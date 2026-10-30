@@ -592,11 +592,16 @@ fn unsupported_versions_and_library_kinds() {
     let mut b = sample();
     b.version = (1, 2);
     assert!(parse(&b.build()).is_ok());
+    // A Core Image library (iOS 17's ci_stdlib and ci_filters) parses as an executable one.
     let mut b = sample();
     b.file_type = 1;
+    let bytes = b.build();
+    assert_eq!(metallib(&bytes).library_type(), LibraryType::Executable);
+    let mut b = sample();
+    b.file_type = 3;
     match parse(&b.build()).unwrap_err() {
         Error::Unsupported(Unsupported {
-            feature: Feature::LibraryKind(1),
+            feature: Feature::LibraryKind(3),
             ..
         }) => {}
         other => panic!("{other:?}"),

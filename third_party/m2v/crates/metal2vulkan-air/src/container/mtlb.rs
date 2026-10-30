@@ -4,7 +4,7 @@
 //! Layout (little-endian, packed), as observed in Apple output of formats 2.7–2.9:
 //!
 //! - Header (0x58 bytes): `MTLB`, `platform u16`, `version u16 u16`, `file_type u8` (0 an
-//!   executable library, 2 a dynamic library), `os u8`, `os_version u16 u16`, then `u64`
+//!   executable library, 1 a Core Image library, 2 a dynamic library), `os u8`, `os_version u16 u16`, then `u64`
 //!   `file_size` and `(offset, size)` pairs for the function list, public metadata, private
 //!   metadata, and bitcode sections.
 //! - Function list: `u32 count`, then `count` entries of `u32 entry_size` (counting itself) and a
@@ -16,9 +16,10 @@
 //! - No two functions share or overlap a public-metadata record, a private-metadata record, or a
 //!   bitcode range. Apple output never does, and requiring it keeps parsing (and the parsed
 //!   result) linear in the file size: otherwise many entries could re-parse one large record.
-//!   The one exception is a dynamic library (`MTLLibraryTypeDynamic`): Apple's toolchain lists each
+//!   The exceptions are a dynamic library (`MTLLibraryTypeDynamic`): Apple's toolchain lists each
 //!   function it exports (`TYPE` 3, its symbol as `NAME`) over the library's one module, so its
-//!   functions may share exactly one bitcode range, hashed once.
+//!   functions may share exactly one bitcode range, hashed once; and a Core Image library
+//!   (`file_type` 1), which lists its externals (`TYPE` 5) over one module the same way.
 //! - The extended header's `HDYN` and `ILST` tags each hold an `(offset, size)` of a region of
 //!   the file. `HDYN`'s is a tag list: `NAME`, the library's install name (a dynamic library's
 //!   `installName`; an executable's file name), and one `DYNL` per dynamic library it was linked
@@ -41,12 +42,19 @@ const SUPPORTED_MAJOR: [u16; 2] = [1, 2];
 const FILE_TYPE_EXECUTABLE: u8 = 0;
 /// `file_type` of a dynamic library (`MTLLibraryTypeDynamic`).
 const FILE_TYPE_DYNAMIC: u8 = 2;
+/// `file_type` of a Core Image library: the `ci_stdlib`, `ci_filters` and portrait-blur metallibs of iOS 17's
+/// CoreImage.framework, one module whose functions (`TYPE` 5, no stage) are externals whose AIR Core Image links into the
+/// kernels of its filter graphs (`newLibraryWithImageFilterFunctionsSPI:imageFilterFunctionInfo:error:`). Its layout is an
+/// executable's, and Metal answers its library type as one (`MTLLibraryTypeExecutable`): a stage made of one of its
+/// functions is refused as any function without a stage is.
+const FILE_TYPE_CORE_IMAGE: u8 = 1;
 
 /// A metallib's library type (`MTLLibraryType`), from its header's `file_type`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LibraryType {
-    /// `MTLLibraryTypeExecutable` (`file_type` 0): a library of entry points.
+    /// `MTLLibraryTypeExecutable` (`file_type` 0): a library of entry points; also a Core Image library (`file_type` 1),
+    /// whose functions are externals another module links.
     Executable,
     /// `MTLLibraryTypeDynamic` (`file_type` 2): a library whose functions resolve other
     /// libraries' external symbols (`MTLDynamicLibrary`).
@@ -248,7 +256,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
             6,
         ));
     }
-    if header.file_type != FILE_TYPE_EXECUTABLE && header.file_type != FILE_TYPE_DYNAMIC {
+    if ![FILE_TYPE_EXECUTABLE, FILE_TYPE_CORE_IMAGE, FILE_TYPE_DYNAMIC].contains(&header.file_type) {
         return Err(InputError::new(
             InputErrorKind::Unsupported(Feature::LibraryKind(header.file_type)),
             Location::container(10),
@@ -320,7 +328,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
     }
     let (extended, _) = tags::read_list(file, at, file.len())?;
     let mut linkage = linkage(file, &extended)?;
-    if header.file_type == FILE_TYPE_DYNAMIC {
+    // A dynamic library's and a Core Image library's functions are symbols of the one module the bitcode section holds.
+    let one_module = header.file_type == FILE_TYPE_DYNAMIC || header.file_type == FILE_TYPE_CORE_IMAGE;
+    if one_module {
         let section = header.bitcode;
         let (start, end) = (offset(section.offset)?, offset(section.end())?);
         linkage.module = Some(
@@ -330,8 +340,8 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Metallib<'_>, Error> {
     }
 
     // Function bitcode ranges are disjoint, so verifying every hash is linear in the file size. A
-    // dynamic library's functions may share one range exactly, which is hashed once.
-    let shared = header.file_type == FILE_TYPE_DYNAMIC;
+    // dynamic library's or a Core Image library's functions may share one range exactly, which is hashed once.
+    let shared = one_module;
     let mut ranges: Vec<(u64, u64, u64, usize)> = parsed
         .iter()
         .enumerate()
