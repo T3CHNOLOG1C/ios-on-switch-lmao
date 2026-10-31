@@ -239,7 +239,7 @@ fn pooled_blocks_place_until_full_and_one_empty_block_is_kept() {
     let mut pool: Pool<&str> = Pool::default();
     assert_eq!(pool.place(16, 16), None, "no block yet");
     let first = pool.add(256, false, "first", 100);
-    assert_eq!(pool.place(100, 64), Some((first, 128)));
+    assert_eq!(pool.place(100, 64), Some((first, 128, true)), "past the first placement: fresh");
     assert_eq!(pool.place(100, 64), None, "full");
     let second = pool.add(256, false, "second", 200);
     assert_ne!(first, second);
@@ -252,7 +252,7 @@ fn pooled_blocks_place_until_full_and_one_empty_block_is_kept() {
     assert_eq!(pool.release(second, 0, 200), Some("second"));
     assert_eq!(pool.blocks(), 1);
     // The kept block serves the next request; its slot is reused for a new block.
-    assert_eq!(pool.place(256, 1), Some((first, 0)));
+    assert_eq!(pool.place(256, 1), Some((first, 0, false)), "placed before: not fresh");
     let third = pool.add(256, false, "third", 1);
     assert_eq!(third, second, "the freed slot is reused");
     let mut drained: Vec<&str> = pool.drain().collect();

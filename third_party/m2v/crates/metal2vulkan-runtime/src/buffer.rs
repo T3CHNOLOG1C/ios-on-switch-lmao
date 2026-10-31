@@ -1008,6 +1008,23 @@ impl Device {
             .0)
     }
 
+    /// A `Shared` buffer of `length` bytes for the runtime's own use whose every byte the caller
+    /// writes before any command reads it (an upload's staging, packed whole): made as
+    /// [`Device::own_buffer`] makes one, without its zeros, which the pack would overwrite.
+    /// M2V_ZERO_FRESH in the environment (any value) zeroes it as before.
+    pub(super) fn staging_buffer(&self, length: u64) -> Result<Buffer, Error> {
+        const CALL: &str = "new_buffer";
+        if std::env::var_os("M2V_ZERO_FRESH").is_some() {
+            return self.own_buffer(length, ResourceOptions::shared());
+        }
+        let modes = Modes::of(ResourceOptions::shared())?;
+        let class = buffer_class(CALL, modes)?;
+        if length == 0 || length > self.properties().max_buffer_length {
+            return Err(nil(CALL, Problem::BufferLength { length }));
+        }
+        self.placed_new_buffer(CALL, length, modes, class, false, AddressPlacement::Outside.into())
+    }
+
     /// A `Shared` buffer of `length` bytes, all zero, of the write-combined CPU cache mode, that
     /// the runtime makes for its own use ([`Device::own_buffer`]): one the GPU alone uses past
     /// the host's zeroes, or that the host only writes (`MemoryClass::WriteCombined`).
@@ -1648,6 +1665,23 @@ impl Buffer {
         })
     }
 
+    /// Whether the buffer's own bytes lie in a fresh placement (`Placement::fresh`): memory the
+    /// driver allocated and no placement used before. The TegraGM20B kernel zeroes every memory
+    /// object it allocates (its pool's memset, a non-coherent object's bzero and clean), so the
+    /// host's zeros of [`clear_first`](Self::clear_first) would be a second pass through a
+    /// write-combined mapping. Never for a heap's buffer or imported memory. M2V_ZERO_FRESH in the
+    /// environment (any value) writes the zeros anyway: for a driver that does not zero.
+    fn fresh(&self) -> bool {
+        static ZERO_ANYWAY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *ZERO_ANYWAY.get_or_init(|| std::env::var_os("M2V_ZERO_FRESH").is_some()) {
+            return false;
+        }
+        match &self.0.bytes {
+            Bytes::Own(own) => own.with(|pages| pages.memory.placement.fresh),
+            Bytes::Heap(_) => false,
+        }
+    }
+
     /// Set a new buffer's padded length of bytes to zero as [`clear`](Self::clear) does, without
     /// waiting for the GPU: the host's bytes (`Shared` and `Managed` storage, a `Managed`
     /// buffer's host copy) at once, so `contents` reads zero before any submission, and bytes the
@@ -1656,9 +1690,11 @@ impl Buffer {
     fn clear_first(&self) -> Result<(), Error> {
         let size = self.padded_length();
         if let Some(contents) = self.contents() {
-            // SAFETY: as in `clear`: the buffer's host-coherent bytes, which nothing else uses
-            // yet.
-            unsafe { std::ptr::write_bytes(contents.as_ptr(), 0, size as usize) };
+            if !self.fresh() {
+                // SAFETY: as in `clear`: the buffer's host-coherent bytes, which nothing else
+                // uses yet.
+                unsafe { std::ptr::write_bytes(contents.as_ptr(), 0, size as usize) };
+            }
             if self.mirror().is_none() {
                 return Ok(());
             }

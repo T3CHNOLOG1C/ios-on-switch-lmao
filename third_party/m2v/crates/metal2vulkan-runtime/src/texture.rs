@@ -5411,7 +5411,7 @@ impl Texture {
         }
         let device = self.device();
         if truth.defers_copies() {
-            let staging = device.own_buffer(host.packed_len(), ResourceOptions::shared())?;
+            let staging = device.staging_buffer(host.packed_len())?;
             let contents = (staging.contents())
                 .ok_or_else(|| internal("a Shared staging buffer without contents"))?;
             // SAFETY: the staging buffer's bytes, at least `packed_len` from `contents`, in

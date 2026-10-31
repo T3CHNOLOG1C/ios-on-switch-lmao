@@ -299,6 +299,9 @@ struct PoolBlock<T> {
     ranges: RangeAllocator,
     dedicated: bool,
     payload: T,
+    /// The end of the furthest range ever placed: bytes past it were never handed out, so they
+    /// hold what the driver's allocation held (`Placement::fresh`).
+    high_water: u64,
 }
 
 impl<T> Default for Pool<T> {
@@ -312,18 +315,18 @@ impl<T> Default for Pool<T> {
 
 impl<T> Pool<T> {
     /// A place for `size` bytes aligned to `align` in a pooled block that has room: (block,
-    /// offset).
-    pub(super) fn place(&mut self, size: u64, align: u64) -> Option<(usize, u64)> {
+    /// offset, whether no placement had any of its bytes before).
+    pub(super) fn place(&mut self, size: u64, align: u64) -> Option<(usize, u64, bool)> {
         self.align = self.align.max(align);
         self.blocks
             .iter_mut()
             .enumerate()
             .find_map(|(index, block)| {
                 let block = block.as_mut().filter(|block| !block.dedicated)?;
-                block
-                    .ranges
-                    .allocate(size, align)
-                    .map(|offset| (index, offset))
+                let offset = block.ranges.allocate(size, align)?;
+                let fresh = offset >= block.high_water;
+                block.high_water = block.high_water.max(offset + size);
+                Some((index, offset, fresh))
             })
     }
 
@@ -339,6 +342,7 @@ impl<T> Pool<T> {
             ranges,
             dedicated,
             payload,
+            high_water: used,
         });
         match self.blocks.iter().position(Option::is_none) {
             Some(index) => {
@@ -559,6 +563,10 @@ pub(super) struct Placement {
     /// asked for one ([`allocate_addressed`]) on a device that enables
     /// `bufferDeviceAddress`.
     pub(super) address: Option<u64>,
+    /// Its bytes are a new block's, never placed before: as the driver's allocation left them
+    /// (zero where the kernel zeroes new memory, as TegraGM20B does). False for memory the runtime
+    /// did not allocate (the caller's, imports) and for any range placed before.
+    pub(super) fresh: bool,
     /// The imports of the caller's dma-bufs the placement lies in, with the source that made them
     /// (`dma_buf.rs`), which no block of the runtime's holds: kept until the placement goes, and
     /// freed, the source dropped, when their last holder goes.
@@ -586,6 +594,7 @@ impl Placement {
             offset,
             mapped: mapped.map(Mapped),
             address: None,
+            fresh: false,
             #[cfg(unix)]
             dma_buf: None,
         }
@@ -614,6 +623,7 @@ impl Placement {
             offset: 0,
             mapped: Some(Mapped(mapped)),
             address: None,
+            fresh: false,
             dma_buf: Some(pages),
         }
     }
@@ -672,6 +682,7 @@ impl Placement {
             offset: self.offset,
             mapped: self.mapped,
             address: self.address,
+            fresh: self.fresh,
             #[cfg(unix)]
             dma_buf: self.dma_buf.clone(),
         }
@@ -819,7 +830,7 @@ impl Memory {
         align: u64,
         addressed: Option<&Counters>,
     ) -> Result<Option<Placement>, Error> {
-        let Some((block, offset)) = self.pool(holds, type_index).place(size, align) else {
+        let Some((block, offset, fresh)) = self.pool(holds, type_index).place(size, align) else {
             return Ok(None);
         };
         if let Some(counts) = addressed {
@@ -834,7 +845,7 @@ impl Memory {
             block,
             offset,
             size,
-            addressed,
+            (addressed, fresh),
         )))
     }
 
@@ -927,7 +938,7 @@ impl Memory {
         block: usize,
         offset: u64,
         size: u64,
-        addressed: bool,
+        (addressed, fresh): (bool, bool),
     ) -> Placement {
         let payload = (self.pool_ref(holds, type_index))
             .payload(block)
@@ -948,6 +959,7 @@ impl Memory {
                 .as_ref()
                 .filter(|_| addressed)
                 .map(|addresses| addresses.address + offset),
+            fresh,
             #[cfg(unix)]
             dma_buf: None,
         }
@@ -1057,7 +1069,7 @@ impl Memory {
                     let index = self
                         .pool(Holds::Buffers, type_index)
                         .add(size, true, block, size);
-                    return Ok(self.placement((Holds::Buffers, type_index), index, 0, size, false));
+                    return Ok(self.placement((Holds::Buffers, type_index), index, 0, size, (false, false)));
                 }
                 Err(error) => failure = ImportFailure::Vulkan(error),
             }
@@ -1432,7 +1444,7 @@ fn place(
             Ok(block) => {
                 let mut memory = lock(memory);
                 let index = memory.add_block(pool, block, block_size, dedicated, size);
-                return Ok(memory.placement(pool, index, 0, size, addressed.is_some()));
+                return Ok(memory.placement(pool, index, 0, size, (addressed.is_some(), true)));
             }
             Err(error @ Error::OutOfMemory(_)) => failure = error,
             Err(error) => return Err(error),
