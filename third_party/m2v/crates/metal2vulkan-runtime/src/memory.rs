@@ -51,6 +51,23 @@ use std::sync::Mutex;
 /// The size of a pooled block, at most the device's `maxMemoryAllocationSize`.
 pub(super) const BLOCK_BYTES: u64 = 64 << 20;
 
+/// The largest pooled block a device makes: [`BLOCK_BYTES`], or `M2V_BLOCK_MIB` MiB from the
+/// environment (at least [`FIRST_BLOCK_BYTES`]). On TegraGM20B the coherent type is one
+/// write-combined pool every process shares, the cached type's blocks are mapped whole and charged
+/// to the process's footprint, and the kernel zeroes each block it makes: a daemon with a few
+/// textures should not hold a 64 MiB block in each pool `keep_room` keeps (iconservicesagent held
+/// 128 MiB and was killed at 140 MB; MaliMetal on the same OS build caps blocks at 8 MiB for the
+/// same reason). A placement past half the cap takes a block of its own size, as before.
+fn block_cap() -> u64 {
+    static CAP: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("M2V_BLOCK_MIB")
+            .ok()
+            .and_then(|mib| mib.trim().parse::<u64>().ok())
+            .map_or(BLOCK_BYTES, |mib| (mib << 20).clamp(FIRST_BLOCK_BYTES, BLOCK_BYTES))
+    })
+}
+
 /// The first pooled block of a pool: later ones grow with the pool ([`Memory::next_block_bytes`]),
 /// doubling it up to [`BLOCK_BYTES`]. Where device memory is the system's own and every block is
 /// wired as it is made (a guest whose GPU imports its pages), a process with a few small resources
@@ -704,7 +721,7 @@ impl Memory {
                 .map(|_| Pool::default())
                 .collect(),
             types,
-            block_bytes: BLOCK_BYTES.min(max_allocation.max(1)),
+            block_bytes: block_cap().min(max_allocation.max(1)),
             device_address,
             address_types: None,
             kept: None,
