@@ -211,7 +211,8 @@ void startRates() {
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC / 4);
     dispatch_source_set_event_handler(timer, ^{
-        char line[512];
+        // 768: the rates line passed 512 with r6-lows' frame distributions (encp= cgap= swait= gpuq= psomax=).
+        char line[768];
         if (native_bridge_metal_rates(line, sizeof line)) os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
     });
     dispatch_resume(timer);

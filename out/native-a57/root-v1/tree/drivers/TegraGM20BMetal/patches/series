@@ -51,3 +51,4 @@ TegraGM20BMetal/patches/m2v/0104-memoryless-dont-care-unread.patch
 TegraGM20BMetal/patches/m2v/0105-memoryless-linear-backing.patch
 TegraGM20BMetal/patches/m2v/0106-fetch-barrier-by-color-writes.patch
 TegraGM20BMetal/patches/m2v/0108-shader-cache-seed-beneath-the-directory.patch
+TegraGM20BMetal/patches/m2v/0109-ios-command-buffer-threads-user-interactive.patch

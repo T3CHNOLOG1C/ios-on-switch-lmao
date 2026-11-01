@@ -50,6 +50,56 @@ struct Timed {std::atomic<uint64_t> count{0},total{0},slowest{0};
 static Timed gTimePipeline,gTimeLibrary,gTimeFunction,gTimeEncodeToCommit;
 static Timed gTimeWaitScheduled,gTimeWaitCompleted;
 static Timed gTimeResourceWait;
+// r6-lows: per-command-buffer time distributions for the rates line (the kernel's display stats line has the presents): fixed bins
+// (1 ms to 64 ms, 4 ms to 128, 8 ms to 256, 64 ms to 1024, one beyond) of relaxed atomics, added from any thread, read and cleared
+// by native_bridge_metal_rates. A quantile is its bin's upper edge, capped at the window's maximum.
+struct NBHist {
+ static constexpr unsigned kBins=64+16+16+12+1;
+ std::atomic<uint32_t> bins[kBins];std::atomic<uint64_t> top{0};
+ static unsigned binOf(uint64_t us) {
+  const uint64_t ms=us/1000;
+  if(ms<64)return (unsigned)ms;
+  if(ms<128)return 64+(unsigned)((ms-64)/4);
+  if(ms<256)return 80+(unsigned)((ms-128)/8);
+  if(ms<1024)return 96+(unsigned)((ms-256)/64);
+  return kBins-1;
+ }
+ static uint64_t upperUs(unsigned bin) {
+  if(bin<64)return (bin+1)*1000ull;
+  if(bin<80)return (64+(bin-63)*4)*1000ull;
+  if(bin<96)return (128+(bin-79)*8)*1000ull;
+  if(bin<108)return (256+(bin-95)*64)*1000ull;
+  return UINT64_MAX;
+ }
+ void add(uint64_t us) {
+  bins[binOf(us)].fetch_add(1,std::memory_order_relaxed);
+  uint64_t seen=top.load(std::memory_order_relaxed);
+  while(us>seen && !top.compare_exchange_weak(seen,us,std::memory_order_relaxed)){}
+ }
+ // The window's counts, cleared: how many, p50, p99 and the maximum (microseconds), and how many reached the bin of overUs, and
+ // of over2Us, or beyond.
+ struct Taken {uint64_t n,p50,p99,max,over,over2;};
+ Taken take(uint64_t overUs,uint64_t over2Us) {
+  uint32_t counts[kBins];uint64_t n=0;
+  for(unsigned bin=0;bin<kBins;bin++){counts[bin]=bins[bin].exchange(0,std::memory_order_relaxed);n+=counts[bin];}
+  const uint64_t most=top.exchange(0,std::memory_order_relaxed);
+  auto quantile=[&](unsigned permille)->uint64_t {
+   if(!n)return 0;
+   const uint64_t rank=(n*permille+999)/1000;uint64_t seen=0;
+   for(unsigned bin=0;bin<kBins;bin++){seen+=counts[bin];if(seen>=rank){const uint64_t up=upperUs(bin);return up<most?up:most;}}
+   return most;
+  };
+  uint64_t over=0,over2=0;
+  for(unsigned bin=binOf(overUs);bin<kBins;bin++)over+=counts[bin];
+  for(unsigned bin=binOf(over2Us);bin<kBins;bin++)over2+=counts[bin];
+  return {n,quantile(500),quantile(990),most,over,over2};
+ }
+};
+// enc: creation to commit (the encoding thread's wall time for one command buffer); gap: one committing thread's commit to its
+// next (CA's render server commits its frames from one thread; gaps of 250 ms or more are idle and not counted); sched: each
+// waitUntilScheduled (CA waits for it before it swaps); gpu: commit to completion; pso: each render pipeline state made.
+static NBHist gHistEncode,gHistGap,gHistSched,gHistGpu,gHistPso;
+static thread_local uint64_t tLastCommitUs;
 static std::atomic<uint64_t> gResourceChecks,gResourceSkipped;
 // The rest of the 5 s rates line (native_bridge_metal_rates): the runtime's commit call (submission, and any CPU wait inside it), each
 // command buffer's encoding (creation to commit, wall time), the time its encoding thread spent inside this frontend's encoding calls
@@ -1284,6 +1334,9 @@ static void scheduled(void *context);
   r={};r.index=index;r.committedUs=self.committedUs;r.ageUs=self.committedUs-createdUs;r.work=encodedWork;
  }
  gEncodeUs+=self.committedUs-createdUs;
+ gHistEncode.add(self.committedUs-createdUs);
+ if(tLastCommitUs && self.committedUs>tLastCommitUs && self.committedUs-tLastCommitUs<250000)gHistGap.add(self.committedUs-tLastCommitUs);
+ tLastCommitUs=self.committedUs;
  dispatch_group_enter(_handlers);
  dispatch_group_enter(_schedulingHandlers);
  @synchronized(gInFlight){[gInFlight addObject:self];}
@@ -1316,6 +1369,7 @@ static void scheduled(void *context);
  }
  dispatch_group_wait(_schedulingHandlers,DISPATCH_TIME_FOREVER);
  gTimeWaitScheduled.add(began);
+ gHistSched.add(nowUs()-began);
 }
 @end
 static void scheduled(void *context) {[(__bridge NBCommandBuffer *)context didSchedule];}
@@ -1325,7 +1379,7 @@ static void completed(void *context) {
  NBCommandBuffer *commandBuffer=(__bridge_transfer NBCommandBuffer *)context;
  {
   const uint64_t took=nowUs()-commandBuffer.committedUs;
-  gTimeEncodeToCommit.count++;gTimeEncodeToCommit.total+=took;
+  gTimeEncodeToCommit.count++;gTimeEncodeToCommit.total+=took;gHistGpu.add(took);
   uint64_t seen=gTimeEncodeToCommit.slowest.load();while(took>seen && !gTimeEncodeToCommit.slowest.compare_exchange_weak(seen,took)){}
   std::lock_guard<std::mutex> lock(gCommitLock);
   CommitRecord &r=gCommitRing[commandBuffer.commitIndex%32];
@@ -2169,7 +2223,7 @@ static void fillLimits(id) {}   // the host's _MTLDevice has its own layout
  if(!pipelineArchives(d.binaryArchives,archives,error)){delete p;return nil;}
  const NmbPipelineOptions creation={(uint64_t)options,archives.data(),archives.size()};
  const uint64_t pipelineBegan=nowUs();const NBCost costBegan=NBCost::now();
- NmbRenderPipeline *handle=nmb_render_pipeline_new_with_options(gDevice,p,&creation);delete p;gTimePipeline.add(pipelineBegan);
+ NmbRenderPipeline *handle=nmb_render_pipeline_new_with_options(gDevice,p,&creation);delete p;gTimePipeline.add(pipelineBegan);gHistPso.add(nowUs()-pipelineBegan);
  journalRenderPipeline(d,pipelineBegan,handle?nullptr:nmb_last_error(),gJournalPath.empty()?std::string():NBCost::now().since(costBegan));
  if(!handle)return failWith<id<MTLRenderPipelineState>>(error,@"render pipeline",nil);
  NBRenderPipeline *state=[NBRenderPipeline new];state.handle=handle;gPipelines++;if(error)*error=nil;return (id<MTLRenderPipelineState>)state;
@@ -2434,6 +2488,9 @@ extern "C" size_t native_bridge_metal_rates(char *out,size_t size) {
  std::lock_guard<std::mutex> guard(lock);
  const Snapshot was=last;last=now;
  const uint64_t commits=now.commits-was.commits,pso=now.psoN-was.psoN,vk=now.work[0]-was.work[0];
+ // r6-lows: this window's command-buffer distributions, taken (and cleared) whether or not the line is written.
+ const NBHist::Taken enc=gHistEncode.take(17000,34000),gap=gHistGap.take(25000,34000),sched=gHistSched.take(17000,34000);
+ const NBHist::Taken gpu=gHistGpu.take(17000,34000),made=gHistPso.take(17000,34000);
  if(!was.at || (!commits && !pso && !vk)){if(out && size)out[0]=0;return 0;}
  auto per=[](uint64_t total,uint64_t n){return n?(double)total/n/1000.0:0.0;};   // ms per item
  const double seconds=(double)(now.at-was.at)/1e6;
@@ -2457,7 +2514,18 @@ extern "C" size_t native_bridge_metal_rates(char *out,size_t size) {
   (unsigned long long)(now.rb-was.rb),(unsigned long long)((now.rbBytes-was.rbBytes)>>20),(double)(now.rbUs-was.rbUs)/1000.0,
   (unsigned long long)(now.impN-was.impN),(double)(now.impUs-was.impUs)/1000.0,(unsigned long long)(now.impHits-was.impHits),
   (unsigned long long)(now.stxN-was.stxN),(double)(now.stxUs-was.stxUs)/1000.0);
- return n>0?(size_t)std::min<int>(n,(int)size-1):0;
+ size_t at=n>0?std::min<size_t>((size_t)n,size?size-1:0):0;
+ // r6-lows, in ms: encp and cgap (one thread's commit to its next) p50/p99/max with the counts at 17 ms and over (past a 60 Hz
+ // frame) and, for cgap, at 25 and 34 ms and over (1.5x and over 2x the frame); swait (waitUntilScheduled) and gpuq (commit to
+ // completion) p50/p99/max; the slowest render pipeline state made. Bins are whole ms.
+ auto ms=[](uint64_t us){return (unsigned long long)(us/1000);};
+ if(at+1<size) {
+  const int more=snprintf(out+at,size-at," encp=%llu/%llu/%llums>16:%llu cgap=%llu/%llu/%llums>25:%llu>33:%llu swait=%llu/%llu/%llums gpuq=%llu/%llu/%llums psomax=%llums",
+   ms(enc.p50),ms(enc.p99),ms(enc.max),(unsigned long long)enc.over,ms(gap.p50),ms(gap.p99),ms(gap.max),(unsigned long long)gap.over,
+   (unsigned long long)gap.over2,ms(sched.p50),ms(sched.p99),ms(sched.max),ms(gpu.p50),ms(gpu.p99),ms(gpu.max),ms(made.max));
+  if(more>0)at=std::min<size_t>(at+(size_t)more,size-1);
+ }
+ return at;
 }
 
 // The telemetry table the plugin streams to the kernel's log: newline-separated rows of at most 90 characters.
