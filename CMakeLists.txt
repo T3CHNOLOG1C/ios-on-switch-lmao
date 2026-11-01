@@ -43,3 +43,14 @@ include(cmake/XnuRecipes.cmake)
 include(cmake/Drivers.cmake)
 include(cmake/Kernel.cmake)
 include(cmake/Package.cmake)
+
+# Lint and format (scripts/lint.py, .clang-format/.clang-tidy in the tree); never part of the default build.
+#   cmake --build out/cmake --target compdb        # <tree>/compile_commands.json for clang-tidy and clangd
+#   cmake --build out/cmake --target format-check  # files clang-format would change
+#   cmake --build out/cmake --target format        # format every first-party file in place
+#   cmake --build out/cmake --target tidy          # clang-tidy over every first-party unit
+set(IOSWITCH_LINT "${CMAKE_SOURCE_DIR}/scripts/lint.py")
+add_custom_target(compdb COMMAND "${IOSWITCH_PYTHON}" "${IOSWITCH_LINT}" compdb USES_TERMINAL)
+add_custom_target(format-check COMMAND "${IOSWITCH_PYTHON}" "${IOSWITCH_LINT}" format --check --all USES_TERMINAL)
+add_custom_target(format COMMAND "${IOSWITCH_PYTHON}" "${IOSWITCH_LINT}" format --all USES_TERMINAL)
+add_custom_target(tidy COMMAND "${IOSWITCH_PYTHON}" "${IOSWITCH_LINT}" tidy --all --compdb USES_TERMINAL)
