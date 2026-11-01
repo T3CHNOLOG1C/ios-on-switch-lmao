@@ -1,3 +1,6 @@
+#include "IOSwitchDiag.h"
+#include "IOSwitchPanicSave.h"
+#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2007-2021 Apple Inc. All rights reserved.
  *
@@ -353,9 +356,11 @@ arm_init(
 	DTEntry chosen = NULL;
 	unsigned int dt_entry_size = 0;
 
+	ioswitch_diag_early_stage(7, "arm_init entered");
 	arm_setup_pre_sign();
 
 	arm_slide_rebase_and_sign_image();
+	ioswitch_diag_early_stage(8, "image rebased");
 
 	/* If kernel integrity is supported, use a constant copy of the boot args. */
 	const_boot_args = *args;
@@ -369,6 +374,8 @@ arm_init(
 #endif /* defined(HAS_APPLE_PAC) */
 
 	PE_init_platform(FALSE, args); /* Get platform expert set up */
+	ioswitch_diag_early_stage(9, "platform expert ready");
+	boot_progress_init();
 
 #if __arm64__
 	configure_timer_apple_regs();
@@ -399,6 +406,10 @@ arm_init(
 
 
 	{
+		/* Native non-Apple 4K builds expose the hardware page size at any RAM size. */
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+		PAGE_SHIFT_CONST = ARM_PGSHIFT;
+#else
 		/*
 		 * Select the advertised kernel page size.
 		 */
@@ -417,8 +428,14 @@ arm_init(
 			PAGE_SHIFT_CONST = ARM_PGSHIFT;
 		}
 
+#endif
+
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+		page_shift_user32 = ARM_PGSHIFT;
+#else
 		/* 32-bit apps always see 16KB page size */
 		page_shift_user32 = PAGE_MAX_SHIFT;
+#endif
 #ifdef  APPLETYPHOON
 		if (PE_parse_boot_argn("cpus_defeatures", &cpus_defeatures, sizeof(cpus_defeatures))) {
 			if ((cpus_defeatures & 0xF) != 0) {
@@ -430,6 +447,7 @@ arm_init(
 #endif
 
 	ml_parse_cpu_topology();
+	ioswitch_diag_early_stage(10, "cpu topology ready");
 
 
 	master_cpu = ml_get_boot_cpu_number();
@@ -459,11 +477,14 @@ arm_init(
 	 */
 	thread->machine.preemption_count = 0;
 	cpu_bootstrap();
+	ioswitch_diag_early_stage(11, "thread and cpu bootstrap ready");
 
 	rtclock_early_init();
+	ioswitch_diag_early_stage(12, "early clock ready");
 
 	kernel_debug_string_early("kernel_startup_bootstrap");
 	kernel_startup_bootstrap();
+	ioswitch_diag_early_stage(13, "startup bootstrap ready");
 
 	/*
 	 * Initialize the timer callout world
@@ -471,8 +492,10 @@ arm_init(
 	timer_call_init();
 
 	cpu_init();
+	ioswitch_diag_early_stage(14, "cpu_init returned");
 
 	processor_bootstrap();
+	ioswitch_diag_early_stage(15, "processor bootstrap ready");
 
 	if (PE_parse_boot_argn("maxmem", &maxmem, sizeof(maxmem))) {
 		xmaxmem = (uint64_t) maxmem * (1024 * 1024);
@@ -519,7 +542,13 @@ arm_init(
 	__builtin_arm_wsr("pan", 1);
 #endif  /* __ARM_PAN_AVAILABLE__ */
 
+	boot_progress_stage("arm_vm_init enter");
+	ioswitch_diag_early_stage(16, "arm_vm_init entered");
 	arm_vm_init(xmaxmem, args);
+	ioswitch_diag_init(args);
+	/* The panic screen and record (IOSwitchPanicSave.c): its mappings, made while io_map can, and the last boot's record. */
+	ioswitch_panic_save_init();
+	boot_progress_stage("arm_vm_init returned");
 
 	if (debug_boot_arg) {
 		patch_low_glo();
@@ -588,6 +617,7 @@ arm_init(
 	cpu_machine_idle_init(TRUE);
 
 	PE_init_platform(TRUE, &BootCpuData);
+	ioswitch_diag_stage("platform interrupts initialized");
 
 #if __arm64__
 	extern bool cpu_config_correct;
@@ -679,6 +709,14 @@ arm_init_cpu(
 
 
 	machine_set_current_thread(cpu_data_ptr->cpu_active_thread);
+#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
+	/* A secondary's first start, and every core's start after system sleep (the boot CPU
+	 * resumes through the same PSCI entry), leaves the entry vectors here; a no-op otherwise. */
+	{
+		extern void ioswitch_secondary_vectors_leave(void);
+		ioswitch_secondary_vectors_leave();
+	}
+#endif
 
 #if APPLE_ARM64_ARCH_FAMILY
 	configure_late_apple_regs(false);

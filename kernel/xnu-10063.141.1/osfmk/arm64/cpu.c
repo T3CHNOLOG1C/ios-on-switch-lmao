@@ -119,6 +119,70 @@ sysreg_restore_t sysreg_restore __attribute__((section("__DATA, __const"))) = {
 //  1 : normal
 //  2 : overhead simulation (delay & flags)
 TUNABLE(unsigned int, wfi, "wfi", 1);
+#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
+/* System sleep on boards without Apple's sleep hardware. drivers/ArmCpu owns both: it sets the handler once PSCI
+ * CPU_OFF and SYSTEM_SUSPEND are known to work, arm64_prepare_for_sleep (machine_routines_asm.s) calls it, and the
+ * flag set here tells ArmCpu this kernel makes that call. */
+extern void (*ioswitch_cpu_sleep_handler)(boolean_t deep_sleep);
+extern bool ioswitch_cpu_sleep_hook_present;
+#endif
+#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !HAS_RETENTION_STATE && !defined(APPLE_ARM64_ARCH_FAMILY)
+static bool ioswitch_cache_retaining_idle;
+
+static bool
+ioswitch_idle_board(void)
+{
+	DTEntry entry;
+	const void *property = NULL;
+	unsigned int size = 0;
+	static const char model[] = "NintendoSwitchOLED";
+	static const char compatible[] = "nintendo,aula";
+	if (SecureDTLookupEntry(NULL, "/", &entry) != kSuccess) {
+		return false;
+	}
+	if (SecureDTGetProperty(entry, "model", &property, &size) == kSuccess &&
+	    property != NULL && size == sizeof(model) && !bcmp(property, model, size)) {
+		return true;
+	}
+	if (SecureDTGetProperty(entry, "compatible", &property, &size) != kSuccess ||
+	    property == NULL || size == 0 || size > 1024) {
+		return false;
+	}
+	const char *bytes = property;
+	bool matched = false;
+	for (unsigned int at = 0; at < size;) {
+		unsigned int end = at;
+		while (end < size && bytes[end] != '\0') {
+			end++;
+		}
+		if (end == size) {
+			return false;
+		}
+		if (end - at == sizeof(compatible) - 1 &&
+		    !bcmp(bytes + at, compatible, sizeof(compatible) - 1)) {
+			matched = true;
+		}
+		at = end + 1;
+	}
+	return matched;
+}
+
+static void
+ioswitch_idle_cache_init(void)
+{
+	int root_boot = 0;
+	ioswitch_cache_retaining_idle = false;
+	if (!PE_parse_boot_argn("ioswitch-root-boot", &root_boot, sizeof(root_boot)) || root_boot != 1) {
+		return;
+	}
+	uint32_t midr = (uint32_t)__builtin_arm_rsr64("MIDR_EL1");
+	if ((midr & (MIDR_EL1_IMP_MASK | MIDR_EL1_PNUM_MASK)) !=
+	    ((0x41u << MIDR_EL1_IMP_SHIFT) | (0xd07u << MIDR_EL1_PNUM_SHIFT))) {
+		return;
+	}
+	ioswitch_cache_retaining_idle = ioswitch_idle_board();
+}
+#endif
 #if DEVELOPMENT || DEBUG
 
 // wfi_flags
@@ -584,7 +648,14 @@ cpu_idle(void)
 
 	if (wfi) {
 #if !defined(APPLE_ARM64_ARCH_FAMILY)
-		platform_cache_idle_enter();
+#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !HAS_RETENTION_STATE
+		/* Bare A57 WFI retains caches; power-management callbacks still flush. */
+		if (!(ioswitch_cache_retaining_idle && wfi == 1 &&
+		    cpu_data_ptr->cpu_idle_notify == NULL && cpu_data_ptr->cpu_cache_dispatch == NULL))
+#endif
+		{
+			platform_cache_idle_enter();
+		}
 #endif
 
 #if DEVELOPMENT || DEBUG
@@ -881,6 +952,23 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 	return KERN_SUCCESS;
 }
 
+#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
+/* The reset vector searches the actual CPU data table with its caches off. */
+int ioswitch_smp_publish_cpu_state(void);
+int
+ioswitch_smp_publish_cpu_state(void)
+{
+	if (ml_get_max_cpu_number() != 3 || ml_get_boot_cpu_number() != 0) return 1;
+	for (unsigned i = 0; i < 4; ++i) {
+		cpu_data_t *data = __atomic_load_n(&CpuDataEntries[i].cpu_data_vaddr, __ATOMIC_ACQUIRE);
+		if (data != NULL) CleanPoC_DcacheRegion((vm_offset_t)data, sizeof(*data));
+	}
+	CleanPoC_DcacheRegion((vm_offset_t)CpuDataEntries, sizeof(CpuDataEntries));
+	extern int ioswitch_smp_publish_tables(void);
+	return ioswitch_smp_publish_tables();
+}
+#endif
+
 #if defined(KERNEL_INTEGRITY_CTRR)
 /* Hibernation needs to reset this state, so data and text are in the hib segment;
  * this allows them be accessed and executed early.
@@ -1164,6 +1252,13 @@ cpu_machine_idle_init(boolean_t from_boot)
 	if (from_boot) {
 		uint32_t        production = 1;
 		DTEntry         entry;
+
+#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !HAS_RETENTION_STATE && !defined(APPLE_ARM64_ARCH_FAMILY)
+		ioswitch_idle_cache_init();
+#endif
+#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
+		ioswitch_cpu_sleep_hook_present = true;
+#endif
 
 		unsigned long   jtag = 0;
 

@@ -1078,6 +1078,31 @@ kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_a
 	return KERN_SUCCESS;
 }
 
+/*
+ * ioswitch: the work interval instance operations (libsystem_kernel's work_interval_instance_start, _update and
+ * _finish, under os_workgroup_interval_start and friends) are private and missing from this source, so they failed
+ * with ENOTSUP. Without a performance controller there is nothing to pass on: an instance operation is valid when the
+ * calling thread has joined the interval and belongs to the task that created it, the checks a notify makes.
+ */
+kern_return_t
+kern_work_interval_instance_check(thread_t thread, uint64_t work_interval_id)
+{
+	assert(thread == current_thread());
+
+	struct work_interval *work_interval = thread->th_work_interval;
+	if (work_interval == NULL || work_interval->wi_id != work_interval_id) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	task_t task = current_task();
+	if (work_interval->wi_creator_uniqueid != get_task_uniqueid(task) ||
+	    work_interval->wi_creator_pidversion != get_task_version(task)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	return KERN_SUCCESS;
+}
+
 /* Start at 1, 0 is not a valid work interval ID */
 static _Atomic uint64_t unique_work_interval_id = 1;
 
@@ -1115,7 +1140,7 @@ kern_work_interval_create(thread_t thread,
 			return KERN_FAILURE;
 		}
 		if (!task_is_app(creating_task)) {
-#if XNU_TARGET_OS_OSX
+#if XNU_TARGET_OS_OSX || 1  /* sheng: UIKit aborts on a refused CA_CLIENT interval; soft-fail it as macOS does */
 			/*
 			 * Soft-fail the case of a non-app pretending to be an
 			 * app, by allowing it to press the buttons, but they're
@@ -1131,7 +1156,8 @@ kern_work_interval_create(thread_t thread,
 #endif /* XNU_TARGET_OS_OSX */
 		}
 		if (task_set_ca_client_wi(creating_task, true) == false) {
-			return KERN_FAILURE;
+			/* sheng: a second CA_CLIENT interval in a task is accepted but not connected, instead of aborting the app */
+			create_flags |= WORK_INTERVAL_FLAG_IGNORED;
 		}
 	}
 

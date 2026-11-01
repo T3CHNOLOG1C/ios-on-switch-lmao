@@ -1,3 +1,4 @@
+#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
  *
@@ -1845,7 +1846,11 @@ proc_handle_critical_exit(proc_t p, int rv)
 	}
 
 	const char *prefix_str;
+#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+	char prefix_str_buf[1024];
+#else
 	char prefix_str_buf[128];
+#endif
 
 	if (p == initproc) {
 		if (strnstr(p->p_name, "preinit", sizeof(p->p_name))) {
@@ -1858,6 +1863,7 @@ proc_handle_critical_exit(proc_t p, int rv)
 	} else {
 		/* For processes that aren't launchd, just use the process name and pid */
 		snprintf(prefix_str_buf, sizeof(prefix_str_buf), "%s[%d] exited", p->p_name, proc_getpid(p));
+		boot_progress_critical_exit(proc_getpid(p), prefix_str_buf, sizeof(prefix_str_buf));
 		prefix_str = prefix_str_buf;
 	}
 
@@ -1891,6 +1897,10 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 	bool corpse_source = false;
 	task_t task = proc_task(p);
 
+
+	boot_progress_exit(proc_getpid(p),p->p_name,rv,
+	    p->p_exit_reason ? p->p_exit_reason->osr_namespace : 0,
+	    p->p_exit_reason ? p->p_exit_reason->osr_code : 0);
 
 	if (p->p_crash_behavior != 0 || p == initproc) {
 		proc_handle_critical_exit(p, rv);
@@ -2192,6 +2202,20 @@ proc_exit(proc_t p)
 	proc_unlock(p);
 	pid = proc_getpid(p);
 	exitval = p->p_xstat;
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	{
+		static int proclog = -1;
+		if (proclog < 0) {
+			int value = 0;
+			(void)PE_parse_boot_argn("ioswitch-proclog", &value, sizeof(value));
+			proclog = value;
+		}
+		if (proclog) {
+			if (WIFSIGNALED(exitval)) printf("-%s[%d] signal %d\n", p->p_comm, pid, WTERMSIG(exitval));
+			else printf("-%s[%d] exit %d\n", p->p_comm, pid, WEXITSTATUS(exitval));
+		}
+	}
+#endif
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
 	    BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_START,
 	    pid, exitval, 0, 0, 0);

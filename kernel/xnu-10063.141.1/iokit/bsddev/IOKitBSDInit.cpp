@@ -566,6 +566,97 @@ IOGetBootManifestHash(char *hash_data, size_t *hash_data_size)
 	return result;
 }
 
+#if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
+#if !DEVELOPMENT && !DEBUG
+#error Owner image-set metadata is an offline development instrument
+#endif
+#include <libkern/crypto/sha2.h>
+extern "C" int native_verified_block_manifest_sha384(dev_t, const char *, uint8_t[48]);
+extern "C" int native_owner_publish_boot_manifest(dev_t, const char *, dev_t, const char *);
+extern "C" {
+volatile int native_owner_boot_manifest_status = -1;
+uint8_t native_owner_boot_manifest_hash[48];
+}
+
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#include "IOSwitchFiles.h"
+extern "C" int ioswitch_cryptex_manifest_sha384(dev_t, const char *, uint8_t[48]);
+extern "C" int native_owner_publish_raw_boot_manifest(dev_t, const char *, dev_t, const char *);
+#endif
+
+static int
+native_owner_publish_boot_manifest_impl(dev_t rootDevice, const char *rootUUID,
+    dev_t cacheDevice, const char *cacheUUID, bool raw)
+{
+	static const char domain[] = "VerifiedRoot.OwnerBootSet.v1";
+	uint8_t rootDigest[48], cacheDigest[48], digest[48];
+	uint8_t rootRole = 1, cacheRole = 2;
+	int cache_identity = 0;
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	if (raw) {
+		if (ioswitch_files_storage_profile() == IOSW_STORAGE_RAW)
+			cache_identity = ioswitch_cryptex_manifest_sha384(cacheDevice, cacheUUID, cacheDigest);
+	} else
+#endif
+	if (!raw) cache_identity = native_verified_block_manifest_sha384(cacheDevice, cacheUUID, cacheDigest);
+	if (rootDevice == cacheDevice ||
+	    !native_verified_block_manifest_sha384(rootDevice, rootUUID, rootDigest) || !cache_identity) {
+		native_owner_boot_manifest_status = 1;
+		return 0;
+	}
+	SHA384_CTX context;
+	SHA384_Init(&context);
+	SHA384_Update(&context, domain, sizeof(domain));
+	SHA384_Update(&context, &rootRole, sizeof(rootRole));
+	SHA384_Update(&context, rootDigest, sizeof(rootDigest));
+	SHA384_Update(&context, &cacheRole, sizeof(cacheRole));
+	SHA384_Update(&context, cacheDigest, sizeof(cacheDigest));
+	SHA384_Final(digest, &context);
+	IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+	if (!chosen) { native_owner_boot_manifest_status = 2; return 0; }
+	// Never replace an existing firmware/Apple identity with an owner identity.
+	if (chosen->getProperty("boot-manifest-hash") || chosen->getProperty("owner-boot-manifest-domain")) {
+		chosen->release();
+		native_owner_boot_manifest_status = 3;
+		return 0;
+	}
+	OSData *value = OSData::withBytes(digest, sizeof(digest));
+	OSData *tag = OSData::withBytes(domain, sizeof(domain));
+	bool tagged = tag && chosen->setProperty("owner-boot-manifest-domain", tag);
+	bool published = tagged && value && chosen->setProperty("boot-manifest-hash", value);
+	uint8_t actual[48];
+	size_t actualSize = sizeof(actual);
+	bool result = published && IOGetBootManifestHash(reinterpret_cast<char *>(actual), &actualSize) &&
+	    actualSize == sizeof(digest) && !memcmp(actual, digest, sizeof(digest));
+	if (!result) {
+		if (published) chosen->removeProperty("boot-manifest-hash");
+		if (tagged) chosen->removeProperty("owner-boot-manifest-domain");
+	} else {
+		memcpy(native_owner_boot_manifest_hash, actual, sizeof(actual));
+	}
+	OSSafeReleaseNULL(tag);
+	OSSafeReleaseNULL(value);
+	chosen->release();
+	native_owner_boot_manifest_status = result ? 0 : 4;
+	return result;
+}
+
+extern "C" int
+native_owner_publish_boot_manifest(dev_t rootDevice, const char *rootUUID,
+    dev_t cacheDevice, const char *cacheUUID)
+{
+	return native_owner_publish_boot_manifest_impl(rootDevice, rootUUID, cacheDevice, cacheUUID, false);
+}
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+extern "C" int
+native_owner_publish_raw_boot_manifest(dev_t rootDevice, const char *rootUUID,
+    dev_t cacheDevice, const char *cacheUUID)
+{
+	return native_owner_publish_boot_manifest_impl(rootDevice, rootUUID, cacheDevice, cacheUUID, true);
+}
+#endif
+#endif
+
 /*
  * Set NVRAM to boot into the right flavor of Recovery,
  * optionally passing a UUID of a volume that failed to boot.
@@ -663,6 +754,11 @@ do_reboot:
 
 	return true;
 }
+
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && \
+    defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
+extern "C" void ioswitch_raw_root_wait_diagnostic(void);
+#endif
 
 kern_return_t
 IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
@@ -918,6 +1014,10 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 			// The disk isn't found - have the user pick from System Recovery.
 			(void)IOSetRecoveryBoot(BSD_BOOTFAIL_MEDIA_MISSING, NULL, true);
 #elif XNU_TARGET_OS_IOS
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && \
+    defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
+			ioswitch_raw_root_wait_diagnostic();
+#endif
 			panic("Failed to mount root device");
 #endif
 		}

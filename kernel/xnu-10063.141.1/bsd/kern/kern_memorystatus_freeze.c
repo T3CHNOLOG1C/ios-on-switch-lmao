@@ -133,7 +133,7 @@ SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_dynamic_thread_delay_enabled, C
 #define FREEZE_APPS_IDLE_DELAY_MULTIPLIER_DEFAULT FREEZE_APPS_IDLE_DELAY_MULTIPLIER_FAST
 unsigned int memorystatus_freeze_apps_idle_delay_multiplier = FREEZE_APPS_IDLE_DELAY_MULTIPLIER_DEFAULT;
 
-#if (XNU_TARGET_OS_IOS && || XNU_TARGET_OS_WATCH
+#if XNU_TARGET_OS_IOS || XNU_TARGET_OS_WATCH
 #define FREEZE_ENABLED_DEFAULT true
 #else
 #define FREEZE_ENABLED_DEFAULT false

@@ -78,6 +78,8 @@
 
 #include "bindfs.h"
 
+volatile int native_bindfs_boot_mount = 0;
+
 #define BINDFS_ENTITLEMENT "com.apple.private.bindfs-allow"
 
 #define SIZEOF_MEMBER(type, member) (sizeof(((type *)0)->member))
@@ -139,8 +141,9 @@ bindfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 		return ENOTSUP;
 	}
 
-	/* check entitlement */
-	if (!IOCurrentTaskHasEntitlement(BINDFS_ENTITLEMENT)) {
+	/* check entitlement; the boot-time addon mount (kern_exec.c native_gpu_addon_prepare) runs before any
+	 * entitled process exists and sets this flag around its own mount() call only */
+	if (!native_bindfs_boot_mount && !IOCurrentTaskHasEntitlement(BINDFS_ENTITLEMENT)) {
 		return EPERM;
 	}
 
@@ -230,6 +233,9 @@ bindfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 	sp->f_flags = flags;
 
 	xmp->bindm_flags = BINDM_CASEINSENSITIVE; /* default to case insensitive */
+	if (native_bindfs_boot_mount) {
+		xmp->bindm_flags |= BINDM_FORCE_ROOT;
+	}
 
 	error = bindfs_vfs_getlowerattr(vnode_mount(lowerrootvp), &vfa, ctx);
 	if (error == 0) {

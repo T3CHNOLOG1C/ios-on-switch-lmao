@@ -5,6 +5,11 @@
 #ifndef CORE_ENTITLEMENTS_H
 #define CORE_ENTITLEMENTS_H
 
+#define kCSWebBrowserNetworkEntitlement "com.apple.developer.web-browser-engine.networking"
+#define kCSWebBrowserWebContentEntitlement "com.apple.developer.web-browser-engine.webcontent"
+#define kCSWebBrowserGPUEntitlement "com.apple.developer.web-browser-engine.rendering"
+#define kCSWebBrowserHostEntitlement "com.apple.developer.web-browser-engine.host"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

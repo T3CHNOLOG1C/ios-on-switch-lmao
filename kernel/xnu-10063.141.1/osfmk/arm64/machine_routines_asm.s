@@ -1063,6 +1063,17 @@ Lwfi_retention:
 	.globl EXT(arm64_prepare_for_sleep)
 LEXT(arm64_prepare_for_sleep)
 	PUSH_FRAME
+#if defined(ARM64_BOARD_CONFIG_BCM2837)
+	/* (This object is built without the IOSWITCH_* defines: the board config stands in. The pointer is
+	 * drivers/ArmCpu's, which this board's kernel always links.)
+	 * A CPU driver that powers cores down through PSCI (drivers/ArmCpu: CPU_OFF on a
+	 * secondary, SYSTEM_SUSPEND on the boot CPU) installs ioswitch_cpu_sleep_handler.
+	 * It is called with x0 = deep_sleep and never returns. Without it: WFI, as before. */
+	adrp	x9, EXT(ioswitch_cpu_sleep_handler)@page
+	ldr		x9, [x9, EXT(ioswitch_cpu_sleep_handler)@pageoff]
+	cbz		x9, Lwfi_inst
+	blr		x9
+#endif
 Lwfi_inst:
 	dsb		sy
 	isb		sy

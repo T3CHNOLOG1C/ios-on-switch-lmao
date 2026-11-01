@@ -4351,6 +4351,17 @@ dropboth:
 			goto outdrop;
 		}
 
+		/*
+		 * IOSwitch: the Data volume is APFS without content protection (MNT_CPROTECT clear: no per-file keys, so no
+		 * class to keep), and APFS answers a class change there with EPERM. iOS clients take that as a failed write
+		 * (SplashBoard leaves its launch snapshots at 0 bytes), so on such a volume a valid class is the no-op it is.
+		 */
+		if (!(vfs_flags(vnode_mount(vp)) & MNT_CPROTECT)) {
+			error = cp_is_valid_class(vnode_isdir(vp), (int32_t)tmp) ? 0 : EINVAL;
+			vnode_put(vp);
+			break;
+		}
+
 		struct vnode_attr va;
 
 		VATTR_INIT(&va);

@@ -5257,14 +5257,16 @@ IOService::setRootMedia(IOService * root)
 	const OSMetaClass * ioblockstoragedriverClass;
 	bool unhide;
 
-	ioblockstoragedriverClass = OSMetaClass::getMetaClassWithName(gIOBlockStorageDriverKey);
-	assert(ioblockstoragedriverClass);
+	if (root) {
+		ioblockstoragedriverClass = OSMetaClass::getMetaClassWithName(gIOBlockStorageDriverKey);
+		assert(ioblockstoragedriverClass);
 
-	while (root) {
-		if (root->metaCast(ioblockstoragedriverClass)) {
-			break;
+		while (root) {
+			if (root->metaCast(ioblockstoragedriverClass)) {
+				break;
+			}
+			root = root->getProvider();
 		}
-		root = root->getProvider();
 	}
 
 	LOCKWRITENOTIFY();
@@ -9152,3 +9154,14 @@ OSMetaClassDefineReservedUnused(IOService, 44);
 OSMetaClassDefineReservedUnused(IOService, 45);
 OSMetaClassDefineReservedUnused(IOService, 46);
 OSMetaClassDefineReservedUnused(IOService, 47);
+
+/* IOSwitch: the matching job pool, for stall diagnostics. */
+extern "C" void ioswitch_iokit_jobs(int *outstanding, int *threads, int *waiting, int *max_threads);
+void
+ioswitch_iokit_jobs(int *outstanding, int *threads, int *waiting, int *max_threads)
+{
+	*outstanding = gOutstandingJobs;
+	*threads = gNumConfigThreads;
+	*waiting = gNumWaitingThreads;
+	*max_threads = gMaxConfigThreads;
+}

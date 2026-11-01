@@ -84,8 +84,12 @@
 
 #include <arm64/proc_reg.h>
 #include <pexpert/arm64/boot.h>
+#if XNU_MONITOR_ANS2_SART
 #include <arm64/ppl/sart.h>
+#endif
+#if XNU_MONITOR_UAT_PPL
 #include <arm64/ppl/uat.h>
+#endif
 
 #if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 #include <arm64/amcc_rorgn.h>
@@ -882,6 +886,8 @@ PMAP_SUPPORT_PROTOTYPES(
 	arm_force_fast_fault, (ppnum_t ppnum,
 	vm_prot_t allow_mode,
 	int options), ARM_FORCE_FAST_FAULT_INDEX);
+
+MARK_AS_PMAP_TEXT static void pmap_phys_write_disable(vm_address_t va);
 
 MARK_AS_PMAP_TEXT static boolean_t
 arm_force_fast_fault_with_flush_range(
@@ -2267,13 +2273,17 @@ pmap_bootstrap(
 	/**
 	 * Bootstrap any necessary UAT data structures and values needed from the device tree.
 	 */
+#if XNU_MONITOR_UAT_PPL
 	uat_bootstrap();
+#endif
 
 
 	/**
 	 * Bootstrap any necessary SART data structures and values needed from the device tree.
 	 */
+#if XNU_MONITOR_ANS2_SART
 	sart_bootstrap();
+#endif
 
 	/**
 	 * Don't make any assumptions about the alignment of avail_start before this
@@ -2286,6 +2296,7 @@ pmap_bootstrap(
 	asid_bitmap = (bitmap_t*)phystokv(avail_start);
 	avail_start = round_page(avail_start + asid_table_size);
 
+	pmap_ioswitch_bootstrap_check(pmap_struct_start, avail_start);
 	memset((char *)phystokv(pmap_struct_start), 0, avail_start - pmap_struct_start);
 
 	vm_first_phys = gPhysBase;
@@ -2598,6 +2609,19 @@ pmap_virtual_region(
 	unsigned long low_global_vr_mask = 0;
 	vm_map_size_t low_global_vr_size = 0;
 
+	if (pmap_ioswitch_ram_enabled()) {
+		/* Full native RAM starts below low globals. Reserve the union of
+		 * the low ranges once, then retain the separate high window. */
+		if (region_select == 0) {
+			*startp = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+			*size = ((virtual_space_start + 0x7fffffULL) & ~0x7fffffULL) - *startp;
+			return TRUE;
+		}
+		if (region_select != 1) {
+			return FALSE;
+		}
+	}
+
 	if (region_select == 0) {
 		/* Round to avoid overlapping with the V=P area; round to at least the L2 block size. */
 		if (!TEST_PAGE_SIZE_4K) {
@@ -2653,6 +2677,34 @@ pmap_virtual_region(
 
 static unsigned int avail_page_count = 0;
 static bool need_ram_ranges_init = true;
+static void initialize_ram_ranges(void);
+static bool iosw_dense_pages;
+static pmap_paddr_t iosw_stolen_end;
+
+unsigned int
+pmap_ioswitch_dense_page_count(void)
+{
+    return pmap_ioswitch_ram_enabled() ? 0x100000 : 0;
+}
+
+boolean_t
+pmap_ioswitch_page_reserved(ppnum_t pnum)
+{
+    pmap_paddr_t pa=(pmap_paddr_t)pnum << PAGE_SHIFT;
+    return pmap_ioswitch_ram_reserved(pnum) || pa < iosw_stolen_end;
+}
+
+boolean_t
+pmap_ioswitch_begin_dense_pages(void)
+{
+    if (!pmap_ioswitch_dense_page_count()) return FALSE;
+    if (need_ram_ranges_init) initialize_ram_ranges();
+    iosw_stolen_end=first_avail;
+    first_avail=gPhysBase;
+    iosw_dense_pages=true;
+    return TRUE;
+}
+
 
 
 /**
@@ -2684,7 +2736,12 @@ initialize_ram_ranges(void)
 	assert(first <= end);
 	assert(first == (first & ~PAGE_MASK));
 	assert(end == (end & ~PAGE_MASK));
-	avail_page_count = atop(end - first);
+    if (pmap_ioswitch_dense_page_count()) {
+        first_avail=gPhysBase;
+        avail_page_count=0;
+        for (pmap_paddr_t pa=gPhysBase;pa<end;pa+=PAGE_SIZE)
+            if (!pmap_ioswitch_page_reserved((ppnum_t)atop(pa))) ++avail_page_count;
+    } else avail_page_count = atop(end - first);
 
 	need_ram_ranges_init = false;
 }
@@ -2727,12 +2784,17 @@ pmap_next_page(
 		initialize_ram_ranges();
 	}
 
-
-	if (first_avail != avail_end) {
+    if (pmap_ioswitch_dense_page_count() && !iosw_dense_pages) {
+        while (first_avail<avail_end && pmap_ioswitch_page_reserved((ppnum_t)atop(first_avail)))
+            first_avail+=PAGE_SIZE;
+    }
+    if (first_avail != avail_end) {
 		*pnum = (ppnum_t)atop(first_avail);
 		first_avail += PAGE_SIZE;
-		assert(avail_page_count > 0);
-		--avail_page_count;
+        if (!iosw_dense_pages || !pmap_ioswitch_page_reserved(*pnum)) {
+            assert(avail_page_count > 0);
+            --avail_page_count;
+        }
 		return TRUE;
 	}
 	assert(avail_page_count == 0);
@@ -4809,13 +4871,13 @@ pmap_page_protect_options_with_flush_range(
 		if (pvh_ptep_is_iommu(pte_p)) {
 #if XNU_MONITOR
 			if (__improbable(pvh_flags & PVH_FLAG_LOCKDOWN_MASK)) {
-				panic("pmap_page_protect: ppnum 0x%x locked down, cannot be owned by iommu %p, pve_p=%p",
-				    ppnum, ptep_get_iommu(pte_p), pve_p);
+				panic("pmap_page_protect: ppnum 0x%x locked down, cannot be owned by iommu ptep %p, pve_p=%p",
+				    ppnum, pte_p, pve_p);
 			}
 #endif
 			if (remove && (options & PMAP_OPTIONS_COMPRESSOR)) {
-				panic("pmap_page_protect: attempt to compress ppnum 0x%x owned by iommu %p, pve_p=%p",
-				    ppnum, ptep_get_iommu(pte_p), pve_p);
+				panic("pmap_page_protect: attempt to compress ppnum 0x%x owned by iommu ptep %p, pve_p=%p",
+				    ppnum, pte_p, pve_p);
 			}
 			goto protect_skip_pve_pass1;
 		}
@@ -7053,7 +7115,9 @@ void
 pmap_sync_page_attributes_phys(
 	ppnum_t pp)
 {
-	flush_dcache((vm_offset_t) (pp << PAGE_SHIFT), PAGE_SIZE, TRUE);
+	/* ptoa() widens before the shift: pp << PAGE_SHIFT is a 32-bit shift and drops the high bits of physical
+	 * addresses at or above 4 GiB (all of DRAM on boards whose memory starts there), which phystokv() then rejects. */
+	flush_dcache((vm_offset_t) ptoa(pp), PAGE_SIZE, TRUE);
 }
 
 #if CONFIG_COREDUMP
@@ -12026,6 +12090,7 @@ pmap_unpin_kernel_pages(vm_offset_t kva __unused, size_t nbytes __unused)
 #endif /* !XNU_MONITOR */
 
 
+#if PMAP_CS_PPL_MONITOR || PMAP_CS_INCLUDE_CODE_SIGNING
 MARK_AS_PMAP_TEXT static inline void
 pmap_cs_lockdown_pages(vm_address_t kva, vm_size_t size, bool ppl_writable)
 {
@@ -12045,6 +12110,8 @@ pmap_cs_unlockdown_pages(vm_address_t kva, vm_size_t size, bool ppl_writable)
 	pmap_ppl_unlockdown_pages(kva, size, 0, ppl_writable);
 #endif
 }
+
+#endif /* PMAP_CS_PPL_MONITOR || PMAP_CS_INCLUDE_CODE_SIGNING */
 
 /**
  * Perform basic validation checks on the destination only and
@@ -14943,3 +15010,7 @@ pmap_test_text_corruption_internal(pmap_paddr_t pa)
 }
 
 #endif /* DEVELOPMENT || DEBUG */
+
+#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !XNU_MONITOR
+#include <arm64/ioswitch_smp_tables.inc>
+#endif

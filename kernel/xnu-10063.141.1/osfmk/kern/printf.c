@@ -920,7 +920,8 @@ consdebug_putc(char c)
 
 	debug_putc(c);
 
-	if (!console_is_serial() && !disable_serial_output) {
+	/* PE_kputc may be the same framebuffer sink as the console. */
+	if (!console_is_serial() && !disable_serial_output && PE_kputc != console_write_unbuffered) {
 		PE_kputc(c);
 	}
 }
@@ -932,7 +933,8 @@ consdebug_putc_unbuffered(char c)
 
 	debug_putc(c);
 
-	if (!console_is_serial() && !disable_serial_output) {
+	/* PE_kputc may be the same framebuffer sink as the console. */
+	if (!console_is_serial() && !disable_serial_output && PE_kputc != console_write_unbuffered) {
 		PE_kputc(c);
 	}
 }

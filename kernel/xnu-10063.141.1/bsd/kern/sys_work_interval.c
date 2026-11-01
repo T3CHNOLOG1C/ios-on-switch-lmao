@@ -38,6 +38,31 @@
 
 #include <libkern/libkern.h>
 
+#include <sys/proc.h>
+#include <kern/policy_internal.h>
+
+/* Board bring-up diagnostic: the last work-interval CREATE2 results, read by the boot-progress banner. */
+char native_wi_log[4][100];
+volatile unsigned native_wi_count;
+static void
+native_wi_note(const char *what, int error, int kret, uint32_t flags)
+{
+	char name[20];
+	proc_selfname(name, sizeof(name));
+	unsigned slot = native_wi_count++ % 4;
+	snprintf(native_wi_log[slot], sizeof(native_wi_log[slot]), "WI#%u p%d %s %s err=%d kret=%d flags=%x app=%d",
+	    native_wi_count, proc_selfpid(), name, what, error, kret, flags, (int)task_is_app(current_task()));
+}
+
+/*
+ * ioswitch: libsystem_kernel's private instance operations (work_interval_instance_start, _update, _finish pass
+ * the interval ID, their struct work_interval_instance and its size, 0x60). Not in this source's sys/work_interval.h,
+ * whose operation numbers skip from JOIN (5) to GET_FLAGS (9).
+ */
+#define WORK_INTERVAL_OPERATION_INSTANCE_START  0x00000006
+#define WORK_INTERVAL_OPERATION_INSTANCE_UPDATE 0x00000007
+#define WORK_INTERVAL_OPERATION_INSTANCE_FINISH 0x00000008
+
 int
 work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
     __unused int32_t *retval)
@@ -69,6 +94,7 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 		}
 
 		if ((error = priv_check_cred(kauth_cred_get(), PRIV_WORK_INTERVAL, 0)) != 0) {
+			native_wi_note("priv", error, 0, create_params.wicp_create_flags);
 			return error;
 		}
 
@@ -79,6 +105,7 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 		};
 
 		kret = kern_work_interval_create(current_thread(), &create_args);
+		native_wi_note("create", 0, kret, create_params.wicp_create_flags);
 
 		/* thread already has a work interval */
 		if (kret == KERN_FAILURE) {
@@ -259,6 +286,26 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 		 */
 		kret = kern_work_interval_join(current_thread(),
 		    (mach_port_name_t)uap->work_interval_id);
+		if (kret != KERN_SUCCESS) {
+			return EINVAL;
+		}
+
+		break;
+	case WORK_INTERVAL_OPERATION_INSTANCE_START:
+	case WORK_INTERVAL_OPERATION_INSTANCE_UPDATE:
+	case WORK_INTERVAL_OPERATION_INSTANCE_FINISH:
+		/*
+		 * ioswitch: audiomxd's IO thread starts an interval every IO cycle (os_workgroup_interval_start); answered
+		 * ENOTSUP, it logged "HALS_IOThread.mm:323 Failed to start the workgroup with code: -1 - Operation not
+		 * supported" every 21 ms. There is no performance controller to inform, so a valid call only succeeds. The
+		 * caller's instance is left as it is: its instance ID stays 0, which libsystem_kernel treats as a legacy
+		 * performance controller (it makes no update or finish calls then).
+		 */
+		if (uap->arg == USER_ADDR_NULL || uap->work_interval_id == 0) {
+			return EINVAL;
+		}
+
+		kret = kern_work_interval_instance_check(current_thread(), uap->work_interval_id);
 		if (kret != KERN_SUCCESS) {
 			return EINVAL;
 		}

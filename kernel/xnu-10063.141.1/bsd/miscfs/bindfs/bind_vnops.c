@@ -105,6 +105,14 @@ bindfs_getattr(struct vnop_getattr_args * args)
 		vnode_put(lowervp);
 
 		if (error == 0) {
+			if (MOUNTTOBINDMOUNT(vnode_mount(args->a_vp))->bindm_flags & BINDM_FORCE_ROOT) {
+				if (VATTR_IS_ACTIVE(args->a_vap, va_uid)) {
+					VATTR_RETURN(args->a_vap, va_uid, 0);
+				}
+				if (VATTR_IS_ACTIVE(args->a_vap, va_gid)) {
+					VATTR_RETURN(args->a_vap, va_gid, 0);
+				}
+			}
 			if (VATTR_IS_ACTIVE(args->a_vap, va_fsid)) {
 				/* fix up fsid so it doesn't say the underlying fs*/
 				VATTR_RETURN(args->a_vap, va_fsid, vfs_statfs(vnode_mount(args->a_vp))->f_fsid.val[0]);

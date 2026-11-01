@@ -1,3 +1,5 @@
+#include "IOSwitchDiag.h"
+#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
@@ -183,7 +185,7 @@
 
 #include "kern_exec_internal.h"
 
-#include <CodeSignature/Entitlements.h>
+#include <CoreEntitlements/CoreEntitlements.h>
 
 #include <mach/exclaves.h>
 
@@ -941,6 +943,18 @@ set_proc_name(struct image_params *imgp, proc_t p)
 	bcopy((caddr_t)imgp->ip_ndp->ni_cnd.cn_nameptr, (caddr_t)p->p_comm,
 	    (unsigned)imgp->ip_ndp->ni_cnd.cn_namelen);
 	p->p_comm[imgp->ip_ndp->ni_cnd.cn_namelen] = '\0';
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	/* ioswitch-proclog=1: one console line per exec and exit while userland has no other log path. */
+	{
+		static int proclog = -1;
+		if (proclog < 0) {
+			int value = 0;
+			(void)PE_parse_boot_argn("ioswitch-proclog", &value, sizeof(value));
+			proclog = value;
+		}
+		if (proclog) printf("+%s[%d]\n", p->p_comm, proc_getpid(p));
+	}
+#endif
 
 #if DEVELOPMENT || DEBUG
 	/*
@@ -1343,7 +1357,11 @@ grade:
 	/*
 	 * Actually load the image file we previously decided to load.
 	 */
+	ioswitch_diag_process_event(proc_getpid(p),p->p_name,"exec load_machfile enter",0);
+	boot_progress_process_stage(proc_getpid(p),p->p_name,"exec load_machfile enter");
 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
+	ioswitch_diag_process_event(proc_getpid(p),p->p_name,"exec load_machfile returned",lret);
+	boot_progress_process_stage(proc_getpid(p),p->p_name,"exec load_machfile returned");
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
 
@@ -5797,6 +5815,98 @@ bad:
 
 
 /*
+ * IOSwitch: environment a chosen daemon gets on top of its own, appended by exec_extract_strings (so a value the
+ * caller passes wins: getenv returns the first match).
+ *
+ * switch-bt=1: bluetoothd's POSIX HCI driver (21H461 bluetoothd FUN_1001d104c / FUN_1000ddaa8) opens the kernel
+ * control named in BT_HCI_TRANSPORT ("<transport>:<driver>:<name>,<baud>") instead of its default
+ * "com.apple.uart.sk.bluetooth", a Skywalk channel endpoint nothing here provides. drivers/SwitchBluetooth registers
+ * the plain stream "com.apple.uart.bluetooth" (the one BlueTool itself opens) with the controller already patched
+ * and at 3 Mbaud; "H4" is plain H4 framing with RTS/CTS, as the ADT's transport-encoding 1 says.
+ */
+/*
+ * r6-lows: CA_FORCE_TIMER=1 for backboardd (NATIVE_IOSWITCH_CA_VBL, a build-time switch: the boot-args are full). QuartzCore
+ * 21H461 CADeviceUseVBL() (dispatch_once at 0x189582620, read at the start of CA::WindowServer::AccelServer's constructor, before
+ * the Metal plug-in loads, hence the exec environment) is true only for MobileGestalt chip ids 0x7000 and 0x8010, or with this
+ * variable non-zero. True, IOMFBServer::add_vsync_source takes IOMobileFramebufferGetVSyncRunLoopSource: the render server's frame
+ * clock is NativeLegacyDisplay's vsync, sent from DC A's V_BLANK interrupt. False (A10X, 0x8011, this build's ADT), it makes a
+ * CADisplayTimer at the nominal refresh whose phase timer_callback aligns from IOMFBDisplay::timing_reference, display+0x6530,
+ * shared timing memory the legacy family never provides: a free-running 60 Hz timer at a random phase to DC A's flip latch
+ * (every boot's display stats: "vsync 0 sent", flip-wait mean 4-12 ms). With VBL, IOMFBDisplay::can_update_ also waits for the
+ * previous swap (IOMobileFramebufferSwapWait), which NativeLegacyDisplay retires when its GPU copy is offered. Off by default
+ * until one boot compares the display stats' present quantiles with and without it.
+ */
+#ifndef NATIVE_IOSWITCH_CA_VBL
+#define NATIVE_IOSWITCH_CA_VBL 0
+#endif
+
+static const char *
+native_ioswitch_exec_environment(const struct image_params *imgp)
+{
+	static const char bluetoothd[] = "/usr/sbin/bluetoothd";
+	static int bluetooth = -1;
+	if (bluetooth < 0) {
+		uint32_t enabled = 0;
+		bluetooth = PE_parse_boot_argn("switch-bt", &enabled, sizeof(enabled)) && enabled;
+	}
+	if (bluetooth && !strncmp(imgp->ip_strings + strlen(EXECUTABLE_KEY), bluetoothd, sizeof(bluetoothd))) {
+		return "BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.bluetooth,3000000";
+	}
+#if NATIVE_IOSWITCH_CA_VBL
+	/* Only with the display's DC A vsync (sheng-vsync, NativeLegacyDisplay startVsync): without it nothing would drive CA. */
+	static const char backboardd[] = "/usr/libexec/backboardd";
+	static int vbl = -1;
+	if (vbl < 0) {
+		uint32_t hz = 0, vblank = 1;
+		(void)PE_parse_boot_argn("ioswitch-vblank", &vblank, sizeof(vblank));
+		vbl = PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz)) && hz && vblank;
+	}
+	if (vbl && !strncmp(imgp->ip_strings + strlen(EXECUTABLE_KEY), backboardd, sizeof(backboardd))) {
+		return "CA_FORCE_TIMER=1";
+	}
+#endif
+	return NULL;
+}
+
+/*
+ * IOSwitch: switch-no-iconagent=1 refuses to run iconservicesagent. With no Metal device in it, Core Image 21H461 falls back
+ * to OpenGL ES, which has no driver here, and the agent crash-loops on every SF Symbol while Settings waits on it.
+ * It is a user-domain job (user/501), so the system disabled.plist does not cover it; refusing the exec does, for any
+ * domain. Clients then get NSXPCConnectionInvalid at once and draw placeholders.
+ */
+static bool
+native_ioswitch_exec_refused(const struct image_params *imgp)
+{
+	static const char iconagent[] = "/System/Library/CoreServices/iconservicesagent";
+	static int refuse = -1;
+	if (refuse < 0) {
+		uint32_t enabled = 0;
+		refuse = PE_parse_boot_argn("switch-no-iconagent", &enabled, sizeof(enabled)) && enabled;
+	}
+	return refuse && !strncmp(imgp->ip_strings + strlen(EXECUTABLE_KEY), iconagent, sizeof(iconagent));
+}
+
+/*
+ * IOSwitch: executables the Data overlay shows (IOSwitchRawMount.inc native_ioswitch_raw_overlay: read-only bindfs unions
+ * of /private/var/ioswitch/overlay<directory> over sealed system directories) skip AMFI's launch constraints. They are
+ * our own builds and still have to be platform code through the packager's trust cache (constraint category 0), but
+ * they are not on the system volume, so the self constraint every launchd system service must meet (21H461 AMFI:
+ * on-system-volume or on-authorized-authapfs-volume, launch-type 1, validation-category 1) can never match. 10-31 r4a:
+ * the BlueTool stand-in died with "Launch Constraint Violation c[8]p[1]m[1]e[6]" on each of ~360 spawns, so bluetoothd
+ * waited on its chip boot for good. Only the kernel mounts bindfs here (bind_vfsops.c entitlement check).
+ */
+static bool
+native_ioswitch_overlay_image(const struct image_params *imgp)
+{
+	static const char overlay[] = "/private/var/ioswitch/overlay/";
+	mount_t mp = imgp->ip_vp ? vnode_mount(imgp->ip_vp) : NULL;
+	if (!mp || !(vfs_flags(mp) & MNT_RDONLY)) return false;
+	struct vfsstatfs *sfs = vfs_statfs(mp);
+	/* No log line: r4b panicked formatting one here (xpcproxy spawning BlueTool, __doprnt fault in process_signature). */
+	return !strcmp(sfs->f_fstypename, "bindfs") && !strncmp(sfs->f_mntfromname, overlay, sizeof(overlay) - 1);
+}
+
+/*
  * exec_extract_strings
  *
  * Copy arguments and environment from user space into work area; we may
@@ -5993,6 +6103,25 @@ exec_extract_strings(struct image_params *imgp)
 			goto bad;
 		}
 		imgp->ip_argspace -= new_ptr_size; /* to hold envv[] entry */
+		imgp->ip_envc++;
+	}
+
+	if (native_ioswitch_exec_refused(imgp)) {
+		error = EPERM;
+		goto bad;
+	}
+	/* IOSwitch: a chosen daemon's extra environment (native_ioswitch_exec_environment). */
+	const char *native_environment = native_ioswitch_exec_environment(imgp);
+	if (native_environment) {
+		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(native_environment), UIO_SYSSPACE, TRUE);
+		if (error) {
+			goto bad;
+		}
+		if (imgp->ip_argspace < new_ptr_size) {
+			error = E2BIG;
+			goto bad;
+		}
+		imgp->ip_argspace -= new_ptr_size;
 		imgp->ip_envc++;
 	}
 
@@ -7013,8 +7142,735 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
  *		word width of the kernel. Once the self-exec completes, the
  *		initproc might be different.
  */
+#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+#if !DEVELOPMENT && !DEBUG
+#error The offline owner cache mount is a development instrument
+#endif
+extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
+#if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
+extern int native_owner_publish_boot_manifest(dev_t, const char *, dev_t, const char *);
+#endif
+#if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
+extern void commpage_update_dyld_flags(uint64_t);
+volatile uint64_t native_owner_cache_dyld_flags = 0;
+#endif
+extern int native_verified_block_root_authorized(dev_t);
+volatile int native_owner_cache_stage = 0;
+volatile int native_owner_cache_status = -1;
+volatile int native_owner_cache_mount_status = -1;
+volatile int native_owner_cache_readonly = 0;
+volatile int native_owner_cache_authorized = 0;
+volatile int native_owner_cache_root_recheck = 0;
+volatile uint64_t native_owner_cache_actual_mount_flags = 0;
+volatile uintptr_t native_owner_cache_original_root = 0;
+volatile uintptr_t native_owner_cache_current_root = 0;
+volatile int native_owner_cache_native_union = 0;
+volatile dev_t native_owner_cache_selected_device = NODEV;
+volatile dev_t native_owner_cache_mounted_device = NODEV;
+char native_owner_cache_device_path[64];
+void native_owner_cache_checkpoint(int, int);
+__attribute__((noinline)) void
+native_owner_cache_checkpoint(int status, int authorized)
+{
+	__asm__ volatile("" : : "r"(status), "r"(authorized) : "memory");
+}
+
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#include "IOSwitchRawMount.inc"
+#include "IOSwitchPanicSave.h"
+#endif
+
 static int
-load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
+native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
+{
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	if (ioswitch_files_storage_profile() == IOSW_STORAGE_RAW)
+		return native_ioswitch_raw_cache_prepare(p, scratch, envp);
+#endif
+	const char *volume = "8846FE78-2910-4297-AF97-D59BB6F8FC16";
+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
+#if !CONFIG_UNION_MOUNTS
+#error The owner composition requires the original native union-mount implementation
+#endif
+	const char *mountpoint = "/";
+#else
+	const char *mountpoint = "/private/preboot";
+#endif
+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+	const char *environment = "DYLD_SHARED_CACHE_DIR=/private/preboot/System/Library/Caches/com.apple.dyld";
+#endif
+	vnode_t original_os_root = rootvnode;
+	native_owner_cache_original_root = (uintptr_t)original_os_root;
+	mount_t root_mount = vnode_mount(original_os_root);
+	vnode_t device_vnode = vfs_devvp(root_mount);
+	dev_t root_device = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
+	dev_t selected = NODEV;
+	vnode_t mounted_root = NULLVP;
+	int error = EAUTH, root_authorized = 0, cache_authorized = 0;
+	int32_t result = 0;
+	user64_addr_t spec = scratch + 0x160;
+	char device_path[64] = {0};
+	uint8_t mount_data[0x150] = {0};
+	uint64_t mount_flags = MNT_RDONLY;
+	uint16_t mount_mode = 1;
+	uint32_t anonymous_owner = 99;
+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+#if defined(XNU_OWNER_CRYPTEX_FILES) && XNU_OWNER_CRYPTEX_FILES
+	const char *fallback = "DYLD_FALLBACK_LIBRARY_PATH=/private/preboot/usr/lib";
+	user64_addr_t environment_vector[3] = {scratch + 0x400, scratch + 0x600, USER_ADDR_NULL};
+#else
+	user64_addr_t environment_vector[2] = {scratch + 0x400, USER_ADDR_NULL};
+#endif
+#endif
+	struct mount_args request = {.type = scratch + 0x100, .path = scratch + 0x120,
+	    .flags = MNT_RDONLY, .data = scratch + 0x200};
+	request.flags = (int)mount_flags;
+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
+	request.flags |= MNT_UNION;
+#endif
+	if (device_vnode) vnode_put(device_vnode);
+	root_authorized = (vfs_flags(root_mount) & MNT_RDONLY) && root_device != NODEV &&
+	    native_verified_block_root_authorized(root_device);
+	if (!root_authorized) goto done;
+	native_owner_cache_stage = 1;
+	if (!native_verified_block_volume_device(volume, &selected, device_path,
+	    sizeof(device_path))) goto done;
+	strlcpy(native_owner_cache_device_path, device_path, sizeof(native_owner_cache_device_path));
+	native_owner_cache_selected_device = selected;
+	native_owner_cache_stage = 2;
+	/* Exact user-mount payload already qualified against this original APFS. */
+	memcpy(mount_data, &spec, sizeof(spec));
+	memcpy(mount_data + 8, &mount_flags, sizeof(mount_flags));
+	memcpy(mount_data + 16, &mount_mode, sizeof(mount_mode));
+	memcpy(mount_data + 0x144, &anonymous_owner, sizeof(anonymous_owner));
+	memcpy(mount_data + 0x148, &anonymous_owner, sizeof(anonymous_owner));
+	if ((error = copyout("apfs", request.type, 5)) != 0 ||
+	    (error = copyout(mountpoint, request.path, strlen(mountpoint) + 1)) != 0 ||
+	    (error = copyout(device_path, spec, strlen(device_path) + 1)) != 0 ||
+	    (error = copyout(mount_data, request.data, sizeof(mount_data))) != 0) goto done;
+	native_owner_cache_stage = 3;
+	error = mount(p, &request, &result);
+	native_owner_cache_mount_status = error;
+	if (error) goto done;
+	native_owner_cache_stage = 4;
+	error = vnode_lookup(mountpoint, 0, &mounted_root, vfs_context_current());
+	if (error) goto done;
+	mount_t cache_mount = vnode_mount(mounted_root);
+	device_vnode = vfs_devvp(cache_mount);
+	dev_t actual = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
+	if (device_vnode) vnode_put(device_vnode);
+	native_owner_cache_mounted_device = actual;
+	int readonly = (vfs_flags(cache_mount) & MNT_RDONLY) != 0;
+	native_owner_cache_readonly = readonly;
+	native_owner_cache_actual_mount_flags = vfs_flags(cache_mount);
+	native_owner_cache_current_root = (uintptr_t)rootvnode;
+	int native_union = (vfs_flags(cache_mount) & MNT_UNION) &&
+	    vnode_mountedhere(original_os_root) == cache_mount && rootvnode == mounted_root;
+	native_owner_cache_native_union = native_union;
+	cache_authorized = readonly && actual == selected &&
+	    !strcmp(vfs_statfs(cache_mount)->f_fstypename, "apfs") && native_verified_block_root_authorized(actual);
+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
+	cache_authorized = cache_authorized && native_union;
+#endif
+	if (!cache_authorized) { error = EAUTH; goto done; }
+	native_owner_cache_stage = 5;
+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+	if ((error = copyout(environment, environment_vector[0], strlen(environment) + 1)) != 0 ||
+	    (error = copyout(environment_vector, scratch + 0x500, sizeof(environment_vector))) != 0) goto done;
+#if defined(XNU_OWNER_CRYPTEX_FILES) && XNU_OWNER_CRYPTEX_FILES
+	if ((error = copyout(fallback, scratch + 0x600, strlen(fallback) + 1)) != 0) goto done;
+#endif
+	*envp = scratch + 0x500;
+#else
+	*envp = USER_ADDR_NULL;
+#endif
+	native_owner_cache_stage = 6;
+done:
+	if (mounted_root) vnode_put(mounted_root);
+	int root_recheck = root_authorized && native_verified_block_root_authorized(root_device);
+	native_owner_cache_root_recheck = root_recheck;
+	if (!root_recheck) error = EAUTH;
+#if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
+	if (!error && cache_authorized && root_recheck &&
+	    !native_owner_publish_boot_manifest(root_device, "04769D26-2CA0-4825-B443-E2E5F88300F2",
+	        selected, volume)) error = EAUTH;
+#endif
+#if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
+	if (!error && cache_authorized && root_recheck) {
+		/* Original dyld bit 3 selects no ignition; the owner chain and actual
+		 * readonly mounts above supply image authentication in this mode. */
+		dyld_flags |= UINT64_C(8);
+		commpage_update_dyld_flags(dyld_flags);
+		native_owner_cache_dyld_flags = dyld_flags;
+	}
+#endif
+	native_owner_cache_authorized = cache_authorized;
+	native_owner_cache_status = error;
+	native_owner_cache_checkpoint(error, cache_authorized);
+	return error;
+}
+#endif
+
+#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
+#if !defined(XNU_OWNER_BOOT_MANIFEST) || !XNU_OWNER_BOOT_MANIFEST
+#error Scratch Data mounting requires the authenticated original OS startup path
+#endif
+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+#ifndef XNU_OWNER_DATA_VOLUME_UUID
+#error Supply the observed scratch volume UUID for the IOKit backend
+#endif
+extern int native_ram_block_volume_seed(const char *, dev_t *, char *, size_t, uint64_t *, uint64_t *, uint8_t *);
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#include "storage/block_backend.h"
+#include <sys/fcntl.h>
+#include <sys/stdio.h>
+extern int ioswitch_data_volume_path(const char *, dev_t *, char *, size_t, uint64_t *);
+extern int ioswitch_data_volume_status(const char *, dev_t *, char *, size_t, uint64_t *);
+#endif
+#endif
+extern dev_t mdevlookup(int);
+extern int mdevgetrange(int, uint64_t *, uint64_t *);
+volatile int native_owner_data_status = -1;
+volatile int native_owner_data_stage = 0;
+volatile int native_owner_data_readonly = -1;
+volatile dev_t native_owner_data_device = NODEV;
+uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
+uint8_t native_owner_data_seed_sha256[32];
+char native_owner_data_device_path[64];
+
+/* Boot-time read-only union views of owner-provided GPU addon content over sealed system directories, mounted after the Data mount and
+ * before launchd starts: the Adreno Metal plugin bundle over /System/Library/Extensions (the original Metal discovery loads
+ * /System/Library/Extensions/<MetalPluginName>.bundle) and an owner launchd job over /System/Library/LaunchDaemons (a process outside
+ * every sandbox profile). Only with boot-arg sheng-gpu-addon=1. Never panics: a missing source directory or a refused mount only
+ * records its status. The backing directories are owner Data (not an authenticated immutable volume); code in them still has to
+ * pass AMFI through the loaded trust cache. */
+extern volatile int native_bindfs_boot_mount;
+volatile int native_gpu_addon_stage = 0;
+volatile int native_gpu_addon_status = -1;
+volatile int native_gpu_addon2_stage = 0;
+volatile int native_gpu_addon2_status = -1;
+static void
+native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
+    const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
+{
+	vnode_t probe = NULLVP;
+	int error;
+	*stage = 1;
+	error = vnode_lookup(source, 0, &probe, vfs_context_current());
+	if (error) {
+		*status = error;
+		return;
+	}
+	vnode_put(probe);
+	probe = NULLVP;
+	*stage = 2;
+	struct mount_args request = {.type = scratch + offset, .path = scratch + offset + 0x20,
+	    .flags = MNT_RDONLY | MNT_UNION, .data = scratch + offset + 0x100};
+	int32_t result = 0;
+	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(point, request.path, point_size)) ||
+	    (error = copyout(source, request.data, source_size))) {
+		*status = error;
+		return;
+	}
+	native_bindfs_boot_mount = 1;
+	error = mount(p, &request, &result);
+	native_bindfs_boot_mount = 0;
+	if (error) {
+		*status = error;
+		return;
+	}
+	*stage = 3;
+	/* The union must still show a sealed lower entry next to the owner's. */
+	error = vnode_lookup(visible, 0, &probe, vfs_context_current());
+	if (!error) {
+		vnode_put(probe);
+		probe = NULLVP;
+		*stage = 4;
+		/* ... and the owner's own entry must be visible through it (stage 5). */
+		error = vnode_lookup(own, 0, &probe, vfs_context_current());
+		if (!error) {
+			vnode_put(probe);
+			probe = NULLVP;
+			*stage = 5;
+		}
+	}
+	*status = error;
+}
+static void
+native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+{
+	uint32_t enabled = 0;
+	if (!PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled)) || enabled != 1) {
+		return;
+	}
+	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
+	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
+	/* Scratch page layout until launchd's exec: 0x000 its path and arguments, 0x100-0x34f mount requests,
+	 * 0x400 its environment string and 0x500 the vector (native_ioswitch_raw_cache_prepare), 0x900 mkdir,
+	 * 0xa00-0xbff union mounts and renames. These two mounts take 0xc00-0xd7f and 0xe00-0xf7f. */
+	native_gpu_addon_mount(p, scratch, 0xc00, extensions_source, sizeof(extensions_source), extensions_point,
+	    sizeof(extensions_point), "/System/Library/Extensions/AGXMetalA10.bundle",
+	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
+	    &native_gpu_addon_status);
+	native_gpu_addon_mount(p, scratch, 0xe00, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
+	    "/System/Library/LaunchDaemons/com.apple.backboardd.plist",
+	    "/System/Library/LaunchDaemons/org.blu-sharky.adrenoprobed.plist", &native_gpu_addon2_stage, &native_gpu_addon2_status);
+}
+
+static int
+native_owner_data_prepare(proc_t p, user_addr_t scratch)
+{
+	uint64_t base = 0, size = 0;
+	dev_t device = NODEV;
+	int error = EINVAL;
+	vnode_t data_root = NULLVP;
+	char device_path[64] = "/dev/md0";
+	uint32_t ioswitch_persistent = 0;
+	int ioswitch_raw = 0;
+	const char *data_uuid = XNU_OWNER_DATA_VOLUME_UUID;
+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	(void)PE_parse_boot_argn("ioswitch-root-boot", &ioswitch_persistent, sizeof(ioswitch_persistent));
+	ioswitch_raw = ioswitch_files_storage_profile() == IOSW_STORAGE_RAW;
+	if (ioswitch_raw) data_uuid = IOSW_RAW_DATA_UUID;
+	if (ioswitch_persistent == 1) {
+		/* Mutable Data has no fixed content digest or contiguous RAM address.
+		 * Select only the exact UUID under this boot's persistent SD child. */
+		bzero(native_owner_data_seed_sha256, sizeof(native_owner_data_seed_sha256));
+		/* Sibling APFS media may still be publishing after OS root is ready.
+		 * Yield only for that state; never retry a refused identity or I/O. */
+		for (unsigned attempt = 0;; ++attempt) {
+			int status = ioswitch_raw ?
+			    ioswitch_raw_volume_status(data_uuid, &device, device_path, sizeof(device_path), &size) :
+			    ioswitch_data_volume_status(data_uuid, &device, device_path, sizeof(device_path), &size);
+			if (status == IOSW_BLOCK_OK) break;
+			if (status != IOSW_BLOCK_NOT_READY) {
+				error = status == IOSW_BLOCK_NOMEM ? ENOMEM :
+				    (status == IOSW_BLOCK_IO ? EIO : EINVAL);
+				goto done;
+			}
+			if (attempt == 100) { error = ETIMEDOUT; goto done; }
+			struct timespec interval = {.tv_sec = 0, .tv_nsec = 100000000};
+			(void)msleep((void *)&native_owner_data_stage, NULL, PWAIT, "ioswData", &interval);
+		}
+		if (size != (ioswitch_raw ? IOSW_RAW_BYTES : UINT64_C(17179869184))) goto done;
+	} else
+#endif
+	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
+	    sizeof(device_path), &base, &size, native_owner_data_seed_sha256)) { error = ENOENT; goto done; }
+	/* Logical capacity is independent of the optional RAM seed representation. */
+	if (!size || size > UINT64_C(0x10000000000) || (size & 4095)) goto done;
+#else
+	device = mdevlookup(0);
+	if (device == NODEV || mdevgetrange(0, &base, &size) || base < VM_MIN_KERNEL_ADDRESS ||
+	    !size || size > UINT64_C(0x80000000) || (base & 4095) || (size & 4095)) goto done;
+	SHA256_CTX context;
+	SHA256_Init(&context);
+	SHA256_Update(&context, (const void *)base, size);
+	SHA256_Final(native_owner_data_seed_sha256, &context);
+#endif
+	native_owner_data_seed_base = base;
+	native_owner_data_seed_size = size;
+	native_owner_data_stage = 1;
+	strlcpy(native_owner_data_device_path, device_path, sizeof(native_owner_data_device_path));
+	uint8_t payload[0x150] = {0};
+	user64_addr_t spec = scratch + 0x160;
+	uint16_t mode = 1;
+	uint32_t anonymous_owner = 99;
+	memcpy(payload, &spec, sizeof(spec));
+	memcpy(payload + 16, &mode, sizeof(mode));
+	memcpy(payload + 0x144, &anonymous_owner, sizeof(anonymous_owner));
+	memcpy(payload + 0x148, &anonymous_owner, sizeof(anonymous_owner));
+	struct mount_args request = {.type = scratch + 0x100, .path = scratch + 0x120,
+	    .flags = 0, .data = scratch + 0x200};
+	int32_t result = 0;
+	if ((error = copyout("apfs", request.type, 5)) ||
+	    (error = copyout("/private/var", request.path, 13)) ||
+	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
+	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
+	native_owner_data_stage = 2;
+	error = mount(p, &request, &result);
+	if (error) goto done;
+	native_owner_data_stage = 3;
+	error = vnode_lookup("/private/var", 0, &data_root, vfs_context_current());
+	if (error) goto done;
+	mount_t data_mount = vnode_mount(data_root);
+	vnode_t device_node = vfs_devvp(data_mount);
+	dev_t actual = device_node ? vnode_specrdev(device_node) : NODEV;
+	if (device_node) vnode_put(device_node);
+	native_owner_data_device = actual;
+	native_owner_data_readonly = (vfs_flags(data_mount) & MNT_RDONLY) != 0;
+	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
+	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	if (!error && ioswitch_persistent == 1) {
+		dev_t rechecked = NODEV;
+		uint64_t rechecked_size = 0;
+		char rechecked_path[64];
+		int status = ioswitch_raw ?
+		    ioswitch_raw_volume_status(data_uuid, &rechecked, rechecked_path, sizeof(rechecked_path), &rechecked_size) :
+		    ioswitch_data_volume_status(data_uuid, &rechecked, rechecked_path, sizeof(rechecked_path), &rechecked_size);
+		if (status != IOSW_BLOCK_OK || rechecked != actual || rechecked_size != size ||
+		    strcmp(device_path, rechecked_path)) error = EPERM;
+	}
+	if (!error) {
+		uint64_t observed_root=UINT64_MAX,observed_mobile=UINT64_MAX;
+		uint64_t flags=vfs_flags(data_mount);
+		struct vnode_attr attributes;
+		vnode_t mobile=NULLVP;
+		if ((flags & MNT_IGNORE_OWNERSHIP) || !vnode_isdir(data_root)) error=EPERM;
+		if (!error) {
+			VATTR_INIT(&attributes);
+			VATTR_WANTED(&attributes,va_uid);VATTR_WANTED(&attributes,va_gid);
+			error=VNOP_GETATTR(data_root,&attributes,vfs_context_current());
+			if (!error && (!VATTR_IS_SUPPORTED(&attributes,va_uid) || !VATTR_IS_SUPPORTED(&attributes,va_gid))) error=ENOTSUP;
+			if (!error) observed_root=((uint64_t)attributes.va_uid<<32)|attributes.va_gid;
+		}
+		if (!error) error=vnode_lookup("/private/var/mobile",0,&mobile,vfs_context_current());
+		if (!error && (!vnode_isdir(mobile) || vnode_mount(mobile)!=data_mount)) error=EINVAL;
+		if (!error) {
+			VATTR_INIT(&attributes);
+			VATTR_WANTED(&attributes,va_uid);VATTR_WANTED(&attributes,va_gid);
+			error=VNOP_GETATTR(mobile,&attributes,vfs_context_current());
+			if (!error && (!VATTR_IS_SUPPORTED(&attributes,va_uid) || !VATTR_IS_SUPPORTED(&attributes,va_gid))) error=ENOTSUP;
+			if (!error) observed_mobile=((uint64_t)attributes.va_uid<<32)|attributes.va_gid;
+		}
+		if (mobile) vnode_put(mobile);
+		ioswitch_root_data_ownership(flags,observed_root,observed_mobile);
+		if (!error && (observed_root!=0 || observed_mobile!=((UINT64_C(501)<<32)|501)))
+			printf("IOSwitch raw boot: Data ownership root=%llx mobile=%llx (expected 0/501:501)\n",
+			    observed_root, observed_mobile);
+	}
+#endif
+	if (!error) native_owner_data_stage = 4;
+	if (!error) native_gpu_addon_prepare(p, scratch);
+done:
+	if (data_root) vnode_put(data_root);
+	native_owner_data_status = error;
+	return error;
+}
+
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && \
+    defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+/* Development launchd policy retained on persistent Data for the native board.
+ * The original OS job and executable remain unchanged. */
+static int
+native_ioswitch_watchdog_attributes(vnode_t vp, mount_t data_mount, int directory, uint64_t size)
+{
+	struct vnode_attr attributes;
+	if (vnode_mount(vp) != data_mount ||
+	    (directory ? !vnode_isdir(vp) : !vnode_isreg(vp))) return EINVAL;
+	VATTR_INIT(&attributes);
+	VATTR_WANTED(&attributes, va_uid);
+	VATTR_WANTED(&attributes, va_gid);
+	VATTR_WANTED(&attributes, va_mode);
+	if (!directory) VATTR_WANTED(&attributes, va_data_size);
+	int error = VNOP_GETATTR(vp, &attributes, vfs_context_current());
+	if (error) return error;
+	if (!VATTR_IS_SUPPORTED(&attributes, va_uid) || !VATTR_IS_SUPPORTED(&attributes, va_gid) ||
+	    !VATTR_IS_SUPPORTED(&attributes, va_mode) ||
+	    (!directory && !VATTR_IS_SUPPORTED(&attributes, va_data_size))) return ENOTSUP;
+	if (attributes.va_uid != 0 || attributes.va_gid != 0) return EPERM;
+	if (directory) {
+		if (attributes.va_mode & 022) return EPERM;
+	} else if ((attributes.va_mode & 022) || (size != UINT64_MAX &&
+	    ((attributes.va_mode & 07777) != 0644 || attributes.va_data_size != size))) return EINVAL;
+	return 0;
+}
+
+static int
+native_ioswitch_watchdog_directory(proc_t p, user_addr_t scratch, const char *path, mount_t data_mount)
+{
+	vnode_t vp = NULLVP;
+	int created = 0;
+	int error = vnode_open(path, FREAD | O_DIRECTORY | O_NOFOLLOW_ANY, 0, 0, &vp, vfs_context_current());
+	if (error == ENOENT) {
+		struct mkdir_args request = {.path = scratch + 0x900, .mode = 0755};
+		int32_t result = 0;
+		if ((error = copyout(path, request.path, strlen(path) + 1))) return error;
+		if ((error = mkdir(p, &request, &result))) return error;
+		created = 1;
+		error = vnode_open(path, FREAD | O_DIRECTORY | O_NOFOLLOW_ANY, 0, 0, &vp, vfs_context_current());
+	}
+	if (error) return error;
+	/* No other userspace exists yet; each already-checked parent is root owned
+	 * and cannot be changed by a non-root principal during this preparation. */
+	if (vnode_mount(vp) != data_mount || !vnode_isdir(vp)) error = EINVAL;
+	if (!error && created) {
+		struct vnode_attr attributes;
+		VATTR_INIT(&attributes);
+		VATTR_SET(&attributes, va_uid, 0);
+		VATTR_SET(&attributes, va_gid, 0);
+		VATTR_SET(&attributes, va_mode, 0755);
+		error = vnode_setattr(vp, &attributes, vfs_context_current());
+	}
+	if (!error) error = native_ioswitch_watchdog_attributes(vp, data_mount, 1, 0);
+	if (!error) error = VNOP_FSYNC(vp, MNT_WAIT, vfs_context_current());
+	int close_error = vnode_close(vp, FREAD, vfs_context_current());
+	return error ? error : close_error;
+}
+
+static int
+native_ioswitch_watchdog_file(proc_t p, user_addr_t scratch, const char *path, const char *bytes, int length, mount_t data_mount,
+    uid_t owner, gid_t group, mode_t mode)
+{
+	/* An empty marker is created once; the policy is replaced atomically every boot
+	 * so edits to its job list reach existing Data volumes. Root-owned, as launchd requires. */
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	char temporary[192];
+	int error;
+	if (!length) {
+		error = vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
+		if (!error) return vnode_close(vp, FREAD, context);
+		if (error != ENOENT) return error;
+	}
+	int size = snprintf(temporary, sizeof(temporary), "%s.ioswitch-%s", path, bootsessionuuid_string);
+	if (size < 0 || (size_t)size >= sizeof(temporary)) return ENAMETOOLONG;
+	error = vnode_open(temporary, FREAD | FWRITE | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode, 0, &vp, context);
+	if (error) return error;
+	if (vnode_mount(vp) != data_mount || !vnode_isreg(vp)) error = EINVAL;
+	if (!error && length) {
+		int residual = length;
+		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)bytes, length, 0, UIO_SYSSPACE, IO_SYNC,
+		    vfs_context_ucred(context), &residual, p);
+		if (!error && residual) error = EIO;
+	}
+	if (!error) {
+		struct vnode_attr attributes;
+		VATTR_INIT(&attributes);
+		VATTR_SET(&attributes, va_uid, owner);
+		VATTR_SET(&attributes, va_gid, group);
+		VATTR_SET(&attributes, va_mode, mode);
+		error = vnode_setattr(vp, &attributes, context);
+	}
+	int close_error = vnode_close(vp, FREAD | FWRITE | (length ? FWASWRITTEN : 0), context);
+	if (!error) error = close_error;
+	struct renameatx_np_args request = {.fromfd = AT_FDCWD, .from = scratch + 0xa00,
+	    .tofd = AT_FDCWD, .to = scratch + 0xb00, .flags = RENAME_NOFOLLOW_ANY};
+	int32_t result = 0;
+	if (!error) error = copyout(temporary, request.from, strlen(temporary) + 1);
+	if (!error) error = copyout(path, request.to, strlen(path) + 1);
+	if (!error) error = renameatx_np(p, &request, &result);
+	if (error && !copyout(temporary, request.from, strlen(temporary) + 1)) {
+		struct unlink_args cleanup = {.path = request.from};
+		(void)unlink(p, &cleanup, &result);
+	}
+	return error;
+}
+
+static int
+native_ioswitch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t owner, mode_t mode)
+{
+	vnode_t vp = NULLVP;
+	int error = vnode_lookup(path, 0, &vp, vfs_context_current());
+	if (!error) {
+		vnode_put(vp);
+		return 0;
+	}
+	if (error != ENOENT) return error;
+	struct mkdir_args request = {.path = scratch + 0x900, .mode = 0755};
+	int32_t result = 0;
+	if ((error = copyout(path, request.path, strlen(path) + 1)) || (error = mkdir(p, &request, &result))) return error;
+	if ((error = vnode_lookup(path, 0, &vp, vfs_context_current()))) return error;
+	struct vnode_attr attributes;
+	VATTR_INIT(&attributes);
+	VATTR_SET(&attributes, va_uid, owner);
+	VATTR_SET(&attributes, va_gid, owner);
+	VATTR_SET(&attributes, va_mode, mode);
+	error = vnode_setattr(vp, &attributes, vfs_context_current());
+	vnode_put(vp);
+	return error;
+}
+
+/* The state a restored iPad has after Setup and data migration, plus no
+ * SpringBoard watchdogs or idle sleep (no buttons or idle timer here yet).
+ * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks. */
+static int
+native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+#define IOSW_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
+	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
+	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
+	static const struct { const char *name, *body; } prefs[] = {
+		{"com.apple.purplebuddy", IOSW_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
+		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>")},
+		{"com.apple.purplebuddy.notbackedup", IOSW_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
+		    "<key>ShouldRunHSA2MiniBuddy</key><false/><key>ShouldRunKeychainSyncMiniBuddy</key><false/>"
+		    "<key>ShouldRunMesaMiniBuddy</key><false/><key>ShouldRunPaymentMiniBuddy</key><false/>"
+		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>")},
+		{"com.apple.managedconfiguration.notbackedup",
+		    IOSW_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>")},
+		{"com.apple.springboard", IOSW_PLIST("<key>BKNoWatchdogs</key><true/>"
+		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
+		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
+		    "<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><true/>"
+		    /* The 7" panel shows 1280x720 points at scale 1 (UIScreen.scale is an integer all the way down,
+		     * so no fractional zoom): large icons and the text size below keep things legible and crisp. */
+		    "<key>SBHomeLargeIcons</key><true/>")},
+		{"com.apple.UIKit", IOSW_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
+		    "<string>UICTContentSizeCategoryXXL</string>")},
+		{"com.apple.migration", IOSW_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
+		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
+		    "<key>buildVersion</key><string>21H461</string></dict>")},
+	};
+#undef IOSW_PLIST
+	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
+	 * session and persona keybags in keybags/ and aborts at every start without it. */
+	static const struct { const char *path; uid_t owner; mode_t mode; } directories[] = {
+		{"/private/var/containers", 0, 0755}, {"/private/var/containers/Bundle", 33, 0755},
+		{"/private/var/containers/Data", 0, 0755}, {"/private/var/containers/Data/System", 0, 0755},
+		{"/private/var/containers/Data/Application", 0, 0755},
+		{"/private/var/containers/Shared", 0, 0755}, {"/private/var/containers/Shared/SystemGroup", 0, 0755},
+		{"/private/var/containers/Temp", 0, 0755},
+		{"/private/var/keybags", 0, 0700}, {"/private/var/keybags/backup", 0, 0700},
+		{"/private/var/PersonaVolumes", 0, 0755}, {"/private/var/Library", 0, 0755},
+		{"/private/var/db/dslocal", 0, 0755}, {"/private/var/db/dslocal/nodes", 0, 0755},
+		{"/private/var/db/dslocal/nodes/Default", 0, 0755},
+		{"/private/var/db/dslocal/nodes/Default/users", 0, 0755},
+		{"/private/var/db/dslocal/nodes/Default/groups", 0, 0755},
+		{"/private/var/db/dslocal/nodes/Default/config", 0, 0755},
+		{"/private/var/mobile/Documents", 501, 0755},
+	};
+	int error = 0;
+	for (unsigned i = 0; i < sizeof(directories) / sizeof(directories[0]) && !error; ++i)
+		error = native_ioswitch_mkdir(p, scratch, directories[i].path, directories[i].owner, directories[i].mode);
+	char path[160] = "/private/var/containers";
+	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
+		snprintf(path, sizeof(path), "/private/var/mobile/Library/Preferences/%s.plist", prefs[i].name);
+		error = native_ioswitch_watchdog_file(p, scratch, path, prefs[i].body, (int)strlen(prefs[i].body),
+		    data_mount, 501, 501, 0600);
+	}
+	if (error) printf("IOSwitch raw boot: first-boot state failed at %s: %d\n", path, error);
+	return error;
+}
+
+/* The last boot's panic, kept in RAM across the warm reset (boot-arg ioswitch-panic-save, IOSwitchPanicSave.c):
+ * /private/var/ioswitch/panic-<UTC time>.log, root 0644, written as the policy files are; the record is cleared once it is
+ * on Data. A failure is logged and the record kept for the next boot. */
+static void
+native_ioswitch_panic_save(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	char path[96];
+	uint32_t length = 0;
+	const char *text = ioswitch_panic_save_pending(&length, path, sizeof(path));
+	if (!text) return;
+	int error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
+	if (!error) error = native_ioswitch_watchdog_file(p, scratch, path, text, (int)length, data_mount, 0, 0, 0644);
+	ioswitch_panic_save_done(error, path);
+}
+
+static int
+native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
+{
+	/* Jobs with no hardware or accounts here; the first four deadlock each other
+	 * (UniXNU-sheng BootWatchdogPolicy.c "lite" set). */
+#define NATIVE_IOSWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
+	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
+	    "<plist version=\"1.0\"><dict>" \
+	    "<key>com.apple.watchdogd</key><true/>" \
+	    "<key>com.apple.identityservicesd</key><true/>" \
+	    "<key>com.apple.locationd</key><true/>" \
+	    "<key>com.apple.CommCenter</key><true/>"
+	/* Bluetooth needs drivers/SwitchBluetooth, which runs only with boot-arg switch-bt=1 (the BlueTool stand-in in
+	 * the overlay and bluetoothd's transport, native_ioswitch_exec_environment, are gated the same way). Without it
+	 * bluetoothd has no controller and stays disabled. audiomxd's Bluetooth plug-in then retries bluetoothd's
+	 * com.apple.BTAudioHALPlugin.xpc in a tight loop (~520/s, 500k+ log lines a boot) unless the overlay shows the stub
+	 * BTAudioHALPlugin.driver/Info.plist (drivers/SwitchAudio/hal/BTAudioHALPlugin-Info.plist: a loading condition that
+	 * matches no IOService, so the audio server defers the plug-in before loading any code). So audiomxd runs when
+	 * bluetoothd does or when that stub is on Data, and stays disabled otherwise. */
+#define NATIVE_IOSWITCH_POLICY_BLUETOOTH "<key>com.apple.bluetoothd</key><true/>"
+#define NATIVE_IOSWITCH_POLICY_AUDIO "<key>com.apple.audiomxd</key><true/>"
+#define NATIVE_IOSWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
+	    "<key>com.apple.mediaanalysisd</key><true/>" \
+	    "<key>com.apple.mediastream.mstreamd</key><true/>" \
+	    "<key>com.apple.icloud.searchpartyd</key><true/>" \
+	    "<key>com.apple.findmy.findmybeaconingd</key><true/>" \
+	    "<key>com.apple.familycircled</key><true/>" \
+	    "<key>com.apple.financed</key><true/>" \
+	    "<key>com.apple.softwareupdateservicesd</key><true/>" \
+	    "<key>com.apple.ndoagent</key><true/>" \
+	    "<key>com.apple.biomesyncd</key><true/>" \
+	    "<key>com.apple.email.maild</key><true/>" \
+	    "<key>com.apple.amsengagementd</key><true/>" \
+	    "<key>com.apple.adid</key><true/>" \
+	    "<key>com.apple.eyereliefd</key><true/>" \
+	    "<key>com.apple.fairplayd.A2</key><true/>" \
+	    "<key>com.apple.passd</key><true/>" \
+	    "<key>com.apple.mobile.obliteration</key><true/>" \
+	    "<key>com.apple.coreduetd</key><true/>" \
+	    "</dict></plist>\n"
+	static const char head[] = NATIVE_IOSWITCH_POLICY_HEAD, bluetooth_off[] = NATIVE_IOSWITCH_POLICY_BLUETOOTH,
+	    audio_off[] = NATIVE_IOSWITCH_POLICY_AUDIO, tail[] = NATIVE_IOSWITCH_POLICY_TAIL;
+	static char policy[sizeof(head) + sizeof(bluetooth_off) + sizeof(audio_off) + sizeof(tail)];
+#undef NATIVE_IOSWITCH_POLICY_HEAD
+#undef NATIVE_IOSWITCH_POLICY_BLUETOOTH
+#undef NATIVE_IOSWITCH_POLICY_AUDIO
+#undef NATIVE_IOSWITCH_POLICY_TAIL
+	static const char bluetooth_audio_stub[] =
+	    "/private/var/ioswitch/overlay/System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/Info.plist";
+	uint32_t bluetooth = 0;
+	const int with_bluetooth = PE_parse_boot_argn("switch-bt", &bluetooth, sizeof(bluetooth)) && bluetooth;
+	int policy_size = 0;
+	static const char *const paths[] = {
+	    "/private/var/db/com.apple.xpc.launchd/disabled.plist",
+	    "/private/var/db/com.apple.xpc.launchd/disabled.migrated"
+	};
+	uint32_t root_boot = 0;
+	if (!PE_parse_boot_argn("ioswitch-root-boot", &root_boot, sizeof(root_boot)) || root_boot != 1) return 0;
+	if (native_owner_data_status || native_owner_data_stage != 4 || native_owner_data_device == NODEV) return EPERM;
+	vnode_t data_root = NULLVP;
+	int error = vnode_open("/private/var", FREAD | O_DIRECTORY | O_NOFOLLOW_ANY,
+	    0, 0, &data_root, vfs_context_current());
+	if (error) return error;
+	mount_t data_mount = vnode_mount(data_root);
+	vnode_t device = vfs_devvp(data_mount);
+	dev_t actual = device ? vnode_specrdev(device) : NODEV;
+	if (device) vnode_put(device);
+	if (actual != native_owner_data_device ||
+	    (vfs_flags(data_mount) & (MNT_RDONLY | MNT_IGNORE_OWNERSHIP)) ||
+	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EPERM;
+	if (!error) error = native_ioswitch_watchdog_attributes(data_root, data_mount, 1, 0);
+	if (!error) {
+		vnode_t stub = NULLVP;
+		/* The HAL union with the stub is gated on switch-audio (tree/overlay/manifest.json), so the stub only
+		 * counts when that boot-arg is set: otherwise the real BTAudioHALPlugin would load and spin. */
+		uint32_t audio = 0;
+		const int with_audio_arg = PE_parse_boot_argn("switch-audio", &audio, sizeof(audio)) && audio;
+		const int with_audio = with_bluetooth ||
+		    (with_audio_arg && !vnode_lookup(bluetooth_audio_stub, 0, &stub, vfs_context_current()));
+		if (stub) vnode_put(stub);
+		strlcpy(policy, head, sizeof(policy));
+		if (!with_bluetooth) strlcat(policy, bluetooth_off, sizeof(policy));
+		if (!with_audio) strlcat(policy, audio_off, sizeof(policy));
+		policy_size = (int)strlcat(policy, tail, sizeof(policy));
+		if (!with_audio) printf("IOSwitch raw boot: audiomxd stays disabled: no %s\n", bluetooth_audio_stub);
+	}
+	if (!error) error = native_ioswitch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
+	if (!error) error = native_ioswitch_watchdog_directory(p, scratch,
+	    "/private/var/db/com.apple.xpc.launchd", data_mount);
+	if (!error) error = native_ioswitch_watchdog_file(p, scratch, paths[0], policy, policy_size, data_mount, 0, 0, 0644);
+	/* Persist the policy name before allowing launchd's migration marker. */
+	if (!error) error = native_ioswitch_watchdog_directory(p, scratch,
+	    "/private/var/db/com.apple.xpc.launchd", data_mount);
+	if (!error) error = native_ioswitch_watchdog_file(p, scratch, paths[1], "", 0, data_mount, 0, 0, 0644);
+	/* Persist new file names and any newly created parent directories. */
+	if (!error) error = native_ioswitch_watchdog_directory(p, scratch,
+	    "/private/var/db/com.apple.xpc.launchd", data_mount);
+	if (!error) error = native_ioswitch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
+	if (!error) error = native_ioswitch_setup_state(p, scratch, data_mount);
+	if (!error) native_ioswitch_panic_save(p, scratch, data_mount);
+	if (!error) error = VNOP_FSYNC(data_root, MNT_WAIT, vfs_context_current());
+	int close_error = vnode_close(data_root, FREAD, vfs_context_current());
+	if (!error) error = close_error;
+	if (!error) printf("ioswitch: persistent Data launchd preferences ready\n");
+	return error;
+}
+#endif
+#endif
+
+static int
+load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path, user_addr_t envp)
 {
 	int retval[2];
 	int error;
@@ -7086,7 +7942,7 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
 	 */
 	init_exec_args.fname = argv0;
 	init_exec_args.argp = scratch_addr;
-	init_exec_args.envp = USER_ADDR_NULL;
+	init_exec_args.envp = envp;
 
 	/*
 	 * So that init task is set with uid,gid 0 token
@@ -7096,7 +7952,13 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
 	 */
 	set_security_token(p, proc_ucred_unsafe(p));
 
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	error=execve(p, &init_exec_args, retval);
+	if (!strcmp(path,"/sbin/launchd")) ioswitch_root_event(13,error,0);
+	return error;
+#else
 	return execve(p, &init_exec_args, retval);
+#endif
 }
 
 static const char * init_programs[] = {
@@ -7141,6 +8003,8 @@ static const char * init_programs[] = {
 void
 load_init_program(proc_t p)
 {
+	boot_progress_stage("load_init_program enter");
+	ioswitch_diag_stage("launchd exec attempt - EL0 not established");
 	uint32_t i;
 	int error;
 	vm_map_t map = current_map();
@@ -7148,9 +8012,59 @@ load_init_program(proc_t p)
 	mach_vm_size_t map_page_size = vm_map_page_size(map);
 
 	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);
+	user_addr_t init_envp = USER_ADDR_NULL;
+#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+	boot_progress_stage("SystemOS mount enter");
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	ioswitch_root_event(9,0,0);
+#endif
+	int cache_error = native_owner_cache_prepare(p, (user_addr_t)scratch_addr, &init_envp);
+	boot_progress_stage("SystemOS mount returned");
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	ioswitch_root_event(10,cache_error,0);
+#endif
+	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
+#endif
+#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
+	boot_progress_stage("Data mount enter");
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	ioswitch_root_event(11,0,0);
+#endif
+	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
+	boot_progress_stage("Data mount returned");
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	ioswitch_root_event(12,data_error,0);
+#endif
+	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && \
+    defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+	int watchdog_error = native_ioswitch_watchdog_policy(p, (user_addr_t)scratch_addr);
+	if (watchdog_error) printf("IOSwitch raw boot: watchdogd launchd policy not written: %d (continuing)\n", watchdog_error);
+	/* Owner overlay unions over sealed directories (IOSwitchRawMount.inc), now that Data is mounted. */
+	native_ioswitch_raw_overlay(p, (user_addr_t)scratch_addr);
+#endif
+#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+	extern int sheng_boot_watchdog_policy(void *, uint64_t);
+	boot_progress_stage("temporary watchdog launch policy enter");
+	int policy_error=sheng_boot_watchdog_policy(p, (uint64_t)scratch_addr);
+	if (policy_error) panic("sheng watchdog launch policy failed: %d", policy_error);
+	boot_progress_stage("temporary watchdog launch policy ready");
+#endif
+#endif
 #if CONFIG_MEMORYSTATUS
 	(void) memorystatus_init_at_boot_snapshot();
 #endif /* CONFIG_MEMORYSTATUS */
+
+#if (DEBUG || DEVELOPMENT) && defined(XNU_NATIVE_AIR_INIT) && XNU_NATIVE_AIR_INIT
+	int offline_air = 0;
+	if (PE_parse_boot_argn("offline-air-init", &offline_air, sizeof(offline_air)) && offline_air) {
+		if (offline_air != 1) panic("offline AIR init invalid selector");
+		error = load_init_program_at_path(p, (user_addr_t)scratch_addr,
+		    "/private/var/tmp/air-native", init_envp);
+		if (error) panic("offline signed AIR instrument exec failed: %d", error);
+		return;
+	}
+#endif
 
 #if DEBUG || DEVELOPMENT
 	/* Check for boot-arg suffix first */
@@ -7162,7 +8076,7 @@ load_init_program(proc_t p)
 
 		if (is_release_suffix) {
 			printf("load_init_program: attempting to load /sbin/launchd\n");
-			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, "/sbin/launchd");
+			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, "/sbin/launchd", init_envp);
 			if (!error) {
 				return;
 			}
@@ -7173,7 +8087,7 @@ load_init_program(proc_t p)
 			strlcat(launchd_path, launchd_suffix, sizeof(launchd_path));
 
 			printf("load_init_program: attempting to load %s\n", launchd_path);
-			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, launchd_path);
+			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, launchd_path, init_envp);
 			if (!error) {
 				return;
 			} else if (error != ENOENT) {
@@ -7186,7 +8100,7 @@ load_init_program(proc_t p)
 	error = ENOENT;
 	for (i = 0; i < sizeof(init_programs) / sizeof(init_programs[0]); i++) {
 		printf("load_init_program: attempting to load %s\n", init_programs[i]);
-		error = load_init_program_at_path(p, (user_addr_t)scratch_addr, init_programs[i]);
+		error = load_init_program_at_path(p, (user_addr_t)scratch_addr, init_programs[i], init_envp);
 		if (!error) {
 			return;
 		} else if (error != ENOENT) {
@@ -7632,6 +8546,7 @@ process_signature(proc_t p, struct image_params *imgp)
 	 * approve of exec, kill and return immediately.
 	 */
 	if (imgp->ip_mac_return != 0) {
+		boot_progress_process_stage(proc_getpid(p),p->p_name,"exec MAC policy REFUSED");
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
 		    proc_getpid(p), OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY, 0, 0);
 		signature_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY);
@@ -7647,9 +8562,10 @@ process_signature(proc_t p, struct image_params *imgp)
 		goto done;
 	}
 
-	/* call the launch constraints hook */
+	/* call the launch constraints hook (IOSwitch: not for the Data overlay's executables, native_ioswitch_overlay_image) */
 	os_reason_t launch_constraint_reason;
-	if ((error = mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason)) != 0) {
+	error = native_ioswitch_overlay_image(imgp) ? 0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
+	if (error != 0) {
 		signature_failure_reason = launch_constraint_reason;
 		goto done;
 	}
@@ -7794,7 +8710,9 @@ done:
 		 * state.
 		 */
 
+		boot_progress_process_stage(proc_getpid(p),p->p_name,"exec process signature enter");
 		error = proc_process_signature(p, &signature_failure_reason);
+		boot_progress_process_stage(proc_getpid(p),p->p_name,error ? "exec process signature REFUSED" : "exec process signature accepted");
 	}
 
 	if (0 == error) {

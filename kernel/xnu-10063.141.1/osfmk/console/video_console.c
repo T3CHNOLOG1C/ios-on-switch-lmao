@@ -1,3 +1,4 @@
+#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
@@ -147,6 +148,31 @@ static unsigned char *gc_buffer_tab_stops;
 static uint32_t gc_buffer_columns;
 static uint32_t gc_buffer_rows;
 static uint32_t gc_buffer_size;
+
+/*
+ * Hardware scroll ("tape") for the Switch's rotated text console (vc_rotate3_32), attached by IOSwitch's display driver
+ * (NativeLegacyDisplay.cpp) while the console owns the screen. A text line is 16 columns of the portrait scanout, 64
+ * bytes of every memory row, so moving the scanout's start address 64 bytes scrolls the whole screen one line. The
+ * tape is that portrait frame with `gap' spare lines after every row (rows `stride' bytes apart): a scroll clears its
+ * new line there, outside the scanned window, then show() points the scanout at the next position, which the display
+ * takes at its next frame boundary. No pixel moves and no frame shows half a scroll. Every scroll uses fresh memory
+ * further on; after `lines' positions the screen is redrawn at the start of the tape, which the display guarantees no
+ * window it may still scan reaches. The console never runs more than `gap' lines ahead of what the display shows:
+ * latched() says the last show() was taken, and vc_tape_pace() sleeps in wait() (until the display's next frame end)
+ * before a character that could go further, where it may block; where it may not (a panic, polled output) it draws on.
+ */
+#define VC_TAPE_LINE_BYTES (ISO_CHAR_HEIGHT * 4)
+static struct {
+	volatile vm_offset_t va;        /* 0: none, the console draws into vinfo's framebuffer */
+	uint32_t stride, gap, lines;
+	uint32_t line;                  /* position: the window starts at va + line * VC_TAPE_LINE_BYTES */
+	volatile uint32_t ahead;        /* lines scrolled since the display was last seen showing the latest position */
+	void (*show)(void *, uint32_t);
+	int (*latched)(void *);
+	int (*wait)(void *);
+	void *ctx;
+} vc_tape;
+static void vc_tape_scroll_up(int num);
 
 
 LCK_GRP_DECLARE(vconsole_lck_grp, "vconsole");
@@ -1109,6 +1135,11 @@ gc_scroll_up(int num, unsigned int top, unsigned int bottom)
 		return;
 	}
 
+	if (vc_tape.va && top == 0 && bottom == gc_buffer_rows && num > 0 && (uint32_t)num < bottom) {
+		vc_tape_scroll_up(num);
+		return;
+	}
+
 	if (bottom <= gc_buffer_rows) {
 		unsigned char colorcodesave = gc_color_code;
 		uint32_t column, row;
@@ -1227,10 +1258,89 @@ gc_update_color(int color, boolean_t fore)
 	gc_ops.update_color(color, fore);
 }
 
-void
-vcputc_options(char c, __unused bool poll)
+/* Under the console lock: every cell of the text buffer, drawn at the tape's position. */
+static void
+vc_tape_repaint(void)
 {
+	unsigned char colorcodesave = gc_color_code;
+
+	for (uint32_t index = 0; index < gc_buffer_size; index++) {
+		if (gc_color_code != gc_buffer_colorcodes[index]) {
+			gc_update_color(COLOR_CODE_GET(gc_buffer_colorcodes[index], TRUE ), TRUE );
+			gc_update_color(COLOR_CODE_GET(gc_buffer_colorcodes[index], FALSE), FALSE);
+		}
+		gc_ops.paint_char(index % gc_buffer_columns, index / gc_buffer_columns,
+		    gc_buffer_characters[index], gc_buffer_attributes[index], 0, 0);
+	}
+
+	if (colorcodesave != gc_color_code) {
+		gc_update_color(COLOR_CODE_GET(colorcodesave, TRUE ), TRUE );
+		gc_update_color(COLOR_CODE_GET(colorcodesave, FALSE), FALSE);
+	}
+}
+
+/*
+ * Under the console lock, from gc_scroll_up: the whole screen up num lines. The text buffer moves as before; on the
+ * screen, the new lines are cleared in the spare columns past the scanned window and the window moves onto them.
+ */
+static void
+vc_tape_scroll_up(int num)
+{
+	uint32_t jump = (uint32_t)num * gc_buffer_columns, keep = gc_buffer_size - jump;
+
+	memmove(gc_buffer_attributes, gc_buffer_attributes + jump, keep);
+	memmove(gc_buffer_characters, gc_buffer_characters + jump, keep);
+	memmove(gc_buffer_colorcodes, gc_buffer_colorcodes + jump, keep);
+	memset(gc_buffer_attributes + keep, ATTR_NONE, jump);
+	memset(gc_buffer_characters + keep, ' ', jump);
+	memset(gc_buffer_colorcodes + keep, gc_color_code, jump);
+
+	if (vc_tape.ahead + (uint32_t)num > vc_tape.gap && vc_tape.latched(vc_tape.ctx)) {
+		vc_tape.ahead = 0;
+	}
+	vc_tape.ahead += (uint32_t)num;
+	if (vc_tape.line + (uint32_t)num < vc_tape.lines) {
+		vc_tape.line += (uint32_t)num;
+		gc_ops.clear_screen(0, 0, gc_buffer_rows - (uint32_t)num, gc_buffer_rows, 2);
+	} else {
+		vc_tape.line = 0;
+		vc_tape_repaint();
+	}
+	vc_tape.show(vc_tape.ctx, vc_tape.line);
+}
+
+/*
+ * Before a character, without the console lock: a scroll it causes must stay within vc_tape.gap lines of what the
+ * display shows. The drain of the console ring calls here preemptible; polled and debugger output never waits.
+ */
+static void
+vc_tape_pace(bool poll)
+{
+	if (!vc_tape.va || vc_tape.ahead < vc_tape.gap || poll ||
+	    get_preemption_level() != 0 || !ml_get_interrupts_enabled()) {
+		return;
+	}
+	for (;;) {
+		boolean_t ready;
+
+		VCPUTC_LOCK_LOCK();
+		if (vc_tape.va && vc_tape.ahead >= vc_tape.gap && vc_tape.latched(vc_tape.ctx)) {
+			vc_tape.ahead = 0;
+		}
+		ready = !vc_tape.va || vc_tape.ahead < vc_tape.gap;
+		VCPUTC_LOCK_UNLOCK();
+		if (ready || !vc_tape.wait(vc_tape.ctx)) {
+			return;
+		}
+	}
+}
+
+void
+vcputc_options(char c, bool poll)
+{
+	if (boot_progress_active()) { boot_progress_putc(c); return; }
 	if (gc_initialized && gc_enabled) {
+		vc_tape_pace(poll);
 		VCPUTC_LOCK_LOCK();
 		if (gc_enabled) {
 			gc_hide_cursor(gc_x, gc_y);
@@ -1324,6 +1434,27 @@ static boolean_t vc_progress_white =
 
 static int vc_acquire_delay = kProgressAcquireDelay;
 
+/* The native OLED scanout stores portrait rows. Keep the physical mode and
+ * mapping intact; only the stock text backend uses landscape coordinates. */
+static boolean_t
+vc_rotate3_32(void)
+{
+	return vinfo.v_rotate == 3 && vinfo.v_depth == 32 &&
+	       vinfo.v_width == 720 && vinfo.v_height == 1280 &&
+	       vinfo.v_rowbytes == 2880;
+}
+
+static volatile uint32_t *
+vc_rotate3_pixel(unsigned int x, unsigned int y)
+{
+	if (vc_tape.va) {
+		return (volatile uint32_t *)(vc_tape.va + (vm_offset_t)vc_tape.line * VC_TAPE_LINE_BYTES +
+		       (vinfo.v_height - 1 - x) * vc_tape.stride + y * 4);
+	}
+	return (volatile uint32_t *)(vinfo.v_baseaddr +
+	       (vinfo.v_height - 1 - x) * vinfo.v_rowbytes + y * 4);
+}
+
 static void
 vc_clear_screen(unsigned int xx, unsigned int yy, unsigned int scrreg_top,
     unsigned int scrreg_bottom, int which)
@@ -1333,6 +1464,38 @@ vc_clear_screen(unsigned int xx, unsigned int yy, unsigned int scrreg_top,
 	int      rowline, rowlongs;
 
 	if (!vinfo.v_depth) {
+		return;
+	}
+
+	if (vc_rotate3_32()) {
+		unsigned int first = scrreg_top * ISO_CHAR_HEIGHT;
+		unsigned int last = scrreg_bottom * ISO_CHAR_HEIGHT;
+		if (scrreg_top > scrreg_bottom || scrreg_bottom > vinfo.v_rows) {
+			return;
+		}
+		switch (which) {
+		case 0:
+			gc_clear_line(xx, yy, 0);
+			first = (yy + 1) * ISO_CHAR_HEIGHT;
+			break;
+		case 1:
+			gc_clear_line(xx, yy, 1);
+			last = yy * ISO_CHAR_HEIGHT;
+			break;
+		case 2:
+			break;
+		default:
+			return;
+		}
+		if (first > last || last > vinfo.v_width) {
+			return;
+		}
+		for (unsigned int x = 0; x < vinfo.v_height; ++x) {
+			volatile uint32_t *pixels = vc_rotate3_pixel(x, 0);
+			for (unsigned int y = first; y < last; ++y) {
+				pixels[y] = vc_color_back;
+			}
+		}
 		return;
 	}
 
@@ -1563,6 +1726,34 @@ vc_paint_char_32(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 	if (attrs_previous) {
 		theCharPrevious = NULL;
 	}
+	if (vc_rotate3_32()) {
+		if (xx >= vinfo.v_columns || yy >= vinfo.v_rows) {
+			return;
+		}
+		/* A glyph column at a time: its 16 pixels are consecutive in one portrait row (one write-combined burst). */
+		for (unsigned int x = 0; x < ISO_CHAR_WIDTH; ++x) {
+			volatile uint32_t *pixels = vc_rotate3_pixel(xx * ISO_CHAR_WIDTH + x, yy * ISO_CHAR_HEIGHT);
+			for (i = 0; i < ISO_CHAR_HEIGHT; ++i) {
+				const unsigned int at = (unsigned int)i * ISO_CHAR_WIDTH + x;
+				uint32_t val = theChar[at];
+				if (!attrs && theCharPrevious && val == theCharPrevious[at]) {
+					continue;
+				}
+				if ((attrs & ATTR_BOLD) && x && theChar[at - 1] && !val) {
+					val = 0xFFFFFFFF;
+				}
+				if (attrs & ATTR_REVERSE) {
+					val = ~val;
+				}
+				if ((attrs & ATTR_UNDER) && i == ISO_CHAR_HEIGHT - 1) {
+					val = ~val;
+				}
+				pixels[i] = (vc_color_back & ~val) | (vc_color_fore & val);
+			}
+		}
+		return;
+	}
+
 	where = (uint32_t*)(vinfo.v_baseaddr +
 	    (yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) +
 	    (xx * ISO_CHAR_WIDTH * 4));
@@ -1707,6 +1898,21 @@ vc_reverse_cursor(unsigned int xx, unsigned int yy)
 		return;
 	}
 
+	if (vc_rotate3_32()) {
+		if (xx >= vinfo.v_columns || yy >= vinfo.v_rows) {
+			return;
+		}
+		for (line = 0; line < ISO_CHAR_HEIGHT; ++line) {
+			for (col = 0; col < ISO_CHAR_WIDTH; ++col) {
+				volatile uint32_t *pixel = vc_rotate3_pixel(
+				    xx * ISO_CHAR_WIDTH + (unsigned int)col,
+				    yy * ISO_CHAR_HEIGHT + (unsigned int)line);
+				*pixel = ~*pixel;
+			}
+		}
+		return;
+	}
+
 	where = (uint32_t*)(vinfo.v_baseaddr +
 	    (yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) +
 	    (xx /** ISO_CHAR_WIDTH*/ * vinfo.v_depth));
@@ -1737,6 +1943,24 @@ vc_scroll_down(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 	uint32_t *from, *to, linelongs, i, line, rowline, rowscanline;
 
 	if (!vinfo.v_depth) {
+		return;
+	}
+
+	if (vc_rotate3_32()) {
+		if (num <= 0 || scrreg_top >= scrreg_bottom ||
+		    scrreg_bottom > vinfo.v_rows ||
+		    (unsigned int)num >= scrreg_bottom - scrreg_top) {
+			return;
+		}
+		unsigned int first = scrreg_top * ISO_CHAR_HEIGHT;
+		unsigned int last = scrreg_bottom * ISO_CHAR_HEIGHT;
+		unsigned int shift = (unsigned int)num * ISO_CHAR_HEIGHT;
+		for (unsigned int x = 0; x < vinfo.v_height; ++x) {
+			volatile uint32_t *pixels = vc_rotate3_pixel(x, 0);
+			for (unsigned int y = last; y > first + shift; --y) {
+				pixels[y - 1] = pixels[y - 1 - shift];
+			}
+		}
 		return;
 	}
 
@@ -1771,6 +1995,24 @@ vc_scroll_up(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 	uint32_t *from, *to, linelongs, i, line, rowline, rowscanline;
 
 	if (!vinfo.v_depth) {
+		return;
+	}
+
+	if (vc_rotate3_32()) {
+		if (num <= 0 || scrreg_top >= scrreg_bottom ||
+		    scrreg_bottom > vinfo.v_rows ||
+		    (unsigned int)num >= scrreg_bottom - scrreg_top) {
+			return;
+		}
+		unsigned int first = scrreg_top * ISO_CHAR_HEIGHT;
+		unsigned int last = scrreg_bottom * ISO_CHAR_HEIGHT;
+		unsigned int shift = (unsigned int)num * ISO_CHAR_HEIGHT;
+		for (unsigned int x = 0; x < vinfo.v_height; ++x) {
+			volatile uint32_t *pixels = vc_rotate3_pixel(x, 0);
+			for (unsigned int y = first; y < last - shift; ++y) {
+				pixels[y] = pixels[y + shift];
+			}
+		}
 		return;
 	}
 
@@ -2782,8 +3024,8 @@ gc_pause( boolean_t pause, boolean_t graphics_now )
 static void
 vc_initialize(__unused struct vc_info * vinfo_p)
 {
-	vinfo.v_rows = vinfo.v_height / ISO_CHAR_HEIGHT;
-	vinfo.v_columns = vinfo.v_width / ISO_CHAR_WIDTH;
+	vinfo.v_rows = (vc_rotate3_32() ? vinfo.v_width : vinfo.v_height) / ISO_CHAR_HEIGHT;
+	vinfo.v_columns = (vc_rotate3_32() ? vinfo.v_height : vinfo.v_width) / ISO_CHAR_WIDTH;
 	vinfo.v_rowscanbytes = ((vinfo.v_depth + 7) / 8) * vinfo.v_width;
 	vc_uiscale = vinfo.v_scale;
 	if (vc_uiscale > kMaxProgressData) {
@@ -2895,6 +3137,9 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		} else {
 			vinfo = new_vinfo;
 		}
+
+		boot_progress_bind(vinfo.v_baseaddr, vinfo.v_width, vinfo.v_height,
+		    vinfo.v_rowbytes, vinfo.v_depth);
 
 		// If we changed the virtual address, remove the old mapping
 		if (newVideoVirt != 0) {
@@ -3048,6 +3293,10 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 	}
 #endif
 	}
+
+	/* Console initialization/acquisition may clear the existing mapping. */
+	boot_progress_bind(vinfo.v_baseaddr, vinfo.v_width, vinfo.v_height,
+	    vinfo.v_rowbytes, vinfo.v_depth);
 }
 
 void vcattach(void); /* XXX gcc 4 warning cleanup */
@@ -3100,6 +3349,86 @@ vcattach(void)
 			}
 		}
 	}
+}
+
+/*
+ * The display hands the rotated text console a tape (see vc_tape above): va, mapped write-combined, holds `lines'
+ * positions of a 720x1280 portrait window whose rows are `stride' bytes apart. The whole screen is redrawn there at
+ * position 0 and show(ctx, 0) puts the display on it. 0: attached; 1: the console is not drawing rotated text now.
+ */
+int
+vc_tape_attach(vm_offset_t va, uint32_t stride, uint32_t gap, uint32_t lines,
+    void (*show)(void *, uint32_t), int (*latched)(void *), int (*wait)(void *), void *ctx)
+{
+	if (!gc_initialized || !va || !show || !latched || !wait || !gap || lines <= 2 * gap ||
+	    stride < vinfo.v_rowbytes + gap * VC_TAPE_LINE_BYTES) {
+		return 1;
+	}
+	VCPUTC_LOCK_LOCK();
+	if (!gc_enabled || !gc_buffer_size || !vc_rotate3_32() || vc_tape.va) {
+		VCPUTC_LOCK_UNLOCK();
+		return 1;
+	}
+	vc_tape.stride = stride;
+	vc_tape.gap = gap;
+	vc_tape.lines = lines;
+	vc_tape.line = 0;
+	vc_tape.ahead = 0;
+	vc_tape.show = show;
+	vc_tape.latched = latched;
+	vc_tape.wait = wait;
+	vc_tape.ctx = ctx;
+	vc_tape.va = va;
+	vc_tape_repaint();
+	gc_show_cursor(gc_x, gc_y);
+	show(ctx, 0);
+#if SCHED_HYGIENE_DEBUG
+	abandon_preemption_disable_measurement();
+#endif /* SCHED_HYGIENE_DEBUG */
+	VCPUTC_LOCK_UNLOCK();
+	return 0;
+}
+
+/*
+ * Once the display no longer scans the tape (it may free it on return): the console draws into vinfo's framebuffer
+ * again, redrawing the screen there if it still draws at all.
+ */
+void
+vc_tape_detach(void)
+{
+	if (!gc_initialized) {
+		return;
+	}
+	VCPUTC_LOCK_LOCK();
+	if (vc_tape.va) {
+		vc_tape.va = 0;
+		if (gc_enabled && gc_buffer_size) {
+			vc_tape_repaint();
+			gc_show_cursor(gc_x, gc_y);
+		}
+	}
+#if SCHED_HYGIENE_DEBUG
+	abandon_preemption_disable_measurement();
+#endif /* SCHED_HYGIENE_DEBUG */
+	VCPUTC_LOCK_UNLOCK();
+}
+
+/*
+ * The display's panic hook; no locks (another CPU may hold the console's). 1: the console still owns the screen and
+ * draws the panic on the tape (its scrolls show() without waiting). 0: it released the screen (or has no tape): it
+ * leaves the tape now, so should it draw again it draws into vinfo's framebuffer, which the display then scans.
+ */
+int
+vc_tape_panic(void)
+{
+	if (!vc_tape.va) {
+		return 0;
+	}
+	if (gc_enabled) {
+		return 1;
+	}
+	vc_tape.va = 0;
+	return 0;
 }
 
 #if defined(XNU_TARGET_OS_OSX)

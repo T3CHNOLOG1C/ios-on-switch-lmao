@@ -1421,6 +1421,10 @@ pmap_startup(
 	uint64_t        start_ns;
 	uint64_t        now_ns;
 	uint_t          low_page_count = 0;
+	unsigned int   native_dense_pages = 0, native_reserved_pages = 0;
+#if defined(__arm64__) && defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	native_dense_pages = pmap_ioswitch_dense_page_count();
+#endif
 
 #if    defined(__LP64__)
 	/*
@@ -1451,10 +1455,16 @@ pmap_startup(
 	mem_sz = pmap_free_pages() * (uint64_t)PAGE_SIZE;
 #endif /* defined(__arm64__) */
 	mem_sz += round_page(virtual_space_start) - virtual_space_start;        /* Account for any slop */
-	npages = (uint_t)(mem_sz / (PAGE_SIZE + sizeof(*vm_pages)));    /* scaled to include the vm_page_ts */
-
+	/* ARM64 derives PPNs from array indices, so native reserved holes need slots too. */
+	npages = native_dense_pages ? native_dense_pages :
+	    (uint_t)(mem_sz / (PAGE_SIZE + sizeof(*vm_pages)));    /* scaled to include the vm_page_ts */
 
 	vm_pages = (vm_page_t) pmap_steal_freeable_memory(npages * sizeof *vm_pages);
+#if defined(__arm64__) && defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	if (native_dense_pages && !pmap_ioswitch_begin_dense_pages()) {
+		panic("native dense memory setup failed");
+	}
+#endif
 
 	/*
 	 * Check if we want to initialize pages to a known value
@@ -1557,12 +1567,16 @@ pmap_startup(
 			break;
 		}
 
-		if (phys_page < max_valid_low_ppnum) {
+		boolean_t native_reserved = FALSE;
+#if defined(__arm64__) && defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+		native_reserved = native_dense_pages && pmap_ioswitch_page_reserved(phys_page);
+#endif
+		if (!native_reserved && phys_page < max_valid_low_ppnum) {
 			++low_page_count;
 		}
 
-		/* Are we at high enough pages to delay the rest? */
-		if (low_page_count > vm_lopage_free_limit && phys_page > delay_above_pnum) {
+		/* Complete the native dense span now; deferred slots must not compact its holes. */
+		if (!native_dense_pages && low_page_count > vm_lopage_free_limit && phys_page > delay_above_pnum) {
 			vm_delayed_count = pmap_free_pages();
 			break;
 		}
@@ -1582,6 +1596,17 @@ pmap_startup(
 		}
 #endif
 		++vm_pages_count;
+		if (native_reserved) {
+			/* Only descriptor memory is touched, never the reserved physical page. */
+			vm_page_t page = &vm_pages[i];
+			bzero(page, sizeof(*page));
+			page->vmp_offset = (vm_object_offset_t)-1;
+			page->vmp_busy = TRUE;
+			page->vmp_error = TRUE;
+			VM_PAGE_SET_PHYS_PAGE(page, phys_page);
+			++native_reserved_pages;
+			continue;
+		}
 		vm_page_init(&vm_pages[i], phys_page, FALSE);
 		if (fill) {
 			fillPage(phys_page, fillval);
@@ -1590,7 +1615,11 @@ pmap_startup(
 			vm_page_release_startup(&vm_pages[i]);
 		}
 	}
-	vm_page_pages = vm_pages_count; /* used to report to user space */
+	if (native_dense_pages) {
+		assert(vm_pages_count == native_dense_pages && vm_delayed_count == 0);
+		assert(pmap_free_pages() == 0);
+	}
+	vm_page_pages = vm_pages_count - native_reserved_pages; /* report usable pages, not hole descriptors */
 
 	if (!vm_himemory_mode) {
 		do {

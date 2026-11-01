@@ -18,6 +18,7 @@
 #include <arm/caches_internal.h>
 #include <kern/debug.h>
 #include <libkern/section_keywords.h>
+#include "IOSwitchPanicSave.h"
 #include <os/overflow.h>
 
 #include <pexpert/arm64/board_config.h>
@@ -102,7 +103,7 @@ void PE_slide_devicetree(vm_offset_t);
 static void
 check_for_panic_log(void)
 {
-#ifdef PLATFORM_PANIC_LOG_PADDR
+#if defined(PLATFORM_PANIC_LOG_PADDR) && !(defined(XNU_DT_PANIC_REGION) && XNU_DT_PANIC_REGION)
 	gPanicBase = ml_io_map_wcomb(PLATFORM_PANIC_LOG_PADDR, PLATFORM_PANIC_LOG_SIZE);
 	panic_text_len = PLATFORM_PANIC_LOG_SIZE - sizeof(struct embedded_panic_header);
 	gPanicSize = PLATFORM_PANIC_LOG_SIZE;
@@ -129,10 +130,26 @@ check_for_panic_log(void)
 	 * embedded-panic-log-size is the maximum amount of data to store in the buffer
 	 */
 	if (kSuccess != SecureDTLookupEntry(0, "pram", &entry)) {
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+		/* No iBoot panic region on this boot chain: without one, SavePanicInfo spins at its first line and no panic
+		 * log is ever written. Boot-arg ioswitch-panic-save gives it RAM kept across a warm reset (IOSwitchPanicSave.c). */
+		uintptr_t ioswitch_base = 0;
+		unsigned int ioswitch_bytes = 0;
+		if (ioswitch_panic_save_xnu_buffer(&ioswitch_base, &ioswitch_bytes) &&
+		    ioswitch_bytes > sizeof(struct embedded_panic_header)) {
+			gPanicBase = ioswitch_base;
+			gPanicSize = ioswitch_bytes;
+			panic_text_len = ioswitch_bytes - sizeof(struct embedded_panic_header);
+			goto ioswitch_panic_region;
+		}
+#endif
 		return;
 	}
 
-	if (kSuccess != SecureDTGetProperty(entry, "reg", (void const **)&reg_prop, &size)) {
+	if (kSuccess != SecureDTGetProperty(entry, "reg", (void const **)&reg_prop, &size) ||
+	    size != 2 * sizeof(*reg_prop) || !reg_prop[0] ||
+	    reg_prop[1] < sizeof(struct embedded_panic_header) ||
+	    reg_prop[0] > UINTPTR_MAX - reg_prop[1]) {
 		return;
 	}
 
@@ -140,11 +157,17 @@ check_for_panic_log(void)
 		return;
 	}
 
-	if (kSuccess != SecureDTGetProperty(chosen, "embedded-panic-log-size", (void const **) &panic_region_length, &size)) {
+	if (kSuccess != SecureDTGetProperty(chosen, "embedded-panic-log-size", (void const **) &panic_region_length, &size) ||
+	    size != sizeof(*panic_region_length) ||
+	    panic_region_length[0] < sizeof(struct embedded_panic_header) ||
+	    panic_region_length[0] > reg_prop[1]) {
 		return;
 	}
 
 	gPanicBase = ml_io_map_wcomb(reg_prop[0], panic_region_length[0]);
+	if (!gPanicBase) {
+		return;
+	}
 
 	/* Deduct the size of the panic header from the panic region size */
 	panic_text_len = panic_region_length[0] - sizeof(struct embedded_panic_header);
@@ -163,6 +186,9 @@ check_for_panic_log(void)
 	}
 #endif /* DEVELOPMENT && defined(XNU_TARGET_OS_BRIDGE) */
 
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+ioswitch_panic_region:
+#endif
 #endif
 	panic_info = (struct embedded_panic_header *)gPanicBase;
 

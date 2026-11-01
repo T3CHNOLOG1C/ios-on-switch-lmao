@@ -97,6 +97,8 @@ kern_work_interval_join(thread_t thread, mach_port_name_t port_name);
 extern kern_return_t
 kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_args);
 extern kern_return_t
+kern_work_interval_instance_check(thread_t thread, uint64_t work_interval_id);
+extern kern_return_t
 kern_work_interval_set_name(mach_port_name_t port_name, char *name, size_t len);
 extern kern_return_t
 kern_work_interval_set_workload_id(mach_port_name_t port_name,
