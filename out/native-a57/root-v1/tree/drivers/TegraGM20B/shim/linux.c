@@ -7,7 +7,7 @@
 #include <nvif/os.h>
 #include <core/device.h>
 
-struct task_struct nvxnu_task = { 0, "kernel" };
+struct task_struct nvxnu_task = {0, "kernel"};
 struct tegra_sku_info tegra_sku_info;
 
 const char *dev_name(const struct device *dev)
@@ -22,20 +22,42 @@ static void *lazy(void **slot, void *(*alloc)(void), void (*release)(void *))
 	if (have)
 		return have;
 	void *fresh = alloc(), *expected = NULL;
-	if (!__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+	if (!__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL,
+					 __ATOMIC_ACQUIRE)) {
 		release(fresh);
 		return expected;
 	}
 	return fresh;
 }
 
-static void rw_release(void *rw) { (void)rw; /* rare race loser: leak one lock */ }
+static void rw_release(void *rw)
+{
+	(void)rw; /* rare race loser: leak one lock */
+}
 
-void mutex_init(struct mutex *m) { m->lck = NULL; lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free); }
-void mutex_destroy(struct mutex *m) { if (m->lck) nvxnu_mutex_free(m->lck); m->lck = NULL; }
-void mutex_lock(struct mutex *m) { nvxnu_mutex_lock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free)); }
-void mutex_unlock(struct mutex *m) { nvxnu_mutex_unlock(m->lck); }
-int mutex_trylock(struct mutex *m) { return nvxnu_mutex_trylock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free)); }
+void mutex_init(struct mutex *m)
+{
+	m->lck = NULL;
+	lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free);
+}
+void mutex_destroy(struct mutex *m)
+{
+	if (m->lck)
+		nvxnu_mutex_free(m->lck);
+	m->lck = NULL;
+}
+void mutex_lock(struct mutex *m)
+{
+	nvxnu_mutex_lock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free));
+}
+void mutex_unlock(struct mutex *m)
+{
+	nvxnu_mutex_unlock(m->lck);
+}
+int mutex_trylock(struct mutex *m)
+{
+	return nvxnu_mutex_trylock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free));
+}
 bool mutex_is_locked(struct mutex *m)
 {
 	if (!mutex_trylock(m))
@@ -48,7 +70,8 @@ bool refcount_dec_and_mutex_lock(refcount_t *r, struct mutex *lock)
 {
 	int old = atomic_read(&r->refs);
 	while (old > 1) {
-		if (__atomic_compare_exchange_n(&r->refs.counter, &old, old - 1, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+		if (__atomic_compare_exchange_n(&r->refs.counter, &old, old - 1, false,
+						__ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
 			return false;
 	}
 	mutex_lock(lock);
@@ -59,20 +82,62 @@ bool refcount_dec_and_mutex_lock(refcount_t *r, struct mutex *lock)
 	return true;
 }
 
-void spin_lock_init(spinlock_t *s) { s->lck = NULL; lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free); }
-void spin_lock(spinlock_t *s) { nvxnu_spin_lock(lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free)); }
-void spin_unlock(spinlock_t *s) { nvxnu_spin_unlock(s->lck); }
+void spin_lock_init(spinlock_t *s)
+{
+	s->lck = NULL;
+	lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free);
+}
+void spin_lock(spinlock_t *s)
+{
+	nvxnu_spin_lock(lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free));
+}
+void spin_unlock(spinlock_t *s)
+{
+	nvxnu_spin_unlock(s->lck);
+}
 
-void rwlock_init(rwlock_t *l) { l->lck = NULL; lazy(&l->lck, nvxnu_rw_alloc, rw_release); }
-void read_lock(rwlock_t *l) { nvxnu_rw_lock_shared(lazy(&l->lck, nvxnu_rw_alloc, rw_release)); }
-void read_unlock(rwlock_t *l) { nvxnu_rw_unlock_shared(l->lck); }
-void write_lock(rwlock_t *l) { nvxnu_rw_lock_exclusive(lazy(&l->lck, nvxnu_rw_alloc, rw_release)); }
-void write_unlock(rwlock_t *l) { nvxnu_rw_unlock_exclusive(l->lck); }
-void init_rwsem(struct rw_semaphore *s) { s->lck = NULL; lazy(&s->lck, nvxnu_rw_alloc, rw_release); }
-void down_read(struct rw_semaphore *s) { nvxnu_rw_lock_shared(lazy(&s->lck, nvxnu_rw_alloc, rw_release)); }
-void up_read(struct rw_semaphore *s) { nvxnu_rw_unlock_shared(s->lck); }
-void down_write(struct rw_semaphore *s) { nvxnu_rw_lock_exclusive(lazy(&s->lck, nvxnu_rw_alloc, rw_release)); }
-void up_write(struct rw_semaphore *s) { nvxnu_rw_unlock_exclusive(s->lck); }
+void rwlock_init(rwlock_t *l)
+{
+	l->lck = NULL;
+	lazy(&l->lck, nvxnu_rw_alloc, rw_release);
+}
+void read_lock(rwlock_t *l)
+{
+	nvxnu_rw_lock_shared(lazy(&l->lck, nvxnu_rw_alloc, rw_release));
+}
+void read_unlock(rwlock_t *l)
+{
+	nvxnu_rw_unlock_shared(l->lck);
+}
+void write_lock(rwlock_t *l)
+{
+	nvxnu_rw_lock_exclusive(lazy(&l->lck, nvxnu_rw_alloc, rw_release));
+}
+void write_unlock(rwlock_t *l)
+{
+	nvxnu_rw_unlock_exclusive(l->lck);
+}
+void init_rwsem(struct rw_semaphore *s)
+{
+	s->lck = NULL;
+	lazy(&s->lck, nvxnu_rw_alloc, rw_release);
+}
+void down_read(struct rw_semaphore *s)
+{
+	nvxnu_rw_lock_shared(lazy(&s->lck, nvxnu_rw_alloc, rw_release));
+}
+void up_read(struct rw_semaphore *s)
+{
+	nvxnu_rw_unlock_shared(s->lck);
+}
+void down_write(struct rw_semaphore *s)
+{
+	nvxnu_rw_lock_exclusive(lazy(&s->lck, nvxnu_rw_alloc, rw_release));
+}
+void up_write(struct rw_semaphore *s)
+{
+	nvxnu_rw_unlock_exclusive(s->lck);
+}
 
 /* ------------------------------------------------------------------ time / work */
 unsigned long nvxnu_jiffies(void)
@@ -106,7 +171,8 @@ static int irq_polling;
 
 int request_irq(unsigned int irq, irq_handler_t h, unsigned long flags, const char *name, void *dev)
 {
-	(void)flags; (void)name;
+	(void)flags;
+	(void)name;
 	irq_slot.irq = irq;
 	irq_slot.dev = dev;
 	__atomic_store_n(&irq_slot.handler, h, __ATOMIC_RELEASE);
@@ -128,7 +194,8 @@ int nvxnu_poll_irqs(void)
 {
 	irq_handler_t h = __atomic_load_n(&irq_slot.handler, __ATOMIC_ACQUIRE);
 	int idle = 0, ret;
-	if (!h || !__atomic_compare_exchange_n(&irq_polling, &idle, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+	if (!h || !__atomic_compare_exchange_n(&irq_polling, &idle, 1, false, __ATOMIC_ACQUIRE,
+					       __ATOMIC_RELAXED))
 		return -1;
 	ret = (int)h(irq_slot.irq, irq_slot.dev);
 	__atomic_store_n(&irq_polling, 0, __ATOMIC_RELEASE);
@@ -136,9 +203,18 @@ int nvxnu_poll_irqs(void)
 }
 
 /* ------------------------------------------------------------------ strings */
-char *kstrdup(const char *s, gfp_t gfp) { return s ? kmemdup(s, strlen(s) + 1, gfp) : NULL; }
-const char *kstrdup_const(const char *s, gfp_t gfp) { return kstrdup(s, gfp); }
-void kfree_const(const void *p) { kfree(p); }
+char *kstrdup(const char *s, gfp_t gfp)
+{
+	return s ? kmemdup(s, strlen(s) + 1, gfp) : NULL;
+}
+const char *kstrdup_const(const char *s, gfp_t gfp)
+{
+	return kstrdup(s, gfp);
+}
+void kfree_const(const void *p)
+{
+	kfree(p);
+}
 
 char *kstrndup(const char *s, size_t max, gfp_t gfp)
 {
@@ -384,7 +460,8 @@ static void rb_set_color(struct rb_node *n, int c)
 	n->__rb_parent_color = (n->__rb_parent_color & ~1UL) | c;
 }
 
-static void rb_replace_child(struct rb_node *old, struct rb_node *new, struct rb_node *parent, struct rb_root *root)
+static void rb_replace_child(struct rb_node *old, struct rb_node *new, struct rb_node *parent,
+			     struct rb_root *root)
 {
 	if (!parent)
 		root->rb_node = new;
@@ -668,7 +745,10 @@ static void pool_free(unsigned long first, unsigned long n)
 	spin_unlock(&pool_lock);
 }
 
-unsigned long nvxnu_pool_used_pages(void) { return READ_ONCE(pool_used); }
+unsigned long nvxnu_pool_used_pages(void)
+{
+	return READ_ONCE(pool_used);
+}
 
 static long pool_index(u64 pa)
 {
@@ -688,10 +768,23 @@ struct page *alloc_pages(gfp_t gfp, unsigned int order)
 	return &pool_pages[i];
 }
 
-struct page *alloc_page(gfp_t gfp) { return alloc_pages(gfp, 0); }
-void __free_pages(struct page *p, unsigned int order) { if (p) pool_free(p - pool_pages, 1UL << order); }
-void __free_page(struct page *p) { __free_pages(p, 0); }
-void *page_address(const struct page *p) { return (char *)nvxnu_pool_base_va() + ((p - pool_pages) << PAGE_SHIFT); }
+struct page *alloc_page(gfp_t gfp)
+{
+	return alloc_pages(gfp, 0);
+}
+void __free_pages(struct page *p, unsigned int order)
+{
+	if (p)
+		pool_free(p - pool_pages, 1UL << order);
+}
+void __free_page(struct page *p)
+{
+	__free_pages(p, 0);
+}
+void *page_address(const struct page *p)
+{
+	return (char *)nvxnu_pool_base_va() + ((p - pool_pages) << PAGE_SHIFT);
+}
 
 struct page *pfn_to_page(unsigned long pfn)
 {
@@ -707,11 +800,14 @@ struct page *vmalloc_to_page(const void *addr)
 	return &pool_pages[((const char *)addr - base) >> PAGE_SHIFT];
 }
 
-void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gfp, unsigned long attrs)
+void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gfp,
+		      unsigned long attrs)
 {
 	unsigned long n = PAGE_ALIGN(size) >> PAGE_SHIFT;
 	long i = pool_map ? pool_alloc(n, 1) : -ENOMEM;
-	(void)dev; (void)gfp; (void)attrs;
+	(void)dev;
+	(void)gfp;
+	(void)attrs;
 	if (i < 0)
 		return NULL;
 	*handle = pool_pages[i].pa;
@@ -719,40 +815,54 @@ void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *handle, gfp_t
 	return page_address(&pool_pages[i]);
 }
 
-void dma_free_attrs(struct device *dev, size_t size, void *va, dma_addr_t handle, unsigned long attrs)
+void dma_free_attrs(struct device *dev, size_t size, void *va, dma_addr_t handle,
+		    unsigned long attrs)
 {
 	long i = pool_index(handle);
-	(void)dev; (void)va; (void)attrs;
+	(void)dev;
+	(void)va;
+	(void)attrs;
 	if (i >= 0)
 		pool_free(i, PAGE_ALIGN(size) >> PAGE_SHIFT);
 }
 
-dma_addr_t dma_map_page(struct device *dev, struct page *page, size_t off, size_t size, enum dma_data_direction dir)
+dma_addr_t dma_map_page(struct device *dev, struct page *page, size_t off, size_t size,
+			enum dma_data_direction dir)
 {
-	(void)dev; (void)size; (void)dir;
+	(void)dev;
+	(void)size;
+	(void)dir;
 	return page ? page->pa + off : DMA_MAPPING_ERROR;
 }
 
 void dma_unmap_page(struct device *dev, dma_addr_t a, size_t s, enum dma_data_direction dir)
 {
-	(void)dev; (void)a; (void)s; (void)dir;
+	(void)dev;
+	(void)a;
+	(void)s;
+	(void)dir;
 }
 
 /* pool memory is mapped write-combined, so there is nothing to clean; kept for the fallback pool */
-void dma_sync_single_for_device(struct device *dev, dma_addr_t a, size_t s, enum dma_data_direction dir)
+void dma_sync_single_for_device(struct device *dev, dma_addr_t a, size_t s,
+				enum dma_data_direction dir)
 {
 	long i = pool_index(a);
-	(void)dev; (void)dir;
+	(void)dev;
+	(void)dir;
 	if (i >= 0)
 		nvxnu_dcache_clean((char *)page_address(&pool_pages[i]) + (a & ~PAGE_MASK), s);
 }
 
-void dma_sync_single_for_cpu(struct device *dev, dma_addr_t a, size_t s, enum dma_data_direction dir)
+void dma_sync_single_for_cpu(struct device *dev, dma_addr_t a, size_t s,
+			     enum dma_data_direction dir)
 {
 	long i = pool_index(a);
-	(void)dev; (void)dir;
+	(void)dev;
+	(void)dir;
 	if (i >= 0)
-		nvxnu_dcache_clean_inval((char *)page_address(&pool_pages[i]) + (a & ~PAGE_MASK), s);
+		nvxnu_dcache_clean_inval((char *)page_address(&pool_pages[i]) + (a & ~PAGE_MASK),
+					 s);
 }
 
 void *vmap(struct page **pages, unsigned int count, unsigned long flags, pgprot_t prot)
@@ -760,7 +870,8 @@ void *vmap(struct page **pages, unsigned int count, unsigned long flags, pgprot_
 	u64 *pas;
 	void *va;
 	unsigned int i;
-	(void)flags; (void)prot;
+	(void)flags;
+	(void)prot;
 	for (i = 1; i < count && pages[i] == pages[0] + i; i++)
 		;
 	if (i == count)
@@ -784,32 +895,55 @@ void vunmap(const void *addr)
 /* scatter-gather: only reachable through NVKM_FIRMWARE_IMG_SGT, which GM20B never uses */
 int sg_alloc_table(struct sg_table *t, unsigned int nents, gfp_t gfp)
 {
-	(void)t; (void)nents; (void)gfp;
+	(void)t;
+	(void)nents;
+	(void)gfp;
 	return -ENOMEM;
 }
-void sg_free_table(struct sg_table *t) { (void)t; }
+void sg_free_table(struct sg_table *t)
+{
+	(void)t;
+}
 void sg_set_page(struct scatterlist *sg, struct page *page, unsigned int len, unsigned int off)
 {
 	sg->page_link = (unsigned long)page;
 	sg->length = len;
 	sg->offset = off;
 }
-int dma_map_sgtable(struct device *d, struct sg_table *t, enum dma_data_direction dir, unsigned long attrs)
+int dma_map_sgtable(struct device *d, struct sg_table *t, enum dma_data_direction dir,
+		    unsigned long attrs)
 {
-	(void)d; (void)t; (void)dir; (void)attrs;
+	(void)d;
+	(void)t;
+	(void)dir;
+	(void)attrs;
 	return -ENOMEM;
 }
-void dma_unmap_sgtable(struct device *d, struct sg_table *t, enum dma_data_direction dir, unsigned long attrs)
+void dma_unmap_sgtable(struct device *d, struct sg_table *t, enum dma_data_direction dir,
+		       unsigned long attrs)
 {
-	(void)d; (void)t; (void)dir; (void)attrs;
+	(void)d;
+	(void)t;
+	(void)dir;
+	(void)attrs;
 }
 
 /* ------------------------------------------------------------------ MMIO and platform device */
-void __iomem *ioremap(phys_addr_t pa, size_t size) { return (void __iomem *)nvxnu_ioremap(pa, size, 0); }
-void __iomem *ioremap_wc(phys_addr_t pa, size_t size) { return (void __iomem *)nvxnu_ioremap(pa, size, 1); }
-void iounmap(volatile void __iomem *va) { (void)va; /* BAR mappings live as long as the kernel */ }
+void __iomem *ioremap(phys_addr_t pa, size_t size)
+{
+	return (void __iomem *)nvxnu_ioremap(pa, size, 0);
+}
+void __iomem *ioremap_wc(phys_addr_t pa, size_t size)
+{
+	return (void __iomem *)nvxnu_ioremap(pa, size, 1);
+}
+void iounmap(volatile void __iomem *va)
+{
+	(void)va; /* BAR mappings live as long as the kernel */
+}
 
-struct resource *platform_get_resource(struct platform_device *pdev, unsigned int type, unsigned int n)
+struct resource *platform_get_resource(struct platform_device *pdev, unsigned int type,
+				       unsigned int n)
 {
 	for (u32 i = 0; i < pdev->num_resources; i++) {
 		if ((pdev->resource[i].flags & type) && !n--)

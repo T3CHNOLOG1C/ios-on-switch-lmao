@@ -15,12 +15,19 @@ struct NativeAdrenoStatusCounts {
     uint64_t suspends;
 };
 class NativeAdrenoStatus final {
-    uint64_t faults_=0,suspends_=0;
+    uint64_t faults_ = 0, suspends_ = 0;
+
 public:
-    void noteFault() {if(faults_!=UINT64_MAX)++faults_;}
-    void noteSuspend() {if(suspends_!=UINT64_MAX)++suspends_;}
-    uint64_t faults() const {return faults_;}
-    uint64_t suspends() const {return suspends_;}
-    NativeAdrenoStatusCounts counts() const {return {faults_,suspends_};}
+    void noteFault()
+    {
+        if (faults_ != UINT64_MAX) ++faults_;
+    }
+    void noteSuspend()
+    {
+        if (suspends_ != UINT64_MAX) ++suspends_;
+    }
+    uint64_t faults() const { return faults_; }
+    uint64_t suspends() const { return suspends_; }
+    NativeAdrenoStatusCounts counts() const { return {faults_, suspends_}; }
 };
 #endif

@@ -60,13 +60,15 @@
 @end
 
 namespace {
-os_log_t logger() {
+os_log_t logger()
+{
     static os_log_t log = os_log_create("com.ioswitch.TegraGM20BMetal", "plugin");
     return log;
 }
 
 // kern.bootargs, read once.
-const char *bootArgs() {
+const char *bootArgs()
+{
     static char args[2048];
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -78,15 +80,18 @@ const char *bootArgs() {
 }
 
 // Environment `env`, else boot-arg `arg` ("arg=value"; a bare "arg" is 1), then also set as `env`. Null when neither is given.
-const char *knob(const char *env, const char *arg) {
+const char *knob(const char *env, const char *arg)
+{
     if (const char *value = getenv(env)) return value;
     const size_t length = strlen(arg);
     for (const char *at = bootArgs() + strspn(bootArgs(), " \t"); *at; at += strspn(at, " \t")) {
         const size_t word = strcspn(at, " \t");
         if (word >= length && !strncmp(at, arg, length) && (word == length || at[length] == '=')) {
             char value[256];
-            if (word == length) strlcpy(value, "1", sizeof value);
-            else snprintf(value, sizeof value, "%.*s", int(word - length - 1), at + length + 1);
+            if (word == length)
+                strlcpy(value, "1", sizeof value);
+            else
+                snprintf(value, sizeof value, "%.*s", int(word - length - 1), at + length + 1);
             setenv(env, value, 0);
             return getenv(env);
         }
@@ -94,13 +99,15 @@ const char *knob(const char *env, const char *arg) {
     }
     return nullptr;
 }
-bool knobOn(const char *env, const char *arg, bool otherwise) {
+bool knobOn(const char *env, const char *arg, bool otherwise)
+{
     const char *value = knob(env, arg);
     return value ? strcmp(value, "0") != 0 : otherwise;
 }
 
 // <bundle>/libvulkan_nouveau.dylib, beside this executable (<bundle>/TegraGM20BMetal).
-bool libraryPath(char *path, size_t size) {
+bool libraryPath(char *path, size_t size)
+{
     Dl_info info = {};
     if (!dladdr(reinterpret_cast<const void *>(&libraryPath), &info) || !info.dli_fname) return false;
     snprintf(path, size, "%s", info.dli_fname);
@@ -111,7 +118,8 @@ bool libraryPath(char *path, size_t size) {
 }
 
 // `path` and its missing parents, owner-only.
-void makeDirectories(const char *path) {
+void makeDirectories(const char *path)
+{
     char partial[1024];
     strlcpy(partial, path, sizeof partial);
     for (char *slash = strchr(partial + 1, '/'); slash; slash = strchr(slash + 1, '/')) {
@@ -125,7 +133,8 @@ void makeDirectories(const char *path) {
 
 // Whether this process can write in `dir`, made if missing: a probe file is created there and removed. access(2) would only ask the
 // file's mode; the sandbox decides at the create.
-bool writable(const char *dir) {
+bool writable(const char *dir)
+{
     makeDirectories(dir);
     char probe[1100];
     snprintf(probe, sizeof probe, "%s/.probe.%d", dir, getpid());
@@ -141,8 +150,10 @@ bool writable(const char *dir) {
 // container_system_path_for_identifier (libsystem_containermanager: identifier, error out; a malloc'd path) has consumed its
 // extension; backboardd's StartWindowServer makes the same lookup for Core Animation's shader cache before Metal opens. The
 // identifier is the main bundle's, else com.apple.<process name> (backboardd's and iconservicesagent's own).
-bool systemContainerCache(char *out, size_t size) {
-    static auto lookup = (char *(*)(const char *, uint64_t *))dlsym(RTLD_DEFAULT, "container_system_path_for_identifier");
+bool systemContainerCache(char *out, size_t size)
+{
+    static auto lookup =
+        (char *(*)(const char *, uint64_t *))dlsym(RTLD_DEFAULT, "container_system_path_for_identifier");
     if (!lookup) return false;
     char identifier[256];
     CFStringRef bundle = CFBundleGetIdentifier(CFBundleGetMainBundle());
@@ -161,7 +172,8 @@ bool systemContainerCache(char *out, size_t size) {
 //  - the process's system container (above): backboardd's;
 //  - the user cache directory elsewhere (a daemon with a home);
 //  - /private/var/tmp/m2v-<process> (iconservicesagent, whose home is /var/empty), then the user temp directory.
-unsigned cacheCandidates(char candidates[][512], unsigned most) {
+unsigned cacheCandidates(char candidates[][512], unsigned most)
+{
     unsigned count = 0;
     auto add = [&](const char *format, const char *a, const char *b) {
         if (count < most) snprintf(candidates[count++], 512, format, a, b);
@@ -184,42 +196,47 @@ unsigned cacheCandidates(char candidates[][512], unsigned most) {
 // and writes what it compiles to its own directory as before. A seed of another build is never hit: its translations sit under
 // another build's name and its driver records name another driver. The seed's SEED line (what the build made) into `name`; false
 // when there is no seed this process can read, or the knob is off.
-bool sharedSeed(char *name, size_t size) {
+bool sharedSeed(char *name, size_t size)
+{
     if (!knobOn("TEGRA_M2V_SEED", "tegra-m2v-seed", true)) return false;
     Dl_info info = {};
     if (!dladdr(reinterpret_cast<const void *>(&sharedSeed), &info) || !info.dli_fname) return false;
     char seed[1024], path[1100];
     strlcpy(seed, info.dli_fname, sizeof seed);
-    for (int i = 0; i < 2; ++i)   // <Extensions>/TegraGM20BMetal.bundle/TegraGM20BMetal -> <Extensions>
+    for (int i = 0; i < 2; ++i)  // <Extensions>/TegraGM20BMetal.bundle/TegraGM20BMetal -> <Extensions>
         if (char *slash = strrchr(seed, '/')) *slash = 0;
     strlcat(seed, "/TegraGM20BMetal.m2v-seed/shared", sizeof seed);
     snprintf(path, sizeof path, "%s/SEED", seed);
-    FILE *file = fopen(path, "r");   // also asks the sandbox once: a process that may not read the seed never names it
+    FILE *file = fopen(path, "r");  // also asks the sandbox once: a process that may not read the seed never names it
     if (!file) return false;
     const bool named = fgets(name, int(size), file) != nullptr;
     fclose(file);
     if (!named) return false;
     name[strcspn(name, "\n")] = 0;
-    setenv("METAL2VULKAN_SHADER_CACHE_SEED", seed, 0);   // read by the runtime when the device opens
+    setenv("METAL2VULKAN_SHADER_CACHE_SEED", seed, 0);  // read by the runtime when the device opens
     return true;
 }
 
 // The frontend's rates line, every 5 s while the device works (it says nothing when idle).
-void startRates() {
+void startRates()
+{
     if (!knobOn("TEGRA_M2V_TELEMETRY", "tegra-m2v-telemetry", true)) return;
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC, NSEC_PER_SEC / 4);
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
+                              NSEC_PER_SEC / 4);
     dispatch_source_set_event_handler(timer, ^{
         // 768: the rates line passed 512 with r6-lows' frame distributions (encp= cgap= swait= gpuq= psomax=).
         char line[768];
-        if (native_bridge_metal_rates(line, sizeof line)) os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
+        if (native_bridge_metal_rates(line, sizeof line))
+            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
     });
     dispatch_resume(timer);
 }
 
 // A Metal selector the frontend does not implement (the frontend's own report, made before it raises).
-void missing(const char *cls, const char *selector) {
+void missing(const char *cls, const char *selector)
+{
     os_log_error(logger(), "TegraGM20BMetal: unimplemented -[%{public}s %{public}s]", cls, selector);
 }
 
@@ -227,7 +244,8 @@ void missing(const char *cls, const char *selector) {
 // exception in the render server restarts it into the same exception: no UI at all. Instead, a selector that some MTL*
 // protocol declares is answered zero/nil/NO with one log line, as an absent optional feature would be; respondsToSelector:
 // still says NO, so optional paths take their unsupported branch. A selector no Metal protocol declares raises as before.
-const char *metalTypes(SEL selector) {
+const char *metalTypes(SEL selector)
+{
     unsigned count = 0;
     Protocol *__unsafe_unretained *protocols = objc_copyProtocolList(&count);
     const char *types = nullptr;
@@ -241,7 +259,8 @@ const char *metalTypes(SEL selector) {
     free(protocols);
     return types;
 }
-NSMethodSignature *forwardSignature(id self, SEL _cmd, SEL selector) {
+NSMethodSignature *forwardSignature(id self, SEL _cmd, SEL selector)
+{
     // NSObject's own answer (the methods the object really has) first; the same IMP serves NBObject's subclasses.
     static auto base = (NSMethodSignature * (*)(id, SEL, SEL))
         class_getMethodImplementation([NSObject class], @selector(methodSignatureForSelector:));
@@ -249,9 +268,11 @@ NSMethodSignature *forwardSignature(id self, SEL _cmd, SEL selector) {
     const char *types = metalTypes(selector);
     return types ? [NSMethodSignature signatureWithObjCTypes:types] : nil;
 }
-void forwardZero(id self, SEL, NSInvocation *invocation) {
-    static NSMutableSet<NSString *> *reported = [NSMutableSet set];   // one line per class and selector, not per frame
-    NSString *key = [NSString stringWithFormat:@"%s %s", class_getName(object_getClass(self)), sel_getName(invocation.selector)];
+void forwardZero(id self, SEL, NSInvocation *invocation)
+{
+    static NSMutableSet<NSString *> *reported = [NSMutableSet set];  // one line per class and selector, not per frame
+    NSString *key =
+        [NSString stringWithFormat:@"%s %s", class_getName(object_getClass(self)), sel_getName(invocation.selector)];
     @synchronized(reported) {
         if (![reported containsObject:key]) {
             [reported addObject:key];
@@ -264,13 +285,15 @@ void forwardZero(id self, SEL, NSInvocation *invocation) {
     [invocation setReturnValue:zero];
     free(zero);
 }
-void answerUnimplemented(Class cls) {
+void answerUnimplemented(Class cls)
+{
     if (!cls) return;
     class_addMethod(cls, @selector(methodSignatureForSelector:), (IMP)forwardSignature, "@@::");
     class_addMethod(cls, @selector(forwardInvocation:), (IMP)forwardZero, "v@:@");
 }
 
-id openDevice(unsigned port) {
+id openDevice(unsigned port)
+{
     static id device;
     static bool tried;
     @synchronized([TegraGM20BMetalDevice class]) {
@@ -282,13 +305,15 @@ id openDevice(unsigned port) {
             strcmp(getprogname(), "ScreenshotServicesService") != 0 &&
             !knobOn("TEGRA_GPU_ALL_CLIENTS", "tegra-gpu-all-clients", true))
             return nil;
-        if (!knob("NMB_MEMO_MB", "tegra-m2v-memo-mb") && !renderServer) setenv("NMB_MEMO_MB", "32", 0);   // read by the bridge
+        if (!knob("NMB_MEMO_MB", "tegra-m2v-memo-mb") && !renderServer)
+            setenv("NMB_MEMO_MB", "32", 0);  // read by the bridge
         // Read by the runtime. In the render server too: its pools double their blocks, and each block is one BoAlloc on the
         // thread whose resource creation found no room (Core Animation's render thread). At the kernel's ~1.5 ms per MiB
         // for cached memory a 64 MiB block stalled it ~100 ms (r5c: 66 MB of BoAllocs, 103 ms, in the 5 s Settings opened);
         // 16 MiB blocks bound that to a quarter and still pool any 720p texture, half a block being the dedicated limit.
         if (!knob("M2V_BLOCK_MIB", "tegra-m2v-block-mib")) setenv("M2V_BLOCK_MIB", renderServer ? "16" : "4", 0);
-        if (!renderServer) setenv("NMB_SYSTEM_COMPILER", "1", 0);   // read by the frontend: Core Image's kernels are compiled here
+        if (!renderServer)
+            setenv("NMB_SYSTEM_COMPILER", "1", 0);  // read by the frontend: Core Image's kernels are compiled here
         knob("NMB_CACHE_MB", "tegra-m2v-cache-mb");
         knob("NMB_ANSWER_CACHE", "tegra-m2v-answer-cache");
         knob("NMB_REFUSE_REBINDS", "tegra-m2v-refuse-rebinds");
@@ -296,7 +321,7 @@ id openDevice(unsigned port) {
         knob("M2V_YCBCR_MEMO", "tegra-m2v-ycbcr-memo");
         knob("M2V_YCBCR_FILTER", "tegra-m2v-ycbcr-filter");
         if (const char *zero = knob("M2V_ZERO_FRESH", "tegra-m2v-zero-fresh"); zero && !strcmp(zero, "0"))
-            unsetenv("M2V_ZERO_FRESH");   // the runtime reads any value as on
+            unsetenv("M2V_ZERO_FRESH");  // the runtime reads any value as on
         char loader[1024];
         if (!libraryPath(loader, sizeof loader)) {
             os_log_error(logger(), "TegraGM20BMetal: no device: libvulkan_nouveau.dylib missing beside the plugin");
@@ -304,7 +329,8 @@ id openDevice(unsigned port) {
         }
         uint64_t registryID = 0;
         if (void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL)) {
-            if (auto entryID = (int (*)(unsigned, uint64_t *))dlsym(iokit, "IORegistryEntryGetRegistryEntryID")) entryID(port, &registryID);
+            if (auto entryID = (int (*)(unsigned, uint64_t *))dlsym(iokit, "IORegistryEntryGetRegistryEntryID"))
+                entryID(port, &registryID);
         }
         // NVK opens the first service of this class (nvkmd_darwin.c darwin_open): ours, never the IOAcceleratorES stub
         // (drivers/IOSwitchAccelStub) that only ends QuartzCore's accelerator poll.
@@ -313,8 +339,10 @@ id openDevice(unsigned port) {
         // display driver take plain rows. The kernel also writes these as backboardd's preferences (read before this code runs).
         if (renderServer) {
             setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
-            CFPreferencesSetAppValue(CFSTR("CAEnableFramebufferCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
-            CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
+            CFPreferencesSetAppValue(CFSTR("CAEnableFramebufferCompression"), kCFBooleanFalse,
+                                     kCFPreferencesCurrentApplication);
+            CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse,
+                                     kCFPreferencesCurrentApplication);
         }
         // The runtime keeps its shader cache across reboots where the directory lasts: the first candidate (cacheCandidates)
         // that takes a write, or TEGRA_M2V_CACHE_DIR. A device that does not open for another reason than its cache is not tried
@@ -323,8 +351,10 @@ id openDevice(unsigned port) {
         char candidates[6][512] = {};
         unsigned count = 0;
         const char *chosen = getenv("TEGRA_M2V_CACHE_DIR");
-        if (chosen && strcmp(chosen, "memory")) strlcpy(candidates[count++], chosen, sizeof candidates[0]);
-        else if (!chosen) count = cacheCandidates(candidates, 6);
+        if (chosen && strcmp(chosen, "memory"))
+            strlcpy(candidates[count++], chosen, sizeof candidates[0]);
+        else if (!chosen)
+            count = cacheCandidates(candidates, 6);
         const char *cache = nullptr;
         char seedName[128] = {};
         const bool seeded = sharedSeed(seedName, sizeof seedName);
@@ -347,15 +377,18 @@ id openDevice(unsigned port) {
             }
         }
         if (!device) {
-            os_log_error(logger(), "TegraGM20BMetal: no device in %{public}s: %{public}s", getprogname(), nmb_last_error());
+            os_log_error(logger(), "TegraGM20BMetal: no device in %{public}s: %{public}s", getprogname(),
+                         nmb_last_error());
             return nil;
         }
-        answerUnimplemented(NSClassFromString(@"NBObject"));   // every frontend object but the device
+        answerUnimplemented(NSClassFromString(@"NBObject"));  // every frontend object but the device
         answerUnimplemented(object_getClass(device));
         // seed: "shared (<its SEED line>)" (the runtime reads the shared seed beneath the cache), "none" (no readable seed, or off)
-        os_log(logger(), "TegraGM20BMetal: device %{public}s ready in %{public}s, cache %{public}s, seed %{public}s%{public}s%{public}s",
-               [[(id<MTLDevice>)device name] UTF8String], getprogname(), cache ? cache : "memory only", seeded ? "shared (" : "none",
-               seeded ? seedName : "", seeded ? ")" : "");
+        os_log(logger(),
+               "TegraGM20BMetal: device %{public}s ready in %{public}s, cache %{public}s, seed "
+               "%{public}s%{public}s%{public}s",
+               [[(id<MTLDevice>)device name] UTF8String], getprogname(), cache ? cache : "memory only",
+               seeded ? "shared (" : "none", seeded ? seedName : "", seeded ? ")" : "");
         startRates();
         return device;
     }
@@ -363,7 +396,8 @@ id openDevice(unsigned port) {
 }  // namespace
 
 @implementation TegraGM20BMetalDevice
-- (id)initWithAcceleratorPort:(unsigned)port {
+- (id)initWithAcceleratorPort:(unsigned)port
+{
     self = [super init];
     if (!self || !port) return nil;
     return openDevice(port);

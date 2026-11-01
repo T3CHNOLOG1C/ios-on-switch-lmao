@@ -24,7 +24,7 @@ typedef struct {
  * No fallback tables, copying/rebuilding, MMIO, cache clean, allocation or
  * hardware probe. A matching software buffer alone is not hardware evidence.
  * On bind failure io is cleared. Inputs/output/storage must be disjoint. */
-ArmSmmu4KStatus ArmSmmu4KBindTableMemory(const ArmSmmu4KTableMemory *,ArmSmmu4KTableIo *);
+ArmSmmu4KStatus ArmSmmu4KBindTableMemory(const ArmSmmu4KTableMemory *, ArmSmmu4KTableIo *);
 #ifdef __cplusplus
 }
 #endif

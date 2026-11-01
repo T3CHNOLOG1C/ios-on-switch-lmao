@@ -52,8 +52,8 @@ int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct 
 void tgm_mem_del(struct tgm_mem **pmem);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds, TLB invalidated before return. read_only: the GPU may only
  * read the range (a write is an MMU fault). */
-int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset, uint8_t kind,
-	       int read_only);
+int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset,
+	       uint8_t kind, int read_only);
 int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range);
 /* Kernel range: map `mem` somewhere at or above TGM_KERNEL_VA and return the address. */
 int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t *va);
@@ -63,8 +63,8 @@ int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t
  * creating process) names it in nvkm's reports and our panic lines. With tegra-gpu-all-clients=1 a GPU error nvkm pins
  * on a channel that is not critical kills only that channel (tgm_chan_error then non-zero, its fence released) instead of
  * panicking. */
-int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence_gpu_va, const char *owner, int critical,
-		 struct tgm_chan **pchan);
+int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence_gpu_va,
+		 const char *owner, int critical, struct tgm_chan **pchan);
 /* boot-arg tegra-gpu-all-clients=1: GPU for every process (client fault isolation, 64 connections, client pool quota) */
 int tgm_all_clients(void);
 /* pool bytes not allocated */
@@ -80,7 +80,8 @@ struct tgm_push {
  * before the seqno is released (gpu.c l2_on). With tegra-gpu-present-order (on unless =0) the pushes run only after
  * the last GPU present queued before this call has finished reading its surface (a GPU-side wait). -EBUSY when the
  * GPFIFO stays full for 1 s (a panic from the self-test on), -EIO on a dead channel. */
-int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count, uint32_t *seqno);
+int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
+		  uint32_t *seqno);
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);
 uint32_t tgm_chan_completed(struct tgm_chan *chan);
 /* 0 healthy; else the CONTRACT.md error code (1 MMU fault, 2 GR exception, 3 host error, 4 timeout). Only before the
@@ -89,7 +90,8 @@ uint32_t tgm_chan_completed(struct tgm_chan *chan);
 uint32_t tgm_chan_error(struct tgm_chan *chan);
 /* Panic naming `who` and the channel's state (fence, GPFIFO GET/PUT, PGRAPH/engine/PBDMA status, MC error registers):
  * work submitted on it did not complete and nvkm reported no error. */
-void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns) __attribute__((noreturn));
+void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)
+	__attribute__((noreturn));
 /* After a wait for `seqno` timed out: panics (tgm_chan_hung) once the channel has completed nothing for 2 s while work
  * is pending; a single submission that runs that long is taken for a hang. */
 void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno);
@@ -115,8 +117,9 @@ void tgm_fence_page_put(volatile uint32_t *va);
 int tgm_present_open(struct tgm_vm **pvm);
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind);
 int tgm_present_unmap(uint64_t va, uint64_t bytes);
-int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t width, uint32_t height, uint64_t dst_va,
-		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *), void *arg);
+int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t width,
+		     uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+		     uint32_t block_height_log2, void (*done)(void *), void *arg);
 /* Host import bookkeeping for the present: `pa` is the import's first page; add 1 when made, 0 when released. The
  * present waits only for address spaces that import its surface (src_pa, the surface's first page), when any does. */
 void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add);
@@ -133,7 +136,8 @@ void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages);
  * write_unlock cleans a GPU import after a CPU write unlock. The last two return the bytes touched (0 if nothing / not
  * our import), and do the cache maintenance themselves (by VA, inner-shareable broadcast). */
 struct tgm_coh;
-struct tgm_coh *tgm_coherency_add(uint64_t pa, const uint64_t *pas, uint32_t npages, int writable, int *clean);
+struct tgm_coh *tgm_coherency_add(uint64_t pa, const uint64_t *pas, uint32_t npages, int writable,
+				  int *clean);
 void tgm_coherency_put(struct tgm_coh *c);
 void tgm_coherency_wrote(struct tgm_coh *c);
 uint64_t tgm_coherency_read_lock(uint64_t pa);
@@ -150,7 +154,8 @@ void tgm_stats_import(int64_t bytes, uint64_t pa);
  * mapped with its pages entered at once (prefault). */
 enum { TGM_PHASES = 4 };
 void tgm_stats_bo_alloc(uint64_t bytes, int pool, uint64_t ns, const uint64_t phase_ns[TGM_PHASES]);
-void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns, const uint64_t phase_ns[TGM_PHASES]);
+void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
+			 const uint64_t phase_ns[TGM_PHASES]);
 void tgm_stats_bind(int map, uint64_t pages, uint64_t ns);
 void tgm_stats_bo_free(uint64_t ns);
 void tgm_stats_prefault(uint64_t bytes);

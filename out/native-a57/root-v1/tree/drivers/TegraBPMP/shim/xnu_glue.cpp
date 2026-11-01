@@ -28,209 +28,265 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" boolean_t ml_get_interrupts_enabled(void);
 extern "C" int cpu_number(void);
 
-namespace {
+namespace
+{
 constexpr vm_offset_t kLicPA = 0x60004000;
-enum : uint32_t { ICTLR_CPU_IEP_FIR = 0x14, ICTLR_CPU_IEP_FIR_SET = 0x18, ICTLR_CPU_IEP_FIR_CLR = 0x1c, ICTLR_CPU_IER = 0x20 };
+enum : uint32_t {
+	ICTLR_CPU_IEP_FIR = 0x14,
+	ICTLR_CPU_IEP_FIR_SET = 0x18,
+	ICTLR_CPU_IEP_FIR_CLR = 0x1c,
+	ICTLR_CPU_IER = 0x20
+};
 constexpr unsigned kDoorbells = 4;
 constexpr uint32_t kInboundSpi[kDoorbells] = {4, 5, 7, 18};
 constexpr uint32_t kOutboundBit = 6;
-constexpr unsigned kOutboundDoorbell = 4;   // mail_t210.c CPU_OB_DOORBELL
+constexpr unsigned kOutboundDoorbell = 4;  // mail_t210.c CPU_OB_DOORBELL
 
 volatile uint8_t *gLic;
 struct Doorbell {
-  void (*handler)(void *data);
-  void *data;
+	void (*handler)(void *data);
+	void *data;
 };
 Doorbell gDoorbells[kDoorbells];
 
 volatile uint8_t *lic()
 {
-  if (!gLic) gLic = reinterpret_cast<volatile uint8_t *>(ml_io_map(kLicPA, 0x1000));
-  return gLic;
+	if (!gLic)
+		gLic = reinterpret_cast<volatile uint8_t *>(ml_io_map(kLicPA, 0x1000));
+	return gLic;
 }
-inline uint32_t licRead(uint32_t offset) { return *reinterpret_cast<volatile uint32_t *>(lic() + offset); }
-inline void licWrite(uint32_t offset, uint32_t value) { *reinterpret_cast<volatile uint32_t *>(lic() + offset) = value; }
+inline uint32_t licRead(uint32_t offset)
+{
+	return *reinterpret_cast<volatile uint32_t *>(lic() + offset);
+}
+inline void licWrite(uint32_t offset, uint32_t value)
+{
+	*reinterpret_cast<volatile uint32_t *>(lic() + offset) = value;
+}
 }  // namespace
 
-class TegraBPMPDoorbells : public IOService {
-  OSDeclareDefaultStructors(TegraBPMPDoorbells)
-  IOWorkLoop *loop = nullptr;
-  IOFilterInterruptEventSource *sources[kDoorbells] = {};
-  static bool filter(OSObject *owner, IOFilterInterruptEventSource *sender);
-  static void action(OSObject *owner, IOInterruptEventSource *sender, int count);
-  int indexOf(IOInterruptEventSource *sender) const;
+class TegraBPMPDoorbells : public IOService
+{
+	OSDeclareDefaultStructors(TegraBPMPDoorbells) IOWorkLoop *loop = nullptr;
+	IOFilterInterruptEventSource *sources[kDoorbells] = {};
+	static bool filter(OSObject *owner, IOFilterInterruptEventSource *sender);
+	static void action(OSObject *owner, IOInterruptEventSource *sender, int count);
+	int indexOf(IOInterruptEventSource *sender) const;
+
 public:
-  bool claim();
+	bool claim();
 };
 
 OSDefineMetaClassAndStructors(TegraBPMPDoorbells, IOService)
 
-int TegraBPMPDoorbells::indexOf(IOInterruptEventSource *sender) const
+	int TegraBPMPDoorbells::indexOf(IOInterruptEventSource *sender) const
 {
-  for (unsigned i = 0; i < kDoorbells; ++i) {
-    if (sources[i] == sender) return static_cast<int>(i);
-  }
-  return -1;
+	for (unsigned i = 0; i < kDoorbells; ++i) {
+		if (sources[i] == sender)
+			return static_cast<int>(i);
+	}
+	return -1;
 }
 
 // Primary interrupt context: acknowledge the forced interrupt so the level drops, then hand over to the work loop.
 bool TegraBPMPDoorbells::filter(OSObject *owner, IOFilterInterruptEventSource *sender)
 {
-  auto *self = static_cast<TegraBPMPDoorbells *>(owner);
-  const int i = self->indexOf(sender);
-  if (i < 0) return false;
-  licWrite(ICTLR_CPU_IEP_FIR_CLR, 1u << kInboundSpi[i]);
-  (void)licRead(ICTLR_CPU_IEP_FIR);
-  return true;
+	auto *self = static_cast<TegraBPMPDoorbells *>(owner);
+	const int i = self->indexOf(sender);
+	if (i < 0)
+		return false;
+	licWrite(ICTLR_CPU_IEP_FIR_CLR, 1u << kInboundSpi[i]);
+	(void)licRead(ICTLR_CPU_IEP_FIR);
+	return true;
 }
 
 void TegraBPMPDoorbells::action(OSObject *owner, IOInterruptEventSource *sender, int count)
 {
-  auto *self = static_cast<TegraBPMPDoorbells *>(owner);
-  const int i = self->indexOf(sender);
-  if (i >= 0 && gDoorbells[i].handler) gDoorbells[i].handler(gDoorbells[i].data);
+	auto *self = static_cast<TegraBPMPDoorbells *>(owner);
+	const int i = self->indexOf(sender);
+	if (i >= 0 && gDoorbells[i].handler)
+		gDoorbells[i].handler(gDoorbells[i].data);
 }
 
 bool TegraBPMPDoorbells::claim()
 {
-  loop = IOWorkLoop::workLoop();
-  if (!loop) return false;
-  for (unsigned i = 0; i < kDoorbells; ++i) {
-    const uint32_t intid = 32 + kInboundSpi[i];
-    IOService *nub = ioswitch_interrupt_nub(intid, false);
-    if (!nub) panic("TegraBPMP: no interrupt for BPMP doorbell %u (INTID %u)", i, intid);
-    sources[i] = IOFilterInterruptEventSource::filterInterruptEventSource(this, &TegraBPMPDoorbells::action,
-                                                                         &TegraBPMPDoorbells::filter, nub, 0);
-    if (!sources[i] || loop->addEventSource(sources[i]) != kIOReturnSuccess) {
-      panic("TegraBPMP: cannot attach BPMP doorbell %u (INTID %u)", i, intid);
-    }
-  }
-  // A doorbell the BPMP forced before this point is not cleared: it fires as soon as its source is enabled and
-  // mail.c then answers whatever inbound mail it signalled, as Linux does after request_irq().
-  for (unsigned i = 0; i < kDoorbells; ++i) sources[i]->enable();
-  return true;
+	loop = IOWorkLoop::workLoop();
+	if (!loop)
+		return false;
+	for (unsigned i = 0; i < kDoorbells; ++i) {
+		const uint32_t intid = 32 + kInboundSpi[i];
+		IOService *nub = ioswitch_interrupt_nub(intid, false);
+		if (!nub)
+			panic("TegraBPMP: no interrupt for BPMP doorbell %u (INTID %u)", i, intid);
+		sources[i] = IOFilterInterruptEventSource::filterInterruptEventSource(
+			this, &TegraBPMPDoorbells::action, &TegraBPMPDoorbells::filter, nub, 0);
+		if (!sources[i] || loop->addEventSource(sources[i]) != kIOReturnSuccess) {
+			panic("TegraBPMP: cannot attach BPMP doorbell %u (INTID %u)", i, intid);
+		}
+	}
+	// A doorbell the BPMP forced before this point is not cleared: it fires as soon as its source is enabled and
+	// mail.c then answers whatever inbound mail it signalled, as Linux does after request_irq().
+	for (unsigned i = 0; i < kDoorbells; ++i)
+		sources[i]->enable();
+	return true;
 }
 
 extern "C" {
 
-int tegra_register_doorbell_handler(unsigned int doorbell_id, void (*handler)(void *data), void *data)
+int tegra_register_doorbell_handler(unsigned int doorbell_id, void (*handler)(void *data),
+				    void *data)
 {
-  if (doorbell_id >= kDoorbells) return -22;   // -EINVAL, as irq-tegra.c
-  gDoorbells[doorbell_id].handler = handler;
-  gDoorbells[doorbell_id].data = data;
-  return 0;
+	if (doorbell_id >= kDoorbells)
+		return -22;  // -EINVAL, as irq-tegra.c
+	gDoorbells[doorbell_id].handler = handler;
+	gDoorbells[doorbell_id].data = data;
+	return 0;
 }
 
 int tegra_ring_doorbell(unsigned int doorbell_id)
 {
-  if (doorbell_id != kOutboundDoorbell) return -22;
-  __asm__ volatile("dsb st" ::: "memory");   // the channel area writes land before the BPMP looks
-  licWrite(ICTLR_CPU_IEP_FIR_SET, 1u << kOutboundBit);
-  return 0;
+	if (doorbell_id != kOutboundDoorbell)
+		return -22;
+	__asm__ volatile("dsb st" ::
+				 : "memory");  // the channel area writes land before the BPMP looks
+	licWrite(ICTLR_CPU_IEP_FIR_SET, 1u << kOutboundBit);
+	return 0;
 }
 
 void bpxnu_doorbells_start(void)
 {
-  static TegraBPMPDoorbells *service;
-  if (service) return;
-  IOService *resources = IOService::getResourceService();
-  TegraBPMPDoorbells *candidate = OSTypeAlloc(TegraBPMPDoorbells);
-  if (!lic() || !resources || !candidate || !candidate->init() || !candidate->attach(resources) ||
-      !candidate->start(resources)) {
-    panic("TegraBPMP: cannot create the BPMP doorbell service");
-  }
-  if (!candidate->claim()) panic("TegraBPMP: no work loop for the BPMP doorbells");
-  candidate->setName("TegraBPMP");
-  candidate->registerService();
-  service = candidate;
+	static TegraBPMPDoorbells *service;
+	if (service)
+		return;
+	IOService *resources = IOService::getResourceService();
+	TegraBPMPDoorbells *candidate = OSTypeAlloc(TegraBPMPDoorbells);
+	if (!lic() || !resources || !candidate || !candidate->init() ||
+	    !candidate->attach(resources) || !candidate->start(resources)) {
+		panic("TegraBPMP: cannot create the BPMP doorbell service");
+	}
+	if (!candidate->claim())
+		panic("TegraBPMP: no work loop for the BPMP doorbells");
+	candidate->setName("TegraBPMP");
+	candidate->registerService();
+	service = candidate;
 }
 
 void bpxnu_doorbell_lost(int ch, int mrq)
 {
-  const uint32_t fir = licRead(ICTLR_CPU_IEP_FIR), ier = licRead(ICTLR_CPU_IER);
-  uint32_t spi = kInboundSpi[0];
-  for (unsigned i = 0; i < kDoorbells; ++i) {
-    if (fir & (1u << kInboundSpi[i])) {
-      spi = kInboundSpi[i];
-      break;
-    }
-  }
-  char gic[160];
-  ioswitch_interrupt_describe(32 + spi, gic, sizeof(gic));
-  panic("TegraBPMP: doorbell lost: BPMP answered mrq %d on ch %d, no interrupt in 4 s; LIC FIR %08x IER %08x; %s", mrq,
-        ch, fir, ier, gic);
+	const uint32_t fir = licRead(ICTLR_CPU_IEP_FIR), ier = licRead(ICTLR_CPU_IER);
+	uint32_t spi = kInboundSpi[0];
+	for (unsigned i = 0; i < kDoorbells; ++i) {
+		if (fir & (1u << kInboundSpi[i])) {
+			spi = kInboundSpi[i];
+			break;
+		}
+	}
+	char gic[160];
+	ioswitch_interrupt_describe(32 + spi, gic, sizeof(gic));
+	panic("TegraBPMP: doorbell lost: BPMP answered mrq %d on ch %d, no interrupt in 4 s; LIC "
+	      "FIR %08x IER %08x; %s",
+	      mrq, ch, fir, ier, gic);
 }
 
 void bpxnu_log(const char *fmt, ...)
 {
-  char line[256];
-  va_list ap;
-  va_start(ap, fmt);
-  vsnprintf(line, sizeof(line), fmt, ap);
-  va_end(ap);
-  IOLog("%s", line);
+	char line[256];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	IOLog("%s", line);
 }
 
 void bpxnu_warn(const char *file, int line)
 {
-  IOLog("TegraBPMP: WARN_ON at %s:%d\n", file, line);
+	IOLog("TegraBPMP: WARN_ON at %s:%d\n", file, line);
 }
 
 void *bpxnu_zalloc(unsigned long size)
 {
-  unsigned long *p = static_cast<unsigned long *>(IOMallocZero(size + 16));
-  if (!p) return nullptr;
-  p[0] = size;
-  return p + 2;
+	unsigned long *p = static_cast<unsigned long *>(IOMallocZero(size + 16));
+	if (!p)
+		return nullptr;
+	p[0] = size;
+	return p + 2;
 }
 
 void bpxnu_free(void *q)
 {
-  unsigned long *p = static_cast<unsigned long *>(q) - 2;
-  IOFree(p, p[0] + 16);
+	unsigned long *p = static_cast<unsigned long *>(q) - 2;
+	IOFree(p, p[0] + 16);
 }
 
-void *bpxnu_spin_alloc(void) { return IOSimpleLockAlloc(); }
-void bpxnu_spin_free(void *lock) { IOSimpleLockFree(static_cast<IOSimpleLock *>(lock)); }
-void bpxnu_spin_lock(void *lock) { IOSimpleLockLock(static_cast<IOSimpleLock *>(lock)); }
-void bpxnu_spin_unlock(void *lock) { IOSimpleLockUnlock(static_cast<IOSimpleLock *>(lock)); }
+void *bpxnu_spin_alloc(void)
+{
+	return IOSimpleLockAlloc();
+}
+void bpxnu_spin_free(void *lock)
+{
+	IOSimpleLockFree(static_cast<IOSimpleLock *>(lock));
+}
+void bpxnu_spin_lock(void *lock)
+{
+	IOSimpleLockLock(static_cast<IOSimpleLock *>(lock));
+}
+void bpxnu_spin_unlock(void *lock)
+{
+	IOSimpleLockUnlock(static_cast<IOSimpleLock *>(lock));
+}
 
 unsigned long bpxnu_spin_lock_irqsave(void *lock)
 {
-  return static_cast<unsigned long>(IOSimpleLockLockDisableInterrupt(static_cast<IOSimpleLock *>(lock)));
+	return static_cast<unsigned long>(
+		IOSimpleLockLockDisableInterrupt(static_cast<IOSimpleLock *>(lock)));
 }
 
 void bpxnu_spin_unlock_irqrestore(void *lock, unsigned long flags)
 {
-  IOSimpleLockUnlockEnableInterrupt(static_cast<IOSimpleLock *>(lock), static_cast<IOInterruptState>(flags));
+	IOSimpleLockUnlockEnableInterrupt(static_cast<IOSimpleLock *>(lock),
+					  static_cast<IOInterruptState>(flags));
 }
 
-int bpxnu_interrupts_disabled(void) { return !ml_get_interrupts_enabled(); }
-int bpxnu_cpu_number(void) { return cpu_number(); }
+int bpxnu_interrupts_disabled(void)
+{
+	return !ml_get_interrupts_enabled();
+}
+int bpxnu_cpu_number(void)
+{
+	return cpu_number();
+}
 
 unsigned long long bpxnu_nanotime(void)
 {
-  uint64_t ns = 0;
-  absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-  return ns;
+	uint64_t ns = 0;
+	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+	return ns;
 }
 
 void bpxnu_assert_wait(const void *event, unsigned long long deadline_ns)
 {
-  uint64_t deadline = 0;
-  nanoseconds_to_absolutetime(deadline_ns, &deadline);
-  assert_wait_deadline((event_t)event, THREAD_UNINT, deadline);
+	uint64_t deadline = 0;
+	nanoseconds_to_absolutetime(deadline_ns, &deadline);
+	assert_wait_deadline((event_t)event, THREAD_UNINT, deadline);
 }
 
-int bpxnu_block(void) { return thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT; }
-void bpxnu_wakeup(const void *event) { thread_wakeup((event_t)event); }
+int bpxnu_block(void)
+{
+	return thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT;
+}
+void bpxnu_wakeup(const void *event)
+{
+	thread_wakeup((event_t)event);
+}
 
 volatile void *bpxnu_ioremap(unsigned long long pa, unsigned long size)
 {
-  const vm_offset_t base = static_cast<vm_offset_t>(pa) & ~static_cast<vm_offset_t>(PAGE_MASK);
-  const vm_size_t span = round_page(static_cast<vm_offset_t>(pa) - base + size);
-  const vm_offset_t va = ml_io_map(base, span);
-  return va ? reinterpret_cast<volatile void *>(va + (static_cast<vm_offset_t>(pa) - base)) : nullptr;
+	const vm_offset_t base =
+		static_cast<vm_offset_t>(pa) & ~static_cast<vm_offset_t>(PAGE_MASK);
+	const vm_size_t span = round_page(static_cast<vm_offset_t>(pa) - base + size);
+	const vm_offset_t va = ml_io_map(base, span);
+	return va ? reinterpret_cast<volatile void *>(va + (static_cast<vm_offset_t>(pa) - base))
+		  : nullptr;
 }
 
 }  // extern "C"

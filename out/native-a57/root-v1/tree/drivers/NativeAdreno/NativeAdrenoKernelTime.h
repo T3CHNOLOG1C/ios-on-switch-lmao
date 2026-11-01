@@ -7,7 +7,7 @@
  * mach_absolute_time and a bounded busy wait. This is the only production
  * implementation of the time callbacks; tests inject their own. */
 struct NativeAdrenoKernelTime {
-    static int now_us(void *,uint64_t *);
-    static int wait_us(void *,unsigned);
+    static int now_us(void *, uint64_t *);
+    static int wait_us(void *, unsigned);
 };
 #endif

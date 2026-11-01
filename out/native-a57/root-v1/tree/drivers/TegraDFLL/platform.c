@@ -81,19 +81,21 @@
 #define PLL_ENABLE BIT(30)
 #define PLL_BYPASS BIT(31)
 #define PLL_LOCK BIT(27)
-#define SRC_PLLP 0u            /* mux_pllp_clkm_idx[0] in bits 31:30 */
-#define SRC_CLKM 3u            /* mux_pllp_clkm_idx[1] */
-#define DFLL_SRC_51MHZ 14u      /* 7.1 divider: 408 MHz * 2 / (14 + 2) = 51 MHz */
-#define PLLP_RATE 408000000UL  /* hekate pll_p, the fixed 408 MHz everything on the APB hangs off (SwitchClocks.h) */
+#define SRC_PLLP 0u        /* mux_pllp_clkm_idx[0] in bits 31:30 */
+#define SRC_CLKM 3u        /* mux_pllp_clkm_idx[1] */
+#define DFLL_SRC_51MHZ 14u /* 7.1 divider: 408 MHz * 2 / (14 + 2) = 51 MHz */
+#define PLLP_RATE \
+	408000000UL /* hekate pll_p, the fixed 408 MHz everything on the APB hangs off (SwitchClocks.h) */
 #define CCLK_SRC_PLLP 4u
 #define CCLK_SRC_PLLX 8u
-#define SUPER_STATE_RUN_BIT BIT(29)  /* L4T clk-super.c:27-39: state field 31:28 is one-hot, RUN = bit 1 */
+#define SUPER_STATE_RUN_BIT \
+	BIT(29) /* L4T clk-super.c:27-39: state field 31:28 is one-hot, RUN = bit 1 */
 #define SUPER_STATE_IDLE_BIT BIT(28)
 
 #define FUSE_CACHE 0x100
 #define FUSE_SPARE 0x280
 #define FUSE_OPT_SUBREVISION_OFF 0x148
-#define FUSE_ODM28_B01 0x240         /* hekate offset, already including +0x100 */
+#define FUSE_ODM28_B01 0x240 /* hekate offset, already including +0x100 */
 #define I2C_CNFG 0x000
 #define I2C_CNFG_MULTI_MASTER_MODE BIT(17)
 
@@ -103,16 +105,21 @@
 #define MAX77812_M4_VOUT 0x26
 
 static volatile u8 *car, *fuse, *apbmisc, *i2c5, *dfll;
-static int init_err = 1;  /* 1: not tried yet */
+static int init_err = 1; /* 1: not tried yet */
 static char init_why[96];
 static u32 hidrev;
 
-static u32 rd(volatile u8 *base, u32 off) { return *(volatile u32 *)(base + off); }
+static u32 rd(volatile u8 *base, u32 off)
+{
+	return *(volatile u32 *)(base + off);
+}
 static void wr(volatile u8 *base, u32 off, u32 v)
 {
 	__asm__ __volatile__("dmb oshst" ::: "memory");
 	*(volatile u32 *)(base + off) = v;
-	(void)*(volatile u32 *)(base + off);  /* post the write before any delay that follows (L4T fence_udelay) */
+	(void)*(volatile u32
+			*)(base +
+			   off); /* post the write before any delay that follows (L4T fence_udelay) */
 }
 
 static int fail(char *why, size_t len, int err, const char *fmt, ...) __printf(4, 5);
@@ -133,25 +140,25 @@ static struct device_node max77812_m4 = {
 	.name = "m4vout",
 	.full_name = "/i2c@7000d000/max77812@33/regulators/m4vout",
 };
-static const char *const dfll_compatible[] = { "nvidia,tegra210b01-dfll", "nvidia,tegra210-dfll" };
-static const char *const dfll_clock_names[] = { "soc", "ref", "i2c" };
+static const char *const dfll_compatible[] = {"nvidia,tegra210b01-dfll", "nvidia,tegra210-dfll"};
+static const char *const dfll_clock_names[] = {"soc", "ref", "i2c"};
 /* <&tegra_car TEGRA210_CLK_DFLL_SOC>, <... DFLL_REF>, <... I2C5> as the names this shim registers them under */
-static const char *const dfll_clocks[] = { "dfll_soc", "dfll_ref", "i2c5" };
-static const char *const dfll_reset_names[] = { "dvco" };
-static const char *const dfll_output_names[] = { "dfllCPU_out" };
-static const char *const dfll_out_clock_name[] = { "dfll_cpu" };
-static const char *const dfll_status[] = { "okay" };
-static const u32 v_align_step_uv[] = { 5000 };
-static const u32 v_sample_rate[] = { 12500 };
-static const u32 v_droop_ctrl[] = { 0x00000f00 };
-static const u32 v_force_mode[] = { 1 };
-static const u32 v_cf[] = { 6 };
-static const u32 v_ci[] = { 0 };
-static const u32 v_cg[] = { 2 };
-static const u32 v_i2c_fs_rate[] = { 400000 };
-static const u32 v_pmic_undershoot_gb[] = { 0 };
-#define PROP_U32(n, v) { .name = n, .cells = v, .ncells = ARRAY_SIZE(v) }
-#define PROP_STR(n, v) { .name = n, .strings = v, .nstrings = ARRAY_SIZE(v) }
+static const char *const dfll_clocks[] = {"dfll_soc", "dfll_ref", "i2c5"};
+static const char *const dfll_reset_names[] = {"dvco"};
+static const char *const dfll_output_names[] = {"dfllCPU_out"};
+static const char *const dfll_out_clock_name[] = {"dfll_cpu"};
+static const char *const dfll_status[] = {"okay"};
+static const u32 v_align_step_uv[] = {5000};
+static const u32 v_sample_rate[] = {12500};
+static const u32 v_droop_ctrl[] = {0x00000f00};
+static const u32 v_force_mode[] = {1};
+static const u32 v_cf[] = {6};
+static const u32 v_ci[] = {0};
+static const u32 v_cg[] = {2};
+static const u32 v_i2c_fs_rate[] = {400000};
+static const u32 v_pmic_undershoot_gb[] = {0};
+#define PROP_U32(n, v) {.name = n, .cells = v, .ncells = ARRAY_SIZE(v)}
+#define PROP_STR(n, v) {.name = n, .strings = v, .nstrings = ARRAY_SIZE(v)}
 static const struct tdfll_property dfll_props[] = {
 	PROP_STR("compatible", dfll_compatible),
 	PROP_STR("clocks", dfll_clocks),
@@ -160,7 +167,7 @@ static const struct tdfll_property dfll_props[] = {
 	PROP_STR("clock-output-names", dfll_output_names),
 	PROP_STR("out-clock-name", dfll_out_clock_name),
 	PROP_STR("status", dfll_status),
-	{ .name = "vdd-cpu-supply", .phandle = &max77812_m4 },
+	{.name = "vdd-cpu-supply", .phandle = &max77812_m4},
 	PROP_U32("nvidia,align-step-uv", v_align_step_uv),
 	PROP_U32("nvidia,sample-rate", v_sample_rate),
 	PROP_U32("nvidia,droop-ctrl", v_droop_ctrl),
@@ -170,7 +177,7 @@ static const struct tdfll_property dfll_props[] = {
 	PROP_U32("nvidia,cg", v_cg),
 	PROP_U32("nvidia,i2c-fs-rate", v_i2c_fs_rate),
 	PROP_U32("nvidia,pmic-undershoot-gb", v_pmic_undershoot_gb),
-	{ .name = NULL },
+	{.name = NULL},
 };
 static struct device_node dfll_node = {
 	.name = "clock",
@@ -180,15 +187,24 @@ static struct device_node dfll_node = {
 
 /* reg: control, I2C output control (same window), integrated I2C controller, LUT RAM; interrupts SPI 62 is unused */
 static struct resource dfll_resources[] = {
-	{ .start = DFLL_PA + 0x000, .end = DFLL_PA + 0x0ff, .name = "control", .flags = IORESOURCE_MEM },
-	{ .start = DFLL_PA + 0x000, .end = DFLL_PA + 0x0ff, .name = "i2c output", .flags = IORESOURCE_MEM },
-	{ .start = DFLL_PA + 0x100, .end = DFLL_PA + 0x1ff, .name = "i2c controller", .flags = IORESOURCE_MEM },
-	{ .start = DFLL_PA + 0x200, .end = DFLL_PA + 0x2ff, .name = "lut", .flags = IORESOURCE_MEM },
+	{.start = DFLL_PA + 0x000,
+	 .end = DFLL_PA + 0x0ff,
+	 .name = "control",
+	 .flags = IORESOURCE_MEM},
+	{.start = DFLL_PA + 0x000,
+	 .end = DFLL_PA + 0x0ff,
+	 .name = "i2c output",
+	 .flags = IORESOURCE_MEM},
+	{.start = DFLL_PA + 0x100,
+	 .end = DFLL_PA + 0x1ff,
+	 .name = "i2c controller",
+	 .flags = IORESOURCE_MEM},
+	{.start = DFLL_PA + 0x200, .end = DFLL_PA + 0x2ff, .name = "lut", .flags = IORESOURCE_MEM},
 };
 static struct platform_device dfll_pdev = {
 	.name = "70110000.clock",
 	.id = -1,
-	.dev = { .init_name = "70110000.clock", .of_node = &dfll_node },
+	.dev = {.init_name = "70110000.clock", .of_node = &dfll_node},
 	.num_resources = ARRAY_SIZE(dfll_resources),
 	.resource = dfll_resources,
 };
@@ -199,7 +215,7 @@ struct platform_device *tdfll_platform_dfll_device(void)
 }
 
 /* the CPU OPP table's device (fcpu probe: soc->dev = get_cpu_device(0)) */
-static struct device cpu0 = { .init_name = "cpu0" };
+static struct device cpu0 = {.init_name = "cpu0"};
 
 struct device *get_cpu_device(unsigned cpu)
 {
@@ -216,13 +232,14 @@ static struct regulator vdd_cpu = {
 	.constraint_max_uV = 1525000,
 	.vsel_reg = MAX77812_M4_VOUT,
 	.vsel_mask = 0xff,
-	.client = { .name = "max77812", .dev = { .init_name = "max77812" } },
-	.regmap = { .dev = &vdd_cpu.client.dev },
+	.client = {.name = "max77812", .dev = {.init_name = "max77812"}},
+	.regmap = {.dev = &vdd_cpu.client.dev},
 };
 
 struct regulator *tdfll_platform_regulator(struct device *dev, const char *id)
 {
-	if (!id || strcmp(id, "vdd-cpu") || !dev || of_parse_phandle(dev->of_node, "vdd-cpu-supply", 0) != &max77812_m4)
+	if (!id || strcmp(id, "vdd-cpu") || !dev ||
+	    of_parse_phandle(dev->of_node, "vdd-cpu-supply", 0) != &max77812_m4)
 		return NULL;
 	return &vdd_cpu;
 }
@@ -250,7 +267,8 @@ int tdfll_platform_vout_write(u8 code)
 	int err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, &code, 1);
 
 	if (err == TEGRA_I2C_EARB)
-		err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, &code, 1);
+		err = tegra_i2c_write(PMIC_BUS, (u8)vdd_cpu.client.addr, MAX77812_M4_VOUT, &code,
+				      1);
 	if (!err)
 		err = tdfll_platform_vout_read(&check);
 	if (!err && check != code)
@@ -266,7 +284,7 @@ static void dvco_reset_set(bool assert)
 	wr(car, RST_DFLL_DVCO, assert ? (v | DVCO_RESET) : (v & ~DVCO_RESET));
 }
 
-static struct reset_control dvco_reset = { .name = "dvco", .set = dvco_reset_set };
+static struct reset_control dvco_reset = {.name = "dvco", .set = dvco_reset_set};
 
 struct reset_control *tdfll_platform_reset(struct device *dev, const char *id)
 {
@@ -274,7 +292,8 @@ struct reset_control *tdfll_platform_reset(struct device *dev, const char *id)
 }
 
 /* ------------------------------------------------------------------ fuses and chip revision (L4T fuse subset) */
-struct tegra_sku_info tegra_sku_info = {   /* fuse-tegra.c:33-38 */
+struct tegra_sku_info tegra_sku_info = {
+	/* fuse-tegra.c:33-38 */
 	.cpu_iddq_value = -ENOTSUPP,
 	.gpu_iddq_value = -ENOTSUPP,
 	.soc_iddq_value = -ENOTSUPP,
@@ -283,12 +302,13 @@ struct tegra_sku_info tegra_sku_info = {   /* fuse-tegra.c:33-38 */
 
 u32 tegra_fuse_read_early(unsigned int offset)
 {
-	return rd(fuse, FUSE_CACHE + offset);  /* fuse-tegra30.c tegra30_fuse_read_early */
+	return rd(fuse, FUSE_CACHE + offset); /* fuse-tegra30.c tegra30_fuse_read_early */
 }
 
 bool tegra_fuse_read_spare(unsigned int spare)
 {
-	return tegra_fuse_read_early(FUSE_SPARE + spare * 4) & 1;  /* fuse-tegra.c tegra_fuse_read_spare */
+	return tegra_fuse_read_early(FUSE_SPARE + spare * 4) &
+	       1; /* fuse-tegra.c tegra_fuse_read_spare */
 }
 
 u32 tegra_read_chipid(void)
@@ -304,10 +324,10 @@ static void init_revision(void)
 		char sub_type;
 		enum tegra_revision revision, id_and_rev;
 	} revs[] = {
-		{ TEGRA210, 1, 1, 0, TEGRA_REVISION_A01, TEGRA210_REVISION_A01 },
-		{ TEGRA210, 1, 1, 'q', TEGRA_REVISION_A01q, TEGRA210_REVISION_A01q },
-		{ TEGRA210, 1, 2, 0, TEGRA_REVISION_A02, TEGRA210_REVISION_A02 },
-		{ TEGRA210B01, 2, 1, 0, TEGRA_REVISION_A01, TEGRA210B01_REVISION_A01 },
+		{TEGRA210, 1, 1, 0, TEGRA_REVISION_A01, TEGRA210_REVISION_A01},
+		{TEGRA210, 1, 1, 'q', TEGRA_REVISION_A01q, TEGRA210_REVISION_A01q},
+		{TEGRA210, 1, 2, 0, TEGRA_REVISION_A02, TEGRA210_REVISION_A02},
+		{TEGRA210B01, 2, 1, 0, TEGRA_REVISION_A01, TEGRA210B01_REVISION_A01},
 	};
 	enum tegra_revision revision = TEGRA_REVISION_UNKNOWN, id_and_rev = TEGRA_REVISION_UNKNOWN;
 	u32 chipid, major, minor, subrev;
@@ -319,11 +339,14 @@ static void init_revision(void)
 	major = tegra_hidrev_get_majorrev(hidrev);
 	minor = tegra_hidrev_get_minorrev(hidrev);
 	if (major) {
-		subrev = rd(fuse, FUSE_CACHE + FUSE_OPT_SUBREVISION_OFF) & 0xf;  /* tegra_fuse_get_subrevision */
+		subrev = rd(fuse, FUSE_CACHE + FUSE_OPT_SUBREVISION_OFF) &
+			 0xf; /* tegra_fuse_get_subrevision */
 		sub_type = subrev == 1 ? 'p' : subrev == 2 ? 'q' : subrev == 3 ? 'r' : 0;
-		for (pass = sub_type ? 0 : 1; pass < 2 && revision == TEGRA_REVISION_UNKNOWN; pass++)
+		for (pass = sub_type ? 0 : 1; pass < 2 && revision == TEGRA_REVISION_UNKNOWN;
+		     pass++)
 			for (i = 0; i < ARRAY_SIZE(revs); i++)
-				if (revs[i].chipid == chipid && revs[i].major == major && revs[i].minor == minor &&
+				if (revs[i].chipid == chipid && revs[i].major == major &&
+				    revs[i].minor == minor &&
 				    (pass || revs[i].sub_type == sub_type)) {
 					revision = revs[i].revision;
 					id_and_rev = revs[i].id_and_rev;
@@ -339,9 +362,11 @@ void tdfll_platform_describe_chip(char *buf, size_t len)
 {
 	const struct tegra_sku_info *s = &tegra_sku_info;
 
-	snprintf(buf, len, "SKU %#x%s, CPU speedo %d/%d process %d (fuse rev %d, IDDQ %d)", s->sku_id,
-		 s->id_and_rev == TEGRA210B01_REVISION_A01 ? " T210B01 A01" : " not T210B01", s->cpu_speedo_id,
-		 s->cpu_speedo_value, s->cpu_process_id, s->speedo_rev, s->cpu_iddq_value);
+	snprintf(buf, len, "SKU %#x%s, CPU speedo %d/%d process %d (fuse rev %d, IDDQ %d)",
+		 s->sku_id,
+		 s->id_and_rev == TEGRA210B01_REVISION_A01 ? " T210B01 A01" : " not T210B01",
+		 s->cpu_speedo_id, s->cpu_speedo_value, s->cpu_process_id, s->speedo_rev,
+		 s->cpu_iddq_value);
 }
 
 /* ------------------------------------------------------------------ clocks */
@@ -350,15 +375,16 @@ static unsigned long pllp_recalc(struct clk_hw *hw, unsigned long parent_rate)
 	return PLLP_RATE;
 }
 
-static const struct clk_ops pllp_ops = { .recalc_rate = pllp_recalc };
-static const struct clk_init_data pllp_init = { .name = "pll_p", .ops = &pllp_ops };
-static struct clk_hw pllp_hw = { .init = &pllp_init };
+static const struct clk_ops pllp_ops = {.recalc_rate = pllp_recalc};
+static const struct clk_init_data pllp_init = {.name = "pll_p", .ops = &pllp_ops};
+static struct clk_hw pllp_hw = {.init = &pllp_init};
 
 /* PLLX as the caller leaves it: m/n/p from PLLX_BASE over pll_ref (SwitchClocks.h refKHz/qlinDivider/pllKHz) */
 static unsigned long pllx_recalc(struct clk_hw *hw, unsigned long parent_rate)
 {
-	static const u8 qlin[15] = { 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 12, 16, 20, 24, 32 };
-	u32 base = rd(car, PLLX_BASE), m = base & 0xff, n = (base >> 8) & 0xff, pcode = (base >> 20) & 0x1f;
+	static const u8 qlin[15] = {1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 12, 16, 20, 24, 32};
+	u32 base = rd(car, PLLX_BASE), m = base & 0xff, n = (base >> 8) & 0xff,
+	    pcode = (base >> 20) & 0x1f;
 	unsigned long ref = 38400000UL >> ((rd(car, OSC_CTRL) >> 26) & 3);
 
 	if (!(base & PLL_ENABLE))
@@ -370,13 +396,14 @@ static unsigned long pllx_recalc(struct clk_hw *hw, unsigned long parent_rate)
 	return (unsigned long)((u64)ref * n / m / qlin[pcode]);
 }
 
-static const struct clk_ops pllx_ops = { .recalc_rate = pllx_recalc };
-static const struct clk_init_data pllx_init = { .name = "pll_x", .ops = &pllx_ops };
-static struct clk_hw pllx_hw = { .init = &pllx_init };
+static const struct clk_ops pllx_ops = {.recalc_rate = pllx_recalc};
+static const struct clk_init_data pllx_init = {.name = "pll_x", .ops = &pllx_ops};
+static struct clk_hw pllx_hw = {.init = &pllx_init};
 
 bool tdfll_platform_pllx_locked(void)
 {
-	return (rd(car, PLLX_BASE) & (PLL_ENABLE | PLL_BYPASS | PLL_LOCK)) == (PLL_ENABLE | PLL_LOCK);
+	return (rd(car, PLLX_BASE) & (PLL_ENABLE | PLL_BYPASS | PLL_LOCK)) ==
+	       (PLL_ENABLE | PLL_LOCK);
 }
 
 static unsigned long clkm_rate(void)
@@ -428,10 +455,12 @@ static const struct clk_ops cl_dvfs_ops = {
 	.disable = cl_dvfs_disable,
 	.recalc_rate = cl_dvfs_recalc,
 };
-static const struct clk_init_data dfll_soc_init = { .name = "dfll_soc", .ops = &cl_dvfs_ops };
-static const struct clk_init_data dfll_ref_init = { .name = "dfll_ref", .ops = &cl_dvfs_ops };
-static struct cl_dvfs_clk dfll_soc_clk = { .hw = { .init = &dfll_soc_init }, .source = CLK_SOURCE_DFLL_SOC };
-static struct cl_dvfs_clk dfll_ref_clk = { .hw = { .init = &dfll_ref_init }, .source = CLK_SOURCE_DFLL_REF };
+static const struct clk_init_data dfll_soc_init = {.name = "dfll_soc", .ops = &cl_dvfs_ops};
+static const struct clk_init_data dfll_ref_init = {.name = "dfll_ref", .ops = &cl_dvfs_ops};
+static struct cl_dvfs_clk dfll_soc_clk = {.hw = {.init = &dfll_soc_init},
+					  .source = CLK_SOURCE_DFLL_SOC};
+static struct cl_dvfs_clk dfll_ref_clk = {.hw = {.init = &dfll_ref_init},
+					  .source = CLK_SOURCE_DFLL_REF};
 
 /* I2C5 belongs to TegraI2C, which adopts it as U-Boot left it and never resets or re-clocks it: the DFLL only needs it
  * running (its integrated I2C master divides this clock, clk-dfll.c dfll_init_i2c_if) and never gates it. */
@@ -444,8 +473,8 @@ static int i2c5_enable(struct clk_hw *hw)
 {
 	if (i2c5_running())
 		return 0;
-	printk("I2C5 is not clocked (CLK_OUT_ENB_H %#x, RST_DEVICES_H %#x)\n", rd(car, CLK_OUT_ENB_H),
-	       rd(car, RST_DEVICES_H));
+	printk("I2C5 is not clocked (CLK_OUT_ENB_H %#x, RST_DEVICES_H %#x)\n",
+	       rd(car, CLK_OUT_ENB_H), rd(car, RST_DEVICES_H));
 	return -ENODEV;
 }
 
@@ -458,15 +487,15 @@ static unsigned long i2c5_recalc(struct clk_hw *hw, unsigned long parent_rate)
 	return parent / ((v & 0xffff) + 1);
 }
 
-static const struct clk_ops i2c5_ops = { .enable = i2c5_enable, .recalc_rate = i2c5_recalc };
-static const struct clk_init_data i2c5_init = { .name = "i2c5", .ops = &i2c5_ops };
-static struct clk_hw i2c5_hw = { .init = &i2c5_init };
+static const struct clk_ops i2c5_ops = {.enable = i2c5_enable, .recalc_rate = i2c5_recalc};
+static const struct clk_init_data i2c5_init = {.name = "i2c5", .ops = &i2c5_ops};
+static struct clk_hw i2c5_hw = {.init = &i2c5_init};
 
 /* cclk_g: L4T clk-super.c clk_super_get_parent / clk_super_set_parent (43-125) for the gen5 mux (width 4, no
  * LP divide-by-2), on CCLKG_BURST_POLICY. Only the source of the current state (RUN, or IDLE) changes. */
-static const char *const cclk_g_parents[] = { "clk_m", "unused", "clk_32k", "unused", "pll_p", "pll_p_out4",
-					      "unused", "unused", "pll_x", "unused", "unused", "unused", "unused",
-					      "unused", "unused", "dfllCPU_out" };
+static const char *const cclk_g_parents[] = {
+	"clk_m", "unused", "clk_32k", "unused", "pll_p",  "pll_p_out4", "unused", "unused",
+	"pll_x", "unused", "unused",  "unused", "unused", "unused",     "unused", "dfllCPU_out"};
 
 static u8 cclk_g_get_parent(struct clk_hw *hw)
 {
@@ -491,7 +520,8 @@ static int cclk_g_set_parent(struct clk_hw *hw, u8 index)
 	return 0;
 }
 
-static const struct clk_ops cclk_g_ops = { .get_parent = cclk_g_get_parent, .set_parent = cclk_g_set_parent };
+static const struct clk_ops cclk_g_ops = {.get_parent = cclk_g_get_parent,
+					  .set_parent = cclk_g_set_parent};
 static const struct clk_init_data cclk_g_init = {
 	.name = "cclk_g",
 	.ops = &cclk_g_ops,
@@ -499,23 +529,29 @@ static const struct clk_init_data cclk_g_init = {
 	.num_parents = ARRAY_SIZE(cclk_g_parents),
 	.flags = CLK_SET_RATE_PARENT,
 };
-static struct clk_hw cclk_g_hw = { .init = &cclk_g_init };
+static struct clk_hw cclk_g_hw = {.init = &cclk_g_init};
 
 /* ------------------------------------------------------------------ checks dfll.c makes before switching */
 int tdfll_platform_cpu_on_pllx(char *why, size_t len)
 {
-	u32 policy = rd(car, CCLKG_BURST_POLICY), alias = rd(car, CCLK_BURST_POLICY), div = rd(car, SUPER_CCLK_DIVIDER);
+	u32 policy = rd(car, CCLKG_BURST_POLICY), alias = rd(car, CCLK_BURST_POLICY),
+	    div = rd(car, SUPER_CCLK_DIVIDER);
 
 	if (policy != alias)
-		return fail(why, len, -ENODEV, "CCLKG_BURST_POLICY %#x != CCLK_BURST_POLICY %#x", policy, alias);
+		return fail(why, len, -ENODEV, "CCLKG_BURST_POLICY %#x != CCLK_BURST_POLICY %#x",
+			    policy, alias);
 	if ((policy & (0xfu << 28)) != SUPER_STATE_RUN_BIT)
-		return fail(why, len, -EBUSY, "the CPU super clock is not in the RUN state (%#x)", policy);
+		return fail(why, len, -EBUSY, "the CPU super clock is not in the RUN state (%#x)",
+			    policy);
 	if (((policy >> 4) & 0xf) != CCLK_SRC_PLLX)
-		return fail(why, len, -EBUSY, "the CPU does not run from PLLX (CCLKG_BURST_POLICY %#x)", policy);
+		return fail(why, len, -EBUSY,
+			    "the CPU does not run from PLLX (CCLKG_BURST_POLICY %#x)", policy);
 	if (!tdfll_platform_pllx_locked())
-		return fail(why, len, -EBUSY, "PLLX is not locked (PLLX_BASE %#x)", rd(car, PLLX_BASE));
+		return fail(why, len, -EBUSY, "PLLX is not locked (PLLX_BASE %#x)",
+			    rd(car, PLLX_BASE));
 	if ((div & BIT(31)) && ((div >> 8) & 0xff) != (div & 0xff))
-		return fail(why, len, -EBUSY, "the CCLK divider is in use (SUPER_CCLK_DIVIDER %#x)", div);
+		return fail(why, len, -EBUSY, "the CCLK divider is in use (SUPER_CCLK_DIVIDER %#x)",
+			    div);
 	return 0;
 }
 
@@ -524,7 +560,9 @@ int tdfll_platform_i2c5_shareable(char *why, size_t len)
 	if (!i2c5_running())
 		return fail(why, len, -ENODEV, "I2C5 is not clocked");
 	if (!(rd(i2c5, I2C_CNFG) & I2C_CNFG_MULTI_MASTER_MODE))
-		return fail(why, len, -EBUSY, "I2C5 is not in multi-master mode (I2C_CNFG %#x), the DFLL would collide with it",
+		return fail(why, len, -EBUSY,
+			    "I2C5 is not in multi-master mode (I2C_CNFG %#x), the DFLL would "
+			    "collide with it",
 			    rd(i2c5, I2C_CNFG));
 	return 0;
 }
@@ -537,7 +575,8 @@ u32 tdfll_platform_dfll_readl(u32 offset)
 /* ------------------------------------------------------------------ bring-up (no CPU clock or VDD_CPU change) */
 static int platform_init(char *why, size_t len)
 {
-	struct clk_hw *hws[] = { &pllp_hw, &pllx_hw, &dfll_soc_clk.hw, &dfll_ref_clk.hw, &i2c5_hw, &cclk_g_hw };
+	struct clk_hw *hws[] = {&pllp_hw,         &pllx_hw, &dfll_soc_clk.hw,
+				&dfll_ref_clk.hw, &i2c5_hw, &cclk_g_hw};
 	unsigned int i;
 	u8 vout;
 	int err;
@@ -567,18 +606,21 @@ static int platform_init(char *why, size_t len)
 	err = tdfll_platform_vout_read(&vout);
 	if (err)
 		return fail(why, len, err == TEGRA_I2C_ENACK ? -ENODEV : -EAGAIN,
-			    "MAX77812 at I2C5 %#x does not answer (TegraI2C %d)", vdd_cpu.client.addr, err);
+			    "MAX77812 at I2C5 %#x does not answer (TegraI2C %d)",
+			    vdd_cpu.client.addr, err);
 
 	/* the DFLL's I2C master divides I2C5's clock: dfll_init_i2c_if BUG()s on a zero divisor */
 	if (!i2c5_running() || !i2c5_recalc(&i2c5_hw, 0))
-		return fail(why, len, -ENODEV, "I2C5 clock is off or unreadable (CLK_SOURCE_I2C5 %#x)",
+		return fail(why, len, -ENODEV,
+			    "I2C5 clock is off or unreadable (CLK_SOURCE_I2C5 %#x)",
 			    rd(car, CLK_SOURCE_I2C5));
 
 	/* L4T init table: dfll_soc and dfll_ref from PLL_P at 51 MHz, enabled for good. Only change the dividers of an
 	 * idle DFLL (CTRL mode 0 = disabled), and read it only once its clock runs. */
 	cl_dvfs_enable(&dfll_soc_clk.hw);
 	if (rd(dfll, 0x00) & 3)
-		return fail(why, len, -EBUSY, "the DFLL is already running (DFLL_CTRL %#x)", rd(dfll, 0x00));
+		return fail(why, len, -EBUSY, "the DFLL is already running (DFLL_CTRL %#x)",
+			    rd(dfll, 0x00));
 	wr(car, CLK_SOURCE_DFLL_SOC, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
 	wr(car, CLK_SOURCE_DFLL_REF, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
 	udelay(2);
@@ -586,15 +628,18 @@ static int platform_init(char *why, size_t len)
 	/* L4T's cclk_g mux BUG()s on a super clock state other than RUN or IDLE: refuse here instead of panicking */
 	if ((rd(car, CCLKG_BURST_POLICY) & (0xfu << 28)) != SUPER_STATE_RUN_BIT &&
 	    (rd(car, CCLKG_BURST_POLICY) & (0xfu << 28)) != SUPER_STATE_IDLE_BIT)
-		return fail(why, len, -EBUSY, "CCLKG_BURST_POLICY %#x is in neither RUN nor IDLE state",
+		return fail(why, len, -EBUSY,
+			    "CCLKG_BURST_POLICY %#x is in neither RUN nor IDLE state",
 			    rd(car, CCLKG_BURST_POLICY));
 	for (i = 0; i < ARRAY_SIZE(hws); i++)
 		if (IS_ERR(clk_register(NULL, hws[i])))
-			return fail(why, len, -ENOMEM, "cannot register clock %s", hws[i]->init->name);
+			return fail(why, len, -ENOMEM, "cannot register clock %s",
+				    hws[i]->init->name);
 	/* the init-table references: cl_dvfs's taken above (counted once more for dfll_ref), cclk_g running */
 	cl_dvfs_gate_refcnt++;
 	if (clk_prepare_enable(cclk_g_hw.clk))
-		return fail(why, len, -ENODEV, "cclk_g could not be enabled (CCLKG_BURST_POLICY %#x)",
+		return fail(why, len, -ENODEV,
+			    "cclk_g could not be enabled (CCLKG_BURST_POLICY %#x)",
 			    rd(car, CCLKG_BURST_POLICY));
 	return 0;
 }
@@ -607,7 +652,9 @@ int tdfll_platform_init(char *why, size_t len)
 		err = platform_init(init_why, sizeof(init_why));
 		if (err)
 			printk("%s\n", init_why);
-		init_err = err == -EAGAIN ? 1 : err;  /* only a transient PMIC probe failure is retried */
+		init_err = err == -EAGAIN
+				   ? 1
+				   : err; /* only a transient PMIC probe failure is retried */
 	}
 	if (err)
 		fail(why, len, err, "%s", init_why);

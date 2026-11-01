@@ -57,8 +57,8 @@ void nvxnu_rw_unlock_exclusive(void *rw);
 
 /* time */
 nvxnu_u64 nvxnu_nanotime(void);
-void nvxnu_udelay(nvxnu_u32 us);       /* busy wait */
-void nvxnu_usleep(nvxnu_u32 us);       /* may block */
+void nvxnu_udelay(nvxnu_u32 us); /* busy wait */
+void nvxnu_usleep(nvxnu_u32 us); /* may block */
 void nvxnu_yield(void);
 
 /* deferred work: run fn(arg) on a kernel thread call */
@@ -93,7 +93,9 @@ void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size);
 void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 count);
 /* the system's page faults so far (every vm_fault) and the zero-filled ones among them (XNU's vm_stat counters); with the
  * kernel's user-fault timing, the user faults handled so far, their total time and the longest since the last call (ns) */
-struct nvxnu_faults { nvxnu_u64 faults, zero_fill, user_n, user_ns, user_max_ns; };
+struct nvxnu_faults {
+	nvxnu_u64 faults, zero_fill, user_n, user_ns, user_max_ns;
+};
 void nvxnu_vm_faults(struct nvxnu_faults *f);
 
 /* firmware embedded in the kernel image (shim/TegraGM20BFirmware.S); 0 on success */
@@ -124,15 +126,16 @@ int tegra_gm20b_rail_enable(int on);
 int tegra_gm20b_rail_get_uv(int *uv);
 int tegra_gm20b_rail_set_uv(int uv);
 int tegra_gm20b_rail_max_uv(void);
-nvxnu_u32 tegra_gm20b_dvfs_khz(int row);                /* L4T B01 GPU rate of table row, 0 past the end */
-int tegra_gm20b_dvfs_na_uv(nvxnu_u32 khz, int speedo);  /* its NAPLL voltage, worst over temperature; -22 off-table */
-int tegra_gm20b_clk_enable(int id, int on);  /* ids below */
+nvxnu_u32 tegra_gm20b_dvfs_khz(int row); /* L4T B01 GPU rate of table row, 0 past the end */
+int tegra_gm20b_dvfs_na_uv(
+	nvxnu_u32 khz, int speedo); /* its NAPLL voltage, worst over temperature; -22 off-table */
+int tegra_gm20b_clk_enable(int id, int on); /* ids below */
 unsigned long tegra_gm20b_clk_get_rate(int id);
 int tegra_gm20b_clk_set_rate(int id, unsigned long rate);
 void tegra_gm20b_reset(int assert);
 int tegra_gm20b_unclamp(void);
 int tegra_gm20b_mc_flush(int flush);
-nvxnu_u32 tegra_gm20b_fuse_read(nvxnu_u32 offset);  /* Linux tegra_fuse_readl() offsets */
+nvxnu_u32 tegra_gm20b_fuse_read(nvxnu_u32 offset); /* Linux tegra_fuse_readl() offsets */
 /* MC_INTSTATUS (cleared after the read), MC_ERR_STATUS, MC_ERR_ADR (Linux drivers/memory/tegra/mc.h): what the memory
  * controller refused since the previous call */
 void tegra_gm20b_mc_errors(nvxnu_u32 *intstatus, nvxnu_u32 *status, nvxnu_u32 *addr);

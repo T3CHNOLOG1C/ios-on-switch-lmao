@@ -35,36 +35,36 @@ enum {
 };
 struct NativeAdrenoAbiParams {
     uint32_t abi_version;
-    uint32_t input_bits;          /* GPU VA bits below 2^input_bits */
-    uint32_t output_bits;         /* physical address bits */
-    uint32_t flags;               /* NativeAdrenoParamsHostImport or zero */
+    uint32_t input_bits;  /* GPU VA bits below 2^input_bits */
+    uint32_t output_bits; /* physical address bits */
+    uint32_t flags;       /* NativeAdrenoParamsHostImport or zero */
     uint64_t max_bo_bytes;
 };
 enum {
-    NativeAdrenoParamsHostImport = 1  /* BoImport pins the caller's own pages (an IOSurface's) as a BO */
+    NativeAdrenoParamsHostImport = 1 /* BoImport pins the caller's own pages (an IOSurface's) as a BO */
 };
 struct NativeAdrenoAbiBoAlloc {
-    uint64_t bytes;               /* 4KiB multiple, <= max_bo_bytes */
-    uint32_t align_log2;          /* 12..24 */
-    uint32_t contiguous;          /* 1 requires one raw physical span */
+    uint64_t bytes;      /* 4KiB multiple, <= max_bo_bytes */
+    uint32_t align_log2; /* 12..24 */
+    uint32_t contiguous; /* 1 requires one raw physical span */
 };
 struct NativeAdrenoAbiBoAllocReply {
-    uint64_t handle;              /* opaque to userspace, nonzero */
+    uint64_t handle; /* opaque to userspace, nonzero */
 };
 /* Pins [address, address + bytes) of the CALLING task and makes it a BO (reply: NativeAdrenoAbiBoAllocReply). The pages stay wired
  * until BoFree; they keep the caller's own CPU mapping and cache mode, so the caller cleans its caches before GPU use and invalidates
  * them after GPU writes (the GPU maps them non-cacheable). An imported BO has no CPU-map token. */
 struct NativeAdrenoAbiBoImport {
-    uint64_t address;             /* 4KiB aligned */
-    uint64_t bytes;               /* 4KiB multiple, <= max_bo_bytes */
+    uint64_t address; /* 4KiB aligned */
+    uint64_t bytes;   /* 4KiB multiple, <= max_bo_bytes */
 };
 struct NativeAdrenoAbiBoMap {
     uint64_t handle;
-    uint64_t iova;                /* 4KiB aligned, inside the mounted aperture */
-    uint32_t permissions;         /* bit0 read, bit1 write; read required */
-    uint32_t writeback;           /* 0 normal non-coherent, 1 WB/WA */
-    uint32_t shareability;        /* 2 outer, 3 inner */
-    uint32_t reserved;            /* zero */
+    uint64_t iova;         /* 4KiB aligned, inside the mounted aperture */
+    uint32_t permissions;  /* bit0 read, bit1 write; read required */
+    uint32_t writeback;    /* 0 normal non-coherent, 1 WB/WA */
+    uint32_t shareability; /* 2 outer, 3 inner */
+    uint32_t reserved;     /* zero */
 };
 struct NativeAdrenoAbiBoMapReply {
     uint64_t iova;
@@ -75,74 +75,74 @@ struct NativeAdrenoAbiBoFree {
 struct NativeAdrenoAbiSubmitBuffer {
     uint64_t handle;
     uint64_t iova;
-    uint64_t bytes;               /* 4-byte multiple, dword count = bytes/4 */
+    uint64_t bytes; /* 4-byte multiple, dword count = bytes/4 */
 };
 struct NativeAdrenoAbiSubmit {
-    uint32_t buffer_count;        /* 1..NativeAdrenoAbiMaxBuffers */
-    uint32_t reserved;            /* zero */
-    uint64_t queue;               /* open queue; 0 is created by open() */
-    uint64_t wait_fence;          /* zero or an earlier fence of this client */
-    uint64_t wait_timeout_ns;     /* used only when wait_fence is nonzero */
+    uint32_t buffer_count;    /* 1..NativeAdrenoAbiMaxBuffers */
+    uint32_t reserved;        /* zero */
+    uint64_t queue;           /* open queue; 0 is created by open() */
+    uint64_t wait_fence;      /* zero or an earlier fence of this client */
+    uint64_t wait_timeout_ns; /* used only when wait_fence is nonzero */
     NativeAdrenoAbiSubmitBuffer buffers[NativeAdrenoAbiMaxBuffers];
 };
 struct NativeAdrenoAbiMetadata {
-    uint64_t handle;              /* object identity */
-    uint32_t bytes;               /* set: length; get: requested capacity */
-    uint32_t reserved;            /* zero */
+    uint64_t handle;                         /* object identity */
+    uint32_t bytes;                          /* set: length; get: requested capacity */
+    uint32_t reserved;                       /* zero */
     char text[NativeAdrenoAbiMetadataBytes]; /* raw bytes, not NUL terminated */
 };
 struct NativeAdrenoAbiSubmitReply {
-    uint64_t fence;               /* nonzero CP timestamp value */
+    uint64_t fence; /* nonzero CP timestamp value */
 };
 struct NativeAdrenoAbiWaitFence {
     uint64_t fence;
-    uint64_t timeout_ns;          /* 0 polls once */
+    uint64_t timeout_ns; /* 0 polls once */
 };
 struct NativeAdrenoAbiTimestamp {
-    uint64_t ticks;               /* GPU always-on counter value */
+    uint64_t ticks; /* GPU always-on counter value */
 };
 struct NativeAdrenoAbiBoCpuMap {
     uint64_t handle;
 };
 struct NativeAdrenoAbiBoCpuMapReply {
-    uint32_t token;               /* clientMemoryForType selector */
-    uint32_t reserved;            /* zero */
-    uint64_t bytes;               /* bytes the mapping covers */
+    uint32_t token;    /* clientMemoryForType selector */
+    uint32_t reserved; /* zero */
+    uint64_t bytes;    /* bytes the mapping covers */
 };
 struct NativeAdrenoAbiBoCpuUnmap {
     uint64_t handle;
-    uint32_t token;               /* exactly the token returned by map */
-    uint32_t reserved;            /* zero */
+    uint32_t token;    /* exactly the token returned by map */
+    uint32_t reserved; /* zero */
 };
 struct NativeAdrenoAbiQueue {
-    uint64_t queue;               /* zero for create, an open id for close */
+    uint64_t queue; /* zero for create, an open id for close */
 };
 struct NativeAdrenoAbiQueueReply {
-    uint64_t queue;               /* nonzero id of the created queue */
+    uint64_t queue; /* nonzero id of the created queue */
 };
 struct NativeAdrenoAbiStatus {
-    uint64_t faults;              /* monotonic; change means context lost */
-    uint64_t suspends;            /* monotonic suspend/reset count */
+    uint64_t faults;   /* monotonic; change means context lost */
+    uint64_t suspends; /* monotonic suspend/reset count */
 };
 /* Fixed facts of the mounted GPU that the Vulkan driver needs and cannot derive: all come from the board code, which takes
  * them from the pinned sources (a6xx catalog, UBWC config, the programmed UCHE ranges), never from a guess. */
 enum {
-    NativeAdrenoDeviceClientIova = 1,     /* flags: the client chooses BO addresses (BoMap iova) */
-    NativeAdrenoDeviceCachedCoherent = 2  /* flags: unused until IO-coherent BO memory exists */
+    NativeAdrenoDeviceClientIova = 1,    /* flags: the client chooses BO addresses (BoMap iova) */
+    NativeAdrenoDeviceCachedCoherent = 2 /* flags: unused until IO-coherent BO memory exists */
 };
 struct NativeAdrenoAbiDeviceInfo {
-    uint32_t chip_id;             /* ADRENO_CHIPID, e.g. 0x43050a01 */
+    uint32_t chip_id; /* ADRENO_CHIPID, e.g. 0x43050a01 */
     uint32_t gmem_bytes;
-    uint64_t gmem_base;           /* UCHE GMEM window start (GPU address) */
+    uint64_t gmem_base; /* UCHE GMEM window start (GPU address) */
     uint64_t uche_trap_base;
-    uint64_t va_start;            /* first GPU address the client may map */
+    uint64_t va_start; /* first GPU address the client may map */
     uint64_t va_size;
     uint32_t highest_bank_bit;
-    uint32_t ubwc_swizzle;        /* bit0 level 1, bit1 level 2, bit2 level 3 */
-    uint32_t macrotile_mode;      /* 0 four channel, 1 eight channel */
-    uint32_t ubwc_version;        /* encoder version, 4 for UBWC 4.0 */
+    uint32_t ubwc_swizzle;   /* bit0 level 1, bit1 level 2, bit2 level 3 */
+    uint32_t macrotile_mode; /* 0 four channel, 1 eight channel */
+    uint32_t ubwc_version;   /* encoder version, 4 for UBWC 4.0 */
     uint32_t flags;
-    uint32_t reserved;            /* zero */
+    uint32_t reserved; /* zero */
 };
 #if defined(__cplusplus)
 static_assert(sizeof(NativeAdrenoAbiDeviceInfo) == 64, "ABI device info layout");

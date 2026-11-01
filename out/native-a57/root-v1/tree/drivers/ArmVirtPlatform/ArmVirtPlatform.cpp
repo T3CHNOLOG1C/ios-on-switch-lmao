@@ -15,129 +15,144 @@ volatile uint32_t armvirt_platform_defaults_count = 0;
 }
 
 class ArmVirtPlatform : public IODTPlatformExpert {
-  OSDeclareDefaultStructors (ArmVirtPlatform)
-public:
-  bool configure (IOService *provider) override;
-  const char *deleteList (void) override;
-  const char *excludeList (void) override;
+OSDeclareDefaultStructors(ArmVirtPlatform) public : bool configure(IOService *provider) override;
+    const char *deleteList(void) override;
+    const char *excludeList(void) override;
+
 private:
-  bool createVirtioNubs (IORegistryEntry *bus);
+    bool createVirtioNubs(IORegistryEntry *bus);
 };
 
-OSDefineMetaClassAndStructors (ArmVirtPlatform, IODTPlatformExpert)
+OSDefineMetaClassAndStructors(ArmVirtPlatform, IODTPlatformExpert)
 
-const char *ArmVirtPlatform::deleteList (void)
+    const char *ArmVirtPlatform::deleteList(void)
 {
-  return nullptr;
+    return nullptr;
 }
 
-const char *ArmVirtPlatform::excludeList (void)
+const char *ArmVirtPlatform::excludeList(void)
 {
-  return nullptr;
+    return nullptr;
 }
 
-bool ArmVirtPlatform::createVirtioNubs (IORegistryEntry *bus)
+bool ArmVirtPlatform::createVirtioNubs(IORegistryEntry *bus)
 {
-  OSIterator *iterator = IODTFindMatchingEntries (bus, kIODTExclusive, nullptr);
-  if (iterator == nullptr) { return true; }
-  bool result = true;
-  IORegistryEntry *entry;
-  while ((entry = OSDynamicCast (IORegistryEntry, iterator->getNextObject ())) != nullptr) {
-    OSData *compatible = OSDynamicCast (OSData, entry->getProperty ("compatible"));
-    if ((compatible == nullptr) || (compatible->getLength () != 12) ||
-        (memcmp (compatible->getBytesNoCopy (), "virtio,mmio", 12) != 0)) { continue; }
-    IOService *nub = createNub (entry);
-    if (nub == nullptr) { result = false; break; }
-    if (!nub->attach (this)) { nub->release (); result = false; break; }
-    nub->registerService ();
-    nub->release ();
-  }
-  iterator->release ();
-  return result;
+    OSIterator *iterator = IODTFindMatchingEntries(bus, kIODTExclusive, nullptr);
+    if (iterator == nullptr) {
+        return true;
+    }
+    bool result = true;
+    IORegistryEntry *entry;
+    while ((entry = OSDynamicCast(IORegistryEntry, iterator->getNextObject())) != nullptr) {
+        OSData *compatible = OSDynamicCast(OSData, entry->getProperty("compatible"));
+        if ((compatible == nullptr) || (compatible->getLength() != 12) ||
+            (memcmp(compatible->getBytesNoCopy(), "virtio,mmio", 12) != 0)) {
+            continue;
+        }
+        IOService *nub = createNub(entry);
+        if (nub == nullptr) {
+            result = false;
+            break;
+        }
+        if (!nub->attach(this)) {
+            nub->release();
+            result = false;
+            break;
+        }
+        nub->registerService();
+        nub->release();
+    }
+    iterator->release();
+    return result;
 }
 
-bool ArmVirtPlatform::configure (IOService *provider)
+bool ArmVirtPlatform::configure(IOService *provider)
 {
-  // This platform has no Apple NVRAM controller. Enumerate its real DT nodes
-  // without calling the legacy IODT NVRAM initialization path.
-  if (!IOPlatformExpert::configure (provider)) {
-    return false;
-  }
-  IORegistryEntry *cpus = provider->childFromPath ("cpus", gIODTPlane);
-  IORegistryEntry *bus = provider->childFromPath ("arm-io", gIODTPlane);
-  if ((cpus == nullptr) || (bus == nullptr)) {
-    if (cpus != nullptr) { cpus->release (); }
-    if (bus != nullptr) { bus->release (); }
-    return false;
-  }
-  OSIterator *iterator = IODTFindMatchingEntries (cpus, kIODTExclusive, nullptr);
-  cpus->release ();
-  if (iterator == nullptr) {
-    bus->release ();
-    return false;
-  }
-  bool result = createNubs (this, iterator); // Consumes the iterator.
-  if (!result) {
-    bus->release ();
-    return false;
-  }
-  IOService *busNub = createNub (bus);
-  bool devicesCreated = (busNub != nullptr) && createVirtioNubs (busNub);
-  bus->release ();
-  if (!devicesCreated) {
-    if (busNub != nullptr) { busNub->release (); }
-    return false;
-  }
-  if (!busNub->attach (this)) {
-    busNub->release ();
-    return false;
-  }
-  busNub->registerService ();
-  busNub->release ();
-  IORegistryEntry *defaults = provider->childFromPath ("defaults", gIODTPlane);
-  if (defaults == nullptr) {
-    return false;
-  }
-  IOService *defaultsNub = createNub (defaults);
-  defaults->release ();
-  if (defaultsNub == nullptr) {
-    return false;
-  }
-  if (!defaultsNub->attach (this)) {
-    defaultsNub->release ();
-    return false;
-  }
-  defaultsNub->registerService ();
-  defaultsNub->release ();
-  iterator = getChildIterator (gIOServicePlane);
-  if (iterator == nullptr) {
-    return false;
-  }
-  uint32_t count = 0;
-  uint32_t cpuCount = 0;
-  uint32_t busCount = 0;
-  uint32_t defaultsCount = 0;
-  IORegistryEntry *child;
-  while ((child = OSDynamicCast (IORegistryEntry, iterator->getNextObject ())) != nullptr) {
-    count++;
-    OSData *type = OSDynamicCast (OSData, child->getProperty ("device_type"));
-    if ((type != nullptr) && (type->getLength () == 4) &&
-        (memcmp (type->getBytesNoCopy (), "cpu", 4) == 0)) {
-      cpuCount++;
+    // This platform has no Apple NVRAM controller. Enumerate its real DT nodes
+    // without calling the legacy IODT NVRAM initialization path.
+    if (!IOPlatformExpert::configure(provider)) {
+        return false;
     }
-    if (strcmp (child->getName (), "arm-io") == 0) {
-      busCount++;
+    IORegistryEntry *cpus = provider->childFromPath("cpus", gIODTPlane);
+    IORegistryEntry *bus = provider->childFromPath("arm-io", gIODTPlane);
+    if ((cpus == nullptr) || (bus == nullptr)) {
+        if (cpus != nullptr) {
+            cpus->release();
+        }
+        if (bus != nullptr) {
+            bus->release();
+        }
+        return false;
     }
-    if (strcmp (child->getName (), "defaults") == 0) {
-      defaultsCount++;
+    OSIterator *iterator = IODTFindMatchingEntries(cpus, kIODTExclusive, nullptr);
+    cpus->release();
+    if (iterator == nullptr) {
+        bus->release();
+        return false;
     }
-  }
-  iterator->release ();
-  armvirt_platform_child_count = count;
-  armvirt_platform_cpu_count = cpuCount;
-  armvirt_platform_bus_count = busCount;
-  armvirt_platform_defaults_count = defaultsCount;
-  armvirt_platform_configured = 1;
-  registerService ();
-  return true;
+    bool result = createNubs(this, iterator);  // Consumes the iterator.
+    if (!result) {
+        bus->release();
+        return false;
+    }
+    IOService *busNub = createNub(bus);
+    bool devicesCreated = (busNub != nullptr) && createVirtioNubs(busNub);
+    bus->release();
+    if (!devicesCreated) {
+        if (busNub != nullptr) {
+            busNub->release();
+        }
+        return false;
+    }
+    if (!busNub->attach(this)) {
+        busNub->release();
+        return false;
+    }
+    busNub->registerService();
+    busNub->release();
+    IORegistryEntry *defaults = provider->childFromPath("defaults", gIODTPlane);
+    if (defaults == nullptr) {
+        return false;
+    }
+    IOService *defaultsNub = createNub(defaults);
+    defaults->release();
+    if (defaultsNub == nullptr) {
+        return false;
+    }
+    if (!defaultsNub->attach(this)) {
+        defaultsNub->release();
+        return false;
+    }
+    defaultsNub->registerService();
+    defaultsNub->release();
+    iterator = getChildIterator(gIOServicePlane);
+    if (iterator == nullptr) {
+        return false;
+    }
+    uint32_t count = 0;
+    uint32_t cpuCount = 0;
+    uint32_t busCount = 0;
+    uint32_t defaultsCount = 0;
+    IORegistryEntry *child;
+    while ((child = OSDynamicCast(IORegistryEntry, iterator->getNextObject())) != nullptr) {
+        count++;
+        OSData *type = OSDynamicCast(OSData, child->getProperty("device_type"));
+        if ((type != nullptr) && (type->getLength() == 4) && (memcmp(type->getBytesNoCopy(), "cpu", 4) == 0)) {
+            cpuCount++;
+        }
+        if (strcmp(child->getName(), "arm-io") == 0) {
+            busCount++;
+        }
+        if (strcmp(child->getName(), "defaults") == 0) {
+            defaultsCount++;
+        }
+    }
+    iterator->release();
+    armvirt_platform_child_count = count;
+    armvirt_platform_cpu_count = cpuCount;
+    armvirt_platform_bus_count = busCount;
+    armvirt_platform_defaults_count = defaultsCount;
+    armvirt_platform_configured = 1;
+    registerService();
+    return true;
 }

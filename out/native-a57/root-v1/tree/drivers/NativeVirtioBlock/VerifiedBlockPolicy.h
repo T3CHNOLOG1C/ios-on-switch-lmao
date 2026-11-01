@@ -3,8 +3,8 @@
 #define NATIVE_VERIFIED_BLOCK_POLICY_H
 #include <stdint.h>
 struct NativeVerifiedBlockPolicy {
-  const uint8_t *manifest;
-  uint64_t manifestBytes;
+    const uint8_t *manifest;
+    uint64_t manifestBytes;
 };
 static_assert(sizeof(NativeVerifiedBlockPolicy) == 16 && alignof(NativeVerifiedBlockPolicy) == 8);
 extern "C" {

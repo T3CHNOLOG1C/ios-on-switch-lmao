@@ -14,12 +14,20 @@
  */
 #include <nvif/os.h>
 
-struct clk { int id; };
-struct regulator { int enabled; };
-struct reset_control { int dummy; };
-struct tegra_pmc { int dummy; };
+struct clk {
+	int id;
+};
+struct regulator {
+	int enabled;
+};
+struct reset_control {
+	int dummy;
+};
+struct tegra_pmc {
+	int dummy;
+};
 
-static struct clk clocks[] = { { TEGRA_GM20B_CLK_GPU }, { TEGRA_GM20B_CLK_REF }, { TEGRA_GM20B_CLK_PWR } };
+static struct clk clocks[] = {{TEGRA_GM20B_CLK_GPU}, {TEGRA_GM20B_CLK_REF}, {TEGRA_GM20B_CLK_PWR}};
 static struct regulator vdd_gpu;
 static struct reset_control gpu_rst;
 static struct tegra_pmc pmc;
@@ -49,16 +57,38 @@ int clk_prepare_enable(struct clk *c)
 	 * (l4t49 clk-tegra210.c:3784) and nvgpu's probe (platform_gk20a_tegra.c:462,498) do before unrailgate enables it */
 	if (c->id == TEGRA_GM20B_CLK_PWR)
 		tegra_gm20b_clk_set_rate(c->id, 204000000);
-	nvxnu_step("tegra-gm20b: M1 step: enable clock %s\n", c->id == TEGRA_GM20B_CLK_GPU ? "gpu" :
-		  c->id == TEGRA_GM20B_CLK_REF ? "pllg_ref" : "pll_p_out5");
+	nvxnu_step("tegra-gm20b: M1 step: enable clock %s\n", c->id == TEGRA_GM20B_CLK_GPU ? "gpu"
+							      : c->id == TEGRA_GM20B_CLK_REF
+								      ? "pllg_ref"
+								      : "pll_p_out5");
 	return tegra_gm20b_clk_enable(c->id, 1);
 }
-void clk_disable_unprepare(struct clk *c) { if (c) tegra_gm20b_clk_enable(c->id, 0); }
-int clk_enable(struct clk *c) { return clk_prepare_enable(c); }
-void clk_disable(struct clk *c) { clk_disable_unprepare(c); }
-unsigned long clk_get_rate(struct clk *c) { return c ? tegra_gm20b_clk_get_rate(c->id) : 0; }
-int clk_set_rate(struct clk *c, unsigned long rate) { return c ? tegra_gm20b_clk_set_rate(c->id, rate) : 0; }
-long clk_round_rate(struct clk *c, unsigned long rate) { (void)c; return (long)rate; }
+void clk_disable_unprepare(struct clk *c)
+{
+	if (c)
+		tegra_gm20b_clk_enable(c->id, 0);
+}
+int clk_enable(struct clk *c)
+{
+	return clk_prepare_enable(c);
+}
+void clk_disable(struct clk *c)
+{
+	clk_disable_unprepare(c);
+}
+unsigned long clk_get_rate(struct clk *c)
+{
+	return c ? tegra_gm20b_clk_get_rate(c->id) : 0;
+}
+int clk_set_rate(struct clk *c, unsigned long rate)
+{
+	return c ? tegra_gm20b_clk_set_rate(c->id, rate) : 0;
+}
+long clk_round_rate(struct clk *c, unsigned long rate)
+{
+	(void)c;
+	return (long)rate;
+}
 
 struct regulator *devm_regulator_get(struct device *dev, const char *id)
 {
@@ -72,7 +102,7 @@ int regulator_enable(struct regulator *r)
 	int ret;
 	nvxnu_bootarg_int("tegra-gpu-uv", &uv);
 	nvxnu_step("tegra-gm20b: M1 step: VDD_GPU: read MAX77812 over I2C5\n");
-	ret = tegra_gm20b_rail_set_uv((int)uv);  /* voltage first, as hekate does, then enable */
+	ret = tegra_gm20b_rail_set_uv((int)uv); /* voltage first, as hekate does, then enable */
 	if (!ret)
 		ret = tegra_gm20b_rail_enable(1);
 	if (ret) {
@@ -89,7 +119,10 @@ int regulator_disable(struct regulator *r)
 	return tegra_gm20b_rail_enable(0) ? -EIO : 0;
 }
 
-int regulator_is_enabled(struct regulator *r) { return r->enabled; }
+int regulator_is_enabled(struct regulator *r)
+{
+	return r->enabled;
+}
 
 int regulator_get_voltage(struct regulator *r)
 {
@@ -100,7 +133,8 @@ int regulator_get_voltage(struct regulator *r)
 
 int regulator_set_voltage(struct regulator *r, int min_uv, int max_uv)
 {
-	(void)r; (void)max_uv;
+	(void)r;
+	(void)max_uv;
 	return tegra_gm20b_rail_set_uv(min_uv) ? -EIO : 0;
 }
 
@@ -133,7 +167,8 @@ int reset_control_deassert(struct reset_control *r)
 	udelay(10);
 	if (ret)
 		pr_err("MC GPU flush timed out\n");
-	nvxnu_step("tegra-gm20b: M1 step: powered; next the first GPU register read (BOOT_0 in nvkm_device_ctor)\n");
+	nvxnu_step("tegra-gm20b: M1 step: powered; next the first GPU register read (BOOT_0 in "
+		   "nvkm_device_ctor)\n");
 	return 0;
 }
 
@@ -144,7 +179,11 @@ int reset_control_reset(struct reset_control *r)
 	return reset_control_deassert(r);
 }
 
-struct tegra_pmc *devm_tegra_pmc_get(struct device *dev) { (void)dev; return &pmc; }
+struct tegra_pmc *devm_tegra_pmc_get(struct device *dev)
+{
+	(void)dev;
+	return &pmc;
+}
 
 int tegra_pmc_powergate_remove_clamping(struct tegra_pmc *p, unsigned int id)
 {
@@ -153,7 +192,10 @@ int tegra_pmc_powergate_remove_clamping(struct tegra_pmc *p, unsigned int id)
 	return id == TEGRA_POWERGATE_3D ? tegra_gm20b_unclamp() : -EINVAL;
 }
 
-int tegra_powergate_remove_clamping(unsigned int id) { return tegra_pmc_powergate_remove_clamping(&pmc, id); }
+int tegra_powergate_remove_clamping(unsigned int id)
+{
+	return tegra_pmc_powergate_remove_clamping(&pmc, id);
+}
 
 int tegra_fuse_readl(unsigned long offset, u32 *value)
 {

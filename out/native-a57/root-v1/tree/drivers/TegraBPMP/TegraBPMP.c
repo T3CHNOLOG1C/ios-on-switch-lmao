@@ -66,14 +66,14 @@ static const struct channel_cfg t210_chcfg = {
 
 static struct device_node bpmp_node = {
 	.full_name = "/bpmp",
-	.reg = { { 0x70016000, 0x2000 }, { 0x60001000, 0x1000 } },
+	.reg = {{0x70016000, 0x2000}, {0x60001000, 0x1000}},
 	.nreg = 2,
 };
 
-#define EMC_CLOCK		0
-#define PMIC_BUS		5
-#define MAX77620		0x3c
-#define MAX77620_REG_SD0	0x16	/* VDD_CORE: 600 mV + 12.5 mV * bits 6:0 (hekate max7762x.c "sd0") */
+#define EMC_CLOCK 0
+#define PMIC_BUS 5
+#define MAX77620 0x3c
+#define MAX77620_REG_SD0 0x16 /* VDD_CORE: 600 mV + 12.5 mV * bits 6:0 (hekate max7762x.c "sd0") */
 
 /*
  * The VDD_CORE L4T requires for an EMC rate on T210B01: emcb01_dvb_dvfs_table (switch-l4t-kernel-4.9
@@ -84,11 +84,12 @@ static struct device_node bpmp_node = {
 static const struct {
 	unsigned int khz, mv;
 } emc_core_mv[] = {
-	{ 1065600, 637 }, { 1331200, 650 }, { 1600000, 675 }, { 1866000, 700 }, { 2133000, 725 }, { 2400000, 750 },
-	{ 2533000, 800 }, { 2666000, 825 }, { 2800000, 900 }, { 2933000, 1000 }, { 3066000, 1025 }, { 3200000, 1050 },
+	{1065600, 637}, {1331200, 650},  {1600000, 675},  {1866000, 700},
+	{2133000, 725}, {2400000, 750},  {2533000, 800},  {2666000, 825},
+	{2800000, 900}, {2933000, 1000}, {3066000, 1025}, {3200000, 1050},
 };
 
-static int mailbox_state = 1;	/* 1 not tried, 0 up, < 0 the error it failed with */
+static int mailbox_state = 1; /* 1 not tried, 0 up, < 0 the error it failed with */
 static char fw_tag[sizeof(struct mrq_query_fw_tag_response) + 1];
 
 static int clk_call(unsigned int cmd, const void *args, int args_size, void *reply, int reply_size)
@@ -133,21 +134,24 @@ static int clk_get_rate(s64 *out)
 
 static int mailbox_up(char *line, unsigned long size)
 {
-	struct mrq_ping_request ping = { .challenge = 0x10101010 };
-	struct mrq_ping_response pong = { 0 };
-	struct mrq_query_abi_request abi = { .mrq = MRQ_QUERY_FW_TAG };
-	struct mrq_query_abi_response abi_reply = { 0 };
+	struct mrq_ping_request ping = {.challenge = 0x10101010};
+	struct mrq_ping_response pong = {0};
+	struct mrq_query_abi_request abi = {.mrq = MRQ_QUERY_FW_TAG};
+	struct mrq_query_abi_response abi_reply = {0};
 	int err;
 
 	if (mailbox_state <= 0) {
 		if (mailbox_state < 0)
-			snprintf(line, size, "BPMP mailbox unavailable (%d), EMC left as is", mailbox_state);
+			snprintf(line, size, "BPMP mailbox unavailable (%d), EMC left as is",
+				 mailbox_state);
 		return mailbox_state;
 	}
 	err = bpmp_mail_init(&t210_chcfg, &t210_mail_ops, &bpmp_node);
 	if (err) {
 		mailbox_state = err;
-		snprintf(line, size, "no BPMP firmware handshake (%d; hekate's bpmpfw_b01.bin not running?), EMC left as is",
+		snprintf(line, size,
+			 "no BPMP firmware handshake (%d; hekate's bpmpfw_b01.bin not running?), "
+			 "EMC left as is",
 			 err);
 		return err;
 	}
@@ -157,10 +161,14 @@ static int mailbox_up(char *line, unsigned long size)
 		err = -EINVAL;
 	if (err) {
 		mailbox_state = err;
-		snprintf(line, size, "BPMP firmware did not answer MRQ_PING (%d, reply %#x), EMC left as is", err, pong.reply);
+		snprintf(line, size,
+			 "BPMP firmware did not answer MRQ_PING (%d, reply %#x), EMC left as is",
+			 err, pong.reply);
 		return err;
 	}
-	if (!tegra_bpmp_send_receive(MRQ_QUERY_ABI, &abi, sizeof(abi), &abi_reply, sizeof(abi_reply)) && !abi_reply.status) {
+	if (!tegra_bpmp_send_receive(MRQ_QUERY_ABI, &abi, sizeof(abi), &abi_reply,
+				     sizeof(abi_reply)) &&
+	    !abi_reply.status) {
 		struct mrq_query_fw_tag_response tag;
 
 		memset(&tag, 0, sizeof(tag));
@@ -192,11 +200,15 @@ int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size)
 	if (!err && (table.num_pairs == 0 || table.num_pairs > EMC_DVFS_TABLE_MAX_SIZE))
 		err = -EINVAL;
 	if (err) {
-		snprintf(line, size, "BPMP firmware %s has no EMC table (MRQ_EMC_DVFS_TABLE %d), EMC left as is", fw_tag, err);
+		snprintf(
+			line, size,
+			"BPMP firmware %s has no EMC table (MRQ_EMC_DVFS_TABLE %d), EMC left as is",
+			fw_tag, err);
 		return err;
 	}
 	for (i = 0; i < table.num_pairs; i++) {
-		n += snprintf(rates + n, sizeof(rates) - n, i ? " %u" : "%u", table.pairs[i].freq / 1000);
+		n += snprintf(rates + n, sizeof(rates) - n, i ? " %u" : "%u",
+			      table.pairs[i].freq / 1000);
 		if (table.pairs[i].freq == khz) {
 			found = 1;
 			fw_mv = table.pairs[i].mv;
@@ -211,25 +223,28 @@ int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size)
 	if (!err)
 		err = clk_get_rate(&before);
 	if (err) {
-		snprintf(line, size, "BPMP clock 0 is not a usable EMC clock (%d, \"%s\"), EMC left as is", err,
+		snprintf(line, size,
+			 "BPMP clock 0 is not a usable EMC clock (%d, \"%s\"), EMC left as is", err,
 			 (const char *)info.name);
 		return err;
 	}
 	if (!khz) {
-		snprintf(line, size, "%lld MHz (BPMP firmware %s; EMC tables %s MHz; switch-emc=0)", before / 1000000, fw_tag,
-			 rates);
+		snprintf(line, size, "%lld MHz (BPMP firmware %s; EMC tables %s MHz; switch-emc=0)",
+			 before / 1000000, fw_tag, rates);
 		return 0;
 	}
 	if (!found) {
-		snprintf(line, size, "%lld MHz kept: %u kHz is not in the BPMP's EMC tables (%s MHz)", before / 1000000, khz,
-			 rates);
+		snprintf(line, size,
+			 "%lld MHz kept: %u kHz is not in the BPMP's EMC tables (%s MHz)",
+			 before / 1000000, khz, rates);
 		return -EINVAL;
 	}
 	for (i = 0; i < ARRAY_SIZE(emc_core_mv) && !need_mv; i++)
 		if (khz <= emc_core_mv[i].khz)
 			need_mv = emc_core_mv[i].mv;
 	if (!need_mv) {
-		snprintf(line, size, "%lld MHz kept: %u MHz is above L4T's T210B01 EMC DVFS table (3200 MHz)",
+		snprintf(line, size,
+			 "%lld MHz kept: %u MHz is above L4T's T210B01 EMC DVFS table (3200 MHz)",
 			 before / 1000000, khz / 1000);
 		return -ERANGE;
 	}
@@ -239,8 +254,11 @@ int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size)
 		err = tegra_i2c_read(PMIC_BUS, MAX77620, MAX77620_REG_SD0, &sd0, 1);
 	have_mv = 600 + (sd0 & 0x7f) * 25 / 2;
 	if (err || have_mv < need_mv) {
-		snprintf(line, size, "%lld MHz kept: %u MHz needs VDD_CORE %u mV (L4T T210B01), MAX77620 SD0 reads %u mV "
-			 "(I2C5 %d)", before / 1000000, khz / 1000, need_mv, have_mv, err);
+		snprintf(line, size,
+			 "%lld MHz kept: %u MHz needs VDD_CORE %u mV (L4T T210B01), MAX77620 SD0 "
+			 "reads %u mV "
+			 "(I2C5 %d)",
+			 before / 1000000, khz / 1000, need_mv, have_mv, err);
 		return err ? err : -ERANGE;
 	}
 
@@ -252,10 +270,14 @@ int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size)
 	if (!err)
 		err = clk_get_rate(&after);
 	if (err) {
-		snprintf(line, size, "%lld MHz: the BPMP refused %u MHz (MRQ_CLK %d)", before / 1000000, khz / 1000, err);
+		snprintf(line, size, "%lld MHz: the BPMP refused %u MHz (MRQ_CLK %d)",
+			 before / 1000000, khz / 1000, err);
 		return err;
 	}
-	snprintf(line, size, "%lld -> %lld MHz (BPMP firmware %s; EMC tables %s MHz; VDD_CORE %u mV, L4T needs %u, "
-		 "firmware table says %u)", before / 1000000, after / 1000000, fw_tag, rates, have_mv, need_mv, fw_mv);
+	snprintf(line, size,
+		 "%lld -> %lld MHz (BPMP firmware %s; EMC tables %s MHz; VDD_CORE %u mV, L4T needs "
+		 "%u, "
+		 "firmware table says %u)",
+		 before / 1000000, after / 1000000, fw_tag, rates, have_mv, need_mv, fw_mv);
 	return 0;
 }

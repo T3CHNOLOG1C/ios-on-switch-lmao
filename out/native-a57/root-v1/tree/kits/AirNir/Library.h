@@ -6,11 +6,16 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define AIR_LIBRARY_MAX_BYTES (64u * 1024u * 1024u)
+#define AIR_LIBRARY_MAX_BYTES     (64u * 1024u * 1024u)
 #define AIR_LIBRARY_MAX_FUNCTIONS 4096u
 enum air_library_status {
-    AIR_LIBRARY_OK, AIR_LIBRARY_ARGUMENT, AIR_LIBRARY_FORMAT,
-    AIR_LIBRARY_BOUNDS, AIR_LIBRARY_HASH, AIR_LIBRARY_INDEX, AIR_LIBRARY_ALIAS
+    AIR_LIBRARY_OK,
+    AIR_LIBRARY_ARGUMENT,
+    AIR_LIBRARY_FORMAT,
+    AIR_LIBRARY_BOUNDS,
+    AIR_LIBRARY_HASH,
+    AIR_LIBRARY_INDEX,
+    AIR_LIBRARY_ALIAS
 };
 /* The callback must hash all supplied bytes, write exactly 32 digest bytes and
  * return zero on success. It is trusted code, not a library-supplied callback. */

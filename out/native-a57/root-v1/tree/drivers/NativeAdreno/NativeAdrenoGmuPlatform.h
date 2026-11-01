@@ -18,17 +18,18 @@ struct NativeAdrenoGmuWindow {
 };
 struct NativeAdrenoGmuTime {
     void *cookie;
-    int (*now_us)(void *,uint64_t *);
-    int (*wait_us)(void *,unsigned);
+    int (*now_us)(void *, uint64_t *);
+    int (*wait_us)(void *, unsigned);
 };
 class NativeAdrenoGmuPlatform final {
     NativeAdrenoGmuWindow windows_[ShengGmuWindows]{};
-    static int read32(void *,unsigned,size_t,uint32_t *);
-    static int write32(void *,unsigned,size_t,uint32_t);
+    static int read32(void *, unsigned, size_t, uint32_t *);
+    static int write32(void *, unsigned, size_t, uint32_t);
     static int barrier(void *);
+
 public:
-    IOReturn bind(const NativeAdrenoGmuWindow windows[ShengGmuWindows],ShengGmuIo *io);
+    IOReturn bind(const NativeAdrenoGmuWindow windows[ShengGmuWindows], ShengGmuIo *io);
     /* sha256 uses the kernel implementation; now/wait must be real. */
-    static IOReturn services(const NativeAdrenoGmuTime *,ShengGmuServices *);
+    static IOReturn services(const NativeAdrenoGmuTime *, ShengGmuServices *);
 };
 #endif

@@ -138,7 +138,7 @@
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
-extern "C" int tegra_gm20b_bringup_busy(void);   // drivers/TegraGM20B/TegraGM20B.cpp
+extern "C" int tegra_gm20b_bringup_busy(void);  // drivers/TegraGM20B/TegraGM20B.cpp
 
 namespace {
 constexpr vm_offset_t kCarPA = 0x60006000, kGpioPA = 0x6000D000, kPinmuxPA = 0x70003000;
@@ -147,15 +147,29 @@ constexpr vm_offset_t kFusePA = 0x7000F800, kApbMiscPA = 0x70000800;
 
 // Clock and reset controller (hekate bdk/soc/clock.{c,h}); PWM is device L17.
 enum : uint32_t {
-  RST_DEVICES_L = 0x004, CLK_OUT_ENB_L = 0x010, MISC_CLK_ENB = 0x048, CLK_SOURCE_PWM = 0x110,
-  RST_DEV_L_SET = 0x300, RST_DEV_L_CLR = 0x304, CLK_ENB_L_SET = 0x320, CLK_ENB_L_CLR = 0x324,
-  CLK_ENB_H_SET = 0x328, CCLKG_BURST_POLICY = 0x368, SUPER_CCLKG_DIVIDER = 0x36c, PLLX_MISC3 = 0x518,
-  PLLP_BASE = 0x0a0, PLLP_OUTB = 0x0a8, CLK_OUT_ENB_Y = 0x298, CLK_ENB_Y_SET = 0x29c, CLK_ENB_Y_CLR = 0x2a0,
-  RST_DEVICES_Y = 0x2a4, RST_DEV_Y_CLR = 0x2ac,
+    RST_DEVICES_L = 0x004,
+    CLK_OUT_ENB_L = 0x010,
+    MISC_CLK_ENB = 0x048,
+    CLK_SOURCE_PWM = 0x110,
+    RST_DEV_L_SET = 0x300,
+    RST_DEV_L_CLR = 0x304,
+    CLK_ENB_L_SET = 0x320,
+    CLK_ENB_L_CLR = 0x324,
+    CLK_ENB_H_SET = 0x328,
+    CCLKG_BURST_POLICY = 0x368,
+    SUPER_CCLKG_DIVIDER = 0x36c,
+    PLLX_MISC3 = 0x518,
+    PLLP_BASE = 0x0a0,
+    PLLP_OUTB = 0x0a8,
+    CLK_OUT_ENB_Y = 0x298,
+    CLK_ENB_Y_SET = 0x29c,
+    CLK_ENB_Y_CLR = 0x2a0,
+    RST_DEVICES_Y = 0x2a4,
+    RST_DEV_Y_CLR = 0x2ac,
 };
 constexpr uint32_t kPwmClock = 1u << 17;
-constexpr uint32_t kFuseClock = 1u << 7, kFuseVisible = 1u << 28;   // CLK_ENB_H bit 7, MISC_CLK_ENB bit 28
-constexpr uint32_t kPllxIddq = 1u << 3;                              // PLLX_MISC3 (clk-tegra210b01.c:373)
+constexpr uint32_t kFuseClock = 1u << 7, kFuseVisible = 1u << 28;  // CLK_ENB_H bit 7, MISC_CLK_ENB bit 28
+constexpr uint32_t kPllxIddq = 1u << 3;                            // PLLX_MISC3 (clk-tegra210b01.c:373)
 constexpr uint32_t kPllpOutCpu = 1u << 31;   // bank Y bit 31: the PLLP branch to the CPU (hekate CLK_Y_PLLP_OUT_CPU)
 constexpr uint32_t kOut4Running = 3u << 16;  // PLLP_OUTB OUT4 RSTN (16) and CLKEN (17), divider 31:24
 constexpr unsigned kSourcePllpOut4 = 5;      // CCLK_G source pll_p_out4 (clk-tegra-super-gen4.c cclk_g_parents_gen5)
@@ -179,56 +193,70 @@ constexpr uint32_t PWM_CSR_1 = 0x10, kPwmEnable = 1u << 31;
 constexpr unsigned kBus = 1;
 constexpr uint8_t kSensor = 0x4c;
 enum : uint8_t {
-  LocalTemp = 0x00, RemoteTemp = 0x01, Status = 0x02, ConfigRead = 0x03, ConfigWrite = 0x09,
-  RateWrite = 0x0a, LocalHighWrite = 0x0b, LocalLowWrite = 0x0c, RemoteHighWrite = 0x0d,
-  RemoteLowWrite = 0x0e, RemoteFraction = 0x10, RemoteOffsetHigh = 0x11, RemoteOffsetLow = 0x12,
-  RemoteHighFraction = 0x13, RemoteLowFraction = 0x14, LocalFraction = 0x15,
-  RemoteThermLimit = 0x19, LocalThermLimit = 0x20, ManufacturerID = 0xfe,
+    LocalTemp = 0x00,
+    RemoteTemp = 0x01,
+    Status = 0x02,
+    ConfigRead = 0x03,
+    ConfigWrite = 0x09,
+    RateWrite = 0x0a,
+    LocalHighWrite = 0x0b,
+    LocalLowWrite = 0x0c,
+    RemoteHighWrite = 0x0d,
+    RemoteLowWrite = 0x0e,
+    RemoteFraction = 0x10,
+    RemoteOffsetHigh = 0x11,
+    RemoteOffsetLow = 0x12,
+    RemoteHighFraction = 0x13,
+    RemoteLowFraction = 0x14,
+    LocalFraction = 0x15,
+    RemoteThermLimit = 0x19,
+    LocalThermLimit = 0x20,
+    ManufacturerID = 0xfe,
 };
 constexpr uint8_t kConfigShutdown = 0x40, kStatusOpen = 0x04;
 constexpr uint8_t kTexasInstruments = 0x55;
 constexpr uint8_t kRateFourPerSecond = 6;
 
-constexpr uint32_t kStaleMS = 5000;       // re-read bound for the fan curve (see the top of the file)
-constexpr uint32_t kRetryMS = 1000;       // re-initialize a failed sensor (fan at full speed meanwhile)
-constexpr uint32_t kConversionMS = 300;   // > one conversion at 4/s: the status then reflects new limits
+constexpr uint32_t kStaleMS = 5000;      // re-read bound for the fan curve (see the top of the file)
+constexpr uint32_t kRetryMS = 1000;      // re-initialize a failed sensor (fan at full speed meanwhile)
+constexpr uint32_t kConversionMS = 300;  // > one conversion at 4/s: the status then reflects new limits
 constexpr unsigned kAlertBurst = 10;
-constexpr unsigned kSafeDrive = 153;      // of 256, until the first good reading
+constexpr unsigned kSafeDrive = 153;  // of 256, until the first good reading
 constexpr unsigned kFullDrive = 256;
 constexpr int kCriticalMilliC = 90000;
 constexpr unsigned kLevels = 10;
 
 // CPU operating point (switch-perf=1; see the top of the file).
-constexpr unsigned kPerfMilliVolts = 1120;    // L4T's T210B01 CPU max_millivolts
+constexpr unsigned kPerfMilliVolts = 1120;  // L4T's T210B01 CPU max_millivolts
 constexpr uint8_t kPerfVout = (kPerfMilliVolts - 250) / 5;
-constexpr unsigned kPllMarginPct = 20;        // over the per-chip DFLL CVB voltage, for a fixed clock
+constexpr unsigned kPllMarginPct = 20;  // over the per-chip DFLL CVB voltage, for a fixed clock
 constexpr int kPerfTripMilliC = 64000;
-constexpr int kPerfHysteresisMilliC = 1000;   // L4T dfll-cap-trip0 hysteresis = <1000>
-constexpr uint32_t kPerfHoldMS = 5000;         // shortest time from a drop to the next raise
-constexpr uint32_t kRailSettleMS = 1;     // 520 mV at the slowest MAX77812 slew, 1.25 mV/us, is 416 us
-constexpr uint32_t kTraceMS = 400, kTraceDelayMS = 2000;   // switch-perf-trace=1 pacing
+constexpr int kPerfHysteresisMilliC = 1000;               // L4T dfll-cap-trip0 hysteresis = <1000>
+constexpr uint32_t kPerfHoldMS = 5000;                    // shortest time from a drop to the next raise
+constexpr uint32_t kRailSettleMS = 1;                     // 520 mV at the slowest MAX77812 slew, 1.25 mV/us, is 416 us
+constexpr uint32_t kTraceMS = 400, kTraceDelayMS = 2000;  // switch-perf-trace=1 pacing
 constexpr unsigned kStepRelock = 1, kStepCurrentLimit = 2, kStepRail = 3, kStepFirstRung = 4;
 
 // L4T's T210B01 CPU ladder above the boot clock: freq-table row, PLLX N and P code with M = 2 (top of the
 // file), and the row's CPUB01_CVB_TABLE coefficients (clk-tegra124-dfll-fcpu.c:625-630).
 constexpr uint32_t kPllxM = 2;
 struct Rung {
-  unsigned rowMHz;
-  uint32_t n, pdivCode;   // P code 0 = /1, 1 = /2 (pll_qlin_pdiv_to_hw)
-  int32_t c0, c1, c2;
+    unsigned rowMHz;
+    uint32_t n, pdivCode;  // P code 0 = /1, 1 = /2 (pll_qlin_pdiv_to_hw)
+    int32_t c0, c1, c2;
 };
 constexpr Rung kRungs[] = {
-  {1224, 127, 1, 1141084, -27735, 27},   // 38.4 MHz * 127 / 2 / 2 = 1219.2 MHz
-  {1428, 74, 0, 1268729, -30745, 27},    // 1420.8 MHz
-  {1581, 82, 0, 1374032, -33005, 27},    // 1574.4 MHz
-  {1683, 87, 0, 1448791, -34505, 27},    // 1670.4 MHz
-  {1785, 92, 0, 1527196, -36015, 27},    // 1766.4 MHz
+    {1224, 127, 1, 1141084, -27735, 27},  // 38.4 MHz * 127 / 2 / 2 = 1219.2 MHz
+    {1428, 74, 0, 1268729, -30745, 27},   // 1420.8 MHz
+    {1581, 82, 0, 1374032, -33005, 27},   // 1574.4 MHz
+    {1683, 87, 0, 1448791, -34505, 27},   // 1670.4 MHz
+    {1785, 92, 0, 1527196, -36015, 27},   // 1766.4 MHz
 };
 constexpr unsigned kRungCount = sizeof(kRungs) / sizeof(kRungs[0]);
 
 // Fuses (L4T offsets from the fuse cache at +0x100: fuse-tegra30.c, speedo-tegra210.c) and APB_MISC HIDREV.
 constexpr uint32_t FUSE_CACHE = 0x100, FUSE_SKU_INFO = 0x010, FUSE_CPU_SPEEDO_0 = 0x014, APB_MISC_HIDREV = 0x004;
-constexpr unsigned kB01ProcessSpeedo = 1650;   // speedo-tegra210.c:52
+constexpr unsigned kB01ProcessSpeedo = 1650;  // speedo-tegra210.c:52
 
 // MAX77812 (L4T max77812-regulator.c:28-101).
 constexpr uint8_t kMax77812Version = 0x14, kMax77812M4Cfg = 0x32, kMax77812GlbCfg2 = 0x34;
@@ -242,35 +270,45 @@ constexpr int kDfllFloorWarmMilliC = 20000, kDfllCap1MilliC = 64000, kDfllCap2Mi
 constexpr int kDfllBoundaries[] = {kDfllFloorWarmMilliC, kDfllCap1MilliC, kDfllCap2MilliC};
 
 struct Profile {
-  const char *name;
-  int32_t soc[2], pcb[2];      // skin estimate scale, offset
-  int32_t trip[kLevels];       // m C
-  int32_t hysteresis[kLevels];
-  uint16_t pwm[kLevels];       // of 256
+    const char *name;
+    int32_t soc[2], pcb[2];  // skin estimate scale, offset
+    int32_t trip[kLevels];   // m C
+    int32_t hysteresis[kLevels];
+    uint16_t pwm[kLevels];  // of 256
 };
 constexpr Profile kProfiles[] = {
-  {"Console", {7831, 57590}, {8051, -45213},
-   {0, 36000, 40000, 43000, 49000, 53000, 70000, 80000, 90000, 100000},
-   {0, 0, 3900, 2900, 0, 0, 0, 0, 0, 0},
-   {0, 0, 51, 51, 128, 255, 255, 255, 255, 255}},
-  {"Handheld", {9029, 4274}, {7176, -33954},
-   {0, 36000, 40000, 43000, 44000, 45000, 46500, 80000, 90000, 100000},
-   {0, 0, 3900, 2900, 0, 0, 1000, 0, 0, 0},
-   {0, 0, 51, 51, 76, 128, 255, 255, 255, 255}},
+    {"Console",
+     {7831, 57590},
+     {8051, -45213},
+     {0, 36000, 40000, 43000, 49000, 53000, 70000, 80000, 90000, 100000},
+     {0, 0, 3900, 2900, 0, 0, 0, 0, 0, 0},
+     {0, 0, 51, 51, 128, 255, 255, 255, 255, 255}},
+    {"Handheld",
+     {9029, 4274},
+     {7176, -33954},
+     {0, 36000, 40000, 43000, 44000, 45000, 46500, 80000, 90000, 100000},
+     {0, 0, 3900, 2900, 0, 0, 1000, 0, 0, 0},
+     {0, 0, 51, 51, 76, 128, 255, 255, 255, 255}},
 };
 
-inline uint32_t rd(volatile uint8_t *base, uint32_t offset) { return *(volatile uint32_t *)(base + offset); }
-inline void wr(volatile uint8_t *base, uint32_t offset, uint32_t value) { *(volatile uint32_t *)(base + offset) = value; }
+inline uint32_t rd(volatile uint8_t *base, uint32_t offset)
+{
+    return *(volatile uint32_t *)(base + offset);
+}
+inline void wr(volatile uint8_t *base, uint32_t offset, uint32_t value)
+{
+    *(volatile uint32_t *)(base + offset) = value;
+}
 
 int skin(const int32_t coefficient[2], int milliC)
 {
-  return (int)(((int64_t)milliC * coefficient[0] + (int64_t)coefficient[1] * 1000) / 10000 + 500);
+    return (int)(((int64_t)milliC * coefficient[0] + (int64_t)coefficient[1] * 1000) / 10000 + 500);
 }
 
 // The sensor temperature (m C) whose skin estimate is `estimate`: skin() solved for T.
 int sensorFor(const int32_t coefficient[2], int estimate)
 {
-  return (int)((((int64_t)estimate - 500) * 10000 - (int64_t)coefficient[1] * 1000) / coefficient[0]);
+    return (int)((((int64_t)estimate - 500) * 10000 - (int64_t)coefficient[1] * 1000) / coefficient[0]);
 }
 
 // ALERT window in whole degrees around one sensor: high when its estimate reaches `up`, low when it
@@ -278,236 +316,253 @@ int sensorFor(const int32_t coefficient[2], int estimate)
 // keep the level-triggered line asserted). The TMP451 alerts above the high and at/below the low.
 void window(int milliC, int up, int down, uint8_t *high, uint8_t *low)
 {
-  int h = (up + 999) / 1000, l = down / 1000;
-  if (h < milliC / 1000 + 1) h = milliC / 1000 + 1;
-  if (l > (milliC + 999) / 1000 - 1) l = (milliC + 999) / 1000 - 1;
-  *high = (uint8_t)(h > 127 ? 127 : h);
-  *low = (uint8_t)(l < 0 ? 0 : l);
+    int h = (up + 999) / 1000, l = down / 1000;
+    if (h < milliC / 1000 + 1) h = milliC / 1000 + 1;
+    if (l > (milliC + 999) / 1000 - 1) l = (milliC + 999) / 1000 - 1;
+    *high = (uint8_t)(h > 127 ? 127 : h);
+    *low = (uint8_t)(l < 0 ? 0 : l);
 }
 
-int readByte(uint8_t reg, uint8_t *value) { return tegra_i2c_read(kBus, kSensor, reg, value, 1); }
-int writeByte(uint8_t reg, uint8_t value) { return tegra_i2c_write(kBus, kSensor, reg, &value, 1); }
-int milliC(uint8_t whole, uint8_t fraction) { return whole * 1000 + (fraction >> 4) * 625 / 10; }
+int readByte(uint8_t reg, uint8_t *value)
+{
+    return tegra_i2c_read(kBus, kSensor, reg, value, 1);
+}
+int writeByte(uint8_t reg, uint8_t value)
+{
+    return tegra_i2c_write(kBus, kSensor, reg, &value, 1);
+}
+int milliC(uint8_t whole, uint8_t fraction)
+{
+    return whole * 1000 + (fraction >> 4) * 625 / 10;
+}
 
 // Linux DIV_ROUND_CLOSEST for a positive divisor.
-int64_t divRoundClosest(int64_t x, int64_t d) { return x >= 0 ? (x + d / 2) / d : (x - d / 2) / d; }
+int64_t divRoundClosest(int64_t x, int64_t d)
+{
+    return x >= 0 ? (x + d / 2) / d : (x - d / 2) / d;
+}
 
 // L4T's DFLL CVB voltage for `rung` at CPU speedo `speedo` (cvb.c tegra_get_cvb_voltage, speedo scale 100,
 // in uV), plus `marginPct`, rounded up to the rail's 5 mV step as tegra_round_cvb_voltage does: mV.
 unsigned cvbMilliVolts(const Rung &rung, int speedo, unsigned marginPct)
 {
-  int64_t uv = divRoundClosest((int64_t)rung.c2 * speedo, 100);
-  uv = divRoundClosest((uv + rung.c1) * speedo, 100) + rung.c0;
-  uv = uv * (100 + marginPct) / 100;
-  return uv > 0 ? (unsigned)((uv + 4999) / 5000 * 5) : 0;
+    int64_t uv = divRoundClosest((int64_t)rung.c2 * speedo, 100);
+    uv = divRoundClosest((uv + rung.c1) * speedo, 100) + rung.c0;
+    uv = uv * (100 + marginPct) / 100;
+    return uv > 0 ? (unsigned)((uv + 4999) / 5000 * 5) : 0;
 }
 
-unsigned rungKHz(const Rung &rung) { return 38400u * rung.n / kPllxM / (rung.pdivCode + 1); }
+unsigned rungKHz(const Rung &rung)
+{
+    return 38400u * rung.n / kPllxM / (rung.pdivCode + 1);
+}
 
 // GLB_CFG2 bits 2:0, the ramp-up slew (max77812-regulator.c slew_rate_table), in uV/us.
 unsigned rampUpUvPerUs(uint8_t glbCfg2)
 {
-  static const uint16_t kSlew[8] = {1250, 2500, 5000, 10000, 20000, 40000, 60000, 60000};
-  return kSlew[glbCfg2 & 7];
+    static const uint16_t kSlew[8] = {1250, 2500, 5000, 10000, 20000, 40000, 60000, 60000};
+    return kSlew[glbCfg2 & 7];
 }
 
 }
 
 class SwitchThermal : public IOService {
-  OSDeclareDefaultStructors(SwitchThermal)
-  IOWorkLoop *loop = nullptr;
-  IOTimerEventSource *timer = nullptr;
-  IOInterruptEventSource *alert = nullptr;
-  volatile uint8_t *car = nullptr, *gpio = nullptr, *pinmux = nullptr, *pwm = nullptr, *pmc = nullptr;
-  volatile uint8_t *fuse = nullptr, *apbMisc = nullptr;
-  const Profile *profile = &kProfiles[0];
-  unsigned level = 0, drive = ~0u, alertCount = 0;
-  uint64_t alertWindowStart = 0;
-  bool alertArmed = false, sensorReady = false, announced = false, reportedFailure = false;
-  bool reportedCritical = false;
-  // CPU operating point: wanted (switch-perf=1), raised now (VDD_CPU above the boot value), or settled
-  // for this boot (sensor lost, a raise refused or stopped by switch-perf-steps: never raised again). A
-  // thermal trip only holds it down until perfHoldUntil.
-  bool perfWanted = false, perfRaised = false, perfSettled = false, perfKept = false, perfTrace = false;
-  bool perfRelocked = false, perfLimited = false;   // steps 1 and 2 are done once per boot (and SC7)
-  bool dfllMode = false, dfllPrepared = false;   // switch-cpu-mode=dfll, and still usable this boot
-  unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;   // the driver's boot defaults
-  unsigned perfRaises = 0, perfSteps = ~0u;  // switch-perf-steps
-  unsigned perfTop = 0, perfRung = 0;        // rungs this chip may use; the rung running now (0: boot clock)
-  int cpuSpeedo = 0, cpuSpeedoId = 0, cpuProcess = 0;
-  uint64_t perfHoldUntil = 0;               // mach_absolute_time() before which no raise happens
-  uint8_t cpuRail = 0, keptVout = 0;        // MAX77812 address; VDD_CPU code as the boot chain left it
-  uint8_t m4Cfg = 0, m4CfgBoot = 0, glbCfg2 = 0, pmicVersion = 0;   // M4_CFG now, and as first read this boot
-  bool m4CfgKept = false;
-  char clockState[256] = "";               // CCLKG, divider, PLLP and its CPU branch as found, for the log
-  uint32_t keptPolicy = 0, keptPllx = 0;    // CCLKG_BURST_POLICY and PLLX_BASE as the boot chain left them
+    OSDeclareDefaultStructors(SwitchThermal) IOWorkLoop *loop = nullptr;
+    IOTimerEventSource *timer = nullptr;
+    IOInterruptEventSource *alert = nullptr;
+    volatile uint8_t *car = nullptr, *gpio = nullptr, *pinmux = nullptr, *pwm = nullptr, *pmc = nullptr;
+    volatile uint8_t *fuse = nullptr, *apbMisc = nullptr;
+    const Profile *profile = &kProfiles[0];
+    unsigned level = 0, drive = ~0u, alertCount = 0;
+    uint64_t alertWindowStart = 0;
+    bool alertArmed = false, sensorReady = false, announced = false, reportedFailure = false;
+    bool reportedCritical = false;
+    // CPU operating point: wanted (switch-perf=1), raised now (VDD_CPU above the boot value), or settled
+    // for this boot (sensor lost, a raise refused or stopped by switch-perf-steps: never raised again). A
+    // thermal trip only holds it down until perfHoldUntil.
+    bool perfWanted = false, perfRaised = false, perfSettled = false, perfKept = false, perfTrace = false;
+    bool perfRelocked = false, perfLimited = false;  // steps 1 and 2 are done once per boot (and SC7)
+    bool dfllMode = false, dfllPrepared = false;     // switch-cpu-mode=dfll, and still usable this boot
+    unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;  // the driver's boot defaults
+    unsigned perfRaises = 0, perfSteps = ~0u;                                     // switch-perf-steps
+    unsigned perfTop = 0, perfRung = 0;  // rungs this chip may use; the rung running now (0: boot clock)
+    int cpuSpeedo = 0, cpuSpeedoId = 0, cpuProcess = 0;
+    uint64_t perfHoldUntil = 0;         // mach_absolute_time() before which no raise happens
+    uint8_t cpuRail = 0, keptVout = 0;  // MAX77812 address; VDD_CPU code as the boot chain left it
+    uint8_t m4Cfg = 0, m4CfgBoot = 0, glbCfg2 = 0, pmicVersion = 0;  // M4_CFG now, and as first read this boot
+    bool m4CfgKept = false;
+    char clockState[256] = "";              // CCLKG, divider, PLLP and its CPU branch as found, for the log
+    uint32_t keptPolicy = 0, keptPllx = 0;  // CCLKG_BURST_POLICY and PLLX_BASE as the boot chain left them
 
-  static void timerFired(OSObject *owner, IOTimerEventSource *sender);
-  static void alertFired(OSObject *owner, IOInterruptEventSource *sender, int count);
-  bool mapRegisters();
-  void gpioMasked(uint32_t port, uint32_t reg, unsigned pin, bool value);
-  void fanPowerOn();
-  void setDrive(unsigned value);
-  bool initSensor();
-  bool readTemperatures(int *soc, int *pcb);
-  bool armAlert(int soc, int pcb);
-  void failSafe(const char *what, int err);
-  void publish(const char *key, int64_t value);
-  bool evaluate();
-  bool raiseCpu(int soc);
-  bool preparePerf();
-  bool setCurrentLimit();
-  bool raiseRail();
-  bool raiseDfll(int soc);
-  void trace(const char *format, ...) __printflike(2, 3);
-  void updateDfllThermal(int soc);
+    static void timerFired(OSObject *owner, IOTimerEventSource *sender);
+    static void alertFired(OSObject *owner, IOInterruptEventSource *sender, int count);
+    bool mapRegisters();
+    void gpioMasked(uint32_t port, uint32_t reg, unsigned pin, bool value);
+    void fanPowerOn();
+    void setDrive(unsigned value);
+    bool initSensor();
+    bool readTemperatures(int *soc, int *pcb);
+    bool armAlert(int soc, int pcb);
+    void failSafe(const char *what, int err);
+    void publish(const char *key, int64_t value);
+    bool evaluate();
+    bool raiseCpu(int soc);
+    bool preparePerf();
+    bool setCurrentLimit();
+    bool raiseRail();
+    bool raiseDfll(int soc);
+    void trace(const char *format, ...) __printflike(2, 3);
+    void updateDfllThermal(int soc);
+
 public:
-  void quiesceCpu();
-  void suspend();
-  void resume();
+    void quiesceCpu();
+    void suspend();
+    void resume();
+
 private:
-  void restoreCpu(const char *why, bool forGood);
-  bool perfPending() const { return perfWanted && !perfSettled && !perfRaised; }
-  uint32_t holdRemainingMS() const;
-  uint32_t nextTickMS(bool ok) const;
-  bool runCpuFromPllx(uint32_t pllxBase, unsigned step);
-  uint32_t rungBase(unsigned rung) const;
+    void restoreCpu(const char *why, bool forGood);
+    bool perfPending() const { return perfWanted && !perfSettled && !perfRaised; }
+    uint32_t holdRemainingMS() const;
+    uint32_t nextTickMS(bool ok) const;
+    bool runCpuFromPllx(uint32_t pllxBase, unsigned step);
+    uint32_t rungBase(unsigned rung) const;
+
 public:
-  bool start(IOService *provider) override;
-  void free() override;
+    bool start(IOService *provider) override;
+    void free() override;
 };
 
 OSDefineMetaClassAndStructors(SwitchThermal, IOService)
 
-static SwitchThermal *gThermal;
+    static SwitchThermal *gThermal;
 
 bool SwitchThermal::mapRegisters()
 {
-  car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
-  gpio = (volatile uint8_t *)ml_io_map(kGpioPA, 0x1000);
-  pinmux = (volatile uint8_t *)ml_io_map(kPinmuxPA, 0x1000);
-  pwm = (volatile uint8_t *)ml_io_map(kPwmPA, 0x100);
-  pmc = (volatile uint8_t *)ml_io_map(kPmcPA, 0x100);
-  return car && gpio && pinmux && pwm && pmc;
+    car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
+    gpio = (volatile uint8_t *)ml_io_map(kGpioPA, 0x1000);
+    pinmux = (volatile uint8_t *)ml_io_map(kPinmuxPA, 0x1000);
+    pwm = (volatile uint8_t *)ml_io_map(kPwmPA, 0x100);
+    pmc = (volatile uint8_t *)ml_io_map(kPmcPA, 0x100);
+    return car && gpio && pinmux && pwm && pmc;
 }
 
 void SwitchThermal::gpioMasked(uint32_t port, uint32_t reg, unsigned pin, bool value)
 {
-  wr(gpio, port + reg, (1u << (pin + 8)) | ((value ? 1u : 0u) << pin));
-  (void)rd(gpio, port + reg);
+    wr(gpio, port + reg, (1u << (pin + 8)) | ((value ? 1u : 0u) << pin));
+    (void)rd(gpio, port + reg);
 }
 
 // hekate fan_set_duty() first-call setup plus regulator_5v_enable(), T210B01 branch.
 void SwitchThermal::fanPowerOn()
 {
-  // The PWM block must be clocked and out of reset before its registers are touched. Left alone
-  // if something already runs it (hekate's Nyx enables it and keeps it on after its fan stops).
-  if (!(rd(car, CLK_OUT_ENB_L) & kPwmClock) || (rd(car, RST_DEVICES_L) & kPwmClock)) {
-    wr(car, RST_DEV_L_SET, kPwmClock);
-    wr(car, CLK_ENB_L_CLR, kPwmClock);
-    wr(car, CLK_SOURCE_PWM, kPwmSource);
-    wr(car, CLK_ENB_L_SET, kPwmClock);
-    IODelay(2);
-    wr(car, RST_DEV_L_CLR, kPwmClock);
-    (void)rd(car, RST_DEVICES_L);
-  }
-  wr(pwm, PWM_CSR_1, kPwmEnable | (256u << 16));  // stopped until the pin is switched over
+    // The PWM block must be clocked and out of reset before its registers are touched. Left alone
+    // if something already runs it (hekate's Nyx enables it and keeps it on after its fan stops).
+    if (!(rd(car, CLK_OUT_ENB_L) & kPwmClock) || (rd(car, RST_DEVICES_L) & kPwmClock)) {
+        wr(car, RST_DEV_L_SET, kPwmClock);
+        wr(car, CLK_ENB_L_CLR, kPwmClock);
+        wr(car, CLK_SOURCE_PWM, kPwmSource);
+        wr(car, CLK_ENB_L_SET, kPwmClock);
+        IODelay(2);
+        wr(car, RST_DEV_L_CLR, kPwmClock);
+        (void)rd(car, RST_DEVICES_L);
+    }
+    wr(pwm, PWM_CSR_1, kPwmEnable | (256u << 16));  // stopped until the pin is switched over
 
-  wr(pinmux, PINMUX_SATA_LED_ACTIVE, 1);
-  gpioMasked(kPortA, MSK_CNF, kPinPA5, true);
-  gpioMasked(kPortA, MSK_OUT, kPinPA5, true);
-  gpioMasked(kPortA, MSK_OE, kPinPA5, true);
-  if (rd(pmc, NO_IOPOWER) & kPmcGpio) {
-    wr(pmc, NO_IOPOWER, rd(pmc, NO_IOPOWER) & ~kPmcGpio);
-    (void)rd(pmc, NO_IOPOWER);
-  }
-  if (rd(pmc, PWR_DET_VAL) & kPmcGpio) {
-    wr(pmc, PWR_DET_VAL, rd(pmc, PWR_DET_VAL) & ~kPmcGpio);
-    (void)rd(pmc, PWR_DET_VAL);
-  }
+    wr(pinmux, PINMUX_SATA_LED_ACTIVE, 1);
+    gpioMasked(kPortA, MSK_CNF, kPinPA5, true);
+    gpioMasked(kPortA, MSK_OUT, kPinPA5, true);
+    gpioMasked(kPortA, MSK_OE, kPinPA5, true);
+    if (rd(pmc, NO_IOPOWER) & kPmcGpio) {
+        wr(pmc, NO_IOPOWER, rd(pmc, NO_IOPOWER) & ~kPmcGpio);
+        (void)rd(pmc, NO_IOPOWER);
+    }
+    if (rd(pmc, PWR_DET_VAL) & kPmcGpio) {
+        wr(pmc, PWR_DET_VAL, rd(pmc, PWR_DET_VAL) & ~kPmcGpio);
+        (void)rd(pmc, PWR_DET_VAL);
+    }
 
-  wr(pinmux, PINMUX_LCD_GPIO2, 1);
-  (void)rd(pinmux, PINMUX_LCD_GPIO2);
-  gpioMasked(kPortV, MSK_CNF, kPinPV4, false);
+    wr(pinmux, PINMUX_LCD_GPIO2, 1);
+    (void)rd(pinmux, PINMUX_LCD_GPIO2);
+    gpioMasked(kPortV, MSK_CNF, kPinPV4, false);
 }
 
 void SwitchThermal::setDrive(unsigned value)
 {
-  if (value > kFullDrive) value = kFullDrive;
-  if (value == drive) return;
-  drive = value;
-  wr(pwm, PWM_CSR_1, kPwmEnable | ((kFullDrive - value) << 16));
-  (void)rd(pwm, PWM_CSR_1);
+    if (value > kFullDrive) value = kFullDrive;
+    if (value == drive) return;
+    drive = value;
+    wr(pwm, PWM_CSR_1, kPwmEnable | ((kFullDrive - value) << 16));
+    (void)rd(pwm, PWM_CSR_1);
 }
 
 void SwitchThermal::publish(const char *key, int64_t value)
 {
-  if (OSNumber *number = OSNumber::withNumber((unsigned long long)value, 32)) {
-    setProperty(key, number);
-    number->release();
-  }
+    if (OSNumber *number = OSNumber::withNumber((unsigned long long)value, 32)) {
+        setProperty(key, number);
+        number->release();
+    }
 }
 
 void SwitchThermal::failSafe(const char *what, int err)
 {
-  setDrive(kFullDrive);
-  publish("FanDrive", kFullDrive);
-  sensorReady = false;
-  restoreCpu(what, true);   // no raised clocks without a working sensor, for the rest of the boot
-  if (!reportedFailure) IOLog("SwitchThermal: %s (%d), fan at full speed\n", what, err);
-  reportedFailure = true;
+    setDrive(kFullDrive);
+    publish("FanDrive", kFullDrive);
+    sensorReady = false;
+    restoreCpu(what, true);  // no raised clocks without a working sensor, for the rest of the boot
+    if (!reportedFailure) IOLog("SwitchThermal: %s (%d), fan at full speed\n", what, err);
+    reportedFailure = true;
 }
 
 bool SwitchThermal::initSensor()
 {
-  const uint8_t setup[][2] = {
-    {ConfigWrite, 0},   // running, ALERT unmasked, 0..127 C
-    {RemoteOffsetHigh, 0xf3}, {RemoteOffsetLow, 0x80},
-    {RemoteThermLimit, 99}, {LocalThermLimit, 120}, {RateWrite, kRateFourPerSecond},
-    {RemoteHighFraction, 0}, {RemoteLowFraction, 0},
-  };
-  uint8_t id = 0;
-  int err = tegra_i2c_init(kBus);
-  if (!err) err = readByte(ManufacturerID, &id);
-  if (!err && id != kTexasInstruments) {
-    failSafe("TMP451 not found on I2C1 (manufacturer ID)", id);
-    return false;
-  }
-  for (const auto &setting : setup) {
-    if (!err) err = writeByte(setting[0], setting[1]);
-  }
-  if (err) {
-    failSafe("TMP451 init failed", err);
-    return false;
-  }
-  return true;
+    const uint8_t setup[][2] = {
+        {ConfigWrite, 0},  // running, ALERT unmasked, 0..127 C
+        {RemoteOffsetHigh, 0xf3}, {RemoteOffsetLow, 0x80},         {RemoteThermLimit, 99},
+        {LocalThermLimit, 120},   {RateWrite, kRateFourPerSecond}, {RemoteHighFraction, 0},
+        {RemoteLowFraction, 0},
+    };
+    uint8_t id = 0;
+    int err = tegra_i2c_init(kBus);
+    if (!err) err = readByte(ManufacturerID, &id);
+    if (!err && id != kTexasInstruments) {
+        failSafe("TMP451 not found on I2C1 (manufacturer ID)", id);
+        return false;
+    }
+    for (const auto &setting : setup) {
+        if (!err) err = writeByte(setting[0], setting[1]);
+    }
+    if (err) {
+        failSafe("TMP451 init failed", err);
+        return false;
+    }
+    return true;
 }
 
 // Reading the status first also clears the latched ALERT bits.
 bool SwitchThermal::readTemperatures(int *soc, int *pcb)
 {
-  uint8_t status = 0, config = 0, remote = 0, remoteFraction = 0, local = 0, localFraction = 0;
-  int err = readByte(Status, &status);
-  if (!err) err = readByte(ConfigRead, &config);
-  if (!err) err = readByte(RemoteTemp, &remote);
-  if (!err) err = readByte(RemoteFraction, &remoteFraction);
-  if (!err) err = readByte(LocalTemp, &local);
-  if (!err) err = readByte(LocalFraction, &localFraction);
-  if (err) {
-    failSafe("TMP451 read failed", err);
-    return false;
-  }
-  if (config & kConfigShutdown) {
-    failSafe("TMP451 found in shutdown", config);
-    return false;
-  }
-  if (status & kStatusOpen) {
-    failSafe("TMP451 SoC diode open", status);
-    return false;
-  }
-  *soc = milliC(remote, remoteFraction);
-  *pcb = milliC(local, localFraction);
-  return true;
+    uint8_t status = 0, config = 0, remote = 0, remoteFraction = 0, local = 0, localFraction = 0;
+    int err = readByte(Status, &status);
+    if (!err) err = readByte(ConfigRead, &config);
+    if (!err) err = readByte(RemoteTemp, &remote);
+    if (!err) err = readByte(RemoteFraction, &remoteFraction);
+    if (!err) err = readByte(LocalTemp, &local);
+    if (!err) err = readByte(LocalFraction, &localFraction);
+    if (err) {
+        failSafe("TMP451 read failed", err);
+        return false;
+    }
+    if (config & kConfigShutdown) {
+        failSafe("TMP451 found in shutdown", config);
+        return false;
+    }
+    if (status & kStatusOpen) {
+        failSafe("TMP451 SoC diode open", status);
+        return false;
+    }
+    *soc = milliC(remote, remoteFraction);
+    *pcb = milliC(local, localFraction);
+    return true;
 }
 
 // The window in which the fan level cannot change: up to the next trip, down to this level's trip
@@ -516,104 +571,105 @@ bool SwitchThermal::readTemperatures(int *soc, int *pcb)
 // speed, sensor to be re-initialized) if the limits could not be written.
 bool SwitchThermal::armAlert(int soc, int pcb)
 {
-  const int up = level + 1 < kLevels ? profile->trip[level + 1] : INT32_MAX / 2;
-  const int down = level ? profile->trip[level] - profile->hysteresis[level] : -1000000;
-  int socUp = up < INT32_MAX / 2 ? sensorFor(profile->soc, up) : 127000;
-  if (socUp > kCriticalMilliC) socUp = kCriticalMilliC;
-  int socDown = level ? sensorFor(profile->soc, down) : -1000;
-  if (perfRaised && dfllMode) {
-    // The next DFLL floor/cap boundary either way, so each index change comes by interrupt.
-    for (int boundary : kDfllBoundaries) {
-      if (boundary > soc && socUp > boundary) socUp = boundary;
-      if (boundary <= soc && socDown < boundary - kPerfHysteresisMilliC) socDown = boundary - kPerfHysteresisMilliC;
+    const int up = level + 1 < kLevels ? profile->trip[level + 1] : INT32_MAX / 2;
+    const int down = level ? profile->trip[level] - profile->hysteresis[level] : -1000000;
+    int socUp = up < INT32_MAX / 2 ? sensorFor(profile->soc, up) : 127000;
+    if (socUp > kCriticalMilliC) socUp = kCriticalMilliC;
+    int socDown = level ? sensorFor(profile->soc, down) : -1000;
+    if (perfRaised && dfllMode) {
+        // The next DFLL floor/cap boundary either way, so each index change comes by interrupt.
+        for (int boundary : kDfllBoundaries) {
+            if (boundary > soc && socUp > boundary) socUp = boundary;
+            if (boundary <= soc && socDown < boundary - kPerfHysteresisMilliC)
+                socDown = boundary - kPerfHysteresisMilliC;
+        }
+    } else if (perfRaised && socUp > kPerfTripMilliC) {
+        socUp = kPerfTripMilliC;
     }
-  } else if (perfRaised && socUp > kPerfTripMilliC) {
-    socUp = kPerfTripMilliC;
-  }
-  if (perfPending() && soc >= kPerfTripMilliC - kPerfHysteresisMilliC &&
-      socDown < kPerfTripMilliC - kPerfHysteresisMilliC) {
-    socDown = kPerfTripMilliC - kPerfHysteresisMilliC;   // ALERT once the CPU may go up again
-  }
-  const int pcbUp = up < INT32_MAX / 2 ? sensorFor(profile->pcb, up) : 127000;
-  uint8_t socHigh, socLow, pcbHigh, pcbLow;
-  window(soc, socUp, socDown, &socHigh, &socLow);
-  window(pcb, pcbUp, level ? sensorFor(profile->pcb, down) : -1000, &pcbHigh, &pcbLow);
-  int err = writeByte(RemoteHighWrite, socHigh);
-  if (!err) err = writeByte(RemoteLowWrite, socLow);
-  if (!err) err = writeByte(LocalHighWrite, pcbHigh);
-  if (!err) err = writeByte(LocalLowWrite, pcbLow);
-  if (err) failSafe("TMP451 limit write failed", err);
-  return !err;
+    if (perfPending() && soc >= kPerfTripMilliC - kPerfHysteresisMilliC &&
+        socDown < kPerfTripMilliC - kPerfHysteresisMilliC) {
+        socDown = kPerfTripMilliC - kPerfHysteresisMilliC;  // ALERT once the CPU may go up again
+    }
+    const int pcbUp = up < INT32_MAX / 2 ? sensorFor(profile->pcb, up) : 127000;
+    uint8_t socHigh, socLow, pcbHigh, pcbLow;
+    window(soc, socUp, socDown, &socHigh, &socLow);
+    window(pcb, pcbUp, level ? sensorFor(profile->pcb, down) : -1000, &pcbHigh, &pcbLow);
+    int err = writeByte(RemoteHighWrite, socHigh);
+    if (!err) err = writeByte(RemoteLowWrite, socLow);
+    if (!err) err = writeByte(LocalHighWrite, pcbHigh);
+    if (!err) err = writeByte(LocalLowWrite, pcbLow);
+    if (err) failSafe("TMP451 limit write failed", err);
+    return !err;
 }
 
 // One evaluation of the fan curve; false if there was no good reading.
 bool SwitchThermal::evaluate()
 {
-  if (!sensorReady) {
-    // A sensor leaving shutdown needs one conversion first: read on the next tick.
-    sensorReady = initSensor();
-    return false;
-  }
-  int soc = 0, pcb = 0;
-  if (!readTemperatures(&soc, &pcb)) return false;
-  reportedFailure = false;
-
-  const int socSkin = skin(profile->soc, soc), pcbSkin = skin(profile->pcb, pcb);
-  const int estimate = socSkin > pcbSkin ? socSkin : pcbSkin;
-  const unsigned before = level;
-  while (level + 1 < kLevels && estimate >= profile->trip[level + 1]) ++level;
-  while (level > 0 && estimate < profile->trip[level] - profile->hysteresis[level]) --level;
-  unsigned target = profile->pwm[level];
-  if (level != before) {
-    IOLog("SwitchThermal: fan level %u -> %u (%u/256): skin %d mC, SoC %d mC, PCB %d mC\n", before, level, target,
-          estimate, soc, pcb);
-  }
-  if (soc >= kCriticalMilliC) {
-    target = kFullDrive;
-    if (!reportedCritical) IOLog("SwitchThermal: SoC at %d mC, fan at full speed\n", soc);
-    reportedCritical = true;
-  } else {
-    reportedCritical = false;
-  }
-  setDrive(target);
-  if (perfRaised && dfllMode) updateDfllThermal(soc);
-  if (perfRaised && !dfllMode && soc >= kPerfTripMilliC) {
-    char why[48];
-    snprintf(why, sizeof(why), "SoC %d.%d C reached the %d C trip", soc / 1000, soc % 1000 / 100,
-             kPerfTripMilliC / 1000);
-    restoreCpu(why, false);
-  }
-  if (!armAlert(soc, pcb)) return false;
-  if (!alertArmed) {
-    // First window programmed (or the sensor is back): from here on the line can be released.
-    alertArmed = true;
-    alert->enable();
-  }
-  if (perfPending() && soc < kPerfTripMilliC - kPerfHysteresisMilliC) {
-    // Not while the GPU comes up on the same MAX77812 (VDD_GPU on, GPCPLL raise, GR init): r3o hung once at GPU M2
-    // with the untraced raise running alongside. Looked at again every 250 ms until the GPU bring-up is done.
-    const uint32_t hold = tegra_gm20b_bringup_busy() ? 250 : holdRemainingMS();
-    if (hold) {
-      timer->setTimeoutMS(hold);   // one-shot: the next evaluation after the hold-off raises it
-    } else if (raiseCpu(soc) && !armAlert(soc, pcb)) {
-      return false;
+    if (!sensorReady) {
+        // A sensor leaving shutdown needs one conversion first: read on the next tick.
+        sensorReady = initSensor();
+        return false;
     }
-  }
+    int soc = 0, pcb = 0;
+    if (!readTemperatures(&soc, &pcb)) return false;
+    reportedFailure = false;
 
-  publish("SoCTemperature", soc);
-  publish("PCBTemperature", pcb);
-  publish("SkinTemperature", estimate);
-  publish("FanDrive", drive);
-  if (!announced) {
-    announced = true;
-    const switchclk::Cpu cpu = switchclk::readCpu(car);
-    publish("CPUClockMHz", cpu.kHz / 1000);
-    publish("CPUClockSource", cpu.source);
-    IOLog("SwitchThermal: started (%s, SoC %d mC, PCB %d mC, fan %u/256, ALERT on GPIO %u, CPU %u MHz%s)\n",
-          profile->name, soc, pcb, drive, (unsigned)TEGRA_GPIO_TEMP_ALERT, cpu.kHz / 1000,
-          perfPending() ? ", CPU raise pending" : "");
-  }
-  return true;
+    const int socSkin = skin(profile->soc, soc), pcbSkin = skin(profile->pcb, pcb);
+    const int estimate = socSkin > pcbSkin ? socSkin : pcbSkin;
+    const unsigned before = level;
+    while (level + 1 < kLevels && estimate >= profile->trip[level + 1]) ++level;
+    while (level > 0 && estimate < profile->trip[level] - profile->hysteresis[level]) --level;
+    unsigned target = profile->pwm[level];
+    if (level != before) {
+        IOLog("SwitchThermal: fan level %u -> %u (%u/256): skin %d mC, SoC %d mC, PCB %d mC\n", before, level, target,
+              estimate, soc, pcb);
+    }
+    if (soc >= kCriticalMilliC) {
+        target = kFullDrive;
+        if (!reportedCritical) IOLog("SwitchThermal: SoC at %d mC, fan at full speed\n", soc);
+        reportedCritical = true;
+    } else {
+        reportedCritical = false;
+    }
+    setDrive(target);
+    if (perfRaised && dfllMode) updateDfllThermal(soc);
+    if (perfRaised && !dfllMode && soc >= kPerfTripMilliC) {
+        char why[48];
+        snprintf(why, sizeof(why), "SoC %d.%d C reached the %d C trip", soc / 1000, soc % 1000 / 100,
+                 kPerfTripMilliC / 1000);
+        restoreCpu(why, false);
+    }
+    if (!armAlert(soc, pcb)) return false;
+    if (!alertArmed) {
+        // First window programmed (or the sensor is back): from here on the line can be released.
+        alertArmed = true;
+        alert->enable();
+    }
+    if (perfPending() && soc < kPerfTripMilliC - kPerfHysteresisMilliC) {
+        // Not while the GPU comes up on the same MAX77812 (VDD_GPU on, GPCPLL raise, GR init): r3o hung once at GPU M2
+        // with the untraced raise running alongside. Looked at again every 250 ms until the GPU bring-up is done.
+        const uint32_t hold = tegra_gm20b_bringup_busy() ? 250 : holdRemainingMS();
+        if (hold) {
+            timer->setTimeoutMS(hold);  // one-shot: the next evaluation after the hold-off raises it
+        } else if (raiseCpu(soc) && !armAlert(soc, pcb)) {
+            return false;
+        }
+    }
+
+    publish("SoCTemperature", soc);
+    publish("PCBTemperature", pcb);
+    publish("SkinTemperature", estimate);
+    publish("FanDrive", drive);
+    if (!announced) {
+        announced = true;
+        const switchclk::Cpu cpu = switchclk::readCpu(car);
+        publish("CPUClockMHz", cpu.kHz / 1000);
+        publish("CPUClockSource", cpu.source);
+        IOLog("SwitchThermal: started (%s, SoC %d mC, PCB %d mC, fan %u/256, ALERT on GPIO %u, CPU %u MHz%s)\n",
+              profile->name, soc, pcb, drive, (unsigned)TEGRA_GPIO_TEMP_ALERT, cpu.kHz / 1000,
+              perfPending() ? ", CPU raise pending" : "");
+    }
+    return true;
 }
 
 // Reads what the operating point depends on, once per boot (top of the file): the cluster on PLLX as hekate
@@ -623,111 +679,125 @@ bool SwitchThermal::evaluate()
 // and settles the operating point for the boot.
 bool SwitchThermal::preparePerf()
 {
-  using namespace switchclk;
-  const Cpu cpu = readCpu(car);
-  const uint32_t policy = rd(car, CCLKG_BURST_POLICY), divider = rd(car, SUPER_CCLKG_DIVIDER);
-  const uint32_t pllp = rd(car, PLLP_BASE), outb = rd(car, PLLP_OUTB), enbY = rd(car, CLK_OUT_ENB_Y);
-  const char *refusal = nullptr;
-  int err = 0;
-  snprintf(clockState, sizeof(clockState), "CCLKG %#x (state %u, run source %u), SUPER_CCLKG_DIVIDER %#x, PLLP_BASE "
-           "%#x, PLLP_OUTB %#x (OUT4 %s, %u kHz), CLK_OUT_ENB_Y %#x (PLLP_OUT_CPU %s), RST_DEVICES_Y bit 31 %u", policy,
-           policy >> 28, (policy >> 4) & 0xf, divider, pllp, outb, (outb & kOut4Running) == kOut4Running ? "on" : "off",
-           kPllpKHz * 2 / ((outb >> 24) + 2), enbY, enbY & kPllpOutCpu ? "on" : "off",
-           (rd(car, RST_DEVICES_Y) >> 31) & 1);
-  trace("step 0: %s", clockState);
-  if (!fuse) fuse = (volatile uint8_t *)ml_io_map(kFusePA, 0x400);
-  if (!apbMisc) apbMisc = (volatile uint8_t *)ml_io_map(kApbMiscPA, 0x100);
-  if (!fuse || !apbMisc) {
-    refusal = "FUSE/APB_MISC mapping failed";
-  } else {
-    wr(car, CLK_ENB_H_SET, kFuseClock);
-    wr(car, MISC_CLK_ENB, rd(car, MISC_CLK_ENB) | kFuseVisible);
-    (void)rd(car, MISC_CLK_ENB);
-    const uint32_t hidrev = rd(apbMisc, APB_MISC_HIDREV), sku = rd(fuse, FUSE_CACHE + FUSE_SKU_INFO) & 0xff;
-    cpuSpeedo = (int)rd(fuse, FUSE_CACHE + FUSE_CPU_SPEEDO_0);
-    cpuSpeedoId = sku == 0x87 ? 3 : 0;
-    cpuProcess = cpuSpeedo < (int)kB01ProcessSpeedo ? 0 : 1;
-    if (policy != cpu.policy || divider != cpu.divider) refusal = "CCLKG_BURST_POLICY/SUPER_CCLKG_DIVIDER differ from the 0x20/0x24 alias";
-    else if ((policy >> 28) != 2) refusal = "the cluster is not in the RUN state";
-    else if (cpu.source != kSourcePllx) refusal = "the CPU does not run from PLLX";
-    else if ((cpu.pllx & (kPllEnable | kPllBypass | kPllLock)) != (kPllEnable | kPllLock)) refusal = "PLLX is not locked";
-    else if ((divider & (1u << 31)) && ((divider >> 8) & 0xff) != (divider & 0xff)) refusal = "the CCLK divider is in use";
-    else if (refKHz(car) != 38400) refusal = "pll_ref is not 38.4 MHz";
-    else if ((outb & kOut4Running) != kOut4Running) refusal = "PLLP_OUT4, the cluster's backup clock, is off";
-    else if (((hidrev >> 8) & 0xff) != 0x21 || ((hidrev >> 4) & 0xf) != 2) refusal = "not a T210B01 (HIDREV)";
-    else if (cpuSpeedo <= 0 || cpuSpeedo > 4000) refusal = "the CPU speedo is not fused";
-    else if ((err = readCpuRail(&cpuRail, &keptVout))) refusal = "VDD_CPU (MAX77812) does not answer on I2C5";
-    else if (voutMilliVolts(keptVout) > kPerfMilliVolts) refusal = "VDD_CPU is already above 1120 mV";
-    else if ((err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812Version, &pmicVersion, 1)) ||
-             (err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812M4Cfg, &m4Cfg, 1)) ||
-             (err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812GlbCfg2, &glbCfg2, 1))) {
-      refusal = "MAX77812 configuration read failed on I2C5";
-    } else if ((pmicVersion & 7) == kVersionEs2) {
-      refusal = "the MAX77812 is ES2 silicon, which L4T trims first";
+    using namespace switchclk;
+    const Cpu cpu = readCpu(car);
+    const uint32_t policy = rd(car, CCLKG_BURST_POLICY), divider = rd(car, SUPER_CCLKG_DIVIDER);
+    const uint32_t pllp = rd(car, PLLP_BASE), outb = rd(car, PLLP_OUTB), enbY = rd(car, CLK_OUT_ENB_Y);
+    const char *refusal = nullptr;
+    int err = 0;
+    snprintf(clockState, sizeof(clockState),
+             "CCLKG %#x (state %u, run source %u), SUPER_CCLKG_DIVIDER %#x, PLLP_BASE "
+             "%#x, PLLP_OUTB %#x (OUT4 %s, %u kHz), CLK_OUT_ENB_Y %#x (PLLP_OUT_CPU %s), RST_DEVICES_Y bit 31 %u",
+             policy, policy >> 28, (policy >> 4) & 0xf, divider, pllp, outb,
+             (outb & kOut4Running) == kOut4Running ? "on" : "off", kPllpKHz * 2 / ((outb >> 24) + 2), enbY,
+             enbY & kPllpOutCpu ? "on" : "off", (rd(car, RST_DEVICES_Y) >> 31) & 1);
+    trace("step 0: %s", clockState);
+    if (!fuse) fuse = (volatile uint8_t *)ml_io_map(kFusePA, 0x400);
+    if (!apbMisc) apbMisc = (volatile uint8_t *)ml_io_map(kApbMiscPA, 0x100);
+    if (!fuse || !apbMisc) {
+        refusal = "FUSE/APB_MISC mapping failed";
+    } else {
+        wr(car, CLK_ENB_H_SET, kFuseClock);
+        wr(car, MISC_CLK_ENB, rd(car, MISC_CLK_ENB) | kFuseVisible);
+        (void)rd(car, MISC_CLK_ENB);
+        const uint32_t hidrev = rd(apbMisc, APB_MISC_HIDREV), sku = rd(fuse, FUSE_CACHE + FUSE_SKU_INFO) & 0xff;
+        cpuSpeedo = (int)rd(fuse, FUSE_CACHE + FUSE_CPU_SPEEDO_0);
+        cpuSpeedoId = sku == 0x87 ? 3 : 0;
+        cpuProcess = cpuSpeedo < (int)kB01ProcessSpeedo ? 0 : 1;
+        if (policy != cpu.policy || divider != cpu.divider)
+            refusal = "CCLKG_BURST_POLICY/SUPER_CCLKG_DIVIDER differ from the 0x20/0x24 alias";
+        else if ((policy >> 28) != 2)
+            refusal = "the cluster is not in the RUN state";
+        else if (cpu.source != kSourcePllx)
+            refusal = "the CPU does not run from PLLX";
+        else if ((cpu.pllx & (kPllEnable | kPllBypass | kPllLock)) != (kPllEnable | kPllLock))
+            refusal = "PLLX is not locked";
+        else if ((divider & (1u << 31)) && ((divider >> 8) & 0xff) != (divider & 0xff))
+            refusal = "the CCLK divider is in use";
+        else if (refKHz(car) != 38400)
+            refusal = "pll_ref is not 38.4 MHz";
+        else if ((outb & kOut4Running) != kOut4Running)
+            refusal = "PLLP_OUT4, the cluster's backup clock, is off";
+        else if (((hidrev >> 8) & 0xff) != 0x21 || ((hidrev >> 4) & 0xf) != 2)
+            refusal = "not a T210B01 (HIDREV)";
+        else if (cpuSpeedo <= 0 || cpuSpeedo > 4000)
+            refusal = "the CPU speedo is not fused";
+        else if ((err = readCpuRail(&cpuRail, &keptVout)))
+            refusal = "VDD_CPU (MAX77812) does not answer on I2C5";
+        else if (voutMilliVolts(keptVout) > kPerfMilliVolts)
+            refusal = "VDD_CPU is already above 1120 mV";
+        else if ((err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812Version, &pmicVersion, 1)) ||
+                 (err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812M4Cfg, &m4Cfg, 1)) ||
+                 (err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812GlbCfg2, &glbCfg2, 1))) {
+            refusal = "MAX77812 configuration read failed on I2C5";
+        } else if ((pmicVersion & 7) == kVersionEs2) {
+            refusal = "the MAX77812 is ES2 silicon, which L4T trims first";
+        }
     }
-  }
-  if (refusal) {
-    perfSettled = true;
-    IOLog("SwitchPerf: CPU raise not applied for this boot: %s (CCLK %#x, PLLX %#x, CPU speedo %d, I2C5 %d; %s)\n",
-          refusal, cpu.policy, cpu.pllx, cpuSpeedo, err, clockState);
-    return false;
-  }
-  if (!m4CfgKept) {
-    // The limit the PMIC came up with, for the log: after SC7 M4_CFG still holds the one written here.
-    m4CfgKept = true;
-    m4CfgBoot = m4Cfg;
-  }
-  perfTop = 0;
-  while (perfTop < kRungCount && cvbMilliVolts(kRungs[perfTop], cpuSpeedo, kPllMarginPct) <= kPerfMilliVolts) ++perfTop;
-  keptPolicy = policy;
-  keptPllx = cpu.pllx;
-  perfKept = true;
-  return true;
+    if (refusal) {
+        perfSettled = true;
+        IOLog("SwitchPerf: CPU raise not applied for this boot: %s (CCLK %#x, PLLX %#x, CPU speedo %d, I2C5 %d; %s)\n",
+              refusal, cpu.policy, cpu.pllx, cpuSpeedo, err, clockState);
+        return false;
+    }
+    if (!m4CfgKept) {
+        // The limit the PMIC came up with, for the log: after SC7 M4_CFG still holds the one written here.
+        m4CfgKept = true;
+        m4CfgBoot = m4Cfg;
+    }
+    perfTop = 0;
+    while (perfTop < kRungCount && cvbMilliVolts(kRungs[perfTop], cpuSpeedo, kPllMarginPct) <= kPerfMilliVolts)
+        ++perfTop;
+    keptPolicy = policy;
+    keptPllx = cpu.pllx;
+    perfKept = true;
+    return true;
 }
 
 // Step 2: M4's peak current limit to L4T's 7.2 A (max77812_config_init: M4_CFG bits 6:4), read back.
 bool SwitchThermal::setCurrentLimit()
 {
-  using namespace switchclk;
-  const uint8_t want = (uint8_t)((m4Cfg & ~kPeakCurrentMask) | kPeakCurrent7200mA);
-  uint8_t check = 0;
-  int err = 0;
-  trace("step %u: MAX77812 0x%02x M4_CFG 0x%02x -> 0x%02x (7.2 A)", kStepCurrentLimit, cpuRail, m4Cfg, want);
-  if (want != m4Cfg) err = tegra_i2c_write(kPmicBus, cpuRail, kMax77812M4Cfg, &want, 1);
-  if (!err) err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812M4Cfg, &check, 1);
-  if (err || check != want) {
-    IOLog("SwitchPerf: CPU raise stopped at step %u: MAX77812 M4_CFG write failed (I2C5 %d, reads 0x%02x)\n",
-          kStepCurrentLimit, err, check);
-    return false;
-  }
-  m4Cfg = check;
-  perfLimited = true;
-  return true;
+    using namespace switchclk;
+    const uint8_t want = (uint8_t)((m4Cfg & ~kPeakCurrentMask) | kPeakCurrent7200mA);
+    uint8_t check = 0;
+    int err = 0;
+    trace("step %u: MAX77812 0x%02x M4_CFG 0x%02x -> 0x%02x (7.2 A)", kStepCurrentLimit, cpuRail, m4Cfg, want);
+    if (want != m4Cfg) err = tegra_i2c_write(kPmicBus, cpuRail, kMax77812M4Cfg, &want, 1);
+    if (!err) err = tegra_i2c_read(kPmicBus, cpuRail, kMax77812M4Cfg, &check, 1);
+    if (err || check != want) {
+        IOLog("SwitchPerf: CPU raise stopped at step %u: MAX77812 M4_CFG write failed (I2C5 %d, reads 0x%02x)\n",
+              kStepCurrentLimit, err, check);
+        return false;
+    }
+    m4Cfg = check;
+    perfLimited = true;
+    return true;
 }
 
 // Step 3: VDD_CPU to kPerfMilliVolts at the clock running now, read back, then the slew settle.
 bool SwitchThermal::raiseRail()
 {
-  using namespace switchclk;
-  uint8_t check = 0;
-  trace("step %u: VDD_CPU %u -> %u mV (M4_VOUT 0x%02x)", kStepRail, voutMilliVolts(keptVout), kPerfMilliVolts, kPerfVout);
-  int err = tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &kPerfVout, 1);
-  if (!err) err = tegra_i2c_read(kPmicBus, cpuRail, kM4Vout, &check, 1);
-  if (err || check != kPerfVout) {
-    (void)tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &keptVout, 1);
-    IOLog("SwitchPerf: CPU raise stopped at step %u: VDD_CPU write failed (I2C5 %d, reads back %u mV)\n", kStepRail,
-          err, voutMilliVolts(check));
-    return false;
-  }
-  IOSleep(kRailSettleMS);
-  perfRaised = true;
-  return true;
+    using namespace switchclk;
+    uint8_t check = 0;
+    trace("step %u: VDD_CPU %u -> %u mV (M4_VOUT 0x%02x)", kStepRail, voutMilliVolts(keptVout), kPerfMilliVolts,
+          kPerfVout);
+    int err = tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &kPerfVout, 1);
+    if (!err) err = tegra_i2c_read(kPmicBus, cpuRail, kM4Vout, &check, 1);
+    if (err || check != kPerfVout) {
+        (void)tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &keptVout, 1);
+        IOLog("SwitchPerf: CPU raise stopped at step %u: VDD_CPU write failed (I2C5 %d, reads back %u mV)\n", kStepRail,
+              err, voutMilliVolts(check));
+        return false;
+    }
+    IOSleep(kRailSettleMS);
+    perfRaised = true;
+    return true;
 }
 
 uint32_t SwitchThermal::rungBase(unsigned rung) const
 {
-  const Rung &r = kRungs[rung];
-  return (keptPllx & ~switchclk::kPllDividers) | (r.pdivCode << 20) | (r.n << 8) | kPllxM;
+    const Rung &r = kRungs[rung];
+    return (keptPllx & ~switchclk::kPllDividers) | (r.pdivCode << 20) | (r.n << 8) | kPllxM;
 }
 
 // Moves the CPU up its ladder (top of the file): steps 1 and 2 once, then VDD_CPU, then one rung after
@@ -735,143 +805,155 @@ uint32_t SwitchThermal::rungBase(unsigned rung) const
 // drop. A refusal or a failed step logs one line and settles it for the boot. Work loop only.
 bool SwitchThermal::raiseCpu(int soc)
 {
-  using namespace switchclk;
-  if (!perfKept && !preparePerf()) return false;
-  if (dfllMode) {
-    if (!perfLimited && perfSteps >= kStepCurrentLimit && !setCurrentLimit()) {
-      perfSettled = true;
-      return false;
+    using namespace switchclk;
+    if (!perfKept && !preparePerf()) return false;
+    if (dfllMode) {
+        if (!perfLimited && perfSteps >= kStepCurrentLimit && !setCurrentLimit()) {
+            perfSettled = true;
+            return false;
+        }
+        if (raiseDfll(soc)) return true;
     }
-    if (raiseDfll(soc)) return true;
-  }
-  const unsigned bootKHz = readCpu(car).kHz, last = kStepFirstRung - 1 + perfTop;
-  const unsigned stop = perfSteps < last ? perfSteps : last;
-  const char *failed = nullptr;
-  if (!perfTop) {
-    perfSettled = true;
-    IOLog("SwitchPerf: CPU raise not applied for this boot: CPU speedo %d needs %u mV at %u MHz (L4T CVB + %u %%), "
-          "above %u mV\n", cpuSpeedo, cvbMilliVolts(kRungs[0], cpuSpeedo, kPllMarginPct), kRungs[0].rowMHz,
-          kPllMarginPct, kPerfMilliVolts);
-    return false;
-  }
-  for (unsigned step = perfRelocked ? kStepRail : kStepRelock; step <= stop && !failed; ++step) {
-    if (step == kStepRelock) {
-      trace("step %u: relock PLLX at the boot dividers (%#x) through PLLP_OUT4", step, keptPllx);
-      if (runCpuFromPllx(keptPllx, step)) perfRelocked = true;
-      else failed = "the PLLP_OUT_CPU gate or the cluster mux did not read back; CPU left on PLLX";
-    } else if (step == kStepCurrentLimit) {
-      if (!perfLimited && !setCurrentLimit()) failed = "";
-    } else if (step == kStepRail) {
-      if (!raiseRail()) failed = "";
-    } else {
-      const unsigned rung = step - kStepFirstRung;
-      trace("step %u: rung %u MHz = %u kHz (PLLX M%u N%u P%u, L4T CVB + %u %% = %u mV)", step, kRungs[rung].rowMHz,
-            rungKHz(kRungs[rung]), kPllxM, kRungs[rung].n, kRungs[rung].pdivCode + 1, kPllMarginPct,
-            cvbMilliVolts(kRungs[rung], cpuSpeedo, kPllMarginPct));
-      if (runCpuFromPllx(rungBase(rung), step)) perfRung = rung + 1;
-      else failed = "the PLLP_OUT_CPU gate or the cluster mux did not read back; CPU left on PLLX";
+    const unsigned bootKHz = readCpu(car).kHz, last = kStepFirstRung - 1 + perfTop;
+    const unsigned stop = perfSteps < last ? perfSteps : last;
+    const char *failed = nullptr;
+    if (!perfTop) {
+        perfSettled = true;
+        IOLog("SwitchPerf: CPU raise not applied for this boot: CPU speedo %d needs %u mV at %u MHz (L4T CVB + %u %%), "
+              "above %u mV\n",
+              cpuSpeedo, cvbMilliVolts(kRungs[0], cpuSpeedo, kPllMarginPct), kRungs[0].rowMHz, kPllMarginPct,
+              kPerfMilliVolts);
+        return false;
     }
-    if (failed && *failed) {
-      IOLog("SwitchPerf: CPU raise stopped at step %u: %s (CCLKG %#x, CCLK %#x)\n", step, failed,
-            rd(car, CCLKG_BURST_POLICY), rd(car, CCLK_BURST_POLICY));
+    for (unsigned step = perfRelocked ? kStepRail : kStepRelock; step <= stop && !failed; ++step) {
+        if (step == kStepRelock) {
+            trace("step %u: relock PLLX at the boot dividers (%#x) through PLLP_OUT4", step, keptPllx);
+            if (runCpuFromPllx(keptPllx, step))
+                perfRelocked = true;
+            else
+                failed = "the PLLP_OUT_CPU gate or the cluster mux did not read back; CPU left on PLLX";
+        } else if (step == kStepCurrentLimit) {
+            if (!perfLimited && !setCurrentLimit()) failed = "";
+        } else if (step == kStepRail) {
+            if (!raiseRail()) failed = "";
+        } else {
+            const unsigned rung = step - kStepFirstRung;
+            trace("step %u: rung %u MHz = %u kHz (PLLX M%u N%u P%u, L4T CVB + %u %% = %u mV)", step,
+                  kRungs[rung].rowMHz, rungKHz(kRungs[rung]), kPllxM, kRungs[rung].n, kRungs[rung].pdivCode + 1,
+                  kPllMarginPct, cvbMilliVolts(kRungs[rung], cpuSpeedo, kPllMarginPct));
+            if (runCpuFromPllx(rungBase(rung), step))
+                perfRung = rung + 1;
+            else
+                failed = "the PLLP_OUT_CPU gate or the cluster mux did not read back; CPU left on PLLX";
+        }
+        if (failed && *failed) {
+            IOLog("SwitchPerf: CPU raise stopped at step %u: %s (CCLKG %#x, CCLK %#x)\n", step, failed,
+                  rd(car, CCLKG_BURST_POLICY), rd(car, CCLK_BURST_POLICY));
+        }
     }
-  }
-  if (failed) {
-    restoreCpu("raise stopped", true);
-    perfSettled = true;
-    return false;
-  }
-  if (!perfRaised) {
-    // switch-perf-steps stopped it before VDD_CPU: nothing raised, nothing to come back to.
-    perfSettled = true;
-    IOLog("SwitchPerf: stopped after step %u of %u as switch-perf-steps asks (CPU speedo %d id %d process %d; "
-          "MAX77812 0x%02x v%u M4_CFG 0x%02x -> 0x%02x, ramp up %u uV/us; top %u MHz; %s)\n", stop, last, cpuSpeedo,
-          cpuSpeedoId, cpuProcess, cpuRail, pmicVersion & 7, m4CfgBoot, m4Cfg, rampUpUvPerUs(glbCfg2),
-          kRungs[perfTop - 1].rowMHz, clockState);
-    return false;
-  }
-  ++perfRaises;
-  const Rung &top = kRungs[perfTop - 1];
-  const unsigned mhz = readCpu(car).kHz / 1000;
-  publish("CPUClockMHz", mhz);
-  publish("CPURaises", perfRaises);
-  char next[48] = "";
-  if (perfTop < kRungCount) {
-    snprintf(next, sizeof(next), "; %u MHz would need %u mV", kRungs[perfTop].rowMHz,
-             cvbMilliVolts(kRungs[perfTop], cpuSpeedo, kPllMarginPct));
-  }
-  IOLog("SwitchPerf: CPU %u -> %u MHz at %u mV (step %u of %u, raise %u; CPU speedo %d id %d process %d, top %u MHz: "
-        "L4T CVB %u mV + %u %%%s; MAX77812 0x%02x v%u M4_CFG 0x%02x -> 0x%02x, ramp up %u uV/us); SoC %d.%d C, "
-        "down at %d C\n",
-        bootKHz / 1000, mhz, kPerfMilliVolts, stop, last, perfRaises, cpuSpeedo, cpuSpeedoId, cpuProcess,
-        top.rowMHz, cvbMilliVolts(top, cpuSpeedo, 0), kPllMarginPct, next, cpuRail, pmicVersion & 7, m4CfgBoot,
-        m4Cfg, rampUpUvPerUs(glbCfg2), soc / 1000, soc % 1000 / 100, kPerfTripMilliC / 1000);
-  return true;
+    if (failed) {
+        restoreCpu("raise stopped", true);
+        perfSettled = true;
+        return false;
+    }
+    if (!perfRaised) {
+        // switch-perf-steps stopped it before VDD_CPU: nothing raised, nothing to come back to.
+        perfSettled = true;
+        IOLog("SwitchPerf: stopped after step %u of %u as switch-perf-steps asks (CPU speedo %d id %d process %d; "
+              "MAX77812 0x%02x v%u M4_CFG 0x%02x -> 0x%02x, ramp up %u uV/us; top %u MHz; %s)\n",
+              stop, last, cpuSpeedo, cpuSpeedoId, cpuProcess, cpuRail, pmicVersion & 7, m4CfgBoot, m4Cfg,
+              rampUpUvPerUs(glbCfg2), kRungs[perfTop - 1].rowMHz, clockState);
+        return false;
+    }
+    ++perfRaises;
+    const Rung &top = kRungs[perfTop - 1];
+    const unsigned mhz = readCpu(car).kHz / 1000;
+    publish("CPUClockMHz", mhz);
+    publish("CPURaises", perfRaises);
+    char next[48] = "";
+    if (perfTop < kRungCount) {
+        snprintf(next, sizeof(next), "; %u MHz would need %u mV", kRungs[perfTop].rowMHz,
+                 cvbMilliVolts(kRungs[perfTop], cpuSpeedo, kPllMarginPct));
+    }
+    IOLog("SwitchPerf: CPU %u -> %u MHz at %u mV (step %u of %u, raise %u; CPU speedo %d id %d process %d, top %u MHz: "
+          "L4T CVB %u mV + %u %%%s; MAX77812 0x%02x v%u M4_CFG 0x%02x -> 0x%02x, ramp up %u uV/us); SoC %d.%d C, "
+          "down at %d C\n",
+          bootKHz / 1000, mhz, kPerfMilliVolts, stop, last, perfRaises, cpuSpeedo, cpuSpeedoId, cpuProcess, top.rowMHz,
+          cvbMilliVolts(top, cpuSpeedo, 0), kPllMarginPct, next, cpuRail, pmicVersion & 7, m4CfgBoot, m4Cfg,
+          rampUpUvPerUs(glbCfg2), soc / 1000, soc % 1000 / 100, kPerfTripMilliC / 1000);
+    return true;
 }
 
 // DFLL mode: L4T's floor/cap indices for this SoC temperature (1 C hysteresis on the way down), applied when they
 // change. Work loop only.
 void SwitchThermal::updateDfllThermal(int soc)
 {
-  unsigned floorIndex = soc >= kDfllFloorWarmMilliC ? TEGRA_DFLL_FLOOR_WARM : TEGRA_DFLL_FLOOR_COLD;
-  if (dfllFloor == TEGRA_DFLL_FLOOR_WARM && soc >= kDfllFloorWarmMilliC - kPerfHysteresisMilliC) {
-    floorIndex = TEGRA_DFLL_FLOOR_WARM;
-  }
-  unsigned capIndex = soc >= kDfllCap2MilliC ? TEGRA_DFLL_CAP_1010MV
-                      : soc >= kDfllCap1MilliC ? TEGRA_DFLL_CAP_1060MV : TEGRA_DFLL_CAP_NONE;
-  if (dfllCap == TEGRA_DFLL_CAP_1010MV && soc >= kDfllCap2MilliC - kPerfHysteresisMilliC) capIndex = TEGRA_DFLL_CAP_1010MV;
-  if (dfllCap == TEGRA_DFLL_CAP_1060MV && capIndex == TEGRA_DFLL_CAP_NONE &&
-      soc >= kDfllCap1MilliC - kPerfHysteresisMilliC) {
-    capIndex = TEGRA_DFLL_CAP_1060MV;
-  }
-  if (floorIndex == dfllFloor && capIndex == dfllCap) return;
-  const int err = tegra_dfll_cpu_set_thermal(floorIndex, capIndex);
-  if (capIndex != dfllCap) {
-    IOLog("SwitchPerf: SoC %d.%d C: DFLL voltage cap %s (%d)\n", soc / 1000, soc % 1000 / 100,
-          capIndex == TEGRA_DFLL_CAP_NONE ? "off" : capIndex == TEGRA_DFLL_CAP_1060MV ? "1060 mV" : "1010 mV", err);
-  }
-  dfllFloor = floorIndex;
-  dfllCap = capIndex;
+    unsigned floorIndex = soc >= kDfllFloorWarmMilliC ? TEGRA_DFLL_FLOOR_WARM : TEGRA_DFLL_FLOOR_COLD;
+    if (dfllFloor == TEGRA_DFLL_FLOOR_WARM && soc >= kDfllFloorWarmMilliC - kPerfHysteresisMilliC) {
+        floorIndex = TEGRA_DFLL_FLOOR_WARM;
+    }
+    unsigned capIndex = soc >= kDfllCap2MilliC   ? TEGRA_DFLL_CAP_1010MV
+                        : soc >= kDfllCap1MilliC ? TEGRA_DFLL_CAP_1060MV
+                                                 : TEGRA_DFLL_CAP_NONE;
+    if (dfllCap == TEGRA_DFLL_CAP_1010MV && soc >= kDfllCap2MilliC - kPerfHysteresisMilliC)
+        capIndex = TEGRA_DFLL_CAP_1010MV;
+    if (dfllCap == TEGRA_DFLL_CAP_1060MV && capIndex == TEGRA_DFLL_CAP_NONE &&
+        soc >= kDfllCap1MilliC - kPerfHysteresisMilliC) {
+        capIndex = TEGRA_DFLL_CAP_1060MV;
+    }
+    if (floorIndex == dfllFloor && capIndex == dfllCap) return;
+    const int err = tegra_dfll_cpu_set_thermal(floorIndex, capIndex);
+    if (capIndex != dfllCap) {
+        IOLog("SwitchPerf: SoC %d.%d C: DFLL voltage cap %s (%d)\n", soc / 1000, soc % 1000 / 100,
+              capIndex == TEGRA_DFLL_CAP_NONE     ? "off"
+              : capIndex == TEGRA_DFLL_CAP_1060MV ? "1060 mV"
+                                                  : "1010 mV",
+              err);
+    }
+    dfllFloor = floorIndex;
+    dfllCap = capIndex;
 }
 
 // DFLL mode raise: prepare once, set the thermal indices for this temperature, then enable at the 1785 MHz row.
 // Any failure (one log line with the driver's reason) leaves the CPU on PLLX and the PLL mode for the boot.
 bool SwitchThermal::raiseDfll(int soc)
 {
-  char why[160] = "";
-  int err = dfllPrepared ? 0 : tegra_dfll_cpu_prepare(why, sizeof(why));
-  if (!err) {
-    dfllPrepared = true;
-    dfllFloor = dfllCap = ~0u;
-    updateDfllThermal(soc);
-    err = tegra_dfll_cpu_enable(kDfllRateHz, why, sizeof(why));
-  }
-  if (err) {
-    dfllMode = false;
-    IOLog("SwitchPerf: DFLL not used (%d: %s); PLL mode for this boot\n", err, why);
-    return false;
-  }
-  perfRaised = true;
-  ++perfRaises;
-  char state[224];
-  tegra_dfll_cpu_describe(kDfllRateHz, state, sizeof(state));
-  const unsigned mhz = switchclk::readCpu(car).kHz / 1000;
-  publish("CPUClockMHz", mhz);
-  publish("CPURaises", perfRaises);
-  IOLog("SwitchPerf: CPU on the DFLL at %lu MHz (raise %u; SoC %d.%d C): %s\n", kDfllRateHz / 1000000, perfRaises,
-        soc / 1000, soc % 1000 / 100, state);
-  return true;
+    char why[160] = "";
+    int err = dfllPrepared ? 0 : tegra_dfll_cpu_prepare(why, sizeof(why));
+    if (!err) {
+        dfllPrepared = true;
+        dfllFloor = dfllCap = ~0u;
+        updateDfllThermal(soc);
+        err = tegra_dfll_cpu_enable(kDfllRateHz, why, sizeof(why));
+    }
+    if (err) {
+        dfllMode = false;
+        IOLog("SwitchPerf: DFLL not used (%d: %s); PLL mode for this boot\n", err, why);
+        return false;
+    }
+    perfRaised = true;
+    ++perfRaises;
+    char state[224];
+    tegra_dfll_cpu_describe(kDfllRateHz, state, sizeof(state));
+    const unsigned mhz = switchclk::readCpu(car).kHz / 1000;
+    publish("CPUClockMHz", mhz);
+    publish("CPURaises", perfRaises);
+    IOLog("SwitchPerf: CPU on the DFLL at %lu MHz (raise %u; SoC %d.%d C): %s\n", kDfllRateHz / 1000000, perfRaises,
+          soc / 1000, soc % 1000 / 100, state);
+    return true;
 }
 
 // Hands the CPU back to PLLX (DFLL mode only) on this service's work loop, before SwitchPMIC's shut-down/restart
 // traffic on I2C5. The PLL mode needs nothing: it has no second master on the bus.
 void SwitchThermal::quiesceCpu()
 {
-  loop->runAction([](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
-    auto *self = static_cast<SwitchThermal *>(owner);
-    if (self->perfRaised && self->dfllMode) self->restoreCpu("shutting down", true);
-    return kIOReturnSuccess;
-  }, this);
+    loop->runAction(
+        [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchThermal *>(owner);
+            if (self->perfRaised && self->dfllMode) self->restoreCpu("shutting down", true);
+            return kIOReturnSuccess;
+        },
+        this);
 }
 
 // System sleep (SwitchSuspend's sleep and wake actions, thread context, I2C up). Before SC7: no more readings, the CPU
@@ -880,51 +962,55 @@ void SwitchThermal::quiesceCpu()
 // from the timer, and the CPU raise starts over from the clocks the console resumed with (captured again).
 void SwitchThermal::suspend()
 {
-  loop->runAction([](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
-    auto *self = static_cast<SwitchThermal *>(owner);
-    self->timer->cancelTimeout();
-    if (self->alertArmed) {
-      self->alert->disable();
-      self->alertArmed = false;
-    }
-    self->restoreCpu("system sleep", false);
-    self->setDrive(0);
-    self->gpioMasked(kPortA, MSK_OUT, kPinPA5, false);
-    return kIOReturnSuccess;
-  }, this);
+    loop->runAction(
+        [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchThermal *>(owner);
+            self->timer->cancelTimeout();
+            if (self->alertArmed) {
+                self->alert->disable();
+                self->alertArmed = false;
+            }
+            self->restoreCpu("system sleep", false);
+            self->setDrive(0);
+            self->gpioMasked(kPortA, MSK_OUT, kPinPA5, false);
+            return kIOReturnSuccess;
+        },
+        this);
 }
 
 void SwitchThermal::resume()
 {
-  loop->runAction([](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
-    auto *self = static_cast<SwitchThermal *>(owner);
-    self->fanPowerOn();
-    self->setDrive(kSafeDrive);
-    self->sensorReady = false;
-    self->perfKept = self->perfRelocked = self->perfLimited = false;
-    self->perfRung = 0;
-    self->perfHoldUntil = 0;
-    self->timer->setTimeoutMS(1);
-    return kIOReturnSuccess;
-  }, this);
+    loop->runAction(
+        [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchThermal *>(owner);
+            self->fanPowerOn();
+            self->setDrive(kSafeDrive);
+            self->sensorReady = false;
+            self->perfKept = self->perfRelocked = self->perfLimited = false;
+            self->perfRung = 0;
+            self->perfHoldUntil = 0;
+            self->timer->setTimeoutMS(1);
+            return kIOReturnSuccess;
+        },
+        this);
 }
 
 uint32_t SwitchThermal::holdRemainingMS() const
 {
-  const uint64_t now = mach_absolute_time();
-  if (now >= perfHoldUntil) return 0;
-  uint64_t ns = 0;
-  absolutetime_to_nanoseconds(perfHoldUntil - now, &ns);
-  return (uint32_t)(ns / 1000000) + 1;
+    const uint64_t now = mach_absolute_time();
+    if (now >= perfHoldUntil) return 0;
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(perfHoldUntil - now, &ns);
+    return (uint32_t)(ns / 1000000) + 1;
 }
 
 // The timer's next shot: the staleness bound, or sooner for a sensor being (re)initialized, or for
 // the end of a CPU hold-off.
 uint32_t SwitchThermal::nextTickMS(bool ok) const
 {
-  if (!ok) return sensorReady ? kConversionMS : kRetryMS;
-  const uint32_t hold = perfPending() ? holdRemainingMS() : 0;
-  return hold && hold < kStaleMS ? hold : kStaleMS;
+    if (!ok) return sensorReady ? kConversionMS : kRetryMS;
+    const uint32_t hold = perfPending() ? holdRemainingMS() : 0;
+    return hold && hold < kStaleMS ? hold : kStaleMS;
 }
 
 // Back to the inherited clocks: the frequency first, then VDD_CPU, with one log line. `forGood`
@@ -933,38 +1019,41 @@ uint32_t SwitchThermal::nextTickMS(bool ok) const
 // failure before the first raise only delays it (the fan runs at full speed meanwhile).
 void SwitchThermal::restoreCpu(const char *why, bool forGood)
 {
-  using namespace switchclk;
-  if (!perfRaised) return;
-  perfRaised = false;
-  if (forGood) perfSettled = true;
-  if (dfllMode) {
-    char because[160] = "";
-    const int err = tegra_dfll_cpu_disable_to_pllx(because, sizeof(because));
-    dfllMode = false;   // after a disable, the rest of the boot is the PLL mode
-    publish("CPUClockMHz", switchclk::readCpu(car).kHz / 1000);
-    IOLog("SwitchPerf: %s: CPU off the DFLL, back on %s%s%s\n", why, err ? "PLLP 408 MHz" : "the inherited PLLX",
-          err ? ": " : "", because);
-    return;
-  }
-  clock_interval_to_deadline(kPerfHoldMS, kMillisecondScale, &perfHoldUntil);
-  if (perfRung && !runCpuFromPllx(keptPllx, 0)) {
-    perfSettled = true;
-    IOLog("SwitchPerf: %s: the PLLP_OUT_CPU gate or the cluster mux did not read back; CPU left at %u MHz and %u mV "
-          "for this boot\n", why,
-          readCpu(car).kHz / 1000, kPerfMilliVolts);
-    return;
-  }
-  perfRung = 0;
-  const int err = tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &keptVout, 1);
-  if (!err) IOSleep(kRailSettleMS);
-  const unsigned mhz = readCpu(car).kHz / 1000;
-  publish("CPUClockMHz", mhz);
-  char again[64];
-  if (forGood) snprintf(again, sizeof(again), "for the rest of this boot");
-  else snprintf(again, sizeof(again), "up again below %d C, not before %u s", (kPerfTripMilliC - kPerfHysteresisMilliC) / 1000,
-                kPerfHoldMS / 1000);
-  IOLog("SwitchPerf: %s: CPU back to %u MHz at %u mV%s, %s\n", why, mhz, voutMilliVolts(err ? kPerfVout : keptVout),
-        err ? " (VDD_CPU write failed, it stays raised)" : "", again);
+    using namespace switchclk;
+    if (!perfRaised) return;
+    perfRaised = false;
+    if (forGood) perfSettled = true;
+    if (dfllMode) {
+        char because[160] = "";
+        const int err = tegra_dfll_cpu_disable_to_pllx(because, sizeof(because));
+        dfllMode = false;  // after a disable, the rest of the boot is the PLL mode
+        publish("CPUClockMHz", switchclk::readCpu(car).kHz / 1000);
+        IOLog("SwitchPerf: %s: CPU off the DFLL, back on %s%s%s\n", why, err ? "PLLP 408 MHz" : "the inherited PLLX",
+              err ? ": " : "", because);
+        return;
+    }
+    clock_interval_to_deadline(kPerfHoldMS, kMillisecondScale, &perfHoldUntil);
+    if (perfRung && !runCpuFromPllx(keptPllx, 0)) {
+        perfSettled = true;
+        IOLog(
+            "SwitchPerf: %s: the PLLP_OUT_CPU gate or the cluster mux did not read back; CPU left at %u MHz and %u mV "
+            "for this boot\n",
+            why, readCpu(car).kHz / 1000, kPerfMilliVolts);
+        return;
+    }
+    perfRung = 0;
+    const int err = tegra_i2c_write(kPmicBus, cpuRail, kM4Vout, &keptVout, 1);
+    if (!err) IOSleep(kRailSettleMS);
+    const unsigned mhz = readCpu(car).kHz / 1000;
+    publish("CPUClockMHz", mhz);
+    char again[64];
+    if (forGood)
+        snprintf(again, sizeof(again), "for the rest of this boot");
+    else
+        snprintf(again, sizeof(again), "up again below %d C, not before %u s",
+                 (kPerfTripMilliC - kPerfHysteresisMilliC) / 1000, kPerfHoldMS / 1000);
+    IOLog("SwitchPerf: %s: CPU back to %u MHz at %u mV%s, %s\n", why, mhz, voutMilliVolts(err ? kPerfVout : keptVout),
+          err ? " (VDD_CPU write failed, it stays raised)" : "", again);
 }
 
 // Runs the cluster from PLLP_OUT4 (408 MHz) while PLLX is stopped, given `pllxBase`'s dividers and
@@ -977,84 +1066,85 @@ void SwitchThermal::restoreCpu(const char *why, bool forGood)
 // trace and the panic (0: the way down).
 bool SwitchThermal::runCpuFromPllx(uint32_t pllxBase, unsigned step)
 {
-  using namespace switchclk;
-  const uint32_t parked = (keptPolicy & ~0xf0u) | (kSourcePllpOut4 << 4);   // the RUN source only
-  const uint32_t gateClose = rd(car, CLK_OUT_ENB_Y) & kPllpOutCpu ? 0 : kPllpOutCpu;   // only if it was shut
-  trace("step %u: PLLP_OUT_CPU gate on (CLK_OUT_ENB_Y %#x)", step, rd(car, CLK_OUT_ENB_Y));
-  // clk-periph-gate.c clk_periph_enable: set, 2 us, then out of reset if it is in reset (none on hardware so far).
-  wr(car, CLK_ENB_Y_SET, kPllpOutCpu);
-  (void)rd(car, CLK_OUT_ENB_Y);
-  IODelay(2);
-  if (rd(car, RST_DEVICES_Y) & kPllpOutCpu) {
-    IODelay(5);
-    wr(car, RST_DEV_Y_CLR, kPllpOutCpu);
-    (void)rd(car, RST_DEVICES_Y);
+    using namespace switchclk;
+    const uint32_t parked = (keptPolicy & ~0xf0u) | (kSourcePllpOut4 << 4);             // the RUN source only
+    const uint32_t gateClose = rd(car, CLK_OUT_ENB_Y) & kPllpOutCpu ? 0 : kPllpOutCpu;  // only if it was shut
+    trace("step %u: PLLP_OUT_CPU gate on (CLK_OUT_ENB_Y %#x)", step, rd(car, CLK_OUT_ENB_Y));
+    // clk-periph-gate.c clk_periph_enable: set, 2 us, then out of reset if it is in reset (none on hardware so far).
+    wr(car, CLK_ENB_Y_SET, kPllpOutCpu);
+    (void)rd(car, CLK_OUT_ENB_Y);
     IODelay(2);
-  }
-  if (!(rd(car, CLK_OUT_ENB_Y) & kPllpOutCpu) || (rd(car, RST_DEVICES_Y) & kPllpOutCpu)) {
-    if (gateClose) wr(car, CLK_ENB_Y_CLR, gateClose);
-    return false;
-  }
-  trace("step %u: cluster mux to PLLP_OUT4 (CCLKG %#x)", step, parked);
-  wr(car, CCLKG_BURST_POLICY, parked);
-  IODelay(2);   // clk-super.c clk_super_set_parent: udelay(2) after the mux write
-  if (rd(car, CCLKG_BURST_POLICY) != parked || rd(car, CCLK_BURST_POLICY) != parked) {
+    if (rd(car, RST_DEVICES_Y) & kPllpOutCpu) {
+        IODelay(5);
+        wr(car, RST_DEV_Y_CLR, kPllpOutCpu);
+        (void)rd(car, RST_DEVICES_Y);
+        IODelay(2);
+    }
+    if (!(rd(car, CLK_OUT_ENB_Y) & kPllpOutCpu) || (rd(car, RST_DEVICES_Y) & kPllpOutCpu)) {
+        if (gateClose) wr(car, CLK_ENB_Y_CLR, gateClose);
+        return false;
+    }
+    trace("step %u: cluster mux to PLLP_OUT4 (CCLKG %#x)", step, parked);
+    wr(car, CCLKG_BURST_POLICY, parked);
+    IODelay(2);  // clk-super.c clk_super_set_parent: udelay(2) after the mux write
+    if (rd(car, CCLKG_BURST_POLICY) != parked || rd(car, CCLK_BURST_POLICY) != parked) {
+        wr(car, CCLKG_BURST_POLICY, keptPolicy);
+        (void)rd(car, CCLKG_BURST_POLICY);
+        IODelay(2);
+        if (gateClose) wr(car, CLK_ENB_Y_CLR, gateClose);
+        return false;
+    }
+    const uint32_t stopped = pllxBase & ~(kPllEnable | kPllBypass | kPllLock);
+    trace("step %u: PLLX off, dividers %#x", step, stopped);
+    wr(car, PLLX_BASE, rd(car, PLLX_BASE) & ~kPllEnable);
+    wr(car, PLLX_BASE, stopped);
+    wr(car, PLLX_MISC, rd(car, PLLX_MISC) | kPllxLockEnable);
+    if (rd(car, PLLX_MISC3) & kPllxIddq) {
+        // clk-pll.c _clk_pll_enable: out of IDDQ, 5 us, before the enable (hekate already leaves it out).
+        wr(car, PLLX_MISC3, rd(car, PLLX_MISC3) & ~kPllxIddq);
+        (void)rd(car, PLLX_MISC3);
+        IODelay(5);
+    }
+    trace("step %u: PLLX on", step);
+    wr(car, PLLX_BASE, stopped | kPllEnable);
+    (void)rd(car, PLLX_BASE);
+    IOSleep(1);
+    const uint32_t locked = rd(car, PLLX_BASE);
+    if (!(locked & kPllLock)) {
+        panic("SwitchPerf: PLLX did not lock at step %u (PLLX_BASE %#x, PLLX_MISC %#x); the CPU is on PLLP_OUT4 at 408 "
+              "MHz",
+              step, locked, rd(car, PLLX_MISC));
+    }
+    trace("step %u: PLLX locked (%#x), cluster mux back to PLLX, then PLLP_OUT_CPU gate off", step, locked);
     wr(car, CCLKG_BURST_POLICY, keptPolicy);
     (void)rd(car, CCLKG_BURST_POLICY);
     IODelay(2);
-    if (gateClose) wr(car, CLK_ENB_Y_CLR, gateClose);
-    return false;
-  }
-  const uint32_t stopped = pllxBase & ~(kPllEnable | kPllBypass | kPllLock);
-  trace("step %u: PLLX off, dividers %#x", step, stopped);
-  wr(car, PLLX_BASE, rd(car, PLLX_BASE) & ~kPllEnable);
-  wr(car, PLLX_BASE, stopped);
-  wr(car, PLLX_MISC, rd(car, PLLX_MISC) | kPllxLockEnable);
-  if (rd(car, PLLX_MISC3) & kPllxIddq) {
-    // clk-pll.c _clk_pll_enable: out of IDDQ, 5 us, before the enable (hekate already leaves it out).
-    wr(car, PLLX_MISC3, rd(car, PLLX_MISC3) & ~kPllxIddq);
-    (void)rd(car, PLLX_MISC3);
-    IODelay(5);
-  }
-  trace("step %u: PLLX on", step);
-  wr(car, PLLX_BASE, stopped | kPllEnable);
-  (void)rd(car, PLLX_BASE);
-  IOSleep(1);
-  const uint32_t locked = rd(car, PLLX_BASE);
-  if (!(locked & kPllLock)) {
-    panic("SwitchPerf: PLLX did not lock at step %u (PLLX_BASE %#x, PLLX_MISC %#x); the CPU is on PLLP_OUT4 at 408 MHz",
-          step, locked, rd(car, PLLX_MISC));
-  }
-  trace("step %u: PLLX locked (%#x), cluster mux back to PLLX, then PLLP_OUT_CPU gate off", step, locked);
-  wr(car, CCLKG_BURST_POLICY, keptPolicy);
-  (void)rd(car, CCLKG_BURST_POLICY);
-  IODelay(2);
-  if (gateClose) wr(car, CLK_ENB_Y_CLR, gateClose);   // the clock framework closes the old parent's chain after it
-  return true;
+    if (gateClose) wr(car, CLK_ENB_Y_CLR, gateClose);  // the clock framework closes the old parent's chain after it
+    return true;
 }
 
 // switch-perf-trace=1: one line before a sub-step, then kTraceMS for the console to draw it.
 void SwitchThermal::trace(const char *format, ...)
 {
-  if (!perfTrace) return;
-  char line[288];
-  va_list args;
-  va_start(args, format);
-  vsnprintf(line, sizeof(line), format, args);
-  va_end(args);
-  IOLog("SwitchPerf trace: %s\n", line);
-  IOSleep(kTraceMS);
+    if (!perfTrace) return;
+    char line[288];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    IOLog("SwitchPerf trace: %s\n", line);
+    IOSleep(kTraceMS);
 }
 
 // The staleness re-read (and the sensor's (re)initialization). A pending ALERT that never reached the
 // CPU panics here rather than being picked up silently by the re-read.
 void SwitchThermal::timerFired(OSObject *owner, IOTimerEventSource *sender)
 {
-  auto *self = OSDynamicCast(SwitchThermal, owner);
-  if (!self) return;
-  if (self->alertArmed) tegra_gpio_check_delivery(TEGRA_GPIO_TEMP_ALERT, "SwitchThermal TMP451 ALERT");
-  const bool ok = self->evaluate();
-  sender->setTimeoutMS(self->nextTickMS(ok));
+    auto *self = OSDynamicCast(SwitchThermal, owner);
+    if (!self) return;
+    if (self->alertArmed) tegra_gpio_check_delivery(TEGRA_GPIO_TEMP_ALERT, "SwitchThermal TMP451 ALERT");
+    const bool ok = self->evaluate();
+    sender->setTimeoutMS(self->nextTickMS(ok));
 }
 
 // ALERT asserted (level low on PX4; the GPIO line stays masked while this runs). Re-evaluate and
@@ -1062,130 +1152,130 @@ void SwitchThermal::timerFired(OSObject *owner, IOTimerEventSource *sender)
 // again, so the line is released before it is unmasked (as nct1008_work_func does).
 void SwitchThermal::alertFired(OSObject *owner, IOInterruptEventSource *sender, int count)
 {
-  auto *self = OSDynamicCast(SwitchThermal, owner);
-  if (!self || !self->alertArmed) return;
-  const uint64_t now = mach_absolute_time();
-  uint64_t elapsedNS = 0;
-  absolutetime_to_nanoseconds(now - self->alertWindowStart, &elapsedNS);
-  if (elapsedNS > 1000000000ull) {
-    self->alertWindowStart = now;
-    self->alertCount = 0;
-  }
-  if (++self->alertCount > kAlertBurst) {
-    char state[192];
-    tegra_gpio_describe(TEGRA_GPIO_TEMP_ALERT, state, sizeof(state));
-    panic("SwitchThermal: TMP451 ALERT fired %u times in 1 s and is not released: %s", self->alertCount, state);
-  }
-  if (!self->evaluate()) {
-    // No good reading, so the line cannot be released: the fan is at full speed, the sensor is
-    // re-initialized from the timer, and the next good evaluation enables the source again.
-    sender->disable();
-    self->alertArmed = false;
-    self->timer->setTimeoutMS(self->sensorReady ? kConversionMS : kRetryMS);
-    return;
-  }
-  IOSleep(kConversionMS);
-  uint8_t status = 0;
-  (void)readByte(Status, &status);
+    auto *self = OSDynamicCast(SwitchThermal, owner);
+    if (!self || !self->alertArmed) return;
+    const uint64_t now = mach_absolute_time();
+    uint64_t elapsedNS = 0;
+    absolutetime_to_nanoseconds(now - self->alertWindowStart, &elapsedNS);
+    if (elapsedNS > 1000000000ull) {
+        self->alertWindowStart = now;
+        self->alertCount = 0;
+    }
+    if (++self->alertCount > kAlertBurst) {
+        char state[192];
+        tegra_gpio_describe(TEGRA_GPIO_TEMP_ALERT, state, sizeof(state));
+        panic("SwitchThermal: TMP451 ALERT fired %u times in 1 s and is not released: %s", self->alertCount, state);
+    }
+    if (!self->evaluate()) {
+        // No good reading, so the line cannot be released: the fan is at full speed, the sensor is
+        // re-initialized from the timer, and the next good evaluation enables the source again.
+        sender->disable();
+        self->alertArmed = false;
+        self->timer->setTimeoutMS(self->sensorReady ? kConversionMS : kRetryMS);
+        return;
+    }
+    IOSleep(kConversionMS);
+    uint8_t status = 0;
+    (void)readByte(Status, &status);
 }
 
 bool SwitchThermal::start(IOService *provider)
 {
-  if (!IOService::start(provider)) return false;
-  if (!mapRegisters()) {
-    IOLog("SwitchThermal: register mapping failed\n");
-    return false;
-  }
-  fanPowerOn();
-  setDrive(kSafeDrive);
+    if (!IOService::start(provider)) return false;
+    if (!mapRegisters()) {
+        IOLog("SwitchThermal: register mapping failed\n");
+        return false;
+    }
+    fanPowerOn();
+    setDrive(kSafeDrive);
 
-  unsigned choice = 0;
-  if (PE_parse_boot_argn("switch-fan-profile", &choice, sizeof(choice)) &&
-      choice < sizeof(kProfiles) / sizeof(kProfiles[0])) {
-    profile = &kProfiles[choice];
-  }
-  unsigned perf = 0, traced = 0;
-  PE_parse_boot_argn("switch-perf", &perf, sizeof(perf));
-  PE_parse_boot_argn("switch-perf-steps", &perfSteps, sizeof(perfSteps));
-  PE_parse_boot_argn("switch-perf-trace", &traced, sizeof(traced));
-  perfWanted = perf != 0;
-  perfTrace = perfWanted && traced != 0;
-  // Traced: the first raise waits until the console has caught up with the boot (a one-shot of the timer).
-  if (perfTrace) clock_interval_to_deadline(kTraceDelayMS, kMillisecondScale, &perfHoldUntil);
-  // switch-cpu-mode=pll|dfll (default pll; see the top of the file).
-  char mode[8] = "pll";
-  if (PE_parse_boot_arg_str("switch-cpu-mode", mode, sizeof(mode))) {
-    dfllMode = strcmp(mode, "dfll") == 0;
-    if (!dfllMode && strcmp(mode, "pll") != 0) IOLog("SwitchPerf: switch-cpu-mode=%s unknown; PLL mode\n", mode);
-  }
-  loop = IOWorkLoop::workLoop();
-  timer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchThermal::timerFired) : nullptr;
-  if (!timer || loop->addEventSource(timer) != kIOReturnSuccess) {
-    IOLog("SwitchThermal: work loop setup failed, fan left at %u/256\n", drive);
-    return false;
-  }
-  // The ALERT interrupt is required. Its source stays disabled until evaluate() has programmed the
-  // first window, so a line still asserted from whatever state the sensor was left in cannot storm.
-  IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_TEMP_ALERT, TEGRA_GPIO_LEVEL_LOW);
-  if (!nub) panic("SwitchThermal: no interrupt for the TMP451 ALERT (GPIO %u, level low)", TEGRA_GPIO_TEMP_ALERT);
-  alert = IOInterruptEventSource::interruptEventSource(this, &SwitchThermal::alertFired, nub, 0);
-  if (!alert || loop->addEventSource(alert) != kIOReturnSuccess) {
-    panic("SwitchThermal: cannot attach the TMP451 ALERT interrupt (GPIO %u)", TEGRA_GPIO_TEMP_ALERT);
-  }
-  setName("SwitchThermal");
-  setProperty("FanProfile", profile->name);
-  publish("FanDrive", drive);
-  registerService();
-  timer->setTimeoutMS(1);
-  return true;
+    unsigned choice = 0;
+    if (PE_parse_boot_argn("switch-fan-profile", &choice, sizeof(choice)) &&
+        choice < sizeof(kProfiles) / sizeof(kProfiles[0])) {
+        profile = &kProfiles[choice];
+    }
+    unsigned perf = 0, traced = 0;
+    PE_parse_boot_argn("switch-perf", &perf, sizeof(perf));
+    PE_parse_boot_argn("switch-perf-steps", &perfSteps, sizeof(perfSteps));
+    PE_parse_boot_argn("switch-perf-trace", &traced, sizeof(traced));
+    perfWanted = perf != 0;
+    perfTrace = perfWanted && traced != 0;
+    // Traced: the first raise waits until the console has caught up with the boot (a one-shot of the timer).
+    if (perfTrace) clock_interval_to_deadline(kTraceDelayMS, kMillisecondScale, &perfHoldUntil);
+    // switch-cpu-mode=pll|dfll (default pll; see the top of the file).
+    char mode[8] = "pll";
+    if (PE_parse_boot_arg_str("switch-cpu-mode", mode, sizeof(mode))) {
+        dfllMode = strcmp(mode, "dfll") == 0;
+        if (!dfllMode && strcmp(mode, "pll") != 0) IOLog("SwitchPerf: switch-cpu-mode=%s unknown; PLL mode\n", mode);
+    }
+    loop = IOWorkLoop::workLoop();
+    timer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchThermal::timerFired) : nullptr;
+    if (!timer || loop->addEventSource(timer) != kIOReturnSuccess) {
+        IOLog("SwitchThermal: work loop setup failed, fan left at %u/256\n", drive);
+        return false;
+    }
+    // The ALERT interrupt is required. Its source stays disabled until evaluate() has programmed the
+    // first window, so a line still asserted from whatever state the sensor was left in cannot storm.
+    IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_TEMP_ALERT, TEGRA_GPIO_LEVEL_LOW);
+    if (!nub) panic("SwitchThermal: no interrupt for the TMP451 ALERT (GPIO %u, level low)", TEGRA_GPIO_TEMP_ALERT);
+    alert = IOInterruptEventSource::interruptEventSource(this, &SwitchThermal::alertFired, nub, 0);
+    if (!alert || loop->addEventSource(alert) != kIOReturnSuccess) {
+        panic("SwitchThermal: cannot attach the TMP451 ALERT interrupt (GPIO %u)", TEGRA_GPIO_TEMP_ALERT);
+    }
+    setName("SwitchThermal");
+    setProperty("FanProfile", profile->name);
+    publish("FanDrive", drive);
+    registerService();
+    timer->setTimeoutMS(1);
+    return true;
 }
 
 void SwitchThermal::free()
 {
-  if (alert) {
-    alert->disable();
-    if (loop) loop->removeEventSource(alert);
-    alert->release();
-  }
-  if (timer) {
-    timer->cancelTimeout();
-    if (loop) loop->removeEventSource(timer);
-    timer->release();
-  }
-  OSSafeReleaseNULL(loop);
-  IOService::free();
+    if (alert) {
+        alert->disable();
+        if (loop) loop->removeEventSource(alert);
+        alert->release();
+    }
+    if (timer) {
+        timer->cancelTimeout();
+        if (loop) loop->removeEventSource(timer);
+        timer->release();
+    }
+    OSSafeReleaseNULL(loop);
+    IOService::free();
 }
 
 extern "C" int switch_thermal_start(void)
 {
-  if (gThermal) return 0;
-  IOService *resources = IOService::getResourceService();
-  SwitchThermal *candidate = OSTypeAlloc(SwitchThermal);
-  if (!resources || !candidate || !candidate->init() || !candidate->attach(resources)) {
-    IOLog("SwitchThermal: attach failed\n");
-    OSSafeReleaseNULL(candidate);
-    return -1;
-  }
-  if (!candidate->start(resources)) {
-    candidate->detach(resources);
-    candidate->release();
-    return -1;
-  }
-  gThermal = candidate;
-  return 0;
+    if (gThermal) return 0;
+    IOService *resources = IOService::getResourceService();
+    SwitchThermal *candidate = OSTypeAlloc(SwitchThermal);
+    if (!resources || !candidate || !candidate->init() || !candidate->attach(resources)) {
+        IOLog("SwitchThermal: attach failed\n");
+        OSSafeReleaseNULL(candidate);
+        return -1;
+    }
+    if (!candidate->start(resources)) {
+        candidate->detach(resources);
+        candidate->release();
+        return -1;
+    }
+    gThermal = candidate;
+    return 0;
 }
 
 extern "C" void switch_thermal_cpu_quiesce(void)
 {
-  if (gThermal) gThermal->quiesceCpu();
+    if (gThermal) gThermal->quiesceCpu();
 }
 
 extern "C" void switch_thermal_suspend(void)
 {
-  if (gThermal) gThermal->suspend();
+    if (gThermal) gThermal->suspend();
 }
 
 extern "C" void switch_thermal_resume(void)
 {
-  if (gThermal) gThermal->resume();
+    if (gThermal) gThermal->resume();
 }

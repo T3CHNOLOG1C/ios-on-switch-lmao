@@ -12,9 +12,9 @@ typedef struct {
      * The trusted caller retains actual pool ownership and immutable results. */
     const ArmSmmu4KConfig *lower, *upper;
     const ArmSmmu4KResult *lower_tables, *upper_tables;
-    uint32_t id0, id2;       /* Raw SMMUv2 identification register values. */
-    unsigned asid;          /* 0..65535, ownership managed by the caller. */
-    unsigned coherent_walk; /* Explicit: 1=inner WBWA, 0=outer NC. */
+    uint32_t id0, id2;                             /* Raw SMMUv2 identification register values. */
+    unsigned asid;                                 /* 0..65535, ownership managed by the caller. */
+    unsigned coherent_walk;                        /* Explicit: 1=inner WBWA, 0=outer NC. */
     unsigned stall_on_fault, continue_after_fault; /* Each 0 or 1. */
 } ArmSmmu4KContextConfig;
 typedef struct {
@@ -29,14 +29,12 @@ typedef struct {
  * ID inputs are not proof that the caller read actual hardware. Inputs,
  * their pointed-to configs/results, and output must be disjoint and immutable
  * throughout the call; this is a trusted kernel integration boundary. */
-ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *,
-    ArmSmmu4KContextImage *);
+ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *, ArmSmmu4KContextImage *);
 /* Compare all supplied readback fields with the freshly encoded expected
  * image. Caller must read real hardware and independently walk its actual
  * TTBR tables, verify ownership/coherency and handle faults/TLB lifetime.
  * Matching caller-supplied values alone never qualify an active GPU mapping. */
-ArmSmmu4KStatus ArmSmmu4KValidateContextReadback(const ArmSmmu4KContextConfig *,
-    const ArmSmmu4KContextImage *);
+ArmSmmu4KStatus ArmSmmu4KValidateContextReadback(const ArmSmmu4KContextConfig *, const ArmSmmu4KContextImage *);
 #ifdef __cplusplus
 }
 #endif

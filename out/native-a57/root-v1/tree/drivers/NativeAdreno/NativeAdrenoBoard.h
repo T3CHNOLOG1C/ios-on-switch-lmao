@@ -18,15 +18,16 @@ struct NativeAdrenoWindow {
 };
 enum { NativeAdrenoMaxWindows = 8 };
 class NativeAdrenoBoard final {
-    NativeAdrenoBoard()=delete;
+    NativeAdrenoBoard() = delete;
+
 public:
     /* Parse a device's `iommus` property. Each entry is one phandle cell
      * followed by #iommu-cells specifier cells; the first specifier cell is the
      * stream ID on this platform. Output keeps property order and never writes
      * on failure. Only the SID is extracted, never a guessed context bank. */
-    static IOReturn parseIommus(const uint8_t *cells,size_t length,
-        uint32_t cells_per_entry,uint16_t *stream_ids,size_t capacity,size_t *count);
-    static IOReturn parseReg(const uint8_t *cells,size_t length,uint32_t address_cells,
-        uint32_t size_cells,NativeAdrenoWindow *windows,size_t capacity,size_t *count);
+    static IOReturn parseIommus(const uint8_t *cells, size_t length, uint32_t cells_per_entry, uint16_t *stream_ids,
+                                size_t capacity, size_t *count);
+    static IOReturn parseReg(const uint8_t *cells, size_t length, uint32_t address_cells, uint32_t size_cells,
+                             NativeAdrenoWindow *windows, size_t capacity, size_t *count);
 };
 #endif

@@ -20,14 +20,16 @@
 #include <vector>
 #include "NativeBridgeMetalFrontend.h"
 
-static CGColorRef color(CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
+static CGColorRef color(CGFloat r, CGFloat g, CGFloat b, CGFloat a)
+{
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
     const CGFloat c[] = {r, g, b, a};
     CGColorRef made = CGColorCreate(space, c);
     CGColorSpaceRelease(space);
     return (CGColorRef)CFAutorelease(made);
 }
-static CGImageRef checker(size_t side) {
+static CGImageRef checker(size_t side)
+{
     std::vector<uint32_t> pixels(side * side);
     for (size_t y = 0; y < side; y++)
         for (size_t x = 0; x < side; x++) pixels[y * side + x] = ((x / 8 + y / 8) & 1) ? 0xff2080e0u : 0xfff0d020u;
@@ -39,7 +41,8 @@ static CGImageRef checker(size_t side) {
     CGColorSpaceRelease(space);
     return (CGImageRef)CFAutorelease(image);
 }
-static CALayer *scene(CGFloat side) {
+static CALayer *scene(CGFloat side)
+{
     CALayer *root = [CALayer layer];
     root.frame = CGRectMake(0, 0, side, side);
     root.backgroundColor = color(0.1, 0.2, 0.6, 1);
@@ -78,14 +81,18 @@ static CALayer *scene(CGFloat side) {
     return root;
 }
 // The tree rendered on the device, as BGRA rows; empty when something failed.
-static std::vector<uint8_t> render(id<MTLDevice> device, NSUInteger side) {
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:side height:side mipmapped:NO];
+static std::vector<uint8_t> render(id<MTLDevice> device, NSUInteger side)
+{
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                 width:side
+                                                                                height:side
+                                                                             mipmapped:NO];
     d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     d.storageMode = MTLStorageModeShared;
     id<MTLTexture> target = [device newTextureWithDescriptor:d];
     id<MTLCommandQueue> queue = [device newCommandQueue];
     if (!target || !queue) return {};
-    CARenderer *renderer = [CARenderer rendererWithMTLTexture:target options:@{kCARendererMetalCommandQueue: queue}];
+    CARenderer *renderer = [CARenderer rendererWithMTLTexture:target options:@{kCARendererMetalCommandQueue : queue}];
     if (!renderer) return {};
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
@@ -107,12 +114,14 @@ static std::vector<uint8_t> render(id<MTLDevice> device, NSUInteger side) {
     [target getBytes:pixels.data() bytesPerRow:side * 4 fromRegion:MTLRegionMake2D(0, 0, side, side) mipmapLevel:0];
     return pixels;
 }
-static void save(const std::vector<uint8_t> &pixels, NSUInteger side, const char *path) {
+static void save(const std::vector<uint8_t> &pixels, NSUInteger side, const char *path)
+{
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
     CGContextRef context = CGBitmapContextCreate((void *)pixels.data(), side, side, 8, side * 4, space,
                                                  kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
     CGImageRef image = CGBitmapContextCreateImage(context);
-    CGImageDestinationRef file = CGImageDestinationCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:@(path)], CFSTR("public.png"), 1, nullptr);
+    CGImageDestinationRef file = CGImageDestinationCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:@(path)],
+                                                                 CFSTR("public.png"), 1, nullptr);
     CGImageDestinationAddImage(file, image, nullptr);
     CGImageDestinationFinalize(file);
     CFRelease(file);
@@ -121,7 +130,10 @@ static void save(const std::vector<uint8_t> &pixels, NSUInteger side, const char
     CGColorSpaceRelease(space);
 }
 
-static void onMissing(const char *cls, const char *sel) {std::fprintf(stderr, "missing selector: %s %s\n", cls, sel);}
+static void onMissing(const char *cls, const char *sel)
+{
+    std::fprintf(stderr, "missing selector: %s %s\n", cls, sel);
+}
 extern "C" void qemu_metal_complete_frontend(void *device);
 extern "C" bool qemu_metal_answer(const char *selector, uint64_t *value);
 extern "C" void qemu_metal_add_libraries(Class device);
@@ -130,21 +142,31 @@ extern "C" void qemu_metal_answer_gaps(Class cls);
 // Mac's own device class it lacks answers as this Mac's device does. Feature flags stay the device's own (QemuMetalRemote.cpp kFlags): a
 // flag answered YES here sends the renderer to objects the frontend does not make (tile pipelines). Instrument only.
 static id gMacDevice;
-static NSUInteger macCount(id, SEL selector) {return ((NSUInteger (*)(id, SEL))objc_msgSend)(gMacDevice, selector);}
+static NSUInteger macCount(id, SEL selector)
+{
+    return ((NSUInteger (*)(id, SEL))objc_msgSend)(gMacDevice, selector);
+}
 // The frontend refuses a pipeline with an error and no log; the instrument prints the error.
 static IMP gComputeWithDescriptor;
-static id loggedCompute(id self, SEL cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options, id *reflection, NSError **error) {
+static id loggedCompute(id self, SEL cmd, MTLComputePipelineDescriptor *d, MTLPipelineOption options, id *reflection,
+                        NSError **error)
+{
     NSError *local = nil;
-    id made = ((id (*)(id, SEL, id, MTLPipelineOption, id *, NSError **))gComputeWithDescriptor)(self, cmd, d, options, reflection, &local);
-    if (!made) std::fprintf(stderr, "compute pipeline %s refused: %s\n", d.label.UTF8String ?: "?", local.localizedDescription.UTF8String ?: "?");
+    id made = ((id (*)(id, SEL, id, MTLPipelineOption, id *, NSError **))gComputeWithDescriptor)(self, cmd, d, options,
+                                                                                                 reflection, &local);
+    if (!made)
+        std::fprintf(stderr, "compute pipeline %s refused: %s\n", d.label.UTF8String ?: "?",
+                     local.localizedDescription.UTF8String ?: "?");
     if (error) *error = local;
     return made;
 }
-static void answerMacQueries(id device) {
+static void answerMacQueries(id device)
+{
     // The selectors the frontend lacks are answered as on the guest (QemuMetalGaps.mm), named in the host's log.
     qemu_metal_answer_gaps(objc_getClass("NBObject"));
     qemu_metal_answer_gaps(object_getClass(device));
-    Method compute = class_getInstanceMethod(object_getClass(device), @selector(newComputePipelineStateWithDescriptor:options:reflection:error:));
+    Method compute = class_getInstanceMethod(
+        object_getClass(device), @selector(newComputePipelineStateWithDescriptor:options:reflection:error:));
     gComputeWithDescriptor = method_setImplementation(compute, (IMP)loggedCompute);
     for (Class cls = object_getClass(gMacDevice); cls && cls != [NSObject class]; cls = class_getSuperclass(cls)) {
         unsigned count = 0;
@@ -152,7 +174,9 @@ static void answerMacQueries(id device) {
         for (unsigned i = 0; i < count; i++) {
             SEL selector = method_getName(methods[i]);
             const char *types = method_getTypeEncoding(methods[i]);
-            if (!types || strchr(sel_getName(selector), ':') || strcmp(types + 1, "16@0:8") || [device respondsToSelector:selector]) continue;
+            if (!types || strchr(sel_getName(selector), ':') || strcmp(types + 1, "16@0:8") ||
+                [device respondsToSelector:selector])
+                continue;
             if (strchr("QqIi", types[0])) class_addMethod(object_getClass(device), selector, (IMP)macCount, "Q16@0:8");
         }
         free(methods);
@@ -160,25 +184,33 @@ static void answerMacQueries(id device) {
 }
 
 // argv: the directory for the two pictures.
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     @autoreleasepool {
         if (argc < 2) return 2;
         const NSUInteger side = 256;
         gMacDevice = MTLCreateSystemDefaultDevice();
         std::vector<uint8_t> expected = render(gMacDevice, side);
         id<MTLDevice> remote = native_bridge_metal_open("", argv[1], 0x716d746c, onMissing);
-        if (!remote) {std::printf("FAIL no remote device\n"); return 1;}
+        if (!remote) {
+            std::printf("FAIL no remote device\n");
+            return 1;
+        }
         qemu_metal_complete_frontend((__bridge void *)remote);
         qemu_metal_add_libraries(object_getClass(remote));
         answerMacQueries(remote);
         std::vector<uint8_t> actual = render(remote, side);
-        if (expected.empty() || actual.empty()) {std::printf("FAIL nothing rendered (%s)\n", expected.empty() ? "Mac" : "remote"); return 1;}
+        if (expected.empty() || actual.empty()) {
+            std::printf("FAIL nothing rendered (%s)\n", expected.empty() ? "Mac" : "remote");
+            return 1;
+        }
         save(expected, side, [@(argv[1]) stringByAppendingPathComponent:@"check-mac.png"].UTF8String);
         save(actual, side, [@(argv[1]) stringByAppendingPathComponent:@"check-remote.png"].UTF8String);
         size_t differ = 0, blank = 0, worst = 0;
         for (size_t i = 0; i < expected.size(); i += 4) {
             size_t most = 0;
-            for (int c = 0; c < 4; c++) most = std::max<size_t>(most, (size_t)std::abs(expected[i + c] - actual[i + c]));
+            for (int c = 0; c < 4; c++)
+                most = std::max<size_t>(most, (size_t)std::abs(expected[i + c] - actual[i + c]));
             if (most > 8) differ++;
             worst = std::max(worst, most);
             if (!actual[i + 3]) blank++;
@@ -186,12 +218,19 @@ int main(int argc, char **argv) {
         // A kernel from Metal source (QemuMetalLibraries.mm compiles it on the host), as iPadOS's Core Image writes one for a filter graph.
         {
             NSError *error = nil;
-            id<MTLLibrary> library = [remote newLibraryWithSource:@"kernel void fill(device uint *out [[buffer(0)]], uint i [[thread_position_in_grid]])"
-                                                                   " { out[i] = i * 3u + SHIFT; }"
-                                                          options:[&] {MTLCompileOptions *o = [MTLCompileOptions new]; o.preprocessorMacros = @{@"SHIFT": @"7"}; return o;}()
-                                                            error:&error];
+            id<MTLLibrary> library =
+                [remote newLibraryWithSource:
+                            @"kernel void fill(device uint *out [[buffer(0)]], uint i [[thread_position_in_grid]])"
+                             " { out[i] = i * 3u + SHIFT; }"
+                                     options:[&] {
+                                         MTLCompileOptions *o = [MTLCompileOptions new];
+                                         o.preprocessorMacros = @{@"SHIFT" : @"7"};
+                                         return o;
+                                     }()
+                                       error:&error];
             id<MTLFunction> function = [library newFunctionWithName:@"fill"];
-            id<MTLComputePipelineState> pipeline = function ? [remote newComputePipelineStateWithFunction:function error:&error] : nil;
+            id<MTLComputePipelineState> pipeline =
+                function ? [remote newComputePipelineStateWithFunction:function error:&error] : nil;
             id<MTLBuffer> buffer = [remote newBufferWithLength:256 * 4 options:MTLResourceStorageModeShared];
             id<MTLCommandBuffer> commandBuffer = [[remote newCommandQueue] commandBuffer];
             id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
@@ -204,11 +243,18 @@ int main(int argc, char **argv) {
             const uint32_t *words = (const uint32_t *)buffer.contents;
             bool right = pipeline != nil;
             for (uint32_t i = 0; right && i < 256; i++) right = words[i] == i * 3 + 7;
-            if (!right) {std::printf("FAIL the kernel from source: %s\n", error.localizedDescription.UTF8String ?: "wrong values"); return 1;}
+            if (!right) {
+                std::printf("FAIL the kernel from source: %s\n",
+                            error.localizedDescription.UTF8String ?: "wrong values");
+                return 1;
+            }
         }
         // A query this Mac's device does not answer is refused as unknown, and the host keeps serving.
         uint64_t unknown = 0;
-        if (qemu_metal_answer("noSuchDeviceQuery", &unknown)) {std::printf("FAIL an unknown query was answered\n"); return 1;}
+        if (qemu_metal_answer("noSuchDeviceQuery", &unknown)) {
+            std::printf("FAIL an unknown query was answered\n");
+            return 1;
+        }
         if (!qemu_metal_answer("maxThreadgroupMemoryLength", &unknown) || !unknown) {
             std::printf("FAIL the host stopped answering after an unknown query\n");
             return 1;
@@ -216,9 +262,13 @@ int main(int argc, char **argv) {
         char status[512];
         native_bridge_metal_status(status, sizeof status);
         std::printf("frontend: %s\n", status);
-        std::printf("%zu of %zu pixels differ by more than 8 (largest %zu); %zu blank\n", differ, expected.size() / 4, worst, blank);
+        std::printf("%zu of %zu pixels differ by more than 8 (largest %zu); %zu blank\n", differ, expected.size() / 4,
+                    worst, blank);
         // Rendering on two devices may round differently; a few edge pixels may differ.
-        if (differ > expected.size() / 4 / 100 || blank == expected.size() / 4) {std::printf("FAIL the pictures disagree\n"); return 1;}
+        if (differ > expected.size() / 4 / 100 || blank == expected.size() / 4) {
+            std::printf("FAIL the pictures disagree\n");
+            return 1;
+        }
         std::printf("PASS: this Mac's CARenderer drew the same picture on %s\n", remote.name.UTF8String);
         return 0;
     }

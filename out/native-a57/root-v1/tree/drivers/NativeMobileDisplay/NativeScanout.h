@@ -6,43 +6,56 @@
 // landscape dimensions to the original compositor and rotate only the copy.
 // PE_current_console has already decoded boot Video.v_depth=0x320 into depth
 // 32 and rotation 3. v_display=0 is stock text mode, not a missing display.
-static inline bool native_legacy_video_mode(const PE_Video &v) {
-    if(!v.v_baseAddr || !v.v_width || !v.v_height || v.v_depth!=32 ||
-       v.v_width>16384 || v.v_height>16384 || v.v_rowBytes<v.v_width*4 ||
-       v.v_rowBytes>UINT64_MAX/v.v_height)return false;
-    return v.v_rotate==0 || (v.v_rotate==3 && v.v_width==720 && v.v_height==1280 && v.v_rowBytes==2880);
+static inline bool native_legacy_video_mode(const PE_Video &v)
+{
+    if (!v.v_baseAddr || !v.v_width || !v.v_height || v.v_depth != 32 || v.v_width > 16384 || v.v_height > 16384 ||
+        v.v_rowBytes < v.v_width * 4 || v.v_rowBytes > UINT64_MAX / v.v_height)
+        return false;
+    return v.v_rotate == 0 || (v.v_rotate == 3 && v.v_width == 720 && v.v_height == 1280 && v.v_rowBytes == 2880);
 }
-static inline uint32_t native_legacy_video_width(const PE_Video &v) {
-    return (uint32_t)(v.v_rotate==3?v.v_height:v.v_width);
+static inline uint32_t native_legacy_video_width(const PE_Video &v)
+{
+    return (uint32_t)(v.v_rotate == 3 ? v.v_height : v.v_width);
 }
-static inline uint32_t native_legacy_video_height(const PE_Video &v) {
-    return (uint32_t)(v.v_rotate==3?v.v_width:v.v_height);
+static inline uint32_t native_legacy_video_height(const PE_Video &v)
+{
+    return (uint32_t)(v.v_rotate == 3 ? v.v_width : v.v_height);
 }
 
 #ifndef NATIVE_SCANOUT_MODE_ONLY
 #include "NativeLegacyRequest.h"
-static inline bool native_legacy_scanout_layout(volatile void *destination,uint64_t destinationBytes,
-    const PE_Video &v,const void *source,uint64_t sourceBytes,uint64_t sourceStride,uint32_t width,uint32_t height) {
-    uintptr_t dst=(uintptr_t)destination,src=(uintptr_t)source;
-    return native_legacy_video_mode(v) && width==native_legacy_video_width(v) && height==native_legacy_video_height(v) &&
-        dst && src && !(dst&3) && !(v.v_rowBytes&3) &&
-        native_legacy_surface_bounds((uint32_t)v.v_width,(uint32_t)v.v_height,v.v_rowBytes,destinationBytes,destinationBytes) &&
-        native_legacy_surface_bounds(width,height,sourceStride,sourceBytes,sourceBytes) &&
-        destinationBytes<=UINTPTR_MAX && sourceBytes<=UINTPTR_MAX &&
-        dst<=UINTPTR_MAX-destinationBytes && src<=UINTPTR_MAX-sourceBytes;
+static inline bool native_legacy_scanout_layout(volatile void *destination, uint64_t destinationBytes,
+                                                const PE_Video &v, const void *source, uint64_t sourceBytes,
+                                                uint64_t sourceStride, uint32_t width, uint32_t height)
+{
+    uintptr_t dst = (uintptr_t)destination, src = (uintptr_t)source;
+    return native_legacy_video_mode(v) && width == native_legacy_video_width(v) &&
+           height == native_legacy_video_height(v) && dst && src && !(dst & 3) && !(v.v_rowBytes & 3) &&
+           native_legacy_surface_bounds((uint32_t)v.v_width, (uint32_t)v.v_height, v.v_rowBytes, destinationBytes,
+                                        destinationBytes) &&
+           native_legacy_surface_bounds(width, height, sourceStride, sourceBytes, sourceBytes) &&
+           destinationBytes <= UINTPTR_MAX && sourceBytes <= UINTPTR_MAX && dst <= UINTPTR_MAX - destinationBytes &&
+           src <= UINTPTR_MAX - sourceBytes;
 }
-static inline bool native_legacy_scanout_copy(volatile void *destination,uint64_t destinationBytes,
-    const PE_Video &v,const void *source,uint64_t sourceBytes,uint64_t sourceStride,uint32_t width,uint32_t height) {
-    if(!native_legacy_scanout_layout(destination,destinationBytes,v,source,sourceBytes,sourceStride,width,height))return false;
-    if(!v.v_rotate)return native_legacy_copy_pixels(destination,destinationBytes,v.v_rowBytes,source,sourceBytes,sourceStride,width,height);
+static inline bool native_legacy_scanout_copy(volatile void *destination, uint64_t destinationBytes, const PE_Video &v,
+                                              const void *source, uint64_t sourceBytes, uint64_t sourceStride,
+                                              uint32_t width, uint32_t height)
+{
+    if (!native_legacy_scanout_layout(destination, destinationBytes, v, source, sourceBytes, sourceStride, width,
+                                      height))
+        return false;
+    if (!v.v_rotate)
+        return native_legacy_copy_pixels(destination, destinationBytes, v.v_rowBytes, source, sourceBytes, sourceStride,
+                                         width, height);
     // Destination rows are contiguous device memory. Read one source column
     // per row and use aligned 32-bit stores, matching the proven OLED console.
-    for(uint32_t x=0;x<width;++x) {
-        volatile uint32_t *out=(volatile uint32_t *)((uintptr_t)destination+(uint64_t)(width-1-x)*v.v_rowBytes);
-        for(uint32_t y=0;y<height;++y) {
+    for (uint32_t x = 0; x < width; ++x) {
+        volatile uint32_t *out =
+            (volatile uint32_t *)((uintptr_t)destination + (uint64_t)(width - 1 - x) * v.v_rowBytes);
+        for (uint32_t y = 0; y < height; ++y) {
             uint32_t pixel;
-            __builtin_memcpy(&pixel,(const unsigned char *)source+(uint64_t)y*sourceStride+(uint64_t)x*4,4);
-            out[y]=pixel;
+            __builtin_memcpy(&pixel, (const unsigned char *)source + (uint64_t)y * sourceStride + (uint64_t)x * 4, 4);
+            out[y] = pixel;
         }
     }
     return true;
@@ -64,54 +77,63 @@ static inline bool native_legacy_scanout_copy(volatile void *destination,uint64_
 // block rows and 10 GOBs of the sixth; the surface is allocated to the block (768 lines, 0x3C0000
 // bytes), as Nyx's is, which stays inside the 4 MiB framebuffer carve-out the loader keeps from XNU
 // (scripts/build_native_loader.py NATIVE_FULL_RAM_EXCLUSIONS 'framebuffer' 0xF5A00000 + 0x400000).
-static constexpr uint32_t kNativeBlockWidth=1280,kNativeBlockHeight=720;
-static constexpr uint64_t kNativeBlockStride=(uint64_t)kNativeBlockWidth*4;              // 5120 bytes, 80 GOBs
-static constexpr uint64_t kNativeBlockGob=512,kNativeBlockGobs=16;                         // BLOCK_HEIGHT(4)
-static constexpr uint64_t kNativeBlockColumn=kNativeBlockGob*kNativeBlockGobs;              // 8 KiB per block
-static constexpr uint64_t kNativeBlockRow=kNativeBlockColumn*(kNativeBlockStride/64);       // 655360 per block row
-static constexpr uint64_t kNativeBlockBytes=kNativeBlockRow*((kNativeBlockHeight+127)/128); // 0x3C0000
-static_assert(kNativeBlockBytes==0x3C0000 && kNativeBlockBytes<=0x400000,"block-linear surface outgrew the carve-out");
-static inline bool native_legacy_block_layout(volatile void *destination,uint64_t destinationBytes,
-    const void *source,uint64_t sourceBytes,uint64_t sourceStride,uint32_t width,uint32_t height) {
-    uintptr_t dst=(uintptr_t)destination,src=(uintptr_t)source;
-    return width==kNativeBlockWidth && height==kNativeBlockHeight && dst && src && !(dst&(kNativeBlockGob-1)) &&
-        destinationBytes>=kNativeBlockBytes && native_legacy_surface_bounds(width,height,sourceStride,sourceBytes,sourceBytes) &&
-        destinationBytes<=UINTPTR_MAX && sourceBytes<=UINTPTR_MAX &&
-        dst<=UINTPTR_MAX-destinationBytes && src<=UINTPTR_MAX-sourceBytes;
+static constexpr uint32_t kNativeBlockWidth = 1280, kNativeBlockHeight = 720;
+static constexpr uint64_t kNativeBlockStride = (uint64_t)kNativeBlockWidth * 4;              // 5120 bytes, 80 GOBs
+static constexpr uint64_t kNativeBlockGob = 512, kNativeBlockGobs = 16;                      // BLOCK_HEIGHT(4)
+static constexpr uint64_t kNativeBlockColumn = kNativeBlockGob * kNativeBlockGobs;           // 8 KiB per block
+static constexpr uint64_t kNativeBlockRow = kNativeBlockColumn * (kNativeBlockStride / 64);  // 655360 per block row
+static constexpr uint64_t kNativeBlockBytes = kNativeBlockRow * ((kNativeBlockHeight + 127) / 128);  // 0x3C0000
+static_assert(kNativeBlockBytes == 0x3C0000 && kNativeBlockBytes <= 0x400000,
+              "block-linear surface outgrew the carve-out");
+static inline bool native_legacy_block_layout(volatile void *destination, uint64_t destinationBytes, const void *source,
+                                              uint64_t sourceBytes, uint64_t sourceStride, uint32_t width,
+                                              uint32_t height)
+{
+    uintptr_t dst = (uintptr_t)destination, src = (uintptr_t)source;
+    return width == kNativeBlockWidth && height == kNativeBlockHeight && dst && src && !(dst & (kNativeBlockGob - 1)) &&
+           destinationBytes >= kNativeBlockBytes &&
+           native_legacy_surface_bounds(width, height, sourceStride, sourceBytes, sourceBytes) &&
+           destinationBytes <= UINTPTR_MAX && sourceBytes <= UINTPTR_MAX && dst <= UINTPTR_MAX - destinationBytes &&
+           src <= UINTPTR_MAX - sourceBytes;
 }
 // One straight pass, no per-pixel work: every GOB is written front to back in 16-byte pieces (each one
 // 16 source bytes of one line), so the write-combined destination sees 512 contiguous bytes per GOB, and
 // the reads walk eight source lines forward together.
-static inline bool native_legacy_block_copy(volatile void *destination,uint64_t destinationBytes,
-    const void *source,uint64_t sourceBytes,uint64_t sourceStride,uint32_t width,uint32_t height) {
-    if(!native_legacy_block_layout(destination,destinationBytes,source,sourceBytes,sourceStride,width,height))return false;
-    for(uint32_t gobLine=0;gobLine<height/8;++gobLine) {
-        const unsigned char *lines=(const unsigned char *)source+(uint64_t)gobLine*8*sourceStride;
+static inline bool native_legacy_block_copy(volatile void *destination, uint64_t destinationBytes, const void *source,
+                                            uint64_t sourceBytes, uint64_t sourceStride, uint32_t width,
+                                            uint32_t height)
+{
+    if (!native_legacy_block_layout(destination, destinationBytes, source, sourceBytes, sourceStride, width, height))
+        return false;
+    for (uint32_t gobLine = 0; gobLine < height / 8; ++gobLine) {
+        const unsigned char *lines = (const unsigned char *)source + (uint64_t)gobLine * 8 * sourceStride;
         // Plain stores: the scanout is mapped write-combined (Normal non-cacheable), so the compiler may pair them into 16-byte
         // stp; nothing reads the destination back, and the caller's dsb orders them before the controller can fetch.
-        uint64_t *gob=(uint64_t *)((uintptr_t)destination+(gobLine/kNativeBlockGobs)*kNativeBlockRow+
-            (gobLine%kNativeBlockGobs)*kNativeBlockGob);
-        for(uint32_t column=0;column<width/16;++column,gob+=kNativeBlockColumn/8) {
-            const unsigned char *in=lines+(uint64_t)column*64;
-            for(unsigned at=0;at<kNativeBlockGob;at+=16) {
+        uint64_t *gob = (uint64_t *)((uintptr_t)destination + (gobLine / kNativeBlockGobs) * kNativeBlockRow +
+                                     (gobLine % kNativeBlockGobs) * kNativeBlockGob);
+        for (uint32_t column = 0; column < width / 16; ++column, gob += kNativeBlockColumn / 8) {
+            const unsigned char *in = lines + (uint64_t)column * 64;
+            for (unsigned at = 0; at < kNativeBlockGob; at += 16) {
                 // Offset bit 8 is x bit 5, bits 7:6 are y bits 2:1, bit 5 is x bit 4, bit 4 is y bit 0.
-                const unsigned x=((at>>3)&32)|((at>>1)&16),y=((at>>5)&6)|((at>>4)&1);
-                uint64_t lo,hi;
-                __builtin_memcpy(&lo,in+(uint64_t)y*sourceStride+x,8);
-                __builtin_memcpy(&hi,in+(uint64_t)y*sourceStride+x+8,8);
-                gob[at/8]=lo;gob[at/8+1]=hi;
+                const unsigned x = ((at >> 3) & 32) | ((at >> 1) & 16), y = ((at >> 5) & 6) | ((at >> 4) & 1);
+                uint64_t lo, hi;
+                __builtin_memcpy(&lo, in + (uint64_t)y * sourceStride + x, 8);
+                __builtin_memcpy(&hi, in + (uint64_t)y * sourceStride + x + 8, 8);
+                gob[at / 8] = lo;
+                gob[at / 8 + 1] = hi;
             }
         }
     }
     return true;
 }
 // A solid color is the same in any layout: fill the whole block-linear extent.
-static inline bool native_legacy_block_fill(volatile void *destination,uint64_t destinationBytes,uint32_t value) {
-    uintptr_t dst=(uintptr_t)destination;
-    if(!dst || (dst&7) || destinationBytes<kNativeBlockBytes)return false;
-    volatile uint64_t *out=(volatile uint64_t *)dst;
-    const uint64_t pair=(uint64_t)value|((uint64_t)value<<32);
-    for(uint64_t i=0;i<kNativeBlockBytes/8;++i)out[i]=pair;
+static inline bool native_legacy_block_fill(volatile void *destination, uint64_t destinationBytes, uint32_t value)
+{
+    uintptr_t dst = (uintptr_t)destination;
+    if (!dst || (dst & 7) || destinationBytes < kNativeBlockBytes) return false;
+    volatile uint64_t *out = (volatile uint64_t *)dst;
+    const uint64_t pair = (uint64_t)value | ((uint64_t)value << 32);
+    for (uint64_t i = 0; i < kNativeBlockBytes / 8; ++i) out[i] = pair;
     return true;
 }
 

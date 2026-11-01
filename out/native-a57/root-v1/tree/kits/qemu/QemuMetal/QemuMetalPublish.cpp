@@ -31,24 +31,41 @@ void native_qemu_metal_publish(void)
     const OSSymbol *name = OSSymbol::withCString("IOAcceleratorES");
     const OSMetaClass *parent = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
     OSSafeReleaseNULL(name);
-    if (!parent || parent->getClassSize() != 136) {native_qemu_metal_status = kIOReturnNotFound; return;}
+    if (!parent || parent->getClassSize() != 136) {
+        native_qemu_metal_status = kIOReturnNotFound;
+        return;
+    }
     native_qemu_metal_stage = 2;
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-    if (!handle) {native_qemu_metal_status = kIOReturnNoResources; return;}
+    if (!handle) {
+        native_qemu_metal_status = kIOReturnNoResources;
+        return;
+    }
     native_qemu_metal_static_init();
     native_qemu_metal_status = OSMetaClass::postModLoad(handle);
     if (native_qemu_metal_status) return;
-    if (native_qemu_metal_accelerator_instance_size() != 136) {native_qemu_metal_status = kIOReturnInvalid; return;}
+    if (native_qemu_metal_accelerator_instance_size() != 136) {
+        native_qemu_metal_status = kIOReturnInvalid;
+        return;
+    }
     native_qemu_metal_stage = 3;
     IOService *accelerator = native_qemu_metal_accelerator_allocate();
-    if (!accelerator || !accelerator->init()) {OSSafeReleaseNULL(accelerator); native_qemu_metal_status = kIOReturnNoMemory; return;}
+    if (!accelerator || !accelerator->init()) {
+        OSSafeReleaseNULL(accelerator);
+        native_qemu_metal_status = kIOReturnNoMemory;
+        return;
+    }
     // The keys the original _MTLRegisterDevices reads; the bundle exists through the addon mount (zzy-native-gpu-addon-mount.patch).
     accelerator->setProperty("MetalPluginName", "QemuMetal");
     accelerator->setProperty("MetalPluginClassName", "QemuMetalDevice");
     // The one process whose open of the accelerator and its client the kernel grants in place of the sandbox verdict
     // (zzw-native-adreno-sandbox-grant.patch): the render server.
     accelerator->setProperty("NativeSandboxGrantProcess", "backboardd");
-    if (!accelerator->attach(IOService::getPlatform())) {accelerator->release(); native_qemu_metal_status = kIOReturnNotAttached; return;}
+    if (!accelerator->attach(IOService::getPlatform())) {
+        accelerator->release();
+        native_qemu_metal_status = kIOReturnNotAttached;
+        return;
+    }
     accelerator->registerService();
     accelerator->release();
     native_qemu_metal_stage = 4;
@@ -60,7 +77,10 @@ void native_qemu_metal_publish(void)
         if (*next) *next++ = 0;
         if (!*name) continue;
         IOService *grant = native_qemu_metal_grant_allocate();
-        if (!grant || !grant->init()) {OSSafeReleaseNULL(grant); continue;}
+        if (!grant || !grant->init()) {
+            OSSafeReleaseNULL(grant);
+            continue;
+        }
         grant->setProperty("NativeSandboxGrantProcess", name);
         if (grant->attach(IOService::getPlatform())) {
             grant->registerService();

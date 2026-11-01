@@ -30,12 +30,11 @@ struct nir_def *air_nir_vertex(struct air_nir *, unsigned width);
 int air_nir_fragment_input(struct air_nir *, unsigned location, unsigned components, struct nir_def **);
 int air_nir_attribute(struct air_nir *, unsigned location, unsigned components, struct nir_def **);
 struct nir_def *air_nir_load(struct air_nir *, unsigned binding, unsigned offset);
-struct nir_def *air_nir_op(struct air_nir *, enum air_op, unsigned fp_flags, struct nir_def *,
-                           struct nir_def *, struct nir_def *);
+struct nir_def *air_nir_op(struct air_nir *, enum air_op, unsigned fp_flags, struct nir_def *, struct nir_def *,
+                           struct nir_def *);
 int air_nir_store(struct air_nir *, unsigned slot, unsigned count, struct nir_def **);
 int air_nir_color(struct air_nir *, unsigned slot, unsigned target, unsigned count, struct nir_def **);
-int air_nir_test_eval(struct air_nir *, uint32_t vertex, const uint8_t *data, unsigned size,
-                      float *out);
+int air_nir_test_eval(struct air_nir *, uint32_t vertex, const uint8_t *data, unsigned size, float *out);
 struct air_nir_test_buffer {
     const uint8_t *data;
     unsigned size;

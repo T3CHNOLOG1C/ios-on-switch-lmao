@@ -55,45 +55,49 @@ extern uint64_t mach_absolute_time(void);
 extern boolean_t pmap_ioswitch_ram_reserved(ppnum_t pnum);
 extern unsigned char iso_font[256 * 16];
 
-#define REGION_PA        UINT64_C(0xb0000000)
-#define REGION_BYTES     0x200000u
-#define XNU_LOG_BYTES    0x100000u
-#define RECORD_OFFSET    0x100000u
-#define CONSOLE_OFFSET   0x180000u
-#define CONSOLE_BYTES    0x80000u
-#define CONSOLE_SIG      0x43474244u          /* 'DBGC' (hekate PSTORE_RAM_SIG) */
-#define TEXT_MAX         (CONSOLE_BYTES - 16) /* hekate saves it only below 0x80000 */
-#define BLOCK_BYTES      4096u
-#define RECORD_MAGIC     UINT64_C(0x31434e5057534f49) /* "IOSWPNC1" */
-#define MSGBUF_TAIL      (64u << 10)
-#define PMC_PA           UINT64_C(0x7000e000) /* the page; APBDEV_PMC at +0x400 (hekate t210.h PMC_BASE) */
-#define PMC_CNTRL        (0x400u + 0x000u)
-#define PMC_SCRATCH0     (0x400u + 0x050u)
-#define PMC_SCRATCH37    (0x400u + 0x130u)
-#define PMC_RST_STATUS   (0x400u + 0x1b4u)
-#define PMC_MAIN_RST     (1u << 4)
-#define PMC_SCRATCH0_MODES ((1u << 0) | (1u << 1) | (1u << 29) | (1u << 30) | (1u << 31)) /* warmboot, RCM, payload, bootloader, recovery */
-#define TPAN             0x4e415054u          /* hekate PMC_SCRATCH37_KERNEL_PANIC_MAGIC */
-#define TMR_PA           UINT64_C(0x60005000)
-#define TMR5_PTV         0x060u
-#define WDT0_CFG         0x100u
-#define WDT0_CMD         0x108u
-#define WDT0_UNLOCK      0x10cu
+#define REGION_PA      UINT64_C(0xb0000000)
+#define REGION_BYTES   0x200000u
+#define XNU_LOG_BYTES  0x100000u
+#define RECORD_OFFSET  0x100000u
+#define CONSOLE_OFFSET 0x180000u
+#define CONSOLE_BYTES  0x80000u
+#define CONSOLE_SIG    0x43474244u          /* 'DBGC' (hekate PSTORE_RAM_SIG) */
+#define TEXT_MAX       (CONSOLE_BYTES - 16) /* hekate saves it only below 0x80000 */
+#define BLOCK_BYTES    4096u
+#define RECORD_MAGIC   UINT64_C(0x31434e5057534f49) /* "IOSWPNC1" */
+#define MSGBUF_TAIL    (64u << 10)
+#define PMC_PA         UINT64_C(0x7000e000) /* the page; APBDEV_PMC at +0x400 (hekate t210.h PMC_BASE) */
+#define PMC_CNTRL      (0x400u + 0x000u)
+#define PMC_SCRATCH0   (0x400u + 0x050u)
+#define PMC_SCRATCH37  (0x400u + 0x130u)
+#define PMC_RST_STATUS (0x400u + 0x1b4u)
+#define PMC_MAIN_RST   (1u << 4)
+#define PMC_SCRATCH0_MODES \
+    ((1u << 0) | (1u << 1) | (1u << 29) | (1u << 30) | (1u << 31)) /* warmboot, RCM, payload, bootloader, recovery */
+#define TPAN        0x4e415054u                                    /* hekate PMC_SCRATCH37_KERNEL_PANIC_MAGIC */
+#define TMR_PA      UINT64_C(0x60005000)
+#define TMR5_PTV    0x060u
+#define WDT0_CFG    0x100u
+#define WDT0_CMD    0x108u
+#define WDT0_UNLOCK 0x10cu
 
 struct ioswitch_panic_record {
     uint64_t magic;
     uint32_t version, bytes;
     uint32_t text_bytes, text_crc;
-    uint32_t phase, cpu;                    /* phase 1: panic string and kernel log; 2: XNU's panic log appended */
-    uint64_t caller, uptime_ns, time_s;     /* time_s: the wall clock (UTC) at the panic */
+    uint32_t phase, cpu;                /* phase 1: panic string and kernel log; 2: XNU's panic log appended */
+    uint64_t caller, uptime_ns, time_s; /* time_s: the wall clock (UTC) at the panic */
     uint32_t time_ns, blocks;
     uint32_t block_crc[CONSOLE_BYTES / BLOCK_BYTES];
-    uint32_t header_crc;                    /* of everything above */
+    uint32_t header_crc; /* of everything above */
 };
-struct ioswitch_panic_console { uint32_t sig, start, size; char text[]; };
+struct ioswitch_panic_console {
+    uint32_t sig, start, size;
+    char text[];
+};
 
-static unsigned save_on, hekate_on, reboot_s;   /* 0: the panic screen stays up (10-31: the user photographs it) */
-static volatile uint8_t *region;            /* write-combined */
+static unsigned save_on, hekate_on, reboot_s; /* 0: the panic screen stays up (10-31: the user photographs it) */
+static volatile uint8_t *region;              /* write-combined */
 static volatile uint32_t *pmc, *tmr, *screen;
 static const char *save_off_reason = "boot-arg ioswitch-panic-save is off";
 static uint32_t last_reset = 0xffffffffu;
@@ -104,20 +108,37 @@ static unsigned panic_cpu;
 static uint64_t panic_at;
 static char panic_line[1024];
 
-static volatile struct ioswitch_panic_record *record(void) {return (volatile struct ioswitch_panic_record *)(region + RECORD_OFFSET);}
-static volatile struct ioswitch_panic_console *console(void) {return (volatile struct ioswitch_panic_console *)(region + CONSOLE_OFFSET);}
-static void drain(void) {__asm__ volatile("dsb sy" ::: "memory");}
-static uint32_t crc_of(const volatile void *bytes, size_t length) {return crc32(0, (const void *)(uintptr_t)bytes, length);}
+static volatile struct ioswitch_panic_record *record(void)
+{
+    return (volatile struct ioswitch_panic_record *)(region + RECORD_OFFSET);
+}
+static volatile struct ioswitch_panic_console *console(void)
+{
+    return (volatile struct ioswitch_panic_console *)(region + CONSOLE_OFFSET);
+}
+static void drain(void)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+static uint32_t crc_of(const volatile void *bytes, size_t length)
+{
+    return crc32(0, (const void *)(uintptr_t)bytes, length);
+}
 
 /* --- the record --------------------------------------------------------------------------------------------- */
 
-static uint32_t text_at;                    /* bytes of console()->text written so far */
+static uint32_t text_at; /* bytes of console()->text written so far */
 static void put(const char *bytes, size_t length)
 {
     volatile char *text = console()->text;
     for (size_t i = 0; i < length && text_at < TEXT_MAX; ++i) text[text_at++] = bytes[i];
 }
-static void puts_(const char *s) {size_t n = 0; while (s[n]) ++n; put(s, n);}
+static void puts_(const char *s)
+{
+    size_t n = 0;
+    while (s[n]) ++n;
+    put(s, n);
+}
 
 /* The last `limit` bytes of the kernel log ring, oldest first, from the first whole line; `out` gets each run. */
 static void msgbuf_tail(uint32_t limit, void (*out)(const char *, size_t))
@@ -130,14 +151,21 @@ static void msgbuf_tail(uint32_t limit, void (*out)(const char *, size_t))
     /* Start after a partial first line: the window starts mid-line, or it is the whole ring and the ring wrapped. */
     const char before = at == x ? (mb->msg_bufc[x] ? 'x' : 0) : mb->msg_bufc[(at + size - 1) % size];
     if (before && before != '\n')
-        while (left && mb->msg_bufc[at] != '\n') {at = (at + 1) % size; --left;}
+        while (left && mb->msg_bufc[at] != '\n') {
+            at = (at + 1) % size;
+            --left;
+        }
     while (left) {
         const uint32_t run = (size - at < left) ? size - at : left;
         uint32_t from = at;
-        for (uint32_t i = at; i < at + run; ++i)                                  /* an unwrapped ring is NUL past bufx */
-            if (!mb->msg_bufc[i]) {if (i > from) out(mb->msg_bufc + from, i - from); from = i + 1;}
+        for (uint32_t i = at; i < at + run; ++i) /* an unwrapped ring is NUL past bufx */
+            if (!mb->msg_bufc[i]) {
+                if (i > from) out(mb->msg_bufc + from, i - from);
+                from = i + 1;
+            }
         if (at + run > from) out(mb->msg_bufc + from, at + run - from);
-        at = (at + run) % size; left -= run;
+        at = (at + run) % size;
+        left -= run;
     }
 }
 
@@ -146,7 +174,8 @@ static int append_xnu_log(const volatile uint8_t *base, uint32_t bytes)
 {
     const volatile struct embedded_panic_header *h = (const volatile struct embedded_panic_header *)base;
     if (h->eph_magic != EMBEDDED_PANIC_MAGIC) return 0;
-    const uint32_t parts[2][2] = {{h->eph_panic_log_offset, h->eph_panic_log_len}, {h->eph_other_log_offset, h->eph_other_log_len}};
+    const uint32_t parts[2][2] = {{h->eph_panic_log_offset, h->eph_panic_log_len},
+                                  {h->eph_other_log_offset, h->eph_other_log_len}};
     puts_("\n--- XNU panic log ---\n");
     for (int i = 0; i < 2; ++i) {
         const uint32_t offset = parts[i][0], length = parts[i][1];
@@ -162,11 +191,17 @@ static int append_xnu_log(const volatile uint8_t *base, uint32_t bytes)
 static void seal(uint32_t phase)
 {
     volatile struct ioswitch_panic_console *c = console();
-    c->sig = CONSOLE_SIG; c->start = text_at; c->size = text_at;
+    c->sig = CONSOLE_SIG;
+    c->start = text_at;
+    c->size = text_at;
     volatile struct ioswitch_panic_record *r = record();
-    r->magic = 0; drain();                  /* a half-written record is never valid */
-    r->version = 1; r->bytes = sizeof(struct ioswitch_panic_record);
-    r->text_bytes = text_at; r->text_crc = crc_of(c->text, text_at); r->phase = phase;
+    r->magic = 0;
+    drain(); /* a half-written record is never valid */
+    r->version = 1;
+    r->bytes = sizeof(struct ioswitch_panic_record);
+    r->text_bytes = text_at;
+    r->text_crc = crc_of(c->text, text_at);
+    r->phase = phase;
     r->blocks = (text_at + BLOCK_BYTES - 1) / BLOCK_BYTES;
     for (uint32_t b = 0; b < r->blocks; ++b) {
         const uint32_t at = b * BLOCK_BYTES, n = text_at - at < BLOCK_BYTES ? text_at - at : BLOCK_BYTES;
@@ -183,16 +218,18 @@ static void format_time(char *out, size_t bytes, uint64_t secs)
     const int64_t z = (int64_t)(secs / 86400) + 719468, era = z / 146097;
     const uint64_t doe = (uint64_t)(z - era * 146097), yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     const uint64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
-    const uint64_t d = doy - (153 * mp + 2) / 5 + 1, m = mp < 10 ? mp + 3 : mp - 9, y = yoe + (uint64_t)era * 400 + (m <= 2);
+    const uint64_t d = doy - (153 * mp + 2) / 5 + 1, m = mp < 10 ? mp + 3 : mp - 9,
+                   y = yoe + (uint64_t)era * 400 + (m <= 2);
     const uint64_t s = secs % 86400;
     snprintf(out, bytes, "%04llu-%02llu-%02llu-%02llu%02llu%02llu", (unsigned long long)y, (unsigned long long)m,
-             (unsigned long long)d, (unsigned long long)(s / 3600), (unsigned long long)(s / 60 % 60), (unsigned long long)(s % 60));
+             (unsigned long long)d, (unsigned long long)(s / 3600), (unsigned long long)(s / 60 % 60),
+             (unsigned long long)(s % 60));
 }
 
 /* --- the screen ---------------------------------------------------------------------------------------------- */
 
-#define COLS 160u
-#define ROWS 45u
+#define COLS    160u
+#define ROWS    45u
 #define LOG_ROW 14u
 static const uint32_t kBlack = 0xff000000u, kGrey = 0xffc0c0c0u;
 
@@ -217,14 +254,26 @@ static unsigned draw(unsigned row, unsigned last, const char *text, size_t lengt
     unsigned col = 0;
     for (size_t i = 0; i < length && row < last; ++i) {
         const char c = text[i];
-        if (c == '\n') {col = 0; ++row; continue;}
+        if (c == '\n') {
+            col = 0;
+            ++row;
+            continue;
+        }
         if (c == '\r') continue;
-        if (col == COLS) {col = 0; if (++row == last) break;}
+        if (col == COLS) {
+            col = 0;
+            if (++row == last) break;
+        }
         glyph(col++, row, (unsigned char)(c == '\t' ? ' ' : c), color);
     }
     return col ? row + 1 : row;
 }
-static unsigned drawz(unsigned row, unsigned last, const char *s, uint32_t color) {size_t n = 0; while (s[n]) ++n; return draw(row, last, s, n, color);}
+static unsigned drawz(unsigned row, unsigned last, const char *s, uint32_t color)
+{
+    size_t n = 0;
+    while (s[n]) ++n;
+    return draw(row, last, s, n, color);
+}
 
 /* The last rows-worth of lines of the kernel log, into the log area. */
 static char tail_text[ROWS * COLS];
@@ -232,7 +281,7 @@ static size_t tail_used;
 static void tail_out(const char *bytes, size_t length)
 {
     for (size_t i = 0; i < length; ++i) {
-        if (tail_used == sizeof(tail_text)) {                     /* keep the newest: drop the oldest half */
+        if (tail_used == sizeof(tail_text)) { /* keep the newest: drop the oldest half */
             for (size_t j = 0; j < sizeof(tail_text) / 2; ++j) tail_text[j] = tail_text[j + sizeof(tail_text) / 2];
             tail_used = sizeof(tail_text) / 2;
         }
@@ -250,9 +299,10 @@ static void draw_log_area(const char *title, const char *text, size_t length)
         size_t line = start - 1;
         while (line > 0 && text[line - 1] != '\n') --line;
         const size_t chars = start - line;
-        const unsigned need = chars > COLS ? (unsigned)((chars - 2) / COLS + 1) : 1;   /* its newline takes no column */
+        const unsigned need = chars > COLS ? (unsigned)((chars - 2) / COLS + 1) : 1; /* its newline takes no column */
         if (rows + need > ROWS - 2 - LOG_ROW) break;
-        rows += need; start = line;
+        rows += need;
+        start = line;
     }
     draw(LOG_ROW + 1, ROWS - 1, text + start, length - start, kGrey);
 }
@@ -260,7 +310,10 @@ static void draw_status(void)
 {
     char line[COLS + 1];
     if (save_on && region && reboot_s)
-        snprintf(line, sizeof(line), "Saved in RAM. Warm reset %us after the panic: hekate writes SD:/L4T_panic.txt, iPadOS /private/var/ioswitch/panic-*.log.", reboot_s);
+        snprintf(line, sizeof(line),
+                 "Saved in RAM. Warm reset %us after the panic: hekate writes SD:/L4T_panic.txt, iPadOS "
+                 "/private/var/ioswitch/panic-*.log.",
+                 reboot_s);
     else if (save_on && region)
         snprintf(line, sizeof(line), "Saved in RAM (ioswitch-panic-reboot=0: no reset). Holding POWER loses it.");
     else
@@ -274,7 +327,8 @@ static void draw_screen(void)
     if (!screen_taken) return;
     for (uint32_t i = 0; i < IOSWITCH_FB_BYTES / 4; ++i) screen[i] = kBlack;
     char title[COLS + 1];
-    uint64_t ns = 0; absolutetime_to_nanoseconds(panic_at, &ns);
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(panic_at, &ns);
     snprintf(title, sizeof(title), "XNU PANIC   cpu %u   %llu.%03llu s after boot", panic_cpu,
              (unsigned long long)(ns / 1000000000ull), (unsigned long long)(ns / 1000000ull % 1000));
     drawz(0, 1, title, IOSWITCH_RED);
@@ -291,14 +345,14 @@ static void arm_watchdog(unsigned seconds)
 {
     if (!tmr || !seconds) return;
     if (seconds > 255) seconds = 255;
-    tmr[TMR5_PTV / 4] = (1u << 31) | (1u << 30) | 250000u;          /* TMR5: enabled, periodic, 250 ms */
-    tmr[WDT0_CFG / 4] = 5u | (seconds << 4) | (1u << 15);            /* WDT0: source TMR5, period, PMC2CAR reset */
-    tmr[WDT0_CMD / 4] = 1u;                                           /* START_COUNTER */
+    tmr[TMR5_PTV / 4] = (1u << 31) | (1u << 30) | 250000u; /* TMR5: enabled, periodic, 250 ms */
+    tmr[WDT0_CFG / 4] = 5u | (seconds << 4) | (1u << 15);  /* WDT0: source TMR5, period, PMC2CAR reset */
+    tmr[WDT0_CMD / 4] = 1u;                                /* START_COUNTER */
     drain();
 }
 static void __attribute__((noreturn)) pmc_reset(void)
 {
-    pmc[PMC_SCRATCH0 / 4] = pmc[PMC_SCRATCH0 / 4] & ~PMC_SCRATCH0_MODES;   /* no warmboot, RCM or hekate mode request */
+    pmc[PMC_SCRATCH0 / 4] = pmc[PMC_SCRATCH0 / 4] & ~PMC_SCRATCH0_MODES; /* no warmboot, RCM or hekate mode request */
     drain();
     pmc[PMC_CNTRL / 4] = pmc[PMC_CNTRL / 4] | PMC_MAIN_RST;
     for (;;) __asm__ volatile("wfe" ::: "memory");
@@ -316,19 +370,27 @@ void ioswitch_panic_save_init(void)
     if (PE_parse_boot_argn("ioswitch-panic-reboot", &value, sizeof(value))) reboot_s = value > 240 ? 240 : value;
     save_on = 1;
     for (uint64_t pa = REGION_PA; pa < REGION_PA + REGION_BYTES; pa += 4096)
-        if (!pmap_ioswitch_ram_reserved((ppnum_t)(pa >> 12))) {save_off_reason = "0xb0000000 is not reserved RAM"; return;}
+        if (!pmap_ioswitch_ram_reserved((ppnum_t)(pa >> 12))) {
+            save_off_reason = "0xb0000000 is not reserved RAM";
+            return;
+        }
     pmc = (volatile uint32_t *)ml_io_map((vm_offset_t)PMC_PA, 4096);
     if (reboot_s) tmr = (volatile uint32_t *)ml_io_map((vm_offset_t)TMR_PA, 4096);
     region = (volatile uint8_t *)ml_io_map_wcomb((vm_offset_t)REGION_PA, REGION_BYTES);
-    if (!pmc || !region || (reboot_s && !tmr)) {region = NULL; save_off_reason = "mapping failed"; return;}
+    if (!pmc || !region || (reboot_s && !tmr)) {
+        region = NULL;
+        save_off_reason = "mapping failed";
+        return;
+    }
     last_reset = pmc[PMC_RST_STATUS / 4] & 7;
-    if (pmc[PMC_SCRATCH37 / 4] == TPAN) pmc[PMC_SCRATCH37 / 4] = 0;  /* hekate clears it; never leave it for later */
+    if (pmc[PMC_SCRATCH37 / 4] == TPAN) pmc[PMC_SCRATCH37 / 4] = 0; /* hekate clears it; never leave it for later */
     /* The last boot's record, checked now; written to Data by kern_exec.c (ioswitch_panic_save_pending). */
     volatile struct ioswitch_panic_record *r = record();
     volatile struct ioswitch_panic_console *c = console();
     if (r->magic != RECORD_MAGIC || r->version != 1 || r->bytes != sizeof(struct ioswitch_panic_record) ||
         r->header_crc != crc_of(r, offsetof(struct ioswitch_panic_record, header_crc)) || r->text_bytes > TEXT_MAX ||
-        r->blocks != (r->text_bytes + BLOCK_BYTES - 1) / BLOCK_BYTES || c->sig != CONSOLE_SIG || c->size != r->text_bytes)
+        r->blocks != (r->text_bytes + BLOCK_BYTES - 1) / BLOCK_BYTES || c->sig != CONSOLE_SIG ||
+        c->size != r->text_bytes)
         return;
     pending = 1;
     for (uint32_t b = 0; b < r->blocks; ++b) {
@@ -344,7 +406,8 @@ void ioswitch_panic_save_init(void)
 int ioswitch_panic_save_xnu_buffer(uintptr_t *base, unsigned int *bytes)
 {
     if (!save_on || !region) return 0;
-    *base = (uintptr_t)region; *bytes = XNU_LOG_BYTES;
+    *base = (uintptr_t)region;
+    *bytes = XNU_LOG_BYTES;
     return 1;
 }
 
@@ -360,23 +423,31 @@ int ioswitch_panic_begin(const char *format, va_list *args, unsigned long caller
     if (length < 0) panic_line[0] = 0;
     screen_taken = take_screen && screen;
     if (save_on && region) {
-        clock_sec_t secs = 0; clock_nsec_t nsecs = 0;
+        clock_sec_t secs = 0;
+        clock_nsec_t nsecs = 0;
         clock_get_calendar_nanotime_nowait(&secs, &nsecs);
-        uint64_t ns = 0; absolutetime_to_nanoseconds(panic_at, &ns);
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(panic_at, &ns);
         char when[32], head[256];
         format_time(when, sizeof(when), secs);
         text_at = 0;
-        snprintf(head, sizeof(head), "IOSwitch panic record 1: %s UTC, %llu.%03llu s after boot, cpu %u, caller 0x%lx\npanic: ",
-                 when, (unsigned long long)(ns / 1000000000ull), (unsigned long long)(ns / 1000000ull % 1000),
-                 panic_cpu, caller);
-        puts_(head); puts_(panic_line);
+        snprintf(head, sizeof(head),
+                 "IOSwitch panic record 1: %s UTC, %llu.%03llu s after boot, cpu %u, caller 0x%lx\npanic: ", when,
+                 (unsigned long long)(ns / 1000000000ull), (unsigned long long)(ns / 1000000ull % 1000), panic_cpu,
+                 caller);
+        puts_(head);
+        puts_(panic_line);
         puts_("\n\n--- kernel log, last 64 KiB (msgbuf) ---\n");
         msgbuf_tail(MSGBUF_TAIL, put);
         volatile struct ioswitch_panic_record *r = record();
-        r->cpu = panic_cpu; r->caller = caller; r->uptime_ns = ns; r->time_s = secs; r->time_ns = nsecs;
+        r->cpu = panic_cpu;
+        r->caller = caller;
+        r->uptime_ns = ns;
+        r->time_s = secs;
+        r->time_ns = nsecs;
         seal(1);
         if (hekate_on) pmc[PMC_SCRATCH37 / 4] = TPAN;
-        arm_watchdog(reboot_s ? reboot_s + 15 : 0);                   /* the reset below, should the panic path hang */
+        arm_watchdog(reboot_s ? reboot_s + 15 : 0); /* the reset below, should the panic path hang */
     }
     draw_screen();
     return screen_taken;
@@ -385,7 +456,7 @@ int ioswitch_panic_begin(const char *format, va_list *args, unsigned long caller
 void ioswitch_panic_halted(void)
 {
     if (!begun || !screen_taken) return;
-    PE_panic_hook("");                      /* the display puts window A back again, should a flip have moved it */
+    PE_panic_hook(""); /* the display puts window A back again, should a flip have moved it */
     draw_screen();
 }
 
@@ -394,7 +465,8 @@ void ioswitch_panic_logged(void)
     static uint32_t once;
     if (!begun || __atomic_exchange_n(&once, 1u, __ATOMIC_ACQ_REL)) return;
     const volatile uint8_t *xnu = (const volatile uint8_t *)gPanicBase;
-    if (save_on && region && xnu == region && record()->magic == RECORD_MAGIC && append_xnu_log(xnu, XNU_LOG_BYTES)) seal(2);
+    if (save_on && region && xnu == region && record()->magic == RECORD_MAGIC && append_xnu_log(xnu, XNU_LOG_BYTES))
+        seal(2);
     if (screen_taken && panic_info && panic_info->eph_panic_log_offset && panic_info->eph_panic_log_len < gPanicSize) {
         /* The panic log from its "Panicked task" line: the backtrace. */
         const char *log = (const char *)gPanicBase + panic_info->eph_panic_log_offset;
@@ -421,7 +493,8 @@ void ioswitch_panic_logged(void)
  * test boot and the boot that saves its record alternate. */
 static void test_panic(thread_call_param_t seconds, thread_call_param_t unused)
 {
-    panic("IOSwitch panic-save: test panic %u s after the Data mount (boot-arg ioswitch-panic-test)", (unsigned)(uintptr_t)seconds);
+    panic("IOSwitch panic-save: test panic %u s after the Data mount (boot-arg ioswitch-panic-test)",
+          (unsigned)(uintptr_t)seconds);
 }
 static void arm_test_panic(void)
 {
@@ -435,14 +508,15 @@ static void arm_test_panic(void)
 
 const char *ioswitch_panic_save_pending(uint32_t *bytes, char *path, size_t path_bytes)
 {
-    static const char *const resets[8] = {"power-on", "watchdog", "thermal sensor", "software (PMC)", "LP0 wake", "AOTAG",
-                                          "unknown 6", "unknown 7"};
+    static const char *const resets[8] = {"power-on", "watchdog", "thermal sensor", "software (PMC)",
+                                          "LP0 wake", "AOTAG",    "unknown 6",      "unknown 7"};
     if (!save_on || !region) {
         if (save_on) printf("IOSwitch panic-save: off: %s\n", save_off_reason);
         return NULL;
     }
     if (!pending) {
-        printf("IOSwitch panic-save: armed (%u MiB at %#llx, warm reset %u s after a panic), last reset %s, no saved panic\n",
+        printf("IOSwitch panic-save: armed (%u MiB at %#llx, warm reset %u s after a panic), last reset %s, no saved "
+               "panic\n",
                REGION_BYTES >> 20, (unsigned long long)REGION_PA, reboot_s, last_reset < 8 ? resets[last_reset] : "?");
         arm_test_panic();
         return NULL;
@@ -464,7 +538,8 @@ void ioswitch_panic_save_done(int error, const char *path)
         return;
     }
     pending = 0;
-    record()->magic = 0; console()->sig = 0;
+    record()->magic = 0;
+    console()->sig = 0;
     drain();
     printf("IOSwitch panic-save: %s written\n", path);
 }

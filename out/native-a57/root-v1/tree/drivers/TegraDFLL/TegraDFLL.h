@@ -54,13 +54,15 @@ extern "C" {
 // switches them on the SoC (Tdiode) and PLL sensor trips with 1 C hysteresis; the caller does that mapping here.
 // Until the caller sets them the driver keeps its own boot defaults: the cold floor and the tightest cap.
 enum {
-  TEGRA_DFLL_FLOOR_COLD = 0,   // below 20 C: VDD_CPU never below 800 mV
-  TEGRA_DFLL_FLOOR_WARM = 1,   // from 20 C: floor = the CVB Vmin (620 mV for the T210B01 tables)
-  TEGRA_DFLL_FLOOR_STATES = 3, // (index 2, from 70 C in the table, equals index 1 on T210B01; no DT trip uses it)
-  TEGRA_DFLL_CAP_NONE = 0,     // below 64 C
-  TEGRA_DFLL_CAP_1060MV = 1,   // from 64 C (TEGRA210B01_DFLL_THERMAL_CAP_0)
-  TEGRA_DFLL_CAP_1010MV = 2,   // from 84 C (TEGRA210B01_DFLL_THERMAL_CAP_1)
-  TEGRA_DFLL_CAP_STATES = 3,
+	TEGRA_DFLL_FLOOR_COLD = 0,  // below 20 C: VDD_CPU never below 800 mV
+	TEGRA_DFLL_FLOOR_WARM =
+		1,  // from 20 C: floor = the CVB Vmin (620 mV for the T210B01 tables)
+	TEGRA_DFLL_FLOOR_STATES =
+		3,  // (index 2, from 70 C in the table, equals index 1 on T210B01; no DT trip uses it)
+	TEGRA_DFLL_CAP_NONE = 0,    // below 64 C
+	TEGRA_DFLL_CAP_1060MV = 1,  // from 64 C (TEGRA210B01_DFLL_THERMAL_CAP_0)
+	TEGRA_DFLL_CAP_1010MV = 2,  // from 84 C (TEGRA210B01_DFLL_THERMAL_CAP_1)
+	TEGRA_DFLL_CAP_STATES = 3,
 };
 
 // Reads the fuses (CPU speedo/process, L4T speedo-tegra210.c), builds the CVB OPP table and the DFLL LUT, finds

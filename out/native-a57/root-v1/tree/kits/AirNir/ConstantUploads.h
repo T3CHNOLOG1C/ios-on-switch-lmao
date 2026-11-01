@@ -7,9 +7,9 @@
 extern "C" {
 #endif
 #define AIR_CONSTANT_MAX_BINDINGS 16u
-#define AIR_CONSTANT_MAX_RANGES 32u
-#define AIR_CONSTANT_MAX_READS 4096u
-#define AIR_CONSTANT_MAX_BYTES 16384u
+#define AIR_CONSTANT_MAX_RANGES   32u
+#define AIR_CONSTANT_MAX_READS    4096u
+#define AIR_CONSTANT_MAX_BYTES    16384u
 struct air_constant_read {
     uint32_t binding, offset, bytes;
 };
@@ -46,10 +46,9 @@ struct air_constant_result {
  * returns zero counts. Only declared ranges/immediates are written; internal
  * preamble, primitive and driver-parameter allocations remain untouched.
  * No allocation, GPU submission, memory translation or pixel computation. */
-struct air_constant_result
-air_pack_constants(const struct air_constant_layout *,
-                   const struct air_constant_binding bindings[AIR_CONSTANT_MAX_BINDINGS],
-                   uint8_t *destination, size_t destination_bytes);
+struct air_constant_result air_pack_constants(const struct air_constant_layout *,
+                                              const struct air_constant_binding bindings[AIR_CONSTANT_MAX_BINDINGS],
+                                              uint8_t *destination, size_t destination_bytes);
 #ifdef __cplusplus
 }
 #endif

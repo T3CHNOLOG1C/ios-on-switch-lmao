@@ -19,7 +19,8 @@ struct NativeAdrenoPwrupCounts {
     uint32_t dynamic;
 };
 class NativeAdrenoPwrupList final {
-    NativeAdrenoPwrupList()=delete;
+    NativeAdrenoPwrupList() = delete;
+
 public:
     static size_t requiredBytes(const NativeAdrenoPwrupCounts &);
     /* regs/values are parallel arrays; dynamic triplets are {aperture,offset,
@@ -28,11 +29,10 @@ public:
     /* Read the sixteen A740 preemption registers through the callback (raw
      * 32-bit GPU register reads) and pack them with zero IFPC and dynamic
      * counts. A read failure refuses and writes nothing. */
-    static IOReturn buildA740(int (*read)(void *,uint32_t,uint32_t *),void *cookie,
-        uint8_t *out,size_t capacity,size_t *written);
-    static IOReturn pack(const NativeAdrenoPwrupCounts &,
-        const uint32_t *ifpc_regs,const uint32_t *ifpc_values,
-        const uint32_t *preemption_regs,const uint32_t *preemption_values,
-        const uint32_t *dynamic_triplets,uint8_t *out,size_t capacity,size_t *written);
+    static IOReturn buildA740(int (*read)(void *, uint32_t, uint32_t *), void *cookie, uint8_t *out, size_t capacity,
+                              size_t *written);
+    static IOReturn pack(const NativeAdrenoPwrupCounts &, const uint32_t *ifpc_regs, const uint32_t *ifpc_values,
+                         const uint32_t *preemption_regs, const uint32_t *preemption_values,
+                         const uint32_t *dynamic_triplets, uint8_t *out, size_t capacity, size_t *written);
 };
 #endif

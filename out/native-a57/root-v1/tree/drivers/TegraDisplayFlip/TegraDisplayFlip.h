@@ -35,16 +35,15 @@ class IOMemoryMap;
 class IOBufferMemoryDescriptor;
 
 class TegraDisplayFlip : public OSObject {
-    OSDeclareDefaultStructors(TegraDisplayFlip)
-public:
+OSDeclareDefaultStructors(TegraDisplayFlip) public :
     // Maps DC A and checks that window A is an enabled 32-bit pitch-linear window. Switches window A to
     // frame-latched updates (REG_ACT_CONTROL) and lets V_BLANK/FRAME_END latch in INT_STATUS; free() restores both.
     static TegraDisplayFlip *create();
 
-    uint32_t width() const {return width_;}
-    uint32_t height() const {return height_;}
-    uint32_t stride() const {return stride_;}
-    uint64_t bufferLength() const {return (uint64_t)stride_*height_;}
+    uint32_t width() const { return width_; }
+    uint32_t height() const { return height_; }
+    uint32_t stride() const { return stride_; }
+    uint64_t bufferLength() const { return (uint64_t)stride_ * height_; }
     // The address the hardware is scanning out now (active copy of DC_WINBUF_START_ADDR).
     uint64_t scanoutAddress();
 
@@ -52,15 +51,15 @@ public:
     // must be physically contiguous, page aligned and below 4 GiB. Returns once the hardware latched the new
     // address at a frame boundary: from then on the previous buffer is no longer read and may be reused.
     // Thread context only (polls with IODelay); kIOReturnTimeout if nothing latched within timeoutUs.
-    IOReturn flip(uint64_t physicalAddress,uint64_t length,uint32_t timeoutUs=50000);
+    IOReturn flip(uint64_t physicalAddress, uint64_t length, uint32_t timeoutUs = 50000);
 
     // Waits for the start of the next vertical blank by polling INT_STATUS (the DC interrupt stays masked).
     // Thread context only: sleeps in 1 ms steps, then spins for the last stretch. timestamp is mach_absolute_time().
-    IOReturn waitForVblank(uint32_t timeoutUs,uint64_t *timestamp=nullptr);
+    IOReturn waitForVblank(uint32_t timeoutUs, uint64_t *timestamp = nullptr);
 
     // Write-combined (Normal non-cacheable) kernel mapping of physical scanout memory, e.g. the boot framebuffer or a
     // second range reserved next to it. Use this, not kIOMapInhibitCache, for anything the CPU fills.
-    static IOMemoryMap *mapScanoutMemory(uint64_t physicalAddress,uint64_t length);
+    static IOMemoryMap *mapScanoutMemory(uint64_t physicalAddress, uint64_t length);
     // A physically contiguous buffer below 4 GiB from kernel memory, page aligned. getBytesNoCopy() is NOT write-combined: for
     // kernel_task the cache option only applies to later map() calls, and map() into kernel_task without kIOMapUnique returns that
     // same cacheable address (IOBufferMemoryDescriptor.cpp, IOGeneralMemoryDescriptor::doMap). Clean+invalidate it and map the
@@ -75,12 +74,12 @@ protected:
 
 private:
     bool attach();
-    uint32_t read(uint32_t index) const {return dc_[index];}
-    void write(uint32_t index,uint32_t value) {dc_[index]=value;}
+    uint32_t read(uint32_t index) const { return dc_[index]; }
+    void write(uint32_t index, uint32_t value) { dc_[index] = value; }
     uint32_t readWindowAActive(uint32_t index);
 
     IOMemoryMap *registers_;
     volatile uint32_t *dc_;
-    uint32_t width_,height_,stride_;
-    uint32_t savedIntEnable_,savedActControl_;
+    uint32_t width_, height_, stride_;
+    uint32_t savedIntEnable_, savedActControl_;
 };

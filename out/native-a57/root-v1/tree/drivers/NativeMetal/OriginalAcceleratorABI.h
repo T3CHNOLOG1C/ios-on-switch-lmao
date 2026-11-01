@@ -6,6 +6,6 @@
 // no original class, method, vtable or metaclass is replaced.
 #include <IOKit/IOService.h>
 class IOAcceleratorES : public IOService {
- OSDeclareAbstractStructors(IOAcceleratorES)
+    OSDeclareAbstractStructors(IOAcceleratorES)
 };
-static_assert(sizeof(IOService)==136 && sizeof(IOAcceleratorES)==136,"Qualified original accelerator base extent");
+static_assert(sizeof(IOService) == 136 && sizeof(IOAcceleratorES) == 136, "Qualified original accelerator base extent");

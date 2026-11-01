@@ -23,8 +23,8 @@
 #include <dispatch/dispatch.h>
 #include <xpc/xpc.h>
 // libxpc exports it on iOS too; the SDK only marks it unavailable to apps.
-extern void vdectest_take_events(const char *stream, dispatch_queue_t queue, void (^handler)(xpc_object_t))
-    __asm__("_xpc_set_event_stream_handler");
+extern void vdectest_take_events(const char *stream, dispatch_queue_t queue,
+                                 void (^handler)(xpc_object_t)) __asm__("_xpc_set_event_stream_handler");
 #endif
 #include "VDECClip.h"
 
@@ -104,7 +104,8 @@ static void run(bool hardware, CMVideoFormatDescriptionRef format, uint8_t **sam
         return;
     }
     CFBooleanRef usingHardware = NULL;
-    VTSessionCopyProperty(session, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL, &usingHardware);
+    VTSessionCopyProperty(session, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL,
+                          &usingHardware);
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     int failed = 0;
@@ -126,8 +127,9 @@ static void run(bool hardware, CMVideoFormatDescriptionRef format, uint8_t **sam
     const double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
     const bool ok = result.match == kClipFrames && result.count == kClipFrames;
     report("%s: %s decoder, %d/%d frames match x264, %d out (%d before an earlier frame), %d decode errors, "
-           "%d callback errors, %.1f ms %s", name, usingHardware == kCFBooleanTrue ? "hardware" : "software",
-           result.match, kClipFrames, result.count, result.outOfOrder, failed, result.errors, ms, ok ? "OK" : "FAIL");
+           "%d callback errors, %.1f ms %s",
+           name, usingHardware == kCFBooleanTrue ? "hardware" : "software", result.match, kClipFrames, result.count,
+           result.outOfOrder, failed, result.errors, ms, ok ? "OK" : "FAIL");
     if (result.first >= 0)
         report("%s: first mismatch: frame %d luma CRC %#010x, expected %#010x", name, result.first, result.firstCrc,
                result.first < kClipFrames ? kClipLumaCrc[result.first] : 0);
@@ -171,7 +173,7 @@ static void test(void)
             continue;
         }
         if (type != 1 && type != 5) continue;
-        if ((nal[i][1] & 0x80) && count < 64) {   // first_mb_in_slice == 0
+        if ((nal[i][1] & 0x80) && count < 64) {  // first_mb_in_slice == 0
             samples[count] = buffer + used;
             sizes[count++] = 0;
         }
@@ -198,9 +200,7 @@ int main(void)
     gLog = os_log_create("com.ioswitch.avd", "vdectest");
 #if TARGET_OS_IPHONE
     // Launched by an IOKit matching event: take it, so launchd does not start this again for the same service.
-    vdectest_take_events("com.apple.iokit.matching", dispatch_get_main_queue(), ^(xpc_object_t event) {
-        (void)event;
-    });
+    vdectest_take_events("com.apple.iokit.matching", dispatch_get_main_queue(), ^(xpc_object_t event) { (void)event; });
     gFile = fopen("/private/var/ioswitch/vdectest.log", "a");
 #endif
     test();

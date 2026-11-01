@@ -6,8 +6,8 @@
 extern "C" {
 #endif
 #define ADRENO_VPC_MAX_OUTPUTS 16u
-#define ADRENO_VPC_MAX_INPUTS 15u
-#define ADRENO_VPC_MAX_WORDS 52u
+#define ADRENO_VPC_MAX_INPUTS  15u
+#define ADRENO_VPC_MAX_WORDS   52u
 struct AdrenoVPCOutput {
     const uint8_t *identity;
     size_t identity_bytes;
@@ -28,8 +28,13 @@ struct AdrenoVPCState {
     size_t input_count;
 };
 enum AdrenoVPCStatus {
-    AdrenoVPCOK, AdrenoVPCArgument, AdrenoVPCProfile, AdrenoVPCIdentity,
-    AdrenoVPCMissingVarying, AdrenoVPCCapacity, AdrenoVPCAlias
+    AdrenoVPCOK,
+    AdrenoVPCArgument,
+    AdrenoVPCProfile,
+    AdrenoVPCIdentity,
+    AdrenoVPCMissingVarying,
+    AdrenoVPCCapacity,
+    AdrenoVPCAlias
 };
 struct AdrenoVPCResult {
     uint32_t status, words, registers, varying_count, stride, position_location;

@@ -5,23 +5,23 @@
 #include <stdint.h>
 
 typedef struct {
-  uint32_t address;
-  uint64_t bytes;
-  uint32_t identifier;
+    uint32_t address;
+    uint64_t bytes;
+    uint32_t identifier;
 } AdrenoFirmwareRegion;
 
 typedef struct {
-  uint32_t address, bytes, type, value;
-  size_t payload_offset;
-  uint32_t region_identifier;
+    uint32_t address, bytes, type, value;
+    size_t payload_offset;
+    uint32_t region_identifier;
 } AdrenoFirmwareBlock;
 
 typedef enum {
-  AdrenoFirmwareSuccess,
-  AdrenoFirmwareInvalid,
-  AdrenoFirmwareTruncated,
-  AdrenoFirmwareUnmapped,
-  AdrenoFirmwareNoSpace
+    AdrenoFirmwareSuccess,
+    AdrenoFirmwareInvalid,
+    AdrenoFirmwareTruncated,
+    AdrenoFirmwareUnmapped,
+    AdrenoFirmwareNoSpace
 } AdrenoFirmwareResult;
 
 /* No output entries are changed on failure; *count is then zero.
@@ -31,10 +31,9 @@ typedef enum {
 #ifdef __cplusplus
 extern "C" {
 #endif
-AdrenoFirmwareResult AdrenoFirmwarePlanGmu(
-    const uint8_t *firmware, size_t bytes,
-    const AdrenoFirmwareRegion *regions, size_t region_count,
-    AdrenoFirmwareBlock *blocks, size_t capacity, size_t *count);
+AdrenoFirmwareResult AdrenoFirmwarePlanGmu(const uint8_t *firmware, size_t bytes, const AdrenoFirmwareRegion *regions,
+                                           size_t region_count, AdrenoFirmwareBlock *blocks, size_t capacity,
+                                           size_t *count);
 #ifdef __cplusplus
 }
 #endif

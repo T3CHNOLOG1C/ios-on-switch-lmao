@@ -8,10 +8,10 @@
 extern "C" {
 #endif
 struct NmbSelftest {
-    uint32_t stage;              /* 0 when every step ran, else the failing step's marker (0x6501..0x6506) */
-    uint32_t compute_bad;        /* wrong outputs of 1000 */
-    uint32_t render_bad;         /* wrong texels of 64 (8x8) */
-    uint32_t import_bad;         /* wrong texels of 4096 (64x64 over imported host pages) */
+    uint32_t stage;       /* 0 when every step ran, else the failing step's marker (0x6501..0x6506) */
+    uint32_t compute_bad; /* wrong outputs of 1000 */
+    uint32_t render_bad;  /* wrong texels of 64 (8x8) */
+    uint32_t import_bad;  /* wrong texels of 4096 (64x64 over imported host pages) */
     uint32_t qc_functions;
     uint32_t qc_kernels_ok, qc_kernels_failed;
     uint32_t qc_pairs_ok, qc_pairs_failed;

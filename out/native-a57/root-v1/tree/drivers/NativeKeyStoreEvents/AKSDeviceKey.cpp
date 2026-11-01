@@ -30,37 +30,44 @@ extern "C" const void *g_crypto_funcs;
 namespace {
 constexpr uint64_t kCarPA = 0x60006000, kFusePagePA = 0x7000F000;
 constexpr uint32_t kCarRstDevicesH = 0x008, kCarClkOutEnbH = 0x014, kCarMiscClkEnb = 0x048;
-constexpr uint32_t kFuseClockBit = 1u << 7;      // CLK_H_FUSE (hekate bdk/soc/clock.h:510)
-constexpr uint32_t kFuseVisible = 1u << 28;      // MISC_CLK_ENB CFG_ALL_VISIBLE
-constexpr uint32_t kFuseBase = 0x800;            // 0x7000F800 within the mapped page
+constexpr uint32_t kFuseClockBit = 1u << 7;  // CLK_H_FUSE (hekate bdk/soc/clock.h:510)
+constexpr uint32_t kFuseVisible = 1u << 28;  // MISC_CLK_ENB CFG_ALL_VISIBLE
+constexpr uint32_t kFuseBase = 0x800;        // 0x7000F800 within the mapped page
 constexpr uint32_t kFuseUid[] = {0x200, 0x204, 0x208, 0x20C, 0x210, 0x214, 0x218};
 
 uint8_t gDeviceKey[32];
 volatile bool gDeviceKeyReady;
 volatile uint64_t gUnsupportedSeen[4];
 
-void sha256Parts(const void *const *parts, const size_t *lengths, size_t count, uint8_t digest[32]) {
+void sha256Parts(const void *const *parts, const size_t *lengths, size_t count, uint8_t digest[32])
+{
     SHA256_CTX c;
     SHA256_Init(&c);
     for (size_t i = 0; i < count; ++i) SHA256_Update(&c, parts[i], lengths[i]);
     SHA256_Final(digest, &c);
 }
 
-struct Kek { aes_encrypt_ctx encrypt; aes_decrypt_ctx decrypt; };
-void encryptBlock(void *context, const uint8_t in[16], uint8_t out[16]) {
+struct Kek {
+    aes_encrypt_ctx encrypt;
+    aes_decrypt_ctx decrypt;
+};
+void encryptBlock(void *context, const uint8_t in[16], uint8_t out[16])
+{
     uint8_t block[16];
     memcpy(block, in, sizeof block);
     aes_encrypt(block, out, &static_cast<Kek *>(context)->encrypt);
     aks::wipe(block, sizeof block);
 }
-void decryptBlock(void *context, const uint8_t in[16], uint8_t out[16]) {
+void decryptBlock(void *context, const uint8_t in[16], uint8_t out[16])
+{
     uint8_t block[16];
     memcpy(block, in, sizeof block);
     aes_decrypt(block, out, &static_cast<Kek *>(context)->decrypt);
     aks::wipe(block, sizeof block);
 }
 
-volatile uint32_t *mapRegisters(uint64_t physical, IOMemoryMap **map) {
+volatile uint32_t *mapRegisters(uint64_t physical, IOMemoryMap **map)
+{
     IODeviceMemory *memory = IODeviceMemory::withRange(physical, 0x1000);
     *map = memory ? memory->map(kIOMapAnywhere | kIOMapInhibitCache) : nullptr;
     OSSafeReleaseNULL(memory);
@@ -68,7 +75,8 @@ volatile uint32_t *mapRegisters(uint64_t physical, IOMemoryMap **map) {
 }
 
 // The class KEK for (keybag, class) keyed into both AES directions; false while corecrypto is not registered.
-bool keyKek(uint32_t keybag, uint32_t keyClass, Kek *kek) {
+bool keyKek(uint32_t keybag, uint32_t keyClass, Kek *kek)
+{
     if (!g_crypto_funcs) return false;
     uint8_t key[32];
     aks::classKey(sha256Parts, gDeviceKey, keybag, keyClass, key);
@@ -80,7 +88,8 @@ bool keyKek(uint32_t keybag, uint32_t keyClass, Kek *kek) {
 }  // namespace
 
 // From AppleKeyStore::start, once, before the service is registered and any user client exists.
-extern "C" void native_aks_device_key_start(void) {
+extern "C" void native_aks_device_key_start(void)
+{
     if (gDeviceKeyReady) return;
     IOMemoryMap *carMap = nullptr, *fuseMap = nullptr;
     volatile uint32_t *car = mapRegisters(kCarPA, &carMap);
@@ -88,10 +97,14 @@ extern "C" void native_aks_device_key_start(void) {
     if (!car || !fuse) panic("AppleKeyStore: cannot map CAR/FUSE for the device key");
     const uint32_t clocks = car[kCarClkOutEnbH / 4], resets = car[kCarRstDevicesH / 4];
     if (!(clocks & kFuseClockBit) || (resets & kFuseClockBit)) {
-        panic("AppleKeyStore: FUSE clock off or in reset (CLK_OUT_ENB_H %#x RST_DEVICES_H %#x), no device key", clocks, resets);
+        panic("AppleKeyStore: FUSE clock off or in reset (CLK_OUT_ENB_H %#x RST_DEVICES_H %#x), no device key", clocks,
+              resets);
     }
     const uint32_t misc = car[kCarMiscClkEnb / 4];
-    if (!(misc & kFuseVisible)) { car[kCarMiscClkEnb / 4] = misc | kFuseVisible; (void)car[kCarMiscClkEnb / 4]; }
+    if (!(misc & kFuseVisible)) {
+        car[kCarMiscClkEnb / 4] = misc | kFuseVisible;
+        (void)car[kCarMiscClkEnb / 4];
+    }
     uint32_t uid[sizeof kFuseUid / sizeof kFuseUid[0]];
     for (size_t i = 0; i < sizeof uid / sizeof uid[0]; ++i) uid[i] = fuse[(kFuseBase + kFuseUid[i]) / 4];
     if (!(misc & kFuseVisible)) car[kCarMiscClkEnb / 4] = misc;
@@ -118,7 +131,8 @@ extern "C" void native_aks_device_key_start(void) {
 
 // aks_wrap_key (selector 10) after the dispatcher checked counts: `key` is the plaintext, `out` the caller's buffer.
 extern "C" IOReturn native_aks_wrap(uint32_t keybag, uint32_t keyClass, const uint8_t *key, size_t length, uint8_t *out,
-                                    size_t capacity, size_t *written) {
+                                    size_t capacity, size_t *written)
+{
     if (!aks::wrapLengthValid(length)) return (IOReturn)aks::kReturnBadArgument;
     if (capacity < length + aks::kBlock) return (IOReturn)aks::kReturnNoSpace;
     if (!gDeviceKeyReady) return (IOReturn)aks::kReturnNotReady;
@@ -133,8 +147,9 @@ extern "C" IOReturn native_aks_wrap(uint32_t keybag, uint32_t keyClass, const ui
 }
 
 // aks_unwrap_key (selector 11): a blob that fails RFC 3394's integrity check answers kReturnError, never the bytes.
-extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const uint8_t *wrapped, size_t length, uint8_t *out,
-                                      size_t capacity, size_t *written) {
+extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const uint8_t *wrapped, size_t length,
+                                      uint8_t *out, size_t capacity, size_t *written)
+{
     if (!aks::unwrappedLengthValid(length)) return (IOReturn)aks::kReturnBadArgument;
     if (capacity < length - aks::kBlock) return (IOReturn)aks::kReturnNoSpace;
     if (!gDeviceKeyReady) return (IOReturn)aks::kReturnNotReady;
@@ -149,7 +164,8 @@ extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const 
 }
 
 // aks_get_bag_uuid (selector 23): a stable UUID per keybag under this device key (RFC 9562 version 8, custom).
-extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16]) {
+extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16])
+{
     if (!gDeviceKeyReady) return (IOReturn)aks::kReturnNotReady;
     static const char label[] = "IOSwitch AppleKeyStore bag uuid v1";
     const uint8_t id[4] = {static_cast<uint8_t>(keybag >> 24), static_cast<uint8_t>(keybag >> 16),
@@ -166,7 +182,8 @@ extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16]) {
 
 // One console line the first time each unimplemented selector is called, naming the caller, so the next one the system needs is
 // visible in a boot photo instead of only as an e00002c7 in some daemon's log.
-extern "C" void native_aks_unsupported(uint32_t selector) {
+extern "C" void native_aks_unsupported(uint32_t selector)
+{
     const uint32_t word = selector < 256 ? selector / 64 : 3, bit = selector < 256 ? selector % 64 : 63;
     const uint64_t mask = 1ull << bit;
     if (__atomic_fetch_or(&gUnsupportedSeen[word], mask, __ATOMIC_RELAXED) & mask) return;

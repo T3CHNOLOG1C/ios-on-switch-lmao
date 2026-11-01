@@ -7,15 +7,25 @@
 #include "bridge/NativeMetalBridge.h"
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
-static void mark(uint32_t v) {std::printf("mark %x\n", v);
-    std::fflush(stdout);}
-static void missing(const char *c, const char *s) {std::printf("missing %s %s\n", c, s);}
-int main(int, char **argv) {
+static void mark(uint32_t v)
+{
+    std::printf("mark %x\n", v);
+    std::fflush(stdout);
+}
+static void missing(const char *c, const char *s)
+{
+    std::printf("missing %s %s\n", c, s);
+}
+int main(int, char **argv)
+{
     NmbSelftest r{};
     uint32_t code = nmb_selftest(argv[1], argv[2], nullptr, 0, mark, &r);
     std::printf("selftest code %x stage %x msg %s\n", code, r.stage, r.message);
     id device = native_bridge_metal_open(argv[1], argv[2], 0, missing);
-    if (!device) {std::printf("open failed: %s\n", nmb_last_error()); return 1;}
+    if (!device) {
+        std::printf("open failed: %s\n", nmb_last_error());
+        return 1;
+    }
     size_t n = 0;
     const void *a = nmb_fixture_air(&n);
     id lib = native_bridge_metal_library_with_air(a, n);

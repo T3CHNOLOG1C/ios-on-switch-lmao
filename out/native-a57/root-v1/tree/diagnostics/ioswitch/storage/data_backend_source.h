@@ -12,7 +12,7 @@ struct iosw_data_source {
     int (*begin_metadata)(void *, uint32_t, uint32_t);
     int (*end)(void *);
     void (*offline)(void *);
-    int (*qualify)(void *, int (*permit)(void *,uint64_t,uint32_t),void *);
+    int (*qualify)(void *, int (*permit)(void *, uint64_t, uint32_t), void *);
     void (*unbind)(void *, void *);
     int (*write)(void *, uint64_t, uint32_t, const uint8_t *);
     int (*sync)(void *);

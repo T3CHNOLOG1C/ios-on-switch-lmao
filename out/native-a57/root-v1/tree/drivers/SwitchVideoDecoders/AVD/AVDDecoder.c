@@ -46,9 +46,12 @@ typedef struct {
 } Output;
 
 static os_log_t gLog;
-static const bool kReorder = false;   // see above
+static const bool kReorder = false;  // see above
 
-static Decoder *storage(CMBaseObjectRef object) { return CMBaseObjectGetDerivedStorage(object); }
+static Decoder *storage(CMBaseObjectRef object)
+{
+    return CMBaseObjectGetDerivedStorage(object);
+}
 
 // ---- H264Backend: pictures out ---------------------------------------------------------------------------------
 
@@ -67,17 +70,21 @@ static void *decoded(void *ctx, const H264Picture *picture)
     CVPixelBufferLockBaseAddress(out->image, 0);
     const uint32_t w = (uint32_t)CVPixelBufferGetWidth(out->image), h = (uint32_t)CVPixelBufferGetHeight(out->image);
     const uint32_t width = w < picture->width ? w : picture->width, height = h < picture->height ? h : picture->height;
-    block_linear_copy(CVPixelBufferGetBaseAddressOfPlane(out->image, 0), CVPixelBufferGetBytesPerRowOfPlane(out->image, 0),
-                      picture->luma, picture->pitch, picture->crop_x, picture->crop_y, width, height);
-    block_linear_copy(CVPixelBufferGetBaseAddressOfPlane(out->image, 1), CVPixelBufferGetBytesPerRowOfPlane(out->image, 1),
-                      picture->chroma, picture->pitch, picture->crop_x & ~1u, picture->crop_y / 2, width & ~1u,
-                      (height + 1) / 2);
+    block_linear_copy(CVPixelBufferGetBaseAddressOfPlane(out->image, 0),
+                      CVPixelBufferGetBytesPerRowOfPlane(out->image, 0), picture->luma, picture->pitch, picture->crop_x,
+                      picture->crop_y, width, height);
+    block_linear_copy(CVPixelBufferGetBaseAddressOfPlane(out->image, 1),
+                      CVPixelBufferGetBytesPerRowOfPlane(out->image, 1), picture->chroma, picture->pitch,
+                      picture->crop_x & ~1u, picture->crop_y / 2, width & ~1u, (height + 1) / 2);
     CVPixelBufferUnlockBaseAddress(out->image, 0);
-    if (d->matrix) CVBufferSetAttachment(out->image, kCVImageBufferYCbCrMatrixKey, d->matrix, kCVAttachmentMode_ShouldPropagate);
+    if (d->matrix)
+        CVBufferSetAttachment(out->image, kCVImageBufferYCbCrMatrixKey, d->matrix, kCVAttachmentMode_ShouldPropagate);
     if (d->primaries)
-        CVBufferSetAttachment(out->image, kCVImageBufferColorPrimariesKey, d->primaries, kCVAttachmentMode_ShouldPropagate);
+        CVBufferSetAttachment(out->image, kCVImageBufferColorPrimariesKey, d->primaries,
+                              kCVAttachmentMode_ShouldPropagate);
     if (d->transfer)
-        CVBufferSetAttachment(out->image, kCVImageBufferTransferFunctionKey, d->transfer, kCVAttachmentMode_ShouldPropagate);
+        CVBufferSetAttachment(out->image, kCVImageBufferTransferFunctionKey, d->transfer,
+                              kCVAttachmentMode_ShouldPropagate);
     return out;
 }
 
@@ -86,13 +93,13 @@ static void emit(void *ctx, void *item)
     Decoder *d = ctx;
     Output *out = item;
     if (d->session)
-        VTDecoderSessionEmitDecodedFrame(d->session, out->frame, out->status, out->image ? 0 : kVTDecodeInfo_FrameDropped,
-                                         out->image);
+        VTDecoderSessionEmitDecodedFrame(d->session, out->frame, out->status,
+                                         out->image ? 0 : kVTDecodeInfo_FrameDropped, out->image);
     if (out->image) CVPixelBufferRelease(out->image);
     free(out);
 }
 
-static void discard(void *ctx, void *item)   // no_output_of_prior_pics: answered, without a picture
+static void discard(void *ctx, void *item)  // no_output_of_prior_pics: answered, without a picture
 {
     Output *out = item;
     if (out->image) CVPixelBufferRelease(out->image);
@@ -106,12 +113,18 @@ static int bufferAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
 {
     return nvdec_alloc(((Decoder *)ctx)->client, size, handle, va);
 }
-static void bufferFree(void *ctx, uint32_t handle) { nvdec_free(((Decoder *)ctx)->client, handle); }
+static void bufferFree(void *ctx, uint32_t handle)
+{
+    nvdec_free(((Decoder *)ctx)->client, handle);
+}
 static int jobSubmit(void *ctx, const TegraNVDECSubmit *submit, uint32_t *fence)
 {
     return nvdec_submit(((Decoder *)ctx)->client, submit, fence);
 }
-static int jobWait(void *ctx, const TegraNVDECWait *wait) { return nvdec_wait(((Decoder *)ctx)->client, wait); }
+static int jobWait(void *ctx, const TegraNVDECWait *wait)
+{
+    return nvdec_wait(((Decoder *)ctx)->client, wait);
+}
 
 // ---- Colour: the format description's own tags, else the SPS's VUI (H.273 code points) --------------------------
 
@@ -120,19 +133,20 @@ static CFTypeRef colourTag(CMFormatDescriptionRef format, CFStringRef key, int c
     CFTypeRef tag = CMFormatDescriptionGetExtension(format, key);
     if (tag) return CFRetain(tag);
     switch (kind) {
-    case 0:   // matrix_coefficients
+    case 0:  // matrix_coefficients
         if (code == 1) return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_709_2);
         if (code == 5 || code == 6) return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_601_4);
         if (code == 9) return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_2020);
         return CFRetain(height >= 720 ? kCVImageBufferYCbCrMatrix_ITU_R_709_2 : kCVImageBufferYCbCrMatrix_ITU_R_601_4);
-    case 1:   // colour_primaries
+    case 1:  // colour_primaries
         if (code == 1) return CFRetain(kCVImageBufferColorPrimaries_ITU_R_709_2);
         if (code == 5) return CFRetain(kCVImageBufferColorPrimaries_EBU_3213);
         if (code == 6) return CFRetain(kCVImageBufferColorPrimaries_SMPTE_C);
         if (code == 9) return CFRetain(kCVImageBufferColorPrimaries_ITU_R_2020);
         return NULL;
     default:  // transfer_characteristics
-        if (code == 1 || code == 6 || code == 14 || code == 15) return CFRetain(kCVImageBufferTransferFunction_ITU_R_709_2);
+        if (code == 1 || code == 6 || code == 14 || code == 15)
+            return CFRetain(kCVImageBufferTransferFunction_ITU_R_709_2);
         if (code == 16) return CFRetain(kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ);
         if (code == 18) return CFRetain(kCVImageBufferTransferFunction_ITU_R_2100_HLG);
         return NULL;
@@ -143,8 +157,10 @@ static CFTypeRef colourTag(CMFormatDescriptionRef format, CFStringRef key, int c
 
 static CFDataRef copyAvcC(CMVideoFormatDescriptionRef format)
 {
-    CFDictionaryRef atoms = CMFormatDescriptionGetExtension(format, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms);
-    CFTypeRef avcC = atoms && CFGetTypeID(atoms) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(atoms, CFSTR("avcC")) : NULL;
+    CFDictionaryRef atoms =
+        CMFormatDescriptionGetExtension(format, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms);
+    CFTypeRef avcC =
+        atoms && CFGetTypeID(atoms) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(atoms, CFSTR("avcC")) : NULL;
     return avcC && CFGetTypeID(avcC) == CFDataGetTypeID() ? CFRetain(avcC) : NULL;
 }
 
@@ -194,11 +210,13 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
         const bool vui = sps->colour_description;
         d->pixelFormat = sps->full_range ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                          : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-        d->matrix = colourTag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, (uint32_t)height);
-        d->primaries = colourTag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+        d->matrix =
+            colourTag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, (uint32_t)height);
+        d->primaries =
+            colourTag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
         d->transfer = colourTag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
-        CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
-                                                                      &kCFTypeDictionaryValueCallBacks);
+        CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
+            kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
                                                      &kCFTypeDictionaryValueCallBacks);
         setNumber(attributes, kCVPixelBufferPixelFormatTypeKey, (int32_t)d->pixelFormat);
@@ -238,14 +256,15 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
     pthread_mutex_lock(&d->lock);
     const int ret = h264_decoder_decode(d->h264, (const uint8_t *)data, size, d->lengthSize, frame,
                                         kReorder && (flags & kVTDecodeFrame_EnableTemporalProcessing));
-    if (!ret && d->session)   // parameter sets only: answered at once, without a picture
+    if (!ret && d->session)  // parameter sets only: answered at once, without a picture
         VTDecoderSessionEmitDecodedFrame(d->session, frame, noErr, kVTDecodeInfo_FrameDropped, NULL);
     pthread_mutex_unlock(&d->lock);
     free(copy);
     if (ret <= -2) {
         static int logged;
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
-            os_log_error(gLog, "AVD: %{public}s", ret == -2 ? "NVDEC job failed" : "no NVDEC buffers for a new geometry");
+            os_log_error(gLog, "AVD: %{public}s",
+                         ret == -2 ? "NVDEC job failed" : "no NVDEC buffers for a new geometry");
         return kVTVideoDecoderMalfunctionErr;
     }
     return ret < 0 ? kVTVideoDecoderBadDataErr : noErr;
@@ -285,7 +304,7 @@ static OSStatus invalidate(CMBaseObjectRef ref)
 {
     Decoder *d = storage(ref);
     pthread_mutex_lock(&d->lock);
-    d->session = NULL;   // pictures still waiting are released without being emitted
+    d->session = NULL;  // pictures still waiting are released without being emitted
     pthread_mutex_unlock(&d->lock);
     return noErr;
 }
@@ -294,7 +313,7 @@ static void finalize(CMBaseObjectRef ref)
 {
     Decoder *d = storage(ref);
     d->session = NULL;
-    h264_decoder_destroy(d->h264);   // frees its buffers through the client, so before closing it
+    h264_decoder_destroy(d->h264);  // frees its buffers through the client, so before closing it
     nvdec_close(d->client);
     if (d->avcC) CFRelease(d->avcC);
     if (d->matrix) CFRelease(d->matrix);
@@ -315,12 +334,12 @@ static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRe
         *(CFTypeRef *)value = CFRetain(kCFBooleanTrue);
         return noErr;
     }
-    return -12783;   // kCMBaseObjectError_ValueNotAvailable
+    return -12783;  // kCMBaseObjectError_ValueNotAvailable
 }
 
 static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef value)
 {
-    (void)ref, (void)key, (void)value;   // real-time, thread count, ...: nothing to tune on a fixed-function engine
+    (void)ref, (void)key, (void)value;  // real-time, thread count, ...: nothing to tune on a fixed-function engine
     return noErr;
 }
 
@@ -350,7 +369,7 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     (void)codec;
     int error = 0;
     NVDECClient *client = nvdec_open(&error);
-    if (!client) {   // VideoToolbox goes on to H264SW
+    if (!client) {  // VideoToolbox goes on to H264SW
         static int logged;
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
             os_log_error(gLog, "AVD: TegraNVDEC refused this process (%#x); H.264 stays in software here", error);
@@ -368,7 +387,7 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     d->client = client;
     const H264Backend backend = {d, bufferAlloc, bufferFree, jobSubmit, jobWait, decoded, emit, discard};
     if (!(d->h264 = h264_decoder_create(&backend))) {
-        CFRelease(object);   // finalize closes the client
+        CFRelease(object);  // finalize closes the client
         return kVTAllocationFailedErr;
     }
     *out = object;
@@ -380,7 +399,7 @@ __attribute__((visibility("default"))) void AVDRegister(void);
 void AVDRegister(void)
 {
     gLog = os_log_create("com.ioswitch.avd", "decoder");
-    if (!nvdec_service_present()) return;   // switch-nvdec=3 not set, or NVDEC did not come up: nothing changes
+    if (!nvdec_service_present()) return;  // switch-nvdec=3 not set, or NVDEC did not come up: nothing changes
     const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_H264, createInstance);
     if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('avc1') failed: %d", (int)status);
 }

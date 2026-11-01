@@ -60,10 +60,19 @@ constexpr uint32_t kRpLinkStatus = 0x090, kRpVendXp = 0xF00;
 // Fuse cache: OPT_LOT_CODE_0 (switchroot U-Boot board/nintendo/switch/nintendo-switch.c).
 constexpr uint32_t kFuseLot0 = 0x208;
 
-volatile uint32_t *map(vm_offset_t pa) { return reinterpret_cast<volatile uint32_t *>(ml_io_map(pa, 0x4000)); }
+volatile uint32_t *map(vm_offset_t pa)
+{
+    return reinterpret_cast<volatile uint32_t *>(ml_io_map(pa, 0x4000));
+}
 volatile uint32_t *gCar, *gFuse;  // kept: switch_wlan_mac may be called again
-inline uint32_t rd(volatile uint32_t *base, uint32_t offset) { return base[offset / 4]; }
-inline unsigned bit(uint32_t value, unsigned n) { return (value >> n) & 1; }
+inline uint32_t rd(volatile uint32_t *base, uint32_t offset)
+{
+    return base[offset / 4];
+}
+inline unsigned bit(uint32_t value, unsigned n)
+{
+    return (value >> n) & 1;
+}
 
 }  // namespace
 
@@ -71,65 +80,72 @@ inline unsigned bit(uint32_t value, unsigned n) { return (value >> n) & 1; }
 // fuse (+2 Wi-Fi, +1 Bluetooth). bt may be null.
 extern "C" int switch_wlan_mac(uint8_t wifi[6], uint8_t bt[6])
 {
-  if (!gCar) gCar = map(kCarPA);
-  if (!gFuse) gFuse = map(kFusePA);
-  if (!gCar || !gFuse) return -1;
-  if (!(rd(gCar, kClkEnbH) & kHFuse) || !(rd(gCar, kMiscClkEnb) & kFuseVisible)) return -1;
-  const uint32_t lot0 = rd(gFuse, kFuseLot0);
-  if (!lot0) return -1;
-  const uint8_t prefix[5] = {0x98, 0xB6, 0xE9, static_cast<uint8_t>(lot0 >> 16), static_cast<uint8_t>(lot0 >> 8)};
-  for (unsigned i = 0; i < 5; ++i) {
-    wifi[i] = prefix[i];
-    if (bt) bt[i] = prefix[i];
-  }
-  wifi[5] = static_cast<uint8_t>(lot0 + 2);
-  if (bt) bt[5] = static_cast<uint8_t>(lot0 + 1);
-  return 0;
+    if (!gCar) gCar = map(kCarPA);
+    if (!gFuse) gFuse = map(kFusePA);
+    if (!gCar || !gFuse) return -1;
+    if (!(rd(gCar, kClkEnbH) & kHFuse) || !(rd(gCar, kMiscClkEnb) & kFuseVisible)) return -1;
+    const uint32_t lot0 = rd(gFuse, kFuseLot0);
+    if (!lot0) return -1;
+    const uint8_t prefix[5] = {0x98, 0xB6, 0xE9, static_cast<uint8_t>(lot0 >> 16), static_cast<uint8_t>(lot0 >> 8)};
+    for (unsigned i = 0; i < 5; ++i) {
+        wifi[i] = prefix[i];
+        if (bt) bt[i] = prefix[i];
+    }
+    wifi[5] = static_cast<uint8_t>(lot0 + 2);
+    if (bt) bt[5] = static_cast<uint8_t>(lot0 + 1);
+    return 0;
 }
 
 extern "C" void switch_wlan_probe(void)
 {
-  uint32_t enabled = 0;
-  if (!PE_parse_boot_argn("switch-wlan", &enabled, sizeof enabled) || !enabled) return;
+    uint32_t enabled = 0;
+    if (!PE_parse_boot_argn("switch-wlan", &enabled, sizeof enabled) || !enabled) return;
 
-  volatile uint32_t *car = map(kCarPA), *pmc = map(kPmcPA), *gpio = map(kGpioPA), *pinmux = map(kPinmuxPA);
-  volatile uint32_t *mc = map(kMcPA), *padctl = map(kPadctlPA), *pcie = map(kPciePA);
-  if (!car || !pmc || !gpio || !pinmux || !mc || !padctl || !pcie) { IOLog("SwitchWLAN: map failed\n"); return; }
-
-  const uint32_t rstU = rd(car, kRstDevU), clkU = rd(car, kClkEnbU), rstW = rd(car, kRstDevW);
-  const uint32_t plle = rd(car, kPlleBase), plleMisc = rd(car, kPlleMisc);
-  const uint32_t gates = rd(pmc, kPwrgateStatus), dpd = rd(pmc, kIoDpdStatus);
-  const uint32_t out = rd(gpio, kGpioH + 0x20), oe = rd(gpio, kGpioH + 0x10), in = rd(gpio, kGpioH + 0x30);
-  const uint32_t smmu = rd(mc, kSmmuConfig), afiAsid = rd(mc, kSmmuAfiAsid);
-
-  // Pad control is reset-only; read it once out of reset.
-  uint32_t padMux = ~0u, uphy = ~0u;
-  if (!(rstW & kWPadctl)) { padMux = rd(padctl, kPadMux); uphy = rd(padctl, kUphyPll0Ctl1); }
-
-  // The AFI needs the partition powered, AFI and PCIE clocked and out of reset; the root port also needs PCIEXCLK
-  // released and its own reset (AFI_PEX1_CTRL bit 0) deasserted.
-  uint32_t afiConfig = ~0u, pex1 = ~0u, rpId = ~0u, rpLink = ~0u, rpVend = ~0u;
-  const bool afiLive = (gates & kPartPcie) && (clkU & (kUAfi | kUPcie)) == (kUAfi | kUPcie) && !(rstU & (kUAfi | kUPcie));
-  if (afiLive) {
-    afiConfig = rd(pcie, kAfi + kAfiPcieConfig);
-    pex1 = rd(pcie, kAfi + kAfiPex1Ctrl);
-    if (!(rstU & kUPcieX) && (pex1 & kAfiPexRst)) {
-      rpId = rd(pcie, kRootPort1);
-      rpLink = rd(pcie, kRootPort1 + kRpLinkStatus);
-      rpVend = rd(pcie, kRootPort1 + kRpVendXp);
+    volatile uint32_t *car = map(kCarPA), *pmc = map(kPmcPA), *gpio = map(kGpioPA), *pinmux = map(kPinmuxPA);
+    volatile uint32_t *mc = map(kMcPA), *padctl = map(kPadctlPA), *pcie = map(kPciePA);
+    if (!car || !pmc || !gpio || !pinmux || !mc || !padctl || !pcie) {
+        IOLog("SwitchWLAN: map failed\n");
+        return;
     }
-  }
 
-  uint8_t mac[6] = {};
-  const bool haveMac = switch_wlan_mac(mac, nullptr) == 0;
+    const uint32_t rstU = rd(car, kRstDevU), clkU = rd(car, kClkEnbU), rstW = rd(car, kRstDevW);
+    const uint32_t plle = rd(car, kPlleBase), plleMisc = rd(car, kPlleMisc);
+    const uint32_t gates = rd(pmc, kPwrgateStatus), dpd = rd(pmc, kIoDpdStatus);
+    const uint32_t out = rd(gpio, kGpioH + 0x20), oe = rd(gpio, kGpioH + 0x10), in = rd(gpio, kGpioH + 0x30);
+    const uint32_t smmu = rd(mc, kSmmuConfig), afiAsid = rd(mc, kSmmuAfiAsid);
 
-  IOLog("SwitchWLAN: pcie part=%u clk afi/pcie=%u%u rst afi/pcie/x=%u%u%u plle en=%u lock=%u pex-dpd=%x "
-        "smmu=%x afi-asid=%08x | padmux=%08x uphy0=%08x | afi cfg=%08x pex1=%08x rp1 id=%08x link=%08x vend=%08x | "
-        "gpioH out=%02x oe=%02x in=%02x wl_reg_on=%u bt_reg_on=%u pin en/rst=%03x/%03x | uartd clk=%u rst=%u | "
-        "mac=%02x:%02x:%02x:%02x:%02x:%02x%s\n",
-        !!(gates & kPartPcie), !!(clkU & kUAfi), !!(clkU & kUPcie), !!(rstU & kUAfi), !!(rstU & kUPcie),
-        !!(rstU & kUPcieX), !!(plle & kPlleEnable), !!(plleMisc & kPlleLock), (dpd & kDpdPex) >> 4, smmu & 1, afiAsid, padMux, uphy, afiConfig, pex1, rpId, rpLink, rpVend,
-        out & 0xFF, oe & 0xFF, in & 0xFF, bit(in, kWlRegOn), bit(in, kBtRegOn), rd(pinmux, kPinWifiEn) & 0xFFF,
-        rd(pinmux, kPinWifiRst) & 0xFFF, !!(clkU & kUUartD), !!(rstU & kUUartD), mac[0], mac[1], mac[2], mac[3], mac[4],
-        mac[5], haveMac ? "" : " (fuses not visible)");
+    // Pad control is reset-only; read it once out of reset.
+    uint32_t padMux = ~0u, uphy = ~0u;
+    if (!(rstW & kWPadctl)) {
+        padMux = rd(padctl, kPadMux);
+        uphy = rd(padctl, kUphyPll0Ctl1);
+    }
+
+    // The AFI needs the partition powered, AFI and PCIE clocked and out of reset; the root port also needs PCIEXCLK
+    // released and its own reset (AFI_PEX1_CTRL bit 0) deasserted.
+    uint32_t afiConfig = ~0u, pex1 = ~0u, rpId = ~0u, rpLink = ~0u, rpVend = ~0u;
+    const bool afiLive =
+        (gates & kPartPcie) && (clkU & (kUAfi | kUPcie)) == (kUAfi | kUPcie) && !(rstU & (kUAfi | kUPcie));
+    if (afiLive) {
+        afiConfig = rd(pcie, kAfi + kAfiPcieConfig);
+        pex1 = rd(pcie, kAfi + kAfiPex1Ctrl);
+        if (!(rstU & kUPcieX) && (pex1 & kAfiPexRst)) {
+            rpId = rd(pcie, kRootPort1);
+            rpLink = rd(pcie, kRootPort1 + kRpLinkStatus);
+            rpVend = rd(pcie, kRootPort1 + kRpVendXp);
+        }
+    }
+
+    uint8_t mac[6] = {};
+    const bool haveMac = switch_wlan_mac(mac, nullptr) == 0;
+
+    IOLog("SwitchWLAN: pcie part=%u clk afi/pcie=%u%u rst afi/pcie/x=%u%u%u plle en=%u lock=%u pex-dpd=%x "
+          "smmu=%x afi-asid=%08x | padmux=%08x uphy0=%08x | afi cfg=%08x pex1=%08x rp1 id=%08x link=%08x vend=%08x | "
+          "gpioH out=%02x oe=%02x in=%02x wl_reg_on=%u bt_reg_on=%u pin en/rst=%03x/%03x | uartd clk=%u rst=%u | "
+          "mac=%02x:%02x:%02x:%02x:%02x:%02x%s\n",
+          !!(gates & kPartPcie), !!(clkU & kUAfi), !!(clkU & kUPcie), !!(rstU & kUAfi), !!(rstU & kUPcie),
+          !!(rstU & kUPcieX), !!(plle & kPlleEnable), !!(plleMisc & kPlleLock), (dpd & kDpdPex) >> 4, smmu & 1, afiAsid,
+          padMux, uphy, afiConfig, pex1, rpId, rpLink, rpVend, out & 0xFF, oe & 0xFF, in & 0xFF, bit(in, kWlRegOn),
+          bit(in, kBtRegOn), rd(pinmux, kPinWifiEn) & 0xFFF, rd(pinmux, kPinWifiRst) & 0xFFF, !!(clkU & kUUartD),
+          !!(rstU & kUUartD), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], haveMac ? "" : " (fuses not visible)");
 }

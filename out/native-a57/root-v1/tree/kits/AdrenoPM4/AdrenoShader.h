@@ -21,10 +21,16 @@ struct AdrenoShaderMapping {
     uint32_t page_shift, readonly;
 };
 enum AdrenoShaderStatus {
-    AdrenoShaderOK, AdrenoShaderArgument, AdrenoShaderProfile,
-    AdrenoShaderMappingError, AdrenoShaderCapacity, AdrenoShaderAlias
+    AdrenoShaderOK,
+    AdrenoShaderArgument,
+    AdrenoShaderProfile,
+    AdrenoShaderMappingError,
+    AdrenoShaderCapacity,
+    AdrenoShaderAlias
 };
-struct AdrenoShaderResult { uint32_t status, words, registers; };
+struct AdrenoShaderResult {
+    uint32_t status, words, registers;
+};
 /* Encode the A740 fd6_emit_shader register subset for real vertex/fragment
  * variants without private memory/constant-data blobs. All actual compiler
  * binding fields must be supplied; do not infer them from code size or names.
@@ -35,8 +41,8 @@ struct AdrenoShaderResult { uint32_t status, words, registers; };
  * This function does not accept user command streams or authorize submission.
  * Failure preserves output, including capacity/metadata alias and pointer wrap.
  * No allocation, MMIO, CPU rendering, simulated mappings or completion. */
-struct AdrenoShaderResult AdrenoA740ShaderBind(const struct AdrenoShaderState *,
-    const struct AdrenoShaderMapping *, uint32_t *output, size_t output_words);
+struct AdrenoShaderResult AdrenoA740ShaderBind(const struct AdrenoShaderState *, const struct AdrenoShaderMapping *,
+                                               uint32_t *output, size_t output_words);
 #ifdef __cplusplus
 }
 #endif

@@ -134,13 +134,21 @@ def resolve(paths):
     return out
 
 
+def ignored():
+    # clang-format -i honours <tree>/.clang-format-ignore, but not when it writes to stdout (--check): skip them here.
+    path = TREE / '.clang-format-ignore'
+    lines = path.read_text().splitlines() if path.exists() else []
+    return {TREE / l.strip() for l in lines if l.strip() and not l.lstrip().startswith('#')}
+
+
 def first_party(roots=FIRST_PARTY):
+    skip = ignored()
     for r in roots:
         for d, dirs, files in os.walk(TREE / r):
             dirs[:] = sorted(x for x in dirs if not FOREIGN.search(f'/{x}/'))
             for f in sorted(files):
                 p = Path(d) / f
-                if f.endswith(SOURCES) and not FOREIGN.search(str(p)):
+                if f.endswith(SOURCES) and not FOREIGN.search(str(p)) and p not in skip:
                     yield p
 
 

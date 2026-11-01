@@ -15,7 +15,8 @@ extern "C" {
 volatile uint32_t native_keyevents_stage, native_keyevents_refused_opens;
 volatile int native_keyevents_status = -1;
 volatile uint64_t native_keyevents_service;
-void native_keyevents_open_refused(void) {
+void native_keyevents_open_refused(void)
+{
     native_keyevents_refused_opens = native_keyevents_refused_opens + 1;
 }
 // sheng-aks=1: the owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed the diagnostic
@@ -24,7 +25,8 @@ extern char boot_progress_ext[8][48];
 volatile uint32_t native_aks_opens, native_aks_calls;
 static volatile uint32_t aks_count[96];
 static volatile int32_t aks_rc[96];
-bool native_aks_state_enabled(void) {
+bool native_aks_state_enabled(void)
+{
     static int cached = -1;
     if (cached < 0) {
         unsigned value = 0;
@@ -33,7 +35,8 @@ bool native_aks_state_enabled(void) {
     return cached == 1;
 }
 // sheng-aks-sls=<n> overrides the reported lock state (default 0 = unlocked; 3 = MobileKeyBag's "no passcode").
-uint32_t native_aks_lock_state(void) {
+uint32_t native_aks_lock_state(void)
+{
     static int cached = -1;
     if (cached < 0) {
         unsigned value = 0;
@@ -42,7 +45,8 @@ uint32_t native_aks_lock_state(void) {
     }
     return (uint32_t)cached;
 }
-static void aks_publish(void) {
+static void aks_publish(void)
+{
     // Slot 0: counters; slot 1: selector:count tokens ('e' = the last answer was an error). Slots 2-3 belong to the Data store.
     char row[48];
     unsigned used = 0;
@@ -64,19 +68,25 @@ static void aks_publish(void) {
     for (; i < 47; ++i) boot_progress_ext[1][i] = ' ';
     boot_progress_ext[1][47] = 0;
 }
-void native_aks_opened(void) {
+void native_aks_opened(void)
+{
     native_aks_opens = native_aks_opens + 1;
     aks_publish();
 }
-void native_aks_call(uint32_t selector, int32_t result) {
+void native_aks_call(uint32_t selector, int32_t result)
+{
     native_aks_calls = native_aks_calls + 1;
-    if (selector < 96) { aks_count[selector] = aks_count[selector] + 1; aks_rc[selector] = result; }
+    if (selector < 96) {
+        aks_count[selector] = aks_count[selector] + 1;
+        aks_rc[selector] = result;
+    }
     aks_publish();
 }
-static void native_keyevents_probe(void) {
+static void native_keyevents_probe(void)
+{
     unsigned enabled = 0, original = 0;
-    if (!PE_parse_boot_argn("offline-key-events", &enabled, sizeof(enabled)) || enabled != 1 ||
-        native_keyevents_stage) return;
+    if (!PE_parse_boot_argn("offline-key-events", &enabled, sizeof(enabled)) || enabled != 1 || native_keyevents_stage)
+        return;
     native_keyevents_stage = 1;
     PE_parse_boot_argn("offline-keystore", &original, sizeof(original));
     native_keyevents_status = kIOReturnNotPermitted;
@@ -112,18 +122,19 @@ volatile uint32_t native_keystore_stage;
 volatile int native_keystore_load_status = -1;
 volatile uint64_t native_keystore_service;
 volatile uint32_t native_keystore_class_size;
-__attribute__((noinline)) void native_keystore_checkpoint(void) {
+__attribute__((noinline)) void native_keystore_checkpoint(void)
+{
     __asm__ volatile("" ::: "memory");
 }
-void native_keystore_probe(void) {
+void native_keystore_probe(void)
+{
     native_keyevents_probe();
     unsigned enabled = 0;
-    if (!PE_parse_boot_argn("offline-keystore", &enabled, sizeof(enabled)) || enabled != 1 ||
-        native_keystore_stage) return;
+    if (!PE_parse_boot_argn("offline-keystore", &enabled, sizeof(enabled)) || enabled != 1 || native_keystore_stage)
+        return;
     native_keystore_stage = 1;
-    native_keystore_load_status = OSKext::loadKextWithIdentifier(
-        "com.apple.driver.AppleSEPKeyStore", true, false,
-        kOSKextExcludeNone, kOSKextExcludeNone, nullptr);
+    native_keystore_load_status = OSKext::loadKextWithIdentifier("com.apple.driver.AppleSEPKeyStore", true, false,
+                                                                 kOSKextExcludeNone, kOSKextExcludeNone, nullptr);
     native_keystore_stage = 2;
     if (!native_keystore_load_status) {
         OSDictionary *matching = IOService::serviceMatching("AppleKeyStore");

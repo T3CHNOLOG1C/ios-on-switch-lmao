@@ -34,10 +34,10 @@ bool switch_pd_owns_alert(void);
 void switch_pd_set_power_listener(void (*listener)(void *context), void *context);
 
 // Internal wiring between the units of libSwitchUSBHost.a (not for other drivers).
-int switchxhci_start(bool superSpeed);       // SwitchXHCI.cpp: bring-up + AppleUSBXHCI; panics on a lost interrupt
-void switchxhci_set_role(bool host);         // pad overrides + XUDC hand-over; callable before the host starts
-void switch_dp_alt_mode(bool entered, unsigned lanes);   // SwitchDPOut.cpp, from SwitchPD's work loop
-int switch_dp_start(void);                   // SwitchDPOut.cpp: DPAUX1 and its HPD interrupt
+int switchxhci_start(bool superSpeed);  // SwitchXHCI.cpp: bring-up + AppleUSBXHCI; panics on a lost interrupt
+void switchxhci_set_role(bool host);    // pad overrides + XUDC hand-over; callable before the host starts
+void switch_dp_alt_mode(bool entered, unsigned lanes);  // SwitchDPOut.cpp, from SwitchPD's work loop
+int switch_dp_start(void);                              // SwitchDPOut.cpp: DPAUX1 and its HPD interrupt
 
 #ifdef __cplusplus
 }

@@ -42,7 +42,10 @@ static uint32_t bits(Reader *r, unsigned n)
     return v;
 }
 
-static bool flag(Reader *r) { return bits(r, 1); }
+static bool flag(Reader *r)
+{
+    return bits(r, 1);
+}
 
 static uint32_t ue(Reader *r)
 {
@@ -73,14 +76,13 @@ static bool moreData(const Reader *r)
 }
 
 static const uint8_t kZigzag4[16] = {0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15};
-static const uint8_t kZigzag8[64] = {
-    0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,  12, 19, 26, 33, 40, 48,
-    41, 34, 27, 20, 13, 6,  7,  14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23,
-    30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
+static const uint8_t kZigzag8[64] = {0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,
+                                     12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6,  7,  14, 21, 28,
+                                     35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+                                     58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
 // Table 7-3 and 7-4, in zigzag order.
-static const uint8_t kDefault4[2][16] = {
-    {6, 13, 13, 20, 20, 20, 28, 28, 28, 28, 32, 32, 32, 37, 37, 42},
-    {10, 14, 14, 20, 20, 20, 24, 24, 24, 24, 27, 27, 27, 30, 30, 34}};
+static const uint8_t kDefault4[2][16] = {{6, 13, 13, 20, 20, 20, 28, 28, 28, 28, 32, 32, 32, 37, 37, 42},
+                                         {10, 14, 14, 20, 20, 20, 24, 24, 24, 24, 27, 27, 27, 30, 30, 34}};
 static const uint8_t kDefault8[2][64] = {
     {6,  10, 10, 13, 11, 13, 16, 16, 16, 16, 18, 18, 18, 18, 18, 23, 23, 23, 23, 23, 23, 25,
      25, 25, 25, 25, 25, 25, 27, 27, 27, 27, 27, 27, 27, 27, 29, 29, 29, 29, 29, 29, 29, 31,
@@ -112,27 +114,31 @@ static bool scalingList(Reader *r, uint8_t *out, unsigned size)
 
 // The scaling lists of an SPS or a PPS with fall-back rule A (fallback == NULL) or B (fallback = the SPS's lists),
 // Table 7-2. Only the two 8x8 luma lists matter for 4:2:0, the only chroma format accepted downstream.
-static void scalingMatrices(Reader *r, unsigned lists8, uint8_t s4[6][16], uint8_t s8[2][64],
-                            const uint8_t (*fb4)[16], const uint8_t (*fb8)[64])
+static void scalingMatrices(Reader *r, unsigned lists8, uint8_t s4[6][16], uint8_t s8[2][64], const uint8_t (*fb4)[16],
+                            const uint8_t (*fb8)[64])
 {
     for (unsigned i = 0; i < 6; i++) {
         if (flag(r)) {
             if (!scalingList(r, s4[i], 16)) defaultList(s4[i], 16, i >= 3);
         } else if (i == 0 || i == 3) {
-            if (fb4) memcpy(s4[i], fb4[i], 16);
-            else defaultList(s4[i], 16, i == 3);
+            if (fb4)
+                memcpy(s4[i], fb4[i], 16);
+            else
+                defaultList(s4[i], 16, i == 3);
         } else {
             memcpy(s4[i], s4[i - 1], 16);
         }
     }
     for (unsigned i = 0; i < lists8; i++) {
         uint8_t scratch[64];
-        uint8_t *dst = i < 2 ? s8[i] : scratch;   // 4:4:4 chroma lists are parsed and dropped
+        uint8_t *dst = i < 2 ? s8[i] : scratch;  // 4:4:4 chroma lists are parsed and dropped
         if (flag(r)) {
             if (!scalingList(r, dst, 64)) defaultList(dst, 64, i & 1);
         } else if (i < 2) {
-            if (fb8) memcpy(dst, fb8[i], 64);
-            else defaultList(dst, 64, i & 1);
+            if (fb8)
+                memcpy(dst, fb8[i], 64);
+            else
+                defaultList(dst, 64, i & 1);
         }
     }
 }
@@ -158,9 +164,9 @@ static void hrd(Reader *r)
 // E.1.1; a damaged VUI only loses the VUI.
 static void vui(Reader *r, H264SPS *s)
 {
-    if (flag(r) && bits(r, 8) == 255) bits(r, 32);   // aspect_ratio_idc, Extended_SAR
-    if (flag(r)) flag(r);                             // overscan
-    if (flag(r)) {                                    // video_signal_type
+    if (flag(r) && bits(r, 8) == 255) bits(r, 32);  // aspect_ratio_idc, Extended_SAR
+    if (flag(r)) flag(r);                           // overscan
+    if (flag(r)) {                                  // video_signal_type
         bits(r, 3);
         s->full_range = flag(r);
         if ((s->colour_description = flag(r))) {
@@ -169,17 +175,17 @@ static void vui(Reader *r, H264SPS *s)
             s->matrix = (uint8_t)bits(r, 8);
         }
     }
-    if (flag(r)) {                                    // chroma_loc_info
+    if (flag(r)) {  // chroma_loc_info
         ue(r);
         ue(r);
     }
-    if (flag(r)) bits(r, 32), bits(r, 32), flag(r);   // timing_info
+    if (flag(r)) bits(r, 32), bits(r, 32), flag(r);  // timing_info
     const bool nal = flag(r);
     if (nal) hrd(r);
     const bool vcl = flag(r);
     if (vcl) hrd(r);
-    if (nal || vcl) flag(r);                          // low_delay_hrd_flag
-    flag(r);                                          // pic_struct_present_flag
+    if (nal || vcl) flag(r);  // low_delay_hrd_flag
+    flag(r);                  // pic_struct_present_flag
     if (flag(r)) {
         flag(r);
         ue(r), ue(r), ue(r), ue(r);
@@ -211,8 +217,19 @@ int h264_parse_sps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
     s.bit_depth_luma = s.bit_depth_chroma = 8;
     flat(s.scaling4, s.scaling8);
     switch (s.profile_idc) {
-    case 100: case 110: case 122: case 244: case 44: case 83: case 86: case 118: case 128: case 138: case 139:
-    case 134: case 135:
+    case 100:
+    case 110:
+    case 122:
+    case 244:
+    case 44:
+    case 83:
+    case 86:
+    case 118:
+    case 128:
+    case 138:
+    case 139:
+    case 134:
+    case 135:
         s.chroma_format_idc = (uint8_t)ue(&r);
         if (s.chroma_format_idc > 3) return -1;
         if (s.chroma_format_idc == 3) s.separate_colour_plane = flag(&r);
@@ -284,7 +301,7 @@ int h264_parse_pps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
     const uint32_t groups = ue(&r) + 1;
     if (groups > 8) return -1;
     p.num_slice_groups = (uint8_t)groups;
-    if (groups > 1) {            // FMO (Baseline only): parsed far enough to report, never decoded here
+    if (groups > 1) {  // FMO (Baseline only): parsed far enough to report, never decoded here
         if (idOut) *idOut = (uint8_t)id;
         sets->pps[id] = p;
         return 0;
@@ -296,7 +313,7 @@ int h264_parse_pps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
     p.weighted_pred = flag(&r);
     p.weighted_bipred_idc = (uint8_t)bits(&r, 2);
     p.pic_init_qp = (int8_t)(26 + se(&r));
-    se(&r);                      // pic_init_qs_minus26
+    se(&r);  // pic_init_qs_minus26
     p.chroma_qp_index_offset = (int8_t)se(&r);
     p.deblocking_filter_control_present = flag(&r);
     p.constrained_intra_pred = flag(&r);
@@ -312,9 +329,11 @@ int h264_parse_pps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
                 scalingMatrices(&r, lists8, p.scaling4, p.scaling8, s->scaling4, s->scaling8);
             else
                 scalingMatrices(&r, lists8, p.scaling4, p.scaling8, NULL, NULL);
-            if (!p.transform_8x8_mode) {      // no 8x8 lists sent: fall back as for absent ones
-                if (s->scaling_matrix_present) memcpy(p.scaling8, s->scaling8, sizeof(p.scaling8));
-                else defaultList(p.scaling8[0], 64, false), defaultList(p.scaling8[1], 64, true);
+            if (!p.transform_8x8_mode) {  // no 8x8 lists sent: fall back as for absent ones
+                if (s->scaling_matrix_present)
+                    memcpy(p.scaling8, s->scaling8, sizeof(p.scaling8));
+                else
+                    defaultList(p.scaling8[0], 64, false), defaultList(p.scaling8[1], 64, true);
             }
         }
         p.second_chroma_qp_index_offset = (int8_t)se(&r);
@@ -383,7 +402,7 @@ int h264_parse_slice(const H264ParamSets *sets, const uint8_t *nal, size_t size,
     if (p->redundant_pic_cnt_present) ue(&r);
     const bool b = out->slice_type == H264_SLICE_B;
     const bool intra = out->slice_type == H264_SLICE_I || out->slice_type == H264_SLICE_SI;
-    if (b) flag(&r);                              // direct_spatial_mv_pred_flag
+    if (b) flag(&r);  // direct_spatial_mv_pred_flag
     uint8_t count[2] = {p->num_ref_idx_active[0], p->num_ref_idx_active[1]};
     if (!intra && flag(&r)) {
         const uint32_t l0 = ue(&r) + 1, l1 = b ? ue(&r) + 1 : count[1];

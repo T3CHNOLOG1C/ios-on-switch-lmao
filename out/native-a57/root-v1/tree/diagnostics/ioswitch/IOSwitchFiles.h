@@ -5,7 +5,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-enum { IOSW_STORAGE_FAT=0, IOSW_STORAGE_RAW=1, IOSW_STORAGE_INVALID=-1 };
+enum { IOSW_STORAGE_FAT = 0, IOSW_STORAGE_RAW = 1, IOSW_STORAGE_INVALID = -1 };
 /* Parsed once during probe; absent/fat retains the existing file backend.
  * Unknown values are fatal. raw is root-boot-only, never a fallback. */
 int ioswitch_files_storage_profile(void);

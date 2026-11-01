@@ -13,22 +13,22 @@ namespace swlan {
 namespace crypto {
 
 struct Sha1 {
-  uint32_t h[5];
-  uint8_t buffer[64];
-  size_t used;
-  uint64_t length;
+    uint32_t h[5];
+    uint8_t buffer[64];
+    size_t used;
+    uint64_t length;
 
-  void init();
-  void update(const uint8_t *data, size_t n);
-  void finish(uint8_t out[20]);
+    void init();
+    void update(const uint8_t *data, size_t n);
+    void finish(uint8_t out[20]);
 };
 
 // HMAC-SHA1 with the key's inner and outer states kept, so PBKDF2's 8192 MACs do not re-hash the key.
 struct Hmac {
-  Sha1 inner, outer;
-  void init(const uint8_t *key, size_t keyLength);
-  // MAC of the concatenation of `count` parts.
-  void mac(const uint8_t *const *parts, const size_t *lengths, size_t count, uint8_t out[20]) const;
+    Sha1 inner, outer;
+    void init(const uint8_t *key, size_t keyLength);
+    // MAC of the concatenation of `count` parts.
+    void mac(const uint8_t *const *parts, const size_t *lengths, size_t count, uint8_t out[20]) const;
 };
 
 void hmacSha1(const uint8_t *key, size_t keyLength, const uint8_t *const *parts, const size_t *lengths, size_t count,
@@ -39,18 +39,18 @@ void passphrasePmk(const uint8_t *passphrase, size_t passphraseLength, const uin
 // The PMK given as 64 hexadecimal digits; false for anything else.
 bool pmkFromHex(const uint8_t *text, size_t length, uint8_t pmk[32]);
 // PRF-n (802.11 12.7.1.2): HMAC-SHA1(key, label || 0 || data || i) blocks.
-void prf(const uint8_t *key, size_t keyLength, const char *label, const uint8_t *data, size_t dataLength,
-         uint8_t *out, size_t outLength);
+void prf(const uint8_t *key, size_t keyLength, const char *label, const uint8_t *data, size_t dataLength, uint8_t *out,
+         size_t outLength);
 // RFC 3394 unwrap with a 128-bit KEK: false if the integrity check fails or the sizes are wrong.
 bool keyUnwrap(const uint8_t kek[16], const uint8_t *wrapped, size_t wrappedLength, uint8_t *out);
 // The same in constant time over equal lengths.
 bool same(const uint8_t *a, const uint8_t *b, size_t n);
 
 struct Aes128 {
-  uint8_t roundKeys[11][16];
-  void init(const uint8_t key[16]);
-  void encrypt(uint8_t block[16]) const;   // used by the host tests' wrap
-  void decrypt(uint8_t block[16]) const;
+    uint8_t roundKeys[11][16];
+    void init(const uint8_t key[16]);
+    void encrypt(uint8_t block[16]) const;  // used by the host tests' wrap
+    void decrypt(uint8_t block[16]) const;
 };
 
 }  // namespace crypto

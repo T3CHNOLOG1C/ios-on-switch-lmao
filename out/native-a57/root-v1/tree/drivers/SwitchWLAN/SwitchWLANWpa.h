@@ -26,51 +26,51 @@ const uint8_t *element(const uint8_t *ies, size_t length, uint8_t id, size_t *el
 const char *checkRsn(const uint8_t *rsn, size_t length);
 
 struct Gtk {
-  uint8_t index;
-  uint8_t key[16];
-  uint8_t rsc[6];
+    uint8_t index;
+    uint8_t key[16];
+    uint8_t rsc[6];
 };
 
 // What one received EAPOL-Key frame asks for: a reply to send, a pairwise key and/or a group key to install.
 struct Step {
-  uint8_t reply[400];
-  size_t replyLength;
-  bool hasPtk, hasGtk;
-  uint8_t tk[16];
-  Gtk gtk;
+    uint8_t reply[400];
+    size_t replyLength;
+    bool hasPtk, hasGtk;
+    uint8_t tk[16];
+    Gtk gtk;
 };
 
 class Supplicant {
 public:
-  using Random = void (*)(uint8_t *out, size_t length);
+    using Random = void (*)(uint8_t *out, size_t length);
 
-  void init(const uint8_t pmk[32], const uint8_t spa[6], Random random);
-  void setIe(const uint8_t *ie, size_t length);   // the RSN element our association request carried
-  void wipe();                                     // keys and nonces cleared
-  bool hasAa() const { return haveAa_; }
-  const uint8_t *aa() const { return aa_; }
-  // Message 1 answered but no valid message 3: what a wrong passphrase looks like.
-  bool unconfirmed() const { return haveTptk_ && !(havePtk_ && sameKey(ptk_, tptk_)); }
-  bool keyed() const { return havePtk_ && haveGtk_; }
+    void init(const uint8_t pmk[32], const uint8_t spa[6], Random random);
+    void setIe(const uint8_t *ie, size_t length);  // the RSN element our association request carried
+    void wipe();                                   // keys and nonces cleared
+    bool hasAa() const { return haveAa_; }
+    const uint8_t *aa() const { return aa_; }
+    // Message 1 answered but no valid message 3: what a wrong passphrase looks like.
+    bool unconfirmed() const { return haveTptk_ && !(havePtk_ && sameKey(ptk_, tptk_)); }
+    bool keyed() const { return havePtk_ && haveGtk_; }
 
-  // nullptr when `step` holds what to do; else why the frame was dropped (nothing to do).
-  const char *receive(const uint8_t *frame, size_t length, Step &step);
+    // nullptr when `step` holds what to do; else why the frame was dropped (nothing to do).
+    const char *receive(const uint8_t *frame, size_t length, Step &step);
 
 private:
-  uint8_t pmk_[32], spa_[6], aa_[6], anonce_[32], snonce_[32], tptk_[48], ptk_[48], replay_[8];
-  uint8_t ie_[64];
-  size_t ieLength_ = 0;
-  bool haveAa_ = false, haveTptk_ = false, havePtk_ = false, haveReplay_ = false, haveGtk_ = false;
-  Gtk gtk_ = {};
-  Random random_ = nullptr;
+    uint8_t pmk_[32], spa_[6], aa_[6], anonce_[32], snonce_[32], tptk_[48], ptk_[48], replay_[8];
+    uint8_t ie_[64];
+    size_t ieLength_ = 0;
+    bool haveAa_ = false, haveTptk_ = false, havePtk_ = false, haveReplay_ = false, haveGtk_ = false;
+    Gtk gtk_ = {};
+    Random random_ = nullptr;
 
-  static bool sameKey(const uint8_t *a, const uint8_t *b);
-  struct Key;
-  void derive(const uint8_t aa[6], uint8_t ptk[48]) const;
-  void build(const Key &k, uint16_t info, const uint8_t nonce[32], const uint8_t *data, size_t dataLength,
-             const uint8_t kck[16], Step &step) const;
-  const char *unwrapGtk(const Key &k, const uint8_t ptk[48], Gtk &gtk) const;
-  bool fresh(const Gtk &gtk);
+    static bool sameKey(const uint8_t *a, const uint8_t *b);
+    struct Key;
+    void derive(const uint8_t aa[6], uint8_t ptk[48]) const;
+    void build(const Key &k, uint16_t info, const uint8_t nonce[32], const uint8_t *data, size_t dataLength,
+               const uint8_t kck[16], Step &step) const;
+    const char *unwrapGtk(const Key &k, const uint8_t ptk[48], Gtk &gtk) const;
+    bool fresh(const Gtk &gtk);
 };
 
 }  // namespace wpa

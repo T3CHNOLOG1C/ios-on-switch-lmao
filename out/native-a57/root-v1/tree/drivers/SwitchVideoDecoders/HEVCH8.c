@@ -38,8 +38,8 @@ void HEVCH8Register(void)
     CreateInstance create = codec ? (CreateInstance)dlsym(codec, "HEVCVideoDecoder_CreateInstance") : NULL;
     RegisterDecoder registerDecoder = (RegisterDecoder)dlsym(RTLD_DEFAULT, "VTRegisterVideoDecoder");
     if (!create || !registerDecoder) {
-        os_log_error(log, "HEVCH8: no %{public}s, HEVC stays software-only", create ? "VTRegisterVideoDecoder" :
-                     "HEVCVideoDecoder_CreateInstance in VCPHEVC.videocodec");
+        os_log_error(log, "HEVCH8: no %{public}s, HEVC stays software-only",
+                     create ? "VTRegisterVideoDecoder" : "HEVCVideoDecoder_CreateInstance in VCPHEVC.videocodec");
         return;
     }
     OSStatus status = registerDecoder('hvc1', create);

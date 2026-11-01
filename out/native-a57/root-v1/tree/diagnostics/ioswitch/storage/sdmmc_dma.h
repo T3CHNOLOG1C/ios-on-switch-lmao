@@ -32,8 +32,8 @@ struct iosw_sd_dma {
 int iosw_sd_dma_bind(struct iosw_sd_dma *, const struct iosw_sd_io *, void *, uint64_t frequency);
 /* Called after transfer/count/direction are configured, before the command.
  * Stages the COMPLETE write before any DMA address is submitted. */
-int iosw_sd_dma_prepare(struct iosw_sd_dma *, const struct iosw_sd_io *, void *,
-    uint32_t block_size, uint32_t count, const uint8_t *input);
+int iosw_sd_dma_prepare(struct iosw_sd_dma *, const struct iosw_sd_io *, void *, uint32_t block_size, uint32_t count,
+                        const uint8_t *input);
 /* Command R1 has already succeeded. Accepts only error-free full transfer;
  * handles exact 512 KiB SDMA boundaries, never restarting beyond the request. */
 int iosw_sd_dma_wait(struct iosw_sd_dma *, const struct iosw_sd_io *, void *, struct iosw_sd_result *);

@@ -8,7 +8,8 @@
 using MatchingFn = void *(*)(const char *);
 using GetServiceFn = unsigned (*)(unsigned, void *);
 
-int main() {
+int main()
+{
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
     if (!iokit) return 1;
     auto matching = (MatchingFn)dlsym(iokit, "IOServiceMatching");

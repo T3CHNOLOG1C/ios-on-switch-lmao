@@ -16,7 +16,7 @@ typedef struct {
     uint8_t profile_idc, constraint_flags, level_idc;
     uint8_t chroma_format_idc, bit_depth_luma, bit_depth_chroma;
     bool separate_colour_plane, transform_bypass, scaling_matrix_present;
-    uint8_t scaling4[6][16], scaling8[2][64];       // raster order (7.4.2.1.1 with fall-back rule A applied)
+    uint8_t scaling4[6][16], scaling8[2][64];  // raster order (7.4.2.1.1 with fall-back rule A applied)
     uint8_t log2_max_frame_num, poc_type, log2_max_poc_lsb;
     bool delta_pic_order_always_zero;
     int32_t offset_for_non_ref_pic, offset_for_top_to_bottom_field;
@@ -26,7 +26,7 @@ typedef struct {
     bool gaps_in_frame_num_allowed;
     uint16_t width_mbs, height_map_units;
     bool frame_mbs_only, mb_adaptive_frame_field, direct_8x8_inference;
-    uint32_t crop_left, crop_right, crop_top, crop_bottom;   // in luma samples
+    uint32_t crop_left, crop_right, crop_top, crop_bottom;  // in luma samples
     // VUI
     bool full_range, colour_description;
     uint8_t colour_primaries, transfer, matrix;
@@ -45,11 +45,11 @@ typedef struct {
     int8_t pic_init_qp, chroma_qp_index_offset, second_chroma_qp_index_offset;
     bool deblocking_filter_control_present, constrained_intra_pred, redundant_pic_cnt_present;
     bool transform_8x8_mode;
-    uint8_t scaling4[6][16], scaling8[2][64];       // after fall-back rule B against its SPS
+    uint8_t scaling4[6][16], scaling8[2][64];  // after fall-back rule B against its SPS
 } H264PPS;
 
 typedef struct {
-    uint8_t type;                       // MMCO 1..6
+    uint8_t type;  // MMCO 1..6
     uint32_t difference_of_pic_nums_minus1, long_term_pic_num, long_term_frame_idx, max_long_term_frame_idx_plus1;
 } H264MMCO;
 

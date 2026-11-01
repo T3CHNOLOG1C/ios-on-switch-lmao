@@ -23,16 +23,38 @@ static void *lock_of(spinlock_t *l)
 	return l->lck;
 }
 
-void spin_lock_init(spinlock_t *l) { l->lck = NULL; (void)lock_of(l); }
-void spin_lock(spinlock_t *l) { bpxnu_spin_lock(lock_of(l)); }
-void spin_unlock(spinlock_t *l) { bpxnu_spin_unlock(l->lck); }
-unsigned long bpxnu_linux_spin_lock_irqsave(spinlock_t *l) { return bpxnu_spin_lock_irqsave(lock_of(l)); }
-void spin_unlock_irqrestore(spinlock_t *l, unsigned long flags) { bpxnu_spin_unlock_irqrestore(l->lck, flags); }
+void spin_lock_init(spinlock_t *l)
+{
+	l->lck = NULL;
+	(void)lock_of(l);
+}
+void spin_lock(spinlock_t *l)
+{
+	bpxnu_spin_lock(lock_of(l));
+}
+void spin_unlock(spinlock_t *l)
+{
+	bpxnu_spin_unlock(l->lck);
+}
+unsigned long bpxnu_linux_spin_lock_irqsave(spinlock_t *l)
+{
+	return bpxnu_spin_lock_irqsave(lock_of(l));
+}
+void spin_unlock_irqrestore(spinlock_t *l, unsigned long flags)
+{
+	bpxnu_spin_unlock_irqrestore(l->lck, flags);
+}
 
 /* Only the atomic (interrupts-off) path of mail.c uses these; TegraBPMP never takes it. */
 static spinlock_t irq_lock;
-unsigned long bpxnu_local_irq_save(void) { return bpxnu_spin_lock_irqsave(lock_of(&irq_lock)); }
-void local_irq_restore(unsigned long flags) { bpxnu_spin_unlock_irqrestore(irq_lock.lck, flags); }
+unsigned long bpxnu_local_irq_save(void)
+{
+	return bpxnu_spin_lock_irqsave(lock_of(&irq_lock));
+}
+void local_irq_restore(unsigned long flags)
+{
+	bpxnu_spin_unlock_irqrestore(irq_lock.lck, flags);
+}
 
 void init_completion(struct completion *c)
 {
@@ -52,13 +74,15 @@ void complete(struct completion *c)
 /* Linux returns 0 on timeout, else the jiffies left (at least 1). */
 unsigned long wait_for_completion_timeout(struct completion *c, unsigned long timeout)
 {
-	const unsigned long long deadline = bpxnu_nanotime() + (unsigned long long)timeout * 1000000ULL;
+	const unsigned long long deadline =
+		bpxnu_nanotime() + (unsigned long long)timeout * 1000000ULL;
 	for (;;) {
 		unsigned long flags;
 		spin_lock_irqsave(&c->lock, flags);
 		if (c->done) {
 			unsigned long long now = bpxnu_nanotime();
-			unsigned long left = now < deadline ? (unsigned long)((deadline - now) / 1000000ULL) : 0;
+			unsigned long left =
+				now < deadline ? (unsigned long)((deadline - now) / 1000000ULL) : 0;
 			c->done--;
 			spin_unlock_irqrestore(&c->lock, flags);
 			return left ? left : 1;
@@ -82,7 +106,8 @@ void sema_init(struct semaphore *s, int count)
 /* Linux returns 0 when it got the semaphore, -ETIME(DOUT) when the timeout (jiffies) ran out. */
 int down_timeout(struct semaphore *s, long timeout)
 {
-	const unsigned long long deadline = bpxnu_nanotime() + (unsigned long long)timeout * 1000000ULL;
+	const unsigned long long deadline =
+		bpxnu_nanotime() + (unsigned long long)timeout * 1000000ULL;
 	for (;;) {
 		unsigned long flags;
 		spin_lock_irqsave(&s->lock, flags);

@@ -9,7 +9,7 @@ struct NativeAdrenoVmRegion {
     ArmSmmu4KLiveState *state;
 };
 struct NativeAdrenoVmResult {
-    ArmSmmu4KStatus operation,quarantine;
+    ArmSmmu4KStatus operation, quarantine;
     size_t completed_spans;
     bool complete;
 };
@@ -26,33 +26,33 @@ struct NativeAdrenoVmResult {
  * only the owned streams. Uncertain resources require independent real reset.
  * No VM may be advertised to apps until per-client isolation, submission
  * validation/protection, genuine IRQ fences and reset are implemented. */
-enum : size_t {NativeAdrenoVmMaxObjects=1024};
+enum : size_t { NativeAdrenoVmMaxObjects = 1024 };
 /* Board hook for sampleWord(): reads one aligned word of physical memory through a fresh uncached mapping; 0 on success. */
-extern "C" int (*native_adreno_dram_read32)(uint64_t physical,uint32_t *value);
+extern "C" int (*native_adreno_dram_read32)(uint64_t physical, uint32_t *value);
 /* The board's reader through the kernel's cacheable physical aperture (null on the host: the BO's own mapping is read). */
-extern "C" int (*native_adreno_cached_read32)(uint64_t physical,uint32_t *value);
+extern "C" int (*native_adreno_cached_read32)(uint64_t physical, uint32_t *value);
 /* Board hook for auditRange(): [physical, physical+bytes), whole 64-byte lines inside one page, as the cacheable physical aperture and
  * DRAM (a fresh uncached mapping) read it. A line that differs is cleaned and invalidated and DRAM read again: when DRAM then holds the
  * cached copy the line was dirty (*dirty), when DRAM is unchanged it was a stale clean copy (*stale). 0 on success. */
-extern "C" int (*native_adreno_line_audit)(uint64_t physical,size_t bytes,uint32_t *dirty,uint32_t *stale);
+extern "C" int (*native_adreno_line_audit)(uint64_t physical, size_t bytes, uint32_t *dirty, uint32_t *stale);
 class NativeAdrenoVm final {
     struct Mapping {
-        NativeAdrenoMemory *memory=nullptr;
-        uint64_t handle=0,iova=0;
-        size_t spans=0,mapped_spans=0;
-        unsigned permissions=0,writeback=0,shareability=0,jobs=0;
+        NativeAdrenoMemory *memory = nullptr;
+        uint64_t handle = 0, iova = 0;
+        size_t spans = 0, mapped_spans = 0;
+        unsigned permissions = 0, writeback = 0, shareability = 0, jobs = 0;
     };
-    Mapping *mappings_=nullptr;
+    Mapping *mappings_ = nullptr;
     NativeAdrenoVmRegion regions_[2]{};
     ArmSmmu4KLiveVisibility visibility_[2]{};
     ArmSmmu4KIo io_{};
-    ArmSmmu4KContextConfig *context_=nullptr;
-    ArmSmmu4KStreamState *streams_=nullptr;
-    ArmSmmu4KRange *ranges_=nullptr;
-    size_t capacity_=0,lower_count_=0,upper_count_=0,objects_=0;
-    unsigned budget_=0;
-    uint64_t next_handle_=1;
-    bool attached_=false,poisoned_=false,distrust_write_combined_=false;
+    ArmSmmu4KContextConfig *context_ = nullptr;
+    ArmSmmu4KStreamState *streams_ = nullptr;
+    ArmSmmu4KRange *ranges_ = nullptr;
+    size_t capacity_ = 0, lower_count_ = 0, upper_count_ = 0, objects_ = 0;
+    unsigned budget_ = 0;
+    uint64_t next_handle_ = 1;
+    bool attached_ = false, poisoned_ = false, distrust_write_combined_ = false;
     NativeAdrenoVmResult result_{};
     ArmSmmu4KLiveRegion region(unsigned) const;
     ArmSmmu4KStatus observe() const;
@@ -60,26 +60,27 @@ class NativeAdrenoVm final {
      * map/unmap pay a full extra audit only every 64th operation (int-139: 4 full walks of the 2 GiB aperture made every map 70 ms). */
     ArmSmmu4KStatus observeStreamsOnly() const;
     ArmSmmu4KStatus observeCheap();
-    unsigned since_audit_=0;
+    unsigned since_audit_ = 0;
     IOReturn fail(ArmSmmu4KStatus);
     Mapping *find(uint64_t);
-    void insert(size_t,unsigned);
-    void erase(size_t,size_t,unsigned);
-    IOReturn preflight(const NativeAdrenoMemory *,unsigned,uint64_t,unsigned,unsigned,unsigned) const;
+    void insert(size_t, unsigned);
+    void erase(size_t, size_t, unsigned);
+    IOReturn preflight(const NativeAdrenoMemory *, unsigned, uint64_t, unsigned, unsigned, unsigned) const;
+
 public:
-    NativeAdrenoVm()=default;
-    ~NativeAdrenoVm()=default;
-    NativeAdrenoVm(const NativeAdrenoVm &)=delete;
-    NativeAdrenoVm &operator=(const NativeAdrenoVm &)=delete;
-    IOReturn attach(const ArmSmmu4KIo *,ArmSmmu4KContextConfig *,ArmSmmu4KStreamState *,
-        const NativeAdrenoVmRegion *lower,const NativeAdrenoVmRegion *upper,
-        size_t max_spans,unsigned poll_budget);
+    NativeAdrenoVm() = default;
+    ~NativeAdrenoVm() = default;
+    NativeAdrenoVm(const NativeAdrenoVm &) = delete;
+    NativeAdrenoVm &operator=(const NativeAdrenoVm &) = delete;
+    IOReturn attach(const ArmSmmu4KIo *, ArmSmmu4KContextConfig *, ArmSmmu4KStreamState *,
+                    const NativeAdrenoVmRegion *lower, const NativeAdrenoVmRegion *upper, size_t max_spans,
+                    unsigned poll_budget);
     /* Frees CPU metadata only, with no BOs remaining. Never releases roots,
      * disables a bank or returns the platform lease; board lifecycle owns it. */
     IOReturn detach();
-    IOReturn findAddress(unsigned upper,size_t bytes,uint64_t alignment,uint64_t *iova) const;
-    IOReturn map(NativeAdrenoMemory *,unsigned upper,uint64_t iova,
-        unsigned permissions,unsigned writeback,unsigned shareability,uint64_t *handle);
+    IOReturn findAddress(unsigned upper, size_t bytes, uint64_t alignment, uint64_t *iova) const;
+    IOReturn map(NativeAdrenoMemory *, unsigned upper, uint64_t iova, unsigned permissions, unsigned writeback,
+                 unsigned shareability, uint64_t *handle);
     IOReturn unmap(uint64_t handle);
     IOReturn holdJob(uint64_t handle);
     /* TLBIALL for the context bank plus TLBSYNC: drops every cached translation of the bank whatever its ASID. Unmap already
@@ -92,15 +93,15 @@ public:
     IOReturn publishMapped();
     /* The submit path saw a CPU-cached word that DRAM did not hold yet in a client's BO: from now on write-combined BOs are maintained
      * like any other (sticky; the safe behaviour of int-070..097). */
-    void distrustWriteCombined() {distrust_write_combined_=true;}
-    bool writeCombinedTrusted() const {return !distrust_write_combined_;}
+    void distrustWriteCombined() { distrust_write_combined_ = true; }
+    bool writeCombinedTrusted() const { return !distrust_write_combined_; }
     /* After a submission completed: cleans and invalidates the CPU caches over every GPU-writable imported BO, so the owner's mapping
      * (an IOSurface) reads what the GPU wrote, not a line prefetched while the GPU ran. Jobs name only their IBs, so every such BO
      * is covered. int-071: an imported render target read back 672 of 4096 texels stale. */
     IOReturn acquireImported();
     /* Diagnostic, never a proof of coherence: the 32-bit word at a mapped GPU address as the kernel's cacheable alias reads it
      * and, when the board installed native_adreno_dram_read32, as DRAM reads it through an uncached mapping (else ~0). */
-    IOReturn sampleWord(uint64_t iova,uint32_t *cached,uint32_t *dram) const;
+    IOReturn sampleWord(uint64_t iova, uint32_t *cached, uint32_t *dram) const;
     /* Every line of [iova, iova+bytes) that lies in a write-combined BO, through native_adreno_line_audit: *dirty counts lines a CPU
      * cache held newer than DRAM (a client view that caches after all; each such line is written back by the audit), *stale clean
      * copies, *lines the lines compared. kIOReturnUnsupported without a board hook. int-099 sampled one word and wrote its line back
@@ -108,17 +109,17 @@ public:
     /* Before a submission while write-combined BOs are trusted: every page of every mapped write-combined BO that XNU set back to the
      * default attribute is write-combined again (and its lines written back); *reset counts the pages. */
     IOReturn reassertWriteCombined(uint32_t *reset) const;
-    IOReturn auditRange(uint64_t iova,size_t bytes,uint32_t *lines,uint32_t *dirty,uint32_t *stale) const;
+    IOReturn auditRange(uint64_t iova, size_t bytes, uint32_t *lines, uint32_t *dirty, uint32_t *stale) const;
     /* Read-only description of a live mapping; never pins or extends it. */
-    IOReturn describe(uint64_t handle,uint64_t *iova,size_t *bytes,unsigned *permissions) const;
+    IOReturn describe(uint64_t handle, uint64_t *iova, size_t *bytes, unsigned *permissions) const;
     /* Up to `count` dwords of a mapped kernel-owned BO at a GPU address (through the kernel's own mapping), for the board log. */
-    IOReturn peekWords(uint64_t iova,uint32_t *out,size_t count) const;
+    IOReturn peekWords(uint64_t iova, uint32_t *out, size_t count) const;
     /* Only a scheduler's actual successful GPU completion may call this.
      * A timeout, interrupt bit alone or CPU-written timestamp is insufficient. */
     IOReturn retireJobAfterCompletion(uint64_t handle);
-    bool poisoned() const {return poisoned_;}
-    size_t objectCount() const {return objects_;}
-    size_t spanCount() const {return lower_count_+upper_count_;}
-    NativeAdrenoVmResult lastResult() const {return result_;}
+    bool poisoned() const { return poisoned_; }
+    size_t objectCount() const { return objects_; }
+    size_t spanCount() const { return lower_count_ + upper_count_; }
+    NativeAdrenoVmResult lastResult() const { return result_; }
 };
 #endif

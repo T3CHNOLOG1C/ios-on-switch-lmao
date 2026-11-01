@@ -17,24 +17,24 @@
 #define TEGRA_SCANOUT_COPY_VERSION 1u
 
 struct TegraScanoutCopy {
-    uint32_t version;              // TEGRA_SCANOUT_COPY_VERSION
-    uint32_t width,height;         // pixels: 1280 x 720
-    uint64_t sequence;             // increases by one per offer, from 1
-    void *display;                 // NativeLegacyDisplay: pass back to native_legacy_gpu_complete
+    uint32_t version;        // TEGRA_SCANOUT_COPY_VERSION
+    uint32_t width, height;  // pixels: 1280 x 720
+    uint64_t sequence;       // increases by one per offer, from 1
+    void *display;           // NativeLegacyDisplay: pass back to native_legacy_gpu_complete
     // The swapped IOSurface's memory (an IOMemoryDescriptor *): pitch-linear, 32-bit pixels, row y at byte y * sourceStride, from
     // offset 0. Retained by the display from the offer until native_legacy_gpu_complete; retain it yourself to cache a GPU mapping
     // of it beyond that. Not prepared (wired) by the display. The compositor rendered it on the GPU: the copy must be ordered after
     // that work (semaphore acquires on the producing channels), and the display does no CPU wait or cache maintenance for it.
     void *source;
-    uint64_t sourceStride;         // bytes per row, >= width * 4 (5120 or padded)
-    uint64_t sourceBytes;          // the surface's allocation, >= sourceStride * height
+    uint64_t sourceStride;  // bytes per row, >= width * 4 (5120 or padded)
+    uint64_t sourceBytes;   // the surface's allocation, >= sourceStride * height
     // The block-linear target: physically contiguous, below 4 GiB, 128 KiB aligned, targetBytes long. Only two addresses ever occur
     // (the boot framebuffer 0xf5a00000 and the display's second buffer); window A is not scanning it while the copy runs, and the
     // display writes it neither on the CPU nor with another copy until this one completes.
     uint64_t target;
-    uint64_t targetBytes;          // 0x3C0000
-    uint32_t targetPitch;          // 5120 bytes per line of pixels (80 GOBs across)
-    uint32_t blockHeightLog2;      // 4: 16 GOBs per block
+    uint64_t targetBytes;      // 0x3C0000
+    uint32_t targetPitch;      // 5120 bytes per line of pixels (80 GOBs across)
+    uint32_t blockHeightLog2;  // 4: 16 GOBs per block
 };
 
 #ifdef __cplusplus
@@ -50,7 +50,7 @@ int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy);
 // flushed past the GPU L2 before the semaphore release that raised the completion) or failed (status != 0: the target may hold a
 // partial frame; the display does not flip to it). Any context, the GPU's interrupt filter included; it only records the status
 // and signals the display's work loop. The display panics if an accepted copy is not completed within 1 s.
-void native_legacy_gpu_complete(void *display,int status);
+void native_legacy_gpu_complete(void *display, int status);
 #ifdef __cplusplus
 }
 #endif

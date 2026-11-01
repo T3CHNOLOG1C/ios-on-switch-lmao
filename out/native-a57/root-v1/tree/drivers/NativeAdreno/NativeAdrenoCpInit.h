@@ -3,8 +3,8 @@
 #define NATIVE_ADRENO_CPINIT_H
 #include "NativeAdrenoRing.h"
 struct NativeAdrenoCpInitConfig {
-    uint64_t sqe_iova;             /* CP_SQE_INSTR_BASE, 4 KiB aligned, nonzero */
-    uint64_t pwrup_reglist_iova;   /* Power-up register list, 4-byte aligned */
+    uint64_t sqe_iova;           /* CP_SQE_INSTR_BASE, 4 KiB aligned, nonzero */
+    uint64_t pwrup_reglist_iova; /* Power-up register list, 4-byte aligned */
     /* Nonzero when the caller already wrote CP_SQE_INSTR_BASE before CP_SQE_CNTL, as a6xx hw_init does: the base is
      * then read back and compared instead of rewritten after the SQE started. */
     uint32_t sqe_base_programmed;
@@ -20,17 +20,17 @@ struct NativeAdrenoCpInitConfig {
  * CP is reported as a timeout instead of a fabricated success. A second call
  * cannot re-initialize the same object. */
 class NativeAdrenoCpInit final {
-    bool done_=false,poisoned_=false;
+    bool done_ = false, poisoned_ = false;
     IOReturn poison();
+
 public:
-    NativeAdrenoCpInit()=default;
-    ~NativeAdrenoCpInit()=default;
-    NativeAdrenoCpInit(const NativeAdrenoCpInit &)=delete;
-    NativeAdrenoCpInit &operator=(const NativeAdrenoCpInit &)=delete;
-    IOReturn run(const NativeAdrenoRingIo *,NativeAdrenoRing *,
-        const NativeAdrenoCpInitConfig *,uint32_t *fence);
-    bool completed() const {return done_;}
-    bool poisoned() const {return poisoned_;}
+    NativeAdrenoCpInit() = default;
+    ~NativeAdrenoCpInit() = default;
+    NativeAdrenoCpInit(const NativeAdrenoCpInit &) = delete;
+    NativeAdrenoCpInit &operator=(const NativeAdrenoCpInit &) = delete;
+    IOReturn run(const NativeAdrenoRingIo *, NativeAdrenoRing *, const NativeAdrenoCpInitConfig *, uint32_t *fence);
+    bool completed() const { return done_; }
+    bool poisoned() const { return poisoned_; }
     static uint32_t meInitMask();
 };
 #endif

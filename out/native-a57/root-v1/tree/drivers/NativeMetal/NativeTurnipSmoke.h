@@ -13,7 +13,7 @@
 #pragma once
 #define VK_NO_PROTOTYPES 1
 #include <vulkan/vulkan_core.h>
-#include "NativeTurnipShaders.h"   // generated: scripts/gen-turnip-smoke-shaders.py
+#include "NativeTurnipShaders.h"  // generated: scripts/gen-turnip-smoke-shaders.py
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
@@ -30,25 +30,29 @@ namespace turnip {
 
 static char gFirstError[96];
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL onMessage(VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT,
-                                                const VkDebugUtilsMessengerCallbackDataEXT *data, void *) {
+static VKAPI_ATTR VkBool32 VKAPI_CALL onMessage(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                                VkDebugUtilsMessageTypeFlagsEXT,
+                                                const VkDebugUtilsMessengerCallbackDataEXT *data, void *)
+{
     if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) && !gFirstError[0] && data && data->pMessage)
         snprintf(gFirstError, sizeof gFirstError, "%s", data->pMessage);
     return VK_FALSE;
 }
 
 struct Result {
-    int stage = 0;          // first setup failure (0 = none): 1 library .. 9 fence wait
+    int stage = 0;  // first setup failure (0 = none): 1 library .. 9 fence wait
     int vkResult = 0;
     int verified = -1;      // fill test: words of 1024 that hold the expected value (-1 = not run)
     int computeWords = -1;  // compute test: words of 1024 written by the shader with the expected value (-1 = not run)
     int computeStage = 0;   // first failing step of the compute test (0 = none)
-    int renderTriangle = -1, renderOther = -1;  // render test: triangle-colour pixels, pixels that are neither colour (-1 = not run)
+    int renderTriangle = -1,
+        renderOther = -1;  // render test: triangle-colour pixels, pixels that are neither colour (-1 = not run)
     int renderStage = 0;
     bool ok = false;
 };
 
 // Device-level entry points the tests use, resolved once through vkGetDeviceProcAddr.
+// clang-format off: an X-macro list, kept a few names per line
 #define TURNIP_DEVICE_FNS(X) \
     X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkCreateCommandPool) X(vkDestroyCommandPool) X(vkAllocateCommandBuffers) \
     X(vkResetCommandBuffer) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdFillBuffer) X(vkCreateBuffer) X(vkDestroyBuffer) \
@@ -61,6 +65,7 @@ struct Result {
     X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) X(vkBindImageMemory) X(vkCreateImageView) \
     X(vkDestroyImageView) X(vkCreateRenderPass) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdDraw) X(vkCmdCopyImageToBuffer)
+// clang-format on
 
 struct Device {
     VkDevice device = nullptr;
@@ -72,13 +77,15 @@ struct Device {
     TURNIP_DEVICE_FNS(TURNIP_DECLARE)
 #undef TURNIP_DECLARE
 
-    uint32_t memoryType(uint32_t bits, VkMemoryPropertyFlags flags) const {
+    uint32_t memoryType(uint32_t bits, VkMemoryPropertyFlags flags) const
+    {
         for (uint32_t i = 0; i < memory.memoryTypeCount; ++i)
             if ((bits & (1u << i)) && (memory.memoryTypes[i].propertyFlags & flags) == flags) return i;
         return UINT32_MAX;
     }
     // Records into the one command buffer, submits it with a fresh fence and waits up to five seconds.
-    VkResult submitAndWait() {
+    VkResult submitAndWait()
+    {
         VkFenceCreateInfo fci = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         VkFence fence = nullptr;
         VkResult r = vkCreateFence(device, &fci, nullptr, &fence);
@@ -91,7 +98,8 @@ struct Device {
         vkDestroyFence(device, fence, nullptr);
         return r;
     }
-    VkResult begin() {
+    VkResult begin()
+    {
         vkResetCommandBuffer(cmd, 0);
         VkCommandBufferBeginInfo bi = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -104,7 +112,8 @@ struct HostBuffer {
     VkBuffer buffer = nullptr;
     VkDeviceMemory memory = nullptr;
     volatile uint32_t *words = nullptr;
-    VkResult create(Device &d, VkDeviceSize bytes, VkBufferUsageFlags usage) {
+    VkResult create(Device &d, VkDeviceSize bytes, VkBufferUsageFlags usage)
+    {
         VkBufferCreateInfo bci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bci.size = bytes;
         bci.usage = usage;
@@ -113,7 +122,8 @@ struct HostBuffer {
         if (r != VK_SUCCESS) return r;
         VkMemoryRequirements req = {};
         d.vkGetBufferMemoryRequirements(d.device, buffer, &req);
-        const uint32_t type = d.memoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        const uint32_t type = d.memoryType(req.memoryTypeBits,
+                                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if (type == UINT32_MAX) return VK_ERROR_FEATURE_NOT_PRESENT;
         VkMemoryAllocateInfo mai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         mai.allocationSize = req.size;
@@ -125,7 +135,8 @@ struct HostBuffer {
         words = static_cast<volatile uint32_t *>(mapped);
         return r != VK_SUCCESS ? r : (words ? VK_SUCCESS : VK_ERROR_MEMORY_MAP_FAILED);
     }
-    void destroy(Device &d) {
+    void destroy(Device &d)
+    {
         if (words) d.vkUnmapMemory(d.device, memory);
         if (buffer) d.vkDestroyBuffer(d.device, buffer, nullptr);
         if (memory) d.vkFreeMemory(d.device, memory, nullptr);
@@ -133,7 +144,8 @@ struct HostBuffer {
     }
 };
 
-static VkShaderModule shaderModule(Device &d, const uint32_t *words, size_t bytes) {
+static VkShaderModule shaderModule(Device &d, const uint32_t *words, size_t bytes)
+{
     VkShaderModuleCreateInfo ci = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     ci.codeSize = bytes;
     ci.pCode = words;
@@ -141,7 +153,8 @@ static VkShaderModule shaderModule(Device &d, const uint32_t *words, size_t byte
     return d.vkCreateShaderModule(d.device, &ci, nullptr, &module) == VK_SUCCESS ? module : nullptr;
 }
 
-static void hostBarrier(Device &d, VkPipelineStageFlags from, VkAccessFlags access) {
+static void hostBarrier(Device &d, VkPipelineStageFlags from, VkAccessFlags access)
+{
     VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     barrier.srcAccessMask = access;
     barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -149,22 +162,43 @@ static void hostBarrier(Device &d, VkPipelineStageFlags from, VkAccessFlags acce
 }
 
 // Fill: vkCmdFillBuffer of the first half of a 4 KiB buffer (Turnip implements it with its own internal blit). Returns verified words or < 0.
-template <typename Marker>
-static int fillTest(Device &d, Marker &mark, int &failStage, VkResult &failResult) {
+template <typename Marker> static int fillTest(Device &d, Marker &mark, int &failStage, VkResult &failResult)
+{
     constexpr VkDeviceSize kBytes = 4096;
     constexpr uint32_t kPattern = 0xc0ffee42u;
     HostBuffer b;
     VkResult r = b.create(d, kBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-    if (r != VK_SUCCESS) {b.destroy(d); failStage = 7; failResult = r; return -1;}
+    if (r != VK_SUCCESS) {
+        b.destroy(d);
+        failStage = 7;
+        failResult = r;
+        return -1;
+    }
     for (unsigned i = 0; i < kBytes / 4; ++i) b.words[i] = 0xdeadbeef;
     mark(0x6007);
-    if ((r = d.begin()) != VK_SUCCESS) {b.destroy(d); failStage = 6; failResult = r; return -1;}
-    d.vkCmdFillBuffer(d.cmd, b.buffer, 0, kBytes / 2, kPattern);   // the first half only: the second half must keep 0xdeadbeef
+    if ((r = d.begin()) != VK_SUCCESS) {
+        b.destroy(d);
+        failStage = 6;
+        failResult = r;
+        return -1;
+    }
+    d.vkCmdFillBuffer(d.cmd, b.buffer, 0, kBytes / 2,
+                      kPattern);  // the first half only: the second half must keep 0xdeadbeef
     hostBarrier(d, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-    if ((r = d.vkEndCommandBuffer(d.cmd)) != VK_SUCCESS) {b.destroy(d); failStage = 6; failResult = r; return -1;}
+    if ((r = d.vkEndCommandBuffer(d.cmd)) != VK_SUCCESS) {
+        b.destroy(d);
+        failStage = 6;
+        failResult = r;
+        return -1;
+    }
     mark(0x6006);
     mark(0x6008);
-    if ((r = d.submitAndWait()) != VK_SUCCESS) {b.destroy(d); failStage = 9; failResult = r; return -1;}
+    if ((r = d.submitAndWait()) != VK_SUCCESS) {
+        b.destroy(d);
+        failStage = 9;
+        failResult = r;
+        return -1;
+    }
     mark(0x6009);
     int good = 0;
     for (unsigned i = 0; i < kBytes / 8; ++i) good += b.words[i] == kPattern;
@@ -175,8 +209,8 @@ static int fillTest(Device &d, Marker &mark, int &failStage, VkResult &failResul
 }
 
 // Compute: 16 workgroups of 64 invocations each write v[i] = i * 3 + 0x1000 (push constants) into a storage buffer.
-template <typename Marker>
-static int computeTest(Device &d, Marker &mark, int &stage) {
+template <typename Marker> static int computeTest(Device &d, Marker &mark, int &stage)
+{
     constexpr uint32_t kWords = 1024, kMul = 3, kAdd = 0x1000;
     mark(0x6100);
     HostBuffer b;
@@ -186,40 +220,71 @@ static int computeTest(Device &d, Marker &mark, int &stage) {
     VkPipeline pipeline = nullptr;
     VkDescriptorPool pool = nullptr;
     int result = -1;
-    auto fail = [&](int s) {stage = s; mark(0x61f0 | s);};
+    auto fail = [&](int s) {
+        stage = s;
+        mark(0x61f0 | s);
+    };
     do {
-        if (b.create(d, kWords * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != VK_SUCCESS) {fail(1); break;}
+        if (b.create(d, kWords * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != VK_SUCCESS) {
+            fail(1);
+            break;
+        }
         for (uint32_t i = 0; i < kWords; ++i) b.words[i] = 0xdeadbeef;
-        if (!(module = shaderModule(d, kSpv_smoke_fill_comp, sizeof kSpv_smoke_fill_comp))) {fail(2); break;}
-        VkDescriptorSetLayoutBinding binding = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        if (!(module = shaderModule(d, kSpv_smoke_fill_comp, sizeof kSpv_smoke_fill_comp))) {
+            fail(2);
+            break;
+        }
+        VkDescriptorSetLayoutBinding binding = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT,
+                                                nullptr};
         VkDescriptorSetLayoutCreateInfo dsl = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         dsl.bindingCount = 1;
         dsl.pBindings = &binding;
-        if (d.vkCreateDescriptorSetLayout(d.device, &dsl, nullptr, &setLayout) != VK_SUCCESS) {fail(3); break;}
+        if (d.vkCreateDescriptorSetLayout(d.device, &dsl, nullptr, &setLayout) != VK_SUCCESS) {
+            fail(3);
+            break;
+        }
         VkPushConstantRange push = {VK_SHADER_STAGE_COMPUTE_BIT, 0, 8};
         VkPipelineLayoutCreateInfo pl = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pl.setLayoutCount = 1;
         pl.pSetLayouts = &setLayout;
         pl.pushConstantRangeCount = 1;
         pl.pPushConstantRanges = &push;
-        if (d.vkCreatePipelineLayout(d.device, &pl, nullptr, &layout) != VK_SUCCESS) {fail(4); break;}
+        if (d.vkCreatePipelineLayout(d.device, &pl, nullptr, &layout) != VK_SUCCESS) {
+            fail(4);
+            break;
+        }
         VkComputePipelineCreateInfo cp = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-        cp.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr};
+        cp.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    nullptr,
+                    0,
+                    VK_SHADER_STAGE_COMPUTE_BIT,
+                    module,
+                    "main",
+                    nullptr};
         cp.layout = layout;
-        if (d.vkCreateComputePipelines(d.device, nullptr, 1, &cp, nullptr, &pipeline) != VK_SUCCESS) {fail(5); break;}
+        if (d.vkCreateComputePipelines(d.device, nullptr, 1, &cp, nullptr, &pipeline) != VK_SUCCESS) {
+            fail(5);
+            break;
+        }
         mark(0x6101);
         VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
         VkDescriptorPoolCreateInfo dp = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         dp.maxSets = 1;
         dp.poolSizeCount = 1;
         dp.pPoolSizes = &size;
-        if (d.vkCreateDescriptorPool(d.device, &dp, nullptr, &pool) != VK_SUCCESS) {fail(6); break;}
+        if (d.vkCreateDescriptorPool(d.device, &dp, nullptr, &pool) != VK_SUCCESS) {
+            fail(6);
+            break;
+        }
         VkDescriptorSetAllocateInfo da = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         da.descriptorPool = pool;
         da.descriptorSetCount = 1;
         da.pSetLayouts = &setLayout;
         VkDescriptorSet set = nullptr;
-        if (d.vkAllocateDescriptorSets(d.device, &da, &set) != VK_SUCCESS) {fail(6); break;}
+        if (d.vkAllocateDescriptorSets(d.device, &da, &set) != VK_SUCCESS) {
+            fail(6);
+            break;
+        }
         VkDescriptorBufferInfo info = {b.buffer, 0, kWords * 4};
         VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         write.dstSet = set;
@@ -227,16 +292,25 @@ static int computeTest(Device &d, Marker &mark, int &stage) {
         write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         write.pBufferInfo = &info;
         d.vkUpdateDescriptorSets(d.device, 1, &write, 0, nullptr);
-        if (d.begin() != VK_SUCCESS) {fail(7); break;}
+        if (d.begin() != VK_SUCCESS) {
+            fail(7);
+            break;
+        }
         const uint32_t constants[2] = {kMul, kAdd};
         d.vkCmdBindPipeline(d.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         d.vkCmdBindDescriptorSets(d.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0, nullptr);
         d.vkCmdPushConstants(d.cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof constants, constants);
         d.vkCmdDispatch(d.cmd, kWords / 64, 1, 1);
         hostBarrier(d, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT);
-        if (d.vkEndCommandBuffer(d.cmd) != VK_SUCCESS) {fail(7); break;}
+        if (d.vkEndCommandBuffer(d.cmd) != VK_SUCCESS) {
+            fail(7);
+            break;
+        }
         mark(0x6102);
-        if (d.submitAndWait() != VK_SUCCESS) {fail(8); break;}
+        if (d.submitAndWait() != VK_SUCCESS) {
+            fail(8);
+            break;
+        }
         mark(0x6103);
         int good = 0;
         for (uint32_t i = 0; i < kWords; ++i) good += b.words[i] == i * kMul + kAdd;
@@ -254,8 +328,8 @@ static int computeTest(Device &d, Marker &mark, int &stage) {
 
 // Render: a 64x64 RGBA8 colour attachment cleared to blue, one triangle drawn in orange (push constant), copied to a host buffer.
 // The triangle covers 512 pixels in exact arithmetic; every other pixel must keep the clear colour.
-template <typename Marker>
-static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &other) {
+template <typename Marker> static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &other)
+{
     constexpr uint32_t kSize = 64;
     mark(0x6200);
     HostBuffer b;
@@ -267,9 +341,15 @@ static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &
     VkShaderModule vs = nullptr, fs = nullptr;
     VkPipelineLayout layout = nullptr;
     VkPipeline pipeline = nullptr;
-    auto fail = [&](int s) {stage = s; mark(0x62f0 | s);};
+    auto fail = [&](int s) {
+        stage = s;
+        mark(0x62f0 | s);
+    };
     do {
-        if (b.create(d, kSize * kSize * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT) != VK_SUCCESS) {fail(1); break;}
+        if (b.create(d, kSize * kSize * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT) != VK_SUCCESS) {
+            fail(1);
+            break;
+        }
         for (uint32_t i = 0; i < kSize * kSize; ++i) b.words[i] = 0x5a5a5a5a;
         VkImageCreateInfo ic = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ic.imageType = VK_IMAGE_TYPE_2D;
@@ -281,7 +361,10 @@ static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &
         ic.tiling = VK_IMAGE_TILING_OPTIMAL;
         ic.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        if (d.vkCreateImage(d.device, &ic, nullptr, &image) != VK_SUCCESS) {fail(2); break;}
+        if (d.vkCreateImage(d.device, &ic, nullptr, &image) != VK_SUCCESS) {
+            fail(2);
+            break;
+        }
         VkMemoryRequirements req = {};
         d.vkGetImageMemoryRequirements(d.device, image, &req);
         uint32_t type = d.memoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
@@ -290,23 +373,40 @@ static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &
         mai.allocationSize = req.size;
         mai.memoryTypeIndex = type;
         if (type == UINT32_MAX || d.vkAllocateMemory(d.device, &mai, nullptr, &imageMemory) != VK_SUCCESS ||
-            d.vkBindImageMemory(d.device, image, imageMemory, 0) != VK_SUCCESS) {fail(2); break;}
+            d.vkBindImageMemory(d.device, image, imageMemory, 0) != VK_SUCCESS) {
+            fail(2);
+            break;
+        }
         VkImageViewCreateInfo vc = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vc.image = image;
         vc.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vc.format = ic.format;
         vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        if (d.vkCreateImageView(d.device, &vc, nullptr, &view) != VK_SUCCESS) {fail(3); break;}
-        VkAttachmentDescription attachment = {0, ic.format, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
-                                              VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE, VK_IMAGE_LAYOUT_UNDEFINED,
+        if (d.vkCreateImageView(d.device, &vc, nullptr, &view) != VK_SUCCESS) {
+            fail(3);
+            break;
+        }
+        VkAttachmentDescription attachment = {0,
+                                              ic.format,
+                                              VK_SAMPLE_COUNT_1_BIT,
+                                              VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                              VK_ATTACHMENT_STORE_OP_STORE,
+                                              VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                                              VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                                              VK_IMAGE_LAYOUT_UNDEFINED,
                                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL};
         VkAttachmentReference ref = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         VkSubpassDescription subpass = {};
         subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &ref;
-        VkSubpassDependency after = {0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, 0};
+        VkSubpassDependency after = {0,
+                                     VK_SUBPASS_EXTERNAL,
+                                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                     VK_ACCESS_TRANSFER_READ_BIT,
+                                     0};
         VkRenderPassCreateInfo rp = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
         rp.attachmentCount = 1;
         rp.pAttachments = &attachment;
@@ -314,7 +414,10 @@ static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &
         rp.pSubpasses = &subpass;
         rp.dependencyCount = 1;
         rp.pDependencies = &after;
-        if (d.vkCreateRenderPass(d.device, &rp, nullptr, &pass) != VK_SUCCESS) {fail(4); break;}
+        if (d.vkCreateRenderPass(d.device, &rp, nullptr, &pass) != VK_SUCCESS) {
+            fail(4);
+            break;
+        }
         VkFramebufferCreateInfo fb = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         fb.renderPass = pass;
         fb.attachmentCount = 1;
@@ -322,18 +425,28 @@ static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &
         fb.width = kSize;
         fb.height = kSize;
         fb.layers = 1;
-        if (d.vkCreateFramebuffer(d.device, &fb, nullptr, &framebuffer) != VK_SUCCESS) {fail(4); break;}
+        if (d.vkCreateFramebuffer(d.device, &fb, nullptr, &framebuffer) != VK_SUCCESS) {
+            fail(4);
+            break;
+        }
         vs = shaderModule(d, kSpv_smoke_triangle_vert, sizeof kSpv_smoke_triangle_vert);
         fs = shaderModule(d, kSpv_smoke_triangle_frag, sizeof kSpv_smoke_triangle_frag);
-        if (!vs || !fs) {fail(5); break;}
+        if (!vs || !fs) {
+            fail(5);
+            break;
+        }
         VkPushConstantRange push = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
         VkPipelineLayoutCreateInfo pl = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pl.pushConstantRangeCount = 1;
         pl.pPushConstantRanges = &push;
-        if (d.vkCreatePipelineLayout(d.device, &pl, nullptr, &layout) != VK_SUCCESS) {fail(6); break;}
-        VkPipelineShaderStageCreateInfo stages[2] = {
-            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", nullptr},
-            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr}};
+        if (d.vkCreatePipelineLayout(d.device, &pl, nullptr, &layout) != VK_SUCCESS) {
+            fail(6);
+            break;
+        }
+        VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                                                      VK_SHADER_STAGE_VERTEX_BIT, vs, "main", nullptr},
+                                                     {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+                                                      VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr}};
         VkPipelineVertexInputStateCreateInfo vi = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
         VkPipelineInputAssemblyStateCreateInfo ia = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
         ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -367,9 +480,15 @@ static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &
         gp.pColorBlendState = &cb;
         gp.layout = layout;
         gp.renderPass = pass;
-        if (d.vkCreateGraphicsPipelines(d.device, nullptr, 1, &gp, nullptr, &pipeline) != VK_SUCCESS) {fail(7); break;}
+        if (d.vkCreateGraphicsPipelines(d.device, nullptr, 1, &gp, nullptr, &pipeline) != VK_SUCCESS) {
+            fail(7);
+            break;
+        }
         mark(0x6201);
-        if (d.begin() != VK_SUCCESS) {fail(8); break;}
+        if (d.begin() != VK_SUCCESS) {
+            fail(8);
+            break;
+        }
         VkClearValue clear = {};
         clear.color.float32[2] = 1.0f;
         clear.color.float32[3] = 1.0f;
@@ -390,17 +509,25 @@ static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &
         copy.imageExtent = {kSize, kSize, 1};
         d.vkCmdCopyImageToBuffer(d.cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.buffer, 1, &copy);
         hostBarrier(d, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-        if (d.vkEndCommandBuffer(d.cmd) != VK_SUCCESS) {fail(8); break;}
+        if (d.vkEndCommandBuffer(d.cmd) != VK_SUCCESS) {
+            fail(8);
+            break;
+        }
         mark(0x6202);
-        if (d.submitAndWait() != VK_SUCCESS) {fail(9); break;}
+        if (d.submitAndWait() != VK_SUCCESS) {
+            fail(9);
+            break;
+        }
         mark(0x6203);
         // RGBA8 little-endian words: clear = (0, 0, 255, 255), triangle = (255, 127 or 128, 0, 255).
         int tri = 0, rest = 0;
         for (uint32_t i = 0; i < kSize * kSize; ++i) {
             const uint32_t px = b.words[i];
             if (px == 0xffff0000u) continue;
-            if (px == 0xff0080ffu || px == 0xff007fffu) ++tri;
-            else ++rest;
+            if (px == 0xff0080ffu || px == 0xff007fffu)
+                ++tri;
+            else
+                ++rest;
         }
         triangle = tri;
         other = rest;
@@ -418,8 +545,8 @@ static void renderTest(Device &d, Marker &mark, int &stage, int &triangle, int &
     b.destroy(d);
 }
 
-template <typename Marker>
-static Result run(Marker &&mark, const char *libraryPath) {
+template <typename Marker> static Result run(Marker &&mark, const char *libraryPath)
+{
     Result out;
     auto fail = [&](int stage, int result) {
         out.stage = stage;
@@ -450,7 +577,8 @@ static Result run(Marker &&mark, const char *libraryPath) {
     const char *extensions[] = {VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
     VkDebugUtilsMessengerCreateInfoEXT messenger = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
     messenger.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    messenger.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+    messenger.messageType =
+        VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
     messenger.pfnUserCallback = onMessage;
     VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "NativeAdrenoMetal";
@@ -465,7 +593,9 @@ static Result run(Marker &&mark, const char *libraryPath) {
     if (r != VK_SUCCESS) return fail(3, r);
     mark(0x6003);
 
-#define INSTANCE_FN(name) auto name = reinterpret_cast<PFN_##name>(gipa(instance, #name)); if (!name) return fail(3, -4)
+#define INSTANCE_FN(name)                                            \
+    auto name = reinterpret_cast<PFN_##name>(gipa(instance, #name)); \
+    if (!name) return fail(3, -4)
     INSTANCE_FN(vkEnumeratePhysicalDevices);
     INSTANCE_FN(vkGetPhysicalDeviceMemoryProperties);
     INSTANCE_FN(vkGetPhysicalDeviceQueueFamilyProperties);
@@ -503,7 +633,9 @@ static Result run(Marker &&mark, const char *libraryPath) {
     r = vkCreateDevice(physical, &dci, nullptr, &d.device);
     if (r != VK_SUCCESS) return fail(5, r);
     mark(0x6005);
-#define TURNIP_RESOLVE(name) d.name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(d.device, #name)); if (!d.name) return fail(5, -8);
+#define TURNIP_RESOLVE(name)                                                     \
+    d.name = reinterpret_cast<PFN_##name>(vkGetDeviceProcAddr(d.device, #name)); \
+    if (!d.name) return fail(5, -8);
     TURNIP_DEVICE_FNS(TURNIP_RESOLVE)
 #undef TURNIP_RESOLVE
     vkGetPhysicalDeviceMemoryProperties(physical, &d.memory);
@@ -537,8 +669,8 @@ static Result run(Marker &&mark, const char *libraryPath) {
     d.vkDestroyDevice(d.device, nullptr);
     vkDestroyInstance(instance, nullptr);
     mark(0x600b);
-    out.ok = !failStage && out.verified == 1024 && out.computeWords == 1024 && out.renderOther == 0 && out.renderTriangle >= 480 &&
-             out.renderTriangle <= 544;
+    out.ok = !failStage && out.verified == 1024 && out.computeWords == 1024 && out.renderOther == 0 &&
+             out.renderTriangle >= 480 && out.renderTriangle <= 544;
     return out;
 }
 
@@ -556,24 +688,33 @@ struct Watched {
     Result result;
 };
 
-static void *watchedWorker(void *argument) {
+static void *watchedWorker(void *argument)
+{
     Watched *w = static_cast<Watched *>(argument);
-    w->result = run([w](uint32_t value) { w->lastMark = value; w->mark(w->markContext, value); }, w->libraryPath);
+    w->result = run(
+        [w](uint32_t value) {
+            w->lastMark = value;
+            w->mark(w->markContext, value);
+        },
+        w->libraryPath);
     __atomic_store_n(&w->done, 1, __ATOMIC_RELEASE);
     return nullptr;
 }
 
-static size_t frameText(char *out, size_t size, uint64_t address) {
+static size_t frameText(char *out, size_t size, uint64_t address)
+{
     Dl_info info = {};
     if (!address || !dladdr(reinterpret_cast<const void *>(address), &info) || !info.dli_fbase)
         return (size_t)snprintf(out, size, " ?%llx", (unsigned long long)address);
     const char *name = info.dli_fname ? strrchr(info.dli_fname, '/') : nullptr;
     name = name ? name + 1 : (info.dli_fname ? info.dli_fname : "?");
     const char tag = !strncmp(name, "libvulkan", 9) ? 'v' : name[0];
-    return (size_t)snprintf(out, size, " %c%llx", tag, (unsigned long long)(address - reinterpret_cast<uint64_t>(info.dli_fbase)));
+    return (size_t)snprintf(out, size, " %c%llx", tag,
+                            (unsigned long long)(address - reinterpret_cast<uint64_t>(info.dli_fbase)));
 }
 
-static void sample(Watched &w, pthread_t worker, char *text, size_t size) {
+static void sample(Watched &w, pthread_t worker, char *text, size_t size)
+{
     const mach_port_t thread = pthread_mach_thread_np(worker);
     thread_basic_info_data_t a = {}, b = {};
     mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
@@ -583,23 +724,30 @@ static void sample(Watched &w, pthread_t worker, char *text, size_t size) {
     thread_info(thread, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&b), &count);
     auto us = [](time_value_t t) { return int64_t(t.seconds) * 1000000 + t.microseconds; };
     const int64_t du = us(b.user_time) - us(a.user_time), dk = us(b.system_time) - us(a.system_time);
-    size_t at = (size_t)snprintf(text, size, "W %x s%d u%lld/k%lld", unsigned(w.lastMark), b.run_state, (long long)du, (long long)dk);
+    size_t at = (size_t)snprintf(text, size, "W %x s%d u%lld/k%lld", unsigned(w.lastMark), b.run_state, (long long)du,
+                                 (long long)dk);
     if (b.run_state == TH_STATE_RUNNING && du <= 0) {
         snprintf(text + at, size - at, " kern");
         return;
     }
-    if (thread_suspend(thread) != KERN_SUCCESS) {snprintf(text + at, size - at, " nosusp"); return;}
+    if (thread_suspend(thread) != KERN_SUCCESS) {
+        snprintf(text + at, size - at, " nosusp");
+        return;
+    }
     arm_thread_state64_t state = {};
     count = ARM_THREAD_STATE64_COUNT;
-    if (thread_get_state(thread, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &count) == KERN_SUCCESS) {
+    if (thread_get_state(thread, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &count) ==
+        KERN_SUCCESS) {
         const uint64_t pc = arm_thread_state64_get_pc(state), lr = arm_thread_state64_get_lr(state);
         uint64_t fp = arm_thread_state64_get_fp(state);
         at += frameText(text + at, size - at, pc);
         if (at < size) at += frameText(text + at, size - at, lr);
-        const uint64_t low = reinterpret_cast<uint64_t>(pthread_get_stackaddr_np(worker)) - pthread_get_stacksize_np(worker);
+        const uint64_t low =
+            reinterpret_cast<uint64_t>(pthread_get_stackaddr_np(worker)) - pthread_get_stacksize_np(worker);
         const uint64_t high = reinterpret_cast<uint64_t>(pthread_get_stackaddr_np(worker));
         for (unsigned i = 0; i < 8 && at + 4 < size && fp >= low && fp + 16 <= high && !(fp & 7); ++i) {
-            const uint64_t next = reinterpret_cast<const uint64_t *>(fp)[0], ret = reinterpret_cast<const uint64_t *>(fp)[1];
+            const uint64_t next = reinterpret_cast<const uint64_t *>(fp)[0],
+                           ret = reinterpret_cast<const uint64_t *>(fp)[1];
             if (ret != lr || i) at += frameText(text + at, size - at, ret);
             if (next <= fp) break;
             fp = next;
@@ -609,18 +757,25 @@ static void sample(Watched &w, pthread_t worker, char *text, size_t size) {
 }
 
 template <typename Marker, typename Reporter>
-static Result runWatched(Marker &mark, Reporter &&report, const char *libraryPath) {
+static Result runWatched(Marker &mark, Reporter &&report, const char *libraryPath)
+{
     Watched *w = new Watched{};
     w->libraryPath = libraryPath;
     w->markContext = &mark;
     w->mark = [](void *context, uint32_t value) { (*static_cast<Marker *>(context))(value); };
     pthread_attr_t attr;
     pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 8u << 20);   // Mesa's NIR/ir3 passes recurse; the default 512 KiB secondary stack is small
+    pthread_attr_setstacksize(&attr,
+                              8u << 20);  // Mesa's NIR/ir3 passes recurse; the default 512 KiB secondary stack is small
     pthread_t worker;
     const bool started = pthread_create(&worker, &attr, watchedWorker, w) == 0;
     pthread_attr_destroy(&attr);
-    if (!started) {Result r; r.stage = 0; r.vkResult = -12; return r;}
+    if (!started) {
+        Result r;
+        r.stage = 0;
+        r.vkResult = -12;
+        return r;
+    }
     static const unsigned checkpoints[] = {15, 45, 90};
     unsigned next = 0;
     for (unsigned tenths = 0; !__atomic_load_n(&w->done, __ATOMIC_ACQUIRE); ++tenths) {
@@ -639,7 +794,8 @@ static Result runWatched(Marker &mark, Reporter &&report, const char *libraryPat
 }
 
 // Path of libvulkan_freedreno.dylib: next to the image this code is part of (the plugin binary inside the bundle).
-static bool libraryPath(char *path, size_t size) {
+static bool libraryPath(char *path, size_t size)
+{
     Dl_info info = {};
     if (!dladdr(reinterpret_cast<const void *>(&libraryPath), &info) || !info.dli_fname) return false;
     snprintf(path, size, "%s", info.dli_fname);

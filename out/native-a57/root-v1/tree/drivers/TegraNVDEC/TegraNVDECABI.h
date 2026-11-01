@@ -22,62 +22,73 @@
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION 1
-#define TEGRA_NVDEC_OPEN_TYPE 0x4e44            // 'ND'
-#define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu    // 'NDTN'
+#define TEGRA_NVDEC_ABI_VERSION  1
+#define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
+#define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
 
 enum TegraNVDECMethod {
-  TegraNVDECMethodGetInfo = 1,      // -> TegraNVDECInfo
-  TegraNVDECMethodBufferAlloc = 2,  // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
-  TegraNVDECMethodBufferFree = 3,   // TegraNVDECBuffer -> (waits for the last job, revokes the client's mappings)
-  TegraNVDECMethodSubmit = 4,       // TegraNVDECSubmit -> TegraNVDECFence
-  TegraNVDECMethodWait = 5,         // TegraNVDECWait ->
+    TegraNVDECMethodGetInfo = 1,      // -> TegraNVDECInfo
+    TegraNVDECMethodBufferAlloc = 2,  // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
+    TegraNVDECMethodBufferFree = 3,   // TegraNVDECBuffer -> (waits for the last job, revokes the client's mappings)
+    TegraNVDECMethodSubmit = 4,       // TegraNVDECSubmit -> TegraNVDECFence
+    TegraNVDECMethodWait = 5,         // TegraNVDECWait ->
 };
 
-enum { TEGRA_NVDEC_CODEC_H264 = 3 };    // NVDEC application id (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_H264)
+enum { TEGRA_NVDEC_CODEC_H264 = 3 };  // NVDEC application id (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_H264)
 
 typedef struct {
-  uint32_t abi_version, nvdec_version;  // nvdec_version 0x20: NVDEC 2.0 (T210)
-  uint32_t codecs;                      // bit n: TEGRA_NVDEC_CODEC_* n is accepted by Submit
-  uint32_t max_width, max_height;
-  uint32_t reserved;
-  uint64_t arena_bytes, arena_free;
+    uint32_t abi_version, nvdec_version;  // nvdec_version 0x20: NVDEC 2.0 (T210)
+    uint32_t codecs;                      // bit n: TEGRA_NVDEC_CODEC_* n is accepted by Submit
+    uint32_t max_width, max_height;
+    uint32_t reserved;
+    uint64_t arena_bytes, arena_free;
 } TegraNVDECInfo;
 
-typedef struct { uint64_t size; } TegraNVDECBufferAlloc;
-typedef struct { uint32_t handle, reserved; uint64_t size; } TegraNVDECBufferReply;   // size rounded to 64 KiB
-typedef struct { uint32_t handle, reserved; } TegraNVDECBuffer;
-typedef struct { uint32_t handle, offset, length, reserved; } TegraNVDECRange;
+typedef struct {
+    uint64_t size;
+} TegraNVDECBufferAlloc;
+typedef struct {
+    uint32_t handle, reserved;
+    uint64_t size;
+} TegraNVDECBufferReply;  // size rounded to 64 KiB
+typedef struct {
+    uint32_t handle, reserved;
+} TegraNVDECBuffer;
+typedef struct {
+    uint32_t handle, offset, length, reserved;
+} TegraNVDECRange;
 
 // One NVDEC method. kind 0: `value` is written as is. kind 1: relocation, the method gets
 // (physical address of buffer `value` + `offset`) >> 8, so `offset` must be 256-byte aligned.
 typedef struct {
-  uint16_t method;                      // byte offset in the NVDEC class (clc5b0.h)
-  uint16_t kind;
-  uint32_t value, offset;
+    uint16_t method;  // byte offset in the NVDEC class (clc5b0.h)
+    uint16_t kind;
+    uint32_t value, offset;
 } TegraNVDECEntry;
 
 enum { TEGRA_NVDEC_ENTRY_VALUE = 0, TEGRA_NVDEC_ENTRY_RELOC = 1 };
 
 #define TEGRA_NVDEC_MAX_ENTRIES 64
-#define TEGRA_NVDEC_MAX_RANGES 4
-#define TEGRA_NVDEC_MAX_SETUP 1024
+#define TEGRA_NVDEC_MAX_RANGES  4
+#define TEGRA_NVDEC_MAX_SETUP   1024
 typedef struct {
-  uint32_t codec;                       // TEGRA_NVDEC_CODEC_*
-  uint32_t entry_count, clean_count;
-  uint32_t setup_bytes;                 // sizeof(nvdec_h264_pic_s) for H.264
-  TegraNVDECEntry entries[TEGRA_NVDEC_MAX_ENTRIES];   // no SET_DRV_PIC_SETUP_OFFSET: the kernel adds it
-  TegraNVDECRange clean[TEGRA_NVDEC_MAX_RANGES];
-  uint8_t setup[TEGRA_NVDEC_MAX_SETUP];
+    uint32_t codec;  // TEGRA_NVDEC_CODEC_*
+    uint32_t entry_count, clean_count;
+    uint32_t setup_bytes;                              // sizeof(nvdec_h264_pic_s) for H.264
+    TegraNVDECEntry entries[TEGRA_NVDEC_MAX_ENTRIES];  // no SET_DRV_PIC_SETUP_OFFSET: the kernel adds it
+    TegraNVDECRange clean[TEGRA_NVDEC_MAX_RANGES];
+    uint8_t setup[TEGRA_NVDEC_MAX_SETUP];
 } TegraNVDECSubmit;
 
-typedef struct { uint32_t fence, reserved; } TegraNVDECFence;
+typedef struct {
+    uint32_t fence, reserved;
+} TegraNVDECFence;
 
 typedef struct {
-  uint32_t fence, timeout_us;
-  uint32_t invalidate_count, reserved;
-  TegraNVDECRange invalidate[TEGRA_NVDEC_MAX_RANGES];
+    uint32_t fence, timeout_us;
+    uint32_t invalidate_count, reserved;
+    TegraNVDECRange invalidate[TEGRA_NVDEC_MAX_RANGES];
 } TegraNVDECWait;
 
 #ifdef __cplusplus

@@ -15,21 +15,28 @@
 #include "../NativeMetal/OriginalAcceleratorABI.h"
 #include <IOKit/IOUserClient.h>
 
-extern "C" IOReturn tegra_gm20b_new_user_client(IOService *, task_t, void *, UInt32, OSDictionary *, IOUserClient **);
+extern "C" IOReturn tegra_gm20b_new_user_client(IOService *, task_t, void *, UInt32, OSDictionary *,
+						IOUserClient **);
 
-class AGXAccelerator : public IOAcceleratorES {
-    OSDeclareDefaultStructors(AGXAccelerator)
-public:
-    IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
-                           IOUserClient **handler) APPLE_KEXT_OVERRIDE;
+class AGXAccelerator : public IOAcceleratorES
+{
+OSDeclareDefaultStructors(AGXAccelerator) public
+    : IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type,
+			     OSDictionary *properties, IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
 OSDefineMetaClassAndStructors(AGXAccelerator, IOAcceleratorES)
 
-IOReturn AGXAccelerator::newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
-                                       IOUserClient **handler)
+	IOReturn AGXAccelerator::newUserClient(task_t owningTask, void *securityID, UInt32 type,
+					       OSDictionary *properties, IOUserClient **handler)
 {
-    return tegra_gm20b_new_user_client(this, owningTask, securityID, type, properties, handler);
+	return tegra_gm20b_new_user_client(this, owningTask, securityID, type, properties, handler);
 }
 
-extern "C" IOService *tegra_gm20b_accelerator_allocate(void) { return new AGXAccelerator; }
-extern "C" unsigned tegra_gm20b_accelerator_instance_size(void) { return sizeof(AGXAccelerator); }
+extern "C" IOService *tegra_gm20b_accelerator_allocate(void)
+{
+	return new AGXAccelerator;
+}
+extern "C" unsigned tegra_gm20b_accelerator_instance_size(void)
+{
+	return sizeof(AGXAccelerator);
+}

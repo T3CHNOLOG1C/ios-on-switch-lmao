@@ -14,5 +14,11 @@ class IOSwitchAccelStub : public IOAcceleratorES {
 };
 OSDefineMetaClassAndStructors(IOSwitchAccelStub, IOAcceleratorES)
 
-extern "C" IOService *ioswitch_accel_stub_allocate(void) { return new IOSwitchAccelStub; }
-extern "C" unsigned ioswitch_accel_stub_instance_size(void) { return sizeof(IOSwitchAccelStub); }
+    extern "C" IOService *ioswitch_accel_stub_allocate(void)
+{
+    return new IOSwitchAccelStub;
+}
+extern "C" unsigned ioswitch_accel_stub_instance_size(void)
+{
+    return sizeof(IOSwitchAccelStub);
+}

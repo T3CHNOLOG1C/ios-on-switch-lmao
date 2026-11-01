@@ -4,11 +4,21 @@
 
 #define IOSW_GPT_MAX_ENTRIES 128u
 enum iosw_gpt_error {
-    IOSW_GPT_OK=0, IOSW_GPT_ARGUMENT=1, IOSW_GPT_IO=2, IOSW_GPT_MBR=3,
-    IOSW_GPT_HEADER=4, IOSW_GPT_HEADER_CRC=5, IOSW_GPT_GEOMETRY=6,
-    IOSW_GPT_ENTRIES=7, IOSW_GPT_ARRAY_CRC=8, IOSW_GPT_MISMATCH=9,
-    IOSW_GPT_NOT_FOUND=10, IOSW_GPT_OVERLAP=11, IOSW_GPT_DUPLICATE=12,
-    IOSW_GPT_PROBE=13, IOSW_GPT_AMBIGUOUS=14
+    IOSW_GPT_OK = 0,
+    IOSW_GPT_ARGUMENT = 1,
+    IOSW_GPT_IO = 2,
+    IOSW_GPT_MBR = 3,
+    IOSW_GPT_HEADER = 4,
+    IOSW_GPT_HEADER_CRC = 5,
+    IOSW_GPT_GEOMETRY = 6,
+    IOSW_GPT_ENTRIES = 7,
+    IOSW_GPT_ARRAY_CRC = 8,
+    IOSW_GPT_MISMATCH = 9,
+    IOSW_GPT_NOT_FOUND = 10,
+    IOSW_GPT_OVERLAP = 11,
+    IOSW_GPT_DUPLICATE = 12,
+    IOSW_GPT_PROBE = 13,
+    IOSW_GPT_AMBIGUOUS = 14
 };
 struct iosw_gpt_slice {
     uint64_t first_sector, sector_count;
@@ -37,8 +47,8 @@ struct iosw_gpt_workspace {
  * Success fills used[0..*used_count) including exact type GUIDs. The same
  * CRC/copy/geometry/overlap/unique-GUID checks and <=259 reads apply. No MBR
  * fallback and no probes; *used_count is untouched on failure. */
-int iosw_gpt_scan(iosw_fat_read512, void *, uint64_t capacity_sectors,
-                  struct iosw_gpt_workspace *, uint32_t *used_count);
+int iosw_gpt_scan(iosw_fat_read512, void *, uint64_t capacity_sectors, struct iosw_gpt_workspace *,
+                  uint32_t *used_count);
 
 /* Return 1 only if the slice contains this build's required image paths, 0 if
  * incompatible, or a negative value if bounded metadata probing failed.
@@ -62,8 +72,7 @@ typedef int (*iosw_gpt_probe_slice)(void *, const struct iosw_gpt_slice *);
  * read callback semantics are as in fat32.h. GPT validation performs at most
  * 259 sector reads, in addition to the caller's bounded per-slice probes.
  * Failure leaves *output entirely unchanged. */
-int iosw_gpt_find(iosw_fat_read512, void *context, uint64_t capacity_sectors,
-                  iosw_gpt_probe_slice, void *probe_context,
+int iosw_gpt_find(iosw_fat_read512, void *context, uint64_t capacity_sectors, iosw_gpt_probe_slice, void *probe_context,
                   struct iosw_gpt_workspace *, struct iosw_gpt_slice *output);
 /* Runtime partition discovery. A protective MBR selects the strict GPT path
  * above. Otherwise validate all four primary MBR entries and probe only FAT32
@@ -73,7 +82,6 @@ int iosw_gpt_find(iosw_fat_read512, void *context, uint64_t capacity_sectors,
  * GPT performs <=260 table reads including dispatch; MBR performs one.
  * MBR results have an all-zero unique_guid. The callback and untouched-output
  * failure contracts are identical to iosw_gpt_find. */
-int iosw_partition_find(iosw_fat_read512, void *context, uint64_t capacity_sectors,
-                        iosw_gpt_probe_slice, void *probe_context,
-                        struct iosw_gpt_workspace *, struct iosw_gpt_slice *output);
+int iosw_partition_find(iosw_fat_read512, void *context, uint64_t capacity_sectors, iosw_gpt_probe_slice,
+                        void *probe_context, struct iosw_gpt_workspace *, struct iosw_gpt_slice *output);
 #endif

@@ -18,17 +18,30 @@
 
 extern "C" size_t native_bridge_metal_telemetry(char *, size_t);
 
-static double nowMs() {return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6;}
-static void missing(const char *c, const char *s) {std::fprintf(stderr, "missing %s %s\n", c, s);}
+static double nowMs()
+{
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6;
+}
+static void missing(const char *c, const char *s)
+{
+    std::fprintf(stderr, "missing %s %s\n", c, s);
+}
 
-int main(int argc, char **argv) {
-    if (argc < 4) {std::fprintf(stderr, "usage: loader cache metallib [limit]\n"); return 2;}
+int main(int argc, char **argv)
+{
+    if (argc < 4) {
+        std::fprintf(stderr, "usage: loader cache metallib [limit]\n");
+        return 2;
+    }
     @autoreleasepool {
         const unsigned limit = argc > 4 ? (unsigned)std::atoi(argv[4]) : 0;
         const bool draw = argc > 5 && std::atoi(argv[5]) == 1;
         double t0 = nowMs();
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0, missing);
-        if (!device) {std::printf("open failed\n"); return 1;}
+        if (!device) {
+            std::printf("open failed\n");
+            return 1;
+        }
         std::printf("open %.1f ms\n", nowMs() - t0);
         // draw=2: the plugin's on-device benchmark (native_bridge_metal_benchmark) with the same pair count, for the host side of the comparison.
         if (argc > 5 && std::atoi(argv[5]) == 2) {
@@ -40,12 +53,18 @@ int main(int argc, char **argv) {
         NSError *error = nil;
         t0 = nowMs();
         id<MTLLibrary> qc = [device newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
-        if (!qc) {std::printf("library failed: %s\n", error.localizedDescription.UTF8String); return 1;}
+        if (!qc) {
+            std::printf("library failed: %s\n", error.localizedDescription.UTF8String);
+            return 1;
+        }
         NSArray<NSString *> *names = qc.functionNames;
         std::printf("library %.1f ms, %lu functions\n", nowMs() - t0, (unsigned long)names.count);
         std::vector<double> function, pipeline, drawn;
         id<MTLCommandQueue> queue = [device newCommandQueue];
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:64 height:64 mipmapped:NO];
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                      width:64
+                                                                                     height:64
+                                                                                  mipmapped:NO];
         td.usage = MTLTextureUsageRenderTarget;
         id<MTLTexture> target = [device newTextureWithDescriptor:td];
         id<MTLBuffer> zeros = [device newBufferWithLength:65536 options:MTLResourceStorageModeShared];
@@ -62,7 +81,8 @@ int main(int argc, char **argv) {
                 id state = [device newComputePipelineStateWithFunction:f error:&error];
                 double p1 = nowMs();
                 pipeline.push_back(p1 - p0);
-                std::printf("K %-60s fn=%7.1f pipe=%8.1f %s\n", name.UTF8String, f1 - f0, p1 - p0, state ? "ok" : error.localizedDescription.UTF8String);
+                std::printf("K %-60s fn=%7.1f pipe=%8.1f %s\n", name.UTF8String, f1 - f0, p1 - p0,
+                            state ? "ok" : error.localizedDescription.UTF8String);
                 state ? ++made : ++refused;
             } else if (f.functionType == MTLFunctionTypeVertex) {
                 NSString *fragmentName = [name stringByReplacingOccurrencesOfString:@"_vert_" withString:@"_frag_"];
@@ -100,8 +120,8 @@ int main(int argc, char **argv) {
                     took = nowMs() - d0;
                     drawn.push_back(took);
                 }
-                std::printf("R %-60s fn=%7.1f+%7.1f pipe=%8.1f draw=%8.1f %s\n", name.UTF8String, f1 - f0, g1 - g0, p1 - p0, took,
-                            state ? "ok" : error.localizedDescription.UTF8String);
+                std::printf("R %-60s fn=%7.1f+%7.1f pipe=%8.1f draw=%8.1f %s\n", name.UTF8String, f1 - f0, g1 - g0,
+                            p1 - p0, took, state ? "ok" : error.localizedDescription.UTF8String);
                 state ? ++made : ++refused;
             }
             std::fflush(stdout);
@@ -112,9 +132,10 @@ int main(int argc, char **argv) {
         double ftotal = 0;
         for (double v : function) ftotal += v;
         if (!pipeline.empty())
-            std::printf("SUMMARY pipelines=%zu made=%u refused=%u total=%.0f ms median=%.1f ms p90=%.1f ms max=%.1f ms | functions=%zu total=%.0f ms\n",
-                        pipeline.size(), made, refused, total, pipeline[pipeline.size() / 2], pipeline[pipeline.size() * 9 / 10], pipeline.back(),
-                        function.size(), ftotal);
+            std::printf("SUMMARY pipelines=%zu made=%u refused=%u total=%.0f ms median=%.1f ms p90=%.1f ms max=%.1f ms "
+                        "| functions=%zu total=%.0f ms\n",
+                        pipeline.size(), made, refused, total, pipeline[pipeline.size() / 2],
+                        pipeline[pipeline.size() * 9 / 10], pipeline.back(), function.size(), ftotal);
         if (!drawn.empty()) {
             std::sort(drawn.begin(), drawn.end());
             double dt = 0;
@@ -123,7 +144,8 @@ int main(int argc, char **argv) {
             native_bridge_metal_telemetry(table, sizeof table);
             for (char *line = std::strtok(table, "\n"); line; line = std::strtok(nullptr, "\n"))
                 if (line[0] == 'V' || line[0] == 'W' || line[0] == 'S') std::printf("TELEMETRY %s\n", line);
-            std::printf("DRAWS n=%zu total=%.0f ms median=%.1f ms max=%.1f ms\n", drawn.size(), dt, drawn[drawn.size() / 2], drawn.back());
+            std::printf("DRAWS n=%zu total=%.0f ms median=%.1f ms max=%.1f ms\n", drawn.size(), dt,
+                        drawn[drawn.size() / 2], drawn.back());
         }
     }
     return 0;

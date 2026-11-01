@@ -12,6 +12,6 @@
  * allocated and IOVA-assigned. MMIO and time services stay caller-provided;
  * this function proves nothing about the hardware and performs no access. */
 IOReturn NativeAdrenoAssembleGmuConfig(const NativeAdrenoFirmwareView *firmware,
-    const NativeAdrenoGmuAllocator *allocator,uint32_t chip_id,unsigned poll_budget,
-    ShengGmuConfig *config);
+                                       const NativeAdrenoGmuAllocator *allocator, uint32_t chip_id,
+                                       unsigned poll_budget, ShengGmuConfig *config);
 #endif

@@ -40,7 +40,7 @@ volatile void *dfllxnu_ioremap(dfllxnu_u64 pa, dfllxnu_u64 size);
  */
 void *dfllxnu_call_alloc(void (*fn)(void *), void *arg);
 void dfllxnu_call_arm(void *call, dfllxnu_u64 delay_ns);
-int dfllxnu_call_cancel(void *call);   /* 1 if it was pending */
+int dfllxnu_call_cancel(void *call); /* 1 if it was pending */
 
 /* sleeping lock for the public API (thread context only) */
 void *dfllxnu_mutex_alloc(void);

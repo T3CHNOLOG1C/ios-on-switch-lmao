@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 #define IOSW_RAW_APFS_MAX_PARTITIONS 128u
-#define IOSW_RAW_APFS_SCRATCH_BYTES 65536u
+#define IOSW_RAW_APFS_SCRATCH_BYTES  65536u
 
 /* Only USED entries from a fully validated GPT, type GUID in on-disk byte order.
  * The caller MUST validate both header/array CRCs and their agreement, usable
@@ -51,8 +51,7 @@ struct iosw_raw_apfs {
 /* Pure standard-format check, also usable by an installer before confirmation.
  * Supply at least the NXSB's declared 4..64 KiB block. No I/O or mutation.
  * Checks bootstrap metadata/geometry only, not complete filesystem consistency. */
-int iosw_raw_apfs_validate_nxsb(const void *block, uint32_t available_bytes,
-    uint64_t partition_sector_count);
+int iosw_raw_apfs_validate_nxsb(const void *block, uint32_t available_bytes, uint64_t partition_sector_count);
 
 /* Scratch is private, at least SCRATCH_BYTES, and needed only during open.
  * NOT_READY can mean no APFS entry or an unavailable transport. Raw mode treats
@@ -64,9 +63,9 @@ int iosw_raw_apfs_validate_nxsb(const void *block, uint32_t available_bytes,
  * It must match the validated NXSB before qualification enables ANY write.
  * Writes are enabled only after validation and successful cache qualification.
  * A failed open is unusable; close it before disposing of its fixed storage. */
-int iosw_raw_apfs_open(struct iosw_raw_apfs *, const struct iosw_raw_apfs_io *,
-    uint64_t capacity_sectors, const struct iosw_raw_apfs_partition *, uint32_t count,
-    const uint8_t expected_container_uuid[16], void *private_scratch, uint32_t scratch_bytes);
+int iosw_raw_apfs_open(struct iosw_raw_apfs *, const struct iosw_raw_apfs_io *, uint64_t capacity_sectors,
+                       const struct iosw_raw_apfs_partition *, uint32_t count,
+                       const uint8_t expected_container_uuid[16], void *private_scratch, uint32_t scratch_bytes);
 int iosw_raw_apfs_get_info(struct iosw_raw_apfs *, struct iosw_block_info *);
 /* Exact, nonzero, 512-aligned <=64 KiB request. Read output and write input
  * MUST be private staging. Copy read bytes to clients only after OK; stage the

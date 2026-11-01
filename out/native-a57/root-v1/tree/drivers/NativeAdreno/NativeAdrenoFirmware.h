@@ -19,9 +19,10 @@ struct NativeAdrenoFirmwareView {
  * the bytes handed to the GMU loader are the pinned ones; it does not prove the
  * payload is loadable or that a GMU exists. */
 class NativeAdrenoFirmware final {
-    NativeAdrenoFirmware()=delete;
+    NativeAdrenoFirmware() = delete;
+
 public:
-    static IOReturn validate(const uint8_t *image,uint64_t length,
-        const NativeAdrenoFirmwareRules *rules,NativeAdrenoFirmwareView *view);
+    static IOReturn validate(const uint8_t *image, uint64_t length, const NativeAdrenoFirmwareRules *rules,
+                             NativeAdrenoFirmwareView *view);
 };
 #endif

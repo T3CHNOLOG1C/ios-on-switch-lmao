@@ -46,13 +46,16 @@ struct Gpu {
     IOServiceCloseFn closeFn = nullptr;
     // Progress marker: an IOServiceOpen with type 0x4147<value>. The driver counts it and refuses it, so it needs no selector, no
     // mapping and no connection, and survives a sandbox that admits nothing else or a crash after it.
-    void mark(uint32_t value) {
+    void mark(uint32_t value)
+    {
         unsigned c = 0;
-        if (openFn && port && openFn(port, mach_task_self(), 0x41470000u | (value & 0xffff), &c) == 0 && c && closeFn) closeFn(c);
+        if (openFn && port && openFn(port, mach_task_self(), 0x41470000u | (value & 0xffff), &c) == 0 && c && closeFn)
+            closeFn(c);
     }
     volatile uint32_t *mailbox = nullptr;
     uint32_t mailboxSeq = 0;
-    int mailboxMethod(uint32_t m, const void *in, size_t is, void *out, size_t os) {
+    int mailboxMethod(uint32_t m, const void *in, size_t is, void *out, size_t os)
+    {
         if (!mailbox || is > 0x700 || os > 0x700) return -1;
         if (is) memcpy(const_cast<uint32_t *>(mailbox) + 0x10, in, is);
         mailbox[3] = m;
@@ -62,14 +65,15 @@ struct Gpu {
         const uint32_t seq = ++mailboxSeq;
         mailbox[1] = seq;
         __sync_synchronize();
-        for (unsigned i = 0; i < 6000 && mailbox[2] != seq; ++i) usleep(500);   // the kernel poller runs at about 1 kHz
+        for (unsigned i = 0; i < 6000 && mailbox[2] != seq; ++i) usleep(500);  // the kernel poller runs at about 1 kHz
         if (mailbox[2] != seq) return -2;
         __sync_synchronize();
         const int status = (int)mailbox[4];
         if (!status && os) memcpy(out, const_cast<uint32_t *>(mailbox) + 0x200, os);
         return status;
     }
-    int method(uint32_t m, const void *in, size_t is, void *out, size_t os) {
+    int method(uint32_t m, const void *in, size_t is, void *out, size_t os)
+    {
         if (mailbox) return mailboxMethod(m, in, is, out, os);
         uint8_t buffer[8 + sizeof(NativeAdrenoAbiSubmit)];
         if (is > sizeof(NativeAdrenoAbiSubmit)) return -1;
@@ -80,14 +84,16 @@ struct Gpu {
         return call(conn, selector, buffer, 8 + is, os ? out : nullptr, os ? &o : nullptr);
     }
     // No selector is admitted: use the mailbox page (IOConnectMapMemory64 is not covered by the selector filter).
-    bool openMailbox() {
+    bool openMailbox()
+    {
         uint64_t address = 0, length = 0;
         if (map(conn, 0xC0DE, mach_task_self(), &address, &length, 1) != 0 || length < 4096) return false;
         mailbox = reinterpret_cast<volatile uint32_t *>(address);
         return mailbox[0] == 0x4d41494c;
     }
     // Returns true when some selector was admitted; the first one becomes the tunnel selector.
-    bool probe() {
+    bool probe()
+    {
         const uint32_t header[2] = {kTunnelMagic, kProbe};
         bool found = false;
         for (uint32_t s = 0; s < 256; ++s) {
@@ -101,7 +107,8 @@ struct Gpu {
     }
 };
 
-void report(Gpu &gpu, const char *process, int step, int error, int verified, int verifiedWc, uint64_t ticks) {
+void report(Gpu &gpu, const char *process, int step, int error, int verified, int verifiedWc, uint64_t ticks)
+{
     // SetMetadata with a bogus handle: the driver records the text before it validates the handle.
     NativeAdrenoAbiMetadata meta = {};
     meta.handle = 1;
@@ -114,7 +121,8 @@ void report(Gpu &gpu, const char *process, int step, int error, int verified, in
 }
 
 // Everything the Turnip backend does for a first submission, in the same order; returns the verified dword count or -1.
-int runTest(Gpu &gpu, uint32_t mapFlags, int &step, int &error) {
+int runTest(Gpu &gpu, uint32_t mapFlags, int &step, int &error)
+{
     auto check = [&](int status) {
         if (status && !error) error = status;
         if (!status) ++step;
@@ -128,33 +136,43 @@ int runTest(Gpu &gpu, uint32_t mapFlags, int &step, int &error) {
     NativeAdrenoAbiBoAlloc alloc = {4096, 12, 0};
     NativeAdrenoAbiBoAllocReply ib = {}, target = {};
     if (!check(gpu.method(NativeAdrenoMethodBoAlloc, &alloc, sizeof alloc, &ib, sizeof ib)) ||
-        !check(gpu.method(NativeAdrenoMethodBoAlloc, &alloc, sizeof alloc, &target, sizeof target))) return -1;
+        !check(gpu.method(NativeAdrenoMethodBoAlloc, &alloc, sizeof alloc, &target, sizeof target)))
+        return -1;
     const uint64_t ibIova = info.va_start, tgtIova = info.va_start + 0x1000;
     NativeAdrenoAbiBoMap mapIb = {ib.handle, ibIova, 1, 0, 2, 0}, mapTgt = {target.handle, tgtIova, 3, 0, 2, 0};
     NativeAdrenoAbiBoMapReply mr = {};
     if (!check(gpu.method(NativeAdrenoMethodBoMap, &mapIb, sizeof mapIb, &mr, sizeof mr)) ||
-        !check(gpu.method(NativeAdrenoMethodBoMap, &mapTgt, sizeof mapTgt, &mr, sizeof mr))) return -1;
+        !check(gpu.method(NativeAdrenoMethodBoMap, &mapTgt, sizeof mapTgt, &mr, sizeof mr)))
+        return -1;
     NativeAdrenoAbiBoCpuMap cmIb = {ib.handle}, cmTgt = {target.handle};
     NativeAdrenoAbiBoCpuMapReply crIb = {}, crTgt = {};
     if (!check(gpu.method(NativeAdrenoMethodBoCpuMap, &cmIb, sizeof cmIb, &crIb, sizeof crIb)) ||
-        !check(gpu.method(NativeAdrenoMethodBoCpuMap, &cmTgt, sizeof cmTgt, &crTgt, sizeof crTgt))) return -1;
+        !check(gpu.method(NativeAdrenoMethodBoCpuMap, &cmTgt, sizeof cmTgt, &crTgt, sizeof crTgt)))
+        return -1;
     uint64_t ibAddr = 0, ibLen = 0, tgtAddr = 0, tgtLen = 0;
     if (!check(gpu.map(gpu.conn, crIb.token, mach_task_self(), &ibAddr, &ibLen, mapFlags)) ||
-        !check(gpu.map(gpu.conn, crTgt.token, mach_task_self(), &tgtAddr, &tgtLen, mapFlags))) return -1;
-    if (ibLen < 4096 || tgtLen < 4096) {error = 0xbad1; return -1;}
+        !check(gpu.map(gpu.conn, crTgt.token, mach_task_self(), &tgtAddr, &tgtLen, mapFlags)))
+        return -1;
+    if (ibLen < 4096 || tgtLen < 4096) {
+        error = 0xbad1;
+        return -1;
+    }
     volatile uint32_t *iw = reinterpret_cast<volatile uint32_t *>(ibAddr);
     volatile uint32_t *tw = reinterpret_cast<volatile uint32_t *>(tgtAddr);
     for (unsigned i = 0; i < 1024; ++i) tw[i] = 0xdeadbeef;
     const uint32_t values[3] = {0x0adc0de1u, 0xfeed0002u, 0x600d0003u};
     uint32_t words[12];
     for (unsigned i = 0; i < 3; ++i) {
-        if (AdrenoPM4Type7(0x3d, 3, &words[i * 4]) != AdrenoPM4Success) {error = 0xbad2; return -1;}
+        if (AdrenoPM4Type7(0x3d, 3, &words[i * 4]) != AdrenoPM4Success) {
+            error = 0xbad2;
+            return -1;
+        }
         words[i * 4 + 1] = uint32_t(tgtIova + i * 4);
         words[i * 4 + 2] = uint32_t(tgtIova >> 32);
         words[i * 4 + 3] = values[i];
     }
     for (unsigned i = 0; i < 12; ++i) iw[i] = words[i];
-    __asm__ volatile("dsb sy" ::: "memory");   // the mapping is non-cacheable and the GPU is an outer-shareable observer
+    __asm__ volatile("dsb sy" ::: "memory");  // the mapping is non-cacheable and the GPU is an outer-shareable observer
     NativeAdrenoAbiSubmit submit = {};
     submit.buffer_count = 1;
     submit.buffers[0] = {ib.handle, ibIova, sizeof words};
@@ -184,7 +202,8 @@ int runTest(Gpu &gpu, uint32_t mapFlags, int &step, int &error) {
 // Two threads of one process may report (the published mode's status monitor and the scanout client): the driver keeps one text cursor, so a line
 // goes out whole.
 static pthread_mutex_t gStreamLock = PTHREAD_MUTEX_INITIALIZER;
-static void streamText(Gpu &gpu, const char *text) {
+static void streamText(Gpu &gpu, const char *text)
+{
     pthread_mutex_lock(&gStreamLock);
     gpu.mark(0x7fff);
     for (unsigned i = 0; i < 63 && text[i]; ++i) gpu.mark(0x7000 | (uint8_t)text[i]);
@@ -192,7 +211,8 @@ static void streamText(Gpu &gpu, const char *text) {
 }
 
 // Line into report (GPU7) instead of report2 (GPU8).
-__attribute__((unused)) static void streamText7(Gpu &gpu, const char *text) {
+__attribute__((unused)) static void streamText7(Gpu &gpu, const char *text)
+{
     pthread_mutex_lock(&gStreamLock);
     gpu.mark(0x7ffe);
     for (unsigned i = 0; i < 63 && text[i]; ++i) gpu.mark(0x7000 | (uint8_t)text[i]);
@@ -212,7 +232,8 @@ struct ProbeBo {
     uint32_t token = 0;
     volatile uint32_t *words = nullptr;
 };
-static int probeAlloc(Gpu &gpu, ProbeBo &b, uint32_t fill) {
+static int probeAlloc(Gpu &gpu, ProbeBo &b, uint32_t fill)
+{
     NativeAdrenoAbiBoAlloc alloc = {4096, 12, 0};
     NativeAdrenoAbiBoAllocReply reply = {};
     if (int e = gpu.method(NativeAdrenoMethodBoAlloc, &alloc, sizeof alloc, &reply, sizeof reply)) return e;
@@ -229,12 +250,14 @@ static int probeAlloc(Gpu &gpu, ProbeBo &b, uint32_t fill) {
     __asm__ volatile("dsb sy" ::: "memory");
     return 0;
 }
-static int probeMap(Gpu &gpu, const ProbeBo &b, uint64_t iova) {
+static int probeMap(Gpu &gpu, const ProbeBo &b, uint64_t iova)
+{
     NativeAdrenoAbiBoMap map = {b.handle, iova, 3, 0, 2, 0};
     NativeAdrenoAbiBoMapReply mr = {};
     return gpu.method(NativeAdrenoMethodBoMap, &map, sizeof map, &mr, sizeof mr);
 }
-static void probeFree(Gpu &gpu, ProbeBo &b) {
+static void probeFree(Gpu &gpu, ProbeBo &b)
+{
     if (!b.handle) return;
     if (b.address) {
         gpu.unmap(gpu.conn, b.token, mach_task_self(), b.address);
@@ -246,7 +269,8 @@ static void probeFree(Gpu &gpu, ProbeBo &b) {
     b = ProbeBo();
 }
 static char gProbe[6] = "P----";
-__attribute__((unused)) static void remapProbe(Gpu &gpu) {
+__attribute__((unused)) static void remapProbe(Gpu &gpu)
+{
     constexpr uint64_t kSource = 0x5f000000ull, kResult = 0x5f010000ull, kIb = 0x5f020000ull, kFlag = 0x5f030000ull;
     const uint32_t patterns[4] = {0x0a1a1a10u, 0x0b2b2b20u, 0x0c3c3c30u, 0x0d4d4d40u};
     ProbeBo ib, result, flag, source;
@@ -255,7 +279,10 @@ __attribute__((unused)) static void remapProbe(Gpu &gpu) {
         probeAlloc(gpu, source, patterns[0]) || probeMap(gpu, ib, kIb) || probeMap(gpu, result, kResult) ||
         probeMap(gpu, flag, kFlag) || probeMap(gpu, source, kSource)) {
         for (unsigned v = 1; v < 5; ++v) gProbe[v] = 'x';
-        probeFree(gpu, source); probeFree(gpu, flag); probeFree(gpu, result); probeFree(gpu, ib);
+        probeFree(gpu, source);
+        probeFree(gpu, flag);
+        probeFree(gpu, result);
+        probeFree(gpu, ib);
         return;
     }
     for (unsigned v = 0; v < 4 && !stuck; ++v) {
@@ -263,7 +290,11 @@ __attribute__((unused)) static void remapProbe(Gpu &gpu) {
         ProbeBo next;
         if (v) {
             // The new page exists before the old one is freed, so the two differ and the old one still holds the old pattern.
-            if (probeAlloc(gpu, next, patterns[v])) {gProbe[1 + v] = 'x'; probeFree(gpu, next); continue;}
+            if (probeAlloc(gpu, next, patterns[v])) {
+                gProbe[1 + v] = 'x';
+                probeFree(gpu, next);
+                continue;
+            }
         }
         uint32_t words[32], n = 0;
         auto packet = [&](uint32_t opcode, std::initializer_list<uint32_t> payload) {
@@ -273,28 +304,48 @@ __attribute__((unused)) static void remapProbe(Gpu &gpu) {
             return true;
         };
         bool ok = true;
-        if (v == 3) ok = packet(0x3c, {3u | (1u << 4), uint32_t(kFlag), uint32_t(kFlag >> 32), 1u, 0xffffffffu, 16u});   // wait flag == 1
+        if (v == 3)
+            ok = packet(0x3c, {3u | (1u << 4), uint32_t(kFlag), uint32_t(kFlag >> 32), 1u, 0xffffffffu,
+                               16u});  // wait flag == 1
         if (v == 2) ok = packet(0x46, {0x31u}) && packet(0x26, {});
-        ok = ok && packet(0x73, {0u, uint32_t(kResult), uint32_t(kResult >> 32), uint32_t(kSource), uint32_t(kSource >> 32)});
-        if (!ok) {gProbe[1 + v] = 'x'; probeFree(gpu, next); continue;}
+        ok = ok &&
+             packet(0x73, {0u, uint32_t(kResult), uint32_t(kResult >> 32), uint32_t(kSource), uint32_t(kSource >> 32)});
+        if (!ok) {
+            gProbe[1 + v] = 'x';
+            probeFree(gpu, next);
+            continue;
+        }
         for (uint32_t i = 0; i < n; ++i) ib.words[i] = words[i];
         result.words[0] = 0xdeadbeef;
         flag.words[0] = 0;
         __asm__ volatile("dsb sy" ::: "memory");
         if (v && v != 3) {
             probeFree(gpu, source);
-            if (probeMap(gpu, next, kSource)) {gProbe[1 + v] = 'x'; probeFree(gpu, next); break;}
+            if (probeMap(gpu, next, kSource)) {
+                gProbe[1 + v] = 'x';
+                probeFree(gpu, next);
+                break;
+            }
             source = next;
         }
         NativeAdrenoAbiSubmit submit = {};
         submit.buffer_count = 1;
         submit.buffers[0] = {ib.handle, kIb, uint64_t(n) * 4};
         NativeAdrenoAbiSubmitReply sr = {};
-        if (gpu.method(NativeAdrenoMethodSubmit, &submit, sizeof submit, &sr, sizeof sr)) {gProbe[1 + v] = 'x'; probeFree(gpu, next); continue;}
+        if (gpu.method(NativeAdrenoMethodSubmit, &submit, sizeof submit, &sr, sizeof sr)) {
+            gProbe[1 + v] = 'x';
+            probeFree(gpu, next);
+            continue;
+        }
         if (v == 3) {
-            usleep(20000);   // the CP is spinning on the flag
+            usleep(20000);  // the CP is spinning on the flag
             probeFree(gpu, source);
-            if (probeMap(gpu, next, kSource)) {gProbe[1 + v] = 'x'; probeFree(gpu, next); stuck = true; break;}
+            if (probeMap(gpu, next, kSource)) {
+                gProbe[1 + v] = 'x';
+                probeFree(gpu, next);
+                stuck = true;
+                break;
+            }
             source = next;
             flag.words[0] = 1;
             __asm__ volatile("dsb sy" ::: "memory");
@@ -304,12 +355,25 @@ __attribute__((unused)) static void remapProbe(Gpu &gpu) {
             NativeAdrenoAbiWaitFence wait = {sr.fence, 200000000ull};
             waited = gpu.method(NativeAdrenoMethodWaitFence, &wait, sizeof wait, nullptr, 0);
         }
-        if (waited) {gProbe[1 + v] = 't'; stuck = true; break;}
+        if (waited) {
+            gProbe[1 + v] = 't';
+            stuck = true;
+            break;
+        }
         const uint32_t got = result.words[0], want = patterns[v];
-        gProbe[1 + v] = got == want ? '1' : (v && got == patterns[v - 1]) ? 'o' : got == 0 ? 'z' : got == 0xdeadbeef ? 'd' : 'g';
+        gProbe[1 + v] = got == want                     ? '1'
+                        : (v && got == patterns[v - 1]) ? 'o'
+                        : got == 0                      ? 'z'
+                        : got == 0xdeadbeef             ? 'd'
+                                                        : 'g';
     }
     // A stuck CP may still reference the buffers.
-    if (!stuck) {probeFree(gpu, source); probeFree(gpu, flag); probeFree(gpu, result); probeFree(gpu, ib);}
+    if (!stuck) {
+        probeFree(gpu, source);
+        probeFree(gpu, flag);
+        probeFree(gpu, result);
+        probeFree(gpu, ib);
+    }
 }
 
 #ifdef NATIVE_TURNIP_REPLAY
@@ -326,7 +390,8 @@ struct Replay {
 };
 // Allocates and maps every recorded buffer and fills it through a CPU mapping with the given flags: 0x101 (Device, aligned volatile
 // stores, as the prefix replay always did) or 0x401 (write combine filled with memcpy/memset, as Turnip fills its BOs).
-static int replayLoad(Gpu &gpu, Replay &r, uint32_t mapFlags) {
+static int replayLoad(Gpu &gpu, Replay &r, uint32_t mapFlags)
+{
     using namespace turnipreplay;
     for (unsigned i = 0; i < Replay::kCount; ++i) {
         const Buffer &b = kBuffers[i];
@@ -359,7 +424,8 @@ static int replayLoad(Gpu &gpu, Replay &r, uint32_t mapFlags) {
     return r.ibIndex == Replay::kCount ? 0xbad4 : 0;
 }
 // Submits the first dwords of the IB and waits up to 2 s; a timeout leaves the buffers referenced by the stuck CP.
-static int replayRun(Gpu &gpu, Replay &r, uint32_t dwords) {
+static int replayRun(Gpu &gpu, Replay &r, uint32_t dwords)
+{
     NativeAdrenoAbiSubmit submit = {};
     submit.buffer_count = 1;
     submit.buffers[0] = {r.handles[r.ibIndex], turnipreplay::kIbIova, uint64_t(dwords) * 4};
@@ -374,22 +440,31 @@ static int replayRun(Gpu &gpu, Replay &r, uint32_t dwords) {
     return waited;
 }
 // A stuck CP still references the buffers; they are only released when everything retired.
-static void replayFree(Gpu &gpu, Replay &r) {
+static void replayFree(Gpu &gpu, Replay &r)
+{
     if (r.hung) return;
     for (uint64_t &h : r.handles)
-        if (h) {NativeAdrenoAbiBoFree f = {h}; gpu.method(NativeAdrenoMethodBoFree, &f, sizeof f, nullptr, 0); h = 0;}
+        if (h) {
+            NativeAdrenoAbiBoFree f = {h};
+            gpu.method(NativeAdrenoMethodBoFree, &f, sizeof f, nullptr, 0);
+            h = 0;
+        }
 }
 // One whole-IB control run on fresh buffers at the same GPU addresses: '1' retired, '0' stuck, 'x' setup failed. Marker 0x6c00 | tag.
-static char replayControl(Gpu &gpu, uint32_t mapFlags, uint32_t tag, bool &hung) {
+static char replayControl(Gpu &gpu, uint32_t mapFlags, uint32_t tag, bool &hung)
+{
     Replay r;
     gpu.mark(0x6c00 | tag);
     char result = 'x';
-    if (!replayLoad(gpu, r, mapFlags)) result = replayRun(gpu, r, turnipreplay::kCuts[sizeof turnipreplay::kCuts / sizeof turnipreplay::kCuts[0] - 1]) ? (r.hung ? '0' : 'x') : '1';
+    if (!replayLoad(gpu, r, mapFlags))
+        result = replayRun(gpu, r, turnipreplay::kCuts[sizeof turnipreplay::kCuts / sizeof turnipreplay::kCuts[0] - 1])
+                     ? (r.hung ? '0' : 'x')
+                     : '1';
     hung = r.hung;
     replayFree(gpu, r);
     return result;
 }
-static char gReplayControls[4] = "---";   // W1 W2 N, appended to the B line
+static char gReplayControls[4] = "---";  // W1 W2 N, appended to the B line
 static char gReplayLine[64];
 // Whole-IB runs before any prefix (int-065). int-064's remap probe read the new pages in every variant (P1111), yet the whole IB on fresh
 // buffers after the prefix series stopped the CP again (W1). These runs separate "a fresh first run stops" (prefix runs had left GPU-written
@@ -398,13 +473,18 @@ static char gReplayLine[64];
 // retires, "d" lists how many words of each buffer differ from the recording and "f" the first changed word outside the fill target, as
 // <buffer>@<word offset>=<value>, so the memory the GPU wrote is known.
 static char gEarly[48] = "E---";
-__attribute__((unused)) static bool earlyRuns(Gpu &gpu) {
+__attribute__((unused)) static bool earlyRuns(Gpu &gpu)
+{
     using namespace turnipreplay;
     const uint32_t whole = kCuts[sizeof kCuts / sizeof kCuts[0] - 1];
     char diff[40] = "";
     Replay r;
     gpu.mark(0x6e01);
-    if (replayLoad(gpu, r, 0x101)) {gEarly[1] = 'x'; replayFree(gpu, r); return true;}
+    if (replayLoad(gpu, r, 0x101)) {
+        gEarly[1] = 'x';
+        replayFree(gpu, r);
+        return true;
+    }
     gEarly[1] = replayRun(gpu, r, whole) ? (r.hung ? '0' : 'x') : '1';
     if (gEarly[1] == '1') {
         unsigned counts[Replay::kCount] = {}, firstBuffer = 0, firstWord = 0;
@@ -423,7 +503,12 @@ __attribute__((unused)) static bool earlyRuns(Gpu &gpu) {
                     if (w[k] == want) continue;
                     ++counts[i];
                     // The fill target is the recording's empty buffer; its change is expected.
-                    if (!found && b.words) {found = true; firstBuffer = i; firstWord = unsigned(k); firstValue = w[k];}
+                    if (!found && b.words) {
+                        found = true;
+                        firstBuffer = i;
+                        firstWord = unsigned(k);
+                        firstValue = w[k];
+                    }
                 }
                 gpu.unmap(gpu.conn, cr.token, mach_task_self(), address);
             }
@@ -433,9 +518,13 @@ __attribute__((unused)) static bool earlyRuns(Gpu &gpu) {
         int at = snprintf(diff, sizeof diff, " d");
         for (unsigned i = 0; i < Replay::kCount && at < int(sizeof diff); ++i)
             at += snprintf(diff + at, sizeof diff - at, "%s%x", i ? "," : "", counts[i]);
-        if (found && at < int(sizeof diff)) snprintf(diff + at, sizeof diff - at, " f%u@%x=%x", firstBuffer, firstWord, firstValue);
+        if (found && at < int(sizeof diff))
+            snprintf(diff + at, sizeof diff - at, " f%u@%x=%x", firstBuffer, firstWord, firstValue);
     }
-    if (gEarly[1] == '1') {gpu.mark(0x6e02); gEarly[2] = replayRun(gpu, r, whole) ? (r.hung ? '0' : 'x') : '1';}
+    if (gEarly[1] == '1') {
+        gpu.mark(0x6e02);
+        gEarly[2] = replayRun(gpu, r, whole) ? (r.hung ? '0' : 'x') : '1';
+    }
     const bool stuck = r.hung;
     replayFree(gpu, r);
     if (!stuck && gEarly[2] == '1') {
@@ -454,7 +543,8 @@ __attribute__((unused)) static bool earlyRuns(Gpu &gpu) {
 // earlier runs cannot help it; the first prefix that stops names the packet that needs that memory. When every prefix retires, CP state
 // left by the earlier runs is what helped, and the whole IB then runs once more on fresh buffers (e<result>). Reported on GPU7 as
 // "F <retired>/<prefixes> o<opcode ending the stuck prefix> c<its dwords> e<whole run: 1, 0 stuck, - not run>".
-static bool freshScan(Gpu &gpu) {
+static bool freshScan(Gpu &gpu)
+{
     using namespace turnipreplay;
     constexpr unsigned kPrefixes = sizeof kCuts / sizeof kCuts[0];
     unsigned retired = 0;
@@ -483,7 +573,8 @@ static bool freshScan(Gpu &gpu) {
     streamText7(gpu, text);
     return !stuck && whole == '1';
 }
-static bool replayPhase(Gpu &gpu) {
+static bool replayPhase(Gpu &gpu)
+{
     using namespace turnipreplay;
     constexpr unsigned kPrefixes = sizeof kCuts / sizeof kCuts[0];
     Replay r;
@@ -505,7 +596,8 @@ static bool replayPhase(Gpu &gpu) {
         gpu.method(NativeAdrenoMethodBoCpuUnmap, &cu, sizeof cu, nullptr, 0);
         return 0;
     };
-    const uint32_t original = r.ibIndex < Replay::kCount ? kBuffers[r.ibIndex].data[(kIbIova - kBuffers[r.ibIndex].iova) / 4 + 1] : 0;
+    const uint32_t original =
+        r.ibIndex < Replay::kCount ? kBuffers[r.ibIndex].data[(kIbIova - kBuffers[r.ibIndex].iova) / 4 + 1] : 0;
     for (uint32_t thread = 1; thread <= 2 && !error; ++thread) {
         gpu.mark(0x6b00 | thread);
         if (!(error = patch(thread)) && !(error = replayRun(gpu, r, 2))) ++variants;
@@ -532,9 +624,13 @@ static bool replayPhase(Gpu &gpu) {
 }
 // N: the whole IB on a second connection, whose first submission carries the A7XX context entry again (Turnip's connection does that
 // after the replay). Returns false when the CP stopped.
-static bool replaySecondClient(Gpu &gpu) {
+static bool replaySecondClient(Gpu &gpu)
+{
     unsigned conn = 0;
-    if (gpu.openFn(gpu.port, mach_task_self(), 0x4147, &conn) != 0 || !conn) {gReplayControls[2] = 'o'; return true;}
+    if (gpu.openFn(gpu.port, mach_task_self(), 0x4147, &conn) != 0 || !conn) {
+        gReplayControls[2] = 'o';
+        return true;
+    }
     const unsigned first = gpu.conn;
     volatile uint32_t *mailbox = gpu.mailbox;
     gpu.conn = conn;
@@ -556,15 +652,17 @@ static bool replaySecondClient(Gpu &gpu) {
 static void (*gAfterTurnip)(Gpu &gpu, const char *turnipPath);
 
 // Turnip phase: only where libvulkan_freedreno.dylib sits next to this code (the plugin bundle), never in the probe daemon.
-static void turnipPhase(Gpu &gpu) {
+static void turnipPhase(Gpu &gpu)
+{
     char path[1024];
     if (!turnip::libraryPath(path, sizeof path) || access(path, R_OK) != 0) return;
     gpu.mark(0x6000);
     auto marker = [&](uint32_t value) { gpu.mark(value); };
     const turnip::Result result = turnip::runWatched(marker, [&](const char *text) { streamText(gpu, text); }, path);
     char text[NativeAdrenoAbiMetadataBytes] = {};
-    snprintf(text, sizeof text, "T s%d r%d v%d c%d%s g%d/%d%s %.30s", result.stage, result.vkResult, result.verified, result.computeWords,
-             result.computeStage ? "!" : "", result.renderTriangle, result.renderOther, result.renderStage ? "!" : "", turnip::gFirstError);
+    snprintf(text, sizeof text, "T s%d r%d v%d c%d%s g%d/%d%s %.30s", result.stage, result.vkResult, result.verified,
+             result.computeWords, result.computeStage ? "!" : "", result.renderTriangle, result.renderOther,
+             result.renderStage ? "!" : "", turnip::gFirstError);
     streamText(gpu, text);
     gpu.mark(result.ok ? 0x6fff : 0x6ffe);
     // Also when results are wrong but every Vulkan step ran: one boot then shows both layers.
@@ -572,7 +670,8 @@ static void turnipPhase(Gpu &gpu) {
 }
 
 // Returns the GPU-verified dword count of the uncached run, or a negative number; every outcome is also reported to the kernel.
-static int adrenoUserTest(unsigned port, const char *process) {
+static int adrenoUserTest(unsigned port, const char *process)
+{
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
     if (!iokit) return -1;
     auto open = (IOServiceOpenFn)dlsym(iokit, "IOServiceOpen");
@@ -600,8 +699,14 @@ static int adrenoUserTest(unsigned port, const char *process) {
     const bool probed = gpu.probe();
     gpu.mark(0x1000 | (gpu.admitted & 0xfff));
     bool mailboxOk = false;
-    if (!probed) {mailboxOk = gpu.openMailbox(); gpu.mark(mailboxOk ? 0x2001 : 0x2000);}
-    if (!probed && !mailboxOk) {close(gpu.conn); return -2;}   // neither channel works: the driver's E row shows what reached it
+    if (!probed) {
+        mailboxOk = gpu.openMailbox();
+        gpu.mark(mailboxOk ? 0x2001 : 0x2000);
+    }
+    if (!probed && !mailboxOk) {
+        close(gpu.conn);
+        return -2;
+    }  // neither channel works: the driver's E row shows what reached it
     // mapFlags are what the CLIENT asks for: IOUserClient::mapClientMemory64 lets them override the cache mode the driver returns, so
     // the cache bits must be set here. 0x101 = anywhere + inhibit cache (aligned dword accesses only), 0x401 = anywhere + write
     // combine (Normal non-cacheable; what a Vulkan driver needs, since it uses memcpy and unaligned stores).
@@ -615,7 +720,8 @@ static int adrenoUserTest(unsigned port, const char *process) {
 #ifdef NATIVE_TURNIP_REPLAY
     // Plugin only (the Turnip library sits next to it): a stuck replay leaves the CP stopped, so Turnip is not started after it.
     char turnipPath[1024];
-    if (verified == 4 && verifiedWc == 4 && turnip::libraryPath(turnipPath, sizeof turnipPath) && access(turnipPath, R_OK) == 0) {
+    if (verified == 4 && verifiedWc == 4 && turnip::libraryPath(turnipPath, sizeof turnipPath) &&
+        access(turnipPath, R_OK) == 0) {
         replayed = freshScan(gpu) && replayPhase(gpu);
     }
 #endif

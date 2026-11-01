@@ -19,38 +19,38 @@ namespace swlan {
 // and the byte reads of the firmware console in the chip's RAM (PCIe carries byte enables, Linux brcmfmac does the
 // same with ioread16/ioread8).
 struct Mmio {
-  volatile uint8_t *base = nullptr;
+    volatile uint8_t *base = nullptr;
 
-  bool map(uint64_t pa, size_t length)
-  {
-    base = reinterpret_cast<volatile uint8_t *>(ml_io_map(static_cast<vm_offset_t>(pa), length));
-    return base != nullptr;
-  }
-  uint32_t r32(uint32_t offset) const { return *reinterpret_cast<volatile uint32_t *>(base + offset); }
-  void w32(uint32_t offset, uint32_t value) const { *reinterpret_cast<volatile uint32_t *>(base + offset) = value; }
-  uint16_t r16(uint32_t offset) const { return *reinterpret_cast<volatile uint16_t *>(base + offset); }
-  void w16(uint32_t offset, uint16_t value) const { *reinterpret_cast<volatile uint16_t *>(base + offset) = value; }
-  uint8_t r8(uint32_t offset) const { return base[offset]; }
-  void modify(uint32_t offset, uint32_t clear, uint32_t set) const { w32(offset, (r32(offset) & ~clear) | set); }
-  // Bounded wait for a status bit that has no interrupt (PLL locks, calibration, power partitions, link
-  // training): true once (r32 & mask) == value, checked every 10 us for up to `us`.
-  bool wait(uint32_t offset, uint32_t mask, uint32_t value, uint32_t us) const
-  {
-    for (uint32_t waited = 0;; waited += 10) {
-      if ((r32(offset) & mask) == value) return true;
-      if (waited >= us) return false;
-      IODelay(10);
+    bool map(uint64_t pa, size_t length)
+    {
+        base = reinterpret_cast<volatile uint8_t *>(ml_io_map(static_cast<vm_offset_t>(pa), length));
+        return base != nullptr;
     }
-  }
-  // The same for waits measured in milliseconds (link training), sleeping 1 ms between looks as Linux does.
-  bool waitMs(uint32_t offset, uint32_t mask, uint32_t value, uint32_t ms) const
-  {
-    for (uint32_t waited = 0;; ++waited) {
-      if ((r32(offset) & mask) == value) return true;
-      if (waited >= ms) return false;
-      IOSleep(1);
+    uint32_t r32(uint32_t offset) const { return *reinterpret_cast<volatile uint32_t *>(base + offset); }
+    void w32(uint32_t offset, uint32_t value) const { *reinterpret_cast<volatile uint32_t *>(base + offset) = value; }
+    uint16_t r16(uint32_t offset) const { return *reinterpret_cast<volatile uint16_t *>(base + offset); }
+    void w16(uint32_t offset, uint16_t value) const { *reinterpret_cast<volatile uint16_t *>(base + offset) = value; }
+    uint8_t r8(uint32_t offset) const { return base[offset]; }
+    void modify(uint32_t offset, uint32_t clear, uint32_t set) const { w32(offset, (r32(offset) & ~clear) | set); }
+    // Bounded wait for a status bit that has no interrupt (PLL locks, calibration, power partitions, link
+    // training): true once (r32 & mask) == value, checked every 10 us for up to `us`.
+    bool wait(uint32_t offset, uint32_t mask, uint32_t value, uint32_t us) const
+    {
+        for (uint32_t waited = 0;; waited += 10) {
+            if ((r32(offset) & mask) == value) return true;
+            if (waited >= us) return false;
+            IODelay(10);
+        }
     }
-  }
+    // The same for waits measured in milliseconds (link training), sleeping 1 ms between looks as Linux does.
+    bool waitMs(uint32_t offset, uint32_t mask, uint32_t value, uint32_t ms) const
+    {
+        for (uint32_t waited = 0;; ++waited) {
+            if ((r32(offset) & mask) == value) return true;
+            if (waited >= ms) return false;
+            IOSleep(1);
+        }
+    }
 };
 
 uint64_t nowNs();
@@ -63,151 +63,158 @@ uint64_t nowNs();
 constexpr uintptr_t kCacheLine = 64;
 inline void dcacheClean(const volatile void *p, size_t n)
 {
-  uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~(kCacheLine - 1);
-  const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
-  for (; at < end; at += kCacheLine) __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
-  __asm__ volatile("dsb sy" ::: "memory");
+    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~(kCacheLine - 1);
+    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
+    for (; at < end; at += kCacheLine) __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
 }
 inline void dcacheFlush(const volatile void *p, size_t n)
 {
-  uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~(kCacheLine - 1);
-  const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
-  for (; at < end; at += kCacheLine) __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-  __asm__ volatile("dsb sy" ::: "memory");
+    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~(kCacheLine - 1);
+    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
+    for (; at < end; at += kCacheLine) __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 // Little-endian fields of firmware messages, any alignment (the build is -mstrict-align).
-inline uint16_t le16(const uint8_t *p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
+inline uint16_t le16(const uint8_t *p)
+{
+    return static_cast<uint16_t>(p[0] | (p[1] << 8));
+}
 inline uint32_t le32(const uint8_t *p)
 {
-  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) |
-         (static_cast<uint32_t>(p[3]) << 24);
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
 }
 inline uint32_t be32(const uint8_t *p)
 {
-  return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
-         (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+    return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
+           (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
 }
-inline void put16(uint8_t *p, uint16_t v) { p[0] = static_cast<uint8_t>(v); p[1] = static_cast<uint8_t>(v >> 8); }
+inline void put16(uint8_t *p, uint16_t v)
+{
+    p[0] = static_cast<uint8_t>(v);
+    p[1] = static_cast<uint8_t>(v >> 8);
+}
 inline void put32(uint8_t *p, uint32_t v)
 {
-  for (int i = 0; i < 4; ++i) p[i] = static_cast<uint8_t>(v >> (8 * i));
+    for (int i = 0; i < 4; ++i) p[i] = static_cast<uint8_t>(v >> (8 * i));
 }
 
 // --- TegraPCIe.cpp: the T210B01 PCIe root complex, root port 1 (x1, UPHY lane 0), the BCM4356 behind it ---------
 class TegraPcie {
 public:
-  struct Endpoint {
-    uint16_t vendor, device;
-    uint32_t bar0, bar2;  // physical addresses given to the chip's BAR0 (32 KiB registers) and BAR2 (4 MiB RAM)
-    uint8_t linkSpeed, linkWidth;
-  };
+    struct Endpoint {
+        uint16_t vendor, device;
+        uint32_t bar0, bar2;  // physical addresses given to the chip's BAR0 (32 KiB registers) and BAR2 (4 MiB RAM)
+        uint8_t linkSpeed, linkWidth;
+    };
 
-  // Rail, clocks, power partition, PLLE, UPHY, AFI, port 1, link, bus numbers and BARs. On failure `why` holds
-  // one line naming the stage and the registers that decided it, and nothing below the root port is touched.
-  bool bringUp(Endpoint &ep, char *why, size_t whyLength);
-  // The chip from cold again after it was lost (nxk pcie.rs `restart`): PERST# asserted, WL_REG_ON cycled, PERST#
-  // released, link trained, endpoint enumerated (to the same BARs). Rail, clocks, UPHY and AFI keep their setup.
-  bool restart(Endpoint &ep, char *why, size_t whyLength);
-  // The endpoint still decodes memory: a chip that reset itself comes back with its command register cleared.
-  bool endpointDecodes();
+    // Rail, clocks, power partition, PLLE, UPHY, AFI, port 1, link, bus numbers and BARs. On failure `why` holds
+    // one line naming the stage and the registers that decided it, and nothing below the root port is touched.
+    bool bringUp(Endpoint &ep, char *why, size_t whyLength);
+    // The chip from cold again after it was lost (nxk pcie.rs `restart`): PERST# asserted, WL_REG_ON cycled, PERST#
+    // released, link trained, endpoint enumerated (to the same BARs). Rail, clocks, UPHY and AFI keep their setup.
+    bool restart(Endpoint &ep, char *why, size_t whyLength);
+    // The endpoint still decodes memory: a chip that reset itself comes back with its command register cleared.
+    bool endpointDecodes();
 
-  // Configuration space of the endpoint (bus 1, device 0) through the 4 KiB AFI window.
-  uint32_t epConfigRead(uint32_t offset);
-  // Read back and rewritten once if it did not take (brcmf_pcie_select_core: a posted BAR access may overtake
-  // this non-posted one). Used for the BAR0 backplane window, which every chip register access moves.
-  void epConfigWrite(uint32_t offset, uint32_t value);
+    // Configuration space of the endpoint (bus 1, device 0) through the 4 KiB AFI window.
+    uint32_t epConfigRead(uint32_t offset);
+    // Read back and rewritten once if it did not take (brcmf_pcie_select_core: a posted BAR access may overtake
+    // this non-posted one). Used for the BAR0 backplane window, which every chip register access moves.
+    void epConfigWrite(uint32_t offset, uint32_t value);
 
-  // MSI: the AFI decodes the chip's MSI writes to the page at msiPA into AFI_MSI_VEC0..7 and raises GIC SPI 99
-  // (INTID 131); the chip's MSI capability is pointed at vector 0 and its INTx turned off. False (and `why`) when
-  // the chip has no MSI capability.
-  bool msiEnable(uint32_t msiPA, char *why, size_t whyLength);
-  uint32_t msiTake();         // AFI_MSI_VEC0, write-1-to-clear what was read
-  uint32_t msiPending() const;
+    // MSI: the AFI decodes the chip's MSI writes to the page at msiPA into AFI_MSI_VEC0..7 and raises GIC SPI 99
+    // (INTID 131); the chip's MSI capability is pointed at vector 0 and its INTx turned off. False (and `why`) when
+    // the chip has no MSI capability.
+    bool msiEnable(uint32_t msiPA, char *why, size_t whyLength);
+    uint32_t msiTake();  // AFI_MSI_VEC0, write-1-to-clear what was read
+    uint32_t msiPending() const;
 
-  // One line for a report: AFI error latch, link state of port 1, endpoint command/status.
-  void describe(char *out, size_t length);
+    // One line for a report: AFI error latch, link state of port 1, endpoint command/status.
+    void describe(char *out, size_t length);
 
 private:
-  Mmio car_, pmc_, gpio_, pinmux_, mc_, padctl_, pcie_, cs_, mselect_;
-  bool mapped_ = false;
-  uint32_t cfgPage_ = ~0u;
+    Mmio car_, pmc_, gpio_, pinmux_, mc_, padctl_, pcie_, cs_, mselect_;
+    bool mapped_ = false;
+    uint32_t cfgPage_ = ~0u;
 
-  bool map();
-  bool rail(char *why, size_t whyLength);
-  bool powerUp(char *why, size_t whyLength);
-  bool plle(char *why, size_t whyLength);
-  bool uphyManagementClock(char *why, size_t whyLength);
-  bool uphy(char *why, size_t whyLength);
-  void pads();
-  void moduleReset();
-  void controller();
-  void portEnable();
-  void portReset();
-  bool portLink();
-  bool enumerate(Endpoint &ep, char *why, size_t whyLength);
-  uint32_t rpRead(uint32_t offset) const;
-  void rpWrite(uint32_t offset, uint32_t value) const;
-  void rpModify(uint32_t offset, uint32_t clear, uint32_t set) const;
-  void selectConfigPage(uint32_t address);
-  void linkReport(char *out, size_t length);
+    bool map();
+    bool rail(char *why, size_t whyLength);
+    bool powerUp(char *why, size_t whyLength);
+    bool plle(char *why, size_t whyLength);
+    bool uphyManagementClock(char *why, size_t whyLength);
+    bool uphy(char *why, size_t whyLength);
+    void pads();
+    void moduleReset();
+    void controller();
+    void portEnable();
+    void portReset();
+    bool portLink();
+    bool enumerate(Endpoint &ep, char *why, size_t whyLength);
+    uint32_t rpRead(uint32_t offset) const;
+    void rpWrite(uint32_t offset, uint32_t value) const;
+    void rpModify(uint32_t offset, uint32_t clear, uint32_t set) const;
+    void selectConfigPage(uint32_t address);
+    void linkReport(char *out, size_t length);
 };
 
 // --- SwitchWLANChip.cpp: the BCM4356 behind the link (backplane, cores, firmware download) ---------------------
 struct Core {
-  uint16_t id;
-  uint8_t rev;
-  uint32_t base, wrap;
+    uint16_t id;
+    uint8_t rev;
+    uint32_t base, wrap;
 };
 
 class Chip {
 public:
-  // BAR0 is a 4 KiB view of the chip's backplane; BAR2 its RAM (TCM) from backplane address 0.
-  bool attach(TegraPcie *pcie, uint32_t bar0PA, uint32_t bar2PA, char *why, size_t whyLength);
+    // BAR0 is a 4 KiB view of the chip's backplane; BAR2 its RAM (TCM) from backplane address 0.
+    bool attach(TegraPcie *pcie, uint32_t bar0PA, uint32_t bar2PA, char *why, size_t whyLength);
 
-  uint32_t read(uint32_t address);   // any backplane address, through the BAR0 window
-  void write(uint32_t address, uint32_t value);
-  const Mmio &tcm() const { return tcm_; }
+    uint32_t read(uint32_t address);  // any backplane address, through the BAR0 window
+    void write(uint32_t address, uint32_t value);
+    const Mmio &tcm() const { return tcm_; }
 
-  uint16_t id() const { return id_; }
-  uint8_t rev() const { return rev_; }
-  unsigned coreCount() const { return coreCount_; }
-  const Core *find(uint16_t coreId) const;
-  uint32_t ramBase() const { return ramBase_; }
-  uint32_t ramSize() const { return ramSize_; }
+    uint16_t id() const { return id_; }
+    uint8_t rev() const { return rev_; }
+    unsigned coreCount() const { return coreCount_; }
+    const Core *find(uint16_t coreId) const;
+    uint32_t ramBase() const { return ramBase_; }
+    uint32_t ramSize() const { return ramSize_; }
 
-  // brcmf_pcie_download_fw_nvram: ARM halted, image and NVRAM into RAM, ARM started, then the firmware's shared
-  // area address awaited (it has no interrupt for that: Linux and nxk poll every 50 ms for up to 5 s).
-  bool boot(const uint8_t *image, size_t imageLength, const uint8_t *nvram, size_t nvramLength, char *why,
-            size_t whyLength);
-  uint32_t shared() const { return shared_; }
-  uint32_t sharedFlags() const { return sharedFlags_; }
-  // The shared area's flags as the firmware has them now: all ones when the chip is gone from the bus,
-  // kSharedDied bits when it asserted or trapped.
-  uint32_t liveFlags() const { return tcm_.r32(shared_); }
-  static constexpr uint32_t kSharedDied = 0x200 | 0x400;   // PCIE_SHARED_ASSERT | PCIE_SHARED_TRAP
+    // brcmf_pcie_download_fw_nvram: ARM halted, image and NVRAM into RAM, ARM started, then the firmware's shared
+    // area address awaited (it has no interrupt for that: Linux and nxk poll every 50 ms for up to 5 s).
+    bool boot(const uint8_t *image, size_t imageLength, const uint8_t *nvram, size_t nvramLength, char *why,
+              size_t whyLength);
+    uint32_t shared() const { return shared_; }
+    uint32_t sharedFlags() const { return sharedFlags_; }
+    // The shared area's flags as the firmware has them now: all ones when the chip is gone from the bus,
+    // kSharedDied bits when it asserted or trapped.
+    uint32_t liveFlags() const { return tcm_.r32(shared_); }
+    static constexpr uint32_t kSharedDied = 0x200 | 0x400;  // PCIE_SHARED_ASSERT | PCIE_SHARED_TRAP
 
-  // What the firmware left when it died (assert expression/file/line or ARM trap registers), and the tail of
-  // its console ring, each as one line.
-  void crash(char *out, size_t length);
-  void consoleTail(char *out, size_t length);
+    // What the firmware left when it died (assert expression/file/line or ARM trap registers), and the tail of
+    // its console ring, each as one line.
+    void crash(char *out, size_t length);
+    void consoleTail(char *out, size_t length);
 
 private:
-  TegraPcie *pcie_ = nullptr;
-  Mmio bar0_, tcm_;
-  uint32_t window_ = ~0u;
-  uint16_t id_ = 0;
-  uint8_t rev_ = 0;
-  Core cores_[24] = {};
-  unsigned coreCount_ = 0;
-  uint32_t ramBase_ = 0, ramSize_ = 0, shared_ = 0, sharedFlags_ = 0, console_ = 0;
+    TegraPcie *pcie_ = nullptr;
+    Mmio bar0_, tcm_;
+    uint32_t window_ = ~0u;
+    uint16_t id_ = 0;
+    uint8_t rev_ = 0;
+    Core cores_[24] = {};
+    unsigned coreCount_ = 0;
+    uint32_t ramBase_ = 0, ramSize_ = 0, shared_ = 0, sharedFlags_ = 0, console_ = 0;
 
-  uint32_t erom(uint32_t &at, uint32_t &type);
-  bool regaddr(uint32_t &at, uint32_t &base, uint32_t &wrap);
-  void scanCores();
-  void coreDisable(const Core &core, uint32_t prereset, uint32_t reset);
-  void coreReset(const Core &core, uint32_t prereset, uint32_t reset, uint32_t postreset);
-  void tcmCopy(uint32_t address, const uint8_t *data, size_t length);
+    uint32_t erom(uint32_t &at, uint32_t &type);
+    bool regaddr(uint32_t &at, uint32_t &base, uint32_t &wrap);
+    void scanCores();
+    void coreDisable(const Core &core, uint32_t prereset, uint32_t reset);
+    void coreReset(const Core &core, uint32_t prereset, uint32_t reset, uint32_t postreset);
+    void tcmCopy(uint32_t address, const uint8_t *data, size_t length);
 };
 
 // nxk fw.rs nvram() = brcmf_fw_nvram_strip: key=value pairs NUL-terminated, padded to a word, then the length
@@ -216,107 +223,107 @@ size_t nvramConvert(const uint8_t *text, size_t textLength, uint8_t *out, size_t
 
 // --- SwitchWLANMsgbuf.cpp: Broadcom msgbuf rings over PCIe --------------------------------------------------------
 struct Event {
-  uint32_t type, status, reason, flags;
-  uint8_t addr[6];
-  const uint8_t *data;
-  uint32_t length;
+    uint32_t type, status, reason, flags;
+    uint8_t addr[6];
+    const uint8_t *data;
+    uint32_t length;
 };
 
 class Msgbuf {
 public:
-  using EventHandler = void (*)(void *context, const Event &event);
-  using FrameHandler = void (*)(void *context, const uint8_t *frame, size_t length);   // Ethernet header + payload
-  enum Flow { FLOW_CLOSED, FLOW_PENDING, FLOW_OPEN, FLOW_REFUSED };
+    using EventHandler = void (*)(void *context, const Event &event);
+    using FrameHandler = void (*)(void *context, const uint8_t *frame, size_t length);  // Ethernet header + payload
+    enum Flow { FLOW_CLOSED, FLOW_PENDING, FLOW_OPEN, FLOW_REFUSED };
 
-  // Rings, scratch and ring-update buffers, control, receive and transmit buffers and the TX flow ring, all in one
-  // contiguous DMA area below 4 GiB (the AFI's FPCI window is 32-bit and nxk keeps DMA32), told to the firmware
-  // through its shared area. Also the MSI page (msiPA()). The area is allocated once and set up afresh on every
-  // call, so a chip brought back after a reset (held in reset meanwhile: nothing DMAs into the old rings) reuses
-  // it. Not yet interrupt-driven: call enableInterrupts() once the MSI source is ready.
-  bool attach(Chip *chip, EventHandler events, FrameHandler frames, void *context, char *why, size_t whyLength);
-  uint32_t msiPA() const { return msiPA_; }
-  void enableInterrupts();
-  void disableInterrupts();
+    // Rings, scratch and ring-update buffers, control, receive and transmit buffers and the TX flow ring, all in one
+    // contiguous DMA area below 4 GiB (the AFI's FPCI window is 32-bit and nxk keeps DMA32), told to the firmware
+    // through its shared area. Also the MSI page (msiPA()). The area is allocated once and set up afresh on every
+    // call, so a chip brought back after a reset (held in reset meanwhile: nothing DMAs into the old rings) reuses
+    // it. Not yet interrupt-driven: call enableInterrupts() once the MSI source is ready.
+    bool attach(Chip *chip, EventHandler events, FrameHandler frames, void *context, char *why, size_t whyLength);
+    uint32_t msiPA() const { return msiPA_; }
+    void enableInterrupts();
+    void disableInterrupts();
 
-  // Work loop, on the MSI: mailbox status taken (mask dropped meanwhile, as brcmf_pcie_isr_thread, so an event
-  // during the drain makes a fresh MSI), mailbox data answered, completion rings drained. Returns the mailbox
-  // status that was seen; *halted set when the firmware reported a halt.
-  uint32_t service(bool *halted);
-  // Chip-side interrupt state for the lost-interrupt check: (MAILBOXINT & MAILBOXMASK) != 0 means the chip is
-  // signalling; *raw gets the two registers for the panic line.
-  bool chipSignalling(uint32_t *mailboxInt, uint32_t *mailboxMask);
+    // Work loop, on the MSI: mailbox status taken (mask dropped meanwhile, as brcmf_pcie_isr_thread, so an event
+    // during the drain makes a fresh MSI), mailbox data answered, completion rings drained. Returns the mailbox
+    // status that was seen; *halted set when the firmware reported a halt.
+    uint32_t service(bool *halted);
+    // Chip-side interrupt state for the lost-interrupt check: (MAILBOXINT & MAILBOXMASK) != 0 means the chip is
+    // signalling; *raw gets the two registers for the panic line.
+    bool chipSignalling(uint32_t *mailboxInt, uint32_t *mailboxMask);
 
-  // Post one ioctl (brcmf_msgbuf_query_dcmd); the answer arrives through service(): replyReady() then reply().
-  bool ioctlSubmit(uint32_t cmd, const uint8_t *data, size_t length, size_t outLength, char *why, size_t whyLength);
-  bool replyReady() const { return replyReady_; }
-  int16_t replyStatus() const { return replyStatus_; }
-  const uint8_t *replyData() const { return reply_; }
-  size_t replyLength() const { return replyLength_; }
+    // Post one ioctl (brcmf_msgbuf_query_dcmd); the answer arrives through service(): replyReady() then reply().
+    bool ioctlSubmit(uint32_t cmd, const uint8_t *data, size_t length, size_t outLength, char *why, size_t whyLength);
+    bool replyReady() const { return replyReady_; }
+    int16_t replyStatus() const { return replyStatus_; }
+    const uint8_t *replyData() const { return reply_; }
+    size_t replyLength() const { return replyLength_; }
 
-  // The station's TX flow ring (brcmf_msgbuf_flowring_create_worker): one, for interface 0, priority 0, created
-  // once per firmware run; the answer arrives through service() (flow() leaves FLOW_PENDING).
-  bool flowCreateSubmit(const uint8_t destination[6], const uint8_t source[6]);
-  Flow flow() const { return flow_; }
-  uint16_t flowStatus() const { return flowStatus_; }
-  // An Ethernet frame onto the flow ring (brcmf_msgbuf_txflow): its header in the ring item, the payload read
-  // from one of our buffers. The request id (1..32) its completion answers for, 0 when it cannot go now (flow
-  // ring not open, every buffer in flight, ring full).
-  uint32_t send(const uint8_t *frame, size_t length);
-  bool sent(uint32_t id, uint16_t *status) const;
+    // The station's TX flow ring (brcmf_msgbuf_flowring_create_worker): one, for interface 0, priority 0, created
+    // once per firmware run; the answer arrives through service() (flow() leaves FLOW_PENDING).
+    bool flowCreateSubmit(const uint8_t destination[6], const uint8_t source[6]);
+    Flow flow() const { return flow_; }
+    uint16_t flowStatus() const { return flowStatus_; }
+    // An Ethernet frame onto the flow ring (brcmf_msgbuf_txflow): its header in the ring item, the payload read
+    // from one of our buffers. The request id (1..32) its completion answers for, 0 when it cannot go now (flow
+    // ring not open, every buffer in flight, ring full).
+    uint32_t send(const uint8_t *frame, size_t length);
+    bool sent(uint32_t id, uint16_t *status) const;
 
-  uint32_t framesReceived() const { return rxFrames_; }
-  uint32_t framesSent() const { return txFrames_; }
-  uint32_t sendsCompleted() const { return txDone_; }
-  uint32_t sendsRefused() const { return txRefused_; }
+    uint32_t framesReceived() const { return rxFrames_; }
+    uint32_t framesSent() const { return txFrames_; }
+    uint32_t sendsCompleted() const { return txDone_; }
+    uint32_t sendsRefused() const { return txRefused_; }
 
 private:
-  struct Ring {
-    uint8_t *va;
-    uint32_t pa;
-    uint16_t items, size;
-    uint32_t wIndex, rIndex;  // TCM addresses of the write and read indices
-    uint16_t pos;             // next item to write (H2D) or read (D2H)
-    uint64_t consumed, cleared;  // D2H only: bytes read and bytes whose cache lines were zeroed (monotonic)
-  };
-  struct Buffer {
-    uint8_t *va;
-    uint32_t pa;
-  };
-  struct TxBuffer {
-    Buffer b;
-    bool busy;
-    uint16_t status;
-  };
+    struct Ring {
+        uint8_t *va;
+        uint32_t pa;
+        uint16_t items, size;
+        uint32_t wIndex, rIndex;     // TCM addresses of the write and read indices
+        uint16_t pos;                // next item to write (H2D) or read (D2H)
+        uint64_t consumed, cleared;  // D2H only: bytes read and bytes whose cache lines were zeroed (monotonic)
+    };
+    struct Buffer {
+        uint8_t *va;
+        uint32_t pa;
+    };
+    struct TxBuffer {
+        Buffer b;
+        bool busy;
+        uint16_t status;
+    };
 
-  Chip *chip_ = nullptr;
-  EventHandler events_ = nullptr;
-  FrameHandler frames_ = nullptr;
-  void *context_ = nullptr;
-  uint8_t *area_ = nullptr;
-  uint32_t areaPA_ = 0, areaUsed_ = 0, msiPA_ = 0;
-  void *memory_ = nullptr;  // IOBufferMemoryDescriptor, kept for the driver's lifetime
-  Ring rings_[6] = {};      // the five common rings, then the TX flow ring
-  Buffer ioctlBuffer_ = {};
-  Buffer control_[16] = {};
-  Buffer rx_[64] = {};
-  TxBuffer tx_[32] = {};
-  unsigned rxCount_ = 0;
-  uint32_t pcie2_ = 0, dataOffset_ = 0, dtohMailbox_ = 0, rxFrames_ = 0, txFrames_ = 0, txDone_ = 0, txRefused_ = 0;
-  uint16_t transId_ = 0, flowStatus_ = 0;
-  Flow flow_ = FLOW_CLOSED;
-  bool replyReady_ = false;
-  int16_t replyStatus_ = 0;
-  uint8_t reply_[1536] = {};
-  size_t replyLength_ = 0;
+    Chip *chip_ = nullptr;
+    EventHandler events_ = nullptr;
+    FrameHandler frames_ = nullptr;
+    void *context_ = nullptr;
+    uint8_t *area_ = nullptr;
+    uint32_t areaPA_ = 0, areaUsed_ = 0, msiPA_ = 0;
+    void *memory_ = nullptr;  // IOBufferMemoryDescriptor, kept for the driver's lifetime
+    Ring rings_[6] = {};      // the five common rings, then the TX flow ring
+    Buffer ioctlBuffer_ = {};
+    Buffer control_[16] = {};
+    Buffer rx_[64] = {};
+    TxBuffer tx_[32] = {};
+    unsigned rxCount_ = 0;
+    uint32_t pcie2_ = 0, dataOffset_ = 0, dtohMailbox_ = 0, rxFrames_ = 0, txFrames_ = 0, txDone_ = 0, txRefused_ = 0;
+    uint16_t transId_ = 0, flowStatus_ = 0;
+    Flow flow_ = FLOW_CLOSED;
+    bool replyReady_ = false;
+    int16_t replyStatus_ = 0;
+    uint8_t reply_[1536] = {};
+    size_t replyLength_ = 0;
 
-  bool allocate(uint32_t length, uint32_t align, Buffer &out);
-  uint8_t *reserve(unsigned ring);
-  void commit(unsigned ring);
-  bool postControl(uint32_t id);
-  bool postRx(uint32_t id);
-  bool next(unsigned ring, uint8_t *item);
-  void retire(unsigned ring);
-  void drain();
+    bool allocate(uint32_t length, uint32_t align, Buffer &out);
+    uint8_t *reserve(unsigned ring);
+    void commit(unsigned ring);
+    bool postControl(uint32_t id);
+    bool postRx(uint32_t id);
+    bool next(unsigned ring, uint8_t *item);
+    void retire(unsigned ring);
+    void drain();
 };
 
 }  // namespace swlan

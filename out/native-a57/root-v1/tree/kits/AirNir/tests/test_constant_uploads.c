@@ -9,8 +9,9 @@
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 static unsigned cases;
-static void refuse(struct air_constant_layout *l, struct air_constant_binding *bindings,
-                   uint8_t *dst, size_t bytes, unsigned status) {
+static void refuse(struct air_constant_layout *l, struct air_constant_binding *bindings, uint8_t *dst, size_t bytes,
+                   unsigned status)
+{
     uint8_t before[256];
     memcpy(before, dst, 256);
     struct air_constant_result r = air_pack_constants(l, bindings, dst, bytes);
@@ -18,18 +19,16 @@ static void refuse(struct air_constant_layout *l, struct air_constant_binding *b
     assert(!memcmp(before, dst, 256));
     cases++;
 }
-int main(void) {
+int main(void)
+{
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
-    uint8_t *guard =
-        mmap(NULL, page * 4, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint8_t *guard = mmap(NULL, page * 4, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(guard != MAP_FAILED);
     assert(!mprotect(guard + page, page, PROT_NONE));
     assert(!mprotect(guard + page * 3, page, PROT_NONE));
     uint8_t *a = guard + page - 8, *b = guard + page * 3 - 80;
-    for (unsigned i = 0; i < 8; i++)
-        a[i] = (uint8_t)(0x10 + i);
-    for (unsigned i = 0; i < 80; i++)
-        b[i] = (uint8_t)(0x40 + i);
+    for (unsigned i = 0; i < 8; i++) a[i] = (uint8_t)(0x10 + i);
+    for (unsigned i = 0; i < 80; i++) b[i] = (uint8_t)(0x40 + i);
     uint8_t *dst = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(dst != MAP_FAILED);
     memset(dst, 0x6b, 256);
@@ -39,18 +38,14 @@ int main(void) {
     struct air_constant_range ranges[] = {{3, 0, 64, 64}, {7, 64, 128, 128}};
     struct air_constant_read reads[] = {{3, 0, 8}, {7, 64, 16}};
     uint32_t imms[] = {0x11223344, 0x89abcdef, 0, 0xffffffff};
-    struct air_constant_layout original = {256, 64, 64, 128, ranges, 2, reads, 2, 208, 4, imms},
-                               l = original;
+    struct air_constant_layout original = {256, 64, 64, 128, ranges, 2, reads, 2, 208, 4, imms}, l = original;
     struct air_constant_result r = air_pack_constants(&l, bindings, dst, 256);
     assert(!r.status && r.written_bytes == 144 && r.padded_bytes == 104);
     for (unsigned i = 0; i < 256; i++) {
         uint8_t expected = 0x6b;
-        if (i >= 64 && i < 128)
-            expected = i < 72 ? a[i - 64] : 0;
-        if (i >= 128 && i < 192)
-            expected = i < 144 ? b[i - 64] : 0;
-        if (i >= 208 && i < 224)
-            expected = (uint8_t)(imms[(i - 208) / 4] >> (((i - 208) % 4) * 8));
+        if (i >= 64 && i < 128) expected = i < 72 ? a[i - 64] : 0;
+        if (i >= 128 && i < 192) expected = i < 144 ? b[i - 64] : 0;
+        if (i >= 208 && i < 224) expected = (uint8_t)(imms[(i - 208) / 4] >> (((i - 208) % 4) * 8));
         assert(dst[i] == expected);
     }
     cases++;
@@ -159,7 +154,6 @@ int main(void) {
     l = original;
     assert(!munmap(guard, page * 4));
     assert(!munmap(dst, page));
-    printf("PASS: %u guarded constant upload cases; short bindings end at inaccessible pages\n",
-           cases);
+    printf("PASS: %u guarded constant upload cases; short bindings end at inaccessible pages\n", cases);
     return 0;
 }

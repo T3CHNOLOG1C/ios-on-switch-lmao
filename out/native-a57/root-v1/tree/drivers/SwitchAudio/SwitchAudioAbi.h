@@ -22,32 +22,37 @@
 #define SWITCH_AUDIO_ABI_H
 #include <stdint.h>
 
-#define SWITCH_AUDIO_CLASS "SwitchAudio"
-#define SWITCH_AUDIO_MAGIC 0x53574155u   /* 'SWAU' */
-#define SWITCH_AUDIO_VERSION 2u
-#define SWITCH_AUDIO_RATE 48000u
-#define SWITCH_AUDIO_OUT_CHANNELS 2u
-#define SWITCH_AUDIO_IN_CHANNELS 1u
+#define SWITCH_AUDIO_CLASS         "SwitchAudio"
+#define SWITCH_AUDIO_MAGIC         0x53574155u /* 'SWAU' */
+#define SWITCH_AUDIO_VERSION       2u
+#define SWITCH_AUDIO_RATE          48000u
+#define SWITCH_AUDIO_OUT_CHANNELS  2u
+#define SWITCH_AUDIO_IN_CHANNELS   1u
 #define SWITCH_AUDIO_PERIOD_FRAMES 480u   /* 10 ms: the null backend's step */
-#define SWITCH_AUDIO_RING_FRAMES 16384u   /* 341 ms: 8 ADMA periods of 2048 frames */
+#define SWITCH_AUDIO_RING_FRAMES   16384u /* 341 ms: 8 ADMA periods of 2048 frames */
 
-enum {SwitchAudioMemoryControl = 0, SwitchAudioMemoryOutput = 1, SwitchAudioMemoryInput = 2};
-enum {SwitchAudioStartOutput = 0, SwitchAudioStopOutput = 1, SwitchAudioStartInput = 2, SwitchAudioStopInput = 3,
-      /* One scalar: the address, in the caller, of CoreAudio's 24 MHz host clock constant (see SwitchAudio.cpp). */
-      SwitchAudioSetHostClock = 4};
-enum {SwitchAudioOutputRunning = 1u << 0, SwitchAudioInputRunning = 1u << 1};
-enum {SwitchAudioBackendNull = 0, SwitchAudioBackendTegraI2S = 1};
+enum { SwitchAudioMemoryControl = 0, SwitchAudioMemoryOutput = 1, SwitchAudioMemoryInput = 2 };
+enum {
+    SwitchAudioStartOutput = 0,
+    SwitchAudioStopOutput = 1,
+    SwitchAudioStartInput = 2,
+    SwitchAudioStopInput = 3,
+    /* One scalar: the address, in the caller, of CoreAudio's 24 MHz host clock constant (see SwitchAudio.cpp). */
+    SwitchAudioSetHostClock = 4
+};
+enum { SwitchAudioOutputRunning = 1u << 0, SwitchAudioInputRunning = 1u << 1 };
+enum { SwitchAudioBackendNull = 0, SwitchAudioBackendTegraI2S = 1 };
 
 typedef struct {
     uint32_t magic, version;
     uint32_t rate, out_channels, in_channels, period_frames, ring_frames, lead_frames;
     uint32_t backend;
-    volatile uint32_t state;              /* SwitchAudio*Running */
+    volatile uint32_t state;               /* SwitchAudio*Running */
     volatile uint64_t ticks_per_frame_q32; /* host ticks per frame, 32.32 fixed point */
-    volatile uint64_t anchor_host;        /* host time of sample time 0 */
-    volatile uint64_t out_frames;         /* the service: playback consumed (and cleared) below this sample time */
-    volatile uint64_t in_frames;          /* the service: capture valid below this sample time */
-    volatile uint64_t out_written;        /* the plug-in: the sample time after the last frame it wrote */
+    volatile uint64_t anchor_host;         /* host time of sample time 0 */
+    volatile uint64_t out_frames;          /* the service: playback consumed (and cleared) below this sample time */
+    volatile uint64_t in_frames;           /* the service: capture valid below this sample time */
+    volatile uint64_t out_written;         /* the plug-in: the sample time after the last frame it wrote */
 } SwitchAudioControl;
 
 #endif

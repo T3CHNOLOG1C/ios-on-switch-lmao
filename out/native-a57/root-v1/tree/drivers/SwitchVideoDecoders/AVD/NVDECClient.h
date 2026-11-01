@@ -10,7 +10,7 @@
 typedef struct NVDECClient NVDECClient;
 
 bool nvdec_service_present(void);
-NVDECClient *nvdec_open(int *error);       // NULL with the IOReturn when the service is absent or refuses this process
+NVDECClient *nvdec_open(int *error);  // NULL with the IOReturn when the service is absent or refuses this process
 void nvdec_close(NVDECClient *client);
 
 // The H264Backend buffer and job callbacks (ctx = the client).

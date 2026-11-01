@@ -8,7 +8,7 @@ static inline const uint8_t *rowBase(const uint8_t *src, uint32_t pitch, uint32_
     return src + (size_t)(y / 16) * pitch * 16 + ((y % 16) / 8) * 512 + ((y % 8) / 2) * 64 + (y % 2) * 16;
 }
 
-static inline uint32_t chunk(uint32_t x)   // the 16-byte sector row holding byte x, relative to rowBase
+static inline uint32_t chunk(uint32_t x)  // the 16-byte sector row holding byte x, relative to rowBase
 {
     return (x / 64) * 1024 + ((x % 64) / 32) * 256 + ((x % 32) / 16) * 32;
 }
@@ -16,7 +16,7 @@ static inline uint32_t chunk(uint32_t x)   // the 16-byte sector row holding byt
 static void copyRow(uint8_t *dst, const uint8_t *row, uint32_t x0, uint32_t width)
 {
     uint32_t x = x0, out = 0;
-    if (x % 16) {                              // leading part of a sector
+    if (x % 16) {  // leading part of a sector
         const uint32_t n = 16 - x % 16 < width ? 16 - x % 16 : width;
         memcpy(dst, row + chunk(x) + x % 16, n);
         x += n, out += n;
@@ -33,7 +33,7 @@ void block_linear_copy(uint8_t *dst, size_t dstPitch, const uint8_t *src, uint32
         copyRow(dst, rowBase(src, srcPitch, y0), x0, width);
         r = 1;
     }
-    for (; r + 2 <= height; r += 2) {           // an even/odd row pair shares every cache line it touches
+    for (; r + 2 <= height; r += 2) {  // an even/odd row pair shares every cache line it touches
         const uint8_t *even = rowBase(src, srcPitch, y0 + r);
         uint8_t *d0 = dst + (size_t)r * dstPitch, *d1 = d0 + dstPitch;
         if (!(x0 % 16) && !(width % 16)) {

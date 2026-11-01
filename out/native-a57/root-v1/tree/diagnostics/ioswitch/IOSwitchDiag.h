@@ -22,16 +22,16 @@ void ioswitch_diag_console_putc(char c);
 void ioswitch_diag_process_event(int pid, const char *name, const char *event, int status);
 void ioswitch_diag_graphics_takeover(void);
 #else
-#define ioswitch_diag_early_stage(stage, message) ((void)0)
-#define ioswitch_diag_early_leave() ((void)0)
+#define ioswitch_diag_early_stage(stage, message)                      ((void)0)
+#define ioswitch_diag_early_leave()                                    ((void)0)
 #define ioswitch_diag_user_syscall(code, error, pid, pc, cpsr, result) ((void)0)
-#define ioswitch_diag_init(args) ((void)0)
-#define ioswitch_diag_stage(message) ((void)0)
-#define ioswitch_diag_panic(format, args, caller) ((void)0)
-#define ioswitch_diag_console_active() 0
-#define ioswitch_native_text_console_active() 0
-#define ioswitch_diag_console_putc(c) ((void)0)
-#define ioswitch_diag_process_event(...) ((void)0)
-#define ioswitch_diag_graphics_takeover() ((void)0)
+#define ioswitch_diag_init(args)                                       ((void)0)
+#define ioswitch_diag_stage(message)                                   ((void)0)
+#define ioswitch_diag_panic(format, args, caller)                      ((void)0)
+#define ioswitch_diag_console_active()                                 0
+#define ioswitch_native_text_console_active()                          0
+#define ioswitch_diag_console_putc(c)                                  ((void)0)
+#define ioswitch_diag_process_event(...)                               ((void)0)
+#define ioswitch_diag_graphics_takeover()                              ((void)0)
 #endif
 #endif

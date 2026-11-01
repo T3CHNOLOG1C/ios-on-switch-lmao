@@ -6,14 +6,18 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define ADRENO_A740_CHIP_ID UINT64_C(0x43050a01)
+#define ADRENO_A740_CHIP_ID          UINT64_C(0x43050a01)
 #define ADRENO_A740_FALLBACK_CHIP_ID UINT64_C(0xffff43050a01)
-#define ADRENO_CONSTANT_MAX_SPANS 64u
-#define ADRENO_CONSTANT_MAX_BYTES 8192u
+#define ADRENO_CONSTANT_MAX_SPANS    64u
+#define ADRENO_CONSTANT_MAX_BYTES    8192u
 /* Values are this API's stage identities, not an external compiler enum. */
 enum AdrenoConstantStage {
-    AdrenoConstantVertex, AdrenoConstantTessControl, AdrenoConstantTessEvaluation,
-    AdrenoConstantGeometry, AdrenoConstantFragment, AdrenoConstantCompute
+    AdrenoConstantVertex,
+    AdrenoConstantTessControl,
+    AdrenoConstantTessEvaluation,
+    AdrenoConstantGeometry,
+    AdrenoConstantFragment,
+    AdrenoConstantCompute
 };
 struct AdrenoConstantConfig {
     uint64_t chip_id; /* Complete identity; never implicitly truncate UAPI IDs. */
@@ -23,8 +27,12 @@ struct AdrenoConstantSpan {
     uint32_t source_byte, destination_byte, bytes;
 };
 enum AdrenoConstantStatus {
-    AdrenoConstantOK, AdrenoConstantArgument, AdrenoConstantProfile,
-    AdrenoConstantRange, AdrenoConstantCapacity, AdrenoConstantAlias
+    AdrenoConstantOK,
+    AdrenoConstantArgument,
+    AdrenoConstantProfile,
+    AdrenoConstantRange,
+    AdrenoConstantCapacity,
+    AdrenoConstantAlias
 };
 struct AdrenoConstantResult {
     uint32_t status, words, packets;
@@ -43,9 +51,9 @@ struct AdrenoConstantResult {
  * Runtime shader/context authorization and pipeline constant sharing are still
  * the driver's responsibility; successful encoding does not authorize submission.
  */
-struct AdrenoConstantResult AdrenoA740Constants(
-    const struct AdrenoConstantConfig *, const struct AdrenoConstantSpan *, size_t span_count,
-    const uint8_t *source, size_t source_bytes, uint32_t *output, size_t output_words);
+struct AdrenoConstantResult AdrenoA740Constants(const struct AdrenoConstantConfig *, const struct AdrenoConstantSpan *,
+                                                size_t span_count, const uint8_t *source, size_t source_bytes,
+                                                uint32_t *output, size_t output_words);
 #ifdef __cplusplus
 }
 #endif

@@ -14,12 +14,13 @@ static uint32_t offset(uint32_t x, uint32_t y, uint32_t pitch)
 int main(void)
 {
     const uint32_t pitch = 1920, rows = 1088;
-    uint8_t *bl = malloc((size_t)pitch * rows), *lin = malloc((size_t)pitch * rows), *out = malloc((size_t)pitch * rows);
+    uint8_t *bl = malloc((size_t)pitch * rows), *lin = malloc((size_t)pitch * rows),
+            *out = malloc((size_t)pitch * rows);
     for (uint32_t i = 0; i < pitch * rows; i++) lin[i] = (uint8_t)(rand() >> 7);
     for (uint32_t y = 0; y < rows; y++)
         for (uint32_t x = 0; x < pitch; x++) bl[offset(x, y, pitch)] = lin[y * pitch + x];
     static const uint32_t cases[][4] = {{0, 0, 1920, 1080}, {0, 0, 1920, 1088}, {8, 2, 1900, 1070}, {3, 1, 17, 5},
-                                        {16, 15, 33, 2}, {62, 7, 70, 17}, {0, 0, 1, 1}};
+                                        {16, 15, 33, 2},    {62, 7, 70, 17},    {0, 0, 1, 1}};
     int bad = 0;
     for (unsigned c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
         const uint32_t x0 = cases[c][0], y0 = cases[c][1], w = cases[c][2], h = cases[c][3];

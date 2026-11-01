@@ -60,7 +60,7 @@
 #define PLLP_OUT5_RSTN (1u << 16)
 #define PLLP_OUT5_CLKEN (1u << 17)
 #define PLLP_RATE 408000000UL
-#define OSC_RATE 38400000UL  /* T210 pll_ref, the GPCPLL reference */
+#define OSC_RATE 38400000UL /* T210 pll_ref, the GPCPLL reference */
 
 #define PMC_GPU_RG_CNTRL 0x2d4
 #define MC_HOTRESET_CTRL_1 0x970
@@ -76,26 +76,31 @@
 #define MAX77812_BUS 5
 #define MAX77812_PHASE211 0x33
 #define MAX77812_EN_CTRL 0x06
-#define MAX77812_EN_M1 0x01  /* vdd-gpu */
-#define MAX77812_EN_M3 0x10  /* vddio-ddr (0x33 part) */
-#define MAX77812_EN_M4 0x40  /* vdd-cpu */
+#define MAX77812_EN_M1 0x01 /* vdd-gpu */
+#define MAX77812_EN_M3 0x10 /* vddio-ddr (0x33 part) */
+#define MAX77812_EN_M4 0x40 /* vdd-cpu */
 #define MAX77812_M1_VOUT 0x23
 #define MAX77812_UV_MIN 250000
 #define MAX77812_UV_STEP 5000
 #define GPU_UV_FLOOR 610000
 #define GPU_UV_CEIL 800000
-#define GPU_VOUT_RAMP_US 1000    /* hekate max7762x.c:209-210; 5 mV/us slew (DT nx-pmic.dtsi:29-32,46) */
-#define GPU_ENABLE_RAMP_US 5000  /* DT nx-pmic.dtsi:47 regulator-enable-ramp-delay, what the L4T regulator core waits */
+#define GPU_VOUT_RAMP_US \
+	1000 /* hekate max7762x.c:209-210; 5 mV/us slew (DT nx-pmic.dtsi:29-32,46) */
+#define GPU_ENABLE_RAMP_US \
+	5000 /* DT nx-pmic.dtsi:47 regulator-enable-ramp-delay, what the L4T regulator core waits */
 
 static volatile uint32_t *car, *pmc, *fuse, *mc;
 static uint8_t max77812_addr;
 
-static uint32_t rd(volatile uint32_t *base, uint32_t off) { return base[off / 4]; }
+static uint32_t rd(volatile uint32_t *base, uint32_t off)
+{
+	return base[off / 4];
+}
 static void wr(volatile uint32_t *base, uint32_t off, uint32_t v)
 {
 	__asm__ volatile("dmb oshst" ::: "memory");
 	base[off / 4] = v;
-	(void)base[off / 4];  /* read back: posts the write before any delay that follows */
+	(void)base[off / 4]; /* read back: posts the write before any delay that follows */
 }
 
 int tegra_gm20b_platform_map(void)
@@ -125,12 +130,14 @@ uint32_t tegra_gm20b_fuse_read(uint32_t offset)
  * I2C5 is shared with firmware (see TegraI2C.h): one register per transaction, nothing else. */
 static int pmic_rd(uint8_t reg, uint8_t *v)
 {
-	int ret = tegra_i2c_init(MAX77812_BUS);  /* idempotent; the first PMIC access may precede every other I2C5 user */
+	int ret = tegra_i2c_init(
+		MAX77812_BUS); /* idempotent; the first PMIC access may precede every other I2C5 user */
 	if (ret)
 		return ret;
 	ret = tegra_i2c_read(MAX77812_BUS, max77812_addr, reg, v, 1);
 	if (ret)
-		ret = tegra_i2c_read(MAX77812_BUS, max77812_addr, reg, v, 1);  /* one retry: arbitration */
+		ret = tegra_i2c_read(MAX77812_BUS, max77812_addr, reg, v,
+				     1); /* one retry: arbitration */
 	return ret;
 }
 
@@ -155,7 +162,8 @@ static int pmic_en_ctrl(uint8_t *en)
 	if (ret)
 		return ret;
 	if (again != *en || !(*en & MAX77812_EN_M4)) {
-		nvxnu_log("TegraGM20B: MAX77812@0x%02x EN_CTRL %02x/%02x, expected bit 6 (vdd-cpu) set: PMIC left untouched\n",
+		nvxnu_log("TegraGM20B: MAX77812@0x%02x EN_CTRL %02x/%02x, expected bit 6 (vdd-cpu) "
+			  "set: PMIC left untouched\n",
 			  max77812_addr, *en, again);
 		return -71;
 	}
@@ -185,8 +193,9 @@ int tegra_gm20b_rail_set_uv(int uv)
 	ret = pmic_en_ctrl(&en);
 	if (!ret)
 		ret = pmic_rd(MAX77812_M1_VOUT, &now);
-	nvxnu_step("tegra-gm20b: M1 step: MAX77812@0x%02x EN_CTRL %02x M1_VOUT %02x (ret %d), write M1_VOUT %02x (%d uV)\n",
-		  max77812_addr, en, now, ret, code, uv);
+	nvxnu_step("tegra-gm20b: M1 step: MAX77812@0x%02x EN_CTRL %02x M1_VOUT %02x (ret %d), "
+		   "write M1_VOUT %02x (%d uV)\n",
+		   max77812_addr, en, now, ret, code, uv);
 	if (!ret)
 		ret = pmic_wr(MAX77812_M1_VOUT, code);
 	if (!ret)
@@ -218,12 +227,14 @@ int tegra_gm20b_rail_enable(int on)
 		nvxnu_udelay(10);
 	}
 	nvxnu_step("tegra-gm20b: M1 step: MAX77812 EN_CTRL %02x -> %02x (vdd-gpu %s)\n", en,
-		  on ? (en | MAX77812_EN_M1) : (en & ~MAX77812_EN_M1), on ? "on" : "off");
+		   on ? (en | MAX77812_EN_M1) : (en & ~MAX77812_EN_M1), on ? "on" : "off");
 	ret = pmic_wr(MAX77812_EN_CTRL, on ? (en | MAX77812_EN_M1) : (en & ~MAX77812_EN_M1));
 	if (!ret)
 		ret = pmic_rd(MAX77812_EN_CTRL, &now);
 	if (!ret && (now ^ en) != MAX77812_EN_M1) {
-		nvxnu_log("TegraGM20B: MAX77812 EN_CTRL %02x -> %02x, expected only bit 0 to change\n", en, now);
+		nvxnu_log("TegraGM20B: MAX77812 EN_CTRL %02x -> %02x, expected only bit 0 to "
+			  "change\n",
+			  en, now);
 		ret = -71;
 	}
 	if (!ret && on)
@@ -248,35 +259,37 @@ static const struct {
 	uint32_t khz;
 	int c0, c1, c2, c3, c4, c5;
 } gpu_b01_cvb[] = {
-	{   76800,  610000,      0,    0,   0,      0,   0 },
-	{  153600,  610000,      0,    0,   0,      0,   0 },
-	{  230400,  610000,      0,    0,   0,      0,   0 },
-	{  307200,  610000,      0,    0,   0,      0,   0 },
-	{  384000,  610000,      0,    0,   0,      0,   0 },
-	{  460800,  610000,      0,    0,   0,      0,   0 },
-	{  537600,  801688, -10900, -163, 298, -10599, 162 },
-	{  614400,  824214,  -5743, -452, 238,  -6325,  81 },
-	{  691200,  848830,  -3903, -552, 119,  -4030,  -2 },
-	{  768000,  891575,  -4409, -584,   0,  -2849,  39 },
-	{  844800,  940071,  -5367, -602, -60,    -63, -93 },
-	{  921600,  986765,  -6637, -614, -179,  1905, -13 },
-	{  998400, 1098475, -13529, -497, -179,  3626,   9 },
-	{ 1075200, 1163644, -12688, -648,   0,   1077,  40 },
-	{ 1152000, 1204812,  -9908, -830,   0,   1469, 110 },
-	{ 1228800, 1277303, -11675, -859,   0,   3722, 313 },
-	{ 1267200, 1335531, -12567, -867,   0,   3681, 559 },
+	{76800, 610000, 0, 0, 0, 0, 0},
+	{153600, 610000, 0, 0, 0, 0, 0},
+	{230400, 610000, 0, 0, 0, 0, 0},
+	{307200, 610000, 0, 0, 0, 0, 0},
+	{384000, 610000, 0, 0, 0, 0, 0},
+	{460800, 610000, 0, 0, 0, 0, 0},
+	{537600, 801688, -10900, -163, 298, -10599, 162},
+	{614400, 824214, -5743, -452, 238, -6325, 81},
+	{691200, 848830, -3903, -552, 119, -4030, -2},
+	{768000, 891575, -4409, -584, 0, -2849, 39},
+	{844800, 940071, -5367, -602, -60, -63, -93},
+	{921600, 986765, -6637, -614, -179, 1905, -13},
+	{998400, 1098475, -13529, -497, -179, 3626, 9},
+	{1075200, 1163644, -12688, -648, 0, 1077, 40},
+	{1152000, 1204812, -9908, -830, 0, 1469, 110},
+	{1228800, 1277303, -11675, -859, 0, 3722, 313},
+	{1267200, 1335531, -12567, -867, 0, 3681, 559},
 };
-static const int gpu_b01_trips_c[] = { -25, 20, 30, 50, 70, 90 };
-#define GPU_B01_CVB_VMIN_UV 610000  /* .cvb_vmin */
+static const int gpu_b01_trips_c[] = {-25, 20, 30, 50, 70, 90};
+#define GPU_B01_CVB_VMIN_UV 610000 /* .cvb_vmin */
 
-static int div_round_closest(int x, int d)  /* Linux DIV_ROUND_CLOSEST, d > 0 */
+static int div_round_closest(int x, int d) /* Linux DIV_ROUND_CLOSEST, d > 0 */
 {
 	return x > 0 ? (x + d / 2) / d : (x - d / 2) / d;
 }
 
 uint32_t tegra_gm20b_dvfs_khz(int row)
 {
-	return row >= 0 && row < (int)(sizeof(gpu_b01_cvb) / sizeof(gpu_b01_cvb[0])) ? gpu_b01_cvb[row].khz : 0;
+	return row >= 0 && row < (int)(sizeof(gpu_b01_cvb) / sizeof(gpu_b01_cvb[0]))
+		       ? gpu_b01_cvb[row].khz
+		       : 0;
 }
 
 int tegra_gm20b_dvfs_na_uv(uint32_t khz, int speedo)
@@ -284,7 +297,8 @@ int tegra_gm20b_dvfs_na_uv(uint32_t khz, int speedo)
 	unsigned int i, j;
 	int worst = GPU_B01_CVB_VMIN_UV;
 
-	for (i = 0; i < sizeof(gpu_b01_cvb) / sizeof(gpu_b01_cvb[0]) && gpu_b01_cvb[i].khz != khz; i++)
+	for (i = 0; i < sizeof(gpu_b01_cvb) / sizeof(gpu_b01_cvb[0]) && gpu_b01_cvb[i].khz != khz;
+	     i++)
 		;
 	if (i == sizeof(gpu_b01_cvb) / sizeof(gpu_b01_cvb[0]) || speedo <= 0)
 		return -22;
@@ -313,14 +327,14 @@ int tegra_gm20b_clk_enable(int id, int on)
 		wr(car, on ? CLK_ENB_X_SET : CLK_ENB_X_CLR, X_GPU);
 		return 0;
 	case TEGRA_GM20B_CLK_REF:
-		if (on)  /* "Only enable" (hekate clock.h:638) */
+		if (on) /* "Only enable" (hekate clock.h:638) */
 			wr(car, CLK_ENB_X_SET, X_PLLG_REF);
 		return 0;
 	case TEGRA_GM20B_CLK_PWR:
 		v = rd(car, PLLP_OUTC);
 		v = on ? (v | PLLP_OUT5_CLKEN | PLLP_OUT5_RSTN) : (v & ~PLLP_OUT5_CLKEN);
 		wr(car, PLLP_OUTC, v);
-		nvxnu_udelay(2);  /* clk_pll_out_enable() */
+		nvxnu_udelay(2); /* clk_pll_out_enable() */
 		return 0;
 	}
 	return -22;
@@ -344,8 +358,9 @@ int tegra_gm20b_clk_set_rate(int id, unsigned long rate)
 {
 	uint32_t v, div;
 	if (id != TEGRA_GM20B_CLK_PWR || !rate)
-		return 0;  /* gpu/ref are fixed; GPCPLL is programmed by nvkm's clk subdev */
-	div = (uint32_t)((PLLP_RATE * 2 + rate - 1) / rate);  /* round up like TEGRA_DIVIDER_ROUND_UP */
+		return 0; /* gpu/ref are fixed; GPCPLL is programmed by nvkm's clk subdev */
+	div = (uint32_t)((PLLP_RATE * 2 + rate - 1) /
+			 rate); /* round up like TEGRA_DIVIDER_ROUND_UP */
 	div = div < 2 ? 0 : div - 2;
 	if (div > 0xff)
 		div = 0xff;

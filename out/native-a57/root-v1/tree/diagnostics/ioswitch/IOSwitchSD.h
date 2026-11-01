@@ -2,8 +2,8 @@
 #define IOSWITCH_SD_DIAGNOSTIC_H
 #include <stdint.h>
 /* Configuration only: early console setup precedes CPU registration. */
-static inline int ioswitch_native_cpu_profile_matches(int cpus, int root_boot,
-    int sheng_smp, int native_smp) {
+static inline int ioswitch_native_cpu_profile_matches(int cpus, int root_boot, int sheng_smp, int native_smp)
+{
     return cpus == 1 || (cpus == 4 && root_boot == 1 && sheng_smp == 1 && native_smp == 1);
 }
 /* One-shot diagnostic only; no filesystem or general block-driver interface. */

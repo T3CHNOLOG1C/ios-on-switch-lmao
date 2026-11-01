@@ -165,7 +165,8 @@ static void hrtimer_fire(void *arg)
 {
 	struct hrtimer *timer = arg;
 
-	(void)timer->function(timer);  /* HRTIMER_RESTART is not used by the vendored code (see hrtimer.h) */
+	(void)timer->function(
+		timer); /* HRTIMER_RESTART is not used by the vendored code (see hrtimer.h) */
 }
 
 void hrtimer_init(struct hrtimer *timer, int which_clock, enum hrtimer_mode mode)
@@ -210,7 +211,8 @@ int of_property_read_u32(const struct device_node *np, const char *propname, u32
 	return 0;
 }
 
-int of_property_read_string(const struct device_node *np, const char *propname, const char **out_string)
+int of_property_read_string(const struct device_node *np, const char *propname,
+			    const char **out_string)
 {
 	const struct tdfll_property *p = of_find_prop(np, propname);
 
@@ -227,7 +229,8 @@ bool of_property_read_bool(const struct device_node *np, const char *propname)
 	return of_find_prop(np, propname) != NULL;
 }
 
-struct device_node *of_parse_phandle(const struct device_node *np, const char *phandle_name, int index)
+struct device_node *of_parse_phandle(const struct device_node *np, const char *phandle_name,
+				     int index)
 {
 	const struct tdfll_property *p = of_find_prop(np, phandle_name);
 
@@ -256,7 +259,8 @@ bool of_device_is_available(const struct device_node *device)
 
 /* Linux __of_match_node: the node's first compatible string that any entry matches wins (so a node with
  * "nvidia,tegra210b01-dfll", "nvidia,tegra210-dfll" gets the B01 data even though the T210 entry comes first) */
-const struct of_device_id *of_match_node(const struct of_device_id *matches, const struct device_node *node)
+const struct of_device_id *of_match_node(const struct of_device_id *matches,
+					 const struct device_node *node)
 {
 	const struct tdfll_property *p = of_find_prop(node, "compatible");
 	const struct of_device_id *m;
@@ -270,7 +274,8 @@ const struct of_device_id *of_match_node(const struct of_device_id *matches, con
 }
 
 /* ------------------------------------------------------------------ platform resources, MMIO */
-struct resource *platform_get_resource(struct platform_device *pdev, unsigned int type, unsigned int num)
+struct resource *platform_get_resource(struct platform_device *pdev, unsigned int type,
+				       unsigned int num)
 {
 	u32 i;
 
@@ -381,7 +386,8 @@ struct regmap *regulator_get_regmap(struct regulator *regulator)
 }
 
 /* the MAX77812 driver uses regulator_set_voltage_sel_regmap, so the hardware vsel is the selector (core.c 4.9) */
-int regulator_get_hardware_vsel_register(struct regulator *regulator, unsigned *vsel_reg, unsigned *vsel_mask)
+int regulator_get_hardware_vsel_register(struct regulator *regulator, unsigned *vsel_reg,
+					 unsigned *vsel_mask)
 {
 	*vsel_reg = regulator->vsel_reg;
 	*vsel_mask = regulator->vsel_mask;
@@ -466,7 +472,8 @@ int dev_pm_opp_add(struct device *dev, unsigned long freq, unsigned long u_volt)
 		return -ENOMEM;
 	for (i = 0; i < t->count && t->opp[i].rate < freq; i++)
 		;
-	if (i < t->count && t->opp[i].rate == freq)  /* drivers/base/power/opp/core.c _opp_add: duplicate */
+	if (i < t->count &&
+	    t->opp[i].rate == freq) /* drivers/base/power/opp/core.c _opp_add: duplicate */
 		return t->opp[i].u_volt == u_volt ? 0 : -EEXIST;
 	if (t->count == MAX_DVFS_FREQS)
 		return -ENOMEM;
@@ -749,9 +756,10 @@ void clk_disable(struct clk *clk)
 	}
 }
 
-static int clk_notify(struct clk *clk, unsigned long msg, unsigned long old_rate, unsigned long new_rate)
+static int clk_notify(struct clk *clk, unsigned long msg, unsigned long old_rate,
+		      unsigned long new_rate)
 {
-	struct clk_notifier_data cnd = { .clk = clk, .old_rate = old_rate, .new_rate = new_rate };
+	struct clk_notifier_data cnd = {.clk = clk, .old_rate = old_rate, .new_rate = new_rate};
 	struct notifier_block *nb;
 	int ret = NOTIFY_DONE;
 
@@ -786,7 +794,7 @@ int clk_notifier_unregister(struct clk *clk, struct notifier_block *nb)
 
 long clk_round_rate(struct clk *clk, unsigned long rate)
 {
-	struct clk_rate_request req = { .rate = rate, .max_rate = ULONG_MAX };
+	struct clk_rate_request req = {.rate = rate, .max_rate = ULONG_MAX};
 	unsigned long parent_rate;
 
 	if (!clk)
@@ -825,7 +833,9 @@ int clk_set_rate(struct clk *clk, unsigned long rate)
 	new_rate = rate;
 	if (clk->ops->determine_rate) {
 		struct clk_rate_request req = {
-			.rate = rate, .max_rate = ULONG_MAX, .best_parent_rate = parent_rate,
+			.rate = rate,
+			.max_rate = ULONG_MAX,
+			.best_parent_rate = parent_rate,
 			.best_parent_hw = clk->parent ? clk->parent->hw : NULL,
 		};
 
@@ -879,7 +889,8 @@ int clk_set_parent(struct clk *clk, struct clk *parent)
 	old_p_rate = old ? clk_get_rate(old) : 0;
 	rate = clk_get_rate(clk);
 
-	if (clk_notify(clk, PRE_RATE_CHANGE, rate, clk->ops->recalc_rate ? rate : p_rate) & NOTIFY_STOP_MASK)
+	if (clk_notify(clk, PRE_RATE_CHANGE, rate, clk->ops->recalc_rate ? rate : p_rate) &
+	    NOTIFY_STOP_MASK)
 		return -EBUSY;
 	if (clk_notify(clk, PRE_PARENT_CHANGE, old_p_rate, p_rate) & NOTIFY_STOP_MASK) {
 		ret = -EBUSY;
@@ -925,7 +936,8 @@ struct clk *of_clk_src_simple_get(struct of_phandle_args *clkspec, void *data)
 	return data;
 }
 
-int of_clk_add_provider(struct device_node *np, struct clk *(*clk_src_get)(struct of_phandle_args *args, void *data),
+int of_clk_add_provider(struct device_node *np,
+			struct clk *(*clk_src_get)(struct of_phandle_args *args, void *data),
 			void *data)
 {
 	return 0;

@@ -23,7 +23,7 @@
 
 /* clk-dfll.c register offsets used for status (DFLL_CTRL, DFLL_FREQ_REQ, DFLL_MONITOR_*, DFLL_I2C_STS, LUT RAM) */
 #define DFLL_CTRL 0x00
-#define DFLL_CTRL_CLOSED_LOOP 2  /* DFLL_CLOSED_LOOP - 1, as dfll_set_mode writes it */
+#define DFLL_CTRL_CLOSED_LOOP 2 /* DFLL_CLOSED_LOOP - 1, as dfll_set_mode writes it */
 #define DFLL_FREQ_REQ 0x14
 #define DFLL_MONITOR_CTRL 0x28
 #define DFLL_MONITOR_CTRL_FREQ 6
@@ -49,7 +49,7 @@ static struct {
 	struct tegra_dfll *td;
 	struct clk *dfll, *cclk_g, *pllx, *pllp;
 	unsigned int floor_index, cap_index;
-	u8 kept_vout;  /* VDD_CPU code found at enable, restored by disable */
+	u8 kept_vout; /* VDD_CPU code found at enable, restored by disable */
 } st;
 
 static int fail(char *why, size_t len, int err, const char *fmt, ...) __printf(4, 5);
@@ -74,10 +74,11 @@ static void lock(void)
 
 		if (!fresh)
 			panic("TegraDFLL: cannot allocate the API lock");
-		if (__atomic_compare_exchange_n(&api_lock, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+		if (__atomic_compare_exchange_n(&api_lock, &expected, fresh, false,
+						__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
 			m = fresh;
 		else
-			m = expected;  /* lost the race: the other one is in use (this one leaks, once) */
+			m = expected; /* lost the race: the other one is in use (this one leaks, once) */
 	}
 	dfllxnu_mutex_lock(m);
 }
@@ -114,7 +115,8 @@ static int prepare_locked(char *why, size_t len)
 		pdev->dev.driver = &drv->driver;
 		ret = drv->probe(pdev);
 		if (ret)
-			fail(st.prepare_why, sizeof(st.prepare_why), ret, "the L4T DFLL probe failed (%d), see above", ret);
+			fail(st.prepare_why, sizeof(st.prepare_why), ret,
+			     "the L4T DFLL probe failed (%d), see above", ret);
 	}
 	if (!ret) {
 		st.td = platform_get_drvdata(pdev);
@@ -122,14 +124,17 @@ static int prepare_locked(char *why, size_t len)
 		st.cclk_g = clk_get(NULL, "cclk_g");
 		st.pllx = clk_get(NULL, "pll_x");
 		st.pllp = clk_get(NULL, "pll_p");
-		if (!st.td || IS_ERR(st.dfll) || IS_ERR(st.cclk_g) || IS_ERR(st.pllx) || IS_ERR(st.pllp))
-			ret = fail(st.prepare_why, sizeof(st.prepare_why), -ENODEV, "the DFLL probe left no clock");
+		if (!st.td || IS_ERR(st.dfll) || IS_ERR(st.cclk_g) || IS_ERR(st.pllx) ||
+		    IS_ERR(st.pllp))
+			ret = fail(st.prepare_why, sizeof(st.prepare_why), -ENODEV,
+				   "the DFLL probe left no clock");
 	}
 	if (!ret && st.thermal_set && (ret = apply_thermal()))
-		fail(st.prepare_why, sizeof(st.prepare_why), ret, "thermal indices %u/%u out of range", st.floor_index,
-		     st.cap_index);
+		fail(st.prepare_why, sizeof(st.prepare_why), ret,
+		     "thermal indices %u/%u out of range", st.floor_index, st.cap_index);
 	if (ret) {
-		if (ret != -EAGAIN)  /* see tdfll_platform_init: a transient PMIC probe failure is retried */
+		if (ret !=
+		    -EAGAIN) /* see tdfll_platform_init: a transient PMIC probe failure is retried */
 			st.prepare_err = ret;
 		printk("not available: %s\n", st.prepare_why);
 		return fail(why, len, ret, "%s", st.prepare_why);
@@ -156,43 +161,53 @@ static int to_pllx_locked(char *why, size_t len)
 	/* PRE_PARENT_CHANGE unlocks the DFLL (open loop), the mux moves to PLLP, the DFLL is unprepared (disabled) */
 	ret = clk_set_parent(st.cclk_g, st.pllp);
 	if (ret)
-		return fail(why, len, ret, "cannot move the CPU off the DFLL (%d); it stays on the DFLL", ret);
+		return fail(why, len, ret,
+			    "cannot move the CPU off the DFLL (%d); it stays on the DFLL", ret);
 	st.enabled = false;
 	ret = tdfll_platform_vout_write(st.kept_vout);
 	if (ret)
-		return fail(why, len, -EIO, "VDD_CPU not restored to %u mV (TegraI2C %d); the CPU stays on PLLP 408 MHz",
+		return fail(why, len, -EIO,
+			    "VDD_CPU not restored to %u mV (TegraI2C %d); the CPU stays on PLLP "
+			    "408 MHz",
 			    MAX77812_UV(st.kept_vout) / 1000, ret);
 	dfllxnu_msleep(VOUT_SLEW_MS);
 	if (!tdfll_platform_pllx_locked())
 		return fail(why, len, -EIO, "PLLX is not locked; the CPU stays on PLLP 408 MHz");
 	ret = clk_set_parent(st.cclk_g, st.pllx);
 	if (ret)
-		return fail(why, len, ret, "cannot move the CPU to PLLX (%d); it stays on PLLP 408 MHz", ret);
+		return fail(why, len, ret,
+			    "cannot move the CPU to PLLX (%d); it stays on PLLP 408 MHz", ret);
 	return 0;
 }
 
 static u32 dfll_last_sent(u32 sts)
 {
-	return tdfll_platform_dfll_readl(DFLL_LUT + 4 * ((sts >> 1) & 0x3f)) & 0xff;  /* LUT[DFLL_I2C_STS last] */
+	return tdfll_platform_dfll_readl(DFLL_LUT + 4 * ((sts >> 1) & 0x3f)) &
+	       0xff; /* LUT[DFLL_I2C_STS last] */
 }
 
 /* After the settle: the loop is closed and the PMIC holds what the DFLL's I2C master last sent. The DFLL may send one
  * more step while TegraI2C reads the PMIC back, so the value it sent just before or just after that read both count. */
 static int check_closed_loop(char *why, size_t len)
 {
-	u32 ctrl = tdfll_platform_dfll_readl(DFLL_CTRL), before = tdfll_platform_dfll_readl(DFLL_I2C_STS), after;
+	u32 ctrl = tdfll_platform_dfll_readl(DFLL_CTRL),
+	    before = tdfll_platform_dfll_readl(DFLL_I2C_STS), after;
 	u8 vout = 0;
 	int err;
 
 	if ((ctrl & 3) != DFLL_CTRL_CLOSED_LOOP)
-		return fail(why, len, -EIO, "the DFLL did not close the loop (DFLL_CTRL %#x)", ctrl);
+		return fail(why, len, -EIO, "the DFLL did not close the loop (DFLL_CTRL %#x)",
+			    ctrl);
 	err = tdfll_platform_vout_read(&vout);
 	after = tdfll_platform_dfll_readl(DFLL_I2C_STS);
 	if (err)
-		return fail(why, len, -EIO, "VDD_CPU unreadable after the switch (TegraI2C %d)", err);
+		return fail(why, len, -EIO, "VDD_CPU unreadable after the switch (TegraI2C %d)",
+			    err);
 	if (vout != dfll_last_sent(before) && vout != dfll_last_sent(after))
-		return fail(why, len, -EIO, "MAX77812 holds %u mV but the DFLL last sent %u mV (DFLL_I2C_STS %#x)",
-			    MAX77812_UV(vout) / 1000, MAX77812_UV(dfll_last_sent(after)) / 1000, after);
+		return fail(why, len, -EIO,
+			    "MAX77812 holds %u mV but the DFLL last sent %u mV (DFLL_I2C_STS %#x)",
+			    MAX77812_UV(vout) / 1000, MAX77812_UV(dfll_last_sent(after)) / 1000,
+			    after);
 	return 0;
 }
 
@@ -215,19 +230,22 @@ int tegra_dfll_cpu_enable(unsigned long rate_hz, char *why, size_t len)
 	if (!ret)
 		ret = tdfll_platform_i2c5_shareable(why, len);
 	if (!ret && tdfll_platform_vout_read(&st.kept_vout))
-		ret = fail(why, len, -EIO, "VDD_CPU (MAX77812 %#x) does not answer", tdfll_platform_pmic_address());
+		ret = fail(why, len, -EIO, "VDD_CPU (MAX77812 %#x) does not answer",
+			   tdfll_platform_pmic_address());
 	if (ret)
 		goto out;
 
 	now = clk_get_rate(st.cclk_g);
 	ret = clk_set_rate(st.dfll, now);
 	if (ret) {
-		fail(why, len, ret, "the DFLL refused the current CPU rate %lu kHz (%d)", now / 1000, ret);
+		fail(why, len, ret, "the DFLL refused the current CPU rate %lu kHz (%d)",
+		     now / 1000, ret);
 		goto out;
 	}
 	ret = clk_set_parent(st.cclk_g, st.dfll);
 	if (ret) {
-		fail(why, len, ret, "switching cclk_g to the DFLL failed (%d); the CPU stays on PLLX", ret);
+		fail(why, len, ret,
+		     "switching cclk_g to the DFLL failed (%d); the CPU stays on PLLX", ret);
 		goto out;
 	}
 	st.enabled = true;
@@ -245,8 +263,8 @@ int tegra_dfll_cpu_enable(unsigned long rate_hz, char *why, size_t len)
 			printk("could not return to PLLX: %s\n", undo);
 		goto out;
 	}
-	printk("CPU on the DFLL, closed loop at %lu kHz (from PLLX %lu kHz, VDD_CPU was %u mV)\n", rate_hz / 1000,
-	       now / 1000, MAX77812_UV(st.kept_vout) / 1000);
+	printk("CPU on the DFLL, closed loop at %lu kHz (from PLLX %lu kHz, VDD_CPU was %u mV)\n",
+	       rate_hz / 1000, now / 1000, MAX77812_UV(st.kept_vout) / 1000);
 out:
 	unlock();
 	return ret;
@@ -289,7 +307,8 @@ int tegra_dfll_cpu_disable_to_pllx(char *why, size_t len)
 	if (st.enabled) {
 		ret = to_pllx_locked(why, len);
 		if (!ret)
-			printk("CPU back on PLLX, VDD_CPU %u mV\n", MAX77812_UV(st.kept_vout) / 1000);
+			printk("CPU back on PLLX, VDD_CPU %u mV\n",
+			       MAX77812_UV(st.kept_vout) / 1000);
 	}
 	unlock();
 	return ret;
@@ -324,7 +343,8 @@ void tegra_dfll_cpu_describe(unsigned long rate_hz, char *buf, size_t len)
 	tdfll_platform_describe_chip(buf, len);
 	n = strlen(buf);
 	if (!st.prepared) {
-		snprintf(buf + n, len - n, "; DFLL %s", st.prepare_err ? st.prepare_why : "not prepared");
+		snprintf(buf + n, len - n, "; DFLL %s",
+			 st.prepare_err ? st.prepare_why : "not prepared");
 		goto out;
 	}
 	cvb = chosen_cvb();
@@ -333,23 +353,30 @@ void tegra_dfll_cpu_describe(unsigned long rate_hz, char *buf, size_t len)
 		rate_hz = clk_get_rate(st.dfll);
 	at = rate_hz;
 	opp = IS_ERR(opp) ? opp : dev_pm_opp_find_freq_ceil(cpu, &at);
-	snprintf(buf + n, len - n, "; CVB '%s' (speedo_id %d process_id %d, %u..%d mV), top %lu MHz; %lu MHz -> %lu mV",
-		 tegra_dfll_get_cvb_version(), cvb ? cvb->speedo_id : -2, cvb ? cvb->process_id : -2,
-		 tegra_dfll_get_min_millivolts(), cvb ? cvb->max_millivolts : 0, top / 1000000, rate_hz / 1000000,
+	snprintf(buf + n, len - n,
+		 "; CVB '%s' (speedo_id %d process_id %d, %u..%d mV), top %lu MHz; %lu MHz -> %lu "
+		 "mV",
+		 tegra_dfll_get_cvb_version(), cvb ? cvb->speedo_id : -2,
+		 cvb ? cvb->process_id : -2, tegra_dfll_get_min_millivolts(),
+		 cvb ? cvb->max_millivolts : 0, top / 1000000, rate_hz / 1000000,
 		 IS_ERR(opp) ? 0 : dev_pm_opp_get_voltage(opp) / 1000);
 	n = strlen(buf);
 	if (st.enabled) {
-		u32 ctrl = tdfll_platform_dfll_readl(DFLL_CTRL), sent = dfll_last_sent(tdfll_platform_dfll_readl(DFLL_I2C_STS));
+		u32 ctrl = tdfll_platform_dfll_readl(DFLL_CTRL),
+		    sent = dfll_last_sent(tdfll_platform_dfll_readl(DFLL_I2C_STS));
 		u32 scale = (tdfll_platform_dfll_readl(DFLL_FREQ_REQ) >> 8) & 0xff;
 		u64 measured = 0;
 
 		/* clk-dfll.c dfll_calc_monitored_rate + dfll_scale_dvco_rate, one read (the monitor is in FREQ mode) */
 		if (tdfll_platform_dfll_readl(DFLL_MONITOR_CTRL) == DFLL_MONITOR_CTRL_FREQ)
-			measured = (u64)(tdfll_platform_dfll_readl(DFLL_MONITOR_DATA) & 0xffff) * (DFLL_REF_RATE / 4) *
-				   (scale + 1) / 256;
-		snprintf(buf + n, len - n, "; %s, target %lu MHz, measured %llu MHz, VDD_CPU sent %u mV (MAX77812 %#x)",
-			 (ctrl & 3) == DFLL_CTRL_CLOSED_LOOP ? "closed loop" : "NOT closed loop", clk_get_rate(st.dfll) / 1000000,
-			 (unsigned long long)(measured / 1000000), MAX77812_UV(sent) / 1000, tdfll_platform_pmic_address());
+			measured = (u64)(tdfll_platform_dfll_readl(DFLL_MONITOR_DATA) & 0xffff) *
+				   (DFLL_REF_RATE / 4) * (scale + 1) / 256;
+		snprintf(buf + n, len - n,
+			 "; %s, target %lu MHz, measured %llu MHz, VDD_CPU sent %u mV (MAX77812 "
+			 "%#x)",
+			 (ctrl & 3) == DFLL_CTRL_CLOSED_LOOP ? "closed loop" : "NOT closed loop",
+			 clk_get_rate(st.dfll) / 1000000, (unsigned long long)(measured / 1000000),
+			 MAX77812_UV(sent) / 1000, tdfll_platform_pmic_address());
 		n = strlen(buf);
 	}
 	if (tdfll_poll_timeouts())

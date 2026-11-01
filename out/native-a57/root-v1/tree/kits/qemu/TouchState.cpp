@@ -20,7 +20,8 @@ void (*volatile gSink)(void *);
 void *volatile gSinkContext;
 }
 
-void native_touch_set_sink(void (*sink)(void *), void *context) {
+void native_touch_set_sink(void (*sink)(void *), void *context)
+{
     gSink = nullptr;
     __asm__ volatile("dmb ish" ::: "memory");
     gSinkContext = context;
@@ -28,7 +29,8 @@ void native_touch_set_sink(void (*sink)(void *), void *context) {
     gSink = sink;
 }
 
-void native_touch_published(void) {
+void native_touch_published(void)
+{
     void (*sink)(void *) = gSink;
     __asm__ volatile("dmb ish" ::: "memory");
     if (sink) sink(gSinkContext);

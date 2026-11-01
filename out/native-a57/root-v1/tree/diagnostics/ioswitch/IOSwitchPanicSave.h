@@ -20,12 +20,12 @@ void ioswitch_panic_logged(void);
 const char *ioswitch_panic_save_pending(uint32_t *bytes, char *path, size_t path_bytes);
 void ioswitch_panic_save_done(int error, const char *path);
 #else
-#define ioswitch_panic_save_init() ((void)0)
-#define ioswitch_panic_save_xnu_buffer(base, bytes) 0
+#define ioswitch_panic_save_init()                              ((void)0)
+#define ioswitch_panic_save_xnu_buffer(base, bytes)             0
 #define ioswitch_panic_begin(format, args, caller, take_screen) 0
-#define ioswitch_panic_halted() ((void)0)
-#define ioswitch_panic_logged() ((void)0)
-#define ioswitch_panic_save_pending(bytes, path, path_bytes) ((const char *)0)
-#define ioswitch_panic_save_done(error, path) ((void)0)
+#define ioswitch_panic_halted()                                 ((void)0)
+#define ioswitch_panic_logged()                                 ((void)0)
+#define ioswitch_panic_save_pending(bytes, path, path_bytes)    ((const char *)0)
+#define ioswitch_panic_save_done(error, path)                   ((void)0)
 #endif
 #endif

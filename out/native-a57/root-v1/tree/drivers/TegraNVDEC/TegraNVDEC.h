@@ -15,9 +15,9 @@ class IOMemoryDescriptor;
 
 // One arena allocation: physically contiguous, below 4 GiB, 64 KiB granular, zeroed and clean in the caches.
 struct TegraNVDECBlock {
-  uint64_t pa, size;
-  uint8_t *va;
-  uint32_t first, count;   // arena granules
+    uint64_t pa, size;
+    uint8_t *va;
+    uint32_t first, count;  // arena granules
 };
 
 // Resolves a submit's buffer handle; the self-test and every user client supply their own.
@@ -27,10 +27,10 @@ extern "C" {
 int tegra_nvdec_arena_init(uint64_t bytes);
 int tegra_nvdec_arena_alloc(uint64_t size, TegraNVDECBlock *block);
 void tegra_nvdec_arena_free(const TegraNVDECBlock *block);
-IOMemoryDescriptor *tegra_nvdec_arena_descriptor(const TegraNVDECBlock *block);   // for mapping into a client
+IOMemoryDescriptor *tegra_nvdec_arena_descriptor(const TegraNVDECBlock *block);  // for mapping into a client
 void tegra_nvdec_arena_usage(uint64_t *total, uint64_t *free);
-void tegra_nvdec_cache_clean(const void *va, size_t size);    // dc cvac: the CPU's writes reach DRAM
-void tegra_nvdec_cache_flush(const void *va, size_t size);    // dc civac: the next CPU read comes from DRAM
+void tegra_nvdec_cache_clean(const void *va, size_t size);  // dc cvac: the CPU's writes reach DRAM
+void tegra_nvdec_cache_flush(const void *va, size_t size);  // dc civac: the next CPU read comes from DRAM
 
 // Checks a submit (TegraNVDECCheck.h), cleans its CPU-written ranges, copies its picture setup into kernel memory
 // and queues it on host1x channel 0. Returns 0 and the job's fence, or a negative errno-style value.
@@ -41,8 +41,8 @@ int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, v
 int tegra_nvdec_wait(uint32_t fence, uint32_t timeoutUs);
 bool tegra_nvdec_ready(void);
 
-int tegra_nvdec_self_test(void);                    // N3
-int tegra_nvdec_publish(void);                      // N4
+int tegra_nvdec_self_test(void);  // N3
+int tegra_nvdec_publish(void);    // N4
 }
 
 #endif

@@ -48,18 +48,18 @@ extern "C" {
 #endif
 
 enum {
-  TEGRA_I2C_OK = 0,
-  TEGRA_I2C_EINVAL = -1,     // bad bus/address/length
-  TEGRA_I2C_ENOMEM = -2,     // mapping or lock allocation failed
-  TEGRA_I2C_ENOTREADY = -3,  // tegra_i2c_init() not called (or failed) for this bus
-  TEGRA_I2C_ENACK = -4,      // device did not acknowledge
-  TEGRA_I2C_EARB = -5,       // arbitration lost / bus stuck
-  TEGRA_I2C_ETIMEDOUT = -6,  // controller did not finish in time
-  TEGRA_I2C_EIO = -7,        // packet completed short
+    TEGRA_I2C_OK = 0,
+    TEGRA_I2C_EINVAL = -1,     // bad bus/address/length
+    TEGRA_I2C_ENOMEM = -2,     // mapping or lock allocation failed
+    TEGRA_I2C_ENOTREADY = -3,  // tegra_i2c_init() not called (or failed) for this bus
+    TEGRA_I2C_ENACK = -4,      // device did not acknowledge
+    TEGRA_I2C_EARB = -5,       // arbitration lost / bus stuck
+    TEGRA_I2C_ETIMEDOUT = -6,  // controller did not finish in time
+    TEGRA_I2C_EIO = -7,        // packet completed short
 };
 
 // Longest single read or write payload, and longest register write (tegra_i2c_write).
-#define TEGRA_I2C_MAX_TRANSFER 4096
+#define TEGRA_I2C_MAX_TRANSFER  4096
 #define TEGRA_I2C_MAX_REG_WRITE 63
 
 // Maps the controller, CAR and pinmux (once), claims the bus's interrupt and brings the bus up.

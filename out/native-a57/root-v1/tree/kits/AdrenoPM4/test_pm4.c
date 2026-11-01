@@ -3,13 +3,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define CHECK(c) do { if (!(c)) { fprintf(stderr, "line %d: %s\n", __LINE__, #c); exit(1); } } while (0)
+#define CHECK(c)                                            \
+    do {                                                    \
+        if (!(c)) {                                         \
+            fprintf(stderr, "line %d: %s\n", __LINE__, #c); \
+            exit(1);                                        \
+        }                                                   \
+    } while (0)
 
 static unsigned population(uint32_t word)
 {
     unsigned sum = 0;
-    for (unsigned bit = 0; bit < 32; ++bit)
-        sum += (word >> bit) & 1;
+    for (unsigned bit = 0; bit < 32; ++bit) sum += (word >> bit) & 1;
     return sum;
 }
 static void refusal(const uint32_t *words, size_t length, size_t capacity, AdrenoPM4Status expected)
@@ -96,6 +101,8 @@ int main(void)
     CHECK(header == 0xa5a5a5a5);
     CHECK(AdrenoPM4Type7(0, 0, NULL) == AdrenoPM4InvalidArgument);
     CHECK(AdrenoPM4Type4(0, 1, NULL) == AdrenoPM4InvalidArgument);
-    printf("PASS: 2097152 type-7 pairs, 262144 registers, 127 counts, %u single-bit corruptions; transactional stream refusals\n", flips);
+    printf("PASS: 2097152 type-7 pairs, 262144 registers, 127 counts, %u single-bit corruptions; transactional stream "
+           "refusals\n",
+           flips);
     return 0;
 }

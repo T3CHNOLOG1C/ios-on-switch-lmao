@@ -63,7 +63,7 @@ namespace {
 constexpr unsigned kBus = 5;
 constexpr uint8_t kPmic = 0x3c, kRtc = 0x68;
 enum : uint8_t { IRQTOP = 0x05, ONOFFIRQ = 0x0b, ONOFFCNFG1 = 0x41, ONOFFCNFG2 = 0x42 };
-constexpr uint8_t kSoftReset = 1u << 7;                                                    // ONOFFCNFG1 SFT_RST
+constexpr uint8_t kSoftReset = 1u << 7;                                                      // ONOFFCNFG1 SFT_RST
 constexpr uint8_t kWakeOnSoftReset = 1u << 7, kWakeAlarm1 = 1u << 2, kWakeAlarm2 = 1u << 1;  // ONOFFCNFG2
 
 enum : uint8_t { RTC_CONTROLM = 0x02, RTC_CONTROL = 0x03, RTC_UPDATE0 = 0x04, RTC_SEC = 0x07 };
@@ -77,415 +77,429 @@ constexpr uint8_t kRtcWriteUpdate = 1u << 0, kRtcReadUpdate = 1u << 4;
 constexpr uint32_t kRtcUpdateMS = 16;
 enum { SEC, MIN, HOUR, WEEKDAY, MONTH, YEAR, DATE, kTimeRegs };
 
-constexpr uint32_t kPowerDownMS = 1000;   // the PMIC cuts power within milliseconds of SFT_RST
+constexpr uint32_t kPowerDownMS = 1000;  // the PMIC cuts power within milliseconds of SFT_RST
 
-int readByte(uint8_t addr, uint8_t reg, uint8_t *value) { return tegra_i2c_read(kBus, addr, reg, value, 1); }
-int writeByte(uint8_t addr, uint8_t reg, uint8_t value) { return tegra_i2c_write(kBus, addr, reg, &value, 1); }
+int readByte(uint8_t addr, uint8_t reg, uint8_t *value)
+{
+    return tegra_i2c_read(kBus, addr, reg, value, 1);
+}
+int writeByte(uint8_t addr, uint8_t reg, uint8_t value)
+{
+    return tegra_i2c_write(kBus, addr, reg, &value, 1);
+}
 
 // Days since 1970-01-01 of a proleptic Gregorian date, and back (H. Hinnant's days_from_civil / civil_from_days).
 int64_t daysFromCivil(int year, int month, int day)
 {
-  year -= month <= 2;
-  const int era = (year >= 0 ? year : year - 399) / 400;
-  const int yoe = year - era * 400;
-  const int doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
-  const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return (int64_t)era * 146097 + doe - 719468;
+    year -= month <= 2;
+    const int era = (year >= 0 ? year : year - 399) / 400;
+    const int yoe = year - era * 400;
+    const int doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+    const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (int64_t)era * 146097 + doe - 719468;
 }
 
 void civilFromDays(int64_t days, int *year, int *month, int *day)
 {
-  days += 719468;
-  const int64_t era = (days >= 0 ? days : days - 146096) / 146097;
-  const int doe = (int)(days - era * 146097);
-  const int yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-  const int doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-  const int mp = (5 * doy + 2) / 153;
-  *day = doy - (153 * mp + 2) / 5 + 1;
-  *month = mp < 10 ? mp + 3 : mp - 9;
-  *year = (int)(yoe + era * 400) + (*month <= 2);
+    days += 719468;
+    const int64_t era = (days >= 0 ? days : days - 146096) / 146097;
+    const int doe = (int)(days - era * 146097);
+    const int yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const int doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const int mp = (5 * doy + 2) / 153;
+    *day = doy - (153 * mp + 2) / 5 + 1;
+    *month = mp < 10 ? mp + 3 : mp - 9;
+    *year = (int)(yoe + era * 400) + (*month <= 2);
 }
 
 // Sets `bit` in UPDATE0 (the others, e.g. the auto-clear mode, stay) and waits out the transfer.
 int rtcUpdate(uint8_t bit)
 {
-  uint8_t update = 0;
-  int err = readByte(kRtc, RTC_UPDATE0, &update);
-  if (!err) err = writeByte(kRtc, RTC_UPDATE0, update | bit);
-  if (!err) IOSleep(kRtcUpdateMS);
-  return err;
+    uint8_t update = 0;
+    int err = readByte(kRtc, RTC_UPDATE0, &update);
+    if (!err) err = writeByte(kRtc, RTC_UPDATE0, update | bit);
+    if (!err) IOSleep(kRtcUpdateMS);
+    return err;
 }
 
 // The RTC's time in seconds since 1970 (UTC), or -1 with `why` filled in.
 int64_t rtcRead(char *why, size_t size)
 {
-  uint8_t control = 0, t[kTimeRegs] = {};
-  int err = rtcUpdate(kRtcReadUpdate);
-  if (!err) err = readByte(kRtc, RTC_CONTROL, &control);
-  if (!err) err = tegra_i2c_read(kBus, kRtc, RTC_SEC, t, sizeof(t));
-  if (err) {
-    snprintf(why, size, "I2C5 error %d", err);
-    return -1;
-  }
-  const bool bcd = control & kRtcBcd;
-  auto value = [bcd](uint8_t raw, uint8_t mask) {
-    raw &= mask;
-    return bcd ? (raw >> 4) * 10 + (raw & 15) : (int)raw;
-  };
-  int hour;
-  if (control & kRtc24Hour) {
-    hour = value(t[HOUR], bcd ? 0x3f : 0x1f);
-  } else {
-    hour = value(t[HOUR], 0x1f) % 12 + ((t[HOUR] & kRtcHourPm) ? 12 : 0);
-  }
-  const int sec = value(t[SEC], 0x7f), min = value(t[MIN], 0x7f), day = value(t[DATE], 0x3f);
-  const int month = value(t[MONTH], 0x1f), year = 2000 + value(t[YEAR], bcd ? 0xff : 0x7f);
-  if (sec > 59 || min > 59 || hour > 23 || month < 1 || month > 12 || day < 1 || day > 31 || year > 2099) {
-    snprintf(why, size, "invalid date %04d-%02d-%02d %02d:%02d:%02d (CONTROL %#x)", year, month, day, hour, min, sec,
-             control);
-    return -1;
-  }
-  return daysFromCivil(year, month, day) * 86400 + hour * 3600 + min * 60 + sec;
+    uint8_t control = 0, t[kTimeRegs] = {};
+    int err = rtcUpdate(kRtcReadUpdate);
+    if (!err) err = readByte(kRtc, RTC_CONTROL, &control);
+    if (!err) err = tegra_i2c_read(kBus, kRtc, RTC_SEC, t, sizeof(t));
+    if (err) {
+        snprintf(why, size, "I2C5 error %d", err);
+        return -1;
+    }
+    const bool bcd = control & kRtcBcd;
+    auto value = [bcd](uint8_t raw, uint8_t mask) {
+        raw &= mask;
+        return bcd ? (raw >> 4) * 10 + (raw & 15) : (int)raw;
+    };
+    int hour;
+    if (control & kRtc24Hour) {
+        hour = value(t[HOUR], bcd ? 0x3f : 0x1f);
+    } else {
+        hour = value(t[HOUR], 0x1f) % 12 + ((t[HOUR] & kRtcHourPm) ? 12 : 0);
+    }
+    const int sec = value(t[SEC], 0x7f), min = value(t[MIN], 0x7f), day = value(t[DATE], 0x3f);
+    const int month = value(t[MONTH], 0x1f), year = 2000 + value(t[YEAR], bcd ? 0xff : 0x7f);
+    if (sec > 59 || min > 59 || hour > 23 || month < 1 || month > 12 || day < 1 || day > 31 || year > 2099) {
+        snprintf(why, size, "invalid date %04d-%02d-%02d %02d:%02d:%02d (CONTROL %#x)", year, month, day, hour, min,
+                 sec, control);
+        return -1;
+    }
+    return daysFromCivil(year, month, day) * 86400 + hour * 3600 + min * 60 + sec;
 }
 
 int rtcWrite(int64_t secs)
 {
-  if (secs < 946684800 || secs >= 4102444800) return TEGRA_I2C_EINVAL;   // the RTC holds 2000 .. 2099 only
-  int year, month, day;
-  const int64_t days = secs / 86400;
-  const int rest = (int)(secs % 86400);
-  civilFromDays(days, &year, &month, &day);
-  const uint8_t t[kTimeRegs] = {
-    (uint8_t)(rest % 60), (uint8_t)(rest / 60 % 60), (uint8_t)(rest / 3600), (uint8_t)(1u << ((days + 4) % 7)),
-    (uint8_t)month, (uint8_t)(year - 2000), (uint8_t)day,
-  };
-  uint8_t control = 0;
-  int err = readByte(kRtc, RTC_CONTROL, &control);
-  if (!err && (control & (kRtcBcd | kRtc24Hour)) != kRtc24Hour) {
-    err = writeByte(kRtc, RTC_CONTROLM, kRtcBcd | kRtc24Hour);
-    if (!err) err = writeByte(kRtc, RTC_CONTROL, kRtc24Hour);
+    if (secs < 946684800 || secs >= 4102444800) return TEGRA_I2C_EINVAL;  // the RTC holds 2000 .. 2099 only
+    int year, month, day;
+    const int64_t days = secs / 86400;
+    const int rest = (int)(secs % 86400);
+    civilFromDays(days, &year, &month, &day);
+    const uint8_t t[kTimeRegs] = {
+        (uint8_t)(rest % 60), (uint8_t)(rest / 60 % 60), (uint8_t)(rest / 3600), (uint8_t)(1u << ((days + 4) % 7)),
+        (uint8_t)month,       (uint8_t)(year - 2000),    (uint8_t)day,
+    };
+    uint8_t control = 0;
+    int err = readByte(kRtc, RTC_CONTROL, &control);
+    if (!err && (control & (kRtcBcd | kRtc24Hour)) != kRtc24Hour) {
+        err = writeByte(kRtc, RTC_CONTROLM, kRtcBcd | kRtc24Hour);
+        if (!err) err = writeByte(kRtc, RTC_CONTROL, kRtc24Hour);
+        if (!err) err = rtcUpdate(kRtcWriteUpdate);
+    }
+    for (unsigned i = 0; !err && i < kTimeRegs; ++i) err = writeByte(kRtc, (uint8_t)(RTC_SEC + i), t[i]);
     if (!err) err = rtcUpdate(kRtcWriteUpdate);
-  }
-  for (unsigned i = 0; !err && i < kTimeRegs; ++i) err = writeByte(kRtc, (uint8_t)(RTC_SEC + i), t[i]);
-  if (!err) err = rtcUpdate(kRtcWriteUpdate);
-  return err;
+    return err;
 }
 
 // ALARM1 at `secs` (RTC time), each field in the RTC's current format (left as the boot chain set it: read-only mode
 // must not change the RTC), all but the weekday compared; or, for secs < 0, every compare off.
 int alarmWrite(int64_t secs)
 {
-  uint8_t control = 0;
-  int err = readByte(kRtc, RTC_CONTROL, &control);
-  uint8_t t[kTimeRegs] = {};
-  if (!err && secs >= 0) {
-    const bool bcd = control & kRtcBcd;
-    auto field = [bcd](int value) { return (uint8_t)(bcd ? ((value / 10) << 4 | value % 10) : value); };
-    int year, month, day;
-    const int rest = (int)(secs % 86400);
-    civilFromDays(secs / 86400, &year, &month, &day);
-    const int hour = rest / 3600;
-    t[SEC] = field(rest % 60) | kAlarmCompare;
-    t[MIN] = field(rest / 60 % 60) | kAlarmCompare;
-    t[HOUR] = (control & kRtc24Hour ? field(hour) : (uint8_t)(field(hour % 12 ? hour % 12 : 12) | (hour >= 12 ? kRtcHourPm : 0))) |
-              kAlarmCompare;
-    t[MONTH] = field(month) | kAlarmCompare;
-    t[YEAR] = field(year - 2000) | kAlarmCompare;
-    t[DATE] = field(day) | kAlarmCompare;
-  }
-  for (unsigned i = 0; !err && i < kTimeRegs; ++i) err = writeByte(kRtc, (uint8_t)(RTC_ALARM1 + i), t[i]);
-  if (!err) err = rtcUpdate(kRtcWriteUpdate);
-  return err;
+    uint8_t control = 0;
+    int err = readByte(kRtc, RTC_CONTROL, &control);
+    uint8_t t[kTimeRegs] = {};
+    if (!err && secs >= 0) {
+        const bool bcd = control & kRtcBcd;
+        auto field = [bcd](int value) { return (uint8_t)(bcd ? ((value / 10) << 4 | value % 10) : value); };
+        int year, month, day;
+        const int rest = (int)(secs % 86400);
+        civilFromDays(secs / 86400, &year, &month, &day);
+        const int hour = rest / 3600;
+        t[SEC] = field(rest % 60) | kAlarmCompare;
+        t[MIN] = field(rest / 60 % 60) | kAlarmCompare;
+        t[HOUR] =
+            (control & kRtc24Hour ? field(hour)
+                                  : (uint8_t)(field(hour % 12 ? hour % 12 : 12) | (hour >= 12 ? kRtcHourPm : 0))) |
+            kAlarmCompare;
+        t[MONTH] = field(month) | kAlarmCompare;
+        t[YEAR] = field(year - 2000) | kAlarmCompare;
+        t[DATE] = field(day) | kAlarmCompare;
+    }
+    for (unsigned i = 0; !err && i < kTimeRegs; ++i) err = writeByte(kRtc, (uint8_t)(RTC_ALARM1 + i), t[i]);
+    if (!err) err = rtcUpdate(kRtcWriteUpdate);
+    return err;
 }
 
 void psciSystemReset()
 {
-  // PSCI 0.2 SYSTEM_RESET over the /psci node's SMC conduit (ArmCpu's CPU_ON uses the same one).
-  register uint64_t x0 __asm__("x0") = 0x84000009;
-  __asm__ volatile("smc #0" : "+r"(x0) : : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12",
-                   "x13", "x14", "x15", "x16", "x17", "memory");
+    // PSCI 0.2 SYSTEM_RESET over the /psci node's SMC conduit (ArmCpu's CPU_ON uses the same one).
+    register uint64_t x0 __asm__("x0") = 0x84000009;
+    __asm__ volatile("smc #0"
+                     : "+r"(x0)
+                     :
+                     : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+                       "x16", "x17", "memory");
 }
 
 // PE_halt_restart. Only a real Shut Down or Restart, in thread context, does anything.
 int haltRestart(unsigned int type)
 {
-  if ((type != kPEHaltCPU && type != kPERestartCPU) || panic_active() || !ml_get_interrupts_enabled()) return -1;
-  const bool restart = type == kPERestartCPU;
-  switch_thermal_cpu_quiesce();   // the DFLL, if the CPU runs on it, must not share I2C5 with what follows
-  uint8_t value = 0;
-  if (!restart) {
-    (void)readByte(kPmic, ONOFFIRQ, &value);
-    (void)readByte(kPmic, IRQTOP, &value);
-  }
-  int err = readByte(kPmic, ONOFFCNFG2, &value);
-  if (!err) {
-    value = restart ? (uint8_t)(value | kWakeOnSoftReset)
-                    : (uint8_t)(value & ~(kWakeOnSoftReset | kWakeAlarm1 | kWakeAlarm2));
-    err = writeByte(kPmic, ONOFFCNFG2, value);
-  }
-  if (!err) err = readByte(kPmic, ONOFFCNFG1, &value);
-  if (!err) err = writeByte(kPmic, ONOFFCNFG1, value | kSoftReset);
-  if (!err) IOSleep(kPowerDownMS);
-  if (restart) {
-    psciSystemReset();
-    panic("SwitchPMIC: restart failed: MAX77620 soft reset %s (%d), then PSCI SYSTEM_RESET returned",
-          err ? "write failed" : "did not take", err);
-  }
-  panic("SwitchPMIC: power-off failed: MAX77620 soft reset %s (%d)", err ? "write failed" : "did not take", err);
+    if ((type != kPEHaltCPU && type != kPERestartCPU) || panic_active() || !ml_get_interrupts_enabled()) return -1;
+    const bool restart = type == kPERestartCPU;
+    switch_thermal_cpu_quiesce();  // the DFLL, if the CPU runs on it, must not share I2C5 with what follows
+    uint8_t value = 0;
+    if (!restart) {
+        (void)readByte(kPmic, ONOFFIRQ, &value);
+        (void)readByte(kPmic, IRQTOP, &value);
+    }
+    int err = readByte(kPmic, ONOFFCNFG2, &value);
+    if (!err) {
+        value = restart ? (uint8_t)(value | kWakeOnSoftReset)
+                        : (uint8_t)(value & ~(kWakeOnSoftReset | kWakeAlarm1 | kWakeAlarm2));
+        err = writeByte(kPmic, ONOFFCNFG2, value);
+    }
+    if (!err) err = readByte(kPmic, ONOFFCNFG1, &value);
+    if (!err) err = writeByte(kPmic, ONOFFCNFG1, value | kSoftReset);
+    if (!err) IOSleep(kPowerDownMS);
+    if (restart) {
+        psciSystemReset();
+        panic("SwitchPMIC: restart failed: MAX77620 soft reset %s (%d), then PSCI SYSTEM_RESET returned",
+              err ? "write failed" : "did not take", err);
+    }
+    panic("SwitchPMIC: power-off failed: MAX77620 soft reset %s (%d)", err ? "write failed" : "did not take", err);
 }
 }  // namespace
 
 // The wall clock between boots. Reads come from the boot-time RTC reading plus elapsed mach time (no I2C on the
 // read path, which XNU also takes on wake paths); settimeofday() writes the RTC back when switch-rtc=2.
 class SwitchRTC : public IORTC {
-  OSDeclareDefaultStructors(SwitchRTC)
-  IOSimpleLock *clockLock = nullptr;
-  IOLock *writeLock = nullptr;
-  uint64_t baseNS = 0, baseStamp = 0;   // wall time in ns since 1970 at mach_absolute_time() == baseStamp
-  uint64_t rtcNS = 0, rtcStamp = 0;     // the last RTC reading (ns since 1970) and its mach_absolute_time()
-  bool writeBack = false;
-  void setBase(uint64_t ns, uint64_t stamp);
+    OSDeclareDefaultStructors(SwitchRTC) IOSimpleLock *clockLock = nullptr;
+    IOLock *writeLock = nullptr;
+    uint64_t baseNS = 0, baseStamp = 0;  // wall time in ns since 1970 at mach_absolute_time() == baseStamp
+    uint64_t rtcNS = 0, rtcStamp = 0;    // the last RTC reading (ns since 1970) and its mach_absolute_time()
+    bool writeBack = false;
+    void setBase(uint64_t ns, uint64_t stamp);
+
 public:
-  bool initAt(int64_t secs, uint64_t stamp, bool write);
-  void free() override;
-  long getGMTTimeOfDay() override;
-  void setGMTTimeOfDay(long secs) override;
-  void getUTCTimeOfDay(clock_sec_t *secs, clock_nsec_t *nsecs) override;
-  void setUTCTimeOfDay(clock_sec_t secs, clock_nsec_t nsecs) override;
-  void setAlarmEnable(IOOptionBits message) override;
-  // System sleep (SwitchSuspend): powerd's next scheduled wake as ALARM1 before SC7; after it, the wall clock is read
-  // from the RTC again (mach time stood still while the SoC was off) and the alarm is turned off.
-  void registerWakeSettings();
-  void suspend();
-  int resume();
-  static IOReturn wakeSetting(OSObject *target, const OSSymbol *type, OSObject *value, uintptr_t refcon);
-  int64_t wakeAt = 0;             // wall time (s) of the next scheduled wake, 0 = none
-  bool alarmArmed = false;
-  volatile bool alarmFired = false;   // RTCINT ALARM1 seen (here or by SwitchButtons' PMIC interrupt)
+    bool initAt(int64_t secs, uint64_t stamp, bool write);
+    void free() override;
+    long getGMTTimeOfDay() override;
+    void setGMTTimeOfDay(long secs) override;
+    void getUTCTimeOfDay(clock_sec_t *secs, clock_nsec_t *nsecs) override;
+    void setUTCTimeOfDay(clock_sec_t secs, clock_nsec_t nsecs) override;
+    void setAlarmEnable(IOOptionBits message) override;
+    // System sleep (SwitchSuspend): powerd's next scheduled wake as ALARM1 before SC7; after it, the wall clock is read
+    // from the RTC again (mach time stood still while the SoC was off) and the alarm is turned off.
+    void registerWakeSettings();
+    void suspend();
+    int resume();
+    static IOReturn wakeSetting(OSObject *target, const OSSymbol *type, OSObject *value, uintptr_t refcon);
+    int64_t wakeAt = 0;  // wall time (s) of the next scheduled wake, 0 = none
+    bool alarmArmed = false;
+    volatile bool alarmFired = false;  // RTCINT ALARM1 seen (here or by SwitchButtons' PMIC interrupt)
 };
 
 OSDefineMetaClassAndStructors(SwitchRTC, IORTC)
 
-bool SwitchRTC::initAt(int64_t secs, uint64_t stamp, bool write)
+    bool SwitchRTC::initAt(int64_t secs, uint64_t stamp, bool write)
 {
-  if (!IORTC::init()) return false;
-  clockLock = IOSimpleLockAlloc();
-  writeLock = IOLockAlloc();
-  if (!clockLock || !writeLock) return false;
-  baseNS = (uint64_t)secs * NSEC_PER_SEC;
-  rtcNS = baseNS;
-  rtcStamp = stamp;
-  baseStamp = stamp;
-  writeBack = write;
-  return true;
+    if (!IORTC::init()) return false;
+    clockLock = IOSimpleLockAlloc();
+    writeLock = IOLockAlloc();
+    if (!clockLock || !writeLock) return false;
+    baseNS = (uint64_t)secs * NSEC_PER_SEC;
+    rtcNS = baseNS;
+    rtcStamp = stamp;
+    baseStamp = stamp;
+    writeBack = write;
+    return true;
 }
 
 void SwitchRTC::free()
 {
-  if (clockLock) IOSimpleLockFree(clockLock);
-  if (writeLock) IOLockFree(writeLock);
-  IORTC::free();
+    if (clockLock) IOSimpleLockFree(clockLock);
+    if (writeLock) IOLockFree(writeLock);
+    IORTC::free();
 }
 
 void SwitchRTC::setBase(uint64_t ns, uint64_t stamp)
 {
-  IOInterruptState state = IOSimpleLockLockDisableInterrupt(clockLock);
-  baseNS = ns;
-  baseStamp = stamp;
-  IOSimpleLockUnlockEnableInterrupt(clockLock, state);
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(clockLock);
+    baseNS = ns;
+    baseStamp = stamp;
+    IOSimpleLockUnlockEnableInterrupt(clockLock, state);
 }
 
 void SwitchRTC::getUTCTimeOfDay(clock_sec_t *secs, clock_nsec_t *nsecs)
 {
-  IOInterruptState state = IOSimpleLockLockDisableInterrupt(clockLock);
-  const uint64_t ns = baseNS, stamp = baseStamp;
-  IOSimpleLockUnlockEnableInterrupt(clockLock, state);
-  uint64_t elapsed = 0;
-  absolutetime_to_nanoseconds(mach_absolute_time() - stamp, &elapsed);
-  *secs = (clock_sec_t)((ns + elapsed) / NSEC_PER_SEC);
-  *nsecs = (clock_nsec_t)((ns + elapsed) % NSEC_PER_SEC);
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(clockLock);
+    const uint64_t ns = baseNS, stamp = baseStamp;
+    IOSimpleLockUnlockEnableInterrupt(clockLock, state);
+    uint64_t elapsed = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time() - stamp, &elapsed);
+    *secs = (clock_sec_t)((ns + elapsed) / NSEC_PER_SEC);
+    *nsecs = (clock_nsec_t)((ns + elapsed) % NSEC_PER_SEC);
 }
 
 // XNU calls this from clock_set_calendar_microtime() with interrupts enabled ("this call might block").
 void SwitchRTC::setUTCTimeOfDay(clock_sec_t secs, clock_nsec_t nsecs)
 {
-  setBase((uint64_t)secs * NSEC_PER_SEC + nsecs, mach_absolute_time());
-  if (!writeBack) return;
-  IOLockLock(writeLock);
-  const int err = rtcWrite((int64_t)secs);
-  if (!err) {
-    rtcNS = (uint64_t)secs * NSEC_PER_SEC;   // the RTC now reads the wall clock (sleep resync offset 0)
-    rtcStamp = mach_absolute_time();
-  }
-  IOLockUnlock(writeLock);
-  if (err) IOLog("SwitchRTC: RTC write failed (%d), it keeps its old time\n", err);
+    setBase((uint64_t)secs * NSEC_PER_SEC + nsecs, mach_absolute_time());
+    if (!writeBack) return;
+    IOLockLock(writeLock);
+    const int err = rtcWrite((int64_t)secs);
+    if (!err) {
+        rtcNS = (uint64_t)secs * NSEC_PER_SEC;  // the RTC now reads the wall clock (sleep resync offset 0)
+        rtcStamp = mach_absolute_time();
+    }
+    IOLockUnlock(writeLock);
+    if (err) IOLog("SwitchRTC: RTC write failed (%d), it keeps its old time\n", err);
 }
 
 long SwitchRTC::getGMTTimeOfDay()
 {
-  clock_sec_t secs = 0;
-  clock_nsec_t nsecs = 0;
-  getUTCTimeOfDay(&secs, &nsecs);
-  return (long)secs;
+    clock_sec_t secs = 0;
+    clock_nsec_t nsecs = 0;
+    getUTCTimeOfDay(&secs, &nsecs);
+    return (long)secs;
 }
 
 void SwitchRTC::setGMTTimeOfDay(long secs)
 {
-  setUTCTimeOfDay((clock_sec_t)secs, 0);
+    setUTCTimeOfDay((clock_sec_t)secs, 0);
 }
 
 // No IORTC alarm messages: scheduled wakes come through the root domain's PM settings (registerWakeSettings), and
 // power-off clears the alarm wake sources.
-void SwitchRTC::setAlarmEnable(IOOptionBits message)
-{
-}
+void SwitchRTC::setAlarmEnable(IOOptionBits message) {}
 
 // IOPMrootDomain forwards powerd's scheduled wake (IOPMSchedulePowerEvent) as "wake" (seconds from now, 0 = none) or
 // "WakeByCalendarDate" (IOPMCalendarStruct, UTC) to the controllers registered for it (IOPMrootDomain.cpp setPMSetting).
 void SwitchRTC::registerWakeSettings()
 {
-  IOPMrootDomain *root = IOService::getPMRootDomain();
-  const OSSymbol *settings[] = {OSSymbol::withCString(kIOPMSettingAutoWakeSecondsKey),
-                                OSSymbol::withCString(kIOPMSettingAutoWakeCalendarKey), nullptr};
-  OSObject *handle = nullptr;
-  if (!root || !settings[0] || !settings[1] ||
-      root->registerPMSettingController(settings, &SwitchRTC::wakeSetting, this, 0, &handle) != kIOReturnSuccess) {
-    IOLog("SwitchRTC: cannot register for scheduled wakes; the console only wakes on the power key\n");
-  }
-  OSSafeReleaseNULL(settings[0]);
-  OSSafeReleaseNULL(settings[1]);
+    IOPMrootDomain *root = IOService::getPMRootDomain();
+    const OSSymbol *settings[] = {OSSymbol::withCString(kIOPMSettingAutoWakeSecondsKey),
+                                  OSSymbol::withCString(kIOPMSettingAutoWakeCalendarKey), nullptr};
+    OSObject *handle = nullptr;
+    if (!root || !settings[0] || !settings[1] ||
+        root->registerPMSettingController(settings, &SwitchRTC::wakeSetting, this, 0, &handle) != kIOReturnSuccess) {
+        IOLog("SwitchRTC: cannot register for scheduled wakes; the console only wakes on the power key\n");
+    }
+    OSSafeReleaseNULL(settings[0]);
+    OSSafeReleaseNULL(settings[1]);
 }
 
 IOReturn SwitchRTC::wakeSetting(OSObject *target, const OSSymbol *type, OSObject *value, uintptr_t)
 {
-  auto *self = OSDynamicCast(SwitchRTC, target);
-  if (!self || !type) return kIOReturnBadArgument;
-  clock_sec_t now = 0;
-  clock_nsec_t nsecs = 0;
-  self->getUTCTimeOfDay(&now, &nsecs);
-  if (type->isEqualTo(kIOPMSettingAutoWakeSecondsKey)) {
-    OSNumber *seconds = OSDynamicCast(OSNumber, value);
-    self->wakeAt = seconds && seconds->unsigned32BitValue() ? (int64_t)now + seconds->unsigned32BitValue() : 0;
-  } else if (type->isEqualTo(kIOPMSettingAutoWakeCalendarKey)) {
-    OSData *data = OSDynamicCast(OSData, value);
-    const IOPMCalendarStruct *date = data && data->getLength() >= sizeof(IOPMCalendarStruct) ?
-        (const IOPMCalendarStruct *)data->getBytesNoCopy() : nullptr;
-    self->wakeAt = date && date->year >= 2000 ? daysFromCivil(date->year, date->month, date->day) * 86400 +
-        date->hour * 3600 + date->minute * 60 + date->second : 0;
-  }
-  return kIOReturnSuccess;
+    auto *self = OSDynamicCast(SwitchRTC, target);
+    if (!self || !type) return kIOReturnBadArgument;
+    clock_sec_t now = 0;
+    clock_nsec_t nsecs = 0;
+    self->getUTCTimeOfDay(&now, &nsecs);
+    if (type->isEqualTo(kIOPMSettingAutoWakeSecondsKey)) {
+        OSNumber *seconds = OSDynamicCast(OSNumber, value);
+        self->wakeAt = seconds && seconds->unsigned32BitValue() ? (int64_t)now + seconds->unsigned32BitValue() : 0;
+    } else if (type->isEqualTo(kIOPMSettingAutoWakeCalendarKey)) {
+        OSData *data = OSDynamicCast(OSData, value);
+        const IOPMCalendarStruct *date = data && data->getLength() >= sizeof(IOPMCalendarStruct)
+                                             ? (const IOPMCalendarStruct *)data->getBytesNoCopy()
+                                             : nullptr;
+        self->wakeAt = date && date->year >= 2000 ? daysFromCivil(date->year, date->month, date->day) * 86400 +
+                                                        date->hour * 3600 + date->minute * 60 + date->second
+                                                  : 0;
+    }
+    return kIOReturnSuccess;
 }
 
 // Sleep action, thread context, I2C still up. The RTC may run at an offset from the wall clock (read-only mode keeps
 // Horizon's RTC as it is), so the alarm is set in RTC time: RTC now + (wake - wall now).
 void SwitchRTC::suspend()
 {
-  alarmFired = false;
-  alarmArmed = false;
-  clock_sec_t now = 0;
-  clock_nsec_t nsecs = 0;
-  getUTCTimeOfDay(&now, &nsecs);
-  if (wakeAt <= (int64_t)now + 1) return;
-  char why[96] = "";
-  uint8_t stale = 0, top = 0;
-  const int64_t rtcNow = rtcRead(why, sizeof(why));
-  int err = rtcNow < 0 ? TEGRA_I2C_EIO : alarmWrite(rtcNow + (wakeAt - (int64_t)now));
-  if (!err) err = readByte(kRtc, RTC_INT, &stale);
-  if (!err) err = writeByte(kRtc, RTC_INT_MASK, (uint8_t)(kRtcIntMaskAll & ~kRtcAlarm1));
-  if (!err) err = readByte(kPmic, IRQTOPM, &top);
-  if (!err) err = writeByte(kPmic, IRQTOPM, (uint8_t)(top & ~kTopRtc));
-  if (err) {
-    IOLog("SwitchRTC: wake alarm not set (%s %d); the console sleeps until the power key\n", why, err);
-    return;
-  }
-  alarmArmed = true;
+    alarmFired = false;
+    alarmArmed = false;
+    clock_sec_t now = 0;
+    clock_nsec_t nsecs = 0;
+    getUTCTimeOfDay(&now, &nsecs);
+    if (wakeAt <= (int64_t)now + 1) return;
+    char why[96] = "";
+    uint8_t stale = 0, top = 0;
+    const int64_t rtcNow = rtcRead(why, sizeof(why));
+    int err = rtcNow < 0 ? TEGRA_I2C_EIO : alarmWrite(rtcNow + (wakeAt - (int64_t)now));
+    if (!err) err = readByte(kRtc, RTC_INT, &stale);
+    if (!err) err = writeByte(kRtc, RTC_INT_MASK, (uint8_t)(kRtcIntMaskAll & ~kRtcAlarm1));
+    if (!err) err = readByte(kPmic, IRQTOPM, &top);
+    if (!err) err = writeByte(kPmic, IRQTOPM, (uint8_t)(top & ~kTopRtc));
+    if (err) {
+        IOLog("SwitchRTC: wake alarm not set (%s %d); the console sleeps until the power key\n", why, err);
+        return;
+    }
+    alarmArmed = true;
 }
 
 // Wake action, right after the I2C buses are back. Returns 1 when ALARM1 is what fired.
 int SwitchRTC::resume()
 {
-  char why[96] = "";
-  const int64_t secs = rtcRead(why, sizeof(why));
-  if (secs >= 0) {
-    // Mach time stood still in SC7 for both the wall clock and the RTC's extrapolation, so their difference (the
-    // offset settimeofday() gave the wall clock) is unchanged and carries over to the new reading.
-    const uint64_t now = mach_absolute_time();
-    uint64_t elapsed = 0;
-    absolutetime_to_nanoseconds(now - rtcStamp, &elapsed);
-    clock_sec_t wall = 0;
-    clock_nsec_t nsecs = 0;
-    getUTCTimeOfDay(&wall, &nsecs);
-    const int64_t offsetNS = ((int64_t)wall * (int64_t)NSEC_PER_SEC + nsecs) - (int64_t)(rtcNS + elapsed);
-    rtcNS = (uint64_t)secs * NSEC_PER_SEC;
-    rtcStamp = now;
-    setBase((uint64_t)((int64_t)rtcNS + offsetNS), now);
-  } else {
-    IOLog("SwitchRTC: RTC unreadable after sleep (%s); the clock misses the time asleep\n", why);
-  }
-  if (!alarmArmed) return 0;
-  alarmArmed = false;
-  uint8_t pending = 0, top = 0;
-  int err = readByte(kRtc, RTC_INT, &pending);
-  if (!err && (pending & kRtcAlarm1)) alarmFired = true;
-  if (!err) err = writeByte(kRtc, RTC_INT_MASK, kRtcIntMaskAll);
-  if (!err) err = readByte(kPmic, IRQTOPM, &top);
-  if (!err) err = writeByte(kPmic, IRQTOPM, (uint8_t)(top | kTopRtc));
-  if (!err) err = alarmWrite(-1);
-  if (err) IOLog("SwitchRTC: wake alarm not cleared (I2C5 %d)\n", err);
-  if (alarmFired) wakeAt = 0;   // powerd schedules the next one
-  return alarmFired ? 1 : 0;
+    char why[96] = "";
+    const int64_t secs = rtcRead(why, sizeof(why));
+    if (secs >= 0) {
+        // Mach time stood still in SC7 for both the wall clock and the RTC's extrapolation, so their difference (the
+        // offset settimeofday() gave the wall clock) is unchanged and carries over to the new reading.
+        const uint64_t now = mach_absolute_time();
+        uint64_t elapsed = 0;
+        absolutetime_to_nanoseconds(now - rtcStamp, &elapsed);
+        clock_sec_t wall = 0;
+        clock_nsec_t nsecs = 0;
+        getUTCTimeOfDay(&wall, &nsecs);
+        const int64_t offsetNS = ((int64_t)wall * (int64_t)NSEC_PER_SEC + nsecs) - (int64_t)(rtcNS + elapsed);
+        rtcNS = (uint64_t)secs * NSEC_PER_SEC;
+        rtcStamp = now;
+        setBase((uint64_t)((int64_t)rtcNS + offsetNS), now);
+    } else {
+        IOLog("SwitchRTC: RTC unreadable after sleep (%s); the clock misses the time asleep\n", why);
+    }
+    if (!alarmArmed) return 0;
+    alarmArmed = false;
+    uint8_t pending = 0, top = 0;
+    int err = readByte(kRtc, RTC_INT, &pending);
+    if (!err && (pending & kRtcAlarm1)) alarmFired = true;
+    if (!err) err = writeByte(kRtc, RTC_INT_MASK, kRtcIntMaskAll);
+    if (!err) err = readByte(kPmic, IRQTOPM, &top);
+    if (!err) err = writeByte(kPmic, IRQTOPM, (uint8_t)(top | kTopRtc));
+    if (!err) err = alarmWrite(-1);
+    if (err) IOLog("SwitchRTC: wake alarm not cleared (I2C5 %d)\n", err);
+    if (alarmFired) wakeAt = 0;  // powerd schedules the next one
+    return alarmFired ? 1 : 0;
 }
 
 namespace {
 void reportClocks(const char *when)
 {
-  using namespace switchclk;
-  volatile uint8_t *car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
-  if (!car) {
-    IOLog("IOSwitch clocks %s: CAR not mapped\n", when);
-    return;
-  }
-  const Cpu cpu = readCpu(car);
-  const Emc emc = readEmc(car);
-  char cpuRate[16], pllRate[16], emcRate[16], rail[48];
-  formatMHz(cpuRate, sizeof(cpuRate), cpu.kHz);
-  formatMHz(pllRate, sizeof(pllRate), pllKHz(cpu.pllx, refKHz(car), 8, false));
-  formatMHz(emcRate, sizeof(emcRate), emc.kHz);
-  uint8_t address = 0, vout = 0;
-  const int err = readCpuRail(&address, &vout);
-  if (err) snprintf(rail, sizeof(rail), "VDD_CPU unreadable (I2C5 %d)", err);
-  else snprintf(rail, sizeof(rail), "VDD_CPU %u mV (MAX77812 0x%02x)", voutMilliVolts(vout), address);
-  IOLog("IOSwitch clocks %s: CPU %s from %s (CCLK %#x; PLLX %s = %u.%u x %u / %u / %u), %s; EMC %s from %s"
-        " (CLK_SOURCE_EMC %#x)\n", when, cpuRate, cpuSourceName(cpu.source), cpu.policy, pllRate, refKHz(car) / 1000,
-        refKHz(car) % 1000 / 100, (cpu.pllx >> 8) & 0xff, cpu.pllx & 0xff, qlinDivider(cpu.pllx), rail, emcRate,
-        emcSourceName(emc.source), emc.clockSource);
+    using namespace switchclk;
+    volatile uint8_t *car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
+    if (!car) {
+        IOLog("IOSwitch clocks %s: CAR not mapped\n", when);
+        return;
+    }
+    const Cpu cpu = readCpu(car);
+    const Emc emc = readEmc(car);
+    char cpuRate[16], pllRate[16], emcRate[16], rail[48];
+    formatMHz(cpuRate, sizeof(cpuRate), cpu.kHz);
+    formatMHz(pllRate, sizeof(pllRate), pllKHz(cpu.pllx, refKHz(car), 8, false));
+    formatMHz(emcRate, sizeof(emcRate), emc.kHz);
+    uint8_t address = 0, vout = 0;
+    const int err = readCpuRail(&address, &vout);
+    if (err)
+        snprintf(rail, sizeof(rail), "VDD_CPU unreadable (I2C5 %d)", err);
+    else
+        snprintf(rail, sizeof(rail), "VDD_CPU %u mV (MAX77812 0x%02x)", voutMilliVolts(vout), address);
+    IOLog("IOSwitch clocks %s: CPU %s from %s (CCLK %#x; PLLX %s = %u.%u x %u / %u / %u), %s; EMC %s from %s"
+          " (CLK_SOURCE_EMC %#x)\n",
+          when, cpuRate, cpuSourceName(cpu.source), cpu.policy, pllRate, refKHz(car) / 1000, refKHz(car) % 1000 / 100,
+          (cpu.pllx >> 8) & 0xff, cpu.pllx & 0xff, qlinDivider(cpu.pllx), rail, emcRate, emcSourceName(emc.source),
+          emc.clockSource);
 }
 
 SwitchRTC *publishRTC(unsigned mode)
 {
-  char why[96] = "";
-  const int64_t secs = rtcRead(why, sizeof(why));
-  const uint64_t stamp = mach_absolute_time();
-  if (secs < 0) {
-    IOLog("SwitchRTC: MAX77620 RTC not used (%s); the clock starts at 1970\n", why);
-    return nullptr;
-  }
-  IOService *resources = IOService::getResourceService();
-  SwitchRTC *rtc = OSTypeAlloc(SwitchRTC);
-  if (!resources || !rtc || !rtc->initAt(secs, stamp, mode >= 2) || !rtc->attach(resources)) {
-    IOLog("SwitchRTC: could not create the RTC service; the clock starts at 1970\n");
-    OSSafeReleaseNULL(rtc);
-    return nullptr;
-  }
-  rtc->setName("SwitchRTC");
-  rtc->registerService();
-  IOService::publishResource("IORTC", rtc);
-  int year, month, day;
-  civilFromDays(secs / 86400, &year, &month, &day);
-  const int rest = (int)(secs % 86400);
-  IOLog("SwitchRTC: %04d-%02d-%02d %02d:%02d:%02d UTC from the MAX77620 RTC%s\n", year, month, day, rest / 3600,
-        rest / 60 % 60, rest % 60, mode >= 2 ? " (settimeofday writes it back)" : "");
-  return rtc;
+    char why[96] = "";
+    const int64_t secs = rtcRead(why, sizeof(why));
+    const uint64_t stamp = mach_absolute_time();
+    if (secs < 0) {
+        IOLog("SwitchRTC: MAX77620 RTC not used (%s); the clock starts at 1970\n", why);
+        return nullptr;
+    }
+    IOService *resources = IOService::getResourceService();
+    SwitchRTC *rtc = OSTypeAlloc(SwitchRTC);
+    if (!resources || !rtc || !rtc->initAt(secs, stamp, mode >= 2) || !rtc->attach(resources)) {
+        IOLog("SwitchRTC: could not create the RTC service; the clock starts at 1970\n");
+        OSSafeReleaseNULL(rtc);
+        return nullptr;
+    }
+    rtc->setName("SwitchRTC");
+    rtc->registerService();
+    IOService::publishResource("IORTC", rtc);
+    int year, month, day;
+    civilFromDays(secs / 86400, &year, &month, &day);
+    const int rest = (int)(secs % 86400);
+    IOLog("SwitchRTC: %04d-%02d-%02d %02d:%02d:%02d UTC from the MAX77620 RTC%s\n", year, month, day, rest / 3600,
+          rest / 60 % 60, rest % 60, mode >= 2 ? " (settimeofday writes it back)" : "");
+    return rtc;
 }
 
 SwitchRTC *gRTC;
@@ -495,54 +509,54 @@ SwitchRTC *gRTC;
 // releases the line; an ALARM1 seen there is remembered for the wake reason.
 extern "C" void switch_rtc_sleep_enable(void)
 {
-  if (gRTC) gRTC->registerWakeSettings();
+    if (gRTC) gRTC->registerWakeSettings();
 }
 
 extern "C" void switch_rtc_suspend(void)
 {
-  if (gRTC) gRTC->suspend();
+    if (gRTC) gRTC->suspend();
 }
 
 extern "C" int switch_rtc_resume(void)
 {
-  return gRTC ? gRTC->resume() : 0;
+    return gRTC ? gRTC->resume() : 0;
 }
 
 extern "C" void switch_rtc_interrupt(void)
 {
-  uint8_t pending = 0;
-  if (!readByte(kRtc, RTC_INT, &pending) && (pending & kRtcAlarm1) && gRTC) gRTC->alarmFired = true;
+    uint8_t pending = 0;
+    if (!readByte(kRtc, RTC_INT, &pending) && (pending & kRtcAlarm1) && gRTC) gRTC->alarmFired = true;
 }
 
 extern "C" int switch_pmic_start(void)
 {
-  static bool started;
-  if (started) return 0;
-  started = true;
-  reportClocks("at boot");
+    static bool started;
+    if (started) return 0;
+    started = true;
+    reportClocks("at boot");
 
-  // Read-only by default: Horizon keeps its clock in the same RTC, and writing ours would shift it.
-  unsigned rtcMode = 1, powerOff = 1, emcKHz = 0, thermal = 1;
-  PE_parse_boot_argn("switch-rtc", &rtcMode, sizeof(rtcMode));
-  PE_parse_boot_argn("switch-poweroff", &powerOff, sizeof(powerOff));
-  PE_parse_boot_argn("switch-emc", &emcKHz, sizeof(emcKHz));
-  if (emcKHz == 1) emcKHz = 1600000;   // hekate's top stock MTC table, L4T's T210B01 core-DVFS "emc" ceiling
-  PE_parse_boot_argn("switch-thermal", &thermal, sizeof(thermal));
-  uint8_t control = 0;
-  const int err = tegra_i2c_init(kBus) ? TEGRA_I2C_ENOTREADY : readByte(kPmic, ONOFFCNFG1, &control);
-  if (err) {
-    IOLog("SwitchPMIC: MAX77620 not answering on I2C5 (%d): no RTC, no power-off\n", err);
-  } else {
-    if (rtcMode) gRTC = publishRTC(rtcMode);
-    if (powerOff) PE_halt_restart = haltRestart;
-  }
+    // Read-only by default: Horizon keeps its clock in the same RTC, and writing ours would shift it.
+    unsigned rtcMode = 1, powerOff = 1, emcKHz = 0, thermal = 1;
+    PE_parse_boot_argn("switch-rtc", &rtcMode, sizeof(rtcMode));
+    PE_parse_boot_argn("switch-poweroff", &powerOff, sizeof(powerOff));
+    PE_parse_boot_argn("switch-emc", &emcKHz, sizeof(emcKHz));
+    if (emcKHz == 1) emcKHz = 1600000;  // hekate's top stock MTC table, L4T's T210B01 core-DVFS "emc" ceiling
+    PE_parse_boot_argn("switch-thermal", &thermal, sizeof(thermal));
+    uint8_t control = 0;
+    const int err = tegra_i2c_init(kBus) ? TEGRA_I2C_ENOTREADY : readByte(kPmic, ONOFFCNFG1, &control);
+    if (err) {
+        IOLog("SwitchPMIC: MAX77620 not answering on I2C5 (%d): no RTC, no power-off\n", err);
+    } else {
+        if (rtcMode) gRTC = publishRTC(rtcMode);
+        if (powerOff) PE_halt_restart = haltRestart;
+    }
 
-  if (emcKHz) {
-    char line[256];
-    const int emcErr = tegra_bpmp_emc_boot(emcKHz, line, sizeof(line));
-    IOLog("IOSwitch EMC: %s\n", line);
-    if (!emcErr) reportClocks("after EMC");
-  }
-  if (thermal && switch_thermal_start()) IOLog("SwitchPMIC: SwitchThermal did not start, the board thread retries\n");
-  return err ? -1 : 0;
+    if (emcKHz) {
+        char line[256];
+        const int emcErr = tegra_bpmp_emc_boot(emcKHz, line, sizeof(line));
+        IOLog("IOSwitch EMC: %s\n", line);
+        if (!emcErr) reportClocks("after EMC");
+    }
+    if (thermal && switch_thermal_start()) IOLog("SwitchPMIC: SwitchThermal did not start, the board thread retries\n");
+    return err ? -1 : 0;
 }

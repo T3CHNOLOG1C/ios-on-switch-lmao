@@ -19,19 +19,20 @@
 enum NativeAdrenoTimeSource { NativeAdrenoTimeGmu = 0, NativeAdrenoTimeCp = 1 };
 struct NativeAdrenoTimeIo {
     void *cookie;
-    int (*read32)(void *,uint32_t address,uint32_t *value);
+    int (*read32)(void *, uint32_t address, uint32_t *value);
 };
 class NativeAdrenoTimer final {
     NativeAdrenoTimeIo io_{};
-    uint32_t source_=NativeAdrenoTimeGmu;
-    bool attached_=false;
+    uint32_t source_ = NativeAdrenoTimeGmu;
+    bool attached_ = false;
+
 public:
-    NativeAdrenoTimer()=default;
-    ~NativeAdrenoTimer()=default;
-    NativeAdrenoTimer(const NativeAdrenoTimer &)=delete;
-    NativeAdrenoTimer &operator=(const NativeAdrenoTimer &)=delete;
+    NativeAdrenoTimer() = default;
+    ~NativeAdrenoTimer() = default;
+    NativeAdrenoTimer(const NativeAdrenoTimer &) = delete;
+    NativeAdrenoTimer &operator=(const NativeAdrenoTimer &) = delete;
     /* Source is a numeric ABI boundary value and is range-checked. */
-    IOReturn attach(const NativeAdrenoTimeIo *,uint32_t source);
+    IOReturn attach(const NativeAdrenoTimeIo *, uint32_t source);
     IOReturn detach();
     IOReturn read(uint64_t *ticks) const;
     static uint32_t gmuLowOffset();

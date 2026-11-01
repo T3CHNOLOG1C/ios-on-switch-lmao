@@ -21,10 +21,12 @@ struct Report {
     char first[96];
     unsigned qcFunctions, qcKernels, qcKernelsOk, qcPairs, qcPairsOk;
     void (*mark)(uint32_t);
-    bool hostSimulation;  // the host simulation's IOKit shim hides IOSurface (steps 3-4 skipped) and Metal's listener (none is made)
+    bool
+        hostSimulation;  // the host simulation's IOKit shim hides IOSurface (steps 3-4 skipped) and Metal's listener (none is made)
 };
 static Report *gReport;
-__attribute__((format(printf, 2, 3))) static void fail(Report *r, const char *format, ...) {
+__attribute__((format(printf, 2, 3))) static void fail(Report *r, const char *format, ...)
+{
     char text[160];
     va_list args;
     va_start(args, format);
@@ -33,41 +35,57 @@ __attribute__((format(printf, 2, 3))) static void fail(Report *r, const char *fo
     std::printf("FAIL %s\n", text);
     if (!r->failed++) snprintf(r->first, sizeof r->first, "%x %s", r->last, text);
 }
-static void step(Report *r, uint32_t marker) {
+static void step(Report *r, uint32_t marker)
+{
     r->last = marker;
     if (r->mark) r->mark(marker);
 }
-#define CHECK(c, ...) do { if (!(c)) fail(gReport, __VA_ARGS__); } while (0)
-static bool completed(id<MTLCommandBuffer> cb, const char *what) {
+#define CHECK(c, ...)                         \
+    do {                                      \
+        if (!(c)) fail(gReport, __VA_ARGS__); \
+    } while (0)
+static bool completed(id<MTLCommandBuffer> cb, const char *what)
+{
     [cb waitUntilCompleted];
     if (cb.status != MTLCommandBufferStatusCompleted) {
-        fail(gReport, "%s: status %lu %s", what, (unsigned long)cb.status, cb.error.localizedDescription.UTF8String ?: "");
+        fail(gReport, "%s: status %lu %s", what, (unsigned long)cb.status,
+             cb.error.localizedDescription.UTF8String ?: "");
         return false;
     }
     return true;
 }
-static bool finish(id<MTLCommandBuffer> cb, const char *what) {
+static bool finish(id<MTLCommandBuffer> cb, const char *what)
+{
     [cb commit];
     return completed(cb, what);
 }
 // The fixture's picture: top-left quarter (255, 51, 0, 255), the rest cleared blue; `bgra` swaps red and blue in memory.
-static unsigned wrongTexels(const uint8_t *bytes, size_t row, unsigned side, bool bgra = false) {
+static unsigned wrongTexels(const uint8_t *bytes, size_t row, unsigned side, bool bgra = false)
+{
     unsigned bad = 0;
     for (unsigned y = 0; y < side; ++y)
         for (unsigned x = 0; x < side; ++x) {
             const bool inside = x < side / 2 && y < side / 2;
-            uint8_t e[4] = {inside ? (uint8_t)255 : (uint8_t)0, inside ? (uint8_t)51 : (uint8_t)0, inside ? (uint8_t)0 : (uint8_t)255, 255};
+            uint8_t e[4] = {inside ? (uint8_t)255 : (uint8_t)0, inside ? (uint8_t)51 : (uint8_t)0,
+                            inside ? (uint8_t)0 : (uint8_t)255, 255};
             if (bgra) std::swap(e[0], e[2]);
             if (memcmp(bytes + y * row + x * 4, e, 4)) ++bad;
         }
     return bad;
 }
-static IOSurfaceRef surface(unsigned side, OSType format) {
-    NSDictionary *p = @{(id)kIOSurfaceWidth: @(side), (id)kIOSurfaceHeight: @(side), (id)kIOSurfaceBytesPerElement: @4,
-                        (id)kIOSurfacePixelFormat: @(format)};
+static IOSurfaceRef surface(unsigned side, OSType format)
+{
+    NSDictionary *p = @{
+        (id)kIOSurfaceWidth : @(side),
+        (id)kIOSurfaceHeight : @(side),
+        (id)kIOSurfaceBytesPerElement : @4,
+        (id)kIOSurfacePixelFormat : @(format)
+    };
     return IOSurfaceCreate((__bridge CFDictionaryRef)p);
 }
-static id<MTLRenderPipelineState> pipeline(id<MTLDevice> device, id<MTLLibrary> library, NSString *fragment, MTLPixelFormat format) {
+static id<MTLRenderPipelineState> pipeline(id<MTLDevice> device, id<MTLLibrary> library, NSString *fragment,
+                                           MTLPixelFormat format)
+{
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     d.vertexFunction = [library newFunctionWithName:@"colored_vertex"];
     d.fragmentFunction = [library newFunctionWithName:fragment];
@@ -78,8 +96,9 @@ static id<MTLRenderPipelineState> pipeline(id<MTLDevice> device, id<MTLLibrary> 
     return state;
 }
 // Draws the fixture quad (vertex positions/colors at buffers 0/1) into `target`, cleared blue first.
-static void drawQuad(id<MTLCommandBuffer> cb, id<MTLRenderPipelineState> state, id<MTLTexture> target, id<MTLTexture> sampled,
-                     const float (*positions)[2], unsigned count) {
+static void drawQuad(id<MTLCommandBuffer> cb, id<MTLRenderPipelineState> state, id<MTLTexture> target,
+                     id<MTLTexture> sampled, const float (*positions)[2], unsigned count)
+{
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -100,7 +119,8 @@ static const float kFull[6][2] = {{-1, 1}, {1, 1}, {-1, -1}, {1, 1}, {1, -1}, {-
 
 // Runs every step on `device` (the frontend's); `library` is the bridge's runtime_examples fixture, `fcLibrary` (may be nil) the
 // function-constant fixture, `qcPath` (may be nil) the target's QuartzCore default.metallib.
-static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcLibrary, NSString *qcPath, Report *r) {
+static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcLibrary, NSString *qcPath, Report *r)
+{
     gReport = r;
     @autoreleasepool {
         CHECK([library.functionNames containsObject:@"sampled_fragment"], "function names");
@@ -119,7 +139,9 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             CHECK(state, "compute pipeline: %s", error.localizedDescription.UTF8String);
             std::vector<float> in(1000);
             for (unsigned i = 0; i < in.size(); ++i) in[i] = (float)i;
-            id<MTLBuffer> input = [device newBufferWithBytes:in.data() length:in.size() * 4 options:MTLResourceStorageModeShared];
+            id<MTLBuffer> input = [device newBufferWithBytes:in.data()
+                                                      length:in.size() * 4
+                                                     options:MTLResourceStorageModeShared];
             id<MTLBuffer> output = [device newBufferWithLength:in.size() * 4 options:MTLResourceStorageModeShared];
             const float scale = 2;
             id<MTLCommandBuffer> cb = [queue commandBuffer];
@@ -141,7 +163,10 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
         step(r, 0x6602);
         // 2. render into a private texture, blit to a buffer
         {
-            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
+            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                         width:8
+                                                                                        height:8
+                                                                                     mipmapped:NO];
             d.usage = MTLTextureUsageRenderTarget;
             d.storageMode = MTLStorageModePrivate;
             id<MTLTexture> target = [device newTextureWithDescriptor:d];
@@ -150,17 +175,29 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             id<MTLCommandBuffer> cb = [queue commandBuffer];
             drawQuad(cb, colored, target, nil, kQuarter, 6);
             id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
-            [b copyFromTexture:target sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(8, 8, 1)
-                      toBuffer:readback destinationOffset:0 destinationBytesPerRow:32 destinationBytesPerImage:256];
+            [b copyFromTexture:target
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                              sourceSize:MTLSizeMake(8, 8, 1)
+                                toBuffer:readback
+                       destinationOffset:0
+                  destinationBytesPerRow:32
+                destinationBytesPerImage:256];
             [b endEncoding];
-            if (finish(cb, "render")) CHECK(!wrongTexels((const uint8_t *)readback.contents, 32, 8), "render: wrong texels");
+            if (finish(cb, "render"))
+                CHECK(!wrongTexels((const uint8_t *)readback.contents, 32, 8), "render: wrong texels");
         }
         step(r, 0x6603);
         // 3. render into an IOSurface (its pages imported, no copy), then 4. sample it into a second surface
-        IOSurfaceRef layer = r->hostSimulation ? nullptr : surface(64, 'RGBA'), screen = r->hostSimulation ? nullptr : surface(64, 'RGBA');
+        IOSurfaceRef layer = r->hostSimulation ? nullptr : surface(64, 'RGBA'),
+                     screen = r->hostSimulation ? nullptr : surface(64, 'RGBA');
         CHECK(r->hostSimulation || (layer && screen), "IOSurfaceCreate");
         if (layer && screen) {
-            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:64 height:64 mipmapped:NO];
+            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                         width:64
+                                                                                        height:64
+                                                                                     mipmapped:NO];
             d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
             d.storageMode = MTLStorageModeShared;
             id<MTLTexture> layerTexture = [device newTextureWithDescriptor:d iosurface:layer plane:0];
@@ -170,12 +207,14 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             drawQuad(cb, colored, layerTexture, nil, kQuarter, 6);
             if (finish(cb, "surface render")) {
                 IOSurfaceLock(layer, kIOSurfaceLockReadOnly, nullptr);
-                CHECK(!wrongTexels((const uint8_t *)IOSurfaceGetBaseAddress(layer), IOSurfaceGetBytesPerRow(layer), 64), "surface render: wrong texels");
+                CHECK(!wrongTexels((const uint8_t *)IOSurfaceGetBaseAddress(layer), IOSurfaceGetBytesPerRow(layer), 64),
+                      "surface render: wrong texels");
                 IOSurfaceUnlock(layer, kIOSurfaceLockReadOnly, nullptr);
             }
             step(r, 0x6604);
             // sampled_fragment samples its texture at position * 1/8 (normalized), so an 8x8 viewport of the screen reads the layer whole
-            id<MTLRenderPipelineState> sampled = pipeline(device, library, @"sampled_fragment", MTLPixelFormatRGBA8Unorm);
+            id<MTLRenderPipelineState> sampled =
+                pipeline(device, library, @"sampled_fragment", MTLPixelFormatRGBA8Unorm);
             cb = [queue commandBuffer];
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             pass.colorAttachments[0].texture = screenTexture;
@@ -199,21 +238,27 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                 const unsigned bad = wrongTexels(corner.data(), 32, 8);
                 const uint8_t *outside = p + 20 * IOSurfaceGetBytesPerRow(screen) + 20 * 4;
                 CHECK(!bad, "composition: %u wrong texels in the sampled corner", bad);
-                CHECK(outside[0] == 0 && outside[1] == 255 && outside[2] == 0, "composition: the rest keeps its clear color");
+                CHECK(outside[0] == 0 && outside[1] == 255 && outside[2] == 0,
+                      "composition: the rest keeps its clear color");
                 IOSurfaceUnlock(screen, kIOSurfaceLockReadOnly, nullptr);
             }
         }
         step(r, 0x6605);
         // 5. compute over textures: invert_texels writes 1 - rgb of its input texel
         {
-            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:16 height:16 mipmapped:NO];
+            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                         width:16
+                                                                                        height:16
+                                                                                     mipmapped:NO];
             d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
             id<MTLTexture> src = [device newTextureWithDescriptor:d], dst = [device newTextureWithDescriptor:d];
             std::vector<uint8_t> texels(16 * 16 * 4);
             for (size_t i = 0; i < texels.size(); ++i) texels[i] = (uint8_t)(i * 7);
             [src replaceRegion:MTLRegionMake2D(0, 0, 16, 16) mipmapLevel:0 withBytes:texels.data() bytesPerRow:64];
             NSError *error = nil;
-            id<MTLComputePipelineState> state = [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"invert_texels"] error:&error];
+            id<MTLComputePipelineState> state =
+                [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"invert_texels"]
+                                                      error:&error];
             CHECK(state, "invert pipeline: %s", error.localizedDescription.UTF8String);
             id<MTLCommandBuffer> cb = [queue commandBuffer];
             id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
@@ -242,9 +287,12 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             id<MTLBuffer> buffer = [device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
             [b fillBuffer:buffer range:NSMakeRange(0, 4096) value:0xa5];
             [b endEncoding];
-            [cb addScheduledHandler:^(id<MTLCommandBuffer>) {scheduled = order++;}];
+            [cb addScheduledHandler:^(id<MTLCommandBuffer>) { scheduled = order++; }];
             __block MTLCommandBufferStatus seen = MTLCommandBufferStatusNotEnqueued;
-            [cb addCompletedHandler:^(id<MTLCommandBuffer> c) {seen = c.status; done = order++;}];
+            [cb addCompletedHandler:^(id<MTLCommandBuffer> c) {
+                seen = c.status;
+                done = order++;
+            }];
             if (finish(cb, "handlers")) {
                 CHECK(scheduled == 0 && done == 1 && order == 2, "handler order %d %d", scheduled, done);
                 CHECK(seen == MTLCommandBufferStatusCompleted, "status inside the completed handler");
@@ -257,7 +305,10 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
         {
             id<MTLCommandBuffer> cb = [queue commandBuffer];
             id<MTLRenderCommandEncoder> e = nil;
-            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
+            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                         width:8
+                                                                                        height:8
+                                                                                     mipmapped:NO];
             d.usage = MTLTextureUsageRenderTarget;
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             pass.colorAttachments[0].texture = [device newTextureWithDescriptor:d];
@@ -265,10 +316,11 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];  // no pipeline set
             [e endEncoding];
             __block bool ran = false;
-            [cb addCompletedHandler:^(id<MTLCommandBuffer>) {ran = true;}];
+            [cb addCompletedHandler:^(id<MTLCommandBuffer>) { ran = true; }];
             [cb commit];
             [cb waitUntilCompleted];
-            CHECK(cb.status == MTLCommandBufferStatusError && cb.error, "a draw without a pipeline must fail the command buffer");
+            CHECK(cb.status == MTLCommandBufferStatusError && cb.error,
+                  "a draw without a pipeline must fail the command buffer");
             CHECK(ran, "the completed handler runs for a failed command buffer");
         }
         step(r, 0x6609);
@@ -281,7 +333,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                 NSError *error = nil;
                 id<MTLFunction> f = [fcLibrary newFunctionWithName:@"fcfold" constantValues:values error:&error];
                 CHECK(f, "specialized function: %s", error.localizedDescription.UTF8String);
-                id<MTLComputePipelineState> state = f ? [device newComputePipelineStateWithFunction:f error:&error] : nil;
+                id<MTLComputePipelineState> state =
+                    f ? [device newComputePipelineStateWithFunction:f error:&error] : nil;
                 CHECK(state, "specialized pipeline: %s", error.localizedDescription.UTF8String);
                 if (!state) continue;
                 const float in = 2;
@@ -326,7 +379,11 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                 }
             }
             CHECK(names.count && kernelsOk + pairsOk, "QuartzCore: nothing translated");
-            r->qcFunctions = (unsigned)names.count; r->qcKernels = kernels; r->qcKernelsOk = kernelsOk; r->qcPairs = pairs; r->qcPairsOk = pairsOk;
+            r->qcFunctions = (unsigned)names.count;
+            r->qcKernels = kernels;
+            r->qcKernelsOk = kernelsOk;
+            r->qcPairs = pairs;
+            r->qcPairsOk = pairsOk;
         }
         step(r, 0x660a);
         // 10. A second queue's command buffer waits for value 1, then copies; the first queue fills and signals 1. The waiting one is committed
@@ -364,20 +421,27 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                 [third endEncoding];
                 [cpu commit];
                 if (finish(signalling, "event signal") && completed(waiting, "event wait")) {
-                    CHECK(((const uint8_t *)b.contents)[4095] == 0x3c, "the GPU wait did not order the copy after the fill");
+                    CHECK(((const uint8_t *)b.contents)[4095] == 0x3c,
+                          "the GPU wait did not order the copy after the fill");
                     CHECK(event.signaledValue == 1, "signaled value %llu", (unsigned long long)event.signaledValue);
                 }
                 CHECK(cpu.status != MTLCommandBufferStatusCompleted, "a wait for 3 completed before 3 was signaled");
                 __block uint64_t heard = 0;
                 dispatch_semaphore_t notified = dispatch_semaphore_create(0);
                 MTLSharedEventListener *listener = r->hostSimulation ? nil : [[MTLSharedEventListener alloc] init];
-                [event notifyListener:listener atValue:3 block:^(id<MTLSharedEvent>, uint64_t value) {heard = value; dispatch_semaphore_signal(notified);}];
+                [event notifyListener:listener
+                              atValue:3
+                                block:^(id<MTLSharedEvent>, uint64_t value) {
+                                    heard = value;
+                                    dispatch_semaphore_signal(notified);
+                                }];
                 event.signaledValue = 3;
                 if (completed(cpu, "CPU-signaled wait")) {
                     const uint8_t *p = (const uint8_t *)c.contents;
                     CHECK(p[2048] == 0x77 && p[2111] == 0x77, "the fence did not order the copy after the fill");
                 }
-                CHECK(!dispatch_semaphore_wait(notified, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) && heard >= 3,
+                CHECK(!dispatch_semaphore_wait(notified, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) &&
+                          heard >= 3,
                       "listener notification %llu", (unsigned long long)heard);
                 CHECK([event waitUntilSignaledValue:3 timeoutMS:10], "waitUntilSignaledValue");
             }
@@ -401,7 +465,9 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                     id<MTLBlitCommandEncoder> fill = [cb blitCommandEncoder];
                     [fill fillBuffer:hb range:NSMakeRange(0, 4096) value:0x5a];
                     [fill endEncoding];
-                    if (finish(cb, "heap fill")) CHECK(((const uint8_t *)hb.contents)[0] == 0x5a && ((const uint8_t *)hb.contents)[4095] == 0x5a, "heap buffer contents");
+                    if (finish(cb, "heap fill"))
+                        CHECK(((const uint8_t *)hb.contents)[0] == 0x5a && ((const uint8_t *)hb.contents)[4095] == 0x5a,
+                              "heap buffer contents");
                 }
             }
             MTLHeapDescriptor *pd = [MTLHeapDescriptor new];
@@ -412,7 +478,9 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             CHECK(placed && placed.type == MTLHeapTypePlacement, "placement heap");
             if (placed) {
                 id<MTLBuffer> first = [placed newBufferWithLength:4096 options:MTLResourceStorageModeShared offset:0];
-                id<MTLBuffer> second = [placed newBufferWithLength:4096 options:MTLResourceStorageModeShared offset:4096];
+                id<MTLBuffer> second = [placed newBufferWithLength:4096
+                                                           options:MTLResourceStorageModeShared
+                                                            offset:4096];
                 CHECK(first && second && second.heapOffset == 4096, "placed buffers");
                 if (first && second) {
                     id<MTLCommandBuffer> cb = [queue commandBuffer];
@@ -421,10 +489,15 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                     [fill fillBuffer:second range:NSMakeRange(0, 4096) value:0x22];
                     [fill endEncoding];
                     if (finish(cb, "placement fill"))
-                        CHECK(((const uint8_t *)first.contents)[4095] == 0x11 && ((const uint8_t *)second.contents)[0] == 0x22, "placed buffers overlap");
+                        CHECK(((const uint8_t *)first.contents)[4095] == 0x11 &&
+                                  ((const uint8_t *)second.contents)[0] == 0x22,
+                              "placed buffers overlap");
                 }
             }
-            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
+            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                          width:8
+                                                                                         height:8
+                                                                                      mipmapped:NO];
             td.usage = MTLTextureUsageRenderTarget;
             td.storageMode = MTLStorageModePrivate;
             id<MTLTexture> target = [device newTextureWithDescriptor:td];
@@ -447,7 +520,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                 [e setVertexBytes:colors.data() length:colors.size() * sizeof(float) atIndex:1];
                 [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
                 [e endEncoding];
-                if (finish(cb, "visibility result")) CHECK(*(const uint64_t *)visible.contents != 0, "visibility result stayed 0 for a visible quad");
+                if (finish(cb, "visibility result"))
+                    CHECK(*(const uint64_t *)visible.contents != 0, "visibility result stayed 0 for a visible quad");
             }
         }
         if (layer) CFRelease(layer);

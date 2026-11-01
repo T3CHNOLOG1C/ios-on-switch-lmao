@@ -7,8 +7,9 @@
  * One-shot only, no allocation, no I/O. Inputs may be empty; a null pointer is
  * accepted only for zero bytes. The digest is big-endian as specified. */
 class NativeAdrenoSha256 final {
-    NativeAdrenoSha256()=delete;
+    NativeAdrenoSha256() = delete;
+
 public:
-    static void hash(const uint8_t *bytes,size_t length,uint8_t digest[32]);
+    static void hash(const uint8_t *bytes, size_t length, uint8_t digest[32]);
 };
 #endif

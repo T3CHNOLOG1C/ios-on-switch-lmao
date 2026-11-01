@@ -17,8 +17,8 @@ typedef enum {
 
 typedef struct {
     size_t header_word;
-    uint32_t type;          /* 4 (register sequence) or 7 (opcode). */
-    uint32_t identifier;    /* Register index or opcode; NOT authorization. */
+    uint32_t type;       /* 4 (register sequence) or 7 (opcode). */
+    uint32_t identifier; /* Register index or opcode; NOT authorization. */
     uint32_t payload_words;
 } AdrenoPM4Packet;
 
@@ -35,8 +35,8 @@ AdrenoPM4Status AdrenoPM4Type7(uint32_t opcode, uint32_t count, uint32_t *header
  * Validate the whole input and capacity before writing any packet record.
  * On failure, *count=0 and output is untouched. Empty input succeeds.
  * No allocation, recursion, payload interpretation, MMIO or completion. */
-AdrenoPM4Status AdrenoPM4Plan(const uint32_t *words, size_t word_count,
-    AdrenoPM4Packet *output, size_t capacity, size_t *count);
+AdrenoPM4Status AdrenoPM4Plan(const uint32_t *words, size_t word_count, AdrenoPM4Packet *output, size_t capacity,
+                              size_t *count);
 #ifdef __cplusplus
 }
 #endif

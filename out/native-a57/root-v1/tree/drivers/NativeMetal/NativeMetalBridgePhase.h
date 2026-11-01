@@ -32,20 +32,26 @@ struct Job {
 };
 static Gpu *gGpu;
 static Job *gJob;
-static id gDevice;   // the frontend device of the checks, kept for the scanout stage
-static void mark(uint32_t value) {
+static id gDevice;  // the frontend device of the checks, kept for the scanout stage
+static void mark(uint32_t value)
+{
     if (gJob) gJob->last = value;
     if (gGpu) gGpu->mark(value);
 }
-static void missingSelector(const char *cls, const char *selector) {
+static void missingSelector(const char *cls, const char *selector)
+{
     if (gJob && !gJob->missing[0]) snprintf(gJob->missing, sizeof gJob->missing, "FM %.20s %.36s", cls, selector);
 }
 // The frontend checks on the native frontend over Turnip (QuartzCore is already translated by the self-test, so it is not repeated).
-static void frontend(Job *job) {
+static void frontend(Job *job)
+{
     mark(0x6600);
     id device = native_bridge_metal_open(job->turnip, job->cache, 0, missingSelector);
     // The runtime's reasons are per thread: keep this worker's for the report.
-    if (!device) {strlcpy(job->error, nmb_last_error(), sizeof job->error); return;}
+    if (!device) {
+        strlcpy(job->error, nmb_last_error(), sizeof job->error);
+        return;
+    }
     job->frontendOpened = true;
     gDevice = device;
     size_t bytes = 0;
@@ -53,7 +59,10 @@ static void frontend(Job *job) {
     id library = native_bridge_metal_library_with_air(air, bytes);
     air = nmb_function_constant_air(&bytes);
     id fcLibrary = native_bridge_metal_library_with_air(air, bytes);
-    if (!library || !fcLibrary) {strlcpy(job->error, nmb_last_error(), sizeof job->error); return;}
+    if (!library || !fcLibrary) {
+        strlcpy(job->error, nmb_last_error(), sizeof job->error);
+        return;
+    }
     job->frontend.mark = mark;
     job->frontendRan = true;
     // An exception escaping a worker thread aborts the whole host process (SpringBoard died that way, int-075/083): report it as a failed check.
@@ -64,7 +73,8 @@ static void frontend(Job *job) {
         snprintf(job->frontend.first, sizeof job->frontend.first, "exception %.40s", exception.name.UTF8String ?: "?");
     }
 }
-static void *worker(void *arg) {
+static void *worker(void *arg)
+{
     Job *job = static_cast<Job *>(arg);
     // The target's own compositor library, read in place (never copied anywhere).
     const uint8_t *qc = nullptr;
@@ -73,7 +83,10 @@ static void *worker(void *arg) {
     struct stat st = {};
     if (fd >= 0 && fstat(fd, &st) == 0 && st.st_size > 0) {
         void *m = mmap(nullptr, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (m != MAP_FAILED) {qc = static_cast<const uint8_t *>(m); qcBytes = (size_t)st.st_size;}
+        if (m != MAP_FAILED) {
+            qc = static_cast<const uint8_t *>(m);
+            qcBytes = (size_t)st.st_size;
+        }
     }
     if (fd >= 0) close(fd);
     job->code = nmb_selftest(job->turnip, job->cache, qc, qcBytes, mark, &job->result);
@@ -91,11 +104,17 @@ struct ScanoutContext {
     Gpu link;
     Gpu *marker;
 };
-static void serveScanout(Gpu &gpu, id device) {
+static void serveScanout(Gpu &gpu, id device)
+{
     ScanoutContext context;
     context.marker = &gpu;
     Gpu &link = context.link;
-    link.call = gpu.call; link.map = gpu.map; link.unmap = gpu.unmap; link.openFn = gpu.openFn; link.closeFn = gpu.closeFn; link.port = gpu.port;
+    link.call = gpu.call;
+    link.map = gpu.map;
+    link.unmap = gpu.unmap;
+    link.openFn = gpu.openFn;
+    link.closeFn = gpu.closeFn;
+    link.port = gpu.port;
     gpuscanout::Stats st = {};
     char line[64];
     gpu.mark(0x6700);
@@ -106,15 +125,16 @@ static void serveScanout(Gpu &gpu, id device) {
         snprintf(line, sizeof line, "P1");
     } else {
         gpu.mark(0x6702);
-        gpuscanout::Transport transport = {&context,
+        gpuscanout::Transport transport = {
+            &context,
             [](void *c, uint32_t method, const void *in, size_t is, void *out, size_t os) -> int {
                 return static_cast<ScanoutContext *>(c)->link.method(0x7000 + method, in, is, out, os);
             },
             [](void *c, uint64_t *address, uint64_t *length) -> int {
                 Gpu &g = static_cast<ScanoutContext *>(c)->link;
-                return g.map(g.conn, 0x5343, mach_task_self(), address, length, 0x101);   // anywhere + inhibit cache
+                return g.map(g.conn, 0x5343, mach_task_self(), address, length, 0x101);  // anywhere + inhibit cache
             },
-            [](void *c, uint32_t value) {static_cast<ScanoutContext *>(c)->marker->mark(value);}};
+            [](void *c, uint32_t value) { static_cast<ScanoutContext *>(c)->marker->mark(value); }};
         gpuscanout::Client client;
         const bool opened = client.open((id<MTLDevice>)device, transport, &st);
         snprintf(line, sizeof line, "P%d e%x", st.step, (unsigned)st.error);
@@ -127,24 +147,27 @@ static void serveScanout(Gpu &gpu, id device) {
                     reportedFrames = st.frames ? st.frames : reportedFrames;
                     reportedFailures = st.failures ? st.failures : reportedFailures;
                     const uint64_t served = st.frames + st.failures;
-                    snprintf(line, sizeof line, "PF %llu/%llu r%d v%llu/%llu t%u a%llu", (unsigned long long)st.frames, (unsigned long long)st.failures,
-                             st.lastResult, (unsigned long long)st.verified, (unsigned long long)st.mismatchRows, st.lastMs,
+                    snprintf(line, sizeof line, "PF %llu/%llu r%d v%llu/%llu t%u a%llu", (unsigned long long)st.frames,
+                             (unsigned long long)st.failures, st.lastResult, (unsigned long long)st.verified,
+                             (unsigned long long)st.mismatchRows, st.lastMs,
                              (unsigned long long)(served ? st.totalMs / served : 0));
                     streamText7(gpu, line);
                 }
             }
-            snprintf(line, sizeof line, "PX %llu/%llu r%d e%x", (unsigned long long)st.frames, (unsigned long long)st.failures, st.lastResult,
-                     (unsigned)st.error);
+            snprintf(line, sizeof line, "PX %llu/%llu r%d e%x", (unsigned long long)st.frames,
+                     (unsigned long long)st.failures, st.lastResult, (unsigned)st.error);
         }
     }
     streamText7(gpu, line);
 }
-static void run(Gpu &gpu, const char *turnipPath) {
+static void run(Gpu &gpu, const char *turnipPath)
+{
     gpu.mark(0x6500);
     Job *job = new Job{};
     job->turnip = turnipPath;
     // A per-user cache directory of the host process (its sandbox allows it); the translated-shader cache goes in a subdirectory.
-    if (!confstr(_CS_DARWIN_USER_CACHE_DIR, job->cache, sizeof job->cache - 16)) strlcpy(job->cache, "/tmp/", sizeof job->cache);
+    if (!confstr(_CS_DARWIN_USER_CACHE_DIR, job->cache, sizeof job->cache - 16))
+        strlcpy(job->cache, "/tmp/", sizeof job->cache);
     strlcat(job->cache, "m2v", sizeof job->cache);
     mkdir(job->cache, 0700);
     gGpu = &gpu;
@@ -155,7 +178,10 @@ static void run(Gpu &gpu, const char *turnipPath) {
     pthread_t thread;
     const bool started = pthread_create(&thread, &attr, worker, job) == 0;
     pthread_attr_destroy(&attr);
-    if (!started) {gpu.mark(0x65fd); return;}
+    if (!started) {
+        gpu.mark(0x65fd);
+        return;
+    }
     static const unsigned checkpoints[] = {30, 90, 180};
     unsigned next = 0;
     for (unsigned tenths = 0; !__atomic_load_n(&job->done, __ATOMIC_ACQUIRE); ++tenths) {
@@ -171,15 +197,21 @@ static void run(Gpu &gpu, const char *turnipPath) {
     const NmbSelftest &r = job->result;
     // One GPU7 line (the page keeps only the latest): the self-test's counts, then after a passing self-test the frontend's verdict.
     char text[64];
-    const int at = snprintf(text, sizeof text, "M s%x c%u r%u i%u q%u k%u/%u p%u/%u", r.stage, r.compute_bad, r.render_bad, r.import_bad,
-                            r.qc_functions, r.qc_kernels_ok, r.qc_kernels_failed, r.qc_pairs_ok, r.qc_pairs_failed);
+    const int at =
+        snprintf(text, sizeof text, "M s%x c%u r%u i%u q%u k%u/%u p%u/%u", r.stage, r.compute_bad, r.render_bad,
+                 r.import_bad, r.qc_functions, r.qc_kernels_ok, r.qc_kernels_failed, r.qc_pairs_ok, r.qc_pairs_failed);
     char *rest = text + (at > 0 && at < (int)sizeof text ? at : 0);
     const size_t room = sizeof text - (size_t)(rest - text);
-    if (job->code) snprintf(rest, room, " %s", r.message);
-    else if (!job->frontendOpened) snprintf(rest, room, " Fo %s", job->error);
-    else if (!job->frontendRan) snprintf(rest, room, " Fx %s", job->error);
-    else if (job->frontend.failed) snprintf(rest, room, " F%u %s", job->frontend.failed, job->frontend.first);
-    else snprintf(rest, room, " F0%s%s", job->missing[0] ? " " : "", job->missing[0] ? job->missing + 3 : "");
+    if (job->code)
+        snprintf(rest, room, " %s", r.message);
+    else if (!job->frontendOpened)
+        snprintf(rest, room, " Fo %s", job->error);
+    else if (!job->frontendRan)
+        snprintf(rest, room, " Fx %s", job->error);
+    else if (job->frontend.failed)
+        snprintf(rest, room, " F%u %s", job->frontend.failed, job->frontend.first);
+    else
+        snprintf(rest, room, " F0%s%s", job->missing[0] ? " " : "", job->missing[0] ? job->missing + 3 : "");
     streamText7(gpu, text);
     const bool ok = !job->code && !r.compute_bad && !r.render_bad && !r.import_bad;
     gpu.mark(ok ? 0x65f0 : 0x65f1);

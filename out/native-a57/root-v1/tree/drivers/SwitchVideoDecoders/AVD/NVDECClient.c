@@ -14,7 +14,10 @@ struct NVDECClient {
     io_connect_t connection;
     uint32_t selector;
     os_unfair_lock lock;
-    struct { uint32_t handle; mach_vm_address_t address; } mappings[MAX_MAPPINGS];
+    struct {
+        uint32_t handle;
+        mach_vm_address_t address;
+    } mappings[MAX_MAPPINGS];
 };
 
 static io_service_t service(void)
@@ -81,7 +84,7 @@ NVDECClient *nvdec_open(int *error)
 void nvdec_close(NVDECClient *c)
 {
     if (!c) return;
-    IOServiceClose(c->connection);   // the kernel waits for this connection's jobs and frees its buffers
+    IOServiceClose(c->connection);  // the kernel waits for this connection's jobs and frees its buffers
     free(c);
 }
 
@@ -111,9 +114,9 @@ int nvdec_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
     unsigned slot = 0;
     while (slot < MAX_MAPPINGS && c->mappings[slot].handle) slot++;
     os_unfair_lock_unlock(&c->lock);
-    kr = slot == MAX_MAPPINGS ? kIOReturnNoResources
-                              : IOConnectMapMemory64(c->connection, reply.handle, mach_task_self(), &address, &mapped,
-                                                     kIOMapAnywhere);
+    kr = slot == MAX_MAPPINGS
+             ? kIOReturnNoResources
+             : IOConnectMapMemory64(c->connection, reply.handle, mach_task_self(), &address, &mapped, kIOMapAnywhere);
     if (kr) {
         logOnce(&mapLogged, "NVDEC buffer map failed", kr, size);
         const TegraNVDECBuffer b = {reply.handle, 0};

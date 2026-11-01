@@ -9,18 +9,31 @@
 #include <cstdio>
 #include "../NativeBridgeMetalFrontend.h"
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     @autoreleasepool {
         if (argc < 3) return 2;
         void *add = dlsym(dlopen("/System/Library/Frameworks/Metal.framework/Metal", RTLD_NOW), "MTLAddDevice");
-        if (!add) {std::printf("SKIP: this system has no MTLAddDevice\n"); return 0;}
+        if (!add) {
+            std::printf("SKIP: this system has no MTLAddDevice\n");
+            return 0;
+        }
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 1, nullptr);
-        if (!device) {std::printf("FAIL device\n"); return 1;}
-        if (![(id)device conformsToProtocol:objc_getProtocol("MTLDeviceSPI")]) {std::printf("FAIL MTLDeviceSPI conformance\n"); return 1;}
+        if (!device) {
+            std::printf("FAIL device\n");
+            return 1;
+        }
+        if (![(id)device conformsToProtocol:objc_getProtocol("MTLDeviceSPI")]) {
+            std::printf("FAIL MTLDeviceSPI conformance\n");
+            return 1;
+        }
         ((void (*)(id))add)(device);
         bool listed = false;
         for (id<MTLDevice> d in MTLCopyAllDevices()) listed |= (d == device);
-        if (!listed) {std::printf("FAIL the registered device is not among the system's devices\n"); return 1;}
+        if (!listed) {
+            std::printf("FAIL the registered device is not among the system's devices\n");
+            return 1;
+        }
         std::printf("PASS: the system's device registration accepted the frontend's device and lists it\n");
     }
     return 0;

@@ -23,21 +23,21 @@ enum SwitchHIDKind : unsigned { kSwitchHIDTouch = 0, kSwitchHIDButtons = 1, kSwi
 // the landscape frame iOS draws in (0..1279 left to right, 0..719 top to bottom); the descriptor's logical range
 // is the whole panel, so backboardd scales them to whatever logical size the UI uses.
 constexpr unsigned kSwitchTouchSlots = 10, kSwitchTouchWidth = 1280, kSwitchTouchHeight = 720;
-enum : uint8_t { kSwitchTouchTip = 1u << 0, kSwitchTouchValid = 1u << 1 };   // bit 2 (Untouch) stays 0
+enum : uint8_t { kSwitchTouchTip = 1u << 0, kSwitchTouchValid = 1u << 1 };  // bit 2 (Untouch) stays 0
 struct __attribute__((packed)) SwitchTouchSlot {
-  uint8_t flags, contact;
-  uint16_t x, y;
+    uint8_t flags, contact;
+    uint16_t x, y;
 };
 struct __attribute__((packed)) SwitchTouchReport {
-  uint8_t id;   // 1
-  SwitchTouchSlot slot[kSwitchTouchSlots];
+    uint8_t id;  // 1
+    SwitchTouchSlot slot[kSwitchTouchSlots];
 };
 
 // Buttons, report ID 1: one bit per Consumer usage (Power 0x30, Volume Increment 0xE9, Volume Decrement 0xEA).
 enum : uint8_t { kSwitchButtonPower = 1u << 0, kSwitchButtonVolumeUp = 1u << 1, kSwitchButtonVolumeDown = 1u << 2 };
 struct __attribute__((packed)) SwitchButtonsReport {
-  uint8_t id;   // 1
-  uint8_t buttons;
+    uint8_t id;  // 1
+    uint8_t buttons;
 };
 
 // Ambient light sensor (../SwitchBrightness/SwitchALS.cpp): top-level collection Apple vendor 0xff00 / AmbientLightSensor

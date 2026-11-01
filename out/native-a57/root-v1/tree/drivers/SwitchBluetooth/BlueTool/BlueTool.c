@@ -23,37 +23,39 @@
 #include <xpc/xpc.h>
 
 // Public on macOS, private (but exported by libxpc and used by every iOS daemon) on iOS.
-extern xpc_connection_t ios_xpc_connection_create_mach_service(const char *name, dispatch_queue_t queue,
-                                                               uint64_t flags) __asm__("_xpc_connection_create_mach_service");
+extern xpc_connection_t
+ios_xpc_connection_create_mach_service(const char *name, dispatch_queue_t queue,
+                                       uint64_t flags) __asm__("_xpc_connection_create_mach_service");
 
 static const char kService[] = "com.apple.BlueTool";
-static const char kFirmware[] = "CYW4356A3_001.004.009.0092.0095.hcd";   // nx-firmware patch, loaded by the kernel
+static const char kFirmware[] = "CYW4356A3_001.004.009.0092.0095.hcd";  // nx-firmware patch, loaded by the kernel
 
 static void answer(xpc_connection_t peer, xpc_object_t message)
 {
-  if (xpc_get_type(message) != XPC_TYPE_DICTIONARY) return;   // errors: the peer went away
-  xpc_object_t reply = xpc_dictionary_create_reply(message);
-  if (!reply) return;
-  const char *id = xpc_dictionary_get_string(message, "kMsgId");
-  xpc_dictionary_set_int64(reply, "result", 0);
-  if (id && !strcmp(id, "RunBuiltinScript")) {
-    xpc_dictionary_set_int64(reply, "manufacturer", 0);
-    xpc_dictionary_set_string(reply, "firmware", kFirmware);
-  }
-  xpc_connection_send_message(peer, reply);
-  xpc_release(reply);
+    if (xpc_get_type(message) != XPC_TYPE_DICTIONARY) return;  // errors: the peer went away
+    xpc_object_t reply = xpc_dictionary_create_reply(message);
+    if (!reply) return;
+    const char *id = xpc_dictionary_get_string(message, "kMsgId");
+    xpc_dictionary_set_int64(reply, "result", 0);
+    if (id && !strcmp(id, "RunBuiltinScript")) {
+        xpc_dictionary_set_int64(reply, "manufacturer", 0);
+        xpc_dictionary_set_string(reply, "firmware", kFirmware);
+    }
+    xpc_connection_send_message(peer, reply);
+    xpc_release(reply);
 }
 
 int main(void)
 {
-  // "-R" (server mode) is the only way launchd runs it; arguments are ignored.
-  xpc_connection_t listener = ios_xpc_connection_create_mach_service(kService, NULL, XPC_CONNECTION_MACH_SERVICE_LISTENER);
-  xpc_connection_set_event_handler(listener, ^(xpc_object_t peer) {
-    if (xpc_get_type(peer) != XPC_TYPE_CONNECTION) return;
-    xpc_connection_t connection = (xpc_connection_t)peer;
-    xpc_connection_set_event_handler(connection, ^(xpc_object_t message) { answer(connection, message); });
-    xpc_connection_resume(connection);
-  });
-  xpc_connection_resume(listener);
-  dispatch_main();
+    // "-R" (server mode) is the only way launchd runs it; arguments are ignored.
+    xpc_connection_t listener =
+        ios_xpc_connection_create_mach_service(kService, NULL, XPC_CONNECTION_MACH_SERVICE_LISTENER);
+    xpc_connection_set_event_handler(listener, ^(xpc_object_t peer) {
+        if (xpc_get_type(peer) != XPC_TYPE_CONNECTION) return;
+        xpc_connection_t connection = (xpc_connection_t)peer;
+        xpc_connection_set_event_handler(connection, ^(xpc_object_t message) { answer(connection, message); });
+        xpc_connection_resume(connection);
+    });
+    xpc_connection_resume(listener);
+    dispatch_main();
 }

@@ -25,13 +25,13 @@
 #include <core/device.h>
 #include <core/tegra.h>
 #include <engine/fifo.h>
-#include <engine/fifo/runl.h>   /* nvkm_runl_chan_get_chid, nvkm_runl_rc_cgrp: client fault isolation */
-#include <engine/fifo/cgrp.h>   /* nvkm_cgrp.rc: a channel nvkm itself put into recovery */
-#include <core/gpuobj.h>       /* nvkm_wo32 on a channel's RAMFC: compositor timeslice */
+#include <engine/fifo/runl.h> /* nvkm_runl_chan_get_chid, nvkm_runl_rc_cgrp: client fault isolation */
+#include <engine/fifo/cgrp.h> /* nvkm_cgrp.rc: a channel nvkm itself put into recovery */
+#include <core/gpuobj.h>      /* nvkm_wo32 on a channel's RAMFC: compositor timeslice */
 #include <engine/gr.h>
 #include <subdev/acr.h>
 #include <subdev/clk.h>
-#include <subdev/clk/priv.h>      /* nvkm_clk_func: clk_raise() runs calc/prog as gm20b_clk_init() does */
+#include <subdev/clk/priv.h> /* nvkm_clk_func: clk_raise() runs calc/prog as gm20b_clk_init() does */
 #include <subdev/devinit.h>
 #include <subdev/fb.h>
 #include <subdev/timer.h>
@@ -58,16 +58,23 @@
 
 /* mainline tegra210.dtsi gpu@57000000: BAR0, BAR1, SPI 157 ("stall") / 158 ("nonstall") */
 static struct resource gpu_res[] = {
-	{ .start = 0x57000000, .end = 0x57ffffff, .name = "bar0", .flags = IORESOURCE_MEM },
-	{ .start = 0x58000000, .end = 0x58ffffff, .name = "bar1", .flags = IORESOURCE_MEM },
+	{.start = 0x57000000, .end = 0x57ffffff, .name = "bar0", .flags = IORESOURCE_MEM},
+	{.start = 0x58000000, .end = 0x58ffffff, .name = "bar1", .flags = IORESOURCE_MEM},
 };
 static struct platform_device gpu_pdev = {
-	.name = "gpu", .id = 0, .dev = { .init_name = "57000000.gpu" },
-	.num_resources = 2, .resource = gpu_res, .irq_stall = 157 + 32, .irq_nonstall = 158 + 32,
+	.name = "gpu",
+	.id = 0,
+	.dev = {.init_name = "57000000.gpu"},
+	.num_resources = 2,
+	.resource = gpu_res,
+	.irq_stall = 157 + 32,
+	.irq_nonstall = 158 + 32,
 };
 /* nouveau_platform.c gm20b_platform_data */
 static const struct nvkm_device_tegra_func gm20b_platform_data = {
-	.iommu_bit = 34, .require_vdd = true, .require_ref_clk = true,
+	.iommu_bit = 34,
+	.require_vdd = true,
+	.require_ref_clk = true,
 };
 
 static struct {
@@ -77,15 +84,30 @@ static struct {
 	struct nvif_device dev;
 	struct nvif_mmu mmu;
 	int mem_type;
-	struct mutex lock;        /* serialises every nvif call (nouveau holds cli->mutex likewise) */
-} gpu = { .lock = { NULL } };
+	struct mutex lock; /* serialises every nvif call (nouveau holds cli->mutex likewise) */
+} gpu = {.lock = {NULL}};
 
-int tgm_stage(void) { return gpu.stage; }
-uint32_t tgm_wake_seq(void) { return nvxnu_wake_seq(); }
-int tgm_idle(uint32_t seq, uint64_t deadline_ns) { return nvxnu_idle(seq, deadline_ns); }
-void tgm_fence_unwoken(uint32_t seq, uint32_t seqno) { nvxnu_wake_due(seq, "fence", seqno); }
+int tgm_stage(void)
+{
+	return gpu.stage;
+}
+uint32_t tgm_wake_seq(void)
+{
+	return nvxnu_wake_seq();
+}
+int tgm_idle(uint32_t seq, uint64_t deadline_ns)
+{
+	return nvxnu_idle(seq, deadline_ns);
+}
+void tgm_fence_unwoken(uint32_t seq, uint32_t seqno)
+{
+	nvxnu_wake_due(seq, "fence", seqno);
+}
 
-static int badf(u32 v) { return (v & 0xffff0000) == 0xbadf0000; }
+static int badf(u32 v)
+{
+	return (v & 0xffff0000) == 0xbadf0000;
+}
 
 /* ------------------------------------------------------------------ M1: rail, clocks, reset, ring, GPCPLL */
 static int m1(char *line, unsigned int len)
@@ -105,7 +127,10 @@ static int m1(char *line, unsigned int len)
 		nvxnu_usleep(2000000);
 	nvxnu_step("tegra-gm20b: M1 step: start\n");
 	if (nvxnu_bootarg_int("tegra-gpu-speedo-id", &v) && v) {
-		scnprintf(line, len, "M1 FAIL tegra-gpu-speedo-id=%lld: nouveau NAPLL has T210 B1 params, B01 needs C1", v);
+		scnprintf(line, len,
+			  "M1 FAIL tegra-gpu-speedo-id=%lld: nouveau NAPLL has T210 B1 params, B01 "
+			  "needs C1",
+			  v);
 		return -EINVAL;
 	}
 	ret = tegra_gm20b_platform_map();
@@ -116,7 +141,8 @@ static int m1(char *line, unsigned int len)
 	/* T210B01 fuses the GPU speedo value in CPU_SPEEDO_2 (L4T speedo-tegra210.c:286-294) */
 	tegra_sku_info.gpu_speedo_value = (int)tegra_gm20b_fuse_read(0x030);
 	tegra_sku_info.gpu_speedo_id = 0;
-	nvxnu_step("tegra-gm20b: M1 step: CAR/PMC/FUSE/MC mapped, GPU speedo %d; pool\n", tegra_sku_info.gpu_speedo_value);
+	nvxnu_step("tegra-gm20b: M1 step: CAR/PMC/FUSE/MC mapped, GPU speedo %d; pool\n",
+		   tegra_sku_info.gpu_speedo_value);
 	ret = nvxnu_pool_setup();
 	if (ret) {
 		scnprintf(line, len, "M1 FAIL pool %d", ret);
@@ -144,10 +170,13 @@ static int m1(char *line, unsigned int len)
 	ret = nvkm_subdev_init(device->privring);
 	if (!ret)
 		ret = nvkm_subdev_init(&device->timer->subdev);
-	start = nvkm_rd32(device, 0x120050);   /* PRI_RINGMASTER_START_RESULTS, bit 0 = connectivity pass */
-	fbps = nvkm_rd32(device, 0x120074);    /* PRI_RINGMASTER_ENUM_FBP */
-	gpcs = nvkm_rd32(device, 0x120078);    /* PRI_RINGMASTER_ENUM_GPC */
-	nvxnu_step("tegra-gm20b: M1 step: ring start %08x gpc %08x fbp %08x ret %d; init clk (GPCPLL)\n", start, gpcs, fbps, ret);
+	start = nvkm_rd32(device,
+			  0x120050); /* PRI_RINGMASTER_START_RESULTS, bit 0 = connectivity pass */
+	fbps = nvkm_rd32(device, 0x120074); /* PRI_RINGMASTER_ENUM_FBP */
+	gpcs = nvkm_rd32(device, 0x120078); /* PRI_RINGMASTER_ENUM_GPC */
+	nvxnu_step("tegra-gm20b: M1 step: ring start %08x gpc %08x fbp %08x ret %d; init clk "
+		   "(GPCPLL)\n",
+		   start, gpcs, fbps, ret);
 	if (!ret)
 		ret = nvkm_subdev_init(&device->clk->subdev);
 	if (!ret) {
@@ -156,15 +185,21 @@ static int m1(char *line, unsigned int len)
 		 * VCO here, so this changes nothing now; any later trip through bypass (PLL reprogramming) then stays at
 		 * 38.4 MHz instead of running the whole GPU, PRI ring included, at 1.2 MHz. */
 		nvkm_mask(device, 0x137250, 0x0000003f, 0x00000000);
-		nvxnu_step("tegra-gm20b: M1 step: GPC2CLK_OUT %08x (bypass divider 1:1), SEL_VCO %08x\n",
+		nvxnu_step("tegra-gm20b: M1 step: GPC2CLK_OUT %08x (bypass divider 1:1), SEL_VCO "
+			   "%08x\n",
 			   nvkm_rd32(device, 0x137250), nvkm_rd32(device, 0x137100));
 	}
-	cfg = nvkm_rd32(device, 0x137000);     /* GPCPLL_CFG: bit 0 enable, bit 17 lock */
-	coeff = nvkm_rd32(device, 0x137004);   /* GPCPLL_COEFF: M 7:0, N 15:8, PL 21:16 */
+	cfg = nvkm_rd32(device, 0x137000);   /* GPCPLL_CFG: bit 0 enable, bit 17 lock */
+	coeff = nvkm_rd32(device, 0x137004); /* GPCPLL_COEFF: M 7:0, N 15:8, PL 21:16 */
 	rail = uv;
-	scnprintf(line, len, "M1 %s boot0=%08x chip=%03x rail=%uuV ring=%s gpc=%u fbp=%u gpcpll cfg=%08x coeff=%08x %s %dkHz ret=%d",
+	scnprintf(line, len,
+		  "M1 %s boot0=%08x chip=%03x rail=%uuV ring=%s gpc=%u fbp=%u gpcpll cfg=%08x "
+		  "coeff=%08x %s %dkHz ret=%d",
 		  ret ? "FAIL" : "ok", boot0, (boot0 >> 20) & 0x1ff, rail,
-		  badf(start) ? "BADF" : (start & 1) ? "pass" : "fail", gpcs & 0x1f, fbps & 0x1f, cfg, coeff,
+		  badf(start)   ? "BADF"
+		  : (start & 1) ? "pass"
+				: "fail",
+		  gpcs & 0x1f, fbps & 0x1f, cfg, coeff,
 		  (cfg & 0x20001) == 0x20001 ? "locked" : "UNLOCKED",
 		  ret ? 0 : nvkm_clk_read(device->clk, nv_clk_src_gpc), ret);
 	if (!ret && ((boot0 >> 20) & 0x1ff) != 0x12b && ((boot0 >> 20) & 0x1ff) != 0x12e)
@@ -199,12 +234,12 @@ static int m1(char *line, unsigned int len)
  * (685 mV + 13% = 774 mV) but not 921.6 (710 mV + 13% > 800 mV). */
 #define FIXED_PLL_MARGIN_PCT 20
 #define FIXED_PLL_MARGIN_MIN 13
-#define BOOT_KHZ 76800  /* gm20b_pstates[0], set by gm20b_clk_init() in M1 */
+#define BOOT_KHZ 76800 /* gm20b_pstates[0], set by gm20b_clk_init() in M1 */
 
 static int clk_prog_khz(struct nvkm_device *device, u32 khz)
 {
 	struct nvkm_clk *clk = device->clk;
-	struct nvkm_cstate cstate = { .domain[nv_clk_src_gpc] = khz };
+	struct nvkm_cstate cstate = {.domain[nv_clk_src_gpc] = khz};
 	int ret = clk->func->calc(clk, &cstate);
 
 	if (!ret) {
@@ -218,19 +253,23 @@ static int clk_prog_khz(struct nvkm_device *device, u32 khz)
  * it). Returns 1 if the GPU runs from a locked GPCPLL at `khz` with the 1:1 bypass divider and a live ring. */
 static int clk_state(struct nvkm_device *device, const char *what, int ret, u32 khz)
 {
-	u32 cfg = nvkm_rd32(device, 0x137000);      /* GPCPLL_CFG: 0 enable, 17 lock */
-	u32 coeff = nvkm_rd32(device, 0x137004);    /* GPCPLL_COEFF: M 7:0, N 15:8, PL 21:16 */
-	u32 vco = nvkm_rd32(device, 0x137100);      /* SEL_VCO: 0 = GPU on bypass */
-	u32 out = nvkm_rd32(device, 0x137250);      /* GPC2CLK_OUT: 5:0 bypass divider, 13:8 VCO divider */
-	u32 ring = nvkm_rd32(device, 0x120050);     /* PRI_RINGMASTER_START_RESULTS: 0 = connectivity pass */
-	u32 bus = nvkm_rd32(device, 0x001100);      /* BUS_INTR_0: 3 = PRI timeout */
+	u32 cfg = nvkm_rd32(device, 0x137000);   /* GPCPLL_CFG: 0 enable, 17 lock */
+	u32 coeff = nvkm_rd32(device, 0x137004); /* GPCPLL_COEFF: M 7:0, N 15:8, PL 21:16 */
+	u32 vco = nvkm_rd32(device, 0x137100);   /* SEL_VCO: 0 = GPU on bypass */
+	u32 out =
+		nvkm_rd32(device, 0x137250); /* GPC2CLK_OUT: 5:0 bypass divider, 13:8 VCO divider */
+	u32 ring = nvkm_rd32(device,
+			     0x120050); /* PRI_RINGMASTER_START_RESULTS: 0 = connectivity pass */
+	u32 bus = nvkm_rd32(device, 0x001100); /* BUS_INTR_0: 3 = PRI timeout */
 	int now = nvkm_clk_read(device->clk, nv_clk_src_gpc);
 
-	nvxnu_step("tegra-gm20b: CLK step: %s, ret %d: GPCPLL_CFG %08x COEFF %08x (M %u N %u PL %u) SEL_VCO %x "
-		   "GPC2CLK_OUT %08x = %d kHz; ring %08x BUS_INTR %08x\n", what, ret, cfg, coeff, coeff & 0xff,
-		   (coeff >> 8) & 0xff, (coeff >> 16) & 0x3f, vco, out, now, ring, bus);
-	return !ret && (cfg & 0x20001) == 0x20001 && (vco & 1) && !(out & 0x3f3f) && now == (int)khz && !badf(ring) &&
-	       (ring & 1) && !(bus & 0x8);
+	nvxnu_step("tegra-gm20b: CLK step: %s, ret %d: GPCPLL_CFG %08x COEFF %08x (M %u N %u PL "
+		   "%u) SEL_VCO %x "
+		   "GPC2CLK_OUT %08x = %d kHz; ring %08x BUS_INTR %08x\n",
+		   what, ret, cfg, coeff, coeff & 0xff, (coeff >> 8) & 0xff, (coeff >> 16) & 0x3f,
+		   vco, out, now, ring, bus);
+	return !ret && (cfg & 0x20001) == 0x20001 && (vco & 1) && !(out & 0x3f3f) &&
+	       now == (int)khz && !badf(ring) && (ring & 1) && !(bus & 0x8);
 }
 
 static int clk_raise(char *line, unsigned int len)
@@ -244,57 +283,73 @@ static int clk_raise(char *line, unsigned int len)
 	if (!nvxnu_bootarg_int("tegra-gpu-mhz", &mhz))
 		return 0;
 	if (nvxnu_bootarg_int("tegra-gpu-pll-margin", &pct))
-		margin = pct < FIXED_PLL_MARGIN_MIN ? FIXED_PLL_MARGIN_MIN : pct > 50 ? 50 : (int)pct;
+		margin = pct < FIXED_PLL_MARGIN_MIN ? FIXED_PLL_MARGIN_MIN
+			 : pct > 50                 ? 50
+						    : (int)pct;
 	for (i = 0; (k = tegra_gm20b_dvfs_khz(i)); i++) {
 		int v = tegra_gm20b_dvfs_na_uv(k, speedo);
-		if (mhz > 0 && mhz < 10000 && mhz * 1000 > (long long)k - 1000 && mhz * 1000 < (long long)k + 1000)
+		if (mhz > 0 && mhz < 10000 && mhz * 1000 > (long long)k - 1000 &&
+		    mhz * 1000 < (long long)k + 1000)
 			khz = k;
 		fits = fits && v > 0 && DIV_ROUND_UP(v * (100 + margin), 100) <= ceil_uv;
 		if (fits)
-			best = k;  /* L4T drops every rate above the first one that does not fit */
+			best = k; /* L4T drops every rate above the first one that does not fit */
 	}
 	if (!khz) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld is not an L4T B01 GPU rate (76.8 MHz x 1..16, 1267.2): GPU stays at "
-			  "%d kHz\n", mhz, nvkm_clk_read(device->clk, nv_clk_src_gpc));
+		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld is not an L4T B01 GPU rate (76.8 MHz x "
+			  "1..16, 1267.2): GPU stays at "
+			  "%d kHz\n",
+			  mhz, nvkm_clk_read(device->clk, nv_clk_src_gpc));
 		return 0;
 	}
 	if (nvkm_clk_read(device->clk, nv_clk_src_gpc) == (int)khz)
-		return 0;  /* the boot rate, or a retried stage 2 */
+		return 0; /* the boot rate, or a retried stage 2 */
 	na_uv = tegra_gm20b_dvfs_na_uv(khz, speedo);
 	if (na_uv < 0) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld refused: no B01 table voltage for GPU speedo %d; GPU stays at %d kHz\n",
+		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld refused: no B01 table voltage for GPU "
+			  "speedo %d; GPU stays at %d kHz\n",
 			  mhz, speedo, nvkm_clk_read(device->clk, nv_clk_src_gpc));
 		return 0;
 	}
 	need_uv = DIV_ROUND_UP(na_uv * (100 + margin), 100);
 	if (need_uv > ceil_uv) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld refused: %u kHz needs %d uV in fixed-frequency mode (B01 NA table %d "
-			  "uV + %d%%) for GPU speedo %d, above the %d uV rail ceiling; GPU stays at %d kHz (highest rate that fits: "
-			  "%u kHz)\n", mhz, khz, need_uv, na_uv, margin, speedo, ceil_uv,
+		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld refused: %u kHz needs %d uV in "
+			  "fixed-frequency mode (B01 NA table %d "
+			  "uV + %d%%) for GPU speedo %d, above the %d uV rail ceiling; GPU stays "
+			  "at %d kHz (highest rate that fits: "
+			  "%u kHz)\n",
+			  mhz, khz, need_uv, na_uv, margin, speedo, ceil_uv,
 			  nvkm_clk_read(device->clk, nv_clk_src_gpc), best);
 		return 0;
 	}
 	ret = tegra_gm20b_rail_get_uv(&uv);
-	nvxnu_step("tegra-gm20b: CLK step: tegra-gpu-mhz=%lld -> %u kHz, GPU speedo %d: B01 NA table %d uV, +%d%% fixed PLL "
-		   "%d uV, ceiling %d uV (highest rate that fits %u kHz); VDD_GPU %d uV (ret %d)\n", mhz, khz, speedo, na_uv,
-		   margin, need_uv, ceil_uv, best, uv, ret);
+	nvxnu_step("tegra-gm20b: CLK step: tegra-gpu-mhz=%lld -> %u kHz, GPU speedo %d: B01 NA "
+		   "table %d uV, +%d%% fixed PLL "
+		   "%d uV, ceiling %d uV (highest rate that fits %u kHz); VDD_GPU %d uV (ret %d)\n",
+		   mhz, khz, speedo, na_uv, margin, need_uv, ceil_uv, best, uv, ret);
 
 	/* voltage first */
 	if (!ret && uv < ceil_uv) {
-		ret = tegra_gm20b_rail_set_uv(ceil_uv);  /* MAX77812 write + readback, then the ramp delay */
+		ret = tegra_gm20b_rail_set_uv(
+			ceil_uv); /* MAX77812 write + readback, then the ramp delay */
 		if (!ret)
 			ret = tegra_gm20b_rail_get_uv(&uv);
-		nvxnu_step("tegra-gm20b: CLK step: VDD_GPU raised to %d uV (ret %d) before the clock\n", uv, ret);
+		nvxnu_step("tegra-gm20b: CLK step: VDD_GPU raised to %d uV (ret %d) before the "
+			   "clock\n",
+			   uv, ret);
 	}
 	if (ret || uv < ceil_uv) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld: VDD_GPU %d uV (ret %d), %d uV needed first; GPU stays at %d kHz\n",
+		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld: VDD_GPU %d uV (ret %d), %d uV needed "
+			  "first; GPU stays at %d kHz\n",
 			  mhz, uv, ret, ceil_uv, nvkm_clk_read(device->clk, nv_clk_src_gpc));
 		return 0;
 	}
 
 	/* then the clock */
-	nvxnu_step("tegra-gm20b: CLK step: GPCPLL_CFG %08x COEFF %08x = %d kHz -> %u kHz (NDIV slide, bypass, relock, slide)\n",
-		   nvkm_rd32(device, 0x137000), nvkm_rd32(device, 0x137004), nvkm_clk_read(device->clk, nv_clk_src_gpc), khz);
+	nvxnu_step("tegra-gm20b: CLK step: GPCPLL_CFG %08x COEFF %08x = %d kHz -> %u kHz (NDIV "
+		   "slide, bypass, relock, slide)\n",
+		   nvkm_rd32(device, 0x137000), nvkm_rd32(device, 0x137004),
+		   nvkm_clk_read(device->clk, nv_clk_src_gpc), khz);
 	ret = clk_prog_khz(device, khz);
 	if (clk_state(device, "raised", ret, khz))
 		return 0;
@@ -302,13 +357,17 @@ static int clk_raise(char *line, unsigned int len)
 	/* not at the target: one way back to the M1 rate, at the same voltage */
 	back = clk_prog_khz(device, BOOT_KHZ);
 	if (clk_state(device, "back to the boot rate", back, BOOT_KHZ)) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld: GPCPLL did not settle at %u kHz (ret %d); back at %u kHz\n", mhz,
-			  khz, ret, BOOT_KHZ);
+		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld: GPCPLL did not settle at %u kHz (ret "
+			  "%d); back at %u kHz\n",
+			  mhz, khz, ret, BOOT_KHZ);
 		return 0;
 	}
-	scnprintf(line, len, "M2 FAIL GPCPLL to %u kHz (ret %d) and back to %u kHz (ret %d): GPCPLL_CFG %08x COEFF %08x "
-		  "SEL_VCO %x", khz, ret, BOOT_KHZ, back, nvkm_rd32(device, 0x137000), nvkm_rd32(device, 0x137004),
-		  nvkm_rd32(device, 0x137100));
+	scnprintf(line, len,
+		  "M2 FAIL GPCPLL to %u kHz (ret %d) and back to %u kHz (ret %d): GPCPLL_CFG %08x "
+		  "COEFF %08x "
+		  "SEL_VCO %x",
+		  khz, ret, BOOT_KHZ, back, nvkm_rd32(device, 0x137000),
+		  nvkm_rd32(device, 0x137004), nvkm_rd32(device, 0x137100));
 	return -EIO;
 }
 
@@ -317,16 +376,19 @@ static int clk_raise(char *line, unsigned int len)
  * status and the GPCPLL output, so a step that leaves the ring or the GPU clock dead shows on the next line. */
 static void m2_step(struct nvkm_device *device, const char *what, const char *name)
 {
-	u32 pmc = nvkm_rd32(device, 0x000200);      /* PMC_ENABLE */
-	u32 elpg = nvkm_rd32(device, 0x00020c);     /* PMC_ELPG_ENABLE: xbar 2, pfb 20, hub 29 */
-	u32 bus = nvkm_rd32(device, 0x001100);      /* BUS_INTR_0: 1 squash, 2 fecserr, 3 PRI timeout */
-	u32 ring = nvkm_rd32(device, 0x120058);     /* PRI_RINGMASTER_INTR_STATUS0: 0 start fault, 1 disconnect */
-	u32 pll = nvkm_rd32(device, 0x137000);      /* GPCPLL_CFG: 0 enable, 1 IDDQ, 17 lock */
-	u32 vco = nvkm_rd32(device, 0x137100);      /* SEL_VCO: 0 = GPU on bypass, 1 = on GPCPLL */
-	u32 out = nvkm_rd32(device, 0x137250);      /* GPC2CLK_OUT: 5:0 bypass divider */
+	u32 pmc = nvkm_rd32(device, 0x000200);  /* PMC_ENABLE */
+	u32 elpg = nvkm_rd32(device, 0x00020c); /* PMC_ELPG_ENABLE: xbar 2, pfb 20, hub 29 */
+	u32 bus = nvkm_rd32(device, 0x001100);  /* BUS_INTR_0: 1 squash, 2 fecserr, 3 PRI timeout */
+	u32 ring = nvkm_rd32(
+		device, 0x120058); /* PRI_RINGMASTER_INTR_STATUS0: 0 start fault, 1 disconnect */
+	u32 pll = nvkm_rd32(device, 0x137000); /* GPCPLL_CFG: 0 enable, 1 IDDQ, 17 lock */
+	u32 vco = nvkm_rd32(device, 0x137100); /* SEL_VCO: 0 = GPU on bypass, 1 = on GPCPLL */
+	u32 out = nvkm_rd32(device, 0x137250); /* GPC2CLK_OUT: 5:0 bypass divider */
 
-	nvxnu_step("tegra-gm20b: M2 step: %s%s: PMC_ENABLE %08x ELPG %08x BUS_INTR %08x ring %08x GPCPLL %08x SEL_VCO %x "
-		   "GPC2CLK_OUT %08x\n", what, name, pmc, elpg, bus, ring, pll, vco, out);
+	nvxnu_step("tegra-gm20b: M2 step: %s%s: PMC_ENABLE %08x ELPG %08x BUS_INTR %08x ring %08x "
+		   "GPCPLL %08x SEL_VCO %x "
+		   "GPC2CLK_OUT %08x\n",
+		   what, name, pmc, elpg, bus, ring, pll, vco, out);
 }
 
 /* nvkm_device_init() (engine/device/base.c) without its nvkm_device_fini() pass, one trace line per subdev init.
@@ -347,7 +409,8 @@ static int m2_device_init(struct nvkm_device *device, const char **at)
 
 	/* nvkm_device_preinit(); Tegra has no device preinit and GM20B no devinit (nvkm_devinit_post takes NULL) */
 	nvkm_intr_unarm(device);
-	list_for_each_entry(subdev, &device->subdev, head) {
+	list_for_each_entry(subdev, &device->subdev, head)
+	{
 		*at = subdev->name;
 		ret = nvkm_subdev_preinit(subdev);
 		if (ret)
@@ -364,7 +427,8 @@ static int m2_device_init(struct nvkm_device *device, const char **at)
 	m2_step(device, "preinit done, privring/timer/clk still up from M1", "");
 
 	nvkm_intr_rearm(device);
-	list_for_each_entry(subdev, &device->subdev, head) {
+	list_for_each_entry(subdev, &device->subdev, head)
+	{
 		/* what nvkm_subdev_init() skips: running since M1, or an engine with no user yet (GR comes up by ref below) */
 		if (subdev->use.enabled || !refcount_read(&subdev->use.refcount))
 			continue;
@@ -374,7 +438,8 @@ static int m2_device_init(struct nvkm_device *device, const char **at)
 			 * (common/mm/mm.c:347-351) before any FB/MMU programming; nouveau never writes it */
 			u32 elpg = nvkm_rd32(device, 0x00020c);
 			nvkm_wr32(device, 0x00020c, elpg | 0x00000004 | 0x00100000 | 0x20000000);
-			nvxnu_step("tegra-gm20b: M2 step: ELPG_ENABLE %08x -> %08x (xbar|pfb|hub, nvgpu gm20b_mc_fb_reset)\n",
+			nvxnu_step("tegra-gm20b: M2 step: ELPG_ENABLE %08x -> %08x (xbar|pfb|hub, "
+				   "nvgpu gm20b_mc_fb_reset)\n",
 				   elpg, nvkm_rd32(device, 0x00020c));
 		}
 		m2_step(device, "init ", subdev->name);
@@ -420,7 +485,9 @@ static int m2(char *line, unsigned int len)
 	struct nvkm_engine *gr;
 	const char *at = "";
 	u64 units = 0;
-	int ret = m2_device_init(device, &at);  /* fb, ltc, mmu, bar, ACR (HS on PMU), LS PMU, volt; privring/clk: M1 */
+	int ret = m2_device_init(
+		device,
+		&at); /* fb, ltc, mmu, bar, ACR (HS on PMU), LS PMU, volt; privring/clk: M1 */
 
 	if (ret) {
 		scnprintf(line, len, "M2 FAIL nvkm init at %s: %d", at, ret);
@@ -433,15 +500,18 @@ static int m2(char *line, unsigned int len)
 	device->refcount++;
 	mutex_unlock(&device->mutex);
 
-	gr = nvkm_engine_ref(&device->gr->engine);  /* oneinit+init: FECS/GPCCS via ACR, golden context */
+	gr = nvkm_engine_ref(
+		&device->gr->engine); /* oneinit+init: FECS/GPCCS via ACR, golden context */
 	ret = IS_ERR(gr) ? (int)PTR_ERR(gr) : 0;
 	if (!ret)
 		units = nvkm_gr_units(device->gr);
-	scnprintf(line, len, "M2 %s wpr=[%llx-%llx] acr=%s fecs_mb0=%08x gpccs_cpuctl=%08x gpc=%u tpc=%u ret=%d",
-		  ret ? "FAIL" : "ok", device->acr ? device->acr->wpr_start : 0, device->acr ? device->acr->wpr_end : 0,
-		  device->acr && device->acr->done ? "done" : "no",
-		  nvkm_rd32(device, 0x409040), nvkm_rd32(device, 0x41a100),
-		  (u32)(units & 0xff), (u32)((units >> 8) & 0xff), ret);
+	scnprintf(
+		line, len,
+		"M2 %s wpr=[%llx-%llx] acr=%s fecs_mb0=%08x gpccs_cpuctl=%08x gpc=%u tpc=%u ret=%d",
+		ret ? "FAIL" : "ok", device->acr ? device->acr->wpr_start : 0,
+		device->acr ? device->acr->wpr_end : 0,
+		device->acr && device->acr->done ? "done" : "no", nvkm_rd32(device, 0x409040),
+		nvkm_rd32(device, 0x41a100), (u32)(units & 0xff), (u32)((units >> 8) & 0xff), ret);
 	if (ret)
 		return ret;
 	/* GR is up: this line is the stage's real result, so it reaches the log even if the nvif setup below fails */
@@ -470,7 +540,8 @@ static int m2(char *line, unsigned int len)
 		ret = gpu.mem_type < 0 ? gpu.mem_type : 0;
 	}
 	if (ret)
-		scnprintf(line, len, "M2 FAIL %s %d (GR came up: see the M2 ok line above)", at, ret);
+		scnprintf(line, len, "M2 FAIL %s %d (GR came up: see the M2 ok line above)", at,
+			  ret);
 	return ret;
 }
 
@@ -531,10 +602,14 @@ uint64_t tgm_pool_avail(void)
  *    page the kernel gives back is written back later; nvgpu flushes on unmap for the same reason
  *    (common/mm/gmmu.c gk20a_gmmu_cache_maint_unmap). nvkm invalidates the L2 after its own page-table writes
  *    (instmem/gk20a.c release). Kernel mappings (rings, fence pages) stay volatile. */
-#define FLUSH_L2_SYSTEM_INVALIDATE 0x070004   /* nvgpu hw_flush_gm20b.h: bit 0 pending, bit 1 outstanding */
-#define L2_OP_NS 1000000                      /* nvgpu allows 200 x 5 us for the invalidate */
+#define FLUSH_L2_SYSTEM_INVALIDATE \
+	0x070004         /* nvgpu hw_flush_gm20b.h: bit 0 pending, bit 1 outstanding */
+#define L2_OP_NS 1000000 /* nvgpu allows 200 x 5 us for the invalidate */
 static DEFINE_MUTEX(l2_lock);
-static struct { u64 sum, max; u32 n; } l2_time;   /* tegra-gpu-stats: the invalidate's CPU time, lock wait included */
+static struct {
+	u64 sum, max;
+	u32 n;
+} l2_time; /* tegra-gpu-stats: the invalidate's CPU time, lock wait included */
 
 static int l2_on(void)
 {
@@ -556,7 +631,8 @@ static void l2_invalidate(void)
 	end = nvxnu_nanotime() + L2_OP_NS;
 	while ((v = nvkm_rd32(device, FLUSH_L2_SYSTEM_INVALIDATE)) & 0x00000003) {
 		if (nvxnu_nanotime() >= end)
-			nvxnu_panic("tegra-gm20b: L2 system invalidate still busy after 1 ms (FLUSH_L2_SYSTEM_INVALIDATE %08x)",
+			nvxnu_panic("tegra-gm20b: L2 system invalidate still busy after 1 ms "
+				    "(FLUSH_L2_SYSTEM_INVALIDATE %08x)",
 				    v);
 		nvxnu_udelay(1);
 	}
@@ -572,9 +648,10 @@ static void l2_invalidate(void)
 struct tgm_vm {
 	struct nvif_vmm vmm;
 	struct list_head kmaps;
-	u64 pfence_va;            /* the present channel's fence page, read-only (tegra-gpu-present-order), 0: not mapped */
-	struct list_head imports; /* struct tgm_import: first pages of the host imports made in it (live_lock) */
-	int imports_lost;         /* one could not be recorded: taken as importing every page */
+	u64 pfence_va; /* the present channel's fence page, read-only (tegra-gpu-present-order), 0: not mapped */
+	struct list_head
+		imports; /* struct tgm_import: first pages of the host imports made in it (live_lock) */
+	int imports_lost; /* one could not be recorded: taken as importing every page */
 };
 struct tgm_import {
 	struct list_head head;
@@ -590,7 +667,8 @@ struct tgm_kmap {
 	struct nvif_vma vma;
 };
 
-static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only, uint64_t *va);
+static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,
+		   uint64_t *va);
 
 /* The present channel's fence page (see "GPU present"): one pool page, made with the first address space that needs it
  * and kept for good, so it exists before the present channel does. With tegra-gpu-present-order (on unless =0) every
@@ -630,7 +708,7 @@ int tgm_vm_new(struct tgm_vm **pvm)
 {
 	/* bigpage selects the big-page size, 16 (64 KiB) or 17 (128 KiB, nouveau's default); anything else is -EINVAL
 	 * (vmmgm200.c gm200_vmm_new_; 10-30: 0 failed M3). 4 KiB pages stay available, and the ABI binds only those. */
-	struct gm200_vmm_v0 args = { .version = 0, .bigpage = 17 };
+	struct gm200_vmm_v0 args = {.version = 0, .bigpage = 17};
 	struct tgm_vm *vm;
 	int ret;
 
@@ -642,8 +720,8 @@ int tgm_vm_new(struct tgm_vm **pvm)
 	INIT_LIST_HEAD(&vm->imports);
 	mutex_lock(&gpu.lock);
 	/* RAW: the client manages [0, 1<<39) with raw binds; nvkm allocates in [1<<39, 1<<40) */
-	ret = nvif_vmm_ctor(&gpu.mmu, "uvmm", NVIF_CLASS_VMM_GM200, RAW, TGM_KERNEL_VA, TGM_VA_LIMIT - TGM_KERNEL_VA,
-			    &args, sizeof(args), &vm->vmm);
+	ret = nvif_vmm_ctor(&gpu.mmu, "uvmm", NVIF_CLASS_VMM_GM200, RAW, TGM_KERNEL_VA,
+			    TGM_VA_LIMIT - TGM_KERNEL_VA, &args, sizeof(args), &vm->vmm);
 	mutex_unlock(&gpu.lock);
 	if (ret) {
 		kfree(vm);
@@ -669,10 +747,11 @@ void tgm_vm_del(struct tgm_vm **pvm)
 	struct tgm_import *im, *it;
 	if (!vm)
 		return;
-	list_for_each_entry_safe(im, it, &vm->imports, head)   /* no channel of it is left to look */
+	list_for_each_entry_safe(im, it, &vm->imports, head) /* no channel of it is left to look */
 		kfree(im);
 	mutex_lock(&gpu.lock);
-	list_for_each_entry_safe(k, t, &vm->kmaps, head) {
+	list_for_each_entry_safe(k, t, &vm->kmaps, head)
+	{
 		nvif_vmm_put(&vm->vmm, &k->vma);
 		list_del(&k->head);
 		kfree(k);
@@ -685,7 +764,7 @@ void tgm_vm_del(struct tgm_vm **pvm)
 
 int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem)
 {
-	struct nvif_mem_ram_v0 args = { .version = 0, .dma = (dma_addr_t *)pas, .sgl = NULL };
+	struct nvif_mem_ram_v0 args = {.version = 0, .dma = (dma_addr_t *)pas, .sgl = NULL};
 	struct tgm_mem *mem;
 	int ret;
 	(void)vm;
@@ -695,8 +774,8 @@ int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct 
 		return -ENOMEM;
 	mem->bytes = (u64)npages << PAGE_SHIFT;
 	mutex_lock(&gpu.lock);
-	ret = nvif_mem_ctor_type(&gpu.mmu, "bo", NVIF_CLASS_MEM_GF100, gpu.mem_type, PAGE_SHIFT, mem->bytes,
-				 &args, sizeof(args), &mem->mem);
+	ret = nvif_mem_ctor_type(&gpu.mmu, "bo", NVIF_CLASS_MEM_GF100, gpu.mem_type, PAGE_SHIFT,
+				 mem->bytes, &args, sizeof(args), &mem->mem);
 	mutex_unlock(&gpu.lock);
 	if (ret) {
 		kfree(mem);
@@ -719,18 +798,21 @@ void tgm_mem_del(struct tgm_mem **pmem)
 
 /* Sysmem is mapped volatile (GPU L2 does not keep its lines): CONTRACT.md §3(b) option one; cacheable with
  * tegra-gpu-l2=1 (l2_on). Compressible kinds are not offered (no comptags); nvkm rejects invalid kinds. */
-static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset, uint8_t kind,
-		  int read_only, int vol)
+static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
+		  uint64_t offset, uint8_t kind, int read_only, int vol)
 {
-	struct gf100_vmm_map_v0 args = { .version = 0, .vol = !!vol, .ro = !!read_only, .priv = 0, .kind = kind };
+	struct gf100_vmm_map_v0 args = {
+		.version = 0, .vol = !!vol, .ro = !!read_only, .priv = 0, .kind = kind};
 	int ret;
 	if (va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range ||
-	    offset > mem->bytes || range > mem->bytes - offset || !nvif_mmu_kind_valid(&gpu.mmu, kind))
+	    offset > mem->bytes || range > mem->bytes - offset ||
+	    !nvif_mmu_kind_valid(&gpu.mmu, kind))
 		return -EINVAL;
 	mutex_lock(&gpu.lock);
 	ret = nvif_vmm_raw_get(&vm->vmm, va, range, PAGE_SHIFT);
 	if (!ret) {
-		ret = nvif_vmm_raw_map(&vm->vmm, va, range, PAGE_SHIFT, &args, sizeof(args), &mem->mem, offset);
+		ret = nvif_vmm_raw_map(&vm->vmm, va, range, PAGE_SHIFT, &args, sizeof(args),
+				       &mem->mem, offset);
 		if (ret)
 			nvif_vmm_raw_put(&vm->vmm, va, range, PAGE_SHIFT);
 	}
@@ -738,8 +820,8 @@ static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem
 	return ret;
 }
 
-int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset, uint8_t kind,
-	       int read_only)
+int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset,
+	       uint8_t kind, int read_only)
 {
 	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on());
 }
@@ -761,9 +843,11 @@ int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t
 	return vm_kmap(vm, mem, bytes, 0, va);
 }
 
-static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only, uint64_t *va)
+static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,
+		   uint64_t *va)
 {
-	struct gf100_vmm_map_v0 args = { .version = 0, .vol = 1, .ro = !!read_only, .priv = 0, .kind = 0 };
+	struct gf100_vmm_map_v0 args = {
+		.version = 0, .vol = 1, .ro = !!read_only, .priv = 0, .kind = 0};
 	struct tgm_kmap *k = kzalloc(sizeof(*k), GFP_KERNEL);
 	int ret;
 	if (!k)
@@ -787,12 +871,14 @@ static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int r
 }
 
 /* ------------------------------------------------------------------ channels */
-#define CHAN_PUSH_BYTES 0x10000   /* nouveau_channel_ctor: plength */
-#define CHAN_GPFIFO_BYTES 0x2000  /* ilength: 1024 entries */
-#define CHAN_SEMA_BYTES 0x1000     /* nvif's GET semaphore at +0; tegra-gpu-stats stamps at CHAN_STAMPS */
+#define CHAN_PUSH_BYTES 0x10000  /* nouveau_channel_ctor: plength */
+#define CHAN_GPFIFO_BYTES 0x2000 /* ilength: 1024 entries */
+#define CHAN_SEMA_BYTES \
+	0x1000 /* nvif's GET semaphore at +0; tegra-gpu-stats stamps at CHAN_STAMPS */
 #define CHAN_BYTES (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + CHAN_SEMA_BYTES)
 #define CHAN_STAMPS (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + 0x800)
-#define CHAN_NSTAMPS 64            /* by seqno; one record = two 16-byte semaphore releases (payload, 0, PTIMER ns) */
+#define CHAN_NSTAMPS \
+	64 /* by seqno; one record = two 16-byte semaphore releases (payload, 0, PTIMER ns) */
 
 /* What a 16-byte semaphore release writes (NV906F SEMAPHORED RELEASE_SIZE_16BYTE) */
 struct tgm_stamp {
@@ -800,7 +886,8 @@ struct tgm_stamp {
 	u64 ns;
 };
 struct tgm_stamps {
-	struct tgm_stamp start, end;   /* the GPU starts the submission (WFI: the one before finished) / finished it */
+	struct tgm_stamp start,
+		end; /* the GPU starts the submission (WFI: the one before finished) / finished it */
 };
 
 struct tgm_chan {
@@ -810,7 +897,7 @@ struct tgm_chan {
 	struct nvif_event kill;
 	struct nvif_event nonstall;
 	struct nvif_chan chan;
-	void *ring;               /* push | gpfifo | sema, pool memory */
+	void *ring; /* push | gpfifo | sema, pool memory */
 	u64 ring_pa, ring_va;
 	u64 *ring_pas;
 	struct tgm_mem *ring_mem;
@@ -821,17 +908,17 @@ struct tgm_chan {
 	u32 error;
 	u32 chid;
 	int nobj;
-	int kernel;               /* the present channel: no client waits on it, the present does not wait for it */
-	int critical;             /* a GPU error on it panics even with tegra-gpu-all-clients (compositor, kernel) */
-	int isolating;            /* client fault isolation: its error was taken as its own, the kill is under way */
-	struct list_head live;    /* live_chans, for tegra_gm20b_sync_for_cpu */
+	int kernel; /* the present channel: no client waits on it, the present does not wait for it */
+	int critical; /* a GPU error on it panics even with tegra-gpu-all-clients (compositor, kernel) */
+	int isolating; /* client fault isolation: its error was taken as its own, the kill is under way */
+	struct list_head live; /* live_chans, for tegra_gm20b_sync_for_cpu */
 	u64 id;
-	char owner[17];           /* process that created it */
-	char fault[200];          /* the nvkm report it was isolated for */
-	u64 submit_ns;            /* when the last fence was kicked */
-	u32 stall_done;           /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
+	char owner[17];  /* process that created it */
+	char fault[200]; /* the nvkm report it was isolated for */
+	u64 submit_ns;   /* when the last fence was kicked */
+	u32 stall_done;  /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
 	u64 stall_ns;
-	u32 stat_done;            /* tegra-gpu-stats: last seqno whose latency was counted, submit times by seqno */
+	u32 stat_done; /* tegra-gpu-stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
 };
@@ -848,7 +935,8 @@ void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add)
 	struct tgm_import *im;
 
 	mutex_lock(&live_lock);
-	list_for_each_entry(im, &vm->imports, head) {
+	list_for_each_entry(im, &vm->imports, head)
+	{
 		if (im->pa == pa)
 			break;
 	}
@@ -870,12 +958,13 @@ void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add)
 	mutex_unlock(&live_lock);
 }
 
-static int vm_imports(struct tgm_vm *vm, u64 pa)   /* live_lock held */
+static int vm_imports(struct tgm_vm *vm, u64 pa) /* live_lock held */
 {
 	struct tgm_import *im;
 	if (vm->imports_lost)
 		return 1;
-	list_for_each_entry(im, &vm->imports, head) {
+	list_for_each_entry(im, &vm->imports, head)
+	{
 		if (im->pa == pa)
 			return 1;
 	}
@@ -900,24 +989,29 @@ static int vm_imports(struct tgm_vm *vm, u64 pa)   /* live_lock held */
  * in a hash under coh_lock for the hook's lookups. Each import holds a reference to its entry, which stays where it was made,
  * so the per-submission dirty mark is one store through the import's own pointer, no lookup and no lock. */
 struct tgm_coh {
-	struct tgm_coh *next;      /* hash chain (coh_lock) */
-	u64 pa;                    /* the surface's first physical page: the key, as the import and the XNU hook both have it */
-	u64 *pas;                  /* the largest page list imported for it, so the cache ops reach a non-contiguous surface */
+	struct tgm_coh *next; /* hash chain (coh_lock) */
+	u64 pa; /* the surface's first physical page: the key, as the import and the XNU hook both have it */
+	u64 *pas; /* the largest page list imported for it, so the cache ops reach a non-contiguous surface */
 	u32 npages, refs;
-	int writable;              /* some import lets the GPU write it: submissions mark it GPU-dirty */
-	int gpu_dirty;             /* atomic: the GPU may have written it since the last CPU read lock */
+	int writable;  /* some import lets the GPU write it: submissions mark it GPU-dirty */
+	int gpu_dirty; /* atomic: the GPU may have written it since the last CPU read lock */
 };
 /* Registers this driver's read_lock/write_unlock with the kernel's IOSurface lock/unlock hook (XNU IOUserClient.cpp). */
-extern void tegra_coherency_register(uint64_t (*read_lock)(uint64_t), uint64_t (*write_unlock)(uint64_t));
+extern void tegra_coherency_register(uint64_t (*read_lock)(uint64_t),
+				     uint64_t (*write_unlock)(uint64_t));
 #define TGM_COH_BUCKETS 256
 static struct tgm_coh *coh_hash[TGM_COH_BUCKETS];
 static DEFINE_MUTEX(coh_lock);
 /* tegra-gpu-stats: the IOSurface lock/unlock hooks' work (one 5 s window), on the push line */
-static struct { u64 inval_n, inval_bytes, clean_n, clean_bytes; } coh_stats;
+static struct {
+	u64 inval_n, inval_bytes, clean_n, clean_bytes;
+} coh_stats;
 
-static struct tgm_coh **coh_slot(u64 pa)   /* coh_lock held: the link that points at pa's entry, or the chain's end */
+static struct tgm_coh **
+coh_slot(u64 pa) /* coh_lock held: the link that points at pa's entry, or the chain's end */
 {
-	struct tgm_coh **p = &coh_hash[((pa >> PAGE_SHIFT) ^ (pa >> (PAGE_SHIFT + 8))) & (TGM_COH_BUCKETS - 1)];
+	struct tgm_coh **p =
+		&coh_hash[((pa >> PAGE_SHIFT) ^ (pa >> (PAGE_SHIFT + 8))) & (TGM_COH_BUCKETS - 1)];
 	while (*p && (*p)->pa != pa)
 		p = &(*p)->next;
 	return p;
@@ -936,7 +1030,8 @@ struct tgm_coh *tgm_coherency_add(u64 pa, const u64 *pas, u32 npages, int writab
 	mutex_lock(&coh_lock);
 	p = coh_slot(pa);
 	c = *p;
-	if (c && c->refs && c->npages >= npages && !memcmp(c->pas, pas, (size_t)npages * sizeof(u64)))
+	if (c && c->refs && c->npages >= npages &&
+	    !memcmp(c->pas, pas, (size_t)npages * sizeof(u64)))
 		*clean = 1;
 	if (c && npages > c->npages) {
 		/* a larger import of the same surface: keep its page list, so the hooks reach every page either imports */
@@ -1004,7 +1099,9 @@ u64 tgm_coherency_read_lock(u64 pa)
 	mutex_lock(&coh_lock);
 	c = *coh_slot(pa);
 	if (c && __atomic_exchange_n(&c->gpu_dirty, 0, __ATOMIC_ACQ_REL)) {
-		tgm_cpu_clean_pages(c->pas, c->npages);   /* clean+invalidate: no dirty CPU line survives either */
+		tgm_cpu_clean_pages(
+			c->pas,
+			c->npages); /* clean+invalidate: no dirty CPU line survives either */
 		bytes = (u64)c->npages << PAGE_SHIFT;
 		coh_stats.inval_n++;
 		coh_stats.inval_bytes += bytes;
@@ -1035,9 +1132,18 @@ u64 tgm_coherency_write_unlock(u64 pa)
 	return bytes;
 }
 
-uint32_t tgm_chan_submitted(struct tgm_chan *chan) { return chan->submitted; }
-uint32_t tgm_chan_completed(struct tgm_chan *chan) { return READ_ONCE(*chan->fence_cpu); }
-uint32_t tgm_chan_error(struct tgm_chan *chan) { return chan->error; }
+uint32_t tgm_chan_submitted(struct tgm_chan *chan)
+{
+	return chan->submitted;
+}
+uint32_t tgm_chan_completed(struct tgm_chan *chan)
+{
+	return READ_ONCE(*chan->fence_cpu);
+}
+uint32_t tgm_chan_error(struct tgm_chan *chan)
+{
+	return chan->error;
+}
 
 /* One line of what the GPU is doing about a channel: owner, hardware channel id, error, completed/submitted fence and
  * how long ago the last one was kicked; GPFIFO GET/PUT as the host sees them (USERD 0x88/0x8c) and the PUT the kernel
@@ -1052,22 +1158,27 @@ static void chan_describe(struct tgm_chan *chan, char *buf, unsigned int len)
 	u32 mc_int, mc_err, mc_adr;
 
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
-	scnprintf(buf, len, "%s ch %u err %u fence %u/%u kicked %llu ms ago, gp %u/%u (put %u), PGRAPH %08x ENG0 %08x, "
+	scnprintf(buf, len,
+		  "%s ch %u err %u fence %u/%u kicked %llu ms ago, gp %u/%u (put %u), PGRAPH %08x "
+		  "ENG0 %08x, "
 		  "PBDMA0 %08x ch %u mthd %08x data %08x, PMC %08x, MC %08x err %08x at %08x",
-		  chan->owner[0] ? chan->owner : "?", chan->chid, chan->error, tgm_chan_completed(chan), chan->submitted,
-		  chan->submit_ns ? (nvxnu_nanotime() - chan->submit_ns) / 1000000 : 0ULL, userd ? userd[0x88 / 4] : 0,
-		  userd ? userd[0x8c / 4] : 0, chan->chan.gpfifo.cur, nvkm_rd32(device, 0x400700),
-		  nvkm_rd32(device, 0x002640), nvkm_rd32(device, 0x003080), nvkm_rd32(device, 0x040120) & 0xfff,
-		  nvkm_rd32(device, 0x0400c0), nvkm_rd32(device, 0x0400c4), nvkm_rd32(device, 0x000100), mc_int, mc_err,
-		  mc_adr);
+		  chan->owner[0] ? chan->owner : "?", chan->chid, chan->error,
+		  tgm_chan_completed(chan), chan->submitted,
+		  chan->submit_ns ? (nvxnu_nanotime() - chan->submit_ns) / 1000000 : 0ULL,
+		  userd ? userd[0x88 / 4] : 0, userd ? userd[0x8c / 4] : 0, chan->chan.gpfifo.cur,
+		  nvkm_rd32(device, 0x400700), nvkm_rd32(device, 0x002640),
+		  nvkm_rd32(device, 0x003080), nvkm_rd32(device, 0x040120) & 0xfff,
+		  nvkm_rd32(device, 0x0400c0), nvkm_rd32(device, 0x0400c4),
+		  nvkm_rd32(device, 0x000100), mc_int, mc_err, mc_adr);
 }
 
 void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)
 {
 	char state[320];
 	chan_describe(chan, state, sizeof(state));
-	nvxnu_panic("tegra-gm20b: %s: fence %u still pending after %llu ms and no GPU error reported: %s", who, seqno,
-		    waited_ns / 1000000, state);
+	nvxnu_panic("tegra-gm20b: %s: fence %u still pending after %llu ms and no GPU error "
+		    "reported: %s",
+		    who, seqno, waited_ns / 1000000, state);
 }
 
 #define TGM_HANG_NS (2 * NSEC_PER_SEC)
@@ -1107,14 +1218,15 @@ int tgm_all_clients(void)
 {
 	static int on = -1;
 	long long v = 0;
-	if (on < 0)   /* on by default since 10-31 (every process that asks gets a device); tegra-gpu-all-clients=0 turns it off */
+	if (on <
+	    0) /* on by default since 10-31 (every process that asks gets a device); tegra-gpu-all-clients=0 turns it off */
 		on = nvxnu_bootarg_int("tegra-gpu-all-clients", &v) ? v != 0 : 1;
 	return on;
 }
 
 static struct {
-	void *deadline;           /* iso_deadline */
-	u64 until;                /* end of the recovery window, 0: none (live_lock) */
+	void *deadline; /* iso_deadline */
+	u64 until;      /* end of the recovery window, 0: none (live_lock) */
 } iso;
 
 /* CONTRACT.md error codes: 1 MMU fault, 2 GR exception, 3 host error */
@@ -1136,10 +1248,12 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	const char *report = chan->fault[0] ? chan->fault : nvxnu_gpu_errors();
 	char state[320];
 
-	(void)repv; (void)repc;
+	(void)repv;
+	(void)repc;
 	if (gpu.stage >= 3 && (chan->critical || !tgm_all_clients())) {
 		chan_describe(chan, state, sizeof(state));
-		nvxnu_panic("tegra-gm20b: channel killed by nvkm recovery after \"%s\": %s", nvxnu_gpu_errors(), state);
+		nvxnu_panic("tegra-gm20b: channel killed by nvkm recovery after \"%s\": %s",
+			    nvxnu_gpu_errors(), state);
 	}
 	if (gpu.stage < 3) {
 		if (!chan->error)
@@ -1150,8 +1264,8 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	WRITE_ONCE(chan->error, fault_code(report));
 	WRITE_ONCE(*chan->fence_cpu, chan->submitted);
 	__asm__ volatile("dsb sy" ::: "memory");
-	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n", chan->owner, chan->chid,
-		  report);
+	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n",
+		  chan->owner, chan->chid, report);
 	nvxnu_wake();
 	return NVIF_EVENT_DROP;
 }
@@ -1159,7 +1273,7 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 /* The next channel id a report names after p ("channel N [" or "ch N"), -2 when there is none; -1 is nvkm's "unknown". */
 static const char *next_chid(const char *p, int *chid)
 {
-	static const char *const tags[] = { "channel ", "ch " };
+	static const char *const tags[] = {"channel ", "ch "};
 	const char *best = NULL, *at;
 	unsigned int i, len = 0;
 
@@ -1194,12 +1308,14 @@ static int chan_marked(u32 chid, int ctxsw_timeout)
 	bool cgid;
 	int id, marked = 0;
 
-	nvkm_runl_foreach(runl, gpu.device->fifo) {
+	nvkm_runl_foreach(runl, gpu.device->fifo)
+	{
 		nchan = nvkm_runl_chan_get_chid(runl, chid, &flags);
 		if (!nchan)
 			continue;
 		marked = atomic_read(&nchan->cgrp->rc) != NVKM_CGRP_RC_NONE;
-		nvkm_runl_foreach_engn_cond(engn, runl, ctxsw_timeout && engn->func->cxid) {
+		nvkm_runl_foreach_engn_cond(engn, runl, ctxsw_timeout && engn->func->cxid)
+		{
 			id = engn->func->cxid(engn, &cgid);
 			marked |= id >= 0 && id == (cgid ? nchan->cgrp->id : nchan->id);
 		}
@@ -1215,10 +1331,11 @@ static void chan_recover(u32 chid)
 	struct nvkm_chan *nchan;
 	unsigned long flags;
 
-	nvkm_runl_foreach(runl, gpu.device->fifo) {
+	nvkm_runl_foreach(runl, gpu.device->fifo)
+	{
 		nchan = nvkm_runl_chan_get_chid(runl, chid, &flags);
 		if (nchan) {
-			nvkm_runl_rc_cgrp(nchan->cgrp);   /* a no-op if nvkm already started it */
+			nvkm_runl_rc_cgrp(nchan->cgrp); /* a no-op if nvkm already started it */
 			nvkm_chan_put(&nchan, flags);
 			return;
 		}
@@ -1238,9 +1355,10 @@ static int errors_contained(const char *errors)
 	mutex_lock(&live_lock);
 	while (contained && (p = next_chid(p, &chid))) {
 		if (chid == -2)
-			continue;   /* "ch" with no number: not an attribution */
+			continue; /* "ch" with no number: not an attribution */
 		found = NULL;
-		list_for_each_entry(chan, &live_chans, live) {
+		list_for_each_entry(chan, &live_chans, live)
+		{
 			if ((int)chan->chid == chid) {
 				found = chan;
 				break;
@@ -1254,7 +1372,8 @@ static int errors_contained(const char *errors)
 			named[n++] = found;
 	}
 	/* channels nvkm put into recovery itself, or the one a context-switch timeout is about; not yet dead or isolated */
-	list_for_each_entry(chan, &live_chans, live) {
+	list_for_each_entry(chan, &live_chans, live)
+	{
 		if (!contained || chan->error || chan->isolating ||
 		    !chan_marked(chan->chid, strstr(errors, "CTXSW_TIMEOUT") != NULL))
 			continue;
@@ -1291,11 +1410,15 @@ static void iso_deadline(void *arg)
 
 	(void)arg;
 	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live) {
+	list_for_each_entry(chan, &live_chans, live)
+	{
 		if (chan->isolating && !READ_ONCE(chan->error)) {
 			chan_describe(chan, state, sizeof(state));
-			nvxnu_panic("tegra-gm20b: GPU error in %s not recovered %llu ms after it (\"%s\"): %s", chan->owner,
-				    (unsigned long long)(TGM_ISOLATE_NS / NSEC_PER_MSEC), chan->fault, state);
+			nvxnu_panic("tegra-gm20b: GPU error in %s not recovered %llu ms after it "
+				    "(\"%s\"): %s",
+				    chan->owner,
+				    (unsigned long long)(TGM_ISOLATE_NS / NSEC_PER_MSEC),
+				    chan->fault, state);
 		}
 	}
 	if (iso.until && nvxnu_nanotime() >= iso.until)
@@ -1313,23 +1436,25 @@ static void iso_deadline(void *arg)
  * line prints ("PTIMER xR"). */
 #define STATS_WINDOW_NS (5 * NSEC_PER_SEC)
 static struct {
-	int on;                   /* -1 until the boot-arg is read */
-	u64 since;                /* start of the current window, 0 before the first submission */
-	u64 cal_ptimer;           /* PTIMER at `since`: its rate over the window */
+	int on;         /* -1 until the boot-arg is read */
+	u64 since;      /* start of the current window, 0 before the first submission */
+	u64 cal_ptimer; /* PTIMER at `since`: its rate over the window */
 	u32 submits, fences, imports, timed;
-	u32 ordered, idle, late;  /* present order: submits held behind a copy; offers that found no user work pending; of
+	u32 ordered, idle,
+		late; /* present order: submits held behind a copy; offers that found no user work pending; of
 				   * those, the ones a user submit followed while the copy was still pending */
-	u32 writer;               /* presents that waited for their surface's importers only */
-	u32 allocs;               /* BoAllocs (r3-hackios #13: measure the churn before caching freed BOs) */
+	u32 writer; /* presents that waited for their surface's importers only */
+	u32 allocs; /* BoAllocs (r3-hackios #13: measure the churn before caching freed BOs) */
 	u64 alloc_bytes, alloc_ns;
-	u64 lat_sum, lat_max;     /* user submissions only */
-	u64 queue_sum, queue_max, exec_sum, exec_max;   /* GPU-side, from the stamps (PTIMER units) */
-	u32 copies, gaps;         /* presents stamped: the copy's own GPU time; the GPU's gap from the end of the last user
+	u64 lat_sum, lat_max;                         /* user submissions only */
+	u64 queue_sum, queue_max, exec_sum, exec_max; /* GPU-side, from the stamps (PTIMER units) */
+	u32 copies,
+		gaps; /* presents stamped: the copy's own GPU time; the GPU's gap from the end of the last user
 				   * work the copy waited for to the copy's start (scheduling and semaphore acquire latency) */
-	u64 copy_sum, copy_max, gap_sum, gap_max;       /* PTIMER units */
-	s64 live_bytes;           /* host imports */
+	u64 copy_sum, copy_max, gap_sum, gap_max; /* PTIMER units */
+	s64 live_bytes;                           /* host imports */
 	s32 live;
-} stats = { .on = -1 };
+} stats = {.on = -1};
 
 static int stats_on(void)
 {
@@ -1339,13 +1464,17 @@ static int stats_on(void)
 	return stats.on;
 }
 
-int tgm_stats_on(void) { return stats_on(); }
+int tgm_stats_on(void)
+{
+	return stats_on();
+}
 
 static void stats_add(u64 *sum, u64 *max, u64 v)
 {
 	u64 m = __atomic_load_n(max, __ATOMIC_RELAXED);
 	__atomic_fetch_add(sum, v, __ATOMIC_RELAXED);
-	while (v > m && !__atomic_compare_exchange_n(max, &m, v, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+	while (v > m &&
+	       !__atomic_compare_exchange_n(max, &m, v, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
 		;
 }
 
@@ -1358,10 +1487,14 @@ static void stats_add(u64 *sum, u64 *max, u64 v)
 static struct {
 	u64 cached_n, cached_bytes, cached_ns, cached_max, cached_phase[TGM_PHASES];
 	u64 pool_n, pool_bytes, pool_ns, pool_max, small_n;
-	u64 import_n, import_bytes, import_ns, import_max, import_phase[TGM_PHASES], import_ro, import_skipped, reimports;
-	u64 map_n, map_pages, map_ns, map_max, unmap_n, unmap_ns, free_n, free_ns, free_max, prefault_n, prefault_bytes;
+	u64 import_n, import_bytes, import_ns, import_max, import_phase[TGM_PHASES], import_ro,
+		import_skipped, reimports;
+	u64 map_n, map_pages, map_ns, map_max, unmap_n, unmap_ns, free_n, free_ns, free_max,
+		prefault_n, prefault_bytes;
 } mstat;
-static struct { u64 pa, ns; } recent[REIMPORT_RING];
+static struct {
+	u64 pa, ns;
+} recent[REIMPORT_RING];
 static u32 recent_next;
 static DEFINE_MUTEX(recent_lock);
 
@@ -1378,10 +1511,11 @@ void tgm_stats_import(int64_t bytes, uint64_t pa)
 	now = nvxnu_nanotime();
 	mutex_lock(&recent_lock);
 	if (bytes < 0) {
-		recent[recent_next++ % REIMPORT_RING] = (typeof(recent[0])){ pa, now };
+		recent[recent_next++ % REIMPORT_RING] = (typeof(recent[0])){pa, now};
 	} else {
 		for (i = 0; i < REIMPORT_RING; i++) {
-			if (recent[i].pa == pa && recent[i].ns && now - recent[i].ns < REIMPORT_NS) {
+			if (recent[i].pa == pa && recent[i].ns &&
+			    now - recent[i].ns < REIMPORT_NS) {
 				recent[i].ns = 0;
 				mstat.reimports++;
 				break;
@@ -1414,7 +1548,8 @@ void tgm_stats_bo_alloc(uint64_t bytes, int pool, uint64_t ns, const uint64_t ph
 		__atomic_fetch_add(&mstat.cached_phase[i], phase_ns[i], __ATOMIC_RELAXED);
 }
 
-void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns, const uint64_t phase_ns[TGM_PHASES])
+void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
+			 const uint64_t phase_ns[TGM_PHASES])
 {
 	int i;
 	if (!stats_on())
@@ -1468,7 +1603,8 @@ static void stats_mem(u64 ms)
 	u64 v[sizeof(mstat) / sizeof(u64)];
 	struct nvxnu_faults f;
 	static struct nvxnu_faults last;
-	static char line[560];   /* one caller at a time: the submission that won the window (stats_tick) */
+	static char line
+		[560]; /* one caller at a time: the submission that won the window (stats_tick) */
 	char user[96] = "";
 	unsigned int k;
 #define MS(field) v[offsetof(typeof(mstat), field) / sizeof(u64)]
@@ -1480,27 +1616,42 @@ static void stats_mem(u64 ms)
 	if (!last.faults)
 		last = f;
 	if (f.user_n > last.user_n)
-		scnprintf(user, sizeof(user), "; user faults %llu mean %llu us max %llu us", f.user_n - last.user_n,
-			  (f.user_ns - last.user_ns) / (f.user_n - last.user_n) / 1000, f.user_max_ns / 1000);
+		scnprintf(user, sizeof(user), "; user faults %llu mean %llu us max %llu us",
+			  f.user_n - last.user_n,
+			  (f.user_ns - last.user_ns) / (f.user_n - last.user_n) / 1000,
+			  f.user_max_ns / 1000);
 	if (MS(cached_n) || MS(pool_n) || MS(free_n)) {
-		scnprintf(line, sizeof(line), "BoAlloc cached %llu (%llu KiB) mean %llu us max %llu us [alloc+wire %llu, clean %llu, "
-			  "pages %llu, nvkm %llu us], pool %llu (%llu KiB) mean %llu us max %llu us, %llu of <= 64 KiB; BoFree %llu "
-			  "mean %llu us max %llu us; %llu prefaulted maps (%llu KiB); faults %llu/s (%llu/s zero-fill)%s",
-			  MS(cached_n), MS(cached_bytes) >> 10, MEAN_US(MS(cached_ns), MS(cached_n)), US(MS(cached_max)),
-			  US(MS(cached_phase[0])), US(MS(cached_phase[1])), US(MS(cached_phase[2])), US(MS(cached_phase[3])),
-			  MS(pool_n), MS(pool_bytes) >> 10, MEAN_US(MS(pool_ns), MS(pool_n)), US(MS(pool_max)), MS(small_n),
-			  MS(free_n), MEAN_US(MS(free_ns), MS(free_n)), US(MS(free_max)), MS(prefault_n), MS(prefault_bytes) >> 10,
-			  (f.faults - last.faults) * 1000 / (ms ? ms : 1), (f.zero_fill - last.zero_fill) * 1000 / (ms ? ms : 1), user);
+		scnprintf(line, sizeof(line),
+			  "BoAlloc cached %llu (%llu KiB) mean %llu us max %llu us [alloc+wire "
+			  "%llu, clean %llu, "
+			  "pages %llu, nvkm %llu us], pool %llu (%llu KiB) mean %llu us max %llu "
+			  "us, %llu of <= 64 KiB; BoFree %llu "
+			  "mean %llu us max %llu us; %llu prefaulted maps (%llu KiB); faults "
+			  "%llu/s (%llu/s zero-fill)%s",
+			  MS(cached_n), MS(cached_bytes) >> 10,
+			  MEAN_US(MS(cached_ns), MS(cached_n)), US(MS(cached_max)),
+			  US(MS(cached_phase[0])), US(MS(cached_phase[1])), US(MS(cached_phase[2])),
+			  US(MS(cached_phase[3])), MS(pool_n), MS(pool_bytes) >> 10,
+			  MEAN_US(MS(pool_ns), MS(pool_n)), US(MS(pool_max)), MS(small_n),
+			  MS(free_n), MEAN_US(MS(free_ns), MS(free_n)), US(MS(free_max)),
+			  MS(prefault_n), MS(prefault_bytes) >> 10,
+			  (f.faults - last.faults) * 1000 / (ms ? ms : 1),
+			  (f.zero_fill - last.zero_fill) * 1000 / (ms ? ms : 1), user);
 		nvxnu_log("tegra-gm20b: mem %s\n", line);
 	}
 	if (MS(import_n) || MS(map_n) || MS(unmap_n)) {
-		scnprintf(line, sizeof(line), "BoImport %llu (%llu KiB, %llu read-only, %llu clean skipped, %llu re-imports) mean "
-			  "%llu us max %llu us [wire %llu, pages %llu, nvkm %llu, clean %llu us]; VmBind %llu maps (%llu pages) mean "
+		scnprintf(line, sizeof(line),
+			  "BoImport %llu (%llu KiB, %llu read-only, %llu clean skipped, %llu "
+			  "re-imports) mean "
+			  "%llu us max %llu us [wire %llu, pages %llu, nvkm %llu, clean %llu us]; "
+			  "VmBind %llu maps (%llu pages) mean "
 			  "%llu us max %llu us, %llu unmaps %llu us",
-			  MS(import_n), MS(import_bytes) >> 10, MS(import_ro), MS(import_skipped), MS(reimports),
-			  MEAN_US(MS(import_ns), MS(import_n)), US(MS(import_max)), US(MS(import_phase[0])),
-			  US(MS(import_phase[1])), US(MS(import_phase[2])), US(MS(import_phase[3])), MS(map_n), MS(map_pages),
-			  MEAN_US(MS(map_ns), MS(map_n)), US(MS(map_max)), MS(unmap_n), US(MS(unmap_ns)));
+			  MS(import_n), MS(import_bytes) >> 10, MS(import_ro), MS(import_skipped),
+			  MS(reimports), MEAN_US(MS(import_ns), MS(import_n)), US(MS(import_max)),
+			  US(MS(import_phase[0])), US(MS(import_phase[1])), US(MS(import_phase[2])),
+			  US(MS(import_phase[3])), MS(map_n), MS(map_pages),
+			  MEAN_US(MS(map_ns), MS(map_n)), US(MS(map_max)), MS(unmap_n),
+			  US(MS(unmap_ns)));
 		nvxnu_log("tegra-gm20b: mem2 %s\n", line);
 	}
 	last = f;
@@ -1511,12 +1662,14 @@ static void stats_mem(u64 ms)
 
 static volatile struct tgm_stamps *chan_stamps(struct tgm_chan *chan, u32 seqno)
 {
-	return (volatile struct tgm_stamps *)((u8 *)chan->ring + CHAN_STAMPS) + seqno % CHAN_NSTAMPS;
+	return (volatile struct tgm_stamps *)((u8 *)chan->ring + CHAN_STAMPS) +
+	       seqno % CHAN_NSTAMPS;
 }
 
 static u64 chan_stamps_va(struct tgm_chan *chan, u32 seqno)
 {
-	return chan->ring_va + CHAN_STAMPS + (u64)(seqno % CHAN_NSTAMPS) * sizeof(struct tgm_stamps);
+	return chan->ring_va + CHAN_STAMPS +
+	       (u64)(seqno % CHAN_NSTAMPS) * sizeof(struct tgm_stamps);
 }
 
 /* Submit-to-fence latency (CPU clock), seen from the fence's nonstall interrupt (every channel's handler runs on each
@@ -1537,11 +1690,12 @@ static void stats_fences(struct tgm_chan *chan)
 		i = (s + 1) % CHAN_NSTAMPS;
 		if (!chan->kernel) {
 			__atomic_fetch_add(&stats.fences, 1, __ATOMIC_RELAXED);
-			stats_add(&stats.lat_sum, &stats.lat_max, now - READ_ONCE(chan->stat_sub_ns[i]));
+			stats_add(&stats.lat_sum, &stats.lat_max,
+				  now - READ_ONCE(chan->stat_sub_ns[i]));
 		}
 		st = chan_stamps(chan, s + 1);
 		if (st->start.payload != s + 1 || st->end.payload != s + 1)
-			continue;   /* overwritten by a later submission, or not stamped */
+			continue; /* overwritten by a later submission, or not stamped */
 		start = st->start.ns;
 		end = st->end.ns;
 		if (chan->kernel) {
@@ -1554,7 +1708,8 @@ static void stats_fences(struct tgm_chan *chan)
 			continue;
 		}
 		__atomic_fetch_add(&stats.timed, 1, __ATOMIC_RELAXED);
-		stats_add(&stats.queue_sum, &stats.queue_max, start - READ_ONCE(chan->stat_sub_ptimer[i]));
+		stats_add(&stats.queue_sum, &stats.queue_max,
+			  start - READ_ONCE(chan->stat_sub_ptimer[i]));
 		stats_add(&stats.exec_sum, &stats.exec_max, end - start);
 	}
 	chan->stat_done = done;
@@ -1565,20 +1720,24 @@ static void present_stats(u32 *presents, u64 *sum, u64 *max);
 /* Run by each submission: the first one after a window's end logs it. */
 static void stats_tick(void)
 {
-	u64 now = nvxnu_nanotime(), since = __atomic_load_n(&stats.since, __ATOMIC_RELAXED), ms, sum, max, qs, qm, es, em, ps, pm;
-	u32 submits, fences, imports, timed, presents, ordered, idle, late, writer, allocs, mc_int, mc_err, mc_adr, copies, gaps;
+	u64 now = nvxnu_nanotime(), since = __atomic_load_n(&stats.since, __ATOMIC_RELAXED), ms,
+	    sum, max, qs, qm, es, em, ps, pm;
+	u32 submits, fences, imports, timed, presents, ordered, idle, late, writer, allocs, mc_int,
+		mc_err, mc_adr, copies, gaps;
 	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, l2s, l2m, busy;
 	u32 l2n;
 	char line[640];
 
 	__atomic_fetch_add(&stats.submits, 1, __ATOMIC_RELAXED);
 	if (!since) {
-		if (__atomic_compare_exchange_n(&stats.since, &since, now, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+		if (__atomic_compare_exchange_n(&stats.since, &since, now, false, __ATOMIC_RELAXED,
+						__ATOMIC_RELAXED))
 			stats.cal_ptimer = nvkm_timer_read(gpu.device->timer);
 		return;
 	}
 	if (now - since < STATS_WINDOW_NS ||
-	    !__atomic_compare_exchange_n(&stats.since, &since, now, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+	    !__atomic_compare_exchange_n(&stats.since, &since, now, false, __ATOMIC_RELAXED,
+					 __ATOMIC_RELAXED))
 		return;
 	ms = (now - since) / 1000000;
 	/* nanoseconds per PTIMER unit over this window, 16.16 fixed point; the window's stamps were taken within it */
@@ -1622,23 +1781,36 @@ static void stats_tick(void)
 	busy = PT_NS(es + cs) * 100 / (now - since);
 	/* formatted here and logged as one string: os_log drops a message whose scalar arguments outgrow its 256-byte buffer
 	 * (libkern/os/log.h OS_LOG_BUFFER_MAX_SIZE), which a string argument does not count against */
-	scnprintf(line, sizeof(line), "%llu ms: %u submits (%llu/s), fence latency mean %llu us max %llu us (%u), GPU queue "
-		  "mean %llu us max %llu us, exec mean %llu us max %llu us (%u stamped), busy %llu%% (PTIMER x%llu.%03llu), "
-		  "L2 %s (invalidate mean %llu us max %llu us), %u presents (%u writer-only), offer to done mean %llu us max "
+	scnprintf(line, sizeof(line),
+		  "%llu ms: %u submits (%llu/s), fence latency mean %llu us max %llu us (%u), GPU "
+		  "queue "
+		  "mean %llu us max %llu us, exec mean %llu us max %llu us (%u stamped), busy "
+		  "%llu%% (PTIMER x%llu.%03llu), "
+		  "L2 %s (invalidate mean %llu us max %llu us), %u presents (%u writer-only), "
+		  "offer to done mean %llu us max "
 		  "%llu us",
-		  ms, submits, submits * 1000ULL / (ms ? ms : 1), fences ? sum / fences / 1000 : 0, max / 1000, fences,
-		  timed ? PT_NS(qs) / timed / 1000 : 0, PT_NS(qm) / 1000, timed ? PT_NS(es) / timed / 1000 : 0,
-		  PT_NS(em) / 1000, timed, busy, rate >> 16, ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile",
-		  l2n ? l2s / l2n / 1000 : 0, l2m / 1000, presents, writer, presents ? ps / presents / 1000 : 0, pm / 1000);
+		  ms, submits, submits * 1000ULL / (ms ? ms : 1), fences ? sum / fences / 1000 : 0,
+		  max / 1000, fences, timed ? PT_NS(qs) / timed / 1000 : 0, PT_NS(qm) / 1000,
+		  timed ? PT_NS(es) / timed / 1000 : 0, PT_NS(em) / 1000, timed, busy, rate >> 16,
+		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile",
+		  l2n ? l2s / l2n / 1000 : 0, l2m / 1000, presents, writer,
+		  presents ? ps / presents / 1000 : 0, pm / 1000);
 	nvxnu_log("tegra-gm20b: stats %s\n", line);
-	scnprintf(line, sizeof(line), "copy mean %llu us max %llu us (%u), after user work mean %llu us max %llu us (%u); "
-		  "order %s: %u submits behind a copy, %u offers idle (%u then a submit); %u imports (%llu/s), %lld KiB live in "
-		  "%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB, MC %08x err %08x at %08x",
-		  copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies, gaps ? PT_NS(gs) / gaps / 1000 : 0,
-		  PT_NS(gm) / 1000, gaps, present_order_on() ? "on" : "off", ordered, idle, late,
-		  imports, imports * 1000ULL / (ms ? ms : 1), (long long)(__atomic_load_n(&stats.live_bytes, __ATOMIC_RELAXED) >> 10),
-		  __atomic_load_n(&stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10, ans / 1000,
-		  nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20, mc_int, mc_err, mc_adr);
+	scnprintf(
+		line, sizeof(line),
+		"copy mean %llu us max %llu us (%u), after user work mean %llu us max %llu us "
+		"(%u); "
+		"order %s: %u submits behind a copy, %u offers idle (%u then a submit); %u imports "
+		"(%llu/s), %lld KiB live in "
+		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB, MC %08x err %08x at %08x",
+		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
+		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps,
+		present_order_on() ? "on" : "off", ordered, idle, late, imports,
+		imports * 1000ULL / (ms ? ms : 1),
+		(long long)(__atomic_load_n(&stats.live_bytes, __ATOMIC_RELAXED) >> 10),
+		__atomic_load_n(&stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10, ans / 1000,
+		nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20, mc_int,
+		mc_err, mc_adr);
 	nvxnu_log("tegra-gm20b: stats2 %s\n", line);
 	stats_mem(ms);
 	/* The lazy IOSurface-coherency hooks' work this window (the XNU lock/unlock hook; tgm_coherency_*): GPU-written imports
@@ -1647,11 +1819,15 @@ static void stats_tick(void)
 	{
 		u64 in, ib, cn, cb;
 		mutex_lock(&coh_lock);
-		in = coh_stats.inval_n; ib = coh_stats.inval_bytes; cn = coh_stats.clean_n; cb = coh_stats.clean_bytes;
-		coh_stats = (typeof(coh_stats)){ 0 };
+		in = coh_stats.inval_n;
+		ib = coh_stats.inval_bytes;
+		cn = coh_stats.clean_n;
+		cb = coh_stats.clean_bytes;
+		coh_stats = (typeof(coh_stats)){0};
 		mutex_unlock(&coh_lock);
 		if (in || cn)
-			nvxnu_log("tegra-gm20b: coherency %llu read-lock invalidations (%llu KiB), %llu write-unlock cleans (%llu KiB)\n",
+			nvxnu_log("tegra-gm20b: coherency %llu read-lock invalidations (%llu KiB), "
+				  "%llu write-unlock cleans (%llu KiB)\n",
 				  in, ib >> 10, cn, cb >> 10);
 	}
 #undef PT_NS
@@ -1663,7 +1839,8 @@ static void present_fenced(struct tgm_chan *chan);
 static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 {
 	struct tgm_chan *chan = container_of(event, struct tgm_chan, nonstall);
-	(void)repv; (void)repc;
+	(void)repv;
+	(void)repc;
 	if (stats_on())
 		stats_fences(chan);
 	if (chan->kernel)
@@ -1703,7 +1880,8 @@ static void chan_free(struct tgm_chan *chan)
 #define RAMFC_TIMESLICE 0xf8
 #define RAMFC_TIMESLICE_HIGH 0x10005080
 
-static int compositor_timeslice_on(void)   /* tegra-gpu-compositor-timeslice=0 keeps nvkm's default for all */
+static int
+compositor_timeslice_on(void) /* tegra-gpu-compositor-timeslice=0 keeps nvkm's default for all */
 {
 	static int on = -1;
 	long long v = 1;
@@ -1720,7 +1898,8 @@ static void chan_timeslice(u32 chid, u32 value)
 	struct nvkm_chan *nchan;
 	unsigned long flags;
 
-	nvkm_runl_foreach(runl, gpu.device->fifo) {
+	nvkm_runl_foreach(runl, gpu.device->fifo)
+	{
 		nchan = nvkm_runl_chan_get_chid(runl, chid, &flags);
 		if (nchan) {
 			nvkm_kmap(nchan->inst);
@@ -1732,11 +1911,11 @@ static void chan_timeslice(u32 chid, u32 value)
 	}
 }
 
-int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence_gpu_va, const char *owner, int critical,
-		 struct tgm_chan **pchan)
+int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence_gpu_va,
+		 const char *owner, int critical, struct tgm_chan **pchan)
 {
-	static const u32 classes[5] = { MAXWELL_B, MAXWELL_COMPUTE_B, KEPLER_INLINE_TO_MEMORY_B, FERMI_TWOD_A,
-					MAXWELL_DMA_COPY_A };
+	static const u32 classes[5] = {MAXWELL_B, MAXWELL_COMPUTE_B, KEPLER_INLINE_TO_MEMORY_B,
+				       FERMI_TWOD_A, MAXWELL_DMA_COPY_A};
 	union {
 		struct nvif_chan_v0 chan;
 		u8 raw[sizeof(struct nvif_chan_v0) + 32];
@@ -1746,7 +1925,7 @@ int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence
 		u8 raw[sizeof(struct nvif_event_v0) + sizeof(struct nvif_chan_event_v0)];
 	} kargs = {};
 	struct nvif_chan_event_v0 *host = (struct nvif_chan_event_v0 *)kargs.ev.data;
-	struct gf100_vmm_map_v0 margs = { .version = 0, .vol = 1 };
+	struct gf100_vmm_map_v0 margs = {.version = 0, .vol = 1};
 	struct nvif_push *push;
 	struct tgm_chan *chan;
 	u64 runm;
@@ -1766,7 +1945,8 @@ int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence
 	 * acquire on the old seqno (the GPU present) is never left waiting for a word that went back to 0 */
 	chan->submitted = READ_ONCE(*fence_cpu);
 	chan->stat_done = chan->submitted;
-	chan->ring = dma_alloc_attrs(&gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL, DMA_ATTR_WRITE_COMBINE);
+	chan->ring = dma_alloc_attrs(&gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL,
+				     DMA_ATTR_WRITE_COMBINE);
 	chan->ring_pas = kcalloc(npages, sizeof(u64), GFP_KERNEL);
 	chan->ring_mem = kzalloc(sizeof(*chan->ring_mem), GFP_KERNEL);
 	if (!chan->ring || !chan->ring_pas || !chan->ring_mem) {
@@ -1778,19 +1958,22 @@ int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence
 
 	mutex_lock(&gpu.lock);
 	{
-		struct nvif_mem_ram_v0 rargs = { .version = 0, .dma = (dma_addr_t *)chan->ring_pas };
+		struct nvif_mem_ram_v0 rargs = {.version = 0, .dma = (dma_addr_t *)chan->ring_pas};
 		chan->ring_mem->bytes = CHAN_BYTES;
-		ret = nvif_mem_ctor_type(&gpu.mmu, "chanRing", NVIF_CLASS_MEM_GF100, gpu.mem_type, PAGE_SHIFT,
-					 CHAN_BYTES, &rargs, sizeof(rargs), &chan->ring_mem->mem);
+		ret = nvif_mem_ctor_type(&gpu.mmu, "chanRing", NVIF_CLASS_MEM_GF100, gpu.mem_type,
+					 PAGE_SHIFT, CHAN_BYTES, &rargs, sizeof(rargs),
+					 &chan->ring_mem->mem);
 		if (ret) {
 			kfree(chan->ring_mem);
 			chan->ring_mem = NULL;
 		}
 	}
 	if (!ret)
-		ret = nvif_vmm_get(&vm->vmm, ADDR, false, PAGE_SHIFT, 0, CHAN_BYTES, &chan->ring_vma);
+		ret = nvif_vmm_get(&vm->vmm, ADDR, false, PAGE_SHIFT, 0, CHAN_BYTES,
+				   &chan->ring_vma);
 	if (!ret) {
-		ret = nvif_vmm_map(&vm->vmm, chan->ring_vma.addr, CHAN_BYTES, &margs, sizeof(margs), &chan->ring_mem->mem, 0);
+		ret = nvif_vmm_map(&vm->vmm, chan->ring_vma.addr, CHAN_BYTES, &margs, sizeof(margs),
+				   &chan->ring_mem->mem, 0);
 		chan->ring_va = chan->ring_vma.addr;
 	}
 	if (ret)
@@ -1810,19 +1993,21 @@ int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence
 	args.chan.length = CHAN_GPFIFO_BYTES;
 	args.chan.huserd = 0;
 	args.chan.ouserd = 0;
-	snprintf((char *)args.chan.name, 32, "%s", chan->owner);   /* nvkm names it in its reports */
-	ret = nvif_object_ctor(&gpu.dev.object, "chan", 0, MAXWELL_CHANNEL_GPFIFO_A, &args, sizeof(args), &chan->user);
+	snprintf((char *)args.chan.name, 32, "%s", chan->owner); /* nvkm names it in its reports */
+	ret = nvif_object_ctor(&gpu.dev.object, "chan", 0, MAXWELL_CHANNEL_GPFIFO_A, &args,
+			       sizeof(args), &chan->user);
 	chan->chid = args.chan.chid;
 	if (!ret && critical && tgm_all_clients() && compositor_timeslice_on())
 		chan_timeslice(chan->chid, RAMFC_TIMESLICE_HIGH);
 	if (!ret)
-		ret = nvif_object_map(&chan->user, NULL, 0);   /* USERD (BAR1) for GP_PUT */
+		ret = nvif_object_map(&chan->user, NULL, 0); /* USERD (BAR1) for GP_PUT */
 	if (ret)
 		goto fail;
 
 	/* engine objects: these allocate the GR context (golden image on first use) and bind the CE */
 	for (i = 0; i < 5; i++) {
-		ret = nvif_object_ctor(&chan->user, "obj", 0x00010000 + i, classes[i], NULL, 0, &chan->obj[chan->nobj]);
+		ret = nvif_object_ctor(&chan->user, "obj", 0x00010000 + i, classes[i], NULL, 0,
+				       &chan->obj[chan->nobj]);
 		if (ret)
 			pr_err("class %04x on channel: %d\n", classes[i], ret);
 		else
@@ -1830,18 +2015,19 @@ int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence
 	}
 	host->version = 0;
 	host->type = NVIF_CHAN_EVENT_V0_KILLED;
-	ret = nvif_event_ctor(&chan->user, "chanKilled", args.chan.chid, chan_killed, false, &kargs.ev, sizeof(kargs),
-			      &chan->kill);
+	ret = nvif_event_ctor(&chan->user, "chanKilled", args.chan.chid, chan_killed, false,
+			      &kargs.ev, sizeof(kargs), &chan->kill);
 	if (!ret)
 		nvif_event_allow(&chan->kill);
 	/* nouveau_fence_context_new(): the fence's nonstall interrupt (uchan.c NVIF_CHAN_EVENT_V0_NON_STALL_INTR); its
 	 * allow sets PFIFO_INTR_EN_0 bit 31 (gf100_fifo_nonstall_allow). Without it, fences are still seen by polling. */
 	host->type = NVIF_CHAN_EVENT_V0_NON_STALL_INTR;
-	if (!nvif_event_ctor(&chan->user, "fenceNonStallIntr", args.chan.chid, chan_nonstall, false, &kargs.ev,
-			     sizeof(kargs), &chan->nonstall))
+	if (!nvif_event_ctor(&chan->user, "fenceNonStallIntr", args.chan.chid, chan_nonstall, false,
+			     &kargs.ev, sizeof(kargs), &chan->nonstall))
 		nvif_event_allow(&chan->nonstall);
-	ret = nvif_chan906f_ctor(&chan->chan, chan->user.map.ptr, (u8 *)chan->ring + CHAN_PUSH_BYTES,
-				 CHAN_GPFIFO_BYTES, chan->ring, chan->ring_va, CHAN_PUSH_BYTES,
+	ret = nvif_chan906f_ctor(&chan->chan, chan->user.map.ptr,
+				 (u8 *)chan->ring + CHAN_PUSH_BYTES, CHAN_GPFIFO_BYTES, chan->ring,
+				 chan->ring_va, CHAN_PUSH_BYTES,
 				 (u8 *)chan->ring + CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES,
 				 chan->ring_va + CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES);
 	mutex_unlock(&gpu.lock);
@@ -1885,7 +2071,8 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	end = nvxnu_nanotime() + NSEC_PER_SEC;
 	for (;;) {
 		u32 seq = nvxnu_wake_seq();
-		if (chan->error || (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0 || nvxnu_nanotime() >= end)
+		if (chan->error || (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0 ||
+		    nvxnu_nanotime() >= end)
 			break;
 		if (!nvxnu_idle(seq, end) && (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0)
 			nvxnu_wake_due(seq, "fence", chan->submitted);
@@ -1906,12 +2093,12 @@ void tgm_chan_del(struct tgm_chan **pchan)
  * Every connection's fence page (its channels' seqno words) is one page of a single pool range, so the GPU present's
  * address space maps all of them once and waits on any user channel with a semaphore acquire. Pages are handed out
  * round-robin and zeroed, so a page freed with an acquire still pending on it is not reused at once. */
-#define TGM_FENCE_PAGES 64   /* one per connection (TegraGM20BUserClient.cpp kMaxConnections) */
+#define TGM_FENCE_PAGES 64 /* one per connection (TegraGM20BUserClient.cpp kMaxConnections) */
 static struct {
 	void *va;
 	u64 pa;
-	u64 used;                 /* bitmap of pages in use */
-	u32 next;                 /* next one to try */
+	u64 used; /* bitmap of pages in use */
+	u32 next; /* next one to try */
 } fences;
 
 int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
@@ -1955,14 +2142,15 @@ void tgm_fence_page_put(volatile uint32_t *va)
  * every submission made so far on every live channel has completed (or its channel died), then clean+invalidate
  * [va, va + bytes) to the point of coherency. With no user channel it returns at once and touches no cache, so the CPU
  * renderer's path is unchanged. Returns 0, or -ETIMEDOUT after timeout_ns (the range is invalidated either way). */
-#define TGM_SYNC_MAX 512   /* 64 connections x 8 channels */
+#define TGM_SYNC_MAX 512 /* 64 connections x 8 channels */
 
 static int sync_done(u64 id, u32 seqno)
 {
 	struct tgm_chan *chan;
-	int done = 1;   /* a channel that is gone was drained or stopped by tgm_chan_del */
+	int done = 1; /* a channel that is gone was drained or stopped by tgm_chan_del */
 	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live) {
+	list_for_each_entry(chan, &live_chans, live)
+	{
 		if (chan->id == id) {
 			done = chan->error || (s32)(tgm_chan_completed(chan) - seqno) >= 0;
 			break;
@@ -1974,7 +2162,10 @@ static int sync_done(u64 id, u32 seqno)
 
 int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns)
 {
-	static struct { u64 id; u32 seqno; } want[TGM_SYNC_MAX];   /* 8 KiB: not on the kernel stack; sync_lock */
+	static struct {
+		u64 id;
+		u32 seqno;
+	} want[TGM_SYNC_MAX]; /* 8 KiB: not on the kernel stack; sync_lock */
 	static DEFINE_MUTEX(sync_lock);
 	struct tgm_chan *chan;
 	unsigned int n = 0, i;
@@ -1983,7 +2174,8 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 
 	mutex_lock(&sync_lock);
 	mutex_lock(&live_lock);
-	list_for_each_entry(chan, &live_chans, live) {
+	list_for_each_entry(chan, &live_chans, live)
+	{
 		if (n < TGM_SYNC_MAX) {
 			want[n].id = chan->id;
 			want[n].seqno = READ_ONCE(chan->submitted);
@@ -2011,9 +2203,11 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 		/* the caller would copy a surface the GPU may still be writing: panic naming the channel it waited for */
 		if (ret && gpu.stage >= 3) {
 			mutex_lock(&live_lock);
-			list_for_each_entry(chan, &live_chans, live) {
+			list_for_each_entry(chan, &live_chans, live)
+			{
 				if (chan->id == want[i].id)
-					tgm_chan_hung(chan, "sync_for_cpu", want[i].seqno, timeout_ns);
+					tgm_chan_hung(chan, "sync_for_cpu", want[i].seqno,
+						      timeout_ns);
 			}
 			mutex_unlock(&live_lock);
 		}
@@ -2038,13 +2232,12 @@ void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)
 /* One 16-byte semaphore release (writes payload and the GPU's PTIMER ns), after wait-for-idle */
 static void push_stamp(struct nvif_push *push, u64 va, u32 payload)
 {
-	PUSH_MTHD(push, NV906F, SEMAPHOREA, NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)),
-				SEMAPHOREB, lower_32_bits(va),
-				SEMAPHOREC, payload,
-				SEMAPHORED,
+	PUSH_MTHD(push, NV906F, SEMAPHOREA,
+		  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)), SEMAPHOREB,
+		  lower_32_bits(va), SEMAPHOREC, payload, SEMAPHORED,
 		  NVDEF(NV906F, SEMAPHORED, OPERATION, RELEASE) |
-		  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
-		  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 16BYTE));
+			  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
+			  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 16BYTE));
 }
 
 /* Push dwords chan_fence() may write, at most */
@@ -2064,21 +2257,23 @@ static u32 chan_fence(struct tgm_chan *chan)
 		 * completion promises the display every byte in DRAM (TegraScanoutCopy.h). */
 		PUSH_NVSQ(push, NV906F, NVB06F_WFI, 0);
 		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
-		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D, NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
+		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
+			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
 		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
 	}
 	if (stats_on())
-		push_stamp(push, chan_stamps_va(chan, next) + offsetof(struct tgm_stamps, end), next);
+		push_stamp(push, chan_stamps_va(chan, next) + offsetof(struct tgm_stamps, end),
+			   next);
 	PUSH_MTHD(push, NV906F, SEMAPHOREA,
 		  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(chan->fence_gpu)),
-				SEMAPHOREB, lower_32_bits(chan->fence_gpu),
-				SEMAPHOREC, next,
-				SEMAPHORED,
+		  SEMAPHOREB, lower_32_bits(chan->fence_gpu), SEMAPHOREC, next, SEMAPHORED,
 		  NVDEF(NV906F, SEMAPHORED, OPERATION, RELEASE) |
-		  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
-		  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE),
-				NON_STALL_INTERRUPT, 0);
-	__asm__ volatile("dsb sy" ::: "memory");   /* client WC writes and our push reach DRAM before GP_PUT */
+			  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
+			  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE),
+		  NON_STALL_INTERRUPT, 0);
+	__asm__ volatile(
+		"dsb sy" ::
+			: "memory"); /* client WC writes and our push reach DRAM before GP_PUT */
 	chan->submit_ns = nvxnu_nanotime();
 	if (stats_on())
 		WRITE_ONCE(chan->stat_sub_ns[next % CHAN_NSTAMPS], chan->submit_ns);
@@ -2093,7 +2288,8 @@ static u32 chan_fence(struct tgm_chan *chan)
 static DEFINE_MUTEX(order_lock);
 static void present_order(struct tgm_chan *chan);
 
-int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count, uint32_t *seqno)
+int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
+		  uint32_t *seqno)
 {
 	int ordered = present_order_on() && !chan->kernel && chan->vm->pfence_va;
 	u32 i;
@@ -2110,23 +2306,27 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 	 * for up to ~1 s */
 	ret = nvif_chan_gpfifo_wait(&chan->chan, count + 3, CHAN_FENCE_DWORDS + 24);
 	if (ret == -ETIMEDOUT && gpu.stage >= 3)
-		tgm_chan_hung(chan, "exec: GPFIFO still full after 1 s", chan->submitted, NSEC_PER_SEC);
+		tgm_chan_hung(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
+			      NSEC_PER_SEC);
 	if (ret)
 		return ret == -ETIMEDOUT ? -EBUSY : ret;
 	if (l2_on())
-		l2_invalidate();   /* before the host can fetch anything of this submission */
+		l2_invalidate(); /* before the host can fetch anything of this submission */
 	if (ordered) {
 		mutex_lock(&order_lock);
-		present_order(chan);   /* first, so the start stamp below times the work itself */
+		present_order(chan); /* first, so the start stamp below times the work itself */
 	}
 	if (stats_on()) {
 		u32 next = chan->submitted + 1;
-		WRITE_ONCE(chan->stat_sub_ptimer[next % CHAN_NSTAMPS], nvkm_timer_read(gpu.device->timer));
-		push_stamp(&chan->chan.push, chan_stamps_va(chan, next) + offsetof(struct tgm_stamps, start), next);
+		WRITE_ONCE(chan->stat_sub_ptimer[next % CHAN_NSTAMPS],
+			   nvkm_timer_read(gpu.device->timer));
+		push_stamp(&chan->chan.push,
+			   chan_stamps_va(chan, next) + offsetof(struct tgm_stamps, start), next);
 		PUSH_KICK(&chan->chan.push);
 	}
 	for (i = 0; i < count; i++)
-		nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2, pushes[i].no_prefetch);
+		nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
+				      pushes[i].no_prefetch);
 
 	*seqno = chan_fence(chan);
 	if (ordered)
@@ -2163,8 +2363,8 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 #define NVB0B5_LAUNCH_DMA 0x0300
 #define NVB0B5_LAUNCH_DMA_NON_PIPELINED (2u << 0)
 #define NVB0B5_LAUNCH_DMA_FLUSH_ENABLE (1u << 2)
-#define NVB0B5_LAUNCH_DMA_SRC_PITCH (1u << 7)           /* SRC_MEMORY_LAYOUT 7:7, PITCH 1 */
-#define NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR (0u << 8)     /* DST_MEMORY_LAYOUT 8:8, BLOCKLINEAR 0 */
+#define NVB0B5_LAUNCH_DMA_SRC_PITCH (1u << 7)       /* SRC_MEMORY_LAYOUT 7:7, PITCH 1 */
+#define NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR (0u << 8) /* DST_MEMORY_LAYOUT 8:8, BLOCKLINEAR 0 */
 #define NVB0B5_LAUNCH_DMA_MULTI_LINE (1u << 9)
 #define NVB0B5_OFFSET_IN_UPPER 0x0400
 #define NVB0B5_OFFSET_IN_LOWER 0x0404
@@ -2175,37 +2375,45 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 #define NVB0B5_LINE_LENGTH_IN 0x0418
 #define NVB0B5_LINE_COUNT 0x041c
 #define NVB0B5_SET_DST_BLOCK_SIZE 0x070c
-#define NVB0B5_BLOCK_SIZE_FERMI_8(log2h) (((log2h) << 4) | (1u << 12))  /* WIDTH 1 GOB, HEIGHT 2^log2h, DEPTH 1, FERMI_8 */
+#define NVB0B5_BLOCK_SIZE_FERMI_8(log2h) \
+	(((log2h) << 4) | (1u << 12)) /* WIDTH 1 GOB, HEIGHT 2^log2h, DEPTH 1, FERMI_8 */
 #define NVB0B5_SET_DST_WIDTH 0x0710
 #define NVB0B5_SET_DST_HEIGHT 0x0714
 #define NVB0B5_SET_DST_DEPTH 0x0718
 #define NVB0B5_SET_DST_LAYER 0x071c
 #define NVB0B5_SET_DST_ORIGIN 0x0720
-#define TGM_PRESENT_NS (1000 * NSEC_PER_MSEC)   /* as the display's own limit: compositor jobs up to ~90 ms were seen */
+#define TGM_PRESENT_NS \
+	(1000 *        \
+	 NSEC_PER_MSEC) /* as the display's own limit: compositor jobs up to ~90 ms were seen */
 
 static struct {
 	struct mutex lock;
 	struct tgm_vm *vm;
 	struct tgm_chan *chan;
 	struct tgm_mem *fence_mem, *fences_mem;
-	void *fence;              /* the channel's own fence page (pool) */
+	void *fence; /* the channel's own fence page (pool) */
 	u64 fence_pa, fence_gpu, fences_gpu;
 	void *deadline_work;
-	u32 pending;              /* seqno of the present in flight, 0: none (atomic: the interrupt pass completes it) */
+	u32 pending; /* seqno of the present in flight, 0: none (atomic: the interrupt pass completes it) */
 	u64 queued;
 	void (*done)(void *);
 	void *arg;
-	u32 waits;                /* the acquires of the present in flight, for the deadline's line */
-	struct { u64 id; u32 seqno; } wait[TGM_SYNC_MAX];
-	volatile struct tgm_stamp *wait_end[TGM_SYNC_MAX];   /* tegra-gpu-stats: their end stamps (pool memory, kept mapped) */
-	u32 stamped;              /* tegra-gpu-stats: seqno of the present in flight, whose copy is stamped */
-	u32 last;                 /* seqno of the last present kicked, 0: none (order_lock) */
-	u64 last_src;             /* its surface's first page, and whether address spaces importing it were found */
+	u32 waits; /* the acquires of the present in flight, for the deadline's line */
+	struct {
+		u64 id;
+		u32 seqno;
+	} wait[TGM_SYNC_MAX];
+	volatile struct tgm_stamp *wait_end
+		[TGM_SYNC_MAX]; /* tegra-gpu-stats: their end stamps (pool memory, kept mapped) */
+	u32 stamped; /* tegra-gpu-stats: seqno of the present in flight, whose copy is stamped */
+	u32 last;    /* seqno of the last present kicked, 0: none (order_lock) */
+	u64 last_src; /* its surface's first page, and whether address spaces importing it were found */
 	int last_matched;
-	int last_idle, last_late; /* tegra-gpu-stats: it found no user work pending; a user submit then waited for it */
-	u32 presents;             /* tegra-gpu-stats */
+	int last_idle,
+		last_late; /* tegra-gpu-stats: it found no user work pending; a user submit then waited for it */
+	u32 presents; /* tegra-gpu-stats */
 	u64 lat_sum, lat_max;
-} present = { .lock = { NULL } };
+} present = {.lock = {NULL}};
 
 /* From the present channel's nonstall interrupt (the interrupt pass, nvkm's event lock held): a present whose fence passed
  * is done, and its callback runs here (the display's only signals its work loop). */
@@ -2219,7 +2427,8 @@ static void present_fenced(struct tgm_chan *chan)
 		return;
 	done = present.done;
 	arg = present.arg;
-	if (!__atomic_compare_exchange_n(&present.pending, &pending, 0, false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+	if (!__atomic_compare_exchange_n(&present.pending, &pending, 0, false, __ATOMIC_ACQ_REL,
+					 __ATOMIC_RELAXED))
 		return;
 	nvxnu_work_cancel(present.deadline_work);
 	if (stats_on()) {
@@ -2251,12 +2460,15 @@ static void present_deadline(void *arg)
 		return;
 	}
 	if ((s32)(tgm_chan_completed(present.chan) - present.pending) >= 0)
-		nvxnu_panic("tegra-gm20b: present fence %u complete after %llu ms but its nonstall interrupt never came",
+		nvxnu_panic("tegra-gm20b: present fence %u complete after %llu ms but its nonstall "
+			    "interrupt never came",
 			    present.pending, (nvxnu_nanotime() - present.queued) / 1000000);
 	mutex_lock(&live_lock);
 	for (i = 0; i < present.waits && !waited; i++) {
-		list_for_each_entry(chan, &live_chans, live) {
-			if (chan->id == present.wait[i].id && (s32)(tgm_chan_completed(chan) - present.wait[i].seqno) < 0) {
+		list_for_each_entry(chan, &live_chans, live)
+		{
+			if (chan->id == present.wait[i].id &&
+			    (s32)(tgm_chan_completed(chan) - present.wait[i].seqno) < 0) {
 				waited = chan;
 				seqno = present.wait[i].seqno;
 				break;
@@ -2266,10 +2478,13 @@ static void present_deadline(void *arg)
 	if (waited)
 		chan_describe(waited, what, sizeof(what));
 	else
-		scnprintf(what, sizeof(what), "none of its %u user fences (the copy itself)", present.waits);
+		scnprintf(what, sizeof(what), "none of its %u user fences (the copy itself)",
+			  present.waits);
 	chan_describe(present.chan, state, sizeof(state));
-	nvxnu_panic("tegra-gm20b: present not done %llu ms after it was queued, waiting for %s%s%u: present %s",
-		    (nvxnu_nanotime() - present.queued) / 1000000, what, waited ? " to reach " : "", waited ? seqno : 0, state);
+	nvxnu_panic("tegra-gm20b: present not done %llu ms after it was queued, waiting for "
+		    "%s%s%u: present %s",
+		    (nvxnu_nanotime() - present.queued) / 1000000, what, waited ? " to reach " : "",
+		    waited ? seqno : 0, state);
 }
 
 /* From tgm_chan_exec, order_lock held, before a user submission's own entries: if the last present kicked has not
@@ -2284,19 +2499,18 @@ static void present_order(struct tgm_chan *chan)
 
 	if (!last || !pchan || (s32)(tgm_chan_completed(pchan) - last) >= 0)
 		return;
-	if (present.last_matched) {   /* only an address space that imports the surface can draw into it */
+	if (present.last_matched) { /* only an address space that imports the surface can draw into it */
 		mutex_lock(&live_lock);
 		writer = vm_imports(chan->vm, present.last_src);
 		mutex_unlock(&live_lock);
 	}
 	if (!writer)
 		return;
-	PUSH_MTHD(push, NV906F, SEMAPHOREA, NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)),
-				SEMAPHOREB, lower_32_bits(va),
-				SEMAPHOREC, last,
-				SEMAPHORED,
+	PUSH_MTHD(push, NV906F, SEMAPHOREA,
+		  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)), SEMAPHOREB,
+		  lower_32_bits(va), SEMAPHOREC, last, SEMAPHORED,
 		  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-		  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
+			  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 	PUSH_KICK(push);
 	if (stats_on()) {
 		__atomic_fetch_add(&stats.ordered, 1, __ATOMIC_RELAXED);
@@ -2359,7 +2573,8 @@ int tgm_present_open(struct tgm_vm **pvm)
 	present.deadline_work = nvxnu_work_alloc(present_deadline, NULL);
 	ret = present.deadline_work ? tgm_vm_new(&present.vm) : -ENOMEM;
 	if (!ret)
-		ret = pfence_get(present.vm);   /* the channel's own fence: the page every address space may wait on */
+		ret = pfence_get(
+			present.vm); /* the channel's own fence: the page every address space may wait on */
 	if (!ret) {
 		present.fence = pfence.va;
 		present.fence_pa = pfence.pa;
@@ -2369,9 +2584,11 @@ int tgm_present_open(struct tgm_vm **pvm)
 	if (!ret)
 		ret = tgm_mem_new(present.vm, pas, TGM_FENCE_PAGES, &present.fences_mem);
 	if (!ret)
-		ret = tgm_vm_kmap(present.vm, present.fences_mem, TGM_FENCE_PAGES * PAGE_SIZE, &present.fences_gpu);
+		ret = tgm_vm_kmap(present.vm, present.fences_mem, TGM_FENCE_PAGES * PAGE_SIZE,
+				  &present.fences_gpu);
 	if (!ret)
-		ret = tgm_chan_new(present.vm, present.fence, present.fence_gpu, "present", 1, &present.chan);
+		ret = tgm_chan_new(present.vm, present.fence, present.fence_gpu, "present", 1,
+				   &present.chan);
 	if (!ret) {
 		present.chan->kernel = 1;
 	} else {
@@ -2409,8 +2626,9 @@ static int present_writer_on(void)
 	return on;
 }
 
-int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t width, uint32_t height, uint64_t dst_va,
-		     uint32_t dst_pitch, uint32_t block_height_log2, void (*done)(void *), void *arg)
+int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t width,
+		     uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+		     uint32_t block_height_log2, void (*done)(void *), void *arg)
 {
 	struct tgm_chan *chan = present.chan, *user;
 	struct nvif_push *push;
@@ -2429,13 +2647,15 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t
 	}
 	/* push room for an acquire per user channel there is now (one made meanwhile has nothing for this frame) */
 	mutex_lock(&live_lock);
-	list_for_each_entry(user, &live_chans, live)
-		room += room < TGM_SYNC_MAX && !user->kernel;
+	list_for_each_entry(user, &live_chans, live) room += room < TGM_SYNC_MAX && !user->kernel;
 	mutex_unlock(&live_lock);
 	push = &chan->chan.push;
-	ret = PUSH_WAIT(push, room * 5 + 40 + CHAN_FENCE_DWORDS);   /* acquires, a start stamp, the copy, the fence */
+	ret = PUSH_WAIT(
+		push, room * 5 + 40 +
+			      CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the fence */
 	if (ret == -ETIMEDOUT)
-		tgm_chan_hung(chan, "present: push buffer still full after 1 s", chan->submitted, NSEC_PER_SEC);
+		tgm_chan_hung(chan, "present: push buffer still full after 1 s", chan->submitted,
+			      NSEC_PER_SEC);
 	if (ret) {
 		mutex_unlock(&present.lock);
 		return ret;
@@ -2445,53 +2665,57 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t
 	if (present_order_on())
 		mutex_lock(&order_lock);
 	mutex_lock(&live_lock);
+	list_for_each_entry(user, &live_chans, live) matched |=
+		present_writer_on() && !user->kernel && vm_imports(user->vm, src_pa);
 	list_for_each_entry(user, &live_chans, live)
-		matched |= present_writer_on() && !user->kernel && vm_imports(user->vm, src_pa);
-	list_for_each_entry(user, &live_chans, live) {
+	{
 		uintptr_t off = (uintptr_t)user->fence_cpu - (uintptr_t)fences.va;
-		if (user->kernel || READ_ONCE(user->error) || off >= TGM_FENCE_PAGES * PAGE_SIZE || n == room ||
-		    (matched && !vm_imports(user->vm, src_pa)) || (s32)(tgm_chan_completed(user) - user->submitted) >= 0)
+		if (user->kernel || READ_ONCE(user->error) || off >= TGM_FENCE_PAGES * PAGE_SIZE ||
+		    n == room || (matched && !vm_imports(user->vm, src_pa)) ||
+		    (s32)(tgm_chan_completed(user) - user->submitted) >= 0)
 			continue;
 		present.wait[n].id = user->id;
 		present.wait[n].seqno = READ_ONCE(user->submitted);
-		present.wait_end[n] = stats_on() ? &chan_stamps(user, present.wait[n].seqno)->end : NULL;
+		present.wait_end[n] =
+			stats_on() ? &chan_stamps(user, present.wait[n].seqno)->end : NULL;
 		va = present.fences_gpu + off;
-		PUSH_MTHD(push, NV906F, SEMAPHOREA, NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)),
-					SEMAPHOREB, lower_32_bits(va),
-					SEMAPHOREC, present.wait[n].seqno,
-					SEMAPHORED,
+		PUSH_MTHD(push, NV906F, SEMAPHOREA,
+			  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)), SEMAPHOREB,
+			  lower_32_bits(va), SEMAPHOREC, present.wait[n].seqno, SEMAPHORED,
 			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-			  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
+				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 		n++;
 	}
 	mutex_unlock(&live_lock);
 	present.waits = n;
-	if (stats_on()) {   /* the copy's start, after the acquires: stats_fences times the copy and the gap before it */
+	if (stats_on()) { /* the copy's start, after the acquires: stats_fences times the copy and the gap before it */
 		present.stamped = chan->submitted + 1;
-		push_stamp(push, chan_stamps_va(chan, present.stamped) + offsetof(struct tgm_stamps, start), present.stamped);
+		push_stamp(push,
+			   chan_stamps_va(chan, present.stamped) +
+				   offsetof(struct tgm_stamps, start),
+			   present.stamped);
 	}
 	PUSH_NVSQ(push, NVA0B5, NVB0B5_OFFSET_IN_UPPER, upper_32_bits(src_va),
-				NVB0B5_OFFSET_IN_LOWER, lower_32_bits(src_va),
-				NVB0B5_OFFSET_OUT_UPPER, upper_32_bits(dst_va),
-				NVB0B5_OFFSET_OUT_LOWER, lower_32_bits(dst_va),
-				NVB0B5_PITCH_IN, (u32)stride,
-				NVB0B5_PITCH_OUT, 0,
-				NVB0B5_LINE_LENGTH_IN, width * 4,
-				NVB0B5_LINE_COUNT, height);
-	PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_DST_BLOCK_SIZE, NVB0B5_BLOCK_SIZE_FERMI_8(block_height_log2),
-				NVB0B5_SET_DST_WIDTH, dst_pitch,
-				NVB0B5_SET_DST_HEIGHT, height,
-				NVB0B5_SET_DST_DEPTH, 1,
-				NVB0B5_SET_DST_LAYER, 0,
-				NVB0B5_SET_DST_ORIGIN, 0);
-	PUSH_NVSQ(push, NVA0B5, NVB0B5_LAUNCH_DMA, NVB0B5_LAUNCH_DMA_NON_PIPELINED | NVB0B5_LAUNCH_DMA_FLUSH_ENABLE |
-				NVB0B5_LAUNCH_DMA_SRC_PITCH | NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR | NVB0B5_LAUNCH_DMA_MULTI_LINE);
+		  NVB0B5_OFFSET_IN_LOWER, lower_32_bits(src_va), NVB0B5_OFFSET_OUT_UPPER,
+		  upper_32_bits(dst_va), NVB0B5_OFFSET_OUT_LOWER, lower_32_bits(dst_va),
+		  NVB0B5_PITCH_IN, (u32)stride, NVB0B5_PITCH_OUT, 0, NVB0B5_LINE_LENGTH_IN,
+		  width * 4, NVB0B5_LINE_COUNT, height);
+	PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_DST_BLOCK_SIZE,
+		  NVB0B5_BLOCK_SIZE_FERMI_8(block_height_log2), NVB0B5_SET_DST_WIDTH, dst_pitch,
+		  NVB0B5_SET_DST_HEIGHT, height, NVB0B5_SET_DST_DEPTH, 1, NVB0B5_SET_DST_LAYER, 0,
+		  NVB0B5_SET_DST_ORIGIN, 0);
+	PUSH_NVSQ(push, NVA0B5, NVB0B5_LAUNCH_DMA,
+		  NVB0B5_LAUNCH_DMA_NON_PIPELINED | NVB0B5_LAUNCH_DMA_FLUSH_ENABLE |
+			  NVB0B5_LAUNCH_DMA_SRC_PITCH | NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR |
+			  NVB0B5_LAUNCH_DMA_MULTI_LINE);
 	/* set before the kick: the nonstall interrupt can come before chan_fence returns */
 	present.done = done;
 	present.arg = arg;
 	present.queued = nvxnu_nanotime();
 	__atomic_store_n(&present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
-	nvxnu_work_schedule_after(present.deadline_work, TGM_PRESENT_NS);   /* before the kick, so the completion cancels it */
+	nvxnu_work_schedule_after(
+		present.deadline_work,
+		TGM_PRESENT_NS); /* before the kick, so the completion cancels it */
 	present.last = chan_fence(chan);
 	present.last_src = src_pa;
 	present.last_matched = matched;
@@ -2550,19 +2774,18 @@ static int m3(char *line, unsigned int len)
 	PUSH_MTHD(push, NVA0B5, SET_REMAP_CONST_A, 0xc0ffee42);
 	PUSH_MTHD(push, NVA0B5, SET_REMAP_COMPONENTS,
 		  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, DST_X, CONST_A) |
-		  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, COMPONENT_SIZE, FOUR) |
-		  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_SRC_COMPONENTS, ONE) |
-		  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_DST_COMPONENTS, ONE));
-	PUSH_MTHD(push, NVA0B5, OFFSET_OUT_UPPER, upper_32_bits(fill),
-				OFFSET_OUT_LOWER, lower_32_bits(fill));
-	PUSH_MTHD(push, NVA0B5, LINE_LENGTH_IN, PAGE_SIZE / 4,
-				LINE_COUNT, 1);
+			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, COMPONENT_SIZE, FOUR) |
+			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_SRC_COMPONENTS, ONE) |
+			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_DST_COMPONENTS, ONE));
+	PUSH_MTHD(push, NVA0B5, OFFSET_OUT_UPPER, upper_32_bits(fill), OFFSET_OUT_LOWER,
+		  lower_32_bits(fill));
+	PUSH_MTHD(push, NVA0B5, LINE_LENGTH_IN, PAGE_SIZE / 4, LINE_COUNT, 1);
 	PUSH_MTHD(push, NVA0B5, LAUNCH_DMA,
 		  NVDEF(NVA0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, NON_PIPELINED) |
-		  NVDEF(NVA0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
-		  NVDEF(NVA0B5, LAUNCH_DMA, SRC_MEMORY_LAYOUT, PITCH) |
-		  NVDEF(NVA0B5, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
-		  NVDEF(NVA0B5, LAUNCH_DMA, REMAP_ENABLE, TRUE));
+			  NVDEF(NVA0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
+			  NVDEF(NVA0B5, LAUNCH_DMA, SRC_MEMORY_LAYOUT, PITCH) |
+			  NVDEF(NVA0B5, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
+			  NVDEF(NVA0B5, LAUNCH_DMA, REMAP_ENABLE, TRUE));
 	seqno = chan_fence(chan);
 	end = nvxnu_nanotime() + NSEC_PER_SEC;
 	for (;;) {
@@ -2577,8 +2800,8 @@ static int m3(char *line, unsigned int len)
 	ret = READ_ONCE(page[0]) != seqno ? -ETIMEDOUT : bad ? -EIO : 0;
 done:
 	scnprintf(line, len, "M3 %s vm=%s chan=%s fence=%u/%u ce_fill_bad=%u/1024%s err=%u ret=%d",
-		  ret ? "FAIL" : "ok", vm ? "ok" : "no", chan ? "ok" : "no", page ? page[0] : 0, seqno, bad,
-		  l2_on() ? " (L2-cached target)" : "", chan ? chan->error : 0, ret);
+		  ret ? "FAIL" : "ok", vm ? "ok" : "no", chan ? "ok" : "no", page ? page[0] : 0,
+		  seqno, bad, l2_on() ? " (L2-cached target)" : "", chan ? chan->error : 0, ret);
 	tgm_chan_del(&chan);
 	if (user)
 		tgm_vm_unmap(vm, fill, PAGE_SIZE);
@@ -2603,16 +2826,14 @@ done:
 #define NVA140_LAUNCH_DMA 0x01b0
 #define NVA140_LAUNCH_DMA_DST_PITCH 0x00000001
 #define NVA140_LOAD_INLINE_DATA 0x01b4
-#define FAULT_TEST_VA 0x200000000ULL   /* never bound in the test VM */
+#define FAULT_TEST_VA 0x200000000ULL /* never bound in the test VM */
 
 static void push_i2m(struct tgm_chan *chan, u64 va, u32 data)
 {
 	struct nvif_push *push = &chan->chan.push;
 
-	PUSH_NVSQ(push, NVA140, NVA140_LINE_LENGTH_IN, 4,
-				NVA140_LINE_COUNT, 1,
-				NVA140_OFFSET_OUT_UPPER, upper_32_bits(va),
-				NVA140_OFFSET_OUT, lower_32_bits(va));
+	PUSH_NVSQ(push, NVA140, NVA140_LINE_LENGTH_IN, 4, NVA140_LINE_COUNT, 1,
+		  NVA140_OFFSET_OUT_UPPER, upper_32_bits(va), NVA140_OFFSET_OUT, lower_32_bits(va));
 	PUSH_NVSQ(push, NVA140, NVA140_LAUNCH_DMA, NVA140_LAUNCH_DMA_DST_PITCH);
 	PUSH_NVSQ(push, NVA140, NVA140_LOAD_INLINE_DATA, data);
 }
@@ -2630,8 +2851,14 @@ static u64 fault_test_wait(struct tgm_chan *chan, int (*done)(struct tgm_chan *)
 	return (nvxnu_nanotime() - start) / NSEC_PER_MSEC;
 }
 
-static int chan_dead(struct tgm_chan *chan) { return READ_ONCE(chan->error) != 0; }
-static int chan_idle(struct tgm_chan *chan) { return (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0; }
+static int chan_dead(struct tgm_chan *chan)
+{
+	return READ_ONCE(chan->error) != 0;
+}
+static int chan_idle(struct tgm_chan *chan)
+{
+	return (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0;
+}
 
 static void fault_test(void)
 {
@@ -2679,11 +2906,14 @@ static void fault_test(void)
 		ok_ms = fault_test_wait(good, chan_idle, 2000);
 		word = READ_ONCE(page[PAGE_SIZE / 4]);
 	}
-	nvxnu_log("tegra-gm20b: fault test %s: MMU fault on a client channel %s (%llu ms, error %u); GR afterwards: I2M word "
+	nvxnu_log("tegra-gm20b: fault test %s: MMU fault on a client channel %s (%llu ms, error "
+		  "%u); GR afterwards: I2M word "
 		  "%08x (want c0ffee43), fence %u/%u in %llu ms, ret %d\n",
-		  !ret && word == 0xc0ffee43 && good && chan_idle(good) && !good->error ? "ok" : "FAIL",
-		  bad && chan_dead(bad) ? "killed it" : "did NOT kill it", killed_ms, bad ? bad->error : 0, word,
-		  good ? tgm_chan_completed(good) : 0, good ? good->submitted : 0, ok_ms, ret);
+		  !ret && word == 0xc0ffee43 && good && chan_idle(good) && !good->error ? "ok"
+											: "FAIL",
+		  bad && chan_dead(bad) ? "killed it" : "did NOT kill it", killed_ms,
+		  bad ? bad->error : 0, word, good ? tgm_chan_completed(good) : 0,
+		  good ? good->submitted : 0, ok_ms, ret);
 	tgm_chan_del(&good);
 	tgm_chan_del(&bad);
 	tgm_mem_del(&mem);
@@ -2702,7 +2932,9 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		gpu.stage = 1;
 	}
 	if (gpu.stage < 2 && stage >= 2) {
-		ret = clk_raise(line, len);  /* tegra-gpu-mhz only: GPCPLL above 76.8 MHz before ACR/PMU/GR */
+		ret = clk_raise(
+			line,
+			len); /* tegra-gpu-mhz only: GPCPLL above 76.8 MHz before ACR/PMU/GR */
 		if (!ret)
 			ret = m2(line, len);
 		if (ret)

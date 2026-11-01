@@ -15,11 +15,11 @@ extern "C" {
 #endif
 
 enum {
-  TEGRA_HOST1X_OK = 0,
-  TEGRA_HOST1X_ENODEV = -19,     // not started (switch-host1x / switch-nvdec off) or bring-up failed
-  TEGRA_HOST1X_EINVAL = -22,
-  TEGRA_HOST1X_ENOMEM = -12,
-  TEGRA_HOST1X_ETIMEDOUT = -60,  // the engine did not reach the threshold in time (its interrupt was not lost)
+    TEGRA_HOST1X_OK = 0,
+    TEGRA_HOST1X_ENODEV = -19,  // not started (switch-host1x / switch-nvdec off) or bring-up failed
+    TEGRA_HOST1X_EINVAL = -22,
+    TEGRA_HOST1X_ENOMEM = -12,
+    TEGRA_HOST1X_ETIMEDOUT = -60,  // the engine did not reach the threshold in time (its interrupt was not lost)
 };
 
 // Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._VIC, ..._NVDEC).
@@ -31,24 +31,24 @@ enum { TEGRA_HOST1X_COND_IMMEDIATE = 0, TEGRA_HOST1X_COND_OP_DONE = 1 };
 // Opcodes (Linux drivers/gpu/host1x/hw/opcodes.h). Method offsets are in words.
 static inline uint32_t tegra_host1x_op_setclass(uint32_t cls, uint32_t offset, uint32_t mask)
 {
-  return (offset << 16) | (cls << 6) | mask;
+    return (offset << 16) | (cls << 6) | mask;
 }
 static inline uint32_t tegra_host1x_op_incr(uint32_t offset, uint32_t count)
 {
-  return (1u << 28) | (offset << 16) | count;
+    return (1u << 28) | (offset << 16) | count;
 }
 static inline uint32_t tegra_host1x_op_nonincr(uint32_t offset, uint32_t count)
 {
-  return (2u << 28) | (offset << 16) | count;
+    return (2u << 28) | (offset << 16) | count;
 }
 static inline uint32_t tegra_host1x_op_imm(uint32_t offset, uint32_t value)
 {
-  return (4u << 28) | (offset << 16) | (value & 0xffff);
+    return (4u << 28) | (offset << 16) | (value & 0xffff);
 }
 // INCR_SYNCPT (method 0 of every class: the engine's THI implements the host methods) with a condition.
 static inline uint32_t tegra_host1x_op_incr_syncpt(uint32_t cond, uint32_t syncpt)
 {
-  return tegra_host1x_op_imm(0, ((cond & 0xff) << 8) | (syncpt & 0xff));
+    return tegra_host1x_op_imm(0, ((cond & 0xff) << 8) | (syncpt & 0xff));
 }
 
 // Brings host1x up once (clock and reset adopted or enabled, sync unit configured, the syncpoint interrupt claimed,

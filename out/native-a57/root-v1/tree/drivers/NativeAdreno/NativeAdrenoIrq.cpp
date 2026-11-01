@@ -40,21 +40,21 @@ enum : uint32_t {
     IrqBitIsdbDebug = 1u << 31
 };
 /* Every A7XX status bit that this decoder knows and may clear. */
-static constexpr uint32_t kKnown = IrqBitIdle | IrqBitAhb | IrqBitAtbAsync | IrqBitGpc |
-    IrqBitCpSw | IrqBitCpHw | IrqBitCpCcuDepth | IrqBitCpCcuColor | IrqBitCpCcuResolve |
-    IrqBitCpIb1 | IrqBitCpIb2 | IrqBitCpPm4 | IrqBitCpPm4Lpac | IrqBitCpRbDone |
-    IrqBitCpWtDone | IrqBitCpFence | IrqBitCpFenceLpac | IrqBitAtbBus | IrqBitHang |
-    IrqBitUcheOob | IrqBitUcheTrap | IrqBitTsbWrite | IrqBitFuse | IrqBitIsdbCpu |
-    IrqBitIsdbDebug;
+static constexpr uint32_t kKnown = IrqBitIdle | IrqBitAhb | IrqBitAtbAsync | IrqBitGpc | IrqBitCpSw | IrqBitCpHw |
+                                   IrqBitCpCcuDepth | IrqBitCpCcuColor | IrqBitCpCcuResolve | IrqBitCpIb1 |
+                                   IrqBitCpIb2 | IrqBitCpPm4 | IrqBitCpPm4Lpac | IrqBitCpRbDone | IrqBitCpWtDone |
+                                   IrqBitCpFence | IrqBitCpFenceLpac | IrqBitAtbBus | IrqBitHang | IrqBitUcheOob |
+                                   IrqBitUcheTrap | IrqBitTsbWrite | IrqBitFuse | IrqBitIsdbCpu | IrqBitIsdbDebug;
 /* A7XX_INT_MASK from the pinned a6xx_gpu.c. */
-static constexpr uint32_t kEnable = IrqBitAhb | IrqBitAtbAsync | IrqBitGpc | IrqBitCpSw |
-    IrqBitCpHw | IrqBitCpPm4 | IrqBitCpRbDone | IrqBitCpFence | IrqBitAtbBus |
-    IrqBitHang | IrqBitUcheOob | IrqBitUcheTrap | IrqBitTsbWrite | IrqBitFuse;
+static constexpr uint32_t kEnable = IrqBitAhb | IrqBitAtbAsync | IrqBitGpc | IrqBitCpSw | IrqBitCpHw | IrqBitCpPm4 |
+                                    IrqBitCpRbDone | IrqBitCpFence | IrqBitAtbBus | IrqBitHang | IrqBitUcheOob |
+                                    IrqBitUcheTrap | IrqBitTsbWrite | IrqBitFuse;
 /* CP_INTERRUPT_STATUS error bits, including the A7XX LPAC/BV replicas. */
 static constexpr uint32_t kCpErrors = 0x3fff7u;
 IOReturn NativeAdrenoIrq::poison()
 {
-    poisoned_=true;return kIOReturnIOError;
+    poisoned_ = true;
+    return kIOReturnIOError;
 }
 uint32_t NativeAdrenoIrq::mask()
 {
@@ -66,59 +66,67 @@ uint32_t NativeAdrenoIrq::cpErrorMask()
 }
 IOReturn NativeAdrenoIrq::attach(const NativeAdrenoRingIo *io)
 {
-    if(attached_ || poisoned_)return kIOReturnBusy;
-    if(!io || !io->read32 || !io->write32 || !io->barrier)return kIOReturnBadArgument;
-    io_=*io;attached_=true;enabled_=0;
+    if (attached_ || poisoned_) return kIOReturnBusy;
+    if (!io || !io->read32 || !io->write32 || !io->barrier) return kIOReturnBadArgument;
+    io_ = *io;
+    attached_ = true;
+    enabled_ = 0;
     return kIOReturnSuccess;
 }
 IOReturn NativeAdrenoIrq::detach()
 {
-    if(poisoned_ || !attached_)return kIOReturnNotReady;
-    attached_=false;io_={};enabled_=0;return kIOReturnSuccess;
+    if (poisoned_ || !attached_) return kIOReturnNotReady;
+    attached_ = false;
+    io_ = {};
+    enabled_ = 0;
+    return kIOReturnSuccess;
 }
 IOReturn NativeAdrenoIrq::programMask(uint32_t *programmed)
 {
-    if(!attached_ || poisoned_)return kIOReturnNotReady;
-    if(programmed)*programmed=0;
-    uint32_t readback=0;
-    if(io_.write32(io_.cookie,IrqRbbmMask,kEnable))return poison();
-    if(io_.read32(io_.cookie,IrqRbbmMask,&readback))return poison();
-    if(readback!=kEnable)return poison();
-    enabled_=readback;
-    if(programmed)*programmed=readback;
+    if (!attached_ || poisoned_) return kIOReturnNotReady;
+    if (programmed) *programmed = 0;
+    uint32_t readback = 0;
+    if (io_.write32(io_.cookie, IrqRbbmMask, kEnable)) return poison();
+    if (io_.read32(io_.cookie, IrqRbbmMask, &readback)) return poison();
+    if (readback != kEnable) return poison();
+    enabled_ = readback;
+    if (programmed) *programmed = readback;
     return kIOReturnSuccess;
 }
 IOReturn NativeAdrenoIrq::handle(NativeAdrenoIrqResult *result)
 {
-    if(!result)return kIOReturnBadArgument;
-    *result={};
-    if(!attached_ || poisoned_)return kIOReturnNotReady;
-    uint32_t status=0;
-    if(io_.read32(io_.cookie,IrqRbbmStatus,&status))return poison();
+    if (!result) return kIOReturnBadArgument;
+    *result = {};
+    if (!attached_ || poisoned_) return kIOReturnNotReady;
+    uint32_t status = 0;
+    if (io_.read32(io_.cookie, IrqRbbmStatus, &status)) return poison();
     /* Linux acknowledges the whole read status before decoding it. */
-    if(io_.write32(io_.cookie,IrqRbbmClear,status))return poison();
-    if(io_.barrier(io_.cookie))return poison();
-    uint32_t flags=0,cp_status=0,protect=0;
-    if(status&IrqBitCpFence)flags|=NativeAdrenoIrqFence;
-    if(status&IrqBitCpSw)flags|=NativeAdrenoIrqPreempt;
-    if(status&(IrqBitIdle))flags|=NativeAdrenoIrqIdle;
-    if(status&(IrqBitHang))flags|=NativeAdrenoIrqHang;
-    if(status&(IrqBitUcheOob|IrqBitUcheTrap))flags|=NativeAdrenoIrqUche;
-    if(status&(IrqBitAhb|IrqBitGpc|IrqBitAtbAsync|IrqBitAtbBus))flags|=NativeAdrenoIrqBusError;
-    if(status&(IrqBitTsbWrite|IrqBitFuse))flags|=NativeAdrenoIrqSecurity;
-    if(status&IrqBitCpHw) {
-        if(io_.read32(io_.cookie,IrqCpStatus,&cp_status))return poison();
-        if(cp_status&kCpErrors) {
-            if(io_.read32(io_.cookie,IrqCpProtect,&protect))return poison();
-            flags|=NativeAdrenoIrqCpError;
+    if (io_.write32(io_.cookie, IrqRbbmClear, status)) return poison();
+    if (io_.barrier(io_.cookie)) return poison();
+    uint32_t flags = 0, cp_status = 0, protect = 0;
+    if (status & IrqBitCpFence) flags |= NativeAdrenoIrqFence;
+    if (status & IrqBitCpSw) flags |= NativeAdrenoIrqPreempt;
+    if (status & (IrqBitIdle)) flags |= NativeAdrenoIrqIdle;
+    if (status & (IrqBitHang)) flags |= NativeAdrenoIrqHang;
+    if (status & (IrqBitUcheOob | IrqBitUcheTrap)) flags |= NativeAdrenoIrqUche;
+    if (status & (IrqBitAhb | IrqBitGpc | IrqBitAtbAsync | IrqBitAtbBus)) flags |= NativeAdrenoIrqBusError;
+    if (status & (IrqBitTsbWrite | IrqBitFuse)) flags |= NativeAdrenoIrqSecurity;
+    if (status & IrqBitCpHw) {
+        if (io_.read32(io_.cookie, IrqCpStatus, &cp_status)) return poison();
+        if (cp_status & kCpErrors) {
+            if (io_.read32(io_.cookie, IrqCpProtect, &protect)) return poison();
+            flags |= NativeAdrenoIrqCpError;
         }
     }
-    const uint32_t unknown=status&~kKnown;
-    if(unknown)flags|=NativeAdrenoIrqUnknown;
-    if(flags&(NativeAdrenoIrqHang|NativeAdrenoIrqCpError|NativeAdrenoIrqUche|
-        NativeAdrenoIrqBusError|NativeAdrenoIrqSecurity|NativeAdrenoIrqUnknown))
-        flags|=NativeAdrenoIrqFatal;
-    result->flags=flags;result->status=status;result->unknown=unknown;
-    result->cp_status=cp_status;result->protect_status=protect;
+    const uint32_t unknown = status & ~kKnown;
+    if (unknown) flags |= NativeAdrenoIrqUnknown;
+    if (flags & (NativeAdrenoIrqHang | NativeAdrenoIrqCpError | NativeAdrenoIrqUche | NativeAdrenoIrqBusError |
+                 NativeAdrenoIrqSecurity | NativeAdrenoIrqUnknown))
+        flags |= NativeAdrenoIrqFatal;
+    result->flags = flags;
+    result->status = status;
+    result->unknown = unknown;
+    result->cp_status = cp_status;
+    result->protect_status = protect;
     return kIOReturnSuccess;
 }
