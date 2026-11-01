@@ -1113,6 +1113,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     int waitTapeFrame()
     {
         if (scanoutStopped || hwSuspended || gPanicRestore.panicking || !tapeAttached) return 0;
+        // No frame end can arrive while the display's interrupt action is pending or running: IOKit keeps the level-triggered
+        // DC A line disabled from the filter until vblankFired returns, so a console printing from that action (its stats line)
+        // or behind it would wait on itself (the 100 ms panic below, seen on hardware). Scroll without waiting then.
+        if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE)) return 0;
+        if (IOWorkLoop *loop = getWorkLoop(); loop && loop->onThread()) return 0;
         const uint64_t seen = __atomic_load_n(&tapeFrames, __ATOMIC_ACQUIRE);
         uint64_t deadline;
         clock_interval_to_deadline(kTapeWaitMS, kMillisecondScale, &deadline);
