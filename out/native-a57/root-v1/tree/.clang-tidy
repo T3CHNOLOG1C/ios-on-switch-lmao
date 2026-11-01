@@ -56,6 +56,8 @@ ExcludeHeaderFilterRegex: '.*/(nouveau|linux|\.cache|refer|build)/.*'
 SystemHeaders: false
 FormatStyle: file
 CheckOptions:
+  # bzero/bcopy are the kernel's own; keep the check for gets/strcpy-class functions only.
+  bugprone-unsafe-functions.ReportMoreUnsafeFunctions: false
   bugprone-suspicious-string-compare.WarnOnImplicitComparison: false
   bugprone-unused-return-value.AllowCastToVoid: true
   performance-unnecessary-value-param.AllowedTypes: 'OSSharedPtr;IOReturn'
