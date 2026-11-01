@@ -12,6 +12,8 @@ bundles/
 *.dmg
 *.HEIC
 *.heic
+# ...except the video decoder's test inputs
+!/out/native-a57/root-v1/tree/drivers/SwitchVideoDecoders/test/*.heic
 
 # Editor/agent leftovers
 *.orig
