@@ -73,26 +73,13 @@ __attribute__((no_stack_protector)) static void early_hex(unsigned y, const char
                              IOSWITCH_WHITE);
 }
 
+// Records the last early stage reached (shown as LAST STAGE on an early exception or panic screen). Nothing is drawn:
+// a normal boot leaves the screen to XNU's console.
 __attribute__((no_stack_protector)) void ioswitch_diag_early_stage(unsigned stage, const char *message)
 {
+    (void)message;
     if (!ioswitch_early_record[0] || ioswitch_early_record[2] || stage < 7 || stage > 21) return;
     ioswitch_early_record[1] = stage;
-    volatile uint32_t *pixels = (volatile uint32_t *)(uintptr_t)IOSWITCH_FB_PA;
-    for (unsigned y = 280; y < 296; ++y)
-        for (unsigned x = 16 + 40 * (stage - 1); x < 32 + 40 * (stage - 1); ++x)
-            ioswitch_diag_pixel(pixels, x, y, IOSWITCH_GREEN);
-    char line[104];
-    line[0] = (char)('0' + stage / 10);
-    line[1] = (char)('0' + stage % 10);
-    line[2] = ' ';
-    unsigned n = 0;
-    while (message[n] && n < sizeof(line) - 4) {
-        line[3 + n] = message[n];
-        ++n;
-    }
-    line[3 + n] = 0;
-    (void)ioswitch_diag_text(pixels, 16, 320 + (stage - 7) * 20, 704, line, sizeof(line), IOSWITCH_GREEN);
-    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 __attribute__((no_stack_protector)) void ioswitch_diag_early_leave(void)
