@@ -54,3 +54,7 @@ add_custom_target(compdb COMMAND "${IOSWITCH_PYTHON}" "${IOSWITCH_LINT}" compdb 
 add_custom_target(format-check COMMAND "${IOSWITCH_PYTHON}" "${IOSWITCH_LINT}" format --check --all USES_TERMINAL)
 add_custom_target(format COMMAND "${IOSWITCH_PYTHON}" "${IOSWITCH_LINT}" format --all USES_TERMINAL)
 add_custom_target(tidy COMMAND "${IOSWITCH_PYTHON}" "${IOSWITCH_LINT}" tidy --all --compdb USES_TERMINAL)
+
+# XNU's changes live in .cache/xnu-work (its own repository, branch ioswitch); this writes them into the main
+# repository as tree/patches/xnu-ioswitch.diff (scripts/xnu-patch.sh). Run after committing XNU edits there.
+add_custom_target(xnu-patch COMMAND zsh "${CMAKE_SOURCE_DIR}/scripts/xnu-patch.sh" export USES_TERMINAL)
