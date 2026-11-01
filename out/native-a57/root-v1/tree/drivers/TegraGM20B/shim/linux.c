@@ -1,0 +1,855 @@
+// SPDX-License-Identifier: MIT
+/*
+ * Linux kernel API used by the vendored nvkm code, implemented on top of nvxnu.h (shim/xnu_glue.cpp).
+ * Original code; nothing here is copied from Linux (the rbtree is a textbook red-black tree using
+ * Linux's node layout so nvkm's rb_link_node()/rb_entry() work unchanged).
+ */
+#include <nvif/os.h>
+#include <core/device.h>
+
+struct task_struct nvxnu_task = { 0, "kernel" };
+struct tegra_sku_info tegra_sku_info;
+
+const char *dev_name(const struct device *dev)
+{
+	return dev && dev->init_name ? dev->init_name : "gpu";
+}
+
+/* ------------------------------------------------------------------ locks */
+static void *lazy(void **slot, void *(*alloc)(void), void (*release)(void *))
+{
+	void *have = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+	if (have)
+		return have;
+	void *fresh = alloc(), *expected = NULL;
+	if (!__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+		release(fresh);
+		return expected;
+	}
+	return fresh;
+}
+
+static void rw_release(void *rw) { (void)rw; /* rare race loser: leak one lock */ }
+
+void mutex_init(struct mutex *m) { m->lck = NULL; lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free); }
+void mutex_destroy(struct mutex *m) { if (m->lck) nvxnu_mutex_free(m->lck); m->lck = NULL; }
+void mutex_lock(struct mutex *m) { nvxnu_mutex_lock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free)); }
+void mutex_unlock(struct mutex *m) { nvxnu_mutex_unlock(m->lck); }
+int mutex_trylock(struct mutex *m) { return nvxnu_mutex_trylock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free)); }
+bool mutex_is_locked(struct mutex *m)
+{
+	if (!mutex_trylock(m))
+		return true;
+	mutex_unlock(m);
+	return false;
+}
+
+bool refcount_dec_and_mutex_lock(refcount_t *r, struct mutex *lock)
+{
+	int old = atomic_read(&r->refs);
+	while (old > 1) {
+		if (__atomic_compare_exchange_n(&r->refs.counter, &old, old - 1, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+			return false;
+	}
+	mutex_lock(lock);
+	if (!refcount_dec_and_test(r)) {
+		mutex_unlock(lock);
+		return false;
+	}
+	return true;
+}
+
+void spin_lock_init(spinlock_t *s) { s->lck = NULL; lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free); }
+void spin_lock(spinlock_t *s) { nvxnu_spin_lock(lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free)); }
+void spin_unlock(spinlock_t *s) { nvxnu_spin_unlock(s->lck); }
+
+void rwlock_init(rwlock_t *l) { l->lck = NULL; lazy(&l->lck, nvxnu_rw_alloc, rw_release); }
+void read_lock(rwlock_t *l) { nvxnu_rw_lock_shared(lazy(&l->lck, nvxnu_rw_alloc, rw_release)); }
+void read_unlock(rwlock_t *l) { nvxnu_rw_unlock_shared(l->lck); }
+void write_lock(rwlock_t *l) { nvxnu_rw_lock_exclusive(lazy(&l->lck, nvxnu_rw_alloc, rw_release)); }
+void write_unlock(rwlock_t *l) { nvxnu_rw_unlock_exclusive(l->lck); }
+void init_rwsem(struct rw_semaphore *s) { s->lck = NULL; lazy(&s->lck, nvxnu_rw_alloc, rw_release); }
+void down_read(struct rw_semaphore *s) { nvxnu_rw_lock_shared(lazy(&s->lck, nvxnu_rw_alloc, rw_release)); }
+void up_read(struct rw_semaphore *s) { nvxnu_rw_unlock_shared(s->lck); }
+void down_write(struct rw_semaphore *s) { nvxnu_rw_lock_exclusive(lazy(&s->lck, nvxnu_rw_alloc, rw_release)); }
+void up_write(struct rw_semaphore *s) { nvxnu_rw_unlock_exclusive(s->lck); }
+
+/* ------------------------------------------------------------------ time / work */
+unsigned long nvxnu_jiffies(void)
+{
+	return (unsigned long)(nvxnu_nanotime() / (NSEC_PER_SEC / HZ));
+}
+
+long schedule_timeout(long timeout)
+{
+	if (timeout > 0 && timeout != MAX_SCHEDULE_TIMEOUT)
+		nvxnu_usleep((u32)(timeout * (USEC_PER_SEC / HZ)));
+	return 0;
+}
+
+void nvxnu_work_trampoline(void *work)
+{
+	struct work_struct *w = work;
+	w->func(w);
+}
+
+/* ------------------------------------------------------------------ interrupts
+ * request_irq() only records the handler; nvxnu_poll_irqs() runs it in thread context, from the GPU interrupt work
+ * loop (shim/xnu_glue.cpp) and nowhere else. Never from primary interrupt context: nvkm's handlers take
+ * lck_spin/lck_mtx based locks that are not IRQ-safe here. */
+static struct {
+	irq_handler_t handler;
+	void *dev;
+	unsigned int irq;
+} irq_slot;
+static int irq_polling;
+
+int request_irq(unsigned int irq, irq_handler_t h, unsigned long flags, const char *name, void *dev)
+{
+	(void)flags; (void)name;
+	irq_slot.irq = irq;
+	irq_slot.dev = dev;
+	__atomic_store_n(&irq_slot.handler, h, __ATOMIC_RELEASE);
+	return 0;
+}
+
+const void *free_irq(unsigned int irq, void *dev)
+{
+	(void)irq;
+	if (irq_slot.dev == dev)
+		__atomic_store_n(&irq_slot.handler, NULL, __ATOMIC_RELEASE);
+	return NULL;
+}
+
+/* Run the GPU's interrupt handler (nvkm_intr: every MC leaf) once. Returns its irqreturn_t, or -1 when no handler
+ * is registered or another thread is already in it (the line is level-triggered, so what that one missed fires
+ * again). */
+int nvxnu_poll_irqs(void)
+{
+	irq_handler_t h = __atomic_load_n(&irq_slot.handler, __ATOMIC_ACQUIRE);
+	int idle = 0, ret;
+	if (!h || !__atomic_compare_exchange_n(&irq_polling, &idle, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+		return -1;
+	ret = (int)h(irq_slot.irq, irq_slot.dev);
+	__atomic_store_n(&irq_polling, 0, __ATOMIC_RELEASE);
+	return ret;
+}
+
+/* ------------------------------------------------------------------ strings */
+char *kstrdup(const char *s, gfp_t gfp) { return s ? kmemdup(s, strlen(s) + 1, gfp) : NULL; }
+const char *kstrdup_const(const char *s, gfp_t gfp) { return kstrdup(s, gfp); }
+void kfree_const(const void *p) { kfree(p); }
+
+char *kstrndup(const char *s, size_t max, gfp_t gfp)
+{
+	size_t n;
+	char *d;
+	if (!s)
+		return NULL;
+	n = strnlen(s, max);
+	d = kmalloc(n + 1, gfp);
+	if (d) {
+		memcpy(d, s, n);
+		d[n] = 0;
+	}
+	return d;
+}
+
+void *kmemdup(const void *p, size_t size, gfp_t gfp)
+{
+	void *d = kmalloc(size, gfp);
+	if (d)
+		memcpy(d, p, size);
+	return d;
+}
+
+void *krealloc(const void *p, size_t s, gfp_t g)
+{
+	void *d;
+	if (!s) {
+		kfree(p);
+		return NULL;
+	}
+	d = kmalloc(s, g);
+	if (d && p) {
+		size_t old = nvxnu_malloc_size((void *)p);
+		memcpy(d, p, old < s ? old : s);
+		kfree(p);
+	}
+	return d;
+}
+
+char *kasprintf(gfp_t gfp, const char *fmt, ...)
+{
+	va_list ap;
+	char *s;
+	int n;
+	va_start(ap, fmt);
+	n = vsnprintf(NULL, 0, fmt, ap);
+	va_end(ap);
+	s = kmalloc(n + 1, gfp);
+	if (s) {
+		va_start(ap, fmt);
+		vsnprintf(s, n + 1, fmt, ap);
+		va_end(ap);
+	}
+	return s;
+}
+
+size_t strcspn(const char *s, const char *reject)
+{
+	size_t n = 0;
+	while (s[n] && !strchr(reject, s[n]))
+		n++;
+	return n;
+}
+
+size_t strspn(const char *s, const char *accept)
+{
+	size_t n = 0;
+	while (s[n] && strchr(accept, s[n]))
+		n++;
+	return n;
+}
+
+char *strstr(const char *h, const char *n)
+{
+	size_t l = strlen(n);
+	for (; *h; h++)
+		if (!strncmp(h, n, l))
+			return (char *)h;
+	return l ? NULL : (char *)h;
+}
+
+ssize_t strscpy(char *dst, const char *src, size_t size)
+{
+	size_t n;
+	if (!size)
+		return -E2BIG;
+	n = strnlen(src, size);
+	if (n == size) {
+		memcpy(dst, src, size - 1);
+		dst[size - 1] = 0;
+		return -E2BIG;
+	}
+	memcpy(dst, src, n + 1);
+	return n;
+}
+
+unsigned long simple_strtoul(const char *cp, char **endp, unsigned int base)
+{
+	unsigned long v = 0;
+	if (!base) {
+		base = 10;
+		if (cp[0] == '0') {
+			base = 8;
+			if ((cp[1] | 32) == 'x') {
+				base = 16;
+				cp += 2;
+			}
+		}
+	} else if (base == 16 && cp[0] == '0' && (cp[1] | 32) == 'x') {
+		cp += 2;
+	}
+	for (;; cp++) {
+		unsigned int d;
+		if (isdigit(*cp))
+			d = *cp - '0';
+		else if ((*cp | 32) >= 'a' && (*cp | 32) <= 'f')
+			d = (*cp | 32) - 'a' + 10;
+		else
+			break;
+		if (d >= base)
+			break;
+		v = v * base + d;
+	}
+	if (endp)
+		*endp = (char *)cp;
+	return v;
+}
+
+long simple_strtol(const char *cp, char **endp, unsigned int base)
+{
+	if (*cp == '-')
+		return -(long)simple_strtoul(cp + 1, endp, base);
+	return (long)simple_strtoul(cp, endp, base);
+}
+
+int kstrtoul(const char *s, unsigned int base, unsigned long *res)
+{
+	char *end;
+	if (!*s)
+		return -EINVAL;
+	*res = simple_strtoul(s, &end, base);
+	if (*end == '\n')
+		end++;
+	return *end ? -EINVAL : 0;
+}
+
+int kstrtol(const char *s, unsigned int base, long *res)
+{
+	unsigned long v;
+	int neg = *s == '-', ret = kstrtoul(s + neg, base, &v);
+	if (!ret)
+		*res = neg ? -(long)v : (long)v;
+	return ret;
+}
+
+/* insertion sort: nvkm only sorts short tables */
+void sort(void *base, size_t num, size_t size, int (*cmp)(const void *, const void *),
+	  void (*swap_fn)(void *, void *, int))
+{
+	char *b = base;
+	for (size_t i = 1; i < num; i++) {
+		for (size_t j = i; j > 0 && cmp(b + (j - 1) * size, b + j * size) > 0; j--) {
+			if (swap_fn) {
+				swap_fn(b + (j - 1) * size, b + j * size, (int)size);
+			} else {
+				char *x = b + (j - 1) * size, *y = b + j * size;
+				for (size_t k = 0; k < size; k++) {
+					char t = x[k];
+					x[k] = y[k];
+					y[k] = t;
+				}
+			}
+		}
+	}
+}
+
+void list_sort(void *priv, struct list_head *head,
+	       int (*cmp)(void *priv, const struct list_head *a, const struct list_head *b))
+{
+	LIST_HEAD(sorted);
+	while (!list_empty(head)) {
+		struct list_head *e = head->next, *pos;
+		list_del(e);
+		for (pos = sorted.prev; pos != &sorted && cmp(priv, pos, e) > 0; pos = pos->prev)
+			;
+		list_add(e, pos);
+	}
+	list_splice(&sorted, head);
+}
+
+/* ------------------------------------------------------------------ bitmaps */
+unsigned long find_next_bit(const unsigned long *a, unsigned long size, unsigned long off)
+{
+	for (; off < size; off++)
+		if (test_bit(off, a))
+			return off;
+	return size;
+}
+
+unsigned long find_next_zero_bit(const unsigned long *a, unsigned long size, unsigned long off)
+{
+	for (; off < size; off++)
+		if (!test_bit(off, a))
+			return off;
+	return size;
+}
+
+void bitmap_set(unsigned long *map, unsigned int start, unsigned int n)
+{
+	while (n--)
+		__set_bit(start++, map);
+}
+
+void bitmap_clear(unsigned long *map, unsigned int start, unsigned int n)
+{
+	while (n--)
+		__clear_bit(start++, map);
+}
+
+unsigned int bitmap_weight(const unsigned long *map, unsigned int bits)
+{
+	unsigned int w = 0;
+	for (unsigned int i = 0; i < bits; i++)
+		w += test_bit(i, map);
+	return w;
+}
+
+/* ------------------------------------------------------------------ red-black tree */
+#define RB_RED 0
+#define RB_BLACK 1
+#define rb_color(n) ((n)->__rb_parent_color & 1)
+#define rb_is_red(n) ((n) && !rb_color(n))
+#define rb_is_black(n) (!(n) || rb_color(n))
+
+static void rb_set_parent(struct rb_node *n, struct rb_node *p)
+{
+	n->__rb_parent_color = rb_color(n) | (unsigned long)p;
+}
+
+static void rb_set_color(struct rb_node *n, int c)
+{
+	n->__rb_parent_color = (n->__rb_parent_color & ~1UL) | c;
+}
+
+static void rb_replace_child(struct rb_node *old, struct rb_node *new, struct rb_node *parent, struct rb_root *root)
+{
+	if (!parent)
+		root->rb_node = new;
+	else if (parent->rb_left == old)
+		parent->rb_left = new;
+	else
+		parent->rb_right = new;
+}
+
+static void rb_rotate_left(struct rb_node *x, struct rb_root *root)
+{
+	struct rb_node *y = x->rb_right, *p = rb_parent(x);
+	x->rb_right = y->rb_left;
+	if (y->rb_left)
+		rb_set_parent(y->rb_left, x);
+	rb_set_parent(y, p);
+	rb_replace_child(x, y, p, root);
+	y->rb_left = x;
+	rb_set_parent(x, y);
+}
+
+static void rb_rotate_right(struct rb_node *x, struct rb_root *root)
+{
+	struct rb_node *y = x->rb_left, *p = rb_parent(x);
+	x->rb_left = y->rb_right;
+	if (y->rb_right)
+		rb_set_parent(y->rb_right, x);
+	rb_set_parent(y, p);
+	rb_replace_child(x, y, p, root);
+	y->rb_right = x;
+	rb_set_parent(x, y);
+}
+
+void rb_insert_color(struct rb_node *n, struct rb_root *root)
+{
+	struct rb_node *p, *g, *u;
+	rb_set_color(n, RB_RED);
+	while ((p = rb_parent(n)) && rb_is_red(p)) {
+		g = rb_parent(p);
+		if (p == g->rb_left) {
+			u = g->rb_right;
+			if (rb_is_red(u)) {
+				rb_set_color(p, RB_BLACK);
+				rb_set_color(u, RB_BLACK);
+				rb_set_color(g, RB_RED);
+				n = g;
+				continue;
+			}
+			if (n == p->rb_right) {
+				rb_rotate_left(p, root);
+				n = p;
+				p = rb_parent(n);
+			}
+			rb_set_color(p, RB_BLACK);
+			rb_set_color(g, RB_RED);
+			rb_rotate_right(g, root);
+		} else {
+			u = g->rb_left;
+			if (rb_is_red(u)) {
+				rb_set_color(p, RB_BLACK);
+				rb_set_color(u, RB_BLACK);
+				rb_set_color(g, RB_RED);
+				n = g;
+				continue;
+			}
+			if (n == p->rb_left) {
+				rb_rotate_right(p, root);
+				n = p;
+				p = rb_parent(n);
+			}
+			rb_set_color(p, RB_BLACK);
+			rb_set_color(g, RB_RED);
+			rb_rotate_left(g, root);
+		}
+	}
+	rb_set_color(root->rb_node, RB_BLACK);
+}
+
+static void rb_erase_fixup(struct rb_node *x, struct rb_node *parent, struct rb_root *root)
+{
+	struct rb_node *w;
+	while (x != root->rb_node && rb_is_black(x)) {
+		if (x == parent->rb_left) {
+			w = parent->rb_right;
+			if (rb_is_red(w)) {
+				rb_set_color(w, RB_BLACK);
+				rb_set_color(parent, RB_RED);
+				rb_rotate_left(parent, root);
+				w = parent->rb_right;
+			}
+			if (rb_is_black(w->rb_left) && rb_is_black(w->rb_right)) {
+				rb_set_color(w, RB_RED);
+				x = parent;
+				parent = rb_parent(x);
+			} else {
+				if (rb_is_black(w->rb_right)) {
+					rb_set_color(w->rb_left, RB_BLACK);
+					rb_set_color(w, RB_RED);
+					rb_rotate_right(w, root);
+					w = parent->rb_right;
+				}
+				rb_set_color(w, rb_color(parent));
+				rb_set_color(parent, RB_BLACK);
+				if (w->rb_right)
+					rb_set_color(w->rb_right, RB_BLACK);
+				rb_rotate_left(parent, root);
+				x = root->rb_node;
+				break;
+			}
+		} else {
+			w = parent->rb_left;
+			if (rb_is_red(w)) {
+				rb_set_color(w, RB_BLACK);
+				rb_set_color(parent, RB_RED);
+				rb_rotate_right(parent, root);
+				w = parent->rb_left;
+			}
+			if (rb_is_black(w->rb_left) && rb_is_black(w->rb_right)) {
+				rb_set_color(w, RB_RED);
+				x = parent;
+				parent = rb_parent(x);
+			} else {
+				if (rb_is_black(w->rb_left)) {
+					rb_set_color(w->rb_right, RB_BLACK);
+					rb_set_color(w, RB_RED);
+					rb_rotate_left(w, root);
+					w = parent->rb_left;
+				}
+				rb_set_color(w, rb_color(parent));
+				rb_set_color(parent, RB_BLACK);
+				if (w->rb_left)
+					rb_set_color(w->rb_left, RB_BLACK);
+				rb_rotate_right(parent, root);
+				x = root->rb_node;
+				break;
+			}
+		}
+	}
+	if (x)
+		rb_set_color(x, RB_BLACK);
+}
+
+void rb_erase(struct rb_node *z, struct rb_root *root)
+{
+	struct rb_node *child, *parent;
+	int color;
+
+	if (z->rb_left && z->rb_right) {
+		struct rb_node *y = z->rb_right;
+		while (y->rb_left)
+			y = y->rb_left;
+		/* y takes z's place in the tree; y's old right child takes y's place */
+		child = y->rb_right;
+		parent = rb_parent(y);
+		color = rb_color(y);
+		if (parent == z) {
+			parent = y;
+		} else {
+			if (child)
+				rb_set_parent(child, parent);
+			parent->rb_left = child;
+			y->rb_right = z->rb_right;
+			rb_set_parent(z->rb_right, y);
+		}
+		y->rb_left = z->rb_left;
+		rb_set_parent(z->rb_left, y);
+		y->__rb_parent_color = z->__rb_parent_color;
+		rb_replace_child(z, y, rb_parent(z), root);
+	} else {
+		child = z->rb_left ? z->rb_left : z->rb_right;
+		parent = rb_parent(z);
+		color = rb_color(z);
+		if (child)
+			rb_set_parent(child, parent);
+		rb_replace_child(z, child, parent, root);
+	}
+	if (color == RB_BLACK)
+		rb_erase_fixup(child, parent, root);
+}
+
+struct rb_node *rb_first(const struct rb_root *root)
+{
+	struct rb_node *n = root->rb_node;
+	if (!n)
+		return NULL;
+	while (n->rb_left)
+		n = n->rb_left;
+	return n;
+}
+
+struct rb_node *rb_last(const struct rb_root *root)
+{
+	struct rb_node *n = root->rb_node;
+	if (!n)
+		return NULL;
+	while (n->rb_right)
+		n = n->rb_right;
+	return n;
+}
+
+struct rb_node *rb_next(const struct rb_node *n)
+{
+	struct rb_node *p;
+	if (RB_EMPTY_NODE(n))
+		return NULL;
+	if (n->rb_right) {
+		n = n->rb_right;
+		while (n->rb_left)
+			n = n->rb_left;
+		return (struct rb_node *)n;
+	}
+	while ((p = rb_parent(n)) && n == p->rb_right)
+		n = p;
+	return p;
+}
+
+struct rb_node *rb_prev(const struct rb_node *n)
+{
+	struct rb_node *p;
+	if (RB_EMPTY_NODE(n))
+		return NULL;
+	if (n->rb_left) {
+		n = n->rb_left;
+		while (n->rb_right)
+			n = n->rb_right;
+		return (struct rb_node *)n;
+	}
+	while ((p = rb_parent(n)) && n == p->rb_left)
+		n = p;
+	return p;
+}
+
+/* ------------------------------------------------------------------ GPU pool pages, DMA, vmap
+ * One physically contiguous pool (nvxnu_pool_*); struct page is an entry of a descriptor array so
+ * page_to_phys()/page_address() are O(1). Allocation is first-fit over a bitmap, under a spinlock. */
+static struct page *pool_pages;
+static unsigned long *pool_map;
+static unsigned long pool_npages, pool_used;
+static DEFINE_SPINLOCK(pool_lock);
+
+int nvxnu_pool_setup(void)
+{
+	int ret = nvxnu_pool_init();
+	if (ret)
+		return ret;
+	pool_npages = nvxnu_pool_size() >> PAGE_SHIFT;
+	pool_pages = kcalloc(pool_npages, sizeof(*pool_pages), GFP_KERNEL);
+	pool_map = kcalloc(BITS_TO_LONGS(pool_npages), sizeof(long), GFP_KERNEL);
+	if (!pool_pages || !pool_map)
+		return -ENOMEM;
+	for (unsigned long i = 0; i < pool_npages; i++)
+		pool_pages[i].pa = nvxnu_pool_base_pa() + (i << PAGE_SHIFT);
+	return 0;
+}
+
+static long pool_alloc(unsigned long n, unsigned long align)
+{
+	unsigned long start = 0, i;
+	spin_lock(&pool_lock);
+	while ((start = find_next_zero_bit(pool_map, pool_npages, start)) + n <= pool_npages) {
+		start = ALIGN(start, align);
+		for (i = 0; i < n && start + i < pool_npages && !test_bit(start + i, pool_map); i++)
+			;
+		if (i == n) {
+			bitmap_set(pool_map, start, n);
+			pool_used += n;
+			spin_unlock(&pool_lock);
+			return start;
+		}
+		start += i + 1;
+	}
+	spin_unlock(&pool_lock);
+	return -ENOMEM;
+}
+
+static void pool_free(unsigned long first, unsigned long n)
+{
+	spin_lock(&pool_lock);
+	bitmap_clear(pool_map, first, n);
+	pool_used -= n;
+	spin_unlock(&pool_lock);
+}
+
+unsigned long nvxnu_pool_used_pages(void) { return READ_ONCE(pool_used); }
+
+static long pool_index(u64 pa)
+{
+	u64 base = nvxnu_pool_base_pa();
+	if (pa < base || pa >= base + (pool_npages << PAGE_SHIFT))
+		return -1;
+	return (pa - base) >> PAGE_SHIFT;
+}
+
+struct page *alloc_pages(gfp_t gfp, unsigned int order)
+{
+	long i = pool_map ? pool_alloc(1UL << order, 1UL << order) : -ENOMEM;
+	if (i < 0)
+		return NULL;
+	if (gfp & __GFP_ZERO)
+		memset(page_address(&pool_pages[i]), 0, PAGE_SIZE << order);
+	return &pool_pages[i];
+}
+
+struct page *alloc_page(gfp_t gfp) { return alloc_pages(gfp, 0); }
+void __free_pages(struct page *p, unsigned int order) { if (p) pool_free(p - pool_pages, 1UL << order); }
+void __free_page(struct page *p) { __free_pages(p, 0); }
+void *page_address(const struct page *p) { return (char *)nvxnu_pool_base_va() + ((p - pool_pages) << PAGE_SHIFT); }
+
+struct page *pfn_to_page(unsigned long pfn)
+{
+	long i = pool_index((u64)pfn << PAGE_SHIFT);
+	return i < 0 ? NULL : &pool_pages[i];
+}
+
+struct page *vmalloc_to_page(const void *addr)
+{
+	char *base = nvxnu_pool_base_va();
+	if ((const char *)addr < base || (const char *)addr >= base + (pool_npages << PAGE_SHIFT))
+		return NULL;
+	return &pool_pages[((const char *)addr - base) >> PAGE_SHIFT];
+}
+
+void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gfp, unsigned long attrs)
+{
+	unsigned long n = PAGE_ALIGN(size) >> PAGE_SHIFT;
+	long i = pool_map ? pool_alloc(n, 1) : -ENOMEM;
+	(void)dev; (void)gfp; (void)attrs;
+	if (i < 0)
+		return NULL;
+	*handle = pool_pages[i].pa;
+	memset(page_address(&pool_pages[i]), 0, n << PAGE_SHIFT);
+	return page_address(&pool_pages[i]);
+}
+
+void dma_free_attrs(struct device *dev, size_t size, void *va, dma_addr_t handle, unsigned long attrs)
+{
+	long i = pool_index(handle);
+	(void)dev; (void)va; (void)attrs;
+	if (i >= 0)
+		pool_free(i, PAGE_ALIGN(size) >> PAGE_SHIFT);
+}
+
+dma_addr_t dma_map_page(struct device *dev, struct page *page, size_t off, size_t size, enum dma_data_direction dir)
+{
+	(void)dev; (void)size; (void)dir;
+	return page ? page->pa + off : DMA_MAPPING_ERROR;
+}
+
+void dma_unmap_page(struct device *dev, dma_addr_t a, size_t s, enum dma_data_direction dir)
+{
+	(void)dev; (void)a; (void)s; (void)dir;
+}
+
+/* pool memory is mapped write-combined, so there is nothing to clean; kept for the fallback pool */
+void dma_sync_single_for_device(struct device *dev, dma_addr_t a, size_t s, enum dma_data_direction dir)
+{
+	long i = pool_index(a);
+	(void)dev; (void)dir;
+	if (i >= 0)
+		nvxnu_dcache_clean((char *)page_address(&pool_pages[i]) + (a & ~PAGE_MASK), s);
+}
+
+void dma_sync_single_for_cpu(struct device *dev, dma_addr_t a, size_t s, enum dma_data_direction dir)
+{
+	long i = pool_index(a);
+	(void)dev; (void)dir;
+	if (i >= 0)
+		nvxnu_dcache_clean_inval((char *)page_address(&pool_pages[i]) + (a & ~PAGE_MASK), s);
+}
+
+void *vmap(struct page **pages, unsigned int count, unsigned long flags, pgprot_t prot)
+{
+	u64 *pas;
+	void *va;
+	unsigned int i;
+	(void)flags; (void)prot;
+	for (i = 1; i < count && pages[i] == pages[0] + i; i++)
+		;
+	if (i == count)
+		return page_address(pages[0]);
+	pas = kmalloc_array(count, sizeof(*pas), GFP_KERNEL);
+	if (!pas)
+		return NULL;
+	for (i = 0; i < count; i++)
+		pas[i] = pages[i]->pa;
+	va = nvxnu_vmap(pas, count);
+	kfree(pas);
+	return va;
+}
+
+void vunmap(const void *addr)
+{
+	if (!vmalloc_to_page(addr))
+		nvxnu_vunmap((void *)addr);
+}
+
+/* scatter-gather: only reachable through NVKM_FIRMWARE_IMG_SGT, which GM20B never uses */
+int sg_alloc_table(struct sg_table *t, unsigned int nents, gfp_t gfp)
+{
+	(void)t; (void)nents; (void)gfp;
+	return -ENOMEM;
+}
+void sg_free_table(struct sg_table *t) { (void)t; }
+void sg_set_page(struct scatterlist *sg, struct page *page, unsigned int len, unsigned int off)
+{
+	sg->page_link = (unsigned long)page;
+	sg->length = len;
+	sg->offset = off;
+}
+int dma_map_sgtable(struct device *d, struct sg_table *t, enum dma_data_direction dir, unsigned long attrs)
+{
+	(void)d; (void)t; (void)dir; (void)attrs;
+	return -ENOMEM;
+}
+void dma_unmap_sgtable(struct device *d, struct sg_table *t, enum dma_data_direction dir, unsigned long attrs)
+{
+	(void)d; (void)t; (void)dir; (void)attrs;
+}
+
+/* ------------------------------------------------------------------ MMIO and platform device */
+void __iomem *ioremap(phys_addr_t pa, size_t size) { return (void __iomem *)nvxnu_ioremap(pa, size, 0); }
+void __iomem *ioremap_wc(phys_addr_t pa, size_t size) { return (void __iomem *)nvxnu_ioremap(pa, size, 1); }
+void iounmap(volatile void __iomem *va) { (void)va; /* BAR mappings live as long as the kernel */ }
+
+struct resource *platform_get_resource(struct platform_device *pdev, unsigned int type, unsigned int n)
+{
+	for (u32 i = 0; i < pdev->num_resources; i++) {
+		if ((pdev->resource[i].flags & type) && !n--)
+			return &pdev->resource[i];
+	}
+	return NULL;
+}
+
+int platform_get_irq_byname(struct platform_device *pdev, const char *name)
+{
+	return !strcmp(name, "stall") ? pdev->irq_stall : pdev->irq_nonstall;
+}
+
+void __iomem *devm_platform_ioremap_resource(struct platform_device *pdev, unsigned int index)
+{
+	struct resource *r = platform_get_resource(pdev, IORESOURCE_MEM, index);
+	void __iomem *va = r ? ioremap(r->start, resource_size(r)) : NULL;
+	return va ? va : ERR_PTR(-ENOMEM);
+}
+
+/* ------------------------------------------------------------------ firmware (embedded) */
+int request_firmware(const struct firmware **pfw, const char *name, struct device *dev)
+{
+	struct firmware *fw;
+	const void *data;
+	unsigned long size;
+	(void)dev;
+	*pfw = NULL;
+	if (nvxnu_firmware_find(name, &data, &size))
+		return -ENOENT;
+	fw = kzalloc(sizeof(*fw), GFP_KERNEL);
+	if (!fw)
+		return -ENOMEM;
+	fw->data = data;
+	fw->size = size;
+	*pfw = fw;
+	return 0;
+}
+
+void release_firmware(const struct firmware *fw)
+{
+	kfree(fw);
+}

@@ -1,0 +1,53 @@
+# The metal2vulkan patch series build-tegra-gm20b-metal.py applies to 720ef1ce, in order (paths from drivers/).
+# AdrenoMetal feat/ipados27-gpu-parity@d6ca655 bridge/patches 0001-0037 (MaliMetal applies them on this pin and OS build): 0001-0005
+# are byte-identical to NativeMetal's; its 0024 (Core Image kernel libraries name no function) is replaced by NativeMetal's 0006 (they
+# list theirs, as 21H461's Core Image loaded them on this device), and its 0019 llvm-bitreverse replaces our m2v 0003 (the same
+# lowering). Then this GPU's own patches, MaliMetal's two YCbCr patches (0100, 0101; off until their environment says) and ours.
+NativeMetal/bridge/patches/0001-optional-constant-output-members.patch
+NativeMetal/bridge/patches/0002-resource-wait-storage-dependencies.patch
+NativeMetal/bridge/patches/0003-cache-device-entry-point-priming.patch
+NativeMetal/bridge/patches/0004-fold-constant-global-field-loads.patch
+NativeMetal/bridge/patches/0005-keep-module-decodes-and-profile-fingerprints.patch
+TegraGM20BMetal/patches/parity/0006-skip-draws-without-a-pipeline.patch
+TegraGM20BMetal/patches/parity/0007-accept-two-plane-rgb-surfaces.patch
+TegraGM20BMetal/patches/parity/0008-alias-padded-rows-of-written-textures.patch
+TegraGM20BMetal/patches/parity/0009-keep-final-pass.patch
+TegraGM20BMetal/patches/parity/0010-fewer-allocations-per-draw.patch
+TegraGM20BMetal/patches/parity/0011-keep-draw-commands.patch
+TegraGM20BMetal/patches/parity/0012-keep-draw-lists.patch
+TegraGM20BMetal/patches/parity/0013-skip-unchanged-rebinds.patch
+TegraGM20BMetal/patches/parity/0014-map-tracker-keys.patch
+TegraGM20BMetal/patches/parity/0015-two-plane-shadow-as-memory-lies.patch
+TegraGM20BMetal/patches/parity/0016-tile-stores-within-rows.patch
+TegraGM20BMetal/patches/parity/0017-optional-shader-cache-directory.patch
+TegraGM20BMetal/patches/parity/0018-srgb-extended-range-blend-rounded-model.patch
+TegraGM20BMetal/patches/parity/0019-llvm-bitreverse.patch
+TegraGM20BMetal/patches/parity/0020-growing-memory-blocks.patch
+TegraGM20BMetal/patches/parity/0021-patch-with-no-control-points.patch
+TegraGM20BMetal/patches/parity/0022-mipmaps-outside-the-measured-spread.patch
+TegraGM20BMetal/patches/parity/0023-heap-texture-size-a-multiple-of-its-alignment.patch
+NativeMetal/bridge/patches/0006-core-image-metallibs.patch
+TegraGM20BMetal/patches/parity/0025-set-viewports-and-scissors-in-place.patch
+TegraGM20BMetal/patches/parity/0026-keep-push-and-table-bytes.patch
+TegraGM20BMetal/patches/parity/0027-keep-bind-vectors.patch
+TegraGM20BMetal/patches/parity/0028-keep-bound-buffer-vectors.patch
+TegraGM20BMetal/patches/parity/0029-keep-vertex-buffer-binds.patch
+TegraGM20BMetal/patches/parity/0030-hand-draw-rooms-to-the-next-encoder.patch
+TegraGM20BMetal/patches/parity/0031-keep-bound-state-room.patch
+TegraGM20BMetal/patches/parity/0032-reshape-colors-without-cloning.patch
+TegraGM20BMetal/patches/parity/0033-look-up-final-passes-by-reference.patch
+TegraGM20BMetal/patches/parity/0034-batch-barriers-on-the-stack.patch
+TegraGM20BMetal/patches/parity/0035-reset-command-pools-as-given-back.patch
+TegraGM20BMetal/patches/parity/0036-calibrate-off-the-commit-path.patch
+TegraGM20BMetal/patches/parity/0037-key-hash-the-draw-path-maps.patch
+TegraGM20BMetal/patches/m2v/0001-unordered-framebuffer-fetch.patch
+TegraGM20BMetal/patches/m2v/0002-core-image-imageblock-role.patch
+TegraGM20BMetal/patches/m2v/0004-unordered-extended-range-blend.patch
+TegraGM20BMetal/patches/m2v/0100-ycbcr-skip-unchanged-conversion.patch
+TegraGM20BMetal/patches/m2v/0101-ycbcr-device-linear-filter.patch
+TegraGM20BMetal/patches/m2v/0102-pooled-block-cap.patch
+TegraGM20BMetal/patches/m2v/0103-skip-zeros-of-fresh-placements.patch
+TegraGM20BMetal/patches/m2v/0104-memoryless-dont-care-unread.patch
+TegraGM20BMetal/patches/m2v/0105-memoryless-linear-backing.patch
+TegraGM20BMetal/patches/m2v/0106-fetch-barrier-by-color-writes.patch
+TegraGM20BMetal/patches/m2v/0108-shader-cache-seed-beneath-the-directory.patch

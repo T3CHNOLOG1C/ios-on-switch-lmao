@@ -1,0 +1,15 @@
+--- a/osfmk/arm/rtclock.c
++++ b/osfmk/arm/rtclock.c
+@@ -468,7 +468,11 @@
+ 	*secs = t64 = abstime / rtclock_sec_divisor;
+ 	abstime -= (t64 * rtclock_sec_divisor);
+ 
+-	*microsecs = (uint32_t)(abstime / rtclock_usec_divisor);
++	/* Preserve fractional-MHz counters such as Tegra's 19.2 MHz. Dividing
++	 * the frequency first rounds it down and lets tv_usec exceed one second,
++	 * making microuptime run backwards at each second boundary. The remainder
++	 * is below the uint32_t second divisor, so this product fits uint64_t. */
++	*microsecs = (uint32_t)((abstime * USEC_PER_SEC) / rtclock_sec_divisor);
+ }
+ 
+ void

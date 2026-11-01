@@ -1,0 +1,114 @@
+From: ioswitch <noreply@ioswitch.local>
+Subject: [PATCH] Decode Core Image's air.ci_imageblock role and pointer layouts
+
+iOS 17's ci_stdlib and ci_stdlib_h declare their _ci_*_block helpers with an air.ci_imageblock parameter, and
+CIPortraitBlurV2's slm_calcV2 states air.struct_type_info on an air.ci_pointer: each was an unknown key, so the whole module
+(every function of the library) failed to decode. The role is decoded (a struct holding a pointer); the layout is read and
+not kept.
+---
+diff --git a/crates/metal2vulkan-air/src/abi/check.rs b/crates/metal2vulkan-air/src/abi/check.rs
+index 0d27edb5..2f86a33b 100644
+--- a/crates/metal2vulkan-air/src/abi/check.rs
++++ b/crates/metal2vulkan-air/src/abi/check.rs
+@@ -340,6 +340,7 @@ fn core_image_role_type(m: &Module, role: CoreImageRole, ty: TypeId) -> bool {
+         CoreImageRole::Texture { .. } => bare_or_wrapped(&|t| ptr_in(t, Some(AddrSpace::Device))),
+         CoreImageRole::Sampler => bare_or_wrapped(&|t| ptr_in(t, Some(AddrSpace::Constant))),
+         CoreImageRole::Pointer { .. } => ptr_in(ty, None),
++        CoreImageRole::Imageblock => bare_or_wrapped(&|t| ptr_in(t, None)),
+     }
+ }
+ 
+diff --git a/crates/metal2vulkan-air/src/abi/core_image.rs b/crates/metal2vulkan-air/src/abi/core_image.rs
+index 2f727722..1dccf704 100644
+--- a/crates/metal2vulkan-air/src/abi/core_image.rs
++++ b/crates/metal2vulkan-air/src/abi/core_image.rs
+@@ -40,13 +40,15 @@ const TEXTURE: &[Key] = &[
+     Key::Write,
+     Key::ReadWrite,
+ ];
+-/// The attributes of `air.ci_pointer`.
++/// The attributes of `air.ci_pointer`. `air.struct_type_info` (the pointee's layout, which
++/// `CIPortraitBlurV2`'s `slm_calcV2` states) is read and not kept.
+ const POINTER: &[Key] = &[
+     Key::Read,
+     Key::Write,
+     Key::ReadWrite,
+     Key::ArgTypeSize,
+     Key::ArgTypeAlignSize,
++    Key::StructTypeInfo,
+ ];
+ 
+ /// Decode one `!air.ci` entry.
+@@ -105,7 +107,7 @@ pub(super) fn kernel(m: &Module, id: MdId, meter: &mut Meter) -> Result<CoreImag
+         let allowed: &[&[Key]] = match role_key {
+             Key::CiTexture => &[NAMES, TEXTURE],
+             Key::CiPointer => &[NAMES, POINTER],
+-            Key::CiBuiltin | Key::CiMatrix | Key::CiSampler => &[NAMES],
++            Key::CiBuiltin | Key::CiMatrix | Key::CiSampler | Key::CiImageblock => &[NAMES],
+             other => return Err(i.site.err(AbiError::UnknownKey, Some(other.name()))),
+         };
+         let a = attrs(&mut i, allowed, meter)?;
+@@ -130,6 +132,7 @@ pub(super) fn kernel(m: &Module, id: MdId, meter: &mut Meter) -> Result<CoreImag
+             },
+             Key::CiMatrix => CoreImageRole::Matrix,
+             Key::CiSampler => CoreImageRole::Sampler,
++            Key::CiImageblock => CoreImageRole::Imageblock,
+             // `air.ci_builtin`: every other key returned above.
+             _ => CoreImageRole::Builtin,
+         };
+@@ -157,6 +160,8 @@ struct Attrs {
+     location_count: Option<u32>,
+     size: Option<u32>,
+     align: Option<u32>,
++    /// `air.struct_type_info` was stated.
++    layout: bool,
+ }
+ 
+ /// Read attributes until the node ends. A key outside `allowed` is `UnknownKey`; a repeated key,
+@@ -176,6 +181,10 @@ fn attrs(ops: &mut Ops<'_>, allowed: &[&[Key]], meter: &mut Meter) -> Result<Att
+             Key::LocationCount => a.location_count.replace(ops.u32(name)?).is_some(),
+             Key::ArgTypeSize => a.size.replace(ops.u32(name)?).is_some(),
+             Key::ArgTypeAlignSize => a.align.replace(ops.u32(name)?).is_some(),
++            Key::StructTypeInfo => {
++                ops.child(name)?;
++                std::mem::replace(&mut a.layout, true)
++            }
+             Key::Sample => a.access.replace(Access::Sample).is_some(),
+             Key::Read => a.access.replace(Access::Read).is_some(),
+             Key::Write => a.access.replace(Access::Write).is_some(),
+diff --git a/crates/metal2vulkan-air/src/abi/keys.rs b/crates/metal2vulkan-air/src/abi/keys.rs
+index b3a6e39c..0a6b6997 100644
+--- a/crates/metal2vulkan-air/src/abi/keys.rs
++++ b/crates/metal2vulkan-air/src/abi/keys.rs
+@@ -132,6 +132,7 @@ pub(super) enum Key {
+     CiTexture,
+     CiSampler,
+     CiPointer,
++    CiImageblock,
+     LocationCount,
+ }
+ 
+@@ -299,6 +300,7 @@ const KEYS: &[(&str, Key)] = &[
+     ("air.ci_texture", Key::CiTexture),
+     ("air.ci_sampler", Key::CiSampler),
+     ("air.ci_pointer", Key::CiPointer),
++    ("air.ci_imageblock", Key::CiImageblock),
+     ("air.location_count", Key::LocationCount),
+ ];
+ 
+diff --git a/crates/metal2vulkan-air/src/abi/mod.rs b/crates/metal2vulkan-air/src/abi/mod.rs
+index 3eec9be6..67c56540 100644
+--- a/crates/metal2vulkan-air/src/abi/mod.rs
++++ b/crates/metal2vulkan-air/src/abi/mod.rs
+@@ -1258,6 +1258,11 @@ pub enum CoreImageRole {
+     /// `air.ci_sampler`: a sampler handle, a constant-space pointer passed bare or as the only
+     /// field of a struct.
+     Sampler,
++    /// `air.ci_imageblock`: the kernel's implicit imageblock (`imageblock<T, layout_implicit>`), a
++    /// by-value struct holding a pointer: what iOS 17's `ci_stdlib` passes its `_ci_*_block`
++    /// helpers on GPUs with imageblocks. Decoded so the rest of the module decodes; a stage that
++    /// reaches it is refused where imageblocks are.
++    Imageblock,
+     /// `air.ci_pointer`: a pointer to `size` bytes.
+     Pointer {
+         /// `air.read`, `air.write`, or `air.read_write`.

@@ -1,0 +1,145 @@
+diff --git a/src/nouveau/vulkan/nvk_image.c b/src/nouveau/vulkan/nvk_image.c
+index 612569c..60d44a6 100644
+--- a/src/nouveau/vulkan/nvk_image.c
++++ b/src/nouveau/vulkan/nvk_image.c
+@@ -75,8 +75,15 @@ nvk_get_image_plane_format_features(const struct nvk_physical_device *pdev,
+       features |= VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_DEPTH_COMPARISON_BIT;
+    }
+ 
+-   if (nil_format_supports_color_targets(&pdev->info, p_format) && 
+-       tiling != VK_IMAGE_TILING_LINEAR) {
++   /* A VK_IMAGE_TILING_LINEAR image renders too (2D, one level, layer and
++    * sample, as linear images are here): in place, as a pitch color target,
++    * where its address and row stride are 128B-aligned and every color
++    * attachment of the rendering is linear (nvk_rendering_linear), else
++    * through its tiled shadow (nvk_image_init_linear_tiled_shadows), as a
++    * DRM_FORMAT_MOD_LINEAR image does.  Metal's IOSurfaces are such images
++    * (metal2vulkan over host memory).
++    */
++   if (nil_format_supports_color_targets(&pdev->info, p_format)) {
+       features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT;
+       if (nil_format_supports_blending(&pdev->info, p_format))
+          features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT;
+@@ -857,6 +864,62 @@ nvk_image_can_compress(const struct nvk_physical_device *pdev,
+    return true;
+ }
+ 
++/* The tiled shadow of each plane of a linear image (DRM_FORMAT_MOD_LINEAR, or
++ * VK_IMAGE_TILING_LINEAR with color attachment usage): the image renders
++ * through it in a rendering it cannot render in place (nvk_rendering_linear),
++ * its memory allocated at the first such rendering
++ * (nvk_image_ensure_linear_tiled_shadow_mem).
++ */
++static VkResult
++nvk_image_init_linear_tiled_shadows(struct nvk_device *dev,
++                                    struct nvk_image *image,
++                                    nil_image_usage_flags usage,
++                                    const struct vk_format_ycbcr_info *ycbcr_info)
++{
++   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
++
++   for (uint8_t plane = 0; plane < image->plane_count; plane++) {
++      VkFormat format = ycbcr_info ?
++         ycbcr_info->planes[plane].format : image->vk.format;
++      const uint8_t width_scale = ycbcr_info ?
++         ycbcr_info->planes[plane].denominator_scales[0] : 1;
++      const uint8_t height_scale = ycbcr_info ?
++         ycbcr_info->planes[plane].denominator_scales[1] : 1;
++
++      struct nil_image_init_info tiled_shadow_nil_info = {
++         .dim = vk_image_type_to_nil_dim(image->vk.image_type),
++         .format = nil_format(nvk_format_to_pipe_format(format)),
++         .modifier = DRM_FORMAT_MOD_INVALID,
++         .extent_px = {
++            .width = image->vk.extent.width / width_scale,
++            .height = image->vk.extent.height / height_scale,
++            .depth = image->vk.extent.depth,
++            .array_len = image->vk.array_layers,
++         },
++         .levels = image->vk.mip_levels,
++         .samples = image->vk.samples,
++         .usage = usage & ~NIL_IMAGE_USAGE_LINEAR_BIT,
++      };
++
++      bool ok = nil_image_init(&pdev->info,
++                               &image->linear_tiled_shadows[plane].nil,
++                               &tiled_shadow_nil_info);
++      if (!ok)
++         return vk_errorf(dev, VK_ERROR_UNKNOWN,
++                          "Invalid image creation parameters");
++
++      /* These are always allocated by the driver so the offset
++       * doesn't matter.
++       */
++      image->linear_tiled_shadows[plane].plane_offset_B = 0;
++      image->linear_tiled_shadows[plane].plane_align_B =
++         MAX2(image->linear_tiled_shadows[plane].nil.align_B,
++              pdev->nvkmd->bind_align_B);
++   }
++
++   return VK_SUCCESS;
++}
++
+ static VkResult
+ nvk_image_init(struct nvk_device *dev,
+                struct nvk_image *image,
+@@ -993,47 +1056,21 @@ nvk_image_init(struct nvk_device *dev,
+       }
+ 
+       if (image->vk.drm_format_mod == DRM_FORMAT_MOD_LINEAR) {
+-         for (uint8_t plane = 0; plane < image->plane_count; plane++) {
+-            VkFormat format = ycbcr_info ?
+-               ycbcr_info->planes[plane].format : image->vk.format;
+-            const uint8_t width_scale = ycbcr_info ?
+-               ycbcr_info->planes[plane].denominator_scales[0] : 1;
+-            const uint8_t height_scale = ycbcr_info ?
+-               ycbcr_info->planes[plane].denominator_scales[1] : 1;
+-
+-            struct nil_image_init_info tiled_shadow_nil_info = {
+-               .dim = vk_image_type_to_nil_dim(image->vk.image_type),
+-               .format = nil_format(nvk_format_to_pipe_format(format)),
+-               .modifier = DRM_FORMAT_MOD_INVALID,
+-               .extent_px = {
+-                  .width = image->vk.extent.width / width_scale,
+-                  .height = image->vk.extent.height / height_scale,
+-                  .depth = image->vk.extent.depth,
+-                  .array_len = image->vk.array_layers,
+-               },
+-               .levels = image->vk.mip_levels,
+-               .samples = image->vk.samples,
+-               .usage = usage & ~NIL_IMAGE_USAGE_LINEAR_BIT,
+-            };
+-
+-            bool ok = nil_image_init(&pdev->info,
+-                                     &image->linear_tiled_shadows[plane].nil,
+-                                     &tiled_shadow_nil_info);
+-            if (!ok)
+-               return vk_errorf(dev, VK_ERROR_UNKNOWN,
+-                                "Invalid image creation parameters");
+-
+-            /* These are always allocated by the driver so the offset
+-             * doesn't matter.
+-             */
+-            image->linear_tiled_shadows[plane].plane_offset_B = 0;
+-            image->linear_tiled_shadows[plane].plane_align_B =
+-               MAX2(image->linear_tiled_shadows[plane].nil.align_B,
+-                    pdev->nvkmd->bind_align_B);
+-         }
++         VkResult result =
++            nvk_image_init_linear_tiled_shadows(dev, image, usage, ycbcr_info);
++         if (result != VK_SUCCESS)
++            return result;
+       }
+    }
+ 
++   if (image->vk.tiling == VK_IMAGE_TILING_LINEAR &&
++       (image->vk.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) {
++      VkResult result =
++         nvk_image_init_linear_tiled_shadows(dev, image, usage, ycbcr_info);
++      if (result != VK_SUCCESS)
++         return result;
++   }
++
+    simple_mtx_init(&image->tiled_shadow_mutex, mtx_plain);
+ 
+    /* The video decode engine needs the block size to be the same across chroma

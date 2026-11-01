@@ -1,0 +1,13 @@
+brcm/brcmfmac4356A3-pcie.bin (583641 bytes, sha256 32a16e7b4391ccd248d3677c17cde940f398aaaaa6163571fcbff2bbee026ade)
+  Intel HEX firmware/brcm/brcmfmac4356A3-pcie.bin.ihex of https://github.com/CTCaer/switch-l4t-kernel-4.9
+  (linux-dev @ 2d0059fd3167a8df756de2aa0489d4aa70a9fc15; file from b784a232, 2023-01-15), converted to binary
+  as the kernel's firmware/Makefile does (objcopy -Iihex -Obinary). Image of the Switch's own HOS 14.0.0 Wi-Fi
+  sysmodule: "4356a3-roml/pcie-ag-msgbuf-...-clm_4356a3_ntd-... Version: 7.35.252.108 (c216b7c)". Licence: WHENCE.
+
+brcm/brcmfmac4356A3-pcie.txt (2758 bytes, sha256 68d581a062816efe508d22cae7221c5f46528de8b57439d0b220fb4c8584f23b)
+  NVRAM (board calibration) from https://gitlab.com/switchroot/android/nx-firmware (main @
+  521295deb9b3512f2e4e972a3c2bff25b1fa1a6a, added in b8cb28fc "initial commit", 2024-02-28): "WiFi NVRAM,
+  includes ccode mod", from a HOS stock dump. boardtype=0x074a, xtalfreq=37400, ccode=XZ (worldwide).
+  Its macaddr is a placeholder; the driver sets cur_etheraddr from the fuses after boot.
+
+Not used: nx-firmware's brcmfmac4356-pcie.clm_blob is the Shield TV (mdarcy) CLM; this image carries its own.

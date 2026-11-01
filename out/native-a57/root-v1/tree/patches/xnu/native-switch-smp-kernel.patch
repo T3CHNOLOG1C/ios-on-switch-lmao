@@ -1,0 +1,130 @@
+--- a/osfmk/arm/arm_init.c
++++ b/osfmk/arm/arm_init.c
+@@ -706,6 +706,12 @@
+ 
+ 
+ 	machine_set_current_thread(cpu_data_ptr->cpu_active_thread);
++#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
++	if (cpu_data_ptr != &BootCpuData) {
++		extern void ioswitch_secondary_vectors_leave(void);
++		ioswitch_secondary_vectors_leave();
++	}
++#endif
+ 
+ #if APPLE_ARM64_ARCH_FAMILY
+ 	configure_late_apple_regs(false);
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -15010,3 +15010,7 @@
+ }
+ 
+ #endif /* DEVELOPMENT || DEBUG */
++
++#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !XNU_MONITOR
++#include <arm64/ioswitch_smp_tables.inc>
++#endif
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -945,6 +945,23 @@
+ 	return KERN_SUCCESS;
+ }
+ 
++#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
++/* The reset vector searches the actual CPU data table with its caches off. */
++int ioswitch_smp_publish_cpu_state(void);
++int
++ioswitch_smp_publish_cpu_state(void)
++{
++	if (ml_get_max_cpu_number() != 3 || ml_get_boot_cpu_number() != 0) return 1;
++	for (unsigned i = 0; i < 4; ++i) {
++		cpu_data_t *data = __atomic_load_n(&CpuDataEntries[i].cpu_data_vaddr, __ATOMIC_ACQUIRE);
++		if (data != NULL) CleanPoC_DcacheRegion((vm_offset_t)data, sizeof(*data));
++	}
++	CleanPoC_DcacheRegion((vm_offset_t)CpuDataEntries, sizeof(CpuDataEntries));
++	extern int ioswitch_smp_publish_tables(void);
++	return ioswitch_smp_publish_tables();
++}
++#endif
++
+ #if defined(KERNEL_INTEGRITY_CTRR)
+ /* Hibernation needs to reset this state, so data and text are in the hib segment;
+  * this allows them be accessed and executed early.
+--- a/osfmk/kern/machine.c
++++ b/osfmk/kern/machine.c
+@@ -170,6 +170,10 @@
+  *	Flag processor as up and running, and available
+  *	for scheduling.
+  */
++#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
++extern void ioswitch_smp_scheduler_online(unsigned int cpu);
++#endif
++
+ void
+ processor_up(
+ 	processor_t                     processor)
+@@ -225,6 +229,9 @@
+ 	if (dtrace_cpu_state_changed_hook) {
+ 		(*dtrace_cpu_state_changed_hook)(processor->cpu_id, TRUE);
+ 	}
++#endif
++#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
++	ioswitch_smp_scheduler_online(processor->cpu_id);
+ #endif
+ }
+ #include <atm/atm_internal.h>
+--- /dev/null
++++ b/osfmk/arm64/ioswitch_smp_tables.inc
+@@ -0,0 +1,53 @@
++/* Native XNU pmap scope only. Publish table pages, never mapped device/data leaves. */
++#define IOSW_SMP_MAX_TABLE_PAGES 8192u
++struct iosw_smp_table_walk {
++    pmap_paddr_t ancestors[4];
++    unsigned pages;
++};
++
++int ioswitch_smp_publish_tables(void);
++
++static int
++iosw_smp_clean_table(pmap_paddr_t pa, unsigned level, unsigned entries,
++    const pt_attr_t *attr, struct iosw_smp_table_walk *walk)
++{
++    const unsigned leaf = pt_attr_leaf_level(attr);
++    if (level > leaf || leaf != 3 || !entries || entries > 512 || (pa & 4095) ||
++        !pa_valid(pa) || !pa_valid(pa + 4095) || ++walk->pages > IOSW_SMP_MAX_TABLE_PAGES)
++        return 1;
++    for (unsigned i = pt_attr_root_level(attr); i < level; ++i)
++        if (walk->ancestors[i] == pa) return 1;
++    walk->ancestors[level] = pa;
++    const tt_entry_t *table = (const tt_entry_t *)phystokv(pa);
++    CleanPoC_DcacheRegion((vm_offset_t)table, entries * sizeof(*table));
++    if (level == leaf) return 0;
++    const uint64_t valid = attr->pta_level_info[level].valid_mask;
++    const uint64_t mask = attr->pta_level_info[level].type_mask;
++    const uint64_t block = attr->pta_level_info[level].type_block;
++    for (unsigned i = 0; i < entries; ++i) {
++        const tt_entry_t value = __atomic_load_n(&table[i], __ATOMIC_ACQUIRE);
++        if (!(value & valid) || (value & mask) == block) continue;
++        if ((value & ARM_TTE_TYPE_MASK) != ARM_TTE_TYPE_TABLE ||
++            iosw_smp_clean_table(value & ARM_TTE_TABLE_MASK, level + 1, 512, attr, walk))
++            return 1;
++    }
++    return 0;
++}
++
++int
++ioswitch_smp_publish_tables(void)
++{
++    const pt_attr_t *attr = pmap_get_pt_attr(kernel_pmap);
++    if (pt_attr_page_size(attr) != 4096 || pt_attr_leaf_level(attr) != 3 ||
++        pt_attr_root_level(attr) > 2 || !cpu_ttep || kernel_pmap->ttep != cpu_ttep)
++        return 1;
++    const vm_size_t bytes = pmap_root_alloc_size(kernel_pmap);
++    if (!bytes || bytes > 4096 || bytes % sizeof(tt_entry_t)) return 1;
++    struct iosw_smp_table_walk walk = { { 0, 0, 0, 0 }, 0 };
++    pmap_lock(kernel_pmap, PMAP_LOCK_SHARED);
++    const int result = iosw_smp_clean_table(cpu_ttep, pt_attr_root_level(attr),
++        (unsigned)(bytes / sizeof(tt_entry_t)), attr, &walk);
++    __builtin_arm_dsb(DSB_SY);
++    pmap_unlock(kernel_pmap, PMAP_LOCK_SHARED);
++    return result;
++}

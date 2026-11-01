@@ -1,0 +1,14 @@
+# The Linux kernel style (Documentation/process/coding-style.rst) of the code this driver ports and sits beside.
+BasedOnStyle: InheritParentConfig
+UseTab: ForContinuationAndIndentation
+IndentWidth: 8
+TabWidth: 8
+ContinuationIndentWidth: 8
+AccessModifierOffset: -8
+BreakBeforeBraces: Linux
+ColumnLimit: 100
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AlignConsecutiveMacros: None

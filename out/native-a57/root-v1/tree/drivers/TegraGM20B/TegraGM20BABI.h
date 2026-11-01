@@ -1,0 +1,212 @@
+/* SPDX-License-Identifier: MIT */
+/* Kernel <-> userland wire ABI for the Tegra X1 GM20B driver (kext: drivers/TegraGM20B, client: Mesa NVK's nvkmd_darwin).
+ * Semantics are in scratchpad/gpu/CONTRACT.md. The kext and the client compile this same file; keep it byte-identical in both.
+ *
+ * Every call is IOConnectCallStructMethod(conn, selector, in, in_size, out, &out_size) with one of the fixed records below.
+ * selector = method number, or (tunnel form) any admitted selector with the input prefixed by {TegraGM20BTunnelMagic, method}.
+ * All records are little endian, naturally aligned, and at most 4096 bytes (IOKit's inline struct limit), so the kext never
+ * sees an out-of-line descriptor. Reserved fields are zero on input and refused otherwise. */
+#ifndef TEGRA_GM20B_ABI_H
+#define TEGRA_GM20B_ABI_H
+#include <stdint.h>
+
+enum {
+    TegraGM20BAbiVersion = 1,
+    TegraGM20BOpenType = 0x4e56,              /* 'NV': IOServiceOpen type the client passes */
+    TegraGM20BTunnelMagic = 0x4e56544e,       /* 'NVTN': first word of a tunnelled call */
+    TegraGM20BTunnelProbe = 0xffffffff,       /* tunnelled method that only answers success */
+
+    TegraGM20BMethodGetInfo = 1,
+    TegraGM20BMethodBoAlloc = 2,
+    TegraGM20BMethodBoImport = 3,
+    TegraGM20BMethodBoFree = 4,
+    TegraGM20BMethodVmBind = 5,
+    TegraGM20BMethodChannelCreate = 6,
+    TegraGM20BMethodChannelDestroy = 7,
+    TegraGM20BMethodExec = 8,
+    TegraGM20BMethodWaitFence = 9,
+    TegraGM20BMethodGetTimestamp = 10,
+    TegraGM20BMethodGetStatus = 11,
+
+    TegraGM20BMaxBindOps = 100,
+    TegraGM20BMaxPushes = 255,
+};
+
+/* TegraGM20BAbiInfo.flags */
+enum {
+    TegraGM20BInfoSparse = 1u << 0,           /* VmBind accepts MapSparse */
+    TegraGM20BInfoHostImport = 1u << 1,       /* BoImport is implemented */
+    TegraGM20BInfoZcull = 1u << 2,            /* zcull[] is valid */
+};
+
+/* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
+struct TegraGM20BAbiInfo {
+    uint32_t abi_version;                     /* TegraGM20BAbiVersion */
+    uint32_t flags;                           /* TegraGM20BInfo* */
+    uint16_t chipset;                         /* NV_PMC_BOOT_0 implementation: 0x12b */
+    uint16_t device_id;                       /* nouveau GETPARAM_PCI_DEVICE equivalent; 0 if none */
+    uint8_t gpc_count;                        /* 1 on T210 */
+    uint8_t reserved0;
+    uint16_t tpc_count;                       /* total TPCs: 2 on T210 */
+    uint16_t cls_copy;                        /* 0xb0b5 MAXWELL_DMA_COPY_A */
+    uint16_t cls_eng2d;                       /* 0x902d FERMI_TWOD_A */
+    uint16_t cls_eng3d;                       /* 0xb197 MAXWELL_B */
+    uint16_t cls_m2mf;                        /* 0xa140 KEPLER_INLINE_TO_MEMORY_B */
+    uint16_t cls_compute;                     /* 0xb1c0 MAXWELL_COMPUTE_B */
+    uint16_t cls_gpfifo;                      /* 0xb06f MAXWELL_CHANNEL_GPFIFO_A */
+    uint32_t reserved1;
+    uint64_t va_start;                        /* client-managed GPU VA range [va_start, va_end) */
+    uint64_t va_end;                          /* the kext keeps everything at and above va_end for itself */
+    uint32_t page_size;                       /* bind granularity: 4096 */
+    uint32_t big_page_size;                   /* GMMU big page the kext may use for aligned binds (0x20000), informational */
+    uint64_t max_bo_bytes;
+    uint32_t zcull[12];                       /* layout of drm_nouveau_get_zcull_info / struct nv_zcull_device_info */
+    char chip_name[16];                       /* "GM20B" */
+    char device_name[64];                     /* "NVIDIA Tegra X1 (GM20B)" */
+};
+
+/* TegraGM20BAbiBoAlloc.flags */
+enum {
+    TegraGM20BBoCoherent = 1u << 0,           /* CPU map is write-combined (Normal non-cacheable); else Normal cacheable */
+    TegraGM20BBoContiguous = 1u << 1,         /* one physically contiguous span (scanout, firmware-adjacent use) */
+};
+
+/* Method 2. Zero-filled pages below 4 GiB. map_token is the clientMemoryForType type for IOConnectMapMemory64. */
+struct TegraGM20BAbiBoAlloc {
+    uint64_t bytes;                           /* page_size multiple, <= max_bo_bytes */
+    uint32_t align_log2;                      /* 12..21; physical alignment only matters with Contiguous */
+    uint32_t flags;                           /* TegraGM20BBo* */
+};
+struct TegraGM20BAbiBoAllocReply {
+    uint64_t handle;                          /* nonzero, unique per connection, never reused while the connection lives */
+    uint32_t map_token;                       /* nonzero */
+    uint32_t reserved;
+};
+
+/* Method 3. Wires [address, address+bytes) of the calling task (an IOSurface's pages) and makes them a BO. No map token: the
+ * caller keeps its own mapping and does its own cache maintenance. Reply: TegraGM20BAbiBoAllocReply with map_token 0. */
+struct TegraGM20BAbiBoImport {
+    uint64_t address;                         /* page aligned */
+    uint64_t bytes;                           /* page multiple */
+};
+
+/* Method 4. The handle dies now; its pages are released only after every channel of the connection has completed what it had
+ * submitted at the time of this call. Any VA still bound to it is unbound first. */
+struct TegraGM20BAbiBoFree {
+    uint64_t handle;
+};
+
+/* Method 5. Applied in order, synchronously, with the GMMU TLB invalidated before return. */
+enum {
+    TegraGM20BBindMap = 1,                    /* [va, va+range) -> handle at bo_offset, PTE kind = kind */
+    TegraGM20BBindUnmap = 2,                  /* [va, va+range) -> invalid (GPU access faults) */
+    TegraGM20BBindMapSparse = 3,              /* [va, va+range) -> sparse (reads 0, writes dropped); needs InfoSparse */
+};
+struct TegraGM20BAbiBindOp {
+    uint32_t op;                              /* TegraGM20BBind* */
+    uint32_t kind;                            /* GMMU PTE kind (NVK's pte_kind); 0 = pitch/generic */
+    uint64_t handle;                          /* Map only */
+    uint64_t bo_offset;                       /* Map only; page multiple */
+    uint64_t va;                              /* page multiple, inside [va_start, va_end) */
+    uint64_t range;                           /* page multiple, nonzero */
+};
+struct TegraGM20BAbiVmBind {
+    uint32_t count;                           /* 1..TegraGM20BMaxBindOps */
+    uint32_t reserved;
+    struct TegraGM20BAbiBindOp ops[TegraGM20BMaxBindOps];
+};
+
+/* TegraGM20BAbiChannelCreate.engines: same bits as NVK's enum nvkmd_engines */
+enum {
+    TegraGM20BEngineCopy = 1u << 0,
+    TegraGM20BEngine2D = 1u << 1,
+    TegraGM20BEngine3D = 1u << 2,
+    TegraGM20BEngineM2MF = 1u << 3,
+    TegraGM20BEngineCompute = 1u << 4,
+};
+/* Method 6. A GPFIFO channel on the GR runlist in the connection's VM, with its GR context, and subchannels 0..4 bound to the
+ * eng3d, compute, m2mf, eng2d and copy classes. fence_token maps (read-only) a page whose uint32 at fence_offset is the channel's
+ * last completed seqno. */
+struct TegraGM20BAbiChannelCreate {
+    uint32_t engines;
+    uint32_t reserved;
+};
+struct TegraGM20BAbiChannelCreateReply {
+    uint32_t channel;                         /* nonzero, per connection */
+    uint32_t fence_token;                     /* clientMemoryForType type of the fence page */
+    uint32_t fence_offset;                    /* byte offset of this channel's uint32 seqno in that page */
+    uint32_t reserved;
+};
+
+/* Method 7. Waits (bounded) for the channel to go idle, then tears it down. */
+struct TegraGM20BAbiChannel {
+    uint32_t channel;
+    uint32_t reserved;
+};
+
+/* Method 8. Appends one GPFIFO entry per push, in order and contiguously, then the kext's own fence push (wait-for-idle, the
+ * cache flush needed for CPU visibility, semaphore release of seqno to the fence page), then rings GP_PUT. count may be 0: no
+ * GPU work, the reply is the last seqno already submitted (and errors of the channel are still reported). */
+enum {
+    TegraGM20BPushNoPrefetch = 1u << 0,       /* GPFIFO entry NO_PREFETCH bit */
+};
+struct TegraGM20BAbiPush {
+    uint64_t va;                              /* 4-byte aligned GPU VA of the method stream */
+    uint32_t dwords;                          /* 1..(1 << 21) - 1 */
+    uint32_t flags;                           /* TegraGM20BPush* */
+};
+struct TegraGM20BAbiExec {
+    uint32_t channel;
+    uint32_t count;                           /* 0..TegraGM20BMaxPushes */
+    struct TegraGM20BAbiPush pushes[TegraGM20BMaxPushes];
+};
+struct TegraGM20BAbiExecReply {
+    uint32_t seqno;                           /* fence of this submission; compare with (int32_t)(a - b) >= 0 */
+    uint32_t reserved;
+};
+
+/* Method 9. Returns kIOReturnSuccess once completed seqno has passed `seqno`, kIOReturnTimeout after timeout_ns (0 = poll once),
+ * kIOReturnNotResponding if the channel is dead. */
+struct TegraGM20BAbiWaitFence {
+    uint32_t channel;
+    uint32_t seqno;
+    uint64_t timeout_ns;
+};
+
+/* Method 10, output only. */
+struct TegraGM20BAbiTimestamp {
+    uint64_t ns;                              /* PTIMER, nanoseconds; same clock the GPU writes in timestamp queries */
+};
+
+/* Method 11. Input TegraGM20BAbiChannel; error 0 means healthy, anything else means the channel is dead (device lost). */
+struct TegraGM20BAbiStatus {
+    uint32_t completed;
+    uint32_t submitted;
+    uint32_t error;                           /* 0, or 1 MMU fault, 2 GR exception, 3 PBDMA/host error, 4 timeout */
+    uint32_t reserved;
+    uint64_t fault_va;                        /* for error 1 */
+};
+
+#if defined(__cplusplus)
+#define TEGRA_GM20B_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
+#else
+#define TEGRA_GM20B_ASSERT(x, n) _Static_assert(sizeof(struct x) == (n), #x " layout")
+#endif
+TEGRA_GM20B_ASSERT(TegraGM20BAbiInfo, 192);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBoAlloc, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBoAllocReply, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBoImport, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBoFree, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBindOp, 40);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiVmBind, 4008);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiChannelCreate, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiChannelCreateReply, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiChannel, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiPush, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiExec, 4088);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiExecReply, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiWaitFence, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiTimestamp, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiStatus, 24);
+#undef TEGRA_GM20B_ASSERT
+#endif

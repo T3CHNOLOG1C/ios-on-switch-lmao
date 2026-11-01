@@ -1,0 +1,51 @@
+# Native verbose console and CPU display attempt
+
+**V23 is installed and safely ejected.** Every custom PID/process log is removed, along with forced kprintf spam. Normal XNU warnings and panic output remain on the stock full-screen console; the custom HUD stays off. SD write-loop polling, vnode sizing, Data readiness and persistent preferences are fixed, and first-frame statistics stop after one frame. The kernel is 52,219,904 bytes with 33 original components; the five-file update is 70,653,866 bytes. V21 removes the old OS RAM cap and corrects the DMA MC guard. [Installation](../out/switch/native-xnu-v23-install.json), [audit and focused verification](native-audit.md). Physical performance, complete startup and graphical presentation remain unverified.
+
+The V15 and earlier notes below are historical.
+
+**V15 is installed and safely ejected.** Its five-file update totals 70,497,436 bytes. The kernel is 52,129,792 bytes with 29 original components, within the existing 768 MiB allocation and 80 MiB staging limit. [Installation receipt](../out/switch/native-xnu-v15-install.json), [build receipt](../out/native-a57/root-v1/passes/native-root-watchdog-policy-v1/build-receipt.json), [package](../out/native-console-v15-delta/manifest.json).
+
+V14's physical boot still panicked on `watchdogd[99]`, although its panic characters are no longer duplicated. V15 follows HakiOS's strategy of excluding that service: original launchd receives an exact disabled-job override in disposable RAM Data before PID1 executes. The V14 software watchdog adapter is no longer linked or started. V15 retains the same SD batching, console and CPU compositor path, and removes the two stale handoff phrases. The copy path is unchanged; [the investigation](native-kernel-copy.md) proposes temporary cacheable mappings. [Watchdog details](native-watchdog.md).
+
+The incremental build recompiled only the diagnostic unit and `kern_exec.c`. Only changed files were read back during installation. No model, broad suite or unchanged-media hash scan was performed. Runtime policy consumption, graphical startup, SD performance and physical input remain unverified.
+
+The following V14 and earlier notes are historical.
+
+**V14 is installed and safely ejected.** [Receipt](../out/switch/native-xnu-v14-install.json). Its five-file update totals 70,514,010 bytes; the kernel is 52,133,888 bytes with 29 original components. The existing 768 MiB allocation and 80 MiB staging limit remain. [Build](../out/native-a57/root-v1/passes/native-root-sd-fast-v1/build-receipt.json), [package](../out/native-console-v14-delta/manifest.json).
+
+V14 batches contiguous requested sectors with CMD18 and AutoCMD12, up to 128 sectors / 64 KiB. FAT coalescing respects fragmentation, file boundaries and split-image boundaries. Short/error reads are not delivered to I/O clients. The single-sector path remains available. Focused host checks pass 48 transport and 15 FAT cases; the latter proves identical 64 KiB output using one batch instead of 128 callbacks. No physical throughput measurement is claimed.
+
+The console avoids writing panic characters twice when PE_kputc and the console share the same sink. The original IOWatchdog class and user client now have a native software-timer subclass. Its exact 171-slot ABI and seven bindings were reviewed; timers survive monitoring disable/re-enable and stop under the workloop gate. The original parent module loads before manual child registration, and the service stays alive for the boot. [Watchdog evidence and limits](native-watchdog.md), [independent review](../out/research-native/native-watchdog-adapter-review.json). Daemon connection, checkins, expiry and UI still need physical observation.
+
+Only changed files were read back during installation. No model, broad suite or unchanged-media hash scan was performed. The V13 development settings described below remain in effect.
+
+The following V13 and earlier notes are historical.
+
+**V13 is installed and safely ejected.** All five changed files passed readback; untouched files were not rehashed. [Installation receipt](../out/switch/native-xnu-v13-install.json). Close Hekate USB storage and choose **More Configs → IOSwitch Native XNU**. It keeps the stock full-screen XNU console, which is visible in the owner's V12 photograph. The custom HUD stays disabled. [V12 hardware result](../out/switch/native-xnu-v12-hardware-result.json), [V13 package](../out/native-console-v13-delta/manifest.json).
+
+V13 removes the eager whole-cache signature conversion, root-startup fixture/sample tests and duplicate FAT chain walks, 73 MB of policy-table loading, custom per-read block hashes, and kernel CRC passes in U-Boot and the native loader. Actual file indexing and requested disk reads remain. The existing development option `cs_integrity_skip=1` also skips code-page content hashing; original signature identity and entitlement handling remain. Fixed boot identifiers provide startup compatibility metadata, not current media authentication. OS and SystemOS remain read-only; Data remains disposable RAM storage.
+
+The previous `PID 1 init: exit 0` message also ran during cleanup of the process replaced by exec. V13 labels that cleanup separately and logs the original launchd's `kern.initproc_spawned` notification if reached. Neither the photograph nor the cancelled diagnostic established a live launchd failure or execution of launchd main. The removed eager work was a concrete startup cost; its physical duration was not measured.
+
+The incremental build contains the same 29 original components and a 52,129,792-byte kernel. [Build receipt](../out/native-a57/root-v1/passes/native-root-console-v3/build-receipt.json). The five-file update totals 70,497,642 bytes, retains the 768 MiB allocation and stays below the 80 MiB staging limit. No model run, test suite or unchanged-file hash scan was performed. V13 hardware startup, SpringBoard presentation and physical input remain unverified.
+
+The following V11/V12 notes are historical.
+
+V11 hardware output was a custom diagnostic HUD containing kernel log lines, not the full-screen XNU text console requested. Its repeated framebuffer redraws ran with interrupts disabled, and it did not release the stock console when graphics took ownership. These are concrete interference risks; they do not establish framebuffer corruption or explain the observed startup stop.
+
+V12 is installed with the stock XNU video console. All five changed files passed readback, and the SD was safely ejected. [Installation receipt](../out/switch/native-xnu-v12-install.json). Its boot mode selects text and OLED rotation 3; the video backend renders 1280×720 logical text on the existing 720×1280 framebuffer. The custom HUD never maps or draws in this profile. The normal console remains active through surface mapping/validation, releases the screen immediately before a CPU presentation, and reacquires it after failure or panic. `serial=0` routes ordinary console output to the video console, and native `kprintf` uses that same stock output path. Physical behavior remains untested.
+
+The preceding V11 installation passed readback before safe ejection; its payload files remain preserved. Untouched files were not rehashed. [V11 installation receipt](../out/switch/native-xnu-v11-install.json). Close Hekate USB storage and choose **More Configs → IOSwitch Native XNU**; photograph the final log or graphical screen. The owner previously reported V10's **ORIGINAL PID1 SYSCALL OBSERVED** banner and increasing authenticated reads. [V10 physical report](../out/switch/native-xnu-v10-hardware-result.json).
+
+The update connects normal kernel console output and `kprintf` to a bounded scrolling text display on the inherited OLED framebuffer. Process startup/exit diagnostics are included. That V11 handoff only disabled the custom renderer, and did not release the stock console; V12 corrects it as described above.
+
+It also enables the existing `NativeLegacyDisplay` CPU compositor path with the original IOMobileGraphicsFamily, IOSurface and IOHIDFamily components. The native presenter rotates logical 1280×720 pixels into the physical 720×1280 framebuffer. QEMU MMIO, shared graphics memory and host Metal calls are excluded from this native path. Existing development keystore notifications support the startup dependencies. No physical touch or button input is connected; the first graphical result may be setup or the lock screen.
+
+The previous V11 combined kernel compiled successfully: 52,129,792 bytes, 29 original components, SHA-256 `c573da3dc3fd1e402a083a4266bd51840cc30ebbe5c69cebcc3210082ecadf4b`. [Build receipt](../out/native-a57/root-v1/passes/native-root-console-v1/build-receipt.json). This is an implementation and build result; native console output, compositor presentation and SpringBoard remain to be tested on hardware.
+
+The [delta package](../out/native-console-v11-delta/manifest.json) contains five files totaling 70,501,926 bytes. Three new files live under `switchroot/ioswitch-native-xnu-v11/`: the kernel window and two loader forms. Only V10's `boot.cmd` and `boot.scr` are replaced, with the executable script published last. The existing Hekate entry and V10 firmware, DTB, exporter, policies and disk image parts are reused in place. Original V10 kernel/loader files remain available, and the two replaced scripts are backed up locally during installation.
+
+At the user's request there are no model runs, broad test suites or unchanged-file checksum scans for this update. The installer checks the identified USB partition and the five changed files only. Original OS/SystemOS remain read-only and the unchanged Data seed remains RAM-backed. The allocation stays within the existing 768 MiB window and 80 MiB staging limit.
+
+V12's incremental build succeeded with the same 29 original components and a 52,129,792-byte kernel. [Build receipt](../out/native-a57/root-v1/passes/native-root-console-v2/build-receipt.json). Its five-file delta totals 70,501,914 bytes, uses the existing 768 MiB window and stays below the 80 MiB staging limit. [V12 package](../out/native-console-v12-delta/manifest.json). No model runs, test suites or unchanged-file hash checks were performed.

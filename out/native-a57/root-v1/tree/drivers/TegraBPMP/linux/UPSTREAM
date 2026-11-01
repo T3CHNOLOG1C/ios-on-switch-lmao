@@ -1,0 +1,7 @@
+Vendored, unmodified unless marked "IOSWITCH:":
+  drivers/firmware/tegra/{bpmp.h,mail.c,mail_t210.c,mailman.c}, include/soc/tegra/{bpmp_abi.h,bpmp_t210_abi.h,tegra_bpmp.h}
+    from github.com/CTCaer/switch-l4t-kernel-nvidia, branch linux-dev (switchroot L4T, NVIDIA kernel-4.9 "nvidia" tree)
+  include/soc/tegra/doorbell.h
+    from github.com/CTCaer/switch-l4t-kernel-4.9, branch linux-dev (its implementation, drivers/irqchip/irq-tegra.c, is
+    replaced by shim/xnu_glue.cpp)
+Fetched 2026-10-30. GPL-2.0 (see each file's header).

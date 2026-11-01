@@ -1,0 +1,71 @@
+{
+  "comment": [
+    "Userland overlay: files shown read-only over sealed system directories without touching the system volume.",
+    "scripts/package_raw_boot.py reads this list: it stages each built file in out/boot/ioswitch/overlay/<path>,",
+    "adds the CDHash of every 'trust' file to the static trust cache (own module, launch-constraint category 0)",
+    "and lists each file's directory, with its optional 'boot-arg' gate, in ADT /chosen ioswitch-overlay.",
+    "The deploy script copies the staged tree to /private/var/ioswitch/overlay/ on the Data volume. At boot, after",
+    "the Data mount and before launchd, the kernel (IOSwitchRawMount.inc native_ioswitch_raw_overlay) union-binds",
+    "/private/var/ioswitch/overlay<directory> over <directory> for every listed directory whose gate is on.",
+    "Fields: path (absolute), source (relative to tree/), trust (signed Mach-O), mode (octal, default 0755 for",
+    "trusted code, 0644 otherwise), boot-arg (all files of one directory share it; 'a|b' shows the directory when",
+    "either boot-arg is non-zero, for directories features share).",
+    "union (optional): the directory to union instead of the file's own, an existing ancestor of path.",
+    "The audio HAL union (our plug-in + the BTAudioHALPlugin stub) is gated on switch-audio, like audiomxd itself."
+  ],
+  "files": [
+    {
+      "path": "/usr/sbin/BlueTool",
+      "source": "build/switch-bluetooth/BlueTool",
+      "trust": true,
+      "boot-arg": "switch-bt"
+    },
+    {
+      "path": "/System/Library/Audio/Plug-Ins/HAL/SwitchAudio.driver/SwitchAudio",
+      "source": "build/switch-audio/SwitchAudio.driver/SwitchAudio",
+      "trust": true,
+      "union": "/System/Library/Audio/Plug-Ins/HAL",
+      "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/System/Library/Audio/Plug-Ins/HAL/SwitchAudio.driver/Info.plist",
+      "source": "drivers/SwitchAudio/hal/Info.plist",
+      "union": "/System/Library/Audio/Plug-Ins/HAL",
+      "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/Info.plist",
+      "source": "drivers/SwitchAudio/hal/BTAudioHALPlugin-Info.plist",
+      "union": "/System/Library/Audio/Plug-Ins/HAL",
+      "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/usr/libexec/joyconpaird",
+      "source": "build/switch-joycon/joyconpaird",
+      "trust": true,
+      "boot-arg": "switch-joycon-bt|switch-joycon-nfc"
+    },
+    {
+      "path": "/System/Library/LaunchDaemons/com.ioswitch.joyconpaird.plist",
+      "source": "drivers/SwitchJoyCon/helper/com.ioswitch.joyconpaird.plist",
+      "boot-arg": "switch-joycon-bt|switch-joycon-nfc"
+    },
+    {
+      "path": "/usr/libexec/joyconnfc",
+      "source": "build/switch-joycon/joyconnfc",
+      "trust": true,
+      "boot-arg": "switch-joycon-bt|switch-joycon-nfc"
+    },
+    {
+      "path": "/System/Library/LaunchDaemons/com.ioswitch.joyconnfc.plist",
+      "source": "drivers/SwitchJoyCon/helper/com.ioswitch.joyconnfc.plist",
+      "boot-arg": "switch-joycon-bt|switch-joycon-nfc"
+    },
+    {
+      "path": "/System/Library/VideoDecoders/HEVCH8.videodecoder",
+      "source": "build/switch-video/HEVCH8.videodecoder",
+      "trust": true,
+      "boot-arg": "switch-hevc"
+    }
+  ]
+}

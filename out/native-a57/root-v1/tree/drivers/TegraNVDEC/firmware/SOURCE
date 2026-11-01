@@ -1,0 +1,12 @@
+linux-firmware main (2026-10-30), gitlab.com/kernel-firmware/linux-firmware
+File: nvidia/tegra210/nvdec.bin (WHENCE: Version l4t-r32.7.6), sha256 7b5ac5ad66dad47e77f2a056991e422dd2630fa17e0a57a5874af492efa0f909.
+Byte-identical to /lib/firmware/tegra21x/nvhost_nvdec020_ns.fw in NVIDIA's nvidia-l4t-firmware 32.7.6-20241104234540
+(repo.download.nvidia.com/jetson/t210, checked 2026-10-30). That package is the only NVDEC image L4T ships for T210 (no
+nvhost_nvdec_bl020* / *_prod.fw): L4T's nvdec.c loads it with CONFIG_NVDEC_BOOTLOADER unset, as switchroot's
+tegra_linux_defconfig has it, and Linux drm/tegra nvdec.c (tegra210) boots the same image with falcon_boot.
+switchroot's nx-firmware repository holds only Wi-Fi/BT/bl33 blobs, no NVDEC firmware.
+Layout (falcon bin header v1): OS header at 0x100, OS data at 0x200 (0x1f200 bytes): code 0x0+0x300, data
+0x1ee00+0x400, 13 apps the OS loads itself through DMATRFBASE.
+The same package's vic04_ucode.bin equals linux-firmware nvidia/tegra210/vic04_ucode.bin (sha256 01ab2263...67f9),
+for when VIC is brought up.
+Licence: LICENCE.nvidia (WHENCE: Redistributable).

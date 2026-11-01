@@ -1,0 +1,122 @@
+# IOSwitch returning register probe v3. CRC token is fixed by the packager.
+# No OS image, initramfs, device tree, storage-write command, or reset is used.
+# The default U-Boot distro script resets after its sourced script returns.
+# Every outcome below therefore ends in the final sleep hold.
+# This firmware defaults stdout to serial but stderr to serial,vidconsole.
+# echoe is its built-in stderr command; make the first checkpoint visible before
+# changing stdout, then route md.l and other normal output to the screen too.
+echoe "IOSWITCH V3 STAGE 0: SCRIPT ENTERED"
+if setenv stdout vidconsole; then
+    echoe "IOSWITCH V3 STAGE 1: SCREEN OUTPUT SELECTED"
+else
+    echoe "IOSWITCH V3: CANNOT SELECT SCREEN OUTPUT - HOLDING"
+    while true; do
+        sleep 1
+    done
+fi
+echo
+echo "IOSwitch native CPU probe v3 - OLED only"
+echo "Firmware register test; this does not start iPadOS"
+echo "Recovery: hold POWER at least 20 seconds; then start Hekate normally"
+echo "At Hekate startup hold VOL- to cancel Hekate autoboot if needed"
+echo
+base 0
+setenv probe_status READY
+if test "${t210b01}" != "1" -o "${sku}" != "3"; then
+    setenv probe_status WRONG_BOARD
+fi
+
+# These two immutable instruction sequences belong to the pinned original BL33
+# loaded by Hekate at 0xAA000000. No newly loaded trampoline is called.
+if test "${probe_status}" = "READY"; then
+    if itest.l *0xAA001920 == 0xd508711f && itest.l *0xAA001924 == 0xd5033fdf && itest.l *0xAA001928 == 0xd65f03c0 && itest.l *0xAA001A64 == 0xd5033f9f && itest.l *0xAA001A68 == 0xd5033fdf && itest.l *0xAA001A6C == 0xd65f03c0; then
+        echo "Pinned firmware cache helpers match"
+    else
+        setenv probe_status FIRMWARE_MISMATCH
+    fi
+fi
+
+if test "${probe_status}" = "READY"; then
+    # This firmware reports a nonzero requested read length even at EOF.
+    # Query the FAT directory entry independently before a bounded exact read.
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-probe-v3/registers.uboot.bin; then
+        if itest.l ${filesize} == 0x340; then
+            echoe "IOSWITCH V3: FAT METADATA SIZE IS 832 BYTES"
+        else
+            setenv probe_status IMAGE_SIZE_FAILED
+        fi
+    else
+        setenv probe_status IMAGE_STAT_FAILED
+    fi
+fi
+
+if test "${probe_status}" = "READY"; then
+    if load mmc ${devnum}:${distro_bootpart} 0xA0100000 /switchroot/ioswitch-probe-v3/registers.uboot.bin 0x340; then
+        if itest.l ${filesize} == 0x340; then
+            if crc32 -v 0xA0100000 0x340 @IMAGE_CRC32@; then
+                echoe "IOSWITCH V3 STAGE 2: EXACT PROBE IMAGE VERIFIED"
+            else
+                setenv probe_status IMAGE_CHECKSUM_FAILED
+            fi
+        else
+            setenv probe_status IMAGE_READ_COUNT_FAILED
+        fi
+    else
+        setenv probe_status IMAGE_READ_FAILED
+    fi
+fi
+
+# Explicit load-only stages: no OS PREP/GO state, so no kernel handoff.
+# loados cleans the destination D-cache and executes DSB before returning.
+# Image header is fixed to U_BOOT/STANDALONE, no compression, load A0000000.
+if test "${probe_status}" = "READY"; then
+    setenv verify yes
+    setenv autostart no
+    if bootm start 0xA0100000; then
+        if bootm loados; then
+            echoe "IOSWITCH V3 STAGE 3: PROBE LOADED AND DATA CACHE PUBLISHED"
+        else
+            setenv probe_status IMAGE_LOAD_FAILED
+        fi
+    else
+        setenv probe_status IMAGE_HEADER_FAILED
+    fi
+fi
+
+if test "${probe_status}" = "READY"; then
+    # Both leafs leave x0=argc=1. go consequently reports rc=1; this is expected.
+    # First: IC IALLUIS; ISB; RET. Second: DSB SY; ISB; RET.
+    # Together with loados: DC clean -> DSB -> IC -> DSB -> ISB.
+    echo "Next two firmware helper rc=1 values are expected"
+    echoe "IOSWITCH V3 STAGE 4: BEFORE INSTRUCTION CACHE HELPER"
+    go 0xAA001920
+    echoe "IOSWITCH V3 STAGE 5: BEFORE BARRIER HELPER"
+    go 0xAA001A64
+    echoe "IOSWITCH V3 STAGE 6: BEFORE CPU PROBE"
+    if go 0xA0000000; then
+        echoe "IOSWITCH V3 STAGE 7: CPU PROBE RETURNED ZERO"
+        if itest.l *0xA0000200 == 0x57534f49 && itest.l *0xA0000204 == 0x31425250 && itest.l *0xA0000208 == 1 && itest.l *0xA0000210 == 0x100; then
+            setenv probe_status COMPLETE
+        else
+            setenv probe_status RESULT_MARKER_FAILED
+        fi
+    else
+        setenv probe_status PROBE_RETURN_FAILED
+    fi
+fi
+
+echo
+echoe "IOSWITCH V3 RESULT: ${probe_status}"
+if test "${probe_status}" = "COMPLETE"; then
+    echo "Result at A0000200, 64-bit little-endian fields shown as 32-bit words"
+    echo "00 marker; 18 EL; 20 MIDR; 28 MPIDR; 30 PFR0; 38 MMFR0; 40 MMFR1"
+    echo "48 ISAR0; 50 CNTFRQ; 58 SP; 60 argc; 68 argv; 70 DAIF"
+    echo "78..98 EL1 SCTLR/TCR/TTBR0/TTBR1/VBAR; A0..C8 EL2 state"
+    md.l 0xA0000200 40
+fi
+echo "Photograph this screen. U-Boot probe screen; no OS is running."
+echo "Hold POWER at least 20 seconds to turn off. Use normal Hekate startup."
+echo "No timed reboot. No Linux/Android fallback. This screen remains here."
+while true; do
+    sleep 1
+done

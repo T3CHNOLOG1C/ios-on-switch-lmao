@@ -1,0 +1,60 @@
+# Python and macOS
+__pycache__/
+*.pyc
+.DS_Store
+
+# Inputs too large or not ours to track: third-party clones, firmware bundles, disk images, photos
+vendor/
+bundles/
+*.ipsw
+*.apfs
+*.raw
+*.dmg
+*.HEIC
+*.heic
+
+# Editor/agent leftovers
+*.orig
+*.rej
+
+# out/ is build output, device logs, boot snapshots and agent scratch. Only its source parts are tracked:
+/out/*
+
+# The kernel tree: our drivers, kits, diagnostics, scripts, patches and package inputs, without its build output,
+# the XNU checkout (.cache/xnu-work is its own git repository) and the reference sources.
+!/out/native-a57/
+/out/native-a57/*
+!/out/native-a57/root-v1/
+/out/native-a57/root-v1/*
+!/out/native-a57/root-v1/tree/
+/out/native-a57/root-v1/tree/build/
+/out/native-a57/root-v1/tree/.cache/
+/out/native-a57/root-v1/tree/refer/
+/out/native-a57/root-v1/tree/compile_commands.json
+/out/native-a57/root-v1/tree/.git-empty-unused/
+
+# The build pass CMake reads (build-options.json, prelink-command.json, the prelink tool), not its kernel binaries.
+!/out/native-a57/root-v1/passes/
+/out/native-a57/root-v1/passes/*
+!/out/native-a57/root-v1/passes/native-root-smp-v1/
+/out/native-a57/root-v1/passes/native-root-smp-v1/*
+!/out/native-a57/root-v1/passes/native-root-smp-v1/build-options.json
+!/out/native-a57/root-v1/passes/native-root-smp-v1/prelink-command.json
+!/out/native-a57/root-v1/passes/native-root-smp-v1/source/
+
+# Deploy tools (not the device logs, photos or receipts beside them)
+!/out/switch/
+/out/switch/*
+!/out/switch/deploy-sd.sh
+!/out/switch/launchd-disable.py
+
+# GPU patches (the NVK series) and notes; not the built bundle, dylibs, seeds or the m2v checkout
+!/out/gpu/
+/out/gpu/*
+!/out/gpu/nvk/
+/out/gpu/nvk/*
+!/out/gpu/nvk/*.patch
+!/out/gpu-artifacts/
+/out/gpu-artifacts/*
+!/out/gpu-artifacts/patches/
+!/out/gpu-artifacts/*.md

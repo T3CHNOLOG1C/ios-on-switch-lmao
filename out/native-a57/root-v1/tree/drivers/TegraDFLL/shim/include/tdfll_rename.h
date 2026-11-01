@@ -1,0 +1,127 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * IOSwitch: link-level names. TegraGM20B's nouveau shim is linked into the same kernel and defines many of the same
+ * Linux symbols (clk_enable, clk_get_rate, devm_clk_get, tegra_sku_info, tegra_fuse_readl, ...), and the vendored L4T
+ * files define globals of their own. Every global the Linux side of TegraDFLL defines or calls is therefore renamed
+ * into tdfll_* here, before any other header, so the vendored sources stay verbatim. Checked with nm after each change
+ * (scratchpad dfll/check.py --symbols): the only unprefixed globals left are the tegra_dfll_cpu_* API and XNU's own.
+ */
+#ifndef TDFLL_RENAME_H
+#define TDFLL_RENAME_H
+#define printk tdfll_printk
+#define kmalloc tdfll_kmalloc
+#define kzalloc tdfll_kzalloc
+#define kfree tdfll_kfree
+#define devm_kzalloc tdfll_devm_kzalloc
+#define devm_kmalloc tdfll_devm_kmalloc
+#define devm_kfree tdfll_devm_kfree
+#define devm_pinctrl_get tdfll_devm_pinctrl_get
+#define pinctrl_lookup_state tdfll_pinctrl_lookup_state
+#define pinctrl_select_state tdfll_pinctrl_select_state
+#define init_timer tdfll_init_timer
+#define mod_timer tdfll_mod_timer
+#define del_timer tdfll_del_timer
+#define hrtimer_init tdfll_hrtimer_init
+#define hrtimer_start tdfll_hrtimer_start
+#define hrtimer_cancel tdfll_hrtimer_cancel
+#define of_property_read_u32 tdfll_of_property_read_u32
+#define of_property_read_string tdfll_of_property_read_string
+#define of_property_read_bool tdfll_of_property_read_bool
+#define of_parse_phandle tdfll_of_parse_phandle
+#define of_device_is_compatible tdfll_of_device_is_compatible
+#define of_device_is_available tdfll_of_device_is_available
+#define of_match_node tdfll_of_match_node
+#define platform_get_resource tdfll_platform_get_resource
+#define devm_ioremap tdfll_devm_ioremap
+#define devm_ioremap_resource tdfll_devm_ioremap_resource
+#define pm_runtime_enable tdfll_pm_runtime_enable
+#define pm_runtime_disable tdfll_pm_runtime_disable
+#define pm_runtime_get_sync tdfll_pm_runtime_get_sync
+#define pm_runtime_put_sync tdfll_pm_runtime_put_sync
+#define get_cpu_device tdfll_get_cpu_device
+#define devm_reset_control_get tdfll_devm_reset_control_get
+#define reset_control_assert tdfll_reset_control_assert
+#define reset_control_deassert tdfll_reset_control_deassert
+#define reset_control_reset tdfll_reset_control_reset
+#define devm_regulator_get tdfll_devm_regulator_get
+#define devm_regulator_put tdfll_devm_regulator_put
+#define regulator_get_regmap tdfll_regulator_get_regmap
+#define regulator_get_hardware_vsel_register tdfll_regulator_get_hardware_vsel_register
+#define regulator_list_hardware_vsel tdfll_regulator_list_hardware_vsel
+#define regulator_count_voltages tdfll_regulator_count_voltages
+#define regulator_list_voltage tdfll_regulator_list_voltage
+#define regulator_get_constraint_voltages tdfll_regulator_get_constraint_voltages
+#define regulator_get_linear_step tdfll_regulator_get_linear_step
+#define dev_pm_opp_add tdfll_dev_pm_opp_add
+#define dev_pm_opp_remove tdfll_dev_pm_opp_remove
+#define dev_pm_opp_find_freq_ceil tdfll_dev_pm_opp_find_freq_ceil
+#define dev_pm_opp_find_freq_floor tdfll_dev_pm_opp_find_freq_floor
+#define dev_pm_opp_get_voltage tdfll_dev_pm_opp_get_voltage
+#define dev_pm_opp_get_freq tdfll_dev_pm_opp_get_freq
+#define dev_pm_opp_get_opp_count tdfll_dev_pm_opp_get_opp_count
+#define clk_notifier_register tdfll_clk_notifier_register
+#define clk_notifier_unregister tdfll_clk_notifier_unregister
+#define clk_get tdfll_clk_get
+#define devm_clk_get tdfll_devm_clk_get
+#define clk_put tdfll_clk_put
+#define clk_prepare tdfll_clk_prepare
+#define clk_unprepare tdfll_clk_unprepare
+#define clk_enable tdfll_clk_enable
+#define clk_disable tdfll_clk_disable
+#define clk_get_rate tdfll_clk_get_rate
+#define clk_set_rate tdfll_clk_set_rate
+#define clk_round_rate tdfll_clk_round_rate
+#define clk_get_parent tdfll_clk_get_parent
+#define clk_set_parent tdfll_clk_set_parent
+#define of_clk_get_by_name tdfll_of_clk_get_by_name
+#define clk_register tdfll_clk_register
+#define clk_unregister tdfll_clk_unregister
+#define __clk_get_name tdfll___clk_get_name
+#define __clk_get_hw tdfll___clk_get_hw
+#define clk_hw_get_rate tdfll_clk_hw_get_rate
+#define of_clk_src_simple_get tdfll_of_clk_src_simple_get
+#define of_clk_add_provider tdfll_of_clk_add_provider
+#define of_clk_del_provider tdfll_of_clk_del_provider
+#define clk_register_clkdev tdfll_clk_register_clkdev
+#define tegra_clk_debugfs_add tdfll_tegra_clk_debugfs_add
+#define tegra_fuse_read_early tdfll_tegra_fuse_read_early
+#define tegra_fuse_read_spare tdfll_tegra_fuse_read_spare
+#define tegra_sku_info tdfll_tegra_sku_info
+#define tegra_read_chipid tdfll_tegra_read_chipid
+#define tegra_fuse_readl tdfll_tegra_fuse_readl
+#define tegra_fuse_control_read tdfll_tegra_fuse_control_read
+#define tegra_fuse_control_write tdfll_tegra_fuse_control_write
+#define tegra_init_revision tdfll_tegra_init_revision
+#define tegra_init_apbmisc tdfll_tegra_init_apbmisc
+#define tegra_get_chip_id tdfll_tegra_get_chip_id
+#define tegra_chip_get_revision tdfll_tegra_chip_get_revision
+#define tegra_dfll_runtime_resume tdfll_tegra_dfll_runtime_resume
+#define tegra_dfll_runtime_suspend tdfll_tegra_dfll_runtime_suspend
+#define dfll_request_get tdfll_dfll_request_get
+#define tegra_dfll_set_external_floor_mv tdfll_tegra_dfll_set_external_floor_mv
+#define tegra_dfll_update_thermal_index tdfll_tegra_dfll_update_thermal_index
+#define tegra_dfll_get_thermal_index tdfll_tegra_dfll_get_thermal_index
+#define tegra_dfll_count_thermal_states tdfll_tegra_dfll_count_thermal_states
+#define tegra_dfll_get_by_phandle tdfll_tegra_dfll_get_by_phandle
+#define tegra_dfll_get_thermal_floor_mv tdfll_tegra_dfll_get_thermal_floor_mv
+#define tegra_dfll_get_thermal_cap_mv tdfll_tegra_dfll_get_thermal_cap_mv
+#define tegra_dfll_get_peak_thermal_floor_mv tdfll_tegra_dfll_get_peak_thermal_floor_mv
+#define tegra_dfll_get_min_millivolts tdfll_tegra_dfll_get_min_millivolts
+#define tegra_dfll_get_alignment tdfll_tegra_dfll_get_alignment
+#define tegra_dfll_get_cvb_version tdfll_tegra_dfll_get_cvb_version
+#define tegra_dfll_suspend tdfll_tegra_dfll_suspend
+#define tegra_dfll_resume tdfll_tegra_dfll_resume
+#define tegra_dfll_resume_tuning tdfll_tegra_dfll_resume_tuning
+#define tegra_dfll_register tdfll_tegra_dfll_register
+#define tegra_dfll_unregister tdfll_tegra_dfll_unregister
+#define tegra210_cpu_cvb_tables tdfll_tegra210_cpu_cvb_tables
+#define tegra210b01_cpu_cvb_tables tdfll_tegra210b01_cpu_cvb_tables
+#define tegra_get_cvb_voltage tdfll_tegra_get_cvb_voltage
+#define tegra_get_cvb_t_voltage tdfll_tegra_get_cvb_t_voltage
+#define tegra_round_cvb_voltage tdfll_tegra_round_cvb_voltage
+#define tegra_round_voltage tdfll_tegra_round_voltage
+#define tegra_cvb_add_opp_table tdfll_tegra_cvb_add_opp_table
+#define tegra_cvb_remove_opp_table tdfll_tegra_cvb_remove_opp_table
+#define tegra_cvb_build_thermal_table tdfll_tegra_cvb_build_thermal_table
+#define tegra210_init_speedo_data tdfll_tegra210_init_speedo_data
+#endif

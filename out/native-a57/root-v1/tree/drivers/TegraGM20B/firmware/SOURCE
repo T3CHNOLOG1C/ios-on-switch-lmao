@@ -1,0 +1,3 @@
+linux-firmware 33af2bf0c14509fca10a2fd53fecd6282484a6f0 (2026-10-30), gitlab.com/kernel-firmware/linux-firmware
+Files: nvidia/gm20b/{acr,gr,pmu}/*; gr/sw_method_init.bin is nvidia/gm200/gr/sw_method_init.bin (WHENCE symlink).
+Licence: LICENCE.nvidia (WHENCE: Redistributable).

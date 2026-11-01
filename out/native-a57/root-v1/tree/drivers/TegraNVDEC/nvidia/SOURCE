@@ -1,0 +1,3 @@
+nvdec_drv.h (NVIDIA, SPDX MIT, "1993-2024") and clc5b0.h (NVIDIA, MIT, "1993-2020"): NVDEC's picture-setup structures
+and class methods, as vendored by averne's FFmpeg nvtegra branch (github.com/averne/FFmpeg, libavutil/, 2026-10-30),
+which decodes with them on the Switch's NVDEC 2.0. Unmodified. Used by TegraNVDECCheck.h and SwitchVideoDecoders/AVD.

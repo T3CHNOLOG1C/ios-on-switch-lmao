@@ -1,0 +1,22 @@
+# Native boot and performance audit, 2026-10-29
+
+V18 compiles the changes below into a new native kernel and adapter. Installation and hardware results are recorded separately in the boot guide. The audit left the running V17 boot untouched. No CPU model, broad suite, unchanged-media checksum scan or Data recopy was used.
+
+| Finding | Change | Evidence and limits |
+| --- | --- | --- |
+| Each four-byte SD FIFO write also sampled status and the counter. | Check status/deadline at each ready 512-byte block, retaining latched-error, short-transfer, completion, programming and CMD13 checks. | Instrumented 64 KiB request: 50,012 to 17,500 callbacks; 86 write/cache and 48 read ASan/UBSan cases. Counts are not measured hardware throughput. |
+| Custom PID output flooded the stock framebuffer console; forced kprintf output can hold interrupts off. | Remove every custom process-event line, including PID 1, plus custom exit/shadow messages and `-enable_kprintf_spam`. | Compiled process-event function is a return instruction. Normal XNU warnings and panic output remain. |
+| Native DeviceTree omitted the vnode override that avoids the inherited 1,024-vnode BCM2837 cap. | Set `/defaults/kern.maxvnodes=13312`, following the existing RAM-based sizing for the actual 768 MiB window. | Fresh template differs only in that property; two targeted checks pass. Vnode pressure is a concrete failure path, not a proven cause of the photographed daemon exits. |
+| A normal loader rebuild silently lost the cacheable copy optimization. | Include the fast path in the canonical native root builder and cap intermediate progress redraws to 10 Hz. | Cross-built adapter retains seven translation tables and a 48 KiB stack; its end at `0xA001C000` stays below the SD reference page. |
+| Data matching queried asynchronous APFS publication only once. | Wait at most ten seconds, yielding only for publication pending. Reject identity, corruption and offline failures immediately. | 33 driver and 51 mount cases; no retries of actual mounts or failed writes. |
+| Exact-byte watchdog preference checking rejected normal launchd rewrites on later boots; direct final-name writes could leave partial policy. | Preserve existing root-owned regular preferences and create the initial policy through a synced sibling and exclusive rename. | 144 policy cases plus exact patch replay. Real APFS power-loss durability still needs hardware proof. |
+| Data cluster-map setup always heap-sorted an already ascending map. | Detect ascending maps first; retain sorting and overlap checks for fragmentation. | 40 backend cases, including descending fragmentation and correct write ordering. |
+| First-frame diagnostics scanned every pixel twice for 32 frames. | Keep those content statistics for the first frame only. | Changed display object compiled into the actual late-init archive; presentation behavior is otherwise unchanged. |
+
+The native kernel is `out/native-a57/root-v1/passes/native-root-sol-audit-v1/kernel.macho`. The package is `out/native-sol-audit-v18-delta/manifest.json`. [Independent emitted-code and package review](../out/research-native/sol-v18-independent-review.json) checks the actual changed objects, command line, DeviceTree, loader and boot CRCs, and disposable installer success/rejection/rollback cases.
+
+Detailed source reports: [storage](../out/research-native/sol-storage-audit.md), [loader and console](../out/research-native/sol-loader-cpu-audit.md), [userspace and vnode budget](../out/research-native/sol-userspace-audit.md). The earlier 16 GiB Data copy is retained; its contents are mutable and are not compared to the initial seed at boot.
+
+The V17 photo shows a roughly 98 ms APFS flush, plus repeated clean exits and relaunches of `fairplayd.A2` and `bluetoothd`. FairPlay's original job restarts even a clean exit; Bluetooth's job requires another activation after a clean exit. The precise return branch and requester are unresolved. No blanket daemon disable was added. The initial Data seed still omits the original staged-system-apps tree; this remains an application-readiness gap.
+
+A separate raw-partition installer is being built around a standard APFS container. The current donors are three independent containers and require APFS-aware migration before one valid container can be flashed. [Actual metadata and migration constraints](../out/research-native/sol-single-apfs-feasibility.md). The raw path has not replaced the installed FAT-backed devices, and no Android partition has been changed.

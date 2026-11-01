@@ -1,0 +1,62 @@
+# clang-tidy for ioswitch's own kernel drivers, kits and diagnostics (and the Metal bundle's Objective-C++).
+# Kernel C/C++: no STL, MMIO through integer-to-pointer casts, IOKit/XNU macros everywhere. The set aims at real bugs
+# (bugprone, the static analyzer, performance) and leaves out style checks the kernel idiom trips on every line.
+# Run: scripts/lint.py tidy FILE… (or --all); compile_commands.json comes from scripts/lint.py compdb.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-reserved-identifier,
+  -bugprone-macro-parentheses,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-branch-clone,
+  -bugprone-switch-missing-default-case,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -bugprone-casting-through-void,
+  -bugprone-sizeof-expression,
+  -bugprone-signed-char-misuse,
+  -bugprone-suspicious-include,
+  -bugprone-throwing-static-initialization,
+  -bugprone-exception-escape,
+  -bugprone-unchecked-optional-access,
+  -bugprone-crtp-constructor-accessibility,
+  -bugprone-signed-bitwise,
+  -bugprone-assignment-in-selection-statement,
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.*,
+  -clang-analyzer-optin.performance.Padding,
+  -clang-analyzer-optin.osx.*,
+  performance-*,
+  -performance-no-int-to-ptr,
+  -performance-enum-size,
+  misc-redundant-expression,
+  misc-misplaced-const,
+  misc-unused-using-decls,
+  misc-static-assert,
+  misc-uniqueptr-reset-release,
+  misc-throw-by-value-catch-by-reference,
+  readability-misleading-indentation,
+  readability-redundant-declaration,
+  readability-duplicate-include,
+  readability-misplaced-array-index,
+  readability-non-const-parameter,
+  readability-redundant-control-flow,
+  readability-delete-null-pointer,
+  readability-static-definition-in-anonymous-namespace,
+  modernize-use-nullptr,
+  modernize-use-override,
+  cert-err34-c,
+  cert-flp30-c
+WarningsAsErrors: ''
+# Report headers of ours; never the XNU, Apple, Linux or nouveau headers they include.
+HeaderFilterRegex: '.*/tree/(drivers|kits|diagnostics)/.*'
+ExcludeHeaderFilterRegex: '.*/(nouveau|linux|\.cache|refer|build)/.*'
+SystemHeaders: false
+FormatStyle: file
+CheckOptions:
+  bugprone-suspicious-string-compare.WarnOnImplicitComparison: false
+  bugprone-unused-return-value.AllowCastToVoid: true
+  performance-unnecessary-value-param.AllowedTypes: 'OSSharedPtr;IOReturn'
+  modernize-use-override.IgnoreDestructors: true

@@ -1,0 +1,542 @@
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -37,6 +37,9 @@
+ #include <arm64/tunables/tunables.s>
+ #endif
+ #include <arm64/exception_asm.h>
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++#include <arm64/ioswitch_smp.h>
++#endif
+ 
+ #if __ARM_KERNEL_PROTECT__
+ #include <arm/pmap.h>
+@@ -179,9 +182,35 @@
+ 
+ #if !(defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR))
+ 	// Set low reset vector before attempting any loads
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++	/* Only our validated PSCI wrapper supplies a physical record in x27.
++	 * Keep its EL1 vectors through the cache-off reset code. */
++	cbz x27, Lioswitch_reset_normal_vectors
++	adrp x16, EXT(ioswitch_secondary_records)@page
++	add x16, x16, EXT(ioswitch_secondary_records)@pageoff
++	sub x17, x27, x16
++	cmp x17, #(IOSW_SMP_CORE_COUNT * IOSW_SMP_RECORD_BYTES)
++	b.hs Lioswitch_reset_normal_vectors
++	tst x17, #(IOSW_SMP_RECORD_BYTES - 1)
++	b.ne Lioswitch_reset_normal_vectors
++	ldr x17, [x27, #IOSW_SMP_STAGE_OFF]
++	cmp x17, #IOSW_SMP_STAGE_RESET
++	b.ne Lioswitch_reset_normal_vectors
++	adrp x0, EXT(ioswitch_secondary_vectors)@page
++	add x0, x0, EXT(ioswitch_secondary_vectors)@pageoff
++	b Lioswitch_reset_vectors_ready
++Lioswitch_reset_normal_vectors:
++	mov x27, xzr
++#endif
+ 	adrp    x0, EXT(LowExceptionVectorBase)@page
+ 	add     x0, x0, EXT(LowExceptionVectorBase)@pageoff
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++Lioswitch_reset_vectors_ready:
++#endif
+ 	msr     VBAR_EL1, x0
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++	isb
++#endif
+ #endif
+ 
+ 
+@@ -408,6 +437,357 @@
+ LEXT(bootstrap_instructions)
+ 
+ #endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++/*
++ * First-start PSCI entry for the four homogeneous Switch Cortex-A57 cores.
++ * Firmware supplies x0=context PA, no stack, M/C/I off, EL1h or EL2h.
++ * This never changes coherency mode or performs a cache set/way operation.
++ */
++.macro IOSWITCH_SMP_CONTEXT context, entry, base, end, scratch, failed
++	lsr \scratch, \entry, #32
++	cbnz \scratch, \failed
++	lsr \scratch, \base, #32
++	cbnz \scratch, \failed
++	lsr \scratch, \end, #32
++	cbnz \scratch, \failed
++	cmp \context, \base
++	b.lo \failed
++	cmp \context, \end
++	b.hs \failed
++	sub \scratch, \context, \base
++	tst \scratch, #(IOSW_SMP_RECORD_BYTES - 1)
++	b.ne \failed
++.endmacro
++.macro IOSWITCH_SMP_CACHE_OFF sctlr, scratch, failed
++	mov \scratch, #0x1005
++	movk \scratch, #0x200, lsl #16
++	tst \sctlr, \scratch
++	b.ne \failed
++.endmacro
++.macro IOSWITCH_SMP_COUNTER_DOMAIN before, virtual, after, failed
++	cmp \virtual, \before
++	b.lo \failed
++	cmp \virtual, \after
++	b.hi \failed
++.endmacro
++	.align 11
++	.globl EXT(ioswitch_secondary_vectors)
++LEXT(ioswitch_secondary_vectors)
++.macro IOSWITCH_SECONDARY_VECTOR number
++	mov x0, #\number
++	b Lioswitch_secondary_exception
++	.space 120
++.endmacro
++	IOSWITCH_SECONDARY_VECTOR 0
++	IOSWITCH_SECONDARY_VECTOR 1
++	IOSWITCH_SECONDARY_VECTOR 2
++	IOSWITCH_SECONDARY_VECTOR 3
++	IOSWITCH_SECONDARY_VECTOR 4
++	IOSWITCH_SECONDARY_VECTOR 5
++	IOSWITCH_SECONDARY_VECTOR 6
++	IOSWITCH_SECONDARY_VECTOR 7
++	IOSWITCH_SECONDARY_VECTOR 8
++	IOSWITCH_SECONDARY_VECTOR 9
++	IOSWITCH_SECONDARY_VECTOR 10
++	IOSWITCH_SECONDARY_VECTOR 11
++	IOSWITCH_SECONDARY_VECTOR 12
++	IOSWITCH_SECONDARY_VECTOR 13
++	IOSWITCH_SECONDARY_VECTOR 14
++	IOSWITCH_SECONDARY_VECTOR 15
++
++	.align 2
++	.globl EXT(ioswitch_secondary_entry)
++LEXT(ioswitch_secondary_entry)
++	msr DAIFSet, #15
++	/* A numeric PA bound cannot justify a store through inherited unknown
++	 * translation tables. Prove this EL's M/C/I and endianness first. */
++	mrs x20, CurrentEL
++	cmp x20, #4
++	b.eq Lioswitch_secondary_check_el1_off
++	cmp x20, #8
++	b.ne Lioswitch_secondary_halt
++	mrs x21, SCTLR_EL2
++	b Lioswitch_secondary_check_off
++Lioswitch_secondary_check_el1_off:
++	mrs x21, SCTLR_EL1
++Lioswitch_secondary_check_off:
++	IOSWITCH_SMP_CACHE_OFF x21, x2, Lioswitch_secondary_halt
++	/* Validate an exact member of our owned array BEFORE any record write.
++	 * PC-relative references denote PA here and KVA after normal entry. */
++	adrp x19, EXT(ioswitch_secondary_records)@page
++	add x19, x19, EXT(ioswitch_secondary_records)@pageoff
++	adrp x1, EXT(ioswitch_secondary_records_end)@page
++	add x1, x1, EXT(ioswitch_secondary_records_end)@pageoff
++	adr x22, EXT(ioswitch_secondary_entry)
++	IOSWITCH_SMP_CONTEXT x0, x22, x19, x1, x2, Lioswitch_secondary_halt
++	mov x19, x0
++	mov x27, x0
++	mov x28, xzr
++	/* Establish a real current-EL vector BEFORE implementation-defined MRS. */
++	str x20, [x19, #IOSW_SMP_ENTRY_EL_OFF]
++	str x21, [x19, #IOSW_SMP_SCTLR_OFF]
++	adrp x1, EXT(ioswitch_secondary_vectors)@page
++	add x1, x1, EXT(ioswitch_secondary_vectors)@pageoff
++	lsr x2, x1, #32
++	cbnz x2, Lioswitch_secondary_bad_control
++	cmp x20, #4
++	b.eq Lioswitch_secondary_set_el1_vectors
++	cmp x20, #8
++	b.ne Lioswitch_secondary_bad_el
++	msr VBAR_EL2, x1
++	isb
++	b Lioswitch_secondary_record_entry
++Lioswitch_secondary_set_el1_vectors:
++	msr VBAR_EL1, x1
++	isb
++Lioswitch_secondary_record_entry:
++	mrs x1, MPIDR_EL1
++	MOV64 x2, 0xff00ffffff
++	and x1, x1, x2
++	str x1, [x19, #IOSW_SMP_SEEN_MPIDR_OFF]
++	str x20, [x19, #IOSW_SMP_ENTRY_EL_OFF]
++	mov x2, #IOSW_SMP_STAGE_ENTRY
++	str x2, [x19, #IOSW_SMP_STAGE_OFF]
++	dsb sy
++	ldr x2, [x19, #IOSW_SMP_MAGIC_OFF]
++	MOV64 x3, IOSW_SMP_MAGIC
++	cmp x2, x3
++	b.ne Lioswitch_secondary_bad_control
++	ldr x2, [x19, #IOSW_SMP_RESERVED0_OFF]
++	ldr x3, [x19, #IOSW_SMP_RESERVED1_OFF]
++	orr x2, x2, x3
++	cbnz x2, Lioswitch_secondary_bad_control
++	cmp x1, #IOSW_SMP_CORE_COUNT
++	b.hs Lioswitch_secondary_bad_mpidr
++	ldr x2, [x19, #IOSW_SMP_MPIDR_OFF]
++	cmp x1, x2
++	b.ne Lioswitch_secondary_bad_mpidr
++	ldr x2, [x19, #IOSW_SMP_LOGICAL_OFF]
++	cmp x1, x2
++	b.ne Lioswitch_secondary_bad_mpidr
++	adrp x2, EXT(ioswitch_secondary_records)@page
++	add x2, x2, EXT(ioswitch_secondary_records)@pageoff
++	add x2, x2, x1, lsl #7
++	cmp x2, x19
++	b.ne Lioswitch_secondary_bad_mpidr
++	ldr x1, [x19, #IOSW_SMP_CNTVOFF_OFF]
++	cbnz x1, Lioswitch_secondary_bad_cntvoff
++	ldr x1, [x19, #IOSW_SMP_RESET_OFF]
++	adrp x2, EXT(LowResetVectorBase)@page
++	add x2, x2, EXT(LowResetVectorBase)@pageoff
++	cmp x1, x2
++	b.ne Lioswitch_secondary_bad_reset
++	lsr x1, x2, #32
++	cbnz x1, Lioswitch_secondary_bad_reset
++	/* Only A57: preserve firmware SMPEN, never set/clear it on a live L2. */
++	mrs x1, MIDR_EL1
++	MOV64 x2, 0xff0ffff0
++	and x1, x1, x2
++	MOV64 x2, 0x410fd070
++	cmp x1, x2
++	b.ne Lioswitch_secondary_bad_midr
++	mrs x1, S3_1_C15_C2_1
++	tbz x1, #6, Lioswitch_secondary_bad_smpen
++	cmp x20, #8
++	b.ne Lioswitch_secondary_el1
++	mrs x1, SCTLR_EL2
++	str x1, [x19, #IOSW_SMP_SCTLR_OFF]
++	IOSWITCH_SMP_CACHE_OFF x1, x2, Lioswitch_secondary_bad_sctlr
++	/* Match the measured primary A57 EL2->EL1 handoff. No GICv3 SRE access. */
++	MOV64 x1, 0x80000000
++	msr HCR_EL2, x1
++	msr VTTBR_EL2, xzr
++	MOV64 x1, 0x33ff
++	msr CPTR_EL2, x1
++	msr MDCR_EL2, xzr
++	msr HSTR_EL2, xzr
++	mrs x1, MIDR_EL1
++	msr VPIDR_EL2, x1
++	mrs x1, MPIDR_EL1
++	msr VMPIDR_EL2, x1
++	mov x1, #3
++	msr CNTHCTL_EL2, x1
++	msr CNTVOFF_EL2, xzr
++	mov x1, #2
++	msr CNTHP_CTL_EL2, x1
++	MOV64 x1, 0x30d00800
++	msr SCTLR_EL1, x1
++	msr TTBR0_EL1, xzr
++	msr TTBR1_EL1, xzr
++	msr TCR_EL1, xzr
++	msr MAIR_EL1, xzr
++	msr CONTEXTIDR_EL1, xzr
++	msr CPACR_EL1, xzr
++	msr CNTKCTL_EL1, xzr
++	adrp x1, EXT(ioswitch_secondary_vectors)@page
++	add x1, x1, EXT(ioswitch_secondary_vectors)@pageoff
++	msr VBAR_EL1, x1
++	adrp x1, Lioswitch_secondary_el1@page
++	add x1, x1, Lioswitch_secondary_el1@pageoff
++	msr ELR_EL2, x1
++	mov x1, #0x3c5
++	msr SPSR_EL2, x1
++	dsb sy
++	isb
++	eret
++Lioswitch_secondary_el1:
++	msr DAIFSet, #15
++	msr SPSel, #1
++	mrs x1, SCTLR_EL1
++	str x1, [x19, #IOSW_SMP_SCTLR_OFF]
++	IOSWITCH_SMP_CACHE_OFF x1, x2, Lioswitch_secondary_bad_sctlr
++	/* Direct EL1 entry is permitted only with the same accessible zero-offset
++	 * counter domain. EL1 cannot read CNTVOFF_EL2: bracket virtual by physical
++	 * reads rather than pretending an EL2 register was observed here. */
++	mrs x1, CNTFRQ_EL0
++	ldr x2, [x19, #IOSW_SMP_CNTFRQ_OFF]
++	cmp x1, x2
++	b.ne Lioswitch_secondary_bad_frequency
++	MOV64 x2, 19200000
++	cmp x1, x2
++	b.ne Lioswitch_secondary_bad_frequency
++	isb
++	mrs x1, CNTPCT_EL0
++	mrs x2, CNTVCT_EL0
++	mrs x3, CNTPCT_EL0
++	IOSWITCH_SMP_COUNTER_DOMAIN x1, x2, x3, Lioswitch_secondary_bad_cntvoff
++	mov x1, #2
++	msr CNTP_CTL_EL0, x1
++	msr CNTV_CTL_EL0, x1
++	MOV64 x1, 0x30d00800
++	msr SCTLR_EL1, x1
++	msr CPACR_EL1, xzr
++	msr CNTKCTL_EL1, xzr
++	isb
++	mov x1, #IOSW_SMP_STAGE_EL1
++	str x1, [x19, #IOSW_SMP_STAGE_OFF]
++	dsb sy
++	mov x1, #IOSW_SMP_STAGE_RESET
++	str x1, [x19, #IOSW_SMP_STAGE_OFF]
++	dsb sy
++	b EXT(LowResetVectorBase)
++
++Lioswitch_secondary_bad_control:
++	mov x1, #IOSW_SMP_ERROR_CONTROL
++	b Lioswitch_secondary_failed
++Lioswitch_secondary_bad_el:
++	mov x1, #IOSW_SMP_ERROR_EL
++	b Lioswitch_secondary_failed
++Lioswitch_secondary_bad_mpidr:
++	mov x1, #IOSW_SMP_ERROR_MPIDR
++	b Lioswitch_secondary_failed
++Lioswitch_secondary_bad_sctlr:
++	mov x1, #IOSW_SMP_ERROR_SCTLR
++	b Lioswitch_secondary_failed
++Lioswitch_secondary_bad_midr:
++	mov x1, #IOSW_SMP_ERROR_MIDR
++	b Lioswitch_secondary_failed
++Lioswitch_secondary_bad_smpen:
++	mov x1, #IOSW_SMP_ERROR_SMPEN
++	b Lioswitch_secondary_failed
++Lioswitch_secondary_bad_frequency:
++	mov x1, #IOSW_SMP_ERROR_FREQUENCY
++	b Lioswitch_secondary_failed
++Lioswitch_secondary_bad_cntvoff:
++	mov x1, #IOSW_SMP_ERROR_CNTVOFF
++	b Lioswitch_secondary_failed
++Lioswitch_secondary_bad_reset:
++	mov x1, #IOSW_SMP_ERROR_RESET
++Lioswitch_secondary_failed:
++	str x1, [x19, #IOSW_SMP_ERROR_OFF]
++	mov x1, #IOSW_SMP_STAGE_FAILED
++	str x1, [x19, #IOSW_SMP_STAGE_OFF]
++	add x1, x19, #IOSW_SMP_STATUS_OFFSET
++	dc cvac, x1
++	dsb sy
++Lioswitch_secondary_halt:
++	wfe
++	b Lioswitch_secondary_halt
++
++/* Works at physical EL1/EL2 and at the KVA vector after MMU enable.
++ * Derive the record anew: an interrupted C function may use x27 as a local. */
++Lioswitch_secondary_exception:
++	msr DAIFSet, #15
++	mov x18, x0
++	mrs x1, MPIDR_EL1
++	MOV64 x2, 0xff00ffffff
++	and x1, x1, x2
++	cmp x1, #IOSW_SMP_CORE_COUNT
++	b.hs Lioswitch_secondary_halt
++	adrp x19, EXT(ioswitch_secondary_records)@page
++	add x19, x19, EXT(ioswitch_secondary_records)@pageoff
++	add x19, x19, x1, lsl #7
++	ldr x2, [x19, #IOSW_SMP_MPIDR_OFF]
++	cmp x1, x2
++	b.ne Lioswitch_secondary_halt
++	ldr x2, [x19, #IOSW_SMP_ERROR_OFF]
++	cbnz x2, Lioswitch_secondary_halt
++	/* Error also prevents recursive faults; FAILED is published last, after
++	 * ESR/ELR/FAR/SCTLR. Only FAILED makes the complete fault payload valid. */
++	add x18, x18, #IOSW_SMP_ERROR_EXCEPTION
++	str x18, [x19, #IOSW_SMP_ERROR_OFF]
++	str x1, [x19, #IOSW_SMP_SEEN_MPIDR_OFF]
++	mrs x1, CurrentEL
++	cmp x1, #8
++	b.eq Lioswitch_secondary_exception_el2
++	cmp x1, #4
++	b.ne Lioswitch_secondary_halt
++	mrs x1, ESR_EL1
++	mrs x2, ELR_EL1
++	mrs x3, FAR_EL1
++	mrs x4, SCTLR_EL1
++	b Lioswitch_secondary_exception_save
++Lioswitch_secondary_exception_el2:
++	mrs x1, ESR_EL2
++	mrs x2, ELR_EL2
++	mrs x3, FAR_EL2
++	mrs x4, SCTLR_EL2
++Lioswitch_secondary_exception_save:
++	str x1, [x19, #IOSW_SMP_ESR_OFF]
++	str x2, [x19, #IOSW_SMP_ELR_OFF]
++	str x3, [x19, #IOSW_SMP_FAR_OFF]
++	str x4, [x19, #IOSW_SMP_SCTLR_OFF]
++	mov x1, #IOSW_SMP_STAGE_FAILED
++	str x1, [x19, #IOSW_SMP_STAGE_OFF]
++	add x1, x19, #IOSW_SMP_STATUS_OFFSET
++	dc cvac, x1
++	dsb sy
++	b Lioswitch_secondary_halt
++
++	.align 2
++	.globl EXT(ioswitch_secondary_vectors_leave)
++LEXT(ioswitch_secondary_vectors_leave)
++	mrs x0, MPIDR_EL1
++	MOV64 x1, 0xff00ffffff
++	and x0, x0, x1
++	cmp x0, #IOSW_SMP_CORE_COUNT
++	b.hs 9f
++	adrp x1, EXT(ioswitch_secondary_records)@page
++	add x1, x1, EXT(ioswitch_secondary_records)@pageoff
++	add x1, x1, x0, lsl #7
++	ldr x2, [x1, #IOSW_SMP_STAGE_OFF]
++	cmp x2, #IOSW_SMP_STAGE_MMU
++	b.ne 9f
++	adrp x0, EXT(ExceptionVectorsBase)@page
++	add x0, x0, EXT(ExceptionVectorsBase)@pageoff
++	msr VBAR_EL1, x0
++	isb
++	mov x2, #IOSW_SMP_STAGE_C
++	str x2, [x1, #IOSW_SMP_STAGE_OFF]
++	add x1, x1, #IOSW_SMP_STATUS_OFFSET
++	dc cvac, x1
++	dsb sy
++9:	ret
++
++	.section __DATA,__data
++	.align 7
++	.globl EXT(ioswitch_secondary_records)
++LEXT(ioswitch_secondary_records)
++	.space (IOSW_SMP_CORE_COUNT * IOSW_SMP_RECORD_BYTES), 0
++	.globl EXT(ioswitch_secondary_records_end)
++LEXT(ioswitch_secondary_records_end)
++	.text
++#endif /* XNU_NATIVE_ARCH_TIMER */
+ 	.align 2
+ 	.globl EXT(resume_idle_cpu)
+ LEXT(resume_idle_cpu)
+@@ -626,6 +1006,9 @@
+ 
+ 	mov x20, x0
+ 	mov x21, #0
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++	mov x27, xzr
++#endif
+ #if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
+ 	mov x28, #0
+ 	// Enable physical early rendering only for the two exact native cold
+@@ -1007,6 +1390,12 @@
+ 	ic		iallu
+ #endif
+ 
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++	/* Finish local maintenance before a first-start secondary enables M/C/I. */
++	dsb sy
++	isb
++#endif
++
+ 	/* If x21 is not 0, then this is either the start_cpu path or
+ 	 * the resume_idle_cpu path.  cpu_ttep should already be
+ 	 * populated, so just switch to the kernel_pmap now.
+@@ -1042,6 +1431,13 @@
+ 	add x0, x0, EXT(LowExceptionVectorBase)@pageoff
+ Lioswitch_normal_vectors:
+ #endif
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++	cbz x27, Lioswitch_secondary_vbar_selected
++	/* This identity vector remains valid across M=0 -> M=1 via TTBR0. */
++	adrp x0, EXT(ioswitch_secondary_vectors)@page
++	add x0, x0, EXT(ioswitch_secondary_vectors)@pageoff
++Lioswitch_secondary_vbar_selected:
++#endif
+ 	MSR_VBAR_EL1_X0
+ 
+ #if HAS_APPLE_PAC
+@@ -1053,6 +1449,25 @@
+ 	MOV64   x0, SCTLR_EL1_DEFAULT
+ 	MSR_SCTLR_EL1_X0
+ 	isb		sy
++#if defined(XNU_NATIVE_ARCH_TIMER) && XNU_NATIVE_ARCH_TIMER
++	cbz x27, Lioswitch_secondary_mmu_live
++	/* MMU is now live: keep faults in our KVA vectors until arm_init_cpu
++	 * installs its thread, then ioswitch_secondary_vectors_leave restores XNU. */
++	add x27, x27, x22
++	sub x27, x27, x23
++	adrp x16, EXT(ioswitch_secondary_vectors)@page
++	add x16, x16, EXT(ioswitch_secondary_vectors)@pageoff
++	add x16, x16, x22
++	sub x16, x16, x23
++	msr VBAR_EL1, x16
++	isb
++	mov x16, #IOSW_SMP_STAGE_MMU
++	str x16, [x27, #IOSW_SMP_STAGE_OFF]
++	add x16, x27, #IOSW_SMP_STATUS_OFFSET
++	dc cvac, x16
++	dsb sy
++Lioswitch_secondary_mmu_live:
++#endif
+ #if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
+ 	cbnz x21, Lioswitch_vectors_live
+ 	cbz x28, Lioswitch_vectors_live
+--- /dev/null
++++ b/osfmk/arm64/ioswitch_smp.h
+@@ -0,0 +1,70 @@
++/* SPDX-License-Identifier: BSD-2-Clause-Patent */
++#ifndef IOSWITCH_SMP_H
++#define IOSWITCH_SMP_H
++/* Shared PSCI physical-entry ABI. Four homogeneous Switch Cortex-A57 cores.
++ * The boot CPU owns control[0..63]; each secondary exclusively owns status[64..127].
++ * Before CPU_ON publish both lines to PoC. After CPU_ON the boot CPU must never
++ * dirty the status line; poll it with invalidate + acquire, not a cached load. */
++#define IOSW_SMP_CORE_COUNT 4
++#define IOSW_SMP_RECORD_BYTES 128
++#define IOSW_SMP_STATUS_OFFSET 64
++#define IOSW_SMP_MAGIC 0x495357534d503031
++#define IOSW_SMP_STAGE_CLEAR 0
++#define IOSW_SMP_STAGE_ENTRY 1
++#define IOSW_SMP_STAGE_EL1 2
++#define IOSW_SMP_STAGE_RESET 3
++#define IOSW_SMP_STAGE_MMU 4
++#define IOSW_SMP_STAGE_C 5
++#define IOSW_SMP_STAGE_FAILED 255
++#define IOSW_SMP_ERROR_CONTROL 1
++#define IOSW_SMP_ERROR_EL 2
++#define IOSW_SMP_ERROR_MPIDR 3
++#define IOSW_SMP_ERROR_SCTLR 4
++#define IOSW_SMP_ERROR_MIDR 5
++#define IOSW_SMP_ERROR_SMPEN 6
++#define IOSW_SMP_ERROR_FREQUENCY 7
++#define IOSW_SMP_ERROR_CNTVOFF 8
++#define IOSW_SMP_ERROR_RESET 9
++#define IOSW_SMP_ERROR_EXCEPTION 256
++#define IOSW_SMP_MAGIC_OFF 0
++#define IOSW_SMP_MPIDR_OFF 8
++#define IOSW_SMP_LOGICAL_OFF 16
++#define IOSW_SMP_CNTFRQ_OFF 24
++#define IOSW_SMP_CNTVOFF_OFF 32
++#define IOSW_SMP_RESET_OFF 40
++#define IOSW_SMP_RESERVED0_OFF 48
++#define IOSW_SMP_RESERVED1_OFF 56
++#define IOSW_SMP_STAGE_OFF 64
++#define IOSW_SMP_ERROR_OFF 72
++#define IOSW_SMP_SEEN_MPIDR_OFF 80
++#define IOSW_SMP_ENTRY_EL_OFF 88
++#define IOSW_SMP_ESR_OFF 96
++#define IOSW_SMP_ELR_OFF 104
++#define IOSW_SMP_FAR_OFF 112
++#define IOSW_SMP_SCTLR_OFF 120
++#ifndef __ASSEMBLER__
++#include <stdint.h>
++#include <stddef.h>
++struct ioswitch_smp_record {
++    uint64_t magic, mpidr, logical, cntfrq, cntvoff, reset_pa, reserved0, reserved1;
++    volatile uint64_t stage, error, seen_mpidr, entry_el, esr, elr, far, sctlr;
++} __attribute__((aligned(64)));
++#ifdef __cplusplus
++static_assert(sizeof(ioswitch_smp_record) == IOSW_SMP_RECORD_BYTES, "SMP record stride");
++static_assert(offsetof(ioswitch_smp_record, stage) == IOSW_SMP_STATUS_OFFSET, "SMP status line");
++extern "C" {
++#else
++_Static_assert(sizeof(struct ioswitch_smp_record) == IOSW_SMP_RECORD_BYTES, "SMP record stride");
++_Static_assert(offsetof(struct ioswitch_smp_record, stage) == IOSW_SMP_STATUS_OFFSET, "SMP status line");
++#endif
++extern struct ioswitch_smp_record ioswitch_secondary_records[IOSW_SMP_CORE_COUNT];
++extern char ioswitch_secondary_records_end[];
++extern char ioswitch_secondary_entry[];
++/* Called only after machine_set_current_thread on this secondary. Installs the
++ * normal XNU KVA vectors and publishes the C-arrival stage. */
++void ioswitch_secondary_vectors_leave(void);
++#ifdef __cplusplus
++}
++#endif
++#endif
++#endif

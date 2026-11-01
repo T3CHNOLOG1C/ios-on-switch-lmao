@@ -1,0 +1,18 @@
+# m2v-corpus: every function of a metallib through the metal2vulkan runtime on the host NVK over the mock GM20B (corpus/tools).
+# Build: cargo +1.98.0 build --release --offline --target-dir <scratch>/target  (paths: the metal2vulkan checkout the plugin
+# build uses, with patches/m2v applied by build-tegra-gm20b-metal.py)
+[package]
+name = "m2v-corpus"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[[bin]]
+name = "m2v-corpus"
+path = "src/main.rs"
+[dependencies]
+metal2vulkan = { path = "../../../../../../../gpu-artifacts/m2v-src/metal2vulkan/crates/metal2vulkan", features = ["ash"] }
+metal2vulkan-runtime = { path = "../../../../../../../gpu-artifacts/m2v-src/metal2vulkan/crates/metal2vulkan-runtime" }
+metal2vulkan-air = { path = "../../../../../../../gpu-artifacts/m2v-src/metal2vulkan/crates/metal2vulkan-air" }
+[profile.release]
+panic = "unwind"
+debug = 1

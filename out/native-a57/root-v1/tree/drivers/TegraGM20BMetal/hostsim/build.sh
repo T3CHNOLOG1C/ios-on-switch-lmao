@@ -1,0 +1,22 @@
+#!/bin/sh
+# Host simulation of the stage-4 stack: NativeBridgeMetalFrontend.mm + the metal2vulkan bridge + NVK (macOS host build,
+# nvkmd_darwin) over mock_iokit.c, a GM20B user client that completes every submission at once. It proves device creation,
+# metal2vulkan's acceptance of NVK's feature set and NAK's SM53 compile of QuartzCore's shaders; nothing executes on a GPU.
+# qc_frontend.mm: QuartzCore's pipelines through the frontend (sheng's 24 recipes, the framebuffer-fetch filters, the uber
+# shader under 33 constant sets), each made and drawn three times in one pass: <outdir>/qc_frontend <nvk> <cache> <QC metallib>.
+# usage: build.sh <host libnative_metal_bridge.a> <outdir>
+#   the bridge: build-tegra-gm20b-metal.py <dir> --host (prints its path)
+#   then: <outdir>/m2v_gm20b <host libvulkan_nouveau.dylib> <cache dir> [<QuartzCore default.metallib> <pairs>]
+set -e
+HERE=$(cd "$(dirname "$0")" && pwd)
+TREE=$HERE/../../..
+mkdir -p "$2"
+xcrun clang -O1 -Wall -dynamiclib -I "$TREE/drivers/TegraGM20B" "$HERE/mock_iokit.c" -framework IOKit -framework CoreFoundation \
+  -install_name @rpath/libmock_iokit.dylib -o "$2/libmock_iokit.dylib"
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
+  "$HERE/m2v_gm20b.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
+  -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/m2v_gm20b"
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
+  "$HERE/qc_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
+  -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/qc_frontend"
+echo "built $2/m2v_gm20b $2/qc_frontend"

@@ -1,0 +1,93 @@
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -119,6 +119,63 @@
+ //  1 : normal
+ //  2 : overhead simulation (delay & flags)
+ TUNABLE(unsigned int, wfi, "wfi", 1);
++#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !HAS_RETENTION_STATE && !defined(APPLE_ARM64_ARCH_FAMILY)
++static bool ioswitch_cache_retaining_idle;
++
++static bool
++ioswitch_idle_board(void)
++{
++	DTEntry entry;
++	const void *property = NULL;
++	unsigned int size = 0;
++	static const char model[] = "NintendoSwitchOLED";
++	static const char compatible[] = "nintendo,aula";
++	if (SecureDTLookupEntry(NULL, "/", &entry) != kSuccess) {
++		return false;
++	}
++	if (SecureDTGetProperty(entry, "model", &property, &size) == kSuccess &&
++	    property != NULL && size == sizeof(model) && !bcmp(property, model, size)) {
++		return true;
++	}
++	if (SecureDTGetProperty(entry, "compatible", &property, &size) != kSuccess ||
++	    property == NULL || size == 0 || size > 1024) {
++		return false;
++	}
++	const char *bytes = property;
++	bool matched = false;
++	for (unsigned int at = 0; at < size;) {
++		unsigned int end = at;
++		while (end < size && bytes[end] != '\0') {
++			end++;
++		}
++		if (end == size) {
++			return false;
++		}
++		if (end - at == sizeof(compatible) - 1 &&
++		    !bcmp(bytes + at, compatible, sizeof(compatible) - 1)) {
++			matched = true;
++		}
++		at = end + 1;
++	}
++	return matched;
++}
++
++static void
++ioswitch_idle_cache_init(void)
++{
++	int root_boot = 0;
++	ioswitch_cache_retaining_idle = false;
++	if (!PE_parse_boot_argn("ioswitch-root-boot", &root_boot, sizeof(root_boot)) || root_boot != 1) {
++		return;
++	}
++	uint32_t midr = (uint32_t)__builtin_arm_rsr64("MIDR_EL1");
++	if ((midr & (MIDR_EL1_IMP_MASK | MIDR_EL1_PNUM_MASK)) !=
++	    ((0x41u << MIDR_EL1_IMP_SHIFT) | (0xd07u << MIDR_EL1_PNUM_SHIFT))) {
++		return;
++	}
++	ioswitch_cache_retaining_idle = ioswitch_idle_board();
++}
++#endif
+ #if DEVELOPMENT || DEBUG
+ 
+ // wfi_flags
+@@ -584,7 +641,14 @@
+ 
+ 	if (wfi) {
+ #if !defined(APPLE_ARM64_ARCH_FAMILY)
+-		platform_cache_idle_enter();
++#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !HAS_RETENTION_STATE
++		/* Bare A57 WFI retains caches; power-management callbacks still flush. */
++		if (!(ioswitch_cache_retaining_idle && wfi == 1 &&
++		    cpu_data_ptr->cpu_idle_notify == NULL && cpu_data_ptr->cpu_cache_dispatch == NULL))
++#endif
++		{
++			platform_cache_idle_enter();
++		}
+ #endif
+ 
+ #if DEVELOPMENT || DEBUG
+@@ -1165,6 +1229,10 @@
+ 		uint32_t        production = 1;
+ 		DTEntry         entry;
+ 
++#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !HAS_RETENTION_STATE && !defined(APPLE_ARM64_ARCH_FAMILY)
++		ioswitch_idle_cache_init();
++#endif
++
+ 		unsigned long   jtag = 0;
+ 
+ 		if (PE_parse_boot_argn("jtag", &jtag, sizeof(jtag))) {
