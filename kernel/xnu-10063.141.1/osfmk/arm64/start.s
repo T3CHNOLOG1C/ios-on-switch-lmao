@@ -97,7 +97,9 @@
 /* Diagnostic-only, fixed OLED experiment. The flag is enabled only after the
  * exact incoming Video and memory-window contract has been checked with MMU off.
  * x16-x18 and condition flags are scratch at every call site. No stack or calls.
- * Logical 16x16 marks occupy y=280..295, x=16+40*(stage-1)..+15.
+ * Every stage is recorded (ioswitch_early_record[1], shown on an early exception or panic screen); only a failure
+ * mark (any colour but the default green) is drawn, a logical 16x16 block at y=280..295, x=16+40*(stage-1)..+15,
+ * so a normal boot leaves the screen to the console.
  */
 #if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
 .macro IOSWITCH_EARLY_MARK stage, color=0xff70ff70
@@ -107,6 +109,7 @@
 	add x16, x16, EXT(ioswitch_early_record)@pageoff
 	mov x17, #\stage
 	str x17, [x16, #8]
+.if \color != 0xff70ff70
 	MOV64 x16, (0xf5a00000 + (1279 - (16 + 40 * (\stage - 1))) * 2880 + 280 * 4)
 	MOV64 x17, \color
 	mov x18, #16
@@ -131,6 +134,7 @@
 	subs x18, x18, #1
 	b.ne 98b
 	dsb sy
+.endif
 99:
 .endmacro
 #else
