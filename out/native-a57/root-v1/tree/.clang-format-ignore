@@ -1,0 +1,2 @@
+# Generated files clang-format must not touch (paths relative to this directory).
+drivers/SwitchVideoDecoders/test/VDECClip.h
