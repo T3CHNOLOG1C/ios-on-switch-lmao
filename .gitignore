@@ -49,6 +49,7 @@ bundles/
 /out/switch/*
 !/out/switch/deploy-sd.sh
 !/out/switch/launchd-disable.py
+!/out/switch/raw-v24-boot.cmd
 
 # GPU patches (the NVK series) and notes; not the built bundle, dylibs, seeds or the m2v checkout
 !/out/gpu/
