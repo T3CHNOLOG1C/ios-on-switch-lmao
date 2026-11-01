@@ -76,15 +76,25 @@ nvk_get_image_plane_format_features(const struct nvk_physical_device *pdev,
    }
 
    /* A VK_IMAGE_TILING_LINEAR image renders too (2D, one level, layer and
-    * sample, as linear images are here): in place, as a pitch color target,
-    * where its address and row stride are 128B-aligned and every color
-    * attachment of the rendering is linear (nvk_rendering_linear), else
-    * through its tiled shadow (nvk_image_init_linear_tiled_shadows), as a
-    * DRM_FORMAT_MOD_LINEAR image does.  Metal's IOSurfaces are such images
-    * (metal2vulkan over host memory).
+    * sample, as linear images are here), under VK_NV_linear_color_attachment's
+    * rule: only in a rendering whose every color attachment is linear and that
+    * has no depth or stencil attachment, which nvk_rendering_linear renders in
+    * place, as a pitch color target (its address and row stride are 128B
+    * aligned: nil lays a linear image out so, and its memory requirements ask
+    * it).  So it reports LINEAR_COLOR_ATTACHMENT_BIT_NV, not the color
+    * attachment feature.  The tiled shadow (nvk_image_init_linear_tiled_shadows)
+    * stays for a rendering that breaks the rule, but there an input attachment
+    * reads the linear plane (its view's descriptor) while the draws write the
+    * shadow: a framebuffer fetch reads the pixels as they were before the
+    * rendering.  Under the rule the application renders such an image apart
+    * through an image of its own (metal2vulkan: linear_attachment.rs).
+    * Metal's IOSurfaces are such images (metal2vulkan over host memory).
     */
    if (nil_format_supports_color_targets(&pdev->info, p_format)) {
-      features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT;
+      if (tiling == VK_IMAGE_TILING_LINEAR)
+         features |= VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV;
+      else
+         features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT;
       if (nil_format_supports_blending(&pdev->info, p_format))
          features |= VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT;
       features |= VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
@@ -315,13 +325,18 @@ vk_image_usage_to_format_features(VkImageUsageFlagBits usage_flag)
       return VK_FORMAT_FEATURE_2_SAMPLED_IMAGE_BIT;
    case VK_IMAGE_USAGE_STORAGE_BIT:
       return VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
+   /* A linear image's color and input attachment usage is under
+    * VK_NV_linear_color_attachment's rule (nvk_get_image_plane_format_features).
+    */
    case VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT:
-      return VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT;
+      return VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
+             VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV;
    case VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT:
       return VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT;
    case VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT:
       return VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
-             VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT;
+             VK_FORMAT_FEATURE_2_DEPTH_STENCIL_ATTACHMENT_BIT |
+             VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV;
    case VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR:
       return VK_FORMAT_FEATURE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
    default:
