@@ -1,5 +1,5 @@
 #!/bin/zsh
-# The host twin of an iOS NVK dylib, for the shader cache precompile (build-tegra-gm20b-metal.py, precompile.mm): the same Mesa
+# The host twin of an iOS NVK dylib, for the shader cache precompile (//gpu:seed, precompile.mm): the same Mesa
 # checkout built for this Mac (aarch64-apple-darwin) with the darwin nvkmd backend, so NAK compiles exactly as on the device. Run
 # it on the checkout the iOS dylib was built from, as it was (build-nvk-ios.sh leaves it so), with the same NVK_BUILD_ID (the pin,
 # when the iOS build had one); both dylibs then get <dylib>.source (nvk-source.sh), which the build step requires to be equal.

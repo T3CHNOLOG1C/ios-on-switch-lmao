@@ -131,3 +131,27 @@ http_archive(
 # range request into the repository cache (bazel/ipsw/pins.bzl, `bazel run //bazel/ipsw:pin` to bump). ---------
 ipsw = use_extension("//bazel/ipsw:ipsw.bzl", "ipsw")
 use_repo(ipsw, "ipsw")
+
+# --- GPU (owned by gpu/) -----------------------------------------------------------------------------------------
+# Rust 1.98.0 (the bridge's `cargo +1.98.0`), with the iOS standard library: the Metal bridge is built by this
+# toolchain's cargo, offline, inside a Bazel action (gpu/defs.bzl). rules_rust pins the dist archives by sha256.
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    extra_target_triples = [
+        "aarch64-apple-ios",
+        "aarch64-apple-darwin",
+    ],
+    versions = ["1.98.0"],
+)
+use_repo(
+    rust,
+    "rust_macos_aarch64__aarch64-apple-darwin__stable_tools",
+    "rust_macos_aarch64__aarch64-apple-ios__stable_tools",
+    "rust_toolchains",
+)
+
+# m2v (steelbrain/metal2vulkan at 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's crates.io
+# dependencies (vendored from its Cargo.lock), and the GPU's checked host inputs (bazel/gpu/deps.bzl).
+gpu = use_extension("//bazel/gpu:deps.bzl", "gpu")
+use_repo(gpu, "gpu_host_inputs", "gpu_llvm_as", "m2v", "m2v_crates")

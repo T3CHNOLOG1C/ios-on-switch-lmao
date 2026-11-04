@@ -3,13 +3,13 @@
 
 usage: stage-tegra-gm20b-metal.py <Data mount point> [--build <outdir>] [--remove] [--no-raw]
 
-<outdir> defaults to out/gpu (build-tegra-gm20b-metal.py's default). Exit status 0 on success, else one error line.
+<outdir> defaults to out/gpu; with Bazel pass the directory //gpu:bundle builds (bazel-bin/gpu/bundle). Exit status 0 on success, else one error line.
 
 Mount the Data volume read-write first, e.g. `diskutil mount -mountOptions nobrowse D1B1D053-D0A6-496C-8625-A947A3DA863E`
 (IOSwitchRawMount.inc IOSW_RAW_DATA_UUID), and eject the card before it goes back into the Switch.
 
 As vendor/unixnu/scripts/add-gpu-plugin-data.py --publish (UniXNU-sheng), on the live volume instead of a seed image:
-  * <Data>/ngpu/addons/TegraGM20BMetal.bundle from <build outdir>/ngpu/addons (build-tegra-gm20b-metal.py). The kernel shows
+  * <Data>/ngpu/addons/TegraGM20BMetal.bundle from <build outdir>/ngpu/addons (//gpu:bundle). The kernel shows
     /private/var/ngpu/addons over /System/Library/Extensions when booted with sheng-gpu-addon=1;
   * <Data>/ngpu/addons/TegraGM20BMetal.m2v-seed beside it, when the build has one (the shader cache seeds, --seed);
   * CAEnableDeepFramebuffer, CAEnableFramebufferCompression and CAEnableIOSurfaceCompression = false merged into the
@@ -63,7 +63,7 @@ def main():
         return
     source = build / 'ngpu/addons' / NAME
     if not (source / 'TegraGM20BMetal').is_file() or not (build / 'TegraGM20BMetal.trustcache').is_file():
-        sys.exit('stage-tegra-gm20b-metal: no plugin build in %s (run drivers/TegraGM20BMetal/build-tegra-gm20b-metal.py)' % build)
+        sys.exit('stage-tegra-gm20b-metal: no plugin build in %s (bazel build //gpu:bundle)' % build)
     for directory in (data / 'ngpu', data / 'ngpu/addons'):
         directory.mkdir(exist_ok=True)
         directory.chmod(0o755)

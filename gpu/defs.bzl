@@ -1,0 +1,316 @@
+"""Rules for the TegraGM20B Metal bundle (gpu/BUILD.bazel). Each step of the old build-tegra-gm20b-metal.py is one
+action with declared inputs, so Bazel reruns only what an edit reaches:
+
+  llvm-as (2 fixtures) -> cargo (iOS bridge, fat LTO) -> clang++ (2 objects) -> link -> strip/sign/trust cache
+                       -> cargo (host bridge, quick) -> precompile tool -> seed (runs on this Mac)
+"""
+
+_XCODE = {
+    "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
+    "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
+}
+
+def _repo_root(files):
+    """The execroot path of the external repository the files come from."""
+    return files[0].owner.workspace_root
+
+# --- llvm-as ---------------------------------------------------------------------------------------------------------
+
+def _llvm_as_impl(ctx):
+    out = ctx.actions.declare_file(ctx.attr.out)
+    ctx.actions.run(
+        executable = ctx.executable._llvm_as,
+        arguments = ["-o", out.path, ctx.file.src.path],
+        inputs = [ctx.file.src],
+        outputs = [out],
+        mnemonic = "LlvmAs",
+        progress_message = "Assembling %{input}",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+llvm_as = rule(
+    implementation = _llvm_as_impl,
+    attrs = {
+        "src": attr.label(mandatory = True, allow_single_file = [".ll"]),
+        "out": attr.string(mandatory = True),
+        "_llvm_as": attr.label(default = "@gpu_llvm_as//:bin/llvm-as", executable = True, cfg = "exec", allow_single_file = True),
+    },
+)
+
+# --- cargo: the bridge static library ----------------------------------------------------------------------------
+
+def _m2v_bridge_impl(ctx):
+    out = ctx.actions.declare_file(ctx.attr.name + "/libnative_metal_bridge.a")
+    args = ctx.actions.args()
+    args.add("--cargo", ctx.file._cargo)
+    args.add("--rustc", ctx.file._rustc)
+    args.add("--m2v", _repo_root(ctx.files.m2v))
+    args.add("--vendor", _repo_root(ctx.files.vendor))
+    args.add("--manifest", ctx.file.manifest)
+    args.add("--lock", ctx.file.lock)
+    args.add("--bridge-rs", ctx.file.bridge_rs)
+    args.add("--objects-rs", ctx.file.objects_rs)
+    args.add("--fixture-air", ctx.file.fixture_air)
+    args.add("--fc-air", ctx.file.fc_air)
+    args.add("--xcode-env", ctx.file._xcode_env)
+    args.add("--target", ctx.attr.target)
+    if ctx.attr.quick:
+        args.add("--quick")
+    args.add_all(ctx.files._rust_std, before_each = "--std")
+    args.add("--output", out)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = depset(
+            ctx.files.m2v + ctx.files.vendor + ctx.files._rust + ctx.files._rust_std + [
+                ctx.file._cargo,
+                ctx.file._rustc,
+                ctx.file.manifest,
+                ctx.file.lock,
+                ctx.file.bridge_rs,
+                ctx.file.objects_rs,
+                ctx.file.fixture_air,
+                ctx.file.fc_air,
+                ctx.file._xcode_env,
+                ctx.file._xcode_identity,
+            ],
+        ),
+        outputs = [out],
+        mnemonic = "CargoBridge",
+        progress_message = "Building the m2v bridge for %s%s (cargo)" % (ctx.attr.target, " (quick)" if ctx.attr.quick else ""),
+        # cargo's jobserver takes every core; nothing else useful runs beside it.
+        resource_set = _all_cores,
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+def _all_cores(_os, _inputs):
+    return {"cpu": 8, "memory": 4096}
+
+_RUST_TOOLS = "@rust_macos_aarch64__aarch64-apple-ios__stable_tools"
+
+m2v_bridge = rule(
+    implementation = _m2v_bridge_impl,
+    attrs = _XCODE | {
+        "m2v": attr.label(mandatory = True),
+        "vendor": attr.label(mandatory = True),
+        "manifest": attr.label(mandatory = True, allow_single_file = True),
+        "lock": attr.label(mandatory = True, allow_single_file = True),
+        "bridge_rs": attr.label(mandatory = True, allow_single_file = True),
+        "objects_rs": attr.label(mandatory = True, allow_single_file = True),
+        "fixture_air": attr.label(mandatory = True, allow_single_file = True),
+        "fc_air": attr.label(mandatory = True, allow_single_file = True),
+        "target": attr.string(mandatory = True),
+        "quick": attr.bool(default = False),
+        "_cargo": attr.label(default = _RUST_TOOLS + "//:cargo", allow_single_file = True),
+        "_rustc": attr.label(default = _RUST_TOOLS + "//:rustc", allow_single_file = True),
+        "_rust": attr.label_list(default = [_RUST_TOOLS + "//:rustc_lib"]),
+        # The standard libraries of both targets (build scripts run on this Mac), from rules_rust's pinned archives.
+        "_rust_std": attr.label_list(default = [
+            _RUST_TOOLS + "//:rust_std-aarch64-apple-ios",
+            "@rust_macos_aarch64__aarch64-apple-darwin__stable_tools//:rust_std-aarch64-apple-darwin",
+        ]),
+        "_tool": attr.label(default = "//tools/gpu:cargo_bridge", executable = True, cfg = "exec"),
+    },
+)
+
+# --- Xcode clang: objects and the plugin link --------------------------------------------------------------------
+
+def _xcode_run(ctx, mnemonic, message, command, inputs, outputs, env = {}):
+    args = ctx.actions.args()
+    args.add(ctx.file._xcode_env)
+    args.add_all(["%s=%s" % (k, v) for k, v in env.items()])
+    args.add("--")
+    args.add_all(command)
+    ctx.actions.run(
+        executable = ctx.executable._xcode_run,
+        arguments = [args],
+        inputs = depset(inputs + [ctx.file._xcode_env, ctx.file._xcode_identity]),
+        outputs = outputs,
+        mnemonic = mnemonic,
+        progress_message = message,
+    )
+
+_IOS = ["-target", "arm64-apple-ios17.0", "-isysroot", "@IPHONEOS_SDK@"]
+
+# The old script's one clang++ line, split into compile and link so each object is its own cached action. Paths in
+# debug info and __FILE__ are mapped to /ioswitch, and the link keeps no object paths (oso_prefix) or times.
+_PLUGIN_CFLAGS = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fstack-protector-strong", "-std=c++17", "-fobjc-arc",
+                  "-Wno-deprecated-declarations", "-ffile-prefix-map=@PWD@=/ioswitch"]
+
+def _metal_plugin_impl(ctx):
+    include = ctx.file.include_marker.dirname
+    objects = []
+    for src in ctx.files.srcs:
+        obj = ctx.actions.declare_file("%s_objs/%s.o" % (ctx.attr.name, src.basename))
+        _xcode_run(
+            ctx,
+            "ObjcxxCompile",
+            "Compiling %s" % src.short_path,
+            ["clang++"] + _IOS + _PLUGIN_CFLAGS + ["-I", include, "-x", "objective-c++", "-c", src.path, "-o", obj.path],
+            ctx.files.srcs + ctx.files.hdrs,
+            [obj],
+        )
+        objects.append(obj)
+    out = ctx.actions.declare_file(ctx.attr.name + "/TegraGM20BMetal")
+    _xcode_run(
+        ctx,
+        "MetalPluginLink",
+        "Linking the TegraGM20BMetal plugin",
+        # The compile flags again, as the old one-line build had them: clang passes -O2 on to ld, whose code
+        # deduplication it turns on (118 KB less __text).
+        ["clang++"] + _IOS + _PLUGIN_CFLAGS + ["-bundle"] + [o.path for o in objects] + [ctx.file.bridge.path] +
+        ["-Wl,-dead_strip", "-Wl,-oso_prefix,@PWD@/", "-lobjc", "-framework", "Foundation", "-framework", "Metal",
+         "-framework", "IOSurface", "-o", out.path],
+        objects + [ctx.file.bridge],
+        [out],
+    )
+    dsym = ctx.actions.declare_directory(ctx.attr.name + "/TegraGM20BMetal.dSYM")
+    _xcode_run(
+        ctx,
+        "Dsymutil",
+        "Writing the plugin's dSYM",
+        ["dsymutil", "--oso-prepend-path=@PWD@", out.path, "-o", dsym.path],
+        objects + [ctx.file.bridge, out],
+        [dsym],
+    )
+    return [
+        DefaultInfo(files = depset([out])),
+        OutputGroupInfo(debug = depset([dsym])),
+    ]
+
+metal_plugin = rule(
+    implementation = _metal_plugin_impl,
+    attrs = _XCODE | {
+        "srcs": attr.label_list(mandatory = True, allow_files = [".mm"]),
+        "hdrs": attr.label_list(allow_files = True),
+        "include_marker": attr.label(mandatory = True, allow_single_file = True, doc = "a file in the -I directory"),
+        "bridge": attr.label(mandatory = True, allow_single_file = True),
+        "_xcode_run": attr.label(default = "//tools/gpu:xcode_run", executable = True, cfg = "exec"),
+    },
+)
+
+# --- The signed bundle and its trust cache -----------------------------------------------------------------------
+
+def _metal_bundle_impl(ctx):
+    bundle = ctx.actions.declare_directory("TegraGM20BMetal.bundle")
+    trustcache = ctx.actions.declare_file("TegraGM20BMetal.trustcache")
+    trust_json = ctx.actions.declare_file("trust.json")
+    args = ctx.actions.args()
+    args.add("--xcode-env", ctx.file._xcode_env)
+    args.add("--plugin", ctx.file.plugin)
+    args.add("--nvk", ctx.file.nvk)
+    args.add("--bundle", bundle.path)
+    args.add("--trustcache", trustcache)
+    args.add("--trust-json", trust_json)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = [ctx.file.plugin, ctx.file.nvk, ctx.file._xcode_env, ctx.file._xcode_identity],
+        outputs = [bundle, trustcache, trust_json],
+        mnemonic = "MetalBundle",
+        progress_message = "Signing TegraGM20BMetal.bundle and writing its trust cache",
+    )
+    return [
+        DefaultInfo(files = depset([bundle, trustcache, trust_json])),
+        OutputGroupInfo(bundle = depset([bundle]), trustcache = depset([trustcache]), trust_json = depset([trust_json])),
+    ]
+
+metal_bundle = rule(
+    implementation = _metal_bundle_impl,
+    attrs = _XCODE | {
+        "plugin": attr.label(mandatory = True, allow_single_file = True),
+        "nvk": attr.label(mandatory = True, allow_single_file = True),
+        "_tool": attr.label(default = "//tools/gpu:bundle", executable = True, cfg = "exec"),
+    },
+)
+
+# --- The shader cache seed ---------------------------------------------------------------------------------------
+
+def _metal_seed_impl(ctx):
+    out = ctx.actions.declare_directory(ctx.attr.name)
+    args = ctx.actions.args()
+    args.add("--xcode-env", ctx.file._xcode_env)
+    args.add("--host-bridge", ctx.file.host_bridge)
+    args.add("--mock-iokit", ctx.file.mock_iokit)
+    args.add("--abi-header", ctx.file.abi_header)
+    args.add("--precompile", ctx.file.precompile)
+    args.add("--frontend", ctx.file.frontend)
+    args.add("--metal-header", ctx.file.metal_header)
+    args.add("--nvk", ctx.file.nvk)
+    args.add("--twin", ctx.file.twin)
+    args.add("--qc", ctx.file.qc)
+    args.add("--store", ctx.file.store_index.dirname)
+    args.add("--corpus", ctx.file.corpus)
+    args.add("--libraries", ctx.file.libraries)
+    args.add("--out", out.path)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = depset(
+            [ctx.file.host_bridge, ctx.file.mock_iokit, ctx.file.abi_header, ctx.file.precompile, ctx.file.frontend,
+             ctx.file.metal_header, ctx.file.nvk, ctx.file.twin, ctx.file.qc, ctx.file.store_index, ctx.file.corpus,
+             ctx.file.libraries, ctx.file._xcode_env, ctx.file._xcode_identity] +
+            ctx.files.hdrs + ctx.files.store + ctx.files.nvk_sources,
+        ),
+        outputs = [out],
+        mnemonic = "MetalSeed",
+        progress_message = "Precompiling the m2v shader cache seed (corpus %s)" % ctx.file.corpus.short_path,
+        # Runs the precompile tool on this Mac (Metal + the NVK twin): never on a remote executor.
+        execution_requirements = {"no-remote-exec": "1"},
+        resource_set = _all_cores,
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+metal_seed = rule(
+    implementation = _metal_seed_impl,
+    attrs = _XCODE | {
+        "host_bridge": attr.label(mandatory = True, allow_single_file = True),
+        "mock_iokit": attr.label(mandatory = True, allow_single_file = True),
+        "abi_header": attr.label(mandatory = True, allow_single_file = True),
+        "precompile": attr.label(mandatory = True, allow_single_file = True),
+        "frontend": attr.label(mandatory = True, allow_single_file = True),
+        "metal_header": attr.label(mandatory = True, allow_single_file = True),
+        "hdrs": attr.label_list(allow_files = True),
+        "nvk": attr.label(mandatory = True, allow_single_file = True),
+        "twin": attr.label(mandatory = True, allow_single_file = True),
+        "nvk_sources": attr.label_list(allow_files = True, doc = "the two dylibs' .source files"),
+        "qc": attr.label(mandatory = True, allow_single_file = True),
+        "store": attr.label(mandatory = True),
+        "store_index": attr.label(mandatory = True, allow_single_file = True, doc = "the store's names.json"),
+        "corpus": attr.label(mandatory = True, allow_single_file = True),
+        "libraries": attr.label(mandatory = True, allow_single_file = True),
+        "_tool": attr.label(default = "//tools/gpu:seed", executable = True, cfg = "exec"),
+    },
+)
+
+# --- The directory deploy stages ---------------------------------------------------------------------------------
+
+def _gpu_tree_impl(ctx):
+    out = ctx.actions.declare_directory(ctx.attr.name)
+    bundle = [f for f in ctx.files.bundle if f.is_directory][0]
+    args = ctx.actions.args()
+    args.add("--bundle", bundle.path)
+    args.add("--seed", ctx.file.seed.path)
+    args.add("--trustcache", ctx.file.trustcache)
+    args.add("--trust-json", ctx.file.trust_json)
+    args.add("--out", out.path)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = [bundle, ctx.file.seed, ctx.file.trustcache, ctx.file.trust_json],
+        outputs = [out],
+        mnemonic = "GpuTree",
+        progress_message = "Laying out the GPU bundle directory",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+gpu_tree = rule(
+    implementation = _gpu_tree_impl,
+    attrs = {
+        "bundle": attr.label(mandatory = True),
+        "seed": attr.label(mandatory = True, allow_single_file = True),
+        "trustcache": attr.label(mandatory = True, allow_single_file = True),
+        "trust_json": attr.label(mandatory = True, allow_single_file = True),
+        "_tool": attr.label(default = "//tools/gpu:assemble", executable = True, cfg = "exec"),
+    },
+)

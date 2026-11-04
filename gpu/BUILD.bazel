@@ -1,0 +1,141 @@
+# The TegraGM20B Metal plugin bundle for iOS 17 (arm64): the GPU userland of the Switch's GM20B.
+#
+#   bazel build //gpu:bundle        the directory deploy stages: ngpu/addons/{TegraGM20BMetal.bundle,
+#                                   TegraGM20BMetal.m2v-seed/shared}, TegraGM20BMetal.trustcache, trust.json
+#   bazel build //gpu:trustcache    only the trust-cache module the boot package appends (both CDHashes)
+#   bazel build //gpu:plugin --output_groups=debug   the plugin's dSYM
+#
+# Inputs: m2v (@m2v: steelbrain/metal2vulkan 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's
+# crates (@m2v_crates, from drivers/TegraGM20BMetal/bridge/Cargo.lock), Rust 1.98.0 and LLVM 23.1.4's llvm-as
+# (pinned downloads), Xcode (the declared host input), and @gpu_host_inputs: the NVK dylib + host twin (TEMPORARY:
+# built by hand from Mesa 77452b90 + out/gpu/nvk/*.patch until NVK builds here), QuartzCore's default.metallib and
+# the precompile's library store. See bazel/gpu/deps.bzl.
+load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_bridge", "metal_bundle", "metal_plugin", "metal_seed")
+
+package(default_visibility = ["//visibility:public"])
+
+METAL = "//out/native-a57/root-v1/tree/drivers/NativeMetal"
+
+GM20B_METAL = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal"
+
+# The runtime's AIR fixtures, which the bridge compiles in (include_bytes!).
+llvm_as(
+    name = "runtime_examples_air",
+    src = "@m2v//:crates/metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll",
+    out = "air/runtime_examples.air",
+)
+
+llvm_as(
+    name = "function_constant_air",
+    src = "@m2v//:crates/metal2vulkan-validation/fixtures/public/kernel_function_constant_gate_fold.ll",
+    out = "air/function_constant.air",
+)
+
+# The device's bridge: aarch64-apple-ios, fat LTO, one codegen unit.
+m2v_bridge(
+    name = "bridge_ios",
+    bridge_rs = METAL + ":bridge/NativeMetalBridge.rs",
+    fc_air = ":function_constant_air",
+    fixture_air = ":runtime_examples_air",
+    lock = GM20B_METAL + ":bridge/Cargo.lock",
+    m2v = "@m2v//:srcs",
+    manifest = GM20B_METAL + ":bridge/Cargo.toml.in",
+    objects_rs = METAL + ":bridge/NativeMetalObjects.rs",
+    target = "aarch64-apple-ios",
+    vendor = "@m2v_crates//:vendor",
+)
+
+# The precompile's: this Mac, no LTO (the cache keys hash the sources, not the code).
+m2v_bridge(
+    name = "bridge_host",
+    bridge_rs = METAL + ":bridge/NativeMetalBridge.rs",
+    fc_air = ":function_constant_air",
+    fixture_air = ":runtime_examples_air",
+    lock = GM20B_METAL + ":bridge/Cargo.lock",
+    m2v = "@m2v//:srcs",
+    manifest = GM20B_METAL + ":bridge/Cargo.toml.in",
+    objects_rs = METAL + ":bridge/NativeMetalObjects.rs",
+    quick = True,
+    target = "aarch64-apple-darwin",
+    vendor = "@m2v_crates//:vendor",
+)
+
+# The device's bridge built for this Mac (fat LTO like bridge_ios): the host simulation's
+# (drivers/TegraGM20BMetal/hostsim/build.sh `bazel-bin/gpu/bridge_darwin/libnative_metal_bridge.a` <outdir>).
+m2v_bridge(
+    name = "bridge_darwin",
+    bridge_rs = METAL + ":bridge/NativeMetalBridge.rs",
+    fc_air = ":function_constant_air",
+    fixture_air = ":runtime_examples_air",
+    lock = GM20B_METAL + ":bridge/Cargo.lock",
+    m2v = "@m2v//:srcs",
+    manifest = GM20B_METAL + ":bridge/Cargo.toml.in",
+    objects_rs = METAL + ":bridge/NativeMetalObjects.rs",
+    target = "aarch64-apple-darwin",
+    vendor = "@m2v_crates//:vendor",
+)
+
+metal_plugin(
+    name = "plugin",
+    srcs = [
+        GM20B_METAL + ":TegraGM20BMetalPlugin.mm",
+        METAL + ":NativeBridgeMetalFrontend.mm",
+    ],
+    hdrs = [METAL + ":frontend_headers"],
+    bridge = ":bridge_ios",
+    include_marker = METAL + ":NativeBridgeMetalFrontend.h",
+)
+
+metal_bundle(
+    name = "signed",
+    nvk = "@gpu_host_inputs//:nvk/libvulkan_nouveau.dylib",
+    plugin = ":plugin",
+)
+
+filegroup(
+    name = "trustcache",
+    srcs = [":signed"],
+    output_group = "trustcache",
+)
+
+filegroup(
+    name = "trust_json",
+    srcs = [":signed"],
+    output_group = "trust_json",
+)
+
+filegroup(
+    name = "signed_bundle",
+    srcs = [":signed"],
+    output_group = "bundle",
+)
+
+metal_seed(
+    name = "seed",
+    abi_header = "//out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h",
+    corpus = GM20B_METAL + ":precompile/corpus.log",
+    frontend = METAL + ":NativeBridgeMetalFrontend.mm",
+    hdrs = [METAL + ":frontend_headers"],
+    host_bridge = ":bridge_host",
+    libraries = GM20B_METAL + ":precompile/libraries.py",
+    metal_header = METAL + ":NativeBridgeMetalFrontend.h",
+    mock_iokit = GM20B_METAL + ":precompile/mock_iokit.c",
+    nvk = "@gpu_host_inputs//:nvk/libvulkan_nouveau.dylib",
+    nvk_sources = [
+        "@gpu_host_inputs//:nvk/libvulkan_nouveau.dylib.source",
+        "@gpu_host_inputs//:nvk/libvulkan_nouveau.host.dylib.source",
+    ],
+    precompile = GM20B_METAL + ":precompile/precompile.mm",
+    qc = "@gpu_host_inputs//:QuartzCore-21H461.default.metallib",
+    store = "@gpu_host_inputs//:m2v_libs",
+    store_index = "@gpu_host_inputs//:m2v-libs/names.json",
+    twin = "@gpu_host_inputs//:nvk/libvulkan_nouveau.host.dylib",
+)
+
+gpu_tree(
+    name = "bundle",
+    bundle = ":signed_bundle",
+    seed = ":seed",
+    trust_json = ":trust_json",
+    trustcache = ":trustcache",
+)

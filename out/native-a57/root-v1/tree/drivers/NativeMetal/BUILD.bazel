@@ -1,0 +1,31 @@
+# The Metal frontend over m2v that the TegraGM20B plugin links (//gpu:bundle), and the bridge's Rust sources.
+# Owned by gpu/; the rest of this directory (Adreno/offline experiments) is not built.
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "frontend_headers",
+    srcs = [
+        "AsyncPipelines.h",
+        "NativeBridgeMetalFrontend.h",
+        "bridge/NativeMetalBridge.h",
+        "bridge/NativeMetalObjects.h",
+    ],
+)
+
+filegroup(
+    name = "bridge_rust",
+    srcs = [
+        "bridge/NativeMetalBridge.rs",
+        "bridge/NativeMetalObjects.rs",
+    ],
+)
+
+filegroup(
+    name = "bridge_patches",
+    srcs = glob(["bridge/patches/*.patch"]),
+)

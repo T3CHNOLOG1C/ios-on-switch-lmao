@@ -1,6 +1,6 @@
 # m2v-corpus: every function of a metallib through the metal2vulkan runtime on the host NVK over the mock GM20B (corpus/tools).
 # Build: cargo +1.98.0 build --release --offline --target-dir <scratch>/target  (paths: the metal2vulkan checkout the plugin
-# build uses, with patches/m2v applied by build-tegra-gm20b-metal.py)
+# build uses, with patches/series applied as //gpu:bundle does: bazel/gpu/deps.bzl @m2v)
 [package]
 name = "m2v-corpus"
 version = "0.1.0"

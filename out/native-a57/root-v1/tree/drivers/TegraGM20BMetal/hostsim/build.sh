@@ -5,7 +5,7 @@
 # qc_frontend.mm: QuartzCore's pipelines through the frontend (sheng's 24 recipes, the framebuffer-fetch filters, the uber
 # shader under 33 constant sets), each made and drawn three times in one pass: <outdir>/qc_frontend <nvk> <cache> <QC metallib>.
 # usage: build.sh <host libnative_metal_bridge.a> <outdir>
-#   the bridge: build-tegra-gm20b-metal.py <dir> --host (prints its path)
+#   the bridge: bazel build //gpu:bridge_darwin (bazel-bin/gpu/bridge_darwin/libnative_metal_bridge.a)
 #   then: <outdir>/m2v_gm20b <host libvulkan_nouveau.dylib> <cache dir> [<QuartzCore default.metallib> <pairs>]
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)

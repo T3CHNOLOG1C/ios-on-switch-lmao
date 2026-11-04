@@ -1,0 +1,36 @@
+# The TegraGM20B Metal plugin's sources, its m2v patch series and the precompile/stage tools. The bundle itself is
+# built by //gpu:bundle (gpu/BUILD.bazel); the device-side tools here are what //deploy:* runs.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "patches",
+    srcs = glob(["patches/**/*.patch"]) + ["patches/series"],
+)
+
+# Merges the shader journals of a mounted Data volume into precompile/corpus.log (deploy's log pull runs it).
+py_binary(
+    name = "harvest",
+    srcs = ["precompile/harvest.py"],
+    main = "precompile/harvest.py",
+)
+
+# Resolves corpus lines against the library store (the seed build runs it).
+py_binary(
+    name = "libraries",
+    srcs = ["precompile/libraries.py"],
+    main = "precompile/libraries.py",
+)
+
+# Stages a built bundle (//gpu:bundle's directory) onto a mounted Data volume (deploy --stage-gpu runs it).
+py_binary(
+    name = "stage",
+    srcs = ["stage-tegra-gm20b-metal.py"],
+    main = "stage-tegra-gm20b-metal.py",
+)

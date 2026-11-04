@@ -1,4 +1,4 @@
-# The metal2vulkan patch series build-tegra-gm20b-metal.py applies to 720ef1ce, in order (paths from drivers/).
+# The metal2vulkan patch series //gpu:bundle applies to 720ef1ce (bazel/gpu/deps.bzl, @m2v), in order (paths from drivers/).
 # AdrenoMetal feat/ipados27-gpu-parity@d6ca655 bridge/patches 0001-0037 (MaliMetal applies them on this pin and OS build): 0001-0005
 # are byte-identical to NativeMetal's; its 0024 (Core Image kernel libraries name no function) is replaced by NativeMetal's 0006 (they
 # list theirs, as 21H461's Core Image loaded them on this device), and its 0019 llvm-bitreverse replaces our m2v 0003 (the same

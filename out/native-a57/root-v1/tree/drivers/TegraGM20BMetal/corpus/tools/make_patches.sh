@@ -1,6 +1,6 @@
 #!/bin/sh
 # Write our metal2vulkan changes (the working tree against tag ioswitch-base6 = 720ef1ce + NativeMetal patches 0001-0006) as
-# the numbered series build-tegra-gm20b-metal.py applies: <out dir>/0001-*.patch ...
+# the numbered series //gpu:bundle applies (patches/series): <out dir>/0001-*.patch ...
 set -e
 M=$1; OUT=$2
 mkdir -p "$OUT"; rm -f "$OUT"/*.patch

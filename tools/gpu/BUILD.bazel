@@ -1,0 +1,29 @@
+# The GPU bundle's build steps (gpu/defs.bzl runs them as actions).
+load("@rules_python//python:py_binary.bzl", "py_binary")
+
+package(default_visibility = ["//gpu:__subpackages__"])
+
+py_binary(
+    name = "cargo_bridge",
+    srcs = ["cargo_bridge.py"],
+)
+
+py_binary(
+    name = "xcode_run",
+    srcs = ["xcode_run.py"],
+)
+
+py_binary(
+    name = "bundle",
+    srcs = ["bundle.py"],
+)
+
+py_binary(
+    name = "seed",
+    srcs = ["seed.py"],
+)
+
+py_binary(
+    name = "assemble",
+    srcs = ["assemble.py"],
+)
