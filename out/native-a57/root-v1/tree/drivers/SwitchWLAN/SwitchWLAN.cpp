@@ -680,6 +680,21 @@ bool SwitchWLAN::bootChip(const char **stage)
     }
     IOLog("SwitchWLAN: firmware: %s (%llu MSIs so far)\n", reinterpret_cast<const char *>(ver),
           static_cast<unsigned long long>(interrupts_));
+    // What this firmware build was compiled with, as brcmfmac reads it (brcmf_feat_firmware_capabilities): "cap"
+    // names p2p, mchan, monitor, rtap, awdl and nan when present. AirDrop needs AWDL, or failing that monitor mode with
+    // injection; the image's own strings cannot tell (most of the firmware is in the chip's ROM). Read once; a refusal
+    // is logged and changes nothing.
+    uint8_t cap[768] = {};
+    size_t capLength = 0;
+    if (getVar("cap", cap, sizeof(cap) - 1, &capLength)) {
+        for (size_t i = 0; i < capLength; ++i) {
+            if (!cap[i]) break;
+            if (cap[i] < 0x20 || cap[i] >= 0x7F) cap[i] = ' ';
+        }
+        IOLog("SwitchWLAN: firmware capabilities: %s\n", reinterpret_cast<const char *>(cap));
+    } else {
+        IOLog("SwitchWLAN: firmware capabilities not read: %s\n", why_);
+    }
     *stage = "radio setup";
     return radioInit();
 }
