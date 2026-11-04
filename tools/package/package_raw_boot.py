@@ -16,12 +16,12 @@ import struct
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from scripts import native_xnu_layout  # noqa: E402
-from scripts.build_native_loader import (NATIVE_FULL_RAM_EXCLUSIONS, STAGE_SOURCE, STAMPS_BYTES,  # noqa: E402
-                                         STAMPS_PROPERTY, build as build_loader, stage_into_bl33)
-from scripts.package_native_handoff import legacy_image, LOAD  # noqa: E402
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import native_xnu_layout  # noqa: E402
+from build_native_loader import (NATIVE_FULL_RAM_EXCLUSIONS, STAGE_SOURCE, STAMPS_BYTES,  # noqa: E402
+                                 STAMPS_PROPERTY, build as build_loader, stage_into_bl33)
+from package_native_handoff import legacy_image, LOAD  # noqa: E402
 
 NAME = 'ioswitch'
 WORK = ROOT / 'out/native-a57/root-v1'

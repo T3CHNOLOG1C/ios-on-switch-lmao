@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import zlib
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "native/handoff"
 REFERENCE = ROOT / "out/switch/boot-reference"
 DTB_PATH = ROOT / "out/research-native/handoff-inventory/oled-sku3.dtb"

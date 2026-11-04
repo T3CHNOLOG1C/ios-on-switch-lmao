@@ -7,6 +7,7 @@
 # prelink list. Every file here is also exported, e.g. //out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h.
 
 load("//bazel/kernel:inputs.bzl", "tool_output")
+load("//bazel/kernel:package.bzl", "ios_binary")
 load("//bazel/kernel:kernel.bzl", "PLAIN_ASM", "kernel_archive", "kernel_driver", "kernel_link", "kernel_prelink", "kernel_recipe", "stage_files")
 load("//bazel/kernel:xnu.bzl", "kernel_firehose", "kernel_sdkroot", "xnu_build")
 
@@ -987,3 +988,143 @@ kernel_prelink(
     previous = "//bazel/pinned:prelink/dma-prelink.json",
     slide = "-0x1000000",
 )
+
+# --- The userland overlay's iOS binaries (tree/overlay/manifest.json; //boot:package stages them) --------------------
+# BlueTool stand-in (gated on switch-bt).
+ios_binary(
+    name = "BlueTool",
+    srcs = ["drivers/SwitchBluetooth/BlueTool/BlueTool.c"],
+    copts = [
+        "-Os",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+    entitlements = "drivers/SwitchBluetooth/BlueTool/BlueTool.entitlements",
+    out = "build/switch-bluetooth/BlueTool",
+    sign_identifier = "com.apple.BlueTool",
+)
+
+# SwitchAudio HAL plug-in (AudioServerPlugIn; the iOS SDK lacks its headers, so the macOS CoreAudio ones, which declare
+# the same interface, come first on the include path).
+ios_binary(
+    name = "SwitchAudioHAL",
+    srcs = ["drivers/SwitchAudio/hal/SwitchAudioPlugIn.c"],
+    hdrs = ["drivers/SwitchAudio/SwitchAudioAbi.h"],
+    copts = [
+        "-I",
+        "{tree}/drivers/SwitchAudio",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-bundle",
+        "-fvisibility=hidden",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "IOKit",
+    ],
+    coreaudio_headers = True,
+    out = "build/switch-audio/SwitchAudio.driver/SwitchAudio",
+    pagesize = "4096",
+    sign_identifier = "com.ioswitch.audio",
+)
+
+# HEVCH8.videodecoder: Apple's software HEVC decoder in VideoToolbox's hardware slot (gated on switch-hevc).
+ios_binary(
+    name = "HEVCH8",
+    srcs = ["drivers/SwitchVideoDecoders/HEVCH8.c"],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "-fvisibility=hidden",
+        "-install_name",
+        "/System/Library/VideoDecoders/HEVCH8.videodecoder",
+    ],
+    out = "build/switch-video/HEVCH8.videodecoder",
+    pagesize = "4096",
+    sign_identifier = "com.ioswitch.hevch8",
+)
+
+# AVD.videodecoder: H.264 on NVDEC as VideoToolbox's hardware 'avc1' decoder.
+ios_binary(
+    name = "AVD",
+    srcs = [
+        "drivers/SwitchVideoDecoders/AVD/AVDDecoder.c",
+        "drivers/SwitchVideoDecoders/AVD/H264NVDEC.c",
+        "drivers/SwitchVideoDecoders/AVD/H264Syntax.c",
+        "drivers/SwitchVideoDecoders/AVD/NVDECClient.c",
+        "drivers/SwitchVideoDecoders/AVD/BlockLinear.c",
+    ],
+    hdrs = glob(["drivers/SwitchVideoDecoders/AVD/*.h"]) + ["drivers/TegraNVDEC/TegraNVDECABI.h"],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "-fvisibility=hidden",
+        "-install_name",
+        "/System/Library/VideoDecoders/AVD.videodecoder",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "CoreMedia",
+        "-framework",
+        "CoreVideo",
+        "-framework",
+        "VideoToolbox",
+        "-framework",
+        "IOKit",
+    ],
+    out = "build/switch-video/AVD.videodecoder",
+    pagesize = "4096",
+    sign_identifier = "com.ioswitch.avd",
+)
+
+# vdectest: the layer-2 NVDEC check.
+ios_binary(
+    name = "vdectest",
+    srcs = ["drivers/SwitchVideoDecoders/test/vdectest.c"],
+    hdrs = ["drivers/SwitchVideoDecoders/test/VDECClip.h"],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "CoreMedia",
+        "-framework",
+        "CoreVideo",
+        "-framework",
+        "VideoToolbox",
+        "-lz",
+    ],
+    out = "build/switch-video/vdectest",
+    sign_identifier = "com.ioswitch.vdectest",
+)
+
+# joyconpaird / joyconnfc: Joy-Con Bluetooth pairing hand-off and NFC (overlay, switch-joycon-bt / -nfc).
+[ios_binary(
+    name = tool,
+    srcs = ["drivers/SwitchJoyCon/helper/{}.c".format(tool)],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unused-parameter",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "IOKit",
+    ],
+    entitlements = "drivers/SwitchJoyCon/helper/{}.entitlements".format(tool),
+    out = "build/switch-joycon/" + tool,
+) for tool in ("joyconpaird", "joyconnfc")]

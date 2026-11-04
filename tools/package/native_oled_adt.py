@@ -17,9 +17,8 @@ import struct
 import sys
 import zlib
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.package_native_handoff import ROOT, read_regular, safe_output
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from package_native_handoff import ROOT, read_regular, safe_output
 
 MANAGED_BASE = 0xB2004000
 MANAGED_USER_BASE = 0xB207C000

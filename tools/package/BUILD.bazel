@@ -1,0 +1,11 @@
+package(default_visibility = ["//visibility:public"])
+
+# The boot entry's packaging: package_raw_boot.py (boot-args = COMMAND_LINE, the ADT edits, USB_HOST, ...),
+# native_xnu_layout.py, build_native_loader.py, package_native_handoff.py, native_oled_adt.py; boot.py runs them for
+# //boot:package with declared inputs.
+filegroup(
+    name = "sources",
+    srcs = glob(["*.py"]),
+)
+
+exports_files(glob(["*.py"]))

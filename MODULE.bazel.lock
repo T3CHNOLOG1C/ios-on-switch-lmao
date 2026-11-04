@@ -236,10 +236,10 @@
   "moduleExtensions": {
     "//bazel/gpu:deps.bzl%gpu": {
       "general": {
-        "bzlTransitiveDigest": "b3q3g7E1KU6zIww+LcZ6lAXTxlh/KcJupuOlcWRXOnI=",
+        "bzlTransitiveDigest": "8Oct/5vTcLfjG7cOvmOEmktMg7ryjyO4QNMXWJFEXlg=",
         "usagesDigest": "bfFdfO1EKlphHXkGdolkTW4gIC6FbU/48n6GLz1cKtk=",
         "recordedInputs": [
-          "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series f7ea59f304353b9beee973eb6c8574c903a354ec362baa8abf2251395ba9152e"
+          "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series d724e008deb7e6f3a11211bca66b01d0ec5e6cd4f943d8fd247b0f3ea3aa05b0"
         ],
         "generatedRepoSpecs": {
           "m2v": {
@@ -298,7 +298,8 @@
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0105-memoryless-linear-backing.patch",
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0106-fetch-barrier-by-color-writes.patch",
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0108-shader-cache-seed-beneath-the-directory.patch",
-                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0109-ios-command-buffer-threads-user-interactive.patch"
+                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0109-ios-command-buffer-threads-user-interactive.patch",
+                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0110-shader-cache-seed-only.patch"
               ]
             }
           },

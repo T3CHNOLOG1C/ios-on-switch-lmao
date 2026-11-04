@@ -1,0 +1,74 @@
+# The Hekate boot entry: what goes to the SD card's FAT (switchroot/ioswitch/*, bootloader/ini/ioswitch.ini) and the
+# userland overlay the deploy copies to Data (overlay/<absolute path>).
+#
+#   bazel build //:boot          -> bazel-bin/boot/ioswitch/   (the CMake flow's out/boot/ioswitch)
+#
+# Boot-args (COMMAND_LINE), the ADT edits and USB_HOST live in tools/package/package_raw_boot.py.
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("//bazel/kernel:inputs.bzl", "tool_output")
+load("//bazel/kernel:package.bzl", "boot_package")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["raw-v24-boot.cmd"])
+
+# Four cores (package_raw_boot.py --smp: cpus=4 sheng-smp=1 ioswitch-smp=1 and the four-A57 ADT), as the CMake flow
+# was configured (IOSWITCH_SMP=ON).
+bool_flag(
+    name = "smp",
+    build_setting_default = True,
+)
+
+# The GPU bundle's trust cache module, appended to the kernel's static trust cache so the plugin and NVK may run.
+# --//boot:gpu_trustcache=//boot:no_gpu packages without it (what the CMake flow did when out/gpu was absent).
+label_flag(
+    name = "gpu_trustcache",
+    build_setting_default = "//gpu:trustcache",
+)
+
+filegroup(
+    name = "no_gpu",
+    srcs = [],
+)
+
+# The board ADT (the CMake flow's passes/native-root-memory-v1/full-ram.adt): generated, with its random seed pinned.
+tool_output(
+    name = "adt",
+    outs = ["full-ram.adt"],
+    args = [
+        "41d4ed8aee6621528a6a355e703603425eef27f7a8df3c8f3cf4460c943df40e4c8b6d7631620a39969418a79e0cb0817cd0d525a13134285ee356ac8871a940",
+        "{out}",
+    ],
+    deps = ["//tools/package:sources"],
+    message = "Generating the native OLED ADT",
+    script = "//tools/package:adt.py",
+)
+
+boot_package(
+    name = "package",
+    adt = ":adt",
+    app_trust = "@ipsw//:app_cryptex_trust_cache",
+    bl31 = "//bazel/pinned:firmware/bl31.bin",
+    bl33 = "//bazel/pinned:firmware/bl33.bin",
+    bt_patch = "//bazel/pinned:firmware/BCM4356A3.hcd",
+    data_seed = "//bazel/pinned:data-seed/data-v10.dbr",
+    dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
+    exporter = "//bazel/pinned:firmware/exporter.uimg",
+    kernel = "//out/native-a57/root-v1/tree:kernel",
+    overlay = {
+        "//out/native-a57/root-v1/tree:BlueTool": "build/switch-bluetooth/BlueTool",
+        "//out/native-a57/root-v1/tree:SwitchAudioHAL": "build/switch-audio/SwitchAudio.driver/SwitchAudio",
+        "//out/native-a57/root-v1/tree:drivers/SwitchAudio/hal/Info.plist": "drivers/SwitchAudio/hal/Info.plist",
+        "//out/native-a57/root-v1/tree:drivers/SwitchAudio/hal/BTAudioHALPlugin-Info.plist": "drivers/SwitchAudio/hal/BTAudioHALPlugin-Info.plist",
+        "//out/native-a57/root-v1/tree:joyconpaird": "build/switch-joycon/joyconpaird",
+        "//out/native-a57/root-v1/tree:drivers/SwitchJoyCon/helper/com.ioswitch.joyconpaird.plist": "drivers/SwitchJoyCon/helper/com.ioswitch.joyconpaird.plist",
+        "//out/native-a57/root-v1/tree:joyconnfc": "build/switch-joycon/joyconnfc",
+        "//out/native-a57/root-v1/tree:drivers/SwitchJoyCon/helper/com.ioswitch.joyconnfc.plist": "drivers/SwitchJoyCon/helper/com.ioswitch.joyconnfc.plist",
+        "//out/native-a57/root-v1/tree:HEVCH8": "build/switch-video/HEVCH8.videodecoder",
+        "//bazel/pinned:overlay/apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
+    },
+    overlay_manifest = "//out/native-a57/root-v1/tree:overlay/manifest.json",
+    portrait_header = "//out/native-a57/root-v1/tree:drivers/NativeMobileDisplay/IOSwitchPortrait.h",
+    static_trust = "//ipsw:static_system_trust",
+    template = ":raw-v24-boot.cmd",
+)

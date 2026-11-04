@@ -47,11 +47,13 @@ def main():
     command += common.prefix_maps(args.path_root, args.bin_dir, "external/+http_archive+xnu")
     command += ["-o", os.path.join(here, args.out)]
     subprocess.run(command, check=True, env=env)
-    if args.sign_identifier:
+    if True:
+        # Ad hoc, as the CMake flow signed them (identifier defaults to the file name).
         sign = ["codesign", "-f", "-s", "-"]
         if args.pagesize:
             sign += ["--pagesize", args.pagesize]
-        sign += ["--identifier", args.sign_identifier]
+        if args.sign_identifier:
+            sign += ["--identifier", args.sign_identifier]
         if args.entitlements:
             sign += ["--entitlements", args.entitlements]
         subprocess.run(sign + [args.out], check=True, env=env)

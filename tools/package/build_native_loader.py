@@ -11,11 +11,10 @@ import struct
 import sys
 import zlib
 
-if __package__ in (None, ''):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.package_native_handoff import BUILD_FLAGS, ROOT, read_regular, safe_output, tool, validate_elf
-from scripts.native_xnu_layout import parse_adt, validate_data_seed, validate_trustcache
-from scripts.native_oled_adt import ROOT_MATCHING
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from package_native_handoff import BUILD_FLAGS, ROOT, read_regular, safe_output, tool, validate_elf
+from native_xnu_layout import parse_adt, validate_data_seed, validate_trustcache
+from native_oled_adt import ROOT_MATCHING
 
 SOURCE = 0xA2000000
 LIMIT = 128 << 20
@@ -444,9 +443,9 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
         sources.append(ROOT/'native/loader/checksum.S')
     if storage_probe:
         sources.append(ROOT/'native/storage/sd_reference.c')
-    source_files = [*sources, ROOT/'native/loader/copy.h', ROOT/'native/loader/memory.h', ROOT/'native/loader/ram.h', ROOT/'native/loader/stamps.h', ROOT/'native/loader/stage.h', ROOT/'native/loader/emc.h', ROOT/'native/storage/sd_reference.h', *(ROOT/'native/handoff').glob('*.h'), ROOT/'native/handoff/entry.S', linker, Path(__file__), ROOT/'scripts/package_native_handoff.py']
+    source_files = [*sources, ROOT/'native/loader/copy.h', ROOT/'native/loader/memory.h', ROOT/'native/loader/ram.h', ROOT/'native/loader/stamps.h', ROOT/'native/loader/stage.h', ROOT/'native/loader/emc.h', ROOT/'native/storage/sd_reference.h', *(ROOT/'native/handoff').glob('*.h'), ROOT/'native/handoff/entry.S', linker, ROOT/'tools/package/build_native_loader.py', ROOT/'tools/package/package_native_handoff.py']
     if root_boot:
-        source_files += [ROOT/'scripts/native_xnu_layout.py', ROOT/'scripts/native_oled_adt.py']
+        source_files += [ROOT/'tools/package/native_xnu_layout.py', ROOT/'tools/package/native_oled_adt.py']
     source_hashes = {str(p.relative_to(ROOT)): hashlib.sha256(read_regular(p)).hexdigest() for p in source_files}
     objects = []
     for i, source in enumerate(sources):
