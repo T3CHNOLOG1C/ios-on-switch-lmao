@@ -52,7 +52,9 @@ def main():
         tmp.replace(patch)
         print("{}: {}".format(patch, git(xnu, "diff", "--shortstat", BASE, "ioswitch").strip()))
     elif args.command == "check":
-        if render(xnu) != patch.read_text():
+        def body(text):   # the diff itself, without the comment header (it names the exporter and the commit)
+            return "\n".join(line for line in text.split("\n") if not line.startswith("# "))
+        if body(render(xnu)) != body(patch.read_text()):
             sys.exit("{} is out of date: run bazel run //xnu:patch_export".format(patch))
         print("{} matches {} branch ioswitch".format(patch, xnu))
     else:
