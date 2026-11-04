@@ -1,30 +1,36 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// USB 2.0 device mode on the Switch's USB-C port: the Tegra X1 XUSB device controller (XUDC) under Apple's own
-// IOUSBDeviceFamily, so a Mac sees an iPad (usbmuxd: idevice*, iproxy, Finder, Xcode; ptpd photos; atc sync).
+// USB 2.0 on the Switch's USB-C port, on Apple's own USB stacks.
 //
-// On when the ADT has /arm-io/usb-device (scripts/package_raw_boot.py writes it, with the properties an iPad's
-// usb-device node has: vendor-id, product-id, product-string, vendor-string, configuration-string); without the node
-// this driver does nothing. The node is also the controller's provider: IOUSBDeviceFamily reads those properties
-// from it, and configd's USBDeviceConfiguration plug-in picks the functions by configuration-string from
-// /System/Library/AppleUSBDevice/USBDeviceConfiguration.plist ("unknownHardware" = AppleUSBMux + PTP).
+// Device mode (on when the ADT has /arm-io/usb-device): the Tegra X1 XUSB device controller (XUDC, SwitchXUDC.cpp)
+// under IOUSBDeviceFamily, so a Mac sees an iPad (usbmuxd: idevice*, iproxy, Finder, Xcode; ptpd photos; atc sync).
+// The node carries an iPad usb-device node's identity, and IOUSBDeviceFamily reads it; configd's USBDeviceConfiguration
+// plug-in picks the functions by configuration-string from /System/Library/AppleUSBDevice/USBDeviceConfiguration.plist
+// ("unknownHardware" = AppleUSBMux + PTP).
 //
-// Needs com.apple.iokit.IOUSBDeviceFamily, com.apple.driver.usb.AppleUSBCommon and com.apple.driver.AppleUSBDeviceMux
-// in the prelink set (the pass's emit_prelink.py NEW_ORIGINAL_COMPONENTS and prelink-command.json).
+// Host mode (on when the ADT has /arm-io/usb-xhci): the XUSB host controller (XusbHost.cpp, falcon firmware
+// tegra210b01_xusb_firmware) under IOUSBHostFamily + AppleUSBXHCI (SwitchXHCI.cpp), with Apple's hub, composite
+// device, HID and mass storage drivers: keyboards, mice, flash drives, through a USB-C OTG adapter or an unpowered hub.
 //
-// Never blocks boot: bring-up runs on its own thread, and anything short of a working interrupt path (no node, rail,
-// MMIO, PLL, kext or class registration) logs one line, "SwitchUSB: device mode off: <why>", and leaves the port
-// alone. Interrupt-driven only (XUDC: GIC SPI 44, INTID 76); an interrupt that cannot be attached or does not reach
-// the CPU panics with one line (SwitchXUDC.cpp).
+// Roles follow the BM92T36 PD controller (SwitchPD.h). A sink on the port (STATUS1 source mode + STATUS2 OTG insert:
+// an OTG adapter, a keyboard, a flash drive) makes us the host: the XUDC goes off the bus, the BQ24193 boost sources
+// VBUS (SwitchBattery's switch_battery_set_otg_boost), USB2 pad 0's ID is grounded, and the host controller is brought
+// up the first time. When the sink goes, all of it is undone in reverse and the XUDC goes back on the bus. A PD source
+// that wants us as host (docks, hubs with power in) needs a PD data-role swap, which is not done: they stay device.
 //
-// State lines (kernel log; all one-shot per state change):
+// Never blocks boot: everything runs on its own thread and work loops, and anything short of a working interrupt path
+// (no node, rail, MMIO, PLL, firmware, kext or class registration) logs one line, "SwitchUSB: device mode off: <why>"
+// or "SwitchUSB: host mode off: <why>", and leaves that mode alone. Interrupts only (XUDC INTID 76, xHCI 71, falcon
+// mailbox 72, PD ALERT PK4). An interrupt that cannot be attached panics; a lost one panics only on positive evidence
+// that it was due (the PD controller saw a cable, and the controller then shows a pending interrupt nobody took).
+//
+// State lines (kernel log; one per state change):
 //   SwitchUSB: device mode ready (XUDC at 0x700d0000, configuration <configuration-string>)
 //   SwitchUSB: functions registered, pull-up on (waiting for a host)
-//   SwitchUSB: host connected (high speed)
-//   SwitchUSB: bus suspended (host asleep or cable out)   SwitchUSB: host disconnected
-//
-// Not yet: host mode and role switching (the BM92T36 PD controller, the BQ24193 OTG boost and the XUSB host
-// controller with its falcon firmware); the untested starting points are SwitchPD.cpp, XusbHost.cpp, SwitchXHCI.cpp,
-// UsbDmaMapper.cpp and SwitchDPOut.cpp in this directory, none of which is built.
+//   SwitchUSB: host connected (high speed)  /  bus suspended (host asleep or cable out)  /  host disconnected
+//   SwitchPD: started (...)  /  SwitchPD: source ready (...)
+//   SwitchUSB: XUSB firmware <version> (built <time>) running, HCSPARAMS1 <value>
+//   SwitchUSB: host controller up (AppleUSBXHCI, <n> interrupters)
+//   SwitchUSB: host role (a device on the port, VBUS on)  /  SwitchUSB: device role
 #pragma once
 #include <stddef.h>
 
@@ -33,8 +39,15 @@ extern "C" {
 #endif
 
 // From the board thread (IOSwitchRootDiag.inc), thread context. Returns at once: 0 when started on its own thread or
-// not configured (no /arm-io/usb-device), -1 if the thread could not be created.
+// not configured (neither ADT node), -1 if the thread could not be created.
 int switch_usb_start(void);
+
+// Prelink cut stub (emit_prelink.py CUT_DEPENDENCIES): 8 zero bytes; a cut dependency's metaclass GOT entry points here.
+extern const unsigned long long ioswitch_prelink_cut_null;
+
+// SwitchXUDC.cpp, from the role manager: a host's cable is in (its bus reset is due); USB2 pad 0 to or from the host.
+void switchxudc_host_expected(void);
+void switchxudc_set_host_owns_port(bool host);
 
 #ifdef __cplusplus
 }
@@ -43,4 +56,8 @@ class IOService;
 // SwitchXUDC.cpp: loads IOUSBDeviceFamily and AppleUSBDeviceMux, registers SwitchXUDC, powers the XUDC and starts it
 // on `provider`. False (with the reason in `why`) when device mode cannot run; the port is then left alone.
 bool switchxudc_start(IOService *provider, char *why, size_t whySize);
+// SwitchXHCI.cpp: powers the XUSB host, loads its firmware and Apple's host stack, starts SwitchXHCI. Thread context.
+bool switchxhci_start(char *why, size_t whySize);
+void switchxhci_set_host_role(bool host);  // USB2 pad 0's ID override (after switchxhci_start)
+void switchxhci_expect_port_change(void);  // a device appeared in host role: arm the lost-interrupt check
 #endif

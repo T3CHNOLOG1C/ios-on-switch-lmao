@@ -127,7 +127,10 @@ def unique_kernel_binding(address, original_exports, native_by_name):
     return next(iter(choices))
 
 
-def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=None):
+def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=None, cuts=None):
+    # cuts: {(component, declared dependency): (exact pointer count, native stub symbol or None)}. A cut dependency is
+    # left out of the closure; each of its pointer sites in the component (exactly that many, or the plan fails) is
+    # rebound to the native stub, an 8-byte zero constant, so the GOT load the component does reads NULL.
     # V17 incremental build: identity is inherited from the completed V15 pass.
     # Do not reread/hash old content merely to reproduce an existing digest.
     if (not isinstance(inherited_original_sha256, str) or len(inherited_original_sha256) != 64 or
@@ -148,6 +151,10 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
         if identifier in entries:
             raise ValueError('Duplicate prelink identifier')
         entries[identifier] = entry
+    cuts = dict(cuts or {})
+    for (component, dependency) in cuts:
+        if dependency not in (entries.get(component, {}).get('OSBundleLibraries') or {}):
+            raise ValueError(f'Cut {component} -> {dependency}: not a declared dependency')
     selected, interfaces = set(), set()
     pending = list(roots)
     while pending:
@@ -161,7 +168,7 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
             interfaces.add(identifier)
             continue
         selected.add(identifier)
-        pending.extend(entry.get('OSBundleLibraries') or {})
+        pending.extend(d for d in (entry.get('OSBundleLibraries') or {}) if (identifier, d) not in cuts)
     owned, modules = [], {}
     for identifier, entry in entries.items():
         if entry.get('OSKernelResource') is True:
@@ -208,6 +215,7 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
         raise ValueError('Duplicate pointer relocation site')
     base = next(s['va'] for s in parent if s['name'] == '__PRELINK_TEXT')
     bindings = []
+    cut_sites = {edge: 0 for edge in cuts}
     for offset in offsets:
         site = base + offset
         source = owner(site)
@@ -217,7 +225,14 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
             raise ValueError('Pointer spans component extent')
         target, = struct.unpack_from('<Q', original_data, backed_offset(parent, site, 8, len(original_data)))
         destination = owner(target)
-        if destination:
+        if destination and (source[2], destination[2]) in cuts and destination[2] not in selected:
+            stub = cuts[(source[2], destination[2])][1]
+            if not stub or len(native_symbols.get(stub, ())) != 1:
+                raise ValueError(f'Cut {source[2]} -> {destination[2]} needs one native stub {stub}')
+            replacement = next(iter(native_symbols[stub]))
+            kind = 'cut'
+            cut_sites[(source[2], destination[2])] += 1
+        elif destination:
             if destination[2] not in selected:
                 raise ValueError(f'Undeclared pointer dependency {destination[2]} from {source[2]}')
             replacement = target + slide
@@ -231,6 +246,9 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
             raise ValueError('Rebased pointer outside 64-bit address space')
         bindings.append({'site': site, 'target': target, 'new_site': site + slide,
                          'new_target': replacement, 'kind': kind, 'module': source[2]})
+    for edge, (expected, _) in cuts.items():
+        if edge[0] in selected and cut_sites[edge] != expected:
+            raise ValueError(f'Cut {edge[0]} -> {edge[1]}: {cut_sites[edge]} pointer sites, the allow-list says {expected}')
     extents = []
     for start, end, identifier, segment in owned:
         if identifier not in selected:
@@ -248,6 +266,8 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
             'codeless_components': sorted(codeless), 'kernel_interfaces': sorted(interfaces),
             'pointer_counts': dict(Counter(binding['kind'] for binding in bindings)),
             'extents': extents, 'bindings': bindings, 'images_modified': False,
+            'cut_dependencies': [{'component': c, 'dependency': d, 'pointer_sites': cut_sites[(c, d)],
+                                  'stub': cuts[(c, d)][1]} for (c, d) in sorted(cuts) if c in selected],
             'instruction_relocation_complete': False, 'abi_qualified': False, 'loadable': False}
 
 

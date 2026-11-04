@@ -29,7 +29,47 @@ NEW_ORIGINAL_COMPONENTS = {'com.apple.iokit.IOGPUFamily',   # IOAcceleratorES fo
                            # USB device mode (drivers/SwitchUSB): the family SwitchXUDC subclasses, its dependency, and the
                            # usbmux function driver (usbmuxd, lockdownd, Xcode, Finder)
                            'com.apple.iokit.IOUSBDeviceFamily', 'com.apple.driver.usb.AppleUSBCommon',
-                           'com.apple.driver.AppleUSBDeviceMux'}
+                           'com.apple.driver.AppleUSBDeviceMux',
+                           # USB host mode (drivers/SwitchUSB SwitchXHCI): Apple's host stack and xHCI driver, which
+                           # SwitchXHCI subclasses, and what it needs (IOAccessoryManager: AppleUSBXHCI's Type-C port
+                           # classes; IOPortFamily: declared by AppleUSBXHCI) ...
+                           'com.apple.iokit.IOUSBHostFamily', 'com.apple.driver.usb.AppleUSBXHCI',
+                           'com.apple.iokit.IOAccessoryManager', 'com.apple.iokit.IOPortFamily',
+                           # ... and the class drivers: hubs, composite devices (configuration and interfaces), HID
+                           # (keyboard, mouse) and mass storage with its SCSI layers and IOPCIFamily (one pointer).
+                           'com.apple.driver.usb.AppleUSBHub', 'com.apple.driver.usb.AppleUSBHostCompositeDevice',
+                           'com.apple.driver.usb.IOUSBHostHIDDevice', 'com.apple.iokit.IOUSBMassStorageDriver',
+                           'com.apple.iokit.IOSCSIArchitectureModelFamily', 'com.apple.iokit.IOSCSIBlockCommandsDevice',
+                           'com.apple.iokit.IOPCIFamily'}
+# Declared dependencies left out of the prelink, by exact pointer count (plan() fails the build when the original
+# kernelcache has a different number of sites): (component, dependency) -> (pointer sites, native stub). A nonzero cut
+# rebinds each site, a GOT entry of the dependency's metaclass, to _ioswitch_prelink_cut_null (8 zero bytes,
+# drivers/SwitchUSB/SwitchUSB.cpp), so that OSDynamicCast yields NULL. The emitted prelink info drops the declaration.
+CUT_STUB = '_ioswitch_prelink_cut_null'
+CUT_DEPENDENCIES = {
+    # AppleSMC (Mac SMC; its own deps com.apple.driver.watchdog and IOACPIFamily are not in the iPad kernelcache).
+    # IOUSBHostFamily's one site is OSDynamicCast(AppleSMC, waitForMatchingService(AppleSMC)) on a path taken only for
+    # a port with a "UsbCPortNumber" property (fn 0xfffffff005e4fe88), which nothing here publishes.
+    ('com.apple.iokit.IOUSBHostFamily', 'com.apple.driver.AppleSMC'): (1, CUT_STUB),
+    # A codeless kext without personalities (the planner cannot carry it); no pointers.
+    ('com.apple.iokit.IOUSBHostFamily', 'com.apple.driver.usb.AppleUSBHostPlatformProperties'): (0, None),
+    # AppleOnboardSerial would pull IOSkywalkFamily and IONetworkingFamily, whose classes (IONetworkInterface,
+    # IONetworkStack, IO80211Interface, ...) SwitchWLAN defines natively: their kexts could never load. The one site is
+    # OSDynamicCast(AppleOnboardSerial, provider) in the start of the serial-accessory port class (fn 0xfffffff005cc3f0c,
+    # provider class AppleOnboardSerialSync, which never exists here); NULL takes its logged failure return, with no
+    # dereference of the result.
+    ('com.apple.iokit.IOAccessoryManager', 'com.apple.driver.AppleOnboardSerial'): (1, CUT_STUB),
+    ('com.apple.iokit.IOAccessoryManager', 'com.apple.iokit.IOSerialFamily'): (0, None),
+}
+# Personalities kept out of the boot-time catalogue (the emitted prelink info) so that the USB host stack does not load
+# at every boot: these three match IOResources ("IOKit"), so they would load IOUSBHostFamily, IOUSBMassStorageDriver and
+# its SCSI/PCI dependencies whether or not host mode is ever used. SwitchXHCI adds AppleUSBHostResources and
+# IOUSBMassStorageResource back (IOCatalogue::addDrivers) when it brings the host up. AppleUSBHostResourcesTypeC stays
+# out: it is the Mac's Type-C/SMC variant, and its probe waits 5 s for a "product" service that is not published here.
+DEFERRED_PERSONALITIES = {
+    'com.apple.iokit.IOUSBHostFamily': ('AppleUSBHostResources', 'AppleUSBHostResourcesTypeC'),
+    'com.apple.iokit.IOUSBMassStorageDriver': ('IOUSBMassStorageResource',),
+}
 # main() requires the --root list to end with sorted(NEW_ORIGINAL_COMPONENTS), in that order in prelink-command.json:
 # AppleGameControllerPersonality, AppleUSBDeviceMux, usb.AppleUSBCommon, IOGPUFamily, IOUSBDeviceFamily.
 
@@ -125,7 +165,7 @@ def instruction_inventory(original_data, parent, modules):
 
 def emit(native_data, original_data, roots, slide, early_security_init=None, *, inherited_original_report):
     inherited = inherited_original_report
-    report = plan(native_data, original_data, roots, slide,
+    report = plan(native_data, original_data, roots, slide, cuts=CUT_DEPENDENCIES,
                   inherited_original_sha256=inherited['original_sha256'])
     # Required relocation work still parses original bytes. Reuse only findings
     # wholly determined by the unchanged original modules and fixed slide.
@@ -295,6 +335,11 @@ def emit(native_data, original_data, roots, slide, early_security_init=None, *, 
         for key in ('_PrelinkExecutableLoadAddr', '_PrelinkExecutableSourceAddr', '_PrelinkKmodInfo'):
             if entry.get(key):
                 entry[key] += slide
+        for (component, dependency) in CUT_DEPENDENCIES:  # OSKext would otherwise refuse the load
+            if component == identifier:
+                del entry['OSBundleLibraries'][dependency]
+        for name in DEFERRED_PERSONALITIES.get(identifier, ()):
+            del entry['IOKitPersonalities'][name]
         selected_entries.append(entry)
     new_base = next(s['va'] for s in new_segments if s['name'] == '__PRELINK_TEXT')
     offsets = [b['new_site'] - new_base for b in report['bindings']]

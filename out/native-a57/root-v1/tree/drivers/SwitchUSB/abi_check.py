@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""SwitchXUDC's ABI against the original 21H461 IOUSBDeviceFamily (run by cmake/Drivers.cmake on every build).
+"""The ABI of our subclasses of original 21H461 classes (run by cmake/Drivers.cmake on every build).
 
-Usage: abi_check.py --kernelcache KC --object SwitchXUDC.o --late SwitchXUDC.late.o --bindings original-bindings.S
-                    --output SwitchXUDC.checked.o [--write]
+Usage: abi_check.py --class xudc|xhci --kernelcache KC --object X.o --late X.late.o --bindings B.S --output X.checked.o
+                    [--write]
 
+xudc: SwitchXUDC against IOUSBDeviceController (com.apple.iokit.IOUSBDeviceFamily);
+xhci: SwitchXHCI against AppleUSBXHCI (com.apple.driver.usb.AppleUSBXHCI, on IOUSBHostFamily's AppleUSBHostController).
 Checks, against the kernelcache the prelinker uses:
-- every bound original address still holds the recorded instruction bytes;
-- the compiled SwitchXUDC vtable has exactly the original 234 slots, no pure virtual left, our overrides only where
-  intended (OWN), and every other slot names the function the original IOUSBDeviceController vtable holds there;
-- the only original imports are the audited ones (CODE), all inside IOUSBDeviceFamily, and no abstract-base D0/D1;
-- original-bindings.S binds exactly those imports at original address + prelink slide (-0x1000000); --write
-  regenerates it instead of comparing;
+- the original vtable (slot count), getMetaClass returning the pinned gMetaClass, the instruction bytes at every address
+  bound by name;
+- the compiled vtable has exactly the original slot count, no pure virtual left, our functions only in OWN, and every
+  other slot names the function the original vtable holds there (xhci: inherited AppleUSBXHCI slots are bound to the
+  original entry of that very slot);
+- the only original imports are the audited ones, all inside the original kexts, and no abstract-base D0/D1;
+- the bindings file binds exactly those imports at original address + prelink slide (-0x1000000); --write regenerates it
+  instead of comparing;
 - the late object (static initializer staged, Drivers.cmake ioswitch_late_object) has the same instructions as the
   object and no __mod_init_func.
-Then copies the late object to --output, which the archive takes. Derived from the r2-era build_switchusb.py.
+Then copies the late object to --output, which the archive takes.
 """
 import argparse
 from pathlib import Path
@@ -25,6 +29,7 @@ sys.path.insert(0, str(TREE / 'kits/NativePrelink'))
 from native_prelink import macho, backed_offset, exports  # noqa: E402
 
 SLIDE = -0x1000000
+# --- xudc: SwitchXUDC against IOUSBDeviceController ------------------------------------------------------------
 VTABLE = 0xfffffff006e81d90        # __ZTV21IOUSBDeviceController (entries start at +16)
 METACLASS = 0xfffffff007b1a4c8     # IOUSBDeviceController::gMetaClass
 SLOTS = 234
@@ -144,42 +149,59 @@ def text_of(data):
     return data[section['fileoff']:section['fileoff'] + section['size']], parsed
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for option in ('--kernelcache', '--object', '--late', '--bindings', '--output'):
-        parser.add_argument(option, required=True, type=Path)
-    parser.add_argument('--write', action='store_true', help='regenerate --bindings instead of comparing')
-    args = parser.parse_args()
 
-    # Original: bytes at every bound address, the vtable and the metaclass.
-    kc = args.kernelcache.read_bytes()
-    parent = macho(kc)
+# --- xhci: SwitchXHCI against AppleUSBXHCI ----------------------------------------------------------------------------
+XHCI_VTABLE = 0xfffffff006dd4d38      # __ZTV12AppleUSBXHCI (entries start at +16)
+XHCI_METACLASS = 0xfffffff007af5468   # AppleUSBXHCI::gMetaClass
+XHCI_METACLASS_SIZE = 0xfffffff005ebdb20   # mov w3, #0xe48 before OSMetaClass::OSMetaClass(name, super, size)
+XHCI_SLOTS = 299
+XHCI_SIZE = 0xe48
+# Mach-O headers of the original kexts the bound code lives in (prelink info _PrelinkExecutableLoadAddr).
+XHCI_KEXTS = {'com.apple.driver.usb.AppleUSBXHCI': 0xfffffff0053a5cc0, 'com.apple.iokit.IOUSBHostFamily': 0xfffffff005383600}
+# Ours: destructors, getMetaClass, free, start, stop, copyMapper, regRead32, regWrite32, regWrite64.
+XHCI_OWN = {0, 1, 7, 14, 86, 87, 253, 290, 292, 293}
+# Bound by name and called by our code: (symbol, original slot or None, address or None = the slot's entry).
+XHCI_CODE = [
+    ('__ZN12AppleUSBXHCIC2EPK11OSMetaClass', None, 0xfffffff005ebdb40),   # AppleUSBHostController C2 + vtable store
+    ('__ZN12AppleUSBXHCID2Ev', None, 0xfffffff005ebdb80),                 # b AppleUSBHostController::D2
+    ('__ZN12AppleUSBXHCI5startEP9IOService', 86, 0xfffffff005ebdc60),
+    ('__ZN12AppleUSBXHCI4stopEP9IOService', 87, None),                    # AppleUSBHostController::stop
+    ('__ZN12AppleUSBXHCI4freeEv', 14, 0xfffffff005ec0808),
+    ('__ZN12AppleUSBXHCI9regRead32Eyj', 290, 0xfffffff005ecf41c),         # add x0, x1, w2, uxtw; b ml_io_read32
+    ('__ZN12AppleUSBXHCI10regWrite32Eyjj', 292, 0xfffffff005ecf42c),      # ...; b ml_io_write32
+    ('__ZN12AppleUSBXHCI10regWrite64Eyjy', 293, 0xfffffff005ecf438),      # ...; b ml_io_write64
+    ('__ZN12AppleUSBXHCI10copyMapperEv', 253, 0xfffffff005e204f0),         # AppleUSBHostController::copyMapper
+]
+XHCI_PINNED = {  # first instruction words of bound code (little-endian hex)
+    0xfffffff005ebdb40: 'fd7bbfa9fd030091',   # stp x29, x30, [sp, #-16]!; mov x29, sp
+    0xfffffff005ecf41c: '2040228b',           # add x0, x1, w2, uxtw
+    0xfffffff005ecf42c: '2040228be10303aa',   # add x0, x1, w2, uxtw; mov x1, x3
+    0xfffffff005ecf438: '2040228be10303aa',
+    0xfffffff005e204f0: '004440f9',           # ldr x0, [x0, #136] (then b IOMapper::copyMapperForDevice)
+}
 
-    def read(va, n):
-        at = backed_offset(parent['segments'], va, n, len(kc))
-        return kc[at:at + n]
 
-    def u64(va):
-        return struct.unpack('<Q', read(va, 8))[0]
-    original_names = exports(kc, parent)
-    require(read(VTABLE, 16) == bytes(16), 'original vtable header')
-    original = [u64(VTABLE + 16 + 8 * i) for i in range(SLOTS)]
-    require(u64(VTABLE + 16 + 8 * SLOTS) == 0 or u64(VTABLE + 16 + 8 * SLOTS) >> 48 != 0xffff,
-            'original vtable has exactly 234 slots')
-    for name, slot, address, head in CODE:
-        require(read(address, 16) == bytes.fromhex(head), f'instruction bytes of {name} at {address:#x}')
-        require(slot is None or original[slot] == address, f'{name} is original slot {slot}')
-    # getMetaClass (slot 7): adrp x0 / add x0 / ret returning the metaclass.
-    getter = original[7]
+def original_vtable(read, u64, vtable, slots, metaclass):
+    require(read(vtable, 16) == bytes(16), 'original vtable header')
+    original = [u64(vtable + 16 + 8 * i) for i in range(slots)]
+    require(all(v >> 48 == 0xffff for v in original), f'original vtable has {slots} code slots')
+    require(u64(vtable + 16 + 8 * slots) == 0 or u64(vtable + 16 + 8 * slots) >> 48 != 0xffff,
+            f'original vtable ends after {slots} slots')
+    getter = original[7]  # getMetaClass: adrp x0 / add x0 / ret returning the metaclass
     adrp, add, ret = struct.unpack('<3I', read(getter, 12))
     imm = ((adrp >> 29) & 3) | ((adrp >> 5) & 0x7ffff) << 2
     page = (getter & ~0xfff) + ((imm - (1 << 21) if imm & (1 << 20) else imm) << 12)
     require(adrp & 0x9f00001f == 0x90000000 and add & 0xffc003ff == 0x91000000 and ret == 0xd65f03c0 and
-            page + ((add >> 10) & 0xfff) == METACLASS, 'original getMetaClass returns gMetaClass')
+            page + ((add >> 10) & 0xfff) == metaclass, 'original getMetaClass returns the pinned gMetaClass')
+    return original
 
-    # SwitchXUDC's ABI against the original.
-    blob = args.object.read_bytes()
-    image, symbols = symbols_of(blob)
+
+def check_xudc(kc, parent, read, u64, blob, image, symbols):
+    original_names = exports(kc, parent)
+    original = original_vtable(read, u64, VTABLE, SLOTS, METACLASS)
+    for name, slot, address, head in CODE:
+        require(read(address, 16) == bytes.fromhex(head), f'instruction bytes of {name} at {address:#x}')
+        require(slot is None or original[slot] == address, f'{name} is original slot {slot}')
     compiled = compiled_vtable(blob, image, symbols, '__ZTV10SwitchXUDC')
     require(len(compiled) == SLOTS, f'SwitchXUDC vtable has {len(compiled)} slots, expected {SLOTS}')
     require('___cxa_pure_virtual' not in compiled, 'pure virtual left in SwitchXUDC')
@@ -195,29 +217,85 @@ def main():
     allowed = {name: address for name, _, address, _ in CODE} | data
     imports = {name for name, _, kind in symbols if kind == 1 and
                any(k in name for k in ('IOUSBDevice', 'USBDeviceInterface', 'USBDevicePipe'))}
+    owners = [macho(kc, backed_offset(parent['segments'], 0xfffffff0054789c0, 32, len(kc)))]
+    return 'IOUSBDeviceFamily', allowed, imports, owners
+
+
+def check_xhci(kc, parent, read, u64, blob, image, symbols):
+    names = exports(kc, parent)
+    original = original_vtable(read, u64, XHCI_VTABLE, XHCI_SLOTS, XHCI_METACLASS)
+    movz = struct.unpack('<I', read(XHCI_METACLASS_SIZE, 4))[0]
+    require(movz & 0xffe0001f == 0x52800003 and (movz >> 5) & 0xffff == XHCI_SIZE, 'AppleUSBXHCI is 0xe48 bytes')
+    bound = {}
+    for name, slot, address in XHCI_CODE:
+        if address is None:
+            address = original[slot]
+        require(slot is None or original[slot] == address, f'{name} is original slot {slot}')
+        if address in XHCI_PINNED:
+            pin = bytes.fromhex(XHCI_PINNED[address])
+            require(read(address, len(pin)) == pin, f'instruction bytes of {name} at {address:#x}')
+        bound[name] = address
+    require(struct.unpack('<I', read(bound['__ZN12AppleUSBXHCID2Ev'], 4))[0] >> 26 == 0x05, 'AppleUSBXHCI D2 is a branch')
+    compiled = compiled_vtable(blob, image, symbols, '__ZTV10SwitchXHCI')
+    require(len(compiled) == XHCI_SLOTS, f'SwitchXHCI vtable has {len(compiled)} slots, expected {XHCI_SLOTS}')
+    require('___cxa_pure_virtual' not in compiled, 'pure virtual left in SwitchXHCI')
+    for slot, name in enumerate(compiled):
+        if slot in XHCI_OWN:
+            require(name.startswith(('__ZN10SwitchXHCI', '__ZNK10SwitchXHCI')), f'slot {slot} should be ours: {name}')
+        elif name.startswith(('__ZN12AppleUSBXHCI', '__ZNK12AppleUSBXHCI')):
+            require(name not in bound or bound[name] == original[slot], f'slot {slot} binds {name} elsewhere')
+            require(not names.get(original[slot]), f'slot {slot}: the original is the kernel\'s {names.get(original[slot])}')
+            bound[name] = original[slot]
+        else:
+            require(name in names.get(original[slot], []), f'slot {slot}: {name} is not the original entry')
+    data = {'__ZN12AppleUSBXHCI10gMetaClassE': XHCI_METACLASS, '__ZTV12AppleUSBXHCI': XHCI_VTABLE}
+    allowed = dict(bound) | data
+    imports = {name for name, _, kind in symbols if kind == 1 and 'AppleUSBXHCI' in name}
+    owners = [macho(kc, backed_offset(parent['segments'], header, 32, len(kc))) for header in XHCI_KEXTS.values()]
+    return 'AppleUSBXHCI/IOUSBHostFamily', allowed, imports, owners
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--class', dest='kind', required=True, choices=('xudc', 'xhci'))
+    for option in ('--kernelcache', '--object', '--late', '--bindings', '--output'):
+        parser.add_argument(option, required=True, type=Path)
+    parser.add_argument('--write', action='store_true', help='regenerate --bindings instead of comparing')
+    args = parser.parse_args()
+    kc = args.kernelcache.read_bytes()
+    parent = macho(kc)
+
+    def read(va, n):
+        at = backed_offset(parent['segments'], va, n, len(kc))
+        return kc[at:at + n]
+
+    def u64(va):
+        return struct.unpack('<Q', read(va, 8))[0]
+    blob = args.object.read_bytes()
+    image, symbols = symbols_of(blob)
+    check = check_xudc if args.kind == 'xudc' else check_xhci
+    family, allowed, imports, owners = check(kc, parent, read, u64, blob, image, symbols)
     unknown = imports - set(allowed)
     require(not unknown, 'unaudited original imports: ' + ', '.join(sorted(unknown)))
     require(not any(name.endswith(('D0Ev', 'D1Ev')) for name in imports), 'abstract base D0/D1 must not be called')
-    owner = [s for s in macho(kc, backed_offset(parent['segments'], 0xfffffff0054789c0, 32, len(kc)))['segments']
-             if s['name'] != '__LINKEDIT']
+    segments = [s for owner in owners for s in owner['segments'] if s['name'] != '__LINKEDIT']
     for name in imports:
-        require(any(s['va'] <= allowed[name] < s['va'] + s['size'] for s in owner),
-                f'{name} outside IOUSBDeviceFamily')
+        require(any(s['va'] <= allowed[name] < s['va'] + s['size'] for s in segments), f'{name} outside {family}')
 
-    text = ('// Generated by abi_check.py --write from the 21H461 kernelcache: original IOUSBDeviceFamily addresses\n'
-            '// plus the prelink slide (-0x1000000). Do not edit.\n' +
+    text = (f'// Generated by abi_check.py --class {args.kind} --write from the 21H461 kernelcache: original {family}\n'
+            '// addresses plus the prelink slide (-0x1000000). Do not edit.\n' +
             ''.join(f'.globl {n}\n.set {n}, {allowed[n] + SLIDE:#x}\n' for n in sorted(imports)))
     if args.write:
         args.bindings.write_text(text)
     else:
         require(args.bindings.read_text() == text,
-                f'{args.bindings} is stale: rerun abi_check.py with --write (imports changed)')
+                f'{args.bindings} is stale: rerun abi_check.py --class {args.kind} --write (imports changed)')
 
     late = args.late.read_bytes()
     late_text, late_image = text_of(late)
     require(late_text == text_of(blob)[0], 'late-init staging changed instructions')
     require(not any(s['name'] == '__mod_init_func' for g in late_image['segments'] for s in g['sections']),
-            'SwitchXUDC still has an automatic initializer')
+            'the late object still has an automatic initializer')
     args.output.write_bytes(late)
 
 

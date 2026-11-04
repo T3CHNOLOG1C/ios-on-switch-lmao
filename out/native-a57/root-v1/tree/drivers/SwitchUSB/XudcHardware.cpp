@@ -244,9 +244,19 @@ bool Hardware::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet,
 }
 
 // hekate _xusb_init_phy(): PLLU, UTMIPLL, OTG pad 0 calibration from fuses, bias pad tracking. Each PLL is started
-// only when it is not already running.
-bool Hardware::initPhy()
+// only when it is not already running. Shared with the host controller (XusbHost.cpp): the pad is the same UTMI pad 0
+// whichever controller owns the port.
+bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uint8_t *padctl)
 {
+    auto r = [](volatile uint8_t *b, uint32_t o) { return *(volatile uint32_t *)(b + o); };
+    auto w = [](volatile uint8_t *b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; };
+    auto waitBits = [&](volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us) {
+        for (uint32_t i = 0; i <= us; ++i) {
+            if ((r(b, o) & mask) == value) return true;
+            IODelay(1);
+        }
+        return false;
+    };
     uint32_t pllu = r(car, PLLU_BASE);
     if (!(pllu & PLL_ENABLE) || !(pllu & PLL_LOCK)) {  // hekate clock_enable_pllu
         w(car, PLLU_MISC, r(car, PLLU_MISC) | (1u << 29));
@@ -303,6 +313,11 @@ bool Hardware::initPhy()
     w(car, CLK_ENB_Y_CLR, Y_USB2_TRK);
     IODelay(30);
     return true;
+}
+
+bool Hardware::initPhy()
+{
+    return usb2PadInit(car, fusePage, padctl);
 }
 
 // hekate xusb_device_init(): clocks, pads, FPCI/IPFS, event ring, EP0. The XUSB top and pad controller are shared

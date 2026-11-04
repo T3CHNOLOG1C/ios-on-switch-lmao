@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Nintendo Switch (OLED, T210B01) battery for iPadOS: MAX17050 fuel gauge (0x36),
 // BQ24193 charger (0x6B) and BM92T36 USB-PD controller (0x18), all on I2C1, published as an
-// IOPMPowerSource. Re-read when one of them interrupts (TegraGPIO pins, see kAlerts), plus a slow
-// re-read that bounds the staleness of what has no interrupt (voltage, current, temperature drift).
+// IOPMPowerSource. Re-read when one of them interrupts (the charger's and gauge's TegraGPIO pins, see kAlerts; the
+// BM92T36's ALERT through SwitchPD, which owns that pin and its clear-on-read ALERT_STATUS and tells us about every
+// alert), plus a slow re-read that bounds the staleness of what has no interrupt (voltage, current, temperature drift).
 // There is no polled mode: alerts that cannot be attached, keep firing, or never reach the CPU panic.
 //
 // powerd (iOS 17) matches IOServiceMatching("IOPMPowerSource") with a first-match
@@ -17,7 +18,8 @@
 // capacity LSB 0.5 mAh, current LSB 156.25 uA (positive = charging), VCELL LSB 0.625 mV
 // (bits 15:3), TEMP s16 1/256 C, RepSOC 1/256 %, Cycles 1 % of a cycle (datasheet).
 // The charger and PD controller are only read; charge current, input limit and the BQ24193
-// I2C watchdog stay as firmware left them. The gauge's alert is armed as Linux max17042_battery.c
+// I2C watchdog stay as firmware left them. The one exception is switch_battery_set_otg_boost() (USB host mode,
+// drivers/SwitchUSB): REG01's CHG_CONFIG and BOOST_LIM, saved and put back as they were. The gauge's alert is armed as Linux max17042_battery.c
 // does (max17042_set_soc_threshold, max17042_thread_handler): CONFIG.Aen, an SOC window of +-1 %
 // around the current RepSOC, re-centred on every reading, STATUS alert bits cleared (POR, BST kept).
 #include <IOKit/IOLib.h>
@@ -34,6 +36,8 @@
 #include <libkern/c++/OSSymbol.h>
 #include "../TegraI2C/TegraI2C.h"
 #include "../TegraGPIO/TegraGPIO.h"
+#include "../SwitchUSB/SwitchPD.h"
+#include "SwitchBattery.h"
 
 namespace {
 constexpr unsigned kBus = 1;
@@ -62,19 +66,20 @@ enum : uint8_t {
     DevName = 0x21,
 };
 // BQ24193 registers and REG08 fields.
-enum : uint8_t { InputSource = 0x00, SystemStatus = 0x08, VendorPart = 0x0a };
+enum : uint8_t { InputSource = 0x00, PowerOnConfig = 0x01, SystemStatus = 0x08, VendorPart = 0x0a };
 constexpr uint8_t kPowerGood = 1u << 2;
 constexpr uint16_t kStatusKeep = (1u << 1) | (1u << 3);  // POR, BST; the rest are alert flags
 constexpr uint16_t kConfigAen = 1u << 2;
-// BM92T36 registers (hekate bm92t36.c).
-enum : uint8_t { PDAlertStatus = 0x02, PDStatus1 = 0x03, PDCurrentPDO = 0x28 };
+// REG01 (bq2419x-charger.c bq2419x_vbus_enable): CHG_CONFIG 5:4 (01 charge, 10 OTG boost), BOOST_LIM 0 (1 = 1.3 A).
+constexpr uint8_t kChgConfigMask = 3u << 4, kChgConfigOtg = 2u << 4, kBoostLim1300 = 1u << 0;
+// BM92T36 registers (hekate bm92t36.c); state registers only, ALERT_STATUS is SwitchPD's.
+enum : uint8_t { PDStatus1 = 0x03, PDCurrentPDO = 0x28 };
 
 // Interrupt lines, all on TegraGPIO (OLED DTB, decompiled: i2c@7000c000 children):
 //   BQ24193 INT   PZ0  interrupts = <0xc8 0x00>; a 256 us active-low pulse per event (datasheet): falling edge.
 //   MAX17050 ALRT PY0  interrupts = <0xc0 0x00>; open drain, low while a STATUS alert flag is set: falling edge,
 //                      and every reading clears the flags, so the next alert is a new edge.
-//   BM92T36 ALERT PK4  interrupts = <0x54 0x01> (IRQ_TYPE_EDGE_RISING); how the chip releases it is unverified
-//                      (ALERT_STATUS is read on every reading), so both edges.
+//   BM92T36 ALERT PK4  SwitchPD's (level low, released by its ALERT_STATUS read); its alerts reach pdChanged().
 struct Alert {
     unsigned gpio, trigger;
     const char *name;
@@ -82,7 +87,6 @@ struct Alert {
 constexpr Alert kAlerts[] = {
     {TEGRA_GPIO_PZ0, TEGRA_GPIO_EDGE_FALLING, "BQ24193 INT (PZ0)"},
     {TEGRA_GPIO_PY0, TEGRA_GPIO_EDGE_FALLING, "MAX17050 ALRT (PY0)"},
-    {TEGRA_GPIO_PK4, TEGRA_GPIO_EDGE_BOTH, "BM92T36 ALERT (PK4)"},
 };
 constexpr unsigned kAlertCount = sizeof(kAlerts) / sizeof(kAlerts[0]);
 
@@ -217,6 +221,7 @@ class SwitchBattery : public IOPMPowerSource {
 
     static void timerFired(OSObject *owner, IOTimerEventSource *sender);
     static void alertFired(OSObject *owner, IOInterruptEventSource *sender, int count);
+    static void pdChanged(void *context, const SwitchPDState *state);
     void attachAlerts();
     bool identify();
     bool refresh();
@@ -258,6 +263,8 @@ bool SwitchBattery::start(IOService *provider)
     setName("SwitchBattery");
     attachAlerts();
     timer->setTimeoutMS(1);
+    // The PD controller's alerts (a plug, a contract): settle and re-read, as for the other two lines.
+    if (switch_pd_add_listener(&SwitchBattery::pdChanged, this)) IOLog("SwitchBattery: no PD controller events\n");
     return true;
 }
 
@@ -326,14 +333,12 @@ bool SwitchBattery::refresh()
         r.adapter->release();
     }
     updateStatus();
-    // Acknowledge: re-centre the gauge window (releases ALRT) and read the PD controller's alert status.
-    uint8_t pdAlert[2];
+    // Acknowledge: re-centre the gauge window (releases ALRT).
     if (armGauge(r.rawPercent) && !reportedFailure) IOLog("SwitchBattery: gauge alert setup failed\n");
-    (void)tegra_i2c_read(kBus, kPD, PDAlertStatus, pdAlert, sizeof(pdAlert));
     return true;
 }
 
-// The three alert lines through TegraGPIO (which may sleep until the GIC is up).
+// The charger's and gauge's alert lines through TegraGPIO (which may sleep until the GIC is up).
 void SwitchBattery::attachAlerts()
 {
     for (unsigned i = 0; i < kAlertCount; ++i) {
@@ -372,6 +377,14 @@ void SwitchBattery::alertFired(OSObject *owner, IOInterruptEventSource *sender, 
     self->timer->setTimeoutMS(kSettleMS);
 }
 
+// SwitchPD's work loop, after each BM92T36 ALERT (it has read ALERT_STATUS). The first call, at registration, is
+// the state as it is (alert 0): nothing happened, so nothing to re-read.
+void SwitchBattery::pdChanged(void *context, const SwitchPDState *state)
+{
+    auto *self = static_cast<SwitchBattery *>(context);
+    if (state->alert) self->timer->setTimeoutMS(kSettleMS);
+}
+
 void SwitchBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
 {
     auto *self = OSDynamicCast(SwitchBattery, owner);
@@ -379,6 +392,7 @@ void SwitchBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
     if (self->published) {
         // An alert pending at the GPIO controller that never reached us panics here (TegraGPIO.h).
         for (const Alert &alert : kAlerts) tegra_gpio_check_delivery(alert.gpio, "SwitchBattery");
+        switch_pd_check_delivery("SwitchBattery");
         self->refresh();
     } else if (self->identify() && self->refresh()) {  // the first reading also arms the gauge window
         self->published = true;
@@ -406,4 +420,40 @@ extern "C" int switch_battery_start(void)
     }
     battery = candidate;
     return 0;
+}
+
+// USB host mode's VBUS (drivers/SwitchUSB): the BQ24193 boost on (CHG_CONFIG 10, BOOST_LIM 1.3 A, as Linux
+// bq2419x_vbus_enable) or back to what REG01 held before. The one writer of REG01. Thread context.
+extern "C" int switch_battery_set_otg_boost(bool on)
+{
+    static IOLock *lock;
+    static bool boosting;
+    static uint8_t saved;
+    if (!lock) {
+        IOLock *fresh = IOLockAlloc(), *none = nullptr;
+        if (!fresh) return -1;
+        if (!__atomic_compare_exchange_n(&lock, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            IOLockFree(fresh);
+    }
+    IOLockLock(lock);
+    int err = 0;
+    if (on != boosting) {
+        uint8_t reg = 0;
+        err = tegra_i2c_init(kBus);
+        if (!err) err = tegra_i2c_read(kBus, kCharger, PowerOnConfig, &reg, 1);
+        if (!err) {
+            uint8_t next;
+            if (on) {
+                saved = reg & (kChgConfigMask | kBoostLim1300);
+                next = (uint8_t)((reg & ~(kChgConfigMask | kBoostLim1300)) | kChgConfigOtg | kBoostLim1300);
+            } else {
+                next = (uint8_t)((reg & ~(kChgConfigMask | kBoostLim1300)) | saved);
+            }
+            err = tegra_i2c_write(kBus, kCharger, PowerOnConfig, &next, 1);
+        }
+        if (!err) boosting = on;
+    }
+    IOLockUnlock(lock);
+    if (err) IOLog("SwitchBattery: OTG boost %s failed (I2C %d)\n", on ? "on" : "off", err);
+    return err ? -1 : 0;
 }

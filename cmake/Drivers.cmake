@@ -276,16 +276,23 @@ ioswitch_compile_command("${nvdec}/nvdec_firmware.o" SOURCE "${T}/drivers/TegraN
           -I "${T}/drivers/TegraNVDEC/firmware")
 list(APPEND nvdec_objects "${nvdec}/nvdec_firmware.o")
 
-# --- SwitchUSB: USB 2.0 device mode on the USB-C port (drivers/SwitchUSB/SwitchUSB.h): the XUDC under Apple's original
-#     IOUSBDeviceFamily (prelinked with AppleUSBDeviceMux, see the pass's emit_prelink.py). On when the ADT has
-#     /arm-io/usb-device. SwitchXUDC subclasses the original IOUSBDeviceController, so it is a late object; abi_check.py
-#     checks its vtable and imports against the kernelcache and that original-bindings.S is current on every build.
+# --- SwitchUSB: USB 2.0 on the USB-C port (drivers/SwitchUSB/SwitchUSB.h). Device mode: the XUDC under Apple's original
+#     IOUSBDeviceFamily (prelinked with AppleUSBDeviceMux), on with the ADT's /arm-io/usb-device. Host mode: the XUSB
+#     host (falcon firmware by .incbin, firmware/README.md) under IOUSBHostFamily + AppleUSBXHCI and Apple's class
+#     drivers (prelinked, see the pass's emit_prelink.py), on with /arm-io/usb-xhci; SwitchPD owns the BM92T36 for the
+#     roles and SwitchBattery. SwitchXUDC and SwitchXHCI subclass original classes, so they are late objects;
+#     abi_check.py checks their vtables and imports against the kernelcache, and that the bindings files are current,
+#     on every build.
 set(usb "${B}/switch-usb")
 set(usb_src "${T}/drivers/SwitchUSB")
 ioswitch_driver("${usb}/XudcHardware.o" "${usb_src}/XudcHardware.cpp")
 ioswitch_driver("${usb}/SwitchUSB.o" "${usb_src}/SwitchUSB.cpp")
 ioswitch_driver("${usb}/SwitchXUDC.o" "${usb_src}/SwitchXUDC.cpp")
 ioswitch_late_object("${usb}/SwitchXUDC.late.o" "${usb}/SwitchXUDC.o" SwitchXUDC.cpp)
+foreach(unit IN ITEMS SwitchPD XusbHost UsbDmaMapper SwitchXHCI)
+  ioswitch_driver("${usb}/${unit}.o" "${usb_src}/${unit}.cpp")
+endforeach()
+ioswitch_late_object("${usb}/SwitchXHCI.late.o" "${usb}/SwitchXHCI.o" SwitchXHCI.cpp)
 file(READ "${IOSWITCH_PASS}/prelink-command.json" usb_prelink)
 string(JSON usb_count LENGTH "${usb_prelink}")
 math(EXPR usb_last "${usb_count} - 2")
@@ -297,15 +304,29 @@ foreach(i RANGE ${usb_last})
   endif()
 endforeach()
 add_custom_command(OUTPUT "${usb}/SwitchXUDC.checked.o"
-  COMMAND "${IOSWITCH_PYTHON}" "${usb_src}/abi_check.py" --kernelcache "${usb_kernelcache}"
+  COMMAND "${IOSWITCH_PYTHON}" "${usb_src}/abi_check.py" --class xudc --kernelcache "${usb_kernelcache}"
           --object "${usb}/SwitchXUDC.o" --late "${usb}/SwitchXUDC.late.o" --bindings "${usb_src}/original-bindings.S"
           --output "${usb}/SwitchXUDC.checked.o"
   DEPENDS "${usb}/SwitchXUDC.o" "${usb}/SwitchXUDC.late.o" "${usb_src}/original-bindings.S" "${usb_src}/abi_check.py"
           "${usb_kernelcache}"
   COMMENT "Checking SwitchXUDC against the original IOUSBDeviceFamily"
   VERBATIM)
+add_custom_command(OUTPUT "${usb}/SwitchXHCI.checked.o"
+  COMMAND "${IOSWITCH_PYTHON}" "${usb_src}/abi_check.py" --class xhci --kernelcache "${usb_kernelcache}"
+          --object "${usb}/SwitchXHCI.o" --late "${usb}/SwitchXHCI.late.o" --bindings "${usb_src}/xhci-original-bindings.S"
+          --output "${usb}/SwitchXHCI.checked.o"
+  DEPENDS "${usb}/SwitchXHCI.o" "${usb}/SwitchXHCI.late.o" "${usb_src}/xhci-original-bindings.S" "${usb_src}/abi_check.py"
+          "${usb_kernelcache}"
+  COMMENT "Checking SwitchXHCI against the original AppleUSBXHCI"
+  VERBATIM)
 ioswitch_bindings("${usb}/original-bindings.o" "${usb_src}/original-bindings.S")
-set(usb_objects "${usb}/XudcHardware.o" "${usb}/SwitchUSB.o" "${usb}/SwitchXUDC.checked.o" "${usb}/original-bindings.o")
+ioswitch_bindings("${usb}/xhci-original-bindings.o" "${usb_src}/xhci-original-bindings.S")
+# tegra210b01_xusb_firmware by .incbin: touch firmware.S when it changes.
+ioswitch_compile_command("${usb}/firmware.o" SOURCE "${usb_src}/firmware.S"
+  COMMAND xcrun clang -target arm64-apple-ios17.0 -isysroot "${IOSWITCH_IPHONEOS_SDK}" -Werror -I "${usb_src}/firmware")
+set(usb_objects "${usb}/XudcHardware.o" "${usb}/SwitchUSB.o" "${usb}/SwitchXUDC.checked.o" "${usb}/original-bindings.o"
+    "${usb}/SwitchPD.o" "${usb}/XusbHost.o" "${usb}/UsbDmaMapper.o" "${usb}/SwitchXHCI.checked.o"
+    "${usb}/xhci-original-bindings.o" "${usb}/firmware.o")
 
 ioswitch_archive("${block}/libNativeIOSwitchBlockDevice.a"
   "${block}/NativeIOSwitchBlockDevice.o" "${block}/original-bindings.o" "${block}/IOSwitchCryptex.o"

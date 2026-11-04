@@ -1,29 +1,28 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchXHCI: the Tegra X1 XUSB host controller under Apple's original AppleUSBXHCI (21H461).
 //
-// Design. iPadOS 17 on iPad7,1 drives USB host through IOUSBHostFamily + AppleUSBXHCI (generic xHCI:
-// rings, slots, ports, hubs, power) with a thin SoC subclass, AppleNubT8011USBXHCI. Once the falcon
-// firmware runs, Tegra's host is a plain xHCI 1.0 (Linux drives it with the generic xhci-hcd plus
-// XHCI_PLAT | XHCI_SPURIOUS_WAKEUP), so SwitchXHCI is the same kind of thin subclass: it does the Tegra
-// bring-up (XusbHost.cpp), hands AppleUSBXHCI a provider nub with the register window and the host
-// interrupt, returns the coherency mapper from copyMapper() (UsbDmaMapper.cpp), and keeps what is Tegra's own:
-// the falcon mailbox (its own interrupt) and the USB2/SS port pads. Everything above (enumeration,
-// IOUSBHostDevice/Interface publication, hubs, HID/mass storage/networking class drivers matching) is
-// Apple's unchanged code.
+// iPadOS drives USB host through IOUSBHostFamily + AppleUSBXHCI (generic xHCI: rings, slots, ports, hubs, power) with
+// a thin SoC subclass (AppleNubT8011USBXHCI on iPad7,1). Once the falcon firmware runs, Tegra's host is a plain xHCI
+// 1.0 (Linux drives it with the generic xhci-hcd), so SwitchXHCI is the same kind of thin subclass: XusbHost.cpp does
+// the Tegra bring-up, a provider nub carries the register window and the host interrupt, and SwitchXHCI keeps what is
+// Tegra's own: DMA coherency (ring buffers allocated non-cacheable, copyMapper() -> UsbDmaMapper.cpp) and the falcon
+// mailbox (its own interrupt). Everything above (enumeration, IOUSBHostDevice/Interface publication, hubs, HID and
+// mass storage class drivers) is Apple's unchanged code.
 //
-// AppleUSBXHCI needs three interrupters (HCSPARAMS1.MaxIntrs >= 3). The interrupt line is shared
-// (one GIC SPI, legacy interrupter mode), so when the Tegra firmware reports fewer, SwitchXHCI reports
-// three and keeps the register sets of the missing ones in a shadow (regRead32/regWrite32/regWrite64
-// overrides, slots 290/292/293). Events of transfers aimed at those interrupters then depend on the
-// firmware putting them on ring 0; this is printed once at start so the photo shows which case ran.
+// AppleUSBXHCI::start refuses a controller with fewer than three interrupters (HCSPARAMS1.MaxIntrs). With one provider
+// interrupt it runs them all on the shared line (legacy interrupters), so when the Tegra firmware reports fewer, we
+// report three and keep the missing register sets in a shadow (regRead32/regWrite32/regWrite64, slots 290/292/293);
+// which case ran is logged once.
 //
-// Interrupts only: AppleUSBXHCI's own filter owns INTID 71; the mailbox filter is ours (INTID 72). A
-// 2 s watchdog panics when IMAN0.IP stays set with the event ring dequeue pointer unmoved (the host
-// interrupt is not reaching the CPU) or a mailbox interrupt stays pending with no filter run.
+// Interrupts only: AppleUSBXHCI's own filter owns INTID 71, the mailbox filter (INTID 72) is ours. No timer runs in
+// steady state. A lost interrupt is checked only on positive evidence: when the PD controller reports a device on the
+// port in host role, a port-status event is due (SwitchUSB.cpp calls switchxhci_expect_port_change); 2 s later IMAN0.IP
+// pending with ERDP0 unmoved, or a mailbox interrupt pending with no filter run, still so 50 ms later, panics.
 #include "OriginalAppleUSBXHCI.h"
-#include "SwitchUSBC.h"
+#include "SwitchUSB.h"
 #include "UsbDmaMapper.h"
 #include "XusbHost.h"
+#include <IOKit/IOCatalogue.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOLib.h>
@@ -39,37 +38,26 @@
 extern "C" {
 extern kmod_info_t g_kernel_kmod_info;
 void switchxhci_static_init(void) __asm__("__GLOBAL__sub_I_SwitchXHCI.cpp");
-void switchxudc_set_host_owns_port(bool host);  // SwitchXUDC.cpp
-// tegra210b01_xusb_firmware, linked by build_switchusbhost.py (empty when none was given).
+// tegra210b01_xusb_firmware (firmware.S, drivers/SwitchUSB/firmware/README.md).
 extern const uint8_t switch_xusb_firmware[] __asm__("_switch_xusb_firmware");
 extern const uint8_t switch_xusb_firmware_end[] __asm__("_switch_xusb_firmware_end");
 }
 
 namespace {
-xhost::Controller gHost;  // mapped once; shared by the role switch and the controller
-bool gHostMapped;
-IOLock *gRoleLock;
-
-constexpr uint32_t kFalconKHz = 204000;  // CLK_SOURCE_XUSB_FALCON: PLLP 408 MHz / 2 (XusbHost.cpp)
-constexpr uint32_t kWatchdogMS = 2000;
+xhost::Controller gHost;
 constexpr uint32_t kRequiredInterrupters = 3;
-
-bool mapHost()
-{
-    if (!gHostMapped) gHostMapped = gHost.map();
-    return gHostMapped;
-}
-}
+constexpr uint32_t kCheckMS = 2000, kConfirmMS = 50;
+}  // namespace
 
 class SwitchXHCI : public AppleUSBXHCI {
-    OSDeclareDefaultStructors(SwitchXHCI)
+    OSDeclareDefaultStructors(SwitchXHCI);
 
-        IOWorkLoop *tegraLoop;  // mailbox + watchdog; AppleUSBXHCI keeps its own loop
+    IOWorkLoop *tegraLoop;  // mailbox and the lost-interrupt check; AppleUSBXHCI keeps its own loop
     IOFilterInterruptEventSource *mailbox;
-    IOTimerEventSource *watchdog;
+    IOTimerEventSource *check;
     volatile uint32_t mailboxInterrupts;
-    uint32_t mailboxSeen, hostSeenErdp;
-    bool hostPendingSeen, mailboxPendingSeen;
+    uint32_t mailboxAtCheck, erdpAtCheck;
+    uint8_t checkStage;
     // Interrupter fold (see the top comment).
     uint32_t hardwareInterrupters, runtimeOffset;
     uint64_t capBase;  // AppleUSBXHCI's mapping of the capability registers
@@ -77,72 +65,63 @@ class SwitchXHCI : public AppleUSBXHCI {
 
     static bool mailboxFilter(OSObject *owner, IOFilterInterruptEventSource *);
     static void mailboxAction(OSObject *owner, IOInterruptEventSource *, int);
-    void tick(IOTimerEventSource *);
+    void armCheck(uint32_t ms, uint8_t stage);
+    void checkFired(IOTimerEventSource *);
     uint32_t *shadowFor(uint64_t address);
 
 public:
+    static SwitchXHCI *running;
+    IOWorkLoop *tegraLoopForCheck() const { return tegraLoop; }
+    IOReturn expectPortChange();
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
     void free() override;
     uint32_t regRead32(uint64_t base, uint32_t offset) override;
     void regWrite32(uint64_t base, uint32_t offset, uint32_t value) override;
     void regWrite64(uint64_t base, uint32_t offset, uint64_t value) override;
-    // The coherency mapper (UsbDmaMapper.h) for every DMA command and buffer of the controller.
     IOMapper *copyMapper() override
     {
-        IOMapper *mapper = switch_usb_dma_mapper();
+        IOMapper *mapper = switch_usb_dma_mapper((gHost.xhci(0x10) & 1) ? (1ull << 40) : (1ull << 32));  // AC64
         if (mapper) mapper->retain();
         return mapper;
     }
 };
-OSDefineMetaClassAndStructors(SwitchXHCI, AppleUSBXHCI)
+OSDefineMetaClassAndStructors(SwitchXHCI, AppleUSBXHCI);
+SwitchXHCI *SwitchXHCI::running;
 
-    bool SwitchXHCI::start(IOService *provider)
+bool SwitchXHCI::start(IOService *provider)
 {
     hardwareInterrupters = (gHost.xhci(4) >> 8) & 0x7ff;
     runtimeOffset = gHost.runtimeOffset();  // read once: regRead32 also runs in the primary interrupt filter
-    // As AppleNubT8011USBXHCI::start: ring buffers without the commpage-selected cache mode (our mapper
-    // decides their cacheability).
-    ringBufferOptions() &= ~0xf00u;
+    // Controller structures non-cacheable: the write-combine cache mode (normal non-cacheable) in place of the one
+    // AppleUSBHostController::init picked (AppleNubT8011USBXHCI clears it: its fabric is coherent; ours is not).
+    ringBufferOptions() = (ringBufferOptions() & ~(uint32_t)kIOMapCacheMask) | (uint32_t)kIOMapWriteCombineCache;
 
     tegraLoop = IOWorkLoop::workLoop();
-    watchdog = tegraLoop ? IOTimerEventSource::timerEventSource(
-                               this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &SwitchXHCI::tick))
-                         : nullptr;
-    if (!watchdog || tegraLoop->addEventSource(watchdog) != kIOReturnSuccess) {
-        IOLog("SwitchXHCI: work loop setup failed\n");
-        return false;
-    }
+    check = tegraLoop ? IOTimerEventSource::timerEventSource(
+                            this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &SwitchXHCI::checkFired))
+                      : nullptr;
+    if (!check || tegraLoop->addEventSource(check) != kIOReturnSuccess) return false;
     IOService *nub = ioswitch_interrupt_nub(xhost::kMailboxIntid, false);
     mailbox = IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchXHCI::mailboxAction,
                                                                        &SwitchXHCI::mailboxFilter, nub, 0);
     if (!mailbox || tegraLoop->addEventSource(mailbox) != kIOReturnSuccess) {
-        panic("SwitchXHCI: cannot attach the XUSB mailbox interrupt (INTID %u)", xhost::kMailboxIntid);
+        panic("SwitchUSB: cannot attach the XUSB mailbox interrupt (INTID %u)", xhost::kMailboxIntid);
     }
     mailbox->enable();
-
-    if (hardwareInterrupters < kRequiredInterrupters) {
-        IOLog("SwitchXHCI: Tegra xHCI has %u interrupter(s), AppleUSBXHCI needs %u: folding onto ring 0\n",
-              hardwareInterrupters, kRequiredInterrupters);
-    }
-    if (!AppleUSBXHCI::start(provider)) {
-        IOLog("SwitchXHCI: AppleUSBXHCI::start failed (USBSTS %#x)\n", gHost.xhci(gHost.capLength() + 4));
-        return false;
-    }
-    // xhci-tegra.c probe_finish: firmware messages on, then USBCMD.EU3S (bit 11, MFINDEX stops in U3).
-    if (!gHost.sendMailbox(xhost::MBOX_MSG_ENABLED, 0)) IOLog("SwitchXHCI: falcon did not take MSG_ENABLED\n");
+    if (!AppleUSBXHCI::start(provider)) return false;
+    // xhci-tegra.c tegra_xusb_probe_finish: firmware messages on, then USBCMD.EU3S (bit 11, MFINDEX stops in U3).
+    if (!gHost.sendMailbox(xhost::MBOX_MSG_ENABLED, 0)) IOLog("SwitchUSB: XUSB falcon did not take MSG_ENABLED\n");
     if (capBase) {
         const uint32_t usbcmd = gHost.capLength();
         regWrite32(capBase, usbcmd, regRead32(capBase, usbcmd) | 1u << 11);
     }
-    watchdog->setTimeoutMS(kWatchdogMS);
-    IOLog("SwitchXHCI: started\n");
     return true;
 }
 
 void SwitchXHCI::stop(IOService *provider)
 {
-    if (watchdog) watchdog->cancelTimeout();
+    if (check) check->cancelTimeout();
     if (mailbox) mailbox->disable();
     AppleUSBXHCI::stop(provider);
 }
@@ -150,10 +129,10 @@ void SwitchXHCI::stop(IOService *provider)
 void SwitchXHCI::free()
 {
     if (tegraLoop) {
-        if (watchdog) tegraLoop->removeEventSource(watchdog);
+        if (check) tegraLoop->removeEventSource(check);
         if (mailbox) tegraLoop->removeEventSource(mailbox);
     }
-    OSSafeReleaseNULL(watchdog);
+    OSSafeReleaseNULL(check);
     OSSafeReleaseNULL(mailbox);
     OSSafeReleaseNULL(tegraLoop);
     AppleUSBXHCI::free();
@@ -168,39 +147,47 @@ bool SwitchXHCI::mailboxFilter(OSObject *owner, IOFilterInterruptEventSource *)
 
 void SwitchXHCI::mailboxAction(OSObject *, IOInterruptEventSource *, int)
 {
-    if (!gHost.serviceMailbox(kFalconKHz)) {
+    if (!gHost.serviceMailbox()) {
         char state[200];
         gHost.describe(state, sizeof(state));
-        panic("SwitchXHCI: XUSB falcon firmware hang (mailbox SMI FW_HANG): %s", state);
+        panic("SwitchUSB: XUSB falcon firmware hang (mailbox SMI FW_HANG): %s", state);
     }
 }
 
-// Lost-interrupt checks only; no event is ever serviced here.
-void SwitchXHCI::tick(IOTimerEventSource *)
+// A device just appeared on the port in host role: its port-status event is due.
+IOReturn SwitchXHCI::expectPortChange()
 {
-    const uint32_t rt = gHost.runtimeOffset();
-    const bool hostPending = (gHost.xhci(rt + 0x20) & 1) && (gHost.xhci(rt + 0x20) & 2);  // IMAN0 IP && IE
-    const uint32_t erdp = gHost.xhci(rt + 0x38);
-    if (hostPending && hostPendingSeen && erdp == hostSeenErdp) {
-        char state[200], gic[192];
-        gHost.describe(state, sizeof(state));
-        ioswitch_interrupt_describe(xhost::kHostIntid, gic, sizeof(gic));
-        panic("SwitchXHCI: xHCI interrupt lost (INTID %u): %s, %s", xhost::kHostIntid, state, gic);
-    }
-    hostPendingSeen = hostPending;
-    hostSeenErdp = erdp;
+    if (!checkStage) armCheck(kCheckMS, 1);
+    return kIOReturnSuccess;
+}
 
-    const uint32_t taken = __atomic_load_n(&mailboxInterrupts, __ATOMIC_RELAXED);
-    const bool mailboxPending = gHost.mailboxPending();
-    if (mailboxPending && mailboxPendingSeen && taken == mailboxSeen) {
-        char state[200], gic[192];
-        gHost.describe(state, sizeof(state));
-        ioswitch_interrupt_describe(xhost::kMailboxIntid, gic, sizeof(gic));
-        panic("SwitchXHCI: XUSB mailbox interrupt lost (INTID %u): %s, %s", xhost::kMailboxIntid, state, gic);
+void SwitchXHCI::armCheck(uint32_t ms, uint8_t stage)
+{
+    checkStage = stage;
+    erdpAtCheck = gHost.xhci(runtimeOffset + 0x38);
+    mailboxAtCheck = __atomic_load_n(&mailboxInterrupts, __ATOMIC_RELAXED);
+    check->setTimeoutMS(ms);
+}
+
+void SwitchXHCI::checkFired(IOTimerEventSource *)
+{
+    const uint32_t iman = gHost.xhci(runtimeOffset + 0x20);
+    const bool hostLost = (iman & 3) == 3 && gHost.xhci(runtimeOffset + 0x38) == erdpAtCheck;  // IP and IE
+    const bool mailboxLost =
+        gHost.mailboxPending() && __atomic_load_n(&mailboxInterrupts, __ATOMIC_RELAXED) == mailboxAtCheck;
+    if (!hostLost && !mailboxLost) {
+        checkStage = 0;
+        return;
     }
-    mailboxPendingSeen = mailboxPending;
-    mailboxSeen = taken;
-    watchdog->setTimeoutMS(kWatchdogMS);
+    if (checkStage == 1) {
+        armCheck(kConfirmMS, 2);
+        return;
+    }
+    const uint32_t intid = hostLost ? xhost::kHostIntid : xhost::kMailboxIntid;
+    char state[200], gic[192];
+    gHost.describe(state, sizeof(state));
+    ioswitch_interrupt_describe(intid, gic, sizeof(gic));
+    panic("SwitchUSB: XUSB %s interrupt lost (INTID %u): %s, %s", hostLost ? "host" : "mailbox", intid, state, gic);
 }
 
 // Interrupter register sets (runtime base + 0x20 + 32 * n) that the hardware does not have.
@@ -245,35 +232,8 @@ void SwitchXHCI::regWrite64(uint64_t base, uint32_t offset, uint64_t value)
 }
 
 // ---------------------------------------------------------------------------
-// Role switching. The XUDC and the host share USB2 pad 0; xusb-tegra210.c routes it by OTG capability
-// plus ID/VBUS overrides. Host: the XUDC lets go first (its pull-up off), then ID grounded. Device:
-// ID floating, VBUS override on, then the XUDC reconnects if its family wants the bus.
-extern "C" void switchxhci_set_role(bool host)
-{
-    IOLock *lock = __atomic_load_n(&gRoleLock, __ATOMIC_ACQUIRE);
-    if (!lock) {
-        IOLock *fresh = IOLockAlloc(), *none = nullptr;
-        if (!fresh) return;
-        if (__atomic_compare_exchange_n(&gRoleLock, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-            lock = fresh;
-        else {
-            IOLockFree(fresh);
-            lock = none;
-        }
-    }
-    if (!mapHost()) {
-        IOLog("SwitchXHCI: MMIO map failed\n");
-        return;
-    }
-    IOLockLock(lock);
-    if (host) switchxudc_set_host_owns_port(true);
-    gHost.setPortRole(host ? xhost::PortRole::Host : xhost::PortRole::Device);
-    if (!host) switchxudc_set_host_owns_port(false);
-    IOLockUnlock(lock);
-}
-
-// ---------------------------------------------------------------------------
-// Late registration (as switchxudc_start): SwitchXHCI's metaclass needs the loaded original AppleUSBXHCI.
+// Bring-up. SwitchXHCI's metaclass needs the loaded original AppleUSBXHCI, so its static initializer is staged
+// (Drivers.cmake ioswitch_late_object) and runs here.
 namespace {
 const OSMetaClass *lookupClass(const char *text)
 {
@@ -283,9 +243,30 @@ const OSMetaClass *lookupClass(const char *text)
     return meta;
 }
 
-// Provider nub: register window index 0 and the host interrupt as index 0 (the GIC nub's own interrupt
-// properties, so IOService resolves it through ArmGIC). The mapper comes from copyMapper(), not from an
-// "iommu-parent" property: an IOService object in a property would not serialize for ioreg.
+// An IOResources personality ("IOResourceMatch" IOKit), as in the kext's Info.plist, into the catalogue (matched now).
+bool addResourcePersonality(const char *ioClass, const char *category, const char *bundle)
+{
+    OSDictionary *personality = OSDictionary::withCapacity(5);
+    bool ok = personality != nullptr;
+    const char *const pairs[][2] = {{"IOClass", ioClass},
+                                    {"IOMatchCategory", category},
+                                    {"IOProviderClass", "IOResources"},
+                                    {"IOResourceMatch", "IOKit"},
+                                    {"CFBundleIdentifier", bundle}};
+    for (const auto &pair : pairs) {
+        const OSSymbol *value = ok ? OSSymbol::withCString(pair[1]) : nullptr;
+        ok = value && personality->setObject(pair[0], value);
+        OSSafeReleaseNULL(value);
+    }
+    OSArray *array = ok ? OSArray::withObjects((const OSObject **)&personality, 1) : nullptr;
+    ok = array && gIOCatalogue->addDrivers(array, true);
+    OSSafeReleaseNULL(array);
+    OSSafeReleaseNULL(personality);
+    return ok;
+}
+
+// Provider nub: register window index 0 and the host interrupt as index 0 (the GIC nub's own interrupt properties, so
+// IOService resolves it through ArmGIC).
 IOService *makeNub()
 {
     IOService *gic = ioswitch_interrupt_nub(xhost::kHostIntid, false);
@@ -313,65 +294,87 @@ IOService *makeNub()
     if (!ok) OSSafeReleaseNULL(nub);
     return nub;
 }
-}
+}  // namespace
 
-extern "C" int switchxhci_start(bool superSpeed)
+bool switchxhci_start(char *why, size_t whySize)
 {
-    static uint32_t state;  // 0 untouched, 1 starting, 2 running, 3 failed
-    uint32_t expected = 0;
-    if (!__atomic_compare_exchange_n(&state, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-        return expected == 2 ? 0 : -1;
-    auto fail = [](const char *why) {
-        IOLog("SwitchXHCI: %s\n", why);
-        __atomic_store_n(&state, 3, __ATOMIC_RELEASE);
-        return -1;
-    };
-    char why[160] = "";
-
-    if (!mapHost()) return fail("MMIO map failed");
-    if (!gHost.smmuBypassed(why, sizeof(why))) return fail(why);
-    if (!gHost.powerOn()) return fail("XUSB host power-up failed");
-    const size_t firmwareBytes = (size_t)(switch_xusb_firmware_end - switch_xusb_firmware);
-    if (!gHost.loadFirmware(firmwareBytes ? switch_xusb_firmware : nullptr, firmwareBytes, why, sizeof(why)))
-        return fail(why);
-    if (superSpeed) {
-        if (!gHost.superSpeedUp()) IOLog("SwitchXHCI: SuperSpeed lane bring-up failed, USB2 only\n");
-    } else {
-        gHost.mapFakeSuperSpeedPort();
+    if (!gHost.map()) {
+        snprintf(why, whySize, "MMIO map failed");
+        return false;
     }
-
-    static const char *const kRequired[] = {"com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBXHCI"};
-    for (const char *kext : kRequired) {
-        if (OSKext::loadKextWithIdentifier(kext, false) != KERN_SUCCESS)
-            return fail("IOUSBHostFamily/AppleUSBXHCI did not load");
+    if (!gHost.powerOn(why, whySize)) return false;
+    if (!gHost.loadFirmware(switch_xusb_firmware, (size_t)(switch_xusb_firmware_end - switch_xusb_firmware), why,
+                            whySize))
+        return false;
+    // The host stack's IOResources personalities, kept out of the boot-time catalogue (emit_prelink.py
+    // DEFERRED_PERSONALITIES): AppleUSBHostResources (AppleUSBHostController::start waits for it) and
+    // IOUSBMassStorageResource, as their kexts' Info.plist has them.
+    if (!addResourcePersonality("AppleUSBHostResources", "AppleUSBHostResources", "com.apple.iokit.IOUSBHostFamily") ||
+        !addResourcePersonality("IOUSBMassStorageResource", "IOUSBMassStorageResource",
+                                "com.apple.iokit.IOUSBMassStorageDriver")) {
+        snprintf(why, whySize, "IOCatalogue refused the USB host resource personalities");
+        return false;
     }
-    // Class drivers: hubs, composite devices, HID. Their personalities match the devices AppleUSBXHCI
-    // publishes; a missing one only loses that class.
+    static const char *const kStack[] = {"com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBXHCI"};
+    for (const char *kext : kStack) {
+        if (OSKext::loadKextWithIdentifier(kext, false) != KERN_SUCCESS) {
+            snprintf(why, whySize, "%s did not load (is it prelinked?)", kext);
+            return false;
+        }
+    }
+    // Class drivers: their personalities match what AppleUSBXHCI publishes; a missing one only loses that class.
     static const char *const kClasses[] = {
         "com.apple.driver.usb.AppleUSBHub", "com.apple.driver.usb.AppleUSBHostCompositeDevice",
-        "com.apple.driver.usb.IOUSBHostHIDDevice", "com.apple.driver.AppleUSBHostMergeProperties"};
+        "com.apple.driver.usb.IOUSBHostHIDDevice", "com.apple.iokit.IOUSBMassStorageDriver",
+        "com.apple.iokit.IOSCSIBlockCommandsDevice"};
     for (const char *kext : kClasses) {
-        if (OSKext::loadKextWithIdentifier(kext, false) != KERN_SUCCESS) IOLog("SwitchXHCI: %s did not load\n", kext);
+        if (OSKext::loadKextWithIdentifier(kext, false) != KERN_SUCCESS) IOLog("SwitchUSB: %s did not load\n", kext);
     }
     const OSMetaClass *parent = lookupClass("AppleUSBXHCI");
-    if (parent != &AppleUSBXHCI::gMetaClass || parent->getClassSize() != sizeof(AppleUSBXHCI))
-        return fail("original AppleUSBXHCI mismatch");
+    if (parent != &AppleUSBXHCI::gMetaClass || parent->getClassSize() != sizeof(AppleUSBXHCI)) {
+        snprintf(why, whySize, "the loaded AppleUSBXHCI is not the 21H461 one");
+        return false;
+    }
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-    if (!handle) return fail("preModLoad failed");
+    if (!handle) {
+        snprintf(why, whySize, "preModLoad failed");
+        return false;
+    }
     switchxhci_static_init();
     if (OSMetaClass::postModLoad(handle) != KERN_SUCCESS || lookupClass("SwitchXHCI") != &SwitchXHCI::gMetaClass ||
-        SwitchXHCI::gMetaClass.getSuperClass() != parent)
-        return fail("SwitchXHCI registration failed");
-
-    IOMapper *mapper = switch_usb_dma_mapper();
-    IOService *nub = mapper ? makeNub() : nullptr;
-    auto *controller = new SwitchXHCI;
+        SwitchXHCI::gMetaClass.getSuperClass() != parent) {
+        snprintf(why, whySize, "SwitchXHCI class registration failed");
+        return false;
+    }
+    const uint32_t interrupters = (gHost.xhci(4) >> 8) & 0x7ff;
+    IOService *nub = makeNub();
+    auto *controller = OSTypeAlloc(SwitchXHCI);
     if (!nub || !controller || !controller->init(nullptr) || !controller->attach(nub)) {
         OSSafeReleaseNULL(controller);
-        return fail("service setup failed");
+        snprintf(why, whySize, "service setup failed");
+        return false;
     }
-    // Once the original start ran, the family holds references: never released.
-    if (!controller->start(nub)) return fail("start failed");
-    __atomic_store_n(&state, 2, __ATOMIC_RELEASE);
-    return 0;
+    if (!controller->start(nub)) {  // the original start may have taken references: the controller is kept
+        snprintf(why, whySize, "AppleUSBXHCI::start failed (USBSTS %#x)", gHost.xhci(gHost.capLength() + 4));
+        return false;
+    }
+    __atomic_store_n(&SwitchXHCI::running, controller, __ATOMIC_RELEASE);
+    IOLog("SwitchUSB: host controller up (AppleUSBXHCI, %u interrupter%s%s)\n", interrupters,
+          interrupters == 1 ? "" : "s", interrupters < kRequiredInterrupters ? ", 3 shown to AppleUSBXHCI" : "");
+    return true;
+}
+
+void switchxhci_set_host_role(bool host)
+{
+    gHost.setHostRole(host);
+}
+
+void switchxhci_expect_port_change(void)
+{
+    SwitchXHCI *controller = __atomic_load_n(&SwitchXHCI::running, __ATOMIC_ACQUIRE);
+    IOWorkLoop *loop = controller ? controller->tegraLoopForCheck() : nullptr;
+    if (loop)
+        loop->runAction([](OSObject *owner, void *, void *, void *,
+                           void *) { return static_cast<SwitchXHCI *>(owner)->expectPortChange(); },
+                        controller);
 }

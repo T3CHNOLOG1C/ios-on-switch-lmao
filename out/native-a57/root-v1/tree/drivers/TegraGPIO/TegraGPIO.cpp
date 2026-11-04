@@ -82,8 +82,11 @@ struct OutputMux {
     uint32_t value;
 };
 constexpr OutputMux kOutputMux[] = {
-    {TEGRA_GPIO_PJ7, 0x150, PULL_DOWN | 1},  // dap4_sclk_pj7 "Touchscreen Reset": rsvd1, pull-down, 476-481;
-                                             // hekate touch_power_on writes PINMUX_AUX_DAP4_SCLK the same
+    {TEGRA_GPIO_PJ7, 0x150, PULL_DOWN | 1},    // dap4_sclk_pj7 "Touchscreen Reset": rsvd1, pull-down, 476-481;
+                                               // hekate touch_power_on writes PINMUX_AUX_DAP4_SCLK the same
+    {TEGRA_GPIO(X, 3), 0x228, PULL_DOWN},      // als_prox_int_px3: v_vdd5v3 enable on Fric (USB-C VBUS source),
+                                               // rsvd0, pull-down, 937-943 (drivers/SwitchUSB SwitchPD)
+    {TEGRA_GPIO(K, 5), 0x268, PULL_DOWN | 1},  // pk5 "USB-PD (BM92T36) VCONN Power Enable": rsvd1, 1087-1094
 };
 
 inline uint32_t portReg(unsigned gpio, uint32_t reg)

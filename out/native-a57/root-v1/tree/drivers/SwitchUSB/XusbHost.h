@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Tegra X1 (T210B01) XUSB host controller hardware: everything Apple's AppleUSBXHCI cannot know about.
-// After powerOn() and loadFirmware() the block at 0x70090000 is a plain xHCI 1.0 controller and
-// AppleUSBXHCI (through SwitchXHCI) drives it; this layer keeps only the Tegra side: clocks and power
-// partitions, the IPFS/FPCI bridge (BAR0, bus master, interrupt routing), the falcon microcontroller
-// that implements the xHCI and its firmware, the falcon mailbox (its own interrupt) and the shared pad
-// controller (USB2 port 0 role overrides, the T210B01 UPHY lane of SuperSpeed port 0).
+// Tegra X1 (T210B01) XUSB host controller hardware: what Apple's AppleUSBXHCI cannot know about. After powerOn()
+// and loadFirmware() the block at 0x70090000 is a plain xHCI 1.0 controller and AppleUSBXHCI (through SwitchXHCI)
+// drives it; this layer keeps only the Tegra side: clocks and power partitions, the IPFS/FPCI bridge (BAR0, bus
+// master, interrupt assertion), the falcon microcontroller that implements the xHCI and its firmware, the falcon
+// mailbox (its own interrupt) and USB2 pad 0's role (the ID and VBUS overrides). USB 2.0 only: SuperSpeed port 0's
+// UPHY lane is left as it is.
 //
 // Sources: CTCaer switch-l4t-kernel-4.9 drivers/usb/host/xhci-tegra.c (tegra210b01_soc, tegra_xusb_config,
-// tegra_xhci_load_firmware, tegra_xusb_mbox_*, tegra_xusb_disable_hsic_wake), drivers/phy/tegra/
-// xusb-tegra210.c (usb2 phy power on, vbus/id override, uphy_init, pex_uphy_enable T210B01 branch,
-// pcie_phy_power_on, usb3_set_lfps_detect, init_usb3_port), clk-tegra210b01.c (UPHY management clock,
-// PLLE hardware sequencer), MyEcoria/nxk user/clk (PLLE enable, MIT). OLED DTB xusb@70090000:
-// registers 0x70090000/0x8000 (xHCI), 0x70098000 (FPCI), 0x70099000 (IPFS); interrupts SPI 39 host
-// (INTID 71), SPI 40 mailbox (INTID 72), SPI 49 padctl (unused here); usb2-0 "otg" with usb3-0 companion
-// on UPHY lane pcie-5 (tegra210b01_usb3_map); iommus = XUSB_HOST, which must be off (physical DMA).
+// tegra_xhci_load_firmware, tegra_xusb_mbox_send/handle, tegra_xusb_disable_hsic_wake) and drivers/phy/tegra/
+// xusb-tegra210.c (tegra210_xusb_padctl_id_override, vbus_override). OLED DTB xusb@70090000: xHCI 0x70090000
+// (0x8000), FPCI 0x70098000, IPFS 0x70099000; interrupts SPI 39 host (INTID 71), SPI 40 mailbox (INTID 72);
+// usb2-0 "otg"; iommus = XUSB_HOST, which must be off (physical DMA).
 //
-// Waits on hardware status with no interrupt behind it (PLL lock, falcon DMA, CNR after boot, mailbox
+// Waits on hardware status with no interrupt behind it (PLL lock, falcon DMA, CNR after the firmware starts, mailbox
 // ownership) are bounded register polls at bring-up, as in Linux; events are interrupt-driven only.
 #pragma once
 #include <stddef.h>
@@ -25,6 +22,7 @@ namespace xhost {
 
 constexpr uint64_t kXhciPA = 0x70090000, kXhciBytes = 0x8000;
 constexpr uint32_t kHostIntid = 32 + 39, kMailboxIntid = 32 + 40;
+constexpr uint32_t kFalconKHz = 204000;  // CLK_SOURCE_XUSB_FALCON: PLLP 408 MHz / 2
 
 // Falcon mailbox commands (xhci-tegra.c enum tegra_xusb_mbox_cmd).
 enum MboxCmd : uint32_t {
@@ -50,36 +48,30 @@ enum MboxCmd : uint32_t {
     MBOX_NAK = 129,
 };
 
-enum class PortRole : uint8_t { Device, Host };
-
 class Controller {
 public:
     bool map();  // MMIO only, no access
-    // SMMU translation for the XUSB_HOST client must be off: AppleUSBXHCI hands the controller physical
-    // addresses (identity SwitchDMAMapper). Returns false (and says why) when it is on.
-    bool smmuBypassed(char *why, size_t size);
-    bool powerOn();  // PLLs, pads, partitions XUSBA+XUSBC, clocks, IPFS/FPCI
+    // PLLs and pad (shared with the XUDC), partitions XUSBA+XUSBC, clocks, IPFS/FPCI; false with the reason.
+    bool powerOn(char *why, size_t whySize);
     bool loadFirmware(const uint8_t *image, size_t size, char *why, size_t whySize);
-    bool superSpeedUp();           // PLLE, UPHY PLL P0, lane pcie-5 -> SS port 0 (switch-usb3=1)
-    void mapFakeSuperSpeedPort();  // SS port 0 mapped to USB2 port 0 without a lane (DT usb3-port-fake)
 
-    // USB2 port 0 (the USB-C port's D+/D-) between the XUDC and this host: OTG capability, then the ID
-    // and VBUS overrides the hardware routes by (xusb-tegra210.c id/vbus override).
-    void setPortRole(PortRole role);
+    // USB2 port 0 (the USB-C port's D+/D-): OTG capability, then the ID override (xusb-tegra210.c): host grounds ID
+    // (the VBUS override off first, as Linux), device floats it (the XUDC sets its VBUS override when it connects).
+    void setHostRole(bool host);
 
-    // xHCI registers through our own mapping (bring-up, the interrupt watchdog).
+    // xHCI registers through our own mapping (bring-up, the lost-interrupt check).
     uint32_t xhci(uint32_t offset) const { return *reinterpret_cast<volatile uint32_t *>(regs + offset); }
     uint32_t capLength() const { return xhci(0) & 0xff; }
     uint32_t runtimeOffset() const { return xhci(0x18) & ~0x1fu; }
 
-    // Mailbox. takeMailboxInterrupt() runs in the primary interrupt filter: it acknowledges SMI_INTR
-    // (W1C) and says whether a message waits (or the firmware hung). serviceMailbox() runs on the work
-    // loop: reads the message, answers it (ACK/NAK), returns false only on a firmware hang.
+    // Mailbox. takeMailboxInterrupt() runs in the primary interrupt filter: it acknowledges SMI_INTR (W1C) and says
+    // whether a message waits (or the firmware hung). serviceMailbox() runs on the work loop: reads the message,
+    // answers it (ACK/NAK), returns false only on a firmware hang.
     bool takeMailboxInterrupt();
-    bool serviceMailbox(uint32_t falconKHz);
-    bool sendMailbox(uint32_t cmd, uint32_t data);   // acquires ownership, waits for the firmware to take it
-    uint32_t mailboxPending() const;                 // SMI_INTR enable/hang bits (watchdog)
-    void describe(char *buffer, size_t size) const;  // one line: USBSTS, IMAN0, ERDP0, falcon, SMI, owner
+    bool serviceMailbox();
+    bool sendMailbox(uint32_t cmd, uint32_t data);   // takes ownership, waits (bounded) for the firmware to take it
+    bool mailboxPending() const;                     // SMI_INTR raised and not yet acknowledged
+    void describe(char *buffer, size_t size) const;  // one line: USBSTS, IMAN0, ERDP0, SMI, owner, IPFS mask
 
 private:
     volatile uint8_t *car = nullptr, *pmcPage = nullptr, *fusePage = nullptr, *mc = nullptr, *padctl = nullptr,
@@ -98,9 +90,6 @@ private:
     bool powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit);
     uint32_t csbRead(uint32_t offset);
     void csbWrite(uint32_t offset, uint32_t value);
-    bool plleUp();
-    void laneConfig(uint32_t ctl8, const uint16_t (*data)[2], unsigned count);
-    void setLfpsDetect(bool enable);
 };
 
 }  // namespace xhost

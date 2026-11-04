@@ -46,6 +46,9 @@ PORTRAIT_HEADER = WORK / 'tree/drivers/NativeMobileDisplay/IOSwitchPortrait.h'
 # 'standardMuxOnly' (AppleUSBMux alone, no userland function driver). J120's own stdMuxPTPEthValIDA needs a dozen
 # function drivers this port lacks. None leaves /arm-io/usb-device out, and the driver then does nothing.
 USB_DEVICE_CONFIGURATION = 'unknownHardware'
+# USB 2.0 host mode on the same port (drivers/SwitchUSB SwitchXHCI): a keyboard, mouse or flash drive through a USB-C OTG
+# adapter or an unpowered hub. True writes /arm-io/usb-xhci, the driver's switch; the role then follows the BM92T36.
+USB_HOST = True
 COMMAND_LINE = ' '.join([
     '-v', 'serial=0', 'debug=0x14e', 'kt_fixed_zones=120', 'cpus=1', 'armcpu-self-ipi=1',
     'ioswitch-diag=1', 'sheng-pmgr=2', '-no_slto_panic',
@@ -408,6 +411,12 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
                            ('manufacturer-string', b'Apple Inc.\0'), ('product-string', b'iPad\0'),
                            ('configuration-string', USB_DEVICE_CONFIGURATION.encode() + b'\0')):
             put(usb, key, value)
+    # USB host mode: /arm-io/usb-xhci (J120 has one), present = on. compatible is not usb-xhci,t8011, so nothing of
+    # Apple's matches the node itself; SwitchXHCI makes its own provider with the register window and interrupt.
+    if USB_HOST:
+        xhci = child(child(tree, 'arm-io'), 'usb-xhci')
+        for key, value in (('compatible', b'usb-xhci,tegra210\0'), ('device_type', b'usb-xhci\0')):
+            put(xhci, key, value)
     # Directories the kernel shows the Data overlay over: NUL-terminated "<directory>[:<boot-arg>]".
     if overlay_dirs:
         put(chosen, 'ioswitch-overlay', b''.join(f'{d}:{g}\0'.encode() if g else f'{d}\0'.encode()

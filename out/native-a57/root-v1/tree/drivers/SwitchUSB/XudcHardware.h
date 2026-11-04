@@ -72,6 +72,10 @@ struct DmaBuffer {
 
 void cacheFlush(const volatile void *p, size_t n);  // clean+invalidate by VA, then DSB
 
+// UTMI pad 0 bring-up (PLLU, UTMIPLL, fuse calibration, bias tracking); fusePage is 0x7000F000. Also used by the host
+// controller (XusbHost.cpp).
+bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uint8_t *padctl);
+
 // What the port did, as port-status events report it (PortChange::handle()).
 struct PortChange {
     bool reset = false;         // bus reset ended: fresh EP0, address 0, configuration gone

@@ -27,10 +27,12 @@
 //   PZ0 200  BQ24193 INT (I2C1 0x6b)         falling     bank 6 SPI 89
 //   PK4  84  BM92T36 ALERT (I2C1 0x18)       DT: rising  bank 2 SPI 34
 //   PJ7  79  FTM4 touch reset/VIO enable     output, active high (DT stm,vio-gpio; hekate touch.c)
+//   PX3 187  v_vdd5v3 enable (USB-C source) output, active high (DT tegra210-nx-power-fixed regulator@0xb)
+//   PK5  85  BM92T36 VCONN enable            output, active high (DT rohm,vconn-en-gpio)
 // The power button is not a GPIO on this board (gpio-keys "power" PX5 is disabled, "Not connected"): it is the
 // MAX77620 ONOFF interrupt on the PMIC's nIRQ, GIC SPI 86 (ioswitch_interrupt_nub(118, false)).
 //
-// For these pins the pinmux is set here too (inputs: input enabled, tristate, the DT pull; the output PJ7: driven,
+// For these pins the pinmux is set here too (inputs: input enabled, tristate, the DT pull; the outputs PJ7, PX3, PK5: driven,
 // input disabled, pull-down; tegra210b01-fric-pinmux.dtsi); any other pin must already be muxed. Call everything
 // from thread context.
 //

@@ -25,9 +25,14 @@
 //   the host's OUT status (state 8) through handleControlRequestStateChange(); both end in inputDataPacket().
 // All calls run on one IOWorkLoop: the family's command gate and the XUDC interrupt (GIC SPI 44 = INTID 76: Linux
 // tegra210.dtsi, OLED DTB xudc@700d0000) share it, so nothing here needs a lock. The interrupt drains the event ring
-// (Linux tegra_xudc_irq); nothing else does. No timer runs in steady state: when the pull-up goes on, one deferred
-// check looks at ST.IP once; pending with no interrupt taken (and still so 50 ms later) means the interrupt does not
-// reach the CPU, and that panics with one line.
+// (Linux tegra_xudc_irq); nothing else does. No timer runs in steady state. The one lost-interrupt check is armed only
+// on positive evidence that an event is due: the PD controller reports a cable from a host (switchxudc_host_expected,
+// SwitchUSB.cpp), and the host's bus reset must follow. 2 s later ST.IP is looked at once; pending with no interrupt
+// taken (and still so 50 ms later) means the interrupt does not reach the CPU, and that panics with one line. No cable,
+// or a charger that never resets the bus, leaves ST.IP clear: nothing happens.
+//
+// Host mode (SwitchUSB.cpp) takes USB2 pad 0 from us with switchxudc_set_host_owns_port(true): we go off the bus as a
+// cable pull would, keep the family's wish to be on it, and go back when the pad is returned.
 #include "OriginalIOUSBDeviceFamily.h"
 #include "XudcHardware.h"
 #include <IOKit/IOLib.h>
@@ -114,7 +119,7 @@ class SwitchXUDC : public IOUSBDeviceController {
     uint8_t setup[8];
     uint16_t sequence;
     int speed;
-    bool onBus, suspended, hostPresent, reportedOnBus;
+    bool onBus, suspended, hostPresent, reportedOnBus, hostOwnsPort, wantBus;
     uint8_t deliveryStage;
     volatile uint32_t interrupts;  // ST.IP acknowledged by the filter
     uint32_t interruptsAtCheck;
@@ -140,6 +145,9 @@ class SwitchXUDC : public IOUSBDeviceController {
 
 public:
     bool begin(IOService *provider, char *why, size_t whySize);
+    static SwitchXUDC *running;
+    IOReturn hostExpected();
+    IOReturn portOwner(bool host);
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
     void free() override;
@@ -170,12 +178,12 @@ public:
         return kIOReturnSuccess;
     }
 };
-OSDefineMetaClassAndStructors(SwitchXUDC, IOUSBDeviceController)
+OSDefineMetaClassAndStructors(SwitchXUDC, IOUSBDeviceController) SwitchXUDC *SwitchXUDC::running;
 
-    // ---------------------------------------------------------------------------
-    // Lifecycle.
-    // Everything that can fail without side effects on the family happens here, before start().
-    bool SwitchXUDC::begin(IOService *provider, char *why, size_t whySize)
+// ---------------------------------------------------------------------------
+// Lifecycle.
+// Everything that can fail without side effects on the family happens here, before start().
+bool SwitchXUDC::begin(IOService *provider, char *why, size_t whySize)
 {
     stage = Stage::Idle;
     speed = kSpeedNone;
@@ -560,7 +568,54 @@ bool SwitchXUDC::copy(_IOUSBDeviceIORequestTag *request, uint32_t offset, uint8_
 // Pure-virtual hardware methods.
 void SwitchXUDC::goOnBus(bool on)
 {
+    if (hostOwnsPort) {  // the host has the pad: remember the wish
+        wantBus = on;
+        return;
+    }
     setBus(on);
+}
+
+// The PD controller saw a cable from a host (SwitchUSB.cpp): its bus reset is due, so the interrupt can be checked.
+IOReturn SwitchXUDC::hostExpected()
+{
+    if (onBus && !hostPresent && !deliveryStage) armDeliveryCheck(kDeliveryCheckMS, 1);
+    return kIOReturnSuccess;
+}
+
+// The pad changes hands. To the host: off the bus as a cable pull would be, the family's wish kept. Back: on the bus
+// again if the family wants it.
+IOReturn SwitchXUDC::portOwner(bool host)
+{
+    if (host == hostOwnsPort) return kIOReturnSuccess;
+    if (host) {
+        wantBus = onBus;
+        setBus(false);
+        hostOwnsPort = true;
+    } else {
+        hostOwnsPort = false;
+        if (wantBus) setBus(true);
+    }
+    return kIOReturnSuccess;
+}
+
+extern "C" void switchxudc_host_expected(void)
+{
+    SwitchXUDC *controller = __atomic_load_n(&SwitchXUDC::running, __ATOMIC_ACQUIRE);
+    if (controller)
+        controller->getWorkLoop()->runAction([](OSObject *owner, void *, void *, void *,
+                                                void *) { return static_cast<SwitchXUDC *>(owner)->hostExpected(); },
+                                             controller);
+}
+
+extern "C" void switchxudc_set_host_owns_port(bool host)
+{
+    SwitchXUDC *controller = __atomic_load_n(&SwitchXUDC::running, __ATOMIC_ACQUIRE);
+    if (controller)
+        controller->getWorkLoop()->runAction(
+            [](OSObject *owner, void *host, void *, void *, void *) {
+                return static_cast<SwitchXUDC *>(owner)->portOwner(host != nullptr);
+            },
+            controller, host ? controller : nullptr);
 }
 
 void SwitchXUDC::setBus(bool on)
@@ -576,7 +631,6 @@ void SwitchXUDC::setBus(bool on)
             reportedOnBus = true;
             IOLog("SwitchUSB: functions registered, pull-up on (waiting for a host)\n");
         }
-        armDeliveryCheck(kDeliveryCheckMS, 1);
         return;
     }
     onBus = false;
@@ -590,12 +644,13 @@ void SwitchXUDC::setBus(bool on)
 // AppleUSBXDCI::softDisconnect clears DCTL.RUN_STOP and nothing more: the family puts us back with goOnBus(true).
 void SwitchXUDC::softDisconnect(uint32_t)
 {
-    setBus(false);
+    goOnBus(false);
 }
 
 // The family's own off-and-on (userland GoOffAndOnBus). 100 ms off so the host sees the detach.
 void SwitchXUDC::forceReEnumeration()
 {
+    if (hostOwnsPort) return;
     setBus(false);
     IOSleep(100);
     setBus(true);
@@ -783,6 +838,7 @@ bool switchxudc_start(IOService *provider, char *why, size_t whySize)
         snprintf(why, whySize, "IOUSBDeviceController::start failed");
         return false;
     }
+    __atomic_store_n(&SwitchXUDC::running, controller, __ATOMIC_RELEASE);
     controller->release();  // the registry holds it
     return true;
 }
