@@ -5840,11 +5840,13 @@ bad:
  * CADisplayTimer at the nominal refresh whose phase timer_callback aligns from IOMFBDisplay::timing_reference, display+0x6530,
  * shared timing memory the legacy family never provides: a free-running 60 Hz timer at a random phase to DC A's flip latch
  * (every boot's display stats: "vsync 0 sent", flip-wait mean 4-12 ms). With VBL, IOMFBDisplay::can_update_ also waits for the
- * previous swap (IOMobileFramebufferSwapWait), which NativeLegacyDisplay retires when its GPU copy is offered. Off by default
- * until one boot compares the display stats' present quantiles with and without it.
+ * previous swap (IOMobileFramebufferSwapWait), which NativeLegacyDisplay retires when its GPU copy is offered.
+ * r8-landscape (11-04): on. Every build so far ran on that free timer: "vsync 0 sent" in every stats line, presents a random
+ * 1-4 DC A frames apart (r7l: 20/s idle from the animated Astronomy poster, "frames 2:6 3:91 4+:3"). NativeLegacyDisplay finds
+ * the registration at the next frame end (watchVsync) and panics if V_BLANK stops while it is armed.
  */
 #ifndef NATIVE_IOSWITCH_CA_VBL
-#define NATIVE_IOSWITCH_CA_VBL 0
+#define NATIVE_IOSWITCH_CA_VBL 1
 #endif
 
 /*
