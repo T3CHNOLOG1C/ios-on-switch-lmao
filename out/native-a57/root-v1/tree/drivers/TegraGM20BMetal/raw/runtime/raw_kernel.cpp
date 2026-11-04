@@ -158,25 +158,37 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
 
 bool Kernel::import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind)
 {
+    if (!importPages(addr, bytes, bo)) {
+        err_ = "BoImport failed";
+        return false;
+    }
+    return bindImport(addr, bo, kind);
+}
+
+bool Kernel::importPages(void *addr, uint64_t bytes, Bo &bo)
+{
     const uint64_t page = info_.page_size;
     const uintptr_t base = uintptr_t(addr) & ~uintptr_t(page - 1);
     const uint64_t span = ((uintptr_t(addr) + bytes + page - 1) & ~uintptr_t(page - 1)) - base;
     TegraGM20BAbiBoImport in = {base, span};
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
-    if (call(TegraGM20BMethodBoImport, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS) {
-        err_ = "BoImport failed";
-        return false;
-    }
+    if (call(TegraGM20BMethodBoImport, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS) return false;
     bo.handle = r.handle;
     bo.bytes = span;
-    bo.vaBase = allocVa(span, kVaGranule);
+    return true;
+}
+
+bool Kernel::bindImport(void *addr, Bo &bo, uint32_t kind)
+{
+    const uintptr_t base = uintptr_t(addr) & ~uintptr_t(info_.page_size - 1);
+    bo.vaBase = allocVa(bo.bytes, kVaGranule);
     if (!bo.vaBase) {
         err_ = "out of GPU VA";
         free(bo);
         return false;
     }
-    if (!bind(bo.vaBase, bo.handle, span, kind)) {
+    if (!bind(bo.vaBase, bo.handle, bo.bytes, kind)) {
         free(bo);
         return false;
     }

@@ -557,6 +557,13 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 {
     return NSClassFromString(@"NBTexture");
 }
+// SPI: the descriptor's (0 for every texture the raw path keeps, rawShape)
+- (NSUInteger)rotation
+{
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    return [_descriptor respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(_descriptor, rotation)
+                                                     : 0;
+}
 - (void)dealloc
 {
     _twin = nil;
@@ -823,6 +830,40 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     if (!t->_rawOk && ![t rmTwin]) return nil;
     return (id<MTLTexture>)t;
 }
+// SPI (Core Animation): the same, one 2D image
+- (id<MTLTexture>)newLinearTextureWithDescriptor:(MTLTextureDescriptor *)d
+                                          offset:(NSUInteger)offset
+                                     bytesPerRow:(NSUInteger)row
+                                   bytesPerImage:(NSUInteger)image
+{
+    (void)image;
+    return [self newTextureWithDescriptor:d offset:offset bytesPerRow:row];
+}
+@end
+
+// Resource calls Core Animation makes on every texture and buffer that need no m2v twin (forwarding them would make one, an m2v
+// import of memory the raw path draws from). Ownership is accounting only (the twin's, when it has one); no content is protected
+// on this device; waitUntilComplete waits for the raw work submitted so far (the kernel's fence interrupt) and the twin's.
+@interface RMObject (Resource)
+@end
+@implementation RMObject (Resource)
+- (kern_return_t)setOwnerWithIdentity:(mach_port_t)identity
+{
+    id twin = _twin;
+    if (twin && [twin respondsToSelector:_cmd])
+        return ((kern_return_t (*)(id, SEL, mach_port_t))objc_msgSend)(twin, _cmd, identity);
+    return KERN_SUCCESS;
+}
+- (uint64_t)protectionOptions
+{
+    return 0;
+}
+- (void)waitUntilComplete
+{
+    if (gRM && gRM->raw) gRM->raw->wait(gRM->raw->submitted());
+    id twin = _twin;
+    if (twin && [twin respondsToSelector:_cmd]) ((void (*)(id, SEL))objc_msgSend)(twin, _cmd);
+}
 @end
 
 @interface RMSampler : RMObject {
@@ -1005,6 +1046,7 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 
 @interface RMCommandBuffer : RMObject {
 @public
+    uint64_t _protection;  // setProtectionOptions: (kept, no effect)
     std::vector<Cmd> _tape;
     std::vector<uint8_t> _bytes;
     std::vector<uint64_t> _extra;
@@ -1349,6 +1391,24 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     setBinding(_cb, OpDepthStencil, 0, 0, s,
                0);  // no Core Animation pass has a depth or stencil attachment (checked at the pass)
+}
+// SPI: lines one pixel wide are what the raw path draws (its default); any other width goes to m2v with the call
+- (void)setLineWidth:(float)width
+{
+    if (width == 1.0f) return;
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[self methodSignatureForSelector:_cmd]];
+    inv.selector = _cmd;
+    [inv setArgument:&width atIndex:2];
+    [self forwardInvocation:inv];
+}
+// No tile shaders (as m2v: the device says so); their calls stay m2v's, which refuses them
+- (NSUInteger)tileWidth
+{
+    return 0;
+}
+- (NSUInteger)tileHeight
+{
+    return 0;
 }
 - (void)setTriangleFillMode:(MTLTriangleFillMode)mode
 {
@@ -1839,6 +1899,16 @@ static void finish(RMCommandBuffer *cb, NSError *error);
 - (void)encodeSignalEventScheduled:(id<MTLEvent>)event value:(uint64_t)value
 {
     [self event:event value:value signal:true];
+}
+// SPI Core Animation calls on every command buffer: content protection does not exist on this device (no protected surfaces,
+// no secure display), so the options are kept for the getter and change nothing
+- (uint64_t)protectionOptions
+{
+    return _protection;
+}
+- (void)setProtectionOptions:(uint64_t)options
+{
+    _protection = options;
 }
 - (void)encodeCacheHintTag:(uint64_t)tag resourceGroups:(const id __unsafe_unretained *)groups count:(NSUInteger)count
 {
@@ -3081,7 +3151,7 @@ static void completionLoop()
 // ---- the rates line ----
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
-        switches, cpuOrdered, acquires;
+        switches, cpuOrdered, acquires, poolStalls;
 } gRates;
 
 size_t raw_metal_rates(char *out, size_t size)
@@ -3103,21 +3173,21 @@ size_t raw_metal_rates(char *out, size_t size)
     }
     raw::Device::Stats &k = gRM->raw->stats;
     const double per = c ? double(c) : 1.0;
-    const int n = snprintf(
-        out, size,
-        "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
-        "defer=%llu "
-        "abort=%llu rw=%llu pool=%lluMB/%llu imp=%llu/%lluMB clean=%.1fKB/c",
-        secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons, *reasons ? ")" : "",
-        (unsigned long long)(s.switches.load() - gRates.switches),
-        (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
-        (unsigned long long)(s.acquires.load() - gRates.acquires), (s.encodeUs.load() - gRates.encodeUs) / per,
-        (s.draws.load() - gRates.draws) / per, (s.passes.load() - gRates.passes) / per,
-        (s.copies.load() - gRates.copies) / per, (unsigned long long)(s.deferred.load() - gRates.deferred),
-        (unsigned long long)(s.aborted.load() - gRates.aborted),
-        (unsigned long long)(k.ringWaits.load() - gRates.ringWaits), (unsigned long long)(k.poolBytes.load() >> 20),
-        (unsigned long long)k.poolChunks.load(), (unsigned long long)k.imports.load(),
-        (unsigned long long)(k.importBytes.load() >> 20), k.cleanBytes.exchange(0) / 1024.0 / per);
+    const int n =
+        snprintf(out, size,
+                 "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
+                 "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c",
+                 secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons,
+                 *reasons ? ")" : "", (unsigned long long)(s.switches.load() - gRates.switches),
+                 (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
+                 (unsigned long long)(s.acquires.load() - gRates.acquires), (s.encodeUs.load() - gRates.encodeUs) / per,
+                 (s.draws.load() - gRates.draws) / per, (s.passes.load() - gRates.passes) / per,
+                 (s.copies.load() - gRates.copies) / per, (unsigned long long)(s.deferred.load() - gRates.deferred),
+                 (unsigned long long)(s.aborted.load() - gRates.aborted),
+                 (unsigned long long)(k.ringWaits.load() - gRates.ringWaits),
+                 (unsigned long long)(k.poolBytes.load() >> 20), (unsigned long long)k.poolChunks.load(),
+                 (unsigned long long)(k.poolStalls.load() - gRates.poolStalls), (unsigned long long)k.imports.load(),
+                 (unsigned long long)(k.importBytes.load() >> 20), k.cleanBytes.exchange(0) / 1024.0 / per);
     gRates.raw = raw;
     gRates.m2v = m2v;
     gRates.encodeUs = s.encodeUs.load();
@@ -3129,9 +3199,49 @@ size_t raw_metal_rates(char *out, size_t size)
     gRates.switches = s.switches.load();
     gRates.cpuOrdered = s.cpuOrdered.load();
     gRates.acquires = s.acquires.load();
+    gRates.poolStalls = k.poolStalls.load();
     gRates.ringWaits = k.ringWaits.load();
     gRates.lastUs = now;
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
+}
+
+// raw_metal_prepare's thread and what it made (taken once, by raw_metal_device_open)
+static struct {
+    std::mutex lock;
+    std::thread thread;
+    std::string path, err;
+    uint64_t stack = 0;
+    raw::Device *dev = nullptr;
+    bool started = false;
+} gPrepared;
+
+static raw::Device *openDevice(const char *packPath, uint64_t stack, std::string &err)
+{
+    raw::Device *dev = new raw::Device;
+    if (!dev->open(packPath, stack, err)) {
+        delete dev;  // its connection closes: the kernel frees what it held
+        return nullptr;
+    }
+    dev->warm();
+    return dev;
+}
+
+void raw_metal_prepare(const char *packPath, uint64_t stack)
+{
+    std::lock_guard<std::mutex> l(gPrepared.lock);
+    if (gPrepared.started) return;
+    gPrepared.started = true;
+    gPrepared.path = packPath;
+    gPrepared.stack = stack;
+    gPrepared.thread = std::thread([] {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        pthread_setname_np("com.ioswitch.raw.open");
+        std::string err;
+        raw::Device *dev = openDevice(gPrepared.path.c_str(), gPrepared.stack, err);
+        std::lock_guard<std::mutex> m(gPrepared.lock);
+        gPrepared.dev = dev;
+        gPrepared.err = err;
+    });
 }
 
 id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTLDevice> fallback, NSString **error)
@@ -3139,11 +3249,26 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     static std::mutex once;
     std::lock_guard<std::mutex> l(once);
     if (gRM) return gRM->device;  // one per process
-    raw::Device *dev = new raw::Device;
+    raw::Device *dev = nullptr;
     std::string err;
-    if (!dev->open(packPath, stack, err)) {
+    bool prepared = false;
+    {
+        std::unique_lock<std::mutex> m(gPrepared.lock);
+        if (gPrepared.started && gPrepared.thread.joinable()) {
+            m.unlock();
+            gPrepared.thread.join();  // what is left of it: it began with the plugin, before the m2v device's open
+            m.lock();
+        }
+        if (gPrepared.started && gPrepared.path == packPath && gPrepared.stack == stack) {
+            prepared = true;
+            dev = gPrepared.dev;
+            err = gPrepared.err;
+            gPrepared.dev = nullptr;
+        }
+    }
+    if (!prepared) dev = openDevice(packPath, stack, err);
+    if (!dev) {
         if (error) *error = [NSString stringWithUTF8String:err.c_str()];
-        delete dev;  // its connection closes: the kernel frees what it held
         return nil;
     }
     // The device class: a subclass of the m2v device's own (an _MTLDevice conforming to MTLDevice and MTLDeviceSPI on the iPad),

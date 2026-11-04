@@ -5,6 +5,7 @@
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
+#import <objc/message.h>
 #include <algorithm>
 #include <mach/mach.h>
 #include "../test/frame.h"
@@ -18,6 +19,13 @@
 #endif
 
 extern "C" void pushcount_report(const char *what);
+// What Core Animation does with every command buffer it makes: no content protection (setProtectionOptions:, SPI)
+static void caCommandBuffer(id<MTLCommandBuffer> cb)
+{
+    static const SEL protection = NSSelectorFromString(@"setProtectionOptions:");
+    if ([(id)cb respondsToSelector:protection]) ((void (*)(id, SEL, uint64_t))objc_msgSend)(cb, protection, 0);
+}
+
 static void missing(const char *cls, const char *sel)
 {
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
@@ -239,6 +247,7 @@ int main(int argc, char **argv)
             @autoreleasepool {
                 const uint64_t c0 = threadNs();
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
+                caCommandBuffer(cb);
                 unsigned drawIndex = 0;
                 for (const frame::Pass &pass : frame::passes(f, shape, blur.size(), uber.size())) {
                     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -313,6 +322,7 @@ int main(int argc, char **argv)
                 if ((f & 1) && !extra.empty()) {
                     [cb commit];
                     cb = [queue commandBuffer];
+                    caCommandBuffer(cb);
                     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
                     rp.colorAttachments[0].texture = tex[frame::BLUR0];
                     rp.colorAttachments[0].loadAction = MTLLoadActionLoad;

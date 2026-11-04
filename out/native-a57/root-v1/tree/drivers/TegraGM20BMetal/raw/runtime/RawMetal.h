@@ -14,6 +14,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+// Starts the raw path's own setup on a thread of its own (the pack read, the kernel connection, the channel and its context, the
+// first pool chunk), so it runs beside the m2v device's open; raw_metal_device_open with the same pack and key takes its result.
+void raw_metal_prepare(const char *packPath, uint64_t stack);
 // A raw device over the pack at `packPath` (its stack key must be `stack`; 0: any, for host tests), wrapping the m2v device
 // `fallback` (nil on a host benchmark: nothing can fall back then), or nil (the reason in *error).
 id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTLDevice> fallback, NSString **error);

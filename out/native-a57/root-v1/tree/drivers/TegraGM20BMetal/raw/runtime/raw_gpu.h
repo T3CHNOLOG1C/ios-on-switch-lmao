@@ -21,6 +21,8 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <thread>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -259,6 +261,11 @@ public:
     bool createSampler(const SamplerDesc &d, Sampler &s);
     void destroySampler(Sampler &s);
 
+    // The first pool chunk made now (its pages wired and imported), off the render thread's first texture (raw_metal_prepare),
+    // and the pool's grower started: the next chunk is made on its own thread once the free bytes of the pool's shared chunks fall
+    // below a low mark, so the render thread's allocations find room (Stats::poolStalls counts the ones that had to grow it).
+    void warm();
+
     // Submission. begin() opens the one command buffer (the caller serialises encoding and commit).
     CommandBuffer *begin();
     uint32_t completed() const { return *fence_; }
@@ -277,7 +284,7 @@ public:
     int orderOthersAfter(uint32_t &waits) { return k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits); }
     struct Stats {
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, imports{0}, importBytes{0},
-            poolBytes{0}, poolChunks{0}, cleanBytes{0};
+            poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
     } stats;
 
 private:
@@ -324,6 +331,13 @@ private:
         uint64_t lastCommit = 0;
     };
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
+    // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
+    uint64_t poolFree_ = 0;
+    bool growing_ = false, stopping_ = false;
+    std::condition_variable grow_, grown_;
+    std::thread grower_;
+    bool newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index);
+    void growLoop();
     uint64_t commitCount_ = 0;
 
     bool init(std::string &err);

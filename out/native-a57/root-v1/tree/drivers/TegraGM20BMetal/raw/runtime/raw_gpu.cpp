@@ -8,6 +8,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <algorithm>
 #include <cmath>
@@ -176,6 +177,12 @@ void Device::retire(Ring &r, uint32_t seqno)
 Device::~Device()
 {
     // the render server keeps its device until it exits; a host test's device: the kernel frees what the connection held
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        stopping_ = true;
+    }
+    grow_.notify_all();
+    if (grower_.joinable()) grower_.join();
 }
 
 bool Device::open(const char *packPath, uint64_t stack, std::string &err)
@@ -312,8 +319,8 @@ bool Device::init(std::string &err)
         byKey_[pp[i].keyHash] = i;
     }
     // the first pool chunk now, at the render server's start, not under its first frame
-    Span s;
-    if (poolAlloc(pageSize(), s)) poolFree(s);
+    uint32_t chunk;
+    newChunk(kChunk, false, nullptr, chunk);
     return true;
 }
 
@@ -326,13 +333,69 @@ Pipeline *Device::pipeline(uint64_t keyHash)
 // ---- device: memory ----
 
 // A span of `bytes` (page multiple) from the pool: first fit in a chunk, else a new chunk (one BoImport of fresh anonymous
-// memory; its pages are wired and their zeros cleaned to memory by the kext). A span of more than kDedicated gets a chunk of its
-// own, given back whole when the span is freed.
+// memory; its pages are wired and their zeros cleaned to memory by the kext: ~10 ms for 16 MiB on the device, r7l). A span of more
+// than kDedicated gets a chunk of its own, given back whole when the span is freed. The shared chunks grow ahead of need: once their
+// free bytes fall below kLowMark the grower thread makes the next one, so this (the render thread's resource creation) finds room;
+// one that does not waits for a chunk the grower is making, or makes one itself (Stats::poolStalls: a burst outran the mark).
+constexpr uint64_t kLowMark =
+    kChunk;  // a whole chunk ahead: a burst of a chunk's worth finds room while the next is wired
+
+// lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring and taken again); the chunk's index in chunks_
+bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index)
+{
+    vm_address_t memory = 0;
+    if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return false;
+    Chunk ch;
+    ch.memory = reinterpret_cast<void *>(memory);
+    ch.bytes = size;
+    ch.dedicated = dedicated;
+    if (unlocked) unlocked->unlock();
+    const bool wired = k_.importPages(ch.memory, size, ch.bo);
+    if (unlocked) unlocked->lock();
+    if (!wired || !k_.bindImport(ch.memory, ch.bo, kPteKindPitch)) {
+        vm_deallocate(mach_task_self(), memory, size);
+        return false;
+    }
+    uint32_t c = 0;
+    while (c < chunks_.size() && chunks_[c].memory) c++;
+    if (c == chunks_.size()) chunks_.emplace_back();
+    if (!dedicated) {
+        ch.free[0] = size;
+        poolFree_ += size;
+    }
+    chunks_[c] = std::move(ch);
+    stats.poolBytes += size;
+    stats.poolChunks++;
+    index = c;
+    return true;
+}
+
+void Device::growLoop()
+{
+    std::unique_lock<std::mutex> l(lock_);
+    for (;;) {
+        grow_.wait(l, [&] { return stopping_ || growing_; });
+        if (stopping_) return;
+        uint32_t c;
+        newChunk(kChunk, false, &l, c);  // failing, the render thread's next allocation tries itself
+        growing_ = false;
+        grown_.notify_all();
+    }
+}
+
 bool Device::poolAlloc(uint64_t bytes, Span &s)
 {
     bytes = (bytes + pageSize() - 1) & ~uint64_t(pageSize() - 1);
     s = {};
-    if (bytes <= kDedicated)
+    if (bytes >
+        kDedicated) {  // its own chunk, made now (rare: no Core Animation texture of the 720p screen is that large)
+        uint32_t c;
+        if (!newChunk(bytes, true, nullptr, c)) return false;
+        chunks_[c].used = bytes;
+        s = {c, 0, bytes, chunks_[c].bo.va, static_cast<uint8_t *>(chunks_[c].memory)};
+        return true;
+    }
+    for (int pass = 0; pass < 3; pass++) {
         for (uint32_t c = 0; c < chunks_.size(); c++) {
             Chunk &ch = chunks_[c];
             if (ch.dedicated || !ch.memory) continue;
@@ -342,32 +405,42 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
                 ch.free.erase(it);
                 if (left) ch.free[offset + bytes] = left;
                 ch.used += bytes;
+                poolFree_ -= bytes;
                 s = {c, offset, bytes, ch.bo.va + offset, static_cast<uint8_t *>(ch.memory) + offset};
+                if (poolFree_ < kLowMark && !growing_ && grower_.joinable()) {  // the next chunk, off this thread
+                    growing_ = true;
+                    grow_.notify_one();
+                }
                 return true;
             }
         }
-    const bool dedicated = bytes > kDedicated;
-    const uint64_t size = dedicated ? bytes : kChunk;
-    vm_address_t memory = 0;
-    if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return false;
-    Chunk ch;
-    ch.memory = reinterpret_cast<void *>(memory);
-    ch.bytes = size;
-    ch.dedicated = dedicated;
-    if (!k_.import(ch.memory, size, ch.bo, kPteKindPitch)) {
-        vm_deallocate(mach_task_self(), memory, size);
-        return false;
+        if (pass == 2) break;
+        stats.poolStalls++;
+        if (growing_) {  // the grower is making one: wait for it rather than wire a second
+            std::unique_lock<std::mutex> l(lock_, std::adopt_lock);
+            grown_.wait(l, [&] { return !growing_; });
+            l.release();
+            continue;
+        }
+        uint32_t c;
+        if (!newChunk(kChunk, false, nullptr, c)) return false;
     }
-    uint32_t c = 0;
-    while (c < chunks_.size() && chunks_[c].memory) c++;
-    if (c == chunks_.size()) chunks_.emplace_back();
-    if (!dedicated && bytes < size) ch.free[bytes] = size - bytes;
-    ch.used = bytes;
-    chunks_[c] = std::move(ch);
-    stats.poolBytes += size;
-    stats.poolChunks++;
-    s = {c, 0, bytes, chunks_[c].bo.va, static_cast<uint8_t *>(chunks_[c].memory)};
-    return true;
+    return false;
+}
+
+void Device::warm()
+{
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        uint32_t c;
+        while (poolFree_ <= kLowMark && newChunk(kChunk, false, nullptr, c)) {}  // the first and the one ahead of it
+    }
+    if (!grower_.joinable())
+        grower_ = std::thread([this] {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            pthread_setname_np("com.ioswitch.raw.pool");
+            growLoop();
+        });
 }
 
 void Device::poolFree(Span &s)
@@ -385,6 +458,7 @@ void Device::poolFree(Span &s)
         return;
     }
     uint64_t offset = s.offset, bytes = s.bytes;
+    poolFree_ += bytes;
     auto next = ch.free.lower_bound(offset);
     if (next != ch.free.end() && offset + bytes == next->first) {
         bytes += next->second;

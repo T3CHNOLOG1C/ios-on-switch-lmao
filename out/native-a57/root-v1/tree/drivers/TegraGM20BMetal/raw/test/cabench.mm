@@ -10,6 +10,7 @@
 //              the first benchmark (the uber shaders' other buffer slots unbound: m2v binds zero buffers there)
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <objc/message.h>
 #import <IOSurface/IOSurface.h>
 #include <algorithm>
 #include <mach/mach.h>
@@ -331,6 +332,10 @@ int main(int argc, char **argv)
             @autoreleasepool {
                 const uint64_t c0 = threadNs(), w0 = wallNs();
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
+                // as Core Animation does on every command buffer (r7l: the raw path once sent each of them to m2v for it)
+                static const SEL protection = NSSelectorFromString(@"setProtectionOptions:");
+                if ([(id)cb respondsToSelector:protection])
+                    ((void (*)(id, SEL, uint64_t))objc_msgSend)(cb, protection, 0);
                 if (mode & 4)
                     [glyphs replaceRegion:MTLRegionMake2D((frame * 64) % 256, 0, 64, 64)
                               mipmapLevel:0

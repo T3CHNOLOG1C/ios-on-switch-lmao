@@ -8,6 +8,7 @@
 // sleeps until it does (a condition variable, as the kext's interrupt), and "mock GPU: deadlock" aborts if nothing can run.
 // MOCK_GPU_LOG=<file>: every submission run, "ch seqno kick_us start_us end_us acquires", and the WaitFence calls by thread.
 // MOCK_IGNORE_ACQUIRES=1: the GPU runs submissions without their acquires (ordercheck.py's negative control).
+// MOCK_IMPORT_US=<n>: BoImport takes n us per 16 MiB (the kext's wiring; selcheck's pool test).
 #include <IOKit/IOKitLib.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -258,6 +259,10 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     }
     case TegraGM20BMethodBoImport: {
         const struct TegraGM20BAbiBoImport *a = in;
+        static const char *slow =
+            NULL; /* MOCK_IMPORT_US=<n>: n us per 16 MiB wired, as the kext's BoImport (r7l: 10.5 ms) */
+        if (!slow) slow = getenv("MOCK_IMPORT_US") ? getenv("MOCK_IMPORT_US") : "";
+        if (*slow) usleep((useconds_t)((uint64_t)atoi(slow) * a->bytes / (16u << 20)));
         unsigned h = atomic_fetch_add(&nbo, 1);
         bos[h] = (struct bo){-1, a->bytes, (void *)(uintptr_t)a->address};
         struct TegraGM20BAbiBoAllocReply r = {.handle = h, .map_token = 0};

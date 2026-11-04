@@ -378,6 +378,12 @@ id openDevice(unsigned port)
             strcmp(getprogname(), "ScreenshotServicesService") != 0 &&
             !knobOn("TEGRA_GPU_ALL_CLIENTS", "tegra-gpu-all-clients", true))
             return nil;
+        // The raw GM20B path's own setup (its pack, channel and context, the first pool chunk) starts now, beside the m2v device's
+        // open below; raw_metal_device_open takes what it made, so the render server's first frame waits for neither twice.
+        if (renderServer && !(getenv("TEGRA_RAW_METAL") && strcmp(getenv("TEGRA_RAW_METAL"), "0") == 0)) {
+            char pack[1100] = "";
+            if (rawPack(pack, sizeof pack)) raw_metal_prepare(pack, uint64_t(TEGRA_RAW_STACK));
+        }
         if (!knob("NMB_MEMO_MB", "tegra-m2v-memo-mb") && !renderServer)
             setenv("NMB_MEMO_MB", "32", 0);  // read by the bridge
         // Read by the runtime. In the render server too: its pools double their blocks, and each block is one BoAlloc on the
