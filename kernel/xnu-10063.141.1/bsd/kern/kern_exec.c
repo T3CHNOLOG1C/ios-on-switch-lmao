@@ -7992,6 +7992,38 @@ native_ioswitch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("IOSwitch raw boot: display gamut %s: MobileGestalt cache dropped (%d)\n", srgb ? "sRGB" : "not sRGB", error);
 }
 
+/* The ambient light sensor (drivers/SwitchBrightness/SwitchALS.cpp): MobileGestalt's ambient-light-sensor is an
+ * IOServiceGetMatchingService on {PrimaryUsagePage 0xff00, PrimaryUsage 4}, which the sensor's HID service answers, and
+ * Settings' Auto-Brightness switch and CoreBrightness's DisplayBrightnessAuto both gate on it. The answer is precacheable
+ * (libMobileGestalt question flags), so it lives in the same build-keyed cache, and a cache made without the service says
+ * false for good. As for the gamut, a change drops the cache once: the marker is present while the service was
+ * registered at launchd's exec (the board thread registers it within a second of the kernel's start, before the root
+ * mount completes; a boot where it was late drops the cache again on the next). */
+extern bool switch_als_published(void);
+static void
+native_ioswitch_als_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/ioswitch/ambient-light-sensor";
+	const int als = switch_als_published();
+	vnode_t vp = NULLVP;
+	const int marked = !vnode_lookup(marker, 0, &vp, vfs_context_current());
+	if (vp) vnode_put(vp);
+	if (marked == als) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error && marked) {
+		if (!(error = copyout(marker, request.path, sizeof(marker)))) error = unlink(p, &request, &result);
+	} else if (!error) {
+		error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
+		if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	}
+	printf("IOSwitch raw boot: ambient light sensor %s: MobileGestalt cache dropped (%d)\n", als ? "on" : "off", error);
+}
+
 /* Portrait-native: Core Animation must composite the landscape interface into the portrait framebuffer itself. backboardd
  * hands every interface orientation to the window server's first display as if it were a mirrored one
  * (UpdateMirroredDisplayOrientationWithInterfaceOrientation: [[CAWindowServer serverIfRunning].displays[0] setOrientation:]),
@@ -8104,6 +8136,7 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	else {
 		native_ioswitch_portrait_cache(p, scratch, data_mount);
 		native_ioswitch_gamut_cache(p, scratch, data_mount);
+		native_ioswitch_als_cache(p, scratch, data_mount);
 		native_ioswitch_portrait_display(p, scratch, data_mount);
 		native_ioswitch_system_app_migration(p, scratch, data_mount);
 	}
