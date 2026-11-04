@@ -19,8 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import native_xnu_layout  # noqa: E402
-from scripts.build_native_loader import (NATIVE_FULL_RAM_EXCLUSIONS, STAMPS_BYTES, STAMPS_PROPERTY,  # noqa: E402
-                                         build as build_loader)
+from scripts.build_native_loader import (NATIVE_FULL_RAM_EXCLUSIONS, STAGE_SOURCE, STAMPS_BYTES,  # noqa: E402
+                                         STAMPS_PROPERTY, build as build_loader, stage_into_bl33)
 from scripts.package_native_handoff import legacy_image, LOAD  # noqa: E402
 
 NAME = 'ioswitch'
@@ -50,6 +50,14 @@ USB_DEVICE_CONFIGURATION = 'unknownHardware'
 # USB 2.0 host mode on the same port (drivers/SwitchUSB SwitchXHCI): a keyboard, mouse or flash drive through a USB-C OTG
 # adapter or an unpowered hub. True writes /arm-io/usb-xhci, the driver's switch; the role then follows the BM92T36.
 USB_HOST = False
+# The panel's colour gamut as iOS learns it: /product artwork-display-gamut, MobileGestalt's ArtworkDisplayGamut, whose
+# HasExtendedColorDisplay is "== P3". 'sRGB' (what sRGB iPads carry) turns off deep colour everywhere: QuartzCore's
+# CADeviceUseCIF10 (so the display reports no extended colours, and CADisplayMode, FBSDisplayConfiguration and UIScreen
+# say sRGB), UIKit's _supportsDeepColor, and WebCore's screenSupportsExtendedColor, so WebKit tiles are BGRA8 rather than
+# two-plane b3a8 and Core Animation stops making w30r surfaces, formats the GM20B only reaches through copies. 'P3' is
+# J120's own. Asset catalog images that this IPSW ships only in P3 (some onboarding and tips art) are not found under
+# sRGB. The kernel drops MobileGestalt's cache when this changes (kern_exec.c native_ioswitch_gamut_cache).
+DISPLAY_GAMUT = 'sRGB'
 COMMAND_LINE = ' '.join([
     '-v', 'serial=0', 'debug=0x14e', 'kt_fixed_zones=120', 'cpus=1', 'armcpu-self-ipi=1',
     'ioswitch-diag=1', 'sheng-pmgr=2', '-no_slto_panic',
@@ -370,7 +378,8 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
                        ('product-description', b'iPad Pro (12.9-inch) (2nd generation)\0'),
                        ('model', b'iPad7,1\0'), ('artwork-device-idiom', b'pad\0'),
                        ('artwork-device-subtype', u32(2732)), ('artwork-scale-factor', u32(2)),
-                       ('artwork-display-gamut', b'P3\0'), ('compatible-device-fallback', b'iPad6,7\0'),
+                       ('artwork-display-gamut', DISPLAY_GAMUT.encode() + b'\0'),
+                       ('compatible-device-fallback', b'iPad6,7\0'),
                        ('thin-bezel', u32(1)),
                        ('product-id', bytes.fromhex('e9fefef6e6f9d12a5ba1a2551866cbbd749f0ec3'))):
         put(product, key, value)
@@ -444,8 +453,45 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
 # seconds on it (3 by default; the entry's own key wins, main.c _auto_launch). Holding VOL- still opens hekate's menu.
 # scan_dev_for_extlinux: the distro scan's extlinux.conf probe (this entry has none) becomes the first boot timing
 # sample, taken once U-Boot, the SD card and hekate's env are up (native/loader/stamps.h).
+# bootcmd_mmc0=true: should boot.scr not take over, U-Boot's distro loop goes on to mmc0, the eMMC (initialize, read
+# its partition table, scan it); never. bl33_sd_only also drops mmc0 from boot_targets for failures before hekate's
+# env is imported (an SD card U-Boot cannot read).
 HEKATE_ENTRY = ('[IOSwitch]\nl4t=1\nboot_prefixes=/switchroot/{name}/\nid=IOSWITCH\nbootwait=0\n'
-                'scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\n')
+                'scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\nbootcmd_mmc0=true\n')
+# U-Boot's built-in environment string in switchroot's bl33.bin (include/configs/tegra-common-post.h BOOT_TARGET_DEVICES;
+# distro_bootcmd walks it): SD (mmc1) only, same length, so nothing else in the binary moves.
+BOOT_TARGETS = (b'\0boot_targets=mmc1 mmc0 \0', b'\0boot_targets=mmc1      \0')
+
+
+def bl33_sd_only(bl33: bytes) -> bytes:
+    """switchroot's U-Boot that never falls back to the eMMC (BOOT_TARGETS); everything else byte for byte."""
+    old, new = BOOT_TARGETS
+    if bl33.count(old) != 1 or new in bl33:
+        raise SystemExit('bl33.bin: U-Boot boot_targets default not found exactly once')
+    return bl33.replace(old, new)
+
+
+def boot_script(text: str, loader_bytes: int, bl33: bytes, constants: dict, staged_bytes: int) -> str:
+    """boot.cmd from the template (TEMPLATE): this entry's paths, the loader's size, and bl33.bin's size, header and
+    trailer words for the staged kernel window (native/loader/stage.h)."""
+    prefix = '/switchroot/' + NAME + '/'
+    for old in ('/switchroot/ioswitch-native-xnu-v23/', '/switchroot/ioswitch-native-xnu-v10/'):
+        text = text.replace(old, prefix)
+    text = text.replace('0x1c040', hex(loader_bytes))
+    trailer = STAGE_SOURCE + staged_bytes
+    for name, value in (('BL33_BYTES', len(bl33)), ('STAGE_STREAM', constants['STREAM_BYTES']),
+                        ('STAGE_BYTES', staged_bytes), ('STAGE_ID_LOW', constants['STAGE_ID'] & 0xFFFFFFFF),
+                        ('STAGE_ID_HIGH', constants['STAGE_ID'] >> 32),
+                        *((f'TRAILER_{i}', trailer + 4 * i) for i in range(6))):
+        if f'@{name}@' not in text:
+            raise SystemExit(f'boot script template has no @{name}@')
+        text = text.replace(f'@{name}@', hex(value))
+    # The command line now lives in the layout; drop the fixed-address args patch.
+    text, removed = re.subn(r'\n# Select raw only.*?\nfi\n', '\n', text, flags=re.S)
+    if (removed != 1 or re.search(r'/switchroot/(?!' + NAME + '/)', text) or 'raw-args' in text or
+            'crc32 -v' in text or '@' in text or 'kernel-window.bin' in text):
+        raise SystemExit('boot script template did not match')
+    return text
 
 
 def main():
@@ -478,24 +524,19 @@ def main():
         command_line=command_line, trustcache_path=trust,
         data_seed_path=Path(sources['NativeDataSeed']['path']),
         video=[0xf5a00000, 0, 2880, 720, 1280, 0x320], full_ram=True)
-    build_loader(staging / 'layout', staging / 'adapter', native_experiment=True,
-                 storage_probe=True, storage_files=True, root_boot=True)
+    built = build_loader(staging / 'layout', staging / 'adapter', native_experiment=True,
+                         storage_probe=True, storage_files=True, root_boot=True)
     loader = legacy_image((staging / 'adapter/loader.bin').read_bytes(), os_type=5, kind=2,
                           name='Loader', load=LOAD, entry=LOAD)
-    # Packed by the loader builder (its nonzero extents back to back; the loader expands it into XNU's window).
+    # Packed by the loader builder (its nonzero extents, LZ4-compressed, back to back; the loader decodes it into
+    # XNU's window). It rides in bl33.bin after U-Boot (native/loader/stage.h): hekate reads it at SDR104.
     window = (staging / 'adapter/kernel-window.bin').read_bytes()
+    constants = built['constants']
+    if constants['SOURCE'] != STAGE_SOURCE or constants['PACKED_BYTES'] != len(window):
+        raise SystemExit('loader was not built for the bl33-staged window')
+    bl33 = stage_into_bl33(bl33_sd_only((FIRMWARE / 'bl33.bin').read_bytes()), window, constants['STREAM_BYTES'])
 
-    prefix = '/switchroot/' + NAME + '/'
-    text = TEMPLATE.read_text()
-    for old in ('/switchroot/ioswitch-native-xnu-v23/', '/switchroot/ioswitch-native-xnu-v10/'):
-        text = text.replace(old, prefix)
-    text = text.replace('0x1c040', hex(len(loader)))
-    text = text.replace('0x4324000', hex(len(window)))
-    # The command line now lives in the layout; drop the fixed-address args patch.
-    text, removed = re.subn(r'\n# Select raw only.*?\nfi\n', '\n', text, flags=re.S)
-    if (removed != 1 or re.search(r'/switchroot/(?!' + NAME + '/)', text) or 'raw-args' in text or
-            'crc32 -v' in text or hex(len(window)) not in text):
-        raise SystemExit('boot script template did not match')
+    text = boot_script(TEMPLATE.read_text(), len(loader), bl33, constants, len(window))
     script = text.encode('ascii')
     scr = legacy_image(struct.pack('>II', len(script), 0) + script, os_type=17, kind=6, name='Boot')
 
@@ -503,10 +544,10 @@ def main():
     if out.exists():
         shutil.rmtree(out)
     files = {f'switchroot/{NAME}/{n}': (FIRMWARE / n).read_bytes()
-             for n in ('bl31.bin', 'bl33.bin', 'oled-sku3.dtb', 'exporter.uimg')}
+             for n in ('bl31.bin', 'oled-sku3.dtb', 'exporter.uimg')}
     files.update({
+        f'switchroot/{NAME}/bl33.bin': bl33,
         f'switchroot/{NAME}/loader.uboot.bin': loader,
-        f'switchroot/{NAME}/kernel-window.bin': window,
         f'switchroot/{NAME}/boot.cmd': script,
         f'switchroot/{NAME}/boot.scr': scr,
         f'bootloader/ini/{NAME}.ini': HEKATE_ENTRY.format(name=NAME).encode(),

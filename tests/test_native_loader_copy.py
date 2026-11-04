@@ -29,7 +29,7 @@ class NativeLoaderCopyTests(unittest.TestCase):
                 "-o", str(executable)
             ], check=True)
             output = subprocess.check_output([str(executable)], text=True)
-            self.assertIn("PASS 32 exact 4GiB map checks and 25 malformed input controls", output)
+            self.assertIn("PASS 32 exact 4GiB map checks and 26 malformed input controls", output)
 
     def test_unpack_decodes_compressed_window_exactly(self):
         """loader_unpack (the loader's LZ4 decode under its cacheable regime) against the builder's compress_window, under

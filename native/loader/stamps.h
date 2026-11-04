@@ -21,7 +21,7 @@
 #define IOSW_BOOT_STAMPS_UBOOT_COUNT 8u
 #define IOSW_TIMERUS_PA UINT64_C(0x60005010) /* TIMERUS_CNTR_1US */
 
-#define IOSW_STAMP_RECORD_MAGIC UINT64_C(0x31504d4154534f49) /* "IOSTAMP1" */
+#define IOSW_STAMP_RECORD_MAGIC UINT64_C(0x32504d4154534f49) /* "IOSTAMP2" */
 enum iosw_stamp {
     IOSW_STAMP_MAGIC = 0,
     IOSW_STAMP_WORDS,          /* IOSW_STAMP_COUNT */
@@ -37,10 +37,15 @@ enum iosw_stamp {
     IOSW_STAMP_UBOOT_PREP,     /* bootm prep done */
     IOSW_STAMP_UBOOT_GO,       /* SD metadata ready, bootm go next */
     IOSW_STAMP_LOADER_ENTRY,   /* loader's first instructions */
+    IOSW_STAMP_EMC_START,      /* EMC raise (emc.h): first BPMP request ... */
+    IOSW_STAMP_EMC_END,        /* ... and done, whatever the result (both 0 when switch-emc is off) */
     IOSW_STAMP_UNPACK_START,   /* cacheable regime on, first payload byte */
     IOSW_STAMP_UNPACK_END,     /* window decoded and zero-filled */
     IOSW_STAMP_COPY_DONE,      /* cleaned to PoC, caches and MMU off again */
     IOSW_STAMP_XNU_ENTRY,      /* branch to XNU */
+    IOSW_STAMP_EMC_RESULT,     /* enum loader_emc_result | (uint32_t)BPMP return code << 32 */
+    IOSW_STAMP_EMC_RATES,      /* EMC kHz before | kHz after << 32 */
+    IOSW_STAMP_EMC_CORE,       /* VDD_CORE mV | BPMP channel 0 area << 32 */
     IOSW_STAMP_COUNT
 };
 #define IOSW_STAMP_RECORD_BYTES (IOSW_STAMP_COUNT * 8u)

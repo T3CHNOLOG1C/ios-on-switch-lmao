@@ -111,14 +111,18 @@ if test "${handoff_status}" = "READY"; then
     fi
 fi
 
-# Stage the kernel window (packed: its nonzero extents, LZ4-compressed, back to
-# back; the loader decodes it into XNU's window) after the size check. Files are
-# checked by size and header only (no CRC passes): FAT reads have their own card
-# CRC. fatsize is the size check: this U-Boot's FatFS glue sets filesize to the
-# length asked of load, not the file's, so the itest after each load always holds.
+# The kernel window (its nonzero extents, LZ4-compressed, back to back; the
+# loader decodes it into XNU's window) rides in bl33.bin after U-Boot
+# (native/loader/stage.h): hekate has already read it, with U-Boot, to
+# 0xAA101000. fatsize pins bl33.bin's size, as it pinned the old window file's
+# (it is the size check here: this U-Boot's FatFS glue sets filesize to the
+# length asked of load, not the file's, so the itest after each load always
+# holds). The header page before the window and the trailer page after it carry
+# its sizes and its id (the staged bytes' SHA-256, also built into the loader):
+# this build's window, whole, in RAM. No CRC pass: SD reads have their own card CRC.
 if test "${handoff_status}" = "READY"; then
-    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-xnu-v23/kernel-window.bin; then
-        if itest.l ${filesize} == 0x4324000; then
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-xnu-v23/bl33.bin; then
+        if itest.l ${filesize} == @BL33_BYTES@; then
             true
         else
             setenv handoff_status KERNEL_SIZE_FAILED
@@ -128,15 +132,15 @@ if test "${handoff_status}" = "READY"; then
     fi
 fi
 if test "${handoff_status}" = "READY"; then
-    if load mmc ${devnum}:${distro_bootpart} 0xA2000000 /switchroot/ioswitch-native-xnu-v23/kernel-window.bin 0x4324000; then
-        if itest.l ${filesize} == 0x4324000; then
-            echoe "KERNEL LOADED"
+    if itest.l *0xAA100000 == 0x57534f49 && itest.l *0xAA100004 == 0x4e49574b && itest.l *0xAA100008 == 1 && itest.l *0xAA10000C == 0x1000 && itest.l *0xAA100010 == @STAGE_STREAM@ && itest.l *0xAA100014 == @STAGE_BYTES@ && itest.l *0xAA100018 == @STAGE_ID_LOW@ && itest.l *0xAA10001C == @STAGE_ID_HIGH@; then
+        if itest.l *@TRAILER_0@ == 0x57534f49 && itest.l *@TRAILER_1@ == 0x444e454b && itest.l *@TRAILER_2@ == @STAGE_STREAM@ && itest.l *@TRAILER_3@ == @STAGE_BYTES@ && itest.l *@TRAILER_4@ == @STAGE_ID_LOW@ && itest.l *@TRAILER_5@ == @STAGE_ID_HIGH@; then
+            echoe "KERNEL STAGED"
             setexpr.l ios_window *0x60005010
         else
-            setenv handoff_status KERNEL_READ_CHECK_FAILED
+            setenv handoff_status KERNEL_TRAILER_FAILED
         fi
     else
-        setenv handoff_status KERNEL_READ_FAILED
+        setenv handoff_status KERNEL_HEADER_FAILED
     fi
 fi
 

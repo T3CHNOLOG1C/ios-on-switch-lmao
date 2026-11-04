@@ -1,5 +1,6 @@
 #include "copy.h"
 #include "layout.h"
+#include "stage.h"
 
 #define PAGE UINT64_C(0x1000)
 #define BLOCK UINT64_C(0x200000)
@@ -16,7 +17,8 @@
 
 /* Image-backed, aligned storage: the loader does not depend on BSS clearing.
  * 0=L1, 1=L2 RAM, 2=L2 framebuffer, 3=adapter L3, 4=source tail L3,
- * 5=destination head L3, 6=destination tail L3. */
+ * 5=destination head L3, 6=destination tail L3, 7=source head L3 (the staged
+ * window in bl33.bin starts mid-block, stage.h). */
 uint64_t loader_copy_tables[LOADER_COPY_TABLE_PAGES][LOADER_COPY_TABLE_ENTRIES]
     __attribute__((section(".copy_tables"), aligned(4096))) = {{0}};
 
@@ -45,9 +47,10 @@ int loader_copy_build_tables(uint64_t tables[LOADER_COPY_TABLE_PAGES][LOADER_COP
         b->image_end != table_address + LOADER_COPY_TABLE_PAGES * PAGE || b->image_end > REFERENCE ||
         b->rx_end < ADAPTER + PAGE || (b->rx_end & (PAGE - 1)) ||
         b->ro_end < b->rx_end || (b->ro_end & (PAGE - 1)) || b->ro_end > table_address ||
-        b->source != UINT64_C(0xa2000000) || !b->bytes || (b->bytes & (PAGE - 1)) ||
+        b->source != IOSW_STAGE_PA || !b->bytes || (b->bytes & (PAGE - 1)) ||
         b->bytes > UINT64_C(0x6000000) ||
-        !b->source_bytes || (b->source_bytes & (PAGE - 1)) || b->source_bytes > UINT64_C(0x6000000) ||
+        !b->source_bytes || (b->source_bytes & (PAGE - 1)) ||
+        b->source_bytes > IOSW_STAGE_END - PAGE - IOSW_STAGE_PA ||
         (b->destination & (PAGE - 1)) || b->destination < UINT64_C(0xb2000000) ||
         b->destination >= UINT64_C(0xc0000000) ||
         b->bytes > UINT64_C(0xc0000000) - b->destination) return 1;
@@ -66,7 +69,7 @@ int loader_copy_build_tables(uint64_t tables[LOADER_COPY_TABLE_PAGES][LOADER_COP
             address < b->ro_end ? DATA | READONLY : DATA;
         tables[3][(address >> 12) & 511] = address | permissions | 3;
     }
-    map_ram(tables, table_address, b->source, b->source + b->source_bytes, DATA | READONLY, 4, 4);
+    map_ram(tables, table_address, b->source, b->source + b->source_bytes, DATA | READONLY, 7, 4);
     map_ram(tables, table_address, b->destination, b->destination + b->bytes, DATA, 5, 6);
 
     /* Firmware reserves these complete two blocks for the framebuffer. They

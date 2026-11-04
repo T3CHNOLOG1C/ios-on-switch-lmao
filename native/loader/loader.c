@@ -6,12 +6,17 @@
 #include "sd_reference.h"
 #include "copy.h"
 #include "stamps.h"
+#include "stage.h"
+#include "emc.h"
 
 #ifndef LOAD_FAST_COPY
 #define LOAD_FAST_COPY 0
 #endif
 #ifndef LOAD_STAMPS_ADT_OFFSET
 #define LOAD_STAMPS_ADT_OFFSET 0
+#endif
+#ifndef LOAD_EMC_KHZ
+#define LOAD_EMC_KHZ 0
 #endif
 
 extern volatile uint64_t probe_record[R_RECORD_WORDS];
@@ -160,6 +165,23 @@ void loader_copy_refuse(uint64_t reason) __attribute__((noreturn));
 void loader_copy_refuse(uint64_t reason) { refuse(reason); }
 #endif
 
+#if LOAD_FAST_COPY
+/* This build's window, whole, where hekate put it (stage.h): the header and trailer pages around the staged bytes
+ * carry their sizes and the stream id this loader was built with. Read with the MMU off, after the FDT check. */
+static uint64_t stage_check(void) {
+    const volatile uint32_t *head = (const volatile uint32_t *)(uintptr_t)IOSW_STAGE_HEADER_PA;
+    const volatile uint32_t *tail = (const volatile uint32_t *)(uintptr_t)(LOAD_SOURCE + LOAD_PACKED_BYTES);
+    const uint32_t id_low = (uint32_t)LOAD_STAGE_ID, id_high = (uint32_t)(LOAD_STAGE_ID >> 32);
+    if (head[0] != IOSW_STAGE_MAGIC || head[1] != IOSW_STAGE_HEAD || head[2] != IOSW_STAGE_VERSION ||
+        head[3] != LOAD_SOURCE - IOSW_STAGE_HEADER_PA) return 0x6a0;
+    if (head[4] != LOAD_STREAM_BYTES || head[5] != LOAD_PACKED_BYTES) return 0x6a1;
+    if (head[6] != id_low || head[7] != id_high) return 0x6a2;
+    if (tail[0] != IOSW_STAGE_MAGIC || tail[1] != IOSW_STAGE_TAIL || tail[2] != LOAD_STREAM_BYTES ||
+        tail[3] != LOAD_PACKED_BYTES || tail[4] != id_low || tail[5] != id_high) return 0x6a3;
+    return 0;
+}
+#endif
+
 static uint64_t native_gate(void) {
 #if LOAD_NATIVE_GATES
     // Recognize the photographed inherited stack before switching to ours.
@@ -219,12 +241,18 @@ void loader_after_transition(void) {
 #if LOAD_FAST_COPY
     /* Cacheable mappings cover only the exact staged bytes and loader image,
      * in addition to the destination envelope already checked above. Tables
-     * are image-backed and included in __image_end, below the SD reference. */
+     * are image-backed and included in __image_end, below the SD reference.
+     * The staged window (in bl33.bin, stage.h) is checked with its header and
+     * trailer pages, which are read before the copy. */
     extern char __image_end[];
+    _Static_assert(LOAD_SOURCE == IOSW_STAGE_PA && LOAD_SOURCE + LOAD_PACKED_BYTES + 0x1000 <= IOSW_STAGE_END,
+                   "staged window outside bl33.bin's reserved range");
     failure=(uint64_t)loader_check_fdt_memory(
         (const uint8_t *)(uintptr_t)r[R_FDT],0x40000,
-        LOAD_SOURCE,LOAD_SOURCE+LOAD_BYTES,&memory);
+        IOSW_STAGE_HEADER_PA,LOAD_SOURCE+LOAD_PACKED_BYTES+0x1000,&memory);
     if (failure) refuse(0x680+failure);
+    failure=stage_check();
+    if (failure) refuse(failure);
     failure=(uint64_t)loader_check_fdt_memory(
         (const uint8_t *)(uintptr_t)r[R_FDT],0x40000,
         UINT64_C(0xa0000000),(uint64_t)(uintptr_t)__image_end,&memory);
@@ -240,6 +268,23 @@ void loader_after_transition(void) {
         if (!loader_check_fdt_memory((const uint8_t *)(uintptr_t)r[R_FDT], 0x40000, IOSW_BOOT_STAMPS_PA,
                                      IOSW_BOOT_STAMPS_PA + IOSW_BOOT_STAMPS_BYTES, &slot))
             stamps_uboot();
+    }
+#endif
+#if LOAD_EMC_KHZ
+    {
+        /* DRAM from hekate's 204 MHz to the kernel's switch-emc rate before the copy (emc.h). Never refuses. */
+        struct loader_emc_report emc;
+        const uint64_t emc_start = ticks();
+        loader_emc_raise((uint32_t)LOAD_EMC_KHZ, (uint32_t)r[R_EL1_CNTFRQ], &emc);
+#if LOAD_STAMPS_ADT_OFFSET
+        boot_stamps[IOSW_STAMP_EMC_START] = emc_start;
+        boot_stamps[IOSW_STAMP_EMC_END] = ticks();
+        boot_stamps[IOSW_STAMP_EMC_RESULT] = emc.result | (uint64_t)(uint32_t)emc.bpmp_code << 32;
+        boot_stamps[IOSW_STAMP_EMC_RATES] = emc.before_khz | (uint64_t)emc.after_khz << 32;
+        boot_stamps[IOSW_STAMP_EMC_CORE] = emc.core_mv | (uint64_t)emc.area << 32;
+#else
+        (void)emc_start;
+#endif
     }
 #endif
 #if LOAD_VERIFY_KERNEL

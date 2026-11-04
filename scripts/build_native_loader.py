@@ -30,7 +30,8 @@ NATIVE_EXCLUSIONS = [
     ('adapter-stack-vectors', 0xA0000000, 0x20000),
     ('wrapped-adapter', 0xA0100000, 0x20040),
     ('staged-kernel-capacity', 0xA2000000, 0x6000000),
-    ('original-bl33', 0xAA000000, 0x100000),
+    # hekate loads all of bl33.bin here: U-Boot in the first MiB, then the staged kernel window (native/loader/stage.h).
+    ('bl33-and-kernel-window', 0xAA000000, 0x6000000),
     ('ramoops', 0xB0000000, 0x200000),
     ('retained-firmware-display-carveouts', 0xF0000000, 0x10000000),
 ]
@@ -49,8 +50,14 @@ PACK_MIN_GAP = 0x10000
 LZ4_MAGIC = b'\x04\x22\x4d\x18'
 # /chosen/ioswitch-boot-stamps: native/loader/stamps.h IOSW_STAMP_COUNT 64-bit words, zero until the loader fills it.
 STAMPS_PROPERTY = 'ioswitch-boot-stamps'
-STAMPS_BYTES = 18 * 8
+STAMPS_BYTES = 23 * 8
 STAMPS_SLOT = 0xA001EF00
+# The cacheable-copy loader's window rides in bl33.bin (native/loader/stage.h): hekate reads it with U-Boot at SDR104.
+BL33_BASE = 0xAA000000
+STAGE_HEADER = 0xAA100000
+STAGE_SOURCE = 0xAA101000
+STAGE_END = 0xB0000000
+STAGE_WORDS = {'magic': 0x57534F49, 'head': 0x4E49574B, 'tail': 0x444E454B, 'version': 1}
 
 
 def pack_window(payload: bytes) -> tuple[list[tuple[int, int]], bytes]:
@@ -172,6 +179,63 @@ def compress_window(payload: bytes, runs: list[tuple[int, int]]) -> tuple[list[t
     return table, bytes(stream)
 
 
+def emc_khz(command_line: str) -> int:
+    """The EMC rate the kernel's SwitchPMIC sets for this command line (switch-emc=1: 1600 MHz, switch-emc=<kHz>), which
+    the loader then sets before its copy (native/loader/emc.h); 0 when the kernel leaves EMC alone."""
+    values = [v.split('=', 1)[1] for v in command_line.split() if v.startswith('switch-emc=')]
+    if not values or values[-1] in ('0', ''):
+        return 0
+    khz = 1600000 if values[-1] == '1' else int(values[-1], 0)
+    if not 204000 < khz <= 3200000:
+        raise ValueError(f'switch-emc={values[-1]}: not an EMC rate in kHz')
+    return khz
+
+
+def stage_id(staged: bytes) -> int:
+    """The staged window's id (native/loader/stage.h): its SHA-256's first 8 bytes, little-endian."""
+    return int.from_bytes(hashlib.sha256(staged).digest()[:8], 'little')
+
+
+def stage_pages(staged: bytes, stream_bytes: int) -> tuple[bytes, bytes]:
+    """The header and trailer pages around the staged window (native/loader/stage.h)."""
+    ident = stage_id(staged)
+    words = STAGE_WORDS
+    header = struct.pack('<8I', words['magic'], words['head'], words['version'], STAGE_SOURCE - STAGE_HEADER,
+                         stream_bytes, len(staged), ident & 0xFFFFFFFF, ident >> 32)
+    trailer = struct.pack('<6I', words['magic'], words['tail'], stream_bytes, len(staged), ident & 0xFFFFFFFF,
+                          ident >> 32)
+    return header.ljust(PACK_PAGE, b'\0'), trailer.ljust(PACK_PAGE, b'\0')
+
+
+def stage_into_bl33(bl33: bytes, staged: bytes, stream_bytes: int) -> bytes:
+    """bl33.bin with the staged kernel window after U-Boot (native/loader/stage.h), checked by check_stage."""
+    if len(staged) % PACK_PAGE or not stream_bytes <= len(staged) < stream_bytes + PACK_PAGE:
+        raise ValueError('staged window must be its stream padded to 4 KiB')
+    header, trailer = stage_pages(staged, stream_bytes)
+    image = bl33.ljust(STAGE_HEADER - BL33_BASE, b'\0') + header + staged + trailer
+    check_stage(image, bl33, staged, stream_bytes)
+    return image
+
+
+def check_stage(image: bytes, bl33: bytes, staged: bytes, stream_bytes: int) -> None:
+    """The composed bl33.bin as hekate puts it at 0xAA000000: U-Boot untouched and wholly below the header, including
+    its pre-relocation BSS (U-Boot's arm64 start.S header: _end_ofs at 0x10, _bss_end_ofs at 0x20); header, window
+    and trailer where boot.cmd and the loader look; everything below hekate's ramoops (0xB0000000)."""
+    slot = STAGE_HEADER - BL33_BASE
+    end_ofs, bss_end_ofs = struct.unpack_from('<Q', bl33, 0x10)[0], struct.unpack_from('<Q', bl33, 0x20)[0]
+    if image[:len(bl33)] != bl33 or any(image[len(bl33):slot]):
+        raise ValueError('bl33: U-Boot changed or the padding is not zero')
+    if not 0 < end_ofs <= len(bl33) <= slot or not 0 < bss_end_ofs <= slot:
+        raise ValueError(f'bl33: U-Boot (_end {end_ofs:#x}, BSS end {bss_end_ofs:#x}) reaches the staged window')
+    header, trailer = stage_pages(staged, stream_bytes)
+    source = STAGE_SOURCE - BL33_BASE
+    if (image[slot:source] != header or image[source:source + len(staged)] != staged or
+            image[source + len(staged):] != trailer):
+        raise ValueError('bl33: staged window not where the loader reads it')
+    if BL33_BASE + len(image) > STAGE_END:
+        raise ValueError('bl33: staged window reaches ramoops at 0xB0000000')
+
+
 def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
           storage_probe: bool = False, storage_files: bool = False,
           root_boot: bool = False, inherited_adt_source: dict | None = None) -> dict:
@@ -218,7 +282,9 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
         m['boot_args_pa'] + 0x480 > m['used_end'] or
         m['entry_pa'] % 4 or len(payload) > m['owned_window_size'] - 0x200000):
         raise ValueError('inconsistent fixed-layout relationships')
-    if SOURCE + len(payload) > m['phys_base']:
+    fast_copy = native_experiment and root_boot
+    staging_pa = STAGE_SOURCE if fast_copy else SOURCE
+    if staging_pa + len(payload) > m['phys_base']:
         raise ValueError('staging intersects destination')
     for key in ('entry_pa', 'boot_args_pa', 'adt_pa'):
         if not m['phys_base'] <= m[key] < m['phys_base'] + len(payload):
@@ -329,7 +395,6 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
             raise ValueError('native experiment requires the exact reviewed exclusion ledger')
         if len(payload) > 0x6000000 or m['video'] not in ([0xF5A00000, 1, 2880, 720, 1280, 32], [0xF5A00000, 0, 2880, 720, 1280, 0x320]):
             raise ValueError('native staging or display contract mismatch')
-    fast_copy = native_experiment and root_boot
     if fast_copy and len(payload) % 0x1000:
         raise ValueError('native cacheable copy requires a page-aligned payload')
     if stamps_offset and not fast_copy:
@@ -337,10 +402,13 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     runs, packed = pack_window(payload) if fast_copy else ([], payload)
     blocks, stream = compress_window(payload, runs) if fast_copy else ([], packed)
     if fast_copy:
-        # U-Boot stages the file; the loader maps it in 4 KiB pages.
+        # Staged in bl33.bin (stage_into_bl33); the loader maps it in 4 KiB pages.
         packed = stream + bytes(-len(stream) % PACK_PAGE)
-    constants = {'SOURCE': SOURCE, 'DEST': m['phys_base'], 'BYTES': len(payload), 'PACKED_BYTES': len(packed),
+        if STAGE_SOURCE + len(packed) + PACK_PAGE > STAGE_END:
+            raise ValueError('compressed kernel window does not fit before ramoops')
+    constants = {'SOURCE': staging_pa, 'DEST': m['phys_base'], 'BYTES': len(payload), 'PACKED_BYTES': len(packed),
                  'STREAM_BYTES': len(stream), 'STAMPS_ADT_OFFSET': stamps_offset,
+                 'STAGE_ID': stage_id(packed) if fast_copy else 0, 'EMC_KHZ': emc_khz(m['command_line']) if fast_copy else 0,
                  'ARGS': m['boot_args_pa'], 'ENTRY': m['entry_pa'],
                  'CRC': 0 if root_boot else zlib.crc32(payload), 'VERIFY_KERNEL': int(not root_boot),
                  'VIRT': m['virt_base'], 'ADT_PA': m['adt_pa'],
@@ -357,7 +425,7 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     output.mkdir(parents=True)
     (output / 'layout.h').write_text(header)
     if fast_copy:
-        # copy.c's table of the staged file's blocks; the file itself is what the boot script loads at SOURCE.
+        # copy.c's table of the staged file's blocks; package_raw_boot.py appends the file to bl33.bin (stage.h).
         (output / 'runs.h').write_text(
             '/* Generated: the kernel window\'s nonzero extents as LZ4 blocks (window offset, bytes, offset in\n'
             ' * kernel-window.bin, its bytes | LOADER_BLOCK_STORED if not compressed) in order, stored back to back;\n'
@@ -371,12 +439,12 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     sources = [ROOT/'native/loader/entry.S', ROOT/'native/loader/loader.c', ROOT/'native/loader/memory.c', ROOT/'native/handoff/probe.c']
     linker = ROOT / ('native/loader/link.ld' if fast_copy else 'native/handoff/link.ld')
     if fast_copy:
-        sources += [ROOT/'native/loader/copy.c', ROOT/'native/loader/copy.S']
+        sources += [ROOT/'native/loader/copy.c', ROOT/'native/loader/copy.S', ROOT/'native/loader/emc.c']
     if not root_boot:
         sources.append(ROOT/'native/loader/checksum.S')
     if storage_probe:
         sources.append(ROOT/'native/storage/sd_reference.c')
-    source_files = [*sources, ROOT/'native/loader/copy.h', ROOT/'native/loader/memory.h', ROOT/'native/loader/ram.h', ROOT/'native/loader/stamps.h', ROOT/'native/storage/sd_reference.h', *(ROOT/'native/handoff').glob('*.h'), ROOT/'native/handoff/entry.S', linker, Path(__file__), ROOT/'scripts/package_native_handoff.py']
+    source_files = [*sources, ROOT/'native/loader/copy.h', ROOT/'native/loader/memory.h', ROOT/'native/loader/ram.h', ROOT/'native/loader/stamps.h', ROOT/'native/loader/stage.h', ROOT/'native/loader/emc.h', ROOT/'native/storage/sd_reference.h', *(ROOT/'native/handoff').glob('*.h'), ROOT/'native/handoff/entry.S', linker, Path(__file__), ROOT/'scripts/package_native_handoff.py']
     if root_boot:
         source_files += [ROOT/'scripts/native_xnu_layout.py', ROOT/'scripts/native_oled_adt.py']
     source_hashes = {str(p.relative_to(ROOT)): hashlib.sha256(read_regular(p)).hexdigest() for p in source_files}
@@ -424,7 +492,7 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
                         for name in ('loader.bin','loader.elf','layout.h') + (('kernel-window.bin',) if fast_copy else ())},
               'packed_runs': [[start, size] for start, size in runs],
               'lz4_blocks': [list(block) for block in blocks],
-              'temporary_ranges': [{'name': 'staging', 'start': SOURCE, 'size': len(packed), 'lifetime': 'before XNU entry'},
+              'temporary_ranges': [{'name': 'staging', 'start': staging_pa, 'size': len(packed), 'lifetime': 'before XNU entry'},
                                    {'name': 'adapter_and_stacks', 'start': 0xA0000000, 'size': 0x20000, 'lifetime': 'before XNU entry'}]}
     (output/'manifest.json').write_text(json.dumps(result, indent=2)+'\n')
     return result
