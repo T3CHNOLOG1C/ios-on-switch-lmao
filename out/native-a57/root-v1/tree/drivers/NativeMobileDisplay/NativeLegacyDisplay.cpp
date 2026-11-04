@@ -557,6 +557,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // MAIR byte of the source and scanout views (mairAttribute).
     // All under the work-loop gate except stVblanks.
     bool stats = false;
+    // Boot-args the swap path reads on every frame, parsed once at start (PE_parse_boot_argn scans the whole command line;
+    // five scans a frame were the display thread's top function in kprof on r7p5).
+    bool bootTransfer = false, bootEarlyRetire = true, bootRetire = false, bootCpuPresent = false, bootValidate = false;
     uint64_t statsStart = 0, lastSubmit = 0, lastRetire = 0, deferredAt = 0;
     Span stQueue = {}, stFlipWait = {}, stMap = {}, stGpu = {}, stCache = {}, stScan = {}, stCopy = {}, stRetire = {},
          stInterval = {}, stClient = {}, stVsyncLate = {};
@@ -1732,6 +1735,13 @@ public:
     }
     bool start(IOService *provider) override
     {
+        unsigned early = 1;
+        PE_parse_boot_argn("sheng-early-retire", &early, sizeof(early));
+        bootEarlyRetire = early == 1;
+        bootTransfer = bootFlag("offline-legacy-transfer");
+        bootRetire = bootFlag("offline-legacy-retire");
+        bootCpuPresent = bootFlag("offline-legacy-cpu-present");
+        bootValidate = bootFlag("offline-legacy-validate");
         if (!startDisplay(provider)) return false;
         stats = bootFlag("ioswitch-display-stats");
         fastSwizzle = bootFlag("ioswitch-fast-swizzle");
@@ -1852,9 +1862,7 @@ public:
     }
     void kickOnce()
     {
-        unsigned enabled = 0;
-        PE_parse_boot_argn("offline-legacy-transfer", &enabled, sizeof(enabled));
-        if (enabled != 1 || transferred || !logicalPM || !bootMapping || !primary) return;
+        if (!bootTransfer || transferred || !logicalPM || !bootMapping || !primary) return;
         const OriginalLegacySwapRequest *request = pendingSwapRequest();
         if (!request || !isValidated(request)) return;
         // Both surfaces are taken while a flip is out (one scanned, one about to be), and the controller is unclocked during SC7:
@@ -1965,10 +1973,8 @@ public:
             // copy (int-243: about 4.4 ms render then about 3 ms copy per frame). Retire now: the presenter holds its own reference to this
             // frame's memory, the previous frame's copy has finished (transferred held this one back), and the next swap still waits for
             // the copy because transferred stays set until finishGpuSwap.
-            unsigned early = 1;
-            PE_parse_boot_argn("sheng-early-retire", &early, sizeof(early));
             noteTaken(request, kickAt);
-            if (early == 1 && retireSwap(request, true)) {
+            if (bootEarlyRetire && retireSwap(request, true)) {
                 gpuRetired = true;
                 native_legacy_early_retires = native_legacy_early_retires + 1;
             }
@@ -2510,9 +2516,7 @@ public:
         gpuLength = (uint64_t)width * height * 4;
         transferred = true;
         noteTaken(request, kickAt);
-        unsigned early = 1;
-        PE_parse_boot_argn("sheng-early-retire", &early, sizeof(early));
-        if (early == 1 && retireSwap(request, true)) {
+        if (bootEarlyRetire && retireSwap(request, true)) {
             gpuRetired = true;
             native_legacy_early_retires = native_legacy_early_retires + 1;
         }
@@ -2587,10 +2591,7 @@ public:
     // Hands the pending head to the unchanged family's completion. Leaves transferred alone: the callers decide when the next frame may go.
     bool retireSwap(const OriginalLegacySwapRequest *request, bool force)
     {
-        unsigned retire = 0, cpuPresent = 0;
-        PE_parse_boot_argn("offline-legacy-retire", &retire, sizeof(retire));
-        PE_parse_boot_argn("offline-legacy-cpu-present", &cpuPresent, sizeof(cpuPresent));
-        if (!(retire == 1 || cpuPresent == 1 || force)) return false;
+        if (!(bootRetire || bootCpuPresent || force)) return false;
         if (!activateOnlyPendingSwap(request)) return false;
         const uint64_t submitted = stats ? submittedAt(request) : 0;
         removeValidated(request);
@@ -2637,9 +2638,7 @@ public:
         OSObject *surface = nullptr;
         unsigned reason = 1;
         bool accepted = false;
-        unsigned enabled = 0;
-        PE_parse_boot_argn("offline-legacy-validate", &enabled, sizeof(enabled));
-        if (enabled == 1 && logicalPM && primary && bootMapping && request) {
+        if (bootValidate && logicalPM && primary && bootMapping && request) {
             reason = 2;
             OSObject *surfaces[4] = {};
             memcpy(surfaces, bytes + 2624, sizeof(surfaces));
@@ -2681,7 +2680,7 @@ public:
                 }
             }
         }
-        if (!accepted && reason == 2 && !surface && enabled == 1) {
+        if (!accepted && reason == 2 && !surface && bootValidate) {
             // No surface in any slot and every updated layer disabled over black: present a blank screen.
             OSObject *none[4] = {};
             memcpy(none, bytes + 2624, sizeof(none));
