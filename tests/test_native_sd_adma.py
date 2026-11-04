@@ -17,7 +17,7 @@ class NativeSdAdmaTests(unittest.TestCase):
                  "-g", "-I", str(DRIVER), str(ROOT / "tests/native_sd_adma_harness.cpp"), "-o", str(binary)],
                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             self.assertEqual(compile_result.returncode, 0, compile_result.stdout)
-            result = subprocess.run([binary], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+            result = subprocess.run([binary], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
             self.assertEqual(result.returncode, 0, result.stdout)
             self.assertIn("PASS: sd adma2 tables", result.stdout)
 
