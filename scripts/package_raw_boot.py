@@ -454,21 +454,44 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
 # scan_dev_for_extlinux: the distro scan's extlinux.conf probe (this entry has none) becomes the first boot timing
 # sample, taken once U-Boot, the SD card and hekate's env are up (native/loader/stamps.h).
 # bootcmd_mmc0=true: should boot.scr not take over, U-Boot's distro loop goes on to mmc0, the eMMC (initialize, read
-# its partition table, scan it); never. bl33_sd_only also drops mmc0 from boot_targets for failures before hekate's
+# its partition table, scan it); never. bl33_patch also drops mmc0 from boot_targets for failures before hekate's
 # env is imported (an SD card U-Boot cannot read).
 HEKATE_ENTRY = ('[IOSwitch]\nl4t=1\nboot_prefixes=/switchroot/{name}/\nid=IOSWITCH\nbootwait=0\n'
                 'scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\nbootcmd_mmc0=true\n')
-# U-Boot's built-in environment string in switchroot's bl33.bin (include/configs/tegra-common-post.h BOOT_TARGET_DEVICES;
-# distro_bootcmd walks it): SD (mmc1) only, same length, so nothing else in the binary moves.
-BOOT_TARGETS = (b'\0boot_targets=mmc1 mmc0 \0', b'\0boot_targets=mmc1      \0')
+# U-Boot's built-in default environment in switchroot's bl33.bin (env/common.c default_environment, imported whole at
+# start: a run of "name=value\0" ended by an empty string), rewritten in place to the same size so nothing else in the
+# binary moves:
+#   * boot_targets: SD (mmc1) only, so U-Boot never falls back to the eMMC, even when it cannot read the SD card and
+#     hekate's env (bootcmd_mmc0=true above) is never imported; bootcmd_mmc0 itself goes.
+#   * two boot timing samples (native/loader/stamps.h) in what runs before hekate's env: bootcmd's start (U-Boot
+#     initialized) and mmc_boot once `mmc dev 1` has brought the SD card up.
+#   * room for them: four variables nothing on this boot path reads (PXE, ramdisk and DHCP script addresses).
+ENV_START = b'\0bootcmd=run distro_bootcmd\0'
+ENV_EDITS = {
+    b'bootcmd=run distro_bootcmd': b'bootcmd=setexpr.l ios_u_main *0x60005010; run distro_bootcmd',
+    b'mmc_boot=if mmc dev ${devnum}; then setenv devtype mmc; run scan_dev_for_boot_part; fi':
+        b'mmc_boot=if mmc dev ${devnum}; then setexpr.l ios_u_sd *0x60005010; setenv devtype mmc; '
+        b'run scan_dev_for_boot_part; fi',
+    b'boot_targets=mmc1 mmc0 ': b'boot_targets=mmc1',
+}
+ENV_DROPS = (b'pxefile_addr_r=0x8ff00000', b'ramdisk_addr_r=0x92000000', b'boot_script_dhcp=boot.scr.uimg',
+             b'bootcmd_mmc0=setenv devnum 0; run mmc_boot')
 
 
-def bl33_sd_only(bl33: bytes) -> bytes:
-    """switchroot's U-Boot that never falls back to the eMMC (BOOT_TARGETS); everything else byte for byte."""
-    old, new = BOOT_TARGETS
-    if bl33.count(old) != 1 or new in bl33:
-        raise SystemExit('bl33.bin: U-Boot boot_targets default not found exactly once')
-    return bl33.replace(old, new)
+def bl33_patch(bl33: bytes) -> bytes:
+    """switchroot's U-Boot with its default environment as ENV_EDITS / ENV_DROPS say; every other byte unchanged."""
+    if bl33.count(ENV_START) != 1:
+        raise SystemExit('bl33.bin: U-Boot default environment not found exactly once')
+    start = bl33.index(ENV_START) + 1
+    end = bl33.index(b'\0\0', start) + 1  # the empty string that ends it
+    entries = bl33[start:end - 1].split(b'\0')
+    if any(entries.count(key) != 1 for key in (*ENV_EDITS, *ENV_DROPS)):
+        raise SystemExit('bl33.bin: U-Boot default environment is not the one this patch was written for')
+    entries = [ENV_EDITS.get(e, e) for e in entries if e not in ENV_DROPS]
+    block = b'\0'.join(entries) + b'\0\0'
+    if len(block) > end + 1 - start:
+        raise SystemExit('bl33.bin: patched U-Boot environment does not fit')
+    return bl33[:start] + block.ljust(end + 1 - start, b'\0') + bl33[end + 1:]
 
 
 def boot_script(text: str, loader_bytes: int, bl33: bytes, constants: dict, staged_bytes: int) -> str:
@@ -534,7 +557,7 @@ def main():
     constants = built['constants']
     if constants['SOURCE'] != STAGE_SOURCE or constants['PACKED_BYTES'] != len(window):
         raise SystemExit('loader was not built for the bl33-staged window')
-    bl33 = stage_into_bl33(bl33_sd_only((FIRMWARE / 'bl33.bin').read_bytes()), window, constants['STREAM_BYTES'])
+    bl33 = stage_into_bl33(bl33_patch((FIRMWARE / 'bl33.bin').read_bytes()), window, constants['STREAM_BYTES'])
 
     text = boot_script(TEMPLATE.read_text(), len(loader), bl33, constants, len(window))
     script = text.encode('ascii')

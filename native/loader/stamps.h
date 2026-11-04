@@ -7,10 +7,12 @@
  * hekate starts the CPU: 0 is about then, and hekate's own time (menu reload, boot logo, bootwait) is before 0.
  *
  * U-Boot runs from hekate's env and cannot read CNTPCT from its shell, so it samples the Tegra microsecond timer
- * (TIMERUS_CNTR_1US, free-running since SoC reset; U-Boot's own timer block) with setexpr.l: once from the hekate
- * entry (scan_dev_for_extlinux: U-Boot initialized, SD card up, hekate's env imported) and at each step of boot.cmd.
- * Just before bootm go it writes the slot below: LE32 [0] IOSW_BOOT_STAMPS_UBOOT_MAGIC, then the samples in
- * IOSW_STAMP_UBOOT_DISTRO.. order (0 = not taken), the rest zero. A slot without the magic is ignored, never refused.
+ * (TIMERUS_CNTR_1US, free-running since SoC reset; U-Boot's own timer block) with setexpr.l: from its own default
+ * environment (package_raw_boot.py bl33_patch: bootcmd's start, the SD card up in mmc_boot), once from the hekate
+ * entry (scan_dev_for_extlinux: hekate's env imported) and at each step of boot.cmd. Just before bootm go it writes
+ * the slot below: LE32 [0] IOSW_BOOT_STAMPS_UBOOT_MAGIC, then the samples (0 = not taken) in slot order:
+ * ios_uboot, ios_script, ios_loader, ios_dtb, ios_window, ios_exporter, ios_prep, ios_go, ios_u_main, ios_u_sd
+ * (loader.c stamps_uboot puts them in record order); the rest zero. A slot without the magic is ignored, never refused.
  *
  * The loader samples the microsecond timer and CNTPCT together, converts U-Boot's samples to counter values, adds its
  * own and writes the record into the ADT placeholder /chosen/ioswitch-boot-stamps (LE64 words, IOSW_STAMP_* order);
@@ -18,16 +20,18 @@
 #define IOSW_BOOT_STAMPS_PA UINT64_C(0xa001ef00)
 #define IOSW_BOOT_STAMPS_BYTES 0x100u
 #define IOSW_BOOT_STAMPS_UBOOT_MAGIC 0x544f4255u /* "UBOT" */
-#define IOSW_BOOT_STAMPS_UBOOT_COUNT 8u
+#define IOSW_BOOT_STAMPS_UBOOT_COUNT 10u
 #define IOSW_TIMERUS_PA UINT64_C(0x60005010) /* TIMERUS_CNTR_1US */
 
-#define IOSW_STAMP_RECORD_MAGIC UINT64_C(0x32504d4154534f49) /* "IOSTAMP2" */
+#define IOSW_STAMP_RECORD_MAGIC UINT64_C(0x33504d4154534f49) /* "IOSTAMP3" */
 enum iosw_stamp {
     IOSW_STAMP_MAGIC = 0,
     IOSW_STAMP_WORDS,          /* IOSW_STAMP_COUNT */
     IOSW_STAMP_FREQUENCY,      /* CNTFRQ_EL0 */
     IOSW_STAMP_TIMERUS,        /* microsecond timer (32 bits) at ... */
     IOSW_STAMP_TIMERUS_AT,     /* ... this count */
+    IOSW_STAMP_UBOOT_MAIN,     /* U-Boot: initialized, its bootcmd starts */
+    IOSW_STAMP_UBOOT_SD,       /* the SD card initialized (mmc dev 1) */
     IOSW_STAMP_UBOOT_DISTRO,   /* U-Boot: hekate env imported, distro scan of /switchroot/ioswitch/ starts */
     IOSW_STAMP_UBOOT_SCRIPT,   /* boot.scr's first command */
     IOSW_STAMP_UBOOT_LOADER,   /* loader.uboot.bin read */
@@ -39,6 +43,7 @@ enum iosw_stamp {
     IOSW_STAMP_LOADER_ENTRY,   /* loader's first instructions */
     IOSW_STAMP_EMC_START,      /* EMC raise (emc.h): first BPMP request ... */
     IOSW_STAMP_EMC_END,        /* ... and done, whatever the result (both 0 when switch-emc is off) */
+    IOSW_STAMP_GATES,          /* FDT, stage, MC and timing-slot checks done */
     IOSW_STAMP_UNPACK_START,   /* cacheable regime on, first payload byte */
     IOSW_STAMP_UNPACK_END,     /* window decoded and zero-filled */
     IOSW_STAMP_COPY_DONE,      /* cleaned to PoC, caches and MMU off again */

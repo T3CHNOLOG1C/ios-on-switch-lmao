@@ -40,7 +40,7 @@ class Bl33StageTests(unittest.TestCase):
     def setUpClass(cls):
         cls.window, cls.blocks, cls.stream, cls.staged = window_and_stage()
         cls.original = (pkg.FIRMWARE / 'bl33.bin').read_bytes()
-        cls.bl33 = stage_into_bl33(pkg.bl33_sd_only(cls.original), cls.staged, len(cls.stream))
+        cls.bl33 = stage_into_bl33(pkg.bl33_patch(cls.original), cls.staged, len(cls.stream))
         cls.constants = {'STREAM_BYTES': len(cls.stream), 'STAGE_ID': stage_id(cls.staged)}
         cls.script = pkg.boot_script(pkg.TEMPLATE.read_text(), 0x1d040, cls.bl33, cls.constants, len(cls.staged))
 
@@ -66,18 +66,26 @@ class Bl33StageTests(unittest.TestCase):
 
     def test_u_boot_is_untouched_but_never_scans_the_emmc(self):
         image = self.bl33
+        start = self.original.index(pkg.ENV_START) + 1
+        end = self.original.index(b'\0\0', start) + 2
         differing = [i for i in range(len(self.original)) if image[i] != self.original[i]]
-        old, new = pkg.BOOT_TARGETS
-        at = self.original.index(old)
-        self.assertTrue(differing and all(at < i < at + len(old) for i in differing))
-        self.assertIn(b'boot_targets=mmc1      \0', image)
+        self.assertTrue(differing and all(start <= i < end for i in differing))  # only the default environment
+        environment = image[start:end].split(b'\0')
+        self.assertIn(b'boot_targets=mmc1', environment)
         self.assertNotIn(b'mmc1 mmc0', image)
+        self.assertFalse(any(e.startswith(b'bootcmd_mmc0=') for e in environment))
+        self.assertIn(b'bootcmd=setexpr.l ios_u_main *0x60005010; run distro_bootcmd', environment)
+        self.assertTrue(any(e.startswith(b'mmc_boot=') and b'setexpr.l ios_u_sd *0x60005010;' in e for e in environment))
         self.assertIn(b'distro_bootcmd=for target in ${boot_targets}', image)
+        # Every other variable is as shipped, in order.
+        original = self.original[start:end].split(b'\0')
+        kept = [pkg.ENV_EDITS.get(e, e) for e in original if e not in pkg.ENV_DROPS]
+        self.assertEqual([e for e in environment if e], [e for e in kept if e])
         _, bss_end = struct.unpack_from('<QQ', image, 0x18)
         self.assertLessEqual(BL33_BASE + bss_end, STAGE_HEADER)
         self.assertLessEqual(BL33_BASE + len(image), 0xB0000000)
         with self.assertRaises(SystemExit):
-            pkg.bl33_sd_only(image)  # already SD-only: refuse rather than guess
+            pkg.bl33_patch(image)  # already patched: refuse rather than guess
 
     def test_loader_decodes_the_window_from_bl33(self):
         table = ",".join(f"{{{a}u,{b}u,{c}u,{d}ull}}" for a, b, c, d in self.blocks)

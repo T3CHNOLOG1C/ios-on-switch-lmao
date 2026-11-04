@@ -76,11 +76,16 @@ static void stamps_uboot(void) {
     if (slot[0] != IOSW_BOOT_STAMPS_UBOOT_MAGIC) return;
     const uint64_t frequency = boot_stamps[IOSW_STAMP_FREQUENCY], at = boot_stamps[IOSW_STAMP_TIMERUS_AT];
     const uint32_t now = (uint32_t)boot_stamps[IOSW_STAMP_TIMERUS];
+    static const uint8_t record[IOSW_BOOT_STAMPS_UBOOT_COUNT] = {
+        IOSW_STAMP_UBOOT_DISTRO, IOSW_STAMP_UBOOT_SCRIPT, IOSW_STAMP_UBOOT_LOADER, IOSW_STAMP_UBOOT_DTB,
+        IOSW_STAMP_UBOOT_WINDOW, IOSW_STAMP_UBOOT_EXPORTER, IOSW_STAMP_UBOOT_PREP, IOSW_STAMP_UBOOT_GO,
+        IOSW_STAMP_UBOOT_MAIN, IOSW_STAMP_UBOOT_SD,
+    };
     for (unsigned i = 0; i < IOSW_BOOT_STAMPS_UBOOT_COUNT; ++i) {
         const uint32_t sample = slot[1 + i];
         const uint64_t back = (uint64_t)(uint32_t)(now - sample) * frequency / 1000000u;
         if (sample && back < at && at - back <= boot_stamps[IOSW_STAMP_LOADER_ENTRY])
-            boot_stamps[IOSW_STAMP_UBOOT_DISTRO + i] = at - back;
+            boot_stamps[record[i]] = at - back;
     }
     slot[0] = 0;
 }
@@ -221,58 +226,11 @@ void loader_after_transition(void) {
         (r[R_EL1_DAIF] & 0x3c0) != 0x3c0 || r[R_EL1_CNTFRQ] != 19200000 ||
         r[R_HCR_AFTER] != 0x80000000 || r[R_CNTHCTL_AFTER] != 3 || r[R_CNTVOFF_AFTER])
         refuse(0x301);
-    struct loader_memory_report memory;
-    uint64_t failure = (uint64_t)loader_check_fdt_memory(
-        (const uint8_t *)(uintptr_t)r[R_FDT], 0x40000,
-        LOAD_DEST & ~UINT64_C(0x1fffff),
-        (LOAD_DEST + LOAD_WINDOW + 0x1fffff) & ~UINT64_C(0x1fffff), &memory);
-    r[L_MEMORY_CHECK]=failure; r[L_RESERVATIONS]=memory.reservations;
-    r[L_RESERVED_NODES]=memory.reserved_nodes;
-    if (failure) refuse(0x500+failure);
-#if LOAD_SD_REFERENCE
-    // The reference uses the last page of our existing 128KiB adapter region.
-    // The builder checks that every load segment and stack ends before it.
-    // Do not access that page until the live FDT rejects any retained overlap.
-    failure=(uint64_t)loader_check_fdt_memory(
-        (const uint8_t *)(uintptr_t)r[R_FDT],0x40000,
-        IOSW_SD_REFERENCE_PA,IOSW_SD_REFERENCE_PA+IOSW_SD_REFERENCE_BYTES,&memory);
-    if (failure) refuse(0x600+failure);
-#endif
-#if LOAD_FAST_COPY
-    /* Cacheable mappings cover only the exact staged bytes and loader image,
-     * in addition to the destination envelope already checked above. Tables
-     * are image-backed and included in __image_end, below the SD reference.
-     * The staged window (in bl33.bin, stage.h) is checked with its header and
-     * trailer pages, which are read before the copy. */
-    extern char __image_end[];
-    _Static_assert(LOAD_SOURCE == IOSW_STAGE_PA && LOAD_SOURCE + LOAD_PACKED_BYTES + 0x1000 <= IOSW_STAGE_END,
-                   "staged window outside bl33.bin's reserved range");
-    failure=(uint64_t)loader_check_fdt_memory(
-        (const uint8_t *)(uintptr_t)r[R_FDT],0x40000,
-        IOSW_STAGE_HEADER_PA,LOAD_SOURCE+LOAD_PACKED_BYTES+0x1000,&memory);
-    if (failure) refuse(0x680+failure);
-    failure=stage_check();
-    if (failure) refuse(failure);
-    failure=(uint64_t)loader_check_fdt_memory(
-        (const uint8_t *)(uintptr_t)r[R_FDT],0x40000,
-        UINT64_C(0xa0000000),(uint64_t)(uintptr_t)__image_end,&memory);
-    if (failure) refuse(0x6c0+failure);
-#endif
-    failure=native_gate();
-    if (failure) refuse(failure);
-#if LOAD_STAMPS_ADT_OFFSET
-    {
-        /* U-Boot's timing slot sits below the SD reference page, outside the loader image; read only if the live FDT
-         * keeps nothing there. */
-        struct loader_memory_report slot;
-        if (!loader_check_fdt_memory((const uint8_t *)(uintptr_t)r[R_FDT], 0x40000, IOSW_BOOT_STAMPS_PA,
-                                     IOSW_BOOT_STAMPS_PA + IOSW_BOOT_STAMPS_BYTES, &slot))
-            stamps_uboot();
-    }
-#endif
 #if LOAD_EMC_KHZ
     {
-        /* DRAM from hekate's 204 MHz to the kernel's switch-emc rate before the copy (emc.h). Never refuses. */
+        /* DRAM from hekate's 204 MHz to the kernel's switch-emc rate (emc.h) first: every check below reads RAM
+         * uncached, one access at a time, and runs that much faster. It needs none of them (it touches only BPMP
+         * registers and the BPMP's own channel area) and never refuses. */
         struct loader_emc_report emc;
         const uint64_t emc_start = ticks();
         loader_emc_raise((uint32_t)LOAD_EMC_KHZ, (uint32_t)r[R_EL1_CNTFRQ], &emc);
@@ -286,6 +244,61 @@ void loader_after_transition(void) {
         (void)emc_start;
 #endif
     }
+#endif
+    /* Every range the loader will touch, against the live FDT's reservations in one walk (memory.c): the walk reads
+     * the FDT uncached, so one walk instead of one per range. Each range keeps the refusal it always had; the first
+     * failing one in this order wins, as when they were checked one after another. 0: no refusal (the timing slot
+     * is only skipped). */
+    struct loader_memory_range ranges[LOADER_MEMORY_RANGES_MAX];
+    uint64_t refusals[LOADER_MEMORY_RANGES_MAX];
+    unsigned count = 0, index = 0;
+    ranges[count] = (struct loader_memory_range){LOAD_DEST & ~UINT64_C(0x1fffff),
+                                                 (LOAD_DEST + LOAD_WINDOW + 0x1fffff) & ~UINT64_C(0x1fffff)};
+    refusals[count++] = 0x500;
+#if LOAD_SD_REFERENCE
+    // The reference uses the last page of our existing 128KiB adapter region.
+    // The builder checks that every load segment and stack ends before it.
+    // Do not access that page until the live FDT rejects any retained overlap.
+    ranges[count] = (struct loader_memory_range){IOSW_SD_REFERENCE_PA, IOSW_SD_REFERENCE_PA + IOSW_SD_REFERENCE_BYTES};
+    refusals[count++] = 0x600;
+#endif
+#if LOAD_FAST_COPY
+    /* Cacheable mappings cover only the exact staged bytes and loader image,
+     * in addition to the destination envelope already checked above. Tables
+     * are image-backed and included in __image_end, below the SD reference.
+     * The staged window (in bl33.bin, stage.h) is checked with its header and
+     * trailer pages, which are read before the copy. */
+    extern char __image_end[];
+    _Static_assert(LOAD_SOURCE == IOSW_STAGE_PA && LOAD_SOURCE + LOAD_PACKED_BYTES + 0x1000 <= IOSW_STAGE_END,
+                   "staged window outside bl33.bin's reserved range");
+    ranges[count] = (struct loader_memory_range){IOSW_STAGE_HEADER_PA, LOAD_SOURCE + LOAD_PACKED_BYTES + 0x1000};
+    refusals[count++] = 0x680;
+    ranges[count] = (struct loader_memory_range){UINT64_C(0xa0000000), (uint64_t)(uintptr_t)__image_end};
+    refusals[count++] = 0x6c0;
+#endif
+#if LOAD_STAMPS_ADT_OFFSET
+    /* U-Boot's timing slot sits below the SD reference page, outside the loader image; read only if the live FDT
+     * keeps nothing there. */
+    ranges[count] = (struct loader_memory_range){IOSW_BOOT_STAMPS_PA, IOSW_BOOT_STAMPS_PA + IOSW_BOOT_STAMPS_BYTES};
+    refusals[count++] = 0;
+#endif
+    struct loader_memory_report memory;
+    uint64_t failure = (uint64_t)loader_check_fdt_memory_ranges(
+        (const uint8_t *)(uintptr_t)r[R_FDT], 0x40000, ranges, count, &memory, &index);
+    r[L_MEMORY_CHECK]=index ? 0 : failure; r[L_RESERVATIONS]=memory.reservations;
+    r[L_RESERVED_NODES]=memory.reserved_nodes;
+    if (failure && refusals[index]) refuse(refusals[index]+failure);
+    const int slot_usable = !failure; /* a failure that did not refuse is the timing slot's own */
+    (void)slot_usable;
+#if LOAD_FAST_COPY
+    failure=stage_check();
+    if (failure) refuse(failure);
+#endif
+    failure=native_gate();
+    if (failure) refuse(failure);
+#if LOAD_STAMPS_ADT_OFFSET
+    if (slot_usable) stamps_uboot();
+    boot_stamps[IOSW_STAMP_GATES] = ticks();
 #endif
 #if LOAD_VERIFY_KERNEL
     uint64_t isar0;

@@ -50,7 +50,7 @@ PACK_MIN_GAP = 0x10000
 LZ4_MAGIC = b'\x04\x22\x4d\x18'
 # /chosen/ioswitch-boot-stamps: native/loader/stamps.h IOSW_STAMP_COUNT 64-bit words, zero until the loader fills it.
 STAMPS_PROPERTY = 'ioswitch-boot-stamps'
-STAMPS_BYTES = 23 * 8
+STAMPS_BYTES = 26 * 8
 STAMPS_SLOT = 0xA001EF00
 # The cacheable-copy loader's window rides in bl33.bin (native/loader/stage.h): hekate reads it with U-Boot at SDR104.
 BL33_BASE = 0xAA000000

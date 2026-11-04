@@ -72,10 +72,10 @@ loader_copy_run:
     cmp x0, #4
     b.ne .Lline_fail
 
-    /* U-Boot's clean/disable handoff remains a precondition. Invalidate
-     * retained clean lines only in these owned ranges, never all cache sets.
-     * With translation disabled, these VA operations use identity addresses.
-     * Invalidate the adapter before populating its tables. */
+    /* U-Boot's clean/disable handoff remains a precondition. Invalidate the
+     * adapter by VA (identity addresses, translation off) before populating
+     * its tables, so the set/way pass below has no line of it to write back
+     * over them. */
     adr x0, __image_start
     adr x1, __image_end
 .Linitial_adapter:
@@ -86,21 +86,15 @@ loader_copy_run:
     dsb sy
     bl loader_copy_prepare
     cbnz w0, .Ltables_fail
-    /* Only the staged file is mapped (and read); LOAD_BYTES is the window it decodes into. */
-    ldr x0, =LOAD_SOURCE
-    ldr x1, =(LOAD_SOURCE + LOAD_PACKED_BYTES)
-.Linitial_source:
-    dc ivac, x0
-    add x0, x0, #64
-    cmp x0, x1
-    b.lo .Linitial_source
-    ldr x0, =LOAD_DEST
-    ldr x1, =(LOAD_DEST + LOAD_BYTES)
-.Linitial_destination:
-    dc ivac, x0
-    add x0, x0, #64
-    cmp x0, x1
-    b.lo .Linitial_destination
+    /* The staged file and the window (89 MB: 1.4 million lines by VA, ~200 ms
+     * measured on r7n) are cleaned and invalidated by set/way instead: every
+     * L1/L2 data line, ~33K operations. Clean-and-invalidate, never
+     * invalidate-only, so no dirty line anywhere (ours, U-Boot's, or the
+     * secure world's in the shared L2) is ever dropped; with U-Boot's
+     * disable-then-flush handoff there are none, and nothing could allocate
+     * since (SCTLR.C clear). One core runs. The adapter was invalidated by VA
+     * above, before its tables were written, so no line of it is left. */
+    bl loader_dcache_cisw_all
     dsb sy
     ic iallu
     tlbi vmalle1
@@ -157,28 +151,16 @@ loader_copy_run:
 .Lenable_fail:
     mov x24, #0x707
 .Lclean:
-    /* From here until SCTLR disables M/C/I there are no stores, callbacks
-     * or stack accesses. Every dirty destination and adapter/stack/table
-     * line reaches PoC; read-only source/code/rodata cannot become dirty.
-     * Normal source cache lines may remain clean, as in ordinary firmware
-     * cache-disable handoffs; the next kernel owns its cache initialization. */
-    ldr x0, =LOAD_DEST
-    ldr x1, =(LOAD_DEST + LOAD_BYTES)
-.Lclean_destination:
-    dc civac, x0
-    add x0, x0, #64
-    cmp x0, x1
-    b.lo .Lclean_destination
-    adr x0, __loader_ro_end
-    adr x1, __image_end
-.Lclean_adapter:
-    dc civac, x0
-    add x0, x0, #64
-    cmp x0, x1
-    b.lo .Lclean_adapter
+    /* From here until every line is clean there are no loads, stores,
+     * callbacks or stack accesses. M/C/I go off first, so nothing can
+     * allocate behind the pass; then every dirty line (the window, the
+     * adapter's data, stack and tables) reaches PoC and every line is
+     * invalidated by set/way, ~33K operations instead of 1.15 million by VA
+     * over the window. The next kernel starts from empty caches. */
     dsb sy
     msr sctlr_el1, x19
     isb
+    bl loader_dcache_cisw_all
     dsb sy
     mrs x0, sctlr_el1
     mov x1, #0x1005
@@ -250,4 +232,48 @@ loader_copy_run:
     ldp x27, x28, [sp, #64]
     ldp x29, x30, [sp, #80]
     ldp x19, x20, [sp], #96
+    ret
+
+/* Clean and invalidate every data cache level to the Level of Coherence by
+ * set/way (CLIDR/CCSIDR walk, the Arm ARM's example sequence). Registers
+ * x0-x11 only: no stack and no memory access, so it can run between turning
+ * the caches off and their contents reaching memory. */
+.balign 16
+.global loader_dcache_cisw_all
+loader_dcache_cisw_all:
+    mrs x0, clidr_el1
+    ubfx x3, x0, #24, #3        /* LoC */
+    lsl x3, x3, #1              /* LoC * 2, the CSSELR level field */
+    cbz x3, 5f
+    mov x10, #0                 /* level * 2 */
+1:  add x2, x10, x10, lsr #1    /* level * 3 */
+    lsr x1, x0, x2
+    and x1, x1, #7              /* cache type at this level */
+    cmp x1, #2
+    b.lt 4f                     /* no data cache here */
+    msr csselr_el1, x10
+    isb
+    mrs x1, ccsidr_el1
+    and x2, x1, #7
+    add x2, x2, #4              /* log2(line bytes) */
+    ubfx x4, x1, #3, #10        /* ways - 1 */
+    clz w5, w4                  /* way field shift */
+    ubfx x7, x1, #13, #15       /* sets - 1 */
+2:  mov x9, x4
+3:  lsl x6, x9, x5
+    orr x11, x10, x6
+    lsl x6, x7, x2
+    orr x11, x11, x6
+    dc cisw, x11
+    subs x9, x9, #1
+    b.ge 3b
+    subs x7, x7, #1
+    b.ge 2b
+4:  add x10, x10, #2
+    cmp x3, x10
+    b.gt 1b
+5:  mov x10, #0
+    msr csselr_el1, x10
+    dsb sy
+    isb
     ret

@@ -45,8 +45,11 @@ def tree(*, reservations=None, children=None, root_cells=2, reserved_cells=2,
     return header + reserves + structure + keys
 
 class Report(ctypes.Structure):
+    # The leading fields of struct loader_memory_report; the parser also fills bank_count and the RAM ledger after
+    # them (about 1.6 KB), so the buffer must hold the whole struct.
     _fields_ = [('reservations', ctypes.c_uint32), ('reserved_nodes', ctypes.c_uint32),
-                ('required_reservations', ctypes.c_uint32), ('ramoops_seen', ctypes.c_uint32)]
+                ('required_reservations', ctypes.c_uint32), ('ramoops_seen', ctypes.c_uint32),
+                ('rest', ctypes.c_uint8 * 4096)]
 
 class NativeMemoryGateTests(unittest.TestCase):
     @classmethod

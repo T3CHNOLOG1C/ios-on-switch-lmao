@@ -6,7 +6,8 @@
 # The video console must still exist (the refusal below writes to it); a refusal switches back to it.
 # Boot timing (native/loader/stamps.h): setexpr.l samples the microsecond timer (TIMERUS_CNTR_1US, 0x60005010) after
 # each step; just before bootm go the samples go to the loader's slot at 0xA001EF00. Diagnostic only: nothing here
-# depends on them. ios_uboot comes from the hekate entry (its scan_dev_for_extlinux).
+# depends on them. ios_uboot comes from the hekate entry (its scan_dev_for_extlinux); ios_u_main and ios_u_sd from
+# U-Boot's own default environment (package_raw_boot.py bl33_patch).
 setexpr.l ios_script *0x60005010
 if setenv stdout vidconsole; then
     setenv stdout serial
@@ -286,6 +287,8 @@ if test "${handoff_status}" = "READY"; then
             if env exists ios_exporter; then mw.l 0xA001EF18 ${ios_exporter} 1; fi
             if env exists ios_prep; then mw.l 0xA001EF1C ${ios_prep} 1; fi
             mw.l 0xA001EF20 ${ios_go} 1
+            if env exists ios_u_main; then mw.l 0xA001EF24 ${ios_u_main} 1; fi
+            if env exists ios_u_sd; then mw.l 0xA001EF28 ${ios_u_sd} 1; fi
             mw.l 0xA001EF00 0x544f4255 1
             echoe "HANDOFF"
             bootm go
