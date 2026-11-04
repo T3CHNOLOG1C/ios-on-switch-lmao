@@ -133,6 +133,7 @@ class SwitchALS : public IOService {
     unsigned gain = 2;  // 64x, as bh1730_init_config and hekate
     unsigned errors = 0, unclaimed = 0, skip = 0;
     bool lit = true, suspended = false, identified = false, configured = false;
+    bool broken = false;  // a sensor or HID path that is not as expected: logged once, sampling off for this boot
     uint64_t ticksSeen = 0;
     // Frame-end filter state: `running` gates it; `frames` is the filter's own; `ticks` counts its signals.
     bool running = false;
@@ -144,6 +145,7 @@ class SwitchALS : public IOService {
     static void ticked(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void deadlinePassed(OSObject *owner, IOTimerEventSource *sender);
     void update();
+    void giveUp();
     int configure();
     void sample();
     void dispatch(uint32_t level, uint32_t visible, uint32_t ir);
@@ -176,7 +178,7 @@ void SwitchALS::frameEnd()
 // registers while LDO6 stays on) and the frame ends are ignored.
 void SwitchALS::update()
 {
-    const bool want = lit && !suspended;
+    const bool want = lit && !suspended && !broken;
     if (want == __atomic_load_n(&running, __ATOMIC_RELAXED)) return;
     if (want) {
         frames = 0;
@@ -191,6 +193,14 @@ void SwitchALS::update()
     configured = false;
 }
 
+// Work loop. The ALS is not worth a boot: a part that is not a BH1730, a sensor that does not answer and an event path
+// nothing takes each log one line (the caller's) and leave the sensor off; a lost display interrupt still panics.
+void SwitchALS::giveUp()
+{
+    broken = true;
+    update();
+}
+
 // The bus and a software reset once, then gain, integration time and continuous conversion (hekate als_power_on,
 // bh1730_power_on and bh1730_init_config). The conversion in flight is the old configuration's, so the next sample is
 // skipped. Nothing touches the hardware before this, the first sample: start() only publishes.
@@ -202,7 +212,11 @@ int SwitchALS::configure()
         if ((err = tegra_i2c_init(kBus))) return err;  // idempotent
         if ((err = tegra_i2c_read(kBus, kSensor, kCommand | RegId, &id, 1))) return err;
         // BH1730FVC PART ID register: part number 0111 in bits 7:4.
-        if ((id >> 4) != 7) panic("SwitchALS: I2C2 0x29 is not a BH1730 (id %#x)", id);
+        if ((id >> 4) != 7) {
+            IOLog("SwitchALS: off: I2C2 0x29 is not a BH1730 (id %#x)\n", id);
+            broken = true;  // sample() turns the sensor off
+            return -1;
+        }
         const uint8_t reset = 0;
         if ((err = tegra_i2c_write(kBus, kSensor, kSoftwareReset, &reset, 1))) return err;
         identified = true;
@@ -218,12 +232,19 @@ int SwitchALS::configure()
 void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
 {
     OSObject *event = OSMetaClass::allocClassWithName("IOHIDEvent");
-    if (!event) panic("SwitchALS: OSMetaClass::allocClassWithName(\"IOHIDEvent\") failed (IOHIDFamily not loaded?)");
+    if (!event) {
+        IOLog("SwitchALS: off: OSMetaClass::allocClassWithName(\"IOHIDEvent\") failed (IOHIDFamily not loaded?)\n");
+        giveUp();
+        return;
+    }
     vcall<void, uint32_t>(event, kSetType, kAmbientLightType);
     // initWithType allocates the event data; without it every accessor would dereference null.
     if (!*reinterpret_cast<void *const *>(reinterpret_cast<const uint8_t *>(event) + 0x10)) {
-        panic("SwitchALS: IOHIDEvent setType(%u) left no event data (wrong vtable slot or no memory)",
+        IOLog("SwitchALS: off: IOHIDEvent setType(%u) left no event data (wrong vtable slot or no memory)\n",
               kAmbientLightType);
+        event->release();
+        giveUp();
+        return;
     }
     vcall<void, uint64_t>(event, kSetTimeStamp, mach_absolute_time());
     vcall<void, uint32_t, int32_t, IOOptionBits>(event, kSetIntegerValue, kFieldLevel, (int32_t)level, 0);
@@ -235,8 +256,9 @@ void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
     if (status == kIOReturnSuccess) {
         unclaimed = 0;
     } else if (++unclaimed >= kUnclaimedLimit) {
-        panic("SwitchALS: no IOHIDEventDriver took the ALS HID device in %u samples (dispatch %#x)", kUnclaimedLimit,
-              status);
+        IOLog("SwitchALS: off: no IOHIDEventDriver took the ALS HID device in %u samples (dispatch %#x)\n",
+              kUnclaimedLimit, status);
+        giveUp();
     }
 }
 
@@ -261,9 +283,12 @@ void SwitchALS::sample()
     uint8_t data[4] = {};  // DATA0 (visible) and DATA1 (infrared), little endian, in one auto-increment read
     const int err = configured ? tegra_i2c_read(kBus, kSensor, kCommand | RegData0, data, sizeof(data)) : configure();
     if (err) {
-        if (++errors >= kErrorLimit) {
-            panic("SwitchALS: BH1730 on I2C2 0x29 %s: I2C error %d %u times in a row (LDO6 off?)",
+        if (broken) {
+            giveUp();  // configure() logged why
+        } else if (++errors >= kErrorLimit) {
+            IOLog("SwitchALS: off: BH1730 on I2C2 0x29 %s: I2C error %d %u times in a row (LDO6 off?)\n",
                   identified ? "stopped answering" : "never answered", err, errors);
+            giveUp();
         }
         return;
     }
