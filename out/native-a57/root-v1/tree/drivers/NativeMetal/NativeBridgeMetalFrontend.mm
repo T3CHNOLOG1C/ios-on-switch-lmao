@@ -30,6 +30,8 @@
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"  // r7-async: render pipeline states made off the asking thread
+// The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
+#include "TwoPlaneStandIn.h"
 
 static NmbDevice *gDevice;
 static id gDeviceObject;
@@ -308,8 +310,25 @@ static void waitForResource(id resource);
 - (bool)invalidateForCpu;
 - (void)gpuWrote;
 @end
+// Two-plane render targets. RenderBox renders widget and poster snapshots into '_RB4' surfaces as RGB8_444_2P (542) on an Apple3
+// device or later (RB::ColorMode::pixel_format), with blends and loads; the runtime renders no pass into a two-plane code format
+// (r7m/r7n: every WidgetRenderer_Default pass refused). Metal holds such an attachment as half texels and stores each channel's
+// code round(h * 255), green into the luma plane and blue and red as the chroma plane's pairs (an M4 under macOS 27.0.1: clears,
+// source-over blends and loads into '_RB4' beside RGBA8Unorm, which rounds its float tile and lands up to 1 off). So a pass renders
+// such an attachment into the texture's RGBA16Float stand-in (made at its first pass and kept with it), the pipelines target
+// RGBA16Float in its place (renderDescriptor), a pass that loads it first moves the planes' codes into the stand-in, and the
+// encoder's end stores the stand-in into the planes through R8Unorm and RG8Unorm textures over them (TwoPlaneStandIn.metal): one
+// full-target draw each, ordered on the GPU like any pass, no CPU wait. Samples, blits and CPU copies of the texture read and
+// write its planes as before.
+static bool rendersThroughStandIn(NSUInteger format)
+{
+    return format == 542;  // MTLPixelFormatRGB8_444_2P
+}
+@class NBTwoPlaneStandIn;
 @interface NBTexture : NBObject
 @property (nonatomic) NmbTexture *handle;
+// A two-plane render target's stand-in (above), made at its first pass.
+@property (nonatomic, strong) NBTwoPlaneStandIn *standIn;
 @property (nonatomic) NmbTextureDescriptor descriptor;
 @property (nonatomic, strong) NBBuffer *buffer;
 @property (nonatomic) IOSurfaceRef surface;
@@ -1517,6 +1536,7 @@ struct PassTarget {
 @property (nonatomic, strong, readonly) NSMutableDictionary *userDictionary;
 @property (nonatomic, readonly) uint64_t globalTraceObjectID;
 - (void)refuse:(NSString *)what;
+- (void)storeStandIn:(NBTwoPlaneStandIn *)standIn;
 @end
 @interface NBEncoder : NBObject
 @property (nonatomic) NmbEncoder *handle;
@@ -1869,8 +1889,17 @@ static void waitForResource(id resource)
 @interface NBRenderEncoder : NBEncoder
 @property (nonatomic) bool skipsPending;  // r7-async: the display's pass: a state still being made skips its draws
 @property (nonatomic) bool skipDraws;     // r7-async: the state set last is being made (or failed): its draws are skipped
+@property (nonatomic, strong) NSArray<NBTwoPlaneStandIn *> *storeBacks;  // stored into their planes at endEncoding
 @end
 @implementation NBRenderEncoder
+// The pass's two-plane attachments go back into their planes once it ends (rendersThroughStandIn).
+- (void)endEncoding
+{
+    [super endEncoding];
+    NSArray<NBTwoPlaneStandIn *> *stores = _storeBacks;
+    _storeBacks = nil;
+    for (NBTwoPlaneStandIn *standIn in stores) [self.commandBuffer storeStandIn:standIn];
+}
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)state
 {
     NBApiTime timed;
@@ -2300,9 +2329,119 @@ static void waitForResource(id resource)
 }
 @end
 
+// A two-plane render target's stand-in and the textures over its planes the store writes (rendersThroughStandIn).
+@interface NBTwoPlaneStandIn : NSObject
+// RGBA16Float: the passes' attachment in the texture's place.
+@property (nonatomic, strong) id<MTLTexture> texture;
+// R8Unorm over plane 0 (green), RG8Unorm over plane 1 (blue, red).
+@property (nonatomic, strong) id<MTLTexture> luma, chroma;
+@end
+@implementation NBTwoPlaneStandIn
+@end
+// The load and store functions' states (TwoPlaneStandIn.metal), made once, synchronously: the store must draw in the encoder that
+// needs it, which a state still being made on a worker would skip (AsyncPipelines.h). Nil, logged once, where either is refused.
+static id<MTLRenderPipelineState> gStandInLoad, gStandInStore;
+static bool standInStates()
+{
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        id<MTLDevice> device = (id<MTLDevice>)gDeviceObject;
+        dispatch_data_t data = dispatch_data_create(kTwoPlaneStandInLibrary, sizeof kTwoPlaneStandInLibrary, nullptr,
+                                                    DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithData:data error:&error];
+        const bool was = tAsyncWorker;
+        tAsyncWorker = true;
+        MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+        d.label = @"two-plane stand-in load";
+        d.vertexFunction = [library newFunctionWithName:@"two_plane_cover"];
+        d.fragmentFunction = [library newFunctionWithName:@"two_plane_load"];
+        d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+        gStandInLoad = library ? [device newRenderPipelineStateWithDescriptor:d error:&error] : nil;
+        d.label = @"two-plane stand-in store";
+        d.fragmentFunction = [library newFunctionWithName:@"two_plane_store"];
+        d.colorAttachments[0].pixelFormat = MTLPixelFormatR8Unorm;
+        d.colorAttachments[1].pixelFormat = MTLPixelFormatRG8Unorm;
+        gStandInStore = gStandInLoad ? [device newRenderPipelineStateWithDescriptor:d error:&error] : nil;
+        tAsyncWorker = was;
+        if (!gStandInLoad || !gStandInStore)
+            NBLOG(@"native-metal: two-plane render targets refused: their load/store states: %@",
+                  error.localizedDescription);
+    });
+    return gStandInLoad && gStandInStore;
+}
+// The stand-in of `texture` where a pass renders it through one (rendersThroughStandIn; a surface texture's level 0), made at its
+// first pass and kept with the texture; nil for any other texture, or where the stand-in cannot be made (logged once, the pass
+// then refused by the runtime as before).
+static NBTwoPlaneStandIn *standInOf(id texture)
+{
+    if (![texture isKindOfClass:[NBTexture class]]) return nil;
+    NBTexture *planes = (NBTexture *)texture;
+    if (!rendersThroughStandIn(planes.descriptor.format) || !planes.surface) return nil;
+    @synchronized(planes) {
+        if (planes.standIn) return planes.standIn;
+        if (!standInStates()) return nil;
+        id<MTLDevice> device = (id<MTLDevice>)gDeviceObject;
+        const NSUInteger width = planes.descriptor.width, height = planes.descriptor.height;
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                                                                     width:width
+                                                                                    height:height
+                                                                                 mipmapped:NO];
+        d.storageMode = MTLStorageModePrivate;
+        d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        NBTwoPlaneStandIn *standIn = [NBTwoPlaneStandIn new];
+        standIn.texture = [device newTextureWithDescriptor:d];
+        d.storageMode = MTLStorageModeShared;
+        d.usage = MTLTextureUsageRenderTarget;
+        d.pixelFormat = MTLPixelFormatR8Unorm;
+        standIn.luma = [device newTextureWithDescriptor:d iosurface:planes.surface plane:0];
+        d.pixelFormat = MTLPixelFormatRG8Unorm;
+        standIn.chroma = [device newTextureWithDescriptor:d iosurface:planes.surface plane:1];
+        if (!standIn.texture || !standIn.luma || !standIn.chroma) {
+            static std::atomic<bool> said{false};
+            if (!said.exchange(true))
+                NBLOG(@"native-metal: two-plane render target refused: no stand-in for a %lux%lu texture (%d%d%d)",
+                      (unsigned long)width, (unsigned long)height, standIn.texture != nil, standIn.luma != nil,
+                      standIn.chroma != nil);
+            return nil;
+        }
+        planes.standIn = standIn;
+        return standIn;
+    }
+}
+
 static void completed(void *context);
 static void scheduled(void *context);
 @implementation NBCommandBuffer
+// The planes' codes into `standIn` before a pass that loads it: one draw reading the texture (Metal's tile of the attachment).
+- (void)loadStandIn:(NBTwoPlaneStandIn *)standIn from:(id<MTLTexture>)planes
+{
+    MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+    d.colorAttachments[0].texture = standIn.texture;
+    d.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    d.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> encoder = [(id<MTLCommandBuffer>)self renderCommandEncoderWithDescriptor:d];
+    [encoder setRenderPipelineState:gStandInLoad];
+    [encoder setFragmentTexture:planes atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+}
+// `standIn` into its texture's planes once a pass that stores it ended: every texel's codes (Metal's store of the attachment).
+- (void)storeStandIn:(NBTwoPlaneStandIn *)standIn
+{
+    MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+    d.colorAttachments[0].texture = standIn.luma;
+    d.colorAttachments[1].texture = standIn.chroma;
+    for (unsigned i = 0; i < 2; i++) {
+        d.colorAttachments[i].loadAction = MTLLoadActionDontCare;
+        d.colorAttachments[i].storeAction = MTLStoreActionStore;
+    }
+    id<MTLRenderCommandEncoder> encoder = [(id<MTLCommandBuffer>)self renderCommandEncoderWithDescriptor:d];
+    [encoder setRenderPipelineState:gStandInStore];
+    [encoder setFragmentTexture:standIn.texture atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+}
 - (instancetype)init
 {
     static std::atomic<uint64_t> traceIDs{0};
@@ -2480,6 +2619,21 @@ static void scheduled(void *context);
             if (pixels >= 2000000) gFullScreenPasses++;
         }
     }
+    // Two-plane attachments render into their stand-ins (rendersThroughStandIn): loaded from the planes first where the pass loads
+    // them, stored back into them when the encoder ends where it stores them.
+    NBTwoPlaneStandIn *standIns[8] = {};
+    NSMutableArray<NBTwoPlaneStandIn *> *storeBacks = nil;
+    for (unsigned i = 0; i < 8; i++) {
+        MTLRenderPassColorAttachmentDescriptor *c = d.colorAttachments[i];
+        if (!c.texture || c.level || c.slice || c.depthPlane || c.resolveTexture ||
+            !(standIns[i] = standInOf(c.texture)))
+            continue;
+        if (c.loadAction == MTLLoadActionLoad) [self loadStandIn:standIns[i] from:c.texture];
+        if (c.storeAction != MTLStoreActionDontCare) {
+            if (!storeBacks) storeBacks = [NSMutableArray array];
+            [storeBacks addObject:standIns[i]];
+        }
+    }
     auto attachment = [&](MTLRenderPassAttachmentDescriptor *a, NmbPassAttachment &out) -> bool {
         if (!a.texture) return true;
         if (![(id)a.texture isKindOfClass:[NBTexture class]]) return false;
@@ -2498,6 +2652,10 @@ static void scheduled(void *context);
         if (!attachment(c, pass.colors[i])) {
             [self refuse:@"foreign color attachment"];
             return [self refusedEncoder:[NBRenderEncoder new]];
+        }
+        if (standIns[i]) {
+            [_resourceOwners addObject:standIns[i].texture];
+            pass.colors[i].texture = [(NBTexture *)standIns[i].texture handle];
         }
         pass.colors[i].clear[0] = c.clearColor.red;
         pass.colors[i].clear[1] = c.clearColor.green;
@@ -2524,6 +2682,7 @@ static void scheduled(void *context);
     }
     [self notePass:d];
     NBRenderEncoder *render = [NBRenderEncoder new];
+    render.storeBacks = storeBacks;
     render.skipsPending = asyncSkips(d);  // r7-async
     return [self encoder:render
                   handle:self.committed ? nullptr : nmb_render_encoder_new(_handle, &pass)
@@ -3048,7 +3207,9 @@ static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDe
     p->fragment = d.fragmentFunction ? [(NBFunction *)d.fragmentFunction handle] : nullptr;
     for (unsigned i = 0; i < 8; i++) {
         MTLRenderPipelineColorAttachmentDescriptor *a = d.colorAttachments[i];
-        p->colors[i] = {(uint64_t)a.pixelFormat,
+        // A two-plane code format renders into its texture's RGBA16Float stand-in (rendersThroughStandIn).
+        const NSUInteger format = rendersThroughStandIn(a.pixelFormat) ? MTLPixelFormatRGBA16Float : a.pixelFormat;
+        p->colors[i] = {(uint64_t)format,
                         (uint64_t)a.writeMask,
                         (uint64_t)a.blendingEnabled,
                         (uint64_t)a.sourceRGBBlendFactor,
