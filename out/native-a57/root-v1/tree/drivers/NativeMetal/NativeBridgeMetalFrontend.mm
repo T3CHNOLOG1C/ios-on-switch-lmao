@@ -1552,7 +1552,9 @@ static void waitForResource(id resource)
 }
 - (bool)check:(bool)ok what:(const char *)what
 {
-    if (!ok) [_commandBuffer refuse:[NSString stringWithFormat:@"%s: %@", what, lastError()]];
+    // A refused encoder's calls (no handle) fail here too: the command buffer keeps its first reason, so nothing is formatted.
+    if (!ok && !_commandBuffer.encodeFailure)
+        [_commandBuffer refuse:[NSString stringWithFormat:@"%s: %@", what, lastError()]];
     return ok;
 }
 - (void)endEncoding
@@ -2402,15 +2404,25 @@ static void scheduled(void *context);
 {
     return nmb_command_buffer_gpu_time(_handle, true);
 }
+// Metal never answers an encoder request with nil, and clients rely on it: RenderBox's DirectRenderCommandEncoder::reset caches
+// the encoder's IMPs through methodForSelector: and calls them, so a nil encoder was a jump to 0 (r7m: WidgetRenderer_Default
+// SIGSEGV at pc 0 from RB::RenderQueue::encode, its RGB8_444_2P pass refused). A refused request answers an encoder without a
+// handle (refusedEncoder:): each call on it refuses again (the command buffer logs its first reason only) and the command buffer
+// completes with an error, as a Metal command buffer that failed to encode does.
+- (id)refusedEncoder:(NBEncoder *)encoder
+{
+    encoder.commandBuffer = self;
+    return encoder;
+}
 - (id)encoder:(NBEncoder *)encoder handle:(NmbEncoder *)handle what:(NSString *)what
 {
     if (self.committed) {
         [self refuse:[what stringByAppendingString:@" after commit"]];
-        return nil;
+        return [self refusedEncoder:encoder];
     }
     if (!handle) {
         [self refuse:[NSString stringWithFormat:@"%@: %@", what, lastError()]];
-        return nil;
+        return [self refusedEncoder:encoder];
     }
     encoder.handle = handle;
     encoder.commandBuffer = self;
@@ -2437,7 +2449,7 @@ static void scheduled(void *context);
     for (NSUInteger i = 0; i < 4; i++)
         if (d.sampleBufferAttachments[i].sampleBuffer) {
             [self refuse:@"compute pass counter samples"];
-            return nil;
+            return [self refusedEncoder:[NBComputeEncoder new]];
         }
     return [self computeCommandEncoderWithDispatchType:d.dispatchType];
 }
@@ -2485,7 +2497,7 @@ static void scheduled(void *context);
         MTLRenderPassColorAttachmentDescriptor *c = d.colorAttachments[i];
         if (!attachment(c, pass.colors[i])) {
             [self refuse:@"foreign color attachment"];
-            return nil;
+            return [self refusedEncoder:[NBRenderEncoder new]];
         }
         pass.colors[i].clear[0] = c.clearColor.red;
         pass.colors[i].clear[1] = c.clearColor.green;
@@ -2494,7 +2506,7 @@ static void scheduled(void *context);
     }
     if (!attachment(d.depthAttachment, pass.depth) || !attachment(d.stencilAttachment, pass.stencil)) {
         [self refuse:@"foreign depth/stencil attachment"];
-        return nil;
+        return [self refusedEncoder:[NBRenderEncoder new]];
     }
     pass.depth.clear[0] = d.depthAttachment.clearDepth;
     pass.stencil.clear[0] = d.stencilAttachment.clearStencil;
@@ -2505,7 +2517,7 @@ static void scheduled(void *context);
     if (d.visibilityResultBuffer) {
         if (![(id)d.visibilityResultBuffer isKindOfClass:[NBBuffer class]]) {
             [self refuse:@"foreign visibility result buffer"];
-            return nil;
+            return [self refusedEncoder:[NBRenderEncoder new]];
         }
         [_resourceOwners addObject:d.visibilityResultBuffer];
         pass.visibility = [(NBBuffer *)d.visibilityResultBuffer handle];
@@ -4524,10 +4536,14 @@ static void installAnswers(Class cls)
                 NBLOG(@"native-metal: no device answer: %@", lastError());
                 continue;
             }
-            // Extended-range 10-bit (XR10) framebuffers are withheld: this display chain presents 8-bit BGRX scanout only. The render server picks its
-            // wide-gamut 64-bit (and Apple-compressed) framebuffer when a device offers them, and the display driver could not show it (int-089: the
-            // swap's surface was '&w4a', 8 bytes per pixel, and every swap was refused).
-            if (!strcmp(name, "supportsExtendedXR10Formats")) value = 0;
+            // Extended-range 10-bit (XR10) framebuffers are withheld from the render server: this display chain presents 8-bit BGRX scanout
+            // only, and backboardd picks its wide-gamut 64-bit (and Apple-compressed) framebuffer when a device offers them, which the display
+            // driver could not show (int-089: the swap's surface was '&w4a', 8 bytes per pixel, and every swap was refused). Everyone else gets
+            // the runtime's answer: CAMetalLayer raises CAMetalLayerInvalid ("unsupported extended range format") at setPixelFormat: of an
+            // XR10 format on a device without them, and ClockKitUI's quad views ask for one whatever the display (AegirPoster's colorSpace 2
+            // is BGR10_XR_sRGB: r7m crash-looped every ~1 s). Their 'w30r'/'w40a' drawables are textures and render targets here, and the
+            // render server samples them as before.
+            if (!strcmp(name, "supportsExtendedXR10Formats") && !strcmp(getprogname(), "backboardd")) value = 0;
             // Command buffer jumps are withheld: on YES MPSGraph and MPSImageCanny send the AGX encoder's encodeStartWhile/If/Else/EndIf SPI,
             // which this frontend's encoders do not implement.
             if (!strcmp(name, "supportsCommandBufferJump")) value = 0;
