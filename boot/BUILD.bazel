@@ -79,9 +79,11 @@ py_binary(
     args = [
         "--boot=$(rlocationpath :package)",
         "--gpu=$(rlocationpath //gpu:bundle)",
+        "--kernel=$(rlocationpath //:kernel)",
     ],
     data = [
         ":package",
+        "//:kernel",
         "//gpu:bundle",
     ],
     main = "//tools/package:snapshot.py",

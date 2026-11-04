@@ -6,6 +6,9 @@ deploying exactly that build later:
     bazel run //deploy:sd -- disk4 --yes --stage-gpu \\
         --boot-package=$PWD/out/boot/lkg/1900-r9-something --gpu-bundle=$PWD/out/boot/lkg/1900-r9-something/gpu
 
+The snapshot also keeps the build's kernel.macho, which names the unslid kernel addresses in panics and in the
+"IOSwitch kprof" lines: `xcrun atos -o out/boot/lkg/<NAME>/kernel.macho -arch arm64 <addr>...`.
+
 Refuses to overwrite an existing snapshot."""
 import argparse
 import hashlib
@@ -29,6 +32,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--boot", required=True)
     parser.add_argument("--gpu")
+    parser.add_argument("--kernel", help="the build's kernel.macho, kept for symbolication")
     parser.add_argument("--no-gpu", action="store_true", help="snapshot the boot entry only")
     parser.add_argument("name")
     args = parser.parse_args()
@@ -43,6 +47,8 @@ def main():
     shutil.copytree(boot, target, symlinks=False)
     if args.gpu and not args.no_gpu:
         shutil.copytree(located(args.gpu), target / "gpu", symlinks=False)
+    if args.kernel:
+        shutil.copyfile(located(args.kernel), target / "kernel.macho")
     for path in target.rglob("*"):
         path.chmod(0o755 if path.is_dir() or os.access(path, os.X_OK) else 0o644)
     window = target / "switchroot/ioswitch/kernel-window.bin"
