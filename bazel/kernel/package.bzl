@@ -163,6 +163,8 @@ boot_package = rule(
                 "@llvm_toolchain_llvm//:bin/llvm-objcopy",
                 "@llvm_toolchain_llvm//:bin/llvm-readelf",
                 "@llvm_toolchain_llvm//:bin/llvm-objdump",
+                # The kernel window's compressor (lz4 -12), built from pinned source.
+                "//tools:lz4",
             ],
             allow_files = True,
             cfg = "exec",

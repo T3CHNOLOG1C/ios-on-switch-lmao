@@ -1,0 +1,32 @@
+# Host tools the build compiles from pinned source.
+load("//bazel/kernel:inputs.bzl", "tool_output")
+
+package(default_visibility = ["//visibility:public"])
+
+LZ4_SOURCES = [
+    "lib/lz4.c",
+    "lib/lz4frame.c",
+    "lib/lz4hc.c",
+    "lib/xxhash.c",
+    "programs/bench.c",
+    "programs/lorem.c",
+    "programs/lz4cli.c",
+    "programs/lz4io.c",
+    "programs/threadpool.c",
+    "programs/timefn.c",
+    "programs/util.c",
+]
+
+# lz4 1.10.0 (MODULE.bazel @lz4), the version the boot package's `lz4 -12` was qualified with (Homebrew's).
+tool_output(
+    name = "lz4",
+    srcs = ["@lz4//:all"],
+    outs = ["lz4"],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--out={out}",
+        "--flag=-Iexternal/+http_archive+lz4/lib",
+    ] + ["external/+http_archive+lz4/" + f for f in LZ4_SOURCES],
+    message = "Building lz4 1.10.0",
+    tool = "host_c_binary.py",
+)
