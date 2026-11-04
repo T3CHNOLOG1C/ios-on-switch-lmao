@@ -699,6 +699,10 @@ struct rb_node *rb_prev(const struct rb_node *n)
  * page_to_phys()/page_address() are O(1). Allocation is first-fit over a bitmap, under a spinlock. */
 static struct page *pool_pages;
 static unsigned long *pool_map;
+/* Free pages not known to hold zeros: set by a free that did not zero (nvkm's, a BO's freed straight back), clear for a
+ * page the pool's initial clear or nvxnu_pool_free_zeroed left zero. nvxnu_pool_alloc_clean zeroes only these, so a BO
+ * whose pages the GPU driver zeroed when it was freed (off the allocating thread) costs its next owner no memset. */
+static unsigned long *pool_dirty;
 static unsigned long pool_npages, pool_used;
 static DEFINE_SPINLOCK(pool_lock);
 
@@ -710,7 +714,8 @@ int nvxnu_pool_setup(void)
 	pool_npages = nvxnu_pool_size() >> PAGE_SHIFT;
 	pool_pages = kcalloc(pool_npages, sizeof(*pool_pages), GFP_KERNEL);
 	pool_map = kcalloc(BITS_TO_LONGS(pool_npages), sizeof(long), GFP_KERNEL);
-	if (!pool_pages || !pool_map)
+	pool_dirty = kcalloc(BITS_TO_LONGS(pool_npages), sizeof(long), GFP_KERNEL);
+	if (!pool_pages || !pool_map || !pool_dirty)
 		return -ENOMEM;
 	for (unsigned long i = 0; i < pool_npages; i++)
 		pool_pages[i].pa = nvxnu_pool_base_pa() + (i << PAGE_SHIFT);
@@ -741,6 +746,7 @@ static void pool_free(unsigned long first, unsigned long n)
 {
 	spin_lock(&pool_lock);
 	bitmap_clear(pool_map, first, n);
+	bitmap_set(pool_dirty, first, n);
 	pool_used -= n;
 	spin_unlock(&pool_lock);
 }
@@ -824,6 +830,38 @@ void dma_free_attrs(struct device *dev, size_t size, void *va, dma_addr_t handle
 	(void)attrs;
 	if (i >= 0)
 		pool_free(i, PAGE_ALIGN(size) >> PAGE_SHIFT);
+}
+
+/* The GPU driver's BOs in the pool (tgm_pool_alloc): first fit, then only the pages a free left dirty are zeroed, so a
+ * range nvxnu_pool_free_zeroed gave back costs nothing to hand out again. Zeroed memory either way, as before. */
+void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long long *pa)
+{
+	unsigned long n = PAGE_ALIGN(size) >> PAGE_SHIFT, k;
+	long i = pool_map ? pool_alloc(n, 1) : -ENOMEM;
+	if (i < 0)
+		return NULL;
+	for (k = 0; k < n; k++)
+		if (test_bit(i + k, pool_dirty))
+			memset(page_address(&pool_pages[i + k]), 0, PAGE_SIZE);
+	spin_lock(&pool_lock);
+	bitmap_clear(pool_dirty, i, n);
+	spin_unlock(&pool_lock);
+	*pa = pool_pages[i].pa;
+	return page_address(&pool_pages[i]);
+}
+
+/* A range the caller zeroed (and made visible: the pool is write-combined) goes back clean. */
+void nvxnu_pool_free_zeroed(unsigned long long pa, unsigned long size)
+{
+	long i = pool_index(pa);
+	unsigned long n = PAGE_ALIGN(size) >> PAGE_SHIFT;
+	if (i < 0)
+		return;
+	spin_lock(&pool_lock);
+	bitmap_clear(pool_map, i, n);
+	bitmap_clear(pool_dirty, i, n);
+	pool_used -= n;
+	spin_unlock(&pool_lock);
 }
 
 dma_addr_t dma_map_page(struct device *dev, struct page *page, size_t off, size_t size,

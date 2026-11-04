@@ -531,12 +531,12 @@ static struct {
 
 extern "C" int nvxnu_pool_init(void)
 {
-	long long pa = 0, mib = 128;
+	long long pa = 0, mib = 256;  // arm_vm_init.c's default too: the two must agree
 	if (pool.va)
 		return 0;
 	nvxnu_bootarg_int("tegra-gpu-pool-mb", &mib);
 	if (mib < 16 || mib > 1024)
-		mib = 128;
+		mib = 256;
 	const uint64_t bytes = static_cast<uint64_t>(mib) << 20;
 	if (nvxnu_bootarg_int("tegra-gpu-pool-pa", &pa) && pa > 0 && !(pa & 0xfff) &&
 	    static_cast<uint64_t>(pa) + bytes <= (1ULL << 32)) {

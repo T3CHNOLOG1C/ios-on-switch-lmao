@@ -1092,6 +1092,10 @@ struct page {
 };
 int nvxnu_pool_setup(void);
 unsigned long nvxnu_pool_used_pages(void);
+/* BO pages in the pool (shim/linux.c): an allocation zeroes only pages a plain free left dirty; a range the caller zeroed
+ * goes back clean. */
+void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long long *pa);
+void nvxnu_pool_free_zeroed(unsigned long long pa, unsigned long size);
 struct page *alloc_page(gfp_t gfp);
 struct page *alloc_pages(gfp_t gfp, unsigned int order);
 void __free_page(struct page *p);

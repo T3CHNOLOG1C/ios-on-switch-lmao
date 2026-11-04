@@ -10,8 +10,10 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOSubMemoryDescriptor.h>
 #include <IOKit/IOUserClient.h>
 #include <kern/clock.h>
+#include <kern/thread_call.h>
 #include <stddef.h>
 #include <string.h>
 #include "TegraGM20BABI.h"
@@ -102,10 +104,18 @@ uint64_t nowNs()
 	return ns;
 }
 
-// tegra-gpu-all-clients=1: a client other than the compositor may hold at most tegra-gpu-client-pool-mb (default 64) of
-// the GPU pool in BOs, and gets none of its last tegra-gpu-pool-reserve-mb (default 32), which stay for the compositor
-// (CA's next allocation must not be the one that fails). A refused BoAlloc is kIOReturnNoMemory, logged once per
-// connection; Metal then fails that allocation cleanly.
+// The GPU pool for clients other than the compositor (tegra-gpu-all-clients, on by default). Every coherent BO comes from
+// the pool (NVK's coherent event heap, Metal's Shared storage through m2v), and so do nvkm's own page tables and channels,
+// unpoliced. Tiers, so the compositor is never starved and nobody else is refused while there is room:
+//  - a BO of up to kPoolSmallBytes (what a device needs to exist: NVK's event heap, upload chunks) is refused only when it
+//    would leave less than kPoolFloorBytes free: one more of the compositor's 16 MiB m2v blocks, and with it the room
+//    nvkm's page tables and channels for new clients take;
+//  - a larger one also leaves tegra-gpu-pool-reserve-mb (default 32: one of the compositor's 16 MiB m2v blocks, and the raw
+//    path's ~7 MiB of rings and tables should backboardd restart, with margin) free, and keeps the client within
+//    tegra-gpu-client-pool-mb (default 64) of pool BOs, a fairness share, not a limit on GPU memory (cached BOs have none).
+// Was: any BO kept the 32 MiB, so at 97 of 128 MiB used every poster extension's first 4 KiB was refused and its device
+// never opened (r7j). A refused BoAlloc is kIOReturnNoMemory, logged once per connection with the rule that refused it.
+constexpr uint64_t kPoolSmallBytes = 1ULL << 20, kPoolFloorBytes = 16ULL << 20;
 uint64_t clientPoolBytes()
 {
 	static uint64_t bytes;
@@ -126,6 +136,395 @@ uint64_t poolReserveBytes()
 		bytes = uint64_t(mb) << 20;
 	}
 	return bytes;
+}
+
+bool poolZeroNow();
+
+// Why a non-compositor client's pool BO of `bytes` is refused while it holds `held` (the tiers above), or nullptr. Freed
+// ranges the thread call has not zeroed yet are room too: when short, they are zeroed now rather than the BO refused.
+const char *poolRefusal(uint64_t bytes, uint64_t held)
+{
+	uint64_t avail = tgm_pool_avail();
+	if (avail < bytes + poolReserveBytes() && poolZeroNow())
+		avail = tgm_pool_avail();
+	if (avail < bytes + kPoolFloorBytes)
+		return "the pool's last 16 MiB stay for the compositor and nvkm";
+	if (bytes <= kPoolSmallBytes)
+		return nullptr;
+	if (avail < bytes + poolReserveBytes())
+		return "the rest stays for the compositor";
+	if (held + bytes > clientPoolBytes())
+		return "past the client's share";
+	return nullptr;
+}
+
+// ------------------------------------------------------------------ BoAlloc without waiting: spare BOs
+// What a BoAlloc cost its caller before (r7l, after 315c6e5): a cached BO is allocated and zero-filled by the VM and then
+// cleaned to DRAM line by line (0.34 ms per MiB), 18-26 ms for backboardd's 16 MiB m2v blocks, which Core Animation makes
+// on its render thread; a pool BO was memset on the caller's thread (4.5 ms for 16 MiB). Now:
+//  - Cached BOs come from spares in size classes (4-64 KiB by powers of two, then quarter steps to 256 MiB, so a BO
+//    wastes at most a quarter of its spare): a BoAlloc takes the smallest ready spare of its class or up to twice its size
+//    (classUp, spareTake) and maps it: no allocation, no zeroing, no clean on the caller's thread. A BO smaller than its
+//    spare is a view of the spare's first pages. The class of a size missed is kept warm from then on, and a few classes
+//    from the start (kWarm: what NVK and m2v make most: 64 KiB pieces, m2v's 4 MiB blocks, backboardd's 8 and 16 MiB
+//    ones, two of the 16 MiB so that a pair of them in one frame waits for neither).
+//  - A freed cached BO no task maps any more goes to the spares as it is (a list push: BoFree no longer unwires and
+//    frees); a thread call zeroes it through its kernel mapping and cleans it to DRAM once, then files it by class, or
+//    gives it back to the VM past kSpareCapBytes. The thread call runs on a free, a miss or a take below a class's mark:
+//    never on a timer. Under memory pressure (memorystatus' level, the one apps' memory warnings follow) it gives every
+//    spare back and keeps none.
+//  - A freed pool BO is zeroed by the same thread call and given back clean (tgm_pool_free_zeroed), so the next pool
+//    BoAlloc of those pages does no memset (shim nvxnu_pool_alloc_clean zeroes only pages a plain free left dirty).
+// Each window's BoAllocs by process go to the "mem3" line (tgm_owner_stats).
+constexpr uint32_t kClasses = 53;  // 4 KiB .. 256 MiB (kMaxBoBytes)
+constexpr uint64_t kSpareCapBytes = 96ULL << 20, kLearnMaxBytes = 16ULL << 20;
+struct WarmClass {
+	uint64_t bytes;
+	uint16_t ready;
+};
+constexpr WarmClass kWarm[] = {
+	{64ULL << 10, 8}, {4ULL << 20, 2}, {8ULL << 20, 1}, {16ULL << 20, 2}};
+constexpr uint32_t kOwners = 16;
+
+uint64_t classBytes(uint32_t c)
+{
+	return c < 5 ? 4096ULL << c : ((64ULL << 10) << ((c - 5) / 4)) * (5 + (c - 5) % 4) / 4;
+}
+
+// The smallest class of at least `bytes`; kClasses past the largest.
+uint32_t classUp(uint64_t bytes)
+{
+	uint32_t c = 0;
+	while (c < kClasses && classBytes(c) < bytes)
+		c++;
+	return c;
+}
+
+struct Spare {
+	Spare *next;
+	IOBufferMemoryDescriptor *bmd;  // prepared; ours alone (no view, no task mapping)
+	uint64_t *pas;
+	uint64_t bytes;
+};
+struct PoolZero {
+	PoolZero *next;
+	void *va;
+	uint64_t pa, bytes;
+};
+struct OwnerStat {
+	char name[17];
+	uint64_t n, bytes, ns, max_ns,
+		made;  // made: cached BOs made on the caller's thread (a miss)
+};
+struct SparePool {
+	IOLock *lock;
+	thread_call_t call;
+	Spare *dirty;         // freed, not yet zeroed
+	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
+	Spare *ready
+		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
+	uint16_t count[kClasses], target[kClasses];
+	uint64_t clean, dirtyBytes,
+		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
+	OwnerStat owners[kOwners];
+};
+SparePool *gSpares;
+// XNU's vm_pressure_level_t: 0 normal, 1 warning, 2 urgent, 4 critical.
+extern "C" int memorystatus_vm_pressure_level;
+
+bool memoryPressure()
+{
+	return __atomic_load_n(&memorystatus_vm_pressure_level, __ATOMIC_RELAXED) != 0;
+}
+
+// The class a spare of `bytes` serves: the largest class not past it.
+uint32_t spareClass(uint64_t bytes)
+{
+	const uint32_t c = classUp(bytes);
+	return c < kClasses && classBytes(c) == bytes ? c : c - 1;
+}
+
+void spareFree(Spare *s)
+{
+	s->bmd->complete();
+	s->bmd->release();
+	IODelete(s->pas, uint64_t, s->bytes >> 12);
+	IODelete(s, Spare, 1);
+}
+
+// Zero `bytes` through a cached BO's kernel mapping (when `zero`), then clean and invalidate its lines: the GPU and the
+// next owner's view see zeros, and no dirty line is written back later over what the GPU writes.
+void cleanZeros(void *va, uint64_t bytes, bool zero)
+{
+	if (zero)
+		bzero(va, bytes);
+	for (uint64_t a = reinterpret_cast<uint64_t>(va) & ~63ULL;
+	     a < reinterpret_cast<uint64_t>(va) + bytes; a += 64)
+		__asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
+	__asm__ volatile("dsb sy" ::: "memory");
+}
+
+// The page list of a wired kernel buffer.
+bool kernelPages(const void *va, uint64_t bytes, uint64_t *pas)
+{
+	for (uint64_t off = 0; off < bytes; off += 4096) {
+		const uint64_t pa = ml_vtophys(reinterpret_cast<vm_offset_t>(va) + off);
+		if (!pa || (pa & 0xfff) || pa + 4096 > (1ULL << 34))
+			return false;
+		pas[off >> 12] = pa;
+	}
+	return true;
+}
+
+// A wired, zeroed, clean cached BO of `bytes` (what BoAlloc's own path makes), or nullptr.
+Spare *spareMake(uint64_t bytes)
+{
+	Spare *s = IONew(Spare, 1);
+	uint64_t *pas = IONew(uint64_t, bytes >> 12);
+	IOBufferMemoryDescriptor *bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+		kernel_task,
+		static_cast<IOOptionBits>(kIODirectionInOut) |
+			static_cast<IOOptionBits>(kIOMemoryMapperNone),
+		bytes, 0x3ffffffffULL);
+	if (s && pas && bmd && bmd->prepare() == kIOReturnSuccess) {
+		// KMA_ZERO zero-filled it through the cacheable aperture: clean the zeros out
+		cleanZeros(bmd->getBytesNoCopy(), bytes, false);
+		if (kernelPages(bmd->getBytesNoCopy(), bytes, pas)) {
+			*s = {nullptr, bmd, pas, bytes};
+			return s;
+		}
+		bmd->complete();
+	}
+	if (bmd)
+		bmd->release();
+	if (pas)
+		IODelete(pas, uint64_t, bytes >> 12);
+	if (s)
+		IODelete(s, Spare, 1);
+	return nullptr;
+}
+
+void spareWork(thread_call_param_t param, thread_call_param_t)
+{
+	SparePool *p = static_cast<SparePool *>(param);
+	for (;;) {
+		IOLockLock(p->lock);
+		if (PoolZero *z = p->poolDirty) {  // first: pool pages are the scarcer
+			p->poolDirty = z->next;
+			IOLockUnlock(p->lock);
+			tgm_pool_free_zeroed(z->va, z->bytes, z->pa);
+			IOLockLock(p->lock);
+			p->poolZeroing -= z->bytes;
+			IOLockUnlock(p->lock);
+			IODelete(z, PoolZero, 1);
+			continue;
+		}
+		const bool pressure = memoryPressure();
+		if (Spare *s = p->dirty) {
+			p->dirty = s->next;
+			p->dirtyBytes -= s->bytes;
+			const bool keep = !pressure && p->clean + s->bytes <= kSpareCapBytes;
+			if (keep)
+				p->clean += s->bytes;  // held for it while it is zeroed
+			IOLockUnlock(p->lock);
+			if (!keep) {
+				spareFree(
+					s);  // past the cap or under pressure: back to the VM, unzeroed
+				continue;
+			}
+			cleanZeros(s->bmd->getBytesNoCopy(), s->bytes, true);
+			const uint32_t c = spareClass(s->bytes);
+			IOLockLock(p->lock);
+			s->next = p->ready[c];
+			p->ready[c] = s;
+			p->count[c]++;
+			IOLockUnlock(p->lock);
+			continue;
+		}
+		if (pressure) {  // give every spare back; refill nothing while it lasts
+			Spare *all = nullptr;
+			for (uint32_t c = 0; c < kClasses; c++) {
+				while (Spare *s = p->ready[c]) {
+					p->ready[c] = s->next;
+					s->next = all;
+					all = s;
+				}
+				p->count[c] = 0;
+			}
+			p->clean = 0;
+			IOLockUnlock(p->lock);
+			while (all) {
+				Spare *next = all->next;
+				spareFree(all);
+				all = next;
+			}
+			return;
+		}
+		uint32_t c = 0;
+		while (c < kClasses &&
+		       (p->count[c] >= p->target[c] || p->clean + classBytes(c) > kSpareCapBytes))
+			c++;
+		if (c == kClasses) {
+			IOLockUnlock(p->lock);
+			return;
+		}
+		p->clean += classBytes(c);
+		IOLockUnlock(p->lock);
+		Spare *s = spareMake(classBytes(c));
+		IOLockLock(p->lock);
+		if (!s) {  // the VM could not give it: try again at the next event, not now
+			p->clean -= classBytes(c);
+			IOLockUnlock(p->lock);
+			return;
+		}
+		s->next = p->ready[c];
+		p->ready[c] = s;
+		p->count[c]++;
+		IOLockUnlock(p->lock);
+	}
+}
+
+SparePool *spares()
+{
+	SparePool *p = __atomic_load_n(&gSpares, __ATOMIC_ACQUIRE);
+	if (p)
+		return p;
+	SparePool *n = IONew(SparePool, 1);
+	if (!n)
+		return nullptr;
+	bzero(n, sizeof(*n));
+	for (const WarmClass &w : kWarm)
+		n->target[classUp(w.bytes)] = w.ready;
+	n->lock = IOLockAlloc();
+	n->call = n->lock ? thread_call_allocate_with_priority(spareWork, n,
+							       THREAD_CALL_PRIORITY_USER)
+			  : nullptr;
+	if (!n->call) {
+		if (n->lock)
+			IOLockFree(n->lock);
+		IODelete(n, SparePool, 1);
+		return nullptr;
+	}
+	if (!__atomic_compare_exchange_n(&gSpares, &p, n, false, __ATOMIC_ACQ_REL,
+					 __ATOMIC_ACQUIRE)) {
+		thread_call_free(n->call);
+		IOLockFree(n->lock);
+		IODelete(n, SparePool, 1);
+		return p;
+	}
+	thread_call_enter(n->call);  // the warm classes, made before anyone waits for them
+	return n;
+}
+
+// A ready spare for a cached BO of `bytes`: of its class, or of a larger one up to about twice its size; nullptr when
+// none is ready, which marks the class to keep warm. Either way a class below its mark wakes the thread call.
+Spare *spareTake(uint64_t bytes)
+{
+	SparePool *p = spares();
+	const uint32_t c = classUp(bytes);
+	if (!p || c >= kClasses)
+		return nullptr;
+	const uint32_t last = c + (c < 5 ? 1 : 4);
+	IOLockLock(p->lock);
+	Spare *s = nullptr;
+	for (uint32_t d = c; d < kClasses && d <= last && !s; d++)
+		if ((s = p->ready[d])) {
+			p->ready[d] = s->next;
+			p->count[d]--;
+			p->clean -= s->bytes;
+		}
+	if (!s && classBytes(c) <= kLearnMaxBytes && !p->target[c])
+		p->target[c] = 1;
+	const bool kick = !memoryPressure() ? p->count[c] < p->target[c] : p->clean != 0;
+	IOLockUnlock(p->lock);
+	if (kick)
+		thread_call_enter(p->call);
+	return s;
+}
+
+// A freed cached BO (its prepared descriptor, which nothing else holds, with its `bytes` and page list) to the spares:
+// true if taken, then the caller must not touch bmd or pas again. Zeroing, cleaning and the cap are the thread call's.
+bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes)
+{
+	SparePool *p = spares();
+	Spare *s = p && bmd->getRetainCount() == 1 ? IONew(Spare, 1) : nullptr;
+	if (!s)
+		return false;
+	*s = {nullptr, bmd, pas, bytes};
+	IOLockLock(p->lock);
+	s->next = p->dirty;
+	p->dirty = s;
+	p->dirtyBytes += bytes;
+	IOLockUnlock(p->lock);
+	thread_call_enter(p->call);
+	return true;
+}
+
+// A freed pool BO's range (no task maps it) to be zeroed and given back clean by the thread call: true if taken.
+bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes)
+{
+	SparePool *p = spares();
+	PoolZero *z = p ? IONew(PoolZero, 1) : nullptr;
+	if (!z)
+		return false;
+	*z = {nullptr, va, pa, bytes};
+	IOLockLock(p->lock);
+	z->next = p->poolDirty;
+	p->poolDirty = z;
+	p->poolZeroing += bytes;
+	IOLockUnlock(p->lock);
+	thread_call_enter(p->call);
+	return true;
+}
+
+// The freed pool ranges still waiting, zeroed and given back now: a pool BoAlloc that found no room tries again after.
+bool poolZeroNow()
+{
+	SparePool *p = __atomic_load_n(&gSpares, __ATOMIC_ACQUIRE);
+	if (!p)
+		return false;
+	IOLockLock(p->lock);
+	PoolZero *all = p->poolDirty;
+	p->poolDirty = nullptr;
+	IOLockUnlock(p->lock);
+	if (!all)
+		return false;
+	while (all) {
+		PoolZero *next = all->next;
+		tgm_pool_free_zeroed(all->va, all->bytes, all->pa);
+		IOLockLock(p->lock);
+		p->poolZeroing -= all->bytes;
+		IOLockUnlock(p->lock);
+		IODelete(all, PoolZero, 1);
+		all = next;
+	}
+	return true;
+}
+
+// One BoAlloc of `owner`'s for the window's "mem3" line; `made`: a cached BO made on the caller's thread.
+void ownerNote(const char *owner, uint64_t bytes, uint64_t ns, bool made)
+{
+	SparePool *p = spares();
+	if (!p || !tgm_stats_on())
+		return;
+	IOLockLock(p->lock);
+	OwnerStat *o = nullptr;
+	for (uint32_t i = 0; i < kOwners && !o; i++)
+		if (!p->owners[i].n || !strncmp(p->owners[i].name, owner, sizeof(o->name) - 1))
+			o = &p->owners[i];
+	if (!o) {  // more processes than slots this window: the last slot takes the rest
+		o = &p->owners[kOwners - 1];
+		strlcpy(o->name, "(others)", sizeof(o->name));
+	} else if (!o->n) {
+		strlcpy(o->name, owner, sizeof(o->name));
+	}
+	o->n++;
+	o->bytes += bytes;
+	o->ns += ns;
+	o->made += made;
+	if (ns > o->max_ns)
+		o->max_ns = ns;
+	IOLockUnlock(p->lock);
 }
 
 // boot-arg tegra-gpu-stats=1 (also gpu.c's stats lines): the method stream of every kScanEvery-th submission is read
@@ -276,6 +675,47 @@ IOReturn ioreturn(int err)
 }
 }  // namespace
 
+extern "C" void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready,
+				 uint64_t *pool_zeroing_bytes)
+{
+	SparePool *p = __atomic_load_n(&gSpares, __ATOMIC_ACQUIRE);
+	uint64_t n = 0;
+	if (p) {
+		IOLockLock(p->lock);
+		for (uint32_t c = 0; c < kClasses; c++)
+			n += p->count[c];
+		*kept_bytes = p->clean + p->dirtyBytes;
+		*pool_zeroing_bytes = p->poolZeroing;
+		IOLockUnlock(p->lock);
+	} else {
+		*kept_bytes = *pool_zeroing_bytes = 0;
+	}
+	*ready = n;
+}
+
+// The window's BoAllocs by process ("name n (KiB, mean/max us, made m)"), then cleared; 0 when there were none.
+extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
+{
+	SparePool *p = __atomic_load_n(&gSpares, __ATOMIC_ACQUIRE);
+	unsigned long at = 0;
+	if (!p || !size)
+		return 0;
+	out[0] = 0;
+	IOLockLock(p->lock);
+	for (uint32_t i = 0; i < kOwners && p->owners[i].n; i++) {
+		const OwnerStat &o = p->owners[i];
+		const int n = snprintf(out + at, size - at,
+				       "%s%s %llu (%llu KiB, %llu/%llu us, made %llu)",
+				       at ? "; " : "", o.name, o.n, o.bytes >> 10,
+				       o.ns / o.n / 1000, o.max_ns / 1000, o.made);
+		if (n > 0)
+			at = at + n < size ? at + n : size - 1;
+	}
+	bzero(p->owners, sizeof(p->owners));
+	IOLockUnlock(p->lock);
+	return at;
+}
+
 class AGXDeviceUserClient : public IOUserClient
 {
 	OSDeclareDefaultStructors(AGXDeviceUserClient)
@@ -284,6 +724,8 @@ class AGXDeviceUserClient : public IOUserClient
 		Bo *next;
 		uint64_t handle, bytes;
 		uint32_t token, flags, npages;
+		uint32_t
+			backing_pages;  // pas' length: npages, or a spare's pages when the BO is a view of its first ones
 		bool readOnly;  // imports of pages the task maps read-only: the GPU maps them read-only
 		uint64_t *pas;  // one per 4 KiB page; tgm_mem keeps a pointer to it
 		void *pool_va;  // Coherent BOs: pool memory (write-combined, contiguous)
@@ -468,8 +910,11 @@ AGXDeviceUserClient::Bo *AGXDeviceUserClient::findToken(uint32_t token)
 void AGXDeviceUserClient::releaseBo(Bo *bo)
 {
 	tgm_mem_del(&bo->mem);
-	if (bo->pool_va && bo->handle)
+	if (bo->pool_va && bo->handle) {
 		pool_bytes_ -= bo->bytes;
+		if (critical_)
+			tgm_stats_compositor_pool(-static_cast<int64_t>(bo->bytes));
+	}
 	// A pool view still mapped in a task keeps its pages until unmapped (PoolOrphan). Cached BOs need no such care:
 	// their mappings hold the buffer itself.
 	PoolOrphan *orphan = nullptr;
@@ -484,8 +929,16 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	} else {
 		if (bo->view)
 			bo->view->release();
-		if (bo->pool_va)
+		// a pool BO's pages are zeroed off this thread and go back clean; a cached BO no task maps any more goes to
+		// the spares as it is (spareKeep: zeroed and cleaned by the thread call, or given back to the VM there)
+		if (bo->pool_va &&
+		    !(bo->handle && poolZeroLater(bo->pool_va, bo->pool_pa, bo->bytes)))
 			tgm_pool_free(bo->pool_va, bo->bytes, bo->pool_pa);
+	}
+	if (bo->bmd && bo->handle && !(bo->flags & TegraGM20BBoContiguous) &&
+	    spareKeep(bo->bmd, bo->pas, uint64_t(bo->backing_pages) << 12)) {
+		bo->bmd = nullptr;
+		bo->pas = nullptr;
 	}
 	if (bo->bmd) {
 		bo->bmd->complete();
@@ -501,7 +954,7 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 		bo->wired->release();
 	}
 	if (bo->pas)
-		IODelete(bo->pas, uint64_t, bo->npages);
+		IODelete(bo->pas, uint64_t, bo->backing_pages);
 	IODelete(bo, Bo, 1);
 }
 
@@ -585,22 +1038,28 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	bo->bytes = in->bytes;
 	bo->flags = in->flags;
 	bo->npages = static_cast<uint32_t>(in->bytes >> 12);
+	bo->backing_pages = bo->npages;
 	bo->pas = IONew(uint64_t, bo->npages);
 	IOReturn ret = bo->pas ? kIOReturnSuccess : kIOReturnNoMemory;
+	int kind = TGM_BO_CACHED;
+	Spare *spare = nullptr;
+	const char *refused = nullptr;
 	if (!ret && (in->flags & TegraGM20BBoCoherent) && !critical_ &&
-	    (pool_bytes_ + in->bytes > clientPoolBytes() ||
-	     tgm_pool_avail() < in->bytes + poolReserveBytes())) {
+	    (refused = poolRefusal(in->bytes, pool_bytes_))) {
 		if (!quotaLogged_)
-			IOLog("tegra-gm20b: %s: GPU pool BoAlloc of %llu KiB refused (client holds "
-			      "%llu of %llu MiB, pool %llu MiB "
-			      "free, %llu kept for the compositor); further refusals not logged\n",
-			      owner_, in->bytes >> 10, pool_bytes_ >> 20, clientPoolBytes() >> 20,
-			      tgm_pool_avail() >> 20, poolReserveBytes() >> 20);
+			IOLog("tegra-gm20b: %s: GPU pool BoAlloc of %llu KiB refused: %s "
+			      "(client holds %llu MiB of the pool, %llu MiB free); "
+			      "further refusals not logged\n",
+			      owner_, in->bytes >> 10, refused, pool_bytes_ >> 20,
+			      tgm_pool_avail() >> 20);
 		quotaLogged_ = true;
 		ret = kIOReturnNoMemory;
 	} else if (!ret && (in->flags & TegraGM20BBoCoherent)) {
-		// write-combined pool memory: zeroed by the allocator, no cacheable alias (CONTRACT §3)
+		// write-combined pool memory: zeroed by the allocator, no cacheable alias (CONTRACT §3). No room: the freed
+		// ranges the thread call has not zeroed yet are zeroed now, and the allocation tried again.
 		bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
+		if (!bo->pool_va && poolZeroNow())
+			bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
 		if (!bo->pool_va) {
 			ret = kIOReturnNoMemory;
 		} else {
@@ -615,9 +1074,28 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 				TASK_NULL);
 			ret = bo->view ? kIOReturnSuccess : kIOReturnNoMemory;
 		}
+	} else if (!ret && !(in->flags & TegraGM20BBoContiguous) &&
+		   (spare = spareTake(in->bytes))) {
+		// a spare: zeroed and cleaned already, its page list made; the BO is its first pages
+		IODelete(bo->pas, uint64_t, bo->npages);
+		bo->pas = spare->pas;
+		bo->backing_pages = static_cast<uint32_t>(spare->bytes >> 12);
+		bo->bmd = spare->bmd;
+		IODelete(spare, Spare, 1);
+		kind = TGM_BO_SPARE;
 	} else if (!ret) {
 		IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
 				       static_cast<IOOptionBits>(kIOMemoryMapperNone);
+		// Made here only when no spare was ready (the class is kept warm from now on), at its class's size so that it
+		// serves the class again once freed; the BO is its first pages.
+		const uint32_t c =
+			(in->flags & TegraGM20BBoContiguous) ? kClasses : classUp(in->bytes);
+		const uint64_t backing = c < kClasses ? classBytes(c) : in->bytes;
+		if (backing != in->bytes) {
+			IODelete(bo->pas, uint64_t, bo->npages);
+			bo->backing_pages = static_cast<uint32_t>(backing >> 12);
+			bo->pas = IONew(uint64_t, bo->backing_pages);
+		}
 		if (in->flags & TegraGM20BBoContiguous)
 			options |= kIOMemoryPhysicallyContiguous;
 		// 34-bit, not 32: a mask below 4 GiB on a non-contiguous buffer makes IOKit use KMA_LOMEM, and arm64 XNU keeps
@@ -630,8 +1108,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		const uint64_t mask = (in->flags & TegraGM20BBoContiguous)
 					      ? 0x3ffffffffULL & ~((1ULL << in->align_log2) - 1)
 					      : 0x3ffffffffULL;
-		bo->bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options,
-									   in->bytes, mask);
+		bo->bmd = bo->pas ? IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+					    kernel_task, options, backing, mask)
+				  : nullptr;
 		if (!bo->bmd || bo->bmd->prepare() != kIOReturnSuccess) {
 			if (bo->bmd)
 				bo->bmd->release();
@@ -644,16 +1123,23 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			// DRAM and drop the lines, so the GPU and a fresh client view see zeros and no dirty line is written back
 			// later over what the GPU wrote. (A bzero here was a second pass over the whole buffer.)
 			void *va = bo->bmd->getBytesNoCopy();
-			for (uint64_t a = reinterpret_cast<uint64_t>(va) & ~63ULL;
-			     a < reinterpret_cast<uint64_t>(va) + in->bytes; a += 64)
-				__asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-			__asm__ volatile("dsb sy" ::: "memory");
+			cleanZeros(va, backing, false);
 			lap(1);
-			ret = collectKernelPages(va, in->bytes, bo->pas);
+			ret = collectKernelPages(va, backing, bo->pas);
 			lap(2);
-			bo->view = bo->bmd;
-			bo->view->retain();
 		}
+	}
+	// A cached BO's view, which its task maps: the descriptor itself, or its first in->bytes when it is a spare's or
+	// a class's larger buffer.
+	if (!ret && bo->bmd) {
+		bo->view = bo->backing_pages == bo->npages
+				   ? static_cast<IOMemoryDescriptor *>(bo->bmd)
+				   : IOSubMemoryDescriptor::withSubRange(bo->bmd, 0, in->bytes,
+									 kIODirectionInOut);
+		if (bo->view == bo->bmd)
+			bo->bmd->retain();
+		else if (!bo->view)
+			ret = kIOReturnNoMemory;
 	}
 	if (!ret)
 		ret = ioreturn(tgm_mem_new(vm_, bo->pas, bo->npages, &bo->mem));
@@ -665,9 +1151,14 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		releaseBo(bo);
 		return ret;
 	}
-	if (bo->pool_va)
+	if (bo->pool_va) {
 		pool_bytes_ += bo->bytes;
-	tgm_stats_bo_alloc(bo->bytes, bo->pool_va != nullptr, mark - start, phase);
+		kind = TGM_BO_POOL;
+		if (critical_)
+			tgm_stats_compositor_pool(static_cast<int64_t>(bo->bytes));
+	}
+	tgm_stats_bo_alloc(bo->bytes, kind, mark - start, phase, owner_);
+	ownerNote(owner_, bo->bytes, mark - start, kind == TGM_BO_CACHED);
 	bo->handle = next_handle_++;
 	bo->token = next_token_++;
 	bo->next = bos_;
@@ -697,6 +1188,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	bzero(bo, sizeof(*bo));
 	bo->bytes = in->bytes;
 	bo->npages = static_cast<uint32_t>(in->bytes >> 12);
+	bo->backing_pages = bo->npages;
 	bo->pas = IONew(uint64_t, bo->npages);
 	IOReturn ret = bo->pas ? kIOReturnSuccess : kIOReturnNoMemory,
 		 wire[2] = {kIOReturnNoMemory, kIOReturnNoMemory};
@@ -1403,7 +1895,7 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
 							       : kIOMapDefaultCache);
 		// Pool views are physical: IOKit enters their pages at map time already (populateDevicePager). A cached BO's
 		// buffer is prepared (BoAlloc), which kIOMapPrefault requires.
-		if (bo->bmd && bo->bytes <= kPrefaultMaxBytes) {
+		if (bo->bmd && bo->view == bo->bmd && bo->bytes <= kPrefaultMaxBytes) {
 			*options |= kIOMapPrefault;
 			tgm_stats_prefault(bo->bytes);
 		}

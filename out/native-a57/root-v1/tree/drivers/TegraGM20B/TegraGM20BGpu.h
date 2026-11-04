@@ -69,6 +69,9 @@ int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence
 int tgm_all_clients(void);
 /* pool bytes not allocated */
 uint64_t tgm_pool_avail(void);
+/* Zero a pool BO's range (write-combined; off any client's thread) and give it back clean, so the next tgm_pool_alloc of
+ * those pages does no memset. tgm_pool_free gives a range back as it is. */
+void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa);
 void tgm_chan_del(struct tgm_chan **pchan);
 struct tgm_push {
 	uint64_t va;
@@ -163,7 +166,16 @@ void tgm_stats_import(int64_t bytes, uint64_t pa);
  * clean; skipped: always 0 now, the import always cleans), a VmBind map or unmap of `pages`, a BoFree, a cached BO's view
  * mapped with its pages entered at once (prefault). */
 enum { TGM_PHASES = 4 };
-void tgm_stats_bo_alloc(uint64_t bytes, int pool, uint64_t ns, const uint64_t phase_ns[TGM_PHASES]);
+/* kind: TGM_BO_CACHED (made on the caller's thread: allocated, zero-filled, cleaned), TGM_BO_POOL, TGM_BO_SPARE (a cached
+ * BO taken from TegraGM20BUserClient.cpp's spares: zeroed and cleaned off every client's thread); owner: the process.
+ * tgm_stats_compositor_pool: the compositor's pool BOs, +/-. tgm_spare_counts and tgm_owner_stats (each process's BoAllocs
+ * this window, then cleared) are TegraGM20BUserClient.cpp's, for the "mem" and "mem3" lines. */
+enum { TGM_BO_CACHED = 0, TGM_BO_POOL = 1, TGM_BO_SPARE = 2 };
+void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
+			const char *owner);
+void tgm_stats_compositor_pool(int64_t bytes);
+void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready, uint64_t *pool_zeroing_bytes);
+unsigned long tgm_owner_stats(char *out, unsigned long size);
 void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
 			 const uint64_t phase_ns[TGM_PHASES]);
 void tgm_stats_bind(int map, uint64_t pages, uint64_t ns);

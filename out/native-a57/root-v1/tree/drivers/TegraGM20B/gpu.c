@@ -570,10 +570,18 @@ uint64_t tgm_timestamp_ns(void)
 
 void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa)
 {
-	dma_addr_t h;
-	void *va = dma_alloc_attrs(&gpu_pdev.dev, bytes, &h, GFP_KERNEL, DMA_ATTR_WRITE_COMBINE);
+	unsigned long long h = 0;
+	void *va = nvxnu_pool_alloc_clean(bytes, &h);
 	*pa = va ? h : 0;
 	return va;
+}
+
+void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)
+{
+	memset(va, 0, bytes);
+	/* the write-combining buffers drained before the pages are handed out again */
+	__asm__ volatile("dsb sy" ::: "memory");
+	nvxnu_pool_free_zeroed(pa, bytes);
 }
 
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa)
@@ -1513,7 +1521,11 @@ static struct {
 		import_skipped, reimports;
 	u64 map_n, map_pages, map_ns, map_max, unmap_n, unmap_ns, free_n, free_ns, free_max,
 		prefault_n, prefault_bytes;
+	u64 spare_n, spare_bytes, spare_ns, spare_max;
 } mstat;
+/* Who paid the window's slowest cached BoAlloc made on its own thread (best effort: the raiser of cached_max writes it). */
+static char mstat_max_owner[17];
+static u64 compositor_pool; /* the compositor's pool BOs (tgm_stats_compositor_pool) */
 static struct {
 	u64 pa, ns;
 } recent[REIMPORT_RING];
@@ -1547,7 +1559,13 @@ void tgm_stats_import(int64_t bytes, uint64_t pa)
 	mutex_unlock(&recent_lock);
 }
 
-void tgm_stats_bo_alloc(uint64_t bytes, int pool, uint64_t ns, const uint64_t phase_ns[TGM_PHASES])
+void tgm_stats_compositor_pool(int64_t bytes)
+{
+	__atomic_fetch_add(&compositor_pool, (u64)bytes, __ATOMIC_RELAXED);
+}
+
+void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
+			const char *owner)
 {
 	int i;
 	if (!stats_on())
@@ -1557,14 +1575,22 @@ void tgm_stats_bo_alloc(uint64_t bytes, int pool, uint64_t ns, const uint64_t ph
 	__atomic_fetch_add(&stats.alloc_ns, ns, __ATOMIC_RELAXED);
 	if (bytes <= (64 << 10))
 		__atomic_fetch_add(&mstat.small_n, 1, __ATOMIC_RELAXED);
-	if (pool) {
+	if (kind == TGM_BO_POOL) {
 		__atomic_fetch_add(&mstat.pool_n, 1, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&mstat.pool_bytes, bytes, __ATOMIC_RELAXED);
 		stats_add(&mstat.pool_ns, &mstat.pool_max, ns);
 		return;
 	}
+	if (kind == TGM_BO_SPARE) {
+		__atomic_fetch_add(&mstat.spare_n, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&mstat.spare_bytes, bytes, __ATOMIC_RELAXED);
+		stats_add(&mstat.spare_ns, &mstat.spare_max, ns);
+		return;
+	}
 	__atomic_fetch_add(&mstat.cached_n, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.cached_bytes, bytes, __ATOMIC_RELAXED);
+	if (owner && ns > __atomic_load_n(&mstat.cached_max, __ATOMIC_RELAXED))
+		strlcpy(mstat_max_owner, owner, sizeof(mstat_max_owner));
 	stats_add(&mstat.cached_ns, &mstat.cached_max, ns);
 	for (i = 0; i < TGM_PHASES; i++)
 		__atomic_fetch_add(&mstat.cached_phase[i], phase_ns[i], __ATOMIC_RELAXED);
@@ -1626,7 +1652,7 @@ static void stats_mem(u64 ms)
 	struct nvxnu_faults f;
 	static struct nvxnu_faults last;
 	static char line
-		[560]; /* one caller at a time: the submission that won the window (stats_tick) */
+		[800]; /* one caller at a time: the submission that won the window (stats_tick) */
 	char user[96] = "";
 	unsigned int k;
 #define MS(field) v[offsetof(typeof(mstat), field) / sizeof(u64)]
@@ -1642,23 +1668,30 @@ static void stats_mem(u64 ms)
 			  f.user_n - last.user_n,
 			  (f.user_ns - last.user_ns) / (f.user_n - last.user_n) / 1000,
 			  f.user_max_ns / 1000);
-	if (MS(cached_n) || MS(pool_n) || MS(free_n)) {
-		scnprintf(line, sizeof(line),
-			  "BoAlloc cached %llu (%llu KiB) mean %llu us max %llu us [alloc+wire "
-			  "%llu, clean %llu, "
-			  "pages %llu, nvkm %llu us], pool %llu (%llu KiB) mean %llu us max %llu "
-			  "us, %llu of <= 64 KiB; BoFree %llu "
-			  "mean %llu us max %llu us; %llu prefaulted maps (%llu KiB); faults "
-			  "%llu/s (%llu/s zero-fill)%s",
-			  MS(cached_n), MS(cached_bytes) >> 10,
-			  MEAN_US(MS(cached_ns), MS(cached_n)), US(MS(cached_max)),
-			  US(MS(cached_phase[0])), US(MS(cached_phase[1])), US(MS(cached_phase[2])),
-			  US(MS(cached_phase[3])), MS(pool_n), MS(pool_bytes) >> 10,
-			  MEAN_US(MS(pool_ns), MS(pool_n)), US(MS(pool_max)), MS(small_n),
-			  MS(free_n), MEAN_US(MS(free_ns), MS(free_n)), US(MS(free_max)),
-			  MS(prefault_n), MS(prefault_bytes) >> 10,
-			  (f.faults - last.faults) * 1000 / (ms ? ms : 1),
-			  (f.zero_fill - last.zero_fill) * 1000 / (ms ? ms : 1), user);
+	if (MS(cached_n) || MS(pool_n) || MS(free_n) || MS(spare_n)) {
+		uint64_t kept = 0, ready = 0, zeroing = 0;
+		tgm_spare_counts(&kept, &ready, &zeroing);
+		scnprintf(
+			line, sizeof(line),
+			"BoAlloc spare %llu (%llu KiB) mean %llu us max %llu us, cached %llu (%llu "
+			"KiB) mean %llu us max %llu us (%s) [alloc+wire %llu, clean %llu, pages "
+			"%llu, "
+			"nvkm %llu us], pool %llu (%llu KiB) mean %llu us max %llu us, %llu of <= "
+			"64 "
+			"KiB; spares %llu KiB in %llu, pool %llu KiB zeroing; BoFree %llu "
+			"mean %llu us max %llu us; %llu prefaulted maps (%llu KiB); faults "
+			"%llu/s (%llu/s zero-fill)%s",
+			MS(spare_n), MS(spare_bytes) >> 10, MEAN_US(MS(spare_ns), MS(spare_n)),
+			US(MS(spare_max)), MS(cached_n), MS(cached_bytes) >> 10,
+			MEAN_US(MS(cached_ns), MS(cached_n)), US(MS(cached_max)),
+			MS(cached_n) ? mstat_max_owner : "-", US(MS(cached_phase[0])),
+			US(MS(cached_phase[1])), US(MS(cached_phase[2])), US(MS(cached_phase[3])),
+			MS(pool_n), MS(pool_bytes) >> 10, MEAN_US(MS(pool_ns), MS(pool_n)),
+			US(MS(pool_max)), MS(small_n), (unsigned long long)(kept >> 10),
+			(unsigned long long)ready, (unsigned long long)(zeroing >> 10), MS(free_n),
+			MEAN_US(MS(free_ns), MS(free_n)), US(MS(free_max)), MS(prefault_n),
+			MS(prefault_bytes) >> 10, (f.faults - last.faults) * 1000 / (ms ? ms : 1),
+			(f.zero_fill - last.zero_fill) * 1000 / (ms ? ms : 1), user);
 		nvxnu_stats("tegra-gm20b: mem %s", line);
 	}
 	if (MS(import_n) || MS(map_n) || MS(unmap_n)) {
@@ -1676,6 +1709,8 @@ static void stats_mem(u64 ms)
 			  US(MS(unmap_ns)));
 		nvxnu_stats("tegra-gm20b: mem2 %s", line);
 	}
+	if (tgm_owner_stats(line, sizeof(line)))
+		nvxnu_stats("tegra-gm20b: mem3 BoAllocs by process: %s", line);
 	last = f;
 #undef MS
 #undef US
@@ -1824,15 +1859,17 @@ static void stats_tick(void)
 		"(%u); "
 		"order %s: %u submits behind a copy, %u offers idle (%u then a submit); %u imports "
 		"(%llu/s), %lld KiB live in "
-		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB, MC %08x err %08x at %08x",
+		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB (compositor %llu), MC %08x "
+		"err "
+		"%08x at %08x",
 		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
 		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps,
 		present_order_on() ? "on" : "off", ordered, idle, late, imports,
 		imports * 1000ULL / (ms ? ms : 1),
 		(long long)(__atomic_load_n(&stats.live_bytes, __ATOMIC_RELAXED) >> 10),
 		__atomic_load_n(&stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10, ans / 1000,
-		nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20, mc_int,
-		mc_err, mc_adr);
+		nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20,
+		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, mc_int, mc_err, mc_adr);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
 	stats_mem(ms);
 	/* The lazy IOSurface-coherency hooks' work this window (the XNU lock/unlock hook; tgm_coherency_*): GPU-written imports
