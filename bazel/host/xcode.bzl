@@ -80,8 +80,11 @@ def _xcode_host_impl(rctx):
     if mismatches:
         print("WARNING: building with an UNPINNED Xcode ({}); outputs will not match the pinned build.".format(app))
 
-    iphoneos = developer + "/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
-    macosx = developer + "/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+    # The SDK paths as `xcrun --show-sdk-path` names them (iPhoneOS27.0.sdk): the spelling the CMake flow passed to
+    # -isysroot, which ends up in debug info.
+    xcrun_env = {"DEVELOPER_DIR": developer}
+    iphoneos = _run(rctx, ["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"], xcrun_env)
+    macosx = _run(rctx, ["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"], xcrun_env)
     rctx.file("identity", "\n".join([
         "developer_dir " + developer,
         "version " + version,

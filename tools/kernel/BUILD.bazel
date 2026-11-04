@@ -1,0 +1,8 @@
+package(default_visibility = ["//visibility:public"])
+
+# The kernel build's tools, run by bazel/kernel rules on the hermetic Python (never imported by each other across
+# packages, never run by hand).
+filegroup(
+    name = "sources",
+    srcs = glob(["*.py"]),
+)

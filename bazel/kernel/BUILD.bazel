@@ -1,0 +1,22 @@
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+
+package(default_visibility = ["//visibility:public"])
+
+# Where build paths appear to be in the outputs (__FILE__ strings, debug info). The default is machine independent;
+# --config=cmake-equivalence sets it to the checkout, which reproduces the CMake flow's strings exactly.
+string_flag(
+    name = "path_root",
+    build_setting_default = "/ioswitch",
+)
+
+# XNU's version string date (newvers.pl reads KERNEL_BUILD_DATE): fixed, so a rebuild is bit-identical.
+string_flag(
+    name = "build_date",
+    build_setting_default = "Thu  1 Jan 1970 00:00:00 UTC",
+)
+
+# XNU's version string builder (newvers.pl runs whoami; the build puts a whoami printing this first on PATH).
+string_flag(
+    name = "builder",
+    build_setting_default = "ioswitch",
+)

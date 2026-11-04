@@ -1,0 +1,43 @@
+"""Inputs the kernel and its package derive from the IPSW and from pinned files: one rule runs a kernel tool on
+declared inputs into declared outputs."""
+
+load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "run_tool", "setting")
+
+def _tool_output_impl(ctx):
+    outs = [ctx.actions.declare_file(o) for o in ctx.attr.outs] + [ctx.actions.declare_directory(d) for d in ctx.attr.out_dirs]
+    args = []
+    for a in ctx.attr.args:
+        for i, o in enumerate(ctx.attr.outs + ctx.attr.out_dirs):
+            a = a.replace("{out%d}" % i, outs[i].path)
+        a = a.replace("{out}", outs[0].path)
+        a = a.replace("{xcode_env}", ctx.file._xcode_env.path)
+        a = a.replace("{path_root}", setting(ctx, "_path_root")).replace("{bin_dir}", ctx.bin_dir.path)
+        args.append(ctx.expand_location(a, ctx.attr.srcs))
+    run_tool(
+        ctx,
+        ctx.attr.tool,
+        args,
+        depset(ctx.files.srcs),
+        outs,
+        ctx.attr.mnemonic,
+        ctx.attr.message or ("Making " + ", ".join(ctx.attr.outs + ctx.attr.out_dirs)),
+        execution_requirements = {r: "" for r in ctx.attr.requirements} if ctx.attr.requirements else None,
+    )
+    return [DefaultInfo(files = depset(outs))]
+
+tool_output = rule(
+    implementation = _tool_output_impl,
+    doc = "Runs tools/kernel/<tool> with args ($(location), {out}/{outN}, {xcode_env}, {path_root}, {bin_dir} " +
+          "expanded) on srcs into outs and out_dirs.",
+    attrs = dict(KERNEL_TOOL_ATTRS, **{
+        "tool": attr.string(mandatory = True),
+        "srcs": attr.label_list(allow_files = True),
+        "outs": attr.string_list(),
+        "out_dirs": attr.string_list(),
+        "args": attr.string_list(),
+        "mnemonic": attr.string(default = "KernelTool"),
+        "message": attr.string(),
+        "requirements": attr.string_list(),
+    }),
+    toolchains = [PY_TOOLCHAIN],
+)

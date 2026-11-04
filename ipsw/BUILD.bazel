@@ -1,0 +1,45 @@
+# What the build derives from the IPSW's members (@ipsw//:<member>, fetched by range request; bazel/ipsw).
+load("//bazel/kernel:inputs.bzl", "tool_output")
+
+package(default_visibility = ["//visibility:public"])
+
+# The original kernelcache, decompressed: what the prelinker takes Apple's kexts from and the ABI checks read.
+# (vendor/unixnu's kernelcache.decompressed: IM4P 'krnl' payload, LZFSE, arm64 slice; pinned.)
+tool_output(
+    name = "kernelcache",
+    srcs = ["@ipsw//:kernelcache"],
+    outs = ["kernelcache.decompressed"],
+    args = [
+        "$(location @ipsw//:kernelcache)",
+        "{out}",
+        "--expect-type=krnl",
+        "--lzfse",
+        "--thin-arm64",
+        "--sha256=f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7",
+    ],
+    message = "Decompressing the 21H461 kernelcache",
+    tool = "im4p.py",
+)
+
+# The static trust cache bundle for the root and the OS cryptex (vendor/unixnu's original-static-system.bundle).
+tool_output(
+    name = "static_system_trust",
+    srcs = [
+        "@ipsw//:static_trust_cache",
+        "@ipsw//:system_cryptex_trust_cache",
+    ],
+    outs = ["original-static-system.bundle"],
+    args = [
+        "{out}",
+        "$(location @ipsw//:static_trust_cache)",
+        "$(location @ipsw//:system_cryptex_trust_cache)",
+    ],
+    message = "Bundling the root and OS cryptex trust caches",
+    tool = "trust_bundle.py",
+)
+
+# The App cryptex's trust cache (an IM4P 'trca'), as the package appends it.
+alias(
+    name = "app_cryptex_trust_cache",
+    actual = "@ipsw//:app_cryptex_trust_cache",
+)

@@ -1,6 +1,14 @@
-# The kernel tree: our drivers, kits, diagnostics, overlay sources and XNU/libpthread patches.
-# Kernel targets are declared in kernel.bzl-driven sections below; every source file is also exported so other
-# packages (gpu/, install/, deploy/) can name it, e.g. //out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h.
+# The kernel tree: XNU + our drivers, kits and diagnostics, linked and prelinked into kernel.macho.
+#
+#   bazel build //:kernel            -> bazel-bin/out/native-a57/root-v1/tree/kernel.macho
+#
+# Adding a driver: one kernel_driver() call (bazel/kernel/kernel.bzl documents the knobs) and its name in the member list
+# of the archive it rides in below. Member order is link order (-force_load). Original kexts a driver needs go in its
+# prelink list. Every file here is also exported, e.g. //out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h.
+
+load("//bazel/kernel:inputs.bzl", "tool_output")
+load("//bazel/kernel:kernel.bzl", "PLAIN_ASM", "kernel_archive", "kernel_driver", "kernel_link", "kernel_prelink", "kernel_recipe", "stage_files")
+load("//bazel/kernel:xnu.bzl", "kernel_firehose", "kernel_sdkroot", "xnu_build")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -8,3 +16,974 @@ exports_files(glob(
     ["**"],
     exclude = ["BUILD.bazel"],
 ))
+
+# --- The kernel SDK root (the CMake flow's .cache/fakeroot) -------------------------------------------------------
+# Its headers need the patched XNU (its makedefs take XNU_AVAILABILITY_PL/KERNEL_SDKROOT). Unlike the CMake flow's
+# fakeroot, which installhdrs filled once and never refreshed, this one follows the patch.
+kernel_sdkroot(
+    name = "fakeroot_headers",
+    out = ".cache/fakeroot-headers",
+    xnu = "@xnu//:all",
+)
+
+kernel_firehose(
+    name = "fakeroot",
+    sdkroot = ":fakeroot_headers",
+    xnu = "@xnu//:all",
+)
+
+# --- XNU ------------------------------------------------------------------------------------------------------------
+# The kernel's XNU options are the smp pass's build-options.json (its archive paths are unused: kernel_link names the
+# archives built here).
+xnu_build(
+    name = "xnu",
+    headers = glob([
+        "diagnostics/**",
+        "kits/VerifiedRoot/include/**",
+        "drivers/NativeIOSwitchBlock/*.h",
+    ]),
+    options = "//out/native-a57/root-v1/passes/native-root-smp-v1:build-options.json",
+    sdkroot = ":fakeroot",
+    xnu = "@xnu//:all",
+)
+
+# --- Compile recipes, from XNU's compile records (cmake/XnuRecipes.cmake) ------------------------------------------
+kernel_recipe(
+    name = "iokit_cxx",
+    record = "iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
+    xnu = ":xnu",
+)
+
+kernel_recipe(
+    name = "iokit_cxx_generic",
+    drop = [
+        "-mcpu=",
+        "-march=",
+        "-flto",
+    ],
+    record = "iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
+    xnu = ":xnu",
+)
+
+kernel_recipe(
+    name = "osfmk_c",
+    record = "osfmk/DEVELOPMENT/arm_init.o.json",
+    xnu = ":xnu",
+)
+
+kernel_recipe(
+    name = "bsd_c",
+    keep_warnings = True,
+    record = "bsd/DEVELOPMENT/bsd_init.o.json",
+    xnu = ":xnu",
+)
+
+kernel_recipe(
+    name = "mockfs_c",
+    drop = [
+        "-DMOCKFS=",
+        "-UMOCKFS",
+    ],
+    keep_warnings = True,
+    record = "bsd/DEVELOPMENT/vfs_conf.o.json",
+    xnu = ":xnu",
+)
+
+# The freestanding recipe the vendored Linux code (nvkm, BPMP, DFLL) uses: osfmk's C flags without XNU's include options
+# (its headers clash with the shims' Linux-named ones).
+kernel_recipe(
+    name = "freestanding_c",
+    record = "osfmk/DEVELOPMENT/arm_init.o.json",
+    strip_includes = True,
+    xnu = ":xnu",
+)
+
+# --- Generated and pinned inputs, where the CMake flow's -I flags expected them (tree/build/<dir>) -----------------
+stage_files(
+    name = "pinned_headers",
+    files = {
+        "//bazel/pinned:kernel/native-legacy-display/OriginalLegacyFramebufferABI.h": "build/native-legacy-display/OriginalLegacyFramebufferABI.h",
+        "//bazel/pinned:kernel/native-hid-input/OriginalHidDeviceABI.h": "build/native-hid-input/OriginalHidDeviceABI.h",
+        "//bazel/pinned:kernel/sheng-platform-power/OriginalPMGRABI.h": "build/sheng-platform-power/OriginalPMGRABI.h",
+        "//bazel/pinned:kernel/sheng-platform-power/GuardedPMGRSlots.inc": "build/sheng-platform-power/GuardedPMGRSlots.inc",
+    },
+)
+
+tool_output(
+    name = "storage_abi",
+    srcs = ["@iostoragefamily//:all"],
+    out_dirs = ["build/storage-abi/include"],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--source=external/+http_archive+iostoragefamily",
+        "--out={out}",
+    ],
+    message = "IOStorageFamily-315 headers (storage-abi)",
+    tool = "storage_abi.py",
+)
+
+# NativeRamBlock's seed pins: a pure function of the pinned seed and its volume UUID (XNU_OWNER_DATA_VOLUME_UUID).
+tool_output(
+    name = "native_data_seed_header",
+    srcs = ["//bazel/pinned:data-seed/data-v10.dbr"],
+    outs = ["build/native-ram-block/NativeDataSeed.h"],
+    args = [
+        "$(location //bazel/pinned:data-seed/data-v10.dbr)",
+        "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9",
+        "{out}",
+    ],
+    tool = "data_seed.py",
+)
+
+# Headers any kernel object may include: every driver/kit/diagnostics header, firmware blobs (.incbin) and the staged
+# and generated headers above.
+filegroup(
+    name = "kernel_headers",
+    srcs = glob([
+        "drivers/**/*.h",
+        "drivers/**/*.hpp",
+        "drivers/**/*.inc",
+        "drivers/**/*.def",
+        "drivers/*/firmware/**",
+        "kits/**/*.h",
+        "kits/**/*.inc",
+        "diagnostics/**/*.h",
+        "diagnostics/**/*.inc",
+    ], allow_empty = True) + [
+        # In the GPU's package (drivers/NativeMetal), included by IOSwitchAccelStub and TegraGM20BAccelerator.
+        "//out/native-a57/root-v1/tree/drivers/NativeMetal:OriginalAcceleratorABI.h",
+        ":native_data_seed_header",
+        ":pinned_headers",
+        ":storage_abi",
+    ],
+)
+
+# --- Corecrypto, libpthread (Apple sources, built against this XNU) ---------------------------------------------------
+tool_output(
+    name = "corecrypto",
+    srcs = [
+        ":fakeroot",
+        ":xnu",
+        "@corecrypto//:all",
+    ],
+    outs = [
+        "build/corecrypto-2023/libcorecrypto_kernel_noasm-namespaced.a",
+        "build/corecrypto-2023/namespace.h",
+    ],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--source=external/+http_archive+corecrypto",
+        "--sdkroot=$(location :fakeroot)",
+        "--objroot=$(execpath :xnu)",
+        "--out={out0}",
+        "--namespace-header={out1}",
+        "--path-root={path_root}",
+    ],
+    message = "Compiling corecrypto 2023 for the kernel (plain, then namespaced)",
+    mnemonic = "KernelCorecrypto",
+    tool = "corecrypto.py",
+)
+
+tool_output(
+    name = "libpthread",
+    srcs = [
+        ":fakeroot",
+        ":xnu",
+        "@libpthread//:all",
+        "@xnu//:all",
+    ],
+    outs = [
+        "build/libpthread-kernel/libpthread_kernel.a",
+        "build/libpthread-kernel/source_pthread_bootstrap.o",
+    ],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--source=external/+http_archive+libpthread",
+        "--xnu=external/+http_archive+xnu",
+        "--sdkroot=$(location :fakeroot)",
+        "--objroot=$(execpath :xnu)",
+        "--out={out0}",
+        "--bootstrap-out={out1}",
+        "--path-root={path_root}",
+        "--bin-dir={bin_dir}",
+    ],
+    message = "Compiling libpthread-519.120.4's kernel component",
+    mnemonic = "KernelLibpthread",
+    tool = "libpthread.py",
+)
+
+# --- Drivers ----------------------------------------------------------------------------------------------------------
+# cmake/Drivers.cmake, unit by unit. Flags that name generated headers use {build} (this package's output directory,
+# the CMake flow's tree/build), {tree}, {xnu} and {sdk}.
+
+# ArmCpu, ArmGIC, ArmDTPlatform: CPU/GIC/timer and platform expert.
+kernel_driver(name = "ArmCpu")
+
+kernel_driver(name = "ArmGIC")
+
+kernel_driver(name = "ArmDTPlatform")
+
+# NativeAES.
+kernel_driver(
+    name = "NativeAES",
+    srcs = [
+        "NativeAES.cpp",
+        ":scripts/data/native-aes-original-bindings.S",
+    ],
+    stems = {"native-aes-original-bindings.S": "original-bindings"},
+)
+
+# NativeIOSwitchBlock: the SD card's block device (+ cryptex files), and the board drivers riding in its archive.
+BLOCK_FLAGS = [
+    "-mgeneral-regs-only",
+    "-mstrict-align",
+    "-I",
+    "{build}/storage-abi/include",
+    "-I",
+    "{tree}/diagnostics/ioswitch/storage",
+    "-I",
+    "{tree}/diagnostics/ioswitch",
+    "-I",
+    "{tree}/kits/VerifiedRoot/include",
+]
+
+kernel_driver(
+    name = "NativeIOSwitchBlock",
+    srcs = [
+        "NativeIOSwitchBlock.cpp",
+        "//bazel/pinned:kernel/native-ioswitch-root/original-bindings.S",
+        "IOSwitchCryptex.cpp",
+    ],
+    copts = BLOCK_FLAGS,
+    stems = {"NativeIOSwitchBlock.cpp": "NativeIOSwitchBlockDevice"},
+)
+
+kernel_driver(
+    name = "SwitchNVRAM",
+    copts = BLOCK_FLAGS,
+)
+
+kernel_driver(name = "TegraGPIO")
+
+kernel_driver(name = "TegraI2C")
+
+kernel_driver(
+    name = "SwitchThermal",
+    srcs = ["SwitchThermal.cpp"],
+    dir = "drivers/SwitchPower",
+)
+
+kernel_driver(name = "SwitchBattery")
+
+kernel_driver(
+    name = "SwitchBluetooth",
+    srcs = ["SwitchBluetooth.cpp"],
+)
+
+# Boot clock line, MAX77620 RTC (IORTC) and power-off/restart; called from IOKitInitializeTime() (xnu patch).
+kernel_driver(
+    name = "SwitchPMIC",
+    srcs = ["SwitchPMIC.cpp"],
+    dir = "drivers/SwitchPower",
+)
+
+# System sleep (SC7) coordinator, inert unless switch-sleep=2.
+kernel_driver(name = "SwitchSuspend")
+
+# SwitchAudio: kernel service + Tegra I2S1/ADMA/RT5639 backend.
+kernel_driver(
+    name = "SwitchAudio",
+    srcs = ["SwitchAudio.cpp"],
+)
+
+# SwitchWLAN: BCM4356A3 Wi-Fi on PCIe port 1 (switch-wlan=1); firmware.S .incbins drivers/SwitchWLAN/firmware.
+kernel_driver(
+    name = "SwitchWLAN",
+    srcs = [
+        "SwitchWLAN.cpp",
+        "SwitchWLANProbe.cpp",
+        "TegraPCIe.cpp",
+        "SwitchWLANChip.cpp",
+        "SwitchWLANMsgbuf.cpp",
+        "SwitchWLANCrypto.cpp",
+        "SwitchWLANWpa.cpp",
+        "SwitchWLANNet.cpp",
+        "firmware.S",
+    ],
+    copts = [
+        "-mgeneral-regs-only",
+        "-mstrict-align",
+    ],
+)
+
+# TegraGM20B: the Tegra X1 GPU (vendored nouveau nvkm under an XNU shim, IOAcceleratorES + AGXDeviceUserClient). Inert
+# unless tegra-gpu=<stage>. Apple clang's kernel defaults add -Wsign-conversion, -Wshorten-64-to-32 and
+# -Wimplicit-int-conversion; Linux-style nvkm code and its shim trip them over a thousand times.
+GPU_C_FLAGS = [
+    "-mgeneral-regs-only",
+    "-mstrict-align",
+    "-fno-stack-protector",
+    "-std=gnu11",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wno-unused-parameter",
+    "-Wno-sign-conversion",
+    "-Wno-shorten-64-to-32",
+    "-Wno-implicit-int-conversion",
+    "-I",
+    "{tree}/drivers/TegraGM20B/shim/include",
+    "-I",
+    "{tree}/drivers/TegraGM20B/nouveau/include",
+    "-I",
+    "{tree}/drivers/TegraGM20B/nouveau/include/nvkm",
+    "-I",
+    "{tree}/drivers/TegraGM20B/nouveau/nvkm",
+    "-I",
+    "{tree}/drivers/TegraGM20B/nouveau/nvkm/subdev/gsp",
+    "-I",
+    "{tree}/drivers/TegraGM20B/nouveau",
+    "-include",
+    "{tree}/drivers/TegraGM20B/shim/include/nvxnu_prelude.h",
+]
+
+# The relaxations Linux builds vendored code with (and two Apple clang defaults upstream code trips).
+LINUX_RELAXATIONS = [
+    "-Wno-pointer-sign",
+    "-Wno-sign-compare",
+    "-Wno-missing-field-initializers",
+    "-Wno-shadow",
+    "-Wno-conditional-uninitialized",
+]
+
+kernel_driver(
+    name = "TegraGM20B_nvkm",
+    srcs = [":" + f for f in glob(["drivers/TegraGM20B/nouveau/**/*.c"])],
+    c_copts = GPU_C_FLAGS + LINUX_RELAXATIONS,
+    c_recipe = ":freestanding_c",
+    dir = "drivers/TegraGM20B",
+    object_names = "path",
+)
+
+kernel_driver(
+    name = "TegraGM20B",
+    srcs = [
+        "shim/linux.c",
+        "shim/tegra_shim.c",
+        "shim/stubs.c",
+        "shim/nvif_nvkm.c",
+        "platform.c",
+        "gpu.c",
+        "shim/xnu_glue.cpp",
+        "TegraGM20B.cpp",
+        "TegraGM20BUserClient.cpp",
+        # Subclasses the original IOAcceleratorES: a late object, run by TegraGM20B.cpp after IOGPUFamily loads.
+        "TegraGM20BAccelerator.cpp",
+        # GM20B falcon firmware (linux-firmware nvidia/gm20b) by .incbin.
+        "firmware.S",
+    ],
+    c_copts = GPU_C_FLAGS,
+    c_recipe = ":freestanding_c",
+    copts = [
+        "-I",
+        "{tree}/drivers/TegraGM20B",
+    ],
+    late = ["TegraGM20BAccelerator.cpp"],
+    object_names = "path",
+    # IOAcceleratorES for QuartzCore's 30 s accelerator poll and the GM20B driver.
+    prelink = ["com.apple.iokit.IOGPUFamily"],
+)
+
+# TegraBPMP: the T210 BPMP mailbox (L4T mail.c / mail_t210.c / mailman.c vendored under a shim), the EMC clock.
+kernel_driver(
+    name = "TegraBPMP",
+    srcs = [
+        "linux/drivers/firmware/tegra/mail.c",
+        "linux/drivers/firmware/tegra/mail_t210.c",
+        "linux/drivers/firmware/tegra/mailman.c",
+        "shim/linux.c",
+        "TegraBPMP.c",
+        "shim/xnu_glue.cpp",
+    ],
+    c_copts = [
+        "-mgeneral-regs-only",
+        "-mstrict-align",
+        "-fno-stack-protector",
+        "-std=gnu11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unused-parameter",
+        "-Wno-sign-conversion",
+        "-Wno-shorten-64-to-32",
+        "-Wno-implicit-int-conversion",
+        "-Wno-sign-compare",
+        "-Wno-missing-field-initializers",
+        "-Wno-gnu-empty-struct",
+        "-Wno-zero-length-array",
+        "-I",
+        "{tree}/drivers/TegraBPMP/shim/include",
+        "-I",
+        "{tree}/drivers/TegraBPMP/linux/include",
+        "-I",
+        "{tree}/drivers/TegraBPMP/linux/drivers/firmware/tegra",
+        "-I",
+        "{tree}/drivers",
+        "-include",
+        "{tree}/drivers/TegraBPMP/shim/include/bpxnu_prelude.h",
+    ],
+    c_recipe = ":freestanding_c",
+    object_names = "path",
+    object_prefix = "tegra-bpmp_",
+    stems = {"xnu_glue.cpp": "TegraBPMPGlue"},
+)
+
+# TegraDFLL: T210B01 CPU DFLL (closed-loop CL-DVFS), L4T clk-dfll.c + fcpu/cvb/speedo under a Linux shim.
+DFLL_C_FLAGS = [
+    "-mgeneral-regs-only",
+    "-mstrict-align",
+    "-fno-stack-protector",
+    "-std=gnu11",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wno-unused-parameter",
+    "-Wno-sign-conversion",
+    "-Wno-shorten-64-to-32",
+    "-Wno-implicit-int-conversion",
+    "-I",
+    "{tree}/drivers/TegraDFLL/shim/include",
+    "-I",
+    "{tree}/drivers/TegraDFLL/linux/include",
+    "-include",
+    "{tree}/drivers/TegraDFLL/shim/include/tdfll_prelude.h",
+]
+
+kernel_driver(
+    name = "TegraDFLL_linux",
+    srcs = [
+        "linux/drivers/clk/tegra/clk-dfll.c",
+        "linux/drivers/clk/tegra/clk-tegra124-dfll-fcpu.c",
+        "linux/drivers/soc/tegra/cvb.c",
+        "linux/drivers/soc/tegra/fuse/speedo-tegra210.c",
+    ],
+    c_copts = DFLL_C_FLAGS + LINUX_RELAXATIONS,
+    c_recipe = ":freestanding_c",
+    dir = "drivers/TegraDFLL",
+    object_names = "path",
+)
+
+kernel_driver(
+    name = "TegraDFLL",
+    srcs = [
+        "shim/linux.c",
+        "platform.c",
+        "dfll.c",
+        "shim/xnu_glue.cpp",
+    ],
+    c_copts = DFLL_C_FLAGS,
+    c_recipe = ":freestanding_c",
+    copts = [
+        "-I",
+        "{tree}/drivers/TegraDFLL/shim",
+    ],
+    object_names = "path",
+    stems = {"xnu_glue.cpp": "shim_xnu_glue.cpp"},
+)
+
+# TegraHost1x + TegraNVDEC: host1x syncpoints, the NVDEC falcon and its job engine (switch-host1x, switch-nvdec=1..3);
+# NVDEC's firmware by .incbin.
+kernel_driver(name = "TegraHost1x")
+
+kernel_driver(
+    name = "TegraNVDEC",
+    srcs = [
+        "TegraNVDEC.cpp",
+        "TegraNVDECMemory.cpp",
+        "TegraNVDECSelfTest.cpp",
+        "TegraNVDECUserClient.cpp",
+        "firmware.S",
+    ],
+    stems = {"firmware.S": "nvdec_firmware"},
+)
+
+# SwitchUSB: USB 2.0 on the USB-C port. Device mode: the XUDC under Apple's IOUSBDeviceFamily (+ AppleUSBDeviceMux).
+# Host mode: the XUSB host (falcon firmware by .incbin) under IOUSBHostFamily + AppleUSBXHCI and Apple's class drivers.
+# SwitchXUDC and SwitchXHCI subclass original classes (late objects); abi_check.py checks their vtables and imports
+# against the kernelcache, and that the bindings files are current, on every build.
+kernel_driver(
+    name = "SwitchUSB",
+    srcs = [
+        "XudcHardware.cpp",
+        "SwitchUSB.cpp",
+        "SwitchXUDC.cpp",
+        "original-bindings.S",
+        "SwitchPD.cpp",
+        "XusbHost.cpp",
+        "UsbDmaMapper.cpp",
+        "SwitchXHCI.cpp",
+        "xhci-original-bindings.S",
+        "firmware.S",
+    ],
+    abi_check_deps = ["kits/NativePrelink/native_prelink.py"],
+    abi_check_script = "drivers/SwitchUSB/abi_check.py",
+    abi_checks = {
+        "drivers/SwitchUSB/original-bindings.S": "xudc SwitchXUDC.cpp",
+        "drivers/SwitchUSB/xhci-original-bindings.S": "xhci SwitchXHCI.cpp",
+    },
+    late = [
+        "SwitchXUDC.cpp",
+        "SwitchXHCI.cpp",
+    ],
+    prelink = [
+        # Device mode: the family SwitchXUDC subclasses, its dependency, and the usbmux function driver (usbmuxd,
+        # lockdownd, Xcode, Finder).
+        "com.apple.iokit.IOUSBDeviceFamily",
+        "com.apple.driver.usb.AppleUSBCommon",
+        "com.apple.driver.AppleUSBDeviceMux",
+        # Host mode: Apple's host stack and xHCI driver, which SwitchXHCI subclasses, and what it needs
+        # (IOAccessoryManager: AppleUSBXHCI's Type-C port classes; IOPortFamily: declared by AppleUSBXHCI) ...
+        "com.apple.iokit.IOUSBHostFamily",
+        "com.apple.driver.usb.AppleUSBXHCI",
+        "com.apple.iokit.IOAccessoryManager",
+        "com.apple.iokit.IOPortFamily",
+        # ... and the class drivers: hubs, composite devices, HID (keyboard, mouse) and mass storage with its SCSI layers
+        # and IOPCIFamily (one pointer).
+        "com.apple.driver.usb.AppleUSBHub",
+        "com.apple.driver.usb.AppleUSBHostCompositeDevice",
+        "com.apple.driver.usb.IOUSBHostHIDDevice",
+        "com.apple.iokit.IOUSBMassStorageDriver",
+        "com.apple.iokit.IOSCSIArchitectureModelFamily",
+        "com.apple.iokit.IOSCSIBlockCommandsDevice",
+        "com.apple.iokit.IOPCIFamily",
+    ],
+    # Declared dependencies left out of the prelink (COMPONENT=DEPENDENCY=pointer sites; a nonzero cut rebinds each
+    # site to _ioswitch_prelink_cut_null in SwitchUSB.cpp, so OSDynamicCast yields NULL):
+    # - AppleSMC (Mac SMC): IOUSBHostFamily's one site is OSDynamicCast(AppleSMC, waitForMatchingService(AppleSMC)) on
+    #   a path taken only for a port with a "UsbCPortNumber" property (fn 0xfffffff005e4fe88), never published here;
+    # - AppleUSBHostPlatformProperties: codeless, no personalities (the planner cannot carry it); no pointers;
+    # - AppleOnboardSerial would pull IOSkywalkFamily and IONetworkingFamily, whose classes SwitchWLAN defines natively;
+    #   its one site is OSDynamicCast(AppleOnboardSerial, provider) in the serial-accessory port's start
+    #   (fn 0xfffffff005cc3f0c), whose NULL path is a logged failure return; IOSerialFamily: no pointers.
+    prelink_cuts = [
+        "com.apple.iokit.IOUSBHostFamily=com.apple.driver.AppleSMC=1",
+        "com.apple.iokit.IOUSBHostFamily=com.apple.driver.usb.AppleUSBHostPlatformProperties=0",
+        "com.apple.iokit.IOAccessoryManager=com.apple.driver.AppleOnboardSerial=1",
+        "com.apple.iokit.IOAccessoryManager=com.apple.iokit.IOSerialFamily=0",
+    ],
+    # Personalities kept out of the boot catalogue so the USB host stack does not load at every boot (they match
+    # IOResources); SwitchXHCI adds AppleUSBHostResources and IOUSBMassStorageResource back when the host comes up.
+    # AppleUSBHostResourcesTypeC stays out (the Mac's Type-C/SMC variant; its probe waits 5 s for "product").
+    prelink_deferred = [
+        "com.apple.iokit.IOUSBHostFamily=AppleUSBHostResources",
+        "com.apple.iokit.IOUSBHostFamily=AppleUSBHostResourcesTypeC",
+        "com.apple.iokit.IOUSBMassStorageDriver=IOUSBMassStorageResource",
+    ],
+)
+
+kernel_archive(
+    name = "libNativeIOSwitchBlockDevice",
+    out = "build/native-ioswitch-root/libNativeIOSwitchBlockDevice.a",
+    members = [
+        ":NativeIOSwitchBlock",
+        ":SwitchNVRAM",
+        ":TegraGPIO",
+        ":TegraI2C",
+        ":SwitchThermal",
+        ":SwitchBattery",
+        ":SwitchBluetooth",
+        ":SwitchPMIC",
+        ":SwitchSuspend",
+        ":SwitchAudio",
+        ":SwitchWLAN",
+        ":TegraGM20B_nvkm",
+        ":TegraGM20B",
+        ":TegraBPMP",
+        ":TegraDFLL_linux",
+        ":TegraDFLL",
+        ":TegraHost1x",
+        ":TegraNVDEC",
+        ":SwitchUSB",
+    ],
+)
+
+# NativeRamBlock: linked as a plain object next to the block driver's bindings (the XNU build script never linked its
+# archive in this configuration).
+kernel_driver(
+    name = "NativeRamBlock",
+    copts = [
+        "-march=armv8-a",
+        "-mgeneral-regs-only",
+        "-fno-lto",
+        "-I",
+        "{xnu}/osfmk",
+        "-I",
+        "{build}/storage-abi/include",
+        "-I",
+        "{build}/native-ram-block",
+    ],
+    include_osfmk = False,
+    recipe = ":iokit_cxx_generic",
+)
+
+# Verified root policy.
+kernel_driver(
+    name = "VerifiedRoot",
+    srcs = [
+        "src/verified_root.c",
+        "adapters/xnu_crypto.c",
+        "//bazel/pinned:kernel/verified-root-ioswitch/trusted-key.S",
+    ],
+    c_copts = [
+        "-I{tree}/kits/VerifiedRoot/include",
+        "-Werror",
+        "-mgeneral-regs-only",
+        "-mstrict-align",
+    ],
+    c_recipe = ":bsd_c",
+    dir = "kits/VerifiedRoot",
+)
+
+# XNU's mockfs.
+kernel_driver(
+    name = "mockfs",
+    srcs = [
+        "@xnu//:bsd/miscfs/mockfs/mockfs_fsnode.c",
+        "@xnu//:bsd/miscfs/mockfs/mockfs_vfsops.c",
+        "@xnu//:bsd/miscfs/mockfs/mockfs_vnops.c",
+    ],
+    c_copts = ["-DMOCKFS=1"],
+    c_recipe = ":mockfs_c",
+    dir = "kits/mockfs",
+)
+
+# ShengPlatformPower: PMGR subclass (late).
+kernel_driver(
+    name = "ShengPlatformPower",
+    srcs = [
+        "ShengPlatformPower.cpp",
+        "//bazel/pinned:kernel/sheng-platform-power/original-bindings.S",
+    ],
+    copts = [
+        "-I",
+        "{build}/sheng-platform-power",
+    ],
+    dir = "kits/qemu",
+    late = ["ShengPlatformPower.cpp"],
+)
+
+# IOSwitchDiag: boot diagnostics, SD/FAT32/APFS storage (osfmk C recipe, no FP/SIMD).
+kernel_driver(
+    name = "IOSwitchDiag",
+    srcs = [
+        "IOSwitchDiag.c",
+        "IOSwitchPanicSave.c",
+        "IOSwitchFiles.c",
+        "IOSwitchSD.c",
+        "storage/block_backend.c",
+        "storage/fat32.c",
+        "storage/partition.c",
+        "storage/sd_reference.c",
+        "storage/sdmmc_read.c",
+        "storage/split_disk.c",
+        "storage/data_backend.c",
+        "storage/raw_apfs.c",
+        "storage/sdmmc_dma.c",
+    ],
+    c_copts = [
+        "-DIOSWITCH_XNU_DIAGNOSTICS=1",
+        "-DXNU_IOSWITCH_VERIFIED_ROOT=1",
+        "-DIOSWITCH_SD_MODEL=0",
+        "-mgeneral-regs-only",
+        "-mstrict-align",
+        "-fno-stack-protector",
+        "-fno-builtin",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unused-parameter",
+        "-I",
+        "{tree}/diagnostics/ioswitch",
+        "-I",
+        "{tree}/kits/VerifiedRoot/include",
+    ],
+    dir = "diagnostics/ioswitch",
+)
+
+# Link stubs: no-op probe hooks.
+kernel_driver(
+    name = "LinkStubs",
+    srcs = ["LinkStubs.c"],
+    c_command = [
+        "xcrun",
+        "--sdk",
+        "iphoneos",
+        "clang",
+        "-arch",
+        "arm64",
+        "-mkernel",
+        "-miphoneos-version-min=17.0",
+        "-Os",
+        "-Wall",
+        "-Werror",
+    ],
+    dir = "kits/qemu",
+)
+
+# Display, key store and HID input, touch, buttons, backlight, Joy-Cons, accelerator stub: one late-initialized archive.
+kernel_driver(
+    name = "NativeLegacyDisplay",
+    srcs = [
+        "NativeLegacyDisplay.cpp",
+        # The display across SC7 (tegra_display_suspend/resume): hekate's cold display init/power-down.
+        "TegraDisplayPower.cpp",
+        "//bazel/pinned:kernel/native-legacy-display/original-bindings.S",
+    ],
+    dir = "drivers/NativeMobileDisplay",
+    late = ["NativeLegacyDisplay.cpp"],
+    src_copts = {"NativeLegacyDisplay.cpp": [
+        "-I",
+        "{build}/native-legacy-display",
+    ]},
+)
+
+kernel_driver(
+    name = "QemuProbes",
+    srcs = [
+        "LegacyDisplayProbe.cpp",
+        "KeyStoreProbe.cpp",
+        "HidInputProbe.cpp",
+        "TouchState.cpp",
+    ],
+    dir = "kits/qemu",
+)
+
+kernel_driver(
+    name = "NativeKeyStoreEvents",
+    srcs = ["NativeKeyStoreEvents.cpp"],
+    late = ["NativeKeyStoreEvents.cpp"],
+)
+
+kernel_driver(
+    name = "NativeHidInput",
+    srcs = [
+        "NativeHidInput.cpp",
+        "//bazel/pinned:kernel/native-hid-input/original-bindings.S",
+    ],
+    late = ["NativeHidInput.cpp"],
+    src_copts = {"NativeHidInput.cpp": [
+        "-I",
+        "{build}/native-hid-input",
+    ]},
+    stems = {"original-bindings.S": "hid-original-bindings"},
+)
+
+kernel_driver(
+    name = "NativeGOPPresenter",
+    srcs = ["NativeGOPPresenter.cpp"],
+    dir = "drivers/NativeMobileDisplay",
+    late = ["NativeGOPPresenter.cpp"],
+)
+
+# Touch screen and buttons. SwitchHIDDevice subclasses the original IOHIDDevice through NativeHidInput's bindings (same
+# archive), so it is a late object.
+kernel_driver(
+    name = "SwitchTouch",
+    srcs = [
+        "SwitchHIDDevice.cpp",
+        "SwitchTouch.cpp",
+    ],
+    late = ["SwitchHIDDevice.cpp"],
+    src_copts = {"SwitchHIDDevice.cpp": [
+        "-I",
+        "{build}/native-hid-input",
+    ]},
+)
+
+kernel_driver(name = "SwitchButtons")
+
+# Backlight (CoreBrightness's AppleARMBacklight, by metaclass), display power and the BH1730 ambient light sensor.
+kernel_driver(
+    name = "SwitchBrightness",
+    srcs = [
+        "TegraPanel.cpp",
+        "SwitchBacklight.cpp",
+        "SwitchALS.cpp",
+        "original-bindings.S",
+    ],
+)
+
+# Joy-Cons (switch-joycon-rail / switch-joycon-bt). SwitchJoyConHID subclasses the original IOHIDDevice (late).
+kernel_driver(
+    name = "SwitchJoyCon",
+    srcs = [
+        "SwitchJoyConHID.cpp",
+        "SwitchJoyConRail.cpp",
+    ],
+    late = ["SwitchJoyConHID.cpp"],
+    # Game-controller personalities (switch-gc-personality).
+    prelink = ["com.apple.driver.AppleGameControllerPersonality"],
+    src_copts = {"SwitchJoyConHID.cpp": [
+        "-I",
+        "{build}/native-hid-input",
+    ]},
+)
+
+# Accelerator stub: ends QuartzCore's 30 s IOAcceleratorES poll.
+kernel_driver(
+    name = "IOSwitchAccelStub",
+    srcs = [
+        "IOSwitchAccelStubPublish.cpp",
+        "IOSwitchAccelStub.cpp",
+        "original-bindings.S",
+    ],
+    late = ["IOSwitchAccelStub.cpp"],
+    prelink = ["com.apple.iokit.IOGPUFamily"],
+)
+
+# AppleKeyStore stand-in's device key: RFC 3394 wrap under a key derived from the fuse chip ID.
+kernel_driver(
+    name = "AKSDeviceKey",
+    srcs = ["AKSDeviceKey.cpp"],
+    dir = "drivers/NativeKeyStoreEvents",
+)
+
+kernel_archive(
+    name = "libNativeLegacyDisplay",
+    out = "build/native-legacy-display/libNativeLegacyDisplay.late.a",
+    members = [
+        ":NativeLegacyDisplay",
+        ":QemuProbes",
+        ":NativeKeyStoreEvents",
+        ":NativeHidInput",
+        ":NativeGOPPresenter",
+        ":SwitchTouch",
+        ":SwitchButtons",
+        ":SwitchBrightness",
+        ":SwitchJoyCon",
+        ":IOSwitchAccelStub",
+        ":AKSDeviceKey",
+    ],
+)
+
+kernel_archive(
+    name = "libArmCpu",
+    out = "build/armcpu/libArmCpu.a",
+    members = [
+        ":ArmCpu",
+        ":ArmGIC",
+    ],
+)
+
+kernel_archive(
+    name = "libArmDTPlatform",
+    out = "build/armdt-platform/libArmDTPlatform.a",
+    members = [":ArmDTPlatform"],
+)
+
+kernel_archive(
+    name = "libNativeAES",
+    out = "build/native-aes/libNativeAES.a",
+    members = [":NativeAES"],
+)
+
+kernel_archive(
+    name = "libVerifiedRootProbe",
+    out = "build/verified-root-ioswitch/libVerifiedRootProbe.a",
+    members = [":VerifiedRoot"],
+)
+
+kernel_archive(
+    name = "libmockfs_fixture",
+    out = "build/mockfs-fixture/libmockfs_fixture.a",
+    members = [":mockfs"],
+)
+
+kernel_archive(
+    name = "libShengPlatformPower",
+    out = "build/sheng-platform-power/libShengPlatformPower.a",
+    members = [":ShengPlatformPower"],
+)
+
+kernel_archive(
+    name = "libIOSwitchDiag",
+    out = "build/ioswitch-diag/libIOSwitchDiag.a",
+    members = [":IOSwitchDiag"],
+)
+
+kernel_archive(
+    name = "libLinkStubs",
+    out = "build/link-stubs/libLinkStubs.a",
+    members = [":LinkStubs"],
+)
+
+# --- Link: XNU's recorded link with LD_KERNEL_ARCHIVES as the XNU build script assembled it for these options ----------
+kernel_link(
+    name = "kernel_unprelinked",
+    inputs = [
+        ":corecrypto",
+        ":libArmDTPlatform",
+        ":libArmCpu",
+        ":libNativeLegacyDisplay",
+        ":libNativeAES",
+        ":libNativeIOSwitchBlockDevice",
+        ":NativeRamBlock",
+        ":libpthread",
+        ":libVerifiedRootProbe",
+        ":libmockfs_fixture",
+        ":libShengPlatformPower",
+        ":libIOSwitchDiag",
+        ":libLinkStubs",
+    ],
+    modes = [
+        "plain",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "plain",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "plain",
+    ],
+    xnu = ":xnu",
+)
+
+# --- Prelink: Apple's original kexts (the V20 roots, plus every driver's prelink list) --------------------------------
+tool_output(
+    name = "dma_prelink_report",
+    srcs = ["//bazel/pinned:prelink/dma-kernel.json.xz"],
+    outs = ["build/prelink/dma-kernel.json"],
+    args = [
+        "$(location //bazel/pinned:prelink/dma-kernel.json.xz)",
+        "{out}",
+        "012162a73b3cb2c8306e7e0a98bae2bdfb4f6cf91d7698feac787939d0c5ffd0",
+    ],
+    tool = "unxz.py",
+)
+
+kernel_prelink(
+    name = "kernel",
+    base_roots = [
+        "com.apple.driver.AppleMobileFileIntegrity",
+        "com.apple.filesystems.apfs",
+        "com.apple.security.sandbox",
+        "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
+        "com.apple.iokit.IOMobileGraphicsFamily",
+        "com.apple.iokit.IOSurface",
+        "com.apple.iokit.IOHIDFamily",
+        "com.apple.driver.DiskImages",
+        "com.apple.driver.DiskImages.FileBackingStore",
+        "com.apple.driver.DiskImages.KernelBacked",
+        "com.apple.driver.DiskImages.ReadWriteDiskImage",
+    ],
+    early_security_init = ["com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"],
+    inherit_report = ":dma_prelink_report",
+    kernel = ":kernel_unprelinked",
+    previous = "//bazel/pinned:prelink/dma-prelink.json",
+    slide = "-0x1000000",
+)

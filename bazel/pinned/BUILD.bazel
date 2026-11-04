@@ -1,0 +1,36 @@
+# Inputs the build cannot regenerate, checked in with their sha256 (SHA256SUMS; `bazel test //bazel/pinned:sha256`).
+#
+#   kernel/*/original-bindings.S, kernel/*/*ABI.h, GuardedPMGRSlots.inc
+#       Absolute-address tables into the 21H461 kernelcache and ABI headers, written by the kernel tree's audit scripts
+#       (build-ioswitch-root-block.py, build-native-legacy-display.py, build-native-hid-input.py,
+#       build-platform-power.py) from QEMU-boot interface audits that cannot run in a sandbox.
+#   kernel/verified-root-ioswitch/trusted-key.S
+#       The owner verification key (openssl, never regenerated).
+#   data-seed/data-v10.dbr
+#       NativeRamBlock's packed 1 GiB Data seed (DBRDISK1). Contains Apple-derived /private/var content from the
+#       21H461 OS volume: check the licence before publishing the repository.
+#   prelink/dma-kernel.json.xz, prelink/dma-prelink.json
+#       The V20 prelink report the SMP prelink inherits (its parent pass no longer exists) and its roots.
+#   firmware/bl31.bin, bl33.bin, oled-sku3.dtb
+#       switchroot's ATF and U-Boot (Ubuntu Noble 5.1.2 entry; U-Boot 2024.NX02 @ 722e2b86) and the OLED device tree
+#       (nx-plat.dtimg entry 3), as the boot entry chains them.
+
+load("@rules_python//python:py_test.bzl", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+py_test(
+    name = "sha256",
+    srcs = ["check_sha256.py"],
+    args = ["$(location SHA256SUMS)"],
+    data = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+    main = "check_sha256.py",
+)

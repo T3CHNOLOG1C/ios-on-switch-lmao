@@ -1,0 +1,18 @@
+{
+  "comment": "The V20 (native-root-dma-v1) prelink: its roots, and the sha256 of the original kernelcache it read (vendor/unixnu/out/ipsw/21H461/kernelcache.decompressed = //ipsw:kernelcache). emit_prelink.py requires the SMP prelink to keep exactly these roots, in this order, before the new ones.",
+  "roots": [
+    "com.apple.driver.AppleMobileFileIntegrity",
+    "com.apple.filesystems.apfs",
+    "com.apple.security.sandbox",
+    "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
+    "com.apple.iokit.IOMobileGraphicsFamily",
+    "com.apple.iokit.IOSurface",
+    "com.apple.iokit.IOHIDFamily",
+    "com.apple.driver.DiskImages",
+    "com.apple.driver.DiskImages.FileBackingStore",
+    "com.apple.driver.DiskImages.KernelBacked",
+    "com.apple.driver.DiskImages.ReadWriteDiskImage"
+  ],
+  "prelinked_sha256": "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7",
+  "report_sha256": "012162a73b3cb2c8306e7e0a98bae2bdfb4f6cf91d7698feac787939d0c5ffd0"
+}

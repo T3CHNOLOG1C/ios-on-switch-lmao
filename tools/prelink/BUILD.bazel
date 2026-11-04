@@ -1,0 +1,4 @@
+package(default_visibility = ["//visibility:public"])
+
+# The prelinker (emit_prelink.py + native_prelink.py), run by bazel/kernel:kernel.bzl kernel_prelink.
+exports_files(glob(["*.py"]))

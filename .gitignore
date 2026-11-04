@@ -42,6 +42,7 @@ bundles/
 /out/native-a57/root-v1/passes/native-root-smp-v1/*
 !/out/native-a57/root-v1/passes/native-root-smp-v1/build-options.json
 !/out/native-a57/root-v1/passes/native-root-smp-v1/prelink-command.json
+!/out/native-a57/root-v1/passes/native-root-smp-v1/BUILD.bazel
 !/out/native-a57/root-v1/passes/native-root-smp-v1/source/
 
 # Deploy tools (not the device logs, photos or receipts beside them)

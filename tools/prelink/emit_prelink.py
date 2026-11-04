@@ -7,8 +7,10 @@ import hashlib
 import json
 from pathlib import Path
 import struct
+import sys
 import xml.etree.ElementTree as ET
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from native_prelink import backed_offset, exports, macho, plan, unserialize_xml
 
 # Standard SHA-256 round constants, stored as 64 little-endian words. Some
@@ -24,54 +26,18 @@ MATH_LITERAL_POOLS = (
     ('0000c1c00000807f0000000084aec68f', 212, '43ef8598a507444b21d8a2abbe4065554baaa3b6a29dbe390465cc0ba0dfbe28'),
     ('9b1a86a049faa8bd053f4e7b9dee213e', 56, 'e874aeba59eebdebdf68d18b1196d1ca6aeee12b110985a856f8fe404e0c76ee'),
 )
-NEW_ORIGINAL_COMPONENTS = {'com.apple.iokit.IOGPUFamily',   # IOAcceleratorES for QuartzCore's 30 s accelerator poll and the GM20B driver
-                           'com.apple.driver.AppleGameControllerPersonality',   # game-controller personalities (switch-gc-personality)
-                           # USB device mode (drivers/SwitchUSB): the family SwitchXUDC subclasses, its dependency, and the
-                           # usbmux function driver (usbmuxd, lockdownd, Xcode, Finder)
-                           'com.apple.iokit.IOUSBDeviceFamily', 'com.apple.driver.usb.AppleUSBCommon',
-                           'com.apple.driver.AppleUSBDeviceMux',
-                           # USB host mode (drivers/SwitchUSB SwitchXHCI): Apple's host stack and xHCI driver, which
-                           # SwitchXHCI subclasses, and what it needs (IOAccessoryManager: AppleUSBXHCI's Type-C port
-                           # classes; IOPortFamily: declared by AppleUSBXHCI) ...
-                           'com.apple.iokit.IOUSBHostFamily', 'com.apple.driver.usb.AppleUSBXHCI',
-                           'com.apple.iokit.IOAccessoryManager', 'com.apple.iokit.IOPortFamily',
-                           # ... and the class drivers: hubs, composite devices (configuration and interfaces), HID
-                           # (keyboard, mouse) and mass storage with its SCSI layers and IOPCIFamily (one pointer).
-                           'com.apple.driver.usb.AppleUSBHub', 'com.apple.driver.usb.AppleUSBHostCompositeDevice',
-                           'com.apple.driver.usb.IOUSBHostHIDDevice', 'com.apple.iokit.IOUSBMassStorageDriver',
-                           'com.apple.iokit.IOSCSIArchitectureModelFamily', 'com.apple.iokit.IOSCSIBlockCommandsDevice',
-                           'com.apple.iokit.IOPCIFamily'}
+# Original kexts prelinked beyond the V20 roots, the dependencies left out of the prelink and the personalities kept
+# out of the boot catalogue: declared by the drivers that need them (prelink, prelink_cuts, prelink_deferred in
+# out/native-a57/root-v1/tree/BUILD.bazel, which says why for each) and passed here by the kernel_prelink rule.
+NEW_ORIGINAL_COMPONENTS = set()     # --new-root BUNDLE
 # Declared dependencies left out of the prelink, by exact pointer count (plan() fails the build when the original
 # kernelcache has a different number of sites): (component, dependency) -> (pointer sites, native stub). A nonzero cut
-# rebinds each site, a GOT entry of the dependency's metaclass, to _ioswitch_prelink_cut_null (8 zero bytes,
-# drivers/SwitchUSB/SwitchUSB.cpp), so that OSDynamicCast yields NULL. The emitted prelink info drops the declaration.
+# rebinds each site, a GOT entry of the dependency's metaclass, to the stub (8 zero bytes), so that OSDynamicCast yields
+# NULL. The emitted prelink info drops the declaration.
 CUT_STUB = '_ioswitch_prelink_cut_null'
-CUT_DEPENDENCIES = {
-    # AppleSMC (Mac SMC; its own deps com.apple.driver.watchdog and IOACPIFamily are not in the iPad kernelcache).
-    # IOUSBHostFamily's one site is OSDynamicCast(AppleSMC, waitForMatchingService(AppleSMC)) on a path taken only for
-    # a port with a "UsbCPortNumber" property (fn 0xfffffff005e4fe88), which nothing here publishes.
-    ('com.apple.iokit.IOUSBHostFamily', 'com.apple.driver.AppleSMC'): (1, CUT_STUB),
-    # A codeless kext without personalities (the planner cannot carry it); no pointers.
-    ('com.apple.iokit.IOUSBHostFamily', 'com.apple.driver.usb.AppleUSBHostPlatformProperties'): (0, None),
-    # AppleOnboardSerial would pull IOSkywalkFamily and IONetworkingFamily, whose classes (IONetworkInterface,
-    # IONetworkStack, IO80211Interface, ...) SwitchWLAN defines natively: their kexts could never load. The one site is
-    # OSDynamicCast(AppleOnboardSerial, provider) in the start of the serial-accessory port class (fn 0xfffffff005cc3f0c,
-    # provider class AppleOnboardSerialSync, which never exists here); NULL takes its logged failure return, with no
-    # dereference of the result.
-    ('com.apple.iokit.IOAccessoryManager', 'com.apple.driver.AppleOnboardSerial'): (1, CUT_STUB),
-    ('com.apple.iokit.IOAccessoryManager', 'com.apple.iokit.IOSerialFamily'): (0, None),
-}
-# Personalities kept out of the boot-time catalogue (the emitted prelink info) so that the USB host stack does not load
-# at every boot: these three match IOResources ("IOKit"), so they would load IOUSBHostFamily, IOUSBMassStorageDriver and
-# its SCSI/PCI dependencies whether or not host mode is ever used. SwitchXHCI adds AppleUSBHostResources and
-# IOUSBMassStorageResource back (IOCatalogue::addDrivers) when it brings the host up. AppleUSBHostResourcesTypeC stays
-# out: it is the Mac's Type-C/SMC variant, and its probe waits 5 s for a "product" service that is not published here.
-DEFERRED_PERSONALITIES = {
-    'com.apple.iokit.IOUSBHostFamily': ('AppleUSBHostResources', 'AppleUSBHostResourcesTypeC'),
-    'com.apple.iokit.IOUSBMassStorageDriver': ('IOUSBMassStorageResource',),
-}
-# main() requires the --root list to end with sorted(NEW_ORIGINAL_COMPONENTS), in that order in prelink-command.json:
-# AppleGameControllerPersonality, AppleUSBDeviceMux, usb.AppleUSBCommon, IOGPUFamily, IOUSBDeviceFamily.
+CUT_DEPENDENCIES = {}               # --cut COMPONENT=DEPENDENCY=SITES (the stub when SITES > 0)
+DEFERRED_PERSONALITIES = {}         # --defer COMPONENT=PERSONALITY
+# main() requires the --root list to be the V20 roots followed by sorted(NEW_ORIGINAL_COMPONENTS).
 
 COALESCED = {'__PRELINK_TEXT': '__TEXT', '__PLK_TEXT_EXEC': '__TEXT_EXEC',
              '__PLK_DATA_CONST': '__DATA_CONST', '__PRELINK_DATA': '__DATA'}
@@ -397,32 +363,43 @@ def main():
     parser.add_argument('--kernel', required=True, type=Path)
     parser.add_argument('--prelinked', required=True, type=Path)
     parser.add_argument('--root', required=True, action='append')
+    parser.add_argument('--new-root', action='append', default=[])
+    parser.add_argument('--cut', action='append', default=[], metavar='COMPONENT=DEPENDENCY=SITES')
+    parser.add_argument('--defer', action='append', default=[], metavar='COMPONENT=PERSONALITY')
     parser.add_argument('--slide', required=True, type=lambda value: int(value, 0))
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--early-security-init', action='append', default=[], metavar='BUNDLE=ORIGINAL_VA',
                         help='Explicit original void(void) policy initializer, called before lockdown; requires source ABI')
     parser.add_argument('--inherit-original-report', required=True, type=Path)
+    parser.add_argument('--previous', required=True, type=Path,
+                        help='the V20 prelink: its roots and the sha256s of its kernelcache and report')
     args = parser.parse_args()
+    NEW_ORIGINAL_COMPONENTS.update(args.new_root)
+    for cut in args.cut:
+        component, dependency, sites = cut.split('=')
+        CUT_DEPENDENCIES[(component, dependency)] = (int(sites), CUT_STUB if int(sites) else None)
+    for defer in args.defer:
+        component, personality = defer.split('=')
+        DEFERRED_PERSONALITIES[component] = DEFERRED_PERSONALITIES.get(component, ()) + (personality,)
     initializers = {}
     for request in args.early_security_init:
         identifier, separator, address = request.partition('=')
         if not separator or not identifier or identifier in initializers:
             parser.error('Use one BUNDLE=ORIGINAL_VA initializer per module')
         initializers[identifier] = int(address, 0)
-    expected_report = Path('/Users/brunostjohn/Development/Projects/ioswitch/out/native-a57/root-v1/passes/native-root-dma-v1/kernel.json')
-    expected_command = Path('/Users/brunostjohn/Development/Projects/ioswitch/out/native-a57/root-v1/passes/native-root-dma-v1/prelink-command.json')
-    if args.inherit_original_report.resolve() != expected_report:
+    previous = json.loads(args.previous.read_text())
+    report_bytes = args.inherit_original_report.read_bytes()
+    if hashlib.sha256(report_bytes).hexdigest() != previous['report_sha256']:
         raise ValueError('Only the completed V20 original-component report may be inherited')
-    previous_command = json.loads(expected_command.read_text())
-    previous_original = Path(previous_command[previous_command.index('--prelinked') + 1])
-    previous_roots = [previous_command[i+1] for i, value in enumerate(previous_command) if value == '--root']
-    if args.prelinked.resolve() != previous_original or args.root != previous_roots + sorted(NEW_ORIGINAL_COMPONENTS):
+    prelinked = args.prelinked.read_bytes()
+    if (hashlib.sha256(prelinked).hexdigest() != previous['prelinked_sha256'] or
+            args.root != previous['roots'] + sorted(NEW_ORIGINAL_COMPONENTS)):
         raise ValueError('Only the unchanged V20 roots are allowed')
-    inherited = json.loads(expected_report.read_text())
+    inherited = json.loads(report_bytes)
     if len(inherited['components']) != 33:raise ValueError('Expected 33 original components')
-    image, report = emit(args.kernel.read_bytes(), args.prelinked.read_bytes(), args.root, args.slide,
+    image, report = emit(args.kernel.read_bytes(), prelinked, args.root, args.slide,
                          initializers, inherited_original_report=inherited)
-    report['original_input_validation']['inherited_report'] = str(expected_report)
+    report['original_input_validation']['inherited_report'] = 'native-root-dma-v1/kernel.json sha256 ' + previous['report_sha256']
     if args.output.exists():
         raise SystemExit('Refuse to overwrite an existing candidate')
     args.output.parent.mkdir(parents=True, exist_ok=True)

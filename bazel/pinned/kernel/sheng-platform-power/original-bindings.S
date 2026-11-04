@@ -1,0 +1,16 @@
+.globl __ZN9ApplePMGRC2EPK11OSMetaClass
+.set __ZN9ApplePMGRC2EPK11OSMetaClass, 0xfffffff0049f003c
+.globl __ZN9ApplePMGRD2Ev
+.set __ZN9ApplePMGRD2Ev, 0xfffffff0049f019c
+.globl __ZN9ApplePMGR10gMetaClassE
+.set __ZN9ApplePMGR10gMetaClassE, 0xfffffff006adf490
+.globl __ZN9ApplePMGR7readAonEv
+.set __ZN9ApplePMGR7readAonEv, 0xfffffff004a20fbc
+.globl __ZN9ApplePMGR8writeAonEy
+.set __ZN9ApplePMGR8writeAonEy, 0xfffffff004a20fc4
+.globl _sheng_original_pmgr_nub_create
+.set _sheng_original_pmgr_nub_create, 0xfffffff004a22568
+.globl _sheng_original_pmgr_nub_read
+.set _sheng_original_pmgr_nub_read, 0xfffffff004a24adc
+.globl _sheng_original_pmgr_nub_write
+.set _sheng_original_pmgr_nub_write, 0xfffffff004a230ec

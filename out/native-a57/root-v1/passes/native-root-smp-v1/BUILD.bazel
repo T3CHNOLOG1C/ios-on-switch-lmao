@@ -1,0 +1,4 @@
+exports_files([
+    "build-options.json",
+    "prelink-command.json",
+])
