@@ -7,6 +7,8 @@
 //   * One of four parts, told apart by WHO_AM_I: ST LSM6DS3H (0x69), LSM6DSE (0x6a) or LSM6DSO (0x6c) at 0x0f, or
 //     InvenSense ICM-40607 (0x38) at 0x75. SPI4 chip select 0, mode 3, 8 MHz (../TegraSPI). Supplied from the battery
 //     rail (vdd/vddio-supply = battery_reg), so it is always powered and keeps what an earlier OS set: it is reset here.
+//     The OLED's part behaves as an ICM-40607 (r7p2, inferred: the started line names it), whose soft reset drops it to
+//     3-wire SPI until INTF_CONFIG4 is set again (icm4Wire).
 //   * Data-ready on the part's INT2 (ST st,drdy-int-pin = 2; ICM irq-int2) to GPIO PX2, level high, latched until the
 //     data is read (tegra210b01-fric-pinmux.dtsi motion_int_px2: pull-down, input).
 //   * Mounting, the DT mount matrices from the part's axes to the console's (handheld landscape: +X right, +Y up, +Z out
@@ -29,8 +31,9 @@
 // feature, SwitchHID.h) or the orientation detector runs. The output data rate is the lowest supported rate at or above
 // the fastest request; the gyroscope's data-ready leads when it is on (both then share the rate) and each service is
 // decimated to its own interval. Each data-ready interrupt reads status and data in one SPI burst, which lets the line
-// drop. A 1 s watchdog, armed only while converting, panics if data-ready stopped arriving (lost at the GPIO controller
-// or the GIC, or the part stopped); a line that stays high without new data panics too. No polling anywhere.
+// drop. A 1 s watchdog, armed only while converting, panics if data-ready is raised but never arrives (lost at the GPIO
+// controller or the GIC); a part that raises none, or a line that stays high without new data, turns motion off with one
+// log line (giveUp). No polling anywhere.
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -151,6 +154,8 @@ enum : uint8_t {
     IntSource0 = 0x65,
     IntSource3 = 0x68,
     WhoAmI = 0x75,
+    BankSel = 0x76,      // REG_BANK_SEL, in every bank
+    IntfConfig4 = 0x7a,  // bank 1: SPI_AP_4WIRE (bit 1)
 };
 enum : uint8_t {
     SoftReset = 1u << 0,
@@ -167,6 +172,7 @@ enum : uint8_t {
     AccelLowNoise = 3u << 0,  // PWR_MGMT0
     Fs2000dps = 0u << 5,
     Fs8g = 1u << 5,
+    Spi4Wire = 1u << 1,  // INTF_CONFIG4: TDK's ICM426XX_INTF_CONFIG4_AP_SPI4W
 };
 constexpr size_t kBurst = 15;
 constexpr int16_t kInvalid = -32768;
@@ -201,7 +207,8 @@ class SwitchMotion : public IOService {
 
     // Work loop state.
     bool converting = false, suspended = false, on[2] = {};
-    unsigned rate = 0;                      // index into info->rates while converting
+    bool broken = false;  // the part misbehaved on its first boots: logged once, motion off for this boot (giveUp)
+    unsigned rate = 0;    // index into info->rates while converting
     unsigned every[2] = {}, count[2] = {};  // decimation per service
     uint64_t settle[2] = {};                // first sample time each sensor's output is trusted
     unsigned samples = 0, empty = 0;
@@ -215,6 +222,8 @@ class SwitchMotion : public IOService {
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
     void readRegisters(uint8_t reg, uint8_t *buffer, size_t length);
     void writeRegister(uint8_t reg, uint8_t value);
+    void icm4Wire();
+    void giveUp();
     bool identify();
     bool reset();
     void configurePart();
@@ -249,13 +258,34 @@ void SwitchMotion::writeRegister(uint8_t reg, uint8_t value)
     if (err) panic("SwitchMotion: SPI4 write of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
 }
 
-// WHO_AM_I at 0x0f (ST) or 0x75 (ICM); reading the other family's address is harmless. An IMU that is missing or does not
-// come out of reset leaves motion off with one log line (r7p: the reset check panicked the board thread at boot); a lost SPI
-// interrupt still panics in the transfer.
+// An ICM-426xx answers reads on SDO only in 4-wire mode (INTF_CONFIG4 SPI_AP_4WIRE), and its soft reset puts it back in
+// 3-wire mode, where it answers on SDI instead. TDK's own driver sets the bit, without reading it, at init and again right
+// after every soft reset "to keep the communication link alive" (Icm426xxDriver_HL.c inv_icm426xx_configure_serial_interface
+// and inv_icm426xx_device_reset). Writes reach the part in either mode. r7p2: the reset below, without this, left the OLED's
+// part in 3-wire mode (it is never unpowered), and every read since returned the same garbage (0x80, 0x60).
+void SwitchMotion::icm4Wire()
+{
+    writeRegister(icm::BankSel, 1);
+    writeRegister(icm::IntfConfig4, icm::Spi4Wire);
+    writeRegister(icm::BankSel, 0);
+}
+
+// WHO_AM_I at 0x0f (ST) first: an ST part answers it in any state, and the ICM writes below would land on ST reserved
+// registers. Then 4-wire mode for an ICM and its WHO_AM_I at 0x75. An IMU that is missing or does not come out of reset
+// leaves motion off with one log line (r7p: the reset check panicked the board thread at boot); a lost SPI interrupt still
+// panics in the transfer.
 bool SwitchMotion::identify()
 {
     uint8_t stId = 0, icmId = 0;
     readRegisters(st::WhoAmI, &stId, 1);
+    for (const Part &p : kParts) {
+        if (p.family == Family::ST && stId == p.whoAmI) {
+            part = &p;
+            info = &kST;
+            return true;
+        }
+    }
+    icm4Wire();
     readRegisters(icm::WhoAmI, &icmId, 1);
     for (const Part &p : kParts) {
         if ((p.family == Family::ST ? stId : icmId) == p.whoAmI) {
@@ -266,10 +296,9 @@ bool SwitchMotion::identify()
     }
     char sck[256];
     tegra_gpio_describe(TEGRA_GPIO(C, 5), sck, sizeof(sck));
-    IOLog(
-        "SwitchMotion: off: no IMU on SPI4 CS0: WHO_AM_I 0x0f = %#x, 0x75 = %#x (expected LSM6DS3H 0x69, LSM6DSE 0x6a, "
-        "LSM6DSO 0x6c, ICM-40607 0x38); SCK pad %s\n",
-        stId, icmId, sck);
+    IOLog("SwitchMotion: off: no IMU on SPI4 CS0: WHO_AM_I 0x0f = %#x, 0x75 = %#x after 4-wire mode (expected LSM6DS3H "
+          "0x69, LSM6DSE 0x6a, LSM6DSO 0x6c, ICM-40607 0x38); SCK pad %s\n",
+          stId, icmId, sck);
     return false;
 }
 
@@ -290,7 +319,8 @@ bool SwitchMotion::reset()
         writeRegister(st::FifoCtrl, 0);
     } else {
         writeRegister(icm::DeviceConfig, icm::SoftReset);
-        IOSleep(2);
+        IOSleep(2);  // TDK: 1 ms before any further access
+        icm4Wire();  // the reset left the part in 3-wire mode (icm4Wire)
         uint8_t status = 0, config = 0, who = 0;
         readRegisters(icm::IntStatus, &status, 1);
         if (!(status & icm::ResetDone)) {
@@ -353,9 +383,24 @@ void SwitchMotion::program(bool accel, bool gyro, unsigned rateIndex)
 }
 
 // Work loop: the clients' intervals (and the orientation detector) to a rate, sensors, routing and decimation.
+// Work loop. A part that does not behave as expected on hardware that has not booted this driver before is not worth the
+// boot: one log line (the caller's), the part stopped, motion off until the next boot. A lost interrupt still panics
+// (tegra_gpio_check_delivery, TegraSPI).
+void SwitchMotion::giveUp()
+{
+    broken = true;
+    if (converting) {
+        program(false, false, 0);
+        irq->disable();
+        watchdog->cancelTimeout();
+        converting = false;
+    }
+    on[Accel] = on[Gyro] = false;
+}
+
 void SwitchMotion::apply()
 {
-    if (suspended) return;
+    if (suspended || broken) return;
     uint32_t interval[2];
     for (unsigned s = 0; s < 2; ++s) interval[s] = __atomic_load_n(&intervalUS[s], __ATOMIC_ACQUIRE);
     const bool detector = kOrientationPolicy != OrientationPolicy::Off;
@@ -500,8 +545,9 @@ void SwitchMotion::sample()
         if (++empty > kStuckLimit) {
             char state[256];
             tegra_gpio_describe(TEGRA_GPIO_IMU_INT, state, sizeof(state));
-            panic("SwitchMotion: %s data-ready (PX2) fired %u times in a row with no new data: %s", part->name, empty,
-                  state);
+            IOLog("SwitchMotion: off: %s data-ready (PX2) fired %u times in a row with no new data: %s\n", part->name,
+                  empty, state);
+            giveUp();
         }
         return;
     }
@@ -531,9 +577,11 @@ void SwitchMotion::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
     if (!self->samples) {
         tegra_gpio_check_delivery(TEGRA_GPIO_IMU_INT, "SwitchMotion");
         const uint32_t milliHz = self->info->rates[self->rate].milliHz;
-        panic("SwitchMotion: %s raised no data-ready on PX2 in %u ms at %u.%u Hz (accel %d, gyro %d): INT2 not wired "
-              "or the part stopped",
+        IOLog("SwitchMotion: off: %s raised no data-ready on PX2 in %u ms at %u.%u Hz (accel %d, gyro %d): INT2 not "
+              "wired or the part stopped\n",
               self->part->name, kWatchdogMS, milliHz / 1000, milliHz % 1000 / 100, self->on[Accel], self->on[Gyro]);
+        self->giveUp();
+        return;
     }
     self->samples = 0;
     sender->setTimeoutMS(kWatchdogMS);

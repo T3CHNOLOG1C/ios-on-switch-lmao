@@ -19,9 +19,10 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" boolean_t preemption_enabled(void);
 
 namespace {
-constexpr vm_offset_t kI2CPA = 0x7000C000, kI2CSize = 0x2000;        // I2C1..I2C6
-constexpr vm_offset_t kCarPA = 0x60006000, kCarSize = 0x1000;        // CLK_RST_CONTROLLER
-constexpr vm_offset_t kPinmuxPA = 0x70003000, kPinmuxSize = 0x1000;  // PINMUX_AUX
+constexpr vm_offset_t kI2CPA = 0x7000C000, kI2CSize = 0x2000;          // I2C1..I2C6
+constexpr vm_offset_t kCarPA = 0x60006000, kCarSize = 0x1000;          // CLK_RST_CONTROLLER
+constexpr vm_offset_t kPinmuxPA = 0x70003000, kPinmuxSize = 0x1000;    // PINMUX_AUX
+constexpr vm_offset_t kApbMiscPA = 0x70000000, kApbMiscSize = 0x1000;  // APB_MISC: the pads' drive (GP_*_CFGPADCTRL)
 constexpr unsigned kBuses = 5;
 constexpr uint32_t kClkM = 19200000;  // CLK_M = 38.4 MHz OSC / 2
 constexpr uint32_t kBusDivide = 48;   // (TLOW 4 + THIGH 2 + 2) * (CLK_DIVISOR std/fast 5 + 1)
@@ -83,15 +84,21 @@ struct BusInfo {
     uint8_t divider;    // CLK_M divider: 4 -> 100 kHz, 1 -> 400 kHz
     uint16_t scl, sda;  // PINMUX_AUX offsets
     uint16_t spi;       // GIC SPI: Linux tegra210.dtsi:676/691/706/721/739, OLED DTB i2c@7000c000.. interrupts
+    uint16_t sclDrive, sdaDrive;  // APB_MISC GP_*_I2C_*_CFGPADCTRL
+    uint8_t pullDown;             // DRVDN, the pads' pull-down (sink) strength; DRVUP is 0
 };
-// hekate clock.c _clock_i2c[] and pinmux.h PINMUX_AUX_X_I2C_SCL/SDA.
+// hekate clock.c _clock_i2c[] and pinmux.h PINMUX_AUX_X_I2C_SCL/SDA. The drive: Horizon's
+// (Atmosphere pinmux_initial_drive_pad_config.inc: Gen1/Gen2/Cam/Pwr I2C 0x1f, Gen3 0x07) and L4T's for the OLED
+// (tegra210b01-fric-pinmux.dtsi drive_default: the same pull-down strengths, pull-up 0); offsets from
+// pinmux_drive_pad_characters.inc and Linux pinctrl-tegra210.c.
 constexpr BusInfo kBus[kBuses] = {
-    {0x0000, 0x300, 0x320, 0x124, 0x004, 0x010, 12, 4, 0xbc, 0xc0, 38},  // I2C1 (L)
-    {0x0400, 0x308, 0x328, 0x198, 0x008, 0x014, 22, 1, 0xc4, 0xc8, 84},  // I2C2 (H)
-    {0x0500, 0x310, 0x330, 0x1b8, 0x00c, 0x018, 3, 1, 0xcc, 0xd0, 92},   // I2C3 (U)
-    {0x0700, 0x430, 0x440, 0x3c4, 0x358, 0x360, 7, 4, 0xd4, 0xd8, 120},  // I2C4 (V), CAM_I2C pads
-    {0x1000, 0x308, 0x328, 0x128, 0x008, 0x014, 15, 1, 0xdc, 0xe0, 53},  // I2C5 (H), PWR_I2C pads
+    {0x0000, 0x300, 0x320, 0x124, 0x004, 0x010, 12, 4, 0xbc, 0xc0, 38, 0x9a8, 0x9ac, 0x1f},  // I2C1 (L)
+    {0x0400, 0x308, 0x328, 0x198, 0x008, 0x014, 22, 1, 0xc4, 0xc8, 84, 0x9b0, 0x9b4, 0x1f},  // I2C2 (H)
+    {0x0500, 0x310, 0x330, 0x1b8, 0x00c, 0x018, 3, 1, 0xcc, 0xd0, 92, 0x9b8, 0x9bc, 0x07},   // I2C3 (U)
+    {0x0700, 0x430, 0x440, 0x3c4, 0x358, 0x360, 7, 4, 0xd4, 0xd8, 120, 0x934, 0x938, 0x1f},  // I2C4 (V), CAM_I2C pads
+    {0x1000, 0x308, 0x328, 0x128, 0x008, 0x014, 15, 1, 0xdc, 0xe0, 53, 0xa6c, 0xa70, 0x1f},  // I2C5 (H), PWR_I2C pads
 };
+constexpr uint32_t kDriveMask = (0x1fu << 20) | (0x1fu << 12);  // DRVUP 24:20, DRVDN 16:12
 
 struct Bus {
     volatile uint8_t *regs;
@@ -112,7 +119,7 @@ struct Bus {
 };
 
 IOLock *volatile gSetupLock;
-volatile uint8_t *gI2C, *gCar, *gPinmux;
+volatile uint8_t *gI2C, *gCar, *gPinmux, *gApbMisc;
 IOWorkLoop *gLoop;
 Bus gBus[kBuses];
 
@@ -171,6 +178,20 @@ void clockEnable(const BusInfo &info)
     IODelay(2);
     w32(gCar, info.reset + 4, bit);
     (void)r32(gCar, info.reset);
+}
+
+// The bus's two pads: function I2Cx with the input on (hekate pinmux_config_i2c), and the pull-down strength Horizon and
+// L4T give them (kBus). Without the drive setting the pads keep their reset strength, which r7p5's BH1730 on I2C2 did
+// not answer through.
+void padConfig(const BusInfo &info)
+{
+    w32(gPinmux, info.scl, kPinmuxI2C);
+    w32(gPinmux, info.sda, kPinmuxI2C);
+    // Only I2C2 (the ALS) for now: the other buses (touch, the PMIC, the camera bus) work at their current strength, and a
+    // wrong drive on PWR_I2C would cost the boot. Widen once r7p8 shows the ALS answering with it.
+    if (info.sclDrive != kBus[1].sclDrive) return;
+    w32(gApbMisc, info.sclDrive, (r32(gApbMisc, info.sclDrive) & ~kDriveMask) | (uint32_t)info.pullDown << 12);
+    w32(gApbMisc, info.sdaDrive, (r32(gApbMisc, info.sdaDrive) & ~kDriveMask) | (uint32_t)info.pullDown << 12);
 }
 
 bool clockRunning(const BusInfo &info)
@@ -341,8 +362,7 @@ int bringUp(unsigned bus, Bus &b)
     b.owned = true;
     b.hz = kClkM / info.divider / kBusDivide;
     clockEnable(info);
-    w32(gPinmux, info.scl, kPinmuxI2C);
-    w32(gPinmux, info.sda, kPinmuxI2C);
+    padConfig(info);
     if (bus == 3 || bus == 4) {
         // hekate pinmux_config_i2c(): detach the CAM_I2C (I2C4) pads from the I2C3 function.
         w32(gPinmux, kBus[3].scl, r32(gPinmux, kBus[3].scl) | 1u);
@@ -452,7 +472,8 @@ extern "C" int tegra_i2c_init(unsigned bus)
     if (!gI2C) {
         gCar = (volatile uint8_t *)ml_io_map(kCarPA, kCarSize);
         gPinmux = (volatile uint8_t *)ml_io_map(kPinmuxPA, kPinmuxSize);
-        gI2C = (gCar && gPinmux) ? (volatile uint8_t *)ml_io_map(kI2CPA, kI2CSize) : nullptr;
+        gApbMisc = (volatile uint8_t *)ml_io_map(kApbMiscPA, kApbMiscSize);
+        gI2C = (gCar && gPinmux && gApbMisc) ? (volatile uint8_t *)ml_io_map(kI2CPA, kI2CSize) : nullptr;
     }
     if (!gLoop) gLoop = IOWorkLoop::workLoop();
     Bus &b = gBus[bus - 1];
@@ -526,8 +547,7 @@ extern "C" void tegra_i2c_resume(void)
         const bool adopted = bus == 5 && clockRunning(info);
         if (!adopted) {
             clockEnable(info);
-            w32(gPinmux, info.scl, kPinmuxI2C);
-            w32(gPinmux, info.sda, kPinmuxI2C);
+            padConfig(info);
             if (bus == 5) b.hz = kClkM / info.divider / kBusDivide;
         }
         if (b.irq) b.irq->enable();

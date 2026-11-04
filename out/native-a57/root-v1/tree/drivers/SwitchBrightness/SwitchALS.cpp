@@ -61,6 +61,7 @@
 #include <IOKit/IOWorkLoop.h>
 #include <os/log.h>
 #include <pexpert/pexpert.h>
+#include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../SwitchTouch/SwitchHID.h"
 #include "SwitchBrightness.h"
@@ -106,6 +107,29 @@ template <typename R, typename... A> R vcall(OSObject *object, unsigned slot, A.
 int writeRegister(uint8_t reg, uint8_t value)
 {
     return tegra_i2c_write(kBus, kSensor, kCommand | reg, &value, 1);
+}
+
+// For the line that turns the sensor off: its supplies and its bus as they are now. The BH1730 has two (L4T
+// tegra210b01-fric-power-tree.dtsi bh1730fvc@29): als-vid = MAX77620 LDO6 (2.9 V, which SwitchTouch switches) and
+// als-vdd = vdd-3v3 (MAX77620 GPIO3). LDO6_CFG 7:6 is the power mode (3 = on) and 5:0 the voltage (42 = 2.9 V), LDO6_CFG2
+// bit 3 its power-OK, FPS_LDO6 7:6 its sequencer source (3 = none); GPIO3 bit 3 the output and bit 2 the input level,
+// AME_GPIO bit 3 set when GPIO3 is an alternate function (hekate max77620.h). SCL (PJ2) and SDA (PJ3) read 1 while the
+// bus idles pulled up.
+void describeSupplies(char *buffer, size_t size)
+{
+    constexpr unsigned kPmicBus = 5;
+    constexpr uint8_t kPmic = 0x3c, kLdo6Cfg = 0x2f, kGpio3 = 0x39, kAmeGpio = 0x40, kFpsLdo6 = 0x4c;
+    uint8_t ldo[2] = {}, gpio3 = 0, ame = 0, fps = 0;  // LDO6_CFG and LDO6_CFG2 (0x30), one auto-increment read
+    int err = tegra_i2c_read(kPmicBus, kPmic, kLdo6Cfg, ldo, sizeof(ldo));
+    if (!err) err = tegra_i2c_read(kPmicBus, kPmic, kGpio3, &gpio3, 1);
+    if (!err) err = tegra_i2c_read(kPmicBus, kPmic, kAmeGpio, &ame, 1);
+    if (!err) err = tegra_i2c_read(kPmicBus, kPmic, kFpsLdo6, &fps, 1);
+    snprintf(
+        buffer, size,
+        "LDO6_CFG %#x (mode %u, %u mV) LDO6_CFG2 %#x (POK %u) FPS_LDO6 %#x, GPIO3 %#x AME %#x (PMIC read %d); SCL %d "
+        "SDA %d",
+        ldo[0], ldo[0] >> 6, 800 + 50 * (ldo[0] & 0x3f), ldo[1], (ldo[1] >> 3) & 1, fps, gpio3, ame, err,
+        tegra_gpio_read(TEGRA_GPIO(J, 2)), tegra_gpio_read(TEGRA_GPIO(J, 3)));
 }
 
 uint32_t lux(uint32_t visible, uint32_t ir, unsigned gain)
@@ -286,8 +310,11 @@ void SwitchALS::sample()
         if (broken) {
             giveUp();  // configure() logged why
         } else if (++errors >= kErrorLimit) {
-            IOLog("SwitchALS: off: BH1730 on I2C2 0x29 %s: I2C error %d %u times in a row (LDO6 off?)\n",
-                  identified ? "stopped answering" : "never answered", err, errors);
+            char supplies[200];
+            describeSupplies(supplies, sizeof(supplies));
+            IOLog("SwitchALS: off: BH1730 on I2C2 0x29 %s: I2C error %d (%s) %u times in a row; %s\n",
+                  identified ? "stopped answering" : "never answered", err,
+                  err == TEGRA_I2C_ENACK ? "no ACK" : "bus fault", errors, supplies);
             giveUp();
         }
         return;
