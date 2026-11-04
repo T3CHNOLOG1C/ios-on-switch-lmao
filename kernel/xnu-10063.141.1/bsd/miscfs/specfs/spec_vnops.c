@@ -91,8 +91,11 @@
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
 #include <kern/policy_internal.h>
+#include <kern/startup.h>
 #include <kern/timer_call.h>
+#include <kern/thread_call.h>
 #include <kern/waitq.h>
+#include <os/atomic_private.h>
 
 #include <pexpert/pexpert.h>
 
@@ -2493,6 +2496,96 @@ int upl_get_cached_tier(void *);
 extern thread_t pm_sync_thread;
 #endif /* CONFIG_PHYS_WRITE_ACCT */
 
+/*
+ * IOSwitch boot I/O census (temporary, 11-04): the boot-text phase is bound by ~2,000 small SD reads a second. Count every
+ * block request per device from boot until the first client frame, by size and with APFS's B_META, so one line tells the
+ * sealed volumes' metadata, file data and the cryptex disk images (their own devices) apart. NativeLegacyDisplay's
+ * presentBlock calls ioswitch_boot_io_report at the first frame; counting stops there and a thread call prints the line
+ * (never from the display's gate). Relaxed atomic increments only: nothing waits.
+ */
+#define IOSWITCH_IO_DEVS  10
+#define IOSWITCH_IO_SIZES 7 /* <=4K <=8K <=16K <=32K <=64K <=128K larger */
+static struct {
+	int32_t  dev1;          /* dev + 1, 0 while the slot is free */
+	uint32_t reads[IOSWITCH_IO_SIZES];
+	uint32_t meta;          /* reads with B_META */
+	uint32_t writes;
+	uint64_t read_bytes;
+} ioswitch_io[IOSWITCH_IO_DEVS];
+static int ioswitch_io_done;
+static thread_call_t ioswitch_io_call; /* allocated at boot: the report may run with interrupts disabled */
+
+static void
+ioswitch_io_count(buf_t bp, dev_t dev)
+{
+	const int32_t key = (int32_t)dev + 1;
+	for (unsigned i = 0; i < IOSWITCH_IO_DEVS; i++) {
+		int32_t slot = os_atomic_load(&ioswitch_io[i].dev1, relaxed);
+		if (slot == 0 && !os_atomic_cmpxchgv(&ioswitch_io[i].dev1, 0, key, &slot, relaxed)) {
+			/* another thread took the slot: slot holds its device */
+		} else if (slot == 0) {
+			slot = key;
+		}
+		if (slot != key) {
+			continue;
+		}
+		const int flags = buf_flags(bp);
+		if (!(flags & B_READ)) {
+			os_atomic_inc(&ioswitch_io[i].writes, relaxed);
+			return;
+		}
+		const uint32_t count = buf_count(bp);
+		unsigned size = 0;
+		while (size < IOSWITCH_IO_SIZES - 1 && count > (4096u << size)) {
+			size++;
+		}
+		os_atomic_inc(&ioswitch_io[i].reads[size], relaxed);
+		if (flags & B_META) {
+			os_atomic_inc(&ioswitch_io[i].meta, relaxed);
+		}
+		os_atomic_add(&ioswitch_io[i].read_bytes, (uint64_t)count, relaxed);
+		return;
+	}
+}
+
+static void
+ioswitch_io_print(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+{
+	char line[1024];
+	int at = snprintf(line, sizeof(line), "IOSwitch boot I/O to first frame (reads <=4K/8K/16K/32K/64K/128K/more, meta, MiB; writes):");
+	for (unsigned i = 0; i < IOSWITCH_IO_DEVS && at > 0 && at < (int)sizeof(line); i++) {
+		const int32_t key = os_atomic_load(&ioswitch_io[i].dev1, relaxed);
+		if (!key) {
+			break;
+		}
+		const uint32_t *r = ioswitch_io[i].reads;
+		at += snprintf(line + at, sizeof(line) - at, " dev %d,%d %u/%u/%u/%u/%u/%u/%u meta %u %llu w %u;",
+		    major(key - 1), minor(key - 1), r[0], r[1], r[2], r[3], r[4], r[5], r[6], ioswitch_io[i].meta,
+		    (unsigned long long)(ioswitch_io[i].read_bytes >> 20), ioswitch_io[i].writes);
+	}
+	printf("%s\n", line);
+}
+
+static void
+ioswitch_io_init(void)
+{
+	ioswitch_io_call = thread_call_allocate_with_options(ioswitch_io_print, NULL, THREAD_CALL_PRIORITY_LOW, 0);
+}
+STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, ioswitch_io_init);
+
+/* Called once per frame until the first one shows (any context, interrupts possibly disabled): the first call reports. */
+void ioswitch_boot_io_report(void);
+void
+ioswitch_boot_io_report(void)
+{
+	if (os_atomic_xchg(&ioswitch_io_done, 1, relaxed)) {
+		return;
+	}
+	if (ioswitch_io_call) {
+		thread_call_enter(ioswitch_io_call);
+	}
+}
+
 int
 spec_strategy(struct vnop_strategy_args *ap)
 {
@@ -2521,6 +2614,10 @@ spec_strategy(struct vnop_strategy_args *ap)
 	vp = buf_vnode(bp);
 	mp = vp ? vp->v_mount : NULL;
 	bap = &bp->b_attr;
+
+	if (!os_atomic_load(&ioswitch_io_done, relaxed)) {
+		ioswitch_io_count(bp, bdev);
+	}
 
 #if CONFIG_PHYS_WRITE_ACCT
 	if (current_thread() == pm_sync_thread) {
