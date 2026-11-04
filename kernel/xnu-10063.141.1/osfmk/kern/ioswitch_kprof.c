@@ -834,7 +834,11 @@ kprof_function_starts(void)
 			n++;
 		}
 		if (pass == 0) {
-			kprof_starts = kalloc_data(n * sizeof(uint32_t), Z_WAITOK | Z_NOFAIL);
+			/* Large: kalloc_large refuses Z_NOFAIL (panics). Without the table, 128-byte buckets. */
+			kprof_starts = kalloc_data(n * sizeof(uint32_t), Z_WAITOK);
+			if (kprof_starts == NULL) {
+				return;
+			}
 		}
 	}
 	kprof_nstarts = n;
@@ -847,17 +851,28 @@ kprof_init(void)
 	nanoseconds_to_absolutetime(KPROF_PERIOD_NS, &kprof_period);
 	nanoseconds_to_absolutetime(KPROF_WINDOW_NS, &kprof_window);
 	kprof_function_starts();
+	/*
+	 * These tables are past kalloc's zone sizes, and kalloc_large panics on Z_NOFAIL ("trying to kalloc(Z_NOFAIL)
+	 * with a large size"): a diagnostic must not take the boot down, so a refused table leaves kprof off.
+	 */
+	bool tables = true;
 	for (unsigned int c = 0; c < kprof_ncpus; c++) {
-		kprof_cpus[c].buf[0] = kalloc_data(sizeof(struct kprof_buf), Z_WAITOK | Z_ZERO | Z_NOFAIL);
-		kprof_cpus[c].buf[1] = kalloc_data(sizeof(struct kprof_buf), Z_WAITOK | Z_ZERO | Z_NOFAIL);
+		kprof_cpus[c].buf[0] = kalloc_data(sizeof(struct kprof_buf), Z_WAITOK | Z_ZERO);
+		kprof_cpus[c].buf[1] = kalloc_data(sizeof(struct kprof_buf), Z_WAITOK | Z_ZERO);
 		kprof_cpus[c].rng = 0x9e3779b9u * (c + 1);
+		tables = tables && kprof_cpus[c].buf[0] != NULL && kprof_cpus[c].buf[1] != NULL;
 	}
-	kprof_fns = kalloc_data(KPROF_FNS * sizeof(kprof_fns[0]), Z_WAITOK | Z_ZERO | Z_NOFAIL);
-	kprof_tasks = kalloc_data(KPROF_TASKS * sizeof(kprof_tasks[0]), Z_WAITOK | Z_ZERO | Z_NOFAIL);
-	kprof_users = kalloc_data(KPROF_USER * sizeof(kprof_users[0]), Z_WAITOK | Z_ZERO | Z_NOFAIL);
-	kprof_threads[0] = kalloc_data(KPROF_THREADS * sizeof(struct kprof_thread), Z_WAITOK | Z_ZERO | Z_NOFAIL);
-	kprof_threads[1] = kalloc_data(KPROF_THREADS * sizeof(struct kprof_thread), Z_WAITOK | Z_ZERO | Z_NOFAIL);
-	kprof_vals = kalloc_data(KPROF_USER * sizeof(uint64_t), Z_WAITOK | Z_ZERO | Z_NOFAIL);
+	kprof_fns = kalloc_data(KPROF_FNS * sizeof(kprof_fns[0]), Z_WAITOK | Z_ZERO);
+	kprof_tasks = kalloc_data(KPROF_TASKS * sizeof(kprof_tasks[0]), Z_WAITOK | Z_ZERO);
+	kprof_users = kalloc_data(KPROF_USER * sizeof(kprof_users[0]), Z_WAITOK | Z_ZERO);
+	kprof_threads[0] = kalloc_data(KPROF_THREADS * sizeof(struct kprof_thread), Z_WAITOK | Z_ZERO);
+	kprof_threads[1] = kalloc_data(KPROF_THREADS * sizeof(struct kprof_thread), Z_WAITOK | Z_ZERO);
+	kprof_vals = kalloc_data(KPROF_USER * sizeof(uint64_t), Z_WAITOK | Z_ZERO);
+	if (!tables || kprof_fns == NULL || kprof_tasks == NULL || kprof_users == NULL || kprof_threads[0] == NULL ||
+	    kprof_threads[1] == NULL || kprof_vals == NULL) {
+		os_log(OS_LOG_DEFAULT, "IOSwitch kprof: off (a sample table could not be allocated)");
+		return;
+	}
 	kprof_call = thread_call_allocate_with_options(kprof_summary, NULL, THREAD_CALL_PRIORITY_USER,
 	    THREAD_CALL_OPTIONS_ONCE);
 	kprof_last_summary = mach_absolute_time();
