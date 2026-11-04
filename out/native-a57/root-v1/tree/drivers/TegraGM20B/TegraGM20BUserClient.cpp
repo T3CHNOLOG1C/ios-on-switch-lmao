@@ -622,7 +622,14 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			options |= kIOMemoryPhysicallyContiguous;
 		// 34-bit, not 32: a mask below 4 GiB on a non-contiguous buffer makes IOKit use KMA_LOMEM, and arm64 XNU keeps
 		// no low-page pool, so every such BO failed (10-30: NVK "device refused: OutOfMemory(Device)")
-		const uint64_t mask = 0x3ffffffffULL & ~((1ULL << in->align_log2) - 1);
+		// The alignment goes into the mask only for Contiguous BOs (ABI: "physical alignment only matters with
+		// Contiguous"): IOBufferMemoryDescriptor takes the mask's low zero bits as the alignment, and any alignment
+		// above the page size makes IOKernelAllocateWithPhysicalRestrict use kmem_alloc_contig, a physically
+		// contiguous search that took up to 130 ms per BO on 11-04 for NVK's 64 KiB-aligned buffers. The GMMU maps
+		// these page by page (bo->pas), so ordinary BOs need no physical alignment.
+		const uint64_t mask = (in->flags & TegraGM20BBoContiguous)
+					      ? 0x3ffffffffULL & ~((1ULL << in->align_log2) - 1)
+					      : 0x3ffffffffULL;
 		bo->bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options,
 									   in->bytes, mask);
 		if (!bo->bmd || bo->bmd->prepare() != kIOReturnSuccess) {
