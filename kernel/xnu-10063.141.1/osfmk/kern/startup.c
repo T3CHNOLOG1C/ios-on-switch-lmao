@@ -429,17 +429,39 @@ kernel_startup_initialize_upto(startup_subsystem_id_t upto)
 /*
  * IOSwitch: the pre-kernel timing record the loader leaves in /chosen/ioswitch-boot-stamps (the main repository's
  * native/loader/stamps.h, whose word order this copies), logged once as milliseconds of the counter that the log's own
- * times use. 0 is when hekate's BL31 enabled the counter; "-" marks a step without a sample (an older boot.scr or
- * hekate entry, or the EMC raise off). "counter 0" is how long after SoC reset (the microsecond timer's 0) that was:
- * hekate's own time. Then the loader's EMC raise (native/loader/emc.h): result, kHz before and after, VDD_CORE.
+ * times use. 0 is when hekate's BL31 enabled the counter; "-" marks a step without a sample (an older U-Boot,
+ * boot.scr or hekate entry, or the EMC raise off). "counter 0" is how long after SoC reset (the microsecond timer's 0)
+ * that was: hekate's own time. Three lines: the unified log cuts a kernel line at about 256 characters.
  */
+static int
+ioswitch_stamp_list(char *line, size_t size, int at, const uint64_t *w, uint64_t frequency, unsigned first,
+    unsigned last, const char *const *names)
+{
+	for (unsigned i = first; i <= last && at > 0 && (size_t)at < size; ++i) {
+		if (w[i]) {
+			at += snprintf(line + at, size - (size_t)at, " %s %llu.%llu%s", names[i - first], w[i] * 1000 / frequency,
+			    w[i] * 10000 / frequency % 10, i < last ? "," : "");
+		} else {
+			at += snprintf(line + at, size - (size_t)at, " %s -%s", names[i - first], i < last ? "," : "");
+		}
+	}
+	return at;
+}
+
 static void
 ioswitch_log_boot_stamps(void)
 {
-	enum { MAGIC, WORDS, FREQUENCY, TIMERUS, TIMERUS_AT, FIRST, LAST = 19, EMC_RESULT, EMC_RATES, EMC_CORE, COUNT };
-	static const char *const names[LAST + 1 - FIRST] = {
-		"u-boot ready", "boot.scr", "loader.bin", "dtb", "kernel-window", "exporter", "bootm prep", "bootm go",
-		"loader", "emc", "emc done", "unpack", "unpacked", "copied", "xnu",
+	enum {
+		MAGIC, WORDS, FREQUENCY, TIMERUS, TIMERUS_AT,
+		UBOOT_FIRST, UBOOT_LAST = UBOOT_FIRST + 9,
+		LOADER_FIRST, LOADER_LAST = LOADER_FIRST + 7,
+		EMC_RESULT, EMC_RATES, EMC_CORE, COUNT
+	};
+	static const char *const uboot[] = {
+		"main", "sd", "ready", "boot.scr", "loader.bin", "dtb", "kernel-window", "exporter", "bootm prep", "bootm go",
+	};
+	static const char *const loader[] = {
+		"entry", "emc", "emc done", "gates", "unpack", "unpacked", "copied", "xnu",
 	};
 	static const char *const emc_results[] = {
 		"raised", "no BPMP firmware", "bad channel area", "channel busy", "no answer", "bad ping", "rate not in table",
@@ -449,7 +471,7 @@ ioswitch_log_boot_stamps(void)
 	const void *value;
 	unsigned int bytes;
 	uint64_t w[COUNT];
-	char line[512];
+	char line[240];
 	int at;
 	int64_t zero_us;
 	uint32_t emc;
@@ -459,36 +481,31 @@ ioswitch_log_boot_stamps(void)
 		return;
 	}
 	memcpy(w, value, sizeof(w));
-	if (w[MAGIC] != 0x32504d4154534f49ULL || w[WORDS] != COUNT || !w[FREQUENCY]) {
+	if (w[MAGIC] != 0x33504d4154534f49ULL || w[WORDS] != COUNT || !w[FREQUENCY]) {
 		return;
 	}
-	at = snprintf(line, sizeof(line), "IOSwitch pre-kernel ms:");
-	for (unsigned i = FIRST; i <= LAST && at > 0 && (size_t)at < sizeof(line); ++i) {
-		if (w[i]) {
-			at += snprintf(line + at, sizeof(line) - (size_t)at, " %s %llu.%llu%s", names[i - FIRST], w[i] * 1000 / w[FREQUENCY],
-			    w[i] * 10000 / w[FREQUENCY] % 10, i < LAST ? "," : "");
-		} else {
-			at += snprintf(line + at, sizeof(line) - (size_t)at, " %s -%s", names[i - FIRST], i < LAST ? "," : "");
-		}
-	}
+	at = snprintf(line, sizeof(line), "IOSwitch pre-kernel ms, u-boot:");
+	ioswitch_stamp_list(line, sizeof(line), at, w, w[FREQUENCY], UBOOT_FIRST, UBOOT_LAST, uboot);
+	printf("%s\n", line);
+
+	at = snprintf(line, sizeof(line), "IOSwitch pre-kernel ms, loader:");
+	at = ioswitch_stamp_list(line, sizeof(line), at, w, w[FREQUENCY], LOADER_FIRST, LOADER_LAST, loader);
 	/* The microsecond timer is 32 bits: SoC reset is only known modulo ~71.6 minutes. */
 	zero_us = (int64_t)(uint32_t)w[TIMERUS] - (int64_t)(w[TIMERUS_AT] * 1000000 / w[FREQUENCY]);
 	if (at > 0 && (size_t)at < sizeof(line)) {
-		at += snprintf(line + at, sizeof(line) - (size_t)at, "; counter 0 = %lld ms after SoC reset", zero_us / 1000);
-	}
-	emc = (uint32_t)w[EMC_RESULT];
-	if (at > 0 && (size_t)at < sizeof(line)) {
-		if (!w[FIRST + 9]) {
-			snprintf(line + at, sizeof(line) - (size_t)at, "; EMC raise off");
-		} else {
-			snprintf(line + at, sizeof(line) - (size_t)at,
-			    "; EMC %s (BPMP %d): %u -> %u MHz, VDD_CORE %u mV, channel area %#x",
-			    emc < sizeof(emc_results) / sizeof(emc_results[0]) ? emc_results[emc] : "?",
-			    (int)(int32_t)(w[EMC_RESULT] >> 32), (uint32_t)w[EMC_RATES] / 1000,
-			    (uint32_t)(w[EMC_RATES] >> 32) / 1000, (uint32_t)w[EMC_CORE], (uint32_t)(w[EMC_CORE] >> 32));
-		}
+		snprintf(line + at, sizeof(line) - (size_t)at, "; counter 0 = %lld ms after SoC reset", zero_us / 1000);
 	}
 	printf("%s\n", line);
+
+	emc = (uint32_t)w[EMC_RESULT];
+	if (!w[LOADER_FIRST + 1]) {
+		printf("IOSwitch pre-kernel EMC: raise off\n");
+	} else {
+		printf("IOSwitch pre-kernel EMC: %s (BPMP %d): %u -> %u MHz, VDD_CORE %u mV, channel area %#x\n",
+		    emc < sizeof(emc_results) / sizeof(emc_results[0]) ? emc_results[emc] : "?",
+		    (int)(int32_t)(w[EMC_RESULT] >> 32), (uint32_t)w[EMC_RATES] / 1000, (uint32_t)(w[EMC_RATES] >> 32) / 1000,
+		    (uint32_t)w[EMC_CORE], (uint32_t)(w[EMC_CORE] >> 32));
+	}
 }
 #endif /* XNU_IOSWITCH_VERIFIED_ROOT */
 
