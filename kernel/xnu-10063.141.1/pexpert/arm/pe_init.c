@@ -292,6 +292,9 @@ PE_init_iokit(void)
 		absolutetime_to_nanoseconds(ioswitch_vcattach_ticks, &ns);
 		printf("IOSwitch console attach: %llu.%llu ms, early log %ld bytes, %ld of them not redrawn (scrolled off)\n",
 		    ns / 1000000, ns / 100000 % 10, ioswitch_vcattach_bytes, ioswitch_vcattach_skipped);
+		/* The pre-kernel timing lines (startup.c): here, once firehose is configured, not in the boot chunk. */
+		extern void ioswitch_log_boot_stamps(void);
+		ioswitch_log_boot_stamps();
 	}
 #endif
 

@@ -432,6 +432,10 @@ kernel_startup_initialize_upto(startup_subsystem_id_t upto)
  * times use. 0 is when hekate's BL31 enabled the counter; "-" marks a step without a sample (an older U-Boot,
  * boot.scr or hekate entry, or the EMC raise off). "counter 0" is how long after SoC reset (the microsecond timer's 0)
  * that was: hekate's own time. Three lines: the unified log cuts a kernel line at about 256 characters.
+ *
+ * Called from PE_init_iokit (pexpert/arm/pe_init.c), after firehose is configured: anything logged before that sits
+ * in the 4 KB firehose_boot_chunk, which r7o's log never received (its archive starts at "Firehose configured").
+ * The record also stays in the device tree for the whole boot: /chosen ioswitch-boot-stamps in the IORegistry.
  */
 static int
 ioswitch_stamp_list(char *line, size_t size, int at, const uint64_t *w, uint64_t frequency, unsigned first,
@@ -448,7 +452,8 @@ ioswitch_stamp_list(char *line, size_t size, int at, const uint64_t *w, uint64_t
 	return at;
 }
 
-static void
+void ioswitch_log_boot_stamps(void);
+void
 ioswitch_log_boot_stamps(void)
 {
 	enum {
@@ -519,9 +524,6 @@ kernel_bootstrap(void)
 	code_signing_config_t cs_config;
 
 	printf("%s\n", version); /* log kernel version */
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-	ioswitch_log_boot_stamps();
-#endif
 
 	scale_setup();
 
