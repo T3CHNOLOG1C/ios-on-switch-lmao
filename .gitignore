@@ -61,3 +61,6 @@ bundles/
 /out/gpu-artifacts/*
 !/out/gpu-artifacts/patches/
 !/out/gpu-artifacts/*.md
+
+# Claude Code worktrees and local state
+.claude/

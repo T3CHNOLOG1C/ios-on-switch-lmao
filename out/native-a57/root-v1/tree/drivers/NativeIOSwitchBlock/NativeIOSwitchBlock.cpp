@@ -421,6 +421,15 @@ OSDefineMetaClassAndStructors(NativeIOSwitchBlockDevice, IOBlockStorageDevice)
 {
     NativeIOSwitchBlock *gOwner = nullptr;
     int gPublishStatus = -1;
+    // r8-sdboot: the boot prefetch thread (IOSwitchCryptex.cpp). Its reads, issued from that thread down to here
+    // (cluster_io -> spec_strategy -> IOMediaBSDClient -> IOBlockStorageDriver -> doAsyncReadWrite), take the background
+    // class, so any queued read of a better class goes first (worker()).
+    thread_t gPrefetchThread = THREAD_NULL;
+}
+
+extern "C" void ioswitch_block_prefetch_thread(thread_t thread)
+{
+    __atomic_store_n(&gPrefetchThread, thread, __ATOMIC_RELEASE);
 }
 
 bool NativeIOSwitchBlockDevice::configure(NativeIOSwitchBlock *provider, uint64_t sectors)
@@ -458,8 +467,11 @@ IOReturn NativeIOSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer,
     auto *request = static_cast<Request *>(IOMalloc(sizeof(Request)));
     if (!request) return kIOReturnNoMemory;
     buffer->retain();
-    // No attributes: the default class, as IOStorage's own default priority.
-    const IOStoragePriority priority = attributes ? attributes->priority : kIOStoragePriorityDefault;
+    // No attributes: the default class, as IOStorage's own default priority. The boot prefetch: background.
+    const IOStoragePriority priority =
+        current_thread() == __atomic_load_n(&gPrefetchThread, __ATOMIC_ACQUIRE) ? kIOStoragePriorityBackground
+        : attributes                                                             ? attributes->priority
+                                                                                 : kIOStoragePriorityDefault;
     *request = {nullptr,
                 buffer,
                 owner->firstSector + block,
