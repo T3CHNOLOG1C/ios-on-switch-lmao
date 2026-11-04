@@ -43,7 +43,7 @@ class NativeSdClientCopyTests(unittest.TestCase):
         uses = [line.strip() for line in source.splitlines() if re.search(r"->\s*(readBytes|writeBytes)\(", line)]
         self.assertEqual(len(uses), 1, uses)
         self.assertIn("copyFlush", source.split(uses[0])[0].rsplit("bool stage(", 1)[1])
-        self.assertIn("ioswitchClientCopy(memory, at, length, toClient, copypv)", source)
+        self.assertIn("ioswitchClientCopy(memory, at, length, toClient, copypv, from)", source)
 
 
 if __name__ == "__main__":

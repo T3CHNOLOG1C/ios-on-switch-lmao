@@ -23,6 +23,7 @@
 #include "AKSKeyWrap.h"
 
 extern "C" void proc_selfname(char *buf, int size);
+extern "C" void native_aks_se_probe(void);
 // libkern/crypto/crypto_internal.h's crypto_functions_t, set when the corecrypto kext registers (APFS depends on it, so before
 // userland). Only its presence is read here; that header's corecrypto includes do not compile as C++ (-Wextern-c-compat).
 extern "C" const void *g_crypto_funcs;
@@ -127,6 +128,8 @@ extern "C" void native_aks_device_key_start(void)
     aks::hmacSha256(sha256Parts, gDeviceKey, 32, idParts, idLengths, 1, id);
     IOLog("AppleKeyStore: device key from the fuse chip ID, key id %02x%02x%02x%02x\n", id[0], id[1], id[2], id[3]);
     gDeviceKeyReady = true;
+    // Read-only: whether the Security Engine's per-console slot is usable from here (TegraSecurityEngine.cpp).
+    native_aks_se_probe();
 }
 
 // aks_wrap_key (selector 10) after the dispatcher checked counts: `key` is the plaintext, `out` the caller's buffer.

@@ -285,6 +285,9 @@ kernel_driver(name = "TegraGPIO")
 
 kernel_driver(name = "TegraI2C")
 
+# SPI4 master for the IMU (drivers/SwitchMotion).
+kernel_driver(name = "TegraSPI")
+
 kernel_driver(
     name = "SwitchThermal",
     srcs = ["SwitchThermal.cpp"],
@@ -607,6 +610,7 @@ kernel_archive(
         ":SwitchNVRAM",
         ":TegraGPIO",
         ":TegraI2C",
+        ":TegraSPI",
         ":SwitchThermal",
         ":SwitchBattery",
         ":SwitchBluetooth",
@@ -820,6 +824,9 @@ kernel_driver(
 
 kernel_driver(name = "SwitchButtons")
 
+# The 6-axis IMU (SPI4) as the accelerometer and gyroscope HID services; calls SwitchHIDDevice (this archive).
+kernel_driver(name = "SwitchMotion")
+
 # Backlight (CoreBrightness's AppleARMBacklight, by metaclass), display power and the BH1730 ambient light sensor.
 kernel_driver(
     name = "SwitchBrightness",
@@ -874,10 +881,13 @@ kernel_driver(
     stems = {"original-bindings.S": "watchdog-original-bindings"},
 )
 
-# AppleKeyStore stand-in's device key: RFC 3394 wrap under a key derived from the fuse chip ID.
+# AppleKeyStore stand-in's device key: RFC 3394 wrap under a key derived from the fuse chip ID; the Security Engine probe.
 kernel_driver(
     name = "AKSDeviceKey",
-    srcs = ["AKSDeviceKey.cpp"],
+    srcs = [
+        "AKSDeviceKey.cpp",
+        "TegraSecurityEngine.cpp",
+    ],
     dir = "drivers/NativeKeyStoreEvents",
 )
 
@@ -892,6 +902,7 @@ kernel_archive(
         ":NativeGOPPresenter",
         ":SwitchTouch",
         ":SwitchButtons",
+        ":SwitchMotion",
         ":SwitchBrightness",
         ":SwitchJoyCon",
         ":IOSwitchAccelStub",

@@ -69,6 +69,7 @@ struct PinMux {
 // tegra210b01-fric-pinmux.dtsi (switch-l4t-platform-t210-nx), the /* 32xx */ comment of each node.
 constexpr PinMux kPinMux[] = {
     {TEGRA_GPIO_PX1, 0x220, PULL_UP},    // touch_int_px1, lines 981-987
+    {TEGRA_GPIO_PX2, 0x224, PULL_DOWN},  // motion_int_px2, 955-961
     {TEGRA_GPIO_PX4, 0x22c, PULL_UP},    // temp_alert_px4, 946-952
     {TEGRA_GPIO_PX6, 0x234, PULL_UP},    // button_vol_up_px6, 1007-1012
     {TEGRA_GPIO_PX7, 0x238, PULL_UP},    // button_vol_down_px7, 1016-1021

@@ -53,6 +53,7 @@
 #include <algorithm>
 #include <initializer_list>
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <objc/runtime.h>
 #include <os/log.h>
@@ -186,9 +187,21 @@ bool writable(const char *dir)
     const int fd = open(probe, O_WRONLY | O_CREAT | O_EXCL, 0600);
     if (fd < 0) return false;
     const bool wrote = write(fd, "probe", 5) == 5;
+    const int failure = errno;
     close(fd);
     unlink(probe);
+    errno = wrote ? 0 : failure;
     return wrote;
+}
+
+// r10-rawapps: why a process's shader cache is its memory alone, for the ready line: each candidate directory and what refused it
+// ("sandbox": its profile, asked without a report; else the probe's errno). A memory-only process never journals, so the seed never
+// gets its states and every launch compiles them again (r7o: com.apple.MapKit.SnapshotService, 14 states, ~2 s a launch).
+char gCacheRefusals[640];
+void noteCacheRefusal(const char *dir, const char *why)
+{
+    const size_t at = strlen(gCacheRefusals);
+    snprintf(gCacheRefusals + at, sizeof gCacheRefusals - at, "%s%s: %s", at ? "; " : "", dir, why);
 }
 
 // <process system container>/Library/Caches/m2v. The container survives reboots and the process's sandbox writes it once
@@ -232,7 +245,10 @@ unsigned cacheCandidates(char candidates[][512], unsigned most)
         snprintf(candidates[count], 512, format, a, b);
         for (unsigned i = 0; i < count; ++i)
             if (!strcmp(candidates[i], candidates[count])) return;
-        if (sandboxMayCreate(candidates[count])) ++count;
+        if (sandboxMayCreate(candidates[count]))
+            ++count;
+        else
+            noteCacheRefusal(candidates[count], "sandbox");
     };
     char user[512] = {}, temp[512] = {}, container[512] = {};
     if (!confstr(_CS_DARWIN_USER_CACHE_DIR, user, sizeof user)) user[0] = 0;
@@ -458,7 +474,10 @@ id openDevice(unsigned port)
         char seedName[128] = {};
         const bool seeded = sharedSeed(seedName, sizeof seedName);
         for (unsigned i = 0; i < count && !device; ++i) {
-            if (!writable(candidates[i])) continue;
+            if (!writable(candidates[i])) {
+                noteCacheRefusal(candidates[i], strerror(errno));
+                continue;
+            }
             cache = candidates[i];
             const uint64_t bridgeBegan = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
             @try {
@@ -513,10 +532,12 @@ id openDevice(unsigned port)
         // seed: "shared (<its SEED line>)" (the runtime reads the shared seed beneath the cache), "none" (no readable seed, or off)
         const uint64_t openNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - openBegan;
         os_log(logger(),
-               "TegraGM20BMetal: device %{public}s ready in %{public}s, cache %{public}s, seed "
+               "TegraGM20BMetal: device %{public}s ready in %{public}s, cache "
+               "%{public}s%{public}s%{public}s%{public}s, seed "
                "%{public}s%{public}s%{public}s, open %llu ms (bridge %llu ms)",
                [[(id<MTLDevice>)device name] UTF8String], getprogname(), cache ? cache : "memory only",
-               seeded ? "shared (" : "none", seeded ? seedName : "", seeded ? ")" : "",
+               !cache ? " (" : "", !cache ? (gCacheRefusals[0] ? gCacheRefusals : "no candidate") : "",
+               !cache ? ")" : "", seeded ? "shared (" : "none", seeded ? seedName : "", seeded ? ")" : "",
                (unsigned long long)(openNs / 1000000), (unsigned long long)(bridgeNs / 1000000));
         startRates();
         return device;

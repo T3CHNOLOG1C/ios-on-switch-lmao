@@ -9,8 +9,10 @@
 // mode is kept untouched. With boot-arg ioswitch-sd-uhs=1, setup() takes the card back
 // through SD initialization into UHS-I SDR104 (1.8 V, 199.68 MHz, hardware-tuned, ~100 MB/s
 // raw; slower tuned clocks if that has no sampling window) the way hekate's bdk does on this
-// SoC; that path has not run on hardware yet, hence opt-in. Data moves by SDHCI v4 SDMA
-// through one physically contiguous bounce buffer, CMD18/CMD25 with Auto CMD12, with
+// SoC; that path has not run on hardware yet, hence opt-in. Data moves by SDHCI v4 ADMA2
+// straight between the card and the requests' own pages (IOSwitchAdma.h), or by SDMA through
+// one physically contiguous bounce buffer for what ADMA2 cannot take (and for everything if
+// setup()'s ADMA2 check fails), CMD18/CMD25 with Auto CMD12, with
 // queued requests that continue each other on the card merged into one command;
 // completion is signalled by the SDMMC1 interrupt (polled only with boot-arg
 // ioswitch-sd-irq=0; an interrupt that cannot be had or never arrives panics) on a
@@ -45,8 +47,18 @@
 #include "block_backend.h"
 #include "NativeIOSwitchBlock.h"
 #include "IOSwitchClientCopy.h"
+#include "IOSwitchAdma.h"
 
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+extern "C" {
+vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+// The ADMA2 path's page checks and cache maintenance (osfmk/arm/pmap/pmap.c, arm64/arm_vm_init.c): whether a page is
+// managed RAM, its cache attributes (VM_WIMG_DEFAULT 0x2, osfmk/arm/memory_types.h: write-back cacheable), and its
+// address in the kernel's physical aperture.
+boolean_t pmap_valid_page(ppnum_t pn);
+unsigned int pmap_cache_attributes(ppnum_t pn);
+vm_offset_t phystokv(uint64_t pa);
+extern uint64_t gPhysBase, gPhysSize;  // the RAM phystokv covers (it panics on anything else)
+}
 
 namespace {
 constexpr uint64_t kControllerPA = 0x700B0000;  // SDMMC1
@@ -74,6 +86,20 @@ constexpr uint32_t kBounceSectors = kBounceBytes / kSector;
 constexpr uint32_t kSafeSectors = 256 * 1024 / kSector;
 // Most requests one merged command carries (APFS issues >= 4 KiB, so 256 still fills the buffer).
 constexpr uint32_t kMaxChain = 256;
+// r10-adma2: with ADMA2, reads go up to kBounceSectors per command (the cap SDMA had once its boundary check passed) and
+// writes up to kDirectWriteSectors. Writes stay at 256 KiB in this build: the cap existed for the SDMA boundary resume
+// (0d184ec), which ADMA2 never uses, but ADMA2 has not written on this controller yet. The first kWriteChecks ADMA2 writes
+// of every boot are read back and compared (proveWrite); once boots show them verified, kDirectWriteSectors can become
+// kBounceSectors (the bounce fallback already splits a longer chain into SDMA-sized pieces).
+constexpr uint32_t kDirectWriteSectors = kSafeSectors;
+constexpr uint32_t kWriteChecks = 32;
+// Descriptor table: 16 KiB, contiguous, below 4 GiB; 1024 descriptors, four times what a 1 MiB chain of scattered 4 KiB
+// pages needs (256). A chain that needs more takes the bounce buffer.
+constexpr uint32_t kAdmaDescriptors = 1024;
+constexpr uint32_t kAdmaTableBytes = kAdmaDescriptors * sizeof(IOSwitchAdmaDescriptor);
+// command()'s step beyond the SDMA ones: the ADMA engine stopped on an error (ADMA error interrupt): the host's DMA,
+// not the card or the bus.
+constexpr int kStepAdmaError = 11;
 const char kRootUUID[] = "04769D26-2CA0-4825-B443-E2E5F88300F2";
 const uint8_t kApfsType[16] = {0xef, 0x57, 0x34, 0x7c, 0x00, 0x00, 0xaa, 0x11,
                                0xaa, 0x11, 0x00, 0x30, 0x65, 0x43, 0xec, 0xac};
@@ -105,6 +131,7 @@ enum : uint32_t {
     HOST_CONTROL2 = 0x3e,
     CAPABILITIES = 0x40,
     CAPABILITIES_HI = 0x44,
+    ADMA_ERROR = 0x54,
     DMA_LOW = 0x58,
     DMA_HIGH = 0x5c,
     VERSION = 0xfe,
@@ -124,7 +151,13 @@ enum : uint32_t {
     INT_DMA = 1u << 3,
     INT_READ_READY = 1u << 5,
     INT_ERROR = 1u << 15,
+    INT_ADMA_ERROR = 1u << 25,
     INT_ERRORS = 0xffff8000u,
+    // HOST_CONTROL DMA select (bits 4:3): SDMA, or ADMA2 (with HOST_CONTROL2's v4 + 64-bit addressing: 128-bit
+    // descriptors; sdhci.c selects SDHCI_CTRL_ADMA32 for any v4 host).
+    DMA_SELECT = 0x18,
+    DMA_ADMA2 = 0x10,
+    CONTROL2_V4_64BIT = 0x3000,
     // Error signal enables are the upper half of SIGNAL_ENABLE (normal bit 15 is fixed 0 in SDHCI): the error
     // bits STATUS_ENABLE latches, 16..25.
     ERROR_SIGNALS = 0x03ff0000u,
@@ -275,6 +308,10 @@ struct Stats {
     // Worker time copying between the bounce buffer and the requests' memory (part of busyNs).
     uint64_t copyNs;
     uint32_t maxQueued;
+    // r10-adma2: requests that went straight to their own pages by ADMA2 and their descriptors, requests that went
+    // through the bounce buffer by why (IOSwitchAdmaRefusal; kAdmaOk: ADMA2 off), ADMA2 writes read back and found
+    // equal, ADMA errors, worker time on the ADMA2 path's cache maintenance (part of busyNs), and busy time per direction.
+    uint64_t direct, descriptors, bounced[kAdmaRefusals], verified, admaErrors, syncNs, readNs, writeNs;
 };
 }
 
@@ -345,6 +382,7 @@ public:
 class NativeIOSwitchBlock : public IOService {
     OSDeclareDefaultStructors(NativeIOSwitchBlock) volatile uint8_t *regs = nullptr;
     volatile uint8_t *car = nullptr, *apb = nullptr, *pmc = nullptr;  // SDR104 bring-up only
+    volatile uint32_t *mc = nullptr;                                  // memory controller (SMMU state for SDMMC1)
     IOBufferMemoryDescriptor *bounceMemory = nullptr;
     uint8_t *bounce = nullptr;
     uint64_t bouncePA = 0;
@@ -360,7 +398,23 @@ class NativeIOSwitchBlock : public IOService {
     bool merge = true;
     // Boot-arg ioswitch-sd-copy-flush=1: requests' bytes through IOMemoryDescriptor::readBytes/writeBytes again, with
     // the clean+invalidate of every destination line they add on this kernel (IOSwitchClientCopy.h), for A/B boots.
+    // It keeps ADMA2 off too, so every request takes the bounce buffer as before r10-adma2.
     bool copyFlush = false;
+    // r10-adma2: the ADMA2 descriptor table (one, rebuilt for every ADMA2 command; 16 KiB contiguous below 4 GiB), whether
+    // ADMA2 carries data (setup()'s check passed and no ADMA error since) and writes (no write read back different), the
+    // state of the last ADMA error (command()), SDMA's own read limit for the bounce path (kBounceSectors once setup()
+    // has checked the boundary resume), and the read-back of the first ADMA2 writes (writeChecks left; a
+    // kDirectWriteSectors buffer until then).
+    IOBufferMemoryDescriptor *tableMemory = nullptr;
+    IOSwitchAdmaTable table = {};
+    uint64_t tablePA = 0;
+    bool adma = false, admaWrites = false;
+    uint8_t admaErrorState = 0;
+    uint64_t admaErrorAddress = 0;
+    uint32_t sdmaReadSectors = kSafeSectors;
+    uint32_t writeChecks = 0;
+    uint8_t *writeCheck = nullptr;
+    char admaWhy[128] = {};
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
     IOWorkLoop *irqLoop = nullptr;
@@ -387,11 +441,11 @@ class NativeIOSwitchBlock : public IOService {
     void w16(uint32_t o, uint16_t v) { *(volatile uint16_t *)(regs + o) = v; }
     void w32(uint32_t o, uint32_t v) { *(volatile uint32_t *)(regs + o) = v; }
     static void barrier() { __asm__ volatile("dsb sy" ::: "memory"); }
-    bool stage(IOMemoryDescriptor *memory, uint8_t *at, uint32_t length, bool toClient)
+    bool stage(IOMemoryDescriptor *memory, uint32_t from, uint8_t *at, uint32_t length, bool toClient)
     {
         if (copyFlush)
-            return (toClient ? memory->writeBytes(0, at, length) : memory->readBytes(0, at, length)) == length;
-        return ioswitchClientCopy(memory, at, length, toClient, copypv);
+            return (toClient ? memory->writeBytes(from, at, length) : memory->readBytes(from, at, length)) == length;
+        return ioswitchClientCopy(memory, at, length, toClient, copypv, from);
     }
 
     bool waitIdle(bool dat0, uint64_t timeoutNs);
@@ -400,9 +454,22 @@ class NativeIOSwitchBlock : public IOService {
     bool waitSignal(uint32_t signals, uint64_t timeoutNs);
     void resetLines();
     void recover(bool data);
-    int command(uint32_t lba, uint32_t sectors, bool write, uint32_t *status);
+    int command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status);
+    bool failed(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write, unsigned descriptors,
+                bool retry);
+    int run(uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
     static void worker(void *, wait_result_t);
     void serviceBatch(Request *, uint32_t sectors);
+    // r10-adma2: the ADMA2 path, the bounce path in SDMA-sized pieces, the write read-back, the setup check, the
+    // power-state hooks.
+    IOSwitchAdmaRefusal buildTable(Request *first, uint32_t sectors);
+    int directChain(uint64_t lba, uint32_t sectors, bool write);
+    bool stageChain(Request *first, uint32_t from, uint32_t length, bool toClient);
+    bool bounceChain(Request *first, uint32_t sectors);
+    bool proveWrite(Request *first, uint32_t sectors);
+    const char *checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages, uint32_t *highOk);
+    void dmaSuspend();
+    void dmaResume();
     void logStats();
     void logThroughput();
     // SDR104 bring-up (bounded register polling, setup() and re-tuning only).
@@ -427,7 +494,9 @@ public:
     void resume();
     Stats stats = {};
     uint64_t firstSector = 0, sectorCount = 0;
-    uint32_t maxSectors = kSafeSectors;  // per command; kBounceSectors once setup() has checked SDMA boundary resumes
+    // Per request and per merged command, as advertised: reads kBounceSectors with ADMA2 or once setup() has checked
+    // SDMA boundary resumes, else kSafeSectors; writes kDirectWriteSectors with ADMA2, else kSafeSectors.
+    uint32_t maxSectors = kSafeSectors, maxWriteSectors = kSafeSectors;
     NativeIOSwitchBlockDevice *device = nullptr;
 
     bool setup();
@@ -461,9 +530,9 @@ bool NativeIOSwitchBlockDevice::configure(NativeIOSwitchBlock *provider, uint64_
     owner = provider;
     blocks = sectors;
     setProperty(kIOMaximumBlockCountReadKey, provider->maxSectors, 64);
-    setProperty(kIOMaximumBlockCountWriteKey, kSafeSectors, 64);
+    setProperty(kIOMaximumBlockCountWriteKey, provider->maxWriteSectors, 64);
     setProperty(kIOMaximumByteCountReadKey, provider->maxSectors * kSector, 64);
-    setProperty(kIOMaximumByteCountWriteKey, kSafeSectors * kSector, 64);
+    setProperty(kIOMaximumByteCountWriteKey, provider->maxWriteSectors * kSector, 64);
     if (OSDictionary *protocol = OSDictionary::withCapacity(2)) {
         protocol->setObject(kIOPropertyPhysicalInterconnectTypeKey, OSString::withCStringNoCopy("SD"));
         protocol->setObject(kIOPropertyPhysicalInterconnectLocationKey,
@@ -488,15 +557,15 @@ IOReturn NativeIOSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer,
         return kIOReturnBadArgument;
     IODirection direction = buffer->getDirection();
     if (direction != kIODirectionIn && direction != kIODirectionOut) return kIOReturnBadArgument;
-    if (direction == kIODirectionOut && count > kSafeSectors) return kIOReturnBadArgument;
+    if (direction == kIODirectionOut && count > owner->maxWriteSectors) return kIOReturnBadArgument;
     auto *request = static_cast<Request *>(IOMalloc(sizeof(Request)));
     if (!request) return kIOReturnNoMemory;
     buffer->retain();
     // No attributes: the default class, as IOStorage's own default priority. The boot prefetch: high.
-    const IOStoragePriority priority =
-        current_thread() == __atomic_load_n(&gPrefetchThread, __ATOMIC_ACQUIRE) ? kIOStoragePriorityHigh
-        : attributes                                                             ? attributes->priority
-                                                                                 : kIOStoragePriorityDefault;
+    const IOStoragePriority priority = current_thread() == __atomic_load_n(&gPrefetchThread, __ATOMIC_ACQUIRE)
+                                           ? kIOStoragePriorityHigh
+                                       : attributes ? attributes->priority
+                                                    : kIOStoragePriorityDefault;
     *request = {nullptr,
                 buffer,
                 owner->firstSector + block,
@@ -596,16 +665,25 @@ void NativeIOSwitchBlock::recover(bool data)
     }
 }
 
-// One SDMA command into/out of the bounce buffer. Returns 0 or a nonzero step
-// code; *status receives the last interrupt status sample.
-int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uint32_t *status)
+// One data command: by ADMA2 through the descriptor table when `descriptors` is nonzero (built and synced by the
+// caller), else by SDMA into/out of the bounce buffer. Returns 0 or a nonzero step code; *status receives the last
+// interrupt status sample.
+int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status)
 {
     *status = 0;
+    // Every card write passes here, whichever path staged it: none may reach outside the APFS partition. (Until setup()
+    // has found the partition, sectorCount is 0 and so no write can be issued at all.)
+    if (write && (lba < firstSector || sectors > sectorCount || lba - firstSector > sectorCount - sectors))
+        panic("IOSwitchSD: write lba=%u n=%u outside the APFS partition [%llu, +%llu)", lba, sectors, firstSector,
+              sectorCount);
     if (!waitIdle(write, 2000000000)) return 1;
     w32(STATUS, 0xffffffff);
-    w32(DMA_LOW, static_cast<uint32_t>(bouncePA));
-    w32(DMA_HIGH, static_cast<uint32_t>(bouncePA >> 32));
-    w16(BLOCK_SIZE, kSector | 0x7000);  // 512 KiB SDMA boundary
+    // DMA select per command: the bring-up commands' SDMA (cardCommand) and the data path share the controller.
+    const uint64_t address = descriptors ? tablePA : bouncePA;
+    w8(HOST_CONTROL, static_cast<uint8_t>((r8(HOST_CONTROL) & ~DMA_SELECT) | (descriptors ? DMA_ADMA2 : 0)));
+    w32(DMA_LOW, static_cast<uint32_t>(address));
+    w32(DMA_HIGH, static_cast<uint32_t>(address >> 32));
+    w16(BLOCK_SIZE, kSector | 0x7000);  // 512 KiB SDMA boundary (ADMA2 ignores it)
     w16(BLOCK_COUNT, static_cast<uint16_t>(sectors));
     w32(ARGUMENT, lba);
     const bool multi = sectors > 1;
@@ -618,17 +696,24 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uin
     // (transfers over 512 KiB). Command complete latches in STATUS without raising the line and its R1 is
     // checked once the data has moved; a command the card refuses moves no data and so ends as a
     // data error or the time limit below. (Waiting for command complete first cost a second
-    // interrupt and context switch per request, a real share of a ~4 KiB read.)
-    const uint32_t awaited = INT_TRANSFER | INT_DMA | ERROR_SIGNALS;
+    // interrupt and context switch per request, a real share of a ~4 KiB read.) ADMA2 has no boundary to resume: its
+    // DMA interrupt only follows a descriptor with the Int attribute, which none of ours has.
+    const uint32_t awaited = INT_TRANSFER | (descriptors ? 0 : INT_DMA) | ERROR_SIGNALS;
     const uint64_t start = nowNs();
     const uint64_t limit = write ? 5000000000ull : 2000000000ull;
     uint32_t s, resume = 0;
     for (;;) {
         s = r32(STATUS);
         *status = s;
+        if (descriptors && (s & INT_ADMA_ERROR)) {
+            // The engine's state and the descriptor it stopped at (ADMA Error Status; ADMA System Address), for failed().
+            admaErrorState = r8(ADMA_ERROR);
+            admaErrorAddress = r32(DMA_LOW) | static_cast<uint64_t>(r32(DMA_HIGH)) << 32;
+            return kStepAdmaError;
+        }
         if (s & INT_ERRORS) return (s & INT_COMMAND) ? 3 : 2;
         if (s & INT_TRANSFER) break;
-        if (s & INT_DMA) {
+        if (!descriptors && (s & INT_DMA)) {
             // Paused at the next 512 KiB boundary of the (boundary-aligned) bounce buffer: give it the address there.
             resume += kSdmaBoundary;
             if (resume > sectors * kSector) return 5;
@@ -673,39 +758,7 @@ int NativeIOSwitchBlock::transfer(uint64_t lba, uint32_t sectors, bool write, ui
     for (uintptr_t at = (uintptr_t)bounce, end = at + length; at < end; at += 64)
         __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
     barrier();
-    uint32_t status = 0;
-    int step = command(static_cast<uint32_t>(lba), sectors, write, &status);
-    if (step) {
-        uint32_t present = r32(PRESENT);
-        IOLog("IOSwitchSD: %s lba=%llu n=%u failed step=%d status=0x%08x present=0x%08x acmd=0x%04x\n",
-              write ? "write" : "read", lba, sectors, step, status, present, r16(AUTO_CMD_ERROR));
-        stats.errors++;
-        stats.lastError = static_cast<uint32_t>(step);
-        stats.lastStatus = status;
-        recover(true);
-        stats.retries++;
-        // At SDR104 a data error is most often a sampling point that drifted (temperature): tune
-        // again before the one retry, as the Linux MMC core re-tunes on CRC errors.
-        if (tuned) retune(false);
-        if (write) {
-            for (uintptr_t at = (uintptr_t)bounce, end = at + length; at < end; at += 64)
-                __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-            barrier();
-        }
-        step = command(static_cast<uint32_t>(lba), sectors, write, &status);
-        if (step) {
-            IOLog("IOSwitchSD: retry %s lba=%llu n=%u failed step=%d status=0x%08x present=0x%08x\n",
-                  write ? "write" : "read", lba, sectors, step, status, r32(PRESENT));
-            stats.errors++;
-            stats.lastError = static_cast<uint32_t>(step);
-            stats.lastStatus = status;
-            recover(true);
-            // Failed again right after a re-tune: later I/O runs one clock step slower (hekate's own
-            // answer to errors at SDR104 is its slower SDR82, sd.c:96-117).
-            if (tuned && speed + 1 < kSpeedCount) retune(true);
-            return step;
-        }
-    }
+    if (const int step = run(lba, sectors, write, 0)) return step;
     if (!write) {
         for (uintptr_t at = (uintptr_t)bounce, end = at + length; at < end; at += 64)
             __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
@@ -713,6 +766,51 @@ int NativeIOSwitchBlock::transfer(uint64_t lba, uint32_t sectors, bool write, ui
         if (bytes != bounce) memcpy(bytes, bounce, length);
     }
     return 0;
+}
+
+// Logs a failed data command and recovers the card. True when ADMA2 itself failed (the host's DMA, not the card or the
+// bus): no retry and no re-tune then; the caller moves the data through the bounce buffer instead.
+bool NativeIOSwitchBlock::failed(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write,
+                                 unsigned descriptors, bool retry)
+{
+    IOLog("IOSwitchSD: %s%s lba=%llu n=%u failed step=%d status=0x%08x present=0x%08x acmd=0x%04x\n",
+          retry ? "retry " : "", write ? "write" : "read", lba, sectors, step, status, r32(PRESENT),
+          r16(AUTO_CMD_ERROR));
+    stats.errors++;
+    stats.lastError = static_cast<uint32_t>(step);
+    stats.lastStatus = status;
+    const bool host = step == kStepAdmaError;
+    if (host) {
+        stats.admaErrors++;
+        IOLog("IOSwitchSD: ADMA2 error: state 0x%02x, at 0x%llx (table 0x%llx, %u descriptors)\n", admaErrorState,
+              admaErrorAddress, tablePA, descriptors);
+    }
+    recover(true);
+    return host;
+}
+
+// One data command (command(); `descriptors` as there) with the error handling every data command gets: a failure is
+// logged and the card recovered; at SDR104 a data error is most often a sampling point that drifted (temperature), so the
+// bus is tuned again before the one retry, as the Linux MMC core re-tunes on CRC errors. Failing again right after a
+// re-tune, later I/O runs one clock step slower (hekate's own answer to errors at SDR104 is its slower SDR82,
+// sd.c:96-117).
+int NativeIOSwitchBlock::run(uint64_t lba, uint32_t sectors, bool write, unsigned descriptors)
+{
+    uint32_t status = 0;
+    int step = command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status);
+    if (!step) return 0;
+    if (failed(step, status, lba, sectors, write, descriptors, false)) return step;
+    stats.retries++;
+    if (tuned) retune(false);
+    if (write && !descriptors) {
+        for (uintptr_t at = (uintptr_t)bounce, end = at + sectors * kSector; at < end; at += 64)
+            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+        barrier();
+    }
+    step = command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status);
+    if (step && !failed(step, status, lba, sectors, write, descriptors, true) && tuned && speed + 1 < kSpeedCount)
+        retune(true);
+    return step;
 }
 
 void NativeIOSwitchBlock::submit(Request *request)
@@ -732,74 +830,203 @@ void NativeIOSwitchBlock::submit(Request *request)
     IOLockUnlock(queueLock);
 }
 
+// A page the ADMA2 path may DMA to or from and maintain by line through the kernel's physical aperture: managed RAM with
+// the default write-back cacheable attributes (VM_WIMG_DEFAULT). A write-combined, uncached or device page (a GPU buffer,
+// a carve-out) takes the bounce buffer, where copypv reaches it with its own attributes.
+static bool cacheableRam(uint64_t page)
+{
+    const ppnum_t pn = static_cast<ppnum_t>(atop_64(page));
+    return page >= gPhysBase && page - gPhysBase < gPhysSize && pmap_valid_page(pn) && pmap_cache_attributes(pn) == 0x2;
+}
+
+// By line over every byte the table moves, through the kernel's physical aperture, a page at a time: clean (the card
+// reads what the CPU wrote), clean+invalidate (before a read: no dirty line of the client's can later be evicted over
+// what the card wrote) or invalidate (after a read: drops what the A57 prefetched meanwhile). The table only holds whole
+// lines of managed RAM (IOSwitchAdma.h), so no other data shares a line and phystokv covers every page.
+template <int op> static void syncLines(const IOSwitchAdmaTable &table)
+{
+    for (uint32_t i = 0; i < table.count; ++i) {
+        uint64_t pa = ioswitchAdmaAddress(table.entries[i]);
+        for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
+            const uint64_t page = (pa | (kAdmaPage - 1)) + 1, stop = page < end ? page : end;
+            for (uintptr_t at = phystokv(pa), last = at + (stop - pa); at < last; at += kAdmaLine) {
+                if (op == 0)
+                    __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
+                else if (op == 1)
+                    __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+                else
+                    __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
+            }
+            pa = stop;
+        }
+    }
+}
+
+// The descriptor table for a chain, from each request's physical segments; kAdmaOk, or why the chain takes the bounce
+// buffer instead.
+IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sectors)
+{
+    table.reset();
+    for (Request *r = first; r; r = r->next) {
+        const IOSwitchAdmaRefusal why = table.addMemory(r->buffer, uint64_t(r->sectors) * kSector, cacheableRam);
+        if (why) return why;
+    }
+    return table.bytes == uint64_t(sectors) * kSector && table.finish() ? kAdmaOk : kAdmaMissing;
+}
+
+// One ADMA2 command for the chain in `table` (buildTable), straight to or from the requests' pages: the descriptors and
+// the pages cleaned (write) or cleaned and invalidated (read) first, a read's pages invalidated again after.
+int NativeIOSwitchBlock::directChain(uint64_t lba, uint32_t sectors, bool write)
+{
+    const uint64_t began = nowNs();
+    for (uintptr_t at = (uintptr_t)table.entries, end = at + table.count * sizeof(IOSwitchAdmaDescriptor); at < end;
+         at += kAdmaLine)
+        __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
+    if (write)
+        syncLines<0>(table);
+    else
+        syncLines<1>(table);
+    barrier();
+    uint64_t synced = nowNs() - began;
+    const int step = run(lba, sectors, write, table.count);
+    if (!write) {
+        const uint64_t after = nowNs();
+        syncLines<2>(table);
+        barrier();
+        synced += nowNs() - after;
+    }
+    stats.syncNs += synced;
+    return step;
+}
+
+// The chain's bytes [from, from + length) between the requests' memory and the start of the bounce buffer.
+bool NativeIOSwitchBlock::stageChain(Request *first, uint32_t from, uint32_t length, bool toClient)
+{
+    const uint64_t began = nowNs();
+    const bool ok =
+        ioswitchChainCopy(first, from, length, bounce, [&](Request *r, uint32_t offset, uint8_t *at, uint32_t n) {
+            return stage(r->buffer, offset, at, n, toClient);
+        });
+    stats.copyNs += nowNs() - began;
+    return ok;
+}
+
+// The chain through the bounce buffer by SDMA, in as many commands as SDMA's own limits need (writes kSafeSectors, reads
+// sdmaReadSectors: a chain merged for ADMA2 can be longer), each piece staged before or copied out after its command.
+bool NativeIOSwitchBlock::bounceChain(Request *first, uint32_t sectors)
+{
+    const bool write = first->write;
+    const uint32_t limit = write ? kSafeSectors : sdmaReadSectors;
+    for (uint32_t done = 0; done < sectors;) {
+        const uint32_t n = sectors - done < limit ? sectors - done : limit;
+        if (write && !stageChain(first, done * kSector, n * kSector, false)) return false;
+        if (transfer(first->lba + done, n, write, bounce)) return false;
+        if (!write && !stageChain(first, done * kSector, n * kSector, true)) return false;
+        done += n;
+    }
+    return true;
+}
+
+// The first kWriteChecks ADMA2 writes of a boot are read back by SDMA (the proven path) and compared with the requests'
+// memory. False only for data that differs: the caller then writes the chain again through the bounce buffer and ADMA2
+// writes stay off until reboot. A read-back that fails proves nothing either way and is not counted.
+bool NativeIOSwitchBlock::proveWrite(Request *first, uint32_t sectors)
+{
+    const uint32_t length = sectors * kSector;
+    if (!writeCheck || sectors > kDirectWriteSectors) return true;
+    for (uint32_t done = 0; done < sectors;) {
+        const uint32_t n = sectors - done < kSafeSectors ? sectors - done : kSafeSectors;
+        if (transfer(first->lba + done, n, false, writeCheck + done * kSector)) return true;
+        done += n;
+    }
+    if (!stageChain(first, 0, length, false)) return true;
+    if (!memcmp(bounce, writeCheck, length)) {
+        stats.verified++;
+        if (!--writeChecks) {
+            IOFreeData(writeCheck, kDirectWriteSectors * kSector);
+            writeCheck = nullptr;
+        }
+        return true;
+    }
+    uint32_t at = 0;
+    while (bounce[at] == writeCheck[at]) ++at;
+    IOLog("IOSwitchSD: ADMA2 write lba=%llu n=%u reads back different from byte %u; written again through the bounce "
+          "buffer, ADMA2 writes off until reboot\n",
+          first->lba, sectors, at);
+    admaWrites = false;
+    return false;
+}
+
 // One card command for a chain of requests that continue each other on the card (same
-// direction, each starting where the previous ended, worker() built it in FIFO order),
-// staged through the bounce buffer at their offsets; then every request completes with
-// its own length. A single request is a chain of one.
+// direction, each starting where the previous ended, worker() built it in FIFO order); then
+// every request completes with its own length. A single request is a chain of one.
 void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
 {
     // Each request was checked against the partition window in doAsyncReadWrite and the
     // chain is their contiguous union; checking the command itself keeps any bug here from
-    // ever reaching outside the APFS partition.
+    // ever reaching outside the APFS partition (command() checks every write again).
     if (first->lba < firstSector || sectors > sectorCount || first->lba - firstSector > sectorCount - sectors)
         panic("IOSwitchSD: command lba=%llu n=%u outside the APFS partition [%llu, +%llu)", first->lba, sectors,
               firstSector, sectorCount);
     const bool write = first->write;
     const uint64_t start = nowNs();
-    IOReturn result = kIOReturnSuccess;
-    if (write) {
-        uint32_t offset = 0;
-        for (Request *r = first; r; r = r->next) {
-            const uint32_t length = r->sectors * kSector;
-            if (!stage(r->buffer, bounce + offset, length, false)) result = kIOReturnIOError;
-            offset += length;
-        }
-        stats.copyNs += nowNs() - start;
-        // Stage directly in the bounce buffer; transfer() would copy onto itself.
-        if (!result && transfer(first->lba, sectors, true, bounce)) result = kIOReturnIOError;
-    } else if (transfer(first->lba, sectors, false, bounce)) {
-        result = kIOReturnIOError;
-    }
-    // Copies first, completions after: busy time covers the card and the copies, completeNs the
-    // callbacks (IOStorageFamily/APFS work that runs on this thread before the next command).
-    IOReturn results[kMaxChain];
     unsigned count = 0;
-    uint32_t offset = 0;
-    const uint64_t copied = nowNs();
-    for (Request *r = first; r; r = r->next, ++count) {
+    for (Request *r = first; r; r = r->next) ++count;
+    // r10-adma2: straight between the card and the requests' pages by ADMA2 when it is on (writes: unless proveWrite
+    // turned them off) and the whole chain qualifies; through the bounce buffer otherwise, counted by why.
+    IOSwitchAdmaRefusal why = kAdmaOk;
+    bool direct = adma && (!write || admaWrites) && (why = buildTable(first, sectors)) == kAdmaOk;
+    IOReturn result = kIOReturnSuccess;
+    if (direct) {
+        const int step = directChain(first->lba, sectors, write);
+        if (step == kStepAdmaError) {
+            // The host's DMA failed, not the card: this chain and every later one through the bounce buffer.
+            adma = false;
+            direct = false;
+            IOLog("IOSwitchSD: ADMA2 off until reboot (step %d); requests go through the bounce buffer\n", step);
+        } else if (step) {
+            result = kIOReturnIOError;
+        } else if (write && writeChecks && !proveWrite(first, sectors)) {
+            direct = false;
+        }
+    }
+    if (direct) {
+        stats.direct += count;
+        stats.descriptors += table.count;
+    } else {
+        if (!bounceChain(first, sectors)) result = kIOReturnIOError;
+        stats.bounced[why] += count;
+    }
+    // Card and copies first, completions after: busy time covers the card, the copies and the cache maintenance,
+    // completeNs the callbacks (IOStorageFamily/APFS work that runs on this thread before the next command).
+    for (Request *r = first; r; r = r->next) {
         const uint32_t length = r->sectors * kSector;
-        IOReturn status = result;
-        if (!write && !status && !stage(r->buffer, bounce + offset, length, true)) status = kIOReturnIOError;
-        results[count] = status;
-        offset += length;
         if (write) {
             stats.writes++;
-            if (!status) stats.writeBytes += length;
+            if (!result) stats.writeBytes += length;
         } else {
             stats.reads++;
-            if (!status) stats.readBytes += length;
+            if (!result) stats.readBytes += length;
         }
         if (r->sectors <= 8) stats.small++;
         if (r->lba == lastEnd) stats.sequential++;
         lastEnd = r->lba + r->sectors;
     }
     const uint64_t done = nowNs(), latency = done - start;
-    if (!write) stats.copyNs += done - copied;
     stats.commands++;
     stats.busyNs += latency;
+    (write ? stats.writeNs : stats.readNs) += latency;
     stats.merged += count - 1;
     if (latency > stats.maxLatencyNs) stats.maxLatencyNs = latency;
-    count = 0;
-    for (Request *r = first; r; ++count) {
+    for (Request *r = first; r;) {
         Request *next = r->next;
-        const IOReturn status = results[count];
         const uint32_t length = r->sectors * kSector;
         IOMemoryDescriptor *buffer = r->buffer;
         IOStorageCompletion completion = r->completion;
         IOFree(r, sizeof(*r));
         buffer->release();
         // IOStorage::complete, without binding another original IOStorageFamily symbol.
-        if (completion.action) completion.action(completion.target, completion.parameter, status, status ? 0 : length);
+        if (completion.action) completion.action(completion.target, completion.parameter, result, result ? 0 : length);
         __atomic_fetch_add(&serviced, 1, __ATOMIC_RELAXED);
         r = next;
     }
@@ -814,7 +1041,7 @@ void NativeIOSwitchBlock::worker(void *context, wait_result_t)
         while (!self->head || self->suspended) IOLockSleep(self->queueLock, &self->head, THREAD_UNINT);
         self->working = true;
         // Take the head and every queued request that continues it on the card in the same
-        // direction, up to one bounce buffer: one command, one card access latency, one
+        // direction, up to one command's limit: one command, one card access latency, one
         // interrupt instead of several. No write passes another.
         Request *prev = nullptr, *first = self->head;
         const uint64_t pickNs = nowNs();
@@ -852,7 +1079,7 @@ void NativeIOSwitchBlock::worker(void *context, wait_result_t)
         };
         while (self->merge && count < kMaxChain && last->next && last->next->write == first->write &&
                last->next->lba == last->lba + last->sectors &&
-               sectors + last->next->sectors <= (first->write ? kSafeSectors : self->maxSectors) &&
+               sectors + last->next->sectors <= (first->write ? self->maxWriteSectors : self->maxSectors) &&
                !overlapsOlder(last->next)) {
             last = last->next;
             sectors += last->sectors;
@@ -932,16 +1159,36 @@ void NativeIOSwitchBlock::logThroughput()
         passed = 0;
         IOLockUnlock(queueLock);
     }
+    // r10-adma2: requests by ADMA2 (dma) and through the bounce buffer, the latter by why when any did (IOSwitchAdmaRefusal:
+    // off = ADMA2 off), ADMA2 descriptors per ADMA2 request, ADMA2 writes read back equal (vfy), cache maintenance time
+    // (sync), and MB/s per direction over each direction's own busy time.
+    char bounces[96] = "";
+    {
+        static const char *const names[kAdmaRefusals] = {"off", "align", "mem", "high", "full", "gone"};
+        size_t at = 0;
+        for (unsigned i = 0; i < kAdmaRefusals; ++i)
+            if (stats.bounced[i] && at < sizeof(bounces))
+                at += (size_t)snprintf(bounces + at, sizeof(bounces) - at, "%s%s %llu", at ? " " : " (", names[i],
+                                       stats.bounced[i]);
+        if (at && at < sizeof(bounces)) snprintf(bounces + at, sizeof(bounces) - at, ")");
+    }
+    uint64_t bounced = 0;
+    for (unsigned i = 0; i < kAdmaRefusals; ++i) bounced += stats.bounced[i];
+    const uint64_t perRequest = stats.direct ? stats.descriptors * 10 / stats.direct : 0;
+    const uint64_t readRate = stats.readNs ? stats.readBytes * 10000 / stats.readNs : 0;
+    const uint64_t writeRate = stats.writeNs ? stats.writeBytes * 10000 / stats.writeNs : 0;
     // Periodic: to the log only (os_log), never the boot console.
-    char out[512];
+    char out[640];
     snprintf(out, sizeof(out),
-             "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums %llu.%llu MB/s %llu%% of %llus | "
-             "<=4K %llu%% seq %llu%% merged %llu q%u | err %llu retune %llu | %s %u.%02u MHz | wait ms%s",
+             "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
+             "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu vfy %llu | "
+             "<=4K %llu%% seq %llu%% merged %llu q%u | err %llu adma %llu retune %llu | %s %u.%02u MHz | wait ms%s",
              requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
-             stats.copyNs / 1000000, rate / 10, rate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000,
-             requests ? stats.small * 100 / requests : 0, requests ? stats.sequential * 100 / requests : 0,
-             stats.merged, stats.maxQueued, stats.errors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10,
-             classes);
+             stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
+             writeRate / 10, writeRate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000, stats.direct, bounced,
+             bounces, perRequest / 10, perRequest % 10, stats.verified, requests ? stats.small * 100 / requests : 0,
+             requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.maxQueued, stats.errors,
+             stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
 }
 
@@ -981,6 +1228,7 @@ int NativeIOSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flag
         for (uintptr_t at = (uintptr_t)bounce, end = at + data; at < end; at += 64)
             __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
         barrier();
+        w8(HOST_CONTROL, r8(HOST_CONTROL) & ~DMA_SELECT);  // SDMA (the data path may have left ADMA2 selected)
         w32(DMA_LOW, static_cast<uint32_t>(bouncePA));
         w32(DMA_HIGH, static_cast<uint32_t>(bouncePA >> 32));
         w16(BLOCK_SIZE, static_cast<uint16_t>(data | 0x7000));
@@ -1159,6 +1407,7 @@ void NativeIOSwitchBlock::tuneStep()
         resetLines();
         return;
     }
+    w8(HOST_CONTROL, r8(HOST_CONTROL) & ~DMA_SELECT);  // as hekate tunes: SDMA selected, never the data path's ADMA2
     w16(BLOCK_SIZE, 64);
     w16(BLOCK_COUNT, 1);
     w16(TRANSFER, 0x10);  // read, no DMA
@@ -1447,7 +1696,7 @@ void NativeIOSwitchBlock::powerOnController()
     w8(POWER, 0x0f);
     w16(CLOCK, r16(CLOCK) | 4);
     w8(HOST_CONTROL, r8(HOST_CONTROL) & ~0x18);
-    w16(HOST_CONTROL2, r16(HOST_CONTROL2) | 0x3000);
+    w16(HOST_CONTROL2, r16(HOST_CONTROL2) | CONTROL2_V4_64BIT);
     w8(TIMEOUT, 0x0e);
     w32(SIGNAL_ENABLE, 0);
     w32(STATUS_ENABLE, 0x03ff800bu);
@@ -1463,8 +1712,35 @@ void NativeIOSwitchBlock::suspend()
     suspended = true;
     while (working) IOLockSleep(queueLock, &working, THREAD_UNINT);
     IOLockUnlock(queueLock);
+    dmaSuspend();
     if (irqSource) irqSource->disable();
     powerOffCard();
+}
+
+// r10-adma2 power-state hooks. Before sleep (the worker is between commands, so no DMA is in flight): SDMA selected and
+// the DMA address cleared, so nothing points the engine at the descriptor table while the controller loses power. After
+// wake (powerOnController() reset the controller and set v4 + 64-bit addressing again; reinitialize() and the LBA 1 check
+// ran by SDMA): ADMA2 carries data again only if that addressing mode took and the SMMU still leaves SDMMC1 untranslated.
+// The table needs nothing more: every ADMA2 command builds it afresh, and command() selects ADMA2 or SDMA per command.
+void NativeIOSwitchBlock::dmaSuspend()
+{
+    w8(HOST_CONTROL, r8(HOST_CONTROL) & ~DMA_SELECT);
+    w32(DMA_LOW, 0);
+    w32(DMA_HIGH, 0);
+    table.reset();
+}
+
+void NativeIOSwitchBlock::dmaResume()
+{
+    if (!adma) return;
+    const uint16_t control2 = r16(HOST_CONTROL2);
+    const bool translated = mc[0xa94 / 4] & 0x80000000u;
+    if ((control2 & CONTROL2_V4_64BIT) == CONTROL2_V4_64BIT && !translated) return;
+    adma = false;
+    IOLog(
+        "IOSwitchSD: ADMA2 off after sleep (HOST_CONTROL2 0x%04x, SMMU %s for SDMMC1); requests go through the bounce "
+        "buffer\n",
+        control2, translated ? "on" : "off");
 }
 
 void NativeIOSwitchBlock::resume()
@@ -1481,16 +1757,130 @@ void NativeIOSwitchBlock::resume()
         panic("IOSwitchSD: LBA 1 differs after sleep (read step %d, bus %s): not the card this boot started from", step,
               busMode);
     }
+    dmaResume();
     IOLockLock(queueLock);
     suspended = false;
     IOLockWakeup(queueLock, &head, false);
     IOLockUnlock(queueLock);
 }
 
+// setup(): nullptr when ADMA2 may carry the data path, else why not. The controller must offer ADMA2 and keep v4 64-bit
+// addressing, and a 1 MiB read through ADMA2 must match `reference` (the same MiB read by SDMA) byte for byte. Its table
+// comes from the data path's own builder, over runs chosen to meet what the data path will: full-length descriptors in
+// the contiguous bounce buffer, a short one that ends inside a sector and one that completes it, and single kernel pages
+// out of physical order, which on this board land above 4 GiB about half the time (RAM is 0x80000000-0x17fffffff). Every
+// destination byte starts in DRAM as the complement of what the card should deliver, so a byte the engine skipped or
+// misplaced shows. Test pages above 4 GiB that kept their fill while everything else arrived mean the engine drops the
+// high address bits: ADMA2 then stays below 4 GiB, as it does when no test page was above 4 GiB. (Such a write cannot
+// have reached RAM: 4 GiB lower lies below DRAM at 0x80000000, outside the memory controller's EMEM aperture; pages
+// whose alias would fall in IRAM at 0x40000000 are not used.)
+const char *NativeIOSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages,
+                                           uint32_t *highOk)
+{
+    *descriptors = *highPages = *highOk = 0;
+    if (copyFlush) return "boot-arg ioswitch-sd-copy-flush=1";
+    if (!(r32(CAPABILITIES) & (1u << 19))) return "the controller reports no ADMA2";
+    if ((r16(HOST_CONTROL2) & CONTROL2_V4_64BIT) != CONTROL2_V4_64BIT)
+        return "HOST_CONTROL2 does not keep v4 64-bit addressing";
+    tableMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task,
+        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
+        kAdmaTableBytes, 0x00000000ffffffffull & ~(kAdmaPage - 1));
+    if (!tableMemory) return "no memory for the descriptor table";
+    table.entries = static_cast<IOSwitchAdmaDescriptor *>(tableMemory->getBytesNoCopy());
+    tablePA = tableMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
+    if (!table.entries || !tablePA || (tablePA & (kAdmaPage - 1)) || tablePA + kAdmaTableBytes > (1ull << 32))
+        return "the descriptor table is not page-aligned below 4 GiB";
+    table.capacity = kAdmaDescriptors;
+    table.limit = 1ull << 34;  // mainline Linux's DMA mask for this controller
+
+    constexpr uint32_t kTestPages = 128;
+    IOBufferMemoryDescriptor *pages =
+        IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionInOut, kTestPages * kAdmaPage, kAdmaPage);
+    if (!pages) return "no memory for the test pages";
+    if (pages->prepare() != kIOReturnSuccess) {
+        pages->release();
+        return "the test pages cannot be wired";
+    }
+    auto *const pageBytes = static_cast<uint8_t *>(pages->getBytesNoCopy());
+    struct Run {
+        uint64_t pa;
+        uint8_t *at;
+        uint32_t length;
+    };
+    static Run runs[kTestPages + 3];  // setup() runs once; ~3 KiB is too much for its stack
+    unsigned count = 0;
+    uint32_t streamed = 0;
+    auto take = [&](uint64_t pa, uint8_t *at, uint32_t length) {
+        runs[count++] = {pa, at, length};
+        streamed += length;
+    };
+    const char *why = nullptr;
+    const uint64_t page0 = pages->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
+    if (pageBytes && page0) {
+        take(bouncePA, bounce, 0x2f000);                    // three full-length descriptors and a short one
+        take(page0 + 0x40, pageBytes + 0x40, 0x40);         // ends inside a sector...
+        take(bouncePA + 0x30000, bounce + 0x30000, 0x1c0);  // ...which this one completes
+        for (uint32_t i = kTestPages - 1; i; --i) {
+            const uint64_t pa = pages->getPhysicalSegment(i * kAdmaPage, nullptr, kIOMemoryMapperNone);
+            if (pa && pa - 0x140000000ull >= 0x40000) take(pa, pageBytes + i * kAdmaPage, kAdmaPage);
+        }
+        take(bouncePA + 0x40000, bounce + 0x40000, kBounceBytes - streamed);  // the rest, in the bounce buffer
+        table.reset();
+        uint32_t at = 0;
+        for (unsigned i = 0; i < count && !why; ++i) {
+            for (uint32_t k = 0; k < runs[i].length; ++k) runs[i].at[k] = static_cast<uint8_t>(~reference[at + k]);
+            if (runs[i].pa >= (1ull << 32)) ++*highPages;
+            if (table.add(runs[i].pa, runs[i].length, cacheableRam)) why = "the builder refused the test memory";
+            at += runs[i].length;
+        }
+        if (!why && !table.finish()) why = "no descriptors";
+    } else {
+        why = "the test pages have no physical address";
+    }
+    if (!why) {
+        // As directChain, without run()'s retry and re-tune: a failure here only keeps the bounce buffer.
+        *descriptors = table.count;
+        for (uintptr_t at = (uintptr_t)table.entries, end = at + table.count * sizeof(IOSwitchAdmaDescriptor); at < end;
+             at += kAdmaLine)
+            __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
+        syncLines<1>(table);
+        barrier();
+        uint32_t status = 0;
+        const int step = command(static_cast<uint32_t>(firstSector), kBounceSectors, false, table.count, &status);
+        syncLines<2>(table);
+        barrier();
+        if (step) {
+            snprintf(admaWhy, sizeof(admaWhy), "the read failed: step %d, STATUS 0x%08x, ADMA state 0x%02x at 0x%llx",
+                     step, status, admaErrorState, admaErrorAddress);
+            why = admaWhy;
+            recover(true);
+        }
+    }
+    unsigned highMissing = 0;
+    for (uint32_t i = 0, at = 0; !why && i < count; at += runs[i++].length) {
+        if (!memcmp(runs[i].at, reference + at, runs[i].length)) {
+            if (runs[i].pa >= (1ull << 32)) ++*highOk;
+            continue;
+        }
+        bool untouched = runs[i].pa >= (1ull << 32);
+        for (uint32_t k = 0; untouched && k < runs[i].length; ++k)
+            untouched = runs[i].at[k] == static_cast<uint8_t>(~reference[at + k]);
+        if (untouched)
+            ++highMissing;
+        else
+            why = "the 1 MiB read differs from SDMA's";
+    }
+    pages->complete();
+    pages->release();
+    if (!why && (highMissing || !*highPages)) table.limit = 1ull << 32;
+    return why;
+}
+
 bool NativeIOSwitchBlock::setup()
 {
     regs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kControllerPA, 0x1000));
-    auto *mc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kMemoryControllerPA, 0x1000));
+    mc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kMemoryControllerPA, 0x1000));
     // CAR, APB_MISC/pinmux and PMC serve the SDR104 bring-up only; without them it is skipped.
     car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
     apb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kApbMiscPA, 0x4000));
@@ -1529,7 +1919,7 @@ bool NativeIOSwitchBlock::setup()
     // SDHCI v4 64-bit SDMA (Tegra210 HOST v4). Interrupt signals stay off except
     // while the worker waits for one (waitSignal).
     w8(HOST_CONTROL, r8(HOST_CONTROL) & ~0x18);
-    w16(HOST_CONTROL2, r16(HOST_CONTROL2) | 0x3000);
+    w16(HOST_CONTROL2, r16(HOST_CONTROL2) | CONTROL2_V4_64BIT);
     w8(TIMEOUT, 0x0e);
     w32(SIGNAL_ENABLE, 0);
     w32(STATUS_ENABLE, 0x03ff800bu);
@@ -1600,21 +1990,41 @@ bool NativeIOSwitchBlock::setup()
         return false;
     }
 
-    // Commands over 512 KiB cross the SDMA boundary (command()). Read the partition's first MiB in four 256 KiB commands
-    // and in one; only identical data with no error allows the larger commands. The 1 MiB read goes straight to
-    // command() so that a failure is not retried and re-tuned (transfer() would step the clock down); a failure keeps
-    // 256 KiB, with one line.
+    // DMA for the data path. Both checks read the partition's first MiB and compare it with the same MiB read as four
+    // 256 KiB SDMA commands (which never reach an SDMA boundary). ADMA2 straight to the requests' pages once checkAdma()
+    // passes; then reads go up to 1 MiB and writes up to kDirectWriteSectors per command, and the bounce fallback splits
+    // longer chains into 256 KiB SDMA commands. Otherwise SDMA through the bounce buffer as before: commands over 512 KiB
+    // cross the SDMA boundary (command()), so one 1 MiB SDMA read must match too before reads may be that long. It goes
+    // straight to command() so that a failure is not retried and re-tuned (transfer() would step the clock down); a
+    // failure keeps 256 KiB, with one line.
     if (sectorCount >= kBounceSectors) {
         uint8_t *reference = static_cast<uint8_t *>(IOMallocData(kBounceBytes));
         int step = reference ? 0 : -2;
         for (uint32_t done = 0; !step && done < kBounceSectors; done += kSafeSectors)
             step = transfer(firstSector + done, kSafeSectors, false, reference + done * kSector);
-        if (!step) {
+        uint32_t descriptors = 0, highPages = 0, highOk = 0;
+        const char *why = step ? "the reference read failed" : checkAdma(reference, &descriptors, &highPages, &highOk);
+        if (!why) {
+            adma = true;
+            maxSectors = kBounceSectors;
+            maxWriteSectors = kDirectWriteSectors;
+            writeCheck = static_cast<uint8_t *>(IOMallocData(kDirectWriteSectors * kSector));
+            writeChecks = writeCheck ? kWriteChecks : 0;
+            admaWrites = writeCheck != nullptr;
+            IOLog("IOSwitchSD: ADMA2 on: 1 MiB read through %u descriptors matches SDMA, %u of %u test pages above "
+                  "4 GiB right%s; commands up to %u KiB read, %u KiB write%s\n",
+                  descriptors, highOk, highPages, table.limit > (1ull << 32) ? "" : " (ADMA2 stays below 4 GiB)",
+                  maxSectors * kSector / 1024, maxWriteSectors * kSector / 1024,
+                  admaWrites ? ", the first writes read back" : ", writes through the bounce buffer");
+        } else {
+            IOLog("IOSwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);
+        }
+        if (!step && !adma) {
             for (uintptr_t at = (uintptr_t)bounce, end = at + kBounceBytes; at < end; at += 64)
                 __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
             barrier();
             uint32_t status = 0;
-            step = command(static_cast<uint32_t>(firstSector), kBounceSectors, false, &status);
+            step = command(static_cast<uint32_t>(firstSector), kBounceSectors, false, 0, &status);
             if (step) {
                 recover(true);
             } else {
@@ -1622,13 +2032,13 @@ bool NativeIOSwitchBlock::setup()
                     __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
                 barrier();
             }
+            const bool same = !step && !memcmp(reference, bounce, kBounceBytes);
+            if (same)
+                maxSectors = sdmaReadSectors = kBounceSectors;
+            else
+                IOLog("IOSwitchSD: 1 MiB commands failed their check (step %d, %s); keeping 256 KiB\n", step,
+                      step ? "error" : "data differs");
         }
-        const bool same = !step && !memcmp(reference, bounce, kBounceBytes);
-        if (same)
-            maxSectors = kBounceSectors;
-        else
-            IOLog("IOSwitchSD: 1 MiB commands failed their check (step %d, %s); keeping 256 KiB\n", step,
-                  step ? "error" : "data differs");
         if (reference) IOFreeData(reference, kBounceBytes);
     }
 

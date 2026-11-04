@@ -4,7 +4,8 @@
 // SwitchHIDDevice subclasses the original IOHIDDevice through the qualified ABI and bindings of NativeHidInput
 // (build/native-hid-input: OriginalHidDeviceABI.h, hid-original-bindings.o). Those bind every IOHIDDevice slot except
 // the ones NativeHidInput overrides, so this class overrides exactly that set: free, start, stop, getWorkLoop,
-// newTransportString, newProductString, newReportDescriptor. Its metaclass can only be registered once IOHIDFamily is
+// newTransportString, newProductString, newReportDescriptor; plus slot 183, setReport, as ../SwitchJoyCon does (the
+// motion sensors' Report Interval feature, SwitchHID.h). Its metaclass can only be registered once IOHIDFamily is
 // loaded, so this file is a late object (Drivers.cmake ioswitch_late_object) whose static initializer
 // switch_hid_create() runs, as HidInputProbe.cpp does for NativeHidInput.
 //
@@ -89,19 +90,53 @@ const uint8_t kLightDescriptor[] = {
     0xc0,
 };
 
+// Motion sensors (SwitchHID.h): Apple vendor top-level collection, input report 1 = three Sensor-page values, 32-bit
+// signed, in 10^-6 of the unit IOHIDEventDriver's event carries (physical range = logical range, unit exponent -6, so
+// getScaledFixedValue gives g or rad/s in 16.16); feature report 1 = Sensor Report Interval, microseconds.
+#define MOTION_DESCRIPTOR(usage, x)                                                                                  \
+    0x06, 0x00, 0xff, 0x09, usage, 0xa1, 0x01, 0x85, 0x01, /* Apple vendor: usage, Collection (Application), ID 1 */ \
+        0x05, 0x20, 0x0a, x, 0x04, 0x0a, x + 1, 0x04, 0x0a, x + 2, 0x04, /* Sensor: X, Y, Z */                       \
+        0x17, 0x00, 0x00, 0x00, 0x80, 0x27, 0xff, 0xff, 0xff, 0x7f,      /* Logical -2^31 .. 2^31-1 */               \
+        0x37, 0x00, 0x00, 0x00, 0x80, 0x47, 0xff, 0xff, 0xff, 0x7f,      /* Physical the same */                     \
+        0x55, 0x0a, 0x75, 0x20, 0x95, 0x03, 0x81, 0x02,                  /* Unit Exponent -6, 3 x 32 bits, Input */  \
+        0x0a, 0x0e, 0x03, 0x15, 0x00, 0x35, 0x00, 0x55, 0x00,            /* Report Interval, 0 .., exponent 0 */     \
+        0x95, 0x01, 0xb1, 0x02,                                          /* 1 x 32 bits, Feature */                  \
+        0xc0
+const uint8_t kAccelerometerDescriptor[] = {
+    MOTION_DESCRIPTOR(0x03, 0x53)};                                 // Accelerometer; Acceleration Axis X 0x0453
+const uint8_t kGyroDescriptor[] = {MOTION_DESCRIPTOR(0x09, 0x57)};  // Gyro; Angular Velocity X 0x0457
+#undef MOTION_DESCRIPTOR
+
+// Device orientation (SwitchHID.h): Sensor/Device Orientation, one bit per AppleVendorMotion usage 0x64..0x6a.
+const uint8_t kOrientationDescriptor[] = {
+    0x05, 0x20, 0x09, 0x8a, 0xa1, 0x01, 0x85, 0x01,              // Sensor: Device Orientation, Collection (App), ID 1
+    0x06, 0x0c, 0xff, 0x19, 0x64, 0x29, 0x6a,                    // AppleVendorMotion: Usage 0x64 .. 0x6a
+    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x07, 0x81, 0x02,  // 7 x 1 bit, Input (Data, Var, Abs)
+    0x95, 0x01, 0x81, 0x03, 0xc0,                                // 1 bit padding
+};
+
 struct Profile {
     const uint8_t *descriptor;
     size_t descriptorSize, reportSize;
     uint32_t productID, usagePage, usage;
     const char *product, *transport;
 };
+// Product IDs: 0x5104 is ../SwitchJoyCon's buttons device.
 const Profile kProfiles[] = {
     {kTouchDescriptor, sizeof(kTouchDescriptor), sizeof(SwitchTouchReport), 0x5101, 0x0d, 0x04, "Switch Touch Screen",
      "SPI"},
     {kButtonsDescriptor, sizeof(kButtonsDescriptor), sizeof(SwitchButtonsReport), 0x5102, 0x0c, 0x01, "Switch Buttons",
      "GPIO"},
     {kLightDescriptor, sizeof(kLightDescriptor), 5, 0x5103, 0xff00, 0x04, "Switch Ambient Light Sensor", "I2C"},
+    {kAccelerometerDescriptor, sizeof(kAccelerometerDescriptor), sizeof(SwitchMotionReport), 0x5105, 0xff00, 0x03,
+     "Switch Accelerometer", "SPI"},
+    {kGyroDescriptor, sizeof(kGyroDescriptor), sizeof(SwitchMotionReport), 0x5106, 0xff00, 0x09, "Switch Gyroscope",
+     "SPI"},
+    {kOrientationDescriptor, sizeof(kOrientationDescriptor), sizeof(SwitchOrientationReport), 0x5107, 0x20, 0x8a,
+     "Switch Device Orientation", "SPI"},
 };
+static_assert(sizeof(kProfiles) / sizeof(kProfiles[0]) == kSwitchHIDOrientation + 1, "one profile per SwitchHIDKind");
+static_assert(sizeof(SwitchMotionReport) == 13 && sizeof(SwitchOrientationReport) == 2, "motion report layouts");
 
 namespace edge {
 enum : unsigned { kSlots = 256, kDispatch = 198, kGetType = 18, kGetInteger = 23, kSetInteger = 24 };
@@ -188,6 +223,8 @@ class SwitchHIDDevice : public IOHIDDevice {
     const Profile *profile = nullptr;
     IOService *eventDriver = nullptr;
     bool edgeInstalled = false;
+    SwitchHIDFeatureHandler featureHandler = nullptr;
+    void *featureContext = nullptr;
 
 public:
     bool initWithProfile(const Profile *p)
@@ -243,6 +280,30 @@ public:
         if (!eventDriver) eventDriver = edge::findDriver(this);
         if (!eventDriver) return kIOReturnNotReady;
         edge::call<void, OSObject *, IOOptionBits>(eventDriver, edge::kDispatch, event, 0);
+        return kIOReturnSuccess;
+    }
+
+    void setFeatureHandler(SwitchHIDFeatureHandler handler, void *context)
+    {
+        featureContext = context;
+        __atomic_store_n(&featureHandler, handler, __ATOMIC_RELEASE);
+    }
+
+    // Slot 183 is IOHIDDevice::setReport(IOMemoryDescriptor *, IOHIDReportType, IOOptionBits) (../SwitchJoyCon's
+    // SwitchJoyConDevice::opaque183 has the evidence); the generated ABI only knows it as opaque183. Its definition
+    // (after the class) is one branch to switch_hid_set_report with the argument registers untouched.
+    void opaque183() override;
+
+    IOReturn setReport(IOMemoryDescriptor *report, uint32_t type, IOOptionBits options)
+    {
+        const SwitchHIDFeatureHandler handler = __atomic_load_n(&featureHandler, __ATOMIC_ACQUIRE);
+        if (!handler || type != 2 /* kIOHIDReportTypeFeature */) return kIOReturnUnsupported;
+        uint8_t bytes[16];
+        const size_t length = report ? report->getLength() : 0;
+        if (!length || length > sizeof(bytes) || report->readBytes(0, bytes, length) != length) {
+            return kIOReturnBadArgument;
+        }
+        handler(featureContext, bytes, length);
         return kIOReturnSuccess;
     }
 };
@@ -305,7 +366,7 @@ OSDefineMetaClassAndStructors(SwitchHIDDevice, IOHIDDevice)
         const OSReturn registered = OSMetaClass::postModLoad(handle);
         if (registered != kOSReturnSuccess) panic("SwitchHID: registering SwitchHIDDevice failed: %#x", registered);
 
-        OSArray *personalities = OSArray::withCapacity(3);
+        OSArray *personalities = OSArray::withCapacity(sizeof(kProfiles) / sizeof(kProfiles[0]));
         for (const Profile &p : kProfiles) {
             OSDictionary *dict = personality(p);
             if (!personalities || !dict) panic("SwitchHID: no memory for the IOHIDEventDriver personalities");
@@ -319,6 +380,19 @@ OSDefineMetaClassAndStructors(SwitchHIDDevice, IOHIDDevice)
     }
 }  // namespace
 
+extern "C" __attribute__((used)) IOReturn switch_hid_set_report(SwitchHIDDevice *device, IOMemoryDescriptor *report,
+                                                                uint32_t type, IOOptionBits options)
+{
+    return device->setReport(report, type, options);
+}
+
+// SwitchHIDDevice::opaque183(), see the declaration. Darwin assembler: one statement per line.
+__asm__(".text\n"
+        ".globl __ZN15SwitchHIDDevice9opaque183Ev\n"
+        ".p2align 2\n"
+        "__ZN15SwitchHIDDevice9opaque183Ev:\n"
+        "  b _switch_hid_set_report\n");
+
 IOService *switch_hid_create(SwitchHIDKind kind)
 {
     static IOLock *volatile lock;
@@ -326,7 +400,7 @@ IOService *switch_hid_create(SwitchHIDKind kind)
         IOLock *fresh = IOLockAlloc();
         if (fresh && !OSCompareAndSwapPtr(nullptr, fresh, &lock)) IOLockFree(fresh);
     }
-    if (!lock || kind > kSwitchHIDLight) panic("SwitchHID: bad device kind %u or no memory", kind);
+    if (!lock || kind > kSwitchHIDOrientation) panic("SwitchHID: bad device kind %u or no memory", kind);
     IOLockLock(lock);
     prepare();
     IOLockUnlock(lock);
@@ -352,6 +426,13 @@ IOReturn switch_hid_dispatch_event(IOService *device, OSObject *event)
 {
     auto *hid = OSDynamicCast(SwitchHIDDevice, device);
     return hid ? hid->deliver(event) : kIOReturnBadArgument;
+}
+
+void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler handler, void *context)
+{
+    auto *hid = OSDynamicCast(SwitchHIDDevice, device);
+    if (!hid) panic("SwitchHID: feature handler for a device that is not ours");
+    hid->setFeatureHandler(handler, context);
 }
 
 void switch_hid_set_edge_contacts(IOService *device, uint32_t contacts)

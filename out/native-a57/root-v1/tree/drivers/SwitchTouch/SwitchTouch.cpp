@@ -33,7 +33,7 @@
 #include "SwitchHID.h"
 #include "SwitchTouch.h"
 
-// SwitchBrightness (SwitchBacklight.cpp): false while the panel is dark (display power off, switch-sleep=1). Weak, so
+// SwitchBrightness (SwitchBacklight.cpp): false while the panel is dark (display power off). Weak, so
 // the touch screen links and reports as before without it.
 extern "C" __attribute__((weak)) bool switch_display_is_on(void)
 {
@@ -129,6 +129,7 @@ class SwitchTouch : public IOService {
     uint32_t edge = 0;     // contacts that began within kEdgeBand of a panel edge
     uint32_t changed = 0;  // contacts that went down or up since the last report
     bool dirty = false, running = false, announced = false;
+    bool screenOff = false;  // display power off (switch_touch_display_power): stays down until the screen lights
     unsigned flip = 0, empty = 0;
 
     static void interruptOccurred(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -136,6 +137,7 @@ class SwitchTouch : public IOService {
     void powerUp();
     void bringUp();
     void enableSensing();
+    void powerDown();
     void handle(const uint8_t *event);
     void position(const uint8_t *event, Contact &contact) const;
     void flush();
@@ -146,6 +148,7 @@ public:
     void free() override;
     void suspend();
     void resume();
+    void displayPower(bool on);
 };
 
 OSDefineMetaClassAndStructors(SwitchTouch, IOService)
@@ -373,25 +376,30 @@ void SwitchTouch::releaseAll()
     flush();
 }
 
-// System sleep (SwitchSuspend's sleep and wake actions, thread context, I2C up): the panel is powered off as hekate's
-// touch_power_off (reset low, LDO6 off) with every contact lifted, and brought up from scratch on wake by the same
-// timer path as at start (touch_power_on, touch_init).
+// Work loop: the panel powered off as hekate's touch_power_off (reset low, LDO6 off) with every contact lifted, the
+// watchdog stopped. It comes back up from scratch by the same timer path as at start (touch_power_on, touch_init).
+void SwitchTouch::powerDown()
+{
+    timer->cancelTimeout();
+    if (!running) return;
+    irq->disable();
+    releaseAll();
+    running = false;
+    tegra_gpio_output(TEGRA_GPIO_TOUCH_RESET, 0);
+    uint8_t ldo = 0;
+    if (!tegra_i2c_read(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1)) {
+        ldo = (uint8_t)(ldo & ~kLdoModeNormal);
+        (void)tegra_i2c_write(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1);
+    }
+}
+
+// System sleep (SwitchSuspend's sleep and wake actions, thread context, I2C up). After SC7 the panel stays down while
+// the screen is dark (a wake that did not light it, e.g. the RTC alarm); the next display power-on brings it up.
 void SwitchTouch::suspend()
 {
     loop->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
-            auto *self = static_cast<SwitchTouch *>(owner);
-            self->timer->cancelTimeout();
-            if (!self->running) return kIOReturnSuccess;
-            self->irq->disable();
-            self->releaseAll();
-            self->running = false;
-            tegra_gpio_output(TEGRA_GPIO_TOUCH_RESET, 0);
-            uint8_t ldo = 0;
-            if (!tegra_i2c_read(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1)) {
-                ldo = (uint8_t)(ldo & ~kLdoModeNormal);
-                (void)tegra_i2c_write(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1);
-            }
+            static_cast<SwitchTouch *>(owner)->powerDown();
             return kIOReturnSuccess;
         },
         this);
@@ -401,10 +409,28 @@ void SwitchTouch::resume()
 {
     loop->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
-            static_cast<SwitchTouch *>(owner)->timer->setTimeoutMS(1);
+            auto *self = static_cast<SwitchTouch *>(owner);
+            if (!self->screenOff) self->timer->setTimeoutMS(1);
             return kIOReturnSuccess;
         },
         this);
+}
+
+// Display power (SwitchBacklight's work loop, thread context): down with the screen, as Linux ftm4 fts_suspend powers it
+// off; back up when the screen lights, on this work loop (about 60 ms, while the panel takes about 0.5 s to wake).
+void SwitchTouch::displayPower(bool on)
+{
+    loop->runAction(
+        [](OSObject *owner, void *arg, void *, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchTouch *>(owner);
+            self->screenOff = arg == nullptr;
+            if (self->screenOff)
+                self->powerDown();
+            else if (!self->running)
+                self->timer->setTimeoutMS(1);
+            return kIOReturnSuccess;
+        },
+        this, on ? this : nullptr);
 }
 
 namespace {
@@ -419,6 +445,11 @@ extern "C" void switch_touch_suspend(void)
 extern "C" void switch_touch_resume(void)
 {
     if (touch) touch->resume();
+}
+
+extern "C" void switch_touch_display_power(bool on)
+{
+    if (touch) touch->displayPower(on);
 }
 
 extern "C" int switch_touch_start(void)

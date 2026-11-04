@@ -8,12 +8,13 @@ has none, and precompile/libraries.py guesses it by the function's name.
 usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log out/switch/device-logs/*/m2v-cache/pipelines.log
        harvest.py <corpus.log> --volume <mounted Data volume> [--save <dir>] [--open <container UUID>]... [--open-all]
 
---volume  every process's m2v cache on the iPad's Data volume (the plugin's cacheCandidates: a container's Library/Caches/m2v
-          or tmp/m2v, tmp/m2v-<process>, a daemon's user cache or temp directory), its pipelines.log and pipelines.log.old. Read
-          only, but for one write: a system container's Library and Library/Caches are mode 000, so for a container named by
-          --open (default: backboardd's, SpringBoard's and Preferences', SYSTEM_CACHES) or every one with --open-all, each closed
-          directory on the way is made u+rx for the read and given its mode back at once (and checked); other closed containers
-          are skipped and counted.
+--volume  every process's m2v cache on the iPad's Data volume (the plugin's cacheCandidates: a container's
+          Library/Caches/m2v, Library/Caches/m2v-<process> or tmp/m2v, tmp/m2v-<process>, a daemon's user cache or
+          temp directory), its pipelines.log and pipelines.log.old. Read only, but for one write: a system container's
+          Library and Library/Caches are mode 000, so for a container named by --open (default: backboardd's,
+          SpringBoard's and Preferences', SYSTEM_CACHES) or every one with --open-all, each closed directory on the
+          way is made u+rx for the read and given its mode back at once (and checked); other closed containers are
+          skipped and counted.
 --save    also copy each m2v cache found, whole (v1/, msl/, libs/, the journals), to <dir>/<where it was>, e.g. the boot's log folder.
 --libs    the library store precompile.mm reads (libraries.py; default out/gpu-artifacts/m2v-libs): with --volume, every cache's
           libs/<SHA-256>.metallib (the libraries made from bytes) is copied to <store>/data/, every msl/*.reply to <store>/msl/, and
@@ -125,6 +126,12 @@ def caches(volume, opens, open_all, log):
                     look('%s/%s/%s' % (kind, c.name, sub), c / sub, tuple(way))
                 elif sub.startswith('Library'):
                     skipped.append(c.name)
+            # the plugin's Library/Caches/m2v-<process> of a data container whose tmp is the process's temp directory (66b8ec2:
+            # WebKit's GPU process in Safari's container, a poster extension in its own)
+            if readable(c / 'Library') and readable(c / 'Library/Caches'):
+                for m2v in sorted((c / 'Library/Caches').glob('m2v-*')):
+                    if m2v.is_dir() and readable(m2v):
+                        look('%s/%s/%s' % (kind, c.name, m2v.relative_to(c)), m2v)
     for pattern in ('tmp/m2v-*', 'tmp/m2v', 'mobile/tmp/*/m2v', 'mobile/Library/Caches/m2v', 'root/Library/Caches/m2v', 'folders/*/*/C/m2v', 'folders/*/*/T/m2v'):
         for m2v in sorted(volume.glob(pattern)):
             if m2v.is_dir() and readable(m2v):

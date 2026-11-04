@@ -155,6 +155,60 @@ int main()
     assert(!ioswitchClientCopy(&failing, bounce.data(), length, true, fakeCopypv));
     assert(calls.size() == 3);
 
+    // From an offset inside the memory (the bounce path's pieces): the walk starts in the right run at the right place.
+    reset();
+    Memory middle = scattered();
+    const uint32_t from = 0x4000 + 0x100, piece = 0x200 - 0x100 + 0x4000 + 0x80;
+    assert(ioswitchClientCopy(&middle, bounce.data(), piece, true, fakeCopypv, from));
+    assert(calls.size() == 3);
+    assert(calls[0].sink == kBase + 0x10000 + 0x100 && calls[0].size == 0x100);
+    assert(calls[1].sink == kBase + 0x80000 && calls[1].size == 0x4000);
+    assert(calls[2].sink == kBase + 0x20000 && calls[2].size == 0x80);
+    assert(!memcmp(&phys[0x10100], bounce.data(), 0x100));
+    assert(!memcmp(&phys[0x80000], bounce.data() + 0x100, 0x4000));
+    assert(!memcmp(&phys[0x20000], bounce.data() + 0x4100, 0x80) && phys[0x20080] == 0xee);
+
+    // A chain of requests back to back on the card (8, 1 and 16 sectors) and a window into it: each request the window
+    // touches is staged once, at its own offset and at the window's bounce offset; nothing else.
+    struct Request {
+        Request *next;
+        uint32_t sectors;
+    };
+    Request c = {nullptr, 16}, b = {&c, 1}, a = {&b, 8};
+    struct Stage {
+        const Request *request;
+        uint32_t offset;
+        uint8_t *at;
+        uint32_t bytes;
+    };
+    std::vector<Stage> staged2;
+    auto record = [&](Request *r, uint32_t offset, uint8_t *at, uint32_t n) {
+        staged2.push_back({r, offset, at, n});
+        return true;
+    };
+    uint8_t window[0x10000];
+    assert(ioswitchChainCopy(&a, 3584, 2048, window, record));
+    assert(staged2.size() == 3);
+    assert(staged2[0].request == &a && staged2[0].offset == 3584 && staged2[0].at == window && staged2[0].bytes == 512);
+    assert(staged2[1].request == &b && staged2[1].offset == 0 && staged2[1].at == window + 512 &&
+           staged2[1].bytes == 512);
+    assert(staged2[2].request == &c && staged2[2].offset == 0 && staged2[2].at == window + 1024 &&
+           staged2[2].bytes == 1024);
+    // The whole chain; a window inside one request; a window that starts in a later request.
+    staged2.clear();
+    assert(ioswitchChainCopy(&a, 0, 25 * 512, window, record) && staged2.size() == 3 && staged2[2].bytes == 8192);
+    staged2.clear();
+    assert(ioswitchChainCopy(&a, 4096 + 512 + 1024, 512, window, record) && staged2.size() == 1);
+    assert(staged2[0].request == &c && staged2[0].offset == 1024 && staged2[0].bytes == 512);
+    // Past the chain's end: false (nothing staged beyond it); a stage that fails stops the walk.
+    staged2.clear();
+    assert(!ioswitchChainCopy(&a, 4096, 25 * 512, window, record));
+    unsigned stages = 0;
+    assert(!ioswitchChainCopy(&a, 0, 25 * 512, window, [&](Request *, uint32_t, uint8_t *, uint32_t) {
+        return ++stages < 2;
+    }));
+    assert(stages == 2);
+
     puts("PASS: sd client copy");
     return 0;
 }

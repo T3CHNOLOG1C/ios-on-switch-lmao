@@ -5,8 +5,9 @@
 // Boot-args:
 //   switch-backlight=1  CoreBrightness's brightness reaches the panel (DCS 0x51). Without it the backlight service is
 //                       still published (CoreBrightness finds its display) and records what it is asked for.
-//   switch-sleep=1      display power: the render server's power requests turn the panel off and on and stop and
-//                       restart the display controller's scanout.
+//   switch-sleep        display power, ON unless switch-sleep=0: the render server's power requests (lock, auto-lock,
+//                       wake) turn the panel and the touch controller off and on and stop and restart the display
+//                       controller's scanout. switch-sleep=2 adds system sleep (drivers/SwitchSuspend).
 //   switch-als=0        no ambient light sensor. By default the BH1730FVC is CoreBrightness's ALS (HID service
 //                       0xff00/0x0004), clocked by display controller A's frame ends (SwitchALS.cpp).
 #ifndef SWITCH_BRIGHTNESS_H
@@ -22,8 +23,11 @@ extern "C" {
 // or setup failed.
 int switch_backlight_start(void);
 
+// Whether display power is on for this boot (switch-sleep absent or nonzero). Any context.
+bool switch_display_power_enabled(void);
+
 // Display power, from the framebuffer when the render server asks for it (IOMobileFramebufferRequestPowerChange: 0 off,
-// anything else on). Returns false (and does nothing) unless switch-sleep=1 and the backlight has started; the caller
+// anything else on). Returns false (and does nothing) unless display power is on and the backlight has started; the caller
 // then keeps the original behaviour. Never blocks: the panel sequence (about 0.3 s each way) runs on the backlight's
 // work loop, which calls native_legacy_display_set_scanout() below in the right order. Any thread context.
 bool switch_display_power_request(bool on);

@@ -128,8 +128,8 @@ extern "C" uint64_t mach_continuous_time(void);
 // SwitchBrightness (TegraPanel.cpp) plays its DSI commands at DC A frame ends, from the vblank interrupt's filter below (primary interrupt
 // context). This empty default keeps the display linkable without it; its strong definition wins when SwitchBrightness is linked.
 extern "C" __attribute__((weak)) void tegra_panel_frame_end_filter(void) {}
-// SwitchBrightness (SwitchBacklight.cpp, boot-arg switch-sleep=1) takes the render server's display power requests; this default (no
-// SwitchBrightness, or switch-sleep off) leaves them to the original user client.
+// SwitchBrightness (SwitchBacklight.cpp; display power is on unless switch-sleep=0) takes the render server's display power requests;
+// this default (no SwitchBrightness, or switch-sleep=0) leaves them to the original user client.
 extern "C" __attribute__((weak)) bool switch_display_power_request(bool)
 {
     return false;
@@ -1534,7 +1534,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     }
 
 public:
-    // Display power (SwitchBrightness, switch-sleep=1), under the work-loop gate. Off, once the panel is asleep: FRAME_END and V_BLANK
+    // Display power (SwitchBrightness; on unless switch-sleep=0), under the work-loop gate. Off, once the panel is asleep: FRAME_END and V_BLANK
     // masked (no display interrupt, so idle cores stay in WFI) and the controller stopped at the end of the frame (hekate
     // _di_dc_video_disable_config, without its power gating, so the restart needs no re-init). DSI stays in video mode. On: continuous
     // display again, then the same interrupts as before; TegraPanel's next command waits for the first frame end and panics without it.
@@ -2773,11 +2773,13 @@ public:
         const uintptr_t original = (*reinterpret_cast<uintptr_t *const *>(client))[kClientSlots];
         return reinterpret_cast<ExternalMethod>(original)(client, selector, args, dispatch, target, ref);
     }
-    // Only with switch-sleep=1: otherwise the clients keep their original vtables, exactly as before display power existed.
+    // Unless switch-sleep=0 (SwitchBrightness.h switch_display_power_enabled, the same rule): with it the clients keep their original
+    // vtables, exactly as before display power existed.
     static bool displaySleepEnabled()
     {
-        unsigned enabled = 0;
-        return PE_parse_boot_argn("switch-sleep", &enabled, sizeof(enabled)) && enabled;
+        unsigned enabled = 1;
+        PE_parse_boot_argn("switch-sleep", &enabled, sizeof(enabled));
+        return enabled != 0;
     }
     static void answerPowerRequests(IOUserClient *client)
     {

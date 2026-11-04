@@ -138,6 +138,7 @@ extern int switch_thermal_start(void);
 extern int switch_battery_start(void);
 extern int switch_touch_start(void);
 extern int switch_buttons_start(void);
+extern int switch_motion_start(void);
 extern int switch_als_start(void);       /* on unless switch-als=0; after SwitchTouch, which powers the sensor (LDO6) */
 extern int switch_bluetooth_start(void); /* no-op unless switch-bt=1; runs its bring-up on its own thread */
 extern int switch_joycon_start(void);    /* no-op unless switch-joycon-rail=1 */
@@ -174,6 +175,8 @@ static void ioswitch_board_thread(void *parameter __unused, wait_result_t result
     if (ioswitch_board_enabled("switch-buttons") && switch_buttons_start())
         printf("IOSwitch: SwitchButtons did not start\n");
     if (switch_als_start()) printf("IOSwitch: SwitchALS did not start\n");
+    if (ioswitch_board_enabled("switch-motion") && switch_motion_start())
+        printf("IOSwitch: SwitchMotion did not start\n");
     if (switch_wlan_publish()) printf("IOSwitch: Wi-Fi driver not started\n");
     if (tegra_gm20b_probe()) printf("IOSwitch: TegraGM20B did not start\n");
     if (tegra_host1x_probe()) printf("IOSwitch: TegraHost1x did not start\n");

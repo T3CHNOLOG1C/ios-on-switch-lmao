@@ -18,11 +18,14 @@
 // OLED DTB pmc@7000e400: core-pwr-good-time 13100/7800 us, core-pwr-off-time 44160 us, core-pwr-req-active-high,
 // sys-clock-req-active-high; max77620 nvidia,pmc-wakeup = wake 51 level low, pwr_int_n).
 #include <IOKit/IOLib.h>
+#include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOService.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <IOKit/pwr_mgt/IOPMPrivate.h>
 #include <libkern/c++/OSSymbol.h>
+#include <os/log.h>
 #include <pexpert/pexpert.h>
+#include "../TegraGPIO/TegraGPIO.h"
 #include "SwitchSuspend.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -46,6 +49,8 @@ void switch_rtc_suspend(void);
 int switch_rtc_resume(void);  // 1 when ALARM1 is what woke the console
 void switch_touch_suspend(void);
 void switch_touch_resume(void);
+void switch_als_suspend(void);
+void switch_als_resume(void);
 // Owned by the display and controllers agents (NativeMobileDisplay/TegraDisplayPower.h, SwitchJoyCon/SwitchJoyCon.h).
 void tegra_display_suspend(void);
 void tegra_display_resume(void);
@@ -77,6 +82,9 @@ enum : uint32_t {
     CNTRL_CPU_PWRREQ_OE = 1u << 16,
 };
 constexpr uint32_t kPmicWake2Bit = 1u << (51 - 32);  // wake 51, pwr_int_n (MAX77620 nIRQ), level low
+// wake 14, gpio_pk4 (BM92T36 USB-PD ALERT: plug, unplug, charger contract), level low (OLED DTB bm92t@18
+// nvidia,pmc-wakeup); armed only while the line is high, since SwitchPD masks a line stuck low for the boot.
+constexpr uint32_t kUsbPdWakeBit = 1u << 14;
 // DIV_ROUND_UP(13100 us * 8192 Hz), DIV_ROUND_UP(7800 us * 32768 Hz) & 0xff, DIV_ROUND_UP(44160 us * 32768 Hz).
 constexpr uint32_t kCoreOsc = (13100u * 8192u + 999999u) / 1000000u, kCorePmu = (7800u * 32768u + 999999u) / 1000000u;
 constexpr uint32_t kCorePowerGood = ((kCoreOsc << 8) & 0xff00u) | (kCorePmu & 0xffu);
@@ -97,7 +105,7 @@ unsigned bootArg(const char *name)
 class SwitchSuspend : public IOService {
     OSDeclareDefaultStructors(SwitchSuspend) volatile uint8_t *pmc = nullptr, *apb = nullptr;
     uint32_t pad[kPadWords] = {}, mux[kMuxWords] = {};
-    uint32_t wakeStatus = 0, wake2Status = 0;
+    uint32_t wakeStatus = 0, wake2Status = 0, wakeArmed = 0;
     unsigned sleeps = 0;
     IOPMDriverAssertionID hold = 0;
 
@@ -219,18 +227,23 @@ IOReturn SwitchSuspend::callPlatformFunction(const OSSymbol *function, bool wait
 // Thread context, before any core goes down. I2C last: from here to wakeDevices() every transfer waits.
 void SwitchSuspend::sleepDevices()
 {
+    switch_als_suspend();  // first: it shares LDO6 with the touch panel, and its clock is the display's frame end
     tegra_display_suspend();
     switch_touch_suspend();
     switch_joycon_suspend();
     switch_thermal_suspend();
+    PESyncNVRAM();  // the NVRAM controller's sync (SwitchNVRAM) while the SD is still up, as the shut-down path does
     ioswitch_block_suspend();
     switch_rtc_suspend();
-    // Exactly one wake source: the MAX77620's nIRQ. Statuses cleared first, as tegra210_pmc_irq_set_wake does.
+    // Wake sources: the MAX77620's nIRQ (power key, RTC alarm) and the USB-PD ALERT (USB-C plug/unplug). Statuses
+    // cleared first, as tegra210_pmc_irq_set_wake does.
+    wakeArmed = tegra_gpio_read(TEGRA_GPIO_PD_ALERT) == 1 ? kUsbPdWakeBit : 0;
     wr(PMC_SW_WAKE_STATUS, 0);
     wr(PMC_SW_WAKE2_STATUS, 0);
     wr(PMC_WAKE_STATUS, 0);
     wr(PMC_WAKE2_STATUS, 0);
-    wr(PMC_WAKE_MASK, 0);
+    wr(PMC_WAKE_LVL, rd(PMC_WAKE_LVL) & ~kUsbPdWakeBit);
+    wr(PMC_WAKE_MASK, wakeArmed);
     wr(PMC_WAKE2_LVL, rd(PMC_WAKE2_LVL) & ~kPmicWake2Bit);
     wr(PMC_WAKE2_MASK, kPmicWake2Bit);
     (void)rd(PMC_WAKE2_MASK);
@@ -267,11 +280,17 @@ void SwitchSuspend::wakeDevices()
     switch_joycon_resume();
     switch_touch_resume();
     tegra_display_resume();
+    switch_als_resume();  // last: after LDO6 (touch) and the frame ends (display) are back
     ++sleeps;
-    const char *reason = alarm ? "rtc" : (wake2Status & kPmicWake2Bit) ? "pwrbtn" : "unknown";
+    const char *reason = alarm                           ? "rtc"
+                         : (wake2Status & kPmicWake2Bit) ? "pwrbtn"
+                         : (wakeStatus & wakeArmed)      ? "usb-c"
+                                                         : "unknown";
     IOPMrootDomain *root = getPMRootDomain();
     if (root) root->claimSystemWakeEvent(this, kIOPMWakeEventSource, reason, nullptr);
-    if (!(wake2Status & kPmicWake2Bit)) {
+    os_log(OS_LOG_DEFAULT, "SwitchSuspend: wake %u: %s (PMC WAKE_STATUS %#x WAKE2_STATUS %#x)", sleeps, reason,
+           wakeStatus, wake2Status);
+    if (!(wake2Status & kPmicWake2Bit) && !(wakeStatus & wakeArmed)) {
         IOLog("SwitchSuspend: wake %u without the PMIC wake event (PMC WAKE_STATUS %#x WAKE2_STATUS %#x)\n", sleeps,
               wakeStatus, wake2Status);
     }

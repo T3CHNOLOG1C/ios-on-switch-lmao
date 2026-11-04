@@ -21,8 +21,11 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <execinfo.h>
 #include <mach/mach.h>
@@ -230,18 +233,27 @@ static NSString *lastError()
 // The render pipeline journal: one line per render pipeline creation (when, on which thread, how long, the outcome, both functions with
 // every constant value, the attachments, blending and vertex descriptor) appended to pipelines.log in the runtime's cache directory, which
 // the board log exports with the caches (CacheExport.h): every pipeline a boot made, or was refused, can be made again on the host.
+// r10-rawapps: the file is opened once (fopen's "a": append, created 0666 less the umask) and each line is one write(2) of the line
+// and its newline, so a line lands whole even if the process dies right after; each line used to open, write and close the file,
+// on the thread making the state (a sandbox evaluation and an APFS lookup per line, three lines per render pipeline). A journal the
+// sandbox refuses is not asked again. The device open renames a journal past 2 MiB before the first line (native_bridge_metal_open).
 static std::mutex gJournalLock;
 static std::string gJournalPath;
 static uint64_t gJournalBegan;
+static int gJournalFd = -1;
+static bool gJournalRefused;
 static void journal(const std::string &line)
 {
     if (gJournalPath.empty()) return;
     std::lock_guard<std::mutex> lock(gJournalLock);
-    if (FILE *f = fopen(gJournalPath.c_str(), "a")) {
-        fwrite(line.data(), 1, line.size(), f);
-        fputc('\n', f);
-        fclose(f);
+    if (gJournalFd < 0 && !gJournalRefused) {
+        gJournalFd = open(gJournalPath.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0666);
+        gJournalRefused = gJournalFd < 0;
     }
+    if (gJournalFd < 0) return;
+    std::string whole = line;
+    whole += '\n';
+    (void)write(gJournalFd, whole.data(), whole.size());
 }
 
 @interface NBObject : NSObject
@@ -2996,6 +3008,47 @@ template <typename T> static T failWith(NSError **error, NSString *what, T value
 // 0x189429000 is the address in that image's disassembly), the global feature flags it ORs into every context's flags, and its
 // CA_DISABLE_GENERIC_SHADERS, CA_FORCE_GENERIC_SHADERS and CA_DISABLE_PRECOMPILED_PIPELINES debug options (ca_debug_options +0x55..0x57,
 // read only where dladdr places that address in QuartzCore).
+// r10-rawapps: QuartzCore's image is found once in dyld's image list (looked for again only after an image loads): its header,
+// the end of its __TEXT and whether its debug options lie in it; each frame is compared with that range. A dladdr per frame (up
+// to 24 a line, each searching an image's symbols for the nearest one) put about a millisecond between the tablet's journal
+// lines, three lines per render pipeline state, on the thread making it. Same output.
+struct NBQuartzCoreImage {
+    uintptr_t header = 0, end = 0;  // [header, end): QuartzCore's __TEXT, 0 until QuartzCore is loaded
+    bool optionsInImage = false;    // whether dladdr places the debug options' address in QuartzCore (below)
+};
+static NBQuartzCoreImage quartzCoreImage()
+{
+    static std::mutex lock;
+    static NBQuartzCoreImage image;
+    static uint32_t imagesSeen = 0;  // the loaded image count at the last look: a look again only after an image loaded
+    std::lock_guard<std::mutex> guard(lock);
+    if (image.header || _dyld_image_count() == imagesSeen) return image;
+    imagesSeen = _dyld_image_count();
+    for (uint32_t i = 0; i < imagesSeen && !image.header; ++i) {
+        // the image dladdr names ".../QuartzCore" (QuartzCore.framework/QuartzCore, or Versions/A/QuartzCore on a Mac)
+        const char *name = _dyld_get_image_name(i);
+        const char *slash = name ? strrchr(name, '/') : nullptr;
+        if (!slash || strcmp(slash, "/QuartzCore") || !strstr(name, "/QuartzCore.framework/")) continue;
+        const auto *mh = (const struct mach_header_64 *)_dyld_get_image_header(i);
+        if (!mh) continue;
+        const auto *command = (const struct load_command *)(mh + 1);
+        for (uint32_t c = 0; mh->magic == MH_MAGIC_64 && c < mh->ncmds; ++c) {
+            const auto *segment = (const struct segment_command_64 *)command;
+            if (command->cmd == LC_SEGMENT_64 && !strncmp(segment->segname, "__TEXT", sizeof segment->segname)) {
+                image.end = (uintptr_t)mh + segment->vmsize;  // __TEXT begins at the header (dyld cache and file alike)
+                break;
+            }
+            command = (const struct load_command *)((const char *)command + command->cmdsize);
+        }
+        if (!image.end) continue;
+        image.header = (uintptr_t)mh;
+        const uintptr_t options = image.header + (0x1f491b3c5ull - 0x189429000ull);
+        Dl_info at{};
+        image.optionsInImage = dladdr((void *)options, &at) && at.dli_fname && strstr(at.dli_fname, "/QuartzCore") &&
+                               (uintptr_t)at.dli_fbase == image.header;
+    }
+    return image;
+}
 static std::string quartzCoreCallers()
 {
     void *frames[24];
@@ -3004,10 +3057,10 @@ static std::string quartzCoreCallers()
     char item[32];
     unsigned kept = 0;
     uintptr_t header = 0;
-    for (int i = 0; i < n && kept < 8; i++) {
-        Dl_info info{};
-        if (!dladdr(frames[i], &info) || !info.dli_fname || !strstr(info.dli_fname, "/QuartzCore")) continue;
-        header = (uintptr_t)info.dli_fbase;
+    const NBQuartzCoreImage image = quartzCoreImage();
+    for (int i = 0; i < n && kept < 8 && image.header; i++) {
+        if ((uintptr_t)frames[i] < image.header || (uintptr_t)frames[i] >= image.end) continue;
+        header = image.header;
         snprintf(item, sizeof item, " %lx", (unsigned long)((uintptr_t)frames[i] - header));
         out += item;
         ++kept;
@@ -3051,9 +3104,7 @@ static std::string quartzCoreCallers()
     out += item;
     if (header) {
         const uintptr_t options = header + (0x1f491b3c5ull - 0x189429000ull);
-        Dl_info info{};
-        if (dladdr((void *)options, &info) && info.dli_fname && strstr(info.dli_fname, "/QuartzCore") &&
-            (uintptr_t)info.dli_fbase == header) {
+        if (image.optionsInImage) {
             const volatile uint8_t *b = (const volatile uint8_t *)options;
             snprintf(item, sizeof item, " dbg=%u%u%u", b[0], b[1], b[2]);
             out += item;

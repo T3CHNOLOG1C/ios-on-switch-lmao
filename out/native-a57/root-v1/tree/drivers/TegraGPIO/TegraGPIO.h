@@ -20,6 +20,7 @@
 //
 // Pins used by IOSwitch drivers (Switch OLED, tegra210b01-fric DTB; switchroot tegra210b01-nx-common.dtsi):
 //   PX1 185  FTM4 touch INT (I2C3 0x49)      level low   bank 5 SPI 87
+//   PX2 186  IMU INT2 data-ready (SPI4 CS0)  level high  bank 5 SPI 87
 //   PX4 188  TMP451 ALERT (I2C1 0x4c)        level low   bank 5 SPI 87
 //   PX6 190  volume up, active low, pull-up  both edges  bank 5 SPI 87
 //   PX7 191  volume down, active low         both edges  bank 5 SPI 87
@@ -94,12 +95,14 @@ enum {
     TEGRA_GPIO_PJ7 = 9 * 8 + 7,
     TEGRA_GPIO_PK4 = 10 * 8 + 4,
     TEGRA_GPIO_PX1 = 23 * 8 + 1,
+    TEGRA_GPIO_PX2 = 23 * 8 + 2,
     TEGRA_GPIO_PX4 = 23 * 8 + 4,
     TEGRA_GPIO_PX6 = 23 * 8 + 6,
     TEGRA_GPIO_PX7 = 23 * 8 + 7,
     TEGRA_GPIO_PY0 = 24 * 8 + 0,
     TEGRA_GPIO_PZ0 = 25 * 8 + 0,
     TEGRA_GPIO_TOUCH_INT = TEGRA_GPIO_PX1,    // TEGRA_GPIO_LEVEL_LOW
+    TEGRA_GPIO_IMU_INT = TEGRA_GPIO_PX2,      // TEGRA_GPIO_LEVEL_HIGH
     TEGRA_GPIO_TOUCH_RESET = TEGRA_GPIO_PJ7,  // output, 1 = running
     TEGRA_GPIO_TEMP_ALERT = TEGRA_GPIO_PX4,   // TEGRA_GPIO_LEVEL_LOW
     TEGRA_GPIO_VOLUME_UP = TEGRA_GPIO_PX6,    // pressed = 0; TEGRA_GPIO_EDGE_BOTH, debounce 16 ms (DT)

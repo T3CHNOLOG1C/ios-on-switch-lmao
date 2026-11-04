@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// HID devices for the Switch's touch screen and buttons (SwitchHIDDevice.cpp), fed by SwitchTouch.cpp and
-// ../SwitchButtons/SwitchButtons.cpp.
+// HID devices for the Switch's touch screen, buttons, ambient light sensor and motion sensors (SwitchHIDDevice.cpp), fed
+// by SwitchTouch.cpp, ../SwitchButtons/SwitchButtons.cpp, ../SwitchBrightness/SwitchALS.cpp and
+// ../SwitchMotion/SwitchMotion.cpp.
 //
 // Each device is an IOHIDDevice (the original class, through NativeHidInput's bindings) with a fixed report
 // descriptor. Apple's in-kernel IOHIDEventDriver turns its reports into IOHIDEvents for backboardd, exactly as for a
@@ -18,7 +19,14 @@
 class IOService;
 class OSObject;
 
-enum SwitchHIDKind : unsigned { kSwitchHIDTouch = 0, kSwitchHIDButtons = 1, kSwitchHIDLight = 2 };
+enum SwitchHIDKind : unsigned {
+    kSwitchHIDTouch = 0,
+    kSwitchHIDButtons = 1,
+    kSwitchHIDLight = 2,
+    kSwitchHIDAccelerometer = 3,
+    kSwitchHIDGyro = 4,
+    kSwitchHIDOrientation = 5,
+};
 
 // Touch screen, report ID 1: ten finger slots, slot n always carries contact n. Coordinates are panel pixels in
 // the landscape frame iOS draws in (0..1279 left to right, 0..719 top to bottom); the descriptor's logical range
@@ -53,6 +61,28 @@ struct __attribute__((packed)) SwitchButtonsReport {
 // has no ambient light element, so SwitchALS makes the kIOHIDEventTypeAmbientLightSensor events itself and hands them to
 // switch_hid_dispatch_event.
 
+// Motion sensors (../SwitchMotion/SwitchMotion.cpp). Each is a top-level collection with the usage pair iPadOS 17's
+// CoreMotion (CLIoHidInterface) and backboardd match, as the J120 device tree's AOP accel and gyro nodes declare
+// (device-usage-page 0xff00, device-usage 3 and 9):
+//  * Accelerometer, Apple vendor 0xff00/0x0003: input report 1 = Sensor-page Acceleration X/Y/Z (0x0453-0x0455) in
+//    micro-g (unit exponent -6, so IOHIDEventDriver's kIOHIDEventTypeAccelerometer events carry g), feature report 1 =
+//    Sensor Report Interval (0x030e, microseconds).
+//  * Gyroscope, Apple vendor 0xff00/0x0009: the same with Angular Velocity X/Y/Z (0x0457-0x0459) in micro-radians per
+//    second (kIOHIDEventTypeGyro in rad/s).
+//  * Device orientation, Sensor 0x20/0x008a (what CoreMotion's orientation notifier in backboardd matches): input
+//    report 1 = one bit per AppleVendorMotion (0xff0c) usage 0x64 + UIDeviceOrientation (0x64 unknown .. 0x6a face
+//    down); IOHIDEventDriver turns a bit that goes 0 -> 1 into a kIOHIDEventTypeOrientation event (CMUsage).
+// Vectors are in iPadOS's device frame: the portrait panel's (IOSwitchPortrait.h), +X to its right, +Y to its top, +Z
+// out of the screen; acceleration is the gravity vector (lying face up reads z = -1 g), as Apple's AOP reports it.
+struct __attribute__((packed)) SwitchMotionReport {
+    uint8_t id;  // 1
+    int32_t x, y, z;
+};
+struct __attribute__((packed)) SwitchOrientationReport {
+    uint8_t id;           // 1
+    uint8_t orientation;  // 1u << UIDeviceOrientation
+};
+
 // Creates, attaches (under IOResources) and starts the device. The first call loads IOHIDFamily, registers the
 // device class and adds the IOHIDEventDriver personalities. Thread context; panics with the reason on failure.
 IOService *switch_hid_create(SwitchHIDKind kind);
@@ -64,6 +94,14 @@ IOReturn switch_hid_post(IOService *device, const void *report, size_t length);
 // Hands an IOHIDEvent to the device's IOHIDEventDriver as if the driver had made it (IOHIDEventService::dispatchEvent,
 // the driver's slot 198). kIOReturnNotReady until the driver has opened the device. Call from one thread per device.
 IOReturn switch_hid_dispatch_event(IOService *device, OSObject *event);
+
+// Feature reports the event system sends the device: IOHIDEventDriver::setProperties writes a client's ReportInterval
+// (microseconds; 0 when the last client stops) into the Report Interval element, and IOHIDDevice::postElementValues
+// hands that feature report to the device's setReport (slot 183). Called with the report's bytes (the report ID first
+// when the report carries one) on the thread that set the property, which may hold IOHIDEventDriver's work loop gate:
+// it must not wait for anything. Devices without a handler answer kIOReturnUnsupported, as the original setReport does.
+typedef void (*SwitchHIDFeatureHandler)(void *context, const uint8_t *report, size_t length);
+void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler handler, void *context);
 
 // Touch only: bit n set = contact n began within the edge band. Its finger events then carry
 // kIOHIDDigitizerEventFromEdgeTip, which UIKit needs for the home and app-switcher edge gestures.

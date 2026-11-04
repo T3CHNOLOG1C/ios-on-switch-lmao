@@ -24,14 +24,15 @@
 constexpr int kIOSwitchCopyToClient = cppvPsnk | cppvNoRefSrc | cppvNoModSnk | cppvKmap;
 constexpr int kIOSwitchCopyFromClient = cppvPsrc | cppvNoRefSrc | cppvKmap;
 
-// Copies `length` bytes between `memory` (from its offset 0) and `bounce`, one physical segment at a time; `copy` is
+// Copies `length` bytes between `memory` (from its offset `from`) and `bounce`, one physical segment at a time; `copy` is
 // copypv. False when a segment is missing or a copy fails (the request then completes with an I/O error).
 template <typename Memory, typename Copy>
-inline bool ioswitchClientCopy(Memory *memory, uint8_t *bounce, uint32_t length, bool toClient, Copy copy)
+inline bool ioswitchClientCopy(Memory *memory, uint8_t *bounce, uint32_t length, bool toClient, Copy copy,
+                               uint32_t from = 0)
 {
     for (uint32_t done = 0; done < length;) {
         IOByteCount segment = 0;
-        const addr64_t pa = memory->getPhysicalSegment(done, &segment, kIOMemoryMapperNone);
+        const addr64_t pa = memory->getPhysicalSegment(from + done, &segment, kIOMemoryMapperNone);
         if (!pa || !segment) return false;
         if (segment > length - done) segment = length - done;
         const addr64_t va = reinterpret_cast<uintptr_t>(bounce + done);
@@ -42,4 +43,26 @@ inline bool ioswitchClientCopy(Memory *memory, uint8_t *bounce, uint32_t length,
         done += unsignedSegment;
     }
     return true;
+}
+
+// The bytes [from, from + length) of a chain of requests that follow each other on the card (`next`; `sectors` of 512
+// bytes each), against bounce[0, length): `stage(request, offset in its memory, bounce address, bytes)` once for each
+// request the window touches, in chain order. False when a stage fails or the chain ends before the window does. The
+// bounce path uses it to move a chain longer than one SDMA command in pieces.
+template <typename Request, typename Stage>
+inline bool ioswitchChainCopy(Request *first, uint32_t from, uint32_t length, uint8_t *bounce, Stage stage)
+{
+    for (Request *r = first; r && length; r = r->next) {
+        const uint32_t size = r->sectors * 512;
+        if (from >= size) {
+            from -= size;
+            continue;
+        }
+        const uint32_t n = size - from < length ? size - from : length;
+        if (!stage(r, from, bounce, n)) return false;
+        bounce += n;
+        length -= n;
+        from = 0;
+    }
+    return !length;
 }

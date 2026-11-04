@@ -129,6 +129,9 @@ COMMAND_LINE = ' '.join([
     # (display power only; system sleep is switch-sleep=2), and the BH1730 ambient light sensor (drivers/SwitchBrightness).
     # 10-30 19:50: with these three (+ Metal) the boot hung before launchd (no log); off until tested one at a time.
     # 'switch-backlight=1', 'switch-sleep=1', 'switch-als=1',
+    # 11-04 r10-sleep: display power (lock turns the panel, the DC scanout and the touch controller off) is on by default
+    # in code now; 'switch-sleep=0' turns it off. switch-sleep=1 had no effect before launchd (it only wraps the render
+    # server's IOMFB clients), so the 10-30 hang was the ALS or the then thread-timed panel commands.
     # 10-31: two boots died (panel noise) while the user moved the brightness slider: TegraPanel's DSI command sequence
     # runs late in the frame (thread-context frame-end wakeups). Off until it runs from the DC frame-end filter.
     # 10-31 r3-panel: the DSI command steps now run in the DC A frame-end filter (TegraPanel), one per FRAME_END,

@@ -755,6 +755,7 @@ void native_legacy_display_late_probe(void);
 extern void native_keystore_probe(void);
 extern "C" int
 switch_backlight_start(void);  // SwitchBrightness: CoreBrightness's backlight (an AppleARMBacklight by metaclass)
+extern "C" bool switch_display_power_enabled(void);  // SwitchBrightness: display power on (switch-sleep not 0)
 extern void native_hid_input_probe(void);
 void native_legacy_display_late_probe(void)
 {
@@ -860,11 +861,10 @@ void native_legacy_display_late_probe(void)
                         }
                         finishUnitScalePolicy(true);
                         OSSafeReleaseNULL(displayTreeParent);
-                        // Only with one of its features on: the default boot keeps today's display stack (no backlight service).
+                        // Only with one of its features on (display power is on unless switch-sleep=0).
                         {
-                            unsigned on = 0, arg = 0;
+                            unsigned on = switch_display_power_enabled() ? 1 : 0, arg = 0;
                             if (PE_parse_boot_argn("switch-backlight", &arg, sizeof(arg)) && arg) on = 1;
-                            if (PE_parse_boot_argn("switch-sleep", &arg, sizeof(arg)) && arg) on = 1;
                             if (PE_parse_boot_argn("switch-als", &arg, sizeof(arg)) && arg) on = 1;
                             if (on && switch_backlight_start()) IOLog("IOSwitch: SwitchBacklight did not start\n");
                         }

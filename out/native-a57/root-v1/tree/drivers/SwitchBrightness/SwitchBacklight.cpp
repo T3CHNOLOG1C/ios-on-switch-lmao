@@ -29,7 +29,11 @@
 // its own powered word; the hardware is the platform's. Here the framebuffer hands the request to
 // switch_display_power_request(), and this work loop plays it: off = TegraPanel's L4T suspend sequence while the DC still
 // scans out, then the display stops the DC (no fetches, no frame-end or vblank interrupts, so the cores sit in WFI); on =
-// the display restarts the DC, then TegraPanel wakes the panel and restores the brightness.
+// the display restarts the DC, then TegraPanel wakes the panel and restores the brightness. The touch controller goes
+// down with the screen and comes back up while the panel wakes (SwitchTouch's display power). On by default; boot-arg
+// switch-sleep=0 leaves the render server's requests to the original user client (the panel stays lit when locked).
+// QuartzCore ignores the request's return value (IOMFBDisplay::update_power_state_locked, 21H461), so answering it here
+// changes nothing on its side.
 //
 // Requests (CoreBrightness's setProperties, the framebuffer's power requests) never wait for this work loop: they are
 // left under a lock and the work timer is kicked (IOTimerEventSource::setTimeout takes no gate). The framebuffer's
@@ -49,6 +53,7 @@
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSSymbol.h>
+#include <os/log.h>
 #include <pexpert/pexpert.h>
 #include "TegraPanel.h"
 #include "SwitchBrightness.h"
@@ -67,6 +72,9 @@ extern "C" __attribute__((weak)) bool native_legacy_display_set_scanout(bool)
 {
     return false;
 }
+
+// SwitchTouch's strong definition wins when it is linked (SwitchTouch.h).
+extern "C" __attribute__((weak)) void switch_touch_display_power(bool) {}
 
 namespace {
 constexpr uint32_t kMax = 65536;  // IODisplayParameters.brightness max, as Apple's
@@ -107,7 +115,23 @@ bool bootArg(const char *name)
     unsigned value = 0;
     return PE_parse_boot_argn(name, &value, sizeof(value)) && value == 1;
 }
+
+uint64_t msSince(uint64_t start)
+{
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
+    return ns / 1000000;
+}
 }  // namespace
+
+// Display power is on unless switch-sleep=0 (switch-sleep=2, system sleep, needs it too). NativeLegacyDisplay and the
+// display probe ask the same.
+extern "C" bool switch_display_power_enabled(void)
+{
+    unsigned value = 1;
+    PE_parse_boot_argn("switch-sleep", &value, sizeof(value));
+    return value != 0;
+}
 
 class SwitchBacklight : public IOService {
     OSDeclareDefaultStructors(SwitchBacklight) IOWorkLoop *loop = nullptr;
@@ -201,17 +225,25 @@ void SwitchBacklight::startRamp(uint32_t value, uint64_t fadeNS)
 // Work loop. The DC still scans out here; it is stopped only once the panel is asleep.
 void SwitchBacklight::powerOff()
 {
+    const uint64_t start = mach_absolute_time();
+    // The ALS first: it shares LDO6 with the touch panel, which turns it off, and its 2 s frame-end deadline must be
+    // disarmed before the scanout stops.
     switch_als_set_active(false);
+    switch_touch_display_power(false);
     const int err = tegra_panel_power_off();
     if (err) IOLog("SwitchBacklight: panel off failed (%d): the display is not running\n", err);
     scanoutStopped = native_legacy_display_set_scanout(false);
     panelOn = false;
     sentRaw = ~0u;
+    os_log(OS_LOG_DEFAULT, "SwitchBacklight: display off in %llu ms (panel %s, scanout %s)", msSince(start),
+           err ? "not running" : "asleep", scanoutStopped ? "stopped" : "still running");
 }
 
 // Work loop. TegraPanel's first step waits for a frame end of the restarted DC, and panics if none comes.
 void SwitchBacklight::powerOn()
 {
+    const uint64_t start = mach_absolute_time();
+    switch_touch_display_power(true);  // the controller comes up on its own work loop while the panel wakes
     if (scanoutStopped && !native_legacy_display_set_scanout(true)) {
         panic("SwitchBacklight: the display did not restart DC A's scanout for wake");
     }
@@ -223,7 +255,9 @@ void SwitchBacklight::powerOn()
     sentRaw = err || level < 0 ? ~0u : (unsigned)level;
     if (target == 0 && level >= 0) target = current = lit;
     gDisplayOn = true;
-    switch_als_set_active(true);
+    switch_als_set_active(true);  // last: frame ends run again, and LDO6 came back with the touch panel meanwhile
+    os_log(OS_LOG_DEFAULT, "SwitchBacklight: display on in %llu ms (panel %s, level %d)", msSince(start),
+           err ? "not running" : "awake", level);
 }
 
 // Work loop: the latest requests, display power first, then one step of the current ramp. Re-arms itself until the
@@ -310,7 +344,7 @@ bool SwitchBacklight::start(IOService *provider)
     if (!IOService::start(provider)) return false;
     brightnessCommands = bootArg("switch-backlight");
     nanoseconds_to_absolutetime(kSendIntervalNS, &sendInterval);
-    sleepEnabled = bootArg("switch-sleep");
+    sleepEnabled = switch_display_power_enabled();
     requestLock = IOLockAlloc();
     loop = IOWorkLoop::workLoop();
     work = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::workFired) : nullptr;
