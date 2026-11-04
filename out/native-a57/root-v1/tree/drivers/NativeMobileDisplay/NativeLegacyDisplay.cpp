@@ -67,6 +67,9 @@ extern "C" __attribute__((weak)) int vc_tape_attach(vm_offset_t, uint32_t, uint3
     return 1;
 }
 extern "C" __attribute__((weak)) void vc_tape_detach(void) {}
+// XNU (kern_exec.c) while the one-time data migration runs: the console stays on screen and the UI's frames are drawn and
+// retired but not shown (presentBlock), so the user watches the migration's progress lines. Weak: absent, never held.
+extern "C" __attribute__((weak)) volatile int ioswitch_console_hold;
 extern "C" __attribute__((weak)) int vc_tape_panic(void)
 {
     return 0;
@@ -1233,6 +1236,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     void presentBlock()
     {
         if (gPanicRestore.panicking) return;
+        if (!rotated && &ioswitch_console_hold && ioswitch_console_hold)
+            return;  // the console keeps the screen (migration)
         if (!rotated)
             startRotation();
         else if (doubleBuffer)
