@@ -3301,6 +3301,12 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 void vcattach(void); /* XXX gcc 4 warning cleanup */
 
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+/* vcattach's replay of the early log, for the one line PE_init_iokit logs (pe_init.c). */
+long ioswitch_vcattach_skipped, ioswitch_vcattach_bytes;
+uint64_t ioswitch_vcattach_ticks;
+#endif
+
 void
 vcattach(void)
 {
@@ -3329,7 +3335,10 @@ vcattach(void)
 	simple_lock_init(&vc_progress_lock, 0);
 
 	if (gc_graphics_boot == FALSE) {
-		long index;
+		long index, start = 0;
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+		const uint64_t attach_start = mach_absolute_time();
+#endif
 
 		if (gc_acquired) {
 			initialize_screen(NULL, kPEReleaseScreen);
@@ -3337,7 +3346,26 @@ vcattach(void)
 
 		initialize_screen(NULL, kPEAcquireScreen);
 
-		for (index = 0; index < msgbufp->msg_bufx; index++) {
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+		/*
+		 * IOSwitch: replay only the lines the screen can show. Every earlier one would be drawn and then scrolled off,
+		 * one whole-screen copy per line (the rotated console copies pixel by pixel); the screen ends up the same:
+		 * the last v_rows - 1 lines and the cursor's. Wrapped lines take more rows and simply scroll as before.
+		 */
+		if (vinfo.v_rows > 1) {
+			unsigned int lines = 0;
+			for (index = msgbufp->msg_bufx; index > 0; --index) {
+				if (msgbufp->msg_bufc[index - 1] == '\n' && ++lines >= vinfo.v_rows) {
+					start = index;
+					break;
+				}
+			}
+		}
+		ioswitch_vcattach_skipped = start;
+		ioswitch_vcattach_bytes = msgbufp->msg_bufx;
+#endif
+
+		for (index = start; index < msgbufp->msg_bufx; index++) {
 			if (msgbufp->msg_bufc[index] == '\0') {
 				continue;
 			}
@@ -3348,6 +3376,9 @@ vcattach(void)
 				vcputc( '\r' );
 			}
 		}
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+		ioswitch_vcattach_ticks = mach_absolute_time() - attach_start;
+#endif
 	}
 }
 

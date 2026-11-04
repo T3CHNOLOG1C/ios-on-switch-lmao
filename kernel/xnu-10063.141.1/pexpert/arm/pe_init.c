@@ -12,6 +12,7 @@
 #include <pexpert/device_tree.h>
 #include <pexpert/pe_images.h>
 #include <kern/sched_prim.h>
+#include <kern/clock.h>
 #include <kern/socd_client.h>
 #include <machine/atomic.h>
 #include <machine/machine_routines.h>
@@ -282,6 +283,17 @@ PE_init_iokit(void)
 	uint32_t        populate_registry_time_value = 0;
 
 	PE_init_printf(TRUE);
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	{
+		/* IOSwitch: what attaching the text console cost (video_console.c vcattach), once. */
+		extern long ioswitch_vcattach_skipped, ioswitch_vcattach_bytes;
+		extern uint64_t ioswitch_vcattach_ticks;
+		uint64_t ns;
+		absolutetime_to_nanoseconds(ioswitch_vcattach_ticks, &ns);
+		printf("IOSwitch console attach: %llu.%llu ms, early log %ld bytes, %ld of them not redrawn (scrolled off)\n",
+		    ns / 1000000, ns / 100000 % 10, ioswitch_vcattach_bytes, ioswitch_vcattach_skipped);
+	}
+#endif
 
 	printf("iBoot version: %s\n", iBoot_version);
 #if defined(TARGET_OS_OSX) && defined(__arm64__)
