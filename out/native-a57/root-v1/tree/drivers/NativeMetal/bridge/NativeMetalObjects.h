@@ -279,6 +279,10 @@ struct NmbPassAttachment {
     NmbTexture *texture;
     uint64_t level, slice, depth_plane, load, store;
     double clear[4]; /* color, or clear[0] depth / stencil */
+    /* resolveTexture (null: none), resolveLevel, resolveSlice, resolveDepthPlane; resolve_filter: the depth attachment's
+       MTLMultisampleDepthResolveFilter, the stencil attachment's MTLMultisampleStencilResolveFilter, 0 for a color one */
+    NmbTexture *resolve_texture;
+    uint64_t resolve_level, resolve_slice, resolve_depth_plane, resolve_filter;
 };
 struct NmbRenderPassDescriptor {
     struct NmbPassAttachment colors[8], depth, stencil;

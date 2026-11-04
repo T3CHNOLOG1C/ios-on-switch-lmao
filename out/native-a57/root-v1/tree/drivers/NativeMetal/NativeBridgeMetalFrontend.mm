@@ -2825,6 +2825,16 @@ static void scheduled(void *context);
         out.depth_plane = a.depthPlane;
         out.load = a.loadAction;
         out.store = a.storeAction;
+        // The MSAA resolve target (WebGL's antialiased drawing buffer, ANGLE's depth resolve): m2v resolves into it where the
+        // store action resolves (without it a color resolve wrote nothing and a depth or stencil one refused the pass).
+        if (id<MTLTexture> resolve = a.resolveTexture) {
+            if (![(id)resolve isKindOfClass:[NBTexture class]]) return false;
+            [_resourceOwners addObject:resolve];
+            out.resolve_texture = [(NBTexture *)resolve handle];
+            out.resolve_level = a.resolveLevel;
+            out.resolve_slice = a.resolveSlice;
+            out.resolve_depth_plane = a.resolveDepthPlane;
+        }
         return true;
     };
     for (unsigned i = 0; i < 8; i++) {
@@ -2848,6 +2858,8 @@ static void scheduled(void *context);
     }
     pass.depth.clear[0] = d.depthAttachment.clearDepth;
     pass.stencil.clear[0] = d.stencilAttachment.clearStencil;
+    pass.depth.resolve_filter = d.depthAttachment.depthResolveFilter;
+    pass.stencil.resolve_filter = d.stencilAttachment.stencilResolveFilter;
     pass.width = d.renderTargetWidth;
     pass.height = d.renderTargetHeight;
     pass.array_length = d.renderTargetArrayLength;
