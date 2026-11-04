@@ -41,11 +41,10 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
     yourself.
 - **bazelisk**: `brew install bazelisk`. `.bazelversion` pins Bazel 9.3.1, and bazelisk fetches it on first use.
   Nothing else comes from Homebrew: lz4 and the LLVM tools are pinned downloads, and the unit tests get them too.
-- **For the GPU bundle only**:
-  - the prebuilt NVK dylibs in `out/gpu/nvk/` (r9: `libvulkan_nouveau.r9{,.host}.dylib` and their `.source` files);
-  - `out/gpu-artifacts/` (the m2v library store and QuartzCore's `default.metallib`).
-  - Each is checked by sha256 (`bazel/gpu/deps.bzl`). They can live elsewhere: export `IOSWITCH_NVK_DIR` and
-    `IOSWITCH_GPU_ARTIFACTS`, or put `common --repo_env=IOSWITCH_NVK_DIR=...` in `user.bazelrc`.
+- **For the GPU bundle only**: `out/gpu-artifacts/` (the m2v library store and QuartzCore's `default.metallib`), each
+  file checked by sha256 (`bazel/gpu/deps.bzl`). It can live elsewhere: export `IOSWITCH_GPU_ARTIFACTS`, or put
+  `common --repo_env=IOSWITCH_GPU_ARTIFACTS=...` in `user.bazelrc`. NVK is built here (`//gpu/nvk`); the hand-built
+  r9 pair in `out/gpu/nvk/` is only read with `--//gpu/nvk:prebuilt` (`IOSWITCH_NVK_DIR` moves it).
 
 ## First build
 
@@ -148,6 +147,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//:kernel` | `kernel.macho`: XNU + drivers, linked and prelinked with Apple's kexts |
 | `//:gpu` (= `//gpu:bundle`) | `bazel-bin/gpu/bundle`: `ngpu/addons/{TegraGM20BMetal.bundle, .m2v-seed, .raw/pack.bin}`, `TegraGM20BMetal.trustcache`, `trust.json` |
 | `//gpu:trustcache` | The bundle's trust cache module. `//:boot` appends it to the kernel's static trust cache |
+| `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa 77452b90 + `gpu/nvk`'s patches, meson inside Bazel. `--//gpu/nvk:prebuilt` makes `//gpu` use the hand-built r9 pair instead |
 | `//out/native-a57/root-v1/tree:<driver>` | One driver's objects (e.g. `:SwitchUSB`); `:xnu` is the XNU objroot; `:kernel_unprelinked` is the link |
 | `//ipsw:kernelcache`, `//ipsw:static_system_trust` | The original kernelcache (decompressed) and the root+OS-cryptex trust bundle, from the IPSW |
 | `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | IPSW members (`bazel/ipsw/pins.bzl`). Deflated ones are inflated by a build action (`//bazel/ipsw:<role>`) |
@@ -270,9 +270,9 @@ every driver object, because they include XNU's headers.
 | XNU tag | `MODULE.bazel` `@xnu`/`@xnu_base` | New URL and sha256. The patch must apply to it |
 | Apple OSS, corecrypto, lz4 | `MODULE.bazel` | Version in the URL, new sha256, `strip_prefix` |
 | m2v | `bazel/gpu/deps.bzl` | Commit and sha256 of the GitHub tarball. The series is `tree/drivers/TegraGM20BMetal/patches/series` |
-| NVK (prebuilt) | `bazel/gpu/deps.bzl` `HOST_FILES` | Build with `gpu/nvk/build-nvk.sh` (into `out/gpu/nvk`), then new dylib names and sha256s (`shasum -a 256`) |
+| NVK | `gpu/nvk/BUILD.bazel` | Add the patch to `PATCHES` (in order), set `GIT_SHA1` to the version string's commit, build `//gpu/nvk:ios //gpu/nvk:host`, then pin `EXPECT` (tree id and both sha256s the build prints) |
+| Mesa | `gpu/nvk/repos.bzl` `MESA_COMMIT` | A new commit; the series must apply. If `nvk_query.cl`, `nvk_copy_indirect.cl` or their headers change, regenerate `bazel/pinned/nvk` with Mesa's mesa_clc/vtn_bindgen2 (LLVM 23.1.4) |
 | m2v library store | `bazel/gpu/m2v-libs.sha256` | Regenerate with the command in its header (per-file `shasum -a 256`) |
-| Mesa | not built yet | `bazel/gpu/deps.bzl` lists what a Mesa build needs |
 | Rust | `MODULE.bazel` GPU section | `rust.toolchain(versions = [...])` |
 | LLVM | `bazel/llvm/llvm.bzl` and `bazel/gpu/deps.bzl` | URL and sha256 in both (one archive) |
 | Python packages | not used yet | — |
@@ -331,7 +331,8 @@ The only things the build reads from the Mac, each declared and checked:
 - **macOS base tools**: `/usr/bin/{make,perl,tar,patch,plutil,compression_tool}`; the installer and deploy also use
   `diskutil`, `hdiutil`, `fsck_apfs` and `ditto`.
 - **The GPU bundle**:
-  - the prebuilt NVK (until Mesa is built here);
+  - NVK's three generated files Mesa's own CL/GLSL compilers made (`bazel/pinned/nvk`: nvkcl.spv/.cpp/.h and
+    astc_spv.h, with the sha256 of every input they were generated from); Mesa, its tools and the dylibs are built;
   - the m2v library store;
   - QuartzCore's metallib.
   - Bazel copies each file in itself, through its download check against the pinned sha256 (`bazel/host/files.bzl`):
@@ -375,15 +376,17 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 | `python3 -m unittest ...` | `bazel test //...` |
 | Edit `cmake/Drivers.cmake` for a new driver | One `kernel_driver()` in the tree's `BUILD.bazel` |
 | Boot-args in `scripts/package_raw_boot.py` | The same file, now `tools/package/package_raw_boot.py` |
-| `out/gpu/nvk/build-nvk.sh`, `relink-nvk.py`, the NVK patches | `gpu/nvk/` (still builds into `out/gpu/nvk`); `bazel run //gpu/nvk:relink` |
+| `out/gpu/nvk/build-nvk.sh`, `relink-nvk.py`, the NVK patches | `bazel build //gpu/nvk:ios //gpu/nvk:host` (the patches and `relink-nvk.py` are in `gpu/nvk/`) |
 | `tree/scripts/*` (builders, audits, qemu-entry), `tree/package/Scripts/*` | Gone: their live parts are Bazel rules and tools; the rest was dead |
 
 ## Troubleshooting
 
 - **"The selected Xcode does not match the pin"**: select Xcode-beta 27.0, or re-pin (see [Bumping a pin](#bumping-a-pin)).
   `IOSWITCH_ALLOW_UNPINNED_XCODE=1` builds anyway, with a warning; the output won't match.
-- **"GPU host input … is missing"**: put the NVK r9 dylibs in `out/gpu/nvk` and the store in `out/gpu-artifacts`, or set
-  `IOSWITCH_NVK_DIR` / `IOSWITCH_GPU_ARTIFACTS`.
+- **"GPU host input … is missing"**: put the store and QuartzCore's metallib in `out/gpu-artifacts` (or set
+  `IOSWITCH_GPU_ARTIFACTS`); with `--//gpu/nvk:prebuilt`, also the NVK r9 dylibs in `out/gpu/nvk`.
+- **"the pinned outputs in bazel/pinned/nvk were generated from other inputs"**: a patch changed what Mesa's CL
+  kernels (or the ASTC shader) read; regenerate those files with the real tools and update `bazel/pinned/nvk/inputs.txt`.
 - **The link fails with an undefined `ioswitch_*` symbol from XNU code**: the XNU patch is stale. Run
   `bazel run //xnu:patch_export`.
 - **Another Bazel command is running**: one server per checkout. Agents working in the same checkout at the same time

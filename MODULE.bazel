@@ -178,4 +178,15 @@ use_repo(
 # m2v (steelbrain/metal2vulkan at 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's crates.io
 # dependencies (vendored from its Cargo.lock), and the GPU's checked host inputs (bazel/gpu/deps.bzl).
 gpu = use_extension("//bazel/gpu:deps.bzl", "gpu")
-use_repo(gpu, "gpu_host_inputs", "gpu_llvm_as", "m2v", "m2v_crates")
+use_repo(gpu, "gpu_host_inputs", "gpu_llvm_as", "m2v", "m2v_crates", "nvk_prebuilt")
+
+# --- NVK (gpu/nvk): Mesa by commit, built here with meson; its tools pinned (gpu/nvk/repos.bzl) ----------------------
+http_archive(
+    name = "nvk_ninja",
+    build_file_content = 'exports_files(["ninja"], visibility = ["//visibility:public"])',
+    sha256 = "c99048673aa765960a99cf10c6ddb9f1fad506099ff0a0e137ad8960a88f321b",
+    url = "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-mac.zip",
+)
+
+nvk = use_extension("//gpu/nvk:repos.bzl", "nvk")
+use_repo(nvk, "mesa", "mesa_wraps", "nvk_bindgen_src", "nvk_cbindgen_src", "nvk_libclang", "nvk_rust")

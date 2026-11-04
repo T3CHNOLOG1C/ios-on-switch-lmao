@@ -8,9 +8,9 @@
 #
 # Inputs: m2v (@m2v: steelbrain/metal2vulkan 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's
 # crates (@m2v_crates, from drivers/TegraGM20BMetal/bridge/Cargo.lock), Rust 1.98.0 and LLVM 23.1.4's llvm-as
-# (pinned downloads), Xcode (the declared host input), and @gpu_host_inputs: the NVK dylib + host twin (TEMPORARY:
-# built by hand from Mesa 77452b90 + gpu/nvk/*.patch until NVK builds here), QuartzCore's default.metallib and
-# the precompile's library store. See bazel/gpu/deps.bzl.
+# (pinned downloads), Xcode (the declared host input), NVK and its host twin (//gpu/nvk: Mesa 77452b90 + the series,
+# built here; --//gpu/nvk:prebuilt takes the hand-built r9 pair from @gpu_host_inputs instead), and
+# @gpu_host_inputs: QuartzCore's default.metallib and the precompile's library store. See bazel/gpu/deps.bzl.
 load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_bridge", "metal_bundle", "metal_plugin", "metal_raw_pack", "metal_seed", "raw_stack")
 
 package(default_visibility = ["//visibility:public"])
@@ -21,13 +21,13 @@ GM20B_METAL = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal"
 
 GM20B_ABI = "//out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h"
 
-NVK = "@gpu_host_inputs//:nvk/libvulkan_nouveau.dylib"
+NVK = "//gpu/nvk:dylib"
 
-NVK_TWIN = "@gpu_host_inputs//:nvk/libvulkan_nouveau.host.dylib"
+NVK_TWIN = "//gpu/nvk:twin"
 
 NVK_SOURCES = [
-    "@gpu_host_inputs//:nvk/libvulkan_nouveau.dylib.source",
-    "@gpu_host_inputs//:nvk/libvulkan_nouveau.host.dylib.source",
+    "//gpu/nvk:dylib_source",
+    "//gpu/nvk:twin_source",
 ]
 
 # The runtime's AIR fixtures, which the bridge compiles in (include_bytes!).

@@ -1,16 +1,117 @@
-# The NVK dylib and its host twin (//gpu:bundle's pinned host inputs, bazel/gpu/deps.bzl HOST_FILES) are built by hand
-# from Mesa 77452b90 + these patches with build-nvk.sh, in out/gpu/nvk (its work directory: Mesa checkout, meson
-# builds, nvk-out/). Bazel does not build Mesa yet; see bazel/gpu/deps.bzl for what a hermetic NVK needs.
+# NVK, the Vulkan driver //gpu:bundle ships (libvulkan_nouveau.dylib) and its macOS host twin (the seed and raw pack
+# compile shaders with it): Mesa 77452b90 + this directory's patch series, built by meson inside Bazel.
+#
+#   bazel build //gpu/nvk:ios //gpu/nvk:host     bazel-bin/gpu/nvk/{ios,host}/libvulkan_nouveau.dylib (+ .source)
+#
+# Hermetic but for Xcode (clang, ld, the SDKs; the repository's one host input): Mesa by commit, Rust 1.96.1,
+# bindgen 0.73.2 and cbindgen 0.29.4 (built here), libclang 23.1.4, meson 1.12.1 + mako (rules_python), ninja 1.13.2,
+# the meson wrap crates. mesa_clc, vtn_bindgen2 and glslangValidator are not built: their outputs for this tree are
+# pinned (bazel/pinned/nvk, with every input they were generated from), see build_nvk.py.
+#
+# A new NVK revision: add its patch to PATCHES, set GIT_SHA1 (the version string's commit), build, and pin the new
+# dylib's sha256 in EXPECT (or leave it empty while iterating).
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load(":defs.bzl", "cargo_tool", "nvk_dylib")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(glob(["*.patch"]) + ["build-nvk.sh"])
+# The series, in order (r9).
+PATCHES = [
+    "nvk-darwin.patch",
+    "nvk-0002-cmd-mem-written-range.patch",
+    "nvk-linear-color-attachments.patch",
+    "nvk-0003-linear-color-attachment-rule.patch",
+    "nvk-0004-sandbox-safe-darwin.patch",
+    "nvk-0005-join-copy-regions.patch",
+]
 
-# Relinks an NVK darwin dylib so the entrypoint tables' absent weak references are absolute symbols at 0:
-#   bazel run //gpu/nvk:relink -- <meson build dir> [<target>]
+# r9: the version string's commit (the hand build's checkout HEAD) and the patched tree's git id (its .source).
+#
+# Against the hand-built r9 dylib (sha256 276260dc…, in out/gpu/nvk): every section and every symbol is identical.
+# `strip -S` of both leaves 15426480 bytes that differ only in LC_UUID. The difference is the linker's debug map: r9's
+# names the hand build's directory (/Users/…/out/agent-scratch/r8-webgpu/nvk-ios-build/…libnvk_rs.a), and ld derives
+# LC_UUID from it; this build writes it relative (-oso_prefix), so it is the same wherever the action runs. The host
+# twin matches the same way but for five imports: r9's twin was linked against Homebrew's SPIRV-Tools (found by
+# pkg-config; SPIR-V disassembly for debug output only), which a hermetic build does not have.
+GIT_SHA1 = "b3bc5a04b3"
+
+EXPECT = {
+    "tree": "628ef7bfa7f9c3281f05d0898ef5cd4e2c66d933",
+    "ios": "41b12aab500543ef3e027a9bf2c8ca28becdb178dec54562e633f67a0112659f",
+    "macos": "b2dcbf3ed01bdc3b991ae06d51caebe6cb0f416cdf5b0eca03befce0c920afd3",
+}
+
+# Panic locations in the Rust standard library, as r9's rustup toolchain (with rust-src) spelled them.
+RUST_SRC_PREFIX = "/Users/brunostjohn/.rustup/toolchains/stable-aarch64-apple-darwin"
+
+[nvk_dylib(
+    name = name,
+    abi_header = "//out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h",
+    expect_sha256 = EXPECT.get(platform, ""),
+    expect_tree = EXPECT.get("tree", ""),
+    git_sha1 = GIT_SHA1,
+    patches = PATCHES,
+    platform = platform,
+    rust_src_prefix = RUST_SRC_PREFIX,
+) for name, platform in (("ios", "ios"), ("host", "macos"))]
+
+# What //gpu:bundle takes: the dylibs built here, or (--//gpu/nvk:prebuilt) the hand-built r9 pair, sha-checked
+# host inputs in out/gpu/nvk (@nvk_prebuilt, bazel/gpu/deps.bzl NVK_PREBUILT).
+bool_flag(
+    name = "prebuilt",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "use_prebuilt",
+    flag_values = {":prebuilt": "true"},
+)
+
+[filegroup(
+    name = "{}_{}".format(name, group),
+    srcs = [":" + name],
+    output_group = group,
+) for name in ("ios", "host") for group in ("dylib", "source")]
+
+[alias(
+    name = name,
+    actual = select({
+        ":use_prebuilt": "@nvk_prebuilt//:nvk/" + prebuilt,
+        "//conditions:default": built,
+    }),
+) for name, built, prebuilt in (
+    ("dylib", ":ios_dylib", "libvulkan_nouveau.dylib"),
+    ("dylib_source", ":ios_source", "libvulkan_nouveau.dylib.source"),
+    ("twin", ":host_dylib", "libvulkan_nouveau.host.dylib"),
+    ("twin_source", ":host_source", "libvulkan_nouveau.host.dylib.source"),
+)]
+
+exports_files(glob(["*.patch"]))
+
+py_binary(
+    name = "build_nvk",
+    srcs = ["build_nvk.py"],
+)
+
+# Relinks an NVK darwin dylib so the entrypoint tables' absent weak references are absolute symbols at 0 (build_nvk
+# runs it; `bazel run //gpu/nvk:relink -- <meson build dir> [<target>]` by hand).
 py_binary(
     name = "relink",
     srcs = ["relink-nvk.py"],
     main = "relink-nvk.py",
+)
+
+cargo_tool(
+    name = "bindgen",
+    srcs = "@nvk_bindgen_src//:all",
+    bin = "bindgen",
+    manifest = "@nvk_bindgen_src//:src/Cargo.toml",
+)
+
+cargo_tool(
+    name = "cbindgen",
+    srcs = "@nvk_cbindgen_src//:all",
+    bin = "cbindgen",
+    manifest = "@nvk_cbindgen_src//:src/Cargo.toml",
 )
