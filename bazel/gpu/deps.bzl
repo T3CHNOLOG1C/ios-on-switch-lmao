@@ -18,7 +18,8 @@
 NVK is not built here yet. What a hermetic NVK needs, beyond what this file already pins (Rust 1.98, Xcode, LLVM
 23.1.4's release archive): Mesa 77452b9092cc44d76d92180a12d3aaaf27a98382 (gitlab.freedesktop.org/mesa/mesa; a
 git_repository by commit, GitLab's archives are not byte-stable) + out/gpu/nvk/{nvk-darwin, nvk-0002-cmd-mem-written-
-range, nvk-linear-color-attachments, nvk-0003-linear-color-attachment-rule, nvk-0004-sandbox-safe-darwin}.patch in that order; meson + ninja + mako
+range, nvk-linear-color-attachments, nvk-0003-linear-color-attachment-rule, nvk-0004-sandbox-safe-darwin, nvk-0005-join-copy-regions}.patch in
+that order, then out/gpu/nvk/relink-nvk.py; meson + ninja + mako
 + pyyaml + packaging + markupsafe from pinned wheels; bindgen and cbindgen (cargo, vendored); Mesa's meson wraps
 (crates paste, syn, quote, proc-macro2, unicode-ident, rustc-hash); and for the two build-time tools a cross build
 runs (mesa_clc, vtn_bindgen2) a native Mesa build against LLVM + clang libraries (the release archive has them, ~10k
@@ -39,11 +40,12 @@ M2V = {
 # Host inputs: file name in the repository -> (environment variable naming the directory, default below the
 # workspace, file name there, sha256). Directories: (variable, default, name, tree digest of tree_digest.py).
 HOST_FILES = {
-    # NVK r8: Mesa 77452b90 + nvk-darwin, nvk-0002, nvk-linear-color-attachments, nvk-0003, nvk-0004-sandbox-safe-darwin.
-    "nvk/libvulkan_nouveau.dylib": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r8.dylib", "64b5f5f298f0b8af9490b6572d3648db12d49b03eb28dc118bf2ebb376625934"),
-    "nvk/libvulkan_nouveau.dylib.source": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r8.dylib.source", "9eb8f6d3c6ffeb79991bc8843d0611f9d825c660b9888d678fc2ce5790fadcde"),
-    "nvk/libvulkan_nouveau.host.dylib": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r8.host.dylib", "450aae9dddf466db1f1632322043e0f3bc574dae6d7d9e83dcbd8ac68804ce09"),
-    "nvk/libvulkan_nouveau.host.dylib.source": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r8.host.dylib.source", "9eb8f6d3c6ffeb79991bc8843d0611f9d825c660b9888d678fc2ce5790fadcde"),
+    # NVK r9 (out/gpu/nvk/build-nvk.sh): Mesa 77452b90 + nvk-darwin, nvk-0002, nvk-linear-color-attachments, nvk-0003,
+    # nvk-0004-sandbox-safe-darwin, nvk-0005-join-copy-regions, then relink-nvk.py (absent entry points absolute at 0).
+    "nvk/libvulkan_nouveau.dylib": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.dylib", "276260dc81da7c40edd8cf7b95f796d41cc4eb84344bddcf78bae8f1d2876a58"),
+    "nvk/libvulkan_nouveau.dylib.source": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.dylib.source", "5e5a48d11e3b141e8b59697fef1c9a82bc50ebb4487b00d0f55a0b6cb64930c2"),
+    "nvk/libvulkan_nouveau.host.dylib": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.host.dylib", "de205f8f0779ddc583f5e7f25c8d8235497d395c2e142e10fd7509c20c6d34da"),
+    "nvk/libvulkan_nouveau.host.dylib.source": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.host.dylib.source", "5e5a48d11e3b141e8b59697fef1c9a82bc50ebb4487b00d0f55a0b6cb64930c2"),
     "QuartzCore-21H461.default.metallib": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "QuartzCore-21H461.default.metallib", "606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9"),
 }
 HOST_DIRS = {
