@@ -21,11 +21,13 @@ int switch_thermal_start(void);
 // I2C5 traffic has the bus to itself; nothing otherwise. Thread context; waits for the thermal work loop.
 void switch_thermal_cpu_quiesce(void);
 
-// PMIC services (SwitchPMIC.cpp): logs the CPU/EMC clock line, publishes the MAX77620 RTC as the "IORTC" resource,
-// installs PE_halt_restart (Shut Down / Restart), sets the EMC clock through the BPMP firmware (drivers/TegraBPMP)
-// and logs the clock line again, then starts the thermal service. Called once by XNU's IOKitInitializeTime() on the
-// bsd_init thread, before the calendar is read; sleeps on I2C5 and BPMP answers and, the first time, until the GIC
-// is up. Returns 0, or -1 when the MAX77620 does not answer (no RTC or power-off then; the rest still runs).
+// PMIC services (SwitchPMIC.cpp): logs the CPU/EMC clock line, turns on the Wi-Fi/Bluetooth module's 32 kHz sleep
+// clock (MAX77620 GPIO4 as 32K_OUT1 and the 32K output enable, as L4T does; Bluetooth needs it), publishes the
+// MAX77620 RTC as the "IORTC" resource, installs PE_halt_restart (Shut Down / Restart), sets the EMC clock through the
+// BPMP firmware (drivers/TegraBPMP) and logs the clock line again, then starts the thermal service. Called once by
+// XNU's IOKitInitializeTime() on the bsd_init thread, before the calendar is read; sleeps on I2C5 and BPMP answers
+// and, the first time, until the GIC is up. Returns 0, or -1 when the MAX77620 does not answer (no RTC or power-off
+// then; the rest still runs).
 int switch_pmic_start(void);
 
 // System sleep hooks (drivers/SwitchSuspend), thread context with I2C up; no-ops when the service did not start.

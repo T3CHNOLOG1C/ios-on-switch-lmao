@@ -53,12 +53,23 @@
 // Panics keep their screen: PE_halt_restart is also handed the panic callouts and, from halt_all_cpus(TRUE) at the
 // end of a panic, kPERestartCPU; with a panic in progress it returns -1 and XNU spins with the panic on the display,
 // as it did with PE_halt_restart unset (IOSwitchPanicSave.c's ioswitch-panic-reboot decides about a reset there).
+//
+// The Wi-Fi/Bluetooth module's 32.768 kHz sleep clock (the BCM4356's LPO) comes from the MAX77620, set as L4T sets it
+// when the PMIC is probed (switchroot tegra210b01-nx-pmic.dtsi): GPIO4 in its alternate function 32K_OUT1 (pin_gpio4
+// function "32k-out1"; Linux pinctrl-max77620.c sets AME_GPIO 0x40 bit 4) and the 32 kHz output enabled
+// (maxim,enable-clock32k-out: CNFG1_32K 0x03 OUT0_EN, bit 2). Neither hekate nor switchroot U-Boot sets either, and
+// the soft reset above puts the PMIC back to its OTP defaults, GPIO4 a plain GPIO. Before r7a XNU's halt never
+// reached the soft reset, so the PMIC kept what Horizon or L4T had set. Without the clock (r7h, every boot after an
+// r7a+ power-off) the Bluetooth ROM answers HCI Reset and Read Local Version, acknowledges the 3 Mbaud switch (0xFC18)
+// and is never heard from again; Wi-Fi gets by on the module's internal oscillator. switch_pmic_start() sets both,
+// before the board thread brings up Wi-Fi and Bluetooth.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/rtc/IORTCController.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <kern/clock.h>
+#include <os/log.h>
 #include <pexpert/pexpert.h>
 #include "../SwitchBrightness/TegraPanel.h"
 #include "../TegraBPMP/TegraBPMP.h"
@@ -76,6 +87,9 @@ constexpr uint8_t kPmic = 0x3c, kRtc = 0x68;
 enum : uint8_t { IRQTOP = 0x05, ONOFFIRQ = 0x0b, ONOFFCNFG1 = 0x41, ONOFFCNFG2 = 0x42 };
 constexpr uint8_t kSoftReset = 1u << 7;                                                      // ONOFFCNFG1 SFT_RST
 constexpr uint8_t kWakeOnSoftReset = 1u << 7, kWakeAlarm1 = 1u << 2, kWakeAlarm2 = 1u << 1;  // ONOFFCNFG2
+// The module's 32 kHz clock (top of file; hekate bdk/power/max77620.h, Linux pinctrl-max77620.c).
+enum : uint8_t { CNFG1_32K = 0x03, AME_GPIO = 0x40 };
+constexpr uint8_t k32kOut0Enable = 1u << 2, kGpio4Alternate = 1u << 4;  // CNFG1_32K OUT0_EN; AME_GPIO GPIO4 32K_OUT1
 
 enum : uint8_t { RTC_CONTROLM = 0x02, RTC_CONTROL = 0x03, RTC_UPDATE0 = 0x04, RTC_SEC = 0x07 };
 // Sleep wake alarm (Linux rtc-max77686.c, hekate max77620-rtc.h): RTCINT 0x00 (clear on read) / RTCINTM 0x01, bit 1 =
@@ -101,6 +115,25 @@ int readByte(uint8_t addr, uint8_t reg, uint8_t *value)
 int writeByte(uint8_t addr, uint8_t reg, uint8_t value)
 {
     return tegra_i2c_write(kBus, addr, reg, &value, 1);
+}
+
+// The Wi-Fi/Bluetooth module's 32 kHz clock on, as L4T has it (top of file); read-modify-write, other bits kept.
+// One line to the log (not the console) when it was off, which is every boot after a PMIC power-off.
+int moduleClockOn()
+{
+    uint8_t cnfg = 0, ame = 0;
+    int err = readByte(kPmic, CNFG1_32K, &cnfg);
+    if (!err) err = readByte(kPmic, AME_GPIO, &ame);
+    if (err) return err;
+    const uint8_t cnfgOn = cnfg | k32kOut0Enable, ameOn = ame | kGpio4Alternate;
+    if (cnfgOn != cnfg) err = writeByte(kPmic, CNFG1_32K, cnfgOn);
+    if (!err && ameOn != ame) err = writeByte(kPmic, AME_GPIO, ameOn);
+    if (!err && (cnfgOn != cnfg || ameOn != ame)) {
+        os_log(OS_LOG_DEFAULT,
+               "SwitchPMIC: Wi-Fi/Bluetooth 32 kHz clock on (CNFG1_32K %#04x -> %#04x, AME_GPIO %#04x -> %#04x)", cnfg,
+               cnfgOn, ame, ameOn);
+    }
+    return err;
 }
 
 // Days since 1970-01-01 of a proleptic Gregorian date, and back (H. Hinnant's days_from_civil / civil_from_days).
@@ -593,6 +626,9 @@ extern "C" int switch_pmic_start(void)
     if (err) {
         IOLog("SwitchPMIC: MAX77620 not answering on I2C5 (%d): no RTC, no power-off\n", err);
     } else {
+        if (const int clockErr = moduleClockOn()) {
+            IOLog("SwitchPMIC: Wi-Fi/Bluetooth 32 kHz clock not set (%d): Bluetooth will not come up\n", clockErr);
+        }
         if (rtcMode) gRTC = publishRTC(rtcMode);
         if (powerOff) {
             gPmc = (volatile uint32_t *)ml_io_map(kPmcPA, 0x1000);

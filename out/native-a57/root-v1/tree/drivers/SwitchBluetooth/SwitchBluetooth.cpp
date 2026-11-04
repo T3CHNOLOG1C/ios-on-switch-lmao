@@ -35,7 +35,8 @@
 // for 50 ms more is a lost interrupt and panics with one line.
 // The filter never leaves a condition it cannot clear asserted: a line held low (a core that is not driving its TX,
 // so breaks), a stuck BI/FIFOE that comes straight back after the FIFO reset, an IIR condition that survives
-// kFilterRounds, or a line that re-fires with IIR showing nothing (kIdleStorm) masks RX (maskRxFaultLocked) until the
+// kFilterRounds, or a line that re-fires with IIR showing nothing (kIdleStorm; first cleared as serial-tegra clears
+// latched interrupts, clearInterruptsLocked, and masked if it comes back) masks RX (maskRxFaultLocked) until the
 // next flush (every bring-up step, every connect) or send (kickTx). Before r8 such a line re-fired the moment the
 // filter returned, pinned CPU0 and froze the thread there for good, often holding the work-loop gate: stackshots
 // stacks-2026-11-04-045010 (r6k) and -055657 (r7a, "BT Stack Stuck") show bluetoothd's connect 30 s on-core in
@@ -274,6 +275,8 @@ class SwitchBluetooth : public IOService {
     uint32_t rxFaults = 0;                // times RX was masked for a fault
     uint32_t idleRun = 0;                 // idle interrupts in a row (hwLock), the first at idleSince
     uint64_t idleSince = 0, idleStormAbs = 0;
+    bool stormCleared = false;       // a storm got clearInterruptsLocked; the next one masks (hwLock)
+    const char *lastFault = "none";  // what the last RX fault was, for describe() and a failed bring-up
 
     // Kernel HCI (bring-up), under hciLock.
     H4Parser h4 = {};
@@ -327,8 +330,9 @@ class SwitchBluetooth : public IOService {
         setPin(PH4, GPIO_OUT, on);
     }
     void resetRxFifoLocked();
-    void maskRxFaultLocked();
-    bool rxFaultEventLocked();
+    void maskRxFaultLocked(const char *what);
+    bool rxFaultEventLocked(const char *what);
+    void clearInterruptsLocked();
     void setupUart();
     void setBaudLocked(uint32_t rate);
     void setHostBaud(uint32_t rate);
@@ -543,12 +547,20 @@ void SwitchBluetooth::setBaudLocked(uint32_t rate)
     baud = rate;
 }
 
+// As serial-tegra's tegra_uart_set_termios: latched interrupts cleared and IER 0 while the clock and divisor change and
+// for the two characters at the new rate that tegra_set_baudrate waits, then IER back. r7h's storms (kIdleStorm idle
+// interrupts once per attempt, around the 3 Mbaud switch) most likely began at a rate change under live RX interrupts.
 void SwitchBluetooth::setHostBaud(uint32_t rate)
 {
-    const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
+    IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
+    clearInterruptsLocked();
+    w32(uart, IER, 0);
     setBaudLocked(rate);
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
-    IODelay(2 * 10 * 1000000 / rate + 20);  // two characters at the new rate (serial-tegra tegra_set_baudrate)
+    IODelay(2 * 10 * 1000000 / rate + 20);
+    s = IOSimpleLockLockDisableInterrupt(hwLock);
+    w32(uart, IER, ier);
+    IOSimpleLockUnlockEnableInterrupt(hwLock, s);
 }
 
 // ---- Interrupt path ----------------------------------------------------------------------------------------------
@@ -590,7 +602,7 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
     if (!done) {
         // kFilterRounds conditions and IIR still reports one. All but THRE and modem status (both cleared above) are
         // receive conditions, so RX goes off; anything left after that takes every source with it.
-        self->maskRxFaultLocked();
+        self->maskRxFaultLocked("an IIR condition no read clears");
         if (!(r32(self->uart, IIR) & IIR_NO_INT)) {
             self->ier = 0;
             w32(self->uart, IER, 0);
@@ -605,8 +617,11 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
         if (!self->idleRun++) self->idleSince = now;
         if (self->idleRun >= kIdleStorm) {
             if (now - self->idleSince < self->idleStormAbs) {
-                if (!self->rxFault) {
-                    self->maskRxFaultLocked();
+                if (!self->stormCleared) {  // serial-tegra's way to drop latched interrupts first
+                    self->clearInterruptsLocked();
+                    self->stormCleared = true;
+                } else if (!self->rxFault) {
+                    self->maskRxFaultLocked("an interrupt storm with IIR clear");
                 } else {
                     self->ier = 0;
                     w32(self->uart, IER, 0);
@@ -616,6 +631,7 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
         }
     } else {
         self->idleRun = 0;
+        self->stormCleared = false;
     }
     work |= self->rxFaults != faultsBefore;  // the work loop runs once more; RX comes back at a flush or a send
     IOSimpleLockUnlock(self->hwLock);
@@ -650,7 +666,7 @@ bool SwitchBluetooth::drainRx(uint32_t &budget, bool stallWhenSpent)
         --budget;
         any = true;
         if (lsr & LSR_BI) {  // the line was low for a whole character: nothing drives it
-            if (rxFaultEventLocked()) break;
+            if (rxFaultEventLocked("the line held low (break)")) break;
         } else if (!(lsr & LSR_ERRORS)) {
             rxFaultRun = 0;  // a good byte: what came before was a glitch
         }
@@ -658,7 +674,7 @@ bool SwitchBluetooth::drainRx(uint32_t &budget, bool stallWhenSpent)
     // T210 (serial-tegra tegra_uart_decode_rx_error): a break, or an errored character, can leave BI or FIFOE set with
     // the FIFO empty, and the line-status interrupt then stays asserted until the RX FIFO is reset. Reset once; the
     // same again with no good byte in between is the line itself (held low), and masks RX instead.
-    if (!rxFault && !(lsr & LSR_DR) && (lsr & (LSR_BI | LSR_FIFOE)) && !rxFaultEventLocked()) {
+    if (!rxFault && !(lsr & LSR_DR) && (lsr & (LSR_BI | LSR_FIFOE)) && !rxFaultEventLocked("a stuck BI/FIFOE")) {
         resetRxFifoLocked();
         ++rxResets;
     }
@@ -668,10 +684,10 @@ bool SwitchBluetooth::drainRx(uint32_t &budget, bool stallWhenSpent)
 }
 
 // hwLock held. One break or stuck-error event; true when it masked RX: kFaultRun of them with no good byte between.
-bool SwitchBluetooth::rxFaultEventLocked()
+bool SwitchBluetooth::rxFaultEventLocked(const char *what)
 {
     if (++rxFaultRun < kFaultRun) return false;
-    maskRxFaultLocked();
+    maskRxFaultLocked(what);
     return true;
 }
 
@@ -681,13 +697,25 @@ bool SwitchBluetooth::rxFaultEventLocked()
 // ran there: a flush or the work loop thread, either holding the work-loop gate, so every later runAction (bring-up,
 // connect) waits for good. RX stays off until the next flush (every bring-up step, every connect) or send (kickTx);
 // ctlConnect brings the chip up again if it faulted since. checkDelivery sees RX disabled: no lost interrupt.
-void SwitchBluetooth::maskRxFaultLocked()
+void SwitchBluetooth::maskRxFaultLocked(const char *what)
 {
     ier &= ~IER_RX;
     w32(uart, IER, ier);
     if (!rxFault) ++rxFaults;
     rxFault = true;
     rxFaultRun = 0;
+    lastFault = what;
+}
+
+// hwLock held. serial-tegra's tegra_uart_set_termios before it changes the configuration: "Clear all interrupts" by
+// writing IER with RDI set, then 0, reading each back; IER as it was afterwards.
+void SwitchBluetooth::clearInterruptsLocked()
+{
+    w32(uart, IER, ier | IER_RDI);
+    (void)r32(uart, IER);
+    w32(uart, IER, 0);
+    (void)r32(uart, IER);
+    w32(uart, IER, ier);
 }
 
 // hwLock held. Tops the TX FIFO up from the ring; THRI stays enabled while the ring has bytes.
@@ -718,6 +746,7 @@ void SwitchBluetooth::kickTx()
         want |= IER_RX;
         rxFault = false;
         rxFaultRun = 0;
+        stormCleared = false;
     }
     if (want != ier) {
         ier = want;
@@ -829,14 +858,15 @@ void SwitchBluetooth::describe(char *buffer, size_t size)
     auto mux = [this](uint32_t o) { return r32(pinmux, o) & PM_LOW; };
     snprintf(buffer, size,
              "lsr %#x msr %#x (cts %u) ier %#x mcr %#x lcr %#x baud %u; rx %u tx %u queued %u irqs %u (idle %u) "
-             "errors %u rx-resets %u rx-faults %u%s dropped %u resyncs %u hw-errors %u; gpio H cnf/oe/out/in "
+             "errors %u rx-resets %u rx-faults %u (last %s)%s dropped %u resyncs %u hw-errors %u; gpio H cnf/oe/out/in "
              "%02x/%02x/%02x/%02x; pinmux %x/%x/%x/%x %x/%x/%x; car clk %u rst %u src %#x; %s",
              r32(uart, LSR), r32(uart, MSR), !!(r32(uart, MSR) & MSR_CTS), ier, r32(uart, MCR), r32(uart, LCR), baud,
-             rxBytes, txBytes, tx.used(), irqs, idleIrqs, lineErrors, rxResets, rxFaults, rxFault ? " (RX off)" : "",
-             dropped, resyncs, hardwareErrors, r32(gpio, port + GPIO_CNF) & 0xff, r32(gpio, port + GPIO_OE) & 0xff,
-             r32(gpio, port + GPIO_OUT) & 0xff, r32(gpio, port + GPIO_IN) & 0xff, mux(0x114), mux(0x118), mux(0x11c),
-             mux(0x120), mux(0x1c0), mux(0x1c4), mux(0x1c8), !!(r32(car, CLK_OUT_ENB_U) & kUartDBit),
-             !!(r32(car, RST_DEVICES_U) & kUartDBit), r32(car, CLK_SOURCE_UARTD), gic);
+             rxBytes, txBytes, tx.used(), irqs, idleIrqs, lineErrors, rxResets, rxFaults, lastFault,
+             rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors, r32(gpio, port + GPIO_CNF) & 0xff,
+             r32(gpio, port + GPIO_OE) & 0xff, r32(gpio, port + GPIO_OUT) & 0xff, r32(gpio, port + GPIO_IN) & 0xff,
+             mux(0x114), mux(0x118), mux(0x11c), mux(0x120), mux(0x1c0), mux(0x1c4), mux(0x1c8),
+             !!(r32(car, CLK_OUT_ENB_U) & kUartDBit), !!(r32(car, RST_DEVICES_U) & kUartDBit),
+             r32(car, CLK_SOURCE_UARTD), gic);
 }
 
 // Every wait in a bring-up or a connect is bounded, so one that is still running after kStuckMs has stopped for a
@@ -1068,7 +1098,8 @@ bool SwitchBluetooth::bringUp(uint32_t offMs, char *why, size_t whySize)
     }
     {
         const uint16_t romSubversion = le16(v + 7);
-        if (baud != kFastBaud) (void)fast();
+        // A failed switch leaves the host at 115200 for the download; the chip may have switched all the same.
+        const bool fastOk = baud == kFastBaud || fast();
 
         // Patch RAM: the minidriver, then the file's own records, the last launching it (btbcm_patchram).
         uint32_t records = 0;
@@ -1076,7 +1107,8 @@ bool SwitchBluetooth::bringUp(uint32_t offMs, char *why, size_t whySize)
             const uint8_t *p = static_cast<const uint8_t *>(patch->getBytesNoCopy());
             const uint32_t size = patch->getLength();
             if ((error = command(OP_BCM_MINIDRIVER, nullptr, 0, kRecordMs))) {
-                snprintf(why, whySize, "download minidriver failed (error %d)", error);
+                snprintf(why, whySize, "download minidriver failed (error %d)%s", error,
+                         fastOk ? "" : " after the 3 Mbaud switch failed");
                 goto fail;
             }
             IOSleep(kMinidriverMs);
@@ -1147,8 +1179,12 @@ bool SwitchBluetooth::bringUp(uint32_t offMs, char *why, size_t whySize)
         return true;
     }
 fail:
-    // RX masked for a fault during the attempt: the line was held low, so the core was not driving its TX.
-    if (rxFaults != faultsBefore) strlcat(why, ", RX held low (core not driving TX)", whySize);
+    // RX masked for a fault during the attempt: which one (r7h said "the line held low" for what was a storm).
+    if (rxFaults != faultsBefore) {
+        char masked[80];
+        snprintf(masked, sizeof(masked), ", RX masked for %s", lastFault);
+        strlcat(why, masked, whySize);
+    }
     setMode(kIdle);
     power(false);
     unwatch();
@@ -1171,6 +1207,7 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
         self->rxStalled = false;
         self->rxFault = false;
         self->rxFaultRun = 0;
+        self->stormCleared = false;
         uint32_t ier = self->chipOn ? self->ier | IER_RX : self->ier & ~IER_RX;
         if (self->tx.used()) ier |= IER_THRI;  // a fault that took every source left bytes queued
         if (ier != self->ier) {
@@ -1214,8 +1251,8 @@ void SwitchBluetooth::setMode(Mode m)
 // ---- Kernel control ----------------------------------------------------------------------------------------------
 
 // Waits for the first bring-up, brings the chip up again if the last client used it, the last attempt failed or the
-// line faulted since (maskRxFaultLocked: the core stopped driving it), then hands the stream over with nothing stale
-// in it. One client at a time.
+// line faulted since (maskRxFaultLocked: the core stopped driving it or the UART wedged), then hands the stream over
+// with nothing stale in it. One client at a time.
 errno_t SwitchBluetooth::ctlConnect(kern_ctl_ref, struct sockaddr_ctl *sac, void **unitinfo)
 {
     SwitchBluetooth *self = gDriver;
@@ -1350,7 +1387,7 @@ void SwitchBluetooth::ctlRcvd(kern_ctl_ref, u_int32_t, void *, int)
 // Kernel thread: the control first (so a client's CTLIOCGINFO finds it and its connect waits), then the first
 // bring-up, power cycled and tried again after 1, 2, 4 and 8 s when it fails. nxk retries a Hardware Error so
 // (Erista's first bring-up after a cold boot gets one for seconds); a core that does not drive its TX at all after a
-// cold power-on (RX held low, maskRxFaultLocked) or does not answer is retried the same way. Only a failure takes
+// cold power-on (RX held low, maskRxFaultLocked) or stops answering is retried the same way. Only a failure takes
 // longer.
 void SwitchBluetooth::run()
 {
