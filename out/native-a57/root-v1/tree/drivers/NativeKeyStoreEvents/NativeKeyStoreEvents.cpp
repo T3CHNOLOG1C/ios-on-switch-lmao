@@ -14,7 +14,8 @@
 //            check answers e00002bc, which securityd turns into "can't be decrypted on this device, ever"
 //   14       aks_get_system                         out [system keybag handle 0] (keybagd then needs no systembag.kb)
 //   17, 35   aks_get_(extended_)device_state        struct out: DER SET{ SEQUENCE{ UTF8String key, INTEGER value } ... }
-//            keys ss sls sb sfa sgs sas sgpe srcd sms bh; ss = 4, sls = lock state (sheng-aks-sls, 3 = MobileKeyBag's "no passcode")
+//            keys ss sls sb sfa sgs sas sgpe srcd sms bh; ss = 4, sls = lock state: 3 = MobileKeyBag's "no passcode" (default;
+//            lockdownd and SpringBoard read "has passcode" as sls != 3), sheng-aks-sls=<n> overrides (KeyStoreProbe.cpp)
 //   23       aks_get_bag_uuid(bag)                  in [bag]; struct out 16-byte UUID, stable per keybag on this console
 //   31, 139  aks_get_configuration / aks_memento_get_state: e00002f0 not found (no configuration, no recovery passcode), which
 //            MobileKeyBag maps instead of logging "Unexpected AppleKeyStore error"
