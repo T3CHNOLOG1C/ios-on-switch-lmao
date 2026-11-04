@@ -48,7 +48,7 @@ PORTRAIT_HEADER = WORK / 'tree/drivers/NativeMobileDisplay/IOSwitchPortrait.h'
 USB_DEVICE_CONFIGURATION = 'unknownHardware'
 # USB 2.0 host mode on the same port (drivers/SwitchUSB SwitchXHCI): a keyboard, mouse or flash drive through a USB-C OTG
 # adapter or an unpowered hub. True writes /arm-io/usb-xhci, the driver's switch; the role then follows the BM92T36.
-USB_HOST = False
+USB_HOST = True
 COMMAND_LINE = ' '.join([
     '-v', 'serial=0', 'debug=0x14e', 'kt_fixed_zones=120', 'cpus=1', 'armcpu-self-ipi=1',
     'ioswitch-diag=1', 'sheng-pmgr=2', '-no_slto_panic',
