@@ -197,6 +197,18 @@ static void cluster_syncup(vnode_t vp, off_t newEOF, int (*)(buf_t, void *), voi
 
 static void cluster_read_upl_release(upl_t upl, int start_pg, int last_pg, int take_reference);
 static inline bool ioswitch_cluster_is_image(vnode_t vp);
+static inline bool ioswitch_cluster_verified_mount(mount_t mp);
+/* IOSwitch boot prefetch (r8-sdboot): while it runs, the foreground's reads of the System image and those that went to
+ * the card (cluster_io: misses plus their read-ahead), for its one summary line (IOSwitchCryptex.cpp). */
+static thread_t ioswitch_prefetch_thread;
+static vnode_t ioswitch_prefetch_vp;
+static uint64_t ioswitch_image_reads, ioswitch_image_ios;
+static inline bool
+ioswitch_prefetch_foreground(vnode_t vp)
+{
+	return os_atomic_load(&ioswitch_prefetch_thread, acquire) != THREAD_NULL && vp == ioswitch_prefetch_vp &&
+	       current_thread() != ioswitch_prefetch_thread;
+}
 static int cluster_copy_ubc_data_internal(vnode_t vp, struct uio *uio, int *io_resid, int mark_dirty, int take_reference);
 
 static int cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t filesize, int flags,
@@ -1270,6 +1282,11 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 	}
 	upl_end_offset = upl_offset + size;
 
+	/* IOSwitch boot prefetch: the foreground's reads of the System image that still go to the card. */
+	if ((flags & CL_READ) && ioswitch_prefetch_foreground(vp)) {
+		os_atomic_inc(&ioswitch_image_ios, relaxed);
+	}
+
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 22)) | DBG_FUNC_START, (int)f_offset, size, upl_offset, flags, 0);
 
 	/*
@@ -1289,7 +1306,7 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 		max_vectors = mp->mnt_segreadcnt;
 
 		if ((flags & CL_PAGEIN) && /* Cluster layer verification will be limited to pagein for now */
-		    !(mp->mnt_kern_flag & MNTK_VIRTUALDEV) &&
+		    (!(mp->mnt_kern_flag & MNTK_VIRTUALDEV) || ioswitch_cluster_verified_mount(mp)) &&
 		    (VNOP_VERIFY(vp, f_offset, NULL, 0, &verify_block_size, NULL, VNODE_VERIFY_DEFAULT, NULL) == 0) &&
 		    verify_block_size) {
 			if (verify_block_size != PAGE_SIZE) {
@@ -4016,6 +4033,59 @@ ioswitch_cluster_is_image(vnode_t vp)
 	return false;
 }
 
+/*
+ * IOSwitch (r8-sdboot) experiment, off unless IOSWITCH_CRYPTEX_CLUSTER_VERIFY is 1: let the cluster layer verify
+ * page-ins on the two cryptex mounts (IOSwitchRawMount.inc registers them) although they sit on DiskImages devices
+ * (MNTK_VIRTUALDEV), as it does on any other volume. On 11-04 the System cryptex paged the dyld shared cache in one
+ * 4 KiB block at a time as B_META reads, ~230K per boot, 96 % of them its subcaches' data: likely APFS's own per-block
+ * verification fallback, which a virtual device gets. The same VNOP_VERIFY hash check runs either way (cluster_EOT
+ * allocates the context when the I/O is issued, cluster_iodone verifies), so nothing is loosened. Kept off by default:
+ * XNU excludes disk images on purpose, and the completion (with VNOP_VERIFY) runs on DiskImages' I/O thread.
+ */
+#ifndef IOSWITCH_CRYPTEX_CLUSTER_VERIFY
+#define IOSWITCH_CRYPTEX_CLUSTER_VERIFY 0
+#endif
+static mount_t ioswitch_verified_mounts[2];
+
+void ioswitch_cluster_register_verified_mount(mount_t mp);
+void
+ioswitch_cluster_register_verified_mount(mount_t mp)
+{
+	for (unsigned i = 0; i < 2; i++) {
+		if (os_atomic_load(&ioswitch_verified_mounts[i], relaxed) == NULL) {
+			os_atomic_store(&ioswitch_verified_mounts[i], mp, release);
+			return;
+		}
+	}
+}
+
+static inline bool
+ioswitch_cluster_verified_mount(mount_t mp)
+{
+	return IOSWITCH_CRYPTEX_CLUSTER_VERIFY && mp &&
+	       (os_atomic_load(&ioswitch_verified_mounts[0], acquire) == mp ||
+	       os_atomic_load(&ioswitch_verified_mounts[1], acquire) == mp);
+}
+
+void ioswitch_cluster_prefetch_begin(vnode_t vp, thread_t thread);
+void
+ioswitch_cluster_prefetch_begin(vnode_t vp, thread_t thread)
+{
+	ioswitch_prefetch_vp = vp;
+	os_atomic_store(&ioswitch_image_reads, 0, relaxed);
+	os_atomic_store(&ioswitch_image_ios, 0, relaxed);
+	os_atomic_store(&ioswitch_prefetch_thread, thread, release);
+}
+
+void ioswitch_cluster_prefetch_end(uint64_t *reads, uint64_t *ios);
+void
+ioswitch_cluster_prefetch_end(uint64_t *reads, uint64_t *ios)
+{
+	os_atomic_store(&ioswitch_prefetch_thread, THREAD_NULL, release);
+	*reads = os_atomic_load(&ioswitch_image_reads, relaxed);
+	*ios = os_atomic_load(&ioswitch_image_ios, relaxed);
+}
+
 void ioswitch_cluster_record_start(vnode_t vp, uint8_t *map, uint32_t blocks);
 void
 ioswitch_cluster_record_start(vnode_t vp, uint8_t *map, uint32_t blocks)
@@ -4069,6 +4139,9 @@ cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*
 
 	if (os_atomic_load(&ioswitch_record_map, relaxed)) {
 		ioswitch_cluster_record(vp, uio);
+	}
+	if (ioswitch_prefetch_foreground(vp)) {
+		os_atomic_inc(&ioswitch_image_reads, relaxed);
 	}
 	if (vp->v_flag & VNOCACHE_DATA) {
 		flags |= IO_NOCACHE;
