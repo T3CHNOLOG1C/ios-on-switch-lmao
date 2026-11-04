@@ -57,13 +57,19 @@ constexpr uint32_t kInterrupt = 46;
 // Longest single interrupt wait before the worker checks STATUS for a lost interrupt (see command()).
 constexpr uint64_t kInterruptCheckNs = 100000000;
 constexpr uint32_t kSector = 512;
-// 256 KiB transfers from a 512 KiB-aligned buffer never reach the 512 KiB
-// SDMA boundary, so the controller never pauses mid-transfer for an address.
-constexpr uint32_t kBounceBytes = 256 * 1024;
+// r8-sdboot: one physically contiguous 1 MiB bounce buffer, aligned to the 512 KiB SDMA boundary. A transfer of more
+// than 512 KiB pauses at each boundary with the DMA interrupt and resumes when the next address is written (command(),
+// as Linux sdhci_data_irq does). setup() checks that on this controller with a 1 MiB read against four 256 KiB ones
+// (which never reach a boundary) before allowing more than kSafeSectors per command; otherwise commands stay at
+// 256 KiB as before. Larger commands halve or quarter the per-command card latency, copy and completion turn-around
+// that held 11-04's 512 KiB prefetch runs (two 256 KiB commands each) to ~67 MB/s on a ~95 MB/s bus.
+constexpr uint32_t kBounceBytes = 1024 * 1024;
 constexpr uint32_t kBounceAlign = 512 * 1024;
-constexpr uint32_t kMaxSectors = kBounceBytes / kSector;
-// Most requests one merged command carries (APFS issues >= 4 KiB, so 64 still fills the buffer).
-constexpr uint32_t kMaxChain = 64;
+constexpr uint32_t kSdmaBoundary = 512 * 1024;
+constexpr uint32_t kBounceSectors = kBounceBytes / kSector;
+constexpr uint32_t kSafeSectors = 256 * 1024 / kSector;
+// Most requests one merged command carries (APFS issues >= 4 KiB, so 256 still fills the buffer).
+constexpr uint32_t kMaxChain = 256;
 const char kRootUUID[] = "04769D26-2CA0-4825-B443-E2E5F88300F2";
 const uint8_t kApfsType[16] = {0xef, 0x57, 0x34, 0x7c, 0x00, 0x00, 0xaa, 0x11,
                                0xaa, 0x11, 0x00, 0x30, 0x65, 0x43, 0xec, 0xac};
@@ -406,6 +412,7 @@ public:
     void resume();
     Stats stats = {};
     uint64_t firstSector = 0, sectorCount = 0;
+    uint32_t maxSectors = kSafeSectors;  // per command; kBounceSectors once setup() has checked SDMA boundary resumes
     NativeIOSwitchBlockDevice *device = nullptr;
 
     bool setup();
@@ -422,8 +429,10 @@ OSDefineMetaClassAndStructors(NativeIOSwitchBlockDevice, IOBlockStorageDevice)
     NativeIOSwitchBlock *gOwner = nullptr;
     int gPublishStatus = -1;
     // r8-sdboot: the boot prefetch thread (IOSwitchCryptex.cpp). Its reads, issued from that thread down to here
-    // (cluster_io -> spec_strategy -> IOMediaBSDClient -> IOBlockStorageDriver -> doAsyncReadWrite), take the background
-    // class, so any queued read of a better class goes first (worker()).
+    // (cluster_io -> spec_strategy -> IOMediaBSDClient -> IOBlockStorageDriver -> doAsyncReadWrite), take the high class,
+    // first come first served with the foreground's reads: in the background class they waited out the 100 ms aging
+    // behind a saturated foreground (11-04 r7h: 965 MiB took 7.5 s to 68.3 s uptime, ~2.5 MB/s after the first 10 s),
+    // while the foreground page-faulted the same blocks one 4 KiB read at a time.
     thread_t gPrefetchThread = THREAD_NULL;
 }
 
@@ -436,10 +445,10 @@ bool NativeIOSwitchBlockDevice::configure(NativeIOSwitchBlock *provider, uint64_
 {
     owner = provider;
     blocks = sectors;
-    setProperty(kIOMaximumBlockCountReadKey, kMaxSectors, 64);
-    setProperty(kIOMaximumBlockCountWriteKey, kMaxSectors, 64);
-    setProperty(kIOMaximumByteCountReadKey, kBounceBytes, 64);
-    setProperty(kIOMaximumByteCountWriteKey, kBounceBytes, 64);
+    setProperty(kIOMaximumBlockCountReadKey, provider->maxSectors, 64);
+    setProperty(kIOMaximumBlockCountWriteKey, provider->maxSectors, 64);
+    setProperty(kIOMaximumByteCountReadKey, provider->maxSectors * kSector, 64);
+    setProperty(kIOMaximumByteCountWriteKey, provider->maxSectors * kSector, 64);
     if (OSDictionary *protocol = OSDictionary::withCapacity(2)) {
         protocol->setObject(kIOPropertyPhysicalInterconnectTypeKey, OSString::withCStringNoCopy("SD"));
         protocol->setObject(kIOPropertyPhysicalInterconnectLocationKey,
@@ -459,7 +468,7 @@ bool NativeIOSwitchBlockDevice::configure(NativeIOSwitchBlock *provider, uint64_
 IOReturn NativeIOSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 count,
                                                      IOStorageAttributes *attributes, IOStorageCompletion *completion)
 {
-    if (!buffer || !completion || !count || block >= blocks || count > blocks - block || count > kMaxSectors ||
+    if (!buffer || !completion || !count || block >= blocks || count > blocks - block || count > owner->maxSectors ||
         buffer->getLength() < count * kSector)
         return kIOReturnBadArgument;
     IODirection direction = buffer->getDirection();
@@ -467,9 +476,9 @@ IOReturn NativeIOSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer,
     auto *request = static_cast<Request *>(IOMalloc(sizeof(Request)));
     if (!request) return kIOReturnNoMemory;
     buffer->retain();
-    // No attributes: the default class, as IOStorage's own default priority. The boot prefetch: background.
+    // No attributes: the default class, as IOStorage's own default priority. The boot prefetch: high.
     const IOStoragePriority priority =
-        current_thread() == __atomic_load_n(&gPrefetchThread, __ATOMIC_ACQUIRE) ? kIOStoragePriorityBackground
+        current_thread() == __atomic_load_n(&gPrefetchThread, __ATOMIC_ACQUIRE) ? kIOStoragePriorityHigh
         : attributes                                                             ? attributes->priority
                                                                                  : kIOStoragePriorityDefault;
     *request = {nullptr,
@@ -589,21 +598,29 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uin
     barrier();
     w16(COMMAND, static_cast<uint16_t>(((write ? (multi ? 25 : 24) : (multi ? 18 : 17)) << 8) | 0x3a));
 
-    // One sleep per command: the worker waits for transfer complete, an error, or the (impossible)
-    // DMA boundary only. Command complete latches in STATUS without raising the line and its R1 is
+    // One sleep per command: the worker waits for transfer complete, an error, or an SDMA boundary
+    // (transfers over 512 KiB). Command complete latches in STATUS without raising the line and its R1 is
     // checked once the data has moved; a command the card refuses moves no data and so ends as a
     // data error or the time limit below. (Waiting for command complete first cost a second
     // interrupt and context switch per request, a real share of a ~4 KiB read.)
     const uint32_t awaited = INT_TRANSFER | INT_DMA | ERROR_SIGNALS;
     const uint64_t start = nowNs();
     const uint64_t limit = write ? 5000000000ull : 2000000000ull;
-    uint32_t s;
+    uint32_t s, resume = 0;
     for (;;) {
         s = r32(STATUS);
         *status = s;
         if (s & INT_ERRORS) return (s & INT_COMMAND) ? 3 : 2;
-        if (s & INT_DMA) return 5;  // impossible: transfers never reach the boundary
         if (s & INT_TRANSFER) break;
+        if (s & INT_DMA) {
+            // Paused at the next 512 KiB boundary of the (boundary-aligned) bounce buffer: give it the address there.
+            resume += kSdmaBoundary;
+            if (resume > sectors * kSector) return 5;
+            w32(STATUS, INT_DMA);
+            w32(DMA_LOW, static_cast<uint32_t>(bouncePA + resume));
+            w32(DMA_HIGH, static_cast<uint32_t>((bouncePA + resume) >> 32));
+            continue;
+        }
         uint64_t elapsed = nowNs() - start;
         if (elapsed >= limit) return (s & INT_COMMAND) ? 6 : 7;
         if (irqMode) {
@@ -634,7 +651,7 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uin
 int NativeIOSwitchBlock::transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes)
 {
     const uint32_t length = sectors * kSector;
-    if (lba > UINT32_MAX || sectors == 0 || sectors > kMaxSectors) return -1;
+    if (lba > UINT32_MAX || sectors == 0 || sectors > kBounceSectors) return -1;
     if (write && bytes != bounce) memcpy(bounce, bytes, length);
     // Clean (write) or clean+invalidate (read) before the device owns the lines.
     for (uintptr_t at = (uintptr_t)bounce, end = at + length; at < end; at += 64)
@@ -815,7 +832,7 @@ void NativeIOSwitchBlock::worker(void *context, wait_result_t)
             return false;
         };
         while (self->merge && count < kMaxChain && last->next && last->next->write == first->write &&
-               last->next->lba == last->lba + last->sectors && sectors + last->next->sectors <= kMaxSectors &&
+               last->next->lba == last->lba + last->sectors && sectors + last->next->sectors <= self->maxSectors &&
                !overlapsOlder(last->next)) {
             last = last->next;
             sectors += last->sectors;
@@ -1551,6 +1568,38 @@ bool NativeIOSwitchBlock::setup()
     if (found != 1 || firstSector + sectorCount > UINT32_MAX) {
         IOLog("IOSwitchSD: expected one APFS partition, found %u\n", found);
         return false;
+    }
+
+    // Commands over 512 KiB cross the SDMA boundary (command()). Read the partition's first MiB in four 256 KiB commands
+    // and in one; only identical data with no error allows the larger commands. The 1 MiB read goes straight to
+    // command() so that a failure is not retried and re-tuned (transfer() would step the clock down); a failure keeps
+    // 256 KiB, with one line.
+    if (sectorCount >= kBounceSectors) {
+        uint8_t *reference = static_cast<uint8_t *>(IOMallocData(kBounceBytes));
+        int step = reference ? 0 : -2;
+        for (uint32_t done = 0; !step && done < kBounceSectors; done += kSafeSectors)
+            step = transfer(firstSector + done, kSafeSectors, false, reference + done * kSector);
+        if (!step) {
+            for (uintptr_t at = (uintptr_t)bounce, end = at + kBounceBytes; at < end; at += 64)
+                __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+            barrier();
+            uint32_t status = 0;
+            step = command(static_cast<uint32_t>(firstSector), kBounceSectors, false, &status);
+            if (step) {
+                recover(true);
+            } else {
+                for (uintptr_t at = (uintptr_t)bounce, end = at + kBounceBytes; at < end; at += 64)
+                    __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
+                barrier();
+            }
+        }
+        const bool same = !step && !memcmp(reference, bounce, kBounceBytes);
+        if (same)
+            maxSectors = kBounceSectors;
+        else
+            IOLog("IOSwitchSD: 1 MiB commands failed their check (step %d, %s); keeping 256 KiB\n", step,
+                  step ? "error" : "data differs");
+        if (reference) IOFreeData(reference, kBounceBytes);
     }
 
     thread_t thread = THREAD_NULL;

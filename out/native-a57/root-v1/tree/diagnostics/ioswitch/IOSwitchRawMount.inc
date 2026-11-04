@@ -10,6 +10,7 @@
 #define IOSW_RAW_BYTES        UINT64_C(34359738368)
 extern int ioswitch_raw_volume_status(const char *, dev_t *, char *, size_t, uint64_t *);
 extern int native_owner_publish_raw_boot_manifest(dev_t, const char *, dev_t, const char *);
+extern void ioswitch_cluster_register_verified_mount(mount_t);
 
 static int native_ioswitch_raw_wait(const char *uuid, dev_t *device, char path[64])
 {
@@ -150,6 +151,7 @@ static int native_ioswitch_raw_cache_prepare(proc_t p, user_addr_t scratch, user
         IOSW_RAW_STEP(i ? "App cryptex mount" : "System cryptex mount",
                       native_ioswitch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount));
         native_owner_cryptex_mount[i] = cryptex_mount;
+        ioswitch_cluster_register_verified_mount(cryptex_mount);  // vfs_cluster.c (inert unless the experiment is on)
         if (!i) cache_device = image_volume;
     }
     native_owner_cryptex_host = preboot_mount;

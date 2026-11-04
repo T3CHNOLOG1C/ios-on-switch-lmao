@@ -24,6 +24,8 @@ int di_root_image_ext(const char *, char *, size_t, dev_t *, bool);
 void ioswitch_cluster_register_image(vnode_t);                          // bsd/vfs/vfs_cluster.c
 void ioswitch_cluster_record_start(vnode_t, uint8_t *map, uint32_t blocks);  // bsd/vfs/vfs_cluster.c
 void ioswitch_cluster_record_stop(void);                                // bsd/vfs/vfs_cluster.c
+void ioswitch_cluster_prefetch_begin(vnode_t, thread_t);                // bsd/vfs/vfs_cluster.c
+void ioswitch_cluster_prefetch_end(uint64_t *reads, uint64_t *ios);     // bsd/vfs/vfs_cluster.c
 void ioswitch_block_prefetch_thread(thread_t);                          // NativeIOSwitchBlock.cpp
 void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 processor_t cpu_to_processor(int);
@@ -92,19 +94,24 @@ int outputs(unsigned index, dev_t *device, char *path, size_t capacity)
 // on a disk image, so with cluster-layer verification off) pages in 4 KiB at a time through the image file. The same
 // bytes read as large sequential runs take a fraction of that card time. So:
 //  - record: on a boot with no valid list, vfs_cluster.c notes the first-read second of every 4 KiB block of the image
-//    file (one byte per block), from the attach until kRecordAfterFrameS after the first frame, and this file saves
+//    file (one byte per block), from the attach until afterFrame (the later of kRecordAfterFrameS after the first
+//    frame and kRecordUntilS of uptime: in the landscape layout the first frame is the boot logo, and SpringBoard took
+//    the screen at 131 s on the 11-04 recording boot), and this file saves
 //    the map next to the image (kListSuffix, header keyed on the image file's id, size and mtime);
 //  - replay: on every later boot, right after the attach, a kernel thread reads the recorded blocks into the image
 //    file's page cache as runs of up to kMaxRun blocks (gaps of up to kMaxGap unread blocks are read through), in
-//    first-read order, one run in flight. Its I/O takes the SD driver's background class, so any queued demand read
-//    goes first (NativeIOSwitchBlock.cpp); a demand read that needs a page of the run in flight waits for that run. The demand reads (the cryptex APFS -> DiskImages -> this file) then find
-//    their pages cached. It stops when the list is done or kRecordAfterFrameS after the first frame.
+//    first-read order, kInFlight runs queued. Its I/O shares the SD driver's high class first come first served with
+//    the foreground's reads (NativeIOSwitchBlock.cpp), so it keeps a large share of the card and stays ahead of the
+//    foreground; the demand reads (the cryptex APFS -> DiskImages -> this file) then find their pages cached. It stops
+//    when the list is done or when a recording would stop (afterFrame).
 // The image is read-only, so a stale list costs only wasted reads; a changed image (id/size/mtime) is re-recorded.
 namespace {
 constexpr uint32_t kBlock = 4096;
 constexpr uint32_t kMaxRun = 128;  // 512 KiB per advisory read: two 256 KiB card commands
 constexpr uint32_t kMaxGap = 8;    // read through up to 32 KiB of unrecorded blocks rather than start a new command
 constexpr uint64_t kRecordAfterFrameS = 30;
+constexpr uint64_t kRecordUntilS = 125;
+constexpr uint32_t kInFlight = 3;  // runs queued at once: up to 6 card commands of 256 KiB
 // NativeLegacyDisplay reports the first frame only in the unrotated layout; without a report, stop this long after the
 // attach (the 11-04 boots reached SpringBoard 110-135 s after it).
 constexpr uint64_t kRecordBackstopS = 180;
@@ -249,10 +256,9 @@ uint32_t buildRuns(const uint8_t *map, uint32_t blocks, Run **out)
     return count;
 }
 
-// Reads the runs into the image file's page cache, one at a time: advisory_read queues a run's I/O asynchronously, then
-// a one-page read of the run's last page waits until it has arrived (or reads it itself if the prefetch failed there,
-// so nothing can hang on it). One run in flight keeps the card fed while bounding how long a demand read can wait
-// behind background-class prefetch I/O for a page it needs (DiskImages serves the image on a single thread).
+// Reads the runs into the image file's page cache, kInFlight at a time: advisory_read queues a run's I/O asynchronously;
+// once kInFlight runs are queued, a one-page read of the oldest run's last page waits until it has arrived (or reads it
+// itself if the prefetch failed there, so nothing can hang on it).
 void prefetchThread(void *, wait_result_t)
 {
     ioswitch_block_prefetch_thread(current_thread());
@@ -262,23 +268,32 @@ void prefetchThread(void *, wait_result_t)
     uint64_t bytes = 0, started = uptimeMs();
     uint32_t done = 0;
     if (page && !vnode_lookup(paths[0], 0, &image, ctx)) {
+        ioswitch_cluster_prefetch_begin(image, current_thread());
         const off_t size = static_cast<off_t>(gPrefetch.key.imageBytes);
-        for (; done < gPrefetch.runCount && !gPrefetch.stop; ++done) {
-            const Run &run = gPrefetch.runs[done];
-            (void)advisory_read(image, size, static_cast<off_t>(run.start) * kBlock, run.blocks * kBlock);
+        uint32_t issued = 0;
+        while (done < gPrefetch.runCount && !gPrefetch.stop) {
+            if (issued < gPrefetch.runCount && issued - done < kInFlight) {
+                const Run &run = gPrefetch.runs[issued++];
+                (void)advisory_read(image, size, static_cast<off_t>(run.start) * kBlock, run.blocks * kBlock);
+                bytes += run.blocks * kBlock;
+                continue;
+            }
+            const Run &run = gPrefetch.runs[done++];
             int resid = 0;
             (void)vn_rdwr(UIO_READ, image, reinterpret_cast<caddr_t>(page), kBlock,
                           static_cast<off_t>(run.start + run.blocks - 1) * kBlock, UIO_SYSSPACE, IO_NOAUTH,
                           vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
-            bytes += run.blocks * kBlock;
         }
-        vnode_put(image);
     }
+    uint64_t reads = 0, ios = 0;
+    ioswitch_cluster_prefetch_end(&reads, &ios);
+    if (image) vnode_put(image);
     ioswitch_block_prefetch_thread(THREAD_NULL);
     const uint64_t now = uptimeMs();
-    IOLog("IOSwitch boot prefetch: %llu MiB of the System cryptex in %u of %u runs, %llu.%llu s to %llu.%llu s uptime%s\n",
-          bytes >> 20, done, gPrefetch.runCount, started / 1000, started / 100 % 10, now / 1000,
-          now / 100 % 10, gPrefetch.stop ? " (stopped after the first frame)" : "");
+    IOLog("IOSwitch boot prefetch: %llu MiB of the System cryptex in %u of %u runs, %llu.%llu s to %llu.%llu s uptime%s; "
+          "meanwhile the foreground read it %llu times, %llu of them going to the card\n",
+          bytes >> 20, done, gPrefetch.runCount, started / 1000, started / 100 % 10, now / 1000, now / 100 % 10,
+          gPrefetch.stop ? " (stopped)" : "", reads, ios);
     if (page) IOFreeData(page, kBlock);
     IOFreeData(gPrefetch.runs, gPrefetch.runCount * sizeof(Run));
     gPrefetch.runs = nullptr;
@@ -357,14 +372,16 @@ void prefetchStart(vnode_t image)
 }  // namespace
 
 // NativeLegacyDisplay calls this (weakly) at each frame until the first one shows, in any context, interrupts possibly
-// disabled: the first call moves afterFrame to kRecordAfterFrameS from now (re-arming replaces the backstop deadline).
+// disabled: the first call moves afterFrame to the later of kRecordAfterFrameS from now and kRecordUntilS of uptime
+// (re-arming replaces the backstop deadline).
 extern "C" void ioswitch_boot_io_report(void)
 {
     if (__atomic_exchange_n(&gPrefetch.frame, 1u, __ATOMIC_RELAXED) || !gPrefetch.frameCall) return;
     if (gPrefetch.loadCall) thread_call_enter(gPrefetch.loadCall);
-    uint64_t deadline = 0;
+    uint64_t deadline = 0, until = 0;
     clock_interval_to_deadline(static_cast<uint32_t>(kRecordAfterFrameS), NSEC_PER_SEC, &deadline);
-    thread_call_enter_delayed(gPrefetch.frameCall, deadline);
+    nanoseconds_to_absolutetime(kRecordUntilS * NSEC_PER_SEC, &until);
+    thread_call_enter_delayed(gPrefetch.frameCall, deadline > until ? deadline : until);
 }
 
 extern "C" int ioswitch_cryptex_attach(unsigned index, dev_t, dev_t *device, char *path, size_t capacity)
