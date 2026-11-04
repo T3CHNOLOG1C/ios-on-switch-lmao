@@ -36,6 +36,7 @@ volatile uint32_t gConnections;
 extern "C" boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
 extern "C" void proc_selfname(char *buf, int size);
 extern "C" vm_offset_t ml_vtophys(vm_offset_t vaddr);
+extern "C" task_t current_task(void);
 
 // A cached BO's view up to this size is mapped into its task with every page entered at once (kIOMapPrefault: one
 // vm_map_enter_mem_object_prefault over the wired page list), not one page fault per 4 KiB page as the task first touches
@@ -297,6 +298,14 @@ class AGXDeviceUserClient : public IOUserClient
 		Bo *bo;
 		uint64_t bo_offset;
 	};
+	// A mapping method 12 (Map) made into the client's task: what IOKit's io_connect_map_memory_into_task keeps in the
+	// client's mapping set, kept here (that set is IOKit's own). Unmap and close release it, and its release unmaps it.
+	struct Mapping {
+		Mapping *next;
+		IOMemoryMap *map;
+		uint32_t token;
+		uint64_t address;
+	};
 
 	IOLock *lock_ = nullptr;
 	task_t task_ = nullptr;
@@ -308,6 +317,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOMemoryDescriptor *fence_view_ = nullptr;
 	tgm_chan *chans_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr;
+	Mapping *maps_ = nullptr;  // under lock_
 	Binding *binds_ = nullptr;
 	uint32_t nbinds_ = 0, cap_binds_ = 0;
 	uint64_t next_handle_ = 1;
@@ -341,6 +351,9 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn exec(const TegraGM20BAbiExec *in, uint32_t count, TegraGM20BAbiExecReply *out);
 	IOReturn waitFence(const TegraGM20BAbiWaitFence *in);
 	IOReturn getStatus(const TegraGM20BAbiChannel *in, TegraGM20BAbiStatus *out);
+	IOReturn mapToken(const TegraGM20BAbiMap *in, TegraGM20BAbiMapReply *out);
+	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
+	void releaseMappings();
 
 public:
 	bool setUp(task_t task);
@@ -383,6 +396,7 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
 IOReturn AGXDeviceUserClient::clientClose()
 {
+	releaseMappings();  // first: a view still mapped would keep its pool pages as an orphan (releaseBo)
 	IOLockLock(lock_);
 	closing_ = true;
 	for (uint32_t i = 0; i < kMaxChannels; i++)
@@ -406,6 +420,7 @@ IOReturn AGXDeviceUserClient::clientClose()
 void AGXDeviceUserClient::free()
 {
 	if (lock_) {
+		releaseMappings();
 		closing_ = true;
 		for (uint32_t i = 0; i < kMaxChannels; i++)
 			tgm_chan_del(&chans_[i]);
@@ -1019,13 +1034,83 @@ IOReturn AGXDeviceUserClient::getStatus(const TegraGM20BAbiChannel *in, TegraGM2
 	return kIOReturnSuccess;
 }
 
+// ------------------------------------------------------------------ CPU mappings (methods 12, 13)
+// What io_connect_map_memory_into_task and io_connect_unmap_memory_from_task do for a task mapping its own connection's
+// memory (IOUserClient::mapClientMemory64 over clientMemoryForType, the same options, the map kept until unmapped or the
+// connection closes), reached through io_connect_method, which WebKit's GPU process profile admits where it refuses those two
+// MIG routines (21H461 syscall-mig list). The same kernel work as IOConnectMapMemory64: nothing is slower.
+IOReturn AGXDeviceUserClient::mapToken(const TegraGM20BAbiMap *in, TegraGM20BAbiMapReply *out)
+{
+	const uint32_t known = TegraGM20BMapReadOnly | TegraGM20BMapFixed;
+	const bool fixed = in->flags & TegraGM20BMapFixed;
+	if (!in->token || (in->flags & ~known) || fixed != (in->address != 0))
+		return kIOReturnBadArgument;
+	if (current_task() != task_)
+		return kIOReturnNotPermitted;  // only the opener maps its connection's memory, into itself
+	Mapping *mapping = IONew(Mapping, 1);
+	if (!mapping)
+		return kIOReturnNoMemory;
+	IOOptionBits options = fixed ? kIOMapOverwrite : kIOMapAnywhere;
+	if (in->flags & TegraGM20BMapReadOnly)
+		options |= kIOMapReadOnly;
+	// clientMemoryForType takes lock_: called without it, as IOKit's own map path calls it
+	IOMemoryMap *map = mapClientMemory64(in->token, task_, options, in->address);
+	if (!map) {
+		IODelete(mapping, Mapping, 1);
+		return kIOReturnBadArgument;  // IOConnectMapMemory64's answer
+	}
+	out->address = map->getAddress();
+	out->bytes = map->getSize();
+	IOLockLock(lock_);
+	*mapping = {maps_, map, in->token, out->address};
+	maps_ = mapping;
+	IOLockUnlock(lock_);
+	return kIOReturnSuccess;
+}
+
+IOReturn AGXDeviceUserClient::unmapToken(const TegraGM20BAbiUnmap *in)
+{
+	Mapping *found = nullptr;
+	IOLockLock(lock_);
+	for (Mapping **p = &maps_; *p; p = &(*p)->next) {
+		if ((*p)->token == in->token && (*p)->address == in->address) {
+			found = *p;
+			*p = found->next;
+			break;
+		}
+	}
+	IOLockUnlock(lock_);
+	if (!found)
+		return kIOReturnBadArgument;
+	found->map->unmap();
+	found->map->release();
+	IODelete(found, Mapping, 1);
+	return kIOReturnSuccess;
+}
+
+// Every mapping method 12 made, unmapped (close and free: the task's mappings go with its connection).
+void AGXDeviceUserClient::releaseMappings()
+{
+	IOLockLock(lock_);
+	Mapping *list = maps_;
+	maps_ = nullptr;
+	IOLockUnlock(lock_);
+	while (list) {
+		Mapping *next = list->next;
+		list->map->unmap();
+		list->map->release();
+		IODelete(list, Mapping, 1);
+		list = next;
+	}
+}
+
 IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 {
 	tgm_info info;
 	tgm_get_info(&info);
 	bzero(out, sizeof(*out));
 	out->abi_version = TegraGM20BAbiVersion;
-	out->flags = TegraGM20BInfoHostImport;
+	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap;
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;
@@ -1112,6 +1197,13 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiChannel);
 		wantOut = sizeof(TegraGM20BAbiStatus);
 		break;
+	case TegraGM20BMethodMap:
+		wantIn = sizeof(TegraGM20BAbiMap);
+		wantOut = sizeof(TegraGM20BAbiMapReply);
+		break;
+	case TegraGM20BMethodUnmap:
+		wantIn = sizeof(TegraGM20BAbiUnmap);
+		break;
 	default:
 		return kIOReturnUnsupported;
 	}
@@ -1135,12 +1227,23 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		if (!reservedZero(static_cast<const TegraGM20BAbiChannel *>(in)->reserved))
 			return kIOReturnBadArgument;
 		break;
+	case TegraGM20BMethodUnmap:
+		if (!reservedZero(static_cast<const TegraGM20BAbiUnmap *>(in)->reserved))
+			return kIOReturnBadArgument;
+		break;
 	default:
 		break;
 	}
 
 	if (method == TegraGM20BMethodWaitFence)
 		return waitFence(static_cast<const TegraGM20BAbiWaitFence *>(in));
+	// Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it); a dead connection still maps and
+	// unmaps what it has, as IOConnectMapMemory64 would.
+	if (method == TegraGM20BMethodMap)
+		return mapToken(static_cast<const TegraGM20BAbiMap *>(in),
+				static_cast<TegraGM20BAbiMapReply *>(out));
+	if (method == TegraGM20BMethodUnmap)
+		return unmapToken(static_cast<const TegraGM20BAbiUnmap *>(in));
 	if (method == TegraGM20BMethodGetTimestamp) {
 		static_cast<TegraGM20BAbiTimestamp *>(out)->ns = tgm_timestamp_ns();
 		return kIOReturnSuccess;

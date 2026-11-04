@@ -1,0 +1,88 @@
+diff --git a/crates/metal2vulkan-runtime/src/shader_cache/store.rs b/crates/metal2vulkan-runtime/src/shader_cache/store.rs
+index a1e35fa4..7b4de939 100644
+--- a/crates/metal2vulkan-runtime/src/shader_cache/store.rs
++++ b/crates/metal2vulkan-runtime/src/shader_cache/store.rs
+@@ -66,6 +66,13 @@ pub(crate) fn content() -> Hash256 {
+ /// beneath its own, never writing it. Unset, relative, or without `v1/`: no seed.
+ pub(crate) const SEED_VARIABLE: &str = "METAL2VULKAN_SHADER_CACHE_SEED";
+ 
++/// The environment variable that, set (any value), leaves the directory alone: nothing is made,
++/// probed, read, written, scanned or removed there, and every entry is the seed's or a miss. For a
++/// process that may write no directory (a sandbox's, as WebKit's GPU process may be): it reads the
++/// seed and keeps what it compiles in memory, and no write is ever tried, so its sandbox reports
++/// no refusal (`METAL2VULKAN_SHADER_CACHE_OPTIONAL`, [`Directory::open`], still tries its directory).
++pub(crate) const SEED_ONLY_VARIABLE: &str = "METAL2VULKAN_SHADER_CACHE_SEED_ONLY";
++
+ /// An opened cache directory: its build's directory exists and takes writes; and the seed beneath
+ /// it, if any, read only.
+ #[derive(Clone, Debug)]
+@@ -74,6 +81,8 @@ pub(crate) struct Directory {
+     build: Hash256,
+     capacity: u64,
+     seed: Option<PathBuf>,
++    /// Whether the directory is used ([`SEED_ONLY_VARIABLE`] unset): false, it is never touched.
++    own: bool,
+ }
+ 
+ impl Directory {
+@@ -86,12 +95,17 @@ impl Directory {
+     /// WebKit's GPU process) still gets its device, and every read and write of the cache is a
+     /// miss, as after any later failure.
+     pub(crate) fn open(root: PathBuf, build: Hash256, capacity: u64) -> Result<Directory, Failed> {
++        let own = std::env::var_os(SEED_ONLY_VARIABLE).is_none();
+         let directory = Directory {
+             root,
+             build,
+             capacity,
+             seed: None,
++            own,
+         };
++        if !own {
++            return Ok(directory);
++        }
+         let failed = |path: &Path| {
+             let path = path.to_path_buf();
+             move |error| Failed { path, error }
+@@ -335,7 +349,7 @@ impl Store {
+     /// as a warning naming the directory and its cap.
+     pub(crate) fn write_failed(&self) {
+         count(&self.counters.write_failures);
+-        if !self.warnings.write_failed.swap(true, Ordering::Relaxed) {
++        if self.directory.own && !self.warnings.write_failed.swap(true, Ordering::Relaxed) {
+             self.warn(
+                 WRITE_FAILED,
+                 format!(
+@@ -463,7 +477,12 @@ impl Store {
+     /// The file at `path` in the directory, else, where the directory has none, the seed's at
+     /// the path `seed` gives (no seed: none).
+     fn read_either(&self, path: &Path, seed: impl FnOnce() -> Option<PathBuf>) -> FoundIn {
+-        match self.read(path) {
++        let own = if self.directory.own {
++            self.read(path)
++        } else {
++            Found::Absent
++        };
++        match own {
+             Found::Bytes(bytes, file) => FoundIn::Directory(bytes, file),
+             Found::Failed => FoundIn::Failed,
+             Found::Absent => match seed() {
+@@ -544,6 +563,9 @@ impl Store {
+         name: &str,
+         body: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+     ) -> io::Result<u64> {
++        if !self.directory.own {
++            return Err(io::Error::from(io::ErrorKind::Unsupported));
++        }
+         let parent = path.parent().expect("an entry has a directory");
+         create_private_dir_all(parent)?;
+         let temporary = parent.join(format!(".{name}.{}.tmp", unique()));
+@@ -596,6 +618,9 @@ impl Store {
+ 
+     /// [`Store::sweep`] (with `unused_builds`) or [`Store::evict`].
+     fn scan(&self, stop: &AtomicBool, unused_builds: bool) {
++        if !self.directory.own {
++            return;
++        }
+         let now = SystemTime::now();
+         let own = hex(&self.directory.build);
+         let Ok(builds) = fs::read_dir(self.directory.layout_dir()) else {

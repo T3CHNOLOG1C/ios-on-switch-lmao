@@ -27,6 +27,8 @@ enum {
 	TegraGM20BMethodWaitFence = 9,
 	TegraGM20BMethodGetTimestamp = 10,
 	TegraGM20BMethodGetStatus = 11,
+	TegraGM20BMethodMap = 12,   /* with TegraGM20BInfoKernelMap */
+	TegraGM20BMethodUnmap = 13, /* with TegraGM20BInfoKernelMap */
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -37,6 +39,7 @@ enum {
 	TegraGM20BInfoSparse = 1u << 0,     /* VmBind accepts MapSparse */
 	TegraGM20BInfoHostImport = 1u << 1, /* BoImport is implemented */
 	TegraGM20BInfoZcull = 1u << 2,      /* zcull[] is valid */
+	TegraGM20BInfoKernelMap = 1u << 3,  /* Map and Unmap (methods 12, 13) are implemented */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
@@ -192,6 +195,33 @@ struct TegraGM20BAbiStatus {
 	uint64_t fault_va; /* for error 1 */
 };
 
+/* TegraGM20BAbiMap.flags */
+enum {
+	TegraGM20BMapReadOnly = 1u << 0, /* kIOMapReadOnly */
+	TegraGM20BMapFixed = 1u
+		<< 1, /* kIOMapOverwrite at `address`; else kIOMapAnywhere (address 0) */
+};
+/* Method 12. Maps the clientMemoryForType type `token` (a BO's map_token, a channel's fence_token) into the calling task, exactly
+ * as IOConnectMapMemory64(conn, token, mach_task_self(), &address, &bytes, options) does, but from inside io_connect_method: a
+ * sandbox may refuse the MIG routine io_connect_map_memory_into_task (WebKit's GPU process profile in 21H461 admits
+ * io_connect_method and not it), as Apple's own GPU drivers map their resources in their external methods. The mapping belongs
+ * to the connection: Unmap removes it, and so does closing the connection. */
+struct TegraGM20BAbiMap {
+	uint32_t token;
+	uint32_t flags;   /* TegraGM20BMap* */
+	uint64_t address; /* Fixed only; else 0 */
+};
+struct TegraGM20BAbiMapReply {
+	uint64_t address;
+	uint64_t bytes; /* the mapping's length (IOConnectMapMemory64's size) */
+};
+/* Method 13. Removes the mapping method 12 made of `token` at `address` (IOConnectUnmapMemory64's work). */
+struct TegraGM20BAbiUnmap {
+	uint32_t token;
+	uint32_t reserved;
+	uint64_t address;
+};
+
 #if defined(__cplusplus)
 #define TEGRA_GM20B_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
 #else
@@ -213,5 +243,8 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiExecReply, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiWaitFence, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiTimestamp, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiStatus, 24);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiMap, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiMapReply, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiUnmap, 16);
 #undef TEGRA_GM20B_ASSERT
 #endif

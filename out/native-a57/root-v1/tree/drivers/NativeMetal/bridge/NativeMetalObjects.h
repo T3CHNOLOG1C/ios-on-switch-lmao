@@ -100,6 +100,11 @@ NmbTexture *nmb_texture_new(NmbDevice *, const struct NmbTextureDescriptor *);
 /* A linear texture over a buffer's bytes; iosurface marks the buffer as standing for a surface without planes (Metal's IOSurface rules). */
 NmbTexture *nmb_texture_new_on_buffer(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset,
                                       uint64_t bytes_per_row, bool iosurface);
+/* A texture over plane `plane` of a two-plane surface the buffer stands for: the plane at offset/bytes_per_row, the surface's OSType,
+ * plane 0's width and height, and plane 1's offset and bytes per row ('b3a8': RGB10A8_2P_XR10 and its sRGB twin over plane 0). */
+NmbTexture *nmb_texture_new_on_surface_planes(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset,
+                                              uint64_t bytes_per_row, uint32_t fourcc, uint64_t plane, uint64_t width,
+                                              uint64_t height, uint64_t plane1_offset, uint64_t plane1_bytes_per_row);
 NmbTexture *nmb_texture_new_linear(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset,
                                    uint64_t bytes_per_row, uint64_t bytes_per_image);
 /* whole: a view of every level and slice as format; else levels and slices are {start, count} and kind the view's texture type. */

@@ -20,7 +20,7 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_runtime::{
     ArgumentEncoder, ResourceRef,
     BinaryArchive, BinaryArchiveDescriptor, BlitCommandEncoder, FamilyRow, FeatureRow, GpuFamily, RowState, BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, ComputeCommandEncoder,
-    ComputePipelineState, DebugMessage, DepthStencilState, Device, DeviceOptions, MessageSeverity, MessageSink, Event, EventRef, Fence, Function, Heap, HeapDescriptor, HeapType, HostMemory, IoSurfacePlane, Library, LoadAction,
+    ComputePipelineState, DebugMessage, DepthStencilState, Device, DeviceOptions, MessageSeverity, MessageSink, Event, EventRef, Fence, Function, Heap, HeapDescriptor, HeapType, HostMemory, IoSurfacePlane, IoSurfaceYCbCr, Library, LoadAction,
     MetalLevel, Origin, PipelineOption, PipelineOptions, PurgeableState, PrivateCount, PrivateFlag, PrivateProperties, MAX_COLOR_ATTACHMENTS, Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
     SamplerState, ScissorRect, SharedEvent, SharedEventListener, Size, StoreAction, Texture, TextureDescriptor, Viewport, VisibilityResultMode,
 };
@@ -157,8 +157,9 @@ fn env_on(name: &str, otherwise: bool) -> bool {
 }
 
 /// # Safety
-/// `loader` is a C string; `cache` a C string or null. A null `cache` keeps no shader cache on disk (the runtime's memo alone,
-/// through METAL2VULKAN_SHADER_CACHE_OPTIONAL and a directory nobody writes): for a process that can write no directory.
+/// `loader` is a C string; `cache` a C string or null. A null `cache` keeps no shader cache on disk: the runtime's memo and the
+/// shared seed alone (METAL2VULKAN_SHADER_CACHE_SEED_ONLY, m2v patch 0110: no directory is made, read or written, so a sandbox
+/// that refuses every directory never sees a write tried): for a process that can write no directory.
 /// The environment: NMB_MEMO_MB caps the memo (MiB; the runtime's 256 by default); NMB_REFUSE_REBINDS=0 lets encoders log
 /// their calls for rebinds again (nothing here rebinds); NMB_PADDED_ALIAS=1 renders and writes a texture over padded rows in
 /// place (PaddedReadsPolicy::AliasWrites, off: untried on NVK). Every texture given a shadow image is written to
@@ -173,7 +174,7 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
         let loader = unsafe { CStr::from_ptr(loader) };
         let cache = if cache.is_null() {
             // SAFETY: as the plugin's own setenv calls before the device opens, under its lock; nothing reads this name meanwhile.
-            unsafe { std::env::set_var("METAL2VULKAN_SHADER_CACHE_OPTIONAL", "1") };
+            unsafe { std::env::set_var("METAL2VULKAN_SHADER_CACHE_SEED_ONLY", "1") };
             None
         } else {
             // SAFETY: the caller's contract.
@@ -832,6 +833,24 @@ pub extern "C" fn nmb_texture_new_on_buffer(buffer: *mut NmbBuffer, descriptor: 
             buffer.new_texture(&descriptor, offset, bytes_per_row)
         };
         Ok(boxed(NmbTexture(texture.map_err(e("texture over buffer"))?)))
+    })
+}
+
+/// A texture over plane `plane` of a two-plane surface whose bytes `buffer` stands for (its first byte the surface's base): the plane
+/// at `offset` with rows `bytes_per_row` apart, the surface's OSType `fourcc`, its `width` x `height` (plane 0's), plane 1 at
+/// `plane1_offset` with rows `plane1_bytes_per_row` apart. The runtime makes `RGB10A8_2P_XR10` and its sRGB twin over plane 0 of a
+/// 'b3a8' surface (WebKit's deep-color layer backing stores) exactly as Metal reads and writes them, and refuses what it cannot.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_texture_new_on_surface_planes(buffer: *mut NmbBuffer, descriptor: *const NmbTextureDescriptor, offset: u64,
+                                                    bytes_per_row: u64, fourcc: u32, plane: u64, width: u64, height: u64,
+                                                    plane1_offset: u64, plane1_bytes_per_row: u64) -> *mut NmbTexture {
+    guard(std::ptr::null_mut(), || {
+        let descriptor = texture_descriptor(descriptor)?;
+        let facts = IoSurfaceYCbCr::new(fourcc, plane, [width, height], plane1_offset, plane1_bytes_per_row);
+        let texture = get(buffer)?
+            .0
+            .new_texture_with_iosurface_plane(&descriptor, IoSurfacePlane::new(offset, bytes_per_row, true).with_ycbcr(facts));
+        Ok(boxed(NmbTexture(texture.map_err(e("texture over surface planes"))?)))
     })
 }
 

@@ -690,6 +690,59 @@ static NBTexture *textureOnBuffer(NBBuffer *buffer, MTLTextureDescriptor *d, NSU
     texture.rowBytes = row;
     return texture;
 }
+// WebKit's deep-color layer backing stores: two-plane 'b3a8' surfaces (kCVPixelFormatType_30RGBLE_8A_BiPlanar: plane 0 the 10-bit
+// extended-range color words, plane 1 the alpha bytes), which WebKit draws a page's tiles into wherever the screen reports a wide
+// gamut, and which the render server samples as RGB10A8_2P_XR10 (550) or its sRGB twin (551) over plane 0. The runtime makes that
+// texture as Metal reads and writes it (texture/surface_two_planes.rs) over the surface's whole allocation, given plane 1's place.
+// Refused (r7d), every web page drew black: Core Animation's "Failed to allocate MTLTexture from IOSurface" for each of Safari's
+// tiles. nil for any other planar surface, format or plane, which stay refused below.
+static NBTexture *twoPlaneSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef surface, NSUInteger plane)
+{
+    constexpr uint32_t kB3A8 = 0x62336138;  // 'b3a8'
+    const NSUInteger format = d.pixelFormat;
+    if (plane != 0 || (format != 550 && format != 551) || IOSurfaceGetPixelFormat(surface) != kB3A8 ||
+        IOSurfaceGetPlaneCount(surface) != 2)
+        return nil;
+    const uintptr_t base = (uintptr_t)IOSurfaceGetBaseAddress(surface);
+    const uintptr_t color = (uintptr_t)IOSurfaceGetBaseAddressOfPlane(surface, 0);
+    const uintptr_t alpha = (uintptr_t)IOSurfaceGetBaseAddressOfPlane(surface, 1);
+    const size_t page = vm_page_size, allocation = IOSurfaceGetAllocSize(surface);
+    if (!base || (base & (page - 1)) || color < base || alpha < base || !allocation ||
+        allocation > SIZE_MAX - (page - 1))
+        return nil;
+    NBBuffer *buffer = surfaceBuffer(surface, (void *)base, (allocation + page - 1) & ~(page - 1));
+    NmbTextureDescriptor descriptor;
+    if (!buffer || !textureDescriptor(d, &descriptor)) return nil;
+    const NSUInteger offset = color - base, row = IOSurfaceGetBytesPerRowOfPlane(surface, 0);
+    const uint64_t began = nowUs();
+    NmbTexture *handle = nmb_texture_new_on_surface_planes(
+        buffer.handle, &descriptor, offset, row, kB3A8, 0, IOSurfaceGetWidthOfPlane(surface, 0),
+        IOSurfaceGetHeightOfPlane(surface, 0), alpha - base, IOSurfaceGetBytesPerRowOfPlane(surface, 1));
+    gTimeSurfaceTexture.add(began);
+    if (!handle) {
+        // once per reason: Core Animation asks again every frame
+        static NSMutableSet *said = [NSMutableSet set];
+        NSString *why = lastError();
+        bool first = false;
+        @synchronized(said) {
+            if (why && ![said containsObject:why]) {
+                [said addObject:why];
+                first = true;
+            }
+        }
+        if (first) NBLOG(@"native-metal: two-plane surface texture refused: %@", why);
+        return nil;
+    }
+    NBTexture *texture = [NBTexture new];
+    texture.handle = handle;
+    nmb_texture_describe(handle, &descriptor);
+    texture.descriptor = descriptor;
+    texture.buffer = buffer;
+    texture.offset = offset;
+    texture.rowBytes = row;
+    texture.surface = (IOSurfaceRef)CFRetain(surface);
+    return texture;
+}
 @implementation NBBuffer (Textures)
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
                                     offset:(NSUInteger)offset
@@ -2770,8 +2823,11 @@ static std::string quartzCoreCallers()
     // The context's own flags (int-154: the draws never took the generic path, which only bit 18 of MetalContext +0x1a0 or the debug byte
     // can cause, and the debug byte was 0). MetalContext::create_pipeline_state (header +0x143000) saves its caller's x19 at fp-8, and its
     // caller MetalContext::draw keeps `this` in x19: the frame record whose return address is +0x143214 links to that frame. Read with
-    // vm_read so a different stack layout reports ctx=? instead of faulting.
-    if (header) {
+    // vm_read so a different stack layout reports ctx=? instead of faulting. In the render server only (its MetalContext is the one
+    // int-154 asked about): elsewhere a sandbox may refuse the vm_read_overwrite MIG routine (WebKit's GPU process does), ctx=? then.
+    static const bool renderServer = !strcmp(getprogname(), "backboardd");
+    if (header && !renderServer) out += " ctx=?";
+    if (header && renderServer) {
         uintptr_t fp = (uintptr_t)__builtin_frame_address(0), ctx = 0;
         for (unsigned depth = 0; fp && depth < 24; ++depth) {
             uintptr_t record[2] = {};
@@ -2817,22 +2873,32 @@ static std::string quartzCoreCallers()
 // What a creation cost beyond its wall time (int-156: a translation the host does in 6 ms took 665 ms on the tablet, whose single core is
 // as fast): this thread's CPU time (user and system, microseconds) and the task's page faults, page-ins and context switches. A creation
 // whose CPU time is near its wall time computed; one whose faults are many paid the 4 KiB fault path; one far below it waited.
+// The thread's times come from proc_pidinfo(PROC_PIDTHREADID64INFO) of this thread (process-info-pidinfo of itself, which every
+// sandbox that admits the device admits), not thread_info(mach_thread_self()): WebKit's GPU process profile refuses both the
+// thread_self trap and the thread_info MIG routine. The iOS SDK has no libproc.h: its declarations, from sys/proc_info.h.
+extern "C" int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int buffersize);
+struct NBThreadInfo {  // struct proc_threadinfo
+    uint64_t user_ns, system_ns;
+    int32_t cpu_usage, policy, run_state, flags, sleep_time, curpri, priority, maxpriority;
+    char name[64];
+};
+static_assert(sizeof(NBThreadInfo) == 112, "struct proc_threadinfo");
 struct NBCost {
     uint64_t user = 0, system = 0;
     int64_t faults = 0, pageins = 0, switches = 0;
     static NBCost now()
     {
         NBCost c;
-        thread_basic_info_data_t t{};
-        mach_msg_type_number_t n = THREAD_BASIC_INFO_COUNT;
-        mach_port_t self = mach_thread_self();
-        if (thread_info(self, THREAD_BASIC_INFO, (thread_info_t)&t, &n) == KERN_SUCCESS) {
-            c.user = (uint64_t)t.user_time.seconds * 1000000 + t.user_time.microseconds;
-            c.system = (uint64_t)t.system_time.seconds * 1000000 + t.system_time.microseconds;
+        constexpr int kThreadId64Info = 15;  // PROC_PIDTHREADID64INFO
+        uint64_t thread = 0;
+        NBThreadInfo t{};
+        if (!pthread_threadid_np(nullptr, &thread) &&
+            proc_pidinfo(getpid(), kThreadId64Info, thread, &t, (int)sizeof t) == (int)sizeof t) {
+            c.user = t.user_ns / 1000;
+            c.system = t.system_ns / 1000;
         }
-        mach_port_deallocate(mach_task_self(), self);
         task_events_info_data_t e{};
-        n = TASK_EVENTS_INFO_COUNT;
+        mach_msg_type_number_t n = TASK_EVENTS_INFO_COUNT;
         if (task_info(mach_task_self(), TASK_EVENTS_INFO, (task_info_t)&e, &n) == KERN_SUCCESS) {
             c.faults = e.faults;
             c.pageins = e.pageins;
@@ -3623,10 +3689,11 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 {
     return 0;
 }
-// A no-copy buffer wraps whole pages (nmb_buffer_new_no_copy), the kernel's 4 KiB.
+// A no-copy buffer wraps whole pages (nmb_buffer_new_no_copy), the kernel's 4 KiB: the commpage's page size (no system call; getpagesize()
+// is a sysctl).
 - (NSUInteger)minBufferNoCopyAlignmentBytes
 {
-    return (NSUInteger)getpagesize();
+    return (NSUInteger)vm_page_size;
 }
 // MPS sizes its threadgroup memory from this private total (its MPSDevice reads it unguarded); the runtime has no answer of its own
 // (Metal's is Apple's), so it is the public length the runtime enforces, never more than a dispatch can take.
@@ -3848,7 +3915,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 {
     if (!surface || IOSurfaceGetPlaneCount(surface)) return nil;
     void *base = IOSurfaceGetBaseAddress(surface);
-    const size_t page = (size_t)getpagesize(), allocation = IOSurfaceGetAllocSize(surface);
+    const size_t page = vm_page_size, allocation = IOSurfaceGetAllocSize(surface);
     if (!base || ((uintptr_t)base & (page - 1)) || !allocation || allocation > SIZE_MAX - (page - 1)) return nil;
     return (id<MTLBuffer>)surfaceBuffer(surface, base, (allocation + page - 1) & ~(page - 1));
 }
@@ -4074,8 +4141,11 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
                                      plane:(NSUInteger)plane
 {
     if (surface && d && (plane || IOSurfaceGetPlaneCount(surface))) {
-        // A planar surface (a decoded HEIC/HEVC frame, '420v'/'420f', Metal format 500 and its kin) is not imported here: say each kind once,
-        // so a boot shows whether the render server is handed any (the wallpaper's two-plane YCbCr image was evb10's largest GPU cost).
+        // WebKit's two-plane deep-color tiles ('b3a8' as format 550/551) are made (twoPlaneSurfaceTexture).
+        if (NBTexture *texture = twoPlaneSurfaceTexture(d, surface, plane)) return (id<MTLTexture>)texture;
+        // Any other planar surface (a decoded HEIC/HEVC frame, '420v'/'420f', Metal format 500 and its kin) is not imported here: say each
+        // kind once, so a boot shows whether the render server is handed any (the wallpaper's two-plane YCbCr image was evb10's largest
+        // GPU cost).
         gSurfaceMultiPlane++;
         static NSMutableSet *said = [NSMutableSet set];
         const uint32_t fourcc = IOSurfaceGetPixelFormat(surface);
@@ -4094,7 +4164,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     }
     if (!surface || !d) return nil;
     void *base = IOSurfaceGetBaseAddress(surface);
-    const size_t page = (size_t)getpagesize(), allocation = IOSurfaceGetAllocSize(surface);
+    const size_t page = vm_page_size, allocation = IOSurfaceGetAllocSize(surface);
     if (!page || (page & (page - 1)) || !base || ((uintptr_t)base & (page - 1)) || !allocation ||
         allocation > SIZE_MAX - (page - 1))
         return nil;
@@ -4298,7 +4368,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     }
     const NmbPipelineOptions creation = {(uint64_t)options, archives.data(), archives.size()};
     const uint64_t pipelineBegan = nowUs();
-    const NBCost costBegan = NBCost::now();
+    const NBCost costBegan = gJournalPath.empty() ? NBCost() : NBCost::now();  // read only for the journal
     NmbRenderPipeline *handle = nmb_render_pipeline_new_with_options(gDevice, p, &creation);
     delete p;
     gTimePipeline.add(pipelineBegan);

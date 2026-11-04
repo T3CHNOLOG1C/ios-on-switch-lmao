@@ -105,6 +105,36 @@ bool knobOn(const char *env, const char *arg, bool otherwise)
     return value ? strcmp(value, "0") != 0 : otherwise;
 }
 
+// Whether this process's sandbox, if it has one, lets it do `operation` with `argument`, asked without a report (sandbox_check with
+// SANDBOX_CHECK_NO_REPORT, libsystem_sandbox; the way Apple's own code asks before it tries): every lookup, read and write below that a
+// sandbox may refuse is asked first, so a refusing sandbox (WebKit's GPU process: no containermanagerd, no /private/var/tmp) never
+// reports one of ours. Not sandboxed: always yes.
+extern "C" int sandbox_check(pid_t pid, const char *operation, int type, ...);
+extern "C" const int SANDBOX_CHECK_NO_REPORT;
+constexpr int kSandboxFilterPath = 1, kSandboxFilterGlobalName = 2;  // SANDBOX_FILTER_PATH, SANDBOX_FILTER_GLOBAL_NAME
+bool sandboxAllows(const char *operation, int filter, const char *argument)
+{
+    return sandbox_check(getpid(), operation, filter | SANDBOX_CHECK_NO_REPORT, argument) == 0;
+}
+
+// Whether the sandbox lets this process create `dir` and files in it: file-write-create asked of `dir`'s deepest existing ancestor
+// (sandbox_check answers no for a path that does not exist yet, whatever the profile).
+bool sandboxMayCreate(const char *dir)
+{
+    char path[1024];
+    strlcpy(path, dir, sizeof path);
+    struct stat st;
+    while (stat(path, &st) != 0) {
+        char *slash = strrchr(path, '/');
+        if (!slash || slash == path) {
+            strlcpy(path, "/", sizeof path);
+            break;
+        }
+        *slash = 0;
+    }
+    return sandboxAllows("file-write-create", kSandboxFilterPath, path);
+}
+
 // <bundle>/libvulkan_nouveau.dylib, beside this executable (<bundle>/TegraGM20BMetal).
 bool libraryPath(char *path, size_t size)
 {
@@ -155,6 +185,8 @@ bool systemContainerCache(char *out, size_t size)
     static auto lookup =
         (char *(*)(const char *, uint64_t *))dlsym(RTLD_DEFAULT, "container_system_path_for_identifier");
     if (!lookup) return false;
+    // A sandbox that refuses containermanagerd (WebKit's GPU process) would refuse each of libsystem_containermanager's six tries.
+    if (!sandboxAllows("mach-lookup", kSandboxFilterGlobalName, "com.apple.containermanagerd.system")) return false;
     char identifier[256];
     CFStringRef bundle = CFBundleGetIdentifier(CFBundleGetMainBundle());
     if (!bundle || !CFStringGetCString(bundle, identifier, sizeof identifier, kCFStringEncodingUTF8))
@@ -171,12 +203,18 @@ bool systemContainerCache(char *out, size_t size)
 //  - the user cache directory when it is inside a data container (an app's own Library/Caches);
 //  - the process's system container (above): backboardd's;
 //  - the user cache directory elsewhere (a daemon with a home);
-//  - /private/var/tmp/m2v-<process> (iconservicesagent, whose home is /var/empty), then the user temp directory.
+//  - /private/var/tmp/m2v-<process> (iconservicesagent, whose home is /var/empty), then the user temp directory, then $TMPDIR (WebKit's
+//    GPU process: its per-user temp directory is the one its sandbox extension covers).
+// One the sandbox would refuse is left out, asked without a report (sandboxMayCreate): the order of the others is unchanged.
 unsigned cacheCandidates(char candidates[][512], unsigned most)
 {
     unsigned count = 0;
     auto add = [&](const char *format, const char *a, const char *b) {
-        if (count < most) snprintf(candidates[count++], 512, format, a, b);
+        if (count >= most) return;
+        snprintf(candidates[count], 512, format, a, b);
+        for (unsigned i = 0; i < count; ++i)
+            if (!strcmp(candidates[i], candidates[count])) return;
+        if (sandboxMayCreate(candidates[count])) ++count;
     };
     char user[512] = {}, temp[512] = {}, container[512] = {};
     if (!confstr(_CS_DARWIN_USER_CACHE_DIR, user, sizeof user)) user[0] = 0;
@@ -186,6 +224,8 @@ unsigned cacheCandidates(char candidates[][512], unsigned most)
     if (user[0] && !appContainer) add("%s%s", user, "m2v");
     add("%s%s", "/private/var/tmp/m2v-", getprogname());
     if (confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof temp)) add("%s%s", temp, "m2v");
+    if (const char *tmpdir = getenv("TMPDIR"); tmpdir && *tmpdir == '/')
+        add(tmpdir[strlen(tmpdir) - 1] == '/' ? "%s%s" : "%s/%s", tmpdir, "m2v");
     return count;
 }
 
@@ -207,7 +247,9 @@ bool sharedSeed(char *name, size_t size)
         if (char *slash = strrchr(seed, '/')) *slash = 0;
     strlcat(seed, "/TegraGM20BMetal.m2v-seed/shared", sizeof seed);
     snprintf(path, sizeof path, "%s/SEED", seed);
-    FILE *file = fopen(path, "r");  // also asks the sandbox once: a process that may not read the seed never names it
+    // a process whose sandbox may not read the seed never names it (asked without a report)
+    if (!sandboxAllows("file-read-data", kSandboxFilterPath, path)) return false;
+    FILE *file = fopen(path, "r");
     if (!file) return false;
     const bool named = fgets(name, int(size), file) != nullptr;
     fclose(file);
@@ -351,7 +393,7 @@ id openDevice(unsigned port)
         char candidates[6][512] = {};
         unsigned count = 0;
         const char *chosen = getenv("TEGRA_M2V_CACHE_DIR");
-        if (chosen && strcmp(chosen, "memory"))
+        if (chosen && strcmp(chosen, "memory") && sandboxMayCreate(chosen))
             strlcpy(candidates[count++], chosen, sizeof candidates[0]);
         else if (!chosen)
             count = cacheCandidates(candidates, 6);
