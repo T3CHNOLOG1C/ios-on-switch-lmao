@@ -39,8 +39,7 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
   - Apple's licence doesn't allow downloading Xcode or its SDKs automatically, so this is the one input you install
     yourself.
 - **bazelisk**: `brew install bazelisk`. `.bazelversion` pins Bazel 9.3.1, and bazelisk fetches it on first use.
-  Nothing the build produces comes from Homebrew. The exception is a few unit tests under `//tests` that link with
-  `ld.lld`: they still find it the old way (`PATH`, then `/opt/homebrew/opt/llvm/bin`).
+  Nothing else comes from Homebrew: lz4 and the LLVM tools are pinned downloads, and the unit tests get them too.
 - **For the GPU bundle only**:
   - the prebuilt NVK dylibs in `out/gpu/nvk/` (r9: `libvulkan_nouveau.r9{,.host}.dylib` and their `.source` files);
   - `out/gpu-artifacts/` (the m2v library store and QuartzCore's `default.metallib`).
@@ -283,6 +282,11 @@ rename a repository, or change how it is declared, update those paths too.
 ```sh
 bazel run //tools/repro:check                   # two from-scratch builds in fresh output bases, every file compared
 ```
+
+Last run (`//:kernel //:boot //:gpu`, two fresh output bases, every cache off): each build ran
+`428 processes: 82 internal, 346 darwin-sandbox`, and the comparison printed **`2829 output files, 0 differ`**. That
+covers the kernel, the boot entry (window, loader, boot script, overlay binaries and their signatures), the Metal plugin
+and NVK signatures, the seed and the raw pack.
 
 What makes the outputs reproducible:
 - Every compile maps the sandbox to a fixed path root with `-ffile-prefix-map` (`/ioswitch/...`). Apple clang's UBSan

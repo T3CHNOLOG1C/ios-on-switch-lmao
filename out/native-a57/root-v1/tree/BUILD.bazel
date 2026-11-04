@@ -1077,7 +1077,10 @@ ios_binary(
         "drivers/SwitchVideoDecoders/AVD/NVDECClient.c",
         "drivers/SwitchVideoDecoders/AVD/BlockLinear.c",
     ],
-    hdrs = glob(["drivers/SwitchVideoDecoders/AVD/*.h"]) + ["drivers/TegraNVDEC/TegraNVDECABI.h"],
+    hdrs = glob([
+        "drivers/SwitchVideoDecoders/AVD/*.h",
+        "drivers/TegraNVDEC/**/*.h",
+    ]),
     copts = [
         "-O2",
         "-Wall",

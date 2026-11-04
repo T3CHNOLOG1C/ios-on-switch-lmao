@@ -26,8 +26,8 @@ from package_native_handoff import legacy_image, LOAD  # noqa: E402
 NAME = 'ioswitch'
 WORK = ROOT / 'out/native-a57/root-v1'
 INPUTS = WORK / 'passes/native-root-vmregions-v1/layout/manifest.json'
-TEMPLATE = ROOT / 'out/switch/raw-v24-boot.cmd'   # last hardware-run raw script
-FIRMWARE = ROOT / 'out/switch/raw-v24-firmware'   # bl31, bl33, oled-sku3.dtb, exporter.uimg
+TEMPLATE = ROOT / 'boot/raw-v24-boot.cmd'   # last hardware-run raw script (//boot:package passes it in)
+FIRMWARE = ROOT / 'bazel/pinned/firmware'   # bl31, bl33, oled-sku3.dtb, exporter.uimg, BCM4356A3.hcd (pinned)
 APP_CRYPTEX_TRUST = ROOT / 'out/switch/cryptex-trustcaches/044-75188-038.dmg.trustcache'
 # The TegraGM20B Metal plugin and the NVK library in its bundle (drivers/TegraGM20BMetal/build-tegra-gm20b-metal.py out/gpu);
 # added when built. Stage the same build onto Data (stage-tegra-gm20b-metal.py): every rebuild changes both CDHashes.

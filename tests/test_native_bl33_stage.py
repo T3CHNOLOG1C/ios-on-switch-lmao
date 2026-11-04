@@ -11,9 +11,9 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from scripts import package_raw_boot as pkg  # noqa: E402
-from scripts.build_native_loader import (BL33_BASE, STAGE_HEADER, STAGE_SOURCE, compress_window,  # noqa: E402
+sys.path.insert(0, str(ROOT / 'tools/package'))
+import package_raw_boot as pkg  # noqa: E402
+from build_native_loader import (BL33_BASE, STAGE_HEADER, STAGE_SOURCE, compress_window,  # noqa: E402
                                          pack_window, stage_id, stage_into_bl33)
 
 
