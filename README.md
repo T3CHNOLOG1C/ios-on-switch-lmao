@@ -302,7 +302,7 @@ build run with `path_root`, `build_date` and `builder` set to that checkout's va
 - **(C)** Every section of the linked kernel is identical (49 of 49).
 - **(B)** The prelinker, run on the CMake kernel, reproduces its `kernel.macho` bit for bit.
 - **(A)** The packaging, run on the CMake kernel, reproduces its whole `out/boot/ioswitch` bit for bit (23 files at main
-  3263cdc).
+  4b85a5b).
 
 What differs in `//:boot` itself, and why:
 - `bl33.bin` (the staged window), `loader.uboot.bin`, `boot.cmd` and `boot.scr` follow from the linker's debug map:
