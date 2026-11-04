@@ -1,4 +1,5 @@
 #include "IOSwitchDiag.h"
+#include <kern/thread_call.h>
 #include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
@@ -923,6 +924,10 @@ extern char panic_on_proc_spawn_fail[];
 extern int use_panic_on_proc_spawn_fail;
 #endif
 
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+void native_ioswitch_migration_process(proc_t p, int exited, int status);
+#endif
+
 void
 set_proc_name(struct image_params *imgp, proc_t p)
 {
@@ -954,6 +959,7 @@ set_proc_name(struct image_params *imgp, proc_t p)
 		}
 		if (proclog) printf("+%s[%d]\n", p->p_comm, proc_getpid(p));
 	}
+	native_ioswitch_migration_process(p, 0, 0);
 #endif
 
 #if DEVELOPMENT || DEBUG
@@ -7683,6 +7689,93 @@ native_ioswitch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t own
 	return error;
 }
 
+/* The migration on XNU's console, where the user watches it: DataMigrator's processes as they start and end, a status line
+ * every 15 s, and its end (the sentinel gone: DataMigrator removes it when the migration is over). Until then
+ * ioswitch_console_hold keeps the console on screen instead of backboardd's progress bar (drivers/NativeMobileDisplay draws
+ * the UI's frames but does not show them), for at most an hour; the migration itself carries on either way. */
+volatile int ioswitch_console_hold = 0;
+#define NATIVE_MIGRATION_TICK_S 15
+#define NATIVE_MIGRATION_HOLD_S 3600
+static struct {
+	volatile int active;
+	uint64_t started;
+	uint32_t plugins_started, plugins_done, plugins_failed;
+	thread_call_t tick;
+} native_migration;
+
+static uint64_t
+native_migration_seconds(void)
+{
+	uint64_t ns = 0;
+	absolutetime_to_nanoseconds(mach_absolute_time() - native_migration.started, &ns);
+	return ns / NSEC_PER_SEC;
+}
+
+static void
+native_migration_tick(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
+{
+	if (!native_migration.active) return;
+	const uint64_t s = native_migration_seconds();
+	vnode_t vp = NULLVP;
+	const int present = !vnode_lookup("/private/var/datamigrator/migrate", 0, &vp, vfs_context_kernel());
+	if (present) vnode_put(vp);
+	if (!present) {
+		native_migration.active = 0;
+		ioswitch_console_hold = 0;
+		printf("IOSwitch migration: FINISHED after %llum%02llus (%u plugin runs, %u failed): the home screen comes next\n",
+		    s / 60, s % 60, native_migration.plugins_done, native_migration.plugins_failed);
+		return;
+	}
+	printf("IOSwitch migration: running %llum%02llus: %u plugin runs started, %u done, %u failed. Leave the Switch on.\n",
+	    s / 60, s % 60, native_migration.plugins_started, native_migration.plugins_done, native_migration.plugins_failed);
+	if (ioswitch_console_hold && s >= NATIVE_MIGRATION_HOLD_S) {
+		ioswitch_console_hold = 0;
+		printf("IOSwitch migration: still running after %u min: the screen goes to the UI (the migration carries on)\n",
+		    NATIVE_MIGRATION_HOLD_S / 60);
+	}
+	uint64_t deadline = 0;
+	clock_interval_to_deadline(NATIVE_MIGRATION_TICK_S, NSEC_PER_SEC, &deadline);
+	thread_call_enter_delayed(native_migration.tick, deadline);
+}
+
+static void
+native_migration_start(void)
+{
+	native_migration.started = mach_absolute_time();
+	native_migration.tick = thread_call_allocate(native_migration_tick, NULL);
+	if (!native_migration.tick) return;
+	native_migration.active = 1;
+	ioswitch_console_hold = 1;
+	printf("IOSwitch migration: STARTING: iOS now installs the stock apps and sets up the defaults (wallpaper, ...).\n"
+	    "IOSwitch migration: this can take 20+ minutes and runs once: leave the Switch on until the home screen appears.\n"
+	    "IOSwitch migration: progress is logged here every %u s; the console stays up until it ends.\n",
+	    NATIVE_MIGRATION_TICK_S);
+	uint64_t deadline = 0;
+	clock_interval_to_deadline(NATIVE_MIGRATION_TICK_S, NSEC_PER_SEC, &deadline);
+	thread_call_enter_delayed(native_migration.tick, deadline);
+}
+
+/* exec (exited 0, from set_proc_name) and exit (exited 1, from proc_exit with the exit status) of every process. */
+void
+native_ioswitch_migration_process(proc_t p, int exited, int status)
+{
+	if (!native_migration.active) return;
+	const char *name = p->p_name[0] ? p->p_name : p->p_comm;
+	const int plugin = !strcmp(name, "com.apple.migrationpluginwrapper");
+	if (!plugin && strcmp(name, "com.apple.datamigrator") && strcmp(name, "com.apple.datamigratorhelper")) return;
+	const uint64_t s = native_migration_seconds();
+	if (plugin && !exited) native_migration.plugins_started++;
+	if (plugin && exited) {
+		native_migration.plugins_done++;
+		if (status) native_migration.plugins_failed++;
+	}
+	if (exited)
+		printf("IOSwitch migration: %llum%02llus %s[%d] ended (status %#x)%s\n", s / 60, s % 60, name, proc_getpid(p), status,
+		    plugin ? "" : " (DataMigrator itself)");
+	else
+		printf("IOSwitch migration: %llum%02llus %s[%d] started\n", s / 60, s % 60, name, proc_getpid(p));
+}
+
 /* The data migration the first boot after a restore runs, once. The com.apple.migration prefs below record 21H461 as
  * migrated (UniXNU's skip-setup seed), so DataMigrator always answered "System build version unchanged" and
  * SystemAppMigrator.migrator never installed the 29 removable apps a restore leaves in /private/var/staged_system_apps
@@ -7715,7 +7808,10 @@ native_ioswitch_system_app_migration(proc_t p, user_addr_t scratch, mount_t data
 	if (!error) error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
 	if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
 	if (error) printf("IOSwitch raw boot: data migration request failed: %d\n", error);
-	else printf("IOSwitch raw boot: data migration requested (staged system apps)\n");
+	else {
+		printf("IOSwitch raw boot: data migration requested (staged system apps)\n");
+		native_migration_start();
+	}
 }
 
 /* The state a restored iPad has after Setup and data migration, plus no

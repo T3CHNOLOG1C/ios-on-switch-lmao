@@ -2149,6 +2149,10 @@ skipcheck:
 void
 proc_exit(proc_t p)
 {
+#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+	extern void native_ioswitch_migration_process(proc_t, int, int);
+	native_ioswitch_migration_process(p, 1, p->p_xstat);
+#endif
 	proc_t q;
 	proc_t pp;
 	struct task *task = proc_task(p);
