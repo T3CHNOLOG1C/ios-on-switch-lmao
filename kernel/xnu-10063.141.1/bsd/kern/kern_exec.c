@@ -8081,7 +8081,31 @@ native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<key>com.apple.passd</key><true/>" \
 	    "<key>com.apple.mobile.obliteration</key><true/>" \
 	    "<key>com.apple.coreduetd</key><true/>" \
+	    NATIVE_IOSWITCH_POLICY_NO_HARDWARE \
 	    "</dict></plist>\n"
+	/* No such hardware on the Switch (approved 11-04): NFC, secure element, Tap to Pay, ID wallet, Face ID, UWB,
+	 * multitouch calibration, hotspot, cellular helper, smart charging, Apple display FDR/BICS; and tailspind (always-on
+	 * kdebug tracing) and accessoryupdaterd. This file is the only override database 21H461 launchd reads: no
+	 * disabled.<uid>.plist exists. launchd reads it once, between its finish-demo-restore and sysstatuscheck boot tasks.
+	 * The user/501 domain shares the system domain's dictionary, so one bare-label key covers both domains. A job disabled
+	 * here is refused at import (error 119), so nothing spawns it, whether speculative, xpc event or mach lookup.
+	 * Not here: ptpd and atc (USB), and WebBookmarks.webbookmarksd (Safari needs it; the cryptex launch-constraint
+	 * fix ended its respawn loop). */
+#define NATIVE_IOSWITCH_POLICY_NO_HARDWARE "<key>com.apple.nfcd</key><true/>" \
+	    "<key>com.apple.seld</key><true/>" \
+	    "<key>com.apple.seserviced</key><true/>" \
+	    "<key>com.apple.softposreaderd</key><true/>" \
+	    "<key>com.apple.coreidvd</key><true/>" \
+	    "<key>com.apple.biometrickitd.mesa</key><true/>" \
+	    "<key>com.apple.nearbyd</key><true/>" \
+	    "<key>com.apple.mtmergeprops</key><true/>" \
+	    "<key>com.apple.MobileInternetSharing</key><true/>" \
+	    "<key>com.apple.CommCenterMobileHelper</key><true/>" \
+	    "<key>com.apple.PowerUIAgent</key><true/>" \
+	    "<key>com.apple.iomfb_fdr_loader</key><true/>" \
+	    "<key>com.apple.iomfb_bics_daemon</key><true/>" \
+	    "<key>com.apple.tailspind</key><true/>" \
+	    "<key>com.apple.accessoryupdaterd</key><true/>"
 	static const char head[] = NATIVE_IOSWITCH_POLICY_HEAD, bluetooth_off[] = NATIVE_IOSWITCH_POLICY_BLUETOOTH,
 	    audio_off[] = NATIVE_IOSWITCH_POLICY_AUDIO, tail[] = NATIVE_IOSWITCH_POLICY_TAIL;
 	static char policy[sizeof(head) + sizeof(bluetooth_off) + sizeof(audio_off) + sizeof(tail)];
@@ -8089,6 +8113,7 @@ native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 #undef NATIVE_IOSWITCH_POLICY_BLUETOOTH
 #undef NATIVE_IOSWITCH_POLICY_AUDIO
 #undef NATIVE_IOSWITCH_POLICY_TAIL
+#undef NATIVE_IOSWITCH_POLICY_NO_HARDWARE
 	static const char bluetooth_audio_stub[] =
 	    "/private/var/ioswitch/overlay/System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/Info.plist";
 	uint32_t bluetooth = 0;
