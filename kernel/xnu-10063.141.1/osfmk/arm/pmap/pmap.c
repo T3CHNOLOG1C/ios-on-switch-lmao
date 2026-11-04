@@ -3037,6 +3037,9 @@ pmap_create_options_internal(
 
 
 	p->pmap_vm_map_cs_enforced = false;
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	p->user_cache_maintenance_trap = false;
+#endif
 	p->min = 0;
 
 
@@ -7798,6 +7801,24 @@ pmap_unlock_phys_page(ppnum_t pn)
 	{ simple_unlock(&phys_backup_lock);}
 }
 
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+/*
+ * Make EL0 cache maintenance on this CPU trap or not, as the user address space about to run here needs (see
+ * pmap_set_jit_entitled_internal). SCTLR_EL1.UCI only governs EL0, and the exception return to EL0 is a context
+ * synchronization event, so no ISB: an address space switch that keeps the setting costs one MRS.
+ */
+static inline void
+pmap_apply_user_cache_maintenance_trap(pmap_t pmap)
+{
+	const uint64_t sctlr = __builtin_arm_rsr64("SCTLR_EL1");
+	const uint64_t want = pmap->user_cache_maintenance_trap ? (sctlr & ~SCTLR_UCI_ENABLED) : (sctlr | SCTLR_UCI_ENABLED);
+
+	if (__improbable(want != sctlr)) {
+		__builtin_arm_wsr64("SCTLR_EL1", want);
+	}
+}
+#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+
 MARK_AS_PMAP_TEXT static void
 pmap_switch_user_ttb(pmap_t pmap, pmap_cpu_data_t *cpu_data_ptr)
 {
@@ -7822,6 +7843,9 @@ pmap_switch_user_ttb(pmap_t pmap, pmap_cpu_data_t *cpu_data_ptr)
 
 	if (pmap != kernel_pmap) {
 		set_mmu_ttb((pmap->ttep & TTBR_BADDR_MASK) | (((uint64_t)pmap->hw_asid) << TTBR_ASID_SHIFT));
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+		pmap_apply_user_cache_maintenance_trap(pmap);
+#endif
 	} else if (!pmap_user_ttb_is_clear()) {
 		pmap_clear_user_ttb_internal();
 	}
@@ -12647,10 +12671,50 @@ pmap_get_vm_map_cs_enforced(
 	return pmap->pmap_vm_map_cs_enforced;
 }
 
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+/*
+ * iOS userland publishes code it writes (JavaScriptCore's JIT) with IC IVAU alone, as Apple cores fetch instructions
+ * coherently with their data caches. Without CTR_EL0.IDC (Cortex-A57) the new code also has to be cleaned to the PoU
+ * first, or the fetch after the IC IVAU reads stale lines from L2. Only MAP_JIT entitled address spaces can make code
+ * (the same MAC check gates MAP_JIT), so EL0 cache maintenance traps while one is live and sleh.c performs it with
+ * the clean; every other process keeps untrapped EL0 cache maintenance (our GPU userland issues DC CIVAC/CVAC loops).
+ */
+static void
+pmap_enable_user_cache_maintenance_trap(pmap_t pmap)
+{
+	if (pmap == kernel_pmap || (__builtin_arm_rsr64("CTR_EL0") & CTR_EL0_IDC)) {
+		return;
+	}
+	pmap->user_cache_maintenance_trap = true;
+
+	/* Exec sets this before the new task's thread first runs; should the pmap be live here already, apply it now. */
+	disable_preemption();
+	if ((get_mmu_ttb() & TTBR_BADDR_MASK) == (pmap->ttep & TTBR_BADDR_MASK)) {
+		pmap_apply_user_cache_maintenance_trap(pmap);
+	}
+	enable_preemption();
+}
+#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+
+void
+pmap_inherit_user_cache_maintenance_trap(
+	__unused pmap_t parent,
+	__unused pmap_t child)
+{
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	if (parent->user_cache_maintenance_trap) {
+		pmap_enable_user_cache_maintenance_trap(child);
+	}
+#endif
+}
+
 MARK_AS_PMAP_TEXT void
 pmap_set_jit_entitled_internal(
 	__unused pmap_t pmap)
 {
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	pmap_enable_user_cache_maintenance_trap(pmap);
+#endif
 	return;
 }
 

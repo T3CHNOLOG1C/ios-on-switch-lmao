@@ -754,6 +754,11 @@ extern void pmap_set_jit_entitled(pmap_t pmap);
 /* Ask the pmap layer if there is a JIT entry in this map. */
 extern bool pmap_get_jit_entitled(pmap_t pmap);
 
+#if defined(__arm64__) && !CONFIG_SPTM
+/* A forked address space traps EL0 cache maintenance when its parent does (osfmk/arm/pmap/pmap.c). */
+extern void pmap_inherit_user_cache_maintenance_trap(pmap_t parent, pmap_t child);
+#endif
+
 /* Inform the pmap layer that the XO register is repurposed for this map */
 extern void pmap_set_tpro(pmap_t pmap);
 

@@ -469,6 +469,74 @@ LEXT(arm64_panic_lockdown_test_copyio)
 	ret
 #endif /* CONFIG_XNUPOST */
 
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+/*
+ * int ioswitch_user_cache_maintenance(user_addr_t va, vm_size_t len, uint32_t op)
+ *
+ * EL0 cache maintenance by VA, performed at EL1 on the current user address range [va, va + len) for sleh.c when
+ * SCTLR_EL1.UCI traps it (see pmap_set_jit_entitled_internal). op is an IOSWITCH_UCM_* value (proc_reg.h). A fault
+ * on the range is a cache maintenance abort, which inspect_data_abort treats as a read; handle_kernel_abort resolves
+ * it with vm_fault on the thread's map through the recovery range below, and one it cannot resolve returns EFAULT
+ * (address in thread->machine.recover_far). None of these operations discards data, so a line the user could not
+ * have maintained itself is never harmed.
+ */
+	.text
+	.align 2
+	.globl EXT(ioswitch_user_cache_maintenance)
+LEXT(ioswitch_user_cache_maintenance)
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	COPYIO_RECOVER_RANGE 5f
+	cbz		x1, 5f
+	mov		x9, #((1<<MMU_CLINE)-1)
+	and		x3, x0, x9
+	bic		x4, x0, x9							// first data cache line
+	add		x5, x1, x3
+	sub		x5, x5, #1
+	lsr		x5, x5, #MMU_CLINE					// data cache lines - 1
+	cmp		w2, #IOSWITCH_UCM_DC_CVAC
+	b.eq	3f
+	cmp		w2, #IOSWITCH_UCM_DC_CIVAC
+	b.eq	4f
+1:
+	dc		cvau, x4							// IOSWITCH_UCM_SYNC_I and IOSWITCH_UCM_DC_CVAU
+	add		x4, x4, #(1<<MMU_CLINE)
+	subs	x5, x5, #1
+	b.pl	1b
+	dsb		ish
+	cbnz	w2, 5f								// IOSWITCH_UCM_DC_CVAU ends here
+	mov		x9, #((1<<MMU_I_CLINE)-1)
+	and		x3, x0, x9
+	bic		x4, x0, x9							// first instruction cache line
+	add		x5, x1, x3
+	sub		x5, x5, #1
+	lsr		x5, x5, #MMU_I_CLINE				// instruction cache lines - 1
+2:
+	ic		ivau, x4
+	add		x4, x4, #(1<<MMU_I_CLINE)
+	subs	x5, x5, #1
+	b.pl	2b
+	dsb		ish
+	b		5f
+3:
+	dc		cvac, x4
+	add		x4, x4, #(1<<MMU_CLINE)
+	subs	x5, x5, #1
+	b.pl	3b
+	dsb		ish
+	b		5f
+4:
+	dc		civac, x4
+	add		x4, x4, #(1<<MMU_CLINE)
+	subs	x5, x5, #1
+	b.pl	4b
+	dsb		ish
+5:
+	mov		x0, #0
+	POP_FRAME
+	ARM64_STACK_EPILOG
+#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+
 /*
  * int _bcopyin(const char *src, char *dst, vm_size_t len)
  */
