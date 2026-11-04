@@ -21,6 +21,11 @@ if [ -n "$data" ]; then
   cp -RX "$data/db/uuidtext" "$LOGS/uuidtext"
   cp -X "$data/log/com.apple.xpc.launchd/launchd.log" "$LOGS/" 2>/dev/null || true
   [ -d "$data/mobile/Library/Logs/CrashReporter" ] && cp -RX "$data/mobile/Library/Logs/CrashReporter" "$LOGS/mobile-CrashReporter"
+  # Activation state (should_hactivate, Activation State) and the one-time data migration (staged system apps:
+  # what is left in staging vs installed). The Mac may ignore ownership on this mount ("Owners" line): uids then mean nothing.
+  [ -d "$data/mobile/Library/Logs/mobileactivationd" ] && cp -RX "$data/mobile/Library/Logs/mobileactivationd" "$LOGS/mobileactivationd"
+  { diskutil info "$data" | grep Owners; ls -ln "$data/staged_system_apps" "$data/datamigrator" "$data/ioswitch"
+    ls "$data/containers/Bundle/Application" | wc -l; } > "$LOGS/migration-state.txt" 2>&1 || true
   # Every process's m2v shader cache to $LOGS/m2v (backboardd's also as $LOGS/m2v-cache), and the render pipeline states and
   # specializations their journals name merged into the precompile corpus the next Metal bundle build seeds from. Read-only but
   # for the mode-000 Library and Library/Caches of the system containers it reads, opened and closed again (harvest.py).
