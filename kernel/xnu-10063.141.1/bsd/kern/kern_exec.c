@@ -8464,6 +8464,12 @@ load_init_program(proc_t p)
     defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
 	int watchdog_error = native_ioswitch_watchdog_policy(p, (user_addr_t)scratch_addr);
 	if (watchdog_error) printf("IOSwitch raw boot: watchdogd launchd policy not written: %d (continuing)\n", watchdog_error);
+	/* The NVRAM saved on Data (drivers/SwitchNVRAM, /private/var/ioswitch/nvram.bin): restored now, so that userland
+	 * sees it from its first read, and saved there from now on. */
+	extern uint32_t ioswitch_nvram_data_mounted(void);
+	int nvram_error = native_ioswitch_mkdir(p, (user_addr_t)scratch_addr, "/private/var/ioswitch", 0, 0755);
+	if (nvram_error) printf("IOSwitch raw boot: /private/var/ioswitch not made: %d (NVRAM not saved)\n", nvram_error);
+	(void)ioswitch_nvram_data_mounted();
 	/* Owner overlay unions over sealed directories (IOSwitchRawMount.inc), now that Data is mounted. */
 	native_ioswitch_raw_overlay(p, (user_addr_t)scratch_addr);
 #endif
