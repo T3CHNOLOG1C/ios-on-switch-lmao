@@ -26,6 +26,9 @@ if [ -n "$data" ]; then
   [ -d "$data/mobile/Library/Logs/mobileactivationd" ] && cp -RX "$data/mobile/Library/Logs/mobileactivationd" "$LOGS/mobileactivationd"
   { diskutil info "$data" | grep Owners; ls -ln "$data/staged_system_apps" "$data/datamigrator" "$data/ioswitch"
     ls "$data/containers/Bundle/Application" | wc -l; } > "$LOGS/migration-state.txt" 2>&1 || true
+  # The kernel's boot I/O census bitmaps (spec_vnops.c, temporary) and any WebKit crash reports, which are newest first.
+  [ -f "$data/ioswitch/boot-io-census.bin" ] && cp -X "$data/ioswitch/boot-io-census.bin" "$LOGS/"
+  for f in "$data"/mobile/Library/Logs/CrashReporter/com.apple.WebKit.*.ips(N); do cp -X "$f" "$LOGS/"; done
   # Every process's m2v shader cache to $LOGS/m2v (backboardd's also as $LOGS/m2v-cache), and the render pipeline states and
   # specializations their journals name merged into the precompile corpus the next Metal bundle build seeds from. Read-only but
   # for the mode-000 Library and Library/Caches of the system containers it reads, opened and closed again (harvest.py).
