@@ -20,9 +20,6 @@ python.toolchain(
     python_version = "3.13",
 )
 
-# The same interpreter for repository rules (bazel/ipsw inflates members with it).
-use_repo(python, "python_3_13_host")
-
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
     hub_name = "ioswitch_pypi",
@@ -43,6 +40,14 @@ bazel_dep(name = "rules_rust", version = "0.75.0")
 xcode_host = use_repo_rule("//bazel/host:xcode.bzl", "xcode_host")
 
 xcode_host(name = "xcode")
+
+# The checked-in pins (bazel/pinned), each copied in through Bazel's sha256 check (bazel/host/files.bzl).
+pinned_files = use_repo_rule("//bazel/host:files.bzl", "pinned_files")
+
+pinned_files(
+    name = "pinned",
+    sums = "//bazel/pinned:SHA256SUMS",
+)
 
 # --- Apple open source the kernel is built from (apple-oss-distributions tags), plus our patches ----------------
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
@@ -133,7 +138,18 @@ http_archive(
 # --- iPadOS 17.7.11 (21H461) for iPad7,1: only the members the build and the SD install read, fetched by HTTP
 # range request into the repository cache (bazel/ipsw/pins.bzl, `bazel run //bazel/ipsw:pin` to bump). ---------
 ipsw = use_extension("//bazel/ipsw:ipsw.bzl", "ipsw")
-use_repo(ipsw, "ipsw")
+use_repo(
+    ipsw,
+    "ipsw",
+    # The deflated members' stored bytes, which //bazel/ipsw inflates.
+    "ipsw_app_cryptex",
+    "ipsw_app_cryptex_trust_cache",
+    "ipsw_device_tree",
+    "ipsw_kernelcache",
+    "ipsw_static_trust_cache",
+    "ipsw_system_cryptex",
+    "ipsw_system_cryptex_trust_cache",
+)
 
 # --- GPU (owned by gpu/) -----------------------------------------------------------------------------------------
 # Rust 1.98.0 (the bridge's `cargo +1.98.0`), with the iOS standard library: the Metal bridge is built by this

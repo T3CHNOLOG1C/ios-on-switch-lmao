@@ -1,9 +1,11 @@
-"""Inputs the kernel and its package derive from the IPSW and from pinned files: one rule runs a kernel tool on
-declared inputs into declared outputs."""
+"""Inputs the kernel and its package derive from the IPSW and from pinned files: one rule runs a tool on declared
+inputs into declared outputs."""
 
-load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "run_tool", "setting")
+load(":common.bzl", "KERNEL_TOOL_ATTRS", "run_tool", "setting")
 
 def _tool_output_impl(ctx):
+    if bool(ctx.attr.tool) == bool(ctx.attr.binary):
+        fail("{}: give exactly one of tool and binary".format(ctx.label))
     outs = [ctx.actions.declare_file(o) for o in ctx.attr.outs] + [ctx.actions.declare_directory(d) for d in ctx.attr.out_dirs]
     args = []
     for a in ctx.attr.args:
@@ -15,9 +17,9 @@ def _tool_output_impl(ctx):
         args.append(ctx.expand_location(a, ctx.attr.srcs))
     run_tool(
         ctx,
-        ctx.file.script if ctx.attr.script else ctx.attr.tool,
+        ctx.attr.binary or ctx.attr.tool,
         args,
-        depset(ctx.files.srcs + ctx.files.deps),
+        depset(ctx.files.srcs),
         outs,
         ctx.attr.mnemonic,
         ctx.attr.message or ("Making " + ", ".join(ctx.attr.outs + ctx.attr.out_dirs)),
@@ -27,12 +29,11 @@ def _tool_output_impl(ctx):
 
 tool_output = rule(
     implementation = _tool_output_impl,
-    doc = "Runs tools/kernel/<tool> with args ($(location), {out}/{outN}, {xcode_env}, {path_root}, {bin_dir} " +
-          "expanded) on srcs into outs and out_dirs.",
+    doc = "Runs a tool (a //tools/kernel name, or any py_binary) with args ($(location), {out}/{outN}, {xcode_env}, " +
+          "{path_root}, {bin_dir} expanded) on srcs into outs and out_dirs.",
     attrs = dict(KERNEL_TOOL_ATTRS, **{
-        "tool": attr.string(doc = "a tools/kernel script name"),
-        "script": attr.label(allow_single_file = True, doc = "or any Python script"),
-        "deps": attr.label_list(allow_files = True, doc = "files the script imports or reads besides srcs"),
+        "tool": attr.string(doc = "a //tools/kernel tool name (bazel/kernel/common.bzl KERNEL_TOOLS)"),
+        "binary": attr.label(executable = True, cfg = "exec", doc = "or any executable target"),
         "srcs": attr.label_list(allow_files = True),
         "outs": attr.string_list(),
         "out_dirs": attr.string_list(),
@@ -41,5 +42,4 @@ tool_output = rule(
         "message": attr.string(),
         "requirements": attr.string_list(),
     }),
-    toolchains = [PY_TOOLCHAIN],
 )

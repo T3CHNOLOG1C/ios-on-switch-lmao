@@ -11,7 +11,7 @@ firmware (a firmware.S that .incbins the directory's firmware/), copts, c_srcs r
 kexts this driver needs prelinked: they join the prelink roots).
 """
 
-load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "python", "run_tool", "setting", "workspace_root")
+load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "run_tool", "setting", "workspace_root")
 load(":xnu.bzl", "XnuInfo")
 
 KernelObjectsInfo = provider(
@@ -164,7 +164,7 @@ def _kernel_driver_impl(ctx):
             checked = ctx.actions.declare_file(out_dir + "/" + stem + ".checked.o")
             run_tool(
                 ctx,
-                ctx.file.abi_check_script,
+                ctx.attr.abi_check,
                 [
                     "--class",
                     check.cls,
@@ -179,7 +179,7 @@ def _kernel_driver_impl(ctx):
                     "--output",
                     checked.path,
                 ],
-                depset([obj, final, check.bindings, ctx.file._kernelcache] + ctx.files.abi_check_deps),
+                depset([obj, final, check.bindings, ctx.file._kernelcache]),
                 [checked],
                 "KernelAbiCheck",
                 "Checking {} against the original kernelcache ({})".format(src.basename, check.cls),
@@ -215,8 +215,7 @@ _kernel_driver = rule(
         "asm_copts": attr.string_list(),
         "late": attr.string_list(),
         "abi_checks": attr.label_keyed_string_dict(allow_files = True),
-        "abi_check_script": attr.label(allow_single_file = True),
-        "abi_check_deps": attr.label_list(allow_files = True),
+        "abi_check": attr.label(executable = True, cfg = "exec", doc = "the ABI checker (a py_binary)"),
         "prelink": attr.string_list(),
         "prelink_cuts": attr.string_list(),
         "prelink_deferred": attr.string_list(),
@@ -391,9 +390,9 @@ def _kernel_prelink_impl(ctx):
         args += ["--early-security-init", init]
     run_tool(
         ctx,
-        ctx.file._emit_prelink,
+        ctx.attr._emit_prelink,
         args,
-        depset([kernel.objects[0], ctx.file.kernelcache, ctx.file.inherit_report, ctx.file.previous, ctx.file._native_prelink]),
+        depset([kernel.objects[0], ctx.file.kernelcache, ctx.file.inherit_report, ctx.file.previous]),
         [out, report],
         "KernelPrelink",
         "Prelinking the original kexts into " + ctx.attr.out,
@@ -413,8 +412,7 @@ kernel_prelink = rule(
         "base_roots": attr.string_list(mandatory = True),
         "slide": attr.string(mandatory = True),
         "early_security_init": attr.string_list(),
-        "_emit_prelink": attr.label(default = "//tools/prelink:emit_prelink.py", allow_single_file = True),
-        "_native_prelink": attr.label(default = "//tools/prelink:native_prelink.py", allow_single_file = True),
+        "_emit_prelink": attr.label(default = "//tools/prelink:emit_prelink", executable = True, cfg = "exec"),
     }),
     toolchains = [PY_TOOLCHAIN],
 )

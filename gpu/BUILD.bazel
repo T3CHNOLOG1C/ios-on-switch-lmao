@@ -9,7 +9,7 @@
 # Inputs: m2v (@m2v: steelbrain/metal2vulkan 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's
 # crates (@m2v_crates, from drivers/TegraGM20BMetal/bridge/Cargo.lock), Rust 1.98.0 and LLVM 23.1.4's llvm-as
 # (pinned downloads), Xcode (the declared host input), and @gpu_host_inputs: the NVK dylib + host twin (TEMPORARY:
-# built by hand from Mesa 77452b90 + out/gpu/nvk/*.patch until NVK builds here), QuartzCore's default.metallib and
+# built by hand from Mesa 77452b90 + gpu/nvk/*.patch until NVK builds here), QuartzCore's default.metallib and
 # the precompile's library store. See bazel/gpu/deps.bzl.
 load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_bridge", "metal_bundle", "metal_plugin", "metal_raw_pack", "metal_seed", "raw_stack")
 

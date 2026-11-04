@@ -1,5 +1,5 @@
-"""Shared plumbing for the kernel rules: the hermetic Python that runs every tool, the Xcode host input, the path
-settings that keep sandbox paths out of the outputs."""
+"""Shared plumbing for the kernel rules: the tools (py_binary targets on the hermetic Python), the Xcode host input,
+the path settings that keep sandbox paths out of the outputs."""
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 
@@ -20,8 +20,29 @@ def workspace_root(target):
     """`external/<canonical repo name>` of a target in an external repository ("" for the main repository)."""
     return target.label.workspace_root
 
+# The kernel build's tools: py_binary targets in tools/kernel (each on the hermetic rules_python toolchain), named by
+# their script's stem. run_tool(ctx, "compile", ...) runs //tools/kernel:compile.
+KERNEL_TOOLS = [
+    "archive",
+    "compile",
+    "corecrypto",
+    "data_seed",
+    "firehose",
+    "host_c_binary",
+    "im4p",
+    "ios_binary",
+    "libpthread",
+    "link",
+    "recipes",
+    "sdkroot",
+    "storage_abi",
+    "trust_bundle",
+    "unxz",
+    "xnu_build",
+]
+
 KERNEL_TOOL_ATTRS = {
-    "_tools": attr.label(default = "//tools/kernel:sources"),
+    "_tools": attr.label_list(default = ["//tools/kernel:" + t for t in KERNEL_TOOLS], cfg = "exec"),
     "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
     "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
     "_path_root": attr.label(default = "//bazel/kernel:path_root"),
@@ -29,26 +50,18 @@ KERNEL_TOOL_ATTRS = {
     "_builder": attr.label(default = "//bazel/kernel:builder"),
 }
 
-def tool_inputs(ctx):
-    """Files every kernel tool action needs: the tools, the Python runtime, the Xcode identity and env."""
-    return depset(
-        ctx.files._tools + [ctx.file._xcode_env, ctx.file._xcode_identity],
-        transitive = [python(ctx).files],
-    )
-
 def run_tool(ctx, tool, arguments, inputs, outputs, mnemonic, progress, execution_requirements = None, env = None):
-    """Runs tools/kernel/<tool> (or a script File) on the hermetic interpreter (-I: no site, no cwd on sys.path)."""
-    py = python(ctx)
-    if type(tool) == "File":
-        script = [tool]
-    else:
-        script = [f for f in ctx.files._tools if f.basename == tool]
-    if len(script) != 1:
-        fail("no tools/kernel/" + str(tool))
+    """Runs a tool: a tools/kernel name ("compile", or "compile.py") or any executable target (a py_binary)."""
+    if type(tool) == "string":
+        name = tool[:-3] if tool.endswith(".py") else tool
+        found = [t for t in ctx.attr._tools if t.label.name == name]
+        if len(found) != 1:
+            fail("no //tools/kernel:" + name)
+        tool = found[0]
     ctx.actions.run(
-        executable = py.interpreter,
-        arguments = ["-I", "-B", script[0].path] + arguments,
-        inputs = depset(script, transitive = [inputs, tool_inputs(ctx)]),
+        executable = tool[DefaultInfo].files_to_run,
+        arguments = arguments,
+        inputs = depset([ctx.file._xcode_env, ctx.file._xcode_identity], transitive = [inputs]),
         outputs = outputs,
         mnemonic = mnemonic,
         progress_message = progress,

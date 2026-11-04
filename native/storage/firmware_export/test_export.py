@@ -48,7 +48,7 @@ class TestExport(unittest.TestCase):
 
     def setUp(self):
         self.mem=bytearray(END-GD);self.accesses=[];self.reject_at=None;self.change_at_second=None;self.gd_reads=0
-        self.mem[BASE-GD:BASE-GD+390884]=(ROOT/'out/switch/boot-reference/bl33.bin').read_bytes()
+        self.mem[BASE-GD:BASE-GD+390884]=(ROOT/'bazel/pinned/firmware/bl33.bin').read_bytes()
         self.p64(GD+8,0x201);self.p64(GD+0x58,BASE);self.p64(GD+0x80,BASE-0x88110000);self.p64(GD+0x90,LOW+0x8000)
         self.p64(BASE+0x66cb0,LOW);self.p64(BASE+0x66ca8,BASE)
         self.list(GD+0xa0,[UC0+0x20,UC+0x20])
@@ -101,7 +101,7 @@ class TestExport(unittest.TestCase):
         struct.pack_into('<8I2Q4I',expected,0,0x4d435349,1,256,1,0x700b0000,1,512,1,CAPACITY,CAPACITY*512,0xc0ff8000,0xabcd,0x80030000,0)
         expected[0x40:0x60]=self.mem[MMC+0x40-GD:MMC+0x60-GD]
         struct.pack_into('<4Q',expected,0x60,MMC,DESC,GD,BASE-0x88110000)
-        expected[0x80:0xa0]=hashlib.sha256((ROOT/'out/switch/boot-reference/bl33.bin').read_bytes()).digest()
+        expected[0x80:0xa0]=hashlib.sha256((ROOT/'bazel/pinned/firmware/bl33.bin').read_bytes()).digest()
         struct.pack_into('<I',expected,0xf0,zlib.crc32(expected[:0xf0]))
         self.assertEqual(out,expected);self.assertEqual(self.gd_reads,2)
         self.assertTrue(all(0x80000000<=p<0x100000000 and p+n<=0x100000000 for p,n in self.accesses))

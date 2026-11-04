@@ -1,0 +1,16 @@
+# The NVK dylib and its host twin (//gpu:bundle's pinned host inputs, bazel/gpu/deps.bzl HOST_FILES) are built by hand
+# from Mesa 77452b90 + these patches with build-nvk.sh, in out/gpu/nvk (its work directory: Mesa checkout, meson
+# builds, nvk-out/). Bazel does not build Mesa yet; see bazel/gpu/deps.bzl for what a hermetic NVK needs.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(["*.patch"]) + ["build-nvk.sh"])
+
+# Relinks an NVK darwin dylib so the entrypoint tables' absent weak references are absolute symbols at 0:
+#   bazel run //gpu/nvk:relink -- <meson build dir> [<target>]
+py_binary(
+    name = "relink",
+    srcs = ["relink-nvk.py"],
+    main = "relink-nvk.py",
+)

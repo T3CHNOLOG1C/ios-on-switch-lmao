@@ -1,8 +1,39 @@
+# The kernel build's tools, one py_binary per job on the hermetic rules_python toolchain. bazel/kernel's rules run
+# them (run_tool in bazel/kernel/common.bzl); nobody runs them by hand.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("//bazel/kernel:common.bzl", "KERNEL_TOOLS")
+
 package(default_visibility = ["//visibility:public"])
 
-# The kernel build's tools, run by bazel/kernel rules on the hermetic Python (never imported by each other across
-# packages, never run by hand).
-filegroup(
-    name = "sources",
-    srcs = glob(["*.py"]),
+# Xcode environment, the path hygiene every compile shares (prefix maps, locale, ZERO_AR_DATE).
+py_library(
+    name = "common",
+    srcs = ["common.py"],
+    imports = ["."],
+)
+
+# The symbol names of XNU's own objects (corecrypto's and libpthread's namespacing).
+py_library(
+    name = "kernel_names",
+    srcs = ["kernel_names.py"],
+    imports = ["."],
+    deps = [":common"],
+)
+
+[py_binary(
+    name = tool,
+    srcs = [tool + ".py"],
+    deps = [":common"] + {
+        "corecrypto": [":kernel_names"],
+        "libpthread": [":kernel_names"],
+        "trust_bundle": [":im4p_lib"],
+    }.get(tool, []),
+) for tool in KERNEL_TOOLS]
+
+# trust_bundle reads the IPSW's IMG4 payloads with im4p's parser.
+py_library(
+    name = "im4p_lib",
+    srcs = ["im4p.py"],
+    imports = ["."],
 )

@@ -5,7 +5,7 @@
 # NVK_BUILD_ID unset, as r6: the pipeline cache UUID hashes the dylib's LC_UUID (the twin takes it from the iOS dylib at the
 # bundle build). Outputs nvk-out/libvulkan_nouveau.dylib (+ .source) and nvk-out/libvulkan_nouveau.host.dylib (+ .source).
 set -e
-S=${0:A:h}; T=$S/../r5-m2vfast/nvk
+R=${0:A:h}; S=${R:h:h}/out/gpu/nvk; T=$S/../r5-m2vfast/nvk  # R: this recipe (gpu/nvk); S: its work directory
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 ABI=/Users/brunostjohn/Development/Projects/ioswitch/out/native-a57/root-v1/tree/drivers/TegraGM20B
 PRE=/Users/brunostjohn/Development/Projects/ioswitch/out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/precompile
@@ -19,12 +19,12 @@ mkdir -p $S/nvk-out
     -Dzstd=disabled -Dzlib=disabled -Dexpat=disabled -Dxmlconfig=disabled -Dshader-cache=disabled -Dnvk-darwin-abi-dir=$ABI)
   meson configure $S/nvk-ios-build -Dnvk-build-id=
   ninja -C $S/nvk-ios-build src/nouveau/vulkan/libvulkan_nouveau.dylib
-  python3 $S/relink-nvk.py $S/nvk-ios-build
+  python3 $R/relink-nvk.py $S/nvk-ios-build
   cp $S/nvk-ios-build/src/nouveau/vulkan/libvulkan_nouveau.dylib $S/nvk-out/libvulkan_nouveau.dylib
   sh $PRE/nvk-source.sh $S/mesa > $S/nvk-out/libvulkan_nouveau.dylib.source
 )
 zsh $PRE/build-nvk-host.sh $S/mesa $S/nvk-host-build $T $S/nvk-out/libvulkan_nouveau.host.dylib
-python3 $S/relink-nvk.py $S/nvk-host-build
+python3 $R/relink-nvk.py $S/nvk-host-build
 cp $S/nvk-host-build/src/nouveau/vulkan/libvulkan_nouveau.dylib $S/nvk-out/libvulkan_nouveau.host.dylib
 otool -L $S/nvk-out/libvulkan_nouveau.dylib
 cat $S/nvk-out/*.source

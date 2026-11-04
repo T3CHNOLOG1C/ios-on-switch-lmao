@@ -9,7 +9,7 @@
 @m2v_crates    every crates.io package of the bridge's Cargo.lock (drivers/TegraGM20BMetal/bridge/Cargo.lock)
                as a cargo `vendor` directory: each .crate fetched by the lock's own sha256.
 @gpu_host_inputs  inputs that exist only on the build Mac, each checked against a pin here (like Xcode):
-               the NVK dylib and its host twin (Mesa 77452b90 + out/gpu/nvk/*.patch, built by hand: TEMPORARY until
+               the NVK dylib and its host twin (Mesa 77452b90 + gpu/nvk/*.patch, built by hand: TEMPORARY until
                NVK builds under Bazel), 21H461's QuartzCore default.metallib, and the precompile's library store
                (Apple metallibs harvested from the device). Found under $IOSWITCH_NVK_DIR / $IOSWITCH_GPU_ARTIFACTS,
                default <workspace>/out/gpu/nvk and <workspace>/out/gpu-artifacts.
@@ -17,9 +17,9 @@
 
 NVK is not built here yet. What a hermetic NVK needs, beyond what this file already pins (Rust 1.98, Xcode, LLVM
 23.1.4's release archive): Mesa 77452b9092cc44d76d92180a12d3aaaf27a98382 (gitlab.freedesktop.org/mesa/mesa; a
-git_repository by commit, GitLab's archives are not byte-stable) + out/gpu/nvk/{nvk-darwin, nvk-0002-cmd-mem-written-
+git_repository by commit, GitLab's archives are not byte-stable) + gpu/nvk/{nvk-darwin, nvk-0002-cmd-mem-written-
 range, nvk-linear-color-attachments, nvk-0003-linear-color-attachment-rule, nvk-0004-sandbox-safe-darwin, nvk-0005-join-copy-regions}.patch in
-that order, then out/gpu/nvk/relink-nvk.py; meson + ninja + mako
+that order, then gpu/nvk/relink-nvk.py; meson + ninja + mako
 + pyyaml + packaging + markupsafe from pinned wheels; bindgen and cbindgen (cargo, vendored); Mesa's meson wraps
 (crates paste, syn, quote, proc-macro2, unicode-ident, rustc-hash); and for the two build-time tools a cross build
 runs (mesa_clc, vtn_bindgen2) a native Mesa build against LLVM + clang libraries (the release archive has them, ~10k
@@ -30,6 +30,8 @@ The iOS build itself is drivers' -Dvulkan-drivers=nouveau ... -Dmesa-clc=system 
 is reproducible and its pipeline cache UUID stable.
 """
 
+load("//bazel/host:files.bzl", "copy_checked", "sha256_lines")
+
 M2V = {
     "commit": "720ef1ce9ae2a2068999a8675717418b9416283e",
     "url": "https://github.com/steelbrain/metal2vulkan/archive/720ef1ce9ae2a2068999a8675717418b9416283e.tar.gz",
@@ -38,9 +40,9 @@ M2V = {
 }
 
 # Host inputs: file name in the repository -> (environment variable naming the directory, default below the
-# workspace, file name there, sha256). Directories: (variable, default, name, tree digest of tree_digest.py).
+# workspace, file name there, sha256). Directories: (variable, default, name, per-file `shasum -a 256` listing).
 HOST_FILES = {
-    # NVK r9 (out/gpu/nvk/build-nvk.sh): Mesa 77452b90 + nvk-darwin, nvk-0002, nvk-linear-color-attachments, nvk-0003,
+    # NVK r9 (gpu/nvk/build-nvk.sh, into out/gpu/nvk): Mesa 77452b90 + nvk-darwin, nvk-0002, nvk-linear-color-attachments, nvk-0003,
     # nvk-0004-sandbox-safe-darwin, nvk-0005-join-copy-regions, then relink-nvk.py (absent entry points absolute at 0).
     "nvk/libvulkan_nouveau.dylib": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.dylib", "276260dc81da7c40edd8cf7b95f796d41cc4eb84344bddcf78bae8f1d2876a58"),
     "nvk/libvulkan_nouveau.dylib.source": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.dylib.source", "5e5a48d11e3b141e8b59697fef1c9a82bc50ebb4487b00d0f55a0b6cb64930c2"),
@@ -49,7 +51,7 @@ HOST_FILES = {
     "QuartzCore-21H461.default.metallib": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "QuartzCore-21H461.default.metallib", "606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9"),
 }
 HOST_DIRS = {
-    "m2v-libs": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "m2v-libs", "ec36180f292ad41229b333ae995b7f184d87fcce7720e0825865e2aa46627b02"),
+    "m2v-libs": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "m2v-libs", "//bazel/gpu:m2v-libs.sha256"),
 }
 
 _SERIES = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/series"
@@ -200,29 +202,20 @@ llvm_tools = repository_rule(
 def _host_dir(rctx, variable, default):
     return rctx.getenv(variable) or (str(rctx.workspace_root) + "/" + default)
 
+def _host_input(rctx, name, variable, default, source, sha256):
+    path = rctx.path(_host_dir(rctx, variable, default) + "/" + source)
+    if not path.exists:
+        fail("GPU host input {} is missing: {} (set {} to its directory)".format(name, path, variable))
+    copy_checked(rctx, path, name, sha256)
+
 def _gpu_host_inputs_impl(rctx):
-    python = rctx.path(rctx.attr._python)
     files = []
     for name, (variable, default, source, sha256) in HOST_FILES.items():
-        path = rctx.path(_host_dir(rctx, variable, default) + "/" + source)
-        if not path.exists:
-            fail("GPU host input {} is missing: {} (set {} to its directory)".format(name, path, variable))
-        rctx.watch(path)
-        result = rctx.execute([python, "-I", "-c", "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())", str(path)])
-        found = result.stdout.strip()
-        if found != sha256:
-            fail("GPU host input {} ({}) has sha256 {}, pinned {} in bazel/gpu/deps.bzl".format(name, path, found, sha256))
-        rctx.symlink(path, name)
+        _host_input(rctx, name, variable, default, source, sha256)
         files.append(name)
-    for name, (variable, default, source, digest) in HOST_DIRS.items():
-        path = rctx.path(_host_dir(rctx, variable, default) + "/" + source)
-        if not path.exists:
-            fail("GPU host input {} is missing: {} (set {} to its directory)".format(name, path, variable))
-        result = rctx.execute([python, "-I", rctx.path(rctx.attr._tree_digest), str(path)])
-        found = result.stdout.split(" ")[0] if result.return_code == 0 else result.stderr
-        if found != digest:
-            fail("GPU host input {} ({}) has tree digest {}, pinned {} in bazel/gpu/deps.bzl".format(name, path, found, digest))
-        rctx.symlink(path, name)
+    for name, (variable, default, source, listing) in HOST_DIRS.items():
+        for sha256, relative in sha256_lines(rctx.read(Label(listing))):
+            _host_input(rctx, name + "/" + relative, variable, default, source + "/" + relative, sha256)
     rctx.file("BUILD.bazel", """\
 package(default_visibility = ["//visibility:public"])
 
@@ -239,14 +232,11 @@ filegroup(
 )
 """.format(files = repr(sorted(files))))
 
+# Each input is copied in through Bazel's own sha256 check (bazel/host/files.bzl copy_checked) and watched, so
+# changing one refetches the repository and a wrong one fails the fetch.
 gpu_host_inputs = repository_rule(
     implementation = _gpu_host_inputs_impl,
     environ = ["IOSWITCH_NVK_DIR", "IOSWITCH_GPU_ARTIFACTS"],
-    local = True,
-    attrs = {
-        "_python": attr.label(default = "@python_3_13_host//:python"),
-        "_tree_digest": attr.label(default = ":tree_digest.py"),
-    },
 )
 
 # --- The extension -------------------------------------------------------------------------------------------------

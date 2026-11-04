@@ -1,4 +1,18 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+
 package(default_visibility = ["//visibility:public"])
 
-# The prelinker (emit_prelink.py + native_prelink.py), run by bazel/kernel:kernel.bzl kernel_prelink.
-exports_files(glob(["*.py"]))
+# The native prelinker's Mach-O reader and plan (SwitchUSB's abi_check reads Mach-O through it too).
+py_library(
+    name = "native_prelink",
+    srcs = ["native_prelink.py"],
+    imports = ["."],
+)
+
+# Prelinks Apple's original kexts into the linked kernel (bazel/kernel/kernel.bzl kernel_prelink runs it).
+py_binary(
+    name = "emit_prelink",
+    srcs = ["emit_prelink.py"],
+    deps = [":native_prelink"],
+)

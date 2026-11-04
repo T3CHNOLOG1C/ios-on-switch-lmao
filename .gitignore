@@ -48,16 +48,10 @@ bundles/
 # Deploy tools (not the device logs, photos or receipts beside them)
 !/out/switch/
 /out/switch/*
-!/out/switch/deploy-sd.sh
-!/out/switch/launchd-disable.py
-!/out/switch/raw-v24-boot.cmd
 
-# GPU patches (the NVK series) and notes; not the built bundle, dylibs, seeds or the m2v checkout
+# GPU notes; not the built bundle, dylibs, seeds or the m2v checkout (the NVK recipe and patches are in gpu/nvk)
 !/out/gpu/
 /out/gpu/*
-!/out/gpu/nvk/
-/out/gpu/nvk/*
-!/out/gpu/nvk/*.patch
 !/out/gpu-artifacts/
 /out/gpu-artifacts/*
 !/out/gpu-artifacts/patches/

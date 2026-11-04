@@ -40,9 +40,8 @@ tool_output(
         "41d4ed8aee6621528a6a355e703603425eef27f7a8df3c8f3cf4460c943df40e4c8b6d7631620a39969418a79e0cb0817cd0d525a13134285ee356ac8871a940",
         "{out}",
     ],
-    deps = ["//tools/package:sources"],
+    binary = "//tools/package:adt",
     message = "Generating the native OLED ADT",
-    script = "//tools/package:adt.py",
 )
 
 boot_package(

@@ -29,7 +29,7 @@ def main():
     if out.exists() or any(p.is_symlink() for p in (out,*out.parents)):
         raise ValueError('output must be a new nonsymlink directory')
     if not out.is_relative_to(ROOT/'out'):raise ValueError('output must be under workspace out')
-    firmware=ROOT/'out/switch/boot-reference/bl33.bin'
+    firmware=ROOT/'bazel/pinned/firmware/bl33.bin'
     if firmware.is_symlink():raise ValueError('symlink firmware')
     raw=firmware.read_bytes()
     if hashlib.sha256(raw).hexdigest()!=PIN:raise ValueError('BL33 pin mismatch')

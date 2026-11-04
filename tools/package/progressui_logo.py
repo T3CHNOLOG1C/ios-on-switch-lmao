@@ -20,7 +20,7 @@ import tempfile
 import zlib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DMG = ROOT / 'vendor/unixnu-qemu/.cache/firmware/target-volumes/044-76040-038.dmg'
 OUT = ROOT / 'out/native-a57/root-v1/tree/build/progressui/apple-logo~ipad.png'
 SOURCE = 'System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo@2x~ipad.png'

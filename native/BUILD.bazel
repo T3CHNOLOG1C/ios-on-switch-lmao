@@ -1,4 +1,31 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
+
 package(default_visibility = ["//visibility:public"])
+
+# The RAM metadata exporter (switchroot/ioswitch/exporter.uimg, pinned in bazel/pinned/firmware): its builder, its
+# Cortex-A57 model run and its host test, all against the pinned bl33.bin.
+#   bazel run //native:firmware_export -- --output <dir under out/>
+py_binary(
+    name = "firmware_export",
+    srcs = ["storage/firmware_export/build.py"],
+    main = "storage/firmware_export/build.py",
+)
+
+py_binary(
+    name = "firmware_export_model",
+    srcs = ["storage/firmware_export/model.py"],
+    main = "storage/firmware_export/model.py",
+)
+
+py_test(
+    name = "firmware_export_test",
+    size = "small",
+    srcs = ["storage/firmware_export/test_export.py"],
+    data = glob(["storage/firmware_export/*"]) + ["//bazel/pinned:firmware/bl33.bin"],
+    main = "storage/firmware_export/test_export.py",
+    tags = ["requires-darwin"],
+)
 
 # What tools/package/build_native_loader.py compiles into loader.uboot.bin (Xcode clang for aarch64-none-elf, LLVM's
 # ld.lld): the native loader, the handoff probe and the SD reference reader.

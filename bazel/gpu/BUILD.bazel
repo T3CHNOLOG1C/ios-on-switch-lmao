@@ -1,1 +1,2 @@
-exports_files(["tree_digest.py"])
+# The per-file pins of the m2v library store (@gpu_host_inputs reads them; bazel/gpu/deps.bzl).
+exports_files(["m2v-libs.sha256"])

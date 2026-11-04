@@ -131,7 +131,7 @@ def _boot_package_impl(ctx):
     ] + gpu + overlay + ctx.files._loader_sources + ctx.files._package_tools + ctx.files._llvm_tools
     run_tool(
         ctx,
-        ctx.file._boot_tool,
+        ctx.attr._boot_tool,
         args,
         depset(inputs),
         [out],
@@ -163,7 +163,7 @@ boot_package = rule(
         "overlay_files": attr.label_list(allow_files = True, doc = "overlay files the manifest names by tree path"),
         "_gpu_trustcache": attr.label(default = "//boot:gpu_trustcache"),
         "_smp": attr.label(default = "//boot:smp"),
-        "_boot_tool": attr.label(default = "//tools/package:boot.py", allow_single_file = True),
+        "_boot_tool": attr.label(default = "//tools/package:boot", executable = True, cfg = "exec"),
         "_package_tools": attr.label(default = "//tools/package:sources"),
         "_loader_sources": attr.label(default = "//native:loader_sources"),
         "_llvm_tools": attr.label_list(

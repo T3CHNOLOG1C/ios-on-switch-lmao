@@ -6,6 +6,8 @@
 # of the archive it rides in below. Member order is link order (-force_load). Original kexts a driver needs go in its
 # prelink list. Every file here is also exported, e.g. //out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h.
 
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/kernel:inputs.bzl", "tool_output")
 load("//bazel/kernel:package.bzl", "ios_binary")
 load("//bazel/kernel:kernel.bzl", "PLAIN_ASM", "kernel_archive", "kernel_driver", "kernel_link", "kernel_prelink", "kernel_recipe", "stage_files")
@@ -527,6 +529,32 @@ kernel_driver(
     stems = {"firmware.S": "nvdec_firmware"},
 )
 
+# Host checks of driver code: each compiles the driver's sources with Xcode's clang for the Mac and runs them.
+py_test(
+    name = "keywrap_test",
+    size = "small",
+    srcs = ["drivers/NativeKeyStoreEvents/test_keywrap.py"],
+    data = glob(["drivers/NativeKeyStoreEvents/**"]),
+    main = "drivers/NativeKeyStoreEvents/test_keywrap.py",
+    tags = ["requires-darwin"],
+)
+
+[py_test(
+    name = "sdmmc_%s_test" % kind,
+    size = "small",
+    srcs = ["diagnostics/ioswitch/storage/tests/test_sdmmc_%s.py" % kind],
+    data = glob(["diagnostics/ioswitch/storage/**"]),
+    main = "diagnostics/ioswitch/storage/tests/test_sdmmc_%s.py" % kind,
+    tags = ["requires-darwin"],
+) for kind in ("batch", "write")]
+
+# The ABI checker of subclasses of original classes (SwitchUSB's abi_checks): reads Mach-O through the prelinker.
+py_binary(
+    name = "abi_check",
+    srcs = ["drivers/SwitchUSB/abi_check.py"],
+    deps = ["//tools/prelink:native_prelink"],
+)
+
 # SwitchUSB: USB 2.0 on the USB-C port. Device mode: the XUDC under Apple's IOUSBDeviceFamily (+ AppleUSBDeviceMux).
 # Host mode: the XUSB host (falcon firmware by .incbin) under IOUSBHostFamily + AppleUSBXHCI and Apple's class drivers.
 # SwitchXUDC and SwitchXHCI subclass original classes (late objects); abi_check.py checks their vtables and imports
@@ -545,8 +573,7 @@ kernel_driver(
         "xhci-original-bindings.S",
         "firmware.S",
     ],
-    abi_check_deps = ["//tools/prelink:native_prelink.py"],
-    abi_check_script = "drivers/SwitchUSB/abi_check.py",
+    abi_check = ":abi_check",
     abi_checks = {
         "drivers/SwitchUSB/original-bindings.S": "xudc SwitchXUDC.cpp",
         "drivers/SwitchUSB/xhci-original-bindings.S": "xhci SwitchXHCI.cpp",

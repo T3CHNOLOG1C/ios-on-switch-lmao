@@ -1,6 +1,6 @@
 """inflate.py <raw deflate stream> <output> <sha256>: a deflated zip member's content, checked against its pin.
 
-Run by the ipsw_member repository rule (bazel/ipsw/ipsw.bzl) on the bytes Bazel fetched by range request."""
+Run by ipsw_inflate (bazel/ipsw/ipsw.bzl) on the bytes Bazel fetched by range request."""
 import hashlib
 import sys
 import zlib

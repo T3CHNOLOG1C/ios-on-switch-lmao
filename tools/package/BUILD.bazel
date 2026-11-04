@@ -1,11 +1,50 @@
+# The boot entry's packaging: package_raw_boot.py (boot-args = COMMAND_LINE, the ADT edits, USB_HOST, ...),
+# native_xnu_layout.py, build_native_loader.py, package_native_handoff.py, native_oled_adt.py. //boot:package runs
+# them through :boot with declared inputs.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+
 package(default_visibility = ["//visibility:public"])
 
-# The boot entry's packaging: package_raw_boot.py (boot-args = COMMAND_LINE, the ADT edits, USB_HOST, ...),
-# native_xnu_layout.py, build_native_loader.py, package_native_handoff.py, native_oled_adt.py; boot.py runs them for
-# //boot:package with declared inputs.
+py_library(
+    name = "packaging",
+    srcs = [
+        "build_native_loader.py",
+        "native_oled_adt.py",
+        "native_xnu_layout.py",
+        "package_native_handoff.py",
+        "package_raw_boot.py",
+    ],
+    imports = ["."],
+)
+
+# //boot:package: the whole boot entry (kernel window in bl33.bin, loader, boot.scr, ADT edits, overlay).
+py_binary(
+    name = "boot",
+    srcs = ["boot.py"],
+    deps = [":packaging"],
+)
+
+# //boot:adt: the native OLED board's ADT with the pinned /chosen/random-seed.
+py_binary(
+    name = "adt",
+    srcs = ["adt.py"],
+    deps = [":packaging"],
+)
+
+# Remakes bazel/pinned/overlay/apple-logo~ipad.png (ProgressUI's 1x boot logo) from the OS volume image:
+#   bazel run //tools/package:progressui_logo -- <OS volume .dmg> <output .png>
+py_binary(
+    name = "progressui_logo",
+    srcs = ["progressui_logo.py"],
+)
+
+# //boot:snapshot copies a build to out/boot/lkg/<name> (its py_binary lives in boot/).
+exports_files(["snapshot.py"])
+
+# The loader's build ID hashes its builder's sources (build_native_loader.py's source_files): //boot:package passes
+# them as --source, and the host tests read them.
 filegroup(
     name = "sources",
     srcs = glob(["*.py"]),
 )
-
-exports_files(glob(["*.py"]))
