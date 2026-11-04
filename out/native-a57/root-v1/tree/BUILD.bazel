@@ -859,6 +859,21 @@ kernel_driver(
     prelink = ["com.apple.iokit.IOGPUFamily"],
 )
 
+# Watchdog: an IOWatchdog (subclass of the original in AppleARMWatchdogTimer, late) so launchd starts watchdogd, which
+# stackshots and kills a hung SpringBoard or backboardd. Published from the board thread.
+kernel_driver(
+    name = "NativeIOSwitchWatchdog",
+    srcs = [
+        "NativeIOSwitchWatchdogPublish.cpp",
+        "NativeIOSwitchWatchdog.cpp",
+        "original-bindings.S",
+    ],
+    late = ["NativeIOSwitchWatchdog.cpp"],
+    # No prelink entry: AppleARMWatchdogTimer is already prelinked as apfs's dependency (naming it as a root reorders
+    # the inherited original extents, which emit_prelink.py refuses).
+    stems = {"original-bindings.S": "watchdog-original-bindings"},
+)
+
 # AppleKeyStore stand-in's device key: RFC 3394 wrap under a key derived from the fuse chip ID.
 kernel_driver(
     name = "AKSDeviceKey",
@@ -880,6 +895,7 @@ kernel_archive(
         ":SwitchBrightness",
         ":SwitchJoyCon",
         ":IOSwitchAccelStub",
+        ":NativeIOSwitchWatchdog",
         ":AKSDeviceKey",
     ],
 )

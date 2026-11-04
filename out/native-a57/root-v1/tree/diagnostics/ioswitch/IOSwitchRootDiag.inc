@@ -149,6 +149,7 @@ extern int
 ioswitch_audio_publish(void); /* null sink unless switch-audio=1|3; the Tegra backend sleeps on I2C1, PZ4 and the GIC */
 extern int switch_suspend_start(void); /* no-op unless switch-sleep=2; after every board driver it suspends */
 extern int switch_usb_start(void);     /* no-op without the ADT's /arm-io/usb-device; runs its bring-up on its own thread */
+extern int ioswitch_watchdog_publish(void); /* the IOWatchdog launchd starts watchdogd for (NativeIOSwitchWatchdog) */
 static int ioswitch_board_enabled(const char *name)
 {
     unsigned enabled = 1;
@@ -159,6 +160,8 @@ static void ioswitch_board_thread(void *parameter __unused, wait_result_t result
 {
     /* First: returns at once and publishes the per-unit BD address before anything here can sleep. */
     if (switch_bluetooth_start()) printf("IOSwitch: SwitchBluetooth did not start\n");
+    /* Before anything that can sleep long: launchd must find the IOWatchdog when it reads its LaunchEvents. */
+    if (ioswitch_watchdog_publish()) printf("IOSwitch: NativeIOSwitchWatchdog did not start\n");
     /* After Bluetooth: rail pairing hands Joy-Cons the console's (fuse-derived) BD address. */
     if (switch_joycon_start()) printf("IOSwitch: SwitchJoyCon did not start\n");
     if (switch_usb_start()) printf("IOSwitch: SwitchUSB did not start\n");
