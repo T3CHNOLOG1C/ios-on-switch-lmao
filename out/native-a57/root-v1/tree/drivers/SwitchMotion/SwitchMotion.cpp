@@ -215,8 +215,8 @@ class SwitchMotion : public IOService {
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
     void readRegisters(uint8_t reg, uint8_t *buffer, size_t length);
     void writeRegister(uint8_t reg, uint8_t value);
-    void identify();
-    void reset();
+    bool identify();
+    bool reset();
     void configurePart();
     void program(bool accel, bool gyro, unsigned rateIndex);
     void apply();
@@ -249,8 +249,10 @@ void SwitchMotion::writeRegister(uint8_t reg, uint8_t value)
     if (err) panic("SwitchMotion: SPI4 write of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
 }
 
-// WHO_AM_I at 0x0f (ST) or 0x75 (ICM); reading the other family's address is harmless.
-void SwitchMotion::identify()
+// WHO_AM_I at 0x0f (ST) or 0x75 (ICM); reading the other family's address is harmless. An IMU that is missing or does not
+// come out of reset leaves motion off with one log line (r7p: the reset check panicked the board thread at boot); a lost SPI
+// interrupt still panics in the transfer.
+bool SwitchMotion::identify()
 {
     uint8_t stId = 0, icmId = 0;
     readRegisters(st::WhoAmI, &stId, 1);
@@ -259,36 +261,50 @@ void SwitchMotion::identify()
         if ((p.family == Family::ST ? stId : icmId) == p.whoAmI) {
             part = &p;
             info = p.family == Family::ST ? &kST : &kICM;
-            return;
+            return true;
         }
     }
     char sck[256];
     tegra_gpio_describe(TEGRA_GPIO(C, 5), sck, sizeof(sck));
-    panic("SwitchMotion: no IMU on SPI4 CS0: WHO_AM_I 0x0f = %#x, 0x75 = %#x (expected LSM6DS3H 0x69, LSM6DSE 0x6a, "
-          "LSM6DSO 0x6c, ICM-40607 0x38); SCK pad %s",
-          stId, icmId, sck);
+    IOLog(
+        "SwitchMotion: off: no IMU on SPI4 CS0: WHO_AM_I 0x0f = %#x, 0x75 = %#x (expected LSM6DS3H 0x69, LSM6DSE 0x6a, "
+        "LSM6DSO 0x6c, ICM-40607 0x38); SCK pad %s\n",
+        stId, icmId, sck);
+    return false;
 }
 
 // Software reset, then the FIFO in bypass (a reset leaves the FIFO and its interrupt as they were, st_lsm6dsx_init_device).
-void SwitchMotion::reset()
+bool SwitchMotion::reset()
 {
     if (info == &kST) {
         writeRegister(st::Ctrl3C, st::SwReset);
         IOSleep(10);
-        uint8_t ctrl3 = 0;
+        uint8_t ctrl3 = 0, who = 0;
         readRegisters(st::Ctrl3C, &ctrl3, 1);
-        if (ctrl3 & st::SwReset)
-            panic("SwitchMotion: %s software reset did not complete (CTRL3_C %#x)", part->name, ctrl3);
+        if (ctrl3 & st::SwReset) {
+            readRegisters(st::WhoAmI, &who, 1);
+            IOLog("SwitchMotion: off: %s software reset did not complete (CTRL3_C %#x, WHO_AM_I now %#x)\n", part->name,
+                  ctrl3, who);
+            return false;
+        }
         writeRegister(st::FifoCtrl, 0);
     } else {
         writeRegister(icm::DeviceConfig, icm::SoftReset);
         IOSleep(2);
-        uint8_t status = 0;
+        uint8_t status = 0, config = 0, who = 0;
         readRegisters(icm::IntStatus, &status, 1);
-        if (!(status & icm::ResetDone))
-            panic("SwitchMotion: %s software reset did not complete (INT_STATUS %#x)", part->name, status);
+        if (!(status & icm::ResetDone)) {
+            readRegisters(icm::DeviceConfig, &config, 1);
+            readRegisters(icm::WhoAmI, &who, 1);
+            IOLog("SwitchMotion: off: %s software reset did not complete (INT_STATUS %#x, DEVICE_CONFIG %#x, WHO_AM_I "
+                  "now "
+                  "%#x)\n",
+                  part->name, status, config, who);
+            return false;
+        }
         writeRegister(icm::FifoConfig, 0);
     }
+    return true;
 }
 
 // Interface and interrupt pin setup, everything converting off. After the reset, and again after sleep.
@@ -540,8 +556,7 @@ bool SwitchMotion::start(IOService *provider)
     if (!IOService::start(provider)) return false;
     const int err = tegra_spi_init(kBus);
     if (err) panic("SwitchMotion: SPI4 init failed (%d)", err);
-    identify();
-    reset();
+    if (!identify() || !reset()) return false;
     configurePart();
 
     IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_IMU_INT, TEGRA_GPIO_LEVEL_HIGH);
@@ -635,9 +650,13 @@ extern "C" int switch_motion_start(void)
     if (gMotion) return 0;
     IOService *resources = IOService::getResourceService();
     SwitchMotion *candidate = OSTypeAlloc(SwitchMotion);
-    if (!resources || !candidate || !candidate->init() || !candidate->attach(resources) ||
-        !candidate->start(resources)) {
-        panic("SwitchMotion: attach or start failed");
+    if (!resources || !candidate || !candidate->init() || !candidate->attach(resources)) {
+        panic("SwitchMotion: attach failed");
+    }
+    if (!candidate->start(resources)) {  // no IMU, or it did not come out of reset: logged, motion stays off
+        candidate->detach(resources);
+        candidate->release();
+        return 1;
     }
     __atomic_store_n(&gMotion, candidate, __ATOMIC_RELEASE);
     candidate->release();  // the attachment keeps it
