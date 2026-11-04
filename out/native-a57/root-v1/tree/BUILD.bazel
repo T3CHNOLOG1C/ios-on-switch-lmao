@@ -1007,6 +1007,16 @@ kernel_prelink(
 )
 
 # --- The userland overlay's iOS binaries (tree/overlay/manifest.json; //boot:package stages them) --------------------
+
+# The overlay files the manifest names by their tree path (plists, tunings): a new one here needs no BUILD edit.
+filegroup(
+    name = "overlay_sources",
+    srcs = glob([
+        "drivers/SwitchAudio/hal/*.plist",
+        "drivers/SwitchAudio/tunings/*.austrip",
+        "drivers/SwitchJoyCon/helper/*.plist",
+    ]),
+)
 # BlueTool stand-in (gated on switch-bt).
 ios_binary(
     name = "BlueTool",

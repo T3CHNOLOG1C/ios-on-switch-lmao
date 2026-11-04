@@ -100,6 +100,14 @@ def _boot_package_impl(ctx):
             fail("overlay {} must be one file".format(target.label))
         args += ["--overlay", source + "=" + files[0].path]
         overlay += files
+
+    # Source files the manifest names by their path in the kernel tree (the manifest's ../): no mapping to keep.
+    tree = ctx.file.overlay_manifest.short_path.rpartition("/")[0].rpartition("/")[0] + "/"
+    for f in ctx.files.overlay_files:
+        if not f.short_path.startswith(tree):
+            fail("overlay_files {} is not in the kernel tree {}".format(f.short_path, tree))
+        args += ["--overlay", f.short_path[len(tree):] + "=" + f.path]
+        overlay.append(f)
     for tool in ctx.files._llvm_tools:
         args += ["--llvm-tool", tool.path]
     for source in ctx.files._loader_sources + ctx.files._package_tools:
@@ -151,7 +159,8 @@ boot_package = rule(
         "bt_patch": attr.label(mandatory = True, allow_single_file = True),
         "overlay_manifest": attr.label(mandatory = True, allow_single_file = True),
         "portrait_header": attr.label(mandatory = True, allow_single_file = True),
-        "overlay": attr.label_keyed_string_dict(allow_files = True),
+        "overlay": attr.label_keyed_string_dict(allow_files = True, doc = "built overlay file -> its manifest source"),
+        "overlay_files": attr.label_list(allow_files = True, doc = "overlay files the manifest names by tree path"),
         "_gpu_trustcache": attr.label(default = "//boot:gpu_trustcache"),
         "_smp": attr.label(default = "//boot:smp"),
         "_boot_tool": attr.label(default = "//tools/package:boot.py", allow_single_file = True),
