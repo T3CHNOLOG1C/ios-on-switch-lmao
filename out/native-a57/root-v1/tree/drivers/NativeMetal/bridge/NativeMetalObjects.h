@@ -50,6 +50,8 @@ bool nmb_device_shader_cache_stats(const NmbDevice *, struct NmbShaderCacheStats
 /* Device memory allocated, pooled/dedicated/imported blocks live, timeline waits, variant pipelines made, linked, fragment
    libraries made, shadowed textures, 0. */
 bool nmb_device_counts(const NmbDevice *, uint64_t out[10]);
+/* Host texel copies by route (m2v 0116): replaceRegion bytes/host/deferred/waited, then getBytes bytes/host/waited. */
+bool nmb_device_texel_copy_routes(const NmbDevice *, uint64_t out[7]);
 // Host calls that waited for the GPU: staging-queue submissions, internal submissions, host texel copies (no wait), and the
 // queue submissions of commits.
 bool nmb_device_wait_counts(const NmbDevice *, uint64_t out[4]);

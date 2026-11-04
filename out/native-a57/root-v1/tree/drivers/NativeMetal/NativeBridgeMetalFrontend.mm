@@ -5392,7 +5392,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         uint64_t at, cpu, sys, faults, commits, encode, submitN, submitUs, waitN, waitUs, gpuN, gpuUs, draws, passes,
             apiUs, joinable, psoN, psoUs, texN, texUs, asked, kept, planar, rb, rbBytes, rbUs, impN, impUs, impHits,
             stxN, stxUs;
-        uint64_t work[10], counts[10], waits[4];
+        uint64_t work[10], counts[10], waits[4], routes[7];
         NmbShaderCacheStats cache;
     };
     static std::mutex lock;
@@ -5436,6 +5436,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         nmb_device_work_stats(gDevice, now.work);
         nmb_device_shader_cache_stats(gDevice, &now.cache);
         nmb_device_counts(gDevice, now.counts);
+        nmb_device_texel_copy_routes(gDevice, now.routes);
         nmb_device_wait_counts(gDevice, now.waits);
     }
     std::lock_guard<std::mutex> guard(lock);
@@ -5503,12 +5504,18 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
     if (at + 1 < size) at += nbasync::appendRates(out + at, size - at);  // r7-async: apso= ... (AsyncPipelines.h)
     // spare=: dedicated memory requests a kept block served instead of a new BoAlloc (m2v 0113, memory.rs).
     if (at + 1 < size) {
-        // held=: waitUntilScheduled calls that returned behind a shared event not reached (heldBehindEvent).
+        // held=: waitUntilScheduled calls that returned behind a shared event not reached (heldBehindEvent). rr= and gb=:
+        // replaceRegion by route (into a buffer's bytes / on the host / staged for the next submission / waited for) and
+        // getBytes (from a buffer's bytes / on the host / waited for), m2v 0116: the waited ones are a GPU wait each.
         static uint64_t heldWas;
         const uint64_t held = gHeldReturns.load();
-        const int more =
-            snprintf(out + at, size - at, " spare=%llu held=%llu", (unsigned long long)(now.counts[9] - was.counts[9]),
-                     (unsigned long long)(held - heldWas));
+        uint64_t d[7];
+        for (unsigned i = 0; i < 7; i++) d[i] = now.routes[i] - was.routes[i];
+        const int more = snprintf(out + at, size - at, " spare=%llu held=%llu rr=%llu/%llu/%llu/%llu gb=%llu/%llu/%llu",
+                                  (unsigned long long)(now.counts[9] - was.counts[9]),
+                                  (unsigned long long)(held - heldWas), (unsigned long long)d[0],
+                                  (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
+                                  (unsigned long long)d[4], (unsigned long long)d[5], (unsigned long long)d[6]);
         heldWas = held;
         if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);
     }

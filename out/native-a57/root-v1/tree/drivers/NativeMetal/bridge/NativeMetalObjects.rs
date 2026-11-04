@@ -314,6 +314,24 @@ pub extern "C" fn nmb_device_counts(device: *const NmbDevice, out: *mut u64) -> 
     })
 }
 
+/// The runtime's host texel copies by route, into the caller's seven words (ioswitch m2v 0116): `replaceRegion` into the texture's
+/// bytes on the CPU, on the host into its image, staged for the next submission, by a submission waited for; then `getBytes` from
+/// the texture's bytes, on the host from its image, by a submission waited for.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_device_texel_copy_routes(device: *const NmbDevice, out: *mut u64) -> bool {
+    guard(false, || {
+        if out.is_null() {
+            return Err("null routes".into());
+        }
+        let c = get(device)?.0.work_counts();
+        // SAFETY: the header's seven words.
+        let out = unsafe { std::slice::from_raw_parts_mut(out, 7) };
+        out[..4].copy_from_slice(&c.replace_region_routes);
+        out[4..].copy_from_slice(&c.get_bytes_routes);
+        Ok(true)
+    })
+}
+
 /// The runtime's host calls that waited for the GPU, into the caller's four words: submissions on the staging queue
 /// (`replace_region`, `get_bytes` and first moves of textures it copies none of on the host), internal submissions (a host
 /// copy through the GPU, a clear of a live buffer, a neutral's making), `replace_region`/`get_bytes` copies made on the host

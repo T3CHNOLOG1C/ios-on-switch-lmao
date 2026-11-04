@@ -16,7 +16,7 @@ load(":defs.bzl", "cargo_tool", "nvk_dylib")
 
 package(default_visibility = ["//visibility:public"])
 
-# The series, in order (r9).
+# The series, in order (r10).
 PATCHES = [
     "nvk-darwin.patch",
     "nvk-0002-cmd-mem-written-range.patch",
@@ -24,8 +24,16 @@ PATCHES = [
     "nvk-0003-linear-color-attachment-rule.patch",
     "nvk-0004-sandbox-safe-darwin.patch",
     "nvk-0005-join-copy-regions.patch",
+    # r10 (r8-webgpu): VK_EXT_host_image_copy on Tegra SoCs from Maxwell (getBytes without a GPU wait), copies through the
+    # client's mapping; a submission's CPU wait for a sync ends after 20 s with one line and abort() (r9-hang).
+    "nvk-0006-host-image-copy-tegra.patch",
+    "nvk-0007-bounded-submission-waits.patch",
 ]
 
+# r10: the version string's commit (the hand build's checkout HEAD, r8-webgpu's 02d6432d39) and the patched tree's git id
+# (its .source). Against the hand-built r10 dylib (out/agent-scratch/r8-webgpu/nvk-r10, the same tree 8d5d979b): `strip -S`
+# of both leaves 16911008 bytes that differ only in LC_UUID's 16, as r9's below.
+#
 # r9: the version string's commit (the hand build's checkout HEAD) and the patched tree's git id (its .source).
 #
 # Against the hand-built r9 dylib (sha256 276260dc…, in out/gpu/nvk): every section and every symbol is identical.
@@ -34,12 +42,12 @@ PATCHES = [
 # LC_UUID from it; this build writes it relative (-oso_prefix), so it is the same wherever the action runs. The host
 # twin matches the same way but for five imports: r9's twin was linked against Homebrew's SPIRV-Tools (found by
 # pkg-config; SPIR-V disassembly for debug output only), which a hermetic build does not have.
-GIT_SHA1 = "b3bc5a04b3"
+GIT_SHA1 = "02d6432d39"
 
 EXPECT = {
-    "tree": "628ef7bfa7f9c3281f05d0898ef5cd4e2c66d933",
-    "ios": "41b12aab500543ef3e027a9bf2c8ca28becdb178dec54562e633f67a0112659f",
-    "macos": "b2dcbf3ed01bdc3b991ae06d51caebe6cb0f416cdf5b0eca03befce0c920afd3",
+    "tree": "8d5d979beb05f299812c6761a581ce648823663c",
+    "ios": "e5b2c97b4fa8be5fb13f6feb4b5b700b8a1551e956d830113487d33fe085f138",
+    "macos": "4d043fd10f7f0372c0767565c84634ded13e95b41349aadfde73fa60070eb138",
 }
 
 # Panic locations in the Rust standard library, as r9's rustup toolchain (with rust-src) spelled them.
