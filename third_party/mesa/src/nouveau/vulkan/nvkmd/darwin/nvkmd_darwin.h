@@ -26,6 +26,7 @@ struct nvkmd_darwin_conn {
    io_connect_t conn;
    bool tunnel;
    uint32_t selector;
+   bool kernel_map; /* TegraGM20BInfoKernelMap: map through methods 12, 13 */
 };
 
 struct nvkmd_darwin_pdev {

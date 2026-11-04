@@ -367,7 +367,17 @@ os_set_option(const char *name, const char *value, bool override)
 bool
 os_get_total_physical_memory(uint64_t *size)
 {
-#if HAVE_SYSCONF && HAVE_SC_PHYS_PAGES
+#if DETECT_OS_APPLE
+   /* hw.memsize by its MIB, as NSProcessInfo.physicalMemory reads it.
+    * Darwin's sysconf(_SC_PHYS_PAGES) also reads hw.pagesize by name, which
+    * WebKit's GPU process sandbox refuses (it admits hw.memsize and
+    * hw.pagesize_compat): the physical device then failed to open there
+    * ("Failed to query total system memory", VK_ERROR_INITIALIZATION_FAILED).
+    */
+   size_t len = sizeof(*size);
+   int mib[2] = { CTL_HW, HW_MEMSIZE };
+   return sysctl(mib, 2, size, &len, NULL, 0) == 0;
+#elif HAVE_SYSCONF && HAVE_SC_PHYS_PAGES
    const long phys_pages = sysconf(_SC_PHYS_PAGES);
    const long page_size = sysconf(_SC_PAGESIZE);
 
@@ -495,7 +505,13 @@ os_get_available_system_memory(uint64_t *size)
 bool
 os_get_page_size(uint64_t *size)
 {
-#if HAVE_SYSCONF
+#if DETECT_OS_APPLE
+   /* The commpage's page size, which libsystem reads as the process starts:
+    * no system call, so no sandbox can refuse it.
+    */
+   *size = vm_page_size;
+   return true;
+#elif HAVE_SYSCONF
    const long page_size = sysconf(_SC_PAGESIZE);
 
    if (page_size <= 0)

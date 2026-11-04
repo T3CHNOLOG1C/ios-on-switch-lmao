@@ -118,8 +118,61 @@ darwin_open(struct vk_object_base *log_obj, struct nvkmd_darwin_conn *c,
                        "TegraGM20B GetInfo failed (0x%x, ABI %u)",
                        kr, kr == KERN_SUCCESS ? info->abi_version : 0);
    }
+   c->kernel_map = (info->flags & TegraGM20BInfoKernelMap) != 0;
 
    return VK_SUCCESS;
+}
+
+/* Maps the connection's memory of `token` into this task, at `fixed`
+ * (kIOMapOverwrite) or anywhere (0): through the kext's Map method where it
+ * has one, as Apple's GPU drivers map their resources from their external
+ * methods, since a sandbox may admit io_connect_method and refuse the MIG
+ * routine io_connect_map_memory_into_task behind IOConnectMapMemory64
+ * (WebKit's GPU process in 21H461 does); else through IOConnectMapMemory64.
+ * The same kernel work either way.
+ */
+static kern_return_t
+darwin_map(const struct nvkmd_darwin_conn *c, uint32_t token, bool read_only,
+           mach_vm_address_t fixed, mach_vm_address_t *addr,
+           mach_vm_size_t *size)
+{
+   if (c->kernel_map) {
+      const struct TegraGM20BAbiMap req = {
+         .token = token,
+         .flags = (read_only ? TegraGM20BMapReadOnly : 0) |
+                  (fixed ? TegraGM20BMapFixed : 0),
+         .address = fixed,
+      };
+      struct TegraGM20BAbiMapReply reply = { 0 };
+      kern_return_t kr = darwin_call(c, TegraGM20BMethodMap, &req, sizeof(req),
+                                     &reply, sizeof(reply));
+      if (kr == KERN_SUCCESS) {
+         *addr = reply.address;
+         *size = reply.bytes;
+      }
+      return kr;
+   }
+
+   IOOptionBits options = fixed ? kIOMapOverwrite : kIOMapAnywhere;
+   if (read_only)
+      options |= kIOMapReadOnly;
+   *addr = fixed;
+   *size = 0;
+   return IOConnectMapMemory64(c->conn, token, mach_task_self(), addr, size,
+                               options);
+}
+
+/* Removes the mapping darwin_map made of `token` at `addr`. */
+static void
+darwin_unmap(const struct nvkmd_darwin_conn *c, uint32_t token,
+             mach_vm_address_t addr)
+{
+   if (c->kernel_map) {
+      const struct TegraGM20BAbiUnmap req = { .token = token, .address = addr };
+      darwin_call(c, TegraGM20BMethodUnmap, &req, sizeof(req), NULL, 0);
+      return;
+   }
+   IOConnectUnmapMemory64(c->conn, token, mach_task_self(), addr);
 }
 
 static VkResult
@@ -936,19 +989,17 @@ nvkmd_darwin_mem_map(struct nvkmd_mem *_mem, struct vk_object_base *log_obj,
       return VK_SUCCESS;
    }
 
-   mach_vm_address_t addr = (uintptr_t)fixed_addr;
+   mach_vm_address_t addr = 0;
    mach_vm_size_t size = 0;
-   IOOptionBits options = (map_flags & NVKMD_MEM_MAP_FIXED) ?
-                          kIOMapOverwrite : kIOMapAnywhere;
-   if (!(map_flags & NVKMD_MEM_MAP_WR))
-      options |= kIOMapReadOnly;
+   const mach_vm_address_t fixed = (map_flags & NVKMD_MEM_MAP_FIXED) ?
+                                   (uintptr_t)fixed_addr : 0;
 
-   kern_return_t kr = IOConnectMapMemory64(dev->conn.conn, mem->map_token,
-                                           mach_task_self(), &addr, &size,
-                                           options);
+   kern_return_t kr = darwin_map(&dev->conn, mem->map_token,
+                                 !(map_flags & NVKMD_MEM_MAP_WR), fixed,
+                                 &addr, &size);
    if (kr != KERN_SUCCESS || size < mem->base.size_B)
       return vk_errorf(log_obj, VK_ERROR_MEMORY_MAP_FAILED,
-                       "IOConnectMapMemory64 failed: 0x%x", kr);
+                       "TegraGM20B map failed: 0x%x", kr);
 
    *map_out = (void *)(uintptr_t)addr;
    return VK_SUCCESS;
@@ -964,8 +1015,7 @@ nvkmd_darwin_mem_unmap(struct nvkmd_mem *_mem, enum nvkmd_mem_map_flags flags,
    if (mem->host_ptr != NULL)
       return;
 
-   IOConnectUnmapMemory64(dev->conn.conn, mem->map_token, mach_task_self(),
-                          (uintptr_t)map);
+   darwin_unmap(&dev->conn, mem->map_token, (uintptr_t)map);
 }
 
 static VkResult
@@ -1261,8 +1311,7 @@ darwin_create_exec_ctx(struct nvkmd_darwin_dev *dev,
 
    mach_vm_address_t addr = 0;
    mach_vm_size_t size = 0;
-   kr = IOConnectMapMemory64(dev->conn.conn, reply.fence_token, mach_task_self(),
-                             &addr, &size, kIOMapAnywhere | kIOMapReadOnly);
+   kr = darwin_map(&dev->conn, reply.fence_token, true, 0, &addr, &size);
    if (kr != KERN_SUCCESS || reply.fence_offset + 4 > size) {
       const struct TegraGM20BAbiChannel destroy = { .channel = reply.channel };
       darwin_call(&dev->conn, TegraGM20BMethodChannelDestroy, &destroy,
@@ -1305,8 +1354,7 @@ nvkmd_darwin_exec_ctx_destroy(struct nvkmd_ctx *_ctx)
    simple_mtx_lock(&dev->channels_mutex);
    struct nvkmd_darwin_channel *chan = darwin_channel_locked(dev, ctx->channel);
    if (chan != NULL) {
-      IOConnectUnmapMemory64(dev->conn.conn, chan->fence_token,
-                             mach_task_self(), chan->fence_map);
+      darwin_unmap(&dev->conn, chan->fence_token, chan->fence_map);
       memset(chan, 0, sizeof(*chan));
    }
    simple_mtx_unlock(&dev->channels_mutex);
