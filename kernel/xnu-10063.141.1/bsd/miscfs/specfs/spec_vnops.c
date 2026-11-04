@@ -91,12 +91,8 @@
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
 #include <kern/policy_internal.h>
-#include <kern/startup.h>
 #include <kern/timer_call.h>
-#include <kern/thread_call.h>
 #include <kern/waitq.h>
-#include <os/atomic_private.h>
-#include <sys/fcntl.h>
 
 #include <pexpert/pexpert.h>
 
@@ -2497,205 +2493,6 @@ int upl_get_cached_tier(void *);
 extern thread_t pm_sync_thread;
 #endif /* CONFIG_PHYS_WRITE_ACCT */
 
-/*
- * IOSwitch boot I/O census (temporary, 11-04): the boot-text phase is bound by ~2,000 small SD reads a second. Count every
- * block request per device from boot until the first client frame, by size and with APFS's B_META, so one line tells the
- * sealed volumes' metadata, file data and the cryptex disk images (their own devices) apart. NativeLegacyDisplay's
- * presentBlock calls ioswitch_boot_io_report at the first frame; counting stops there and a thread call prints the line
- * (never from the display's gate). Relaxed atomic increments only: nothing waits.
- * r8-sdboot additions (also temporary): a bitmap of the 4 KiB blocks read for each of the first IOSWITCH_IO_SEEN devices
- * to reach 16 reads, so the line also gives distinct blocks, reads that touched only blocks already read (repeats) and
- * the highest block index seen (a sanity check: above the device's size means the block unit below was wrong); the
- * cryptex image reads the cluster layer saw and issued (vfs_cluster.c); the VM page counts and file-page reclaim at the
- * first frame; and the bitmaps themselves in /private/var/ioswitch/boot-io-census.bin, to map the cryptex's blocks to
- * its files offline. buf_blkno is taken in 4 KiB units: IOMediaBSDClient's dkreadwrite scales it by the minor's
- * bdevBlockSize, which is 4096 for the APFS container devices this is about (dev_init "device_handle block size 4096").
- * The bitmaps (1 MiB each, allocated at boot) are never freed: a racing strategy call may still be setting a bit when
- * the report runs.
- */
-#define IOSWITCH_IO_DEVS  10
-#define IOSWITCH_IO_SIZES 7 /* <=4K <=8K <=16K <=32K <=64K <=128K larger */
-#define IOSWITCH_IO_SEEN  4
-#define IOSWITCH_IO_SEEN_BYTES (1u << 20) /* 8,388,608 blocks of 4 KiB: 32 GiB, the whole SD container */
-static struct {
-	int32_t  dev1;          /* dev + 1, 0 while the slot is free */
-	uint32_t reads[IOSWITCH_IO_SIZES];
-	uint32_t meta;          /* reads with B_META */
-	uint32_t writes;
-	uint64_t read_bytes;
-	uint32_t total;         /* reads */
-	uint32_t distinct;      /* 4 KiB blocks read at least once */
-	uint32_t repeats;       /* reads whose blocks had all been read before */
-	uint32_t claimed;       /* a bitmap was handed out (or none was left) */
-	uint64_t max_block;     /* highest 4 KiB block index read */
-	uint64_t *seen;         /* the bitmap, once claimed */
-} ioswitch_io[IOSWITCH_IO_DEVS];
-static uint64_t *ioswitch_io_seen[IOSWITCH_IO_SEEN];
-static uint32_t ioswitch_io_seen_next;
-static int ioswitch_io_done;
-static thread_call_t ioswitch_io_call; /* allocated at boot: the report may run with interrupts disabled */
-
-static void
-ioswitch_io_count(buf_t bp, dev_t dev)
-{
-	const int32_t key = (int32_t)dev + 1;
-	for (unsigned i = 0; i < IOSWITCH_IO_DEVS; i++) {
-		int32_t slot = os_atomic_load(&ioswitch_io[i].dev1, relaxed);
-		if (slot == 0 && !os_atomic_cmpxchgv(&ioswitch_io[i].dev1, 0, key, &slot, relaxed)) {
-			/* another thread took the slot: slot holds its device */
-		} else if (slot == 0) {
-			slot = key;
-		}
-		if (slot != key) {
-			continue;
-		}
-		const int flags = buf_flags(bp);
-		if (!(flags & B_READ)) {
-			os_atomic_inc(&ioswitch_io[i].writes, relaxed);
-			return;
-		}
-		const uint32_t count = buf_count(bp);
-		unsigned size = 0;
-		while (size < IOSWITCH_IO_SIZES - 1 && count > (4096u << size)) {
-			size++;
-		}
-		os_atomic_inc(&ioswitch_io[i].reads[size], relaxed);
-		if (flags & B_META) {
-			os_atomic_inc(&ioswitch_io[i].meta, relaxed);
-		}
-		os_atomic_add(&ioswitch_io[i].read_bytes, (uint64_t)count, relaxed);
-		const uint32_t reads = os_atomic_inc(&ioswitch_io[i].total, relaxed);
-		uint64_t *seen = os_atomic_load(&ioswitch_io[i].seen, acquire);
-		if (!seen && reads >= 16 && os_atomic_cmpxchg(&ioswitch_io[i].claimed, 0, 1, relaxed)) {
-			const uint32_t k = os_atomic_inc_orig(&ioswitch_io_seen_next, relaxed);
-			if (k < IOSWITCH_IO_SEEN && ioswitch_io_seen[k]) {
-				seen = ioswitch_io_seen[k];
-				os_atomic_store(&ioswitch_io[i].seen, seen, release);
-			}
-		}
-		if (seen && count) {
-			const uint64_t first = (uint64_t)buf_blkno(bp), last = first + (count - 1) / 4096;
-			if (last > os_atomic_load(&ioswitch_io[i].max_block, relaxed)) {
-				os_atomic_max(&ioswitch_io[i].max_block, last, relaxed);
-			}
-			uint32_t fresh = 0;
-			for (uint64_t b = first; b <= last && b < IOSWITCH_IO_SEEN_BYTES * 8ull; b++) {
-				const uint64_t bit = 1ull << (b & 63);
-				if (!(os_atomic_or_orig(&seen[b >> 6], bit, relaxed) & bit)) {
-					fresh++;
-				}
-			}
-			if (fresh) {
-				os_atomic_add(&ioswitch_io[i].distinct, fresh, relaxed);
-			} else {
-				os_atomic_inc(&ioswitch_io[i].repeats, relaxed);
-			}
-		}
-		return;
-	}
-}
-
-/* bsd/vfs/vfs_cluster.c: cryptex image reads and issued I/O (6), then VM page counts and file-page reclaim (11). */
-extern void ioswitch_cluster_image_stats(uint64_t out[17]);
-
-/* The bitmaps, trimmed to their last nonzero word: "IOSWCEN1", u32 slots, u32 0, then per slot i32 dev, u32 bytes, bytes. */
-static void
-ioswitch_io_write_seen(void)
-{
-	vfs_context_t ctx = vfs_context_kernel();
-	vnode_t vp = NULLVP;
-	if (vnode_open("/private/var/ioswitch/boot-io-census.bin", O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, 0644, 0, &vp, ctx)) {
-		return;
-	}
-	struct {
-		char magic[8];
-		uint32_t slots, zero;
-	} header = {.magic = {'I', 'O', 'S', 'W', 'C', 'E', 'N', '1'}};
-	for (unsigned i = 0; i < IOSWITCH_IO_DEVS; i++) {
-		header.slots += os_atomic_load(&ioswitch_io[i].seen, acquire) != NULL;
-	}
-	off_t at = 0;
-	int resid = 0, error = vn_rdwr(UIO_WRITE, vp, (caddr_t)&header, sizeof(header), at, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
-	    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
-	at += sizeof(header);
-	for (unsigned i = 0; !error && i < IOSWITCH_IO_DEVS; i++) {
-		const int32_t key = os_atomic_load(&ioswitch_io[i].dev1, relaxed);
-		uint64_t *seen = os_atomic_load(&ioswitch_io[i].seen, acquire);
-		if (!seen || !key) {
-			continue;
-		}
-		uint32_t words = IOSWITCH_IO_SEEN_BYTES / 8;
-		while (words && !seen[words - 1]) {
-			words--;
-		}
-		struct {
-			int32_t dev;
-			uint32_t bytes;
-		} entry = {key - 1, words * 8};
-		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)&entry, sizeof(entry), at, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
-		    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
-		at += sizeof(entry);
-		if (!error && entry.bytes) {
-			error = vn_rdwr(UIO_WRITE, vp, (caddr_t)seen, (int)entry.bytes, at, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
-			    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
-			at += entry.bytes;
-		}
-	}
-	(void)vnode_close(vp, FWRITE, ctx);
-}
-
-static void
-ioswitch_io_print(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
-{
-	char line[1024];
-	int at = snprintf(line, sizeof(line), "IOSwitch boot I/O to first frame (reads <=4K/8K/16K/32K/64K/128K/more, meta, MiB; writes; distinct 4K blocks, repeat reads, highest block):");
-	for (unsigned i = 0; i < IOSWITCH_IO_DEVS && at > 0 && at < (int)sizeof(line); i++) {
-		const int32_t key = os_atomic_load(&ioswitch_io[i].dev1, relaxed);
-		if (!key) {
-			break;
-		}
-		const uint32_t *r = ioswitch_io[i].reads;
-		at += snprintf(line + at, sizeof(line) - at, " dev %d,%d %u/%u/%u/%u/%u/%u/%u meta %u %llu w %u d %u r %u max %llu;",
-		    major(key - 1), minor(key - 1), r[0], r[1], r[2], r[3], r[4], r[5], r[6], ioswitch_io[i].meta,
-		    (unsigned long long)(ioswitch_io[i].read_bytes >> 20), ioswitch_io[i].writes, ioswitch_io[i].distinct,
-		    ioswitch_io[i].repeats, (unsigned long long)ioswitch_io[i].max_block);
-	}
-	printf("%s\n", line);
-	uint64_t image[17];
-	ioswitch_cluster_image_stats(image);
-	/* One %s argument: os_log drops a message whose scalar arguments pass its buffer. */
-	snprintf(line, sizeof(line), "IOSwitch boot I/O: cryptex image reads <=16K %llu, larger %llu; issued cached %llu (%llu MiB), "
-	    "uncached %llu (%llu MiB); pages free %llu active %llu inactive %llu speculative %llu wired %llu file %llu; "
-	    "reclaimed external %llu speculative %llu cleaned %llu, evicted %llu, ghost refaults %llu",
-	    image[0], image[1], image[2], image[3] >> 20, image[4], image[5] >> 20, image[6], image[7], image[8], image[9],
-	    image[10], image[11], image[12], image[13], image[14], image[15], image[16]);
-	printf("%s\n", line);
-	ioswitch_io_write_seen();
-}
-
-static void
-ioswitch_io_init(void)
-{
-	ioswitch_io_call = thread_call_allocate_with_options(ioswitch_io_print, NULL, THREAD_CALL_PRIORITY_LOW, 0);
-	for (unsigned i = 0; i < IOSWITCH_IO_SEEN; i++) {
-		ioswitch_io_seen[i] = kalloc_data(IOSWITCH_IO_SEEN_BYTES, Z_WAITOK | Z_ZERO);
-	}
-}
-STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, ioswitch_io_init);
-
-/* Called once per frame until the first one shows (any context, interrupts possibly disabled): the first call reports. */
-void ioswitch_boot_io_report(void);
-void
-ioswitch_boot_io_report(void)
-{
-	if (os_atomic_xchg(&ioswitch_io_done, 1, relaxed)) {
-		return;
-	}
-	if (ioswitch_io_call) {
-		thread_call_enter(ioswitch_io_call);
-	}
-}
-
 int
 spec_strategy(struct vnop_strategy_args *ap)
 {
@@ -2724,10 +2521,6 @@ spec_strategy(struct vnop_strategy_args *ap)
 	vp = buf_vnode(bp);
 	mp = vp ? vp->v_mount : NULL;
 	bap = &bp->b_attr;
-
-	if (!os_atomic_load(&ioswitch_io_done, relaxed)) {
-		ioswitch_io_count(bp, bdev);
-	}
 
 #if CONFIG_PHYS_WRITE_ACCT
 	if (current_thread() == pm_sync_thread) {

@@ -197,7 +197,6 @@ static void cluster_syncup(vnode_t vp, off_t newEOF, int (*)(buf_t, void *), voi
 
 static void cluster_read_upl_release(upl_t upl, int start_pg, int last_pg, int take_reference);
 static inline bool ioswitch_cluster_is_image(vnode_t vp);
-static uint64_t ioswitch_image_stats[6];
 static int cluster_copy_ubc_data_internal(vnode_t vp, struct uio *uio, int *io_resid, int mark_dirty, int take_reference);
 
 static int cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t filesize, int flags,
@@ -1270,13 +1269,6 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 		size = non_rounded_size;
 	}
 	upl_end_offset = upl_offset + size;
-
-	/* IOSwitch boot I/O census (temporary): reads of the cryptex disk images that reach the device. */
-	if ((flags & CL_READ) && ioswitch_cluster_is_image(vp)) {
-		const unsigned path = (flags & CL_NOCACHE) ? 4 : 2;
-		os_atomic_inc(&ioswitch_image_stats[path], relaxed);
-		os_atomic_add(&ioswitch_image_stats[path + 1], (uint64_t)size, relaxed);
-	}
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 22)) | DBG_FUNC_START, (int)f_offset, size, upl_offset, flags, 0);
 
@@ -3975,23 +3967,26 @@ cluster_read(vnode_t vp, struct uio *uio, off_t filesize, int xflags)
 
 /*
  * IOSwitch (r8-sdboot): the System/App cryptex disk images (drivers/NativeIOSwitchBlock/IOSwitchCryptex.cpp registers
- * their backing files after the attach). DiskImages' FileBackingStore marks the image vnode VNOCACHE_DATA, which makes
- * every read of the image device an uncached read of the same size on the SD card. The cryptex's APFS reads its
- * 4 KiB blocks one at a time (B_META, ~235K per boot before the first frame), so reads of at most
- * IOSWITCH_IMAGE_SMALL_READ go through the page cache here (repeats are copies, sequential runs get read-ahead); larger
- * reads, the dyld cache page-ins that the cryptex's own page cache keeps, stay uncached as DiskImages intends, so the
- * same pages are not held twice. The images are read-only, so there is nothing to keep coherent. The vnode is matched
- * by pointer and vid and never dereferenced from the table, so a recycled vnode simply stops matching.
- * The counters are temporary (boot I/O census, spec_vnops.c): image reads by size and the I/O the cluster layer issued
- * for them, split by cached and uncached path, so hits = small reads - cached-path I/Os (which include read-ahead).
+ * their backing files after the attach and clears DiskImages' VNOCACHE_DATA on them, so their reads go through the page
+ * cache). Matched by pointer and vid, never dereferenced from the table, so a recycled vnode simply stops matching.
+ * Registered images' cached reads always take a page reference (cluster_read_copy), whatever tier the disk image's I/O
+ * thread runs at, instead of landing unreferenced on the speculative queue, the first pages the pageout scan frees.
+ *
+ * Boot prefetch recording: on a boot with no valid prefetch list, IOSwitchCryptex arms a map with one byte per 4 KiB
+ * block of the System image (0 never read, else 1 + whole seconds since it was armed, at most 255) and the reads of that
+ * image set each block's first-read time here. IOSwitchCryptex stops it after the first frame and saves the map next
+ * to the image; the next boots replay it as large reads in first-read order. The map is never freed (a read racing the
+ * stop may still be writing to it; it is allocated once per image change).
  */
-#define IOSWITCH_IMAGE_VNODES     2
-#define IOSWITCH_IMAGE_SMALL_READ (16 * 1024)
+#define IOSWITCH_IMAGE_VNODES 2
 static struct {
 	vnode_t  vp;
 	uint32_t vid;
 } ioswitch_image_vnodes[IOSWITCH_IMAGE_VNODES];
-/* ioswitch_image_stats (declared above cluster_io): small reads, large reads, cached-path I/Os + bytes, uncached I/Os + bytes */
+static uint8_t *ioswitch_record_map;
+static vnode_t ioswitch_record_vp;
+static uint32_t ioswitch_record_vid, ioswitch_record_blocks;
+static uint64_t ioswitch_record_start, ioswitch_record_second;
 
 void ioswitch_cluster_register_image(vnode_t vp);
 void
@@ -4021,29 +4016,44 @@ ioswitch_cluster_is_image(vnode_t vp)
 	return false;
 }
 
-extern unsigned int vm_page_free_count, vm_page_active_count, vm_page_inactive_count, vm_page_speculative_count;
-extern unsigned int vm_page_wire_count, vm_page_external_count;
-void ioswitch_cluster_image_stats(uint64_t out[17]);
+void ioswitch_cluster_record_start(vnode_t vp, uint8_t *map, uint32_t blocks);
 void
-ioswitch_cluster_image_stats(uint64_t out[17])
+ioswitch_cluster_record_start(vnode_t vp, uint8_t *map, uint32_t blocks)
 {
-	for (unsigned i = 0; i < 6; i++) {
-		out[i] = os_atomic_load(&ioswitch_image_stats[i], relaxed);
-	}
-	/* Temporary census: VM page counts and file-page reclaim since boot, for the line printed at the first frame. */
-	out[6] = vm_page_free_count;
-	out[7] = vm_page_active_count;
-	out[8] = vm_page_inactive_count;
-	out[9] = vm_page_speculative_count;
-	out[10] = vm_page_wire_count;
-	out[11] = vm_page_external_count;
-	out[12] = vm_pageout_vminfo.vm_pageout_freed_external;
-	out[13] = vm_pageout_vminfo.vm_pageout_freed_speculative;
-	out[14] = vm_pageout_vminfo.vm_pageout_freed_cleaned;
-	out[15] = vm_pageout_vminfo.vm_pageout_pages_evicted;
-	out[16] = vm_pageout_vminfo.vm_phantom_cache_found_ghost;
+	nanoseconds_to_absolutetime(NSEC_PER_SEC, &ioswitch_record_second);
+	ioswitch_record_start = mach_absolute_time();
+	ioswitch_record_vp = vp;
+	ioswitch_record_vid = vnode_vid(vp);
+	ioswitch_record_blocks = blocks;
+	os_atomic_store(&ioswitch_record_map, map, release);
 }
 
+/* Stops the recording; the map stays valid (never freed). */
+void ioswitch_cluster_record_stop(void);
+void
+ioswitch_cluster_record_stop(void)
+{
+	os_atomic_store(&ioswitch_record_map, (uint8_t *)NULL, release);
+}
+
+static void
+ioswitch_cluster_record(vnode_t vp, struct uio *uio)
+{
+	uint8_t *map = os_atomic_load(&ioswitch_record_map, acquire);
+	if (map == NULL || vp != ioswitch_record_vp || vp->v_id != ioswitch_record_vid || uio_resid(uio) <= 0 ||
+	    uio_offset(uio) < 0) {
+		return;
+	}
+	const uint64_t elapsed = (mach_absolute_time() - ioswitch_record_start) / ioswitch_record_second;
+	const uint8_t when = (uint8_t)(elapsed < 254 ? elapsed + 1 : 255);
+	const uint64_t first = (uint64_t)uio_offset(uio) / PAGE_SIZE;
+	const uint64_t last = ((uint64_t)uio_offset(uio) + (uint64_t)uio_resid(uio) - 1) / PAGE_SIZE;
+	for (uint64_t b = first; b <= last && b < ioswitch_record_blocks; b++) {
+		if (map[b] == 0) {
+			map[b] = when;
+		}
+	}
+}
 
 int
 cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*callback)(buf_t, void *), void *callback_arg)
@@ -4057,15 +4067,11 @@ cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*
 
 	flags = xflags;
 
+	if (os_atomic_load(&ioswitch_record_map, relaxed)) {
+		ioswitch_cluster_record(vp, uio);
+	}
 	if (vp->v_flag & VNOCACHE_DATA) {
-		if (!ioswitch_cluster_is_image(vp)) {
-			flags |= IO_NOCACHE;
-		} else if (uio_resid(uio) <= IOSWITCH_IMAGE_SMALL_READ) {
-			os_atomic_inc(&ioswitch_image_stats[0], relaxed);
-		} else {
-			os_atomic_inc(&ioswitch_image_stats[1], relaxed);
-			flags |= IO_NOCACHE;
-		}
+		flags |= IO_NOCACHE;
 	}
 	if ((vp->v_flag & VRAOFF) || speculative_reads_disabled) {
 		flags |= IO_RAOFF;
@@ -4186,9 +4192,8 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 	policy = throttle_get_io_policy(NULL);
 
 	/*
-	 * IOSwitch (r8-sdboot): the cryptex image's small reads are cached so that their repeats hit; whatever tier the disk
-	 * image's I/O thread runs at, its pages take a reference like any foreground read, instead of landing on the
-	 * speculative queue unreferenced, the first pages the pageout scan frees.
+	 * IOSwitch (r8-sdboot): the cryptex images' cached pages take a reference like any foreground read, whatever tier
+	 * the disk image's I/O thread runs at (see ioswitch_cluster_register_image).
 	 */
 	if ((policy == THROTTLE_LEVEL_TIER3 || policy == THROTTLE_LEVEL_TIER2 || (flags & IO_NOCACHE)) &&
 	    ((flags & IO_NOCACHE) || !ioswitch_cluster_is_image(vp))) {
