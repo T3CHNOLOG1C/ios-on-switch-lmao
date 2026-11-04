@@ -15,5 +15,5 @@
 #pragma once
 
 #ifndef IOSWITCH_PORTRAIT_NATIVE
-#define IOSWITCH_PORTRAIT_NATIVE 0  // integrator 11-04 r7a: off until r8-landscape ships it (set 1 then)
+#define IOSWITCH_PORTRAIT_NATIVE 1  // 11-04 r7e: on (user: landscape-only). 0 restores the rotated 1280x720 path.
 #endif
