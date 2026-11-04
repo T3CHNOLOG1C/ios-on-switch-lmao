@@ -5,6 +5,7 @@
 #
 # Boot-args (COMMAND_LINE), the ADT edits and USB_HOST live in tools/package/package_raw_boot.py.
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/kernel:inputs.bzl", "tool_output")
 load("//bazel/kernel:package.bzl", "boot_package")
 
@@ -71,4 +72,21 @@ boot_package(
     portrait_header = "//out/native-a57/root-v1/tree:drivers/NativeMobileDisplay/IOSwitchPortrait.h",
     static_trust = "//ipsw:static_system_trust",
     template = ":raw-v24-boot.cmd",
+)
+
+# bazel run //boot:snapshot -- <name>: this build's boot entry and Metal bundle as out/boot/lkg/<name> (rollback, or
+# deploy exactly that build later with //deploy:sd --boot-package=... --gpu-bundle=...).
+py_binary(
+    name = "snapshot",
+    srcs = ["//tools/package:snapshot.py"],
+    args = [
+        "--boot=$(rlocationpath :package)",
+        "--gpu=$(rlocationpath //gpu:bundle)",
+    ],
+    data = [
+        ":package",
+        "//gpu:bundle",
+    ],
+    main = "//tools/package:snapshot.py",
+    deps = ["@rules_python//python/runfiles"],
 )
