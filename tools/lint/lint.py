@@ -7,6 +7,7 @@
   bazel test //lint:format_test               the same, as a test
   bazel run //lint:tidy [-- --fix FILE…]      clang-tidy with <tree>/.clang-tidy (runs //lint:compdb first)
   bazel run //lint:lint -- churn [DIR…]       lines clang-format would change, per directory (nothing written)
+  bazel run //lint:py_owners                  fail on any tracked .py file no py_binary/py_test/py_library owns
 
 Files are paths relative to the project root, the tree, or absolute. Formatting follows the nearest .clang-format:
 the tree root's, a directory's own where its style differs, and DisableFormat where the code is someone else's
@@ -228,6 +229,29 @@ def cmd_churn(args):
         print(f'{r:40} {changed:6} of {total:6} lines ({100 * changed / max(total, 1):5.1f}%)')
 
 
+PY_OWNED = ('kind("source file", labels(srcs, kind("py_(binary|test|library)", //...)) + '
+            'labels(main, kind("py_(binary|test)", //...)))')
+
+
+def cmd_py_owners(args):
+    """Every tracked .py file is a source of a py_binary, py_test or py_library: no script runs outside Bazel."""
+    bazel = os.environ.get('BAZEL', 'bazel')
+    tracked = subprocess.run(['git', 'ls-files', '*.py'], cwd=ROOT, check=True, capture_output=True,
+                             text=True).stdout.split()
+    query = subprocess.run([bazel, 'query', PY_OWNED, '--output=label'], cwd=ROOT, check=True, capture_output=True,
+                           text=True).stdout.split()
+    owned = set()
+    for label in query:
+        if label.startswith('//'):
+            package, _, name = label[2:].partition(':')
+            owned.add(f'{package}/{name}' if package else name)
+    unowned = sorted(set(tracked) - owned)
+    for path in unowned:
+        print(f'{path}: no py_binary, py_test or py_library owns it')
+    print(f'{len(tracked)} tracked .py files, {len(tracked) - len(unowned)} owned by a Bazel target')
+    return 1 if unowned else 0
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
@@ -244,11 +268,12 @@ def main():
     t.add_argument('files', nargs='*')
     c = sub.add_parser('churn')
     c.add_argument('dirs', nargs='*')
+    sub.add_parser('py-owners')
     a = p.parse_args()
     if a.cmd in ('format', 'tidy') and not a.files:
         a.all = True   # no files: every first-party file
     sys.exit({'compdb': lambda: compdb() and 0, 'format': lambda: cmd_format(a), 'tidy': lambda: cmd_tidy(a),
-              'churn': lambda: cmd_churn(a)}[a.cmd]())
+              'churn': lambda: cmd_churn(a), 'py-owners': lambda: cmd_py_owners(a)}[a.cmd]())
 
 
 if __name__ == '__main__':

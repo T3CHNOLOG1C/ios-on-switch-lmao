@@ -6,6 +6,7 @@
 #   bazel test //lint:format_test            the same as a test (part of `bazel test //...`)
 #   bazel run //lint:compdb                  out/native-a57/root-v1/tree/compile_commands.json from Bazel's compiles
 #   bazel run //lint:tidy [-- --fix FILE...] clang-tidy (all first-party units by default)
+#   bazel run //lint:py_owners               every tracked .py file belongs to a py_binary/py_test/py_library
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
 
@@ -34,6 +35,8 @@ LLVM_DATA = [
         "--all",
     ]),
     ("compdb", ["compdb"]),
+    # Not a test: it asks `bazel query` which targets own each .py file, and a test cannot run Bazel.
+    ("py_owners", ["py-owners"]),
     ("tidy", [
         "tidy",
         "--compdb",

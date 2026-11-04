@@ -14,6 +14,11 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "rules_python", version = "2.4.6")
 
 # --- Python: the build's tools and tests run on this interpreter, never the host's ------------------------------
+# No implicit __init__.py in runfiles: tools/ is a namespace package (PEP 420), imported as tools.install etc.
+rules_python_config = use_extension("@rules_python//python/extensions:config.bzl", "config")
+
+rules_python_config.explicit_init_py(default = True)
+
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     is_default = True,

@@ -25,6 +25,7 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
 - [Bumping a pin](#bumping-a-pin)
 - [Reproducibility and the old CMake flow](#reproducibility-and-the-old-cmake-flow)
 - [Host inputs](#host-inputs)
+- [Tools and scripts](#tools-and-scripts)
 - [Coming from the CMake flow](#coming-from-the-cmake-flow)
 - [Troubleshooting](#troubleshooting)
 
@@ -149,14 +150,17 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//gpu:trustcache` | The bundle's trust cache module. `//:boot` appends it to the kernel's static trust cache |
 | `//out/native-a57/root-v1/tree:<driver>` | One driver's objects (e.g. `:SwitchUSB`); `:xnu` is the XNU objroot; `:kernel_unprelinked` is the link |
 | `//ipsw:kernelcache`, `//ipsw:static_system_trust` | The original kernelcache (decompressed) and the root+OS-cryptex trust bundle, from the IPSW |
-| `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | IPSW members (`bazel/ipsw/pins.bzl`) |
+| `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | IPSW members (`bazel/ipsw/pins.bzl`). Deflated ones are inflated by a build action (`//bazel/ipsw:<role>`) |
 | `//install:sd`, `//install:artifacts` | SD-card install and what it writes |
 | `//deploy:sd`, `//deploy:pull_logs` | Deploy and log pull |
 | `//boot:snapshot` | Copy this build to `out/boot/lkg/<name>` |
 | `//xnu:patch_export`, `:patch_check`, `:patch_apply` | XNU patch ⇄ working repository |
 | `//lint:format`, `:format_check`, `:format_test`, `:tidy`, `:compdb` | clang-format / clang-tidy (LLVM 23.1.4) |
-| `//tests/...`, `//bazel/pinned:sha256`, `//install:*_test` | Tests |
+| `//lint:py_owners` | Fails on any tracked `.py` file that no `py_binary`, `py_test` or `py_library` owns |
+| `//tests/...`, `//out/native-a57/root-v1/tree:*_test`, `//native:firmware_export_test`, `//install:*_test`, `//tools/deploy:deploy_test`, `//bazel/pinned:sha256` | Tests |
 | `//tools/repro:check`, `//tools/repro:equivalence` | Reproducibility and old-flow comparison |
+| `//native:firmware_export`, `//gpu/nvk:relink`, `//tools/package:progressui_logo` | Regenerate a pinned input: the RAM exporter, a relinked NVK dylib, the ProgressUI logo |
+| `//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:<tool>` | GPU developer tools: the shader corpus (`make_corpus`, `run_corpus`, `report`, …), `ordercheck`, `check_dyld_cache_imports` |
 
 Flags:
 - `--//boot:smp=false`: package for one core.
@@ -182,7 +186,8 @@ Measured on this Mac (16 cores, shared with other agents, so wall times vary):
 | **One m2v patch changed** (a line in 0110) | 284.4 s | `INFO: 15 processes: 2 action cache hit, 1 internal, 14 darwin-sandbox.` |
 | m2v patch reverted | 4.3 s | `INFO: 15 processes: 2 action cache hit, 14 disk cache hit, 1 internal.` |
 | **Fresh output base**, disk cache warm (a new clone, or after `bazel clean --expunge`) | 78.5 s (critical path 2.2 s) | `INFO: 428 processes: 346 disk cache hit, 82 internal.` |
-| An XNU patch change | ≈117 s | `INFO: 295 processes: … 294 darwin-sandbox.` (XNU plus every driver object, which include XNU's headers) |
+| **A driver header edited** (a comment in `drivers/TegraGPIO/TegraGPIO.h`) | 24.8 s (critical path 2.6 s) | `INFO: 282 processes: 24 action cache hit, 1 internal, 281 darwin-sandbox.` (every driver object: each declares all the tree's headers) |
+| An XNU patch change, or a header XNU itself includes (`diagnostics/**`, `drivers/NativeIOSwitchBlock/*.h`, `kits/VerifiedRoot/include/**`) | ≈95–117 s | `INFO: 295 processes: … 294 darwin-sandbox.` (XNU plus every driver object, which include XNU's headers) |
 
 What each scenario shows:
 - **Comment added.** Only that object recompiled. It came out byte-identical, so nothing after it ran: Bazel keys on
@@ -207,9 +212,9 @@ measured while other agents loaded the machine; expect less on an idle one.
 | `~/Library/Caches/bazel/_bazel_$USER/<hash>` | The output base: this checkout's bazel-out and external repos | About 1.5–2.5 GB. `bazel clean` empties it; the disk cache refills it in seconds |
 
 Notes:
-- IPSW members are stored once. On APFS, the copy Bazel makes from the repository cache is a clone.
+- IPSW members are stored once, as fetched. On APFS, the copy Bazel makes from the repository cache is a clone.
 - The OS image (5.16 GB) is only fetched by `//install:sd`. The system cryptex is held compressed (1.3 GB) and
-  unpacked (3.3 GB) only for an install.
+  inflated (3.3 GB) into the output base only for an install; that action stays out of the disk cache.
 - To shrink everything: `bazel clean --expunge`; delete `~/Library/Caches/ioswitch-bazel/disk` (rebuilt on demand);
   delete `~/Library/Caches/ioswitch-bazel/repository/contents` (unpacked repositories, re-extracted on demand).
 
@@ -233,7 +238,7 @@ The default is the IOKit C++ recipe (XNU's own compile flags) plus our warnings.
 | `srcs = [...]` | An explicit, ordered list. Names are relative to the driver's directory; `:path` and `//label` reach elsewhere. `.c` and `.S` work too |
 | `copts`, `c_copts`, `src_copts = {"X.cpp": [...]}` | Extra flags. `{tree}`, `{build}`, `{xnu}` and `{sdk}` expand to the tree, this package's output directory, the patched XNU and the iPhoneOS SDK |
 | `late = ["X.cpp"]` | A late object: subclasses an original class; the board code runs its static initializer |
-| `abi_checks = {"bindings.S": "xudc X.cpp"}`, `abi_check_script` | SwitchUSB-style vtable and import checks against the original kernelcache |
+| `abi_checks = {"bindings.S": "xudc X.cpp"}`, `abi_check = ":abi_check"` | SwitchUSB-style vtable and import checks against the original kernelcache (`abi_check` is a `py_binary`) |
 | `prelink = ["com.apple.iokit.IOUSBHostFamily"]` | Original kexts to prelink |
 | `prelink_cuts`, `prelink_deferred` | Dependencies cut and personalities deferred (see SwitchUSB) |
 | `c_recipe = ":freestanding_c"`, `object_names = "path"` | Vendored Linux code (nvkm, BPMP, DFLL) |
@@ -253,8 +258,9 @@ bazel build //:kernel
 ```
 
 The patch is the source of truth for the build. A tree change that calls new XNU code fails to link until the patch is
-exported. `bazel run //xnu:patch_check` tells you whether the patch is current. Any XNU change recompiles XNU (about
-80 s) and every driver object, because they include XNU's headers.
+exported. `bazel run //xnu:patch_check` tells you whether the patch is current (it reads this checkout's
+`.cache/xnu-work`; a git worktree has its own copy, possibly stale). Any XNU change recompiles XNU (about 80 s) and
+every driver object, because they include XNU's headers.
 
 ## Bumping a pin
 
@@ -264,13 +270,14 @@ exported. `bazel run //xnu:patch_check` tells you whether the patch is current. 
 | XNU tag | `MODULE.bazel` `@xnu`/`@xnu_base` | New URL and sha256. The patch must apply to it |
 | Apple OSS, corecrypto, lz4 | `MODULE.bazel` | Version in the URL, new sha256, `strip_prefix` |
 | m2v | `bazel/gpu/deps.bzl` | Commit and sha256 of the GitHub tarball. The series is `tree/drivers/TegraGM20BMetal/patches/series` |
-| NVK (prebuilt) | `bazel/gpu/deps.bzl` `HOST_FILES` | New dylib names and sha256s (`shasum -a 256`) |
+| NVK (prebuilt) | `bazel/gpu/deps.bzl` `HOST_FILES` | Build with `gpu/nvk/build-nvk.sh` (into `out/gpu/nvk`), then new dylib names and sha256s (`shasum -a 256`) |
+| m2v library store | `bazel/gpu/m2v-libs.sha256` | Regenerate with the command in its header (per-file `shasum -a 256`) |
 | Mesa | not built yet | `bazel/gpu/deps.bzl` lists what a Mesa build needs |
 | Rust | `MODULE.bazel` GPU section | `rust.toolchain(versions = [...])` |
 | LLVM | `bazel/llvm/llvm.bzl` and `bazel/gpu/deps.bzl` | URL and sha256 in both (one archive) |
 | Python packages | not used yet | — |
 | Xcode | `bazel/host/xcode.bzl` | Select the new Xcode, then `bazel run @xcode//:print_pins` and paste |
-| Pinned files | `bazel/pinned` | Replace the file, update `SHA256SUMS`, `bazel test //bazel/pinned:sha256` |
+| Pinned files | `bazel/pinned` | Replace the file, update its line in `SHA256SUMS` (`shasum -a 256 <path>`, path relative to `bazel/pinned`), `bazel test //bazel/pinned:sha256` |
 
 A few BUILD arguments name external repositories by their directory, which Bazel 9 derives from `MODULE.bazel`. For
 example, `external/+http_archive+xnu`, `+http_archive+corecrypto`, `+http_archive+lz4` and
@@ -327,11 +334,12 @@ The only things the build reads from the Mac, each declared and checked:
   - the prebuilt NVK (until Mesa is built here);
   - the m2v library store;
   - QuartzCore's metallib.
-  - All three are checked by sha256.
+  - Bazel copies each file in itself, through its download check against the pinned sha256 (`bazel/host/files.bzl`):
+    a wrong file fails the fetch, and the build only ever sees the pinned bytes.
   - The seed and the raw pack run Metal on this Mac's GPU, so they never run on a remote executor. Their results are
     still identical across builds.
 
-Pinned, unregenerable files (in `bazel/pinned`, with `SHA256SUMS`):
+Pinned, unregenerable files (in `bazel/pinned`, with `SHA256SUMS`, checked the same way by `@pinned`):
 - the kernelcache audit outputs (`original-bindings.S`, ABI headers);
 - the owner key;
 - the V20 prelink report;
@@ -339,6 +347,17 @@ Pinned, unregenerable files (in `bazel/pinned`, with `SHA256SUMS`):
 - `exporter.uimg` and the BT patch RAM.
 
 `data-v10.dbr` and the ProgressUI logo contain Apple-derived content: check before publishing the repository.
+
+## Tools and scripts
+
+Every build, package, install, deploy and log step is a Bazel target, and there are no loose scripts:
+- Orchestration is Starlark: rules in `bazel/kernel`, `bazel/ipsw`, `gpu/defs.bzl` and `install/defs.bzl` declare each
+  action's inputs and outputs; repository rules fetch and check what comes from outside.
+- Real tools are Python, one `py_binary` per job on the hermetic rules_python 3.13 (`tools/kernel`, `tools/package`,
+  `tools/prelink`, `tools/gpu`, `tools/install`, `tools/deploy`), called from those rules or by `bazel run`.
+  Shared code is a `py_library`; host tests are `py_test`.
+- `bazel run //lint:py_owners` fails on any tracked `.py` file that no target owns. Run it before committing a new
+  script; give it a target, or don't add it.
 
 ## Coming from the CMake flow
 
@@ -356,6 +375,8 @@ Pinned, unregenerable files (in `bazel/pinned`, with `SHA256SUMS`):
 | `python3 -m unittest ...` | `bazel test //...` |
 | Edit `cmake/Drivers.cmake` for a new driver | One `kernel_driver()` in the tree's `BUILD.bazel` |
 | Boot-args in `scripts/package_raw_boot.py` | The same file, now `tools/package/package_raw_boot.py` |
+| `out/gpu/nvk/build-nvk.sh`, `relink-nvk.py`, the NVK patches | `gpu/nvk/` (still builds into `out/gpu/nvk`); `bazel run //gpu/nvk:relink` |
+| `tree/scripts/*` (builders, audits, qemu-entry), `tree/package/Scripts/*` | Gone: their live parts are Bazel rules and tools; the rest was dead |
 
 ## Troubleshooting
 
