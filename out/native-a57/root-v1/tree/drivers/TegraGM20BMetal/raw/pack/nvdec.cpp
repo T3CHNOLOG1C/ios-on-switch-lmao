@@ -366,23 +366,44 @@ void Decoder::copyEngine(uint32_t launch)
         barrier("CE_BLOCKLINEAR");
         return;
     }
-    // remap (r8-rawca: NVK's two uses): DST_X CONST_A, the fill (vkCmdFillBuffer); DST_X..W = SRC_X..W, an image copy whose
-    // line length counts elements of NUM_DST_COMPONENTS components of COMPONENT_SIZE bytes (nouveau_copy_rect)
-    uint32_t elem = 1, constant = 0;
-    bool fill = false;
+    // remap: each destination component of COMPONENT_SIZE bytes from a source component (SRC_X..W of the source element of
+    // NUM_SRC_COMPONENTS), constant A or B, or left as it was (NO_WRITE); the line length counts elements (nouveau_copy_rect).
+    // NVK's two uses: DST_X CONST_A, the fill (vkCmdFillBuffer), and DST_X..W = SRC_X..W, an image copy; the raw path's planar
+    // conversion (r8-rawca: a 4:4:4 two-plane surface's planes into one RGBA8 image) leaves components with NO_WRITE.
+    uint32_t elem = 1, srcElem = 1, comp = 0, csize = 1, nsrc = 1, ndst = 1;
+    const uint32_t consts[2] = {r[0x700 / 4], r[0x704 / 4]};
+    bool remap = false, plain = true;
     if (launch & (1u << 10)) {
-        const uint32_t comp = r[0x708 / 4];
-        elem = (((comp >> 16) & 3) + 1) * (((comp >> 24) & 3) + 1);
-        constant = r[0x700 / 4];
-        fill = (comp & 7) == 4;
+        remap = true;
+        comp = r[0x708 / 4];
+        csize = ((comp >> 16) & 3) + 1;
+        nsrc = ((comp >> 20) & 3) + 1;
+        ndst = ((comp >> 24) & 3) + 1;
+        elem = csize * ndst;
+        srcElem = csize * nsrc;
+        for (uint32_t c = 0; c < ndst; c++) plain = plain && ((comp >> (4 * c)) & 7) == c && c < nsrc;
+        plain = plain && nsrc == ndst;
     }
     const uint64_t bytes = uint64_t(length) * elem;
-    std::vector<uint8_t> line(bytes);
+    std::vector<uint8_t> line(bytes), from(uint64_t(length) * srcElem);
     for (uint32_t y = 0; y < lines; y++) {
-        if (fill)
-            for (uint64_t k = 0; k < bytes; k++) line[k] = uint8_t(constant >> (8 * (k % 4)));
-        else
+        if (remap && !plain) {  // component by component, over what the destination holds
+            read(dst + uint64_t(y) * pitchOut, line.data(), bytes);
+            bool reads = false;
+            for (uint32_t c = 0; c < ndst; c++) reads = reads || ((comp >> (4 * c)) & 7) < 4;
+            if (reads) read(src + uint64_t(y) * pitchIn, from.data(), from.size());
+            for (uint32_t e = 0; e < length; e++)
+                for (uint32_t c = 0; c < ndst; c++) {
+                    const uint32_t sel = (comp >> (4 * c)) & 7;
+                    uint8_t *out = &line[uint64_t(e) * elem + c * csize];
+                    if (sel < 4 && sel < nsrc)
+                        memcpy(out, &from[uint64_t(e) * srcElem + sel * csize], csize);
+                    else if (sel == 4 || sel == 5)
+                        for (uint32_t k = 0; k < csize; k++) out[k] = uint8_t(consts[sel - 4] >> (8 * k));
+                }
+        } else {
             read(src + uint64_t(y) * pitchIn, line.data(), bytes);
+        }
         // NVDEC_WRITETHROUGH: the copy lands in the memory behind the destination too, as the GPU's would, so a host test reads
         // its result back on the CPU (pack/cap.cpp maps every BO)
         // (and not in the overlay: the CPU may rewrite that memory later, which the overlay would hide from the next read)

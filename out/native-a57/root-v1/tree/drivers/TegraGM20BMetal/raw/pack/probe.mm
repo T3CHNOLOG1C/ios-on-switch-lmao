@@ -329,9 +329,13 @@ int main(int argc, char **argv)
                 MTLPixelFormatBGR5A1Unorm};
             State st;
             bool found = false;
+            // PROBE_FORMATS_STATE=<text>: the first state whose line holds it instead (what m2v writes per bound format)
+            const char *pick = getenv("PROBE_FORMATS_STATE");
             for (const std::string &line : lines)
-                if (line.find("f fixed_frag_lph_cph") != std::string::npos &&
-                    line.find("fc_texture_function:49:01") != std::string::npos && parseState(qc, line, st)) {
+                if ((pick ? line.find(pick) != std::string::npos
+                          : line.find("f fixed_frag_lph_cph") != std::string::npos &&
+                                line.find("fc_texture_function:49:01") != std::string::npos) &&
+                    parseState(qc, line, st)) {
                     found = true;
                     break;
                 }

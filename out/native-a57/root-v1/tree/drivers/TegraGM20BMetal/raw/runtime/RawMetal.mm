@@ -2366,6 +2366,37 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
         rc->abandon();
         return false;
     };
+    // the planar textures it samples: their images from their planes first, once (m2v converts at each encoder that uses one;
+    // nothing between this command buffer's passes writes the planes, refused below), then the passes, whose prologue's full
+    // barrier orders the copies before their reads. A sampler that clamps to zero or to the border reads a 4:4:4 code texture
+    // as clamp to edge (m2v's address map), which the raw path does not derive: such a command buffer is m2v's.
+    {
+        std::vector<RMTexture *> planar;
+        bool clampsOut = false;
+        auto isPlanar = [](void *o) { return o && ((__bridge RMTexture *)o)->_raw.planar; };
+        for (const Cmd &c : cb->_tape) {
+            // Metal's copies of a planar texture move its planes' bytes, not the image: m2v's
+            if ((c.op == OpCopyTexture && (isPlanar(c.obj) || isPlanar(c.obj2))) ||
+                (c.op == OpCopyBufferToTexture && isPlanar(c.obj2)) ||
+                (c.op == OpCopyTextureToBuffer && isPlanar(c.obj)))
+                return fail("a copy to or from a planar texture");
+            if (c.op == OpTexture && c.obj) {
+                RMTexture *t = (__bridge RMTexture *)c.obj;
+                if (t->_raw.planar && std::find(planar.begin(), planar.end(), t) == planar.end()) planar.push_back(t);
+            } else if (c.op == OpSampler && c.obj) {
+                MTLSamplerDescriptor *sd = ((__bridge RMSampler *)c.obj)->_descriptor;
+                for (MTLSamplerAddressMode m : {sd.sAddressMode, sd.tAddressMode, sd.rAddressMode})
+                    clampsOut = clampsOut || m == MTLSamplerAddressModeClampToZero ||
+                                m == MTLSamplerAddressModeClampToBorderColor;
+            }
+        }
+        if (!planar.empty()) {
+            if (clampsOut) return fail("a planar texture with a sampler that clamps to zero or to the border");
+            raw::BlitEncoder *conv = rc->blit();
+            for (RMTexture *t : planar) conv->convertPlanar(t->_raw);
+            conv->end();
+        }
+    }
     for (const Cmd &c : cb->_tape) {
         switch (c.op) {
         case OpRender: {
@@ -2375,6 +2406,7 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
                 MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
                 RMTexture *t = (RMTexture *)a.texture;
                 if (!t) continue;
+                if (t->_raw.planar) return fail("a planar texture as a render target");
                 p.color[j].texture = &t->_raw;
                 p.color[j].load = a.loadAction == MTLLoadActionClear  ? raw::ColorAttachment::Clear
                                   : a.loadAction == MTLLoadActionLoad ? raw::ColorAttachment::Load
@@ -2677,6 +2709,23 @@ static void commitBuffer(RMCommandBuffer *cb);
     if (!t->_rawOk) return [self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
     return (id<MTLTexture>)t;
 }
+// RGB8_444_2P (542) over plane 0 of a two-plane 4:4:4 surface of one byte a luma texel and two a chroma pair (CoreVideo's
+// '_RB4', the widget and poster snapshots Core Animation samples): Metal reads its codes, red Cr, green Y, blue Cb, alpha 1
+// (m2v ycbcr.rs), which the raw path holds in an RGBA8 image it writes from the planes with the copy engine before the work that
+// samples it (raw::BlitEncoder::convertPlanar). A 2D texture of the surface's size, one level, no view, no rotation, sampled.
+static bool planar444(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane)
+{
+    constexpr MTLPixelFormat kRGB8_444_2P = MTLPixelFormat(542);
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    const NSUInteger turned =
+        [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
+    return d.pixelFormat == kRGB8_444_2P && plane == 0 && IOSurfaceGetPlaneCount(s) == 2 &&
+           d.textureType == MTLTextureType2D && d.mipmapLevelCount == 1 && d.sampleCount == 1 && !turned &&
+           !(d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView)) &&
+           IOSurfaceGetWidthOfPlane(s, 0) == d.width && IOSurfaceGetHeightOfPlane(s, 0) == d.height &&
+           IOSurfaceGetWidthOfPlane(s, 1) == d.width && IOSurfaceGetHeightOfPlane(s, 1) == d.height &&
+           IOSurfaceGetBytesPerElementOfPlane(s, 0) == 1 && IOSurfaceGetBytesPerElementOfPlane(s, 1) == 2;
+}
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
     if (!s) return nil;
@@ -2686,7 +2735,14 @@ static void commitBuffer(RMCommandBuffer *cb);
     t->_kind = RMTextureSurface;
     t->_surface = (IOSurfaceRef)CFRetain(s);
     t->_plane = plane;
-    if (rawShape(d) && !plane && !IOSurfaceGetPlaneCount(s)) {
+    if (planar444(d, s, plane)) {  // RGB8_444_2P over a 4:4:4 two-plane surface: an RGBA8 image of its codes
+        void *base = IOSurfaceGetBaseAddress(s);
+        const uintptr_t at = uintptr_t(base);
+        t->_rawOk = gRM->raw->createPlanarTexture(
+            IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 0)) - at,
+            uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 0)), uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 1)) - at,
+            uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 1)), uint32_t(d.width), uint32_t(d.height), t->_raw);
+    } else if (rawShape(d) && !plane && !IOSurfaceGetPlaneCount(s)) {
         void *base = IOSurfaceGetBaseAddress(s);  // valid while the surface lives (the import retains it)
         t->_rawOk = gRM->raw->createSurfaceTexture(
             IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, 0, uint32_t(d.width), uint32_t(d.height),
@@ -3153,6 +3209,15 @@ static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
         switches, cpuOrdered, acquires, poolStalls;
 } gRates;
+
+const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
+{
+    if (![(id)texture isKindOfClass:[RMTexture class]]) return nullptr;
+    RMTexture *t = (RMTexture *)texture;
+    if (!t->_rawOk || !t->_raw.cpu) return nullptr;
+    if (pitch) *pitch = t->_raw.pitch;
+    return t->_raw.cpu;
+}
 
 size_t raw_metal_rates(char *out, size_t size)
 {

@@ -25,6 +25,9 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *descriptor);
 // One rates line since the previous call (0 when the device did nothing): command buffers on each path and why, encode time,
 // draws, passes, copies, waits, memory. The plugin logs it every 5 s with the m2v line (TEGRA_M2V_TELEMETRY).
 size_t raw_metal_rates(char *out, size_t size);
+// Host tests: the CPU's view of the image the raw path samples for `texture` (a planar texture's converted image), its row pitch
+// in *pitch; null when the raw path holds none.
+const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch);
 #ifdef __cplusplus
 }
 #endif

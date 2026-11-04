@@ -75,6 +75,14 @@ struct Texture {
     uint32_t tic = 0;          // texture header index, 0: none (not sampleable)
     Import *import = nullptr;  // surface or no-copy pages, else
     Span span;                 // pool memory, else a view (memory of the texture it views)
+    // A two-plane 4:4:4 surface's texture (RGB8_444_2P, Metal format 542): the image sampled is span (RGBA8, the codes as Metal
+    // reads them: red Cr, green Y, blue Cb, alpha 1), which BlitEncoder::convertPlanar writes from the surface's planes (import)
+    // before the work that samples it
+    struct Planes {
+        uint64_t luma = 0, chroma = 0;  // GPU addresses of plane 0 (a Y code a texel) and plane 1 (Cb, Cr a texel)
+        uint32_t lumaPitch = 0, chromaPitch = 0;
+    } planes;
+    bool planar = false;
 };
 struct Buffer {
     uint64_t va = 0, length = 0;
@@ -195,6 +203,9 @@ public:
     // buffer<->image copies of linear images)
     void copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
                   uint32_t bpp);
+    // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
+    // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
+    void convertPlanar(const Texture &t);
     void end();
 
 private:
@@ -249,6 +260,11 @@ public:
                        Texture &t);  // pool memory, rows 256-byte aligned
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
                               uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t);
+    // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
+    // with their pitches), sampled through an RGBA8 image of the pool (Texture::planar)
+    bool createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
+                             uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width, uint32_t height,
+                             Texture &t);
     bool createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                              uint32_t format,
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)

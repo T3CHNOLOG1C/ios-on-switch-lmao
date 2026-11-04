@@ -36,6 +36,10 @@ xcrun clang++ $OBJC -Wall -Wextra -x objective-c++ "$HERE/selcheck.mm" "$RAW/run
   -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" -x none "$BRIDGE" $LIBS \
   -o "$OUT/selcheck" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/selcheck"
+xcrun clang++ $OBJC -Wall -Wextra -x objective-c++ "$HERE/planarframe.mm" "$RAW/runtime/RawMetal.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+  -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" -x none "$BRIDGE" $LIBS \
+  -o "$OUT/planarframe" 2>&1 | grep -v "duplicate libraries" || true
+echo "built $OUT/planarframe"
 xcrun clang++ $OBJC -x objective-c++ "$HERE/cabench.mm" "$RAW/runtime/RawMetal.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
   -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" -x none "$BRIDGE" $LIBS \
   -o "$OUT/cabench" 2>&1 | grep -v "duplicate libraries" || true

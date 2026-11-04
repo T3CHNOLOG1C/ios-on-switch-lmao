@@ -57,6 +57,7 @@ enum : uint32_t {
     CE_LAUNCH_DMA = 0x0300,
     CE_OFFSET_IN_UPPER = 0x0400,
     CE_LINE_LENGTH_IN = 0x0418,
+    CE_SET_REMAP_CONST_A = 0x0700,
     CE_SET_REMAP_COMPONENTS = 0x0708,
 };
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
@@ -599,6 +600,32 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     return true;
 }
 
+bool Device::createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
+                                 uint64_t luma, uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch,
+                                 uint32_t width, uint32_t height, Texture &t)
+{
+    constexpr uint32_t kRGBA8Unorm = 70;
+    if (!width || !height || lumaPitch < width || chromaPitch < 2 * width ||
+        luma + uint64_t(lumaPitch) * height > allocBytes || chroma + uint64_t(chromaPitch) * height > allocBytes ||
+        (uintptr_t(base) & (pageSize() - 1)))
+        return false;
+    Import *planes;
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        planes = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface);
+    }
+    if (!planes) return false;
+    if (!createTexture(width, height, kRGBA8Unorm, t)) {  // the image: pool memory, its texture header
+        std::lock_guard<std::mutex> l(lock_);
+        release(planes);
+        return false;
+    }
+    t.import = planes;
+    t.planar = true;
+    t.planes = {t.import->bo.va + luma, t.import->bo.va + chroma, lumaPitch, chromaPitch};
+    return true;
+}
+
 bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                                  uint32_t format, Texture &t)
 {
@@ -1108,6 +1135,19 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     return true;
 }
 
+// The largest index of `count` indices of type T at `at` (any alignment), restarts (all ones) left out; 0 for none.
+template <typename T> static uint32_t largestIndex(const uint8_t *at, uint32_t count)
+{
+    T most = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        T v;
+        memcpy(&v, at + size_t(i) * sizeof(T), sizeof(T));
+        v = v == T(~T(0)) ? T(0) : v;
+        most = v > most ? v : most;
+    }
+    return most;
+}
+
 // NVK's indexed draw on MAXWELL_B: the index buffer as NVK_MME_BIND_IB sets it (start, last byte, the restart index of the type,
 // the index size) where it changed, the draw parameters as NVK_MME_DRAW_INDEXED's (base vertex 0: those of a draw from vertex 0),
 // then BEGIN, SET_INDEX_BUFFER_F (first index) and DRAW_INDEX_BUFFER (count), END. m2v binds the indices the draw reads.
@@ -1124,16 +1164,10 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         *why = "an indexed draw the raw path does not take";
         return false;
     }
-    // the vertices it reads: up to its largest index (the indices are CPU-written, as the vertices)
+    // the vertices it reads: up to its largest index (the indices are CPU-written, as the vertices). A restart (the all-ones
+    // index) reads as 0, which never raises the largest: branch-free per index size, so clang vectorizes it (UMAXV; r9-simd)
     const uint8_t *at = ib->cpu + offset;
-    uint32_t most = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        uint32_t v = 0;
-        memcpy(&v, at + size_t(i) * indexSize, indexSize);
-        if (indexSize == 2 && v == 0xffff) continue;  // a restart
-        if (indexSize == 4 && v == 0xffffffffu) continue;
-        most = std::max(most, v);
-    }
+    const uint32_t most = indexSize == 2 ? largestIndex<uint16_t>(at, count) : largestIndex<uint32_t>(at, count);
     cb_->clean(at, uint64_t(count) * indexSize);
     if (!prepare(pl, primitive, 0, 0, most + 1, 0, true, why)) return false;
     const uint64_t va = ib->va + offset, end = va + uint64_t(count) * indexSize - 1;
@@ -1510,6 +1544,32 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
            {uint32_t(src >> 32), uint32_t(src), uint32_t(dst >> 32), uint32_t(dst), srcPitch, dstPitch, width, lines},
            SUBC_COPY);
     p_.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);  // REMAP_ENABLE
+}
+
+// The codes Metal reads of RGB8_444_2P (pack/../m2v ycbcr_convert.rs: "Codes"): red Cr, green Y, blue Cb, each code / 255, alpha
+// 1, an RGBA8Unorm texel of the codes, as m2v's image holds them. Remap per destination component: SRC_X..W 0..3, CONST_A 4,
+// NO_WRITE 6 (clb0b5 SET_REMAP_COMPONENTS); one byte a component, four destination components.
+void BlitEncoder::convertPlanar(const Texture &t)
+{
+    if (!t.planar || !t.width || !t.height) return;
+    room();
+    constexpr uint32_t A = 4, W = 6, one = 0 << 16, dst4 = 3u << 24;
+    p_.m(CE_SET_REMAP_CONST_A, 0xff, SUBC_COPY);
+    // the luma plane, one component a texel: green Y, alpha 255
+    p_.m(CE_SET_REMAP_COMPONENTS, W | 0 << 4 | W << 8 | A << 12 | one | 0u << 20 | dst4, SUBC_COPY);
+    p_.inc(CE_OFFSET_IN_UPPER,
+           {uint32_t(t.planes.luma >> 32), uint32_t(t.planes.luma), uint32_t(t.va >> 32), uint32_t(t.va),
+            t.planes.lumaPitch, t.pitch, t.width, t.height},
+           SUBC_COPY);
+    p_.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);
+    room();
+    // the chroma plane, two components a texel (Cb, Cr): red Cr, blue Cb
+    p_.m(CE_SET_REMAP_COMPONENTS, 1 | W << 4 | 0 << 8 | W << 12 | one | 1u << 20 | dst4, SUBC_COPY);
+    p_.inc(CE_OFFSET_IN_UPPER,
+           {uint32_t(t.planes.chroma >> 32), uint32_t(t.planes.chroma), uint32_t(t.va >> 32), uint32_t(t.va),
+            t.planes.chromaPitch, t.pitch, t.width, t.height},
+           SUBC_COPY);
+    p_.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);
 }
 
 void BlitEncoder::end()
