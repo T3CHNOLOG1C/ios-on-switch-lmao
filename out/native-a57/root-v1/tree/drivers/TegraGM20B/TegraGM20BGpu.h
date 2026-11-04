@@ -129,15 +129,13 @@ void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add);
 void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages);
 
 /* Host-import coherency registry (gpu.c), keyed by a surface's first physical page: the lazy CPU<->GPU path the XNU
- * IOSurface lock/unlock hook drives. add at import (with the import's page list; returns the entry the import holds, and
- * *clean = 1 when the surface was already registered with those pages, so its CPU lines are clean and the import need
- * not clean them) and put at release; wrote marks a writable import a submission may have written (from exec: one store
- * through the import's entry); read_lock invalidates a GPU-written import for a CPU read lock and clears the mark;
+ * IOSurface lock/unlock hook drives (once that hook is on the trap path: see gpu.c). add at import (with the import's page list; returns the entry the import holds; the
+ * import still cleans its pages itself, always) and put at release; wrote marks a writable import a submission may have
+ * written (from exec: one store through the import's entry); read_lock invalidates a GPU-written import for a CPU read lock and clears the mark;
  * write_unlock cleans a GPU import after a CPU write unlock. The last two return the bytes touched (0 if nothing / not
  * our import), and do the cache maintenance themselves (by VA, inner-shareable broadcast). */
 struct tgm_coh;
-struct tgm_coh *tgm_coherency_add(uint64_t pa, const uint64_t *pas, uint32_t npages, int writable,
-				  int *clean);
+struct tgm_coh *tgm_coherency_add(uint64_t pa, const uint64_t *pas, uint32_t npages, int writable);
 void tgm_coherency_put(struct tgm_coh *c);
 void tgm_coherency_wrote(struct tgm_coh *c);
 uint64_t tgm_coherency_read_lock(uint64_t pa);
@@ -150,7 +148,7 @@ void tgm_stats_import(int64_t bytes, uint64_t pa);
 /* With tegra-gpu-stats, what making and dropping GPU memory costs the CPU ("tegra-gm20b: mem", per 5 s window):
  * a BoAlloc of `bytes` (pool: write-combined pool memory; else cached pages, phase_ns = kernel allocation and wiring,
  * cache clean, page list, GPU memory object), a host import (phase_ns = wiring, page list, GPU memory object, cache
- * clean; skipped: the registry knew the surface clean), a VmBind map or unmap of `pages`, a BoFree, a cached BO's view
+ * clean; skipped: always 0 now, the import always cleans), a VmBind map or unmap of `pages`, a BoFree, a cached BO's view
  * mapped with its pages entered at once (prefault). */
 enum { TGM_PHASES = 4 };
 void tgm_stats_bo_alloc(uint64_t bytes, int pool, uint64_t ns, const uint64_t phase_ns[TGM_PHASES]);

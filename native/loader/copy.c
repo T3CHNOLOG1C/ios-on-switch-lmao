@@ -76,7 +76,73 @@ int loader_copy_build_tables(uint64_t tables[LOADER_COPY_TABLE_PAGES][LOADER_COP
     return 0;
 }
 
+/* 64-byte blocks; bytes is a nonzero multiple of 64 (callers pass 4 KiB multiples). Inline loops, so the compiler
+ * cannot turn them into memcpy/memset calls the freestanding image does not have. */
+static void copy_blocks(uint64_t to, uint64_t from, uint64_t bytes) {
+    __asm__ volatile(
+        "1:\n"
+        "ldp x9, x10, [%1]\n"
+        "ldp x11, x12, [%1, #16]\n"
+        "ldp x13, x14, [%1, #32]\n"
+        "ldp x15, x16, [%1, #48]\n"
+        "stp x9, x10, [%0]\n"
+        "stp x11, x12, [%0, #16]\n"
+        "stp x13, x14, [%0, #32]\n"
+        "stp x15, x16, [%0, #48]\n"
+        "add %1, %1, #64\n"
+        "add %0, %0, #64\n"
+        "subs %2, %2, #64\n"
+        "b.ne 1b\n"
+        : "+r"(to), "+r"(from), "+r"(bytes)
+        :
+        : "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "cc", "memory");
+}
+
+static void zero_blocks(uint64_t to, uint64_t bytes) {
+    __asm__ volatile(
+        "1:\n"
+        "stp xzr, xzr, [%0]\n"
+        "stp xzr, xzr, [%0, #16]\n"
+        "stp xzr, xzr, [%0, #32]\n"
+        "stp xzr, xzr, [%0, #48]\n"
+        "add %0, %0, #64\n"
+        "subs %1, %1, #64\n"
+        "b.ne 1b\n"
+        : "+r"(to), "+r"(bytes)
+        :
+        : "cc", "memory");
+}
+
+int loader_unpack(uint64_t destination, uint64_t source, uint64_t bytes,
+                  const uint64_t (*runs)[2], unsigned count,
+                  void (*progress)(uint64_t, uint64_t, uint64_t), uint64_t started) {
+    uint64_t at = 0;
+    for (unsigned i = 0; i < count; ++i) {
+        const uint64_t offset = runs[i][0], length = runs[i][1];
+        if (offset < at || offset > bytes || !length || length > bytes - offset ||
+            ((offset | length) & (PAGE - 1))) return 1;
+        if (offset > at) zero_blocks(destination + at, offset - at);
+        copy_blocks(destination + offset, source, length);
+        source += length;
+        at = offset + length;
+        if (progress) progress(at, bytes, started);
+    }
+    if (bytes & (PAGE - 1)) return 1;
+    if (bytes > at) zero_blocks(destination + at, bytes - at);
+    if (progress) progress(bytes, bytes, started);
+    return 0;
+}
+
 #ifndef LOADER_COPY_HOST_TEST
+#include "runs.h"
+
+/* Under loader_copy_run's temporary cacheable regime: the packed staging copy at LOAD_SOURCE (the window's nonzero
+ * extents back to back) expanded into the window at LOAD_DEST, zeros everywhere else. The builder checked that the
+ * table expands to the exact layout image. */
+int loader_copy_payload(void (*progress)(uint64_t, uint64_t, uint64_t), uint64_t started) {
+    return loader_unpack(LOAD_DEST, LOAD_SOURCE, LOAD_BYTES, loader_runs, LOAD_RUN_COUNT, progress, started);
+}
+
 extern char __loader_rx_end[], __loader_ro_end[], __image_end[];
 
 int loader_copy_prepare(void) {

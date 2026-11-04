@@ -31,14 +31,14 @@
 // tegra_i2c_init() claims the bus's SPI, I2C1 38, I2C2 84, I2C3 92, I2C4 120, I2C5 53 (Linux tegra210.dtsi:676/691/
 // 706/721/739; the OLED DTB i2c@7000c000.. nodes), sleeping in ioswitch_interrupt_nub() until the GIC is up; a caller
 // sleeps until the work loop action reports packet completion, NACK or arbitration loss (FIFO refills and drains
-// happen there too; the bus clear completes by INT_BUS_CLEAR_DONE). There is no polled mode: an interrupt that
-// cannot be attached, or a wait that times out while the controller asserts an unmasked status bit, panics with the
-// controller and GIC state. I2C5 is no exception: switchroot's L4T kernel drives i2c@7000d000 by interrupt like the
-// other buses (OLED DTB node: interrupts SPI 53, status okay; Linux i2c-tegra.c probe requests every non-DVC bus's
-// IRQ), and nothing else uses that register block at runtime (CL-DVFS is its own initiator on the PWR_I2C pads; the
-// PMC bootrom-commands on controller 4 run only in the BootROM on reset). Call only from thread context, never with
-// a spinlock held or from an interrupt/filter handler. After a failed transfer an owned bus is reset and
-// reinitialized (as Linux i2c-tegra does).
+// happen there too; the bus clear completes by INT_BUS_CLEAR_DONE). There is no polled mode (tegra_i2c_final_transfer,
+// the power-off's last transfers, aside): an interrupt that cannot be attached, or a wait that times out while the
+// controller asserts an unmasked status bit, panics with the controller and GIC state. I2C5 is no exception:
+// switchroot's L4T kernel drives i2c@7000d000 by interrupt like the other buses (OLED DTB node: interrupts SPI 53,
+// status okay; Linux i2c-tegra.c probe requests every non-DVC bus's IRQ), and nothing else uses that register block
+// at runtime (CL-DVFS is its own initiator on the PWR_I2C pads; the PMC bootrom-commands on controller 4 run only in
+// the BootROM on reset). Call only from thread context, never with a spinlock held or from an interrupt/filter
+// handler. After a failed transfer an owned bus is reset and reinitialized (as Linux i2c-tegra does).
 #ifndef TEGRA_I2C_H
 #define TEGRA_I2C_H
 #include <stddef.h>
@@ -75,6 +75,15 @@ int tegra_i2c_read(unsigned bus, uint8_t addr, uint8_t reg, void *buf, size_t le
 
 // Register write: reg followed by len (<= TEGRA_I2C_MAX_REG_WRITE) bytes, then STOP.
 int tegra_i2c_write(unsigned bus, uint8_t addr, uint8_t reg, const void *buf, size_t len);
+
+// The last transfers of the boot: SwitchPMIC's Shut Down / Restart (PE_halt_restart), and nothing else. The one polled
+// path in this driver: the packet is queued and INT_STATUS polled until it ends (same budget as an interrupt-driven
+// packet, then TEGRA_I2C_ETIMEDOUT), because nothing is left to interrupt by then and the caller may run with
+// interrupts off, where neither the GIC nor the work loop answers. The first call takes the bus for good (waiting for
+// a transfer in flight when it may sleep; with interrupts off it takes the bus as it finds it) and masks the
+// controller's interrupts: transfers by anyone else wait forever after it. Same arguments and limits as
+// tegra_i2c_transfer().
+int tegra_i2c_final_transfer(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx, size_t rxlen);
 
 // System sleep (drivers/SwitchSuspend), thread context, both from the same thread: suspend holds every bus (later
 // transfers wait) until resume has re-clocked and reconfigured the controllers after SC7. Panics if a bus does not

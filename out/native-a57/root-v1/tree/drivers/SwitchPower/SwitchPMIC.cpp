@@ -30,19 +30,29 @@
 // Horizon the first boot may start at the RTC's own date until timed sets the time, which is then written back in
 // UTC, as L4T does. Horizon then shows that shift until it next syncs its own clock.
 //
+// Shut Down: userspace reboot(RB_HALT) -> reboot_kernel() (sync, unmount, buffers clean) -> host_reboot() ->
+// halt_all_cpus(FALSE) -> PEHaltRestart(kPEHaltCPU) -> IOPMrootDomain's shutdown notifications -> IOPlatformExpert::
+// haltRestart() -> PE_halt_restart; Restart the same with kPERestartCPU. Both end here, in that thread:
+//   1. the panel goes dark first, as hekate's power_set_state() does (hw_deinit -> display_end) and L4T's suspend list
+//      for this panel: TegraPanel's brightness 0, DCS display off, sleep in, while the DC still scans out;
+//   2. the MAX77620 soft reset, through tegra_i2c_final_transfer(): polled, I2C5 kept from then on (TegraI2C.h).
 // Power-off (Linux drivers/power/reset/max77620-poweroff.c max77620_pm_power_off, selected by the DT's
 // maxim,system-pmic-power-off; hekate power_set_state(POWER_OFF_RESET)): read ONOFFIRQ 0x0B and IRQTOP 0x05 to clear
 // what is latched, clear ONOFFCNFG2 0x42 SFT_RST_WK (bit 7) and, as hekate does, WK_ALARM1/WK_ALARM2 (bits 2, 1) so an
-// RTC alarm left by Horizon (it uses ALARM2) does not wake the console, then set ONOFFCNFG1 0x41 SFT_RST (bit 7). PSCI
-// SYSTEM_OFF is no option: switchroot ATF's tegra_soc_prepare_system_off() panics "operation not handled".
+// RTC alarm left by Horizon (it uses ALARM2) does not wake the console, then set ONOFFCNFG1 0x41 SFT_RST (bit 7). The
+// PMIC then runs its power-down sequence and stays off until the power button (hekate comes up next). PSCI SYSTEM_OFF
+// is no option: switchroot ATF's tegra_soc_prepare_system_off() panics "operation not handled".
 // Restart: the same with SFT_RST_WK set, a full PMIC power cycle: switchroot U-Boot's reset_misc() does exactly this
 // on T210B01 ("r2p is not possible on T210B01, so do a full power off reboot", board/nintendo/switch), and hekate's
-// POWER_OFF_REBOOT the same. If that write fails, PSCI SYSTEM_RESET, L4T Linux's path (pmc.c restart handler ->
-// psci): switchroot ATF tegra_soc_prepare_system_reset() sets SCLK to its POR default and writes PMC_CNTRL MAIN_RST.
+// POWER_OFF_REBOOT the same. If that fails, PSCI SYSTEM_RESET, L4T Linux's path (pmc.c restart handler -> psci):
+// switchroot ATF tegra_soc_prepare_system_reset() sets SCLK to its POR default and writes PMC_CNTRL MAIN_RST; should
+// that return, PMC_CNTRL MAIN_RST from here (hekate's reboot, L4T tegra_pmc_restart).
+// A power-off or restart that does not happen panics with one line, the panel lit again first so that it is seen: a
+// console left dark and running would pass for off and drain the battery.
 //
 // Panics keep their screen: PE_halt_restart is also handed the panic callouts and, from halt_all_cpus(TRUE) at the
-// end of a panic, kPERestartCPU; with a panic in progress or interrupts off (no I2C then anyway) it returns -1 and
-// XNU spins with the panic on the display, as it did with PE_halt_restart unset.
+// end of a panic, kPERestartCPU; with a panic in progress it returns -1 and XNU spins with the panic on the display,
+// as it did with PE_halt_restart unset (IOSwitchPanicSave.c's ioswitch-panic-reboot decides about a reset there).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -50,13 +60,14 @@
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <kern/clock.h>
 #include <pexpert/pexpert.h>
+#include "../SwitchBrightness/TegraPanel.h"
 #include "../TegraBPMP/TegraBPMP.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchClocks.h"
 #include "SwitchPower.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-extern "C" boolean_t ml_get_interrupts_enabled(void);
+extern "C" boolean_t preemption_enabled(void);
 extern "C" unsigned panic_active(void);
 
 namespace {
@@ -77,7 +88,11 @@ constexpr uint8_t kRtcWriteUpdate = 1u << 0, kRtcReadUpdate = 1u << 4;
 constexpr uint32_t kRtcUpdateMS = 16;
 enum { SEC, MIN, HOUR, WEEKDAY, MONTH, YEAR, DATE, kTimeRegs };
 
-constexpr uint32_t kPowerDownMS = 1000;  // the PMIC cuts power within milliseconds of SFT_RST
+constexpr uint32_t kPowerDownUS = 2000000;  // the PMIC cuts power within milliseconds of SFT_RST
+// PMC_CNTRL (APBDEV_PMC_CNTRL, PMC at 0x7000E400) MAIN_RST: the SoC's warm reset (hekate, L4T tegra_pmc_restart).
+constexpr vm_offset_t kPmcPA = 0x7000E000;
+constexpr uint32_t kPmcCntrl = 0x400, kPmcMainReset = 1u << 4;
+volatile uint32_t *gPmc;  // mapped at start: nothing is mapped on the restart path
 
 int readByte(uint8_t addr, uint8_t reg, uint8_t *value)
 {
@@ -206,6 +221,37 @@ int alarmWrite(int64_t secs)
     return err;
 }
 
+// The terminal transfers, polled (TegraI2C.h tegra_i2c_final_transfer): the first one keeps I2C5 for good.
+int finalRead(uint8_t reg, uint8_t *value)
+{
+    return tegra_i2c_final_transfer(kBus, kPmic, &reg, 1, value, 1);
+}
+int finalWrite(uint8_t reg, uint8_t value)
+{
+    const uint8_t data[2] = {reg, value};
+    return tegra_i2c_final_transfer(kBus, kPmic, data, sizeof(data), nullptr, 0);
+}
+
+// MAX77620 soft reset: L4T max77620_pm_power_off / max77620_pm_power_reset (read-modify-write), hekate
+// power_set_state(POWER_OFF_RESET / POWER_OFF_REBOOT). Restart keeps SFT_RST_WK set: the PMIC powers up again.
+int pmicSoftReset(bool restart)
+{
+    uint8_t value = 0;
+    if (!restart) {  // max77620_pm_power_off: clear the latched power-key and top-level interrupts
+        (void)finalRead(ONOFFIRQ, &value);
+        (void)finalRead(IRQTOP, &value);
+    }
+    int err = finalRead(ONOFFCNFG2, &value);
+    if (!err) {
+        value = restart ? (uint8_t)(value | kWakeOnSoftReset)
+                        : (uint8_t)(value & ~(kWakeOnSoftReset | kWakeAlarm1 | kWakeAlarm2));
+        err = finalWrite(ONOFFCNFG2, value);
+    }
+    if (!err) err = finalRead(ONOFFCNFG1, &value);
+    if (!err) err = finalWrite(ONOFFCNFG1, value | kSoftReset);
+    return err;
+}
+
 void psciSystemReset()
 {
     // PSCI 0.2 SYSTEM_RESET over the /psci node's SMC conduit (ArmCpu's CPU_ON uses the same one).
@@ -217,29 +263,29 @@ void psciSystemReset()
                        "x16", "x17", "memory");
 }
 
-// PE_halt_restart. Only a real Shut Down or Restart, in thread context, does anything.
+// PE_halt_restart. A Shut Down or Restart outside a panic ends here; everything else returns -1 (see the top).
 int haltRestart(unsigned int type)
 {
-    if ((type != kPEHaltCPU && type != kPERestartCPU) || panic_active() || !ml_get_interrupts_enabled()) return -1;
+    if ((type != kPEHaltCPU && type != kPERestartCPU) || panic_active()) return -1;
     const bool restart = type == kPERestartCPU;
-    switch_thermal_cpu_quiesce();  // the DFLL, if the CPU runs on it, must not share I2C5 with what follows
-    uint8_t value = 0;
-    if (!restart) {
-        (void)readByte(kPmic, ONOFFIRQ, &value);
-        (void)readByte(kPmic, IRQTOP, &value);
+    // Storage needs nothing more: reboot_kernel() synced and unmounted every file system and waited out the dirty
+    // buffers before halt_all_cpus(), and NativeIOSwitchBlock completes a write only once the card has it.
+    bool dark = false;
+    // XNU's path is thread context; both steps below sleep (the panel's commands ride DC frame ends).
+    if (preemption_enabled()) {
+        switch_thermal_cpu_quiesce();  // the DFLL, if the CPU runs on it, must not share I2C5 with what follows
+        dark = tegra_panel_power_off() == 0;
     }
-    int err = readByte(kPmic, ONOFFCNFG2, &value);
-    if (!err) {
-        value = restart ? (uint8_t)(value | kWakeOnSoftReset)
-                        : (uint8_t)(value & ~(kWakeOnSoftReset | kWakeAlarm1 | kWakeAlarm2));
-        err = writeByte(kPmic, ONOFFCNFG2, value);
-    }
-    if (!err) err = readByte(kPmic, ONOFFCNFG1, &value);
-    if (!err) err = writeByte(kPmic, ONOFFCNFG1, value | kSoftReset);
-    if (!err) IOSleep(kPowerDownMS);
+    const int err = pmicSoftReset(restart);
+    if (!err) IODelay(kPowerDownUS);  // busy: interrupts may be off here
     if (restart) {
         psciSystemReset();
-        panic("SwitchPMIC: restart failed: MAX77620 soft reset %s (%d), then PSCI SYSTEM_RESET returned",
+        if (gPmc) gPmc[kPmcCntrl / 4] |= kPmcMainReset;
+        IODelay(kPowerDownUS);
+    }
+    if (dark) (void)tegra_panel_power_on(-1);
+    if (restart) {
+        panic("SwitchPMIC: restart failed: MAX77620 soft reset %s (%d), PSCI SYSTEM_RESET and PMC main reset returned",
               err ? "write failed" : "did not take", err);
     }
     panic("SwitchPMIC: power-off failed: MAX77620 soft reset %s (%d)", err ? "write failed" : "did not take", err);
@@ -548,7 +594,10 @@ extern "C" int switch_pmic_start(void)
         IOLog("SwitchPMIC: MAX77620 not answering on I2C5 (%d): no RTC, no power-off\n", err);
     } else {
         if (rtcMode) gRTC = publishRTC(rtcMode);
-        if (powerOff) PE_halt_restart = haltRestart;
+        if (powerOff) {
+            gPmc = (volatile uint32_t *)ml_io_map(kPmcPA, 0x1000);
+            PE_halt_restart = haltRestart;
+        }
     }
 
     if (emcKHz) {

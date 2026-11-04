@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #pragma once
 #include <pexpert/pexpert.h>
+#include "IOSwitchPortrait.h"
 
 // Hekate's OLED surface is portrait storage rotated counter-clockwise. Publish
 // landscape dimensions to the original compositor and rotate only the copy.
 // PE_current_console has already decoded boot Video.v_depth=0x320 into depth
 // 32 and rotation 3. v_display=0 is stock text mode, not a missing display.
+// Portrait-native (IOSwitchPortrait.h): the compositor gets the panel's own 720x1280 and rotation 3 stays the console's.
 static inline bool native_legacy_video_mode(const PE_Video &v)
 {
     if (!v.v_baseAddr || !v.v_width || !v.v_height || v.v_depth != 32 || v.v_width > 16384 || v.v_height > 16384 ||
@@ -15,11 +17,11 @@ static inline bool native_legacy_video_mode(const PE_Video &v)
 }
 static inline uint32_t native_legacy_video_width(const PE_Video &v)
 {
-    return (uint32_t)(v.v_rotate == 3 ? v.v_height : v.v_width);
+    return (uint32_t)(v.v_rotate == 3 && !IOSWITCH_PORTRAIT_NATIVE ? v.v_height : v.v_width);
 }
 static inline uint32_t native_legacy_video_height(const PE_Video &v)
 {
-    return (uint32_t)(v.v_rotate == 3 ? v.v_width : v.v_height);
+    return (uint32_t)(v.v_rotate == 3 && !IOSWITCH_PORTRAIT_NATIVE ? v.v_width : v.v_height);
 }
 
 #ifndef NATIVE_SCANOUT_MODE_ONLY
@@ -44,7 +46,7 @@ static inline bool native_legacy_scanout_copy(volatile void *destination, uint64
     if (!native_legacy_scanout_layout(destination, destinationBytes, v, source, sourceBytes, sourceStride, width,
                                       height))
         return false;
-    if (!v.v_rotate)
+    if (!v.v_rotate || IOSWITCH_PORTRAIT_NATIVE)  // portrait-native frames are the panel's own rows
         return native_legacy_copy_pixels(destination, destinationBytes, v.v_rowBytes, source, sourceBytes, sourceStride,
                                          width, height);
     // Destination rows are contiguous device memory. Read one source column
@@ -77,14 +79,22 @@ static inline bool native_legacy_scanout_copy(volatile void *destination, uint64
 // block rows and 10 GOBs of the sixth; the surface is allocated to the block (768 lines, 0x3C0000
 // bytes), as Nyx's is, which stays inside the 4 MiB framebuffer carve-out the loader keeps from XNU
 // (scripts/build_native_loader.py NATIVE_FULL_RAM_EXCLUSIONS 'framebuffer' 0xF5A00000 + 0x400000).
-static constexpr uint32_t kNativeBlockWidth = 1280, kNativeBlockHeight = 720;
-static constexpr uint64_t kNativeBlockStride = (uint64_t)kNativeBlockWidth * 4;              // 5120 bytes, 80 GOBs
+//
+// Portrait-native (IOSwitchPortrait.h): the surface is the compositor's own 720x1280 portrait frame in the same GOB and
+// block layout, and window A scans it row by row, unrotated (no SCAN_COLUMN, no H_DIRECTION, H_OFFSET 0): 2880-byte
+// lines are 45 GOBs, 1280 lines exactly 10 block rows of 45 x 8 KiB, 0x384000 bytes (hekate's pitch frame's size).
+// Only SURFACE_KIND then differs from hekate's pitch window. The copies below and the GPU's (TegraScanoutCopy.h) take
+// the geometry from these constants.
+static constexpr uint32_t kNativeBlockWidth = IOSWITCH_PORTRAIT_NATIVE ? 720 : 1280,
+                          kNativeBlockHeight = IOSWITCH_PORTRAIT_NATIVE ? 1280 : 720;
+static constexpr uint64_t kNativeBlockStride = (uint64_t)kNativeBlockWidth * 4;              // 5120 (2880) bytes
 static constexpr uint64_t kNativeBlockGob = 512, kNativeBlockGobs = 16;                      // BLOCK_HEIGHT(4)
 static constexpr uint64_t kNativeBlockColumn = kNativeBlockGob * kNativeBlockGobs;           // 8 KiB per block
-static constexpr uint64_t kNativeBlockRow = kNativeBlockColumn * (kNativeBlockStride / 64);  // 655360 per block row
+static constexpr uint64_t kNativeBlockRow = kNativeBlockColumn * (kNativeBlockStride / 64);  // 655360 (368640)
 static constexpr uint64_t kNativeBlockBytes = kNativeBlockRow * ((kNativeBlockHeight + 127) / 128);  // 0x3C0000
-static_assert(kNativeBlockBytes == 0x3C0000 && kNativeBlockBytes <= 0x400000,
-              "block-linear surface outgrew the carve-out");
+static_assert(kNativeBlockBytes == (IOSWITCH_PORTRAIT_NATIVE ? 0x384000 : 0x3C0000) && kNativeBlockBytes <= 0x400000 &&
+                  kNativeBlockStride % 64 == 0 && kNativeBlockWidth % 16 == 0 && kNativeBlockHeight % 8 == 0,
+              "block-linear surface outgrew the carve-out or is not whole GOBs");
 static inline bool native_legacy_block_layout(volatile void *destination, uint64_t destinationBytes, const void *source,
                                               uint64_t sourceBytes, uint64_t sourceStride, uint32_t width,
                                               uint32_t height)

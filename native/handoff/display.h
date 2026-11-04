@@ -18,7 +18,7 @@ static inline void display_pixel(unsigned x, unsigned y, uint32_t color) {
     *(volatile uint32_t *)(uintptr_t)(DISPLAY_BASE + offset) = color;
 }
 
-static void display_clear(void) {
+__attribute__((unused)) static void display_clear(void) {
     volatile uint32_t *pixels = (volatile uint32_t *)(uintptr_t)DISPLAY_BASE;
     for (uint32_t i = 0; i < DISPLAY_BYTES / 4; ++i) pixels[i] = DISPLAY_BACKGROUND;
     __asm__ volatile("dsb sy" ::: "memory");
@@ -51,7 +51,7 @@ static const struct { char ch; uint8_t row[7]; } display_font[] = {
     {'?',{14,17,1,2,4,0,4}}, {' ',{0,0,0,0,0,0,0}},
 };
 
-static void display_text(unsigned x, unsigned y, const char *text, uint32_t color) {
+__attribute__((unused)) static void display_text(unsigned x, unsigned y, const char *text, uint32_t color) {
     for (unsigned n = 0; text[n] && n < 104; ++n) {
         char ch = text[n];
         if (ch >= 'a' && ch <= 'z') ch -= 'a' - 'A';

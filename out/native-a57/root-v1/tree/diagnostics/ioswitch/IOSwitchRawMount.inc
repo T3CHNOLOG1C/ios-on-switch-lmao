@@ -136,12 +136,26 @@ static int native_ioswitch_raw_cache_prepare(proc_t p, user_addr_t scratch, user
     for (unsigned i = 0; i < 3; ++i)
         IOSW_RAW_STEP(directories[i], native_ioswitch_raw_directory(p, scratch, directories[i], preboot_mount, 1));
     dev_t cache_device = NODEV;
+    /* Real iOS grafts these cryptexes onto the Preboot volume (libignition), so their files are members of Preboot:
+     * statfs/getattrlist report Preboot's mount point for them, and LaunchServices files their bundles under the
+     * Preboot container (CoreServices -[FSNode volumeNodeWithFlags:] reads kCFURLVolumeURLKey, i.e. the statfs
+     * f_mntonname, and compares it to +[FSNode prebootVolumeNode] == "/private/preboot"). We attach-and-mount instead
+     * of grafting, so each cryptex is its own volume whose f_mntonname is its own path; its container then compares
+     * unequal to every kept volume and _LSServerCleanEphemeralMobileContainersForFirstBoot drops it on the first lsd
+     * start of every boot, taking the four WebKit web-process plugins with it. Report Preboot's mount point for the
+     * two cryptex mounts (the one fact a graft changes that this check keys on), and record each mount_t so
+     * kern_exec's launch-constraint skip can recognise them. Nothing else about the mounts changes. */
+    const char *prebooton = vfs_statfs(preboot_mount)->f_mntonname;
     for (unsigned i = 0; i < 2; ++i) {
         dev_t image_volume = NODEV;
+        mount_t cryptex_mount = NULL;
         IOSW_RAW_STEP(i ? "App cryptex attach" : "System cryptex attach",
                       ioswitch_cryptex_attach(i, preboot_device, &image_volume, path, sizeof(path)));
         IOSW_RAW_STEP(i ? "App cryptex mount" : "System cryptex mount",
-                      native_ioswitch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, NULL));
+                      native_ioswitch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount));
+        native_owner_cryptex_mount[i] = cryptex_mount;
+        struct vfsstatfs *cryptex_statfs = vfs_statfs(cryptex_mount);
+        strlcpy(cryptex_statfs->f_mntonname, prebooton, sizeof(cryptex_statfs->f_mntonname));
         if (!i) cache_device = image_volume;
     }
     /* dyld looks for code that only the OS cryptex has under the cryptex prefix that

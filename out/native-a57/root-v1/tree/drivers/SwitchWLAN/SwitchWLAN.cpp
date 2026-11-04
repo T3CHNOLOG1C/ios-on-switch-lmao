@@ -1648,15 +1648,14 @@ static void publishMac(const uint8_t mac[6])
     }
 }
 
-// Called once from the kernel's boot path (IOSwitchRootDiag.inc, after the SD block device): the read-only probe
-// line, the address in the device tree, then the driver on IOResources if the boot-arg asks for it. Returns 0 when
-// off or started.
+// Called once from the kernel's boot path (IOSwitchRootDiag.inc, after the SD block device): the address in the device
+// tree, then the driver on IOResources if the boot-arg asks for it. Returns 0 when off or started. (The bring-up
+// register report, switch_wlan_probe, is no longer printed at boot.)
 extern "C" int switch_wlan_publish(void)
 {
     uint32_t enabled = 0;
     if (!PE_parse_boot_argn("switch-wlan", &enabled, sizeof(enabled)) || enabled != 1) return 0;
     if (gDriver) return 0;
-    switch_wlan_probe();
     uint8_t mac[6];
     if (switch_wlan_mac(mac, nullptr)) {
         // The fuses were not readable (switch_wlan_mac needs the fuse clock and FUSE_VISIBLE): a locally administered

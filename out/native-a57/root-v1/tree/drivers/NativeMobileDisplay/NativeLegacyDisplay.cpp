@@ -70,6 +70,8 @@ extern "C" __attribute__((weak)) void vc_tape_detach(void) {}
 // XNU (kern_exec.c) while the one-time data migration runs: the console stays on screen and the UI's frames are drawn and
 // retired but not shown (presentBlock), so the user watches the migration's progress lines. Weak: absent, never held.
 extern "C" __attribute__((weak)) volatile int ioswitch_console_hold;
+// XNU (spec_vnops.c, temporary): ends the boot I/O census at the first client frame; it prints from a thread call.
+extern "C" __attribute__((weak)) void ioswitch_boot_io_report(void);
 extern "C" __attribute__((weak)) int vc_tape_panic(void)
 {
     return 0;
@@ -200,8 +202,13 @@ static constexpr uint32_t kHDirection = 1u << 0, kVDirection = 1u << 2, kScanCol
                           kWinAUnderflowInt = 1u << 8;
 // _di_winA_block: BLOCK | BLOCK_HEIGHT(4); the stride is the landscape line; H_OFFSET is the last byte of a line, where
 // H_DIRECTION starts (L4T window.c: (x + w) * Bpp - 1 = 0x13FF, the value hekate quotes for Horizon's own block scanout).
+// Portrait-native (IOSwitchPortrait.h): the same block layout scanned row by row, unrotated, as hekate's pitch window
+// scans; kBlockScan is what the block layout adds to hekate's WIN_OPTIONS.
 static constexpr uint32_t kBlockSurfaceKind = 2u | (4u << 4), kBlockLineStride = (uint32_t)kNativeBlockStride,
-                          kBlockHOffset = (uint32_t)kNativeBlockStride - 1;
+                          kBlockHOffset = IOSWITCH_PORTRAIT_NATIVE ? 0 : (uint32_t)kNativeBlockStride - 1,
+                          kBlockScan = IOSWITCH_PORTRAIT_NATIVE ? 0 : kScanColumn | kHDirection;
+static constexpr const char *kBlockScanName =
+    IOSWITCH_PORTRAIT_NATIVE ? "row scan of the portrait" : "column scan of the landscape";
 // The pitch window hekate hands over (_di_winA_pitch): 720x1280 at 1.0x, 2880-byte lines. The rotation changes only
 // WIN_OPTIONS, LINE_STRIDE, SURFACE_KIND and ADDR_H_OFFSET; everything else must already be this or the switch would scramble.
 static constexpr uint32_t kPitchSize = (1280u << 16) | 720u, kPitchPrescaled = (1280u << 16) | (720u * 4),
@@ -580,6 +587,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     Span stFeLate = {};
     uint64_t feStamp = 0, feLast = 0, fePeriodSum = 0, fePeriodMin = UINT64_MAX, fePeriodMax = 0;
     uint32_t fePeriodN = 0, stFeFolded = 0;
+    // r6-lows (r6h): swaps validateSwap refused this window and the last refusal's reason (2: not one IOSurface in layer 0 alone,
+    // a multi-layer or detached-layer swap; 3: geometry; 4: surface; see validateSwap), relaxed atomics: the client's swap path.
+    // A frozen screen with CA still rendering shows here as ~300 a window and 0 swaps.
+    uint32_t stRejected = 0, stRejectReason = 0;
     // Under the gate: a flip latched at stamp (mach time); latchedAt is frameEnds - flipRequested (1: at the first frame end).
     void notePresent(uint64_t stamp, uint64_t latchedAt)
     {
@@ -808,6 +819,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         add(", fe-late %llu/%llu us, folded %u, flip-waited %u, latch 1st %u later %u",
             (unsigned long long)stFeLate.meanUs(), (unsigned long long)stFeLate.maxUs(),
             __atomic_exchange_n(&stFeFolded, 0u, __ATOMIC_RELAXED), stFlipWait.count, stLatch[0], stLatch[1]);
+        add(", rejected %u (reason %u)", __atomic_exchange_n(&stRejected, 0u, __ATOMIC_RELAXED),
+            __atomic_load_n(&stRejectReason, __ATOMIC_RELAXED));
         IOLog("IOSwitch display stats: %s\n", line);
         stPresentGap = stLatency = FrameHist{};
         stFeLate = Span{};
@@ -1236,6 +1249,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     void presentBlock()
     {
         if (gPanicRestore.panicking) return;
+        if (!rotated && &ioswitch_boot_io_report) ioswitch_boot_io_report();  // once; later calls return at once
         if (!rotated && &ioswitch_console_hold && ioswitch_console_hold)
             return;  // the console keeps the screen (migration)
         if (!rotated)
@@ -1347,7 +1361,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         dc[kWinLineStride] = kBlockLineStride;
         dc[kWinbufSurfaceKind] = kBlockSurfaceKind;
         dc[kWinbufHOffset] = kBlockHOffset;
-        dc[kWinOptions] = pitchOptions | kScanColumn | kHDirection;
+        dc[kWinOptions] = pitchOptions | kBlockScan;
         // Double-buffered, this frame is in surface 1: no scrambled frame through the pitch window at the handover. Single-buffered
         // it is in the boot framebuffer, which window A may not scan yet (the console tape).
         dc[kWinbufStartAddr] = surfaceAddress(doubleBuffer ? 1 : 0);
@@ -1369,8 +1383,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             flipRequested = frameEnds;
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
         }
-        IOLog("IOSwitch display: window A to block-linear column scan requested (ACT_CONTROL %#x -> %#x)\n",
-              pitchActControl, pitchActControl & ~kWinAActHcntrSel);
+        IOLog("IOSwitch display: window A to block-linear %s surface requested (ACT_CONTROL %#x -> %#x)\n",
+              kBlockScanName, pitchActControl, pitchActControl & ~kWinAActHcntrSel);
     }
     // Every DC A frame end while rotated, under the gate: the ACT_REQ bits clear when the hardware takes the assembly copy.
     void checkRotation()
@@ -1388,11 +1402,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             const uint32_t options = windowActive(kWinOptions), stride = windowActive(kWinLineStride);
             const uint32_t kind = windowActive(kWinbufSurfaceKind), hOffset = windowActive(kWinbufHOffset),
                            start = windowActive(kWinbufStartAddr);
-            if (options != (pitchOptions | kScanColumn | kHDirection) || (stride & 0xffff) != kBlockLineStride ||
+            if (options != (pitchOptions | kBlockScan) || (stride & 0xffff) != kBlockLineStride ||
                 kind != kBlockSurfaceKind || hOffset != kBlockHOffset || start != expectedStart())
-                panic("IOSwitch display: DC A did not take the rotated window A: OPTIONS %#x STRIDE %#x KIND %#x H %#x "
-                      "START %#x, wrote %#x %#x %#x %#x %#x",
-                      options, stride, kind, hOffset, start, pitchOptions | kScanColumn | kHDirection, kBlockLineStride,
+                panic("IOSwitch display: DC A did not take the block-linear window A: OPTIONS %#x STRIDE %#x KIND %#x "
+                      "H %#x START %#x, wrote %#x %#x %#x %#x %#x",
+                      options, stride, kind, hOffset, start, pitchOptions | kBlockScan, kBlockLineStride,
                       kBlockSurfaceKind, kBlockHOffset, expectedStart());
             rotationLatched = true;
             underflowRun = 0;
@@ -1400,9 +1414,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             stopConsoleTape();  // window A has left it
             if (!rotationAnnounced) {
                 rotationAnnounced = true;
-                IOLog("IOSwitch display: window A scans the block-linear landscape surface (latched after %llu frame "
-                      "ends)\n",
-                      frameEnds - rotationRequested);
+                IOLog("IOSwitch display: window A does a block-linear %s surface (latched after %llu frame ends)\n",
+                      kBlockScanName, frameEnds - rotationRequested);
             }
             if (flipPending) {
                 if (stats) notePresent(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), frameEnds - flipRequested);
@@ -2661,6 +2674,10 @@ public:
             noteSubmitted(request);
         else
             removeValidated(request);
+        if (!accepted && stats) {
+            __atomic_fetch_add(&stRejected, 1u, __ATOMIC_RELAXED);
+            __atomic_store_n(&stRejectReason, reason, __ATOMIC_RELAXED);
+        }
         native_legacy_swap_validation_observed(accepted, reason, request, surface);
         return accepted;
     }
@@ -2772,10 +2789,25 @@ public:
                 // The Switch boots its panel in text mode (v_display=0); it is still the one built-in display.
                 primary = true;
                 valid = native_legacy_gop_mapping_observed(this, bootMapping, width, height);
+                if (valid && IOSWITCH_PORTRAIT_NATIVE) publishStrideRequirements();
             }
         }
         OSSafeReleaseNULL(mapping);
         return valid;
+    }
+    // The compositor's framebuffer rows (QuartzCore CA::WindowServer::AppleDisplay::update_display_limits reads this IOMFB
+    // property; iosurface_alignment() then rounds every framebuffer's bytesPerRow up to it, 64 by default). The GPU renders
+    // into a linear surface in place only when its rows are 128-byte multiples (Mesa nil image.rs; below that NVK renders
+    // through a tiled shadow and copies it back every pass). 1280 x 4 = 5120 was one; 720 x 4 = 2880 is not, so ask
+    // 128: 2944-byte rows. The scanout copies take any source stride.
+    void publishStrideRequirements()
+    {
+        OSDictionary *requirements = OSDictionary::withCapacity(1);
+        OSNumber *horizontal = OSNumber::withNumber(128ull, 32);
+        if (requirements && horizontal && requirements->setObject("StrideLinearHorizontal", horizontal))
+            setProperty("DisplayPipeStrideRequirements", requirements);
+        OSSafeReleaseNULL(horizontal);
+        OSSafeReleaseNULL(requirements);
     }
 #define LEAF(n)                                                            \
     __attribute__((noreturn, noinline)) void opaque##n() override          \

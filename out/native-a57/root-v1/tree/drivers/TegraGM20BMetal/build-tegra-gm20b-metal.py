@@ -2,7 +2,8 @@
 """Build the TegraGM20B Metal plugin bundle for iOS 17 (arm64) and its trust-cache module.
 
 usage: build-tegra-gm20b-metal.py [<outdir>] [--m2v <metal2vulkan checkout>] [--nvk <libvulkan_nouveau.dylib>] [--seed <dir>] [--reset-m2v]
-                                  [--nvk-host <libvulkan_nouveau.dylib>] [--qc <default.metallib>] [--no-precompile] [--host]
+                                  [--nvk-host <libvulkan_nouveau.dylib>] [--qc <default.metallib>] [--libs <store>] [--no-precompile]
+                                  [--host]
 
   <outdir>  default out/gpu (the path package_raw_boot.py and stage-tegra-gm20b-metal.py read)
   --m2v     steelbrain/metal2vulkan at 720ef1ce (git clone, checkout); the patches patches/series lists (paths from drivers/),
@@ -20,6 +21,9 @@ usage: build-tegra-gm20b-metal.py [<outdir>] [--m2v <metal2vulkan checkout>] [--
             nvk-source.sh: the checkout's git tree and the -Dnvk-build-id), else no seed is generated: a twin of other sources
             under the device's pipeline cache UUID would hand the device wrong code. Default <nvk dir>/libvulkan_nouveau.host.dylib.
   --qc      QuartzCore.framework/default.metallib of 21H461 (SHA-256 checked). Default out/gpu-artifacts/QuartzCore-21H461.default.metallib.
+  --libs    the library store of the precompile (precompile/libraries.py: the 21H461 OS volume's and cryptex's metallibs, the
+            libraries apps made from bytes and app bundles' metallibs harvested from the device). Default out/gpu-artifacts/m2v-libs;
+            without it, only QuartzCore's lines are replayed.
   --no-precompile  no generated seed: only --seed's.
   --host    only the bridge, for this Mac (aarch64-apple-darwin), for the host simulation (hostsim/build.sh): prints its path.
 
@@ -257,8 +261,18 @@ def precompile(m2v, out, nvk):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('NAK_', 'NVK_', 'MESA_', 'NMB_', 'M2V_', 'METAL2VULKAN_', 'TEGRA_', 'MTL_'))}
     env['MESA_SHADER_CACHE_DISABLE'] = 'true'
+    # The corpus with each function's library: the journal's lib=, or for a line from before the journal named libraries, the
+    # one library of the store holding its name (libraries.py resolve; QuartzCore's names stay QuartzCore's).
+    store = option('--libs', ROOT / 'out/gpu-artifacts/m2v-libs')
+    corpus = PRECOMPILE / 'corpus.log'
+    if (store / 'names.json').is_file():
+        corpus = work / 'corpus.log'
+        print(run([sys.executable, PRECOMPILE / 'libraries.py', store, 'resolve', PRECOMPILE / 'corpus.log', corpus]).rstrip())
+    else:
+        print('precompile: no library store at %s (--libs; precompile/libraries.py index): QuartzCore\'s lines alone' % store)
     linked = time.monotonic()
-    made = run([work / 'precompile', dylib, cache, qc, PRECOMPILE / 'corpus.log'], env=env)
+    made = run([work / 'precompile', '--libs', store, dylib, cache, qc, corpus], env=env)
+    print('\n'.join(line for line in made.splitlines() if line.startswith('library ')))
     print(next(line for line in made.splitlines() if line.startswith('precompile:')),
           '(host bridge %.0f s, tool and twin %.0f s, run %.0f s)' % (bridged - began, linked - bridged, time.monotonic() - linked))
     builds = sorted(p.name for p in (cache / 'v1').iterdir() if p.name != CONTENT)
@@ -275,7 +289,7 @@ def precompile(m2v, out, nvk):
 
 def main():
     args = [a for i, a in enumerate(sys.argv[1:], 1)
-            if not a.startswith('--') and sys.argv[i - 1] not in ('--m2v', '--nvk', '--seed', '--nvk-host', '--qc')]
+            if not a.startswith('--') and sys.argv[i - 1] not in ('--m2v', '--nvk', '--seed', '--nvk-host', '--qc', '--libs')]
     if len(args) > 1:
         sys.exit(__doc__)
     out = Path(args[0]).resolve() if args else ROOT / 'out/gpu'

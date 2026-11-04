@@ -267,16 +267,6 @@ const char *ArmGIC::setup()
     IOPlatformExpert *platform = getPlatform();
     if (!platform || !attach(platform)) return "cannot attach to the platform expert";
     platform->registerInterruptController(const_cast<OSSymbol *>(name), this);
-    if (lic) {
-        uint32_t ier[kLicBanks];
-        for (uint32_t bank = 0; bank < kLicBanks; ++bank) {
-            ier[bank] = *reinterpret_cast<volatile uint32_t *>(lic + bank * 0x100 + ICTLR_CPU_IER);
-        }
-        IOLog("ArmGIC: SPIs 32..%u to CPU interface %#x; Tegra LIC CPU_IER %08x %08x %08x %08x %08x %08x\n", intids - 1,
-              cpu0Target, ier[0], ier[1], ier[2], ier[3], ier[4], ier[5]);
-    } else {
-        IOLog("ArmGIC: SPIs 32..%u to CPU interface %#x\n", intids - 1, cpu0Target);
-    }
     return nullptr;
 }
 
@@ -384,9 +374,6 @@ void ArmGIC::initVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector 
     write8(GICD_IPRIORITYR + intid, priorityFor(intid));
     const uint8_t target = targetFor(intid);
     write8(GICD_ITARGETSR + intid, target);
-    if (target != cpu0Target) {
-        IOLog("ArmGIC: INTID %u (frame) at priority %#x to CPU interface %#x\n", intid, kFramePriority, target);
-    }
     const uint32_t config = GICD_ICFGR + (intid / 16) * 4, edgeBit = 2U << ((intid % 16) * 2);
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(controllerLock);
     write32(config, isEdge(intid) ? (read32(config) | edgeBit) : (read32(config) & ~edgeBit));

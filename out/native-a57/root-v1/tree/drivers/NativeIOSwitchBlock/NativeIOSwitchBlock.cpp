@@ -1201,12 +1201,7 @@ bool NativeIOSwitchBlock::raiseBusSpeed()
     const uint32_t baseKHz = source >> 29 == SOURCE_PLLP ? PLLP_KHZ * 2 / ((source & 0xff) + 2) : 0;
     busKHz = divider ? baseKHz / (2 * divider) : baseKHz;
     busMode = "inherited";
-    IOLog("IOSwitchSD: inherited bus %u kHz %s-bit %s V (CAR 0x%08x clock 0x%04x hc 0x%02x hc2 0x%04x power 0x%02x "
-          "loopback %u spare 0x%08x)\n",
-          busKHz, r8(HOST_CONTROL) & 2 ? "4" : "1", r16(HOST_CONTROL2) & CONTROL2_1V8 ? "1.8" : "3.3", source, clock,
-          r8(HOST_CONTROL), r16(HOST_CONTROL2), r8(POWER), rd(apb, APB_SDMMC1_CLK_LOOPBACK), r32(IO_SPARE));
-    // Opt-in until the sequence has been seen working on hardware: by default nothing below the
-    // inherited-bus log line runs (no CMD0, no PLLC4, no PMIC access).
+    // Opt-in (boot-arg): without it nothing below runs (no CMD0, no PLLC4, no PMIC access).
     unsigned enabled = 0;
     PE_parse_boot_argn("ioswitch-sd-uhs", &enabled, sizeof(enabled));
     const char *skip = nullptr;

@@ -17,7 +17,8 @@
 //     from the panel's active area (stm,max-real-coords 1264 x 704, stm,edge-offset 15) as fts_coordinates_factor.
 // That landscape frame is the one the display shows iOS (NativeScanout.h and the rotate-3 console both put landscape
 // pixel (x, y) at portrait row 1279 - x, column y, upright in handheld use, as hekate's GUI). Boot-arg
-// switch-touch-flip: bit 0 mirrors X, bit 1 mirrors Y, in case the hardware shows otherwise.
+// switch-touch-flip: bit 0 mirrors X, bit 1 mirrors Y, in case the hardware shows otherwise. Portrait-native
+// (IOSwitchPortrait.h): iOS's screen is the portrait panel, so contacts are reported at that row and column (position).
 //
 // Failures panic with a one-line reason; there is no polled mode. A 10 s watchdog only checks that a latched INT
 // reached the CPU (tegra_gpio_check_delivery).
@@ -307,8 +308,9 @@ void SwitchTouch::position(const uint8_t *event, Contact &contact) const
     uint16_t y = scale((unsigned)event[2] << 4 | (event[3] & 0xf), kRealMaxY, kSwitchTouchHeight);
     if (flip & 1) x = (uint16_t)(kSwitchTouchWidth - 1 - x);
     if (flip & 2) y = (uint16_t)(kSwitchTouchHeight - 1 - y);
-    contact.x = x;
-    contact.y = y;
+    // Portrait-native (SwitchHID.h): the panel's frame, as the display maps landscape pixel (x, y) to row 1279 - x, column y.
+    contact.x = IOSWITCH_PORTRAIT_NATIVE ? y : x;
+    contact.y = IOSWITCH_PORTRAIT_NATIVE ? (uint16_t)(kSwitchTouchWidth - 1 - x) : y;
 }
 
 // One FIFO event. A contact that goes down and up within one batch gets each transition in its own report.
@@ -334,8 +336,8 @@ void SwitchTouch::handle(const uint8_t *event)
         position(event, contact);
         contact.down = true;
         changed |= bit;
-        const bool atEdge = contact.x < kEdgeBand || contact.x >= kSwitchTouchWidth - kEdgeBand ||
-                            contact.y < kEdgeBand || contact.y >= kSwitchTouchHeight - kEdgeBand;
+        const bool atEdge = contact.x < kEdgeBand || contact.x >= kSwitchTouchReportWidth - kEdgeBand ||
+                            contact.y < kEdgeBand || contact.y >= kSwitchTouchReportHeight - kEdgeBand;
         edge = atEdge ? edge | bit : edge & ~bit;
     } else {
         position(event, contact);

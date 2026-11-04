@@ -14,7 +14,6 @@ import re
 import shutil
 import struct
 import sys
-import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -420,19 +419,19 @@ def main():
                  storage_probe=True, storage_files=True, root_boot=True)
     loader = legacy_image((staging / 'adapter/loader.bin').read_bytes(), os_type=5, kind=2,
                           name='Loader', load=LOAD, entry=LOAD)
-    window = (staging / 'layout/kernel-window.bin').read_bytes()
+    # Packed by the loader builder (its nonzero extents back to back; the loader expands it into XNU's window).
+    window = (staging / 'adapter/kernel-window.bin').read_bytes()
 
     prefix = '/switchroot/' + NAME + '/'
     text = TEMPLATE.read_text()
     for old in ('/switchroot/ioswitch-native-xnu-v23/', '/switchroot/ioswitch-native-xnu-v10/'):
         text = text.replace(old, prefix)
     text = text.replace('0x1c040', hex(len(loader)))
-    text = re.sub(r'(crc32 -v 0xA0100000 ' + hex(len(loader)) + r' )[0-9a-f]{8}',
-                  lambda m: m.group(1) + f'{zlib.crc32(loader):08x}', text)
     text = text.replace('0x4324000', hex(len(window)))
     # The command line now lives in the layout; drop the fixed-address args patch.
     text, removed = re.subn(r'\n# Select raw only.*?\nfi\n', '\n', text, flags=re.S)
-    if removed != 1 or re.search(r'/switchroot/(?!' + NAME + '/)', text) or 'raw-args' in text:
+    if (removed != 1 or re.search(r'/switchroot/(?!' + NAME + '/)', text) or 'raw-args' in text or
+            'crc32 -v' in text or hex(len(window)) not in text):
         raise SystemExit('boot script template did not match')
     script = text.encode('ascii')
     scr = legacy_image(struct.pack('>II', len(script), 0) + script, os_type=17, kind=6, name='Boot')
@@ -459,8 +458,8 @@ def main():
         target.chmod(mode)
     print(f'{out}: {len(files)} files, {sum(map(len, files.values()))} bytes; '
           f'kernel window {len(window)} bytes, entry {layout["entry_pa"]:#x}')
-    for path, _, _, digest in overlay_files:
-        print(f'overlay: {path} -> Data {OVERLAY_ROOT}{path}' + (f', CDHash {digest.hex()} trusted' if digest else ''))
+    print(f'overlay: {len(overlay_files)} files ({sum(1 for *_, digest in overlay_files if digest)} trusted) '
+          f'-> Data {OVERLAY_ROOT}')
 
 
 if __name__ == '__main__':

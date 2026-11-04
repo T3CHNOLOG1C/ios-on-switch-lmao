@@ -982,9 +982,13 @@ static int vm_imports(struct tgm_vm *vm, u64 pa) /* live_lock held */
  *  - CPU -> GPU: a writer's non-read-only unlock of a surface the GPU imported cleans its lines, so the GPU reads what the
  *    CPU wrote; read-only imports included (the GPU reads what the app redraws into them). This replaces the frontend's
  *    per-commit seed clean, which saw only in-process writers (r4d sc=0: Settings' writers are other processes).
- *  - Import: the importer cleans a surface's lines once, for what the CPU wrote before the GPU imported it, unless the
- *    surface was already registered with the same pages: then every CPU write since its first import was cleaned at its
- *    unlock (tgm_coherency_add's *clean), and a second import (another process's, or a re-import) skips that pass.
+ *  - Import: the importer always cleans the surface's lines, for what the CPU wrote before the GPU imported it, even when
+ *    another import of the same pages is live. An earlier import proves nothing about writes since: no-copy buffers (Core
+ *    Animation's shared-memory images, most read-only imports) never see an IOSurface lock, and IOSurfaceLock/Unlock are
+ *    IOKit traps (IOConnectTrap3, index 2/3), not the external methods the XNU hook watches, so no unlock cleaned anything
+ *    (r6k: 0 coherency lines all boot). r6a-r6k skipped the clean for such imports (up to 253 of 271 per 5 s): a recycled
+ *    backing store reached the GPU with its newest lines still in the CPU caches (IMG_0085, Files sidebar: "Recents" as
+ *    16x1 blocks of old and new, the selected row showing the buffer's previous text). Cleaning costs ~80 us per MiB.
  * Entries are keyed by the surface's first physical page (its page-aligned base, as the import and the XNU hook both have it),
  * in a hash under coh_lock for the hook's lookups. Each import holds a reference to its entry, which stays where it was made,
  * so the per-submission dirty mark is one store through the import's own pointer, no lookup and no lock. */
@@ -1018,21 +1022,16 @@ coh_slot(u64 pa) /* coh_lock held: the link that points at pa's entry, or the ch
 }
 
 /* A host import of the surface whose pages are pas[0..npages) was made: its entry, with a reference for the import (NULL
- * when there is no memory for one: the import then simply has no lazy coherency, as before the registry). *clean is 1
- * when the surface was already registered with these pages, so its CPU lines are clean up to now (see above) and the
- * import's own clean can be skipped; 0 when the importer must clean. `writable` is 0 for a read-only import. */
-struct tgm_coh *tgm_coherency_add(u64 pa, const u64 *pas, u32 npages, int writable, int *clean)
+ * when there is no memory for one: the import then simply has no lazy coherency, as before the registry). The importer
+ * cleans the pages itself, always (see above). `writable` is 0 for a read-only import. */
+struct tgm_coh *tgm_coherency_add(u64 pa, const u64 *pas, u32 npages, int writable)
 {
 	struct tgm_coh **p, *c;
-	*clean = 0;
 	if (!npages)
 		return NULL;
 	mutex_lock(&coh_lock);
 	p = coh_slot(pa);
 	c = *p;
-	if (c && c->refs && c->npages >= npages &&
-	    !memcmp(c->pas, pas, (size_t)npages * sizeof(u64)))
-		*clean = 1;
 	if (c && npages > c->npages) {
 		/* a larger import of the same surface: keep its page list, so the hooks reach every page either imports */
 		u64 *copy = kmalloc_array(npages, sizeof(u64), GFP_KERNEL);

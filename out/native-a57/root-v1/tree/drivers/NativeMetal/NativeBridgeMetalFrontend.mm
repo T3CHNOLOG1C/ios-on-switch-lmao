@@ -29,6 +29,7 @@
 #include <mach/mach_time.h>
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
+#include "AsyncPipelines.h"  // r7-async: render pipeline states made off the asking thread
 
 static NmbDevice *gDevice;
 static id gDeviceObject;
@@ -720,13 +721,16 @@ static NBTexture *textureOnBuffer(NBBuffer *buffer, MTLTextureDescriptor *d, NSU
     id storage;  // keeps the metallib's bytes: its functions' bitcode, which stitching sends (functionBitcode)
 @property (nonatomic) const uint8_t *bytes;
 @property (nonatomic) size_t length;
+@property (nonatomic)
+    std::string journalId;  // the journal's lib=: the file's path, or data:<SHA-256 of the bytes> (libraryJournalId)
 @end
 @interface NBFunction : NBObject
 @property (nonatomic) NmbFunction *handle;
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic) MTLFunctionType functionType;
 @property (nonatomic)
-    std::string constantsText;  // name:type:hex of each constant value it was specialized with (the journal's)
+    std::string constantsText;           // name:type:hex of each constant value it was specialized with (the journal's)
+@property (nonatomic) bool specialized;  // made by newFunctionWithName:constantValues:, even with no values
 @property (nonatomic, strong) NBLibrary *library;  // the library it came from, whose bytes hold its bitcode
 @end
 @interface NBArgumentEncoder : NBObject
@@ -734,6 +738,51 @@ static NBTexture *textureOnBuffer(NBBuffer *buffer, MTLTextureDescriptor *d, NSU
 @property (nonatomic, strong) id<MTLBuffer> argumentBuffer;  // the buffer its writes go to, kept while it is set
 + (id<MTLArgumentEncoder>)with:(NmbArgumentEncoder *)handle;
 @end
+// A journal token of `text`: space, '%' and '|' percent-encoded (the journal is split at spaces and " | ").
+static std::string journalToken(const char *text)
+{
+    std::string out;
+    for (const char *c = text ? text : ""; *c; c++) {
+        char hex[4];
+        snprintf(hex, sizeof hex, "%%%02X", (unsigned char)*c);
+        out += *c == ' ' || *c == '%' || *c == '|' ? std::string(hex) : std::string(1, *c);
+    }
+    return out.empty() ? "-" : out;
+}
+// The journal's name of a library made from `bytes`: data:<their SHA-256>, its bytes kept once as <cache>/libs/<SHA-256>.metallib,
+// beside the journal, so the host can make what the journal names again (precompile/harvest.py collects them). Written beside its
+// name and renamed; a library already kept is not written again.
+static std::string libraryJournalId(const void *bytes, size_t length)
+{
+    if (gJournalPath.empty() || !bytes || !length) return std::string();
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(bytes, (CC_LONG)length, digest);
+    char sha[2 * CC_SHA256_DIGEST_LENGTH + 1];
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) snprintf(sha + 2 * i, 3, "%02x", digest[i]);
+    const std::string dir = gJournalPath.substr(0, gJournalPath.rfind('/')) + "/libs",
+                      path = dir + "/" + sha + ".metallib";
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+        mkdir(dir.c_str(), 0700);
+        const std::string temporary = path + "." + std::to_string(getpid()) + ".tmp";
+        if (FILE *f = fopen(temporary.c_str(), "wb")) {
+            const bool written = fwrite(bytes, 1, length, f) == length;
+            if (fclose(f) == 0 && written) rename(temporary.c_str(), path.c_str());
+        }
+        unlink(temporary.c_str());
+    }
+    return std::string("data:") + sha;
+}
+// A function as the journal's S, R and C lines name it: its name, lib=<its library>, then its constants; "spec" for one specialized
+// with no constant values (newFunctionWithName:constantValues:, which is not newFunctionWithName:).
+static std::string stageText(NBFunction *f)
+{
+    if (!f) return "- ";
+    std::string text = f.name.UTF8String ?: "?";
+    if (f.library && !f.library.journalId.empty()) text += " lib=" + f.library.journalId;
+    if (f.specialized && f.constantsText.empty()) text += " spec";
+    return text + " " + f.constantsText;
+}
 // The function constants a function declares (MTLFunctionConstant's readable properties), for functionConstantsDictionary.
 @interface NBFunctionConstant : NSObject
 @property (nonatomic, copy) NSString *name;
@@ -897,10 +946,11 @@ static bool systemCompiler();
     // generic pipeline unmade without a word): the function, its constants, the time, the refusal and QuartzCore's callers.
     if (!gJournalPath.empty()) {
         char head[96];
-        snprintf(head, sizeof head,
-                 "S t=%llu us=%llu ok=%d name=", (unsigned long long)((functionBegan - gJournalBegan) / 1000),
+        snprintf(head, sizeof head, "S t=%llu us=%llu ok=%d ",
+                 (unsigned long long)((functionBegan - gJournalBegan) / 1000),
                  (unsigned long long)(nowUs() - functionBegan), handle ? 1 : 0);
-        journal(head + std::string(name.UTF8String ?: "?") + " k=" + text +
+        journal(head + (_journalId.empty() ? std::string() : "lib=" + _journalId + " ") +
+                "name=" + std::string(name.UTF8String ?: "?") + " k=" + text +
                 (handle ? std::string() : " err=" + std::string(lastError().UTF8String ?: "?")) + " | " +
                 quartzCoreCallers());
     }
@@ -914,6 +964,7 @@ static bool systemCompiler();
     function.name = name;
     function.functionType = (MTLFunctionType)nmb_function_type(handle);
     function.constantsText = text;
+    function.specialized = true;
     function.library = self;
     if (error) *error = nil;
     return (id<MTLFunction>)function;
@@ -1073,8 +1124,16 @@ static NSData *functionBitcode(NBFunction *function)
 @end
 @interface NBRenderPipeline : NBObject
 @property (nonatomic) NmbRenderPipeline *handle;
+@property (nonatomic) std::shared_ptr<nbasync::Making> making;  // r7-async: being made on a worker (AsyncPipelines.h)
 @end
 @implementation NBRenderPipeline
+// r7-async: a state made on a worker draws with the handle of the state the synchronous path made there, once made.
+- (NmbRenderPipeline *)handle
+{
+    if (!_making) return _handle;
+    std::lock_guard<std::mutex> g(_making->lock);
+    return _making->state == nbasync::Making::Made ? [(NBRenderPipeline *)_making->result handle] : nullptr;
+}
 - (void)dealloc
 {
     nmb_render_pipeline_release(_handle);
@@ -1087,6 +1146,60 @@ static NSData *functionBitcode(NBFunction *function)
     return s[0];
 }
 @end
+// r7-async (AsyncPipelines.h): a worker's own creation takes the synchronous path.
+static thread_local bool tAsyncWorker;
+// Whether a render pass skips the draws of a state still being made: the display's (its first color attachment an IOSurface).
+static bool asyncSkips(MTLRenderPassDescriptor *d)
+{
+    if (!nbasync::policy().on) return false;
+    id<MTLTexture> t = d.colorAttachments[0].texture;
+    const bool surface = [(id)t isKindOfClass:[NBTexture class]] && ((NBTexture *)t).surface;
+    return nbasync::onscreen(surface, t ? (uint64_t)t.width * t.height : 0);
+}
+// Whether newRenderPipelineStateWithDescriptor: makes `d` on a worker (the policy's, AsyncPipelines.h), unless archives must be
+// read (FailOnBinaryArchiveMiss refuses at the call) or a function is another device's (refused at the call, as before).
+static bool asyncRenderPipelineWanted(MTLRenderPipelineDescriptor *d, MTLPipelineOption options)
+{
+    if (tAsyncWorker || !nbasync::policy().on || !d || d.binaryArchives.count) return false;
+    if (options & MTLPipelineOptionFailOnBinaryArchiveMiss) return false;
+    if (![(id)d.vertexFunction isKindOfClass:[NBFunction class]]) return false;
+    return !d.fragmentFunction || [(id)d.fragmentFunction isKindOfClass:[NBFunction class]];
+}
+// A state of `d` made on a worker by the synchronous path (the call returns at once; AsyncPipelines.h).
+static id<MTLRenderPipelineState> asyncRenderPipeline(id device, MTLRenderPipelineDescriptor *d, MTLPipelineOption options)
+{
+    MTLRenderPipelineDescriptor *copy = [d copy];
+    auto making = std::make_shared<nbasync::Making>();
+    making->label = std::string(copy.label.UTF8String ?: "") + " " + (copy.vertexFunction.name.UTF8String ?: "-") + "+" +
+                    (copy.fragmentFunction.name.UTF8String ?: "-");
+    making->work = [device, copy, options](NSString **failure) -> id {
+        tAsyncWorker = true;
+        NSError *error = nil;
+        id state = [(id<MTLDevice>)device newRenderPipelineStateWithDescriptor:copy
+                                                                       options:options
+                                                                    reflection:nil
+                                                                         error:&error];
+        tAsyncWorker = false;
+        if (!state) *failure = error.localizedDescription;
+        return state;
+    };
+    NBRenderPipeline *state = [NBRenderPipeline new];
+    state.making = making;
+    nbasync::start(making);
+    return (id<MTLRenderPipelineState>)state;
+}
+// `call` on a worker (the completion-handler API, which calls back there), or here with NMB_ASYNC_PSO_API=0.
+static void asyncCall(void (^call)(void))
+{
+    if (!nbasync::policy().api) return call();
+    nbasync::workers().submit([call] {
+        @autoreleasepool {
+            tAsyncWorker = true;
+            call();
+            tAsyncWorker = false;
+        }
+    });
+}
 @interface NBSampler : NBObject
 @property (nonatomic) NmbSampler *handle;
 @end
@@ -1670,6 +1783,8 @@ static void waitForResource(id resource)
 @end
 
 @interface NBRenderEncoder : NBEncoder
+@property (nonatomic) bool skipsPending;  // r7-async: the display's pass: a state still being made skips its draws
+@property (nonatomic) bool skipDraws;     // r7-async: the state set last is being made (or failed): its draws are skipped
 @end
 @implementation NBRenderEncoder
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)state
@@ -1677,6 +1792,14 @@ static void waitForResource(id resource)
     NBApiTime timed;
     if (![(id)state isKindOfClass:[NBRenderPipeline class]]) {
         [self.commandBuffer refuse:@"foreign render pipeline"];
+        return;
+    }
+    // r7-async (AsyncPipelines.h): a state still being made is set once made, after a bounded wait in the display's pass;
+    // until then nothing is set and this encoder's draws are skipped.
+    _skipDraws = false;
+    if (const std::shared_ptr<nbasync::Making> making = ((NBRenderPipeline *)state).making;
+        making && !nbasync::ready(making, _skipsPending)) {
+        _skipDraws = true;
         return;
     }
     [self check:nmb_render_set_pipeline(self.handle, [(NBRenderPipeline *)state handle]) what:"setRenderPipelineState"];
@@ -1856,6 +1979,10 @@ static void waitForResource(id resource)
           baseInstance:(NSUInteger)b
 {
     NBApiTime timed;
+    if (_skipDraws) {  // r7-async: its state is still being made
+        nbasync::counters().skippedDraws++;
+        return;
+    }
     gDraws++;
     self.commandBuffer->encodedWork.draws++;
     [self check:nmb_render_draw(self.handle, t, (uint32_t)s, (uint32_t)n, (uint32_t)i, (uint32_t)b)
@@ -1882,6 +2009,10 @@ static void waitForResource(id resource)
                  baseInstance:(NSUInteger)bi
 {
     NBApiTime timed;
+    if (_skipDraws) {  // r7-async: its state is still being made
+        nbasync::counters().skippedDraws++;
+        return;
+    }
     if (![(id)b isKindOfClass:[NBBuffer class]]) {
         [self.commandBuffer refuse:@"foreign index buffer"];
         return;
@@ -2298,7 +2429,9 @@ static void scheduled(void *context);
         pass.visibility = [(NBBuffer *)d.visibilityResultBuffer handle];
     }
     [self notePass:d];
-    return [self encoder:[NBRenderEncoder new]
+    NBRenderEncoder *render = [NBRenderEncoder new];
+    render.skipsPending = asyncSkips(d);  // r7-async
+    return [self encoder:render
                   handle:self.committed ? nullptr : nmb_render_encoder_new(_handle, &pass)
                     what:@"renderCommandEncoder"];
 }
@@ -2485,8 +2618,9 @@ static void scheduled(void *context);
         [gInFlight addObject:self];
     }
     if (!self.encodeFailure) {
-        // No cache maintenance on the submit path: CPU writes into imports reach the GPU through the kernel's IOSurface-unlock
-        // clean (the writer's unlock, in any process), and the import-time clean (BoImport). The render path pays nothing.
+        // No cache maintenance on the submit path: CPU writes into imports reach the GPU through the import-time clean
+        // (BoImport, every import). The kernel's IOSurface-unlock clean does not run: IOSurfaceUnlock is an IOKit trap, and
+        // the XNU hook sits on external methods (r7-text). A CPU redraw into a still-live import is not cleaned.
         // Completion owns this reference; the runtime orders the non-owning scheduled callback before it.
         void *context = (__bridge_retained void *)self;
         bool committed = nmb_command_buffer_on_completed(_handle, completed, context) &&
@@ -2709,8 +2843,8 @@ struct NBCost {
 };
 // One journal line of a render pipeline creation begun at `began` (microseconds), `refused` its refusal or null. The label is the
 // caller's name for the pipeline (QuartzCore's: its spec's encoded name).
-static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, uint64_t began, const char *refused,
-                                  const std::string &cost)
+static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOption options, uint64_t began,
+                                  const char *refused, const std::string &cost)
 {
     if (gJournalPath.empty()) return;
     const uint64_t ended = nowUs();
@@ -2724,6 +2858,7 @@ static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, uint64_t began
              (unsigned long)d.stencilAttachmentPixelFormat);
     std::string line = head;
     line += cost;
+    if (options) line += " opt=" + std::to_string((unsigned long long)options);
     line += " label=";
     line += d.label.length ? d.label.UTF8String : "-";
     for (unsigned i = 0; i < 8; i++) {
@@ -2748,20 +2883,48 @@ static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, uint64_t began
         }
     NBFunction *vf = [(id)d.vertexFunction isKindOfClass:[NBFunction class]] ? (NBFunction *)d.vertexFunction : nil;
     NBFunction *ff = [(id)d.fragmentFunction isKindOfClass:[NBFunction class]] ? (NBFunction *)d.fragmentFunction : nil;
-    line += " | v ";
-    line += vf ? vf.name.UTF8String : "-";
-    line += " ";
-    line += vf ? vf.constantsText : "";
-    line += " | f ";
-    line += ff ? ff.name.UTF8String : "-";
-    line += " ";
-    line += ff ? ff.constantsText : "";
+    line += " | v " + stageText(vf);
+    line += " | f " + stageText(ff);
     if (refused) {
         line += " | refused ";
         line += refused;
     }
     line += " | ";
     line += quartzCoreCallers();
+    for (char &c : line)
+        if (c == '\n') c = ' ';
+    journal(line);
+}
+// One journal line of a compute pipeline creation begun at `began`, `refused` its refusal or null: made from the function `f` alone
+// (form=f) or from the descriptor `d` (form=d: its fields, the kernel as k, its visible linked functions as l and private ones as
+// p), with `options`; the host makes it again the same way (precompile.mm).
+static void journalComputePipeline(MTLComputePipelineDescriptor *d, NBFunction *f, MTLPipelineOption options,
+                                   uint64_t began, const char *refused)
+{
+    if (gJournalPath.empty()) return;
+    char head[256];
+    snprintf(head, sizeof head, "C t=%llu us=%llu ok=%d form=%s opt=%llu",
+             (unsigned long long)((began - gJournalBegan) / 1000), (unsigned long long)(nowUs() - began),
+             refused ? 0 : 1, d ? "d" : "f", (unsigned long long)options);
+    std::string line = head;
+    if (d) {
+        char mutability[32] = {};
+        for (unsigned i = 0; i < 31; i++) mutability[i] = (char)('0' + (d.buffers[i].mutability & 7));
+        snprintf(head, sizeof head, " max=%lu tgm=%d icb=%d depth=%lu abf=%d mut=%s",
+                 (unsigned long)d.maxTotalThreadsPerThreadgroup, (int)d.threadGroupSizeIsMultipleOfThreadExecutionWidth,
+                 (int)d.supportIndirectCommandBuffers, (unsigned long)d.maxCallStackDepth,
+                 (int)d.supportAddingBinaryFunctions, mutability);
+        line += head;
+        line += " label=" + journalToken(d.label.UTF8String);
+        f = (NBFunction *)d.computeFunction;
+    }
+    line += " | k " + stageText(f);
+    for (id l in d.linkedFunctions.functions)
+        line += " | l " + stageText([l isKindOfClass:[NBFunction class]] ? (NBFunction *)l : nil);
+    for (id l in d.linkedFunctions.privateFunctions)
+        line += " | p " + stageText([l isKindOfClass:[NBFunction class]] ? (NBFunction *)l : nil);
+    if (refused) line += std::string(" | refused ") + refused;
+    line += " | " + quartzCoreCallers();
     for (char &c : line)
         if (c == '\n') c = ' ';
     journal(line);
@@ -3949,6 +4112,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     library.storage = mapped;
     library.bytes = (const uint8_t *)bytes;
     library.length = size;
+    library.journalId = libraryJournalId(bytes, size);
     if (error) *error = nil;
     return (id<MTLLibrary>)library;
 }
@@ -3965,6 +4129,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     library.storage = bytes;
     library.bytes = (const uint8_t *)bytes.bytes;
     library.length = bytes.length;
+    if (!gJournalPath.empty()) library.journalId = journalToken(path.UTF8String);
     if (error) *error = nil;
     return (id<MTLLibrary>)library;
 }
@@ -3989,25 +4154,54 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 {
     return [(id<MTLDevice>)self newDefaultLibraryWithBundle:[NSBundle mainBundle] error:nil];
 }
-// The asynchronous forms make the state on the caller's thread and call back (Core Image's, Espresso's): the base class would queue a
-// request to Apple's compiler service.
+// The asynchronous forms make the state on a worker and call back there (r7-async, asyncCall; Core Image's, Espresso's): the
+// base class would queue a request to Apple's compiler service. The descriptor is copied at the call, as Metal does.
 - (void)newComputePipelineStateWithFunction:(id<MTLFunction>)function
                           completionHandler:(MTLNewComputePipelineStateCompletionHandler)handler
 {
-    NSError *error = nil;
-    id<MTLComputePipelineState> state = [(id<MTLDevice>)self newComputePipelineStateWithFunction:function error:&error];
-    handler(state, error);
+    asyncCall(^{
+        NSError *error = nil;
+        id<MTLComputePipelineState> state = [(id<MTLDevice>)self newComputePipelineStateWithFunction:function error:&error];
+        handler(state, error);
+    });
 }
 - (void)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d
                                       options:(MTLPipelineOption)options
                             completionHandler:(MTLNewComputePipelineStateWithReflectionCompletionHandler)handler
 {
-    NSError *error = nil;
-    id<MTLComputePipelineState> state = [(id<MTLDevice>)self newComputePipelineStateWithDescriptor:d
-                                                                                           options:options
-                                                                                        reflection:nil
-                                                                                             error:&error];
-    handler(state, nil, error);
+    MTLComputePipelineDescriptor *copy = [d copy];
+    asyncCall(^{
+        NSError *error = nil;
+        id<MTLComputePipelineState> state = [(id<MTLDevice>)self newComputePipelineStateWithDescriptor:copy
+                                                                                               options:options
+                                                                                            reflection:nil
+                                                                                                 error:&error];
+        handler(state, nil, error);
+    });
+}
+- (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
+                           completionHandler:(MTLNewRenderPipelineStateCompletionHandler)handler
+{
+    MTLRenderPipelineDescriptor *copy = [d copy];
+    asyncCall(^{
+        NSError *error = nil;
+        id<MTLRenderPipelineState> state = [(id<MTLDevice>)self newRenderPipelineStateWithDescriptor:copy error:&error];
+        handler(state, error);
+    });
+}
+- (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
+                                     options:(MTLPipelineOption)options
+                           completionHandler:(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler
+{
+    MTLRenderPipelineDescriptor *copy = [d copy];
+    asyncCall(^{
+        NSError *error = nil;
+        id<MTLRenderPipelineState> state = [(id<MTLDevice>)self newRenderPipelineStateWithDescriptor:copy
+                                                                                             options:options
+                                                                                          reflection:nil
+                                                                                               error:&error];
+        handler(state, nil, error);
+    });
 }
 - (id<MTLComputePipelineState>)newComputePipelineStateWithFunction:(id<MTLFunction>)function error:(NSError **)error
 {
@@ -4032,6 +4226,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     NmbComputePipeline *handle =
         nmb_compute_pipeline_new_with_options(gDevice, [(NBFunction *)function handle], &creation);
     gTimePipeline.add(pipelineBegan);
+    journalComputePipeline(nil, (NBFunction *)function, options, pipelineBegan, handle ? nullptr : nmb_last_error());
     if (!handle) return failWith<id<MTLComputePipelineState>>(error, @"compute pipeline", nil);
     NBComputePipeline *state = [NBComputePipeline new];
     state.handle = handle;
@@ -4055,6 +4250,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     const uint64_t pipelineBegan = nowUs();
     NmbComputePipeline *handle = nmb_compute_pipeline_new_with_descriptor(gDevice, &p, &creation);
     gTimePipeline.add(pipelineBegan);
+    journalComputePipeline(d, nil, options, pipelineBegan, handle ? nullptr : nmb_last_error());
     if (!handle) return failWith<id<MTLComputePipelineState>>(error, @"compute pipeline", nil);
     NBComputePipeline *state = [NBComputePipeline new];
     state.handle = handle;
@@ -4077,6 +4273,11 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
                                                              error:(NSError **)error
 {
     if (reflection) *reflection = nil;
+    // r7-async (AsyncPipelines.h): the render server's states are made on a worker, the call returning at once.
+    if (asyncRenderPipelineWanted(d, options)) {
+        if (error) *error = nil;
+        return asyncRenderPipeline(self, d, options);
+    }
     auto *p = new NmbRenderPipelineDescriptor();
     if (!renderDescriptor(d, p, error)) {
         delete p;
@@ -4094,7 +4295,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     delete p;
     gTimePipeline.add(pipelineBegan);
     gHistPso.add(nowUs() - pipelineBegan);
-    journalRenderPipeline(d, pipelineBegan, handle ? nullptr : nmb_last_error(),
+    journalRenderPipeline(d, options, pipelineBegan, handle ? nullptr : nmb_last_error(),
                           gJournalPath.empty() ? std::string() : NBCost::now().since(costBegan));
     if (!handle) return failWith<id<MTLRenderPipelineState>>(error, @"render pipeline", nil);
     NBRenderPipeline *state = [NBRenderPipeline new];
@@ -4602,6 +4803,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
                      ms(sched.p99), ms(sched.max), ms(gpu.p50), ms(gpu.p99), ms(gpu.max), ms(made.max));
         if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);
     }
+    if (at + 1 < size) at += nbasync::appendRates(out + at, size - at);  // r7-async: apso= ... (AsyncPipelines.h)
     return at;
 }
 

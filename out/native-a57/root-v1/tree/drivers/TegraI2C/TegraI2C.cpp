@@ -16,6 +16,7 @@
 #include "../ArmGIC/IOSwitchInterrupts.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+extern "C" boolean_t preemption_enabled(void);
 
 namespace {
 constexpr vm_offset_t kI2CPA = 0x7000C000, kI2CSize = 0x2000;        // I2C1..I2C6
@@ -101,6 +102,7 @@ struct Bus {
     bool ready;
     bool owned;        // we reset/clocked it, so error recovery may reset it again
     bool multiMaster;  // another master shares the pads: lost arbitration is retried, never reset or bus-cleared
+    bool final;        // tegra_i2c_final_transfer() has the bus for the rest of the boot
     // The wait in flight (under irqLock): a packet, or the bus clear.
     const uint8_t *tx;
     uint8_t *rx;
@@ -389,6 +391,29 @@ int packet(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, 
     return result;
 }
 
+// tegra_i2c_final_transfer()'s packet: the one polled transfer in this driver (TegraI2C.h). The controller's interrupts
+// stay masked; INT_STATUS is read until an error or PACKET_DONE ends the packet, moving FIFO words on every pass, within
+// the same budget packet() gives the interrupt. The caller holds irqLock when it could take it.
+int pollPacket(Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, size_t len, bool repeatStart)
+{
+    int result = startPacket(b, addr, out, in, len, repeatStart);
+    const uint64_t end = nowUs() + 5000 + (uint64_t)(len + 2) * 18 * 1000000 / b.hz;
+    while (result == TEGRA_I2C_OK) {
+        const uint32_t status = r32(b.regs, INT_STATUS);
+        serviceFifo(b);
+        const int done = outcome(b, status);
+        if (done != kPending) {
+            result = done;
+            break;
+        }
+        if (nowUs() > end) result = TEGRA_I2C_ETIMEDOUT;
+    }
+    w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
+    b.tx = nullptr;
+    b.rx = nullptr;
+    return result;
+}
+
 // Reset after a failed transfer. irqLock is held while the clock is gated so no action reads an unclocked block.
 // A multi-master bus only gets its FIFOs flushed: a reset's bus clear would cut into the other master's transfer.
 void recover(unsigned bus, Bus &b)
@@ -515,6 +540,48 @@ extern "C" void tegra_i2c_resume(void)
         if (result != TEGRA_I2C_OK) panic("TegraI2C: I2C%u did not come back after sleep (%d)", bus, result);
         IOLockUnlock(b.lock);
     }
+}
+
+// Shut Down / Restart only (TegraI2C.h). Polling is acceptable here and nowhere else: these are the boot's last
+// transfers, nothing is left to interrupt, and the caller may have interrupts off. A failed packet only has the FIFOs
+// flushed (no reset, no bus clear): the caller has nothing left to retry with but its fallback.
+extern "C" int tegra_i2c_final_transfer(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx,
+                                        size_t rxlen)
+{
+    if (bus < 1 || bus > kBuses || addr > 0x7f || (!txlen && !rxlen) || txlen > TEGRA_I2C_MAX_TRANSFER ||
+        rxlen > TEGRA_I2C_MAX_TRANSFER || (txlen && !tx) || (rxlen && !rx)) {
+        return TEGRA_I2C_EINVAL;
+    }
+    Bus &b = gBus[bus - 1];
+    if (!b.lock || !b.irqLock || !b.ready) return TEGRA_I2C_ENOTREADY;
+    const bool canSleep = preemption_enabled();
+    if (!b.final) {
+        // Keep the bus from here on: a transfer in flight finishes first (by its interrupt) when this thread may
+        // sleep; with interrupts off a busy bus is taken as it is, since nothing else runs here to finish it.
+        if (canSleep) {
+            IOLockLock(b.lock);
+        } else {
+            (void)IOLockTryLock(b.lock);
+        }
+        b.final = true;
+    }
+    const bool irqHeld = canSleep ? (IOLockLock(b.irqLock), true) : IOLockTryLock(b.irqLock);
+    b.active = false;  // a late action for this bus only masks and clears
+    w32(b.regs, INT_MASK, 0);
+    int result = TEGRA_I2C_OK;
+    for (unsigned attempt = 0;; ++attempt) {
+        if (txlen) result = pollPacket(b, addr, (const uint8_t *)tx, nullptr, txlen, rxlen != 0);
+        if (result == TEGRA_I2C_OK && rxlen) result = pollPacket(b, addr, nullptr, (uint8_t *)rx, rxlen, false);
+        if (result == TEGRA_I2C_OK) break;
+        w32(b.regs, FIFO_CONTROL, r32(b.regs, FIFO_CONTROL) | FIFO_FLUSH);
+        (void)waitClear(b, FIFO_CONTROL, FIFO_FLUSH, 2000);
+        w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
+        if (result != TEGRA_I2C_EARB || !b.multiMaster || attempt == kArbRetries) break;
+        IODelay(100);  // the other master's transfer (a few bytes at 400 kHz) finishes
+        result = TEGRA_I2C_OK;
+    }
+    if (irqHeld) IOLockUnlock(b.irqLock);
+    return result;
 }
 
 extern "C" int tegra_i2c_read(unsigned bus, uint8_t addr, uint8_t reg, void *buf, size_t len)

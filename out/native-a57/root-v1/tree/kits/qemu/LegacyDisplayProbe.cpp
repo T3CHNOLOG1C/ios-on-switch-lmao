@@ -868,8 +868,6 @@ void native_legacy_display_late_probe(void)
                             if (PE_parse_boot_argn("switch-als", &arg, sizeof(arg)) && arg) on = 1;
                             if (on && switch_backlight_start()) IOLog("IOSwitch: SwitchBacklight did not start\n");
                         }
-                        IOLog("IOSwitch: CPU display registered %ux%u rotation=%u\n", native_legacy_video_width(video),
-                              native_legacy_video_height(video), (unsigned)video.v_rotate);
                         native_legacy_display_checkpoint();
                         return;
                     }

@@ -42,6 +42,7 @@ static uint64_t ticks(void) {
     return value;
 }
 
+#if !LOAD_FAST_COPY || LOAD_VERIFY_KERNEL
 static void progress(unsigned row, uint64_t done, uint64_t total, uint64_t started) {
     unsigned percent = (unsigned)(done * 100 / total);
     uint64_t elapsed = (ticks() - started) / 19200;
@@ -52,19 +53,18 @@ static void progress(unsigned row, uint64_t done, uint64_t total, uint64_t start
     display_text(500,row,line,DISPLAY_WHITE);
     loader_progress[2]=done;
 }
+#endif
 
 #if LOAD_FAST_COPY
+// Timing only (the record words, for a debugger): nothing is drawn on the way to the kernel.
 static void copy_progress(uint64_t done, uint64_t total, uint64_t started) {
     uint64_t elapsed=ticks()-started;
     // The zero callback occurs after the temporary cache regime is enabled,
-    // before the first payload load/store. Do not call preparation "copy 0%".
-    if (!done) {
-        loader_copy_prepare_ticks=elapsed;
-        display_text(16,104,"COPY KERNEL ",DISPLAY_WHITE);
-    }
-    if (done && done!=total && elapsed-loader_progress[7]<1920000) return;
+    // before the first payload load/store.
+    if (!done) loader_copy_prepare_ticks=elapsed;
+    (void)total;
     loader_progress[7]=elapsed;
-    progress(104,done,total,started);
+    loader_progress[2]=done;
 }
 #endif
 
@@ -186,8 +186,10 @@ void loader_after_transition(void) {
     r[L_SOURCE] = LOAD_SOURCE; r[L_DEST] = LOAD_DEST; r[L_BYTES] = LOAD_BYTES;
     r[L_ARGS] = LOAD_ARGS; r[L_ENTRY] = LOAD_ENTRY;
     r[R_STAGE] = 0x50;
+#if !LOAD_FAST_COPY
     display_clear();
     display_text(16, 24, "LOADER", DISPLAY_WHITE);
+#endif
 #if LOAD_VERIFY_KERNEL
     display_text(16,64,"CHECK SOURCE",DISPLAY_WHITE);
     display_text(16,144,"CHECK DESTINATION",DISPLAY_WHITE);
@@ -195,9 +197,7 @@ void loader_after_transition(void) {
     r[L_SOURCE_CRC] = checksum(LOAD_SOURCE,64);
     if (r[L_SOURCE_CRC] != LOAD_CRC) refuse(0x302);
 #endif
-#if LOAD_FAST_COPY
-    display_text(16,104,"PREPARE COPY",DISPLAY_WHITE);
-#else
+#if !LOAD_FAST_COPY
     display_text(16,104,"COPY KERNEL",DISPLAY_WHITE);
 #endif
 #if LOAD_SD_REFERENCE
@@ -290,6 +290,8 @@ void loader_after_transition(void) {
 #endif
     r[R_STAGE] = 0x52;
     loader_progress[1]=4;
+#if !LOAD_FAST_COPY
     display_text(16, 200, "COPY COMPLETE", DISPLAY_GREEN);
+#endif
     loader_enter_kernel(LOAD_ARGS, LOAD_ENTRY);
 }

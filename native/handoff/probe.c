@@ -119,32 +119,49 @@ static int inspect_fdt(void) {
     return 0;
 }
 
+#ifndef PROBE_QUIET
+#define PROBE_QUIET 0
+#endif
+
+// PROBE_QUIET (the native loader): no register screen on the way through, and only the FDT's address and magic here;
+// the loader walks the FDT itself (memory.c: header, reservations, exact banks, cells) before it writes anything.
+// This code runs with the caches off, where the full-screen clear, the text and a bitwise CRC of the FDT are slow.
+static int check_fdt_address(void) {
+    if (probe_record[R_FDT] != UINT64_C(0x8d000000)) return 1;
+    if (be32((const uint8_t *)(uintptr_t)probe_record[R_FDT]) != 0xd00dfeed) return 2;
+    return 0;
+}
+
 int probe_before_transition(void) {
-    display_clear();
-    display_text(16, 12, "HANDOFF", DISPLAY_GREEN);
-    field(96, "ENTRY EL / EXPECT 8", probe_record[R_ENTRY_EL]);
-    field(116, "ENTRY SCTLR", probe_record[R_ENTRY_SCTLR]);
-    field(136, "ENTRY DAIF", probe_record[R_ENTRY_DAIF]);
-    field(156, "ENTRY STACK", probe_record[R_ENTRY_SP]);
-    field(176, "ENTRY HCR", probe_record[R_HCR]);
-    field(196, "ENTRY CNTHCTL", probe_record[R_CNTHCTL]);
-    field(216, "ENTRY CNTVOFF", probe_record[R_CNTVOFF]);
-    field(236, "FDT PHYSICAL", probe_record[R_FDT]);
+    if (!PROBE_QUIET) {
+        display_clear();
+        display_text(16, 12, "HANDOFF", DISPLAY_GREEN);
+        field(96, "ENTRY EL / EXPECT 8", probe_record[R_ENTRY_EL]);
+        field(116, "ENTRY SCTLR", probe_record[R_ENTRY_SCTLR]);
+        field(136, "ENTRY DAIF", probe_record[R_ENTRY_DAIF]);
+        field(156, "ENTRY STACK", probe_record[R_ENTRY_SP]);
+        field(176, "ENTRY HCR", probe_record[R_HCR]);
+        field(196, "ENTRY CNTHCTL", probe_record[R_CNTHCTL]);
+        field(216, "ENTRY CNTVOFF", probe_record[R_CNTVOFF]);
+        field(236, "FDT PHYSICAL", probe_record[R_FDT]);
+    }
     uint64_t reason = 0;
     if (probe_record[R_ENTRY_EL] != 8 || (probe_record[R_ENTRY_SCTLR] & 0x1005)) reason = 0x101;
     else if (probe_record[R_X1] || probe_record[R_X2] || probe_record[R_X3]) reason = 0x102;
     else if (((probe_record[R_MIDR] >> 24) & 255) != 0x41 ||
              ((probe_record[R_MIDR] >> 4) & 0xfff) != 0xd07) reason = 0x103;
     else if (probe_record[R_CNTFRQ] != 19200000) reason = 0x104;
-    else reason = inspect_fdt();
-    field(256, "FDT BYTES", probe_record[R_FDT_SIZE]);
-    field(276, "FDT CRC32", probe_record[R_FDT_CRC]);
-    field(296, "FDT RESERVATIONS", probe_record[R_FDT_RESERVES]);
-    field(316, "BANK 0 BASE", probe_record[R_BANK0_BASE]);
-    field(336, "BANK 0 SIZE", probe_record[R_BANK0_SIZE]);
-    field(356, "BANK 1 BASE", probe_record[R_BANK1_BASE]);
-    field(376, "BANK 1 SIZE", probe_record[R_BANK1_SIZE]);
-    field(396, "MEMORY REG BYTES", probe_record[R_MEMORY_REG_BYTES]);
+    else reason = PROBE_QUIET ? check_fdt_address() : inspect_fdt();
+    if (!PROBE_QUIET) {
+        field(256, "FDT BYTES", probe_record[R_FDT_SIZE]);
+        field(276, "FDT CRC32", probe_record[R_FDT_CRC]);
+        field(296, "FDT RESERVATIONS", probe_record[R_FDT_RESERVES]);
+        field(316, "BANK 0 BASE", probe_record[R_BANK0_BASE]);
+        field(336, "BANK 0 SIZE", probe_record[R_BANK0_SIZE]);
+        field(356, "BANK 1 BASE", probe_record[R_BANK1_BASE]);
+        field(376, "BANK 1 SIZE", probe_record[R_BANK1_SIZE]);
+        field(396, "MEMORY REG BYTES", probe_record[R_MEMORY_REG_BYTES]);
+    }
     uint64_t now;
     __asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(now));
     probe_record[R_COUNTER_POST] = now;
@@ -156,7 +173,7 @@ int probe_before_transition(void) {
         return 0;
     }
     probe_record[R_STAGE] = 2;
-    display_text(16, 416, "EL1 ENTRY", DISPLAY_GREEN);
+    if (!PROBE_QUIET) display_text(16, 416, "EL1 ENTRY", DISPLAY_GREEN);
     return 1;
 }
 

@@ -1218,8 +1218,7 @@ class SwitchAudio : public IOService {
         const bool in = jackPlugged(status);
         if (!self->jackKnown) {
             self->jackKnown = true;
-            IOLog("SwitchAudio: headphones %s at start (INT_IRQ_ST %#x, PV6 %d, PV6 pinmux was %#x)\n",
-                  in ? "in" : "out", status, tegra_gpio_read(kJackDetect), self->jackPinFound);
+            IOLog("SwitchAudio: headphones %s at start\n", in ? "in" : "out");
         } else if (in != self->jackIn) {
             IOLog("SwitchAudio: headphones %s\n", in ? "plugged in" : "unplugged");
         } else {

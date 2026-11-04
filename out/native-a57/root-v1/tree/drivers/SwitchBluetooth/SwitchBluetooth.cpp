@@ -123,8 +123,10 @@ enum : uint32_t {
     MCR_RTS_EN = 1u << 6,
     LSR_DR = 1u << 0,
     LSR_ERRORS = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4),  // OE PE FE BI
+    LSR_BI = 1u << 4,
     LSR_THRE = 1u << 5,
     LSR_TEMT = 1u << 6,
+    LSR_FIFOE = 1u << 7,  // an errored character in the RX FIFO
     LSR_TXFIFO_FULL = 1u << 8,
     MSR_CTS = 1u << 4,
 };
@@ -244,10 +246,12 @@ class SwitchBluetooth : public IOService {
     IOLock *stateLock = nullptr, *hciLock = nullptr, *txLock = nullptr;
     Ring rx = {}, tx = {};
     uint32_t ier = 0, baud = 0;
+    bool chipOn = false;              // BT_REG_ON high; RX interrupts are only on while it is (hwLock)
     bool rxStalled = false;           // RX interrupts masked: ring full or an interrupt's budget spent (hwLock)
     volatile bool txWanted = false;   // a writer waits for ring space or an empty ring
     volatile bool actionDue = false;  // the filter asked for the action; the line stays masked until it has run
     uint32_t irqs = 0, rxBytes = 0, txBytes = 0, lineErrors = 0, dropped = 0, resyncs = 0, hardwareErrors = 0;
+    uint32_t idleIrqs = 0, rxResets = 0;  // interrupts that moved no byte; RX FIFO resets for a stuck BI/FIFOE
 
     // Kernel HCI (bring-up), under hciLock.
     H4Parser h4 = {};
@@ -278,7 +282,22 @@ class SwitchBluetooth : public IOService {
     }
     bool pin(unsigned p, uint32_t reg) const { return r32(gpio, portReg(p, reg)) & (1u << (p & 7)); }
     void setupPins();
-    void power(bool on) { setPin(PH4, GPIO_OUT, on); }
+    // BT_REG_ON. RX interrupts follow the core's power: an unpowered core leaves RX on its pull-down, a break that keeps
+    // the line-status interrupt asserted on CPU0 (r6k: bluetoothd's re-bring-up spun 30 s in the flush after power-on).
+    // The flush after power-on (gated 0) turns them back on.
+    void power(bool on)
+    {
+        const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
+        chipOn = on;
+        if (!on) {
+            ier &= ~IER_RX;
+            rxStalled = false;
+            w32(uart, IER, ier);
+        }
+        IOSimpleLockUnlockEnableInterrupt(hwLock, s);
+        setPin(PH4, GPIO_OUT, on);
+    }
+    void resetRxFifoLocked();
     void setupUart();
     void setBaudLocked(uint32_t rate);
     void setHostBaud(uint32_t rate);
@@ -287,7 +306,7 @@ class SwitchBluetooth : public IOService {
     // Interrupt path.
     static bool filter(OSObject *owner, IOFilterInterruptEventSource *sender);
     static void action(OSObject *owner, IOInterruptEventSource *sender, int count);
-    bool drainRx(uint32_t &budget);
+    bool drainRx(uint32_t &budget, bool stallWhenSpent);
     bool resumeRx();
     bool fillTx();
     void kickTx();
@@ -413,11 +432,8 @@ bool SwitchBluetooth::start(IOService *provider)
         ioswitch_interrupt_describe(kIntid, gic, sizeof(gic));
         panic("SwitchBluetooth: cannot attach the UART-D interrupt (INTID %u): %s", kIntid, gic);
     }
+    // RX interrupts stay off: setupPins left the core unpowered (see power()); the first flush after power-on enables them.
     irq->enable();
-    const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
-    ier = IER_RX;
-    w32(uart, IER, ier);
-    IOSimpleLockUnlockEnableInterrupt(hwLock, s);
 
     tio.c_iflag = IGNPAR;
     tio.c_cflag = CS8 | CREAD | CLOCAL | CRTSCTS;
@@ -516,6 +532,7 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
     bool work = false;
     IOSimpleLockLock(self->hwLock);
     ++self->irqs;
+    const uint32_t rxBefore = self->rx.head, txBefore = self->tx.tail, resetsBefore = self->rxResets;
     uint32_t budget = kIrqRxBudget;
     for (unsigned round = 0; round < 32; ++round) {
         const uint32_t iir = r32(self->uart, IIR);
@@ -525,12 +542,14 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
         case ID_RX:
         case ID_LINE:
         case ID_EORD:
-        case ID_RX_TIMEOUT: work |= self->drainRx(budget); break;
+        case ID_RX_TIMEOUT: work |= self->drainRx(budget, true); break;
         case ID_MODEM: (void)r32(self->uart, MSR); break;
         default: break;
         }
         if (self->rxStalled) break;  // RX masked (budget spent or ring full): the work loop drains and re-enables it
     }
+    // Counted for describe(): a steady rate of these is an interrupt source the loop above does not clear.
+    if (self->rx.head == rxBefore && self->tx.tail == txBefore && self->rxResets == resetsBefore) ++self->idleIrqs;
     IOSimpleLockUnlock(self->hwLock);
     if (work) self->actionDue = true;
     return work;
@@ -540,23 +559,33 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
 // (H4 resynchronises on the next packet type). The FIFO is drained until it empties, the ring fills, or this
 // interrupt's byte budget is spent. In the latter two cases the RX interrupts are masked and rxStalled is set: the
 // rest stays in the FIFO, where RTS holds the chip, and deliver() drains the ring and re-enables RX. Bounding the
-// batch keeps one interrupt short so CPU0 is not pinned by a sender that outruns the slow UART MMIO.
-bool SwitchBluetooth::drainRx(uint32_t &budget)
+// batch keeps one interrupt short so CPU0 is not pinned by a sender that outruns the slow UART MMIO. With
+// stallWhenSpent false (resumeRx) a spent budget just stops the drain and RX stays on: only a full ring stalls.
+bool SwitchBluetooth::drainRx(uint32_t &budget, bool stallWhenSpent)
 {
     uint32_t head = rx.head;
     const uint32_t tail = __atomic_load_n(&rx.tail, __ATOMIC_ACQUIRE);
     bool any = false;
-    for (uint32_t lsr; (lsr = r32(uart, LSR)) & LSR_DR;) {
+    uint32_t lsr;
+    while ((lsr = r32(uart, LSR)) & LSR_DR) {
         if (lsr & LSR_ERRORS) ++lineErrors;
         if (head - tail == kRingBytes || budget == 0) {
-            ier &= ~IER_RX;
-            w32(uart, IER, ier);
-            rxStalled = true;
+            if (head - tail == kRingBytes || stallWhenSpent) {
+                ier &= ~IER_RX;
+                w32(uart, IER, ier);
+                rxStalled = true;
+            }
             break;
         }
         rx.data[head++ & (kRingBytes - 1)] = (uint8_t)r32(uart, THR);
         --budget;
         any = true;
+    }
+    // T210 (serial-tegra tegra_uart_decode_rx_error): a break, or an errored character, can leave BI or FIFOE set with
+    // the FIFO empty, and the line-status interrupt then stays asserted until the RX FIFO is reset.
+    if (!(lsr & LSR_DR) && (lsr & (LSR_BI | LSR_FIFOE))) {
+        resetRxFifoLocked();
+        ++rxResets;
     }
     rxBytes += head - rx.head;
     __atomic_store_n(&rx.head, head, __ATOMIC_RELEASE);
@@ -639,18 +668,23 @@ again:
 // holds is taken here, bounded like one interrupt. A residue below the RX trigger (8) whose character timeout ran
 // out while RX was masked raises neither RDI nor the RX timeout once unmasked: the 7 bytes left of a 71-byte
 // Command Complete (Read Local Supported Commands, 64 taken by the budget) sat in the FIFO and bluetoothd's stack
-// waited on them for good. True when bytes were taken, for deliver() to pass on (drainRx masks RX again if the
-// budget runs out, and deliver() comes back here once they are passed on).
+// waited on them for good. At most one FIFO's worth is taken, without masking RX again: that is every byte that was in
+// the FIFO when RX came back on; later ones raise RDI or the RX timeout themselves. So deliver() passes these on and
+// returns. (It used to loop here while each drain spent a 64-byte budget, holding the work-loop gate for as long as
+// the controller kept sending; a bring-up's runAction then waited on it for good.) True when bytes were taken.
 bool SwitchBluetooth::resumeRx()
 {
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
     rxStalled = false;
-    ier |= IER_RX;
-    w32(uart, IER, ier);
-    const uint32_t before = rx.head;
-    uint32_t budget = kIrqRxBudget;
-    (void)drainRx(budget);
-    const bool took = rx.head != before;
+    bool took = false;
+    if (chipOn) {  // power() masked RX for an unpowered core: the flush after power-on enables it
+        ier |= IER_RX;
+        w32(uart, IER, ier);
+        const uint32_t before = rx.head;
+        uint32_t budget = kFifoBytes;
+        (void)drainRx(budget, false);
+        took = rx.head != before;
+    }
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
     return took;
 }
@@ -687,11 +721,11 @@ void SwitchBluetooth::describe(char *buffer, size_t size)
     const uint32_t port = portReg(PH4, 0);
     auto mux = [this](uint32_t o) { return r32(pinmux, o) & PM_LOW; };
     snprintf(buffer, size,
-             "lsr %#x msr %#x (cts %u) ier %#x mcr %#x lcr %#x baud %u; rx %u tx %u queued %u irqs %u errors %u "
-             "dropped %u resyncs %u hw-errors %u; gpio H cnf/oe/out/in %02x/%02x/%02x/%02x; pinmux %x/%x/%x/%x "
-             "%x/%x/%x; car clk %u rst %u src %#x; %s",
+             "lsr %#x msr %#x (cts %u) ier %#x mcr %#x lcr %#x baud %u; rx %u tx %u queued %u irqs %u (idle %u) "
+             "errors %u rx-resets %u dropped %u resyncs %u hw-errors %u; gpio H cnf/oe/out/in %02x/%02x/%02x/%02x; "
+             "pinmux %x/%x/%x/%x %x/%x/%x; car clk %u rst %u src %#x; %s",
              r32(uart, LSR), r32(uart, MSR), !!(r32(uart, MSR) & MSR_CTS), ier, r32(uart, MCR), r32(uart, LCR), baud,
-             rxBytes, txBytes, tx.used(), irqs, lineErrors, dropped, resyncs, hardwareErrors,
+             rxBytes, txBytes, tx.used(), irqs, idleIrqs, lineErrors, rxResets, dropped, resyncs, hardwareErrors,
              r32(gpio, port + GPIO_CNF) & 0xff, r32(gpio, port + GPIO_OE) & 0xff, r32(gpio, port + GPIO_OUT) & 0xff,
              r32(gpio, port + GPIO_IN) & 0xff, mux(0x114), mux(0x118), mux(0x11c), mux(0x120), mux(0x1c0), mux(0x1c4),
              mux(0x1c8), !!(r32(car, CLK_OUT_ENB_U) & kUartDBit), !!(r32(car, RST_DEVICES_U) & kUartDBit),
@@ -993,21 +1027,17 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
     auto *self = static_cast<SwitchBluetooth *>(owner);
     const uintptr_t op = reinterpret_cast<uintptr_t>(what);
     if (op == 0) {
-        // Flush: the RX FIFO as Linux tegra_uart_fifo_reset does on T210 (FIFO mode off, clear, on), then the ring
-        // and the H4 parser. Under hwLock the filter cannot produce meanwhile.
+        // Flush: the RX FIFO, then the ring and the H4 parser. Under hwLock the filter cannot produce meanwhile.
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(self->hwLock);
-        const uint32_t fcr = FCR_RX_TRIG_8 | FCR_TX_TRIG_16;
-        w32(self->uart, FCR, fcr);
-        IODelay(60);
-        w32(self->uart, FCR, fcr | FCR_CLEAR_RX);
-        w32(self->uart, FCR, fcr | FCR_ENABLE);
-        (void)r32(self->uart, SPR);
-        IODelay(20);  // 32 UART clocks for the flush to propagate (serial-tegra), generous at any rate here
+        self->resetRxFifoLocked();
         __atomic_store_n(&self->rx.tail, __atomic_load_n(&self->rx.head, __ATOMIC_ACQUIRE), __ATOMIC_RELEASE);
-        if (self->rxStalled) {  // the ring and FIFO a stall waited on are gone: nothing else would unmask RX
-            self->rxStalled = false;
-            self->ier |= IER_RX;
-            w32(self->uart, IER, self->ier);
+        // The ring and FIFO a stall waited on are gone, so nothing else would unmask RX; and this is where RX comes
+        // back on after power-on (power() keeps it off for an unpowered core).
+        self->rxStalled = false;
+        const uint32_t ier = self->chipOn ? self->ier | IER_RX : self->ier & ~IER_RX;
+        if (ier != self->ier) {
+            self->ier = ier;
+            w32(self->uart, IER, ier);
         }
         IOSimpleLockUnlockEnableInterrupt(self->hwLock, s);
         self->h4.state = 0;
@@ -1019,6 +1049,19 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
         self->deliver();  // what the ring holds goes by the new mode, and a stall held for the old client resumes
     }
     return kIOReturnSuccess;
+}
+
+// hwLock held. The RX FIFO as Linux tegra_uart_fifo_reset does on T210, which cannot clear it in FIFO mode: FIFO mode
+// off, clear, on (the TX FIFO empties with it), then 32 UART clocks for the clear to propagate.
+void SwitchBluetooth::resetRxFifoLocked()
+{
+    const uint32_t fcr = FCR_RX_TRIG_8 | FCR_TX_TRIG_16;
+    w32(uart, FCR, fcr);
+    IODelay(60);
+    w32(uart, FCR, fcr | FCR_CLEAR_RX);
+    w32(uart, FCR, fcr | FCR_ENABLE);
+    (void)r32(uart, SPR);
+    IODelay(20);  // 32 UART clocks (serial-tegra), generous at any rate here
 }
 
 void SwitchBluetooth::flushRx()
@@ -1086,6 +1129,10 @@ errno_t SwitchBluetooth::ctlDisconnect(kern_ctl_ref, u_int32_t unit, void *)
     if (mine) {
         self->client = 0;
         self->chipDirty |= self->clientUsed;
+        // A core the client used goes off now (under stateLock, so a connect's bring-up cannot be cut short): the
+        // next connect brings it up again anyway, and until then no one would take what it keeps sending (r6k:
+        // bluetoothd exited mid-connection to AirPods with an LE scan and inquiry running).
+        if (self->chipDirty) self->power(false);
     }
     IOLockUnlock(self->stateLock);
     if (mine) {

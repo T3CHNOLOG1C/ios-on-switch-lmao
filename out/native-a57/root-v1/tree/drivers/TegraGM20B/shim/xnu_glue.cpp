@@ -52,17 +52,18 @@ extern "C" void nvxnu_log(const char *fmt, ...)
 	va_end(ap);
 }
 
+// Bring-up step trace (M1/M2/CLK steps): only with boot-arg tegra-gpu-trace=1, which also gives the console time to draw
+// each line before the next step (10-30: three freezes with no trace line drawn). Without it nothing is printed: the
+// stage results (M1..M4 ok) are TegraGM20B.cpp's own lines, and every GPU failure panics with one line.
 extern "C" void nvxnu_step(const char *fmt, ...)
 {
+	if (!nvxnu_trace_paced())
+		return;
 	va_list ap;
 	va_start(ap, fmt);
 	IOLogv(fmt, ap);
 	va_end(ap);
-	// The text console scrolls the whole 720x1280 write-combined framebuffer per line, so it runs far behind the
-	// log (10-30: three freezes with no trace line drawn): with tegra-gpu-trace=1, give it time to draw this line
-	// before the next step. Off by default: bring-up passes, and the pauses cost ~10 s of boot.
-	if (nvxnu_trace_paced())
-		IOSleep(400);
+	IOSleep(400);
 }
 
 extern "C" int nvxnu_trace_paced(void)

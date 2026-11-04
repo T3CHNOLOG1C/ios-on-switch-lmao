@@ -137,40 +137,20 @@ loader_copy_run:
     cmp x1, x0
     b.ne .Lenable_fail
 
-    // Preparation is complete. The callback changes the displayed stage and
-    // records counter time before any payload load/store starts.
+    // Preparation is complete. The callback records counter time before
+    // any payload load/store starts.
     mov x0, #0
     ldr x1, =LOAD_BYTES
     mov x2, x28
     blr x29
-    ldr x25, =LOAD_SOURCE
-    ldr x26, =LOAD_DEST
-    ldr x27, =LOAD_BYTES
-.Lchunk:
-    mov x24, #0x100000
-    cmp x27, x24
-    csel x24, x27, x24, lo
-    mov x12, x24
-.Lcopy:
-    ldp x0, x1, [x25]
-    ldp x2, x3, [x25, #16]
-    ldp x4, x5, [x25, #32]
-    ldp x6, x7, [x25, #48]
-    stp x0, x1, [x26]
-    stp x2, x3, [x26, #16]
-    stp x4, x5, [x26, #32]
-    stp x6, x7, [x26, #48]
-    add x25, x25, #64
-    add x26, x26, #64
-    subs x12, x12, #64
-    b.ne .Lcopy
-    sub x27, x27, x24
-    ldr x1, =LOAD_BYTES
-    sub x0, x1, x27
-    mov x2, x28
-    blr x29
-    cbnz x27, .Lchunk
-    mov x24, #0
+    // The staging copy is packed (the window's nonzero extents back to back):
+    // copy.c expands it into the window and zeroes the rest, in this regime.
+    mov x0, x29
+    mov x1, x28
+    bl loader_copy_payload
+    mov x24, #0x70a
+    cmp w0, #0
+    csel x24, xzr, x24, eq
     b .Lclean
 
 .Lenable_fail:

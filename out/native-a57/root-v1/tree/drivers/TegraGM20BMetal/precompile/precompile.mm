@@ -1,20 +1,28 @@
-// r6-precompile: the shader cache backboardd's Core Animation writes on the Switch, made on this Mac before the boot. Every
-// function specialization (S lines) and render pipeline state (R lines) of the device journals (pipelines.log, the frontend's) is
-// made again through the shipped frontend + m2v (host build of the same sources: same cache build directory) and NVK (host build
-// of the same sources, its LC_UUID set to the iOS dylib's: same pipelineCacheUUID), over the GM20B mock (mock_iokit.c, chipset
-// 0x12e as the T210B01 reports), into an empty cache directory: m2v's translations, its creation answers, and the driver record
-// (NAK's SM53 code) of every pipeline a state's creation makes (m2v makes the pipeline its first draw is predicted to take inside
-// the creation, pipeline/predicted.rs). No draw is needed: on the r3v and r4d boots every driver record the device wrote is one a
-// creation made. Fails (exit 1) when any specialization or state is refused. The journals of every process are harvested
-// (harvest.py), but a journal line does not name its library: a specialization or state of a function QuartzCore's library does
-// not have (Core Image's kernels in iconservicesagent, an app's own library) is another library's, skipped and counted.
+// The shader cache the device's processes write on the Switch, made on this Mac before the boot. Every function specialization
+// (S lines), render pipeline state (R lines) and compute pipeline state (C lines) of the device journals (pipelines.log, the
+// frontend's, merged by harvest.py) is made again through the shipped frontend + m2v (host build of the same sources: same cache
+// build directory) and NVK (host build of the same sources, its LC_UUID set to the iOS dylib's: same pipelineCacheUUID), over the
+// GM20B mock (mock_iokit.c, chipset 0x12e as the T210B01 reports), into an empty cache directory: m2v's translations, its creation
+// answers, and the driver record (NAK's SM53 code) of every pipeline a state's creation makes (m2v makes the pipeline its first
+// draw is predicted to take inside the creation, pipeline/predicted.rs). No draw is needed for Core Animation's states: on the r3v
+// and r4d boots every driver record backboardd wrote is one a creation made.
+//
+// Each function is made from the library the journal names (lib=): a file by its device path, read from the library store
+// (--libs, libraries.py: the 21H461 OS volume's and cryptex's libraries, app bundles' from the Data volume), or a library made from
+// bytes by its SHA-256 (data:<sha>, the frontend's <cache>/libs/ dumps, harvested). A function without lib= is QuartzCore's (the
+// given default.metallib): backboardd's journals from before the journal named libraries. A line whose library the store does not
+// have, or whose function its library lacks, is skipped and counted; one m2v refuses is printed and counted. Fails (exit 1) only
+// when a QuartzCore line is refused: m2v would refuse it on the device too, in the render server.
 // The cache is shared by every process: m2v's names hash the build, the key and the device's profile, none of them per process
 // (r4d-b: iconservicesagent and backboardd wrote the same record names, byte for byte).
-// The last line is the frontend's rates line over the replay (cache=h<hits>/m<misses>/w<writes>, drv=l<driver loads>/...): with a
-// seed beneath an empty cache (METAL2VULKAN_SHADER_CACHE_SEED), every state of the seed shows as a hit and writes nothing.
-// usage: precompile <host libvulkan_nouveau.dylib> <cache dir> <QuartzCore default.metallib> <pipelines.log>...
+// The output: the summary line ("precompile: ..."), one "library" line per library with what was replayed (ok), refused (ref) and
+// skipped (skip) of each kind, then the frontend's rates line over the replay (cache=h<hits>/m<misses>/w<writes>, drv=l<driver
+// loads>/...): with a seed beneath an empty cache (METAL2VULKAN_SHADER_CACHE_SEED), every state of the seed shows as a hit.
+// usage: precompile [--libs <store>] <host libvulkan_nouveau.dylib> <cache dir> <QuartzCore default.metallib> <journal>...
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <map>
+#include <regex>
 #include <set>
 #include <stdio.h>
 #include <string>
@@ -26,15 +34,15 @@ static void missing(const char *cls, const char *sel)
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
 }
 
-static std::vector<std::string> split(const std::string &s)
+static std::vector<std::string> split(const std::string &s, const std::string &by = " ")
 {
     std::vector<std::string> out;
     size_t at = 0;
-    while (at < s.size()) {
-        size_t e = s.find(' ', at);
+    while (at <= s.size()) {
+        size_t e = s.find(by, at);
         if (e == std::string::npos) e = s.size();
         if (e > at) out.push_back(s.substr(at, e - at));
-        at = e + 1;
+        at = e + by.size();
     }
     return out;
 }
@@ -60,56 +68,146 @@ static MTLFunctionConstantValues *constants(const std::vector<std::string> &item
     return v;
 }
 
-// The functions QuartzCore's library has.
-static std::set<std::string> gNames;
-static bool known(const std::vector<std::string> &stage)
+// ---- libraries ----
+static const std::string kQuartzCore = "/System/Library/Frameworks/QuartzCore.framework/default.metallib";
+static std::string gStore, gQuartzCore;
+static id<MTLDevice> gDevice;
+
+// A journal token with its %XX escapes undone (the frontend's journalToken).
+static std::string unescape(const std::string &token)
 {
-    return stage.empty() || stage[0] == "-" || gNames.count(stage[0]);
+    std::string out;
+    for (size_t i = 0; i < token.size(); i++)
+        if (token[i] == '%' && i + 2 < token.size()) {
+            out += (char)strtoul(token.substr(i + 1, 2).c_str(), nullptr, 16);
+            i += 2;
+        } else
+            out += token[i];
+    return out;
 }
 
-// A stage's function as the journal names it: no constants text is -newFunctionWithName: (no S line is written for it), else
-// -newFunctionWithName:constantValues:error: with exactly those values.
-static id<MTLFunction> function(id<MTLLibrary> qc, const std::vector<std::string> &stage)
+// The host file of the library the journal names `id` ("" is QuartzCore's).
+static std::string hostFile(const std::string &id)
 {
-    if (stage.empty() || stage[0] == "-") return nil;
-    if (stage.size() == 1) return [qc newFunctionWithName:@(stage[0].c_str())];
-    NSError *e = nil;
-    id<MTLFunction> f = [qc newFunctionWithName:@(stage[0].c_str())
-                                 constantValues:constants(std::vector<std::string>(stage.begin() + 1, stage.end()))
-                                          error:&e];
-    if (!f) fprintf(stderr, "function %s: %s\n", stage[0].c_str(), e.localizedDescription.UTF8String);
+    std::string path = unescape(id);
+    if (path.rfind("/System/Cryptexes/OS/", 0) == 0) path = path.substr(20);
+    if (path.rfind("/var/", 0) == 0)
+        path = "/private" + path;  // the store keeps the Data volume's paths as /private/var
+    if (path.empty() || path == kQuartzCore) return gQuartzCore;
+    if (path.rfind("data:", 0) == 0) return gStore + "/data/" + path.substr(5) + ".metallib";
+    return gStore + "/root" + path;
+}
+
+struct Library {
+    id<MTLLibrary> library;
+    std::set<std::string> names;
+};
+static std::map<std::string, Library> gLibraries;  // by host file; nil library: none there, or the frontend refused it
+
+static Library &library(const std::string &file)
+{
+    auto found = gLibraries.find(file);
+    if (found != gLibraries.end()) return found->second;
+    Library &l = gLibraries[file];
+    NSError *error = nil;
+    if (access(file.c_str(), R_OK) == 0) {
+        l.library = [gDevice newLibraryWithURL:[NSURL fileURLWithPath:@(file.c_str())] error:&error];
+        if (!l.library) fprintf(stderr, "library %s: %s\n", file.c_str(), error.localizedDescription.UTF8String);
+        for (NSString *name in l.library.functionNames) l.names.insert(name.UTF8String);
+    }
+    return l;
+}
+
+// A stage as the journal writes it (the frontend's stageText): the name, lib=<library>, "spec" for a specialization with no
+// constants, then the constants.
+struct Stage {
+    std::string name, file;
+    bool specialized = false;
+    std::vector<std::string> constants;
+};
+static Stage stage(const std::string &text)
+{
+    Stage s;
+    std::vector<std::string> tokens = split(text);
+    if (tokens.empty()) return s;
+    s.name = tokens[0];
+    std::string id;
+    for (size_t i = 1; i < tokens.size(); i++)
+        if (tokens[i].rfind("lib=", 0) == 0)
+            id = tokens[i].substr(4);
+        else if (tokens[i] == "spec")
+            s.specialized = true;
+        else
+            s.constants.push_back(tokens[i]);
+    s.file = hostFile(id);
+    s.specialized = s.specialized || !s.constants.empty();
+    return s;
+}
+
+// What became of a line, counted per library (the vertex function's, the kernel's) and kind.
+enum Outcome { Made, Refused, NoLibrary, NoFunction };
+struct Counts {
+    unsigned made = 0, refused = 0, skipped = 0;
+};
+static std::map<std::string, std::map<char, Counts>> gCounts;
+static bool gQuartzCoreRefused = false;
+static void count(const std::string &file, char kind, Outcome outcome, const std::string &what, NSError *error)
+{
+    Counts &c = gCounts[file][kind];
+    if (outcome == Made) c.made++;
+    if (outcome == NoLibrary || outcome == NoFunction) c.skipped++;
+    if (outcome == Refused) {
+        c.refused++;
+        gQuartzCoreRefused = gQuartzCoreRefused || file == gQuartzCore;
+        fprintf(stderr, "REFUSED %c %s (%s): %s\n", kind, what.c_str(), file.c_str(),
+                error.localizedDescription.UTF8String ?: "a function");
+    }
+}
+
+// The stage's function: newFunctionWithName: where the journal gives no constants and no "spec", else
+// newFunctionWithName:constantValues:error: with exactly its constants. Nil with `outcome` when it cannot be made.
+static id<MTLFunction> function(const Stage &s, Outcome &outcome, NSError **error)
+{
+    Library &l = library(s.file);
+    if (!l.library) {
+        outcome = NoLibrary;
+        return nil;
+    }
+    if (!l.names.count(s.name)) {
+        outcome = NoFunction;
+        return nil;
+    }
+    id<MTLFunction> f = s.specialized ? [l.library newFunctionWithName:@(s.name.c_str())
+                                                        constantValues:constants(s.constants)
+                                                                 error:error]
+                                      : [l.library newFunctionWithName:@(s.name.c_str())];
+    outcome = f ? Made : Refused;
     return f;
 }
 
-struct State {
-    std::string key, label;
-    MTLRenderPipelineDescriptor *d;
-    id<MTLRenderPipelineState> state;
-};
-
-// An R line's descriptor (frontend journalRenderPipeline): samples, topology class, depth/stencil formats, label, color
+// ---- lines ----
+// An R line's descriptor (frontend journalRenderPipeline): samples, topology class, depth/stencil formats, options, label, color
 // attachments (format:writeMask:blend:srcRGB:dstRGB:opRGB:srcA:dstA:opA), vertex attributes (format:offset:buffer:stride:step:rate),
-// then both functions with their constants. False for a malformed line; `foreign` when a function is another library's.
-static bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, bool &foreign)
+// then both functions. The outcome, counted under the vertex function's library.
+static Outcome renderState(const std::string &line, std::string &file, std::string &label)
 {
-    size_t bar1 = line.find(" | v "), bar2 = line.find(" | f "), bar3 = line.find(" | ", bar2 + 5);
-    if (bar1 == std::string::npos || bar2 == std::string::npos) return false;
-    std::vector<std::string> head = split(line.substr(0, bar1));
-    std::vector<std::string> v = split(line.substr(bar1 + 5, bar2 - bar1 - 5));
-    std::vector<std::string> f =
-        split(line.substr(bar2 + 5, (bar3 == std::string::npos ? line.size() : bar3) - bar2 - 5));
-    if ((foreign = !known(v) || !known(f))) return false;
+    std::vector<std::string> parts = split(line, " | ");
+    if (parts.size() < 3 || parts[1].rfind("v ", 0) != 0 || parts[2].rfind("f ", 0) != 0) return Refused;
+    Stage v = stage(parts[1].substr(2)), f = stage(parts[2].substr(2));
+    file = v.file;
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     MTLVertexDescriptor *vd = nil;
-    std::string key;
-    for (const std::string &h : head) {
+    MTLPipelineOption options = MTLPipelineOptionNone;
+    for (const std::string &h : split(parts[0])) {
         if (h.rfind("label=", 0) == 0) {
-            s.label = h.substr(6);
-            if (s.label != "-") d.label = @(s.label.c_str());
+            label = h.substr(6);
+            if (label != "-") d.label = @(label.c_str());
         } else if (h.rfind("samples=", 0) == 0)
             d.rasterSampleCount = strtoul(h.c_str() + 8, nullptr, 10);
         else if (h.rfind("topo=", 0) == 0)
             d.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)strtoul(h.c_str() + 5, nullptr, 10);
+        else if (h.rfind("opt=", 0) == 0)
+            options = (MTLPipelineOption)strtoull(h.c_str() + 4, nullptr, 10);
         else if (h.rfind("ds=", 0) == 0) {
             unsigned a = 0, b = 0;
             sscanf(h.c_str() + 3, "%u/%u", &a, &b);
@@ -143,49 +241,119 @@ static bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, boo
             vd.layouts[x[2]].stride = x[3];
             vd.layouts[x[2]].stepFunction = (MTLVertexStepFunction)x[4];
             vd.layouts[x[2]].stepRate = x[5];
-        } else
-            continue;
-        if (h.rfind("label=", 0) != 0) key += h + " ";
+        }
     }
     d.vertexDescriptor = vd;
-    d.vertexFunction = function(qc, v);
-    d.fragmentFunction = function(qc, f);
-    if (!d.vertexFunction || (!d.fragmentFunction && !f.empty() && f[0] != "-")) return false;
-    s.key = key + line.substr(bar1, (bar3 == std::string::npos ? line.size() : bar3) - bar1);
-    s.d = d;
-    return true;
+    Outcome outcome = Made;
+    NSError *error = nil;
+    d.vertexFunction = function(v, outcome, &error);
+    if (outcome != Made) return outcome;
+    if (f.name != "-") {
+        d.fragmentFunction = function(f, outcome, &error);
+        if (outcome != Made) return outcome;
+    }
+    if (![gDevice newRenderPipelineStateWithDescriptor:d options:options reflection:nil error:&error]) {
+        fprintf(stderr, "render state %s: %s\n", label.c_str(), error.localizedDescription.UTF8String);
+        return Refused;
+    }
+    return Made;
+}
+
+// A C line (frontend journalComputePipeline): made from its kernel alone (form=f) or from a descriptor (form=d: its fields, the
+// kernel k, visible linked functions l and private ones p), with its options. The outcome, counted under the kernel's library.
+static Outcome computeState(const std::string &line, std::string &file, std::string &label)
+{
+    std::vector<std::string> parts = split(line, " | ");
+    std::map<std::string, std::string> fields;
+    for (const std::string &h : split(parts.empty() ? std::string() : parts[0])) {
+        size_t eq = h.find('=');
+        if (eq != std::string::npos) fields[h.substr(0, eq)] = h.substr(eq + 1);
+    }
+    label = fields.count("label") ? unescape(fields["label"]) : "-";
+    std::vector<Stage> linked, hidden;
+    Stage kernel;
+    for (size_t i = 1; i < parts.size(); i++) {
+        const std::string &p = parts[i];
+        if (p.rfind("k ", 0) == 0) kernel = stage(p.substr(2));
+        if (p.rfind("l ", 0) == 0) linked.push_back(stage(p.substr(2)));
+        if (p.rfind("p ", 0) == 0) hidden.push_back(stage(p.substr(2)));
+    }
+    file = kernel.file;
+    if (kernel.name.empty()) return Refused;
+    Outcome outcome = Made;
+    NSError *error = nil;
+    id<MTLFunction> k = function(kernel, outcome, &error);
+    if (outcome != Made) return outcome;
+    const MTLPipelineOption options = (MTLPipelineOption)strtoull(fields["opt"].c_str(), nullptr, 10);
+    id<MTLComputePipelineState> state = nil;
+    if (fields["form"] != "d")
+        state = [gDevice newComputePipelineStateWithFunction:k options:options reflection:nil error:&error];
+    else {
+        MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
+        d.computeFunction = k;
+        if (label != "-") d.label = @(label.c_str());
+        d.maxTotalThreadsPerThreadgroup = strtoul(fields["max"].c_str(), nullptr, 10);
+        d.threadGroupSizeIsMultipleOfThreadExecutionWidth = fields["tgm"] == "1";
+        d.supportIndirectCommandBuffers = fields["icb"] == "1";
+        d.maxCallStackDepth = strtoul(fields["depth"].c_str(), nullptr, 10);
+        d.supportAddingBinaryFunctions = fields["abf"] == "1";
+        const std::string &mutability = fields["mut"];
+        for (size_t i = 0; i < 31 && i < mutability.size(); i++)
+            d.buffers[i].mutability = (MTLMutability)(mutability[i] - '0');
+        NSMutableArray *visible = [NSMutableArray array], *private_ = [NSMutableArray array];
+        for (auto &[stages, into] :
+             std::vector<std::pair<std::vector<Stage> *, NSMutableArray *>>{{&linked, visible}, {&hidden, private_}})
+            for (const Stage &s : *stages) {
+                id<MTLFunction> f = function(s, outcome, &error);
+                if (outcome != Made) return outcome;
+                [into addObject:f];
+            }
+        if (visible.count || private_.count) {
+            MTLLinkedFunctions *functions = [MTLLinkedFunctions linkedFunctions];
+            functions.functions = visible;
+            functions.privateFunctions = private_;
+            d.linkedFunctions = functions;
+        }
+        state = [gDevice newComputePipelineStateWithDescriptor:d options:options reflection:nil error:&error];
+    }
+    if (!state) {
+        fprintf(stderr, "compute state %s %s: %s\n", kernel.name.c_str(), label.c_str(),
+                error.localizedDescription.UTF8String);
+        return Refused;
+    }
+    return Made;
 }
 
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 5) {
-            fprintf(stderr, "usage: precompile <nvk dylib> <cache dir> <default.metallib> <pipelines.log>...\n");
+        int first = 1;
+        if (argc > 2 && !strcmp(argv[1], "--libs")) {
+            gStore = argv[2];
+            first = 3;
+        }
+        if (argc - first < 4) {
+            fprintf(
+                stderr,
+                "usage: precompile [--libs <store>] <nvk dylib> <cache dir> <default.metallib> <pipelines.log>...\n");
             return 2;
         }
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
         setenv("NVK_DARWIN_SERVICE", "AGXAccelerator", 0);
-        id<MTLDevice> dev = native_bridge_metal_open(argv[1], argv[2], 0, missing);
-        if (!dev) {
+        gDevice = native_bridge_metal_open(argv[first], argv[first + 1], 0, missing);
+        if (!gDevice) {
             fprintf(stderr, "NO DEVICE: %s\n", nmb_last_error());
             return 1;
         }
-        NSError *error = nil;
-        id<MTLLibrary> qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
-        if (!qc) {
-            fprintf(stderr, "library: %s\n", error.localizedDescription.UTF8String);
-            return 1;
-        }
-        for (NSString *name in qc.functionNames) gNames.insert(name.UTF8String);
+        gQuartzCore = argv[first + 2];
+        if (!library(gQuartzCore).library) return 1;
         char rates[1024];
         native_bridge_metal_rates(rates, sizeof rates);  // the replay's rates start here
 
-        // The journals, oldest first: each specialization and state once, in the order the device first made it.
-        std::vector<std::pair<std::string, std::vector<std::string>>> specializations;
-        std::set<std::string> seenS, seenR;
-        unsigned foreignS = 0, foreignR = 0;
-        std::vector<std::string> stateLines;
-        for (int a = 4; a < argc; a++) {
+        // The journals, oldest first: each line once, in the order the device first made it; specializations first.
+        std::vector<std::string> lines[3];  // S, R, C
+        std::set<std::string> seen;
+        for (int a = first + 3; a < argc; a++) {
             NSString *text = [NSString stringWithContentsOfFile:@(argv[a]) encoding:NSUTF8StringEncoding error:nil];
             if (!text)
                 text = [NSString stringWithContentsOfFile:@(argv[a]) encoding:NSISOLatin1StringEncoding error:nil];
@@ -195,64 +363,59 @@ int main(int argc, char **argv)
             }
             for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
                 std::string line = l.UTF8String ?: "";
-                if (line.find(" ok=1 ") == std::string::npos) continue;
-                if (line.rfind("S ", 0) == 0) {
-                    size_t n = line.find(" name="), k = line.find(" k="),
+                const char *kinds = "SRC";
+                const char *kind = line.size() > 2 && line[1] == ' ' ? strchr(kinds, line[0]) : nullptr;
+                if (!kind || line.find(" ok=1 ") == std::string::npos) continue;
+                // Deduplicated by what the line makes: without its time, thread, costs, label and callers.
+                std::string key;
+                for (const std::string &p : split(line, " | "))
+                    if (p.rfind("qc ", 0) != 0) key += p + " | ";
+                key = std::regex_replace(key, std::regex(" (t|tid|main|us|cpu|sys|flt|pin|csw|label)=\\S*"), "");
+                if (seen.insert(key).second) lines[kind - kinds].push_back(line);
+            }
+        }
+        unsigned made[3] = {}, refused[3] = {}, skipped[3] = {};
+        double ms[3] = {};
+        for (int kind = 0; kind < 3; kind++) {
+            const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+            for (const std::string &line : lines[kind]) {
+                std::string file, label;
+                Outcome outcome;
+                NSError *error = nil;
+                if (kind == 0) {
+                    size_t n = line.find(" name="), k = line.find(" k=", n == std::string::npos ? 0 : n),
                            bar = line.find(" | ", k == std::string::npos ? 0 : k);
                     if (n == std::string::npos || k == std::string::npos) continue;
-                    if (!gNames.count(line.substr(n + 6, k - n - 6))) {
-                        foreignS++;
-                        continue;
-                    }
-                    std::string name = line.substr(n + 6, k - n - 6),
-                                items = line.substr(k + 3, (bar == std::string::npos ? line.size() : bar) - k - 3);
-                    if (seenS.insert(name + " " + items).second) specializations.push_back({name, split(items)});
-                } else if (line.rfind("R ", 0) == 0) {
-                    stateLines.push_back(line);
-                }
+                    size_t lib = line.rfind(" lib=", n);
+                    Stage s =
+                        stage(line.substr(n + 6, k - n - 6) +
+                              (lib == std::string::npos ? std::string() : " " + line.substr(lib + 1, n - lib - 1)) +
+                              " spec " + line.substr(k + 3, (bar == std::string::npos ? line.size() : bar) - k - 3));
+                    file = s.file;
+                    label = s.name;
+                    function(s, outcome, &error);
+                } else
+                    outcome = kind == 1 ? renderState(line, file, label) : computeState(line, file, label);
+                count(file, "SRC"[kind], outcome, label, error);
+                (outcome == Made ? made : outcome == Refused ? refused : skipped)[kind]++;
             }
+            ms[kind] = (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1e6;
         }
-        const uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-        unsigned functions = 0, functionFailures = 0;
-        for (auto &s : specializations) {
-            NSError *e = nil;
-            id<MTLFunction> f = [qc newFunctionWithName:@(s.first.c_str()) constantValues:constants(s.second) error:&e];
-            if (f)
-                functions++;
-            else {
-                functionFailures++;
-                fprintf(stderr, "specialization %s: %s\n", s.first.c_str(), e.localizedDescription.UTF8String);
-            }
+        printf("precompile: %u specializations (%u failed) in %.0f ms, %u states (%u refused) in %.0f ms, %u compute "
+               "states (%u refused) in %.0f ms; skipped (library or function not in the store): %u/%u/%u\n",
+               made[0], refused[0], ms[0], made[1], refused[1], ms[1], made[2], refused[2], ms[2], skipped[0],
+               skipped[1], skipped[2]);
+        for (auto &[file, kinds] : gCounts) {
+            std::string name = file == gQuartzCore ? "QuartzCore (default)" : file;
+            if (!gStore.empty() && name.rfind(gStore, 0) == 0) name = name.substr(gStore.size() + 1);
+            printf("library %-90s", name.c_str());
+            for (char kind : std::string("SRC"))
+                if (kinds.count(kind))
+                    printf(" %c ok=%u ref=%u skip=%u", kind, kinds[kind].made, kinds[kind].refused,
+                           kinds[kind].skipped);
+            printf("%s\n", library(file).library ? "" : " (not in the store)");
         }
-        const uint64_t t1 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-        std::vector<State> states;
-        unsigned refused = 0;
-        for (const std::string &line : stateLines) {
-            State s;
-            bool foreign = false;
-            if (!parseState(qc, line, s, foreign)) {
-                if (foreign)
-                    foreignR++;
-                else
-                    refused++;
-                continue;
-            }
-            if (!seenR.insert(s.key).second) continue;
-            s.state = [dev newRenderPipelineStateWithDescriptor:s.d error:&error];
-            if (!s.state) {
-                refused++;
-                fprintf(stderr, "REFUSED %s: %s\n", s.label.c_str(), error.localizedDescription.UTF8String);
-                continue;
-            }
-            states.push_back(s);
-        }
-        const uint64_t t2 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-        printf("precompile: %u specializations (%u failed) in %.0f ms, %zu states (%u refused) in %.0f ms; other "
-               "libraries' lines "
-               "skipped: %u specializations, %u states\n",
-               functions, functionFailures, (t1 - t0) / 1e6, states.size(), refused, (t2 - t1) / 1e6, foreignS,
-               foreignR);
         if (native_bridge_metal_rates(rates, sizeof rates)) printf("rates: %s\n", rates);
-        return functionFailures || refused ? 1 : 0;
+        return gQuartzCoreRefused ? 1 : 0;
     }
 }

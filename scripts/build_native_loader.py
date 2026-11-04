@@ -38,6 +38,38 @@ NATIVE_FULL_RAM_EXCLUSIONS = [r for r in NATIVE_EXCLUSIONS if r[0] != 'retained-
     ('framebuffer',0xF5A00000,0x400000), ('secure-low-tail',0xFFD00000,0x300000),
 ]
 
+# The cacheable-copy loader ships the window packed: only its nonzero extents (4 KiB granular; zero gaps shorter than
+# 64 KiB stay in an extent), back to back. Over half the window is zeros (the VA holes between prelinked segments), and
+# U-Boot reads the file from FAT at ~20 MB/s; the loader writes the zeros itself during its cached copy.
+PACK_PAGE = 0x1000
+PACK_MIN_GAP = 0x10000
+
+
+def pack_window(payload: bytes) -> tuple[list[tuple[int, int]], bytes]:
+    """The payload's nonzero extents as (offset, bytes) and their bytes back to back; checked by expanding them again."""
+    zero, runs, offset = bytes(PACK_PAGE), [], 0
+    while offset < len(payload):
+        if payload[offset:offset + PACK_PAGE] == zero[:len(payload) - offset]:
+            offset += PACK_PAGE
+            continue
+        start = offset
+        while offset < len(payload) and payload[offset:offset + PACK_PAGE] != zero[:len(payload) - offset]:
+            offset += PACK_PAGE
+        end = min(offset, len(payload))
+        if runs and start - (runs[-1][0] + runs[-1][1]) < PACK_MIN_GAP:
+            runs[-1] = (runs[-1][0], end - runs[-1][0])
+        else:
+            runs.append((start, end - start))
+    packed = b''.join(payload[start:start + size] for start, size in runs)
+    expanded, at = bytearray(len(payload)), 0
+    for start, size in runs:
+        expanded[start:start + size] = packed[at:at + size]
+        at += size
+    if expanded != payload:
+        raise ValueError('packed kernel window does not expand to the layout image')
+    return runs, packed
+
+
 def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
           storage_probe: bool = False, storage_files: bool = False,
           root_boot: bool = False, inherited_adt_source: dict | None = None) -> dict:
@@ -191,7 +223,8 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     fast_copy = native_experiment and root_boot
     if fast_copy and len(payload) % 0x1000:
         raise ValueError('native cacheable copy requires a page-aligned payload')
-    constants = {'SOURCE': SOURCE, 'DEST': m['phys_base'], 'BYTES': len(payload),
+    runs, packed = pack_window(payload) if fast_copy else ([], payload)
+    constants = {'SOURCE': SOURCE, 'DEST': m['phys_base'], 'BYTES': len(payload), 'PACKED_BYTES': len(packed),
                  'ARGS': m['boot_args_pa'], 'ENTRY': m['entry_pa'],
                  'CRC': 0 if root_boot else zlib.crc32(payload), 'VERIFY_KERNEL': int(not root_boot),
                  'VIRT': m['virt_base'], 'ADT_PA': m['adt_pa'],
@@ -207,6 +240,15 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     header = ''.join(f'#define LOAD_{k} UINT64_C(0x{v:x})\n' for k, v in constants.items())
     output.mkdir(parents=True)
     (output / 'layout.h').write_text(header)
+    if fast_copy:
+        # copy.c's table of the packed file's extents; the file itself is what the boot script loads at SOURCE.
+        (output / 'runs.h').write_text(
+            '/* Generated: the kernel window\'s nonzero extents (offset, bytes) in order, stored back to back in the\n'
+            ' * packed kernel-window.bin; everything else in the window is zero. */\n'
+            f'#define LOAD_RUN_COUNT {len(runs)}u\n'
+            'static const uint64_t loader_runs[LOAD_RUN_COUNT][2] = {\n' +
+            ''.join(f'    {{UINT64_C(0x{start:x}), UINT64_C(0x{size:x})}},\n' for start, size in runs) + '};\n')
+        (output / 'kernel-window.bin').write_bytes(packed)
     commands = []
     sources = [ROOT/'native/loader/entry.S', ROOT/'native/loader/loader.c', ROOT/'native/loader/memory.c', ROOT/'native/handoff/probe.c']
     linker = ROOT / ('native/loader/link.ld' if fast_copy else 'native/handoff/link.ld')
@@ -223,7 +265,9 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     objects = []
     for i, source in enumerate(sources):
         obj = output / f'part-{i}.o'; objects.append(obj)
-        commands.append([tool('clang'), *BUILD_FLAGS, '-I', str(output), '-I', str(ROOT/'native/loader'), '-I', str(ROOT/'native/handoff'), '-I', str(ROOT/'native/storage'),
+        # PROBE_QUIET: the shared handoff probe draws nothing and skips its FDT CRC/walk unless it refuses (the loader
+        # checks the FDT itself); everything before the copy runs with the caches off.
+        commands.append([tool('clang'), *BUILD_FLAGS, '-DPROBE_QUIET=1', '-I', str(output), '-I', str(ROOT/'native/loader'), '-I', str(ROOT/'native/handoff'), '-I', str(ROOT/'native/storage'),
                          '-c', str(source), '-o', str(obj)])
     elf = output / 'loader.elf'
     commands.append([tool('ld.lld'), '-T', str(linker), '-o', str(elf), *map(str, objects)])
@@ -257,8 +301,9 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
               'sources': source_hashes, 'build_commands': commands,
               'files': {name: {'size_bytes': (output/name).stat().st_size,
                               'sha256': hashlib.sha256((output/name).read_bytes()).hexdigest()}
-                        for name in ('loader.bin','loader.elf','layout.h')},
-              'temporary_ranges': [{'name': 'staging', 'start': SOURCE, 'size': len(payload), 'lifetime': 'before XNU entry'},
+                        for name in ('loader.bin','loader.elf','layout.h') + (('kernel-window.bin',) if fast_copy else ())},
+              'packed_runs': [[start, size] for start, size in runs],
+              'temporary_ranges': [{'name': 'staging', 'start': SOURCE, 'size': len(packed), 'lifetime': 'before XNU entry'},
                                    {'name': 'adapter_and_stacks', 'start': 0xA0000000, 'size': 0x20000, 'lifetime': 'before XNU entry'}]}
     (output/'manifest.json').write_text(json.dumps(result, indent=2)+'\n')
     return result

@@ -171,7 +171,6 @@ bool gLinkAnnounced;  // wifid was told the link is up (an association) and not 
 uint32_t gRxFrames, gRxErrors, gRxNoBuffer, gTxOversize, gTxRefused;
 int gAssocResult = kAssocOk;
 unsigned gScanCursor, gScanning;
-uint32_t gLogged[256 / 32];
 
 // ---- events to the framework: class IEEE 802.11 (6), subclass 1, data starting with the interface name ----------
 void post_event(uint32_t code, const void *payload, size_t length)
@@ -737,14 +736,7 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data)
         if (!(__atomic_load_n(&gAnnounced, __ATOMIC_RELAXED) & kAnnounceRequest)) report_busy();
         announce_attached(kAnnounceRequest);
         apple80211req *rq = static_cast<apple80211req *>(data);
-        const int e = apple80211(cmd == SIOCSA80211, *rq);
-        // Each request type once, with its answer: what wifid needs shows on the console.
-        const int type = rq->req_type;
-        if (type >= 0 && type < 256 && !(gLogged[type / 32] & (1u << (type % 32)))) {
-            gLogged[type / 32] |= 1u << (type % 32);
-            IOLog("SwitchWLAN: Apple80211 %s type %d -> %d\n", cmd == SIOCSA80211 ? "set" : "get", type, e);
-        }
-        return e;
+        return apple80211(cmd == SIOCSA80211, *rq);
     }
     case SIOCGIFMEDIA64: {  // (the stack hands SIOCGIFXMEDIA over as this too)
         struct ifmediareq64 *m = static_cast<struct ifmediareq64 *>(data);
