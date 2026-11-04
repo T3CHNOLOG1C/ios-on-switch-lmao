@@ -158,8 +158,8 @@ XHCI_SLOTS = 299
 XHCI_SIZE = 0xe48
 # Mach-O headers of the original kexts the bound code lives in (prelink info _PrelinkExecutableLoadAddr).
 XHCI_KEXTS = {'com.apple.driver.usb.AppleUSBXHCI': 0xfffffff0053a5cc0, 'com.apple.iokit.IOUSBHostFamily': 0xfffffff005383600}
-# Ours: destructors, getMetaClass, free, start, stop, copyMapper, regRead32, regWrite32, regWrite64.
-XHCI_OWN = {0, 1, 7, 14, 86, 87, 253, 290, 292, 293}
+# Ours: destructors, getMetaClass, free, start, stop, copyMapper, regRead32, regRead64, regWrite32, regWrite64.
+XHCI_OWN = {0, 1, 7, 14, 86, 87, 253, 290, 291, 292, 293}
 # Bound by name and called by our code: (symbol, original slot or None, address or None = the slot's entry).
 XHCI_CODE = [
     ('__ZN12AppleUSBXHCIC2EPK11OSMetaClass', None, 0xfffffff005ebdb40),   # AppleUSBHostController C2 + vtable store
@@ -168,6 +168,7 @@ XHCI_CODE = [
     ('__ZN12AppleUSBXHCI4stopEP9IOService', 87, None),                    # AppleUSBHostController::stop
     ('__ZN12AppleUSBXHCI4freeEv', 14, 0xfffffff005ec0808),
     ('__ZN12AppleUSBXHCI9regRead32Eyj', 290, 0xfffffff005ecf41c),         # add x0, x1, w2, uxtw; b ml_io_read32
+    ('__ZN12AppleUSBXHCI9regRead64Eyj', 291, 0xfffffff005ecf424),         # add x0, x1, w2, uxtw; b ml_io_read64
     ('__ZN12AppleUSBXHCI10regWrite32Eyjj', 292, 0xfffffff005ecf42c),      # ...; b ml_io_write32
     ('__ZN12AppleUSBXHCI10regWrite64Eyjy', 293, 0xfffffff005ecf438),      # ...; b ml_io_write64
     ('__ZN12AppleUSBXHCI10copyMapperEv', 253, 0xfffffff005e204f0),         # AppleUSBHostController::copyMapper
@@ -175,6 +176,7 @@ XHCI_CODE = [
 XHCI_PINNED = {  # first instruction words of bound code (little-endian hex)
     0xfffffff005ebdb40: 'fd7bbfa9fd030091',   # stp x29, x30, [sp, #-16]!; mov x29, sp
     0xfffffff005ecf41c: '2040228b',           # add x0, x1, w2, uxtw
+    0xfffffff005ecf424: '2040228b',
     0xfffffff005ecf42c: '2040228be10303aa',   # add x0, x1, w2, uxtw; mov x1, x3
     0xfffffff005ecf438: '2040228be10303aa',
     0xfffffff005e204f0: '004440f9',           # ldr x0, [x0, #136] (then b IOMapper::copyMapperForDevice)

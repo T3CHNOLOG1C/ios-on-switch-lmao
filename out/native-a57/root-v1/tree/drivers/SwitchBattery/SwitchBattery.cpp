@@ -18,8 +18,9 @@
 // capacity LSB 0.5 mAh, current LSB 156.25 uA (positive = charging), VCELL LSB 0.625 mV
 // (bits 15:3), TEMP s16 1/256 C, RepSOC 1/256 %, Cycles 1 % of a cycle (datasheet).
 // The charger and PD controller are only read; charge current, input limit and the BQ24193
-// I2C watchdog stay as firmware left them. The one exception is switch_battery_set_otg_boost() (USB host mode,
-// drivers/SwitchUSB): REG01's CHG_CONFIG and BOOST_LIM, saved and put back as they were. The gauge's alert is armed as Linux max17042_battery.c
+// I2C watchdog stay as firmware left them. The one exception is REG01's CHG_CONFIG (and BOOST_LIM): charge mode at
+// start, whatever an earlier boot left (an OTG boost left on blocks charging), and switch_battery_set_otg_boost() for
+// SwitchPD's VBUS to a sink-only partner. The gauge's alert is armed as Linux max17042_battery.c
 // does (max17042_set_soc_threshold, max17042_thread_handler): CONFIG.Aen, an SOC window of +-1 %
 // around the current RepSOC, re-centred on every reading, STATUS alert bits cleared (POR, BST kept).
 #include <IOKit/IOLib.h>
@@ -68,10 +69,12 @@ enum : uint8_t {
 // BQ24193 registers and REG08 fields.
 enum : uint8_t { InputSource = 0x00, PowerOnConfig = 0x01, SystemStatus = 0x08, VendorPart = 0x0a };
 constexpr uint8_t kPowerGood = 1u << 2;
+constexpr unsigned kVbusUsbHost = 1, kVbusAdapter = 2;   // REG08 VBUS_STAT (7:6): an input on VBUS
 constexpr uint16_t kStatusKeep = (1u << 1) | (1u << 3);  // POR, BST; the rest are alert flags
 constexpr uint16_t kConfigAen = 1u << 2;
 // REG01 (bq2419x-charger.c bq2419x_vbus_enable): CHG_CONFIG 5:4 (01 charge, 10 OTG boost), BOOST_LIM 0 (1 = 1.3 A).
-constexpr uint8_t kChgConfigMask = 3u << 4, kChgConfigOtg = 2u << 4, kBoostLim1300 = 1u << 0;
+constexpr uint8_t kChgConfigMask = 3u << 4, kChgConfigCharge = 1u << 4, kChgConfigOtg = 2u << 4,
+                  kBoostLim1300 = 1u << 0;
 // BM92T36 registers (hekate bm92t36.c); state registers only, ALERT_STATUS is SwitchPD's.
 enum : uint8_t { PDStatus1 = 0x03, PDCurrentPDO = 0x28 };
 
@@ -170,6 +173,44 @@ OSDictionary *adapterDetails(bool external, uint8_t inputSource, uint8_t status)
         text->release();
     }
     return dict;
+}
+
+// REG01's writers (the start-up charge mode, switch_battery_set_otg_boost) under one lock, created on first use.
+IOLock *gBoostLock;
+bool gBoosting;  // this boot's boost is on
+
+IOLock *boostLock()
+{
+    IOLock *lock = __atomic_load_n(&gBoostLock, __ATOMIC_ACQUIRE);
+    if (lock) return lock;
+    IOLock *fresh = IOLockAlloc(), *none = nullptr;
+    if (!fresh) return nullptr;
+    if (__atomic_compare_exchange_n(&gBoostLock, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return fresh;
+    IOLockFree(fresh);
+    return none;
+}
+
+// Start-up: CHG_CONFIG to charge unless this boot's own boost is on. An earlier boot that rebooted with its OTG boost
+// on (or anything else in REG01) must not keep the battery from charging. One line when it changes something.
+void chargeModeAtStart()
+{
+    IOLock *lock = boostLock();
+    if (!lock) return;
+    IOLockLock(lock);
+    uint8_t reg = 0, next = 0;
+    int err = tegra_i2c_read(kBus, kCharger, PowerOnConfig, &reg, 1);
+    const bool change = !err && !gBoosting && (reg & kChgConfigMask) != kChgConfigCharge;
+    if (change) {
+        next = (uint8_t)((reg & ~kChgConfigMask) | kChgConfigCharge);
+        err = tegra_i2c_write(kBus, kCharger, PowerOnConfig, &next, 1);
+    }
+    IOLockUnlock(lock);
+    if (err) {
+        IOLog("SwitchBattery: charge mode check failed (I2C %d)\n", err);
+    } else if (change) {
+        IOLog("SwitchBattery: charger was left with CHG_CONFIG %u (REG01 %#x), now charge (REG01 %#x)\n",
+              (reg & kChgConfigMask) >> 4, reg, next);
+    }
 }
 
 int readAll(Reading *r)
@@ -291,7 +332,10 @@ bool SwitchBattery::identify()
     int err = tegra_i2c_init(kBus);
     if (!err) err = tegra_i2c_read(kBus, kGauge, DevName, name, sizeof(name));
     if (!err) err = tegra_i2c_read(kBus, kCharger, VendorPart, &vendor, 1);
-    if (!err && (name[0] | name[1] << 8) == 0x00ac && vendor == 0x2f) return true;
+    if (!err && (name[0] | name[1] << 8) == 0x00ac && vendor == 0x2f) {
+        chargeModeAtStart();
+        return true;
+    }
     if (!reportedFailure) {
         IOLog("SwitchBattery: MAX17050/BQ24193 not found on I2C1 (err %d, dev 0x%02x%02x, vendor 0x%02x)\n", err,
               name[1], name[0], vendor);
@@ -422,38 +466,27 @@ extern "C" int switch_battery_start(void)
     return 0;
 }
 
-// USB host mode's VBUS (drivers/SwitchUSB): the BQ24193 boost on (CHG_CONFIG 10, BOOST_LIM 1.3 A, as Linux
-// bq2419x_vbus_enable) or back to what REG01 held before. The one writer of REG01. Thread context.
+// VBUS for a sink-only partner (drivers/SwitchUSB/SwitchPD; SwitchBattery.h). Thread context.
 extern "C" int switch_battery_set_otg_boost(bool on)
 {
-    static IOLock *lock;
-    static bool boosting;
-    static uint8_t saved;
-    if (!lock) {
-        IOLock *fresh = IOLockAlloc(), *none = nullptr;
-        if (!fresh) return -1;
-        if (!__atomic_compare_exchange_n(&lock, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-            IOLockFree(fresh);
-    }
+    IOLock *lock = boostLock();
+    if (!lock) return -1;
     IOLockLock(lock);
-    int err = 0;
-    if (on != boosting) {
-        uint8_t reg = 0;
-        err = tegra_i2c_init(kBus);
-        if (!err) err = tegra_i2c_read(kBus, kCharger, PowerOnConfig, &reg, 1);
-        if (!err) {
-            uint8_t next;
-            if (on) {
-                saved = reg & (kChgConfigMask | kBoostLim1300);
-                next = (uint8_t)((reg & ~(kChgConfigMask | kBoostLim1300)) | kChgConfigOtg | kBoostLim1300);
-            } else {
-                next = (uint8_t)((reg & ~(kChgConfigMask | kBoostLim1300)) | saved);
-            }
-            err = tegra_i2c_write(kBus, kCharger, PowerOnConfig, &next, 1);
-        }
-        if (!err) boosting = on;
+    uint8_t status = 0, reg = 0;
+    bool refused = false;
+    int err = tegra_i2c_init(kBus);
+    if (!err && on && !gBoosting) {
+        err = tegra_i2c_read(kBus, kCharger, SystemStatus, &status, 1);
+        refused = !err && ((status & kPowerGood) || (status >> 6) == kVbusUsbHost || (status >> 6) == kVbusAdapter);
+    }
+    if (!err && !refused) err = tegra_i2c_read(kBus, kCharger, PowerOnConfig, &reg, 1);
+    if (!err && !refused) {
+        const uint8_t next = on ? (uint8_t)((reg & ~(kChgConfigMask | kBoostLim1300)) | kChgConfigOtg | kBoostLim1300)
+                                : (uint8_t)((reg & ~kChgConfigMask) | kChgConfigCharge);
+        if (next != reg) err = tegra_i2c_write(kBus, kCharger, PowerOnConfig, &next, 1);
+        if (!err) gBoosting = on;
     }
     IOLockUnlock(lock);
     if (err) IOLog("SwitchBattery: OTG boost %s failed (I2C %d)\n", on ? "on" : "off", err);
-    return err ? -1 : 0;
+    return err ? -1 : refused ? SWITCH_BATTERY_BOOST_VBUS_PRESENT : 0;
 }

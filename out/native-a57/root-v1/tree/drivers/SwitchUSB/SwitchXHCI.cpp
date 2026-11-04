@@ -11,13 +11,14 @@
 //
 // AppleUSBXHCI::start refuses a controller with fewer than three interrupters (HCSPARAMS1.MaxIntrs). With one provider
 // interrupt it runs them all on the shared line (legacy interrupters), so when the Tegra firmware reports fewer, we
-// report three and keep the missing register sets in a shadow (regRead32/regWrite32/regWrite64, slots 290/292/293);
-// which case ran is logged once.
+// report three and keep the missing register sets in a shadow (regRead32/regRead64/regWrite32/regWrite64, slots
+// 290-293: AppleUSBXHCIInterrupter::enable reads ERSTBA and ERDP back through regRead64); which case ran is logged once.
 //
 // Interrupts only: AppleUSBXHCI's own filter owns INTID 71, the mailbox filter (INTID 72) is ours. No timer runs in
 // steady state. A lost interrupt is checked only on positive evidence: when the PD controller reports a device on the
 // port in host role, a port-status event is due (SwitchUSB.cpp calls switchxhci_expect_port_change); 2 s later IMAN0.IP
-// pending with ERDP0 unmoved, or a mailbox interrupt pending with no filter run, still so 50 ms later, panics.
+// pending with ERDP0 unmoved, or a mailbox interrupt pending with no filter run, still so 50 ms later, panics. A
+// mailbox line that fires with nothing to take is turned off with one line, never left to storm CPU0.
 #include "OriginalAppleUSBXHCI.h"
 #include "SwitchUSB.h"
 #include "UsbDmaMapper.h"
@@ -47,6 +48,7 @@ namespace {
 xhost::Controller gHost;
 constexpr uint32_t kRequiredInterrupters = 3;
 constexpr uint32_t kCheckMS = 2000, kConfirmMS = 50;
+constexpr uint32_t kUnclaimedLimit = 1000;  // mailbox interrupts in a row with no SMI to take: a line we cannot clear
 }  // namespace
 
 class SwitchXHCI : public AppleUSBXHCI {
@@ -56,6 +58,8 @@ class SwitchXHCI : public AppleUSBXHCI {
     IOFilterInterruptEventSource *mailbox;
     IOTimerEventSource *check;
     volatile uint32_t mailboxInterrupts;
+    uint32_t unclaimed;  // primary interrupt context only
+    volatile bool mailboxStorm;
     uint32_t mailboxAtCheck, erdpAtCheck;
     uint8_t checkStage;
     // Interrupter fold (see the top comment).
@@ -77,11 +81,13 @@ public:
     void stop(IOService *provider) override;
     void free() override;
     uint32_t regRead32(uint64_t base, uint32_t offset) override;
+    uint64_t regRead64(uint64_t base, uint32_t offset) override;
     void regWrite32(uint64_t base, uint32_t offset, uint32_t value) override;
     void regWrite64(uint64_t base, uint32_t offset, uint64_t value) override;
+    static uint64_t dmaReach() { return (gHost.xhci(0x10) & 1) ? (1ull << 40) : (1ull << 32); }  // HCCPARAMS1.AC64
     IOMapper *copyMapper() override
     {
-        IOMapper *mapper = switch_usb_dma_mapper((gHost.xhci(0x10) & 1) ? (1ull << 40) : (1ull << 32));  // AC64
+        IOMapper *mapper = switch_usb_dma_mapper(dmaReach());
         if (mapper) mapper->retain();
         return mapper;
     }
@@ -96,6 +102,8 @@ bool SwitchXHCI::start(IOService *provider)
     // Controller structures non-cacheable: the write-combine cache mode (normal non-cacheable) in place of the one
     // AppleUSBHostController::init picked (AppleNubT8011USBXHCI clears it: its fabric is coherent; ours is not).
     ringBufferOptions() = (ringBufferOptions() & ~(uint32_t)kIOMapCacheMask) | (uint32_t)kIOMapWriteCombineCache;
+    // Without the mapper AppleUSBXHCI would run on (copyMapper NULL is no error to it) there is no cache maintenance.
+    if (!switch_usb_dma_mapper(dmaReach())) return false;
 
     tegraLoop = IOWorkLoop::workLoop();
     check = tegraLoop ? IOTimerEventSource::timerEventSource(
@@ -138,15 +146,33 @@ void SwitchXHCI::free()
     AppleUSBXHCI::free();
 }
 
+// Primary interrupt context. INTID 72 with no SMI to acknowledge is ignored a few times (a spurious level); a line
+// that keeps firing with nothing to take would storm CPU0, so after kUnclaimedLimit in a row it goes to the action
+// (returning true masks the level source until then), which turns it off for good with one line.
 bool SwitchXHCI::mailboxFilter(OSObject *owner, IOFilterInterruptEventSource *)
 {
-    if (!gHost.takeMailboxInterrupt()) return false;
-    __atomic_fetch_add(&static_cast<SwitchXHCI *>(owner)->mailboxInterrupts, 1, __ATOMIC_RELAXED);
+    auto *self = static_cast<SwitchXHCI *>(owner);
+    if (gHost.takeMailboxInterrupt()) {
+        self->unclaimed = 0;
+        __atomic_fetch_add(&self->mailboxInterrupts, 1, __ATOMIC_RELAXED);
+        return true;
+    }
+    if (++self->unclaimed < kUnclaimedLimit) return false;
+    self->mailboxStorm = true;
     return true;
 }
 
-void SwitchXHCI::mailboxAction(OSObject *, IOInterruptEventSource *, int)
+void SwitchXHCI::mailboxAction(OSObject *owner, IOInterruptEventSource *, int)
 {
+    auto *self = static_cast<SwitchXHCI *>(owner);
+    if (self->mailboxStorm) {
+        self->mailbox->disable();
+        char state[200];
+        gHost.describe(state, sizeof(state));
+        IOLog("SwitchUSB: XUSB mailbox interrupt (INTID %u) fired %u times with no SMI to take, turned off: %s\n",
+              xhost::kMailboxIntid, kUnclaimedLimit, state);
+        return;
+    }
     if (!gHost.serviceMailbox()) {
         char state[200];
         gHost.describe(state, sizeof(state));
@@ -173,8 +199,8 @@ void SwitchXHCI::checkFired(IOTimerEventSource *)
 {
     const uint32_t iman = gHost.xhci(runtimeOffset + 0x20);
     const bool hostLost = (iman & 3) == 3 && gHost.xhci(runtimeOffset + 0x38) == erdpAtCheck;  // IP and IE
-    const bool mailboxLost =
-        gHost.mailboxPending() && __atomic_load_n(&mailboxInterrupts, __ATOMIC_RELAXED) == mailboxAtCheck;
+    const bool mailboxLost = !mailboxStorm && gHost.mailboxPending() &&
+                             __atomic_load_n(&mailboxInterrupts, __ATOMIC_RELAXED) == mailboxAtCheck;
     if (!hostLost && !mailboxLost) {
         checkStage = 0;
         return;
@@ -210,6 +236,12 @@ uint32_t SwitchXHCI::regRead32(uint64_t base, uint32_t offset)
         value = (value & ~(0x7ffu << 8)) | kRequiredInterrupters << 8;
     }
     return value;
+}
+
+uint64_t SwitchXHCI::regRead64(uint64_t base, uint32_t offset)
+{
+    if (uint32_t *s = shadowFor(base + offset)) return s[0] | (uint64_t)s[1] << 32;
+    return AppleUSBXHCI::regRead64(base, offset);
 }
 
 void SwitchXHCI::regWrite32(uint64_t base, uint32_t offset, uint32_t value)

@@ -11,11 +11,12 @@
 // tegra210b01_xusb_firmware) under IOUSBHostFamily + AppleUSBXHCI (SwitchXHCI.cpp), with Apple's hub, composite
 // device, HID and mass storage drivers: keyboards, mice, flash drives, through a USB-C OTG adapter or an unpowered hub.
 //
-// Roles follow the BM92T36 PD controller (SwitchPD.h). A sink on the port (STATUS1 source mode + STATUS2 OTG insert:
-// an OTG adapter, a keyboard, a flash drive) makes us the host: the XUDC goes off the bus, the BQ24193 boost sources
-// VBUS (SwitchBattery's switch_battery_set_otg_boost), USB2 pad 0's ID is grounded, and the host controller is brought
-// up the first time. When the sink goes, all of it is undone in reverse and the XUDC goes back on the bus. A PD source
-// that wants us as host (docks, hubs with power in) needs a PD data-role swap, which is not done: they stay device.
+// The power role is SwitchPD's (SwitchPD.h: sink first; VBUS only to a partner proven sink-only, and SwitchPD alone
+// turns it on and off). The data role follows it: SwitchPD sourcing (an OTG adapter, a keyboard, a flash drive) makes
+// us the host: the host controller is brought up the first time, the XUDC goes off the bus and USB2 pad 0's ID is
+// grounded. When SwitchPD stops sourcing, that is undone in reverse and the XUDC goes back on the bus. Nothing else
+// changes the role (a bus suspend, a host asleep). A PD source that wants us as host (docks, hubs with power in) needs
+// a PD data-role swap, which is not done: they stay device.
 //
 // Never blocks boot: everything runs on its own thread and work loops, and anything short of a working interrupt path
 // (no node, rail, MMIO, PLL, firmware, kext or class registration) logs one line, "SwitchUSB: device mode off: <why>"
@@ -27,7 +28,8 @@
 //   SwitchUSB: device mode ready (XUDC at 0x700d0000, configuration <configuration-string>)
 //   SwitchUSB: functions registered, pull-up on (waiting for a host)
 //   SwitchUSB: host connected (high speed)  /  bus suspended (host asleep or cable out)  /  host disconnected
-//   SwitchPD: started (...)  /  SwitchPD: source ready (...)
+//   SwitchPD: started (...)  /  one SwitchPD line per power-role decision (sink, classifying, dual-role, sink-only,
+//   sourcing, not sourcing, detached), with the controller's ALERT_STATUS/STATUS1/STATUS2
 //   SwitchUSB: XUSB firmware <version> (built <time>) running, HCSPARAMS1 <value>
 //   SwitchUSB: host controller up (AppleUSBXHCI, <n> interrupters)
 //   SwitchUSB: host role (a device on the port, VBUS on)  /  SwitchUSB: device role

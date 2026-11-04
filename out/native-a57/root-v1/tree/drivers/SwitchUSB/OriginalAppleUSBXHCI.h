@@ -9,10 +9,10 @@
 // Tegra X1 XUSB host controller. The class is concrete: no pure virtual slot.
 //
 // Only the slot order, the instance size and what SwitchXHCI overrides are declared. Every original
-// symbol is bound to its 21H461 address by build_switchusbhost.py, which also checks the compiled
-// vtable slot by slot against the original one (299 slots) and the instruction bytes at every binding.
+// symbol is bound to its 21H461 address (xhci-original-bindings.S, from abi_check.py --class xhci, which also checks
+// the compiled vtable slot by slot against the original one (299 slots) and the instruction bytes at every binding).
 //
-// Facts used (iOS kernelcache, see the build script for the addresses):
+// Facts used (iOS kernelcache, see abi_check.py for the addresses):
 //   - start (slot 86) maps getProvider()->getDeviceMemoryWithIndex(0) (slot 121), reads the capability
 //     registers through regRead16/regRead32 (289/290) into +1280.., requires HCSPARAMS1.MaxIntrs >= 3
 //     ("%d interrupters supported, %d are required"), creates one IOFilterInterruptEventSource per
@@ -184,7 +184,7 @@ public:
     USBX_OPAQUE(287);
     USBX_OPAQUE(288);
     // Register accessors: (mapped base, byte offset). The read-modify-write helpers 294-297 call these
-    // through the vtable, so overriding 290/292/293 sees every 32/64-bit register access.
+    // through the vtable, so overriding 290-293 sees every 32/64-bit register access.
     virtual uint16_t regRead16(uint64_t base, uint32_t offset);               // 289 (32-bit read, half selected)
     virtual uint32_t regRead32(uint64_t base, uint32_t offset);               // 290 ml_io_read32
     virtual uint64_t regRead64(uint64_t base, uint32_t offset);               // 291 ml_io_read64

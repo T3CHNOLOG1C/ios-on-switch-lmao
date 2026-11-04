@@ -286,8 +286,6 @@
 .set __ZN12AppleUSBXHCI9opaque298Ev, 0xfffffff004ececf0
 .globl __ZN12AppleUSBXHCI9regRead16Eyj
 .set __ZN12AppleUSBXHCI9regRead16Eyj, 0xfffffff004ecf3e4
-.globl __ZN12AppleUSBXHCI9regRead64Eyj
-.set __ZN12AppleUSBXHCI9regRead64Eyj, 0xfffffff004ecf424
 .globl __ZN12AppleUSBXHCI9terminateEj
 .set __ZN12AppleUSBXHCI9terminateEj, 0xfffffff004e17b34
 .globl __ZN12AppleUSBXHCIC2EPK11OSMetaClass

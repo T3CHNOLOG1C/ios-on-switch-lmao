@@ -19,6 +19,8 @@ struct Mapping {
     bool writable = false, cached = false, used = false;
 };
 
+IOBufferMemoryDescriptor *gPool;  // switch_usb_dma_reserve(); for the boot
+
 // Cache mode of an IOBufferMemoryDescriptor (IOMemoryDescriptor kIOMemoryBufferCacheMask); 0 for any other memory.
 bool cacheable(IOMemoryDescriptor *memory)
 {
@@ -36,7 +38,6 @@ class SwitchDMAMapper : public IOMapper {
     OSDeclareDefaultStructors(SwitchDMAMapper);
 
     IOLock *lock = nullptr;
-    IOBufferMemoryDescriptor *pool = nullptr;
     uint8_t *poolVA = nullptr;
     uint64_t poolPA = 0;
     uint8_t *usedPages = nullptr;  // kPoolPages entries
@@ -69,24 +70,14 @@ bool SwitchDMAMapper::initHardware(IOService *)
     lock = IOLockAlloc();
     usedPages = IONewZero(uint8_t, kPoolPages);
     mappings = IONewZero(Mapping, kMaxMappings);
-    pool = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-        kernel_task,
-        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
-            static_cast<IOOptionBits>(kIOMapWriteCombineCache),
-        kPoolBytes, 0x00000000fffff000ull);
-    uint64_t physical = pool ? pool->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone) : 0;
-    if (!lock || !usedPages || !mappings || !pool || !physical || physical + kPoolBytes > (1ull << 32)) {
-        IOLog("SwitchUSB: no %u MiB DMA bounce pool below 4 GiB\n", kPoolBytes >> 20);
-        return false;
-    }
-    poolVA = static_cast<uint8_t *>(pool->getBytesNoCopy());
-    poolPA = physical;
+    if (!lock || !usedPages || !mappings || !gPool) return false;
+    poolVA = static_cast<uint8_t *>(gPool->getBytesNoCopy());
+    poolPA = gPool->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
     return true;
 }
 
 void SwitchDMAMapper::free()
 {
-    OSSafeReleaseNULL(pool);  // never in practice: the mapper lives for the boot
     if (usedPages) IODeleteData(usedPages, uint8_t, kPoolPages);
     if (mappings) IODelete(mappings, Mapping, kMaxMappings);
     if (lock) IOLockFree(lock);
@@ -186,6 +177,23 @@ IOReturn SwitchDMAMapper::iovmUnmapMemory(IOMemoryDescriptor *memory, IODMAComma
     }
     done.memory->release();
     return kIOReturnSuccess;
+}
+
+int switch_usb_dma_reserve(void)
+{
+    if (gPool) return 0;
+    IOBufferMemoryDescriptor *pool = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task,
+        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
+            static_cast<IOOptionBits>(kIOMapWriteCombineCache),
+        kPoolBytes, 0x00000000fffff000ull);
+    const uint64_t physical = pool ? pool->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone) : 0;
+    if (!physical || physical + kPoolBytes > (1ull << 32)) {
+        OSSafeReleaseNULL(pool);
+        return -1;
+    }
+    gPool = pool;
+    return 0;
 }
 
 IOMapper *switch_usb_dma_mapper(uint64_t reach)
