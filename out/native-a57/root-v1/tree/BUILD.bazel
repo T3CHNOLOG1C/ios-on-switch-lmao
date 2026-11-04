@@ -246,9 +246,8 @@ kernel_driver(
     name = "NativeAES",
     srcs = [
         "NativeAES.cpp",
-        ":scripts/data/native-aes-original-bindings.S",
+        "//bazel/pinned:kernel/native-aes/original-bindings.S",
     ],
-    stems = {"native-aes-original-bindings.S": "original-bindings"},
 )
 
 # NativeIOSwitchBlock: the SD card's block device (+ cryptex files), and the board drivers riding in its archive.
@@ -546,7 +545,7 @@ kernel_driver(
         "xhci-original-bindings.S",
         "firmware.S",
     ],
-    abi_check_deps = ["kits/NativePrelink/native_prelink.py"],
+    abi_check_deps = ["//tools/prelink:native_prelink.py"],
     abi_check_script = "drivers/SwitchUSB/abi_check.py",
     abi_checks = {
         "drivers/SwitchUSB/original-bindings.S": "xudc SwitchXUDC.cpp",

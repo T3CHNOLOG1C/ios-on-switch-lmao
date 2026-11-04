@@ -233,7 +233,7 @@ def kernel_driver(name, srcs = None, dir = None, **kwargs):
     """A kernel driver: its objects, in link order.
 
     dir defaults to drivers/<name>; srcs to its .cpp files (sorted) followed by its firmware.S, if it has one. Names in
-    srcs are relative to dir; anything else is a label (":scripts/data/x.S", "//bazel/pinned:...", "@xnu//:...")."""
+    srcs are relative to dir; anything else is a label ("//bazel/pinned:...", "@xnu//:...")."""
     dir = dir or ("drivers/" + name)
     if srcs == None:
         srcs = sorted(native.glob([dir + "/*.cpp"])) + native.glob([dir + "/firmware.S"], allow_empty = True)

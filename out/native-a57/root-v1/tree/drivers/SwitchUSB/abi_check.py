@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The ABI of our subclasses of original 21H461 classes (run by cmake/Drivers.cmake on every build).
+"""The ABI of our subclasses of original 21H461 classes (kernel_driver's abi_checks run it on every build).
 
 Usage: abi_check.py --class xudc|xhci --kernelcache KC --object X.o --late X.late.o --bindings B.S --output X.checked.o
                     [--write]
@@ -25,7 +25,7 @@ import struct
 import sys
 
 TREE = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(TREE / 'kits/NativePrelink'))
+sys.path.insert(0, str(TREE.parents[3] / 'tools/prelink'))  # the prelinker's Mach-O reader
 from native_prelink import macho, backed_offset, exports  # noqa: E402
 
 SLIDE = -0x1000000

@@ -6,18 +6,6 @@ load("@rules_python//python:py_test.bzl", "py_test")
 
 TESTS = glob(["test_*.py"])
 
-# These fail on main outside Bazel too: they read untracked GPT-6-era artifacts (out/switch/native-platform-summary.json,
-# fixture images) or assert against changed sources. Kept, but out of `bazel test //...` until someone revives them.
-STALE = [
-    "test_native_block_backend.py",
-    "test_native_fat_batching.py",
-    "test_native_indexed_disk.py",
-    "test_native_loader_builder.py",
-    "test_native_oled_adt.py",
-    "test_native_sd_card.py",
-    "test_native_split_disk.py",
-]
-
 [py_test(
     name = t[:-3],
     size = "medium",
@@ -45,5 +33,5 @@ STALE = [
     env = {"PATH": "tools:../+llvm_tools+llvm/bin:/usr/bin:/bin:/usr/sbin:/sbin"},
     imports = [".."],
     main = t,
-    tags = ["requires-darwin"] + (["manual"] if t in STALE else []),
+    tags = ["requires-darwin"],
 ) for t in TESTS]
