@@ -3816,6 +3816,7 @@ thread_dispatch(
 			 * CPU is not running.
 			 */
 			kperf_running_setup(processor, processor->last_dispatch);
+			ioswitch_kprof_running_setup(processor, processor->last_dispatch);
 		}
 		running_timers_activate(processor);
 		processor->first_timeslice = TRUE;
