@@ -289,11 +289,14 @@ def load_overlay():
     unions (each with the boot-arg that gates it, shared by all its files) and the CDHashes of the trusted ones. The
     union directory is the file's own unless "union" names an existing ancestor (XNU unions are deep, so a new bundle
     directory can appear inside a sealed one). A source not built yet is left out with a warning. "portrait": true
-    stages the file only for a portrait-native kernel (portrait_native)."""
+    stages the file only for a portrait-native kernel (portrait_native); "unless-boot-arg": name leaves it out when
+    COMMAND_LINE sets that boot-arg (boot_arg_on)."""
     manifest = json.loads(OVERLAY_MANIFEST.read_text()) if OVERLAY_MANIFEST.exists() else {'files': []}
     files, gates, hashes = [], {}, []
     for entry in manifest['files']:
         if entry.get('portrait') and not portrait_native():
+            continue
+        if entry.get('unless-boot-arg') and boot_arg_on(entry['unless-boot-arg']):
             continue
         path = entry['path']
         if not path.startswith('/') or posixpath.normpath(path) != path or path.startswith('/private/var/'):
