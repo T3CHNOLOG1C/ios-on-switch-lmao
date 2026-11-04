@@ -1,0 +1,16 @@
+# Build output, device logs, third-party checkouts and agent scratch that live (untracked) in the working copy: Bazel
+# must never glob or watch them. Everything the build reads is a pinned download, a tracked source or bazel/pinned.
+bundles
+vendor
+out/agent-scratch
+out/boot
+out/build
+out/cmake
+out/gpu
+out/gpu-artifacts/m2v-src
+out/gpu-artifacts/m2v-libs
+out/native-a57/root-v1/tree/build
+out/native-a57/root-v1/tree/.cache
+out/native-a57/root-v1/tree/refer
+out/native-a57/root-v1/tree/.git-empty-unused
+out/switch/device-logs

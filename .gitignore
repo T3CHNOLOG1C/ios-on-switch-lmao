@@ -64,3 +64,8 @@ bundles/
 
 # Claude Code worktrees and local state
 .claude/
+
+# Bazel: convenience symlinks, personal flags, execution logs
+/bazel-*
+/user.bazelrc
+/repro-exec.log.zst

@@ -1,0 +1,59 @@
+# ioswitch Bazel defaults. Personal overrides go in user.bazelrc (ignored by git), imported last.
+
+# --- Caches: content-addressed, outside the output base, shared by every checkout and worktree ---------------------
+# Repository cache: every download (toolchains, Apple OSS tarballs, IPSW members) by sha256. Hardlinked into the
+# external repositories on a hit, so a multi-GB IPSW member is stored once.
+common --repository_cache=~/Library/Caches/ioswitch-bazel/repository
+common --experimental_repository_cache_hardlinks
+# Disk cache: action results by action key (a fresh output base or a `bazel clean` reuses them). Size-capped: Bazel
+# deletes the least recently used entries above the cap once it has been idle for gc_idle_delay.
+common --disk_cache=~/Library/Caches/ioswitch-bazel/disk
+common --experimental_disk_cache_gc_max_size=10G
+common --experimental_disk_cache_gc_max_age=30d
+common --experimental_disk_cache_gc_idle_delay=2m
+
+# --- Hermeticity -------------------------------------------------------------------------------------------------
+# Actions see a fixed PATH/env (the only host inputs are declared in bazel/host: Xcode and its SDKs), run sandboxed
+# (darwin-sandbox: read-only inputs, no network), and repository rules may only fetch what MODULE.bazel pins.
+common --incompatible_strict_action_env
+build --spawn_strategy=sandboxed,local
+build --sandbox_default_allow_network=false
+build --reuse_sandbox_directories
+build --nolegacy_external_runfiles
+# Fail early on a moved or tampered download instead of using it.
+common --lockfile_mode=error
+common --experimental_repository_downloader_retries=3
+# Never stamp (no build time, user or host in any output).
+build --nostamp
+
+# --- Output ------------------------------------------------------------------------------------------------------
+build --show_result=30
+common --color=yes
+common --curses=auto
+test --test_output=errors
+# The cache counters the README talks about ("N processes: M disk cache hit, ...") on every build.
+build --show_progress_rate_limit=1
+
+# --- Presets -----------------------------------------------------------------------------------------------------
+# dev: the default; keeps going after the first failure.
+build:dev --keep_going
+# release: the same artifacts (nothing here changes an action), but no partial result and a full log.
+build:release --nokeep_going
+build:release --verbose_failures
+# reproducible-check: ignore every cache so each action really runs, and write an execution log; `bazel run
+# //tools/repro:check` builds twice like this in two fresh output bases and diffs every artifact bit for bit.
+build:reproducible-check --noremote_accept_cached
+build:reproducible-check --disk_cache=
+build:reproducible-check --noremote_upload_local_results
+build:reproducible-check --execution_log_compact_file=repro-exec.log.zst
+# remote: a shared remote cache (bazel-remote, BuildBuddy, ...): the URL is per-user, so
+# put `build:remote --remote_cache=grpcs://host:port` (and credentials: --remote_header=... or --credential_helper=...) in user.bazelrc, then use --config=remote.
+build:remote --remote_upload_local_results=true
+build:remote --remote_timeout=120s
+build:remote --remote_cache_compression
+build:remote --experimental_remote_cache_eviction_retries=5
+
+# The default preset.
+build --config=dev
+
+try-import %workspace%/user.bazelrc

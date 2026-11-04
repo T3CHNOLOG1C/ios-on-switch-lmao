@@ -1,0 +1,133 @@
+"""ioswitch: iPadOS 17.7.11 (21H461, iPad7,1) on the Nintendo Switch OLED.
+
+Everything the build reads is pinned here (or in a .bzl this file loads) by version and sha256, except the one
+declared host input: Xcode and its SDKs (Apple's licence forbids redistributing them), which bazel/host checks
+against the pins in bazel/host/xcode.bzl.
+"""
+
+module(name = "ioswitch")
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "rules_cc", version = "0.2.27")
+bazel_dep(name = "rules_shell", version = "0.8.0")
+bazel_dep(name = "rules_python", version = "2.4.6")
+bazel_dep(name = "toolchains_llvm", version = "1.13.0")
+
+# --- Python: the build's tools and tests run on this interpreter, never the host's ------------------------------
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.13",
+)
+
+# The same interpreter for repository rules (bazel/ipsw inflates members with it).
+use_repo(python, "python_3_13_host")
+
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+pip.parse(
+    hub_name = "ioswitch_pypi",
+    python_version = "3.13",
+    requirements_lock = "//bazel/python:requirements_lock.txt",
+)
+use_repo(pip, "ioswitch_pypi")
+
+# --- LLVM 23.1.4 (the Homebrew version the CMake flow used): ld.lld/objcopy/readelf for the loader, llvm-objcopy
+# for late kernel objects, clang-format/clang-tidy for lint, and the C/C++ toolchain for host-side tests. --------
+llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
+llvm.toolchain(
+    name = "llvm_toolchain",
+    llvm_version = "23.1.4",
+)
+use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
+
+register_toolchains("@llvm_toolchain//:all")
+
+bazel_dep(name = "rules_rust", version = "0.75.0")
+
+# --- The declared host input: Xcode (pinned version + SDK digests) ---------------------------------------------
+xcode_host = use_repo_rule("//bazel/host:xcode.bzl", "xcode_host")
+
+xcode_host(name = "xcode")
+
+# --- Apple open source the kernel is built from (apple-oss-distributions tags), plus our patches ----------------
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+_SOURCE_BUILD = 'exports_files(glob(["**"]))\n\nfilegroup(name = "all", srcs = glob(["**"]), visibility = ["//visibility:public"])\n'
+
+# XNU xnu-10063.141.1 (commit d8b80295118e) with ioswitch's changes. The patch is exported from the XNU working
+# repository (branch ioswitch) by `bazel run //xnu:patch_export`.
+http_archive(
+    name = "xnu",
+    build_file_content = _SOURCE_BUILD,
+    patch_args = ["-p1"],
+    patches = ["//out/native-a57/root-v1/tree/patches:xnu-ioswitch.diff"],
+    sha256 = "ffdc143cbf4c57dac48e7ad6367ab492c6c4180e5698cb2d68e87eaf1781bc48",
+    strip_prefix = "xnu-xnu-10063.141.1",
+    urls = ["https://github.com/apple-oss-distributions/xnu/archive/refs/tags/xnu-10063.141.1.tar.gz"],
+)
+
+# The same tag without our changes: its installhdrs are the kernel SDK headers corecrypto and firehose build against.
+http_archive(
+    name = "xnu_base",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "ffdc143cbf4c57dac48e7ad6367ab492c6c4180e5698cb2d68e87eaf1781bc48",
+    strip_prefix = "xnu-xnu-10063.141.1",
+    urls = ["https://github.com/apple-oss-distributions/xnu/archive/refs/tags/xnu-10063.141.1.tar.gz"],
+)
+
+http_archive(
+    name = "libplatform",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "5de737c41efa455b1514af6e4fac87a5479e466b384dedf9dfcad25b0fb0388e",
+    strip_prefix = "libplatform-libplatform-316.100.10",
+    urls = ["https://github.com/apple-oss-distributions/libplatform/archive/refs/tags/libplatform-316.100.10.tar.gz"],
+)
+
+http_archive(
+    name = "libdispatch",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "97e3cac286e4d521594d4822767cd3b32b18a8ba8841c288451e786f69134c80",
+    strip_prefix = "libdispatch-libdispatch-1477.100.9",
+    urls = ["https://github.com/apple-oss-distributions/libdispatch/archive/refs/tags/libdispatch-1477.100.9.tar.gz"],
+)
+
+http_archive(
+    name = "availability_versions",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "4aea449803bd26bf7af37688f6defde48c897d03aa5e22abfda4accc97ced322",
+    strip_prefix = "AvailabilityVersions-AvailabilityVersions-141.1",
+    urls = ["https://github.com/apple-oss-distributions/AvailabilityVersions/archive/refs/tags/AvailabilityVersions-141.1.tar.gz"],
+)
+
+http_archive(
+    name = "libpthread",
+    build_file_content = _SOURCE_BUILD,
+    patch_args = ["-p1"],
+    patches = ["//out/native-a57/root-v1/tree/patches:libpthread/explicit-kernel-address.patch"],
+    sha256 = "82f9ec53344f80b164535b47a12bac05eec6ffb78130ea0f016a9cb2e904aa04",
+    strip_prefix = "libpthread-libpthread-519.120.4",
+    urls = ["https://github.com/apple-oss-distributions/libpthread/archive/refs/tags/libpthread-519.120.4.tar.gz"],
+)
+
+http_archive(
+    name = "iostoragefamily",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "2dfe356b50641d2acc0298c557fa310d8c2ba99aa44e097872e567f77d599e60",
+    strip_prefix = "IOStorageFamily-IOStorageFamily-315",
+    urls = ["https://github.com/apple-oss-distributions/IOStorageFamily/archive/refs/tags/IOStorageFamily-315.tar.gz"],
+)
+
+# Apple's corecrypto 2023 source release (the developer.apple.com download), as mirrored at this commit.
+http_archive(
+    name = "corecrypto",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "fd04cb46cb733fdd8e6334702081a33b202ae7645140f59fa55b7d47de7e688f",
+    strip_prefix = "corecrypto-2023-11fba65b12d8830630e248dfa8344caf8b065f26",
+    urls = ["https://github.com/ONLYA/corecrypto-2023/archive/11fba65b12d8830630e248dfa8344caf8b065f26.tar.gz"],
+)
+
+# --- iPadOS 17.7.11 (21H461) for iPad7,1: only the members the build and the SD install read, fetched by HTTP
+# range request into the repository cache (bazel/ipsw/pins.bzl, `bazel run //bazel/ipsw:pin` to bump). ---------
+ipsw = use_extension("//bazel/ipsw:ipsw.bzl", "ipsw")
+use_repo(ipsw, "ipsw")
