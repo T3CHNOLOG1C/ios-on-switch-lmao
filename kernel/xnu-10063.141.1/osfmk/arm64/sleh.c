@@ -1223,6 +1223,8 @@ brk_out:
 #undef MSG_FMT
 }
 
+extern void ioswitch_kprof_user_trap(arm_saved_state_t *state, uint32_t esr);
+
 static void
 handle_breakpoint(arm_saved_state_t *state, uint32_t esr __unused)
 {
@@ -1231,6 +1233,9 @@ handle_breakpoint(arm_saved_state_t *state, uint32_t esr __unused)
 	mach_msg_type_number_t     numcodes  = 2;
 
 	boot_progress_user_breakpoint(state, esr);
+	if (PSR64_IS_USER(get_saved_state_cpsr(state))) {
+		ioswitch_kprof_user_trap(state, esr);
+	}
 #if __has_feature(ptrauth_calls)
 	if (ESR_EC(esr) == ESR_EC_BRK_AARCH64 &&
 	    brk_comment_is_ptrauth(ISS_BRK_COMMENT(esr))) {
