@@ -38,11 +38,13 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <pexpert/pexpert.h>
+#include <vm/pmap.h>
 #include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "block_backend.h"
 #include "NativeIOSwitchBlock.h"
+#include "IOSwitchClientCopy.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -270,6 +272,8 @@ struct Stats {
     // command (merged), requests of at most 4 KiB, SDMMC1 interrupts taken, SDR104 re-tunes, and the
     // deepest the queue got.
     uint64_t commands, busyNs, completeNs, firstNs, sequential, merged, small, interrupts, retunes;
+    // Worker time copying between the bounce buffer and the requests' memory (part of busyNs).
+    uint64_t copyNs;
     uint32_t maxQueued;
 };
 }
@@ -354,6 +358,9 @@ class NativeIOSwitchBlock : public IOService {
     uint64_t lastEnd = 0;                  // card LBA after the previous request (sequential count)
     uint64_t statsEveryNs = 0, statsLastNs = 0;
     bool merge = true;
+    // Boot-arg ioswitch-sd-copy-flush=1: requests' bytes through IOMemoryDescriptor::readBytes/writeBytes again, with
+    // the clean+invalidate of every destination line they add on this kernel (IOSwitchClientCopy.h), for A/B boots.
+    bool copyFlush = false;
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
     IOWorkLoop *irqLoop = nullptr;
@@ -380,6 +387,12 @@ class NativeIOSwitchBlock : public IOService {
     void w16(uint32_t o, uint16_t v) { *(volatile uint16_t *)(regs + o) = v; }
     void w32(uint32_t o, uint32_t v) { *(volatile uint32_t *)(regs + o) = v; }
     static void barrier() { __asm__ volatile("dsb sy" ::: "memory"); }
+    bool stage(IOMemoryDescriptor *memory, uint8_t *at, uint32_t length, bool toClient)
+    {
+        if (copyFlush)
+            return (toClient ? memory->writeBytes(0, at, length) : memory->readBytes(0, at, length)) == length;
+        return ioswitchClientCopy(memory, at, length, toClient, copypv);
+    }
 
     bool waitIdle(bool dat0, uint64_t timeoutNs);
     bool startInterrupt();
@@ -738,9 +751,10 @@ void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
         uint32_t offset = 0;
         for (Request *r = first; r; r = r->next) {
             const uint32_t length = r->sectors * kSector;
-            if (r->buffer->readBytes(0, bounce + offset, length) != length) result = kIOReturnIOError;
+            if (!stage(r->buffer, bounce + offset, length, false)) result = kIOReturnIOError;
             offset += length;
         }
+        stats.copyNs += nowNs() - start;
         // Stage directly in the bounce buffer; transfer() would copy onto itself.
         if (!result && transfer(first->lba, sectors, true, bounce)) result = kIOReturnIOError;
     } else if (transfer(first->lba, sectors, false, bounce)) {
@@ -751,10 +765,11 @@ void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
     IOReturn results[kMaxChain];
     unsigned count = 0;
     uint32_t offset = 0;
+    const uint64_t copied = nowNs();
     for (Request *r = first; r; r = r->next, ++count) {
         const uint32_t length = r->sectors * kSector;
         IOReturn status = result;
-        if (!write && !status && r->buffer->writeBytes(0, bounce + offset, length) != length) status = kIOReturnIOError;
+        if (!write && !status && !stage(r->buffer, bounce + offset, length, true)) status = kIOReturnIOError;
         results[count] = status;
         offset += length;
         if (write) {
@@ -769,6 +784,7 @@ void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
         lastEnd = r->lba + r->sectors;
     }
     const uint64_t done = nowNs(), latency = done - start;
+    if (!write) stats.copyNs += done - copied;
     stats.commands++;
     stats.busyNs += latency;
     stats.merged += count - 1;
@@ -886,7 +902,8 @@ void NativeIOSwitchBlock::logStats()
 }
 
 // One line to compare boots from a photo. busy is worker time per card command (bus, card and
-// bounce copies, not completions); "of" is wall time since the first request, so the percentage
+// bounce copies, not completions), copy the part of it spent copying between the bounce buffer and the
+// requests' memory; "of" is wall time since the first request, so the percentage
 // is how much of that the SD card was the thing being waited on. MB/s is over busy time: the
 // card's effective rate at the request sizes APFS actually issues.
 void NativeIOSwitchBlock::logThroughput()
@@ -918,10 +935,10 @@ void NativeIOSwitchBlock::logThroughput()
     // Periodic: to the log only (os_log), never the boot console.
     char out[512];
     snprintf(out, sizeof(out),
-             "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus %llu.%llu MB/s %llu%% of %llus | "
+             "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums %llu.%llu MB/s %llu%% of %llus | "
              "<=4K %llu%% seq %llu%% merged %llu q%u | err %llu retune %llu | %s %u.%02u MHz | wait ms%s",
              requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
-             rate / 10, rate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000,
+             stats.copyNs / 1000000, rate / 10, rate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000,
              requests ? stats.small * 100 / requests : 0, requests ? stats.sequential * 100 / requests : 0,
              stats.merged, stats.maxQueued, stats.errors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10,
              classes);
@@ -1525,6 +1542,15 @@ bool NativeIOSwitchBlock::setup()
     unsigned merging = 1;
     PE_parse_boot_argn("ioswitch-sd-merge", &merging, sizeof(merging));
     merge = merging != 0;
+    unsigned flushing = 0;
+    PE_parse_boot_argn("ioswitch-sd-copy-flush", &flushing, sizeof(flushing));
+    copyFlush = flushing != 0;
+    // What a scatter-gather (ADMA2) path straight into the requests' pages would rest on: CAPABILITIES bit 19 (ADMA2),
+    // 28 (64-bit addressing, v3) and 27 (64-bit addressing, v4). The log only, once.
+    const uint32_t caps = r32(CAPABILITIES), capsHi = r32(CAPABILITIES_HI);
+    os_log(OS_LOG_DEFAULT, "IOSwitchSD: host version %#06x caps %#010x %#010x (ADMA2 %u, 64-bit v3 %u v4 %u), copy %s",
+           r16(VERSION), caps, capsHi, (caps >> 19) & 1, (caps >> 28) & 1, (caps >> 27) & 1,
+           copyFlush ? "readBytes/writeBytes (flushing)" : "copypv (no flush)");
 
     // GPT: header at LBA 1, then entries. Exactly one APFS partition. The header is read in the
     // inherited bus mode first; after a re-initialization it must read back byte for byte, which
