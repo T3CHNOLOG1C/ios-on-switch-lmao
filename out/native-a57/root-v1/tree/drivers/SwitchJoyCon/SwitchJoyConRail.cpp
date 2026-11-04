@@ -38,9 +38,17 @@
 //   Joy-Con (R) did not answer 91/12 within 250 ms.
 //   then cmd 92 carries Bluetooth HID reports both ways: the host sends output reports (01 subcommand, 10 rumble) or
 //   the "request input" payload 1F (J:1525-1543), the Joy-Con answers with input reports (21, 30). The Joy-Con only
-//   speaks when spoken to and drops HID mode after ~2 s without host packets (hekate 1257-1261), so the host sends
-//   one packet every 15 ms (J:1809; hekate 1059-1074): the next queued output report, else the latest rumble, else
-//   1F. That clock is the protocol, not a poll of hardware state: every reply is taken by interrupt. The rail stays
+//   speaks when spoken to (91/12 sets the interval it expects, it does not make it push: hekate and L4T keep asking)
+//   and drops HID mode after ~2 s without host packets (hekate 1257-1261), so the host asks every 15 ms (J:1809;
+//   hekate 1059-1074): the next queued output report, else 1F. That clock is the protocol, not a poll of hardware
+//   state: every reply is taken by interrupt. One clock (`poll`) serves both rails, so two seated Joy-Cons cost one
+//   wakeup per 15 ms, and it runs only while a Joy-Con is running: an empty rail, or a rail paused with the display,
+//   has no timer at all. Rumble (output report 0x10) goes out on the reply, as L4T's rumble worker does (J:1132-1138,
+//   1871-1905): right after the Joy-Con answers a request, the newest rumble report is sent if there is one it has not
+//   had, or again every 50 ms while it asks for a non-zero amplitude (L4T's keep-alive, J:1845-1851: a Joy-Con stops
+//   a vibration that is not refreshed). The request stays every 15 ms, so input never depends on whether the Joy-Con
+//   answers a rumble report. Every output report the rail sends carries the rail's own packet counter (byte 1, mod 16:
+//   deku bluetooth_hid_notes.md "global packet number"), so a repeated rumble report is a new packet. The rail stays
 //   in input report mode 0x30, as the console and L4T keep it: JoyConHIDServicePlugin asks for 0x3F ("simple HID",
 //   which pushes only on button changes, deku bluetooth_hid_subcommands_notes.md 66-81) as soon as gamecontrollerd
 //   connects, and a rail Joy-Con in 0x3F stops answering 1F, so it looked detached 500 ms later. That subcommand 0x03
@@ -53,25 +61,30 @@
 // loop. Hardware RTS flow control backs this up for long replies. Attach is the detect pin's GPIO
 // interrupt. A missing reply is either the Joy-Con gone (the line is silent: detach after 500 ms, J:1793) or a lost
 // interrupt (bytes sit in the FIFO with RX interrupts enabled, or the TX FIFO is empty with THRI enabled): that
-// panics in one line with the UART registers and the GIC state. While waiting for an attach, the 10 s
-// watchdog runs tegra_gpio_check_delivery() on the detect pin (as SwitchButtons). Every packet also takes one
+// panics in one line with the UART registers and the GIC state. A rail waiting for an attach arms nothing but the
+// detect pin's interrupt; tegra_gpio_check_delivery() (as SwitchButtons) looks at that pin when the display goes off,
+// not on a timer. Every packet also takes one
 // THR-empty interrupt, so the interrupt count proves the UART's line reaches the CPU even when nothing comes back.
 // Giving up on an attach logs one line with the first bytes received since the attach (or none), that interrupt
 // count, what happened at 3 Mbaud (packets sent, bytes and line errors received), the bytes the failing step got,
 // the UART registers and clock, the four pads' levels, GPIO modes and pinmux, and the rail and pad power. A
 // running Joy-Con that falls silent logs one line with the number of input reports it sent.
 //
-// Pairing (switch-joycon-bt=1): before the HID device is published, the driver reads the Joy-Con's pairing slots
-// (SPI 0x2000, 0x26-byte slots: magic 0x95, size 0x22, checksum, host BD_ADDR display order, LTK; hekate 1084-1245,
-// deku spi_flash_notes.md 44-76). If a slot already names this console's address (/arm-io/bluetooth
-// local-mac-address, which bluetoothd gives the controller and SwitchBluetooth sets from the fuses as switchroot's
-// U-Boot does; read at every attach), its key is reused; otherwise the Joy-Con is
-// paired over the rail with subcommand 0x01 (deku bluetooth_hid_subcommands_notes.md 13-52): 01 <host BD_ADDR LSB
-// first> -> Joy-Con BD_ADDR; 02 -> LTK, each byte XOR 0xAA; 03 -> saved to SPI 0x2000. The result is published as a
-// SwitchJoyConPairing registry entry (Address, LinkKey in HCI order, Name, ClassOfDevice, ProductID) for joyconpaird
-// (helper/), which hands it to bluetoothd. switchroot itself never pairs live: it imports what Horizon stored (hekate
-// "Dump Joy-Con BT" -> joycon_mac.bin -> u-boot sets the controller address to Horizon's, jc_setup.sh writes
-// bt_config.conf); reading the slot first gives the same result when the console address matches.
+// Pairing (switch-bt=1, or the old switch-joycon-bt=1): the address to pair to is the one SwitchBluetooth programs
+// into the controller for bluetoothd: the unit's own (fuses, as switchroot's U-Boot derives it) or, when deploy staged
+// hekate's "Dump Joy-Con BT" (switchroot/joycon_mac.ini), Horizon's, as switchroot's U-Boot takes it from joycon_mac.bin
+// (SwitchBluetooth.cpp). SwitchBluetooth knows it only when bluetoothd first connects, well after the rails handshake
+// the Joy-Cons seated at boot, so a Joy-Con that attaches before it runs unpaired and is paired the moment it arrives
+// (switch_joycon_bluetooth_address: its HID device goes away for the pairing, about 0.1 s, and comes back); later
+// attaches pair before the HID device is published. Pairing reads the Joy-Con's pairing log (SPI 0x2000, 0x26-byte
+// slots: magic, size 0x22, checksum, host BD_ADDR display order, LTK; hekate 1084-1245, deku spi_flash_notes.md 44-76):
+// earlier pairings have magic 0x00, the one in use 0x95, erased flash ends it. If the slot in use names this address,
+// its key is reused and nothing is written (a Joy-Con paired in Horizon to the address SwitchBluetooth adopted); else
+// the Joy-Con is paired over the rail with subcommand 0x01 (deku bluetooth_hid_subcommands_notes.md 13-52): 01 <host
+// BD_ADDR LSB first> -> Joy-Con BD_ADDR; 02 -> LTK, each byte XOR 0xAA; 03 -> saved, which makes it the slot in use
+// (Horizon pairs it back the next time it is attached there). The result is published as a SwitchJoyConPairing
+// registry entry (Address, LinkKey in HCI order, Name, ClassOfDevice, ProductID) for joyconpaird (helper/), which
+// hands it to bluetoothd: pulled off the rail, the Joy-Con pages this address and reconnects over Bluetooth.
 //
 // NFC (switch-joycon-nfc=1): joyconnfc (helper/) drives the Joy-Con (R)'s NFC/IR MCU through the HID device with the
 // Bluetooth protocol (output report 0x11 MCU requests, subcommands 0x03/0x21/0x22; jc_toolkit nfc_tag_info, yuzu
@@ -84,6 +97,11 @@
 // SC7 (switch_joycon_suspend/resume): as L4T joycon_serdev_suspend, a running Joy-Con is told to sleep (subcommand
 // 0x06 HCI state 0, which it does not answer), charging stops, and everything is quiesced; on resume the UARTs are set
 // up again and both rails re-enter detection, which finds a seated Joy-Con by level and handshakes it afresh.
+//
+// Display off (switch_joycon_display_power, from SwitchBacklight): the rails pause. Nothing is sent, so a Joy-Con
+// leaves HID mode after its 2 s timeout and stays seated and charging (the charge enable is left as it is); timers,
+// the UART's and the detect pin's interrupts are off and the HID devices go (GameController sees them disconnect).
+// Display on: both rails re-enter detection, as after SC7, and a seated Joy-Con is handshaken afresh (about 0.2 s).
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
@@ -93,6 +111,7 @@
 #include <IOKit/IODeviceTreeSupport.h>
 #include <kern/clock.h>
 #include <libkern/c++/OSData.h>
+#include <os/log.h>
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraGPIO/TegraGPIO.h"
@@ -244,14 +263,17 @@ constexpr uint8_t kRumbleNeutral[8] = {0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40,
 
 // Timing (J: 1709 retries, 1748 settle, 1793 silence, 1809 interval; hekate 1257 handshake reply).
 constexpr uint32_t kSettleMS = 64, kHandshakeMS = 100, kCommandMS = 250, kRetryMS = 100, kAttempts = 30;
-constexpr uint32_t kSubcommandMS = 1000, kIntervalMS = 15, kSilenceMS = 500, kWatchdogMS = 10000;
+constexpr uint32_t kSubcommandMS = 1000, kIntervalMS = 15, kSilenceMS = 500;
+// A non-zero rumble is sent again this often (L4T JC_RUMBLE_PERIOD_MS, J:470).
+constexpr uint32_t kRumbleKeepAliveMS = 50;
 // After the 3 Mbaud switch: 91/11 every 5 ms for up to 200 ms (hekate 1325-1341: ten sends 5 ms apart; L4T's retry
 // comes after 1 s, well inside the Joy-Con's 2 s), 1 s for the other steps (L4T); the Joy-Con's own HID timeout,
 // after which it is back at 1 Mbaud (hekate 1254-1259); handshakes that may fail past the switch before giving up.
 constexpr uint32_t kResendMS = 5, kDisconnectSends = 40, kFastCommandMS = 1000, kJoyConTimeoutMS = 2000,
                    kFastAttempts = 3;
-// Pairing slots (deku spi_flash_notes.md 44-76; hekate 1158-1166 reads 0x1A of each 0x26-byte slot).
-constexpr uint32_t kSlotBase = 0x2000, kSlotStride = 0x26, kSlots = 4;
+// Pairing slots (deku spi_flash_notes.md 44-76; hekate 1158-1166 reads 0x1A of each 0x26-byte slot): the log fills the
+// 4 KiB section (deku), so the slot in use can be any of them.
+constexpr uint32_t kSlotBase = 0x2000, kSlotStride = 0x26, kSlots = 0x1000 / kSlotStride;
 constexpr uint8_t kSlotRead = 0x1a, kSlotMagic = 0x95, kSlotSize = 0x22;
 constexpr uint32_t kJoyConClass = 0x000508;  // Peripheral / Gamepad, as switchroot's BlueZ record
 
@@ -363,21 +385,29 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         uint8_t mac[6];
         uint8_t key[16];
         bool charging, chargeKnown;
+        bool pairPending;  // running unpaired until SwitchBluetooth gives the address (see the header)
         IOService *hid;
         SwitchJoyConPairing *record;
-        // Output queue: subcommand reports in order, rumble coalesced to the latest.
+        // Output queue (outLock): subcommand reports in order, rumble coalesced to the latest, `rumbleFresh` until sent.
         uint8_t queue[8][kMaxOutput];
         uint8_t queueLength[8];
         uint8_t queueHead, queueTail;
         uint8_t rumble[kMaxOutput];
         uint8_t rumbleLength;
+        bool rumbleFresh;
+        // Work loop: the last packet sent was a rumble report (the next reply does not send another), and when the last
+        // rumble report went out.
+        bool rumbleSent;
+        uint64_t rumbleAt;
     };
 
     IOWorkLoop *loop = nullptr;
+    IOTimerEventSource *poll = nullptr;  // the 15 ms clock of every running Joy-Con; armed only while one runs
     volatile uint8_t *car = nullptr, *gpio = nullptr, *apbMisc = nullptr, *pinmux = nullptr, *uarts = nullptr,
                      *pmc = nullptr;
     Side sides[2] = {};
-    bool pairing = false, nfc = false, suspended = false;
+    bool pairing = false, nfc = false, suspended = false, displayOff = false, polling = false;
+    bool hostKnown = false;  // `host` is the address SwitchBluetooth programmed
     uint8_t host[6] = {};
 
     // Registers.
@@ -397,6 +427,7 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     static void uartAction(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void detectAction(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void timerAction(OSObject *owner, IOTimerEventSource *sender);
+    static void pollAction(OSObject *owner, IOTimerEventSource *sender);
     static IOReturn output(void *context, const uint8_t *report, size_t length);
     Side *sideFor(const OSObject *source);
     bool filter(Side &s);
@@ -411,21 +442,25 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     void wake(Side &s);
     void configureUart(Side &s, bool fast);
     void send(Side &s, const uint8_t *bytes, size_t length);
+    bool txIdle(Side &s);
     void sendCommand(Side &s, uint8_t subcmd, const uint8_t *payload = nullptr, uint16_t length = 0);
     void sendReport(Side &s, const uint8_t *report, size_t length);
+    void sendOutput(Side &s, uint8_t *report, size_t length);
     void sendSubcommand(Side &s, uint8_t id, const uint8_t *data, size_t length);
     void enterDetect(Side &s);
     void attachJoyCon(Side &s);
     void startAttempt(Side &s);
     void failAttempt(Side &s, const char *why);
     void sendStep(Side &s);
-    bool hostAddress();
     void startPairing(Side &s);
     void sendPairStep(Side &s);
     void finishPairing(Side &s, bool paired, const char *how);
     void run(Side &s);
+    void armPoll();
     void tick(Side &s);
+    void rumbleAfterReply(Side &s);
     void detach(Side &s);
+    void pause(Side &s);
     void received(Side &s, const uint8_t *packet, size_t length);
     void handshakeReply(Side &s, uint8_t cmd, uint8_t echo, const uint8_t *payload, size_t length);
     void pairingReply(Side &s, const uint8_t *report, size_t length);
@@ -439,6 +474,8 @@ public:
     bool start(IOService *provider) override;
     void suspend();
     void resume();
+    void displayPower(bool on);
+    void bluetoothAddress(const uint8_t address[6]);
 };
 
 OSDefineMetaClassAndStructors(SwitchJoyConRail, IOService)
@@ -641,6 +678,16 @@ void SwitchJoyConRail::send(Side &s, const uint8_t *bytes, size_t length)
     if (busy) checkDelivery(s, "TX still busy");
 }
 
+// Whether the last packet has left (its THR-empty interrupt refilled the FIFO to the end). For packets sent on a reply:
+// the Joy-Con answered, so it heard the whole request.
+bool SwitchJoyConRail::txIdle(Side &s)
+{
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
+    const bool idle = s.txPosition == s.txLength;
+    IOSimpleLockUnlockEnableInterrupt(s.lock, state);
+    return idle;
+}
+
 void SwitchJoyConRail::sendCommand(Side &s, uint8_t subcmd, const uint8_t *payload, uint16_t length)
 {
     uint8_t packet[kHeader + 8];
@@ -651,6 +698,14 @@ void SwitchJoyConRail::sendReport(Side &s, const uint8_t *report, size_t length)
 {
     uint8_t packet[kHeader + kMaxOutput];
     send(s, packet, buildPacket(packet, kCmdExtRet, 0, report, (uint16_t)length));
+}
+
+// An output report from the HID device (0x01 subcommand, 0x10 rumble, 0x11/0x12 MCU) with the rail's packet counter in
+// byte 1 (see the header).
+void SwitchJoyConRail::sendOutput(Side &s, uint8_t *report, size_t length)
+{
+    report[1] = (uint8_t)(s.counter++ & 0xf);
+    sendReport(s, report, length);
 }
 
 // A subcommand of the driver's own (pairing), framed as the Bluetooth output report 0x01 (J:785-815).
@@ -673,6 +728,7 @@ IOReturn SwitchJoyConRail::output(void *context, const uint8_t *report, size_t l
     if (report[0] == kReportRumble) {
         memcpy(s.rumble, report, length);
         s.rumbleLength = (uint8_t)length;
+        s.rumbleFresh = true;
     } else if ((uint8_t)(s.queueTail - s.queueHead) == 8) {
         result = kIOReturnNoSpace;
     } else {
@@ -824,7 +880,8 @@ void SwitchJoyConRail::handshakeReply(Side &s, uint8_t cmd, uint8_t echo, const 
         return;
     }
     s.timer->cancelTimeout();
-    if (pairing)
+    s.pairPending = pairing;
+    if (pairing && hostKnown)
         startPairing(s);
     else
         run(s);
@@ -848,27 +905,13 @@ void SwitchJoyConRail::failAttempt(Side &s, const char *why)
 
 // ---- Work loop: pairing -------------------------------------------------------------------------------------------
 
-// The controller's address as bluetoothd will program it: /arm-io/bluetooth local-mac-address (SwitchBluetooth
-// replaces the packager's placeholder there, and in /chosen mac-address-bluetooth0, from the fuses).
-bool SwitchJoyConRail::hostAddress()
-{
-    static const char *const where[][2] = {{"/arm-io/bluetooth", "local-mac-address"},
-                                           {"/chosen", "mac-address-bluetooth0"}};
-    static const uint8_t zero[6] = {};
-    for (const auto &entry : where) {
-        IORegistryEntry *node = IORegistryEntry::fromPath(entry[0], gIODTPlane);
-        OSData *address = node ? OSDynamicCast(OSData, node->getProperty(entry[1])) : nullptr;
-        const bool ok = address && address->getLength() == 6 && memcmp(address->getBytesNoCopy(), zero, 6);
-        if (ok) memcpy(host, address->getBytesNoCopy(), 6);
-        OSSafeReleaseNULL(node);
-        if (ok) return true;
-    }
-    return false;
-}
-
+// From the attach, or for a running Joy-Con when the address arrives (bluetoothAddress): the HID device goes while the
+// pairing subcommands and their replies use the rail, and comes back with run().
 void SwitchJoyConRail::startPairing(Side &s)
 {
-    if (!hostAddress()) return finishPairing(s, false, "no Bluetooth address in the device tree");
+    s.pairPending = false;
+    if (s.hid) switch_joycon_hid_destroy(s.hid);
+    s.hid = nullptr;
     s.phase = kPairing;
     s.step = kReadSlot;
     s.slot = 0;
@@ -920,18 +963,18 @@ void SwitchJoyConRail::pairingReply(Side &s, const uint8_t *report, size_t lengt
         const uint32_t address = data[0] | data[1] << 8 | (uint32_t)data[2] << 16 | (uint32_t)data[3] << 24;
         if (address != kSlotBase + s.slot * kSlotStride) return;  // a late reply to an earlier read
         // Checksum as hekate _jc_validate_pairing_info: byte sum of the slot from offset 4 (the unread tail is zero except
-        // the capability byte, 0x68 for a Switch host, 0x08 for a PC), XOR 0x55.
+        // the capability byte, 0x68 for a Switch host, 0x08 for a PC), XOR 0x55. Erased flash fails it: no slot in use.
         uint8_t sum = 0;
         for (unsigned i = 4; i < kSlotRead; ++i) sum += slot[i];
         const bool valid = ((uint8_t)(sum + 0x68) ^ 0x55) == slot[2] || ((uint8_t)(sum + 0x08) ^ 0x55) == slot[2];
+        if (valid && slot[0] != kSlotMagic && ++s.slot < kSlots) return sendPairStep(s);  // an earlier pairing
         if (valid && slot[0] == kSlotMagic && slot[1] == kSlotSize && !memcmp(slot + 4, host, 6)) {
             // Stored most significant byte first; HCI and bluetoothd take the key least significant byte first (hekate
             // 761-762 reverses it for joycon_mac.ini, which BlueZ uses as is).
             for (unsigned i = 0; i < 16; ++i) s.key[i] = slot[10 + 15 - i];
             return finishPairing(s, true, "flash");
         }
-        // Another host's slot, or an inactive one: look at the next; erased flash (no valid checksum) ends the search.
-        if (valid && ++s.slot < kSlots) return sendPairStep(s);
+        // The slot in use names another host (Horizon's address on a console that kept its own), or there is none.
         s.step = kSendHost;
         return sendPairStep(s);
     }
@@ -954,15 +997,22 @@ void SwitchJoyConRail::pairingReply(Side &s, const uint8_t *report, size_t lengt
 void SwitchJoyConRail::finishPairing(Side &s, bool paired, const char *how)
 {
     s.timer->cancelTimeout();
-    if (paired)
+    if (paired) {
         publishPairing(s, how);
-    else
+        // Once per attach: the system log, not the console.
+        os_log(OS_LOG_DEFAULT,
+               "SwitchJoyCon: Joy-Con (%c) %02x:%02x:%02x:%02x:%02x:%02x paired to %02x:%02x:%02x:%02x:%02x:%02x (%s)",
+               s.cfg->letter, s.mac[0], s.mac[1], s.mac[2], s.mac[3], s.mac[4], s.mac[5], host[0], host[1], host[2],
+               host[3], host[4], host[5],
+               strcmp(how, "rail") ? "its slot in use, nothing written" : "written over the rail");
+    } else {
         IOLog("SwitchJoyCon: Joy-Con (%c) not paired for Bluetooth: %s\n", s.cfg->letter, how);
+    }
     run(s);
 }
 
-// The record joyconpaird matches (launchd IOKit matching on IOProviderClass SwitchJoyConPairing). Replaced on every
-// attach; the helper hands it to bluetoothd with BTAccessoryManagerSetLinkKeyEx, which is idempotent.
+// The record joyconpaird watches for (IOKit matching on IOProviderClass SwitchJoyConPairing). Replaced on every pairing;
+// the helper hands it to bluetoothd with BTAccessoryManagerSetLinkKeyEx, which is idempotent.
 void SwitchJoyConRail::publishPairing(Side &s, const char *source)
 {
     if (s.record) {
@@ -1007,7 +1057,9 @@ void SwitchJoyConRail::run(Side &s)
     IOLockLock(s.outLock);
     s.queueHead = s.queueTail = 0;
     s.rumbleLength = 0;
+    s.rumbleFresh = false;
     IOLockUnlock(s.outLock);
+    s.rumbleSent = false;
     s.phase = kRunning;
     s.lastReply = nowMS();
     s.reports = 0;
@@ -1015,10 +1067,29 @@ void SwitchJoyConRail::run(Side &s)
     s.overflowsAtRun = s.overflows;
     s.hid = switch_joycon_hid_create(s.cfg->left, s.mac, &SwitchJoyConRail::output, &s);
     tick(s);
+    if (!polling) armPoll();  // a running clock keeps its phase: the other rail's Joy-Con is not delayed
 }
 
-// One host packet per 15 ms slot: the oldest queued output report (subcommands keep their order), else the newest
-// rumble, else the input request. A Joy-Con that has said nothing for 500 ms is gone (J:1793).
+// The shared 15 ms clock: armed while any Joy-Con runs, left to lapse when none does (see the header). Sides that stop
+// running elsewhere (detach, pause, pairing) need nothing: the next fire finds them gone and does not re-arm.
+void SwitchJoyConRail::armPoll()
+{
+    polling = false;
+    for (Side &s : sides) polling |= s.phase == kRunning;
+    if (polling) poll->setTimeoutMS(kIntervalMS);
+}
+
+void SwitchJoyConRail::pollAction(OSObject *owner, IOTimerEventSource *)
+{
+    auto *self = static_cast<SwitchJoyConRail *>(owner);
+    for (Side &s : self->sides) {
+        if (s.phase == kRunning) self->tick(s);
+    }
+    self->armPoll();
+}
+
+// One request per 15 ms: the oldest queued output report (subcommands keep their order), else the input request. A
+// Joy-Con that has said nothing for 500 ms is gone (J:1793).
 void SwitchJoyConRail::tick(Side &s)
 {
     if (nowMS() - s.lastReply > kSilenceMS) {
@@ -1037,18 +1108,43 @@ void SwitchJoyConRail::tick(Side &s)
         const unsigned at = s.queueHead++ & 7;
         length = s.queueLength[at];
         memcpy(report, s.queue[at], length);
-    } else if (s.rumbleLength) {
-        length = s.rumbleLength;
-        memcpy(report, s.rumble, length);
-        s.rumbleLength = 0;
     }
     IOLockUnlock(s.outLock);
-    if (!length) {
+    s.rumbleSent = false;
+    if (length) {
+        sendOutput(s, report, length);
+    } else {
         report[0] = kRequestInput;
-        length = 1;
+        sendReport(s, report, 1);
     }
-    sendReport(s, report, length);
-    s.timer->setTimeoutMS(kIntervalMS);
+}
+
+// After a reply to a request: the newest rumble report if the Joy-Con has not had it, or the last one again every 50 ms
+// while it asks for a non-zero amplitude on this Joy-Con (L4T joycon_send_rumble_data: the left half of the 8 rumble
+// bytes drives a Joy-Con (L), the right half a Joy-Con (R); zero amplitude is 0x40000000 under mask 0xFF80FE00, LE).
+// A reply to the rumble report itself sends nothing.
+void SwitchJoyConRail::rumbleAfterReply(Side &s)
+{
+    if (s.rumbleSent || !txIdle(s)) return;
+    uint8_t report[kMaxOutput];
+    size_t length = 0;
+    const uint64_t now = nowMS();
+    IOLockLock(s.outLock);
+    if (s.rumbleLength >= 10) {
+        const uint8_t *half = s.rumble + (s.cfg->left ? 2 : 6);
+        const uint32_t word = half[0] | half[1] << 8 | (uint32_t)half[2] << 16 | (uint32_t)half[3] << 24;
+        const bool moving = (word & 0xff80fe00u) != 0x40000000u;
+        if (s.rumbleFresh || (moving && now - s.rumbleAt >= kRumbleKeepAliveMS)) {
+            length = s.rumbleLength;
+            memcpy(report, s.rumble, length);
+            s.rumbleFresh = false;
+        }
+    }
+    IOLockUnlock(s.outLock);
+    if (!length) return;
+    s.rumbleSent = true;
+    s.rumbleAt = now;
+    sendOutput(s, report, length);
 }
 
 void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t length)
@@ -1063,6 +1159,7 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
             setCharging(s, true);
     }
     ++s.reports;
+    rumbleAfterReply(s);
     if (!s.hid) return;
     switch_joycon_hid_input(s.hid, report, length);
     // 0x31 is 0x30 (timer, battery, buttons, sticks, vibrator, three IMU samples; yuzu joycon_types.h
@@ -1084,6 +1181,23 @@ void SwitchJoyConRail::detach(Side &s)
     enterDetect(s);
 }
 
+// Display off (see the header). A rail waiting for an attach has its detect interrupt's delivery checked first: the one
+// look at it that needs no timer. The poll lapses by itself once no side runs.
+void SwitchJoyConRail::pause(Side &s)
+{
+    if (s.phase == kWaiting) tegra_gpio_check_delivery(s.cfg->detectPin, "SwitchJoyCon");
+    s.timer->cancelTimeout();
+    s.detect->disable();
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
+    s.ier = 0;
+    wr(s, IER, 0);
+    s.txLength = s.txPosition = 0;
+    IOSimpleLockUnlockEnableInterrupt(s.lock, state);
+    if (s.hid) switch_joycon_hid_destroy(s.hid);
+    s.hid = nullptr;
+    s.phase = kSuspended;
+}
+
 void SwitchJoyConRail::setCharging(Side &s, bool on)
 {
     if (s.chargeKnown && s.charging == on) return;
@@ -1100,18 +1214,13 @@ void SwitchJoyConRail::timerAction(OSObject *owner, IOTimerEventSource *sender)
     if (!s) return;
     switch (s->phase) {
     case kSettling:
-        // Arm first, then look: a Joy-Con already on the rail never makes an edge (J:1753-1757).
+        // Arm first, then look: a Joy-Con already on the rail never makes an edge (J:1753-1757). Nothing else is armed
+        // while the rail is empty.
         s->phase = kWaiting;
         s->detect->enable();
-        if (tegra_gpio_read(s->cfg->detectPin) == 0)
-            self->attachJoyCon(*s);
-        else
-            s->timer->setTimeoutMS(kWatchdogMS);
+        if (tegra_gpio_read(s->cfg->detectPin) == 0) self->attachJoyCon(*s);
         break;
-    case kWaiting:
-        tegra_gpio_check_delivery(s->cfg->detectPin, "SwitchJoyCon");
-        s->timer->setTimeoutMS(kWatchdogMS);
-        break;
+    case kWaiting: break;
     case kBackoff: self->startAttempt(*s); break;
     case kHandshake:
         if (s->step == kDisconnect && s->sends < kDisconnectSends)
@@ -1123,7 +1232,7 @@ void SwitchJoyConRail::timerAction(OSObject *owner, IOTimerEventSource *sender)
         self->checkDelivery(*s, "pairing step timed out");
         self->finishPairing(*s, false, "no reply");
         break;
-    case kRunning: self->tick(*s); break;
+    case kRunning: break;  // the shared poll drives it
     case kSuspended: break;
     }
 }
@@ -1317,11 +1426,12 @@ void SwitchJoyConRail::quiesce(Side &s)
     s.phase = kSuspended;
 }
 
+// With the display still off the rail stays paused; displayPower(true) starts detection.
 void SwitchJoyConRail::wake(Side &s)
 {
     initHardware(s);
     s.irq->enable();
-    enterDetect(s);
+    if (!displayOff) enterDetect(s);
 }
 
 void SwitchJoyConRail::suspend()
@@ -1331,6 +1441,8 @@ void SwitchJoyConRail::suspend()
             auto *self = static_cast<SwitchJoyConRail *>(owner);
             if (self->suspended) return kIOReturnSuccess;
             for (Side &s : self->sides) self->quiesce(s);
+            self->poll->cancelTimeout();
+            self->polling = false;
             self->suspended = true;
             return kIOReturnSuccess;
         },
@@ -1351,6 +1463,53 @@ void SwitchJoyConRail::resume()
         this);
 }
 
+// ---- Display power and the Bluetooth address --------------------------------------------------------------------
+
+void SwitchJoyConRail::displayPower(bool on)
+{
+    loop->runAction(
+        [](OSObject *owner, void *arg, void *, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchJoyConRail *>(owner);
+            const bool on = arg != nullptr;
+            if (self->displayOff == !on) return kIOReturnSuccess;
+            self->displayOff = !on;
+            if (self->suspended)
+                return kIOReturnSuccess;  // SC7 already stopped everything; resume() looks at displayOff
+            for (Side &s : self->sides) {
+                if (on)
+                    self->enterDetect(s);
+                else
+                    self->pause(s);
+            }
+            if (!on) {
+                self->poll->cancelTimeout();
+                self->polling = false;
+            }
+            return kIOReturnSuccess;
+        },
+        this, on ? this : nullptr);
+}
+
+// The address to pair to (see the header). Joy-Cons that ran unpaired while it was unknown are paired now; a new
+// address (it changes only when SwitchBluetooth adopts the staged one) pairs every running Joy-Con again.
+void SwitchJoyConRail::bluetoothAddress(const uint8_t address[6])
+{
+    loop->runAction(
+        [](OSObject *owner, void *arg, void *, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchJoyConRail *>(owner);
+            const uint8_t *address = static_cast<const uint8_t *>(arg);
+            const bool changed = !self->hostKnown || memcmp(self->host, address, 6);
+            memcpy(self->host, address, 6);
+            self->hostKnown = true;
+            if (!self->pairing) return kIOReturnSuccess;
+            for (Side &s : self->sides) {
+                if (s.phase == kRunning && (s.pairPending || changed)) self->startPairing(s);
+            }
+            return kIOReturnSuccess;
+        },
+        this, const_cast<uint8_t *>(address));
+}
+
 // ---- Start --------------------------------------------------------------------------------------------------------
 
 bool SwitchJoyConRail::start(IOService *provider)
@@ -1367,8 +1526,10 @@ bool SwitchJoyConRail::start(IOService *provider)
         panic("SwitchJoyCon: cannot map CAR/GPIO/APB_MISC/pinmux/UART/PMC or make a work loop");
     }
 
-    pairing = bootArg("switch-joycon-bt");
+    pairing = bootArg("switch-bt") || bootArg("switch-joycon-bt");
     nfc = bootArg("switch-joycon-nfc");
+    poll = IOTimerEventSource::timerEventSource(this, &SwitchJoyConRail::pollAction);
+    if (!poll || loop->addEventSource(poll) != kIOReturnSuccess) panic("SwitchJoyCon: cannot attach the rail clock");
 
     preparePads("start");
     for (unsigned i = 0; i < 2; ++i) setUp(sides[i], &kSides[i]);
@@ -1399,7 +1560,7 @@ extern "C" int switch_joycon_start(void)
     started = true;
     // First, so whichever game-controller personalities serve are settled before any controller can appear.
     switch_joycon_hid_select_personalities();
-    const bool rail = bootArg("switch-joycon-rail"), bluetooth = bootArg("switch-joycon-bt");
+    const bool rail = bootArg("switch-joycon-rail"), bluetooth = bootArg("switch-bt") || bootArg("switch-joycon-bt");
     IOService *resources = IOService::getResourceService();
     if (bootArg("switch-joycon-nfc")) {
         auto *marker = OSTypeAlloc(SwitchJoyConNFC);
@@ -1431,4 +1592,14 @@ extern "C" void switch_joycon_suspend(void)
 extern "C" void switch_joycon_resume(void)
 {
     if (gRail) gRail->resume();
+}
+
+extern "C" void switch_joycon_display_power(bool on)
+{
+    if (gRail) gRail->displayPower(on);
+}
+
+extern "C" void switch_joycon_bluetooth_address(const uint8_t address[6])
+{
+    if (gRail) gRail->bluetoothAddress(address);
 }

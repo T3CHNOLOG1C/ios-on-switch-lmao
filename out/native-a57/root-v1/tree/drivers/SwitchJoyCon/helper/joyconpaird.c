@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// joyconpaird: hands the kernel's rail pairings of Joy-Cons to bluetoothd.
+// joyconpaird: hands Joy-Con pairings to bluetoothd, so a Joy-Con pulled off the rail reconnects over Bluetooth.
 //
-// The rail driver (../SwitchJoyConRail.cpp) pairs a Joy-Con to the console's Bluetooth address over the rail and
-// publishes one SwitchJoyConPairing registry entry per Joy-Con: AddressString ("xx:xx:xx:xx:xx:xx"), LinkKey (16 bytes,
-// HCI order), Name, ClassOfDevice. bluetoothd keeps classic link keys in the system keychain (generic password,
+// Two sources, both {address, name, link key (16 bytes, HCI order)}:
+//   * the rail driver (../SwitchJoyConRail.cpp), which pairs a Joy-Con to the console's Bluetooth address over the
+//     rail (or finds it already paired) and publishes one SwitchJoyConPairing registry entry per Joy-Con:
+//     AddressString ("xx:xx:xx:xx:xx:xx"), LinkKey, Name, ClassOfDevice;
+//   * hekate's "Dump Joy-Con BT" of the pairings Horizon made (switchroot/joycon_mac.ini), which the deploy tool stages
+//     as kStagedPath (tools/deploy/joycon_pairing.py: HostAddress, Controllers [{Address, Name, ProductID, LinkKey}]);
+//     the kernel gives the controller that HostAddress (../../SwitchBluetooth/SwitchBluetooth.cpp), so those
+//     Joy-Cons reconnect without ever touching the rail. A dump is imported once (kImportedPath keeps a copy of the
+//     one imported): bluetoothd keeps the keys, and a later boot must not put back a key the rail has replaced since.
+//     A Joy-Con whose rail record is present is taken from the rail (it was just read from the Joy-Con itself).
+// bluetoothd keeps classic link keys in the system keychain (generic password,
 // service "MobileBluetooth", account = address, access group com.apple.bluetooth: BTKCSetData in bluetoothd) and the
 // device records in the com.apple.MobileBluetooth.devices preferences domain. Neither is reachable from the kernel,
 // and writing them behind bluetoothd's back would race its caches; MobileBluetooth.framework has the call Apple uses
@@ -11,20 +19,35 @@
 //   BTAccessoryManagerSetLinkKeyEx(manager, address[6], name, classOfDevice, serviceMask, linkKey[16], &device)
 // (XPC kCBMsgIdAccessorySetLinkKeyExMsg; bluetoothd BTAccessoryMsgHandler::handleBTAccessorySetLinkKeyExMsg creates
 // the paired device and stores the key itself). The address bytes come from BTDeviceAddressFromString, so they are in
-// bluetoothd's own order. Service mask 0x20 is "ServiceHID" in bluetoothd's record writer.
+// bluetoothd's own order. Service mask 0x20 is "ServiceHID" in bluetoothd's record writer. 21H461 bluetoothd
+// FUN_10053dc80 -> FUN_1003de5ec: finds or creates the device by address, sets class of device, name and the service
+// bits, and stores the 16 bytes as they come as an authenticated combination key (type 5; FUN_100555d1c(key, 5),
+// FUN_10056a990), so importing the same key again changes nothing.
 //
-// Launched by launchd on IOKit matching of IOProviderClass SwitchJoyConPairing (com.ioswitch.joyconpaird.plist), runs
-// as root with com.apple.bluetooth.system/.internal (what sharingd holds for MobileBluetooth's accessory calls),
-// imports every record present, and exits when idle. MobileBluetooth is private: it is loaded with dlopen, and the
-// prototypes below are from its disassembly (21H461).
+// Started by the BlueTool stand-in at each of bluetoothd's chip boots (../../SwitchBluetooth/BlueTool/BlueTool.c: launchd
+// does not load LaunchDaemons plists from the Data overlay), so it runs as mobile, outside any sandbox, with
+// com.apple.bluetooth.system/.internal (what sharingd holds for MobileBluetooth's accessory calls). One instance runs
+// (kLockPath); it imports the dump and every rail record present, then waits for new rail records for the boot, or until
+// bluetoothd's session ends (the next chip boot starts it again). MobileBluetooth is private: it is loaded with dlopen,
+// and the prototypes below are from its disassembly (21H461, BTAccessoryManagerSetLinkKeyEx: x0 manager, x1 address
+// bytes, x2 name, w3 class, w4 service mask, x5 key, x6 device out).
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <os/log.h>
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <xpc/xpc.h>
 
 typedef void *BTSession;
@@ -48,25 +71,16 @@ static int (*BTAccessoryManagerSetLinkKeyEx)(BTAccessoryManager manager, const B
                                              const char *name, uint32_t classOfDevice, uint32_t serviceMask,
                                              const uint8_t key[16], BTDevice *device);
 
-enum { kServiceHID = 0x20, kIdleSeconds = 30 };
+enum { kServiceHID = 0x20 };
+static const char kStagedPath[] = "/private/var/ioswitch/bluetooth/joycon-pairing.plist";  // deploy's, read-only here
+static const char kImportedPath[] = "/private/var/mobile/Library/com.ioswitch.joycon-pairing.imported.plist";
+static const char kLockPath[] = "/private/var/tmp/com.ioswitch.joyconpaird.lock";
 
 static dispatch_queue_t queue;
 static BTAccessoryManager manager;
 static IONotificationPortRef port;
 static io_iterator_t records;
 static os_log_t logger;
-
-static void scheduleExit(void)
-{
-    static dispatch_source_t timer;
-    if (!timer) {
-        timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-        dispatch_source_set_event_handler(timer, ^{ exit(0); });
-        dispatch_resume(timer);
-    }
-    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)kIdleSeconds * NSEC_PER_SEC),
-                              DISPATCH_TIME_FOREVER, NSEC_PER_SEC);
-}
 
 static CFTypeRef property(io_service_t service, const char *key, CFTypeID type)
 {
@@ -80,33 +94,47 @@ static CFTypeRef property(io_service_t service, const char *key, CFTypeID type)
     return value;
 }
 
+// One pairing to bluetoothd; returns 0 or its error. `source` is for the log line.
+static int pair(const char *address, const char *name, uint32_t classOfDevice, const uint8_t key[16],
+                const char *source)
+{
+    BTDeviceAddress bytes;
+    BTDevice device = NULL;
+    int result = BTDeviceAddressFromString(address, &bytes);
+    if (!result)
+        result = BTAccessoryManagerSetLinkKeyEx(manager, &bytes, name, classOfDevice, kServiceHID, key, &device);
+    if (result)
+        os_log_error(logger, "joyconpaird: %{public}s (%{public}s, %{public}s) not imported: %d", name, address, source,
+                     result);
+    else
+        os_log(logger, "joyconpaird: %{public}s (%{public}s) paired with bluetoothd (%{public}s)", name, address,
+               source);
+    return result;
+}
+
 static void import(io_service_t service)
 {
     CFStringRef addressString = property(service, "AddressString", CFStringGetTypeID());
     CFStringRef nameString = property(service, "Name", CFStringGetTypeID());
+    CFStringRef sourceString = property(service, "Source", CFStringGetTypeID());
     CFDataRef key = property(service, "LinkKey", CFDataGetTypeID());
     CFNumberRef cod = property(service, "ClassOfDevice", CFNumberGetTypeID());
-    char address[18] = "", name[32] = "Joy-Con";
+    char address[18] = "", name[32] = "Joy-Con", source[16] = "?";
     uint32_t classOfDevice = 0x000508;
-    BTDeviceAddress bytes;
-    BTDevice device = NULL;
-    int result = -1;
+    if (nameString) CFStringGetCString(nameString, name, sizeof(name), kCFStringEncodingUTF8);
+    if (sourceString) CFStringGetCString(sourceString, source, sizeof(source), kCFStringEncodingUTF8);
+    if (cod) CFNumberGetValue(cod, kCFNumberSInt32Type, &classOfDevice);
+    char from[32];
+    snprintf(from, sizeof(from), "rail, %s", source);
     if (addressString && key && CFDataGetLength(key) == 16 &&
         CFStringGetCString(addressString, address, sizeof(address), kCFStringEncodingUTF8)) {
-        if (nameString) CFStringGetCString(nameString, name, sizeof(name), kCFStringEncodingUTF8);
-        if (cod) CFNumberGetValue(cod, kCFNumberSInt32Type, &classOfDevice);
-        result = BTDeviceAddressFromString(address, &bytes);
-        if (!result) {
-            result = BTAccessoryManagerSetLinkKeyEx(manager, &bytes, name, classOfDevice, kServiceHID,
-                                                    CFDataGetBytePtr(key), &device);
-        }
+        pair(address, name, classOfDevice, CFDataGetBytePtr(key), from);
+    } else {
+        os_log_error(logger, "joyconpaird: a SwitchJoyConPairing record without address or 16-byte key");
     }
-    if (result)
-        os_log_error(logger, "joyconpaird: %{public}s (%{public}s) not imported: %d", name, address, result);
-    else
-        os_log(logger, "joyconpaird: %{public}s (%{public}s) paired with bluetoothd", name, address);
     if (addressString) CFRelease(addressString);
     if (nameString) CFRelease(nameString);
+    if (sourceString) CFRelease(sourceString);
     if (key) CFRelease(key);
     if (cod) CFRelease(cod);
 }
@@ -118,15 +146,112 @@ static void matched(void *context, io_iterator_t iterator)
         import(service);
         IOObjectRelease(service);
     }
-    scheduleExit();
+}
+
+// Whether the rail driver has a record for `address` now (it wins over the dump; see the file comment).
+static bool railHas(const char *address)
+{
+    io_iterator_t iterator = IO_OBJECT_NULL;
+    if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("SwitchJoyConPairing"), &iterator) !=
+        KERN_SUCCESS)
+        return false;
+    bool found = false;
+    io_service_t service;
+    while (!found && (service = IOIteratorNext(iterator))) {
+        CFStringRef string = property(service, "AddressString", CFStringGetTypeID());
+        char other[18] = "";
+        found = string && CFStringGetCString(string, other, sizeof(other), kCFStringEncodingUTF8) &&
+                !strcasecmp(other, address);
+        if (string) CFRelease(string);
+        IOObjectRelease(service);
+    }
+    IOObjectRelease(iterator);
+    return found;
+}
+
+static CFDataRef readFile(const char *path)
+{
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0) return NULL;
+    struct stat st;
+    CFMutableDataRef data = NULL;
+    if (!fstat(fd, &st) && st.st_size > 0 && st.st_size < 65536) {
+        data = CFDataCreateMutable(kCFAllocatorDefault, st.st_size);
+        CFDataSetLength(data, st.st_size);
+        if (read(fd, CFDataGetMutableBytePtr(data), st.st_size) != st.st_size) {
+            CFRelease(data);
+            data = NULL;
+        }
+    }
+    close(fd);
+    return data;
+}
+
+static bool writeFile(const char *path, CFDataRef data)
+{
+    char partial[PATH_MAX];
+    snprintf(partial, sizeof(partial), "%s.partial", path);
+    int fd = open(partial, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (fd < 0) return false;
+    const bool ok = write(fd, CFDataGetBytePtr(data), CFDataGetLength(data)) == CFDataGetLength(data) && !fsync(fd);
+    close(fd);
+    return ok && !rename(partial, path);
+}
+
+// The staged dump, once per dump (see the file comment).
+static void importStaged(void)
+{
+    CFDataRef staged = readFile(kStagedPath);
+    if (!staged) return;
+    CFDataRef imported = readFile(kImportedPath);
+    const bool done = imported && CFEqual(staged, imported);
+    if (imported) CFRelease(imported);
+    CFPropertyListRef plist =
+        done ? NULL : CFPropertyListCreateWithData(kCFAllocatorDefault, staged, kCFPropertyListImmutable, NULL, NULL);
+    CFArrayRef controllers = plist && CFGetTypeID(plist) == CFDictionaryGetTypeID()
+                                 ? CFDictionaryGetValue((CFDictionaryRef)plist, CFSTR("Controllers"))
+                                 : NULL;
+    if (!done && (!controllers || CFGetTypeID(controllers) != CFArrayGetTypeID())) {
+        os_log_error(logger, "joyconpaird: %{public}s is not a pairing dump", kStagedPath);
+        controllers = NULL;
+    }
+    int failures = controllers ? 0 : !done;
+    for (CFIndex i = 0; controllers && i < CFArrayGetCount(controllers); ++i) {
+        CFDictionaryRef entry = CFArrayGetValueAtIndex(controllers, i);
+        CFStringRef addressString =
+            CFGetTypeID(entry) == CFDictionaryGetTypeID() ? CFDictionaryGetValue(entry, CFSTR("Address")) : NULL;
+        CFStringRef nameString = addressString ? CFDictionaryGetValue(entry, CFSTR("Name")) : NULL;
+        CFDataRef key = addressString ? CFDictionaryGetValue(entry, CFSTR("LinkKey")) : NULL;
+        char address[18] = "", name[32] = "Joy-Con";
+        if (!addressString || CFGetTypeID(addressString) != CFStringGetTypeID() || !key ||
+            CFGetTypeID(key) != CFDataGetTypeID() || CFDataGetLength(key) != 16 ||
+            !CFStringGetCString(addressString, address, sizeof(address), kCFStringEncodingUTF8)) {
+            os_log_error(logger, "joyconpaird: entry %ld of %{public}s is malformed", (long)i, kStagedPath);
+            ++failures;
+            continue;
+        }
+        if (nameString && CFGetTypeID(nameString) == CFStringGetTypeID())
+            CFStringGetCString(nameString, name, sizeof(name), kCFStringEncodingUTF8);
+        if (railHas(address)) {
+            os_log(logger, "joyconpaird: %{public}s (%{public}s): the rail's pairing is newer than the dump's", name,
+                   address);
+            continue;
+        }
+        failures += pair(address, name, 0x000508, CFDataGetBytePtr(key), "Horizon, staged dump") != 0;
+    }
+    if (!failures && !done && !writeFile(kImportedPath, staged))
+        os_log_error(logger, "joyconpaird: cannot write %{public}s: %{errno}d", kImportedPath, errno);
+    if (plist) CFRelease(plist);
+    CFRelease(staged);
 }
 
 static void sessionEvent(BTSession session, int event, int result, void *context)
 {
     if (event != 0 || result != 0) {
+        // Anything but attached: bluetoothd went away (or refused), and a dead session must not keep the lock; its next
+        // chip boot starts this again.
         os_log_error(logger, "joyconpaird: bluetoothd session event %d result %d", event, result);
-        if (event != 0) exit(1);
-        return;
+        exit(1);
     }
     int error = BTAccessoryManagerGetDefault(session, &manager);
     if (error) {
@@ -143,11 +268,21 @@ static void sessionEvent(BTSession session, int event, int result, void *context
         exit(1);
     }
     matched(NULL, records);
+    importStaged();
 }
 
 int main(void)
 {
     logger = os_log_create("com.ioswitch.joyconpaird", "pairing");
+    // One instance: BlueTool starts this at every chip boot, and the lock goes with the process. An agent whose session
+    // just ended may still be on its way out: a few tries, 200 ms apart.
+    const int lock = open(kLockPath, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0644);
+    bool locked = false;
+    for (unsigned tries = 0; lock >= 0 && !locked && tries < 10; ++tries) {
+        locked = !flock(lock, LOCK_EX | LOCK_NB);
+        if (!locked) usleep(200000);
+    }
+    if (!locked) return 0;
     queue = dispatch_queue_create("com.ioswitch.joyconpaird", DISPATCH_QUEUE_SERIAL);
     void *mb = dlopen("/System/Library/PrivateFrameworks/MobileBluetooth.framework/MobileBluetooth", RTLD_NOW);
     BTSessionAttachWithQueue = mb ? dlsym(mb, "BTSessionAttachWithQueue") : NULL;
@@ -159,13 +294,6 @@ int main(void)
         os_log_error(logger, "joyconpaird: MobileBluetooth unavailable: %{public}s", dlerror());
         return 1;
     }
-    // launchd started this job for an IOKit match: take the stream's events so it does not hold them for us (the
-    // registry is read directly above). The SDK marks the call unavailable on iOS; libxpc has it (gamecontrollerd uses
-    // LaunchEvents the same way).
-    void (*setStreamHandler)(const char *, dispatch_queue_t, xpc_handler_t) =
-        (void (*)(const char *, dispatch_queue_t, xpc_handler_t))dlsym(RTLD_DEFAULT, "xpc_set_event_stream_handler");
-    if (setStreamHandler) setStreamHandler("com.apple.iokit.matching", queue, ^(xpc_object_t event) { (void)event; });
-
     static const BTSessionCallbacks callbacks = {sessionEvent, {NULL, NULL, NULL}};
     dispatch_async(queue, ^{
         int error = BTSessionAttachWithQueue("com.ioswitch.joyconpaird", &callbacks, NULL, queue);
@@ -173,7 +301,6 @@ int main(void)
             os_log_error(logger, "joyconpaird: BTSessionAttachWithQueue: %d", error);
             exit(1);
         }
-        scheduleExit();
     });
     dispatch_main();
 }

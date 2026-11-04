@@ -11,6 +11,7 @@ exports_files([
 py_library(
     name = "lib",
     srcs = [
+        "joycon_pairing.py",
         "mkarchive.py",
         "pull_logs.py",
     ],

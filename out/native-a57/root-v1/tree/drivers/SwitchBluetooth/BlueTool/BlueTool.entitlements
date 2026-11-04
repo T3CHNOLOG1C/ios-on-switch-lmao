@@ -12,8 +12,6 @@
 	<true/>
 	<key>com.apple.private.ZhuGeSupport.CopyValue</key>
 	<true/>
-	<key>com.apple.private.sandbox.profile:embedded</key>
-	<string>BlueTool</string>
 	<key>com.apple.security.exception.iokit-user-client-class</key>
 	<array>
 		<string>AppleBTHciUC</string>

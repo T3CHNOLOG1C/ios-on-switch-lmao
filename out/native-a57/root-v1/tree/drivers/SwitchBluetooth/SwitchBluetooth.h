@@ -14,7 +14,9 @@
 //   "ioswitch,patchram"  the .hcd file (HCI Write_RAM / Launch_RAM records), downloaded at every bring-up
 //   "local-mac-address"  6 bytes, display order; written to the controller (Broadcom 0xFC01) after the patch. When
 //                        the fuses are readable the unit's own address (U-Boot's 98:B6:E9 + lot code scheme)
-//                        replaces it here and in /chosen mac-address-bluetooth0 before userland starts.
+//                        replaces it here and in /chosen mac-address-bluetooth0 before userland starts; when deploy
+//                        staged hekate's Joy-Con dump, Horizon's replaces that at bluetoothd's first connect
+//                        (SwitchBluetooth.cpp, "BD address").
 //   "transport-speed" (u32 3000000) and "transport-encoding" (u32 1, H4) for bluetoothd and BlueTool.
 #ifndef SWITCH_BLUETOOTH_H
 #define SWITCH_BLUETOOTH_H

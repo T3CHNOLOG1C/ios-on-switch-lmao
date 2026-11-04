@@ -30,7 +30,8 @@
 // switch_display_power_request(), and this work loop plays it: off = TegraPanel's L4T suspend sequence while the DC still
 // scans out, then the display stops the DC (no fetches, no frame-end or vblank interrupts, so the cores sit in WFI); on =
 // the display restarts the DC, then TegraPanel wakes the panel and restores the brightness. The touch controller goes
-// down with the screen and comes back up while the panel wakes (SwitchTouch's display power). On by default; boot-arg
+// down with the screen and comes back up while the panel wakes (SwitchTouch's display power), and so do the rail
+// Joy-Cons' traffic and timers (switch_joycon_display_power). On by default; boot-arg
 // switch-sleep=0 leaves the render server's requests to the original user client (the panel stays lit when locked).
 // QuartzCore ignores the request's return value (IOMFBDisplay::update_power_state_locked, 21H461), so answering it here
 // changes nothing on its side.
@@ -73,8 +74,9 @@ extern "C" __attribute__((weak)) bool native_legacy_display_set_scanout(bool)
     return false;
 }
 
-// SwitchTouch's strong definition wins when it is linked (SwitchTouch.h).
+// SwitchTouch's and SwitchJoyCon's strong definitions win when they are linked (SwitchTouch.h, SwitchJoyCon.h).
 extern "C" __attribute__((weak)) void switch_touch_display_power(bool) {}
+extern "C" __attribute__((weak)) void switch_joycon_display_power(bool) {}
 
 namespace {
 constexpr uint32_t kMax = 65536;  // IODisplayParameters.brightness max, as Apple's
@@ -230,6 +232,7 @@ void SwitchBacklight::powerOff()
     // disarmed before the scanout stops.
     switch_als_set_active(false);
     switch_touch_display_power(false);
+    switch_joycon_display_power(false);  // rail traffic and timers stop (returns at once)
     const int err = tegra_panel_power_off();
     if (err) IOLog("SwitchBacklight: panel off failed (%d): the display is not running\n", err);
     scanoutStopped = native_legacy_display_set_scanout(false);
@@ -243,7 +246,8 @@ void SwitchBacklight::powerOff()
 void SwitchBacklight::powerOn()
 {
     const uint64_t start = mach_absolute_time();
-    switch_touch_display_power(true);  // the controller comes up on its own work loop while the panel wakes
+    switch_touch_display_power(true);   // the controller comes up on its own work loop while the panel wakes
+    switch_joycon_display_power(true);  // so do seated Joy-Cons, on the rail's
     if (scanoutStopped && !native_legacy_display_set_scanout(true)) {
         panic("SwitchBacklight: the display did not restart DC A's scanout for wake");
     }

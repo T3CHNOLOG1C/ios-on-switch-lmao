@@ -52,6 +52,16 @@
 // overlay), which reports success: the work is done here. A client that sent anything leaves the chip in an unknown
 // state (an original BlueTool would push its own baud rate and firmware), so the next connect brings the chip up
 // again.
+//
+// BD address: the unit's own from the fuses (publishAddress), or Horizon's when deploy staged hekate's "Dump Joy-Con BT"
+// (switchroot/joycon_mac.ini on the FAT, read there by tools/deploy/joycon_pairing.py and written to Data as
+// kStagedAddressPath: 6 bytes, display order), as switchroot's U-Boot sets the controller to the host address in
+// joycon_mac.bin so that Joy-Cons paired in Horizon reconnect without being paired again. Data is surely mounted only
+// once bluetoothd runs, so the staged address is read at its first connect, written to the controller (0xFC01) before
+// the stream is handed over and put where bluetoothd and MobileGestalt read the address. bluetoothd has read
+// local-mac-address once already by then, for BlueTool's "btaddress" (21H461 FUN_1002f0268), which the stand-in
+// ignores. Every connect then hands the controller's address to the rail Joy-Con driver, which pairs rail Joy-Cons to
+// it (switch_joycon_bluetooth_address, ../SwitchJoyCon/SwitchJoyCon.h).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
@@ -68,13 +78,18 @@
 #include <sys/errno.h>
 #include <sys/kern_control.h>
 #include <sys/kpi_mbuf.h>
+#include <sys/fcntl.h>
 #include <sys/termios.h>
 #include <sys/ttycom.h>
+#include <sys/vnode.h>
 #include <string.h>
 #include "SwitchBluetooth.h"
 #include "../ArmGIC/IOSwitchInterrupts.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+
+// The rail Joy-Con driver's strong definition wins when it is linked (../SwitchJoyCon/SwitchJoyCon.h).
+extern "C" __attribute__((weak)) void switch_joycon_bluetooth_address(const uint8_t[6]) {}
 
 namespace {
 constexpr vm_offset_t kUartPA = 0x70006000, kUartD = 0x300;  // UART-A page; UART-D at +0x300 (hekate uart.c)
@@ -83,6 +98,7 @@ constexpr uint32_t kIntid = 32 + 90;
 constexpr uint32_t kPllpHz = 408000000;
 constexpr uint32_t kInitBaud = 115200, kFastBaud = 3000000;
 constexpr const char *kControlName = "com.apple.uart.bluetooth";
+constexpr const char *kStagedAddressPath = "/private/var/ioswitch/bluetooth/host-address";  // see the header
 
 // Clock and reset controller (hekate bdk/soc/clock.h, clock.c _clock_uart[3]): UARTD is bit 1 of the U registers.
 enum : uint32_t {
@@ -329,6 +345,9 @@ class SwitchBluetooth : public IOService {
     uint8_t address[6] = {};
     bool haveAddress = false;
     const char *addressFrom = "ADT";
+    bool stagedChecked = false;  // stateLock: the staged address was looked for (first connect)
+    bool adoptStagedAddress();
+    void publishAddressProperties();
 
     // A bring-up or connect that outlives kStuckMs (watch / unwatch) logs one line; a thread call, so a work loop or
     // gate that is itself stuck cannot hold it up.
@@ -1457,6 +1476,55 @@ void SwitchBluetooth::setMode(Mode m)
     loop->runAction(&SwitchBluetooth::gated, this, reinterpret_cast<void *>(uintptr_t(m) + 2));
 }
 
+// ---- BD address --------------------------------------------------------------------------------------------------
+
+// The address where bluetoothd (/arm-io/bluetooth local-mac-address) and MobileGestalt (/chosen
+// mac-address-bluetooth0) read it, as publishAddress() puts the fuses' one.
+void SwitchBluetooth::publishAddressProperties()
+{
+    OSData *value = OSData::withBytes(address, sizeof(address));
+    IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane);
+    IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+    if (value && node) node->setProperty("local-mac-address", value);
+    if (value && chosen) chosen->setProperty("mac-address-bluetooth0", value);
+    OSSafeReleaseNULL(chosen);
+    OSSafeReleaseNULL(node);
+    OSSafeReleaseNULL(value);
+}
+
+// The staged address (see the header), read with the kernel's context: this runs on bluetoothd's thread, and its
+// sandbox would refuse the path. Returns whether it replaced `address`. A missing file is the normal case; a malformed
+// one is ignored with a line.
+bool SwitchBluetooth::adoptStagedAddress()
+{
+    vfs_context_t ctx = vfs_context_kernel();
+    vnode_t vp = NULLVP;
+    if (vnode_open(kStagedAddressPath, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) return false;
+    uint8_t staged[7] = {};
+    int resid = 0;
+    const int error = vn_rdwr(UIO_READ, vp, reinterpret_cast<caddr_t>(staged), sizeof(staged), 0, UIO_SYSSPACE,
+                              IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+    vnode_close(vp, FREAD, ctx);
+    static const uint8_t zero[6] = {}, ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    // Exactly 6 bytes (one more asked for, so a longer file shows), a unicast address.
+    if (error || resid != 1 || !memcmp(staged, zero, 6) || !memcmp(staged, ones, 6) || (staged[0] & 1)) {
+        IOLog("SwitchBluetooth: %s is not a BD address (error %d, %d bytes); kept %02x:%02x:%02x:%02x:%02x:%02x\n",
+              kStagedAddressPath, error, (int)sizeof(staged) - resid, address[0], address[1], address[2], address[3],
+              address[4], address[5]);
+        return false;
+    }
+    if (haveAddress && !memcmp(staged, address, 6)) return false;
+    IOLog("SwitchBluetooth: BD %02x:%02x:%02x:%02x:%02x:%02x from the staged Joy-Con pairing (Horizon's), was "
+          "%02x:%02x:%02x:%02x:%02x:%02x (%s)\n",
+          staged[0], staged[1], staged[2], staged[3], staged[4], staged[5], address[0], address[1], address[2],
+          address[3], address[4], address[5], haveAddress ? addressFrom : "chip default");
+    memcpy(address, staged, 6);
+    haveAddress = true;
+    addressFrom = "staged";
+    publishAddressProperties();
+    return true;
+}
+
 // ---- Kernel control ----------------------------------------------------------------------------------------------
 
 // Waits for the first bring-up, brings the chip up again if the last client used it, the last attempt failed or the
@@ -1471,6 +1539,30 @@ errno_t SwitchBluetooth::ctlConnect(kern_ctl_ref, struct sockaddr_ctl *sac, void
     while (self->state <= kBusy &&
            IOLockSleepDeadline(self->stateLock, &self->state, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {}
     errno_t error = 0;
+    // The first connect (see the header): a staged address the controller does not have yet. Bring-up writes it; a
+    // controller that needs none gets it with one command.
+    bool readdress = false;
+    if (self->state > kBusy && !self->client && !self->stagedChecked) {
+        self->stagedChecked = true;
+        IOLockUnlock(self->stateLock);
+        readdress = self->adoptStagedAddress();
+        IOLockLock(self->stateLock);
+    }
+    if (readdress && self->state == kReady && !self->client && !self->chipDirty &&
+        !__atomic_load_n(&self->rxFault, __ATOMIC_RELAXED)) {
+        self->state = kBusy;
+        IOLockUnlock(self->stateLock);
+        self->setMode(kKernel);
+        const uint8_t le[6] = {self->address[5], self->address[4], self->address[3],
+                               self->address[2], self->address[1], self->address[0]};
+        const int written = self->command(OP_BCM_WRITE_BDADDR, le, sizeof(le), kCommandMs);
+        self->setMode(kIdle);
+        if (written) IOLog("SwitchBluetooth: Write BD_ADDR for the staged address failed (error %d)\n", written);
+        IOLockLock(self->stateLock);
+        self->state = kReady;
+        self->chipDirty |= written != 0;  // the bring-up below writes it
+        IOLockWakeup(self->stateLock, &self->state, false);
+    }
     if (self->state <= kBusy)
         error = ETIMEDOUT;
     else if (self->client)
@@ -1507,6 +1599,7 @@ errno_t SwitchBluetooth::ctlConnect(kern_ctl_ref, struct sockaddr_ctl *sac, void
     char line[400];
     self->describe(line, sizeof(line));
     IOLog("SwitchBluetooth: client %u connected: %s\n", sac->sc_unit, line);
+    if (self->haveAddress) switch_joycon_bluetooth_address(self->address);
     return 0;
 }
 

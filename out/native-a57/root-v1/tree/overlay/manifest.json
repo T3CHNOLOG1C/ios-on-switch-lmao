@@ -54,23 +54,7 @@
       "path": "/usr/libexec/joyconpaird",
       "source": "build/switch-joycon/joyconpaird",
       "trust": true,
-      "boot-arg": "switch-joycon-bt|switch-joycon-nfc"
-    },
-    {
-      "path": "/System/Library/LaunchDaemons/com.ioswitch.joyconpaird.plist",
-      "source": "drivers/SwitchJoyCon/helper/com.ioswitch.joyconpaird.plist",
-      "boot-arg": "switch-joycon-bt|switch-joycon-nfc"
-    },
-    {
-      "path": "/usr/libexec/joyconnfc",
-      "source": "build/switch-joycon/joyconnfc",
-      "trust": true,
-      "boot-arg": "switch-joycon-bt|switch-joycon-nfc"
-    },
-    {
-      "path": "/System/Library/LaunchDaemons/com.ioswitch.joyconnfc.plist",
-      "source": "drivers/SwitchJoyCon/helper/com.ioswitch.joyconnfc.plist",
-      "boot-arg": "switch-joycon-bt|switch-joycon-nfc"
+      "boot-arg": "switch-bt|switch-joycon-bt"
     },
     {
       "path": "/System/Library/VideoDecoders/HEVCH8.videodecoder",

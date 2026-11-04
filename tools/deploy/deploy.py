@@ -10,7 +10,9 @@ Steps (each can be switched off):
   2 boot entry     switchroot/ioswitch/* and bootloader/ini/ioswitch.ini on the FAT: only files that differ are
                    copied, stale files in switchroot/ioswitch/ removed, AppleDouble files by name; nothing else on the FAT
   3 overlay        <Data>/ioswitch/overlay := the package's overlay/; also removes the r3 Wi-Fi bring-up's configd Debug
-                   logging profile (STALE_LOGGING_PROFILES) if a card still has it
+                   logging profile (STALE_LOGGING_PROFILES) if a card still has it; and stages hekate's "Dump Joy-Con
+                   BT" (the FAT's switchroot/joycon_mac.ini, only read) as <Data>/ioswitch/bluetooth/{host-address,
+                   joycon-pairing.plist}, removed when the FAT has none (joycon_pairing.py; --no-joycon-pairing skips it)
   4 GPU bundle     --stage-gpu: <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed} from --//deploy:gpu_bundle, via
                    the plugin's stager (its CDHashes must be in the same build's kernel window: deploy the boot package
                    built with that bundle); --remove-gpu removes it
@@ -28,6 +30,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
+from tools.deploy import joycon_pairing  # noqa: E402
 from tools.deploy import pull_logs  # noqa: E402
 from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
@@ -85,6 +88,7 @@ def main(argv=None):
     parser.add_argument("--corpus")
     parser.add_argument("--launchd-check", nargs="+", metavar="LABEL", default=None)
     parser.add_argument("--no-eject", action="store_true")
+    parser.add_argument("--no-joycon-pairing", action="store_true")
     parser.add_argument("--boot-package", required=True)
     parser.add_argument("--spec", required=True)
     parser.add_argument("--gpu-bundle")
@@ -111,9 +115,13 @@ def main(argv=None):
             raise host.HostError("--stage-gpu: no GPU bundle (build //gpu:bundle; --//deploy:gpu_bundle=//gpu:bundle)")
         with cards.mounted(fat.identifier, log) as fat_root:
             changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
+            pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
         log("card {}: FAT {}, iPad Data {}".format(card.disk, fat.identifier, data))
         plan = (["pull logs"] if not args.no_pull_logs else []) + \
             ["boot entry: {} to copy, {} stale".format(len(changes), len(removed)), "overlay"] + \
+            ([] if args.no_joycon_pairing else ["Joy-Con pairing: {}".format(
+                "stage {} controller(s) for host {}".format(len(pairing["controllers"]), pairing["host"])
+                if pairing else "remove any staged dump")]) + \
             (["stage the GPU bundle"] if args.stage_gpu else []) + (["remove the GPU bundle"] if args.remove_gpu else []) + \
             (["launchd check {}".format(args.launchd_check)] if args.launchd_check else []) + \
             ([] if args.no_eject else ["unmount the iPad volumes and eject"])
@@ -138,6 +146,8 @@ def main(argv=None):
                 cards.sync_boot_entry(fat_root, args.boot_package, log)
             cards.sync_overlay(data_root, args.boot_package, log)
             remove_stale_logging_profiles(data_root, log)
+            if not args.no_joycon_pairing:
+                joycon_pairing.stage(data_root, pairing, log)
             if args.stage_gpu or args.remove_gpu:
                 command = [sys.executable, args.stager, str(data_root)]
                 command += ["--remove"] if args.remove_gpu else ["--build", args.gpu_bundle]

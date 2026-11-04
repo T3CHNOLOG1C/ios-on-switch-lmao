@@ -118,8 +118,9 @@ COMMAND_LINE = ' '.join([
     # that a refused exec leaves launchd holding SpringBoard's first icon request forever (no first frame in 3 hours).
     'tegra-gpu=4', 'sheng-gpu-addon=1', 'tegra-gpu-mhz=768', 'tegra-gpu-pool-pa=0xe4000000',
     # 10-30 18:45 feature test 1 (built 10-29/30, never run on hardware): Wi-Fi (drivers/SwitchWLAN), rail Joy-Cons as
-    # GameController devices and Joy-Con (R) NFC (drivers/SwitchJoyCon, joyconnfc).
-    'switch-wlan=1', 'switch-joycon-rail=1', 'switch-joycon-nfc=1',
+    # GameController devices (drivers/SwitchJoyCon). 11-04: Joy-Con NFC dropped (user): switch-joycon-nfc=1 is off,
+    # so joyconnfc no longer runs a 30 s MCU scan on every Joy-Con (R) attach.
+    'switch-wlan=1', 'switch-joycon-rail=1',
     # 10-31 r4-bt: Bluetooth (drivers/SwitchBluetooth: BCM4356A3 on UART-D, patch RAM from the ADT, kernel control
     # com.apple.uart.bluetooth). Turns on, together: /arm-io/bluetooth + ioswitch,patchram here, the BlueTool stand-in
     # overlay, bluetoothd's BT_HCI_TRANSPORT (kern_exec.c) and drops com.apple.bluetoothd from the kernel-written
