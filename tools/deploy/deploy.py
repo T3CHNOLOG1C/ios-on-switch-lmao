@@ -9,7 +9,8 @@ Steps (each can be switched off):
                    --no-csstore/--no-harvest/--no-launchd-log narrow it)
   2 boot entry     switchroot/ioswitch/* and bootloader/ini/ioswitch.ini on the FAT: only files that differ are
                    copied, stale files in switchroot/ioswitch/ removed, AppleDouble files by name; nothing else on the FAT
-  3 overlay        <Data>/ioswitch/overlay := the package's overlay/
+  3 overlay        <Data>/ioswitch/overlay := the package's overlay/; also removes the r3 Wi-Fi bring-up's configd Debug
+                   logging profile (STALE_LOGGING_PROFILES) if a card still has it
   4 GPU bundle     --stage-gpu: <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed} from --//deploy:gpu_bundle, via
                    the plugin's stager (its CDHashes must be in the same build's kernel window: deploy the boot package
                    built with that bundle); --remove-gpu removes it
@@ -30,6 +31,20 @@ if __package__ in (None, ""):
 from tools.deploy import pull_logs  # noqa: E402
 from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
+
+
+# Logging profiles an earlier bring-up put on Data by hand, which nothing else removes. 10-31 r3-wifi:
+# com.apple.SystemConfiguration at Debug, persisted ("remove once Wi-Fi works"; Wi-Fi joins since r7j). On r7o it still
+# wrote ~8 Debug lines/s to the persisted log (configd SCDynamicStore/IPMonitor, wifid SCPreferences).
+STALE_LOGGING_PROFILES = ("preferences/Logging/Subsystems/com.apple.SystemConfiguration.plist",)
+
+
+def remove_stale_logging_profiles(data_root, log):
+    for name in STALE_LOGGING_PROFILES:
+        path = Path(data_root) / name
+        if path.is_file():
+            path.unlink()
+            log("removed stale logging profile", name)
 
 
 def located(path):
@@ -122,6 +137,7 @@ def main(argv=None):
             with cards.mounted(fat.identifier, log) as fat_root:
                 cards.sync_boot_entry(fat_root, args.boot_package, log)
             cards.sync_overlay(data_root, args.boot_package, log)
+            remove_stale_logging_profiles(data_root, log)
             if args.stage_gpu or args.remove_gpu:
                 command = [sys.executable, args.stager, str(data_root)]
                 command += ["--remove"] if args.remove_gpu else ["--build", args.gpu_bundle]
