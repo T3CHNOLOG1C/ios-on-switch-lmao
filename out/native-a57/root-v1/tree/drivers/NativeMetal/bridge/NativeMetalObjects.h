@@ -65,6 +65,8 @@ size_t nmb_device_vendor_name(const NmbDevice *, char *out, size_t size);
 size_t nmb_device_family_waivers(const NmbDevice *, char *out,
                                  size_t size); /* the target families' rows not met, one family per line */
 uint64_t nmb_device_linear_bytes_per_row(const NmbDevice *, uint64_t format, uint64_t width); /* 0: refused */
+bool nmb_device_pixel_format_block(const NmbDevice *, uint64_t format,
+                                   uint64_t out[4]); /* bytes, width, height, depth of a block (a texel: 1x1x1) */
 
 typedef struct NmbBinaryArchive NmbBinaryArchive;
 NmbBinaryArchive *nmb_binary_archive_new(NmbDevice *, const char *path /* NULL: empty */);
@@ -242,6 +244,9 @@ bool nmb_command_buffer_commit(NmbCommandBuffer *);
 bool nmb_command_buffer_wait_scheduled(NmbCommandBuffer *);
 /* 0 completed in time, 1 timed out (timeout_ms 0 waits without a bound). */
 int nmb_command_buffer_wait(NmbCommandBuffer *, uint64_t timeout_ms);
+/* Bounded waits (m2v 0115): 0 done, 1 not done within timeout_ms, -1 refused (the runtime's deadlock answers). */
+int nmb_command_buffer_wait_scheduled_for(NmbCommandBuffer *, uint64_t timeout_ms);
+int nmb_command_buffer_wait_completed_for(NmbCommandBuffer *, uint64_t timeout_ms);
 /* Metal's MTLCommandBufferStatus (0 not enqueued .. 4 completed, 5 error). */
 uint64_t nmb_command_buffer_status(const NmbCommandBuffer *);
 size_t nmb_command_buffer_error(const NmbCommandBuffer *, char *out, size_t size);

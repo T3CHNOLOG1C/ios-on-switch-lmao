@@ -25,6 +25,7 @@
 #include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -44,6 +45,24 @@ static os_log_t rawLog()
     static os_log_t l = os_log_create("com.ioswitch.TegraGM20BMetal", "raw");
     return l;
 }
+
+// A wait the plugin bounds (r9-hang: r7n's and r7o's freezes were a userland wait with no end in backboardd's render thread):
+// past kWaitLimit, one line naming the wait and the object, then abort(), for a crash report with the stack instead of a silent
+// freeze, the userland twin of the kernel's missing-interrupt panic. Nothing waits that long when it works: the kernel's own GPU
+// waits panic within 10 s.
+static constexpr auto kWaitLimit = std::chrono::seconds(20);
+[[noreturn]] static void waitTooLong(const char *what, const void *object)
+{
+    os_log_fault(rawLog(), "raw: %{public}s %p not done after %lld s: abort() for the stack", what, object,
+                 (long long)kWaitLimit.count());
+#if !TARGET_OS_IPHONE
+    fprintf(stderr, "raw: %s %p not done after %lld s\n", what, object, (long long)kWaitLimit.count());
+#endif
+    abort();
+}
+
+// How long waitUntilScheduled waits before it asks whether a shared event holds the command buffer (waitUntilScheduled).
+static constexpr auto kHeldGrace = std::chrono::milliseconds(500);
 
 // One line per distinct text, then silence (shipped paths: no diagnostics but one-shot lines).
 static void once(NSString *text)
@@ -177,7 +196,7 @@ static const char *const kReasonNames[WhyCount] = {"raw",     "state",   "textur
                                                    "compute", "mipmaps", "event",   "encode"};
 struct Stats {
     std::atomic<uint64_t> raw{0}, m2v{0}, deferred{0}, aborted{0}, encodeUs{0}, draws{0}, passes{0}, copies{0},
-        reasons[WhyCount], switches{0}, cpuOrdered{0}, acquires{0};
+        reasons[WhyCount], switches{0}, cpuOrdered{0}, acquires{0}, eventsReleased{0}, heldReturns{0};
 };
 struct RawState {
     raw::Device *raw = nullptr;
@@ -1058,6 +1077,9 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
     NSError *_error;
     RMQueue *_queue;
     bool _committed, _scheduledDone, _completedDone, _m2v;
+    // scheduled() and finish() ran (their handlers taken): a handler added after goes at once, and scheduled() runs once (a
+    // command buffer held for a shared event is scheduled at its commit, eventHeld)
+    bool _scheduledSent, _completedSent;
     std::mutex _lock;
     std::condition_variable _changed;
     uint32_t _seqno;
@@ -1739,6 +1761,7 @@ namespace {}  // namespace
 
 static void markWritten(RMCommandBuffer *cb);
 static void finish(RMCommandBuffer *cb, NSError *error);
+static bool heldBehindEvent();
 
 @implementation RMCommandBuffer
 - (void)retain:(id)object
@@ -1936,7 +1959,9 @@ static void finish(RMCommandBuffer *cb, NSError *error);
     bool now;
     {
         std::lock_guard<std::mutex> l(_lock);
-        now = _scheduledDone;
+        // once scheduled() took the handlers, one added is run behind them (was: until they ran, it joined a list no one read
+        // again, and a presentDrawable added then never presented)
+        now = _scheduledSent;
         if (!now) [_scheduledHandlers addObject:[block copy]];
     }
     if (now) dispatch_async(gRM->handlers, ^{ block((id<MTLCommandBuffer>)self); });
@@ -1947,7 +1972,7 @@ static void finish(RMCommandBuffer *cb, NSError *error);
     bool now;
     {
         std::lock_guard<std::mutex> l(_lock);
-        now = _completedDone;
+        now = _completedSent;  // as addScheduledHandler: once finish() took the handlers
         if (!now) [_completedHandlers addObject:[block copy]];
     }
     if (now) block((id<MTLCommandBuffer>)self);
@@ -1987,13 +2012,30 @@ static void finish(RMCommandBuffer *cb, NSError *error);
 {
     std::unique_lock<std::mutex> l(_lock);
     if (!_committed) return;
-    _changed.wait(l, [&] { return _scheduledDone; });
+    if (_changed.wait_for(l, kHeldGrace, [&] { return _scheduledDone; })) return;
+    // Behind a shared event no one reached yet (its own wait, or an earlier command buffer's that holds it in order): Metal's
+    // command buffer is scheduled there, its GPU waiting for the event, so this returns. Core Animation's render thread flushes
+    // with waitUntilScheduled every frame, and forces the per-surface event of a client that died or was suspended after 5 s
+    // (CA::WindowServer::SharedEvent::is_complete_with_timeout): blocked here it never could (r7n: AegirPoster died, r7o:
+    // PosterKit's scenes were suspended; the display froze for good).
+    l.unlock();
+    if (heldBehindEvent()) {
+        gRM->stats.heldReturns++;
+        once(@"waitUntilScheduled of a command buffer behind a shared event not reached yet: returns after 500 ms, as "
+             @"Metal's "
+             @"(its GPU waits for the event)");
+        return;
+    }
+    l.lock();
+    if (!_changed.wait_for(l, kWaitLimit, [&] { return _scheduledDone; }))
+        waitTooLong("waitUntilScheduled of command buffer", (__bridge void *)self);
 }
 - (void)waitUntilCompleted
 {
     std::unique_lock<std::mutex> l(_lock);
     if (!_committed) return;
-    _changed.wait(l, [&] { return _completedDone; });
+    if (!_changed.wait_for(l, kWaitLimit, [&] { return _completedDone; }))
+        waitTooLong("waitUntilCompleted of command buffer", (__bridge void *)self);
 }
 // A selector a command buffer does not answer here: recorded for m2v (the command buffer goes there), answered zero.
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
@@ -2565,11 +2607,41 @@ static void markWritten(RMCommandBuffer *cb)
 }
 
 // Scheduled: handlers in order on the device's handler queue (never inside commit), then waitUntilScheduled returns.
+// The committed command buffers that wait for a shared event, until scheduled (heldBehindEvent).
+static std::mutex gHoldersLock;
+static std::set<RMCommandBuffer *> gHolders;
+
+static bool waitsForEvent(RMCommandBuffer *cb)
+{
+    for (const Cmd &c : cb->_tape)
+        if (c.op == OpWaitEvent) return true;
+    return false;
+}
+
+// Whether a committed command buffer not yet scheduled waits for a shared event value nothing reached yet.
+static bool heldBehindEvent()
+{
+    std::lock_guard<std::mutex> l(gHoldersLock);
+    for (RMCommandBuffer *cb : gHolders)
+        for (const Cmd &c : cb->_tape)
+            if (c.op == OpWaitEvent && [(id<MTLSharedEvent>)(__bridge id)c.obj signaledValue] < c.c) return true;
+    return false;
+}
+
+static void unhold(RMCommandBuffer *cb)
+{
+    std::lock_guard<std::mutex> l(gHoldersLock);
+    gHolders.erase(cb);
+}
+
 static void scheduled(RMCommandBuffer *cb)
 {
+    unhold(cb);
     NSArray *handlers;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
+        if (cb->_scheduledSent) return;  // once (eventHeld: at its commit; then its submission's)
+        cb->_scheduledSent = true;
         if (cb->_status == MTLCommandBufferStatusCommitted) cb->_status = MTLCommandBufferStatusScheduled;
         handlers = [cb->_scheduledHandlers copy];
         [cb->_scheduledHandlers removeAllObjects];
@@ -2590,6 +2662,7 @@ static void scheduled(RMCommandBuffer *cb)
 // objects released, waiters woken.
 static void finish(RMCommandBuffer *cb, NSError *error)
 {
+    unhold(cb);
     markWritten(cb);
     if (!cb->_m2v)
         for (const Cmd &c : cb->_tape)
@@ -2602,6 +2675,8 @@ static void finish(RMCommandBuffer *cb, NSError *error)
         cb->_gpuEnd = hostSeconds();
         handlers = [cb->_completedHandlers copy];
         [cb->_completedHandlers removeAllObjects];
+        cb->_completedSent = true;
+        cb->_scheduledSent = true;  // a completed command buffer is scheduled; its own scheduled() runs no more
     }
     void (^run)(void) = ^{
         for (MTLCommandBufferHandler h in handlers) h((id<MTLCommandBuffer>)cb);
@@ -3003,6 +3078,9 @@ static bool eventsReady(RMCommandBuffer *cb)
     return true;
 }
 
+// How long a command buffer waits for a shared event another process signals (waitEvents).
+static constexpr int64_t kEventLimitNs = 10 * NSEC_PER_SEC;
+
 // The CPU-ordered remainder: each wait nothing submitted covers, until the event's value is reached (notified, no polling).
 static void waitEvents(RMCommandBuffer *cb)
 {
@@ -3014,11 +3092,22 @@ static void waitEvents(RMCommandBuffer *cb)
              @"the command buffer waiting for it is submitted once it is reached");
         gRM->stats.cpuOrdered++;
         dispatch_semaphore_t reached = dispatch_semaphore_create(0);
-        [(id<MTLSharedEvent>)(__bridge id)c.obj
-            notifyListener:gRM->listener
-                   atValue:c.c
-                     block:^(id<MTLSharedEvent>, uint64_t) { dispatch_semaphore_signal(reached); }];
-        dispatch_semaphore_wait(reached, DISPATCH_TIME_FOREVER);
+        id<MTLSharedEvent> event = (__bridge id)c.obj;
+        [event notifyListener:gRM->listener
+                      atValue:c.c
+                        block:^(id<MTLSharedEvent>, uint64_t) { dispatch_semaphore_signal(reached); }];
+        // A signaller that never reaches it (a client killed or suspended mid-frame: Core Animation's per-surface events,
+        // CA::OGL::shared_event_submit) holds no one past kEventLimit: the command buffer goes on as if the event were reached,
+        // as Core Animation's own SharedEvent::force_complete would make it (r7n: AegirPoster died, r7o: PosterKit's scenes
+        // were suspended, and this wait held every later command buffer and the render thread for good).
+        if (dispatch_semaphore_wait(reached, dispatch_time(DISPATCH_TIME_NOW, kEventLimitNs))) {
+            gRM->stats.eventsReleased++;
+            os_log_error(rawLog(),
+                         "raw: shared event %p (%{public}s) not reached %llu after %lld ms (at %llu): its command "
+                         "buffer goes on without it",
+                         (__bridge void *)event, object_getClassName(event), (unsigned long long)c.c,
+                         (long long)(kEventLimitNs / 1000000), (unsigned long long)event.signaledValue);
+        }
     }
 }
 
@@ -3145,6 +3234,10 @@ static bool submitLocked(RMCommandBuffer *cb)
 static void commitBuffer(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
+    if (waitsForEvent(cb)) {
+        std::lock_guard<std::mutex> h(gHoldersLock);
+        gHolders.insert(cb);
+    }
     std::unique_lock<std::mutex> l(r.submit);
     bool now = r.waiting.empty();
     if (now && cb->_reason == WhyRaw) {
@@ -3174,7 +3267,9 @@ static void submitLoop()
         if (cb->_reason == WhyRaw) {
             {
                 std::unique_lock<std::mutex> m(r.m2vLock);
-                r.m2vChanged.wait(m, [&] { return m2vClear(); });
+                if (!r.m2vChanged.wait_for(m, kWaitLimit, [&] { return m2vClear(); }))
+                    waitTooLong("raw command buffer waiting for the m2v work before it, command buffer",
+                                (__bridge void *)cb);
             }
             waitEvents(cb);
         }
@@ -3207,7 +3302,7 @@ static void completionLoop()
 // ---- the rates line ----
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
-        switches, cpuOrdered, acquires, poolStalls;
+        switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns;
 } gRates;
 
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
@@ -3238,21 +3333,22 @@ size_t raw_metal_rates(char *out, size_t size)
     }
     raw::Device::Stats &k = gRM->raw->stats;
     const double per = c ? double(c) : 1.0;
-    const int n =
-        snprintf(out, size,
-                 "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
-                 "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c",
-                 secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons,
-                 *reasons ? ")" : "", (unsigned long long)(s.switches.load() - gRates.switches),
-                 (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
-                 (unsigned long long)(s.acquires.load() - gRates.acquires), (s.encodeUs.load() - gRates.encodeUs) / per,
-                 (s.draws.load() - gRates.draws) / per, (s.passes.load() - gRates.passes) / per,
-                 (s.copies.load() - gRates.copies) / per, (unsigned long long)(s.deferred.load() - gRates.deferred),
-                 (unsigned long long)(s.aborted.load() - gRates.aborted),
-                 (unsigned long long)(k.ringWaits.load() - gRates.ringWaits),
-                 (unsigned long long)(k.poolBytes.load() >> 20), (unsigned long long)k.poolChunks.load(),
-                 (unsigned long long)(k.poolStalls.load() - gRates.poolStalls), (unsigned long long)k.imports.load(),
-                 (unsigned long long)(k.importBytes.load() >> 20), k.cleanBytes.exchange(0) / 1024.0 / per);
+    const int n = snprintf(
+        out, size,
+        "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
+        "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c ev=%llu/%llu",
+        secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons, *reasons ? ")" : "",
+        (unsigned long long)(s.switches.load() - gRates.switches),
+        (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
+        (unsigned long long)(s.acquires.load() - gRates.acquires), (s.encodeUs.load() - gRates.encodeUs) / per,
+        (s.draws.load() - gRates.draws) / per, (s.passes.load() - gRates.passes) / per,
+        (s.copies.load() - gRates.copies) / per, (unsigned long long)(s.deferred.load() - gRates.deferred),
+        (unsigned long long)(s.aborted.load() - gRates.aborted),
+        (unsigned long long)(k.ringWaits.load() - gRates.ringWaits), (unsigned long long)(k.poolBytes.load() >> 20),
+        (unsigned long long)k.poolChunks.load(), (unsigned long long)(k.poolStalls.load() - gRates.poolStalls),
+        (unsigned long long)k.imports.load(), (unsigned long long)(k.importBytes.load() >> 20),
+        k.cleanBytes.exchange(0) / 1024.0 / per, (unsigned long long)(s.eventsReleased.load() - gRates.eventsReleased),
+        (unsigned long long)(s.heldReturns.load() - gRates.heldReturns));
     gRates.raw = raw;
     gRates.m2v = m2v;
     gRates.encodeUs = s.encodeUs.load();
@@ -3266,6 +3362,8 @@ size_t raw_metal_rates(char *out, size_t size)
     gRates.acquires = s.acquires.load();
     gRates.poolStalls = k.poolStalls.load();
     gRates.ringWaits = k.ringWaits.load();
+    gRates.eventsReleased = s.eventsReleased.load();
+    gRates.heldReturns = s.heldReturns.load();
     gRates.lastUs = now;
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }

@@ -277,6 +277,35 @@ static void journal(const std::string &line)
 // The wait takes a strong snapshot of already-committed buffers; new commits require the
 // caller's usual resource synchronization. Storage dependency checks are in the runtime.
 static NSMutableSet *gInFlight;
+// How long waitUntilScheduled waits before it asks whether a shared event holds the command buffer (heldBehindEvent).
+static constexpr unsigned kHeldGraceMs = 500;
+static std::atomic<uint64_t> gHeldReturns;
+// The bound on every wait the frontend makes (r9-hang: no userland wait without an end): 20 s, past the kernel's GPU-wait panics
+// (10 s) and Core Animation's own 5 s shared-event timeout. A host test may shorten it (NMB_WAIT_LIMIT_MS, macOS only).
+static uint64_t waitLimitMs()
+{
+#if !TARGET_OS_IPHONE
+    static const uint64_t limit = [] {
+        const char *value = getenv("NMB_WAIT_LIMIT_MS");
+        return value && atoll(value) > 0 ? (uint64_t)atoll(value) : 20000ull;
+    }();
+    return limit;
+#else
+    return 20000;
+#endif
+}
+// Past the bound: one line naming the wait and the object, then abort(), for a crash report with the stack instead of a silent
+// freeze (the userland twin of the kernel's missing-interrupt panic).
+[[noreturn]] static void waitTooLong(const char *what, const void *object, uint64_t value)
+{
+    os_log_fault(OS_LOG_DEFAULT,
+                 "native-metal: %{public}s %p not done after %llu ms (event value %llu): abort() for the stack", what,
+                 object, (unsigned long long)waitLimitMs(), (unsigned long long)value);
+#if !TARGET_OS_IPHONE
+    fprintf(stderr, "native-metal: %s %p not done after %llu ms\n", what, object, (unsigned long long)waitLimitMs());
+#endif
+    abort();
+}
 static void waitForResource(id resource);
 // Resource SPI the runtime has no state for: no protected content (Metal's default options), and no owner transfer
 // (memory attribution is the kernel driver's, by the importing task), refused as not supported. makeAliasable and
@@ -1530,7 +1559,10 @@ struct PassTarget {
     PassTarget lastPass[10];  // the previous render encoder's, while it is the last encoder opened (lastIsRender)
     bool lastIsRender, lastHadVisibility;
     NSUInteger lastWidth, lastHeight;
+    // The shared event values it waits for (encodeWaitForEvent), its events kept alive in waitedEvents: heldBehindEvent.
+    std::vector<std::pair<NmbEvent *, uint64_t>> eventWaits;
 }
+@property (nonatomic, strong) NSMutableArray *waitedEvents;
 @property (nonatomic) NmbCommandBuffer *handle;
 @property (nonatomic, strong) NBQueue *queue;
 @property (atomic, copy) NSString *encodeFailure;
@@ -2762,6 +2794,11 @@ static void scheduled(void *context);
         return;
     }
     NmbEvent *handle = [(NBEvent *)event handle];
+    if (!signal && [(id)event isKindOfClass:[NBSharedEvent class]]) {
+        if (!_waitedEvents) _waitedEvents = [NSMutableArray array];
+        [_waitedEvents addObject:event];
+        eventWaits.emplace_back(handle, value);
+    }
     if (!(signal ? nmb_command_buffer_signal_event(_handle, handle, value)
                  : nmb_command_buffer_wait_event(_handle, handle, value)))
         [self refuse:[NSString
@@ -2903,23 +2940,69 @@ static void scheduled(void *context);
     gCommitFailures++;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{ [self finish]; });
 }
+// Whether a committed command buffer not yet scheduled waits for a shared event value nothing reached yet (encodeWaitForEvent).
+- (bool)waitsUnreached
+{
+    if (self.schedulingDelivered) return false;
+    for (const auto &wait : eventWaits)
+        if (nmb_shared_event_value(wait.first) < wait.second) return true;
+    return false;
+}
+static bool heldBehindEvent()
+{
+    NSArray *pending;
+    @synchronized(gInFlight) {
+        pending = gInFlight.allObjects;
+    }
+    for (NBCommandBuffer *commandBuffer in pending)
+        if ([commandBuffer waitsUnreached]) return true;
+    return false;
+}
 - (void)waitUntilCompleted
 {
     if (!self.committed) return;
     const uint64_t began = nowUs();
-    if (!self.failedLocally) nmb_command_buffer_wait(_handle, 0);
-    dispatch_group_wait(_handlers, DISPATCH_TIME_FOREVER);
+    // Bounded (r9-hang): the kernel's GPU waits panic within 10 s, so past waitLimitMs this is a hang (a shared event no one
+    // signals, a handler that never returns): one line and abort(), a crash report with the stack, not a silent freeze.
+    if (!self.failedLocally && nmb_command_buffer_wait_completed_for(_handle, waitLimitMs()) == 1)
+        waitTooLong("waitUntilCompleted of command buffer", (__bridge void *)self,
+                    eventWaits.empty() ? 0 : eventWaits[0].second);
+    if (dispatch_group_wait(_handlers, dispatch_time(DISPATCH_TIME_NOW, (int64_t)waitLimitMs() * NSEC_PER_MSEC)))
+        waitTooLong("completed handlers of command buffer", (__bridge void *)self, 0);
     gTimeWaitCompleted.add(began);
 }
 - (void)waitUntilScheduled
 {
     if (!self.committed) return;
     const uint64_t began = nowUs();
-    if (!self.failedLocally && !nmb_command_buffer_wait_scheduled(_handle)) {
-        NBLOG(@"native-metal: waitUntilScheduled refused: %@", lastError());
-        return;
+    if (!self.failedLocally) {
+        int scheduled = nmb_command_buffer_wait_scheduled_for(_handle, kHeldGraceMs);
+        if (scheduled == 1) {
+            // Behind a shared event no one reached yet (its own wait, or an earlier command buffer's that holds it in order):
+            // Metal's command buffer is scheduled there, its GPU waiting for the event, so this returns. Core Animation's render
+            // thread flushes with waitUntilScheduled every frame and forces the per-surface event of a client that died or was
+            // suspended after 5 s (CA::WindowServer::SharedEvent::is_complete_with_timeout): blocked here it never could (r7n,
+            // r7o: the display froze for good).
+            if (heldBehindEvent()) {
+                gHeldReturns++;
+                static std::atomic<bool> said{false};
+                if (!said.exchange(true))
+                    NBLOG(@"native-metal: waitUntilScheduled of a command buffer behind a shared event not reached "
+                          @"yet: returns after %u ms, as Metal's (its GPU waits for the event)",
+                          kHeldGraceMs);
+                return;
+            }
+            scheduled = nmb_command_buffer_wait_scheduled_for(_handle, waitLimitMs());
+            if (scheduled == 1) waitTooLong("waitUntilScheduled of command buffer", (__bridge void *)self, 0);
+        }
+        if (scheduled < 0) {
+            NBLOG(@"native-metal: waitUntilScheduled refused: %@", lastError());
+            return;
+        }
     }
-    dispatch_group_wait(_schedulingHandlers, DISPATCH_TIME_FOREVER);
+    if (dispatch_group_wait(_schedulingHandlers,
+                            dispatch_time(DISPATCH_TIME_NOW, (int64_t)waitLimitMs() * NSEC_PER_MSEC)))
+        waitTooLong("scheduled handlers of command buffer", (__bridge void *)self, 0);
     gTimeWaitScheduled.add(began);
     gHistSched.add(nowUs() - began);
 }
@@ -3399,6 +3482,143 @@ static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDe
 @property (nonatomic, strong) NSArray *resources;
 @end
 @implementation NBResourceGroup
+@end
+
+// Apple's texture layout object (MTLTextureLayout, Apple SPI, from newTextureLayoutWithDescriptor:isHeapOrBufferBacked:):
+// where a texture's texels lie in memory its caller holds, and the copies between that memory and linear rows. ImageIO keeps
+// PosterBoard's wallpaper snapshots in it (ATX files written "pre-twiddled", kCGImagePropertyASTCPreTwiddle; its
+// ASTCTwiddler writes and reads them through this object), and Core Animation and PhotosUI ask for it for compressed images.
+// No GPU reads that memory here (newTextureWithBytesNoCopy: is refused), so the layout is the plain one: each slice holds
+// its levels in turn, each level its images, each image its rows of blocks packed; a copy is a row copy. The watermark
+// (which GPU the memory was laid out for; ImageIO refuses a file whose watermark differs) is zero, as in the snapshots
+// written while this object was refused (ImageIO then wrote the same packed rows), so those read as they are.
+struct NBWatermark {
+    uint64_t words[2];
+};
+static constexpr uint64_t kLayoutMaxLevels = 16;
+static uint64_t blocksOf(uint64_t texels, uint64_t block)
+{
+    return (texels + block - 1) / block;
+}
+struct PlainLayout {
+    uint64_t block[4];  // bytes, width, height, depth
+    uint64_t width, height, depth, levels, slices, sliceBytes;
+    uint64_t levelOffset[kLayoutMaxLevels];  // within a slice
+
+    // A level's rows of blocks: the bytes of one, how many an image has, and its images (3D: its depth in blocks; else 1).
+    uint64_t rowBytes(uint64_t level) const
+    {
+        return blocksOf(std::max<uint64_t>(1, width >> level), block[1]) * block[0];
+    }
+    uint64_t rows(uint64_t level) const { return blocksOf(std::max<uint64_t>(1, height >> level), block[2]); }
+    uint64_t images(uint64_t level) const { return blocksOf(std::max<uint64_t>(1, depth >> level), block[3]); }
+    // copy(offset in the texture's memory, offset in the linear bytes, bytes) for each row of blocks of `region` (texels) of
+    // slice/level, the linear rows `rowStride` apart (0: packed) and images `imageStride` apart (0: packed); false for a
+    // region outside the level.
+    template <typename Copy>
+    bool eachRow(const MTLRegion &region, uint64_t slice, uint64_t level, uint64_t rowStride, uint64_t imageStride,
+                 Copy copy) const
+    {
+        const uint64_t x = region.origin.x / block[1], y = region.origin.y / block[2], z = region.origin.z / block[3];
+        const uint64_t length = blocksOf(region.size.width, block[1]) * block[0],
+                       height = blocksOf(region.size.height, block[2]), count = blocksOf(region.size.depth, block[3]);
+        if (slice >= slices || level >= levels || x * block[0] + length > rowBytes(level) || y + height > rows(level) ||
+            z + count > images(level))
+            return false;
+        const uint64_t row = rowBytes(level), image = row * rows(level);
+        const uint64_t base = slice * sliceBytes + levelOffset[level] + z * image + y * row + x * block[0];
+        if (!rowStride) rowStride = length;
+        if (!imageStride) imageStride = height * rowStride;
+        for (uint64_t i = 0; i < count; i++)
+            for (uint64_t r = 0; r < height; r++)
+                copy(base + i * image + r * row, i * imageStride + r * rowStride, length);
+        return true;
+    }
+};
+static void refusedLayoutCopy(NSUInteger slice, NSUInteger level, const MTLRegion &r)
+{
+    NBLOG(@"native-metal: texture layout copy refused: slice %lu level %lu region (%lu,%lu,%lu) %lux%lux%lu is outside",
+          (unsigned long)slice, (unsigned long)level, (unsigned long)r.origin.x, (unsigned long)r.origin.y,
+          (unsigned long)r.origin.z, (unsigned long)r.size.width, (unsigned long)r.size.height,
+          (unsigned long)r.size.depth);
+}
+@interface NBTextureLayout : NBObject
+- (instancetype)initWithDescriptor:(MTLTextureDescriptor *)d block:(const uint64_t *)block;
+@end
+@implementation NBTextureLayout {
+    PlainLayout _layout;
+}
+- (instancetype)initWithDescriptor:(MTLTextureDescriptor *)d block:(const uint64_t *)block
+{
+    if (!(self = [super init])) return nil;
+    PlainLayout &l = _layout;
+    memcpy(l.block, block, sizeof(l.block));
+    l.width = d.width;
+    l.height = d.height;
+    l.depth = d.textureType == MTLTextureType3D ? d.depth : 1;
+    l.levels = d.mipmapLevelCount;
+    const bool cube = d.textureType == MTLTextureTypeCube || d.textureType == MTLTextureTypeCubeArray;
+    l.slices = (d.textureType == MTLTextureType3D ? 1 : d.arrayLength) * (cube ? 6 : 1);
+    uint64_t offset = 0;
+    for (uint64_t level = 0; level < l.levels; level++) {
+        l.levelOffset[level] = offset;
+        offset += l.rowBytes(level) * l.rows(level) * l.images(level);
+    }
+    l.sliceBytes = offset;
+    return self;
+}
+- (NSUInteger)size
+{
+    return _layout.sliceBytes * _layout.slices;
+}
+- (NSUInteger)alignment
+{
+    return 16;
+}
+- (MTLSize)copyGranularity
+{
+    return MTLSizeMake(_layout.block[1], _layout.block[2], _layout.block[3]);
+}
+- (NBWatermark)watermark
+{
+    return NBWatermark{};
+}
+- (void)initializeTextureMemory:(void *)memory
+{
+    (void)memory;
+}
+- (void)finalizeTextureMemory:(void *)memory
+{
+    (void)memory;
+}
+- (void)copyFromLinearBytes:(const void *)bytes
+               linearOffset:(NSUInteger)offset
+          linearBytesPerRow:(NSUInteger)rowStride
+        linearBytesPerImage:(NSUInteger)imageStride
+            toTextureMemory:(void *)memory
+               textureSlice:(NSUInteger)slice
+               textureLevel:(NSUInteger)level
+              textureRegion:(MTLRegion)region
+{
+    const uint8_t *from = static_cast<const uint8_t *>(bytes) + offset;
+    uint8_t *to = static_cast<uint8_t *>(memory);
+    auto copy = [&](uint64_t at, uint64_t linear, uint64_t length) { memcpy(to + at, from + linear, length); };
+    if (!_layout.eachRow(region, slice, level, rowStride, imageStride, copy)) refusedLayoutCopy(slice, level, region);
+}
+- (void)copyFromTextureMemory:(const void *)memory
+                 textureSlice:(NSUInteger)slice
+                 textureLevel:(NSUInteger)level
+                textureRegion:(MTLRegion)region
+                toLinearBytes:(void *)bytes
+                 linearOffset:(NSUInteger)offset
+            linearBytesPerRow:(NSUInteger)rowStride
+          linearBytesPerImage:(NSUInteger)imageStride
+{
+    const uint8_t *from = static_cast<const uint8_t *>(memory);
+    uint8_t *to = static_cast<uint8_t *>(bytes) + offset;
+    auto copy = [&](uint64_t at, uint64_t linear, uint64_t length) { memcpy(to + linear, from + at, length); };
+    if (!_layout.eachRow(region, slice, level, rowStride, imageStride, copy)) refusedLayoutCopy(slice, level, region);
+}
 @end
 
 // Creation and archive population must use the same complete supported descriptor.
@@ -4299,8 +4519,9 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     group.resources = held;
     return group;
 }
-// Not made here: a texture over raw memory in Apple's layout, and Apple's texture layout object. Both are refused, with the reason, rather than
-// answered with a guessed shape.
+// Not made here: a texture over raw memory in Apple's layout, refused with the reason rather than answered with a guessed
+// shape. Texture layouts (NBTextureLayout) are answered only for memory the CPU alone reads, not for a heap or buffer the GPU
+// would read the texture from.
 - (id<MTLTexture>)newTextureWithBytesNoCopy:(void *)bytes
                                      length:(NSUInteger)length
                                  descriptor:(MTLTextureDescriptor *)d
@@ -4316,11 +4537,26 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 }
 - (id)newTextureLayoutWithDescriptor:(MTLTextureDescriptor *)d isHeapOrBufferBacked:(BOOL)backed
 {
-    (void)d;
-    (void)backed;
-    NBLOG(@"native-metal: newTextureLayoutWithDescriptor:isHeapOrBufferBacked: is not implemented (Apple's layout "
-          @"object is not known)");
-    return nil;
+    NSString *why = nil;
+    uint64_t block[4];
+    if (backed)
+        why = @"heap or buffer backed (the GPU would read it in Apple's layout, which is not known)";
+    else if (d.sampleCount > 1 || d.textureType == MTLTextureType2DMultisample ||
+             d.textureType == MTLTextureType2DMultisampleArray || d.textureType == MTLTextureTypeTextureBuffer)
+        why = [NSString stringWithFormat:@"texture type %lu with %lu samples", (unsigned long)d.textureType,
+                                         (unsigned long)d.sampleCount];
+    else if (!d.mipmapLevelCount || d.mipmapLevelCount > kLayoutMaxLevels || !d.width || !d.height || !d.depth ||
+             !d.arrayLength)
+        why = [NSString stringWithFormat:@"%lux%lux%lu, %lu levels, %lu slices", (unsigned long)d.width,
+                                         (unsigned long)d.height, (unsigned long)d.depth,
+                                         (unsigned long)d.mipmapLevelCount, (unsigned long)d.arrayLength];
+    else if (!nmb_device_pixel_format_block(gDevice, d.pixelFormat, block))
+        why = lastError();
+    if (why) {
+        NBLOG(@"native-metal: newTextureLayoutWithDescriptor:isHeapOrBufferBacked: refused: %@", why);
+        return nil;
+    }
+    return [[NBTextureLayout alloc] initWithDescriptor:d block:block];
 }
 - (id<MTLCommandQueue>)newCommandQueueWithMaxCommandBufferCount:(NSUInteger)count
 {
@@ -5123,7 +5359,13 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
     if (at + 1 < size) at += nbasync::appendRates(out + at, size - at);  // r7-async: apso= ... (AsyncPipelines.h)
     // spare=: dedicated memory requests a kept block served instead of a new BoAlloc (m2v 0113, memory.rs).
     if (at + 1 < size) {
-        const int more = snprintf(out + at, size - at, " spare=%llu", (unsigned long long)(now.counts[9] - was.counts[9]));
+        // held=: waitUntilScheduled calls that returned behind a shared event not reached (heldBehindEvent).
+        static uint64_t heldWas;
+        const uint64_t held = gHeldReturns.load();
+        const int more =
+            snprintf(out + at, size - at, " spare=%llu held=%llu", (unsigned long long)(now.counts[9] - was.counts[9]),
+                     (unsigned long long)(held - heldWas));
+        heldWas = held;
         if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);
     }
     return at;

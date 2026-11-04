@@ -49,6 +49,8 @@
 #include <mutex>
 #include <pthread.h>
 #include <pthread/qos.h>
+#include <os/log.h>
+#include <chrono>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -296,7 +298,13 @@ inline bool ready(const std::shared_ptr<Making> &m, bool skips)
         run(m);
         std::unique_lock<std::mutex> g(m->lock);
         Lend lend(*m);
-        m->finished.wait(g, [&] { return m->done(); });
+        // Bounded (r9-hang: no userland wait without an end): a making past a minute is a hang, not a compile.
+        if (!m->finished.wait_for(g, std::chrono::seconds(60), [&] { return m->done(); })) {
+            os_log_fault(OS_LOG_DEFAULT,
+                         "native-metal: render pipeline state %{public}s not made after 60 s: abort() for the stack",
+                         m->label.c_str());
+            abort();
+        }
         const uint64_t took = usNow() - began;
         c.offWaits++;
         c.offWaitUs += took;

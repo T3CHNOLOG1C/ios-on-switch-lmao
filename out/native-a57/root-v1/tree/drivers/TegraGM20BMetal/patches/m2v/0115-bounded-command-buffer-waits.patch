@@ -1,0 +1,52 @@
+diff --git a/crates/metal2vulkan-runtime/src/command_buffer/mod.rs b/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
+--- a/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
++++ b/crates/metal2vulkan-runtime/src/command_buffer/mod.rs
+@@ -1989,6 +1989,48 @@
+                 .0;
+         }
+         Ok(())
++    }
++
++    /// [`wait_until_scheduled`](Self::wait_until_scheduled) for at most `timeout` (ioswitch): `Ok(true)`
++    /// once scheduled, `Ok(false)` where `timeout` passed first; refused as that one is.
++    pub fn wait_until_scheduled_within(&self, timeout: Duration) -> Result<bool, Error> {
++        let deadline = Instant::now() + timeout;
++        let scheduled_now = scheduled(&self.state());
++        let _blocked = match scheduled_wait(running(), self.0.target(), scheduled_now) {
++            Answer::Refuse(cause) => return Err(cause.into()),
++            Answer::Return | Answer::Wait => None,
++            Answer::Block(from) => Some(contexts::block(from, self.0.context())?),
++        };
++        let mut state = self.state();
++        while !scheduled(&state) {
++            if exit_guard::closed() {
++                return Err(DeadlockCause::Exiting.into());
++            }
++            let now = Instant::now();
++            if now >= deadline {
++                return Ok(false);
++            }
++            state = self
++                .0
++                .changed
++                .wait_timeout(state, (deadline - now).min(exit_guard::WAKE))
++                .unwrap_or_else(std::sync::PoisonError::into_inner)
++                .0;
++        }
++        Ok(true)
++    }
++
++    /// [`wait_until_completed`](Self::wait_until_completed) for at most `timeout` (ioswitch):
++    /// `Ok(true)` once completed, `Ok(false)` where `timeout` passed first; refused as that one
++    /// is (where [`wait_until_completed_for`](Self::wait_until_completed_for) answers `TimedOut`).
++    pub fn wait_until_completed_within(&self, timeout: Duration) -> Result<bool, Error> {
++        let _blocked = match self.completed_wait() {
++            Answer::Return => return Ok(true),
++            Answer::Refuse(cause) => return Err(cause.into()),
++            Answer::Wait => None,
++            Answer::Block(from) => Some(contexts::block(from, self.0.context())?),
++        };
++        Ok(self.0.gate.wait_until(Instant::now() + timeout).is_ok())
+     }
+ 
+     /// `waitUntilCompleted`: block until the command buffer completed or failed and its

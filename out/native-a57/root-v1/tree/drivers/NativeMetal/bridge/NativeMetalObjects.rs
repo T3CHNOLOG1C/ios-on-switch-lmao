@@ -620,6 +620,29 @@ pub extern "C" fn nmb_device_linear_bytes_per_row(device: *const NmbDevice, form
     })
 }
 
+/// A format's block as Metal describes it (`MTLPixelFormatGetInfoForDevice`): `out` = its bytes, width, height and depth,
+/// a texel being a 1x1x1 block of a format not made of blocks. False, with the reason, for a format Metal does not describe.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_device_pixel_format_block(device: *const NmbDevice, format: u64, out: *mut u64) -> bool {
+    guard(false, || {
+        if out.is_null() {
+            return Err("null block".into());
+        }
+        let info = get(device)?.0.pixel_format_info(format);
+        if info.words[0] == 0 {
+            return Err(format!("pixel format {format} has no texel or block size"));
+        }
+        // Flags bit 0x400: a format of blocks, whose words are the block's.
+        let block = if info.flags & 0x400 != 0 { info.words } else { [info.words[0], 1, 1, 1] };
+        if block[1..].contains(&0) {
+            return Err(format!("pixel format {format} has an empty block"));
+        }
+        // SAFETY: the header's four words.
+        unsafe { std::slice::from_raw_parts_mut(out, 4) }.copy_from_slice(&block);
+        Ok(true)
+    })
+}
+
 /// `vendorName`: the Vulkan device's PCI vendor, named where the ID is a known GPU vendor's, else the ID itself.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_device_vendor_name(device: *const NmbDevice, out: *mut c_char, size: usize) -> usize {
@@ -1633,6 +1656,30 @@ pub extern "C" fn nmb_command_buffer_wait_scheduled(command_buffer: *mut NmbComm
     guard(false, || {
         get(command_buffer)?.0.wait_until_scheduled().map_err(e("wait scheduled"))?;
         Ok(true)
+    })
+}
+
+/// waitUntilScheduled for at most `timeout_ms` (m2v 0115): 0 scheduled, 1 not yet, -1 refused (the runtime's deadlock answers).
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_command_buffer_wait_scheduled_for(command_buffer: *mut NmbCommandBuffer, timeout_ms: u64) -> i32 {
+    guard(-1, || {
+        let scheduled = get(command_buffer)?
+            .0
+            .wait_until_scheduled_within(Duration::from_millis(timeout_ms))
+            .map_err(e("wait scheduled"))?;
+        Ok(if scheduled { 0 } else { 1 })
+    })
+}
+
+/// waitUntilCompleted for at most `timeout_ms` (m2v 0115): 0 completed, 1 not yet, -1 refused (the runtime's deadlock answers).
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_command_buffer_wait_completed_for(command_buffer: *mut NmbCommandBuffer, timeout_ms: u64) -> i32 {
+    guard(-1, || {
+        let completed = get(command_buffer)?
+            .0
+            .wait_until_completed_within(Duration::from_millis(timeout_ms))
+            .map_err(e("wait"))?;
+        Ok(if completed { 0 } else { 1 })
     })
 }
 
