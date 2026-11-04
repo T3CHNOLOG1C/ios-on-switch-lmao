@@ -69,6 +69,13 @@ def main():
             "NativeDataSeed": {"path": str(regular(args.data_seed))},
         }}))
         # The overlay manifest names its files relative to the kernel tree (build/... for built ones): a tree view.
+        # package_raw_boot leaves out a file it cannot find ("not built"); under Bazel every manifest entry must be a
+        # declared input of //boot:package (its overlay dict), so a missing one is an error, not a silent omission.
+        given = {spec.partition("=")[0] for spec in args.overlay}
+        wanted = {entry["source"] for entry in json.loads(Path(args.overlay_manifest).read_text())["files"]}
+        if wanted - given:
+            sys.exit("overlay/manifest.json lists {} but //boot:package's overlay does not give them: add them to "
+                     "boot/BUILD.bazel".format(", ".join(sorted(wanted - given))))
         work = scratch / "work"
         for spec in args.overlay:
             source, _, path = spec.partition("=")

@@ -39,7 +39,8 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
   - Apple's licence doesn't allow downloading Xcode or its SDKs automatically, so this is the one input you install
     yourself.
 - **bazelisk**: `brew install bazelisk`. `.bazelversion` pins Bazel 9.3.1, and bazelisk fetches it on first use.
-  Nothing else comes from Homebrew.
+  Nothing the build produces comes from Homebrew. The exception is a few unit tests under `//tests` that link with
+  `ld.lld`: they still find it the old way (`PATH`, then `/opt/homebrew/opt/llvm/bin`).
 - **For the GPU bundle only**:
   - the prebuilt NVK dylibs in `out/gpu/nvk/` (r9: `libvulkan_nouveau.r9{,.host}.dylib` and their `.source` files);
   - `out/gpu-artifacts/` (the m2v library store and QuartzCore's `default.metallib`).
@@ -271,6 +272,11 @@ exported. `bazel run //xnu:patch_check` tells you whether the patch is current. 
 | Python packages | not used yet | — |
 | Xcode | `bazel/host/xcode.bzl` | Select the new Xcode, then `bazel run @xcode//:print_pins` and paste |
 | Pinned files | `bazel/pinned` | Replace the file, update `SHA256SUMS`, `bazel test //bazel/pinned:sha256` |
+
+A few BUILD arguments name external repositories by their directory, which Bazel 9 derives from `MODULE.bazel`. For
+example, `external/+http_archive+xnu`, `+http_archive+corecrypto`, `+http_archive+lz4` and
+`+http_archive+iostoragefamily` appear in `out/native-a57/root-v1/tree/BUILD.bazel` and `tools/BUILD.bazel`. If you
+rename a repository, or change how it is declared, update those paths too.
 
 ## Reproducibility and the old CMake flow
 

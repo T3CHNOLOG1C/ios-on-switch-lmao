@@ -37,6 +37,7 @@ install_artifacts(
 label_flag(
     name = "system_cryptex",
     build_setting_default = "@ipsw//:system_cryptex",
+    tags = ["manual"],
 )
 
 label_flag(
@@ -64,6 +65,9 @@ py_binary(
         "@ipsw//:os",
     ],
     main = "//tools/install:sd.py",
+    # Not part of `bazel build //...`: building it fetches the 5.2 GB OS image and inflates the 3.3 GB system cryptex.
+    # `bazel run //install:sd` builds it on demand.
+    tags = ["manual"],
     deps = [
         "//tools/install:lib",
         "@rules_python//python/runfiles",
