@@ -366,8 +366,14 @@ static bool rendersThroughStandIn(NSUInteger format)
     return format == 542;  // MTLPixelFormatRGB8_444_2P
 }
 @class NBTwoPlaneStandIn;
+// RG8Unorm_sRGB held as RGBA8Unorm_sRGB (heldAsRGBA8): a texture the device samples with its sRGB decode before the filter, as
+// Metal's does, where the device has no sampled R8G8_SRGB (GM20B: KaleidoscopePoster's wallpaper drew black, every draw refused
+// "Format VK_FORMAT_R8G8_SRGB SampledImage"). Its texels are the RG pairs widened to (r, g, 0, 255), which Metal's own RG8 texture
+// reads as; its CPU copies and buffer blits narrow and widen them (rgWide).
+static bool gHoldRG8SrgbAsRGBA8;
 @interface NBTexture : NBObject
 @property (nonatomic) NmbTexture *handle;
+@property (nonatomic) bool rgWide;  // RG8Unorm_sRGB held as RGBA8Unorm_sRGB (gHoldRG8SrgbAsRGBA8)
 // A two-plane render target's stand-in (above), made at its first pass.
 @property (nonatomic, strong) NBTwoPlaneStandIn *standIn;
 @property (nonatomic) NmbTextureDescriptor descriptor;
@@ -516,6 +522,52 @@ static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
         [gSurfaceImports setObject:buffer forKey:key];
     }
     return buffer;
+}
+// RG pairs at `from` (rows `fromRow` apart, images `fromImage` apart) widened to RGBA texels at `to` (rows `w` * 4 apart, images
+// `h` rows apart): (r, g, 0, 255). narrowRG: the other way.
+static void widenRG(const uint8_t *from, size_t fromRow, size_t fromImage, uint8_t *to, size_t w, size_t h, size_t d)
+{
+    for (size_t z = 0; z < d; z++)
+        for (size_t y = 0; y < h; y++) {
+            const uint8_t *src = from + z * fromImage + y * fromRow;
+            uint8_t *dst = to + ((z * h + y) * w) * 4;
+            for (size_t x = 0; x < w; x++) {
+                dst[4 * x] = src[2 * x];
+                dst[4 * x + 1] = src[2 * x + 1];
+                dst[4 * x + 2] = 0;
+                dst[4 * x + 3] = 255;
+            }
+        }
+}
+static void narrowRG(const uint8_t *from, size_t w, size_t h, size_t d, uint8_t *to, size_t toRow, size_t toImage)
+{
+    for (size_t z = 0; z < d; z++)
+        for (size_t y = 0; y < h; y++) {
+            const uint8_t *src = from + ((z * h + y) * w) * 4;
+            uint8_t *dst = to + z * toImage + y * toRow;
+            for (size_t x = 0; x < w; x++) {
+                dst[2 * x] = src[4 * x];
+                dst[2 * x + 1] = src[4 * x + 1];
+            }
+        }
+}
+// Whether a new texture of `d` is held as RGBA8Unorm_sRGB (gHoldRG8SrgbAsRGBA8): RG8Unorm_sRGB, single-sample, sampled and copied
+// only (a pass, a shader write or a view of another size would see the wider texels; those keep the runtime's own image).
+static bool heldAsRGBA8(MTLTextureDescriptor *d)
+{
+    return gHoldRG8SrgbAsRGBA8 && d.pixelFormat == (MTLPixelFormat)31 /* RG8Unorm_sRGB */ && d.sampleCount <= 1 &&
+           !(d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite)) &&
+           d.textureType != MTLTextureType2DMultisample && d.textureType != MTLTextureType2DMultisampleArray;
+}
+// A view's format of an RG8 texture held as RGBA8: its RGBA8 twin (RG8Unorm -> RGBA8Unorm, RG8Unorm_sRGB -> RGBA8Unorm_sRGB), or
+// Invalid for another.
+static MTLPixelFormat wideViewFormat(MTLPixelFormat format)
+{
+    switch (format) {
+    case MTLPixelFormatRG8Unorm: return MTLPixelFormatRGBA8Unorm;
+    case (MTLPixelFormat)31 /* RG8Unorm_sRGB */: return MTLPixelFormatRGBA8Unorm_sRGB;
+    default: return MTLPixelFormatInvalid;
+    }
 }
 static bool textureDescriptor(MTLTextureDescriptor *d, NmbTextureDescriptor *out)
 {
@@ -666,8 +718,29 @@ NB_RESOURCE_SPI(texture)
     if (_surface) view.surface = (IOSurfaceRef)CFRetain(_surface);
     return (id<MTLTexture>)view;
 }
+// A view of an RG8 texture held as RGBA8 is its RGBA8 twin's (wideViewFormat), reporting the format asked for.
+- (id<MTLTexture>)wideView:(NmbTexture *)handle format:(MTLPixelFormat)format
+{
+    NBTexture *view = (NBTexture *)[self view:handle];
+    if (view) {
+        NmbTextureDescriptor descriptor = view.descriptor;
+        descriptor.format = format;
+        view.descriptor = descriptor;
+        view.rgWide = true;
+    }
+    return (id<MTLTexture>)view;
+}
 - (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format
 {
+    if (_rgWide) {
+        const MTLPixelFormat wide = wideViewFormat(format);
+        if (wide == MTLPixelFormatInvalid) {
+            NBLOG(@"native-metal: texture view refused: an RG8Unorm_sRGB texture held as RGBA8 viewed as %lu",
+                  (unsigned long)format);
+            return nil;
+        }
+        return [self wideView:nmb_texture_new_view(_handle, wide, 0, nullptr, nullptr, true) format:format];
+    }
     return [self view:nmb_texture_new_view(_handle, format, 0, nullptr, nullptr, true)];
 }
 - (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format
@@ -676,6 +749,15 @@ NB_RESOURCE_SPI(texture)
                                          slices:(NSRange)slices
 {
     const uint64_t l[2] = {levels.location, levels.length}, s[2] = {slices.location, slices.length};
+    if (_rgWide) {
+        const MTLPixelFormat wide = wideViewFormat(format);
+        if (wide == MTLPixelFormatInvalid) {
+            NBLOG(@"native-metal: texture view refused: an RG8Unorm_sRGB texture held as RGBA8 viewed as %lu",
+                  (unsigned long)format);
+            return nil;
+        }
+        return [self wideView:nmb_texture_new_view(_handle, wide, type, l, s, false) format:format];
+    }
     return [self view:nmb_texture_new_view(_handle, format, type, l, s, false)];
 }
 - (void)replaceRegion:(MTLRegion)r
@@ -687,8 +769,18 @@ NB_RESOURCE_SPI(texture)
 {
     NBApiTime timed;
     const uint64_t region[6] = {r.origin.x, r.origin.y, r.origin.z, r.size.width, r.size.height, r.size.depth};
-    const uint64_t length = (r.size.depth > 1 ? image * (r.size.depth - 1) : 0) + row * r.size.height;
+    uint64_t length = (r.size.depth > 1 ? image * (r.size.depth - 1) : 0) + row * r.size.height;
     const uint64_t began = nowUs();
+    std::vector<uint8_t> wide;
+    if (_rgWide && bytes) {  // the RG pairs widened to the RGBA8 texels the texture holds
+        const size_t w = r.size.width, h = r.size.height, d = std::max<size_t>(r.size.depth, 1);
+        wide.resize(w * h * d * 4);
+        widenRG((const uint8_t *)bytes, row, image, wide.data(), w, h, d);
+        bytes = wide.data();
+        row = w * 4;
+        image = w * 4 * h;
+        length = wide.size();
+    }
     const bool replaced = nmb_texture_replace(_handle, region, level, slice, bytes, row, image, length);
     gTimeTexelCopy.add(began);
     if (!replaced) NBLOG(@"native-metal: replaceRegion refused: %@", lastError());
@@ -711,7 +803,15 @@ NB_RESOURCE_SPI(texture)
     const uint64_t length = (r.size.depth > 1 ? image * (r.size.depth - 1) : 0) + row * r.size.height;
     [[self hostImport] invalidateForCpu];  // a read back of what the GPU wrote this texture's surface/buffer pages
     const uint64_t began = nowUs();
-    const bool read = nmb_texture_get_bytes(_handle, bytes, row, image, length, region, level, slice);
+    bool read;
+    if (_rgWide && bytes) {  // the RGBA8 texels narrowed to the RG pairs the program reads
+        const size_t w = r.size.width, h = r.size.height, d = std::max<size_t>(r.size.depth, 1);
+        std::vector<uint8_t> wide(w * h * d * 4);
+        read = nmb_texture_get_bytes(_handle, wide.data(), w * 4, w * 4 * h, wide.size(), region, level, slice);
+        if (read) narrowRG(wide.data(), w, h, d, (uint8_t *)bytes, row, image);
+    } else {
+        read = nmb_texture_get_bytes(_handle, bytes, row, image, length, region, level, slice);
+    }
     gTimeTexelCopy.add(began);
     if (!read) NBLOG(@"native-metal: getBytes refused: %@", lastError());
 }
@@ -2304,6 +2404,10 @@ static void waitForResource(id resource)
 {
     NBApiTime timed;
     if (![self textures:NB_OBJECTS(s) count:1] || ![self textures:NB_OBJECTS(d) count:1]) return;
+    if ([(NBTexture *)s rgWide] != [(NBTexture *)d rgWide]) {  // one is an RG8 texture held as RGBA8 (heldAsRGBA8)
+        [self.commandBuffer refuse:@"copyFromTexture:toTexture: between an RG8 texture held as RGBA8 and another"];
+        return;
+    }
     const uint64_t a[3] = {so.x, so.y, so.z}, size[3] = {z.width, z.height, z.depth}, b[3] = {dO.x, dO.y, dO.z};
     [self check:nmb_blit_copy_texture(self.handle, [(NBTexture *)s handle], ss, sl, a, size, [(NBTexture *)d handle],
                                       ds, dl, b)
@@ -2312,6 +2416,10 @@ static void waitForResource(id resource)
 - (void)copyFromTexture:(id<MTLTexture>)s toTexture:(id<MTLTexture>)d
 {
     if (![self textures:NB_OBJECTS(s) count:1] || ![self textures:NB_OBJECTS(d) count:1]) return;
+    if ([(NBTexture *)s rgWide] != [(NBTexture *)d rgWide]) {  // one is an RG8 texture held as RGBA8 (heldAsRGBA8)
+        [self.commandBuffer refuse:@"copyFromTexture:toTexture: between an RG8 texture held as RGBA8 and another"];
+        return;
+    }
     const NSUInteger levels = MIN(s.mipmapLevelCount, d.mipmapLevelCount), slices = MIN(s.arrayLength, d.arrayLength);
     for (NSUInteger slice = 0; slice < slices; slice++)
         for (NSUInteger level = 0; level < levels; level++) {
@@ -2341,6 +2449,30 @@ static void waitForResource(id resource)
     NBApiTime timed;
     if (![self buffers:NB_OBJECTS(s) count:1] || ![self textures:NB_OBJECTS(d) count:1]) return;
     const uint64_t size[3] = {z.width, z.height, z.depth}, b[3] = {dO.x, dO.y, dO.z};
+    if ([(NBTexture *)d rgWide]) {
+        // An RG8 texture held as RGBA8 (heldAsRGBA8): the buffer's RG pairs widened into a staging buffer now, which the copy
+        // moves. A buffer the CPU cannot read (Private) is refused.
+        const uint8_t *from = (const uint8_t *)[(id<MTLBuffer>)s contents];
+        if (!from) {
+            [self.commandBuffer
+                refuse:@"copyFromBuffer:toTexture: a Private buffer into an RG8Unorm_sRGB texture held as RGBA8"];
+            return;
+        }
+        const size_t w = z.width, h = z.height, depth = std::max<size_t>(z.depth, 1);
+        id<MTLBuffer> staging = [(id<MTLDevice>)gDeviceObject newBufferWithLength:std::max<size_t>(w * h * depth * 4, 4)
+                                                                          options:MTLResourceStorageModeShared];
+        if (!staging) {
+            [self.commandBuffer
+                refuse:@"copyFromBuffer:toTexture: no staging buffer for an RG8Unorm_sRGB texture held as RGBA8"];
+            return;
+        }
+        widenRG(from + o, row, image, (uint8_t *)staging.contents, w, h, depth);
+        [self.commandBuffer.resourceOwners addObject:staging];
+        [self check:nmb_blit_buffer_to_texture(self.handle, [(NBBuffer *)staging handle], 0, w * 4, w * 4 * h, size,
+                                               [(NBTexture *)d handle], slice, level, b)
+               what:"copyFromBuffer:toTexture:"];
+        return;
+    }
     [self check:nmb_blit_buffer_to_texture(self.handle, [(NBBuffer *)s handle], o, row, image, size,
                                            [(NBTexture *)d handle], slice, level, b)
            what:"copyFromBuffer:toTexture:"];
@@ -2357,6 +2489,10 @@ static void waitForResource(id resource)
 {
     NBApiTime timed;
     if (![self textures:NB_OBJECTS(s) count:1] || ![self buffers:NB_OBJECTS(d) count:1]) return;
+    if ([(NBTexture *)s rgWide]) {
+        [self.commandBuffer refuse:@"copyFromTexture:toBuffer: from an RG8Unorm_sRGB texture held as RGBA8"];
+        return;
+    }
     const uint64_t a[3] = {so.x, so.y, so.z}, size[3] = {z.width, z.height, z.depth};
     [self check:nmb_blit_texture_to_buffer(self.handle, [(NBTexture *)s handle], slice, level, a, size,
                                            [(NBBuffer *)d handle], o, row, image)
@@ -4609,6 +4745,8 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 {
     NmbTextureDescriptor descriptor;
     if (!textureDescriptor(d, &descriptor)) return nil;
+    const bool wide = heldAsRGBA8(d);
+    if (wide) descriptor.format = MTLPixelFormatRGBA8Unorm_sRGB;
     NmbTexture *handle = nmb_texture_new(gDevice, &descriptor);
     noteFormat((uint32_t)descriptor.format, handle != nullptr);
     if (!handle) {
@@ -4618,6 +4756,10 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     NBTexture *texture = [NBTexture new];
     texture.handle = handle;
     nmb_texture_describe(handle, &descriptor);
+    if (wide) {
+        descriptor.format = 31;  // RG8Unorm_sRGB, what the program asked for, and reads back
+        texture.rgWide = true;
+    }
     texture.descriptor = descriptor;
     return (id<MTLTexture>)texture;
 }
@@ -5033,6 +5175,8 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
     {
         char waived[4096] = {};
         nmb_device_family_waivers(gDevice, waived, sizeof waived);
+        // No filter of sampled RG8Unorm_sRGB (no R8G8_SRGB sampled image): such textures are held as RGBA8 (heldAsRGBA8).
+        gHoldRG8SrgbAsRGBA8 = strstr(waived, "RG8Unorm_sRGB/Filter") != nullptr;
         for (char *line = waived, *next; *line; line = next) {
             next = strchr(line, '\n');
             if (next)
