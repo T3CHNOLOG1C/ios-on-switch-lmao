@@ -188,7 +188,7 @@ int main(int argc, char **argv)
         IOSurfaceRef surfaces[frame::TEX_COUNT] = {};
         for (int t = 0; t < frame::TEX_COUNT; t++) {
             frame::TexDesc td = frame::texture(t);
-            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormat(td.format)
                                                                                          width:td.w
                                                                                         height:td.h
                                                                                      mipmapped:NO];
@@ -251,7 +251,8 @@ int main(int argc, char **argv)
                 unsigned drawIndex = 0;
                 for (const frame::Pass &pass : frame::passes(f, shape, blur.size(), uber.size())) {
                     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-                    for (int c = 0; c < 2; c++) {
+                    for (int c = 0; c < 3; c++) {
+                        if (pass.color[c] < 0) continue;
                         rp.colorAttachments[c].texture = tex[pass.color[c]];
                         rp.colorAttachments[c].loadAction = pass.load[c] == 2   ? MTLLoadActionClear
                                                             : pass.load[c] == 1 ? MTLLoadActionLoad
@@ -260,6 +261,10 @@ int main(int argc, char **argv)
                             frame::texture(pass.color[c]).memoryless ? MTLStoreActionDontCare : MTLStoreActionStore;
                         rp.colorAttachments[c].clearColor =
                             MTLClearColorMake(pass.clear[0], pass.clear[1], pass.clear[2], pass.clear[3]);
+                    }
+                    if (frame::rtSize() && !pass.draws.empty() && !pass.draws[0].blur) {
+                        rp.renderTargetWidth = frame::texture(pass.color[0]).w - frame::kRtShortW;
+                        rp.renderTargetHeight = frame::texture(pass.color[0]).h - frame::kRtShortH;
                     }
                     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
                     bool bound[3][31] = {};
@@ -280,7 +285,11 @@ int main(int argc, char **argv)
                                     [e setVertexBufferOffset:ringAt atIndex:b.slot];
                                 else
                                     [e setFragmentBufferOffset:ringAt atIndex:b.slot];
-                                ringAt = (ringAt + b.length + 255) & ~NSUInteger(255);
+                                // FRAME_RING_ALIGN: the ring's suballocation alignment (Core Animation's pool aligns to the
+                                // device's minConstantBufferAlignmentBytes; 16 or 4 binds uniforms the raw path leaves to m2v)
+                                static const NSUInteger align =
+                                    getenv("FRAME_RING_ALIGN") ? NSUInteger(atoi(getenv("FRAME_RING_ALIGN"))) : 256;
+                                ringAt = (ringAt + b.length + align - 1) / align * align;
                                 continue;
                             }
                             if (b.stage == 1)
@@ -363,6 +372,13 @@ int main(int argc, char **argv)
         if (!c.empty())
             printf(FRAME_PATH " frames=%zu blur=%u draws=%u: encode cpu mean %.3f ms p50 %.3f p90 %.3f\n", c.size(),
                    shape.blurPasses, shape.draws, sum / c.size(), c[c.size() / 2], c[c.size() * 9 / 10]);
+#ifdef RAW_FACADE
+        {
+            char rates[2048];
+            raw_metal_rates(rates, sizeof rates);
+            printf("RATES %s\n", rates);
+        }
+#endif
         pushcount_report("nvkframe");
     }
     return 0;

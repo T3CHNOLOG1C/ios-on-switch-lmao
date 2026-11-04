@@ -83,9 +83,9 @@ int main(int argc, char **argv)
             ok = dev.createSurfaceTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s, 0,
                                           td.w, td.h, uint32_t(IOSurfaceGetBytesPerRow(s)), 80, tex[t]);
         } else if (td.memoryless) {
-            ok = dev.createMemoryless(td.w, td.h, 80, tex[t]);
+            ok = dev.createMemoryless(td.w, td.h, td.format, tex[t]);
         } else {
-            ok = dev.createTexture(td.w, td.h, 80, tex[t]);
+            ok = dev.createTexture(td.w, td.h, td.format, tex[t]);
         }
         if (!ok) {
             fprintf(stderr, "texture %d failed\n", t);
@@ -124,14 +124,18 @@ int main(int argc, char **argv)
         unsigned drawIndex = 0;
         for (const frame::Pass &pass : frame::passes(f, shape, blur.size(), uber.size())) {
             raw::PassDesc pd;
-            pd.count = 2;
-            for (int c = 0; c < 2; c++) {
+            pd.count = pass.color[2] >= 0 ? 3 : 2;
+            for (int c = 0; c < int(pd.count); c++) {
                 pd.color[c].texture = &tex[pass.color[c]];
                 pd.color[c].load = pass.load[c] == 2   ? raw::ColorAttachment::Clear
                                    : pass.load[c] == 1 ? raw::ColorAttachment::Load
                                                        : raw::ColorAttachment::DontCare;
                 pd.color[c].store = !frame::texture(pass.color[c]).memoryless;
                 memcpy(pd.color[c].clear, pass.clear, sizeof pass.clear);
+            }
+            if (frame::rtSize() && !pass.draws.empty() && !pass.draws[0].blur) {
+                pd.width = frame::texture(pass.color[0]).w - frame::kRtShortW;
+                pd.height = frame::texture(pass.color[0]).h - frame::kRtShortH;
             }
             raw::RenderEncoder *e = cb->render(pd);
             bool bound[3][31] = {};

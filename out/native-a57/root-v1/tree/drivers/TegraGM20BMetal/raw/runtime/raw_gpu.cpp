@@ -77,31 +77,31 @@ uint32_t fbits(float f)
 // Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the render target
 // format NVK writes where the pack renders to it (BGRA8 0xcf; R32Float 0xe5, Core Animation's third attachment in two states).
 const FormatInfo kFormats[] = {
-    {1, 0, 0x2002491d, 1, false},      // A8Unorm
-    {10, 0, 0x7012491d, 1, false},     // R8Unorm
-    {11, 0, 0x7012491d, 1, true},      // R8Unorm_sRGB
-    {20, 0, 0x7012491b, 2, false},     // R16Unorm
-    {25, 0, 0x7017ff9b, 2, false},     // R16Float
-    {30, 0, 0x70d24918, 2, false},     // RG8Unorm
-    {40, 0, 0x74e24915, 2, false},     // B5G6R5Unorm
-    {41, 0, 0x272a4913, 2, false},     // A1BGR5Unorm
-    {42, 0, 0x272a4912, 2, false},     // ABGR4Unorm
-    {43, 0, 0x54e24914, 2, false},     // BGR5A1Unorm
-    {55, 0xe5, 0x7017ff8f, 4, false},  // R32Float
-    {60, 0, 0x70d2490c, 4, false},     // RG16Unorm
-    {65, 0, 0x70d7ff8c, 4, false},     // RG16Float
-    {70, 0, 0x58d24908, 4, false},     // RGBA8Unorm
-    {71, 0, 0x58d24908, 4, true},      // RGBA8Unorm_sRGB
-    {80, 0xcf, 0x54e24908, 4, false},  // BGRA8Unorm
-    {81, 0, 0x54e24908, 4, true},      // BGRA8Unorm_sRGB
-    {90, 0, 0x58d24909, 4, false},     // RGB10A2Unorm
-    {92, 0, 0x78d7ffa1, 4, false},     // RG11B10Float
-    {93, 0, 0x78d7ffa0, 4, false},     // RGB9E5Float
-    {94, 0, 0x54e24909, 4, false},     // BGR10A2Unorm
-    {105, 0, 0x70d7ff84, 8, false},    // RG32Float
-    {110, 0, 0x58d24903, 8, false},    // RGBA16Unorm
-    {115, 0, 0x58d7ff83, 8, false},    // RGBA16Float
-    {125, 0, 0x58d7ff81, 16, false},   // RGBA32Float
+    {1, 0, 0x2002491d, 1, false},        // A8Unorm
+    {10, 0, 0x7012491d, 1, false},       // R8Unorm
+    {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
+    {20, 0, 0x7012491b, 2, false},       // R16Unorm
+    {25, 0, 0x7017ff9b, 2, false},       // R16Float
+    {30, 0, 0x70d24918, 2, false},       // RG8Unorm
+    {40, 0, 0x74e24915, 2, false},       // B5G6R5Unorm
+    {41, 0, 0x272a4913, 2, false},       // A1BGR5Unorm
+    {42, 0, 0x272a4912, 2, false},       // ABGR4Unorm
+    {43, 0, 0x54e24914, 2, false},       // BGR5A1Unorm
+    {55, 0xe5, 0x7017ff8f, 4, false},    // R32Float
+    {60, 0, 0x70d2490c, 4, false},       // RG16Unorm
+    {65, 0, 0x70d7ff8c, 4, false},       // RG16Float
+    {70, 0xd5, 0x58d24908, 4, false},    // RGBA8Unorm (rendered: a 4:2:0 code texture's image)
+    {71, 0, 0x58d24908, 4, true},        // RGBA8Unorm_sRGB
+    {80, 0xcf, 0x54e24908, 4, false},    // BGRA8Unorm
+    {81, 0, 0x54e24908, 4, true},        // BGRA8Unorm_sRGB
+    {90, 0, 0x58d24909, 4, false},       // RGB10A2Unorm
+    {92, 0, 0x78d7ffa1, 4, false},       // RG11B10Float
+    {93, 0, 0x78d7ffa0, 4, false},       // RGB9E5Float
+    {94, 0, 0x54e24909, 4, false},       // BGR10A2Unorm
+    {105, 0, 0x70d7ff84, 8, false},      // RG32Float
+    {110, 0, 0x58d24903, 8, false},      // RGBA16Unorm
+    {115, 0xca, 0x58d7ff83, 8, false},   // RGBA16Float (rendered: a 4:2:0 texture's converted image)
+    {125, 0xc0, 0x58d7ff81, 16, false},  // RGBA32Float (rendered: an sRGB 4:2:0 texture's image)
 };
 
 // bits [lo, hi] of the 256-bit header
@@ -548,6 +548,14 @@ void Device::writeTic(const Texture &t)
     memcpy(tic_.cpu + 32 * t.tic, w, 32);  // write-combined: visible at the next submission's header invalidate
 }
 
+// A pitch-linear color target: its address and pitch multiples of 128 (NVK renders a linear image only so, nvk_rendering_linear,
+// "the render hardware gets grumpy" otherwise; m2v's NVK renders any other through a tiled shadow, which the raw path leaves to
+// m2v)
+static bool linearTarget(const Texture &t)
+{
+    return !((t.va | t.pitch) & 127);
+}
+
 static bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
 {
     const FormatInfo *f = formatInfo(format);
@@ -581,7 +589,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
                                   uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, uint32_t format,
                                   Texture &t)
 {
-    if (!shape(width, height, format, t) || (pitch & 31) || pitch < width * t.bpp ||
+    if (!shape(width, height, format, t) || (pitch & 31) || (offset & 31) || pitch < width * t.bpp ||
         offset + uint64_t(pitch) * height > allocBytes || (uintptr_t(base) & (pageSize() - 1)))
         return false;
     std::lock_guard<std::mutex> l(lock_);
@@ -591,6 +599,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
         return false;
     t.va = t.import->bo.va + offset;
     t.cpu = static_cast<uint8_t *>(base) + offset;
+    t.renderable = t.renderable && linearTarget(t);
     if (!(t.tic = allocTic())) {
         release(t.import);
         t.import = nullptr;
@@ -622,6 +631,7 @@ bool Device::createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocB
     }
     t.import = planes;
     t.planar = true;
+    t.addressMap = 2;
     t.planes = {t.import->bo.va + luma, t.import->bo.va + chroma, lumaPitch, chromaPitch};
     return true;
 }
@@ -629,12 +639,13 @@ bool Device::createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocB
 bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                                  uint32_t format, Texture &t)
 {
-    if (!shape(width, height, format, t) || (pitch & 31) || pitch < width * t.bpp || ((b.va + offset) & 255) ||
+    if (!shape(width, height, format, t) || (pitch & 31) || pitch < width * t.bpp || ((b.va + offset) & 31) ||
         offset + uint64_t(pitch) * height > b.length)
         return false;
     std::lock_guard<std::mutex> l(lock_);
     t.pitch = pitch;
     t.va = b.va + offset;
+    t.renderable = t.renderable && linearTarget(t);
     t.cpu = b.cpu + offset;
     if (!(t.tic = allocTic())) return false;
     writeTic(t);
@@ -648,7 +659,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     std::lock_guard<std::mutex> l(lock_);
     t = of;
     t.format = format;
-    t.renderable = f->rt != 0;
+    t.renderable = f->rt != 0 && linearTarget(t);
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
     if (!(t.tic = allocTic())) return false;
@@ -665,6 +676,12 @@ bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, 
 
 void Device::destroyTexture(Texture &t)
 {
+    for (Texture *plane : {t.luma, t.chroma})
+        if (plane) {
+            destroyTexture(*plane);
+            delete plane;
+        }
+    t.luma = t.chroma = nullptr;
     std::lock_guard<std::mutex> l(lock_);
     if (t.tic) {
         memset(tic_.cpu + 32 * t.tic, 0, 32);
@@ -793,6 +810,7 @@ bool Device::createSampler(const SamplerDesc &d, Sampler &s)
 {
     uint32_t w[8];
     samplerHeader(d, w);
+    s.desc = d;
     std::lock_guard<std::mutex> l(lock_);
     if (!freeTsc_.empty()) {
         s.tsc = freeTsc_.back();
@@ -810,7 +828,84 @@ void Device::destroySampler(Sampler &s)
 {
     std::lock_guard<std::mutex> l(lock_);
     if (s.tsc) freeTsc_.push_back(s.tsc);
+    for (uint32_t m : s.mapped)
+        if (m && m != s.tsc && std::find(freeTsc_.begin(), freeTsc_.end(), m) == freeTsc_.end()) freeTsc_.push_back(m);
     s = {};
+}
+
+// m2v's address map of a planar texture (metal2vulkan ycbcr.rs, `address_mode_map`): a 4:2:0 or 4:2:2 texture samples every mode as
+// clamp to the edge; a 4:4:4 texture read as codes clamp to zero and clamp to the border color as clamp to the edge, the others
+// as they are (MTLSamplerAddressMode: ClampToEdge 0, ClampToZero 4, ClampToBorderColor 5)
+bool Device::samplerVariant(Sampler &s, uint8_t map)
+{
+    if (!map || map > 2) return false;
+    if (s.mapped[map]) return true;
+    SamplerDesc d = s.desc;
+    for (uint8_t *m : {&d.sAddress, &d.tAddress, &d.rAddress})
+        if (map == 1 || *m == 4 || *m == 5) *m = 0;
+    if (d.sAddress == s.desc.sAddress && d.tAddress == s.desc.tAddress && d.rAddress == s.desc.rAddress) {
+        s.mapped[map] = s.tsc;
+        return true;
+    }
+    uint32_t w[8];
+    samplerHeader(d, w);
+    std::lock_guard<std::mutex> l(lock_);
+    uint32_t tsc = 0;
+    if (!freeTsc_.empty()) {
+        tsc = freeTsc_.back();
+        freeTsc_.pop_back();
+    } else if (nextTsc_ < kTscCount) {
+        tsc = nextTsc_++;
+    } else {
+        return false;
+    }
+    memcpy(tsc_.cpu + 32 * tsc, w, 32);
+    s.mapped[map] = tsc;
+    return true;
+}
+
+Pipeline *Device::ycbcrPipeline(uint8_t output)
+{
+    static const char *const names[] = {"", "raw.ycbcr.ycbcr_converted_frag", "raw.ycbcr.ycbcr_srgb_frag",
+                                        "raw.ycbcr.ycbcr_codes_frag"};
+    if (!output || output > 3) return nullptr;
+    return pipeline(Pack::fnv(names[output], strlen(names[output])));
+}
+
+bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
+                                uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width,
+                                uint32_t height, uint32_t format, const uint32_t shape[9], Texture &t)
+{
+    constexpr uint32_t kR8Unorm = 10, kRG8Unorm = 30;
+    const uint8_t output = format == 500 ? 1 : format == 520 ? 2 : format == 540 ? 3 : 0;
+    const uint32_t image = output == 1 ? 115 : output == 2 ? 125 : 70;
+    if (!output || !ycbcrPipeline(output)) return false;
+    Texture *y = new Texture, *c = new Texture;
+    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, luma, width, height, lumaPitch, kR8Unorm, *y)) {
+        delete y;
+        delete c;
+        return false;
+    }
+    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, chroma, (width + 1) / 2, (height + 1) / 2,
+                              chromaPitch, kRG8Unorm, *c)) {
+        destroyTexture(*y);
+        delete y;
+        delete c;
+        return false;
+    }
+    if (!createTexture(width, height, image, t)) {
+        destroyTexture(*y);
+        destroyTexture(*c);
+        delete y;
+        delete c;
+        return false;
+    }
+    t.luma = y;
+    t.chroma = c;
+    memcpy(t.shape, shape, sizeof t.shape);
+    t.ycbcr = output;
+    t.addressMap = 1;
+    return true;
 }
 
 // A memoryless attachment's memory: one per size and format, kept while passes use it (m2v 0105 gives a memoryless attachment
@@ -874,6 +969,7 @@ CommandBuffer *Device::begin()
     cb.flush_.clear();
     cb.backings_.clear();
     cb.draws = cb.passes = cb.blits = 0;
+    cb.refusal = {};
     cb.pushStart_ = push_.head;
     cb.uploadStart_ = upload_.head;
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
@@ -934,6 +1030,11 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         const Texture *t = pass.color[j].texture;
         if (!t) continue;
         if (!t->renderable) return nullptr;
+        if (!t->memoryless && ((t->va | t->pitch) & 127)) {  // diagnostics only: NVK would render it through a shadow
+            dev_->stats.rtUnaligned++;
+            dev_->stats.rtUnalignedPitch = t->pitch;
+            dev_->stats.rtUnalignedVa = uint32_t(t->va & 255);
+        }
         if (t->memoryless) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
             Texture *b = dev_->backing(*t);
@@ -943,17 +1044,19 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             backings_.push_back(b);
         }
     }
-    // the render area: from the origin, the smallest attachment's extent (m2v's)
+    // the render area: from the origin, the smallest attachment's extent, each axis within the pass's target size where it
+    // names one (m2v render_pass.rs `area`); Metal's default viewport and scissor cover it (render_state.rs `metal_defaults`)
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (const Texture *t = e.pass_.color[j].texture) {
             e.areaW_ = e.areaW_ ? std::min(e.areaW_, t->width) : t->width;
             e.areaH_ = e.areaH_ ? std::min(e.areaH_, t->height) : t->height;
         }
+    if (pass.width) e.areaW_ = std::min(e.areaW_, pass.width);
+    if (pass.height) e.areaH_ = std::min(e.areaH_, pass.height);
     // the body goes straight into the push ring; the pass prologue (targets, clears) is written at end() and runs first
     e.reserve();
-    const Texture *t0 = e.pass_.color[0].texture;
-    e.setViewport(0, 0, t0 ? t0->width : 0, t0 ? t0->height : 0, 0, 1);
-    e.setScissor(0, 0, t0 ? t0->width : 0, t0 ? t0->height : 0);
+    e.setViewport(0, 0, e.areaW_, e.areaH_, 0, 1);
+    e.setScissor(0, 0, e.areaW_, e.areaH_);
     passes++;
     return &e;
 }
@@ -1078,6 +1181,12 @@ void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
 
 void RenderEncoder::setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
+    // a rectangle past the render area is clipped to it, as plain Metal clips it (m2v render_state.rs `set_scissors`)
+    const uint32_t x0 = std::min(x, areaW_), y0 = std::min(y, areaH_);
+    w = uint32_t(std::min<uint64_t>(uint64_t(x) + w, areaW_)) - x0;
+    h = uint32_t(std::min<uint64_t>(uint64_t(y) + h, areaH_)) - y0;
+    x = x0;
+    y = y0;
     sc_[0] = x;
     sc_[1] = y;
     sc_[2] = w;
@@ -1162,6 +1271,8 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     if (!ib || (indexSize != 2 && indexSize != 4) || offset % indexSize ||
         offset + uint64_t(count) * indexSize > ib->length) {
         *why = "an indexed draw the raw path does not take";
+        cb_->refusal = {RefIndexedRange, uint32_t(offset), indexSize,
+                        ib ? uint32_t(std::min<uint64_t>(ib->length, ~0u)) : 0};
         return false;
     }
     // the vertices it reads: up to its largest index (the indices are CPU-written, as the vertices). A restart (the all-ones
@@ -1217,12 +1328,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     }
     if (baseInstance) {
         *why = "draw with a base instance";
+        cb_->refusal = {RefBaseInstance, baseInstance, 0, 0};
         return false;
     }
     for (uint32_t j = 0; j < 8; j++) {  // the pass's attachments are the formats the state was made for
         const Texture *t = j < pass_.count ? pass_.color[j].texture : nullptr;
         if ((t ? t->format : 0) != pl->colorFormats[j] && !(t && pl->colorFormats[j] == 0)) {
             *why = "a state whose color formats differ from the pass's";
+            cb_->refusal = {RefColorFormats, j, t ? t->format : 0, pl->colorFormats[j]};
             return false;
         }
     }
@@ -1259,6 +1372,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             // (every probe bound at offset 0)
             if ((b.va & 255) && !e.samplerKind) {
                 *why = "a uniform buffer bound at an offset that is not a multiple of 256";
+                cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, uint32_t(b.va & 255),
+                                uint32_t(std::min<uint64_t>(b.offset, ~0u))};
                 return false;
             }
             if (b.buffer) cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range, b.size));
@@ -1273,6 +1388,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             const Texture *t = textures_[e.slot];
             if (t && !t->tic) {
                 *why = "a texture the raw path cannot sample";
+                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                 return false;
             }
             tic = t ? t->tic : 0;
@@ -1280,10 +1396,19 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             const Texture *t = pass_.color[e.slot].texture;
             tic = t ? t->tic : 0;
         }
+        const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
         if (e.samplerKind == SamplerSlot) {
             const Sampler *s = samplers_[e.sampler];
-            tsc = s ? s->tsc : d.neutralTsc_;
+            tsc = s ? (map ? s->mapped[map] : s->tsc) : d.neutralTsc_;
+            if (s && map && !tsc) {
+                *why = "a planar texture's sampler without its address map";
+                return false;
+            }
         } else if (e.samplerKind == SamplerConstexpr) {
+            if (map) {  // m2v compiles a variant of the function for it (RuntimeFact::ConstexprSampled)
+                *why = "a planar texture sampled through a constexpr sampler";
+                return false;
+            }
             tsc = d.constexprTsc_[e.sampler];
         }
         at[0] = tic | tsc << 20;
@@ -1373,6 +1498,27 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     return true;
 }
 
+// The clear value m2v hands Vulkan for a Metal clear color of an attachment of `format` (metal2vulkan-runtime clear_value.rs
+// `color`): what NVK's clear writes, as Metal's conversion stores it. Normalized channels through float, clamped, k / 255 of the
+// nearest integer k (ties to even); half channels the value of the half nearest (ties to even); float channels themselves (a
+// NaN quieted); the channels a format has none of 0.
+static void clearValue(uint32_t format, const float in[4], uint32_t out[4])
+{
+    auto unorm8 = [](float x) {
+        const double v = std::isnan(x) ? 0.0 : std::clamp(double(x), 0.0, 1.0);
+        return fbits(float(std::nearbyint(v * 255.0) / 255.0));
+    };
+    auto exact = [](float x) { return std::isnan(x) ? (fbits(x) | 0x7fc00000u) : fbits(x); };
+    auto half = [&](float x) { return std::isnan(x) ? exact(x) : fbits(float(_Float16(x))); };
+    for (int i = 0; i < 4; i++) switch (format) {
+        case 70:
+        case 80: out[i] = unorm8(in[i]); break;
+        case 55: out[i] = i ? 0u : exact(in[i]); break;
+        case 115: out[i] = half(in[i]); break;
+        default: out[i] = exact(in[i]); break;  // RGBA32Float
+        }
+}
+
 void RenderEncoder::end()
 {
     Device &d = *dev_;
@@ -1380,14 +1526,43 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clears();
-    const uint32_t room = 128 + 8 * 12 + uint32_t(cl.size()) * 16;
+    const uint32_t room = 160 + 8 * 12 + uint32_t(cl.size()) * 48;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
     p.m(WAIT_FOR_IDLE, 0);
     p.m(INVALIDATE_SHADER_CACHES, 0x14);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    uint32_t ct = 0, count = 0, w = 0, h = 0;
+    // the clears m2v makes by passes of their own first (Clear loads reaching past the render area): each its attachment alone
+    // as target 0, over its reach, then the barrier between passes
+    bool own = false;
+    for (const Clear &c : cl) {
+        if (!c.own) continue;
+        const Texture *t = pass_.color[c.target].texture;
+        p.inc(COLOR_TARGET, {uint32_t(t->va >> 32), uint32_t(t->va), t->pitch, t->height, formatInfo(t->format)->rt,
+                             0x1000u, 1, 0u, 0});
+        p.m(COLOR_COMPRESSION, 0);
+        uint32_t map = 0;
+        for (uint32_t k = 0; k < 8; k++) map |= k << (4 + 3 * k);
+        p.m(CT_SELECT, map | 1);
+        p.inc(SURFACE_CLIP_H, {c.x1 << 16, c.y1 << 16});
+        p.m(ZT_SELECT, 0);
+        uint32_t v[4];
+        clearValue(pass_.color[c.target].texture->format, c.value, v);
+        p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
+        p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
+        p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
+        p.m(RENDER_ENABLE_OVERRIDE, 1);
+        p.m(CLEAR_SURFACE, 0x3c);
+        p.m(RENDER_ENABLE_OVERRIDE, 0);
+        own = true;
+    }
+    if (own) {
+        p.m(WAIT_FOR_IDLE, 0);
+        p.m(INVALIDATE_SHADER_CACHES, 0x14);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+    }
+    uint32_t ct = 0, count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
         const Texture *t = pass_.color[j].texture;
         if (!t) continue;
@@ -1397,18 +1572,17 @@ void RenderEncoder::end()
                   0u, 0});
         p.m(COLOR_COMPRESSION + 4 * j, 0);
         count++;
-        if (!w) {
-            w = t->width;
-            h = t->height;
-        }
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`)
     for (uint32_t k = 0; k < 8; k++) ct |= k << (4 + 3 * k);
     p.m(CT_SELECT, ct | count);
-    p.inc(SURFACE_CLIP_H, {w << 16, h << 16});
+    p.inc(SURFACE_CLIP_H, {areaW_ << 16, areaH_ << 16});  // the render area (nvk_CmdBeginRendering)
     p.m(ZT_SELECT, 0);
     for (const Clear &c : cl) {
-        p.inc(COLOR_CLEAR_VALUE, {fbits(c.value[0]), fbits(c.value[1]), fbits(c.value[2]), fbits(c.value[3])});
+        if (c.own) continue;
+        uint32_t v[4];
+        clearValue(pass_.color[c.target].texture->format, c.value, v);
+        p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
         p.m(RENDER_ENABLE_OVERRIDE, 1);
@@ -1466,9 +1640,20 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
     for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
         const ColorAttachment &a = pass_.color[j];
         if (!a.texture) continue;
-        const uint32_t w = a.texture->width, h = a.texture->height;
+        const uint32_t w = areaW_, h = areaH_;  // NVK's clears cover the render area (nvk_CmdBeginRendering)
         if (a.load == ColorAttachment::Clear) {
-            out.push_back({j, 0, 0, w, h, a.clear});
+            // Metal's Clear load of a stored attachment reaches past the render area: over it rounded up to whole 32-pixel
+            // tiles, clipped to the attachment, in a pass with a draw call; the whole attachment in one without (m2v
+            // clear_reach.rs `cleared`). Past the render area, m2v clears it by a pass of its own before this one
+            // (ReachClears), which the pass then loads.
+            uint32_t rw = w, rh = h;
+            if (a.store && !memoryless_[j]) {
+                rw = called_ ? std::min((w + kTile - 1) / kTile * kTile, a.texture->width) : a.texture->width;
+                rh = called_ ? std::min((h + kTile - 1) / kTile * kTile, a.texture->height) : a.texture->height;
+            }
+            Clear c{j, 0, 0, rw, rh, a.clear};
+            c.own = rw != w || rh != h;
+            out.push_back(c);
             continue;
         }
         if (a.load != ColorAttachment::DontCare || reach == Nothing) continue;

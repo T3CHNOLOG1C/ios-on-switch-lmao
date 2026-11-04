@@ -83,6 +83,15 @@ struct Texture {
         uint32_t lumaPitch = 0, chromaPitch = 0;
     } planes;
     bool planar = false;
+    // A two-plane 4:2:0 surface's texture (YCBCR8_420_2P 500, its sRGB twin 520, RGB8_420_2P 540): the image sampled is span
+    // (RGBA16Float, RGBA32Float, RGBA8Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma
+    // (R8Unorm) and chroma (RG8Unorm), before the work that samples it (pack/ycbcr.metal; shape: its fragment buffer 0)
+    Texture *luma = nullptr, *chroma = nullptr;
+    uint32_t shape[9] = {};
+    uint8_t ycbcr = 0;  // 1 converted, 2 sRGB, 3 codes
+    // m2v's address map of a planar texture's samplers: 1 every mode clamps to the edge (4:2:0), 2 clamp to zero and to the
+    // border clamp to the edge (4:4:4 codes)
+    uint8_t addressMap = 0;
 };
 struct Buffer {
     uint64_t va = 0, length = 0;
@@ -101,6 +110,10 @@ struct SamplerDesc {                                      // the MTLSamplerDescr
 void samplerHeader(const SamplerDesc &d, uint32_t w[8]);
 struct Sampler {
     uint32_t tsc = 0;
+    SamplerDesc desc;
+    // its headers under a planar texture's address map (Texture::addressMap 1, 2): m2v samples those textures through the sampler
+    // with the map applied (Device::samplerVariant makes them; the same header where the map changes nothing)
+    uint32_t mapped[3] = {};
 };
 
 struct Pipeline {
@@ -124,6 +137,9 @@ struct ColorAttachment {
 struct PassDesc {
     ColorAttachment color[8];
     uint32_t count = 0;
+    // renderTargetWidth / renderTargetHeight: the render area's bounds where nonzero (m2v render_pass.rs `area`: the
+    // attachments' smallest extent, each axis limited by its target size)
+    uint32_t width = 0, height = 0;
 };
 
 class RenderEncoder {
@@ -190,6 +206,7 @@ private:
     struct Clear {
         uint32_t target, x0, y0, x1, y1;
         const float *value;
+        bool own = false;  // cleared by a pass of its own before this one (a Clear load reaching past the render area)
     };
     std::vector<Clear> clears() const;
 };
@@ -217,8 +234,16 @@ private:
     void room();
 };
 
+// Which encode-time predicate refused a draw (set beside *why; RawMetal.mm counts and logs it, r10-rawsweep diagnostics)
+enum RefusalId : uint8_t { RefNone, RefIndexedRange, RefBaseInstance, RefColorFormats, RefUboOffset, RefNoTic };
+struct Refusal {
+    uint8_t id = RefNone;
+    uint32_t a = 0, b = 0, c = 0;
+};
+
 class CommandBuffer {
 public:
+    Refusal refusal;                              // the last refused draw's predicate and its values
     RenderEncoder *render(const PassDesc &pass);  // null: an attachment the raw path cannot render to
     BlitEncoder *blit();
     // CPU lines the GPU reads in this submission (CPU-written cached memory): cleaned to memory before it is submitted.
@@ -260,6 +285,16 @@ public:
                        Texture &t);  // pool memory, rows 256-byte aligned
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
                               uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t);
+    // A two-plane 4:2:0 surface's texture of YCBCR8_420_2P (500), YCBCR8_420_2P_sRGB (520) or RGB8_420_2P (540): its planes at
+    // `luma`/`chroma` (offsets in the allocation, with their pitches) as R8Unorm and RG8Unorm textures, its image an
+    // RGBA16Float, RGBA32Float or RGBA8Unorm one of the pool, `shape` the conversion's fragment buffer (pack/ycbcr.metal)
+    bool createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
+                            uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width, uint32_t height,
+                            uint32_t format, const uint32_t shape[9], Texture &t);
+    // The pack's conversion state of a 4:2:0 texture's output (Texture::ycbcr), null if the pack has none
+    Pipeline *ycbcrPipeline(uint8_t output);
+    // s's header under address map `map` (Texture::addressMap), made now if it is not yet
+    bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
     // with their pitches), sampled through an RGBA8 image of the pool (Texture::planar)
     bool createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
@@ -301,6 +336,10 @@ public:
     struct Stats {
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, imports{0}, importBytes{0},
             poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
+        // diagnostics: color targets the raw path rendered whose address or pitch is not a multiple of 128 (NVK renders
+        // those through a tiled shadow: nvk_cmd_draw.c nvk_image_plane_aligned_for_linear_attachment), and the last one's pitch
+        std::atomic<uint64_t> rtUnaligned{0};
+        std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
     } stats;
 
 private:

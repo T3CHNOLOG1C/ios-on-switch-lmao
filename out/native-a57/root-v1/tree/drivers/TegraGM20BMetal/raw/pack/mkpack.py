@@ -96,10 +96,8 @@ def main():
             r = p['records'][0]
             if any(v[2] != 'known' for v in r['prog'].values()): why = 'unknown program'
             elif sorted(r['prog']) != [1, 5]: why = 'stages %s' % sorted(r['prog'])
-        # more than two color attachments: not the render server's (corpus 11-04: two states, other processes), and not in the
-        # host equivalence frame (test/frame.h), so not taken
-        if not why and sum(1 for t in p['key'].split() if t[:1] == 'c' and t[1:2].isdigit() and '=' in t) > 2:
-            why = 'more than two color attachments'
+        # (three color attachments: the render server's since r7n's harvest, Core Animation's "A3" states with an R32Float third
+        # attachment, taken as any other; test/frame.h FRAME_A3 draws them)
         if why: skipped.append((p, why))
         else: simple.append(p)
     # a color target's own registers (per-target blend 0x1e00 + 0x20 j, SET_CT_WRITE 0x1a00 + 4 j) mean nothing for a state

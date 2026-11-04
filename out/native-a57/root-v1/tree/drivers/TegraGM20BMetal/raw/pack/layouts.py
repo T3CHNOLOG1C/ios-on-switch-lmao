@@ -14,16 +14,19 @@ def tic_kind(tic, rts):
     return ('tic?', '%s:%dx%d' % (name, width, height))
 DUMMY_TSC = [0x26092, 0x291, 0x40000]   # MTLSamplerDescriptor's defaults through m2v + NVK (nearest, clamp, not mipmapped)
 def tsc_kind(t):
-    # probe.mm tags fragment sampler slot s with max LOD 1 + s/2 (4.8 fixed point: 256 + 128 s)
+    # probe.mm tags fragment sampler slot s with max LOD 1 + s/2 under a nearest mip filter, linear filters when s&1 and a
+    # repeating U when s&2. m2v hands Vulkan the level a nearest mip filter reads at the bound (metal/sampler.rs nearest_level:
+    # past one half reads the next level), so the header holds level 1 + s//2 (4.8 fixed point: 256 per level) and an odd slot
+    # shares its even neighbour's level: the filter tells them apart. (r10: reading the level alone named an odd slot's sampler
+    # its even neighbour's, whose filter then differed, and 9 two-image Core Animation states were skipped as "derived".)
     lod = (t[2] >> 12) & 0xfff
-    if lod % 128 or not 256 <= lod <= 256 + 15 * 128:
+    if lod % 256 or not 256 <= lod <= 256 * 8:
         return ('tsc?', ' '.join('%x' % w for w in t))
-    slot = (lod - 256) // 128
-    # and its filter and U address are that slot's (probe.mm: linear when s&1, repeat U when s&2): m2v derives samplers of its
-    # own from a bound one for some functions (two-plane YCbCr conversion: linear, its own address modes), which the raw path
-    # does not make: such a handle is no plain slot sampler
     mag, u = t[1] & 7, t[0] & 7
-    if mag != (2 if slot & 1 else 1) or u != (0 if slot & 2 else 2):
+    if mag not in (1, 2):
+        return ('tsc?', ' '.join('%x' % w for w in t))
+    slot = 2 * (lod // 256 - 1) + (1 if mag == 2 else 0)
+    if slot > 15 or u != (0 if slot & 2 else 2):
         return ('tsc?derived', ' '.join('%x' % w for w in t))
     return ('smp', slot)
 def layout(p):

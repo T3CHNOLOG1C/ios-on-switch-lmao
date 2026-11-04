@@ -49,6 +49,11 @@ inline std::string key(const std::string &line)
     return k;
 }
 
+inline bool a3()
+{
+    return getenv("FRAME_A3") != nullptr;
+}
+
 struct State {
     std::string line, key;
     bool uber, blur, extra = false;
@@ -70,8 +75,11 @@ inline std::vector<State> states(const char *corpusPath)
             continue;  // the render server's (the pack's)
         for (size_t at; (at = l.find(" lib=")) != std::string::npos;)
             l.erase(at, l.find(' ', at + 1) - at);  // not in the key
+        // FRAME_A3: the three-attachment states instead (a third R32Float attachment, c2=55: Core Animation's "A3" states,
+        // r7n's harvest), drawn in a main pass with that third attachment
         if (l.find(" c0=80:") == std::string::npos || l.find(" c1=80:") == std::string::npos ||
-            l.find(" c2=") != std::string::npos)
+            (a3() ? l.find(" c2=55:") == std::string::npos || l.find(" c3=") != std::string::npos
+                  : l.find(" c2=") != std::string::npos))
             continue;
         State s{l, key(l), l.find("v fixed_vert_lph_spc") != std::string::npos,
                 l.find("v downsample_blur_vert_lph") != std::string::npos};
@@ -109,10 +117,24 @@ inline std::vector<State> states(const char *corpusPath)
     return out;
 }
 
-enum Tex : int { FB0, FB1, MEMORYLESS, BLUR0, BLUR1, BLUR_MEMORYLESS, IMAGE0, IMAGE1, IMAGE2, IMAGE3, TEX_COUNT };
+enum Tex : int {
+    FB0,
+    FB1,
+    MEMORYLESS,
+    BLUR0,
+    BLUR1,
+    BLUR_MEMORYLESS,
+    IMAGE0,
+    IMAGE1,
+    IMAGE2,
+    IMAGE3,
+    A3TARGET,
+    TEX_COUNT
+};
 struct TexDesc {
     int w, h;
     bool iosurface, memoryless, renderTarget;
+    uint32_t format = 80;  // MTLPixelFormat: BGRA8Unorm, or R32Float (55) for the A3 states' third attachment
 };
 inline TexDesc texture(int t)
 {
@@ -124,6 +146,7 @@ inline TexDesc texture(int t)
     case BLUR1: return {320, 180, false, false, true};
     case BLUR_MEMORYLESS: return {320, 180, false, true, true};
     case IMAGE0: return {1280, 720, true, false, false};
+    case A3TARGET: return {1280, 720, false, false, true, 55};
     default: return {128, 128, t == IMAGE2, false, false};
     }
 }
@@ -149,8 +172,8 @@ struct Draw {
     uint32_t primitive = 4, first = 0, count = 4, instances = 1;  // MTLPrimitiveType (4 triangle strip)
 };
 struct Pass {
-    int color[2];  // Tex
-    int load[2];   // 0 dontCare 1 load 2 clear
+    int color[3];  // Tex (-1: none)
+    int load[3];   // 0 dontCare 1 load 2 clear
     float clear[4];
     std::vector<Draw> draws;
 };
@@ -164,6 +187,14 @@ struct Shape {
     bool ring = getenv("FRAME_RING") != nullptr;
 };
 constexpr uint32_t kRingBytes = 8 << 20;
+// FRAME_RTSIZE: the main pass's renderTargetWidth/Height 37 and 23 pixels short of its attachments' (the device's passes, r7o:
+// "a render target size other than the attachment's"), so its render area, default viewport and scissor, clears and the
+// scissors past it are the target size's
+inline bool rtSize()
+{
+    return getenv("FRAME_RTSIZE") != nullptr;
+}
+constexpr uint32_t kRtShortW = 37, kRtShortH = 23;
 
 // The frame's passes. `uniformBytes`: the setBytes length of every uniform slot (CA's are 64 and 128; 256 = a whole m2v upload chunk,
 // so the decoded payloads hold no bytes past the Metal length, which m2v leaves stale in its recycled chunks).
@@ -171,7 +202,7 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
 {
     std::vector<Pass> out;
     for (unsigned p = 0; p < s.blurPasses && blurCount; p++) {
-        Pass bp{{p & 1 ? BLUR1 : BLUR0, BLUR_MEMORYLESS}, {0, 0}, {0, 0, 0, 0}, {}};
+        Pass bp{{p & 1 ? BLUR1 : BLUR0, BLUR_MEMORYLESS, -1}, {0, 0, 0}, {0, 0, 0, 0}, {}};
         Draw d{int(p % blurCount), true, {0, 0, 320, 180}, {}, {}, {}};
         for (int &t : d.textures) t = -1;
         for (int &t : d.samplers) t = -1;
@@ -185,7 +216,7 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
         bp.draws.push_back(d);
         out.push_back(bp);
     }
-    Pass mp{{frameIndex & 1 ? FB1 : FB0, MEMORYLESS}, {2, 0}, {0, 0, 0, 1}, {}};
+    Pass mp{{frameIndex & 1 ? FB1 : FB0, MEMORYLESS, a3() ? A3TARGET : -1}, {2, 0, 2}, {0, 0, 0, 1}, {}};
     for (unsigned i = 0; i < s.draws && uberCount; i++) {
         Draw d{int((i / 3) % std::min<size_t>(s.mainStates, uberCount)),
                false,
@@ -197,6 +228,11 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
         for (int &t : d.samplers) t = -1;
         d.bytes = {{1, 1, s.vertexBytes},  {1, 2, s.uniformBytes}, {1, 3, s.uniformBytes}, {2, 1, s.uniformBytes},
                    {2, 2, s.uniformBytes}, {2, 5, s.uniformBytes}, {2, 6, s.uniformBytes}};
+        if (a3()) {  // the A3 states' vertex uniforms at 5 and fragment uniforms at 3 and 4 too
+            d.bytes.push_back({1, 5, s.uniformBytes});
+            d.bytes.push_back({2, 3, s.uniformBytes});
+            d.bytes.push_back({2, 4, s.uniformBytes});
+        }
         // FRAME_DRAW_FORMS: also triangle lists, a nonzero vertexStart and two instances (the draw paths CA's strips never take)
         if (getenv("FRAME_DRAW_FORMS")) {
             if (i % 4 == 1) {
