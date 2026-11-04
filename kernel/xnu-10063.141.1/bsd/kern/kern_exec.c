@@ -7683,6 +7683,41 @@ native_ioswitch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t own
 	return error;
 }
 
+/* The data migration the first boot after a restore runs, once. The com.apple.migration prefs below record 21H461 as
+ * migrated (UniXNU's skip-setup seed), so DataMigrator always answered "System build version unchanged" and
+ * SystemAppMigrator.migrator never installed the 29 removable apps a restore leaves in /private/var/staged_system_apps
+ * (Maps, Mail, Calendar, Notes, Music, ...; every binary is in the static trust cache). DataMigrator's own trigger is
+ * its sentinel, /private/var/datamigrator/migrate ("Migration sentinel present. Migration necessary."), which it removes
+ * when the migration ends; backboardd then runs it behind its progress bar while SpringBoard waits. The marker makes it
+ * one try: a sentinel still there on a later boot means that migration never ended (a plugin hung, the power was cut),
+ * and it is removed rather than run again. Failures are logged only. */
+static void
+native_ioswitch_system_app_migration(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char marker[] = "/private/var/ioswitch/system-app-migration",
+	    sentinel[] = "/private/var/datamigrator/migrate";
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	int error = vnode_lookup(marker, 0, &vp, context);
+	if (!error) {
+		vnode_put(vp);
+		if (vnode_lookup(sentinel, 0, &vp, context)) return;
+		vnode_put(vp);
+		struct unlink_args request = {.path = scratch + 0x900};
+		int32_t result = 0;
+		if (!(error = copyout(sentinel, request.path, sizeof(sentinel)))) error = unlink(p, &request, &result);
+		printf("IOSwitch raw boot: last boot's data migration did not finish; not run again (%d)\n", error);
+		return;
+	}
+	/* datamigrator runs as mobile and unlinks the sentinel: directory and file are mobile's, as on the OS volume. */
+	if (error == ENOENT) error = native_ioswitch_mkdir(p, scratch, "/private/var/datamigrator", 501, 0755);
+	if (!error) error = native_ioswitch_watchdog_file(p, scratch, sentinel, "", 0, data_mount, 501, 501, 0644);
+	if (!error) error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
+	if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	if (error) printf("IOSwitch raw boot: data migration request failed: %d\n", error);
+	else printf("IOSwitch raw boot: data migration requested (staged system apps)\n");
+}
+
 /* The state a restored iPad has after Setup and data migration, plus no
  * SpringBoard watchdogs or idle sleep (no buttons or idle timer here yet).
  * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks. */
@@ -7692,27 +7727,28 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 #define IOSW_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
-	static const struct { const char *name, *body; } prefs[] = {
+	static const struct { const char *name, *body; bool once; } prefs[] = {
 		{"com.apple.purplebuddy", IOSW_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
-		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>")},
+		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), false},
 		{"com.apple.purplebuddy.notbackedup", IOSW_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
 		    "<key>ShouldRunHSA2MiniBuddy</key><false/><key>ShouldRunKeychainSyncMiniBuddy</key><false/>"
 		    "<key>ShouldRunMesaMiniBuddy</key><false/><key>ShouldRunPaymentMiniBuddy</key><false/>"
-		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>")},
+		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), false},
 		{"com.apple.managedconfiguration.notbackedup",
-		    IOSW_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>")},
+		    IOSW_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), false},
 		{"com.apple.springboard", IOSW_PLIST("<key>BKNoWatchdogs</key><true/>"
 		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
 		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
 		    "<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><true/>"
 		    /* The 7" panel shows 1280x720 points at scale 1 (UIScreen.scale is an integer all the way down,
 		     * so no fractional zoom): large icons and the text size below keep things legible and crisp. */
-		    "<key>SBHomeLargeIcons</key><true/>")},
+		    "<key>SBHomeLargeIcons</key><true/>"), false},
 		{"com.apple.UIKit", IOSW_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
-		    "<string>UICTContentSizeCategoryXXL</string>")},
+		    "<string>UICTContentSizeCategoryXXL</string>"), false},
+		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
 		{"com.apple.migration", IOSW_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
-		    "<key>buildVersion</key><string>21H461</string></dict>")},
+		    "<key>buildVersion</key><string>21H461</string></dict>"), true},
 	};
 #undef IOSW_PLIST
 	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
@@ -7738,10 +7774,16 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	char path[160] = "/private/var/containers";
 	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
 		snprintf(path, sizeof(path), "/private/var/mobile/Library/Preferences/%s.plist", prefs[i].name);
+		vnode_t existing = NULLVP;
+		if (prefs[i].once && !vnode_lookup(path, 0, &existing, vfs_context_current())) {
+			vnode_put(existing);
+			continue;
+		}
 		error = native_ioswitch_watchdog_file(p, scratch, path, prefs[i].body, (int)strlen(prefs[i].body),
 		    data_mount, 501, 501, 0600);
 	}
 	if (error) printf("IOSwitch raw boot: first-boot state failed at %s: %d\n", path, error);
+	else native_ioswitch_system_app_migration(p, scratch, data_mount);
 	return error;
 }
 
