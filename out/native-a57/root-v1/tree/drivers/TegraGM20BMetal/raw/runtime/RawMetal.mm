@@ -3254,18 +3254,17 @@ static void commitBuffer(RMCommandBuffer *cb);
 // any multiple of 16 (its own answers), so the m2v twins of the same memory are unchanged in what they hold:
 //  - its buffer pool's suballocations (CA::OGL::MetalBufferPool::get_buffer: max(this, the argument's)): a uniform buffer the
 //    raw path binds at its address (a constant buffer's is a multiple of 256 on GM20B; m2v's residual is not in the pack);
-//  - the IOSurfaces it makes (CADeviceSetMinimumAlignment, which raises every row alignment to this): rows the texture header
-//    takes (32) and a pitch render target takes (128: NVK renders linear targets only at 128, nvk_rendering_linear);
+//  (not iosurfaceReadOnlyTextureAlignmentBytes: QuartzCore makes it the render server's needed IOSurface row alignment,
+//  CADeviceSetMinimumAlignment, and hands it to every client, CA::Context::connect_remote; MetalContext::update_surface then
+//  refuses every surface whose rows miss it, "Row bytes (N) not 128 aligned", and the layer draws nothing (r7p5: 3347 refusals
+//  in backboardd, Safari images and widgets blank). The m2v device's answer, 16, stands; rows the raw path cannot take stay
+//  m2v's: its texture header takes rows of 32, a pitch render target rows of 128.)
 //  - the image memory it samples in place (CA::OGL::MetalContext::copy_image_to_texture: offset and rows a multiple of this,
 //    else it copies them into a texture of its own): the texture header's 32;
 //  - the rows of its CPU readbacks (CAMetalTextureGetBytesPerRow).
 - (NSUInteger)minConstantBufferAlignmentBytes
 {
     return 256;
-}
-- (NSUInteger)iosurfaceReadOnlyTextureAlignmentBytes
-{
-    return 128;
 }
 - (NSUInteger)deviceLinearReadOnlyTextureAlignmentBytes
 {
@@ -4223,7 +4222,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
             static const struct {
                 uint16_t offset;
                 uint32_t value;
-            } own[] = {{0x78, 256}, {0xa8, 128}, {0xb0, 32}};
+            } own[] = {{0x78, 256}, {0xb0, 32}};
             for (const auto &o : own) memcpy(static_cast<uint8_t *>(to) + o.offset, &o.value, 4);
         }
     }
