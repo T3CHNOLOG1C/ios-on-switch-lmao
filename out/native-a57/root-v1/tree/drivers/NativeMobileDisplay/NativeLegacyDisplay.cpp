@@ -441,6 +441,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint64_t vsyncInterval = 0, vsyncNext = 0;
     unsigned vsyncHz = 0;
     bool vsyncArmed = false;
+    unsigned vsyncSilent = 0;  // DC A frame ends without a V_BLANK while armed (watchVsync)
+    static constexpr unsigned kVsyncSilentFrames = 30;
     // DC A interrupt, on the same work loop. FRAME_END stays unmasked while it runs: it feeds the panel's DSI commands and shows the
     // interrupt is alive. V_BLANK is unmasked only while a vsync client is registered. The filter clears both in INT_STATUS, which lowers
     // the line, and hands them to the action; the timer only checks once, 250 ms after the start, that frame ends arrive.
@@ -735,6 +737,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             if (stamp && now > stamp) stFeLate.add(now - stamp);
         }
         if (status & kVblankInt) vblankNotify();
+        watchVsync(status);
         // After the compositor's vsync, since a latched flip starts the next frame's copy right here. A flip is also looked for at
         // V_BLANK (unmasked while a vsync client is registered), in case the controller latches after its FRAME_END.
         if ((status & kFrameEndInt) && rotated)
@@ -857,6 +860,27 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             ++stVsyncs;
             stVsyncLate.add(mach_absolute_time() - stamp);
         }
+    }
+    // Every DC A action, under the gate. The render server is a vsync client (kern_exec.c gives backboardd CA_FORCE_TIMER=1, so
+    // QuartzCore's IOMFBServer::set_vsync_enabled takes IOMobileFramebufferEnableVSyncNotifications instead of its CADisplayTimer)
+    // and draws nothing until its first vsync: its registration is found here, at the first frame end after it, whether or not it
+    // went through kickSwapQueue (no swap comes to do it). Armed, V_BLANK must come every frame: kVsyncSilentFrames frame ends
+    // without one panic, since the compositor would wait for ever.
+    void watchVsync(uint32_t status)
+    {
+        if (status & kVblankInt) vsyncSilent = 0;
+        if (!(status & kFrameEndInt)) return;
+        if (!vsyncArmed) {
+            vsyncSilent = 0;
+            armVsync();
+            return;
+        }
+        if (++vsyncSilent < kVsyncSilentFrames) return;
+        char gic[192];
+        ioswitch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
+        panic("IOSwitch display: no DC A V_BLANK in %u frame ends with vsync armed: INT_STATUS %#x MASK %#x ENABLE "
+              "%#x, %s",
+              vsyncSilent, dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
     }
     static bool displayClocked()
     {
