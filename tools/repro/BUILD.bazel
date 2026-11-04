@@ -1,3 +1,17 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+
 package(default_visibility = ["//visibility:public"])
 
 exports_files(glob(["*.py"]))
+
+# bazel run //tools/repro:check [-- TARGET...]: two from-scratch builds, every output compared bit for bit.
+py_binary(
+    name = "check",
+    srcs = ["check.py"],
+)
+
+# bazel run //tools/repro:equivalence -- <CMake-flow checkout>: the three-layer comparison with the old flow.
+py_binary(
+    name = "equivalence",
+    srcs = ["equivalence.py"],
+)

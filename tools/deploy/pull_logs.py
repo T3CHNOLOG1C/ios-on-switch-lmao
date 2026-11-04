@@ -2,6 +2,7 @@
 """Pull the last boots' logs off the card's iPad Data volume (read-only but for harvest.py's one documented write).
 
     bazel run //deploy:pull_logs -- <diskN> [--out DIR] [--no-logarchive] [--no-harvest] [--no-csstore] [--no-launchd]
+                                            [--no-eject]
 
 Copies into <out> (default <workspace>/out/switch/device-logs/boot-<MMDD-HHMM>):
   diagnostics/, uuidtext/               the unified log (Data db/), and <out>/boot.logarchive built from them
@@ -140,6 +141,7 @@ def main(argv=None):
         parser.add_argument("--no-" + flag, action="store_true")
     parser.add_argument("--log")
     parser.add_argument("--spec", help="//install:spec (the kernel's volume UUIDs)")
+    parser.add_argument("--no-eject", action="store_true", help="leave the card attached (default: unmount and eject)")
     args = parser.parse_args(argv)
     log = host.Log(args.log or Path.home() / "Library/Logs/ioswitch-install/pull-logs-{}.log".format(
         time.strftime("%Y%m%d-%H%M%S")))
@@ -147,7 +149,7 @@ def main(argv=None):
         host.check_tools(log)
         spec = load_spec(args.spec)
         card = cards.resolve(args.disk)
-        cards.check_layout_unprivileged(card, spec)
+        fat, target = cards.check_layout_unprivileged(card, spec)
         volume = data_volume(card, spec["volumes"]["data"]["uuid"])
         if not volume:
             raise host.HostError("no iPad Data volume {} on {}".format(spec["volumes"]["data"]["uuid"], card.disk))
@@ -155,6 +157,13 @@ def main(argv=None):
         with cards.mounted(volume, log) as data:
             pull(data, out, log, logarchive=not args.no_logarchive, harvest=not args.no_harvest,
                  csstore=not args.no_csstore, launchd=not args.no_launchd, corpus=args.corpus)
+        if not args.no_eject:
+            # As deploy does: the iPad volumes unmounted, then the whole card ejected.
+            container = host.container_on(target.identifier)
+            if container:
+                host.run("diskutil", "unmountDisk", container["ContainerReference"], log=log, check=False)
+            host.run("diskutil", "eject", card.disk, log=log)
+            log("ejected", card.disk)
         return 0
     except cards.Refused as error:
         log("REFUSED:", error)
