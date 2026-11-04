@@ -45,14 +45,17 @@ def main():
     boot = located(args.boot)
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(boot, target, symlinks=False)
+    # copytree keeps bazel-bin's read-only modes; the snapshot root must take gpu/ and kernel.macho.
+    target.chmod(0o755)
     if args.gpu and not args.no_gpu:
         shutil.copytree(located(args.gpu), target / "gpu", symlinks=False)
     if args.kernel:
         shutil.copyfile(located(args.kernel), target / "kernel.macho")
     for path in target.rglob("*"):
         path.chmod(0o755 if path.is_dir() or os.access(path, os.X_OK) else 0o644)
-    window = target / "switchroot/ioswitch/kernel-window.bin"
-    print("{}: kernel-window.bin sha256 {}".format(target, hashlib.sha256(window.read_bytes()).hexdigest()))
+    print(target)
+    for path in sorted((target / "switchroot/ioswitch").iterdir()):
+        print("  {} sha256 {}".format(path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
 
 
 if __name__ == "__main__":
