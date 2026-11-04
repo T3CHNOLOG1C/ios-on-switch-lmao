@@ -210,8 +210,9 @@ void ioswitch_root_boot_prepare(void)
      * IOKit and APFS publish the container and volumes from there. */
     int error = ioswitch_block_publish();
     if (error) panic("IOSwitch: SD block device publish failed (%d); see IOSwitchSD lines above", error);
-    /* RAM-backed NVRAM controller: IODTNVRAM gains a backend and the "IONVRAM"
-     * resource is published (AppleImage4's NVRAM writes wait on it forever). */
+    /* NVRAM controller: IODTNVRAM gains a backend and the "IONVRAM" resource is
+     * published (AppleImage4's NVRAM writes wait on it forever). It keeps the
+     * NVRAM in RAM until Data is mounted, then in /private/var/ioswitch/nvram.bin. */
     extern int ioswitch_nvram_publish(void);
     if (ioswitch_nvram_publish()) printf("IOSwitch: NVRAM controller not registered\n");
     ioswitch_board_start();
