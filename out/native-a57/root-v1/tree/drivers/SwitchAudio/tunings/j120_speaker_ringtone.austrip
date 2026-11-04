@@ -46,6 +46,146 @@
 						<integer>1635083896</integer>
 					</dict>
 				</dict>
+				<dict>
+					<key>bypass</key>
+					<integer>1</integer>
+					<key>displayname</key>
+					<string>Apple: AUMozartCompressorSingleBand</string>
+					<key>unit</key>
+					<dict>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>subtype</key>
+						<integer>1836022387</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+					</dict>
+				</dict>
+				<dict>
+					<key>bypass</key>
+					<integer>0</integer>
+					<key>displayname</key>
+					<string>Apple: AUVariableEQV2</string>
+					<key>unit</key>
+					<dict>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>subtype</key>
+						<integer>1987211570</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+					</dict>
+				</dict>
+				<dict>
+					<key>bypass</key>
+					<integer>1</integer>
+					<key>displayname</key>
+					<string>Apple: AUMeisterStueck</string>
+					<key>unit</key>
+					<dict>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>subtype</key>
+						<integer>1836282987</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+					</dict>
+				</dict>
+				<dict>
+					<key>aupreset</key>
+					<dict>
+						<key>data</key>
+						<data>
+						AAAAAAAAAAAAAAADAAAAAAAAAAAA
+						AAPoP4AAAAAAD6AAAAAA
+						</data>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>name</key>
+						<string>j120_speaker_ringtone-pass-through</string>
+						<key>numberOfBands</key>
+						<integer>1</integer>
+						<key>subtype</key>
+						<integer>1851942257</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+						<key>version</key>
+						<integer>0</integer>
+					</dict>
+					<key>bypass</key>
+					<integer>1</integer>
+					<key>displayname</key>
+					<string>Apple: AUNBandEQ~2</string>
+					<key>unit</key>
+					<dict>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>subtype</key>
+						<integer>1851942257</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+					</dict>
+				</dict>
+				<dict>
+					<key>bypass</key>
+					<integer>1</integer>
+					<key>displayname</key>
+					<string>Apple: AURotationShading</string>
+					<key>unit</key>
+					<dict>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>subtype</key>
+						<integer>1919906664</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+					</dict>
+				</dict>
+				<dict>
+					<key>bypass</key>
+					<integer>1</integer>
+					<key>displayname</key>
+					<string>Apple: AUMNBandEQ</string>
+					<key>unit</key>
+					<dict>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>subtype</key>
+						<integer>1835165041</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+					</dict>
+				</dict>
+				<dict>
+					<key>bypass</key>
+					<integer>1</integer>
+					<key>displayname</key>
+					<string>Apple: AUControlFreak</string>
+					<key>unit</key>
+					<dict>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>subtype</key>
+						<integer>1667658347</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+					</dict>
+				</dict>
+				<dict>
+					<key>bypass</key>
+					<integer>1</integer>
+					<key>displayname</key>
+					<string>Apple: AUSpeakerProtectionV3</string>
+					<key>unit</key>
+					<dict>
+						<key>manufacturer</key>
+						<integer>1634758764</integer>
+						<key>subtype</key>
+						<integer>1936748595</integer>
+						<key>type</key>
+						<integer>1635083896</integer>
+					</dict>
+				</dict>
 			</array>
 		</dict>
 	</array>

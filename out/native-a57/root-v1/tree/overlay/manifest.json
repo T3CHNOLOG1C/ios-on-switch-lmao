@@ -18,8 +18,9 @@
     "ProgressUI's 1x boot logo (backboardd's Apple logo overlay; 21H461 ships only @2x) is made from the OS volume's own",
     "@2x one by scripts/progressui_logo.py into build/ (Apple's artwork, not in git); missing, it is left out.",
     "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/IOSwitchPortrait.h).",
-    "J120's speaker strips, VirtualAudio's DSP chain for the built-in speaker port (tuned for J120's four MAX98723",
-    "drivers), are shown as stereo pass-through ones from drivers/SwitchAudio/tunings, gated like the plug-in.",
+    "J120's speaker strips give the presets and bypass flags of VirtualAudio's built-in DSP chain for the speaker port",
+    "(nine AUs tuned for J120's four MAX98723 drivers). drivers/SwitchAudio/tunings has same-named ones, gated like the",
+    "plug-in, that bypass every AU of those chains except the volume (see hal/SwitchAudioPlugIn.c).",
     "The VideoDecoders union (HEVCH8, AVD) has no gate: AVD registers only in processes that may open the TegraNVDEC",
     "service, which the kernel publishes once NVDEC proves itself at boot (switch-nvdec=0 turns NVDEC off)."
   ],

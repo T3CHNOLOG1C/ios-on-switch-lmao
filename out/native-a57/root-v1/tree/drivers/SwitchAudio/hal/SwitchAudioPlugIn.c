@@ -19,9 +19,17 @@
 // correction); Hawking keeps its own on the host clock and never starts the hardware.
 // Objects: the plug-in (1); Speaker (2) with its output (3), tap (4) and output volume (5); the microphone device (6)
 // and its input (7); Hawking (8) and its input (9).
-// VirtualAudio runs a port's DSP chain after the mix: for pspk on J120 that is /Library/Audio/Tunings/J120/VAD/
-// j120_speaker_*.austrip, tuned for its four MAX98723 drivers. ../tunings has stereo pass-through strips under the same
-// names, which the Data overlay shows over those (tree/overlay/manifest.json).
+// VirtualAudio runs a port's DSP chain after the mix. For pspk on J120 the chain is compiled into VirtualAudio: nine AUs
+// (two AUNBandEQs, a compressor, AUVariableEQV2 'vrq2', a 400 Hz crossover, rotation shading to four channels, a
+// four-channel EQ, AUControlFreak, speaker protection V3), tuned for J120's four MAX98723 drivers.
+// /Library/Audio/Tunings/J120/VAD/j120_speaker_*.austrip only gives each of those AUs its preset and bypass flag,
+// matched by subtype and occurrence. The system volume is software on this port: J120's routing database gives its
+// hardware part a 0..0 dB range, so VirtualAudio leaves the control below at 0 dB and sets vrq2's gain instead. With
+// their defaults the eight other AUs added about 20 dB and compressed after vrq2 (r7p5: PostDSP 7 to 13 dB over PreDSP
+// with -14 to -4 dB of volume, peaks clipping), so the speaker was loud at any volume and volume steps barely changed
+// it. ../tunings lists every AU of each J120 speaker chain, bypassed except the volume (vrq2; AUVolume in measurement),
+// and the Data overlay shows those strips over J120's (tree/overlay/manifest.json): the speaker plays the mix times the
+// volume. The plug-in's own volume control was the hardware volume of the old Thunderbolt port (ptbo).
 //
 // Derived from UniXNU-sheng's hal/ShengAudioPlugIn.c (BSD-2-Clause-Patent), which plays on iPadOS 17.7.11 hardware;
 // its diagnostics, property trace and VirtualAudio rebinding are left out. What it established and this keeps:
@@ -345,6 +353,8 @@ static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
         else if (a->mSelector != kAudioLevelControlPropertyScalarValue)
             return kAudioHardwareUnknownPropertyError;
         gVolume = v < 0 ? 0 : v > 1 ? 1 : v;
+        os_log(OS_LOG_DEFAULT, "SwitchAudio: output volume control %.3f (%.1f dB)", (double)gVolume,
+               (double)toDb(gVolume));
         const AudioObjectPropertyAddress changed[2] = {
             {kAudioLevelControlPropertyScalarValue, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain},
             {kAudioLevelControlPropertyDecibelValue, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain}};
@@ -575,14 +585,20 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cl
         return 0;
     }
     UInt32 *users = o == kSpeaker ? &gSpeakerUsers : &gMicUsers;
+    const char *const what = o == kSpeaker ? "speaker" : "microphone";
     if (*users == 0) {
         const Boolean first = !gSpeakerUsers && !gMicUsers;
-        if (connectService() || call(o == kSpeaker ? SwitchAudioStartOutput : SwitchAudioStartInput) != KERN_SUCCESS)
+        if (connectService() || call(o == kSpeaker ? SwitchAudioStartOutput : SwitchAudioStartInput) != KERN_SUCCESS) {
             r = kAudioHardwareNotRunningError;
-        else if (first) {
-            setHostClock();  // again: the shared page may have been read back from disk since
-            gZeroOrigin = nowFrames();
-            gZeroSeed++;
+            os_log_error(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO not started: the kernel service refused", what);
+        } else {
+            if (first) {
+                setHostClock();  // again: the shared page may have been read back from disk since
+                gZeroOrigin = nowFrames();
+                gZeroSeed++;
+            }
+            os_log(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO started (volume control %.1f dB)", what,
+                   (double)toDb(gVolume));
         }
     }
     if (!r) ++*users;
@@ -599,7 +615,10 @@ static OSStatus StopIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cli
         if (gHawkingUsers) --gHawkingUsers;
     } else {
         UInt32 *users = o == kSpeaker ? &gSpeakerUsers : &gMicUsers;
-        if (*users && --*users == 0) call(o == kSpeaker ? SwitchAudioStopOutput : SwitchAudioStopInput);
+        if (*users && --*users == 0) {
+            call(o == kSpeaker ? SwitchAudioStopOutput : SwitchAudioStopInput);
+            os_log(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO stopped", o == kSpeaker ? "speaker" : "microphone");
+        }
     }
     pthread_mutex_unlock(&gLock);
     return 0;
