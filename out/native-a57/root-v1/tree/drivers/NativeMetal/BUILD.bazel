@@ -12,6 +12,7 @@ filegroup(
     srcs = [
         "AsyncPipelines.h",
         "NativeBridgeMetalFrontend.h",
+        "TwoPlaneStandIn.h",
         "bridge/NativeMetalBridge.h",
         "bridge/NativeMetalObjects.h",
     ],
