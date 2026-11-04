@@ -314,7 +314,11 @@ class SwitchBluetooth : public IOService {
     } txFrame = {};
     uint32_t rxPacketLeft = 0;  // bytes of the controller's packet being passed on still to go
     bool framingLost = false;   // either stream stopped parsing as H4: everything goes through untouched
-    uint32_t completionFixes = 0;
+    bool rxDrop = false;        // the packet being taken is a completion the client did not ask for: not passed on
+    bool sentOverflow = false;  // a command left `sentCmds` unanswered (cmdLock): unknown completions pass as they come
+    uint32_t completionFixes = 0, strayDrops = 0;
+    uint16_t strayOps[8] = {};  // opcodes of the stray completions logged this boot
+    uint32_t strayOpCount = 0;
     void resetClientFraming();
     void noteClientTx(const uint8_t *bytes, size_t length);
     bool frameRx(uint32_t avail);
@@ -808,6 +812,12 @@ again:
             // One controller packet at a time (frameRx); a completion waits here until it has all arrived.
             if (!framingLost && !rxPacketLeft && !frameRx(avail)) break;
             if (!framingLost && chunk > rxPacketLeft) chunk = rxPacketLeft;
+            if (!framingLost && rxDrop) {  // a completion the client did not ask for (frameRx): taken, not passed on
+                rxPacketLeft -= chunk;
+                rxDrop = rxPacketLeft != 0;
+                __atomic_store_n(&rx.tail, tail + chunk, __ATOMIC_RELEASE);
+                continue;
+            }
             size_t room = 0;
             if (ctl_getenqueuespace(control, client, &room) != 0) room = chunk;  // client gone: drop below
             if (room < chunk) chunk = (uint32_t)room;
@@ -844,15 +854,26 @@ again:
 // it did not expect it lets pass. So here a Command Complete or Status for an LE command the client has not
 // outstanding, while a vendor command is, is passed on as that vendor command's, status Unknown HCI Command: the answer
 // bluetoothd already gets, and copes with, for every other vendor command this controller lacks (its Stack.VSC "status
-// 701" lines). The credits in the event stay the controller's. Anything else goes through as it came.
+// 701" lines). The credits in the event stay the controller's.
+//
+// The firmware also answers 0xFCE9 properly (Command Complete, status 0) and then, tens of ms later, sends that LE
+// completion for 0x2027 anyway, with nothing of the client's outstanding (r7m 18:52:29 and :39: bluetoothd's
+// startup loads a paired device's IRK, so it restarted on every start). Any Command Complete or Status for an opcode
+// the client has not outstanding (and that the rule above does not take) is not passed on at all: bluetoothd sets its
+// command credits from every completion it gets and counts them down as it sends, so one whose credit belongs to no
+// command of its own (even as the no-op form, opcode 0) would let it send a second command past the controller's
+// single slot. One line per opcode per boot. If `sentCmds` ever pushed a command off unanswered, completions it
+// cannot place pass as they come, as before, until the client reconnects.
 
 void SwitchBluetooth::resetClientFraming()
 {
     rxPacketLeft = 0;
     framingLost = false;
+    rxDrop = false;
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
     txFrame = {};
     sentCount = 0;
+    sentOverflow = false;
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
 }
 
@@ -881,6 +902,7 @@ void SwitchBluetooth::noteClientTx(const uint8_t *bytes, size_t length)
                 if (sentCount == kMaxPending) {  // a command that was never answered: the oldest goes
                     memmove(sentCmds, sentCmds + 1, (kMaxPending - 1) * sizeof(sentCmds[0]));
                     --sentCount;
+                    sentOverflow = true;
                 }
                 sentCmds[sentCount++] = opcode;
             }
@@ -938,12 +960,29 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
         const uint16_t opcode = (uint16_t)(at(op) | at(op + 1) << 8);
         if (!opcode) break;  // credits only
         uint16_t vendor = 0;
+        bool stray = false;
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
-        if (!takePendingLocked(opcode) && (opcode >> 10) == kOgfLe) vendor = takeVendorLocked();
+        if (!takePendingLocked(opcode)) {
+            if ((opcode >> 10) == kOgfLe) vendor = takeVendorLocked();
+            stray = !vendor && !sentOverflow;
+        }
         IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
-        if (!vendor) break;
         uint8_t *const statusByte = status ? &at(3) : at(2) >= 4 ? &at(6) : nullptr;
         const unsigned was = statusByte ? *statusByte : 0;
+        if (stray) {  // not passed on (top of section)
+            rxDrop = true;
+            ++strayDrops;
+            bool logged = false;
+            for (uint32_t i = 0; i < strayOpCount && !logged; ++i) logged = strayOps[i] == opcode;
+            if (!logged && strayOpCount < sizeof(strayOps) / sizeof(strayOps[0])) {
+                strayOps[strayOpCount++] = opcode;
+                IOLog("SwitchBluetooth: the controller sent a Command %s for %#06x (status 0x%02x) with no such "
+                      "command of the client's outstanding; not passed on\n",
+                      status ? "Status" : "Complete", opcode, was);
+            }
+            break;
+        }
+        if (!vendor) break;
         at(op) = (uint8_t)vendor;
         at(op + 1) = (uint8_t)(vendor >> 8);
         if (statusByte) *statusByte = kUnknownCommand;
@@ -1026,12 +1065,12 @@ void SwitchBluetooth::describe(char *buffer, size_t size)
     auto mux = [this](uint32_t o) { return r32(pinmux, o) & PM_LOW; };
     snprintf(buffer, size,
              "lsr %#x msr %#x (cts %u) ier %#x mcr %#x lcr %#x baud %u; rx %u tx %u queued %u irqs %u (idle %u) "
-             "errors %u rx-resets %u rx-faults %u (last %s)%s dropped %u resyncs %u hw-errors %u fixes %u; gpio H "
-             "cnf/oe/out/in "
+             "errors %u rx-resets %u rx-faults %u (last %s)%s dropped %u resyncs %u hw-errors %u fixes %u strays %u; "
+             "gpio H cnf/oe/out/in "
              "%02x/%02x/%02x/%02x; pinmux %x/%x/%x/%x %x/%x/%x; car clk %u rst %u src %#x; %s",
              r32(uart, LSR), r32(uart, MSR), !!(r32(uart, MSR) & MSR_CTS), ier, r32(uart, MCR), r32(uart, LCR), baud,
              rxBytes, txBytes, tx.used(), irqs, idleIrqs, lineErrors, rxResets, rxFaults, lastFault,
-             rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors, completionFixes,
+             rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors, completionFixes, strayDrops,
              r32(gpio, port + GPIO_CNF) & 0xff, r32(gpio, port + GPIO_OE) & 0xff, r32(gpio, port + GPIO_OUT) & 0xff,
              r32(gpio, port + GPIO_IN) & 0xff, mux(0x114), mux(0x118), mux(0x11c), mux(0x120), mux(0x1c0), mux(0x1c4),
              mux(0x1c8), !!(r32(car, CLK_OUT_ENB_U) & kUartDBit), !!(r32(car, RST_DEVICES_U) & kUartDBit),
