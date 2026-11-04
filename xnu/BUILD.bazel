@@ -1,0 +1,21 @@
+# XNU: the build applies out/native-a57/root-v1/tree/patches/xnu-ioswitch.diff to the pinned xnu-10063.141.1 tarball
+# (MODULE.bazel @xnu). These keep that patch in step with the XNU working repository (branch ioswitch).
+#
+#   bazel run //xnu:patch_export           after committing XNU edits in the working repository
+#   bazel run //xnu:patch_check            exit 1 if the patch is stale
+#   bazel run //xnu:patch_apply -- <dir>   recreate a working repository from a clean xnu-10063.141.1 checkout
+load("@rules_python//python:py_binary.bzl", "py_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+[py_binary(
+    name = "patch_" + command,
+    srcs = ["//tools/xnu:patch.py"],
+    args = [command],
+    main = "//tools/xnu:patch.py",
+) for command in ("export", "check", "apply")]
+
+alias(
+    name = "kernel",
+    actual = "//out/native-a57/root-v1/tree:kernel",
+)
