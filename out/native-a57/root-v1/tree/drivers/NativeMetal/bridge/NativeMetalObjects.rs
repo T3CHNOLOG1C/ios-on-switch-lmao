@@ -886,6 +886,36 @@ pub extern "C" fn nmb_buffer_set_purgeable_state(buffer: *const NmbBuffer, state
     })
 }
 
+/// `makeAliasable` on a texture: an automatic heap's texture gives its range to the next resource the heap places (Espresso
+/// and MPS size their heaps for that); one outside a heap, or of a placement heap, stays as it is. False where it fails.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_texture_make_aliasable(texture: *const NmbTexture) -> bool {
+    guard(false, || {
+        get(texture)?.0.make_aliasable().map_err(e("make aliasable"))?;
+        Ok(true)
+    })
+}
+
+/// `makeAliasable` on a buffer, as on a texture.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_buffer_make_aliasable(buffer: *const NmbBuffer) -> bool {
+    guard(false, || {
+        get(buffer)?.0.make_aliasable().map_err(e("make aliasable"))?;
+        Ok(true)
+    })
+}
+
+/// `isAliasable`: true once `makeAliasable` gave an automatic heap's resource back, and for a placement heap's from the start.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_texture_is_aliasable(texture: *const NmbTexture) -> bool {
+    guard(false, || Ok(get(texture)?.0.is_aliasable()))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_buffer_is_aliasable(buffer: *const NmbBuffer) -> bool {
+    guard(false, || Ok(get(buffer)?.0.is_aliasable()))
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_texture_release(texture: *mut NmbTexture) {
     release(texture)

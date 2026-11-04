@@ -27,7 +27,8 @@
 //   render threads. A set that waits without a bound runs a creation no worker took yet itself; a set that waits for a
 //   worker's creation lends that worker its own class meanwhile (a QoS override).
 // - **The asynchronous API** (newRenderPipelineStateWithDescriptor:completionHandler: and the compute forms) makes the state
-//   on a worker and calls back there, in every process (NMB_ASYNC_PSO_API=0: on the caller's thread, as before).
+//   on a global queue of the caller's class (not these workers) and calls back there, in every process (NMB_ASYNC_PSO_API=0:
+//   on the caller's thread, as before).
 //
 // NMB_ASYNC_PSO and NMB_ASYNC_PSO_API: 1 on, 0 every creation on the asking thread as before; both on by default on the
 // device, off on the host (its tools make states and exit: precompile.mm's seed). NMB_ASYNC_PSO_ONSCREEN: surfaces (the render

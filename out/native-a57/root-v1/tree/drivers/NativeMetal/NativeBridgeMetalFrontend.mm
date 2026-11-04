@@ -265,30 +265,36 @@ static void journal(const std::string &line)
 static NSMutableSet *gInFlight;
 static void waitForResource(id resource);
 // Resource SPI the runtime has no state for: no protected content (Metal's default options), and no owner transfer
-// (memory attribution is the kernel driver's, by the importing task), refused as not supported.
-#define NB_RESOURCE_SPI                             \
-    -(uint64_t)protectionOptions                    \
-    {                                               \
-        return 0;                                   \
-    }                                               \
-    -(id<MTLHeap>)heap                              \
-    {                                               \
-        return _parentHeap;                         \
-    }                                               \
-    -(BOOL)isAliasable                              \
-    {                                               \
-        return NO;                                  \
-    }                                               \
-    -(int)setOwnerWithIdentity : (unsigned)identity \
-    {                                               \
-        (void)identity;                             \
-        return 46; /* KERN_NOT_SUPPORTED */         \
-    }                                               \
-    -(void)waitUntilComplete                        \
-    {                                               \
-        waitForResource(self);                      \
-    }                                               \
-    -(void)makeAliasable {} /* the runtime never reuses a heap resource's memory: keeping it is always correct */
+// (memory attribution is the kernel driver's, by the importing task), refused as not supported. makeAliasable and
+// isAliasable are the runtime's (kind: buffer or texture): an automatic heap's resource gives its range to the next one
+// the heap places. Espresso and MPS size their heaps for that; dropped, Vision's networks ran out of heap mid-plan (11-01:
+// Spotlight 1438, Photos 108 `heap texture: OutOfMemory(Heap)`, each run ending in an Espresso exception).
+#define NB_RESOURCE_SPI(kind)                                                                                      \
+    -(uint64_t)protectionOptions                                                                                   \
+    {                                                                                                              \
+        return 0;                                                                                                  \
+    }                                                                                                              \
+    -(id<MTLHeap>)heap                                                                                             \
+    {                                                                                                              \
+        return _parentHeap;                                                                                        \
+    }                                                                                                              \
+    -(BOOL)isAliasable                                                                                             \
+    {                                                                                                              \
+        return nmb_##kind##_is_aliasable(_handle);                                                                 \
+    }                                                                                                              \
+    -(int)setOwnerWithIdentity : (unsigned)identity                                                                \
+    {                                                                                                              \
+        (void)identity;                                                                                            \
+        return 46; /* KERN_NOT_SUPPORTED */                                                                        \
+    }                                                                                                              \
+    -(void)waitUntilComplete                                                                                       \
+    {                                                                                                              \
+        waitForResource(self);                                                                                     \
+    }                                                                                                              \
+    -(void)makeAliasable                                                                                           \
+    {                                                                                                              \
+        if (!nmb_##kind##_make_aliasable(_handle)) NBLOG(@"native-metal: makeAliasable refused: %@", lastError()); \
+    }
 @interface NBBuffer : NBObject
 @property (nonatomic) NmbBuffer *handle;
 @property (nonatomic) MTLResourceOptions options;
@@ -401,7 +407,7 @@ static void cleanToCoherency(const void *base, size_t bytes)
 {
     return nullptr;
 }  // a buffer is never the backing of a surface here (surfaces back textures)
-NB_RESOURCE_SPI
+NB_RESOURCE_SPI(buffer)
 @end
 // Reuse only an import still held by a texture/view or pending command. Weak
 // values never extend a GPU allocation's lifetime. The strong buffer snapshot
@@ -581,7 +587,7 @@ static bool textureDescriptor(MTLTextureDescriptor *d, NmbTextureDescriptor *out
     if (!answer) NBLOG(@"native-metal: texture setPurgeableState refused: %@", lastError());
     return (MTLPurgeableState)answer;
 }
-NB_RESOURCE_SPI
+NB_RESOURCE_SPI(texture)
 - (id<MTLTexture>)view:(NmbTexture *)handle
 {
     if (!handle) {
@@ -1188,11 +1194,13 @@ static id<MTLRenderPipelineState> asyncRenderPipeline(id device, MTLRenderPipeli
     nbasync::start(making);
     return (id<MTLRenderPipelineState>)state;
 }
-// `call` on a worker (the completion-handler API, which calls back there), or here with NMB_ASYNC_PSO_API=0.
+// `call` on a global queue of the caller's class (the completion-handler API, which calls back there; not the workers, whose
+// creations would hold it), or here with NMB_ASYNC_PSO_API=0.
 static void asyncCall(void (^call)(void))
 {
     if (!nbasync::policy().api) return call();
-    nbasync::workers().submit([call] {
+    const qos_class_t mine = qos_class_self();
+    dispatch_async(dispatch_get_global_queue(mine == QOS_CLASS_UNSPECIFIED ? QOS_CLASS_USER_INITIATED : mine, 0), ^{
         @autoreleasepool {
             tAsyncWorker = true;
             call();

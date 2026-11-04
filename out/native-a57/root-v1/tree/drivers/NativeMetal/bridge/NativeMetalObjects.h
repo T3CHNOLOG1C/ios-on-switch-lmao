@@ -108,6 +108,11 @@ NmbTexture *nmb_texture_new_view(NmbTexture *, uint64_t format, uint64_t kind, c
 /* setPurgeableState: with Metal's raw state; the answer's raw state, 0 where it fails. */
 uint64_t nmb_texture_set_purgeable_state(const NmbTexture *, uint64_t state);
 uint64_t nmb_buffer_set_purgeable_state(const NmbBuffer *, uint64_t state);
+/* makeAliasable / isAliasable: an automatic heap's resource gives its range back to the heap; false where it fails. */
+bool nmb_texture_make_aliasable(const NmbTexture *);
+bool nmb_buffer_make_aliasable(const NmbBuffer *);
+bool nmb_texture_is_aliasable(const NmbTexture *);
+bool nmb_buffer_is_aliasable(const NmbBuffer *);
 void nmb_texture_release(NmbTexture *);
 void nmb_texture_describe(const NmbTexture *, struct NmbTextureDescriptor *out);
 bool nmb_texture_replace(NmbTexture *, const uint64_t region[6], uint64_t level, uint64_t slice, const void *bytes,

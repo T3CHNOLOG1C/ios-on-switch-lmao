@@ -11,6 +11,7 @@
 #include <libkern/c++/OSString.h>
 #include <sys/errno.h>
 #include <sys/param.h>
+#include <sys/vnode.h>
 #include "IOSwitchCryptex.h"
 
 extern "C" int di_root_image_ext(const char *, char *, size_t, dev_t *, bool);
@@ -81,6 +82,23 @@ extern "C" int ioswitch_cryptex_attach(unsigned index, dev_t, dev_t *device, cha
     if (status) {
         IOLog("IOSwitch cryptex: attach %s failed: %d\n", paths[index], status);
         return results[index] = EIO;
+    }
+    // r8-sdboot: let the image file's pages stay in the page cache. DiskImages' FileBackingStore marks the image vnode
+    // VNOCACHE_DATA when it opens it, so every read of the image device became an uncached read of the same size on the
+    // SD card: no read-ahead, pages dropped after the copy (vfs_cluster.c cluster_read_copy, IO_NOCACHE). The System
+    // cryptex's APFS reads compressed file data (decmpfs type 14, e.g. the dyld cache's 395 MiB .52.dyldlinkedit, 101 MiB
+    // on disk) as 4 KiB B_META blocks and reads the same blocks again and again: the 11-04 14:02 boot I/O census counted
+    // 245,891 such reads (~960 MiB) on the cryptex container before the first frame, ~85% of all SD reads, against ~270
+    // MiB of compressed data in the whole cryptex. Cached, a repeat costs a page-cache copy instead of a ~0.45 ms random
+    // SD read, and sequential runs get cluster read-ahead. The image is read-only here, so there is nothing to keep
+    // coherent; the cached pages are clean, inactive and reclaimable like any file's. The vnode is the one the backing
+    // store holds (one vnode per file), so clearing the flag after the attach reaches its reads.
+    vnode_t image = NULLVP;
+    if (const int lookup = vnode_lookup(paths[index], 0, &image, vfs_context_current())) {
+        IOLog("IOSwitch cryptex: %s stays uncached: lookup %d\n", paths[index], lookup);
+    } else {
+        vnode_clearnocache(image);
+        vnode_put(image);
     }
     // The image's APFS container publishes its volume asynchronously.
     for (unsigned attempt = 0; attempt < 200; ++attempt) {
