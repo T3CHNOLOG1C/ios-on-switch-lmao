@@ -7954,6 +7954,42 @@ native_ioswitch_portrait_cache(proc_t p, user_addr_t scratch, mount_t data_mount
 	    orientation ? "portrait-native" : "landscape", orientation, error);
 }
 
+/* Portrait-native: Core Animation must composite the landscape interface into the portrait framebuffer itself. backboardd
+ * hands every interface orientation to the window server's first display as if it were a mirrored one
+ * (UpdateMirroredDisplayOrientationWithInterfaceOrientation: [[CAWindowServer serverIfRunning].displays[0] setOrientation:]),
+ * which here is the panel; with landscape there, QuartzCore (CA::OGL::MetalContext::get_surface) asks Metal for a rotated
+ * 1280x720 render target over the 720-wide framebuffer (MTLTextureDescriptor rotation 3), which the GPU here renders only
+ * through a shadow and a turning copy, and this build refuses: every frame failed from the first landscape layout (boot
+ * 11-04 16:03, "Failed to allocate [1280 x 720] BGRA framebuffer"), the screen kept the boot logo. backboardd skips that
+ * update, and sets the display's orientation once at start instead, when its local default BKForceMirroredOrientation
+ * (com.apple.backboardd, BKSLocalDefaults) is set: "portrait" keeps the window server display in the panel's own
+ * orientation, as it was in the landscape-screen mode. It is a managed preference (CFPreferences reads
+ * /Library/Managed Preferences/mobile/<domain>.plist over the user's), so backboardd's own plist (Invert Colors, ALS,
+ * pointer settings) is left alone. Root-owned like MDM's, rewritten every boot; not portrait-native, it goes. */
+static void
+native_ioswitch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char directory[] = "/private/var/Managed Preferences", user[] = "/private/var/Managed Preferences/mobile",
+	    path[] = "/private/var/Managed Preferences/mobile/com.apple.backboardd.plist",
+	    body[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+	    "<plist version=\"1.0\"><dict><key>BKForceMirroredOrientation</key><string>portrait</string></dict></plist>\n";
+	int error = 0;
+	if (!native_ioswitch_portrait()) {
+		vnode_t vp = NULLVP;
+		if (vnode_lookup(path, 0, &vp, vfs_context_current())) return;
+		vnode_put(vp);
+		struct unlink_args request = {.path = scratch + 0x900};
+		int32_t result = 0;
+		if (!(error = copyout(path, request.path, sizeof(path)))) error = unlink(p, &request, &result);
+	} else {
+		error = native_ioswitch_mkdir(p, scratch, directory, 0, 0755);
+		if (!error) error = native_ioswitch_mkdir(p, scratch, user, 0, 0755);
+		if (!error) error = native_ioswitch_watchdog_file(p, scratch, path, body, (int)sizeof(body) - 1, data_mount, 0, 0, 0644);
+	}
+	if (error) printf("IOSwitch raw boot: %s failed: %d\n", path, error);
+}
+
 /* The state a restored iPad has after Setup and data migration, plus no
  * SpringBoard watchdogs or idle sleep (no buttons or idle timer here yet).
  * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks. */
@@ -8022,6 +8058,7 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	if (error) printf("IOSwitch raw boot: first-boot state failed at %s: %d\n", path, error);
 	else {
 		native_ioswitch_portrait_cache(p, scratch, data_mount);
+		native_ioswitch_portrait_display(p, scratch, data_mount);
 		native_ioswitch_system_app_migration(p, scratch, data_mount);
 	}
 	return error;
