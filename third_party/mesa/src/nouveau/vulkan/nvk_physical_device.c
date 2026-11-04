@@ -85,6 +85,16 @@ nvk_get_vk_version(const struct nv_device_info *info)
    return VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION);
 }
 
+/* VK_EXT_host_image_copy: Turing+, and Tegra SoCs from Maxwell (ioswitch,
+ * the GM20B: getBytes of a Shared texture without waiting for the queue).
+ */
+static bool
+nvk_has_host_image_copy(const struct nv_device_info *info)
+{
+   return info->cls_eng3d >= TURING_A ||
+          (info->type == NV_DEVICE_TYPE_SOC && info->cls_eng3d >= MAXWELL_A);
+}
+
 static bool
 nvk_is_conformant(const struct nv_device_info *info)
 {
@@ -264,7 +274,10 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_graphics_pipeline_library = true,
       .EXT_hdr_metadata = true,
       .EXT_host_query_reset = true,
-      .EXT_host_image_copy = info->cls_eng3d >= TURING_A,
+      /* ioswitch: and on Tegra SoCs from Maxwell (nil copies their TegraColor
+       * GOBs, the K1-to-Parker sector layout of the block-linear modifier).
+       */
+      .EXT_host_image_copy = nvk_has_host_image_copy(info),
       .EXT_image_2d_view_of_3d = true,
       .EXT_image_robustness = true,
       .EXT_image_sliced_view_of_3d = true,
@@ -506,7 +519,7 @@ nvk_get_device_features(const struct nv_device_info *info,
       .maintenance5 = true,
       .maintenance6 = true,
       .pipelineRobustness = true,
-      .hostImageCopy = info->cls_eng3d >= TURING_A,
+      .hostImageCopy = nvk_has_host_image_copy(info),
       .pushDescriptor = true,
 
       /* VK_KHR_copy_memory_indirect */

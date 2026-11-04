@@ -55,6 +55,12 @@ memcpy2d(void *dst, size_t dst_stride_B,
    }
 }
 
+/* ioswitch: a copy goes through the client's mapping of the memory where it
+ * has one (the runtime maps its blocks whole, for good), and maps it only
+ * where it has none: on nvkmd_darwin each internal map is a kernel mapping of
+ * the whole BO, faulted in page by page, then unmapped. A read cleans nothing
+ * back to the GPU after it.
+ */
 static VkResult
 nvk_image_plane_map(const struct nvk_image_plane *plane,
                     enum nvkmd_mem_map_flags map_flags,
@@ -63,15 +69,20 @@ nvk_image_plane_map(const struct nvk_image_plane *plane,
    struct nvk_device_memory *host_mem = plane->host_mem;
    VkResult result;
 
-   result = nvkmd_mem_map(host_mem->mem, &host_mem->vk.base,
-                          map_flags, NULL, map_out);
-   if (result != VK_SUCCESS)
-      return result;
+   const bool client = host_mem->mem->client_map != NULL;
+   if (client) {
+      *map_out = host_mem->mem->client_map;
+   } else {
+      result = nvkmd_mem_map(host_mem->mem, &host_mem->vk.base,
+                             map_flags, NULL, map_out);
+      if (result != VK_SUCCESS)
+         return result;
+   }
 
    /* TODO: This should be a lot more granular */
-   nvkmd_mem_sync_map_from_gpu(plane->host_mem->mem,
-                               plane->host_offset_B,
-                               plane->nil.size_B);
+   nvkmd_mem_sync_from_gpu(plane->host_mem->mem, client,
+                           plane->host_offset_B,
+                           plane->nil.size_B);
 
    *map_out += plane->host_offset_B;
 
@@ -79,14 +90,23 @@ nvk_image_plane_map(const struct nvk_image_plane *plane,
 }
 
 static void
-nvk_image_plane_unmap(const struct nvk_image_plane *plane)
+nvk_image_plane_unmap(const struct nvk_image_plane *plane,
+                      enum nvkmd_mem_map_flags map_flags)
 {
-   /* TODO: This should be a lot more granular */
-   nvkmd_mem_sync_map_to_gpu(plane->host_mem->mem,
-                             plane->host_offset_B,
-                             plane->nil.size_B);
+   struct nvkmd_mem *mem = plane->host_mem->mem;
+   /* The client map is checked again: it is the same as at the map, which
+    * the client keeps for as long as it copies (its contract).
+    */
+   const bool client = mem->client_map != NULL;
 
-   nvkmd_mem_unmap(plane->host_mem->mem, 0);
+   /* TODO: This should be a lot more granular */
+   if (map_flags & NVKMD_MEM_MAP_WR) {
+      nvkmd_mem_sync_to_gpu(mem, client, plane->host_offset_B,
+                            plane->nil.size_B);
+   }
+
+   if (!client)
+      nvkmd_mem_unmap(mem, 0);
 }
 
 static VkResult
@@ -179,7 +199,7 @@ nvk_copy_memory_to_image(struct nvk_image *dst,
       }
    }
 
-   nvk_image_plane_unmap(dst_plane);
+   nvk_image_plane_unmap(dst_plane, NVKMD_MEM_MAP_WR);
 
    return VK_SUCCESS;
 }
@@ -305,7 +325,7 @@ nvk_copy_image_to_memory(struct nvk_image *src,
       }
    }
 
-   nvk_image_plane_unmap(src_plane);
+   nvk_image_plane_unmap(src_plane, NVKMD_MEM_MAP_RD);
 
    return VK_SUCCESS;
 }
@@ -540,8 +560,8 @@ nvk_copy_image_to_image(struct nvk_device *dev,
       vk_free(&dev->vk.alloc, tmp_mem);
    }
 
-   nvk_image_plane_unmap(src_img_plane);
-   nvk_image_plane_unmap(dst_img_plane);
+   nvk_image_plane_unmap(src_img_plane, NVKMD_MEM_MAP_RD);
+   nvk_image_plane_unmap(dst_img_plane, NVKMD_MEM_MAP_WR);
 
    return VK_SUCCESS;
 }
