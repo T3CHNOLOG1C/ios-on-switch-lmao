@@ -473,6 +473,13 @@ ENV_EDITS = {
         b'mmc_boot=if mmc dev ${devnum}; then setexpr.l ios_u_sd *0x60005010; setenv devtype mmc; '
         b'run scan_dev_for_boot_part; fi',
     b'boot_targets=mmc1 mmc0 ': b'boot_targets=mmc1',
+    # r7o: 1016 ms from the SD card up to hekate's env imported, nearly all `part list -bootable` (U-Boot re-reads and
+    # re-checks the GPT for every one of its 64 partition indexes). hekate's FAT is always partition 1, and r7o booted
+    # from it: scan it directly (no part list, no fstype probe: test -e and load mount it themselves).
+    b'scan_dev_for_boot_part=part list ${devtype} ${devnum} -bootable devplist; env exists devplist || setenv devplist 1; '
+    b'for distro_bootpart in ${devplist}; do if fstype ${devtype} ${devnum}:${distro_bootpart} bootfstype; then '
+    b'run scan_dev_for_boot; fi; done':
+        b'scan_dev_for_boot_part=setenv distro_bootpart 1; run scan_dev_for_boot',
 }
 ENV_DROPS = (b'pxefile_addr_r=0x8ff00000', b'ramdisk_addr_r=0x92000000', b'boot_script_dhcp=boot.scr.uimg',
              b'bootcmd_mmc0=setenv devnum 0; run mmc_boot')
