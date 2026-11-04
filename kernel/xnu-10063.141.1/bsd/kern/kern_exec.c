@@ -5846,31 +5846,64 @@ bad:
 #define NATIVE_IOSWITCH_CA_VBL 0
 #endif
 
-static const char *
+/*
+ * r6-lows (r6h hangs, 11-01): CA_DISABLE_DETACHED=1 for backboardd whenever NativeLegacyDisplay's validator is the one
+ * (offline-legacy-validate=1): it takes one full-screen BGRA IOSurface in layer 0 and nothing else. QuartzCore 21H461 reads the
+ * variable once (init_debug: debug_option_env_vars[21] through CADefaultsGetFloat, which tries getenv first) into
+ * ca_debug_options[21], and CA::OGL::detach_contents returns "not detached" (reason 0x10, 0x189566798) before it asks the
+ * display's detach_layer. Without it, Photos made CA detach its content into a second display layer: every swap_end failed
+ * (e00002c2, "frame rejected (reason 2)", 60 a second) and the screen froze for 28 s and 100 s, and the second time
+ * IOMFBDisplay::detach_layer's copy_surface needed an IOSurfaceAccelerator, which this platform does not have:
+ * "Failed to create IOSurfaceAccelerator" abort, backboardd and SpringBoard restarted.
+ */
+static const char *const native_ioswitch_bluetoothd_environment[] = {
+	"BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.bluetooth,3000000", NULL
+};
+static const char *const native_ioswitch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
+#if NATIVE_IOSWITCH_CA_VBL
+static const char *const native_ioswitch_backboardd_vbl_environment[] = {"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", NULL};
+#endif
+
+/* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
+static const char *const *
 native_ioswitch_exec_environment(const struct image_params *imgp)
 {
+	const char *executable = imgp->ip_strings + strlen(EXECUTABLE_KEY);
 	static const char bluetoothd[] = "/usr/sbin/bluetoothd";
 	static int bluetooth = -1;
 	if (bluetooth < 0) {
 		uint32_t enabled = 0;
 		bluetooth = PE_parse_boot_argn("switch-bt", &enabled, sizeof(enabled)) && enabled;
 	}
-	if (bluetooth && !strncmp(imgp->ip_strings + strlen(EXECUTABLE_KEY), bluetoothd, sizeof(bluetoothd))) {
-		return "BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.bluetooth,3000000";
+	if (bluetooth && !strncmp(executable, bluetoothd, sizeof(bluetoothd))) {
+		return native_ioswitch_bluetoothd_environment;
 	}
-#if NATIVE_IOSWITCH_CA_VBL
-	/* Only with the display's DC A vsync (sheng-vsync, NativeLegacyDisplay startVsync): without it nothing would drive CA. */
 	static const char backboardd[] = "/usr/libexec/backboardd";
-	static int vbl = -1;
-	if (vbl < 0) {
-		uint32_t hz = 0, vblank = 1;
-		(void)PE_parse_boot_argn("ioswitch-vblank", &vblank, sizeof(vblank));
-		vbl = PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz)) && hz && vblank;
+	static int single_layer = -1;
+	if (single_layer < 0) {
+		uint32_t validate = 0;
+		single_layer = PE_parse_boot_argn("offline-legacy-validate", &validate, sizeof(validate)) && validate == 1;
 	}
-	if (vbl && !strncmp(imgp->ip_strings + strlen(EXECUTABLE_KEY), backboardd, sizeof(backboardd))) {
-		return "CA_FORCE_TIMER=1";
-	}
+	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
+#if NATIVE_IOSWITCH_CA_VBL
+		/* Only with the display's DC A vsync (sheng-vsync, NativeLegacyDisplay startVsync): without it nothing would drive CA. */
+		static int vbl = -1;
+		if (vbl < 0) {
+			uint32_t hz = 0, vblank = 1;
+			(void)PE_parse_boot_argn("ioswitch-vblank", &vblank, sizeof(vblank));
+			vbl = PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz)) && hz && vblank;
+		}
+		if (vbl && single_layer) {
+			return native_ioswitch_backboardd_vbl_environment;
+		}
+		if (vbl) {
+			return native_ioswitch_backboardd_vbl_environment + 1;
+		}
 #endif
+		if (single_layer) {
+			return native_ioswitch_backboardd_environment;
+		}
+	}
 	return NULL;
 }
 
@@ -5910,6 +5943,30 @@ native_ioswitch_overlay_image(const struct image_params *imgp)
 	struct vfsstatfs *sfs = vfs_statfs(mp);
 	/* No log line: r4b panicked formatting one here (xpcproxy spawning BlueTool, __doprnt fault in process_signature). */
 	return !strcmp(sfs->f_fstypename, "bindfs") && !strncmp(sfs->f_mntfromname, overlay, sizeof(overlay) - 1);
+}
+
+/*
+ * IOSwitch: the two read-only Apple cryptex mounts (IOSwitchRawMount.inc native_ioswitch_raw_cache_prepare mounts the
+ * original System and App cryptex APFS volumes at /private/preboot/Cryptexes/{OS,App}). Real iOS grafts these onto the
+ * preboot volume (libignition), so their executables are "on an authorized cryptex / system volume" and meet the self
+ * launch constraint every launchd system service and BrowserEngineKit web process requires (21H461 AMFI:
+ * on-system-volume or on-authorized-authapfs-volume, launch-type 1, validation-category 1). We attach and mount them
+ * instead of grafting, so that fact is otherwise absent and WebKit's BEWebContentProcess/BENetworkingProcess/
+ * BERenderingProcess and the App-cryptex daemons (webbookmarksd, SafariBookmarksSyncAgent, Safari.History) die with a
+ * Launch Constraint Violation before launch. Supply the graft's answer for vnodes on exactly these two mounts, by the
+ * mount_t the kernel recorded when it mounted them (never a path string). This changes only the launch-constraint
+ * decision: code-signing, cdhash and trust-cache enforcement are unchanged and happen during image activation, so a
+ * binary on these mounts still has to match Apple's static trust cache exactly and nothing on Data gains anything.
+ */
+mount_t native_owner_cryptex_mount[2] = {NULL, NULL};
+static bool
+native_ioswitch_cryptex_image(const struct image_params *imgp)
+{
+	mount_t mp = imgp->ip_vp ? vnode_mount(imgp->ip_vp) : NULL;
+	if (!mp || !(vfs_flags(mp) & MNT_RDONLY)) return false;
+	for (unsigned i = 0; i < 2; ++i)
+		if (native_owner_cryptex_mount[i] && mp == native_owner_cryptex_mount[i]) return true;
+	return false;
 }
 
 /*
@@ -6117,9 +6174,9 @@ exec_extract_strings(struct image_params *imgp)
 		goto bad;
 	}
 	/* IOSwitch: a chosen daemon's extra environment (native_ioswitch_exec_environment). */
-	const char *native_environment = native_ioswitch_exec_environment(imgp);
-	if (native_environment) {
-		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(native_environment), UIO_SYSSPACE, TRUE);
+	const char *const *native_environment = native_ioswitch_exec_environment(imgp);
+	for (; native_environment && *native_environment; native_environment++) {
+		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(*native_environment), UIO_SYSSPACE, TRUE);
 		if (error) {
 			goto bad;
 		}
@@ -8700,9 +8757,11 @@ process_signature(proc_t p, struct image_params *imgp)
 		goto done;
 	}
 
-	/* call the launch constraints hook (IOSwitch: not for the Data overlay's executables, native_ioswitch_overlay_image) */
+	/* call the launch constraints hook (IOSwitch: not for the Data overlay's executables, native_ioswitch_overlay_image,
+	 * nor for the two grafted-equivalent Apple cryptex mounts, native_ioswitch_cryptex_image; trust cache still enforced) */
 	os_reason_t launch_constraint_reason;
-	error = native_ioswitch_overlay_image(imgp) ? 0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
+	error = (native_ioswitch_overlay_image(imgp) || native_ioswitch_cryptex_image(imgp)) ?
+	    0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
 	if (error != 0) {
 		signature_failure_reason = launch_constraint_reason;
 		goto done;
