@@ -76,6 +76,7 @@ constexpr uint32_t opRestart(uint32_t byteOffset)
 {
     return (5u << 28) | (byteOffset >> 4);
 }
+constexpr uint32_t kOpNop = 2u << 28;  // NONINCR, offset 0, count 0
 
 volatile uint8_t *gHost, *gCar, *gMc;
 IOWorkLoop *gLoop;
@@ -373,21 +374,25 @@ extern "C" int tegra_host1x_submit(const uint32_t *words, uint32_t count)
     IOLockLock(gSubmitLock);
     const uint32_t get = r32(gHost, CH_DMAGET) % kPushBytes;
     const uint32_t room = (get + kPushBytes - gPut - 4) % kPushBytes;
-    if (count * 4 > room) {
+    // A job must not straddle the RESTART slot: Linux's push buffer only holds two-word GATHERs, but these are the
+    // job's own opcodes, and a RESTART landing inside an opcode's data is taken as data, so the command processor runs
+    // on to DMAEND and stops (r7p5: DMAGET 0x4004, DMAPUT 0x84, fence never reached). Such a job starts at 0, the rest
+    // of the buffer NOPs (host1x_opcode_nop: NONINCR, count 0) up to the RESTART.
+    const uint32_t tail = kPushBytes - gPut, bytes = count * 4;
+    const uint32_t pad = bytes > tail ? tail : 0;
+    if (pad + bytes > room) {
         IOLockUnlock(gSubmitLock);
         return TEGRA_HOST1X_ENOMEM;
     }
+    if (pad) {
+        for (uint32_t at = gPut; at < kPushBytes; at += 4) gPushVA[at / 4] = kOpNop;
+        cleanToPoC((uint8_t *)gPushVA + gPut, pad);
+        gPut = 0;
+    }
     const uint32_t from = gPut;
-    for (uint32_t i = 0; i < count; i++) {
-        gPushVA[gPut / 4] = words[i];
-        gPut = (gPut + 4) % kPushBytes;
-    }
-    if (gPut > from) {
-        cleanToPoC((uint8_t *)gPushVA + from, gPut - from);
-    } else {  // wrapped past the RESTART slot
-        cleanToPoC((uint8_t *)gPushVA + from, kPushBytes - from);
-        cleanToPoC(gPushVA, gPut);
-    }
+    for (uint32_t i = 0; i < count; i++) gPushVA[from / 4 + i] = words[i];
+    cleanToPoC((uint8_t *)gPushVA + from, bytes);
+    gPut = (from + bytes) % kPushBytes;  // a job that ends exactly at the RESTART slot leaves PUT at 0
     w32(gHost, CH_DMAPUT, gPut);
     IOLockUnlock(gSubmitLock);
     return TEGRA_HOST1X_OK;
