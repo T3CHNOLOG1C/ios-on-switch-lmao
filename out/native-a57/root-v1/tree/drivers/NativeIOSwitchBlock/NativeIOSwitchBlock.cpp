@@ -63,6 +63,8 @@ constexpr uint32_t kSector = 512;
 // (which never reach a boundary) before allowing more than kSafeSectors per command; otherwise commands stay at
 // 256 KiB as before. Larger commands halve or quarter the per-command card latency, copy and completion turn-around
 // that held 11-04's 512 KiB prefetch runs (two 256 KiB commands each) to ~67 MB/s on a ~95 MB/s bus.
+// Writes stay at kSafeSectors: the check only proves the boundary resume for reads, so nothing larger is ever written
+// until a write check exists (a 256 KiB write from the start of the boundary-aligned bounce never reaches a boundary).
 constexpr uint32_t kBounceBytes = 1024 * 1024;
 constexpr uint32_t kBounceAlign = 512 * 1024;
 constexpr uint32_t kSdmaBoundary = 512 * 1024;
@@ -446,9 +448,9 @@ bool NativeIOSwitchBlockDevice::configure(NativeIOSwitchBlock *provider, uint64_
     owner = provider;
     blocks = sectors;
     setProperty(kIOMaximumBlockCountReadKey, provider->maxSectors, 64);
-    setProperty(kIOMaximumBlockCountWriteKey, provider->maxSectors, 64);
+    setProperty(kIOMaximumBlockCountWriteKey, kSafeSectors, 64);
     setProperty(kIOMaximumByteCountReadKey, provider->maxSectors * kSector, 64);
-    setProperty(kIOMaximumByteCountWriteKey, provider->maxSectors * kSector, 64);
+    setProperty(kIOMaximumByteCountWriteKey, kSafeSectors * kSector, 64);
     if (OSDictionary *protocol = OSDictionary::withCapacity(2)) {
         protocol->setObject(kIOPropertyPhysicalInterconnectTypeKey, OSString::withCStringNoCopy("SD"));
         protocol->setObject(kIOPropertyPhysicalInterconnectLocationKey,
@@ -473,6 +475,7 @@ IOReturn NativeIOSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer,
         return kIOReturnBadArgument;
     IODirection direction = buffer->getDirection();
     if (direction != kIODirectionIn && direction != kIODirectionOut) return kIOReturnBadArgument;
+    if (direction == kIODirectionOut && count > kSafeSectors) return kIOReturnBadArgument;
     auto *request = static_cast<Request *>(IOMalloc(sizeof(Request)));
     if (!request) return kIOReturnNoMemory;
     buffer->retain();
@@ -651,7 +654,7 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uin
 int NativeIOSwitchBlock::transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes)
 {
     const uint32_t length = sectors * kSector;
-    if (lba > UINT32_MAX || sectors == 0 || sectors > kBounceSectors) return -1;
+    if (lba > UINT32_MAX || sectors == 0 || sectors > (write ? kSafeSectors : kBounceSectors)) return -1;
     if (write && bytes != bounce) memcpy(bounce, bytes, length);
     // Clean (write) or clean+invalidate (read) before the device owns the lines.
     for (uintptr_t at = (uintptr_t)bounce, end = at + length; at < end; at += 64)
@@ -832,7 +835,8 @@ void NativeIOSwitchBlock::worker(void *context, wait_result_t)
             return false;
         };
         while (self->merge && count < kMaxChain && last->next && last->next->write == first->write &&
-               last->next->lba == last->lba + last->sectors && sectors + last->next->sectors <= self->maxSectors &&
+               last->next->lba == last->lba + last->sectors &&
+               sectors + last->next->sectors <= (first->write ? kSafeSectors : self->maxSectors) &&
                !overlapsOlder(last->next)) {
             last = last->next;
             sectors += last->sectors;
