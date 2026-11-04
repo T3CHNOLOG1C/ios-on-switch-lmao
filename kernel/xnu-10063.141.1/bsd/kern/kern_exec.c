@@ -177,6 +177,7 @@
 #include <machine/pal_routines.h>
 
 #include <pexpert/pexpert.h>
+#include <pexpert/device_tree.h>
 
 #if CONFIG_MEMORYSTATUS
 #include <sys/kern_memorystatus.h>
@@ -5959,6 +5960,9 @@ native_ioswitch_overlay_image(const struct image_params *imgp)
  * binary on these mounts still has to match Apple's static trust cache exactly and nothing on Data gains anything.
  */
 mount_t native_owner_cryptex_mount[2] = {NULL, NULL};
+/* The Preboot mount the two cryptexes stand in a graft on (vfs_syscalls.c getfsstat64_callback reports its mount point
+ * for them, as a graft's files would; their own f_mntonname is unchanged). */
+mount_t native_owner_cryptex_host = NULL;
 static bool
 native_ioswitch_cryptex_image(const struct image_params *imgp)
 {
@@ -7871,6 +7875,85 @@ native_ioswitch_system_app_migration(proc_t p, user_addr_t scratch, mount_t data
 	}
 }
 
+/* Portrait-native (drivers/NativeMobileDisplay/IOSwitchPortrait.h): iOS is given the Switch's 720x1280 panel as it is and
+ * runs landscape with the panel's top on the user's right, which is interface orientation 4 (landscape left, home button
+ * on the left) and device orientation 4. With no accelerometer, the orientation comes from two places:
+ *  - ADT /chosen display-boot-rotation 270 (scripts/package_raw_boot.py, which also decides the mode): MobileGestalt
+ *    DisplayBootRotation, from which SpringBoard starts in orientation 4 (-[SpringBoard _bootOrientation]: 270 -> 4,
+ *    90 -> 3) and ProgressUI turns the boot Apple logo.
+ *  - SpringBoard's rotation lock, restored at every startup (-[SBOrientationLockManager restoreStateFromPrefs] locks to
+ *    SBLastRotationLockedOrientation[iPad] when it is non-zero, and sends backboardd BKSHIDServicesLockOrientation, so
+ *    backboardd's device orientation is 4 and CoreMotion's "unknown" is ignored). It is derived from the ADT value, so
+ *    the packager's one number turns everything (270 -> 4; its mirror, 90 -> 3). The SpringBoard plist is rewritten
+ *    every boot, so a lock turned off in Control Center comes back at the next boot.
+ * The orientation to lock to, from this boot's ADT; 0: not portrait-native. */
+static unsigned int
+native_ioswitch_portrait(void)
+{
+	DTEntry chosen;
+	void const *value = NULL;
+	unsigned int size = 0;
+	uint32_t rotation = 0;
+	if (SecureDTLookupEntry(0, "/chosen", &chosen) == kSuccess &&
+	    SecureDTGetProperty(chosen, "display-boot-rotation", &value, &size) == kSuccess && size == sizeof(rotation)) {
+		memcpy(&rotation, value, sizeof(rotation));
+	}
+	return rotation == 270 ? 4 : rotation == 90 ? 3 : 0;
+}
+
+/* The SpringBoard prefs body with the rotation lock added before its closing "</dict></plist>\n", in buffer; any other
+ * domain, or not portrait-native, as it is. */
+static const char *
+native_ioswitch_portrait_prefs(const char *name, const char *body, char *buffer, size_t size)
+{
+	static const char end[] = "</dict></plist>\n";
+	const size_t length = strlen(body), tail = sizeof(end) - 1;
+	const unsigned int orientation = native_ioswitch_portrait();
+	if (strcmp(name, "com.apple.springboard") || !orientation || length < tail || strcmp(body + length - tail, end)) {
+		return body;
+	}
+	const int made = snprintf(buffer, size, "%.*s<key>SBLastRotationLockedOrientationiPad</key><integer>%u</integer>"
+	    "<key>SBLastRotationLockedOrientation</key><integer>%u</integer>%s", (int)(length - tail), body, orientation,
+	    orientation, end);
+	return made > 0 && (size_t)made < size ? buffer : body;
+}
+
+/* MobileGestalt caches its answers (DisplayBootRotation among them) keyed by the OS build alone, so an answer from the
+ * other mode would outlive the ADT change. When the mode differs from the last boot's (a marker per locked orientation),
+ * the cache is removed once and MobileGestalt makes it again. Failures are logged only; the next boot tries again. */
+static void
+native_ioswitch_portrait_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist";
+	const unsigned int orientation = native_ioswitch_portrait();
+	char marker[2][64];
+	int marked[2], changed = 0;
+	for (unsigned int i = 0; i < 2; ++i) {
+		snprintf(marker[i], sizeof(marker[i]), "/private/var/ioswitch/portrait-native-%u", 3 + i);
+		vnode_t vp = NULLVP;
+		marked[i] = !vnode_lookup(marker[i], 0, &vp, vfs_context_current());
+		if (vp) vnode_put(vp);
+		changed |= marked[i] != (orientation == 3 + i);
+	}
+	if (!changed) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	for (unsigned int i = 0; i < 2 && !error; ++i) {
+		if (marked[i] && orientation != 3 + i) {
+			if (!(error = copyout(marker[i], request.path, strlen(marker[i]) + 1))) error = unlink(p, &request, &result);
+		} else if (!marked[i] && orientation == 3 + i) {
+			error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
+			if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker[i], "", 0, data_mount, 0, 0, 0644);
+		}
+	}
+	printf("IOSwitch raw boot: screen %s (orientation %u): MobileGestalt cache dropped (%d)\n",
+	    orientation ? "portrait-native" : "landscape", orientation, error);
+}
+
 /* The state a restored iPad has after Setup and data migration, plus no
  * SpringBoard watchdogs or idle sleep (no buttons or idle timer here yet).
  * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks. */
@@ -7932,11 +8015,15 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 			vnode_put(existing);
 			continue;
 		}
-		error = native_ioswitch_watchdog_file(p, scratch, path, prefs[i].body, (int)strlen(prefs[i].body),
-		    data_mount, 501, 501, 0600);
+		static char portrait[1024];  /* once, in launchd's exec */
+		const char *body = native_ioswitch_portrait_prefs(prefs[i].name, prefs[i].body, portrait, sizeof(portrait));
+		error = native_ioswitch_watchdog_file(p, scratch, path, body, (int)strlen(body), data_mount, 501, 501, 0600);
 	}
 	if (error) printf("IOSwitch raw boot: first-boot state failed at %s: %d\n", path, error);
-	else native_ioswitch_system_app_migration(p, scratch, data_mount);
+	else {
+		native_ioswitch_portrait_cache(p, scratch, data_mount);
+		native_ioswitch_system_app_migration(p, scratch, data_mount);
+	}
 	return error;
 }
 
