@@ -13,7 +13,6 @@ STALE = [
     "test_native_fat_batching.py",
     "test_native_indexed_disk.py",
     "test_native_loader_builder.py",
-    "test_native_memory_gate.py",
     "test_native_oled_adt.py",
     "test_native_sd_card.py",
     "test_native_split_disk.py",
