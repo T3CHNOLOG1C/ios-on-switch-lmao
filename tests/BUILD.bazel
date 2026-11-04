@@ -1,0 +1,38 @@
+# Host-side unit tests of the boot chain's native code (native/loader, native/handoff, native/storage, compiled with
+# Xcode's clang for the host and driven through ctypes) and of the packaging (tools/package).
+#
+#   bazel test //tests/...
+load("@rules_python//python:py_test.bzl", "py_test")
+
+TESTS = glob(["test_*.py"])
+
+# These fail on main outside Bazel too: they read untracked GPT-6-era artifacts (out/switch/native-platform-summary.json,
+# fixture images) or assert against changed sources. Kept, but out of `bazel test //...` until someone revives them.
+STALE = [
+    "test_native_block_backend.py",
+    "test_native_fat_batching.py",
+    "test_native_indexed_disk.py",
+    "test_native_loader_builder.py",
+    "test_native_memory_gate.py",
+    "test_native_oled_adt.py",
+    "test_native_sd_card.py",
+    "test_native_split_disk.py",
+]
+
+[py_test(
+    name = t[:-3],
+    size = "medium",
+    srcs = TESTS,
+    data = glob([
+        "*.c",
+        "*.cpp",
+        "*.h",
+    ]) + [
+        "//native:all_sources",
+        "//out/native-a57/root-v1/tree:lint_sources",
+        "//tools/package:sources",
+    ],
+    imports = [".."],
+    main = t,
+    tags = ["requires-darwin"] + (["manual"] if t in STALE else []),
+) for t in TESTS]

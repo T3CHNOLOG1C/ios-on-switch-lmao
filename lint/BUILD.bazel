@@ -1,0 +1,56 @@
+# clang-format / clang-tidy for our sources (tools/lint/lint.py) with LLVM 23.1.4 from MODULE.bazel.
+#
+#   bazel run //lint:format                  format every first-party file in place
+#   bazel run //lint:format -- FILE...       format these
+#   bazel run //lint:format_check            list what would change (changes nothing)
+#   bazel test //lint:format_test            the same as a test (part of `bazel test //...`)
+#   bazel run //lint:compdb                  out/native-a57/root-v1/tree/compile_commands.json from Bazel's compiles
+#   bazel run //lint:tidy [-- --fix FILE...] clang-tidy (all first-party units by default)
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+LLVM = {"IOSWITCH_LLVM_BIN": "$(rootpath @llvm_toolchain_llvm//:bin/clang-format)"}
+
+LLVM_DATA = [
+    "@llvm_toolchain_llvm//:bin/clang-format",
+    "@llvm_toolchain_llvm//:bin/clang-tidy",
+]
+
+[py_binary(
+    name = name,
+    srcs = ["//tools/lint:lint.py"],
+    args = args,
+    data = LLVM_DATA,
+    env = LLVM,
+    main = "//tools/lint:lint.py",
+) for name, args in (
+    ("lint", []),
+    ("format", ["format"]),
+    ("format_check", [
+        "format",
+        "--check",
+        "--all",
+    ]),
+    ("compdb", ["compdb"]),
+    ("tidy", [
+        "tidy",
+        "--compdb",
+    ]),
+)]
+
+py_test(
+    name = "format_test",
+    srcs = ["//tools/lint:lint.py"],
+    args = [
+        "format",
+        "--check",
+        "--all",
+    ],
+    data = LLVM_DATA + ["//out/native-a57/root-v1/tree:lint_sources"],
+    env = LLVM,
+    main = "//tools/lint:lint.py",
+    # Not in `bazel test //...`: main still has unformatted files (bazel run //lint:format_check lists them).
+    tags = ["manual"],
+)

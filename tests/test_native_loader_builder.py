@@ -9,10 +9,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts import build_native_loader as builder
-from scripts import native_xnu_layout as layout
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tools/package'))
+import build_native_loader as builder
+import native_xnu_layout as layout
 from tests.test_native_xnu_layout import macho, adt, trustcache, V
-from scripts import native_oled_adt
+import native_oled_adt
 
 
 class CompilerReached(RuntimeError):
@@ -316,7 +317,7 @@ class NativeLoaderBuilderTests(unittest.TestCase):
         self.assertEqual(keep.read_text(), "preserved")
 
     def test_direct_cli_help_works_outside_project_directory(self):
-        result = subprocess.run([sys.executable, str(builder.ROOT / "scripts/build_native_loader.py"), "--help"],
+        result = subprocess.run([sys.executable, str(builder.ROOT / "tools/package/build_native_loader.py"), "--help"],
                                 cwd=self.root, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--layout", result.stdout)

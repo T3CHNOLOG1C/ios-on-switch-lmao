@@ -37,7 +37,8 @@ class NativeLoaderCopyTests(unittest.TestCase):
         import random
         import sys
         sys.path.insert(0, str(ROOT))
-        from scripts.build_native_loader import compress_window, pack_window
+        import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tools/package'))
+        from build_native_loader import compress_window, pack_window
         rng = random.Random(1104)
         pages = 2048  # 8 MiB: blocks of 4 MiB and a short tail, gaps, short periods and incompressible pages
         window = bytearray(pages * 4096)

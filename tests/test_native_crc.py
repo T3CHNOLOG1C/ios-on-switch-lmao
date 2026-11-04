@@ -7,7 +7,8 @@ import tempfile
 import unittest
 import zlib
 
-from scripts.package_native_handoff import tool
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tools/package'))
+from package_native_handoff import tool
 
 ROOT=Path(__file__).resolve().parents[1]
 

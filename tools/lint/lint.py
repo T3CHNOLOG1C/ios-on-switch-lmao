@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""clang-format and clang-tidy for our sources in the kernel tree (out/native-a57/root-v1/tree).
+"""clang-format and clang-tidy for our sources in the kernel tree (out/native-a57/root-v1/tree), with LLVM 23.1.4.
 
-  scripts/lint.py compdb                  write <tree>/compile_commands.json (clang-tidy, clangd)
-  scripts/lint.py format [--check] FILE…  clang-format in place (--check: report, change nothing)
-  scripts/lint.py tidy [--fix] FILE…      clang-tidy with <tree>/.clang-tidy
-  scripts/lint.py format|tidy --all       every first-party file instead of a list
-  scripts/lint.py churn [DIR…]            lines clang-format would change, per directory (nothing written)
+  bazel run //lint:compdb                     write <tree>/compile_commands.json (clang-tidy, clangd)
+  bazel run //lint:format [-- FILE…]          clang-format in place (default: every first-party file)
+  bazel run //lint:format_check               report what clang-format would change, change nothing
+  bazel test //lint:format_test               the same, as a test
+  bazel run //lint:tidy [-- --fix FILE…]      clang-tidy with <tree>/.clang-tidy (runs //lint:compdb first)
+  bazel run //lint:lint -- churn [DIR…]       lines clang-format would change, per directory (nothing written)
 
 Files are paths relative to the project root, the tree, or absolute. Formatting follows the nearest .clang-format:
 the tree root's, a directory's own where its style differs, and DisableFormat where the code is someone else's
-(XNU, nouveau, Linux ports). `compdb` reads the CMake build's commands (cmake -S . -B out/cmake -G Ninja first) and
-adds the Metal bundle's two Objective-C++ units, which build-tegra-gm20b-metal.py compiles outside it.
+(XNU, nouveau, Linux ports). `compdb` builds the kernel and asks Bazel for its compile actions (bazel aquery), then
+has tools/kernel/compile.py print each one's exact command; it adds the Metal bundle's two Objective-C++ units.
 """
 import argparse
 import concurrent.futures
@@ -23,10 +24,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+# `bazel run` gives the workspace; a test runs in its runfiles, where the sources are at the same relative paths.
+ROOT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path.cwd())
 TREE = ROOT / 'out/native-a57/root-v1/tree'
-BUILD = ROOT / 'out/cmake'
-LLVM = Path('/opt/homebrew/opt/llvm/bin')
+# LLVM 23.1.4 from MODULE.bazel (toolchains_llvm), passed by //lint's targets; Homebrew's only as a fallback.
+LLVM = Path(os.environ['IOSWITCH_LLVM_BIN']).resolve().parent if os.environ.get('IOSWITCH_LLVM_BIN') else Path('/opt/homebrew/opt/llvm/bin')
 SOURCES = ('.c', '.cc', '.cpp', '.h', '.hpp', '.m', '.mm', '.inc')
 FIRST_PARTY = ('drivers', 'kits', 'diagnostics/ioswitch')
 # Not ours, or generated: never formatted or linted (formatting is also switched off by their .clang-format).
@@ -77,28 +79,31 @@ def clean(args, source):
     return out
 
 
-def ninja_entries():
-    if not (BUILD / 'build.ninja').exists():
-        sys.exit(f'{BUILD}/build.ninja missing: run cmake -S . -B out/cmake -G Ninja')
-    raw = json.loads(subprocess.run(['ninja', '-C', str(BUILD), '-t', 'compdb'], check=True, capture_output=True,
-                                    text=True).stdout)
+def bazel_entries():
+    """Every KernelCompile action of //:kernel, as the command tools/kernel/compile.py runs."""
+    bazel = os.environ.get('BAZEL', 'bazel')
+    subprocess.run([bazel, 'build', '//:kernel'], cwd=ROOT, check=True)
+    execroot = subprocess.run([bazel, 'info', 'execution_root'], cwd=ROOT, check=True, capture_output=True,
+                              text=True).stdout.strip()
+    query = subprocess.run([bazel, 'aquery', 'mnemonic("KernelCompile", deps(//:kernel))', '--output=jsonproto'],
+                           cwd=ROOT, check=True, capture_output=True, text=True).stdout
     entries = []
-    for e in raw:
-        source = e.get('file', '')
+    for action in json.loads(query).get('actions', []):
+        argv = action['arguments']
+        result = subprocess.run(argv + ['--dry-run'], cwd=execroot, capture_output=True, text=True)
+        if result.returncode:
+            continue
+        e = json.loads(result.stdout)
+        source = e['file']
         if not source.endswith(SOURCES) or source.endswith('.S'):
             continue
-        source = str((Path(e['directory']) / source).resolve())
-        directory, command = e['directory'], None
-        for part in e['command'].split(' && '):   # cd <dir> && <cc> … && <depfile transform>
-            words = shlex.split(part)
-            if words and words[0] == 'cd':
-                directory = words[1]
-            elif words and re.search(r'(^|/)(clang|clang\+\+|cc|c\+\+)$', words[0]) and source in words:
-                command = words
-        if not command:
-            continue
-        args = clean(expand(command[1:], directory), source) + KERNEL_COMPAT
-        entries.append({'directory': directory, 'file': source, 'arguments': [tool('clang')] + args + [source]})
+        # The execution root links back to the workspace: name the workspace's own file, which editors open.
+        relative = os.path.relpath(source, execroot)
+        if not relative.startswith(('..', 'external/', 'bazel-out/')):
+            source = str(ROOT / relative)
+        command = e['arguments']
+        args = clean(command[1:], e['file']) + KERNEL_COMPAT
+        entries.append({'directory': e['directory'], 'file': source, 'arguments': [tool('clang')] + args + [source]})
     return entries
 
 
@@ -114,7 +119,7 @@ def metal_entries():
 
 
 def compdb():
-    entries = ninja_entries() + metal_entries()
+    entries = bazel_entries() + metal_entries()
     target = TREE / 'compile_commands.json'
     target.write_text(json.dumps(entries, indent=1) + '\n')
     print(f'{target}: {len(entries)} units')
@@ -192,7 +197,7 @@ def cmd_tidy(args):
     files = [f for f in (first_party() if args.all else resolve(args.files)) if f.suffix not in ('.h', '.hpp', '.inc')]
     missing = [f for f in files if str(f) not in known]
     for f in missing:
-        print(f'{f}: not in compile_commands.json (not built by out/cmake); skipped', file=sys.stderr)
+        print(f'{f}: not in compile_commands.json (not built by //:kernel); skipped', file=sys.stderr)
     files = [f for f in files if str(f) in known]
     base = [tool('clang-tidy'), '-p', str(TREE), '--quiet'] + (['--fix'] if args.fix else [])
 
@@ -240,8 +245,8 @@ def main():
     c = sub.add_parser('churn')
     c.add_argument('dirs', nargs='*')
     a = p.parse_args()
-    if a.cmd in ('format', 'tidy') and not a.all and not a.files:
-        p.error('give files, or --all')
+    if a.cmd in ('format', 'tidy') and not a.files:
+        a.all = True   # no files: every first-party file
     sys.exit({'compdb': lambda: compdb() and 0, 'format': lambda: cmd_format(a), 'tidy': lambda: cmd_tidy(a),
               'churn': lambda: cmd_churn(a)}[a.cmd]())
 

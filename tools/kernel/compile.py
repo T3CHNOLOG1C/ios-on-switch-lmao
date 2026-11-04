@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--recipe")
     parser.add_argument("--command", action="append", default=[])
     parser.add_argument("--flag", action="append", default=[])
+    parser.add_argument("--dry-run", action="store_true", help="print the compile as a compile_commands.json entry")
     args = parser.parse_args()
     here = common.execroot()
     xcode = common.xcode_env(args.xcode_env)
@@ -58,6 +59,9 @@ def main():
         command = [expand(a) for a in args.command] + flags + common.prefix_maps(args.path_root, args.bin_dir, args.xnu)
         command += ["-c", source, "-o", compiled]
         cwd = here
+    if args.dry_run:
+        print(json.dumps({"directory": cwd, "file": source, "output": compiled, "arguments": command}))
+        return
     with tempfile.TemporaryDirectory() as scratch:
         # Files from XNU's object root that name @EXECROOT@ in their contents (the sanitizer ignore lists).
         for i, value in enumerate(command):

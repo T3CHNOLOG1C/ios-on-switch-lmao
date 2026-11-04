@@ -8,8 +8,9 @@ import unittest
 from unittest.mock import patch
 import zlib
 
-from scripts import native_oled_adt as oled
-from scripts import native_xnu_layout as layout
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tools/package'))
+import native_oled_adt as oled
+import native_xnu_layout as layout
 from tests.test_native_xnu_layout import macho, trustcache
 
 

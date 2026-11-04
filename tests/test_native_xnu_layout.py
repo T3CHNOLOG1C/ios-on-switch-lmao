@@ -6,7 +6,8 @@ import struct
 import tempfile
 import unittest
 
-from scripts import native_xnu_layout as layout
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tools/package'))
+import native_xnu_layout as layout
 
 V = 0xFFFFFFF000001000
 P = 0xA0001000

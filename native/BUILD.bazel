@@ -18,4 +18,12 @@ filegroup(
     ]),
 )
 
+filegroup(
+    name = "all_sources",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
 exports_files(glob(["**"]))

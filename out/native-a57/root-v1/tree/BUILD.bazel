@@ -18,6 +18,23 @@ exports_files(glob(
     exclude = ["BUILD.bazel"],
 ))
 
+# What //lint formats and checks: our sources and the .clang-format/.clang-tidy files that style them.
+filegroup(
+    name = "lint_sources",
+    srcs = glob(
+        [
+            "drivers/**",
+            "kits/**",
+            "diagnostics/ioswitch/**",
+            ".clang-format",
+            ".clang-tidy",
+            ".clang-format-ignore",
+            "**/.clang-format",
+        ],
+        allow_empty = True,
+    ),
+)
+
 # --- The kernel SDK root (the CMake flow's .cache/fakeroot) -------------------------------------------------------
 # Its headers need the patched XNU (its makedefs take XNU_AVAILABILITY_PL/KERNEL_SDKROOT). Unlike the CMake flow's
 # fakeroot, which installhdrs filled once and never refreshed, this one follows the patch.
