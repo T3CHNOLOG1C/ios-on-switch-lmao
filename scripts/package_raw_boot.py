@@ -37,6 +37,8 @@ BT_PATCH = FIRMWARE / 'BCM4356A3.hcd'
 # Userland overlay: files shown over sealed system directories (IOSwitchRawMount.inc native_ioswitch_raw_overlay).
 OVERLAY_MANIFEST = WORK / 'tree/overlay/manifest.json'
 OVERLAY_ROOT = '/private/var/ioswitch/overlay'
+# The kernel's display/touch mode (IOSWITCH_PORTRAIT_NATIVE's default there); the ADT must match it (portrait_native).
+PORTRAIT_HEADER = WORK / 'tree/drivers/NativeMobileDisplay/IOSwitchPortrait.h'
 COMMAND_LINE = ' '.join([
     '-v', 'serial=0', 'debug=0x14e', 'kt_fixed_zones=120', 'cpus=1', 'armcpu-self-ipi=1',
     'ioswitch-diag=1', 'sheng-pmgr=2', '-no_slto_panic',
@@ -275,10 +277,13 @@ def load_overlay():
     "mode": "0755", "boot-arg": name, "union": absolute}]}. Returns the files to stage, the directories the kernel
     unions (each with the boot-arg that gates it, shared by all its files) and the CDHashes of the trusted ones. The
     union directory is the file's own unless "union" names an existing ancestor (XNU unions are deep, so a new bundle
-    directory can appear inside a sealed one). A source not built yet is left out with a warning."""
+    directory can appear inside a sealed one). A source not built yet is left out with a warning. "portrait": true
+    stages the file only for a portrait-native kernel (portrait_native)."""
     manifest = json.loads(OVERLAY_MANIFEST.read_text()) if OVERLAY_MANIFEST.exists() else {'files': []}
     files, gates, hashes = [], {}, []
     for entry in manifest['files']:
+        if entry.get('portrait') and not portrait_native():
+            continue
         path = entry['path']
         if not path.startswith('/') or posixpath.normpath(path) != path or path.startswith('/private/var/'):
             raise SystemExit(f'overlay: bad path {path}')
@@ -306,6 +311,14 @@ def boot_arg_on(name):
     return any(arg.startswith(name + '=') and arg.split('=', 1)[1] not in ('0', '') for arg in COMMAND_LINE.split())
 
 
+def portrait_native():
+    """True when the kernel is built portrait-native: IOSwitchPortrait.h's default for IOSWITCH_PORTRAIT_NATIVE."""
+    found = re.search(r'^#define IOSWITCH_PORTRAIT_NATIVE ([01])\b', PORTRAIT_HEADER.read_text(), re.M)
+    if not found:
+        raise SystemExit(f'{PORTRAIT_HEADER}: no IOSWITCH_PORTRAIT_NATIVE default')
+    return found.group(1) == '1'
+
+
 def ipad_adt(data, smp=False, overlay_dirs=()):
     """The inherited Switch tree plus what iPadOS userland expects of a J120
     (values of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard)."""
@@ -321,6 +334,13 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
         put(tree, 'compatible', b'J120AP\0' + compatible)
     chosen = child(tree, 'chosen')
     put(chosen, 'ephemeral-storage', u32(0))    # Data is a persistent APFS volume
+    # Portrait-native kernel (IOSwitchPortrait.h): iOS is given the 720x1280 panel and runs landscape with the panel's
+    # top on the user's right. MobileGestalt DisplayBootRotation reads this: SpringBoard starts in interface orientation
+    # 4 (landscape left, -[SpringBoard _bootOrientation]) and ProgressUI turns the boot Apple logo the same way. The
+    # kernel also restores SpringBoard's rotation lock to 4 when it is set (kern_exec.c). display-rotation stays 0
+    # (published at runtime): a non-zero one would mean a panel mounted rotated, and iOS would composite sideways.
+    if portrait_native():
+        put(chosen, 'display-boot-rotation', u32(270))
     # Locally administered addresses; MobileGestalt waits on these when they are missing.
     for index, key in enumerate(('mac-address-wifi0', 'mac-address-bluetooth0', 'mac-address-ethernet0')):
         put(chosen, key, bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, index + 1]))

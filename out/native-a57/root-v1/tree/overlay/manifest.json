@@ -11,7 +11,10 @@
     "trusted code, 0644 otherwise), boot-arg (all files of one directory share it; 'a|b' shows the directory when",
     "either boot-arg is non-zero, for directories features share).",
     "union (optional): the directory to union instead of the file's own, an existing ancestor of path.",
-    "The audio HAL union (our plug-in + the BTAudioHALPlugin stub) is gated on switch-audio, like audiomxd itself."
+    "The audio HAL union (our plug-in + the BTAudioHALPlugin stub) is gated on switch-audio, like audiomxd itself.",
+    "ProgressUI's 1x boot logo (backboardd's Apple logo overlay; 21H461 ships only @2x) is made from the OS volume's own",
+    "@2x one by scripts/progressui_logo.py into build/ (Apple's artwork, not in git); missing, it is left out.",
+    "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/IOSwitchPortrait.h)."
   ],
   "files": [
     {
@@ -66,6 +69,11 @@
       "source": "build/switch-video/HEVCH8.videodecoder",
       "trust": true,
       "boot-arg": "switch-hevc"
+    },
+    {
+      "path": "/System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo~ipad.png",
+      "source": "build/progressui/apple-logo~ipad.png",
+      "portrait": true
     }
   ]
 }
