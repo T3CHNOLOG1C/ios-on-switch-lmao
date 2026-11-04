@@ -17,7 +17,9 @@
     "(switch-bt off) wants: with switch-bt=1 it is left out and the plug-in connects to bluetoothd (A2DP, HFP).",
     "ProgressUI's 1x boot logo (backboardd's Apple logo overlay; 21H461 ships only @2x) is made from the OS volume's own",
     "@2x one by scripts/progressui_logo.py into build/ (Apple's artwork, not in git); missing, it is left out.",
-    "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/IOSwitchPortrait.h)."
+    "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/IOSwitchPortrait.h).",
+    "J120's speaker strips, VirtualAudio's DSP chain for the built-in speaker port (tuned for J120's four MAX98723",
+    "drivers), are shown as stereo pass-through ones from drivers/SwitchAudio/tunings, gated like the plug-in."
   ],
   "files": [
     {
@@ -78,6 +80,36 @@
       "path": "/System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo~ipad.png",
       "source": "build/progressui/apple-logo~ipad.png",
       "portrait": true
+    },
+    {
+      "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_general.austrip",
+      "source": "drivers/SwitchAudio/tunings/j120_speaker_general.austrip",
+      "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_latenight_general.austrip",
+      "source": "drivers/SwitchAudio/tunings/j120_speaker_latenight_general.austrip",
+      "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_latenight_movie.austrip",
+      "source": "drivers/SwitchAudio/tunings/j120_speaker_latenight_movie.austrip",
+      "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_measurement.austrip",
+      "source": "drivers/SwitchAudio/tunings/j120_speaker_measurement.austrip",
+      "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_movie.austrip",
+      "source": "drivers/SwitchAudio/tunings/j120_speaker_movie.austrip",
+      "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_ringtone.austrip",
+      "source": "drivers/SwitchAudio/tunings/j120_speaker_ringtone.austrip",
+      "boot-arg": "switch-audio"
     }
   ]
 }
