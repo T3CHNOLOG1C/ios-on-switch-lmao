@@ -78,12 +78,24 @@ struct tgm_push {
 /* Append the pushes, then the fence (WFI semaphore release of the next seqno), then kick. With tegra-gpu-l2=1 user
  * mappings are L2-cacheable: the L2's clean lines are invalidated before the kick and its dirty lines written back
  * before the seqno is released (gpu.c l2_on). With tegra-gpu-present-order (on unless =0) the pushes run only after
- * the last GPU present queued before this call has finished reading its surface (a GPU-side wait). -EBUSY when the
- * GPFIFO stays full for 1 s (a panic from the self-test on), -EIO on a dead channel. */
+ * the last GPU present queued before this call has finished reading its surface (a GPU-side wait), and after what the
+ * acquires tgm_chan_order queued for the channel wait for. -EBUSY when the GPFIFO stays full for 1 s (a panic from the
+ * self-test on), -EIO on a dead channel. */
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 		  uint32_t *seqno);
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);
 uint32_t tgm_chan_completed(struct tgm_chan *chan);
+/* The group a channel belongs to (its connection's task): tgm_chan_order relates the channels of one group. */
+void tgm_chan_set_group(struct tgm_chan *chan, const void *group);
+/* GPU-side order between the channels of chan's group (TegraGM20BABI.h method 14), no CPU wait: semaphore acquires the
+ * channels' next tgm_chan_exec starts with. TGM_ORDER_AFTER: chan's next submission waits for the last submission of every
+ * other channel of the group with work pending; TGM_ORDER_BEFORE: every other channel's next submission waits for chan to
+ * complete `seqno` (0: its last submission; a later one is -EINVAL). *queued: the acquires queued. -ENODEV: an address
+ * space has no view of the fence pages; -ENOSPC: a channel has TGM_ORDER_MAX acquires queued from other channels. */
+#define TGM_ORDER_AFTER 1u
+#define TGM_ORDER_BEFORE 2u
+#define TGM_ORDER_MAX 16
+int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32_t *queued);
 /* 0 healthy; else the CONTRACT.md error code (1 MMU fault, 2 GR exception, 3 host error, 4 timeout). Only before the
  * self-test passed, or with tegra-gpu-all-clients=1 for a channel that is not critical: otherwise every GPU error panics
  * (nvkm's report in the panic string) and no channel dies quietly. */

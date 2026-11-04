@@ -268,6 +268,8 @@ IOReturn ioreturn(int err)
 		return kIOReturnTimeout;  // ETIMEDOUT
 	case -19:
 		return kIOReturnNotReady;  // ENODEV
+	case -28:
+		return kIOReturnNoResources;  // ENOSPC
 	default:
 		return kIOReturnError;
 	}
@@ -352,6 +354,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn waitFence(const TegraGM20BAbiWaitFence *in);
 	IOReturn getStatus(const TegraGM20BAbiChannel *in, TegraGM20BAbiStatus *out);
 	IOReturn mapToken(const TegraGM20BAbiMap *in, TegraGM20BAbiMapReply *out);
+	IOReturn order(const TegraGM20BAbiOrder *in, TegraGM20BAbiOrderReply *out);
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
 	void releaseMappings();
 
@@ -841,11 +844,30 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 		tgm_chan_new(vm_, fence, fence_gpu_ + slot * 16, owner_, critical_, &chans_[slot]));
 	if (ret)
 		return ret;
+	tgm_chan_set_group(chans_[slot], task_);  // Order relates the channels of one task
 	out->channel = slot + 1;
 	out->fence_token = kFenceToken;
 	out->fence_offset = slot * 16;
 	out->reserved = 0;
 	return kIOReturnSuccess;
+}
+
+// Method 14: GPU-side order between this channel and the task's other channels (gpu.c tgm_chan_order); the peers are found by
+// task in gpu.c, only the caller's own channel is named here.
+IOReturn AGXDeviceUserClient::order(const TegraGM20BAbiOrder *in, TegraGM20BAbiOrderReply *out)
+{
+	static_assert(TegraGM20BOrderAfterTask == TGM_ORDER_AFTER &&
+			      TegraGM20BOrderBeforeTask == TGM_ORDER_BEFORE &&
+			      TegraGM20BMaxOrderWaits == TGM_ORDER_MAX,
+		      "order flags");
+	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
+		return kIOReturnBadArgument;
+	uint32_t queued = 0;
+	const IOReturn ret =
+		ioreturn(tgm_chan_order(chans_[in->channel - 1], in->flags, in->seqno, &queued));
+	out->waits = queued;
+	out->reserved = 0;
+	return ret;
 }
 
 IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
@@ -1110,7 +1132,7 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	tgm_get_info(&info);
 	bzero(out, sizeof(*out));
 	out->abi_version = TegraGM20BAbiVersion;
-	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap;
+	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap | TegraGM20BInfoOrder;
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;
@@ -1204,6 +1226,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodUnmap:
 		wantIn = sizeof(TegraGM20BAbiUnmap);
 		break;
+	case TegraGM20BMethodOrder:
+		wantIn = sizeof(TegraGM20BAbiOrder);
+		wantOut = sizeof(TegraGM20BAbiOrderReply);
+		break;
 	default:
 		return kIOReturnUnsupported;
 	}
@@ -1231,6 +1257,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		if (!reservedZero(static_cast<const TegraGM20BAbiUnmap *>(in)->reserved))
 			return kIOReturnBadArgument;
 		break;
+	case TegraGM20BMethodOrder:
+		if (!reservedZero(static_cast<const TegraGM20BAbiOrder *>(in)->reserved))
+			return kIOReturnBadArgument;
+		break;
 	default:
 		break;
 	}
@@ -1256,7 +1286,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		dead_ = chans_[i] && tgm_chan_error(chans_[i]) && tgm_stage() >= 3;
 	if (dead_ && (method == TegraGM20BMethodBoAlloc || method == TegraGM20BMethodBoImport ||
 		      method == TegraGM20BMethodVmBind || method == TegraGM20BMethodChannelCreate ||
-		      method == TegraGM20BMethodExec)) {
+		      method == TegraGM20BMethodExec || method == TegraGM20BMethodOrder)) {
 		IOLockUnlock(lock_);
 		return kIOReturnNotResponding;
 	}
@@ -1293,6 +1323,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodGetStatus:
 		ret = getStatus(static_cast<const TegraGM20BAbiChannel *>(in),
 				static_cast<TegraGM20BAbiStatus *>(out));
+		break;
+	case TegraGM20BMethodOrder:
+		ret = order(static_cast<const TegraGM20BAbiOrder *>(in),
+			    static_cast<TegraGM20BAbiOrderReply *>(out));
 		break;
 	default:
 		ret = kIOReturnUnsupported;

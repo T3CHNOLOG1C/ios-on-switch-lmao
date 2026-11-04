@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""eqcheck (r7-raw): compare two nvdec logs (capture/cap.cpp RAWCAP_LOG, NVDEC_REGS=1) of the same frames, one from the shipped
+m2v + NVK path and one from the raw path, draw by draw. Submissions without draws or clears (context init, NVK's own setup) are
+skipped; then the i-th frame of one log is compared with the i-th of the other.
+
+A draw is the same GPU work when every field matches: the live 3D registers (R line), the render targets (by first-appearance name),
+the vertex data, each stage's program and register count, and the bytes each program's constant buffers hold (pointers replaced by
+what they point to, handles by their texture/sampler headers). Barriers are compared as sets: the raw path must cover what NVK
+emitted before each draw that reads memory written earlier (WFI + TEXINV before a framebuffer fetch).
+
+usage: eqcheck.py <nvk.log> <raw.log> [--show N]
+"""
+import re, sys, collections
+
+def frames(path):
+    subs, cur = [], []
+    for l in open(path):
+        l = l.rstrip('\n')
+        if l.startswith('SUBMIT'):
+            subs.append(cur); cur = []
+        elif l.startswith(('DRAW', 'CLEAR', '  ', 'END-OF-SUBMIT')) and not l.startswith(('  STATE', 'P ')):   # DRAW-INDEXED too
+            cur.append(l)
+    out = []
+    for s in subs:
+        events, ev = [], None
+        for l in s:
+            if l.startswith('DRAW') or l.startswith('CLEAR'):
+                ev = {'head': l, 'lines': []}; events.append(ev)
+            elif l.startswith('  ') and ev is not None:
+                ev['lines'].append(l.strip())
+        if any(e['head'].startswith('DRAW') for e in events):
+            out.append(events)
+    # persistent resources renamed in order of first appearance in draws (clears of textures no draw uses, such as m2v's
+    # initialisation of new textures, would otherwise shift every name)
+    names = {}
+    def rename(text, assign):
+        def sub(m):
+            if m.group(0) not in names:
+                if not assign: return 'C' + m.group(0)[1:]
+                names[m.group(0)] = 'N%d' % (len(names) + 1)
+            return names[m.group(0)]
+        return re.sub(r'\bR\d+\b', sub, text)
+    for events in out:
+        for e in events:
+            if e['head'].startswith('DRAW'):
+                e['lines'] = [rename(l, True) for l in e['lines']]
+    for events in out:
+        for e in events:
+            if e['head'].startswith('CLEAR'):
+                e['head'] = rename(e['head'], False)
+    return out
+
+def fields(ev):
+    f = collections.OrderedDict()
+    h = ev['head']
+    if h.startswith('DRAW'):
+        m = re.match(r'DRAW(?:-INDEXED)? first=(\d+) count=(\d+) begin=(\w+) barriers=(.*)', h)
+        f['draw'] = '%s %s %s %s' % ((h.split()[0],) + m.group(1, 2, 3))
+        f['barriers'] = set(x for x in m.group(4).split(',') if x)
+    else:
+        m = re.match(r'CLEAR (.*) barriers=(.*)', h)
+        f['clear'] = m.group(1)
+        f['barriers'] = set(x for x in m.group(2).split(',') if x)
+    stage = None
+    for l in ev['lines']:
+        if l.startswith('R '):
+            f['R'] = dict(x.split('=') for x in l[2:].split())
+        elif l.startswith('regs='):
+            f['regs'] = l[5:]
+        elif l.startswith('stage'):
+            stage = l.split()[0]
+            f[stage] = l
+        elif l.startswith('cb'):
+            f['%s.%s' % (stage, l.split()[0] + (' ' + l.split()[2].split('=')[0] if l.split()[1] == 'root' else ''))] = l
+        else:
+            f[l.split('=')[0].split()[0]] = l
+    return f
+
+# TIC_POOL_C / TSC_POOL_C: the header pools' last index. The raw path sizes its pools for the render server's live textures (8192
+# texture headers, 1024 samplers; NVK's init: 1024 and 4096): a limit, not draw state. Not compared.
+POOL_LIMITS = {'1564', '157c'}
+
+def main():
+    show = int(sys.argv[sys.argv.index('--show') + 1]) if '--show' in sys.argv else 3
+    a, b = frames(sys.argv[1]), frames(sys.argv[2])
+    print('frames: nvk %d raw %d' % (len(a), len(b)))
+    mism = collections.Counter(); examples = collections.defaultdict(list)
+    reg_diff = collections.Counter(); bar_missing = collections.Counter(); bar_extra = collections.Counter()
+    draws = same = clears = 0
+    for fi, (fa, fb) in enumerate(zip(a, b)):
+        da = [e for e in fa if e['head'].startswith('DRAW')]
+        db = [e for e in fb if e['head'].startswith('DRAW')]
+        ca = [fields(e)['clear'] for e in fa if e['head'].startswith('CLEAR')]
+        cb = [fields(e)['clear'] for e in fb if e['head'].startswith('CLEAR')]
+        if fi == 0:
+            extra = [c for c in ca if c not in cb]
+            if extra:
+                print('frame 0: %d clears only in nvk (m2v initialises new textures: %s)' % (len(extra), '; '.join(e.split(' color')[0] for e in extra)))
+                ca = [c for c in ca if c in cb]
+        if ca != cb:
+            mism['clears'] += 1
+            if len(examples['clears']) < show: examples['clears'].append('frame %d\n   nvk %s\n   raw %s' % (fi, ca, cb))
+        clears += len(ca)
+        if len(da) != len(db):
+            mism['draw count'] += 1
+            examples['draw count'].append('frame %d: nvk %d raw %d' % (fi, len(da), len(db)))
+        for di, (ea, eb) in enumerate(zip(da, db)):
+            draws += 1
+            x, y = fields(ea), fields(eb)
+            ok = True
+            for k in sorted(set(x) | set(y)):
+                if k in ('regs', 'barriers'):
+                    continue
+                if k == 'R':
+                    ra, rb = x.get('R', {}), y.get('R', {})
+                    d = sorted(m for m in set(ra) | set(rb) if ra.get(m) != rb.get(m) and m not in POOL_LIMITS)
+                    if d:
+                        ok = False; mism['registers'] += 1
+                        for m in d: reg_diff[m] += 1
+                        if len(examples['registers']) < show:
+                            examples['registers'].append('frame %d draw %d: %s' % (fi, di, ' '.join('%s nvk=%s raw=%s' % (m, ra.get(m, '-'), rb.get(m, '-')) for m in d[:12])))
+                    continue
+                if x.get(k) != y.get(k):
+                    ok = False; mism[k] += 1
+                    if len(examples[k]) < show:
+                        examples[k].append('frame %d draw %d\n   nvk %s\n   raw %s' % (fi, di, x.get(k), y.get(k)))
+            missing = x['barriers'] - y['barriers']
+            for m in missing: bar_missing[m] += 1
+            for m in y['barriers'] - x['barriers']: bar_extra[m] += 1
+            if 'TEXINV' in missing or 'WFI' in missing:
+                ok = False; mism['barrier (fetch/pass)'] += 1
+                if len(examples['barrier (fetch/pass)']) < show:
+                    examples['barrier (fetch/pass)'].append('frame %d draw %d: nvk %s raw %s' % (fi, di, sorted(x['barriers']), sorted(y['barriers'])))
+            same += ok
+    print('draws compared %d, identical %d; clears compared %d' % (draws, same, clears))
+    for k, n in mism.most_common():
+        print('MISMATCH %-28s %d' % (k, n))
+        for e in examples[k]: print('  ' + e)
+    if reg_diff: print('registers differing (draws):', ' '.join('%s:%d' % kv for kv in reg_diff.most_common(40)))
+    if bar_missing: print('barriers nvk had, raw not (draws):', dict(bar_missing))
+    if bar_extra: print('barriers raw had, nvk not (draws):', dict(bar_extra))
+    return 0 if draws and same == draws and not mism else 1
+
+if __name__ == '__main__':
+    sys.exit(main())

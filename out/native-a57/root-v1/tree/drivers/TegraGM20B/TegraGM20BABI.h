@@ -29,6 +29,7 @@ enum {
 	TegraGM20BMethodGetStatus = 11,
 	TegraGM20BMethodMap = 12,   /* with TegraGM20BInfoKernelMap */
 	TegraGM20BMethodUnmap = 13, /* with TegraGM20BInfoKernelMap */
+	TegraGM20BMethodOrder = 14, /* with TegraGM20BInfoOrder */
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -40,6 +41,7 @@ enum {
 	TegraGM20BInfoHostImport = 1u << 1, /* BoImport is implemented */
 	TegraGM20BInfoZcull = 1u << 2,      /* zcull[] is valid */
 	TegraGM20BInfoKernelMap = 1u << 3,  /* Map and Unmap (methods 12, 13) are implemented */
+	TegraGM20BInfoOrder = 1u << 4,      /* Order (method 14) is implemented */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
@@ -222,6 +224,37 @@ struct TegraGM20BAbiUnmap {
 	uint64_t address;
 };
 
+/* TegraGM20BAbiOrder.flags: one or both */
+enum {
+	TegraGM20BOrderAfterTask = 1u << 0,  /* `channel` waits for the task's other channels */
+	TegraGM20BOrderBeforeTask = 1u << 1, /* the task's other channels wait for `channel` */
+};
+enum {
+	TegraGM20BMaxOrderWaits = 16, /* acquires one channel's next submission can have queued */
+};
+/* Method 14. Order on the GPU between the channels of the calling task (its connections: two drivers of one process, e.g.
+ * the render server's raw GM20B path and NVK), with no CPU wait. The kext queues semaphore acquires (ACQ_GEQ, acquire switch
+ * on: the host runs other channels meanwhile) that a channel's next Exec starts with, ahead of its pushes, on the fence words
+ * of the task's other channels (every address space maps the fence pages read-only for them):
+ *  - AfterTask: the next submission of `channel` waits for the last submission, as of this call, of every other channel of
+ *    the task that has work pending;
+ *  - BeforeTask: the next submission of every other channel of the task waits for `channel` to complete `seqno` (0: its
+ *    last submission; a seqno not submitted yet is refused).
+ * Every acquire names work submitted before the call, so no two submissions can wait for each other. A channel the task makes
+ * after the call is not ordered by it; work that completed already queues nothing. reply.waits: the acquires queued.
+ * kIOReturnNotReady: an address space has no view of the fence pages; kIOReturnNoResources: a channel has
+ * TegraGM20BMaxOrderWaits acquires from other channels queued. Either way the caller orders that switch itself. */
+struct TegraGM20BAbiOrder {
+	uint32_t channel;
+	uint32_t flags; /* TegraGM20BOrder* */
+	uint32_t seqno; /* BeforeTask */
+	uint32_t reserved;
+};
+struct TegraGM20BAbiOrderReply {
+	uint32_t waits;
+	uint32_t reserved;
+};
+
 #if defined(__cplusplus)
 #define TEGRA_GM20B_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
 #else
@@ -246,5 +279,7 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiStatus, 24);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiMap, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiMapReply, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiUnmap, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiOrder, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiOrderReply, 8);
 #undef TEGRA_GM20B_ASSERT
 #endif

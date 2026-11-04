@@ -1,0 +1,101 @@
+// SPDX-License-Identifier: MIT
+// nvdec (r7-raw): a GM20B push-stream executor for equivalence checks. It runs a submission's method stream the way the
+// GPU front end would (per-subchannel method registers, Fermi MME macros through Mesa's simulator, LOAD_CONSTANT_BUFFER writes
+// into constant-buffer memory, constant-buffer binds) and prints one canonical record per draw, clear and barrier.
+//
+// Canonical means: addresses never appear. Memory the GPU reads per draw (root table, descriptor sets, uniform payloads, vertex
+// data) is printed as a hash of its content, with any GPU pointer inside replaced by the hash of what it points to; persistent
+// resources (render targets, texture images) get names in order of first appearance. Two streams that make the GPU draw the same
+// thing print the same records, whatever addresses, method order or redundant writes each used.
+#pragma once
+#include <cstdint>
+#include <cstdio>
+#include <functional>
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+
+namespace nvdec {
+
+// Resolves [va, va + bytes) of the channel's VM to host memory as the CPU left it at submit time, or null.
+using MapFn = std::function<const uint8_t *(uint64_t va, uint64_t bytes)>;
+
+// A known program (from the NVK driver records, tools/mkprograms.py): its 80-byte shader header and code, and what its constant
+// buffer slots are (nvk_cbuf_type numbering: 1 root table, 2 shader data, 3 descriptor set, 4 dynamic UBO, 5 UBO descriptor).
+struct ProgramInfo {
+    std::vector<uint8_t> image;  // header + code, as uploaded to the shader heap
+    std::vector<uint8_t> cbufTypes;
+};
+
+class Decoder {
+public:
+    Decoder(MapFn map, FILE *out);
+    void submitBegin();
+    void push(const uint32_t *w, uint64_t dwords);
+    void submitEnd();
+
+    // Known programs, by the hash of their 80-byte header; a bound program is identified by an exact match of its bytes.
+    std::multimap<uint64_t, ProgramInfo> programs;
+    bool loadPrograms(const char *path);
+    // Set-0 layouts (tools/mkpack.py layouts.txt: "<vs id> <fs id> <set bytes> <offset>:<u|h>..."): only the bytes an entry covers
+    // are compared (m2v recycles its descriptor memory and writes only its layout's entries; the rest is the last owner's)
+    struct Layout {
+        uint32_t bytes;
+        std::vector<std::pair<uint32_t, uint32_t>> ranges;
+        std::set<uint32_t> textureOnly;
+    };
+    std::map<std::string, Layout> layouts;
+    bool loadLayouts(const char *path);
+    bool fullStateAtFirstDraw = true;  // one STATE record of every non-address register at the first draw
+    uint64_t draws = 0, clears = 0, submits = 0, macroCalls = 0, unknownMacros = 0, badHeaders = 0;
+
+    static uint64_t fnv(const void *p, size_t n, uint64_t h = 0xcbf29ce484222325ull);
+
+private:
+    struct Bind {
+        uint64_t addr = 0;
+        uint32_t size = 0;
+        bool valid = false;
+    };
+    MapFn map_;
+    FILE *out_;
+    uint32_t reg_[5][0x4000] = {};
+    std::vector<uint32_t> mmeRam_ = std::vector<uint32_t>(0x2000), mmeStart_ = std::vector<uint32_t>(0x80);
+    uint32_t mmeRamPtr_ = 0, mmeStartPtr_ = 0;
+    // method parse state, carried across the pushes of one submission
+    uint32_t op_ = 0, subc_ = 0, mthd_ = 0, left_ = 0;
+    // a macro call collecting its parameters
+    int pendingMacro_ = -1;
+    std::vector<uint32_t> params_;
+    // constant buffer bytes written by LOAD_CONSTANT_BUFFER (the GPU's view, over the CPU's)
+    std::map<uint64_t, uint32_t> cbufWrites_;  // persists: the GPU's writes stay in memory across submissions
+    std::set<uint64_t> writtenThisSubmit_;
+    const Layout *layout_ = nullptr;  // of the draw being printed
+    Bind binds_[5][18];
+    // persistent resource names, by the host memory behind the address where the map knows it (r8-rawca: so the same pages
+    // mapped in two channels' address spaces, the raw path's and m2v's twins, are one resource), shared by every decoder
+    static std::map<uint64_t, int> &names();
+    std::set<std::string> pendingBarriers_;
+    bool firstDraw_ = true;
+    bool indexed_ = false;  // the draw being printed is DRAW_INDEX_BUFFER's
+
+    void method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme);
+    void runMacro();
+    void copyEngine(uint32_t launch);
+    void draw(const char *kind, uint32_t a, uint32_t b);
+    void probeDump(uint32_t first, uint32_t count);
+    void clear(uint32_t data);
+    void barrier(const std::string &what);
+
+    uint32_t r3(uint32_t mthd) const { return reg_[0][mthd >> 2]; }
+    uint64_t addr3(uint32_t hiMthd, uint32_t loMthd) const { return (uint64_t(r3(hiMthd) & 0xff) << 32) | r3(loMthd); }
+    bool read(uint64_t va, void *dst, uint64_t bytes);  // CPU memory with the LOAD_CONSTANT_BUFFER writes over it
+    std::string name(uint64_t va);
+    std::string contentHash(uint64_t va, uint64_t bytes, int depth, bool handles, bool childHandles);
+    std::string ticEntry(uint32_t index);
+    std::string tscEntry(uint32_t index);
+    const ProgramInfo *program(int stage, std::string &id);
+};
+
+}  // namespace nvdec

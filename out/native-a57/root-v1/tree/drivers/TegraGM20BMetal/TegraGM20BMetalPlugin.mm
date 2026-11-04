@@ -40,6 +40,14 @@
 //   TEGRA_M2V_SEED          tegra-m2v-seed=0          no shared shader cache seed (default 1)
 //   NMB_SYSTEM_COMPILER     (environment only)        Metal source and stitched libraries compiled in-process (default 1 outside
 //                                                     backboardd, 0 in it)
+//   TEGRA_RAW_METAL         (environment only)        0: the render server keeps the m2v device even with a raw pack staged
+//
+// The render server's raw GM20B path (raw/runtime/RawMetal.h): in backboardd, when the build's pipeline pack is staged beside the
+// bundle (<Extensions>/TegraGM20BMetal.raw/pack.bin, build-tegra-gm20b-metal.py makes it, stage-tegra-gm20b-metal.py copies it),
+// the device Core Animation gets is the raw facade over the m2v device: its command buffers go straight to MAXWELL_B methods, and
+// any the raw path cannot draw exactly as m2v (a state not in the pack, an extended-range format, compute, mipmaps...) are
+// replayed on m2v whole. A pack of another build is refused (its stack key, TEGRA_RAW_STACK, differs). Off for a boot: remove or
+// rename <Data>/ngpu/addons/TegraGM20BMetal.raw (stage-tegra-gm20b-metal.py --no-raw does), or TEGRA_RAW_METAL=0 in backboardd.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <algorithm>
@@ -51,7 +59,13 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 #include "NativeBridgeMetalFrontend.h"
+#include "RawMetal.h"
 #include "bridge/NativeMetalObjects.h"
+
+// The build's stack key (build-tegra-gm20b-metal.py); 0 takes a pack of any build (never shipped so).
+#ifndef TEGRA_RAW_STACK
+#define TEGRA_RAW_STACK 0
+#endif
 
 @interface _MTLDevice : NSObject
 @end
@@ -259,6 +273,20 @@ bool sharedSeed(char *name, size_t size)
     return true;
 }
 
+// <Extensions>/TegraGM20BMetal.raw/pack.bin, beside the bundle (and the seed): the raw path's pipeline pack, if staged and readable.
+bool rawPack(char *path, size_t size)
+{
+    Dl_info info = {};
+    if (!dladdr(reinterpret_cast<const void *>(&rawPack), &info) || !info.dli_fname) return false;
+    strlcpy(path, info.dli_fname, size);
+    for (int i = 0; i < 2; ++i)  // <Extensions>/TegraGM20BMetal.bundle/TegraGM20BMetal -> <Extensions>
+        if (char *slash = strrchr(path, '/')) *slash = 0;
+    strlcat(path, "/TegraGM20BMetal.raw/pack.bin", size);
+    return access(path, R_OK) == 0;
+}
+
+bool gRaw;  // the render server's device is the raw facade
+
 // The frontend's rates line, every 5 s while the device works (it says nothing when idle).
 void startRates()
 {
@@ -271,6 +299,9 @@ void startRates()
         // 768: the rates line passed 512 with r6-lows' frame distributions (encp= cgap= swait= gpuq= psomax=).
         char line[768];
         if (native_bridge_metal_rates(line, sizeof line))
+            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
+        // The raw path's own: command buffers on each path, encode, draws.
+        if (gRaw && raw_metal_rates(line, sizeof line))
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
     });
     dispatch_resume(timer);
@@ -425,6 +456,30 @@ id openDevice(unsigned port)
         }
         answerUnimplemented(NSClassFromString(@"NBObject"));  // every frontend object but the device
         answerUnimplemented(object_getClass(device));
+        // The render server draws through the raw GM20B path when the build's pack is staged (above); the m2v device stays
+        // inside it for every answer, object and command buffer the raw path has no own for.
+        // One line either way, so a boot shows which device Core Animation got.
+        if (renderServer) {
+            char pack[1100] = "";
+            const char *knob = getenv("TEGRA_RAW_METAL");
+            if (knob && strcmp(knob, "0") == 0) {
+                os_log(logger(), "TegraGM20BMetal: raw GM20B path off (TEGRA_RAW_METAL=0): m2v device kept");
+            } else if (!rawPack(pack, sizeof pack)) {
+                os_log(logger(), "TegraGM20BMetal: raw GM20B path off (no pack staged at %{public}s): m2v device kept",
+                       pack);
+            } else {
+                NSString *why = nil;
+                if (id raw = raw_metal_device_open(pack, uint64_t(TEGRA_RAW_STACK), (id<MTLDevice>)device, &why)) {
+                    os_log(logger(),
+                           "TegraGM20BMetal: raw GM20B path on in backboardd (pack %{public}s, stack %016llx)", pack,
+                           (unsigned long long)TEGRA_RAW_STACK);
+                    device = raw;
+                    gRaw = true;
+                } else {
+                    os_log_error(logger(), "TegraGM20BMetal: raw GM20B path off (%{public}@): m2v device kept", why);
+                }
+            }
+        }
         // seed: "shared (<its SEED line>)" (the runtime reads the shared seed beneath the cache), "none" (no readable seed, or off)
         os_log(logger(),
                "TegraGM20BMetal: device %{public}s ready in %{public}s, cache %{public}s, seed "

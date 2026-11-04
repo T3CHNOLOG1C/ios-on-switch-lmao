@@ -58,6 +58,12 @@ Output in <outdir>:
                                        runtime (METAL2VULKAN_SHADER_CACHE_SEED, m2v patch 0108): a name the process's own cache
                                        misses is read there, in place and read only; nothing is copied. SEED names the build,
                                        the NVK identity and the contents (the plugin logs it).
+  ngpu/addons/TegraGM20BMetal.raw/pack.bin   the raw GM20B path's pipeline pack for the render server (raw/pack/rawpack.py: Core
+                                       Animation's corpus states made through this build's frontend, host bridge and NVK twin over a
+                                       mock GM20B, read off the decoded push stream), stamped with this build's stack key, which the
+                                       plugin is compiled with (TEGRA_RAW_STACK): a pack of another build is refused on the device.
+                                       Made with the seed (it needs the same host bridge and twin); without one the render server
+                                       keeps the m2v device. The plugin uses it when staged beside the bundle.
   precompile/                          the host bridge's tool, the twin as the device's identity, the generated cache
   TegraGM20BMetal.trustcache   one version-2 trust-cache module with both CDHashes (package_raw_boot.py appends it to the
                                static trust-cache bundle; every rebuild changes the CDHashes, so repackage the boot entry)
@@ -88,6 +94,7 @@ PATCHES = ([TREE / 'drivers' / line.strip() for line in SERIES.read_text().split
 LLVM = Path('/opt/homebrew/opt/llvm/bin')
 NAME = 'TegraGM20BMetal'
 PRECOMPILE = DRV / 'precompile'
+RAW = DRV / 'raw'   # the raw GM20B path: runtime/ (compiled into the plugin), pack/ (the pack generator)
 QC_SHA256 = '606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9'   # 21H461 QuartzCore.framework/default.metallib
 CONTENT = '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'     # m2v's content directory (shader_cache/store.rs)
 
@@ -207,6 +214,37 @@ def trust_module(cdhashes):
     return struct.pack('<I16sI', 2, identifier.bytes, len(hashes)) + b''.join(h + bytes([2, 0, 0, 0]) for h in hashes)
 
 
+def raw_stack(nvk):
+    """The raw path's stack key: a hash of what the pack's contents depend on, known before the plugin is compiled. The NVK dylib
+    (its context init, NAK's programs and register values), m2v (the patch series and the bridge sources: the binding rules), the
+    frontend (the journal's state keys) and the raw runtime and pack generator. 64 bits, as hex."""
+    digest = hashlib.sha256(nvk.read_bytes())
+    for path in [*PATCHES, METAL / 'bridge/NativeMetalBridge.rs', METAL / 'bridge/NativeMetalObjects.rs', METAL / 'NativeBridgeMetalFrontend.mm',
+                 *sorted(p for p in RAW.rglob('*') if p.is_file() and p.suffix in ('.h', '.c', '.cpp', '.mm', '.py', '.inc'))]:
+        digest.update(str(path.name).encode() + b'\0' + path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def rawpack(out, library, twin, qc, corpus, stack):
+    """The raw path's pack beside the bundle (ngpu/addons/TegraGM20BMetal.raw/pack.bin) from the precompile's host bridge and twin:
+    None, or why there is none (the render server then keeps the m2v device)."""
+    target = out / 'ngpu/addons' / (NAME + '.raw')
+    shutil.rmtree(target, ignore_errors=True)
+    work = out / 'raw-pack'
+    shutil.rmtree(work, ignore_errors=True)
+    r = subprocess.run([sys.executable, str(RAW / 'pack/rawpack.py'), '--bridge', str(library), '--nvk', str(twin), '--qc', str(qc),
+                        '--corpus', str(corpus), '--out', str(work), '--stack', stack, '--clean'], capture_output=True, text=True,
+                       env=dict(os.environ, RAWPACK_TREE=str(TREE)))
+    if r.returncode or not (work / 'pack.bin').is_file():
+        return 'the pack generator failed: %s' % (r.stdout + r.stderr)[-2000:]
+    print('\n'.join(l for l in r.stdout.splitlines() if not l.startswith('  skipped')))
+    target.mkdir(parents=True)
+    shutil.copyfile(work / 'pack.bin', target / 'pack.bin')
+    for path in [target, target / 'pack.bin']:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    return None
+
+
 def lc_uuid(path, value=None):
     """The LC_UUID of the thin 64-bit Mach-O at `path`, after setting it to `value` (16 bytes) when given."""
     data = bytearray(path.read_bytes())
@@ -223,7 +261,7 @@ def lc_uuid(path, value=None):
     sys.exit('%s: no LC_UUID' % path)
 
 
-def precompile(m2v, out, nvk):
+def precompile(m2v, out, nvk, stack):
     """The shader cache the device would write with this build for the corpus's states (the docstring's m2v-seed), made on this
     Mac: its v1/ and SEED name, or None and why not. One cache serves every process: m2v's names hash the build, the key and
     the device's profile, none of them per process."""
@@ -271,6 +309,8 @@ def precompile(m2v, out, nvk):
     else:
         print('precompile: no library store at %s (--libs; precompile/libraries.py index): QuartzCore\'s lines alone' % store)
     linked = time.monotonic()
+    why = rawpack(out, library, dylib, qc, PRECOMPILE / 'corpus.log', stack)
+    print('raw pack:', why or 'made, stack %s' % stack)
     made = run([work / 'precompile', '--libs', store, dylib, cache, qc, corpus], env=env)
     print('\n'.join(line for line in made.splitlines() if line.startswith('library ')))
     print(next(line for line in made.splitlines() if line.startswith('precompile:')),
@@ -309,10 +349,14 @@ def main():
     bundle.mkdir(parents=True)
     sdk = run(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path']).strip()
     exe = bundle / NAME
+    stack = raw_stack(nvk)
     run(['xcrun', 'clang++', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror',
          '-fstack-protector-strong', '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations', '-bundle', '-I', METAL,
-         '-x', 'objective-c++', DRV / 'TegraGM20BMetalPlugin.mm', METAL / 'NativeBridgeMetalFrontend.mm', '-x', 'none', library,
-         '-Wl,-dead_strip', '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface', '-o', exe])
+         '-I', RAW / 'runtime', '-I', TREE / 'drivers/TegraGM20B', '-DTEGRA_RAW_STACK=0x%sull' % stack,
+         '-x', 'objective-c++', DRV / 'TegraGM20BMetalPlugin.mm', METAL / 'NativeBridgeMetalFrontend.mm', RAW / 'runtime/RawMetal.mm',
+         '-x', 'c++', RAW / 'runtime/raw_gpu.cpp', RAW / 'runtime/raw_kernel.cpp', RAW / 'runtime/raw_pack.cpp', '-x', 'none', library,
+         '-Wl,-dead_strip', '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface',
+         '-framework', 'IOKit', '-o', exe])
     run(['strip', '-x', exe])
     shutil.rmtree(out / (NAME + '.dSYM'), ignore_errors=True)
     if (bundle / (NAME + '.dSYM')).exists():   # the Rust bridge's debug map lands next to the executable
@@ -335,7 +379,7 @@ def main():
     seed_out = extensions / (NAME + '.m2v-seed')
     shutil.rmtree(seed_out, ignore_errors=True)
     shared = seed_out / 'shared'
-    generated, why = (None, '--no-precompile') if '--no-precompile' in sys.argv[1:] else precompile(m2v, out, nvk)
+    generated, why = (None, '--no-precompile') if '--no-precompile' in sys.argv[1:] else precompile(m2v, out, nvk, stack)
     given = option('--seed', None)
     if generated:
         shutil.copytree(generated[0], shared / 'v1', copy_function=shutil.copyfile)
@@ -355,7 +399,9 @@ def main():
     (out / (NAME + '.trustcache')).write_bytes(trust_module([plugin_cdhash, nvk_cdhash]))
     (out / 'trust.json').write_text(json.dumps(dict(plugin_cdhash=plugin_cdhash, nvk_cdhash=nvk_cdhash,
                                                     plugin_bytes=exe.stat().st_size, nvk_bytes=dylib.stat().st_size), indent=2) + '\n')
-    print('built', bundle, 'plugin', plugin_cdhash, 'nvk', nvk_cdhash, 'seed', seed_out if seed_out.exists() else 'none')
+    raw = extensions / (NAME + '.raw/pack.bin')
+    print('built', bundle, 'plugin', plugin_cdhash, 'nvk', nvk_cdhash, 'seed', seed_out if seed_out.exists() else 'none',
+          'raw pack', raw if raw.exists() else 'none (the render server keeps m2v)')
 
 
 if __name__ == '__main__':

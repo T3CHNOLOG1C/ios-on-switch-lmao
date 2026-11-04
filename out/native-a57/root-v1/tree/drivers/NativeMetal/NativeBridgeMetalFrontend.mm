@@ -772,6 +772,15 @@ static NBTexture *twoPlaneSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef s
     return (id<MTLTexture>)texture;
 }
 @end
+// The raw GM20B path's m2v view of memory it shares with it (drivers/TegraGM20BMetal/raw/runtime/RawMetal.mm): a texture over
+// `buffer`'s bytes rendered and sampled in place, as an IOSurface's texture is (m2v's texture over an IOSurface plane), never
+// through a shadow image the raw path would not see.
+extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger offset, NSUInteger row)
+{
+    if (![buffer isKindOfClass:[NBBuffer class]] || ![descriptor isKindOfClass:[MTLTextureDescriptor class]])
+        return nil;
+    return textureOnBuffer((NBBuffer *)buffer, (MTLTextureDescriptor *)descriptor, offset, row, true);
+}
 
 // ---- libraries, functions, states ----
 @interface NBLibrary : NBObject

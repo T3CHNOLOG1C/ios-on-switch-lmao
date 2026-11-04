@@ -649,6 +649,7 @@ struct tgm_vm {
 	struct nvif_vmm vmm;
 	struct list_head kmaps;
 	u64 pfence_va; /* the present channel's fence page, read-only (tegra-gpu-present-order), 0: not mapped */
+	u64 fences_va; /* every connection's fence page, read-only (tgm_chan_order's acquires), 0: not mapped */
 	struct list_head
 		imports; /* struct tgm_import: first pages of the host imports made in it (live_lock) */
 	int imports_lost; /* one could not be recorded: taken as importing every page */
@@ -669,6 +670,7 @@ struct tgm_kmap {
 
 static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,
 		   uint64_t *va);
+static int fences_map(struct tgm_vm *vm);
 
 /* The present channel's fence page (see "GPU present"): one pool page, made with the first address space that needs it
  * and kept for good, so it exists before the present channel does. With tegra-gpu-present-order (on unless =0) every
@@ -736,6 +738,9 @@ int tgm_vm_new(struct tgm_vm **pvm)
 			return ret;
 		}
 	}
+	/* for the task order's acquires (tgm_chan_order); without the view, Order refuses and the client orders itself */
+	if (fences_map(vm))
+		vm->fences_va = 0;
 	*pvm = vm;
 	return 0;
 }
@@ -890,6 +895,13 @@ struct tgm_stamps {
 		end; /* the GPU starts the submission (WFI: the one before finished) / finished it */
 };
 
+/* An acquire tgm_chan_order queued for a channel's next submission: another channel's fence word reaching seqno. */
+struct tgm_order {
+	u64 va;                  /* the source's fence word in the waiter's address space */
+	const volatile u32 *cpu; /* and in the kernel's */
+	u64 id;                  /* the source channel */
+	u32 seqno;
+};
 struct tgm_chan {
 	struct tgm_vm *vm;
 	struct nvif_object user;
@@ -921,6 +933,12 @@ struct tgm_chan {
 	u32 stat_done; /* tegra-gpu-stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
+	/* tgm_chan_order: its connection's task (tgm_chan_set_group), the acquires queued for its next submission
+	 * (live_lock), and the last one kicked (a hang's line names it while it has not passed) */
+	const void *group;
+	u32 norder;
+	struct tgm_order order[TGM_ORDER_MAX];
+	struct tgm_order waited;
 };
 
 /* Every user channel, so a CPU reader outside the GPU client can wait for all GPU work (tegra_gm20b_sync_for_cpu). */
@@ -1173,11 +1191,16 @@ static void chan_describe(struct tgm_chan *chan, char *buf, unsigned int len)
 
 void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)
 {
-	char state[320];
+	char state[320], order[64] = "";
+	const struct tgm_order *w = &chan->waited;
 	chan_describe(chan, state, sizeof(state));
+	/* still waiting for another channel of its task (tgm_chan_order) */
+	if (w->cpu && (s32)(READ_ONCE(*w->cpu) - w->seqno) < 0)
+		scnprintf(order, sizeof(order), ", order wait on chan %llu fence %u (at %u)", w->id,
+			  w->seqno, READ_ONCE(*w->cpu));
 	nvxnu_panic("tegra-gm20b: %s: fence %u still pending after %llu ms and no GPU error "
-		    "reported: %s",
-		    who, seqno, waited_ns / 1000000, state);
+		    "reported: %s%s",
+		    who, seqno, waited_ns / 1000000, state, order);
 }
 
 #define TGM_HANG_NS (2 * NSEC_PER_SEC)
@@ -2060,6 +2083,8 @@ fail:
 	return ret;
 }
 
+static void order_forget(struct tgm_chan *chan);
+
 void tgm_chan_del(struct tgm_chan **pchan)
 {
 	struct tgm_chan *chan = *pchan;
@@ -2081,6 +2106,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 		tgm_chan_hung(chan, "channel destroy", chan->submitted, NSEC_PER_SEC);
 	mutex_lock(&live_lock);
 	list_del(&chan->live);
+	order_forget(chan);
 	mutex_unlock(&live_lock);
 	mutex_lock(&gpu.lock);
 	chan_free(chan);
@@ -2132,6 +2158,166 @@ void tgm_fence_page_put(volatile uint32_t *va)
 	mutex_lock(&live_lock);
 	fences.used &= ~BIT_ULL(off / PAGE_SIZE);
 	mutex_unlock(&live_lock);
+}
+
+/* ------------------------------------------------------------------ order between the channels of a task
+ * Two drivers in one process (the render server's raw GM20B path and NVK) each have their own connection, address space and
+ * channels, and Metal's order between their command buffers is the order the process submits them in. tgm_chan_order
+ * (TegraGM20BABI.h method 14) keeps it on the GPU, with no CPU wait: it queues semaphore ACQUIRE_GEQs (acquire switch on, as
+ * the present's) on the fence words of the task's other channels, which the waiting channel's next tgm_chan_exec kicks as an
+ * entry of their own ahead of its pushes. Every address space maps the whole fence pool read-only for them (fences_map, from
+ * tgm_vm_new), as the present's does. Each acquire names a seqno already submitted when it was queued (AfterTask: the other
+ * channels' last; BeforeTask: one up to the channel's last), and a channel's entries run in order, so no two submissions can
+ * wait for each other. A source channel's teardown waits for it to go idle and drops what was queued on it (order_forget),
+ * so no acquire is left on a fence page handed out again; one already kicked has passed by then. A waiter stuck on one is a
+ * hang like any other (tgm_chan_check_progress), and its line names the acquire (tgm_chan_hung). */
+static DEFINE_MUTEX(fences_mem_lock);
+static struct tgm_mem *fences_mem; /* the whole pool as GPU memory, made once and kept */
+static u64 fences_pas[TGM_FENCE_PAGES];
+
+static int fences_map(struct tgm_vm *vm)
+{
+	u32 i;
+	int ret = 0;
+
+	mutex_lock(&fences_mem_lock);
+	if (!fences_mem) {
+		/* the pool exists from the first connection on; make sure it does now */
+		mutex_lock(&live_lock);
+		if (!fences.va)
+			fences.va = tgm_pool_alloc(TGM_FENCE_PAGES * PAGE_SIZE, &fences.pa);
+		mutex_unlock(&live_lock);
+		if (!fences.va)
+			ret = -ENOMEM;
+		for (i = 0; !ret && i < TGM_FENCE_PAGES; i++)
+			fences_pas[i] = fences.pa + i * PAGE_SIZE;
+		if (!ret)
+			ret = tgm_mem_new(vm, fences_pas, TGM_FENCE_PAGES, &fences_mem);
+	}
+	mutex_unlock(&fences_mem_lock);
+	if (!ret)
+		ret = vm_kmap(vm, fences_mem, TGM_FENCE_PAGES * PAGE_SIZE, 1, &vm->fences_va);
+	return ret;
+}
+
+void tgm_chan_set_group(struct tgm_chan *chan, const void *group)
+{
+	mutex_lock(&live_lock);
+	chan->group = group;
+	mutex_unlock(&live_lock);
+}
+
+/* live_lock held: `waiter`'s next submission waits for `source` to complete `seqno` (one entry per source, the later seqno) */
+static int order_add(struct tgm_chan *waiter, struct tgm_chan *source, u32 seqno)
+{
+	uintptr_t off = (uintptr_t)source->fence_cpu - (uintptr_t)fences.va;
+	u32 i;
+
+	if (!waiter->vm->fences_va || !fences.va || off >= TGM_FENCE_PAGES * PAGE_SIZE)
+		return -ENODEV;
+	for (i = 0; i < waiter->norder; i++) {
+		if (waiter->order[i].id != source->id)
+			continue;
+		if ((s32)(seqno - waiter->order[i].seqno) > 0)
+			waiter->order[i].seqno = seqno;
+		return 0;
+	}
+	if (waiter->norder == TGM_ORDER_MAX)
+		return -ENOSPC;
+	waiter->order[waiter->norder].va = waiter->vm->fences_va + off;
+	waiter->order[waiter->norder].cpu = source->fence_cpu;
+	waiter->order[waiter->norder].id = source->id;
+	waiter->order[waiter->norder].seqno = seqno;
+	waiter->norder++;
+	return 0;
+}
+
+int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32_t *queued)
+{
+	struct tgm_chan *other;
+	u32 n = 0, last;
+	int ret = 0;
+
+	*queued = 0;
+	if (chan->kernel || !flags || (flags & ~(TGM_ORDER_AFTER | TGM_ORDER_BEFORE)))
+		return -EINVAL;
+	if (flags & TGM_ORDER_BEFORE) {
+		if (!seqno)
+			seqno = chan->submitted;
+		if ((s32)(seqno - chan->submitted) > 0)
+			return -EINVAL; /* only submitted work: an acquire never waits for a later submission */
+		if ((s32)(tgm_chan_completed(chan) - seqno) >= 0)
+			flags &= ~TGM_ORDER_BEFORE; /* done already: nothing to wait for */
+	}
+	mutex_lock(&live_lock);
+	list_for_each_entry(other, &live_chans, live)
+	{
+		if (other == chan || other->kernel || !chan->group || other->group != chan->group ||
+		    READ_ONCE(other->error))
+			continue;
+		last = READ_ONCE(other->submitted);
+		if ((flags & TGM_ORDER_AFTER) && (s32)(tgm_chan_completed(other) - last) < 0) {
+			ret = order_add(chan, other, last);
+			if (ret)
+				break;
+			n++;
+		}
+		if (flags & TGM_ORDER_BEFORE) {
+			ret = order_add(other, chan, seqno);
+			if (ret)
+				break;
+			n++;
+		}
+	}
+	mutex_unlock(&live_lock);
+	*queued = n;
+	return ret;
+}
+
+/* live_lock held, `chan` leaving: what other channels had queued on its fence word goes (it is idle: nothing to wait for) */
+static void order_forget(struct tgm_chan *chan)
+{
+	struct tgm_chan *other;
+	u32 i;
+
+	list_for_each_entry(other, &live_chans, live)
+	{
+		for (i = 0; i < other->norder;) {
+			if (other->order[i].id == chan->id)
+				other->order[i] = other->order[--other->norder];
+			else
+				i++;
+		}
+	}
+}
+
+/* From tgm_chan_exec, before a submission's own entries: the acquires tgm_chan_order queued for it, as one entry. One whose
+ * source passed its seqno already is left out. */
+static void order_waits(struct tgm_chan *chan)
+{
+	struct nvif_push *push = &chan->chan.push;
+	struct tgm_order wait[TGM_ORDER_MAX];
+	u32 i, n, kicked = 0;
+
+	mutex_lock(&live_lock);
+	n = chan->norder;
+	memcpy(wait, chan->order, n * sizeof(wait[0]));
+	chan->norder = 0;
+	mutex_unlock(&live_lock);
+	for (i = 0; i < n; i++) {
+		if ((s32)(READ_ONCE(*wait[i].cpu) - wait[i].seqno) >= 0)
+			continue;
+		PUSH_MTHD(push, NV906F, SEMAPHOREA,
+			  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(wait[i].va)),
+			  SEMAPHOREB, lower_32_bits(wait[i].va), SEMAPHOREC, wait[i].seqno,
+			  SEMAPHORED,
+			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
+				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
+		chan->waited = wait[i];
+		kicked++;
+	}
+	if (kicked)
+		PUSH_KICK(push);
 }
 
 /* ------------------------------------------------------------------ CPU readers of GPU-written memory
@@ -2301,9 +2487,10 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 		return 0;
 	}
 	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
-	 * them, a present wait and (tegra-gpu-stats) a start stamp, one more nvif GET semaphore with each; nvif polls GET
-	 * for up to ~1 s */
-	ret = nvif_chan_gpfifo_wait(&chan->chan, count + 3, CHAN_FENCE_DWORDS + 24);
+	 * them, a present wait, the task order's acquires and (tegra-gpu-stats) a start stamp, one more nvif GET semaphore
+	 * with each; nvif polls GET for up to ~1 s */
+	ret = nvif_chan_gpfifo_wait(&chan->chan, count + 4,
+				    CHAN_FENCE_DWORDS + 24 + 5 * TGM_ORDER_MAX);
 	if (ret == -ETIMEDOUT && gpu.stage >= 3)
 		tgm_chan_hung(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
 			      NSEC_PER_SEC);
@@ -2315,6 +2502,8 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 		mutex_lock(&order_lock);
 		present_order(chan); /* first, so the start stamp below times the work itself */
 	}
+	if (READ_ONCE(chan->norder))
+		order_waits(chan); /* the task's other channels' work it follows (tgm_chan_order) */
 	if (stats_on()) {
 		u32 next = chan->submitted + 1;
 		WRITE_ONCE(chan->stat_sub_ptimer[next % CHAN_NSTAMPS],

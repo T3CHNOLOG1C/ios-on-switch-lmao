@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Per probe: set 0's layout as m2v + NVK wrote it, read off the tagged probe (capture/probe.mm, NVDEC_SCRUB records)."""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probelog
+STAGES = {1: 'v', 2: 'f'}
+def tic_kind(tic, rts):
+    name, w = tic
+    width, height = (w[4] & 0xffff) + 1, (w[5] & 0xffff) + 1
+    if 16 <= width < 32 and height == width - 8:
+        return ('tex', width - 16)
+    if name in rts:
+        return ('fetch', rts[name])
+    return ('tic?', '%s:%dx%d' % (name, width, height))
+DUMMY_TSC = [0x26092, 0x291, 0x40000]   # MTLSamplerDescriptor's defaults through m2v + NVK (nearest, clamp, not mipmapped)
+def tsc_kind(t):
+    # probe.mm tags fragment sampler slot s with max LOD 1 + s/2 (4.8 fixed point: 256 + 128 s)
+    lod = (t[2] >> 12) & 0xfff
+    if lod % 128 or not 256 <= lod <= 256 + 15 * 128:
+        return ('tsc?', ' '.join('%x' % w for w in t))
+    slot = (lod - 256) // 128
+    # and its filter and U address are that slot's (probe.mm: linear when s&1, repeat U when s&2): m2v derives samplers of its
+    # own from a bound one for some functions (two-plane YCbCr conversion: linear, its own address modes), which the raw path
+    # does not make: such a handle is no plain slot sampler
+    mag, u = t[1] & 7, t[0] & 7
+    if mag != (2 if slot & 1 else 1) or u != (0 if slot & 2 else 2):
+        return ('tsc?derived', ' '.join('%x' % w for w in t))
+    return ('smp', slot)
+def layout(p):
+    r = p['records'][0]
+    if 'set0' not in r:
+        return [], []
+    i = p['index']
+    words = r['set0'][1]
+    # render targets of the draw by name, from the canonical record (rtN=Rk ...)
+    rts = {}
+    for l in p['canon']:
+        if l.startswith('  rt') and '=' in l:
+            k, v = l.strip().split('=', 1)
+            rts[v.split()[0]] = int(k[2:])
+    entries, problems = [], []
+    o = 0
+    while o < len(words):
+        key = 'ptr0.%d' % (o * 4)
+        if o % 4 == 0 and key in r['ptr']:
+            pw = r['ptr'][key][1]
+            if (pw[0] >> 16) == 0xc0de and pw[1] == i:
+                entries.append((o * 4, 'ubo', STAGES[(pw[0] >> 8) & 0xff], pw[0] & 0xff, words[o + 2]))
+            else:
+                problems.append('untagged pointer at %d (%x)' % (o * 4, pw[0]))
+            o += 4
+            continue
+        w = words[o]
+        if w:
+            tic, tsc = w & 0xfffff, w >> 20
+            t = r['tic'].get(tic) if tic else None
+            s = r['tsc'].get(tsc)
+            tk = tic_kind(t, rts) if t else (None if not tic else ('tic?', tic))
+            sk = tsc_kind(s) if s else ('tsc?', tsc)
+            if sk[0] == 'tsc?' and tsc == 0 and s and s[:3] == DUMMY_TSC:
+                sk = None   # index 0: the probe's warm-up sampler, never bound in a probe: the handle names no sampler
+            entries.append((o * 4, 'handle', tk, sk, w))
+            if tk and tk[0].endswith('?'):
+                problems.append('unidentified handle at %d: %x' % (o * 4, w))
+        o += 1
+    return entries, problems
+if __name__ == '__main__':
+    P = probelog.load(sys.argv[1], sys.argv[2])
+    import collections
+    c = collections.Counter()
+    for p in P:
+        if p['draws'] != 1 or p['dispatches']:
+            continue
+        e, pr = layout(p)
+        desc = ' '.join('%d:%s' % (x[0], ('ubo(%s%d,%x)' % x[2:5]) if x[1] == 'ubo' else 'h(%s,%s)' % (x[2], x[3])) for x in e)
+        c[desc] += 1
+        if pr:
+            print('PROBLEM', p['index'], pr)
+    for k, n in c.most_common():
+        print(n, k)
