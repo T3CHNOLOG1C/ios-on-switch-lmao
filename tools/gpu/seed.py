@@ -16,29 +16,14 @@ import argparse
 import hashlib
 import os
 import shutil
-import struct
 import subprocess
 import sys
 from pathlib import Path
 
+from tools.gpu.nvk_twin import make_twin
+
 QC_SHA256 = '606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9'   # 21H461 QuartzCore default.metallib
 CONTENT = '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'     # m2v's content directory
-
-
-def lc_uuid(path, value=None):
-    """The LC_UUID of the thin 64-bit Mach-O at `path`, after setting it to `value` (16 bytes) when given."""
-    data = bytearray(Path(path).read_bytes())
-    magic, _, _, _, ncmds = struct.unpack_from('<5I', data)
-    at = 32
-    for _ in range(ncmds if magic == 0xfeedfacf else 0):
-        cmd, size = struct.unpack_from('<2I', data, at)
-        if cmd == 0x1b:   # LC_UUID
-            if value is not None:
-                data[at + 8:at + 24] = value
-                Path(path).write_bytes(data)
-            return bytes(data[at + 8:at + 24])
-        at += size
-    sys.exit('%s: no LC_UUID' % path)
 
 
 def main():
@@ -62,9 +47,6 @@ def main():
             sys.exit('FAILED: %s\n%s%s' % (' '.join(map(str, command))[:600], result.stdout[-4000:], result.stderr[-6000:]))
         return result.stdout + result.stderr
 
-    sources = [Path(str(p) + '.source') for p in (args.nvk, args.twin)]
-    if not all(p.is_file() for p in sources) or sources[0].read_text() != sources[1].read_text():
-        sys.exit('%s and %s missing or different: the twin is not of the iOS dylib\'s sources' % tuple(sources))
     if hashlib.sha256(Path(args.qc).read_bytes()).hexdigest() != QC_SHA256:
         sys.exit('%s is not 21H461\'s QuartzCore default.metallib' % args.qc)
 
@@ -76,15 +58,9 @@ def main():
          '-I', Path(args.metal_header).parent, '-x', 'objective-c++', args.precompile, args.frontend, '-x', 'none',
          args.host_bridge, '-L', work, '-lmock_iokit', '-Wl,-rpath,' + str(work), '-framework', 'Foundation',
          '-framework', 'Metal', '-framework', 'IOSurface', '-framework', 'IOKit', '-o', work / 'precompile'])
-    # The twin with the device's pipeline cache identity: NVK hashes the -Dnvk-build-id when the build had one (both
-    # builds had the same, .source says), else its own LC_UUID, which the twin then takes from the iOS dylib.
+    # The twin with the device's pipeline cache identity (tools/gpu/nvk_twin.py).
     dylib = work / 'libvulkan_nouveau.dylib'
-    shutil.copyfile(args.twin, dylib)
-    dylib.chmod(0o755)
-    pinned = any(line.split()[1:] for line in sources[0].read_text().splitlines() if line.startswith('nvk-build-id'))
-    if not pinned:
-        lc_uuid(dylib, lc_uuid(args.nvk))
-    run(['/usr/bin/codesign', '--force', '--sign', '-', dylib])
+    make_twin(args.nvk, args.twin, dylib, tool_env)
 
     store = Path(args.store)
     corpus = Path(args.corpus)

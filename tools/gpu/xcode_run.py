@@ -2,7 +2,7 @@
 """xcode_run.py <xcode.env> [--cwd-map] [--env NAME=VALUE ...] -- <tool> [args...]
 
 Runs an Xcode tool (`clang`, `clang++`, `strip`, `dsymutil`, `codesign`, ...) from the pinned Xcode named by
-@xcode//:xcode.env, with DEVELOPER_DIR set, `@IPHONEOS_SDK@`/`@MACOSX_SDK@`/`@PWD@` replaced in the arguments, and
+@xcode//:xcode.env, with DEVELOPER_DIR set, `@IPHONEOS_SDK@`/`@MACOSX_SDK@`/`@PWD@`/`@FILE:<path>@` replaced in the arguments, and
 ZERO_AR_DATE=1 (no object/archive timestamps in a link). A bare tool name is looked up in the Xcode toolchain, then
 /usr/bin (codesign lives there)."""
 import os
@@ -28,6 +28,11 @@ def main():
     for i, arg in enumerate(command):
         for key, value in replace.items():
             arg = arg.replace(key, value)
+        # @FILE:<path>@ is the file's content (stripped): a value an earlier action computed, e.g. the raw stack key.
+        while '@FILE:' in arg:
+            start = arg.index('@FILE:')
+            end = arg.index('@', start + 6)
+            arg = arg[:start] + Path(arg[start + 6:end]).read_text().strip() + arg[end + 1:]
         command[i] = arg
     tool = command[0]
     if '/' not in tool:

@@ -1,5 +1,6 @@
 # The GPU bundle's build steps (gpu/defs.bzl runs them as actions).
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
 
 package(default_visibility = ["//gpu:__subpackages__"])
 
@@ -18,9 +19,26 @@ py_binary(
     srcs = ["bundle.py"],
 )
 
+py_library(
+    name = "nvk_twin",
+    srcs = ["nvk_twin.py"],
+)
+
 py_binary(
     name = "seed",
     srcs = ["seed.py"],
+    deps = [":nvk_twin"],
+)
+
+py_binary(
+    name = "rawpack",
+    srcs = ["rawpack.py"],
+    deps = [":nvk_twin"],
+)
+
+py_binary(
+    name = "raw_stack",
+    srcs = ["raw_stack.py"],
 )
 
 py_binary(

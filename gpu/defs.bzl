@@ -143,20 +143,31 @@ _PLUGIN_CFLAGS = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fstack-protector
                   "-Wno-deprecated-declarations", "-fno-objc-msgsend-selector-stubs", "-ffile-prefix-map=@PWD@=/ioswitch"]
 
 def _metal_plugin_impl(ctx):
-    include = ctx.file.include_marker.dirname
+    # -I in the old build's order (NativeMetal, raw/runtime, TegraGM20B), and the raw path's stack key as a define.
+    includes = []
+    for marker in ctx.files.include_markers:
+        includes += ["-I", marker.dirname]
+    defines = ["-DTEGRA_RAW_STACK=0x@FILE:%s@ull" % ctx.file.stack.path] if ctx.file.stack else []
+    inputs = ctx.files.srcs + ctx.files.cc_srcs + ctx.files.hdrs + ctx.files.include_markers + ctx.files.stack
     objects = []
-    for src in ctx.files.srcs:
-        obj = ctx.actions.declare_file("%s_objs/%s.o" % (ctx.attr.name, src.basename))
-        _xcode_run(
-            ctx,
-            "ObjcxxCompile",
-            "Compiling %s" % src.short_path,
-            ["clang++"] + _IOS + _PLUGIN_CFLAGS + ["-I", include, "-x", "objective-c++", "-c", src.path, "-o", obj.path],
-            ctx.files.srcs + ctx.files.hdrs,
-            [obj],
-        )
-        objects.append(obj)
+    for language, sources in (("objective-c++", ctx.files.srcs), ("c++", ctx.files.cc_srcs)):
+        # Plain C++ sends no Objective-C messages (clang calls the flag unused there, an error under -Werror).
+        cflags = [f for f in _PLUGIN_CFLAGS if language == "objective-c++" or f != "-fno-objc-msgsend-selector-stubs"]
+        for src in sources:
+            obj = ctx.actions.declare_file("%s_objs/%s.o" % (ctx.attr.name, src.basename))
+            _xcode_run(
+                ctx,
+                "ObjcxxCompile",
+                "Compiling %s" % src.short_path,
+                ["clang++"] + _IOS + cflags + includes + defines + ["-x", language, "-c", src.path, "-o", obj.path],
+                inputs,
+                [obj],
+            )
+            objects.append(obj)
     out = ctx.actions.declare_file(ctx.attr.name + "/TegraGM20BMetal")
+    frameworks = []
+    for framework in ctx.attr.frameworks:
+        frameworks += ["-framework", framework]
     _xcode_run(
         ctx,
         "MetalPluginLink",
@@ -164,8 +175,7 @@ def _metal_plugin_impl(ctx):
         # The compile flags again, as the old one-line build had them: clang passes -O2 on to ld, whose code
         # deduplication it turns on (118 KB less __text).
         ["clang++"] + _IOS + _PLUGIN_CFLAGS + ["-bundle"] + [o.path for o in objects] + [ctx.file.bridge.path] +
-        ["-Wl,-dead_strip", "-Wl,-oso_prefix,@PWD@/", "-lobjc", "-framework", "Foundation", "-framework", "Metal",
-         "-framework", "IOSurface", "-o", out.path],
+        ["-Wl,-dead_strip", "-Wl,-oso_prefix,@PWD@/", "-lobjc"] + frameworks + ["-o", out.path],
         objects + [ctx.file.bridge],
         [out],
     )
@@ -186,11 +196,93 @@ def _metal_plugin_impl(ctx):
 metal_plugin = rule(
     implementation = _metal_plugin_impl,
     attrs = _XCODE | {
-        "srcs": attr.label_list(mandatory = True, allow_files = [".mm"]),
+        "srcs": attr.label_list(mandatory = True, allow_files = [".mm"], doc = "Objective-C++ units, in link order"),
+        "cc_srcs": attr.label_list(allow_files = [".cpp"], doc = "C++ units, linked after srcs"),
         "hdrs": attr.label_list(allow_files = True),
-        "include_marker": attr.label(mandatory = True, allow_single_file = True, doc = "a file in the -I directory"),
+        "include_markers": attr.label_list(allow_files = True, doc = "one file per -I directory, in order"),
+        "stack": attr.label(allow_single_file = True, doc = "the raw path's stack key (TEGRA_RAW_STACK)"),
+        "frameworks": attr.string_list(default = ["Foundation", "Metal", "IOSurface"]),
         "bridge": attr.label(mandatory = True, allow_single_file = True),
         "_xcode_run": attr.label(default = "//tools/gpu:xcode_run", executable = True, cfg = "exec"),
+    },
+)
+
+# --- The raw GM20B path: its stack key and its pipeline pack -------------------------------------------------------
+
+def _raw_stack_impl(ctx):
+    out = ctx.actions.declare_file(ctx.attr.name + ".txt")
+    drivers = ctx.file.series.dirname.rsplit("/TegraGM20BMetal/", 1)[0]
+    args = ctx.actions.args()
+    args.add("--nvk", ctx.file.nvk)
+    args.add("--drivers", drivers)
+    args.add("--series", ctx.file.series)
+    args.add("--raw", drivers + "/TegraGM20BMetal/raw")
+    args.add("--out", out)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = [ctx.file.nvk, ctx.file.series] + ctx.files.patches + ctx.files.srcs,
+        outputs = [out],
+        mnemonic = "RawStack",
+        progress_message = "Hashing the raw path's stack key",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+raw_stack = rule(
+    implementation = _raw_stack_impl,
+    attrs = {
+        "nvk": attr.label(mandatory = True, allow_single_file = True),
+        "series": attr.label(mandatory = True, allow_single_file = True),
+        "patches": attr.label_list(allow_files = True),
+        "srcs": attr.label_list(allow_files = True, doc = "the bridge sources, the frontend, every raw/ source"),
+        "_tool": attr.label(default = "//tools/gpu:raw_stack", executable = True, cfg = "exec"),
+    },
+)
+
+def _metal_raw_pack_impl(ctx):
+    out = ctx.actions.declare_directory(ctx.attr.name)
+    tree = ctx.file.generator.dirname.rsplit("/drivers/", 1)[0]
+    args = ctx.actions.args()
+    args.add("--xcode-env", ctx.file._xcode_env)
+    args.add("--host-bridge", ctx.file.host_bridge)
+    args.add("--nvk", ctx.file.nvk)
+    args.add("--twin", ctx.file.twin)
+    args.add("--qc", ctx.file.qc)
+    args.add("--corpus", ctx.file.corpus)
+    args.add("--stack", ctx.file.stack)
+    args.add("--generator", ctx.file.generator)
+    args.add("--tree", tree)
+    args.add("--out", out.path)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = depset(
+            [ctx.file.host_bridge, ctx.file.nvk, ctx.file.twin, ctx.file.qc, ctx.file.corpus, ctx.file.stack,
+             ctx.file.generator, ctx.file._xcode_env, ctx.file._xcode_identity] +
+            ctx.files.srcs + ctx.files.nvk_sources,
+        ),
+        outputs = [out],
+        mnemonic = "MetalRawPack",
+        progress_message = "Making the raw GM20B path's pipeline pack",
+        # The probe runs on this Mac (Metal + the NVK twin over the mock GM20B): never on a remote executor.
+        execution_requirements = {"no-remote-exec": "1"},
+        resource_set = _all_cores,
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+metal_raw_pack = rule(
+    implementation = _metal_raw_pack_impl,
+    attrs = _XCODE | {
+        "host_bridge": attr.label(mandatory = True, allow_single_file = True),
+        "nvk": attr.label(mandatory = True, allow_single_file = True),
+        "twin": attr.label(mandatory = True, allow_single_file = True),
+        "nvk_sources": attr.label_list(allow_files = True),
+        "qc": attr.label(mandatory = True, allow_single_file = True),
+        "corpus": attr.label(mandatory = True, allow_single_file = True),
+        "stack": attr.label(mandatory = True, allow_single_file = True),
+        "generator": attr.label(mandatory = True, allow_single_file = True, doc = "raw/pack/rawpack.py"),
+        "srcs": attr.label_list(allow_files = True, doc = "the pack generator's sources, the frontend, the ABI headers"),
+        "_tool": attr.label(default = "//tools/gpu:rawpack", executable = True, cfg = "exec"),
     },
 )
 
@@ -298,11 +390,13 @@ def _gpu_tree_impl(ctx):
     args.add("--seed", ctx.file.seed.path)
     args.add("--trustcache", ctx.file.trustcache)
     args.add("--trust-json", ctx.file.trust_json)
+    if ctx.file.raw:
+        args.add("--raw", ctx.file.raw.path)
     args.add("--out", out.path)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [bundle, ctx.file.seed, ctx.file.trustcache, ctx.file.trust_json],
+        inputs = [bundle, ctx.file.seed, ctx.file.trustcache, ctx.file.trust_json] + ctx.files.raw,
         outputs = [out],
         mnemonic = "GpuTree",
         progress_message = "Laying out the GPU bundle directory",
@@ -316,6 +410,7 @@ gpu_tree = rule(
         "seed": attr.label(mandatory = True, allow_single_file = True),
         "trustcache": attr.label(mandatory = True, allow_single_file = True),
         "trust_json": attr.label(mandatory = True, allow_single_file = True),
+        "raw": attr.label(allow_single_file = True, doc = "the raw path's pack directory (pack.bin)"),
         "_tool": attr.label(default = "//tools/gpu:assemble", executable = True, cfg = "exec"),
     },
 )

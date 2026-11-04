@@ -14,6 +14,23 @@ filegroup(
     srcs = glob(["patches/**/*.patch"]) + ["patches/series"],
 )
 
+# The raw GM20B path: its runtime (compiled into the plugin), its pack generator, and every source its stack key hashes
+# (every .h/.c/.cpp/.mm/.py/.inc below raw/, the old build's raw_stack()).
+filegroup(
+    name = "raw_runtime_headers",
+    srcs = glob(["raw/runtime/*.h"]),
+)
+
+filegroup(
+    name = "raw_pack_generator",
+    srcs = glob(["raw/pack/**"]),
+)
+
+filegroup(
+    name = "raw_stack_sources",
+    srcs = glob(["raw/**/*.%s" % suffix for suffix in ("h", "c", "cpp", "mm", "py", "inc")]),
+)
+
 # Merges the shader journals of a mounted Data volume into precompile/corpus.log (deploy's log pull runs it).
 py_binary(
     name = "harvest",
