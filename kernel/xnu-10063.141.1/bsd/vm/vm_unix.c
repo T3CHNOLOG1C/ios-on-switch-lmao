@@ -2517,10 +2517,113 @@ iosw_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_
 }
 
 /*
+ * IOSwitch keyboard: the software keyboard as wide as the screen from its first layout.
+ *
+ * MobileGestalt's ArtworkDeviceSubType is 2732 (the ADT's iPad7,1 artwork, tools/package/package_raw_boot.py), so
+ * TextInput's IsLargeIPad() is true, the KeyboardUseProLayout preference defaults to YES, and UIKit gives the keyboard
+ * the 12.9-inch Pro class (keyboard idiom 23). For that class _UIKeyboardGetDerivedKeyboardForSpecificOrientation
+ * (UIKitCore, cache text in dyld_shared_cache_arm64.03 of 21H461) makes no derived keyboard: a real 12.9-inch screen
+ * is 1366 points wide in landscape, the width of a layout of its own. This one is 1280, so the layout picked by width
+ * is the 1024-point Wildcat-Landscape. Its keys are drawn stretched to 1280 (stretchFactor 1.25), but the keyboard
+ * view keeps the layout's 1024 points (UIKeyboardAutomatic frame (128 0; 1024 370)), and the input window places that
+ * narrower view centred at x = 128 in some layout passes and at x = 0 in others: a text field's first keyboard shows
+ * its keys 128 points to the right, the right-hand ones off the screen, until a later pass (a keypress) moves it.
+ * Every other iPad whose screen is not a layout width gets a derived keyboard. For idiom 26 (screens larger than
+ * 768x1024, the 10.2-inch iPad) that branch derives Wildcat-Landscape with keyboardSize (screen width, -1): the
+ * keyboard view, its keyplane (sizeForKeyplane:) and the drawn keys all take the screen's width; the height and the
+ * layout stay the same. Here the Pro class takes that branch for its non-emoji keyboards too: the emoji test's
+ * cbz w0 (no "emoji" in the input mode) goes to the idiom-26 branch (+0x5c) instead of "no derived keyboard" (+0x54).
+ * Same pager and checks as the settings icons, on one 4 KB chunk: the instruction and the two after it must read as
+ * shipped.
+ */
+static const uint8_t iosw_kb_uuid[16] = {           /* dyld_shared_cache_arm64.03 of 21H461 */
+	0x1b, 0x9c, 0xcf, 0x0c, 0x7b, 0x68, 0x39, 0x63, 0xaf, 0x64, 0x48, 0x4b, 0xcf, 0xda, 0xc1, 0x4c,
+};
+#define IOSW_KB_PAGES_VMADDR    0x18a2ac000ULL      /* unslid; one 16 KB page (.03's text: 0x186dac000, file 0) */
+#define IOSW_KB_PAGES_FILEOFF   0x3500000ULL
+#define IOSW_KB_PAGES_SIZE      0x4000ULL
+#define IOSW_KB_CHUNK_OFFSET    0x3000ULL           /* the 4 KB chunk at 0x18a2af000 */
+#define IOSW_KB_INSN_FILEOFF    0x3503ae4ULL        /* 0x18a2afae4, the function + 0xd14 */
+
+static int iosw_kb_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
+static uint32_t iosw_kb_logged;
+
+static int
+iosw_keyboard_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
+{
+	/* cbz w0, +0x54 (no derived keyboard); adrp x8, UIKBDerivedKeyboard@PAGE; ldr x0, [x8, #0x7b8] */
+	static const uint8_t stock[12] = { 0xa0, 0x02, 0x00, 0x34, 0xa8, 0x0f, 0x33, 0x90, 0x00, 0xdd, 0x43, 0xf9 };
+	static const uint8_t derived[4] = { 0xe0, 0x02, 0x00, 0x34 };   /* cbz w0, +0x5c (the idiom-26 branch) */
+	uint8_t *out = dst;
+
+	bcopy(src, dst, IOSW_HG_CHUNK);
+	if (IOSW_KB_INSN_FILEOFF < src_offset || IOSW_KB_INSN_FILEOFF + sizeof(stock) > src_offset + IOSW_HG_CHUNK) {
+		return 0;
+	}
+	uint64_t at = IOSW_KB_INSN_FILEOFF - src_offset;
+	if (memcmp(out + at, stock, sizeof(stock)) != 0) {
+		if (!os_atomic_xchg(&iosw_kb_logged, 1, relaxed)) {
+			printf("IOSwitch keyboard: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
+			    IOSW_KB_INSN_FILEOFF);
+		}
+		return 0;
+	}
+	memcpy(out + at, derived, sizeof(derived));
+	if (!os_atomic_xchg(&iosw_kb_logged, 1, relaxed)) {
+		printf("IOSwitch keyboard: Pro-class keyboard derived to the screen width\n");
+	}
+	return 0;
+}
+
+/* The keyboard's pager for the mapping that holds the branch, or MEMORY_OBJECT_NULL. */
+static memory_object_t
+iosw_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
+{
+	if (unslid_address > IOSW_KB_PAGES_VMADDR ||
+	    IOSW_KB_PAGES_VMADDR + IOSW_KB_PAGES_SIZE > unslid_address + size ||
+	    file_offset + (IOSW_KB_PAGES_VMADDR - unslid_address) != IOSW_KB_PAGES_FILEOFF ||
+	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
+		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the branch */
+	}
+
+	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(iosw_kb_uuid)];
+	int resid = 0;
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
+	if (error != 0 || resid != 0) {
+		printf("IOSwitch keyboard: cache header read failed (%d), cache text left stock\n", error);
+		return MEMORY_OBJECT_NULL;
+	}
+	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
+	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_kb_uuid, sizeof(iosw_kb_uuid)) != 0) {
+		printf("IOSwitch keyboard: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+
+	struct pager_crypt_info crypt_info = {
+		.page_decrypt = iosw_keyboard_page,
+		.crypt_end = NULL,
+		.crypt_ops = &iosw_kb_cookie,
+		.crypt_refcnt = 0,
+	};
+	memory_object_t mo = apple_protect_pager_setup(file_object, IOSW_KB_PAGES_FILEOFF,
+	    IOSW_KB_PAGES_FILEOFF + IOSW_KB_CHUNK_OFFSET, &crypt_info,
+	    IOSW_KB_CHUNK_OFFSET, IOSW_KB_CHUNK_OFFSET + IOSW_HG_CHUNK, TRUE);
+	if (mo == MEMORY_OBJECT_NULL) {
+		printf("IOSwitch keyboard: pager setup failed, cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+	*range_offset = IOSW_KB_PAGES_VMADDR - unslid_address;
+	*range_size = IOSW_KB_PAGES_SIZE;
+	return mo;
+}
+
+/*
  * Called by vm_shared_region_map_file_setup() for each executable cache mapping it has just entered in a shared
  * region. Returns an apple_protect pager for the range to replace (range_offset/range_size within the mapping),
- * or MEMORY_OBJECT_NULL to keep the mapping stock. The patched ranges are in different subcaches (.25, .13), so
- * a mapping matches at most one.
+ * or MEMORY_OBJECT_NULL to keep the mapping stock. The patched ranges are in different subcaches (.25, .13, .03),
+ * so a mapping matches at most one.
  */
 memory_object_t ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size);
@@ -2533,6 +2636,9 @@ ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, 
 	if (mo == MEMORY_OBJECT_NULL) {
 		mo = iosw_settings_icons_pager(file_object, file_offset, size, unslid_address, vp, range_offset,
 		    range_size);
+	}
+	if (mo == MEMORY_OBJECT_NULL) {
+		mo = iosw_keyboard_pager(file_object, file_offset, size, unslid_address, vp, range_offset, range_size);
 	}
 	return mo;
 }
