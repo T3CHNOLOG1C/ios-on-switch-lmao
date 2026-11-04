@@ -7956,6 +7956,42 @@ native_ioswitch_portrait_cache(proc_t p, user_addr_t scratch, mount_t data_mount
 	    orientation ? "portrait-native" : "landscape", orientation, error);
 }
 
+/* The display gamut (scripts/package_raw_boot.py DISPLAY_GAMUT): MobileGestalt's ArtworkDisplayGamut is ADT
+ * /product artwork-display-gamut, and its HasExtendedColorDisplay is that answer being "P3". QuartzCore
+ * (CADeviceUseCIF10, so the display's supportsExtendedColors, CADisplayMode, FBSDisplayConfiguration and UIScreen
+ * gamut), UIKit (_supportsDeepColor) and WebCore (screenSupportsExtendedColor: RGB10A8 tiles) follow it. Both
+ * answers live in the same build-keyed cache as DisplayBootRotation, so, as for the screen mode, a change drops the
+ * cache once: the marker is present while the ADT says sRGB. Failures are logged only; the next boot tries again. */
+static void
+native_ioswitch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/ioswitch/display-gamut-sRGB",
+	    srgb_name[] = "sRGB";
+	DTEntry product;
+	void const *value = NULL;
+	unsigned int size = 0;
+	const int srgb = SecureDTLookupEntry(0, "/product", &product) == kSuccess &&
+	    SecureDTGetProperty(product, "artwork-display-gamut", &value, &size) == kSuccess && size == sizeof(srgb_name) &&
+	    !memcmp(value, srgb_name, sizeof(srgb_name));
+	vnode_t vp = NULLVP;
+	const int marked = !vnode_lookup(marker, 0, &vp, vfs_context_current());
+	if (vp) vnode_put(vp);
+	if (marked == srgb) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error && marked) {
+		if (!(error = copyout(marker, request.path, sizeof(marker)))) error = unlink(p, &request, &result);
+	} else if (!error) {
+		error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
+		if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	}
+	printf("IOSwitch raw boot: display gamut %s: MobileGestalt cache dropped (%d)\n", srgb ? "sRGB" : "not sRGB", error);
+}
+
 /* Portrait-native: Core Animation must composite the landscape interface into the portrait framebuffer itself. backboardd
  * hands every interface orientation to the window server's first display as if it were a mirrored one
  * (UpdateMirroredDisplayOrientationWithInterfaceOrientation: [[CAWindowServer serverIfRunning].displays[0] setOrientation:]),
@@ -8060,6 +8096,7 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	if (error) printf("IOSwitch raw boot: first-boot state failed at %s: %d\n", path, error);
 	else {
 		native_ioswitch_portrait_cache(p, scratch, data_mount);
+		native_ioswitch_gamut_cache(p, scratch, data_mount);
 		native_ioswitch_portrait_display(p, scratch, data_mount);
 		native_ioswitch_system_app_migration(p, scratch, data_mount);
 	}
