@@ -1,29 +1,44 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // AVD.videodecoder: H.264 on the Tegra X1's NVDEC as VideoToolbox's hardware 'avc1' decoder.
 //
-// How VideoToolbox finds it (21H461, see HEVCH8.c for the disassembly): VTLoadVideoDecoders dlopens a fixed list of
-// paths and calls each one's register function. /System/Library/VideoDecoders/AVD.videodecoder (AVDRegister) is the
-// slot of Apple's AVD decoders on later SoCs; iPad7,1 ships no such file, so the userland overlay puts this one there
-// (the VideoDecoders union HEVCH8 shares, gate switch-hevc). AVDRegister registers nothing unless the kernel published
-// TegraNVDEC (switch-nvdec=3), so the default boot only pays one failed service lookup per process. The list starts with H264SW.videocodec, Apple's NEON H.264 decoder, which registers 'avc1' with
-// {IsHardwareAccelerated: false} and rating 0. VTRegisterVideoDecoder leaves IsHardwareAccelerated true and rating 0,
-// and _vtSortRegistryItemsByRating ranks rating first, then hardware first, so this decoder is tried first; when its
-// factory fails (no TegraNVDEC service, or the sandbox refuses this process its client) VideoToolbox moves on to
-// H264SW. A session this decoder cannot take (interlaced, 4:2:2, high bit depth, more than 4096x4096) fails in
-// StartSession, which VideoToolbox does not retry with another decoder: a limit of this version.
+// How VideoToolbox finds it (21H461 VTLoadVideoDecoders, disassembled): it dlopens a fixed list of paths and calls each
+// one's register function: H264SW.videocodec first (Apple's NEON H.264, registered with IsHardwareAccelerated false),
+// ..., HEVCH8, H8, VCPHEVC, then /System/Library/VideoDecoders/AVD.videodecoder (AVDRegister), the slot of Apple's AVD
+// decoders on later SoCs. iPad7,1 ships no such file; the userland overlay puts this one there.
 //
-// Per picture: H264NVDEC parses and fills NVDEC's setup, the kernel decodes into a block-linear surface, and the
-// picture is copied (de-swizzled) on the CPU into a pixel buffer from the session's pool, NV12 '420v'/'420f'. VIC is
-// not used: with the SMMU bypassed it can only write physically contiguous memory, which pool IOSurfaces are not, so
-// its output would need this same CPU pass. Frames go out as soon as they are decoded, in decode order, as Apple's
-// H.264 decoders do even under kVTDecodeFrame_EnableTemporalProcessing (observed on macOS 27 with test/vdectest):
-// clients order by presentation time. H264NVDEC's display-order bumping stays available (kReorder).
+// Registration is per process and tells the truth. AVDRegister registers 'avc1' only when the kernel published
+// TegraNVDEC (it proved itself at boot, N4) and this process may open it (a probe connection, closed at once).
+// VTIsHardwareDecodeSupported only asks the registry (VTSelectAndCreateVideoDecoderInstance with no out-pointer
+// returns before any factory runs), so registering in a process the sandbox refuses would be a false YES there.
+//
+// Selection: VTRegisterVideoDecoder leaves IsHardwareAccelerated true and rating 0; _vtSortRegistryItemsByRating ranks
+// hardware first, so this decoder is tried before H264SW, and a factory that fails moves VideoToolbox to the next one.
+// StartSession is not retried with another decoder, so a stream NVDEC cannot take (interlaced, 4:2:2 or 4:4:4, high
+// bit depth, slice groups, beyond 4096x4096) or one the arena has no room for runs on Apple's software decoder inside
+// this instance: VTSelectAndCreateVideoDecoderInstance with hardware disabled picks it, every class call is forwarded,
+// and UsingHardwareAcceleratedVideoDecoder answers false. Nothing that decoded before decodes worse now.
+//
+// Per picture (the scheduling): H264NVDEC parses and fills NVDEC's setup on the caller's decode thread; the kernel
+// queues the job on host1x channel 0 and the thread sleeps on the syncpoint interrupt (no polling, no GPU, nothing on
+// the compositor's threads); then the picture is copied (de-swizzled) on the same thread into a pixel buffer from the
+// session's pool, NV12 '420v'/'420f', the format H264SW gives the same clients. VIC is not used: with the SMMU
+// bypassed it can only write physically contiguous memory, which pool IOSurfaces are not, so its output would need
+// this same CPU pass. Frames go out as soon as they are decoded, in decode order, as Apple's H.264 decoders do even
+// under kVTDecodeFrame_EnableTemporalProcessing (observed on macOS 27 with test/vdectest): clients order by
+// presentation time. H264NVDEC's display-order bumping stays available (kReorder).
+//
+// Log (subsystem com.ioswitch.avd, category decoder): per process, a refusal by TegraNVDEC; per session, one line when
+// it starts (on NVDEC, or on the software decoder and why) and one when it ends (frames, mean decode and copy time);
+// once per boot, the clip check (ClipCheck.c) in the first process that may open NVDEC, category selftest.
 #include <CoreFoundation/CoreFoundation.h>
+#include <dispatch/dispatch.h>
+#include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include "BlockLinear.h"
+#include "ClipCheck.h"
 #include "H264NVDEC.h"
 #include "NVDECClient.h"
 #include "VTDecoderSPI.h"
@@ -33,10 +48,13 @@ typedef struct {
     VTVideoDecoderSession session;
     NVDECClient *client;
     H264Decoder *h264;
+    VTVideoDecoderRef software;  // the session runs on Apple's software decoder (see above)
     CFDataRef avcC;
     unsigned lengthSize;
     OSType pixelFormat;
     CFTypeRef matrix, primaries, transfer;
+    uint32_t width, height, frames, errors;
+    uint64_t decodeTicks, copyTicks;
 } Decoder;
 
 typedef struct {
@@ -53,6 +71,48 @@ static Decoder *storage(CMBaseObjectRef object)
     return CMBaseObjectGetDerivedStorage(object);
 }
 
+static double ticksToMs(uint64_t ticks)
+{
+    static mach_timebase_info_data_t base;
+    if (!base.denom) mach_timebase_info(&base);
+    return (double)ticks * base.numer / base.denom / 1e6;
+}
+
+// ---- The software decoder this instance forwards to ----------------------------------------------------------------
+
+static const VTPluginDecoderVTable *softwareVTable(const Decoder *d)
+{
+    return CMBaseObjectGetVTable(VTVideoDecoderGetCMBaseObject(d->software));
+}
+
+static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format,
+                              const char *why)
+{
+    const void *keys[] = {kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder};
+    const void *values[] = {kCFBooleanFalse};
+    CFDictionaryRef spec =
+        CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    VTVideoDecoderRef software = NULL;
+    OSStatus status =
+        VTSelectAndCreateVideoDecoderInstance(kCMVideoCodecType_H264, kCFAllocatorDefault, spec, &software);
+    CFRelease(spec);
+    const VTPluginDecoderVTable *vtable =
+        software ? CMBaseObjectGetVTable(VTVideoDecoderGetCMBaseObject(software)) : NULL;
+    if (!status && (!vtable || !vtable->decoderClass || !vtable->decoderClass->startSession))
+        status = kVTCouldNotFindVideoDecoderErr;
+    if (!status) status = vtable->decoderClass->startSession(software, session, format);
+    if (status) {
+        if (software) CFRelease(software);
+        os_log_error(gLog, "AVD: %{public}s: no software H.264 decoder either (%d)", why, (int)status);
+        return status;
+    }
+    d->software = software;
+    const CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
+    os_log(gLog, "AVD: session %dx%d in %{public}s on Apple's software H.264 decoder: %{public}s", size.width,
+           size.height, getprogname(), why);
+    return noErr;
+}
+
 // ---- H264Backend: pictures out ---------------------------------------------------------------------------------
 
 static void *decoded(void *ctx, const H264Picture *picture)
@@ -62,11 +122,13 @@ static void *decoded(void *ctx, const H264Picture *picture)
     if (!out) return NULL;
     out->frame = picture->token;
     out->status = picture->status ? kVTVideoDecoderBadDataErr : noErr;
+    if (picture->status) d->errors++;
     CVPixelBufferPoolRef pool = d->session ? VTDecoderSessionGetPixelBufferPool(d->session) : NULL;
     if (!pool || CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &out->image) != kCVReturnSuccess) {
         out->status = kVTVideoDecoderMalfunctionErr;
         return out;
     }
+    const uint64_t began = mach_absolute_time();
     CVPixelBufferLockBaseAddress(out->image, 0);
     const uint32_t w = (uint32_t)CVPixelBufferGetWidth(out->image), h = (uint32_t)CVPixelBufferGetHeight(out->image);
     const uint32_t width = w < picture->width ? w : picture->width, height = h < picture->height ? h : picture->height;
@@ -77,6 +139,7 @@ static void *decoded(void *ctx, const H264Picture *picture)
                       CVPixelBufferGetBytesPerRowOfPlane(out->image, 1), picture->chroma, picture->pitch,
                       picture->crop_x & ~1u, picture->crop_y / 2, width & ~1u, (height + 1) / 2);
     CVPixelBufferUnlockBaseAddress(out->image, 0);
+    d->copyTicks += mach_absolute_time() - began;
     if (d->matrix)
         CVBufferSetAttachment(out->image, kCVImageBufferYCbCrMatrixKey, d->matrix, kCVAttachmentMode_ShouldPropagate);
     if (d->primaries)
@@ -200,39 +263,46 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
     pthread_mutex_lock(&d->lock);
     d->session = session;
     d->avcC = copyAvcC(format);
-    OSStatus status = kVTVideoDecoderUnsupportedDataFormatErr;
-    const H264SPS *sps = NULL;
     const int configured = d->avcC && !loadAvcC(d, d->avcC) ? h264_decoder_configure(d->h264) : -1;
-    if (!configured) sps = h264_decoder_sps(d->h264);
-    if (sps) {
-        const int32_t width = sps->width_mbs * 16 - (int32_t)(sps->crop_left + sps->crop_right);
-        const int32_t height = sps->height_map_units * 16 - (int32_t)(sps->crop_top + sps->crop_bottom);
-        const bool vui = sps->colour_description;
-        d->pixelFormat = sps->full_range ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-                                         : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
-        d->matrix =
-            colourTag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, (uint32_t)height);
-        d->primaries =
-            colourTag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
-        d->transfer = colourTag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
-        CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
-            kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
-                                                     &kCFTypeDictionaryValueCallBacks);
-        setNumber(attributes, kCVPixelBufferPixelFormatTypeKey, (int32_t)d->pixelFormat);
-        setNumber(attributes, kCVPixelBufferWidthKey, width);
-        setNumber(attributes, kCVPixelBufferHeightKey, height);
-        setNumber(attributes, kCVPixelBufferBytesPerRowAlignmentKey, 64);
-        CFDictionarySetValue(attributes, kCVPixelBufferIOSurfacePropertiesKey, surface);
-        status = VTDecoderSessionSetPixelBufferAttributes(session, attributes);
-        CFRelease(surface);
-        CFRelease(attributes);
-    } else if (configured == -3) {
-        status = kVTVideoDecoderMalfunctionErr;
-        os_log_error(gLog, "AVD: no NVDEC buffers for this stream (see the AVD alloc/map line)");
-    } else {
-        os_log_error(gLog, "AVD: stream not decodable on NVDEC (needs progressive 4:2:0 8-bit H.264 up to 4096x4096)");
+    const H264SPS *sps = configured ? NULL : h264_decoder_sps(d->h264);
+    OSStatus status;
+    if (!sps) {
+        // NVDEC's buffers go back to the arena for other sessions before the software decoder takes over.
+        h264_decoder_destroy(d->h264);
+        nvdec_close(d->client);
+        d->h264 = NULL;
+        d->client = NULL;
+        status =
+            startSoftware(d, session, format,
+                          configured == -3 ? "no room in the NVDEC arena (see the AVD alloc/map line)"
+                                           : "not decodable on NVDEC (progressive 4:2:0 8-bit up to 4096x4096 is)");
+        pthread_mutex_unlock(&d->lock);
+        return status;
     }
+    d->width = (uint32_t)(sps->width_mbs * 16 - (int32_t)(sps->crop_left + sps->crop_right));
+    d->height = (uint32_t)(sps->height_map_units * 16 - (int32_t)(sps->crop_top + sps->crop_bottom));
+    const bool vui = sps->colour_description;
+    d->pixelFormat = sps->full_range ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                                     : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    d->matrix = colourTag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, d->height);
+    d->primaries =
+        colourTag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+    d->transfer = colourTag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
+    CFMutableDictionaryRef attributes = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
+                                                 &kCFTypeDictionaryValueCallBacks);
+    setNumber(attributes, kCVPixelBufferPixelFormatTypeKey, (int32_t)d->pixelFormat);
+    setNumber(attributes, kCVPixelBufferWidthKey, (int32_t)d->width);
+    setNumber(attributes, kCVPixelBufferHeightKey, (int32_t)d->height);
+    setNumber(attributes, kCVPixelBufferBytesPerRowAlignmentKey, 64);
+    CFDictionarySetValue(attributes, kCVPixelBufferIOSurfacePropertiesKey, surface);
+    status = VTDecoderSessionSetPixelBufferAttributes(session, attributes);
+    CFRelease(surface);
+    CFRelease(attributes);
+    if (!status)
+        os_log(gLog, "AVD: session %ux%u in %{public}s on NVDEC (H.264 profile %u level %u, %u reference frames)",
+               d->width, d->height, getprogname(), sps->profile_idc, sps->level_idc, sps->max_num_ref_frames);
     pthread_mutex_unlock(&d->lock);
     return status;
 }
@@ -241,6 +311,7 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
                             VTDecodeFrameFlags flags, VTDecodeInfoFlags *info)
 {
     Decoder *d = storage(ref);
+    if (d->software) return softwareVTable(d)->decoderClass->decodeFrame(d->software, frame, sample, flags, info);
     if (info) *info = 0;
     CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sample);
     const size_t size = block ? CMBlockBufferGetDataLength(block) : 0;
@@ -254,8 +325,13 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
         }
     }
     pthread_mutex_lock(&d->lock);
+    const uint64_t began = mach_absolute_time(), copied = d->copyTicks;
     const int ret = h264_decoder_decode(d->h264, (const uint8_t *)data, size, d->lengthSize, frame,
                                         kReorder && (flags & kVTDecodeFrame_EnableTemporalProcessing));
+    if (ret == 1) {
+        d->frames++;
+        d->decodeTicks += mach_absolute_time() - began - (d->copyTicks - copied);
+    }
     if (!ret && d->session)  // parameter sets only: answered at once, without a picture
         VTDecoderSessionEmitDecodedFrame(d->session, frame, noErr, kVTDecodeInfo_FrameDropped, NULL);
     pthread_mutex_unlock(&d->lock);
@@ -270,12 +346,29 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
     return ret < 0 ? kVTVideoDecoderBadDataErr : noErr;
 }
 
+// VTDecompressionSessionCopyProperty hands a key it does not answer itself to the decoder only when the decoder lists
+// it here (21H461, 0x1978a2438); UsingHardwareAcceleratedVideoDecoder is such a key, so it is listed, read-only, next
+// to whatever the software decoder lists when this instance runs on it.
 static OSStatus copySupportedPropertyDictionary(VTVideoDecoderRef ref, CFDictionaryRef *out)
 {
-    (void)ref;
-    *out = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
-                              &kCFTypeDictionaryValueCallBacks);
-    return *out ? noErr : kVTAllocationFailedErr;
+    Decoder *d = storage(ref);
+    CFDictionaryRef software = NULL;
+    if (d->software && softwareVTable(d)->decoderClass->copySupportedPropertyDictionary)
+        softwareVTable(d)->decoderClass->copySupportedPropertyDictionary(d->software, &software);
+    CFMutableDictionaryRef supported =
+        software ? CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, software)
+                 : CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
+                                             &kCFTypeDictionaryValueCallBacks);
+    if (software) CFRelease(software);
+    if (!supported) return kVTAllocationFailedErr;
+    const void *keys[] = {kVTPropertyTypeKey, kVTPropertyReadWriteStatusKey};
+    const void *values[] = {kVTPropertyType_Boolean, kVTPropertyReadWriteStatus_ReadOnly};
+    CFDictionaryRef description = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
+                                                     &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(supported, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, description);
+    CFRelease(description);
+    *out = supported;
+    return noErr;
 }
 
 // A new format keeps this instance only when its parameter sets are the same bytes; otherwise VideoToolbox makes a
@@ -283,6 +376,10 @@ static OSStatus copySupportedPropertyDictionary(VTVideoDecoderRef ref, CFDiction
 static Boolean canAcceptFormatDescription(VTVideoDecoderRef ref, CMVideoFormatDescriptionRef format)
 {
     Decoder *d = storage(ref);
+    if (d->software) {
+        const VTPluginDecoderClass *software = softwareVTable(d)->decoderClass;
+        return software->canAcceptFormatDescription && software->canAcceptFormatDescription(d->software, format);
+    }
     CFDataRef avcC = copyAvcC(format);
     const Boolean same = avcC && d->avcC && CFEqual(avcC, d->avcC);
     if (avcC) CFRelease(avcC);
@@ -292,6 +389,10 @@ static Boolean canAcceptFormatDescription(VTVideoDecoderRef ref, CMVideoFormatDe
 static OSStatus finishDelayedFrames(VTVideoDecoderRef ref)
 {
     Decoder *d = storage(ref);
+    if (d->software) {
+        const VTPluginDecoderClass *software = softwareVTable(d)->decoderClass;
+        return software->finishDelayedFrames ? software->finishDelayedFrames(d->software) : noErr;
+    }
     pthread_mutex_lock(&d->lock);
     h264_decoder_flush(d->h264);
     pthread_mutex_unlock(&d->lock);
@@ -303,6 +404,10 @@ static OSStatus finishDelayedFrames(VTVideoDecoderRef ref)
 static OSStatus invalidate(CMBaseObjectRef ref)
 {
     Decoder *d = storage(ref);
+    if (d->software) {
+        const VTPluginBaseClass *software = softwareVTable(d)->baseClass;
+        return software->invalidate ? software->invalidate(VTVideoDecoderGetCMBaseObject(d->software)) : noErr;
+    }
     pthread_mutex_lock(&d->lock);
     d->session = NULL;  // pictures still waiting are released without being emitted
     pthread_mutex_unlock(&d->lock);
@@ -313,6 +418,13 @@ static void finalize(CMBaseObjectRef ref)
 {
     Decoder *d = storage(ref);
     d->session = NULL;
+    if (d->frames)
+        os_log(gLog,
+               "AVD: session %ux%u in %{public}s ended: %u frames on NVDEC, %u with errors, mean %.2f ms decode + "
+               "%.2f ms copy",
+               d->width, d->height, getprogname(), d->frames, d->errors, ticksToMs(d->decodeTicks) / d->frames,
+               ticksToMs(d->copyTicks) / d->frames);
+    if (d->software) CFRelease(d->software);
     h264_decoder_destroy(d->h264);  // frees its buffers through the client, so before closing it
     nvdec_close(d->client);
     if (d->avcC) CFRelease(d->avcC);
@@ -324,23 +436,30 @@ static void finalize(CMBaseObjectRef ref)
 
 static CFStringRef copyDebugDescription(CMBaseObjectRef ref)
 {
-    return CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("<AVD NVDEC H.264 decoder %p>"), ref);
+    Decoder *d = storage(ref);
+    return CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("<AVD H.264 decoder %p on %s>"), ref,
+                                    d->software ? "Apple's software decoder" : "NVDEC");
 }
 
 static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRef allocator, void *value)
 {
-    (void)ref, (void)allocator;
+    Decoder *d = storage(ref);
     if (CFEqual(key, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder)) {
-        *(CFTypeRef *)value = CFRetain(kCFBooleanTrue);
+        *(CFTypeRef *)value = CFRetain(d->software ? kCFBooleanFalse : kCFBooleanTrue);
         return noErr;
     }
+    if (d->software && softwareVTable(d)->baseClass->copyProperty)
+        return softwareVTable(d)->baseClass->copyProperty(VTVideoDecoderGetCMBaseObject(d->software), key, allocator,
+                                                          value);
     return -12783;  // kCMBaseObjectError_ValueNotAvailable
 }
 
 static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef value)
 {
-    (void)ref, (void)key, (void)value;  // real-time, thread count, ...: nothing to tune on a fixed-function engine
-    return noErr;
+    Decoder *d = storage(ref);
+    if (d->software && softwareVTable(d)->baseClass->setProperty)
+        return softwareVTable(d)->baseClass->setProperty(VTVideoDecoderGetCMBaseObject(d->software), key, value);
+    return noErr;  // real-time, thread count, ...: nothing to tune on a fixed-function engine
 }
 
 static const VTPluginBaseClass kBaseClass = {
@@ -353,6 +472,8 @@ static const VTPluginBaseClass kBaseClass = {
     .setProperty = setProperty,
 };
 
+// Version 1: the slots VideoToolbox reads from every decoder. H264SW declares version 3 and leaves setProperties,
+// copySerializableProperties and finishDelayedFrames empty, so VideoToolbox checks the optional slots before calling.
 static const VTPluginDecoderClass kDecoderClass = {
     .version = 1,
     .startSession = startSession,
@@ -372,7 +493,8 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     if (!client) {  // VideoToolbox goes on to H264SW
         static int logged;
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
-            os_log_error(gLog, "AVD: TegraNVDEC refused this process (%#x); H.264 stays in software here", error);
+            os_log_error(gLog, "AVD: TegraNVDEC refused %{public}s (%#x) after registration; H.264 goes to software",
+                         getprogname(), error);
         return kVTCouldNotFindVideoDecoderErr;
     }
     CMBaseObjectRef object = NULL;
@@ -394,12 +516,38 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     return noErr;
 }
 
+static void selfTest(void *context)
+{
+    (void)context;
+    char line[512];
+    const bool ok = clip_check(ClipCheckHardware, NULL, line, sizeof(line));
+    os_log_t log = os_log_create("com.ioswitch.avd", "selftest");
+    if (ok)
+        os_log(log, "vdectest: %{public}s (in %{public}s)", line, getprogname());
+    else
+        os_log_error(log, "vdectest: %{public}s (in %{public}s)", line, getprogname());
+}
+
 __attribute__((visibility("default"))) void AVDRegister(void);
 
 void AVDRegister(void)
 {
     gLog = os_log_create("com.ioswitch.avd", "decoder");
-    if (!nvdec_service_present()) return;  // switch-nvdec=3 not set, or NVDEC did not come up: nothing changes
+    if (!nvdec_service_present()) return;  // switch-nvdec=0, or NVDEC did not prove itself at boot: nothing changes
+    int error = 0;
+    NVDECClient *probe = nvdec_open(&error);
+    if (!probe) {
+        os_log(gLog, "AVD: TegraNVDEC refuses %{public}s (%#x): H.264 stays on Apple's software decoder here",
+               getprogname(), error);
+        return;
+    }
     const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_H264, createInstance);
-    if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('avc1') failed: %d", (int)status);
+    const bool claimed = !status && nvdec_claim_self_test(probe);
+    nvdec_close(probe);
+    if (status) {
+        os_log_error(gLog, "AVD: VTRegisterVideoDecoder('avc1') failed: %d", (int)status);
+        return;
+    }
+    // Off the registry's thread: the check's own session looks the registry up once this registration returns.
+    if (claimed) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), NULL, selfTest);
 }

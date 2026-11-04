@@ -2,9 +2,9 @@
 // Inside TegraNVDEC: the engine (TegraNVDEC.cpp), the buffer arena (TegraNVDECMemory.cpp), the user client
 // (TegraNVDECUserClient.cpp) and the boot self-test (TegraNVDECSelfTest.cpp).
 //
-// Boot-arg switch-nvdec=<stage>: 1 brings NVDEC up (N0 host1x, N1 power and falcon, N2 syncpoint proof of life);
-// 2 also reserves the arena and decodes an embedded H.264 picture (N3); 3 also publishes the TegraNVDEC service and
-// its user client (N4). switch-nvdec-mib=<MiB> sizes the arena (default 48).
+// On by default (stage 3). Boot-arg switch-nvdec=<stage> overrides: 0 off; 1 brings NVDEC up (N0 host1x, N1 power
+// and falcon, N2 syncpoint proof of life); 2 also reserves the arena and decodes an embedded H.264 picture (N3); 3 also
+// publishes the TegraNVDEC service and its user client (N4). switch-nvdec-mib=<MiB> sizes the arena (default 48).
 #ifndef TEGRA_NVDEC_H
 #define TEGRA_NVDEC_H
 #include <stddef.h>
@@ -25,6 +25,7 @@ typedef bool (*TegraNVDECResolve)(void *context, uint32_t handle, TegraNVDECBloc
 
 extern "C" {
 int tegra_nvdec_arena_init(uint64_t bytes);
+void tegra_nvdec_arena_release(void);  // a failed bring-up gives the whole arena back (engine in reset first)
 int tegra_nvdec_arena_alloc(uint64_t size, TegraNVDECBlock *block);
 void tegra_nvdec_arena_free(const TegraNVDECBlock *block);
 IOMemoryDescriptor *tegra_nvdec_arena_descriptor(const TegraNVDECBlock *block);  // for mapping into a client
@@ -36,13 +37,15 @@ void tegra_nvdec_cache_flush(const void *va, size_t size);  // dc civac: the nex
 // and queues it on host1x channel 0. Returns 0 and the job's fence, or a negative errno-style value.
 int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, void *context, uint32_t *fence,
                     const char **why);
-// Sleeps until the fence is reached (syncpoint interrupt). -60 when the engine did not finish in time: the engine is
-// then wedged and refuses work until the next resume.
-int tegra_nvdec_wait(uint32_t fence, uint32_t timeoutUs);
+// Sleeps until the fence is reached (syncpoint interrupt), bounded by the engine's own GP timer per queued job. Past
+// that bound: a one-line panic once published (N4); during the N3 self-test, -60 and the engine refuses work.
+int tegra_nvdec_wait(uint32_t fence);
 bool tegra_nvdec_ready(void);
+// True for exactly one caller per boot: the process that runs the userland clip check (AVD.videodecoder).
+bool tegra_nvdec_claim_self_test(void);
 
-int tegra_nvdec_self_test(void);  // N3
-int tegra_nvdec_publish(void);    // N4
+int tegra_nvdec_self_test(void);            // N3
+int tegra_nvdec_publish(uint64_t arenaUs);  // N4
 }
 
 #endif

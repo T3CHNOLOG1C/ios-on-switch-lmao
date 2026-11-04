@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// HEVCH8.videodecoder: Apple's own software HEVC decoder, registered in VideoToolbox's hardware slot.
+// HEVCH8.videodecoder: Apple's own software HEVC decoder, registered in VideoToolbox's hardware slot for still images.
 //
 // How 21H461 decodes HEIC/HEVC on iPad7,1 (disassembly of the dyld cache):
 //   ImageIO HEIFReadPlugin -> CMPhoto (dlsym'd) -> VTDecompressionSession / VTTileDecompressionSession -> a VideoToolbox
@@ -7,32 +7,51 @@
 //   VTLoadVideoDecoders), which dlopens a fixed table of paths and calls each one's register function:
 //     /System/Library/VideoDecoders/H264H8.videodecoder  H264H8Register: registers the A10X hardware H.264 and HEVC
 //         decoders only when IOServiceMatching("AppleD5500") finds the VXD393 kext's service. There is none here.
-//     /System/Library/VideoCodecs/VCPHEVC.videocodec   VCPHEVCRegisterDecoder: always registers the software decoder
-//         HEVCVideoDecoder_CreateInstance for 'hvc1' with kVTVideoDecoder_IsHardwareAccelerated = false.
 //     /System/Library/VideoDecoders/HEVCH8.videodecoder  HEVCH8Register: a slot this SoC does not ship (the path is
 //         not in the dyld cache), so dlopen looks on disk. This file sits there through the userland overlay.
+//     /System/Library/VideoCodecs/VCPHEVC.videocodec   VCPHEVCRegisterDecoder: always registers the software decoder
+//         HEVCVideoDecoder_CreateInstance for 'hvc1' with kVTVideoDecoder_IsHardwareAccelerated = false.
 //   With no options, ImageIO asks CMPhoto for AccelerationMode 0 (auto) and VideoToolbox falls back to the software
 //   decoder by itself. But kCGImageSourceUseHardwareAcceleration = true (QuickLook previews, PhotoLibraryServices
 //   thumbnail rebuilds) becomes AccelerationMode 2, CMPhoto's RequireHardwareCodec, and
-//   kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: those decodes fail without a hardware entry,
-//   and VTIsHardwareDecodeSupported('hvc1') answers false (MediaToolbox asks it for video).
+//   kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: those decodes fail without a hardware entry.
 //
 // So this registers the same software decoder again through VTRegisterVideoDecoder, which leaves
-// kVTVideoDecoder_IsHardwareAccelerated at its default, true. Every request then finds a decoder, and all of them
-// run Apple's NEON decoder on the CPU (tile decoding included). No Apple binary is patched. VTRegisterVideoDecoder and
-// HEVCVideoDecoder_CreateInstance are exported but not in the SDK, so both come from dlsym. An NVDEC-backed decoder
-// can take this slot later.
+// kVTVideoDecoder_IsHardwareAccelerated at its default, true, and those still-image decodes find a decoder (Apple's
+// NEON decoder on the CPU, tile decoding included). No Apple binary is patched. VTRegisterVideoDecoder and
+// HEVCVideoDecoder_CreateInstance are exported but not in the SDK, so both come from dlsym.
+//
+// The entry is a stand-in, and VTIsHardwareDecodeSupported('hvc1') answers from the registry alone, so it would tell
+// every process that HEVC decodes in hardware. NVDEC does decode HEVC Main/Main10, but AVD.videodecoder does not drive
+// it yet: HEVC video is software. Processes that choose streaming codecs from that answer (Safari's WebKit processes
+// for MSE, MediaCapabilities and HLS; mediaplaybackd and mediaserverd for AVPlayer's HLS variants; videocodecd) get no
+// entry here, so they see NO and pick H.264, which AVD decodes on NVDEC. When AVD drives HEVC on NVDEC, it takes the
+// 'hvc1' hardware slot wherever TegraNVDEC is open to the process and this stand-in steps aside there.
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
 #include <os/log.h>
+#include <stdlib.h>
+#include <string.h>
 
 typedef OSStatus (*CreateInstance)(FourCharCode codecType, CFAllocatorRef allocator, void **decoderOut);
 typedef OSStatus (*RegisterDecoder)(FourCharCode codecType, CreateInstance create);
 
 __attribute__((visibility("default"))) void HEVCH8Register(void);
 
+static bool choosesStreamingCodecs(const char *process)
+{
+    static const char *const kExact[] = {"mediaplaybackd", "mediaserverd", "videocodecd", "MobileSafari",
+                                         "SafariViewService"};
+    if (!process) return false;
+    if (!strncmp(process, "com.apple.WebKit.", strlen("com.apple.WebKit."))) return true;
+    for (size_t i = 0; i < sizeof(kExact) / sizeof(kExact[0]); i++)
+        if (!strcmp(process, kExact[i])) return true;
+    return false;
+}
+
 void HEVCH8Register(void)
 {
+    if (choosesStreamingCodecs(getprogname())) return;  // HEVC is software here, and this process is told so
     os_log_t log = os_log_create("com.ioswitch.hevc", "register");
     void *codec = dlopen("/System/Library/VideoCodecs/VCPHEVC.videocodec", RTLD_NOW | RTLD_LOCAL);
     CreateInstance create = codec ? (CreateInstance)dlsym(codec, "HEVCVideoDecoder_CreateInstance") : NULL;
@@ -46,5 +65,5 @@ void HEVCH8Register(void)
     if (status)
         os_log_error(log, "HEVCH8: VTRegisterVideoDecoder('hvc1') failed: %d", (int)status);
     else
-        os_log(log, "HEVCH8: software HEVC (VCPHEVC) registered as the hardware 'hvc1' decoder");
+        os_log(log, "HEVCH8: software HEVC (VCPHEVC) registered as the hardware 'hvc1' decoder for still images");
 }

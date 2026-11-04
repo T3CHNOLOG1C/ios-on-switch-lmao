@@ -139,10 +139,12 @@ OSDefineMetaClassAndStructors(SwitchSuspend, IOService)
         return "switch-cpu-mode=dfll (the DFLL is not restored after SC7)";
     }
     if (bootArg("switch-usb-host") || bootArg("switch-dp")) return "USB-C host/DP (no suspend path)";
-    // When the video agent's tegra_nvdec_suspend/_resume exist: call them after the Joy-Con hooks in sleepDevices() and
-    // before them in wakeDevices(), and drop this line.
-    if (bootArg("switch-nvdec") || bootArg("switch-host1x"))
-        return "switch-nvdec/switch-host1x (no tegra_nvdec_suspend yet)";
+    // TegraNVDEC is on unless switch-nvdec=0 (r11-nvdec). Its hooks exist (TegraHost1x.cpp tegra_nvdec_suspend /
+    // tegra_nvdec_resume: quiesce, host1x save/restore, falcon reload): to allow sleep with it, call them after the
+    // Joy-Con hooks in sleepDevices() and before them in wakeDevices(), and drop this line.
+    unsigned nvdec = 3;
+    PE_parse_boot_argn("switch-nvdec", &nvdec, sizeof(nvdec));
+    if (nvdec || bootArg("switch-host1x")) return "TegraNVDEC/host1x (on unless switch-nvdec=0; hooks not wired yet)";
     return nullptr;
 }
 

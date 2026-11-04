@@ -81,6 +81,13 @@ NVDECClient *nvdec_open(int *error)
     return c;
 }
 
+bool nvdec_claim_self_test(NVDECClient *c)
+{
+    TegraNVDECClaim reply = {0, 0};
+    return call(c, c->selector, TegraNVDECMethodClaimSelfTest, NULL, 0, &reply, sizeof(reply)) == KERN_SUCCESS &&
+           reply.claimed;
+}
+
 void nvdec_close(NVDECClient *c)
 {
     if (!c) return;

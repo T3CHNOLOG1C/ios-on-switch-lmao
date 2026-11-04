@@ -6,6 +6,8 @@
 // buffer the relocation points into: the decoded surfaces (pitch x 32-aligned height, NV12 block linear), the
 // colocated-motion slots (one per picture index used), the MB history, the history buffer and the status record.
 // Reads (bitstream, slice offsets) are bounded by their buffers too. Only H.264 frames are accepted for now.
+// Every job must run with the engine's GP timer on and at most its default limit (1 << 27 cycles), which is what
+// bounds a job whatever its bitstream holds (TegraNVDEC.cpp kJobBoundUs).
 #ifndef TEGRA_NVDEC_CHECK_H
 #define TEGRA_NVDEC_CHECK_H
 #include <stdint.h>
@@ -35,8 +37,9 @@ static inline const char *tegra_nvdec_check(const TegraNVDECSubmit *s, const uin
                 if (e->value != s->codec) return "application id";
                 bit = 0;
                 break;
-            case NVC5B0_SET_CONTROL_PARAMS:  // codec type, GPTIMER_ON, RET_ERROR, ERR_CONCEAL_ON, MBTIMER_ON
-                if ((e->value & 0xf) != s->codec || (e->value & ~0x207fu) != 0) return "control params";
+            case NVC5B0_SET_CONTROL_PARAMS:  // codec type, GPTIMER_ON (required), RET_ERROR, ERR_CONCEAL_ON, MBTIMER_ON
+                if ((e->value & 0xf) != s->codec || (e->value & ~0x207fu) != 0 || !(e->value & 0x10))
+                    return "control params";
                 bit = 1;
                 break;
             case NVC5B0_SET_PICTURE_INDEX: bit = 2; break;
@@ -84,6 +87,7 @@ static inline const char *tegra_nvdec_check(const TegraNVDECSubmit *s, const uin
     for (uint32_t i = 0; i < sizeof(p->encryption_params); i++)
         if (otf[i]) return "encryption parameters";
     if (p->hint_dump_en) return "hint dump";
+    if (p->gptimer_timeout_value > (1u << 27)) return "GP timer limit";  // 0: the firmware's 1 << 27
     const uint32_t w = (uint32_t)p->PicWidthInMbs, h = (uint32_t)p->FrameHeightInMbs;
     if (p->PicWidthInMbs < 3 || w > 256 || p->FrameHeightInMbs < 1 || h > 256) return "dimensions";
     if (!p->frame_mbs_only_flag || p->field_pic_flag || p->MbaffFrameFlag) return "not progressive";

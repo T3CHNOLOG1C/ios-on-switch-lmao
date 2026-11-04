@@ -92,6 +92,7 @@ uint32_t gArmed[kSyncpts / 32];  // threshold interrupts a waiter enabled (gLock
 int gState;                      // 0 not started, 1 up, 2 suspended, < 0 failed
 uint32_t gSaved[kSyncpts];       // syncpoint values across SC7, which resets the sync unit
 unsigned gClockMHz;
+bool gStrict;  // a client proved its engine: a lost interrupt panics from here on (tegra_host1x_set_strict)
 
 inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
@@ -212,14 +213,16 @@ void syncConfigure()
     }
 }
 
-void attachInterrupt()
+// Before any engine behind host1x is proven, a missing interrupt is a bring-up failure (one line, nothing published),
+// not a panic: host1x comes up by default for NVDEC and has never run on this board.
+bool attachInterrupt()
 {
     gLoop = IOWorkLoop::workLoop();
     IOService *nub = ioswitch_interrupt_nub(kIntid, false);
-    gIrq = gLoop ? IOInterruptEventSource::interruptEventSource(gLoop, &interruptOccurred, nub, 0) : nullptr;
-    if (!gIrq || gLoop->addEventSource(gIrq) != kIOReturnSuccess)
-        panic("TegraHost1x: cannot attach the syncpoint interrupt (INTID %u)", kIntid);
+    gIrq = gLoop && nub ? IOInterruptEventSource::interruptEventSource(gLoop, &interruptOccurred, nub, 0) : nullptr;
+    if (!gIrq || gLoop->addEventSource(gIrq) != kIOReturnSuccess) return false;
     gIrq->enable();
+    return true;
 }
 
 uint64_t nowUs()
@@ -245,7 +248,7 @@ int bringUp()
     if (r32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_HC)
         w32(gMc, MC_HOTRESET_CTRL, r32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_HC);
     syncConfigure();
-    attachInterrupt();
+    if (!attachInterrupt()) return fail("cannot attach the syncpoint interrupt, INTID", kIntid);
     if (!channelAlloc()) return fail("no push buffer below 4 GiB", 0);
     channelProgram();
     gState = 1;
@@ -263,8 +266,8 @@ int bringUp()
     if (ret) {
         char state[160];
         tegra_host1x_describe(state, sizeof(state));
-        IOLog("TegraHost1x: H1 FAIL self-test syncpoint %u stayed at %u (%d), %s\n", id, tegra_host1x_syncpt_read(id),
-              ret, state);
+        IOLog("TegraHost1x: H1 FAIL self-test syncpoint %u at %u (%s), %s\n", id, tegra_host1x_syncpt_read(id),
+              ret == TEGRA_HOST1X_ELOST ? "reached, but its interrupt never came" : "not reached", state);
         gState = TEGRA_HOST1X_ENODEV;
         return gState;
     }
@@ -313,7 +316,8 @@ extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id)
 
 // Linux host1x_intr_add_fence order: threshold, then enable; the value is read again after arming so an increment
 // that landed in between is not slept on. A wait that ends with the syncpoint's status bit still set at the
-// controller, after a grace period for an action under way, means the interrupt never reached the CPU: panic.
+// controller, after a grace period for an action under way, means the interrupt never reached the CPU: a panic once
+// strict (an engine was proven and published), TEGRA_HOST1X_ELOST while its probe is still running.
 extern "C" int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_t timeoutUs)
 {
     if (gState != 1) return TEGRA_HOST1X_ENODEV;
@@ -335,6 +339,10 @@ extern "C" int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_
         }
         if (!(sync(SYNC_INT_STATUS + 4 * word) & bit)) break;
         if (grace) {
+            if (!__atomic_load_n(&gStrict, __ATOMIC_ACQUIRE)) {
+                ret = TEGRA_HOST1X_ELOST;
+                break;
+            }
             char gic[192];
             ioswitch_interrupt_describe(kIntid, gic, sizeof(gic));
             panic("TegraHost1x: syncpoint %u threshold interrupt lost (INTID %u): value %u threshold %u INT_STATUS[%u] "
@@ -349,6 +357,11 @@ extern "C" int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_
     gArmed[word] &= ~bit;
     IOLockUnlock(gLock);
     return ret;
+}
+
+extern "C" void tegra_host1x_set_strict(void)
+{
+    __atomic_store_n(&gStrict, true, __ATOMIC_RELEASE);
 }
 
 // Linux push_buffer_push + cdma_flush: words go in at PUT (wrapping at the RESTART slot), are cleaned to DRAM, and

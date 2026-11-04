@@ -19,7 +19,9 @@
     "@2x one by scripts/progressui_logo.py into build/ (Apple's artwork, not in git); missing, it is left out.",
     "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/IOSwitchPortrait.h).",
     "J120's speaker strips, VirtualAudio's DSP chain for the built-in speaker port (tuned for J120's four MAX98723",
-    "drivers), are shown as stereo pass-through ones from drivers/SwitchAudio/tunings, gated like the plug-in."
+    "drivers), are shown as stereo pass-through ones from drivers/SwitchAudio/tunings, gated like the plug-in.",
+    "The VideoDecoders union (HEVCH8, AVD) has no gate: AVD registers only in processes that may open the TegraNVDEC",
+    "service, which the kernel publishes once NVDEC proves itself at boot (switch-nvdec=0 turns NVDEC off)."
   ],
   "files": [
     {
@@ -73,8 +75,12 @@
     {
       "path": "/System/Library/VideoDecoders/HEVCH8.videodecoder",
       "source": "build/switch-video/HEVCH8.videodecoder",
-      "trust": true,
-      "boot-arg": "switch-hevc"
+      "trust": true
+    },
+    {
+      "path": "/System/Library/VideoDecoders/AVD.videodecoder",
+      "source": "build/switch-video/AVD.videodecoder",
+      "trust": true
     },
     {
       "path": "/System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo~ipad.png",

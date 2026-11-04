@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// N4 (switch-nvdec=3): the TegraNVDEC service and its user client (ABI in TegraNVDECABI.h).
+// N4 (on by default; switch-nvdec=0 off): the TegraNVDEC service and its user client (ABI in TegraNVDECABI.h).
 //
-// The client class is named AppleD5500UserClient. iPad7,1's own decoder (AppleD5500, the VXD393 kext, not loaded
-// here) is reached through a user client of that name, and 21H461's sandbox profiles list it wherever video is
-// decoded on this device, so that is the name VideoToolbox's processes may open. The service is not called AppleD5500:
+// The client class is named AppleD5500UserClient, the name of iPad7,1's own decoder client (AppleD5500, the VXD393
+// kext, not loaded here), which some of 21H461's sandbox profiles may admit. The service is not called AppleD5500:
 // H264H8.videodecoder (in the dyld cache) matches that name and would register Apple's decoder against this driver.
-// When decoding runs out of process (CoreMedia's SeparateCodecProcess feature flag), videocodecd opens it, and the
-// service names that process for the kernel's sandbox grant (xnu IOUserClient.cpp native_sandbox_grant).
+// The processes known to decode video are granted the service outright (xnu IOUserClient.cpp native_sandbox_grant,
+// first 16 characters of the process name): the WebKit processes (Safari's media runs in com.apple.WebKit.GPU; the
+// grant's 16 characters, "com.apple.WebKit", cover WebContent and Networking too), mediaplaybackd (AVPlayer's
+// out-of-process playback: Photos, Files, Safari's non-MSE video), mediaserverd, videocodecd (CoreMedia's
+// SeparateCodecProcess) and MobileSlideShow (Photos). Any other process gets the client only if its own profile admits
+// it; AVD.videodecoder registers nothing in a process that cannot open it, so VideoToolbox's answers stay true there.
 // The sandbox may admit only some selectors of the class, so every call is tunnelled through whichever one it admits.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
@@ -83,7 +86,7 @@ bool AppleD5500UserClient::resolve(void *context, uint32_t handle, TegraNVDECBlo
 bool AppleD5500UserClient::quiesce()
 {
     if (!submitted_) return true;
-    const int ret = tegra_nvdec_wait(lastFence_, 1000000);
+    const int ret = tegra_nvdec_wait(lastFence_);
     return ret == 0 || !tegra_nvdec_ready();
 }
 
@@ -148,16 +151,17 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         {sizeof(TegraNVDECBuffer), 0},
         {sizeof(TegraNVDECSubmit), sizeof(TegraNVDECFence)},
         {sizeof(TegraNVDECWait), 0},
+        {0, sizeof(TegraNVDECClaim)},
     };
-    if (method < TegraNVDECMethodGetInfo || method > TegraNVDECMethodWait || inSize != kSizes[method].in ||
+    if (method < TegraNVDECMethodGetInfo || method > TegraNVDECMethodClaimSelfTest || inSize != kSizes[method].in ||
         *outSize < kSizes[method].out)
         return kIOReturnBadArgument;
     *outSize = kSizes[method].out;
 
     if (method == TegraNVDECMethodWait) {  // no lock: other calls of this connection may proceed while it sleeps
         const TegraNVDECWait *w = static_cast<const TegraNVDECWait *>(in);
-        if (w->invalidate_count > TEGRA_NVDEC_MAX_RANGES || w->timeout_us > 10000000) return kIOReturnBadArgument;
-        const int ret = tegra_nvdec_wait(w->fence, w->timeout_us);
+        if (w->invalidate_count > TEGRA_NVDEC_MAX_RANGES) return kIOReturnBadArgument;
+        const int ret = tegra_nvdec_wait(w->fence);  // bounded by the kernel, whatever timeout_us says
         if (ret) return ioreturn(ret);
         IOLockLock(lock_);
         IOReturn result = kIOReturnSuccess;
@@ -238,6 +242,12 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         reply->reserved = 0;
         break;
     }
+    case TegraNVDECMethodClaimSelfTest: {
+        TegraNVDECClaim *reply = static_cast<TegraNVDECClaim *>(out);
+        reply->claimed = tegra_nvdec_claim_self_test();
+        reply->reserved = 0;
+        break;
+    }
     default: ret = kIOReturnUnsupported; break;
     }
     IOLockUnlock(lock_);
@@ -305,7 +315,7 @@ IOReturn TegraNVDEC::newUserClient(task_t task, void *securityID, UInt32 type, O
     return kIOReturnSuccess;
 }
 
-extern "C" int tegra_nvdec_publish(void)
+extern "C" int tegra_nvdec_publish(uint64_t arenaUs)
 {
     IOService *resources = IOService::getResourceService();
     TegraNVDEC *service = OSTypeAlloc(TegraNVDEC);
@@ -315,7 +325,8 @@ extern "C" int tegra_nvdec_publish(void)
         return -12;
     }
     service->setProperty("IOUserClientClass", "AppleD5500UserClient");
-    service->setProperty("NativeSandboxGrantProcess", "videocodecd");
+    service->setProperty("NativeSandboxGrantProcess",
+                         "com.apple.WebKit,mediaplaybackd,mediaserverd,videocodecd,MobileSlideShow");
     service->setProperty("TegraNVDECABIVersion", (unsigned long long)TEGRA_NVDEC_ABI_VERSION, 32);
     if (!service->attach(resources)) {
         service->release();
@@ -331,8 +342,9 @@ extern "C" int tegra_nvdec_publish(void)
     service->registerService();
     uint64_t total = 0, free = 0;
     tegra_nvdec_arena_usage(&total, &free);
-    IOLog("TegraNVDEC: N4 ok service published (user client AppleD5500UserClient, ABI %u, arena %llu MiB)\n",
-          TEGRA_NVDEC_ABI_VERSION, total >> 20);
+    IOLog("TegraNVDEC: N4 ok service published (user client AppleD5500UserClient, ABI %u, arena %llu MiB reserved in "
+          "%llu ms)\n",
+          TEGRA_NVDEC_ABI_VERSION, total >> 20, arenaUs / 1000);
     service->release();  // the attachment keeps it
     return 0;
 }

@@ -62,6 +62,7 @@ boot_package(
         "//out/native-a57/root-v1/tree:joyconpaird": "build/switch-joycon/joyconpaird",
         "//out/native-a57/root-v1/tree:joyconnfc": "build/switch-joycon/joyconnfc",
         "//out/native-a57/root-v1/tree:HEVCH8": "build/switch-video/HEVCH8.videodecoder",
+        "//out/native-a57/root-v1/tree:AVD": "build/switch-video/AVD.videodecoder",
         "//bazel/pinned:overlay/apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
     },
     overlay_files = ["//out/native-a57/root-v1/tree:overlay_sources"],

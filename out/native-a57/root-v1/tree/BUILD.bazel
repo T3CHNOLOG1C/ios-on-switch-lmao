@@ -1085,7 +1085,8 @@ ios_binary(
     sign_identifier = "com.ioswitch.audio",
 )
 
-# HEVCH8.videodecoder: Apple's software HEVC decoder in VideoToolbox's hardware slot (gated on switch-hevc).
+# HEVCH8.videodecoder: Apple's software HEVC decoder in VideoToolbox's hardware slot, for still images (HEIC) outside the
+# processes that choose streaming codecs.
 ios_binary(
     name = "HEVCH8",
     srcs = ["drivers/SwitchVideoDecoders/HEVCH8.c"],
@@ -1104,7 +1105,8 @@ ios_binary(
     sign_identifier = "com.ioswitch.hevch8",
 )
 
-# AVD.videodecoder: H.264 on NVDEC as VideoToolbox's hardware 'avc1' decoder.
+# AVD.videodecoder: H.264 on NVDEC as VideoToolbox's hardware 'avc1' decoder (registered where TegraNVDEC is open to
+# the process), with the once-per-boot clip check (ClipCheck.c over test/VDECClip.h).
 ios_binary(
     name = "AVD",
     srcs = [
@@ -1113,11 +1115,12 @@ ios_binary(
         "drivers/SwitchVideoDecoders/AVD/H264Syntax.c",
         "drivers/SwitchVideoDecoders/AVD/NVDECClient.c",
         "drivers/SwitchVideoDecoders/AVD/BlockLinear.c",
+        "drivers/SwitchVideoDecoders/AVD/ClipCheck.c",
     ],
     hdrs = glob([
         "drivers/SwitchVideoDecoders/AVD/*.h",
         "drivers/TegraNVDEC/**/*.h",
-    ]),
+    ]) + ["drivers/SwitchVideoDecoders/test/VDECClip.h"],
     copts = [
         "-O2",
         "-Wall",
@@ -1143,11 +1146,17 @@ ios_binary(
     sign_identifier = "com.ioswitch.avd",
 )
 
-# vdectest: the layer-2 NVDEC check.
+# vdectest: the clip check as a command (AVD/ClipCheck.c); on the device the same check runs inside AVD.videodecoder.
 ios_binary(
     name = "vdectest",
-    srcs = ["drivers/SwitchVideoDecoders/test/vdectest.c"],
-    hdrs = ["drivers/SwitchVideoDecoders/test/VDECClip.h"],
+    srcs = [
+        "drivers/SwitchVideoDecoders/test/vdectest.c",
+        "drivers/SwitchVideoDecoders/AVD/ClipCheck.c",
+    ],
+    hdrs = [
+        "drivers/SwitchVideoDecoders/AVD/ClipCheck.h",
+        "drivers/SwitchVideoDecoders/test/VDECClip.h",
+    ],
     copts = [
         "-O2",
         "-Wall",
@@ -1161,7 +1170,6 @@ ios_binary(
         "CoreVideo",
         "-framework",
         "VideoToolbox",
-        "-lz",
     ],
     out = "build/switch-video/vdectest",
     sign_identifier = "com.ioswitch.vdectest",

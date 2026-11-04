@@ -16,10 +16,11 @@ extern "C" {
 
 enum {
     TEGRA_HOST1X_OK = 0,
-    TEGRA_HOST1X_ENODEV = -19,  // not started (switch-host1x / switch-nvdec off) or bring-up failed
+    TEGRA_HOST1X_ENODEV = -19,  // not started (no client asked: switch-nvdec=0 and no switch-host1x) or failed
     TEGRA_HOST1X_EINVAL = -22,
     TEGRA_HOST1X_ENOMEM = -12,
     TEGRA_HOST1X_ETIMEDOUT = -60,  // the engine did not reach the threshold in time (its interrupt was not lost)
+    TEGRA_HOST1X_ELOST = -5,       // the threshold was reached but its interrupt never came (before strict mode only)
 };
 
 // Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._VIC, ..._NVDEC).
@@ -61,8 +62,11 @@ int tegra_host1x_syncpt_alloc(uint32_t *id);
 uint32_t tegra_host1x_syncpt_read(uint32_t id);
 
 // Sleeps until syncpoint `id` reaches `threshold` (wrapping compare) or `timeoutUs` pass. A threshold interrupt that
-// is pending at the controller but never reaches the CPU panics (one line, with the GIC's state).
+// is pending at the controller but never reaches the CPU panics (one line, with the GIC's state) once a client has
+// proven its engine (tegra_host1x_set_strict); before that it returns TEGRA_HOST1X_ELOST, so a probe that meets a
+// missing interrupt logs its own failure line and leaves its engine unpublished instead of stopping the boot.
 int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_t timeoutUs);
+void tegra_host1x_set_strict(void);
 
 // Copies `count` opcode words into channel 0's push buffer and starts them. The stream must leave its syncpoint
 // increments to the caller's wait; `count` must be below 4096. Serialised; returns at once.
@@ -84,7 +88,7 @@ void tegra_nvdec_resume(void);
 // Channel 0 state for a failure line: DMAGET, DMAPUT, CBSTAT (class and offset), CBREAD (last word).
 void tegra_host1x_describe(char *buffer, size_t size);
 
-// Boot hook: inert unless the boot-arg switch-host1x is non-zero (switch-nvdec also starts it).
+// Boot hook: inert unless the boot-arg switch-host1x is non-zero (TegraNVDEC, on by default, starts host1x itself).
 int tegra_host1x_probe(void);
 
 #ifdef __cplusplus

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Host test: block_linear_copy against the per-byte GOB formula, for aligned and unaligned windows.
-// Build: cc -O2 -o blocklinear_host blocklinear_host.c ../AVD/BlockLinear.c
+// Build: cc -O2 -o blocklinear_host blocklinear_host.c ../AVD/BlockLinear.c (tests/test_switch_video.py)
 #include <stdio.h>
 #include <stdlib.h>
 #include "../AVD/BlockLinear.h"
@@ -14,8 +14,9 @@ static uint32_t offset(uint32_t x, uint32_t y, uint32_t pitch)
 int main(void)
 {
     const uint32_t pitch = 1920, rows = 1088;
+    // out is written at a pitch of width + 5 (an unaligned destination), so it is sized for that.
     uint8_t *bl = malloc((size_t)pitch * rows), *lin = malloc((size_t)pitch * rows),
-            *out = malloc((size_t)pitch * rows);
+            *out = malloc((size_t)(pitch + 5) * rows);
     for (uint32_t i = 0; i < pitch * rows; i++) lin[i] = (uint8_t)(rand() >> 7);
     for (uint32_t y = 0; y < rows; y++)
         for (uint32_t x = 0; x < pitch; x++) bl[offset(x, y, pitch)] = lin[y * pitch + x];

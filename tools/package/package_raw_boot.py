@@ -76,9 +76,9 @@ COMMAND_LINE = ' '.join([
     # SD card: re-initialize into UHS-I SDR104 (1.8 V, ~200 MHz, tuned) instead of U-Boot's 3.3 V 48 MHz.
     # Remove to keep the inherited bus mode (NativeIOSwitchBlock.cpp, panics name the failing step).
     'ioswitch-sd-uhs=1',
-    # HEIC/HEVC everywhere on the CPU: Apple's software HEVC decoder (VCPHEVC) also registered in VideoToolbox's hardware
-    # slot, so hardware-required decodes (QuickLook previews, Photos thumbnails) work (overlay HEVCH8.videodecoder).
-    'switch-hevc=1',
+    # 11-04 r11-nvdec: 'switch-hevc=1' dropped (14 bytes free). It only gated the overlay's VideoDecoders union, which is
+    # now always shown: HEVCH8 (software HEVC in VideoToolbox's hardware slot, for HEIC) and AVD (H.264 on NVDEC, which
+    # TegraNVDEC turns on by default; switch-nvdec=0 turns it off).
     # 10-30 07:35 boot froze at IOMobileFramebuffer start with no SwitchThermal/SwitchPerf line on screen: test without
     # the CPU raise (998 MHz / 800 mV as hekate leaves it).
     # 10-31 r3-cpu: the raise is staged (switch-perf-steps=N stops after step N; 0 = read and report only, no writes).

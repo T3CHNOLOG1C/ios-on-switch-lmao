@@ -97,8 +97,11 @@ int run(char *line, size_t size)
         snprintf(line, size, "N3 FAIL submit refused (%d, %s)", ret, why ? why : "engine");
         return ret;
     }
-    if ((ret = tegra_nvdec_wait(fence, 500000))) {
-        snprintf(line, size, "N3 FAIL decode did not finish (%d; see the job line)", ret);
+    if ((ret = tegra_nvdec_wait(fence))) {
+        snprintf(line, size, "N3 FAIL decode did not finish (%s; see the job line)",
+                 ret == -60  ? "past its bound"
+                 : ret == -5 ? "done, but its interrupt never came"
+                             : "engine refused");
         return ret;
     }
     const uint64_t us = nowUs() - began;

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVDEC user client ABI, v1 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
+// TegraNVDEC user client ABI, v2 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
 //
-// The service is "TegraNVDEC" (IOServiceMatching), published when switch-nvdec=3. Its user client's class is named
-// AppleD5500UserClient: that is the name iPadOS's sandbox profiles already admit wherever iPad7,1 decodes video (its
-// VXD393 decoder's client), so VideoToolbox can open it from the processes that decode. Open type TEGRA_NVDEC_OPEN_TYPE.
+// The service is "TegraNVDEC" (IOServiceMatching), published by default once NVDEC has proven itself (N4). Its user
+// client's class is named AppleD5500UserClient, iPad7,1's own decoder client (VXD393), which some of 21H461's sandbox
+// profiles may admit; the processes known to decode are granted outright (NativeSandboxGrantProcess on the service).
+// Open type TEGRA_NVDEC_OPEN_TYPE.
 //
 // Calls: IOConnectCallStructMethod on any selector the sandbox admits, input {TEGRA_NVDEC_TUNNEL_MAGIC, method,
 // record...}, output the method's record. Method TEGRA_NVDEC_TUNNEL_PROBE only proves a selector is admitted.
@@ -17,22 +18,25 @@
 //     into kernel-only memory after its sizes are checked against the buffers it makes NVDEC write.
 //   * Cache maintenance is explicit: Submit cleans the ranges the CPU wrote (bitstream, slice offsets), Wait
 //     invalidates the ranges the CPU will read (status, the decoded surface). Surfaces are never written by the CPU.
-//   * Jobs run in submission order; a fence is a syncpoint threshold. Wait sleeps on the syncpoint interrupt.
+//   * Jobs run in submission order; a fence is a syncpoint threshold. Wait sleeps on the syncpoint interrupt. Every job
+//     runs with NVDEC's GP timer (required by the checker), so the kernel bounds each wait itself; timeout_us is
+//     ignored. A job past that bound is a hardware fault and panics.
 #ifndef TEGRA_NVDEC_ABI_H
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION  1
+#define TEGRA_NVDEC_ABI_VERSION  2
 #define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
 #define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
 
 enum TegraNVDECMethod {
-    TegraNVDECMethodGetInfo = 1,      // -> TegraNVDECInfo
-    TegraNVDECMethodBufferAlloc = 2,  // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
-    TegraNVDECMethodBufferFree = 3,   // TegraNVDECBuffer -> (waits for the last job, revokes the client's mappings)
-    TegraNVDECMethodSubmit = 4,       // TegraNVDECSubmit -> TegraNVDECFence
-    TegraNVDECMethodWait = 5,         // TegraNVDECWait ->
+    TegraNVDECMethodGetInfo = 1,        // -> TegraNVDECInfo
+    TegraNVDECMethodBufferAlloc = 2,    // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
+    TegraNVDECMethodBufferFree = 3,     // TegraNVDECBuffer -> (waits for the last job, revokes the client's mappings)
+    TegraNVDECMethodSubmit = 4,         // TegraNVDECSubmit -> TegraNVDECFence
+    TegraNVDECMethodWait = 5,           // TegraNVDECWait ->
+    TegraNVDECMethodClaimSelfTest = 6,  // -> TegraNVDECClaim: claimed = 1 for exactly one caller per boot
 };
 
 enum { TEGRA_NVDEC_CODEC_H264 = 3 };  // NVDEC application id (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_H264)
@@ -86,7 +90,11 @@ typedef struct {
 } TegraNVDECFence;
 
 typedef struct {
-    uint32_t fence, timeout_us;
+    uint32_t claimed, reserved;
+} TegraNVDECClaim;
+
+typedef struct {
+    uint32_t fence, timeout_us;  // timeout_us: ignored (the kernel bounds every wait, see above)
     uint32_t invalidate_count, reserved;
     TegraNVDECRange invalidate[TEGRA_NVDEC_MAX_RANGES];
 } TegraNVDECWait;

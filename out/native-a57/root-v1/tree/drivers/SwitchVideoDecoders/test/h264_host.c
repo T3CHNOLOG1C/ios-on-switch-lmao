@@ -3,18 +3,26 @@
 // NVDEC backend and checks every submit with the kernel's checker (TegraNVDECCheck.h).
 //   h264_host <stream.264>             prints "out <decode index> <poc>" in display order (compare with ffprobe)
 //   h264_host <stream.264> --selftest  prints the first picture's submit as the kernel's N3 test vector (C source)
+//   h264_host --clip                   test/VDECClip.h's clip: every submit accepted, pictures out in x264's display
+//                                      order, and the checker refusing each kind of bad submit derived from the first
+//                                      one; prints "PASS h264 clip ..." (tests/test_switch_video.py)
 // Build: cc -O1 -I.. -o h264_host h264_host.c ../AVD/H264Syntax.c ../AVD/H264NVDEC.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../AVD/H264NVDEC.h"
 #include "../../TegraNVDEC/TegraNVDECCheck.h"
+#include "VDECClip.h"
 
 typedef struct {
     uint8_t *va[64];
     uint64_t size[64];
     unsigned decoded, failures;
     int selftest;
+    bool clip, haveFirst;
+    TegraNVDECSubmit first;  // the first submit and its relocations' room, for the refusal cases
+    uint64_t firstAvail[TEGRA_NVDEC_MAX_ENTRIES];
+    unsigned order[64], outputs;
 } Fake;
 
 static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -64,6 +72,11 @@ static int fakeSubmit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
         f->failures++;
         return -1;
     }
+    if (!f->haveFirst) {
+        f->first = *s;
+        memcpy(f->firstAvail, avail, sizeof(avail));
+        f->haveFirst = true;
+    }
     if (f->selftest == 1) {
         // The kernel test recreates the buffers itself: emit the setup, the bitstream and the slice offsets.
         const nvdec_h264_pic_s *p = (const nvdec_h264_pic_s *)s->setup;
@@ -109,7 +122,8 @@ static void fakeEmit(void *ctx, void *item)
 {
     Fake *f = ctx;
     Item *it = item;
-    if (!f->selftest) printf("out %u %d\n", it->index, it->poc);
+    if (f->clip && f->outputs < 64) f->order[f->outputs++] = it->index;
+    if (!f->selftest && !f->clip) printf("out %u %d\n", it->index, it->poc);
     free(it);
 }
 
@@ -118,21 +132,87 @@ static void fakeDiscard(void *ctx, void *item)
     (void)ctx, free(item);
 }
 
+// ---- --clip: the refusals the kernel must make, each from the clip's first (accepted) submit --------------------
+
+static int entryOf(const TegraNVDECSubmit *s, uint16_t method)
+{
+    for (uint32_t i = 0; i < s->entry_count; i++)
+        if (s->entries[i].method == method) return (int)i;
+    return -1;
+}
+
+static int refusals(const Fake *f)
+{
+    int bad = 0;
+    for (int c = 0; c <= 12; c++) {
+        TegraNVDECSubmit s = f->first;
+        uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES];
+        memcpy(avail, f->firstAvail, sizeof(avail));
+        nvdec_h264_pic_s *p = (nvdec_h264_pic_s *)s.setup;
+        const int control = entryOf(&s, NVC5B0_SET_CONTROL_PARAMS), execute = entryOf(&s, NVC5B0_EXECUTE);
+        const int luma = entryOf(&s, NVC5B0_SET_PICTURE_LUMA_OFFSET0),
+                  status = entryOf(&s, NVC5B0_SET_NVDEC_STATUS_OFFSET);
+        const int input = entryOf(&s, NVC5B0_SET_IN_BUF_BASE_OFFSET);
+        const char *expected = NULL;
+        switch (c) {
+        case 0: break;  // as decoded: accepted
+        case 1: s.codec = 4, expected = "codec"; break;
+        case 2: s.entries[control].value &= ~0x10u, expected = "control params"; break;  // GP timer off
+        case 3: p->gptimer_timeout_value = (1u << 27) + 1, expected = "GP timer limit"; break;
+        case 4: {
+            const TegraNVDECEntry last = s.entries[execute];
+            s.entries[execute] = s.entries[execute - 1];
+            s.entries[execute - 1] = last;
+            expected = "execute not last";
+            break;
+        }
+        case 5: s.entries[execute].value |= 1u, expected = "execute flags"; break;  // NOTIFY: a semaphore release
+        case 6: s.entries[luma].offset += 16, expected = "relocation alignment"; break;
+        case 7: avail[luma] = 64, expected = "surface too small"; break;
+        case 8: ((uint8_t *)&p->encryption_params)[0] = 1, expected = "encryption parameters"; break;
+        case 9:
+            memmove(&s.entries[status], &s.entries[status + 1], (s.entry_count - status - 1) * sizeof(s.entries[0]));
+            memmove(&avail[status], &avail[status + 1], (s.entry_count - status - 1) * sizeof(avail[0]));
+            s.entry_count--;
+            expected = "missing relocation";
+            break;
+        case 10: avail[input] = p->stream_len - 1, expected = "bitstream"; break;
+        case 11: p->PicWidthInMbs = 257, expected = "dimensions"; break;
+        case 12: s.setup_bytes -= 4, expected = "setup size"; break;
+        }
+        const char *why = tegra_nvdec_check(&s, avail);
+        if ((why == NULL) != (expected == NULL) || (why && strcmp(why, expected))) {
+            fprintf(stderr, "refusal case %d: checker said \"%s\", expected \"%s\"\n", c, why ? why : "accepted",
+                    expected ? expected : "accepted");
+            bad++;
+        }
+    }
+    return bad;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) return 2;
-    FILE *fp = fopen(argv[1], "rb");
-    if (!fp) return 2;
     static uint8_t data[64 << 20];
-    const size_t size = fread(data, 1, sizeof(data), fp);
-    fclose(fp);
-    Fake fake = {.selftest = argc > 2 && !strcmp(argv[2], "--selftest")};
+    Fake fake = {.clip = !strcmp(argv[1], "--clip")};
+    size_t size;
+    if (fake.clip) {
+        memcpy(data, kClip, sizeof(kClip));
+        size = sizeof(kClip);
+    } else {
+        FILE *fp = fopen(argv[1], "rb");
+        if (!fp) return 2;
+        size = fread(data, 1, sizeof(data), fp);
+        fclose(fp);
+        fake.selftest = argc > 2 && !strcmp(argv[2], "--selftest");
+    }
     const H264Backend backend = {&fake, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, fakeEmit, fakeDiscard};
     H264Decoder *d = h264_decoder_create(&backend);
 
     // Split into NAL units, then access units (7.4.1.2.3: a new one starts at an AUD, a parameter set or SEI after
     // slices, or a slice with first_mb_in_slice 0); re-pack each as 4-byte length-prefixed NAL units.
-    size_t starts[1 << 16], ends[1 << 16], count = 0;
+    static size_t starts[1 << 16], ends[1 << 16];
+    size_t count = 0;
     for (size_t i = 0; i + 3 <= size && count < (1 << 16);) {
         if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
             if (count) {
@@ -190,6 +270,18 @@ int main(int argc, char **argv)
     }
     h264_decoder_flush(d);
     h264_decoder_destroy(d);
+    if (fake.clip) {
+        // Display position p is the access unit i with kClipDisplay[i] == p.
+        int misordered = fake.outputs != (unsigned)kClipFrames;
+        for (unsigned p = 0; p < fake.outputs && p < (unsigned)kClipFrames; p++)
+            if (fake.order[p] >= (unsigned)kClipFrames || kClipDisplay[fake.order[p]] != (int)p) misordered++;
+        const int refused = fake.haveFirst ? refusals(&fake) : 1;
+        const bool pass = !errors && !fake.failures && !misordered && !refused && index == (unsigned)kClipFrames;
+        printf("%s h264 clip: %u access units, %u pictures, %d errors, %u refused by the checker, %d out of display "
+               "order, %d refusal cases wrong\n",
+               pass ? "PASS" : "FAIL", index, fake.decoded, errors, fake.failures, misordered, refused);
+        return pass ? 0 : 1;
+    }
     if (!fake.selftest)
         fprintf(stderr, "%u access units, %u pictures, %d errors, %u refused\n", index, fake.decoded, errors,
                 fake.failures);

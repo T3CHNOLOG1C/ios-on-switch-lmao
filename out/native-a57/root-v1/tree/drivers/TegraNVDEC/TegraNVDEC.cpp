@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra210 NVDEC (video decoder 2.0, a falcon behind host1x): bring-up, the job engine and sleep. tegra_nvdec_probe()
-// is inert unless the boot-arg switch-nvdec is non-zero (stages in TegraNVDEC.h); it then runs on its own thread:
+// runs the whole bring-up by default (stage 3; switch-nvdec=0 turns it off, 1 or 2 stop early, stages in
+// TegraNVDEC.h) on its own thread:
 //   N0  host1x up (drivers/TegraHost1x: clock adopted, syncpoint interrupt, channel 0, self-test)
 //   N1  power partition, clock, reset, falcon firmware loaded and started
 //   N2  proof of life through host1x channel 0 in NVDEC's class: an IMMEDIATE syncpoint increment (the engine's host
 //       interface answers) then an OP_DONE one (the falcon firmware answers), each completed by interrupt
 //   N3  (stage 2) an embedded H.264 picture decoded and checked (TegraNVDECSelfTest.cpp)
 //   N4  (stage 3) the TegraNVDEC service and its user client published (TegraNVDECUserClient.cpp)
-// One line per stage ("TegraNVDEC: N1 ok ..."), or the failing stage's FAIL line and nothing after it.
+// One line per stage ("TegraNVDEC: N1 ok ..."), or the failing stage's FAIL line and nothing after it. Until N4
+// publishes, every failure (a register that does not settle, an engine that does not answer, an interrupt that never
+// comes) is that one line: the engine is put back in reset with its clock off and nothing is published, so
+// VideoToolbox keeps Apple's software decoders. From N4 on the engine is proven and the project rule applies: a lost
+// syncpoint interrupt (TegraHost1x) or a job past its bound panics with one line.
 //
 // Jobs (tegra_nvdec_run): host1x channel 0 in NVDEC's class, each method written through the engine's THI
 // METHOD0/METHOD1 pair (averne's av_nvtegra_cmdbuf_push_value; L4T nvhost), the picture setup from a kernel-only slot,
 // then an OP_DONE increment of NVDEC's syncpoint: the job's fence. At most 8 jobs are queued, which bounds both the
-// push buffer and the 16 setup slots.
+// push buffer and the 16 setup slots. Every job runs with the engine's GP timer on (the checker requires it), which
+// ends a picture the firmware cannot finish after 1 << 27 cycles (329 ms at 408 MHz) with an error status, so bad
+// input never holds the engine: waits are bounded by kJobBoundUs per queued job, whatever timeout a client asks for,
+// and a job past that bound is a hardware fault.
 //
 // Firmware: the non-secure falcon image L4T loads as nvhost_nvdec020_ns.fw when CONFIG_NVDEC_BOOTLOADER is off
 // (switchroot's tegra_linux_defconfig), here linux-firmware's nvidia/tegra210/nvdec.bin (firmware/SOURCE). The secure
@@ -115,10 +123,14 @@ Image gImage;
 char gLine[256];
 
 // The job engine (tegra_nvdec_run / tegra_nvdec_wait / sleep).
-constexpr uint32_t kInFlight = 8, kSetupSlots = 16, kSetupSlotBytes = 1024, kJobTimeoutUs = 1000000;
+// kJobBoundUs: the GP timer's 329 ms plus margin; a wait covers at most kInFlight queued jobs.
+constexpr uint32_t kInFlight = 8, kSetupSlots = 16, kSetupSlotBytes = 1024, kJobBoundUs = 400000;
+constexpr uint32_t kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
-bool gUp, gWedged, gSuspended;
+bool gUp, gWedged, gSuspended, gPublished;
+volatile int gSelfTestClaimed;  // the userland clip check runs in one process per boot (tegra_nvdec_claim_self_test)
+uint64_t gArenaUs;
 TegraNVDECBlock gSetup;  // kSetupSlots picture setups, never mapped into a client
 
 inline uint32_t r32(volatile uint8_t *base, uint32_t o)
@@ -339,8 +351,9 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
     if (ret) {
         char host[200];
         tegra_host1x_describe(host, sizeof(host));
-        snprintf(gLine, sizeof(gLine), "N2 FAIL %s did not increment syncpoint %u (%u->%u, %d); %s; %s", stage, *id,
-                 *from, tegra_host1x_syncpt_read(*id), ret, falconState(), host);
+        snprintf(gLine, sizeof(gLine), "N2 FAIL %s %s syncpoint %u (%u->%u, %d); %s; %s", stage,
+                 ret == TEGRA_HOST1X_ELOST ? "incremented, but no interrupt came for" : "did not increment", *id, *from,
+                 tegra_host1x_syncpt_read(*id), ret, falconState(), host);
         return false;
     }
     return true;
@@ -349,29 +362,50 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
 void engineSuspend();
 void engineResume();
 
-void wedge(uint32_t fence)
+// A fence past its bound. Once published, the engine is proven and this is a hardware fault: one-line panic. Before
+// that (the N3 self-test) the engine is refused and the bring-up ends with its FAIL line.
+void timedOut(uint32_t fence)
 {
-    if (gWedged) return;
-    gWedged = true;
     char host[200];
     tegra_host1x_describe(host, sizeof(host));
-    IOLog(
-        "TegraNVDEC: job fence %u not reached in %u ms (syncpoint %u at %u); NVDEC refuses work until resume; %s; %s\n",
-        fence, kJobTimeoutUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+    if (gPublished)
+        panic("TegraNVDEC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s",
+              fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+    if (gWedged) return;
+    gWedged = true;
+    IOLog("TegraNVDEC: job fence %u not reached in %u ms (syncpoint %u at %u); %s; %s\n", fence, kWaitBoundUs / 1000,
+          gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+}
+
+// Back to reset with the clock off after a failed bring-up: nothing will use the engine this boot.
+void park()
+{
+    w32(gCar, RST_DEV_Y_SET, Y_NVDEC);
+    IODelay(2);
+    w32(gCar, CLK_ENB_Y_CLR, Y_NVDEC);
 }
 
 void bringUp(void *stageArg, wait_result_t)
 {
     const uint32_t stage = (uint32_t)(uintptr_t)stageArg;
+    // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), and
+    // the arena returned.
+    auto giveUp = [](bool touched) {
+        if (touched) park();
+        tegra_nvdec_arena_release();
+    };
     // The arena first, while physical memory is least fragmented.
     uint32_t mib = 48;
     PE_parse_boot_argn("switch-nvdec-mib", &mib, sizeof(mib));
+    const uint64_t arenaStart = nowUs();
     if (stage >= 2 && tegra_nvdec_arena_init((uint64_t)(mib < 4 ? 4 : mib > 512 ? 512 : mib) << 20)) {
         IOLog("TegraNVDEC: N0 FAIL no contiguous %u MiB arena below 4 GiB (switch-nvdec-mib)\n", mib);
         return;
     }
+    gArenaUs = nowUs() - arenaStart;
     if (tegra_host1x_start()) {
         IOLog("TegraNVDEC: N0 FAIL host1x is not up (see the TegraHost1x line)\n");
+        giveUp(false);
         return;
     }
     gNvdec = (volatile uint8_t *)ml_io_map(kNvdecPA, kNvdecSize);
@@ -381,12 +415,14 @@ void bringUp(void *stageArg, wait_result_t)
     gEngineLock = IOLockAlloc();
     if (!gNvdec || !gCar || !gPmc || !gMc || !gEngineLock) {
         IOLog("TegraNVDEC: N1 FAIL no mapping\n");
+        giveUp(false);
         return;
     }
     bool wasOn = false;
     gLine[0] = 0;
     if (!powerUp(&wasOn) || !bootFalcon()) {
         IOLog("TegraNVDEC: %s\n", gLine[0] ? gLine : "N1 FAIL");
+        giveUp(true);
         return;
     }
     IOLog("TegraNVDEC: N1 ok partition %u %s, 408 MHz, falcon started (OS code %#x+%#x data %#x+%#x, %u apps)\n",
@@ -396,6 +432,7 @@ void bringUp(void *stageArg, wait_result_t)
     uint32_t id = 0, from = 0;
     if (!proofOfLife(&us, &id, &from)) {
         IOLog("TegraNVDEC: %s\n", gLine);
+        giveUp(true);
         return;
     }
     IOLog("TegraNVDEC: N2 ok host interface and falcon incremented syncpoint %u %u->%u by interrupt in %llu us; %s\n",
@@ -403,14 +440,23 @@ void bringUp(void *stageArg, wait_result_t)
     if (stage < 2) return;
     if (tegra_nvdec_arena_alloc(kSetupSlots * kSetupSlotBytes, &gSetup)) {
         IOLog("TegraNVDEC: N3 FAIL no setup slots in the arena\n");
+        giveUp(true);
         return;
     }
     gSyncpt = id;
     gBase = tegra_host1x_syncpt_read(id);
     gUp = true;
+    if (tegra_nvdec_self_test()) {  // its FAIL line is out
+        gUp = false;
+        giveUp(true);
+        return;
+    }
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
-    if (tegra_nvdec_self_test() || stage < 3) return;
-    tegra_nvdec_publish();
+    if (stage < 3) return;
+    // Proven: from here a lost interrupt or a job past its bound panics (TegraNVDEC.h).
+    gPublished = true;
+    tegra_host1x_set_strict();
+    tegra_nvdec_publish(gArenaUs);
 }
 }  // namespace
 
@@ -467,9 +513,9 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
     }
     const uint32_t job = gIssued + 1;
     if (job > kInFlight) {
-        const int ret = tegra_host1x_syncpt_wait(gSyncpt, gBase + job - kInFlight, kJobTimeoutUs);
+        const int ret = tegra_host1x_syncpt_wait(gSyncpt, gBase + job - kInFlight, kWaitBoundUs);
         if (ret) {
-            if (ret == TEGRA_HOST1X_ETIMEDOUT) wedge(gBase + job - kInFlight);
+            if (ret == TEGRA_HOST1X_ETIMEDOUT) timedOut(gBase + job - kInFlight);
             IOLockUnlock(gEngineLock);
             return ret;
         }
@@ -493,18 +539,23 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
     return ret;
 }
 
-extern "C" int tegra_nvdec_wait(uint32_t fence, uint32_t timeoutUs)
+extern "C" int tegra_nvdec_wait(uint32_t fence)
 {
     if (!gUp) return -19;
-    // A fence no job will reach would time out and wedge the engine for everyone.
+    // A fence no job will reach would never be reached: refused, so it cannot pass for an engine fault.
     if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0) return -22;
-    const int ret = tegra_host1x_syncpt_wait(gSyncpt, fence, timeoutUs);
+    const int ret = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
     if (ret == TEGRA_HOST1X_ETIMEDOUT) {
         IOLockLock(gEngineLock);
-        wedge(fence);
+        timedOut(fence);
         IOLockUnlock(gEngineLock);
     }
     return ret;
+}
+
+extern "C" bool tegra_nvdec_claim_self_test(void)
+{
+    return !__atomic_exchange_n(&gSelfTestClaimed, 1, __ATOMIC_SEQ_CST);
 }
 
 // Sleep (SC7), through tegra_nvdec_suspend/resume in TegraHost1x.cpp. Suspend lets the queued jobs finish
@@ -516,7 +567,8 @@ void engineSuspend()
 {
     IOLockLock(gEngineLock);
     gSuspended = true;
-    if (!gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kJobTimeoutUs)) wedge(gBase + gIssued);
+    if (!gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
+        timedOut(gBase + gIssued);
     w32(gCar, RST_DEV_Y_SET, Y_NVDEC);
     IODelay(2);
     w32(gCar, CLK_ENB_Y_CLR, Y_NVDEC);
@@ -556,8 +608,9 @@ void engineResume()
 extern "C" int tegra_nvdec_probe(void)
 {
     static volatile int started;
-    uint32_t stage = 0;
-    if (!PE_parse_boot_argn("switch-nvdec", &stage, sizeof(stage)) || !stage) return 0;
+    uint32_t stage = 3;  // on by default, like the board drivers; switch-nvdec=0 turns it off
+    PE_parse_boot_argn("switch-nvdec", &stage, sizeof(stage));
+    if (!stage) return 0;
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return 0;
     thread_t thread;
     if (kernel_thread_start(bringUp, (void *)(uintptr_t)stage, &thread) != KERN_SUCCESS) {

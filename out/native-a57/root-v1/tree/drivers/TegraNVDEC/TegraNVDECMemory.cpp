@@ -87,6 +87,17 @@ extern "C" int tegra_nvdec_arena_init(uint64_t bytes)
     return 0;
 }
 
+extern "C" void tegra_nvdec_arena_release(void)
+{
+    if (!gArena) return;
+    gArena->complete();
+    gArena->release();
+    gArena = nullptr;
+    IODelete(gUsed, uint32_t, (gGranules + 31) / 32);
+    gUsed = nullptr;
+    gGranules = gFree = 0;
+}
+
 extern "C" int tegra_nvdec_arena_alloc(uint64_t size, TegraNVDECBlock *block)
 {
     if (!gArena || !size || size > (uint64_t)gGranules * kGranule) return -12;

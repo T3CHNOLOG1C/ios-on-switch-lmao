@@ -63,6 +63,12 @@ extern CMBaseClassID VTVideoDecoderGetClassID(void);
 extern OSStatus CMDerivedObjectCreate(CFAllocatorRef allocator, const void *vtable, CMBaseClassID classID,
                                       CMBaseObjectRef *out);
 extern void *CMBaseObjectGetDerivedStorage(CMBaseObjectRef object);
+extern const void *CMBaseObjectGetVTable(CMBaseObjectRef object);  // a VTPluginDecoderVTable for a decoder
+extern CMBaseObjectRef VTVideoDecoderGetCMBaseObject(VTVideoDecoderRef decoder);
+// The registry's choice for a codec under a decoder specification (21H461 VideoToolbox, exported): with an out-pointer
+// it runs the candidates' factories in rating order until one succeeds; with none it only answers whether one exists.
+extern OSStatus VTSelectAndCreateVideoDecoderInstance(FourCharCode codecType, CFAllocatorRef allocator,
+                                                      CFDictionaryRef specification, VTVideoDecoderRef *out);
 extern OSStatus VTDecoderSessionSetPixelBufferAttributes(VTVideoDecoderSession session, CFDictionaryRef attributes);
 extern CVPixelBufferPoolRef VTDecoderSessionGetPixelBufferPool(VTVideoDecoderSession session);
 extern OSStatus VTDecoderSessionEmitDecodedFrame(VTVideoDecoderSession session, VTVideoDecoderFrame frame,
