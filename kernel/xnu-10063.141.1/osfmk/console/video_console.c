@@ -1455,6 +1455,47 @@ vc_rotate3_pixel(unsigned int x, unsigned int y)
 	       (vinfo.v_height - 1 - x) * vinfo.v_rowbytes + y * 4);
 }
 
+/*
+ * Until the display's tape takes over, the rotated console draws into the boot framebuffer as initialize_screen maps
+ * it: VM_WIMG_IO (Device memory) on this platform (no HAS_UCNORMAL_MEM), where every access is its own bus
+ * transaction and a read waits for DRAM. A text line is a 64-byte run of each portrait row (rows 2880 bytes apart;
+ * the tape's stride and line are multiples of 16 too), so pixels move 16 bytes at a time: one LDP/STP of two general
+ * registers (no FP/SIMD state on this path), always 16-byte aligned as Device memory requires. A run that is not
+ * aligned keeps the 32-bit loop.
+ */
+static inline boolean_t
+vc_rotate3_wide(const volatile uint32_t *a, const volatile uint32_t *b, unsigned int pixels)
+{
+#if defined(__arm64__)
+	return !(((uintptr_t)a | (uintptr_t)b) & 15) && !(pixels & 3);
+#else
+	(void)a; (void)b; (void)pixels;
+	return FALSE;
+#endif
+}
+
+static inline void
+vc_rotate3_store4(volatile uint32_t *to, uint64_t low, uint64_t high)
+{
+#if defined(__arm64__)
+	__asm__ volatile ("stp %0, %1, [%2]" : : "r"(low), "r"(high), "r"(to) : "memory");
+#else
+	to[0] = (uint32_t)low; to[1] = (uint32_t)(low >> 32); to[2] = (uint32_t)high; to[3] = (uint32_t)(high >> 32);
+#endif
+}
+
+static inline void
+vc_rotate3_copy4(volatile uint32_t *to, const volatile uint32_t *from)
+{
+#if defined(__arm64__)
+	uint64_t low, high;
+	__asm__ volatile ("ldp %0, %1, [%2]" : "=&r"(low), "=&r"(high) : "r"(from) : "memory");
+	vc_rotate3_store4(to, low, high);
+#else
+	to[0] = from[0]; to[1] = from[1]; to[2] = from[2]; to[3] = from[3];
+#endif
+}
+
 static void
 vc_clear_screen(unsigned int xx, unsigned int yy, unsigned int scrreg_top,
     unsigned int scrreg_bottom, int which)
@@ -1490,8 +1531,15 @@ vc_clear_screen(unsigned int xx, unsigned int yy, unsigned int scrreg_top,
 		if (first > last || last > vinfo.v_width) {
 			return;
 		}
+		const uint64_t back = (uint64_t)vc_color_back << 32 | vc_color_back;
 		for (unsigned int x = 0; x < vinfo.v_height; ++x) {
 			volatile uint32_t *pixels = vc_rotate3_pixel(x, 0);
+			if (vc_rotate3_wide(pixels + first, pixels + first, last - first)) {
+				for (unsigned int y = first; y < last; y += 4) {
+					vc_rotate3_store4(pixels + y, back, back);
+				}
+				continue;
+			}
 			for (unsigned int y = first; y < last; ++y) {
 				pixels[y] = vc_color_back;
 			}
@@ -1730,14 +1778,21 @@ vc_paint_char_32(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 		if (xx >= vinfo.v_columns || yy >= vinfo.v_rows) {
 			return;
 		}
-		/* A glyph column at a time: its 16 pixels are consecutive in one portrait row (one write-combined burst). */
+		/*
+		 * A glyph column at a time: its 16 pixels are consecutive in one portrait row, written four at a time (one
+		 * STP, vc_rotate3_store4) wherever any of the four changes. Over a previous glyph (scroll repaints) the four
+		 * unchanged neighbours get the same colours they were drawn with, as gc_scroll_up only passes ch_previous
+		 * for a cell whose colours are unchanged.
+		 */
 		for (unsigned int x = 0; x < ISO_CHAR_WIDTH; ++x) {
 			volatile uint32_t *pixels = vc_rotate3_pixel(xx * ISO_CHAR_WIDTH + x, yy * ISO_CHAR_HEIGHT);
+			uint32_t out[ISO_CHAR_HEIGHT];
+			uint32_t changed = 0;
 			for (i = 0; i < ISO_CHAR_HEIGHT; ++i) {
 				const unsigned int at = (unsigned int)i * ISO_CHAR_WIDTH + x;
 				uint32_t val = theChar[at];
-				if (!attrs && theCharPrevious && val == theCharPrevious[at]) {
-					continue;
+				if (!(!attrs && theCharPrevious && val == theCharPrevious[at])) {
+					changed |= 1u << i;
 				}
 				if ((attrs & ATTR_BOLD) && x && theChar[at - 1] && !val) {
 					val = 0xFFFFFFFF;
@@ -1748,7 +1803,21 @@ vc_paint_char_32(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 				if ((attrs & ATTR_UNDER) && i == ISO_CHAR_HEIGHT - 1) {
 					val = ~val;
 				}
-				pixels[i] = (vc_color_back & ~val) | (vc_color_fore & val);
+				out[i] = (vc_color_back & ~val) | (vc_color_fore & val);
+			}
+			if (vc_rotate3_wide(pixels, pixels, ISO_CHAR_HEIGHT)) {
+				for (i = 0; i < ISO_CHAR_HEIGHT; i += 4) {
+					if (changed & (0xfu << i)) {
+						vc_rotate3_store4(pixels + i, (uint64_t)out[i + 1] << 32 | out[i],
+						    (uint64_t)out[i + 3] << 32 | out[i + 2]);
+					}
+				}
+				continue;
+			}
+			for (i = 0; i < ISO_CHAR_HEIGHT; ++i) {
+				if (changed & (1u << i)) {
+					pixels[i] = out[i];
+				}
 			}
 		}
 		return;
@@ -1957,6 +2026,13 @@ vc_scroll_down(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 		unsigned int shift = (unsigned int)num * ISO_CHAR_HEIGHT;
 		for (unsigned int x = 0; x < vinfo.v_height; ++x) {
 			volatile uint32_t *pixels = vc_rotate3_pixel(x, 0);
+			/* Backward: each source run is at least a text line before what is being written. */
+			if (vc_rotate3_wide(pixels + first + shift, pixels + first, last - shift - first)) {
+				for (unsigned int y = last; y > first + shift; y -= 4) {
+					vc_rotate3_copy4(pixels + y - 4, pixels + y - 4 - shift);
+				}
+				continue;
+			}
 			for (unsigned int y = last; y > first + shift; --y) {
 				pixels[y - 1] = pixels[y - 1 - shift];
 			}
@@ -2009,6 +2085,13 @@ vc_scroll_up(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 		unsigned int shift = (unsigned int)num * ISO_CHAR_HEIGHT;
 		for (unsigned int x = 0; x < vinfo.v_height; ++x) {
 			volatile uint32_t *pixels = vc_rotate3_pixel(x, 0);
+			/* Forward: each source run is at least a text line (16 pixels) past what is being written. */
+			if (vc_rotate3_wide(pixels + first, pixels + first + shift, last - shift - first)) {
+				for (unsigned int y = first; y < last - shift; y += 4) {
+					vc_rotate3_copy4(pixels + y, pixels + y + shift);
+				}
+				continue;
+			}
 			for (unsigned int y = first; y < last - shift; ++y) {
 				pixels[y] = pixels[y + shift];
 			}
