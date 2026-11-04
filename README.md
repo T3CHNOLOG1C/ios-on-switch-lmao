@@ -69,8 +69,8 @@ It then compiles XNU (about 80 s), about 300 driver objects, corecrypto and libp
 The Rust bridges add about 5 minutes the first time.
 
 `bazel-bin/boot/ioswitch` is what `out/boot/ioswitch` used to be:
-- `switchroot/ioswitch/`: `kernel-window.bin` (LZ4), `loader.uboot.bin`, `boot.scr`, `boot.cmd`, `bl31.bin`,
-  `bl33.bin`, `oled-sku3.dtb`, `exporter.uimg`;
+- `switchroot/ioswitch/`: `bl33.bin` (U-Boot with the LZ4 kernel window staged after it), `loader.uboot.bin`,
+  `boot.scr`, `boot.cmd`, `bl31.bin`, `oled-sku3.dtb`, `exporter.uimg`;
 - `bootloader/ini/ioswitch.ini`;
 - `overlay/`: the userland overlay that deploy copies to Data.
 
@@ -301,12 +301,13 @@ What makes the outputs reproducible:
 build run with `path_root`, `build_date` and `builder` set to that checkout's values):
 - **(C)** Every section of the linked kernel is identical (49 of 49).
 - **(B)** The prelinker, run on the CMake kernel, reproduces its `kernel.macho` bit for bit.
-- **(A)** The packaging, run on the CMake kernel, reproduces its whole `out/boot/ioswitch` bit for bit (19 files).
+- **(A)** The packaging, run on the CMake kernel, reproduces its whole `out/boot/ioswitch` bit for bit (17 files at main
+  fdede2c).
 
 What differs in `//:boot` itself, and why:
-- `kernel-window.bin`, `loader.uboot.bin`, `boot.cmd` and `boot.scr` follow from the linker's debug map: N_OSO object
-  paths and modification times in `__LINKEDIT`, which name the CMake flow's absolute paths. They change the window's
-  length, and the loader and boot script embed that length.
+- `bl33.bin` (the staged window), `loader.uboot.bin`, `boot.cmd` and `boot.scr` follow from the linker's debug map:
+  N_OSO object paths and modification times in `__LINKEDIT`, which name the CMake flow's absolute paths. They change
+  the compressed window's length and stage ID, and the loader and boot script embed both.
 - The default (`path_root=/ioswitch`) also changes `__FILE__` strings from your home directory to `/ioswitch/...`.
 - No build can reproduce those bytes, not even a second CMake build: its debug map records each object's modification
   time.
