@@ -1,0 +1,99 @@
+# Installing iPadOS onto the Switch SD card. Read tools/install/sd.py's docstring for what is written and the guards.
+#
+#   bazel build //install:artifacts             what the install writes, described (no device)
+#   bazel run //install:sd -- disk4             dry run against the card at disk4
+#   bazel run //install:sd -- disk4 --yes       install (type-to-confirm, then sudo)
+#
+# The boot package comes from --//deploy:boot_package (default //:boot); the IPSW members from @ipsw (fetched by
+# range request into the repository cache; on APFS the copies Bazel makes from the cache are clones, so a member's
+# bytes are stored once).
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load(":defs.bzl", "fake_boot_package", "install_artifacts", "install_spec", "ipsw_pins", "test_member")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(["testdata/**"]))
+
+install_spec(
+    name = "spec",
+    block_cpp = "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/NativeIOSwitchBlock.cpp",
+    cryptex_cpp = "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/IOSwitchCryptex.cpp",
+    cryptex_h = "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/IOSwitchCryptex.h",
+    raw_mount = "//out/native-a57/root-v1/tree:diagnostics/ioswitch/IOSwitchRawMount.inc",
+)
+
+ipsw_pins(name = "ipsw")
+
+install_artifacts(
+    name = "artifacts",
+    boot_package = "//deploy:boot_package",
+    ipsw = ":ipsw",
+    spec = ":spec",
+)
+
+# What the installer stages into Preboot and checks it against. Only tests change these (a small stand-in for the
+# 3.3 GB system cryptex: --//install:system_cryptex=//install:test_system_cryptex
+# --//install:ipsw_pins=//install:test_ipsw_pins).
+label_flag(
+    name = "system_cryptex",
+    build_setting_default = "@ipsw//:system_cryptex",
+)
+
+label_flag(
+    name = "ipsw_pins",
+    build_setting_default = ":ipsw",
+)
+
+py_binary(
+    name = "sd",
+    srcs = ["//tools/install:sd.py"],
+    args = [
+        "--spec=$(rlocationpath :spec)",
+        "--ipsw=$(rlocationpath :ipsw_pins)",
+        "--os-dmg=$(rlocationpath @ipsw//:os)",
+        "--system-cryptex=$(rlocationpath :system_cryptex)",
+        "--app-cryptex=$(rlocationpath @ipsw//:app_cryptex)",
+        "--boot-package=$(rlocationpath //deploy:boot_package)",
+    ],
+    data = [
+        ":ipsw_pins",
+        ":spec",
+        ":system_cryptex",
+        "//deploy:boot_package",
+        "@ipsw//:app_cryptex",
+        "@ipsw//:os",
+    ],
+    main = "//tools/install:sd.py",
+    deps = [
+        "//tools/install:lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# --- test stand-ins --------------------------------------------------------------------------------------------------
+# A boot package with dummy contents and the real layout (--//deploy:boot_package=//install:fake_boot_package), and a
+# second generation of it (two files differ) for the rerun test.
+fake_boot_package(name = "fake_boot_package")
+
+fake_boot_package(
+    name = "fake_boot_package_gen1",
+    generation = 1,
+)
+
+fake_boot_package(
+    name = "fake_gpu_bundle",
+    gpu = True,
+)
+
+test_member(
+    name = "test_system_cryptex",
+    mib = 4,
+    pins = ":ipsw",
+    role = "system_cryptex",
+)
+
+filegroup(
+    name = "test_ipsw_pins",
+    srcs = [":test_system_cryptex"],
+    output_group = "pins",
+)

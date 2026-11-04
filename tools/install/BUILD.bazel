@@ -1,0 +1,108 @@
+# The SD installer's and deploy's Python: partition table, APFS, card guards, the install itself.
+# Entry points are in //install and //deploy; this package holds the code and its unit tests.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_library(
+    name = "lib",
+    srcs = [
+        "apfs.py",
+        "card.py",
+        "gpt.py",
+        "host.py",
+    ],
+    imports = ["../.."],
+)
+
+py_binary(
+    name = "sd",
+    srcs = ["sd.py"],
+    deps = [
+        ":lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_binary(
+    name = "spec",
+    srcs = ["spec.py"],
+)
+
+py_binary(
+    name = "artifacts",
+    srcs = ["artifacts.py"],
+)
+
+py_binary(
+    name = "fake_boot_package",
+    srcs = ["fake_boot_package.py"],
+)
+
+py_binary(
+    name = "test_member",
+    srcs = ["test_member.py"],
+)
+
+# `bazel run //tools/install:testcard -- create <image>`: a sparse stand-in for the card (the real partition table).
+py_binary(
+    name = "testcard",
+    srcs = ["testcard.py"],
+    data = ["//install:testdata/switch-card-1tb.json"],
+    deps = [
+        ":lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_test(
+    name = "gpt_test",
+    srcs = ["gpt_test.py"],
+    data = ["//install:testdata/switch-card-1tb.json"],
+    deps = [
+        ":lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_test(
+    name = "apfs_test",
+    srcs = ["apfs_test.py"],
+    deps = [
+        ":lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_test(
+    name = "spec_test",
+    srcs = ["spec_test.py"],
+    data = [
+        "//out/native-a57/root-v1/tree:diagnostics/ioswitch/IOSwitchRawMount.inc",
+        "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/IOSwitchCryptex.cpp",
+        "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/IOSwitchCryptex.h",
+        "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/NativeIOSwitchBlock.cpp",
+    ],
+    deps = [
+        ":spec_lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_library(
+    name = "spec_lib",
+    srcs = ["spec.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "card_test",
+    srcs = ["card_test.py"],
+    data = ["//install:testdata/switch-card-1tb.json"],
+    deps = [
+        ":lib",
+        "@rules_python//python/runfiles",
+    ],
+)
