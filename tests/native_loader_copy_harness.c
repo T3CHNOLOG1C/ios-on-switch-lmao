@@ -63,7 +63,7 @@ static void positive(struct loader_copy_bounds b) {
         if (va >= UINT64_C(0xa0000000) && va < b.image_end)
             expected = va < b.rx_end ? RAM | RO :
                 va < b.ro_end ? RAM | RO | PXN : RAM | PXN;
-        else if (va >= b.source && va < b.source + b.bytes)
+        else if (va >= b.source && va < b.source + b.source_bytes)
             expected = RAM | RO | PXN;
         else if (va >= b.destination && va < b.destination + b.bytes)
             expected = RAM | PXN;
@@ -77,8 +77,8 @@ static void positive(struct loader_copy_bounds b) {
             assert((actual & ~ADDRESS & ~UINT64_C(3)) == expected);
             if (level == 2) {
                 uint64_t begin = va & ~(BLOCK - 1);
-                if (va >= b.source && va < b.source + b.bytes)
-                    assert(begin >= b.source && begin + BLOCK <= b.source + b.bytes);
+                if (va >= b.source && va < b.source + b.source_bytes)
+                    assert(begin >= b.source && begin + BLOCK <= b.source + b.source_bytes);
                 if (va >= b.destination && va < b.destination + b.bytes)
                     assert(begin >= b.destination && begin + BLOCK <= b.destination + b.bytes);
             }
@@ -93,7 +93,8 @@ int main(void) {
     tables = (uint64_t (*)[512])(allocation + PAGE);
     struct loader_copy_bounds b = {
         UINT64_C(0xa2000000), UINT64_C(0xb207c000), UINT64_C(0x4308000),
-        UINT64_C(0xa0006000), UINT64_C(0xa0007000), UINT64_C(0xa001c000)
+        UINT64_C(0xa0006000), UINT64_C(0xa0007000), UINT64_C(0xa001c000),
+        UINT64_C(0xe3c000)
     };
     const uint64_t sizes[] = {PAGE, BLOCK - PAGE, BLOCK, BLOCK + PAGE,
         2 * BLOCK - PAGE, 2 * BLOCK + PAGE, UINT64_C(0x4308000), UINT64_C(0x6000000)};
@@ -102,12 +103,14 @@ int main(void) {
     for (unsigned n = 0; n < sizeof(sizes) / sizeof(sizes[0]); ++n)
         for (unsigned o = 0; o < sizeof(offsets) / sizeof(offsets[0]); ++o) {
             b.bytes = sizes[n]; b.destination = UINT64_C(0xb2000000) + offsets[o];
+            /* The staged file is smaller than the window it decodes into, or (stored) as large. */
+            b.source_bytes = sizes[(n + o) % (sizeof(sizes) / sizeof(sizes[0]))];
             positive(b); ++positives;
         }
     uint64_t before[7][512];
     memcpy(before, tables, sizeof(before));
     struct loader_copy_bounds good = b;
-    for (unsigned kind = 0; kind < 18; ++kind) {
+    for (unsigned kind = 0; kind < 22; ++kind) {
         b = good;
         uint64_t pa = table_address;
         switch (kind) {
@@ -129,6 +132,10 @@ int main(void) {
             case 15: pa++; break;
             case 16: pa = UINT64_C(0x9ffff000); break;
             case 17: pa = UINT64_C(0xa0019000); b.image_end = pa + 7 * PAGE; break;
+            case 18: b.source_bytes = 0; break;
+            case 19: b.source_bytes = 1; break;
+            case 20: b.source_bytes = UINT64_C(0x6001000); break;
+            case 21: b.source_bytes = UINT64_MAX; break;
         }
         assert(loader_copy_build_tables(tables, pa, &b) != 0);
         assert(memcmp(before, tables, sizeof(before)) == 0);

@@ -2,6 +2,7 @@
 """Build a fixed-layout XNU entry adapter. Does not install or boot."""
 from __future__ import annotations
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
@@ -40,9 +41,16 @@ NATIVE_FULL_RAM_EXCLUSIONS = [r for r in NATIVE_EXCLUSIONS if r[0] != 'retained-
 
 # The cacheable-copy loader ships the window packed: only its nonzero extents (4 KiB granular; zero gaps shorter than
 # 64 KiB stay in an extent), back to back. Over half the window is zeros (the VA holes between prelinked segments), and
-# U-Boot reads the file from FAT at ~20 MB/s; the loader writes the zeros itself during its cached copy.
+# U-Boot reads the file from FAT at ~20 MB/s (48 MHz 4-bit SD); the loader writes the zeros itself during its cached
+# copy. Each extent is also LZ4-compressed (lz4 -12, ~2.4:1 on this kernel: ~36 -> ~15 MB, about a second less of
+# U-Boot reading); the loader decodes it under the same cached regime (native/loader/copy.c lz4_block).
 PACK_PAGE = 0x1000
 PACK_MIN_GAP = 0x10000
+LZ4_MAGIC = b'\x04\x22\x4d\x18'
+# /chosen/ioswitch-boot-stamps: native/loader/stamps.h IOSW_STAMP_COUNT 64-bit words, zero until the loader fills it.
+STAMPS_PROPERTY = 'ioswitch-boot-stamps'
+STAMPS_BYTES = 18 * 8
+STAMPS_SLOT = 0xA001EF00
 
 
 def pack_window(payload: bytes) -> tuple[list[tuple[int, int]], bytes]:
@@ -68,6 +76,100 @@ def pack_window(payload: bytes) -> tuple[list[tuple[int, int]], bytes]:
     if expanded != payload:
         raise ValueError('packed kernel window does not expand to the layout image')
     return runs, packed
+
+
+def lz4_frame_blocks(frame: bytes, length: int) -> list[tuple[int, bool, bytes]]:
+    """An LZ4 frame (lz4.org frame format) of `length` bytes as its blocks (decoded length, stored, block bytes). Only
+    what the loader decodes: independent blocks without checksums or dictionary."""
+    if frame[:4] != LZ4_MAGIC or len(frame) < 7:
+        raise ValueError('lz4: not an LZ4 frame')
+    flags, descriptor = frame[4], frame[5]
+    if flags >> 6 != 1 or not flags >> 5 & 1 or flags >> 4 & 1 or flags & 1 or not 4 <= descriptor >> 4 & 7:
+        raise ValueError(f'lz4: unsupported frame flags {flags:#x}/{descriptor:#x}')
+    block_max = 1 << (8 + 2 * (descriptor >> 4 & 7))
+    at, left, blocks = 6 + (8 if flags >> 3 & 1 else 0) + 1, length, []
+    while True:
+        size = struct.unpack_from('<I', frame, at)[0]
+        at += 4
+        if not size:
+            break
+        stored, size = bool(size >> 31), size & 0x7fffffff
+        if not size or not left or at + size > len(frame):
+            raise ValueError('lz4: truncated frame')
+        blocks.append((min(block_max, left), stored, frame[at:at + size]))
+        left -= blocks[-1][0]
+        at += size
+    if left or at + (4 if flags >> 2 & 1 else 0) != len(frame):
+        raise ValueError('lz4: frame does not hold exactly the extent')
+    return blocks
+
+
+def lz4_decode(block: bytes, length: int) -> bytes:
+    """One LZ4 block (lz4.org block format), as the loader decodes it; the builder's own check of the table."""
+    out, at, end = bytearray(), 0, len(block)
+
+    def extended(value: int) -> int:
+        nonlocal at
+        while True:
+            more = block[at]
+            at += 1
+            value += more
+            if more != 255:
+                return value
+    while True:
+        token = block[at]
+        at += 1
+        literal = token >> 4
+        if literal == 15:
+            literal = extended(literal)
+        out += block[at:at + literal]
+        at += literal
+        if at >= end:
+            break
+        offset = block[at] | block[at + 1] << 8
+        at += 2
+        if not offset or offset > len(out):
+            raise ValueError('lz4: bad match offset')
+        match = token & 15
+        match = (extended(match) if match == 15 else match) + 4
+        begin = len(out) - offset
+        if match <= offset:
+            out += out[begin:begin + match]
+        else:
+            repeats, rest = divmod(match, offset)
+            pattern = bytes(out[begin:])
+            out += pattern * repeats + pattern[:rest]
+    if at != end or len(out) != length:
+        raise ValueError('lz4: block does not decode to its length')
+    return bytes(out)
+
+
+def compress_window(payload: bytes, runs: list[tuple[int, int]]) -> tuple[list[tuple[int, int, int, int]], bytes]:
+    """The window's nonzero extents, each LZ4-compressed (lz4 -12, independent blocks of up to 4 MiB): the loader's block
+    table (window offset, length, offset in the stream, stream bytes | 1 << 63 if stored) and the blocks back to back.
+    Checked by decoding the table into the window again."""
+    lz4 = tool('lz4')
+
+    def frame(run):
+        start, size = run
+        return subprocess.run([lz4, '-12', '-B7', '--no-frame-crc', '-c', '-q'], input=payload[start:start + size],
+                              capture_output=True, check=True).stdout
+    with ThreadPoolExecutor() as pool:
+        frames = list(pool.map(frame, runs))
+    table, stream = [], bytearray()
+    expanded = bytearray(len(payload))
+    for (start, size), data in zip(runs, frames):
+        at = start
+        for length, stored, block in lz4_frame_blocks(data, size):
+            if (at | length) % PACK_PAGE:
+                raise ValueError('lz4: block not page-granular')
+            table.append((at, length, len(stream), len(block) | (1 << 63 if stored else 0)))
+            expanded[at:at + length] = block if stored else lz4_decode(block, length)
+            stream += block
+            at += length
+    if expanded != payload:
+        raise ValueError('compressed kernel window does not decode to the layout image')
+    return table, bytes(stream)
 
 
 def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
@@ -128,6 +230,7 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
         raise ValueError('full RAM requires native root gates')
     ram_offset = 0
     sd_reference_offset = 0
+    stamps_offset = 0
     if storage_probe:
         sidecars = ('NativeDataSeed','TrustCache') if root_boot else ('RAMDisk','TrustCache')
         if m['phys_base'] != 0xB207C000 or set(sidecars) - m['sources'].keys():
@@ -156,6 +259,12 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
         if size != 16 or original_adt[offset:offset+size] != expected or payload[start+offset:start+offset+size] != expected:
             raise ValueError('missing or changed fixed SD reference property')
         sd_reference_offset = offset
+        # Optional pre-kernel timing record (native/loader/stamps.h), filled by the cacheable-copy loader only.
+        stamps_offset, stamps_bytes = properties.get(('/chosen', STAMPS_PROPERTY), (0, 0))
+        if stamps_offset and (stamps_bytes != STAMPS_BYTES or stamps_offset % 4 or
+                              original_adt[stamps_offset:stamps_offset + stamps_bytes] != bytes(stamps_bytes) or
+                              payload[start + stamps_offset:start + stamps_offset + stamps_bytes] != bytes(stamps_bytes)):
+            raise ValueError('boot timing placeholder must be a zeroed, aligned, exact-size /chosen property')
         if root_boot:
             required = {'osenvironment':b'main\0', 'root-matching':ROOT_MATCHING,
                         'crypto-hash-method':b'sha2-384\0',
@@ -223,8 +332,15 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     fast_copy = native_experiment and root_boot
     if fast_copy and len(payload) % 0x1000:
         raise ValueError('native cacheable copy requires a page-aligned payload')
+    if stamps_offset and not fast_copy:
+        raise ValueError('the boot timing record needs the cacheable-copy loader')
     runs, packed = pack_window(payload) if fast_copy else ([], payload)
+    blocks, stream = compress_window(payload, runs) if fast_copy else ([], packed)
+    if fast_copy:
+        # U-Boot stages the file; the loader maps it in 4 KiB pages.
+        packed = stream + bytes(-len(stream) % PACK_PAGE)
     constants = {'SOURCE': SOURCE, 'DEST': m['phys_base'], 'BYTES': len(payload), 'PACKED_BYTES': len(packed),
+                 'STREAM_BYTES': len(stream), 'STAMPS_ADT_OFFSET': stamps_offset,
                  'ARGS': m['boot_args_pa'], 'ENTRY': m['entry_pa'],
                  'CRC': 0 if root_boot else zlib.crc32(payload), 'VERIFY_KERNEL': int(not root_boot),
                  'VIRT': m['virt_base'], 'ADT_PA': m['adt_pa'],
@@ -241,13 +357,15 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     output.mkdir(parents=True)
     (output / 'layout.h').write_text(header)
     if fast_copy:
-        # copy.c's table of the packed file's extents; the file itself is what the boot script loads at SOURCE.
+        # copy.c's table of the staged file's blocks; the file itself is what the boot script loads at SOURCE.
         (output / 'runs.h').write_text(
-            '/* Generated: the kernel window\'s nonzero extents (offset, bytes) in order, stored back to back in the\n'
-            ' * packed kernel-window.bin; everything else in the window is zero. */\n'
-            f'#define LOAD_RUN_COUNT {len(runs)}u\n'
-            'static const uint64_t loader_runs[LOAD_RUN_COUNT][2] = {\n' +
-            ''.join(f'    {{UINT64_C(0x{start:x}), UINT64_C(0x{size:x})}},\n' for start, size in runs) + '};\n')
+            '/* Generated: the kernel window\'s nonzero extents as LZ4 blocks (window offset, bytes, offset in\n'
+            ' * kernel-window.bin, its bytes | LOADER_BLOCK_STORED if not compressed) in order, stored back to back;\n'
+            ' * everything else in the window is zero. */\n'
+            f'#define LOAD_BLOCK_COUNT {len(blocks)}u\n'
+            'static const uint64_t loader_blocks[LOAD_BLOCK_COUNT][4] = {\n' +
+            ''.join(f'    {{UINT64_C(0x{a:x}), UINT64_C(0x{b:x}), UINT64_C(0x{c:x}), UINT64_C(0x{d:x})}},\n'
+                    for a, b, c, d in blocks) + '};\n')
         (output / 'kernel-window.bin').write_bytes(packed)
     commands = []
     sources = [ROOT/'native/loader/entry.S', ROOT/'native/loader/loader.c', ROOT/'native/loader/memory.c', ROOT/'native/handoff/probe.c']
@@ -258,7 +376,7 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
         sources.append(ROOT/'native/loader/checksum.S')
     if storage_probe:
         sources.append(ROOT/'native/storage/sd_reference.c')
-    source_files = [*sources, ROOT/'native/loader/copy.h', ROOT/'native/loader/memory.h', ROOT/'native/loader/ram.h', ROOT/'native/storage/sd_reference.h', *(ROOT/'native/handoff').glob('*.h'), ROOT/'native/handoff/entry.S', linker, Path(__file__), ROOT/'scripts/package_native_handoff.py']
+    source_files = [*sources, ROOT/'native/loader/copy.h', ROOT/'native/loader/memory.h', ROOT/'native/loader/ram.h', ROOT/'native/loader/stamps.h', ROOT/'native/storage/sd_reference.h', *(ROOT/'native/handoff').glob('*.h'), ROOT/'native/handoff/entry.S', linker, Path(__file__), ROOT/'scripts/package_native_handoff.py']
     if root_boot:
         source_files += [ROOT/'scripts/native_xnu_layout.py', ROOT/'scripts/native_oled_adt.py']
     source_hashes = {str(p.relative_to(ROOT)): hashlib.sha256(read_regular(p)).hexdigest() for p in source_files}
@@ -278,6 +396,8 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     elf_layout = validate_elf(elf.read_bytes())
     if storage_probe and int(elf_layout['footprint_end_exclusive'], 0) > 0xA001F000:
         raise ValueError('adapter code/data/stacks overlap the fixed SD reference page')
+    if stamps_offset and int(elf_layout['footprint_end_exclusive'], 0) > STAMPS_SLOT:
+        raise ValueError("adapter code/data/stacks overlap U-Boot's boot timing slot")
     subprocess.run([tool('llvm-objcopy'), '-O', 'binary', str(elf), str(output/'loader.bin')], check=True)
     if storage_probe and (output/'loader.bin').stat().st_size > 0x1F000:
         raise ValueError('adapter file overlaps the fixed SD reference page')
@@ -303,6 +423,7 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
                               'sha256': hashlib.sha256((output/name).read_bytes()).hexdigest()}
                         for name in ('loader.bin','loader.elf','layout.h') + (('kernel-window.bin',) if fast_copy else ())},
               'packed_runs': [[start, size] for start, size in runs],
+              'lz4_blocks': [list(block) for block in blocks],
               'temporary_ranges': [{'name': 'staging', 'start': SOURCE, 'size': len(packed), 'lifetime': 'before XNU entry'},
                                    {'name': 'adapter_and_stacks', 'start': 0xA0000000, 'size': 0x20000, 'lifetime': 'before XNU entry'}]}
     (output/'manifest.json').write_text(json.dumps(result, indent=2)+'\n')

@@ -5,9 +5,13 @@
 #include "memory.h"
 #include "sd_reference.h"
 #include "copy.h"
+#include "stamps.h"
 
 #ifndef LOAD_FAST_COPY
 #define LOAD_FAST_COPY 0
+#endif
+#ifndef LOAD_STAMPS_ADT_OFFSET
+#define LOAD_STAMPS_ADT_OFFSET 0
 #endif
 
 extern volatile uint64_t probe_record[R_RECORD_WORDS];
@@ -42,6 +46,55 @@ static uint64_t ticks(void) {
     return value;
 }
 
+#if LOAD_STAMPS_ADT_OFFSET
+/* Pre-kernel timing (stamps.h), written into the ADT just before XNU starts. Diagnostic only: nothing here refuses. */
+static volatile uint64_t boot_stamps[IOSW_STAMP_COUNT] __attribute__((section(".data"))) = {0};
+
+/* The microsecond timer U-Boot sampled, against the counter, once at entry. */
+static void stamps_entry(void) {
+    boot_stamps[IOSW_STAMP_MAGIC] = IOSW_STAMP_RECORD_MAGIC;
+    boot_stamps[IOSW_STAMP_WORDS] = IOSW_STAMP_COUNT;
+    boot_stamps[IOSW_STAMP_FREQUENCY] = probe_record[R_EL1_CNTFRQ];
+    boot_stamps[IOSW_STAMP_LOADER_ENTRY] = probe_record[R_COUNTER_PRE];
+    const uint64_t before = ticks();
+    const uint32_t us = *(const volatile uint32_t *)(uintptr_t)IOSW_TIMERUS_PA;
+    const uint64_t after = ticks();
+    boot_stamps[IOSW_STAMP_TIMERUS] = us;
+    boot_stamps[IOSW_STAMP_TIMERUS_AT] = before + (after - before) / 2;
+}
+
+/* U-Boot's samples (stamps.h slot) as counter values: only those taken after the counter started and before this
+ * loader did. The slot is then cleared, so a later boot never reads this one's. The caller checked the slot against
+ * the live FDT's reservations. */
+static void stamps_uboot(void) {
+    volatile uint32_t *slot = (volatile uint32_t *)(uintptr_t)IOSW_BOOT_STAMPS_PA;
+    if (slot[0] != IOSW_BOOT_STAMPS_UBOOT_MAGIC) return;
+    const uint64_t frequency = boot_stamps[IOSW_STAMP_FREQUENCY], at = boot_stamps[IOSW_STAMP_TIMERUS_AT];
+    const uint32_t now = (uint32_t)boot_stamps[IOSW_STAMP_TIMERUS];
+    for (unsigned i = 0; i < IOSW_BOOT_STAMPS_UBOOT_COUNT; ++i) {
+        const uint32_t sample = slot[1 + i];
+        const uint64_t back = (uint64_t)(uint32_t)(now - sample) * frequency / 1000000u;
+        if (sample && back < at && at - back <= boot_stamps[IOSW_STAMP_LOADER_ENTRY])
+            boot_stamps[IOSW_STAMP_UBOOT_DISTRO + i] = at - back;
+    }
+    slot[0] = 0;
+}
+
+/* The record into the ADT placeholder in the copied window (caches are off again: plain stores reach RAM). ADT values
+ * are only 4-byte aligned, so 32-bit stores. A placeholder that is not zero is left alone. */
+static void stamps_commit(void) {
+    volatile uint32_t *record = (volatile uint32_t *)(uintptr_t)(LOAD_ADT_PA + LOAD_STAMPS_ADT_OFFSET);
+    for (unsigned i = 0; i < 2 * IOSW_STAMP_COUNT; ++i)
+        if (record[i]) return;
+    boot_stamps[IOSW_STAMP_XNU_ENTRY] = ticks();
+    for (unsigned i = 0; i < IOSW_STAMP_COUNT; ++i) {
+        record[2 * i] = (uint32_t)boot_stamps[i];
+        record[2 * i + 1] = (uint32_t)(boot_stamps[i] >> 32);
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+#endif
+
 #if !LOAD_FAST_COPY || LOAD_VERIFY_KERNEL
 static void progress(unsigned row, uint64_t done, uint64_t total, uint64_t started) {
     unsigned percent = (unsigned)(done * 100 / total);
@@ -58,10 +111,14 @@ static void progress(unsigned row, uint64_t done, uint64_t total, uint64_t start
 #if LOAD_FAST_COPY
 // Timing only (the record words, for a debugger): nothing is drawn on the way to the kernel.
 static void copy_progress(uint64_t done, uint64_t total, uint64_t started) {
-    uint64_t elapsed=ticks()-started;
+    const uint64_t now=ticks(), elapsed=now-started;
     // The zero callback occurs after the temporary cache regime is enabled,
     // before the first payload load/store.
     if (!done) loader_copy_prepare_ticks=elapsed;
+#if LOAD_STAMPS_ADT_OFFSET
+    if (!done) boot_stamps[IOSW_STAMP_UNPACK_START]=now;
+    if (done == total) boot_stamps[IOSW_STAMP_UNPACK_END]=now;
+#endif
     (void)total;
     loader_progress[7]=elapsed;
     loader_progress[2]=done;
@@ -135,6 +192,9 @@ static uint64_t native_gate(void) {
 
 void loader_after_transition(void) {
     volatile uint64_t *r = probe_record;
+#if LOAD_STAMPS_ADT_OFFSET
+    stamps_entry();
+#endif
     if (r[R_EL1_EL] != 4 || (r[R_EL1_SCTLR] & 0x1005) ||
         (r[R_EL1_DAIF] & 0x3c0) != 0x3c0 || r[R_EL1_CNTFRQ] != 19200000 ||
         r[R_HCR_AFTER] != 0x80000000 || r[R_CNTHCTL_AFTER] != 3 || r[R_CNTVOFF_AFTER])
@@ -172,6 +232,16 @@ void loader_after_transition(void) {
 #endif
     failure=native_gate();
     if (failure) refuse(failure);
+#if LOAD_STAMPS_ADT_OFFSET
+    {
+        /* U-Boot's timing slot sits below the SD reference page, outside the loader image; read only if the live FDT
+         * keeps nothing there. */
+        struct loader_memory_report slot;
+        if (!loader_check_fdt_memory((const uint8_t *)(uintptr_t)r[R_FDT], 0x40000, IOSW_BOOT_STAMPS_PA,
+                                     IOSW_BOOT_STAMPS_PA + IOSW_BOOT_STAMPS_BYTES, &slot))
+            stamps_uboot();
+    }
+#endif
 #if LOAD_VERIFY_KERNEL
     uint64_t isar0;
     __asm__ volatile("mrs %0, id_aa64isar0_el1" : "=r"(isar0));
@@ -234,6 +304,9 @@ void loader_after_transition(void) {
 #endif
     __asm__ volatile("dsb sy" ::: "memory");
     loader_progress[4]=ticks()-started;
+#if LOAD_STAMPS_ADT_OFFSET
+    boot_stamps[IOSW_STAMP_COPY_DONE]=started+loader_progress[4];
+#endif
     loader_progress[1]=3;
 #if LOAD_VERIFY_KERNEL
     r[L_DEST_CRC] = checksum(LOAD_DEST,144);
@@ -292,6 +365,9 @@ void loader_after_transition(void) {
     loader_progress[1]=4;
 #if !LOAD_FAST_COPY
     display_text(16, 200, "COPY COMPLETE", DISPLAY_GREEN);
+#endif
+#if LOAD_STAMPS_ADT_OFFSET
+    stamps_commit();
 #endif
     loader_enter_kernel(LOAD_ARGS, LOAD_ENTRY);
 }

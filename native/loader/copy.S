@@ -86,8 +86,9 @@ loader_copy_run:
     dsb sy
     bl loader_copy_prepare
     cbnz w0, .Ltables_fail
+    /* Only the staged file is mapped (and read); LOAD_BYTES is the window it decodes into. */
     ldr x0, =LOAD_SOURCE
-    ldr x1, =(LOAD_SOURCE + LOAD_BYTES)
+    ldr x1, =(LOAD_SOURCE + LOAD_PACKED_BYTES)
 .Linitial_source:
     dc ivac, x0
     add x0, x0, #64
@@ -143,8 +144,8 @@ loader_copy_run:
     ldr x1, =LOAD_BYTES
     mov x2, x28
     blr x29
-    // The staging copy is packed (the window's nonzero extents back to back):
-    // copy.c expands it into the window and zeroes the rest, in this regime.
+    // The staged file is the window's nonzero extents, LZ4-compressed in blocks:
+    // copy.c decodes them into the window and zeroes the rest, in this regime.
     mov x0, x29
     mov x1, x28
     bl loader_copy_payload

@@ -19,7 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import native_xnu_layout  # noqa: E402
-from scripts.build_native_loader import NATIVE_FULL_RAM_EXCLUSIONS, build as build_loader  # noqa: E402
+from scripts.build_native_loader import (NATIVE_FULL_RAM_EXCLUSIONS, STAMPS_BYTES, STAMPS_PROPERTY,  # noqa: E402
+                                         build as build_loader)
 from scripts.package_native_handoff import legacy_image, LOAD  # noqa: E402
 
 NAME = 'ioswitch'
@@ -427,9 +428,21 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
         put(buttons, key, value)
     # APFS's no-SEP mode; it also permits the unencrypted Data volume.
     put(child(tree, 'filesystems'), 'DoNotUseSEP', u32(1))
+    # Pre-kernel boot timing (native/loader/stamps.h): zeros here, filled by the loader, logged once by XNU.
+    put(chosen, STAMPS_PROPERTY, bytes(STAMPS_BYTES))
     if smp:
         four_cores(tree)
     return adt_serialize(tree)
+
+
+# The hekate entry. Every key also reaches U-Boot's environment (hekate's L4T launcher passes the section on; U-Boot
+# imports it before its distro scan of boot_prefixes).
+# bootwait=0: hekate always shows its boot logo before an L4T entry and, launched from Nyx, waits [config] bootwait
+# seconds on it (3 by default; the entry's own key wins, main.c _auto_launch). Holding VOL- still opens hekate's menu.
+# scan_dev_for_extlinux: the distro scan's extlinux.conf probe (this entry has none) becomes the first boot timing
+# sample, taken once U-Boot, the SD card and hekate's env are up (native/loader/stamps.h).
+HEKATE_ENTRY = ('[IOSwitch]\nl4t=1\nboot_prefixes=/switchroot/{name}/\nid=IOSWITCH\nbootwait=0\n'
+                'scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\n')
 
 
 def main():
@@ -493,7 +506,7 @@ def main():
         f'switchroot/{NAME}/kernel-window.bin': window,
         f'switchroot/{NAME}/boot.cmd': script,
         f'switchroot/{NAME}/boot.scr': scr,
-        f'bootloader/ini/{NAME}.ini': f'[IOSwitch]\nl4t=1\nboot_prefixes=/switchroot/{NAME}/\nid=IOSWITCH\n'.encode(),
+        f'bootloader/ini/{NAME}.ini': HEKATE_ENTRY.format(name=NAME).encode(),
     })
     for relative, data in files.items():
         (out / relative).parent.mkdir(parents=True, exist_ok=True)

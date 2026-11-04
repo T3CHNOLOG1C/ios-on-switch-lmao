@@ -4,6 +4,10 @@
 # from the native entry would trigger U-Boot's own reset path before this script.
 # The screen stays dark until the loader draws: U-Boot's output (and echoe's stderr) goes to the serial console only.
 # The video console must still exist (the refusal below writes to it); a refusal switches back to it.
+# Boot timing (native/loader/stamps.h): setexpr.l samples the microsecond timer (TIMERUS_CNTR_1US, 0x60005010) after
+# each step; just before bootm go the samples go to the loader's slot at 0xA001EF00. Diagnostic only: nothing here
+# depends on them. ios_uboot comes from the hekate entry (its scan_dev_for_extlinux).
+setexpr.l ios_script *0x60005010
 if setenv stdout vidconsole; then
     setenv stdout serial
     setenv stderr serial
@@ -74,6 +78,7 @@ if test "${handoff_status}" = "READY"; then
     if load mmc ${devnum}:${distro_bootpart} 0xA0100000 /switchroot/ioswitch-native-xnu-v23/loader.uboot.bin 0x1c040; then
         if itest.l ${filesize} == 0x1c040; then
             echoe "LOADER READY"
+            setexpr.l ios_loader *0x60005010
         else
             setenv handoff_status IMAGE_READ_CHECK_FAILED
         fi
@@ -97,6 +102,7 @@ if test "${handoff_status}" = "READY"; then
     if load mmc ${devnum}:${distro_bootpart} 0x8D000000 /switchroot/ioswitch-native-xnu-v10/oled-sku3.dtb 0x28c52; then
         if itest.l ${filesize} == 0x28c52; then
             echoe "DTB READY"
+            setexpr.l ios_dtb *0x60005010
         else
             setenv handoff_status DTB_READ_CHECK_FAILED
         fi
@@ -105,9 +111,11 @@ if test "${handoff_status}" = "READY"; then
     fi
 fi
 
-# Stage the kernel window (packed: its nonzero extents back to back; the loader
-# expands it into XNU's window) after the size check. Files are checked by size
-# and header only (no CRC passes): FAT reads have their own card CRC.
+# Stage the kernel window (packed: its nonzero extents, LZ4-compressed, back to
+# back; the loader decodes it into XNU's window) after the size check. Files are
+# checked by size and header only (no CRC passes): FAT reads have their own card
+# CRC. fatsize is the size check: this U-Boot's FatFS glue sets filesize to the
+# length asked of load, not the file's, so the itest after each load always holds.
 if test "${handoff_status}" = "READY"; then
     if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-xnu-v23/kernel-window.bin; then
         if itest.l ${filesize} == 0x4324000; then
@@ -123,6 +131,7 @@ if test "${handoff_status}" = "READY"; then
     if load mmc ${devnum}:${distro_bootpart} 0xA2000000 /switchroot/ioswitch-native-xnu-v23/kernel-window.bin 0x4324000; then
         if itest.l ${filesize} == 0x4324000; then
             echoe "KERNEL LOADED"
+            setexpr.l ios_window *0x60005010
         else
             setenv handoff_status KERNEL_READ_CHECK_FAILED
         fi
@@ -188,6 +197,7 @@ if test "${handoff_status}" = "READY"; then
                             go 0xAA001920
                             go 0xAA001A64
                             echoe "SD EXPORTER READY"
+                            setexpr.l ios_exporter *0x60005010
                         else
                             setenv handoff_status EXPORTER_LOAD_FAILED
                         fi
@@ -230,6 +240,7 @@ if test "${handoff_status}" = "READY"; then
     # prep performs in-place FDT padding, real-bank/PSCI/GPU-node fixups, then
     # shrinks/reserves the FDT. It can visibly hang on firmware preparation error.
     if bootm prep; then
+        setexpr.l ios_prep *0x60005010
         # Capture the reference and active initialized card state after final
         # bootm prep. Exporter reads cached firmware RAM; it performs no card
         # commands, DMA, initialization or filesystem/device writes.
@@ -260,6 +271,18 @@ if test "${handoff_status}" = "READY"; then
             setenv handoff_status SD_REFERENCE_WRONG_DEVICE
         fi
         if test "${handoff_status}" = "READY"; then
+            setexpr.l ios_go *0x60005010
+            # The loader's timing slot (native/loader/stamps.h): samples, then the magic. A missing one stays 0.
+            mw.l 0xA001EF00 0 0x40
+            if env exists ios_uboot; then mw.l 0xA001EF04 ${ios_uboot} 1; fi
+            if env exists ios_script; then mw.l 0xA001EF08 ${ios_script} 1; fi
+            if env exists ios_loader; then mw.l 0xA001EF0C ${ios_loader} 1; fi
+            if env exists ios_dtb; then mw.l 0xA001EF10 ${ios_dtb} 1; fi
+            if env exists ios_window; then mw.l 0xA001EF14 ${ios_window} 1; fi
+            if env exists ios_exporter; then mw.l 0xA001EF18 ${ios_exporter} 1; fi
+            if env exists ios_prep; then mw.l 0xA001EF1C ${ios_prep} 1; fi
+            mw.l 0xA001EF20 ${ios_go} 1
+            mw.l 0xA001EF00 0x544f4255 1
             echoe "HANDOFF"
             bootm go
             setenv handoff_status UNEXPECTED_BOOTM_RETURN

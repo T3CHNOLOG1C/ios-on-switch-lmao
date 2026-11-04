@@ -47,6 +47,7 @@ int loader_copy_build_tables(uint64_t tables[LOADER_COPY_TABLE_PAGES][LOADER_COP
         b->ro_end < b->rx_end || (b->ro_end & (PAGE - 1)) || b->ro_end > table_address ||
         b->source != UINT64_C(0xa2000000) || !b->bytes || (b->bytes & (PAGE - 1)) ||
         b->bytes > UINT64_C(0x6000000) ||
+        !b->source_bytes || (b->source_bytes & (PAGE - 1)) || b->source_bytes > UINT64_C(0x6000000) ||
         (b->destination & (PAGE - 1)) || b->destination < UINT64_C(0xb2000000) ||
         b->destination >= UINT64_C(0xc0000000) ||
         b->bytes > UINT64_C(0xc0000000) - b->destination) return 1;
@@ -65,7 +66,7 @@ int loader_copy_build_tables(uint64_t tables[LOADER_COPY_TABLE_PAGES][LOADER_COP
             address < b->ro_end ? DATA | READONLY : DATA;
         tables[3][(address >> 12) & 511] = address | permissions | 3;
     }
-    map_ram(tables, table_address, b->source, b->source + b->bytes, DATA | READONLY, 4, 4);
+    map_ram(tables, table_address, b->source, b->source + b->source_bytes, DATA | READONLY, 4, 4);
     map_ram(tables, table_address, b->destination, b->destination + b->bytes, DATA, 5, 6);
 
     /* Firmware reserves these complete two blocks for the framebuffer. They
@@ -113,21 +114,124 @@ static void zero_blocks(uint64_t to, uint64_t bytes) {
         : "cc", "memory");
 }
 
-int loader_unpack(uint64_t destination, uint64_t source, uint64_t bytes,
-                  const uint64_t (*runs)[2], unsigned count,
+/* 16 bytes at any alignment. The decoder runs in loader_copy_run's regime: Normal memory with SCTLR_EL1.A clear, where
+ * unaligned LDP/STP are architectural (-mstrict-align only stops the compiler from emitting them itself). */
+static inline void copy16(uint8_t *to, const uint8_t *from) {
+#ifdef LOADER_COPY_HOST_TEST
+    /* Host tests: plain C, so AddressSanitizer checks every access the decoder makes. */
+    uint8_t step[16];
+    for (unsigned i = 0; i < 16; ++i) step[i] = from[i];
+    for (unsigned i = 0; i < 16; ++i) to[i] = step[i];
+#else
+    uint64_t low, high;
+    __asm__ volatile("ldp %0, %1, [%2]" : "=&r"(low), "=&r"(high) : "r"(from) : "memory");
+    __asm__ volatile("stp %0, %1, [%2]" : : "r"(low), "r"(high), "r"(to) : "memory");
+#endif
+}
+
+/* Exactly length bytes, forward. from is at least 16 bytes behind to, or in another buffer. */
+static void copy_exact(uint8_t *to, const uint8_t *from, uint64_t length) {
+    for (; length >= 16; length -= 16, to += 16, from += 16) copy16(to, from);
+    for (; length; --length) *to++ = *from++;
+}
+
+/* length bytes rounded up to 16, forward: the caller has that much room at to (and to read at from). from is at least
+ * 16 bytes behind to, or in another buffer; the bytes past length are rewritten by the output that follows. */
+static void copy_wild(uint8_t *to, const uint8_t *from, uint64_t length) {
+    uint8_t *const end = to + length;
+    do {
+        copy16(to, from);
+        to += 16;
+        from += 16;
+    } while (to < end);
+}
+
+/* An LZ4 length extension: 255-valued bytes continue it. 0, or 1 past the end of the input. */
+static int lz4_length(const uint8_t **in, const uint8_t *end, uint64_t *length) {
+    unsigned more;
+    do {
+        if (*in == end) return 1;
+        more = *(*in)++;
+        *length += more;
+    } while (more == 255);
+    return 0;
+}
+
+/* One LZ4 block (lz4.org block format) into [out, out + out_bytes) from [in, in + in_bytes). 0 only when its sequences
+ * use the input exactly and fill the output exactly. Every literal run, match length and offset is checked against
+ * both ends before it is copied, so a damaged file is refused, never written or read outside its block. */
+static int lz4_block(uint8_t *const out, const uint64_t out_bytes, const uint8_t *in, const uint64_t in_bytes) {
+    const uint8_t *const in_end = in + in_bytes;
+    uint8_t *op = out;
+    uint8_t *const out_end = out + out_bytes;
+    for (;;) {
+        if (in == in_end) return 1;
+        const unsigned token = *in++;
+        uint64_t length = token >> 4;
+        if (length == 15 && lz4_length(&in, in_end, &length)) return 1;
+        if (length > (uint64_t)(in_end - in) || length > (uint64_t)(out_end - op)) return 1;
+        if (length) {
+            if ((uint64_t)(in_end - in) >= length + 16 && (uint64_t)(out_end - op) >= length + 16)
+                copy_wild(op, in, length);
+            else
+                copy_exact(op, in, length);
+            op += length;
+            in += length;
+        }
+        if (in == in_end) return op == out_end ? 0 : 1; /* the last sequence is literals only */
+        if (in_end - in < 2) return 1;
+        const uint64_t offset = (uint64_t)in[0] | (uint64_t)in[1] << 8;
+        in += 2;
+        if (!offset || offset > (uint64_t)(op - out)) return 1;
+        length = token & 15;
+        if (length == 15 && lz4_length(&in, in_end, &length)) return 1;
+        length += 4;
+        if (length > (uint64_t)(out_end - op)) return 1;
+        const uint8_t *match = op - offset;
+        if (offset < 16) {
+            /* A short period: bytes one at a time until the output repeats at the smallest multiple of the offset that
+             * is at least 16 bytes back, then whole steps from there (the same bytes, a period further back). */
+            uint64_t period = offset;
+            while (period < 16) period += offset;
+            const uint64_t head = length < period ? length : period;
+            for (uint64_t i = 0; i < head; ++i) op[i] = match[i];
+            op += head;
+            length -= head;
+            match = op - period;
+        }
+        if (length) {
+            if ((uint64_t)(out_end - op) >= length + 16)
+                copy_wild(op, match, length);
+            else
+                copy_exact(op, match, length);
+            op += length;
+        }
+    }
+}
+
+int loader_unpack(uint64_t destination, uint64_t bytes, uint64_t source, uint64_t source_bytes,
+                  const uint64_t (*blocks)[4], unsigned count,
                   void (*progress)(uint64_t, uint64_t, uint64_t), uint64_t started) {
-    uint64_t at = 0;
+    uint64_t at = 0, read = 0;
+    if (bytes & (PAGE - 1)) return 1;
     for (unsigned i = 0; i < count; ++i) {
-        const uint64_t offset = runs[i][0], length = runs[i][1];
+        const uint64_t offset = blocks[i][0], length = blocks[i][1], from = blocks[i][2];
+        const uint64_t packed = blocks[i][3] & ~LOADER_BLOCK_STORED;
         if (offset < at || offset > bytes || !length || length > bytes - offset ||
-            ((offset | length) & (PAGE - 1))) return 1;
+            ((offset | length) & (PAGE - 1)) || from != read || !packed || packed > source_bytes - read) return 1;
         if (offset > at) zero_blocks(destination + at, offset - at);
-        copy_blocks(destination + offset, source, length);
-        source += length;
+        if (blocks[i][3] & LOADER_BLOCK_STORED) {
+            if (packed != length) return 1;
+            copy_blocks(destination + offset, source + from, length);
+        } else if (lz4_block((uint8_t *)(uintptr_t)(destination + offset), length,
+                             (const uint8_t *)(uintptr_t)(source + from), packed)) {
+            return 1;
+        }
+        read += packed;
         at = offset + length;
         if (progress) progress(at, bytes, started);
     }
-    if (bytes & (PAGE - 1)) return 1;
+    if (read != source_bytes) return 1;
     if (bytes > at) zero_blocks(destination + at, bytes - at);
     if (progress) progress(bytes, bytes, started);
     return 0;
@@ -136,21 +240,24 @@ int loader_unpack(uint64_t destination, uint64_t source, uint64_t bytes,
 #ifndef LOADER_COPY_HOST_TEST
 #include "runs.h"
 
-/* Under loader_copy_run's temporary cacheable regime: the packed staging copy at LOAD_SOURCE (the window's nonzero
- * extents back to back) expanded into the window at LOAD_DEST, zeros everywhere else. The builder checked that the
- * table expands to the exact layout image. */
+/* Under loader_copy_run's temporary cacheable regime: the staged file at LOAD_SOURCE (the window's nonzero extents,
+ * LZ4-compressed in blocks, back to back) decoded into the window at LOAD_DEST, zeros everywhere else. The builder
+ * checked that the table decodes to the exact layout image. */
 int loader_copy_payload(void (*progress)(uint64_t, uint64_t, uint64_t), uint64_t started) {
-    return loader_unpack(LOAD_DEST, LOAD_SOURCE, LOAD_BYTES, loader_runs, LOAD_RUN_COUNT, progress, started);
+    return loader_unpack(LOAD_DEST, LOAD_BYTES, LOAD_SOURCE, LOAD_STREAM_BYTES, loader_blocks, LOAD_BLOCK_COUNT,
+                         progress, started);
 }
 
 extern char __loader_rx_end[], __loader_ro_end[], __image_end[];
 
 int loader_copy_prepare(void) {
-    const struct loader_copy_bounds bounds = {
+    /* Static: a local this size is built with a memcpy call, which the freestanding image does not have. */
+    static const struct loader_copy_bounds bounds = {
         LOAD_SOURCE, LOAD_DEST, LOAD_BYTES,
         (uint64_t)(uintptr_t)__loader_rx_end,
         (uint64_t)(uintptr_t)__loader_ro_end,
-        (uint64_t)(uintptr_t)__image_end
+        (uint64_t)(uintptr_t)__image_end,
+        LOAD_PACKED_BYTES
     };
     return loader_copy_build_tables(loader_copy_tables,
         (uint64_t)(uintptr_t)loader_copy_tables, &bounds);
