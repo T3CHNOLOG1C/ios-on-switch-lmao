@@ -15,8 +15,10 @@ for line in sums.read_text().splitlines():
         data = (root / name).read_bytes()
     if hashlib.sha256(data).hexdigest() != digest:
         bad.append(name)
-listed = {line.split("  ", 1)[1] for line in sums.read_text().splitlines()}
-present = {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()} - {"SHA256SUMS", "BUILD.bazel", "check_sha256.py"}
+listed = {line.split("  ", 1)[1].replace(" (decompressed)", ".xz") for line in sums.read_text().splitlines()}
+# Every file in the pinned directories (the runfiles tree also holds this test's own interpreter files).
+dirs = {name.split("/")[0] for name in listed}
+present = {str(p.relative_to(root)) for d in dirs for p in (root / d).rglob("*") if p.is_file()}
 unlisted = sorted(present - listed)
 if bad or unlisted:
     sys.exit("sha256 mismatch: {}; not in SHA256SUMS: {}".format(bad, unlisted))
