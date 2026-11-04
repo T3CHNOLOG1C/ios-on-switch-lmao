@@ -481,6 +481,9 @@ void ioswitch_panic_logged(void)
         draw_log_area("XNU panic log:", log + from, length - from);
         draw_status();
     }
+    /* Still on XNU's verbose text console (a panic before the GUI took the screen): the panic log has scrolled the
+     * panic string off the top, so it is printed again under the backtrace, where a photo of the screen finds it. */
+    if (!screen_taken && panic_line[0]) kdb_printf_unbuffered("\npanic (cpu %u): %s\n", panic_cpu, panic_line);
     if (!save_on || !region || !reboot_s) return;
     uint64_t deadline = 0;
     nanoseconds_to_absolutetime((uint64_t)reboot_s * 1000000000ull, &deadline);
