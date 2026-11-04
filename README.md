@@ -172,7 +172,31 @@ Flags:
 Bazel caches every action by a hash of exactly its inputs. Each build's last line says what ran and what was reused.
 Measured on this Mac (16 cores, shared with other agents, so wall times vary):
 
-<!-- CACHE-NUMBERS -->
+| Scenario | Wall time | What Bazel printed |
+|---|---|---|
+| **Cold**: fresh output base, no disk cache (`//:kernel //:boot //:gpu`) | 380.8 s (critical path 318.5 s) | `INFO: 428 processes: 82 internal, 346 darwin-sandbox.` |
+| **No-op** rebuild | 0.29 s | `INFO: 1 process: 1 internal.` |
+| **Comment added** to `drivers/SwitchButtons/SwitchButtons.cpp` | 2.3 s | `INFO: 2 processes: 1 action cache hit, 1 internal, 1 darwin-sandbox.` |
+| **Code changed** in that driver (a function added) | 11.7 s | `INFO: 6 processes: 1 internal, 5 darwin-sandbox.` |
+| Code change reverted | 0.53 s | `INFO: 6 processes: 5 disk cache hit, 1 internal.` |
+| **One m2v patch changed** (a line in 0110) | 284.4 s | `INFO: 15 processes: 2 action cache hit, 1 internal, 14 darwin-sandbox.` |
+| m2v patch reverted | 4.3 s | `INFO: 15 processes: 2 action cache hit, 14 disk cache hit, 1 internal.` |
+| **Fresh output base**, disk cache warm (a new clone, or after `bazel clean --expunge`) | 78.5 s (critical path 2.2 s) | `INFO: 428 processes: 346 disk cache hit, 82 internal.` |
+| An XNU patch change | ≈117 s | `INFO: 295 processes: … 294 darwin-sandbox.` (XNU plus every driver object, which include XNU's headers) |
+
+What each scenario shows:
+- **Comment added.** Only that object recompiled. It came out byte-identical, so nothing after it ran: Bazel keys on
+  content, not timestamps.
+- **Code changed.** Exactly five actions ran: that object, its archive, the XNU link, the prelink and the package.
+  XNU, the other ~300 objects and the GPU bundle were untouched.
+- **m2v patch changed.** Both cargo bridges reran, then the plugin objects (the raw stack key hashes the patches and is
+  compiled in), link, sign, seed, raw pack and bundle. The kernel didn't rebuild; only the package step reruns once the
+  bundle's trust cache changes.
+- **Fresh output base.** Nothing executed. The time is server start, analysis and copying 346 outputs out of the disk
+  cache.
+
+Run the scenarios yourself with `bazel run //tools/bench:cache` (add `-- --cold` for the cold build). Times were
+measured while other agents loaded the machine; expect less on an idle one.
 
 ## Caches and disk use
 
@@ -274,7 +298,8 @@ What differs in `//:boot` itself, and why:
   paths and modification times in `__LINKEDIT`, which name the CMake flow's absolute paths. They change the window's
   length, and the loader and boot script embed that length.
 - The default (`path_root=/ioswitch`) also changes `__FILE__` strings from your home directory to `/ioswitch/...`.
-- The CMake flow could never rebuild the same kernel twice anyway: it embedded build times.
+- No build can reproduce those bytes, not even a second CMake build: its debug map records each object's modification
+  time.
 
 For the GPU bundle, every file matches main's flow except the plugin. In the plugin, classic call sites replace
 selector stubs, paths become `/ioswitch/...`, and 96 bytes of `llvm-as` version string differ (the official LLVM 23.1.4
