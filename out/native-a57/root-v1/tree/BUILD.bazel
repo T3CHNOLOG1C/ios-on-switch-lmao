@@ -1,0 +1,10 @@
+# The kernel tree: our drivers, kits, diagnostics, overlay sources and XNU/libpthread patches.
+# Kernel targets are declared in kernel.bzl-driven sections below; every source file is also exported so other
+# packages (gpu/, install/, deploy/) can name it, e.g. //out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
