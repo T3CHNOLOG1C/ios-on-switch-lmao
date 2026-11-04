@@ -8162,12 +8162,12 @@ static int
 native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 {
 	/* Jobs with no hardware or accounts here; the first three deadlock each other (UniXNU-sheng BootWatchdogPolicy.c
-	 * "lite" set). watchdogd runs: drivers/NativeIOSwitchWatchdog publishes the IOWatchdog launchd starts it for (without
-	 * one it os_crash()es, and its _PanicOnCrash panics), and it is what stackshots and kills a hung SpringBoard or
-	 * backboardd. */
+	 * "lite" set). watchdogd is off again: on its first hardware boot (r7p4) it os_crash()ed (SIGTRAP) about 41 s in,
+	 * and its _PanicOnCrash took the system down; drivers/NativeIOSwitchWatchdog stays published for when it returns. */
 #define NATIVE_IOSWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	    "<plist version=\"1.0\"><dict>" \
+	    "<key>com.apple.watchdogd</key><true/>" \
 	    "<key>com.apple.identityservicesd</key><true/>" \
 	    "<key>com.apple.locationd</key><true/>" \
 	    "<key>com.apple.CommCenter</key><true/>"
