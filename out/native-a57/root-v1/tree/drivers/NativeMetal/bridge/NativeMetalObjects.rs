@@ -294,7 +294,8 @@ pub extern "C" fn nmb_device_work_stats(device: *const NmbDevice, out: *mut u64)
 
 /// The runtime's own counts into the caller's ten words: device memory allocated (bytes), pooled, dedicated and imported blocks
 /// live, timeline waits (CPU waits for the GPU), render variants' VkPipelines made, those linked from libraries, fragment
-/// shader libraries made, textures given shadow images, and 0.
+/// shader libraries made, textures given shadow images, and dedicated requests a spare block served (the runtime's ioswitch
+/// spare dedicated blocks, `memory.rs`).
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_device_counts(device: *const NmbDevice, out: *mut u64) -> bool {
     guard(false, || {
@@ -307,7 +308,7 @@ pub extern "C" fn nmb_device_counts(device: *const NmbDevice, out: *mut u64) -> 
         out.copy_from_slice(&[
             c.device_memory_allocated, c.memory_blocks_live, c.dedicated_memory_blocks_live, c.host_imports_live,
             c.timeline_waits, c.variant_pipelines_made, c.pipelines_linked, c.fragment_shader_libraries_made,
-            SHADOWS.load(std::sync::atomic::Ordering::Relaxed), 0,
+            SHADOWS.load(std::sync::atomic::Ordering::Relaxed), c.spare_block_reuses,
         ]);
         Ok(true)
     })

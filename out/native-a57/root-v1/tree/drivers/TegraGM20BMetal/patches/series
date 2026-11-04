@@ -55,3 +55,4 @@ TegraGM20BMetal/patches/m2v/0109-ios-command-buffer-threads-user-interactive.pat
 TegraGM20BMetal/patches/m2v/0110-shader-cache-seed-only.patch
 TegraGM20BMetal/patches/m2v/0111-prime-without-generated-commands.patch
 TegraGM20BMetal/patches/m2v/0112-two-plane-span-copy-back.patch
+TegraGM20BMetal/patches/m2v/0113-spare-dedicated-blocks.patch

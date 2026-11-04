@@ -214,7 +214,7 @@
         "bzlTransitiveDigest": "z8XkojoKR49TyAWCLYxZpXMok6w8GzMyJs/leikKNkU=",
         "usagesDigest": "bfFdfO1EKlphHXkGdolkTW4gIC6FbU/48n6GLz1cKtk=",
         "recordedInputs": [
-          "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series e68f2e67b5669397cfbae10bc23dfea1b6dee4b27d7e7abef727270dfa998711"
+          "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series 3e8f6a9d36ff83889f7502667d3fd59d0ef23941b106734f4996f3702e61fab3"
         ],
         "generatedRepoSpecs": {
           "m2v": {
@@ -276,7 +276,8 @@
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0109-ios-command-buffer-threads-user-interactive.patch",
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0110-shader-cache-seed-only.patch",
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0111-prime-without-generated-commands.patch",
-                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0112-two-plane-span-copy-back.patch"
+                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0112-two-plane-span-copy-back.patch",
+                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0113-spare-dedicated-blocks.patch"
               ]
             }
           },

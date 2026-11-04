@@ -5070,6 +5070,11 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);
     }
     if (at + 1 < size) at += nbasync::appendRates(out + at, size - at);  // r7-async: apso= ... (AsyncPipelines.h)
+    // spare=: dedicated memory requests a kept block served instead of a new BoAlloc (m2v 0113, memory.rs).
+    if (at + 1 < size) {
+        const int more = snprintf(out + at, size - at, " spare=%llu", (unsigned long long)(now.counts[9] - was.counts[9]));
+        if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);
+    }
     return at;
 }
 

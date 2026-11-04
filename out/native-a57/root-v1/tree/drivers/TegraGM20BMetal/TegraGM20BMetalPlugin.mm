@@ -51,6 +51,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <algorithm>
+#include <initializer_list>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <objc/runtime.h>
@@ -217,6 +218,9 @@ bool systemContainerCache(char *out, size_t size)
 //  - the user cache directory when it is inside a data container (an app's own Library/Caches);
 //  - the process's system container (above): backboardd's;
 //  - the user cache directory elsewhere (a daemon with a home);
+//  - the Library/Caches of the data container whose tmp is the temp directory, as m2v-<process> (WebKit's GPU process writes Safari's
+//    container, a poster extension its own: iOS may clear a container's tmp, never its Library/Caches but under storage pressure, so
+//    their pipelines no longer compile again after a reboot; r7n/r7o: the GPU process's and AegirPoster's caches were in tmp/m2v);
 //  - /private/var/tmp/m2v-<process> (iconservicesagent, whose home is /var/empty), then the user temp directory, then $TMPDIR (WebKit's
 //    GPU process: its per-user temp directory is the one its sandbox extension covers).
 // One the sandbox would refuse is left out, asked without a report (sandboxMayCreate): the order of the others is unchanged.
@@ -236,8 +240,19 @@ unsigned cacheCandidates(char candidates[][512], unsigned most)
     if (user[0] && appContainer) add("%s%s", user, "m2v");
     if (!appContainer && systemContainerCache(container, sizeof container)) add("%s%s", container, "");
     if (user[0] && !appContainer) add("%s%s", user, "m2v");
+    const bool haveTemp = confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof temp) != 0;
+    for (const char *dir : {haveTemp ? (const char *)temp : nullptr, (const char *)getenv("TMPDIR")}) {
+        // <...>/Containers/Data/<kind>/<UUID>/tmp/... -> <...>/Containers/Data/<kind>/<UUID>/Library/Caches/m2v-<process>
+        const char *data = dir ? strstr(dir, "/Containers/Data/") : nullptr;
+        const char *tmp = data ? strstr(data, "/tmp/") : nullptr;
+        if (!tmp && data && (tmp = strstr(data, "/tmp")) && tmp[4]) tmp = nullptr;  // only a container's own tmp
+        if (!tmp) continue;
+        char root[512];
+        snprintf(root, sizeof root, "%.*s/Library/Caches/m2v-", (int)(tmp - dir), dir);
+        add("%s%s", root, getprogname());
+    }
     add("%s%s", "/private/var/tmp/m2v-", getprogname());
-    if (confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof temp)) add("%s%s", temp, "m2v");
+    if (haveTemp) add("%s%s", temp, "m2v");
     if (const char *tmpdir = getenv("TMPDIR"); tmpdir && *tmpdir == '/')
         add(tmpdir[strlen(tmpdir) - 1] == '/' ? "%s%s" : "%s/%s", tmpdir, "m2v");
     return count;
