@@ -50,9 +50,13 @@ int tegra_panel_power_on(int level);
 // holds no plausible value.
 int tegra_panel_boot_brightness(void);
 
+// The panel level last sent, 0..TEGRA_PANEL_BRIGHTNESS_MAX, or -1 before the first; any context (SwitchALS's stats).
+int tegra_panel_brightness(void);
+
 // For the owner of the DC A interrupt: call from its primary interrupt filter at every FRAME_END (DC_CMD_INT_STATUS
 // bit 1, which that owner enables, unmasks and clears), after clearing it. Returns at once unless a command is out; the
-// last step of a command spends about 620 us here (hekate's syncpoint reset and its settle delays).
+// last step of a command spends about 620 us here (hekate's syncpoint reset and its settle delays). It also clocks the
+// ambient light sensor (switch_als_frame_end).
 void tegra_panel_frame_end_filter(void);
 
 #ifdef __cplusplus

@@ -31,6 +31,7 @@
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/IOSwitchInterrupts.h"
+#include "SwitchBrightness.h"
 #include "TegraPanel.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -331,11 +332,17 @@ extern "C" int tegra_panel_boot_brightness(void)
     return locked([] { return bootLevel(); });
 }
 
+extern "C" int tegra_panel_brightness(void)
+{
+    return __atomic_load_n(&gHaveLevel, __ATOMIC_RELAXED) ? (int)__atomic_load_n(&gLevel, __ATOMIC_RELAXED) : -1;
+}
+
 // Primary interrupt context, at every DC A FRAME_END; one step of the command out, if any (see the top of this file).
 extern "C" void tegra_panel_frame_end_filter(void)
 {
     if (!__atomic_load_n(&gFrameEndsDriven, __ATOMIC_RELAXED))
         __atomic_store_n(&gFrameEndsDriven, true, __ATOMIC_RELEASE);
+    switch_als_frame_end();
     uint32_t next = step();
     switch (next) {
     case kQueued:

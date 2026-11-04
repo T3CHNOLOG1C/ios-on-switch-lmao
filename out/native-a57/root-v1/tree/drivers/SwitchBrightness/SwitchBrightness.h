@@ -2,12 +2,13 @@
 // The built-in display's backlight, display power and ambient light sensor for iPadOS 17 CoreBrightness
 // (SwitchBacklight.cpp, SwitchALS.cpp; the panel itself is TegraPanel.h).
 //
-// Boot-args, all default off until proven on hardware:
+// Boot-args:
 //   switch-backlight=1  CoreBrightness's brightness reaches the panel (DCS 0x51). Without it the backlight service is
 //                       still published (CoreBrightness finds its display) and records what it is asked for.
 //   switch-sleep=1      display power: the render server's power requests turn the panel off and on and stop and
 //                       restart the display controller's scanout.
-//   switch-als=1        the BH1730FVC ambient light sensor as CoreBrightness's ALS (HID service 0xff00/0x0004).
+//   switch-als=0        no ambient light sensor. By default the BH1730FVC is CoreBrightness's ALS (HID service
+//                       0xff00/0x0004), clocked by display controller A's frame ends (SwitchALS.cpp).
 #ifndef SWITCH_BRIGHTNESS_H
 #define SWITCH_BRIGHTNESS_H
 #include <stdbool.h>
@@ -36,13 +37,27 @@ bool switch_display_is_on(void);
 // true when done. Called from the backlight's work loop only: after the panel is off, and before it is turned on again.
 bool native_legacy_display_set_scanout(bool on);
 
-// Starts the ambient light sensor (switch-als=1; otherwise returns 0 and does nothing). Needs TegraI2C, the GIC and
-// IOHIDFamily (switch_hid_create loads it); thread context, may sleep. Panics with the reason if the sensor does not
-// answer. 0 on success.
+// Starts the ambient light sensor (unless switch-als=0: then returns 0 and does nothing). Needs TegraI2C, the GIC and
+// IOHIDFamily (switch_hid_create loads it); thread context, may sleep. Publishes the HID service at once and talks to the
+// sensor at its first sample (SwitchTouch powers it), panicking with the reason if it does not answer. 0 on success.
 int switch_als_start(void);
 
+// True once the ALS HID service is registered: MobileGestalt's ambient-light-sensor is then true (XNU's kern_exec drops
+// MobileGestalt's cache when this differs from the last boot's). Any context.
+bool switch_als_published(void);
+
+// For TegraPanel's frame-end filter (primary interrupt context), at every DC A FRAME_END: the sensor's sample clock.
+void switch_als_frame_end(void);
+
 // The backlight tells the sensor when the panel goes dark or lights up: the sensor stops converting while it is dark.
+// Thread context.
 void switch_als_set_active(bool active);
+
+// System sleep (SwitchSuspend), thread context, I2C up. Suspend before the display and touch suspend (the sensor shares
+// LDO6 with the touch panel, and its clock is the display's frame end); resume after both have resumed (the sensor is
+// configured again at its first sample, which needs LDO6 and frame ends).
+void switch_als_suspend(void);
+void switch_als_resume(void);
 
 #ifdef __cplusplus
 }

@@ -138,7 +138,7 @@ extern int switch_thermal_start(void);
 extern int switch_battery_start(void);
 extern int switch_touch_start(void);
 extern int switch_buttons_start(void);
-extern int switch_als_start(void); /* no-op unless switch-als=1; after SwitchTouch, which powers the sensor (LDO6) */
+extern int switch_als_start(void);       /* on unless switch-als=0; after SwitchTouch, which powers the sensor (LDO6) */
 extern int switch_bluetooth_start(void); /* no-op unless switch-bt=1; runs its bring-up on its own thread */
 extern int switch_joycon_start(void);    /* no-op unless switch-joycon-rail=1 */
 extern int switch_wlan_publish(void);    /* no-op unless switch-wlan=1; runs its bring-up on its own thread */
