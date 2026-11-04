@@ -1,0 +1,93 @@
+From b3bc5a04b31b36f118a90ac37b75c699028c846c Mon Sep 17 00:00:00 2001
+From: r8-webgpu <r8-webgpu@localhost>
+Date: Wed, 4 Nov 2026 17:52:36 +0000
+Subject: [PATCH] nvk: join contiguous copy regions (one copy, not one dispatch
+ per row)
+
+---
+ src/nouveau/vulkan/nvk_cmd_meta.c | 52 +++++++++++++++++++++++++++++--
+ 1 file changed, 50 insertions(+), 2 deletions(-)
+
+diff --git a/src/nouveau/vulkan/nvk_cmd_meta.c b/src/nouveau/vulkan/nvk_cmd_meta.c
+index 42d444cf..88d1f01c 100644
+--- a/src/nouveau/vulkan/nvk_cmd_meta.c
++++ b/src/nouveau/vulkan/nvk_cmd_meta.c
+@@ -11,6 +11,7 @@
+ #include "nvk_physical_device.h"
+ 
+ #include "vk_format.h"
++#include "util/stack_array.h"
+ 
+ #include "nv_push_cl9097.h"
+ #include "nv_push_cl90c0.h"
+@@ -547,18 +548,65 @@ nvk_cmd_copy_memory_meta(struct nvk_cmd_buffer *cmd,
+    nvk_meta_end_compute(cmd, &save);
+ }
+ 
++/* Whether region b continues region a in both the source and the destination
++ * (and with the same flags), so that one copy of both is the same copy.
++ */
++static bool
++nvk_copy_memory_regions_join(const VkDeviceMemoryCopyKHR *a,
++                             const VkDeviceMemoryCopyKHR *b)
++{
++   return a->pNext == NULL && b->pNext == NULL &&
++          a->srcFlags == b->srcFlags && a->dstFlags == b->dstFlags &&
++          a->srcRange.size == a->dstRange.size &&
++          b->srcRange.size == b->dstRange.size &&
++          a->srcRange.address + a->srcRange.size == b->srcRange.address &&
++          a->dstRange.address + a->dstRange.size == b->dstRange.address;
++}
++
+ VKAPI_ATTR void VKAPI_CALL
+ nvk_CmdCopyMemoryKHR(VkCommandBuffer commandBuffer,
+                      const VkCopyDeviceMemoryInfoKHR *pCopyMemoryInfo)
+ {
+    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
+ 
++   /* ioswitch: regions that continue one another (a buffer's rows copied
++    * one region each, as metal2vulkan's shadows copy back a surface's rows)
++    * become one copy: the meta path is a compute dispatch per region, ~1000
++    * for one 512-row tile, and the copy engine a launch per region.
++    */
++   const uint32_t count = pCopyMemoryInfo->regionCount;
++   uint32_t joined = count;
++   for (uint32_t r = 1; r < count; r++) {
++      if (nvk_copy_memory_regions_join(&pCopyMemoryInfo->pRegions[r - 1],
++                                       &pCopyMemoryInfo->pRegions[r]))
++         joined--;
++   }
++
++   VkCopyDeviceMemoryInfoKHR info = *pCopyMemoryInfo;
++   STACK_ARRAY(VkDeviceMemoryCopyKHR, regions, joined < count ? joined : 1);
++   if (joined < count) {
++      uint32_t n = 0;
++      for (uint32_t r = 0; r < count; r++) {
++         const VkDeviceMemoryCopyKHR *region = &pCopyMemoryInfo->pRegions[r];
++         if (n > 0 && nvk_copy_memory_regions_join(&regions[n - 1], region)) {
++            regions[n - 1].srcRange.size += region->srcRange.size;
++            regions[n - 1].dstRange.size += region->dstRange.size;
++         } else {
++            regions[n++] = *region;
++         }
++      }
++      assert(n == joined);
++      info.regionCount = n;
++      info.pRegions = regions;
++   }
++
+    VkQueueFlags queue_flags = nvk_cmd_buffer_queue_flags(cmd);
+    if (queue_flags & VK_QUEUE_COMPUTE_BIT) {
+-      nvk_cmd_copy_memory_meta(cmd, pCopyMemoryInfo);
++      nvk_cmd_copy_memory_meta(cmd, &info);
+    } else {
+-      nvk_cmd_copy_memory_ce(cmd, pCopyMemoryInfo);
++      nvk_cmd_copy_memory_ce(cmd, &info);
+    }
++   STACK_ARRAY_FINISH(regions);
+ }
+ 
+ static void
+-- 
+2.54.0 (Apple Git-156)
+

@@ -1,0 +1,63 @@
+diff --git a/crates/metal2vulkan-runtime/src/texture/heap_two_planes.rs b/crates/metal2vulkan-runtime/src/texture/heap_two_planes.rs
+index f7cb3738..ffd18c15 100644
+--- a/crates/metal2vulkan-runtime/src/texture/heap_two_planes.rs
++++ b/crates/metal2vulkan-runtime/src/texture/heap_two_planes.rs
+@@ -25,8 +25,8 @@
+ //! `ShadowTarget::Planes`): into the image, the texture's bytes copied into a staging buffer,
+ //! one dispatch of `bind::two_plane_texels_module` moving them into a tight buffer of the image's
+ //! texels, and that buffer copied into the image; back, the image into the tight buffer, the
+-//! kernel into the staging buffer, and each row of each plane on into the heap's bytes, so the
+-//! bytes between the rows stay. Each step is ordered after the one before by a full barrier, and
++//! kernel into the staging buffer, and the span on into the heap's bytes as one copy, the bytes
++//! between the rows and the planes as the copy in found them, so they stay. Each step is ordered after the one before by a full barrier, and
+ //! the buffers are the texture's for its life. A buffer or texture over the texture's bytes, the
+ //! CPU's writes through the heap's pages and the texture's own CPU copies (plane 0's color words
+ //! at Metal's rows, `heap_plane_layout`) then meet the same bytes as on Metal.
+@@ -98,12 +98,6 @@ impl TwoPlaneHeapLayout {
+         self.alpha_at + (self.height - 1) * self.alpha_pitch + self.width
+     }
+ 
+-    /// Each row of each plane, as (its first byte, its bytes), plane 0's first.
+-    fn rows(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+-        let color = (0..self.height).map(|y| (y * self.color_pitch, 4 * self.width));
+-        let alpha = (0..self.height).map(|y| (self.alpha_at + y * self.alpha_pitch, self.width));
+-        color.chain(alpha)
+-    }
+ }
+ 
+ /// One direction of the kernel's moves: its shape, where it lies in the shape buffer, and the
+@@ -150,7 +144,7 @@ impl HeapPlaneCopies {
+ 
+     /// The staging buffer of a texture of `layout` whose first byte lies at `at` of the heap's
+     /// `VkBuffer`: the texture's bytes, from its first to plane 1's last, at its start, of the
+-    /// texture's `hazard` tracking, in whole 4-byte words; each row of each plane copied back.
++    /// texture's `hazard` tracking, in whole 4-byte words; the span copied back whole.
+     pub(crate) fn staging(
+         device: &Device,
+         layout: &TwoPlaneHeapLayout,
+@@ -162,14 +156,17 @@ impl HeapPlaneCopies {
+             ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
+         let buffer = device.own_buffer(span.next_multiple_of(4), options)?;
+         let (_, start) = buffer.at(0);
+-        let back = layout
+-            .rows()
+-            .map(|(row, size)| vk::BufferCopy {
+-                src_offset: start + row,
+-                dst_offset: at + row,
+-                size,
+-            })
+-            .collect();
++        // Back as one copy of the span (ioswitch), not one per row of each plane: the staging
++        // buffer holds every byte of the span as the copy in found it, the kernel rewrote only
++        // the texels' words, so the bytes between the rows and the planes go back as they were.
++        // A copy per row was a compute dispatch each on NVK (`vk_meta_copy_memory`): ~1000 per
++        // 512-row tile, the most of WebKit's GPU time while it re-rendered tiles (r7j: 1002
++        // dispatches per submission, 80% busy, 2-9 frames a second while zooming).
++        let back = vec![vk::BufferCopy {
++            src_offset: start,
++            dst_offset: at,
++            size: span,
++        }];
+         Ok(ShadowStaging {
+             into: vk::BufferCopy {
+                 src_offset: at,

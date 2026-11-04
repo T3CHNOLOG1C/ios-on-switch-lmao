@@ -20,7 +20,7 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_runtime::{
     ArgumentEncoder, ResourceRef,
     BinaryArchive, BinaryArchiveDescriptor, BlitCommandEncoder, FamilyRow, FeatureRow, GpuFamily, RowState, BlitOption, Buffer, ClearColor, CommandBuffer, CommandQueue, ComputeCommandEncoder,
-    ComputePipelineState, DebugMessage, DepthStencilState, Device, DeviceOptions, MessageSeverity, MessageSink, Event, EventRef, Fence, Function, Heap, HeapDescriptor, HeapType, HostMemory, IoSurfacePlane, IoSurfaceYCbCr, Library, LoadAction,
+    ComputePipelineState, DebugMessage, DepthStencilState, Device, DeviceOptions, MessageSeverity, MessageSink, Event, EventRef, Fence, Function, Heap, HeapDescriptor, HeapType, HostMemory, IoSurfacePlane, IoSurfaceYCbCr, SurfaceYCbCrMatrix, Library, LoadAction,
     MetalLevel, Origin, PipelineOption, PipelineOptions, PurgeableState, PrivateCount, PrivateFlag, PrivateProperties, MAX_COLOR_ATTACHMENTS, Region, RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
     SamplerState, ScissorRect, SharedEvent, SharedEventListener, Size, StoreAction, Texture, TextureDescriptor, Viewport, VisibilityResultMode,
 };
@@ -836,17 +836,25 @@ pub extern "C" fn nmb_texture_new_on_buffer(buffer: *mut NmbBuffer, descriptor: 
     })
 }
 
-/// A texture over plane `plane` of a two-plane surface whose bytes `buffer` stands for (its first byte the surface's base): the plane
+/// A texture over plane `plane` of a planar surface whose bytes `buffer` stands for (its first byte the surface's base): the plane
 /// at `offset` with rows `bytes_per_row` apart, the surface's OSType `fourcc`, its `width` x `height` (plane 0's), plane 1 at
-/// `plane1_offset` with rows `plane1_bytes_per_row` apart. The runtime makes `RGB10A8_2P_XR10` and its sRGB twin over plane 0 of a
-/// 'b3a8' surface (WebKit's deep-color layer backing stores) exactly as Metal reads and writes them, and refuses what it cannot.
+/// `plane1_offset` with rows `plane1_bytes_per_row` apart (0 and 0 for a one-plane surface), and its `kIOSurfaceYCbCrMatrix`
+/// attachment string `matrix` (null without one). The runtime makes Metal's two-plane formats over plane 0 ('b3a8' as
+/// RGB10A8_2P_XR10, '_RB4' as RGB8_444_2P, the CoreVideo YCbCr surfaces as YCBCR8_420_2P and kin) and plain formats over a plane,
+/// exactly as Metal reads and writes them, and refuses what it cannot.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_texture_new_on_surface_planes(buffer: *mut NmbBuffer, descriptor: *const NmbTextureDescriptor, offset: u64,
                                                     bytes_per_row: u64, fourcc: u32, plane: u64, width: u64, height: u64,
-                                                    plane1_offset: u64, plane1_bytes_per_row: u64) -> *mut NmbTexture {
+                                                    plane1_offset: u64, plane1_bytes_per_row: u64, matrix: *const c_char)
+                                                    -> *mut NmbTexture {
     guard(std::ptr::null_mut(), || {
         let descriptor = texture_descriptor(descriptor)?;
-        let facts = IoSurfaceYCbCr::new(fourcc, plane, [width, height], plane1_offset, plane1_bytes_per_row);
+        let mut facts = IoSurfaceYCbCr::new(fourcc, plane, [width, height], plane1_offset, plane1_bytes_per_row);
+        if !matrix.is_null() {
+            // SAFETY: the caller's NUL-terminated string, read for the call.
+            let text = unsafe { CStr::from_ptr(matrix) }.to_string_lossy();
+            facts = facts.with_matrix(SurfaceYCbCrMatrix::from_attachment(&text));
+        }
         let texture = get(buffer)?
             .0
             .new_texture_with_iosurface_plane(&descriptor, IoSurfacePlane::new(offset, bytes_per_row, true).with_ycbcr(facts));

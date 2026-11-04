@@ -690,47 +690,59 @@ static NBTexture *textureOnBuffer(NBBuffer *buffer, MTLTextureDescriptor *d, NSU
     texture.rowBytes = row;
     return texture;
 }
-// WebKit's deep-color layer backing stores: two-plane 'b3a8' surfaces (kCVPixelFormatType_30RGBLE_8A_BiPlanar: plane 0 the 10-bit
-// extended-range color words, plane 1 the alpha bytes), which WebKit draws a page's tiles into wherever the screen reports a wide
-// gamut, and which the render server samples as RGB10A8_2P_XR10 (550) or its sRGB twin (551) over plane 0. The runtime makes that
-// texture as Metal reads and writes it (texture/surface_two_planes.rs) over the surface's whole allocation, given plane 1's place.
-// Refused (r7d), every web page drew black: Core Animation's "Failed to allocate MTLTexture from IOSurface" for each of Safari's
-// tiles. nil for any other planar surface, format or plane, which stay refused below.
-static NBTexture *twoPlaneSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef surface, NSUInteger plane)
+// A texture over plane `plane` of a planar surface, made by the runtime over the surface's whole allocation with the surface's facts
+// (its OSType, plane 0's size, plane 1's place, its kIOSurfaceYCbCrMatrix): Metal's two-plane formats over plane 0 and plain
+// formats over either plane, as the runtime holds them (`new_texture_with_iosurface_plane`):
+//  - 'b3a8' as RGB10A8_2P_XR10 (550/551): WebKit's deep-color tiles (r8: refused, every web page drew black);
+//  - '_RB4' as RGB8_444_2P (542): the widget and poster snapshots Chrono and PosterBoard hand the render server (r7j: refused, no
+//    widget drew and Core Animation logged "Failed to allocate MTLTexture from IOSurface" for each, 3226 in one boot);
+//  - '420f'/'420v' (and the other CoreVideo YCbCr surfaces) as YCBCR8_420_2P (500), its sRGB twin (520) or RGB8_420_2P (540): decoded
+//    photos and video frames, converted at each encoder that samples them (ycbcr.rs; M2V_YCBCR_MEMO skips unchanged ones);
+//  - R8Unorm/RG8Unorm and kin over plane 0 or 1 (the decoders' and Core Image's per-plane views).
+// The runtime refuses what it does not hold exactly (logged once per reason; the texture is then nil, as before).
+static NBTexture *planarSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef surface, NSUInteger plane)
 {
-    constexpr uint32_t kB3A8 = 0x62336138;  // 'b3a8'
-    const NSUInteger format = d.pixelFormat;
-    if (plane != 0 || (format != 550 && format != 551) || IOSurfaceGetPixelFormat(surface) != kB3A8 ||
-        IOSurfaceGetPlaneCount(surface) != 2)
-        return nil;
+    const size_t planes = IOSurfaceGetPlaneCount(surface);
+    if (planes < 1 || planes > 2 || plane >= planes) return nil;
     const uintptr_t base = (uintptr_t)IOSurfaceGetBaseAddress(surface);
-    const uintptr_t color = (uintptr_t)IOSurfaceGetBaseAddressOfPlane(surface, 0);
-    const uintptr_t alpha = (uintptr_t)IOSurfaceGetBaseAddressOfPlane(surface, 1);
+    const uintptr_t at = (uintptr_t)IOSurfaceGetBaseAddressOfPlane(surface, plane);
+    const uintptr_t chroma = planes > 1 ? (uintptr_t)IOSurfaceGetBaseAddressOfPlane(surface, 1) : 0;
     const size_t page = vm_page_size, allocation = IOSurfaceGetAllocSize(surface);
-    if (!base || (base & (page - 1)) || color < base || alpha < base || !allocation ||
+    if (!base || (base & (page - 1)) || at < base || (planes > 1 && chroma < base) || !allocation ||
         allocation > SIZE_MAX - (page - 1))
         return nil;
     NBBuffer *buffer = surfaceBuffer(surface, (void *)base, (allocation + page - 1) & ~(page - 1));
     NmbTextureDescriptor descriptor;
     if (!buffer || !textureDescriptor(d, &descriptor)) return nil;
-    const NSUInteger offset = color - base, row = IOSurfaceGetBytesPerRowOfPlane(surface, 0);
+    // kIOSurfaceYCbCrMatrix: the CoreVideo attachment's string ("ITU_R_709_2", ...), which the converted formats read.
+    char matrix[32] = {};
+    if (CFTypeRef value = IOSurfaceCopyValue(surface, CFSTR("IOSurfaceYCbCrMatrix"))) {
+        if (CFGetTypeID(value) == CFStringGetTypeID())
+            CFStringGetCString((CFStringRef)value, matrix, sizeof matrix, kCFStringEncodingUTF8);
+        CFRelease(value);
+    }
+    const NSUInteger offset = at - base, row = IOSurfaceGetBytesPerRowOfPlane(surface, plane);
     const uint64_t began = nowUs();
     NmbTexture *handle = nmb_texture_new_on_surface_planes(
-        buffer.handle, &descriptor, offset, row, kB3A8, 0, IOSurfaceGetWidthOfPlane(surface, 0),
-        IOSurfaceGetHeightOfPlane(surface, 0), alpha - base, IOSurfaceGetBytesPerRowOfPlane(surface, 1));
+        buffer.handle, &descriptor, offset, row, IOSurfaceGetPixelFormat(surface), plane,
+        IOSurfaceGetWidthOfPlane(surface, 0), IOSurfaceGetHeightOfPlane(surface, 0), planes > 1 ? chroma - base : 0,
+        planes > 1 ? IOSurfaceGetBytesPerRowOfPlane(surface, 1) : 0, matrix[0] ? matrix : nullptr);
     gTimeSurfaceTexture.add(began);
     if (!handle) {
-        // once per reason: Core Animation asks again every frame
+        // once per format, OSType, plane and reason: Core Animation asks again every frame
         static NSMutableSet *said = [NSMutableSet set];
-        NSString *why = lastError();
+        const uint32_t fourcc = IOSurfaceGetPixelFormat(surface);
+        NSString *why = [NSString stringWithFormat:@"%lu %c%c%c%c plane %lu: %@", (unsigned long)d.pixelFormat,
+                                                   (char)(fourcc >> 24), (char)(fourcc >> 16), (char)(fourcc >> 8),
+                                                   (char)fourcc, (unsigned long)plane, lastError()];
         bool first = false;
         @synchronized(said) {
-            if (why && ![said containsObject:why]) {
+            if (![said containsObject:why]) {
                 [said addObject:why];
                 first = true;
             }
         }
-        if (first) NBLOG(@"native-metal: two-plane surface texture refused: %@", why);
+        if (first) NBLOG(@"native-metal: planar surface texture refused (format, fourcc, plane): %@", why);
         return nil;
     }
     NBTexture *texture = [NBTexture new];
@@ -3909,7 +3921,13 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 // their pipelines from their own metallib.
 - (id)newPipelineLibraryWithFilePath:(NSString *)path error:(NSError **)error
 {
-    refuseLibrary([NSString stringWithFormat:@"pipeline library %@", path.lastPathComponent]);
+    // Not a failure the caller waits on or retries: Metal's own answer for a GPU its library has no pipelines of, after which
+    // RenderBox, PencilKit and the rest make their states from their metallib at once (r7j: once per library and process).
+    static std::atomic<int> told{0};
+    if (told.fetch_add(1) < 8)
+        NBLOG(@"native-metal: pipeline library %@: none for this GPU (file not found, as Metal answers; the caller "
+              @"compiles its metallib)",
+              path.lastPathComponent);
     if (error)
         *error = [NSError errorWithDomain:MTLLibraryErrorDomain
                                      code:MTLLibraryErrorFileNotFound
@@ -4150,26 +4168,10 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
                                      plane:(NSUInteger)plane
 {
     if (surface && d && (plane || IOSurfaceGetPlaneCount(surface))) {
-        // WebKit's two-plane deep-color tiles ('b3a8' as format 550/551) are made (twoPlaneSurfaceTexture).
-        if (NBTexture *texture = twoPlaneSurfaceTexture(d, surface, plane)) return (id<MTLTexture>)texture;
-        // Any other planar surface (a decoded HEIC/HEVC frame, '420v'/'420f', Metal format 500 and its kin) is not imported here: say each
-        // kind once, so a boot shows whether the render server is handed any (the wallpaper's two-plane YCbCr image was evb10's largest
-        // GPU cost).
+        // Every planar surface goes to the runtime with its facts (planarSurfaceTexture), which makes what it holds exactly and
+        // refuses the rest (logged once per reason there); planar= counts the planar textures asked for.
         gSurfaceMultiPlane++;
-        static NSMutableSet *said = [NSMutableSet set];
-        const uint32_t fourcc = IOSurfaceGetPixelFormat(surface);
-        NSString *kind = [NSString stringWithFormat:@"%lu %c%c%c%c %zu", (unsigned long)d.pixelFormat,
-                                                    (char)(fourcc >> 24), (char)(fourcc >> 16), (char)(fourcc >> 8),
-                                                    (char)fourcc, IOSurfaceGetPlaneCount(surface)];
-        bool first = false;
-        @synchronized(said) {
-            if (![said containsObject:kind]) {
-                [said addObject:kind];
-                first = true;
-            }
-        }
-        if (first) NBLOG(@"native-metal: planar surface texture refused (format, fourcc, planes): %@", kind);
-        return nil;
+        return (id<MTLTexture>)planarSurfaceTexture(d, surface, plane);
     }
     if (!surface || !d) return nil;
     void *base = IOSurfaceGetBaseAddress(surface);

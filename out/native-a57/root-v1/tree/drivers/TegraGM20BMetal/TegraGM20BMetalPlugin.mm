@@ -421,6 +421,11 @@ id openDevice(unsigned port)
         // that takes a write, or TEGRA_M2V_CACHE_DIR. A device that does not open for another reason than its cache is not tried
         // again with the next one. With none writable the cache is the runtime's memory alone (a bridge without that mode
         // refuses, and the process gets no device as before).
+        // The opening's cost, one line (the ready line's "open" field): the cache directory's choice and probe, then the bridge's
+        // device (NVK loaded and its device made, the runtime's device and priming), on the thread that asked for the device
+        // (a process's main thread, often: Chrono's WidgetRenderer and the screenshot service wait on it).
+        const uint64_t openBegan = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        uint64_t bridgeNs = 0;
         char candidates[6][512] = {};
         unsigned count = 0;
         const char *chosen = getenv("TEGRA_M2V_CACHE_DIR");
@@ -434,20 +439,24 @@ id openDevice(unsigned port)
         for (unsigned i = 0; i < count && !device; ++i) {
             if (!writable(candidates[i])) continue;
             cache = candidates[i];
+            const uint64_t bridgeBegan = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
             @try {
                 device = native_bridge_metal_open(loader, cache, registryID, missing);
             } @catch (NSException *exception) {
                 device = nil;
             }
+            bridgeNs += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - bridgeBegan;
             if (!device && !strstr(nmb_last_error(), "ShaderCache")) break;
         }
         if (!device && (!cache || strstr(nmb_last_error(), "ShaderCache"))) {
             cache = nullptr;
+            const uint64_t bridgeBegan = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
             @try {
                 device = native_bridge_metal_open(loader, nullptr, registryID, missing);
             } @catch (NSException *exception) {
                 device = nil;
             }
+            bridgeNs += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - bridgeBegan;
         }
         if (!device) {
             os_log_error(logger(), "TegraGM20BMetal: no device in %{public}s: %{public}s", getprogname(),
@@ -481,11 +490,13 @@ id openDevice(unsigned port)
             }
         }
         // seed: "shared (<its SEED line>)" (the runtime reads the shared seed beneath the cache), "none" (no readable seed, or off)
+        const uint64_t openNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - openBegan;
         os_log(logger(),
                "TegraGM20BMetal: device %{public}s ready in %{public}s, cache %{public}s, seed "
-               "%{public}s%{public}s%{public}s",
+               "%{public}s%{public}s%{public}s, open %llu ms (bridge %llu ms)",
                [[(id<MTLDevice>)device name] UTF8String], getprogname(), cache ? cache : "memory only",
-               seeded ? "shared (" : "none", seeded ? seedName : "", seeded ? ")" : "");
+               seeded ? "shared (" : "none", seeded ? seedName : "", seeded ? ")" : "",
+               (unsigned long long)(openNs / 1000000), (unsigned long long)(bridgeNs / 1000000));
         startRates();
         return device;
     }

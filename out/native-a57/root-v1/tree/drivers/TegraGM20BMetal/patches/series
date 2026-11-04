@@ -53,3 +53,5 @@ TegraGM20BMetal/patches/m2v/0106-fetch-barrier-by-color-writes.patch
 TegraGM20BMetal/patches/m2v/0108-shader-cache-seed-beneath-the-directory.patch
 TegraGM20BMetal/patches/m2v/0109-ios-command-buffer-threads-user-interactive.patch
 TegraGM20BMetal/patches/m2v/0110-shader-cache-seed-only.patch
+TegraGM20BMetal/patches/m2v/0111-prime-without-generated-commands.patch
+TegraGM20BMetal/patches/m2v/0112-two-plane-span-copy-back.patch
