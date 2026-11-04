@@ -1,58 +1,55 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SwitchXUDC: the Tegra X1 XUSB device controller as a backend of Apple's
-// original IOUSBDeviceController (com.apple.iokit.IOUSBDeviceFamily, 21H461).
+// SwitchXUDC: the Tegra X1 XUSB device controller as a backend of Apple's original IOUSBDeviceController
+// (com.apple.iokit.IOUSBDeviceFamily 2.0.0, 21H461).
 //
-// The family does everything above the controller: descriptors, the EP0
-// request state machine (IOUSBDeviceControlRequest), configurations and
-// functions. With ConfigurationType "standardBringup" the original
-// IOUSBDeviceConfigurator publishes one AppleUSBMux interface, so the original
-// AppleUSBDeviceMux runs and a Mac's usbmuxd sees an iPad (iproxy, SSH).
-// This file implements the 18 pure-virtual hardware methods the in-cache
-// reference backend (AppleUSBXDCI, a DWC3 driver) implements, on top of
-// XudcHardware. USB2 high speed; bulk and interrupt endpoints; no isochronous.
+// Apple's code does everything above the controller, as on an iPad:
+//   * the family (prelinked) builds descriptors, runs the EP0 request state machine (IOUSBDeviceControlRequest) and
+//     publishes one IOUSBDeviceInterface per function;
+//   * configd's USBDeviceConfiguration plug-in reads the controller's ConfigurationType (the provider's
+//     configuration-string, /arm-io/usb-device in the ADT) and sets the description from
+//     /System/Library/AppleUSBDevice/USBDeviceConfiguration.plist, with the UDID as serial number;
+//   * the functions' drivers register: AppleUSBDeviceMux (prelinked) for AppleUSBMux (usbmuxd, lockdownd, Xcode,
+//     Finder, atc sync), ptpd (launched by launchd on the PTP interface) for photos;
+//   * once every function has registered, the family's startUSBStack asks getConnectionSpeed(): anything but -1 means
+//     a cable, so it calls handleUSBCableConnect(), which calls goOnBus(true). Without a cable detector (the BM92T36
+//     is not ours yet, see SwitchUSB.h) the port always reports a cable: the pull-up goes on once the functions are
+//     ready, and a host plugged in later simply resets the bus.
+// This file implements the 18 pure-virtual hardware methods the in-cache reference backend (AppleUSBXDCI, a DWC3
+// driver) implements, on top of XudcHardware. USB2 high/full speed; bulk and interrupt endpoints; no isochronous.
 //
-// Contract (symbolized macOS IOUSBDeviceFamily, checked against the iOS code):
+// Contract (symbolized macOS IOUSBDeviceFamily, checked against the 21H461 code):
 // - setup packets go to controlRequest()->inputSetupPacket() + processSetupPacket();
-// - io() requests reach ioGated() inside the family's command gate on our
-//   workloop; completion = status + actual into the request, then
-//   completeEndpointIO(); a nonzero ioGated() return means "not queued";
-// - EP0: the family sends IN data and the device's IN status as io(0x80),
-//   tells us OUT data stages (state 5/6) and the host's OUT status (state 8)
-//   through handleControlRequestStateChange(); both end in inputDataPacket().
-// All calls run on one IOWorkLoop: the family's command gate, the XUDC
-// interrupt (GIC SPI 44 = INTID 76: Linux tegra210.dtsi:1303, OLED DTB
-// xudc@700d0000) and a housekeeping timer share it, so nothing here needs a
-// lock. The interrupt drains the event ring (Linux tegra_xudc_irq); nothing
-// else does. The timer repeats the cable kick until the family first goes on
-// the bus (the family's own readiness, which raises no interrupt), then only
-// watches ST.IP: set at two ticks in a row with no interrupt taken in between,
-// the interrupt is not reaching the CPU and we panic. No polled mode.
+// - io() requests reach ioGated() inside the family's command gate on our work loop; completion = status + actual
+//   into the request, then completeEndpointIO(); a nonzero ioGated() return means "not queued";
+// - EP0: the family sends IN data and the device's IN status as io(0x80), tells us OUT data stages (state 5/6) and
+//   the host's OUT status (state 8) through handleControlRequestStateChange(); both end in inputDataPacket().
+// All calls run on one IOWorkLoop: the family's command gate and the XUDC interrupt (GIC SPI 44 = INTID 76: Linux
+// tegra210.dtsi, OLED DTB xudc@700d0000) share it, so nothing here needs a lock. The interrupt drains the event ring
+// (Linux tegra_xudc_irq); nothing else does. No timer runs in steady state: when the pull-up goes on, one deferred
+// check looks at ST.IP once; pending with no interrupt taken (and still so 50 ms later) means the interrupt does not
+// reach the CPU, and that panics with one line.
 #include "OriginalIOUSBDeviceFamily.h"
 #include "XudcHardware.h"
 #include <IOKit/IOLib.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
-#include <libkern/c++/OSData.h>
-#include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSKext.h>
 #include <libkern/c++/OSSymbol.h>
-#include <kern/clock.h>
 #include <mach/kmod.h>
 #include <string.h>
 #include "../ArmGIC/IOSwitchInterrupts.h"
+#include "SwitchUSB.h"
 
 using namespace xudc;
 
 extern "C" {
 extern kmod_info_t g_kernel_kmod_info;
 void switchxudc_static_init(void) __asm__("__GLOBAL__sub_I_SwitchXUDC.cpp");
-int switchxudc_start(void);
-void switchxudc_set_host_owns_port(bool host);
 }
 
 namespace {
-// _IOUSBDeviceIORequestTag fields (IOUSBDeviceController::io and completeEndpointIO).
+// _IOUSBDeviceIORequestTag fields (IOUSBDeviceController::io, completeEndpointIO; 21H461 code).
 constexpr size_t kReqEndpoint = 0, kReqBuffer = 8, kReqStatus = 40, kReqIsoc = 48, kReqLength = 64, kReqActual = 72;
 template <typename T> T get(const _IOUSBDeviceIORequestTag *r, size_t off)
 {
@@ -65,7 +62,7 @@ template <typename T> void put(_IOUSBDeviceIORequestTag *r, size_t off, T value)
     memcpy(reinterpret_cast<uint8_t *>(r) + off, &value, sizeof(value));
 }
 
-// IOUSBDeviceControlRequest states that need the controller (see the header).
+// IOUSBDeviceControlRequest states that need the controller (see OriginalIOUSBDeviceFamily.h).
 enum : int { kStateOutData = 5, kStateOutDataLong = 6, kStateInStatus = 7, kStateOutStatus = 8 };
 // USB transfer types as passed to activateEndpoint.
 enum : int { kTypeBulk = 2, kTypeInterrupt = 3 };
@@ -73,14 +70,9 @@ constexpr int kSpeedFull = 1, kSpeedHigh = 2, kSpeedNone = -1;
 
 constexpr uint32_t kQueueDepth = 16;
 constexpr uint32_t kEp0Bytes = 0x1000;      // descriptors and control data
-constexpr uint32_t kBounceBytes = 0x10000;  // AppleUSBDeviceMux uses 32 KiB transfers
-constexpr uint32_t kStallCode = 6;
+constexpr uint32_t kBounceBytes = 0x10000;  // per data endpoint; longer requests go through in 64 KiB pieces
 constexpr uint32_t kXudcIntid = 32 + 44;
-constexpr uint32_t kWatchdogMS = 2000;
-
-// USB2 pad 0 belongs to the host controller (SwitchXHCI.cpp, switch-usb-host=1) while this is set: the
-// family's goOnBus(true) is remembered and connects only when the pad comes back.
-bool gHostOwnsPort;
+constexpr uint32_t kDeliveryCheckMS = 2000, kDeliveryConfirmMS = 50;
 
 uint32_t dciFor(int address)
 {
@@ -97,21 +89,14 @@ uint32_t log2Floor(uint32_t v)
     }
     return n;
 }
-
-uint64_t nowMs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000000;
-}
-}
+}  // namespace
 
 class SwitchXUDC : public IOUSBDeviceController {
     OSDeclareDefaultStructors(SwitchXUDC)
 
         struct Endpoint {
         bool active, busy;
-        uint32_t busyTrb, busyLength;
+        uint32_t busyTrb, busyLength, done;  // the piece in flight, and the bytes of the head request moved so far
         DmaBuffer bounce;
         _IOUSBDeviceIORequestTag *queue[kQueueDepth];
         uint32_t head, count;
@@ -120,7 +105,7 @@ class SwitchXUDC : public IOUSBDeviceController {
 
     Hardware hw;
     IOWorkLoop *loop;
-    IOTimerEventSource *timer;
+    IOTimerEventSource *delivery;
     IOFilterInterruptEventSource *interrupt;
     Endpoint endpoints[kMaxDci];
     Stage stage;
@@ -129,18 +114,18 @@ class SwitchXUDC : public IOUSBDeviceController {
     uint8_t setup[8];
     uint16_t sequence;
     int speed;
-    bool onBus, everOnBus, suspended, configuratorReported, pendingSeen, wantBus;
-    uint64_t startedAt, lastCableKick;
+    bool onBus, suspended, hostPresent, reportedOnBus;
+    uint8_t deliveryStage;
     volatile uint32_t interrupts;  // ST.IP acknowledged by the filter
-    uint32_t interruptsAtPending;
+    uint32_t interruptsAtCheck;
 
-    void housekeeping(IOTimerEventSource *);
     void serviceEvents();
     void attachInterrupt();
     static bool interruptFilter(OSObject *owner, IOFilterInterruptEventSource *sender);
     static void interruptOccurred(OSObject *owner, IOInterruptEventSource *sender, int count);
-    void portChange();
-    void busReset();
+    void armDeliveryCheck(uint32_t ms, uint8_t nextStage);
+    void deliveryCheck(IOTimerEventSource *);
+    void portEvent();
     void setupEvent(const Event &e);
     void transferEvent(const Event &e);
     void ep0Complete(const Event &e);
@@ -150,12 +135,11 @@ class SwitchXUDC : public IOUSBDeviceController {
     void kick(uint32_t dci);
     void cancel(uint32_t dci, IOReturn status);
     void finish(_IOUSBDeviceIORequestTag *request, IOReturn status, uint32_t actual);
-    bool copy(_IOUSBDeviceIORequestTag *request, uint8_t *bytes, uint32_t length, bool toDevice);
-    void checkConfigurator();
-    IOReturn portOwnerChanged();
+    bool copy(_IOUSBDeviceIORequestTag *request, uint32_t offset, uint8_t *bytes, uint32_t length, bool toDevice);
     void setBus(bool on);
 
 public:
+    bool begin(IOService *provider, char *why, size_t whySize);
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
     void free() override;
@@ -168,7 +152,7 @@ public:
     IOReturn handleAbortEndpoint(int address) override;
     IOReturn handleSetAddressPreStatusPhase(int address) override;
     IOReturn handleSetAddressPostStatusPhase(int) override { return kIOReturnSuccess; }
-    int getConnectionSpeed() override { return speed; }
+    int getConnectionSpeed() override { return speed == kSpeedNone ? kSpeedHigh : speed; }  // always a cable
     IOReturn provideEndpointIDsForConfiguration(OSArray *interfaces, uint8_t *ids) override;
     IOReturn prepareConfiguration(OSArray *) override { return kIOReturnSuccess; }
     IOReturn activateEndpoint(int address, int type, int maxPacketSize, int interval, int property) override;
@@ -185,65 +169,53 @@ public:
         options = 0;
         return kIOReturnSuccess;
     }
-
-    static SwitchXUDC *running;
-    static IOReturn portOwnerAction(OSObject *owner, void *, void *, void *, void *);
 };
-OSDefineMetaClassAndStructors(SwitchXUDC, IOUSBDeviceController) SwitchXUDC *SwitchXUDC::running;
+OSDefineMetaClassAndStructors(SwitchXUDC, IOUSBDeviceController)
 
-// ---------------------------------------------------------------------------
-// Lifecycle.
-bool SwitchXUDC::start(IOService *provider)
+    // ---------------------------------------------------------------------------
+    // Lifecycle.
+    // Everything that can fail without side effects on the family happens here, before start().
+    bool SwitchXUDC::begin(IOService *provider, char *why, size_t whySize)
 {
     stage = Stage::Idle;
     speed = kSpeedNone;
     if (!hw.map()) {
-        IOLog("SwitchXUDC: MMIO map failed\n");
+        snprintf(why, whySize, "MMIO map failed");
         return false;
     }
     loop = IOWorkLoop::workLoop();
-    if (!loop || !endpoints[0].bounce.allocate(kEp0Bytes)) {
-        IOLog("SwitchXUDC: allocation failed\n");
+    delivery = IOTimerEventSource::timerEventSource(
+        this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &SwitchXUDC::deliveryCheck));
+    if (!loop || !delivery || !endpoints[0].bounce.allocate(kEp0Bytes)) {
+        snprintf(why, whySize, "out of memory");
         return false;
     }
-    if (!hw.powerOn()) {
-        hw.report("bring-up failed");
-        return false;
-    }
+    return hw.powerOn(why, whySize);
+}
+
+bool SwitchXUDC::start(IOService *provider)
+{
     // The family builds its command gate, pool and timers on getWorkLoop().
-    if (!IOUSBDeviceController::start(provider)) {
-        IOLog("SwitchXUDC: IOUSBDeviceController::start failed\n");
-        return false;
-    }
-    timer = IOTimerEventSource::timerEventSource(
-        this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &SwitchXUDC::housekeeping));
-    if (!timer || loop->addEventSource(timer) != kIOReturnSuccess) {
-        IOLog("SwitchXUDC: timer setup failed\n");
-        return false;
-    }
-    attachInterrupt();        // sleeps until the GIC is up
-    readyForHost();           // control request, USB device description, registerService()
-    handleUSBCableConnect();  // VBUS is overridden on: the cable counts as connected
-    startedAt = lastCableKick = nowMs();
-    timer->setTimeoutMS(1);
-    __atomic_store_n(&running, this, __ATOMIC_RELEASE);
-    IOLog("SwitchXUDC: started\n");
+    if (!IOUSBDeviceController::start(provider)) return false;
+    if (loop->addEventSource(delivery) != kIOReturnSuccess) return false;
+    attachInterrupt();  // sleeps until the GIC is up; panics if the interrupt cannot be had
+    readyForHost();     // control request, USB device description defaults, registerService()
     return true;
 }
 
 void SwitchXUDC::stop(IOService *provider)
 {
-    if (timer) timer->cancelTimeout();
+    if (delivery) delivery->cancelTimeout();
     if (interrupt) interrupt->disable();
-    goOnBus(false);
-    if (timer && loop) loop->removeEventSource(timer);
+    setBus(false);
+    if (delivery && loop) loop->removeEventSource(delivery);
     if (interrupt && loop) loop->removeEventSource(interrupt);
     IOUSBDeviceController::stop(provider);
 }
 
 void SwitchXUDC::free()
 {
-    OSSafeReleaseNULL(timer);
+    OSSafeReleaseNULL(delivery);
     OSSafeReleaseNULL(interrupt);
     for (Endpoint &ep : endpoints) ep.bounce.release();
     OSSafeReleaseNULL(loop);
@@ -251,36 +223,19 @@ void SwitchXUDC::free()
 }
 
 // ---------------------------------------------------------------------------
-// Events (workloop context: the family's gate is held).
-void SwitchXUDC::serviceEvents()
-{
-    Event e;
-    for (uint32_t handled = 0; handled < 64 && hw.nextEvent(e); ++handled) {
-        switch (e.type()) {
-        case TRB_TRANSFER_EVENT: transferEvent(e); break;
-        case TRB_PORT_EVENT: portChange(); break;
-        case TRB_SETUP_EVENT: setupEvent(e); break;
-        default: break;
-        }
-    }
-    // Always: the ERDP write also clears EHB, without which no further interrupt
-    // is raised. Events left over (more than 64) raise a new one.
-    hw.finishEvents();
-}
-
+// Interrupt (work loop context: the family's gate is held).
 void SwitchXUDC::attachInterrupt()
 {
     IOService *nub = ioswitch_interrupt_nub(kXudcIntid, false);
     interrupt = IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchXUDC::interruptOccurred,
                                                                          &SwitchXUDC::interruptFilter, nub, 0);
     if (!interrupt || loop->addEventSource(interrupt) != kIOReturnSuccess) {
-        panic("SwitchXUDC: cannot attach the XUDC interrupt (INTID %u)", kXudcIntid);
+        panic("SwitchUSB: cannot attach the XUDC interrupt (INTID %u)", kXudcIntid);
     }
     interrupt->enable();
 }
 
-// Primary interrupt context: acknowledge ST.IP so the level line drops, then
-// let the work loop drain the ring. Not ours (IP clear): nothing to do.
+// Primary interrupt context: acknowledge ST.IP so the level line drops, then let the work loop drain the ring.
 bool SwitchXUDC::interruptFilter(OSObject *owner, IOFilterInterruptEventSource *)
 {
     auto *self = static_cast<SwitchXUDC *>(owner);
@@ -294,101 +249,88 @@ void SwitchXUDC::interruptOccurred(OSObject *owner, IOInterruptEventSource *, in
     static_cast<SwitchXUDC *>(owner)->serviceEvents();
 }
 
-// Housekeeping (no event handling: that is the interrupt's alone).
-void SwitchXUDC::housekeeping(IOTimerEventSource *)
+void SwitchXUDC::serviceEvents()
 {
-    // ST.IP stays set only until the filter acknowledges it, microseconds later.
-    const uint32_t taken = __atomic_load_n(&interrupts, __ATOMIC_RELAXED);
-    const bool pending = hw.interruptPending();
-    if (pending && pendingSeen && taken == interruptsAtPending) {
-        char state[160], gic[192];
-        hw.describeInterrupt(state, sizeof(state));
-        ioswitch_interrupt_describe(kXudcIntid, gic, sizeof(gic));
-        panic("SwitchXUDC: XUDC interrupt lost (INTID %u): %s, %s", kXudcIntid, state, gic);
-    }
-    pendingSeen = pending;
-    interruptsAtPending = taken;
-    // gated_handleUSBCableConnect() returns early (and latches nothing) until the
-    // configurator's description and the functions are in: repeat it until the
-    // family first puts us on the bus. Later disconnects are the family's choice.
-    uint64_t now = nowMs();
-    if (!everOnBus && now - lastCableKick >= 200) {
-        lastCableKick = now;
-        handleUSBCableConnect();
-    }
-    if (!configuratorReported && now - startedAt >= 5000) checkConfigurator();
-    timer->setTimeoutMS(everOnBus ? kWatchdogMS : 200);
-}
-
-// Without a matching IOUSBDeviceConfigurator nothing is ever put on the bus.
-void SwitchXUDC::checkConfigurator()
-{
-    configuratorReported = true;
-    OSIterator *clients = getClientIterator();
-    bool found = false;
-    while (clients && !found) {
-        OSObject *client = clients->getNextObject();
-        if (!client) break;
-        found = !strcmp(client->getMetaClass()->getClassName(), "IOUSBDeviceConfigurator");
-    }
-    OSSafeReleaseNULL(clients);
-    if (!found) {
-        OSObject *type = getProperty("ConfigurationType");
-        OSString *name = OSDynamicCast(OSString, type);
-        IOLog("SwitchXUDC: no IOUSBDeviceConfigurator after 5 s (ConfigurationType %s)\n",
-              name ? name->getCStringNoCopy() : "?");
-    }
-}
-
-// hekate _xusb_handle_port_change() order; reset and connect-done go to the family.
-void SwitchXUDC::portChange()
-{
-    uint32_t sc = hw.portStatus();
-    bool ltssm = hw.stateChangeRequested();
-    if (sc & PORTSC_PRC) {
-        hw.clearPortChange(sc, PORTSC_PRC);
-        if (!(sc & PORTSC_PR) && onBus) busReset();
-    }
-    if (sc & PORTSC_WPR) hw.releaseLtssm();
-    if (sc & PORTSC_WRC) hw.clearPortChange(sc, PORTSC_WRC);
-    sc = hw.portStatus();
-    if (sc & PORTSC_CSC) {
-        hw.clearPortChange(sc, PORTSC_CSC);
-        if (!(sc & PORTSC_CCS) && speed != kSpeedNone) {  // host gone: drop the configuration
-            speed = kSpeedNone;
-            ep0Cancel(kIOReturnAborted);
-            handleUSBReset();
+    Event e;
+    for (uint32_t handled = 0; handled < 64 && hw.nextEvent(e); ++handled) {
+        switch (e.type()) {
+        case TRB_TRANSFER_EVENT: transferEvent(e); break;
+        case TRB_PORT_EVENT: portEvent(); break;
+        case TRB_SETUP_EVENT: setupEvent(e); break;
+        default: break;
         }
     }
-    if (ltssm) hw.releaseLtssm();
-    sc = hw.portStatus();
-    if (sc & PORTSC_PLC) {
-        hw.clearPortChange(sc, PORTSC_PLC);
-        uint32_t link = sc & PORTSC_PLS_MASK;
-        if (link == PORTSC_PLS_U3 && !suspended && speed != kSpeedNone) {
-            suspended = true;
-            handleUSBSuspend();
-        } else if (link == PORTSC_PLS_U0 && suspended) {
-            suspended = false;
-            handleUSBResume();
-        }
-    }
-    sc = hw.portStatus();
-    if (sc & PORTSC_CEC) hw.clearPortChange(sc, PORTSC_CEC);
+    // Always: the ERDP write also clears EHB, without which no further interrupt is raised. Events left over (more
+    // than 64) raise a new one.
+    hw.finishEvents();
 }
 
-// Bus reset done: fresh EP0 (Linux tegra_xudc_reset), then the family's reset
-// (address 0, default state, configuration dropped: deactivateEndpoint for
-// every pipe) and connection done with the negotiated speed.
-void SwitchXUDC::busReset()
+// One deferred look at ST.IP: pending with no interrupt taken since the check was armed, and still so 50 ms later,
+// means the XUDC interrupt does not reach the CPU. Nothing pending (no host, or interrupts working): done.
+void SwitchXUDC::armDeliveryCheck(uint32_t ms, uint8_t nextStage)
 {
-    ep0Cancel(kIOReturnAborted);
-    hw.initEndpoint(0, EP_CONTROL, 64, 0);
-    if (!hw.reloadEndpoint(0)) IOLog("SwitchXUDC: EP0 reload timed out\n");
-    suspended = false;
-    handleUSBReset();
-    speed = ((hw.portStatus() >> 10) & 0xf) == 1 ? kSpeedFull : kSpeedHigh;
-    handleUSBConnectionDone();
+    deliveryStage = nextStage;
+    interruptsAtCheck = __atomic_load_n(&interrupts, __ATOMIC_RELAXED);
+    delivery->setTimeoutMS(ms);
+}
+
+void SwitchXUDC::deliveryCheck(IOTimerEventSource *)
+{
+    const bool lost = hw.interruptPending() && __atomic_load_n(&interrupts, __ATOMIC_RELAXED) == interruptsAtCheck;
+    if (!lost) {
+        deliveryStage = 0;
+        return;
+    }
+    if (deliveryStage == 1) {
+        armDeliveryCheck(kDeliveryConfirmMS, 2);
+        return;
+    }
+    char state[192], gic[192];
+    hw.describeInterrupt(state, sizeof(state));
+    ioswitch_interrupt_describe(kXudcIntid, gic, sizeof(gic));
+    panic("SwitchUSB: XUDC interrupt lost (INTID %u): %s, %s", kXudcIntid, state, gic);
+}
+
+// ---------------------------------------------------------------------------
+// Port: reset, connect, suspend (Linux tegra_xudc port handling); the family hears reset, connection done, suspend
+// and resume. A host that goes away without a disconnect (the cable pulled with VBUS overridden on) shows as a
+// suspend; its next reset starts over.
+void SwitchXUDC::portEvent()
+{
+    PortChange change = hw.portChange();
+    if (change.disconnected && speed != kSpeedNone) {
+        ep0Cancel(kIOReturnAborted);
+        speed = kSpeedNone;
+        handleUSBReset();  // the family drops the configuration (deactivateEndpoint for every pipe)
+    }
+    if (change.disconnected && hostPresent) {
+        hostPresent = false;
+        IOLog("SwitchUSB: host disconnected\n");
+    }
+    if (change.reset && onBus) {
+        ep0Cancel(kIOReturnAborted);
+        stage = Stage::Idle;
+        suspended = false;
+        handleUSBReset();
+        speed = change.fullSpeed ? kSpeedFull : kSpeedHigh;
+        handleUSBConnectionDone();
+        if (!hostPresent) {
+            hostPresent = true;
+            IOLog("SwitchUSB: host connected (%s speed)\n", speed == kSpeedHigh ? "high" : "full");
+        }
+    }
+    if (change.suspended && !suspended && speed != kSpeedNone) {
+        suspended = true;
+        handleUSBSuspend();
+        if (hostPresent) {
+            hostPresent = false;
+            IOLog("SwitchUSB: bus suspended (host asleep or cable out)\n");
+        }
+    } else if (change.resumed && suspended) {
+        suspended = false;
+        hostPresent = true;
+        handleUSBResume();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,12 +341,14 @@ void SwitchXUDC::setupEvent(const Event &e)
     sequence = e.setupSequence();
     hw.setHalt(0, false);
     IOUSBDeviceControlRequest *request = controlRequest();
-    if (sequence == 0xfffe || sequence == 0xffff || !request) {  // Tegra210 invalid sequence (tegra-xudc.c)
+    if (sequence == 0xfffe || sequence == 0xffff || !request) {  // Tegra210 invalid sequence (tegra_xudc.c)
         hw.setHalt(0, true);
         return;
     }
-    // Stages we own are superseded; a family request still pending is aborted
-    // by the family itself (premature setup -> abortEndpoint -> handleAbortEndpoint).
+    // A new setup packet ends the previous control transfer: what it left on the ring is dropped. Our own OUT stages
+    // end here; a family request still pending is aborted by the family itself (premature setup -> abortEndpoint ->
+    // handleAbortEndpoint -> ep0Cancel).
+    if (stage != Stage::Idle) hw.dropQueued(0);
     if (stage == Stage::DataOut || stage == Stage::StatusOut) stage = Stage::Idle;
     request->inputSetupPacket(setup);
     request->processSetupPacket();
@@ -428,9 +372,8 @@ void SwitchXUDC::handleControlRequestStateChange(int, int newState)
     }
 }
 
-// EP0 IN requests queue: a data stage that is a multiple of the packet size
-// and shorter than wLength is followed at once by a zero-length one
-// (IOUSBDeviceControlRequest::sendControlInDataGated, zlpCompletion).
+// EP0 IN requests queue: a data stage that is a multiple of the packet size and shorter than wLength is followed at
+// once by a zero-length one (IOUSBDeviceControlRequest::sendControlInDataGated, zlpCompletion).
 IOReturn SwitchXUDC::ep0Io(_IOUSBDeviceIORequestTag *request, bool in)
 {
     Endpoint &ep = endpoints[0];
@@ -441,8 +384,8 @@ IOReturn SwitchXUDC::ep0Io(_IOUSBDeviceIORequestTag *request, bool in)
     return kIOReturnSuccess;
 }
 
-// A zero-length IN while the family waits for the device's status (state 7)
-// is the status stage; anything else is a data stage (including the ZLP).
+// A zero-length IN while the family waits for the device's status (state 7) is the status stage; anything else is
+// a data stage (including the ZLP).
 void SwitchXUDC::ep0Kick()
 {
     Endpoint &ep = endpoints[0];
@@ -456,7 +399,7 @@ void SwitchXUDC::ep0Kick()
             stage = Stage::StatusIn;
             ep0Length = 0;
             ep0Trb = hw.push(0, 0, 0, trbType(TRB_STATUS) | TRB_IOC | TRB_DIR_IN);
-        } else if (!copy(request, ep.bounce.va, length, true)) {
+        } else if (!copy(request, 0, ep.bounce.va, length, true)) {
             finish(request, kIOReturnDMAError, 0);
             continue;
         } else {
@@ -513,17 +456,18 @@ void SwitchXUDC::ep0Cancel(IOReturn status)
 }
 
 // ---------------------------------------------------------------------------
-// Data endpoints: one transfer at a time per endpoint through a bounce buffer.
+// Data endpoints: one request at a time per endpoint, moved through the endpoint's bounce buffer in pieces of up to
+// 64 KiB (each a multiple of the packet size, so the host sees one transfer; an OUT piece that ends short ends it).
 IOReturn SwitchXUDC::ioGated(_IOUSBDeviceIORequestTag *request)
 {
     if (!onBus) return kIOReturnNotReady;
     int address = get<int32_t>(request, kReqEndpoint);
     if (!(address & 0x7f)) return ep0Io(request, address & 0x80);
     uint32_t dci = dciFor(address);
+    if (dci >= kMaxDci || !endpoints[dci].active) return kIOReturnNotReady;
     Endpoint &ep = endpoints[dci];
-    if (dci >= kMaxDci || !ep.active) return kIOReturnNotReady;
     if (get<uint8_t>(request, kReqIsoc)) return kIOReturnUnsupported;
-    if (get<uint64_t>(request, kReqLength) > ep.bounce.size || ep.count == kQueueDepth) return kIOReturnNoResources;
+    if (get<uint64_t>(request, kReqLength) > UINT32_MAX || ep.count == kQueueDepth) return kIOReturnNoResources;
     ep.queue[(ep.head + ep.count++) % kQueueDepth] = request;
     kick(dci);
     return kIOReturnSuccess;
@@ -532,21 +476,24 @@ IOReturn SwitchXUDC::ioGated(_IOUSBDeviceIORequestTag *request)
 void SwitchXUDC::kick(uint32_t dci)
 {
     Endpoint &ep = endpoints[dci];
-    if (!ep.active || ep.busy || !ep.count || hw.halted(dci)) return;
-    _IOUSBDeviceIORequestTag *request = ep.queue[ep.head];
-    uint32_t length = (uint32_t)get<uint64_t>(request, kReqLength);
-    bool in = dci & 1;
-    if (in && !copy(request, ep.bounce.va, length, true)) {
-        ep.head = (ep.head + 1) % kQueueDepth;
-        ep.count--;
-        finish(request, kIOReturnDMAError, 0);
-        return kick(dci);
+    while (ep.active && !ep.busy && ep.count && !hw.halted(dci)) {
+        _IOUSBDeviceIORequestTag *request = ep.queue[ep.head];
+        const uint32_t length = (uint32_t)get<uint64_t>(request, kReqLength);
+        const uint32_t left = length - ep.done, piece = left < ep.bounce.size ? left : ep.bounce.size;
+        const bool in = dci & 1;
+        if (in && !copy(request, ep.done, ep.bounce.va, piece, true)) {
+            ep.head = (ep.head + 1) % kQueueDepth;
+            ep.count--;
+            ep.done = 0;
+            finish(request, kIOReturnDMAError, 0);
+            continue;
+        }
+        cacheFlush(ep.bounce.va, piece ? piece : 1);
+        ep.busyLength = piece;
+        ep.busyTrb = hw.push(dci, ep.bounce.pa, piece, trbType(TRB_NORMAL) | TRB_ISP | TRB_IOC);
+        ep.busy = true;
+        hw.doorbell(dci);
     }
-    cacheFlush(ep.bounce.va, length ? length : 1);
-    ep.busyLength = length;
-    ep.busyTrb = hw.push(dci, ep.bounce.pa, length, trbType(TRB_NORMAL) | TRB_ISP | TRB_IOC);
-    ep.busy = true;
-    hw.doorbell(dci);
 }
 
 void SwitchXUDC::transferEvent(const Event &e)
@@ -558,16 +505,21 @@ void SwitchXUDC::transferEvent(const Event &e)
     if (!ep.busy || e.trb() != ep.busyTrb) return;  // dropped by an abort
     ep.busy = false;
     _IOUSBDeviceIORequestTag *request = ep.queue[ep.head];
-    ep.head = (ep.head + 1) % kQueueDepth;
-    ep.count--;
-    bool ok = e.code() == COMP_SUCCESS || e.code() == COMP_SHORT_PACKET;
-    uint32_t actual = ok && e.residue() <= ep.busyLength ? ep.busyLength - e.residue() : 0;
-    IOReturn status = ok ? kIOReturnSuccess : e.code() == kStallCode ? kIOReturnNotResponding : kIOReturnIOError;
+    const bool ok = e.code() == COMP_SUCCESS || e.code() == COMP_SHORT_PACKET;
+    const uint32_t actual = ok && e.residue() <= ep.busyLength ? ep.busyLength - e.residue() : 0;
+    IOReturn status = ok ? kIOReturnSuccess : e.code() == COMP_STALL ? kIOReturnNotResponding : kIOReturnIOError;
     if (ok && !(dci & 1) && actual) {
         cacheFlush(ep.bounce.va, actual);
-        if (!copy(request, ep.bounce.va, actual, false)) status = kIOReturnDMAError;
+        if (!copy(request, ep.done, ep.bounce.va, actual, false)) status = kIOReturnDMAError;
     }
-    finish(request, status, actual);  // the function may queue its next transfer from here
+    ep.done += actual;
+    const uint32_t length = (uint32_t)get<uint64_t>(request, kReqLength);
+    if (status == kIOReturnSuccess && ep.done < length && actual == ep.busyLength) return kick(dci);  // next piece
+    const uint32_t moved = ep.done;
+    ep.head = (ep.head + 1) % kQueueDepth;
+    ep.count--;
+    ep.done = 0;
+    finish(request, status, moved);  // the function may queue its next transfer from here
     kick(dci);
 }
 
@@ -578,7 +530,7 @@ void SwitchXUDC::cancel(uint32_t dci, IOReturn status)
     _IOUSBDeviceIORequestTag *pending[kQueueDepth];
     uint32_t count = ep.count;
     for (uint32_t i = 0; i < count; ++i) pending[i] = ep.queue[(ep.head + i) % kQueueDepth];
-    ep.head = ep.count = 0;
+    ep.head = ep.count = ep.done = 0;
     if (ep.busy) {
         hw.dropQueued(dci);
         ep.busy = false;
@@ -589,16 +541,17 @@ void SwitchXUDC::cancel(uint32_t dci, IOReturn status)
 void SwitchXUDC::finish(_IOUSBDeviceIORequestTag *request, IOReturn status, uint32_t actual)
 {
     put<int32_t>(request, kReqStatus, status);
-    put<uint32_t>(request, kReqActual, actual);  // completeEndpointIO reads it as 32 bits
+    put<uint64_t>(request, kReqActual, actual);  // read as 32 bits for bulk, 64 for isochronous
     completeEndpointIO(request);
 }
 
-bool SwitchXUDC::copy(_IOUSBDeviceIORequestTag *request, uint8_t *bytes, uint32_t length, bool toDevice)
+bool SwitchXUDC::copy(_IOUSBDeviceIORequestTag *request, uint32_t offset, uint8_t *bytes, uint32_t length,
+                      bool toDevice)
 {
     if (!length) return true;
     IOMemoryDescriptor *md = get<IOMemoryDescriptor *>(request, kReqBuffer);
     if (!md || md->prepare() != kIOReturnSuccess) return false;
-    IOByteCount done = toDevice ? md->readBytes(0, bytes, length) : md->writeBytes(0, bytes, length);
+    IOByteCount done = toDevice ? md->readBytes(offset, bytes, length) : md->writeBytes(offset, bytes, length);
     md->complete();
     return done == length;
 }
@@ -607,11 +560,6 @@ bool SwitchXUDC::copy(_IOUSBDeviceIORequestTag *request, uint8_t *bytes, uint32_
 // Pure-virtual hardware methods.
 void SwitchXUDC::goOnBus(bool on)
 {
-    if (__atomic_load_n(&gHostOwnsPort, __ATOMIC_ACQUIRE)) {  // the host has the pad: remember the wish
-        wantBus = on;
-        everOnBus |= on;  // the family is ready: no more cable kicks
-        return;
-    }
     setBus(on);
 }
 
@@ -621,9 +569,14 @@ void SwitchXUDC::setBus(bool on)
     if (on) {
         ep0Cancel(kIOReturnAborted);
         hw.initEndpoint(0, EP_CONTROL, 64, 0);
-        hw.reloadEndpoint(0);
+        (void)hw.reloadEndpoint(0);
         hw.connect();
-        onBus = everOnBus = true;
+        onBus = true;
+        if (!reportedOnBus) {
+            reportedOnBus = true;
+            IOLog("SwitchUSB: functions registered, pull-up on (waiting for a host)\n");
+        }
+        armDeliveryCheck(kDeliveryCheckMS, 1);
         return;
     }
     onBus = false;
@@ -631,47 +584,21 @@ void SwitchXUDC::setBus(bool on)
     ep0Cancel(kIOReturnAborted);
     for (uint32_t dci = 2; dci < kMaxDci; ++dci) cancel(dci, kIOReturnAborted);
     speed = kSpeedNone;
-    suspended = false;
+    suspended = hostPresent = false;
 }
 
+// AppleUSBXDCI::softDisconnect clears DCTL.RUN_STOP and nothing more: the family puts us back with goOnBus(true).
 void SwitchXUDC::softDisconnect(uint32_t)
 {
-    goOnBus(false);
+    setBus(false);
 }
 
-// The pad changed hands (switchxudc_set_host_owns_port, on this work loop). To the host: off the bus as a
-// cable pull would be, the family's wish kept. Back: on the bus again if the family still wants it.
-IOReturn SwitchXUDC::portOwnerChanged()
-{
-    const bool host = __atomic_load_n(&gHostOwnsPort, __ATOMIC_ACQUIRE);
-    if (host && onBus) {
-        setBus(false);
-        wantBus = true;
-    } else if (!host && wantBus) {
-        wantBus = false;
-        setBus(true);
-    }
-    return kIOReturnSuccess;
-}
-
-IOReturn SwitchXUDC::portOwnerAction(OSObject *owner, void *, void *, void *, void *)
-{
-    return static_cast<SwitchXUDC *>(owner)->portOwnerChanged();
-}
-
-extern "C" void switchxudc_set_host_owns_port(bool host)
-{
-    __atomic_store_n(&gHostOwnsPort, host, __ATOMIC_RELEASE);
-    SwitchXUDC *controller = __atomic_load_n(&SwitchXUDC::running, __ATOMIC_ACQUIRE);
-    if (controller && controller->getWorkLoop())
-        controller->getWorkLoop()->runAction(&SwitchXUDC::portOwnerAction, controller);
-}
-
+// The family's own off-and-on (userland GoOffAndOnBus). 100 ms off so the host sees the detach.
 void SwitchXUDC::forceReEnumeration()
 {
-    goOnBus(false);
+    setBus(false);
     IOSleep(100);
-    goOnBus(true);
+    setBus(true);
 }
 
 IOReturn SwitchXUDC::handleStallEndpoint(int address, bool stall)
@@ -701,7 +628,7 @@ IOReturn SwitchXUDC::handleAbortEndpoint(int address)
     return kIOReturnSuccess;
 }
 
-// SET_ADDRESS takes effect before the status stage (hekate, AppleUSBXDCI).
+// SET_ADDRESS takes effect before the status stage (hekate, Linux tegra_xudc_ep0_set_address).
 IOReturn SwitchXUDC::handleSetAddressPreStatusPhase(int address)
 {
     hw.setAddress(address & 0x7f);
@@ -717,9 +644,8 @@ IOReturn SwitchXUDC::resetEndpointDataToggle(int address)
     return kIOReturnSuccess;
 }
 
-// AppleUSBXDCI::provideEndpointIDsForConfiguration: per function interface,
-// each alternate setting numbers its pipes from the next free IN/OUT endpoint;
-// the widest alternate setting decides how many numbers the interface uses.
+// AppleUSBXDCI::provideEndpointIDsForConfiguration: per function interface, each alternate setting numbers its pipes
+// from the next free IN/OUT endpoint; the widest alternate setting decides how many numbers the interface uses.
 IOReturn SwitchXUDC::provideEndpointIDsForConfiguration(OSArray *interfaces, uint8_t *ids)
 {
     if (!interfaces || !ids) return kIOReturnBadArgument;
@@ -770,7 +696,7 @@ IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, 
     }
     Endpoint &ep = endpoints[dci];
     if (!ep.bounce.va && !ep.bounce.allocate(kBounceBytes)) return kIOReturnNoMemory;
-    ep.head = ep.count = 0;
+    ep.head = ep.count = ep.done = 0;
     ep.busy = false;
     hw.initEndpoint(dci, kind, (uint32_t)maxPacketSize, period);
     if (!hw.reloadEndpoint(dci)) return kIOReturnTimeout;
@@ -789,8 +715,8 @@ IOReturn SwitchXUDC::deactivateEndpoint(int address)
     return kIOReturnSuccess;
 }
 
-// AppleUSBXDCI::createIOBuffer: pageable kernel buffer; data is copied through
-// our bounce buffers, so placement does not matter.
+// AppleUSBXDCI::createIOBuffer: pageable kernel buffer; data is copied through our bounce buffers, so placement does
+// not matter.
 IOBufferMemoryDescriptor *SwitchXUDC::createIOBuffer(IOOptionBits options, uint64_t capacity)
 {
     return IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options | kIOMemoryPageable, capacity,
@@ -798,7 +724,8 @@ IOBufferMemoryDescriptor *SwitchXUDC::createIOBuffer(IOOptionBits options, uint6
 }
 
 // ---------------------------------------------------------------------------
-// Late registration: SwitchXUDC's metaclass needs the loaded original family.
+// Registration: SwitchXUDC's metaclass needs the loaded original family, so its static initializer is staged
+// (Drivers.cmake ioswitch_late_object) and runs here.
 namespace {
 const OSMetaClass *lookupClass(const char *text)
 {
@@ -807,75 +734,55 @@ const OSMetaClass *lookupClass(const char *text)
     OSSafeReleaseNULL(name);
     return meta;
 }
+}  // namespace
 
-void setData(OSDictionary *dict, const char *key, const void *bytes, unsigned length)
+bool switchxudc_start(IOService *provider, char *why, size_t whySize)
 {
-    OSData *data = OSData::withBytes(bytes, length);
-    if (data) {
-        dict->setObject(key, data);
-        data->release();
+    if (OSKext::loadKextWithIdentifier("com.apple.iokit.IOUSBDeviceFamily", false) != KERN_SUCCESS) {
+        snprintf(why, whySize, "IOUSBDeviceFamily did not load (is it prelinked?)");
+        return false;
     }
-}
-}
-
-// Provider nub: the properties prepareDefaults() reads from the device tree on
-// a real iPad (OSData, searched up the service plane). 0x05ac:0x12ab is the
-// iPad usbmux identity; the configuration selects IOUSBDeviceConfigurator's
-// "standardBringup" personality (one AppleUSBMux interface). The boot-arg
-// IOUSBDeviceController-configuration=<type> overrides it.
-static IOService *makePort()
-{
-    OSDictionary *dict = OSDictionary::withCapacity(8);
-    if (!dict) return nullptr;
-    const uint32_t vendor = 0x05ac, product = 0x12ab;
-    setData(dict, "vendor-id", &vendor, sizeof(vendor));
-    setData(dict, "product-id", &product, sizeof(product));
-    setData(dict, "product-string", "iPad", 5);
-    setData(dict, "manufacturer-string", "Apple Inc.", 11);
-    setData(dict, "configuration-string", "standardBringup", 16);
-    IOService *port = new IOService;
-    bool ok = port && port->init(dict) && port->attach(IOService::getResourceService());
-    dict->release();
-    if (!ok) {
-        OSSafeReleaseNULL(port);
-        return nullptr;
+    if (OSKext::loadKextWithIdentifier("com.apple.driver.AppleUSBDeviceMux", false) != KERN_SUCCESS) {
+        snprintf(why, whySize, "AppleUSBDeviceMux did not load (is it prelinked?)");
+        return false;
     }
-    port->setName("usb-device");
-    return port;
-}
-
-extern "C" int switchxudc_start(void)
-{
-    static uint32_t state;  // 0 untouched, 1 starting, 2 running, 3 failed
-    uint32_t expected = 0;
-    if (!__atomic_compare_exchange_n(&state, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-        return expected == 2 ? 0 : -1;
-    auto fail = [](const char *why) {
-        IOLog("SwitchXUDC: %s\n", why);
-        __atomic_store_n(&state, 3, __ATOMIC_RELEASE);
-        return -1;
-    };
-    if (OSKext::loadKextWithIdentifier("com.apple.iokit.IOUSBDeviceFamily", false) != KERN_SUCCESS)
-        return fail("IOUSBDeviceFamily did not load");
-    if (OSKext::loadKextWithIdentifier("com.apple.driver.AppleUSBDeviceMux", false) != KERN_SUCCESS)
-        IOLog("SwitchXUDC: AppleUSBDeviceMux did not load\n");
     const OSMetaClass *parent = lookupClass("IOUSBDeviceController");
-    if (parent != &IOUSBDeviceController::gMetaClass || parent->getClassSize() != sizeof(IOUSBDeviceController))
-        return fail("original IOUSBDeviceController mismatch");
+    if (parent != &IOUSBDeviceController::gMetaClass || parent->getClassSize() != sizeof(IOUSBDeviceController)) {
+        snprintf(why, whySize, "the loaded IOUSBDeviceController is not the 21H461 one");
+        return false;
+    }
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-    if (!handle) return fail("preModLoad failed");
+    if (!handle) {
+        snprintf(why, whySize, "preModLoad failed");
+        return false;
+    }
     switchxudc_static_init();
     if (OSMetaClass::postModLoad(handle) != KERN_SUCCESS || lookupClass("SwitchXUDC") != &SwitchXUDC::gMetaClass ||
-        SwitchXUDC::gMetaClass.getSuperClass() != parent)
-        return fail("SwitchXUDC registration failed");
-    IOService *port = makePort();
-    auto *controller = new SwitchXUDC;
-    if (!port || !controller || !controller->init() || !controller->attach(port)) {
-        OSSafeReleaseNULL(controller);
-        return fail("service setup failed");
+        SwitchXUDC::gMetaClass.getSuperClass() != parent) {
+        snprintf(why, whySize, "SwitchXUDC class registration failed");
+        return false;
     }
-    // Once the original start ran, the family holds references: never released.
-    if (!controller->start(port)) return fail("start failed");
-    __atomic_store_n(&state, 2, __ATOMIC_RELEASE);
-    return 0;
+    auto *controller = OSTypeAlloc(SwitchXUDC);
+    if (!controller || !controller->init()) {
+        OSSafeReleaseNULL(controller);
+        snprintf(why, whySize, "out of memory");
+        return false;
+    }
+    if (!controller->begin(provider, why, whySize)) {
+        controller->release();
+        return false;
+    }
+    if (!controller->attach(provider)) {
+        controller->release();
+        snprintf(why, whySize, "attach to %s failed", provider->getName());
+        return false;
+    }
+    if (!controller->start(provider)) {
+        controller->detach(provider);
+        controller->release();
+        snprintf(why, whySize, "IOUSBDeviceController::start failed");
+        return false;
+    }
+    controller->release();  // the registry holds it
+    return true;
 }

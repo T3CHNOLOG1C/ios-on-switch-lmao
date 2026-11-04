@@ -25,9 +25,13 @@ MATH_LITERAL_POOLS = (
     ('9b1a86a049faa8bd053f4e7b9dee213e', 56, 'e874aeba59eebdebdf68d18b1196d1ca6aeee12b110985a856f8fe404e0c76ee'),
 )
 NEW_ORIGINAL_COMPONENTS = {'com.apple.iokit.IOGPUFamily',   # IOAcceleratorES for QuartzCore's 30 s accelerator poll and the GM20B driver
-                           'com.apple.driver.AppleGameControllerPersonality'}   # game-controller personalities (switch-gc-personality)
-# main() requires the --root list to end with sorted(NEW_ORIGINAL_COMPONENTS): AppleGameControllerPersonality's root
-# goes before IOGPUFamily's in prelink-command.json.
+                           'com.apple.driver.AppleGameControllerPersonality',   # game-controller personalities (switch-gc-personality)
+                           # USB device mode (drivers/SwitchUSB): the family SwitchXUDC subclasses, its dependency, and the
+                           # usbmux function driver (usbmuxd, lockdownd, Xcode, Finder)
+                           'com.apple.iokit.IOUSBDeviceFamily', 'com.apple.driver.usb.AppleUSBCommon',
+                           'com.apple.driver.AppleUSBDeviceMux'}
+# main() requires the --root list to end with sorted(NEW_ORIGINAL_COMPONENTS), in that order in prelink-command.json:
+# AppleGameControllerPersonality, AppleUSBDeviceMux, usb.AppleUSBCommon, IOGPUFamily, IOUSBDeviceFamily.
 
 COALESCED = {'__PRELINK_TEXT': '__TEXT', '__PLK_TEXT_EXEC': '__TEXT_EXEC',
              '__PLK_DATA_CONST': '__DATA_CONST', '__PRELINK_DATA': '__DATA'}

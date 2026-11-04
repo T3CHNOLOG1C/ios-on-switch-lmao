@@ -15,6 +15,7 @@
 #include "IOSwitchCryptex.h"
 
 extern "C" int di_root_image_ext(const char *, char *, size_t, dev_t *, bool);
+extern "C" void ioswitch_cluster_register_image(vnode_t);  // bsd/vfs/vfs_cluster.c
 
 namespace {
 const char *const paths[IOSWITCH_CRYPTEX_COUNT] = {"/private/preboot/IOSwitch-Staging/044-76034-038.dmg",
@@ -83,21 +84,19 @@ extern "C" int ioswitch_cryptex_attach(unsigned index, dev_t, dev_t *device, cha
         IOLog("IOSwitch cryptex: attach %s failed: %d\n", paths[index], status);
         return results[index] = EIO;
     }
-    // r8-sdboot: let the image file's pages stay in the page cache. DiskImages' FileBackingStore marks the image vnode
-    // VNOCACHE_DATA when it opens it, so every read of the image device became an uncached read of the same size on the
-    // SD card: no read-ahead, pages dropped after the copy (vfs_cluster.c cluster_read_copy, IO_NOCACHE). The System
-    // cryptex's APFS reads compressed file data (decmpfs type 14, e.g. the dyld cache's 395 MiB .52.dyldlinkedit, 101 MiB
-    // on disk) as 4 KiB B_META blocks and reads the same blocks again and again: the 11-04 14:02 boot I/O census counted
-    // 245,891 such reads (~960 MiB) on the cryptex container before the first frame, ~85% of all SD reads, against ~270
-    // MiB of compressed data in the whole cryptex. Cached, a repeat costs a page-cache copy instead of a ~0.45 ms random
-    // SD read, and sequential runs get cluster read-ahead. The image is read-only here, so there is nothing to keep
-    // coherent; the cached pages are clean, inactive and reclaimable like any file's. The vnode is the one the backing
-    // store holds (one vnode per file), so clearing the flag after the attach reaches its reads.
+    // r8-sdboot: DiskImages' FileBackingStore marks the image vnode VNOCACHE_DATA when it opens it, so every read of the
+    // image device becomes an uncached read of the same size on the SD card. The System cryptex's APFS reads 4 KiB
+    // B_META blocks one at a time (235-246K per boot before the first frame on 11-04, most of the SD's reads).
+    // Registering the image with the cluster layer (vfs_cluster.c ioswitch_cluster_register_image) sends its reads of at
+    // most 16 KiB through the page cache (repeats are copies, sequential runs get read-ahead) and leaves larger reads, the
+    // dyld cache page-ins the cryptex's own page cache keeps, uncached so the same pages are not held twice (r7c cleared
+    // the flag for every read). The image is read-only here, so there is nothing to keep coherent. The vnode is the one
+    // the backing store holds (one vnode per file).
     vnode_t image = NULLVP;
     if (const int lookup = vnode_lookup(paths[index], 0, &image, vfs_context_current())) {
         IOLog("IOSwitch cryptex: %s stays uncached: lookup %d\n", paths[index], lookup);
     } else {
-        vnode_clearnocache(image);
+        ioswitch_cluster_register_image(image);
         vnode_put(image);
     }
     // The image's APFS container publishes its volume asynchronously.

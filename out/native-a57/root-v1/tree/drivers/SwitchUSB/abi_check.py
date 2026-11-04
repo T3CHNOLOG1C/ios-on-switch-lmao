@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
-"""Build libSwitchUSB.a: XudcHardware + SwitchUSB (console gadget) + SwitchXUDC
-(IOUSBDeviceController backend bound to the original 21H461 IOUSBDeviceFamily).
+"""SwitchXUDC's ABI against the original 21H461 IOUSBDeviceFamily (run by cmake/Drivers.cmake on every build).
 
-Usage: build_switchusb.py [OUTDIR]   (default: <tree>/build/switch-usb)
+Usage: abi_check.py --kernelcache KC --object SwitchXUDC.o --late SwitchXUDC.late.o --bindings original-bindings.S
+                    --output SwitchXUDC.checked.o [--write]
 
-Checks before anything is archived:
-- every bound original address still holds the recorded instruction bytes
-  (the 21H461 kernelcache the prelinker uses);
-- the compiled SwitchXUDC vtable has exactly the original 234 slots, no pure
-  virtual left, our overrides only where intended, and every other slot names
-  the function the original IOUSBDeviceController vtable holds there;
-- the only original imports are the audited ones; SwitchXUDC's static
-  initializer is staged (it runs from switchxudc_start after the family loads).
-Bound values are original addresses plus the prelink slide (-0x1000000).
+Checks, against the kernelcache the prelinker uses:
+- every bound original address still holds the recorded instruction bytes;
+- the compiled SwitchXUDC vtable has exactly the original 234 slots, no pure virtual left, our overrides only where
+  intended (OWN), and every other slot names the function the original IOUSBDeviceController vtable holds there;
+- the only original imports are the audited ones (CODE), all inside IOUSBDeviceFamily, and no abstract-base D0/D1;
+- original-bindings.S binds exactly those imports at original address + prelink slide (-0x1000000); --write
+  regenerates it instead of comparing;
+- the late object (static initializer staged, Drivers.cmake ioswitch_late_object) has the same instructions as the
+  object and no __mod_init_func.
+Then copies the late object to --output, which the archive takes. Derived from the r2-era build_switchusb.py.
 """
-import json
+import argparse
 from pathlib import Path
 import struct
-import subprocess
 import sys
 
 TREE = Path(__file__).resolve().parents[2]
-ROOT = TREE.parents[3]
-SOURCES = TREE / 'drivers/SwitchUSB'
-KERNELCACHE = ROOT / 'vendor/unixnu/out/ipsw/21H461/kernelcache.decompressed'
-SLIDE = -0x1000000
-LLVM = '/opt/homebrew/opt/llvm/bin/'
 sys.path.insert(0, str(TREE / 'kits/NativePrelink'))
 from native_prelink import macho, backed_offset, exports  # noqa: E402
 
+SLIDE = -0x1000000
 VTABLE = 0xfffffff006e81d90        # __ZTV21IOUSBDeviceController (entries start at +16)
 METACLASS = 0xfffffff007b1a4c8     # IOUSBDeviceController::gMetaClass
 SLOTS = 234
@@ -106,16 +102,6 @@ CODE = [
 ]
 
 
-def require(ok, why):
-    if not ok:
-        raise SystemExit('build_switchusb: ' + why)
-
-
-def run(command, cwd=None):
-    result = subprocess.run([str(c) for c in command], cwd=cwd, capture_output=True, text=True)
-    require(result.returncode == 0, ' '.join(map(str, command[:3])) + '...\n' + result.stdout[-4000:] + result.stderr[-6000:])
-
-
 def symbols_of(blob):
     image = macho(blob)
     table = next(at for cmd, at, _ in image['commands'] if cmd == 2)
@@ -145,16 +131,34 @@ def compiled_vtable(blob, image, symbols, name):
     return entries
 
 
+
+
+def require(ok, why):
+    if not ok:
+        raise SystemExit('abi_check: ' + why)
+
+
+def text_of(data):
+    parsed = macho(data)
+    section = next(s for g in parsed['segments'] for s in g['sections'] if s['name'] == '__text')
+    return data[section['fileoff']:section['fileoff'] + section['size']], parsed
+
+
 def main():
-    out = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else TREE / 'build/switch-usb'
-    out.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    for option in ('--kernelcache', '--object', '--late', '--bindings', '--output'):
+        parser.add_argument(option, required=True, type=Path)
+    parser.add_argument('--write', action='store_true', help='regenerate --bindings instead of comparing')
+    args = parser.parse_args()
 
     # Original: bytes at every bound address, the vtable and the metaclass.
-    kc = KERNELCACHE.read_bytes()
+    kc = args.kernelcache.read_bytes()
     parent = macho(kc)
+
     def read(va, n):
         at = backed_offset(parent['segments'], va, n, len(kc))
         return kc[at:at + n]
+
     def u64(va):
         return struct.unpack('<Q', read(va, 8))[0]
     original_names = exports(kc, parent)
@@ -173,22 +177,8 @@ def main():
     require(adrp & 0x9f00001f == 0x90000000 and add & 0xffc003ff == 0x91000000 and ret == 0xd65f03c0 and
             page + ((add >> 10) & 0xfff) == METACLASS, 'original getMetaClass returns gMetaClass')
 
-    # Compile with the kernel driver flags (the block driver's recorded command).
-    template = json.loads((TREE / 'build/native-ioswitch-root/compile-command.json').read_text())
-    block = str(TREE / 'drivers/NativeIOSwitchBlock/NativeIOSwitchBlock.cpp')
-    cwd = json.loads((TREE / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json')
-                     .read_text().strip().rstrip(','))['directory']
-    objects = {}
-    for unit in ('XudcHardware', 'SwitchUSB', 'SwitchXUDC'):
-        command = list(template)
-        command[command.index(block)] = str(SOURCES / (unit + '.cpp'))
-        command[command.index('-o') + 1] = str(out / (unit + '.o'))
-        run(command, cwd=cwd)
-        objects[unit] = out / (unit + '.o')
-    (out / 'compile-command.json').write_text(json.dumps(command, indent=1) + '\n')
-
     # SwitchXUDC's ABI against the original.
-    blob = objects['SwitchXUDC'].read_bytes()
+    blob = args.object.read_bytes()
     image, symbols = symbols_of(blob)
     compiled = compiled_vtable(blob, image, symbols, '__ZTV10SwitchXUDC')
     require(len(compiled) == SLOTS, f'SwitchXUDC vtable has {len(compiled)} slots, expected {SLOTS}')
@@ -214,33 +204,21 @@ def main():
         require(any(s['va'] <= allowed[name] < s['va'] + s['size'] for s in owner),
                 f'{name} outside IOUSBDeviceFamily')
 
-    bindings = {name: allowed[name] + SLIDE for name in sorted(imports)}
-    assembly = out / 'original-bindings.S'
-    assembly.write_text(''.join(f'.globl {n}\n.set {n}, {v:#x}\n' for n, v in bindings.items()))
-    run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-Werror', '-Wno-incompatible-sysroot',
-         '-c', assembly, '-o', out / 'original-bindings.o'])
+    text = ('// Generated by abi_check.py --write from the 21H461 kernelcache: original IOUSBDeviceFamily addresses\n'
+            '// plus the prelink slide (-0x1000000). Do not edit.\n' +
+            ''.join(f'.globl {n}\n.set {n}, {allowed[n] + SLIDE:#x}\n' for n in sorted(imports)))
+    if args.write:
+        args.bindings.write_text(text)
+    else:
+        require(args.bindings.read_text() == text,
+                f'{args.bindings} is stale: rerun abi_check.py with --write (imports changed)')
 
-    # SwitchXUDC registers its metaclass only after IOUSBDeviceFamily is loaded.
-    late = out / 'SwitchXUDC.late.o'
-    run([LLVM + 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func',
-         '--globalize-symbol=__GLOBAL__sub_I_SwitchXUDC.cpp', objects['SwitchXUDC'], late])
-    def text(data):
-        parsed = macho(data)
-        section = next(s for g in parsed['segments'] for s in g['sections'] if s['name'] == '__text')
-        return data[section['fileoff']:section['fileoff'] + section['size']], parsed
-    late_blob = late.read_bytes()
-    late_text, late_image = text(late_blob)
-    require(late_text == text(blob)[0], 'late-init staging changed instructions')
+    late = args.late.read_bytes()
+    late_text, late_image = text_of(late)
+    require(late_text == text_of(blob)[0], 'late-init staging changed instructions')
     require(not any(s['name'] == '__mod_init_func' for g in late_image['segments'] for s in g['sections']),
             'SwitchXUDC still has an automatic initializer')
-
-    archive = out / 'libSwitchUSB.a'
-    archive.unlink(missing_ok=True)
-    run(['xcrun', 'ar', 'rcs', archive, objects['XudcHardware'], objects['SwitchUSB'], late, out / 'original-bindings.o'])
-    report = {'archive': str(archive), 'slots_checked': SLOTS, 'own_slots': sorted(OWN),
-              'bindings': {n: hex(v) for n, v in bindings.items()}, 'slide': SLIDE}
-    (out / 'bindings.json').write_text(json.dumps(report, indent=1) + '\n')
-    print(f'libSwitchUSB.a: {SLOTS} slots checked, {len(bindings)} original bindings verified -> {archive}')
+    args.output.write_bytes(late)
 
 
 if __name__ == '__main__':

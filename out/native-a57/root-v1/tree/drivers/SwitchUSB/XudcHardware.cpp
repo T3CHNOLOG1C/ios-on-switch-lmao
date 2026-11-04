@@ -63,9 +63,9 @@ enum : uint32_t {  // PMC (from 0x7000E400; hekate bdk/soc/pmc_t210.h)
     PART_XUSBA = 20,
     PART_XUSBB = 21,
 };
-enum : uint32_t { FUSE_USB_CALIB = 0x1f0, FUSE_USB_CALIB_EXT = 0x350 };                   // from 0x7000F800
-enum : uint32_t { MC_SMMU_TRANSLATION_ENABLE_1 = 0x230, MC_SMMU_XUSB_DEV_ASID = 0x28c };  // Linux tegra210.c
-enum : uint32_t {  // XUSB pad controller (hekate usb_t210.h)
+enum : uint32_t { FUSE_USB_CALIB = 0x1f0, FUSE_USB_CALIB_EXT = 0x350 };  // from 0x7000F800
+enum : uint32_t { MC_SMMU_XUSB_DEV_ASID = 0x28c };                       // Linux tegra210.c, bit 31 = translate
+enum : uint32_t {                                                        // XUSB pad controller (hekate usb_t210.h)
     USB2_PAD_MUX = 0x004,
     USB2_PORT_CAP = 0x008,
     SS_PORT_MAP = 0x014,
@@ -79,7 +79,7 @@ enum : uint32_t {  // XUSB pad controller (hekate usb_t210.h)
     BIAS_PAD_CTL_1 = 0x288,
     USB2_VBUS_ID = 0xc60,
 };
-enum : uint32_t {  // XUDC: xHCI-like block at +0, FPCI config at +0x8000, IPFS at +0x9000
+enum : uint32_t {  // XUDC: xHCI-like block at +0, FPCI config at +0x8000, IPFS at +0x9000 (Linux tegra_xudc.c)
     DB = 0x04,
     ERSTSZ = 0x08,
     ERST0BALO = 0x10,
@@ -96,6 +96,7 @@ enum : uint32_t {  // XUDC: xHCI-like block at +0, FPCI config at +0x8000, IPFS 
     PORTSC = 0x3c,
     ECPLO = 0x40,
     ECPHI = 0x44,
+    PORTPM = 0x4c,
     EP_HALT = 0x50,
     EP_PAUSE = 0x54,
     EP_RELOAD = 0x58,
@@ -118,9 +119,25 @@ enum : uint32_t {
     ST_IP = 1u << 4,
     EREP_ECS = 1u << 0,
     ERDP_EHB = 1u << 3,
+    PORTSC_CCS = 1u << 0,
+    PORTSC_PED = 1u << 1,
+    PORTSC_PR = 1u << 4,
+    PORTSC_PLS_MASK = 0xfu << 5,
+    PORTSC_PLS_U0 = 0u << 5,
+    PORTSC_PLS_U3 = 3u << 5,
     PORTSC_PLS_RXDETECT = 5u << 5,
+    PORTSC_PS_FS = 1u << 10,
+    PORTSC_PS_MASK = 0xfu << 10,
     PORTSC_LWS = 1u << 16,
+    PORTSC_CSC = 1u << 17,
+    PORTSC_WRC = 1u << 19,
+    PORTSC_PRC = 1u << 21,
+    PORTSC_PLC = 1u << 22,
+    PORTSC_CEC = 1u << 23,
+    PORTSC_WPR = 1u << 30,
     PORTSC_CHANGES = PORTSC_CSC | PORTSC_WRC | PORTSC_PRC | PORTSC_PLC | PORTSC_CEC,
+    PORTPM_L1S_MASK = 3u,
+    PORTPM_L1S_NYET = 2u,  // no USB2 LPM (Linux tegra210 soc: lpm_enable = false)
     PORTHALT_HALT_LTSSM = 1u << 0,
     PORTHALT_STCHG_REQ = 1u << 20,
     FE_PORTREGSEL_MASK = 3u,
@@ -142,7 +159,7 @@ inline void barrier()
 {
     __asm__ volatile("dsb sy" ::: "memory");
 }
-}
+}  // namespace
 
 void cacheFlush(const volatile void *p, size_t n)
 {
@@ -188,6 +205,7 @@ void Hardware::pmcWrite(uint32_t o, uint32_t v)
     w(pmcPage, kPmcOffset + o, v);
 }
 
+// Bounded register handshakes of the bring-up and endpoint commands (microseconds); never event waits.
 bool Hardware::waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
 {
     for (uint32_t i = 0; i <= us; ++i) {
@@ -208,27 +226,8 @@ bool Hardware::map()
     return car && pmcPage && fusePage && mc && padctl && xudc;
 }
 
-// One line with everything that decides whether bring-up can work; read-only.
-// Pad and XUDC registers are read only when clock, reset and partition allow
-// it (0xdead otherwise): an unclocked Tegra block can hang the bus.
-void Hardware::report(const char *why)
-{
-    uint32_t gate = pmc(PWRGATE_STATUS), clkU = r(car, CLK_OUT_ENB_U), rstU = r(car, RST_DEVICES_U);
-    uint32_t clkW = r(car, CLK_OUT_ENB_W), rstW = r(car, RST_DEVICES_W);
-    bool xudcLive = (gate & (1u << PART_XUSBB)) && (clkU & U_XUSB_DEV) && !(rstU & U_XUSB_DEV);
-    bool padLive = (clkW & W_XUSB) && !(rstW & W_XUSB_PADCTL);
-    auto pad = [&](uint32_t o) { return padLive ? r(padctl, o) : 0xdeadu; };
-    IOLog("SwitchUSB: %s pwrgate=0x%08x clkU=0x%08x rstU=0x%08x clkW=0x%08x rstW=0x%08x clkH=0x%08x "
-          "pllu=0x%08x utmipll=0x%08x padmux=0x%08x portcap=0x%08x vbusid=0x%08x elpg0=0x%08x "
-          "smmu=0x%08x/0x%08x usb_ao=0x%08x ctrl=0x%08x st=0x%08x portsc=0x%08x\n",
-          why, gate, clkU, rstU, clkW, rstW, r(car, CLK_OUT_ENB_H), r(car, PLLU_BASE), r(car, UTMIPLL_HW_PWRDN_CFG0),
-          pad(USB2_PAD_MUX), pad(USB2_PORT_CAP), pad(USB2_VBUS_ID), pad(ELPG_PROGRAM_0), r(mc, MC_SMMU_XUSB_DEV_ASID),
-          r(mc, MC_SMMU_TRANSLATION_ENABLE_1), pmc(USB_AO), xudcLive ? xr(CTRL) : 0xdeadu, xudcLive ? xr(ST) : 0xdeadu,
-          xudcLive ? xr(PORTSC) : 0xdeadu);
-}
-
-// Linux tegra_powergate_power_up order: module reset asserted, partition on,
-// module clock on, clamps removed. The caller releases the reset later.
+// Linux tegra_powergate_power_up order: module reset asserted, partition on, module clock on, clamps removed. The
+// caller releases the reset later. A partition already on (the boot chain's) is left as it is.
 bool Hardware::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit)
 {
     if (pmc(PWRGATE_STATUS) & (1u << partition)) return true;
@@ -244,42 +243,27 @@ bool Hardware::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet,
     return true;
 }
 
-// hekate _xusb_init_phy(): PLLU, UTMIPLL, OTG pad 0 calibration, bias tracking. Shared with the host
-// controller (XusbHost.cpp): the pad is the same UTMI pad 0 whichever controller owns the port, and every
-// step either checks the PLL it would start or rewrites the same calibration, so running it twice is safe.
-bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uint8_t *padctl)
+// hekate _xusb_init_phy(): PLLU, UTMIPLL, OTG pad 0 calibration from fuses, bias pad tracking. Each PLL is started
+// only when it is not already running.
+bool Hardware::initPhy()
 {
-    auto r = [](volatile uint8_t *b, uint32_t o) { return *(volatile uint32_t *)(b + o); };
-    auto w = [](volatile uint8_t *b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; };
-    auto waitBits = [&](volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us) {
-        for (uint32_t i = 0; i <= us; ++i) {
-            if ((r(b, o) & mask) == value) return true;
-            IODelay(1);
-        }
-        return false;
-    };
     uint32_t pllu = r(car, PLLU_BASE);
-    if (!(pllu & PLL_ENABLE) || !(pllu & PLL_LOCK)) {
+    if (!(pllu & PLL_ENABLE) || !(pllu & PLL_LOCK)) {  // hekate clock_enable_pllu
         w(car, PLLU_MISC, r(car, PLLU_MISC) | (1u << 29));
         uint32_t cfg = (pllu & 0xffe00000u) | (1u << 24) | (1u << 16) | (0x19u << 8) | 2;
         w(car, PLLU_BASE, cfg);
         w(car, PLLU_BASE, cfg | PLL_ENABLE);
-        if (!waitBits(car, PLLU_BASE, PLL_LOCK, PLL_LOCK, 1000)) {
-            IOLog("SwitchUSB: PLLU did not lock\n");
-            return false;
-        }
-        IODelay(10);
+        if (!waitBits(car, PLLU_BASE, PLL_LOCK, PLL_LOCK, 1000)) return false;
+        IODelay(8);
     }
     w(car, PLLU_BASE, r(car, PLLU_BASE) | 0x2e00000u);  // USB, HSIC, ICUSB and 48 MHz outputs
 
-    if (!(r(car, UTMIPLL_HW_PWRDN_CFG0) & UTMIPLL_LOCK)) {
-        w(car, UTMIPLL_HW_PWRDN_CFG0, (r(car, UTMIPLL_HW_PWRDN_CFG0) & ~3u) | 1);  // software IDDQ, off
-        // 38.4 MHz * 25 / 1 = 960 MHz, enable/stable counts for 38.4 MHz.
+    if (!(r(car, UTMIPLL_HW_PWRDN_CFG0) & UTMIPLL_LOCK)) {  // hekate clock_enable_utmipll: 38.4 MHz * 25 = 960 MHz
+        w(car, UTMIPLL_HW_PWRDN_CFG0, (r(car, UTMIPLL_HW_PWRDN_CFG0) & ~3u) | 1);  // software IDDQ control, IDDQ off
         w(car, UTMIP_PLL_CFG0, (r(car, UTMIP_PLL_CFG0) & 0xff0000ffu) | (25u << 16) | (1u << 8));
         w(car, UTMIP_PLL_CFG2, (r(car, UTMIP_PLL_CFG2) & 0xff00003fu) | (24u << 18));
         w(car, UTMIP_PLL_CFG1, (r(car, UTMIP_PLL_CFG1) & 0x07ffa000u) | (1u << 15) | 375);
-        if (!waitBits(car, UTMIPLL_HW_PWRDN_CFG0, UTMIPLL_LOCK, UTMIPLL_LOCK, 1000))
-            IOLog("SwitchUSB: UTMIPLL lock not reported, continuing\n");
+        (void)waitBits(car, UTMIPLL_HW_PWRDN_CFG0, UTMIPLL_LOCK, UTMIPLL_LOCK, 1000);  // hekate does not insist either
     }
     w(car, UTMIP_PLL_CFG2, (r(car, UTMIP_PLL_CFG2) & 0xfeffffe8u) | 0x2000008u | 0x20 | 2);
     IODelay(2);
@@ -321,20 +305,16 @@ bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uin
     return true;
 }
 
-bool Hardware::initPhy()
-{
-    return usb2PadInit(car, fusePage, padctl);
-}
-
-// hekate xusb_device_init(): clocks, pads, FPCI/IPFS, event ring, EP0.
-bool Hardware::powerOn()
+// hekate xusb_device_init(): clocks, pads, FPCI/IPFS, event ring, EP0. The XUSB top and pad controller are shared
+// with the PCIe controller (drivers/SwitchWLAN): their clocks are enabled and resets released, never asserted.
+bool Hardware::powerOn(char *why, size_t whySize)
 {
     if (r(mc, MC_SMMU_XUSB_DEV_ASID) & 0x80000000u) {
-        IOLog("SwitchUSB: SMMU translation on for XUSB_DEV\n");
+        snprintf(why, whySize, "SMMU translation is on for XUSB_DEV (ASID 0x%08x)", r(mc, MC_SMMU_XUSB_DEV_ASID));
         return false;
     }
     if (!control.va && !control.allocate(kControlBytes)) {
-        IOLog("SwitchUSB: DMA allocation failed\n");
+        snprintf(why, whySize, "no DMA memory below 4 GiB");
         return false;
     }
     for (uint32_t i = 0; i < kMaxDci; ++i) {
@@ -346,17 +326,20 @@ bool Hardware::powerOn()
     w(car, RST_DEV_L_SET, L_USBD);
     w(car, CLK_ENB_L_CLR, L_USBD);
     w(car, CLK_ENB_W_SET, W_XUSB);
-    w(car, RST_DEV_W_CLR, W_XUSB_PADCTL);
+    w(car, RST_DEV_W_CLR, W_XUSB | W_XUSB_PADCTL);
     IODelay(2);
     if (!powerUp(PART_XUSBA, CLK_ENB_W_SET, RST_DEV_W_SET, W_XUSB_SS) ||
         !powerUp(PART_XUSBB, CLK_ENB_U_SET, RST_DEV_U_SET, U_XUSB_DEV)) {
-        IOLog("SwitchUSB: XUSB partition power-up failed (0x%08x)\n", pmc(PWRGATE_STATUS));
+        snprintf(why, whySize, "XUSB partitions did not power up (PMC PWRGATE_STATUS 0x%08x)", pmc(PWRGATE_STATUS));
         return false;
     }
 
     // OTG pad 0 and the bias pad belong to XUSB; port 0 is a device port.
     w(padctl, USB2_PAD_MUX, (r(padctl, USB2_PAD_MUX) & ~(3u << 18 | 3u)) | 1u << 18 | 1u);
-    if (!initPhy()) return false;
+    if (!initPhy()) {
+        snprintf(why, whySize, "PLLU did not lock (PLLU_BASE 0x%08x)", r(car, PLLU_BASE));
+        return false;
+    }
     w(padctl, USB2_PORT_CAP, (r(padctl, USB2_PORT_CAP) & ~3u) | 2);
     w(padctl, SS_PORT_MAP, r(padctl, SS_PORT_MAP) & ~0xfu);
     pmcWrite(USB_AO, pmc(USB_AO) & 0xfffffff3u);  // ID and VBUS wake detectors powered
@@ -375,7 +358,7 @@ bool Hardware::powerOn()
     w(car, RST_DEV_U_CLR, U_XUSB_DEV);
     IODelay(2);
 
-    // IPFS bridge, then the controller's PCI-style config space: BAR0 = its own base.
+    // IPFS bridge, then the controller's PCI-style config space: BAR0 = its own base (Linux tegra_xudc_fpci_ipfs_init).
     xw(IPFS_CONFIGURATION, xr(IPFS_CONFIGURATION) | 1);
     IODelay(10);
     xw(FPCI_CFG_1, xr(FPCI_CFG_1) | 7);  // IO, memory, bus master
@@ -406,7 +389,7 @@ bool Hardware::powerOn()
     return true;
 }
 
-// hekate xusb_device_enumerate(): VBUS/ID overrides, enable, port to RxDetect.
+// hekate xusb_device_enumerate(): no interrupt moderation, VBUS/ID overrides, enable, port to RxDetect, pull-up on.
 void Hardware::connect()
 {
     xw(RT_IMOD, 0);
@@ -418,12 +401,12 @@ void Hardware::connect()
     xw(PORTHALT, xr(PORTHALT) & ~PORTHALT_HALT_LTSSM);
     xw(CTRL, xr(CTRL) | CTRL_ENABLE);
     xw(CFG_DEV_FE, (xr(CFG_DEV_FE) & ~FE_PORTREGSEL_MASK) | FE_PORTREGSEL_HSFS);
-    xw(PORTSC, (xr(PORTSC) & ~PORTSC_PLS_MASK) | PORTSC_LWS | PORTSC_PLS_RXDETECT);
+    xw(PORTSC, (xr(PORTSC) & ~(PORTSC_PLS_MASK | PORTSC_CHANGES)) | PORTSC_LWS | PORTSC_PLS_RXDETECT);
     xw(CFG_DEV_FE, xr(CFG_DEV_FE) & ~FE_PORTREGSEL_MASK);
     w(padctl, USB2_VBUS_ID, (r(padctl, USB2_VBUS_ID) & ~VBUS_ID_OVR_MASK) | VBUS_ID_OVR_FLOAT | VBUS_ID_VBUS_ON);
 }
 
-// Device mode off and VBUS override low: the pull-up goes away.
+// Device mode off and the VBUS override low: the pull-up goes away.
 void Hardware::disconnect()
 {
     xw(CTRL, xr(CTRL) & ~(CTRL_ENABLE | CTRL_RUN));
@@ -447,14 +430,14 @@ bool Hardware::nextEvent(Event &event)
     return true;
 }
 
-// Linux tegra_xudc_process_event_ring(): the new dequeue pointer with EHB written as 1 (W1C), which re-enables
-// the interrupt. ST.IP is not touched here: an IP raised for events that arrived after the drain must survive.
+// Linux tegra_xudc_process_event_ring(): the new dequeue pointer with EHB written as 1 (W1C), which re-enables the
+// interrupt. ST.IP is not touched here: an IP raised for events that arrived after the drain must survive.
 void Hardware::finishEvents()
 {
-    xw(ERDPLO, (control.pa + kEventOffset + eventIndex * 16) | (xr(ERDPLO) & 0x7) | ERDP_EHB);
+    xw(ERDPHI, 0);
+    xw(ERDPLO, (control.pa + kEventOffset + eventIndex * 16) | ERDP_EHB);
 }
 
-// Linux tegra_xudc_irq(): acknowledge ST.IP alone (ST.RC is W1C too), before the ring is drained.
 bool Hardware::interruptPending()
 {
     return xr(ST) & ST_IP;
@@ -462,15 +445,97 @@ bool Hardware::interruptPending()
 
 void Hardware::describeInterrupt(char *buffer, size_t size)
 {
-    snprintf(buffer, size, "ST %#x CTRL %#x ERDPLO %#x EREPLO %#x RT_IMOD %#x IPFS_INTR_MASK %#x", xr(ST), xr(CTRL),
-             xr(ERDPLO), xr(EREPLO), xr(RT_IMOD), xr(IPFS_INTR_MASK));
+    snprintf(buffer, size, "ST %#x CTRL %#x ERDP %#x EREP %#x PORTSC %#x IPFS_INTR_MASK %#x", xr(ST), xr(CTRL),
+             xr(ERDPLO), xr(EREPLO), xr(PORTSC), xr(IPFS_INTR_MASK));
 }
 
+// Linux tegra_xudc_irq(): acknowledge ST.IP alone (ST.RC is W1C too), before the ring is drained.
 bool Hardware::takeInterrupt()
 {
     if (!(xr(ST) & ST_IP)) return false;
     xw(ST, ST_IP);
     return true;
+}
+
+// Linux clear_port_change(): the other change bits written as 0 so they stay pending.
+void Hardware::clearPortChange(uint32_t change)
+{
+    xw(PORTSC, (xr(PORTSC) & ~PORTSC_CHANGES) | change);
+}
+
+// Linux tegra_xudc_reset() for EP0: drop what is queued (dequeue = enqueue), sequence and partial-TD state cleared,
+// every endpoint unhalted, EP0 reloaded and unpaused. The device address goes back to 0 with the bus reset.
+void Hardware::resetEp0()
+{
+    Ring &ring = rings[0];
+    volatile uint32_t *c = context(0);
+    cacheFlush(c, 64);
+    c[2] = ((ring.pa + ring.enqueue * 16) & ~0xfu) | ring.cycle;
+    c[3] = 0;
+    c[5] &= 0x00ffffffu;                      // rsvd, partial_td, splitxstate, seq_num
+    c[11] &= ~0x7fu;                          // device address
+    c[1] = (c[1] & 0x0000ffffu) | 64u << 16;  // max packet 64 below SuperSpeed
+    cacheFlush(c, 64);
+    xw(CTRL, xr(CTRL) & ~(0x7fu << 24));
+    if (uint32_t halted = xr(EP_HALT)) {  // Linux ep_unhalt_all
+        xw(EP_HALT, 0);
+        if (waitBits(xudc, EP_STCHG, halted, halted, 1000)) xw(EP_STCHG, halted);
+    }
+    xw(EP_RELOAD, 1u);
+    (void)waitBits(xudc, EP_RELOAD, 1u, 0, 1000);
+    toggleBit(EP_PAUSE, 0, false);
+}
+
+// Linux __tegra_xudc_handle_port_status(), run until no change is left (tegra_xudc_handle_port_status). Port reset and
+// connect also get Linux's tegra_xudc_port_connect() setup: USB2 LPM answered NYET, ST.RC cleared.
+PortChange Hardware::portChange()
+{
+    PortChange change;
+    for (unsigned pass = 0; pass < 8; ++pass) {
+        uint32_t halt = xr(PORTHALT);
+        if ((halt & PORTHALT_STCHG_REQ) && (halt & PORTHALT_HALT_LTSSM)) xw(PORTHALT, halt & ~PORTHALT_HALT_LTSSM);
+
+        uint32_t sc = xr(PORTSC);
+        if ((sc & PORTSC_PRC) && (sc & PORTSC_PR)) clearPortChange(PORTSC_PRC | PORTSC_PED);  // reset still going
+        bool connectNow = false;
+        if ((sc & PORTSC_PRC) && !(sc & PORTSC_PR)) {
+            clearPortChange(PORTSC_PRC | PORTSC_PED);
+            resetEp0();
+            change.reset = connectNow = true;
+        }
+        sc = xr(PORTSC);
+        if (sc & PORTSC_WRC) {
+            clearPortChange(PORTSC_WRC | PORTSC_PED);
+            if (!(xr(PORTSC) & PORTSC_WPR)) {
+                resetEp0();
+                change.reset = connectNow = true;
+            }
+        }
+        sc = xr(PORTSC);
+        if (sc & PORTSC_CSC) {
+            clearPortChange(PORTSC_CSC);
+            if (sc & PORTSC_CCS) {
+                change.connected = connectNow = true;
+            } else {
+                resetEp0();
+                change.disconnected = true;
+            }
+        }
+        if (connectNow) {
+            change.fullSpeed = (xr(PORTSC) & PORTSC_PS_MASK) == PORTSC_PS_FS;
+            xw(PORTPM, (xr(PORTPM) & ~PORTPM_L1S_MASK) | PORTPM_L1S_NYET);
+            if (xr(ST) & ST_RC) xw(ST, ST_RC);
+        }
+        sc = xr(PORTSC);
+        if (sc & PORTSC_PLC) {
+            clearPortChange(PORTSC_PLC);
+            if ((sc & PORTSC_PLS_MASK) == PORTSC_PLS_U3) change.suspended = true;
+            if ((sc & PORTSC_PLS_MASK) == PORTSC_PLS_U0) change.resumed = true;
+        }
+        if (sc & PORTSC_CEC) clearPortChange(PORTSC_CEC);
+        if (!(xr(PORTSC) & PORTSC_CHANGES) && !(xr(PORTHALT) & PORTHALT_STCHG_REQ)) break;
+    }
+    return change;
 }
 
 volatile uint32_t *Hardware::context(uint32_t dci)
@@ -490,8 +555,8 @@ void Hardware::resetRing(uint32_t dci)
     cacheFlush(ring.trb, kRingTrbs * 16);
 }
 
-// hekate xusb_ep_ctx_t / Linux BUILD_EP_CONTEXT_RW: state running, CErr/CEC 3,
-// dequeue = ring start with DCS 1; EP0 keeps the current device address.
+// hekate xusb_ep_ctx_t / Linux tegra_xudc_ep_context_setup: state running, CErr/CEC 3, dequeue = ring start with
+// DCS 1; EP0 keeps the current device address.
 void Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uint32_t interval)
 {
     resetRing(dci);
@@ -543,35 +608,34 @@ void Hardware::disableEndpoint(uint32_t dci)
     c[0] &= ~7u;
     cacheFlush(c, 64);
     xw(EP_RELOAD, 1u << dci);
-    waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000);
+    (void)waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000);
 }
 
-// Linux __tegra_xudc_ep_set_halt(false): disable, reload, running with the
-// sequence number and partial-TD state cleared, reload, unpause, unhalt.
+// Linux __tegra_xudc_ep_set_halt(false): disable, reload, running with the sequence number and partial-TD state
+// cleared, reload, unpause, unhalt.
 void Hardware::resetSequence(uint32_t dci)
 {
     volatile uint32_t *c = context(dci);
     cacheFlush(c, 64);
     c[0] &= ~7u;
     cacheFlush(c, 64);
-    reloadEndpoint(dci);
+    (void)reloadEndpoint(dci);
     cacheFlush(c, 64);
     c[0] = (c[0] & ~7u) | 1;
     c[5] &= 0x00ffffffu;  // rsvd, partial_td, splitxstate, seq_num
     cacheFlush(c, 64);
-    reloadEndpoint(dci);
+    (void)reloadEndpoint(dci);
     toggleBit(EP_PAUSE, dci, false);
     toggleBit(EP_HALT, dci, false);
 }
 
-// Linux __tegra_xudc_ep_dequeue (busy case): pause, wait until idle, move the
-// dequeue pointer to the enqueue position, clear partial-TD state, reload.
-// The sequence number (data toggle) survives.
+// Linux __tegra_xudc_ep_dequeue (busy case): pause, wait until idle, move the dequeue pointer to the enqueue position,
+// clear partial-TD state, reload. The sequence number (data toggle) survives.
 void Hardware::dropQueued(uint32_t dci)
 {
     Ring &ring = rings[dci];
     toggleBit(EP_PAUSE, dci, true);
-    waitBits(xudc, EP_THREAD_ACTIVE, 1u << dci, 0, 1000);
+    (void)waitBits(xudc, EP_THREAD_ACTIVE, 1u << dci, 0, 1000);
     volatile uint32_t *c = context(dci);
     cacheFlush(c, 64);
     c[2] = ((ring.pa + ring.enqueue * 16) & ~0xfu) | ring.cycle;
@@ -579,7 +643,7 @@ void Hardware::dropQueued(uint32_t dci)
     c[5] &= 0xf8000000u;  // keep seq_num; clear edtla, rsvd, partial_td, splitxstate
     cacheFlush(c, 64);
     xw(EP_RELOAD, 1u << dci);
-    waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000);
+    (void)waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000);
     toggleBit(EP_PAUSE, dci, false);
 }
 
@@ -609,9 +673,10 @@ void Hardware::doorbell(uint32_t dci, uint16_t sequence)
     xw(DB, dci << 8 | (dci == 0 ? (uint32_t)sequence << 16 : 0));
 }
 
+// SET_ADDRESS: CTRL.DEVADDR and EP0's context (Linux tegra_xudc_ep0_set_address), before the status stage.
 void Hardware::setAddress(uint32_t address)
 {
-    xw(CTRL, (xr(CTRL) & 0x80ffffffu) | (address & 0x7f) << 24);
+    xw(CTRL, (xr(CTRL) & ~(0x7fu << 24)) | (address & 0x7f) << 24);
     volatile uint32_t *c = context(0);
     cacheFlush(c, 64);
     c[11] = (c[11] & ~0x7fu) | (address & 0x7f);
@@ -623,23 +688,6 @@ void Hardware::run()
     if (xr(CTRL) & CTRL_RUN) return;
     xw(CTRL, xr(CTRL) | CTRL_RUN);
     xw(ST, ST_RC);  // W1C: writing ST back would also clear a pending IP
-}
-
-uint32_t Hardware::portStatus()
-{
-    return xr(PORTSC);
-}
-void Hardware::clearPortChange(uint32_t status, uint32_t change)
-{
-    xw(PORTSC, (status & ~PORTSC_CHANGES) | change);
-}
-void Hardware::releaseLtssm()
-{
-    xw(PORTHALT, xr(PORTHALT) & ~PORTHALT_HALT_LTSSM);
-}
-bool Hardware::stateChangeRequested()
-{
-    return xr(PORTHALT) & PORTHALT_STCHG_REQ;
 }
 
 }  // namespace xudc

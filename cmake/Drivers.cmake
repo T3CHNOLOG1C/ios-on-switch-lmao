@@ -276,10 +276,41 @@ ioswitch_compile_command("${nvdec}/nvdec_firmware.o" SOURCE "${T}/drivers/TegraN
           -I "${T}/drivers/TegraNVDEC/firmware")
 list(APPEND nvdec_objects "${nvdec}/nvdec_firmware.o")
 
+# --- SwitchUSB: USB 2.0 device mode on the USB-C port (drivers/SwitchUSB/SwitchUSB.h): the XUDC under Apple's original
+#     IOUSBDeviceFamily (prelinked with AppleUSBDeviceMux, see the pass's emit_prelink.py). On when the ADT has
+#     /arm-io/usb-device. SwitchXUDC subclasses the original IOUSBDeviceController, so it is a late object; abi_check.py
+#     checks its vtable and imports against the kernelcache and that original-bindings.S is current on every build.
+set(usb "${B}/switch-usb")
+set(usb_src "${T}/drivers/SwitchUSB")
+ioswitch_driver("${usb}/XudcHardware.o" "${usb_src}/XudcHardware.cpp")
+ioswitch_driver("${usb}/SwitchUSB.o" "${usb_src}/SwitchUSB.cpp")
+ioswitch_driver("${usb}/SwitchXUDC.o" "${usb_src}/SwitchXUDC.cpp")
+ioswitch_late_object("${usb}/SwitchXUDC.late.o" "${usb}/SwitchXUDC.o" SwitchXUDC.cpp)
+file(READ "${IOSWITCH_PASS}/prelink-command.json" usb_prelink)
+string(JSON usb_count LENGTH "${usb_prelink}")
+math(EXPR usb_last "${usb_count} - 2")
+foreach(i RANGE ${usb_last})
+  string(JSON usb_arg GET "${usb_prelink}" ${i})
+  if(usb_arg STREQUAL "--prelinked")
+    math(EXPR i "${i} + 1")
+    string(JSON usb_kernelcache GET "${usb_prelink}" ${i})
+  endif()
+endforeach()
+add_custom_command(OUTPUT "${usb}/SwitchXUDC.checked.o"
+  COMMAND "${IOSWITCH_PYTHON}" "${usb_src}/abi_check.py" --kernelcache "${usb_kernelcache}"
+          --object "${usb}/SwitchXUDC.o" --late "${usb}/SwitchXUDC.late.o" --bindings "${usb_src}/original-bindings.S"
+          --output "${usb}/SwitchXUDC.checked.o"
+  DEPENDS "${usb}/SwitchXUDC.o" "${usb}/SwitchXUDC.late.o" "${usb_src}/original-bindings.S" "${usb_src}/abi_check.py"
+          "${usb_kernelcache}"
+  COMMENT "Checking SwitchXUDC against the original IOUSBDeviceFamily"
+  VERBATIM)
+ioswitch_bindings("${usb}/original-bindings.o" "${usb_src}/original-bindings.S")
+set(usb_objects "${usb}/XudcHardware.o" "${usb}/SwitchUSB.o" "${usb}/SwitchXUDC.checked.o" "${usb}/original-bindings.o")
+
 ioswitch_archive("${block}/libNativeIOSwitchBlockDevice.a"
   "${block}/NativeIOSwitchBlockDevice.o" "${block}/original-bindings.o" "${block}/IOSwitchCryptex.o"
   "${block}/SwitchNVRAM.o" "${board}/TegraGPIO.o" "${board}/TegraI2C.o" "${board}/SwitchThermal.o"
-  "${board}/SwitchBattery.o" "${board}/SwitchBluetooth.o" "${board}/SwitchPMIC.o" "${board}/SwitchSuspend.o" "${board}/SwitchAudio.o" ${wlan_objects} ${gpu_objects} ${bpmp_objects} ${dfll_objects} ${nvdec_objects})
+  "${board}/SwitchBattery.o" "${board}/SwitchBluetooth.o" "${board}/SwitchPMIC.o" "${board}/SwitchSuspend.o" "${board}/SwitchAudio.o" ${wlan_objects} ${gpu_objects} ${bpmp_objects} ${dfll_objects} ${nvdec_objects} ${usb_objects})
 
 # --- NativeRamBlock (scripts/build-native-ram-block.py). The XNU script links the object
 #     itself next to the block driver's bindings and only checks the archive. ---------------

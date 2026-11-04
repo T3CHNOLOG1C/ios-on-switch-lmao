@@ -148,6 +148,7 @@ extern int tegra_nvdec_probe(void);      /* no-op unless switch-nvdec=1; own thr
 extern int
 ioswitch_audio_publish(void); /* null sink unless switch-audio=1|3; the Tegra backend sleeps on I2C1, PZ4 and the GIC */
 extern int switch_suspend_start(void); /* no-op unless switch-sleep=2; after every board driver it suspends */
+extern int switch_usb_start(void);     /* no-op without the ADT's /arm-io/usb-device; runs its bring-up on its own thread */
 static int ioswitch_board_enabled(const char *name)
 {
     unsigned enabled = 1;
@@ -160,6 +161,7 @@ static void ioswitch_board_thread(void *parameter __unused, wait_result_t result
     if (switch_bluetooth_start()) printf("IOSwitch: SwitchBluetooth did not start\n");
     /* After Bluetooth: rail pairing hands Joy-Cons the console's (fuse-derived) BD address. */
     if (switch_joycon_start()) printf("IOSwitch: SwitchJoyCon did not start\n");
+    if (switch_usb_start()) printf("IOSwitch: SwitchUSB did not start\n");
     if (ioswitch_board_enabled("switch-gpio") && tegra_gpio_start()) printf("IOSwitch: TegraGPIO did not start\n");
     if (ioswitch_board_enabled("switch-thermal") && switch_thermal_start())
         printf("IOSwitch: SwitchThermal did not start\n");

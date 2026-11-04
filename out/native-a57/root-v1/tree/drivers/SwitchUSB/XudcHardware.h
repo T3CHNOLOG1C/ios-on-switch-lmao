@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Tegra X1 (T210B01) XUSB device controller (XUDC): clocks, power, USB2 PHY
-// on OTG pad 0 (the USB-C port), event ring, endpoint contexts and transfer
-// rings. Shared by the CDC-ACM console gadget (SwitchUSB.cpp) and the
-// IOUSBDeviceController backend (SwitchXUDC.cpp). USB2 high speed only.
+// Tegra X1 (T210B01) XUSB device controller (XUDC): clocks, power, the USB2 PHY on OTG pad 0 (the USB-C port's D+/D-),
+// event ring, endpoint contexts and transfer rings. USB2 high speed only. Used by SwitchXUDC.cpp, the backend of
+// Apple's IOUSBDeviceController.
 //
-// Sequence: hekate bdk/usb/xusbd.c (xusb_device_init, _xusb_init_phy,
-// _xusbd_init_device_clocks, xusb_device_enumerate); endpoint pause/reload/halt
-// and the context bit layout: Linux drivers/usb/gadget/udc/tegra-xudc.c.
-// The caller serializes all calls (one thread or one IOWorkLoop), except
-// takeInterrupt(), which only touches ST and may run in a primary interrupt
-// filter. Events are interrupt-driven when the caller attaches the XUDC SPI
-// (44, INTID 76; CTRL.IE and the IPFS IP_INT mask are set by powerOn()).
+// Sequence: hekate bdk/usb/xusbd.c (xusb_device_init, _xusb_init_phy, _xusbd_init_device_clocks,
+// xusb_device_enumerate); port reset, endpoint pause/reload/halt and the context bit layout: Linux
+// drivers/usb/gadget/udc/tegra_xudc.c (switch-l4t-kernel-4.9). The caller serializes every call (one IOWorkLoop),
+// except takeInterrupt(), which touches only ST and runs in the primary interrupt filter. Events are delivered by
+// the XUDC interrupt (GIC SPI 44, INTID 76; CTRL.IE and the IPFS IP_INT mask are set by powerOn()).
+//
+// The controller does not snoop the A57 caches: every ring, context and data buffer is cleaned before the
+// controller reads it and invalidated before the CPU reads what the controller wrote (cacheFlush).
 #pragma once
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <libkern/c++/OSObject.h>
@@ -33,27 +33,14 @@ enum : uint32_t {
     TRB_DIR_IN = 1u << 16,
     // Completion codes.
     COMP_SUCCESS = 1,
+    COMP_STALL = 6,
     COMP_SHORT_PACKET = 13,
     // Endpoint context types.
-    EP_ISOC_OUT = 1,
     EP_BULK_OUT = 2,
     EP_INTR_OUT = 3,
     EP_CONTROL = 4,
-    EP_ISOC_IN = 5,
     EP_BULK_IN = 6,
     EP_INTR_IN = 7,
-    // PORTSC.
-    PORTSC_CCS = 1u << 0,
-    PORTSC_PR = 1u << 4,
-    PORTSC_PLS_MASK = 0xfu << 5,
-    PORTSC_PLS_U0 = 0u << 5,
-    PORTSC_PLS_U3 = 3u << 5,
-    PORTSC_CSC = 1u << 17,
-    PORTSC_WRC = 1u << 19,
-    PORTSC_PRC = 1u << 21,
-    PORTSC_PLC = 1u << 22,
-    PORTSC_CEC = 1u << 23,
-    PORTSC_WPR = 1u << 30,
 };
 constexpr uint32_t trbType(uint32_t type)
 {
@@ -85,21 +72,28 @@ struct DmaBuffer {
 
 void cacheFlush(const volatile void *p, size_t n);  // clean+invalidate by VA, then DSB
 
-// UTMI pad 0 bring-up (PLLU, UTMIPLL, fuse calibration, bias tracking); fusePage is 0x7000F000.
-bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uint8_t *padctl);
+// What the port did, as port-status events report it (PortChange::handle()).
+struct PortChange {
+    bool reset = false;         // bus reset ended: fresh EP0, address 0, configuration gone
+    bool connected = false;     // a host drives the bus (CSC with CCS)
+    bool disconnected = false;  // CSC without CCS
+    bool suspended = false;     // link to U3 (host suspend, or the cable is gone)
+    bool resumed = false;       // link back to U0
+    bool fullSpeed = false;     // PORTSC.PS: the host runs us at full speed
+};
 
 class Hardware {
 public:
     bool map();                                         // MMIO only, no access
-    void report(const char *why);                       // one log line, reads only live blocks
-    bool powerOn();                                     // partitions, clocks, PHY, FPCI/IPFS, event ring, EP0
-    void connect();                                     // VBUS/ID override, enable, port to RxDetect
-    void disconnect();                                  // drop the pull-up; the host sees a detach
+    bool powerOn(char *why, size_t whySize);            // partitions, clocks, PHY, FPCI/IPFS, event ring, EP0
+    void connect();                                     // VBUS/ID override, enable, port to RxDetect: pull-up on
+    void disconnect();                                  // device mode and VBUS override off: the host sees a detach
     bool nextEvent(Event &event);                       // false when the ring is empty
-    void finishEvents();                                // ERDP update (+ EHB clear) after a batch
+    void finishEvents();                                // ERDP update + EHB clear after a batch
     bool takeInterrupt();                               // ST.IP set? Then acknowledge it (W1C, IP only)
     bool interruptPending();                            // ST.IP, read only
-    void describeInterrupt(char *buffer, size_t size);  // ST, CTRL, ERDP, EREP, IPFS mask: for a panic line
+    void describeInterrupt(char *buffer, size_t size);  // ST, CTRL, ERDP, EREP, PORTSC, IPFS mask: for a panic line
+    PortChange portChange();                            // Linux __tegra_xudc_handle_port_status, every change acked
 
     // Endpoints (DCI = 2 * number + IN; EP0 is DCI 0).
     void initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uint32_t interval);
@@ -113,10 +107,6 @@ public:
     void doorbell(uint32_t dci, uint16_t sequence = 0);
     void setAddress(uint32_t address);
     void run();  // CTRL.RUN (first data endpoint)
-    uint32_t portStatus();
-    void clearPortChange(uint32_t status, uint32_t change);
-    void releaseLtssm();
-    bool stateChangeRequested();
 
 private:
     struct Ring {
@@ -138,6 +128,8 @@ private:
     bool waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us);
     bool powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit);
     bool initPhy();
+    void clearPortChange(uint32_t change);
+    void resetEp0();
     volatile uint32_t *context(uint32_t dci);
     void resetRing(uint32_t dci);
     void toggleBit(uint32_t reg, uint32_t dci, bool set);

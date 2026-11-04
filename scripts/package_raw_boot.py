@@ -39,6 +39,13 @@ OVERLAY_MANIFEST = WORK / 'tree/overlay/manifest.json'
 OVERLAY_ROOT = '/private/var/ioswitch/overlay'
 # The kernel's display/touch mode (IOSWITCH_PORTRAIT_NATIVE's default there); the ADT must match it (portrait_native).
 PORTRAIT_HEADER = WORK / 'tree/drivers/NativeMobileDisplay/IOSwitchPortrait.h'
+# USB 2.0 device mode on the USB-C port (drivers/SwitchUSB): the USB function set configd's USBDeviceConfiguration
+# plug-in gives Apple's IOUSBDeviceFamily, by name from /System/Library/AppleUSBDevice/USBDeviceConfiguration.plist.
+# The family goes on the bus only once every function of every configuration has a driver, so only sets whose
+# drivers exist here work: 'unknownHardware' (AppleUSBMux + PTP: usbmuxd/Finder/Xcode/atc and ptpd photos) or
+# 'standardMuxOnly' (AppleUSBMux alone, no userland function driver). J120's own stdMuxPTPEthValIDA needs a dozen
+# function drivers this port lacks. None leaves /arm-io/usb-device out, and the driver then does nothing.
+USB_DEVICE_CONFIGURATION = 'unknownHardware'
 COMMAND_LINE = ' '.join([
     '-v', 'serial=0', 'debug=0x14e', 'kt_fixed_zones=120', 'cpus=1', 'armcpu-self-ipi=1',
     'ioswitch-diag=1', 'sheng-pmgr=2', '-no_slto_panic',
@@ -390,6 +397,17 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
         # J120's A10X (T8011); unique-chip-id stands in for the ECID, a fixed value with the overlay MACs' 02:1d:5a.
         put(chosen, 'chip-id', u32(0x8011))
         put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001d5a0000000001))
+    # USB device mode (drivers/SwitchUSB): /arm-io/usb-device with an iPad usb-device node's identity (J120: Apple
+    # 0x05ac:0x12ab "iPad"), published by ArmDTPlatform; SwitchXUDC starts on it and IOUSBDeviceFamily reads these.
+    # compatible is not usb-device,t8011, so nothing of Apple's matches the node itself.
+    if USB_DEVICE_CONFIGURATION:
+        usb = child(child(tree, 'arm-io'), 'usb-device')
+        for key, value in (('compatible', b'usb-device,tegra210\0'), ('device_type', b'usb-device\0'),
+                           ('vendor-id', u32(0x05ac)), ('product-id', u32(0x12ab)), ('product-version', u32(0x0701)),
+                           ('bcd-usb-version', u32(0x0200)), ('vendor-string', b'Apple Inc.\0'),
+                           ('manufacturer-string', b'Apple Inc.\0'), ('product-string', b'iPad\0'),
+                           ('configuration-string', USB_DEVICE_CONFIGURATION.encode() + b'\0')):
+            put(usb, key, value)
     # Directories the kernel shows the Data overlay over: NUL-terminated "<directory>[:<boot-arg>]".
     if overlay_dirs:
         put(chosen, 'ioswitch-overlay', b''.join(f'{d}:{g}\0'.encode() if g else f'{d}\0'.encode()
