@@ -4,6 +4,7 @@
 // backend leaves stop; this class is not yet a published system display.
 #include "OriginalLegacyFramebufferABI.h"
 #include <IOKit/IOLib.h>
+#include <os/log.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOWorkLoop.h>
@@ -821,7 +822,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             __atomic_exchange_n(&stFeFolded, 0u, __ATOMIC_RELAXED), stFlipWait.count, stLatch[0], stLatch[1]);
         add(", rejected %u (reason %u)", __atomic_exchange_n(&stRejected, 0u, __ATOMIC_RELAXED),
             __atomic_load_n(&stRejectReason, __ATOMIC_RELAXED));
-        IOLog("IOSwitch display stats: %s\n", line);
+        os_log(OS_LOG_DEFAULT, "IOSwitch display stats: %s", line);  // log only, never the boot console
         stPresentGap = stLatency = FrameHist{};
         stFeLate = Span{};
         for (auto &n : stVb) n = 0;

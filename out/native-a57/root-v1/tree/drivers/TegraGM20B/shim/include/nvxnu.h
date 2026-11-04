@@ -16,6 +16,8 @@ typedef unsigned int nvxnu_u32;
 
 /* logging (always goes to the kernel log; callers filter) */
 void nvxnu_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* Periodic statistics: the unified log only (os_log), never the boot console. */
+void nvxnu_stats(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Bring-up trace: nvxnu_log, then 400 ms so the console draws the line before the next (possibly hanging) step. */
 void nvxnu_step(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* boot-arg tegra-gpu-trace=1: bring-up trace lines wait for the console (nvxnu_step 400 ms, 2 s before M1, 3 s per stage) */

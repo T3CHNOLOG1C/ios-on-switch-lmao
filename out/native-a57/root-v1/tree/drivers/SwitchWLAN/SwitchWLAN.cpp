@@ -22,6 +22,7 @@
 // (`init`, `scan`, `join`, `apply`, `add_key`, `disconnect`, `link`); Linux brcmfmac (CTCaer switch-l4t-kernel-4.9)
 // fwil_types.h/cfg80211.c for the commands and layouts.
 #include <IOKit/IOCommandGate.h>
+#include <os/log.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOKitKeys.h>
@@ -1433,12 +1434,15 @@ void SwitchWLAN::logStats()
     }
     int signal = 0;
     locked([&] { signal = status_.signal_dbm; });
-    IOLog("SwitchWLAN: stats %u ms: rx %u (en0 %u, no mbuf %u, input refused %u), tx %u done %u refused %u, "
-          "if_output dropped %u oversize %u, %llu MSIs, %d dBm\n",
-          kStatsMs, now.rx - was.rx, now.net.rx_input - was.net.rx_input, now.net.rx_no_mbuf - was.net.rx_no_mbuf,
-          now.net.rx_input_errors - was.net.rx_input_errors, now.tx - was.tx, now.done - was.done,
-          now.refused - was.refused, now.net.tx_refused - was.net.tx_refused, now.net.tx_oversize - was.net.tx_oversize,
-          static_cast<unsigned long long>(now.msis - was.msis), signal);
+    char out[384];  // periodic: to the log only (os_log), never the boot console
+    snprintf(out, sizeof(out),
+             "SwitchWLAN: stats %u ms: rx %u (en0 %u, no mbuf %u, input refused %u), tx %u done %u refused %u, "
+             "if_output dropped %u oversize %u, %llu MSIs, %d dBm",
+             kStatsMs, now.rx - was.rx, now.net.rx_input - was.net.rx_input, now.net.rx_no_mbuf - was.net.rx_no_mbuf,
+             now.net.rx_input_errors - was.net.rx_input_errors, now.tx - was.tx, now.done - was.done,
+             now.refused - was.refused, now.net.tx_refused - was.net.tx_refused,
+             now.net.tx_oversize - was.net.tx_oversize, static_cast<unsigned long long>(now.msis - was.msis), signal);
+    os_log(OS_LOG_DEFAULT, "%s", out);
     lastCounts_ = now;
 }
 

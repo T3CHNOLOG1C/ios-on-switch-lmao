@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // XNU side of the nvkm shim (see shim/include/nvxnu.h): heap, locks, time, thread calls, GPU interrupts, MMIO, the
 // GPU memory pool, cache maintenance, embedded firmware and boot-args. No Linux names in here.
+#include <os/log.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -42,6 +43,16 @@ static lck_grp_t *nvxnu_grp()
 			lck_grp_free(fresh);
 	}
 	return grp;
+}
+
+extern "C" void nvxnu_stats(const char *fmt, ...)
+{
+	char line[768];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	os_log(OS_LOG_DEFAULT, "%s", line);
 }
 
 extern "C" void nvxnu_log(const char *fmt, ...)

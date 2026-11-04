@@ -1636,7 +1636,7 @@ static void stats_mem(u64 ms)
 			  MS(prefault_n), MS(prefault_bytes) >> 10,
 			  (f.faults - last.faults) * 1000 / (ms ? ms : 1),
 			  (f.zero_fill - last.zero_fill) * 1000 / (ms ? ms : 1), user);
-		nvxnu_log("tegra-gm20b: mem %s\n", line);
+		nvxnu_stats("tegra-gm20b: mem %s", line);
 	}
 	if (MS(import_n) || MS(map_n) || MS(unmap_n)) {
 		scnprintf(line, sizeof(line),
@@ -1651,7 +1651,7 @@ static void stats_mem(u64 ms)
 			  US(MS(import_phase[3])), MS(map_n), MS(map_pages),
 			  MEAN_US(MS(map_ns), MS(map_n)), US(MS(map_max)), MS(unmap_n),
 			  US(MS(unmap_ns)));
-		nvxnu_log("tegra-gm20b: mem2 %s\n", line);
+		nvxnu_stats("tegra-gm20b: mem2 %s", line);
 	}
 	last = f;
 #undef MS
@@ -1794,7 +1794,7 @@ static void stats_tick(void)
 		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile",
 		  l2n ? l2s / l2n / 1000 : 0, l2m / 1000, presents, writer,
 		  presents ? ps / presents / 1000 : 0, pm / 1000);
-	nvxnu_log("tegra-gm20b: stats %s\n", line);
+	nvxnu_stats("tegra-gm20b: stats %s", line);
 	scnprintf(
 		line, sizeof(line),
 		"copy mean %llu us max %llu us (%u), after user work mean %llu us max %llu us "
@@ -1810,7 +1810,7 @@ static void stats_tick(void)
 		__atomic_load_n(&stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10, ans / 1000,
 		nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20, mc_int,
 		mc_err, mc_adr);
-	nvxnu_log("tegra-gm20b: stats2 %s\n", line);
+	nvxnu_stats("tegra-gm20b: stats2 %s", line);
 	stats_mem(ms);
 	/* The lazy IOSurface-coherency hooks' work this window (the XNU lock/unlock hook; tgm_coherency_*): GPU-written imports
 	 * invalidated for a CPU read lock, and CPU-written imports cleaned for the GPU at a write unlock. Zero on the render

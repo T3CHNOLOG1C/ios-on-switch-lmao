@@ -6,6 +6,7 @@
 // clientMemoryForType views cached per token so IOConnectUnmapMemory64 finds the same descriptor.
 // GPU work goes through gpu.c (TegraGM20BGpu.h). Fence waits sleep until the GPU's nonstall interrupt wakes them;
 // a fence found complete without that wake panics (no polled mode), and so does one that never completes.
+#include <os/log.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -914,7 +915,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count)
 		 w.scanned, w.submits, v[13], w.bytes ? w.readBytes * 100 / w.bytes : 0, v[0], v[1],
 		 v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[14], v[9], v[10], v[11], v[12],
 		 w.unparsed);
-	IOLog("tegra-gm20b: push %s\n", line);
+	os_log(OS_LOG_DEFAULT, "tegra-gm20b: push %s", line); /* log only */
 }
 
 IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,

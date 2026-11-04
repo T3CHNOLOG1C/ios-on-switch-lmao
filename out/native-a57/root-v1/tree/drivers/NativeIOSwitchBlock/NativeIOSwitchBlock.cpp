@@ -19,6 +19,7 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOLib.h>
+#include <os/log.h>
 #include <IOKit/IOWorkLoop.h>
 #include <libkern/c++/OSKext.h>
 #include <IOKit/IOKitKeys.h>
@@ -881,12 +882,17 @@ void NativeIOSwitchBlock::logThroughput()
         passed = 0;
         IOLockUnlock(queueLock);
     }
-    IOLog("IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus %llu.%llu MB/s %llu%% of %llus | "
-          "<=4K %llu%% seq %llu%% merged %llu q%u | err %llu retune %llu | %s %u.%02u MHz | wait ms%s\n",
-          requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
-          rate / 10, rate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000,
-          requests ? stats.small * 100 / requests : 0, requests ? stats.sequential * 100 / requests : 0, stats.merged,
-          stats.maxQueued, stats.errors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
+    // Periodic: to the log only (os_log), never the boot console.
+    char out[512];
+    snprintf(out, sizeof(out),
+             "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus %llu.%llu MB/s %llu%% of %llus | "
+             "<=4K %llu%% seq %llu%% merged %llu q%u | err %llu retune %llu | %s %u.%02u MHz | wait ms%s",
+             requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
+             rate / 10, rate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000,
+             requests ? stats.small * 100 / requests : 0, requests ? stats.sequential * 100 / requests : 0,
+             stats.merged, stats.maxQueued, stats.errors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10,
+             classes);
+    os_log(OS_LOG_DEFAULT, "%s", out);
 }
 
 void NativeIOSwitchBlock::reportState(const char *why)

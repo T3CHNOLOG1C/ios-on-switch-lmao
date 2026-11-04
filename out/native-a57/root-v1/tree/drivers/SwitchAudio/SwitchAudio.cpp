@@ -63,6 +63,7 @@
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
+#include <os/log.h>
 #include <IOKit/IOLib.h>
 #include <kern/clock.h>
 #include <pexpert/pexpert.h>
@@ -1260,7 +1261,7 @@ class SwitchAudio : public IOService {
             tegra_gpio_read(kJackDetect), routes[self->route], self->codecRead(PWR_DIG1), self->codecRead(PWR_ANLG1),
             self->codecRead(PWR_MIXER), self->codecRead(PWR_VOL), self->codecRead(SPK_VOL), self->codecRead(HP_VOL),
             self->codecRead(DAC1_DIG_VOL));
-        IOLog("%s\n", line);
+        os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
         sender->setTimeoutMS(kStatsMS);
     }
 
