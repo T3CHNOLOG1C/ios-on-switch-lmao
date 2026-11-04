@@ -190,6 +190,12 @@ enum : uint16_t {
 };
 enum : uint8_t { H4_COMMAND = 1, H4_ACL = 2, H4_SCO = 3, H4_EVENT = 4 };
 enum : uint8_t { EV_COMMAND_COMPLETE = 0x0e, EV_COMMAND_STATUS = 0x0f, EV_HARDWARE_ERROR = 0x10 };
+// Client-mode completion fix (frameRx): the one command that has no completion event, the LE controller OGF, the
+// vendor OGF, and the status bluetoothd already copes with for vendor commands this controller lacks.
+constexpr uint16_t OP_HOST_NUMBER_OF_COMPLETED_PACKETS = 0x0c35;
+constexpr uint16_t kOgfLe = 0x08, kOgfVendor = 0x3f;
+constexpr uint8_t kUnknownCommand = 0x01;
+constexpr uint32_t kMaxPending = 16;
 constexpr uint16_t kBroadcom = 0x000f;
 
 constexpr uint32_t kPowerOffMs = 50, kPowerOffAfterErrorMs = 500, kPowerOnMs = 200;  // nxk POWER_OFF/ON_MS
@@ -294,6 +300,26 @@ class SwitchBluetooth : public IOService {
     uint32_t client = 0;
     bool clientUsed = false, chipDirty = false, clientBlocked = false;
     struct termios tio = {};
+
+    // Client-mode HCI bookkeeping (frameRx): the commands the client has sent and not yet seen completed, from its H4
+    // stream (noteClientTx; cmdLock), and the framing of the controller's stream, so that a Command Complete or Status
+    // is looked at before it goes out (work loop).
+    IOSimpleLock *cmdLock = nullptr;
+    uint16_t sentCmds[kMaxPending] = {};
+    uint32_t sentCount = 0;
+    struct {
+        uint8_t state, type, have, need;
+        uint8_t header[4];
+        uint32_t left;
+    } txFrame = {};
+    uint32_t rxPacketLeft = 0;  // bytes of the controller's packet being passed on still to go
+    bool framingLost = false;   // either stream stopped parsing as H4: everything goes through untouched
+    uint32_t completionFixes = 0;
+    void resetClientFraming();
+    void noteClientTx(const uint8_t *bytes, size_t length);
+    bool frameRx(uint32_t avail);
+    bool takePendingLocked(uint16_t opcode);
+    uint16_t takeVendorLocked();
 
     OSData *patch = nullptr;
     uint8_t address[6] = {};
@@ -421,6 +447,7 @@ bool SwitchBluetooth::start(IOService *provider)
     gpio = reinterpret_cast<volatile uint8_t *>(ml_io_map(kGpioPA, 0x1000));
     pinmux = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPinmuxPA, 0x1000));
     hwLock = IOSimpleLockAlloc();
+    cmdLock = IOSimpleLockAlloc();
     stateLock = IOLockAlloc();
     hciLock = IOLockAlloc();
     txLock = IOLockAlloc();
@@ -430,7 +457,7 @@ bool SwitchBluetooth::start(IOService *provider)
     stuckCall = thread_call_allocate(&SwitchBluetooth::stuck, this);
     nanoseconds_to_absolutetime(kIdleStormNs, &idleStormAbs);
     if (!uart || !car || !gpio || !pinmux || !hwLock || !stateLock || !hciLock || !txLock || !rx.data || !tx.data ||
-        !loop || !stuckCall) {
+        !loop || !stuckCall || !cmdLock) {
         IOLog("SwitchBluetooth: out of memory or mappings\n");
         return false;
     }
@@ -778,6 +805,9 @@ again:
         if (mode == kKernel) {
             parse(rx.data + at, chunk);
         } else if (mode == kClient) {
+            // One controller packet at a time (frameRx); a completion waits here until it has all arrived.
+            if (!framingLost && !rxPacketLeft && !frameRx(avail)) break;
+            if (!framingLost && chunk > rxPacketLeft) chunk = rxPacketLeft;
             size_t room = 0;
             if (ctl_getenqueuespace(control, client, &room) != 0) room = chunk;  // client gone: drop below
             if (room < chunk) chunk = (uint32_t)room;
@@ -792,12 +822,150 @@ again:
                 break;
             }
             if (ctl_enqueuedata(control, client, rx.data + at, chunk, 0) != 0) dropped += chunk;
+            if (!framingLost) rxPacketLeft -= chunk;
         } else {
             dropped += chunk;
         }
         __atomic_store_n(&rx.tail, tail + chunk, __ATOMIC_RELEASE);
     }
     if (rxStalled && rx.space() >= kRingBytes / 2 && resumeRx()) goto again;
+}
+
+// ---- Client-mode completions ---------------------------------------------------------------------------------------
+//
+// bluetoothd takes this BCM4356A3 for the BCM4355C0 of the J120 table and adds a peer's IRK (MagicPairing's key update
+// from AirPods) with Broadcom's RPA vendor command, _BCM_LEMetaAddIrk: opcode 0xFCE9, sub-command 2, IRK, address type,
+// address (24 bytes; Android's HCI_VENDOR_BLE_RPA_VSC BTM_BLE_META_ADD_IRK_ENTRY). This firmware evidently answers it
+// with the Command Complete of the standard command it maps it to, LE Add Device To Resolving List (0x2027; Command
+// Disallowed while LE scanning runs): with the controller's single command credit the vendor command was the only one
+// outstanding when that completion came. bluetoothd has no 0x2027 outstanding, and an unknown completion of a
+// non-vendor command makes it restart ("Command Complete, orphan event, opcode: 2027", then "Bluetooth error -
+// restarting { reason=635 }"; r6k 04:49:39, r7j 17:27:50), every time AirPods connect. A completion of a vendor command
+// it did not expect it lets pass. So here a Command Complete or Status for an LE command the client has not
+// outstanding, while a vendor command is, is passed on as that vendor command's, status Unknown HCI Command: the answer
+// bluetoothd already gets, and copes with, for every other vendor command this controller lacks (its Stack.VSC "status
+// 701" lines). The credits in the event stay the controller's. Anything else goes through as it came.
+
+void SwitchBluetooth::resetClientFraming()
+{
+    rxPacketLeft = 0;
+    framingLost = false;
+    const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    txFrame = {};
+    sentCount = 0;
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+}
+
+// Client thread, before the bytes go out: the commands in the client's H4 stream join `sentCmds`. ACL and SCO
+// payloads are skipped by their lengths. Anything that is not H4 turns the bookkeeping off for the connection.
+void SwitchBluetooth::noteClientTx(const uint8_t *bytes, size_t length)
+{
+    if (framingLost) return;
+    const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    auto &f = txFrame;
+    for (size_t i = 0; i < length && !framingLost;) {
+        if (f.state == 0) {
+            f.type = bytes[i++];
+            f.need = f.type == H4_COMMAND ? 3 : f.type == H4_ACL ? 4 : f.type == H4_SCO ? 3 : 0;
+            f.have = 0;
+            if (f.need)
+                f.state = 1;
+            else
+                framingLost = true;
+        } else if (f.state == 1) {
+            f.header[f.have++] = bytes[i++];
+            if (f.have < f.need) continue;
+            f.left = f.type == H4_ACL ? (uint32_t)(f.header[2] | f.header[3] << 8) : f.header[2];
+            const uint16_t opcode = (uint16_t)(f.header[0] | f.header[1] << 8);
+            if (f.type == H4_COMMAND && opcode != OP_HOST_NUMBER_OF_COMPLETED_PACKETS) {
+                if (sentCount == kMaxPending) {  // a command that was never answered: the oldest goes
+                    memmove(sentCmds, sentCmds + 1, (kMaxPending - 1) * sizeof(sentCmds[0]));
+                    --sentCount;
+                }
+                sentCmds[sentCount++] = opcode;
+            }
+            f.state = f.left ? 2 : 0;
+        } else {
+            const size_t skip = length - i < f.left ? length - i : f.left;
+            i += skip;
+            f.left -= (uint32_t)skip;
+            if (!f.left) f.state = 0;
+        }
+    }
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+}
+
+// cmdLock held. The oldest sent `opcode`, taken off the list; false if there is none.
+bool SwitchBluetooth::takePendingLocked(uint16_t opcode)
+{
+    for (uint32_t i = 0; i < sentCount; ++i) {
+        if (sentCmds[i] != opcode) continue;
+        memmove(sentCmds + i, sentCmds + i + 1, (sentCount - i - 1) * sizeof(sentCmds[0]));
+        --sentCount;
+        return true;
+    }
+    return false;
+}
+
+// cmdLock held. The oldest pending vendor command, taken off the list; 0 if there is none.
+uint16_t SwitchBluetooth::takeVendorLocked()
+{
+    for (uint32_t i = 0; i < sentCount; ++i) {
+        if ((sentCmds[i] >> 10) != kOgfVendor) continue;
+        const uint16_t opcode = sentCmds[i];
+        (void)takePendingLocked(opcode);
+        return opcode;
+    }
+    return 0;
+}
+
+// Work loop, client mode, at a packet boundary of the controller's stream: the next packet's length into
+// rxPacketLeft. A Command Complete or Status waits until it is all in the ring and is matched against `sentCmds` first
+// (top of section). False while what is needed has not arrived; the next interrupt's action comes back here.
+bool SwitchBluetooth::frameRx(uint32_t avail)
+{
+    const uint32_t tail = rx.tail;
+    auto at = [this, tail](uint32_t i) -> uint8_t & { return rx.data[(tail + i) & (kRingBytes - 1)]; };
+    uint32_t total = 0;
+    switch (at(0)) {
+    case H4_EVENT: {
+        if (avail < 3) return false;
+        total = 3u + at(2);
+        const bool status = at(1) == EV_COMMAND_STATUS;  // Status: status, credits, opcode; Complete: credits, opcode
+        if (!(status ? at(2) >= 4 : at(1) == EV_COMMAND_COMPLETE && at(2) >= 3)) break;
+        if (avail < total) return false;
+        const uint32_t op = status ? 5 : 4;
+        const uint16_t opcode = (uint16_t)(at(op) | at(op + 1) << 8);
+        if (!opcode) break;  // credits only
+        uint16_t vendor = 0;
+        const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+        if (!takePendingLocked(opcode) && (opcode >> 10) == kOgfLe) vendor = takeVendorLocked();
+        IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+        if (!vendor) break;
+        uint8_t *const statusByte = status ? &at(3) : at(2) >= 4 ? &at(6) : nullptr;
+        const unsigned was = statusByte ? *statusByte : 0;
+        at(op) = (uint8_t)vendor;
+        at(op + 1) = (uint8_t)(vendor >> 8);
+        if (statusByte) *statusByte = kUnknownCommand;
+        if (!completionFixes++) {
+            IOLog("SwitchBluetooth: the controller answered vendor command %#06x with a Command %s for %#06x (status "
+                  "%#04x); passed on as Unknown HCI Command for %#06x\n",
+                  vendor, status ? "Status" : "Complete", opcode, was, vendor);
+        }
+        break;
+    }
+    case H4_ACL:
+        if (avail < 5) return false;
+        total = 5u + (uint32_t)(at(3) | at(4) << 8);
+        break;
+    case H4_SCO:
+        if (avail < 4) return false;
+        total = 4u + at(3);
+        break;
+    default: framingLost = true; return true;  // not H4: pass everything on as it comes
+    }
+    rxPacketLeft = total;
+    return true;
 }
 
 // Work loop, RX masked (rxStalled) and room in the ring again: RX interrupts back on, then what the FIFO already
@@ -858,14 +1026,15 @@ void SwitchBluetooth::describe(char *buffer, size_t size)
     auto mux = [this](uint32_t o) { return r32(pinmux, o) & PM_LOW; };
     snprintf(buffer, size,
              "lsr %#x msr %#x (cts %u) ier %#x mcr %#x lcr %#x baud %u; rx %u tx %u queued %u irqs %u (idle %u) "
-             "errors %u rx-resets %u rx-faults %u (last %s)%s dropped %u resyncs %u hw-errors %u; gpio H cnf/oe/out/in "
+             "errors %u rx-resets %u rx-faults %u (last %s)%s dropped %u resyncs %u hw-errors %u fixes %u; gpio H "
+             "cnf/oe/out/in "
              "%02x/%02x/%02x/%02x; pinmux %x/%x/%x/%x %x/%x/%x; car clk %u rst %u src %#x; %s",
              r32(uart, LSR), r32(uart, MSR), !!(r32(uart, MSR) & MSR_CTS), ier, r32(uart, MCR), r32(uart, LCR), baud,
              rxBytes, txBytes, tx.used(), irqs, idleIrqs, lineErrors, rxResets, rxFaults, lastFault,
-             rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors, r32(gpio, port + GPIO_CNF) & 0xff,
-             r32(gpio, port + GPIO_OE) & 0xff, r32(gpio, port + GPIO_OUT) & 0xff, r32(gpio, port + GPIO_IN) & 0xff,
-             mux(0x114), mux(0x118), mux(0x11c), mux(0x120), mux(0x1c0), mux(0x1c4), mux(0x1c8),
-             !!(r32(car, CLK_OUT_ENB_U) & kUartDBit), !!(r32(car, RST_DEVICES_U) & kUartDBit),
+             rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors, completionFixes,
+             r32(gpio, port + GPIO_CNF) & 0xff, r32(gpio, port + GPIO_OE) & 0xff, r32(gpio, port + GPIO_OUT) & 0xff,
+             r32(gpio, port + GPIO_IN) & 0xff, mux(0x114), mux(0x118), mux(0x11c), mux(0x120), mux(0x1c0), mux(0x1c4),
+             mux(0x1c8), !!(r32(car, CLK_OUT_ENB_U) & kUartDBit), !!(r32(car, RST_DEVICES_U) & kUartDBit),
              r32(car, CLK_SOURCE_UARTD), gic);
 }
 
@@ -1220,6 +1389,7 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
         self->deliver();
     } else {
         self->mode = static_cast<Mode>(op - 2);
+        if (self->mode == kClient) self->resetClientFraming();
         __atomic_store_n(&self->clientBlocked, false, __ATOMIC_SEQ_CST);
         self->deliver();  // what the ring holds goes by the new mode, and a stall held for the old client resumes
     }
@@ -1330,7 +1500,10 @@ errno_t SwitchBluetooth::ctlSend(kern_ctl_ref, u_int32_t unit, void *, mbuf_t m,
     errno_t error = self->client == unit ? 0 : ENOTCONN;
     if (!error) self->clientUsed = true;
     for (mbuf_t n = m; n && !error; n = mbuf_next(n)) {
-        if (mbuf_len(n)) error = self->transmit(static_cast<const uint8_t *>(mbuf_data(n)), mbuf_len(n), kWriteMs);
+        if (!mbuf_len(n)) continue;
+        const uint8_t *bytes = static_cast<const uint8_t *>(mbuf_data(n));
+        self->noteClientTx(bytes, mbuf_len(n));  // before the controller can see, let alone answer, a command
+        error = self->transmit(bytes, mbuf_len(n), kWriteMs);
     }
     mbuf_freem(m);
     return error;
