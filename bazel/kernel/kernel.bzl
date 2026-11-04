@@ -223,7 +223,7 @@ _kernel_driver = rule(
         "xnu": attr.label(default = "//out/native-a57/root-v1/tree:xnu", providers = [XnuInfo]),
         "_xnu_src": attr.label(default = "@xnu//:all"),
         "_common_hdrs": attr.label(default = "//out/native-a57/root-v1/tree:kernel_headers"),
-        "_objcopy": attr.label(default = "@llvm_toolchain_llvm//:bin/llvm-objcopy", executable = True, allow_single_file = True, cfg = "exec"),
+        "_objcopy": attr.label(default = "@llvm//:bin/llvm-objcopy", executable = True, allow_single_file = True, cfg = "exec"),
         "_kernelcache": attr.label(default = "//ipsw:kernelcache", allow_single_file = True),
     }),
     toolchains = [PY_TOOLCHAIN],

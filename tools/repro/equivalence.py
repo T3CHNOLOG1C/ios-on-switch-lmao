@@ -135,7 +135,7 @@ def main():
                     (root / d).mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(f, root / d / f.name)
                     sources += ["--source", d + "/" + f.name]
-        llvm = external / "toolchains_llvm++llvm+llvm_toolchain_llvm/bin"
+        llvm = external / "+_repo_rules+llvm/bin"
         tools = []
         for t in ("ld.lld", "llvm-objcopy", "llvm-readelf", "llvm-objdump"):
             shutil.copyfile(llvm / t, root / t)

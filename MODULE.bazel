@@ -12,7 +12,6 @@ bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "rules_cc", version = "0.2.27")
 bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "rules_python", version = "2.4.6")
-bazel_dep(name = "toolchains_llvm", version = "1.13.0")
 
 # --- Python: the build's tools and tests run on this interpreter, never the host's ------------------------------
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
@@ -32,16 +31,11 @@ pip.parse(
 )
 use_repo(pip, "ioswitch_pypi")
 
-# --- LLVM 23.1.4 (the Homebrew version the CMake flow used): ld.lld/objcopy/readelf for the loader, llvm-objcopy
-# for late kernel objects, clang-format/clang-tidy for lint, and the C/C++ toolchain for host-side tests. --------
-llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
-llvm.toolchain(
-    name = "llvm_toolchain",
-    llvm_version = "23.1.4",
-)
-use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
+# --- LLVM 23.1.4 (the Homebrew version the CMake flow used): ld.lld/objcopy/readelf/objdump for the loader, llvm-objcopy
+# for late kernel objects, clang-format/clang-tidy for lint. Only those binaries of the release are extracted. --------
+llvm_tools = use_repo_rule("//bazel/llvm:llvm.bzl", "llvm_tools")
 
-register_toolchains("@llvm_toolchain//:all")
+llvm_tools(name = "llvm")
 
 bazel_dep(name = "rules_rust", version = "0.75.0")
 

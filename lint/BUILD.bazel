@@ -11,11 +11,11 @@ load("@rules_python//python:py_test.bzl", "py_test")
 
 package(default_visibility = ["//visibility:public"])
 
-LLVM = {"IOSWITCH_LLVM_BIN": "$(rootpath @llvm_toolchain_llvm//:bin/clang-format)"}
+LLVM = {"IOSWITCH_LLVM_BIN": "$(rootpath @llvm//:bin/clang-format)"}
 
 LLVM_DATA = [
-    "@llvm_toolchain_llvm//:bin/clang-format",
-    "@llvm_toolchain_llvm//:bin/clang-tidy",
+    "@llvm//:bin/clang-format",
+    "@llvm//:bin/clang-tidy",
 ]
 
 [py_binary(

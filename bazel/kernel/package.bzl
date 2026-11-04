@@ -159,10 +159,10 @@ boot_package = rule(
         "_loader_sources": attr.label(default = "//native:loader_sources"),
         "_llvm_tools": attr.label_list(
             default = [
-                "@llvm_toolchain_llvm//:bin/ld.lld",
-                "@llvm_toolchain_llvm//:bin/llvm-objcopy",
-                "@llvm_toolchain_llvm//:bin/llvm-readelf",
-                "@llvm_toolchain_llvm//:bin/llvm-objdump",
+                "@llvm//:bin/ld.lld",
+                "@llvm//:bin/llvm-objcopy",
+                "@llvm//:bin/llvm-readelf",
+                "@llvm//:bin/llvm-objdump",
                 # The kernel window's compressor (lz4 -12), built from pinned source.
                 "//tools:lz4",
             ],
