@@ -135,10 +135,10 @@ def main():
                     (root / d).mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(f, root / d / f.name)
                     sources += ["--source", d + "/" + f.name]
-        llvm = external / "+_repo_rules+llvm/bin"
+        llvm = external / "+llvm_tools+llvm/bin"
         tools = []
-        for t in ("ld.lld", "llvm-objcopy", "llvm-readelf", "llvm-objdump"):
-            shutil.copyfile(llvm / t, root / t)
+        for t in ("ld.lld", "llvm-objcopy", "llvm-readelf", "llvm-objdump", "lz4"):
+            shutil.copyfile(bin_dir / "tools/lz4" if t == "lz4" else llvm / t, root / t)
             os.chmod(root / t, 0o755)
             tools += ["--llvm-tool", t]
         command += ["--kernel", "kernel.macho", "--adt", "adt", "--static-trust", "static", "--app-trust", "app",

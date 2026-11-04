@@ -6,9 +6,11 @@
 
 Scenarios (each prints Bazel's Elapsed/processes lines):
   no-op            build //:boot //:gpu again: nothing runs
-  driver changed   a comment appended to drivers/SwitchButtons/SwitchButtons.cpp: that object, the archive, the link,
-                   the prelink and the package rerun; nothing else
-  driver reverted  the comment removed: every action of the previous build is a disk-cache hit
+  comment added    a comment appended to drivers/SwitchButtons/SwitchButtons.cpp: that object recompiles, comes out
+                   byte-identical, and nothing downstream runs (Bazel keys on content, not timestamps)
+  code changed     a function added to the same file: that object, the archive, the link, the prelink and the package
+                   rerun; nothing else
+  code reverted    the function removed: every action of the original build is a disk-cache hit
   fresh base       a brand-new output base (a fresh clone or `bazel clean --expunge`): everything from the disk cache
   cold (--cold)    a brand-new output base with no disk cache: everything runs
 The edited source is always restored."""
@@ -44,10 +46,12 @@ def main():
     original = source.read_bytes()
     try:
         source.write_bytes(original + b"// cache demo\n")
-        build(workspace, "driver changed")
+        build(workspace, "comment added")
+        source.write_bytes(original + b'extern "C" __attribute__((used)) int ioswitch_cache_demo(void) { return 1104; }\n')
+        build(workspace, "code changed")
     finally:
         source.write_bytes(original)
-    build(workspace, "driver reverted")
+    build(workspace, "code reverted")
     scratch = Path(tempfile.mkdtemp(prefix="ioswitch-bench-"))
     try:
         quiet = ["--experimental_convenience_symlinks=ignore"]

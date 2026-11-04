@@ -21,7 +21,7 @@ from pathlib import Path
 def outputs(bazel, base, workspace, targets):
     files = {}
     query = subprocess.run([bazel, "--output_base=" + base, "cquery", "--config=reproducible-check",
-                            "--output=files", *targets], cwd=workspace, capture_output=True, text=True, check=True)
+                            "--output=files", " + ".join(targets)], cwd=workspace, capture_output=True, text=True, check=True)
     exec_root = subprocess.run([bazel, "--output_base=" + base, "info", "execution_root"], cwd=workspace,
                                capture_output=True, text=True, check=True).stdout.strip()
     for line in query.stdout.split():
