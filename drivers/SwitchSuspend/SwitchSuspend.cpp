@@ -31,6 +31,7 @@
 #include "../SwitchUSB/SwitchUSB.h"
 #include "../SwitchWLAN/SwitchWLANStation.h"
 #include "../TegraBPMP/TegraBPMP.h"
+#include "../TegraGM20B/TegraGM20BSleep.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraHost1x/TegraHost1x.h"
 #include "../TegraSE/TegraSE.h"
@@ -186,7 +187,6 @@ void appendName(char *list, size_t size, const char *name)
 void SwitchSuspend::missingSuspendPaths(char *list, size_t size)
 {
     list[0] = 0;
-    if (bootArg("tegra-gpu")) appendName(list, size, "GM20B");
     if (bootArg("switch-usb-host") || bootArg("switch-dp")) appendName(list, size, "USB-C host/DP");
 }
 
@@ -315,6 +315,7 @@ void SwitchSuspend::sleepDevices()
     // first: it shares LDO6 with the touch panel, and its clock is the display's frame end
     timed("sleep", 0, "als", switch_als_suspend);
     timed("sleep", 1, "display", tegra_display_suspend);
+    timed("sleep", 1, "gpu", tegra_gm20b_suspend);
     timed("sleep", 2, "touch", switch_touch_suspend);
     timed("sleep", 2, "motion", switch_motion_suspend);  // IMU off, SPI4 clock off
     timed("sleep", 3, "joycon", switch_joycon_suspend);
@@ -457,6 +458,7 @@ void SwitchSuspend::wakeDevices()
     timed("wake", 5, "thermal", switch_thermal_resume);
     timed("wake", 5, "sensors", switch_sensors_resume);
     timed("wake", 6, "host1x", tegra_nvdec_resume);  // before the display, which sits behind host1x
+    timed("wake", 6, "gpu", tegra_gm20b_resume);     // before the display: its frames go through the GPU present
     timed("wake", 6, "audio", switch_audio_resume);
     timed("wake", 7, "wifi", switch_wlan_resume);  // the bring-up runs on SwitchWLAN's worker
     timed("wake", 7, "bluetooth", switch_bluetooth_resume);

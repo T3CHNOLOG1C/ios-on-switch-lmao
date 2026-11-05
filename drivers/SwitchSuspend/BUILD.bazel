@@ -37,6 +37,7 @@ kernel_driver(
         "drivers/SwitchUSB",
         "drivers/SwitchWLAN",
         "drivers/TegraBPMP",
+        "drivers/TegraGM20B",
         "drivers/TegraGPIO",
         "drivers/TegraHost1x",
         "drivers/TegraSE",
