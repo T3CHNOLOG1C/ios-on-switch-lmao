@@ -1,0 +1,10 @@
+# Mesa 77452b90 for NVK (README.ioswitch.md). Mesa's own files are not ioswitch's to format or lint.
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files(exclude = [
+    "bin/**",
+    "include/**",
+    "src/**",
+    "subprojects/**",
+    "rustfmt.toml",
+])
