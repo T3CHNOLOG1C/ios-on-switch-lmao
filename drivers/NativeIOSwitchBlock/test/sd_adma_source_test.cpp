@@ -51,9 +51,10 @@ TEST(SdAdmaSource, DriverGuards)
     // and checkCq(): those issue reads (write false) with a task argument, never a write.
     const auto calls = LinesMatching(source, R"(^.*[^:\w]issue\(static_cast|^.*[^:\w]issue\(lba)");
     EXPECT_EQ(calls.size(), 4u) << testing::PrintToString(calls);
+    // r18-sdcq: beginTask takes the engine's CMD46 argument from the group runner (IOSwitchCq.h run).
     for (const char *name : {"void NativeIOSwitchBlock::beginTask(", "const char *NativeIOSwitchBlock::checkCq("})
         EXPECT_TRUE(Search(
-            body(name), R"(issue\(static_cast<uint32_t>\([^)]*\), \w+(?:\.sectors)?, false, [^;]*cq\.argument\(\)\))"))
+            body(name), R"(issue\(static_cast<uint32_t>\([^)]*\), \w+(?:\.sectors)?, false, [^;]*argument(?:\(\))?\))"))
             << name;
     // In ADMA2 mode the SDMA boundary interrupt is neither awaited nor acted on (resuming would rewrite the descriptor
     // table's address), and an ADMA error is the host's failure.

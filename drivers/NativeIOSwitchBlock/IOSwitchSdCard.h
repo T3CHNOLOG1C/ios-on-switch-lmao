@@ -300,6 +300,30 @@ inline const char *ioswitchSdCqControlMeaning(uint8_t value)
     default: return "enabled, sequential";
     }
 }
+// r18-sdcq: the error and event bits set in an R1 card status (Table 4-42), by name, for the queue's error lines: "-" when
+// none. COM_CRC and ILLEGAL (clear condition B) describe the command before the one whose response carries them.
+inline void ioswitchSdR1ErrorNames(uint32_t r1, char *out, unsigned long size)
+{
+    static const struct {
+        uint32_t bit;
+        const char *name;
+    } kBits[] = {
+        {1u << 31, "OUT_OF_RANGE"}, {1u << 30, "ADDRESS"},     {1u << 29, "BLOCK_LEN"}, {1u << 28, "ERASE_SEQ"},
+        {1u << 27, "ERASE_PARAM"},  {1u << 26, "WP"},          {1u << 24, "LOCK"},      {1u << 23, "COM_CRC"},
+        {1u << 22, "ILLEGAL"},      {1u << 21, "ECC"},         {1u << 20, "CC"},        {1u << 19, "ERROR"},
+        {1u << 16, "CSD_OW"},       {1u << 13, "ERASE_RESET"}, {1u << 6, "FX_EVENT"},   {1u << 3, "AKE_SEQ"}};
+    if (!size) return;
+    unsigned long at = 0;
+    out[0] = 0;
+    for (const auto &b : kBits) {
+        if (!(r1 & b.bit)) continue;
+        for (const char *c = at ? "|" : ""; *c && at + 1 < size; ++c) out[at++] = *c;
+        for (const char *c = b.name; *c && at + 1 < size; ++c) out[at++] = *c;
+    }
+    if (!at && size > 1) out[at++] = '-';
+    out[at] = 0;
+}
+
 // ---- Data command framing ------------------------------------------------------------------------------------------
 // SDHCI TRANSFER_MODE (0x0c) bits and the COMMAND (0x0e) low byte of a data command with an R1 response (48-bit, CRC and
 // index checked, data present).
