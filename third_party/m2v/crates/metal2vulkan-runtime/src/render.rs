@@ -1149,6 +1149,42 @@ struct LastRetained {
     samplers: Vec<Arc<OwnedSampler>>,
 }
 
+/// The vectors a render encoder's draws fill again draw after draw, emptied: an ended encoder
+/// gives them to its device, whose next encoder takes them, so its first draws allocate them no
+/// more than its later ones.
+#[derive(Default)]
+pub(crate) struct DrawRooms {
+    draw_commands: Option<DrawCommands>,
+    uses: Vec<Use<ResourceKey>>,
+    argument_samplers: Vec<SamplerState>,
+    vertex_buffers: Vec<(u32, vk::Buffer, u64, u64)>,
+    bind_memo: binding::BindMemo,
+}
+
+/// The most [`DrawRooms`] a device keeps: one per encoder encoding at once.
+const KEPT_DRAW_ROOMS: usize = 4;
+
+impl DrawRooms {
+    /// A kept one of `device`'s, or new ones.
+    fn take(device: &crate::device::Device) -> Self {
+        crate::device::lock(&device.shared().draw_rooms)
+            .pop()
+            .unwrap_or_default()
+    }
+
+    /// Keep them for `device`'s next encoder, emptied.
+    fn keep(mut self, device: &crate::device::Device) {
+        self.uses.clear();
+        self.argument_samplers.clear();
+        self.vertex_buffers.clear();
+        self.bind_memo = self.bind_memo.emptied();
+        let mut kept = crate::device::lock(&device.shared().draw_rooms);
+        if kept.len() < KEPT_DRAW_ROOMS {
+            kept.push(self);
+        }
+    }
+}
+
 impl LastRetained {
     /// Retain into `core` a draw's pipeline state, variant objects and made `VkPipeline`, each
     /// unless it is the one the last draw retained.
@@ -1318,6 +1354,7 @@ impl CommandBuffer {
         render_pass::degrade_depth_clear(device, &layout);
         let extended = ExtendedShadows::of(descriptor, &layout, rate_map.is_some());
         let rerecord = reroute::keeps_whole(device) || extended.keeps_draws();
+        let rooms = DrawRooms::take(device);
         Ok(RenderCommandEncoder {
             core,
             earlier: Vec::new(),
@@ -1406,11 +1443,11 @@ impl CommandBuffer {
             live: Arc::default(),
             log,
             quiet_bound_values: None,
-            draw_commands: None,
-            uses_room: Vec::new(),
-            argument_samplers_room: Vec::new(),
-            vertex_buffers_room: Vec::new(),
-            bind_memo: binding::BindMemo::default(),
+            draw_commands: rooms.draw_commands,
+            uses_room: rooms.uses,
+            argument_samplers_room: rooms.argument_samplers,
+            vertex_buffers_room: rooms.vertex_buffers,
+            bind_memo: rooms.bind_memo,
             last_retained: LastRetained::default(),
         })
     }
@@ -3069,8 +3106,21 @@ impl RenderCommandEncoder {
             extended,
             reload_at,
             log,
+            draw_commands,
+            uses_room,
+            argument_samplers_room,
+            vertex_buffers_room,
+            bind_memo,
             ..
         } = self;
+        DrawRooms {
+            draw_commands,
+            uses: uses_room,
+            argument_samplers: argument_samplers_room,
+            vertex_buffers: vertex_buffers_room,
+            bind_memo,
+        }
+        .keep(core.device());
         earlier.push(current);
         let mut instances = earlier;
         // A color attachment's store action still `Unknown` stores nothing, as plain Metal's

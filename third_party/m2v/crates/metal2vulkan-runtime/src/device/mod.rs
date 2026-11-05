@@ -373,6 +373,9 @@ pub(super) struct DeviceShared {
     /// rebind's or a storage form's new `VkImage`, a detach's stand-in, a reattach): a view kept
     /// by what it was made of (`binding::BindMemo`) is current while this holds.
     pub(crate) views_epoch: AtomicU64,
+    /// The vectors ended render encoders' draws filled, emptied, for the next encoders' draws
+    /// (`render::DrawRooms`).
+    pub(crate) draw_rooms: Mutex<Vec<crate::render::DrawRooms>>,
 }
 
 impl DeviceShared {
@@ -1234,6 +1237,7 @@ impl Device {
             record_executions,
             refuse_rebinds,
             views_epoch: AtomicU64::new(0),
+            draw_rooms: Mutex::new(Vec::new()),
             device_address,
             upload_alignment,
             memory: Mutex::new(memory),

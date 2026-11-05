@@ -910,6 +910,18 @@ pub(super) struct BindMemo {
 }
 
 impl BindMemo {
+    /// The memo with nothing kept but its vectors' room: what an ended encoder hands the next
+    /// (`render::DrawRooms`), holding no texture of its views.
+    pub(super) fn emptied(mut self) -> Self {
+        self.views.clear();
+        self.samplers.clear();
+        self.writes.clear();
+        self.holes.clear();
+        self.bound_samplers.clear();
+        self.roots.clear();
+        self
+    }
+
     /// Keep the vectors of a [`Bound`] its consumer is done with for the next bind; samplers
     /// where the consumer did not keep them.
     pub(super) fn give_back(
