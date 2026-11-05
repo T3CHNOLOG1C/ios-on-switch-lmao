@@ -6,16 +6,14 @@
 //           nothing, so pictures come out black: the test wants all 30 out of a session that says hardware.
 //   full:   the fake arena refuses every buffer, so the instance runs Apple's software decoder: the test wants 30/30
 //           frames matching x264 from a session that says software.
-//   vp9:    VP9Clip.h as 'vp09' (kVTVideoDecoderSpecification_AllowVP9Decode) on the fake engine: every superframe and
-//           frame through VP9NVDEC and the kernel's checker, all 16 shown frames out of a session that says hardware.
+//   vp9:    VP9Clip.h as 'vp09' (kVTVideoDecoderSpecification_AllowVP9Decode) on AVD's private check registration
+//           (registerCheckDecoder: not flagged hardware, named com.ioswitch.avd.check.vp09, as the device's boot check
+//           uses it) and the fake engine: every superframe and frame through VP9NVDEC and the kernel's checker, all 16
+//           shown frames out of a session that says hardware.
 // Prints "PASS avd ..." when both hold (tests/test_switch_video.py).
 #include "../AVD/AVDDecoder.c"
 #include <stdio.h>
 #include "../../TegraNVDEC/TegraNVDECCheck.h"
-
-extern const CFStringRef kVTVideoDecoderSpecification_DecoderID;
-extern OSStatus VTRegisterVideoDecoderWithInfo(FourCharCode codecType, CFDictionaryRef info,
-                                               VTDecoderCreateInstance create);
 
 struct NVDECClient {
     uint8_t *va[64];
@@ -50,10 +48,23 @@ uint32_t nvdec_codecs(const NVDECClient *c)
     return 1u << TEGRA_NVDEC_CODEC_H264 | 1u << TEGRA_NVDEC_CODEC_VP9;
 }
 
-bool nvdec_claim_self_test(NVDECClient *c)
+uint32_t nvdec_check_claim(NVDECClient *c, bool *claimed)
 {
     (void)c;
-    return false;
+    *claimed = false;
+    return TEGRA_NVDEC_CHECK_PASSED;
+}
+
+int nvdec_check_report(NVDECClient *c, bool vp9Ok)
+{
+    (void)c, (void)vp9Ok;
+    return 0;
+}
+
+uint32_t nvdec_check_wait(NVDECClient *c)
+{
+    (void)c;
+    return TEGRA_NVDEC_CHECK_PASSED;
 }
 
 int nvdec_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
@@ -110,8 +121,8 @@ int main(void)
     const void *keys[] = {CFSTR("CMClassImplementationID")}, *values[] = {CFSTR("com.ioswitch.avd-host")};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus registered = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, createInstance) ||
-                                VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_VP9, info, createInstance);
+    const OSStatus registered =
+        VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, createInstance) || registerCheckDecoder();
     CFRelease(info);
     if (registered) {
         printf("FAIL avd: VTRegisterVideoDecoderWithInfo %d\n", (int)registered);
@@ -130,8 +141,7 @@ int main(void)
     gFull = false;
     char vp9[512];
     const int vp9Submits = gSubmits;
-    const void *vp9Keys[] = {kVTVideoDecoderSpecification_DecoderID},
-               *vp9Values[] = {CFSTR("com.ioswitch.avd-host.vp09")};
+    const void *vp9Keys[] = {kVTVideoDecoderSpecification_DecoderID}, *vp9Values[] = {kCheckDecoderID};
     CFDictionaryRef vp9Spec = CFDictionaryCreate(NULL, vp9Keys, vp9Values, 1, &kCFTypeDictionaryKeyCallBacks,
                                                  &kCFTypeDictionaryValueCallBacks);
     clip_check(ClipCheckVP9, vp9Spec, vp9, sizeof(vp9));

@@ -11,7 +11,7 @@
 #include "../test/VDECClip.h"
 #include "../test/VP9Clip.h"
 
-extern const CFStringRef kVTVideoDecoderSpecification_AllowVP9Decode;
+extern const CFStringRef kVTVideoDecoderSpecification_AllowVP9Decode, kVTVideoDecoderSpecification_DecoderID;
 
 typedef struct {
     int width, height, frames;
@@ -164,9 +164,12 @@ bool clip_check(ClipCheckMode mode, CFDictionaryRef extraSpec, char *line, size_
     CFMutableDictionaryRef spec = extraSpec ? CFDictionaryCreateMutableCopy(NULL, 0, extraSpec)
                                             : CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
                                                                         &kCFTypeDictionaryValueCallBacks);
-    if (hardware)
+    // A named decoder (AVD's private check registration is not flagged hardware) is taken as named; the session must
+    // still report hardware below.
+    const bool named = CFDictionaryContainsKey(spec, kVTVideoDecoderSpecification_DecoderID);
+    if (hardware && !named)
         CFDictionarySetValue(spec, kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
-    else
+    else if (!hardware)
         CFDictionarySetValue(spec, kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder, kCFBooleanFalse);
     if (vp9) CFDictionarySetValue(spec, kVTVideoDecoderSpecification_AllowVP9Decode, kCFBooleanTrue);
     int32_t pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;

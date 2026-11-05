@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVDEC user client ABI, v3 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
+// TegraNVDEC user client ABI, v4 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
 //
 // The service is "TegraNVDEC" (IOServiceMatching), published by default once NVDEC has proven itself (N4). Its user
 // client's class is named AppleD5500UserClient, iPad7,1's own decoder client (VXD393), which some of 21H461's sandbox
@@ -25,18 +25,30 @@
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION  3
+#define TEGRA_NVDEC_ABI_VERSION  4
 #define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
 #define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
 
 enum TegraNVDECMethod {
-    TegraNVDECMethodGetInfo = 1,        // -> TegraNVDECInfo
-    TegraNVDECMethodBufferAlloc = 2,    // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
-    TegraNVDECMethodBufferFree = 3,     // TegraNVDECBuffer -> (waits for the last job, revokes the client's mappings)
-    TegraNVDECMethodSubmit = 4,         // TegraNVDECSubmit -> TegraNVDECFence
-    TegraNVDECMethodWait = 5,           // TegraNVDECWait ->
-    TegraNVDECMethodClaimSelfTest = 6,  // -> TegraNVDECClaim: claimed = 1 for exactly one caller per boot
+    TegraNVDECMethodGetInfo = 1,         // -> TegraNVDECInfo
+    TegraNVDECMethodBufferAlloc = 2,     // TegraNVDECBufferAlloc -> TegraNVDECBufferReply
+    TegraNVDECMethodBufferFree = 3,      // TegraNVDECBuffer -> (waits for the last job, revokes the client's mappings)
+    TegraNVDECMethodSubmit = 4,          // TegraNVDECSubmit -> TegraNVDECFence
+    TegraNVDECMethodWait = 5,            // TegraNVDECWait ->
+    TegraNVDECMethodClaimSelfTest = 6,   // -> TegraNVDECClaim: claimed = 1 for the one caller that runs the clip check
+    TegraNVDECMethodReportSelfTest = 7,  // TegraNVDECReport -> (the claiming connection only)
+    TegraNVDECMethodWaitSelfTest = 8,    // -> TegraNVDECClaim: sleeps while the check runs, at most 3 s
+};
+
+// The userland clip check (AVD's ClipCheck.c): one connection per boot claims it and reports its VP9 verdict; until
+// then 'vp09' is registered nowhere, and a failure turns VP9 off (TegraNVDECInfo.codecs loses it, Submit refuses it).
+// A claiming connection that closes before reporting gives the claim back.
+enum {
+    TEGRA_NVDEC_CHECK_UNCLAIMED = 0,
+    TEGRA_NVDEC_CHECK_RUNNING = 1,
+    TEGRA_NVDEC_CHECK_PASSED = 2,
+    TEGRA_NVDEC_CHECK_FAILED = 3,
 };
 
 // NVDEC application ids (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_*). TegraNVDECInfo.codecs has bit n set for each
@@ -92,8 +104,12 @@ typedef struct {
 } TegraNVDECFence;
 
 typedef struct {
-    uint32_t claimed, reserved;
+    uint32_t claimed, state;  // state: TEGRA_NVDEC_CHECK_*
 } TegraNVDECClaim;
+
+typedef struct {
+    uint32_t vp9_ok, reserved;
+} TegraNVDECReport;
 
 typedef struct {
     uint32_t fence, timeout_us;  // timeout_us: ignored (the kernel bounds every wait, see above)

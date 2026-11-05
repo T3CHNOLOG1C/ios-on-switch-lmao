@@ -112,6 +112,17 @@ static int fakeSubmit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
         f->refused++;
         return -1;
     }
+    // The frame's filter as NVDEC numbers it: the header's literal (0 smooth, 1 regular, 2 sharp, 3 bilinear, 4
+    // switchable). On r7p9d, clip A's frame 7 (regular) sent in libvpx's numbering (0) decoded as libvpx decodes it with
+    // the literal rewritten to smooth (luma CRC 0xbde1bb6d).
+    static const int kLiteralOf[5] = {1, 0, 2, 3, 4};  // libvpx EIGHTTAP, SMOOTH, SHARP, BILINEAR, SWITCHABLE
+    const nvdec_vp9_pic_s *p = (const nvdec_vp9_pic_s *)s->setup;
+    if (f->frame && !f->frame->key && !f->frame->intra_only &&
+        p->mcomp_filter_type != kLiteralOf[f->frame->interp_filter]) {
+        fprintf(stderr, "VP9 job %d: mcomp_filter_type %d for libvpx filter %d, NVDEC wants %d\n", f->jobs,
+                p->mcomp_filter_type, f->frame->interp_filter, kLiteralOf[f->frame->interp_filter]);
+        f->refused++;
+    }
     if (!f->haveFirst) {
         f->first = *s;
         memcpy(f->firstAvail, avail, sizeof(avail));

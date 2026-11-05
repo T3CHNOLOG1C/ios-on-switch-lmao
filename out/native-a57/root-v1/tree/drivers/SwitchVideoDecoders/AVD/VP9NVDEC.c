@@ -291,6 +291,12 @@ _Static_assert(offsetof(nvdec_vp9_pic_s, ref0_stride) == offsetof(nvdec_vp9_pic_
 _Static_assert(offsetof(nvdec_vp9_pic_s, ref1_stride) == offsetof(nvdec_vp9_pic_s, ref1_width) + 4, "ref1 group");
 _Static_assert(offsetof(nvdec_vp9_pic_s, ref2_stride) == offsetof(nvdec_vp9_pic_s, ref2_width) + 4, "ref2 group");
 
+// NVDEC numbers the frame's interpolation filter as the header's 2-bit literal does: 0 smooth, 1 regular, 2 sharp,
+// 3 bilinear, 4 switchable (FFmpeg's FilterMode, averne's mapping), not libvpx's INTERP_FILTER (0 regular, 1 smooth).
+// Proven on r7p9d: clip A's frame 7 (fixed regular filter) sent as libvpx's 0 decoded to luma CRC 0xbde1bb6d, which is
+// exactly libvpx's output with that frame's literal rewritten to 0 (smooth); frames with switchable filters matched.
+static const char kNvdecFilter[5] = {1, 0, 2, 3, 4};  // indexed by libvpx EIGHTTAP, SMOOTH, SHARP, BILINEAR, SWITCHABLE
+
 static void fillSetup(const VP9Decoder *d, nvdec_vp9_pic_s *p, const VP9FrameHeader *h, const Surface *cur,
                       const Surface *refs[3], uint32_t streamLen)
 {
@@ -324,7 +330,7 @@ static void fillSetup(const VP9Decoder *d, nvdec_vp9_pic_s *p, const VP9FrameHea
     p->lossless = h->lossless;
     p->transform_mode = (char)h->tx_mode;
     p->allow_high_precision_mv = !h->key_frame && h->allow_high_precision_mv;
-    p->mcomp_filter_type = (char)h->interp_filter;
+    p->mcomp_filter_type = kNvdecFilter[h->interp_filter];
     p->comp_pred_mode = (char)h->reference_mode;
     p->comp_fixed_ref = (char)h->comp_fixed_ref;
     p->comp_var_ref[0] = (char)h->comp_var_ref[0];

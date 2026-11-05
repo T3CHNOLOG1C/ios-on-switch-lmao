@@ -70,6 +70,12 @@ extern CMBaseObjectRef VTVideoDecoderGetCMBaseObject(VTVideoDecoderRef decoder);
 // A decoder specification for 'vp09' is refused unless it carries this (true): VideoToolbox's selection returns no
 // decoder otherwise (21H461 0x19789ee98); VTIsHardwareDecodeSupported sets it in Fig servers and entitled tasks.
 extern const CFStringRef kVTVideoDecoderSpecification_AllowVP9Decode;
+// A decoder's own ID (its info's CMClassImplementationID + "." + the codec) names it for a session; registry info
+// key IsHardwareAccelerated (VTRegisterVideoDecoder's default true) decides whether hardware queries count it.
+extern const CFStringRef kVTVideoDecoderSpecification_DecoderID;
+extern const CFStringRef kVTVideoDecoder_IsHardwareAccelerated;
+extern OSStatus VTRegisterVideoDecoderWithInfo(FourCharCode codecType, CFDictionaryRef info,
+                                               VTDecoderCreateInstance create);
 extern OSStatus VTSelectAndCreateVideoDecoderInstance(FourCharCode codecType, CFAllocatorRef allocator,
                                                       CFDictionaryRef specification, VTVideoDecoderRef *out);
 extern OSStatus VTDecoderSessionSetPixelBufferAttributes(VTVideoDecoderSession session, CFDictionaryRef attributes);

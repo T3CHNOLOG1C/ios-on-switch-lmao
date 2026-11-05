@@ -12,10 +12,13 @@ typedef struct NVDECClient NVDECClient;
 bool nvdec_service_present(void);
 NVDECClient *nvdec_open(int *error);  // NULL with the IOReturn when the service is absent or refuses this process
 void nvdec_close(NVDECClient *client);
-bool nvdec_claim_self_test(NVDECClient *client);
-uint32_t nvdec_codecs(
-    const NVDECClient *
-        client);  // TegraNVDECInfo.codecs: bit n, codec n proven at boot  // true for one caller per boot (TegraNVDECMethodClaimSelfTest)
+// TegraNVDECInfo.codecs: bit n, codec n proven on the engine at boot.
+uint32_t nvdec_codecs(const NVDECClient *client);
+// The clip check's verdict (TegraNVDECABI.h TEGRA_NVDEC_CHECK_*): claim (the state; *claimed when this connection runs
+// it), report (the owner), wait (at most 3 s while another process runs it).
+uint32_t nvdec_check_claim(NVDECClient *client, bool *claimed);
+int nvdec_check_report(NVDECClient *client, bool vp9Ok);
+uint32_t nvdec_check_wait(NVDECClient *client);
 
 // The H264Backend buffer and job callbacks (ctx = the client).
 int nvdec_alloc(void *client, uint64_t size, uint32_t *handle, void **va);

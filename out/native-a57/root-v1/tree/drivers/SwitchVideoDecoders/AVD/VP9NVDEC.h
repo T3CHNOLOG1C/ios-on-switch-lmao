@@ -6,10 +6,10 @@
 //
 // NVDEC-specific facts (buffer set and sizes, method stream, probability table and counter layouts, the filter buffer's
 // BSD control offset, the tile size table's tail entries) follow averne's FFmpeg nvtegra hwaccel
-// (libavcodec/nvtegra_vp9.c, GPL; read, not copied) and NVIDIA's nvdec_drv.h / clc5b0.h. Where averne's code and
-// libvpx disagree, libvpx's semantics are used: uv AC/DC deltas by their NVIDIA field names, the interpolation filter
-// in libvpx's numbering (NVIDIA's driver derives from libvpx), compound-reference counts adapted, the segmentation map
-// cleared when libvpx clears it, resolutionChange set.
+// (libavcodec/nvtegra_vp9.c, GPL; read, not copied) and NVIDIA's nvdec_drv.h / clc5b0.h, including the frame's
+// interpolation filter in FFmpeg's numbering (proven on hardware, VP9NVDEC.c kNvdecFilter). Where averne's code and
+// libvpx disagree on semantics, libvpx's are used: uv AC/DC deltas by their NVIDIA field names, compound-reference
+// counts adapted, the segmentation map cleared when libvpx clears it, resolutionChange set.
 //
 // The plain-C backend (H264Backend's buffers, jobs and pictures) is shared with H264NVDEC, so the host tests drive this
 // without a kernel.

@@ -577,6 +577,10 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
 {
     int error = 0;
     NVDECClient *client = nvdec_open(&error);
+    if (client && codec == kCMVideoCodecType_VP9 && !(nvdec_codecs(client) & (1u << TEGRA_NVDEC_CODEC_VP9))) {
+        nvdec_close(client);  // VP9 was turned off after this process registered it (its clip check failed)
+        return kVTCouldNotFindVideoDecoderErr;
+    }
     if (!client) {  // VideoToolbox goes on to H264SW
         static int logged;
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
@@ -605,17 +609,61 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     return noErr;
 }
 
+// The clip checks, once per boot, in the process that claimed them from the kernel. VP9 runs on a private registration
+// of this decoder (not flagged hardware, so no VTIsHardwareDecodeSupported('vp09') answers YES from it; named, so only
+// the check selects it); the verdict goes to the kernel, and 'vp09' is offered (here and in every other process) only
+// when the clip matched libvpx. A failure turns VP9 off: TegraNVDECInfo.codecs loses it and Submit refuses it.
+#define kCheckImplementation CFSTR("com.ioswitch.avd.check")
+#define kCheckDecoderID      CFSTR("com.ioswitch.avd.check.vp09")
+
+typedef struct {
+    NVDECClient *probe;  // holds the claim until the verdict is reported
+    bool vp9;
+} Check;
+
+static void logCheck(bool ok, const char *line)
+{
+    os_log_t log = os_log_create("com.ioswitch.avd", "selftest");
+    if (ok)
+        os_log(log, "vdectest: %{public}s (in %{public}s)", line, getprogname());
+    else
+        os_log_error(log, "vdectest: %{public}s (in %{public}s)", line, getprogname());
+}
+
 static void selfTest(void *context)
 {
-    const bool vp9 = context != NULL;
-    os_log_t log = os_log_create("com.ioswitch.avd", "selftest");
-    for (int mode = ClipCheckHardware; mode <= (vp9 ? ClipCheckVP9 : ClipCheckHardware); mode += ClipCheckVP9) {
-        char line[512];
-        if (clip_check((ClipCheckMode)mode, NULL, line, sizeof(line)))
-            os_log(log, "vdectest: %{public}s (in %{public}s)", line, getprogname());
-        else
-            os_log_error(log, "vdectest: %{public}s (in %{public}s)", line, getprogname());
+    Check *check = context;
+    char line[512];
+    logCheck(clip_check(ClipCheckHardware, NULL, line, sizeof(line)), line);
+    bool vp9Ok = false;
+    if (check->vp9) {
+        const void *keys[] = {kVTVideoDecoderSpecification_DecoderID}, *values[] = {kCheckDecoderID};
+        CFDictionaryRef spec =
+            CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        vp9Ok = clip_check(ClipCheckVP9, spec, line, sizeof(line));
+        CFRelease(spec);
+        logCheck(vp9Ok, line);
     }
+    nvdec_check_report(check->probe, vp9Ok);
+    if (vp9Ok) {
+        const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
+        if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)status);
+    } else if (check->vp9) {
+        os_log_error(gLog, "AVD: VP9 off until reboot (the clip check failed); sites fall back to H.264");
+    }
+    nvdec_close(check->probe);
+    free(check);
+}
+
+static OSStatus registerCheckDecoder(void)
+{
+    const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoDecoder_IsHardwareAccelerated};
+    const void *values[] = {kCheckImplementation, kCFBooleanFalse};
+    CFDictionaryRef info =
+        CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    const OSStatus status = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_VP9, info, createInstance);
+    CFRelease(info);
+    return status;
 }
 
 __attribute__((visibility("default"))) void AVDRegister(void);
@@ -631,18 +679,32 @@ void AVDRegister(void)
                getprogname(), error);
         return;
     }
-    const uint32_t codecs = nvdec_codecs(probe);
-    OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_H264, createInstance);
+    const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_H264, createInstance);
     if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('avc1') failed: %d", (int)status);
-    // VP9 only when the kernel's N3 VP9 picture matched libvpx on this boot.
-    bool vp9 = false;
-    if (codecs & (1u << TEGRA_NVDEC_CODEC_VP9)) {
+    // VP9 needs the kernel's N3 VP9 picture (it matched libvpx this boot) and then this boot's clip check.
+    const bool vp9Proven = nvdec_codecs(probe) & (1u << TEGRA_NVDEC_CODEC_VP9);
+    bool claimed = false;
+    uint32_t state = nvdec_check_claim(probe, &claimed);
+    if (!claimed && state == TEGRA_NVDEC_CHECK_RUNNING) {
+        state = nvdec_check_wait(probe);  // another process runs it (well under a second)
+        if (state == TEGRA_NVDEC_CHECK_UNCLAIMED) state = nvdec_check_claim(probe, &claimed);  // it gave up the claim
+    }
+    if (claimed) {
+        Check *check = calloc(1, sizeof(*check));
+        if (check) {
+            check->probe = probe;
+            check->vp9 = vp9Proven && !registerCheckDecoder();
+            // Off the registry's thread: the check's sessions look the registry up once this registration returns.
+            dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), check, selfTest);
+            return;
+        }
+        nvdec_check_report(probe, false);
+    } else if (vp9Proven && state == TEGRA_NVDEC_CHECK_PASSED) {
         const OSStatus vp9Status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
         if (vp9Status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)vp9Status);
-        vp9 = !vp9Status;
+    } else if (vp9Proven) {
+        os_log(gLog, "AVD: VP9 not offered in %{public}s: the clip check %{public}s", getprogname(),
+               state == TEGRA_NVDEC_CHECK_FAILED ? "failed" : "gave no verdict within 3 s");
     }
-    const bool claimed = !status && nvdec_claim_self_test(probe);
     nvdec_close(probe);
-    // Off the registry's thread: the check's own session looks the registry up once this registration returns.
-    if (claimed) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), vp9 ? (void *)1 : NULL, selfTest);
 }

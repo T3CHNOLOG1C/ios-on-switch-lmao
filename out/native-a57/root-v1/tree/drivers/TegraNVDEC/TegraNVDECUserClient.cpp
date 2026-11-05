@@ -105,6 +105,7 @@ void AppleD5500UserClient::drop(Buffer *b, bool returnMemory)
 
 IOReturn AppleD5500UserClient::clientClose()
 {
+    tegra_nvdec_check_release(this);  // a clip check this connection claimed and never reported goes to the next
     IOLockLock(lock_);
     const bool idle = quiesce();
     if (!idle) IOLog("TegraNVDEC: a closing client's job never finished; its buffers stay out of the arena\n");
@@ -117,6 +118,7 @@ IOReturn AppleD5500UserClient::clientClose()
 
 void AppleD5500UserClient::free()
 {
+    tegra_nvdec_check_release(this);
     if (lock_) {
         for (uint32_t i = 0; i < kMaxBuffers; i++)
             if (buffers_[i].handle) drop(&buffers_[i], quiesce());
@@ -152,12 +154,20 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         {sizeof(TegraNVDECSubmit), sizeof(TegraNVDECFence)},
         {sizeof(TegraNVDECWait), 0},
         {0, sizeof(TegraNVDECClaim)},
+        {sizeof(TegraNVDECReport), 0},
+        {0, sizeof(TegraNVDECClaim)},
     };
-    if (method < TegraNVDECMethodGetInfo || method > TegraNVDECMethodClaimSelfTest || inSize != kSizes[method].in ||
+    if (method < TegraNVDECMethodGetInfo || method > TegraNVDECMethodWaitSelfTest || inSize != kSizes[method].in ||
         *outSize < kSizes[method].out)
         return kIOReturnBadArgument;
     *outSize = kSizes[method].out;
 
+    if (method == TegraNVDECMethodWaitSelfTest) {  // no lock either: it sleeps (at most 3 s) for another process
+        TegraNVDECClaim *reply = static_cast<TegraNVDECClaim *>(out);
+        reply->claimed = 0;
+        reply->state = tegra_nvdec_check_wait();
+        return kIOReturnSuccess;
+    }
     if (method == TegraNVDECMethodWait) {  // no lock: other calls of this connection may proceed while it sleeps
         const TegraNVDECWait *w = static_cast<const TegraNVDECWait *>(in);
         if (w->invalidate_count > TEGRA_NVDEC_MAX_RANGES) return kIOReturnBadArgument;
@@ -249,10 +259,14 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
     }
     case TegraNVDECMethodClaimSelfTest: {
         TegraNVDECClaim *reply = static_cast<TegraNVDECClaim *>(out);
-        reply->claimed = tegra_nvdec_claim_self_test();
-        reply->reserved = 0;
+        bool claimed = false;
+        reply->state = tegra_nvdec_check_claim(this, &claimed);
+        reply->claimed = claimed;
         break;
     }
+    case TegraNVDECMethodReportSelfTest:
+        ret = ioreturn(tegra_nvdec_check_report(this, static_cast<const TegraNVDECReport *>(in)->vp9_ok != 0));
+        break;
     default: ret = kIOReturnUnsupported; break;
     }
     IOLockUnlock(lock_);

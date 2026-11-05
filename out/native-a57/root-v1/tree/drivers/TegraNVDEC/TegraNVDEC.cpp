@@ -130,8 +130,10 @@ constexpr uint32_t kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
 bool gUp, gWedged, gSuspended, gPublished;
-uint32_t gCodecs;               // proven at N3 (tegra_nvdec_codecs)
-volatile int gSelfTestClaimed;  // the userland clip check runs in one process per boot (tegra_nvdec_claim_self_test)
+uint32_t gCodecs;    // proven at N3 (tegra_nvdec_codecs)
+IOLock *gCheckLock;  // the userland clip check (tegra_nvdec_check_*): its state and owning connection
+uint32_t gCheckState;
+const void *gCheckOwner;
 uint64_t gArenaUs;
 TegraNVDECBlock gSetup;  // kSetupSlots picture setups, never mapped into a client
 
@@ -437,7 +439,8 @@ void bringUpStages(uint32_t stage)
     gPmc = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
     gMc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
     gEngineLock = IOLockAlloc();
-    if (!gNvdec || !gCar || !gPmc || !gMc || !gEngineLock) {
+    gCheckLock = IOLockAlloc();
+    if (!gNvdec || !gCar || !gPmc || !gMc || !gEngineLock || !gCheckLock) {
         IOLog("TegraNVDEC: N1 FAIL no mapping\n");
         giveUp(false);
         return;
@@ -610,9 +613,57 @@ extern "C" int tegra_nvdec_wait(uint32_t fence)
     return ret;
 }
 
-extern "C" bool tegra_nvdec_claim_self_test(void)
+extern "C" uint32_t tegra_nvdec_check_claim(const void *owner, bool *claimed)
 {
-    return !__atomic_exchange_n(&gSelfTestClaimed, 1, __ATOMIC_SEQ_CST);
+    IOLockLock(gCheckLock);
+    *claimed = gCheckState == TEGRA_NVDEC_CHECK_UNCLAIMED;
+    if (*claimed) {
+        gCheckState = TEGRA_NVDEC_CHECK_RUNNING;
+        gCheckOwner = owner;
+    }
+    const uint32_t state = gCheckState;
+    IOLockUnlock(gCheckLock);
+    return state;
+}
+
+extern "C" int tegra_nvdec_check_report(const void *owner, bool vp9Ok)
+{
+    IOLockLock(gCheckLock);
+    const bool mine = gCheckState == TEGRA_NVDEC_CHECK_RUNNING && gCheckOwner == owner;
+    const bool hadVP9 = __atomic_load_n(&gCodecs, __ATOMIC_SEQ_CST) & (1u << TEGRA_NVDEC_CODEC_VP9);
+    if (mine) {
+        gCheckState = vp9Ok ? TEGRA_NVDEC_CHECK_PASSED : TEGRA_NVDEC_CHECK_FAILED;
+        gCheckOwner = nullptr;
+        if (!vp9Ok) __atomic_and_fetch(&gCodecs, ~(1u << TEGRA_NVDEC_CODEC_VP9), __ATOMIC_SEQ_CST);
+        IOLockWakeup(gCheckLock, &gCheckState, false);
+    }
+    IOLockUnlock(gCheckLock);
+    if (mine && !vp9Ok && hadVP9) IOLog("TegraNVDEC: the VP9 clip check failed in userland; VP9 is off until reboot\n");
+    return mine ? 0 : -22;
+}
+
+// A process that may decode waits here for the verdict before it offers 'vp09' (the check takes well under a second).
+extern "C" uint32_t tegra_nvdec_check_wait(void)
+{
+    uint64_t deadline;
+    clock_interval_to_deadline(3, kSecondScale, &deadline);
+    IOLockLock(gCheckLock);
+    while (gCheckState == TEGRA_NVDEC_CHECK_RUNNING)  // uninterruptible like every wait here: the 3 s bound ends it
+        if (IOLockSleepDeadline(gCheckLock, &gCheckState, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) break;
+    const uint32_t state = gCheckState;
+    IOLockUnlock(gCheckLock);
+    return state;
+}
+
+extern "C" void tegra_nvdec_check_release(const void *owner)
+{
+    IOLockLock(gCheckLock);
+    if (gCheckState == TEGRA_NVDEC_CHECK_RUNNING && gCheckOwner == owner) {
+        gCheckState = TEGRA_NVDEC_CHECK_UNCLAIMED;
+        gCheckOwner = nullptr;
+        IOLockWakeup(gCheckLock, &gCheckState, false);
+    }
+    IOLockUnlock(gCheckLock);
 }
 
 // Sleep (SC7), through tegra_nvdec_suspend/resume in TegraHost1x.cpp. Suspend lets the queued jobs finish

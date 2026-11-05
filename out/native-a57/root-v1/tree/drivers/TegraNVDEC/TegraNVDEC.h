@@ -41,8 +41,12 @@ int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, v
 // that bound: a one-line panic once published (N4); during the N3 self-test, -60 and the engine refuses work.
 int tegra_nvdec_wait(uint32_t fence);
 bool tegra_nvdec_ready(void);
-// True for exactly one caller per boot: the process that runs the userland clip check (AVD.videodecoder).
-bool tegra_nvdec_claim_self_test(void);
+// The userland clip check's verdict (TegraNVDECABI.h): claim (returns the state; *claimed for the one owner), the
+// owner's report (a VP9 failure clears the VP9 codec bit), a bounded wait while it runs, and the owner's release.
+uint32_t tegra_nvdec_check_claim(const void *owner, bool *claimed);
+int tegra_nvdec_check_report(const void *owner, bool vp9Ok);
+uint32_t tegra_nvdec_check_wait(void);
+void tegra_nvdec_check_release(const void *owner);
 
 // The bring-up has ended: 1 when NVDEC decodes (N4 published), 0 when it does not or `timeoutMs` passed first.
 // TegraNVENC's E3 decodes its picture here.

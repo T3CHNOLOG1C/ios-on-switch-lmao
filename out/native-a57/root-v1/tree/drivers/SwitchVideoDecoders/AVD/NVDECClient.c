@@ -87,11 +87,28 @@ uint32_t nvdec_codecs(const NVDECClient *c)
     return c->codecs;
 }
 
-bool nvdec_claim_self_test(NVDECClient *c)
+// A call that fails leaves the state FAILED: nothing is offered on a verdict this process could not read.
+uint32_t nvdec_check_claim(NVDECClient *c, bool *claimed)
 {
-    TegraNVDECClaim reply = {0, 0};
-    return call(c, c->selector, TegraNVDECMethodClaimSelfTest, NULL, 0, &reply, sizeof(reply)) == KERN_SUCCESS &&
-           reply.claimed;
+    TegraNVDECClaim reply = {0, TEGRA_NVDEC_CHECK_FAILED};
+    if (call(c, c->selector, TegraNVDECMethodClaimSelfTest, NULL, 0, &reply, sizeof(reply)) != KERN_SUCCESS)
+        reply = (TegraNVDECClaim){0, TEGRA_NVDEC_CHECK_FAILED};
+    *claimed = reply.claimed;
+    return reply.state;
+}
+
+int nvdec_check_report(NVDECClient *c, bool vp9Ok)
+{
+    const TegraNVDECReport report = {vp9Ok, 0};
+    return call(c, c->selector, TegraNVDECMethodReportSelfTest, &report, sizeof(report), NULL, 0) ? -1 : 0;
+}
+
+uint32_t nvdec_check_wait(NVDECClient *c)
+{
+    TegraNVDECClaim reply = {0, TEGRA_NVDEC_CHECK_FAILED};
+    if (call(c, c->selector, TegraNVDECMethodWaitSelfTest, NULL, 0, &reply, sizeof(reply)) != KERN_SUCCESS)
+        reply.state = TEGRA_NVDEC_CHECK_FAILED;
+    return reply.state;
 }
 
 void nvdec_close(NVDECClient *c)
