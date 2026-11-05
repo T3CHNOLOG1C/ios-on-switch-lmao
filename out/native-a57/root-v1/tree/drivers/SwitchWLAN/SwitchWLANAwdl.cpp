@@ -9,9 +9,10 @@
 //     page (type 2), and the async wake-up;
 //   - the AWDL protocol itself (awdl/awdl_core.c) on the radio services of SwitchWLANAwdlRadio.h (r12-awdl).
 //
-// Off unless the Data file /private/var/ioswitch/awdl-enable exists AND the radio opens with what the stack needs:
-// otherwise en0 never advertises AWDL (capability bit 32) and nothing here runs. Every step that has never run on
-// hardware fails with one log line and AWDL off. The native backend (the firmware's own AWDL, RADIO-API §6) drives
+// en0 advertises AWDL (capability bit 32) when the radio's bring-up probe found a way to make the firmware's AWDL
+// interface (interface_create v3 or awdl_if); otherwise it never does and nothing here runs. Nothing touches the
+// firmware before wifip2pd enables AWDL on awdl0: that is when the radio is opened (event mask) and the interface
+// made. Every step that has never run on hardware fails with one log line and AWDL off. The native backend (the firmware's own AWDL, RADIO-API §6) drives
 // whichever firmware generation the radio's bring-up probe found (interface_create v3 as the brcmfmac AWDL series, or
 // the 7.x awdl_if); the software backend (monitor + inject) stays for radios without firmware AWDL.
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -29,7 +30,6 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
-#include <sys/vnode.h>
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -52,6 +52,11 @@ extern "C" {
 // ---- the radio services, until r12-awdl's SwitchWLAN provides them: "unavailable" ------------------------------
 extern "C" {
 __attribute__((weak)) int swlan_awdl_open(const struct swlan_awdl_caps **caps_out)
+{
+    if (caps_out) *caps_out = nullptr;
+    return -EOPNOTSUPP;
+}
+__attribute__((weak)) int swlan_awdl_query(const struct swlan_awdl_caps **caps_out)
 {
     if (caps_out) *caps_out = nullptr;
     return -EOPNOTSUPP;
@@ -124,7 +129,10 @@ constexpr uint32_t kMaxRequest = 4096;  // largest awdl0 request payload we copy
 
 IOLock *gLock;      // the core, the facade, the ring and the interface state
 IOLock *gSend;      // one awdl0 output at a time: taken before gLock, held across the radio's transmit
-int gCapable = -1;  // -1 not decided yet (Data not mounted), 0 off, 1 on
+int gCapable = -1;  // -1 not decided yet (the radio cannot answer yet), 0 off, 1 on
+// The radio is opened for AWDL (event_msgs) the first time wifip2pd enables AWDL, never before (ensureRadio).
+IOLock *gOpenLock;
+int gRadioOpen;  // 0 not yet, 1 open, -1 refused for good (one log line)
 const struct swlan_awdl_caps *gCaps;
 struct awdl_core *gCore;
 a80211_awdl gFacade;
@@ -584,6 +592,31 @@ errno_t ifOutput(ifnet_t ifp, mbuf_t m)
     return 0;
 }
 
+// The first AWDL_SYNC_ENABLED on: the radio opens for AWDL (the AWDL event bits in event_msgs; the station is not
+// touched before). Thread context, without gLock (it waits for the firmware). 0 or an errno for wifip2pd.
+int ensureRadio()
+{
+    IOLockLock(gOpenLock);
+    int e = 0;
+    if (gRadioOpen < 0) {
+        e = ENXIO;
+    } else if (!gRadioOpen) {
+        const struct swlan_awdl_caps *caps = nullptr;
+        const int r = swlan_awdl_open(&caps);
+        if (r >= 0 && caps) {
+            gRadioOpen = 1;
+        } else {
+            // the radio says why in its own line; a radio that was only down (recovering) is asked again next time
+            IOLog("SwitchWLAN: AWDL: wifip2pd enabled AWDL but the radio did not open for it (%d): AWDL off%s\n", r,
+                  r == -ENXIO ? " until the next enable" : "");
+            if (r != -ENXIO) gRadioOpen = -1;
+            e = ENXIO;
+        }
+    }
+    IOLockUnlock(gOpenLock);
+    return e;
+}
+
 int awdlRequest(bool set, apple80211req &rq)
 {
     if (rq.req_len > kMaxRequest) return EINVAL;
@@ -592,6 +625,10 @@ int awdlRequest(bool set, apple80211req &rq)
     if (capacity && !data) return ENOMEM;
     int e = 0;
     if (set && capacity && rq.req_data) e = copyin(rq.req_data, data, capacity);
+    // apple80211_awdl_sync_enabled {version, flags, enabled}: AWDL on needs the radio opened first, without gLock
+    if (!e && set && rq.req_type == A80211_IOC_AWDL_SYNC_ENABLED && capacity >= 12 &&
+        (data[8] | data[9] | data[10] | data[11]))
+        e = ensureRadio();
     uint32_t length = set ? capacity : 0;
     if (!e) {
         IOLockLock(gLock);
@@ -919,51 +956,31 @@ void createInterface(thread_call_param_t, thread_call_param_t)
           gMac[4], gMac[5]);
 }
 
-// The switch: an empty file on Data, where the deploy writes (/private/var/ioswitch), or where AFC reaches over USB
-// (/private/var/mobile/Media, AFC's root: "/ioswitch/awdl-enable" in an AFC client).
-const char kFlag[] = "/private/var/ioswitch/awdl-enable";
-const char kFlagAfc[] = "/private/var/mobile/Media/ioswitch/awdl-enable";
-
-bool pathExists(const char *path)
-{
-    vfs_context_t ctx = vfs_context_create(nullptr);
-    vnode_t vp = nullptr;
-    const int e = vnode_lookup(path, 0, &vp, ctx);
-    if (!e) vnode_put(vp);
-    vfs_context_rele(ctx);
-    return e == 0;
-}
-
 }  // namespace
 
 extern "C" int switch_wlan_awdl_capable(void)
 {
     if (__atomic_load_n(&gCapable, __ATOMIC_ACQUIRE) >= 0) return gCapable;
-    if (!pathExists(kFlag) && !pathExists(kFlagAfc)) {
-        // decided only once Data is mounted (its ioswitch directory exists); before that, ask again later
-        if (pathExists("/private/var/ioswitch")) {
-            IOLog("SwitchWLAN: AWDL: off (no %s or %s)\n", kFlag, kFlagAfc);
-            __atomic_store_n(&gCapable, 0, __ATOMIC_RELEASE);
-        }
-        return 0;
-    }
     // one caller decides; a concurrent one is told "not (yet)" and asks again at its next request
     static unsigned deciding;
     if (__atomic_exchange_n(&deciding, 1u, __ATOMIC_ACQ_REL)) return 0;
     if (gCapable < 0) {
-        int verdict = 0;
+        int verdict = -1;  // undecided until the radio can answer
         const struct swlan_awdl_caps *caps = nullptr;
-        const int e = swlan_awdl_open(&caps);
-        if (e < 0 || !caps) {
-            IOLog("SwitchWLAN: AWDL: the flag file is set but the radio has no AWDL (%d): off\n", e);
+        const int e = swlan_awdl_query(&caps);  // what the bring-up found; no firmware request
+        if (e == -EAGAIN) {
+            // the radio has not read its capabilities or run the probe yet: ask again at the next request
+        } else if (e < 0 || !caps) {
+            IOLog("SwitchWLAN: AWDL: the radio has no AWDL (%d): off\n", e);
+            verdict = 0;
         } else if (caps->abi_version != SWLAN_AWDL_ABI_VERSION) {
             IOLog("SwitchWLAN: AWDL: radio ABI %u, the stack speaks %u: off\n", caps->abi_version,
                   SWLAN_AWDL_ABI_VERSION);
-            swlan_awdl_close();
+            verdict = 0;
         } else if (!caps->has_native_awdl && !(caps->can_monitor && caps->can_inject)) {
             IOLog("SwitchWLAN: AWDL: radio native=%u monitor=%u inject=%u: neither backend can run: off\n",
                   caps->has_native_awdl, caps->can_monitor, caps->can_inject);
-            swlan_awdl_close();
+            verdict = 0;
         } else if (caps->has_native_awdl && bcm_awdl_api_of(caps->probe) == BCM_AWDL_API_NONE &&
                    !(caps->can_monitor && caps->can_inject)) {
             // the cap list says awdl, but the iovar table cannot make an AWDL interface (the BCM4350's 7.35.180.133
@@ -971,15 +988,15 @@ extern "C" int switch_wlan_awdl_capable(void)
             IOLog(
                 "SwitchWLAN: AWDL: the firmware lists awdl but has neither interface_create v3 nor awdl_if (%s): off\n",
                 caps->probe ? "AWDL probe lines" : "probe did not run");
-            swlan_awdl_close();
-        } else if (!(gLock = IOLockAlloc()) || !(gSend = IOLockAlloc()) ||
+            verdict = 0;
+        } else if (!(gLock = IOLockAlloc()) || !(gSend = IOLockAlloc()) || !(gOpenLock = IOLockAlloc()) ||
                    !(gCore = static_cast<awdl_core *>(IOMallocZero(awdl_core_size()))) ||
                    !(gTimer = thread_call_allocate_with_priority(timerFired, nullptr, THREAD_CALL_PRIORITY_HIGH)) ||
                    !(gDeferred = thread_call_allocate(deferredWork, nullptr)) ||
                    !(gCreate = thread_call_allocate(createInterface, nullptr)) ||
                    !(gIovarWork = thread_call_allocate(iovarWork, nullptr))) {
             IOLog("SwitchWLAN: AWDL: no memory for the stack: off\n");
-            swlan_awdl_close();
+            verdict = 0;
         } else {
             gCaps = caps;
             memcpy(gMac, caps->self_mac, 6);
@@ -1000,10 +1017,10 @@ extern "C" int switch_wlan_awdl_capable(void)
                   caps->can_scheduled_hops, caps->can_stay_assoc);
             verdict = 1;
         }
-        __atomic_store_n(&gCapable, verdict, __ATOMIC_RELEASE);
+        if (verdict >= 0) __atomic_store_n(&gCapable, verdict, __ATOMIC_RELEASE);
     }
     __atomic_store_n(&deciding, 0u, __ATOMIC_RELEASE);
-    return gCapable;
+    return gCapable > 0 ? 1 : 0;
 }
 
 extern "C" int switch_wlan_awdl_vif_create(void *payload, size_t length)

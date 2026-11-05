@@ -177,6 +177,7 @@ OSDeclareDefaultStructors(SwitchWLAN)
     // the firmware: thread context only, never the work loop. The callbacks are only stored here; the work loop calls
     // them with the gate held (the stack never calls back into a gated call while holding its own lock).
     int awdlOpen(const swlan_awdl_caps **caps);
+    int awdlQuery(const swlan_awdl_caps **caps);
     void awdlClose();
     int awdlVar(bool set, uint8_t ifidx, const char *name, const void *in, size_t inLength, void *out, size_t outLength,
                 size_t *returned);
@@ -249,7 +250,7 @@ private:
 
     // AWDL: the firmware's cap list has "awdl"; open (event mask on, frames and events routed); the AWDL
     // interface's firmware index from its WLC_E_IF (-1 until then).
-    bool capAwdl_ = false, awdlOpen_ = false;
+    bool capAwdl_ = false, capRead_ = false, awdlOpen_ = false;
     int awdlIfidx_ = -1, awdlBssidx_ = -1;  // from its WLC_E_IF add (wl_event_data_if_t ifidx, bssidx)
     bool awdlStrayFrameSaid_ = false;
     uint32_t awdlRxDropped_ = 0, awdlEventsIn_ = 0;
@@ -846,11 +847,12 @@ bool SwitchWLAN::bootChip(const char **stage)
             if (cap[i] < 0x20 || cap[i] >= 0x7F) cap[i] = ' ';
         }
         IOLog("SwitchWLAN: firmware capabilities: %s\n", reinterpret_cast<const char *>(cap));
-        // the firmware's own AWDL (r7p8: present on 7.35.252.108); used only when the Data flag asks for it
+        // the firmware's own AWDL (r7p8: present on 7.35.252.108); its iovars are probed after the bring-up
         capAwdl_ = false;
         for (size_t i = 0; i + 4 <= capLength && cap[i]; ++i)
             if (!memcmp(cap + i, "awdl", 4) && (i == 0 || cap[i - 1] == ' ') && (cap[i + 4] == ' ' || !cap[i + 4]))
                 capAwdl_ = true;
+        __atomic_store_n(&capRead_, true, __ATOMIC_RELEASE);
     } else {
         IOLog("SwitchWLAN: firmware capabilities not read: %s\n", why_);
     }
@@ -2070,6 +2072,23 @@ void SwitchWLAN::awdlEvent(const swlan::Event &event)
     awdlEventFn_(awdlEventCtx_, &e, event.data, event.length);
 }
 
+// en0's capability answer: what awdlOpen would give, from what the bring-up already read (no firmware request).
+int SwitchWLAN::awdlQuery(const swlan_awdl_caps **caps)
+{
+    static swlan_awdl_caps c;
+    if (!__atomic_load_n(&capRead_, __ATOMIC_ACQUIRE)) return -EAGAIN;  // the capability list is read at bring-up
+    if (!capAwdl_) return -ENODEV;
+    if (!__atomic_load_n(&gAwdlProbe.done, __ATOMIC_ACQUIRE)) return -EAGAIN;  // the probe follows the first bring-up
+    if (!mb_.awdlAvailable()) return -ENOSPC;
+    memset(&c, 0, sizeof(c));
+    c.abi_version = SWLAN_AWDL_ABI_VERSION;
+    c.has_native_awdl = 1;
+    memcpy(c.self_mac, mac_, 6);
+    c.probe = &gAwdlProbe;
+    *caps = &c;
+    return 0;
+}
+
 int SwitchWLAN::awdlOpen(const swlan_awdl_caps **caps)
 {
     if (loop_->onThread()) return -EDEADLK;
@@ -2132,7 +2151,7 @@ void SwitchWLAN::awdlProbe()
         os_log(OS_LOG_DEFAULT, "SwitchWLAN: AWDL probe: %s: %d %s, %u bytes%s", bcm_probe_names[i], status,
                bcme_name(status), static_cast<unsigned>(ok ? got : 0), hex);
     }
-    gAwdlProbe.done = 1;
+    __atomic_store_n(&gAwdlProbe.done, 1, __ATOMIC_RELEASE);  // awdlQuery reads it from another thread
     const enum bcm_awdl_api api = bcm_awdl_api_of(&gAwdlProbe);
     os_log(OS_LOG_DEFAULT,
            "SwitchWLAN: AWDL probe: API %s (interface_create version %u, awdl_if %s, slot_bss %s, awdl_chan_seq %s, "
@@ -2278,6 +2297,11 @@ extern "C" int swlan_awdl_open(const struct swlan_awdl_caps **caps_out)
 {
     if (caps_out) *caps_out = nullptr;
     return gDriver ? gDriver->awdlOpen(caps_out) : -ENXIO;
+}
+extern "C" int swlan_awdl_query(const struct swlan_awdl_caps **caps_out)
+{
+    if (caps_out) *caps_out = nullptr;
+    return gDriver ? gDriver->awdlQuery(caps_out) : -EAGAIN;
 }
 extern "C" void swlan_awdl_close(void)
 {

@@ -681,7 +681,7 @@ int apple80211(bool set, apple80211req &rq)
     case kCardCaps: {  // a bitmap, bit n in byte n / 8: AES, AES-CCM, power management, short slot and preamble, WPA2, WME, short guard interval at 20 MHz
         static const uint8_t has[] = {2, 3, 6, 9, 10, 14, 17, 19};
         for (uint8_t bit : has) out.raw[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
-        // AWDL (bit 32, what wifip2pd gates awdl0 on) only with the Data flag and a radio that can (SwitchWLANAwdl.cpp)
+        // AWDL (bit 32, what wifip2pd gates awdl0 on) when the radio's probe found the firmware's AWDL (SwitchWLANAwdl.cpp)
         if (switch_wlan_awdl_capable() == 1) out.raw[4] |= 1;
         return answer_bytes(rq, out.raw, 12);
     }

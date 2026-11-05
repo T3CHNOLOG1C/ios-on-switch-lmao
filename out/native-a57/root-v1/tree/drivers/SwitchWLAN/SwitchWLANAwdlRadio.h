@@ -38,8 +38,13 @@ struct swlan_awdl_caps {
     // firmware generation's bring-up from it (bcm_awdl_api_of). NULL when the probe did not run.
     const struct bcm_awdl_probe *probe;
 };
-// <0 (negative errno): AWDL unavailable; the stack says so to wifip2pd and does not retry.
+// <0 (negative errno): AWDL unavailable; the stack says so to wifip2pd and does not retry. Sets the firmware up for
+// AWDL (event_msgs): the stack calls it only once wifip2pd enables AWDL on awdl0.
 int swlan_awdl_open(const struct swlan_awdl_caps **caps_out);
+// What swlan_awdl_open would answer, without touching the firmware (en0's CARD_CAPABILITIES asks this). -EAGAIN while
+// the radio has not got that far (capability list not read, bring-up probe not run yet: ask again later); another
+// negative errno when it never will (no "awdl" in the capability list, no AWDL flow rings).
+int swlan_awdl_query(const struct swlan_awdl_caps **caps_out);
 void swlan_awdl_close(void);
 
 struct swlan_rx_meta {
@@ -132,8 +137,9 @@ int swlan_awdl_eth_rx(swlan_eth_rx_fn fn, void *ctx);
 uint16_t swlan_awdl_infra_freq(void);
 
 // ---- SwitchWLANAwdl.cpp (r12-awdl-stack) -> SwitchWLANNet.cpp ---------------------------------------------------
-// Whether en0 advertises AWDL (CARD_CAPABILITIES bit 32): the Data flag /private/var/ioswitch/awdl-enable exists and
-// the radio opened with what the stack needs. Evaluated once userland runs; cheap after that.
+// Whether en0 advertises AWDL (CARD_CAPABILITIES bit 32): the radio's bring-up probe found a way to make the
+// firmware's AWDL interface (interface_create v3 or awdl_if) and the stack's memory is there. Decided once, as soon as
+// the radio can answer (swlan_awdl_query); 0 before that; cheap after. Touches no firmware state.
 int switch_wlan_awdl_capable(void);
 // en0's VIRTUAL_IF_CREATE (94) / VIRTUAL_IF_DELETE (95), the payload already copied in; create may write the new
 // interface's name back into it (the caller copies it out). 0 or an errno.
