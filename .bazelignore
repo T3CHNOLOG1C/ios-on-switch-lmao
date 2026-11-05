@@ -26,3 +26,5 @@ out/switch/device-logs
 out/switch/raw-v24-firmware
 out/switch/cryptex-trustcaches
 .claude
+.git
+.agents
