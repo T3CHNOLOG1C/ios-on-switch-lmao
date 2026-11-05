@@ -15,10 +15,13 @@
 //     every nits value CoreBrightness computes is clamped to 1 (r7r: "Lmax=1.000000 Lmin=0.000000", "nits physical =
 //     1.000000"), and AABC::_UpdateEsensorTrusted, which bounds the lux it acts on by the lux at which its curve reaches
 //     the panel's maximum, held auto-brightness at 7.85 lux while the sensor read 30-70 (320 of 372 samples).
-//   * It writes with IORegistryEntrySetCFProperties(service, dict): "brightness" = ceil(fraction * (max - min)) + min,
-//     fraction being linear luminance relative to maximum; "FadePeriod" = seconds * 65536 to ramp over; sometimes
-//     "backlight-level" (not used here). A failed write makes it drop that update. It also sets IOMFBBrightnessLevel on
-//     the framebuffer unless the backlight carries ignore-IOMFB.
+//   * Without that range it writes with IORegistryEntrySetCFProperties(service, dict): "brightness" = ceil(fraction *
+//     (max - min)) + min; "FadePeriod" = seconds * 65536 to ramp over; sometimes "backlight-level" (not used here). With
+//     it, every change (the user's slider and auto-brightness) comes as "brightness-nits", nits * 65536, which
+//     CoreBrightness steps itself (_SetBLDriverNitsValue from ___DisplaySetLogicalBrightnessInternal), and sometimes
+//     "brightness-nits-cap". r7s dropped brightness-nits: auto-brightness ramped from 38 to 138 nits and the panel stayed
+//     at the level it was given at start (525). Both are taken now (SwitchBacklightMath.h). A failed write makes it drop
+//     that update. It also sets IOMFBBrightnessLevel on the framebuffer unless the backlight carries ignore-IOMFB.
 // The original class lives in com.apple.driver.AppleARMPlatform, which is prelinked here (a dependency of
 // IOMobileGraphicsFamily), so the name cannot be defined again (duplicate classes panic in OSMetaClass::postModLoad).
 // SwitchBacklight is a plain IOService whose metaclass names the original AppleARMBacklight metaclass as its superclass
@@ -62,6 +65,7 @@
 #include <os/log.h>
 #include <pexpert/pexpert.h>
 #include "TegraPanel.h"
+#include "SwitchBacklightMath.h"
 #include "SwitchBrightness.h"
 
 // The original AppleARMBacklight::gMetaClass (original-bindings.S), declared with a concrete type so that its address is
@@ -84,23 +88,13 @@ extern "C" __attribute__((weak)) void switch_touch_display_power(bool) {}
 extern "C" __attribute__((weak)) void switch_joycon_display_power(bool) {}
 
 namespace {
-constexpr uint32_t kMax = 65536;  // IODisplayParameters.brightness max, as Apple's
+using namespace switch_backlight;
+static_assert(kPanelMax == TEGRA_PANEL_BRIGHTNESS_MAX, "SwitchBacklightMath.h's panel range");
 constexpr uint64_t kLongestFadeNS = 10000000000ull;
 constexpr uint64_t kSendIntervalNS = 50000000;  // three frames at 60 Hz between panel commands
-constexpr unsigned kFloorRaw = 64;              // the dimmest panel value the slider reaches (~3% of full)
-constexpr unsigned kSpanRaw = TEGRA_PANEL_BRIGHTNESS_MAX - kFloorRaw;
 
 volatile bool gDisplayOn = true;
-
-unsigned toRaw(uint32_t brightness)
-{
-    return kFloorRaw + (unsigned)(((uint64_t)brightness * kSpanRaw + kMax / 2) / kMax);
-}
-
-uint32_t toBrightness(unsigned raw)
-{
-    return raw <= kFloorRaw ? 0 : (uint32_t)((uint64_t)(raw - kFloorRaw) * kMax / kSpanRaw);
-}
+volatile bool gSawNits, gSawNitsCap;  // the first of each is logged once
 
 OSDictionary *range(uint32_t max, uint32_t value)
 {
@@ -121,11 +115,12 @@ OSDictionary *range(uint32_t max, uint32_t value)
 // divided by 65536, each without a null check (a missing key would crash backboardd in CFNumberGetValue), and an
 // optional tenth. lMaxPanel and lMinPanel become the physical maximum and minimum (_DisplayGetBrightnessMaxPhysical
 // reads display+0x1d0 = lMaxPanel, ...MinPhysical display+0x18c = lMinPanel); the product values are its marketing range.
-// The Switch OLED's luminance has not been measured, so the nits are CoreBrightness's own for an uncalibrated display
-// (its fallback when the dictionary is absent stores 400, 140 and 5 nits before scaling them by the slider table it does
-// not have here). The currents only feed its power model; they are the nits themselves, so every current ratio is the
-// luminance ratio and milliAmps2NitsScaleFactor is left to its default, lMaxPanel.
-constexpr uint32_t kNitsMax = 400, kNitsMid = 140, kNitsMin = 5;
+// The Switch OLED's luminance has not been measured: the maximum and middle are CoreBrightness's own for an
+// uncalibrated display (its fallback when the dictionary is absent stores 400, 140 and 5 nits before scaling them by the
+// slider table it does not have here), and the minimum is the panel's floor on that scale, 12.5 nits
+// (SwitchBacklightMath.h), so that CoreBrightness never asks for less than the panel shows. The currents only feed its
+// power model; they are the nits themselves, so every current ratio is the luminance ratio and milliAmps2NitsScaleFactor
+// is left to its default, lMaxPanel. All values nits * 65536.
 
 OSDictionary *calibration()
 {
@@ -145,7 +140,7 @@ OSDictionary *calibration()
     };
     OSDictionary *dict = OSDictionary::withCapacity(sizeof(entries) / sizeof(entries[0]));
     for (const auto &entry : entries) {
-        OSNumber *number = OSNumber::withNumber((unsigned long long)entry.value << 16, 32);
+        OSNumber *number = OSNumber::withNumber(entry.value, 32);
         if (!dict || !number || !dict->setObject(entry.key, number)) {
             OSSafeReleaseNULL(number);
             OSSafeReleaseNULL(dict);
@@ -239,6 +234,7 @@ void SwitchBacklight::publishParameters()
         parameters->setObject("rawBrightness", raw);
         setProperty("IODisplayParameters", parameters);
     }
+    setProperty("brightness-nits", rawToNits(toRaw(current)), 32);  // what the panel shows, nits * 65536
     OSSafeReleaseNULL(raw);
     OSSafeReleaseNULL(brightness);
     OSSafeReleaseNULL(parameters);
@@ -366,12 +362,36 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
 {
     OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
     if (!dict) return kIOReturnBadArgument;
+    // brightness-nits-cap: CoreBrightness's ceiling for EDR headroom; its SDR targets already respect its caps, so it is
+    // only recorded (the first one logged).
+    if (OSNumber *cap = OSDynamicCast(OSNumber, dict->getObject("brightness-nits-cap"))) {
+        setProperty("brightness-nits-cap", cap);
+        if (!__atomic_exchange_n(&gSawNitsCap, true, __ATOMIC_RELAXED)) {
+            IOLog("SwitchBacklight: first brightness-nits-cap %u nits (recorded only)\n",
+                  cap->unsigned32BitValue() >> 16);
+        }
+    }
+    OSNumber *nits = OSDynamicCast(OSNumber, dict->getObject("brightness-nits"));
     OSNumber *brightness = OSDynamicCast(OSNumber, dict->getObject("brightness"));
-    if (!brightness) return kIOReturnSuccess;  // FadePeriod / backlight-level alone: nothing to do
-    OSNumber *fade = OSDynamicCast(OSNumber, dict->getObject("FadePeriod"));
+    if (!nits && !brightness) return kIOReturnSuccess;  // FadePeriod / backlight-level alone: nothing to do
+    uint32_t value;
+    uint64_t fadeNS = 0;
+    if (nits) {
+        // nits * 65536, a CFNumber SInt32; CoreBrightness steps its own ramps, so no fade here.
+        const int32_t requested = (int32_t)nits->unsigned32BitValue();
+        value = nitsToBrightness(requested);
+        if (!__atomic_exchange_n(&gSawNits, true, __ATOMIC_RELAXED)) {
+            IOLog("SwitchBacklight: CoreBrightness sets brightness-nits (first %d.%02d nits, panel %u)\n",
+                  requested >> 16, (int)(((requested & 0xffff) * 100) >> 16), toRaw(value));
+        }
+    } else {
+        OSNumber *fade = OSDynamicCast(OSNumber, dict->getObject("FadePeriod"));
+        value = brightness->unsigned32BitValue();
+        fadeNS = fade ? fade->unsigned64BitValue() * 1000000000ull / 65536 : 0;
+    }
     IOLockLock(requestLock);
-    requestValue = brightness->unsigned32BitValue();
-    requestFadeNS = fade ? fade->unsigned64BitValue() * 1000000000ull / 65536 : 0;
+    requestValue = value;
+    requestFadeNS = fadeNS;
     haveRequest = true;
     IOLockUnlock(requestLock);
     kick();

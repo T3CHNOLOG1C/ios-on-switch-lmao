@@ -41,9 +41,20 @@ struct Window {
 };
 constexpr Window kWindow[] = {{231, 9697, 30300}, {993, 3333, 2778}, {1478, 1621, 1053}, {7500, 81, 10}};
 
+// A channel at the ADC's top (65535): the light is beyond this gain's range, and with DATA0 clipped the IR ratio is
+// too high, so the window row and the lux under-read. At 1x there is no lower gain: lux() reports kLuxMax. At any
+// other gain SwitchALS drops the sample while nextGain() steps down (r7s, a lamp: ch0 65535 ch1 12940 at 1x).
+constexpr uint32_t kChannelMax = 0xffff;
+inline bool saturated(uint32_t visible, uint32_t ir)
+{
+    return visible >= kChannelMax || ir >= kChannelMax;
+}
+
 inline uint32_t lux(uint32_t visible, uint32_t ir, unsigned gain)
 {
-    if (!visible || gain >= kGains) return 0;
+    if (gain >= kGains) return 0;
+    if (saturated(visible, ir)) return gain == 0 ? kLuxMax : 0;
+    if (!visible) return 0;
     int64_t weighted = 0;
     for (const Window &w : kWindow) {
         if (1000ull * ir / visible < w.rc) {

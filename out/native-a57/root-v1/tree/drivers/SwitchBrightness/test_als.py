@@ -21,6 +21,9 @@ values in TegraI2C.cpp and SwitchALS.cpp against the references they cite.
    (-[CBALSNode initALSProperties]: Placement, Orientation, the three integration times; IOHIDFamily
    AppleEmbeddedHIDKeys.h enums) and SwitchBacklight.cpp's backlight-calibration-parameters (DisplayCreateWithID: all
    nine mandatory keys, 16.16 fixed point, nits in order).
+5. SwitchBacklightMath.h, compiled for the Mac: brightness-nits (nits * 65536) onto the panel linearly in luminance,
+   2047 at lMaxPanel and never below the floor, which is lMinPanel; the legacy brightness mapping unchanged; the
+   brightness the ramp keeps lands on the same panel level; the r7s auto-brightness targets it dropped.
 """
 from pathlib import Path
 import re
@@ -101,8 +104,16 @@ with tempfile.TemporaryDirectory() as directory:
 
 rows = 0
 worst = 0
+saturated_cases = 0
 for line in output.splitlines():
     g, v, i, ours, next_gain = map(int, line.split())
+    if v >= 65535 or i >= 65535:
+        # Clipped: the ceiling at 1x, no reading (the gain steps down) above it.
+        assert ours == (MAX_LUX if g == 0 else 0), (g, v, i, ours)
+        assert g == 0 or next_gain == g - 1, (g, v, i, next_gain)
+        saturated_cases += 1
+        rows += 1
+        continue
     reference = linux_lux(v, i, g)
     assert reference <= ours <= reference + 4, (g, v, i, ours, reference)
     worst = max(worst, ours - reference)
@@ -114,7 +125,8 @@ for line in output.splitlines():
     else:
         assert next_gain == stepped, (g, v, i, next_gain, stepped)
     rows += 1
-assert rows == 4 * len(values) ** 2
+unclipped = sum(v < 65535 for v in values)
+assert rows == 4 * len(values) ** 2 and saturated_cases == 4 * (len(values) ** 2 - unclipped ** 2)
 # Spot value: 64x, DATA0 1000, DATA1 100 (ratio 100 < 231, row 0): (9697000 - 3030000) * 100 * 3600 / (64 * 102600 *
 # 1000) = 365.5; Linux's 6667000 * 100 // 6566400 = 101, * 3600 // 1000 = 363.
 assert linux_lux(1000, 100, 2) == 363
@@ -194,17 +206,63 @@ assert light == {'Placement': 1,                                # kIOHIDPlacemen
                  'ALSSlowIntegrationTime': ITIME_US}, light
 assert 'if (&p == &kProfiles[kSwitchHIDLight]) addLightProperties(dict);' in hid
 backlight = (root / 'SwitchBacklight.cpp').read_text()
-found = re.search(r'constexpr uint32_t kNitsMax = (\d+), kNitsMid = (\d+), kNitsMin = (\d+);', backlight).groups()
-nits = dict(zip(('max', 'mid', 'min'), map(int, found)))
-assert nits == {'max': 400, 'mid': 140, 'min': 5}  # CoreBrightness's own fallback for an uncalibrated display
 keys = re.findall(r'\{"([a-zA-Z-]+)", kNits(Max|Mid|Min)\}', backlight)
 assert sorted(k for k, _ in keys) == sorted(['current-for-max-backlight', 'current-for-mid-backlight',
                                              'hardware-max-current-limit', 'lMaxProduct', 'lMidProduct', 'lMinProduct',
                                              'lMaxPanel', 'lMidPanel', 'lMinPanel']), keys
 assert dict(keys)['lMaxPanel'] == 'Max' and dict(keys)['lMinPanel'] == 'Min' and dict(keys)['lMidPanel'] == 'Mid'
-assert '(unsigned long long)entry.value << 16, 32' in backlight  # read as float / 65536
-assert nits['max'] << 16 < 1 << 32
+assert 'OSNumber::withNumber(entry.value, 32)' in backlight  # already nits * 65536 (read as float / 65536)
+assert 'OSNumber *nits = OSDynamicCast(OSNumber, dict->getObject("brightness-nits"));' in backlight
+assert 'value = nitsToBrightness(requested);' in backlight
+
+# ---- 5. The panel model ----------------------------------------------------------------------------------------------
+PANEL, FLOOR = 2047, 64
+NITS_MAX = 400 << 16
+r7s = [37.7215, 47.7215, 51.0549, 84.3882, 137.9125, 103.5238]  # r7s Begin ramp L_target values, never shown
+probe = [int(n * 65536) for n in r7s] + list(range(-65536, 420 << 16, 4099)) + [0, NITS_MAX, NITS_MAX + 1, 0x7fffffff]
+model = r'''
+#include <cstdio>
+#include "SwitchBacklightMath.h"
+using namespace switch_backlight;
+int main() {
+    static const long long probe[] = {%s};
+    printf("consts %%u %%u %%u %%u %%u\n", kNitsMax, kNitsMid, kNitsMin, toRaw(0), toRaw(kMax));
+    for (unsigned raw = 0; raw <= kPanelMax + 2; ++raw) {
+        if (raw >= kFloorRaw && raw <= kPanelMax && toRaw(toBrightness(raw)) != raw) { printf("RT %%u\n", raw); return 1; }
+    }
+    for (long long n : probe) {
+        const int32_t v = (int32_t)n;
+        printf("%%d %%u %%u %%u\n", v, nitsToRaw(v), toRaw(nitsToBrightness(v)), rawToNits(nitsToRaw(v)));
+    }
+    return 0;
+}
+''' % ', '.join(str(n) for n in probe)
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    (work / 'bl.cpp').write_text(model)
+    subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I', str(root), str(work / 'bl.cpp'), '-o',
+                    str(work / 'bl')], check=True)
+    lines = subprocess.run([str(work / 'bl')], check=True, capture_output=True, text=True).stdout.splitlines()
+consts = list(map(int, lines[0].split()[1:]))
+assert consts[:2] == [400 << 16, 140 << 16]
+assert consts[2] == round((400 << 16) * FLOOR / PANEL) and abs(consts[2] / 65536 - 12.506) < 0.01  # lMinPanel = floor
+assert consts[3:] == [FLOOR, PANEL]  # the legacy brightness mapping, as before
+shown = {}
+previous = None
+for line in lines[1:]:
+    v, raw, ramp, back = map(int, line.split())
+    expect = min(PANEL, max(FLOOR, (v * PANEL + NITS_MAX // 2) // NITS_MAX)) if v > 0 else FLOOR  # nearest level
+    assert raw == expect, (v, raw, expect)
+    assert ramp == raw, (v, raw, ramp)              # the ramp's brightness shows that level
+    assert abs(back - raw * NITS_MAX / PANEL) <= 1  # the readback is that level's nits
+    if previous is not None and v >= previous[0]:
+        assert raw >= previous[1], (v, raw, previous)  # monotonic
+    previous = (v, raw)
+    shown[v] = raw
+targets = [shown[int(n * 65536)] for n in r7s]
+assert targets == [193, 244, 261, 432, 706, 530], targets  # 38..138 nits: panel 193..706 (r7s stayed at 525)
+assert shown[0] == FLOOR and shown[NITS_MAX] == PANEL and shown[0x7fffffff] == PANEL
 
 print(f'SwitchALS: {rows} lux/gain cases match bh1730.c (worst +{worst} lux); I2C2 row, pinmux 0x40, drive DRVDN 0x1f '
       f'and BH1730 commands match Atmosphere, L4T, Linux, hekate and the datasheet; window tables continuous; '
-      f'CoreBrightness ALS and backlight calibration keys present')
+      f'CoreBrightness ALS and backlight calibration keys present; brightness-nits {targets} on the panel')

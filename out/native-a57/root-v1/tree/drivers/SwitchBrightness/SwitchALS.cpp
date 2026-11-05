@@ -382,9 +382,11 @@ void SwitchALS::sample()
         return;
     }
     const uint32_t visible = (uint32_t)data[1] << 8 | data[0], ir = (uint32_t)data[3] << 8 | data[2];
-    const uint32_t level = lux(visible, ir, gain);
-    dispatch(level, visible, ir);
-    noteStats(level, visible, ir);
+    if (!saturated(visible, ir) || gain == 0) {  // a clipped reading at a higher gain only steps the gain down
+        const uint32_t level = lux(visible, ir, gain);
+        dispatch(level, visible, ir);
+        noteStats(level, visible, ir);
+    }
 
     const unsigned next = nextGain(gain, visible, ir);
     if (next == gain) return;
