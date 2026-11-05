@@ -8284,17 +8284,12 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		    /* Explicitly false: earlier boots wrote true into the user plist, which this managed key overrides.
 		     * True makes SpringBoard hold FrontBoard's PreventIdleSleep ("SBPowerDefaults") forever. */
 		    "<key>SBDisableIdleSleep</key><false/>"
-		    /* The 7" panel shows 1280x720 points at scale 1 (UIScreen.scale is an integer all the way down,
-		     * so no fractional zoom): large icons and the text size below keep things legible and crisp. */
-		    "<key>SBHomeLargeIcons</key><true/>"
 		    /* Fixed volume buttons. SpringBoard swaps volume up and down by interface orientation
 		     * (SBVolumeButtonEventMapper) for an iPad's top-edge or right-edge buttons. It puts them on the
-		     * top edge here: no iPad without a home button is as small as 720x1280 points, so the screen
+		     * top edge here: no iPad without a home button is as small as 450x800 points, so the screen
 		     * type falls back to the iPad mini 6. In orientation 4 that swap turns Vol- into Vol+. With it
 		     * off, Vol+ (PX6) raises the volume in every interface orientation the Switch rotates to. */
 		    "<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"), kSetupManaged},
-		{"com.apple.UIKit", IOSW_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
-		    "<string>UICTContentSizeCategoryXXL</string>"), kSetupOnce}, /* the default; the user's Text Size then sticks */
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
 		{"com.apple.migration", IOSW_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
