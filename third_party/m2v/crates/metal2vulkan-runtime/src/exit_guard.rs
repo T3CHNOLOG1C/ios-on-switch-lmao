@@ -782,7 +782,10 @@ pub(crate) fn raise_to_user_initiated() {}
 
 /// Run this thread at the user-interactive quality of service, whatever its class: a thread of
 /// the runtime's own that takes command buffers to their handlers ([`spawn_user_interactive`]).
-#[cfg(target_os = "macos")]
+// iOS as macOS (ioswitch r6-lows): built for aarch64-apple-ios, these threads ran at QOS_CLASS_DEFAULT, below the render
+// server that waits on them (waitUntilScheduled each frame) and level with every busy daemon: under load commit to completion
+// took 11-38 ms (frontend gpu=) where the kernel's fence took 2-5 ms, and waitUntilScheduled 5-34 ms per command buffer.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn run_at_user_interactive() {
     // Metal runs every command buffer's scheduled and completed handlers at the user-interactive
     // class, whatever the class of the thread that committed it: measured on an M3 Max, macOS
@@ -902,8 +905,8 @@ impl SchedAttr {
     }
 }
 
-/// Nothing: no such hint here ([`run_at_user_interactive`] on macOS and Linux).
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Nothing: no such hint here ([`run_at_user_interactive`] on macOS, iOS and Linux).
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 fn run_at_user_interactive() {}
 
 /// Whether this thread runs at the user-initiated quality of service or above: its class is
