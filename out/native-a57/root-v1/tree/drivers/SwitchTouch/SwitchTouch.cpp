@@ -30,6 +30,7 @@
 #include <pexpert/pexpert.h>
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../SwitchPower/SwitchPower.h"
 #include "SwitchHID.h"
 #include "SwitchTouch.h"
 
@@ -279,6 +280,9 @@ void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, i
     auto *self = OSDynamicCast(SwitchTouch, owner);
     if (!self) return;
     const bool shown = switch_display_is_on();
+    // A touch on a lit screen: the CPU and GPU governors go to their top points now, before the FIFO read, so the
+    // frame that answers this touch already runs at full clock (SwitchPower.h; a few stores).
+    if (shown) switch_perf_hint(SWITCH_PERF_HINT_TOUCH);
     bool any = false;
     for (unsigned round = 0; round < 4; ++round) {
         unsigned count = 0;

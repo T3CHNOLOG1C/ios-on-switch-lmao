@@ -27,6 +27,7 @@
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
 #include "TegraDisplayPower.h"
+#include "../SwitchPower/SwitchPower.h"
 extern "C" __attribute__((noreturn)) void native_legacy_backend_guard(unsigned, void *, void *);
 extern "C" IOService *native_legacy_display_allocate(void);
 extern "C" bool native_legacy_gop_mapping_observed(IOService *, IOMemoryMap *, uint32_t, uint32_t);
@@ -670,6 +671,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // is the presented frame's own times (all 0 if not known).
     void notePresent(uint64_t stamp, uint64_t latchedAt, const FrameMark &mark)
     {
+        if (stamp) noteMissedFrame(stamp);
         if (!stats || !stamp) return;
         ++stPresents;
         ++stLatch[latchedAt <= 1 ? 0 : 1];
@@ -712,6 +714,23 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             cause = kLongLatch;
         ++stLong[cause];
         stLongFrames[cause] += frames - 1;
+    }
+    // A present two or more refresh periods after the one before it, right after one that came a single period
+    // after its own (a full-rate animation broke cadence; a steady 30 Hz client is not a miss), and while frames keep
+    // coming (gaps under kGapUs; longer ones are a screen that went still): the CPU and GPU governors go to their top
+    // points for a while (SwitchPower.h). Independent of ioswitch-display-stats; its own stamps, under the gate.
+    uint64_t missLast = 0, missFrames = 0;
+    void noteMissedFrame(uint64_t stamp)
+    {
+        const uint64_t last = missLast, before = missFrames;
+        missLast = stamp;
+        missFrames = 0;
+        if (!last || stamp <= last) return;
+        const uint64_t us = Span::ticksToUs(stamp - last);
+        if (us >= kGapUs) return;
+        const uint64_t period = vsyncInterval ? Span::ticksToUs(vsyncInterval) : 16667;
+        missFrames = (us + period / 2) / period;
+        if (missFrames >= 2 && before == 1) switch_perf_hint(SWITCH_PERF_HINT_FRAME_MISS);
     }
     bool vsyncWanted() const
     {

@@ -10,8 +10,9 @@
 // (shim/), so voltages, LUT, tuning and calibration are exactly L4T's. platform.c holds the board: the DT node
 // (switchroot OLED DT), CAR clocks/reset, fuses, VDD_CPU = MAX77812 M4 on I2C5.
 //
-// Nothing here runs unless called. The caller (SwitchThermal, boot-arg switch-cpu-mode=dfll) owns the policy: it
-// picks the rate, maps temperature to the L4T thermal indices below and decides when to leave DFLL mode. Every call
+// Nothing here runs unless called. The caller (SwitchThermal: its on-demand governor by default, or a fixed 1785 MHz
+// with switch-cpu-mode=dfll) owns the policy: it picks the rate, maps temperature to the L4T thermal indices below and
+// decides when to leave DFLL mode. Every call
 // is thread context only (I2C5 and IOSleep), serialized internally; none may run from an interrupt or with a spinlock
 // held. Interrupts: none needed. L4T keeps the DFLL interrupt (GIC SPI 62, output min/max limits) masked
 // (DFLL_INTR_EN = 0) and drives the loop from two timers, both XNU thread calls here: the low->high tuning step
@@ -30,7 +31,7 @@
 //     and hekate enables it "to avoid issues with I2C5 sharing" (hw_init.c:413-414);
 //   * the DFLL's I2C master divides I2C5's module clock (DT clocks "i2c" = TEGRA210_CLK_I2C5), read once at probe,
 //     and L4T only sets that clock at I2C5 probe; it must not change afterwards.
-// TegraI2C sets MULTI_MASTER_MODE on I2C5 when switch-cpu-mode=dfll (tegra_dfll_cpu_enable() refuses without it;
+// TegraI2C sets MULTI_MASTER_MODE on I2C5 unless switch-cpu-mode=pll (tegra_dfll_cpu_enable() refuses without it;
 // this driver only reads I2C_CNFG) and repeats a transfer that lost arbitration up to 3 times, so TEGRA_I2C_EARB
 // reaches a caller only when the DFLL kept winning the bus.
 //
@@ -65,6 +66,12 @@ enum {
 	TEGRA_DFLL_CAP_STATES = 3,
 };
 
+// The highest CPU rate this driver will run: Horizon's own boost-mode clock on Mariko, 1785 MHz (the CPU table HOS's
+// PCV uses; also sys-clk's "1785 -> max clock, boost mode"). CTCaer's L4T tables go on to 2397 MHz (overclocks,
+// clk-tegra124-dfll-fcpu.c tegra210b01_cpu_max_freq_table "Overclocked from ..."), with max_millivolts raised to
+// 1235 mV for them; enable and set_rate refuse anything above this instead (-EINVAL).
+#define TEGRA_DFLL_CPU_MAX_HZ 1785000000UL
+
 // Reads the fuses (CPU speedo/process, L4T speedo-tegra210.c), builds the CVB OPP table and the DFLL LUT, finds
 // VDD_CPU's MAX77812 and initializes the DFLL block in its disabled state with its I2C output off (L4T's probe).
 // Never touches the CPU clock or VDD_CPU. Idempotent; a failure is final for the boot, except -EAGAIN (the MAX77812
@@ -78,11 +85,13 @@ int tegra_dfll_cpu_prepare(char *why, size_t len);
 // M4_VOUT (read over TegraI2C) equals the LUT entry the DFLL last sent; on any failure after the switch it returns to
 // PLLX (as tegra_dfll_cpu_disable_to_pllx) before returning the error. The DVCO target is rate_hz rounded down to a
 // 25.5 MHz step (the 51 MHz reference / 2); below the DVCO's minimum (set by the thermal floor) the output skipper
-// delivers the rate in 1/256 steps (clk-dfll.c dfll_calculate_rate_request). A rate above the table's top fails with
-// -EINVAL. Already enabled: same as set_rate.
+// delivers the rate in 1/256 steps (clk-dfll.c dfll_calculate_rate_request). A rate above the table's top or above
+// TEGRA_DFLL_CPU_MAX_HZ fails with -EINVAL. Already enabled: same as set_rate.
 int tegra_dfll_cpu_enable(unsigned long rate_hz, char *why, size_t len);
 
-// New closed-loop target (clk-dfll.c dfll_request_rate). -EPERM if not enabled.
+// New closed-loop target (clk-dfll.c dfll_request_rate). -EPERM if not enabled, -EINVAL above TEGRA_DFLL_CPU_MAX_HZ.
+// A few register writes under the driver's spin lock (the voltage follows in hardware, over the DFLL's own I2C
+// master; crossing the tuning threshold arms L4T's 2 ms tune timer until the PMIC got there).
 int tegra_dfll_cpu_set_rate(unsigned long rate_hz);
 
 // Applies L4T thermal indices (tegra_dfll_update_thermal_index): floor 0..2, cap 0..2. Before prepare they are
@@ -94,6 +103,22 @@ int tegra_dfll_cpu_set_thermal(unsigned floor_index, unsigned cap_index);
 // over TegraI2C, then 1 ms for the 5 mV/us slew), cclk_g to PLLX if PLLX is still locked. If VDD_CPU cannot be
 // restored or PLLX is not locked the CPU stays on PLLP at 408 MHz and this fails. 0 if not enabled.
 int tegra_dfll_cpu_disable_to_pllx(char *why, size_t len);
+
+// The OPP table prepare built (L4T cvb.c build_opp_table from this chip's CVB row: rates with their CVB voltages,
+// rounded up to the 5 mV step and clamped to [the CVB Vmin, the table's max_millivolts]), ascending, rates up to
+// max_hz (never above TEGRA_DFLL_CPU_MAX_HZ): kHz into khz[], mV into mv[], at most cap rows. Returns the row count,
+// or a negative errno before a successful prepare.
+int tegra_dfll_cpu_opps(unsigned long max_hz, unsigned int *khz, unsigned int *mv,
+			unsigned int cap);
+
+// The thermal floor and cap now in force, in mV (L4T tegra_dfll_get_thermal_floor_mv / _cap_mv: the LUT voltages the
+// floor and cap indices select). -EPERM before a successful prepare.
+int tegra_dfll_cpu_thermal_mv(unsigned int *floor_mv, unsigned int *cap_mv);
+
+// For a periodic log line: the closed-loop target, the rate the DFLL's monitor measured (one read, as describe) and
+// the VDD_CPU code its I2C master last sent, in mV; all 0 when the CPU is not on the DFLL. Takes the API lock.
+void tegra_dfll_cpu_status(unsigned long *target_hz, unsigned long *measured_hz,
+			   unsigned int *vdd_mv);
 
 // One line for the boot log: SKU, CPU speedo id/value and process id; after prepare also the CVB table chosen, its
 // voltage range and top rate, the CVB voltage at rate_hz (0: the current DFLL target); when enabled the DFLL's mode,

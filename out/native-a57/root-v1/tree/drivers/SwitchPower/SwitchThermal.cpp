@@ -48,8 +48,9 @@
 //
 // CPU operating point (off unless switch-perf=1). XNU does no DVFS, so the A57 cluster otherwise stays
 // where hekate left it: 998.4 MHz on PLLX at 800 mV (SwitchClocks.h). Only from this service's own work
-// loop, once it has a good reading and the ALERT armed, the CPU climbs a short ladder of L4T rates
-// (switch-cpu-mode=pll, the default; =dfll is L4T's own closed-loop mode, see below). Sources: "L4T" =
+// loop, once it has a good reading and the ALERT armed, the CPU goes on L4T's closed-loop DFLL with an on-demand
+// governor (the default, see "DFLL on demand" below), or climbs a short ladder of L4T rates on PLLX and stays there
+// (switch-cpu-mode=pll; also the fallback whenever the DFLL or its governor fails). Sources: "L4T" =
 // CTCaer/switch-l4t-kernel-4.9 2d0059fd; DT = switchroot tegra210b01-nx-pmic.dtsi / nx-common.dtsi.
 //   * L4T has no PLLX voltage for these rates on T210B01. Its PLL table (tegra210-dvfs.c:571-601,
 //     CPUB01_PLL_CVB_TABLE) is a flat 1120 mV from 1020 MHz, but set_cpu_dvfs_data() adds CVB_PLL_MARGIN
@@ -100,12 +101,19 @@
 //     super-clock mux switches glitch-free (L4T clk-super.c switches it under a spinlock with udelay(2)),
 //     the generic timer is not on CCLK, and TegraI2C serializes I2C5 with the GPU's VDD_GPU traffic (it
 //     writes M1_VOUT and EN_CTRL, never M4).
-//   * switch-cpu-mode=dfll: L4T's normal mode instead, the DFLL in closed loop (drivers/TegraDFLL,
-//     vendored clk-dfll.c) at the 1785 MHz CVB row, with the per-chip CVB voltage (roughly 875-1015 mV
-//     for CPU speedos 1850-1450). There the thermal trips do not drop the clock; they set the DFLL's L4T
-//     voltage cap and floor indices (cap 1060 mV from 64 C, 1010 mV from 84 C, floor 800 mV below 20 C;
+//   * DFLL on demand (no switch-cpu-mode, the default): L4T's normal mode, the DFLL in closed loop (drivers/TegraDFLL,
+//     vendored clk-dfll.c), entered at the 1785 MHz CVB row (Horizon's boost clock, the most this port ever runs:
+//     TEGRA_DFLL_CPU_MAX_HZ), then moved by SwitchPerfGovernor.cpp between the DFLL's own OPP rows from the CVB Vmin
+//     row (918 MHz at 620 mV on speedo 1659) up to 1785 MHz as the scheduler's load, touches, missed frames and
+//     launches ask; the boot holds the top until System Boot Complete. Each pair is L4T's: the DFLL's CVB voltage for
+//     that row, set by the DFLL itself over its I2C master. A rate the DFLL refuses logs one line and falls back to
+//     the PLL ladder below (today's fixed 1670 MHz at 1120 mV on this chip) for the rest of the boot.
+//   * switch-cpu-mode=dfll: the same DFLL, fixed at the 1785 MHz CVB row, with the per-chip CVB voltage (roughly
+//     875-1015 mV for CPU speedos 1850-1450). In both DFLL modes the thermal trips do not drop the clock; they set
+//     the DFLL's L4T voltage cap and floor indices (cap 1060 mV from 64 C, 1010 mV from 84 C, floor 800 mV below 20 C;
 //     1 C hysteresis, tegra210b01-nx-common.dtsi dfll-cap-trip*/dfll-floor-trip0), and the ALERT window is
-//     cut at the next of those boundaries so each change comes by interrupt. If the DFLL cannot be
+//     cut at the next of those boundaries so each change comes by interrupt (governed: they also become the
+//     governor's lowest and highest points, the rows at or under the floor and cap voltages). If the DFLL cannot be
 //     prepared or enabled (one log line saying why; it refuses while I2C5 is not in multi-master mode) the
 //     PLL mode is used for the rest of the boot. Losing the sensor returns the CPU to PLLX for good.
 //     switch_thermal_cpu_quiesce() hands the CPU back to PLLX before SwitchPMIC's shut-down and restart
@@ -134,7 +142,10 @@
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchClocks.h"
 #include "../TegraDFLL/TegraDFLL.h"
+#include "SwitchGovernor.h"
+#include "SwitchPerfGovernor.h"
 #include "SwitchPower.h"
+#include <os/log.h>
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -266,6 +277,7 @@ constexpr uint8_t kPeakCurrentMask = 0x70, kPeakCurrent7200mA = 7u << 4, kVersio
 // T210B01 thermal boundaries for the DFLL's floor and cap indices (dt-bindings/thermal/tegra210b01-trips.h
 // TEGRA210B01_DFLL_THERMAL_FLOOR_0 / _CAP_0 / _CAP_1; 1 C hysteresis as the DT trips).
 constexpr unsigned long kDfllRateHz = 1785000000UL;
+static_assert(kDfllRateHz <= TEGRA_DFLL_CPU_MAX_HZ, "never above Horizon's boost clock");
 constexpr int kDfllFloorWarmMilliC = 20000, kDfllCap1MilliC = 64000, kDfllCap2MilliC = 84000;
 constexpr int kDfllBoundaries[] = {kDfllFloorWarmMilliC, kDfllCap1MilliC, kDfllCap2MilliC};
 
@@ -382,7 +394,10 @@ class SwitchThermal : public IOService {
     // thermal trip only holds it down until perfHoldUntil.
     bool perfWanted = false, perfRaised = false, perfSettled = false, perfKept = false, perfTrace = false;
     bool perfRelocked = false, perfLimited = false;  // steps 1 and 2 are done once per boot (and SC7)
-    bool dfllMode = false, dfllPrepared = false;     // switch-cpu-mode=dfll, and still usable this boot
+    bool dfllMode = false, dfllPrepared = false;     // the CPU goes on the DFLL, and it is still usable this boot
+    bool governed = false;                           // on the DFLL, the clock follows the load (switchperf)
+    IOInterruptEventSource *governor = nullptr;      // switchperf's signal: a software interrupt of this work loop
+    int lastSoc = 0;                                 // the last good SoC reading (m C)
     unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;  // the driver's boot defaults
     unsigned perfRaises = 0, perfSteps = ~0u;                                     // switch-perf-steps
     unsigned perfTop = 0, perfRung = 0;  // rungs this chip may use; the rung running now (0: boot clock)
@@ -411,6 +426,10 @@ class SwitchThermal : public IOService {
     bool setCurrentLimit();
     bool raiseRail();
     bool raiseDfll(int soc);
+    bool startGovernor(char *why, size_t len);
+    void governorLimits();
+    static void governorSignal(void *ctx);
+    static void governorFired(OSObject *owner, IOInterruptEventSource *sender, int count);
     void trace(const char *format, ...) __printflike(2, 3);
     void updateDfllThermal(int soc);
 
@@ -435,6 +454,8 @@ public:
 OSDefineMetaClassAndStructors(SwitchThermal, IOService)
 
     static SwitchThermal *gThermal;
+// The last good SoC reading for other drivers (switch_thermal_soc_millic); INT32_MIN without one.
+static int gSocMilliC = INT32_MIN;
 
 bool SwitchThermal::mapRegisters()
 {
@@ -508,6 +529,7 @@ void SwitchThermal::failSafe(const char *what, int err)
     setDrive(kFullDrive);
     publish("FanDrive", kFullDrive);
     sensorReady = false;
+    __atomic_store_n(&gSocMilliC, INT32_MIN, __ATOMIC_RELAXED);
     restoreCpu(what, true);  // no raised clocks without a working sensor, for the rest of the boot
     if (!reportedFailure) IOLog("SwitchThermal: %s (%d), fan at full speed\n", what, err);
     reportedFailure = true;
@@ -613,6 +635,8 @@ bool SwitchThermal::evaluate()
     int soc = 0, pcb = 0;
     if (!readTemperatures(&soc, &pcb)) return false;
     reportedFailure = false;
+    lastSoc = soc;
+    __atomic_store_n(&gSocMilliC, soc, __ATOMIC_RELAXED);
 
     const int socSkin = skin(profile->soc, soc), pcbSkin = skin(profile->pcb, pcb);
     const int estimate = socSkin > pcbSkin ? socSkin : pcbSkin;
@@ -912,13 +936,21 @@ void SwitchThermal::updateDfllThermal(int soc)
     }
     dfllFloor = floorIndex;
     dfllCap = capIndex;
+    governorLimits();
+}
+
+// The DFLL's floor and cap now in force, as the governor's lowest and highest points. Work loop only.
+void SwitchThermal::governorLimits()
+{
+    unsigned floorMv = 0, capMv = 0;
+    if (switchperf::running() && !tegra_dfll_cpu_thermal_mv(&floorMv, &capMv)) switchperf::limits(floorMv, capMv);
 }
 
 // DFLL mode raise: prepare once, set the thermal indices for this temperature, then enable at the 1785 MHz row.
 // Any failure (one log line with the driver's reason) leaves the CPU on PLLX and the PLL mode for the boot.
 bool SwitchThermal::raiseDfll(int soc)
 {
-    char why[160] = "";
+    char why[256] = "";
     int err = dfllPrepared ? 0 : tegra_dfll_cpu_prepare(why, sizeof(why));
     if (!err) {
         dfllPrepared = true;
@@ -928,19 +960,94 @@ bool SwitchThermal::raiseDfll(int soc)
     }
     if (err) {
         dfllMode = false;
+        governed = false;
         IOLog("SwitchPerf: DFLL not used (%d: %s); PLL mode for this boot\n", err, why);
         return false;
     }
     perfRaised = true;
     ++perfRaises;
+    if (governed && !startGovernor(why, sizeof(why))) {
+        // One line, then today's fixed point: off the DFLL, and raiseCpu() goes on up the PLL ladder.
+        IOLog("SwitchPerf: CPU governor not started (%s); PLL mode for this boot\n", why);
+        governed = false;
+        restoreCpu("no governor", false);
+        return false;
+    }
     char state[224];
     tegra_dfll_cpu_describe(kDfllRateHz, state, sizeof(state));
     const unsigned mhz = switchclk::readCpu(car).kHz / 1000;
     publish("CPUClockMHz", mhz);
     publish("CPURaises", perfRaises);
-    IOLog("SwitchPerf: CPU on the DFLL at %lu MHz (raise %u; SoC %d.%d C): %s\n", kDfllRateHz / 1000000, perfRaises,
-          soc / 1000, soc % 1000 / 100, state);
+    IOLog("SwitchPerf: CPU on the DFLL at %lu MHz%s (raise %u; SoC %d.%d C): %s\n", kDfllRateHz / 1000000,
+          governed ? ", on demand from here" : "", perfRaises, soc / 1000, soc % 1000 / 100, state);
+    if (governed) IOLog("SwitchPerf: %s\n", why);  // the governor's table and tunables
     return true;
+}
+
+// Governed DFLL mode: the governor's points from the DFLL's own OPP table (switch_gov_cpu_table: the CVB Vmin row up to
+// 1785 MHz), the clock already at the top (enable's rate). Work loop only. `why` gets the reason on failure, the
+// table on success.
+bool SwitchThermal::startGovernor(char *why, size_t len)
+{
+    uint32_t rowKhz[32], rowMv[32], khz[SWITCH_GOV_MAX_OPPS], mv[SWITCH_GOV_MAX_OPPS];
+    const int rows = tegra_dfll_cpu_opps(kDfllRateHz, rowKhz, rowMv, 32);
+    if (rows <= 0) {
+        snprintf(why, len, "no DFLL operating points (%d)", rows);
+        return false;
+    }
+    const unsigned count =
+        switch_gov_cpu_table(rowKhz, rowMv, (unsigned)rows, kDfllRateHz / 1000, rowMv[0], khz, mv, SWITCH_GOV_MAX_OPPS);
+    if (!count || khz[count - 1] != kDfllRateHz / 1000) {
+        snprintf(why, len, "the DFLL table ends at %u kHz, not %lu", count ? khz[count - 1] : 0, kDfllRateHz / 1000);
+        return false;
+    }
+    if (!governor) {
+        governor = IOInterruptEventSource::interruptEventSource(this, &SwitchThermal::governorFired);
+        if (!governor || loop->addEventSource(governor) != kIOReturnSuccess) {
+            OSSafeReleaseNULL(governor);
+            snprintf(why, len, "no work loop source");
+            return false;
+        }
+        governor->enable();
+    }
+    if (!switchperf::start(khz, mv, count, count - 1, &SwitchThermal::governorSignal, this, why, len)) return false;
+    governorLimits();
+    size_t n = (size_t)snprintf(why, len, "CPU governor: %u points (L4T CVB, MHz@mV):", count);
+    for (unsigned i = 0; i < count && n < len; ++i)
+        n += (size_t)snprintf(why + n, len - n, " %u@%u", khz[i] / 1000, mv[i]);
+    if (n < len) snprintf(why + n, len - n, "; top until System Boot Complete");
+    return true;
+}
+
+// From any context (switchperf's decisions: the scheduler's callout, a hint's interrupt or thread): wake the work loop.
+void SwitchThermal::governorSignal(void *ctx)
+{
+    auto *self = static_cast<SwitchThermal *>(ctx);
+    if (self->governor) self->governor->interruptOccurred(nullptr, nullptr, 0);
+}
+
+// Work loop: the point switchperf decided, onto the DFLL. A refusal logs one line and falls back to today's fixed
+// point: governor stopped, CPU back on PLLX, then the PLL ladder (1670 MHz on this chip) from the next evaluation, a
+// millisecond later (the ALERT window is re-armed for the PLL mode's trip there).
+void SwitchThermal::governorFired(OSObject *owner, IOInterruptEventSource *, int)
+{
+    auto *self = OSDynamicCast(SwitchThermal, owner);
+    if (!self || !switchperf::running()) return;
+    char line[700];
+    const unsigned index = switchperf::take(line, sizeof(line));
+    if (line[0]) os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
+    if (!self->perfRaised || !self->dfllMode || !self->governed) return;
+    const unsigned long hz = (unsigned long)switchperf::khzAt(index) * 1000;
+    if (switch_perf_cpu_khz() * 1000ul == hz) return;
+    const int err = hz ? tegra_dfll_cpu_set_rate(hz) : -22;  // -EINVAL
+    if (!err) {
+        switchperf::applied(index);
+        return;
+    }
+    IOLog("SwitchPerf: the DFLL refused %lu MHz (%d); CPU governor off, PLL mode for this boot\n", hz / 1000000, err);
+    self->governed = false;
+    self->restoreCpu("governor off", false);
+    self->timer->setTimeoutMS(1);  // the next evaluation raises it the PLL way (no hold-off after a DFLL restore)
 }
 
 // Hands the CPU back to PLLX (DFLL mode only) on this service's work loop, before SwitchPMIC's shut-down/restart
@@ -1023,6 +1130,7 @@ void SwitchThermal::restoreCpu(const char *why, bool forGood)
     if (!perfRaised) return;
     perfRaised = false;
     if (forGood) perfSettled = true;
+    switchperf::stop();  // no more decisions; the DFLL is about to go
     if (dfllMode) {
         char because[160] = "";
         const int err = tegra_dfll_cpu_disable_to_pllx(because, sizeof(because));
@@ -1202,11 +1310,16 @@ bool SwitchThermal::start(IOService *provider)
     perfTrace = perfWanted && traced != 0;
     // Traced: the first raise waits until the console has caught up with the boot (a one-shot of the timer).
     if (perfTrace) clock_interval_to_deadline(kTraceDelayMS, kMillisecondScale, &perfHoldUntil);
-    // switch-cpu-mode=pll|dfll (default pll; see the top of the file).
-    char mode[8] = "pll";
+    // switch-cpu-mode=pll|dfll; without it the DFLL with the on-demand governor (see the top of the file).
+    char mode[8] = "";
+    dfllMode = governed = true;
     if (PE_parse_boot_arg_str("switch-cpu-mode", mode, sizeof(mode))) {
-        dfllMode = strcmp(mode, "dfll") == 0;
-        if (!dfllMode && strcmp(mode, "pll") != 0) IOLog("SwitchPerf: switch-cpu-mode=%s unknown; PLL mode\n", mode);
+        dfllMode = strcmp(mode, "pll") != 0;
+        governed = false;
+        if (dfllMode && strcmp(mode, "dfll") != 0) {
+            IOLog("SwitchPerf: switch-cpu-mode=%s unknown; DFLL on demand\n", mode);
+            governed = true;
+        }
     }
     loop = IOWorkLoop::workLoop();
     timer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchThermal::timerFired) : nullptr;
@@ -1232,6 +1345,12 @@ bool SwitchThermal::start(IOService *provider)
 
 void SwitchThermal::free()
 {
+    switchperf::stop();
+    if (governor) {
+        governor->disable();
+        if (loop) loop->removeEventSource(governor);
+        governor->release();
+    }
     if (alert) {
         alert->disable();
         if (loop) loop->removeEventSource(alert);
@@ -1263,6 +1382,13 @@ extern "C" int switch_thermal_start(void)
     }
     gThermal = candidate;
     return 0;
+}
+
+// The SoC diode's last good reading in m C (INT32_MIN before one, or after the sensor was lost): TegraGM20B's governor
+// holds VDD_GPU at its ceiling below 21 C (L4T's 800 mV floor under 20 C). Any context.
+extern "C" int switch_thermal_soc_millic(void)
+{
+    return __atomic_load_n(&gSocMilliC, __ATOMIC_RELAXED);
 }
 
 extern "C" void switch_thermal_cpu_quiesce(void)

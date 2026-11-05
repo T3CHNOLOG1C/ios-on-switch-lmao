@@ -217,6 +217,9 @@ int tegra_dfll_cpu_enable(unsigned long rate_hz, char *why, size_t len)
 	unsigned long now;
 	int ret;
 
+	if (rate_hz > TEGRA_DFLL_CPU_MAX_HZ)
+		return fail(why, len, -EINVAL, "%lu kHz is above Horizon's %lu kHz CPU maximum",
+			    rate_hz / 1000, TEGRA_DFLL_CPU_MAX_HZ / 1000);
 	lock();
 	if (st.enabled) {
 		ret = clk_set_rate(st.dfll, rate_hz);
@@ -274,6 +277,8 @@ int tegra_dfll_cpu_set_rate(unsigned long rate_hz)
 {
 	int ret = -EPERM;
 
+	if (rate_hz > TEGRA_DFLL_CPU_MAX_HZ)
+		return -EINVAL;
 	lock();
 	if (st.enabled)
 		ret = clk_set_rate(st.dfll, rate_hz);
@@ -312,6 +317,71 @@ int tegra_dfll_cpu_disable_to_pllx(char *why, size_t len)
 	}
 	unlock();
 	return ret;
+}
+
+int tegra_dfll_cpu_opps(unsigned long max_hz, unsigned int *khz, unsigned int *mv, unsigned int cap)
+{
+	struct device *cpu = get_cpu_device(0);
+	struct dev_pm_opp *opp;
+	unsigned long rate = 0;
+	unsigned int n = 0;
+	int ret = -EPERM;
+
+	if (max_hz > TEGRA_DFLL_CPU_MAX_HZ)
+		max_hz = TEGRA_DFLL_CPU_MAX_HZ;
+	lock();
+	if (st.prepared) {
+		/* cvb.c added the rows in table order, ascending; walk them with the OPP lookups dfll.c uses */
+		while (n < cap && !IS_ERR(opp = dev_pm_opp_find_freq_ceil(cpu, &rate)) &&
+		       rate <= max_hz) {
+			khz[n] = rate / 1000;
+			mv[n] = dev_pm_opp_get_voltage(opp) / 1000;
+			n++;
+			rate++;
+		}
+		ret = n;
+	}
+	unlock();
+	return ret;
+}
+
+int tegra_dfll_cpu_thermal_mv(unsigned int *floor_mv, unsigned int *cap_mv)
+{
+	int ret = -EPERM;
+
+	lock();
+	if (st.prepared) {
+		*floor_mv = tegra_dfll_get_thermal_floor_mv();
+		*cap_mv = tegra_dfll_get_thermal_cap_mv();
+		ret = 0;
+	}
+	unlock();
+	return ret;
+}
+
+/* clk-dfll.c dfll_calc_monitored_rate + dfll_scale_dvco_rate, one read (the monitor is in FREQ mode) */
+static unsigned long measured_hz(void)
+{
+	u32 scale = (tdfll_platform_dfll_readl(DFLL_FREQ_REQ) >> 8) & 0xff;
+
+	if (tdfll_platform_dfll_readl(DFLL_MONITOR_CTRL) != DFLL_MONITOR_CTRL_FREQ)
+		return 0;
+	return (u64)(tdfll_platform_dfll_readl(DFLL_MONITOR_DATA) & 0xffff) * (DFLL_REF_RATE / 4) *
+	       (scale + 1) / 256;
+}
+
+void tegra_dfll_cpu_status(unsigned long *target_hz, unsigned long *measured, unsigned int *vdd_mv)
+{
+	*target_hz = *measured = 0;
+	*vdd_mv = 0;
+	lock();
+	if (st.enabled) {
+		*target_hz = clk_get_rate(st.dfll);
+		*measured = measured_hz();
+		*vdd_mv =
+			MAX77812_UV(dfll_last_sent(tdfll_platform_dfll_readl(DFLL_I2C_STS))) / 1000;
+	}
+	unlock();
 }
 
 /* cvb.c tegra_cvb_add_opp_table's choice, repeated for the description (the driver keeps it in td->soc) */
@@ -364,13 +434,7 @@ void tegra_dfll_cpu_describe(unsigned long rate_hz, char *buf, size_t len)
 	if (st.enabled) {
 		u32 ctrl = tdfll_platform_dfll_readl(DFLL_CTRL),
 		    sent = dfll_last_sent(tdfll_platform_dfll_readl(DFLL_I2C_STS));
-		u32 scale = (tdfll_platform_dfll_readl(DFLL_FREQ_REQ) >> 8) & 0xff;
-		u64 measured = 0;
-
-		/* clk-dfll.c dfll_calc_monitored_rate + dfll_scale_dvco_rate, one read (the monitor is in FREQ mode) */
-		if (tdfll_platform_dfll_readl(DFLL_MONITOR_CTRL) == DFLL_MONITOR_CTRL_FREQ)
-			measured = (u64)(tdfll_platform_dfll_readl(DFLL_MONITOR_DATA) & 0xffff) *
-				   (DFLL_REF_RATE / 4) * (scale + 1) / 256;
+		u64 measured = measured_hz();
 		snprintf(buf + n, len - n,
 			 "; %s, target %lu MHz, measured %llu MHz, VDD_CPU sent %u mV (MAX77812 "
 			 "%#x)",

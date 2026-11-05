@@ -289,9 +289,13 @@ kernel_driver(name = "TegraI2C")
 # SPI4 master for the IMU (drivers/SwitchMotion).
 kernel_driver(name = "TegraSPI")
 
+# SwitchThermal: fan curve, CPU operating point; SwitchPerfGovernor: the CPU's on-demand governor (perfcontrol callouts).
 kernel_driver(
     name = "SwitchThermal",
-    srcs = ["SwitchThermal.cpp"],
+    srcs = [
+        "SwitchThermal.cpp",
+        "SwitchPerfGovernor.cpp",
+    ],
     dir = "drivers/SwitchPower",
 )
 

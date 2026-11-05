@@ -89,6 +89,9 @@ COMMAND_LINE = ' '.join([
     # Off until r3-cpu fixes the park sequence.
     # 10-31 r3-cpu r2: park on PLLP_OUT4 (source 5) with the PLLP_OUT_CPU gate opened, as L4T. Test step 1 only.
     # 10-31 14:34: the whole ladder works: CPU 998 -> 1670 MHz at 1120 mV (speedo 1659, M4_CFG 0xd1 -> 0xf1). Trace off.
+    # 11-05 r15-dvfs: switch-perf=1 now puts the CPU on L4T's DFLL with an on-demand governor (918-1785 MHz at the CVB
+    # voltages, 1785 = Horizon's boost clock, never above; touch/frame-miss/launch boosts, the boot at the top) and falls
+    # back to that ladder (1670 MHz) on any DFLL failure. switch-cpu-mode=pll keeps the fixed ladder, =dfll a fixed 1785.
     'switch-perf=1',
     # Test ladder step 2: EMC (RAM) 204 -> 1600 MHz through the BPMP mailbox, as L4T does. 10-30: refused on every boot
     # ("needs VDD_CORE 1100 mV", a placeholder in hekate's B01 MTC tables); TegraBPMP.c now checks L4T's B01 table (675 mV).

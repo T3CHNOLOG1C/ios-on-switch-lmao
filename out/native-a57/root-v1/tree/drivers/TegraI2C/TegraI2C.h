@@ -23,8 +23,8 @@
 // as-is when it is already clocked: it is never reset or re-clocked because its clock and
 // config are firmware-owned and CL-DVFS shares the PWR_I2C pads (hekate hw_init.c enables
 // CL-DVFS "to avoid issues with I2C5 sharing"); runtime use by the T210B01 BPMP firmware is
-// unverified. A PMIC driver on I2C5 must keep transfers short. With switch-cpu-mode=dfll the
-// DFLL's own I2C master writes VDD_CPU on these pads, so I2C5 runs in MULTI_MASTER_MODE (as L4T
+// unverified. A PMIC driver on I2C5 must keep transfers short. Unless switch-cpu-mode=pll the
+// DFLL's own I2C master may write VDD_CPU on these pads, so I2C5 runs in MULTI_MASTER_MODE (as L4T
 // runs every T210 controller): a transfer that loses arbitration is repeated (up to 3 times)
 // after a FIFO flush, never answered with a reset or bus clear, and TEGRA_I2C_EARB reaches the
 // caller only when every attempt lost. (On Hoag only, MAX77620 LDO8 also powers the I2C1 pads.) The touch panel

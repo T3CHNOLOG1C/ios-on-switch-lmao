@@ -17,9 +17,32 @@ extern "C" {
 // the MMIO part succeeded).
 int switch_thermal_start(void);
 
-// With the CPU on the DFLL (switch-cpu-mode=dfll), moves it back to PLLX so that SwitchPMIC's shut-down/restart
-// I2C5 traffic has the bus to itself; nothing otherwise. Thread context; waits for the thermal work loop.
+// With the CPU on the DFLL (the governed default, or switch-cpu-mode=dfll), moves it back to PLLX so that SwitchPMIC's
+// shut-down/restart I2C5 traffic has the bus to itself; nothing otherwise. Thread context; waits for the thermal work
+// loop.
 void switch_thermal_cpu_quiesce(void);
+
+// Performance hints for the on-demand governors (SwitchPerfGovernor.cpp for the CPU, TegraGM20B for the GPU): the top
+// operating point at once, held for a while after the last hint (BOOT_DONE instead ends the boot's floor). Any
+// context: thread, work loop, primary interrupt, the scheduler's; a few stores under a spin lock, nothing when the
+// governors are off. Callers: SwitchTouch (each touch interrupt), NativeLegacyDisplay (a present two or more refresh
+// periods after the last one, while frames keep coming), XNU exec_activate_image (LAUNCH) and its boot band lift at
+// IOKit's System Boot Complete (BOOT_DONE).
+enum {
+    SWITCH_PERF_HINT_TOUCH = 1,
+    SWITCH_PERF_HINT_FRAME_MISS = 2,
+    SWITCH_PERF_HINT_LAUNCH = 3,
+    SWITCH_PERF_HINT_BOOT_DONE = 4,
+};
+void switch_perf_hint(unsigned int hint);
+
+// The CPU clock the governor last applied, in kHz; 0 when the CPU is not governed (PLL or fixed DFLL mode). Any
+// context (one atomic load): kprof prints it next to its measured per-core clock.
+unsigned int switch_perf_cpu_khz(void);
+
+// The thermal service's last good SoC (TMP451 remote diode) reading in m C; INT32_MIN before the first one or after the
+// sensor was lost. Any context (one atomic load).
+int switch_thermal_soc_millic(void);
 
 // PMIC services (SwitchPMIC.cpp): logs the CPU/EMC clock line, turns on the Wi-Fi/Bluetooth module's 32 kHz sleep
 // clock (MAX77620 GPIO4 as 32K_OUT1 and the 32K output enable, as L4T does; Bluetooth needs it), publishes the
