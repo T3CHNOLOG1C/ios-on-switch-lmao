@@ -6,7 +6,8 @@
 // so it is a late object (Drivers.cmake ioswitch_late_object) whose static initializer runs from
 // switch_joycon_hid_prepare() once IOHIDFamily is loaded. Overrides: NativeHidInput's set (free, start, stop,
 // getWorkLoop, newTransportString, newProductString, newReportDescriptor; the bindings leave exactly those IOHIDDevice
-// slots unbound) and slot 183, setReport (below).
+// slots unbound), slot 183, setReport (below), and handleOpen/handleClose, which call the bound originals and keep
+// the device's backboardd session (below).
 //
 // Unlike the touch screen and buttons, no IOHIDEventDriver may sit on these devices. iPadOS 17's own Joy-Con support
 // is user space (all verified in the 21H461 OS image):
@@ -38,6 +39,14 @@
 //     controller from the plugin and publishes GCController "Joy-Con (L)"/"Joy-Con (R)" (GCExtendedGamepad sideways,
 //     motion, player lights, rumble). Holding Capture (L) and Home (R) together fuses the two into "Joy-Con (L/R)".
 // So this device only has to look like bluetoothd's Joy-Con IOHIDUserDevice: same IDs, descriptor and report bytes.
+//
+// With one addition: a rail device outlives a backboardd restart (a respring), and gamecontrollerd takes only one
+// plugin session per HID service: the restarted backboardd's plugin and GamepadHIDServiceFilter were refused and
+// reconnected in a loop (68094 connections in 7 minutes after the r7p9d respring, gamecontrollerd the top CPU user).
+// So handleOpen/handleClose keep the device's backboardd session (SwitchJoyConSession.h: the first backboardd user
+// client to open it, in practice the plugin's HIDDevice) and report its end, the serving client's close or a different
+// backboardd's open, once to the rail driver, which publishes a new device for the new backboardd
+// (SwitchJoyConRail.cpp, "Sessions").
 //
 // The descriptor is the Joy-Con's own, from its SDP HIDDescriptorList (attribute 0x0206) as captured in switchroot's
 // l4t-initramfs init (line 247): 170 bytes, Generic Desktop/Game Pad; inputs 0x21, 0x30 (48 bytes), 0x31-0x33
@@ -76,7 +85,11 @@
 #include <libkern/c++/OSString.h>
 #include <mach/kmod.h>
 #include <pexpert/pexpert.h>
+#include <IOKit/IOUserClient.h>
+#include <sys/param.h>
+#include <sys/proc.h>
 #include "SwitchJoyConHID.h"
+#include "SwitchJoyConSession.h"
 
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void switch_joycon_hid_static_init(void) __asm__("__GLOBAL__sub_I_SwitchJoyConHID.cpp");
@@ -128,17 +141,28 @@ const uint8_t kButtonsDescriptor[] = {
 class SwitchJoyConDevice : public IOHIDDevice {
     OSDeclareDefaultStructors(SwitchJoyConDevice) IOWorkLoop *loop = nullptr;
     IOBufferMemoryDescriptor *input = nullptr;
-    IOLock *outputLock = nullptr;
+    IOLock *outputLock = nullptr;  // output, ended, outputContext and session
     SwitchJoyConOutput output = nullptr;
+    SwitchJoyConSessionEnded ended = nullptr;
     void *outputContext = nullptr;
+    switch_joycon_session session = {};
     bool left = false;
     char serial[18] = {};
 
+    // Reports the end of the backboardd session (SwitchJoyConHID.h) once, while the rail still listens.
+    void noteSession(switch_joycon_session_event event, int32_t openerPid)
+    {
+        if (event == kSwitchJoyConSessionNone || !ended) return;
+        ended(outputContext, session.pid, openerPid);
+    }
+
 public:
-    bool initWith(bool isLeft, const uint8_t mac[6], SwitchJoyConOutput fn, void *context)
+    bool initWith(bool isLeft, const uint8_t mac[6], SwitchJoyConOutput fn, SwitchJoyConSessionEnded endedFn,
+                  void *context)
     {
         left = isLeft;
         output = fn;
+        ended = endedFn;
         outputContext = context;
         snprintf(serial, sizeof(serial), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4],
                  mac[5]);
@@ -190,7 +214,36 @@ public:
     {
         IOLockLock(outputLock);
         output = nullptr;
+        ended = nullptr;
         outputContext = nullptr;
+        IOLockUnlock(outputLock);
+    }
+
+    // IOService::open/close call these with the device's arbitration lock held, on the opener's thread for a user
+    // client (IOHIDLibUserClient opens from its external method, through its gate: the same thread; the log's
+    // "SwitchJoyConDevice ... open by IOHIDLibUserClient" carries backboardd's thread ID) and on a kernel thread for a
+    // close when the client's task has gone. The originals are IOHIDDevice's (bound); the session needs only the
+    // client's identity, compared and never dereferenced.
+    bool handleOpen(IOService *client, IOOptionBits options, void *arg) override
+    {
+        if (!IOHIDDevice::handleOpen(client, options, arg)) return false;
+        if (!OSDynamicCast(IOUserClient, client)) return true;
+        char name[MAXCOMLEN + 1] = {};
+        proc_selfname(name, sizeof(name));
+        const int32_t pid = proc_selfpid();
+        IOLockLock(outputLock);
+        noteSession(switch_joycon_session_open(&session, reinterpret_cast<uintptr_t>(client), pid,
+                                               !strncmp(name, "backboardd", sizeof(name))),
+                    pid);
+        IOLockUnlock(outputLock);
+        return true;
+    }
+
+    void handleClose(IOService *client, IOOptionBits options) override
+    {
+        IOHIDDevice::handleClose(client, options);
+        IOLockLock(outputLock);
+        noteSession(switch_joycon_session_close(&session, reinterpret_cast<uintptr_t>(client)), 0);
         IOLockUnlock(outputLock);
     }
 
@@ -485,7 +538,8 @@ void switch_joycon_hid_prepare(void)
 
 static SwitchJoyConButtons *gButtons;  // rail work loop only (see the class)
 
-IOService *switch_joycon_hid_create(bool left, const uint8_t mac[6], SwitchJoyConOutput output, void *context)
+IOService *switch_joycon_hid_create(bool left, const uint8_t mac[6], SwitchJoyConOutput output,
+                                    SwitchJoyConSessionEnded ended, void *context)
 {
     switch_joycon_hid_prepare();
     IOService *resources = IOService::getResourceService();
@@ -498,7 +552,7 @@ IOService *switch_joycon_hid_create(bool left, const uint8_t mac[6], SwitchJoyCo
         gButtons = buttons;  // kept for the boot
     }
     auto *device = OSTypeAlloc(SwitchJoyConDevice);
-    if (!resources || !device || !device->initWith(left, mac, output, context) || !device->attach(resources)) {
+    if (!resources || !device || !device->initWith(left, mac, output, ended, context) || !device->attach(resources)) {
         panic("SwitchJoyCon: Joy-Con (%c) HID device: attach failed", left ? 'L' : 'R');
     }
     if (!device->start(resources))

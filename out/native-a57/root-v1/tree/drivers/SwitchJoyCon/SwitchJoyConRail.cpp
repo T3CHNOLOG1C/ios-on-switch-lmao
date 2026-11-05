@@ -102,6 +102,16 @@
 // leaves HID mode after its 2 s timeout and stays seated and charging (the charge enable is left as it is); timers,
 // the UART's and the detect pin's interrupts are off and the HID devices go (GameController sees them disconnect).
 // Display on: both rails re-enter detection, as after SC7, and a seated Joy-Con is handshaken afresh (about 0.2 s).
+//
+// Sessions (SwitchJoyConSession.h): gamecontrollerd takes one JoyConHIDServicePlugin session per HID device, and a
+// rail device outlives backboardd. When the backboardd session serving a running Joy-Con's device ends (its client
+// closed the device: backboardd exited; or a different backboardd opened it), the device reports it from inside
+// IOService::open/close, which may not wait for this work loop: the callback marks the side and fires `sessions`, a
+// software interrupt source (no provider: interruptOccurred only counts and wakes the loop), and the loop publishes a
+// new device in place of the old (destroy, create: a new registry ID, which gamecontrollerd claims afresh). The rail
+// itself does not stop: the Joy-Con keeps its HID mode and the 15 ms clock its phase; only the output queue and rumble
+// the old session left are dropped. One os_log line per republish. A backboardd that ends a second session on the
+// same Joy-Con within 10 s (switch_joycon_republish_allowed) logs one line and turns republishing off for the boot.
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
@@ -117,6 +127,7 @@
 #include "../TegraGPIO/TegraGPIO.h"
 #include "SwitchJoyCon.h"
 #include "SwitchJoyConHID.h"
+#include "SwitchJoyConSession.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -394,6 +405,10 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         bool pairPending;  // running unpaired until SwitchBluetooth gives the address (see the header)
         IOService *hid;
         SwitchJoyConPairing *record;
+        // The device's backboardd session ended (sessionEnded, any thread; under outLock): publish it again.
+        bool republish;
+        int32_t servedPid, openerPid;
+        switch_joycon_republish_guard guard;  // work loop
         // Output queue (outLock): subcommand reports in order, rumble coalesced to the latest, `rumbleFresh` until sent.
         uint8_t queue[8][kMaxOutput];
         uint8_t queueLength[8];
@@ -408,12 +423,14 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     };
 
     IOWorkLoop *loop = nullptr;
-    IOTimerEventSource *poll = nullptr;  // the 15 ms clock of every running Joy-Con; armed only while one runs
+    IOTimerEventSource *poll = nullptr;          // the 15 ms clock of every running Joy-Con; armed only while one runs
+    IOInterruptEventSource *sessions = nullptr;  // software interrupt: a device's backboardd session ended
     volatile uint8_t *car = nullptr, *gpio = nullptr, *apbMisc = nullptr, *pinmux = nullptr, *uarts = nullptr,
                      *pmc = nullptr;
     Side sides[2] = {};
     bool pairing = false, nfc = false, suspended = false, displayOff = false, polling = false;
-    bool hostKnown = false;  // `host` is the address SwitchBluetooth programmed
+    bool republishOff = false;  // the loop check tripped (see the header)
+    bool hostKnown = false;     // `host` is the address SwitchBluetooth programmed
     uint8_t host[6] = {};
 
     // Registers.
@@ -434,7 +451,9 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     static void detectAction(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void timerAction(OSObject *owner, IOTimerEventSource *sender);
     static void pollAction(OSObject *owner, IOTimerEventSource *sender);
+    static void sessionAction(OSObject *owner, IOInterruptEventSource *sender, int count);
     static IOReturn output(void *context, const uint8_t *report, size_t length);
+    static void sessionEnded(void *context, int32_t servedPid, int32_t openerPid);
     Side *sideFor(const OSObject *source);
     bool filter(Side &s);
     void fillTx(Side &s);
@@ -463,6 +482,9 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     void sendPairStep(Side &s);
     void finishPairing(Side &s, bool paired, const char *how);
     void run(Side &s);
+    IOService *createHid(Side &s);
+    void dropHid(Side &s);
+    void republish(Side &s);
     void armPoll();
     void tick(Side &s);
     void rumbleAfterReply(Side &s);
@@ -794,6 +816,20 @@ IOReturn SwitchJoyConRail::output(void *context, const uint8_t *report, size_t l
     return result;
 }
 
+// The device's backboardd session ended (header, "Sessions"), from inside IOService::open/close on any thread: mark the
+// side and wake the work loop. The device reports only until switch_joycon_hid_destroy() has detached it, and dropHid
+// clears the mark after that, so a mark never outlives the device that set it.
+void SwitchJoyConRail::sessionEnded(void *context, int32_t servedPid, int32_t openerPid)
+{
+    Side &s = *static_cast<Side *>(context);
+    IOLockLock(s.outLock);
+    s.republish = true;
+    s.servedPid = servedPid;
+    s.openerPid = openerPid;
+    IOLockUnlock(s.outLock);
+    s.owner->sessions->interruptOccurred(nullptr, nullptr, 0);
+}
+
 // ---- Work loop: states --------------------------------------------------------------------------------------------
 
 // UART at 1 or 3 Mbaud (hekate uart_init order; Linux tegra_uart_hw_init for the FIFO and interrupt setup).
@@ -961,8 +997,7 @@ void SwitchJoyConRail::failAttempt(Side &s, const char *why)
 void SwitchJoyConRail::startPairing(Side &s)
 {
     s.pairPending = false;
-    if (s.hid) switch_joycon_hid_destroy(s.hid);
-    s.hid = nullptr;
+    dropHid(s);
     s.phase = kPairing;
     s.step = kReadSlot;
     s.slot = 0;
@@ -1116,9 +1151,67 @@ void SwitchJoyConRail::run(Side &s)
     s.reports = 0;
     s.errorsAtRun = s.lineErrors;
     s.overflowsAtRun = s.overflows;
-    s.hid = switch_joycon_hid_create(s.cfg->left, s.mac, &SwitchJoyConRail::output, &s);
+    s.hid = createHid(s);
     tick(s);
     if (!polling) armPoll();  // a running clock keeps its phase: the other rail's Joy-Con is not delayed
+}
+
+IOService *SwitchJoyConRail::createHid(Side &s)
+{
+    return switch_joycon_hid_create(s.cfg->left, s.mac, &SwitchJoyConRail::output, &SwitchJoyConRail::sessionEnded, &s);
+}
+
+// Every device goes through here. Once destroy has detached it, the device reports nothing more, so a session mark it
+// set before that is cleared with it and cannot republish the next device.
+void SwitchJoyConRail::dropHid(Side &s)
+{
+    if (s.hid) switch_joycon_hid_destroy(s.hid);
+    s.hid = nullptr;
+    IOLockLock(s.outLock);
+    s.republish = false;
+    IOLockUnlock(s.outLock);
+}
+
+void SwitchJoyConRail::sessionAction(OSObject *owner, IOInterruptEventSource *, int)
+{
+    auto *self = static_cast<SwitchJoyConRail *>(owner);
+    for (Side &s : self->sides) self->republish(s);
+}
+
+// A new device for a running Joy-Con whose backboardd session ended (header, "Sessions").
+void SwitchJoyConRail::republish(Side &s)
+{
+    IOLockLock(s.outLock);
+    const bool wanted = s.republish;
+    const int32_t served = s.servedPid, opener = s.openerPid;
+    s.republish = false;
+    IOLockUnlock(s.outLock);
+    if (!wanted || republishOff || s.phase != kRunning || !s.hid) return;
+    if (!switch_joycon_republish_allowed(&s.guard, served, nowMS())) {
+        republishOff = true;
+        IOLog("SwitchJoyCon: Joy-Con (%c): backboardd[%d] ended a second HID session within %u ms; not publishing "
+              "Joy-Con HID devices again this boot\n",
+              s.cfg->letter, served, (unsigned)kSwitchJoyConRepublishGapMS);
+        return;
+    }
+    dropHid(s);
+    // What the old session queued or left vibrating is not the new session's (run() starts the same way).
+    IOLockLock(s.outLock);
+    s.queueHead = s.queueTail = 0;
+    s.rumbleLength = 0;
+    s.rumbleFresh = false;
+    IOLockUnlock(s.outLock);
+    s.rumbleSent = false;
+    s.hid = createHid(s);
+    if (opener) {
+        os_log(OS_LOG_DEFAULT,
+               "SwitchJoyCon: Joy-Con (%c) HID device published again: backboardd[%d] opened the one "
+               "backboardd[%d] served",
+               s.cfg->letter, opener, served);
+    } else {
+        os_log(OS_LOG_DEFAULT, "SwitchJoyCon: Joy-Con (%c) HID device published again: backboardd[%d] closed it",
+               s.cfg->letter, served);
+    }
 }
 
 // The shared 15 ms clock: armed while any Joy-Con runs, left to lapse when none does (see the header). Sides that stop
@@ -1227,8 +1320,7 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
 void SwitchJoyConRail::detach(Side &s)
 {
     s.timer->cancelTimeout();
-    if (s.hid) switch_joycon_hid_destroy(s.hid);
-    s.hid = nullptr;
+    dropHid(s);
     enterDetect(s);
 }
 
@@ -1244,8 +1336,7 @@ void SwitchJoyConRail::pause(Side &s)
     wr(s, IER, 0);
     s.txLength = s.txPosition = 0;
     IOSimpleLockUnlockEnableInterrupt(s.lock, state);
-    if (s.hid) switch_joycon_hid_destroy(s.hid);
-    s.hid = nullptr;
+    dropHid(s);
     s.phase = kSuspended;
 }
 
@@ -1470,8 +1561,7 @@ void SwitchJoyConRail::quiesce(Side &s)
     wr(s, IER, 0);
     s.txLength = s.txPosition = 0;
     IOSimpleLockUnlockEnableInterrupt(s.lock, state);
-    if (s.hid) switch_joycon_hid_destroy(s.hid);
-    s.hid = nullptr;
+    dropHid(s);
     setCharging(s, false);
     s.chargeKnown = false;  // the charge-enable GPIO is driven again on resume
     s.phase = kSuspended;
@@ -1581,6 +1671,10 @@ bool SwitchJoyConRail::start(IOService *provider)
     nfc = bootArg("switch-joycon-nfc");
     poll = IOTimerEventSource::timerEventSource(this, &SwitchJoyConRail::pollAction);
     if (!poll || loop->addEventSource(poll) != kIOReturnSuccess) panic("SwitchJoyCon: cannot attach the rail clock");
+    sessions = IOInterruptEventSource::interruptEventSource(this, &SwitchJoyConRail::sessionAction);
+    if (!sessions || loop->addEventSource(sessions) != kIOReturnSuccess) {
+        panic("SwitchJoyCon: cannot attach the HID session event source");
+    }
 
     preparePads("start");
     for (unsigned i = 0; i < 2; ++i) setUp(sides[i], &kSides[i]);

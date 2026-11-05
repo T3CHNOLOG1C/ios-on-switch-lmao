@@ -26,6 +26,13 @@ class IOService;
 // Must not block for long; the rail driver queues it.
 typedef IOReturn (*SwitchJoyConOutput)(void *context, const uint8_t *report, size_t length);
 
+// Called once per device when the backboardd session serving it ends while the device stays (SwitchJoyConSession.h):
+// `servedPid` is that backboardd, `openerPid` the different backboardd that opened the device (0: the serving
+// client closed it). gamecontrollerd would refuse the device's next plugin session, so the rail publishes a new one.
+// Runs on the opener's or closer's thread inside IOService::open/close (the device's arbitration lock held): it
+// must only take note and wake the rail's work loop.
+typedef void (*SwitchJoyConSessionEnded)(void *context, int32_t servedPid, int32_t openerPid);
+
 enum : uint32_t { kSwitchJoyConLeftPID = 0x2006, kSwitchJoyConRightPID = 0x2007 };
 
 // Applies switch-gc-personality (SwitchJoyCon.h) once, before any game controller can appear (switch_joycon_start
@@ -44,16 +51,17 @@ void switch_joycon_hid_select_personalities(void);
 void switch_joycon_hid_prepare(void);
 
 // Creates, attaches (under IOResources) and starts a Joy-Con device, and with the first one the system-buttons device.
-// `mac` is the Joy-Con's BD_ADDR in display order. Output reports go to `output(context, ...)` until
-// switch_joycon_hid_destroy(). Rail work loop; panics on failure.
-IOService *switch_joycon_hid_create(bool left, const uint8_t mac[6], SwitchJoyConOutput output, void *context);
+// `mac` is the Joy-Con's BD_ADDR in display order. Output reports go to `output(context, ...)`, and the end of its
+// backboardd session to `ended(context, ...)`, until switch_joycon_hid_destroy(). Rail work loop; panics on failure.
+IOService *switch_joycon_hid_create(bool left, const uint8_t mac[6], SwitchJoyConOutput output,
+                                    SwitchJoyConSessionEnded ended, void *context);
 
 // Hands one input report (report ID first) to the device; 0x21 and 0x30 are padded to the descriptor's 49 bytes,
 // longer reports are cut to the descriptor's size (0x31-0x33: 362 bytes with the ID). The Home or Capture bit of
 // 0x21/0x30/0x31 also goes to the system-buttons device. Call from the rail driver's work loop.
 IOReturn switch_joycon_hid_input(IOService *device, const uint8_t *report, size_t length);
 
-// Releases the Joy-Con's system button if it was down, stops output callbacks (they return kIOReturnOffline from here
-// on), terminates the device and drops the creator's reference. gamecontrollerd sees the controller disconnect.
-// Rail work loop.
+// Releases the Joy-Con's system button if it was down, stops output and session callbacks (output returns
+// kIOReturnOffline from here on; the closes the termination causes report nothing), terminates the device and drops
+// the creator's reference. gamecontrollerd sees the controller disconnect. Rail work loop.
 void switch_joycon_hid_destroy(IOService *device);
