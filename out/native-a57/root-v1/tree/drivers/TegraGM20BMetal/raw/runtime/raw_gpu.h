@@ -360,6 +360,11 @@ public:
     // Whether write-combined buffers are on (RawMetal.mm turns them off at open when m2v cannot make its twin over one)
     bool wcOn() const { return wcOn_; }
     void setWc(bool on) { wcOn_ = on; }
+    // How the pack's programs reached the heap at open: HeapByCpu (the kernel did not import the pack's pages), HeapByCopy (the
+    // copy engine, and the bytes sampled after it match the pack), HeapCopyMismatch (they did not: copied on the CPU after all)
+    enum HeapUpload : uint8_t { HeapByCpu, HeapByCopy, HeapCopyMismatch };
+    HeapUpload heapUpload() const { return heapUpload_; }
+    uint64_t heapBytes() const { return heap_.bytes; }
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
     void destroyBuffer(Buffer &b);
     bool createSampler(const SamplerDesc &d, Sampler &s);
@@ -397,6 +402,8 @@ public:
         std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainRefreshes{0}, chainCopies{0};
         // write-combined buffers: live bytes, and the buffers that asked for one and got pool memory (the WC pool full)
         std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
+        // the copy engine's work encoded: launches and the bytes they write (copies, remaps, the pass prologue's shadow copies)
+        std::atomic<uint64_t> ceOps{0}, ceBytes{0};
     } stats;
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
     // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first
@@ -450,6 +457,7 @@ private:
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
     bool wcOn_ = true;
+    HeapUpload heapUpload_ = HeapByCpu;
     bool wcAlloc(uint64_t bytes, Span &s);
     void wcFree(Span &s);
     bool chainsOn_ = false;

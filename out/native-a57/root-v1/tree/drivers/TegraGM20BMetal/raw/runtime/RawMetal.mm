@@ -3137,12 +3137,17 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
             const uint32_t size = c.b == MTLIndexTypeUInt16 ? 2 : 4;
             if (ib && pipe && pipe->_raw && !extra(cb, c.x + 1) && c.c + uint64_t(c.a) * size <= ib->_raw.length) {
                 range(ib, c.c, uint64_t(c.a) * size);
+                // the largest index only sizes the vertices to clean: none in write-combined memory (r17), whose indices the
+                // CPU would read uncached, one load each (raw::RenderEncoder::drawIndexed's rule)
+                const raw::PackPipeline &rec = *pipe->_raw->rec;
+                RMBuffer *vb = rec.vertexSlot <= 30 ? bound[1][rec.vertexSlot] : nil;
                 uint32_t most = 0;
-                for (uint32_t i = 0; i < c.a; i++) {
-                    uint32_t v = 0;
-                    memcpy(&v, ib->_raw.cpu + c.c + uint64_t(i) * size, size);
-                    if (v != (size == 2 ? 0xffffu : 0xffffffffu)) most = std::max(most, v);
-                }
+                if (vb && !vb->_raw.wc && rec.vertexStride)
+                    for (uint32_t k = 0; k < c.a; k++) {
+                        uint32_t v = 0;
+                        memcpy(&v, ib->_raw.cpu + c.c + uint64_t(k) * size, size);
+                        if (v != (size == 2 ? 0xffffu : 0xffffffffu)) most = std::max(most, v);
+                    }
                 drawn(0, c.a ? most + 1 : 0);
             } else {
                 if (ib) buffers.insert(ib);
@@ -4720,7 +4725,8 @@ size_t raw_metal_rates(char *out, size_t size)
     const int n = snprintf(
         out, size,
         "raw %.0fs c=%llu(%.1f/s) m2v=%llu%s%s%s sw=%llu cpu=%llu acq=%llu enc=%.0fus/c d=%.1f p=%.1f b=%.2f "
-        "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c ev=%llu/%llu%s",
+        "defer=%llu abort=%llu rw=%llu pool=%lluMB/%llu grow=%llu imp=%llu/%lluMB clean=%.1fKB/c ce=%llu/%.0fKB "
+        "ev=%llu/%llu%s",
         secs, (unsigned long long)c, c / secs, (unsigned long long)f, *reasons ? "(" : "", reasons, *reasons ? ")" : "",
         (unsigned long long)(s.switches.load() - gRates.switches),
         (unsigned long long)(s.cpuOrdered.load() - gRates.cpuOrdered),
@@ -4731,7 +4737,8 @@ size_t raw_metal_rates(char *out, size_t size)
         (unsigned long long)(k.ringWaits.load() - gRates.ringWaits), (unsigned long long)(k.poolBytes.load() >> 20),
         (unsigned long long)k.poolChunks.load(), (unsigned long long)(k.poolStalls.load() - gRates.poolStalls),
         (unsigned long long)k.imports.load(), (unsigned long long)(k.importBytes.load() >> 20),
-        k.cleanBytes.exchange(0) / 1024.0 / per, (unsigned long long)(s.eventsReleased.load() - gRates.eventsReleased),
+        k.cleanBytes.exchange(0) / 1024.0 / per, (unsigned long long)k.ceOps.exchange(0),
+        k.ceBytes.exchange(0) / 1024.0, (unsigned long long)(s.eventsReleased.load() - gRates.eventsReleased),
         (unsigned long long)(s.heldReturns.load() - gRates.heldReturns), diag);
     gRates.raw = raw;
     gRates.m2v = m2v;
@@ -4983,6 +4990,19 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         os_log(rawLog(),
                "raw: write-combined buffers %{public}s (a GPU-pool page: %{public}s, m2v's twin over it %{public}s)",
                dev->wcOn() ? "on" : "off", probe.wc || twin ? "made" : "not made", twin ? "made" : "not made");
+    }
+    {  // the pack's programs into the heap (r18): one line either way; a copy whose sampled bytes differ is an error line
+        const raw::Device::HeapUpload h = dev->heapUpload();
+        if (h == raw::Device::HeapCopyMismatch)
+            os_log_error(rawLog(),
+                         "raw: shader heap by copy engine off (%llu KB: its bytes differ after the copy; copied on the "
+                         "CPU)",
+                         (unsigned long long)(dev->heapBytes() >> 10));
+        else
+            os_log(rawLog(), "raw: shader heap by copy engine %{public}s (%llu KB%{public}s)",
+                   h == raw::Device::HeapByCopy ? "on" : "off", (unsigned long long)(dev->heapBytes() >> 10),
+                   h == raw::Device::HeapByCopy ? ", its bytes checked"
+                                                : ": the pack's pages not imported, copied on the CPU");
     }
     {  // the stall line's timer (rawStallTick): its own, so nothing the render server's other threads hold delays it
         static dispatch_source_t stall;

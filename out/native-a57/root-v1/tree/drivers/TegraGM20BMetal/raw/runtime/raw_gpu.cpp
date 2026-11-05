@@ -68,6 +68,8 @@ constexpr uint64_t kPushRing = 2 << 20, kUploadRing = 4 << 20;
 constexpr uint64_t kChunk = 16 << 20, kDedicated = 8 << 20;
 constexpr uint32_t kPteKindPitch = 0;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
+// NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
+constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
 
 uint32_t fbits(float f)
 {
@@ -208,7 +210,14 @@ bool Device::init(std::string &err)
         err = k_.error();
         return false;
     }
-    memcpy(heap_.cpu, pack_.section<uint8_t>(PackHeap), heapBytes);
+    // the pack's programs (its heap image) into the heap by the copy engine, from an import of the pack's mapped pages, at the
+    // head of the context's own submission (r18: no CPU copy of the shader binaries; one the kernel does not import goes on
+    // the CPU as before)
+    const uint8_t *heapImage = pack_.section<uint8_t>(PackHeap);
+    Bo heapSource;
+    const bool heapByCopy =
+        heapBytes && k_.import(const_cast<uint8_t *>(heapImage), heapBytes, heapSource, kPteKindPitch);
+    if (!heapByCopy) memcpy(heap_.cpu, heapImage, heapBytes);
     memset(tic_.cpu, 0, tic_.bytes);
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
@@ -243,8 +252,24 @@ bool Device::init(std::string &err)
     // the context: NVK's own init methods with our addresses, then every register Core Animation's states leave the same
     uint64_t va;
     const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
-    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, (initCount * 2 + 4096) * 4, 256, va));
-    Push p{start, start + initCount * 2 + 4096};
+    const uint32_t heapLaunches = uint32_t((heapBytes + (1u << 17) - 1) >> 17);
+    uint32_t *start =
+        reinterpret_cast<uint32_t *>(alloc(push_, (initCount * 2 + 4096 + heapLaunches * 10) * 4, 256, va));
+    Push p{start, start + initCount * 2 + 4096 + heapLaunches * 10};
+    if (heapByCopy) {  // 128 KiB a launch (nvk_cmd_copy_memory_ce), done before anything here or after reads the programs
+        for (uint64_t done = 0; done < heapBytes;) {
+            const uint32_t n = uint32_t(std::min<uint64_t>(heapBytes - done, 1u << 17));
+            const uint64_t from = heapSource.va + done, to = heap_.va + done;
+            p.inc(CE_OFFSET_IN_UPPER, {uint32_t(from >> 32), uint32_t(from), uint32_t(to >> 32), uint32_t(to)},
+                  SUBC_COPY);
+            p.inc(CE_LINE_LENGTH_IN, {n, 1}, SUBC_COPY);
+            p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);
+            stats.ceOps++;
+            stats.ceBytes += n;
+            done += n;
+        }
+        p.m(WAIT_FOR_IDLE, 0);
+    }
     const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
     for (uint32_t i = 0; i < initCount; i++) {
         uint32_t d = im[i].data;
@@ -280,9 +305,28 @@ bool Device::init(std::string &err)
     }
     lastSeqno_ = seq;
     retire(push_, seq);
-    if (!k_.wait(channel_, seq)) {
+    const bool waited = k_.wait(channel_, seq);
+    if (heapByCopy) k_.free(heapSource);  // (the copy is done: the context's submission completed)
+    if (!waited) {
         err = k_.error();
         return false;
+    }
+    // the copy checked where a chunking or offset fault would show: the first and last 64 bytes of each 128 KiB launch (2 KiB
+    // of uncached reads for a 2 MB heap, once); a mismatch puts the heap there by the CPU after all, before any program runs
+    // (a new path's check: off with a line, not a panic; RawMetal.mm logs heapUpload())
+    if (heapByCopy) {
+        heapUpload_ = HeapByCopy;
+        for (uint64_t at = 0; at < heapBytes && heapUpload_ == HeapByCopy; at += 1u << 17) {
+            const uint64_t end = std::min<uint64_t>(heapBytes, at + (1u << 17));
+            for (const uint64_t from : {at, end - std::min<uint64_t>(64, end - at)}) {
+                const uint64_t n = std::min<uint64_t>(64, end - from);
+                if (memcmp(heap_.cpu + from, heapImage + from, n)) {
+                    heapUpload_ = HeapCopyMismatch;
+                    break;
+                }
+            }
+        }
+        if (heapUpload_ == HeapCopyMismatch) memcpy(heap_.cpu, heapImage, heapBytes);
     }
     // pipelines: the pack's register blobs as push words, program offsets relocated into our heap (the heap image is the pack's)
     const PackPipeline *pp = pack_.section<PackPipeline>(PackPipelines);
@@ -1883,15 +1927,15 @@ static void clearValue(uint32_t format, const float in[4], uint32_t out[4])
         }
 }
 
-// NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
 namespace {
-constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
 // `lines` rows of `width` texels of `bpp` bytes, pitch to pitch: a remap of min(bpp, 4)-byte components, so the line length counts
 // texels (about 12 dwords)
 void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
-              uint32_t bpp)
+              uint32_t bpp, Device::Stats &stats)
 {
     if (!width || !lines || !bpp) return;
+    stats.ceOps++;
+    stats.ceBytes += uint64_t(width) * bpp * lines;
     const uint32_t comp = std::min(bpp, 4u), n = bpp / comp;
     // DST_X..W = SRC_X..W, COMPONENT_SIZE, NUM_SRC_COMPONENTS, NUM_DST_COMPONENTS
     p.m(CE_SET_REMAP_COMPONENTS, 0 | 1 << 4 | 2 << 8 | 3 << 12 | (comp - 1) << 16 | (n - 1) << 20 | (n - 1) << 24,
@@ -1924,7 +1968,7 @@ void RenderEncoder::end()
         if (const Texture *o = shadowOf_[j]) {
             if (pass_.color[j].load == ColorAttachment::Clear) continue;
             const Texture *s = pass_.color[j].texture;
-            copyRows(p, o->va, o->pitch, s->va, s->pitch, areaW_, areaH_, o->bpp);
+            copyRows(p, o->va, o->pitch, s->va, s->pitch, areaW_, areaH_, o->bpp, d.stats);
             copied = true;
         }
     if (copied) {
@@ -2014,7 +2058,7 @@ void RenderEncoder::end()
                     h = std::max(h, c.y1);
                 }
             const Texture *s = pass_.color[j].texture;
-            copyRows(q, s->va, s->pitch, o->va, o->pitch, w, h, o->bpp);
+            copyRows(q, s->va, s->pitch, o->va, o->pitch, w, h, o->bpp, d.stats);
         }
         cb_->segment(at, q.at);
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
@@ -2132,6 +2176,8 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
                SUBC_COPY);
         p_.inc(CE_LINE_LENGTH_IN, {n, 1}, SUBC_COPY);
         p_.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);
+        dev_->stats.ceOps++;
+        dev_->stats.ceBytes += n;
         done += n;
     }
 }
@@ -2141,7 +2187,7 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
 {
     if (!width || !lines || !bpp) return;
     room();
-    copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp);
+    copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp, dev_->stats);
 }
 
 // The codes Metal reads of RGB8_444_2P (pack/../m2v ycbcr_convert.rs: "Codes"): red Cr, green Y, blue Cb, each code / 255, alpha
@@ -2150,6 +2196,9 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
 void BlitEncoder::convertPlanar(const Texture &t)
 {
     if (!t.planar || !t.width || !t.height) return;
+    dev_->stats.ceOps += 2;
+    dev_->stats.ceBytes +=
+        uint64_t(t.width) * t.height * 4 * 2;  // (each launch writes the image's rows, through NO_WRITE)
     room();
     constexpr uint32_t A = 4, W = 6, one = 0 << 16, dst4 = 3u << 24;
     p_.m(CE_SET_REMAP_CONST_A, 0xff, SUBC_COPY);
