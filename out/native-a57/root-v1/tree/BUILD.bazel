@@ -310,7 +310,7 @@ kernel_driver(name = "TegraI2C")
 # SPI4 master for the IMU (drivers/SwitchMotion).
 kernel_driver(name = "TegraSPI")
 
-# APB DMA for the UARTs (Joy-Con rails' RX, Bluetooth's TX).
+# APB DMA for the UARTs (Joy-Con rails' RX, Bluetooth's TX and RX).
 kernel_driver(name = "TegraAPBDMA")
 
 # The Security Engine SE2: known answers over its interrupt, the kernel PRNG reseeded from its DRBG, and a timing run

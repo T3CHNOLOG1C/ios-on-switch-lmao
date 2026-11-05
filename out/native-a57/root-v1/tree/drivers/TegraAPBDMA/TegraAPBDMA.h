@@ -29,7 +29,8 @@ enum : unsigned {
     TEGRA_APBDMA_CH_UARTB_RX = 0,  // Joy-Con (R) rail
     TEGRA_APBDMA_CH_UARTC_RX = 1,  // Joy-Con (L) rail
     TEGRA_APBDMA_CH_UARTD_TX = 2,  // Bluetooth
-    TEGRA_APBDMA_CHANNELS = 3,
+    TEGRA_APBDMA_CH_UARTD_RX = 3,  // Bluetooth (UART-D's request line serves both directions, as Linux's two channels)
+    TEGRA_APBDMA_CHANNELS = 4,
 };
 
 // The longest transfer one programming takes (WCOUNT is 16 bits of bytes, word-granular).
@@ -62,6 +63,13 @@ void tegra_apbdma_start_ring(struct tegra_apbdma_channel *ch, uint32_t apb, unsi
 // Memory to device, once: `size` bytes (a multiple of 16, at most TEGRA_APBDMA_MAX_BYTES) from `pa` (4-byte aligned)
 // to `apb` (a UART's THR), 16-byte bursts on request line `req`; end-of-count (and the handler) when the last has gone.
 void tegra_apbdma_start_once(struct tegra_apbdma_channel *ch, uint32_t apb, unsigned req, uint32_t pa, uint32_t size);
+// Device to memory, once, a byte at a time: `words` 32-bit APB reads of `apb` (a UART's RBR: each pops one byte, in
+// bits 7:0, as the CPU's 32-bit reads do), one read per request on line `req` (a UART in DMA mode with its RX trigger
+// at one byte), each read stored as one word from `pa` (4-byte aligned; at most TEGRA_APBDMA_MAX_BYTES / 4 words).
+// End-of-count (and the handler) after the last. No byte is left below a burst for PIO to take, so the channel is the
+// FIFO's only reader while it runs (SwitchBluetooth "RX by APB DMA").
+void tegra_apbdma_start_rx_words(struct tegra_apbdma_channel *ch, uint32_t apb, unsigned req, uint32_t pa,
+                                 uint32_t words);
 // Bytes moved in the current pass of the transfer last started (0 .. size, word-granular), and whether an end-of-count
 // is pending that the interrupt has not taken yet (the count then belongs to the next pass, or the transfer is done).
 uint32_t tegra_apbdma_moved(struct tegra_apbdma_channel *ch, bool *endPending);

@@ -53,7 +53,8 @@ enum : uint32_t {
     AHBSEQ_BURST_1 = 4u << 24,  // one word: the 4-byte RX trigger
     AHBSEQ_BURST_4 = 5u << 24,  // four words: the 16-byte TX trigger
     APBSEQ_BUS_WIDTH_8 = 0u << 28,
-    APBSEQ_WRAP_WORD_1 = 1u << 16,  // the APB address stays on the one register
+    APBSEQ_BUS_WIDTH_32 = 2u << 28,  // one 32-bit read of the register per word (a UART's RBR: one byte)
+    APBSEQ_WRAP_WORD_1 = 1u << 16,   // the APB address stays on the one register
     COUNT_MASK = 0xfffc,
 };
 // CAR (hekate bdk/soc/clock.h; Linux clk-tegra210.c TEGRA210_CLK_APBDMA = 34: the H registers, bit 2).
@@ -306,6 +307,21 @@ void tegra_apbdma_start_once(tegra_apbdma_channel *ch, uint32_t apb, unsigned re
     wr(ch, AHB_SEQ, AHBSEQ_INTR_ENB | AHBSEQ_BUS_WIDTH_32 | AHBSEQ_BURST_4);
     wr(ch, WCOUNT, (size - 4) & COUNT_MASK);
     const uint32_t csr = CSR_IE_EOC | CSR_DIR | CSR_ONCE | CSR_FLOW | (req & 0x1f) << CSR_REQ_SEL_SHIFT;
+    wr(ch, CSR, csr);
+    wr(ch, CSR, csr | CSR_ENB);
+}
+
+void tegra_apbdma_start_rx_words(tegra_apbdma_channel *ch, uint32_t apb, unsigned req, uint32_t pa, uint32_t words)
+{
+    ensureUp();
+    stopLocked(ch);
+    ch->size = words * 4;
+    wr(ch, APB_PTR, apb);
+    wr(ch, APB_SEQ, APBSEQ_BUS_WIDTH_32 | APBSEQ_WRAP_WORD_1);
+    wr(ch, AHB_PTR, pa);
+    wr(ch, AHB_SEQ, AHBSEQ_INTR_ENB | AHBSEQ_BUS_WIDTH_32 | AHBSEQ_BURST_1);
+    wr(ch, WCOUNT, (ch->size - 4) & COUNT_MASK);
+    const uint32_t csr = CSR_IE_EOC | CSR_ONCE | CSR_FLOW | (req & 0x1f) << CSR_REQ_SEL_SHIFT;  // device to memory
     wr(ch, CSR, csr);
     wr(ch, CSR, csr | CSR_ENB);
 }

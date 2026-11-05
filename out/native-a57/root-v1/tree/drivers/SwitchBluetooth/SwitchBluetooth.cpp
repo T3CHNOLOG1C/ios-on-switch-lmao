@@ -50,12 +50,37 @@
 // flow-controlled by the UART, so CTS still holds the chip's pace), one end-of-count interrupt for the lot; the
 // unaligned head and the tail below 16 bytes by PIO and THR-empty as before. The ring's tail moves when the channel's
 // end-of-count is taken (txDone, primary interrupt context), which also starts what follows and wakes writers through
-// the work loop. RX stays per FIFO trigger: with serial-tegra's terminate-and-PIO at every packet end (a 20 us burst
-// wait each), DMA would cost an HCI event (~40 bytes) as much as the four interrupts it takes now. Lost interrupt: a
-// transfer that the channel shows ended but no interrupt took, after the 50 ms grace, panics (checkDelivery). Never
+// the work loop. Lost interrupt: a transfer that the channel shows ended but no interrupt took, after the 50 ms grace,
+// panics (checkDelivery). Never
 // booted: a channel that does not open, or a transfer that has not moved with the TX FIFO empty and CTS asserted (the
 // UART asked and the channel did not serve), turns TX DMA off for the boot with one line; the ring keeps every byte
 // the channel did not take, and PIO sends it.
+//
+// RX by APB DMA (r17-iodma; SwitchBluetoothRxDma.h, ../TegraAPBDMA): at peak (two Joy-Cons' 59-byte HID reports at
+// 120 Hz, AirPods' A2DP completions, LE scanning for AirDrop) every byte took two UART register reads and every 16 bytes
+// an interrupt. Linux serial-tegra's RX DMA stops the channel at every packet end (RTS off, a 20 us burst wait, residue,
+// PIO, restart); the Joy-Con rails' ring (../SwitchJoyCon) takes the 1-3 bytes below a 4-byte burst by PIO, which is
+// safe only because a rail's Joy-Con says nothing until asked again: this controller sends whenever it has something,
+// and a byte the channel took while PIO read the FIFO would reorder the H4 stream. So here the channel is the FIFO's
+// only reader while the UART is in DMA mode (FCR DMA select, RX trigger 1): channel 3 (UART-D's request line, as TX)
+// reads RBR 32 bits at a time, one byte a read, one word a byte (tegra_apbdma_start_rx_words), into transfers that
+// always start at word 0 of rxBuf. The CPU takes what moved, cache lines invalidated, into the same ring and framing as
+// PIO did, at two points only: the line going idle (EORD, 4 characters after the last byte, the PIO path's RX timeout:
+// an isolated packet is one interrupt) and a transfer's end of count, which also starts the next one, sized
+// (SwitchBluetoothRxDma.h) to end 5 bytes (the longest H4 header) past the end of the packet it starts in, so a packet
+// sent back to back with the next, no idle between, is seen 5 characters after its end where PIO's 16-byte trigger took
+// up to 16 (host model at the peak load, tests/test_switch_bluetooth_rx_dma.py: 1531 interrupts/s and 0.96% of CPU0
+// against 4343 and 4.5%, the worst HID report's last byte taken 30 us after it against 64). Nothing waits on a timer,
+// no transfer is stopped while bytes may flow, no PIO read ever races the channel. A ring with no room for what moved
+// leaves the rest in rxBuf and the next transfer unstarted: the FIFO fills and RTS holds the chip, as PIO's stall did;
+// resumeRx takes it and starts the channel again. Leaving DMA mode (a flush, power off, a fault, a stuck BI/FIFOE that
+// PIO's FIFO reset then takes, the checks below) turns DMA select off first and waits 4 us for a read the channel had
+// started, so PIO again sees every byte in order. Line errors lose the framing until the next sync, as an errored byte
+// did under PIO. Lost interrupt (checkDelivery): a transfer ended with no interrupt taken, or bytes moved with the line
+// idle and no EORD taken, 50 ms on: one line, panic. Never booted (one line, RX by PIO for the boot): a channel that
+// does not open; a first packet after power-on that is not an HCI event; bytes left in the FIFO across two line-idle
+// interrupts with the channel not moving; and, until a line-idle interrupt has once delivered what the channel moved,
+// moved bytes no interrupt took.
 //
 // Userland interface: kernel control "com.apple.uart.bluetooth" (one client), SOCK_STREAM, raw H4 both ways;
 // TIOCGETA / TIOCSETA as SYSPROTO_CONTROL socket options carry a struct termios whose speed is applied to the UART
@@ -110,6 +135,7 @@
 #include <string.h>
 #include "SwitchBluetooth.h"
 #include "SwitchBluetoothLinks.h"
+#include "SwitchBluetoothRxDma.h"
 #include "SwitchCoex.h"
 #include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraAPBDMA/TegraAPBDMA.h"
@@ -171,11 +197,15 @@ enum : uint32_t {
     IER_THRI = 1u << 1,
     IER_RLSI = 1u << 2,
     IER_RTOIE = 1u << 4,  // RTOIE: Tegra RX timeout
+    IER_EORD = 1u << 5,  // end of receive data: the line idle 4 characters (DMA mode; serial-tegra TEGRA_UART_IER_EORD)
     IER_RX = IER_RDI | IER_RLSI | IER_RTOIE,
+    IER_RX_DMA = IER_RLSI | IER_RTOIE | IER_EORD,  // DMA mode: no RDI, the channel takes every byte
     IIR_NO_INT = 1u << 0,
     FCR_ENABLE = 1u << 0,
     FCR_CLEAR_RX = 1u << 1,
     FCR_CLEAR_TX = 1u << 2,
+    FCR_DMA = 1u << 3,         // UART_FCR_DMA_SELECT: RX DMA requests (header "RX by APB DMA")
+    FCR_RX_TRIG_1 = 0u << 6,   // DMA mode: a request per byte, one APB read each
     FCR_TX_TRIG_16 = 0u << 4,  // Tegra's TX trigger runs backwards: 0 = interrupt at 16 bytes left
     FCR_RX_TRIG_16 = 3u << 6,  // RX data interrupt above 16 bytes; the timeout one takes the rest (RX trigger below)
     LCR_8N1 = 3u,
@@ -197,6 +227,7 @@ constexpr uint32_t kFifoBytes = 32;
 constexpr uint32_t kIrqRxBudget =
     64;  // RX bytes one interrupt moves before masking RX and handing the rest to the work loop
 constexpr uint32_t kFilterRounds = 32;  // IIR conditions one interrupt services; more is one it cannot clear
+constexpr uint32_t kRxDmaSettleUs = 4;  // leaving DMA mode: a read the channel had started lands (one byte, < 1 us)
 constexpr uint32_t kFaultRun = 2;       // break / stuck-error events with no good byte between them that mask RX
 // Interrupts in a row that find nothing to do, within kIdleStormNs: the line re-fires straight away with IIR showing
 // nothing (one such entry after a real interrupt is the level line's deassert latency; ~1 ms apart is normal too).
@@ -368,19 +399,38 @@ class SwitchBluetooth : public IOService {
     bool txDmaOff = false;
     static void txDone(void *context);
     void txDmaFailedLocked(uint32_t moved);
+    // RX by DMA (header "RX by APB DMA"), hwLock: the channel and its buffer of words (null channel: PIO only); DMA
+    // mode on; a transfer running from word 0 (rxDmaLength words, rxDmaTaken of them taken); off for the boot; a
+    // line-idle interrupt has delivered what moved (until then a lost one is a failed check, not a panic); the first
+    // packet after power-on was looked at; bytes seen in the FIFO at the last line-idle interrupt with the channel at
+    // rxDmaIdleMoved. Counts: transfers, ends of count taken, line-idle takes, bytes. rxDmaFailed: why it went off (the
+    // action logs it).
+    tegra_apbdma_channel *rxDma = nullptr;
+    tegra_apbdma_buffer rxBuf = {};
+    bool rxDmaOn = false, rxDmaArmed = false, rxDmaOff = false, rxDmaProven = false, rxDmaChecked = false;
+    bool rxDmaIdleFull = false;
+    uint32_t rxDmaLength = 0, rxDmaTaken = 0, rxDmaIdleMoved = 0;
+    uint32_t rxDmaTransfers = 0, rxDmaEnds = 0, rxDmaIdleTakes = 0, rxDmaBytes = 0;
+    const char *rxDmaFailed = nullptr;
+    char rxDmaWhy[96] = {};
+    uint64_t isrTicks = 0;  // time in the UART filter and the channels' handlers (the stats line's interrupt time)
+    static void rxDone(void *context);
+    bool takeRxDmaLocked(uint32_t movedBytes, bool ended);
+    bool endRxDmaLocked();
+    bool rxDmaIdleLocked(bool idle, bool lineError);
+    void armRxDmaLocked();
+    void enterRxDmaLocked();
+    void leaveRxDmaLocked(bool keep);
+    void rxDmaFailedLocked(const char *why);
     uint32_t rxFaults = 0;  // times RX was masked for a fault
     uint32_t idleRun = 0;   // idle interrupts in a row (hwLock), the first at idleSince
     uint64_t idleSince = 0, idleStormAbs = 0;
     bool stormCleared = false;       // a storm got clearInterruptsLocked; the next one masks (hwLock)
     const char *lastFault = "none";  // what the last RX fault was, for describe() and a failed bring-up
     // One work loop wakeup per controller packet in client mode (filter): the H4 framing of the bytes the filter puts
-    // in the ring, kept in step with frameRx's by syncFramerLocked (hwLock).
-    struct {
-        uint8_t state, type, have, need;  // 0 packet type, 1 header, 2 payload
-        uint8_t header[4];
-        uint32_t left;
-        bool lost;  // a line error or dropped bytes: every interrupt wakes the work loop until the next sync
-    } rxFrame = {};
+    // in the ring, kept in step with frameRx's by syncFramerLocked (hwLock). Lost (a line error or dropped bytes):
+    // every interrupt wakes the work loop until the next sync. RX DMA sizes its transfers from it too.
+    switch_bt_h4_frame rxFrame = {};
     bool rxPacketDone = false;  // a packet ended in the ring since the last wakeup
     bool framePackets = false;  // client mode: wake the work loop at packet ends only
     void frameByteLocked(uint8_t byte);
@@ -458,6 +508,9 @@ class SwitchBluetooth : public IOService {
         uint32_t count;
     } failed[8] = {}, failedLogged[8] = {};  // completions with a non-zero status, by opcode (work loop)
     uint32_t irqsLogged = 0, rxBytesLogged = 0, txBytesLogged = 0;
+    uint32_t rxDmaBytesLogged = 0, rxDmaTransfersLogged = 0, rxDmaEndsLogged = 0, rxDmaIdleTakesLogged = 0;
+    uint32_t txDmaRunsLogged = 0;
+    uint64_t isrTicksLogged = 0;
     uint64_t statsAt = 0;      // mach_absolute_time of the last stats line
     uint64_t statsWindow = 0;  // kStatsMs in absolute time units
     errno_t clientCommand(uint8_t *packet, size_t size);
@@ -543,6 +596,7 @@ private:
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
         chipOn = on;
         if (!on) {
+            leaveRxDmaLocked(false);  // what an unpowered core sends is noise; the flush after power-on starts it again
             ier &= ~IER_RX;
             rxStalled = false;
             w32(uart, IER, ier);
@@ -743,6 +797,11 @@ bool SwitchBluetooth::start(IOService *provider)
     if (txBuf.va)
         txDma = tegra_apbdma_open(TEGRA_APBDMA_CH_UARTD_TX, loop, &SwitchBluetooth::txDone, this, why, sizeof(why));
     if (!txDma) IOLog("SwitchBluetooth: TX DMA off (%s): TX by THR-empty interrupt\n", why);
+    // RX by DMA (header "RX by APB DMA"): PIO without it. DMA mode starts at the first flush after power-on.
+    char rxWhy[128] = "no DMA-able memory for its buffer";
+    if (tegra_apbdma_alloc(SWITCH_BT_RX_DMA_WORDS * 4, &rxBuf))
+        rxDma = tegra_apbdma_open(TEGRA_APBDMA_CH_UARTD_RX, loop, &SwitchBluetooth::rxDone, this, rxWhy, sizeof(rxWhy));
+    if (!rxDma) IOLog("SwitchBluetooth: RX DMA off (%s): RX by interrupt per FIFO trigger\n", rxWhy);
 
     tio.c_iflag = IGNPAR;
     tio.c_cflag = CS8 | CREAD | CLOCAL | CRTSCTS;
@@ -861,10 +920,16 @@ void SwitchBluetooth::setHostBaud(uint32_t rate)
 // in the middle of a packet stay in the ring until its end, which is the earliest the client could use them: no packet
 // reaches bluetoothd later than before. frameRx's framing is the reference, and deliver() puts the filter's back in step
 // with it whenever the ring is empty (syncFramerLocked). The kernel's own HCI (bring-up) keeps a wakeup per interrupt.
+//
+// DMA mode (header "RX by APB DMA"): a receive condition (EORD, RX timeout, line status) masks the RX sources as
+// serial-tegra's tegra_uart_isr does (RDI written on, then every RX source off: that clears EORD); once IIR is clear
+// what the channel moved is taken (rxDmaIdleLocked) and the sources come back.
 bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
 {
     auto *self = static_cast<SwitchBluetooth *>(owner);
-    bool work = false, rxWork = false, idle = false, done = false;
+    const uint64_t entered = mach_absolute_time();
+    bool work = false, rxWork = false, idle = false, done = false, dmaRx = false, dmaLineError = false;
+    bool dmaStuck = false;
     IOSimpleLockLock(self->hwLock);
     ++self->irqs;
     const uint32_t rxBefore = self->rx.head, txBefore = self->tx.tail, resetsBefore = self->rxResets;
@@ -876,7 +941,27 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
             done = true;
             break;
         }
-        switch ((iir >> 1) & 7) {
+        const uint32_t id = (iir >> 1) & 7;
+        if (self->rxDmaOn && id != ID_TX && id != ID_MODEM) {
+            if (!dmaRx) {
+                w32(self->uart, IER, self->ier | IER_RDI);
+                w32(self->uart, IER, self->ier & ~(IER_RX | IER_EORD));
+            }
+            dmaRx = true;
+            idle |= id == ID_EORD || id == ID_RX_TIMEOUT;
+            if (id == ID_LINE) {
+                const uint32_t lsr = r32(self->uart, LSR);  // the read clears the error bits
+                if (lsr & LSR_ERRORS) {
+                    ++self->lineErrors;
+                    dmaLineError = true;
+                }
+                // T210's BI/FIFOE that stays with the FIFO empty (drainRx): PIO's FIFO reset and fault counting take
+                // it.
+                dmaStuck |= !(lsr & LSR_DR) && (lsr & (LSR_BI | LSR_FIFOE));
+            }
+            continue;
+        }
+        switch (id) {
         case ID_TX: work |= self->fillTx(); break;
         case ID_RX_TIMEOUT: idle = true; [[fallthrough]];
         case ID_RX:
@@ -887,6 +972,11 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
         }
         // RX masked (budget spent, ring full, or a fault): the work loop drains and, but for a fault, re-enables it.
         if (self->rxStalled || self->rxFault) done = true;
+    }
+    if (dmaRx) rxWork |= self->rxDmaIdleLocked(idle, dmaLineError);
+    if (dmaStuck) {
+        self->leaveRxDmaLocked(true);  // PIO until the next flush; its next interrupt resets the FIFO (drainRx)
+        rxWork = true;
     }
     // The middle of a packet: its end wakes the work loop (above).
     if (rxWork && self->framePackets && !self->rxFrame.lost && !self->rxPacketDone && !idle && !self->rxStalled &&
@@ -929,6 +1019,8 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
         self->stormCleared = false;
     }
     work |= self->rxFaults != faultsBefore;  // the work loop runs once more; RX comes back at a flush or a send
+    work |= self->rxDmaFailed != nullptr;    // its one line
+    self->isrTicks += mach_absolute_time() - entered;
     IOSimpleLockUnlock(self->hwLock);
     if (work) self->actionDue = true;
     return work;
@@ -985,24 +1077,7 @@ bool SwitchBluetooth::drainRx(uint32_t &budget, bool stallWhenSpent)
 // Anything that is not an H4 packet type loses the framing until the next sync.
 void SwitchBluetooth::frameByteLocked(uint8_t byte)
 {
-    auto &f = rxFrame;
-    if (f.lost) return;
-    if (f.state == 0) {
-        f.type = byte;
-        f.need = byte == H4_EVENT ? 2 : byte == H4_ACL ? 4 : byte == H4_SCO ? 3 : 0;
-        f.have = 0;
-        f.state = 1;
-        f.lost = !f.need;
-    } else if (f.state == 1) {
-        f.header[f.have++] = byte;
-        if (f.have < f.need) return;
-        f.left = f.type == H4_EVENT ? f.header[1] : f.type == H4_ACL ? le16(f.header + 2) : f.header[2];
-        f.state = f.left ? 2 : 0;
-        rxPacketDone |= !f.left;
-    } else if (!--f.left) {
-        f.state = 0;
-        rxPacketDone = true;
-    }
+    if (switch_bt_h4_frame_byte(&rxFrame, byte)) rxPacketDone = true;
 }
 
 // hwLock held, work loop, client mode, the ring empty: the filter's framing set to frameRx's, the reference. Between
@@ -1034,6 +1109,7 @@ bool SwitchBluetooth::rxFaultEventLocked(const char *what)
 // ctlConnect brings the chip up again if it faulted since. checkDelivery sees RX disabled: no lost interrupt.
 void SwitchBluetooth::maskRxFaultLocked(const char *what)
 {
+    leaveRxDmaLocked(true);  // DMA mode too ends here; the next flush starts it again
     ier &= ~IER_RX;
     w32(uart, IER, ier);
     if (!rxFault) ++rxFaults;
@@ -1126,6 +1202,7 @@ void SwitchBluetooth::kickTx()
 void SwitchBluetooth::txDone(void *context)
 {
     auto *self = static_cast<SwitchBluetooth *>(context);
+    const uint64_t entered = mach_absolute_time();
     IOSimpleLockLock(self->hwLock);
     if (self->txDmaBytes) {
         __atomic_store_n(&self->tx.tail, self->tx.tail + self->txDmaBytes, __ATOMIC_RELEASE);
@@ -1139,6 +1216,7 @@ void SwitchBluetooth::txDone(void *context)
         w32(self->uart, IER, self->ier);
     }
     const bool wake = self->txWanted;
+    self->isrTicks += mach_absolute_time() - entered;
     IOSimpleLockUnlock(self->hwLock);
     if (wake) {
         self->actionDue = true;
@@ -1163,11 +1241,199 @@ void SwitchBluetooth::txDmaFailedLocked(uint32_t moved)
     }
 }
 
+// ---- RX by APB DMA (header "RX by APB DMA") -------------------------------------------------------------------------
+
+// hwLock held, DMA mode. What the transfer shows written since the last take (cache lines invalidated first: the
+// channel does not snoop), a byte a word, into the ring and framing as drainRx puts them. True when bytes were taken. A
+// ring with no room for all of it stalls RX: the rest stays in rxBuf for resumeRx and no transfer starts meanwhile, so
+// the FIFO fills and RTS holds the chip. The first packet after power-on is looked at once a boot (never booted: it is
+// the controller's answer to HCI Reset, an event); a failure marks DMA off, which the caller then leaves.
+bool SwitchBluetooth::takeRxDmaLocked(uint32_t movedBytes, bool ended)
+{
+    const uint32_t visible = switch_bt_rx_dma_visible(rxDmaLength, movedBytes, ended, rxDmaTaken);
+    const uint32_t count = visible - rxDmaTaken;
+    if (!count) return false;
+    uint32_t head = rx.head;
+    const uint32_t room = kRingBytes - (head - __atomic_load_n(&rx.tail, __ATOMIC_ACQUIRE));
+    const uint32_t n = count < room ? count : room;
+    if (n) {
+        const uint32_t *words = reinterpret_cast<const uint32_t *>(rxBuf.va) + rxDmaTaken;
+        for (uintptr_t line = (uintptr_t)words & ~(uintptr_t)63, end = (uintptr_t)(words + n); line < end; line += 64)
+            __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
+        __asm__ volatile("dsb sy" ::: "memory");
+        if (!rxDmaChecked && !rxFrame.lost) {
+            rxDmaChecked = true;
+            const uint8_t type = (uint8_t)words[0], code = n > 1 ? (uint8_t)words[1] : EV_COMMAND_COMPLETE;
+            if (rxDmaTaken || type != H4_EVENT ||
+                (code != EV_COMMAND_COMPLETE && code != EV_COMMAND_STATUS && code != EV_HARDWARE_ERROR &&
+                 code != EV_VENDOR)) {
+                snprintf(rxDmaWhy, sizeof(rxDmaWhy), "the first bytes by DMA after power-on were %02x %02x at word %u",
+                         type, n > 1 ? (uint8_t)words[1] : 0, rxDmaTaken);
+                rxDmaOff = true;
+                rxDmaFailed = rxDmaWhy;
+            }
+        }
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint8_t byte = (uint8_t)words[i];
+            rx.data[head++ & (kRingBytes - 1)] = byte;
+            frameByteLocked(byte);
+        }
+        rxDmaTaken += n;
+        rxBytes += n;
+        rxDmaBytes += n;
+        __atomic_store_n(&rx.head, head, __ATOMIC_RELEASE);
+    }
+    if (n < count && !rxStalled) {
+        rxStalled = true;
+        ier &= ~(IER_RX | IER_EORD);
+        w32(uart, IER, ier);
+    }
+    return n != 0;
+}
+
+// hwLock held, DMA mode, RX sources masked (filter): a line-idle (EORD, RX timeout) or line-status interrupt. What
+// moved is taken, the never-booted FIFO check runs (header), the sources come back unless RX stalled. True when the
+// work loop has something.
+bool SwitchBluetooth::rxDmaIdleLocked(bool idle, bool lineError)
+{
+    if (lineError) rxFrame.lost = true;  // an errored byte somewhere in what moved: framing unknown till the sync
+    bool took = false;
+    bool ended = false;
+    const uint32_t moved = rxDmaArmed ? tegra_apbdma_moved(rxDma, &ended) : 0;
+    if (rxDmaArmed && ended) {
+        // Ended, its end of count not taken yet: done here, so what waits in the FIFO moves on now (UART-D's INTID is
+        // below the channel's, and its RX timeout would come back first for as long as those bytes waited).
+        took = endRxDmaLocked();
+        if (idle) ++rxDmaIdleTakes;
+    } else if (rxDmaArmed) {
+        took = takeRxDmaLocked(moved, false);
+        if (idle) {
+            ++rxDmaIdleTakes;
+            if (took) rxDmaProven = true;
+            // Bytes in the FIFO 4 characters after the line went quiet, the transfer running and not moving: the
+            // channel does not serve the UART. Twice in a row with no progress (one that landed just now is not that).
+            const bool waiting = r32(uart, LSR) & LSR_DR;
+            if (waiting && rxDmaIdleFull && moved == rxDmaIdleMoved)
+                rxDmaFailedLocked("bytes waited in the FIFO across two line-idle interrupts and the channel took none");
+            rxDmaIdleFull = waiting;
+            rxDmaIdleMoved = moved;
+        }
+    }
+    if (rxDmaOff && rxDmaOn) leaveRxDmaLocked(true);
+    if (rxDmaOn && !rxStalled) w32(uart, IER, ier);
+    return took || lineError || rxStalled || rxDmaFailed;
+}
+
+// hwLock held: the running transfer ended (its end of count, or seen ended first by the UART filter or resumeRx): taken
+// whole, the next one started unless RX stalled. A start clears an end of count the channel's filter has not taken yet
+// (TegraAPBDMA stopLocked), which then finds nothing.
+bool SwitchBluetooth::endRxDmaLocked()
+{
+    rxDmaArmed = false;
+    ++rxDmaEnds;
+    const bool took = takeRxDmaLocked(rxDmaLength * 4, true);
+    if (rxDmaOff) leaveRxDmaLocked(true);
+    if (!rxStalled) armRxDmaLocked();
+    return took;
+}
+
+// hwLock held: the next transfer, from word 0 (everything before it taken), as long as the framing says
+// (SwitchBluetoothRxDma.h switch_bt_rx_dma_length).
+void SwitchBluetooth::armRxDmaLocked()
+{
+    if (!rxDmaOn || rxDmaArmed) return;
+    rxDmaLength = switch_bt_rx_dma_length(&rxFrame);
+    rxDmaTaken = 0;
+    rxDmaIdleFull = false;
+    tegra_apbdma_start_rx_words(rxDma, (uint32_t)(kUartPA + kUartD + THR), TEGRA_APBDMA_REQ_UARTD, rxBuf.pa,
+                                rxDmaLength);
+    rxDmaArmed = true;
+    ++rxDmaTransfers;
+}
+
+// Primary interrupt context, CPU0 (TegraAPBDMA.h): channel 3's end of count. The transfer is taken whole and the next
+// one starts at once (bytes that land meanwhile wait in the FIFO, in order); the work loop wakes for a packet end.
+void SwitchBluetooth::rxDone(void *context)
+{
+    auto *self = static_cast<SwitchBluetooth *>(context);
+    const uint64_t entered = mach_absolute_time();
+    IOSimpleLockLock(self->hwLock);
+    bool work = false;
+    if (self->rxDmaOn && self->rxDmaArmed) {
+        const bool took = self->endRxDmaLocked();
+        work = (took && (!self->framePackets || self->rxPacketDone || self->rxFrame.lost)) || self->rxStalled ||
+               self->rxDmaFailed;
+        if (work) self->rxPacketDone = false;
+    }
+    self->isrTicks += mach_absolute_time() - entered;
+    IOSimpleLockUnlock(self->hwLock);
+    if (work) {
+        self->actionDue = true;
+        self->irq->signalInterrupt();
+    }
+}
+
+// hwLock held: DMA mode on, if the channel is there and nothing keeps RX off. What the FIFO holds goes by PIO first,
+// with DMA select still off; from the FCR write on the channel is the FIFO's only reader.
+void SwitchBluetooth::enterRxDmaLocked()
+{
+    if (!rxDma || rxDmaOff || rxDmaOn || !chipOn || rxFault) return;
+    uint32_t budget = kFifoBytes;
+    (void)drainRx(budget, false);
+    if (rxFault) return;  // the drain found a fault (maskRxFaultLocked): RX stays off until the next flush or send
+    w32(uart, FCR, FCR_ENABLE | FCR_DMA | FCR_RX_TRIG_1 | FCR_TX_TRIG_16);
+    rxDmaOn = true;
+    rxDmaArmed = false;
+    rxDmaLength = rxDmaTaken = 0;
+    if (!rxStalled) armRxDmaLocked();
+    ier = (ier & IER_THRI) | (rxStalled ? 0 : IER_RX_DMA);
+    w32(uart, IER, ier);
+}
+
+// hwLock held: back to PIO (RX interrupt per FIFO trigger). DMA select off first, then the read the channel may have
+// started lands (kRxDmaSettleUs), then what moved is taken (keep) and the channel stops: PIO sees the rest in order.
+void SwitchBluetooth::leaveRxDmaLocked(bool keep)
+{
+    if (!rxDmaOn) return;
+    w32(uart, FCR, FCR_ENABLE | FCR_RX_TRIG_16 | FCR_TX_TRIG_16);
+    (void)r32(uart, LSR);
+    IODelay(kRxDmaSettleUs);
+    if (keep) {
+        bool ended = !rxDmaArmed;
+        const uint32_t moved = rxDmaArmed ? tegra_apbdma_moved(rxDma, &ended) : rxDmaLength * 4;
+        (void)takeRxDmaLocked(moved, ended);
+        const uint32_t left = switch_bt_rx_dma_visible(rxDmaLength, moved, ended, rxDmaTaken) - rxDmaTaken;
+        if (left) {  // no room in the ring for them: gone, and the framing with them
+            dropped += left;
+            rxFrame.lost = true;
+        }
+    }
+    tegra_apbdma_stop(rxDma);
+    rxDmaOn = rxDmaArmed = false;
+    ier = (ier & IER_THRI) | (chipOn && !rxFault && !rxStalled ? IER_RX : 0);
+    w32(uart, IER, ier);
+}
+
+// hwLock held: a never-booted check failed (header "RX by APB DMA"): PIO for the boot; the action logs `why` once.
+void SwitchBluetooth::rxDmaFailedLocked(const char *why)
+{
+    if (rxDmaOff) return;
+    snprintf(rxDmaWhy, sizeof(rxDmaWhy), "%s", why);
+    rxDmaOff = true;
+    rxDmaFailed = rxDmaWhy;
+    leaveRxDmaLocked(true);
+}
+
 void SwitchBluetooth::action(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = static_cast<SwitchBluetooth *>(owner);
     self->actionDue = false;  // IOKit unmasks the line when this returns
     ++self->st.actions;
+    if (const char *why = __atomic_exchange_n(&self->rxDmaFailed, nullptr, __ATOMIC_ACQ_REL)) {
+        char dma[320];
+        tegra_apbdma_describe(self->rxDma, dma, sizeof(dma));
+        IOLog("SwitchBluetooth: RX DMA off for this boot (%s): RX by interrupt per FIFO trigger; %s\n", why, dma);
+    }
     self->deliver();
 }
 
@@ -2063,6 +2329,9 @@ void SwitchBluetooth::logStats(bool force)
     n.scanOff = __atomic_load_n(&st.scanOff, __ATOMIC_RELAXED);
     n.central = __atomic_load_n(&st.central, __ATOMIC_RELAXED);
     const uint32_t irqsNow = irqs, rxNow = rxBytes, txNow = txBytes;
+    const uint32_t rxDmaBytesNow = rxDmaBytes, rxDmaTransfersNow = rxDmaTransfers, rxDmaEndsNow = rxDmaEnds;
+    const uint32_t rxDmaIdleTakesNow = rxDmaIdleTakes, txDmaRunsNow = txDmaRuns;
+    const uint64_t isrTicksNow = __atomic_load_n(&isrTicks, __ATOMIC_RELAXED);
     const Stats &o = stLogged;
     if (n.events == o.events && n.acl == o.acl && n.sco == o.sco && n.commands == o.commands &&
         n.answered == o.answered) {
@@ -2120,8 +2389,10 @@ void SwitchBluetooth::logStats(bool force)
                                snapshot.strayDone);
         if (w < 0 || used + (size_t)w >= kHeld) held[used] = '\0';
     }
-    uint64_t ns = 0;
+    uint64_t ns = 0, isrNs = 0;
     absolutetime_to_nanoseconds(now - statsAt, &ns);
+    absolutetime_to_nanoseconds(isrTicksNow - isrTicksLogged, &isrNs);
+    const uint32_t isrBasis = ns ? (uint32_t)(isrNs * 10000 / ns) : 0;  // hundredths of a percent of one core
     char *const line = statsLine;
     snprintf(
         line, sizeof(statsLine),
@@ -2139,11 +2410,30 @@ void SwitchBluetooth::logStats(bool force)
         n.advFixed - o.advFixed, n.scanOn - o.scanOn, n.scanOff - o.scanOff, n.central - o.central,
         at ? fails : " none", held[0] ? held : " none");
     os_log(OS_LOG_DEFAULT, "%s", line);
+    // The transport's own line (headers "TX by APB DMA", "RX by APB DMA"): what each path moved, the interrupts it
+    // took, and the time spent in them (the UART filter and both channels' handlers, all on CPU0).
+    os_log(OS_LOG_DEFAULT,
+           "SwitchBluetooth: transport %llu ms: rx %u B (%u by DMA in %u transfers: %u ends of count, %u line-idle "
+           "takes; DMA %s), tx %u B (%u DMA transfers), %u UART interrupts, interrupt time %llu us = %u.%02u%% of CPU0",
+           (unsigned long long)(ns / 1000000), rxNow - rxBytesLogged, rxDmaBytesNow - rxDmaBytesLogged,
+           rxDmaTransfersNow - rxDmaTransfersLogged, rxDmaEndsNow - rxDmaEndsLogged,
+           rxDmaIdleTakesNow - rxDmaIdleTakesLogged,
+           !rxDma || rxDmaOff ? "off"
+           : rxDmaOn          ? "on"
+                              : "pio now",
+           txNow - txBytesLogged, txDmaRunsNow - txDmaRunsLogged, irqsNow - irqsLogged,
+           (unsigned long long)(isrNs / 1000), isrBasis / 100, isrBasis % 100);
     stLogged = n;
     memcpy(failedLogged, failed, sizeof(failed));
     irqsLogged = irqsNow;
     rxBytesLogged = rxNow;
     txBytesLogged = txNow;
+    rxDmaBytesLogged = rxDmaBytesNow;
+    rxDmaTransfersLogged = rxDmaTransfersNow;
+    rxDmaEndsLogged = rxDmaEndsNow;
+    rxDmaIdleTakesLogged = rxDmaIdleTakesNow;
+    txDmaRunsLogged = txDmaRunsNow;
+    isrTicksLogged = isrTicksNow;
     statsAt = now;
 }
 
@@ -2155,12 +2445,29 @@ void SwitchBluetooth::logStats(bool force)
 // the FIFO when RX came back on; later ones raise RDI or the RX timeout themselves. So deliver() passes these on and
 // returns. (It used to loop here while each drain spent a 64-byte budget, holding the work-loop gate for as long as
 // the controller kept sending; a bring-up's runAction then waited on it for good.) True when bytes were taken.
+//
+// DMA mode (header "RX by APB DMA"): what the stall left in rxBuf is taken, the next transfer starts if the last has
+// ended, and the RX sources come back; what the FIFO gathered meanwhile the channel then reads, in order.
 bool SwitchBluetooth::resumeRx()
 {
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
     rxStalled = false;
     bool took = false;
-    if (chipOn && !rxFault) {  // power() and a fault mask RX until a flush (the one after power-on) enables it
+    if (rxDmaOn) {
+        bool ended = false;
+        const uint32_t moved = rxDmaArmed ? tegra_apbdma_moved(rxDma, &ended) : 0;
+        if (rxDmaArmed && ended)
+            took = endRxDmaLocked();
+        else
+            took = takeRxDmaLocked(rxDmaArmed ? moved : rxDmaLength * 4, !rxDmaArmed);  // the stall's rest in rxBuf
+        if (rxDmaOff) {
+            leaveRxDmaLocked(true);
+        } else if (!rxStalled) {
+            armRxDmaLocked();
+            ier = (ier & IER_THRI) | IER_RX_DMA;
+            w32(uart, IER, ier);
+        }
+    } else if (chipOn && !rxFault) {  // power() and a fault mask RX until a flush (the one after power-on) enables it
         ier |= IER_RX;
         w32(uart, IER, ier);
         const uint32_t before = rx.head;
@@ -2207,6 +2514,38 @@ void SwitchBluetooth::checkDelivery(const char *what)
         if (!ended && !((lsr & LSR_THRE) && (msr & MSR_CTS))) break;  // the chip holds CTS: a timeout, not a fault
         IOSleep(kGraceMs);
     }
+    // RX DMA (header "RX by APB DMA"): a transfer ended, or bytes moved with no line-idle interrupt to take them, and
+    // still so 50 ms later with no interrupt taken: lost. Until a line-idle interrupt has once delivered what moved
+    // (rxDmaProven), the latter is DMA mode not working as this driver needs (never booted): DMA off, PIO.
+    uint32_t rxSeen = 0, rxMoved = 0;
+    for (unsigned pass = 0; rxDma && pass < 2; ++pass) {
+        IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
+        bool ended = false, pending = false;
+        uint32_t moved = 0;
+        if (rxDmaOn && rxDmaArmed && !rxStalled) {
+            moved = tegra_apbdma_moved(rxDma, &ended);
+            pending = ended || switch_bt_rx_dma_visible(rxDmaLength, moved, false, rxDmaTaken) > rxDmaTaken;
+        }
+        const uint32_t seen = irqs + tegra_apbdma_interrupts(rxDma);
+        if (pending && pass && seen == rxSeen && moved == rxMoved) {
+            if (!ended && !rxDmaProven) {
+                rxDmaFailedLocked("bytes the channel moved raised no line-idle interrupt (EORD)");
+                IOSimpleLockUnlockEnableInterrupt(hwLock, s);
+                break;
+            }
+            const uint32_t taken = rxDmaTaken, length = rxDmaLength;
+            IOSimpleLockUnlockEnableInterrupt(hwLock, s);
+            char dma[320];
+            tegra_apbdma_describe(rxDma, dma, sizeof(dma));
+            panic("SwitchBluetooth: UART-D RX DMA %s interrupt lost during %s: %u of %u words taken, %u moved, %s",
+                  ended ? "end-of-count" : "line-idle (EORD)", what, taken, length, moved / 4, dma);
+        }
+        IOSimpleLockUnlockEnableInterrupt(hwLock, s);
+        if (!pending || pass) break;
+        rxSeen = seen;
+        rxMoved = moved;
+        IOSleep(kGraceMs);
+    }
     uint32_t before = 0;
     for (unsigned pass = 0; pass < 2; ++pass) {
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
@@ -2234,14 +2573,18 @@ void SwitchBluetooth::describe(char *buffer, size_t size)
     auto mux = [this](uint32_t o) { return r32(pinmux, o) & PM_LOW; };
     snprintf(buffer, size,
              "lsr %#x msr %#x (cts %u) ier %#x mcr %#x lcr %#x baud %u; rx %u tx %u queued %u (dma %u, %u done%s) "
-             "irqs %u (idle %u) "
+             "rx-dma %s %u/%u words, %u transfers %u ends %u idle takes; irqs %u (idle %u) "
              "errors %u rx-resets %u rx-faults %u (last %s)%s dropped %u resyncs %u hw-errors %u fixes %u strays %u; "
              "gpio H cnf/oe/out/in "
              "%02x/%02x/%02x/%02x; pinmux %x/%x/%x/%x %x/%x/%x; car clk %u rst %u src %#x; %s",
              r32(uart, LSR), r32(uart, MSR), !!(r32(uart, MSR) & MSR_CTS), ier, r32(uart, MCR), r32(uart, LCR), baud,
-             rxBytes, txBytes, tx.used(), txDmaBytes, txDmaRuns, txDma && !txDmaOff ? "" : " off", irqs, idleIrqs,
-             lineErrors, rxResets, rxFaults, lastFault, rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors,
-             completionFixes, strayDrops, r32(gpio, port + GPIO_CNF) & 0xff, r32(gpio, port + GPIO_OE) & 0xff,
+             rxBytes, txBytes, tx.used(), txDmaBytes, txDmaRuns, txDma && !txDmaOff ? "" : " off",
+             !rxDma || rxDmaOff ? "off"
+             : rxDmaOn          ? (rxDmaArmed ? "armed" : "idle")
+                                : "pio",
+             rxDmaTaken, rxDmaLength, rxDmaTransfers, rxDmaEnds, rxDmaIdleTakes, irqs, idleIrqs, lineErrors, rxResets,
+             rxFaults, lastFault, rxFault ? " RX off" : "", dropped, resyncs, hardwareErrors, completionFixes,
+             strayDrops, r32(gpio, port + GPIO_CNF) & 0xff, r32(gpio, port + GPIO_OE) & 0xff,
              r32(gpio, port + GPIO_OUT) & 0xff, r32(gpio, port + GPIO_IN) & 0xff, mux(0x114), mux(0x118), mux(0x11c),
              mux(0x120), mux(0x1c0), mux(0x1c4), mux(0x1c8), !!(r32(car, CLK_OUT_ENB_U) & kUartDBit),
              !!(r32(car, RST_DEVICES_U) & kUartDBit), r32(car, CLK_SOURCE_UARTD), gic);
@@ -2599,6 +2942,7 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
             self->ier = ier;
             w32(self->uart, IER, ier);
         }
+        self->enterRxDmaLocked();  // header "RX by APB DMA": from here on the channel reads the FIFO
         IOSimpleLockUnlockEnableInterrupt(self->hwLock, s);
         self->h4.state = 0;
     } else if (op == 1) {
@@ -2623,7 +2967,8 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
 // off, clear, on (the TX FIFO empties with it), then 32 UART clocks for the clear to propagate.
 void SwitchBluetooth::resetRxFifoLocked()
 {
-    rxFrame.lost = true;  // whatever the FIFO held is gone (a flush starts the framing afresh after this)
+    leaveRxDmaLocked(false);  // DMA mode's FCR goes with it; a flush starts it again (gated)
+    rxFrame.lost = true;      // whatever the FIFO held is gone (a flush starts the framing afresh after this)
     const uint32_t fcr = FCR_RX_TRIG_16 | FCR_TX_TRIG_16;
     w32(uart, FCR, fcr);
     IODelay(60);

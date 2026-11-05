@@ -109,7 +109,7 @@ class BluetoothRxTests(unittest.TestCase):
         source = DRIVER.read_text()
         self.assertNotIn("FCR_RX_TRIG_8", source)
         fcr_writes = [line for line in source.splitlines() if "FCR_RX_TRIG_16 | FCR_TX_TRIG_16" in line]
-        self.assertEqual(len(fcr_writes), 2, "setupUart and resetRxFifoLocked")
+        self.assertEqual(len(fcr_writes), 3, "setupUart, resetRxFifoLocked and leaving RX DMA mode")
         self.assertIn("FCR_RX_TRIG_16 = 3u << 6", source)
         self.assertIn("MCR_CTS_EN | MCR_RTS_EN | MCR_RTS", source)  # flow control holds the chip past a full FIFO
 
