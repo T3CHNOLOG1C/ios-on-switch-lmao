@@ -1,5 +1,5 @@
-// loader_check_fdt_memory after the r9-preboot round 4 rewrite (one walk for several ranges, word reads) against the
-// previous parser, kept verbatim in memory_reference.c: on generated and randomly damaged FDTs (fdt_builder.h), every
+// loader_check_fdt_memory (one walk for several ranges, word reads) against the single-range reference parser in
+// memory_reference.c: on generated and randomly damaged FDTs (fdt_builder.h), every
 // single-range status is unchanged, and so is the whole report whenever it passes (the only time the loader uses it),
 // and the multi-range result is what the single-range calls in index order would have stopped at.
 #include <gtest/gtest.h>
@@ -73,7 +73,7 @@ TEST(LoaderMemoryRanges, SingleAndMultiRangeMatchThePreviousParser)
                                                       {0xA001EF00, 0xA001F000}, {0xB0000000, 0xB0001000}};
     unsigned checked = 0, multis = 0;
     for (const Bytes &data : Trees(rng)) {
-        // The tree and 8 zero bytes after it (as the Python test's buffer), its own length declared.
+        // The tree and 8 zero bytes after it, its own length declared.
         auto buffer = std::make_unique<uint8_t[]>(data.size() + 8);
         std::memset(buffer.get(), 0, data.size() + 8);
         std::memcpy(buffer.get(), data.data(), data.size());

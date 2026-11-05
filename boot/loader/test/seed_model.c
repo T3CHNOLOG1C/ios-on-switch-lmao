@@ -165,7 +165,7 @@ static uint32_t run(unsigned flags)
     m.clk_v = (flags & SE_CLOCK_OFF) ? 0 : 1u << 31;
     m.clk_w = (flags & (ENTROPY_OFF | ENTROPY_STUCK)) ? 0 : 1u << 21;
     m.rst_w = (flags & ENTROPY_OFF) ? 1u << 21 : 0;
-    m.security = (flags & SE_SECURE) ? 0x35u : 0x10035u; /* what r11-sep's probe read on hardware: 0x10035 */
+    m.security = (flags & SE_SECURE) ? 0x35u : 0x10035u; /* as read on hardware: 0x10035 */
     m.counter = 0x123456789ull;
     memcpy(m.seed, pinned, sizeof(pinned));
     const uint32_t word = iosw_seed_mix(SEED_PA, SOURCE_PA, ticks, 38400);

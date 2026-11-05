@@ -23,8 +23,8 @@ static uint64_t (*tables)[512];
 static unsigned char *allocation;
 static const uint64_t table_address = UINT64_C(0xa0015000);
 
-/* Like assert() in the original harness, the first failed check of a scan stops it (one finding, not millions): a
- * check that fails sets `broken`, and the walk returns. */
+/* The first failed check of a scan stops it (one finding, not millions): a check that fails sets `broken`, and the
+ * walk returns. */
 static int broken;
 #define STOP_UNLESS(x)   \
     do {                 \

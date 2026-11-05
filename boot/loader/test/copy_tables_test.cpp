@@ -20,7 +20,6 @@ TEST(LoaderCopyTablesCases, ThirtyTwoExactMaps)
     EXPECT_EQ(copy_tables_sizes() * copy_tables_offsets(), 32u);
 }
 
-// Each window size at every destination offset: one exact 4 GiB map check each.
 TEST_P(LoaderCopyTablesBySize, ExactMapAtEveryOffset)
 {
     for (unsigned o = 0; o < copy_tables_offsets(); ++o) {

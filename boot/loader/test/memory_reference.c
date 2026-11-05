@@ -1,6 +1,6 @@
-/* loader_check_fdt_memory as it was before r9-preboot round 4 (boot/loader/memory.c at 519a20e..fdede2c), kept
- * verbatim as the reference memory_ranges_test.cpp compares the current parser against (built with its entry point
- * renamed: BUILD.bazel :memory_reference). */
+/* The single-range loader_check_fdt_memory (boot/loader/memory.c at 519a20e..fdede2c), kept verbatim as the
+ * reference memory_ranges_test.cpp compares the current parser against (built with its entry point renamed:
+ * BUILD.bazel :memory_reference). */
 #include "../memory.h"
 
 static uint32_t be32(const uint8_t *p)

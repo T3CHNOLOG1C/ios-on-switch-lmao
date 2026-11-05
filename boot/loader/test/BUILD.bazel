@@ -9,7 +9,6 @@ load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
 lint_files()
 
-# --- EMC raise: emc.c over the BPMP mailbox / I2C5 / counter model ---------------------------------------------------
 host_library(
     name = "emc",
     srcs = [
@@ -28,7 +27,6 @@ host_test(
     deps = [":emc"],
 )
 
-# --- Seed mix: seed.c over the CAR / SE2 / AHB / counter model -------------------------------------------------------
 host_library(
     name = "seed",
     srcs = [
@@ -47,7 +45,6 @@ host_test(
     deps = [":seed"],
 )
 
-# --- copy.c: the page-table builder and the window decoder -----------------------------------------------------------
 # copy.c as the host builds it: LOADER_COPY_HOST_TEST (plain-C copies, so ASan sees every access) and the empty
 # layout.h of host_include. Its page tables' ELF section (.copy_tables, which Mach-O cannot name) becomes `used`: the
 # storage stays, unused by the host tests, which pass the builder their own tables.
@@ -151,7 +148,6 @@ host_test(
     deps = [":copy"],
 )
 
-# --- checksum.S: the AArch64 CRC-32 routine, run natively ------------------------------------------------------------
 # The file for Mach-O: its ELF-only .type and .size lines dropped and the symbol given Mach-O's leading underscore.
 genrule(
     name = "checksum_host",
@@ -180,7 +176,6 @@ host_test(
     ],
 )
 
-# --- memory.c: the FDT memory gate ------------------------------------------------------------------------------------
 host_library(
     name = "memory",
     srcs = [
@@ -191,7 +186,7 @@ host_library(
     copts = ["-O2"],
 )
 
-# The parser before r9-preboot round 4, verbatim, under its own name.
+# The single-range reference parser memory_ranges_test compares memory.c against, under its own name.
 host_library(
     name = "memory_reference",
     srcs = [

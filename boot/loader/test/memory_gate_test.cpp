@@ -29,7 +29,7 @@ struct Result {
 };
 
 // The parser over the tree, `capacity` (default: the tree's length) bytes of it declared. The buffer holds the tree, a
-// NUL (as the Python test's C string did) and the rest of that last word: memory.c reads aligned 32-bit words only
+// NUL and the rest of that last word: memory.c reads aligned 32-bit words only
 // (uncached RAM, one read per four bytes), so the word holding the tree's last byte is read whole, by design.
 Result Check(const Bytes &data, std::optional<uint32_t> capacity = std::nullopt)
 {
