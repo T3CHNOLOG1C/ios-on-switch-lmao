@@ -94,8 +94,9 @@ pub(crate) use depth_test::{
 };
 pub use discard::DiscardForm;
 pub(crate) use fetch::{
-    blends_half_in_shader, compiled_write_mask, extended_range_blend, half4_output,
-    half_blend_attachment, interlock_orders, kept_channels, storage_form, ColorUse, StorageSamples,
+    blends_half_in_shader, blends_through_inputs, compiled_write_mask, extended_range_blend,
+    half4_output, half_blend_attachment, interlock_orders, kept_channels, storage_form, ColorUse,
+    StorageSamples,
 };
 pub use fetch::{
     select_output as select_storage_output, select_second_output as select_storage_second_output,

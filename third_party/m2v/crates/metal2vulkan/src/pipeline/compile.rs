@@ -1516,7 +1516,7 @@ pub(crate) fn fetch_inputs(
     p: &DeviceProfile,
 ) -> Option<crate::pipeline::lower_inputs::FramebufferFetchInputs> {
     let interlock = crate::lower::fragment::interlock_orders(p);
-    let inputs = !interlock && p.fields().fragment.rasterization_order_color_access;
+    let inputs = crate::lower::fragment::blends_through_inputs(p);
     if !matches!(spec.ep.stage, AbiStage::Fragment { .. }) || !(interlock || inputs) {
         return None;
     }

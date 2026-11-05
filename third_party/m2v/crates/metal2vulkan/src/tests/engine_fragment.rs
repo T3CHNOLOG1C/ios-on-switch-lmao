@@ -4597,6 +4597,108 @@ fn an_operation_over_the_active_lanes_records_the_split_quads_note() {
     }
 }
 
+/// On a device with neither ordered form of framebuffer fetch (lavapipe without
+/// `rasterizationOrderColorAttachmentAccess`, as NVK on Maxwell), a blend into an extended-range
+/// attachment is computed over the attachment's input attachment under `AcceptUnordered`: made,
+/// the raw format written whole without a Vulkan blend, one `uint` input attachment, the
+/// `ExtendedRangeInputBlend` fact and the `UnorderedFramebufferFetch` note; `RequireOrdered`
+/// refuses it, as before. An extended-range attachment beside it that the function
+/// does not write takes no Vulkan blend and an empty mask whatever its blend (QuartzCore's
+/// two-attachment warm-up pipelines), where the same attachment written blends in the shader.
+#[test]
+fn an_extended_range_blend_reads_unordered_input_attachments_where_neither_ordered_form_exists() {
+    use crate::metal::BlendFactor;
+    use crate::pipeline::sym::SampledType;
+    let Some(fills) = fixture("rt6_samples") else {
+        return;
+    };
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles/lavapipe.json");
+    let text = std::fs::read_to_string(path).expect("profile");
+    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    desc.features
+        .remove(&VkFeature::RasterizationOrderColorAttachmentAccess);
+    desc.features.remove(&VkFeature::FragmentShaderPixelInterlock);
+    let device = |framebuffer_fetch| {
+        let policy = DevicePolicy {
+            framebuffer_fetch,
+            ..Default::default()
+        };
+        Device::new(desc.clone(), policy).expect("device")
+    };
+    let unordered = device(FramebufferFetchPolicy::AcceptUnordered);
+    let strict = device(FramebufferFetchPolicy::RequireOrdered);
+    let frag = unordered.profile().fields().fragment;
+    assert!(!frag.rasterization_order_color_access && !frag.pixel_interlock);
+    let function = |name: &str| {
+        FunctionDescriptor::new(
+            Library::from_air(&fills)
+                .expect("library")
+                .function(name)
+                .expect("function"),
+        )
+    };
+    let premultiplied = |pf: PixelFormat| {
+        let mut c = ColorAttachmentDescriptor::new(pf);
+        c.blending_enabled = true;
+        c.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
+        c.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
+        c
+    };
+    let pipeline = |dev: &Device, colors: &[Option<ColorAttachmentDescriptor>]| {
+        let mut d = RenderPipelineDescriptor::new(StageSource::Function(function("rt6_fill_vertex")));
+        d.fragment = Some(StageSource::Function(function("rt6_fill_rgba16float")));
+        for (i, c) in colors.iter().enumerate() {
+            d.color_attachments[i] = *c;
+        }
+        dev.compile_render_pipeline(&d, &Budget::standard())
+    };
+    use vk::ColorComponentFlags as C;
+    for pf in [PixelFormat::BGR10XR, PixelFormat::RGB10A82PXR10] {
+        let form = crate::metal::format::ExtendedRange::of(pf).expect("extended range");
+        let c = premultiplied(pf);
+        let a = pipeline(&unordered, &[Some(c)]).unwrap_or_else(|e| panic!("{pf:?}: {e}"));
+        let state = a.graphics.color_attachments[0].expect("color 0");
+        assert_eq!(state.format, form.raw_format(), "{pf:?}");
+        assert!(state.blend.is_none(), "{pf:?}");
+        let inputs: Vec<(u32, SampledType)> = a
+            .graphics
+            .input_attachments
+            .iter()
+            .map(|i| (i.color_index, i.format_class))
+            .collect();
+        assert_eq!(inputs, [(0, SampledType::Uint)], "{pf:?}");
+        assert!(!a.graphics.rasterization_order_attachment_access, "{pf:?}");
+        assert!(
+            a.dependencies.iter().any(|d| matches!(
+                d.fact,
+                RuntimeFact::ExtendedRangeInputBlend { color: 0, .. }
+            )),
+            "{pf:?}"
+        );
+        assert!(
+            a.stages
+                .iter()
+                .any(|s| s.precision_notes.contains(&PrecisionNote::UnorderedFramebufferFetch)),
+            "{pf:?}"
+        );
+        let e = pipeline(&strict, &[Some(c)]).expect_err(&format!("{pf:?} ordered"));
+        assert!(matches!(e, Error::Unsupported(_)), "{pf:?} ordered: {e}");
+        // Beside a written `RGBA8Unorm` color 0, unwritten at color 1 and blended.
+        let colors = [Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm)), Some(c)];
+        let a = pipeline(&unordered, &colors).unwrap_or_else(|e| panic!("{pf:?} at 1: {e}"));
+        let state = a.graphics.color_attachments[1].expect("color 1");
+        assert_eq!((state.write_mask, state.blend), (C::empty(), None), "{pf:?} at 1");
+        assert!(a.graphics.input_attachments.is_empty(), "{pf:?} at 1");
+    }
+    // A blended bfloat attachment is Metal's pipeline error, written or not.
+    let colors = [
+        Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm)),
+        Some(premultiplied(PixelFormat::R16Bfloat)),
+    ];
+    assert!(pipeline(&unordered, &colors).is_err());
+}
+
 /// A fragment function blended into an `RGB10A8_2P_XR10` attachment (premultiplied over) records
 /// `PrecisionNote::ExtendedRangeBlendSource` exactly where Metal may round the blend's source
 /// otherwise than the computed blend: a `float4` output whose lanes are not each a load

@@ -190,6 +190,27 @@ pub(crate) fn interlock_orders(p: &DeviceProfile) -> bool {
     !f.rasterization_order_color_access && f.pixel_interlock
 }
 
+/// Whether `p` has neither ordered form of framebuffer fetch (no rasterization-order color
+/// attachment access, no pixel interlock) and its policy accepts the unordered fetch
+/// (`FramebufferFetchPolicy::AcceptUnordered`): NVK on Maxwell. Its fetches read input attachments
+/// in no order between the fragments of one draw that cover a pixel (the runtime orders draws by
+/// a barrier), recorded as `PrecisionNote::UnorderedFramebufferFetch`.
+pub(crate) fn unordered_inputs(p: &DeviceProfile) -> bool {
+    let f = p.fields();
+    f.framebuffer_fetch == FramebufferFetchPolicy::AcceptUnordered
+        && !f.fragment.rasterization_order_color_access
+        && !f.fragment.pixel_interlock
+}
+
+/// Whether `p` computes an extended-range attachment's blend over the attachment's input
+/// attachment (`input_blend`): it orders fetch through rasterization-order input attachments, or
+/// it reads them unordered ([`unordered_inputs`]), the same trade as any fetch there. A device that
+/// orders fetch through the pixel interlock alone takes the storage form instead.
+pub(crate) fn blends_through_inputs(p: &DeviceProfile) -> bool {
+    !interlock_orders(p)
+        && (p.fields().fragment.rasterization_order_color_access || unordered_inputs(p))
+}
+
 /// Whether `p` asks for Metal's 16-bit float blend of a `half4` output, computed by the function
 /// in the storage form (`DevicePolicy::half_blend`), which a device that orders fetch through
 /// the pixel interlock alone ([`interlock_orders`]) takes.
@@ -688,15 +709,15 @@ pub(crate) fn extended_range_blend(
         alpha_operation: O::Add,
     };
     if !interlock_orders(p) {
-        let f = p.fields().fragment;
-        if !f.rasterization_order_color_access {
+        if !blends_through_inputs(p) {
             return Err(Unsupported::needs(
                 Feature::FramebufferFetch,
                 Capability::Feature(VkFeature::FragmentShaderPixelInterlock),
             ));
         }
-        // The blend over the input attachment: the attachment's raw format a color attachment,
-        // and the blend Metal's model's.
+        // The blend over the input attachment (in rasterization order, or unordered under
+        // `AcceptUnordered`): the attachment's raw format a color attachment, and the blend
+        // Metal's model's.
         if form.padded() || form.bfloat() {
             return Err(Unsupported::not_implemented(Feature::Format));
         }

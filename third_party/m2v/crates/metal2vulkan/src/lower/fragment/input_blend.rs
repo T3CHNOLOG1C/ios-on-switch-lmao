@@ -1,5 +1,6 @@
 //! Metal's blend into an extended-range attachment on a device that orders framebuffer fetch
-//! through rasterization-order input attachments.
+//! through rasterization-order input attachments, or that reads them unordered under
+//! `FramebufferFetchPolicy::AcceptUnordered` (`fetch::blends_through_inputs`).
 //!
 //! Such an attachment holds Metal's raw texels in its raw unsigned format, which no device blends.
 //! On a device that fetches in the pixel interlock the storage form computes the blend in the
@@ -16,7 +17,11 @@
 //! attachment access orders each fragment's read after every earlier fragment's write of the pixel,
 //! so each blend reads the codes the one before stored, as a draw of the storage form without the
 //! `half` shadow does (the announcement, `extended-range-blends-stored-codes`, stays the runtime's
-//! there).
+//! there). On a device with neither ordered form whose policy accepts the unordered fetch (NVK on
+//! Maxwell, `fetch::unordered_inputs`) the same blend reads the input attachment without that
+//! order: a later draw's blend reads an earlier draw's codes (the runtime records a barrier between
+//! them), but fragments of one draw that cover the same pixel blend in no defined order, recorded
+//! as `PrecisionNote::UnorderedFramebufferFetch`, the trade every fetch takes there.
 //!
 //! The blend is Metal's model's alone, its gap refused by name (`Feature::ExtendedRangeBlend`,
 //! as the storage form refuses it): a `half4` output under every factor and operation, a
@@ -35,6 +40,7 @@ use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::metal::format::ExtendedRange;
 use crate::metal::ColorWriteMask;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::lower_inputs::BlendEquation;
 use crate::pipeline::sym::{PushField, Stage};
@@ -68,12 +74,12 @@ pub struct InputBlend {
 /// input attachment's read, its decode, the encode, and a merge of kept channels.
 const WRITE_WORDS: u64 = 120;
 
-/// Whether the device orders framebuffer fetch through rasterization-order input attachments,
-/// where this module computes an extended-range blend (on one that orders it through the pixel
-/// interlock, the storage form does, `fetch::interlock_orders`).
+/// Whether the device reads input attachments for framebuffer fetch, in rasterization order or
+/// unordered under `AcceptUnordered` (`fetch::blends_through_inputs`), where this module computes
+/// an extended-range blend (on one that orders it through the pixel interlock, the storage form
+/// does, `fetch::interlock_orders`).
 fn through_inputs(cx: &SelectCx<'_>) -> bool {
-    let f = cx.profile.fields().fragment;
-    f.rasterization_order_color_access && !fetch::interlock_orders(cx.profile)
+    fetch::blends_through_inputs(cx.profile)
 }
 
 /// Plan the extended-range attachments the function writes through a first output where the
@@ -161,6 +167,10 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         // The attachment's input attachment, which a `[[color(n)]]` read of it shares (`color`).
         cx.descriptors.input_attachments = cx.descriptors.input_attachments.saturating_add(1);
         cx.facts.insert(RuntimeFact::FramebufferFetch { color });
+        // Without rasterization order the blend reads the texel unordered within a draw.
+        if fetch::unordered_inputs(cx.profile) {
+            cx.precision.insert(PrecisionNote::UnorderedFramebufferFetch);
+        }
         planned.insert(
             color,
             InputBlend {

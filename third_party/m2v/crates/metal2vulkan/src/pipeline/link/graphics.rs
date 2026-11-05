@@ -326,7 +326,18 @@ pub fn graphics_state(
                     // output, the descriptor's mask rotated, and the blend `rotated_blend`
                     // finds Metal's in Vulkan's factors.
                     let rotated = metal::format::rotated_channels(a.pixel_format);
-                    let blended = a.blending_enabled && !replaced && input_blend.is_none();
+                    // An extended-range attachment no first output of the fragment function names
+                    // is left unmodified whatever its blend (its mask is empty, below), as Metal
+                    // leaves any such attachment: it takes no Vulkan blend, which its raw format
+                    // could not take. Not a bfloat one, whose blend Metal refuses, nor one of a
+                    // pipeline without a fragment function.
+                    let unwritten_extended = fs.is_some()
+                        && ExtendedRange::of(a.pixel_format).is_some_and(|f| !f.bfloat())
+                        && !written.contains(&(index as u32));
+                    let blended = a.blending_enabled
+                        && !replaced
+                        && input_blend.is_none()
+                        && !unwritten_extended;
                     let mut usages = BTreeSet::from([FormatUsage::ColorAttachment]);
                     if blended {
                         usages.insert(FormatUsage::ColorAttachmentBlend);
@@ -358,6 +369,7 @@ pub fn graphics_state(
                             };
                             extended_write_mask(form, stored)?
                         }
+                        (Some(_), None) if unwritten_extended => vk::ColorComponentFlags::empty(),
                         (Some(form), None) => extended_write_mask(form, descriptor_mask)?,
                         (None, _) => descriptor_mask,
                     };
@@ -366,7 +378,8 @@ pub fn graphics_state(
                     } else {
                         vk::ColorComponentFlags::empty()
                     };
-                    let blend = match (replaced || input_blend.is_some(), rotated) {
+                    let unblended = replaced || input_blend.is_some() || unwritten_extended;
+                    let blend = match (unblended, rotated) {
                         (true, _) => None,
                         (false, false) => blend_factors(a, p)?,
                         // The second output the rotation needs is the function's only beside

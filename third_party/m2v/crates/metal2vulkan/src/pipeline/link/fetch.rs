@@ -24,7 +24,8 @@
 //! planes (`StorageAttachmentView::SamplePlanes`), a single-sample image of one layer per sample,
 //! which needs no sample count of storage images.
 //!
-//! On a device that orders framebuffer fetch through rasterization-order input attachments, the
+//! On a device that orders framebuffer fetch through rasterization-order input attachments, or
+//! reads them unordered under `AcceptUnordered` (`lower::fragment::blends_through_inputs`), the
 //! function computes an extended-range attachment's blend over its input attachment
 //! (`RuntimeFact::ExtendedRangeInputBlend`, [`input_blends`]): the attachment stays a color
 //! attachment of the subpass, which `graphics_state` gives no Vulkan blend and a write of every raw
@@ -40,7 +41,8 @@ use crate::error::{
 };
 use crate::library::FunctionArtifact;
 use crate::lower::fragment::{
-    interlock_orders, kept_channels, storage_form, ColorUse, StorageSamples,
+    blends_through_inputs, interlock_orders, kept_channels, storage_form, ColorUse,
+    StorageSamples,
 };
 use crate::metal::state::color_write_mask;
 use crate::pipeline::facts::RuntimeFact;
@@ -168,7 +170,8 @@ pub fn storage_attachments(
 
 /// The extended-range attachments whose blend fragment stage `fragment` computes over their
 /// input attachments (`RuntimeFact::ExtendedRangeInputBlend`), on a device that orders fetch
-/// through rasterization-order input attachments, against the attachments of render inputs `r`:
+/// through rasterization-order input attachments (or reads them unordered,
+/// `lower::fragment::blends_through_inputs`), against the attachments of render inputs `r`:
 /// by color index, the channels each write keeps from its texel, where the pipeline's blend and
 /// write mask there are those the function compiled under; `NeedsInput(FramebufferFetch)` where
 /// they are another pipeline's.
@@ -182,7 +185,7 @@ pub fn input_blends(
         let RuntimeFact::ExtendedRangeInputBlend { color, blend, kept } = *fact else {
             continue;
         };
-        if interlock_orders(p) || !p.fields().fragment.rasterization_order_color_access {
+        if !blends_through_inputs(p) {
             return Err(Error::Internal(InternalError::new(
                 InternalKind::Invariant,
                 "an extended-range blend over an input attachment on a device that fetches \
