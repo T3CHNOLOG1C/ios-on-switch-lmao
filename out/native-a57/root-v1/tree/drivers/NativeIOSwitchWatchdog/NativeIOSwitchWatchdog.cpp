@@ -84,6 +84,20 @@ OSDefineMetaClassAndStructors(NativeIOSwitchWatchdog, IOWatchdog)
     clearIOKitMonitoring();
     setProperty("IOKitQuiesceWatchdogEnabled", false);
     gWatchdog = this;
+    // Userspace monitoring off for now: thermalmonitord registers with watchdogd and reports itself unhealthy from boot
+    // ("Missing sensor(s): TG0B TP1d ..." -- none of its SMC-style sensors exist here), so watchdogd kills it at 60 s
+    // and 120 s and panics "no successful checkins from thermalmonitord (2 induced crashes)" at ~199 s on every boot
+    // (r7t, r7u). Off as after a watchdogd crash, until thermalmonitord has its sensors: watchdogd reads "disabled" and
+    // exits 0.
+    off_ = true;
+    {
+        IOSimpleLock *lock = checkinLock();
+        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
+        setUserspaceMonitoring(false);
+        setCheckinDeadline(0);
+        IOSimpleLockUnlockEnableInterrupt(lock, state);
+    }
+    IOLog("IOSwitch watchdog: userspace watchdog off (thermalmonitord has no sensors to report healthy)\n");
     return true;
 }
 
