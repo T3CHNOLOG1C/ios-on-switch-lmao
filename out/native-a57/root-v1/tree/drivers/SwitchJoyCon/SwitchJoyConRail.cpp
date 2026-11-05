@@ -70,6 +70,23 @@
 // the UART registers and clock, the four pads' levels, GPIO modes and pinmux, and the rail and pad power. A
 // running Joy-Con that falls silent logs one line with the number of input reports it sent.
 //
+// RX by APB DMA while running (r15-offload; TegraAPBDMA.h): a running Joy-Con's reply (~61 bytes of 0x30 report every
+// 15 ms per rail) took about eight interrupts by FIFO trigger, around 1000 a second on CPU0 for two rails. While a rail
+// runs, the UART is in DMA mode as Linux serial-tegra puts it (FCR DMA select, 4-byte RX trigger, IER RLSI | RTOIE |
+// EORD and no RDI): channel 0 (UART-B) / 1 (UART-C) moves every 4 bytes into a 4 KiB ring, continuously, and the reply
+// takes one interrupt, EORD or RX timeout once the line has been idle for 4 characters. The filter then takes what the
+// DMA put in the ring (cache lines invalidated first) and, by PIO, the 1-3 bytes below the burst still in the FIFO
+// (serial-tegra tegra_uart_rx_buffer_push + tegra_uart_handle_rx_pio), into the same ring and framing as before, and
+// wakes the action once. Reading the FIFO while the channel runs is safe here because a Joy-Con only speaks when spoken
+// to: nothing arrives between its reply and the next request; should the ring move during that read anyway, the order
+// of those bytes is unknown and they count as a line error (the packet is dropped and the stream resynchronises, as
+// for any line error). TX stays PIO (a request fits the FIFO: one THR-empty interrupt). Handshake and pairing keep PIO,
+// so their give-up lines see every byte. The DMA's end-of-count at every wrap is counted: more wraps than the bytes
+// taken account for means the ring was overrun, data lost, and the action panics with one line; bytes in the ring that
+// no interrupt took, after 50 ms, are a lost interrupt (checkDelivery). Never booted: a channel that does not open, a
+// first reply that does not start with the reply magic, or 4 bytes or more left in the FIFO with the ring not moving
+// turn DMA off for that rail with one log line; it keeps working by interrupt per FIFO trigger as before.
+//
 // Pairing (switch-bt=1, or the old switch-joycon-bt=1): the address to pair to is the one SwitchBluetooth programs
 // into the controller for bluetoothd: the unit's own (fuses, as switchroot's U-Boot derives it) or, when deploy staged
 // hekate's "Dump Joy-Con BT" (switchroot/joycon_mac.ini), Horizon's, as switchroot's U-Boot takes it from joycon_mac.bin
@@ -124,6 +141,7 @@
 #include <os/log.h>
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../TegraAPBDMA/TegraAPBDMA.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "SwitchJoyCon.h"
 #include "SwitchJoyConHID.h"
@@ -152,9 +170,20 @@ enum : uint32_t {
     IER_THRI = 0x02,
     IER_RLSI = 0x04,
     IER_RTOIE = 0x10,
-    IER_RX = IER_RDI | IER_RLSI | IER_RTOIE
+    IER_EORD = 0x20,  // end of receive data: the line idle 4 characters (DMA mode; serial-tegra TEGRA_UART_IER_EORD)
+    IER_RX = IER_RDI | IER_RLSI | IER_RTOIE,
+    IER_RX_DMA = IER_RLSI | IER_RTOIE | IER_EORD,
 };
-enum : uint32_t { FCR_FIFO = 0x01, FCR_RX_CLR = 0x02, FCR_TX_CLR = 0x04, FCR_TX_TRIG_16 = 0x00, FCR_RX_TRIG_8 = 0x80 };
+enum : uint32_t {
+    FCR_FIFO = 0x01,
+    FCR_RX_CLR = 0x02,
+    FCR_TX_CLR = 0x04,
+    FCR_DMA = 0x08,  // UART_FCR_DMA_SELECT: RX/TX DMA requests
+    FCR_TX_TRIG_16 = 0x00,
+    FCR_RX_TRIG_4 = 0x40,  // the DMA's one-word burst (serial-tegra, chips without 8-byte-only bursts)
+    FCR_RX_TRIG_8 = 0x80
+};
+constexpr uint32_t kDmaRingBytes = 4096;
 enum : uint32_t { LCR_8N1 = 0x03, LCR_2STOP = 0x04, LCR_DLAB = 0x80, MCR_RTS_EN = 0x40 };
 enum : uint32_t { LSR_DR = 0x01, LSR_ERRORS = 0x1e, LSR_THRE = 0x20, LSR_TEMT = 0x40, LSR_TX_FULL = 0x100 };
 enum : uint32_t { CSR_INVERT_TXD = 0x02, CSR_INVERT_RTS = 0x08 };
@@ -381,6 +410,16 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         uint8_t tx[kMaxTx];
         uint32_t txLength, txPosition;
         uint32_t ier;
+        // RX by DMA while running (header "RX by APB DMA"), under `lock`: the channel and its ring (null: PIO only),
+        // DMA mode on, the ring offset taken up to, bytes taken since the start, the channel's interrupt count at the
+        // start, the first reply checked; a reason to turn it off (the action logs it), an overrun (the action panics),
+        // and counts: replies taken, leftover bytes by PIO, ring moves during the leftover read.
+        tegra_apbdma_channel *dma;
+        tegra_apbdma_buffer dmaRing;
+        bool dmaOn, dmaOff, dmaChecked, dmaOverrun;
+        const char *dmaFailed;
+        uint32_t dmaTaken, dmaLapsAtStart, dmaTakes, dmaPio, dmaRaces;
+        uint64_t dmaBytes;
         // Work loop.
         Phase phase;
         uint8_t step, attempts, fastFailures, sends, slot, counter;  // sends: of the current handshake step
@@ -459,6 +498,10 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     void fillTx(Side &s);
     bool drainRx(Side &s);
     static void frameByte(Side &s, uint8_t byte);
+    bool takeDma(Side &s);
+    void startDmaLocked(Side &s);
+    void stopDmaLocked(Side &s);
+    void dmaFailedLocked(Side &s, const char *why);
 
     // Work loop.
     void setUp(Side &s, const SideConfig *cfg);
@@ -555,9 +598,13 @@ bool SwitchJoyConRail::uartFilter(OSObject *owner, IOFilterInterruptEventSource 
 // going idle (RX timeout), a line error or an overflow. That is the earliest the action could use them: no input
 // report or rumble goes out later than before. Every other phase (handshake, pairing) records every byte for its
 // give-up line and keeps a wakeup per interrupt.
+//
+// DMA mode (header "RX by APB DMA"): an RX condition (EORD, RX timeout, line status) masks the RX interrupts as
+// serial-tegra's tegra_uart_isr does (RDI written on, then every RX source off: that clears EORD); once IIR is clear the
+// ring and the FIFO's leftovers are taken (takeDma) and the RX sources come back.
 bool SwitchJoyConRail::filter(Side &s)
 {
-    bool got = false, idle = false;
+    bool got = false, idle = false, dmaRx = false;
     IOSimpleLockLock(s.lock);
     s.interrupts = s.interrupts + 1;
     const uint32_t errorsBefore = s.lineErrors, overflowsBefore = s.overflows;
@@ -576,10 +623,27 @@ bool SwitchJoyConRail::filter(Side &s)
         case 0: (void)rd(s, MSR); break;
         case 1: fillTx(s); break;
         default:
+            if (s.dmaOn) {
+                if (!dmaRx) {
+                    wr(s, IER, s.ier | IER_RDI);
+                    wr(s, IER, s.ier & ~(IER_RX | IER_EORD));
+                }
+                dmaRx = true;
+                if (((iir >> 1) & 7) == 3 && (rd(s, LSR) & LSR_ERRORS)) {  // line status: the read clears it
+                    s.lineErrors = s.lineErrors + 1;
+                    s.fastErrors = s.fastErrors + 1;
+                }
+                break;
+            }
             idle |= ((iir >> 1) & 7) == 6;  // RX timeout
             got |= drainRx(s);
             break;
         }
+    }
+    if (dmaRx && !s.stuck) {
+        idle = true;  // EORD and RX timeout come with the line idle: the end of a reply
+        got |= takeDma(s);
+        if (s.dmaOn) wr(s, IER, s.ier);  // a failed check left PIO's sources (dmaFailedLocked)
     }
     if (got && !s.stuck && s.phase == kRunning && !s.packetDone && !idle && s.lineErrors == errorsBefore &&
         s.overflows == overflowsBefore)
@@ -642,6 +706,117 @@ bool SwitchJoyConRail::drainRx(Side &s)
     return got;
 }
 
+// `lock` held, DMA mode, RX interrupts masked (filter): what the channel put in the ring since the last take (its cache
+// lines invalidated first: the engine does not snoop), then the bytes below its 4-byte burst still in the FIFO, by PIO
+// (drainRx), all into `ring` with the same framing. More end-of-counts (wraps) than the bytes taken account for is an
+// overrun (the action panics). The never-booted checks (header) turn DMA off for the rail (dmaFailedLocked), which
+// loses nothing: the PIO drain takes whatever the FIFO holds.
+bool SwitchJoyConRail::takeDma(Side &s)
+{
+    const uint32_t size = s.dmaRing.size;
+    const uint32_t at = tegra_apbdma_moved(s.dma, nullptr) % size;
+    const uint32_t count = (at + size - s.dmaTaken) % size;
+    const uint32_t laps = tegra_apbdma_interrupts(s.dma) - s.dmaLapsAtStart;
+    if (laps > (s.dmaBytes + count) / size) {
+        s.dmaOverrun = true;
+        return true;
+    }
+    bool got = false;
+    if (count) {
+        const uint32_t from = s.dmaTaken;
+        for (uint32_t done = 0; done < count;) {
+            const uint32_t start = (from + done) % size,
+                           run = count - done < size - start ? count - done : size - start;
+            for (uintptr_t line = (uintptr_t)(s.dmaRing.va + start) & ~(uintptr_t)63,
+                           end = (uintptr_t)(s.dmaRing.va + start + run);
+                 line < end; line += 64)
+                __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
+            done += run;
+        }
+        __asm__ volatile("dsb sy" ::: "memory");
+        if (!s.dmaChecked) {
+            // The first reply since the start begins at offset 0: the reply magic, after any zeros (uartAction's
+            // "Obird workaround"). Anything else: the channel's position or data are not what the driver thinks.
+            s.dmaChecked = true;
+            uint32_t i = 0;
+            while (i < count && !s.dmaRing.va[i]) ++i;
+            if (from != 0 || count - i < 3 || memcmp(s.dmaRing.va + i, kReplyMagic, 3)) {
+                dmaFailedLocked(s, "the first reply by DMA did not start with the reply magic");
+                return drainRx(s);
+            }
+        }
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint8_t byte = s.dmaRing.va[(from + i) % size];
+            const uint32_t next = (s.head + 1) % sizeof(s.ring);
+            if (next == s.tail) {
+                s.overflows = s.overflows + 1;
+                continue;
+            }
+            s.ring[s.head] = byte;
+            s.head = next;
+            frameByte(s, byte);
+        }
+        s.dmaTaken = at;
+        s.dmaBytes += count;
+        s.dmaTakes = s.dmaTakes + 1;
+        got = true;
+    }
+    const uint32_t before = s.head;
+    got |= drainRx(s);
+    const uint32_t pio = (s.head + sizeof(s.ring) - before) % sizeof(s.ring);
+    s.dmaPio += pio;
+    if (pio >= 4 && !count) {
+        dmaFailedLocked(s, "4 or more bytes waited in the FIFO and the DMA took none");
+    } else if (tegra_apbdma_moved(s.dma, nullptr) % size != at) {
+        s.dmaRaces = s.dmaRaces + 1;  // the ring moved while the FIFO was read: their order is unknown
+        s.lineErrors = s.lineErrors + 1;
+        s.fastErrors = s.fastErrors + 1;
+    }
+    return got;
+}
+
+// `lock` held, work loop (run): the UART into DMA mode with the ring from offset 0. What the FIFO holds is taken by
+// PIO first.
+void SwitchJoyConRail::startDmaLocked(Side &s)
+{
+    if (!s.dma || s.dmaOff || s.dmaOn) return;
+    (void)drainRx(s);
+    s.dmaTaken = 0;
+    s.dmaBytes = 0;
+    s.dmaChecked = false;
+    s.dmaLapsAtStart = tegra_apbdma_interrupts(s.dma);
+    for (uintptr_t line = (uintptr_t)s.dmaRing.va, end = line + s.dmaRing.size; line < end; line += 64)
+        __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
+    const unsigned request = s.cfg->uart == 'B' ? TEGRA_APBDMA_REQ_UARTB : TEGRA_APBDMA_REQ_UARTC;
+    tegra_apbdma_start_ring(s.dma, (uint32_t)(kUartPA + s.cfg->uartOffset + RBR_THR), request, s.dmaRing.pa,
+                            s.dmaRing.size);
+    wr(s, IIR_FCR, FCR_FIFO | FCR_DMA | FCR_RX_TRIG_4 | FCR_TX_TRIG_16);
+    s.ier = (s.ier & IER_THRI) | IER_RX_DMA;
+    wr(s, IER, s.ier);
+    s.dmaOn = true;
+}
+
+// `lock` held: back to PIO (RX interrupt per FIFO trigger), the channel stopped. Unread ring bytes are the caller's to
+// drop (leaving the running phase) or already taken.
+void SwitchJoyConRail::stopDmaLocked(Side &s)
+{
+    if (!s.dmaOn) return;
+    wr(s, IIR_FCR, FCR_FIFO | FCR_RX_TRIG_8 | FCR_TX_TRIG_16);
+    tegra_apbdma_stop(s.dma);
+    s.dmaOn = false;
+    s.ier = (s.ier & IER_THRI) | IER_RX;
+    wr(s, IER, s.ier);
+}
+
+// `lock` held: a never-booted check failed (header): PIO for this rail from now on; the action logs `why` once.
+void SwitchJoyConRail::dmaFailedLocked(Side &s, const char *why)
+{
+    stopDmaLocked(s);
+    s.dmaOff = true;
+    s.dmaFailed = why;
+}
+
 // ---- Work loop: receive -------------------------------------------------------------------------------------------
 
 void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sender, int)
@@ -654,6 +829,18 @@ void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sende
         ioswitch_interrupt_describe(s->cfg->intid, gic, sizeof(gic));
         panic("SwitchJoyCon: UART-%c interrupt stuck (INTID %u): IIR %#x LSR %#x, %s", s->cfg->uart, s->cfg->intid,
               rd(*s, IIR_FCR), rd(*s, LSR), gic);
+    }
+    if (s->dmaOverrun) {
+        char dma[320];
+        tegra_apbdma_describe(s->dma, dma, sizeof(dma));
+        panic("SwitchJoyCon: UART-%c RX DMA overran its ring (data lost): taken %llu bytes at %u, %s", s->cfg->uart,
+              s->dmaBytes, s->dmaTaken, dma);
+    }
+    if (const char *why = __atomic_exchange_n(&s->dmaFailed, nullptr, __ATOMIC_ACQ_REL)) {
+        char dma[320];
+        tegra_apbdma_describe(s->dma, dma, sizeof(dma));
+        IOLog("SwitchJoyCon: UART-%c RX DMA off for this boot (%s): RX by interrupt per FIFO trigger as before; %s\n",
+              s->cfg->uart, why, dma);
     }
     // A line error inside a packet (framing, parity, overrun) spoils it: drop what is assembled and resynchronise.
     if (s->lineErrors != s->errorsSeen) {
@@ -869,6 +1056,7 @@ void SwitchJoyConRail::configureUart(Side &s, bool fast)
 void SwitchJoyConRail::enterDetect(Side &s)
 {
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
+    stopDmaLocked(s);
     s.ier = 0;
     wr(s, IER, 0);
     s.txLength = s.txPosition = 0;
@@ -1152,6 +1340,9 @@ void SwitchJoyConRail::run(Side &s)
     s.errorsAtRun = s.lineErrors;
     s.overflowsAtRun = s.overflows;
     s.hid = createHid(s);
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
+    startDmaLocked(s);  // before the first request: its reply is the first the DMA takes
+    IOSimpleLockUnlockEnableInterrupt(s.lock, state);
     tick(s);
     if (!polling) armPoll();  // a running clock keeps its phase: the other rail's Joy-Con is not delayed
 }
@@ -1240,8 +1431,12 @@ void SwitchJoyConRail::tick(Side &s)
         checkDelivery(s, "no reply for 500 ms");
         // Pulled off the rail, or the HID phase does not work (0 reports): either way it is handshaken again if seated.
         IOLog("SwitchJoyCon: Joy-Con (%c) on the rail stopped answering after %u input reports (line errors %u, ring "
-              "overflows %u)\n",
-              s.cfg->letter, s.reports, s.lineErrors - s.errorsAtRun, s.overflows - s.overflowsAtRun);
+              "overflows %u; RX DMA %s: %u replies, %u bytes by PIO, %u ring moves during it)\n",
+              s.cfg->letter, s.reports, s.lineErrors - s.errorsAtRun, s.overflows - s.overflowsAtRun,
+              s.dmaOn              ? "on"
+              : s.dma && !s.dmaOff ? "idle"
+                                   : "off",
+              s.dmaTakes, s.dmaPio, s.dmaRaces);
         detach(s);
         return;
     }
@@ -1332,6 +1527,7 @@ void SwitchJoyConRail::pause(Side &s)
     s.timer->cancelTimeout();
     s.detect->disable();
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
+    stopDmaLocked(s);
     s.ier = 0;
     wr(s, IER, 0);
     s.txLength = s.txPosition = 0;
@@ -1386,7 +1582,9 @@ void SwitchJoyConRail::checkDelivery(Side &s, const char *why)
 {
     for (unsigned look = 0; look < 2; ++look) {
         const uint32_t seen = s.interrupts, lsr = rd(s, LSR);
-        const bool rx = (lsr & LSR_DR) && (s.ier & (IER_RDI | IER_RTOIE));
+        // DMA mode: bytes the channel put in the ring that no EORD/RX-timeout interrupt took.
+        const bool ring = s.dmaOn && tegra_apbdma_moved(s.dma, nullptr) % s.dmaRing.size != s.dmaTaken;
+        const bool rx = ((lsr & LSR_DR) && (s.ier & (IER_RDI | IER_RTOIE))) || ring;
         const bool tx = (lsr & LSR_THRE) && (s.ier & IER_THRI);
         if (!rx && !tx) return;
         if (look == 0) {
@@ -1396,8 +1594,11 @@ void SwitchJoyConRail::checkDelivery(Side &s, const char *why)
         }
         char gic[160];
         ioswitch_interrupt_describe(s.cfg->intid, gic, sizeof(gic));
-        panic("SwitchJoyCon: UART-%c interrupt lost (INTID %u, %s): LSR %#x IER %#x MCR %#x tx %u/%u, %s", s.cfg->uart,
-              s.cfg->intid, why, lsr, rd(s, IER), rd(s, MCR), s.txPosition, s.txLength, gic);
+        panic(
+            "SwitchJoyCon: UART-%c interrupt lost (INTID %u, %s): LSR %#x IER %#x MCR %#x tx %u/%u dma %u ring %u/%u, "
+            "%s",
+            s.cfg->uart, s.cfg->intid, why, lsr, rd(s, IER), rd(s, MCR), s.txPosition, s.txLength, s.dmaOn,
+            s.dmaOn ? tegra_apbdma_moved(s.dma, nullptr) : 0, s.dmaTaken, gic);
     }
 }
 
@@ -1540,6 +1741,14 @@ void SwitchJoyConRail::setUp(Side &s, const SideConfig *cfg)
         panic("SwitchJoyCon: cannot attach the Joy-Con (%c) detect interrupt (GPIO %u)", cfg->letter, cfg->detectPin);
     }
     s.irq->enable();
+
+    // RX DMA (header "RX by APB DMA"): the rail works by interrupt per FIFO trigger without it.
+    char why[128] = "no DMA-able ring";
+    if (tegra_apbdma_alloc(kDmaRingBytes, &s.dmaRing)) {
+        s.dma = tegra_apbdma_open(cfg->uart == 'B' ? TEGRA_APBDMA_CH_UARTB_RX : TEGRA_APBDMA_CH_UARTC_RX, loop, nullptr,
+                                  nullptr, why, sizeof(why));
+    }
+    if (!s.dma) IOLog("SwitchJoyCon: UART-%c RX DMA off (%s): RX by interrupt per FIFO trigger\n", cfg->uart, why);
 }
 
 // ---- SC7 ----------------------------------------------------------------------------------------------------------
@@ -1557,6 +1766,7 @@ void SwitchJoyConRail::quiesce(Side &s)
     s.detect->disable();
     s.irq->disable();
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s.lock);
+    stopDmaLocked(s);
     s.ier = 0;
     wr(s, IER, 0);
     s.txLength = s.txPosition = 0;

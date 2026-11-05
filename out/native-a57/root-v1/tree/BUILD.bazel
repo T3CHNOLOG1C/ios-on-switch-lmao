@@ -289,6 +289,9 @@ kernel_driver(name = "TegraI2C")
 # SPI4 master for the IMU (drivers/SwitchMotion).
 kernel_driver(name = "TegraSPI")
 
+# APB DMA for the UARTs (Joy-Con rails' RX, Bluetooth's TX).
+kernel_driver(name = "TegraAPBDMA")
+
 # SwitchThermal: fan curve, CPU operating point; SwitchPerfGovernor: the CPU's on-demand governor (perfcontrol callouts).
 kernel_driver(
     name = "SwitchThermal",
@@ -719,6 +722,7 @@ kernel_archive(
         ":TegraGPIO",
         ":TegraI2C",
         ":TegraSPI",
+        ":TegraAPBDMA",
         ":SwitchThermal",
         ":SwitchBattery",
         ":SwitchBluetooth",
