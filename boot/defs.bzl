@@ -7,9 +7,11 @@ only the steps it reaches:
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU) ... trustcache.bundle
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
-                                         ...... plan.json, the kernel's LZ4 blocks, the rest
-    build_native_loader.py compress, twice ... each set of blocks lz4 -12'd (a boot-arg, ADT, overlay or GPU trust
-                                               cache edit leaves the kernel's set, and its 2-4 s, alone)
+                                         ...... plan.json, the window's 1 MiB LZ4 blocks in 96 shards (by the MiB
+                                                each starts in)
+    lz4 -12, one action per shard ........... each shard's blocks compressed and checked (an unchanged shard is a
+                                               cache hit: a driver edit recompresses the native kernel's few blocks,
+                                               a boot-arg, ADT or trust cache edit the tail's)
     build_native_loader.py join ............. layout.h, runs.h, kernel-window.bin, constants.json
     clang -c, one per loader source ......... loader objects (the window's constants only for those including them)
     loader_link.py ........................... loader.uboot.bin
@@ -19,8 +21,8 @@ only the steps it reaches:
     cp ...................................... ioswitch/ (the directory //deploy:sd, //install:sd and //boot:snapshot take)
 
 So an overlay plist edit reruns the overlay tree and the final copy; a driver edit reruns the kernel's steps from the
-layout on (both compressions, four loader objects, the link, the bl33 stage, the boot script and the copy); a boot-arg
-edit reruns from the ADT edit on, but compresses only the window's tail. The Python steps run on the hermetic interpreter and need nothing of Xcode; the loader's compiles do (Xcode's
+layout on (the shards it changed, four loader objects, the link, the bl33 stage, the boot script and the copy); a
+boot-arg edit reruns from the ADT edit on, but compresses only the window's tail. The Python steps run on the hermetic interpreter and need nothing of Xcode; the loader's compiles do (Xcode's
 clang, the declared host input).
 """
 
@@ -86,8 +88,22 @@ def _run(ctx, tool, arguments, inputs, outputs, mnemonic, message):
         progress_message = message,
     )
 
-def _four_cpus(_os, _inputs):
-    return {"cpu": 4}
+# The kernel window's shards (tools/package/loader_abi.py WINDOW_SHARDS: the MiB of the window a block starts in).
+_WINDOW_SHARDS = 96
+
+def _two_digits(i):
+    return ("0" + str(i))[-2:]
+
+# One shard: lz4 -12 over each of its blocks (none, one, or a few small ones), each checked by decoding it again.
+_COMPRESS_SHARD = """set -e
+lz4="$1"; in="$2"; out="$3"
+for block in "$in"/*; do
+    [ -f "$block" ] || continue
+    name="${block##*/}"
+    "$lz4" -12 -B6 --no-frame-crc -c -q "$block" > "$out/$name.lz4"
+    "$lz4" -d -c -q "$out/$name.lz4" | /usr/bin/cmp -s - "$block" || { echo "lz4: $name does not decode to its block" >&2; exit 1; }
+done
+"""
 
 def _one(target, what):
     files = target.files.to_list()
@@ -168,9 +184,10 @@ def _boot_package_impl(ctx):
     # end of the file"), so a release kernel is stripped where it is linked, before the prelinker (which binds the kexts
     # to its global symbols, all a strip -x keeps).
     kernel = ctx.file.kernel
-    # Layout and checks, then the kernel's own LZ4 blocks and the rest compressed apart (a boot-arg, ADT, overlay
-    # binary or GPU trust cache edit recompresses only the rest), then the staged window and the loader's headers.
-    window_plan, kernel_blocks, tail_blocks = out("window/plan.json"), out("window/kernel.blocks"), out("window/tail.blocks")
+    # Layout and checks, then each shard of the window's LZ4 blocks compressed on its own (only the shards an edit
+    # changed rerun), then the staged window and the loader's headers.
+    window_plan = out("window/plan.json")
+    shards = [ctx.actions.declare_directory(name + "_work/window/blocks/" + _two_digits(i)) for i in range(_WINDOW_SHARDS)]
     args = ctx.actions.args()
     args.add("layout")
     args.add("--kernel", kernel)
@@ -179,36 +196,34 @@ def _boot_package_impl(ctx):
     args.add("--data-seed", ctx.file.data_seed)
     args.add("--boot-args", boot_args)
     args.add("--plan", window_plan)
-    args.add("--kernel-blocks", kernel_blocks)
-    args.add("--tail-blocks", tail_blocks)
-    _run(ctx, ctx.executable._window, [args], [kernel, adt, bundle, ctx.file.data_seed, boot_args], [window_plan, kernel_blocks, tail_blocks], "KernelLayout", "Laying out the kernel window")
+    args.add("--blocks", shards[0].dirname)
+    _run(ctx, ctx.executable._window, [args], [kernel, adt, bundle, ctx.file.data_seed, boot_args], [window_plan] + shards, "KernelLayout", "Laying out the kernel window")
 
-    compressed = {}
-    for shard, blocks in (("kernel", kernel_blocks), ("tail", tail_blocks)):
-        compressed[shard] = out("window/%s.lz4" % shard)
-        ctx.actions.run(
-            executable = ctx.executable._window,
-            arguments = ["compress", "--lz4", ctx.file._lz4.path, "--blocks", blocks.path, "--out", compressed[shard].path],
-            inputs = [blocks],
+    compressed = []
+    for i, shard in enumerate(shards):
+        lz4 = ctx.actions.declare_directory(name + "_work/window/lz4/" + _two_digits(i))
+        ctx.actions.run_shell(
+            command = _COMPRESS_SHARD,
+            arguments = [ctx.file._lz4.path, shard.path, lz4.path],
+            inputs = [shard],
             tools = [ctx.file._lz4],
-            outputs = [compressed[shard]],
+            outputs = [lz4],
+            env = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
             mnemonic = "KernelCompress",
-            progress_message = "Compressing the kernel window's %s blocks" % shard,
-            # lz4 -12 over the kernel's ~60 blocks in parallel; the tail is a block or two, beside it.
-            resource_set = _four_cpus if shard == "kernel" else None,
+            progress_message = "Compressing the kernel window's MiB %d" % i,
         )
+        compressed.append(lz4)
 
     layout_h, runs_h, window, constants = out("gen/layout.h"), out("gen/runs.h"), out("kernel-window.bin"), out("constants.json")
     args = ctx.actions.args()
     args.add("join")
     args.add("--plan", window_plan)
-    args.add("--kernel-lz4", compressed["kernel"])
-    args.add("--tail-lz4", compressed["tail"])
+    args.add("--compressed", compressed[0].dirname)
     args.add("--layout-h", layout_h)
     args.add("--runs-h", runs_h)
     args.add("--window", window)
     args.add("--constants", constants)
-    _run(ctx, ctx.executable._window, [args], [window_plan, compressed["kernel"], compressed["tail"]], [layout_h, runs_h, window, constants], "KernelWindow", "Staging the kernel window")
+    _run(ctx, ctx.executable._window, [args], [window_plan] + compressed, [layout_h, runs_h, window, constants], "KernelWindow", "Staging the kernel window")
 
     includes = []
     for marker in ctx.files.loader_include_markers:
@@ -318,7 +333,7 @@ def _boot_package_impl(ctx):
         DefaultInfo(files = depset([package])),
         OutputGroupInfo(
             adt = depset([adt]),
-            kernel_window = depset([window, layout_h, runs_h, constants]),
+            kernel_window = depset([window, layout_h, runs_h, constants, window_plan]),
             loader = depset([loader]),
             overlay = depset([plan, overlay_trust, overlay]),
             trust = depset([bundle]),
@@ -368,7 +383,8 @@ boot_package = rule(
         "_loader_link": _tool("//tools/package:loader_link"),
         "_bl33": _tool("//tools/package:bl33"),
         "_boot_script": _tool("//tools/package:boot_script"),
-        # The kernel window's compressor (lz4 -12), built from pinned source; LLVM 23.1.4's linker and binutils.
+        # The kernel window's compressor (lz4 -12, one action per shard), built from pinned source; LLVM 23.1.4's
+        # linker and binutils.
         "_lz4": attr.label(default = "//tools:lz4", cfg = "exec", allow_single_file = True),
         "_ld_lld": attr.label(default = "@llvm//:bin/ld.lld", cfg = "exec", allow_single_file = True),
         "_objcopy": attr.label(default = "@llvm//:bin/llvm-objcopy", cfg = "exec", allow_single_file = True),

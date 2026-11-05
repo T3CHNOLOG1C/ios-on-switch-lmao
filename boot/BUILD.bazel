@@ -7,6 +7,7 @@
 # tools/package/adt_edit.py; the steps and what each reads in boot/defs.bzl.
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/kernel:inputs.bzl", "tool_output")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "boot_package")
@@ -119,6 +120,29 @@ boot_package(
     portrait_header = "//drivers/NativeMobileDisplay:IOSwitchPortrait.h",
     static_trust = "//ipsw:static_system_trust",
     template = ":raw-v24-boot.cmd",
+)
+
+# The staged kernel window decodes (lz4 -d, block by block from the table the loader compiles in) to exactly the image
+# the layout made: the compression changes the staged bytes, never the kernel the loader copies into place.
+filegroup(
+    name = "kernel_window",
+    srcs = [":package"],
+    output_group = "kernel_window",
+)
+
+py_test(
+    name = "window_decode_test",
+    size = "small",
+    srcs = ["window_decode_test.py"],
+    args = [
+        "$(rlocationpath //tools:lz4)",
+        "$(rlocationpaths :kernel_window)",
+    ],
+    data = [
+        ":kernel_window",
+        "//tools:lz4",
+    ],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 # bazel run //boot:snapshot -- <name>: this build's boot entry and Metal bundle as out/boot/lkg/<name> (rollback, or

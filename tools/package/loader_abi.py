@@ -30,10 +30,15 @@ VIDEO = [0xF5A00000, 0, 2880, 720, 1280, 0x320]
 # The cacheable-copy loader ships the window packed: only its nonzero extents (4 KiB granular; zero gaps shorter than
 # 64 KiB stay in an extent), back to back. Over half the window is zeros (the VA holes between prelinked segments); the
 # loader writes them itself during its cached copy. Each extent is also LZ4-compressed (lz4 -12, independent blocks of
-# 4 MiB, ~2.4:1 on this kernel); the loader decodes it under the same cached regime (native/loader/copy.c lz4_block).
+# 1 MiB, ~2.4:1 on this kernel); the loader decodes it under the same cached regime (native/loader/copy.c lz4_block).
+# 1 MiB, not 4: the slowest block takes lz4 -12 0.5 s, not 2.5 s, for 0.2% more bytes (lz4's window is 64 KiB).
 PACK_PAGE = 0x1000
 PACK_MIN_GAP = 0x10000
-LZ4_BLOCK = 4 << 20
+LZ4_BLOCK = 1 << 20
+# The packaging compresses the blocks in shards, one action each: a block's shard is the MiB of the window it starts in,
+# so a block keeps its shard (and an unchanged shard its cached compression) whatever changes elsewhere in the window.
+WINDOW_SHARD_BYTES = 1 << 20
+WINDOW_SHARDS = 0x6000000 // WINDOW_SHARD_BYTES  # the staged window's limit (build_native_loader.py window_checks)
 LZ4_MAGIC = b'\x04\x22\x4d\x18'
 
 # /chosen/ioswitch-boot-stamps: native/loader/stamps.h IOSW_STAMP_COUNT 64-bit words, zero until the loader fills it.

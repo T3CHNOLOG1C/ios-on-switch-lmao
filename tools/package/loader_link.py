@@ -6,7 +6,9 @@ U-Boot's bootm.
 
 Checks the ELF (an AArch64 executable entered at 0xA0000000, every load segment inside the loader's 128 KiB, no
 relocations), that the loader's code, data and stacks end below the fixed SD reference page and, when the ADT has the
-boot timing record, below U-Boot's stamp slot, and that the flat image fits before the SD reference page.
+boot timing record, below U-Boot's stamp slot, and that the flat image fits before the SD reference page. A loader
+that does not fit says how big the kernel window's block table (runs.h, copy.c's loader_blocks) has grown: it is the
+part that grows with the kernel, 32 bytes a block.
 """
 
 import argparse
@@ -51,6 +53,25 @@ def validate_elf(data: bytes) -> dict:
     return {'footprint_end': max(virt + memsz for virt, memsz, _ in segments)}
 
 
+def block_table(readelf: Path, objects: list[Path]) -> str:
+    """The kernel window's block table (copy.c's loader_blocks, runs.h) in the objects, as words for a failure."""
+    for obj in objects:
+        symbols = subprocess.run([readelf, '-sW', obj], capture_output=True, text=True).stdout
+        for line in symbols.splitlines():
+            fields = line.split()
+            if len(fields) >= 8 and fields[-1] == 'loader_blocks':
+                size = int(fields[2], 0)
+                return f'the kernel window block table (runs.h) is {size // 32} blocks, {size} bytes of .rodata'
+    return 'no kernel window block table in the objects'
+
+
+def too_big(what: str, readelf: Path, objects: list[Path]) -> SystemExit:
+    return SystemExit(
+        f'{what}; {block_table(readelf, objects)}. The loader must end below 0x{STAMPS_SLOT:x} (stamps.h): fewer, larger '
+        'LZ4 blocks (loader_abi.LZ4_BLOCK) or a smaller loader'
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('ld-lld', 'objcopy', 'readelf', 'linker-script', 'constants', 'out'):
@@ -64,15 +85,17 @@ def main():
             [args.ld_lld, '-T', args.linker_script, '-o', elf, *args.objects], capture_output=True, text=True
         )
         if linked.returncode:
+            if 'overlap' in linked.stdout + linked.stderr:  # link.ld's ASSERTs on the image's end
+                raise too_big((linked.stdout + linked.stderr).strip(), args.readelf, args.objects)
             raise SystemExit(linked.stdout + linked.stderr)
         footprint = validate_elf(elf.read_bytes())['footprint_end']
         if footprint > SD_REFERENCE:
-            raise SystemExit('loader code/data/stacks overlap the fixed SD reference page')
+            raise too_big('loader code/data/stacks overlap the fixed SD reference page', args.readelf, args.objects)
         if constants['STAMPS_ADT_OFFSET'] and footprint > STAMPS_SLOT:
-            raise SystemExit("loader code/data/stacks overlap U-Boot's boot timing slot")
+            raise too_big("loader code/data/stacks overlap U-Boot's boot timing slot", args.readelf, args.objects)
         subprocess.run([args.objcopy, '-O', 'binary', elf, flat], check=True)
         if flat.stat().st_size > SD_REFERENCE - LOAD:
-            raise SystemExit('loader file overlaps the fixed SD reference page')
+            raise too_big('loader file overlaps the fixed SD reference page', args.readelf, args.objects)
         report = subprocess.run([args.readelf, '-h', '-l', '-r', '-s', elf], check=True, capture_output=True, text=True)
         if 'There are no relocations in this file.' not in report.stdout:
             raise SystemExit('unresolved loader relocations')

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""The kernel window the native loader copies into place, and the loader's generated headers: three steps of
-//boot:package (boot/defs.bzl), each its own action.
+"""The kernel window the native loader copies into place, and the loader's generated headers: steps of //boot:package
+(boot/defs.bzl), each its own action.
 
     build_native_loader.py layout --kernel K --adt ADT --trustcache BUNDLE --data-seed SEED --boot-args F \
-        --plan OUT --kernel-blocks OUT --tail-blocks OUT
-    build_native_loader.py compress --lz4 LZ4 --blocks IN --out OUT
-    build_native_loader.py join --plan P --kernel-lz4 C --tail-lz4 C --layout-h OUT --runs-h OUT --window OUT \
-        --constants OUT
+        --plan OUT --blocks DIR
+    (per shard: lz4 -12 over DIR/NN/*, each block checked by decoding it again: boot/defs.bzl, no Python)
+    build_native_loader.py join --plan P --compressed DIR --layout-h OUT --runs-h OUT --window OUT --constants OUT
 
 layout lays the kernel, the ADT, the trust cache bundle and the Data seed out at their physical addresses
 (native_xnu_layout.build_layout, the full-RAM root-boot profile), checks the result against every contract the loader
-relies on and packs it (nonzero extents only, cut into 4 MiB LZ4 blocks). The blocks wholly inside the kernel go to
-one file and the rest (boot_args, the ADT, the trust caches, the Data seed) to another, so that a boot-arg, ADT,
-overlay or GPU trust cache edit leaves the kernel's file, and its compression, as they were. compress runs lz4 -12
-over each block (in parallel, each checked by decoding it again). join writes:
+relies on and packs it (nonzero extents only, cut into 1 MiB LZ4 blocks). Each block goes to DIR/NN/<offset>, NN the
+MiB of the window it starts in (loader_abi.WINDOW_SHARDS shards, one compress action each): a block's shard holds
+whatever is around it, so an edit recompresses only the shards whose blocks it changed (a driver edit: the native
+kernel's few; a boot-arg, ADT or trust cache edit: the tail's) and every other shard's compression is a cache hit.
+join reads DIR/NN/<offset>.lz4 (lz4's frames) and writes:
 
   layout.h        the loader's LOAD_* constants (native/loader/loader.c, copy.c, entry.S, copy.S include it)
   runs.h          copy.c's table of the staged window's blocks
@@ -57,6 +57,8 @@ from loader_abi import (
     STAMPS_BYTES,
     STAMPS_PROPERTY,
     VIDEO,
+    WINDOW_SHARD_BYTES,
+    WINDOW_SHARDS,
     WINDOW_SIZE,
 )
 from native_oled_adt import ROOT_MATCHING
@@ -117,7 +119,7 @@ def lz4_frame_blocks(frame: bytes, length: int) -> list[tuple[int, bool, bytes]]
 
 
 def lz4_blocks(runs: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """The extents' LZ4 blocks as (window offset, length): each extent cut into 4 MiB blocks from its start (lz4 -B7)."""
+    """The extents' LZ4 blocks as (window offset, length): each extent cut into 1 MiB blocks from its start (lz4 -B6)."""
     return [(at, min(LZ4_BLOCK, start + size - at)) for start, size in runs for at in range(start, start + size, LZ4_BLOCK)]
 
 
@@ -132,11 +134,11 @@ def compress_blocks(blocks: list[bytes], lz4: str | None = None) -> list[tuple[b
 
     def compress(data):
         frame = subprocess.run(
-            [lz4, '-12', '-B7', '--no-frame-crc', '-c', '-q'], input=data, capture_output=True, check=True
+            [lz4, '-12', '-B6', '--no-frame-crc', '-c', '-q'], input=data, capture_output=True, check=True
         ).stdout
         (decoded_length, stored, body), *more = lz4_frame_blocks(frame, len(data))
         if more or decoded_length != len(data):
-            raise ValueError('lz4: a 4 MiB block did not compress to one block')
+            raise ValueError('lz4: a block did not compress to one block')
         if subprocess.run([lz4, '-d', '-c', '-q'], input=frame, capture_output=True, check=True).stdout != data:
             raise ValueError('lz4: a block does not decode to the window')
         return stored, body
@@ -160,7 +162,7 @@ def block_table(blocks: list[tuple[int, int]], compressed: list[tuple[bool, byte
 def compress_window(
     payload: bytes, runs: list[tuple[int, int]], lz4: str | None = None
 ) -> tuple[list[tuple[int, int, int, int]], bytes]:
-    """The window's nonzero extents, each LZ4-compressed (lz4 -12, independent blocks of up to 4 MiB): the loader's block
+    """The window's nonzero extents, each LZ4-compressed (lz4 -12, independent blocks of up to 1 MiB): the loader's block
     table and the blocks back to back, checked by laying the blocks back into an empty window."""
     blocks = lz4_blocks(runs)
     table, stream = block_table(blocks, compress_blocks([payload[at : at + length] for at, length in blocks], lz4))
@@ -508,43 +510,19 @@ def runs_header(blocks: list) -> str:
     )
 
 
-def pack_blocks(blocks: list[bytes]) -> bytes:
-    """Blocks as one file: u32 count, u64 lengths, the bytes back to back."""
-    return struct.pack(f'<I{len(blocks)}Q', len(blocks), *map(len, blocks)) + b''.join(blocks)
+def shard_of(at: int) -> str:
+    """A block's shard: the MiB of the window it starts in (its directory below layout's --blocks)."""
+    if not 0 <= at < WINDOW_SHARDS * WINDOW_SHARD_BYTES:
+        raise ValueError(f'block at {at:#x} beyond the {WINDOW_SHARDS} window shards')
+    return f'{at // WINDOW_SHARD_BYTES:02d}'
 
 
-def unpack_blocks(data: bytes) -> list[bytes]:
-    count = struct.unpack_from('<I', data)[0]
-    lengths, at, blocks = struct.unpack_from(f'<{count}Q', data, 4), 4 + 8 * count, []
-    for length in lengths:
-        blocks.append(data[at : at + length])
-        at += length
-    if at != len(data):
-        raise ValueError('block file has trailing bytes')
-    return blocks
-
-
-def pack_compressed(compressed: list[tuple[bool, bytes]]) -> bytes:
-    """Compressed blocks as one file: u32 count, then per block u8 stored, u64 length, the bytes."""
-    return struct.pack('<I', len(compressed)) + b''.join(
-        struct.pack('<BQ', stored, len(body)) + body for stored, body in compressed
-    )
-
-
-def unpack_compressed(data: bytes) -> list[tuple[bool, bytes]]:
-    count, at, blocks = struct.unpack_from('<I', data)[0], 4, []
-    for _ in range(count):
-        stored, length = struct.unpack_from('<BQ', data, at)
-        blocks.append((bool(stored), data[at + 9 : at + 9 + length]))
-        at += 9 + length
-    if at != len(data):
-        raise ValueError('compressed block file has trailing bytes')
-    return blocks
+def block_name(at: int) -> str:
+    return f'{at:08x}'
 
 
 def layout(args):
-    """The layout, its checks, the extents and their blocks: the kernel's own (wholly below boot_args: unchanged by
-    a boot-arg, ADT, trust cache or Data seed edit) and the rest, each set in one file for its own compress action."""
+    """The layout, its checks, the extents and their blocks, each block in its shard's directory (shard_of)."""
     command_line = args.boot_args.read_text().rstrip('\n')
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)
@@ -569,20 +547,32 @@ def layout(args):
         payload = (scratch / 'layout/kernel-window.bin').read_bytes()
         constants = window_checks(m, payload, inputs['adt'].read_bytes())
     runs, _ = pack_window(payload)
-    kernel_end = m['boot_args_pa'] - m['phys_base']
-    blocks = [(at, length, 'kernel' if at + length <= kernel_end else 'tail') for at, length in lz4_blocks(runs)]
-    for shard, out in (('kernel', args.kernel_blocks), ('tail', args.tail_blocks)):
-        out.write_bytes(pack_blocks([payload[at : at + length] for at, length, s in blocks if s == shard]))
-    args.plan.write_text(json.dumps({'constants': constants, 'blocks': blocks, 'entry_pa': m['entry_pa']}) + '\n')
+    blocks = lz4_blocks(runs)
+    shards = sorted(p.name for p in args.blocks.iterdir())
+    if shards != [f'{i:02d}' for i in range(WINDOW_SHARDS)]:
+        raise SystemExit(f'{args.blocks}: not the {WINDOW_SHARDS} shard directories (boot/defs.bzl _WINDOW_SHARDS)')
+    for at, length in blocks:
+        (args.blocks / shard_of(at) / block_name(at)).write_bytes(payload[at : at + length])
+    # image: what the loader's decode must give (boot:window_decode_test decodes the staged window against it).
+    image = {'bytes': len(payload), 'sha256': m['image']['sha256']}  # window_checks: the payload's
+    args.plan.write_text(
+        json.dumps({'constants': constants, 'blocks': blocks, 'entry_pa': m['entry_pa'], 'image': image}) + '\n'
+    )
 
 
 def join(args):
     plan = json.loads(args.plan.read_text())
-    shards = {'kernel': unpack_compressed(args.kernel_lz4.read_bytes()), 'tail': unpack_compressed(args.tail_lz4.read_bytes())}
-    compressed = [shards[shard].pop(0) for _, _, shard in plan['blocks']]
-    if any(shards.values()):
-        raise SystemExit('more compressed blocks than the plan has')
-    table, stream = block_table([(at, length) for at, length, _ in plan['blocks']], compressed)
+    compressed = []
+    for at, length in plan['blocks']:
+        frame = (args.compressed / shard_of(at) / (block_name(at) + '.lz4')).read_bytes()
+        (decoded_length, stored, body), *more = lz4_frame_blocks(frame, length)
+        if more or decoded_length != length:
+            raise ValueError(f'lz4: the block at {at:#x} did not compress to one block')
+        compressed.append((stored, body))
+    found = sum(1 for _ in args.compressed.glob('*/*'))
+    if found != len(compressed):
+        raise SystemExit(f'{found} compressed blocks for the plan\'s {len(compressed)}')
+    table, stream = block_table([(at, length) for at, length in plan['blocks']], compressed)
     constants, staged = staged_window(plan['constants'], table, stream)
     args.layout_h.write_text(layout_header(constants))
     args.runs_h.write_text(runs_header(table))
@@ -595,9 +585,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     steps = parser.add_subparsers(dest='step', required=True)
     for step, names in (
-        ('layout', ('kernel', 'adt', 'trustcache', 'data-seed', 'boot-args', 'plan', 'kernel-blocks', 'tail-blocks')),
-        ('compress', ('lz4', 'blocks', 'out')),
-        ('join', ('plan', 'kernel-lz4', 'tail-lz4', 'layout-h', 'runs-h', 'window', 'constants')),
+        ('layout', ('kernel', 'adt', 'trustcache', 'data-seed', 'boot-args', 'plan', 'blocks')),
+        ('join', ('plan', 'compressed', 'layout-h', 'runs-h', 'window', 'constants')),
     ):
         p = steps.add_parser(step)
         for name in names:
@@ -605,9 +594,6 @@ def main():
     args = parser.parse_args()
     if args.step == 'layout':
         layout(args)
-    elif args.step == 'compress':
-        blocks = unpack_blocks(args.blocks.read_bytes())
-        args.out.write_bytes(pack_compressed(compress_blocks(blocks, str(args.lz4.absolute())) if blocks else []))
     else:
         join(args)
 
