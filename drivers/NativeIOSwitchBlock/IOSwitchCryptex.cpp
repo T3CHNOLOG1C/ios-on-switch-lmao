@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The unchanged System/App cryptex images from Preboot as read-only block devices: read straight from the SD card into
-// the requesting pages (r17-launch, the direct read map), or through the original DiskImages hook if that map is
-// refused; the APFS volume each one publishes; and the boot prefetch of the cryptex volumes' files.
+// The unchanged System/App cryptex images from Preboot as read-only block devices: read from the SD card through a
+// cache of 128 KiB windows (the direct read map), or through the original DiskImages hook if that map is refused; the
+// APFS volume each one publishes; and the boot prefetch of the cryptex volumes' files.
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOLocks.h>
+#include <IOKit/IORegistryEntry.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOSubMemoryDescriptor.h>
 #include <IOKit/storage/IOBlockStorageDevice.h>
@@ -19,6 +20,7 @@
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
+#include <mach/memory_object_types.h>
 #include <sys/disk.h>
 #include <sys/errno.h>
 #include <sys/fcntl.h>
@@ -27,7 +29,10 @@
 #include <sys/stat.h>
 #include <sys/ubc.h>
 #include <sys/vnode.h>
+#include <vm/pmap.h>
+#include "IOSwitchClientCopy.h"
 #include "IOSwitchCryptex.h"
+#include "IOSwitchCryptexCache.h"
 #include "IOSwitchCryptexMap.h"
 
 struct ioswitch_record_entry {  // bsd/vfs/vfs_cluster.c
@@ -49,7 +54,6 @@ uint32_t ioswitch_cluster_record_stop(void);                                    
 void ioswitch_cluster_image_direct(uint64_t bytes, uint32_t cardReads);                      // bsd/vfs/vfs_cluster.c
 int vnode_pagein(vnode_t, upl_t, upl_offset_t, vm_object_offset_t, upl_size_t, int, int *);  // bsd/vm/vnode_pager.c
 int VFS_VGET(mount_t, ino64_t, vnode_t *, vfs_context_t);                                    // bsd/vfs/kpi_vfs.c
-void ioswitch_block_prefetch_thread(thread_t);                                               // NativeIOSwitchBlock.cpp
 IOBlockStorageDevice *ioswitch_block_device(IOService **controller, dev_t *whole, uint64_t *sectors,
                                             uint32_t *maxReadSectors);  // NativeIOSwitchBlock.cpp
 void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
@@ -143,18 +147,20 @@ int outputs(unsigned index, dev_t *device, char *path, size_t capacity)
 // with the per-read VNOP_READ, UPL and copy work those four threads used ~29 s of CPU per r7v boot, ~1.5 s of it the
 // copy). The image is one unchanging file, so its extents are resolved once here instead: the file's blocks on Preboot
 // (VNOP_BLOCKMAP) and where they sit on the SD card's APFS window (DKIOCGETPHYSICALEXTENT, as kern_symfile.c's
-// direct-I/O files), checked by reading sampled blocks both ways. The cryptex device's reads then go straight to the SD
-// device as sub-ranges of the request's own memory, one per extent piece, which the SD driver's ADMA2 table scatters
-// into the requesting pages: no image page cache, no copy, no DiskImages thread.
+// direct-I/O files), checked by reading sampled blocks both ways. The cryptex device's reads then go to the SD device,
+// one read per extent piece: no DiskImages thread, no VNOP_READ.
 //
 // The device reports itself as SD storage, not a virtual (disk image) interface, so the cryptex APFS mounts without
-// MNTK_VIRTUALDEV: its page-ins are then clustered reads checked by the cluster layer (cluster_EOT asks APFS for the
-// seal's hashes when the I/O is issued, cluster_iodone checks every page against them: VNOP_VERIFY), as on every
-// non-virtual volume and as grafted cryptexes are read on a stock iPad, instead of APFS's own one-4-KiB-block-at-a-time
-// check for virtual devices (245,891 of 245,941 reads in the 11-04 census). The same hashes, root hash and trust cache
-// apply to the same bytes. Completions go to the client from a thread call, never from the SD driver's worker, so the
-// hash checks run beside the card's next command, and a completion that ever waited for another read of the same
-// image could not block the thread that issues it.
+// MNTK_VIRTUALDEV. APFS still reads the cryptex files one 4 KiB block at a time, each after the last, whatever the
+// page-in asks for, and a card command for 4 KiB costs nearly as much as one for 128 KiB. So reads go through a cache
+// of 128 KiB windows (IOSwitchCryptexCache.h): a small read that misses reads its whole window in one command, the
+// reads that follow copy their blocks out of it (copypv, as the SD driver's bounce path copies into requests), and the
+// boot prefetch reads its runs ahead into windows. A large read the cache does not hold goes straight into the
+// request's pages. APFS checks every block it gets against the seal's hashes, wherever it came from. The cache is
+// checked once at the first attach (proveCache) and turned off with one line if a block differs from the image file.
+// Completions go to the client from a thread call, never from the SD driver's worker, so the hash checks run beside
+// the card's next command, and a completion that ever waited for another read of the same image could not block the
+// thread that issues it.
 //
 // The image file stays open (its use count) while the device exists. A refused map (a hole, a compressed file, an
 // extent outside the window, a sampled block that differs) logs one line and attaches through DiskImages as before.
@@ -163,6 +169,16 @@ constexpr uint32_t kImageBlock = 4096;  // the cryptex device's block (APFS's), 
 constexpr uint32_t kSdSector = 512;
 constexpr uint32_t kMaxExtents = 1u << 16;
 constexpr unsigned kSampledExtents = 16;  // checked both ways at attach, besides the image's first and last block
+static_assert(kImageBlock == kIOSwitchCacheBlock, "the cache's block is the device's");
+// The cache's windows: 32 MiB until the boot's reads are done (bootIoDone), then 8 MiB: app launches page the
+// cryptexes in one block at a time too.
+constexpr uint32_t kBootWindows = 256;
+constexpr uint32_t kSteadyWindows = 64;
+constexpr uint32_t kMinWindows = 8;
+constexpr uint32_t kBuckets = 1024;
+constexpr uint64_t kAroundBytes = 16 * kImageBlock;  // reads up to 64 KiB read their windows around them
+constexpr uint32_t kRequestReads = kIOSwitchAroundWindows * kIOSwitchWindowReads;
+constexpr unsigned kWorkers = 4;  // prefetch threads: APFS pages a run in one block at a time
 
 using Extent = IOSwitchExtent;  // bytes: image offset, offset on the SD APFS window, length
 
@@ -171,23 +187,83 @@ struct Pending {
     thread_call_t call;
     IOStorageCompletion client;
     uint64_t length, bytes;
-    uint32_t remaining;  // pieces outstanding, plus one while the request is being issued
+    uint32_t remaining;  // pieces outstanding (or one while it waits on the cache), plus one while it is being issued
     IOReturn status;
     bool prefetch;
+    bool inflight;  // its length is counted in gFlow.inflight (a prefetch read that went straight to the card)
+    bool cached;    // finishRequest copies it out of `cache`'s windows into `buffer`
+    IOMemoryDescriptor *buffer;  // retained while cached
+    uint64_t start;              // the request's first image byte
+    IOSwitchCacheRequest cache;
+    IOSwitchCacheRead reads[kRequestReads];
+};
+
+// A read into a cache window, in pieces of one extent and one SD command each.
+struct Job {
+    Job *next;
+    IOSwitchWindow *window;
+    uint32_t first, count;  // blocks of the window
+    uint32_t remaining;     // pieces outstanding, plus one while it is being issued
+    IOReturn status;
+    uint64_t ahead;  // bytes counted in gFlow.inflight (a prefetch read-ahead), 0 for a request's read
 };
 
 IOLock *gPoolLock;
 Pending *gPool;
+Job *gJobs;
 const uint8_t gZeros[kImageBlock] = {};
 
-// The boot prefetch thread's reads in flight on the direct devices (bytes), and the foreground's while it runs.
+// The boot prefetch threads, their reads in flight on the direct devices (bytes: reads straight to the card and reads
+// ahead into the cache), and the foreground's reads while they run.
 struct {
     IOLock *lock;
-    thread_t thread;
+    thread_t threads[kWorkers];
     uint64_t inflight;
     bool waiting;
     uint64_t foregroundReads, foregroundBytes;
 } gFlow;
+
+// The cache (IOSwitchCryptexCache.h) is used under its lock; each window's memory is one IOBufferMemoryDescriptor.
+struct {
+    IOLock *lock;
+    IOSwitchCache cache;
+    IOSwitchWindow *windows;
+    IOSwitchWindow **buckets;
+    uint32_t count;
+    bool setUp, on;
+    uint64_t unreported;  // read-ahead card reads not yet in the kprof image line
+} gCache;
+
+bool isPrefetchThread(thread_t thread)
+{
+    for (unsigned i = 0; i < kWorkers; ++i)
+        if (__atomic_load_n(&gFlow.threads[i], __ATOMIC_RELAXED) == thread) return true;
+    return false;
+}
+
+bool prefetchRunning()
+{
+    for (unsigned i = 0; i < kWorkers; ++i)
+        if (__atomic_load_n(&gFlow.threads[i], __ATOMIC_RELAXED) != THREAD_NULL) return true;
+    return false;
+}
+
+void flowDone(uint64_t bytes)
+{
+    IOLockLock(gFlow.lock);
+    gFlow.inflight -= bytes;
+    const bool wake = gFlow.waiting;
+    gFlow.waiting = false;
+    IOLockUnlock(gFlow.lock);
+    if (wake) IOLockWakeup(gFlow.lock, &gFlow.inflight, false);
+}
+
+// The kprof image line's direct reads (one per request) and the card reads they took, with the read-ahead's.
+void reportDirect(uint64_t bytes, uint32_t cardReads)
+{
+    const uint64_t ahead = __atomic_exchange_n(&gCache.unreported, 0, __ATOMIC_RELAXED);
+    ioswitch_cluster_image_direct(bytes, cardReads + static_cast<uint32_t>(ahead));
+}
 
 void finishRequest(thread_call_param_t, thread_call_param_t);
 
@@ -216,24 +292,37 @@ void returnPending(Pending *p)
     IOLockUnlock(gPoolLock);
 }
 
-// A thread call: the request's last piece has completed.
-void finishRequest(thread_call_param_t parameter, thread_call_param_t)
+Job *takeJob()
 {
-    auto *p = static_cast<Pending *>(parameter);
-    const IOStorageCompletion client = p->client;
-    const IOReturn status = p->status;
-    const uint64_t bytes = status == kIOReturnSuccess ? p->length : p->bytes;
-    if (p->prefetch) {
-        IOLockLock(gFlow.lock);
-        gFlow.inflight -= p->length;
-        const bool wake = gFlow.waiting;
-        gFlow.waiting = false;
-        IOLockUnlock(gFlow.lock);
-        if (wake) IOLockWakeup(gFlow.lock, &gFlow.inflight, false);
+    IOLockLock(gPoolLock);
+    Job *j = gJobs;
+    if (j) gJobs = j->next;
+    IOLockUnlock(gPoolLock);
+    return j ? j : static_cast<Job *>(IOMallocZero(sizeof(Job)));
+}
+
+void returnJob(Job *j)
+{
+    IOLockLock(gPoolLock);
+    j->next = gJobs;
+    gJobs = j;
+    IOLockUnlock(gPoolLock);
+}
+
+// The request's blocks, out of its windows into its memory (the windows are held: their blocks do not change).
+bool copyOut(Pending *p)
+{
+    const uint64_t first = p->start / kImageBlock, end = first + p->length / kImageBlock;
+    for (uint32_t i = 0; i < p->cache.windows; ++i) {
+        const IOSwitchWindow *w = p->cache.window[i];
+        const uint64_t from = first > w->tag ? first : w->tag;
+        const uint64_t to = end < w->tag + kIOSwitchWindowBlocks ? end : w->tag + kIOSwitchWindowBlocks;
+        uint8_t *bytes = static_cast<uint8_t *>(w->bytes) + (from - w->tag) * kImageBlock;
+        if (from >= to || !ioswitchClientCopy(p->buffer, bytes, static_cast<uint32_t>((to - from) * kImageBlock), true,
+                                              copypv, static_cast<uint32_t>((from - first) * kImageBlock)))
+            return false;
     }
-    returnPending(p);
-    // IOStorage::complete, without binding another original IOStorageFamily symbol (as NativeIOSwitchBlock).
-    if (client.action) client.action(client.target, client.parameter, status, bytes);
+    return true;
 }
 
 // The request's first error is its status.
@@ -243,13 +332,68 @@ void failPending(Pending *p, IOReturn status)
     (void)__atomic_compare_exchange_n(&p->status, &expected, status, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
 }
 
-// One piece's completion, on the SD driver's worker.
+// A thread call: the request's last piece has completed (or, cached, its windows hold every block it asked for).
+void finishRequest(thread_call_param_t parameter, thread_call_param_t)
+{
+    auto *p = static_cast<Pending *>(parameter);
+    if (p->cached) {
+        const bool copied = p->status == kIOReturnSuccess && !p->cache.failed && copyOut(p);
+        if (!copied) failPending(p, kIOReturnIOError);
+        IOLockLock(gCache.lock);
+        gCache.cache.release(&p->cache, copied);
+        IOLockUnlock(gCache.lock);
+        p->buffer->release();
+        p->buffer = nullptr;
+        p->cached = false;
+    }
+    const IOStorageCompletion client = p->client;
+    const IOReturn status = p->status;
+    const uint64_t bytes = status == kIOReturnSuccess ? p->length : p->bytes;
+    const uint64_t counted = p->inflight ? p->length : 0;
+    p->inflight = false;
+    returnPending(p);
+    if (counted) flowDone(counted);
+    // IOStorage::complete, without binding another original IOStorageFamily symbol (as NativeIOSwitchBlock).
+    if (client.action) client.action(client.target, client.parameter, status, bytes);
+}
+
+// One piece's completion, on the SD driver's worker (or one more of the cache's: the request's windows are ready).
 void pieceDone(void *, void *parameter, IOReturn status, UInt64 actualByteCount)
 {
     auto *p = static_cast<Pending *>(parameter);
     if (status != kIOReturnSuccess) failPending(p, status);
     __atomic_fetch_add(&p->bytes, actualByteCount, __ATOMIC_RELAXED);
     if (__atomic_sub_fetch(&p->remaining, 1, __ATOMIC_ACQ_REL) == 0) thread_call_enter(p->call);
+}
+
+// On the SD driver's worker: the requests a finished read made ready complete from their own thread calls.
+void jobFinish(Job *j)
+{
+    IOLockLock(gCache.lock);
+    IOSwitchCacheRequest *ready = gCache.cache.finished(j->window, j->first, j->count, j->status == kIOReturnSuccess);
+    IOLockUnlock(gCache.lock);
+    const uint64_t ahead = j->ahead;
+    returnJob(j);
+    if (ahead) flowDone(ahead);
+    while (ready) {
+        IOSwitchCacheRequest *next = ready->nextReady;  // (the request may be gone once told)
+        pieceDone(nullptr, ready->owner, kIOReturnSuccess, 0);
+        ready = next;
+    }
+}
+
+void jobFail(Job *j, IOReturn status)
+{
+    IOReturn expected = kIOReturnSuccess;
+    (void)__atomic_compare_exchange_n(&j->status, &expected, status, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+}
+
+// One piece of a cache read, on the SD driver's worker.
+void jobPieceDone(void *, void *parameter, IOReturn status, UInt64)
+{
+    auto *j = static_cast<Job *>(parameter);
+    if (status != kIOReturnSuccess) jobFail(j, status);
+    if (__atomic_sub_fetch(&j->remaining, 1, __ATOMIC_ACQ_REL) == 0) jobFinish(j);
 }
 }  // namespace
 
@@ -310,6 +454,10 @@ OSDeclareDefaultStructors(IOSwitchCryptexDevice)
     IOReturn setWriteCacheState(bool) override { return kIOReturnUnsupported; }
     IOReturn doAsyncReadWrite(IOMemoryDescriptor *, UInt64, UInt64, IOStorageAttributes *,
                               IOStorageCompletion *) override;
+    // Image bytes [start, start + length) read ahead into the cache; one block read through the device and waited for.
+    void readAhead(uint64_t start, uint64_t length);
+    IOReturn readBlock(IOMemoryDescriptor *buffer, uint64_t block);
+    uint64_t imageBytes() const { return blocks * kImageBlock; }
 
 private:
     unsigned index = 0;
@@ -319,6 +467,9 @@ private:
     IOBlockStorageDevice *sd = nullptr;
     uint64_t maxPiece = 0;  // bytes per SD read
     bool holes = false;     // some of the image reads as zeros (a sparse file)
+    bool cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count,
+                   IOStorageAttributes *attributes);
+    uint32_t issueRead(const IOSwitchCacheRead &read, IOStorageAttributes *attributes, bool ahead);
 };
 
 OSDefineMetaClassAndStructors(IOSwitchCryptexDevice, IOBlockStorageDevice)
@@ -368,14 +519,23 @@ IOReturn IOSwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UIn
     p->bytes = 0;
     p->status = kIOReturnSuccess;
     p->remaining = 1;
-    p->prefetch = gFlow.thread != THREAD_NULL && current_thread() == gFlow.thread;
+    p->inflight = p->cached = false;
+    p->prefetch = isPrefetchThread(current_thread());
+    if (!p->prefetch && prefetchRunning()) {
+        __atomic_fetch_add(&gFlow.foregroundReads, 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&gFlow.foregroundBytes, length, __ATOMIC_RELAXED);
+    }
+    // The boot prefetch's card reads take the SD driver's high class, first come first served with the foreground's:
+    // in a lower class they wait out its 100 ms aging behind a saturated foreground.
+    IOStorageAttributes high = {};
+    high.priority = kIOStoragePriorityHigh;
+    IOStorageAttributes *issue = p->prefetch ? &high : attributes;
+    if (cacheRead(p, buffer, block, count, issue)) return kIOReturnSuccess;
     if (p->prefetch) {
+        p->inflight = true;
         IOLockLock(gFlow.lock);
         gFlow.inflight += length;
         IOLockUnlock(gFlow.lock);
-    } else if (gFlow.thread != THREAD_NULL) {
-        __atomic_fetch_add(&gFlow.foregroundReads, 1, __ATOMIC_RELAXED);
-        __atomic_fetch_add(&gFlow.foregroundBytes, length, __ATOMIC_RELAXED);
     }
     uint32_t pieces = 0, at = ioswitchExtentAt(extents, extentCount, start);
     uint64_t done = 0;
@@ -404,16 +564,122 @@ IOReturn IOSwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UIn
         __atomic_fetch_add(&p->remaining, 1, __ATOMIC_RELAXED);
         IOStorageCompletion pieceCompletion = {this, pieceDone, p};
         const IOReturn issued =
-            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, attributes, &pieceCompletion);
+            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, issue, &pieceCompletion);
         sub->release();
         if (issued != kIOReturnSuccess) pieceDone(this, p, issued, 0);
         ++pieces;
         done += piece.length;
     }
     if (done < length) failPending(p, kIOReturnNoMemory);  // the rest was never issued
-    ioswitch_cluster_image_direct(length, pieces);
+    reportDirect(length, pieces);
     pieceDone(this, p, kIOReturnSuccess, 0);  // the issuing reference
     return kIOReturnSuccess;
+}
+
+// True when the cache took the request (finishRequest completes it once its windows hold every block). Only a small
+// request of the SD driver's high class (the foreground's page-ins, the prefetch's) reads its windows around it; one of
+// a lower class reads only its own blocks, so a foreground read never waits on a window a background one is reading.
+bool IOSwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count,
+                                      IOStorageAttributes *attributes)
+{
+    if (!__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE)) return false;
+    const bool high = attributes && attributes->priority <= kIOStoragePriorityHigh;
+    const auto mode = count * kImageBlock > kAroundBytes ? IOSwitchCache::kCoveredOnly
+                      : high                             ? IOSwitchCache::kReadAround
+                                                         : IOSwitchCache::kNeedOnly;
+    // Set before the plan: a read already under way may make the request ready as soon as the lock is dropped.
+    p->cached = true;
+    p->buffer = buffer;
+    p->start = block * kImageBlock;
+    p->cache.owner = p;
+    uint32_t n = 0;
+    IOLockLock(gCache.lock);
+    const bool taken = gCache.cache.plan(&p->cache, static_cast<uint8_t>(index), block, static_cast<uint32_t>(count),
+                                         blocks, mode, p->reads, kRequestReads, &n);
+    if (taken) p->remaining = p->cache.waiting ? 2 : 1;  // the issuing reference, and the wait for the windows
+    IOLockUnlock(gCache.lock);
+    if (!taken) {
+        p->cached = false;
+        p->buffer = nullptr;
+        return false;
+    }
+    buffer->retain();
+    uint32_t cardReads = 0;
+    for (uint32_t i = 0; i < n; ++i) cardReads += issueRead(p->reads[i], attributes, false);
+    reportDirect(p->length, cardReads);
+    pieceDone(this, p, kIOReturnSuccess, 0);  // the issuing reference
+    return true;
+}
+
+// Returns the card reads it issued. The window's blocks are marked being read: nothing else touches them until
+// jobFinish.
+uint32_t IOSwitchCryptexDevice::issueRead(const IOSwitchCacheRead &read, IOStorageAttributes *attributes, bool ahead)
+{
+    Job *j = takeJob();
+    if (!j) {  // the read fails at once: its blocks are read again by the next request that wants them
+        IOLockLock(gCache.lock);
+        IOSwitchCacheRequest *ready = gCache.cache.finished(read.window, read.first, read.count, false);
+        IOLockUnlock(gCache.lock);
+        for (IOSwitchCacheRequest *next; ready; ready = next) {
+            next = ready->nextReady;
+            pieceDone(nullptr, ready->owner, kIOReturnSuccess, 0);
+        }
+        return 0;
+    }
+    const uint64_t start = (read.window->tag + read.first) * kImageBlock, length = uint64_t(read.count) * kImageBlock;
+    *j = {nullptr, read.window, read.first, read.count, 1, kIOReturnSuccess, ahead ? length : 0};
+    if (j->ahead) {
+        IOLockLock(gFlow.lock);
+        gFlow.inflight += j->ahead;
+        IOLockUnlock(gFlow.lock);
+    }
+    auto *memory = static_cast<IOBufferMemoryDescriptor *>(read.window->memory);
+    uint8_t *bytes = static_cast<uint8_t *>(read.window->bytes) + uint64_t(read.first) * kImageBlock;
+    uint32_t pieces = 0, at = ioswitchExtentAt(extents, extentCount, start);
+    uint64_t done = 0;
+    while (done < length) {
+        const IOSwitchPiece piece = ioswitchNextPiece(extents, extentCount, &at, start + done, length - done, maxPiece);
+        if (!piece.length) break;
+        if (piece.disk == kIOSwitchHole) {
+            bzero(bytes + done, piece.length);
+            done += piece.length;
+            continue;
+        }
+        IOSubMemoryDescriptor *sub = IOSubMemoryDescriptor::withSubRange(
+            memory, uint64_t(read.first) * kImageBlock + done, piece.length, kIODirectionIn);
+        if (!sub) break;
+        __atomic_fetch_add(&j->remaining, 1, __ATOMIC_RELAXED);
+        IOStorageCompletion pieceCompletion = {this, jobPieceDone, j};
+        const IOReturn issued =
+            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, attributes, &pieceCompletion);
+        sub->release();
+        if (issued != kIOReturnSuccess) jobPieceDone(this, j, issued, 0);
+        ++pieces;
+        done += piece.length;
+    }
+    if (done < length) jobFail(j, kIOReturnNoMemory);  // the rest was never issued
+    jobPieceDone(this, j, kIOReturnSuccess, 0);        // the issuing reference
+    return pieces;
+}
+
+void IOSwitchCryptexDevice::readAhead(uint64_t start, uint64_t length)
+{
+    if (!__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE) || !length) return;
+    IOStorageAttributes high = {};
+    high.priority = kIOStoragePriorityHigh;
+    const uint64_t end = (start + length + kImageBlock - 1) / kImageBlock;
+    uint32_t cardReads = 0;
+    for (uint64_t at = start / kImageBlock; at < end;) {
+        IOSwitchCacheRead reads[kIOSwitchWindowReads];
+        uint32_t n = 0;
+        IOLockLock(gCache.lock);
+        const uint32_t covered = gCache.cache.readAhead(static_cast<uint8_t>(index), at, end - at, blocks, reads, &n);
+        IOLockUnlock(gCache.lock);
+        if (!covered) break;  // every window in use: the page-in reads the rest itself
+        for (uint32_t i = 0; i < n; ++i) cardReads += issueRead(reads[i], &high, true);
+        at += covered;
+    }
+    __atomic_fetch_add(&gCache.unreported, cardReads, __ATOMIC_RELAXED);
 }
 
 namespace {
@@ -448,6 +714,102 @@ IOReturn readSd(IOBlockStorageDevice *sd, uint64_t sector, IOBufferMemoryDescrip
     }
     IOLockFree(wait.lock);
     return status;
+}
+}  // namespace
+
+// Its reads complete from the SD driver's interrupts; one that never does is a lost completion: a one-line panic, not
+// a hang.
+IOReturn IOSwitchCryptexDevice::readBlock(IOMemoryDescriptor *buffer, uint64_t block)
+{
+    SyncRead wait = {IOLockAlloc(), false, kIOReturnSuccess};
+    if (!wait.lock) return kIOReturnNoMemory;
+    IOStorageCompletion completion = {nullptr, syncReadDone, &wait};
+    IOStorageAttributes high = {};
+    high.priority = kIOStoragePriorityHigh;  // (read around, as the page-ins it stands for)
+    IOReturn status = doAsyncReadWrite(buffer, block, 1, &high, &completion);
+    if (status == kIOReturnSuccess) {
+        uint64_t deadline = 0;
+        clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);
+        IOLockLock(wait.lock);
+        while (!wait.done)
+            if (IOLockSleepDeadline(wait.lock, &wait, deadline, THREAD_UNINT) == THREAD_TIMED_OUT && !wait.done)
+                panic("IOSwitch cryptex: a read of block %llu of %s never completed (10 s)", block, paths[index]);
+        IOLockUnlock(wait.lock);
+        status = wait.status;
+    }
+    IOLockFree(wait.lock);
+    return status;
+}
+
+namespace {
+// Once, at the first direct attach: kBootWindows, or as many as there is memory for (below kMinWindows none, and reads
+// go straight to the card). Allocated here, never in the read path, which page-outs may be waiting on.
+bool setupCache()
+{
+    if (gCache.setUp) return gCache.count >= kMinWindows;
+    gCache.setUp = true;
+    gCache.lock = IOLockAlloc();
+    gCache.windows = static_cast<IOSwitchWindow *>(IOMallocZero(kBootWindows * sizeof(IOSwitchWindow)));
+    gCache.buckets = static_cast<IOSwitchWindow **>(IOMallocZero(kBuckets * sizeof(IOSwitchWindow *)));
+    if (!gCache.lock || !gCache.windows || !gCache.buckets) return false;
+    uint32_t n = 0;
+    for (; n < kBootWindows; ++n) {
+        IOBufferMemoryDescriptor *memory =
+            IOBufferMemoryDescriptor::withOptions(kIODirectionIn, kIOSwitchWindowBytes, kImageBlock);
+        if (!memory) break;
+        if (memory->prepare() != kIOReturnSuccess) {
+            memory->release();
+            break;
+        }
+        gCache.windows[n].memory = memory;
+        gCache.windows[n].bytes = memory->getBytesNoCopy();
+    }
+    gCache.count = n;
+    if (n < kMinWindows) {
+        for (uint32_t i = 0; i < n; ++i) {
+            auto *memory = static_cast<IOBufferMemoryDescriptor *>(gCache.windows[i].memory);
+            memory->complete();
+            memory->release();
+        }
+        gCache.count = 0;
+        return false;
+    }
+    gCache.cache.init(gCache.windows, n, gCache.buckets, kBuckets);
+    return true;
+}
+
+// Blocks read through the cache must be the image file's own (vn_rdwr): a cold miss (its window read around it), a hit
+// in that window, the image's last block, and the first block of extents spread over the image. nullptr, or what
+// failed.
+const char *proveCache(IOSwitchCryptexDevice *device, vnode_t image, const Extent *map, uint32_t count, uint64_t bytes)
+{
+    IOBufferMemoryDescriptor *buffer = IOBufferMemoryDescriptor::withOptions(kIODirectionIn, kImageBlock, kImageBlock);
+    auto *file = static_cast<uint8_t *>(IOMallocData(kImageBlock));
+    const bool prepared = buffer && buffer->prepare() == kIOReturnSuccess;
+    const char *why = prepared && file ? nullptr : "no memory";
+    uint64_t offsets[kSampledExtents + 3];
+    unsigned n = 0;
+    offsets[n++] = 0;
+    if (bytes > kImageBlock) offsets[n++] = kImageBlock;
+    offsets[n++] = bytes - kImageBlock;
+    for (unsigned k = 1; k <= kSampledExtents && count > 2; ++k)
+        offsets[n++] = map[uint64_t(count - 1) * k / (kSampledExtents + 1)].file;
+    vfs_context_t ctx = vfs_context_current();
+    for (unsigned i = 0; i < n && !why; ++i) {
+        int resid = 0;
+        if (vn_rdwr(UIO_READ, image, reinterpret_cast<caddr_t>(file), kImageBlock, static_cast<off_t>(offsets[i]),
+                    UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) ||
+            resid)
+            why = "the image file could not be read";
+        else if (device->readBlock(buffer, offsets[i] / kImageBlock) != kIOReturnSuccess)
+            why = "a read through it failed";
+        else if (memcmp(buffer->getBytesNoCopy(), file, kImageBlock))
+            why = "a block read through it differs from the image file";
+    }
+    if (prepared) buffer->complete();
+    OSSafeReleaseNULL(buffer);
+    if (file) IOFreeData(file, kImageBlock);
+    return why;
 }
 
 // Whether block `offset` of the image reads the same through the file and through the map.
@@ -611,8 +973,25 @@ IOService *attachDirect(unsigned index, dev_t preboot, const char **why)
         vnode_close(image, FREAD, ctx);
         return nullptr;
     }
-    IOLog("IOSwitch cryptex: %s read straight from the card: %u extents, %llu MiB\n", paths[index], count,
-          va.va_data_size >> 20);
+    // Checked through this device before it is registered, so nothing else reads through the cache yet.
+    const char *cacheOff = nullptr;
+    if (!gCache.setUp) {
+        if (!setupCache()) {
+            cacheOff = "no memory for its windows";
+        } else {
+            __atomic_store_n(&gCache.on, true, __ATOMIC_RELEASE);
+            if ((cacheOff = proveCache(device, image, map, count, va.va_data_size)))
+                __atomic_store_n(&gCache.on, false, __ATOMIC_RELEASE);
+        }
+        if (cacheOff) IOLog("IOSwitch cryptex: read cache off (%s); every read goes to the card\n", cacheOff);
+    }
+    if (gCache.on)
+        IOLog("IOSwitch cryptex: %s read from the card through the read cache (%u windows of %u KiB, checked): %u "
+              "extents, %llu MiB\n",
+              paths[index], gCache.count, kIOSwitchWindowBytes >> 10, count, va.va_data_size >> 20);
+    else
+        IOLog("IOSwitch cryptex: %s read straight from the card: %u extents, %llu MiB\n", paths[index], count,
+              va.va_data_size >> 20);
     vnode_put(image);  // the open's use count keeps the file (and its extents) for the device's life
     device->registerService();
     return device;
@@ -720,12 +1099,15 @@ extern "C" int ioswitch_cryptex_manifest_sha384(dev_t device, const char *uuid, 
 //    afterFrame (the later of kRecordAfterFrameS after the first frame and kRecordUntilS of uptime), and this file saves
 //    the files' ranges (file id, pages) as runs of up to kMaxRun pages (through gaps of up to kMaxGap pages), in
 //    first-read order, next to the System image (kListSuffix; the header keys both images' id, size and mtime);
-//  - replay: on every later boot, right after both cryptexes are mounted, a kernel thread pages the runs in, in order
-//    (vnode_pagein on the file: absent pages only, into the file's own pages, read and checked like any page-in), with
-//    at most kInFlightBytes of its reads in flight on the direct devices. Its reads share the SD driver's high class first
-//    come first served with the foreground's (NativeIOSwitchBlock.cpp), so it keeps a large share of the card and stays
-//    ahead of the foreground, whose page-ins then find their pages resident (or in flight, and wait for them). It stops
-//    when the list is done or when a recording would stop (afterFrame).
+//  - replay: on every later boot, right after both cryptexes are mounted, kWorkers kernel threads page the runs in, in
+//    order (vnode_pagein on the file: absent pages only, into the file's own pages, read and checked like any page-in).
+//    APFS reads a page-in's blocks one at a time, so each thread first reads its run's absent pages ahead into the
+//    cache as image ranges (VNOP_BLOCKMAP, then the volume's DKIOCGETPHYSICALEXTENT as resolveExtents does; the map is
+//    checked once per image on a real page: mapProven), and the page-in then copies its blocks out of the cache. At
+//    most kInFlightBytes of the threads' reads are on the card at once, in the SD driver's high class first come first
+//    served with the foreground's: a foreground read waits behind at most that much, the prefetch keeps a large share
+//    of the card, and it stays ahead of the foreground, whose page-ins then find their pages resident (or in flight,
+//    and wait for them). It stops when the list is done or when a recording would stop (afterFrame).
 // The volumes are read-only, so a stale list costs only wasted reads; a changed image is re-recorded. A list this build
 // cannot read is a recording boot with no prefetch, so loadList says why in one line, and the format is frozen
 // (IOSwitchCryptexMap.h): a new one must read the old.
@@ -740,11 +1122,23 @@ constexpr uint32_t kLogEntries = 1u << 16;  // 2 MiB, allocated on recording boo
 // NativeLegacyDisplay reports the first frame only in the unrotated layout; without a report, stop this long after the
 // mounts (the 11-04 boots reached SpringBoard 110-135 s after them).
 constexpr uint64_t kRecordBackstopS = 180;
+// A prefetch read on the card this long with no other finishing was lost (they complete from the SD driver's interrupts).
+constexpr uint32_t kFlowTimeoutS = 30;
 constexpr char kListSuffix[] = ".boot-prefetch";
 
 using ListHeader = IOSwitchListHeader;
 using Run = IOSwitchRun;
 static_assert(kIOSwitchListImages == IOSWITCH_CRYPTEX_COUNT, "the list keys both cryptex images");
+
+// How a cryptex volume's file blocks become image offsets, for the read-ahead.
+enum MapState : uint8_t { kMapOff, kMapUnproven, kMapProving, kMapOn };
+struct VolumeMap {
+    uint32_t blockSize;  // the volume device's: VNOP_BLOCKMAP's unit
+    bool physical;       // DKIOCGETPHYSICALEXTENT answers (else the volume's offsets are the image's)
+    dev_t store;         // the device it names: one of the image device's media
+    uint64_t base;       // where that media starts in the image
+    uint8_t state;
+};
 
 struct {
     ListHeader key;  // this boot's images
@@ -755,6 +1149,10 @@ struct {
     uint64_t runCapacity = 0;  // the recording's runs allocation (afterFrame)
     thread_call_t frameCall = nullptr, loadCall = nullptr;
     volatile uint32_t frame = 0, stop = 0, started = 0;
+    // ioLeft: the boot's read phases still running (the replay, the recording window); at 0 the cache shrinks.
+    uint32_t next = 0, done = 0, files = 0, missing = 0, workers = 0, ioLeft = 0, frameDone = 0;
+    uint64_t bytes = 0, startedMs = 0;
+    VolumeMap map[IOSWITCH_CRYPTEX_COUNT] = {};
 } gPrefetch;
 
 void listPath(char *out, size_t capacity)
@@ -820,31 +1218,246 @@ Run *loadList(const ListHeader &key, uint32_t *count, const char **why)
     return runs;
 }
 
-// Pages the runs in, in order, with at most kInFlightBytes of the thread's reads in flight on the direct devices
-// (finishRequest wakes it; on DiskImages nothing is counted and each page-in simply returns once queued).
-void prefetchThread(void *, wait_result_t)
+// Waits until fewer than `limit` bytes of the prefetch's reads are on the card (finishRequest and jobFinish wake it).
+void waitFlowBelow(uint64_t limit)
 {
-    ioswitch_block_prefetch_thread(current_thread());
     IOLockLock(gFlow.lock);
-    gFlow.foregroundReads = gFlow.foregroundBytes = 0;
-    gFlow.thread = current_thread();
+    while (gFlow.inflight >= limit) {
+        gFlow.waiting = true;
+        uint64_t deadline = 0;
+        clock_interval_to_deadline(kFlowTimeoutS, NSEC_PER_SEC, &deadline);
+        if (IOLockSleepDeadline(gFlow.lock, &gFlow.inflight, deadline, THREAD_UNINT) == THREAD_TIMED_OUT &&
+            gFlow.inflight >= limit)
+            panic("IOSwitch boot prefetch: %llu bytes of its reads still on the card after %u s with none finishing",
+                  gFlow.inflight, kFlowTimeoutS);
+    }
     IOLockUnlock(gFlow.lock);
+}
+
+// Where BSD device `dev` (the device DKIOCGETPHYSICALEXTENT names) starts in the cryptex image, when it is one of the
+// image device's media (its whole disk, or a partition of it: IOMedia's Base); false when it is not.
+bool mediaBase(IOService *device, dev_t dev, uint64_t *base)
+{
+    IORegistryIterator *it = IORegistryIterator::iterateOver(device, gIOServicePlane, kIORegistryIterateRecursively);
+    if (!it) return false;
+    bool found = false;
+    while (IORegistryEntry *entry = it->getNextObject()) {
+        auto *majorNumber = OSDynamicCast(OSNumber, entry->getProperty(kIOBSDMajorKey));
+        auto *minorNumber = OSDynamicCast(OSNumber, entry->getProperty(kIOBSDMinorKey));
+        if (!majorNumber || !minorNumber ||
+            makedev(majorNumber->unsigned32BitValue(), minorNumber->unsigned32BitValue()) != dev)
+            continue;
+        auto *at = OSDynamicCast(OSNumber, entry->getProperty("Base"));  // kIOMediaBaseKey (not in this storage ABI)
+        *base = at ? at->unsigned64BitValue() : 0;
+        found = true;
+        break;
+    }
+    it->release();
+    return found;
+}
+
+// Checked on first use (mapProven).
+void prepareMap(unsigned index)
+{
+    VolumeMap &m = gPrefetch.map[index];
+    m.state = kMapOff;
+    auto *device = OSDynamicCast(IOSwitchCryptexDevice, directDevice[index]);
+    if (!device || !__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE) || !gPrefetch.mounts[index]) return;
+    vnode_t devvp = vfs_devvp(gPrefetch.mounts[index]);
+    if (!devvp) return;
     vfs_context_t ctx = vfs_context_kernel();
-    const uint64_t started = uptimeMs();
-    uint64_t bytes = 0;
-    uint32_t done = 0, files = 0, missing = 0;
+    const char *why = nullptr;
+    dk_physical_extent_t request = {};
+    request.length = kPage;
+    int error = 0;
+    if (VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, reinterpret_cast<caddr_t>(&m.blockSize), 0, ctx) || !m.blockSize) {
+        why = "no block size";
+    } else if ((error = VNOP_IOCTL(devvp, DKIOCGETPHYSICALEXTENT, reinterpret_cast<caddr_t>(&request), 0, ctx))) {
+        if (error != ENOTTY) why = "DKIOCGETPHYSICALEXTENT failed";
+        m.physical = false;  // ENOTTY: the volume's offsets are the image's (mapProven checks that)
+        m.base = 0;
+    } else if (!mediaBase(device, request.dev, &m.base)) {
+        why = "its volume's store is not on the image device";
+    } else {
+        m.physical = true;
+        m.store = request.dev;
+    }
+    vnode_put(devvp);
+    if (why)
+        IOLog("IOSwitch boot prefetch: no read-ahead for %s (%s); its runs are paged in block by block\n", paths[index],
+              why);
+    else
+        m.state = kMapUnproven;
+}
+
+// A logical offset on the volume's device as an image offset; *length shrinks to what stays contiguous there.
+bool toImage(vnode_t devvp, unsigned index, uint64_t logical, uint64_t *image, uint64_t *length)
+{
+    const VolumeMap &m = gPrefetch.map[index];
+    uint64_t at = logical;
+    if (m.physical) {
+        dk_physical_extent_t request = {};
+        request.offset = logical;
+        request.length = *length;
+        if (VNOP_IOCTL(devvp, DKIOCGETPHYSICALEXTENT, reinterpret_cast<caddr_t>(&request), 0, vfs_context_kernel()) ||
+            !request.length || request.dev != m.store)
+            return false;
+        at = request.offset;
+        if (request.length < *length) *length = request.length;
+    }
+    *image = m.base + at;
+    return !(*image % kPage);
+}
+
+// The first read-ahead of each image checks its map on real bytes: the file's page at `offset` (vn_rdwr, through APFS
+// and its checks) must be the image's block at `image` (through the device). Until one thread has checked, the others
+// read nothing ahead; a map that fails turns the image's read-ahead off (one line).
+bool mapProven(IOSwitchCryptexDevice *device, vnode_t vp, unsigned index, off_t offset, uint64_t image)
+{
+    VolumeMap &m = gPrefetch.map[index];
+    uint8_t state = __atomic_load_n(&m.state, __ATOMIC_ACQUIRE);
+    if (state != kMapUnproven) return state == kMapOn;
+    if (!__atomic_compare_exchange_n(&m.state, &state, uint8_t(kMapProving), false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return false;
+    IOBufferMemoryDescriptor *buffer = IOBufferMemoryDescriptor::withOptions(kIODirectionIn, kPage, kPage);
+    auto *file = static_cast<uint8_t *>(IOMallocData(kPage));
+    const bool prepared = buffer && buffer->prepare() == kIOReturnSuccess;
+    const char *why = prepared && file ? nullptr : "no memory";
+    vfs_context_t ctx = vfs_context_kernel();
+    int resid = 0;
+    if (!why && (vn_rdwr(UIO_READ, vp, reinterpret_cast<caddr_t>(file), kPage, offset, UIO_SYSSPACE, IO_NOAUTH,
+                         vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) ||
+                 resid >= static_cast<int>(kPage)))
+        why = "its first file page could not be read";
+    else if (!why && image + kPage > device->imageBytes())
+        why = "the map points past the image";
+    else if (!why && device->readBlock(buffer, image / kPage) != kIOReturnSuccess)
+        why = "the image could not be read";
+    else if (!why && memcmp(buffer->getBytesNoCopy(), file, kPage - static_cast<uint32_t>(resid)))
+        why = "a file page is not the image block its map names";
+    if (prepared) buffer->complete();
+    OSSafeReleaseNULL(buffer);
+    if (file) IOFreeData(file, kPage);
+    __atomic_store_n(&m.state, uint8_t(why ? kMapOff : kMapOn), __ATOMIC_RELEASE);
+    if (why)
+        IOLog("IOSwitch boot prefetch: no read-ahead for %s (%s); its runs are paged in block by block\n", paths[index],
+              why);
+    return !why;
+}
+
+// The file's absent pages [at, at + bytes), extent by extent, read ahead into the cache.
+void mapAhead(IOSwitchCryptexDevice *device, vnode_t devvp, vnode_t vp, unsigned index, off_t at, off_t bytes)
+{
+    const VolumeMap &m = gPrefetch.map[index];
+    for (off_t done = 0; done < bytes;) {
+        daddr64_t blkno = -1;
+        size_t run = 0;
+        if (VNOP_BLOCKMAP(vp, at + done, static_cast<size_t>(bytes - done), &blkno, &run, nullptr, VNODE_READ,
+                          nullptr) ||
+            !run)
+            return;
+        if (run > static_cast<size_t>(bytes - done)) run = static_cast<size_t>(bytes - done);
+        uint64_t length = run;
+        if (blkno >= 0) {  // (a hole reads as zeros: nothing to read ahead)
+            uint64_t image = 0;
+            if (!toImage(devvp, index, uint64_t(blkno) * m.blockSize, &image, &length) ||
+                !mapProven(device, vp, index, at + done, image))
+                return;
+            device->readAhead(image, length);
+        }
+        done += static_cast<off_t>(length);
+    }
+}
+
+// So that the page-in's block-at-a-time reads find the run in the cache instead of each going to the card.
+void readAheadRun(vnode_t vp, unsigned index, off_t offset, off_t length)
+{
+    auto *device = OSDynamicCast(IOSwitchCryptexDevice, directDevice[index]);
+    if (!device || !__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE) ||
+        __atomic_load_n(&gPrefetch.map[index].state, __ATOMIC_ACQUIRE) == kMapOff)
+        return;
+    vnode_t devvp = vfs_devvp(vnode_mount(vp));
+    if (!devvp) return;
+    const off_t end = offset + length;
+    for (off_t at = offset; at < end;) {
+        int absent = 0, present = 0;
+        if (ubc_range_op(vp, at, end, UPL_ROP_ABSENT, &absent) != KERN_SUCCESS || absent < 0) break;
+        if (absent) {
+            mapAhead(device, devvp, vp, index, at, absent);
+            at += absent;
+        } else if (ubc_range_op(vp, at, end, UPL_ROP_PRESENT, &present) != KERN_SUCCESS || present <= 0) {
+            break;
+        } else {
+            at += present;  // resident, or being paged in by someone else
+        }
+    }
+    vnode_put(devvp);
+}
+
+// The boot's reads are done (the replay, and the recording window up to afterFrame): the cache gives back its idle
+// windows beyond kSteadyWindows (all of them if it is off).
+void bootIoDone()
+{
+    if (__atomic_sub_fetch(&gPrefetch.ioLeft, 1, __ATOMIC_ACQ_REL)) return;
+    if (!gCache.lock || !gCache.count) return;
+    const uint32_t keep = __atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE) ? kSteadyWindows : 0;
+    for (uint32_t batch = 32; batch == 32;) {
+        IOSwitchWindow *retired[32];
+        batch = 0;
+        IOLockLock(gCache.lock);
+        while (batch < 32 && (retired[batch] = gCache.cache.retire(keep))) ++batch;
+        IOLockUnlock(gCache.lock);
+        for (uint32_t i = 0; i < batch; ++i) {
+            auto *memory = static_cast<IOBufferMemoryDescriptor *>(retired[i]->memory);
+            retired[i]->memory = retired[i]->bytes = nullptr;
+            memory->complete();
+            memory->release();
+        }
+    }
+}
+
+// The last prefetch thread out: the summary, once the last of its reads have arrived.
+void prefetchDone()
+{
+    waitFlowBelow(1);
+    const uint64_t started = gPrefetch.startedMs, now = uptimeMs();
+    IOSwitchCacheStats s = {};
+    if (gCache.lock) {
+        IOLockLock(gCache.lock);
+        s = gCache.cache.stats();
+        IOLockUnlock(gCache.lock);
+    }
+    IOLog("IOSwitch boot prefetch: %llu MiB of the cryptexes' files (%u lookups) in %u of %u runs, %llu.%llu s to "
+          "%llu.%llu s uptime%s; %llu MiB read ahead, %llu%% of it used; meanwhile the foreground read the direct maps "
+          "%llu times (%llu MiB)%s; cache: %llu of %llu reads found every block there, %llu left to the card, %llu MiB "
+          "in %llu card reads, %llu windows reused unused\n",
+          gPrefetch.bytes >> 20, gPrefetch.files, gPrefetch.done, gPrefetch.runCount, started / 1000,
+          started / 100 % 10, now / 1000, now / 100 % 10, gPrefetch.stop ? " (stopped)" : "",
+          (s.aheadBlocks * kPage) >> 20, s.aheadBlocks ? s.aheadServed * 100 / s.aheadBlocks : 0, gFlow.foregroundReads,
+          gFlow.foregroundBytes >> 20, gPrefetch.missing ? ", some files gone" : "", s.ready, s.requests, s.refused,
+          (s.blocksRead * kPage) >> 20, s.reads, s.evicted);
+    IOFreeData(gPrefetch.runs, gPrefetch.runCount * sizeof(Run));
+    gPrefetch.runs = nullptr;
+    bootIoDone();
+}
+
+// One of kWorkers prefetch threads: takes the next run in order, reads it ahead into the cache, pages it in; at most
+// kInFlightBytes of the threads' reads on the card (on DiskImages nothing is counted and each page-in waits for its own).
+void prefetchWorker(void *parameter, wait_result_t)
+{
+    const auto slot = static_cast<unsigned>(reinterpret_cast<uintptr_t>(parameter));
+    __atomic_store_n(&gFlow.threads[slot], current_thread(), __ATOMIC_RELEASE);
+    vfs_context_t ctx = vfs_context_kernel();
     vnode_t vp = NULLVP;
     uint64_t vpFile = 0;
     unsigned vpIndex = IOSWITCH_CRYPTEX_COUNT;
     off_t vpSize = 0;
-    for (; done < gPrefetch.runCount && !gPrefetch.stop; ++done) {
-        const Run &run = gPrefetch.runs[done];
-        IOLockLock(gFlow.lock);
-        while (gFlow.inflight >= kInFlightBytes) {
-            gFlow.waiting = true;
-            IOLockSleep(gFlow.lock, &gFlow.inflight, THREAD_UNINT);
-        }
-        IOLockUnlock(gFlow.lock);
+    while (!gPrefetch.stop) {
+        const uint32_t i = __atomic_fetch_add(&gPrefetch.next, 1, __ATOMIC_RELAXED);
+        if (i >= gPrefetch.runCount) break;
+        const Run &run = gPrefetch.runs[i];
+        waitFlowBelow(kInFlightBytes);
+        __atomic_fetch_add(&gPrefetch.done, 1, __ATOMIC_RELAXED);
         if (run.index >= IOSWITCH_CRYPTEX_COUNT || !gPrefetch.mounts[run.index]) continue;
         if (run.fileId != vpFile || run.index != vpIndex) {
             if (vp) vnode_put(vp);
@@ -854,43 +1467,26 @@ void prefetchThread(void *, wait_result_t)
             if (VFS_VGET(gPrefetch.mounts[run.index], static_cast<ino64_t>(run.fileId), &vp, ctx) || !vnode_isreg(vp)) {
                 if (vp) vnode_put(vp);
                 vp = NULLVP;
-                ++missing;
+                __atomic_fetch_add(&gPrefetch.missing, 1, __ATOMIC_RELAXED);
                 continue;
             }
             vpSize = static_cast<off_t>(ubc_getsize(vp));
-            ++files;
+            __atomic_fetch_add(&gPrefetch.files, 1, __ATOMIC_RELAXED);
         }
         if (!vp) continue;
         const off_t offset = off_t(run.page) * kPage;
         if (offset >= vpSize) continue;
         off_t length = off_t(run.pages) * kPage;
         if (length > vpSize - offset) length = (vpSize - offset + kPage - 1) & ~off_t(kPage - 1);
-        // On the direct maps the page-in only queues its reads (the in-flight bound above paces it); through
-        // DiskImages, which this thread's reads are not counted on, each waits for its own.
+        if (directDevice[run.index]) readAheadRun(vp, run.index, offset, length);
         int error = 0;
         (void)vnode_pagein(vp, nullptr, 0, static_cast<vm_object_offset_t>(offset), static_cast<upl_size_t>(length),
                            directDevice[run.index] ? 0 : UPL_IOSYNC, &error);
-        bytes += uint64_t(length);
+        __atomic_fetch_add(&gPrefetch.bytes, uint64_t(length), __ATOMIC_RELAXED);
     }
     if (vp) vnode_put(vp);
-    // The summary's end: the last page-ins have arrived.
-    IOLockLock(gFlow.lock);
-    while (gFlow.inflight) {
-        gFlow.waiting = true;
-        IOLockSleep(gFlow.lock, &gFlow.inflight, THREAD_UNINT);
-    }
-    gFlow.thread = THREAD_NULL;
-    IOLockUnlock(gFlow.lock);
-    ioswitch_block_prefetch_thread(THREAD_NULL);
-    const uint64_t now = uptimeMs();
-    IOLog("IOSwitch boot prefetch: %llu MiB of the cryptexes' files (%u lookups) in %u of %u runs, %llu.%llu s to "
-          "%llu.%llu s "
-          "uptime%s; meanwhile the foreground read the direct maps %llu times (%llu MiB)%s\n",
-          bytes >> 20, files, done, gPrefetch.runCount, started / 1000, started / 100 % 10, now / 1000, now / 100 % 10,
-          gPrefetch.stop ? " (stopped)" : "", gFlow.foregroundReads, gFlow.foregroundBytes >> 20,
-          missing ? ", some files gone" : "");
-    IOFreeData(gPrefetch.runs, gPrefetch.runCount * sizeof(Run));
-    gPrefetch.runs = nullptr;
+    __atomic_store_n(&gFlow.threads[slot], THREAD_NULL, __ATOMIC_RELEASE);
+    if (!__atomic_sub_fetch(&gPrefetch.workers, 1, __ATOMIC_ACQ_REL)) prefetchDone();
     thread_terminate(current_thread());
 }
 
@@ -998,10 +1594,9 @@ uint32_t buildRuns(ioswitch_record_entry *log, uint32_t entries, Run **out, uint
     return runs ? count : 0;
 }
 
-// kRecordAfterFrameS after the first frame (or kRecordBackstopS after the mounts): stop the prefetch, save a recording.
-void afterFrame(thread_call_param_t, thread_call_param_t)
+// A recording boot's log, saved as the next boots' list.
+void saveRecording()
 {
-    gPrefetch.stop = 1;
     ioswitch_record_entry *log = __atomic_exchange_n(&gPrefetch.log, nullptr, __ATOMIC_ACQ_REL);
     if (!log) return;
     const uint32_t appended = ioswitch_cluster_record_stop();
@@ -1039,6 +1634,16 @@ void afterFrame(thread_call_param_t, thread_call_param_t)
               count, (pages * kPage) >> 20, files, dropped + (appended - entries), appended);
 }
 
+// kRecordAfterFrameS after the first frame (or kRecordBackstopS after the mounts): stop the prefetch, save a recording.
+// (Re-armed by the first frame after the backstop has run, it may run twice: only the first does anything.)
+void afterFrame(thread_call_param_t, thread_call_param_t)
+{
+    gPrefetch.stop = 1;
+    if (__atomic_exchange_n(&gPrefetch.frameDone, 1u, __ATOMIC_ACQ_REL)) return;
+    saveRecording();
+    bootIoDone();
+}
+
 // Temporary (r8-sdboot, 11-04): CPU time per core from boot to the first frame, to tell what bounds the boot once the
 // SD card no longer does. One line, once.
 void cpuLoad(thread_call_param_t, thread_call_param_t)
@@ -1068,19 +1673,28 @@ void prefetchStart()
     gPrefetch.loadCall = thread_call_allocate_with_options(cpuLoad, nullptr, THREAD_CALL_PRIORITY_LOW, 0);
     gPrefetch.frameCall = thread_call_allocate_with_options(afterFrame, nullptr, THREAD_CALL_PRIORITY_LOW, 0);
     if (!gPrefetch.frameCall) return;
+    uint32_t count = 0;
+    const char *why = nullptr;
+    Run *runs = loadList(gPrefetch.key, &count, &why);
+    // The boot's read phases: the replay (if any) and the recording window, both before afterFrame can run.
+    gPrefetch.ioLeft = runs ? 2 : 1;
     uint64_t backstop = 0;
     clock_interval_to_deadline(static_cast<uint32_t>(kRecordBackstopS), NSEC_PER_SEC, &backstop);
     thread_call_enter_delayed(gPrefetch.frameCall, backstop);
-    uint32_t count = 0;
-    const char *why = nullptr;
-    if (Run *runs = loadList(gPrefetch.key, &count, &why)) {
+    if (runs) {
         gPrefetch.runs = runs;
         gPrefetch.runCount = count;
-        thread_t thread = THREAD_NULL;
-        if (kernel_thread_start(prefetchThread, nullptr, &thread) == KERN_SUCCESS)
-            thread_deallocate(thread);
-        else
-            IOFreeData(runs, count * sizeof(Run));
+        for (unsigned i = 0; i < IOSWITCH_CRYPTEX_COUNT; ++i) prepareMap(i);
+        gFlow.foregroundReads = gFlow.foregroundBytes = 0;
+        gPrefetch.startedMs = uptimeMs();
+        gPrefetch.workers = kWorkers;
+        for (unsigned i = 0; i < kWorkers; ++i) {
+            thread_t thread = THREAD_NULL;
+            if (kernel_thread_start(prefetchWorker, reinterpret_cast<void *>(uintptr_t(i)), &thread) == KERN_SUCCESS)
+                thread_deallocate(thread);
+            else if (!__atomic_sub_fetch(&gPrefetch.workers, 1, __ATOMIC_ACQ_REL))
+                prefetchDone();
+        }
         return;
     }
     IOLog("IOSwitch boot prefetch: no list to replay (%s); this boot records one\n", why);
