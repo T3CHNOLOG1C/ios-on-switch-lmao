@@ -214,4 +214,12 @@ static inline unsigned switch_gov_cpu_table(const uint32_t *khz, const uint32_t 
     return n;
 }
 
+// A clock measured over the one asked for by half a DFLL step or more (the DFLL runs whole steps of 25.5 MHz, so a
+// rate one step high reads 1.4 % over; a probe reads within 0.3 % of the truth). SwitchThermal checks the DFLL's top
+// with it: 1785 MHz is kept only while it measures at or under 1785 + half a step.
+static inline int switch_gov_over_step(uint32_t measured_khz, uint32_t asked_khz, uint32_t step_khz)
+{
+    return measured_khz > asked_khz + step_khz / 2;
+}
+
 #endif

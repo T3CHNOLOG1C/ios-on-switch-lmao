@@ -50,6 +50,8 @@ unsigned gov_cpu_table(const uint32_t *khz, const uint32_t *mv, unsigned rows, u
     return switch_gov_cpu_table(khz, mv, rows, max_khz, vmin_mv, khz_out, mv_out, cap);
 }
 
+int gov_over_step(uint32_t measured, uint32_t asked, uint32_t step) { return switch_gov_over_step(measured, asked, step); }
+
 unsigned gov_index_at_mv(const uint32_t *mv, unsigned count, uint32_t limit_mv)
 {
     return switch_gov_index_at_mv(mv, count, limit_mv);

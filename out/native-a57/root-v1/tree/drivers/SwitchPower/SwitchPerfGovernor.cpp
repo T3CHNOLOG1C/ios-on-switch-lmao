@@ -81,6 +81,8 @@ void *gCtx;
 uint64_t gWindow, gBootUntil, gLogStart, gLogDue;
 uint32_t gFloorMv, gCapMv;  // the DFLL's thermal floor and cap last given to limits() (0: none)
 uint32_t gCltm = 0x10000u;  // thermalmonitord's CPU ceiling, a 16.16 share of the top clock (atomic loads)
+unsigned gTopCap = SWITCH_GOV_MAX_OPPS - 1;  // capTop(): the top this boot measured at or under 1785 MHz
+unsigned gDerate;                            // derate(): rows every ceiling sits below (a ceiling that measured high)
 // per log window
 uint32_t gWindows, gBusyPeak, gHints[5];
 uint64_t gBusySum;
@@ -158,6 +160,8 @@ bool applyLimits(uint64_t now)
     unsigned hi = gCapMv ? switch_gov_index_at_mv(gMv, gGov.count, gCapMv) : gGov.count - 1;
     const unsigned cltm = switch_gov_index_at_fraction(gGov.khz, gGov.count, __atomic_load_n(&gCltm, __ATOMIC_RELAXED));
     if (cltm < hi) hi = cltm;
+    if (gTopCap < hi) hi = gTopCap;        // the top this boot measured at or under 1785 MHz
+    hi = hi > gDerate ? hi - gDerate : 0;  // every ceiling a row lower once one measured high
     switch_gov_limit(&gGov, lo, hi, now);
     return gRunning && claimSignal(now);
 }
@@ -226,6 +230,7 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
     gPrevNow = now;
     gFloorMv = gCapMv = 0;
     gApplied = gGov.cur;
+    gDerate = 0;  // gTopCap is the caller's (capTop before start), kept
     __atomic_store_n(&gAppliedKhz, gGov.khz[gGov.cur], __ATOMIC_RELEASE);
     gSignal = signal;
     gCtx = ctx;
@@ -347,6 +352,47 @@ void switchperf::limits(unsigned floorMv, unsigned capMv)
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     gFloorMv = floorMv;
     gCapMv = capMv;
+    const bool wake = applyLimits(now);
+    IOSimpleLockUnlockEnableInterrupt(gLock, state);
+    if (wake) gSignal(gCtx);
+}
+
+unsigned switchperf::indexAt(uint32_t khz)
+{
+    unsigned i = 0;
+    while (i + 1 < gGov.count && gGov.khz[i + 1] <= khz) ++i;
+    return i;
+}
+
+unsigned switchperf::ceiling()
+{
+    if (!gLock) return 0;
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
+    const unsigned hi = gGov.hi;
+    IOSimpleLockUnlockEnableInterrupt(gLock, state);
+    return hi;
+}
+
+void switchperf::capTop(unsigned index)
+{
+    if (!gLock) {  // before the first start: nothing else runs yet
+        gTopCap = index;
+        return;
+    }
+    const uint64_t now = mach_absolute_time();
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
+    gTopCap = index;
+    const bool wake = applyLimits(now);
+    IOSimpleLockUnlockEnableInterrupt(gLock, state);
+    if (wake) gSignal(gCtx);
+}
+
+void switchperf::derate()
+{
+    if (!gLock || !running()) return;
+    const uint64_t now = mach_absolute_time();
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
+    if (gDerate + 1 < gGov.count) ++gDerate;
     const bool wake = applyLimits(now);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);

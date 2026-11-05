@@ -102,16 +102,19 @@
 //     the generic timer is not on CCLK, and TegraI2C serializes I2C5 with the GPU's VDD_GPU traffic (it
 //     writes M1_VOUT and EN_CTRL, never M4).
 //   * DFLL on demand (no switch-cpu-mode, the default): L4T's normal mode, the DFLL in closed loop (drivers/TegraDFLL,
-//     vendored clk-dfll.c), entered at the 1785 MHz CVB row (Horizon's boost clock, the most this port ever runs:
-//     TEGRA_DFLL_CPU_MAX_HZ), then moved by SwitchPerfGovernor.cpp between the DFLL's own OPP rows from the CVB Vmin
+//     vendored clk-dfll.c), entered at the 1683 MHz CVB row and taken to 1785 MHz (Horizon's boost clock, the most this
+//     port ever runs: TEGRA_DFLL_CPU_MAX_HZ) only as measured at or under it (settleDfllTop: the first request after
+//     the loop closes can run a DFLL step high), then moved by SwitchPerfGovernor.cpp between the DFLL's own OPP rows
+//     from the CVB Vmin
 //     row (918 MHz at 620 mV on speedo 1659) up to 1785 MHz as the scheduler's load, touches, missed frames and
 //     launches ask; the boot holds the top until System Boot Complete. Each pair is L4T's: the DFLL's CVB voltage for
 //     that row, set by the DFLL itself over its I2C master. A rate the DFLL refuses logs one line and falls back to
 //     the PLL ladder below (today's fixed 1670 MHz at 1120 mV on this chip) for the rest of the boot.
-//   * switch-cpu-mode=dfll: the same DFLL, fixed at the 1785 MHz CVB row, with the per-chip CVB voltage (roughly
-//     875-1015 mV for CPU speedos 1850-1450). In both DFLL modes the thermal trips do not drop the clock; they set
-//     the DFLL's L4T voltage cap and floor indices (cap 1060 mV from 64 C, 1010 mV from 84 C, floor 800 mV below 20 C;
-//     1 C hysteresis, tegra210b01-nx-common.dtsi dfll-cap-trip*/dfll-floor-trip0), and the ALERT window is
+//   * switch-cpu-mode=dfll: the same DFLL, fixed at the measured top (the 1785 MHz row, else 1683), at the per-chip
+//     CVB voltage (roughly 875-1015 mV for CPU speedos 1850-1450). In both DFLL modes the thermal trips do not drop
+//     the clock; they set the DFLL's L4T voltage cap and floor indices (cap 1060 mV from 64 C, 1010 mV from 84 C,
+//     floor 800 mV below 20 C; 1 C hysteresis, tegra210b01-nx-common.dtsi dfll-cap-trip*/dfll-floor-trip0), and the
+//     ALERT window is
 //     cut at the next of those boundaries so each change comes by interrupt (governed: they also become the
 //     governor's lowest and highest points, the rows at or under the floor and cap voltages). If the DFLL cannot be
 //     prepared or enabled (one log line saying why; it refuses while I2C5 is not in multi-master mode) the
@@ -138,6 +141,8 @@
 #include <IOKit/IOInterruptEventSource.h>
 #include <libkern/c++/OSNumber.h>
 #include <pexpert/pexpert.h>
+#include <kern/clock.h>
+#include <machine/machine_routines.h>
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchClocks.h"
@@ -278,6 +283,12 @@ constexpr uint8_t kPeakCurrentMask = 0x70, kPeakCurrent7200mA = 7u << 4, kVersio
 // TEGRA210B01_DFLL_THERMAL_FLOOR_0 / _CAP_0 / _CAP_1; 1 C hysteresis as the DT trips).
 constexpr unsigned long kDfllRateHz = 1785000000UL;
 static_assert(kDfllRateHz <= TEGRA_DFLL_CPU_MAX_HZ, "never above Horizon's boost clock");
+// The top, by measurement (settleDfllTop): enable asks for the CVB row below it, re-asks it from the row below
+// that, and asks for 1785 MHz only once a request has measured right. One DFLL step is the 51 MHz reference / 2.
+constexpr unsigned long kDfllSafeHz = 1683000000UL, kDfllBounceHz = 1581000000UL, kDfllStepHz = 25500000UL;
+static_assert(kDfllSafeHz + kDfllStepHz < kDfllRateHz, "one step over the safe row stays under the top");
+constexpr uint32_t kDfllSettleMS = 10;  // a request's closed-loop settle, tune transition included (enable waits this)
+constexpr uint32_t kDfllCeilingCheckMS = 10;  // after a governor move to its ceiling, before it is measured
 constexpr int kDfllFloorWarmMilliC = 20000, kDfllCap1MilliC = 64000, kDfllCap2MilliC = 84000;
 constexpr int kDfllBoundaries[] = {kDfllFloorWarmMilliC, kDfllCap1MilliC, kDfllCap2MilliC};
 
@@ -396,6 +407,7 @@ class SwitchThermal : public IOService {
     bool perfRelocked = false, perfLimited = false;  // steps 1 and 2 are done once per boot (and SC7)
     bool dfllMode = false, dfllPrepared = false;     // the CPU goes on the DFLL, and it is still usable this boot
     bool governed = false;                           // on the DFLL, the clock follows the load (switchperf)
+    unsigned long dfllTopHz = kDfllRateHz;           // the top this boot measured at or under 1785 MHz
     IOInterruptEventSource *governor = nullptr;      // switchperf's signal: a software interrupt of this work loop
     unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;  // the driver's boot defaults
     unsigned perfRaises = 0, perfSteps = ~0u;                                     // switch-perf-steps
@@ -426,6 +438,8 @@ class SwitchThermal : public IOService {
     bool raiseRail();
     bool raiseDfll(int soc);
     bool startGovernor(char *why, size_t len);
+    unsigned long settleDfllTop();
+    bool dfllOverCeiling(uint32_t *measuredKHz);
     void governorLimits();
     static void governorSignal(void *ctx);
     static void governorFired(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -969,7 +983,7 @@ bool SwitchThermal::raiseDfll(int soc)
         dfllPrepared = true;
         dfllFloor = dfllCap = ~0u;
         updateDfllThermal(soc);
-        err = tegra_dfll_cpu_enable(kDfllRateHz, why, sizeof(why));
+        err = tegra_dfll_cpu_enable(kDfllSafeHz, why, sizeof(why));
     }
     if (err) {
         dfllMode = false;
@@ -979,6 +993,7 @@ bool SwitchThermal::raiseDfll(int soc)
     }
     perfRaised = true;
     ++perfRaises;
+    dfllTopHz = settleDfllTop();  // 1785 MHz only as measured at or under it (fixed and governed modes alike)
     if (governed && !startGovernor(why, sizeof(why))) {
         // One line, then today's fixed point: off the DFLL, and raiseCpu() goes on up the PLL ladder.
         IOLog("SwitchPerf: CPU governor not started (%s); PLL mode for this boot\n", why);
@@ -987,14 +1002,128 @@ bool SwitchThermal::raiseDfll(int soc)
         return false;
     }
     char state[224];
-    tegra_dfll_cpu_describe(kDfllRateHz, state, sizeof(state));
+    tegra_dfll_cpu_describe(dfllTopHz, state, sizeof(state));
     const unsigned mhz = switchclk::readCpu(car).kHz / 1000;
     publish("CPUClockMHz", mhz);
     publish("CPURaises", perfRaises);
-    IOLog("SwitchPerf: CPU on the DFLL at %lu MHz%s (raise %u; SoC %d.%d C): %s\n", kDfllRateHz / 1000000,
+    IOLog("SwitchPerf: CPU on the DFLL at %lu MHz%s (raise %u; SoC %d.%d C): %s\n", dfllTopHz / 1000000,
           governed ? ", on demand from here" : "", perfRaises, soc / 1000, soc % 1000 / 100, state);
     if (governed) IOLog("SwitchPerf: %s\n", why);  // the governor's table and tunables
     return true;
+}
+
+// The cluster's clock, measured where it runs: a chain of dependent adds (one per cycle on the A57) timed by the
+// generic timer with interrupts masked, as XNU's kprof_clock_probe (ioswitch_kprof.c) does, 4x longer (131072
+// adds: about 73 us at 1785 MHz, 0.07 % timer resolution). kprof's probe read 995-997 MHz at 998.4, 1664-1668 at
+// 1670.4 and 1782-1787 at 1785 on this console: within 0.3 % low, against DFLL steps 1.4 % apart. In kHz.
+static uint32_t probeCpuKhz()
+{
+    constexpr uint64_t kLoops = 16384, kAdds = kLoops * 8;
+    uint64_t n = 0, x = 0, t0 = 0, t1 = 0;
+    const boolean_t enabled = ml_set_interrupts_enabled(FALSE);
+    for (int pass = 0; pass < 2; pass++) {  // the first pass warms the branch predictor and the I-cache
+        n = pass ? kLoops : 64;
+        t0 = mach_absolute_time();
+        __asm__ volatile("1:\n"
+                         "add %1, %1, #1\n"
+                         "add %1, %1, #1\n"
+                         "add %1, %1, #1\n"
+                         "add %1, %1, #1\n"
+                         "add %1, %1, #1\n"
+                         "add %1, %1, #1\n"
+                         "add %1, %1, #1\n"
+                         "add %1, %1, #1\n"
+                         "subs %0, %0, #1\n"
+                         "b.ne 1b\n"
+                         : "+r"(n), "+r"(x)
+                         :
+                         : "cc");
+        t1 = mach_absolute_time();
+    }
+    ml_set_interrupts_enabled(enabled);
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(t1 - t0, &ns);
+    return ns ? (uint32_t)(kAdds * 1000000 / ns) : 0;
+}
+
+// The clock now against the governor's ceiling (the lowest of the top this boot measured, the DFLL's thermal cap and
+// thermalmonitord's CLTM ceiling): over it by half a DFLL step or more (one step over 1785 MHz is 1810.5), the ceiling
+// is asked again from the row below; still over, and every ceiling sits a row lower for the rest of the boot
+// (switchperf::derate), one line either way. Below the ceiling a step high cannot reach it: rows are four DFLL steps
+// or more apart. `measuredKHz` gets the probe. Returns whether it moved the clock. Work loop, governed.
+bool SwitchThermal::dfllOverCeiling(uint32_t *measuredKHz)
+{
+    const uint32_t khz = probeCpuKhz(), step = (uint32_t)(kDfllStepHz / 1000);
+    if (measuredKHz) *measuredKHz = khz;
+    const unsigned hi = switchperf::ceiling();
+    const uint32_t ceiling = switchperf::khzAt(hi);
+    if (!switch_gov_over_step(khz, ceiling, step)) return false;
+    const uint32_t below = hi ? switchperf::khzAt(hi - 1) : ceiling;
+    int err = tegra_dfll_cpu_set_rate((unsigned long)below * 1000);
+    if (!err) {
+        IOSleep(2);
+        err = tegra_dfll_cpu_set_rate((unsigned long)ceiling * 1000);
+    }
+    if (!err) IOSleep(kDfllSettleMS);
+    const uint32_t again = probeCpuKhz();
+    if (!err && !switch_gov_over_step(again, ceiling, step)) {
+        switchperf::applied(hi);
+        IOLog("SwitchPerf: DFLL measured %u MHz at its %u MHz ceiling; re-asked from %u MHz: %u MHz\n", khz / 1000,
+              ceiling / 1000, below / 1000, again / 1000);
+        return true;
+    }
+    switchperf::derate();
+    const unsigned lower = switchperf::ceiling();
+    const int moved = tegra_dfll_cpu_set_rate((unsigned long)switchperf::khzAt(lower) * 1000);
+    if (!moved) {
+        IOSleep(kDfllSettleMS);
+        switchperf::applied(lower);
+    }
+    IOLog("SwitchPerf: DFLL measured %u MHz at its %u MHz ceiling, %u MHz re-asked (%d): every ceiling a row lower for "
+          "this boot, %u MHz now (%d; measured %u MHz)\n",
+          khz / 1000, ceiling / 1000, again / 1000, err, switchperf::khzAt(lower) / 1000, moved, probeCpuKhz() / 1000);
+    return true;
+}
+
+// The top this boot can run without exceeding 1785 MHz, by measurement (11-05 r7z, kprof's probe: the rate asked right
+// after the DFLL closed its loop ran one DFLL step high, 1807-1813 MHz for 1785 MHz asked, for the 80 s nothing asked
+// again; every later request, from below, landed at 1782-1787. The DT's loop gains, cf 6 ci 0, have no integral term,
+// so where the loop settles depends on how it got there). Enable has asked for kDfllSafeHz (1683 MHz: one step high
+// is 1708.5, still under 1785) and waited kDfllSettleMS; this asks it again from kDfllBounceHz, measures it, and only
+// if that request landed right asks for 1785 MHz, measures that, and steps back to 1683 if it is high. Fixed and
+// governed DFLL modes both run their top from here. One log line. Work loop, on the DFLL.
+unsigned long SwitchThermal::settleDfllTop()
+{
+    uint32_t safe = 0, top = 0;
+    int err = tegra_dfll_cpu_set_rate(kDfllBounceHz);
+    if (!err) IOSleep(2);
+    if (!err) err = tegra_dfll_cpu_set_rate(kDfllSafeHz);
+    if (!err) IOSleep(kDfllSettleMS);
+    safe = probeCpuKhz();
+    unsigned long chosen = kDfllSafeHz;
+    const char *why = "";
+    if (err) {
+        why = ", re-request refused";
+    } else if (switch_gov_over_step(safe, kDfllSafeHz / 1000, kDfllStepHz / 1000)) {
+        why = ", which measured high, so 1785 MHz was not asked";
+    } else if ((err = tegra_dfll_cpu_set_rate(kDfllRateHz)) != 0) {
+        why = ", 1785 MHz refused";
+    } else {
+        IOSleep(kDfllSettleMS);
+        top = probeCpuKhz();
+        if (!switch_gov_over_step(top, kDfllRateHz / 1000, kDfllStepHz / 1000)) {
+            chosen = kDfllRateHz;
+        } else {
+            why = ", 1785 MHz measured high";
+            err = tegra_dfll_cpu_set_rate(kDfllSafeHz);
+            if (!err) IOSleep(kDfllSettleMS);
+        }
+    }
+    char at[40] = "";
+    if (top) snprintf(at, sizeof(at), ", %u MHz at %lu MHz", top / 1000, kDfllRateHz / 1000000);
+    IOLog("SwitchPerf: DFLL measured %u MHz at %lu MHz (re-asked from %lu MHz)%s%s; top %lu MHz (probe; %d)\n",
+          safe / 1000, kDfllSafeHz / 1000000, kDfllBounceHz / 1000000, at, why, chosen / 1000000, err);
+    return chosen;
 }
 
 // Governed DFLL mode: the governor's points from the DFLL's own OPP table (switch_gov_cpu_table: the CVB Vmin row up to
@@ -1023,12 +1152,15 @@ bool SwitchThermal::startGovernor(char *why, size_t len)
         }
         governor->enable();
     }
-    if (!switchperf::start(khz, mv, count, count - 1, &SwitchThermal::governorSignal, this, why, len)) return false;
+    unsigned top = count - 1;
+    while (top && khz[top] > dfllTopHz / 1000) --top;  // the measured top (1785 MHz, or 1683 if 1785 measured high)
+    switchperf::capTop(top);                           // before start: the boot floor never asks above it
+    if (!switchperf::start(khz, mv, count, top, &SwitchThermal::governorSignal, this, why, len)) return false;
     governorLimits();
     size_t n = (size_t)snprintf(why, len, "CPU governor: %u points (L4T CVB, MHz@mV):", count);
     for (unsigned i = 0; i < count && n < len; ++i)
         n += (size_t)snprintf(why + n, len - n, " %u@%u", khz[i] / 1000, mv[i]);
-    if (n < len) snprintf(why + n, len - n, "; top until System Boot Complete");
+    if (n < len) snprintf(why + n, len - n, "; %u MHz until System Boot Complete", khz[top] / 1000);
     return true;
 }
 
@@ -1046,15 +1178,27 @@ void SwitchThermal::governorFired(OSObject *owner, IOInterruptEventSource *, int
 {
     auto *self = OSDynamicCast(SwitchThermal, owner);
     if (!self || !switchperf::running()) return;
-    char line[700];
+    char line[760];
     const unsigned index = switchperf::take(line, sizeof(line));
-    if (line[0]) os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
-    if (!self->perfRaised || !self->dfllMode || !self->governed) return;
+    const bool onDfll = self->perfRaised && self->dfllMode && self->governed;
+    uint32_t measured = 0;
+    if (line[0]) {
+        // The 10 s line also carries the clock as measured, and checks it against the ceiling.
+        if (onDfll && self->dfllOverCeiling(&measured)) return;
+        const size_t n = strlen(line);
+        if (onDfll && n + 32 < sizeof(line)) snprintf(line + n, sizeof(line) - n, "; probe %u MHz", measured / 1000);
+        os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
+    }
+    if (!onDfll) return;
     const unsigned long hz = (unsigned long)switchperf::khzAt(index) * 1000;
     if (switch_perf_cpu_khz() * 1000ul == hz) return;
     const int err = hz ? tegra_dfll_cpu_set_rate(hz) : -22;  // -EINVAL
     if (!err) {
         switchperf::applied(index);
+        if (index == switchperf::ceiling()) {
+            IOSleep(kDfllCeilingCheckMS);  // a new request at the ceiling: measured once it has settled
+            (void)self->dfllOverCeiling(&measured);
+        }
         return;
     }
     IOLog("SwitchPerf: the DFLL refused %lu MHz (%d); CPU governor off, PLL mode for this boot\n", hz / 1000000, err);

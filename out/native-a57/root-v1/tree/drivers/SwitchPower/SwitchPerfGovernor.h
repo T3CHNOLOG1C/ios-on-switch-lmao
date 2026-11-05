@@ -38,6 +38,15 @@ void limits(unsigned floorMv, unsigned capMv);
 
 uint32_t khzAt(unsigned index);
 
+// The highest index the governor may use from now on (the top this boot measured at or under 1785 MHz), on top of the
+// DFLL's thermal cap and thermalmonitord's ceiling; applied at once, or kept for start() when called before it.
+// derate(): every ceiling one row lower for the rest of the boot (a ceiling that measured high even when re-asked).
+// ceiling(): the highest index in force now. indexAt: the highest index at or below `khz`. Work loop only.
+void capTop(unsigned index);
+void derate();
+unsigned ceiling();
+unsigned indexAt(uint32_t khz);
+
 }  // namespace switchperf
 
 #endif

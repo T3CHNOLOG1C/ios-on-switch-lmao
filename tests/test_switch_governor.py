@@ -108,6 +108,8 @@ class SwitchGovernorTests(unittest.TestCase):
         lib.gov_cpu_table.restype = uint
         lib.gov_index_at_mv.argtypes = [ctypes.POINTER(u32), uint, u32]
         lib.gov_index_at_mv.restype = uint
+        lib.gov_over_step.argtypes = [u32, u32, u32]
+        lib.gov_over_step.restype = ctypes.c_int
 
         # The kernel's tunables, as shipped (the governor's state machine is checked with them; without the kernel
         # source that carries them, the traces run on ondemand-like stand-ins).
@@ -196,6 +198,20 @@ class SwitchGovernorTests(unittest.TestCase):
         table = (ctypes.c_uint32 * len(mv))(*mv)
         self.assertEqual(khz[self.lib.gov_index_at_mv(table, len(mv), CPU_COLD_FLOOR_MV)], 1428000)
 
+
+    def test_dfll_top_check_on_r7z_measurements(self):
+        """The DFLL top check (SwitchThermal settleDfllTop / dfllOverTop) on the 11-05 r7z boot's kprof probe: at 1785 MHz
+        asked, 1807-1813 MHz right after enable (one DFLL step high: 1810.5) is over; 1782-1787 MHz after a later
+        request is not; nor is the PLL's 1670.4 MHz read as 1664-1668, nor 1683 MHz one step high (1708.5) checked
+        against the 1785 MHz ceiling, which is what keeps the 1683 MHz fallback legal even if it overshoots too."""
+        step = 25500
+        for measured in (1807000, 1810500, 1813000, 1798000):
+            self.assertTrue(self.lib.gov_over_step(measured, 1785000, step), measured)
+        for measured in (1782000, 1785000, 1787000, 1797000, 1708500):
+            self.assertFalse(self.lib.gov_over_step(measured, 1785000, step), measured)
+        for measured in (1664000, 1668000):
+            self.assertFalse(self.lib.gov_over_step(measured, 1670400, step), measured)
+        self.assertTrue(self.lib.gov_over_step(1708500, 1683000, step))  # 1683 asked, one step high: not "landed right"
 
     # ---------------------------------------------------------------------------------------------- traces
     def test_saturation_reaches_the_ceiling_in_one_window(self):
