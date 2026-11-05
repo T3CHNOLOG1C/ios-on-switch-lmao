@@ -6,6 +6,8 @@
 .set _tegra_vic_ios_bytes_per_row, 0xfffffff004b9ebd4
 .globl _tegra_vic_ios_complete
 .set _tegra_vic_ios_complete, 0xfffffff004b9ff64
+.globl _tegra_vic_ios_device_unlock
+.set _tegra_vic_ios_device_unlock, 0xfffffff004ba0fc8
 .globl _tegra_vic_ios_format
 .set _tegra_vic_ios_format, 0xfffffff004b9ebac
 .globl _tegra_vic_ios_height

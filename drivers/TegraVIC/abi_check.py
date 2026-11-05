@@ -7,7 +7,9 @@ Usage: abi_check.py --class iosurface --kernelcache KC --object X.o --late X.o -
 TegraVICSurface.cpp calls com.apple.iokit.IOSurface functions by address (the kext exports no symbols in the
 kernelcache). Checks, against the kernelcache the prelinker uses:
 - each function's original address holds the instructions read when it was identified (first 16 bytes; for the
-  plane accessors the shared prologue plus the bounds checks of the plane array at +0x180 and the count at +0x98);
+  plane accessors the shared prologue plus the bounds checks of the plane array at +0x180 and the count at +0x98; for
+  the device write-end the seed's own loads and stores);
+- the function the device write-end is taken to be is the one Apple's AppleM2ScalerCSCDriver imports for it (its GOT);
 - the bindings file binds exactly these functions at original address + prelink slide (-0x1000000); --write
   regenerates it instead of comparing;
 - the object's undefined _tegra_vic_ios_* symbols are all bound, and nothing else of the kext is imported;
@@ -53,13 +55,31 @@ FUNCTIONS = [
     ('_tegra_vic_ios_prepare', 0xfffffff005b9fda0, 'ffc301d1f85f03a9f65704a9f44f05a9',
      'IOSurface::prepare(): wire count +0x20c, descriptor prepare'),
     ('_tegra_vic_ios_complete', 0xfffffff005b9ff64, 'ff8301d1f44f04a9fd7b05a9fd430191', 'IOSurface::complete()'),
+    # r18-planes: the end of a device's write (re/seed in r18-planes' scratch): under the surface's IOLock (+0x50), unless
+    # options bit 0 (read), the seed (the u32 at +0xc of the surface's IOSurfaceRoot entry, IOSurface+0x178) and the
+    # write count at +0x10 go up and the cache flags at +0x3b0 get 0x1c; returns 0. What Apple's media engines call on a
+    # destination when a job is done (AppleM2ScalerCSCDriver's frame-done teardown with 0, its source with 1).
+    ('_tegra_vic_ios_device_unlock', 0xfffffff005ba0fc8, 'f44fbea9fd7b01a9fd430091f40301aa',
+     'device write end (surface, options): seed +1 under the surface lock'),
 ]
-# Each plane accessor's field: the immediate of its `add x8, x8, #field` (offset in the function, instruction).
-PLANE_FIELDS = {
-    '_tegra_vic_ios_plane_height': (0x80, '08210091'),        # add x8, x8, #0x8
-    '_tegra_vic_ios_plane_offset': (0x80, '08610091'),        # add x8, x8, #0x18
-    '_tegra_vic_ios_plane_bytes_per_row': (0x80, '08810091'), # add x8, x8, #0x20
+# Fields a function must read or write (offset in the function, instruction): each plane accessor's `add x8, x8, #field`;
+# the device write-end's seed increment.
+FIELDS = {
+    '_tegra_vic_ios_plane_height': [(0x80, '08210091')],        # add x8, x8, #0x8
+    '_tegra_vic_ios_plane_offset': [(0x80, '08610091')],        # add x8, x8, #0x18
+    '_tegra_vic_ios_plane_bytes_per_row': [(0x80, '08810091')], # add x8, x8, #0x20
+    '_tegra_vic_ios_device_unlock': [
+        (0x20, '68be40f9'),  # ldr x8, [x19, #0x178]: the surface's root entry
+        (0x24, '090d40b9'),  # ldr w9, [x8, #0xc]: the seed
+        (0x2c, '090d00b9'),  # str w9, [x8, #0xc]
+        (0x34, '29091e32'),  # orr w9, w9, #0x1c: the cache flags
+        (0x44, '091100b9'),  # str w9, [x8, #0x10]: the write count
+    ],
 }
+# Apple's own imports of the functions bound above (GOT entries in its kexts' __DATA_CONST): the same function.
+IMPORTS = [
+    ('_tegra_vic_ios_device_unlock', 0xfffffff006e5ea88, 'AppleM2ScalerCSCDriver'),
+]
 
 
 # Apple's scaler classes, which TegraVICUserClient.cpp instantiates and whose vtable copies it points their slots of
@@ -118,10 +138,14 @@ def main():
     for name, address, want, what in FUNCTIONS:
         at = backed_offset(top['segments'], address, 16, len(kc))
         require(kc[at:at + 16].hex() == want, f'{name} ({what}) at {address:#x} is {kc[at:at + 16].hex()}, want {want}')
-        if name in PLANE_FIELDS:
-            off, insn = PLANE_FIELDS[name]
+        for off, insn in FIELDS.get(name, []):
             at = backed_offset(top['segments'], address + off, 4, len(kc))
             require(kc[at:at + 4].hex() == insn, f'{name}: field instruction at +{off:#x} is {kc[at:at + 4].hex()}')
+    addresses = {name: address for name, address, _, _ in FUNCTIONS}
+    for name, got_entry, kext in IMPORTS:
+        at = backed_offset(top['segments'], got_entry, 8, len(kc))
+        got = struct.unpack_from('<Q', kc, at)[0]
+        require(got == addresses[name], f'{kext} imports {got:#x} at {got_entry:#x}, not {name} ({addresses[name]:#x})')
     for cls, vtable, slots in VTABLES:
         for slot, want in slots.items():
             at = backed_offset(top['segments'], vtable + 8 * slot, 8, len(kc))

@@ -262,6 +262,8 @@ void engineThread(void *, wait_result_t)
         gStats.jobs++;
         if (status) gStats.failed++;
         statsLine();
+        // The destination's seed moves before the caller hears back (r18-planes): VIC wrote it, or may have in part.
+        tegra_vic_surface_written(&job->dst);
         tegra_vic_surface_release(&job->src);
         tegra_vic_surface_release(&job->dst);
         IOUserClient *client = job->client;

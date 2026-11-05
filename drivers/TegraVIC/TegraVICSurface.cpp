@@ -34,6 +34,8 @@ uint64_t tegra_vic_ios_plane_offset(OSObject *surface, uint32_t plane);
 uint64_t tegra_vic_ios_plane_bytes_per_row(OSObject *surface, uint32_t plane);
 int tegra_vic_ios_prepare(OSObject *surface);
 int tegra_vic_ios_complete(OSObject *surface);
+// The end of a device's write (options 0) or read (1): a write moves the surface's seed (abi_check.py FIELDS).
+int tegra_vic_ios_device_unlock(OSObject *surface, uint32_t options);
 }
 
 namespace {
@@ -121,6 +123,15 @@ extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t exten
     }
     *count = n;
     return kIOReturnSuccess;
+}
+
+// r18-planes: VIC wrote the surface (a TransformSurface destination): its seed moves as a CPU write-unlock or Apple's
+// scaler's frame-done moves it (AppleM2ScalerCSCDriver calls the same function on its destination), so whoever caches by
+// seed (the raw GPU path's 4:2:0 conversions, IOSurfaceGetSeed) sees the new picture. Thread context; the surface's own
+// lock is taken inside. Its next CPU lock cleans the CPU's caches once, as after Apple's engines.
+extern "C" void tegra_vic_surface_written(TegraVICSurface *s)
+{
+    if (s->surface) (void)tegra_vic_ios_device_unlock(s->surface, 0);
 }
 
 extern "C" void tegra_vic_surface_complete(TegraVICSurface *s)
