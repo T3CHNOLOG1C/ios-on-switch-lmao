@@ -1,0 +1,26 @@
+# The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+# The XNU the kernel is built from: kernel/xnu-<version>/. Code that differs per version uses #if XNU_<version> (the
+# kernel toolchain defines it from this setting); drivers depend on :sdk, never on one XNU's labels.
+string_flag(
+    name = "xnu_version",
+    build_setting_default = "10063.141.1",
+    values = ["10063.141.1"],
+)
+
+config_setting(
+    name = "xnu_10063_141_1",
+    flag_values = {":xnu_version": "10063.141.1"},
+)
+
+# The selected XNU's SDK for the kernel's compiles (headers and the paths the kernel toolchain names).
+alias(
+    name = "sdk",
+    actual = select({":xnu_10063_141_1": "//out/native-a57/root-v1/tree:kernel_sdk"}),
+)

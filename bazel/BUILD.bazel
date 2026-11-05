@@ -1,3 +1,29 @@
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("//bazel/lint:defs.bzl", "lint_files")
 
+package(default_visibility = ["//visibility:public"])
+
 lint_files()
+
+# The build profile, one setting for the whole graph (--config=debug / --config=release in .bazelrc set it):
+#   debug    (default) the fastest incremental builds: no LTO, asserts on, symbols, XNU DEVELOPMENT
+#   release  full optimisation: fat LTO everywhere, NDEBUG, XNU RELEASE, stripped
+# Every stream maps it onto its own flags with select() on :debug / :release (never by reading .bazelrc).
+string_flag(
+    name = "profile",
+    build_setting_default = "debug",
+    values = [
+        "debug",
+        "release",
+    ],
+)
+
+config_setting(
+    name = "debug",
+    flag_values = {":profile": "debug"},
+)
+
+config_setting(
+    name = "release",
+    flag_values = {":profile": "release"},
+)

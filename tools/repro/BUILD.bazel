@@ -18,3 +18,10 @@ py_binary(
     name = "equivalence",
     srcs = ["equivalence.py"],
 )
+
+# bazel run //tools/repro:cache_check [-- TARGET...]: a second worktree of this commit, built in a fresh output base,
+# must execute nothing (every action a disk-cache hit): action keys do not depend on the checkout's or output base's path.
+py_binary(
+    name = "cache_check",
+    srcs = ["cache_check.py"],
+)

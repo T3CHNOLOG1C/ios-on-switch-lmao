@@ -59,11 +59,20 @@ test --test_output=errors
 build --show_progress_rate_limit=1
 
 # --- Presets -----------------------------------------------------------------------------------------------------
-# dev: the default; keeps going after the first failure.
-build:dev --keep_going
-# release: the same artifacts (nothing here changes an action), but no partial result and a full log.
+# The two build profiles (//bazel:profile; every part of the graph selects its flags on it):
+# debug: the default. The fastest incremental builds: no LTO, asserts on, symbols, XNU DEVELOPMENT. Keeps going after
+# the first failure.
+build:debug --//bazel:profile=debug
+build:debug --keep_going
+# release: full optimisation (fat LTO everywhere, NDEBUG, XNU RELEASE, stripped), no partial result, a full log.
+build:release --//bazel:profile=release
+# Host code (tests, tools) the usual optimised way: -O2 -DNDEBUG. The kernel's and the iOS toolchains' flags come from
+# //bazel:profile, not from this.
+build:release --compilation_mode=opt
 build:release --nokeep_going
 build:release --verbose_failures
+# dev: the old name of the default preset.
+build:dev --config=debug
 # reproducible-check: ignore every cache so each action really runs, and write an execution log; `bazel run
 # //tools/repro:check` builds twice like this in two fresh output bases and diffs every artifact bit for bit.
 build:reproducible-check --noremote_accept_cached
@@ -78,6 +87,6 @@ build:remote --remote_cache_compression
 build:remote --experimental_remote_cache_eviction_retries=5
 
 # The default preset.
-build --config=dev
+build --config=debug
 
 try-import %workspace%/user.bazelrc
