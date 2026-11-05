@@ -12,6 +12,9 @@ lint_files()
 string_flag(
     name = "profile",
     build_setting_default = "debug",
+    # Target configuration only: exec tools (compilers, generators, test runners) never differ by profile, so switching
+    # profiles reuses every exec action.
+    scope = "target",
     values = [
         "debug",
         "release",
