@@ -1215,3 +1215,14 @@ PTHREAD_BOOTSTRAP = struct(
     includes = {},
     segments = {},
 )
+
+# RELEASE: libpthread.py rewrites the object (and libpthread_kernel.a links after XNU's LTO step), so it is machine code,
+# make's CFLAGS_NOLTO_FLAG as for the objects setsegname reads.
+PTHREAD_BOOTSTRAP_RELEASE = struct(
+    objects = PTHREAD_BOOTSTRAP.objects,
+    copts = {
+        "bsd/kern/source_pthread_bootstrap.c": PTHREAD_BOOTSTRAP.copts["bsd/kern/source_pthread_bootstrap.c"] + ["-fno-lto"],
+    },
+    includes = {},
+    segments = {},
+)

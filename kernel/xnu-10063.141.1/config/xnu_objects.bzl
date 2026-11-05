@@ -124,6 +124,11 @@ _ASSYM_SED = [
 
 def _genassym(ctx, feature_configuration, cc_toolchain, recipe, places, maps, compilation_context, ignorelists):
     flags = [f for f in _expand(recipe.flags, places) if f != "-c"]
+
+    # make's ${CFLAGS_NOLTO_FLAG}: -fno-lto whenever the config builds LTO (RELEASE), or -S writes LLVM IR, not the
+    # assembly the sed below reads.
+    if [f for f in flags if f.startswith("-flto")]:
+        flags.append("-fno-lto")
     flags += ["-fno-integrated-as", "-S"] + _expand(recipe.includes, places) + maps
     _, outputs = cc_common.compile(
         name = ctx.label.name + "_genassym",

@@ -5,7 +5,7 @@
 # source: add it to objects.bzl where conf/files would put it, with any flags its conf/Makefile.* entry adds.
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/xnu-10063.141.1/config:xnu_objects.bzl", "xnu_objects")
-load(":objects.bzl", "DEVELOPMENT", "PTHREAD_BOOTSTRAP", "RELEASE")
+load(":objects.bzl", "DEVELOPMENT", "PTHREAD_BOOTSTRAP", "PTHREAD_BOOTSTRAP_RELEASE", "RELEASE")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -82,6 +82,6 @@ xnu_objects(
     name = "pthread_bootstrap",
     srcs = ["//kernel/xnu-10063.141.1/bsd:kern/source_pthread_bootstrap.c"],
     component = "osfmk",
-    release = PTHREAD_BOOTSTRAP,
+    release = PTHREAD_BOOTSTRAP_RELEASE,
     table = PTHREAD_BOOTSTRAP,
 )
