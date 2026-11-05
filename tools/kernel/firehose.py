@@ -44,6 +44,14 @@ def main():
         config.write_text("\n".join(lines) + "\n")
         env = common.environment(xcode)
         cache = args.path_root.rstrip("/") + "/out/native-a57/root-v1/tree/.cache"
+        # The temporary directory reaches clang under both its spellings: /private/var/... (the compiles' working
+        # directory, resolved) and /var/... (the sources' paths, as xcodebuild normalizes them).
+        real = os.path.realpath(scratch)
+        temps = {real, real[len("/private"):] if real.startswith("/private/") else real, str(scratch)}
+        places = [(t + "/libdispatch-work", cache + "/libdispatch-work") for t in sorted(temps)]
+        places += [(t + "/xnu-work", cache + "/xnu-work") for t in sorted(temps)]
+        places.append((os.path.realpath(out), cache + "/fakeroot"))
+        maps = " ".join("-ffile-prefix-map={}={}".format(path, spelling) for path, spelling in places)
         common.run(["xcodebuild", "install", "-project", work / "libdispatch.xcodeproj", "-target", "libfirehose_kernel",
                     "-configuration", "Release", "-sdk", "iphoneos", "-jobs", args.jobs, "ARCHS=arm64",
                     "VALID_ARCHS=arm64", "ONLY_ACTIVE_ARCH=NO", "IPHONEOS_DEPLOYMENT_TARGET=17.0",
@@ -51,8 +59,7 @@ def main():
                     "OBJROOT=" + str(scratch / "obj"), "SYMROOT=" + str(scratch / "sym"),
                     "DSTROOT=" + str(out), "FAKEROOT_DIR=" + str(out),
                     # Where the CMake flow kept these trees, so no sandbox path reaches the objects.
-                    "OTHER_CFLAGS=$(inherited) -ffile-prefix-map={}={} -ffile-prefix-map={}={}".format(
-                        work, cache + "/libdispatch-work", scratch / "xnu-work", cache + "/xnu-work")],
+                    "OTHER_CFLAGS=$(inherited) " + maps],
                    env, cwd=scratch, log=log)
         lib = out / "usr/local/lib/kernel"
         if (lib / "liblibfirehose_kernel.a").exists():
