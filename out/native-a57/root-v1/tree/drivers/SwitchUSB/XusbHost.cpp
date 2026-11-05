@@ -2,6 +2,7 @@
 // Tegra X1 XUSB host controller hardware layer; see XusbHost.h.
 #include "XusbHost.h"
 #include "XudcHardware.h"
+#include "XusbPorts.h"
 #include <IOKit/IOLib.h>
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -93,23 +94,17 @@ enum : uint32_t {  // falcon and its memory pool, through the CSB window (xhci-t
     L2IMEMOP_RESULT_VLD = 1u << 31,
     IMEM_BLOCK = 256,
 };
-enum : uint32_t {  // XUSB pad controller (xusb-tegra210.c)
+enum : uint32_t {  // XUSB pad controller (xusb-tegra210.c); port 0's role registers are XusbPorts.h's
     USB2_PAD_MUX = 0x004,
-    USB2_PORT_CAP = 0x008,
     SS_PORT_MAP = 0x014,
-    BATTERY_CHRG_OTGPAD0_CTL1 = 0x084,
+    ELPG_PROGRAM_0 = 0x020,
+    ELPG_PROGRAM_1 = 0x024,
     OTG_PAD0_CTL_0 = 0x088,
-    USB2_VBUS_ID = 0xc60,
-    PORT0_CAP_MASK = 3u,
-    PORT0_CAP_OTG = 3u,
+    OTG_PAD0_CTL_1 = 0x08c,
+    BIAS_PAD_CTL_0 = 0x284,
     VREG_FIX18 = 1u << 6,
     OTG_PAD_PD = 1u << 26,
     OTG_PAD_PD_ZI = 1u << 29,
-    VBUS_ID_VBUS_ON = 1u << 14,
-    VBUS_ID_OVR_MASK = 0xfu << 18,
-    VBUS_ID_OVR_GROUNDED = 0u << 18,
-    VBUS_ID_OVR_FLOATING = 8u << 18,
-    VBUS_ID_SRC_OVR = (1u << 12) | (1u << 16),  // VBUS override enable, ID source = override
 };
 
 // Firmware header (xhci-tegra.c struct tegra_xusb_fw_header, 256 bytes before the image proper).
@@ -145,6 +140,7 @@ void Controller::pmcWrite(uint32_t o, uint32_t v)
 
 bool Controller::map()
 {
+    if (isMapped) return true;
     car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
     pmcPage = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
     fusePage = (volatile uint8_t *)ml_io_map(kFusePagePA, 0x1000);
@@ -153,7 +149,16 @@ bool Controller::map()
     regs = (volatile uint8_t *)ml_io_map(kXhciPA, kXhciBytes);
     fpci = (volatile uint8_t *)ml_io_map(kFpciPA, 0x1000);
     ipfs = (volatile uint8_t *)ml_io_map(kIpfsPA, 0x1000);
-    return car && pmcPage && fusePage && mc && padctl && regs && fpci && ipfs;
+    isMapped = car && pmcPage && fusePage && mc && padctl && regs && fpci && ipfs;
+    return isMapped;
+}
+
+// The XUSB top and pad controller clock on and resets released (shared with the XUDC and PCIe: never asserted).
+void Controller::padctlUp()
+{
+    w(car, CLK_ENB_W_SET, W_XUSB);
+    w(car, RST_DEV_W_CLR, W_XUSB | W_XUSB_PADCTL);
+    IODelay(2);
 }
 
 // Linux tegra_powergate_power_up order (as XudcHardware::powerUp): reset asserted, partition on, module clock on,
@@ -184,17 +189,15 @@ bool Controller::powerOn(char *why, size_t whySize)
         snprintf(why, whySize, "SMMU translation is on for XUSB_HOST (ASID %#x)", r(mc, MC_SMMU_XUSB_HOST_ASID));
         return false;
     }
-    w(car, CLK_ENB_W_SET, W_XUSB);
-    w(car, RST_DEV_W_CLR, W_XUSB | W_XUSB_PADCTL);
-    IODelay(2);
+    padctlUp();
     rmw(padctl, USB2_PAD_MUX, 3u << 18 | 3u, 1u << 18 | 1u);  // bias pad and OTG pad 0 to XUSB
     if ((r(padctl, OTG_PAD0_CTL_0) & (OTG_PAD_PD | OTG_PAD_PD_ZI)) && !xudc::usb2PadInit(car, fusePage, padctl)) {
         snprintf(why, whySize, "PLLU did not lock");
         return false;
     }
-    rmw(padctl, SS_PORT_MAP, 0xfu, 0);                      // SS port 0 paired with USB2 port 0 (as the XUDC)
-    rmw(padctl, BATTERY_CHRG_OTGPAD0_CTL1, 0, VREG_FIX18);  // T210B01: fixed 1.8 V regulator on the USB2 pads
-    pmcWrite(USB_AO, pmc(USB_AO) & 0xfffffff3u);            // ID and VBUS wake detectors powered (as the XUDC)
+    rmw(padctl, SS_PORT_MAP, 0xfu, 0);                   // SS port 0 paired with USB2 port 0 (as the XUDC)
+    rmw(padctl, XUSB_CHRG_OTGPAD0_CTL1, 0, VREG_FIX18);  // T210B01: fixed 1.8 V regulator on the USB2 pads
+    pmcWrite(USB_AO, pmc(USB_AO) & 0xfffffff3u);         // ID and VBUS wake detectors powered (as the XUDC)
 
     // Host core 102 MHz and falcon 204 MHz from PLLP, FS 48 MHz from PLLU FO, SS 120 MHz from the HSIC 480 MHz
     // branch: the L4T device tree's assigned rates, sources as XudcHardware.
@@ -225,6 +228,7 @@ bool Controller::powerOn(char *why, size_t whySize)
     rmw(fpci, XUSB_CFG_ARU_C11PAGESEL, 0, HSP0);
     rmw(fpci, XUSB_CFG_HSPX_CORE_CTRL, HSIC_PLLCLK_VLD, 0);
     rmw(fpci, XUSB_CFG_ARU_C11PAGESEL, HSP0, 0);
+    isPowered = true;
     return true;
 }
 
@@ -296,19 +300,99 @@ bool Controller::loadFirmware(const uint8_t *image, size_t size, char *why, size
 
 void Controller::setHostRole(bool host)
 {
-    rmw(padctl, USB2_PORT_CAP, PORT0_CAP_MASK, PORT0_CAP_OTG);
-    uint32_t v = r(padctl, USB2_VBUS_ID) | VBUS_ID_SRC_OVR;
-    if (host) {
-        if (v & VBUS_ID_VBUS_ON) {  // tegra210_xusb_padctl_id_override: VBUS override off, 1-2 ms, then ID
-            w(padctl, USB2_VBUS_ID, v & ~VBUS_ID_VBUS_ON);
-            IODelay(1500);
-            v &= ~VBUS_ID_VBUS_ON;
-        }
-        v = (v & ~VBUS_ID_OVR_MASK) | VBUS_ID_OVR_GROUNDED;
-    } else {
-        v = (v & ~VBUS_ID_OVR_MASK) | VBUS_ID_OVR_FLOATING;
+    padctlUp();
+    rmw(padctl, XUSB_USB2_PORT_CAP, XUSB_PORT0_CAP_MASK, XUSB_PORT0_CAP_OTG);
+    const uint32_t v = r(padctl, XUSB_USB2_VBUS_ID);
+    if (!host) {
+        w(padctl, XUSB_USB2_VBUS_ID, xusb_vbus_id_device(v));
+        return;
     }
-    w(padctl, USB2_VBUS_ID, v);
+    if (v & XUSB_VBUS_ID_VBUS_ON) {  // tegra210_xusb_padctl_id_override: VBUS override off, 1-2 ms, then ID
+        w(padctl, XUSB_USB2_VBUS_ID, xusb_vbus_id_drop_vbus(v));
+        IODelay(1500);
+    }
+    w(padctl, XUSB_USB2_VBUS_ID, xusb_vbus_id_host(r(padctl, XUSB_USB2_VBUS_ID)));
+    const uint32_t ctl0 = r(padctl, XUSB_CHRG_OTGPAD0_CTL0), ctl1 = r(padctl, XUSB_CHRG_OTGPAD0_CTL1);
+    const uint32_t ocMap = r(padctl, XUSB_USB2_OC_MAP);
+    if (ctl0 != xusb_chrg_ctl0_host(ctl0) || ctl1 != xusb_chrg_ctl1_host(ctl1) || ocMap != xusb_oc_map_host(ocMap)) {
+        w(padctl, XUSB_CHRG_OTGPAD0_CTL0, xusb_chrg_ctl0_host(ctl0));
+        w(padctl, XUSB_CHRG_OTGPAD0_CTL1, xusb_chrg_ctl1_host(ctl1));
+        w(padctl, XUSB_USB2_OC_MAP, xusb_oc_map_host(ocMap));
+        IOLog("SwitchUSB: host role: pad 0 had charger-detect or over-current settings left (CHRG_OTGPAD0 %#x/%#x, "
+              "USB2_OC_MAP %#x), now %#x/%#x, %#x\n",
+              ctl0, ctl1, ocMap, xusb_chrg_ctl0_host(ctl0), xusb_chrg_ctl1_host(ctl1), xusb_oc_map_host(ocMap));
+    }
+}
+
+namespace {
+uint32_t readCapability(void *context, uint32_t offset)
+{
+    return *reinterpret_cast<volatile uint32_t *>(static_cast<volatile uint8_t *>(context) + offset);
+}
+}  // namespace
+
+unsigned Controller::otgPort()
+{
+    if (!isPowered) return 0;
+    if (!usb2First) {
+        const xhci_port_range usb2 = xhci_find_ports(&readCapability, (void *)regs, (uint32_t)kXhciBytes, 2);
+        usb2First = usb2.first;
+        usb2Count = usb2.count;
+    }
+    return usb2First;
+}
+
+bool Controller::cyclePortPower(unsigned port, uint32_t trace[3])
+{
+    const uint32_t at = xhci_portsc_offset(capLength(), port);
+    trace[0] = xhci(at);
+    w(regs, at, xhci_portsc_power(trace[0], false));
+    bool off = false, on = false;
+    for (int i = 0; i < 100 && !off; ++i) {
+        off = !(xhci(at) & XHCI_PORTSC_PP);
+        if (!off) IODelay(10);
+    }
+    trace[1] = xhci(at);
+    w(regs, at, xhci_portsc_power(trace[1], true));
+    for (int i = 0; i < 100 && !on; ++i) {
+        on = xhci(at) & XHCI_PORTSC_PP;
+        if (!on) IODelay(10);
+    }
+    trace[2] = xhci(at);
+    return off && on;
+}
+
+void Controller::describePads(char *buffer, size_t size)
+{
+    if (!isMapped) {
+        snprintf(buffer, size, "PADCTL not mapped");
+        return;
+    }
+    padctlUp();
+    const uint32_t vbusId = r(padctl, XUSB_USB2_VBUS_ID);
+    snprintf(buffer, size,
+             "PADCTL PORT_CAP %#x VBUS_ID %#x (ID %s, VBUS override %s) PAD_MUX %#x OTG_PAD0 %#x/%#x CHRG %#x/%#x "
+             "OC_MAP %#x VBUS_OC_MAP %#x OC_DET %#x ELPG %#x/%#x SS_PORT_MAP %#x BIAS %#x",
+             r(padctl, XUSB_USB2_PORT_CAP), vbusId, xusb_id_name(vbusId),
+             (vbusId & XUSB_VBUS_ID_VBUS_ON) ? "on" : "off", r(padctl, USB2_PAD_MUX), r(padctl, OTG_PAD0_CTL_0),
+             r(padctl, OTG_PAD0_CTL_1), r(padctl, XUSB_CHRG_OTGPAD0_CTL0), r(padctl, XUSB_CHRG_OTGPAD0_CTL1),
+             r(padctl, XUSB_USB2_OC_MAP), r(padctl, XUSB_VBUS_OC_MAP), r(padctl, XUSB_OC_DET),
+             r(padctl, ELPG_PROGRAM_0), r(padctl, ELPG_PROGRAM_1), r(padctl, SS_PORT_MAP), r(padctl, BIAS_PAD_CTL_0));
+}
+
+void Controller::describePorts(char *buffer, size_t size)
+{
+    if (!isPowered) {
+        snprintf(buffer, size, "xHCI not powered");
+        return;
+    }
+    const uint32_t op = capLength();
+    const unsigned ports = xhci(4) >> 24, pad = otgPort();
+    int n = snprintf(buffer, size, "xHCI USBCMD %#x USBSTS %#x, pad 0 = port %u (USB2 %u+%u); PORTSC", xhci(op),
+                     xhci(op + 4), pad, usb2First, usb2Count);
+    for (unsigned port = 1; port <= ports && port <= 16 && n > 0 && (size_t)n < size; ++port) {
+        n += snprintf(buffer + n, size - (size_t)n, " %u:%#x", port, xhci(xhci_portsc_offset(op, port)));
+    }
 }
 
 bool Controller::takeMailboxInterrupt()

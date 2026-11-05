@@ -4,9 +4,13 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
+#include <kern/clock.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <libkern/c++/OSData.h>
+#include <os/log.h>
+#include <string.h>
+#include "../SwitchBattery/SwitchBattery.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchPD.h"
 #include "SwitchUSB.h"
@@ -22,9 +26,11 @@ bool gHostPackaged;
 // sleep: kext loads, firmware) follows it with the data role. Everything below gLock is touched only with it held,
 // the apply step only from the thread call.
 IOLock *gLock;
-thread_call_t gRoleCall;
+thread_call_t gRoleCall, gReportCall;
 bool gWantHost, gHostCable;            // from the last PD state
 bool gHostUp, gHostBroken, gHostRole;  // what has been done
+uint32_t gRoleChanges;                 // role changes applied (the report names the one it follows)
+constexpr uint32_t kReportMS = 1000;   // the role line: this long after a change, when the port has settled
 
 // avddio_usb (OLED DTB xudc@700d0000 / xusb@70090000) is MAX77620 LDO1 at 1.05 V, shared with PCIe (drivers/SwitchWLAN
 // TegraPCIe rail(): same register, same value); normally on already. hvdd_usb (3.3 V) and avdd_pll_utmip (SD3, 1.8 V)
@@ -59,7 +65,40 @@ void pdChanged(void *, const SwitchPDState *state)
     if (changed) thread_call_enter(gRoleCall);
 }
 
+// The role line, kReportMS after a role change (its own thread call, re-armed by every change: the last one wins):
+// one os_log record with where the port stands, so a boot shows where host mode stops. The xHCI (USBCMD, USBSTS,
+// every PORTSC, the last PP cycle) and the pad controller (port 0's capability, ID and VBUS overrides, pad power,
+// charger detection, over-current maps); the PD controller (phase, STATUS1/2, switches, rails' GPIOs); the charger
+// (REG01/05/08/09, battery current). Log only, never the boot console.
+void reportRole(thread_call_param_t, thread_call_param_t change)
+{
+    char xhci[720], pd[300], charger[260];
+    switchxhci_describe(xhci, sizeof(xhci));
+    (void)switch_pd_describe(pd, sizeof(pd));
+    (void)switch_battery_describe_otg(charger, sizeof(charger));
+    const char *role = gHostRole ? "host" : "device";
+    const unsigned number = (unsigned)(uintptr_t)change;
+    // Under the 1 KiB os_log record (kprof keeps its lines under 900): one line, or two when it would not fit.
+    if (strlen(xhci) + strlen(pd) + strlen(charger) < 820) {
+        os_log(OS_LOG_DEFAULT, "SwitchUSB: %s role +1 s (change %u): %s | %s | %s", role, number, xhci, pd, charger);
+    } else {
+        os_log(OS_LOG_DEFAULT, "SwitchUSB: %s role +1 s (change %u, 1/2): %s", role, number, xhci);
+        os_log(OS_LOG_DEFAULT, "SwitchUSB: %s role +1 s (change %u, 2/2): %s | %s", role, number, pd, charger);
+    }
+}
+
+void armReport()
+{
+    uint64_t deadline = 0;
+    clock_interval_to_deadline(kReportMS, kMillisecondScale, &deadline);
+    thread_call_cancel(gReportCall);
+    thread_call_enter1_delayed(gReportCall, (thread_call_param_t)(uintptr_t)++gRoleChanges, deadline);
+}
+
 // Thread call (THREAD_CALL_OPTIONS_ONCE: never two at once; entered again while it runs, it runs again after).
+// Host: the XUDC off the bus first (as a cable pull), the pad to the host (ID grounded; PP cycled when the controller
+// already runs), then the controller the first time, which powers its ports with the pad already the host's
+// (xhci-tegra.c: ID override, then PORTSC.PP). Device: the reverse.
 void applyRole(thread_call_param_t, thread_call_param_t)
 {
     IOLockLock(gLock);
@@ -67,22 +106,26 @@ void applyRole(thread_call_param_t, thread_call_param_t)
     IOLockUnlock(gLock);
     if (wantHost && !gHostRole && !gHostBroken) {
         char why[160] = "";
+        switchxudc_set_host_owns_port(true);
+        switchxhci_set_host_role(true);
         if (!gHostUp && !(gHostUp = switchxhci_start(why, sizeof(why)))) {
             IOLog("SwitchUSB: host mode off: %s\n", why);
             gHostBroken = true;
+            switchxhci_set_host_role(false);
+            switchxudc_set_host_owns_port(false);
             (void)switch_pd_allow_source(false);  // SwitchPD takes VBUS off and keeps the port sink-only
             return;
         }
-        switchxudc_set_host_owns_port(true);
-        switchxhci_set_host_role(true);
         gHostRole = true;
         IOLog("SwitchUSB: host role (a device on the port, VBUS on)\n");
         switchxhci_expect_port_change();
+        armReport();
     } else if (!wantHost && gHostRole) {
         switchxhci_set_host_role(false);
         switchxudc_set_host_owns_port(false);
         gHostRole = false;
         IOLog("SwitchUSB: device role\n");
+        armReport();
     }
     if (hostCable && !gHostRole) switchxudc_host_expected();
 }
@@ -143,8 +186,11 @@ extern "C" int switch_usb_start(void)
     gRoleCall = gLock ? thread_call_allocate_with_options(&applyRole, nullptr, THREAD_CALL_PRIORITY_KERNEL,
                                                           THREAD_CALL_OPTIONS_ONCE)
                       : nullptr;
+    gReportCall = gRoleCall ? thread_call_allocate_with_options(&reportRole, nullptr, THREAD_CALL_PRIORITY_LOW,
+                                                                THREAD_CALL_OPTIONS_ONCE)
+                            : nullptr;
     thread_t thread = THREAD_NULL;
-    if (!gRoleCall || kernel_thread_start(&usbThread, nullptr, &thread) != KERN_SUCCESS) {
+    if (!gReportCall || kernel_thread_start(&usbThread, nullptr, &thread) != KERN_SUCCESS) {
         IOLog("SwitchUSB: device mode off: no thread\n");
         return -1;
     }

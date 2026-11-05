@@ -50,14 +50,30 @@ enum MboxCmd : uint32_t {
 
 class Controller {
 public:
-    bool map();  // MMIO only, no access
+    bool map();  // MMIO only, no access; once
     // PLLs and pad (shared with the XUDC), partitions XUSBA+XUSBC, clocks, IPFS/FPCI; false with the reason.
     bool powerOn(char *why, size_t whySize);
     bool loadFirmware(const uint8_t *image, size_t size, char *why, size_t whySize);
+    bool powered() const { return isPowered; }  // powerOn succeeded: the xHCI registers can be read
 
-    // USB2 port 0 (the USB-C port's D+/D-): OTG capability, then the ID override (xusb-tegra210.c): host grounds ID
-    // (the VBUS override off first, as Linux), device floats it (the XUDC sets its VBUS override when it connects).
+    // USB2 port 0 (the USB-C port's D+/D-), XusbPorts.h: OTG capability, then the ID override (xusb-tegra210.c):
+    // host grounds ID (the VBUS override off first, 1.5 ms, as Linux) and clears what a boot stage's charger detection
+    // left on the pad (D+/D- pull overrides, sources, sinks) and port 0's over-current pin (one line if anything was
+    // set); device floats ID (the XUDC sets its VBUS override when it connects). Works before powerOn (the pad
+    // controller's clock and reset are taken as powerOn does).
     void setHostRole(bool host);
+
+    // The xHCI port of USB2 pad 0: the first USB 2.0 port of the Supported Protocol capabilities (0: not found, or
+    // not powered). Tegra XUSB: SS ports 1-4, USB2 ports 5-9 (pads 0-3, HSIC).
+    unsigned otgPort();
+    // tegra_xhci_set_host_mode (otg_set_port_power): PORTSC.PP off, then on again, each followed for up to 1 ms (Linux:
+    // 10 x 10-20 us; the falcon firmware implements PORTSC); `trace` gets the three PORTSC values. Call on
+    // AppleUSBXHCI's work loop (its port register writes happen there). False if PP did not follow.
+    bool cyclePortPower(unsigned port, uint32_t trace[3]);
+    // One-line reports for the role line (SwitchUSB.cpp): the pad controller's port 0 state; the xHCI's USBCMD,
+    // USBSTS and every PORTSC (only when powered).
+    void describePads(char *buffer, size_t size);
+    void describePorts(char *buffer, size_t size);
 
     // xHCI registers through our own mapping (bring-up, the lost-interrupt check).
     uint32_t xhci(uint32_t offset) const { return *reinterpret_cast<volatile uint32_t *>(regs + offset); }
@@ -76,7 +92,10 @@ public:
 private:
     volatile uint8_t *car = nullptr, *pmcPage = nullptr, *fusePage = nullptr, *mc = nullptr, *padctl = nullptr,
                      *regs = nullptr, *fpci = nullptr, *ipfs = nullptr;
-    bool mailboxHang = false;
+    bool mailboxHang = false, isMapped = false, isPowered = false;
+    unsigned usb2First = 0, usb2Count = 0;
+
+    void padctlUp();
 
     static uint32_t r(volatile uint8_t *b, uint32_t o) { return *reinterpret_cast<volatile uint32_t *>(b + o); }
     static void w(volatile uint8_t *b, uint32_t o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(b + o) = v; }

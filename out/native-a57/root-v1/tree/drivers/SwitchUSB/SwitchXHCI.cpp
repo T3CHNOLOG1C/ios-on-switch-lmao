@@ -396,9 +396,53 @@ bool switchxhci_start(char *why, size_t whySize)
     return true;
 }
 
+namespace {
+// The last PP cycle (SwitchUSB.cpp's role line): port, the three PORTSC values, whether PP followed. Written on
+// AppleUSBXHCI's work loop, read by the report a second later.
+struct PowerCycle {
+    unsigned port;
+    uint32_t trace[3];
+    bool followed;
+} gCycle;
+}  // namespace
+
+// The pad first (the ID grounded before the port is powered, as tegra_xhci_set_host_mode), then, with the controller
+// already running, the OTG port's PP off and on again so the firmware powers it with the pad in the host role. The
+// first time, AppleUSBXHCI::start powers the ports itself, after this. Device: ID floating; PP is left on (the XUDC
+// ran with it on after every r7w host session).
 void switchxhci_set_host_role(bool host)
 {
+    if (!gHost.map()) return;
     gHost.setHostRole(host);
+    SwitchXHCI *controller = __atomic_load_n(&SwitchXHCI::running, __ATOMIC_ACQUIRE);
+    if (!host || !controller) return;
+    controller->getWorkLoop()->runAction(
+        [](OSObject *, void *, void *, void *, void *) -> IOReturn {
+            PowerCycle cycle = {gHost.otgPort(), {}, false};
+            if (cycle.port) cycle.followed = gHost.cyclePortPower(cycle.port, cycle.trace);
+            gCycle = cycle;
+            return kIOReturnSuccess;
+        },
+        controller);
+}
+
+void switchxhci_describe(char *buffer, size_t size)
+{
+    if (!size) return;
+    if (!gHost.map()) {
+        snprintf(buffer, size, "XUSB not mapped");
+        return;
+    }
+    char pads[400], ports[300];
+    gHost.describePads(pads, sizeof(pads));
+    gHost.describePorts(ports, sizeof(ports));
+    const PowerCycle cycle = gCycle;
+    if (cycle.port) {
+        snprintf(buffer, size, "%s; last PP cycle port %u %#x>%#x>%#x%s; %s", ports, cycle.port, cycle.trace[0],
+                 cycle.trace[1], cycle.trace[2], cycle.followed ? "" : " (PP did not follow)", pads);
+    } else {
+        snprintf(buffer, size, "%s; no PP cycle; %s", ports, pads);
+    }
 }
 
 void switchxhci_expect_port_change(void)

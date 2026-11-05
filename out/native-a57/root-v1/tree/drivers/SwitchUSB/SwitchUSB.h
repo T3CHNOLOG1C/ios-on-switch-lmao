@@ -33,6 +33,14 @@
 //   SwitchUSB: XUSB firmware <version> (built <time>) running, HCSPARAMS1 <value>
 //   SwitchUSB: host controller up (AppleUSBXHCI, <n> interrupters)
 //   SwitchUSB: host role (a device on the port, VBUS on)  /  SwitchUSB: device role
+// and 1 s after each role change one os_log record (log only):
+//   SwitchUSB: <host|device> role +1 s (change <n>): xHCI USBCMD/USBSTS, pad 0's port, PORTSC <port>:<value>...; the
+//   last PP cycle; PADCTL PORT_CAP, VBUS_ID (ID, VBUS override), pad power, charger detect, OC maps | BM92T36 phase,
+//   STATUS1 (switch1/2, VSAFE), STATUS2, CONFIG1, VENDOR (OCP), rails and their GPIOs (PX3, PK5), PSEL/OTG (PJ5,
+//   PL0) | BQ24193 REG01/05/08/09 (CHG_CONFIG, watchdog, VBUS_STAT, faults) and the battery current
+// The host role first hands the pad over (XUDC off the bus, ID grounded, charger-detect leftovers cleared), then
+// powers the port: the controller's first start powers its ports itself; later host roles cycle the OTG port's
+// PORTSC.PP as xhci-tegra.c does for T210, so the firmware sees the port powered with the pad in the host role.
 #pragma once
 #include <stddef.h>
 
@@ -60,6 +68,10 @@ class IOService;
 bool switchxudc_start(IOService *provider, char *why, size_t whySize);
 // SwitchXHCI.cpp: powers the XUSB host, loads its firmware and Apple's host stack, starts SwitchXHCI. Thread context.
 bool switchxhci_start(char *why, size_t whySize);
-void switchxhci_set_host_role(bool host);  // USB2 pad 0's ID override (after switchxhci_start)
+// USB2 pad 0's role (XusbHost.h setHostRole; before or after switchxhci_start); with the controller running, host also
+// cycles the OTG port's PORTSC.PP. Thread context.
+void switchxhci_set_host_role(bool host);
 void switchxhci_expect_port_change(void);  // a device appeared in host role: arm the lost-interrupt check
+// The role line's xHCI part: USBCMD, USBSTS, every PORTSC (once powered), the last PP cycle and the pad controller.
+void switchxhci_describe(char *buffer, size_t size);
 #endif

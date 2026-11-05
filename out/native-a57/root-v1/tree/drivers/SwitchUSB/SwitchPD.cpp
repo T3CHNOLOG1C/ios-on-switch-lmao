@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SwitchPD: the BM92T36 USB-PD controller's one owner and the port's power role; see SwitchPD.h.
+// SwitchPD: the BM92T36 USB-PD controller's one owner and the port's power role; see SwitchPD.h. The decisions are
+// SwitchPDPolicy.h; this file does what they say.
 //
 // Registers, bits and the source bring-up: CTCaer switch-l4t-kernel-4.9 drivers/misc/bm92txx.c (bm92t_probe,
 // bm92t_extcon_cable_set_init_state, bm92t_enable_ocp, bm92t_set_source_mode, bm92t_event_handler's OTG branch).
-// Board (OLED DTB bm92t@18, tegra210-nx-power-fixed.dtsi): ALERT PK4 level low; VCONN enable PK5 active high;
-// v_vdd5v3 (the controller's vbus-source-supply, 5.3 V, 10 ms ramp) enable PX3 active high; VBUS itself from the
-// BQ24193 boost (vbus-supply usb0_vbus).
+// Board (OLED DTB bm92t@18; L4T nx-platform tegra210-nx-power-fixed.dtsi, tegra210b01-fric-power-tree.dtsi): ALERT
+// PK4 level low; VCONN enable PK5 active high; v_vdd5v3 ("VBUS power", the controller's vbus-source-supply, 5.3 V,
+// 10 ms ramp) enable PX3 active high, switched onto the connector by the controller's SPDSRC; the BQ24193 boost
+// (vbus-supply usb0_vbus) is turned on as Linux does, but on Mariko boards it is not what powers the port.
 #include "SwitchPD.h"
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
@@ -16,16 +18,21 @@
 #include "../SwitchBattery/SwitchBattery.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "SwitchPDPolicy.h"
 
 namespace {
 constexpr unsigned kBus = 1;
 constexpr uint8_t kPD = 0x18;
 constexpr unsigned kVconnGpio = TEGRA_GPIO(K, 5), kSourceRailGpio = TEGRA_GPIO(X, 3);
+// The BQ24193's PSEL and OTG inputs (L4T tegra210b01-fric-gpio.dtsi "Charger IC (BQ24193) Charge Select 1/2", held
+// low; Atmosphere's OtgFet1/2ForSdev): the boost runs only with OTG high (datasheet 8.3.1.5). Read for the report.
+constexpr unsigned kChargeSelect1Gpio = TEGRA_GPIO(J, 5), kChargeSelect2Gpio = TEGRA_GPIO(L, 0);
 constexpr unsigned kMaxListeners = 4;
 constexpr unsigned kAlertBurst = 50;  // ALERTs in one second that mean the line is stuck low
+constexpr uint32_t kRailRampMS = 10;  // v_vdd5v3 regulator-enable-ramp-delay (10000 us)
 // Classify window: a dual-role partner that loses our Rp sees the port open (tPDDebounce 20 ms), toggles to source
 // (tDRP 100 ms), debounces our Rd (tCCDebounce 200 ms) and raises VBUS (tVBUSON 275 ms): under 600 ms by the Type-C
-// spec. Re-attach window: our own toggle and debounce of a sink-only partner, about 300 ms.
+// spec. Re-attach window: our own toggle and debounce of a sink-only partner, about 300 ms (r7w: 53 ms).
 constexpr uint32_t kClassifyMS = 1000, kReattachMS = 1000;
 
 enum : uint8_t {
@@ -38,29 +45,11 @@ enum : uint8_t {
     FW_REVISION = 0x4c,
 };
 enum : uint16_t {
-    ALERT_SRC_FAULT = 1u << 1,
-    ALERT_CONTRACT = 1u << 12,
-    STATUS1_FAULT_MASK = 3u << 0,
-    STATUS1_INSERT = 1u << 7,
-    STATUS1_DR_SHIFT = 8,
-    STATUS1_VSAFE = 1u << 10,
-    STATUS1_SRC_MODE = 1u << 12,
-    STATUS2_OTG_INSERT = 1u << 13,
     CONFIG1_SPDSRC_SHIFT = 14,
     CONFIG1_SPDSRC_MASK = 3u << 14,
     SPDSRC12_ON = 0,
     SPDSRC12_OFF = 3,
     VENDOR_CONFIG_OCP_DISABLE = 1u << 2,
-    DATA_ROLE_DFP = 2,
-};
-
-enum class Phase : uint8_t {
-    Empty,     // nothing on the port; source switches on only with host mode
-    Sink,      // a partner we do not source: switches off until it is unplugged
-    Classify,  // a partner that came up as our sink, switches off: does it source (dual-role) or go (sink-only)?
-    Reattach,  // it went without sourcing: switches on, waiting for it to come back as our sink
-    Source,    // our VBUS on a sink-only partner
-    Held,      // sourcing ended on an error (a contract, a fault, the boost refused): not again until unplugged
 };
 
 struct Listener {
@@ -81,6 +70,16 @@ int write16(uint8_t reg, uint16_t value)
     const uint8_t b[2] = {(uint8_t)value, (uint8_t)(value >> 8)};
     return tegra_i2c_write(kBus, kPD, reg, b, 2);
 }
+
+// A pin for the report: "sfio" (special function), "in 0/1", "out 0/1".
+const char *pinText(unsigned gpio)
+{
+    const int config = tegra_gpio_config(gpio);
+    if (config < 0) return "?";
+    if (!(config & 1)) return "sfio";
+    if (config & 2) return (config & 4) ? "out 1" : "out 0";
+    return (config & 8) ? "in 1" : "in 0";
+}
 }  // namespace
 
 class SwitchPD : public IOService {
@@ -92,19 +91,20 @@ class SwitchPD : public IOService {
     Listener listeners[kMaxListeners] = {};
     unsigned listenerCount = 0;
     SwitchPDState state = {};
-    Phase phase = Phase::Empty;
-    bool allowSource = false, switchesOn = false, sawDetach = false, stuck = false;
+    switch_pd_phase phase = SWITCH_PD_EMPTY;
+    bool allowSource = false, switchesOn = false, railsOn = false, sawDetach = false, stuck = false;
     bool reportedReadFailure = false, reportedSwitchFailure = false;
     unsigned alertCount = 0;
     uint64_t alertWindow = 0;
 
     bool readStatus(uint16_t &status1, uint16_t &status2);
     void handle(uint16_t alertBits, uint16_t status1, uint16_t status2);
-    void decide(uint16_t alertBits);
-    void enter(Phase next, const char *why);
+    void apply(const switch_pd_step &step);
+    void enter(switch_pd_phase next, const char *why);
     void setSwitches(bool on);
+    bool setRails(bool on);
     void startSourcing();
-    void endSourcing(Phase next, const char *why);
+    void endSourcing(switch_pd_phase next, const char *why);
     void notify();
     void stopEvents();
     static void alertFired(OSObject *owner, IOInterruptEventSource *, int);
@@ -115,6 +115,7 @@ public:
     bool begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool &turnedOff);
     IOReturn addListener(Listener listener);
     void setAllowSource(bool allow);
+    void describe(char *buffer, size_t size);
 };
 OSDefineMetaClassAndStructors(SwitchPD, IOService);
 
@@ -136,7 +137,8 @@ IOLock *pdLock()
 }  // namespace
 
 // Before the interrupt: the source switches off whatever an earlier boot left (r7f left them on; the controller keeps
-// CONFIG1 across reboots), the latched ALERT released, the first state decided, then interrupts on.
+// CONFIG1 across reboots) and the source rails off, the latched ALERT released, the first state decided, then
+// interrupts on.
 bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool &turnedOff)
 {
     int err = tegra_i2c_init(kBus);
@@ -152,6 +154,8 @@ bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool 
         setSwitches(false);
         turnedOff = wereOn && !switchesOn;
     }
+    railsOn = true;  // whatever the boot chain left: driven off
+    (void)setRails(false);
     loop = IOWorkLoop::workLoop();
     window = loop ? IOTimerEventSource::timerEventSource(this, &SwitchPD::windowFired) : nullptr;
     IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_PD_ALERT, TEGRA_GPIO_LEVEL_LOW);
@@ -189,84 +193,50 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     state.alert = alertBits;
     state.status1 = status1;
     state.status2 = status2;
-    state.plugged = status1 & STATUS1_INSERT;
-    state.vbusPresent = status1 & STATUS1_VSAFE;
-    state.dataHost = state.plugged && ((status1 >> STATUS1_DR_SHIFT) & 3) == DATA_ROLE_DFP;
-    decide(alertBits);
+    state.plugged = status1 & SWITCH_PD_STATUS1_INSERT;
+    state.vbusPresent = status1 & SWITCH_PD_STATUS1_VSAFE;
+    state.dataHost = state.plugged && ((status1 >> SWITCH_PD_STATUS1_DR_SHIFT) & 3) == SWITCH_PD_DATA_ROLE_DFP;
+    apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource));
     notify();
 }
 
 void SwitchPD::notify()
 {
-    state.role = phase == Phase::Empty    ? SWITCH_PD_ROLE_NONE
-                 : phase == Phase::Source ? SWITCH_PD_ROLE_SOURCE
-                                          : SWITCH_PD_ROLE_SINK;
+    state.role = phase == SWITCH_PD_EMPTY    ? SWITCH_PD_ROLE_NONE
+                 : phase == SWITCH_PD_SOURCE ? SWITCH_PD_ROLE_SOURCE
+                                             : SWITCH_PD_ROLE_SINK;
     for (unsigned i = 0; i < listenerCount; ++i) listeners[i].function(listeners[i].context, &state);
 }
 
-// The power role (SwitchPD.h). Only Classify and Reattach run a window; every way out of Source is endSourcing().
-void SwitchPD::decide(uint16_t alertBits)
+void SwitchPD::apply(const switch_pd_step &step)
 {
-    const bool plugged = state.plugged, vbus = state.vbusPresent;
-    const bool partnerIsSink = plugged && (state.status1 & STATUS1_SRC_MODE);  // we came up as the source
-    const bool otgSink = partnerIsSink && (state.status2 & STATUS2_OTG_INSERT);
-    switch (phase) {
-    case Phase::Empty:
-        // Our sink without OTG_INSERT (yet, or an accessory): nothing to decide until the controller says more.
-        if (!plugged || (partnerIsSink && !otgSink)) break;
-        if (!partnerIsSink) {
-            enter(Phase::Sink, "sink: the partner is a source (charger, host or dock)");
-        } else if (vbus) {
-            enter(Phase::Sink, "sink: the partner came up as our sink with VBUS already up");
-        } else if (!allowSource) {
-            enter(Phase::Sink, "sink: the partner came up as our sink; host mode off");
-        } else {
-            enter(Phase::Classify, "classifying: the partner came up as our sink; source switches off 1 s");
-        }
-        break;
-    case Phase::Classify:
-        if (!plugged) {
-            sawDetach = true;  // the switches moved the port: a sink-only partner stays away, a dual-role one sources
-        } else if (!partnerIsSink) {
-            window->cancelTimeout();
-            enter(Phase::Sink, "dual-role partner: it sources with our source switches off (sink until unplugged)");
-        }
-        break;
-    case Phase::Reattach:
-        if (!plugged || (partnerIsSink && !otgSink)) break;
-        window->cancelTimeout();
-        if (otgSink && !vbus) {
-            startSourcing();
-        } else {
-            enter(Phase::Sink, "sink: the partner came back as a source, or with VBUS up");
-        }
-        break;
-    case Phase::Source:
-        if (!plugged) {
-            endSourcing(Phase::Empty, "detached: VBUS, v_vdd5v3, VCONN off");
-        } else if (!partnerIsSink) {
-            endSourcing(Phase::Sink, "not sourcing: the partner took the source role (sink until unplugged)");
-        } else if (alertBits & ALERT_CONTRACT) {
-            endSourcing(Phase::Held, "not sourcing: the partner made a USB-PD contract (no plain OTG device)");
-        } else if ((alertBits & ALERT_SRC_FAULT) || (state.status1 & STATUS1_FAULT_MASK)) {
-            endSourcing(Phase::Held, "not sourcing: source fault");
-        }
-        break;
-    case Phase::Sink:
-    case Phase::Held:
-        if (!plugged) enter(Phase::Empty, "detached");
-        break;
+    if (step.cancel_window) window->cancelTimeout();
+    switch (step.act) {
+    case SWITCH_PD_NONE: break;
+    case SWITCH_PD_SAW_DETACH: sawDetach = true; break;
+    case SWITCH_PD_ENTER: enter(step.next, step.why); break;
+    case SWITCH_PD_START: startSourcing(); break;
+    case SWITCH_PD_END: endSourcing(step.next, step.why); break;
     }
 }
 
-void SwitchPD::enter(Phase next, const char *why)
+// A phase's outputs (SwitchPDPolicy.h): switches off first when they go off, the rails, then the switches on, so the
+// controller never closes a switch onto a rail that is still ramping. A rail that cannot come up holds the port.
+void SwitchPD::enter(switch_pd_phase next, const char *why)
 {
     phase = next;
     sawDetach = false;
-    setSwitches(next == Phase::Empty || next == Phase::Held || next == Phase::Reattach ? allowSource : false);
-    if (next == Phase::Classify) window->setTimeoutMS(kClassifyMS);
-    if (next == Phase::Reattach) window->setTimeoutMS(kReattachMS);
+    const bool switches = switch_pd_switches_on(next, allowSource), rails = switch_pd_rails_on(next);
+    if (!switches) setSwitches(false);
+    const bool railsDone = setRails(rails);
     IOLog("SwitchPD: %s (alert %#x status1 %#x status2 %#x)\n", why, state.alert, state.status1, state.status2);
+    if (rails && !railsDone) {
+        enter(SWITCH_PD_HELD, "not sourcing: over-current protection or the source rails failed");
+        return;
+    }
+    if (switches) setSwitches(true);
+    if (next == SWITCH_PD_CLASSIFY) window->setTimeoutMS(kClassifyMS);
+    if (next == SWITCH_PD_REATTACH) window->setTimeoutMS(kReattachMS);
 }
 
 // CONFIG1 SPDSRC: both source switches on (SPDSRC12_ON, bm92t_set_source_mode) or off (SPDSRC12_OFF).
@@ -288,38 +258,58 @@ void SwitchPD::setSwitches(bool on)
     reportedSwitchFailure = err != 0;
 }
 
-// Reattach: the partner proved sink-only and is back as our sink with VBUS down. bm92t_extcon_cable_set_init_state
-// and the OTG branch of bm92t_event_handler: over-current protection on, v_vdd5v3 and VCONN on, then VBUS.
+// The source rails, bm92t_probe + bm92t_extcon_cable_set_init_state order: over-current protection on, v_vdd5v3,
+// VCONN, the ramp. Never half on: a failure turns both GPIOs off again. True when the rails are as asked.
+bool SwitchPD::setRails(bool on)
+{
+    if (on == railsOn) return true;
+    int err = 0;
+    if (on) {
+        uint16_t vendor = 0;
+        err = read16(VENDOR_CONFIG, vendor);
+        if (!err && (vendor & VENDOR_CONFIG_OCP_DISABLE))
+            err = write16(VENDOR_CONFIG, vendor & ~VENDOR_CONFIG_OCP_DISABLE);
+        if (!err) err = tegra_gpio_output(kSourceRailGpio, 1);
+        if (!err) err = tegra_gpio_output(kVconnGpio, 1);
+        if (!err) {
+            IOSleep(kRailRampMS);
+        } else {
+            (void)tegra_gpio_output(kVconnGpio, 0);
+            (void)tegra_gpio_output(kSourceRailGpio, 0);
+        }
+        railsOn = !err;
+    } else {
+        err = tegra_gpio_output(kVconnGpio, 0);
+        if (const int rail = tegra_gpio_output(kSourceRailGpio, 0)) err = rail;
+        railsOn = err != 0;
+    }
+    if (err) IOLog("SwitchPD: source rails %s failed (%d)\n", on ? "on" : "off", err);
+    return !err;
+}
+
+// Reattach: the partner proved sink-only and is back as our sink; the rails were up before it came, so our switch
+// may already be closed (VSAFE ours). bm92t_event_handler's OTG branch: the boost (vbus-supply) on.
 void SwitchPD::startSourcing()
 {
-    uint16_t vendor = 0;
-    int err = read16(VENDOR_CONFIG, vendor);
-    if (!err && (vendor & VENDOR_CONFIG_OCP_DISABLE)) err = write16(VENDOR_CONFIG, vendor & ~VENDOR_CONFIG_OCP_DISABLE);
-    if (!err) err = tegra_gpio_output(kSourceRailGpio, 1);
-    if (!err) err = tegra_gpio_output(kVconnGpio, 1);
-    if (!err) IOSleep(10);  // v_vdd5v3 regulator-enable-ramp-delay
-    const int boost = err ? 0 : switch_battery_set_otg_boost(true);
-    phase = Phase::Source;
-    if (err) {
-        endSourcing(Phase::Held, "not sourcing: over-current protection or the source rails failed");
-    } else if (boost == SWITCH_BATTERY_BOOST_VBUS_PRESENT) {
-        endSourcing(Phase::Sink, "not sourcing: the charger sees VBUS (sink until unplugged)");
+    phase = SWITCH_PD_SOURCE;
+    const bool ours = switch_pd_vbus_ours(state.status1);
+    const int boost = switch_battery_set_otg_boost(true, ours);
+    if (boost == SWITCH_BATTERY_BOOST_VBUS_PRESENT) {
+        endSourcing(SWITCH_PD_SINK, "not sourcing: the charger sees VBUS that is not ours (sink until unplugged)");
     } else if (boost) {
-        endSourcing(Phase::Held, "not sourcing: the BQ24193 boost failed");
+        endSourcing(SWITCH_PD_HELD, "not sourcing: the BQ24193 boost failed");
     } else {
-        IOLog("SwitchPD: sink-only partner: sourcing VBUS (OCP, v_vdd5v3, VCONN, boost on) (alert %#x status1 %#x "
-              "status2 %#x)\n",
-              state.alert, state.status1, state.status2);
+        IOLog("SwitchPD: sink-only partner: sourcing VBUS (v_vdd5v3, VCONN, OCP up before it came back; %s; boost "
+              "on) (alert %#x status1 %#x status2 %#x)\n",
+              ours ? "our switch closed" : "our switch closing", state.alert, state.status1, state.status2);
     }
 }
 
-// The one way out of Source, for a detach and for every error: VBUS (the boost), v_vdd5v3 and VCONN off, then the
-// switches as `next` has them (the empty-port state, or off for a sink session).
-void SwitchPD::endSourcing(Phase next, const char *why)
+// The one way out of Source, for a detach and for every error: the boost off, then the phase's outputs (rails off,
+// switches as `next` has them: the empty-port state, or off for a sink session).
+void SwitchPD::endSourcing(switch_pd_phase next, const char *why)
 {
-    (void)switch_battery_set_otg_boost(false);
-    (void)tegra_gpio_output(kVconnGpio, 0);
-    (void)tegra_gpio_output(kSourceRailGpio, 0);
+    (void)switch_battery_set_otg_boost(false, false);
     enter(next, why);
 }
 
@@ -328,24 +318,12 @@ void SwitchPD::windowFired(OSObject *owner, IOTimerEventSource *)
     auto *self = static_cast<SwitchPD *>(owner);
     uint16_t status1 = 0, status2 = 0;
     if (!self->readStatus(status1, status2)) return;
+    const switch_pd_step step = switch_pd_window_end(self->phase, self->sawDetach, status1);
+    if (step.act == SWITCH_PD_NONE) return;
     self->state.alert = 0;
     self->state.status1 = status1;
     self->state.status2 = status2;
-    const bool plugged = status1 & STATUS1_INSERT;
-    if (self->phase == Phase::Classify) {
-        if (!self->sawDetach) {
-            self->enter(Phase::Sink, "not sourcing: no detach with our source switches off, sink-only not proven");
-        } else if (plugged) {
-            self->enter(Phase::Sink, "not sourcing: the partner came back with our source switches off");
-        } else {
-            self->enter(Phase::Reattach, "sink-only partner: it left with our source switches off and sourced "
-                                         "nothing; switches on");
-        }
-    } else if (self->phase == Phase::Reattach) {
-        self->enter(Phase::Empty, "empty: the sink-only partner did not come back");
-    } else {
-        return;
-    }
+    self->apply(step);
     self->handle(0, status1, status2);  // the state as it is now, through the new phase
 }
 
@@ -374,8 +352,8 @@ void SwitchPD::alertFired(OSObject *owner, IOInterruptEventSource *, int)
 }
 
 // ALERT stuck low (re-fires as fast as the work loop reads it): no storm. The pin is masked for the rest of the boot
-// with one line, VBUS is never driven again (sourcing ends, switches off) and the port stays sink-only; the charger,
-// which does not need the PD controller to charge, and the battery's own slow re-read carry on.
+// with one line, VBUS is never driven again (sourcing ends, switches and rails off) and the port stays sink-only; the
+// charger, which does not need the PD controller to charge, and the battery's own slow re-read carry on.
 void SwitchPD::stopEvents()
 {
     char pin[256];
@@ -386,10 +364,10 @@ void SwitchPD::stopEvents()
     window->cancelTimeout();
     IOLog("SwitchPD: BM92T36 ALERT (PK4) fired %u times in 1 s, turned off (port sink-only until reboot): %s\n",
           alertCount, pin);
-    if (phase == Phase::Source) {
-        endSourcing(Phase::Sink, "not sourcing: no PD events");
+    if (phase == SWITCH_PD_SOURCE) {
+        endSourcing(SWITCH_PD_SINK, "not sourcing: no PD events");
     } else {
-        enter(Phase::Sink, "sink: no PD events");
+        enter(SWITCH_PD_SINK, "sink: no PD events");
     }
     notify();
 }
@@ -406,16 +384,35 @@ void SwitchPD::setAllowSource(bool allow)
 {
     if (allow == allowSource || stuck) return;
     allowSource = allow;
-    if (!allow && phase == Phase::Source) {
-        endSourcing(Phase::Held, "not sourcing: host mode is off");
+    if (!allow && phase == SWITCH_PD_SOURCE) {
+        endSourcing(SWITCH_PD_HELD, "not sourcing: host mode is off");
         notify();
-    } else if (!allow && (phase == Phase::Classify || phase == Phase::Reattach)) {
+    } else if (!allow && (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH)) {
         window->cancelTimeout();
-        enter(Phase::Sink, "sink: host mode is off");
+        enter(SWITCH_PD_SINK, "sink: host mode is off");
         notify();
-    } else if (phase == Phase::Empty || phase == Phase::Held) {
+    } else if (phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_HELD) {
         setSwitches(allow);
     }
+}
+
+// Work loop. The status registers are not clear-on-read (ALERT_STATUS, which is, stays alertFired's).
+void SwitchPD::describe(char *buffer, size_t size)
+{
+    uint16_t status1 = 0, status2 = 0, config = 0, vendor = 0;
+    int err = read16(STATUS1, status1);
+    if (!err) err = read16(STATUS2, status2);
+    if (!err) err = read16(CONFIG1, config);
+    if (!err) err = read16(VENDOR_CONFIG, vendor);
+    snprintf(
+        buffer, size,
+        "BM92T36 %s%s: STATUS1 %#x (switch1 %u switch2 %u VSAFE %u) STATUS2 %#x CONFIG1 %#x VENDOR %#x (OCP %s)%s; "
+        "rails %s (v_vdd5v3 PX3 %s, VCONN PK5 %s); PSEL/OTG PJ5 %s PL0 %s",
+        switch_pd_phase_name(phase), allowSource ? "" : " (host mode off)", status1,
+        !!(status1 & SWITCH_PD_STATUS1_SPDSRC1), !!(status1 & SWITCH_PD_STATUS1_SPDSRC2),
+        !!(status1 & SWITCH_PD_STATUS1_VSAFE), status2, config, vendor,
+        (vendor & VENDOR_CONFIG_OCP_DISABLE) ? "off" : "on", err ? " (I2C error)" : "", railsOn ? "on" : "off",
+        pinText(kSourceRailGpio), pinText(kVconnGpio), pinText(kChargeSelect1Gpio), pinText(kChargeSelect2Gpio));
 }
 
 // ---------------------------------------------------------------------------
@@ -482,5 +479,22 @@ extern "C" int switch_pd_allow_source(bool allow)
             return kIOReturnSuccess;
         },
         pd, allow ? pd : nullptr);
+    return 0;
+}
+
+extern "C" int switch_pd_describe(char *buffer, size_t size)
+{
+    if (!buffer || !size) return -1;
+    SwitchPD *pd = __atomic_load_n(&gPDStage, __ATOMIC_ACQUIRE) == 2 ? gPD : nullptr;
+    if (!pd) {
+        snprintf(buffer, size, "BM92T36 not running");
+        return -1;
+    }
+    pd->getWorkLoop()->runAction(
+        [](OSObject *owner, void *buffer, void *size, void *, void *) -> IOReturn {
+            static_cast<SwitchPD *>(owner)->describe(static_cast<char *>(buffer), reinterpret_cast<size_t>(size));
+            return kIOReturnSuccess;
+        },
+        pd, buffer, reinterpret_cast<void *>(size));
     return 0;
 }

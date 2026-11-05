@@ -163,6 +163,12 @@ public:
     IOService *nubFor(unsigned pin, unsigned trigger);
     int read(unsigned pin) const { return (rd(portReg(pin, IN)) & pinBit(pin)) ? 1 : 0; }
     int sample(unsigned pin, unsigned *config);
+    unsigned config(unsigned pin) const
+    {
+        const uint32_t bit = pinBit(pin);
+        return ((rd(portReg(pin, CNF)) & bit) ? 1u : 0u) | ((rd(portReg(pin, OE)) & bit) ? 2u : 0u) |
+               ((rd(portReg(pin, OUT)) & bit) ? 4u : 0u) | ((rd(portReg(pin, IN)) & bit) ? 8u : 0u);
+    }
     void describe(unsigned pin, char *buffer, size_t size) const;
     bool latched(unsigned pin) const { return rd(portReg(pin, INT_STA)) & rd(portReg(pin, INT_ENB)) & pinBit(pin); }
     void setDebounce(unsigned pin, unsigned ms);
@@ -455,10 +461,7 @@ int TegraGPIO::sample(unsigned pin, unsigned *config)
 {
     const uint32_t bit = pinBit(pin);
     const bool cnf = rd(portReg(pin, CNF)) & bit, oe = rd(portReg(pin, OE)) & bit;
-    if (config) {
-        *config = (cnf ? 1u : 0u) | (oe ? 2u : 0u) | ((rd(portReg(pin, OUT)) & bit) ? 4u : 0u) |
-                  ((rd(portReg(pin, IN)) & bit) ? 8u : 0u);
-    }
+    if (config) *config = this->config(pin);
     maskWrite(pin, MSK_OE, false);
     maskWrite(pin, MSK_CNF, true);
     IODelay(2);
@@ -534,6 +537,11 @@ extern "C" int tegra_gpio_read(unsigned gpio)
 extern "C" int tegra_gpio_sample(unsigned gpio, unsigned *config)
 {
     return gController && gpio < TEGRA_GPIO_COUNT ? gController->sample(gpio, config) : -1;
+}
+
+extern "C" int tegra_gpio_config(unsigned gpio)
+{
+    return gController && gpio < TEGRA_GPIO_COUNT ? (int)gController->config(gpio) : -1;
 }
 
 extern "C" void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size)

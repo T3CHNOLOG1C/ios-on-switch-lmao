@@ -145,6 +145,10 @@ int tegra_gpio_read(unsigned gpio);
 // bit 0 CNF, 1 OE, 2 OUT, 3 GPIO_IN. Returns 0 or 1, or -1 before tegra_gpio_start() or for a bad pin.
 int tegra_gpio_sample(unsigned gpio, unsigned *config);
 
+// Diagnostics only, for any pin (an output included): its GPIO registers as they are, nothing written. Bit 0 CNF,
+// 1 OE, 2 OUT, 3 GPIO_IN (meaningful only with the pad's input enabled); -1 before tegra_gpio_start() or for a bad pin.
+int tegra_gpio_config(unsigned gpio);
+
 // One line for a panic message: the pin's CNF/OE/IN/INT_ENB/INT_STA/INT_LVL bits and trigger, then its bank's GIC
 // state (ioswitch_interrupt_describe).
 void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size);

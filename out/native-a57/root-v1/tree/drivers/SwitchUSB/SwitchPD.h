@@ -21,12 +21,15 @@
 //     dock) is a sink session: switches off until INSERT drops, so no later event (suspend, sleep, a swap request)
 //     can make us the source. A partner that came up as our sink is offered the source role: switches off for
 //     kClassifyMS. A dual-role partner then sources (sink session); a sink-only one just goes away (an observed
-//     detach), and only then the switches go back on, it attaches again as the sink, and we source: OCP on, v_vdd5v3
-//     and VCONN on, the BQ24193 boost on (refused if the charger sees VBUS). No observed detach (the switches did not
-//     move the port's role) is no proof: we do not source.
+//     detach), and only then the source rails come up (OCP on, v_vdd5v3 on PX3, VCONN on PK5, 10 ms ramp) and the
+//     switches go back on, so the controller closes its switch onto a live 5.3 V rail when the partner attaches
+//     again as the sink (bm92txx.c order: rails at probe, SPDSRC12_ON after). We then source: the BQ24193 boost on
+//     as Linux does (refused only if the charger sees VBUS that is not ours: STATUS1 shows neither SPDSRC switch on).
+//     v_vdd5v3 is the OLED's VBUS power (SwitchPDPolicy.h). No observed detach (the switches did not move the port's
+//     role) is no proof: we do not source.
 //   - Sourcing ends (detach, a USB-PD contract, a source fault, host mode gone) through one path: boost off, v_vdd5v3
-//     and VCONN off, switches to the empty-port state.
-// One kernel log line per decision, with the controller's bits.
+//     and VCONN off, switches to the empty-port state. The rails are on in Reattach and Source only.
+// One kernel log line per decision, with the controller's bits. The decisions are SwitchPDPolicy.h (host-tested).
 //
 // Interrupt only: a pin that cannot be attached panics; a pin that keeps firing (stuck low: more than 50 ALERTs in a
 // second) is masked for the boot with one line and the port stays sink-only (no storm, no panic);
@@ -34,6 +37,7 @@
 // windows are one-shot timers on the PD work loop, armed only by a new attach: nothing re-arms on its own.
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -68,6 +72,11 @@ void switch_pd_check_delivery(const char *who);
 // Host mode packaged and working (true) or gone for this boot (false: its bring-up failed). Without it the port is
 // sink-only. Thread context; 0, or -1 without the controller.
 int switch_pd_allow_source(bool allow);
+
+// One line for the role report (SwitchUSB.cpp): the phase, STATUS1/STATUS2/CONFIG1/VENDOR_CONFIG as read now, and the
+// GPIOs behind VBUS: v_vdd5v3 (PX3), VCONN (PK5) and the BQ24193's PSEL/OTG inputs (PJ5, PL0; read, never driven).
+// Thread context (I2C on the PD work loop); 0, or -1 without the controller (the buffer then says so).
+int switch_pd_describe(char *buffer, size_t size);
 
 #ifdef __cplusplus
 }

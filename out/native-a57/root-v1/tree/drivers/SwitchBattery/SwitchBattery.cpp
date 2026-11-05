@@ -72,7 +72,14 @@ enum : uint8_t {
     DevName = 0x21,
 };
 // BQ24193 registers and REG08 fields.
-enum : uint8_t { InputSource = 0x00, PowerOnConfig = 0x01, SystemStatus = 0x08, VendorPart = 0x0a };
+enum : uint8_t {
+    InputSource = 0x00,
+    PowerOnConfig = 0x01,
+    TimerControl = 0x05,
+    SystemStatus = 0x08,
+    Fault = 0x09,
+    VendorPart = 0x0a,
+};
 constexpr uint8_t kPowerGood = 1u << 2;
 constexpr unsigned kVbusUsbHost = 1, kVbusAdapter = 2;   // REG08 VBUS_STAT (7:6): an input on VBUS
 constexpr uint16_t kStatusKeep = (1u << 1) | (1u << 3);  // POR, BST; the rest are alert flags
@@ -255,7 +262,8 @@ int readAll(Reading *r)
     if (err) return err;
 
     const unsigned vbus = status >> 6, chrg = (status >> 4) & 3;
-    r->external = (status & kPowerGood) && vbus != 3;  // VBUS 3 = OTG: we power the dock
+    // VBUS 3 = OTG: we power the dock; and while we source the port (the boost on), what the charger sees is ours.
+    r->external = (status & kPowerGood) && vbus != 3 && !__atomic_load_n(&gBoosting, __ATOMIC_RELAXED);
     r->charging = r->external && (chrg == 1 || chrg == 2);
     r->full = r->external && chrg == 3;
     r->rawPercent = repSoc >> 8;
@@ -510,7 +518,7 @@ extern "C" int switch_battery_temperature(int *milli_c, unsigned long long *at)
 }
 
 // VBUS for a sink-only partner (drivers/SwitchUSB/SwitchPD; SwitchBattery.h). Thread context.
-extern "C" int switch_battery_set_otg_boost(bool on)
+extern "C" int switch_battery_set_otg_boost(bool on, bool ourVbus)
 {
     IOLock *lock = boostLock();
     if (!lock) return -1;
@@ -518,7 +526,7 @@ extern "C" int switch_battery_set_otg_boost(bool on)
     uint8_t status = 0, reg = 0;
     bool refused = false;
     int err = tegra_i2c_init(kBus);
-    if (!err && on && !gBoosting) {
+    if (!err && on && !gBoosting && !ourVbus) {
         err = tegra_i2c_read(kBus, kCharger, SystemStatus, &status, 1);
         refused = !err && ((status & kPowerGood) || (status >> 6) == kVbusUsbHost || (status >> 6) == kVbusAdapter);
     }
@@ -532,4 +540,36 @@ extern "C" int switch_battery_set_otg_boost(bool on)
     IOLockUnlock(lock);
     if (err) IOLog("SwitchBattery: OTG boost %s failed (I2C %d)\n", on ? "on" : "off", err);
     return err ? -1 : refused ? SWITCH_BATTERY_BOOST_VBUS_PRESENT : 0;
+}
+
+// The USB role report's charger line (SwitchBattery.h). Reads only; REG09's first read returns and clears the faults
+// latched since the last read, the second the faults now.
+extern "C" int switch_battery_describe_otg(char *buffer, size_t size)
+{
+    if (!buffer || !size) return -1;
+    static const char *const kVbusStat[4] = {"none", "USB host", "adapter", "OTG"};
+    static const char *const kChrgStat[4] = {"not charging", "pre-charge", "fast charge", "done"};
+    static const char *const kWatchdog[4] = {"off", "40 s", "80 s", "160 s"};
+    uint8_t config = 0, timer = 0, status = 0, latched = 0, now = 0;
+    uint16_t current = 0;
+    int err = tegra_i2c_init(kBus);
+    if (!err) err = tegra_i2c_read(kBus, kCharger, PowerOnConfig, &config, 1);
+    if (!err) err = tegra_i2c_read(kBus, kCharger, TimerControl, &timer, 1);
+    if (!err) err = tegra_i2c_read(kBus, kCharger, SystemStatus, &status, 1);
+    if (!err) err = tegra_i2c_read(kBus, kCharger, Fault, &latched, 1);
+    if (!err) err = tegra_i2c_read(kBus, kCharger, Fault, &now, 1);
+    const int gauge = err ? err : gaugeWord(Current, &current);
+    if (err) {
+        snprintf(buffer, size, "BQ24193 not readable (I2C %d)", err);
+        return err;
+    }
+    snprintf(buffer, size,
+             "BQ24193 REG01 %#x (CHG_CONFIG %u, %s%s) REG05 %#x (watchdog %s) REG08 %#x (VBUS %s, %s, PG %u) REG09 "
+             "%#x/%#x (boost fault %u/%u, watchdog fault %u/%u); battery %d mA",
+             config, (config & kChgConfigMask) >> 4, (config & kBoostLim1300) ? "1.3 A" : "500 mA",
+             __atomic_load_n(&gBoosting, __ATOMIC_RELAXED) ? ", ours" : "", timer, kWatchdog[(timer >> 4) & 3], status,
+             kVbusStat[status >> 6], kChrgStat[(status >> 4) & 3], !!(status & kPowerGood), latched, now,
+             !!(latched & 0x40), !!(now & 0x40), !!(latched & 0x80), !!(now & 0x80),
+             gauge ? 0 : (int16_t)current * 15625 / 100000);
+    return 0;
 }
