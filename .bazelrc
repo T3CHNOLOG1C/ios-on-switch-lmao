@@ -58,6 +58,11 @@ common --watchfs
 common --noexperimental_check_external_repository_files
 common --noexperimental_check_output_files
 
+# py_binary launchers as a shell script: rules_python's default first starts the system's /usr/bin/python3 (Xcode's
+# xcrun shim) only to re-exec the hermetic interpreter, ~0.08 s of every Python tool action (six on a driver edit's
+# path); the script starts the hermetic interpreter at once. The same interpreter, venv and program.
+common --@rules_python//python/config_settings:bootstrap_impl=script
+
 # --- Output ------------------------------------------------------------------------------------------------------
 build --show_result=30
 common --color=yes
