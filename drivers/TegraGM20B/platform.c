@@ -126,8 +126,8 @@ uint32_t tegra_gm20b_fuse_read(uint32_t offset)
 	return rd(fuse, FUSE_CACHE + offset);
 }
 
-/* ------------------------------------------------------------------ VDD_GPU: MAX77812 M1 on I2C5
- * I2C5 is shared with firmware (see TegraI2C.h): one register per transaction, nothing else. */
+/* VDD_GPU: MAX77812 M1 on I2C5. I2C5 is shared with firmware (see TegraI2C.h): one register per transaction,
+ * nothing else. */
 static int pmic_rd(uint8_t reg, uint8_t *v)
 {
 	int ret = tegra_i2c_init(
@@ -247,14 +247,14 @@ int tegra_gm20b_rail_max_uv(void)
 	return GPU_UV_CEIL;
 }
 
-/* ------------------------------------------------------------------ B01 GPU DVFS table
- * L4T's only B01 GPU table, GPUB01_NA_CVB_TABLE "NAPLL En - p4v3" (tegra210-dvfs.c:850-877), the gpub01_cvb_dvfs_table
- * row for speedo ID -1 (:922-929) that every B01 takes (gpu_speedo_id 1, speedo-tegra210.c:189). These are voltages
- * for the noise-aware GPCPLL. set_gpu_dvfs_data() (:1954-2092) evaluates each row for the fused GPU speedo value at
- * the gpu_scaling_cdev trip temperatures (DT nx-common.dtsi:1358-1367, tegra210b01-trips.h:15-20), rounds up to the
- * 5 mV rail step, floors at cvb_vmin 610 mV, and keeps a rate only if every range fits the cap (DT
- * nvidia,gpu-max-volt-mv 800, nx-common.dtsi:548). tegra_gm20b_dvfs_na_uv() is that voltage, worst case over the trips
- * (each range takes the max of its two trip ends, :2003-2031); the 800 mV floor below 20 C is the caller's. */
+/* B01 GPU DVFS table: L4T's only B01 GPU table, GPUB01_NA_CVB_TABLE "NAPLL En - p4v3" (tegra210-dvfs.c:850-877), the
+ * gpub01_cvb_dvfs_table row for speedo ID -1 (:922-929) that every B01 takes (gpu_speedo_id 1,
+ * speedo-tegra210.c:189). These are voltages for the noise-aware GPCPLL. set_gpu_dvfs_data() (:1954-2092) evaluates
+ * each row for the fused GPU speedo value at the gpu_scaling_cdev trip temperatures (DT nx-common.dtsi:1358-1367,
+ * tegra210b01-trips.h:15-20), rounds up to the 5 mV rail step, floors at cvb_vmin 610 mV, and keeps a rate only if
+ * every range fits the cap (DT nvidia,gpu-max-volt-mv 800, nx-common.dtsi:548). tegra_gm20b_dvfs_na_uv() is that
+ * voltage, worst case over the trips (each range takes the max of its two trip ends, :2003-2031); the 800 mV floor
+ * below 20 C is the caller's. */
 static const struct {
 	uint32_t khz;
 	int c0, c1, c2, c3, c4, c5;
@@ -318,7 +318,6 @@ int tegra_gm20b_dvfs_na_uv(uint32_t khz, int speedo)
 	return worst;
 }
 
-/* ------------------------------------------------------------------ CAR */
 int tegra_gm20b_clk_enable(int id, int on)
 {
 	uint32_t v;

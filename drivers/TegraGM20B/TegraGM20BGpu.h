@@ -191,7 +191,7 @@ void tgm_stats_import(int64_t bytes, uint64_t pa);
 /* With tegra-gpu-stats, what making and dropping GPU memory costs the CPU ("tegra-gm20b: mem", per 5 s window):
  * a BoAlloc of `bytes` (pool: write-combined pool memory; else cached pages, phase_ns = kernel allocation and wiring,
  * cache clean, page list, GPU memory object), a host import (phase_ns = wiring, page list, GPU memory object, cache
- * clean; skipped: always 0 now, the import always cleans), a VmBind map or unmap of `pages`, a BoFree, a cached BO's view
+ * clean; skipped: always 0, the import always cleans), a VmBind map or unmap of `pages`, a BoFree, a cached BO's view
  * mapped with its pages entered at once (prefault). */
 enum { TGM_PHASES = 4 };
 /* kind: TGM_BO_CACHED (made on the caller's thread: allocated, zero-filled, cleaned), TGM_BO_POOL, TGM_BO_SPARE (a cached

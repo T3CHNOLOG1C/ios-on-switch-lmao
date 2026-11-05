@@ -45,12 +45,12 @@ void bringupDone()
 	switch_thermal_gpu_ready();
 }
 
-// Same staging as UniXNU-sheng's publishMetal() (package/GpuPowerProbe.cpp:1217-1251) and IOSwitchAccelStubPublish.cpp: load
+// Staged as UniXNU-sheng's publishMetal() (package/GpuPowerProbe.cpp:1217-1251) and IOSwitchAccelStubPublish.cpp: load
 // IOGPUFamily (already loaded by the stub; idempotent) so the IOAcceleratorES metaclass exists, run our class's static
 // initializer inside preModLoad/postModLoad, then publish with the keys the original discovery reads.
-// NativeSandboxGrantProcess names the processes (comma-separated) whose open our XNU grants in place of the sandbox verdict:
-// kernel/xnu-10063.141.1/iokit/Kernel/IOUserClient.cpp native_sandbox_grant() takes a comma-separated list of process names (as
-// sheng's later patch zzw-native-adreno-sandbox-grant.patch does), matching each on at most its first 16 characters.
+// NativeSandboxGrantProcess: the comma-separated process names whose open our XNU grants in place of the sandbox
+// verdict (IOUserClient.cpp native_sandbox_grant(), as in sheng's zzw-native-adreno-sandbox-grant.patch), each matched
+// on at most its first 16 characters.
 IOReturn publish()
 {
 	if (!tegra_gm20b_accelerator_static_init || !tegra_gm20b_accelerator_allocate ||
@@ -81,14 +81,14 @@ IOReturn publish()
 	}
 	accelerator->setProperty("MetalPluginName", "TegraGM20BMetal");
 	accelerator->setProperty("MetalPluginClassName", "TegraGM20BMetalDevice");
-	// the render server, and iconservicesagent: with no Metal device Core Image 21H461 falls back to OpenGL ES, which has no
-	// driver here, and the agent crash-loops on every SF Symbol (Settings then waits on it forever). ScreenshotServicesService
-	// (the screenshot thumbnail and markup): PencilKit's -[PKMetalResourceHandler newPaintShaderKernelPipelineState] takes
-	// a nil device's nil paint_kernel and Metal aborts the process (setComputeFunction: nil), so every screenshot's thumbnail
-	// dies 1-2 s after the flash (the image itself is already saved). Names match on their first 16 characters, so this
-	// also admits ClassroomKit's ScreenshotService; the plugin compares the whole name and gives that one no device. With
-	// tegra-gpu-all-clients=1 also every other process: "*" is any name for native_sandbox_grant() (IOUserClient.cpp);
-	// a kernel without that change matches "*" to no process and still grants the named ones.
+	// backboardd is the render server. iconservicesagent: with no Metal device Core Image 21H461 falls back to OpenGL ES,
+	// which has no driver here, and the agent crash-loops on every SF Symbol (Settings then waits on it forever).
+	// ScreenshotServicesService (the screenshot thumbnail and markup): PencilKit's -[PKMetalResourceHandler
+	// newPaintShaderKernelPipelineState] takes a nil device's nil paint_kernel and Metal aborts the process
+	// (setComputeFunction: nil), so every screenshot's thumbnail dies 1-2 s after the flash. Names match on their first 16
+	// characters, so this also admits ClassroomKit's ScreenshotService; the plugin compares the whole name and gives that
+	// one no device. With tegra-gpu-all-clients=1 also every other process: "*" is any name for native_sandbox_grant()
+	// (IOUserClient.cpp); a kernel without that change matches "*" to no process and still grants the named ones.
 	accelerator->setProperty(
 		"NativeSandboxGrantProcess",
 		tgm_all_clients() ? "*,backboardd,iconservicesagent,ScreenshotServicesService"
