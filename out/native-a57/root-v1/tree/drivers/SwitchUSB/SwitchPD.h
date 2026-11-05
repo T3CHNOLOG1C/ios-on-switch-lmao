@@ -5,9 +5,21 @@
 // The ALERT line is level-low and released by reading ALERT_STATUS, which clears on read (Linux bm92txx.c
 // bm92t_probe: IRQF_TRIGGER_LOW). So exactly one driver may take the pin and read that register: this one. On every
 // ALERT it reads ALERT_STATUS once, then STATUS1/STATUS2, decides the power role and hands the state to its listeners
-// on its own work loop: SwitchBattery (which re-reads the charger and gauge 250 ms later) and the USB role manager
-// (SwitchUSB.cpp, which only follows `role` with the data role). It negotiates nothing: a contract, the input current
-// limit and charging stay as the controller and the charger manage them.
+// on its own work loop: SwitchBattery (which re-reads the charger and gauge 250 ms later and programs the BQ24193's
+// input limit from the contract below) and the USB role manager (SwitchUSB.cpp, which only follows `role` with the
+// data role).
+//
+// USB-PD request (sink sessions with a source partner only; the power role logic below is untouched). The controller
+// negotiates a first contract on its own (CONFIG1 AUTONGTSNK, left as the firmware has it, as Linux bm92txx leaves it);
+// on that contract (ALERT_CONTRACT, or at start when it is already sinking) SwitchPD reads the source's PDOs, picks one
+// with charge::choosePdo (SwitchBattery/SwitchChargePolicy.h: Linux bm92t_check_pdo, at most 15 V and 3 A), requests
+// it (SET_RDO + SEND_RDO, operating current = the input limit the BQ24193 will get), verifies the new contract against
+// the request (CURRENT_PDO/CURRENT_RDO), sends PS_RDY and publishes it 2 s after PS_RDY completes (bm92t_power_work)
+// with one line, "SwitchPD: contract <V> V <A> A (<the source's PDOs, * = ours>)". A source that offers nothing usable,
+// rejects the request, or a step that is not answered within 1.5 s: one line, and the controller's own contract stays
+// with nothing published (the charger then gets 500 mA). A later unsolicited contract (a multi-port charger
+// re-balancing, a source reset) withdraws the published one and starts over; three failed requests in one session end
+// the attempts until the cable is pulled. Every step is a reply to an ALERT or a one-shot timer.
 //
 // Power role: sink first (Try.SNK). The Switch takes power from anything that can give it and sources VBUS only to a
 // partner proven to be sink-only (an OTG adapter, a USB-C flash drive or keyboard, an unpowered hub). Linux cannot
@@ -58,6 +70,10 @@ struct SwitchPDState {
     bool vbusPresent;        // STATUS1.VSAFE: VBUS at vSafe5V or a contract (ours when role is SOURCE)
     bool dataHost;           // STATUS1 data role DFP
     enum SwitchPDRole role;  // the power role decided (above)
+    // USB-PD request (above), sink sessions only; all 0/false outside one.
+    bool pdSource;                 // the partner sent USB-PD source capabilities
+    uint16_t contractMillivolts;   // the published (requested and verified) contract, 0 = none
+    uint16_t inputLimitMilliamps;  // its operating current: the BQ24193 input current limit for it, 0 = none
 };
 
 // Adds a listener (at most 4; for the life of the boot) and starts the PD service on first use (may sleep: I2C,

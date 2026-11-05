@@ -8,6 +8,9 @@
 // PK4 level low; VCONN enable PK5 active high; v_vdd5v3 ("VBUS power", the controller's vbus-source-supply, 5.3 V,
 // 10 ms ramp) enable PX3 active high, switched onto the connector by the controller's SPDSRC; the BQ24193 boost
 // (vbus-supply usb0_vbus) is turned on as Linux does, but on Mariko boards it is not what powers the port.
+// The USB-PD request (SwitchPD.h): bm92txx.c bm92t_event_handler's INIT_STATE/NEW_PDO/PS_RDY_SENT steps and
+// bm92t_power_work, bm92t_check_pdo/bm92t_send_rdo through SwitchBattery/SwitchChargePolicy.h; its msleep()s are
+// one-shot timers here; no DR swap, VDM or dock alt mode.
 #include "SwitchPD.h"
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
@@ -16,6 +19,7 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include "../SwitchBattery/SwitchBattery.h"
+#include "../SwitchBattery/SwitchChargePolicy.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchPDPolicy.h"
@@ -34,13 +38,23 @@ constexpr uint32_t kRailRampMS = 10;  // v_vdd5v3 regulator-enable-ramp-delay (1
 // (tDRP 100 ms), debounces our Rd (tCCDebounce 200 ms) and raises VBUS (tVBUSON 275 ms): under 600 ms by the Type-C
 // spec. Re-attach window: our own toggle and debounce of a sink-only partner, about 300 ms (r7w: 53 ms).
 constexpr uint32_t kClassifyMS = 1000, kReattachMS = 1000;
+// USB-PD request: source PDOs after a contract alert without ALERT_PDO (bm92t_event_handler's msleep(500)), a reply to
+// a command (the chip answers in tens of ms; the old in-tree port's kReplyMS), the input limit 2 s after PS_RDY
+// (bm92t_power_work), failed requests per session.
+constexpr uint32_t kPdoWaitMS = 500, kReplyMS = 1500, kPowerDelayMS = 2000;
+constexpr unsigned kMaxFailedRequests = 3;
 
 enum : uint8_t {
     ALERT_STATUS = 0x02,  // clears on read; reading it releases ALERT
     STATUS1 = 0x03,
     STATUS2 = 0x04,
+    COMMAND = 0x05,
     CONFIG1 = 0x06,
+    READ_PDOS_SRC = 0x08,  // count byte (4 per PDO), up to 7 PDOs
     VENDOR_CONFIG = 0x1a,
+    CURRENT_PDO = 0x28,  // count byte, PDO
+    CURRENT_RDO = 0x2b,  // count byte, RDO
+    SET_RDO = 0x30,      // count byte, RDO
     FW_TYPE = 0x4b,
     FW_REVISION = 0x4c,
 };
@@ -50,6 +64,12 @@ enum : uint16_t {
     SPDSRC12_ON = 0,
     SPDSRC12_OFF = 3,
     VENDOR_CONFIG_OCP_DISABLE = 1u << 2,
+    ALERT_CMD_DONE = 1u << 2,
+    ALERT_PDO = 1u << 14,
+    STATUS1_LASTCMD_SHIFT = 4,  // 0 complete, 2 aborted, 4 invalid, 6 rejected, 7 terminated
+    STATUS1_LASTCMD_MASK = 7u << 4,
+    SEND_RDO_CMD = 0x0707,
+    PS_RDY_CMD = 0x0505,
 };
 
 struct Listener {
@@ -71,6 +91,57 @@ int write16(uint8_t reg, uint16_t value)
     return tegra_i2c_write(kBus, kPD, reg, b, 2);
 }
 
+// The USB-PD request within a sink session (SwitchPD.h).
+enum class Nego : uint8_t {
+    Idle,       // waiting for the controller's own contract
+    WaitPdos,   // a contract alert without the source's PDOs yet: kPdoWaitMS
+    RdoSent,    // SEND_RDO: waiting for the contract (kReplyMS)
+    PsRdySent,  // contract verified, PS_RDY: waiting for it to complete (kReplyMS)
+    Settling,   // PS_RDY done: kPowerDelayMS before publishing
+    Done,       // published
+    NotPd,      // no source capabilities: not a USB-PD source
+    Failed,     // one line said why; the controller's own contract stays, nothing published
+};
+
+uint32_t le32(const uint8_t *b)
+{
+    return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+}
+
+// "15", "1.2", "2.25": milli-units as units without trailing zeros.
+void formatMilli(char *out, size_t size, unsigned milli)
+{
+    const unsigned whole = milli / 1000, frac = milli % 1000;
+    if (!frac) {
+        snprintf(out, size, "%u", whole);
+    } else if (frac % 100 == 0) {
+        snprintf(out, size, "%u.%u", whole, frac / 100);
+    } else if (frac % 10 == 0) {
+        snprintf(out, size, "%u.%02u", whole, frac / 10);
+    } else {
+        snprintf(out, size, "%u.%03u", whole, frac);
+    }
+}
+
+// "5 V 1.5 A, *15 V 2.6 A" (* = position `chosen`); other PDO types by name.
+void formatPdos(char *out, size_t size, const uint32_t *pdos, unsigned count, unsigned chosen)
+{
+    size_t used = 0;
+    out[0] = 0;
+    for (unsigned i = 0; i < count && used + 1 < size; ++i) {
+        char volts[12], amps[12];
+        formatMilli(volts, sizeof(volts), charge::pdoMillivolts(pdos[i]));
+        formatMilli(amps, sizeof(amps), charge::pdoMilliamps(pdos[i]));
+        static const char *const kTypes[] = {"", "battery ", "variable ", "augmented "};
+        const int n = charge::pdoType(pdos[i]) == 3
+                          ? snprintf(out + used, size - used, "%saugmented", i ? ", " : "")
+                          : snprintf(out + used, size - used, "%s%s%s%s V %s A", i ? ", " : "",
+                                     i + 1 == chosen ? "*" : "", kTypes[charge::pdoType(pdos[i])], volts, amps);
+        if (n < 0) break;
+        used += (size_t)n < size - used ? (size_t)n : size - used - 1;
+    }
+}
+
 // A pin for the report: "sfio" (special function), "in 0/1", "out 0/1".
 const char *pinText(unsigned gpio)
 {
@@ -87,7 +158,7 @@ class SwitchPD : public IOService {
 
     IOWorkLoop *loop = nullptr;
     IOInterruptEventSource *alert = nullptr;
-    IOTimerEventSource *window = nullptr;
+    IOTimerEventSource *window = nullptr, *negoTimer = nullptr;
     Listener listeners[kMaxListeners] = {};
     unsigned listenerCount = 0;
     SwitchPDState state = {};
@@ -96,6 +167,11 @@ class SwitchPD : public IOService {
     bool reportedReadFailure = false, reportedSwitchFailure = false;
     unsigned alertCount = 0;
     uint64_t alertWindow = 0;
+    // The USB-PD request (SwitchPD.h).
+    Nego nego = Nego::Idle;
+    charge::PdChoice choice = {};
+    uint32_t sourcePdos[7] = {};
+    unsigned sourcePdoCount = 0, failedRequests = 0;
 
     bool readStatus(uint16_t &status1, uint16_t &status2);
     void handle(uint16_t alertBits, uint16_t status1, uint16_t status2);
@@ -107,8 +183,17 @@ class SwitchPD : public IOService {
     void endSourcing(switch_pd_phase next, const char *why);
     void notify();
     void stopEvents();
+    void negotiate(uint16_t alertBits);
+    void choose();
+    void verify();
+    void publish();
+    void withdraw();
+    void fail(const char *why);
+    void endNegotiation();
+    bool readContract(uint32_t &pdo, uint32_t &rdo);
     static void alertFired(OSObject *owner, IOInterruptEventSource *, int);
     static void windowFired(OSObject *owner, IOTimerEventSource *);
+    static void negoFired(OSObject *owner, IOTimerEventSource *);
 
 public:
     IOWorkLoop *getWorkLoop() const override { return loop; }
@@ -158,9 +243,11 @@ bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool 
     (void)setRails(false);
     loop = IOWorkLoop::workLoop();
     window = loop ? IOTimerEventSource::timerEventSource(this, &SwitchPD::windowFired) : nullptr;
+    negoTimer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchPD::negoFired) : nullptr;
     IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_PD_ALERT, TEGRA_GPIO_LEVEL_LOW);
     alert = nub && loop ? IOInterruptEventSource::interruptEventSource(this, &SwitchPD::alertFired, nub, 0) : nullptr;
-    if (!window || loop->addEventSource(window) != kIOReturnSuccess || !alert ||
+    if (!window || loop->addEventSource(window) != kIOReturnSuccess || !negoTimer ||
+        loop->addEventSource(negoTimer) != kIOReturnSuccess || !alert ||
         loop->addEventSource(alert) != kIOReturnSuccess) {
         panic("SwitchPD: cannot attach the BM92T36 ALERT (PK4, GPIO %u, level low)", TEGRA_GPIO_PD_ALERT);
     }
@@ -197,6 +284,7 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     state.vbusPresent = status1 & SWITCH_PD_STATUS1_VSAFE;
     state.dataHost = state.plugged && ((status1 >> SWITCH_PD_STATUS1_DR_SHIFT) & 3) == SWITCH_PD_DATA_ROLE_DFP;
     apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource));
+    negotiate(alertBits);
     notify();
 }
 
@@ -362,6 +450,7 @@ void SwitchPD::stopEvents()
     stuck = true;
     allowSource = false;
     window->cancelTimeout();
+    endNegotiation();  // no events: no contract can be followed, so none stays published
     IOLog("SwitchPD: BM92T36 ALERT (PK4) fired %u times in 1 s, turned off (port sink-only until reboot): %s\n",
           alertCount, pin);
     if (phase == SWITCH_PD_SOURCE) {
@@ -413,6 +502,199 @@ void SwitchPD::describe(char *buffer, size_t size)
         !!(status1 & SWITCH_PD_STATUS1_VSAFE), status2, config, vendor,
         (vendor & VENDOR_CONFIG_OCP_DISABLE) ? "off" : "on", err ? " (I2C error)" : "", railsOn ? "on" : "off",
         pinText(kSourceRailGpio), pinText(kVconnGpio), pinText(kChargeSelect1Gpio), pinText(kChargeSelect2Gpio));
+}
+
+// --- USB-PD request (SwitchPD.h) ---------------------------------------------------------------------------------
+// From handle(), after decide(): only a sink session with a source partner negotiates; anything else ends it.
+void SwitchPD::negotiate(uint16_t alertBits)
+{
+    const bool sinkSession = phase == SWITCH_PD_SINK && state.plugged && !(state.status1 & SWITCH_PD_STATUS1_SRC_MODE);
+    if (!sinkSession) {
+        if (nego != Nego::Idle || state.pdSource || state.contractMillivolts) endNegotiation();
+        return;
+    }
+    if (alertBits & (SWITCH_PD_ALERT_CONTRACT | ALERT_PDO)) state.pdSource = true;
+    switch (nego) {
+    case Nego::Idle:
+    case Nego::NotPd:
+        if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
+            if (alertBits & ALERT_PDO) {
+                choose();
+            } else {  // bm92t_event_handler: "In case of no new PDO, wait for it"
+                nego = Nego::WaitPdos;
+                negoTimer->setTimeoutMS(kPdoWaitMS);
+            }
+        } else if (nego == Nego::Idle && (state.status1 & SWITCH_PD_STATUS1_SPDSNK)) {
+            choose();  // already sinking on a contract made before this boot (bm92txx first_init)
+        }
+        break;
+    case Nego::WaitPdos:
+        if (alertBits & ALERT_PDO) choose();
+        break;
+    case Nego::RdoSent:
+        if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
+            verify();
+        } else if ((alertBits & ALERT_CMD_DONE) && (state.status1 & STATUS1_LASTCMD_MASK)) {
+            char why[64];
+            snprintf(why, sizeof(why), "the request was refused (last command status %u)",
+                     (state.status1 & STATUS1_LASTCMD_MASK) >> STATUS1_LASTCMD_SHIFT);
+            fail(why);
+        }
+        break;
+    case Nego::PsRdySent:
+        if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
+            withdraw();
+            choose();
+        } else if (alertBits & ALERT_CMD_DONE) {
+            nego = Nego::Settling;
+            negoTimer->setTimeoutMS(kPowerDelayMS);
+        }
+        break;
+    case Nego::Settling:
+    case Nego::Done:
+    case Nego::Failed:
+        // A contract we did not ask for (a multi-port charger re-balancing, a source reset): start over.
+        if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
+            withdraw();
+            if (nego == Nego::Failed && failedRequests >= kMaxFailedRequests) break;
+            choose();
+        }
+        break;
+    }
+}
+
+bool SwitchPD::readContract(uint32_t &pdo, uint32_t &rdo)
+{
+    uint8_t p[5] = {}, r[5] = {};
+    if (tegra_i2c_read(kBus, kPD, CURRENT_PDO, p, sizeof(p)) || tegra_i2c_read(kBus, kPD, CURRENT_RDO, r, sizeof(r))) {
+        return false;
+    }
+    pdo = le32(p + 1);
+    rdo = le32(r + 1);
+    return true;
+}
+
+// The source's PDOs, the choice, and the request unless the contract already is the one we would ask for.
+void SwitchPD::choose()
+{
+    negoTimer->cancelTimeout();
+    uint8_t raw[29] = {};
+    if (tegra_i2c_read(kBus, kPD, READ_PDOS_SRC, raw, sizeof(raw))) {
+        fail("the source's PDOs could not be read");
+        return;
+    }
+    sourcePdoCount = raw[0] / 4 > 7 ? 7 : raw[0] / 4;
+    for (unsigned i = 0; i < sourcePdoCount; ++i) sourcePdos[i] = le32(raw + 1 + 4 * i);
+    if (!sourcePdoCount) {
+        if (nego != Nego::NotPd) {
+            IOLog("SwitchPD: no USB-PD source capabilities: the charger keeps its own input detection (status1 %#x)\n",
+                  state.status1);
+        }
+        nego = Nego::NotPd;
+        return;
+    }
+    state.pdSource = true;
+    choice = charge::choosePdo(sourcePdos, sourcePdoCount);
+    if (!choice.position) {
+        fail(choice.refusal);
+        return;
+    }
+    uint32_t pdo = 0, rdo = 0;
+    if (readContract(pdo, rdo) && charge::contractMatches(choice, pdo, rdo)) {
+        publish();  // ours already (made by an earlier boot): nothing to request
+        return;
+    }
+    const uint32_t request = charge::encodeRdo(choice);
+    const uint8_t message[5] = {4, (uint8_t)request, (uint8_t)(request >> 8), (uint8_t)(request >> 16),
+                                (uint8_t)(request >> 24)};
+    if (tegra_i2c_write(kBus, kPD, SET_RDO, message, sizeof(message)) || write16(COMMAND, SEND_RDO_CMD)) {
+        fail("the request could not be written");
+        return;
+    }
+    nego = Nego::RdoSent;
+    negoTimer->setTimeoutMS(kReplyMS);
+}
+
+// ALERT_CONTRACT after our request: it must be the one asked for; then PS_RDY (bm92t_event_handler NEW_PDO).
+void SwitchPD::verify()
+{
+    negoTimer->cancelTimeout();
+    uint32_t pdo = 0, rdo = 0;
+    if (!readContract(pdo, rdo)) {
+        fail("the new contract could not be read");
+        return;
+    }
+    if (!charge::contractMatches(choice, pdo, rdo)) {
+        char why[96];
+        snprintf(why, sizeof(why), "the new contract is not the one requested (PDO %#x RDO %#x, asked RDO %#x)", pdo,
+                 rdo, charge::encodeRdo(choice));
+        fail(why);
+        return;
+    }
+    if (write16(COMMAND, PS_RDY_CMD)) {
+        fail("PS_RDY could not be written");
+        return;
+    }
+    nego = Nego::PsRdySent;
+    negoTimer->setTimeoutMS(kReplyMS);
+}
+
+// The contract becomes the input limit's (SwitchBattery, through notify()): one line.
+void SwitchPD::publish()
+{
+    negoTimer->cancelTimeout();
+    nego = Nego::Done;
+    failedRequests = 0;
+    state.contractMillivolts = (uint16_t)choice.millivolts;
+    state.inputLimitMilliamps = (uint16_t)choice.inputLimit;
+    char volts[12], amps[12], pdos[192];
+    formatMilli(volts, sizeof(volts), choice.millivolts);
+    formatMilli(amps, sizeof(amps), choice.inputLimit);
+    formatPdos(pdos, sizeof(pdos), sourcePdos, sourcePdoCount, choice.position);
+    IOLog("SwitchPD: contract %s V %s A (%s%s)\n", volts, amps, choice.dock ? "dock: " : "", pdos);
+}
+
+void SwitchPD::withdraw()
+{
+    state.contractMillivolts = 0;
+    state.inputLimitMilliamps = 0;
+}
+
+// One line; the controller's own contract stays and nothing is published (the charger keeps its own detection).
+void SwitchPD::fail(const char *why)
+{
+    negoTimer->cancelTimeout();
+    withdraw();
+    nego = Nego::Failed;
+    ++failedRequests;
+    char pdos[192];
+    formatPdos(pdos, sizeof(pdos), sourcePdos, sourcePdoCount, 0);
+    IOLog("SwitchPD: no USB-PD request: %s; the controller's own contract stays (source: %s)%s\n", why,
+          sourcePdoCount ? pdos : "?",
+          failedRequests >= kMaxFailedRequests ? "; no more requests until unplugged" : "");
+}
+
+void SwitchPD::endNegotiation()
+{
+    negoTimer->cancelTimeout();
+    nego = Nego::Idle;
+    failedRequests = 0;
+    sourcePdoCount = 0;
+    state.pdSource = false;
+    withdraw();
+}
+
+void SwitchPD::negoFired(OSObject *owner, IOTimerEventSource *)
+{
+    auto *self = static_cast<SwitchPD *>(owner);
+    switch (self->nego) {
+    case Nego::WaitPdos: self->choose(); break;  // bm92txx goes on after its msleep(500) whatever came
+    case Nego::RdoSent: self->fail("no contract within 1.5 s of the request"); break;
+    case Nego::PsRdySent: self->fail("PS_RDY was not completed within 1.5 s"); break;
+    case Nego::Settling: self->publish(); break;
+    default: return;
+    }
+    self->notify();
 }
 
 // ---------------------------------------------------------------------------
