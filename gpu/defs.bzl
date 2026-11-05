@@ -1,8 +1,8 @@
 """Rules for the TegraGM20B Metal bundle (gpu/BUILD.bazel). Each step of the old build-tegra-gm20b-metal.py is one
 action with declared inputs, so Bazel reruns only what an edit reaches:
 
-  llvm-as (2 fixtures) -> cargo (iOS bridge, fat LTO) -> clang++ (2 objects) -> link -> strip/sign/trust cache
-                       -> cargo (host bridge, quick) -> precompile tool -> seed (runs on this Mac)
+  llvm-as (2 fixtures) -> rustc per crate (iOS bridge: bazel/rust) -> clang++ (each object) -> link -> strip/sign/trust cache
+                       -> rustc per crate (host bridge) -> precompile tool -> seed (runs on this Mac)
 """
 
 load("//bazel/ipsw:ipsw.bzl", "IpswInfo")
@@ -40,81 +40,8 @@ llvm_as = rule(
     },
 )
 
-# --- cargo: the bridge static library ----------------------------------------------------------------------------
-
-def _m2v_bridge_impl(ctx):
-    out = ctx.actions.declare_file(ctx.attr.name + "/libnative_metal_bridge.a")
-    args = ctx.actions.args()
-    args.add("--cargo", ctx.file._cargo)
-    args.add("--rustc", ctx.file._rustc)
-    args.add("--m2v", _repo_root(ctx.files.m2v))
-    args.add("--vendor", _repo_root(ctx.files.vendor))
-    args.add("--manifest", ctx.file.manifest)
-    args.add("--lock", ctx.file.lock)
-    args.add("--bridge-rs", ctx.file.bridge_rs)
-    args.add("--objects-rs", ctx.file.objects_rs)
-    args.add("--fixture-air", ctx.file.fixture_air)
-    args.add("--fc-air", ctx.file.fc_air)
-    args.add("--xcode-env", ctx.file._xcode_env)
-    args.add("--target", ctx.attr.target)
-    if ctx.attr.quick:
-        args.add("--quick")
-    args.add_all(ctx.files._rust_std, before_each = "--std")
-    args.add("--output", out)
-    ctx.actions.run(
-        executable = ctx.executable._tool,
-        arguments = [args],
-        inputs = depset(
-            ctx.files.m2v + ctx.files.vendor + ctx.files._rust + ctx.files._rust_std + [
-                ctx.file._cargo,
-                ctx.file._rustc,
-                ctx.file.manifest,
-                ctx.file.lock,
-                ctx.file.bridge_rs,
-                ctx.file.objects_rs,
-                ctx.file.fixture_air,
-                ctx.file.fc_air,
-                ctx.file._xcode_env,
-                ctx.file._xcode_identity,
-            ],
-        ),
-        outputs = [out],
-        mnemonic = "CargoBridge",
-        progress_message = "Building the m2v bridge for %s%s (cargo)" % (ctx.attr.target, " (quick)" if ctx.attr.quick else ""),
-        # cargo's jobserver takes every core; nothing else useful runs beside it.
-        resource_set = _all_cores,
-    )
-    return [DefaultInfo(files = depset([out]))]
-
 def _all_cores(_os, _inputs):
     return {"cpu": 8, "memory": 4096}
-
-_RUST_TOOLS = "@rust_macos_aarch64__aarch64-apple-ios__stable_tools"
-
-m2v_bridge = rule(
-    implementation = _m2v_bridge_impl,
-    attrs = _XCODE | {
-        "m2v": attr.label(mandatory = True),
-        "vendor": attr.label(mandatory = True),
-        "manifest": attr.label(mandatory = True, allow_single_file = True),
-        "lock": attr.label(mandatory = True, allow_single_file = True),
-        "bridge_rs": attr.label(mandatory = True, allow_single_file = True),
-        "objects_rs": attr.label(mandatory = True, allow_single_file = True),
-        "fixture_air": attr.label(mandatory = True, allow_single_file = True),
-        "fc_air": attr.label(mandatory = True, allow_single_file = True),
-        "target": attr.string(mandatory = True),
-        "quick": attr.bool(default = False),
-        "_cargo": attr.label(default = _RUST_TOOLS + "//:cargo", allow_single_file = True),
-        "_rustc": attr.label(default = _RUST_TOOLS + "//:rustc", allow_single_file = True),
-        "_rust": attr.label_list(default = [_RUST_TOOLS + "//:rustc_lib"]),
-        # The standard libraries of both targets (build scripts run on this Mac), from rules_rust's pinned archives.
-        "_rust_std": attr.label_list(default = [
-            _RUST_TOOLS + "//:rust_std-aarch64-apple-ios",
-            "@rust_macos_aarch64__aarch64-apple-darwin__stable_tools//:rust_std-aarch64-apple-darwin",
-        ]),
-        "_tool": attr.label(default = "//tools/gpu:cargo_bridge", executable = True, cfg = "exec"),
-    },
-)
 
 # --- Xcode clang: objects and the plugin link --------------------------------------------------------------------
 
@@ -225,17 +152,22 @@ metal_plugin = rule(
 
 def _raw_stack_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.name + ".txt")
-    drivers = ctx.file.series.dirname.rsplit("/TegraGM20BMetal/", 1)[0]
+    bridge = [f for f in ctx.files.srcs if f.basename == "NativeMetalBridge.rs"]
+    if len(bridge) != 1:
+        fail("srcs must name NativeMetal's bridge/NativeMetalBridge.rs once")
+    drivers = bridge[0].dirname.rsplit("/NativeMetal/", 1)[0]
+    m2v_root = ctx.attr.m2v_root.label.package
     args = ctx.actions.args()
     args.add("--nvk", ctx.file.nvk)
     args.add("--drivers", drivers)
-    args.add("--series", ctx.file.series)
+    args.add("--m2v-root", m2v_root)
+    args.add_all(ctx.files.m2v, before_each = "--m2v")
     args.add("--raw", drivers + "/TegraGM20BMetal/raw")
     args.add("--out", out)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [ctx.file.nvk, ctx.file.series] + ctx.files.patches + ctx.files.srcs,
+        inputs = [ctx.file.nvk] + ctx.files.m2v + ctx.files.srcs,
         outputs = [out],
         mnemonic = "RawStack",
         progress_message = "Hashing the raw path's stack key",
@@ -246,8 +178,8 @@ raw_stack = rule(
     implementation = _raw_stack_impl,
     attrs = {
         "nvk": attr.label(mandatory = True, allow_single_file = True),
-        "series": attr.label(mandatory = True, allow_single_file = True),
-        "patches": attr.label_list(allow_files = True),
+        "m2v": attr.label_list(allow_files = True, doc = "the source files of the m2v crates the bridge links"),
+        "m2v_root": attr.label(mandatory = True, allow_single_file = True, doc = "the m2v tree's package (its files are hashed by their path below it)"),
         "srcs": attr.label_list(allow_files = True, doc = "the bridge sources, the frontend, every raw/ source"),
         "_tool": attr.label(default = "//tools/gpu:raw_stack", executable = True, cfg = "exec"),
     },

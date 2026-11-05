@@ -30,8 +30,3 @@ filegroup(
         "bridge/NativeMetalObjects.rs",
     ],
 )
-
-filegroup(
-    name = "bridge_patches",
-    srcs = glob(["bridge/patches/*.patch"]),
-)

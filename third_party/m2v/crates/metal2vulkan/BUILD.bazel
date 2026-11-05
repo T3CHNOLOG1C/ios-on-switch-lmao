@@ -1,0 +1,72 @@
+# metal2vulkan, the translator (lib metal2vulkan): crates/metal2vulkan/Cargo.toml, with the `ash` feature (the runtime's
+# and the Metal bridge's).
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/rust:defs.bzl", "THIRD_PARTY_LINT_EXCLUDE", "cargo_ids")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = THIRD_PARTY_LINT_EXCLUDE)
+
+# build.rs: M2V_SOURCE_DIGEST, the hash of every file the product compiles (build_support.rs walks the crate roots' module
+# trees, the AIR front end's by its manifest's path, and the workspace manifest it inherits from, each by its path
+# relative to this directory): the runtime's shader cache keys on it, so it must equal cargo's, and does, the paths being
+# the same relative ones.
+cargo_build_script(
+    name = "build_script",
+    srcs = [
+        "build.rs",
+        "build_support.rs",
+    ],
+    crate_features = [
+        "ash",
+        "default",
+    ],
+    crate_root = "build.rs",
+    data = [
+        "Cargo.toml",
+        "build.rs",
+        "build_support.rs",
+        "//third_party/m2v:Cargo.toml",
+        "//third_party/m2v/crates/metal2vulkan-air:fingerprint_inputs",
+    ] + glob(["src/**"]),
+    edition = "2021",
+    pkg_name = "metal2vulkan",
+    version = "0.2.0",
+    deps = ["@rust_crates//:sha2"],
+)
+
+rust_library(
+    name = "metal2vulkan",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(
+        ["src/**"],
+        exclude = ["src/**/*.rs"],
+    ),
+    crate_features = [
+        "ash",
+        "default",
+    ],
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    rustc_flags = cargo_ids("efe63d8bd34fcca5", "e2cf93919ca11dbb") + ["--cap-lints=allow"],
+    version = "0.2.0",
+    deps = [
+        ":build_script",
+        "//third_party/m2v/crates/metal2vulkan-air",
+        "@rust_crates//:ash",
+        "@rust_crates//:serde_json",
+        "@rust_crates//:sha2",
+    ],
+)
+
+# Every file of the crate the product can compile or read (the raw GM20B path's stack key hashes them: //gpu:raw_stack).
+filegroup(
+    name = "sources",
+    srcs = [
+        "Cargo.toml",
+        "build.rs",
+        "build_support.rs",
+    ] + glob(["src/**"]),
+)

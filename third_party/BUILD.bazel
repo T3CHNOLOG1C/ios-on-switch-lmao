@@ -1,0 +1,4 @@
+# Third-party source trees built here, each with our changes as commits on top of a pristine import (git log -- <dir>).
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()

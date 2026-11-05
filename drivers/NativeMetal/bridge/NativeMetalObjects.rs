@@ -182,6 +182,7 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
             Some(PathBuf::from(unsafe { CStr::from_ptr(cache) }.to_string_lossy().into_owned()))
         };
         let mut options = DeviceOptions::default();
+        options.policy.framebuffer_fetch = metal2vulkan::device::FramebufferFetchPolicy::AcceptUnordered;
         options.loader = Some(PathBuf::from(loader.to_string_lossy().into_owned()));
         options.metal_level = Some(MetalLevel::NEWEST);
         options.shader_cache = metal2vulkan_runtime::ShaderCacheOptions::in_directory(

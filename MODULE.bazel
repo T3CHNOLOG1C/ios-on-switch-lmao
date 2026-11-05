@@ -212,11 +212,14 @@ use_repo(
     "rust_toolchains",
 )
 
-# m2v (steelbrain/metal2vulkan at 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's crates.io
-# dependencies (vendored from its Cargo.lock), the Apple Metal libraries of the IPSW's OS volume and the device's own
-# data (bazel/gpu/deps.bzl).
+# The crates.io crates of m2v, the Metal bridge and the corpus runner: @rust_crates (crate_universe, pinned by
+# bazel/rust/Cargo.lock and crates.lock.json).
+include("//bazel/rust:crates.MODULE.bazel")
+
+# The Apple Metal libraries of the IPSW's OS volume, the device's own data and llvm-as (bazel/gpu/deps.bzl). m2v is
+# third_party/m2v, its crates.io crates @rust_crates (bazel/rust).
 gpu = use_extension("//bazel/gpu:deps.bzl", "gpu")
-use_repo(gpu, "gpu_apple_libs", "gpu_device_data", "gpu_llvm_as", "m2v", "m2v_crates")
+use_repo(gpu, "gpu_apple_libs", "gpu_device_data", "gpu_llvm_as")
 
 # --- NVK (gpu/nvk): Mesa by commit, built here with meson; its tools pinned (gpu/nvk/repos.bzl) ----------------------
 http_archive(

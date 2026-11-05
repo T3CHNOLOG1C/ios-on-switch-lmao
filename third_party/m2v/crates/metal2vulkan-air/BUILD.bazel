@@ -1,0 +1,37 @@
+# metal2vulkan-air, the AIR front end (lib metal2vulkan_air): crates/metal2vulkan-air/Cargo.toml.
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/rust:defs.bzl", "THIRD_PARTY_LINT_EXCLUDE", "cargo_ids")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = THIRD_PARTY_LINT_EXCLUDE)
+
+rust_library(
+    name = "metal2vulkan-air",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(
+        ["src/**"],
+        allow_empty = True,
+        exclude = ["src/**/*.rs"],
+    ),
+    crate_features = ["default"],
+    crate_name = "metal2vulkan_air",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    rustc_flags = cargo_ids("e1da67ec9623747f", "59e1cd7e4c7e7a75") + ["--cap-lints=allow"],
+    version = "0.2.0",
+    deps = ["@rust_crates//:sha2"],
+)
+
+# What metal2vulkan's build script hashes of this crate (its source fingerprint follows the product into the front end).
+filegroup(
+    name = "fingerprint_inputs",
+    srcs = ["Cargo.toml"] + glob(["src/**"]),
+)
+
+# Every file of the crate the product can compile or read (the raw GM20B path's stack key hashes them: //gpu:raw_stack).
+filegroup(
+    name = "sources",
+    srcs = ["Cargo.toml"] + glob(["src/**"]),
+)

@@ -6,14 +6,18 @@
 #   bazel build //gpu:trustcache    only the trust-cache module the boot package appends (both CDHashes)
 #   bazel build //gpu:plugin --output_groups=debug   the plugin's dSYM
 #
-# Inputs: m2v (@m2v: steelbrain/metal2vulkan 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's
-# crates (@m2v_crates, from drivers/TegraGM20BMetal/bridge/Cargo.lock), Rust 1.98.0 and LLVM 23.1.4's llvm-as
-# (pinned downloads), Xcode (the declared host input), NVK and its host twin (//gpu/nvk: Mesa 77452b90 + the series,
-# built here), the Apple Metal libraries the seed and the raw pack read (@gpu_apple_libs: the IPSW kind's OS volume's, QuartzCore's
+#   bazel build //gpu:bridge_ios    the Metal bridge (NativeMetal's bridge over m2v) the plugin links, alone
+#
+# Inputs: m2v (third_party/m2v: steelbrain/metal2vulkan 720ef1ce and our patches as commits), the bridge's crates.io
+# crates (@rust_crates, bazel/rust), Rust 1.98.0 and LLVM 23.1.4's llvm-as (pinned downloads), Xcode (the declared host
+# input), NVK and its host twin (//gpu/nvk: Mesa 77452b90 + the series, built here), the Apple Metal libraries the seed
+# and the raw pack read (@gpu_apple_libs: the IPSW kind's OS volume's, QuartzCore's
 # default.metallib among them, extracted from the IPSW) and what only the device makes (@gpu_device_data: its driver
 # records and Core Image's compiled kernels, a pinned tar). See bazel/gpu/deps.bzl.
+load("@rules_rust//rust:defs.bzl", "rust_static_library")
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_bridge", "m2v_library_names", "metal_bundle", "metal_plugin", "metal_raw_pack", "metal_seed", "raw_stack")
+load("//bazel/rust:defs.bzl", "cargo_ids", "rust_artifact")
+load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_library_names", "metal_bundle", "metal_plugin", "metal_raw_pack", "metal_seed", "raw_stack")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -37,70 +41,82 @@ NVK_SOURCES = [
 # The runtime's AIR fixtures, which the bridge compiles in (include_bytes!).
 llvm_as(
     name = "runtime_examples_air",
-    src = "@m2v//:crates/metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll",
+    src = "//third_party/m2v:crates/metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll",
     out = "air/runtime_examples.air",
 )
 
 llvm_as(
     name = "function_constant_air",
-    src = "@m2v//:crates/metal2vulkan-validation/fixtures/public/kernel_function_constant_gate_fold.ll",
+    src = "//third_party/m2v:crates/metal2vulkan-validation/fixtures/public/kernel_function_constant_gate_fold.ll",
     out = "air/function_constant.air",
 )
 
-# The device's bridge: aarch64-apple-ios, fat LTO, one codegen unit.
-m2v_bridge(
+# The Metal bridge: NativeMetal's bridge (drivers/NativeMetal/bridge) over m2v's runtime and translator, a static
+# library the plugin links. One crate graph, built per crate (bazel/rust/defs.bzl): each m2v crate and crates.io crate is
+# its own cached rustc action, so an edit recompiles that crate and its dependents only.
+rust_static_library(
+    name = "bridge",
+    srcs = [
+        METAL + ":bridge/NativeMetalBridge.rs",
+        METAL + ":bridge/NativeMetalObjects.rs",
+    ],
+    # The AIR fixtures it compiles in (include_bytes!(env!(...)); rules_rust makes $(execpath) absolute).
+    compile_data = [
+        ":function_constant_air",
+        ":runtime_examples_air",
+    ],
+    crate_name = "native_metal_bridge",
+    crate_root = METAL + ":bridge/NativeMetalBridge.rs",
+    edition = "2024",
+    rustc_env = {
+        "NMB_FC_AIR": "$(execpath :function_constant_air)",
+        "NMB_FIXTURE_AIR": "$(execpath :runtime_examples_air)",
+    },
+    # cargo's -C metadata for the crate (bazel/rust/defs.bzl: the release bridge is cargo's, byte for byte). A staticlib
+    # takes no extra-filename: the archive's own object is named without cargo's suffix (no shipped byte depends on it).
+    rustc_flags = cargo_ids("0cd6ef7afe7b4328", "943b498a20400856")[:1],
+    version = "0.1.0",
+    deps = [
+        "//third_party/m2v/crates/metal2vulkan",
+        "//third_party/m2v/crates/metal2vulkan-runtime",
+        "@rust_crates//:libc",
+        "@rust_crates//:sha2",
+    ],
+)
+
+# The device's: aarch64-apple-ios, in the build profile (release: fat LTO, one codegen unit, as cargo built it).
+rust_artifact(
     name = "bridge_ios",
-    bridge_rs = METAL + ":bridge/NativeMetalBridge.rs",
-    fc_air = ":function_constant_air",
-    fixture_air = ":runtime_examples_air",
-    lock = GM20B_METAL + ":bridge/Cargo.lock",
-    m2v = "@m2v//:srcs",
-    manifest = GM20B_METAL + ":bridge/Cargo.toml.in",
-    objects_rs = METAL + ":bridge/NativeMetalObjects.rs",
-    target = "aarch64-apple-ios",
-    vendor = "@m2v_crates//:vendor",
+    crate = ":bridge",
+    kind = "device",
 )
 
-# The precompile's: this Mac, no LTO (the cache keys hash the sources, not the code).
-m2v_bridge(
+# The precompile's: this Mac, optimized but no LTO, in both profiles (the cache keys hash the sources, not the code).
+rust_artifact(
     name = "bridge_host",
-    bridge_rs = METAL + ":bridge/NativeMetalBridge.rs",
-    fc_air = ":function_constant_air",
-    fixture_air = ":runtime_examples_air",
-    lock = GM20B_METAL + ":bridge/Cargo.lock",
-    m2v = "@m2v//:srcs",
-    manifest = GM20B_METAL + ":bridge/Cargo.toml.in",
-    objects_rs = METAL + ":bridge/NativeMetalObjects.rs",
-    quick = True,
-    target = "aarch64-apple-darwin",
-    vendor = "@m2v_crates//:vendor",
+    crate = ":bridge",
+    kind = "tool",
 )
 
-# The device's bridge built for this Mac (fat LTO like bridge_ios): the host simulation's
+# The device's bridge built for this Mac (like bridge_ios, in the build profile): the host simulation's
 # (drivers/TegraGM20BMetal/hostsim/build.sh `bazel-bin/gpu/bridge_darwin/libnative_metal_bridge.a` <outdir>).
-m2v_bridge(
+rust_artifact(
     name = "bridge_darwin",
-    bridge_rs = METAL + ":bridge/NativeMetalBridge.rs",
-    fc_air = ":function_constant_air",
-    fixture_air = ":runtime_examples_air",
-    lock = GM20B_METAL + ":bridge/Cargo.lock",
-    m2v = "@m2v//:srcs",
-    manifest = GM20B_METAL + ":bridge/Cargo.toml.in",
-    objects_rs = METAL + ":bridge/NativeMetalObjects.rs",
-    target = "aarch64-apple-darwin",
-    vendor = "@m2v_crates//:vendor",
+    crate = ":bridge",
+    kind = "device_mac",
 )
 
 # The raw GM20B path's stack key: compiled into the plugin and stamped into the raw pack (a pack of another build is
-# refused on the device). Hashes NVK, the m2v series, the bridge sources, the frontend and raw/'s sources.
+# refused on the device). Hashes NVK, m2v's sources, the bridge sources, the frontend and raw/'s sources.
 raw_stack(
     name = "raw_stack",
-    nvk = NVK,
-    patches = [
-        GM20B_METAL + ":patches",
-        METAL + ":bridge_patches",
+    m2v = [
+        "//third_party/m2v/crates/metal2vulkan:sources",
+        "//third_party/m2v/crates/metal2vulkan-air:sources",
+        "//third_party/m2v/crates/metal2vulkan-runtime:sources",
     ],
-    series = GM20B_METAL + ":patches/series",
+    m2v_root = "//third_party/m2v:Cargo.toml",
+    nvk = NVK,
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
         METAL + ":bridge/NativeMetalObjects.rs",

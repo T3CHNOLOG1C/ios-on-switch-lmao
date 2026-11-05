@@ -1,13 +1,5 @@
 """The GPU bundle's external inputs (MODULE.bazel `gpu` extension).
 
-@m2v           steelbrain/metal2vulkan at 720ef1ce (GitHub tarball, sha256), the patch series of
-               drivers/TegraGM20BMetal/patches/series applied in order. The validation crate (1.5 GB of corpus
-               and fixtures the bridge never reads) is dropped but for its manifest and the two LLVM-text
-               fixtures the bridge assembles. The crate layout (crates/<name>/ under the workspace Cargo.toml)
-               is kept as is: metal2vulkan's and metal2vulkan-runtime's build scripts hash the sources by
-               relative path into the shader cache's build id, which must equal a plain cargo build's.
-@m2v_crates    every crates.io package of the bridge's Cargo.lock (drivers/TegraGM20BMetal/bridge/Cargo.lock)
-               as a cargo `vendor` directory: each .crate fetched by the lock's own sha256.
 @gpu_apple_libs  the Apple Metal libraries the seed and the raw pack read (QuartzCore's default.metallib among them),
                extracted from 21H461's OS volume (@ipsw_os, the IPSW's 044-76040-038.dmg) and pinned file by file
                in bazel/gpu/apple-libs.sha256. Each file is a repository cache entry of its own, so a fetch reads the
@@ -22,13 +14,6 @@ load("//bazel/host:files.bzl", "sha256_lines")
 load("//bazel/ipsw:ipsw.bzl", "ipsw_member_label")
 load("//bazel/ipsw:pins.bzl", "DEFAULT_KIND")
 
-M2V = {
-    "commit": "720ef1ce9ae2a2068999a8675717418b9416283e",
-    "url": "https://github.com/steelbrain/metal2vulkan/archive/720ef1ce9ae2a2068999a8675717418b9416283e.tar.gz",
-    "sha256": "6232a3df14ba9a666742fe6fde8cf8b4967eb2d438e6b7244659b23cb0fd80a1",
-    "strip_prefix": "metal2vulkan-720ef1ce9ae2a2068999a8675717418b9416283e",
-}
-
 # @gpu_device_data: the tar harvest.py --pack wrote (out/gpu-device-data/<file>), by its sha256. Its records are of the
 # NVK identities the device booted (vendor, device, driver version, pipelineCacheUUID); the seed takes its own NVK's.
 # None on a machine without the tar: the seed then has no device records and lacks the 2 S and 2 C lines of Core Image's
@@ -38,79 +23,12 @@ DEVICE_DATA = {
     "sha256": "533beda1b80c203d6f5f52576c0254304cc80e2fe26a0a750e51e7172d8acf7a",
 }
 
-_SERIES = "//drivers/TegraGM20BMetal:patches/series"
-_CARGO_LOCK = "//drivers/TegraGM20BMetal:bridge/Cargo.lock"
-
-def _drivers_label(path):
-    """A series line (a path below tree/drivers/) as a label in its driver's package."""
-    package, _, file = path.partition("/")
-    return Label("//drivers/{}:{}".format(package, file))
-
-# --- @m2v --------------------------------------------------------------------------------------------------------
-
-_M2V_BUILD = """\
-package(default_visibility = ["//visibility:public"])
-
-# Everything cargo reads to build the bridge's two m2v dependencies (and their path dependencies).
-filegroup(
-    name = "srcs",
-    srcs = glob(["**"], exclude = ["BUILD.bazel", "REPO.bazel"]),
-)
-
-exports_files([
-    "crates/metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll",
-    "crates/metal2vulkan-validation/fixtures/public/kernel_function_constant_gate_fold.ll",
-])
-"""
-
-_KEEP = [
-    "crates/metal2vulkan-validation/Cargo.toml",
-    "crates/metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll",
-    "crates/metal2vulkan-validation/fixtures/public/kernel_function_constant_gate_fold.ll",
-]
-
 def _run(rctx, args):
     result = rctx.execute(args, quiet = True)
     if result.return_code:
         fail("{} failed ({}):\n{}{}".format(" ".join([str(a) for a in args]), result.return_code, result.stdout, result.stderr))
 
-def _m2v_source_impl(rctx):
-    archive = "m2v.tar.gz"
-    rctx.download(url = rctx.attr.url, output = archive, sha256 = rctx.attr.sha256)
-    # The validation crate is 1.5 GB extracted; only _KEEP of it is read. macOS's bsdtar filters while extracting.
-    prefix = rctx.attr.strip_prefix + "/"
-    _run(rctx, ["/usr/bin/tar", "-xzf", archive, "--strip-components", "1",
-                "--exclude", prefix + "crates/metal2vulkan-validation/*"])
-    _run(rctx, ["/usr/bin/tar", "-xzf", archive, "--strip-components", "1"] + [prefix + path for path in _KEEP])
-    rctx.delete(archive)
-    # Exactly the series, in order. Bazel's own patcher misreads a format-patch's "---" separator line, so the
-    # patches go through patch(1) with no fuzz: the result is byte-identical to the `git apply` of
-    # build-tegra-gm20b-metal.py (checked against its checkout when this was written).
-    for line in rctx.read(rctx.attr.series).splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        patch = rctx.path(_drivers_label(line))
-        rctx.watch(patch)
-        _run(rctx, ["/usr/bin/patch", "-p1", "-F0", "-N", "-s", "--no-backup-if-mismatch", "-i", str(patch)])
-    rctx.file("BUILD.bazel", _M2V_BUILD)
-    # A pinned download and the patches it watches: the repository contents cache shares this across output bases and
-    # worktrees.
-    return rctx.repo_metadata(reproducible = True)
-
-m2v_source = repository_rule(
-    implementation = _m2v_source_impl,
-    attrs = {
-        "url": attr.string(mandatory = True),
-        "sha256": attr.string(mandatory = True),
-        "strip_prefix": attr.string(mandatory = True),
-        "series": attr.label(mandatory = True, allow_single_file = True),
-        # Every patch of the series, so that editing one refetches (the series is read for the order).
-        "patches": attr.label_list(allow_files = True),
-    },
-)
-
-# --- @m2v_crates ---------------------------------------------------------------------------------------------------
+# --- Cargo.lock reading (gpu/nvk/repos.bzl vendors bindgen's and cbindgen's crates with it) ----------------------------
 
 def lock_packages(text):
     """The [[package]] tables of a Cargo.lock as dicts of their string keys."""
@@ -126,40 +44,6 @@ def lock_packages(text):
             key, _, value = line.partition(" = ")
             current[key] = value.strip('"')
     return packages
-
-def _cargo_vendor_impl(rctx):
-    names = []
-    for package in lock_packages(rctx.read(rctx.attr.lockfile)):
-        if package.get("source", "") != "registry+https://github.com/rust-lang/crates.io-index":
-            continue
-        name, version, checksum = package["name"], package["version"], package["checksum"]
-        directory = "{}-{}".format(name, version)
-        rctx.download_and_extract(
-            url = "https://static.crates.io/crates/{}/{}-{}.crate".format(name, name, version),
-            sha256 = checksum,
-            stripPrefix = directory,
-            output = directory,
-            type = "tar.gz",
-        )
-        # A cargo `directory` source: the package checksum must equal the lock's; no per-file checksums.
-        rctx.file(directory + "/.cargo-checksum.json", json.encode({"files": {}, "package": checksum}))
-        names.append(directory)
-    rctx.file("BUILD.bazel", """\
-package(default_visibility = ["//visibility:public"])
-
-# {count} crates of {lock}, laid out like `cargo vendor`.
-filegroup(
-    name = "vendor",
-    srcs = glob(["**"], exclude = ["BUILD.bazel", "REPO.bazel"]),
-)
-""".format(count = len(names), lock = rctx.attr.lockfile))
-    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
-    return rctx.repo_metadata(reproducible = True)
-
-cargo_vendor = repository_rule(
-    implementation = _cargo_vendor_impl,
-    attrs = {"lockfile": attr.label(mandatory = True, allow_single_file = True)},
-)
 
 # --- @gpu_llvm_as --------------------------------------------------------------------------------------------------
 # llvm-as of LLVM 23.1.4, the version the bridge's AIR fixtures were assembled with (Homebrew's; the bitcode records
@@ -293,21 +177,6 @@ device_data = repository_rule(implementation = _device_data_impl)
 # --- The extension -------------------------------------------------------------------------------------------------
 
 def _gpu_impl(module_ctx):
-    series = module_ctx.read(Label(_SERIES))
-    patches = [
-        _drivers_label(line.strip())
-        for line in series.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
-    m2v_source(
-        name = "m2v",
-        url = M2V["url"],
-        sha256 = M2V["sha256"],
-        strip_prefix = M2V["strip_prefix"],
-        series = Label(_SERIES),
-        patches = patches,
-    )
-    cargo_vendor(name = "m2v_crates", lockfile = Label(_CARGO_LOCK))
     llvm_tools(name = "gpu_llvm_as", tools = ["llvm-as"])
     apple_libraries(
         name = "gpu_apple_libs",

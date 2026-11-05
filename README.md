@@ -71,7 +71,7 @@ The first build downloads, all by sha256 into the shared repository cache:
   cache by its sha256. Later fetches take them from the cache and read neither the image nor the network.
 
 It then compiles XNU (about 80 s), about 300 driver objects, corecrypto and libpthread, links, prelinks and packages.
-The Rust bridges add about 5 minutes the first time.
+The Rust bridges add about 4 minutes the first time (each crate is cached on its own after that).
 
 `bazel-bin/boot/ioswitch` is what `out/boot/ioswitch` used to be:
 - `switchroot/ioswitch/`: `bl33.bin` (U-Boot with the LZ4 kernel window staged after it), `loader.uboot.bin`,
@@ -190,8 +190,8 @@ Measured on this Mac (16 cores, shared with other agents, so wall times vary):
 | **Comment added** to `drivers/SwitchButtons/SwitchButtons.cpp` | 2.3 s | `INFO: 2 processes: 1 action cache hit, 1 internal, 1 darwin-sandbox.` |
 | **Code changed** in that driver (a function added) | 11.7 s | `INFO: 6 processes: 1 internal, 5 darwin-sandbox.` |
 | Code change reverted | 0.53 s | `INFO: 6 processes: 5 disk cache hit, 1 internal.` |
-| **One m2v patch changed** (a line in 0110) | 284.4 s | `INFO: 15 processes: 2 action cache hit, 1 internal, 14 darwin-sandbox.` |
-| m2v patch reverted | 4.3 s | `INFO: 15 processes: 2 action cache hit, 14 disk cache hit, 1 internal.` |
+| **One m2v `.rs` edited** (a line in `third_party/m2v/crates/metal2vulkan/src/lower/arith/wide.rs`, debug profile) | 101.6 s, of it 67 s for the Rust (load average 50-90 on 16 cores, `--jobs=4`) | `INFO: 26 processes: 3 internal, 23 darwin-sandbox.` |
+| m2v edit reverted | 0.3 s (the bridges) | `INFO: 13 processes: 34 action cache hit, 10 disk cache hit, 3 internal.` |
 | **Fresh output base**, disk cache warm (a new clone, or after `bazel clean --expunge`) | 78.5 s (critical path 2.2 s) | `INFO: 428 processes: 346 disk cache hit, 82 internal.` |
 | **A driver header edited** (a comment in `drivers/TegraGPIO/TegraGPIO.h`) | 24.8 s (critical path 2.6 s) | `INFO: 282 processes: 24 action cache hit, 1 internal, 281 darwin-sandbox.` (every driver object: each declares all the tree's headers) |
 | An XNU patch change, or a header XNU itself includes (`diagnostics/**`, `drivers/NativeIOSwitchBlock/*.h`, `kits/VerifiedRoot/include/**`) | ≈95–117 s | `INFO: 295 processes: … 294 darwin-sandbox.` (XNU plus every driver object, which include XNU's headers) |
@@ -201,9 +201,10 @@ What each scenario shows:
   content, not timestamps.
 - **Code changed.** Exactly five actions ran: that object, its archive, the XNU link, the prelink and the package.
   XNU, the other ~300 objects and the GPU bundle were untouched.
-- **m2v patch changed.** Both cargo bridges reran, then the plugin objects (the raw stack key hashes the patches and is
-  compiled in), link, sign, seed, raw pack and bundle. The kernel didn't rebuild; only the package step reruns once the
-  bundle's trust cache changes.
+- **m2v `.rs` edited.** That crate (metal2vulkan) and its dependents only (metal2vulkan-runtime, the bridge), each
+  its own rustc action, for the device's bridge and the precompile's host bridge; no LTO in the debug profile. Then the
+  plugin objects (the raw stack key hashes m2v's sources and is compiled in), link, sign, seed, raw pack and bundle.
+  The kernel didn't rebuild; only the package step reruns once the bundle's trust cache changes.
 - **Fresh output base.** Nothing executed. The time is server start, analysis and copying 346 outputs out of the disk
   cache.
 
@@ -280,12 +281,13 @@ linters leave them alone.
 | IPSW | `bazel/ipsw/pins.bzl` | `bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> iPad7,1 j120ap` (pins one kind in place; streams each member once to hash it; nothing stored) |
 | XNU version | `kernel/xnu-<version>/` | Vendor the new tag next to the old one (pristine commit, then our commits replayed), `bazel run //kernel/xnu-<version>:update_tables`, add the version to `//kernel:xnu_version`. `MODULE.bazel` `@xnu_base` (lldb macros) follows |
 | Apple OSS, corecrypto, lz4 | `MODULE.bazel` | Version in the URL, new sha256, `strip_prefix` |
-| m2v | `bazel/gpu/deps.bzl` | Commit and sha256 of the GitHub tarball. The series is `drivers/TegraGM20BMetal/patches/series` |
+| m2v | `third_party/m2v` | Vendored: the upstream tree as one commit, our changes as commits on it (`git log -- third_party/m2v`). Edit it in place; for a new upstream commit, import it and rebase ours onto it |
+| Rust crates | `bazel/rust/crates.MODULE.bazel` | Edit a `crate.spec`, then `CARGO_BAZEL_REPIN=1 bazel mod deps --lockfile_mode=update` (rewrites `bazel/rust/Cargo.lock` and `crates.lock.json`) |
 | NVK | `gpu/nvk/BUILD.bazel` | Add the patch to `PATCHES` (in order), set `GIT_SHA1` to the version string's commit, build `//gpu/nvk:ios //gpu/nvk:host`, then pin `EXPECT` (tree id and both sha256s the build prints) |
 | Mesa | `gpu/nvk/repos.bzl` `MESA_COMMIT` | A new commit; the series must apply. If `nvk_query.cl`, `nvk_copy_indirect.cl` or their headers change, regenerate `bazel/pinned/nvk` with Mesa's mesa_clc/vtn_bindgen2 (LLVM 23.1.4) |
 | The IPSW's Metal libraries | `bazel/gpu/apple-libs.sha256` | After an IPSW bump: attach the OS image read-only and regenerate with the command in its header (`libraries.py pins`) |
 | Device data | `bazel/gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes `out/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
-| Rust | `MODULE.bazel` GPU section | `rust.toolchain(versions = [...])` |
+| Rust | `MODULE.bazel` | `rust.toolchain(versions = [...])` and the values of `//bazel/rust:toolchain_version` |
 | LLVM | `bazel/llvm/llvm.bzl` and `bazel/gpu/deps.bzl` | URL and sha256 in both (one archive) |
 | Python packages | not used yet | — |
 | Xcode | `bazel/host/xcode.bzl` | Select the new Xcode, then `bazel run @xcode//:print_pins` and paste |

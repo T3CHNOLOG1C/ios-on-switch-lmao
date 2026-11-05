@@ -4,7 +4,7 @@ crash or a hang at the next function. Writes <out>/<tag>.tsv (rows) and <out>/<t
 
 usage: run_corpus.py <corpus.tsv> <out dir> [--jobs N] [--only substr] [--timeout s]
 corpus.tsv: tag<TAB>path per line (tools/make_corpus.py).
-Environment: RUNNER (corpus/runner's m2v-corpus), NVK (a host build of libvulkan_nouveau.dylib: scratchpad/gpu/userland/build-host,
+Environment: RUNNER (corpus/runner's m2v-corpus: bazel build of its BUILD.bazel's :m2v-corpus), NVK (a host build of libvulkan_nouveau.dylib: scratchpad/gpu/userland/build-host,
 or build-host-rel for the iOS build's release NAK), MOCK (hostsim's libmock_iokit.dylib), RUNNER_ARGS (--draw: also draw each
 render pipeline three times in one pass)."""
 import os, subprocess, sys, shutil, concurrent.futures as cf
@@ -13,7 +13,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 BASE = HERE.parent
 S = BASE.parent
-RUNNER = Path(os.environ.get('RUNNER', BASE / 'target/release/m2v-corpus'))
+RUNNER = Path(os.environ.get('RUNNER', S.parents[1] / 'bazel-bin/drivers/TegraGM20BMetal/corpus/runner/m2v-corpus'))
 NVK = Path(os.environ.get('NVK', S / 'gpu/userland/build-host/src/nouveau/vulkan/libvulkan_nouveau.dylib'))
 MOCK = Path(os.environ.get('MOCK', S / 'gpu/hostsim/libmock_iokit.dylib'))
 

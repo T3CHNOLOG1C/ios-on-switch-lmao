@@ -1,0 +1,17 @@
+# metal2vulkan: steelbrain/metal2vulkan (https://github.com/steelbrain/metal2vulkan) at 720ef1ce, GPL-2.0-or-later OR
+# LGPL-3.0-or-later (LICENSE*), imported as published less the validation crate's data, then the GPU bundle's patch series
+# as one commit each (git log -- third_party/m2v). Its crates build per crate with rules_rust: crates/*/BUILD.bazel.
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/rust:defs.bzl", "THIRD_PARTY_LINT_EXCLUDE")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = THIRD_PARTY_LINT_EXCLUDE)
+
+exports_files([
+    # The workspace manifest the crates inherit from: metal2vulkan's source fingerprint hashes it.
+    "Cargo.toml",
+    # The runtime's AIR fixtures, which the Metal bridge assembles and compiles in (gpu/BUILD.bazel).
+    "crates/metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll",
+    "crates/metal2vulkan-validation/fixtures/public/kernel_function_constant_gate_fold.ll",
+])

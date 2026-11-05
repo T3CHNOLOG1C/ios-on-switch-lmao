@@ -8,11 +8,6 @@ package(default_visibility = ["//gpu:__subpackages__"])
 lint_files()
 
 py_binary(
-    name = "cargo_bridge",
-    srcs = ["cargo_bridge.py"],
-)
-
-py_binary(
     name = "xcode_run",
     srcs = ["xcode_run.py"],
 )

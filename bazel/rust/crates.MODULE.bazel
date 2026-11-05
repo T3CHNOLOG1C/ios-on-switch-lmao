@@ -1,0 +1,114 @@
+# The crates.io crates the build's Rust uses (m2v, the Metal bridge, the shader corpus runner), through crate_universe:
+# @rust_crates//:<name>. Included by MODULE.bazel.
+#
+# Pinned twice over: bazel/rust/Cargo.lock (every crate's version and sha256, as cargo resolved them) and
+# bazel/rust/crates.lock.json (crate_universe's rendering of that resolution). A fetch reads only those two files: each
+# .crate is downloaded by its sha256, so it is a repository cache entry shared by every output base and worktree, and
+# nothing is resolved again. To change a version or a feature, edit the spec below, then re-pin (network):
+#
+#   CARGO_BAZEL_REPIN=1 bazel mod deps --lockfile_mode=update
+#
+# The versions are the Metal bridge's Cargo.lock of before Bazel built Rust per crate, and the features those cargo
+# resolved for it, so the release bridge is the one cargo built.
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+
+# m2v's (the workspace's [workspace.dependencies]) and the bridge's own direct dependencies; the rest follow from them.
+crate.spec(
+    default_features = False,
+    # metal2vulkan's `std`, the runtime's `loaded` (the Vulkan loader opened with dlopen, nothing linked).
+    features = [
+        "loaded",
+        "std",
+    ],
+    package = "ash",
+    version = "=0.38.0",
+)
+crate.spec(
+    package = "libc",
+    version = "=0.2.191",
+)
+crate.spec(
+    package = "serde_json",
+    version = "=1.0.154",
+)
+crate.spec(
+    # The bridge's `asm`: sha2-asm is built (and links nothing on aarch64-apple, where sha2 uses the CPU's SHA-2
+    # instructions), as it was under cargo.
+    features = ["asm"],
+    package = "sha2",
+    version = "=0.10.9",
+)
+
+# Each crate keeps the -C metadata and -C extra-filename cargo gave it in the release iOS bridge (bazel/rust/
+# rules_rust-own-metadata.patch), so its symbols, the order fat LTO merges the crates' modules in, and with them the
+# release bridge's bytes are cargo's. The values are the Metal bridge's `cargo build --release --target
+# aarch64-apple-ios -v` at 720ef1ce; a crate whose version changes takes rules_rust's own (delete its line). Its sources
+# are named as cargo's vendor directory named them (/ioswitch/external/+gpu+m2v_crates/<name>-<version>/...: panic
+# locations in the plugin), whatever the repository's own name.
+[
+    crate.annotation(
+        crate = name,
+        rustc_flags = [
+            "-Cmetadata=" + metadata,
+            "-Cextra-filename=-" + extra,
+            "--remap-path-prefix=external/rules_rust++crate+rust_crates__{0}-{1}=/ioswitch/external/+gpu+m2v_crates/{0}-{1}".format(name, version),
+        ],
+        version = version,
+    )
+    for name, version, metadata, extra in [
+        ("block-buffer", "0.10.4", "8c55dfe3739ad777", "08bbbb8a4846ecb7"),
+        ("cfg-if", "1.0.5", "3aff44da6a8953b9", "9829afcf1eacb3a3"),
+        ("cpufeatures", "0.2.17", "d330a47f9a2cc180", "88e1b827dde6d7de"),
+        ("crypto-common", "0.1.7", "a62114f1cf15fd19", "de6bbebdcd4f7318"),
+        ("digest", "0.10.7", "37fc15d9c550accf", "8d933be04d24430d"),
+        ("generic-array", "0.14.7", "2f6c03ff0b25d8b5", "904144865195202f"),
+        ("itoa", "1.0.18", "7aabbc6593744dce", "5bbc855f3d4ecebc"),
+        ("libc", "0.2.191", "803b2d2d57b547a6", "6a2856f9644a61e6"),
+        ("libloading", "0.8.9", "9baf276cd6639d7d", "4da28b856ecfffeb"),
+        ("memchr", "2.8.3", "8e10fdde55d4e892", "1ff1a266c5e346c5"),
+        ("serde_core", "1.0.229", "4077337934c446dd", "d99c2c85844bbcb9"),
+        ("serde_json", "1.0.154", "3970bc0bfe8bd852", "3c3742b7f724ed96"),
+        ("sha2", "0.10.9", "e4da127270afa1a8", "909bcf8f2362a581"),
+        ("typenum", "1.20.1", "5b68734e02b5901c", "82b5615311a1400b"),
+        ("zmij", "1.0.23", "18011039993036ea", "68b4594a61e3f2c0"),
+    ]
+]
+
+# ash's version carries build metadata (+1.3.281), which its repository's name spells -1.3.281.
+crate.annotation(
+    crate = "ash",
+    rustc_flags = [
+        "-Cmetadata=352f79ac2963a554",
+        "-Cextra-filename=-8c611b457fff094a",
+        "--remap-path-prefix=external/rules_rust++crate+rust_crates__ash-0.38.0-1.3.281=/ioswitch/external/+gpu+m2v_crates/ash-0.38.0+1.3.281",
+    ],
+    version = "0.38.0+1.3.281",
+)
+
+# sha2-asm's build script compiles its one .S with the cc crate: Xcode's clang and SDKs (the declared host input,
+# bazel/host), found through DEVELOPER_DIR.
+crate.annotation(
+    build_script_env = {
+        "IPHONEOS_DEPLOYMENT_TARGET": "17.0",
+        "MACOSX_DEPLOYMENT_TARGET": "14.0",
+    },
+    build_script_env_files = ["@@//bazel/rust:xcode_env"],
+    crate = "sha2-asm",
+    rustc_flags = [
+        "-Cmetadata=abefad0bff350234",
+        "-Cextra-filename=-3fe95fed770081cb",
+        "--remap-path-prefix=external/rules_rust++crate+rust_crates__sha2-asm-0.6.4=/ioswitch/external/+gpu+m2v_crates/sha2-asm-0.6.4",
+    ],
+    version = "0.6.4",
+)
+crate.from_specs(
+    name = "rust_crates",
+    cargo_lockfile = "//bazel/rust:Cargo.lock",
+    lockfile = "//bazel/rust:crates.lock.json",
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-apple-ios",
+    ],
+)
+use_repo(crate, "rust_crates")
