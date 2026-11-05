@@ -344,24 +344,60 @@ static void jobs(void)
     CHECK(TEGRA_VIC_GET(c, TEGRA_VIC_OUT_MATRIX, MATRIX_ENABLE) == 1 &&
               TEGRA_VIC_GET(c, s + TEGRA_VIC_SLOT_MATRIX, MATRIX_ENABLE) == 0,
           "RGB in, Y'CbCr out: the output matrix only");
-    // The same job with rectangles before the transpose (the other convention the self-test can prove).
+    // The same job with rectangles and the output surface before the transpose (hekate's programming, the convention
+    // the self-test tries first): the 1280x720 '420f' described as the 720x1280 picture VIC composes, its planes'
+    // memory geometry with width and height exchanged (720 rows of 1280 luma bytes are LumaWidth 719, LumaHeight 1279;
+    // 360 rows of 640 CbCr pairs ChromaWidth 359, ChromaHeight 639), the slot's destination rectangle the target's.
     TegraVICTraits pre = t;
     pre.preTransposeRects = pre.preTransposeSurface = 1;
     why = tegra_vic_build(&src, &dst, &op, &pre, 0x80001000, 0x80002000, &job);
     CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT) == 719 &&
-              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 719,
-          "pre-transpose rectangles");
-    // The two measured apart: rectangles before the transpose with the surface size after it, and the reverse.
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_BOTTOM) == 1279 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 719 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_HEIGHT) == 1279,
+          "pre-transpose rectangles and surface size");
+    CHECK(TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH) == 719 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_HEIGHT) == 1279 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_WIDTH) == 359 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_HEIGHT) == 639,
+          "pre-transpose plane geometry: luma %llux%llu, chroma %llux%llu",
+          (unsigned long long)TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH),
+          (unsigned long long)TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_HEIGHT),
+          (unsigned long long)TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_WIDTH),
+          (unsigned long long)TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_HEIGHT));
+    CHECK(TEGRA_VIC_GET(job.config, s, SLOT_DEST_RIGHT) == 719 &&
+              TEGRA_VIC_GET(job.config, s, SLOT_DEST_BOTTOM) == 1279,
+          "pre-transpose slot destination rectangle");
+    // The two measured apart: rectangles before the transpose with the surface after it, and the reverse.
     pre.preTransposeSurface = 0;
     why = tegra_vic_build(&src, &dst, &op, &pre, 0x80001000, 0x80002000, &job);
     CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT) == 719 &&
-              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 1279,
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 1279 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH) == 1279 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_HEIGHT) == 719,
           "pre-transpose rectangles, post-transpose surface");
     pre.preTransposeRects = 0, pre.preTransposeSurface = 1;
     why = tegra_vic_build(&src, &dst, &op, &pre, 0x80001000, 0x80002000, &job);
     CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT) == 1279 &&
-              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 719,
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 719 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH) == 719,
           "post-transpose rectangles, pre-transpose surface");
+    // A job without the transpose keeps its geometry under either convention.
+    TegraVICOp flat = op;
+    flat.transform = 0;
+    flat.srcW = 720u << 16;
+    flat.srcH = 1280u << 16;
+    flat.dstW = 720;
+    flat.dstH = 1280;
+    TegraVICImage tall = image(TEGRA_VIC_FOURCC('4', '2', '0', 'f'), 720, 1280, 768, 0x18000000);
+    pre.preTransposeRects = 1;
+    why = tegra_vic_build(&src, &tall, &flat, &pre, 0x80001000, 0x80002000, &job);
+    CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT) == 719 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH) == 767 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_HEIGHT) == 1279 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_WIDTH) == 383 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_HEIGHT) == 639,
+          "untransposed geometry under the pre-transpose conventions: %s", why ? why : "fields");
 
     // A fill (Core Animation's border clears): no slot, the background colour.
     memset(&op, 0, sizeof(op));

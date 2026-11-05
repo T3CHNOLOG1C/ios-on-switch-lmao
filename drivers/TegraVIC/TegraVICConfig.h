@@ -16,6 +16,12 @@
 //   each NV12 byte lands in. TegraVIC's boot self-test (V4) proves these on this unit before anything is published.
 //   averne's FFmpeg nvtegra (libavutil/clb0b6.h, hwcontext_nvtegra.c; read, not copied): CONTROL_PARAMS GPTIMER_ON
 //   and FALCON_CONTROL, PipeConfig downsample 1.0 = 4 (U9.2), the chroma siting values, NV12 = T_Y8___U8V8_N420.
+//   CTCaer's hekate bdk/display/vic.c (GPLv2; read, not copied), the one VIC transpose known to work on this hardware
+//   (Nyx's 1280x720 frame turned onto the 720x1280 panel): a transposed job is described before the transpose, the
+//   target rectangle and the whole OutputSurfaceConfig (OutSurfaceWidth/Height and OutLumaWidth/Height 1279/719, the
+//   source's), and the engine writes a 720-pixel-stride, 1280-row picture: composed pixel (x, y) lands in memory row x,
+//   column y, so LumaHeight + 1 is the row stride and LumaWidth + 1 the rows. V4's diag lines on the unit show the
+//   same law: with LumaHeight 31 (the rows, post-transpose) a 256-byte-pitch 16x32 output got a 128-byte row stride.
 #ifndef TEGRA_VIC_CONFIG_H
 #define TEGRA_VIC_CONFIG_H
 #include <stdint.h>
@@ -361,7 +367,8 @@ typedef struct {
     TegraVICChroma in, out;        // channel of Cb/Cr when reading and writing 4:2:0
     uint8_t vicFlips[8][3];        // IOSurfaceAccelerator transform -> OutputFlipX, OutputFlipY, OutputTranspose
     uint32_t preTransposeRects;    // 1: a transposed job's target/destination rectangles are given before the transpose
-    uint32_t preTransposeSurface;  // 1: and its output surface size (the self-test measures the two apart)
+    uint32_t preTransposeSurface;  // 1: and its whole output surface (size, luma and chroma memory geometry): measured
+                                   // apart from the rectangles
     uint32_t rotations;            // bit t: transform t proven
     uint32_t bilinear;             // 2-tap filtering proven (else every job is 1-tap)
     uint32_t pitchAlign;           // smallest pitch alignment proven (64 or 256 bytes)
@@ -470,8 +477,10 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     TEGRA_VIC_SET(c, TEGRA_VIC_PIPE, PIPE_DOWNSAMPLE_HORIZ, 4);  // 1.0, U9.2
     TEGRA_VIC_SET(c, TEGRA_VIC_PIPE, PIPE_DOWNSAMPLE_VERT, 4);
 
-    // Output. With the rectangles (and, apart, the surface size) given before the transpose (traits the self-test
-    // proves), they are swapped for a transposed job; the pitch is always the real one.
+    // Output. With the rectangles (and, apart, the output surface) given before the transpose (traits the self-test
+    // proves), they are swapped for a transposed job. The surface before the transpose is all of OutputSurfaceConfig
+    // (hekate's programming): its size, and the planes' memory geometry with width and height exchanged, since the
+    // engine writes composed pixel (x, y) to memory row x, column y (LumaHeight + 1 elements a row, LumaWidth + 1 rows).
     const uint32_t swap = transpose && t->preTransposeRects, swapSurface = transpose && t->preTransposeSurface;
     const uint32_t ow = swapSurface ? dst->height : dst->width, oh = swapSurface ? dst->width : dst->height;
     const uint32_t tx = swap ? op->dstY : op->dstX, ty = swap ? op->dstX : op->dstY;
@@ -515,11 +524,17 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_BLK_KIND, TEGRA_VIC_BLK_PITCH);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH, ow - 1);
     TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_HEIGHT, oh - 1);
-    TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH, dst->pitch[0] / df->bpe[0] - 1);
-    TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_HEIGHT, dst->height - 1);
-    TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_WIDTH,
-                  df->planes > 1 ? dst->pitch[1] / df->bpe[1] - 1 : 16383);
-    TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_HEIGHT, df->planes > 1 ? dst->height / 2 - 1 : 16383);
+    const uint32_t lumaRow = dst->pitch[0] / df->bpe[0], lumaRows = dst->height;
+    TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH, (swapSurface ? lumaRows : lumaRow) - 1);
+    TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_HEIGHT, (swapSurface ? lumaRow : lumaRows) - 1);
+    if (df->planes > 1) {
+        const uint32_t chromaRow = dst->pitch[1] / df->bpe[1], chromaRows = dst->height / 2;
+        TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_WIDTH, (swapSurface ? chromaRows : chromaRow) - 1);
+        TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_HEIGHT, (swapSurface ? chromaRow : chromaRows) - 1);
+    } else {
+        TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_WIDTH, 16383);
+        TEGRA_VIC_SET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_CHROMA_HEIGHT, 16383);
+    }
 
     const int dstYcc = df->kind != TEGRA_VIC_KIND_RGB;
     if (!op->fill) {
