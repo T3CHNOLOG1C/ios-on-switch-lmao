@@ -1,0 +1,146 @@
+// SPDX-License-Identifier: MIT
+// drivers/TegraGM20B/TegraGM20BPoolPolicy.h on the host (tests/test_gm20b_pool_policy.py): a model of the GPU pool at r8a's
+// numbers (256 MiB, 221 used, 63 of them the compositor's: 35 free) and what Maps asked of it when it opened (23 coherent
+// BOs, 74400 KiB, the first 4096 KiB refused and VectorKit aborting on the nil buffer), run with the tiers as they were
+// (a refused BO failed) and as they are (it comes from system memory). Also MapKit's 4 KiB refused with 11 MiB free and the
+// compositor's 16 MiB m2v block with the pool full.
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+#include "../out/native-a57/root-v1/tree/drivers/TegraGM20B/TegraGM20BPoolPolicy.h"
+
+namespace
+{
+constexpr uint64_t KiB = 1024, MiB = 1024 * KiB;
+// the kernel's defaults (TegraGM20BUserClient.cpp kPoolSmallBytes, kPoolFloorBytes, tegra-gpu-pool-reserve-mb, -client-pool-mb)
+constexpr tgm_pool::Limits kLimits = {1 * MiB, 16 * MiB, 32 * MiB, 64 * MiB};
+
+struct Pool {
+	uint64_t size = 256 * MiB, used = 0;
+	uint64_t avail() const { return size - used; }
+};
+struct Client {
+	bool compositor;
+	uint64_t held = 0;
+};
+struct Result {
+	unsigned failed = 0, fromPool = 0, fromSystem = 0;
+	uint64_t systemBytes = 0;
+};
+
+// One coherent BoAlloc as AGXDeviceUserClient::BoAlloc decides it: `legacy` the r8a build (a refusal fails the BO)
+bool alloc(Pool &p, Client &c, uint64_t bytes, bool legacy, Result &r)
+{
+	const char *refused = legacy && c.compositor ? nullptr  // (the r8a build: the compositor past every tier)
+						      : tgm_pool::refusal(bytes, c.held, p.avail(), kLimits, c.compositor);
+	const bool poolHasIt = !refused && p.avail() >= bytes;
+	if (legacy && !poolHasIt) {
+		r.failed++;
+		return false;
+	}
+	if (tgm_pool::coherentSource(refused, poolHasIt) == tgm_pool::FromPool) {
+		p.used += bytes;
+		c.held += bytes;
+		r.fromPool++;
+	} else {
+		r.fromSystem++;
+		r.systemBytes += bytes;
+	}
+	return true;
+}
+
+int failures = 0;
+void expect(bool ok, const char *what)
+{
+	std::printf("%s: %s\n", ok ? "ok  " : "FAIL", what);
+	failures += !ok;
+}
+
+// Maps' 23 BOs (mem3 line at 15:39:52: 74400 KiB): eighteen of VectorKit's 4096 KiB buffers and five small ones
+std::vector<uint64_t> mapsOpening()
+{
+	std::vector<uint64_t> b(18, 4096 * KiB);
+	for (uint64_t k : {256, 128, 128, 112, 48}) b.push_back(k * KiB);
+	return b;
+}
+
+Result runR8a(bool legacy, Pool &p, Client &compositor)
+{
+	p.used = 221 * MiB;  // stats2 15:39:44: pool 221/256 MiB (compositor 63)
+	compositor.held = 63 * MiB;
+	Client maps{false};
+	Result r;
+	for (uint64_t bytes : mapsOpening()) alloc(p, maps, bytes, legacy, r);
+	return r;
+}
+}  // namespace
+
+int main()
+{
+	{  // r8a: Maps opens with 35 MiB of the pool free
+		Pool p;
+		Client compositor{true};
+		const Result before = runR8a(true, p, compositor);
+		std::printf("r8a as it was: %u of 23 failed, %u from the pool\n", before.failed, before.fromPool);
+		expect(before.failed > 0, "reproduced: Maps' 4096 KiB BOs refused with 35 MiB of the pool free");
+
+		Pool q;
+		Client c2{true};
+		const Result after = runR8a(false, q, c2);
+		std::printf("r8a now: %u failed, %u from the pool, %u from system memory (%llu KiB)\n", after.failed,
+			    after.fromPool, after.fromSystem, (unsigned long long)(after.systemBytes / KiB));
+		expect(after.failed == 0, "no BO of Maps fails");
+		expect(after.fromSystem >= before.failed, "the BOs the tiers kept out came from system memory");
+		expect(q.avail() >= kLimits.reserveBytes, "the compositor's reserve is still free");
+		Result r;
+		expect(alloc(q, c2, 16 * MiB, false, r) && r.fromPool == 1, "the compositor's next 16 MiB block is the pool's");
+	}
+	{  // MapKit at 15:14:58: 4 KiB refused with 11 MiB free (the pool's last 16 MiB)
+		Pool p;
+		p.used = p.size - 11 * MiB;
+		Client mapkit{false};
+		Result legacy, now;
+		alloc(p, mapkit, 4 * KiB, true, legacy);
+		alloc(p, mapkit, 4 * KiB, false, now);
+		expect(legacy.failed == 1, "reproduced: MapKit's 4 KiB refused");
+		expect(now.failed == 0 && now.fromSystem == 1, "MapKit's 4 KiB from system memory");
+	}
+	{  // the compositor's 16 MiB m2v block with the pool full (15:14:50, twelve refusals)
+		Pool p;
+		p.used = p.size - 2 * MiB;
+		Client compositor{true};
+		Result legacy, now;
+		alloc(p, compositor, 16 * MiB, true, legacy);
+		alloc(p, compositor, 16 * MiB, false, now);
+		expect(legacy.failed == 1, "reproduced: the compositor's 16 MiB refused with the pool full");
+		expect(now.failed == 0 && now.fromSystem == 1, "the compositor's 16 MiB from system memory");
+	}
+	{  // the compositor near the floor: its BO comes from system memory, the floor stays for nvkm's tables and channels
+		Pool was, p;
+		was.used = p.used = p.size - 24 * MiB;
+		Client compositor{true}, compositor2{true};
+		Result legacy, now;
+		alloc(was, compositor, 16 * MiB, true, legacy);
+		alloc(p, compositor2, 16 * MiB, false, now);
+		expect(legacy.fromPool == 1 && was.avail() < kLimits.floorBytes,
+		       "as it was: the compositor took the pool's last 16 MiB");
+		expect(now.fromSystem == 1 && p.avail() == 24 * MiB,
+		       "now: the floor stays nvkm's, the compositor's block comes from system memory");
+	}
+	{  // room for everyone: nothing changes
+		Pool p;
+		p.used = 64 * MiB;
+		Client app{false};
+		Result r;
+		for (int i = 0; i < 8; i++) alloc(p, app, 4 * MiB, false, r);
+		expect(r.fromPool == 8 && r.fromSystem == 0, "with room, every BO is the pool's as before");
+		alloc(p, app, 64 * MiB, false, r);  // past the client's 64 MiB share
+		expect(r.fromSystem == 1 && r.failed == 0, "past its share, a client's BO comes from system memory");
+	}
+	if (failures) {
+		std::printf("FAIL: pool policy (%d)\n", failures);
+		return 1;
+	}
+	std::printf("PASS: pool policy\n");
+	return 0;
+}

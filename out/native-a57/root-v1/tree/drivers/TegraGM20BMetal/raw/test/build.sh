@@ -25,7 +25,10 @@ xcrun clang++ $FLAGS -I "$TREE/drivers/TegraGM20B" "$HERE/rawframe.cpp" "$RAW/ru
 xcrun clang++ $OBJC -Wall -Wextra -DRAW_FACADE -x objective-c++ "$HERE/nvkframe.mm" "$RAW/runtime/RawMetal.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
   -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" -x none "$BRIDGE" $LIBS \
   -o "$OUT/facadeframe" 2>&1 | grep -v "duplicate libraries" || true
-echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe"
+# poolcheck: the raw device's chunks after a burst (raw::Device::poolFree, wcFree)
+xcrun clang++ $FLAGS -I "$TREE/drivers/TegraGM20B" "$HERE/poolcheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" \
+  "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" $LIBS -o "$OUT/poolcheck"
+echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck"
 xcrun clang++ $OBJC -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "$RAW/runtime/RawMetal.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
   -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" -x none "$BRIDGE" $LIBS \
   -o "$OUT/blitframe" 2>&1 | grep -v "duplicate libraries" || true

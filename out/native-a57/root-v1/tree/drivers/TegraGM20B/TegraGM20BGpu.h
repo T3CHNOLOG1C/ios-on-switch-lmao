@@ -203,6 +203,11 @@ void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t ph
 			const char *owner);
 void tgm_stats_compositor_pool(int64_t bytes);
 void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready, uint64_t *pool_zeroing_bytes);
+/* Where the pool is (TegraGM20BUserClient.cpp, for the stats2 line): pool BOs of clients other than the compositor, pool
+ * pages freed but still behind their view's release (orphans: a task still maps the view, or an import of it is live), and
+ * coherent BOs served from system memory instead (tgm_pool::FromSystem) with their count. */
+void tgm_pool_breakdown(uint64_t *client_bytes, uint64_t *orphan_bytes, uint64_t *orphans,
+			uint64_t *system_bytes, uint64_t *systems);
 unsigned long tgm_owner_stats(char *out, unsigned long size);
 void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
 			 const uint64_t phase_ns[TGM_PHASES]);

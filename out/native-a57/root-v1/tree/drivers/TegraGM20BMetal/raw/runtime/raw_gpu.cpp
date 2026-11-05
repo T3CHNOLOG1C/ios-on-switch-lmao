@@ -535,6 +535,16 @@ void Device::poolFree(Span &s)
     }
     if (!merged) ch.free[offset] = bytes;
     s = {};
+    // an empty chunk goes back while the others keep a chunk's worth free (kLowMark: the grower's own mark), so the pool
+    // shrinks after a burst instead of holding its peak for good (r8a: 320 MB in 20 chunks from 15:18 on, the screen idle)
+    if (!ch.used && poolFree_ >= ch.bytes + kLowMark) {
+        poolFree_ -= ch.bytes;
+        stats.poolBytes -= ch.bytes;
+        stats.poolChunks--;
+        k_.free(ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
+        vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
+        ch = Chunk();
+    }
 }
 
 Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner)
@@ -1080,6 +1090,33 @@ void Device::wcFree(Span &s)
     }
     if (!merged) ch.free[offset] = bytes;
     s = {};
+    // an empty chunk goes back to the GPU pool while another empty one stays for the next burst: the compositor's pool
+    // share follows what Core Animation holds, not its peak (r8a: the compositor 107 MiB of the pool at 15:16, 63 after,
+    // and Maps refused a 4 MiB BO with 33 MiB free)
+    if (!ch.used) {
+        for (const Chunk &other : wcChunks_)
+            if (&other != &ch && other.bo.handle && !other.dedicated && !other.used) {
+                k_.free(ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
+                ch = Chunk();
+                break;
+            }
+    }
+}
+
+uint32_t Device::wcChunksHeld()
+{
+    std::lock_guard<std::mutex> l(lock_);
+    uint32_t n = 0;
+    for (const Chunk &ch : wcChunks_) n += ch.bo.handle && !ch.dedicated;
+    return n;
+}
+
+uint64_t Device::wcChunkBytesHeld()
+{
+    std::lock_guard<std::mutex> l(lock_);
+    uint64_t n = 0;
+    for (const Chunk &ch : wcChunks_) n += ch.bo.handle && !ch.dedicated ? ch.bytes : 0;
+    return n;
 }
 
 bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b)

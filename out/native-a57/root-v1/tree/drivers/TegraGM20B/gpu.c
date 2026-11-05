@@ -2080,13 +2080,19 @@ static void stats_tick(void)
 		  l2n ? l2s / l2n / 1000 : 0, l2m / 1000, presents, writer,
 		  presents ? ps / presents / 1000 : 0, pm / 1000, clk);
 	nvxnu_stats("tegra-gm20b: stats %s", line);
+	/* the pool by holder (r8a: 221 of 256 MiB used, 63 of it the compositor's, the rest unnamed) */
+	uint64_t pool_clients, pool_orphan_bytes, pool_orphans, pool_system_bytes, pool_systems;
+	tgm_pool_breakdown(&pool_clients, &pool_orphan_bytes, &pool_orphans, &pool_system_bytes,
+			   &pool_systems);
 	scnprintf(
 		line, sizeof(line),
 		"copy mean %llu us max %llu us (%u), after user work mean %llu us max %llu us "
 		"(%u); "
 		"order %s: %u submits behind a copy, %u offers idle (%u then a submit); %u imports "
 		"(%llu/s), %lld KiB live in "
-		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB (compositor %llu), %s, MC "
+		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB (compositor %llu, clients "
+		"%llu, orphans %llu in "
+		"%llu; coherent from system memory %llu MiB in %llu), %s, MC "
 		"%08x "
 		"err "
 		"%08x at %08x",
@@ -2097,8 +2103,9 @@ static void stats_tick(void)
 		(long long)(__atomic_load_n(&stats.live_bytes, __ATOMIC_RELAXED) >> 10),
 		__atomic_load_n(&stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10, ans / 1000,
 		nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20,
-		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, scrubbed, mc_int, mc_err,
-		mc_adr);
+		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, pool_clients >> 20,
+		pool_orphan_bytes >> 20, pool_orphans, pool_system_bytes >> 20, pool_systems,
+		scrubbed, mc_int, mc_err, mc_adr);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
 	stats_exec_owners(line, sizeof(line), rate);
 	stats_mem(ms);

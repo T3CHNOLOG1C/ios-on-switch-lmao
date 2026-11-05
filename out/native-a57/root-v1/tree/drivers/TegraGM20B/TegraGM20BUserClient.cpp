@@ -18,6 +18,7 @@
 #include <string.h>
 #include "TegraGM20BABI.h"
 #include "TegraGM20BGpu.h"
+#include "TegraGM20BPoolPolicy.h"
 #include "TegraGM20BPushScan.h"
 using tgm_scan::PushCounts;
 using tgm_scan::PushParse;
@@ -75,8 +76,14 @@ struct PoolOrphan {
 	void *va;
 	uint64_t pa, bytes;
 	bool zero;  // a BO a client had: its pages are zeroed before they go back (poolZeroLater)
+	// a coherent BO from ordinary pages (tgm_pool::FromSystem): its pages, released after the view instead of va's
+	IOBufferMemoryDescriptor *backing;
 };
 PoolOrphan *gPoolOrphans;
+// Coherent BOs the pool did not serve (tgm_pool::FromSystem), since boot: count and bytes (the stats line's "system")
+volatile uint64_t gSystemCoherent, gSystemCoherentBytes;
+// Pool BOs of clients other than the compositor, and pool pages freed but still behind their view's release (orphans)
+volatile uint64_t gClientPoolBytes, gOrphanBytes, gOrphans;
 
 void pushOrphan(PoolOrphan *orphan)
 {
@@ -116,8 +123,17 @@ void releaseOrphans()
 			continue;
 		}
 		orphan->view->release();
-		if (!(orphan->zero && poolZeroLater(orphan->va, orphan->pa, orphan->bytes)))
+		if (orphan->va) {
+			__atomic_sub_fetch(&gOrphanBytes, orphan->bytes, __ATOMIC_RELAXED);
+			__atomic_sub_fetch(&gOrphans, 1, __ATOMIC_RELAXED);
+		}
+		if (orphan->backing) {
+			orphan->backing->complete();
+			orphan->backing->release();
+		} else if (!(orphan->zero &&
+			     poolZeroLater(orphan->va, orphan->pa, orphan->bytes))) {
 			tgm_pool_free(orphan->va, orphan->bytes, orphan->pa);
+		}
 		IODelete(orphan, PoolOrphan, 1);
 	}
 }
@@ -188,22 +204,20 @@ uint64_t poolReserveBytes()
 
 bool poolZeroNow();
 
-// Why a non-compositor client's pool BO of `bytes` is refused while it holds `held` (the tiers above), or nullptr. Freed
-// ranges the thread call has not zeroed yet are room too: when short, they are zeroed now rather than the BO refused.
-const char *poolRefusal(uint64_t bytes, uint64_t held)
+// Why a pool BO of `bytes` stays out of the pool while its client holds `held` (the tiers above; the compositor only the
+// floor), or nullptr: it then comes from system memory (tgm_pool::coherentSource). Freed ranges the thread call has not
+// zeroed yet are room too: when short, they are zeroed now rather than the BO sent elsewhere.
+const char *poolRefusal(uint64_t bytes, uint64_t held, bool compositor)
 {
+	// (the compositor zeroes pending ranges on its thread only where the floor would refuse it, as it did only when the
+	// pool had no room)
 	uint64_t avail = tgm_pool_avail();
-	if (avail < bytes + poolReserveBytes() && poolZeroNow())
+	if (avail < bytes + (compositor ? kPoolFloorBytes : poolReserveBytes()) && poolZeroNow())
 		avail = tgm_pool_avail();
-	if (avail < bytes + kPoolFloorBytes)
-		return "the pool's last 16 MiB stay for the compositor and nvkm";
-	if (bytes <= kPoolSmallBytes)
-		return nullptr;
-	if (avail < bytes + poolReserveBytes())
-		return "the rest stays for the compositor";
-	if (held + bytes > clientPoolBytes())
-		return "past the client's share";
-	return nullptr;
+	return tgm_pool::refusal(
+		bytes, held, avail,
+		{kPoolSmallBytes, kPoolFloorBytes, poolReserveBytes(), clientPoolBytes()},
+		compositor);
 }
 
 // ------------------------------------------------------------------ BoAlloc without waiting: spare BOs
@@ -590,7 +604,8 @@ void ownerNote(const char *owner, uint64_t bytes, uint64_t ns, bool made)
 // compute dispatches and semaphore acquires; "bad" counts streams with an opcode NVK does not emit. Pushes in host
 // imports (no kernel mapping) are not read; the line says what share of the push bytes was. The reader:
 // TegraGM20BPushScan.h. Every kProfileEvery-th submission read is also profiled (gpu.c "push profile").
-constexpr uint32_t kScanEvery = 4, kPushOwners = 4, kProfileEvery = 16;  // 1 submission in 64 profiled (its pushes WFI-stamped)
+constexpr uint32_t kScanEvery = 4, kPushOwners = 4,
+		   kProfileEvery = 16;  // 1 submission in 64 profiled (its pushes WFI-stamped)
 constexpr uint64_t kScanMaxBytes = 512 << 10, kScanWindowNs = 5000000000ULL;
 struct PushOwner {
 	char name[17];
@@ -653,6 +668,16 @@ extern "C" void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready,
 	*ready = n;
 }
 
+extern "C" void tgm_pool_breakdown(uint64_t *client_bytes, uint64_t *orphan_bytes,
+				   uint64_t *orphans, uint64_t *system_bytes, uint64_t *systems)
+{
+	*client_bytes = __atomic_load_n(&gClientPoolBytes, __ATOMIC_RELAXED);
+	*orphan_bytes = __atomic_load_n(&gOrphanBytes, __ATOMIC_RELAXED);
+	*orphans = __atomic_load_n(&gOrphans, __ATOMIC_RELAXED);
+	*system_bytes = __atomic_load_n(&gSystemCoherentBytes, __ATOMIC_RELAXED);
+	*systems = __atomic_load_n(&gSystemCoherent, __ATOMIC_RELAXED);
+}
+
 // The window's BoAllocs by process ("name n (KiB, mean/max us, made m)"), then cleared; 0 when there were none.
 extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 {
@@ -693,6 +718,7 @@ class AGXDeviceUserClient : public IOUserClient
 		IOBufferMemoryDescriptor *bmd;  // cached BOs
 		IOMemoryDescriptor *wired;      // imports
 		IOMemoryDescriptor *view;       // cached clientMemoryForType descriptor
+		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): bmd's pages under a physical view
 		tgm_mem *mem;
 		tgm_coh *coh;  // imports: the surface's coherency registry entry (gpu.c), held
 		uint32_t snapshot[kMaxChannels];  // submitted seqnos when freed (zombies only)
@@ -737,6 +763,8 @@ class AGXDeviceUserClient : public IOUserClient
 		true;  // its GPU errors panic; no pool quota (all but the compositor with all-clients)
 	bool dead_ = false;  // a channel was killed for a GPU error: no new work, BOs or binds
 	bool quotaLogged_ = false;
+	bool systemLogged_ =
+		false;  // a coherent BoAlloc served from system memory (tgm_pool::FromSystem), logged once
 	uint64_t pool_bytes_ = 0;  // pool BOs held
 
 	Bo *findBo(uint64_t handle);
@@ -879,17 +907,36 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 		pool_bytes_ -= bo->bytes;
 		if (critical_)
 			tgm_stats_compositor_pool(-static_cast<int64_t>(bo->bytes));
+		else
+			__atomic_sub_fetch(&gClientPoolBytes, bo->bytes, __ATOMIC_RELAXED);
 	}
 	// A pool BO's view and pages go to the thread call (releaseOrphans: releasing the view can wait for an import on
 	// another connection), which keeps the pages while a task still maps the view. Cached BOs need no such care: their
 	// mappings hold the buffer itself, and releasing one waits for nothing.
 	PoolOrphan *orphan = nullptr;
-	if (bo->pool_va && bo->view && (orphan = IONew(PoolOrphan, 1))) {
+	if (bo->system && bo->handle) {
+		__atomic_sub_fetch(&gSystemCoherent, 1, __ATOMIC_RELAXED);
+		__atomic_sub_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
+	}
+	// (a system BO's view is physical as a pool BO's is, and goes the same way, its backing pages released after it)
+	if ((bo->pool_va || bo->system) && bo->view && (orphan = IONew(PoolOrphan, 1))) {
 		if (!closing_ && bo->view->getRetainCount() > 1)
 			IOLog("tegra-gm20b: BoFree of BO %llu (%llu bytes) still mapped by its "
 			      "task: pages kept until unmapped\n",
 			      bo->handle, bo->bytes);
-		*orphan = {nullptr, bo->view, bo->pool_va, bo->pool_pa, bo->bytes, bo->handle != 0};
+		*orphan = {nullptr,
+			   bo->view,
+			   bo->pool_va,
+			   bo->pool_pa,
+			   bo->bytes,
+			   bo->handle != 0,
+			   bo->system ? bo->bmd : nullptr};
+		if (bo->pool_va) {
+			__atomic_add_fetch(&gOrphanBytes, bo->bytes, __ATOMIC_RELAXED);
+			__atomic_add_fetch(&gOrphans, 1, __ATOMIC_RELAXED);
+		}
+		if (bo->system)
+			bo->bmd = nullptr;  // the orphan's now
 		pushOrphan(orphan);
 		scheduleOrphanRelease();
 	} else {
@@ -901,7 +948,7 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 		    !(bo->handle && poolZeroLater(bo->pool_va, bo->pool_pa, bo->bytes)))
 			tgm_pool_free(bo->pool_va, bo->bytes, bo->pool_pa);
 	}
-	if (bo->bmd && bo->handle && !(bo->flags & TegraGM20BBoContiguous) &&
+	if (bo->bmd && bo->handle && !bo->system && !(bo->flags & TegraGM20BBoContiguous) &&
 	    spareKeep(bo->bmd, bo->pas, uint64_t(bo->backing_pages) << 12)) {
 		bo->bmd = nullptr;
 		bo->pas = nullptr;
@@ -1011,37 +1058,41 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	int kind = TGM_BO_CACHED;
 	Spare *spare = nullptr;
 	const char *refused = nullptr;
-	if (!ret && (in->flags & TegraGM20BBoCoherent) && !critical_ &&
-	    (refused = poolRefusal(in->bytes, pool_bytes_))) {
-		if (!quotaLogged_)
-			IOLog("tegra-gm20b: %s: GPU pool BoAlloc of %llu KiB refused: %s "
-			      "(client holds %llu MiB of the pool, %llu MiB free); "
-			      "further refusals not logged\n",
-			      owner_, in->bytes >> 10, refused, pool_bytes_ >> 20,
-			      tgm_pool_avail() >> 20);
-		quotaLogged_ = true;
-		ret = kIOReturnNoMemory;
-	} else if (!ret && (in->flags & TegraGM20BBoCoherent)) {
-		// write-combined pool memory: zeroed by the allocator, no cacheable alias (CONTRACT §3). No room: the freed
-		// ranges the thread call has not zeroed yet are zeroed now, and the allocation tried again.
-		bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
-		if (!bo->pool_va && poolZeroNow())
+	// A coherent BO the pool does not serve (its tiers keep it out, or the pool has no room) is not refused: ordinary pages,
+	// made below as a cached BO's are (never a spare's: those are another BO's cacheable pages), mapped write-combined
+	// (tgm_pool::FromSystem). r8a: refusing Maps' first 4 MiB buffer with 33 MiB of the pool free made VectorKit abort.
+	bool system = false;
+	if (!ret && (in->flags & TegraGM20BBoCoherent)) {
+		refused = poolRefusal(in->bytes, pool_bytes_, critical_);
+		if (!refused) {
+			// write-combined pool memory: zeroed by the allocator, no cacheable alias (CONTRACT §3). No room: the freed
+			// ranges the thread call has not zeroed yet are zeroed now, and the allocation tried again.
 			bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
-		if (!bo->pool_va) {
-			ret = kIOReturnNoMemory;
-		} else {
-			for (uint32_t i = 0; i < bo->npages; i++)
-				bo->pas[i] = bo->pool_pa + (uint64_t(i) << 12);
-			IOAddressRange range = {bo->pool_pa, bo->bytes};
-			bo->view = IOMemoryDescriptor::withAddressRanges(
-				&range, 1,
-				static_cast<IOOptionBits>(kIODirectionInOut) |
-					static_cast<IOOptionBits>(kIOMemoryTypePhysical64) |
-					kPoolCacheMode,
-				TASK_NULL);
-			ret = bo->view ? kIOReturnSuccess : kIOReturnNoMemory;
+			if (!bo->pool_va && poolZeroNow())
+				bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
 		}
-	} else if (!ret && !(in->flags & TegraGM20BBoContiguous) &&
+		system = tgm_pool::coherentSource(refused, bo->pool_va != nullptr) ==
+			 tgm_pool::FromSystem;
+		if (system && !systemLogged_)
+			IOLog("tegra-gm20b: %s: coherent BoAlloc of %llu KiB from system memory, "
+			      "write-combined: %s "
+			      "(client holds %llu MiB of the pool, %llu MiB free); further ones "
+			      "not logged\n",
+			      owner_, in->bytes >> 10, refused ? refused : "the pool has no room",
+			      pool_bytes_ >> 20, tgm_pool_avail() >> 20);
+		systemLogged_ = systemLogged_ || system;
+	}
+	if (!ret && bo->pool_va) {
+		for (uint32_t i = 0; i < bo->npages; i++)
+			bo->pas[i] = bo->pool_pa + (uint64_t(i) << 12);
+		IOAddressRange range = {bo->pool_pa, bo->bytes};
+		bo->view = IOMemoryDescriptor::withAddressRanges(
+			&range, 1,
+			static_cast<IOOptionBits>(kIODirectionInOut) |
+				static_cast<IOOptionBits>(kIOMemoryTypePhysical64) | kPoolCacheMode,
+			TASK_NULL);
+		ret = bo->view ? kIOReturnSuccess : kIOReturnNoMemory;
+	} else if (!ret && !system && !(in->flags & TegraGM20BBoContiguous) &&
 		   (spare = spareTake(in->bytes))) {
 		// a spare: zeroed and cleaned already, its page list made; the BO is its first pages
 		IODelete(bo->pas, uint64_t, bo->npages);
@@ -1056,7 +1107,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		// Made here only when no spare was ready (the class is kept warm from now on), at its class's size so that it
 		// serves the class again once freed; the BO is its first pages.
 		const uint32_t c =
-			(in->flags & TegraGM20BBoContiguous) ? kClasses : classUp(in->bytes);
+			(in->flags & TegraGM20BBoContiguous) || system
+				? kClasses
+				: classUp(in->bytes);  // (a system BO is never a spare: its own size)
 		const uint64_t backing = c < kClasses ? classBytes(c) : in->bytes;
 		if (backing != in->bytes) {
 			IODelete(bo->pas, uint64_t, bo->npages);
@@ -1098,7 +1151,35 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	}
 	// A cached BO's view, which its task maps: the descriptor itself, or its first in->bytes when it is a spare's or
 	// a class's larger buffer.
-	if (!ret && bo->bmd) {
+	if (!ret && bo->bmd && system) {
+		// a coherent BO from ordinary pages: its task's view is a physical descriptor over them, write-combined as a pool
+		// BO's (kPoolCacheMode: IOKit takes a physical descriptor's user cache mode from the descriptor), one range a run
+		// of contiguous pages. The pages' cacheable kernel mapping holds no line of them (cleanZeros dropped the zeros'),
+		// and nothing here writes through it again. Released as a pool view is (releaseBo: orphan, then its backing).
+		uint32_t runs = 0;
+		for (uint32_t i = 0; i < bo->npages; i++)
+			runs += !i || bo->pas[i] != bo->pas[i - 1] + 4096;
+		IOAddressRange *ranges = IONew(IOAddressRange, runs);
+		if (ranges) {
+			uint32_t r = 0;
+			for (uint32_t i = 0; i < bo->npages; i++) {
+				if (i && bo->pas[i] == bo->pas[i - 1] + 4096) {
+					ranges[r - 1].length += 4096;
+					continue;
+				}
+				ranges[r++] = {bo->pas[i], 4096};
+			}
+			bo->view = IOMemoryDescriptor::withAddressRanges(
+				ranges, runs,
+				static_cast<IOOptionBits>(kIODirectionInOut) |
+					static_cast<IOOptionBits>(kIOMemoryTypePhysical64) |
+					kPoolCacheMode,
+				TASK_NULL);
+			IODelete(ranges, IOAddressRange, runs);
+		}
+		if (!bo->view)
+			ret = kIOReturnNoMemory;
+	} else if (!ret && bo->bmd) {
 		bo->view = bo->backing_pages == bo->npages
 				   ? static_cast<IOMemoryDescriptor *>(bo->bmd)
 				   : IOSubMemoryDescriptor::withSubRange(bo->bmd, 0, in->bytes,
@@ -1123,6 +1204,13 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		kind = TGM_BO_POOL;
 		if (critical_)
 			tgm_stats_compositor_pool(static_cast<int64_t>(bo->bytes));
+		else
+			__atomic_add_fetch(&gClientPoolBytes, bo->bytes, __ATOMIC_RELAXED);
+	}
+	if (system) {
+		bo->system = true;
+		__atomic_add_fetch(&gSystemCoherent, 1, __ATOMIC_RELAXED);
+		__atomic_add_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
 	}
 	tgm_stats_bo_alloc(bo->bytes, kind, mark - start, phase, owner_);
 	ownerNote(owner_, bo->bytes, mark - start, kind == TGM_BO_CACHED);
@@ -1366,10 +1454,12 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 				    va + bytes <= binds_[b].va + binds_[b].range)
 					hit = &binds_[b];
 		}
-		const void *base = !hit               ? nullptr
-				   : hit->bo->pool_va ? hit->bo->pool_va
-				   : hit->bo->bmd     ? hit->bo->bmd->getBytesNoCopy()
-						      : nullptr;
+		// (not a system coherent BO's: its task writes it write-combined, and a read through its cacheable kernel
+		// mapping could fill lines a later read would find stale)
+		const void *base = !hit || hit->bo->system ? nullptr
+				   : hit->bo->pool_va      ? hit->bo->pool_va
+				   : hit->bo->bmd          ? hit->bo->bmd->getBytesNoCopy()
+							   : nullptr;
 		if (!base || bytes > budget) {
 			scanPush(c, p, whole, nullptr, 0);  // not read: no later push is stamped
 			continue;

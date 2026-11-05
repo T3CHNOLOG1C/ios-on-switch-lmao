@@ -360,6 +360,9 @@ public:
     // Whether write-combined buffers are on (RawMetal.mm turns them off at open when m2v cannot make its twin over one)
     bool wcOn() const { return wcOn_; }
     void setWc(bool on) { wcOn_ = on; }
+    // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
+    uint32_t wcChunksHeld();
+    uint64_t wcChunkBytesHeld();
     // How the pack's programs reached the heap at open: HeapByCpu (the kernel did not import the pack's pages), HeapByCopy (the
     // copy engine, and the bytes sampled after it match the pack), HeapCopyMismatch (they did not: copied on the CPU after all)
     enum HeapUpload : uint8_t { HeapByCpu, HeapByCopy, HeapCopyMismatch };
