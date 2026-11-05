@@ -610,6 +610,18 @@ impl Timing {
         self.from_host
     }
 
+    /// The device's latest calibration pair, however old, taken now only where there is none: a
+    /// commit's, on the program's thread. A reading is a round trip to the GPU's driver (on
+    /// DroidVM a request to the host, from WindowServer's main thread every 100 ms); the
+    /// completion thread refreshes the pair instead ([`pair`](Self::pair)), so the one a commit
+    /// takes is at most [`REFRESH`] and a command buffer's completion old.
+    pub(crate) fn kept_pair(&self) -> Option<Pair> {
+        if let Some((_, pair)) = *lock(&self.latest) {
+            return Some(pair);
+        }
+        self.pair()
+    }
+
     /// The device's latest calibration pair, taken now when the last is [`REFRESH`] old or
     /// there is none; `None` where the device has no calibration or the reading fails.
     pub(crate) fn pair(&self) -> Option<Pair> {

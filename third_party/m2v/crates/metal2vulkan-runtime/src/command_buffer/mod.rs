@@ -2401,7 +2401,7 @@ impl CommandBufferShared {
             Some(slot) => {
                 shared.counts.timestamp_slot_taken();
                 state.times.slot = Some(slot);
-                state.times.pair = timing.pair();
+                state.times.pair = timing.kept_pair();
             }
             None => state.times.stamped = Stamped::NoSlot,
         }

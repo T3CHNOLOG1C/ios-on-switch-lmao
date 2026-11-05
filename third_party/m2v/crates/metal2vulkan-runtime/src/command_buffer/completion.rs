@@ -292,6 +292,9 @@ fn run(watch: &Watch) {
                 buffer.read_stamps();
                 buffer.place_gpu_times();
             }
+            // The calibration pair the next commits take, refreshed here when old rather than at
+            // a commit (`Timing::kept_pair`).
+            device.shared().timing.pair();
         }
         drop(device);
         match settled {
