@@ -58,6 +58,7 @@ void tegra_display_suspend(void);
 void tegra_display_resume(void);
 void switch_joycon_suspend(void);
 void switch_joycon_resume(void);
+bool switch_display_power_enabled(void);  // SwitchBrightness
 }
 
 namespace {
@@ -101,7 +102,19 @@ unsigned bootArg(const char *name)
     PE_parse_boot_argn(name, &value, sizeof(value));
     return value;
 }
+// ArmCpu panics on a halt unless SC7 is on (armcpu_system_sleep_enable), so whenever it is not, a CPU assertion
+// keeps IOPMrootDomain from sleeping (checkSystemSleepAllowed: kPMCPUAssertion), idle and demand sleep alike.
+IOPMDriverAssertionID switch_suspend_hold(IOService *owner, const char *why)
+{
+    IOPMrootDomain *root = IOService::getPMRootDomain();
+    const IOPMDriverAssertionID id =
+        root ? root->createPMAssertion(kIOPMDriverAssertionCPUBit, kIOPMDriverAssertionLevelOn, owner, "SwitchSuspend")
+             : 0;
+    IOLog("SwitchSuspend: system sleep held off%s: %s\n", id ? "" : " (NO assertion: a sleep would panic)", why);
+    switch_power_journal("SwitchSuspend: system sleep held off: %s", why);
+    return id;
 }
+}  // namespace
 
 class SwitchSuspend : public IOService {
     OSDeclareDefaultStructors(SwitchSuspend) volatile uint8_t *pmc = nullptr, *apb = nullptr;
@@ -114,7 +127,7 @@ class SwitchSuspend : public IOService {
 
     uint32_t rd(uint32_t o) const { return *reinterpret_cast<volatile uint32_t *>(pmc + o); }
     void wr(uint32_t o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(pmc + o) = v; }
-    const char *missingSuspendPath() const;
+    static void missingSuspendPaths(char *list, size_t size);
     const char *checkPmc(char *why, size_t size);
     void sleepDevices();
     void quiesce();
@@ -129,26 +142,33 @@ public:
 
 OSDefineMetaClassAndStructors(SwitchSuspend, IOService)
 
-    // The first turned-on driver that cannot go through SC7 yet, or nullptr.
-    const char *SwitchSuspend::missingSuspendPath() const
+namespace {
+void appendName(char *list, size_t size, const char *name)
 {
+    const size_t used = strnlen(list, size);
+    if (used + 1 < size) snprintf(list + used, size - used, "%s%s", used ? ", " : "", name);
+}
+}  // namespace
+
+// The turned-on drivers that cannot go through SC7 yet, as a ", "-separated list (empty when there is none).
+void SwitchSuspend::missingSuspendPaths(char *list, size_t size)
+{
+    list[0] = 0;
     char mode[8] = "";
-    if (bootArg("switch-wlan")) return "switch-wlan (Wi-Fi has no suspend path)";
-    if (bootArg("switch-bt")) return "switch-bt (Bluetooth has no suspend path)";
-    if (bootArg("switch-audio")) return "switch-audio (audio has no suspend path)";
-    if (bootArg("tegra-gpu")) return "tegra-gpu (the GM20B driver has no suspend path)";
-    if (bootArg("switch-emc")) return "switch-emc (the BPMP EMC rate is not re-applied after SC7)";
-    if (PE_parse_boot_arg_str("switch-cpu-mode", mode, sizeof(mode)) && !strcmp(mode, "dfll")) {
-        return "switch-cpu-mode=dfll (the DFLL is not restored after SC7)";
-    }
-    if (bootArg("switch-usb-host") || bootArg("switch-dp")) return "USB-C host/DP (no suspend path)";
-    // TegraNVDEC is on unless switch-nvdec=0 (r11-nvdec). Its hooks exist (TegraHost1x.cpp tegra_nvdec_suspend /
-    // tegra_nvdec_resume: quiesce, host1x save/restore, falcon reload): to allow sleep with it, call them after the
-    // Joy-Con hooks in sleepDevices() and before them in wakeDevices(), and drop this line.
+    if (bootArg("switch-wlan")) appendName(list, size, "Wi-Fi");
+    if (bootArg("switch-bt")) appendName(list, size, "Bluetooth");
+    if (bootArg("switch-audio")) appendName(list, size, "audio");
+    if (bootArg("tegra-gpu")) appendName(list, size, "GM20B");
+    if (bootArg("switch-emc")) appendName(list, size, "EMC rate (BPMP)");
+    // SwitchThermal runs the CPU on the DFLL with switch-perf unless switch-cpu-mode=pll, and its sleep path leaves the
+    // DFLL for the rest of the boot.
+    const bool pllMode = PE_parse_boot_arg_str("switch-cpu-mode", mode, sizeof(mode)) && !strcmp(mode, "pll");
+    if (bootArg("switch-perf") && !pllMode) appendName(list, size, "DFLL");
+    if (bootArg("switch-usb-host") || bootArg("switch-dp")) appendName(list, size, "USB-C host/DP");
+    // TegraHost1x.cpp has tegra_nvdec_suspend/resume for every host1x engine; sleepDevices() does not call them yet.
     unsigned nvdec = 3;
     PE_parse_boot_argn("switch-nvdec", &nvdec, sizeof(nvdec));
-    if (nvdec || bootArg("switch-host1x")) return "TegraNVDEC/host1x (on unless switch-nvdec=0; hooks not wired yet)";
-    return nullptr;
+    if (nvdec || bootArg("switch-host1x")) appendName(list, size, "NVDEC/host1x");
 }
 
 // The power-request setup L4T's PMC probe makes (CPU and system-clock requests driven, core and system-clock requests
@@ -195,22 +215,21 @@ bool SwitchSuspend::start(IOService *provider)
     pmc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPagePA, 0x1000));
     apb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kApbMiscPA, 0x4000));
     setName("SwitchSuspend");
-    char why[160] = "";
+    char why[224] = "", missing[160] = "";
+    missingSuspendPaths(missing, sizeof(missing));
     const char *blocker = nullptr;
     if (!pmc || !apb) {
         blocker = "the PMC/APB_MISC could not be mapped";
-    } else if (!(blocker = missingSuspendPath()) && !(blocker = checkPmc(why, sizeof(why))) &&
-               armcpu_system_sleep_enable(why, sizeof(why))) {
+    } else if (!switch_display_power_enabled()) {
+        blocker = "display power is off (switch-sleep=0)";
+    } else if (missing[0]) {
+        snprintf(why, sizeof(why), "no SC7 path yet: %s", missing);
+        blocker = why;
+    } else if (!(blocker = checkPmc(why, sizeof(why))) && armcpu_system_sleep_enable(why, sizeof(why))) {
         blocker = why;
     }
     if (blocker) {
-        // IOPMrootDomain::checkSystemSleepAllowed: a CPU assertion keeps the system awake (idle and demand sleep).
-        IOPMrootDomain *root = getPMRootDomain();
-        if (root)
-            hold =
-                root->createPMAssertion(kIOPMDriverAssertionCPUBit, kIOPMDriverAssertionLevelOn, this, "SwitchSuspend");
-        IOLog("SwitchSuspend: system sleep held off: %s; the display still turns off (switch-sleep=1 behaviour)\n",
-              blocker);
+        hold = switch_suspend_hold(this, blocker);
         registerService();
         return true;
     }
@@ -222,6 +241,7 @@ bool SwitchSuspend::start(IOService *provider)
     setProperty("IOPlatformWakeAction", kActionPriority, 32);
     registerService();
     IOLog("SwitchSuspend: started (PSCI SYSTEM_SUSPEND to SC7, wake on the power key and the MAX77620 RTC)\n");
+    switch_power_journal("SwitchSuspend: system sleep on (SC7)");
     return true;
 }
 
@@ -353,17 +373,18 @@ void SwitchSuspend::wakeDevices()
 extern "C" int switch_suspend_start(void)
 {
     static SwitchSuspend *suspend;
-    if (suspend || bootArg("switch-sleep") != 2) return 0;
+    if (suspend) return 0;
     IOService *resources = IOService::getResourceService();
     SwitchSuspend *candidate = OSTypeAlloc(SwitchSuspend);
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources)) {
-        IOLog("SwitchSuspend: attach failed; system sleep stays off\n");
         OSSafeReleaseNULL(candidate);
+        if (resources) (void)switch_suspend_hold(resources, "SwitchSuspend could not attach");
         return 0;
     }
     if (!candidate->start(resources)) {
         candidate->detach(resources);
         candidate->release();
+        (void)switch_suspend_hold(resources, "SwitchSuspend did not start");
         return 0;
     }
     suspend = candidate;  // the attachment keeps it

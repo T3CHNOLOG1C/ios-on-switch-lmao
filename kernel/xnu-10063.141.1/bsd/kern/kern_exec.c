@@ -8223,8 +8223,7 @@ native_ioswitch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mou
 }
 
 /* The state a restored iPad has after Setup and data migration, plus no
- * SpringBoard watchdogs or idle sleep (no buttons or idle timer here yet).
- * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks.
+ * SpringBoard watchdogs. Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks.
  *
  * Each domain is written one of three ways: replacing the user's plist every boot (kSetupUser: domains whose every key is
  * ours), seeding it only when it is missing (kSetupOnce), or as a managed preference (kSetupManaged: /private/var/Managed
@@ -8255,7 +8254,10 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		{"com.apple.springboard", IOSW_PLIST("<key>BKNoWatchdogs</key><true/>"
 		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
 		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
-		    "<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><true/>"
+		    "<key>SBDontDimOrLockOnAC</key><true/>"
+		    /* Explicitly false: earlier boots wrote true into the user plist, which this managed key overrides.
+		     * True makes SpringBoard hold FrontBoard's PreventIdleSleep ("SBPowerDefaults") forever. */
+		    "<key>SBDisableIdleSleep</key><false/>"
 		    /* The 7" panel shows 1280x720 points at scale 1 (UIScreen.scale is an integer all the way down,
 		     * so no fractional zoom): large icons and the text size below keep things legible and crisp. */
 		    "<key>SBHomeLargeIcons</key><true/>"

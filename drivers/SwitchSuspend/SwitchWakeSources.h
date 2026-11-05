@@ -6,8 +6,7 @@
 //
 // Sleep, as this port has it (r15):
 //   * Display power (the lock): backboardd's render server asks for the panel off (lock button, auto-lock) and on
-//     (SwitchBacklight). The system stays up: no IOPMrootDomain sleep (ADT /defaults sleep-disabled, SwitchSuspend is
-//     inert unless switch-sleep=2), so every interrupt still reaches the CPU and nothing needs to be armed. A wake is
+//     (SwitchBacklight). Until IOPMrootDomain sleeps (SwitchSuspend), every interrupt still reaches the CPU. A wake is
 //     SpringBoard turning the panel on again because of an input event: the power key (Consumer Power), or the Home
 //     button (Consumer Menu, J120's own Home button: one press wakes and goes home).
 //   * The wake sources with the panel off, each of which ends in one of those two events:
@@ -28,7 +27,7 @@
 //     in /private/var/ioswitch/wake-<UTC>.kcdata), so a hung SpringBoard or backboardd shows as a frozen screen, not as
 //     a Switch that will not wake, and the stackshot says where they are stuck. Holding POWER 6 s is the PMIC's own
 //     power-off (hekate sets ONOFFCNFG1 MRT), whatever the kernel does.
-//   * System sleep (SwitchSuspend, switch-sleep=2, SC7) arms the PMC wake events in switch_wake_pmc_events.
+//   * System sleep (SwitchSuspend, SC7) arms the PMC wake events in switch_wake_pmc_events.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>

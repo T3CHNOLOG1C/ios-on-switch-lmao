@@ -125,9 +125,9 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
         put(chosen, key, u32(0))
     for key in ('certificate-security-mode', 'effective-security-mode-sep'):
         put(chosen, key, u32(1))
-    # System sleep only with SwitchSuspend (switch-sleep=2: PSCI SYSTEM_SUSPEND to SC7); otherwise IOPMrootDomain
-    # never sleeps (gSleepDisabledFlag), since ArmCpu has no other way to stop a core.
-    put(child(tree, 'defaults'), 'sleep-disabled', u32(0 if 'switch-sleep=2' in command_line.split() else 1))
+    # IOPMrootDomain reads this at boot complete (gSleepDisabledFlag) and refuses every sleep while it is 1. Whether
+    # the console may sleep is SwitchSuspend's call at runtime (a CPU power assertion while it cannot).
+    put(child(tree, 'defaults'), 'sleep-disabled', u32(0))
     product = child(tree, 'product')
     for key, value in (('product-name', b'iPad Pro (12.9-inch) (2nd generation)\0'),
                        ('product-description', b'iPad Pro (12.9-inch) (2nd generation)\0'),

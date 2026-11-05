@@ -85,7 +85,7 @@ class ArmGIC : public IOInterruptController {
     uintptr_t dist = 0, lic = 0;
     uint32_t intids = 0;      // INTIDs the distributor implements: 32 * (GICD_TYPER.ITLinesNumber + 1), < 1020
     uint8_t cpu0Target = 0;   // CPU interface mask of logical CPU 0
-    bool steerFrame = false;  // frame SPIs go to the last running core (off when system sleep may stop that core)
+    bool steerFrame = false;  // frame SPIs go to the last running core
     uint32_t steerPending[kMaxIntid / 32 + 1] = {};  // frame SPIs made before any secondary core took SPIs
     uint32_t edge[kMaxIntid / 32 + 1] = {};          // trigger of each INTID, fixed when its nub is made
     uint32_t *fired = nullptr;                       // handled interrupts per INTID, for panic messages
@@ -245,11 +245,10 @@ const char *ArmGIC::setup()
     intids = ((typer & 31) + 1) * 32;
     if (intids > kMaxIntid) intids = kMaxIntid;
     cpu0Target = static_cast<uint8_t>(armcpu_gic_targets[0]);
-    // System sleep (switch-sleep=2) stops the secondaries before the boot CPU and restarts them after it, with the
-    // display and GPU lines restored in between: keep every SPI on CPU0 then.
-    unsigned sleepMode = 0;
-    PE_parse_boot_argn("switch-sleep", &sleepMode, sizeof(sleepMode));
-    steerFrame = sleepMode != 2;
+    // Frame lines stay on their core across system sleep: the display suspends in the first sleep action, before
+    // IOCPUSleepKernel stops any core, and resumes in a wake action, after every core is back; a line that pends
+    // while its core is off waits in the distributor.
+    steerFrame = true;
     vectors = IONewZero(IOInterruptVector, intids);
     nubs = IONewZero(IOService *, intids);
     fired = IONewZero(uint32_t, intids);

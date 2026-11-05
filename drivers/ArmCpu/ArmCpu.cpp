@@ -1387,7 +1387,7 @@ void ArmCpu::quiesceCPU(void)
 {
     __atomic_fetch_add(&armcpu_quiesce_calls, 1U, __ATOMIC_RELAXED);
     if (!gSystemSleep || !gicV2) {
-        panic("ArmCpu: CPU%u quiesce for system sleep, but sleep is not enabled (switch-sleep=2, SwitchSuspend)",
+        panic("ArmCpu: CPU%u quiesce for system sleep, but SwitchSuspend did not enable SC7",
               logicalId);
     }
     if (!secondary) {
@@ -1413,7 +1413,7 @@ void ArmCpu::haltCPU(void)
 {
     __atomic_fetch_add(&armcpu_halt_calls, 1U, __ATOMIC_RELAXED);
     if (!gSystemSleep) {
-        panic("ArmCpu: CPU%u halt requested, but system sleep is not enabled (switch-sleep=2, SwitchSuspend)",
+        panic("ArmCpu: CPU%u halt requested, but SwitchSuspend did not enable SC7",
               logicalId);
     }
     const kern_return_t result = processor_exit(machProcessor);

@@ -152,7 +152,7 @@ extern int tegra_vic_probe(void);        /* on by default; own thread, waits for
 extern int tegra_nvjpg_probe(void);      /* on by default; own thread, waits for NVDEC's bring-up to end */
 extern int
 ioswitch_audio_publish(void); /* null sink unless switch-audio=1|3; the Tegra backend sleeps on I2C1, PZ4 and the GIC */
-extern int switch_suspend_start(void); /* no-op unless switch-sleep=2; after every board driver it suspends */
+extern int switch_suspend_start(void); /* after every board driver it suspends */
 extern int switch_usb_start(void); /* no-op without the ADT's /arm-io/usb-device; runs its bring-up on its own thread */
 extern int ioswitch_watchdog_publish(void); /* the IOWatchdog launchd starts watchdogd for (NativeIOSwitchWatchdog) */
 extern int tegra_se_start(void);            /* SE2: known answers, kernel PRNG reseed, a timing run later; own thread */

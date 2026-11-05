@@ -7,7 +7,7 @@
 //                       still published (CoreBrightness finds its display) and records what it is asked for.
 //   switch-sleep        display power, ON unless switch-sleep=0: the render server's power requests (lock, auto-lock,
 //                       wake) turn the panel and the touch controller off and on and stop and restart the display
-//                       controller's scanout. switch-sleep=2 adds system sleep (drivers/SwitchSuspend).
+//                       controller's scanout. System sleep (drivers/SwitchSuspend) needs it.
 //   switch-als=0        no ambient light sensor. By default the BH1730FVC is CoreBrightness's ALS (HID service
 //                       0xff00/0x0004), clocked by display controller A's frame ends (SwitchALS.cpp).
 #ifndef SWITCH_BRIGHTNESS_H

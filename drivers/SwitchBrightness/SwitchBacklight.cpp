@@ -196,8 +196,8 @@ uint64_t msSince(uint64_t start)
 }
 }  // namespace
 
-// Display power is on unless switch-sleep=0 (switch-sleep=2, system sleep, needs it too). NativeLegacyDisplay and the
-// display probe ask the same.
+// Display power is on unless switch-sleep=0 (system sleep needs it too). NativeLegacyDisplay, the display probe and
+// SwitchSuspend ask the same.
 extern "C" bool switch_display_power_enabled(void)
 {
     unsigned value = 1;

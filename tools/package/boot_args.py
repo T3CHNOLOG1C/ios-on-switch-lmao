@@ -82,7 +82,7 @@ COMMAND_LINE = ' '.join([
     # launchd disabled.plist. Never booted before. With it the smp line is 1023/1023 bytes.
     'switch-bt=1',
     # + display: CoreBrightness's slider to the panel (DCS 0x51), panel off/on with the render server's power requests
-    # (display power only; system sleep is switch-sleep=2), and the BH1730 ambient light sensor (drivers/SwitchBrightness).
+    # (display power), and the BH1730 ambient light sensor (drivers/SwitchBrightness).
     # 10-30 19:50: with these three (+ Metal) the boot hung before launchd (no log); off until tested one at a time.
     # 'switch-backlight=1', 'switch-sleep=1', 'switch-als=1',
     # 11-04 r10-sleep: display power (lock turns the panel, the DC scanout and the touch controller off) is on by default

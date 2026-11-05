@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// System sleep (SC7) for iPadOS on the Switch OLED (T210B01), boot-arg switch-sleep=2. Display power (panel, scanout and
-// touch off/on through SwitchBrightness and the NativeLegacyDisplay selector-12 wrap) is on unless switch-sleep=0; =2 adds
-// this driver on top of it.
+// System sleep (SC7) for iPadOS on the Switch OLED (T210B01). It needs display power (panel, scanout and touch off/on
+// through SwitchBrightness and the NativeLegacyDisplay selector-12 wrap; off only with switch-sleep=0).
 //
 // How sleep happens (all stock XNU, iokit/Kernel/IOPMrootDomain.cpp, IOCPU.cpp, osfmk/kern/machine.c, arm64/cpu.c):
 //   powerd's idle-sleep policy (no user activity, display off, no PreventUserIdleSystemSleep assertions) makes
@@ -12,7 +11,8 @@
 //   Wake: PMC wake event -> bootrom -> warmboot (hekate's sc7exit_b01.bin) -> ATF -> ioswitch_secondary_entry
 //   (EL2 -> EL1) -> XNU reset vector -> start_cpu -> arm_init_cpu -> ArmCpu::initCPU(false) -> back in
 //   IOCPUSleepKernel, which CPU_ONs the secondaries and runs the platform wake actions.
-//   The ADT's /defaults sleep-disabled must be 0 (scripts/package_raw_boot.py writes 1 unless switch-sleep=2).
+//   The ADT's /defaults sleep-disabled is 0 (tools/package/adt_edit.py); while sleep cannot be taken this driver
+//   holds a CPU power assertion instead (kPMCPUAssertion), since ArmCpu panics on a halt without SC7.
 //
 // Order (one driver here runs every step, so the order is this list; each hook is <driver>_suspend/_resume):
 //   sleep action, thread context, interrupts on, secondaries still running:
@@ -47,8 +47,8 @@
 extern "C" {
 #endif
 
-// Board thread, after the board drivers have started. Returns 0, also when switch-sleep is not 2 (then it does
-// nothing) or when sleep has to stay off (one log line says why); never panics at start.
+// Board thread, after the board drivers have started. Returns 0, also when sleep has to stay off (one log line and one
+// power-journal line list every reason); never panics at start.
 int switch_suspend_start(void);
 
 #ifdef __cplusplus
