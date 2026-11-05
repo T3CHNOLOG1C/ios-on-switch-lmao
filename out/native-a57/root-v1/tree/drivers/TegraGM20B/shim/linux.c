@@ -708,7 +708,7 @@ static DEFINE_SPINLOCK(pool_lock);
 
 int nvxnu_pool_setup(void)
 {
-	int ret = nvxnu_pool_init();
+	int zeroed = 0, ret = nvxnu_pool_init(&zeroed);
 	if (ret)
 		return ret;
 	pool_npages = nvxnu_pool_size() >> PAGE_SHIFT;
@@ -719,7 +719,23 @@ int nvxnu_pool_setup(void)
 		return -ENOMEM;
 	for (unsigned long i = 0; i < pool_npages; i++)
 		pool_pages[i].pa = nvxnu_pool_base_pa() + (i << PAGE_SHIFT);
+	/* nothing zeroed them yet: the GPU's scrubber will (gpu.c "pool scrub") */
+	if (!zeroed)
+		bitmap_set(pool_dirty, 0, pool_npages);
 	return 0;
+}
+
+/* Zero the pages of [first, first + n) a free left dirty (all of them with `all`), then mark the range clean: what every
+ * allocation does, so a page is zero when handed out whether the CPU or the GPU (the scrubber) zeroed it. */
+static void pool_zero_dirty(unsigned long first, unsigned long n, int all)
+{
+	unsigned long k;
+	for (k = 0; k < n; k++)
+		if (all || test_bit(first + k, pool_dirty))
+			memset(page_address(&pool_pages[first + k]), 0, PAGE_SIZE);
+	spin_lock(&pool_lock);
+	bitmap_clear(pool_dirty, first, n);
+	spin_unlock(&pool_lock);
 }
 
 static long pool_alloc(unsigned long n, unsigned long align)
@@ -769,8 +785,8 @@ struct page *alloc_pages(gfp_t gfp, unsigned int order)
 	long i = pool_map ? pool_alloc(1UL << order, 1UL << order) : -ENOMEM;
 	if (i < 0)
 		return NULL;
-	if (gfp & __GFP_ZERO)
-		memset(page_address(&pool_pages[i]), 0, PAGE_SIZE << order);
+	/* zeroed whatever the flags: before the scrubber, the pool's initial clear gave every caller zeros */
+	pool_zero_dirty(i, 1UL << order, 0);
 	return &pool_pages[i];
 }
 
@@ -817,7 +833,7 @@ void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *handle, gfp_t
 	if (i < 0)
 		return NULL;
 	*handle = pool_pages[i].pa;
-	memset(page_address(&pool_pages[i]), 0, n << PAGE_SHIFT);
+	pool_zero_dirty(i, n, 0);
 	return page_address(&pool_pages[i]);
 }
 
@@ -836,18 +852,53 @@ void dma_free_attrs(struct device *dev, size_t size, void *va, dma_addr_t handle
  * range nvxnu_pool_free_zeroed gave back costs nothing to hand out again. Zeroed memory either way, as before. */
 void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long long *pa)
 {
-	unsigned long n = PAGE_ALIGN(size) >> PAGE_SHIFT, k;
+	unsigned long n = PAGE_ALIGN(size) >> PAGE_SHIFT;
 	long i = pool_map ? pool_alloc(n, 1) : -ENOMEM;
 	if (i < 0)
 		return NULL;
-	for (k = 0; k < n; k++)
-		if (test_bit(i + k, pool_dirty))
-			memset(page_address(&pool_pages[i + k]), 0, PAGE_SIZE);
-	spin_lock(&pool_lock);
-	bitmap_clear(pool_dirty, i, n);
-	spin_unlock(&pool_lock);
+	pool_zero_dirty(i, n, 0);
 	*pa = pool_pages[i].pa;
 	return page_address(&pool_pages[i]);
+}
+
+unsigned long nvxnu_pool_claim_dirty(unsigned long max_bytes, unsigned long long *pa)
+{
+	unsigned long first = 0, n = 0, max = max_bytes >> PAGE_SHIFT, w, bits;
+	if (!pool_map || !max)
+		return 0;
+	spin_lock(&pool_lock);
+	/* the first free dirty page, a word of the two bitmaps at a time */
+	for (w = 0; w < BITS_TO_LONGS(pool_npages); w++) {
+		bits = pool_dirty[w] & ~pool_map[w];
+		if (bits) {
+			first = w * BITS_PER_LONG + __builtin_ctzl(bits);
+			break;
+		}
+	}
+	if (w < BITS_TO_LONGS(pool_npages) && first < pool_npages) {
+		while (n < max && first + n < pool_npages && test_bit(first + n, pool_dirty) &&
+		       !test_bit(first + n, pool_map))
+			n++;
+		bitmap_set(pool_map, first, n);
+		pool_used += n;
+	}
+	spin_unlock(&pool_lock);
+	if (!n)
+		return 0;
+	*pa = pool_pages[first].pa;
+	return n << PAGE_SHIFT;
+}
+
+unsigned long nvxnu_pool_dirty_free_pages(void)
+{
+	unsigned long w, n = 0;
+	if (!pool_map)
+		return 0;
+	spin_lock(&pool_lock);
+	for (w = 0; w < BITS_TO_LONGS(pool_npages); w++)
+		n += __builtin_popcountl(pool_dirty[w] & ~pool_map[w]);
+	spin_unlock(&pool_lock);
+	return n;
 }
 
 /* A range the caller zeroed (and made visible: the pool is write-combined) goes back clean. */

@@ -1096,6 +1096,11 @@ unsigned long nvxnu_pool_used_pages(void);
  * goes back clean. */
 void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long long *pa);
 void nvxnu_pool_free_zeroed(unsigned long long pa, unsigned long size);
+/* The GPU scrubber's (gpu.c "pool scrub"): the first run of free pages not known to be zero, at most max_bytes, claimed
+ * (allocated) for the copy engine to zero and nvxnu_pool_free_zeroed to give back; its bytes, 0 when none is left. And
+ * how many free pages are not known to be zero. */
+unsigned long nvxnu_pool_claim_dirty(unsigned long max_bytes, unsigned long long *pa);
+unsigned long nvxnu_pool_dirty_free_pages(void);
 struct page *alloc_page(gfp_t gfp);
 struct page *alloc_pages(gfp_t gfp, unsigned int order);
 void __free_page(struct page *p);

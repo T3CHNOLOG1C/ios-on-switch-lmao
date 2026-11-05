@@ -214,7 +214,7 @@
         "bzlTransitiveDigest": "1p3iB4v14u1f2irtUPbwnYtFfKYxCjewg8UD2XJrIEw=",
         "usagesDigest": "bfFdfO1EKlphHXkGdolkTW4gIC6FbU/48n6GLz1cKtk=",
         "recordedInputs": [
-          "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series 2cf7de4384af509d889833f3c854c30a28e699e089f25d43ff41ef6c558f56d0"
+          "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series bc9550063f9e9e61d78a704094931360ddf910c90adc200a62f40d0076e84d2e"
         ],
         "generatedRepoSpecs": {
           "m2v": {
@@ -282,7 +282,8 @@
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0116-host-reads-and-texel-copy-routes.patch",
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0117-listener-user-interactive.patch",
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0118-making-log.patch",
-                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0119-bounded-slot-wait.patch"
+                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0119-bounded-slot-wait.patch",
+                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0120-attachment-pass-barriers.patch"
               ]
             }
           },

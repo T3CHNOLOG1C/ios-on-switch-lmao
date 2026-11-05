@@ -72,6 +72,10 @@ uint64_t tgm_pool_avail(void);
 /* Zero a pool BO's range (write-combined; off any client's thread) and give it back clean, so the next tgm_pool_alloc of
  * those pages does no memset. tgm_pool_free gives a range back as it is. */
 void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa);
+/* Give a freed pool range back zeroed by the GPU's copy engine (gpu.c "pool scrub"), without the CPU waiting: 0 if queued
+ * (the range comes back clean once the copy engine's fence passes), else (no scrubber, its queue full, or not a pool
+ * range) the caller zeroes it. */
+int tgm_pool_scrub(uint64_t pa, uint64_t bytes);
 void tgm_chan_del(struct tgm_chan **pchan);
 struct tgm_push {
 	uint64_t va;

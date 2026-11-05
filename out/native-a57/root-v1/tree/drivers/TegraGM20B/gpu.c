@@ -594,9 +594,13 @@ void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)
 	nvxnu_pool_free_zeroed(pa, bytes);
 }
 
+static void scrub_kick(void);
+
+/* Back dirty: the scrubber zeroes it on the GPU (see "pool scrub") unless an allocation takes it first and zeroes it. */
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa)
 {
 	dma_free_attrs(&gpu_pdev.dev, bytes, va, pa, 0);
+	scrub_kick();
 }
 
 uint64_t tgm_pool_avail(void)
@@ -941,7 +945,7 @@ struct tgm_chan {
 	u32 error;
 	u32 chid;
 	int nobj;
-	int kernel; /* the present channel: no client waits on it, the present does not wait for it */
+	int kernel; /* a kernel channel, no client waits on it and the present does not wait for it: CHAN_PRESENT, CHAN_SCRUB */
 	int critical; /* a GPU error on it panics even with tegra-gpu-all-clients (compositor, kernel) */
 	int isolating; /* client fault isolation: its error was taken as its own, the kill is under way */
 	struct list_head live; /* live_chans, for tegra_gm20b_sync_for_cpu */
@@ -971,6 +975,9 @@ struct tgm_chan {
 	struct tgm_order order[TGM_ORDER_MAX];
 	struct tgm_order waited;
 };
+
+#define CHAN_PRESENT 1 /* the GPU present's channel */
+#define CHAN_SCRUB 2   /* the pool scrubber's */
 
 /* Every user channel, so a CPU reader outside the GPU client can wait for all GPU work (tegra_gm20b_sync_for_cpu). */
 static LIST_HEAD(live_chans);
@@ -1854,6 +1861,7 @@ static void stats_fences(struct tgm_chan *chan)
 }
 
 static void present_stats(u32 *presents, u64 *sum, u64 *max);
+static void scrub_stats(char *buf, unsigned int len, u64 window_ms);
 
 /* The stats line's GPU clock, every window: the rate the GPCPLL is programmed for (nvkm_clk_read: its M/N/PL registers),
  * whether the GPU runs from it (SEL_VCO bit 0, GPC2CLK_OUT's bypass divider 0 = 1:1), and the rate GPC 0's clock
@@ -2000,7 +2008,7 @@ static void stats_tick(void)
 		mc_err, mc_adr, copies, gaps;
 	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, l2s, l2m, busy;
 	u32 l2n;
-	char line[640], clk[120];
+	char line[640], clk[120], scrubbed[120];
 
 	__atomic_fetch_add(&stats.submits, 1, __ATOMIC_RELAXED);
 	if (!since) {
@@ -2054,6 +2062,7 @@ static void stats_tick(void)
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
 	clk_measure(clk, sizeof(clk));
+	scrub_stats(scrubbed, sizeof(scrubbed), ms);
 	/* formatted here and logged as one string: os_log drops a message whose scalar arguments outgrow its 256-byte buffer
 	 * (libkern/os/log.h OS_LOG_BUFFER_MAX_SIZE), which a string argument does not count against */
 	scnprintf(line, sizeof(line),
@@ -2077,7 +2086,8 @@ static void stats_tick(void)
 		"(%u); "
 		"order %s: %u submits behind a copy, %u offers idle (%u then a submit); %u imports "
 		"(%llu/s), %lld KiB live in "
-		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB (compositor %llu), MC %08x "
+		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB (compositor %llu), %s, MC "
+		"%08x "
 		"err "
 		"%08x at %08x",
 		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
@@ -2087,7 +2097,8 @@ static void stats_tick(void)
 		(long long)(__atomic_load_n(&stats.live_bytes, __ATOMIC_RELAXED) >> 10),
 		__atomic_load_n(&stats.live, __ATOMIC_RELAXED), allocs, abytes >> 10, ans / 1000,
 		nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20,
-		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, mc_int, mc_err, mc_adr);
+		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, scrubbed, mc_int, mc_err,
+		mc_adr);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
 	stats_exec_owners(line, sizeof(line), rate);
 	stats_mem(ms);
@@ -2452,6 +2463,7 @@ static void idle_start(void)
 
 /* nouveau_fence_wait_uevent_handler(): a fence's NON_STALL_INTERRUPT arrived; wake the fence waiters. */
 static void present_fenced(struct tgm_chan *chan);
+static void scrub_fenced(struct tgm_chan *chan);
 
 static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 {
@@ -2459,6 +2471,10 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	(void)repv;
 	(void)repc;
 	idle_fenced(chan);
+	if (chan->kernel == CHAN_SCRUB) {
+		scrub_fenced(chan);
+		return NVIF_EVENT_KEEP; /* nobody sleeps on its fence: no wake */
+	}
 	if (stats_on())
 		stats_fences(chan);
 	if (chan->kernel)
@@ -3407,7 +3423,7 @@ int tgm_present_open(struct tgm_vm **pvm)
 		ret = tgm_chan_new(present.vm, present.fence, present.fence_gpu, "present", 1,
 				   &present.chan);
 	if (!ret) {
-		present.chan->kernel = 1;
+		present.chan->kernel = CHAN_PRESENT;
 	} else {
 		/* stays unusable: every offer is refused and the display copies with the CPU */
 		nvxnu_log("tegra-gm20b: GPU present unavailable: %d\n", ret);
@@ -3552,6 +3568,281 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t
 		__atomic_fetch_add(&stats.idle, 1, __ATOMIC_RELAXED);
 	mutex_unlock(&present.lock);
 	return 0;
+}
+
+/* ------------------------------------------------------------------ pool scrub: the copy engine zeroes pool pages
+ * The pool used to be zeroed by the CPU at M1 (256 MiB through the write-combined aperture: 0.3 s of every boot) and
+ * a client's freed pool BO by a thread call's memset (spareWork, 4.5 ms per 16 MiB). Now its pages start dirty (shim
+ * nvxnu_pool_init) and the GPU zeroes them: a kernel channel (CHAN_SCRUB) in an address space of its own, which maps
+ * the whole pool once (volatile, at scrub.pool_va), runs MAXWELL_DMA_COPY_A fills of remapped constant 0 (as Mesa's
+ * nvk_cmd_fill_memory_ce and M3), each range followed by the kernel fence (chan_fence: WFI, FB flush, L2 flush of
+ * dirty lines, then the semaphore release and the nonstall interrupt), so the zeros are in DRAM before the range goes
+ * back clean (nvxnu_pool_free_zeroed) from that interrupt's pass. Nothing waits for it on the CPU: until then a range is
+ * the scrubber's (allocated), and an allocation takes other pages, zeroing on the CPU only those a free left dirty.
+ *  - Boot: once M3 passed, the scrubber's work item claims the free dirty pages (shim nvxnu_pool_claim_dirty) a run of at
+ *    most SCRUB_CHUNK at a time, with at most SCRUB_INFLIGHT bytes queued, and claims more as ranges complete, so it
+ *    never holds more than that of the pool from an allocation.
+ *  - A freed pool BO (TegraGM20BUserClient.cpp poolZeroLater): tgm_pool_scrub queues its range.
+ * The CPU has no cacheable view of the pool, so the zeros need no cache maintenance. A range not back SCRUB_NS after it
+ * was queued panics with one line, as a present does: its nonstall interrupt never came, or the copy never ran. */
+#define SCRUB_JOBS 64
+#define SCRUB_CHUNK (16UL << 20)
+#define SCRUB_INFLIGHT (48UL << 20)
+#define SCRUB_NS (1000 * NSEC_PER_MSEC)
+#define SCRUB_LINE \
+	(128U << 10) /* bytes per line of a fill: 32768 four-byte elements, Mesa's max_dim */
+
+static struct {
+	struct mutex lock; /* submissions: the ring's head, the channel's push buffer */
+	struct tgm_vm *vm;
+	struct tgm_chan *chan;
+	struct tgm_mem *pool_mem, *fence_mem;
+	u64 *pool_pas;
+	u64 pool_va, fence_gpu, fence_pa;
+	volatile u32 *fence;
+	void *work, *deadline;
+	struct {
+		u64 pa, bytes, queued;
+		u32 seqno;
+	} job[SCRUB_JOBS];
+	u32 head,
+		tail; /* job[tail % SCRUB_JOBS .. head) queued; head moves under lock, tail in scrub_fenced only */
+	u64 inflight;  /* bytes queued (atomic) */
+	int boot_done; /* the boot scrub found nothing left to claim */
+	u64 boot_start, boot_bytes;
+	/* tegra-gpu-stats: this window's ranges zeroed, their bytes and queue-to-done time (ns) */
+	u64 n, bytes, ns, max_ns;
+} scrub = {.lock = {NULL}};
+
+/* One range: copy-engine fills, then the fence. Under scrub.lock, with a free job slot. 0 or a push error. */
+static int scrub_submit(u64 pa, u64 bytes)
+{
+	struct tgm_chan *chan = scrub.chan;
+	struct nvif_push *push = &chan->chan.push;
+	u64 va = scrub.pool_va + (pa - nvxnu_pool_base_pa()), lines = bytes / SCRUB_LINE,
+	    rest = bytes % SCRUB_LINE;
+	u32 slot, seqno;
+	int ret = nvif_chan_gpfifo_wait(&chan->chan, 4, 32 + CHAN_FENCE_DWORDS);
+
+	if (ret)
+		return ret;
+	PUSH_MTHD(push, NVA0B5, SET_REMAP_CONST_A, 0);
+	PUSH_MTHD(push, NVA0B5, SET_REMAP_COMPONENTS,
+		  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, DST_X, CONST_A) |
+			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, COMPONENT_SIZE, FOUR) |
+			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_SRC_COMPONENTS, ONE) |
+			  NVDEF(NVA0B5, SET_REMAP_COMPONENTS, NUM_DST_COMPONENTS, ONE));
+	PUSH_MTHD(push, NVA0B5, PITCH_IN, SCRUB_LINE, PITCH_OUT, SCRUB_LINE);
+	if (lines) { /* whole 128 KiB lines, one multi-line fill */
+		PUSH_MTHD(push, NVA0B5, OFFSET_OUT_UPPER, upper_32_bits(va), OFFSET_OUT_LOWER,
+			  lower_32_bits(va));
+		PUSH_MTHD(push, NVA0B5, LINE_LENGTH_IN, SCRUB_LINE / 4, LINE_COUNT, (u32)lines);
+		PUSH_MTHD(push, NVA0B5, LAUNCH_DMA,
+			  NVDEF(NVA0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, NON_PIPELINED) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, SRC_MEMORY_LAYOUT, PITCH) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, MULTI_LINE_ENABLE, TRUE) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, REMAP_ENABLE, TRUE));
+	}
+	if (rest) { /* the last pages, one line (a multiple of 4 KiB) */
+		va += lines * SCRUB_LINE;
+		PUSH_MTHD(push, NVA0B5, OFFSET_OUT_UPPER, upper_32_bits(va), OFFSET_OUT_LOWER,
+			  lower_32_bits(va));
+		PUSH_MTHD(push, NVA0B5, LINE_LENGTH_IN, (u32)(rest / 4), LINE_COUNT, 1);
+		PUSH_MTHD(push, NVA0B5, LAUNCH_DMA,
+			  NVDEF(NVA0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, NON_PIPELINED) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, SRC_MEMORY_LAYOUT, PITCH) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
+				  NVDEF(NVA0B5, LAUNCH_DMA, REMAP_ENABLE, TRUE));
+	}
+	slot = scrub.head % SCRUB_JOBS;
+	scrub.job[slot].pa = pa;
+	scrub.job[slot].bytes = bytes;
+	scrub.job[slot].queued = nvxnu_nanotime();
+	scrub.job[slot].seqno = seqno = chan->submitted + 1;
+	__atomic_fetch_add(&scrub.inflight, bytes, __ATOMIC_RELAXED);
+	/* the job is visible to scrub_fenced before its fence can complete */
+	__atomic_store_n(&scrub.head, scrub.head + 1, __ATOMIC_RELEASE);
+	if (chan_fence(chan) != seqno)
+		nvxnu_panic("tegra-gm20b: pool scrub fence %u is not the job's %u", chan->submitted,
+			    seqno);
+	nvxnu_work_schedule_after(scrub.deadline, SCRUB_NS);
+	return 0;
+}
+
+/* Room for one more range: a free job slot (the boot's claims also keep to SCRUB_INFLIGHT). Under scrub.lock. */
+static int scrub_room(void)
+{
+	return scrub.head - __atomic_load_n(&scrub.tail, __ATOMIC_ACQUIRE) < SCRUB_JOBS;
+}
+
+/* The work item: claim and queue the free pages not known to be zero, as long as there is room (see above). */
+static void scrub_work(void *arg)
+{
+	u64 pa;
+	unsigned long bytes;
+	(void)arg;
+	mutex_lock(&scrub.lock);
+	while (scrub.chan && !READ_ONCE(scrub.chan->error) && scrub_room() &&
+	       __atomic_load_n(&scrub.inflight, __ATOMIC_RELAXED) + SCRUB_CHUNK <= SCRUB_INFLIGHT) {
+		bytes = nvxnu_pool_claim_dirty(SCRUB_CHUNK, (unsigned long long *)&pa);
+		if (!bytes) {
+			if (!scrub.boot_done) {
+				scrub.boot_done = 1;
+				nvxnu_log("tegra-gm20b: pool scrub: %llu MiB queued to the copy "
+					  "engine %llu ms after M3 (the CPU cleared it at M1 "
+					  "before)\n",
+					  scrub.boot_bytes >> 20,
+					  (nvxnu_nanotime() - scrub.boot_start) / NSEC_PER_MSEC);
+			}
+			break;
+		}
+		if (scrub_submit(pa, bytes)) {
+			/* back as it was, dirty (the CPU zeroes it if taken), without kicking this work again */
+			dma_free_attrs(&gpu_pdev.dev, bytes, NULL, pa, 0);
+			break;
+		}
+		if (!scrub.boot_done)
+			scrub.boot_bytes += bytes;
+	}
+	mutex_unlock(&scrub.lock);
+}
+
+/* Pages went back dirty: the work item claims and queues them (any context; nothing before the scrubber is up). */
+static void scrub_kick(void)
+{
+	if (READ_ONCE(scrub.chan))
+		nvxnu_work_schedule(scrub.work);
+}
+
+/* From the scrub channel's nonstall interrupt: every range whose fence passed goes back clean; then more claims. */
+static void scrub_fenced(struct tgm_chan *chan)
+{
+	u32 done = tgm_chan_completed(chan), tail = scrub.tail,
+	    head = __atomic_load_n(&scrub.head, __ATOMIC_ACQUIRE);
+	u64 now = nvxnu_nanotime(), took;
+	int freed = 0;
+
+	while (tail != head && (s32)(done - scrub.job[tail % SCRUB_JOBS].seqno) >= 0) {
+		u32 slot = tail % SCRUB_JOBS;
+		nvxnu_pool_free_zeroed(scrub.job[slot].pa, scrub.job[slot].bytes);
+		__atomic_fetch_sub(&scrub.inflight, scrub.job[slot].bytes, __ATOMIC_RELAXED);
+		took = now - scrub.job[slot].queued;
+		__atomic_fetch_add(&scrub.n, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&scrub.bytes, scrub.job[slot].bytes, __ATOMIC_RELAXED);
+		stats_add(&scrub.ns, &scrub.max_ns, took);
+		__atomic_store_n(&scrub.tail, ++tail, __ATOMIC_RELEASE);
+		freed = 1;
+	}
+	if (tail == head)
+		nvxnu_work_cancel(scrub.deadline);
+	if (freed && nvxnu_pool_dirty_free_pages())
+		nvxnu_work_schedule(scrub.work);
+}
+
+/* A range not back SCRUB_NS after it was queued: one line and a panic. */
+static void scrub_deadline(void *arg)
+{
+	u32 tail = __atomic_load_n(&scrub.tail, __ATOMIC_ACQUIRE),
+	    head = __atomic_load_n(&scrub.head, __ATOMIC_ACQUIRE), slot = tail % SCRUB_JOBS;
+	u64 age;
+	char state[320];
+
+	(void)arg;
+	if (tail == head)
+		return;
+	age = nvxnu_nanotime() - scrub.job[slot].queued;
+	if (age < SCRUB_NS) {
+		nvxnu_work_schedule_after(scrub.deadline, SCRUB_NS - age);
+		return;
+	}
+	if ((s32)(tgm_chan_completed(scrub.chan) - scrub.job[slot].seqno) >= 0)
+		nvxnu_panic(
+			"tegra-gm20b: pool scrub fence %u complete after %llu ms but its nonstall "
+			"interrupt never came",
+			scrub.job[slot].seqno, age / 1000000);
+	chan_describe(scrub.chan, state, sizeof(state));
+	nvxnu_panic("tegra-gm20b: pool scrub of %llu KiB at %#llx not done %llu ms after it was "
+		    "queued: scrub %s",
+		    scrub.job[slot].bytes >> 10, scrub.job[slot].pa, age / 1000000, state);
+}
+
+/* After M3: the scrubber's address space (the whole pool mapped once), fence page and channel; then the boot scrub. One
+ * line and no scrubber if any of it fails: pool pages are then zeroed by the CPU as they are taken. */
+static void scrub_open(void)
+{
+	u64 npages = nvxnu_pool_size() >> PAGE_SHIFT, i;
+	struct tgm_chan *chan = NULL;
+	void *fence_va;
+	int ret;
+
+	mutex_init(&scrub.lock);
+	scrub.boot_start = nvxnu_nanotime();
+	scrub.work = nvxnu_work_alloc(scrub_work, NULL);
+	scrub.deadline = nvxnu_work_alloc(scrub_deadline, NULL);
+	scrub.pool_pas =
+		kcalloc(npages, sizeof(u64), GFP_KERNEL); /* nvkm keeps the array (mem.c) */
+	fence_va = tgm_pool_alloc(PAGE_SIZE, &scrub.fence_pa);
+	ret = scrub.work && scrub.deadline && scrub.pool_pas && fence_va ? tgm_vm_new(&scrub.vm)
+									 : -ENOMEM;
+	for (i = 0; !ret && i < npages; i++)
+		scrub.pool_pas[i] = nvxnu_pool_base_pa() + (i << PAGE_SHIFT);
+	if (!ret)
+		ret = tgm_mem_new(scrub.vm, scrub.pool_pas, (u32)npages, &scrub.pool_mem);
+	if (!ret)
+		ret = tgm_vm_kmap(scrub.vm, scrub.pool_mem, npages << PAGE_SHIFT, &scrub.pool_va);
+	if (!ret)
+		ret = tgm_mem_new(scrub.vm, &scrub.fence_pa, 1, &scrub.fence_mem);
+	if (!ret)
+		ret = tgm_vm_kmap(scrub.vm, scrub.fence_mem, PAGE_SIZE, &scrub.fence_gpu);
+	scrub.fence = fence_va;
+	if (!ret)
+		ret = tgm_chan_new(scrub.vm, scrub.fence, scrub.fence_gpu, "scrub", 1, &chan);
+	if (ret) {
+		/* no teardown: what was made stays unused (a few pages); allocations zero on the CPU */
+		nvxnu_log("tegra-gm20b: pool scrub unavailable (%d): pool pages are zeroed by the "
+			  "CPU "
+			  "as they are taken\n",
+			  ret);
+		return;
+	}
+	chan->kernel =
+		CHAN_SCRUB; /* before anyone can submit on it: its nonstall goes to scrub_fenced */
+	__atomic_store_n(&scrub.chan, chan, __ATOMIC_RELEASE);
+	nvxnu_work_schedule(scrub.work);
+}
+
+int tgm_pool_scrub(uint64_t pa, uint64_t bytes)
+{
+	int ret;
+	if (!__atomic_load_n(&scrub.chan, __ATOMIC_ACQUIRE))
+		return -ENODEV;
+	if ((pa | bytes) & (PAGE_SIZE - 1) || !bytes || pa < nvxnu_pool_base_pa() ||
+	    pa + bytes > nvxnu_pool_base_pa() + nvxnu_pool_size())
+		return -EINVAL;
+	mutex_lock(&scrub.lock);
+	if (!READ_ONCE(scrub.chan->error) && scrub_room())
+		ret = scrub_submit(pa, bytes);
+	else
+		ret = -EBUSY;
+	mutex_unlock(&scrub.lock);
+	return ret;
+}
+
+/* tegra-gpu-stats: this window's scrubbed ranges for the stats2 line */
+static void scrub_stats(char *buf, unsigned int len, u64 window_ms)
+{
+	u64 n = __atomic_exchange_n(&scrub.n, 0, __ATOMIC_RELAXED),
+	    bytes = __atomic_exchange_n(&scrub.bytes, 0, __ATOMIC_RELAXED),
+	    ns = __atomic_exchange_n(&scrub.ns, 0, __ATOMIC_RELAXED),
+	    max = __atomic_exchange_n(&scrub.max_ns, 0, __ATOMIC_RELAXED);
+	(void)window_ms;
+	scnprintf(buf, len,
+		  "scrub %llu (%llu MiB, queued to done mean %llu us max %llu us), %lu KiB dirty",
+		  n, bytes >> 20, n ? ns / n / 1000 : 0, max / 1000,
+		  nvxnu_pool_dirty_free_pages() << (PAGE_SHIFT - 10));
 }
 
 /* ------------------------------------------------------------------ M3: one channel, CE fill, fence */
@@ -3776,6 +4067,7 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		 * is_io_connect_method, tegra_coherency_register). The GPU does the imports, so it owns the registry. */
 		tegra_coherency_register(tgm_coherency_read_lock, tgm_coherency_write_unlock);
 		idle_start(); /* 768 MHz while busy, 76.8 MHz once truly idle */
+		scrub_open(); /* the copy engine zeroes the pool from here on (see "pool scrub") */
 	}
 	return ret;
 }

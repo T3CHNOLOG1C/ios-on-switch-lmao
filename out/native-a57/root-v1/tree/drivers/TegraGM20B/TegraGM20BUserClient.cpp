@@ -221,8 +221,9 @@ const char *poolRefusal(uint64_t bytes, uint64_t held)
 //    gives it back to the VM past kSpareCapBytes. The thread call runs on a free, a miss or a take below a class's mark:
 //    never on a timer. Under memory pressure (memorystatus' level, the one apps' memory warnings follow) it gives every
 //    spare back and keeps none.
-//  - A freed pool BO is zeroed by the same thread call and given back clean (tgm_pool_free_zeroed), so the next pool
-//    BoAlloc of those pages does no memset (shim nvxnu_pool_alloc_clean zeroes only pages a plain free left dirty).
+//  - A freed pool BO is zeroed by the GPU's copy engine (tgm_pool_scrub; by the same thread call where the scrubber cannot
+//    take it) and given back clean, so the next pool BoAlloc of those pages does no memset (shim nvxnu_pool_alloc_clean
+//    zeroes only pages a plain free left dirty).
 // Each window's BoAllocs by process go to the "mem3" line (tgm_owner_stats).
 constexpr uint32_t kClasses = 53;  // 4 KiB .. 256 MiB (kMaxBoBytes)
 constexpr uint64_t kSpareCapBytes = 96ULL << 20, kLearnMaxBytes = 16ULL << 20;
@@ -508,9 +509,12 @@ bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes)
 	return true;
 }
 
-// A freed pool BO's range (no task maps it) to be zeroed and given back clean by the thread call: true if taken.
+// A freed pool BO's range (no task maps it) to be zeroed and given back clean: by the GPU's copy engine (gpu.c "pool
+// scrub", no CPU time), else by the thread call: true if taken.
 bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes)
 {
+	if (!tgm_pool_scrub(pa, bytes))
+		return true;
 	SparePool *p = spares();
 	PoolZero *z = p ? IONew(PoolZero, 1) : nullptr;
 	if (!z)

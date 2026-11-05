@@ -80,7 +80,9 @@ void nvxnu_iounmap(volatile void *va, nvxnu_u64 size);
  * Either a range the loader withholds from XNU (boot-args tegra-gpu-pool-pa / -mb) or, as a
  * fallback, an IOBufferMemoryDescriptor. Page granular (4 KiB).
  */
-int nvxnu_pool_init(void);
+/* *zeroed: 1 if the pool's pages were zeroed here (the fallback); the reserved range is not, its pages start dirty and
+ * the GPU's copy engine zeroes them once it runs (gpu.c "pool scrub") */
+int nvxnu_pool_init(int *zeroed);
 nvxnu_u64 nvxnu_pool_base_pa(void);
 nvxnu_u64 nvxnu_pool_size(void);
 void *nvxnu_pool_base_va(void);

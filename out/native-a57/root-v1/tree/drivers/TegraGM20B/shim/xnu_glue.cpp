@@ -529,9 +529,10 @@ static struct {
 	void *va;
 } pool;
 
-extern "C" int nvxnu_pool_init(void)
+extern "C" int nvxnu_pool_init(int *zeroed)
 {
 	long long pa = 0, mib = 256;  // arm_vm_init.c's default too: the two must agree
+	*zeroed = 0;
 	if (pool.va)
 		return 0;
 	nvxnu_bootarg_int("tegra-gpu-pool-mb", &mib);
@@ -550,13 +551,9 @@ extern "C" int nvxnu_pool_init(void)
 			return -12;
 		pool.pa = static_cast<uint64_t>(pa);
 		pool.size = bytes;
-		for (uint64_t off = 0; off < bytes; off += 16ULL << 20) {
-			nvxnu_step("tegra-gm20b: M1 step: clear pool %llu-%llu MiB at va %p\n",
-				   off >> 20, (off >> 20) + 16, static_cast<char *>(pool.va) + off);
-			memset(static_cast<char *>(pool.va) + off, 0,
-			       (16ULL << 20) < bytes - off ? (16ULL << 20) : bytes - off);
-		}
-		nvxnu_step("tegra-gm20b: M1 step: pool cleared\n");
+		// No CPU clear (it was 0.3 s of the boot, 256 MiB through the write-combined aperture): every page starts
+		// dirty, an allocation before the GPU runs zeroes the pages it takes, and the copy engine zeroes the rest
+		// once the GPU is up (gpu.c "pool scrub").
 		return 0;
 	}
 	IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
@@ -587,6 +584,7 @@ extern "C" int nvxnu_pool_init(void)
 	pool.pa = first;
 	pool.size = bytes;
 	pool.va = va;
+	*zeroed = 1;
 	return 0;
 }
 extern "C" nvxnu_u64 nvxnu_pool_base_pa(void)
