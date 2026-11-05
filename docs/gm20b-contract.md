@@ -24,7 +24,7 @@ The transport copies `NativeAdrenoABI.h`/`NativeAdrenoPublish.cpp`, which alread
 ### Registry and open
 - **Accelerator.** `AGXAccelerator : IOAcceleratorES`, the same trick as `T/drivers/NativeAdreno/NativeAdrenoAccelerator.cpp`. It carries
   `MetalPluginName`/`MetalPluginClassName` for the plugin bundle, plus `NativeSandboxGrantProcess` (our XNU already honours that
-  property: `.cache/xnu-work/iokit/Kernel/IOUserClient.cpp:4329-4336`).
+  property: `kernel/xnu-10063.141.1/iokit/Kernel/IOUserClient.cpp`).
 - **User client.** Class name `AGXDeviceUserClient`, so the original sandbox profiles admit the open (as sheng did).
 - **Open type.** `TegraGM20BOpenType` = 0x4e56. Refuse every other type: the original IOGPU library opens with type 1. A
   diagnostic service, e.g. `TegraGM20BPublished` opened with type 0, may accept the same methods directly.
