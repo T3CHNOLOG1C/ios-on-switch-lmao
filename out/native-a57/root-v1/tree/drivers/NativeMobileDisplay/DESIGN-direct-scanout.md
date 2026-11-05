@@ -48,12 +48,20 @@ this tree; **[I]** = inferred, to check; **[T]** = to be proven by a boot self-t
    back to block-linear the same way). The ring (TegraScanoutRing.h) gains slot entries: a slot is busy while scanned or
    asked for, exactly like a scan surface.
 5. **Surface lifetime:** the DC reads a direct surface until the next flip is seen taken, so CA must not draw into it until
-   then. Hold its IOSurface use count from the flip to that latch (IOSurface kext `increment_use_count`/
-   `decrement_use_count`, bound by address as TegraVIC binds `lookupSurface`/`prepare`/`complete`, checked by
-   abi_check.py) and keep the swap's early retire. To check first [I]: that CA's framebuffer pool waits on
-   `IOSurfaceIsInUse` before reusing a framebuffer (QuartzCore WindowServer, `out/agent-scratch/r9-hang/dsc`). If it does
-   not, retire direct swaps at unscan instead (CA has at least three framebuffers: client surfaces 0-2 in r7q [V]).
-6. **Expected:** swap-to-scan ~0.5 ms shorter (frames that finish within that of a boundary make it), 450 MB/s less DRAM
+   then. CA reuses framebuffers on swap completion, not on use counts: QuartzCore logs "swap %u completed, recycling
+   surface 0x%x from swap %u" [V, dyld cache string], i.e. a completed swap frees the surface of an earlier one, which is
+   IOMFB's own meaning of completion (on screen). So a direct swap retires when its flip is seen taken, not at the offer
+   (the copy path's early retire stays: its surface is read by the copy, which the GPU orders before CA's next render);
+   a frame replaced before it latched retires with the one that replaced it. CA has three framebuffers (client surfaces
+   0-2 in r7q [V]): one scanned, one asked for, one to draw, so 60 Hz with one frame of latency holds [I: measure, as the
+   early-retire change of r3 was kept for speed]. The kernel keeps the surface's descriptor retained and prepared (wired)
+   for as long as it is mapped in a slot.
+6. **Probe first (done, r14):** DisplaySmmuProbe.h runs D1-D2 once at boot and undoes it (CRC by physical address, through
+   the identity, through an IOVA slot below DRAM, with a pixel-change liveness check); its line on the next boot is what
+   steps 3-5 wait for. Window A is client display0a (id 1, TRANSLATION_ENABLE_0 bit 1) in swgroup dc (MC 0x240); the
+   T210 device tree gives DC A the dc and dc12 (0xa88) swgroups, dc12 being window D's clients [V: tegra210-soc-base.dtsi,
+   hekate mc_t210.h], which stays in bypass (window D is never enabled here).
+7. **Expected:** swap-to-scan ~0.5 ms shorter (frames that finish within that of a boundary make it), 450 MB/s less DRAM
    traffic at 60 fps, the present channel idle for UI frames. Next-boot lines: the D0-D3 lines, the pacing line's copy
    stage dropping to the GPU tail alone, no WIN_A underflow frames.
 
