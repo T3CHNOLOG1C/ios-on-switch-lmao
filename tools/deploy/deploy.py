@@ -41,9 +41,9 @@ from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
 
 
-# Logging profiles an earlier bring-up put on Data by hand, which nothing else removes. 10-31 r3-wifi:
-# com.apple.SystemConfiguration at Debug, persisted ("remove once Wi-Fi works"; Wi-Fi joins since r7j). On r7o it still
-# wrote ~8 Debug lines/s to the persisted log (configd SCDynamicStore/IPMonitor, wifid SCPreferences).
+# Logging profiles put on Data by hand during bring-up, which nothing else removes: com.apple.SystemConfiguration at
+# Debug, persisted, writes ~8 Debug lines/s to the persisted log (configd SCDynamicStore/IPMonitor, wifid
+# SCPreferences).
 STALE_LOGGING_PROFILES = ("preferences/Logging/Subsystems/com.apple.SystemConfiguration.plist",)
 
 
