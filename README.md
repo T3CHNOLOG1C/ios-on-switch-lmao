@@ -153,7 +153,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//:kernel` | `kernel.macho`: XNU + drivers, linked and prelinked with Apple's kexts |
 | `//:gpu` (= `//gpu:bundle`) | `bazel-bin/gpu/bundle`: `ngpu/addons/{TegraGM20BMetal.bundle, .m2v-seed, .raw/pack.bin}`, `TegraGM20BMetal.trustcache`, `trust.json` |
 | `//gpu:trustcache` | The bundle's trust cache module. `//:boot` appends it to the kernel's static trust cache |
-| `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa 77452b90 + `gpu/nvk`'s patches, meson inside Bazel |
+| `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa vendored in `third_party/mesa` (77452b90 + ioswitch's commits), built natively, one action per compile and generator |
 | `//drivers/<Driver>` | One driver's package: its objects (e.g. `//drivers/SwitchUSB`), headers (`:headers`, `:hdrs`) and tests. `//kernel:xnu` is the XNU objroot; `//kernel:kernel_unprelinked` is the link |
 | `//ipsw:kernelcache`, `//ipsw:static_system_trust` | The original kernelcache (decompressed) and the root+OS-cryptex trust bundle, from the IPSW |
 | `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | The members of the IPSW kind `--//bazel/ipsw:kind` selects (`bazel/ipsw/pins.bzl`, one table of kinds). Deflated ones are inflated by a build action (`//bazel/ipsw:<kind>_<role>`) |
@@ -166,7 +166,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//bazel/python:requirements.update`, `:requirements_test` | Re-lock the Python packages with uv; check the lock is current |
 | `//tests/...`, the driver packages' `*_test`, `//native:firmware_export_test`, `//install:*_test`, `//tools/deploy:deploy_test`, `//bazel/pinned:sha256` | Tests |
 | `//tools/repro:check` | Reproducibility |
-| `//native:firmware_export`, `//gpu/nvk:relink`, `//tools/package:progressui_logo`, `//tools/package:wallpaper_1x` | Regenerate a pinned input: the RAM exporter, a relinked NVK dylib, the ProgressUI logo, the 1x wallpaper plists |
+| `//native:firmware_export`, `//tools/package:progressui_logo`, `//tools/package:wallpaper_1x` | Regenerate a pinned input: the RAM exporter, the ProgressUI logo, the 1x wallpaper plists |
 | `//drivers/TegraGM20BMetal:<tool>` | GPU developer tools: the shader corpus (`make_corpus`, `run_corpus`, `report`, …), `ordercheck`, `check_dyld_cache_imports` |
 
 Flags:
@@ -284,8 +284,8 @@ linters leave them alone.
 | Apple OSS, corecrypto, lz4 | `MODULE.bazel` | Version in the URL, new sha256, `strip_prefix` |
 | m2v | `third_party/m2v` | Vendored: the upstream tree as one commit, our changes as commits on it (`git log -- third_party/m2v`). Edit it in place; for a new upstream commit, import it and rebase ours onto it |
 | Rust crates | `bazel/rust/crates.MODULE.bazel` | Edit a `crate.spec`, then `CARGO_BAZEL_REPIN=1 bazel mod deps --lockfile_mode=update` (rewrites `bazel/rust/Cargo.lock` and `crates.lock.json`) |
-| NVK | `gpu/nvk/BUILD.bazel` | Add the patch to `PATCHES` (in order), set `GIT_SHA1` to the version string's commit, build `//gpu/nvk:ios //gpu/nvk:host`, then pin `EXPECT` (tree id and both sha256s the build prints) |
-| Mesa | `gpu/nvk/repos.bzl` `MESA_COMMIT` | A new commit; the series must apply. If `nvk_query.cl`, `nvk_copy_indirect.cl` or their headers change, regenerate `bazel/pinned/nvk` with Mesa's mesa_clc/vtn_bindgen2 (LLVM 23.1.4) |
+| NVK | `third_party/mesa` | Edit Mesa's sources and commit (one commit per change, as the series is); `bazel build //gpu/nvk:ios //gpu/nvk:host` rebuilds what the edit touches |
+| Mesa | `third_party/mesa/README.ioswitch.md` | A new import, ioswitch's commits rebased onto it, the BUILD files updated where meson.build changed. If `nvk_query.cl`, `nvk_copy_indirect.cl` or their headers change, regenerate `third_party/mesa/bazel/pinned` with Mesa's mesa_clc/vtn_bindgen2 (LLVM 23.1.4) |
 | The IPSW's Metal libraries | `bazel/gpu/apple-libs.sha256` | After an IPSW bump: attach the OS image read-only and regenerate with the command in its header (`libraries.py pins`) |
 | Device data | `bazel/gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes `out/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
 | Rust | `MODULE.bazel` | `rust.toolchain(versions = [...])` and the values of `//bazel/rust:toolchain_version` |
@@ -339,7 +339,7 @@ The only things the build reads from the Mac, each declared and checked:
 - **macOS base tools**: `/usr/bin/{make,perl,tar,patch,plutil,compression_tool}`; the installer and deploy also use
   `diskutil`, `hdiutil`, `fsck_apfs` and `ditto`.
 - **The GPU bundle**:
-  - NVK's three generated files Mesa's own CL/GLSL compilers made (`bazel/pinned/nvk`: nvkcl.spv/.cpp/.h and
+  - NVK's three generated files Mesa's own CL/GLSL compilers made (`third_party/mesa/bazel/pinned`: nvkcl.spv/.cpp/.h and
     astc_spv.h, with the sha256 of every input they were generated from); Mesa, its tools and the dylibs are built;
   - the m2v library store;
   - QuartzCore's metallib.
@@ -409,7 +409,7 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 | `python3 -m unittest ...` | `bazel test //...` |
 | Edit `cmake/Drivers.cmake` for a new driver | One `kernel_driver()` in the tree's `BUILD.bazel` |
 | Boot-args in `scripts/package_raw_boot.py` | `tools/package/boot_args.py` (the ADT edits in `tools/package/adt_edit.py`) |
-| `out/gpu/nvk/build-nvk.sh`, `relink-nvk.py`, the NVK patches | `bazel build //gpu/nvk:ios //gpu/nvk:host` (the patches and `relink-nvk.py` are in `gpu/nvk/`) |
+| `out/gpu/nvk/build-nvk.sh`, `relink-nvk.py`, the NVK patches | `bazel build //gpu/nvk:ios //gpu/nvk:host` (the patches are `third_party/mesa`'s commits; the relink is `third_party/mesa/bazel/link.bzl`) |
 | `tree/scripts/*` (builders, audits, qemu-entry), `tree/package/Scripts/*` | Gone: their live parts are Bazel rules and tools; the rest was dead |
 
 ## Troubleshooting
@@ -425,8 +425,8 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 - **`hdiutil attach` fails while fetching `@gpu_apple_libs`**: the first fetch on a machine attaches the IPSW's OS image
   read-only (no root needed). A fetch interrupted while it was attached leaves the mount behind: the next fetch detaches it,
   or run `hdiutil detach` on the `_volume` directory in `$(bazel info output_base)/external/+gpu+gpu_apple_libs`.
-- **"the pinned outputs in bazel/pinned/nvk were generated from other inputs"**: a patch changed what Mesa's CL
-  kernels (or the ASTC shader) read; regenerate those files with the real tools and update `bazel/pinned/nvk/inputs.txt`.
+- **`//third_party/mesa/bazel/pinned:inputs_test` fails**: a Mesa change touched what Mesa's CL kernels (or the ASTC
+  shader) read; regenerate those files with the real tools and update `third_party/mesa/bazel/pinned/inputs.txt`.
 - **"no file for o/..." or "no step writes ..." from an XNU target**: a makefile change outran the tables; run
   `bazel run //kernel/xnu-10063.141.1:update_tables`.
 - **Another Bazel command is running**: one server per checkout. Agents working in the same checkout at the same time
