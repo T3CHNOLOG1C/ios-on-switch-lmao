@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The GPU frame copy for the hardware-rotated, double-buffered scanout (NativeLegacyDisplay, boot-args ioswitch-gpu-copy=1 and
+// The GPU frame copy for the hardware-rotated, multi-buffered scanout (NativeLegacyDisplay, boot-args ioswitch-gpu-copy=1 and
 // ioswitch-scanout-double=1): the display hands each swapped IOSurface to the GPU driver, whose copy engine writes it, pitch-linear
-// to block-linear, into the scanout buffer window A does not scan; the display flips window A to it at the next frame end once the
-// GPU says it is done. C and C++ (drivers/TegraGM20B includes it as well).
+// to block-linear, into a scanout buffer window A neither scans nor may take (TegraScanoutRing.h); the display flips window A to it
+// once the GPU says it is done, taken at the next frame boundary. C and C++ (drivers/TegraGM20B includes it as well).
 //
 // Destination layout, the one window A column-scans (NativeScanout.h; hekate _di_winA_block; DC SURFACE_KIND BLOCK, BLOCK_HEIGHT 4):
 // 32-bit B8G8R8A8 pixels, 1280 x 720, GOBs of 64 bytes x 8 lines (the Fermi/Maxwell GOB, byte x of line y at ((x & 32) << 3) |
@@ -28,9 +28,9 @@ struct TegraScanoutCopy {
     void *source;
     uint64_t sourceStride;  // bytes per row, >= width * 4 (5120 or padded)
     uint64_t sourceBytes;   // the surface's allocation, >= sourceStride * height
-    // The block-linear target: physically contiguous, below 4 GiB, 128 KiB aligned, targetBytes long. Only two addresses ever occur
-    // (the boot framebuffer 0xf5a00000 and the display's second buffer); window A is not scanning it while the copy runs, and the
-    // display writes it neither on the CPU nor with another copy until this one completes.
+    // The block-linear target: physically contiguous, below 4 GiB, 128 KiB aligned, targetBytes long. At most three addresses ever
+    // occur (the boot framebuffer 0xf5a00000 and the display's other two buffers, r14-pacing); window A is not scanning it and cannot
+    // take it while the copy runs, and the display writes it neither on the CPU nor with another copy until this one completes.
     uint64_t target;
     uint64_t targetBytes;      // 0x3C0000
     uint32_t targetPitch;      // 5120 bytes per line of pixels (80 GOBs across)

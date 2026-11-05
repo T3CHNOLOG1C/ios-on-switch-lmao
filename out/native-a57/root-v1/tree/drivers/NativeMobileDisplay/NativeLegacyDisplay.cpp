@@ -22,6 +22,7 @@
 #include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraDisplayFlip/TegraBlockSwizzle.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
+#include "../TegraDisplayFlip/TegraScanoutRing.h"
 #include "TegraDisplayPower.h"
 extern "C" __attribute__((noreturn)) void native_legacy_backend_guard(unsigned, void *, void *);
 extern "C" IOService *native_legacy_display_allocate(void);
@@ -410,6 +411,14 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         validatedAt[slot] = now;
         return true;
     }
+    // The request queued behind this one in the family's tail queue (each request's next at +2960, OriginalLegacyFramebufferABI.h
+    // activateOnlyPendingSwap), or none.
+    static const OriginalLegacySwapRequest *queuedAfter(const OriginalLegacySwapRequest *request)
+    {
+        const OriginalLegacySwapRequest *next = nullptr;
+        if (request) memcpy(&next, reinterpret_cast<const unsigned char *>(request) + 2960, sizeof(next));
+        return next;
+    }
     uint64_t submittedAt(const OriginalLegacySwapRequest *request) const
     {
         for (unsigned i = 0; i < 8; ++i)
@@ -466,20 +475,25 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     unsigned underflowRun = 0;       // consecutive frame ends with WIN_A_UF_INT latched, once latched
     bool rotationAnnounced = false;  // the latch line is logged once, not again after every SC7 resume
     static constexpr unsigned kLatchFrames = 4, kUnderflowFrames = 30;
-    // Double buffering (boot-arg ioswitch-scanout-double=1, default 0; only with the hardware rotation). Two block-linear
-    // surfaces: 0 is the boot framebuffer's (blockMapping), 1 a physically contiguous buffer below 4 GiB. A frame is swizzled into
-    // the one window A does not scan, then window A's start address flips to it, latched at the next frame boundary (frame-
-    // counter latching, set by startRotation). Until a DC A frame end (or vblank) shows that flip latched, the next frame's kick
-    // is deferred, so a surface is written only after the controller has stopped reading it. The first frame goes to surface 1
-    // together with the switch to the rotated layout. Kick, flip and frame ends all run under the family's work-loop gate.
+    // Multiple buffering (boot-arg ioswitch-scanout-double=1, default 0; only with the hardware rotation). Three block-linear
+    // surfaces (two if no third could be had): 0 is the boot framebuffer's (blockMapping), 1 and 2 physically contiguous buffers
+    // below 4 GiB. A frame is swizzled into one window A neither scans nor may take (ring.target()), then window A's start
+    // address flips to it, latched at the next frame boundary (frame-counter latching, set by startRotation). A frame finished
+    // while an older flip is still out replaces that flip (latest frame wins, TegraScanoutRing.h): it scans out at the next
+    // boundary and the older frame is not shown. With every buffer held (one scanned, one asked for, one replaced and not yet
+    // known to be untaken) the next frame's kick is deferred to the frame end that settles it, so a surface is written only after
+    // the controller has stopped reading it. The first frame goes to surface 1 together with the switch to the rotated layout.
+    // Kick, flip and frame ends all run under the family's work-loop gate.
     bool doubleBuffer = false;
-    IOBufferMemoryDescriptor *scanBuffer = nullptr;  // surface 1's pages
-    IOMemoryMap *scanMapping = nullptr;              // surface 1, write-combined
-    uint64_t scanAddress = 0;                        // surface 1's physical address
-    unsigned front = 0;                              // the surface window A scans (latched)
-    bool flipPending = false;                        // START_ADDR of surface front ^ 1 requested, not yet latched
-    bool kickDeferred = false;                       // a swap is waiting for that latch (or for the SC7 resume)
-    uint64_t flipRequested = 0, flipWaits = 0;       // frameEnds when the flip went out; swaps that had to wait for one
+    static constexpr unsigned kScanBuffers = TegraScanoutRing::kMaxBuffers;
+    static constexpr int kNoBuffer = TegraScanoutRing::kNone;
+    IOBufferMemoryDescriptor *scanBuffers[kScanBuffers] =
+        {};                                        // surfaces 1 and 2's pages ([0] unused: the boot framebuffer)
+    IOMemoryMap *scanMappings[kScanBuffers] = {};  // their write-combined views
+    uint64_t scanAddresses[kScanBuffers] = {};     // their physical addresses
+    TegraScanoutRing ring;                         // which surface is scanned, asked for, replaced, drawn
+    bool kickDeferred = false;                     // a swap is waiting for a frame end (or for the SC7 resume)
+    uint64_t flipRequested = 0, flipWaits = 0;  // frameEnds when the last flip went out; swaps that waited for a buffer
     IOTimerEventSource *flipTimer =
         nullptr;  // a flip's deadline: a lost DC A interrupt would otherwise stall the screen
     static constexpr unsigned kFlipDeadlineMS = 100;
@@ -581,7 +595,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     //   stPresentGap  present-to-present intervals under kGapUs (longer ones are idle screens or stalls: stGaps, not in the quantiles)
     //   stVb          the same intervals in whole frames (1, 2, 3, 4 or more DC A periods)
     //   stLatency     the compositor's swap submission (validateSwap) to that present
-    //   takenSubmit   the submission time of the swap a kick took (noteTaken), until flip() moves it to flipSubmit
+    //   taken         the times of the swap a kick took (noteTaken), until flip() files them under its surface (marks)
     //   stLatch       flips latched at the first frame end after the request, and later
     // From the filter (primary interrupt context, one CPU): feStamp, the last FRAME_END; the DC A frame period (fePeriod*, relaxed
     // atomics, reset by the stats line); stFeFolded, frame ends that came before the action took the previous one (the gate was
@@ -589,7 +603,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr uint64_t kGapUs = 250000;
     FrameHist stPresentGap = {}, stLatency = {};
     uint32_t stVb[4] = {}, stGaps[2] = {}, stPresents = 0, stLatch[2] = {};
-    uint64_t lastPresent = 0, takenSubmit = 0, flipSubmit = 0;
+    uint64_t lastPresent = 0;
     Span stFeLate = {};
     uint64_t feStamp = 0, feLast = 0, fePeriodSum = 0, fePeriodMin = UINT64_MAX, fePeriodMax = 0;
     uint32_t fePeriodN = 0, stFeFolded = 0;
@@ -597,14 +611,56 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // a multi-layer or detached-layer swap; 3: geometry; 4: surface; see validateSwap), relaxed atomics: the client's swap path.
     // A frozen screen with CA still rendering shows here as ~300 a window and 0 swaps.
     uint32_t stRejected = 0, stRejectReason = 0;
-    // Under the gate: a flip latched at stamp (mach time); latchedAt is frameEnds - flipRequested (1: at the first frame end).
-    void notePresent(uint64_t stamp, uint64_t latchedAt)
+    // r14-pacing: the second stats line, "IOSwitch display pacing". Each frame's own times travel with the surface it is drawn into
+    // (several frames can be in flight: one asked for, one being copied), mach time: its swap's submission (validateSwap), its kick,
+    // of the time between them the part spent waiting for a free surface, and its flip. At its present, swap-to-scan splits into
+    // queue (submission to kick: behind the previous copy, or waiting for a surface), copy (kick to flip: the GPU work the copy is
+    // ordered after, i.e. the compositor's own rendering of the frame, then the copy) and latch (flip to the boundary that took it).
+    // Every present more than 1.5 frames after the previous one (and under kGapUs) is charged to one cause, with the frames it cost:
+    //   idle   the compositor turned vsync off since the previous present: it had nothing to draw (no stall)
+    //   ca     its swap came at or after the boundary a one-frame interval would have used: the compositor was late (its CPU
+    //          render: m2v replay, encode, CPU contention)
+    //   gpu    the swap came in time, but kick to flip alone outlasted the time it had left: the compositor's GPU work (or GPU
+    //          contention) ended after that boundary
+    //   queue  in time, but waiting behind the previous copy or for a surface made it miss
+    //   latch  the flip was asked for in time but taken a boundary later
+    // Also: frames replaced before they were shown (latest frame wins), swaps retired unshown because a newer one was queued
+    // behind them (collapsed), V_BLANKs folded into one notification, notifications more than 1 ms after their V_BLANK, and how
+    // often the compositor turned vsync off.
+    struct FrameMark {
+        uint64_t submit, kick, waited, ready;
+    };
+    FrameMark taken = {}, marks[kScanBuffers] = {};
+    enum { kLongIdle, kLongCa, kLongGpu, kLongQueue, kLongLatch, kLongCauses };
+    Span stPQueue = {}, stPWait = {}, stPCopy = {}, stPLatch = {};
+    uint32_t stReplaced = 0, stCollapsed = 0, stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
+    uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;  // stVsyncFolded: atomic (the filter)
+    uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled (once a boot at most)
+    bool idleSincePresent = false;
+    // Under the gate, from flip(): the frame just written into surface i goes out now.
+    void markFlip(int i)
+    {
+        if (!stats || i < 0) return;
+        marks[i] = taken;
+        marks[i].ready = mach_absolute_time();
+        taken = {};
+    }
+    // Under the gate: a flip latched at stamp (mach time); latchedAt is frameEnds - flipRequested (1: at the first frame end); mark
+    // is the presented frame's own times (all 0 if not known).
+    void notePresent(uint64_t stamp, uint64_t latchedAt, const FrameMark &mark)
     {
         if (!stats || !stamp) return;
         ++stPresents;
         ++stLatch[latchedAt <= 1 ? 0 : 1];
-        if (flipSubmit && stamp > flipSubmit) stLatency.add(Span::ticksToUs(stamp - flipSubmit));
-        flipSubmit = 0;
+        if (mark.submit && stamp > mark.submit) {
+            stLatency.add(Span::ticksToUs(stamp - mark.submit));
+            if (mark.kick >= mark.submit && mark.ready >= mark.kick && stamp >= mark.ready) {
+                stPQueue.add(mark.kick - mark.submit);
+                stPWait.add(mark.waited);
+                stPCopy.add(mark.ready - mark.kick);
+                stPLatch.add(stamp - mark.ready);
+            }
+        }
         if (lastPresent && stamp > lastPresent) {
             const uint64_t us = Span::ticksToUs(stamp - lastPresent);
             if (us >= kGapUs)
@@ -614,9 +670,27 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 const uint64_t period = vsyncInterval ? Span::ticksToUs(vsyncInterval) : 16667;
                 const uint64_t frames = (us + period / 2) / period;
                 ++stVb[frames <= 1 ? 0 : frames >= 4 ? 3 : frames - 1];
+                if (frames >= 2) noteLong((uint32_t)frames, mark);
             }
         }
         lastPresent = stamp;
+        idleSincePresent = false;
+    }
+    // A present frames DC A periods after the previous one (lastPresent, not yet moved on): its cause, see above.
+    void noteLong(uint32_t frames, const FrameMark &mark)
+    {
+        uint64_t period = vsyncInterval;
+        if (!period) nanoseconds_to_absolutetime(16666667ull, &period);
+        const uint64_t due = lastPresent + period;  // the boundary a one-frame interval would have used
+        unsigned cause;
+        if (!mark.submit || mark.submit >= due)
+            cause = idleSincePresent ? kLongIdle : kLongCa;
+        else if (mark.ready > due)
+            cause = mark.ready - mark.kick > due - mark.submit ? kLongGpu : kLongQueue;
+        else
+            cause = kLongLatch;
+        ++stLong[cause];
+        stLongFrames[cause] += frames - 1;
     }
     bool vsyncWanted() const
     {
@@ -666,6 +740,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (!vsyncTimer) return;
         if (!vsyncWanted()) {
             native_legacy_vsync_observed(2, vsyncHz);
+            noteVsyncIdle();
             return;
         }
         const uint64_t now = mach_absolute_time();
@@ -721,8 +796,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             }
         }
         // Two V_BLANKs before the action runs (the gate busy, e.g. with a copy) fold into one notification; the stats count both.
-        if ((status & kVblankInt) && self->stats && self->vsyncArmed)
+        if ((status & kVblankInt) && self->stats && self->vsyncArmed) {
             __atomic_fetch_add(&self->stVblanks, 1u, __ATOMIC_RELAXED);
+            if (__atomic_load_n(&self->dcPending, __ATOMIC_ACQUIRE) & kVblankInt)
+                __atomic_fetch_add(&self->stVsyncFolded, 1u, __ATOMIC_RELAXED);
+        }
         __atomic_fetch_or(&self->dcPending, status, __ATOMIC_RELEASE);
         return true;
     }
@@ -745,7 +823,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         // V_BLANK (unmasked while a vsync client is registered), in case the controller latches after its FRAME_END.
         if ((status & kFrameEndInt) && rotated)
             checkRotation();
-        else if ((status & kVblankInt) && rotationLatched && flipPending)
+        else if ((status & kVblankInt) && rotationLatched && ring.pending != kNoBuffer)
             checkFlip(false);
         if ((status & kFrameEndInt) && tapeSettle) checkTapeSettled();
         if ((status & kFrameEndInt) && stats) noteStatsWindow();
@@ -829,6 +907,32 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         add(", rejected %u (reason %u)", __atomic_exchange_n(&stRejected, 0u, __ATOMIC_RELAXED),
             __atomic_load_n(&stRejectReason, __ATOMIC_RELAXED));
         os_log(OS_LOG_DEFAULT, "IOSwitch display stats: %s", line);  // log only, never the boot console
+        // r14-pacing: swap-to-scan by stage, long presents by cause (presents/frames lost), vsync delivery (see FrameMark).
+        at = 0;
+        add("%u presents: swap-to-scan = queue %llu/%llu (surface wait %llu/%llu) + copy %llu/%llu + latch %llu/%llu "
+            "us "
+            "mean/max",
+            stPresents, (unsigned long long)stPQueue.meanUs(), (unsigned long long)stPQueue.maxUs(),
+            (unsigned long long)stPWait.meanUs(), (unsigned long long)stPWait.maxUs(),
+            (unsigned long long)stPCopy.meanUs(), (unsigned long long)stPCopy.maxUs(),
+            (unsigned long long)stPLatch.meanUs(), (unsigned long long)stPLatch.maxUs());
+        add("; %u buffers%s, replaced %u, collapsed %u", doubleBuffer ? ring.buffers : 1u,
+            !doubleBuffer || ring.replace ? ""
+            : stFallbacks                 ? " (fell back to double buffering now)"
+                                          : " (double-buffered)",
+            stReplaced, stCollapsed);
+        add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u",
+            stLong[kLongIdle] + stLong[kLongCa] + stLong[kLongGpu] + stLong[kLongQueue] + stLong[kLongLatch],
+            stLong[kLongIdle], stLongFrames[kLongIdle], stLong[kLongCa], stLongFrames[kLongCa], stLong[kLongGpu],
+            stLongFrames[kLongGpu], stLong[kLongQueue], stLongFrames[kLongQueue], stLong[kLongLatch],
+            stLongFrames[kLongLatch]);
+        add("; vsync folded %u late>1ms %u idle %u", __atomic_exchange_n(&stVsyncFolded, 0u, __ATOMIC_RELAXED),
+            stVsyncLateN, stVsyncIdle);
+        os_log(OS_LOG_DEFAULT, "IOSwitch display pacing: %s", line);  // log only, never the boot console
+        stPQueue = stPWait = stPCopy = stPLatch = Span{};
+        stReplaced = stCollapsed = stVsyncLateN = stVsyncIdle = stFallbacks = 0;
+        for (auto &n : stLong) n = 0;
+        for (auto &n : stLongFrames) n = 0;
         stPresentGap = stLatency = FrameHist{};
         stFeLate = Span{};
         for (auto &n : stVb) n = 0;
@@ -849,6 +953,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             dc[kDcIntMask] = dc[kDcIntMask] & ~kVblankInt;
             vsyncArmed = false;
             native_legacy_vsync_observed(2, vsyncHz);
+            noteVsyncIdle();
             return;
         }
         // The panel's own period between consecutive vblanks; the nominal one after a pause.
@@ -861,8 +966,17 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         native_legacy_vsync_observed(1, vsyncHz);
         if (stats) {
             ++stVsyncs;
-            stVsyncLate.add(mach_absolute_time() - stamp);
+            const uint64_t late = mach_absolute_time() - stamp;
+            stVsyncLate.add(late);
+            if (Span::ticksToUs(late) > 1000) ++stVsyncLateN;
         }
+    }
+    // The compositor has no vsync client any more: it has nothing to draw until it registers again.
+    void noteVsyncIdle()
+    {
+        if (!stats) return;
+        ++stVsyncIdle;
+        idleSincePresent = true;
     }
     // Every DC A action, under the gate. The render server is a vsync client (kern_exec.c gives backboardd CA_FORCE_TIMER=1, so
     // QuartzCore's IOMFBServer::set_vsync_enabled takes IOMobileFramebufferEnableVSyncNotifications instead of its CADisplayTimer)
@@ -1017,7 +1131,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
               "first client frame; "
               "memory type %#x (pitch view %#x%s)\n",
               kNativeBlockWidth, kNativeBlockHeight, (uint64_t)bootMapping->getPhysicalAddress(),
-              doubleBuffer ? " and a second buffer (double-buffered)" : "",
+              !doubleBuffer       ? ""
+              : ring.buffers == 3 ? " and two more buffers (triple-buffered, latest frame wins)"
+                                  : " and a second buffer (double-buffered)",
               mairAttribute(reinterpret_cast<const void *>(blockMapping->getVirtualAddress())),
               mairAttribute(reinterpret_cast<const void *>(bootMapping->getVirtualAddress())),
               scanoutWC ? ", ioswitch-scanout-wc" : "");
@@ -1043,35 +1159,54 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         OSSafeReleaseNULL(memory);
         return map;
     }
-    // At start, while 3.75 MiB of contiguous pages are easy to find. The DC has no SMMU on this boot chain and START_ADDR_HI stays 0,
-    // so the buffer is physically contiguous below 4 GiB; 128 KiB aligned (the mask's low zero bits), as a Maxwell big page.
-    void startDoubleBuffer()
+    // At start, while 3.75 MiB runs of contiguous pages are easy to find. The DC has no SMMU on this boot chain and START_ADDR_HI
+    // stays 0, so each buffer is physically contiguous below 4 GiB; 128 KiB aligned (the mask's low zero bits), as a Maxwell big
+    // page. Surface 1 is required (as before); without surface 2 the display double-buffers, said in one line.
+    bool startScanBuffer(unsigned i, bool required)
     {
         const IOOptionBits options = IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryPhysicallyContiguous) |
                                      IOOptionBits(kIOMemoryMapperNone);
-        scanBuffer = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, kNativeBlockBytes,
-                                                                      0x00000000fffe0000ULL);
+        IOBufferMemoryDescriptor *buffer = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+            kernel_task, options, kNativeBlockBytes, 0x00000000fffe0000ULL);
         IOByteCount run = 0;
-        scanAddress = scanBuffer ? scanBuffer->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
-        if (!scanAddress || run < kNativeBlockBytes || (scanAddress & 0x1ffff) ||
-            scanAddress + kNativeBlockBytes > (1ull << 32) || !scanBuffer->getBytesNoCopy())
-            panic("IOSwitch display: ioswitch-scanout-double=1: no physically contiguous %#llx-byte buffer below 4 GiB "
-                  "(got %#llx, %#llx contiguous)",
-                  kNativeBlockBytes, scanAddress, (uint64_t)run);
-        // The allocator zeroed the pages through the kernel's cacheable alias. Write those lines back and drop them now, before the
-        // write-combined mapping writes the same memory around the cache; nothing writes through the cacheable alias after this,
-        // so no dirty line can later land on a frame.
-        cleanInvalidate(scanBuffer->getBytesNoCopy(), kNativeBlockBytes);
-        scanMapping = mapScanout(scanAddress);
-        if (!scanMapping || !scanMapping->getVirtualAddress() || scanMapping->getLength() < kNativeBlockBytes)
-            panic("IOSwitch display: cannot map the second %#llx-byte scanout buffer at %#llx", kNativeBlockBytes,
-                  scanAddress);
+        const uint64_t pa = buffer ? buffer->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
+        IOMemoryMap *mapping = nullptr;
+        if (pa && run >= kNativeBlockBytes && !(pa & 0x1ffff) && pa + kNativeBlockBytes <= (1ull << 32) &&
+            buffer->getBytesNoCopy()) {
+            // The allocator zeroed the pages through the kernel's cacheable alias. Write those lines back and drop them now,
+            // before the write-combined mapping writes the same memory around the cache; nothing writes through the cacheable
+            // alias after this, so no dirty line can later land on a frame.
+            cleanInvalidate(buffer->getBytesNoCopy(), kNativeBlockBytes);
+            mapping = mapScanout(pa);
+            if (mapping && (!mapping->getVirtualAddress() || mapping->getLength() < kNativeBlockBytes))
+                OSSafeReleaseNULL(mapping);
+        }
+        if (!mapping) {
+            if (required)
+                panic("IOSwitch display: ioswitch-scanout-double=1: no mapped, physically contiguous %#llx-byte buffer "
+                      "below 4 GiB for surface %u (got %#llx, %#llx contiguous)",
+                      kNativeBlockBytes, i, pa, (uint64_t)run);
+            IOLog("IOSwitch display: no physically contiguous %#llx-byte buffer below 4 GiB for surface %u (got %#llx, "
+                  "%#llx contiguous): double-buffered, a late frame delays the ones after it\n",
+                  kNativeBlockBytes, i, pa, (uint64_t)run);
+            OSSafeReleaseNULL(buffer);
+            return false;
+        }
+        scanBuffers[i] = buffer;
+        scanMappings[i] = mapping;
+        scanAddresses[i] = pa;
+        return true;
+    }
+    void startDoubleBuffer()
+    {
+        startScanBuffer(1, true);
+        const unsigned buffers = startScanBuffer(2, false) ? 3 : 2;
         flipTimer = IOTimerEventSource::timerEventSource(this, &NativeLegacyDisplay::flipDeadline);
         if (!flipTimer || getWorkLoop()->addEventSource(flipTimer) != kIOReturnSuccess)
             panic("IOSwitch display: ioswitch-scanout-double=1: cannot add the flip deadline timer");
         doubleBuffer = true;
-        front = 0;
-        flipPending = kickDeferred = false;
+        ring.reset(buffers);
+        kickDeferred = false;
     }
     // XNU's text console scrolls by window A's start address (video_console.c vc_tape) from here until the first client frame
     // scans. Its text lines are 16-pixel columns of the portrait scanout, 64 bytes of every memory row, so moving the start address
@@ -1230,7 +1365,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // taken by the filter but not yet handled (the gate was busy, e.g. with a copy) only moves the deadline.
     void checkFlipDeadline()
     {
-        if (!flipPending || hwSuspended || scanoutStopped || gPanicRestore.panicking) return;
+        if (ring.pending == kNoBuffer || hwSuspended || scanoutStopped || gPanicRestore.panicking) return;
         if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE) & kFrameEndInt) {
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
             return;
@@ -1239,38 +1374,61 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         ioswitch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         panic("IOSwitch display: window A flip to %#x not settled in %u ms (%llu frame ends since): STATE_CONTROL %#x "
               "INT_STATUS %#x MASK %#x ENABLE %#x, %s",
-              surfaceAddress(front ^ 1), kFlipDeadlineMS, frameEnds - flipRequested, dc[kDcStateControl],
+              surfaceAddress(ring.pending), kFlipDeadlineMS, frameEnds - flipRequested, dc[kDcStateControl],
               dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
     }
     // Surface i's physical address (window A's START_ADDR); 0 is the boot framebuffer, also the pitch console's.
-    uint32_t surfaceAddress(unsigned i) const
+    uint32_t surfaceAddress(int i) const
     {
-        return (uint32_t)(i ? scanAddress : bootMapping->getPhysicalAddress());
+        return (uint32_t)(i > 0 ? scanAddresses[i] : bootMapping->getPhysicalAddress());
     }
-    // Where the next block-linear frame goes: the surface window A does not scan, or the only one.
-    IOMemoryMap *drawSurface() const { return doubleBuffer && !front ? scanMapping : blockMapping; }
+    // The surface window A scans when its START_ADDR is start; kNoBuffer when none is.
+    int surfaceIndex(uint32_t start) const
+    {
+        for (unsigned i = 0; i < (doubleBuffer ? ring.buffers : 1u); ++i)
+            if (start == surfaceAddress((int)i)) return (int)i;
+        return kNoBuffer;
+    }
+    IOMemoryMap *surfaceMapping(int i) const { return i > 0 ? scanMappings[i] : blockMapping; }
+    // Where the next block-linear frame goes: a surface window A neither scans nor may take (ring.target(), the one being drawn
+    // while a copy runs), or the only one. A caller that writes it has made sure there is one (kickOnce defers otherwise).
+    IOMemoryMap *drawSurface() const
+    {
+        const int target = doubleBuffer ? ring.target() : 0;
+        return surfaceMapping(target == kNoBuffer ? 0 : target);
+    }
     // The START_ADDR window A should have once everything requested has latched.
     uint32_t expectedStart() const
     {
-        return doubleBuffer ? surfaceAddress(flipPending ? front ^ 1 : front) : surfaceAddress(0);
+        return doubleBuffer ? surfaceAddress(ring.pending != kNoBuffer ? ring.pending : ring.front) : surfaceAddress(0);
     }
-    // Under the gate, a frame complete in surface front ^ 1 (the caller's copy or fill): point window A at it from the next frame.
+    // Under the gate, a frame complete in drawSurface() (the caller's copy or fill): point window A at it from the next frame. A flip
+    // still out (not seen taken at a frame end) is replaced: DC A takes whatever START_ADDR its assembly copy holds at the boundary,
+    // so the newer frame is the one that scans out there (TegraScanoutRing.h; checkFlip sorts out a boundary that beat this store).
+    // Double-buffered after a fallback (recoverFlip), a frame finished while a flip is out is held and flipped at that flip's latch.
     void flip()
     {
         if (gPanicRestore.panicking) return;
+        const int target = ring.target();
+        if (target == kNoBuffer)
+            panic("IOSwitch display: a frame to flip, but no scanout surface was free for it (front %d pending %d "
+                  "replaced %d)",
+                  ring.front, ring.pending, ring.superseded);
+        const TegraScanoutRing::Ready how = ring.ready(target);
+        markFlip(target);
+        if (how != TegraScanoutRing::kHold) writeFlip(target);
+    }
+    // Under the gate: window A to surface i from the next frame boundary (START_ADDR, then the window and general requests).
+    void writeFlip(int i)
+    {
         __asm__ volatile("dsb sy" ::: "memory");  // the frame is in memory before the window can fetch it
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
         dc[kDcWindowHeader] = kWindowASelect;
-        dc[kWinbufStartAddr] = surfaceAddress(front ^ 1);
+        dc[kWinbufStartAddr] = surfaceAddress(i);
         dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
         dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
-        flipPending = true;
-        flipRequested = frameEnds;
+        flipRequested = frameEnds;  // a replaced flip's boundary is this one's too
         flipTimer->setTimeoutMS(kFlipDeadlineMS);
-        if (stats) {
-            flipSubmit = takenSubmit;
-            takenSubmit = 0;
-        }  // r6-lows: this frame's swap submission, for notePresent
     }
     // Under the gate, a block-linear frame complete in drawSurface(): the first one switches window A to the rotated layout (and,
     // double-buffered, to surface 1), later ones flip when double-buffered; single-buffered they are already on screen.
@@ -1285,30 +1443,63 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         else if (doubleBuffer)
             flip();
     }
-    // A frame end (atFrameEnd) or vblank while a flip is out, under the gate. The latch frees the surface scanned before it.
+    // A frame end (atFrameEnd) or vblank while a flip is out, under the gate. Which surface window A scans (its active START_ADDR)
+    // says what the boundary took: the flip asked for, a flip that was replaced but beat the replacing store (the newer one is
+    // then taken at the next boundary), or nothing yet. Each latch frees the surfaces no longer scanned.
     void checkFlip(bool atFrameEnd)
     {
-        const uint32_t control = dc[kDcStateControl];
-        if (control & (kGeneralActReq | kWinAActReq)) {
+        const uint32_t control = dc[kDcStateControl], start = windowActive(kWinbufStartAddr);
+        const int asked = ring.pending, replaced = ring.superseded, scanned = ring.front;
+        const uint64_t stamp = atFrameEnd ? __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE) : vblankTime;
+        switch (ring.latch(surfaceIndex(start), control & (kGeneralActReq | kWinAActReq))) {
+        case TegraScanoutRing::kWaiting:
             if (!atFrameEnd || frameEnds - flipRequested < kLatchFrames) return;
             panic("IOSwitch display: window A never latched the flip to %#x in %u frames: STATE_CONTROL %#x "
                   "ACT_CONTROL %#x START %#x",
-                  surfaceAddress(front ^ 1), kLatchFrames, control, dc[kDcRegActControl],
-                  windowActive(kWinbufStartAddr));
+                  surfaceAddress(asked), kLatchFrames, control, dc[kDcRegActControl], start);
+        case TegraScanoutRing::kInconsistent:
+            // Double-buffered already, this is the check the path had before r14: window A does not show the flip asked for.
+            if (!ring.replace)
+                panic(
+                    "IOSwitch display: window A latched START_ADDR %#x, not the flip to %#x (front %#x; STATE_CONTROL "
+                    "%#x)",
+                    start, surfaceAddress(asked), surfaceAddress(scanned), control);
+            recoverFlip(start, control, asked, replaced, scanned);
+            return;
+        case TegraScanoutRing::kTaken:
+            if (stats) {
+                if (replaced != kNoBuffer) ++stReplaced;  // that frame was never shown
+                notePresent(stamp, frameEnds - flipRequested, marks[asked]);
+            }
+            break;
+        case TegraScanoutRing::kTakenReplaced:
+            if (stats)
+                notePresent(stamp, 1, marks[replaced]);  // shown for a frame after all; the newer one is still out
+            break;
         }
-        const uint32_t start = windowActive(kWinbufStartAddr);
-        if (start != surfaceAddress(front ^ 1))
-            panic("IOSwitch display: window A latched START_ADDR %#x, not the flip to %#x (front %#x)", start,
-                  surfaceAddress(front ^ 1), surfaceAddress(front));
-        if (stats)
-            notePresent(atFrameEnd ? __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE) : vblankTime,
-                        frameEnds - flipRequested);
         flipLatched();
     }
+    // Under the gate, at the first frame end whose window A START_ADDR none of the asked-for flips explains while flips are being
+    // replaced: DC A does not take a replaced START_ADDR as TegraScanoutRing.h models it. One line, then double buffering for the
+    // rest of the boot, as before r14: the buffer DC A scans becomes the front, the newest complete frame is asked for again (no
+    // request is out now, so it is a plain flip), a replaced buffer it does not scan stays untouched until a frame end shows a plain
+    // latch, and a copy in flight finishes into its own buffer and waits for that latch. A mismatch after this panics as it did.
+    void recoverFlip(uint32_t start, uint32_t control, int asked, int replaced, int scanned)
+    {
+        IOLog("IOSwitch display: window A scans %#x after flips to %#x (replaced %#x, front %#x; STATE_CONTROL %#x), "
+              "not as "
+              "modelled: double-buffered from here (the r7q path)\n",
+              start, surfaceAddress(asked), replaced == kNoBuffer ? 0u : surfaceAddress(replaced),
+              surfaceAddress(scanned), control);
+        const int again = ring.recover(surfaceIndex(start));
+        if (again != kNoBuffer) writeFlip(again);
+        if (stats) ++stFallbacks;
+    }
+    // A surface left the scan: a frame held for the flip slot goes out (double-buffered after a fallback), and a swap waiting for a
+    // surface may go.
     void flipLatched()
     {
-        front ^= 1;
-        flipPending = false;
+        if (const int held = ring.flipHeld(); held != kNoBuffer) writeFlip(held);
         if (kickDeferred) {
             kickDeferred = false;
             kickSwapQueue();
@@ -1390,9 +1581,14 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         dc[kWinbufSurfaceKind] = kBlockSurfaceKind;
         dc[kWinbufHOffset] = kBlockHOffset;
         dc[kWinOptions] = pitchOptions | kBlockScan;
-        // Double-buffered, this frame is in surface 1: no scrambled frame through the pitch window at the handover. Single-buffered
-        // it is in the boot framebuffer, which window A may not scan yet (the console tape).
-        dc[kWinbufStartAddr] = surfaceAddress(doubleBuffer ? 1 : 0);
+        // Double-buffered, this frame is in surface 1 (ring.target() with surface 0 scanned and nothing asked for): no scrambled
+        // frame through the pitch window at the handover. Single-buffered it is in the boot framebuffer, which window A may not scan
+        // yet (the console tape).
+        const int target = doubleBuffer ? ring.target() : 0;
+        if (target == kNoBuffer)
+            panic("IOSwitch display: the first frame has no scanout surface (front %d pending %d replaced %d)",
+                  ring.front, ring.pending, ring.superseded);
+        dc[kWinbufStartAddr] = surfaceAddress(target);
         // From here a panic must put the pitch window back (see restorePitchOnPanic); disarmed it only stops this driver's flips.
         chainPanicHook();
         gPanicRestore.armed = true;
@@ -1407,9 +1603,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         rotationRequested = frameEnds;
         underflowRun = 0;
         if (doubleBuffer) {
-            flipPending = true;
+            ring.ready(target);
             flipRequested = frameEnds;
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
+            markFlip(target);
         }
         IOLog("IOSwitch display: window A to block-linear %s surface requested (ACT_CONTROL %#x -> %#x)\n",
               kBlockScanName, pitchActControl, pitchActControl & ~kWinAActHcntrSel);
@@ -1445,13 +1642,19 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 IOLog("IOSwitch display: window A does a block-linear %s surface (latched after %llu frame ends)\n",
                       kBlockScanName, frameEnds - rotationRequested);
             }
-            if (flipPending) {
-                if (stats) notePresent(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), frameEnds - flipRequested);
+            if (ring.pending != kNoBuffer) {
+                // start is expectedStart(), the flip asked for last: taken (a replaced one never scanned for long).
+                const int asked = ring.pending, replaced = ring.superseded;
+                ring.latch(surfaceIndex(start), false);
+                if (stats) {
+                    if (replaced != kNoBuffer) ++stReplaced;
+                    notePresent(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), frameEnds - flipRequested, marks[asked]);
+                }
                 flipLatched();
             }
             return;
         }
-        if (flipPending) checkFlip(true);
+        if (ring.pending != kNoBuffer) checkFlip(true);
         const uint32_t underflow = dc[kDcIntStatus] & kWinAUnderflowInt;
         if (!underflow) {
             underflowRun = 0;
@@ -1502,12 +1705,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         stopConsoleTape();
         hwRotate = false;
         OSSafeReleaseNULL(blockMapping);
-        // Surface 1 may be read until the pitch window latches: one frame of stale pixels at worst, never a write.
+        // Surfaces 1 and 2 may be read until the pitch window latches: one frame of stale pixels at worst, never a write.
         doubleBuffer = false;
-        flipPending = kickDeferred = false;
-        front = 0;
-        OSSafeReleaseNULL(scanMapping);
-        OSSafeReleaseNULL(scanBuffer);
+        kickDeferred = false;
+        ring.reset(0);
+        for (unsigned i = 1; i < kScanBuffers; ++i) {
+            OSSafeReleaseNULL(scanMappings[i]);
+            OSSafeReleaseNULL(scanBuffers[i]);
+            scanAddresses[i] = 0;
+        }
         if (flipTimer) {
             flipTimer->cancelTimeout();
             if (IOWorkLoop *loop = getWorkLoop()) loop->removeEventSource(flipTimer);
@@ -1594,10 +1800,7 @@ public:
         savedIntEnable = dc[kDcIntEnable];
         savedIntMask = dc[kDcIntMask];
         // The requested surface is complete (flip() follows the copy); it is the one window A gets back.
-        if (flipPending) {
-            front ^= 1;
-            flipPending = false;
-        }
+        ring.settle();
         gPanicRestore.armed = false;
         __asm__ volatile("dmb ish" ::: "memory");
         vblankSource->disable();
@@ -1642,6 +1845,7 @@ public:
             gpuPresentDeferred = false;
             presentGpuCopy();
         }  // likewise a GPU frame copy
+        if (const int held = ring.flipHeld(); held != kNoBuffer) writeFlip(held);  // a frame held for the flip slot
         if (kickDeferred) {
             kickDeferred = false;
             kickSwapQueue();
@@ -1865,15 +2069,29 @@ public:
         if (!bootTransfer || transferred || !logicalPM || !bootMapping || !primary) return;
         const OriginalLegacySwapRequest *request = pendingSwapRequest();
         if (!request || !isValidated(request)) return;
-        // Both surfaces are taken while a flip is out (one scanned, one about to be), and the controller is unclocked during SC7:
-        // the frame end that shows the latch, or the resume, kicks again.
-        if (flipPending || hwSuspended) {
-            if (flipPending && !kickDeferred) {
+        // Every surface is held (one scanned, one asked for, and with three a replaced one not yet known to be untaken, or a flip
+        // out with two), or the controller is unclocked during SC7: the frame end that settles a latch, or the resume, kicks again.
+        const bool noSurface = doubleBuffer && ring.target() == kNoBuffer;
+        if (noSurface || hwSuspended) {
+            if (noSurface && !kickDeferred) {
                 flipWaits = flipWaits + 1;
                 if (stats) deferredAt = mach_absolute_time();
             }
             kickDeferred = true;
             return;
+        }
+        // r14-pacing: a newer accepted swap queued behind this one makes it stale: shown, it would hold the newer one back a frame
+        // (or be replaced at once). Every accepted swap is a whole frame, so it retires unshown, as an early retire does at a
+        // copy's start, and the newest one goes. Only with early retirement (the default): with sheng-early-retire=0 every swap
+        // retires after its own copy.
+        if (bootEarlyRetire) {
+            for (const OriginalLegacySwapRequest *next = queuedAfter(request); next && isValidated(next);
+                 next = queuedAfter(request)) {
+                if (!retireSwap(request, true)) break;
+                if (stats) ++stCollapsed;
+                request = pendingSwapRequest();
+                if (!request || !isValidated(request)) return;
+            }
         }
         const uint64_t kickAt = stats ? mach_absolute_time() : 0;
         // This bounded first-frame transfer preserves the original queue's
@@ -1916,6 +2134,7 @@ public:
                 return;
             }
             __asm__ volatile("dsb sy" ::: "memory");
+            noteTaken(request, kickAt);  // before the flip, which carries it to the present
             if (block) presentBlock();
             shadowValid = false;
             transferred = true;
@@ -1926,7 +2145,6 @@ public:
                 native_legacy_frame_colors_observed(colors, counts, 0);
             }
             native_legacy_transfer_observed(kIOReturnSuccess, request, blankLength);
-            noteTaken(request, kickAt);
             finishTransfer(request);
             return;
         }
@@ -2041,6 +2259,7 @@ public:
             stReadDue = false;
             stRead = readPass(sourceAddress, sourceStride, width, height);
         }
+        noteTaken(request, kickAt);  // before the flip, which carries it to the present
         uint64_t copyStart;
         __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(copyStart));
         uint64_t stored = UINT64_MAX;
@@ -2111,17 +2330,18 @@ public:
         releaseSource();
         transferred = true;
         native_legacy_transfer_observed(kIOReturnSuccess, request, length);
-        noteTaken(request, kickAt);
         finishTransfer(request);
     }
     // A swap the kick has finished with (copied, filled or handed to the GPU), before it retires: its queue time and flip wait.
     void noteTaken(const OriginalLegacySwapRequest *request, uint64_t kickAt)
     {
         if (!stats) return;
-        takenSubmit = submittedAt(request);  // r6-lows: carried to the flip of this frame (flip, notePresent)
-        if (const uint64_t submitted = takenSubmit) stQueue.add(kickAt > submitted ? kickAt - submitted : 0);
+        // r6-lows/r14-pacing: carried to the flip of this frame (flip, markFlip), then to its present (notePresent).
+        taken = {submittedAt(request), kickAt, 0, 0};
+        if (taken.submit) stQueue.add(kickAt > taken.submit ? kickAt - taken.submit : 0);
         if (deferredAt) {
-            stFlipWait.add(kickAt > deferredAt ? kickAt - deferredAt : 0);
+            taken.waited = kickAt > deferredAt ? kickAt - deferredAt : 0;
+            stFlipWait.add(taken.waited);
             deferredAt = 0;
         }
     }
@@ -2298,6 +2518,7 @@ public:
         job.request = request;
         job.source = source;
         job.target = drawSurface();
+        if (doubleBuffer) ring.claim(ring.target());  // the copy thread writes it until copyFinished
         job.ownedSource = ownedSource;
         job.stride = stride;
         job.allocation = allocation;
@@ -2383,7 +2604,8 @@ public:
         if (__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE)) return;
         if (job.status != kIOReturnSuccess) {
             // As a failed copy under the gate: the swap stays queued for the next kick. One retired at the start is gone, so the
-            // next may go at once (a refused one is not tried again here, which could loop).
+            // next may go at once (a refused one is not tried again here, which could loop). Its surface holds nothing to show.
+            if (doubleBuffer) ring.release();
             native_legacy_transfer_observed(job.status, job.request, 0);
             transferred = false;
             if (job.retired) kickSwapQueue();
@@ -2478,14 +2700,16 @@ public:
         OSSafeReleaseNULL(gpuDeadline);
         gpuCopy = false;
     }
-    // Under the gate, in the kick, with no flip out: offer the swap's surface to the GPU for the buffer window A does not scan (front ^ 1,
-    // the one drawSurface() names). Declined, the caller copies it on the CPU. Accepted, the swap retires now unless sheng-early-retire=0
-    // (the compositor renders its next frame, into its other surface, while the GPU copies), and transferred holds the next swap until
-    // the completion has flipped window A.
+    // Under the gate, in the kick, with a surface free: offer the swap's surface to the GPU for the buffer window A neither scans nor
+    // may take (ring.target(), the one drawSurface() names; a flip may be out for another). Declined, the caller copies it on the CPU.
+    // Accepted, the swap retires now unless sheng-early-retire=0 (the compositor renders its next frame, into its other surface,
+    // while the GPU copies), and transferred holds the next swap until the completion has flipped window A.
     bool offerGpuCopy(const OriginalLegacySwapRequest *request, IOMemoryDescriptor *memory, uint64_t stride,
                       uint64_t allocation, uint32_t width, uint32_t height, uint64_t kickAt)
     {
-        if (width != kNativeBlockWidth || height != kNativeBlockHeight || !doubleBuffer || flipPending) return false;
+        if (width != kNativeBlockWidth || height != kNativeBlockHeight || !doubleBuffer) return false;
+        const int target = ring.target();
+        if (target == kNoBuffer) return false;
         TegraScanoutCopy copy = {};
         copy.version = TEGRA_SCANOUT_COPY_VERSION;
         copy.width = width;
@@ -2495,7 +2719,7 @@ public:
         copy.source = memory;
         copy.sourceStride = stride;
         copy.sourceBytes = allocation;
-        copy.target = surfaceAddress(front ^ 1);
+        copy.target = surfaceAddress(target);
         copy.targetBytes = kNativeBlockBytes;
         copy.targetPitch = (uint32_t)kNativeBlockStride;
         copy.blockHeightLog2 = 4;  // kNativeBlockGobs, the DC's BLOCK_HEIGHT(4)
@@ -2508,6 +2732,7 @@ public:
         gpuSequence = copy.sequence;
         gpuSource = memory;
         gpuOfferedAt = mach_absolute_time();
+        ring.claim(target);  // the GPU writes it until finishGpuCopy
         __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
         gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
         native_legacy_swap_stage(1);
@@ -2539,7 +2764,7 @@ public:
         }
         panic("IOSwitch display: GPU frame copy %llu into %#x not completed in %u ms (tegra_gm20b_scanout_copy "
               "accepted it)",
-              self->gpuSequence, self->surfaceAddress(self->front ^ 1), kGpuCopyDeadlineMS);
+              self->gpuSequence, self->surfaceAddress(self->ring.drawing), kGpuCopyDeadlineMS);
     }
     // Under the gate: the GPU frame copy is done (status 0) or failed. Done, window A flips to it (after SC7: at the resume) and the swap
     // retires, or, retired at the offer, the next one may go. Failed, nothing is flipped: a swap still queued is copied on the CPU at
@@ -2557,6 +2782,7 @@ public:
         }
         if (status) {
             native_legacy_gpu_fallback_observed(status);
+            ring.release();  // the target may hold a partial frame: never flipped to
             gpuBypass = true;
             if (gpuRetired) {
                 gpuRetired = false;

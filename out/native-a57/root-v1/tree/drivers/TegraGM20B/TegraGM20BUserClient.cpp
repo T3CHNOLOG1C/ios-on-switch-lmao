@@ -1955,7 +1955,8 @@ extern "C" IOReturn tegra_gm20b_new_user_client(IOService *provider, task_t task
 // copies it, after the compositor's GPU work, into the block-linear target, and calls native_legacy_gpu_complete from the
 // GPU interrupt pass. Offers come one at a time under the display's gate: nothing here waits for the GPU. tegra-gpu-present=0
 // declines every offer (the display then copies on the CPU).
-//   targets   the two scanout buffers, physically contiguous, mapped once each at kPresentTarget + i * 4 MiB, kind 0xfe
+//   targets   the display's scanout buffers (three: r14-pacing's latest-frame-wins flips), physically contiguous, mapped once
+//             each at kPresentTarget + i * 4 MiB, kind 0xfe
 //   surfaces  the last four swapped surfaces, like the display's own surface maps: each keeps a retained and prepared
 //             (wired) descriptor and its GPU mapping at kPresentSurface + i * 16 MiB; the least recently offered one goes
 //             when a fifth surface comes. Its CPU caches are cleaned once, when it is imported (the GPU, which wrote it,
@@ -1978,7 +1979,9 @@ struct PresentSurface {
 	uint64_t *pas;
 	tgm_mem *mem;
 };
-PresentTarget gTargets[2];
+// TegraScanoutCopy.h: the boot framebuffer and the display's two other buffers
+constexpr unsigned kPresentTargets = 3;
+PresentTarget gTargets[kPresentTargets];
 PresentSurface gSurfaces[4];
 uint64_t gSurfaceUses;
 IOLock *gPresentLock;
@@ -2000,17 +2003,20 @@ void dropSurface(PresentSurface &s, unsigned slot)
 	s = {};
 }
 
-// The GPU address of the target at pa (one of the display's two scanout buffers), mapped on first use.
+// The GPU address of the target at pa (one of the display's scanout buffers), mapped on first use.
 uint64_t presentTarget(uint64_t pa, uint64_t bytes)
 {
-	for (unsigned i = 0; i < 2; i++)
+	unsigned slot = kPresentTargets;
+	for (unsigned i = 0; i < kPresentTargets; i++) {
 		if (gTargets[i].mem && gTargets[i].pa == pa && gTargets[i].bytes == bytes)
 			return kPresentTarget + i * kPresentTargetSpan;
-	unsigned slot = gTargets[0].mem ? 1 : 0;
-	PresentTarget &t = gTargets[slot];
-	if (t.mem || bytes > kPresentTargetSpan || (pa | bytes) & 0xfff ||
+		if (!gTargets[i].mem && slot == kPresentTargets)
+			slot = i;
+	}
+	if (slot == kPresentTargets || bytes > kPresentTargetSpan || (pa | bytes) & 0xfff ||
 	    pa + bytes > (1ULL << 32))
-		return 0;  // a third address: not the contract (TegraScanoutCopy.h)
+		return 0;  // a fourth address: not the contract (TegraScanoutCopy.h)
+	PresentTarget &t = gTargets[slot];
 	const uint32_t npages = static_cast<uint32_t>(bytes >> 12);
 	t.pas = IONew(uint64_t, npages);
 	if (!t.pas)
