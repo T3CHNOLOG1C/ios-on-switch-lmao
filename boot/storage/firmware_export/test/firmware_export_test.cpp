@@ -1,4 +1,4 @@
-// boot/storage/firmware_export/export.c (iosw_fw_capture: the RAM reader that exports the pinned U-Boot's SD card
+// boot/storage/firmware_export/export.c (switch_fw_capture: the RAM reader that exports the pinned U-Boot's SD card
 // state) against a synthetic RAM image built here around the pinned bl33.bin: the exact 256-byte record, capacity
 // edges, a global-data pointer never dereferenced when invalid, every instruction fingerprint, bad global fields, heap
 // mismatches, class, device, card-link, state and capacity faults, a failed read at every address it reads, and a
@@ -45,7 +45,7 @@ protected:
     std::optional<uint64_t> reject_at;
     std::function<void()> change_at_second;
     unsigned gd_reads = 0;
-    iosw_fw_reader reader{this, Copy};
+    switch_fw_reader reader{this, Copy};
 
     void P16(uint64_t p, uint16_t v) { Put(p, v, 2); }
     void P32(uint64_t p, uint32_t v) { Put(p, v, 4); }
@@ -125,7 +125,7 @@ protected:
     Bytes RunCapture(int expected = 0, uint64_t gd = GD)
     {
         Bytes out(256, 0xa5);
-        EXPECT_EQ(iosw_fw_capture(&reader, gd, out.data()), expected);
+        EXPECT_EQ(switch_fw_capture(&reader, gd, out.data()), expected);
         if (expected) EXPECT_EQ(out, Bytes(256, 0xa5)) << "failure wrote the record";
         return out;
     }
@@ -166,7 +166,7 @@ TEST_F(FirmwareExport, ExactSuccessRecord)
     uint8_t digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(Bl33().data(), (CC_LONG)Bl33().size(), digest);
     std::memcpy(&expected[0x80], digest, 32);
-    EXPECT_EQ(std::memcmp(digest, iosw_fw_sha256, 32), 0) << "signatures.h names the pinned bl33.bin";
+    EXPECT_EQ(std::memcmp(digest, switch_fw_sha256, 32), 0) << "signatures.h names the pinned bl33.bin";
     Le(expected, 0xf0, (uint32_t)crc32(0, expected.data(), 0xf0), 4);
     EXPECT_EQ(out, expected);
     EXPECT_EQ(gd_reads, 2u);
@@ -195,18 +195,18 @@ TEST_F(FirmwareExport, InvalidGlobalDataNeverDereferenced)
 
 TEST_F(FirmwareExport, EveryInstructionFingerprint)
 {
-    const size_t count = sizeof(iosw_fw_words) / sizeof(iosw_fw_words[0]);
+    const size_t count = sizeof(switch_fw_words) / sizeof(switch_fw_words[0]);
     EXPECT_GT(count, 100u);
     for (size_t i = 0; i < count; ++i) {
-        const uint64_t p = BASE + iosw_fw_words[i].offset;
-        SCOPED_TRACE(testing::Message() << std::hex << "fingerprint at +0x" << iosw_fw_words[i].offset);
+        const uint64_t p = BASE + switch_fw_words[i].offset;
+        SCOPED_TRACE(testing::Message() << std::hex << "fingerprint at +0x" << switch_fw_words[i].offset);
         // The fingerprint is the pinned file's own word there.
         uint32_t stored;
         std::memcpy(&stored, &mem[p - GD], 4);
-        EXPECT_EQ(stored, iosw_fw_words[i].word);
-        P32(p, iosw_fw_words[i].word ^ 1);
+        EXPECT_EQ(stored, switch_fw_words[i].word);
+        P32(p, switch_fw_words[i].word ^ 1);
         RunCapture(3);
-        P32(p, iosw_fw_words[i].word);
+        P32(p, switch_fw_words[i].word);
     }
 }
 
@@ -301,7 +301,7 @@ TEST_F(FirmwareExport, EveryReadCanFailWithoutOutput)
         SCOPED_TRACE(testing::Message() << std::hex << "failing the read at 0x" << p);
         reject_at = p;
         Bytes out(256, 0xa5);
-        EXPECT_NE(iosw_fw_capture(&reader, GD, out.data()), 0);
+        EXPECT_NE(switch_fw_capture(&reader, GD, out.data()), 0);
         EXPECT_EQ(out, Bytes(256, 0xa5));
     }
     reject_at.reset();

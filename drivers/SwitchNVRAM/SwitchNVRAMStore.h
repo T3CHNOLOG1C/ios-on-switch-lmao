@@ -4,7 +4,7 @@
 //
 // Two slots, written alternately. A slot is a 32-byte header, then the bank image IODTNVRAM serialized (a CHRP bank:
 // the "nvram" header with its adler32, then the common partition), zero-padded to a 4 KiB multiple (the stride):
-//    0  magic     "IOSWNVRM"
+//    0  magic     "SWCHNVRM"
 //    8  version   1
 //   12  bytes     image length (/chosen nvram-bank-size when it was written)
 //   16  sequence  +1 per write (64-bit); of the slots that check out, the one with the higher sequence is current
@@ -25,7 +25,7 @@
 #define SWITCH_NVRAM_STORE_HEADER    32u
 #define SWITCH_NVRAM_STORE_MAX_IMAGE 0x10000u
 
-static const char switch_nvram_store_magic[8] = {'I', 'O', 'S', 'W', 'N', 'V', 'R', 'M'};
+static const char switch_nvram_store_magic[8] = {'S', 'W', 'C', 'H', 'N', 'V', 'R', 'M'};
 
 static inline uint32_t switch_nvram_get32(const uint8_t *p)
 {

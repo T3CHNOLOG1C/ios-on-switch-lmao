@@ -72,9 +72,9 @@ _start:
     mrs x11, CNTHCTL_EL2
     str x11, [x9, #200]
 2:
-    // Commit marker last: little-endian ASCII IOSWPRB1.
-    movz x11, #0x4f49
-    movk x11, #0x5753, lsl #16
+    // Commit marker last: little-endian ASCII SWCHPRB1.
+    movz x11, #0x5753
+    movk x11, #0x4843, lsl #16
     movk x11, #0x5250, lsl #32
     movk x11, #0x3142, lsl #48
     str x11, [x9]

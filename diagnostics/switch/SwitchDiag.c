@@ -279,7 +279,7 @@ void switch_diag_init(const boot_args *args)
     if (args->Video.v_baseAddr == SWITCH_FB_PA && args->Video.v_display == 0 && args->Video.v_rowBytes == 2880 &&
         args->Video.v_width == 720 && args->Video.v_height == 1280 && args->Video.v_depth == 0x320) {
         native_text_console = 1;
-        switch_diag_record.magic = UINT64_C(0x494f5357584e5531);
+        switch_diag_record.magic = UINT64_C(0x53574348584e5531);
         return;
     }
     if (cpus != 1) return; /* Four-core native uses only the stock video console. */
@@ -290,7 +290,7 @@ void switch_diag_init(const boot_args *args)
     vm_offset_t mapped = ml_io_map((vm_offset_t)SWITCH_FB_PA, (vm_size_t)SWITCH_FB_BYTES);
     if (!mapped) return;
     framebuffer = (volatile uint32_t *)mapped;
-    switch_diag_record.magic = UINT64_C(0x494f5357584e5531); /* IOSWXNU1 */
+    switch_diag_record.magic = UINT64_C(0x53574348584e5531); /* SWCHXNU1 */
     switch_diag_record.framebuffer_va = mapped;
     switch_diag_record.ready = 1;
     int verbose = 0;
@@ -301,7 +301,7 @@ void switch_diag_init(const boot_args *args)
     }
     int user_test = 0;
     if (PE_parse_boot_argn("switch-user-test", &user_test, sizeof(user_test)) && user_test == 1) {
-        switch_user_record[0] = UINT64_C(0x494f535755534552);
+        switch_user_record[0] = UINT64_C(0x5357434855534552);
         switch_user_record[1] = 1;
     }
     switch_diag_clear(framebuffer);
@@ -433,7 +433,7 @@ static void files_digest_line(unsigned y, const char *label, const uint8_t diges
 }
 void switch_diag_files_update(void)
 {
-    if (!switch_diag_record.ready || switch_diag_record.panicked || switch_files_record[0] != IOSW_FILES_MAGIC)
+    if (!switch_diag_record.ready || switch_diag_record.panicked || switch_files_record[0] != SWITCH_FILES_MAGIC)
         return;
     boolean_t previous = ml_set_interrupts_enabled(FALSE);
     for (unsigned y = 350; y < 660; y++)
@@ -490,9 +490,9 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
         return;
     }
     unsigned step = (unsigned)switch_user_record[2];
-    if ((step == 0 && (code != 20 || pc != IOSW_USER_AFTER_GETPID)) ||
-        (step == 1 && (code != 202 || pc != IOSW_USER_AFTER_SYSCTL)) ||
-        (step == 2 && (code != 20 || pc != IOSW_USER_CHECKPOINT)) || step > 2)
+    if ((step == 0 && (code != 20 || pc != SWITCH_USER_AFTER_GETPID)) ||
+        (step == 1 && (code != 202 || pc != SWITCH_USER_AFTER_SYSCTL)) ||
+        (step == 2 && (code != 20 || pc != SWITCH_USER_CHECKPOINT)) || step > 2)
         return;
     switch_user_record[4] = pc;
     switch_user_record[5] = cpsr;
@@ -504,9 +504,9 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
     }
     if (step == 2) {
         uint64_t results[4], page = 0, length = 0;
-        if (copyin(IOSW_USER_RESULTS, results, sizeof(results)) ||
-            copyin(IOSW_USER_USER_PAGE_SIZE, &page, sizeof(page)) ||
-            copyin(IOSW_USER_OLD_LENGTH, &length, sizeof(length))) {
+        if (copyin(SWITCH_USER_RESULTS, results, sizeof(results)) ||
+            copyin(SWITCH_USER_USER_PAGE_SIZE, &page, sizeof(page)) ||
+            copyin(SWITCH_USER_OLD_LENGTH, &length, sizeof(length))) {
             switch_user_record[3] = 0x200;
             return;
         }
@@ -545,7 +545,7 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
     if (step == 2) {
         switch_sd_probe();
         block_start();
-        if (switch_sd_record[0] == IOSW_SD_DIAG_MAGIC && switch_files_record[0] != IOSW_FILES_MAGIC) {
+        if (switch_sd_record[0] == SWITCH_SD_DIAG_MAGIC && switch_files_record[0] != SWITCH_FILES_MAGIC) {
             previous = ml_set_interrupts_enabled(FALSE);
             const char *message = switch_sd_record[2] == 5     ? "SD SECTOR 0 MATCHES U-BOOT - READ ONLY"
                                   : switch_sd_record[3] == 123 ? "SD SECTOR 0 MISMATCH - NO RETRY"

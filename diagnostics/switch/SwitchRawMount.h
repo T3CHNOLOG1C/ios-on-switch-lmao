@@ -5,9 +5,9 @@
 #include "storage/block_backend.h"
 #include <sys/fcntl.h>
 
-#define IOSW_RAW_DATA_UUID    "D1B1D053-D0A6-496C-8625-A947A3DA863E"
-#define IOSW_RAW_PREBOOT_UUID "4AA4A761-5138-439D-9A30-D4138F6887FA"
-#define IOSW_RAW_BYTES        UINT64_C(34359738368)
+#define SWITCH_RAW_DATA_UUID    "D1B1D053-D0A6-496C-8625-A947A3DA863E"
+#define SWITCH_RAW_PREBOOT_UUID "4AA4A761-5138-439D-9A30-D4138F6887FA"
+#define SWITCH_RAW_BYTES        UINT64_C(34359738368)
 extern int switch_raw_volume_status(const char *, dev_t *, char *, size_t, uint64_t *);
 extern int native_owner_publish_raw_boot_manifest(dev_t, const char *, dev_t, const char *);
 
@@ -16,12 +16,12 @@ static int native_switch_raw_wait(const char *uuid, dev_t *device, char path[64]
     for (unsigned attempt = 0;; ++attempt) {
         uint64_t bytes = 0;
         int status = switch_raw_volume_status(uuid, device, path, 64, &bytes);
-        if (status == IOSW_BLOCK_OK) return bytes ? 0 : EINVAL;
-        if (status != IOSW_BLOCK_NOT_READY)
-            return status == IOSW_BLOCK_NOMEM ? ENOMEM : status == IOSW_BLOCK_IO ? EIO : EINVAL;
+        if (status == SWITCH_BLOCK_OK) return bytes ? 0 : EINVAL;
+        if (status != SWITCH_BLOCK_NOT_READY)
+            return status == SWITCH_BLOCK_NOMEM ? ENOMEM : status == SWITCH_BLOCK_IO ? EIO : EINVAL;
         if (attempt == 100) return ETIMEDOUT;
         struct timespec interval = {.tv_sec = 0, .tv_nsec = 100000000};
-        (void)msleep((void *)&native_owner_cache_stage, NULL, PWAIT, "ioswRaw", &interval);
+        (void)msleep((void *)&native_owner_cache_stage, NULL, PWAIT, "switchRaw", &interval);
     }
 }
 
@@ -100,7 +100,7 @@ static int native_switch_raw_union(proc_t p, user_addr_t scratch, const char *so
     return error;
 }
 
-#define IOSW_RAW_STEP(step, call)                                        \
+#define SWITCH_RAW_STEP(step, call)                                        \
     do {                                                                 \
         error = (call);                                                  \
         if (error) {                                                     \
@@ -126,15 +126,15 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
     dev_t preboot_device = NODEV;
     char path[64];
     mount_t preboot_mount = NULL;
-    IOSW_RAW_STEP("Preboot volume lookup", native_switch_raw_wait(IOSW_RAW_PREBOOT_UUID, &preboot_device, path));
-    IOSW_RAW_STEP("/private/preboot lookup",
+    SWITCH_RAW_STEP("Preboot volume lookup", native_switch_raw_wait(SWITCH_RAW_PREBOOT_UUID, &preboot_device, path));
+    SWITCH_RAW_STEP("/private/preboot lookup",
                   native_switch_raw_directory(p, scratch, "/private/preboot", os_mount, 0));
-    IOSW_RAW_STEP("Preboot mount",
+    SWITCH_RAW_STEP("Preboot mount",
                   native_switch_raw_mount(p, scratch, "/private/preboot", path, preboot_device, 0, &preboot_mount));
     static const char *const directories[] = {"/private/preboot/Cryptexes", "/private/preboot/Cryptexes/OS",
                                               "/private/preboot/Cryptexes/App"};
     for (unsigned i = 0; i < 3; ++i)
-        IOSW_RAW_STEP(directories[i], native_switch_raw_directory(p, scratch, directories[i], preboot_mount, 1));
+        SWITCH_RAW_STEP(directories[i], native_switch_raw_directory(p, scratch, directories[i], preboot_mount, 1));
     dev_t cache_device = NODEV;
     /* Real iOS grafts these cryptexes onto the Preboot volume (libignition), so LaunchServices files their bundles
      * under the Preboot container and keeps them. We attach-and-mount instead, so record each cryptex mount_t and
@@ -145,7 +145,7 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
     for (unsigned i = 0; i < 2; ++i) {
         dev_t image_volume = NODEV;
         mount_t cryptex_mount = NULL;
-        IOSW_RAW_STEP(i ? "App cryptex attach" : "System cryptex attach",
+        SWITCH_RAW_STEP(i ? "App cryptex attach" : "System cryptex attach",
                       switch_cryptex_attach(i, preboot_device, &image_volume, path, sizeof(path)));
         error = native_switch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount);
         /* r17-launch: a volume on the image's direct read map that does not mount is mounted through DiskImages. */
@@ -154,7 +154,7 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
                    error);
             error = native_switch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount);
         }
-        IOSW_RAW_STEP(i ? "App cryptex mount" : "System cryptex mount", error);
+        SWITCH_RAW_STEP(i ? "App cryptex mount" : "System cryptex mount", error);
         native_owner_cryptex_mount[i] = cryptex_mount;
         switch_cryptex_mounted(i, cryptex_mount);  // SwitchCryptex.cpp: the cluster layer's record, the prefetch
         if (!i) cache_device = image_volume;

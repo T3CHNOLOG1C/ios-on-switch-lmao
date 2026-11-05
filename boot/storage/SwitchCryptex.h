@@ -14,7 +14,7 @@ extern "C" {
 /* Boot-only serialized original DiskImages attach. index0=System,1=App.
  * Fixed root-owned files under /private/preboot/Switch-Staging; exact native
  * RW Preboot UUID/device, backing vnode and retained RO provider are required.
- * Returns BSD errno (0 success), not iosw_block_status. An attachment failure
+ * Returns BSD errno (0 success), not switch_block_status. An attachment failure
  * latches for this index: the original hook has no transactional detach API. */
 int switch_cryptex_attach(unsigned index, dev_t expectedPrebootDevice,
     dev_t *volume, char *devicePath, size_t capacity);

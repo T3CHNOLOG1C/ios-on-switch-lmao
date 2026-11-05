@@ -2678,8 +2678,8 @@ pmap_virtual_region(
 static unsigned int avail_page_count = 0;
 static bool need_ram_ranges_init = true;
 static void initialize_ram_ranges(void);
-static bool iosw_dense_pages;
-static pmap_paddr_t iosw_stolen_end;
+static bool switch_dense_pages;
+static pmap_paddr_t switch_stolen_end;
 
 unsigned int
 pmap_switch_dense_page_count(void)
@@ -2691,7 +2691,7 @@ boolean_t
 pmap_switch_page_reserved(ppnum_t pnum)
 {
     pmap_paddr_t pa=(pmap_paddr_t)pnum << PAGE_SHIFT;
-    return pmap_switch_ram_reserved(pnum) || pa < iosw_stolen_end;
+    return pmap_switch_ram_reserved(pnum) || pa < switch_stolen_end;
 }
 
 boolean_t
@@ -2699,9 +2699,9 @@ pmap_switch_begin_dense_pages(void)
 {
     if (!pmap_switch_dense_page_count()) return FALSE;
     if (need_ram_ranges_init) initialize_ram_ranges();
-    iosw_stolen_end=first_avail;
+    switch_stolen_end=first_avail;
     first_avail=gPhysBase;
-    iosw_dense_pages=true;
+    switch_dense_pages=true;
     return TRUE;
 }
 
@@ -2784,14 +2784,14 @@ pmap_next_page(
 		initialize_ram_ranges();
 	}
 
-    if (pmap_switch_dense_page_count() && !iosw_dense_pages) {
+    if (pmap_switch_dense_page_count() && !switch_dense_pages) {
         while (first_avail<avail_end && pmap_switch_page_reserved((ppnum_t)atop(first_avail)))
             first_avail+=PAGE_SIZE;
     }
     if (first_avail != avail_end) {
 		*pnum = (ppnum_t)atop(first_avail);
 		first_avail += PAGE_SIZE;
-        if (!iosw_dense_pages || !pmap_switch_page_reserved(*pnum)) {
+        if (!switch_dense_pages || !pmap_switch_page_reserved(*pnum)) {
             assert(avail_page_count > 0);
             --avail_page_count;
         }

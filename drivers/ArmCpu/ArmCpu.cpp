@@ -269,7 +269,7 @@ static inline void countOwn(volatile uint32_t &counter)
 
 static void gicV2IpiObserved(uint32_t cpu, uint32_t acknowledge)
 {
-    if (!gNativeSmp || cpu >= IOSW_SMP_CORE_COUNT) {
+    if (!gNativeSmp || cpu >= SWITCH_SMP_CORE_COUNT) {
         return;
     }
     const uint32_t source = 1U << ((acknowledge >> 10) & 7);
@@ -277,7 +277,7 @@ static void gicV2IpiObserved(uint32_t cpu, uint32_t acknowledge)
         __atomic_store_n(&armcpu_smp_self_ipi_ack[cpu], 1U, __ATOMIC_RELEASE);
     }
     if (cpu == 0) {
-        for (uint32_t peer = 1; peer < IOSW_SMP_CORE_COUNT; ++peer) {
+        for (uint32_t peer = 1; peer < SWITCH_SMP_CORE_COUNT; ++peer) {
             const uint32_t target = __atomic_load_n(&armcpu_gic_targets[peer], __ATOMIC_ACQUIRE);
             if (source == target && __atomic_exchange_n(&gCrossReply[peer], 0U, __ATOMIC_ACQ_REL)) {
                 __atomic_store_n(&armcpu_smp_cross_back[peer], 1U, __ATOMIC_RELEASE);
@@ -467,7 +467,7 @@ bool ArmCpu::wakeRedistributor(bool local)
 bool ArmCpu::prepareGicV2(void)
 {
     const unsigned cpus = static_cast<unsigned>(ml_get_max_cpu_number()) + 1;
-    if (gSpiIpi || (cpus != 1 && (!gNativeSmp || cpus != IOSW_SMP_CORE_COUNT)) ||
+    if (gSpiIpi || (cpus != 1 && (!gNativeSmp || cpus != SWITCH_SMP_CORE_COUNT)) ||
         cpus > (((read32(dist, 4) >> 5) & 7) + 1)) {
         return false;
     }
@@ -737,7 +737,7 @@ bool ArmCpu::finishSecondary(void)
     dist = gDist;
     redistBase = gFrames;
     redistSize = gFramesSize;
-    if (gicV2 && (!gNativeSmp || logicalId >= IOSW_SMP_CORE_COUNT || affinity != logicalId)) {
+    if (gicV2 && (!gNativeSmp || logicalId >= SWITCH_SMP_CORE_COUNT || affinity != logicalId)) {
         armcpu_smp_fail[logicalId] = 3;
         return false;
     }
@@ -830,7 +830,7 @@ static bool qualifyNativePsci(uint64_t target)
 
 static void invalidateSecondaryStatus(switch_smp_record *record)
 {
-    const uintptr_t status = reinterpret_cast<uintptr_t>(record) + IOSW_SMP_STATUS_OFFSET;
+    const uintptr_t status = reinterpret_cast<uintptr_t>(record) + SWITCH_SMP_STATUS_OFFSET;
     // This cache line belongs exclusively to the secondary after CPU_ON. The
     // boot CPU never dirties it while polling cache-off entry/fault evidence.
     __asm__ volatile("dsb sy\ndc ivac, %0\ndsb sy" ::"r"(status) : "memory");
@@ -838,7 +838,7 @@ static void invalidateSecondaryStatus(switch_smp_record *record)
 
 static bool nativeSmpReady(uint32_t cpu, uint64_t stage)
 {
-    return cpu < IOSW_SMP_CORE_COUNT && stage == IOSW_SMP_STAGE_C &&
+    return cpu < SWITCH_SMP_CORE_COUNT && stage == SWITCH_SMP_STAGE_C &&
            __atomic_load_n(&armcpu_smp_scheduler_ack[cpu], __ATOMIC_ACQUIRE) &&
            __atomic_load_n(&armcpu_gic_targets[cpu], __ATOMIC_ACQUIRE) &&
            __atomic_load_n(&armcpu_core_timer[cpu], __ATOMIC_ACQUIRE) &&
@@ -863,12 +863,12 @@ void ArmCpu::observeAllThread(void *, wait_result_t)
     // registration/start threads cannot evade the per-core qualification checks.
     const uint64_t started = counter();
     for (;;) {
-        bool ready = __atomic_load_n(&armcpu_smp_running, __ATOMIC_ACQUIRE) == IOSW_SMP_CORE_COUNT - 1;
-        for (uint32_t cpu = 1; cpu < IOSW_SMP_CORE_COUNT; ++cpu) {
+        bool ready = __atomic_load_n(&armcpu_smp_running, __ATOMIC_ACQUIRE) == SWITCH_SMP_CORE_COUNT - 1;
+        for (uint32_t cpu = 1; cpu < SWITCH_SMP_CORE_COUNT; ++cpu) {
             ready = ready && __atomic_load_n(&armcpu_smp_step[cpu], __ATOMIC_ACQUIRE) == 8;
         }
         if (ready) {
-            IOLog("ArmCpu: %u of %u secondary cores running\n", IOSW_SMP_CORE_COUNT - 1, IOSW_SMP_CORE_COUNT - 1);
+            IOLog("ArmCpu: %u of %u secondary cores running\n", SWITCH_SMP_CORE_COUNT - 1, SWITCH_SMP_CORE_COUNT - 1);
             thread_terminate(current_thread());
             return;
         }
@@ -880,7 +880,7 @@ void ArmCpu::observeAllThread(void *, wait_result_t)
     }
     // Cores that never reached the scheduler are simply absent; the system runs on the rest.
     IOLog("ArmCpu: %u of %u secondary cores running (CPU1=%u/%u/%d CPU2=%u/%u/%d CPU3=%u/%u/%d step/fail/rc)\n",
-          armcpu_smp_running, IOSW_SMP_CORE_COUNT - 1, armcpu_smp_step[1], armcpu_smp_fail[1], armcpu_smp_psci_rc[1],
+          armcpu_smp_running, SWITCH_SMP_CORE_COUNT - 1, armcpu_smp_step[1], armcpu_smp_fail[1], armcpu_smp_psci_rc[1],
           armcpu_smp_step[2], armcpu_smp_fail[2], armcpu_smp_psci_rc[2], armcpu_smp_step[3], armcpu_smp_fail[3],
           armcpu_smp_psci_rc[3]);
     thread_terminate(current_thread());
@@ -928,7 +928,7 @@ void ArmCpu::observeThread(void *argument, wait_result_t)
         }
         if (ready && __atomic_load_n(&armcpu_smp_cross_back[cpu], __ATOMIC_ACQUIRE)) {
             __atomic_store_n(&armcpu_smp_step[cpu], 8U, __ATOMIC_RELEASE);
-            if (__atomic_add_fetch(&armcpu_smp_running, 1U, __ATOMIC_RELAXED) == IOSW_SMP_CORE_COUNT - 1)
+            if (__atomic_add_fetch(&armcpu_smp_running, 1U, __ATOMIC_RELAXED) == SWITCH_SMP_CORE_COUNT - 1)
                 __atomic_store_n(&gIpiQualified, true, __ATOMIC_RELEASE);
             thread_terminate(current_thread());
             return;
@@ -1468,7 +1468,7 @@ static void psciSleep(boolean_t)
         const int64_t rc = psciCall(false, 0x84000002, 0, 0, 0);
         panic("ArmCpu: PSCI CPU_OFF on CPU%u returned %lld", cpu, rc);
     }
-    for (uint64_t peer = 1; gNativeSmp && peer < IOSW_SMP_CORE_COUNT; ++peer) {
+    for (uint64_t peer = 1; gNativeSmp && peer < SWITCH_SMP_CORE_COUNT; ++peer) {
         const uint64_t started = counter();
         int64_t state;
         while ((state = psciCall(false, 0xc4000004, peer, 0, 0)) != 1) {
@@ -1480,7 +1480,7 @@ static void psciSleep(boolean_t)
     }
     switch_smp_record *record = &switch_secondary_records[0];
     memset(record, 0, sizeof(*record));
-    record->magic = IOSW_SMP_MAGIC;
+    record->magic = SWITCH_SMP_MAGIC;
     record->mpidr = 0;
     record->logical = 0;
     record->cntfrq = UINT64_C(19200000);
@@ -1509,7 +1509,7 @@ extern "C" int armcpu_system_sleep_enable(char *why, size_t size)
         reason = "secondary cores without native SMP (sheng-smp=1 switch-smp=1)";
     }
     // A core parked after a failed start stays on at the firmware, and SYSTEM_SUSPEND would wait for it forever.
-    else if (gNativeSmp && __atomic_load_n(&armcpu_smp_running, __ATOMIC_ACQUIRE) != IOSW_SMP_CORE_COUNT - 1) {
+    else if (gNativeSmp && __atomic_load_n(&armcpu_smp_running, __ATOMIC_ACQUIRE) != SWITCH_SMP_CORE_COUNT - 1) {
         reason = "not every secondary core is running";
     } else if (!psciConduit(&hvc) || hvc) {
         reason = "no PSCI SMC conduit in /psci";
@@ -1617,7 +1617,7 @@ kern_return_t ArmCpu::startCPU(vm_offset_t, vm_offset_t)
     // that sleep stopped may be started a second time.
     const bool resume = gSystemSleep && getCPUState() == kIOCPUStateStopped;
     if (gicV2) {
-        if (!gNativeSmp || logicalId >= IOSW_SMP_CORE_COUNT || affinity != logicalId ||
+        if (!gNativeSmp || logicalId >= SWITCH_SMP_CORE_COUNT || affinity != logicalId ||
             (__atomic_exchange_n(&gCpuOnAttempted[logicalId], 1U, __ATOMIC_ACQ_REL) && !resume) ||
             !qualifyNativePsci(affinity)) {
             armcpu_smp_psci_rc[logicalId] = -1002;
@@ -1638,7 +1638,7 @@ kern_return_t ArmCpu::startCPU(vm_offset_t, vm_offset_t)
             return KERN_FAILURE;
         }
         memset(record, 0, sizeof(*record));
-        record->magic = IOSW_SMP_MAGIC;
+        record->magic = SWITCH_SMP_MAGIC;
         record->mpidr = affinity;
         record->logical = logicalId;
         record->cntfrq = frequency;

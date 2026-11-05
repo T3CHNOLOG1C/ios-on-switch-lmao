@@ -428,7 +428,7 @@ diff -uN a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 -#ifndef XNU_OWNER_CACHE_VOLUME_UUID
 -#define XNU_OWNER_CACHE_VOLUME_UUID "7A23BAC7-E86D-4DF4-B181-E6D80F212AE5"
 +#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-+	if (switch_files_storage_profile() == IOSW_STORAGE_RAW)
++	if (switch_files_storage_profile() == SWITCH_STORAGE_RAW)
 +		return native_switch_raw_cache_prepare(p, scratch, envp);
  #endif
 -	const char *volume = XNU_OWNER_CACHE_VOLUME_UUID;
@@ -1212,8 +1212,8 @@ diff -uN a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 -	 * sparse media. A sparse disk has no contiguous logical-byte address. */
 +#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 +	(void)PE_parse_boot_argn("switch-root-boot", &switch_persistent, sizeof(switch_persistent));
-+	switch_raw = switch_files_storage_profile() == IOSW_STORAGE_RAW;
-+	if (switch_raw) data_uuid = IOSW_RAW_DATA_UUID;
++	switch_raw = switch_files_storage_profile() == SWITCH_STORAGE_RAW;
++	if (switch_raw) data_uuid = SWITCH_RAW_DATA_UUID;
 +	if (switch_persistent == 1) {
 +		/* Mutable Data has no fixed content digest or contiguous RAM address.
 +		 * Select only the exact UUID under this boot's persistent SD child. */
@@ -1224,17 +1224,17 @@ diff -uN a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 +			int status = switch_raw ?
 +			    switch_raw_volume_status(data_uuid, &device, device_path, sizeof(device_path), &size) :
 +			    switch_data_volume_status(data_uuid, &device, device_path, sizeof(device_path), &size);
-+			if (status == IOSW_BLOCK_OK) break;
-+			if (status != IOSW_BLOCK_NOT_READY) {
-+				error = status == IOSW_BLOCK_NOMEM ? ENOMEM :
-+				    (status == IOSW_BLOCK_IO ? EIO : EINVAL);
++			if (status == SWITCH_BLOCK_OK) break;
++			if (status != SWITCH_BLOCK_NOT_READY) {
++				error = status == SWITCH_BLOCK_NOMEM ? ENOMEM :
++				    (status == SWITCH_BLOCK_IO ? EIO : EINVAL);
 +				goto done;
 +			}
 +			if (attempt == 100) { error = ETIMEDOUT; goto done; }
 +			struct timespec interval = {.tv_sec = 0, .tv_nsec = 100000000};
-+			(void)msleep((void *)&native_owner_data_stage, NULL, PWAIT, "ioswData", &interval);
++			(void)msleep((void *)&native_owner_data_stage, NULL, PWAIT, "switchData", &interval);
 +		}
-+		if (size != (switch_raw ? IOSW_RAW_BYTES : UINT64_C(17179869184))) goto done;
++		if (size != (switch_raw ? SWITCH_RAW_BYTES : UINT64_C(17179869184))) goto done;
 +	} else
 +#endif
  	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
@@ -1256,7 +1256,7 @@ diff -uN a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 +		int status = switch_raw ?
 +		    switch_raw_volume_status(data_uuid, &rechecked, rechecked_path, sizeof(rechecked_path), &rechecked_size) :
 +		    switch_data_volume_status(data_uuid, &rechecked, rechecked_path, sizeof(rechecked_path), &rechecked_size);
-+		if (status != IOSW_BLOCK_OK || rechecked != actual || rechecked_size != size ||
++		if (status != SWITCH_BLOCK_OK || rechecked != actual || rechecked_size != size ||
 +		    strcmp(device_path, rechecked_path)) error = EPERM;
 +	}
 +	if (!error) {
@@ -1676,33 +1676,33 @@ diff -uN a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 +static int
 +native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 +{
-+#define IOSW_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
++#define SWITCH_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 +	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 +	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
 +	static const struct { const char *name, *body; bool once; } prefs[] = {
-+		{"com.apple.purplebuddy", IOSW_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
++		{"com.apple.purplebuddy", SWITCH_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
 +		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), false},
-+		{"com.apple.purplebuddy.notbackedup", IOSW_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
++		{"com.apple.purplebuddy.notbackedup", SWITCH_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
 +		    "<key>ShouldRunHSA2MiniBuddy</key><false/><key>ShouldRunKeychainSyncMiniBuddy</key><false/>"
 +		    "<key>ShouldRunMesaMiniBuddy</key><false/><key>ShouldRunPaymentMiniBuddy</key><false/>"
 +		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), false},
 +		{"com.apple.managedconfiguration.notbackedup",
-+		    IOSW_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), false},
-+		{"com.apple.springboard", IOSW_PLIST("<key>BKNoWatchdogs</key><true/>"
++		    SWITCH_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), false},
++		{"com.apple.springboard", SWITCH_PLIST("<key>BKNoWatchdogs</key><true/>"
 +		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
 +		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
 +		    "<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><true/>"
 +		    /* The 7" panel shows 1280x720 points at scale 1 (UIScreen.scale is an integer all the way down,
 +		     * so no fractional zoom): large icons and the text size below keep things legible and crisp. */
 +		    "<key>SBHomeLargeIcons</key><true/>"), false},
-+		{"com.apple.UIKit", IOSW_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
++		{"com.apple.UIKit", SWITCH_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
 +		    "<string>UICTContentSizeCategoryXXL</string>"), false},
 +		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
-+		{"com.apple.migration", IOSW_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
++		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
 +		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
 +		    "<key>buildVersion</key><string>21H461</string></dict>"), true},
 +	};
-+#undef IOSW_PLIST
++#undef SWITCH_PLIST
 +	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
 +	 * session and persona keybags in keybags/ and aborts at every start without it. */
 +	static const struct { const char *path; uid_t owner; mode_t mode; } directories[] = {
@@ -2599,33 +2599,33 @@ diff -uN a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
 + * cache file replaces the two 16 KB pages that hold the 16 entries in the shared region. At page-in it faults
 + * the page from the file (the vnode's UBC), validates it against the cache's own code signature (Apple's
 + * hashes), copies it to the new page, which inherits that validation, and only then lets
-+ * iosw_home_grid_page() change a 4 KB chunk, and only if every entry in the chunk reads exactly as shipped.
++ * switch_home_grid_page() change a 4 KB chunk, and only if every entry in the chunk reads exactly as shipped.
 + * Nothing on disk changes. Keyed to the subcache UUID, the mapping's address and its file offset; anything
 + * else leaves the cache text stock. Private mappings of the cache file (not through the shared region) stay
 + * stock too.
 + */
-+static const uint8_t iosw_hg_magic[16] = "dyld_v1   arm64";
-+static const uint8_t iosw_hg_uuid[16] = {           /* dyld_shared_cache_arm64.25 of 21H461 */
++static const uint8_t switch_hg_magic[16] = "dyld_v1   arm64";
++static const uint8_t switch_hg_uuid[16] = {           /* dyld_shared_cache_arm64.25 of 21H461 */
 +	0xf1, 0x6d, 0xce, 0xf8, 0xc4, 0x46, 0x38, 0x05, 0x91, 0x63, 0xc0, 0x13, 0x8e, 0x4d, 0xca, 0xd1,
 +};
-+#define IOSW_HG_UUID_OFFSET     0x58                /* dyld_cache_header.uuid */
-+#define IOSW_HG_PAGES_VMADDR    0x1cf660000ULL      /* unslid; 2 x 16 KB */
-+#define IOSW_HG_PAGES_FILEOFF   0x15cc000ULL
-+#define IOSW_HG_PAGES_SIZE      0x8000ULL
-+#define IOSW_HG_CHUNKS_OFFSET   0x3000ULL           /* the 4 KB chunks at 0x1cf663000 and 0x1cf664000 */
-+#define IOSW_HG_CHUNKS_SIZE     0x2000ULL
-+#define IOSW_HG_ENTRY0_FILEOFF  0x15cf6a0ULL        /* _defaultRootMetrics (0x1cf6633d0) + 0x2d0: type 0x19 */
-+#define IOSW_HG_ENTRY_STRIDE    0x120ULL
-+#define IOSW_HG_ENTRIES         16u
-+#define IOSW_HG_WIDGETS_OFFSET  0x48                /* the entry's grid for pages with widgets */
-+#define IOSW_HG_CHUNK           4096ULL
++#define SWITCH_HG_UUID_OFFSET     0x58                /* dyld_cache_header.uuid */
++#define SWITCH_HG_PAGES_VMADDR    0x1cf660000ULL      /* unslid; 2 x 16 KB */
++#define SWITCH_HG_PAGES_FILEOFF   0x15cc000ULL
++#define SWITCH_HG_PAGES_SIZE      0x8000ULL
++#define SWITCH_HG_CHUNKS_OFFSET   0x3000ULL           /* the 4 KB chunks at 0x1cf663000 and 0x1cf664000 */
++#define SWITCH_HG_CHUNKS_SIZE     0x2000ULL
++#define SWITCH_HG_ENTRY0_FILEOFF  0x15cf6a0ULL        /* _defaultRootMetrics (0x1cf6633d0) + 0x2d0: type 0x19 */
++#define SWITCH_HG_ENTRY_STRIDE    0x120ULL
++#define SWITCH_HG_ENTRIES         16u
++#define SWITCH_HG_WIDGETS_OFFSET  0x48                /* the entry's grid for pages with widgets */
++#define SWITCH_HG_CHUNK           4096ULL
 +
-+static int iosw_hg_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
-+static uint32_t iosw_hg_chunks_done;                /* one bit per patched 4 KB chunk */
-+static uint32_t iosw_hg_mismatch_logged;
++static int switch_hg_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
++static uint32_t switch_hg_chunks_done;                /* one bit per patched 4 KB chunk */
++static uint32_t switch_hg_mismatch_logged;
 +
 +static int
-+iosw_home_grid_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
++switch_home_grid_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
 +{
 +	static const uint8_t stock[8] = { 5, 6, 6, 5, 0, 0, 0, 0 };
 +	static const uint8_t widgets[8] = { 4, 6, 0, 0, 0, 0, 0, 0 };
@@ -2633,20 +2633,20 @@ diff -uN a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
 +	uint8_t *out = dst;
 +	unsigned int count = 0;
 +
-+	bcopy(src, dst, IOSW_HG_CHUNK);
++	bcopy(src, dst, SWITCH_HG_CHUNK);
 +	/* all or nothing per chunk: check every entry in it, then patch */
 +	for (int pass = 0; pass < 2; pass++) {
-+		for (unsigned int k = 0; k < IOSW_HG_ENTRIES; k++) {
-+			uint64_t fileoff = IOSW_HG_ENTRY0_FILEOFF + k * IOSW_HG_ENTRY_STRIDE;
-+			if (fileoff < src_offset || fileoff >= src_offset + IOSW_HG_CHUNK) {
++		for (unsigned int k = 0; k < SWITCH_HG_ENTRIES; k++) {
++			uint64_t fileoff = SWITCH_HG_ENTRY0_FILEOFF + k * SWITCH_HG_ENTRY_STRIDE;
++			if (fileoff < src_offset || fileoff >= src_offset + SWITCH_HG_CHUNK) {
 +				continue;
 +			}
 +			uint64_t at = fileoff - src_offset;
 +			if (pass == 0) {
-+				if (at + IOSW_HG_WIDGETS_OFFSET + sizeof(widgets) > IOSW_HG_CHUNK ||
++				if (at + SWITCH_HG_WIDGETS_OFFSET + sizeof(widgets) > SWITCH_HG_CHUNK ||
 +				    memcmp(out + at, stock, sizeof(stock)) != 0 ||
-+				    memcmp(out + at + IOSW_HG_WIDGETS_OFFSET, widgets, sizeof(widgets)) != 0) {
-+					if (!os_atomic_xchg(&iosw_hg_mismatch_logged, 1, relaxed)) {
++				    memcmp(out + at + SWITCH_HG_WIDGETS_OFFSET, widgets, sizeof(widgets)) != 0) {
++					if (!os_atomic_xchg(&switch_hg_mismatch_logged, 1, relaxed)) {
 +						printf("SwitchHomeGrid: cache bytes at 0x%llx are not the shipped ones, "
 +						    "page left stock\n", fileoff);
 +					}
@@ -2658,15 +2658,15 @@ diff -uN a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
 +			}
 +		}
 +	}
-+	uint64_t chunk = (src_offset - (IOSW_HG_PAGES_FILEOFF + IOSW_HG_CHUNKS_OFFSET)) / IOSW_HG_CHUNK;
-+	if (count == 0 || chunk >= IOSW_HG_CHUNKS_SIZE / IOSW_HG_CHUNK) {
++	uint64_t chunk = (src_offset - (SWITCH_HG_PAGES_FILEOFF + SWITCH_HG_CHUNKS_OFFSET)) / SWITCH_HG_CHUNK;
++	if (count == 0 || chunk >= SWITCH_HG_CHUNKS_SIZE / SWITCH_HG_CHUNK) {
 +		return 0;
 +	}
-+	uint32_t all = (1u << (IOSW_HG_CHUNKS_SIZE / IOSW_HG_CHUNK)) - 1;
-+	uint32_t before = os_atomic_or_orig(&iosw_hg_chunks_done, 1u << chunk, relaxed);
++	uint32_t all = (1u << (SWITCH_HG_CHUNKS_SIZE / SWITCH_HG_CHUNK)) - 1;
++	uint32_t before = os_atomic_or_orig(&switch_hg_chunks_done, 1u << chunk, relaxed);
 +	if (before != all && (before | (1u << chunk)) == all) {
-+		printf("SwitchHomeGrid: 6x4 (%u entries, %llu pages)\n", IOSW_HG_ENTRIES,
-+		    IOSW_HG_PAGES_SIZE / PAGE_SIZE);
++		printf("SwitchHomeGrid: 6x4 (%u entries, %llu pages)\n", SWITCH_HG_ENTRIES,
++		    SWITCH_HG_PAGES_SIZE / PAGE_SIZE);
 +	}
 +	return 0;
 +}
@@ -2682,14 +2682,14 @@ diff -uN a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
 +switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
 +    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
 +{
-+	if (unslid_address > IOSW_HG_PAGES_VMADDR ||
-+	    IOSW_HG_PAGES_VMADDR + IOSW_HG_PAGES_SIZE > unslid_address + size ||
-+	    file_offset + (IOSW_HG_PAGES_VMADDR - unslid_address) != IOSW_HG_PAGES_FILEOFF ||
++	if (unslid_address > SWITCH_HG_PAGES_VMADDR ||
++	    SWITCH_HG_PAGES_VMADDR + SWITCH_HG_PAGES_SIZE > unslid_address + size ||
++	    file_offset + (SWITCH_HG_PAGES_VMADDR - unslid_address) != SWITCH_HG_PAGES_FILEOFF ||
 +	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
 +		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the table */
 +	}
 +
-+	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(iosw_hg_uuid)];
++	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_hg_uuid)];
 +	int resid = 0;
 +	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 +	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
@@ -2697,29 +2697,29 @@ diff -uN a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
 +		printf("SwitchHomeGrid: cache header read failed (%d), cache text left stock\n", error);
 +		return MEMORY_OBJECT_NULL;
 +	}
-+	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
-+	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_hg_uuid, sizeof(iosw_hg_uuid)) != 0) {
++	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
++	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_hg_uuid, sizeof(switch_hg_uuid)) != 0) {
 +		printf("SwitchHomeGrid: not the 21H461 subcache (UUID differs), cache text left stock\n");
 +		return MEMORY_OBJECT_NULL;
 +	}
 +
 +	struct pager_crypt_info crypt_info = {
-+		.page_decrypt = iosw_home_grid_page,
++		.page_decrypt = switch_home_grid_page,
 +		.crypt_end = NULL,
-+		.crypt_ops = &iosw_hg_cookie,
++		.crypt_ops = &switch_hg_cookie,
 +		.crypt_refcnt = 0,
 +	};
 +	/* page_decrypt() gets crypto_backing_offset - crypto_start + offset in the pager: the chunk's file offset */
 +	/* file_object is the cache file's object (object_base 0) or the a64x translator's, whose offset 0 is file offset object_base */
-+	memory_object_t mo = apple_protect_pager_setup(file_object, IOSW_HG_PAGES_FILEOFF - object_base,
-+	    IOSW_HG_PAGES_FILEOFF + IOSW_HG_CHUNKS_OFFSET, &crypt_info,
-+	    IOSW_HG_CHUNKS_OFFSET, IOSW_HG_CHUNKS_OFFSET + IOSW_HG_CHUNKS_SIZE, TRUE);
++	memory_object_t mo = apple_protect_pager_setup(file_object, SWITCH_HG_PAGES_FILEOFF - object_base,
++	    SWITCH_HG_PAGES_FILEOFF + SWITCH_HG_CHUNKS_OFFSET, &crypt_info,
++	    SWITCH_HG_CHUNKS_OFFSET, SWITCH_HG_CHUNKS_OFFSET + SWITCH_HG_CHUNKS_SIZE, TRUE);
 +	if (mo == MEMORY_OBJECT_NULL) {
 +		printf("SwitchHomeGrid: pager setup failed, cache text left stock\n");
 +		return MEMORY_OBJECT_NULL;
 +	}
-+	*range_offset = IOSW_HG_PAGES_VMADDR - unslid_address;
-+	*range_size = IOSW_HG_PAGES_SIZE;
++	*range_offset = SWITCH_HG_PAGES_VMADDR - unslid_address;
++	*range_size = SWITCH_HG_PAGES_SIZE;
 +	return mo;
 +}
 +#endif /* XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION */
@@ -3028,7 +3028,7 @@ diff -uN a/iokit/bsddev/DINetBootHook.cpp b/iokit/bsddev/DINetBootHook.cpp
  	do {
  		IOService::getResourceService()->publishResource("com.apple.AppleDiskImageController.load", kOSBooleanTrue);
 +#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-+		if (switch_files_storage_profile() == IOSW_STORAGE_RAW) {
++		if (switch_files_storage_profile() == SWITCH_STORAGE_RAW) {
 +			/* Native raw boot must fail instead of waiting forever on unrelated busy resources. */
 +			if (IOService::getResourceService()->waitQuiet(NSEC_PER_SEC * kDIMatchQuiesceTimeout) != kIOReturnSuccess) {
 +				break;
@@ -3064,7 +3064,7 @@ diff -uN a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
 +	int cache_identity = 0;
 +#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 +	if (raw) {
-+		if (switch_files_storage_profile() == IOSW_STORAGE_RAW)
++		if (switch_files_storage_profile() == SWITCH_STORAGE_RAW)
 +			cache_identity = switch_cryptex_manifest_sha384(cacheDevice, cacheUUID, cacheDigest);
 +	} else
 +#endif
@@ -3447,8 +3447,8 @@ diff -uN a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
  static unsigned int avail_page_count = 0;
  static bool need_ram_ranges_init = true;
 +static void initialize_ram_ranges(void);
-+static bool iosw_dense_pages;
-+static pmap_paddr_t iosw_stolen_end;
++static bool switch_dense_pages;
++static pmap_paddr_t switch_stolen_end;
 +
 +unsigned int
 +pmap_switch_dense_page_count(void)
@@ -3460,7 +3460,7 @@ diff -uN a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
 +pmap_switch_page_reserved(ppnum_t pnum)
 +{
 +    pmap_paddr_t pa=(pmap_paddr_t)pnum << PAGE_SHIFT;
-+    return pmap_switch_ram_reserved(pnum) || pa < iosw_stolen_end;
++    return pmap_switch_ram_reserved(pnum) || pa < switch_stolen_end;
 +}
  
 +boolean_t
@@ -3468,9 +3468,9 @@ diff -uN a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
 +{
 +    if (!pmap_switch_dense_page_count()) return FALSE;
 +    if (need_ram_ranges_init) initialize_ram_ranges();
-+    iosw_stolen_end=first_avail;
++    switch_stolen_end=first_avail;
 +    first_avail=gPhysBase;
-+    iosw_dense_pages=true;
++    switch_dense_pages=true;
 +    return TRUE;
 +}
 +
@@ -3496,7 +3496,7 @@ diff -uN a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
  		initialize_ram_ranges();
  	}
  
-+    if (pmap_switch_dense_page_count() && !iosw_dense_pages) {
++    if (pmap_switch_dense_page_count() && !switch_dense_pages) {
 +        while (first_avail<avail_end && pmap_switch_page_reserved((ppnum_t)atop(first_avail)))
 +            first_avail+=PAGE_SIZE;
 +    }
@@ -3505,7 +3505,7 @@ diff -uN a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
  		first_avail += PAGE_SIZE;
 -		assert(avail_page_count > 0);
 -		--avail_page_count;
-+        if (!iosw_dense_pages || !pmap_switch_page_reserved(*pnum)) {
++        if (!switch_dense_pages || !pmap_switch_page_reserved(*pnum)) {
 +            assert(avail_page_count > 0);
 +            --avail_page_count;
 +        }
@@ -3706,37 +3706,37 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 +
 +/* Actual banks and live reservations supplied by the gated native loader.
 + * The physical aperture remains dense for ARM64's span-indexed page metadata. */
-+static struct iosw_ram_ledger iosw_ram;
-+static pmap_paddr_t iosw_kernel_start, iosw_bootstrap_start, iosw_bootstrap_limit, iosw_accounted_bootstrap_end;
++static struct switch_ram_ledger switch_ledger;
++static pmap_paddr_t switch_kernel_start, switch_bootstrap_start, switch_bootstrap_limit, switch_accounted_bootstrap_end;
 +/* tegra-gpu-pool-pa: outside the managed pages like the framebuffer (no pv lists, never handed to the VM), and in the
 + * physical aperture write-combined only (no cacheable alias anywhere): the GPU driver reaches it with phystokv(). A
 + * separate 128 MiB ml_io_map_wcomb fails, kernel VA (10-30: "kmem_alloc(.., 134217728, ..): failed with 3"). */
-+static pmap_paddr_t iosw_gpu_start, iosw_gpu_end;
-+static bool iosw_physmap_wcomb;   /* set only while arm_vm_switch_physmap maps the GPU pool */
++static pmap_paddr_t switch_gpu_start, switch_gpu_end;
++static bool switch_physmap_wcomb;   /* set only while arm_vm_switch_physmap maps the GPU pool */
 +
 +boolean_t
-+pmap_switch_ram_enabled(void) { return iosw_ram.committed == 1; }
++pmap_switch_ram_enabled(void) { return switch_ledger.committed == 1; }
 +
 +boolean_t
 +pmap_switch_pa_valid(pmap_paddr_t pa)
 +{
-+    if (!iosw_ram.committed) return TRUE;
++    if (!switch_ledger.committed) return TRUE;
 +    if (pa >= 0xa0000000ULL && pa < 0xa0020000ULL) return FALSE;
 +    if (pa >= 0xf5a00000ULL && pa < 0xf5e00000ULL) return FALSE;
-+    if (pa >= iosw_gpu_start && pa < iosw_gpu_end) return FALSE;
-+    return (pa >= iosw_ram.banks[0].start && pa < iosw_ram.banks[0].end) ||
-+           (pa >= iosw_ram.banks[1].start && pa < iosw_ram.banks[1].end);
++    if (pa >= switch_gpu_start && pa < switch_gpu_end) return FALSE;
++    return (pa >= switch_ledger.banks[0].start && pa < switch_ledger.banks[0].end) ||
++           (pa >= switch_ledger.banks[1].start && pa < switch_ledger.banks[1].end);
 +}
 +
 +boolean_t
 +pmap_switch_ram_reserved(ppnum_t pnum)
 +{
 +    pmap_paddr_t pa = (pmap_paddr_t)pnum << PAGE_SHIFT;
-+    if (!iosw_ram.committed) return FALSE;
++    if (!switch_ledger.committed) return FALSE;
 +    if (!pmap_switch_pa_valid(pa)) return TRUE;
-+    if (pa < first_avail_phys && pa + PAGE_SIZE > iosw_kernel_start) return TRUE;
-+    for (unsigned i=0; i<iosw_ram.count; ++i) {
-+        if (pa < iosw_ram.reserved[i].end && pa+PAGE_SIZE > iosw_ram.reserved[i].start) return TRUE;
++    if (pa < first_avail_phys && pa + PAGE_SIZE > switch_kernel_start) return TRUE;
++    for (unsigned i=0; i<switch_ledger.count; ++i) {
++        if (pa < switch_ledger.reserved[i].end && pa+PAGE_SIZE > switch_ledger.reserved[i].start) return TRUE;
 +    }
 +    return FALSE;
 +}
@@ -3744,7 +3744,7 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 +void
 +pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
 +{
-+    if (iosw_ram.committed && (start < iosw_bootstrap_start || end < start || end > iosw_bootstrap_limit))
++    if (switch_ledger.committed && (start < switch_bootstrap_start || end < start || end > switch_bootstrap_limit))
 +        panic("native bootstrap allocation outside contiguous free RAM");
 +}
  
@@ -3759,27 +3759,27 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 +            panic("native full RAM requires live ownership ledger");
 +        return;
 +    }
-+    if (bytes != sizeof(iosw_ram)) panic("native RAM ledger size");
-+    memcpy(&iosw_ram, wire, sizeof(iosw_ram));
-+    if (iosw_ram.magic != IOSW_RAM_MAGIC || iosw_ram.version != 1 || iosw_ram.committed != 1 ||
-+        !iosw_ram.count || iosw_ram.count > IOSW_RAM_RANGES ||
-+        iosw_ram.banks[0].start != 0x80000000ULL || iosw_ram.banks[0].end != 0xffd00000ULL ||
-+        iosw_ram.banks[1].start != 0x100000000ULL || iosw_ram.banks[1].end != 0x180000000ULL ||
++    if (bytes != sizeof(switch_ledger)) panic("native RAM ledger size");
++    memcpy(&switch_ledger, wire, sizeof(switch_ledger));
++    if (switch_ledger.magic != SWITCH_RAM_MAGIC || switch_ledger.version != 1 || switch_ledger.committed != 1 ||
++        !switch_ledger.count || switch_ledger.count > SWITCH_RAM_RANGES ||
++        switch_ledger.banks[0].start != 0x80000000ULL || switch_ledger.banks[0].end != 0xffd00000ULL ||
++        switch_ledger.banks[1].start != 0x100000000ULL || switch_ledger.banks[1].end != 0x180000000ULL ||
 +        args->physBase != 0x80000000ULL || args->memSize != 0x100000000ULL ||
 +        args->virtBase != 0xffffffefd2200000ULL)
 +        panic("native RAM ledger/bank geometry");
-+    iosw_kernel_start = 0xb207c000;
-+    iosw_bootstrap_start = args->topOfKernelData;
++    switch_kernel_start = 0xb207c000;
++    switch_bootstrap_start = args->topOfKernelData;
 +    /* Temporary assembly blocks end at the old envelope rounded down. */
-+    iosw_bootstrap_limit = 0xe2000000ULL;
-+    if (iosw_bootstrap_start <= iosw_kernel_start || iosw_bootstrap_start >= iosw_bootstrap_limit)
++    switch_bootstrap_limit = 0xe2000000ULL;
++    if (switch_bootstrap_start <= switch_kernel_start || switch_bootstrap_start >= switch_bootstrap_limit)
 +        panic("native kernel extent outside low bank");
-+    for (unsigned i=0; i<iosw_ram.count; ++i) {
-+        pmap_paddr_t start=iosw_ram.reserved[i].start, end=iosw_ram.reserved[i].end;
++    for (unsigned i=0; i<switch_ledger.count; ++i) {
++        pmap_paddr_t start=switch_ledger.reserved[i].start, end=switch_ledger.reserved[i].end;
 +        if (start >= end) panic("native invalid reservation");
-+        if (start < iosw_bootstrap_start && end > iosw_kernel_start) panic("native reservation overlaps kernel");
-+        if (start >= iosw_bootstrap_start && start < iosw_bootstrap_limit)
-+            iosw_bootstrap_limit = start & ~PAGE_MASK;
++        if (start < switch_bootstrap_start && end > switch_kernel_start) panic("native reservation overlaps kernel");
++        if (start >= switch_bootstrap_start && start < switch_bootstrap_limit)
++            switch_bootstrap_limit = start & ~PAGE_MASK;
 +    }
 +    /* drivers/TegraGM20B's GPU pool (nvxnu_pool_init): with boot-arg tegra-gpu-pool-pa=<pa> (tegra-gpu-pool-mb, default
 +     * 128) that RAM joins the ledger here, so the VM never hands it out and the GPU driver maps it write-combined. A
@@ -3790,18 +3790,18 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 +        PE_parse_boot_argn("tegra-gpu-pool-mb", &gpu_mb, sizeof(gpu_mb));
 +        const uint64_t gpu_end = gpu_pa + (gpu_mb << 20);
 +        if ((gpu_pa & PAGE_MASK) || gpu_mb < 16 || gpu_mb > 1024 || gpu_pa < 0xe2000000ULL || gpu_end > 0xf5a00000ULL ||
-+            iosw_ram.count == IOSW_RAM_RANGES)
++            switch_ledger.count == SWITCH_RAM_RANGES)
 +            panic("tegra-gpu-pool-pa %#llx (%llu MiB) outside 0xe2000000-0xf5a00000, or the RAM ledger is full", gpu_pa, gpu_mb);
 +        /* The ledger also holds the live FDT's /reserved-memory and memreserve ranges (loader memory.c), which the
 +         * build does not know: RAM another owner keeps must not become the GPU's. */
-+        for (unsigned i=0; i<iosw_ram.count; ++i) {
-+            if (gpu_pa < iosw_ram.reserved[i].end && iosw_ram.reserved[i].start < gpu_end)
++        for (unsigned i=0; i<switch_ledger.count; ++i) {
++            if (gpu_pa < switch_ledger.reserved[i].end && switch_ledger.reserved[i].start < gpu_end)
 +                panic("tegra-gpu-pool-pa %#llx-%#llx overlaps reserved RAM %#llx-%#llx (ledger entry %u)", gpu_pa, gpu_end,
-+                      (uint64_t)iosw_ram.reserved[i].start, (uint64_t)iosw_ram.reserved[i].end, i);
++                      (uint64_t)switch_ledger.reserved[i].start, (uint64_t)switch_ledger.reserved[i].end, i);
 +        }
-+        iosw_ram.reserved[iosw_ram.count++] = (struct iosw_ram_range){gpu_pa, gpu_end};
-+        iosw_gpu_start = gpu_pa;
-+        iosw_gpu_end = gpu_end;
++        switch_ledger.reserved[switch_ledger.count++] = (struct switch_ram_range){gpu_pa, gpu_end};
++        switch_gpu_start = gpu_pa;
++        switch_gpu_end = gpu_end;
 +    }
 +#endif
 +}
@@ -3823,7 +3823,7 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  			if ((start <= va) && (va < rounded_end)) {
  				ptmp = pa | ARM_PTE_AF | ARM_PTE_SH(SH_OUTER_MEMORY) | ARM_PTE_TYPE_VALID;
 -				ptmp = ptmp | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DEFAULT);
-+				ptmp = ptmp | ARM_PTE_ATTRINDX(iosw_physmap_wcomb ? CACHE_ATTRINDX_WRITECOMB : CACHE_ATTRINDX_DEFAULT);
++				ptmp = ptmp | ARM_PTE_ATTRINDX(switch_physmap_wcomb ? CACHE_ATTRINDX_WRITECOMB : CACHE_ATTRINDX_DEFAULT);
  				ptmp = ptmp | ARM_PTE_AP(pte_prot_APX);
  				ptmp = ptmp | ARM_PTE_NX;
  #if __ARM_KERNEL_PROTECT__
@@ -3832,7 +3832,7 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  				    | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_NX
  				    | ARM_TTE_BLOCK_AP(pte_prot_APX) | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY)
 -				    | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK);
-+				    | ARM_TTE_BLOCK_ATTRINDX(iosw_physmap_wcomb ? CACHE_ATTRINDX_WRITECOMB : CACHE_ATTRINDX_WRITEBACK);
++				    | ARM_TTE_BLOCK_ATTRINDX(switch_physmap_wcomb ? CACHE_ATTRINDX_WRITECOMB : CACHE_ATTRINDX_WRITEBACK);
  
  #if __ARM_KERNEL_PROTECT__
  				tmplate = tmplate | ARM_TTE_BLOCK_NG;
@@ -3845,28 +3845,28 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
 +static void
 +arm_vm_switch_physmap(ptov_table_entry *table, pmap_paddr_t start, pmap_paddr_t end)
 +{
-+    static const struct iosw_ram_range regions[] = {
++    static const struct switch_ram_range regions[] = {
 +        {0x80000000ULL,0xa0000000ULL}, {0xa0020000ULL,0xf5a00000ULL},
 +        {0xf5e00000ULL,0xffd00000ULL},
 +        {0x100000000ULL,0x180000000ULL}
 +    };
 +    for (unsigned i=0;i<4;i++) {
 +        pmap_paddr_t lo=MAX(start,regions[i].start), hi=MIN(end,regions[i].end);
-+        /* The GPU pool (iosw_gpu_start..end) splits the region it lies in and is mapped write-combined. */
++        /* The GPU pool (switch_gpu_start..end) splits the region it lies in and is mapped write-combined. */
 +        pmap_paddr_t pieces[3][2] = {{lo, hi}, {0, 0}, {0, 0}};
-+        if (iosw_gpu_start < iosw_gpu_end && lo < iosw_gpu_end && iosw_gpu_start < hi) {
-+            pieces[0][1] = MAX(lo, iosw_gpu_start);
-+            pieces[1][0] = MAX(lo, iosw_gpu_start);
-+            pieces[1][1] = MIN(hi, iosw_gpu_end);
-+            pieces[2][0] = MIN(hi, iosw_gpu_end);
++        if (switch_gpu_start < switch_gpu_end && lo < switch_gpu_end && switch_gpu_start < hi) {
++            pieces[0][1] = MAX(lo, switch_gpu_start);
++            pieces[1][0] = MAX(lo, switch_gpu_start);
++            pieces[1][1] = MIN(hi, switch_gpu_end);
++            pieces[2][0] = MIN(hi, switch_gpu_end);
 +            pieces[2][1] = hi;
 +        }
 +        for (unsigned j=0;j<3;j++) {
 +            if (pieces[j][0] >= pieces[j][1]) continue;
-+            iosw_physmap_wcomb = j == 1;
++            switch_physmap_wcomb = j == 1;
 +            arm_vm_physmap_slide(table,pieces[j][0]-gPhysBase+gVirtBase,
 +                pieces[j][1]-pieces[j][0],AP_RWNA,ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
-+            iosw_physmap_wcomb = false;
++            switch_physmap_wcomb = false;
 +        }
 +    }
  }
@@ -3876,7 +3876,7 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  	bzero(temp_ptov_table, sizeof(temp_ptov_table));
  
  	// Will be handed back to VM layer through ml_static_mfree() in arm_vm_prot_finalize()
-+    if (iosw_ram.committed) arm_vm_switch_physmap(temp_ptov_table,gPhysBase,segLOWEST-gVirtBase+gPhysBase);
++    if (switch_ledger.committed) arm_vm_switch_physmap(temp_ptov_table,gPhysBase,segLOWEST-gVirtBase+gPhysBase);
 +    else {
  	arm_vm_physmap_slide(temp_ptov_table, gVirtBase, segLOWEST - gVirtBase, AP_RWNA,
  	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
@@ -3885,7 +3885,7 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  	arm_vm_page_granular_RWNX(end_kern, phystokv(args->topOfKernelData) - end_kern,
  	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); /* Device Tree (if not locked down), RAM Disk (if present), bootArgs */
  
-+    if (iosw_ram.committed) arm_vm_switch_physmap(temp_ptov_table,args->topOfKernelData,real_avail_end);
++    if (switch_ledger.committed) arm_vm_switch_physmap(temp_ptov_table,args->topOfKernelData,real_avail_end);
 +    else {
  	arm_vm_physmap_slide(temp_ptov_table, (args->topOfKernelData - gPhysBase + gVirtBase),
  	    real_avail_end - args->topOfKernelData, AP_RWNA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // rest of physmem
@@ -3898,7 +3898,7 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  	 */
  
 -	ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
-+	if (!iosw_ram.committed) ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
++	if (!switch_ledger.committed) ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
  
  	/*
  	 * KTRR support means we will be mucking with these pages and trying to
@@ -3914,7 +3914,7 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  	gPhysSize = mem_size = ((gPhysBase + args->memSize) & ~PAGE_MASK) - gPhysBase;
  	mem_actual = args->memSizeActual ? args->memSizeActual : mem_size;
  
-+	if (iosw_ram.committed && memory_size && memory_size < mem_size)
++	if (switch_ledger.committed && memory_size && memory_size < mem_size)
 +		panic("native full RAM profile cannot truncate dense aperture");
  	if ((memory_size != 0) && (mem_size > memory_size)) {
  		mem_size = memory_size;
@@ -3957,20 +3957,20 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  	sane_size = mem_size - (avail_start - gPhysBase);
 -	max_mem = mem_size;
 +    max_mem = mem_size;
-+    if (iosw_ram.committed) {
++    if (switch_ledger.committed) {
 +        uint64_t eligible=0, free_bytes=0;
 +        for (pmap_paddr_t pa=gPhysBase;pa<gPhysBase+mem_size;pa+=PAGE_SIZE) {
 +            if (pmap_switch_pa_valid(pa)) {
 +                boolean_t reserved=FALSE;
-+                for (unsigned i=0;i<iosw_ram.count;i++)
-+                    if (pa<iosw_ram.reserved[i].end && pa+PAGE_SIZE>iosw_ram.reserved[i].start) reserved=TRUE;
++                for (unsigned i=0;i<switch_ledger.count;i++)
++                    if (pa<switch_ledger.reserved[i].end && pa+PAGE_SIZE>switch_ledger.reserved[i].start) reserved=TRUE;
 +                if (!reserved) eligible+=PAGE_SIZE;
-+                if (!reserved && !(pa<avail_start && pa+PAGE_SIZE>iosw_kernel_start)) free_bytes+=PAGE_SIZE;
++                if (!reserved && !(pa<avail_start && pa+PAGE_SIZE>switch_kernel_start)) free_bytes+=PAGE_SIZE;
 +            }
 +        }
 +        max_mem=mem_actual=max_mem_actual=eligible;
 +        sane_size=free_bytes;
-+        iosw_accounted_bootstrap_end=avail_start;
++        switch_accounted_bootstrap_end=avail_start;
 +    }
  	vm_kernel_slid_base = segLOWESTTEXT;
  	// vm_kernel_slide is set by arm_init()->arm_slide_rebase_and_sign_image()
@@ -3979,9 +3979,9 @@ diff -uN a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
  	pmap_static_allocations_done();
  #endif
  	first_avail = avail_start;
-+	if (iosw_ram.committed) {
++	if (switch_ledger.committed) {
 +        first_avail_phys = avail_start;
-+        sane_size -= avail_start - iosw_accounted_bootstrap_end;
++        sane_size -= avail_start - switch_accounted_bootstrap_end;
 +    }
  	patch_low_glo_static_region(args->topOfKernelData, avail_start - args->topOfKernelData);
  	enable_preemption();
@@ -4122,13 +4122,13 @@ diff -uN a/osfmk/arm64/switch_ram.h b/osfmk/arm64/switch_ram.h
 +#ifndef SWITCH_RAM_LEDGER_H
 +#define SWITCH_RAM_LEDGER_H
 +/* Native little-endian ADT wire format. Filled only after live FDT/MC gates. */
-+#define IOSW_RAM_MAGIC 0x324d4152u
-+#define IOSW_RAM_RANGES 96u
-+struct iosw_ram_range { unsigned long long start, end; };
-+struct iosw_ram_ledger {
++#define SWITCH_RAM_MAGIC 0x324d4152u
++#define SWITCH_RAM_RANGES 96u
++struct switch_ram_range { unsigned long long start, end; };
++struct switch_ram_ledger {
 +    unsigned int magic, version, count, committed;
-+    struct iosw_ram_range banks[2];
-+    struct iosw_ram_range reserved[IOSW_RAM_RANGES];
++    struct switch_ram_range banks[2];
++    struct switch_ram_range reserved[SWITCH_RAM_RANGES];
 +};
 +#endif
 diff -uN a/osfmk/arm64/switch_smp.h b/osfmk/arm64/switch_smp.h
@@ -4142,43 +4142,43 @@ diff -uN a/osfmk/arm64/switch_smp.h b/osfmk/arm64/switch_smp.h
 + * The boot CPU owns control[0..63]; each secondary exclusively owns status[64..127].
 + * Before CPU_ON publish both lines to PoC. After CPU_ON the boot CPU must never
 + * dirty the status line; poll it with invalidate + acquire, not a cached load. */
-+#define IOSW_SMP_CORE_COUNT 4
-+#define IOSW_SMP_RECORD_BYTES 128
-+#define IOSW_SMP_STATUS_OFFSET 64
-+#define IOSW_SMP_MAGIC 0x495357534d503031
-+#define IOSW_SMP_STAGE_CLEAR 0
-+#define IOSW_SMP_STAGE_ENTRY 1
-+#define IOSW_SMP_STAGE_EL1 2
-+#define IOSW_SMP_STAGE_RESET 3
-+#define IOSW_SMP_STAGE_MMU 4
-+#define IOSW_SMP_STAGE_C 5
-+#define IOSW_SMP_STAGE_FAILED 255
-+#define IOSW_SMP_ERROR_CONTROL 1
-+#define IOSW_SMP_ERROR_EL 2
-+#define IOSW_SMP_ERROR_MPIDR 3
-+#define IOSW_SMP_ERROR_SCTLR 4
-+#define IOSW_SMP_ERROR_MIDR 5
-+#define IOSW_SMP_ERROR_SMPEN 6
-+#define IOSW_SMP_ERROR_FREQUENCY 7
-+#define IOSW_SMP_ERROR_CNTVOFF 8
-+#define IOSW_SMP_ERROR_RESET 9
-+#define IOSW_SMP_ERROR_EXCEPTION 256
-+#define IOSW_SMP_MAGIC_OFF 0
-+#define IOSW_SMP_MPIDR_OFF 8
-+#define IOSW_SMP_LOGICAL_OFF 16
-+#define IOSW_SMP_CNTFRQ_OFF 24
-+#define IOSW_SMP_CNTVOFF_OFF 32
-+#define IOSW_SMP_RESET_OFF 40
-+#define IOSW_SMP_RESERVED0_OFF 48
-+#define IOSW_SMP_RESERVED1_OFF 56
-+#define IOSW_SMP_STAGE_OFF 64
-+#define IOSW_SMP_ERROR_OFF 72
-+#define IOSW_SMP_SEEN_MPIDR_OFF 80
-+#define IOSW_SMP_ENTRY_EL_OFF 88
-+#define IOSW_SMP_ESR_OFF 96
-+#define IOSW_SMP_ELR_OFF 104
-+#define IOSW_SMP_FAR_OFF 112
-+#define IOSW_SMP_SCTLR_OFF 120
++#define SWITCH_SMP_CORE_COUNT 4
++#define SWITCH_SMP_RECORD_BYTES 128
++#define SWITCH_SMP_STATUS_OFFSET 64
++#define SWITCH_SMP_MAGIC 0x495357534d503031
++#define SWITCH_SMP_STAGE_CLEAR 0
++#define SWITCH_SMP_STAGE_ENTRY 1
++#define SWITCH_SMP_STAGE_EL1 2
++#define SWITCH_SMP_STAGE_RESET 3
++#define SWITCH_SMP_STAGE_MMU 4
++#define SWITCH_SMP_STAGE_C 5
++#define SWITCH_SMP_STAGE_FAILED 255
++#define SWITCH_SMP_ERROR_CONTROL 1
++#define SWITCH_SMP_ERROR_EL 2
++#define SWITCH_SMP_ERROR_MPIDR 3
++#define SWITCH_SMP_ERROR_SCTLR 4
++#define SWITCH_SMP_ERROR_MIDR 5
++#define SWITCH_SMP_ERROR_SMPEN 6
++#define SWITCH_SMP_ERROR_FREQUENCY 7
++#define SWITCH_SMP_ERROR_CNTVOFF 8
++#define SWITCH_SMP_ERROR_RESET 9
++#define SWITCH_SMP_ERROR_EXCEPTION 256
++#define SWITCH_SMP_MAGIC_OFF 0
++#define SWITCH_SMP_MPIDR_OFF 8
++#define SWITCH_SMP_LOGICAL_OFF 16
++#define SWITCH_SMP_CNTFRQ_OFF 24
++#define SWITCH_SMP_CNTVOFF_OFF 32
++#define SWITCH_SMP_RESET_OFF 40
++#define SWITCH_SMP_RESERVED0_OFF 48
++#define SWITCH_SMP_RESERVED1_OFF 56
++#define SWITCH_SMP_STAGE_OFF 64
++#define SWITCH_SMP_ERROR_OFF 72
++#define SWITCH_SMP_SEEN_MPIDR_OFF 80
++#define SWITCH_SMP_ENTRY_EL_OFF 88
++#define SWITCH_SMP_ESR_OFF 96
++#define SWITCH_SMP_ELR_OFF 104
++#define SWITCH_SMP_FAR_OFF 112
++#define SWITCH_SMP_SCTLR_OFF 120
 +#ifndef __ASSEMBLER__
 +#include <stdint.h>
 +#include <stddef.h>
@@ -4187,14 +4187,14 @@ diff -uN a/osfmk/arm64/switch_smp.h b/osfmk/arm64/switch_smp.h
 +    volatile uint64_t stage, error, seen_mpidr, entry_el, esr, elr, far, sctlr;
 +} __attribute__((aligned(64)));
 +#ifdef __cplusplus
-+static_assert(sizeof(switch_smp_record) == IOSW_SMP_RECORD_BYTES, "SMP record stride");
-+static_assert(offsetof(switch_smp_record, stage) == IOSW_SMP_STATUS_OFFSET, "SMP status line");
++static_assert(sizeof(switch_smp_record) == SWITCH_SMP_RECORD_BYTES, "SMP record stride");
++static_assert(offsetof(switch_smp_record, stage) == SWITCH_SMP_STATUS_OFFSET, "SMP status line");
 +extern "C" {
 +#else
-+_Static_assert(sizeof(struct switch_smp_record) == IOSW_SMP_RECORD_BYTES, "SMP record stride");
-+_Static_assert(offsetof(struct switch_smp_record, stage) == IOSW_SMP_STATUS_OFFSET, "SMP status line");
++_Static_assert(sizeof(struct switch_smp_record) == SWITCH_SMP_RECORD_BYTES, "SMP record stride");
++_Static_assert(offsetof(struct switch_smp_record, stage) == SWITCH_SMP_STATUS_OFFSET, "SMP status line");
 +#endif
-+extern struct switch_smp_record switch_secondary_records[IOSW_SMP_CORE_COUNT];
++extern struct switch_smp_record switch_secondary_records[SWITCH_SMP_CORE_COUNT];
 +extern char switch_secondary_records_end[];
 +extern char switch_secondary_entry[];
 +/* Called only after machine_set_current_thread on this secondary. Installs the
@@ -4210,8 +4210,8 @@ diff -uN a/osfmk/arm64/switch_smp_tables.h b/osfmk/arm64/switch_smp_tables.h
 +++ b/osfmk/arm64/switch_smp_tables.h
 @@ -0,0 +1,53 @@
 +/* Native XNU pmap scope only. Publish table pages, never mapped device/data leaves. */
-+#define IOSW_SMP_MAX_TABLE_PAGES 8192u
-+struct iosw_smp_table_walk {
++#define SWITCH_SMP_MAX_TABLE_PAGES 8192u
++struct switch_smp_table_walk {
 +    pmap_paddr_t ancestors[4];
 +    unsigned pages;
 +};
@@ -4219,12 +4219,12 @@ diff -uN a/osfmk/arm64/switch_smp_tables.h b/osfmk/arm64/switch_smp_tables.h
 +int switch_smp_publish_tables(void);
 +
 +static int
-+iosw_smp_clean_table(pmap_paddr_t pa, unsigned level, unsigned entries,
-+    const pt_attr_t *attr, struct iosw_smp_table_walk *walk)
++switch_smp_clean_table(pmap_paddr_t pa, unsigned level, unsigned entries,
++    const pt_attr_t *attr, struct switch_smp_table_walk *walk)
 +{
 +    const unsigned leaf = pt_attr_leaf_level(attr);
 +    if (level > leaf || leaf != 3 || !entries || entries > 512 || (pa & 4095) ||
-+        !pa_valid(pa) || !pa_valid(pa + 4095) || ++walk->pages > IOSW_SMP_MAX_TABLE_PAGES)
++        !pa_valid(pa) || !pa_valid(pa + 4095) || ++walk->pages > SWITCH_SMP_MAX_TABLE_PAGES)
 +        return 1;
 +    for (unsigned i = pt_attr_root_level(attr); i < level; ++i)
 +        if (walk->ancestors[i] == pa) return 1;
@@ -4239,7 +4239,7 @@ diff -uN a/osfmk/arm64/switch_smp_tables.h b/osfmk/arm64/switch_smp_tables.h
 +        const tt_entry_t value = __atomic_load_n(&table[i], __ATOMIC_ACQUIRE);
 +        if (!(value & valid) || (value & mask) == block) continue;
 +        if ((value & ARM_TTE_TYPE_MASK) != ARM_TTE_TYPE_TABLE ||
-+            iosw_smp_clean_table(value & ARM_TTE_TABLE_MASK, level + 1, 512, attr, walk))
++            switch_smp_clean_table(value & ARM_TTE_TABLE_MASK, level + 1, 512, attr, walk))
 +            return 1;
 +    }
 +    return 0;
@@ -4254,9 +4254,9 @@ diff -uN a/osfmk/arm64/switch_smp_tables.h b/osfmk/arm64/switch_smp_tables.h
 +        return 1;
 +    const vm_size_t bytes = pmap_root_alloc_size(kernel_pmap);
 +    if (!bytes || bytes > 4096 || bytes % sizeof(tt_entry_t)) return 1;
-+    struct iosw_smp_table_walk walk = { { 0, 0, 0, 0 }, 0 };
++    struct switch_smp_table_walk walk = { { 0, 0, 0, 0 }, 0 };
 +    pmap_lock(kernel_pmap, PMAP_LOCK_SHARED);
-+    const int result = iosw_smp_clean_table(cpu_ttep, pt_attr_root_level(attr),
++    const int result = switch_smp_clean_table(cpu_ttep, pt_attr_root_level(attr),
 +        (unsigned)(bytes / sizeof(tt_entry_t)), attr, &walk);
 +    __builtin_arm_dsb(DSB_SY);
 +    pmap_unlock(kernel_pmap, PMAP_LOCK_SHARED);
@@ -4656,12 +4656,12 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	adrp x16, EXT(switch_secondary_records)@page
 +	add x16, x16, EXT(switch_secondary_records)@pageoff
 +	sub x17, x27, x16
-+	cmp x17, #(IOSW_SMP_CORE_COUNT * IOSW_SMP_RECORD_BYTES)
++	cmp x17, #(SWITCH_SMP_CORE_COUNT * SWITCH_SMP_RECORD_BYTES)
 +	b.hs Lswitch_reset_normal_vectors
-+	tst x17, #(IOSW_SMP_RECORD_BYTES - 1)
++	tst x17, #(SWITCH_SMP_RECORD_BYTES - 1)
 +	b.ne Lswitch_reset_normal_vectors
-+	ldr x17, [x27, #IOSW_SMP_STAGE_OFF]
-+	cmp x17, #IOSW_SMP_STAGE_RESET
++	ldr x17, [x27, #SWITCH_SMP_STAGE_OFF]
++	cmp x17, #SWITCH_SMP_STAGE_RESET
 +	b.ne Lswitch_reset_normal_vectors
 +	adrp x0, EXT(switch_secondary_vectors)@page
 +	add x0, x0, EXT(switch_secondary_vectors)@pageoff
@@ -4836,7 +4836,7 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	cmp \context, \end
 +	b.hs \failed
 +	sub \scratch, \context, \base
-+	tst \scratch, #(IOSW_SMP_RECORD_BYTES - 1)
++	tst \scratch, #(SWITCH_SMP_RECORD_BYTES - 1)
 +	b.ne \failed
 +.endmacro
 +.macro SWITCH_SMP_CACHE_OFF sctlr, scratch, failed
@@ -4905,8 +4905,8 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	mov x27, x0
 +	mov x28, xzr
 +	/* Establish a real current-EL vector BEFORE implementation-defined MRS. */
-+	str x20, [x19, #IOSW_SMP_ENTRY_EL_OFF]
-+	str x21, [x19, #IOSW_SMP_SCTLR_OFF]
++	str x20, [x19, #SWITCH_SMP_ENTRY_EL_OFF]
++	str x21, [x19, #SWITCH_SMP_SCTLR_OFF]
 +	adrp x1, EXT(switch_secondary_vectors)@page
 +	add x1, x1, EXT(switch_secondary_vectors)@pageoff
 +	lsr x2, x1, #32
@@ -4925,25 +4925,25 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	mrs x1, MPIDR_EL1
 +	MOV64 x2, 0xff00ffffff
 +	and x1, x1, x2
-+	str x1, [x19, #IOSW_SMP_SEEN_MPIDR_OFF]
-+	str x20, [x19, #IOSW_SMP_ENTRY_EL_OFF]
-+	mov x2, #IOSW_SMP_STAGE_ENTRY
-+	str x2, [x19, #IOSW_SMP_STAGE_OFF]
++	str x1, [x19, #SWITCH_SMP_SEEN_MPIDR_OFF]
++	str x20, [x19, #SWITCH_SMP_ENTRY_EL_OFF]
++	mov x2, #SWITCH_SMP_STAGE_ENTRY
++	str x2, [x19, #SWITCH_SMP_STAGE_OFF]
 +	dsb sy
-+	ldr x2, [x19, #IOSW_SMP_MAGIC_OFF]
-+	MOV64 x3, IOSW_SMP_MAGIC
++	ldr x2, [x19, #SWITCH_SMP_MAGIC_OFF]
++	MOV64 x3, SWITCH_SMP_MAGIC
 +	cmp x2, x3
 +	b.ne Lswitch_secondary_bad_control
-+	ldr x2, [x19, #IOSW_SMP_RESERVED0_OFF]
-+	ldr x3, [x19, #IOSW_SMP_RESERVED1_OFF]
++	ldr x2, [x19, #SWITCH_SMP_RESERVED0_OFF]
++	ldr x3, [x19, #SWITCH_SMP_RESERVED1_OFF]
 +	orr x2, x2, x3
 +	cbnz x2, Lswitch_secondary_bad_control
-+	cmp x1, #IOSW_SMP_CORE_COUNT
++	cmp x1, #SWITCH_SMP_CORE_COUNT
 +	b.hs Lswitch_secondary_bad_mpidr
-+	ldr x2, [x19, #IOSW_SMP_MPIDR_OFF]
++	ldr x2, [x19, #SWITCH_SMP_MPIDR_OFF]
 +	cmp x1, x2
 +	b.ne Lswitch_secondary_bad_mpidr
-+	ldr x2, [x19, #IOSW_SMP_LOGICAL_OFF]
++	ldr x2, [x19, #SWITCH_SMP_LOGICAL_OFF]
 +	cmp x1, x2
 +	b.ne Lswitch_secondary_bad_mpidr
 +	adrp x2, EXT(switch_secondary_records)@page
@@ -4951,9 +4951,9 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	add x2, x2, x1, lsl #7
 +	cmp x2, x19
 +	b.ne Lswitch_secondary_bad_mpidr
-+	ldr x1, [x19, #IOSW_SMP_CNTVOFF_OFF]
++	ldr x1, [x19, #SWITCH_SMP_CNTVOFF_OFF]
 +	cbnz x1, Lswitch_secondary_bad_cntvoff
-+	ldr x1, [x19, #IOSW_SMP_RESET_OFF]
++	ldr x1, [x19, #SWITCH_SMP_RESET_OFF]
 +	adrp x2, EXT(LowResetVectorBase)@page
 +	add x2, x2, EXT(LowResetVectorBase)@pageoff
 +	cmp x1, x2
@@ -4972,7 +4972,7 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	cmp x20, #8
 +	b.ne Lswitch_secondary_el1
 +	mrs x1, SCTLR_EL2
-+	str x1, [x19, #IOSW_SMP_SCTLR_OFF]
++	str x1, [x19, #SWITCH_SMP_SCTLR_OFF]
 +	SWITCH_SMP_CACHE_OFF x1, x2, Lswitch_secondary_bad_sctlr
 +	/* Match the measured primary A57 EL2->EL1 handoff. No GICv3 SRE access. */
 +	MOV64 x1, 0x80000000
@@ -5015,13 +5015,13 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	msr DAIFSet, #15
 +	msr SPSel, #1
 +	mrs x1, SCTLR_EL1
-+	str x1, [x19, #IOSW_SMP_SCTLR_OFF]
++	str x1, [x19, #SWITCH_SMP_SCTLR_OFF]
 +	SWITCH_SMP_CACHE_OFF x1, x2, Lswitch_secondary_bad_sctlr
 +	/* Direct EL1 entry is permitted only with the same accessible zero-offset
 +	 * counter domain. EL1 cannot read CNTVOFF_EL2: bracket virtual by physical
 +	 * reads rather than pretending an EL2 register was observed here. */
 +	mrs x1, CNTFRQ_EL0
-+	ldr x2, [x19, #IOSW_SMP_CNTFRQ_OFF]
++	ldr x2, [x19, #SWITCH_SMP_CNTFRQ_OFF]
 +	cmp x1, x2
 +	b.ne Lswitch_secondary_bad_frequency
 +	MOV64 x2, 19200000
@@ -5040,45 +5040,45 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	msr CPACR_EL1, xzr
 +	msr CNTKCTL_EL1, xzr
 +	isb
-+	mov x1, #IOSW_SMP_STAGE_EL1
-+	str x1, [x19, #IOSW_SMP_STAGE_OFF]
++	mov x1, #SWITCH_SMP_STAGE_EL1
++	str x1, [x19, #SWITCH_SMP_STAGE_OFF]
 +	dsb sy
-+	mov x1, #IOSW_SMP_STAGE_RESET
-+	str x1, [x19, #IOSW_SMP_STAGE_OFF]
++	mov x1, #SWITCH_SMP_STAGE_RESET
++	str x1, [x19, #SWITCH_SMP_STAGE_OFF]
 +	dsb sy
 +	b EXT(LowResetVectorBase)
 +
 +Lswitch_secondary_bad_control:
-+	mov x1, #IOSW_SMP_ERROR_CONTROL
++	mov x1, #SWITCH_SMP_ERROR_CONTROL
 +	b Lswitch_secondary_failed
 +Lswitch_secondary_bad_el:
-+	mov x1, #IOSW_SMP_ERROR_EL
++	mov x1, #SWITCH_SMP_ERROR_EL
 +	b Lswitch_secondary_failed
 +Lswitch_secondary_bad_mpidr:
-+	mov x1, #IOSW_SMP_ERROR_MPIDR
++	mov x1, #SWITCH_SMP_ERROR_MPIDR
 +	b Lswitch_secondary_failed
 +Lswitch_secondary_bad_sctlr:
-+	mov x1, #IOSW_SMP_ERROR_SCTLR
++	mov x1, #SWITCH_SMP_ERROR_SCTLR
 +	b Lswitch_secondary_failed
 +Lswitch_secondary_bad_midr:
-+	mov x1, #IOSW_SMP_ERROR_MIDR
++	mov x1, #SWITCH_SMP_ERROR_MIDR
 +	b Lswitch_secondary_failed
 +Lswitch_secondary_bad_smpen:
-+	mov x1, #IOSW_SMP_ERROR_SMPEN
++	mov x1, #SWITCH_SMP_ERROR_SMPEN
 +	b Lswitch_secondary_failed
 +Lswitch_secondary_bad_frequency:
-+	mov x1, #IOSW_SMP_ERROR_FREQUENCY
++	mov x1, #SWITCH_SMP_ERROR_FREQUENCY
 +	b Lswitch_secondary_failed
 +Lswitch_secondary_bad_cntvoff:
-+	mov x1, #IOSW_SMP_ERROR_CNTVOFF
++	mov x1, #SWITCH_SMP_ERROR_CNTVOFF
 +	b Lswitch_secondary_failed
 +Lswitch_secondary_bad_reset:
-+	mov x1, #IOSW_SMP_ERROR_RESET
++	mov x1, #SWITCH_SMP_ERROR_RESET
 +Lswitch_secondary_failed:
-+	str x1, [x19, #IOSW_SMP_ERROR_OFF]
-+	mov x1, #IOSW_SMP_STAGE_FAILED
-+	str x1, [x19, #IOSW_SMP_STAGE_OFF]
-+	add x1, x19, #IOSW_SMP_STATUS_OFFSET
++	str x1, [x19, #SWITCH_SMP_ERROR_OFF]
++	mov x1, #SWITCH_SMP_STAGE_FAILED
++	str x1, [x19, #SWITCH_SMP_STAGE_OFF]
++	add x1, x19, #SWITCH_SMP_STATUS_OFFSET
 +	dc cvac, x1
 +	dsb sy
 +Lswitch_secondary_halt:
@@ -5093,21 +5093,21 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	mrs x1, MPIDR_EL1
 +	MOV64 x2, 0xff00ffffff
 +	and x1, x1, x2
-+	cmp x1, #IOSW_SMP_CORE_COUNT
++	cmp x1, #SWITCH_SMP_CORE_COUNT
 +	b.hs Lswitch_secondary_halt
 +	adrp x19, EXT(switch_secondary_records)@page
 +	add x19, x19, EXT(switch_secondary_records)@pageoff
 +	add x19, x19, x1, lsl #7
-+	ldr x2, [x19, #IOSW_SMP_MPIDR_OFF]
++	ldr x2, [x19, #SWITCH_SMP_MPIDR_OFF]
 +	cmp x1, x2
 +	b.ne Lswitch_secondary_halt
-+	ldr x2, [x19, #IOSW_SMP_ERROR_OFF]
++	ldr x2, [x19, #SWITCH_SMP_ERROR_OFF]
 +	cbnz x2, Lswitch_secondary_halt
 +	/* Error also prevents recursive faults; FAILED is published last, after
 +	 * ESR/ELR/FAR/SCTLR. Only FAILED makes the complete fault payload valid. */
-+	add x18, x18, #IOSW_SMP_ERROR_EXCEPTION
-+	str x18, [x19, #IOSW_SMP_ERROR_OFF]
-+	str x1, [x19, #IOSW_SMP_SEEN_MPIDR_OFF]
++	add x18, x18, #SWITCH_SMP_ERROR_EXCEPTION
++	str x18, [x19, #SWITCH_SMP_ERROR_OFF]
++	str x1, [x19, #SWITCH_SMP_SEEN_MPIDR_OFF]
 +	mrs x1, CurrentEL
 +	cmp x1, #8
 +	b.eq Lswitch_secondary_exception_el2
@@ -5124,13 +5124,13 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	mrs x3, FAR_EL2
 +	mrs x4, SCTLR_EL2
 +Lswitch_secondary_exception_save:
-+	str x1, [x19, #IOSW_SMP_ESR_OFF]
-+	str x2, [x19, #IOSW_SMP_ELR_OFF]
-+	str x3, [x19, #IOSW_SMP_FAR_OFF]
-+	str x4, [x19, #IOSW_SMP_SCTLR_OFF]
-+	mov x1, #IOSW_SMP_STAGE_FAILED
-+	str x1, [x19, #IOSW_SMP_STAGE_OFF]
-+	add x1, x19, #IOSW_SMP_STATUS_OFFSET
++	str x1, [x19, #SWITCH_SMP_ESR_OFF]
++	str x2, [x19, #SWITCH_SMP_ELR_OFF]
++	str x3, [x19, #SWITCH_SMP_FAR_OFF]
++	str x4, [x19, #SWITCH_SMP_SCTLR_OFF]
++	mov x1, #SWITCH_SMP_STAGE_FAILED
++	str x1, [x19, #SWITCH_SMP_STAGE_OFF]
++	add x1, x19, #SWITCH_SMP_STATUS_OFFSET
 +	dc cvac, x1
 +	dsb sy
 +	b Lswitch_secondary_halt
@@ -5141,21 +5141,21 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	mrs x0, MPIDR_EL1
 +	MOV64 x1, 0xff00ffffff
 +	and x0, x0, x1
-+	cmp x0, #IOSW_SMP_CORE_COUNT
++	cmp x0, #SWITCH_SMP_CORE_COUNT
 +	b.hs 9f
 +	adrp x1, EXT(switch_secondary_records)@page
 +	add x1, x1, EXT(switch_secondary_records)@pageoff
 +	add x1, x1, x0, lsl #7
-+	ldr x2, [x1, #IOSW_SMP_STAGE_OFF]
-+	cmp x2, #IOSW_SMP_STAGE_MMU
++	ldr x2, [x1, #SWITCH_SMP_STAGE_OFF]
++	cmp x2, #SWITCH_SMP_STAGE_MMU
 +	b.ne 9f
 +	adrp x0, EXT(ExceptionVectorsBase)@page
 +	add x0, x0, EXT(ExceptionVectorsBase)@pageoff
 +	msr VBAR_EL1, x0
 +	isb
-+	mov x2, #IOSW_SMP_STAGE_C
-+	str x2, [x1, #IOSW_SMP_STAGE_OFF]
-+	add x1, x1, #IOSW_SMP_STATUS_OFFSET
++	mov x2, #SWITCH_SMP_STAGE_C
++	str x2, [x1, #SWITCH_SMP_STAGE_OFF]
++	add x1, x1, #SWITCH_SMP_STATUS_OFFSET
 +	dc cvac, x1
 +	dsb sy
 +9:	ret
@@ -5164,7 +5164,7 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	.align 7
 +	.globl EXT(switch_secondary_records)
 +LEXT(switch_secondary_records)
-+	.space (IOSW_SMP_CORE_COUNT * IOSW_SMP_RECORD_BYTES), 0
++	.space (SWITCH_SMP_CORE_COUNT * SWITCH_SMP_RECORD_BYTES), 0
 +	.globl EXT(switch_secondary_records_end)
 +LEXT(switch_secondary_records_end)
 +	.text
@@ -5430,9 +5430,9 @@ diff -uN a/osfmk/arm64/start.s b/osfmk/arm64/start.s
 +	sub x16, x16, x23
 +	msr VBAR_EL1, x16
 +	isb
-+	mov x16, #IOSW_SMP_STAGE_MMU
-+	str x16, [x27, #IOSW_SMP_STAGE_OFF]
-+	add x16, x27, #IOSW_SMP_STATUS_OFFSET
++	mov x16, #SWITCH_SMP_STAGE_MMU
++	str x16, [x27, #SWITCH_SMP_STAGE_OFF]
++	add x16, x27, #SWITCH_SMP_STATUS_OFFSET
 +	dc cvac, x16
 +	dsb sy
 +Lswitch_secondary_mmu_live:

@@ -133,8 +133,8 @@ if test "${handoff_status}" = "READY"; then
     fi
 fi
 if test "${handoff_status}" = "READY"; then
-    if itest.l *0xAA100000 == 0x57534f49 && itest.l *0xAA100004 == 0x4e49574b && itest.l *0xAA100008 == 1 && itest.l *0xAA10000C == 0x1000 && itest.l *0xAA100010 == @STAGE_STREAM@ && itest.l *0xAA100014 == @STAGE_BYTES@ && itest.l *0xAA100018 == @STAGE_ID_LOW@ && itest.l *0xAA10001C == @STAGE_ID_HIGH@; then
-        if itest.l *@TRAILER_0@ == 0x57534f49 && itest.l *@TRAILER_1@ == 0x444e454b && itest.l *@TRAILER_2@ == @STAGE_STREAM@ && itest.l *@TRAILER_3@ == @STAGE_BYTES@ && itest.l *@TRAILER_4@ == @STAGE_ID_LOW@ && itest.l *@TRAILER_5@ == @STAGE_ID_HIGH@; then
+    if itest.l *0xAA100000 == 0x48435753 && itest.l *0xAA100004 == 0x4e49574b && itest.l *0xAA100008 == 1 && itest.l *0xAA10000C == 0x1000 && itest.l *0xAA100010 == @STAGE_STREAM@ && itest.l *0xAA100014 == @STAGE_BYTES@ && itest.l *0xAA100018 == @STAGE_ID_LOW@ && itest.l *0xAA10001C == @STAGE_ID_HIGH@; then
+        if itest.l *@TRAILER_0@ == 0x48435753 && itest.l *@TRAILER_1@ == 0x444e454b && itest.l *@TRAILER_2@ == @STAGE_STREAM@ && itest.l *@TRAILER_3@ == @STAGE_BYTES@ && itest.l *@TRAILER_4@ == @STAGE_ID_LOW@ && itest.l *@TRAILER_5@ == @STAGE_ID_HIGH@; then
             echoe "KERNEL STAGED"
             setexpr.l ios_window *0x60005010
         else

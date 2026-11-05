@@ -322,20 +322,20 @@ extern boolean_t vnode_pager_virtualdev(
 extern void switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
 /*
  * osfmk/kern/switch_kprof.c (r17-faults): a completed vm_fault for the current process, kprof faults lines. cls is
- * how vm_fault_internal resolved it, flags IOSW_FAULT_WIRE/KERNEL/PURGEABLE, began the mach time it was entered,
+ * how vm_fault_internal resolved it, flags SWITCH_FAULT_WIRE/KERNEL/PURGEABLE, began the mach time it was entered,
  * vaddr the fault address, around the pages the zero-fill fault-around entered with it (vm_fault.c).
  */
-#define IOSW_FAULT_ZF        0u     /* zero fill: DBG_ZERO_FILL_FAULT, DBG_NZF_PAGE_FAULT */
-#define IOSW_FAULT_COW       1u     /* copy on write: DBG_COW_FAULT */
-#define IOSW_FAULT_SOFT      2u     /* the page was resident: DBG_CACHE_HIT_FAULT */
-#define IOSW_FAULT_DEVICE    3u     /* ... a device pager's (private) page: IOKit physical memory */
-#define IOSW_FAULT_FILE      4u     /* paged in from its pager: DBG_PAGEIN/PAGEIND/PAGEINV_FAULT */
-#define IOSW_FAULT_CMP       5u     /* decompressed: DBG_COMPRESSOR_FAULT, DBG_COMPRESSOR_SWAPIN_FAULT */
-#define IOSW_FAULT_FAILED    6u     /* kr != KERN_SUCCESS, guard pages */
-#define IOSW_FAULT_CLASSES   7u
-#define IOSW_FAULT_WIRE      0x01u  /* change_wiring: vm_map_wire, IOKit prepare */
-#define IOSW_FAULT_KERNEL    0x02u  /* in a kernel map */
-#define IOSW_FAULT_PURGEABLE 0x04u  /* a zero fill in a purgeable object */
+#define SWITCH_FAULT_ZF        0u     /* zero fill: DBG_ZERO_FILL_FAULT, DBG_NZF_PAGE_FAULT */
+#define SWITCH_FAULT_COW       1u     /* copy on write: DBG_COW_FAULT */
+#define SWITCH_FAULT_SOFT      2u     /* the page was resident: DBG_CACHE_HIT_FAULT */
+#define SWITCH_FAULT_DEVICE    3u     /* ... a device pager's (private) page: IOKit physical memory */
+#define SWITCH_FAULT_FILE      4u     /* paged in from its pager: DBG_PAGEIN/PAGEIND/PAGEINV_FAULT */
+#define SWITCH_FAULT_CMP       5u     /* decompressed: DBG_COMPRESSOR_FAULT, DBG_COMPRESSOR_SWAPIN_FAULT */
+#define SWITCH_FAULT_FAILED    6u     /* kr != KERN_SUCCESS, guard pages */
+#define SWITCH_FAULT_CLASSES   7u
+#define SWITCH_FAULT_WIRE      0x01u  /* change_wiring: vm_map_wire, IOKit prepare */
+#define SWITCH_FAULT_KERNEL    0x02u  /* in a kernel map */
+#define SWITCH_FAULT_PURGEABLE 0x04u  /* a zero fill in a purgeable object */
 extern void switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr,
     unsigned int around);
 /* osfmk/arm64/sleh.c (r17-faults): a fault arm_fast_fault resolved (pmap ref/mod emulation, never reaches vm_fault) */

@@ -40,8 +40,8 @@ class TestExport(unittest.TestCase):
         path=Path(cls.temp.name)/'export.dylib'
         subprocess.run(['clang','-std=c11','-O2','-shared','-fPIC','-Wall','-Wextra','-Werror',
                         str(HERE/'export.c'),'-o',str(path)],check=True)
-        cls.lib=ctypes.CDLL(str(path));cls.lib.iosw_fw_capture.argtypes=[ctypes.POINTER(Reader),ctypes.c_uint64,ctypes.POINTER(ctypes.c_uint8)]
-        cls.lib.iosw_fw_capture.restype=ctypes.c_int
+        cls.lib=ctypes.CDLL(str(path));cls.lib.switch_fw_capture.argtypes=[ctypes.POINTER(Reader),ctypes.c_uint64,ctypes.POINTER(ctypes.c_uint8)]
+        cls.lib.switch_fw_capture.restype=ctypes.c_int
 
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
@@ -91,7 +91,7 @@ class TestExport(unittest.TestCase):
         ctypes.memmove(out,bytes(self.mem[p-GD:p-GD+n]),n);return 0
     def run_capture(self,expected=0,gd=GD):
         out=(ctypes.c_uint8*256)(*([0xa5]*256))
-        result=self.lib.iosw_fw_capture(ctypes.byref(self.reader),gd,out)
+        result=self.lib.switch_fw_capture(ctypes.byref(self.reader),gd,out)
         self.assertEqual(result,expected)
         result_bytes=bytes(out)
         if expected:self.assertEqual(result_bytes,bytes([0xa5])*256)
@@ -150,7 +150,7 @@ class TestExport(unittest.TestCase):
         for p in points:
             with self.subTest(p=hex(p)):
                 self.reject_at=p;out=(ctypes.c_uint8*256)(*([0xa5]*256))
-                result=self.lib.iosw_fw_capture(ctypes.byref(self.reader),GD,out)
+                result=self.lib.switch_fw_capture(ctypes.byref(self.reader),GD,out)
                 self.assertNotEqual(result,0);self.assertEqual(bytes(out),bytes([0xa5])*256)
         self.reject_at=None
     def test_changed_valid_snapshot(self):

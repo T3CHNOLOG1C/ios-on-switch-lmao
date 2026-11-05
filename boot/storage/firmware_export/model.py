@@ -69,7 +69,7 @@ def main():
         if case=='wrong-heap':f.p64(fixture.BASE+0x66cb0,fixture.LOW+8)
         initial=bytes(f.mem);(d/'firmware-ram.bin').write_bytes(initial)
         guard=bytes([0x5a])*4096;(d/'reference-before.bin').write_bytes(guard)
-        with tempfile.TemporaryDirectory(prefix='iosw-fwe-') as temp:
+        with tempfile.TemporaryDirectory(prefix='switch-fwe-') as temp:
             cmd=[tool('qemu-system-aarch64'),'-machine','virt,virtualization=on','-cpu','cortex-a57','-m','4096M',
                  '-display','none','-serial','none','-monitor','none','-S','-qmp','stdio',
                  '-device',f'loader,file={d/"firmware-ram.bin"},addr={fixture.GD:#x},force-raw=on',

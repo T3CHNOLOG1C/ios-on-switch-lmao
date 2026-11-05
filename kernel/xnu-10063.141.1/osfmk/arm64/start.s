@@ -193,12 +193,12 @@ LEXT(reset_vector)
 	adrp x16, EXT(switch_secondary_records)@page
 	add x16, x16, EXT(switch_secondary_records)@pageoff
 	sub x17, x27, x16
-	cmp x17, #(IOSW_SMP_CORE_COUNT * IOSW_SMP_RECORD_BYTES)
+	cmp x17, #(SWITCH_SMP_CORE_COUNT * SWITCH_SMP_RECORD_BYTES)
 	b.hs Lswitch_reset_normal_vectors
-	tst x17, #(IOSW_SMP_RECORD_BYTES - 1)
+	tst x17, #(SWITCH_SMP_RECORD_BYTES - 1)
 	b.ne Lswitch_reset_normal_vectors
-	ldr x17, [x27, #IOSW_SMP_STAGE_OFF]
-	cmp x17, #IOSW_SMP_STAGE_RESET
+	ldr x17, [x27, #SWITCH_SMP_STAGE_OFF]
+	cmp x17, #SWITCH_SMP_STAGE_RESET
 	b.ne Lswitch_reset_normal_vectors
 	adrp x0, EXT(switch_secondary_vectors)@page
 	add x0, x0, EXT(switch_secondary_vectors)@pageoff
@@ -459,7 +459,7 @@ LEXT(bootstrap_instructions)
 	cmp \context, \end
 	b.hs \failed
 	sub \scratch, \context, \base
-	tst \scratch, #(IOSW_SMP_RECORD_BYTES - 1)
+	tst \scratch, #(SWITCH_SMP_RECORD_BYTES - 1)
 	b.ne \failed
 .endmacro
 .macro SWITCH_SMP_CACHE_OFF sctlr, scratch, failed
@@ -528,8 +528,8 @@ Lswitch_secondary_check_off:
 	mov x27, x0
 	mov x28, xzr
 	/* Establish a real current-EL vector BEFORE implementation-defined MRS. */
-	str x20, [x19, #IOSW_SMP_ENTRY_EL_OFF]
-	str x21, [x19, #IOSW_SMP_SCTLR_OFF]
+	str x20, [x19, #SWITCH_SMP_ENTRY_EL_OFF]
+	str x21, [x19, #SWITCH_SMP_SCTLR_OFF]
 	adrp x1, EXT(switch_secondary_vectors)@page
 	add x1, x1, EXT(switch_secondary_vectors)@pageoff
 	lsr x2, x1, #32
@@ -548,25 +548,25 @@ Lswitch_secondary_record_entry:
 	mrs x1, MPIDR_EL1
 	MOV64 x2, 0xff00ffffff
 	and x1, x1, x2
-	str x1, [x19, #IOSW_SMP_SEEN_MPIDR_OFF]
-	str x20, [x19, #IOSW_SMP_ENTRY_EL_OFF]
-	mov x2, #IOSW_SMP_STAGE_ENTRY
-	str x2, [x19, #IOSW_SMP_STAGE_OFF]
+	str x1, [x19, #SWITCH_SMP_SEEN_MPIDR_OFF]
+	str x20, [x19, #SWITCH_SMP_ENTRY_EL_OFF]
+	mov x2, #SWITCH_SMP_STAGE_ENTRY
+	str x2, [x19, #SWITCH_SMP_STAGE_OFF]
 	dsb sy
-	ldr x2, [x19, #IOSW_SMP_MAGIC_OFF]
-	MOV64 x3, IOSW_SMP_MAGIC
+	ldr x2, [x19, #SWITCH_SMP_MAGIC_OFF]
+	MOV64 x3, SWITCH_SMP_MAGIC
 	cmp x2, x3
 	b.ne Lswitch_secondary_bad_control
-	ldr x2, [x19, #IOSW_SMP_RESERVED0_OFF]
-	ldr x3, [x19, #IOSW_SMP_RESERVED1_OFF]
+	ldr x2, [x19, #SWITCH_SMP_RESERVED0_OFF]
+	ldr x3, [x19, #SWITCH_SMP_RESERVED1_OFF]
 	orr x2, x2, x3
 	cbnz x2, Lswitch_secondary_bad_control
-	cmp x1, #IOSW_SMP_CORE_COUNT
+	cmp x1, #SWITCH_SMP_CORE_COUNT
 	b.hs Lswitch_secondary_bad_mpidr
-	ldr x2, [x19, #IOSW_SMP_MPIDR_OFF]
+	ldr x2, [x19, #SWITCH_SMP_MPIDR_OFF]
 	cmp x1, x2
 	b.ne Lswitch_secondary_bad_mpidr
-	ldr x2, [x19, #IOSW_SMP_LOGICAL_OFF]
+	ldr x2, [x19, #SWITCH_SMP_LOGICAL_OFF]
 	cmp x1, x2
 	b.ne Lswitch_secondary_bad_mpidr
 	adrp x2, EXT(switch_secondary_records)@page
@@ -574,9 +574,9 @@ Lswitch_secondary_record_entry:
 	add x2, x2, x1, lsl #7
 	cmp x2, x19
 	b.ne Lswitch_secondary_bad_mpidr
-	ldr x1, [x19, #IOSW_SMP_CNTVOFF_OFF]
+	ldr x1, [x19, #SWITCH_SMP_CNTVOFF_OFF]
 	cbnz x1, Lswitch_secondary_bad_cntvoff
-	ldr x1, [x19, #IOSW_SMP_RESET_OFF]
+	ldr x1, [x19, #SWITCH_SMP_RESET_OFF]
 	adrp x2, EXT(LowResetVectorBase)@page
 	add x2, x2, EXT(LowResetVectorBase)@pageoff
 	cmp x1, x2
@@ -595,7 +595,7 @@ Lswitch_secondary_record_entry:
 	cmp x20, #8
 	b.ne Lswitch_secondary_el1
 	mrs x1, SCTLR_EL2
-	str x1, [x19, #IOSW_SMP_SCTLR_OFF]
+	str x1, [x19, #SWITCH_SMP_SCTLR_OFF]
 	SWITCH_SMP_CACHE_OFF x1, x2, Lswitch_secondary_bad_sctlr
 	/* Match the measured primary A57 EL2->EL1 handoff. No GICv3 SRE access. */
 	MOV64 x1, 0x80000000
@@ -638,13 +638,13 @@ Lswitch_secondary_el1:
 	msr DAIFSet, #15
 	msr SPSel, #1
 	mrs x1, SCTLR_EL1
-	str x1, [x19, #IOSW_SMP_SCTLR_OFF]
+	str x1, [x19, #SWITCH_SMP_SCTLR_OFF]
 	SWITCH_SMP_CACHE_OFF x1, x2, Lswitch_secondary_bad_sctlr
 	/* Direct EL1 entry is permitted only with the same accessible zero-offset
 	 * counter domain. EL1 cannot read CNTVOFF_EL2: bracket virtual by physical
 	 * reads rather than pretending an EL2 register was observed here. */
 	mrs x1, CNTFRQ_EL0
-	ldr x2, [x19, #IOSW_SMP_CNTFRQ_OFF]
+	ldr x2, [x19, #SWITCH_SMP_CNTFRQ_OFF]
 	cmp x1, x2
 	b.ne Lswitch_secondary_bad_frequency
 	MOV64 x2, 19200000
@@ -663,45 +663,45 @@ Lswitch_secondary_el1:
 	msr CPACR_EL1, xzr
 	msr CNTKCTL_EL1, xzr
 	isb
-	mov x1, #IOSW_SMP_STAGE_EL1
-	str x1, [x19, #IOSW_SMP_STAGE_OFF]
+	mov x1, #SWITCH_SMP_STAGE_EL1
+	str x1, [x19, #SWITCH_SMP_STAGE_OFF]
 	dsb sy
-	mov x1, #IOSW_SMP_STAGE_RESET
-	str x1, [x19, #IOSW_SMP_STAGE_OFF]
+	mov x1, #SWITCH_SMP_STAGE_RESET
+	str x1, [x19, #SWITCH_SMP_STAGE_OFF]
 	dsb sy
 	b EXT(LowResetVectorBase)
 
 Lswitch_secondary_bad_control:
-	mov x1, #IOSW_SMP_ERROR_CONTROL
+	mov x1, #SWITCH_SMP_ERROR_CONTROL
 	b Lswitch_secondary_failed
 Lswitch_secondary_bad_el:
-	mov x1, #IOSW_SMP_ERROR_EL
+	mov x1, #SWITCH_SMP_ERROR_EL
 	b Lswitch_secondary_failed
 Lswitch_secondary_bad_mpidr:
-	mov x1, #IOSW_SMP_ERROR_MPIDR
+	mov x1, #SWITCH_SMP_ERROR_MPIDR
 	b Lswitch_secondary_failed
 Lswitch_secondary_bad_sctlr:
-	mov x1, #IOSW_SMP_ERROR_SCTLR
+	mov x1, #SWITCH_SMP_ERROR_SCTLR
 	b Lswitch_secondary_failed
 Lswitch_secondary_bad_midr:
-	mov x1, #IOSW_SMP_ERROR_MIDR
+	mov x1, #SWITCH_SMP_ERROR_MIDR
 	b Lswitch_secondary_failed
 Lswitch_secondary_bad_smpen:
-	mov x1, #IOSW_SMP_ERROR_SMPEN
+	mov x1, #SWITCH_SMP_ERROR_SMPEN
 	b Lswitch_secondary_failed
 Lswitch_secondary_bad_frequency:
-	mov x1, #IOSW_SMP_ERROR_FREQUENCY
+	mov x1, #SWITCH_SMP_ERROR_FREQUENCY
 	b Lswitch_secondary_failed
 Lswitch_secondary_bad_cntvoff:
-	mov x1, #IOSW_SMP_ERROR_CNTVOFF
+	mov x1, #SWITCH_SMP_ERROR_CNTVOFF
 	b Lswitch_secondary_failed
 Lswitch_secondary_bad_reset:
-	mov x1, #IOSW_SMP_ERROR_RESET
+	mov x1, #SWITCH_SMP_ERROR_RESET
 Lswitch_secondary_failed:
-	str x1, [x19, #IOSW_SMP_ERROR_OFF]
-	mov x1, #IOSW_SMP_STAGE_FAILED
-	str x1, [x19, #IOSW_SMP_STAGE_OFF]
-	add x1, x19, #IOSW_SMP_STATUS_OFFSET
+	str x1, [x19, #SWITCH_SMP_ERROR_OFF]
+	mov x1, #SWITCH_SMP_STAGE_FAILED
+	str x1, [x19, #SWITCH_SMP_STAGE_OFF]
+	add x1, x19, #SWITCH_SMP_STATUS_OFFSET
 	dc cvac, x1
 	dsb sy
 Lswitch_secondary_halt:
@@ -716,21 +716,21 @@ Lswitch_secondary_exception:
 	mrs x1, MPIDR_EL1
 	MOV64 x2, 0xff00ffffff
 	and x1, x1, x2
-	cmp x1, #IOSW_SMP_CORE_COUNT
+	cmp x1, #SWITCH_SMP_CORE_COUNT
 	b.hs Lswitch_secondary_halt
 	adrp x19, EXT(switch_secondary_records)@page
 	add x19, x19, EXT(switch_secondary_records)@pageoff
 	add x19, x19, x1, lsl #7
-	ldr x2, [x19, #IOSW_SMP_MPIDR_OFF]
+	ldr x2, [x19, #SWITCH_SMP_MPIDR_OFF]
 	cmp x1, x2
 	b.ne Lswitch_secondary_halt
-	ldr x2, [x19, #IOSW_SMP_ERROR_OFF]
+	ldr x2, [x19, #SWITCH_SMP_ERROR_OFF]
 	cbnz x2, Lswitch_secondary_halt
 	/* Error also prevents recursive faults; FAILED is published last, after
 	 * ESR/ELR/FAR/SCTLR. Only FAILED makes the complete fault payload valid. */
-	add x18, x18, #IOSW_SMP_ERROR_EXCEPTION
-	str x18, [x19, #IOSW_SMP_ERROR_OFF]
-	str x1, [x19, #IOSW_SMP_SEEN_MPIDR_OFF]
+	add x18, x18, #SWITCH_SMP_ERROR_EXCEPTION
+	str x18, [x19, #SWITCH_SMP_ERROR_OFF]
+	str x1, [x19, #SWITCH_SMP_SEEN_MPIDR_OFF]
 	mrs x1, CurrentEL
 	cmp x1, #8
 	b.eq Lswitch_secondary_exception_el2
@@ -747,13 +747,13 @@ Lswitch_secondary_exception_el2:
 	mrs x3, FAR_EL2
 	mrs x4, SCTLR_EL2
 Lswitch_secondary_exception_save:
-	str x1, [x19, #IOSW_SMP_ESR_OFF]
-	str x2, [x19, #IOSW_SMP_ELR_OFF]
-	str x3, [x19, #IOSW_SMP_FAR_OFF]
-	str x4, [x19, #IOSW_SMP_SCTLR_OFF]
-	mov x1, #IOSW_SMP_STAGE_FAILED
-	str x1, [x19, #IOSW_SMP_STAGE_OFF]
-	add x1, x19, #IOSW_SMP_STATUS_OFFSET
+	str x1, [x19, #SWITCH_SMP_ESR_OFF]
+	str x2, [x19, #SWITCH_SMP_ELR_OFF]
+	str x3, [x19, #SWITCH_SMP_FAR_OFF]
+	str x4, [x19, #SWITCH_SMP_SCTLR_OFF]
+	mov x1, #SWITCH_SMP_STAGE_FAILED
+	str x1, [x19, #SWITCH_SMP_STAGE_OFF]
+	add x1, x19, #SWITCH_SMP_STATUS_OFFSET
 	dc cvac, x1
 	dsb sy
 	b Lswitch_secondary_halt
@@ -764,21 +764,21 @@ LEXT(switch_secondary_vectors_leave)
 	mrs x0, MPIDR_EL1
 	MOV64 x1, 0xff00ffffff
 	and x0, x0, x1
-	cmp x0, #IOSW_SMP_CORE_COUNT
+	cmp x0, #SWITCH_SMP_CORE_COUNT
 	b.hs 9f
 	adrp x1, EXT(switch_secondary_records)@page
 	add x1, x1, EXT(switch_secondary_records)@pageoff
 	add x1, x1, x0, lsl #7
-	ldr x2, [x1, #IOSW_SMP_STAGE_OFF]
-	cmp x2, #IOSW_SMP_STAGE_MMU
+	ldr x2, [x1, #SWITCH_SMP_STAGE_OFF]
+	cmp x2, #SWITCH_SMP_STAGE_MMU
 	b.ne 9f
 	adrp x0, EXT(ExceptionVectorsBase)@page
 	add x0, x0, EXT(ExceptionVectorsBase)@pageoff
 	msr VBAR_EL1, x0
 	isb
-	mov x2, #IOSW_SMP_STAGE_C
-	str x2, [x1, #IOSW_SMP_STAGE_OFF]
-	add x1, x1, #IOSW_SMP_STATUS_OFFSET
+	mov x2, #SWITCH_SMP_STAGE_C
+	str x2, [x1, #SWITCH_SMP_STAGE_OFF]
+	add x1, x1, #SWITCH_SMP_STATUS_OFFSET
 	dc cvac, x1
 	dsb sy
 9:	ret
@@ -787,7 +787,7 @@ LEXT(switch_secondary_vectors_leave)
 	.align 7
 	.globl EXT(switch_secondary_records)
 LEXT(switch_secondary_records)
-	.space (IOSW_SMP_CORE_COUNT * IOSW_SMP_RECORD_BYTES), 0
+	.space (SWITCH_SMP_CORE_COUNT * SWITCH_SMP_RECORD_BYTES), 0
 	.globl EXT(switch_secondary_records_end)
 LEXT(switch_secondary_records_end)
 	.text
@@ -1465,9 +1465,9 @@ Lswitch_secondary_vbar_selected:
 	sub x16, x16, x23
 	msr VBAR_EL1, x16
 	isb
-	mov x16, #IOSW_SMP_STAGE_MMU
-	str x16, [x27, #IOSW_SMP_STAGE_OFF]
-	add x16, x27, #IOSW_SMP_STATUS_OFFSET
+	mov x16, #SWITCH_SMP_STAGE_MMU
+	str x16, [x27, #SWITCH_SMP_STAGE_OFF]
+	add x16, x27, #SWITCH_SMP_STATUS_OFFSET
 	dc cvac, x16
 	dsb sy
 Lswitch_secondary_mmu_live:

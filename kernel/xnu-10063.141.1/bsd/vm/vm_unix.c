@@ -2302,33 +2302,33 @@ out:
  * cache file replaces the two 16 KB pages that hold the 16 entries in the shared region. At page-in it faults
  * the page from the file (the vnode's UBC), validates it against the cache's own code signature (Apple's
  * hashes), copies it to the new page, which inherits that validation, and only then lets
- * iosw_home_grid_page() change a 4 KB chunk, and only if every entry in the chunk reads exactly as shipped.
+ * switch_home_grid_page() change a 4 KB chunk, and only if every entry in the chunk reads exactly as shipped.
  * Nothing on disk changes. Keyed to the subcache UUID, the mapping's address and its file offset; anything
  * else leaves the cache text stock. Private mappings of the cache file (not through the shared region) stay
  * stock too.
  */
-static const uint8_t iosw_hg_magic[16] = "dyld_v1   arm64";
-static const uint8_t iosw_hg_uuid[16] = {           /* dyld_shared_cache_arm64.25 of 21H461 */
+static const uint8_t switch_hg_magic[16] = "dyld_v1   arm64";
+static const uint8_t switch_hg_uuid[16] = {           /* dyld_shared_cache_arm64.25 of 21H461 */
 	0xf1, 0x6d, 0xce, 0xf8, 0xc4, 0x46, 0x38, 0x05, 0x91, 0x63, 0xc0, 0x13, 0x8e, 0x4d, 0xca, 0xd1,
 };
-#define IOSW_HG_UUID_OFFSET     0x58                /* dyld_cache_header.uuid */
-#define IOSW_HG_PAGES_VMADDR    0x1cf660000ULL      /* unslid; 2 x 16 KB */
-#define IOSW_HG_PAGES_FILEOFF   0x15cc000ULL
-#define IOSW_HG_PAGES_SIZE      0x8000ULL
-#define IOSW_HG_CHUNKS_OFFSET   0x3000ULL           /* the 4 KB chunks at 0x1cf663000 and 0x1cf664000 */
-#define IOSW_HG_CHUNKS_SIZE     0x2000ULL
-#define IOSW_HG_ENTRY0_FILEOFF  0x15cf6a0ULL        /* _defaultRootMetrics (0x1cf6633d0) + 0x2d0: type 0x19 */
-#define IOSW_HG_ENTRY_STRIDE    0x120ULL
-#define IOSW_HG_ENTRIES         16u
-#define IOSW_HG_WIDGETS_OFFSET  0x48                /* the entry's grid for pages with widgets */
-#define IOSW_HG_CHUNK           4096ULL
+#define SWITCH_HG_UUID_OFFSET     0x58                /* dyld_cache_header.uuid */
+#define SWITCH_HG_PAGES_VMADDR    0x1cf660000ULL      /* unslid; 2 x 16 KB */
+#define SWITCH_HG_PAGES_FILEOFF   0x15cc000ULL
+#define SWITCH_HG_PAGES_SIZE      0x8000ULL
+#define SWITCH_HG_CHUNKS_OFFSET   0x3000ULL           /* the 4 KB chunks at 0x1cf663000 and 0x1cf664000 */
+#define SWITCH_HG_CHUNKS_SIZE     0x2000ULL
+#define SWITCH_HG_ENTRY0_FILEOFF  0x15cf6a0ULL        /* _defaultRootMetrics (0x1cf6633d0) + 0x2d0: type 0x19 */
+#define SWITCH_HG_ENTRY_STRIDE    0x120ULL
+#define SWITCH_HG_ENTRIES         16u
+#define SWITCH_HG_WIDGETS_OFFSET  0x48                /* the entry's grid for pages with widgets */
+#define SWITCH_HG_CHUNK           4096ULL
 
-static int iosw_hg_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
-static uint32_t iosw_hg_chunks_done;                /* one bit per patched 4 KB chunk */
-static uint32_t iosw_hg_mismatch_logged;
+static int switch_hg_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
+static uint32_t switch_hg_chunks_done;                /* one bit per patched 4 KB chunk */
+static uint32_t switch_hg_mismatch_logged;
 
 static int
-iosw_home_grid_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
+switch_home_grid_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
 {
 	static const uint8_t stock[8] = { 5, 6, 6, 5, 0, 0, 0, 0 };
 	static const uint8_t widgets[8] = { 4, 6, 0, 0, 0, 0, 0, 0 };
@@ -2336,20 +2336,20 @@ iosw_home_grid_page(const void *src, void *dst, unsigned long long src_offset, _
 	uint8_t *out = dst;
 	unsigned int count = 0;
 
-	bcopy(src, dst, IOSW_HG_CHUNK);
+	bcopy(src, dst, SWITCH_HG_CHUNK);
 	/* all or nothing per chunk: check every entry in it, then patch */
 	for (int pass = 0; pass < 2; pass++) {
-		for (unsigned int k = 0; k < IOSW_HG_ENTRIES; k++) {
-			uint64_t fileoff = IOSW_HG_ENTRY0_FILEOFF + k * IOSW_HG_ENTRY_STRIDE;
-			if (fileoff < src_offset || fileoff >= src_offset + IOSW_HG_CHUNK) {
+		for (unsigned int k = 0; k < SWITCH_HG_ENTRIES; k++) {
+			uint64_t fileoff = SWITCH_HG_ENTRY0_FILEOFF + k * SWITCH_HG_ENTRY_STRIDE;
+			if (fileoff < src_offset || fileoff >= src_offset + SWITCH_HG_CHUNK) {
 				continue;
 			}
 			uint64_t at = fileoff - src_offset;
 			if (pass == 0) {
-				if (at + IOSW_HG_WIDGETS_OFFSET + sizeof(widgets) > IOSW_HG_CHUNK ||
+				if (at + SWITCH_HG_WIDGETS_OFFSET + sizeof(widgets) > SWITCH_HG_CHUNK ||
 				    memcmp(out + at, stock, sizeof(stock)) != 0 ||
-				    memcmp(out + at + IOSW_HG_WIDGETS_OFFSET, widgets, sizeof(widgets)) != 0) {
-					if (!os_atomic_xchg(&iosw_hg_mismatch_logged, 1, relaxed)) {
+				    memcmp(out + at + SWITCH_HG_WIDGETS_OFFSET, widgets, sizeof(widgets)) != 0) {
+					if (!os_atomic_xchg(&switch_hg_mismatch_logged, 1, relaxed)) {
 						printf("SwitchHomeGrid: cache bytes at 0x%llx are not the shipped ones, "
 						    "page left stock\n", fileoff);
 					}
@@ -2361,32 +2361,32 @@ iosw_home_grid_page(const void *src, void *dst, unsigned long long src_offset, _
 			}
 		}
 	}
-	uint64_t chunk = (src_offset - (IOSW_HG_PAGES_FILEOFF + IOSW_HG_CHUNKS_OFFSET)) / IOSW_HG_CHUNK;
-	if (count == 0 || chunk >= IOSW_HG_CHUNKS_SIZE / IOSW_HG_CHUNK) {
+	uint64_t chunk = (src_offset - (SWITCH_HG_PAGES_FILEOFF + SWITCH_HG_CHUNKS_OFFSET)) / SWITCH_HG_CHUNK;
+	if (count == 0 || chunk >= SWITCH_HG_CHUNKS_SIZE / SWITCH_HG_CHUNK) {
 		return 0;
 	}
-	uint32_t all = (1u << (IOSW_HG_CHUNKS_SIZE / IOSW_HG_CHUNK)) - 1;
-	uint32_t before = os_atomic_or_orig(&iosw_hg_chunks_done, 1u << chunk, relaxed);
+	uint32_t all = (1u << (SWITCH_HG_CHUNKS_SIZE / SWITCH_HG_CHUNK)) - 1;
+	uint32_t before = os_atomic_or_orig(&switch_hg_chunks_done, 1u << chunk, relaxed);
 	if (before != all && (before | (1u << chunk)) == all) {
-		printf("SwitchHomeGrid: 6x4 (%u entries, %llu pages)\n", IOSW_HG_ENTRIES,
-		    IOSW_HG_PAGES_SIZE / PAGE_SIZE);
+		printf("SwitchHomeGrid: 6x4 (%u entries, %llu pages)\n", SWITCH_HG_ENTRIES,
+		    SWITCH_HG_PAGES_SIZE / PAGE_SIZE);
 	}
 	return 0;
 }
 
 /* The home grid's pager for the mapping that holds the table, or MEMORY_OBJECT_NULL. */
 static memory_object_t
-iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
+switch_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
 {
-	if (unslid_address > IOSW_HG_PAGES_VMADDR ||
-	    IOSW_HG_PAGES_VMADDR + IOSW_HG_PAGES_SIZE > unslid_address + size ||
-	    file_offset + (IOSW_HG_PAGES_VMADDR - unslid_address) != IOSW_HG_PAGES_FILEOFF ||
+	if (unslid_address > SWITCH_HG_PAGES_VMADDR ||
+	    SWITCH_HG_PAGES_VMADDR + SWITCH_HG_PAGES_SIZE > unslid_address + size ||
+	    file_offset + (SWITCH_HG_PAGES_VMADDR - unslid_address) != SWITCH_HG_PAGES_FILEOFF ||
 	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
 		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the table */
 	}
 
-	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(iosw_hg_uuid)];
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_hg_uuid)];
 	int resid = 0;
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
@@ -2394,28 +2394,28 @@ iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t siz
 		printf("SwitchHomeGrid: cache header read failed (%d), cache text left stock\n", error);
 		return MEMORY_OBJECT_NULL;
 	}
-	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
-	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_hg_uuid, sizeof(iosw_hg_uuid)) != 0) {
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_hg_uuid, sizeof(switch_hg_uuid)) != 0) {
 		printf("SwitchHomeGrid: not the 21H461 subcache (UUID differs), cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 
 	struct pager_crypt_info crypt_info = {
-		.page_decrypt = iosw_home_grid_page,
+		.page_decrypt = switch_home_grid_page,
 		.crypt_end = NULL,
-		.crypt_ops = &iosw_hg_cookie,
+		.crypt_ops = &switch_hg_cookie,
 		.crypt_refcnt = 0,
 	};
 	/* page_decrypt() gets crypto_backing_offset - crypto_start + offset in the pager: the chunk's file offset */
-	memory_object_t mo = apple_protect_pager_setup(file_object, IOSW_HG_PAGES_FILEOFF,
-	    IOSW_HG_PAGES_FILEOFF + IOSW_HG_CHUNKS_OFFSET, &crypt_info,
-	    IOSW_HG_CHUNKS_OFFSET, IOSW_HG_CHUNKS_OFFSET + IOSW_HG_CHUNKS_SIZE, TRUE);
+	memory_object_t mo = apple_protect_pager_setup(file_object, SWITCH_HG_PAGES_FILEOFF,
+	    SWITCH_HG_PAGES_FILEOFF + SWITCH_HG_CHUNKS_OFFSET, &crypt_info,
+	    SWITCH_HG_CHUNKS_OFFSET, SWITCH_HG_CHUNKS_OFFSET + SWITCH_HG_CHUNKS_SIZE, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
 		printf("SwitchHomeGrid: pager setup failed, cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
-	*range_offset = IOSW_HG_PAGES_VMADDR - unslid_address;
-	*range_size = IOSW_HG_PAGES_SIZE;
+	*range_offset = SWITCH_HG_PAGES_VMADDR - unslid_address;
+	*range_size = SWITCH_HG_PAGES_SIZE;
 	return mo;
 }
 
@@ -2433,40 +2433,40 @@ iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t siz
  * IconServices' icons at 2x: 29-point icons from 58-pixel bitmaps, drawn downsampled (never upscaled). Same pager and
  * checks as the home grid, on one 4 KB chunk: the instruction and the two after it must read as shipped.
  */
-static const uint8_t iosw_si_uuid[16] = {           /* dyld_shared_cache_arm64.13 of 21H461 */
+static const uint8_t switch_si_uuid[16] = {           /* dyld_shared_cache_arm64.13 of 21H461 */
 	0xc0, 0x45, 0x2d, 0x94, 0xa5, 0xf8, 0x3b, 0xe1, 0xbd, 0xfc, 0xe1, 0x5e, 0x71, 0x4a, 0x84, 0xf5,
 };
-#define IOSW_SI_PAGES_VMADDR    0x1a72c4000ULL      /* unslid; one 16 KB page (.13's text: 0x1a67c8000, file 0) */
-#define IOSW_SI_PAGES_FILEOFF   0xafc000ULL
-#define IOSW_SI_PAGES_SIZE      0x4000ULL
-#define IOSW_SI_CHUNK_OFFSET    0x2000ULL           /* the 4 KB chunk at 0x1a72c6000 */
-#define IOSW_SI_INSN_FILEOFF    0xafec84ULL         /* 0x1a72c6c84, settingsIconCacheWithScale: + 0x10 */
+#define SWITCH_SI_PAGES_VMADDR    0x1a72c4000ULL      /* unslid; one 16 KB page (.13's text: 0x1a67c8000, file 0) */
+#define SWITCH_SI_PAGES_FILEOFF   0xafc000ULL
+#define SWITCH_SI_PAGES_SIZE      0x4000ULL
+#define SWITCH_SI_CHUNK_OFFSET    0x2000ULL           /* the 4 KB chunk at 0x1a72c6000 */
+#define SWITCH_SI_INSN_FILEOFF    0xafec84ULL         /* 0x1a72c6c84, settingsIconCacheWithScale: + 0x10 */
 
-static int iosw_si_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
-static uint32_t iosw_si_logged;
+static int switch_si_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
+static uint32_t switch_si_logged;
 
 static int
-iosw_settings_icons_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
+switch_settings_icons_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
 {
 	/* fmov d8, d0; fmov d0, #3.0; fcmp d8, d0 */
 	static const uint8_t stock[12] = { 0x08, 0x40, 0x60, 0x1e, 0x00, 0x10, 0x61, 0x1e, 0x00, 0x21, 0x60, 0x1e };
 	static const uint8_t scale2[4] = { 0x08, 0x10, 0x60, 0x1e };    /* fmov d8, #2.0 */
 	uint8_t *out = dst;
 
-	bcopy(src, dst, IOSW_HG_CHUNK);
-	if (IOSW_SI_INSN_FILEOFF < src_offset || IOSW_SI_INSN_FILEOFF + sizeof(stock) > src_offset + IOSW_HG_CHUNK) {
+	bcopy(src, dst, SWITCH_HG_CHUNK);
+	if (SWITCH_SI_INSN_FILEOFF < src_offset || SWITCH_SI_INSN_FILEOFF + sizeof(stock) > src_offset + SWITCH_HG_CHUNK) {
 		return 0;
 	}
-	uint64_t at = IOSW_SI_INSN_FILEOFF - src_offset;
+	uint64_t at = SWITCH_SI_INSN_FILEOFF - src_offset;
 	if (memcmp(out + at, stock, sizeof(stock)) != 0) {
-		if (!os_atomic_xchg(&iosw_si_logged, 1, relaxed)) {
+		if (!os_atomic_xchg(&switch_si_logged, 1, relaxed)) {
 			printf("SwitchSettingsIcons: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
-			    IOSW_SI_INSN_FILEOFF);
+			    SWITCH_SI_INSN_FILEOFF);
 		}
 		return 0;
 	}
 	memcpy(out + at, scale2, sizeof(scale2));
-	if (!os_atomic_xchg(&iosw_si_logged, 1, relaxed)) {
+	if (!os_atomic_xchg(&switch_si_logged, 1, relaxed)) {
 		printf("SwitchSettingsIcons: icon cache at scale 2\n");
 	}
 	return 0;
@@ -2474,17 +2474,17 @@ iosw_settings_icons_page(const void *src, void *dst, unsigned long long src_offs
 
 /* The settings icons' pager for the mapping that holds the method, or MEMORY_OBJECT_NULL. */
 static memory_object_t
-iosw_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
+switch_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
 {
-	if (unslid_address > IOSW_SI_PAGES_VMADDR ||
-	    IOSW_SI_PAGES_VMADDR + IOSW_SI_PAGES_SIZE > unslid_address + size ||
-	    file_offset + (IOSW_SI_PAGES_VMADDR - unslid_address) != IOSW_SI_PAGES_FILEOFF ||
+	if (unslid_address > SWITCH_SI_PAGES_VMADDR ||
+	    SWITCH_SI_PAGES_VMADDR + SWITCH_SI_PAGES_SIZE > unslid_address + size ||
+	    file_offset + (SWITCH_SI_PAGES_VMADDR - unslid_address) != SWITCH_SI_PAGES_FILEOFF ||
 	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
 		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the method */
 	}
 
-	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(iosw_si_uuid)];
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_si_uuid)];
 	int resid = 0;
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
@@ -2492,27 +2492,27 @@ iosw_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_
 		printf("SwitchSettingsIcons: cache header read failed (%d), cache text left stock\n", error);
 		return MEMORY_OBJECT_NULL;
 	}
-	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
-	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_si_uuid, sizeof(iosw_si_uuid)) != 0) {
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_si_uuid, sizeof(switch_si_uuid)) != 0) {
 		printf("SwitchSettingsIcons: not the 21H461 subcache (UUID differs), cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 
 	struct pager_crypt_info crypt_info = {
-		.page_decrypt = iosw_settings_icons_page,
+		.page_decrypt = switch_settings_icons_page,
 		.crypt_end = NULL,
-		.crypt_ops = &iosw_si_cookie,
+		.crypt_ops = &switch_si_cookie,
 		.crypt_refcnt = 0,
 	};
-	memory_object_t mo = apple_protect_pager_setup(file_object, IOSW_SI_PAGES_FILEOFF,
-	    IOSW_SI_PAGES_FILEOFF + IOSW_SI_CHUNK_OFFSET, &crypt_info,
-	    IOSW_SI_CHUNK_OFFSET, IOSW_SI_CHUNK_OFFSET + IOSW_HG_CHUNK, TRUE);
+	memory_object_t mo = apple_protect_pager_setup(file_object, SWITCH_SI_PAGES_FILEOFF,
+	    SWITCH_SI_PAGES_FILEOFF + SWITCH_SI_CHUNK_OFFSET, &crypt_info,
+	    SWITCH_SI_CHUNK_OFFSET, SWITCH_SI_CHUNK_OFFSET + SWITCH_HG_CHUNK, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
 		printf("SwitchSettingsIcons: pager setup failed, cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
-	*range_offset = IOSW_SI_PAGES_VMADDR - unslid_address;
-	*range_size = IOSW_SI_PAGES_SIZE;
+	*range_offset = SWITCH_SI_PAGES_VMADDR - unslid_address;
+	*range_size = SWITCH_SI_PAGES_SIZE;
 	return mo;
 }
 
@@ -2537,40 +2537,40 @@ iosw_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_
  * Same pager and checks as the settings icons, on one 4 KB chunk: the instruction and the two after it must read as
  * shipped.
  */
-static const uint8_t iosw_kb_uuid[16] = {           /* dyld_shared_cache_arm64.03 of 21H461 */
+static const uint8_t switch_kb_uuid[16] = {           /* dyld_shared_cache_arm64.03 of 21H461 */
 	0x1b, 0x9c, 0xcf, 0x0c, 0x7b, 0x68, 0x39, 0x63, 0xaf, 0x64, 0x48, 0x4b, 0xcf, 0xda, 0xc1, 0x4c,
 };
-#define IOSW_KB_PAGES_VMADDR    0x18a2ac000ULL      /* unslid; one 16 KB page (.03's text: 0x186dac000, file 0) */
-#define IOSW_KB_PAGES_FILEOFF   0x3500000ULL
-#define IOSW_KB_PAGES_SIZE      0x4000ULL
-#define IOSW_KB_CHUNK_OFFSET    0x3000ULL           /* the 4 KB chunk at 0x18a2af000 */
-#define IOSW_KB_INSN_FILEOFF    0x3503ae4ULL        /* 0x18a2afae4, the function + 0xd14 */
+#define SWITCH_KB_PAGES_VMADDR    0x18a2ac000ULL      /* unslid; one 16 KB page (.03's text: 0x186dac000, file 0) */
+#define SWITCH_KB_PAGES_FILEOFF   0x3500000ULL
+#define SWITCH_KB_PAGES_SIZE      0x4000ULL
+#define SWITCH_KB_CHUNK_OFFSET    0x3000ULL           /* the 4 KB chunk at 0x18a2af000 */
+#define SWITCH_KB_INSN_FILEOFF    0x3503ae4ULL        /* 0x18a2afae4, the function + 0xd14 */
 
-static int iosw_kb_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
-static uint32_t iosw_kb_logged;
+static int switch_kb_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
+static uint32_t switch_kb_logged;
 
 static int
-iosw_keyboard_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
+switch_keyboard_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
 {
 	/* cbz w0, +0x54 (no derived keyboard); adrp x8, UIKBDerivedKeyboard@PAGE; ldr x0, [x8, #0x7b8] */
 	static const uint8_t stock[12] = { 0xa0, 0x02, 0x00, 0x34, 0xa8, 0x0f, 0x33, 0x90, 0x00, 0xdd, 0x43, 0xf9 };
 	static const uint8_t derived[4] = { 0xe0, 0x02, 0x00, 0x34 };   /* cbz w0, +0x5c (the idiom-26 branch) */
 	uint8_t *out = dst;
 
-	bcopy(src, dst, IOSW_HG_CHUNK);
-	if (IOSW_KB_INSN_FILEOFF < src_offset || IOSW_KB_INSN_FILEOFF + sizeof(stock) > src_offset + IOSW_HG_CHUNK) {
+	bcopy(src, dst, SWITCH_HG_CHUNK);
+	if (SWITCH_KB_INSN_FILEOFF < src_offset || SWITCH_KB_INSN_FILEOFF + sizeof(stock) > src_offset + SWITCH_HG_CHUNK) {
 		return 0;
 	}
-	uint64_t at = IOSW_KB_INSN_FILEOFF - src_offset;
+	uint64_t at = SWITCH_KB_INSN_FILEOFF - src_offset;
 	if (memcmp(out + at, stock, sizeof(stock)) != 0) {
-		if (!os_atomic_xchg(&iosw_kb_logged, 1, relaxed)) {
+		if (!os_atomic_xchg(&switch_kb_logged, 1, relaxed)) {
 			printf("SwitchKeyboard: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
-			    IOSW_KB_INSN_FILEOFF);
+			    SWITCH_KB_INSN_FILEOFF);
 		}
 		return 0;
 	}
 	memcpy(out + at, derived, sizeof(derived));
-	if (!os_atomic_xchg(&iosw_kb_logged, 1, relaxed)) {
+	if (!os_atomic_xchg(&switch_kb_logged, 1, relaxed)) {
 		printf("SwitchKeyboard: Pro-class keyboard derived to the screen width\n");
 	}
 	return 0;
@@ -2578,17 +2578,17 @@ iosw_keyboard_page(const void *src, void *dst, unsigned long long src_offset, __
 
 /* The keyboard's pager for the mapping that holds the branch, or MEMORY_OBJECT_NULL. */
 static memory_object_t
-iosw_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
+switch_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
 {
-	if (unslid_address > IOSW_KB_PAGES_VMADDR ||
-	    IOSW_KB_PAGES_VMADDR + IOSW_KB_PAGES_SIZE > unslid_address + size ||
-	    file_offset + (IOSW_KB_PAGES_VMADDR - unslid_address) != IOSW_KB_PAGES_FILEOFF ||
+	if (unslid_address > SWITCH_KB_PAGES_VMADDR ||
+	    SWITCH_KB_PAGES_VMADDR + SWITCH_KB_PAGES_SIZE > unslid_address + size ||
+	    file_offset + (SWITCH_KB_PAGES_VMADDR - unslid_address) != SWITCH_KB_PAGES_FILEOFF ||
 	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
 		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the branch */
 	}
 
-	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(iosw_kb_uuid)];
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_kb_uuid)];
 	int resid = 0;
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
@@ -2596,27 +2596,27 @@ iosw_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size
 		printf("SwitchKeyboard: cache header read failed (%d), cache text left stock\n", error);
 		return MEMORY_OBJECT_NULL;
 	}
-	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
-	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_kb_uuid, sizeof(iosw_kb_uuid)) != 0) {
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_kb_uuid, sizeof(switch_kb_uuid)) != 0) {
 		printf("SwitchKeyboard: not the 21H461 subcache (UUID differs), cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 
 	struct pager_crypt_info crypt_info = {
-		.page_decrypt = iosw_keyboard_page,
+		.page_decrypt = switch_keyboard_page,
 		.crypt_end = NULL,
-		.crypt_ops = &iosw_kb_cookie,
+		.crypt_ops = &switch_kb_cookie,
 		.crypt_refcnt = 0,
 	};
-	memory_object_t mo = apple_protect_pager_setup(file_object, IOSW_KB_PAGES_FILEOFF,
-	    IOSW_KB_PAGES_FILEOFF + IOSW_KB_CHUNK_OFFSET, &crypt_info,
-	    IOSW_KB_CHUNK_OFFSET, IOSW_KB_CHUNK_OFFSET + IOSW_HG_CHUNK, TRUE);
+	memory_object_t mo = apple_protect_pager_setup(file_object, SWITCH_KB_PAGES_FILEOFF,
+	    SWITCH_KB_PAGES_FILEOFF + SWITCH_KB_CHUNK_OFFSET, &crypt_info,
+	    SWITCH_KB_CHUNK_OFFSET, SWITCH_KB_CHUNK_OFFSET + SWITCH_HG_CHUNK, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
 		printf("SwitchKeyboard: pager setup failed, cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
-	*range_offset = IOSW_KB_PAGES_VMADDR - unslid_address;
-	*range_size = IOSW_KB_PAGES_SIZE;
+	*range_offset = SWITCH_KB_PAGES_VMADDR - unslid_address;
+	*range_size = SWITCH_KB_PAGES_SIZE;
 	return mo;
 }
 
@@ -2645,20 +2645,20 @@ iosw_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size
  * one 4 KB chunk per site: the case's six instructions must read as shipped (the getter's ends in ret, the closure's
  * in b +0x2c to its Optional return).
  */
-static const uint8_t iosw_wd_uuid[16] = {           /* dyld_shared_cache_arm64.07 of 21H461 */
+static const uint8_t switch_wd_uuid[16] = {           /* dyld_shared_cache_arm64.07 of 21H461 */
 	0xb8, 0x6b, 0xcb, 0x98, 0x4e, 0x86, 0x33, 0x74, 0xb9, 0x27, 0x98, 0xa7, 0x1e, 0x6b, 0x1e, 0xbd,
 };
-#define IOSW_WD_PAGE_SIZE       0x4000ULL           /* one 16 KB page per site (.07's text: 0x1948c8000, file 0) */
-#define IOSW_WD_PATCH_OFFSET    12                  /* the fmov d1, #20.0 and the fmaxnm after it */
+#define SWITCH_WD_PAGE_SIZE       0x4000ULL           /* one 16 KB page per site (.07's text: 0x1948c8000, file 0) */
+#define SWITCH_WD_PATCH_OFFSET    12                  /* the fmov d1, #20.0 and the fmaxnm after it */
 
-static const struct iosw_wd_site {
+static const struct switch_wd_site {
 	uint64_t page_vmaddr;                       /* unslid */
 	uint64_t page_fileoff;
 	uint64_t chunk_offset;                      /* the 4 KB chunk within the page that holds the case */
 	uint64_t case_fileoff;                      /* the case's scvtf */
 	uint8_t stock[24];
 	const char *name;
-} iosw_wd_sites[] = {
+} switch_wd_sites[] = {
 	{   /* WidgetExtensionSessionOperation.defaultTimeout.getter + 0x20 (0x195df6ef4) */
 		0x195df4000ULL, 0x152c000ULL, 0x2000ULL, 0x152eef4ULL,
 		/* scvtf d0, x8; fmov d1, #10.0; fadd d0, d0, d1; fmov d1, #20.0; fmaxnm d0, d0, d1; ret */
@@ -2674,34 +2674,34 @@ static const struct iosw_wd_site {
 		"DefaultWatchdogTimeoutProvider",
 	},
 };
-#define IOSW_WD_SITES           (sizeof(iosw_wd_sites) / sizeof(iosw_wd_sites[0]))
+#define SWITCH_WD_SITES           (sizeof(switch_wd_sites) / sizeof(switch_wd_sites[0]))
 
-static uint32_t iosw_wd_logged[IOSW_WD_SITES];
+static uint32_t switch_wd_logged[SWITCH_WD_SITES];
 
 /* crypt_ops is the site: it tells the two pagers' crypt_info apart and tells the page which case to patch */
 static int
-iosw_widget_deadline_page(const void *src, void *dst, unsigned long long src_offset, void *ops)
+switch_widget_deadline_page(const void *src, void *dst, unsigned long long src_offset, void *ops)
 {
-	const struct iosw_wd_site *site = ops;
-	const unsigned which = (unsigned)(site - iosw_wd_sites);
+	const struct switch_wd_site *site = ops;
+	const unsigned which = (unsigned)(site - switch_wd_sites);
 	/* fmov d1, #5.0; fmul d0, d0, d1 */
 	static const uint8_t scaled[8] = { 0x01, 0x90, 0x62, 0x1e, 0x00, 0x08, 0x61, 0x1e };
 	uint8_t *out = dst;
 
-	bcopy(src, dst, IOSW_HG_CHUNK);
-	if (site->case_fileoff < src_offset || site->case_fileoff + sizeof(site->stock) > src_offset + IOSW_HG_CHUNK) {
+	bcopy(src, dst, SWITCH_HG_CHUNK);
+	if (site->case_fileoff < src_offset || site->case_fileoff + sizeof(site->stock) > src_offset + SWITCH_HG_CHUNK) {
 		return 0;
 	}
 	uint64_t at = site->case_fileoff - src_offset;
 	if (memcmp(out + at, site->stock, sizeof(site->stock)) != 0) {
-		if (!os_atomic_xchg(&iosw_wd_logged[which], 1, relaxed)) {
+		if (!os_atomic_xchg(&switch_wd_logged[which], 1, relaxed)) {
 			printf("SwitchWidgets: cache bytes at 0x%llx (%s) are not the shipped ones, placeholder deadline "
 			    "left stock\n", site->case_fileoff, site->name);
 		}
 		return 0;
 	}
-	memcpy(out + at + IOSW_WD_PATCH_OFFSET, scaled, sizeof(scaled));
-	if (!os_atomic_xchg(&iosw_wd_logged[which], 1, relaxed)) {
+	memcpy(out + at + SWITCH_WD_PATCH_OFFSET, scaled, sizeof(scaled));
+	if (!os_atomic_xchg(&switch_wd_logged[which], 1, relaxed)) {
 		printf("SwitchWidgets: placeholder batch deadline (n + 10) x 5 s (%s)\n", site->name);
 	}
 	return 0;
@@ -2709,17 +2709,17 @@ iosw_widget_deadline_page(const void *src, void *dst, unsigned long long src_off
 
 /* The pager for one widget deadline site, if this mapping holds it, or MEMORY_OBJECT_NULL. */
 static memory_object_t
-iosw_widget_deadline_pager(const struct iosw_wd_site *site, vm_object_t file_object, uint64_t file_offset,
+switch_widget_deadline_pager(const struct switch_wd_site *site, vm_object_t file_object, uint64_t file_offset,
     uint64_t size, uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
 {
 	if (unslid_address > site->page_vmaddr ||
-	    site->page_vmaddr + IOSW_WD_PAGE_SIZE > unslid_address + size ||
+	    site->page_vmaddr + SWITCH_WD_PAGE_SIZE > unslid_address + size ||
 	    file_offset + (site->page_vmaddr - unslid_address) != site->page_fileoff ||
 	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
 		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the site */
 	}
 
-	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(iosw_wd_uuid)];
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_wd_uuid)];
 	int resid = 0;
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
@@ -2727,27 +2727,27 @@ iosw_widget_deadline_pager(const struct iosw_wd_site *site, vm_object_t file_obj
 		printf("SwitchWidgets: cache header read failed (%d), cache text left stock\n", error);
 		return MEMORY_OBJECT_NULL;
 	}
-	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
-	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_wd_uuid, sizeof(iosw_wd_uuid)) != 0) {
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_wd_uuid, sizeof(switch_wd_uuid)) != 0) {
 		printf("SwitchWidgets: not the 21H461 subcache (UUID differs), cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 
 	struct pager_crypt_info crypt_info = {
-		.page_decrypt = iosw_widget_deadline_page,
+		.page_decrypt = switch_widget_deadline_page,
 		.crypt_end = NULL,
 		.crypt_ops = (void *)(uintptr_t)site,
 		.crypt_refcnt = 0,
 	};
 	memory_object_t mo = apple_protect_pager_setup(file_object, site->page_fileoff,
 	    site->page_fileoff + site->chunk_offset, &crypt_info,
-	    site->chunk_offset, site->chunk_offset + IOSW_HG_CHUNK, TRUE);
+	    site->chunk_offset, site->chunk_offset + SWITCH_HG_CHUNK, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
 		printf("SwitchWidgets: pager setup failed (%s), cache text left stock\n", site->name);
 		return MEMORY_OBJECT_NULL;
 	}
 	*range_offset = site->page_vmaddr - unslid_address;
-	*range_size = IOSW_WD_PAGE_SIZE;
+	*range_size = SWITCH_WD_PAGE_SIZE;
 	return mo;
 }
 
@@ -2780,7 +2780,7 @@ iosw_widget_deadline_pager(const struct iosw_wd_site *site, vm_object_t file_obj
  * MobileGestalt keeps the answer in its build-keyed cache; kern_exec.c drops that cache once for this scale
  * (native_switch_ui_scale_cache).
  */
-struct iosw_us_edit {
+struct switch_us_edit {
 	uint64_t fileoff;                           /* the first byte that must read as shipped */
 	uint8_t length;                             /* bytes that must read as shipped */
 	uint8_t at, size;                           /* the bytes replaced, from fileoff + at */
@@ -2788,15 +2788,15 @@ struct iosw_us_edit {
 	uint8_t patched[20];
 };
 
-static const struct iosw_us_site {
+static const struct switch_us_site {
 	uint8_t uuid[16];
 	uint64_t page_vmaddr;                       /* unslid; one 16 KB page */
 	uint64_t page_fileoff;
 	uint64_t chunk_offset;                      /* the 4 KB chunk within the page that holds every edit */
 	unsigned edits;
-	struct iosw_us_edit edit[2];
+	struct switch_us_edit edit[2];
 	const char *name, *applied;
-} iosw_us_sites[] = {
+} switch_us_sites[] = {
 	{   /* dyld_shared_cache_arm64.09 of 21H461 (text 0x199130000, file 0) */
 		{ 0x59, 0xec, 0x4b, 0x71, 0xf0, 0x27, 0x33, 0xd1, 0xae, 0x39, 0x4e, 0x04, 0xbd, 0x70, 0x7b, 0x6d },
 		0x19f3cc000ULL, 0x629c000ULL, 0x3000ULL, 1,
@@ -2829,27 +2829,27 @@ static const struct iosw_us_site {
 		"MobileGestalt", "main-screen-scale 1.6",
 	},
 };
-#define IOSW_US_SITES           (sizeof(iosw_us_sites) / sizeof(iosw_us_sites[0]))
-#define IOSW_US_PAGE_SIZE       0x4000ULL
+#define SWITCH_US_SITES           (sizeof(switch_us_sites) / sizeof(switch_us_sites[0]))
+#define SWITCH_US_PAGE_SIZE       0x4000ULL
 
-static uint32_t iosw_us_logged[IOSW_US_SITES];
+static uint32_t switch_us_logged[SWITCH_US_SITES];
 
 /* crypt_ops is the site, as for the widget deadlines */
 static int
-iosw_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, void *ops)
+switch_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, void *ops)
 {
-	const struct iosw_us_site *site = ops;
-	const unsigned which = (unsigned)(site - iosw_us_sites);
+	const struct switch_us_site *site = ops;
+	const unsigned which = (unsigned)(site - switch_us_sites);
 	uint8_t *out = dst;
 
-	bcopy(src, dst, IOSW_HG_CHUNK);
+	bcopy(src, dst, SWITCH_HG_CHUNK);
 	for (unsigned i = 0; i < site->edits; i++) {
-		const struct iosw_us_edit *edit = &site->edit[i];
-		if (edit->fileoff < src_offset || edit->fileoff + edit->length > src_offset + IOSW_HG_CHUNK) {
+		const struct switch_us_edit *edit = &site->edit[i];
+		if (edit->fileoff < src_offset || edit->fileoff + edit->length > src_offset + SWITCH_HG_CHUNK) {
 			return 0;
 		}
 		if (memcmp(out + (edit->fileoff - src_offset), edit->stock, edit->length) != 0) {
-			if (!os_atomic_xchg(&iosw_us_logged[which], 1, relaxed)) {
+			if (!os_atomic_xchg(&switch_us_logged[which], 1, relaxed)) {
 				printf("SwitchUIScale: %s cache bytes at 0x%llx are not the shipped ones, page left stock\n",
 				    site->name, edit->fileoff);
 			}
@@ -2857,10 +2857,10 @@ iosw_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, vo
 		}
 	}
 	for (unsigned i = 0; i < site->edits; i++) {
-		const struct iosw_us_edit *edit = &site->edit[i];
+		const struct switch_us_edit *edit = &site->edit[i];
 		memcpy(out + (edit->fileoff - src_offset) + edit->at, edit->patched, edit->size);
 	}
-	if (!os_atomic_xchg(&iosw_us_logged[which], 1, relaxed)) {
+	if (!os_atomic_xchg(&switch_us_logged[which], 1, relaxed)) {
 		printf("SwitchUIScale: %s %s\n", site->name, site->applied);
 	}
 	return 0;
@@ -2868,17 +2868,17 @@ iosw_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, vo
 
 /* The pager for one UI scale site, if this mapping holds it, or MEMORY_OBJECT_NULL. */
 static memory_object_t
-iosw_ui_scale_pager(const struct iosw_us_site *site, vm_object_t file_object, uint64_t file_offset, uint64_t size,
+switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
 {
 	if (unslid_address > site->page_vmaddr ||
-	    site->page_vmaddr + IOSW_US_PAGE_SIZE > unslid_address + size ||
+	    site->page_vmaddr + SWITCH_US_PAGE_SIZE > unslid_address + size ||
 	    file_offset + (site->page_vmaddr - unslid_address) != site->page_fileoff ||
 	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
 		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the site */
 	}
 
-	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(site->uuid)];
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(site->uuid)];
 	int resid = 0;
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
@@ -2886,34 +2886,34 @@ iosw_ui_scale_pager(const struct iosw_us_site *site, vm_object_t file_object, ui
 		printf("SwitchUIScale: %s cache header read failed (%d), cache text left stock\n", site->name, error);
 		return MEMORY_OBJECT_NULL;
 	}
-	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
-	    memcmp(header + IOSW_HG_UUID_OFFSET, site->uuid, sizeof(site->uuid)) != 0) {
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, site->uuid, sizeof(site->uuid)) != 0) {
 		printf("SwitchUIScale: %s is not in the 21H461 subcache (UUID differs), cache text left stock\n",
 		    site->name);
 		return MEMORY_OBJECT_NULL;
 	}
 
 	struct pager_crypt_info crypt_info = {
-		.page_decrypt = iosw_ui_scale_page,
+		.page_decrypt = switch_ui_scale_page,
 		.crypt_end = NULL,
 		.crypt_ops = (void *)(uintptr_t)site,
 		.crypt_refcnt = 0,
 	};
 	memory_object_t mo = apple_protect_pager_setup(file_object, site->page_fileoff,
 	    site->page_fileoff + site->chunk_offset, &crypt_info,
-	    site->chunk_offset, site->chunk_offset + IOSW_HG_CHUNK, TRUE);
+	    site->chunk_offset, site->chunk_offset + SWITCH_HG_CHUNK, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
 		printf("SwitchUIScale: %s pager setup failed, cache text left stock\n", site->name);
 		return MEMORY_OBJECT_NULL;
 	}
 	*range_offset = site->page_vmaddr - unslid_address;
-	*range_size = IOSW_US_PAGE_SIZE;
+	*range_size = SWITCH_US_PAGE_SIZE;
 	return mo;
 }
 
 /*
  * Called by vm_shared_region_map_file_setup() for each executable cache mapping it has just entered in a shared
- * region, once per slot (0 .. IOSW_TEXT_SLOTS - 1 there). Returns an apple_protect pager for the slot's range to replace
+ * region, once per slot (0 .. SWITCH_TEXT_SLOTS - 1 there). Returns an apple_protect pager for the slot's range to replace
  * (range_offset/range_size within the mapping), or MEMORY_OBJECT_NULL to keep that part of the mapping stock. The home
  * grid, settings icons, keyboard and UI scale ranges are in different subcaches (.25, .13, .03, .09, .11), one per
  * mapping, so they only answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k.
@@ -2926,24 +2926,24 @@ switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, ui
 {
 	memory_object_t mo = MEMORY_OBJECT_NULL;
 	if (slot == 0) {
-		mo = iosw_home_grid_pager(file_object, file_offset, size, unslid_address, vp, range_offset, range_size);
+		mo = switch_home_grid_pager(file_object, file_offset, size, unslid_address, vp, range_offset, range_size);
 		if (mo == MEMORY_OBJECT_NULL) {
-			mo = iosw_settings_icons_pager(file_object, file_offset, size, unslid_address, vp, range_offset,
+			mo = switch_settings_icons_pager(file_object, file_offset, size, unslid_address, vp, range_offset,
 			    range_size);
 		}
 		if (mo == MEMORY_OBJECT_NULL) {
-			mo = iosw_keyboard_pager(file_object, file_offset, size, unslid_address, vp, range_offset, range_size);
+			mo = switch_keyboard_pager(file_object, file_offset, size, unslid_address, vp, range_offset, range_size);
 		}
-		for (unsigned site = 0; site < IOSW_US_SITES && mo == MEMORY_OBJECT_NULL; site++) {
-			mo = iosw_ui_scale_pager(&iosw_us_sites[site], file_object, file_offset, size, unslid_address, vp,
+		for (unsigned site = 0; site < SWITCH_US_SITES && mo == MEMORY_OBJECT_NULL; site++) {
+			mo = switch_ui_scale_pager(&switch_us_sites[site], file_object, file_offset, size, unslid_address, vp,
 			    range_offset, range_size);
 		}
 		if (mo != MEMORY_OBJECT_NULL) {
 			return mo;
 		}
 	}
-	if (slot < IOSW_WD_SITES) {
-		mo = iosw_widget_deadline_pager(&iosw_wd_sites[slot], file_object, file_offset, size, unslid_address, vp,
+	if (slot < SWITCH_WD_SITES) {
+		mo = switch_widget_deadline_pager(&switch_wd_sites[slot], file_object, file_offset, size, unslid_address, vp,
 		    range_offset, range_size);
 	}
 	return mo;

@@ -15,20 +15,20 @@ volatile uint32_t switch_block_devices_published = 0;
 volatile uint64_t switch_block_read_requests = 0;
 volatile uint64_t switch_block_read_bytes = 0;
 volatile uint64_t switch_block_read_failures = 0;
-volatile uint32_t switch_block_last_status = IOSW_BLOCK_NOT_READY;
-volatile uint32_t switch_block_volume_matches[IOSW_BLOCK_DISK_COUNT] = {};
+volatile uint32_t switch_block_last_status = SWITCH_BLOCK_NOT_READY;
+volatile uint32_t switch_block_volume_matches[SWITCH_BLOCK_DISK_COUNT] = {};
 }
 
 class NativeSwitchBlock;
 class NativeSwitchBlockDevice : public IOBlockStorageDevice {
   OSDeclareDefaultStructors(NativeSwitchBlockDevice)
   NativeSwitchBlock *owner = nullptr;
-  unsigned disk = IOSW_BLOCK_DISK_COUNT;
+  unsigned disk = SWITCH_BLOCK_DISK_COUNT;
   uint64_t blocks = 0;
   char label[16] = {};
   bool started = false;
 public:
-  bool configure(NativeSwitchBlock *, unsigned, const iosw_block_info &);
+  bool configure(NativeSwitchBlock *, unsigned, const switch_block_info &);
   bool start(IOService *) override;
   void stop(IOService *) override;
   void free() override;
@@ -47,7 +47,7 @@ public:
   }
   IOReturn reportBlockSize(UInt64 *value) override {
     if (!value) return kIOReturnBadArgument;
-    *value = IOSW_BLOCK_SECTOR_BYTES; return kIOReturnSuccess;
+    *value = SWITCH_BLOCK_SECTOR_BYTES; return kIOReturnSuccess;
   }
   IOReturn reportMaxValidBlock(UInt64 *value) override {
     if (!value || !blocks) return kIOReturnBadArgument;
@@ -74,11 +74,11 @@ public:
 class NativeSwitchBlock : public IOService {
   OSDeclareDefaultStructors(NativeSwitchBlock)
   IOLock *gate = nullptr;
-  iosw_block_backend *backend = nullptr;
+  switch_block_backend *backend = nullptr;
   uint8_t *scratch = nullptr;
-  iosw_block_info info[IOSW_BLOCK_DISK_COUNT] = {};
+  switch_block_info info[SWITCH_BLOCK_DISK_COUNT] = {};
   bool online = false;
-  int startStatus = IOSW_BLOCK_NOT_READY;
+  int startStatus = SWITCH_BLOCK_NOT_READY;
   bool healthyLocked(unsigned);
 public:
   bool start(IOService *) override;
@@ -96,8 +96,8 @@ namespace {
 // The boot retains this owner. No removal/reinitialization path is advertised.
 NativeSwitchBlock *publishedOwner = nullptr;
 uint32_t publicationState = 0; // 0=unattempted, 1=preparing, 2=published, 3=failed
-int publicationStatus = IOSW_BLOCK_NOT_READY;
-const char *const volumeUUIDs[IOSW_BLOCK_DISK_COUNT] = {
+int publicationStatus = SWITCH_BLOCK_NOT_READY;
+const char *const volumeUUIDs[SWITCH_BLOCK_DISK_COUNT] = {
   "04769D26-2CA0-4825-B443-E2E5F88300F2",
   "8846FE78-2910-4297-AF97-D59BB6F8FC16"
 };
@@ -107,30 +107,30 @@ void backendRelease(void *, void *allocation, size_t bytes) {
 }
 IOReturn ioStatus(int status) {
   switch (status) {
-  case IOSW_BLOCK_OK: return kIOReturnSuccess;
-  case IOSW_BLOCK_NOT_READY: return kIOReturnNotReady;
-  case IOSW_BLOCK_INVALID: return kIOReturnBadArgument;
-  case IOSW_BLOCK_TIMEOUT: return kIOReturnTimeout;
-  case IOSW_BLOCK_NOMEM: return kIOReturnNoMemory;
+  case SWITCH_BLOCK_OK: return kIOReturnSuccess;
+  case SWITCH_BLOCK_NOT_READY: return kIOReturnNotReady;
+  case SWITCH_BLOCK_INVALID: return kIOReturnBadArgument;
+  case SWITCH_BLOCK_TIMEOUT: return kIOReturnTimeout;
+  case SWITCH_BLOCK_NOMEM: return kIOReturnNoMemory;
   default: return kIOReturnIOError;
   }
 }
 }
 
 bool NativeSwitchBlockDevice::configure(NativeSwitchBlock *provider,
-                                         unsigned index, const iosw_block_info &metadata)
+                                         unsigned index, const switch_block_info &metadata)
 {
-  if (owner || !provider || index >= IOSW_BLOCK_DISK_COUNT || !metadata.size_bytes ||
-      metadata.size_bytes % IOSW_BLOCK_SECTOR_BYTES ||
+  if (owner || !provider || index >= SWITCH_BLOCK_DISK_COUNT || !metadata.size_bytes ||
+      metadata.size_bytes % SWITCH_BLOCK_SECTOR_BYTES ||
       !metadata.label[0] || !memchr(metadata.label, 0, sizeof(metadata.label))) return false;
   if (!setProperty(kIOMaximumBlockCountReadKey,
-      static_cast<UInt64>(IOSW_BLOCK_MAX_TRANSFER_BYTES / IOSW_BLOCK_SECTOR_BYTES), 64) ||
+      static_cast<UInt64>(SWITCH_BLOCK_MAX_TRANSFER_BYTES / SWITCH_BLOCK_SECTOR_BYTES), 64) ||
       !setProperty(kIOMaximumByteCountReadKey,
-      static_cast<UInt64>(IOSW_BLOCK_MAX_TRANSFER_BYTES), 64)) return false;
+      static_cast<UInt64>(SWITCH_BLOCK_MAX_TRANSFER_BYTES), 64)) return false;
   owner = provider;
   owner->retain(); // Survives detach until the child's last client releases it.
   disk = index;
-  blocks = metadata.size_bytes / IOSW_BLOCK_SECTOR_BYTES;
+  blocks = metadata.size_bytes / SWITCH_BLOCK_SECTOR_BYTES;
   strlcpy(label, metadata.label, sizeof(label));
   setName(label);
   return true;
@@ -182,47 +182,47 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer,
     UInt64 block, UInt64 count, IOStorageAttributes *, IOStorageCompletion *completion)
 {
   if (!buffer || !completion || !completion->action || !count || block >= blocks ||
-      count > blocks - block || count > IOSW_BLOCK_MAX_TRANSFER_BYTES / IOSW_BLOCK_SECTOR_BYTES ||
-      buffer->getLength() < count * IOSW_BLOCK_SECTOR_BYTES) return kIOReturnBadArgument;
+      count > blocks - block || count > SWITCH_BLOCK_MAX_TRANSFER_BYTES / SWITCH_BLOCK_SECTOR_BYTES ||
+      buffer->getLength() < count * SWITCH_BLOCK_SECTOR_BYTES) return kIOReturnBadArgument;
   if (buffer->getDirection() != kIODirectionIn) return kIOReturnNotWritable;
   if (!owner || !__atomic_load_n(&started, __ATOMIC_ACQUIRE)) return kIOReturnNotReady;
-  return owner->read(disk, buffer, block * IOSW_BLOCK_SECTOR_BYTES,
-      static_cast<uint32_t>(count * IOSW_BLOCK_SECTOR_BYTES), completion);
+  return owner->read(disk, buffer, block * SWITCH_BLOCK_SECTOR_BYTES,
+      static_cast<uint32_t>(count * SWITCH_BLOCK_SECTOR_BYTES), completion);
 }
 
 bool NativeSwitchBlock::start(IOService *provider)
 {
   if (!IOService::start(provider)) return false;
-  NativeSwitchBlockDevice *pending[IOSW_BLOCK_DISK_COUNT] = {};
-  bool attached[IOSW_BLOCK_DISK_COUNT] = {}, started[IOSW_BLOCK_DISK_COUNT] = {};
+  NativeSwitchBlockDevice *pending[SWITCH_BLOCK_DISK_COUNT] = {};
+  bool attached[SWITCH_BLOCK_DISK_COUNT] = {}, started[SWITCH_BLOCK_DISK_COUNT] = {};
   gate = IOLockAlloc();
-  scratch = static_cast<uint8_t *>(IOMalloc(IOSW_BLOCK_MAX_TRANSFER_BYTES));
-  startStatus = IOSW_BLOCK_NOMEM;
+  scratch = static_cast<uint8_t *>(IOMalloc(SWITCH_BLOCK_MAX_TRANSFER_BYTES));
+  startStatus = SWITCH_BLOCK_NOMEM;
   if (gate && scratch) {
-    iosw_block_allocator allocator = {nullptr, backendAllocate, backendRelease};
+    switch_block_allocator allocator = {nullptr, backendAllocate, backendRelease};
     IOLockLock(gate);
-    startStatus = iosw_block_create(&allocator, &backend);
-    if (!startStatus && !backend) startStatus = IOSW_BLOCK_CORRUPT;
-    for (unsigned i = 0; i < IOSW_BLOCK_DISK_COUNT && !startStatus; ++i) {
-      startStatus = iosw_block_get_info(backend, i, &info[i]);
-      if (!startStatus && (!info[i].size_bytes || info[i].size_bytes % IOSW_BLOCK_SECTOR_BYTES ||
+    startStatus = switch_block_create(&allocator, &backend);
+    if (!startStatus && !backend) startStatus = SWITCH_BLOCK_CORRUPT;
+    for (unsigned i = 0; i < SWITCH_BLOCK_DISK_COUNT && !startStatus; ++i) {
+      startStatus = switch_block_get_info(backend, i, &info[i]);
+      if (!startStatus && (!info[i].size_bytes || info[i].size_bytes % SWITCH_BLOCK_SECTOR_BYTES ||
           !info[i].label[0] || !memchr(info[i].label, 0, sizeof(info[i].label)))) {
-        startStatus = IOSW_BLOCK_CORRUPT;
+        startStatus = SWITCH_BLOCK_CORRUPT;
       }
     }
     IOLockUnlock(gate);
-    for (unsigned i = 0; i < IOSW_BLOCK_DISK_COUNT && !startStatus; ++i) {
+    for (unsigned i = 0; i < SWITCH_BLOCK_DISK_COUNT && !startStatus; ++i) {
       pending[i] = OSTypeAlloc(NativeSwitchBlockDevice);
       if (!pending[i] || !pending[i]->init(static_cast<OSDictionary *>(nullptr)) ||
-          !pending[i]->configure(this, i, info[i])) { startStatus = IOSW_BLOCK_NOMEM; break; }
-      if (!pending[i]->attach(this)) { startStatus = IOSW_BLOCK_NOT_READY; break; }
+          !pending[i]->configure(this, i, info[i])) { startStatus = SWITCH_BLOCK_NOMEM; break; }
+      if (!pending[i]->attach(this)) { startStatus = SWITCH_BLOCK_NOT_READY; break; }
       attached[i] = true;
-      if (!pending[i]->start(this)) { startStatus = IOSW_BLOCK_NOT_READY; break; }
+      if (!pending[i]->start(this)) { startStatus = SWITCH_BLOCK_NOT_READY; break; }
       started[i] = true;
     }
   }
   if (startStatus) {
-    for (unsigned i = 0; i < IOSW_BLOCK_DISK_COUNT; ++i) {
+    for (unsigned i = 0; i < SWITCH_BLOCK_DISK_COUNT; ++i) {
       if (!pending[i]) continue;
       if (started[i]) pending[i]->stop(this);
       if (attached[i]) pending[i]->detach(this);
@@ -236,7 +236,7 @@ bool NativeSwitchBlock::start(IOService *provider)
   IOLockUnlock(gate);
   // No fallible work follows the first publication. Existing registry/client
   // references own each published child; never undo publication as startup cleanup.
-  for (unsigned i = 0; i < IOSW_BLOCK_DISK_COUNT; ++i) {
+  for (unsigned i = 0; i < SWITCH_BLOCK_DISK_COUNT; ++i) {
     pending[i]->registerService();
     __atomic_fetch_add(&switch_block_devices_published, 1, __ATOMIC_RELAXED);
     pending[i]->release();
@@ -246,11 +246,11 @@ bool NativeSwitchBlock::start(IOService *provider)
 
 bool NativeSwitchBlock::healthyLocked(unsigned disk)
 {
-  if (!online || !backend || disk >= IOSW_BLOCK_DISK_COUNT) return false;
-  iosw_block_info current = {};
-  int result = iosw_block_get_info(backend, disk, &current);
+  if (!online || !backend || disk >= SWITCH_BLOCK_DISK_COUNT) return false;
+  switch_block_info current = {};
+  int result = switch_block_get_info(backend, disk, &current);
   if (!result && (current.size_bytes != info[disk].size_bytes ||
-      memcmp(current.label, info[disk].label, sizeof(current.label)))) result = IOSW_BLOCK_CORRUPT;
+      memcmp(current.label, info[disk].label, sizeof(current.label)))) result = SWITCH_BLOCK_CORRUPT;
   if (result) {
     online = false;
     __atomic_store_n(&switch_block_last_status, static_cast<uint32_t>(result), __ATOMIC_RELAXED);
@@ -275,7 +275,7 @@ IOReturn NativeSwitchBlock::read(unsigned disk, IOMemoryDescriptor *buffer,
   IOLockLock(gate);
   if (!healthyLocked(disk)) { IOLockUnlock(gate); return kIOReturnNotReady; }
   __atomic_fetch_add(&switch_block_read_requests, 1, __ATOMIC_RELAXED);
-  int result = iosw_block_read(backend, disk, offset, scratch, bytes);
+  int result = switch_block_read(backend, disk, offset, scratch, bytes);
   __atomic_store_n(&switch_block_last_status, static_cast<uint32_t>(result), __ATOMIC_RELAXED);
   UInt64 actual = 0;
   IOReturn status = ioStatus(result);
@@ -312,11 +312,11 @@ void NativeSwitchBlock::free()
   if (gate) {
     IOLockLock(gate);
     online = false;
-    if (backend) { iosw_block_destroy(backend); backend = nullptr; }
-    if (scratch) { IOFree(scratch, IOSW_BLOCK_MAX_TRANSFER_BYTES); scratch = nullptr; }
+    if (backend) { switch_block_destroy(backend); backend = nullptr; }
+    if (scratch) { IOFree(scratch, SWITCH_BLOCK_MAX_TRANSFER_BYTES); scratch = nullptr; }
     IOLockUnlock(gate);
     IOLockFree(gate); gate = nullptr;
-  } else if (scratch) { IOFree(scratch, IOSW_BLOCK_MAX_TRANSFER_BYTES); scratch = nullptr; }
+  } else if (scratch) { IOFree(scratch, SWITCH_BLOCK_MAX_TRANSFER_BYTES); scratch = nullptr; }
   IOService::free();
 }
 
@@ -325,21 +325,21 @@ extern "C" int switch_block_publish(void)
   uint32_t expected = 0;
   if (!__atomic_compare_exchange_n(&publicationState, &expected, 1, false,
       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-    if (expected == 1) return IOSW_BLOCK_NOT_READY;
+    if (expected == 1) return SWITCH_BLOCK_NOT_READY;
     if (expected == 2) return publishedOwner && publishedOwner->healthy(0)
-      ? IOSW_BLOCK_OK : IOSW_BLOCK_NOT_READY;
+      ? SWITCH_BLOCK_OK : SWITCH_BLOCK_NOT_READY;
     return publicationStatus;
   }
   IOService *resources = IOService::getResourceService();
   NativeSwitchBlock *owner = OSTypeAlloc(NativeSwitchBlock);
   bool attached = false;
-  int result = IOSW_BLOCK_NOMEM;
+  int result = SWITCH_BLOCK_NOMEM;
   if (owner && owner->init(static_cast<OSDictionary *>(nullptr))) {
     if (resources && owner->attach(resources)) {
       attached = true;
-      if (owner->start(resources)) result = IOSW_BLOCK_OK;
+      if (owner->start(resources)) result = SWITCH_BLOCK_OK;
       else result = owner->status();
-    } else result = IOSW_BLOCK_NOT_READY;
+    } else result = SWITCH_BLOCK_NOT_READY;
   }
   if (!result) {
     publishedOwner = owner; // Keep the allocation reference for this boot.
@@ -355,23 +355,23 @@ extern "C" int switch_block_publish(void)
 
 extern "C" int switch_block_volume_path(unsigned disk, char *path, unsigned size)
 {
-  if (!path || !size) return IOSW_BLOCK_INVALID;
+  if (!path || !size) return SWITCH_BLOCK_INVALID;
   path[0] = 0;
-  if (disk >= IOSW_BLOCK_DISK_COUNT || size < 7) return IOSW_BLOCK_INVALID;
+  if (disk >= SWITCH_BLOCK_DISK_COUNT || size < 7) return SWITCH_BLOCK_INVALID;
   if (__atomic_load_n(&publicationState, __ATOMIC_ACQUIRE) != 2 ||
-      !publishedOwner || !publishedOwner->healthy(disk)) return IOSW_BLOCK_NOT_READY;
+      !publishedOwner || !publishedOwner->healthy(disk)) return SWITCH_BLOCK_NOT_READY;
   OSDictionary *matching = IOService::serviceMatching("IOMedia");
   OSDictionary *properties = OSDictionary::withCapacity(1);
   OSString *wanted = OSString::withCString(volumeUUIDs[disk]);
   if (!matching || !properties || !wanted) {
     OSSafeReleaseNULL(wanted); OSSafeReleaseNULL(properties); OSSafeReleaseNULL(matching);
-    return IOSW_BLOCK_NOMEM;
+    return SWITCH_BLOCK_NOMEM;
   }
   bool ready = properties->setObject("UUID", wanted) && matching->setObject("IOPropertyMatch", properties);
   wanted->release(); properties->release();
   OSIterator *iterator = ready ? IOService::getMatchingServices(matching) : nullptr;
   matching->release();
-  if (!iterator) return ready ? IOSW_BLOCK_NOT_READY : IOSW_BLOCK_NOMEM;
+  if (!iterator) return ready ? SWITCH_BLOCK_NOT_READY : SWITCH_BLOCK_NOMEM;
   unsigned matches = 0;
   bool selected = false;
   char candidate[64] = {};
@@ -420,8 +420,8 @@ extern "C" int switch_block_volume_path(unsigned disk, char *path, unsigned size
   }
   iterator->release();
   __atomic_store_n(&switch_block_volume_matches[disk], matches, __ATOMIC_RELAXED);
-  if (matches > 1) return IOSW_BLOCK_CORRUPT;
-  if (!selected || !publishedOwner->healthy(disk)) return IOSW_BLOCK_NOT_READY;
+  if (matches > 1) return SWITCH_BLOCK_CORRUPT;
+  if (!selected || !publishedOwner->healthy(disk)) return SWITCH_BLOCK_NOT_READY;
   strlcpy(path, candidate, size);
-  return IOSW_BLOCK_OK;
+  return SWITCH_BLOCK_OK;
 }

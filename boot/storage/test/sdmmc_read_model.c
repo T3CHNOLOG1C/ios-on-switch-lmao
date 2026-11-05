@@ -146,7 +146,7 @@ unsigned sdmmc_read_cases(void)
         m.reg[0x38 / 2] = 0x8002;
         uint32_t prior[128];
         memcpy(prior, m.reg, sizeof prior);
-        struct iosw_sd_host h = {.io = {r8, r16, r32, w16, w32, ticks, barrier},
+        struct switch_sd_host h = {.io = {r8, r16, r32, w16, w32, ticks, barrier},
                                  .context = &m,
                                  .frequency = 1000,
                                  .capacity_sectors = 2000,
@@ -155,8 +155,8 @@ unsigned sdmmc_read_cases(void)
                                  .block_addressing_verified = 1};
         uint8_t dest[514];
         memset(dest, 0xaa, sizeof dest);
-        struct iosw_sd_result report;
-        int result = iosw_sd_read_sector(&h, 199, dest + 1, &report);
+        struct switch_sd_result report;
+        int result = switch_sd_read_sector(&h, 199, dest + 1, &report);
         CHECK(result == (int)errors[mode]);
         CHECK(dest[0] == 0xaa && dest[513] == 0xaa);
         CHECK(report.readiness_failures == masks[mode]);
@@ -190,7 +190,7 @@ unsigned sdmmc_read_cases(void)
             else {
                 CHECK(m.commands == 1 && h.blocked && m.reg[0x38 / 2] == 0);
                 unsigned writes = m.writes;
-                CHECK(iosw_sd_read_sector(&h, 100, dest + 1, &report) == IOSW_SD_ALREADY_BLOCKED);
+                CHECK(switch_sd_read_sector(&h, 100, dest + 1, &report) == SWITCH_SD_ALREADY_BLOCKED);
                 CHECK(writes == m.writes);
             }
         }
@@ -204,20 +204,20 @@ unsigned sdmmc_read_cases(void)
         m.reg[4 / 2] = 0x7200;
         uint32_t prior[128];
         memcpy(prior, m.reg, sizeof prior);
-        struct iosw_sd_host h = {.io = {r8, r16, r32, w16, w32, ticks, barrier},
+        struct switch_sd_host h = {.io = {r8, r16, r32, w16, w32, ticks, barrier},
                                  .context = &m,
                                  .frequency = 1000,
                                  .capacity_sectors = 1,
                                  .permitted_sector_count = 1};
         uint8_t out[512];
         memset(out, 0xaa, sizeof out);
-        struct iosw_sd_result report;
+        struct switch_sd_result report;
         int allowed = scenario < 512 && ((scenario & 255) == 2 || (scenario & 255) == 3);
-        CHECK(iosw_sd_read_sector(&h, 0, out, &report) == (allowed ? 0 : IOSW_SD_NOT_READY));
+        CHECK(switch_sd_read_sector(&h, 0, out, &report) == (allowed ? 0 : SWITCH_SD_NOT_READY));
         CHECK(report.version == (scenario == 512 ? 0x0303 : m.version));
         CHECK(report.readiness_failures == (allowed           ? 0
-                                            : scenario == 512 ? IOSW_SD_READY_POWER
-                                                              : IOSW_SD_READY_VERSION));
+                                            : scenario == 512 ? SWITCH_SD_READY_POWER
+                                                              : SWITCH_SD_READY_VERSION));
         if (allowed) {
             CHECK(report.stage == 5 && report.words_read == 128 && m.commands == 1 && !h.blocked);
             CHECK(!memcmp(prior, m.reg, sizeof prior));
@@ -230,7 +230,7 @@ unsigned sdmmc_read_cases(void)
     }
     for (unsigned scenario = 0; scenario < 9; scenario++) {
         struct model m = {0};
-        struct iosw_sd_host h = {.io = {r8, r16, r32, w16, w32, ticks, barrier},
+        struct switch_sd_host h = {.io = {r8, r16, r32, w16, w32, ticks, barrier},
                                  .context = &m,
                                  .frequency = 1000,
                                  .capacity_sectors = 2000,
@@ -238,7 +238,7 @@ unsigned sdmmc_read_cases(void)
                                  .permitted_sector_count = 100,
                                  .block_addressing_verified = 1};
         uint8_t out[512];
-        struct iosw_sd_result report;
+        struct switch_sd_result report;
         uint64_t lba = 100;
         if (scenario == 0) lba = 99;
         if (scenario == 1) lba = 200;
@@ -249,21 +249,21 @@ unsigned sdmmc_read_cases(void)
         if (scenario == 6) h.frequency = 0;
         if (scenario == 7) h.permitted_sector_count = 0;
         if (scenario == 8) h.io.barrier = 0;
-        CHECK(iosw_sd_read_sector(&h, lba, out, &report) != 0 && m.writes == 0);
+        CHECK(switch_sd_read_sector(&h, lba, out, &report) != 0 && m.writes == 0);
         cases++;
     }
     struct model m = {0};
     m.reg[4 / 2] = 512;
-    struct iosw_sd_host h = {.io = {r8, r16, r32, w16, w32, ticks, barrier},
+    struct switch_sd_host h = {.io = {r8, r16, r32, w16, w32, ticks, barrier},
                              .context = &m,
                              .frequency = 1000,
                              .capacity_sectors = 1,
                              .permitted_sector_count = 1};
     uint8_t out[512];
-    struct iosw_sd_result report;
-    CHECK(iosw_sd_read_sector(&h, 1, out, &report) == IOSW_SD_ARGUMENT && m.writes == 0);
+    struct switch_sd_result report;
+    CHECK(switch_sd_read_sector(&h, 1, out, &report) == SWITCH_SD_ARGUMENT && m.writes == 0);
     cases++;
-    CHECK(iosw_sd_read_sector(&h, 0, out, &report) == 0 && m.commands == 1);
+    CHECK(switch_sd_read_sector(&h, 0, out, &report) == 0 && m.commands == 1);
     cases++;
     return cases;
 }

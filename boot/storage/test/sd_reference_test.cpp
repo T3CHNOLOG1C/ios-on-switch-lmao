@@ -56,7 +56,7 @@ Bytes MakePage(const Bytes &sector = Counting(), uint32_t commit = 0)
 
 struct Guarded {
     uint8_t before[16];
-    iosw_sd_reference result;
+    switch_sd_reference result;
     uint8_t after[16];
 };
 
@@ -69,7 +69,7 @@ void Invoke(const Bytes &page, uint32_t expectedCommit = 0, uint32_t length = PA
     std::memset(&output, 0xA5, sizeof(output));
     Guarded before;
     std::memcpy(&before, &output, sizeof(output));
-    const int error = iosw_sd_reference_validate(raw.get(), length, expectedCommit, &output.result);
+    const int error = switch_sd_reference_validate(raw.get(), length, expectedCommit, &output.result);
     EXPECT_EQ(error, expectedError);
     EXPECT_EQ(std::memcmp(raw.get(), page.data(), page.size()), 0) << "validator modified input";
     for (unsigned i = 0; i < 16; ++i) {
@@ -111,10 +111,10 @@ TEST(SdReference, CrcAgainstZlibKnownVectorsAndNonWordLengths)
     for (const Bytes &value : vectors) {
         auto raw = std::make_unique<uint8_t[]>(value.size() + 1);  // a C string's room
         if (!value.empty()) std::memcpy(raw.get(), value.data(), value.size());
-        EXPECT_EQ(iosw_sd_crc32(raw.get(), (uint32_t)value.size()), Crc(value.data(), value.size()))
+        EXPECT_EQ(switch_sd_crc32(raw.get(), (uint32_t)value.size()), Crc(value.data(), value.size()))
             << value.size() << " bytes";
     }
-    EXPECT_EQ(iosw_sd_crc32(nullptr, 0), 0u);
+    EXPECT_EQ(switch_sd_crc32(nullptr, 0), 0u);
 }
 
 // A one-byte input is enough: every wrong size must fail before a header read (ASan reports any read past it).
@@ -129,10 +129,10 @@ TEST(SdReference, RejectsNullArgumentsAndInvalidExpectedCommit)
     std::memset(&output, 0xA5, sizeof(output));
     Guarded before;
     std::memcpy(&before, &output, sizeof(output));
-    EXPECT_EQ(iosw_sd_reference_validate(nullptr, 4096, 0, &output.result), 1);
+    EXPECT_EQ(switch_sd_reference_validate(nullptr, 4096, 0, &output.result), 1);
     EXPECT_EQ(std::memcmp(&output, &before, sizeof(output)), 0);
     const Bytes page = MakePage();
-    EXPECT_EQ(iosw_sd_reference_validate(page.data(), 4096, 0, nullptr), 1);
+    EXPECT_EQ(switch_sd_reference_validate(page.data(), 4096, 0, nullptr), 1);
     for (uint32_t commit : {2u, 0xFFFFFFFFu}) Invoke(Bytes{0xEE}, commit, PAGE_BYTES, 1);
 }
 
@@ -219,8 +219,8 @@ TEST(SdReference, UnalignedInputPage)
     std::memcpy(raw.get() + 1, page.data(), page.size());
     raw[page.size() + 1] = 'Y';
     raw[page.size() + 2] = 0;
-    iosw_sd_reference out;
-    EXPECT_EQ(iosw_sd_reference_validate(raw.get() + 1, 4096, 0, &out), 0);
+    switch_sd_reference out;
+    EXPECT_EQ(switch_sd_reference_validate(raw.get() + 1, 4096, 0, &out), 0);
     EXPECT_EQ(raw[0], 'X');
     EXPECT_EQ(raw[page.size() + 1], 'Y');
 }
@@ -230,7 +230,7 @@ TEST(SdReference, UnalignedInputPage)
 TEST(SdReference, GuardedReadOnlyPage)
 {
     const size_t granule = (size_t)sysconf(_SC_PAGESIZE);
-    ASSERT_GE(granule, IOSW_SD_REFERENCE_BYTES);
+    ASSERT_GE(granule, SWITCH_SD_REFERENCE_BYTES);
     uint8_t *allocation = static_cast<uint8_t *>(mmap(nullptr, granule * 3, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0));
     ASSERT_NE(allocation, MAP_FAILED);
     uint8_t *middle = allocation + granule;
@@ -246,8 +246,8 @@ TEST(SdReference, GuardedReadOnlyPage)
         page[0x2a] = 0x75;
         page[0x2b] = 0x78;
         ASSERT_EQ(mprotect(middle, granule, PROT_READ), 0);
-        iosw_sd_reference out;
-        EXPECT_EQ(iosw_sd_reference_validate(page, 4096, 0, &out), IOSW_SD_REF_OK);
+        switch_sd_reference out;
+        EXPECT_EQ(switch_sd_reference_validate(page, 4096, 0, &out), SWITCH_SD_REF_OK);
         EXPECT_EQ(out.crc32, 0xb2aa7578u);
         ASSERT_EQ(mprotect(middle, granule, PROT_READ | PROT_WRITE), 0);
     }

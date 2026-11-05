@@ -4,7 +4,7 @@
 //  - extents: the image's bytes as (image offset, SD window offset, length), sorted, contiguous from offset 0;
 //  - pieces: a read of the image split into SD reads that each stay inside one extent and one SD command;
 //  - runs: logged page ranges of the cryptex files merged into the prefetch's page-in runs;
-//  - the list file's header (format IOSWPF02, frozen) and its check.
+//  - the list file's header (format SWCHPF02, frozen) and its check.
 #ifndef SWITCH_CRYPTEX_MAP_H
 #define SWITCH_CRYPTEX_MAP_H
 #include <stdint.h>
@@ -140,10 +140,10 @@ inline int switchCompareRanges(const SwitchRange &x, const SwitchRange &y)
     return x.first < y.first ? -1 : x.first > y.first;
 }
 
-// The prefetch list file: this header, then `runs` SwitchRun. This layout is format IOSWPF02, frozen by
+// The prefetch list file: this header, then `runs` SwitchRun. This layout is format SWCHPF02, frozen by
 // cryptex_map_test.cpp: a build whose loader refuses a list an earlier build saved makes its first boot a recording
 // boot with no prefetch. So a new format keeps reading every older one and converts it (the older runs are still the
-// boot's reads), and the test keeps a saved IOSWPF02 list loading.
+// boot's reads), and the test keeps a saved SWCHPF02 list loading.
 constexpr uint32_t kSwitchListImages = 2;  // System, App (SWITCH_CRYPTEX_COUNT)
 struct SwitchImageKey {
     uint64_t bytes, fileId;
@@ -156,8 +156,8 @@ struct SwitchListHeader {
     uint32_t runs, files;
     uint64_t checksum;  // FNV-1a 64 of the runs
 };
-static_assert(sizeof(SwitchListHeader) == 96 && sizeof(SwitchRun) == 16, "the list format IOSWPF02");
-constexpr char kSwitchListMagic[8] = {'I', 'O', 'S', 'W', 'P', 'F', '0', '2'};
+static_assert(sizeof(SwitchListHeader) == 96 && sizeof(SwitchRun) == 16, "the list format SWCHPF02");
+constexpr char kSwitchListMagic[8] = {'S', 'W', 'C', 'H', 'P', 'F', '0', '2'};
 constexpr uint32_t kSwitchListVersion = 2;
 
 inline uint64_t switchFnv(const uint8_t *p, uint64_t n)
@@ -172,9 +172,9 @@ inline const char *switchListRefusal(const SwitchListHeader &saved, const Switch
                                        uint32_t maxRuns)
 {
     for (unsigned i = 0; i < sizeof(kSwitchListMagic); ++i)
-        if (saved.magic[i] != kSwitchListMagic[i]) return "not an IOSWPF02 list";
+        if (saved.magic[i] != kSwitchListMagic[i]) return "not an SWCHPF02 list";
     if (saved.version != kSwitchListVersion || saved.headerBytes != sizeof(SwitchListHeader))
-        return "an IOSWPF02 list of another version";
+        return "an SWCHPF02 list of another version";
     for (unsigned i = 0; i < kSwitchListImages; ++i)
         if (saved.images[i].bytes != images[i].bytes || saved.images[i].fileId != images[i].fileId ||
             saved.images[i].mtimeSec != images[i].mtimeSec || saved.images[i].mtimeNsec != images[i].mtimeNsec)

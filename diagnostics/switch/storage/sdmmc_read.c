@@ -37,46 +37,46 @@ struct batch_budget {
     uint64_t start;
     uint32_t polls;
 };
-static int batch_expired(struct iosw_sd_host *h, struct batch_budget *b)
+static int batch_expired(struct switch_sd_host *h, struct batch_budget *b)
 {
     return ++b->polls > MAX_POLLS || h->io.ticks(h->context) - b->start >= h->frequency * 5;
 }
-static int wait_event(struct iosw_sd_host *h, uint32_t event, struct iosw_sd_result *r, struct batch_budget *batch,
+static int wait_event(struct switch_sd_host *h, uint32_t event, struct switch_sd_result *r, struct batch_budget *batch,
                       int final_buffer)
 {
     uint64_t started = h->io.ticks(h->context);
     for (uint32_t polls = 0; polls < MAX_POLLS; ++polls) {
         r->status = h->io.read32(h->context, STATUS);
-        if (r->status & ERRORS) return IOSW_SD_CONTROLLER_ERROR;
-        if (batch && batch_expired(h, batch)) return IOSW_SD_TIMEOUT;
+        if (r->status & ERRORS) return SWITCH_SD_CONTROLLER_ERROR;
+        if (batch && batch_expired(h, batch)) return SWITCH_SD_TIMEOUT;
         if (batch && event == BUFFER_READY && (r->status & TRANSFER_DONE) &&
             !(final_buffer && (r->status & BUFFER_READY)))
-            return IOSW_SD_BUFFER_STATE; /* Short or non-final completion. */
-        if (r->status & event) return IOSW_SD_OK;
+            return SWITCH_SD_BUFFER_STATE; /* Short or non-final completion. */
+        if (r->status & event) return SWITCH_SD_OK;
         /* One second, bounded also when a broken counter does not advance. */
-        if (h->io.ticks(h->context) - started >= h->frequency) return IOSW_SD_TIMEOUT;
+        if (h->io.ticks(h->context) - started >= h->frequency) return SWITCH_SD_TIMEOUT;
     }
-    return IOSW_SD_TIMEOUT;
+    return SWITCH_SD_TIMEOUT;
 }
-static int read_transfer(struct iosw_sd_host *h, uint64_t lba, uint32_t count, uint8_t *output,
-                         struct iosw_sd_result *r)
+static int read_transfer(struct switch_sd_host *h, uint64_t lba, uint32_t count, uint8_t *output,
+                         struct switch_sd_result *r)
 {
     if (!h || !r || !output || !h->io.read8 || !h->io.read16 || !h->io.read32 || !h->io.write16 || !h->io.write32 ||
-        !h->io.ticks || !h->io.barrier || !count || count > IOSW_SD_MAX_READ_SECTORS)
-        return IOSW_SD_ARGUMENT;
-    *r = (struct iosw_sd_result){0};
-    if (h->blocked) return IOSW_SD_ALREADY_BLOCKED;
-    if (h->dma_required && (!h->dma || !h->dma->bound || h->dma->failed)) return IOSW_SD_UNQUALIFIED;
+        !h->io.ticks || !h->io.barrier || !count || count > SWITCH_SD_MAX_READ_SECTORS)
+        return SWITCH_SD_ARGUMENT;
+    *r = (struct switch_sd_result){0};
+    if (h->blocked) return SWITCH_SD_ALREADY_BLOCKED;
+    if (h->dma_required && (!h->dma || !h->dma->bound || h->dma->failed)) return SWITCH_SD_UNQUALIFIED;
     if (h->block_addressing_verified > 1 ||
         (!h->block_addressing_verified &&
          (h->permitted_first_sector || h->permitted_sector_count != 1 || h->capacity_sectors != 1)) ||
         h->frequency < 1000 || h->frequency > 1000000000 || !h->capacity_sectors ||
         h->capacity_sectors > UINT64_C(0x100000000) || h->permitted_first_sector >= h->capacity_sectors ||
         !h->permitted_sector_count || h->permitted_sector_count > h->capacity_sectors - h->permitted_first_sector)
-        return IOSW_SD_UNQUALIFIED;
+        return SWITCH_SD_UNQUALIFIED;
     if (lba < h->permitted_first_sector || lba - h->permitted_first_sector >= h->permitted_sector_count ||
         count > h->permitted_sector_count - (lba - h->permitted_first_sector))
-        return IOSW_SD_ARGUMENT;
+        return SWITCH_SD_ARGUMENT;
     r->stage = 1;
     /* Sample every readiness register exactly once. A later diagnostic read
      * may differ from the value which caused a refusal. Preserve all samples
@@ -92,18 +92,18 @@ static int read_transfer(struct iosw_sd_host *h, uint64_t lba, uint32_t count, u
      * Auto CMD12 is used only for multiple blocks. Accept these revisions,
      * inserted/stable card, idle command/data lines and inherited 4-bit bus. */
     uint32_t spec_version = r->version & 0xff;
-    if (spec_version != 2 && spec_version != 3) r->readiness_failures |= IOSW_SD_READY_VERSION;
-    if (r->present & 0x307) r->readiness_failures |= IOSW_SD_READY_ACTIVE;
-    if ((r->present & 0x30000) != 0x30000) r->readiness_failures |= IOSW_SD_READY_CARD;
-    if ((r->host_control & 0x22) != 2) r->readiness_failures |= IOSW_SD_READY_BUS;
-    if (!(r->power & 1)) r->readiness_failures |= IOSW_SD_READY_POWER;
-    if ((r->clock & 7) != 7) r->readiness_failures |= IOSW_SD_READY_CLOCK;
-    if (r->reset) r->readiness_failures |= IOSW_SD_READY_RESET;
-    if ((r->block_size & 0xfff) != 512) r->readiness_failures |= IOSW_SD_READY_BLOCK_SIZE;
-    if (r->readiness_failures) return IOSW_SD_NOT_READY;
+    if (spec_version != 2 && spec_version != 3) r->readiness_failures |= SWITCH_SD_READY_VERSION;
+    if (r->present & 0x307) r->readiness_failures |= SWITCH_SD_READY_ACTIVE;
+    if ((r->present & 0x30000) != 0x30000) r->readiness_failures |= SWITCH_SD_READY_CARD;
+    if ((r->host_control & 0x22) != 2) r->readiness_failures |= SWITCH_SD_READY_BUS;
+    if (!(r->power & 1)) r->readiness_failures |= SWITCH_SD_READY_POWER;
+    if ((r->clock & 7) != 7) r->readiness_failures |= SWITCH_SD_READY_CLOCK;
+    if (r->reset) r->readiness_failures |= SWITCH_SD_READY_RESET;
+    if ((r->block_size & 0xfff) != 512) r->readiness_failures |= SWITCH_SD_READY_BLOCK_SIZE;
+    if (r->readiness_failures) return SWITCH_SD_NOT_READY;
     r->status = h->io.read32(h->context, STATUS);
     r->initial_status = r->status;
-    if (r->status & ERRORS) return IOSW_SD_PREEXISTING_ERROR;
+    if (r->status & ERRORS) return SWITCH_SD_PREEXISTING_ERROR;
     uint32_t prior_enable = h->io.read32(h->context, STATUS_ENABLE);
     uint32_t prior_signal = h->io.read32(h->context, SIGNAL_ENABLE);
     uint16_t prior_size = (uint16_t)r->block_size;
@@ -123,9 +123,9 @@ static int read_transfer(struct iosw_sd_host *h, uint64_t lba, uint32_t count, u
      * Auto CMD12. Hekate uses the same stop mode on the Tegra controller.
      * The DMA adapter adds only its transfer bit/address/boundary controls. */
     h->io.write16(h->context, TRANSFER, count > 1 ? 0x36 : 0x12);
-    int error = IOSW_SD_OK;
+    int error = SWITCH_SD_OK;
     if (h->dma) {
-        error = iosw_sd_dma_prepare(h->dma, &h->io, h->context, 512, count, 0);
+        error = switch_sd_dma_prepare(h->dma, &h->io, h->context, 512, count, 0);
         if (error) goto failed;
     }
     h->io.barrier(h->context);
@@ -136,13 +136,13 @@ static int read_transfer(struct iosw_sd_host *h, uint64_t lba, uint32_t count, u
     if (error) goto failed;
     r->response = h->io.read32(h->context, RESPONSE);
     if (r->response & CARD_ERRORS) {
-        error = IOSW_SD_CARD_ERROR;
+        error = SWITCH_SD_CARD_ERROR;
         goto failed;
     }
     h->io.write32(h->context, STATUS, COMMAND_DONE);
     r->stage = 3;
     if (h->dma) {
-        error = iosw_sd_dma_wait(h->dma, &h->io, h->context, r);
+        error = switch_sd_dma_wait(h->dma, &h->io, h->context, r);
         if (error) goto failed;
     } else
         for (uint32_t block = 0; block < count; block++) {
@@ -151,7 +151,7 @@ static int read_transfer(struct iosw_sd_host *h, uint64_t lba, uint32_t count, u
             error = wait_event(h, BUFFER_READY, r, batch, block + 1 == count);
             if (error) goto failed;
             if (!(h->io.read32(h->context, PRESENT) & 0x800)) {
-                error = IOSW_SD_BUFFER_STATE;
+                error = SWITCH_SD_BUFFER_STATE;
                 goto failed;
             }
             /* Clear before draining: the next block may become ready as the last
@@ -179,11 +179,11 @@ static int read_transfer(struct iosw_sd_host *h, uint64_t lba, uint32_t count, u
         for (;;) {
             r->status = h->io.read32(h->context, STATUS);
             if (r->status & ERRORS) {
-                error = IOSW_SD_CONTROLLER_ERROR;
+                error = SWITCH_SD_CONTROLLER_ERROR;
                 goto failed;
             }
             if (batch_expired(h, batch) || h->io.ticks(h->context) - started >= h->frequency * 2) {
-                error = IOSW_SD_TIMEOUT;
+                error = SWITCH_SD_TIMEOUT;
                 goto failed;
             }
             uint32_t present = h->io.read32(h->context, PRESENT);
@@ -193,20 +193,20 @@ static int read_transfer(struct iosw_sd_host *h, uint64_t lba, uint32_t count, u
             r->auto_cmd_error = h->io.read16(h->context, AUTO_CMD_ERROR);
             r->stop_response = h->io.read32(h->context, STOP_RESPONSE);
             if (r->auto_cmd_error & 0x9f) {
-                error = IOSW_SD_CONTROLLER_ERROR;
+                error = SWITCH_SD_CONTROLLER_ERROR;
                 goto failed;
             }
             if (r->stop_response & CARD_ERRORS) {
-                error = IOSW_SD_CARD_ERROR;
+                error = SWITCH_SD_CARD_ERROR;
                 goto failed;
             }
         }
     } else if (h->io.read32(h->context, PRESENT) & 0x307) {
-        error = IOSW_SD_BUFFER_STATE;
+        error = SWITCH_SD_BUFFER_STATE;
         goto failed;
     }
     if (h->dma) {
-        error = iosw_sd_dma_complete(h->dma, h->context, output);
+        error = switch_sd_dma_complete(h->dma, h->context, output);
         if (error) goto failed;
         r->words_read = count * 128;
     }
@@ -218,11 +218,11 @@ static int read_transfer(struct iosw_sd_host *h, uint64_t lba, uint32_t count, u
     h->io.write32(h->context, SIGNAL_ENABLE, prior_signal);
     h->io.barrier(h->context);
     r->stage = 5;
-    return IOSW_SD_OK;
+    return SWITCH_SD_OK;
 failed:
     h->blocked = 1;
     h->write_cache_off_verified = 0;
-    if (h->dma) iosw_sd_dma_abort(h->dma);
+    if (h->dma) switch_sd_dma_abort(h->dma);
     h->io.write32(h->context, SIGNAL_ENABLE, 0);
     h->io.barrier(h->context);
     /* Keep signals masked. In-flight hardware is not silently returned to a
@@ -230,9 +230,9 @@ failed:
     return error;
 }
 
-int iosw_sd_read_sector(struct iosw_sd_host *h, uint64_t lba, uint8_t output[512], struct iosw_sd_result *r)
+int switch_sd_read_sector(struct switch_sd_host *h, uint64_t lba, uint8_t output[512], struct switch_sd_result *r)
 {
-    if (!output) return IOSW_SD_ARGUMENT;
+    if (!output) return SWITCH_SD_ARGUMENT;
     uint8_t sector[512];
     int error = read_transfer(h, lba, 1, sector, r);
     if (!error)
@@ -240,10 +240,10 @@ int iosw_sd_read_sector(struct iosw_sd_host *h, uint64_t lba, uint8_t output[512
     return error;
 }
 
-int iosw_sd_read_sectors(struct iosw_sd_host *h, uint64_t lba, uint32_t count, uint8_t *private_output,
-                         struct iosw_sd_result *r)
+int switch_sd_read_sectors(struct switch_sd_host *h, uint64_t lba, uint32_t count, uint8_t *private_output,
+                         struct switch_sd_result *r)
 {
-    if (count == 1) return iosw_sd_read_sector(h, lba, private_output, r);
+    if (count == 1) return switch_sd_read_sector(h, lba, private_output, r);
     return read_transfer(h, lba, count, private_output, r);
 }
 
@@ -255,34 +255,34 @@ struct write_saved {
     uint16_t size, count, transfer;
     uint32_t argument, enable, signal;
 };
-static int write_valid(struct iosw_sd_host *h, struct iosw_sd_result *r, int cache)
+static int write_valid(struct switch_sd_host *h, struct switch_sd_result *r, int cache)
 {
     if (!h || !r || !h->io.read8 || !h->io.read16 || !h->io.read32 || !h->io.write16 || !h->io.write32 ||
         !h->io.ticks || !h->io.barrier)
-        return IOSW_SD_ARGUMENT;
-    if (h->blocked) return IOSW_SD_ALREADY_BLOCKED;
-    if (h->dma_required && (!h->dma || !h->dma->bound || h->dma->failed)) return IOSW_SD_UNQUALIFIED;
+        return SWITCH_SD_ARGUMENT;
+    if (h->blocked) return SWITCH_SD_ALREADY_BLOCKED;
+    if (h->dma_required && (!h->dma || !h->dma->bound || h->dma->failed)) return SWITCH_SD_UNQUALIFIED;
     if (h->block_addressing_verified != 1 || !h->rca || h->rca > 0xffff || h->frequency < 1000 ||
         h->frequency > 1000000000 || !h->capacity_sectors || h->capacity_sectors > UINT64_C(0x100000000) ||
         h->permitted_first_sector >= h->capacity_sectors || !h->permitted_sector_count ||
         h->permitted_sector_count > h->capacity_sectors - h->permitted_first_sector)
-        return IOSW_SD_UNQUALIFIED;
-    if (!h->permit_write) return IOSW_SD_WRITE_DENIED;
-    if (h->card_write_protected) return IOSW_SD_WRITE_PROTECTED;
-    if (cache && h->write_cache_off_verified != 1) return IOSW_SD_CACHE_UNQUALIFIED;
-    return IOSW_SD_OK;
+        return SWITCH_SD_UNQUALIFIED;
+    if (!h->permit_write) return SWITCH_SD_WRITE_DENIED;
+    if (h->card_write_protected) return SWITCH_SD_WRITE_PROTECTED;
+    if (cache && h->write_cache_off_verified != 1) return SWITCH_SD_CACHE_UNQUALIFIED;
+    return SWITCH_SD_OK;
 }
-static int write_fail(struct iosw_sd_host *h, int error)
+static int write_fail(struct switch_sd_host *h, int error)
 {
     h->blocked = 1;
-    if (h->dma) iosw_sd_dma_abort(h->dma);
+    if (h->dma) switch_sd_dma_abort(h->dma);
     h->write_cache_off_verified = 0;
     /* A failed in-flight operation is never returned to another owner. */
     h->io.write32(h->context, SIGNAL_ENABLE, 0);
     h->io.barrier(h->context);
     return error;
 }
-static int write_prepare(struct iosw_sd_host *h, struct iosw_sd_result *r, struct write_saved *s)
+static int write_prepare(struct switch_sd_host *h, struct switch_sd_result *r, struct write_saved *s)
 {
     r->present = h->io.read32(h->context, PRESENT);
     r->version = h->io.read16(h->context, VERSION);
@@ -292,21 +292,21 @@ static int write_prepare(struct iosw_sd_host *h, struct iosw_sd_result *r, struc
     r->reset = h->io.read8(h->context, RESET);
     r->block_size = h->io.read16(h->context, BLOCK_SIZE);
     r->readiness_failures = 0;
-    if ((r->version & 0xff) != 2 && (r->version & 0xff) != 3) r->readiness_failures |= IOSW_SD_READY_VERSION;
-    if (r->present & 0x307) r->readiness_failures |= IOSW_SD_READY_ACTIVE;
-    if ((r->present & 0x30000) != 0x30000) r->readiness_failures |= IOSW_SD_READY_CARD;
-    if ((r->host_control & 0x22) != 2) r->readiness_failures |= IOSW_SD_READY_BUS;
-    if (!(r->power & 1)) r->readiness_failures |= IOSW_SD_READY_POWER;
-    if ((r->clock & 7) != 7) r->readiness_failures |= IOSW_SD_READY_CLOCK;
-    if (r->reset) r->readiness_failures |= IOSW_SD_READY_RESET;
-    if ((r->block_size & 0xfff) != 512) r->readiness_failures |= IOSW_SD_READY_BLOCK_SIZE;
-    if (r->readiness_failures) return IOSW_SD_NOT_READY;
+    if ((r->version & 0xff) != 2 && (r->version & 0xff) != 3) r->readiness_failures |= SWITCH_SD_READY_VERSION;
+    if (r->present & 0x307) r->readiness_failures |= SWITCH_SD_READY_ACTIVE;
+    if ((r->present & 0x30000) != 0x30000) r->readiness_failures |= SWITCH_SD_READY_CARD;
+    if ((r->host_control & 0x22) != 2) r->readiness_failures |= SWITCH_SD_READY_BUS;
+    if (!(r->power & 1)) r->readiness_failures |= SWITCH_SD_READY_POWER;
+    if ((r->clock & 7) != 7) r->readiness_failures |= SWITCH_SD_READY_CLOCK;
+    if (r->reset) r->readiness_failures |= SWITCH_SD_READY_RESET;
+    if ((r->block_size & 0xfff) != 512) r->readiness_failures |= SWITCH_SD_READY_BLOCK_SIZE;
+    if (r->readiness_failures) return SWITCH_SD_NOT_READY;
     /* SDHCI Write Protect Switch Pin Level: 1 means writes are allowed. */
-    if (!(r->present & 0x80000)) return IOSW_SD_WRITE_PROTECTED;
-    if (!(r->present & 0x100000)) return IOSW_SD_NOT_READY;
+    if (!(r->present & 0x80000)) return SWITCH_SD_WRITE_PROTECTED;
+    if (!(r->present & 0x100000)) return SWITCH_SD_NOT_READY;
     r->status = h->io.read32(h->context, STATUS);
     r->initial_status = r->status;
-    if (r->status & ERRORS) return IOSW_SD_PREEXISTING_ERROR;
+    if (r->status & ERRORS) return SWITCH_SD_PREEXISTING_ERROR;
     s->size = (uint16_t)r->block_size;
     s->count = h->io.read16(h->context, BLOCK_COUNT);
     s->transfer = h->io.read16(h->context, TRANSFER);
@@ -316,9 +316,9 @@ static int write_prepare(struct iosw_sd_host *h, struct iosw_sd_result *r, struc
     h->io.write32(h->context, SIGNAL_ENABLE, 0);
     h->io.write32(h->context, STATUS_ENABLE, s->enable | 0x03ff8033u | (h->dma ? 8u : 0u));
     h->io.write32(h->context, STATUS, 0x33 | (h->dma ? 8u : 0u));
-    return IOSW_SD_OK;
+    return SWITCH_SD_OK;
 }
-static void write_restore(struct iosw_sd_host *h, const struct write_saved *s)
+static void write_restore(struct switch_sd_host *h, const struct write_saved *s)
 {
     h->io.write16(h->context, BLOCK_SIZE, s->size);
     h->io.write16(h->context, BLOCK_COUNT, s->count);
@@ -328,23 +328,23 @@ static void write_restore(struct iosw_sd_host *h, const struct write_saved *s)
     h->io.write32(h->context, SIGNAL_ENABLE, s->signal);
     h->io.barrier(h->context);
 }
-static int write_idle(struct iosw_sd_host *h, struct iosw_sd_result *r, struct batch_budget *budget)
+static int write_idle(struct switch_sd_host *h, struct switch_sd_result *r, struct batch_budget *budget)
 {
     uint64_t started = h->io.ticks(h->context);
     for (;;) {
         r->status = h->io.read32(h->context, STATUS);
-        if (r->status & ERRORS) return IOSW_SD_CONTROLLER_ERROR;
-        if (batch_expired(h, budget) || h->io.ticks(h->context) - started >= h->frequency * 2) return IOSW_SD_TIMEOUT;
+        if (r->status & ERRORS) return SWITCH_SD_CONTROLLER_ERROR;
+        if (batch_expired(h, budget) || h->io.ticks(h->context) - started >= h->frequency * 2) return SWITCH_SD_TIMEOUT;
         uint32_t present = h->io.read32(h->context, PRESENT);
-        if ((present & 0x30000) != 0x30000) return IOSW_SD_NOT_READY;
-        if (!(present & 0x80000)) return IOSW_SD_WRITE_PROTECTED;
-        if (!(present & 0x307) && (present & 0x100000)) return IOSW_SD_OK;
+        if ((present & 0x30000) != 0x30000) return SWITCH_SD_NOT_READY;
+        if (!(present & 0x80000)) return SWITCH_SD_WRITE_PROTECTED;
+        if (!(present & 0x307) && (present & 0x100000)) return SWITCH_SD_OK;
     }
 }
 /* Size is 0 for R1 commands, 8 for SCR or 512 for extension/media data.
  * Only the CMD24/25 call site can supply input. Caller serializes the host. */
-static int write_command(struct iosw_sd_host *h, uint16_t command, uint32_t argument, uint32_t size, uint32_t count,
-                         uint8_t *output, const uint8_t *input, struct iosw_sd_result *r, struct batch_budget *budget)
+static int write_command(struct switch_sd_host *h, uint16_t command, uint32_t argument, uint32_t size, uint32_t count,
+                         uint8_t *output, const uint8_t *input, struct switch_sd_result *r, struct batch_budget *budget)
 {
     struct write_saved saved;
     int error = write_prepare(h, r, &saved);
@@ -354,7 +354,7 @@ static int write_command(struct iosw_sd_host *h, uint16_t command, uint32_t argu
     h->io.write32(h->context, ARGUMENT, argument);
     h->io.write16(h->context, TRANSFER, (uint16_t)(!size ? 0 : input ? (count > 1 ? 0x26 : 0x02) : 0x12));
     if (size && h->dma) {
-        error = iosw_sd_dma_prepare(h->dma, &h->io, h->context, size, count, input);
+        error = switch_sd_dma_prepare(h->dma, &h->io, h->context, size, count, input);
         if (error) return write_fail(h, error);
     }
     h->io.barrier(h->context);
@@ -362,11 +362,11 @@ static int write_command(struct iosw_sd_host *h, uint16_t command, uint32_t argu
     error = wait_event(h, COMMAND_DONE, r, budget, 0);
     if (error) return write_fail(h, error);
     r->response = h->io.read32(h->context, RESPONSE);
-    if (r->response & CARD_ERRORS) return write_fail(h, IOSW_SD_CARD_ERROR);
+    if (r->response & CARD_ERRORS) return write_fail(h, SWITCH_SD_CARD_ERROR);
     h->io.write32(h->context, STATUS, COMMAND_DONE);
     if (size) {
         if (h->dma) {
-            error = iosw_sd_dma_wait(h->dma, &h->io, h->context, r);
+            error = switch_sd_dma_wait(h->dma, &h->io, h->context, r);
             if (error) return write_fail(h, error);
         } else
             for (uint32_t block = 0; block < count; block++) {
@@ -376,13 +376,13 @@ static int write_command(struct iosw_sd_host *h, uint16_t command, uint32_t argu
                     uint64_t started = h->io.ticks(h->context);
                     for (;;) {
                         r->status = h->io.read32(h->context, STATUS);
-                        if (r->status & ERRORS) return write_fail(h, IOSW_SD_CONTROLLER_ERROR);
+                        if (r->status & ERRORS) return write_fail(h, SWITCH_SD_CONTROLLER_ERROR);
                         if (batch_expired(h, budget) || h->io.ticks(h->context) - started >= h->frequency)
-                            return write_fail(h, IOSW_SD_TIMEOUT);
-                        if (r->status & TRANSFER_DONE) return write_fail(h, IOSW_SD_BUFFER_STATE);
+                            return write_fail(h, SWITCH_SD_TIMEOUT);
+                        if (r->status & TRANSFER_DONE) return write_fail(h, SWITCH_SD_BUFFER_STATE);
                         if (r->status & 0x10) break;
                     }
-                    if (!(h->io.read32(h->context, PRESENT) & 0x400)) return write_fail(h, IOSW_SD_BUFFER_STATE);
+                    if (!(h->io.read32(h->context, PRESENT) & 0x400)) return write_fail(h, SWITCH_SD_BUFFER_STATE);
                     h->io.write32(h->context, STATUS, 0x10);
                     /* Buffer-ready reserves this complete block's FIFO space.
                  * Device/status reads and serializing timer samples per word
@@ -394,13 +394,13 @@ static int write_command(struct iosw_sd_host *h, uint16_t command, uint32_t argu
                         r->words_written++;
                     }
                     r->status = h->io.read32(h->context, STATUS);
-                    if (r->status & ERRORS) return write_fail(h, IOSW_SD_CONTROLLER_ERROR);
-                    if ((r->status & TRANSFER_DONE) && block + 1 < count) return write_fail(h, IOSW_SD_BUFFER_STATE);
-                    if (batch_expired(h, budget)) return write_fail(h, IOSW_SD_TIMEOUT);
+                    if (r->status & ERRORS) return write_fail(h, SWITCH_SD_CONTROLLER_ERROR);
+                    if ((r->status & TRANSFER_DONE) && block + 1 < count) return write_fail(h, SWITCH_SD_BUFFER_STATE);
+                    if (batch_expired(h, budget)) return write_fail(h, SWITCH_SD_TIMEOUT);
                 } else {
                     error = wait_event(h, BUFFER_READY, r, budget, 1);
                     if (error) return write_fail(h, error);
-                    if (!(h->io.read32(h->context, PRESENT) & 0x800)) return write_fail(h, IOSW_SD_BUFFER_STATE);
+                    if (!(h->io.read32(h->context, PRESENT) & 0x800)) return write_fail(h, SWITCH_SD_BUFFER_STATE);
                     h->io.write32(h->context, STATUS, BUFFER_READY);
                     for (uint32_t word = 0; word < size / 4; word++) {
                         uint32_t value = h->io.read32(h->context, BUFFER);
@@ -422,11 +422,11 @@ static int write_command(struct iosw_sd_host *h, uint16_t command, uint32_t argu
     if (input && count > 1) {
         r->auto_cmd_error = h->io.read16(h->context, AUTO_CMD_ERROR);
         r->stop_response = h->io.read32(h->context, STOP_RESPONSE);
-        if (r->auto_cmd_error & 0x9f) return write_fail(h, IOSW_SD_CONTROLLER_ERROR);
-        if (r->stop_response & CARD_ERRORS) return write_fail(h, IOSW_SD_CARD_ERROR);
+        if (r->auto_cmd_error & 0x9f) return write_fail(h, SWITCH_SD_CONTROLLER_ERROR);
+        if (r->stop_response & CARD_ERRORS) return write_fail(h, SWITCH_SD_CARD_ERROR);
     }
     if (size && h->dma) {
-        error = iosw_sd_dma_complete(h->dma, h->context, output);
+        error = switch_sd_dma_complete(h->dma, h->context, output);
         if (error) return write_fail(h, error);
         if (input)
             r->words_written = size * count / 4;
@@ -434,9 +434,9 @@ static int write_command(struct iosw_sd_host *h, uint16_t command, uint32_t argu
             r->words_read += size * count / 4;
     }
     write_restore(h, &saved);
-    return IOSW_SD_OK;
+    return SWITCH_SD_OK;
 }
-static int write_ready(struct iosw_sd_host *h, struct iosw_sd_result *r, struct batch_budget *budget)
+static int write_ready(struct switch_sd_host *h, struct switch_sd_result *r, struct batch_budget *budget)
 {
     int error = write_idle(h, r, budget);
     if (error) return write_fail(h, error);
@@ -445,9 +445,9 @@ static int write_ready(struct iosw_sd_host *h, struct iosw_sd_result *r, struct 
         if (error) return write_fail(h, error);
         r->card_status = r->response;
         uint32_t state = (r->card_status >> 9) & 15;
-        if (state == 4 && (r->card_status & 0x100)) return IOSW_SD_OK;
-        if (state != 7 && state != 4) return write_fail(h, IOSW_SD_CARD_STATE);
-        if (batch_expired(h, budget)) return write_fail(h, IOSW_SD_TIMEOUT);
+        if (state == 4 && (r->card_status & 0x100)) return SWITCH_SD_OK;
+        if (state != 7 && state != 4) return write_fail(h, SWITCH_SD_CARD_STATE);
+        if (batch_expired(h, budget)) return write_fail(h, SWITCH_SD_TIMEOUT);
     }
 }
 static uint32_t write_le16(const uint8_t *p)
@@ -458,12 +458,12 @@ static uint32_t write_le32(const uint8_t *p)
 {
     return write_le16(p) | write_le16(p + 2) << 16;
 }
-static int write_cache_probe(struct iosw_sd_host *h, struct iosw_sd_result *r, struct batch_budget *budget)
+static int write_cache_probe(struct switch_sd_host *h, struct switch_sd_result *r, struct batch_budget *budget)
 {
     uint8_t bytes[512], general[512];
     int error = write_command(h, 0x371a, h->rca << 16, 0, 0, 0, 0, r, budget);
     if (error) return error;
-    if (!(r->response & 0x20)) return IOSW_SD_CARD_STATE;
+    if (!(r->response & 0x20)) return SWITCH_SD_CARD_STATE;
     error = write_command(h, 0x333a, 0, 8, 1, bytes, 0, r, budget);
     if (error) return error;
     uint64_t scr = 0;
@@ -475,45 +475,45 @@ static int write_cache_probe(struct iosw_sd_host *h, struct iosw_sd_result *r, s
     uint32_t spec = (uint32_t)(scr >> 56) & 15;
     if ((scr >> 60) != 0 || spec != 2 || ((scr >> 48) & 5) != 5 ||
         ((scr & (UINT64_C(1) << 35)) && !(scr & (UINT64_C(1) << 34))))
-        return IOSW_SD_CACHE_UNQUALIFIED;
+        return SWITCH_SD_CACHE_UNQUALIFIED;
     if (!(scr & UINT64_C(1) << 34)) {
-        r->cache_evidence = IOSW_SD_CACHE_NO_CMD48;
-        return IOSW_SD_OK;
+        r->cache_evidence = SWITCH_SD_CACHE_NO_CMD48;
+        return SWITCH_SD_OK;
     }
-    if (spec != 2 || !(scr & (UINT64_C(1) << 47))) return IOSW_SD_CACHE_UNQUALIFIED;
+    if (spec != 2 || !(scr & (UINT64_C(1) << 47))) return SWITCH_SD_CACHE_UNQUALIFIED;
     error = write_command(h, 0x303a, 0x1ff, 512, 1, general, 0, r, budget);
     if (error) return error;
     uint32_t length = write_le16(general + 2), total = general[4], ext = 16;
     if (write_le16(general) != 0 || length < 16 || length > 512 || !total || total > 10)
-        return IOSW_SD_CACHE_UNQUALIFIED;
+        return SWITCH_SD_CACHE_UNQUALIFIED;
     uint32_t seen[10] = {0}, perf = 0;
     for (uint32_t i = 0; i < total; i++) {
-        if (ext < 16 || ext > length || length - ext < 48) return IOSW_SD_CACHE_UNQUALIFIED;
+        if (ext < 16 || ext > length || length - ext < 48) return SWITCH_SD_CACHE_UNQUALIFIED;
         for (uint32_t j = 0; j < i; j++)
-            if (ext < seen[j] + 48 && seen[j] < ext + 48) return IOSW_SD_CACHE_UNQUALIFIED;
+            if (ext < seen[j] + 48 && seen[j] < ext + 48) return SWITCH_SD_CACHE_UNQUALIFIED;
         seen[i] = ext;
         uint32_t next = write_le16(general + ext + 40), registers = general[ext + 42];
-        if (registers != 1 || (i + 1 == total ? next != 0 : next == 0)) return IOSW_SD_CACHE_UNQUALIFIED;
+        if (registers != 1 || (i + 1 == total ? next != 0 : next == 0)) return SWITCH_SD_CACHE_UNQUALIFIED;
         if (write_le16(general + ext) == 2) {
-            if (perf++) return IOSW_SD_CACHE_UNQUALIFIED;
+            if (perf++) return SWITCH_SD_CACHE_UNQUALIFIED;
             uint32_t address = write_le32(general + ext + 44);
             uint32_t fno = (address >> 18) & 15, page = (address >> 9) & 255;
             /* Standard performance register is one 512-byte page. A nonzero
              * starting offset or reserved address bit needs a larger parser. */
-            if ((address & 0xffc201ffu) || !fno) return IOSW_SD_CACHE_UNQUALIFIED;
+            if ((address & 0xffc201ffu) || !fno) return SWITCH_SD_CACHE_UNQUALIFIED;
             error = write_command(h, 0x303a, fno << 27 | page << 18 | 0x1ff, 512, 1, bytes, 0, r, budget);
             if (error) return error;
-            if (bytes[0] != 0 || (bytes[260] & 1) || (bytes[262] & 1)) return IOSW_SD_CACHE_UNQUALIFIED;
-            r->cache_evidence = (bytes[4] & 1) ? IOSW_SD_CACHE_OBSERVED_OFF : IOSW_SD_CACHE_UNSUPPORTED;
+            if (bytes[0] != 0 || (bytes[260] & 1) || (bytes[262] & 1)) return SWITCH_SD_CACHE_UNQUALIFIED;
+            r->cache_evidence = (bytes[4] & 1) ? SWITCH_SD_CACHE_OBSERVED_OFF : SWITCH_SD_CACHE_UNSUPPORTED;
         }
         ext = next;
     }
-    if (!perf) r->cache_evidence = IOSW_SD_CACHE_NO_PERF;
-    return IOSW_SD_OK;
+    if (!perf) r->cache_evidence = SWITCH_SD_CACHE_NO_PERF;
+    return SWITCH_SD_OK;
 }
-int iosw_sd_qualify_writes(struct iosw_sd_host *h, struct iosw_sd_result *r)
+int switch_sd_qualify_writes(struct switch_sd_host *h, struct switch_sd_result *r)
 {
-    if (r) *r = (struct iosw_sd_result){0};
+    if (r) *r = (struct switch_sd_result){0};
     int error = write_valid(h, r, 0);
     if (error) return error;
     h->write_cache_off_verified = 0;
@@ -528,11 +528,11 @@ int iosw_sd_qualify_writes(struct iosw_sd_host *h, struct iosw_sd_result *r)
     if (error) return error;
     h->write_cache_off_verified = 1;
     r->stage = 12;
-    return IOSW_SD_OK;
+    return SWITCH_SD_OK;
 }
-int iosw_sd_sync(struct iosw_sd_host *h, struct iosw_sd_result *r)
+int switch_sd_sync(struct switch_sd_host *h, struct switch_sd_result *r)
 {
-    if (r) *r = (struct iosw_sd_result){0};
+    if (r) *r = (struct switch_sd_result){0};
     int error = write_valid(h, r, 1);
     if (error) return error;
     r->stage = 30;
@@ -541,19 +541,19 @@ int iosw_sd_sync(struct iosw_sd_host *h, struct iosw_sd_result *r)
     if (!error) r->stage = 31;
     return error;
 }
-int iosw_sd_write_sectors(struct iosw_sd_host *h, uint64_t lba, uint32_t count, const uint8_t *input,
-                          struct iosw_sd_result *r)
+int switch_sd_write_sectors(struct switch_sd_host *h, uint64_t lba, uint32_t count, const uint8_t *input,
+                          struct switch_sd_result *r)
 {
-    if (r) *r = (struct iosw_sd_result){0};
-    if (!input || !count || count > IOSW_SD_MAX_WRITE_SECTORS) return IOSW_SD_ARGUMENT;
+    if (r) *r = (struct switch_sd_result){0};
+    if (!input || !count || count > SWITCH_SD_MAX_WRITE_SECTORS) return SWITCH_SD_ARGUMENT;
     int error = write_valid(h, r, 1);
     if (error) return error;
     if (lba < h->permitted_first_sector || lba - h->permitted_first_sector >= h->permitted_sector_count ||
         count > h->permitted_sector_count - (lba - h->permitted_first_sector))
-        return IOSW_SD_ARGUMENT;
+        return SWITCH_SD_ARGUMENT;
     /* No reads, timer sampling or register writes can precede this exact-range
      * authorization. A partition-sized allowance alone is never sufficient. */
-    if (h->permit_write(h->write_context, lba, count) != 1) return IOSW_SD_WRITE_DENIED;
+    if (h->permit_write(h->write_context, lba, count) != 1) return SWITCH_SD_WRITE_DENIED;
     r->stage = 20;
     struct batch_budget budget = {h->io.ticks(h->context), 0};
     error = write_command(h, count > 1 ? 0x193a : 0x183a, (uint32_t)lba, 512, count, 0, input, r, &budget);

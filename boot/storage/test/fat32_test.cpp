@@ -169,8 +169,8 @@ int Read512(void *, uint64_t lba, uint8_t output[512])
 class NativeFat32 : public testing::Test {
 protected:
     std::unique_ptr<FatImage> image = std::make_unique<FatImage>();
-    std::unique_ptr<iosw_fat_volume> volume = std::make_unique<iosw_fat_volume>();
-    iosw_fat_file file{};
+    std::unique_ptr<switch_fat_volume> volume = std::make_unique<switch_fat_volume>();
+    switch_fat_file file{};
 
     void SetUp() override { gImage = image.get(); }
     void Replace(std::unique_ptr<FatImage> next)
@@ -181,17 +181,17 @@ protected:
 
     void Mount(int expected = OK, std::optional<uint64_t> capacity = std::nullopt, uint32_t partition = 0)
     {
-        EXPECT_EQ(iosw_fat_mount(volume.get(), Read512, nullptr, capacity ? *capacity : image->capacity, partition),
+        EXPECT_EQ(switch_fat_mount(volume.get(), Read512, nullptr, capacity ? *capacity : image->capacity, partition),
                   expected);
         EXPECT_TRUE(image->out_of_bounds.empty());
     }
-    int Open(const char *path) { return iosw_fat_open(volume.get(), path, &file); }
+    int Open(const char *path) { return switch_fat_open(volume.get(), path, &file); }
 
     // Reads `count` bytes into a buffer with a guard byte on each side; returns what landed between them.
     Bytes Read(uint64_t offset, uint32_t count, int expected = OK)
     {
         Bytes buffer(count + 2, 0xaa);
-        EXPECT_EQ(iosw_fat_read(volume.get(), &file, offset, buffer.data() + 1, count), expected);
+        EXPECT_EQ(switch_fat_read(volume.get(), &file, offset, buffer.data() + 1, count), expected);
         EXPECT_EQ(buffer.front(), 0xaa);
         EXPECT_EQ(buffer.back(), 0xaa);
         EXPECT_TRUE(image->out_of_bounds.empty());
@@ -285,7 +285,7 @@ TEST_F(NativeFat32, TrustedSliceAnd64BitPartitionAddressing)
     image->sectors.clear();
     image->Directory(2, {Dirent("IOS", 3, 0, 0x10)});
     image->Directory(3, {Dirent("VERIFY.BIN", 5, 1200)});
-    EXPECT_EQ(iosw_fat_mount_slice(volume.get(), Read512, nullptr, image->capacity, image->first, image->total), OK);
+    EXPECT_EQ(switch_fat_mount_slice(volume.get(), Read512, nullptr, image->capacity, image->first, image->total), OK);
     EXPECT_EQ(image->reads, std::vector<uint64_t>{image->first}) << "MBR not consulted";
     ASSERT_EQ(Open("IOS/VERIFY.BIN"), OK);
     const Sector payload = FatImage::Payload(image->lba(5));
@@ -296,7 +296,7 @@ TEST_F(NativeFat32, TrustedSliceAnd64BitPartitionAddressing)
                                 {UINT64_MAX, 2},
                                 {image->first, image->total - 1},
                                 {image->first, UINT64_MAX}})
-        EXPECT_EQ(iosw_fat_mount_slice(volume.get(), Read512, nullptr, image->capacity, first, count), RANGE)
+        EXPECT_EQ(switch_fat_mount_slice(volume.get(), Read512, nullptr, image->capacity, first, count), RANGE)
             << first << " + " << count;
     EXPECT_TRUE(image->out_of_bounds.empty());
 }

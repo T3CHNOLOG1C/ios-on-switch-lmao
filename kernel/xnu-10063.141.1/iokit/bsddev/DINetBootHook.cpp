@@ -115,7 +115,7 @@ di_load_controller( void )
 	do {
 		IOService::getResourceService()->publishResource("com.apple.AppleDiskImageController.load", kOSBooleanTrue);
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-		if (switch_files_storage_profile() == IOSW_STORAGE_RAW) {
+		if (switch_files_storage_profile() == SWITCH_STORAGE_RAW) {
 			/* Native raw boot must fail instead of waiting forever on unrelated busy resources. */
 			if (IOService::getResourceService()->waitQuiet(NSEC_PER_SEC * kDIMatchQuiesceTimeout) != kIOReturnSuccess) {
 				break;

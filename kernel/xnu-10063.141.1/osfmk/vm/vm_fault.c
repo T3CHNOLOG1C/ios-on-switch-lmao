@@ -4330,10 +4330,10 @@ vm_fault_internal(
 	 */
 	bool                    object_is_contended = false;
 	/* Switch (r17-faults): for the kprof faults lines (switch_kprof_fault, at done) */
-	const uint64_t          iosw_began = mach_absolute_time();
-	bool                    iosw_device = false;    /* the page entered was a device pager's */
-	bool                    iosw_purgeable = false; /* a zero fill in a purgeable object */
-	unsigned int            iosw_around = 0;        /* pages the zero-fill fault-around entered */
+	const uint64_t          switch_began = mach_absolute_time();
+	bool                    switch_device = false;    /* the page entered was a device pager's */
+	bool                    switch_purgeable = false; /* a zero fill in a purgeable object */
+	unsigned int            switch_around = 0;        /* pages the zero-fill fault-around entered */
 
 
 	real_vaddr = vaddr;
@@ -4443,8 +4443,8 @@ RetryFault:
 	 * the real fault type once we determine it
 	 */
 	type_of_fault = DBG_CACHE_HIT_FAULT;
-	iosw_device = false;
-	iosw_purgeable = false;
+	switch_device = false;
+	switch_purgeable = false;
 
 	/*
 	 *	Find the backing store object and offset into
@@ -5034,7 +5034,7 @@ FastPmapEnter:
 				}
 				assertf(VM_PAGE_OBJECT(m) == m_object, "m=%p m_object=%p object=%p", m, m_object, object);
 				assert(VM_PAGE_OBJECT(m) != VM_OBJECT_NULL);
-				iosw_device = m->vmp_private;
+				switch_device = m->vmp_private;
 				if (caller_pmap) {
 					kr = vm_fault_enter(m,
 					    caller_pmap,
@@ -5691,7 +5691,7 @@ FastPmapEnter:
 				} else {
 					type_of_fault = DBG_ZERO_FILL_FAULT;
 				}
-				iosw_purgeable = object->purgable != VM_PURGABLE_DENY;
+				switch_purgeable = object->purgable != VM_PURGABLE_DENY;
 				{
 					pmap_t destination_pmap;
 					vm_map_offset_t destination_pmap_vaddr;
@@ -5833,7 +5833,7 @@ zero_fill_cleanup:
 				    !change_wiring && !wired && !rtfault && caller_pmap == PMAP_NULL && physpage_p == NULL &&
 				    top_object == VM_OBJECT_NULL && map == original_map && real_map == map &&
 				    fault_page_size == PAGE_SIZE && !map->no_zero_fill) {
-					iosw_around = switch_zero_fill_around(object, vm_object_trunc_page(offset), pmap, vaddr,
+					switch_around = switch_zero_fill_around(object, vm_object_trunc_page(offset), pmap, vaddr,
 					    prot, caller_prot, &fault_info);
 				}
 
@@ -6382,7 +6382,7 @@ handle_copy_delay:
 		}
 		assertf(VM_PAGE_OBJECT(m) == m_object, "m=%p m_object=%p", m, m_object);
 		assert(VM_PAGE_OBJECT(m) != VM_OBJECT_NULL);
-		iosw_device = m->vmp_private;
+		switch_device = m->vmp_private;
 		if (caller_pmap) {
 			kr = vm_fault_enter(m,
 			    caller_pmap,
@@ -6674,37 +6674,37 @@ done:
 
 	/* Switch (r17-faults): this fault for the kprof faults lines */
 	{
-		unsigned int iosw_class;
+		unsigned int switch_class;
 
 		if (kr != KERN_SUCCESS || type_of_fault == DBG_GUARD_FAULT) {
-			iosw_class = IOSW_FAULT_FAILED;
+			switch_class = SWITCH_FAULT_FAILED;
 		} else {
 			switch (type_of_fault) {
 			case DBG_ZERO_FILL_FAULT:
 			case DBG_NZF_PAGE_FAULT:
-				iosw_class = IOSW_FAULT_ZF;
+				switch_class = SWITCH_FAULT_ZF;
 				break;
 			case DBG_COW_FAULT:
-				iosw_class = IOSW_FAULT_COW;
+				switch_class = SWITCH_FAULT_COW;
 				break;
 			case DBG_PAGEIN_FAULT:
 			case DBG_PAGEIND_FAULT:
 			case DBG_PAGEINV_FAULT:
-				iosw_class = IOSW_FAULT_FILE;
+				switch_class = SWITCH_FAULT_FILE;
 				break;
 			case DBG_COMPRESSOR_FAULT:
 			case DBG_COMPRESSOR_SWAPIN_FAULT:
-				iosw_class = IOSW_FAULT_CMP;
+				switch_class = SWITCH_FAULT_CMP;
 				break;
 			default:
-				iosw_class = iosw_device ? IOSW_FAULT_DEVICE : IOSW_FAULT_SOFT;
+				switch_class = switch_device ? SWITCH_FAULT_DEVICE : SWITCH_FAULT_SOFT;
 				break;
 			}
 		}
-		switch_kprof_fault(iosw_class,
-		    (change_wiring ? IOSW_FAULT_WIRE : 0) | (original_map->pmap == kernel_pmap ? IOSW_FAULT_KERNEL : 0) |
-		    (iosw_purgeable && iosw_class == IOSW_FAULT_ZF ? IOSW_FAULT_PURGEABLE : 0),
-		    iosw_began, (uint64_t)vaddr, iosw_around);
+		switch_kprof_fault(switch_class,
+		    (change_wiring ? SWITCH_FAULT_WIRE : 0) | (original_map->pmap == kernel_pmap ? SWITCH_FAULT_KERNEL : 0) |
+		    (switch_purgeable && switch_class == SWITCH_FAULT_ZF ? SWITCH_FAULT_PURGEABLE : 0),
+		    switch_began, (uint64_t)vaddr, switch_around);
 	}
 
 	return kr;

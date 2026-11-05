@@ -1,15 +1,15 @@
 /* boot/loader/seed.c against a model of what it touches: CAR's SE and ENTROPY clock/reset bits, SE2's registers
  * (security, config, lists, RNG, status, interrupt and error latches) with a DRBG that writes its output into the
  * output list's buffer when started, the AHB write queue, the counter, and the 64-byte seed and 8-byte report in an
- * ADT. Every access seed.c makes goes through iosw_seed_read32/write32 below; anything outside the model aborts.
- * seed_scenarios() is run by seed_test.cpp (BUILD.bazel builds seed.c with IOSW_SEED_HOST_TEST). */
+ * ADT. Every access seed.c makes goes through switch_seed_read32/write32 below; anything outside the model aborts.
+ * seed_scenarios() is run by seed_test.cpp (BUILD.bazel builds seed.c with SWITCH_SEED_HOST_TEST). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../seed.h"
 #include "bazel/testing/c_check.h"
 
-volatile uint32_t *iosw_seed_dma_words(void);
+volatile uint32_t *switch_seed_dma_words(void);
 
 #define CAR       0x60006000u
 #define AHB       0x6000c000u
@@ -52,8 +52,8 @@ static void start(void)
     CHECK(m.config == 0x01002000u && m.crypto == 0x108u && m.last == 3 && m.in_ll == 0);
     CHECK((m.rng & ~3u) == 4u);                   /* SRC_ENTROPY, a mode, nothing else */
     CHECK((m.rng_src & 2u) && !(m.rng_src & 1u)); /* RO_ENT_SRC on, its lock never set */
-    CHECK(m.out_ll == (uint32_t)(uintptr_t)iosw_seed_dma_words());
-    volatile uint32_t *dma = iosw_seed_dma_words();
+    CHECK(m.out_ll == (uint32_t)(uintptr_t)switch_seed_dma_words());
+    volatile uint32_t *dma = switch_seed_dma_words();
     CHECK(dma[0] == 0 && dma[1] == (uint32_t)(uintptr_t)(dma + 16) && dma[2] == 64);
     for (unsigned i = 16; i < 32; ++i) CHECK(dma[i] == 0); /* cleared before the start */
     m.modes[m.starts < 4 ? m.starts : 3] = m.rng & 3u;
@@ -76,7 +76,7 @@ static void start(void)
     m.drains = 3;
 }
 
-uint32_t iosw_seed_read32(uint64_t pa)
+uint32_t switch_seed_read32(uint64_t pa)
 {
     if (pa >= SEED_PA && pa < SEED_PA + 64) return m.seed[(pa - SEED_PA) / 4];
     if (pa >= SOURCE_PA && pa < SOURCE_PA + 8) return m.source[(pa - SOURCE_PA) / 4];
@@ -111,7 +111,7 @@ uint32_t iosw_seed_read32(uint64_t pa)
     }
 }
 
-void iosw_seed_write32(uint64_t pa, uint32_t value)
+void switch_seed_write32(uint64_t pa, uint32_t value)
 {
     if (pa >= SEED_PA && pa < SEED_PA + 64) {
         m.seed[(pa - SEED_PA) / 4] = value;
@@ -168,9 +168,9 @@ static uint32_t run(unsigned flags)
     m.security = (flags & SE_SECURE) ? 0x35u : 0x10035u; /* as read on hardware: 0x10035 */
     m.counter = 0x123456789ull;
     memcpy(m.seed, pinned, sizeof(pinned));
-    const uint32_t word = iosw_seed_mix(SEED_PA, SOURCE_PA, ticks, 38400);
-    CHECK(m.source[0] == IOSW_SEED_MAGIC && m.source[1] == word);
-    volatile uint32_t *dma = iosw_seed_dma_words();
+    const uint32_t word = switch_seed_mix(SEED_PA, SOURCE_PA, ticks, 38400);
+    CHECK(m.source[0] == SWITCH_SEED_MAGIC && m.source[1] == word);
+    volatile uint32_t *dma = switch_seed_dma_words();
     for (unsigned i = 16; i < 32; ++i) CHECK(dma[i] == 0); /* nothing of the output stays in the image */
     return word;
 }
@@ -192,7 +192,7 @@ unsigned seed_scenarios(void)
     uint32_t w;
 
     w = run(0); /* the shipped case: clocks on, the DRBG answers */
-    CHECK((w & 0xffffu) == IOSW_SEED_STATUS_MIXED && m.starts == 1 && m.modes[0] == 2);
+    CHECK((w & 0xffffu) == SWITCH_SEED_STATUS_MIXED && m.starts == 1 && m.modes[0] == 2);
     check_seed(1);
     uint32_t fold = 0;
     for (unsigned i = 0; i < 16; ++i) fold ^= m.drbg[i];
@@ -200,59 +200,59 @@ unsigned seed_scenarios(void)
     ++scenarios;
 
     w = run(ENTROPY_OFF); /* BL31 left the entropy clock off (SC7): the loader turns it on first */
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_MIXED && (w & IOSW_SEED_FLAG_ENTROPY_ENABLED));
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_MIXED && (w & SWITCH_SEED_FLAG_ENTROPY_ENABLED));
     CHECK((m.clk_w & (1u << 21)) && !(m.rst_w & (1u << 21)));
     check_seed(1);
     ++scenarios;
 
     w = run(ENTROPY_STUCK);
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_ENTROPY && m.starts == 0);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_ENTROPY && m.starts == 0);
     check_seed(0);
     ++scenarios;
 
     w = run(SE_CLOCK_OFF); /* not one engine register touched */
-    CHECK((w & 0xffffu) == IOSW_SEED_STATUS_SE_CLOCK && m.se_accesses == 0);
+    CHECK((w & 0xffffu) == SWITCH_SEED_STATUS_SE_CLOCK && m.se_accesses == 0);
     check_seed(0);
     ++scenarios;
 
     w = run(SE_SECURE); /* read SE_SECURITY, nothing else */
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_SECURE && w >> 16 == 0x35u && m.se_accesses == 1);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_SECURE && w >> 16 == 0x35u && m.se_accesses == 1);
     check_seed(0);
     ++scenarios;
 
     w = run(DROP_WRITES);
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_IGNORED && m.starts == 0);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_IGNORED && m.starts == 0);
     check_seed(0);
     ++scenarios;
 
     w = run(NEVER_DONE); /* bounded: about 2 ms of counter, then the pinned seed */
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_TIMEOUT && m.starts == 1);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_TIMEOUT && m.starts == 1);
     CHECK(m.counter - 0x123456789ull < 38400u + 4000u);
     check_seed(0);
     ++scenarios;
 
     w = run(ERROR_FIRST); /* forced reseed errors (DRBG never instantiated): instantiate once instead */
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_MIXED && m.starts == 2 && m.modes[0] == 2 && m.modes[1] == 1);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_MIXED && m.starts == 2 && m.modes[0] == 2 && m.modes[1] == 1);
     check_seed(1);
     ++scenarios;
 
     w = run(ERROR_ALWAYS);
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_ERROR && w >> 16 == 0x40u && m.starts == 2);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_ERROR && w >> 16 == 0x40u && m.starts == 2);
     check_seed(0);
     ++scenarios;
 
     w = run(NEVER_DRAIN);
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_DRAIN);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_DRAIN);
     check_seed(0);
     ++scenarios;
 
     w = run(ZERO_OUTPUT);
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_OUTPUT);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_OUTPUT);
     check_seed(0);
     ++scenarios;
 
     w = run(REPEAT_OUTPUT);
-    CHECK((w & 0xffu) == IOSW_SEED_STATUS_OUTPUT);
+    CHECK((w & 0xffu) == SWITCH_SEED_STATUS_OUTPUT);
     check_seed(0);
     ++scenarios;
 
@@ -267,7 +267,7 @@ unsigned seed_scenarios(void)
     m.counter = 0x123456789ull;
     m.starts = 5; /* the model's output depends on its start count */
     memcpy(m.seed, pinned, sizeof(pinned));
-    (void)iosw_seed_mix(SEED_PA, SOURCE_PA, ticks, 38400);
+    (void)switch_seed_mix(SEED_PA, SOURCE_PA, ticks, 38400);
     CHECK(memcmp(first + 2, m.seed + 2, 56) != 0);
     ++scenarios;
 

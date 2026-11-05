@@ -35,7 +35,7 @@ host_library(
     ],
     hdrs = ["//boot:loader/seed.h"],
     copts = ["-O1"],
-    defines = ["IOSW_SEED_HOST_TEST=1"],
+    defines = ["SWITCH_SEED_HOST_TEST=1"],
     deps = ["//bazel/testing:c_check"],
 )
 

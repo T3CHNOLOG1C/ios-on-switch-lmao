@@ -6,10 +6,10 @@
 #include <vm/vm_map.h>
 
 extern void switch_root_progress(unsigned, unsigned, uint64_t, uint64_t);
-static const struct iosw_root_policy *root_policies;
+static const struct switch_root_policy *root_policies;
 static unsigned root_policy_attempted;
 
-const struct iosw_root_policy *switch_root_policy_get(unsigned disk)
+const struct switch_root_policy *switch_root_policy_get(unsigned disk)
 {
     return disk < 2 && root_policies ? &root_policies[disk] : NULL;
 }
@@ -24,14 +24,14 @@ int switch_root_policy_load(void)
     int active = 0;
     if (root_policy_attempted) return root_policies ? 0 : 400;
     root_policy_attempted = 1;
-    if (source_ready(&reader) != IOSW_BLOCK_OK) return 401;
+    if (source_ready(&reader) != SWITCH_BLOCK_OK) return 401;
     if (kmem_alloc(kernel_map, &descriptors, PAGE_SIZE, KMA_KOBJECT | KMA_DATA | KMA_ZERO, VM_KERN_MEMORY_FILE) !=
         KERN_SUCCESS)
         return 402;
-    struct iosw_root_policy *views = (struct iosw_root_policy *)descriptors;
+    struct switch_root_policy *views = (struct switch_root_policy *)descriptors;
     for (disk = 0; disk < 2; disk++) {
-        const struct iosw_root_expected *e = &iosw_root_expected[disk];
-        if (!e->bytes || e->bytes > 64u * 1024u * 1024u || e->image_bytes != iosw_storage_volumes[disk].size_bytes) {
+        const struct switch_root_expected *e = &switch_root_expected[disk];
+        if (!e->bytes || e->bytes > 64u * 1024u * 1024u || e->image_bytes != switch_storage_volumes[disk].size_bytes) {
             code = 403;
             goto fail;
         }
@@ -42,7 +42,7 @@ int switch_root_policy_load(void)
             goto fail;
         }
         uint32_t count = 0;
-        if (iosw_fat_index_count(&volume, (uint32_t)e->bytes, &count) || !count || count > 131072) {
+        if (switch_fat_index_count(&volume, (uint32_t)e->bytes, &count) || !count || count > 131072) {
             code = 405;
             goto fail;
         }
@@ -58,8 +58,8 @@ int switch_root_policy_load(void)
         }
         active = 1;
         switch_root_progress(2, disk, 0, e->bytes);
-        struct iosw_fat_indexed_file file = {0};
-        if (iosw_fat_open_indexed(&volume, e->path, &file, (uint32_t *)index, count) || file.file.size != e->bytes) {
+        struct switch_fat_indexed_file file = {0};
+        if (switch_fat_open_indexed(&volume, e->path, &file, (uint32_t *)index, count) || file.file.size != e->bytes) {
             code = 408;
             goto fail;
         }
@@ -69,7 +69,7 @@ int switch_root_policy_load(void)
             uint32_t n = (uint32_t)e->bytes - offset;
             if (n > FILES_BUFFER) n = FILES_BUFFER;
             uint8_t *dest = (uint8_t *)storage[disk] + offset;
-            if (iosw_fat_read_indexed(&volume, &file, offset, dest, n)) {
+            if (switch_fat_read_indexed(&volume, &file, offset, dest, n)) {
                 code = 409;
                 goto fail;
             }
@@ -120,9 +120,9 @@ int switch_root_policy_load(void)
     /* No device publication or concurrent lookup is allowed before this one
      * release point; immutable views retain their immutable envelope storage. */
     __sync_synchronize();
-    root_policies = (const struct iosw_root_policy *)descriptors;
-    switch_root_progress(4, 0, iosw_root_expected[0].bytes + iosw_root_expected[1].bytes,
-                           iosw_root_expected[0].bytes + iosw_root_expected[1].bytes);
+    root_policies = (const struct switch_root_policy *)descriptors;
+    switch_root_progress(4, 0, switch_root_expected[0].bytes + switch_root_expected[1].bytes,
+                           switch_root_expected[0].bytes + switch_root_expected[1].bytes);
     return 0;
 fail:
     if (active) (void)source_end(&reader);

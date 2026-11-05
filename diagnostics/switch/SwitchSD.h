@@ -11,5 +11,5 @@ void switch_sd_probe(void);
 extern volatile uint64_t switch_sd_record[33];
 extern uint8_t switch_sd_bytes[512];
 extern uint8_t switch_sd_reference_bytes[512];
-#define IOSW_SD_DIAG_MAGIC UINT64_C(0x4953575344524431)
+#define SWITCH_SD_DIAG_MAGIC UINT64_C(0x4953575344524431)
 #endif

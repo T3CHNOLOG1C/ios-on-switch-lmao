@@ -11,12 +11,12 @@
 extern "C" {
 #endif
 /* Records a GoogleTest failure at file:line when !ok. Returns ok. */
-int iosw_test_check(int ok, const char *expression, const char *file, int line);
+int switch_test_check(int ok, const char *expression, const char *file, int line);
 /* Records a GoogleTest failure at file:line with a printf-style message. */
-void iosw_test_fail(const char *file, int line, const char *format, ...) __attribute__((format(printf, 3, 4)));
+void switch_test_fail(const char *file, int line, const char *format, ...) __attribute__((format(printf, 3, 4)));
 #ifdef __cplusplus
 }
 #endif
-#define CHECK(x)    iosw_test_check(!!(x), #x, __FILE__, __LINE__)
-#define FAIL_C(...) iosw_test_fail(__FILE__, __LINE__, __VA_ARGS__)
+#define CHECK(x)    switch_test_check(!!(x), #x, __FILE__, __LINE__)
+#define FAIL_C(...) switch_test_fail(__FILE__, __LINE__, __VA_ARGS__)
 #endif

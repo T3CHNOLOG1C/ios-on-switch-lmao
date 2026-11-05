@@ -6,13 +6,13 @@
 #include <cstdarg>
 #include <cstdio>
 
-extern "C" int iosw_test_check(int ok, const char *expression, const char *file, int line)
+extern "C" int switch_test_check(int ok, const char *expression, const char *file, int line)
 {
     if (!ok) ADD_FAILURE_AT(file, line) << "CHECK(" << expression << ") failed";
     return ok;
 }
 
-extern "C" void iosw_test_fail(const char *file, int line, const char *format, ...)
+extern "C" void switch_test_fail(const char *file, int line, const char *format, ...)
 {
     char text[1024];
     va_list ap;

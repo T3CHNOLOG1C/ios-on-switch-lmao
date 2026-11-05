@@ -95,7 +95,7 @@ if test "${probe_status}" = "READY"; then
     echoe "SWITCH V3 STAGE 6: BEFORE CPU PROBE"
     if go 0xA0000000; then
         echoe "SWITCH V3 STAGE 7: CPU PROBE RETURNED ZERO"
-        if itest.l *0xA0000200 == 0x57534f49 && itest.l *0xA0000204 == 0x31425250 && itest.l *0xA0000208 == 1 && itest.l *0xA0000210 == 0x100; then
+        if itest.l *0xA0000200 == 0x48435753 && itest.l *0xA0000204 == 0x31425250 && itest.l *0xA0000208 == 1 && itest.l *0xA0000210 == 0x100; then
             setenv probe_status COMPLETE
         else
             setenv probe_status RESULT_MARKER_FAILED

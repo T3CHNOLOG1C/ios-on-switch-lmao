@@ -11,10 +11,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// The key labels' first eight bytes, as every keybag and wrapped class key already on a card was derived with them (the
-// project's former name): other bytes here are another device key, and every protected file on that Data volume is lost.
-#define AKS_LABEL_DOMAIN "\x49\x4f\x53\x77\x69\x74\x63\x68"
-
 namespace aks {
 
 // The AppleKeyStore answers the callers tell apart (securityd 21H461 ks_crypt at 0x100014aa8: e00002bc and the e007xxxx range ->
@@ -142,7 +138,7 @@ inline void hmacSha256(Sha256Parts sha256, const uint8_t *key, size_t keyLength,
 inline void classKey(Sha256Parts sha256, const uint8_t deviceKey[32], uint32_t keybag, uint32_t keyClass,
                      uint8_t kek[32])
 {
-    static const char label[] = AKS_LABEL_DOMAIN " AppleKeyStore class key v1";
+    static const char label[] = "Switch AppleKeyStore class key v2";
     const uint8_t ids[8] = {static_cast<uint8_t>(keybag >> 24),   static_cast<uint8_t>(keybag >> 16),
                             static_cast<uint8_t>(keybag >> 8),    static_cast<uint8_t>(keybag),
                             static_cast<uint8_t>(keyClass >> 24), static_cast<uint8_t>(keyClass >> 16),

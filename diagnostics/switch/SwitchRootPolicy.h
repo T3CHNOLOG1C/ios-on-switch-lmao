@@ -7,12 +7,12 @@ extern "C" {
 /* The loader publishes both descriptors together only after exact role/size/
  * image identity, signature and complete table authentication, with envelope
  * and descriptor memory permanently read-only. No untrusted key is accepted. */
-struct iosw_root_policy {
+struct switch_root_policy {
     struct vr_view view;
     const uint8_t *envelope;
     uint64_t envelope_bytes;
 };
-const struct iosw_root_policy *switch_root_policy_get(unsigned disk);
+const struct switch_root_policy *switch_root_policy_get(unsigned disk);
 /* The block owner calls this after releasing its gate, at most each MiB of
  * successful verified requests or on an error. It may render diagnostic state. */
 void switch_root_io_progress(uint64_t verified_bytes, unsigned error);

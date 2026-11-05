@@ -21,26 +21,26 @@ static int same(const uint8_t *a, const uint8_t *b, uint32_t n) {
     for (uint32_t i=0;i<n;i++) if (a[i]!=b[i]) return 0;
     return 1;
 }
-static int cluster_valid(const struct iosw_fat_volume *v, uint32_t c) {
+static int cluster_valid(const struct switch_fat_volume *v, uint32_t c) {
     return c>=2 && c-2<v->cluster_count && c<0x0ffffff0u;
 }
-static int sector(struct iosw_fat_volume *v, uint64_t lba, uint8_t out[512],
+static int sector(struct switch_fat_volume *v, uint64_t lba, uint8_t out[512],
                   struct budget *b) {
-    if (lba>=v->capacity_sectors) return IOSW_FAT_RANGE;
+    if (lba>=v->capacity_sectors) return SWITCH_FAT_RANGE;
     if (v->mounted && (lba<v->partition_start ||
-        lba-v->partition_start>=v->total_sectors)) return IOSW_FAT_RANGE;
-    if (!b->io) return IOSW_FAT_LIMIT;
+        lba-v->partition_start>=v->total_sectors)) return SWITCH_FAT_RANGE;
+    if (!b->io) return SWITCH_FAT_LIMIT;
     b->io--;
-    return v->read512(v->context,lba,out) ? IOSW_FAT_IO : IOSW_FAT_OK;
+    return v->read512(v->context,lba,out) ? SWITCH_FAT_IO : SWITCH_FAT_OK;
 }
-static int fat_entry(struct iosw_fat_volume *v, uint32_t cluster,
+static int fat_entry(struct switch_fat_volume *v, uint32_t cluster,
                      uint32_t *value, struct budget *b) {
-    if (!cluster_valid(v,cluster)) return IOSW_FAT_CHAIN;
-    if (!b->links) return IOSW_FAT_LIMIT;
+    if (!cluster_valid(v,cluster)) return SWITCH_FAT_CHAIN;
+    if (!b->links) return SWITCH_FAT_LIMIT;
     b->links--;
     uint64_t index=(uint64_t)cluster*4/512;
     uint32_t byte=(cluster*4u)%512;
-    if (index>=v->fat_sectors) return IOSW_FAT_RANGE;
+    if (index>=v->fat_sectors) return SWITCH_FAT_RANGE;
     if (!v->cache_valid || v->cache_sector!=index) {
         v->cache_valid=0;
         int rc=sector(v,v->fat_start+(uint64_t)v->active_fat*v->fat_sectors+index,
@@ -55,52 +55,52 @@ static int fat_entry(struct iosw_fat_volume *v, uint32_t cluster,
     }
     uint32_t next=le32(v->cache[0]+byte)&0x0fffffffu;
     if (v->mirrored && v->fat_count==2 &&
-        next!=(le32(v->cache[1]+byte)&0x0fffffffu)) return IOSW_FAT_MIRROR;
-    if (next>=0x0ffffff8u) { *value=0; return IOSW_FAT_OK; }
-    if (!cluster_valid(v,next)) return IOSW_FAT_CHAIN;
+        next!=(le32(v->cache[1]+byte)&0x0fffffffu)) return SWITCH_FAT_MIRROR;
+    if (next>=0x0ffffff8u) { *value=0; return SWITCH_FAT_OK; }
+    if (!cluster_valid(v,next)) return SWITCH_FAT_CHAIN;
     *value=next;
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }
 static struct chain chain_start(uint32_t c) {
     struct chain s={c,c,1,0}; return s;
 }
 /* Brent's cycle detector needs constant memory; budget also bounds every walk. */
-static int chain_next(struct iosw_fat_volume *v, struct chain *s,
+static int chain_next(struct switch_fat_volume *v, struct chain *s,
                       struct budget *b) {
     uint32_t next;
     int rc=fat_entry(v,s->cluster,&next,b);
     if (rc) return rc;
-    if (!next) { s->cluster=0; return IOSW_FAT_OK; }
+    if (!next) { s->cluster=0; return SWITCH_FAT_OK; }
     s->distance++;
-    if (next==s->anchor) return IOSW_FAT_CHAIN;
+    if (next==s->anchor) return SWITCH_FAT_CHAIN;
     if (s->distance==s->power) {
         s->anchor=next;
         s->distance=0;
         s->power*=2;
     }
     s->cluster=next;
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }
-static uint64_t cluster_sector(const struct iosw_fat_volume *v, uint32_t c) {
+static uint64_t cluster_sector(const struct switch_fat_volume *v, uint32_t c) {
     return v->data_start+(uint64_t)(c-2)*v->sectors_per_cluster;
 }
 
-static int begin_mount(struct iosw_fat_volume *v, iosw_fat_read512 read512,
+static int begin_mount(struct switch_fat_volume *v, switch_fat_read512 read512,
                         void *context, uint64_t capacity) {
-    if (!v) return IOSW_FAT_ARGUMENT;
+    if (!v) return SWITCH_FAT_ARGUMENT;
     v->mounted=0;
     v->cache_valid=0;
     v->generation++;
     if (!v->generation) v->generation=1;
-    if (!read512 || !capacity) return IOSW_FAT_ARGUMENT;
+    if (!read512 || !capacity) return SWITCH_FAT_ARGUMENT;
     v->read512=read512; v->context=context; v->capacity_sectors=capacity;
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }
-static int mount_bpb(struct iosw_fat_volume *v, uint64_t first, uint64_t count,
+static int mount_bpb(struct switch_fat_volume *v, uint64_t first, uint64_t count,
                       struct budget *b) {
     if (!first || !count || first>=v->capacity_sectors ||
         count>v->capacity_sectors-first)
-        return IOSW_FAT_RANGE;
+        return SWITCH_FAT_RANGE;
     v->partition_start=first; v->partition_sectors=count;
     uint8_t buf[512];
     int rc=sector(v,first,buf,b);
@@ -112,47 +112,47 @@ static int mount_bpb(struct iosw_fat_volume *v, uint64_t first, uint64_t count,
         !spc || spc>128 || (spc&(spc-1)) || !reserved ||
         !fats || fats>2 || le16(buf+17) || le16(buf+19) || le16(buf+22) ||
         !fat_size || !total || le16(buf+42) || (flags&0xff70u))
-        return IOSW_FAT_FORMAT;
+        return SWITCH_FAT_FORMAT;
     uint64_t overhead=(uint64_t)reserved+(uint64_t)fats*fat_size;
-    if (total>count || overhead>=total) return IOSW_FAT_RANGE;
+    if (total>count || overhead>=total) return SWITCH_FAT_RANGE;
     uint64_t clusters=((uint64_t)total-overhead)/spc;
     if (clusters<65525 || clusters>0x0fffffeeu ||
-        (uint64_t)fat_size*128<clusters+2) return IOSW_FAT_FORMAT;
+        (uint64_t)fat_size*128<clusters+2) return SWITCH_FAT_FORMAT;
     uint32_t mirrored=(flags&0x80u)==0;
     uint32_t active=mirrored?0:flags&15;
-    if (active>=fats) return IOSW_FAT_FORMAT;
+    if (active>=fats) return SWITCH_FAT_FORMAT;
     v->fat_start=first+reserved; v->data_start=first+overhead;
     v->total_sectors=total; v->fat_sectors=fat_size;
     v->cluster_count=(uint32_t)clusters; v->root_cluster=root;
     v->sectors_per_cluster=spc; v->fat_count=fats;
     v->active_fat=active; v->mirrored=mirrored;
-    if (!cluster_valid(v,root)) return IOSW_FAT_FORMAT;
+    if (!cluster_valid(v,root)) return SWITCH_FAT_FORMAT;
     v->mounted=1;
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }
 
-int iosw_fat_mount(struct iosw_fat_volume *v, iosw_fat_read512 read512,
+int switch_fat_mount(struct switch_fat_volume *v, switch_fat_read512 read512,
                    void *context, uint64_t capacity, uint32_t partition_index) {
     int rc=begin_mount(v,read512,context,capacity);
     if (rc) return rc;
-    if (partition_index>=4) return IOSW_FAT_ARGUMENT;
-    struct budget b={IOSW_FAT_MAX_IO,IOSW_FAT_MAX_CHAIN};
+    if (partition_index>=4) return SWITCH_FAT_ARGUMENT;
+    struct budget b={SWITCH_FAT_MAX_IO,SWITCH_FAT_MAX_CHAIN};
     uint8_t buf[512];
     rc=sector(v,0,buf,&b);
     if (rc) return rc;
-    if (buf[510]!=0x55 || buf[511]!=0xaa) return IOSW_FAT_FORMAT;
+    if (buf[510]!=0x55 || buf[511]!=0xaa) return SWITCH_FAT_FORMAT;
     const uint8_t *p=buf+446+partition_index*16;
     if ((p[0]!=0 && p[0]!=0x80) || (p[4]!=0x0b && p[4]!=0x0c))
-        return IOSW_FAT_FORMAT;
+        return SWITCH_FAT_FORMAT;
     return mount_bpb(v,le32(p+8),le32(p+12),&b);
 }
 
-int iosw_fat_mount_slice(struct iosw_fat_volume *v, iosw_fat_read512 read512,
+int switch_fat_mount_slice(struct switch_fat_volume *v, switch_fat_read512 read512,
                          void *context, uint64_t capacity, uint64_t first,
                          uint64_t count) {
     int rc=begin_mount(v,read512,context,capacity);
     if (rc) return rc;
-    struct budget b={IOSW_FAT_MAX_IO,IOSW_FAT_MAX_CHAIN};
+    struct budget b={SWITCH_FAT_MAX_IO,SWITCH_FAT_MAX_CHAIN};
     return mount_bpb(v,first,count,&b);
 }
 
@@ -160,43 +160,43 @@ static int name_char(uint8_t c) {
     /* The packager's portable subset; no DOS aliases, separators or wildcards. */
     return (c>='A' && c<='Z') || (c>='0' && c<='9') || c=='_' || c=='-';
 }
-static int parse_path(const char *path, uint8_t names[IOSW_FAT_MAX_DEPTH][11],
+static int parse_path(const char *path, uint8_t names[SWITCH_FAT_MAX_DEPTH][11],
                       uint32_t *depth) {
-    if (!path) return IOSW_FAT_ARGUMENT;
+    if (!path) return SWITCH_FAT_ARGUMENT;
     uint32_t length=0;
-    while (length<=IOSW_FAT_MAX_PATH && path[length]) length++;
-    if (!length || length>IOSW_FAT_MAX_PATH) return IOSW_FAT_ARGUMENT;
+    while (length<=SWITCH_FAT_MAX_PATH && path[length]) length++;
+    if (!length || length>SWITCH_FAT_MAX_PATH) return SWITCH_FAT_ARGUMENT;
     uint32_t i=path[0]=='/'?1:0, n=0;
     while (i<length) {
-        if (n==IOSW_FAT_MAX_DEPTH) return IOSW_FAT_LIMIT;
+        if (n==SWITCH_FAT_MAX_DEPTH) return SWITCH_FAT_LIMIT;
         for (uint32_t j=0;j<11;j++) names[n][j]=' ';
         uint32_t base=0,ext=0,dot=0;
         while (i<length && path[i]!='/') {
             uint8_t c=(uint8_t)path[i++];
             if (c=='.') {
-                if (!base || dot) return IOSW_FAT_ARGUMENT;
+                if (!base || dot) return SWITCH_FAT_ARGUMENT;
                 dot=1; continue;
             }
             if (c>='a' && c<='z') c=(uint8_t)(c-'a'+'A');
-            if (!name_char(c)) return IOSW_FAT_ARGUMENT;
+            if (!name_char(c)) return SWITCH_FAT_ARGUMENT;
             if (!dot) {
-                if (base==8) return IOSW_FAT_ARGUMENT;
+                if (base==8) return SWITCH_FAT_ARGUMENT;
                 names[n][base++]=c;
             } else {
-                if (ext==3) return IOSW_FAT_ARGUMENT;
+                if (ext==3) return SWITCH_FAT_ARGUMENT;
                 names[n][8+ext++]=c;
             }
         }
-        if (!base || (dot && !ext)) return IOSW_FAT_ARGUMENT;
+        if (!base || (dot && !ext)) return SWITCH_FAT_ARGUMENT;
         n++;
-        if (i<length && ++i==length) return IOSW_FAT_ARGUMENT;
+        if (i<length && ++i==length) return SWITCH_FAT_ARGUMENT;
     }
-    if (!n) return IOSW_FAT_ARGUMENT;
-    *depth=n; return IOSW_FAT_OK;
+    if (!n) return SWITCH_FAT_ARGUMENT;
+    *depth=n; return SWITCH_FAT_OK;
 }
-static int lookup(struct iosw_fat_volume *v, uint32_t first,
+static int lookup(struct switch_fat_volume *v, uint32_t first,
                    const uint8_t name[11], uint8_t entry[32], struct budget *b) {
-    if (!cluster_valid(v,first)) return IOSW_FAT_CHAIN;
+    if (!cluster_valid(v,first)) return SWITCH_FAT_CHAIN;
     struct chain s=chain_start(first);
     uint32_t sectors=0;
     uint8_t buf[512];
@@ -206,51 +206,51 @@ static int lookup(struct iosw_fat_volume *v, uint32_t first,
         int rc=chain_next(v,&next,b);
         if (rc) return rc;
         for (uint32_t n=0;n<v->sectors_per_cluster;n++) {
-            if (sectors++==IOSW_FAT_MAX_DIR_SECTORS) return IOSW_FAT_LIMIT;
+            if (sectors++==SWITCH_FAT_MAX_DIR_SECTORS) return SWITCH_FAT_LIMIT;
             rc=sector(v,cluster_sector(v,s.cluster)+n,buf,b);
             if (rc) return rc;
             for (uint32_t i=0;i<512;i+=32) {
                 const uint8_t *p=buf+i;
-                if (!p[0]) return IOSW_FAT_NOT_FOUND;
+                if (!p[0]) return SWITCH_FAT_NOT_FOUND;
                 if (p[0]==0xe5 || (p[11]&0x3f)==0x0f || (p[11]&8)) continue;
                 if (same(p,name,11)) {
-                    copy_bytes(entry,p,32); return IOSW_FAT_OK;
+                    copy_bytes(entry,p,32); return SWITCH_FAT_OK;
                 }
             }
         }
         s=next;
     }
-    return IOSW_FAT_NOT_FOUND;
+    return SWITCH_FAT_NOT_FOUND;
 }
 
-int iosw_fat_index_count(const struct iosw_fat_volume *v, uint32_t size,
+int switch_fat_index_count(const struct switch_fat_volume *v, uint32_t size,
                          uint32_t *entries) {
-    if (!entries) return IOSW_FAT_ARGUMENT;
+    if (!entries) return SWITCH_FAT_ARGUMENT;
     *entries=0;
     if (!v || !v->mounted || !v->sectors_per_cluster ||
         v->sectors_per_cluster>128 ||
         (v->sectors_per_cluster&(v->sectors_per_cluster-1)))
-        return IOSW_FAT_ARGUMENT;
+        return SWITCH_FAT_ARGUMENT;
     uint32_t bytes=v->sectors_per_cluster*512u;
     uint32_t count=(uint32_t)(((uint64_t)size+bytes-1)/bytes);
-    if (count>v->cluster_count || count>IOSW_FAT_MAX_CHAIN)
-        return IOSW_FAT_LIMIT;
+    if (count>v->cluster_count || count>SWITCH_FAT_MAX_CHAIN)
+        return SWITCH_FAT_LIMIT;
     *entries=count;
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }
 
-static int open_file(struct iosw_fat_volume *v, const char *path,
-                      struct iosw_fat_file *file, uint32_t *map,
+static int open_file(struct switch_fat_volume *v, const char *path,
+                      struct switch_fat_file *file, uint32_t *map,
                       uint32_t capacity, int indexed) {
-    if (!file) return IOSW_FAT_ARGUMENT;
+    if (!file) return SWITCH_FAT_ARGUMENT;
     file->volume=0;
-    if (!v || !v->mounted) return IOSW_FAT_ARGUMENT;
-    if (indexed && !map && capacity) return IOSW_FAT_ARGUMENT;
-    uint8_t names[IOSW_FAT_MAX_DEPTH][11], entry[32];
+    if (!v || !v->mounted) return SWITCH_FAT_ARGUMENT;
+    if (indexed && !map && capacity) return SWITCH_FAT_ARGUMENT;
+    uint8_t names[SWITCH_FAT_MAX_DEPTH][11], entry[32];
     uint32_t depth=0;
     int rc=parse_path(path,names,&depth);
     if (rc) return rc;
-    struct budget b={IOSW_FAT_MAX_IO,IOSW_FAT_MAX_CHAIN};
+    struct budget b={SWITCH_FAT_MAX_IO,SWITCH_FAT_MAX_CHAIN};
     uint32_t first=v->root_cluster, size=0;
     for (uint32_t i=0;i<depth;i++) {
         rc=lookup(v,first,names[i],entry,&b);
@@ -258,66 +258,66 @@ static int open_file(struct iosw_fat_volume *v, const char *path,
         first=(le16(entry+20)<<16)|le16(entry+26);
         size=le32(entry+28);
         if (i+1<depth) {
-            if (!(entry[11]&0x10) || size) return IOSW_FAT_NOT_FILE;
-            if (!cluster_valid(v,first)) return IOSW_FAT_CHAIN;
-        } else if (entry[11]&0x10) return IOSW_FAT_NOT_FILE;
+            if (!(entry[11]&0x10) || size) return SWITCH_FAT_NOT_FILE;
+            if (!cluster_valid(v,first)) return SWITCH_FAT_CHAIN;
+        } else if (entry[11]&0x10) return SWITCH_FAT_NOT_FILE;
     }
     uint32_t clusters;
-    rc=iosw_fat_index_count(v,size,&clusters);
+    rc=switch_fat_index_count(v,size,&clusters);
     if (rc) return rc;
-    if (indexed && clusters>capacity) return IOSW_FAT_LIMIT;
+    if (indexed && clusters>capacity) return SWITCH_FAT_LIMIT;
     if (!size) {
-        if (first) return IOSW_FAT_CHAIN;
+        if (first) return SWITCH_FAT_CHAIN;
     } else {
-        if (!cluster_valid(v,first)) return IOSW_FAT_CHAIN;
+        if (!cluster_valid(v,first)) return SWITCH_FAT_CHAIN;
         struct chain s=chain_start(first);
         for (uint32_t n=0;n<clusters;n++) {
-            if (!s.cluster) return IOSW_FAT_CHAIN;
+            if (!s.cluster) return SWITCH_FAT_CHAIN;
             if (indexed) map[n]=s.cluster;
             rc=chain_next(v,&s,&b);
             if (rc) return rc;
         }
-        if (s.cluster) return IOSW_FAT_CHAIN;
+        if (s.cluster) return SWITCH_FAT_CHAIN;
     }
     file->volume=v; file->generation=v->generation;
     file->first_cluster=first; file->size=size; file->clusters=clusters;
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }
 
-int iosw_fat_open(struct iosw_fat_volume *v, const char *path,
-                  struct iosw_fat_file *file) {
+int switch_fat_open(struct switch_fat_volume *v, const char *path,
+                  struct switch_fat_file *file) {
     return open_file(v,path,file,0,0,0);
 }
 
-int iosw_fat_open_indexed(struct iosw_fat_volume *v, const char *path,
-                          struct iosw_fat_indexed_file *file, uint32_t *map,
+int switch_fat_open_indexed(struct switch_fat_volume *v, const char *path,
+                          struct switch_fat_indexed_file *file, uint32_t *map,
                           uint32_t capacity) {
-    if (!file) return IOSW_FAT_ARGUMENT;
-    *file=(struct iosw_fat_indexed_file){0};
+    if (!file) return SWITCH_FAT_ARGUMENT;
+    *file=(struct switch_fat_indexed_file){0};
     int rc=open_file(v,path,&file->file,map,capacity,1);
     if (rc) return rc;
     file->clusters=map;
     file->count=file->file.clusters;
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }
 
-int iosw_fat_read(struct iosw_fat_volume *v, const struct iosw_fat_file *file,
+int switch_fat_read(struct switch_fat_volume *v, const struct switch_fat_file *file,
                   uint64_t offset, void *output, uint32_t length) {
     if (!v || !v->mounted || !file || file->volume!=v ||
         file->generation!=v->generation || (!output && length))
-        return IOSW_FAT_ARGUMENT;
+        return SWITCH_FAT_ARGUMENT;
     if (offset>file->size || length>(uint64_t)file->size-offset)
-        return IOSW_FAT_RANGE;
-    if (!length) return IOSW_FAT_OK;
-    if (!cluster_valid(v,file->first_cluster)) return IOSW_FAT_CHAIN;
-    struct budget b={IOSW_FAT_MAX_IO,IOSW_FAT_MAX_CHAIN};
+        return SWITCH_FAT_RANGE;
+    if (!length) return SWITCH_FAT_OK;
+    if (!cluster_valid(v,file->first_cluster)) return SWITCH_FAT_CHAIN;
+    struct budget b={SWITCH_FAT_MAX_IO,SWITCH_FAT_MAX_CHAIN};
     struct chain s=chain_start(file->first_cluster);
     uint32_t bytes=v->sectors_per_cluster*512u;
     uint32_t skip=(uint32_t)(offset/bytes), within=(uint32_t)(offset%bytes);
     for (uint32_t n=0;n<skip;n++) {
         int rc=chain_next(v,&s,&b);
         if (rc) return rc;
-        if (!s.cluster) return IOSW_FAT_CHAIN;
+        if (!s.cluster) return SWITCH_FAT_CHAIN;
     }
     uint8_t buf[512], *dest=output;
     while (length) {
@@ -331,31 +331,31 @@ int iosw_fat_read(struct iosw_fat_volume *v, const struct iosw_fat_file *file,
         if (length && within==bytes) {
             rc=chain_next(v,&s,&b);
             if (rc) return rc;
-            if (!s.cluster) return IOSW_FAT_CHAIN;
+            if (!s.cluster) return SWITCH_FAT_CHAIN;
             within=0;
         }
     }
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }
 
-int iosw_fat_read_indexed(struct iosw_fat_volume *v,
-                          const struct iosw_fat_indexed_file *indexed,
+int switch_fat_read_indexed(struct switch_fat_volume *v,
+                          const struct switch_fat_indexed_file *indexed,
                           uint64_t offset, void *output, uint32_t length) {
     if (!v || !v->mounted || !indexed || indexed->file.volume!=v ||
         indexed->file.generation!=v->generation || (!output && length) ||
         indexed->count!=indexed->file.clusters ||
-        (indexed->count && !indexed->clusters)) return IOSW_FAT_ARGUMENT;
-    const struct iosw_fat_file *file=&indexed->file;
+        (indexed->count && !indexed->clusters)) return SWITCH_FAT_ARGUMENT;
+    const struct switch_fat_file *file=&indexed->file;
     if (offset>file->size || length>(uint64_t)file->size-offset)
-        return IOSW_FAT_RANGE;
-    if (!length) return IOSW_FAT_OK;
+        return SWITCH_FAT_RANGE;
+    if (!length) return SWITCH_FAT_OK;
     uint32_t bytes=v->sectors_per_cluster*512u;
     uint32_t at=(uint32_t)(offset/bytes), within=(uint32_t)(offset%bytes);
-    struct budget b={IOSW_FAT_MAX_IO,IOSW_FAT_MAX_CHAIN};
+    struct budget b={SWITCH_FAT_MAX_IO,SWITCH_FAT_MAX_CHAIN};
     uint8_t buf[512], *dest=output;
     while (length) {
         if (at>=indexed->count || !cluster_valid(v,indexed->clusters[at]))
-            return IOSW_FAT_CHAIN;
+            return SWITCH_FAT_CHAIN;
         uint32_t sector_index=within/512, byte=within%512;
         uint32_t n=512-byte;
         if (n>length) n=length;
@@ -366,5 +366,5 @@ int iosw_fat_read_indexed(struct iosw_fat_volume *v,
         dest+=n; length-=n; within+=n;
         if (length && within==bytes) {at++; within=0;}
     }
-    return IOSW_FAT_OK;
+    return SWITCH_FAT_OK;
 }

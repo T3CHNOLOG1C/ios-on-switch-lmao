@@ -7,7 +7,7 @@ Guard rails (every command):
   * it must look like a Switch card: valid primary and backup GPT, entry #0 "hos_data" a Microsoft basic data (FAT32)
     partition that the hybrid MBR also lists;
   * the target is exactly one entry whose partition GUID is the card's userdata GUID or whose name is userdata, UDA or
-    iOS, exactly the kernel's IOSW_RAW_BYTES (32 GiB), Linux-data or APFS typed, not the FAT, not emuMMC;
+    iOS, exactly the kernel's SWITCH_RAW_BYTES (32 GiB), Linux-data or APFS typed, not the FAT, not emuMMC;
   * no other APFS-typed entry on the card (the kernel takes the only one).
 Writes on the FAT go only to switchroot/ios/* and bootloader/ini/ios.ini (by name), and remove a copy of this boot
 entry under the project's former names (renamed.py); on the iPad volumes only to the paths the caller names.
@@ -116,7 +116,7 @@ def check_layout(card, spec):
     if target.index == first.index or target.type == gpt.EMUMMC:
         raise Refused("{}: the target {} is the FAT or emuMMC".format(card.disk, target.describe()))
     if target.sectors != spec["partition_sectors"]:
-        raise Refused("{}: {} is {} bytes; the kernel requires exactly {} (IOSW_RAW_BYTES)".format(
+        raise Refused("{}: {} is {} bytes; the kernel requires exactly {} (SWITCH_RAW_BYTES)".format(
             card.disk, target.describe(), target.bytes, spec["partition_bytes"]))
     if target.type not in (gpt.LINUX_DATA, gpt.APFS):
         raise Refused("{}: {} is neither Linux data nor APFS".format(card.disk, target.describe()))

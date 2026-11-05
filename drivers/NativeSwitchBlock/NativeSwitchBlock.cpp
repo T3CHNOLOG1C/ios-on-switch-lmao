@@ -3736,7 +3736,7 @@ extern "C" void switch_block_resume(void)
 extern "C" int switch_block_publish(void)
 {
     if (gPublishStatus >= 0) return gPublishStatus;
-    gPublishStatus = IOSW_BLOCK_NOT_READY;
+    gPublishStatus = SWITCH_BLOCK_NOT_READY;
     IOService *resources = IOService::getResourceService();
     auto *owner = OSTypeAlloc(NativeSwitchBlock);
     if (!owner || !owner->init() || !owner->attach(resources) || !owner->start(resources) || !owner->setup()) {
@@ -3753,7 +3753,7 @@ extern "C" int switch_block_publish(void)
     gOwner = owner;
     device->registerService();
     device->release();
-    gPublishStatus = IOSW_BLOCK_OK;
+    gPublishStatus = SWITCH_BLOCK_OK;
     return gPublishStatus;
 }
 
@@ -3800,7 +3800,7 @@ int findVolume(const char *uuid, dev_t *device, char *path, size_t capacity)
 {
     *device = NODEV;
     if (path && capacity) path[0] = 0;
-    if (!gOwner || !gOwner->device) return IOSW_BLOCK_NOT_READY;
+    if (!gOwner || !gOwner->device) return SWITCH_BLOCK_NOT_READY;
     OSDictionary *match = IOService::serviceMatching("IOMedia");
     OSDictionary *properties = OSDictionary::withCapacity(1);
     OSString *wanted = OSString::withCString(uuid);
@@ -3808,7 +3808,7 @@ int findVolume(const char *uuid, dev_t *device, char *path, size_t capacity)
         OSSafeReleaseNULL(match);
         OSSafeReleaseNULL(properties);
         OSSafeReleaseNULL(wanted);
-        return IOSW_BLOCK_NOMEM;
+        return SWITCH_BLOCK_NOMEM;
     }
     properties->setObject("UUID", wanted);
     match->setObject(gIOPropertyMatchKey, properties);
@@ -3816,8 +3816,8 @@ int findVolume(const char *uuid, dev_t *device, char *path, size_t capacity)
     match->release();
     properties->release();
     wanted->release();
-    if (!it) return IOSW_BLOCK_NOT_READY;
-    int status = IOSW_BLOCK_NOT_READY;
+    if (!it) return SWITCH_BLOCK_NOT_READY;
+    int status = SWITCH_BLOCK_NOT_READY;
     while (auto *media = OSDynamicCast(IOService, it->getNextObject())) {
         bool ours = false;
         IORegistryEntry *entry = media->copyParentEntry(gIOServicePlane);
@@ -3835,7 +3835,7 @@ int findVolume(const char *uuid, dev_t *device, char *path, size_t capacity)
         if (!name || !majorNumber || !minorNumber) continue;  // BSD client not attached yet
         *device = makedev(majorNumber->unsigned32BitValue(), minorNumber->unsigned32BitValue());
         if (path && capacity) snprintf(path, capacity, "/dev/%s", name->getCStringNoCopy());
-        status = IOSW_BLOCK_OK;
+        status = SWITCH_BLOCK_OK;
         break;
     }
     it->release();
@@ -3883,7 +3883,7 @@ bool ownsDevice(dev_t device, const char *uuid)
 
 extern "C" int switch_raw_volume_status(const char *uuid, dev_t *device, char *path, size_t capacity, uint64_t *bytes)
 {
-    if (!uuid || !device || !path || !bytes || capacity < 6) return IOSW_BLOCK_INVALID;
+    if (!uuid || !device || !path || !bytes || capacity < 6) return SWITCH_BLOCK_INVALID;
     *bytes = 0;
     int status = findVolume(uuid, device, path, capacity);
     if (!status) *bytes = gOwner->sectorCount * kSector;
@@ -3899,7 +3899,7 @@ extern "C" int native_verified_block_volume_device(const char *uuid, dev_t *devi
         path[0] = 0;
         return 0;
     }
-    return findVolume(uuid, device, path, capacity) == IOSW_BLOCK_OK;
+    return findVolume(uuid, device, path, capacity) == SWITCH_BLOCK_OK;
 }
 
 extern "C" int native_verified_block_root_authorized(dev_t device)
@@ -3981,14 +3981,14 @@ extern "C" int switch_data_volume_status(const char *, dev_t *device, char *path
     if (device) *device = NODEV;
     if (path && capacity) path[0] = 0;
     if (bytes) *bytes = 0;
-    return IOSW_BLOCK_INVALID;
+    return SWITCH_BLOCK_INVALID;
 }
 extern "C" int switch_data_volume_path(const char *uuid, dev_t *device, char *path, size_t capacity, uint64_t *bytes)
 {
-    return switch_data_volume_status(uuid, device, path, capacity, bytes) == IOSW_BLOCK_OK;
+    return switch_data_volume_status(uuid, device, path, capacity, bytes) == SWITCH_BLOCK_OK;
 }
 extern "C" int switch_block_volume_path(unsigned, char *path, unsigned capacity)
 {
     if (path && capacity) path[0] = 0;
-    return IOSW_BLOCK_NOT_READY;
+    return SWITCH_BLOCK_NOT_READY;
 }

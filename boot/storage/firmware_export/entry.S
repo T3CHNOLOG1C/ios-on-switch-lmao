@@ -12,7 +12,7 @@ _start:
     adr x10, stack_top
     mov sp, x10
     mov x0, x18
-    bl iosw_fw_native
+    bl switch_fw_native
     adr x9, saved_caller
     ldp x10, x30, [x9]
     ldr x18, [x9, #16]

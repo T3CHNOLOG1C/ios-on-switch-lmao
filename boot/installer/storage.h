@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
-#ifndef IOSW_INSTALL_STORAGE_H
-#define IOSW_INSTALL_STORAGE_H
+#ifndef SWITCH_INSTALL_STORAGE_H
+#define SWITCH_INSTALL_STORAGE_H
 #include <stdint.h>
 int installer_card_bind(void);
 int installer_card_ready(void *);

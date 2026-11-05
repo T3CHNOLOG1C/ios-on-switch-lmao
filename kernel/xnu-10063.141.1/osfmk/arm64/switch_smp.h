@@ -5,43 +5,43 @@
  * The boot CPU owns control[0..63]; each secondary exclusively owns status[64..127].
  * Before CPU_ON publish both lines to PoC. After CPU_ON the boot CPU must never
  * dirty the status line; poll it with invalidate + acquire, not a cached load. */
-#define IOSW_SMP_CORE_COUNT 4
-#define IOSW_SMP_RECORD_BYTES 128
-#define IOSW_SMP_STATUS_OFFSET 64
-#define IOSW_SMP_MAGIC 0x495357534d503031
-#define IOSW_SMP_STAGE_CLEAR 0
-#define IOSW_SMP_STAGE_ENTRY 1
-#define IOSW_SMP_STAGE_EL1 2
-#define IOSW_SMP_STAGE_RESET 3
-#define IOSW_SMP_STAGE_MMU 4
-#define IOSW_SMP_STAGE_C 5
-#define IOSW_SMP_STAGE_FAILED 255
-#define IOSW_SMP_ERROR_CONTROL 1
-#define IOSW_SMP_ERROR_EL 2
-#define IOSW_SMP_ERROR_MPIDR 3
-#define IOSW_SMP_ERROR_SCTLR 4
-#define IOSW_SMP_ERROR_MIDR 5
-#define IOSW_SMP_ERROR_SMPEN 6
-#define IOSW_SMP_ERROR_FREQUENCY 7
-#define IOSW_SMP_ERROR_CNTVOFF 8
-#define IOSW_SMP_ERROR_RESET 9
-#define IOSW_SMP_ERROR_EXCEPTION 256
-#define IOSW_SMP_MAGIC_OFF 0
-#define IOSW_SMP_MPIDR_OFF 8
-#define IOSW_SMP_LOGICAL_OFF 16
-#define IOSW_SMP_CNTFRQ_OFF 24
-#define IOSW_SMP_CNTVOFF_OFF 32
-#define IOSW_SMP_RESET_OFF 40
-#define IOSW_SMP_RESERVED0_OFF 48
-#define IOSW_SMP_RESERVED1_OFF 56
-#define IOSW_SMP_STAGE_OFF 64
-#define IOSW_SMP_ERROR_OFF 72
-#define IOSW_SMP_SEEN_MPIDR_OFF 80
-#define IOSW_SMP_ENTRY_EL_OFF 88
-#define IOSW_SMP_ESR_OFF 96
-#define IOSW_SMP_ELR_OFF 104
-#define IOSW_SMP_FAR_OFF 112
-#define IOSW_SMP_SCTLR_OFF 120
+#define SWITCH_SMP_CORE_COUNT 4
+#define SWITCH_SMP_RECORD_BYTES 128
+#define SWITCH_SMP_STATUS_OFFSET 64
+#define SWITCH_SMP_MAGIC 0x495357534d503031
+#define SWITCH_SMP_STAGE_CLEAR 0
+#define SWITCH_SMP_STAGE_ENTRY 1
+#define SWITCH_SMP_STAGE_EL1 2
+#define SWITCH_SMP_STAGE_RESET 3
+#define SWITCH_SMP_STAGE_MMU 4
+#define SWITCH_SMP_STAGE_C 5
+#define SWITCH_SMP_STAGE_FAILED 255
+#define SWITCH_SMP_ERROR_CONTROL 1
+#define SWITCH_SMP_ERROR_EL 2
+#define SWITCH_SMP_ERROR_MPIDR 3
+#define SWITCH_SMP_ERROR_SCTLR 4
+#define SWITCH_SMP_ERROR_MIDR 5
+#define SWITCH_SMP_ERROR_SMPEN 6
+#define SWITCH_SMP_ERROR_FREQUENCY 7
+#define SWITCH_SMP_ERROR_CNTVOFF 8
+#define SWITCH_SMP_ERROR_RESET 9
+#define SWITCH_SMP_ERROR_EXCEPTION 256
+#define SWITCH_SMP_MAGIC_OFF 0
+#define SWITCH_SMP_MPIDR_OFF 8
+#define SWITCH_SMP_LOGICAL_OFF 16
+#define SWITCH_SMP_CNTFRQ_OFF 24
+#define SWITCH_SMP_CNTVOFF_OFF 32
+#define SWITCH_SMP_RESET_OFF 40
+#define SWITCH_SMP_RESERVED0_OFF 48
+#define SWITCH_SMP_RESERVED1_OFF 56
+#define SWITCH_SMP_STAGE_OFF 64
+#define SWITCH_SMP_ERROR_OFF 72
+#define SWITCH_SMP_SEEN_MPIDR_OFF 80
+#define SWITCH_SMP_ENTRY_EL_OFF 88
+#define SWITCH_SMP_ESR_OFF 96
+#define SWITCH_SMP_ELR_OFF 104
+#define SWITCH_SMP_FAR_OFF 112
+#define SWITCH_SMP_SCTLR_OFF 120
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 #include <stddef.h>
@@ -50,14 +50,14 @@ struct switch_smp_record {
     volatile uint64_t stage, error, seen_mpidr, entry_el, esr, elr, far, sctlr;
 } __attribute__((aligned(64)));
 #ifdef __cplusplus
-static_assert(sizeof(switch_smp_record) == IOSW_SMP_RECORD_BYTES, "SMP record stride");
-static_assert(offsetof(switch_smp_record, stage) == IOSW_SMP_STATUS_OFFSET, "SMP status line");
+static_assert(sizeof(switch_smp_record) == SWITCH_SMP_RECORD_BYTES, "SMP record stride");
+static_assert(offsetof(switch_smp_record, stage) == SWITCH_SMP_STATUS_OFFSET, "SMP status line");
 extern "C" {
 #else
-_Static_assert(sizeof(struct switch_smp_record) == IOSW_SMP_RECORD_BYTES, "SMP record stride");
-_Static_assert(offsetof(struct switch_smp_record, stage) == IOSW_SMP_STATUS_OFFSET, "SMP status line");
+_Static_assert(sizeof(struct switch_smp_record) == SWITCH_SMP_RECORD_BYTES, "SMP record stride");
+_Static_assert(offsetof(struct switch_smp_record, stage) == SWITCH_SMP_STATUS_OFFSET, "SMP status line");
 #endif
-extern struct switch_smp_record switch_secondary_records[IOSW_SMP_CORE_COUNT];
+extern struct switch_smp_record switch_secondary_records[SWITCH_SMP_CORE_COUNT];
 extern char switch_secondary_records_end[];
 extern char switch_secondary_entry[];
 /* Called only after machine_set_current_thread on this secondary. Installs the

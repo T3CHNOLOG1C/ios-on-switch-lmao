@@ -2,15 +2,15 @@
 #ifndef SWITCH_WRITABLE_DATA_H
 #define SWITCH_WRITABLE_DATA_H
 #include <stdint.h>
-#define IOSW_WRITABLE_DATA_BYTES      UINT64_C(17179869184)
-#define IOSW_WRITABLE_DATA_PART_COUNT 8u
-#define IOSW_WRITABLE_DATA_UUID       "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9"
-struct iosw_writable_part {
+#define SWITCH_WRITABLE_DATA_BYTES      UINT64_C(17179869184)
+#define SWITCH_WRITABLE_DATA_PART_COUNT 8u
+#define SWITCH_WRITABLE_DATA_UUID       "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9"
+struct switch_writable_part {
     const char *path;
     uint64_t offset;
     uint32_t size;
 };
-static const struct iosw_writable_part iosw_writable_data_parts[8] = {
+static const struct switch_writable_part switch_writable_data_parts[8] = {
     {"/IOS/WRITABLE/DATA0000.BIN", UINT64_C(0), UINT32_C(2147483648)},
     {"/IOS/WRITABLE/DATA0001.BIN", UINT64_C(2147483648), UINT32_C(2147483648)},
     {"/IOS/WRITABLE/DATA0002.BIN", UINT64_C(4294967296), UINT32_C(2147483648)},

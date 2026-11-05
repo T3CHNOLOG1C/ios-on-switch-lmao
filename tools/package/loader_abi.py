@@ -41,7 +41,7 @@ WINDOW_SHARD_BYTES = 1 << 20
 WINDOW_SHARDS = 0x6000000 // WINDOW_SHARD_BYTES  # the staged window's limit (build_native_loader.py window_checks)
 LZ4_MAGIC = b'\x04\x22\x4d\x18'
 
-# /chosen/switch-boot-stamps: boot/loader/stamps.h IOSW_STAMP_COUNT 64-bit words, zero until the loader fills it.
+# /chosen/switch-boot-stamps: boot/loader/stamps.h SWITCH_STAMP_COUNT 64-bit words, zero until the loader fills it.
 STAMPS_PROPERTY = 'switch-boot-stamps'
 STAMPS_BYTES = 26 * 8
 STAMPS_SLOT = 0xA001EF00
@@ -61,7 +61,7 @@ BL33_BASE = 0xAA000000
 STAGE_HEADER = 0xAA100000
 STAGE_SOURCE = 0xAA101000
 STAGE_END = 0xB0000000
-STAGE_WORDS = {'magic': 0x57534F49, 'head': 0x4E49574B, 'tail': 0x444E454B, 'version': 1}
+STAGE_WORDS = {'magic': 0x48435753, 'head': 0x4E49574B, 'tail': 0x444E454B, 'version': 1}
 
 
 def staged_bl33_bytes(staged_bytes: int) -> int:

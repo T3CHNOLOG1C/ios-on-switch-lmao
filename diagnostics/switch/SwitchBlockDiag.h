@@ -45,8 +45,8 @@ static void block_start(void)
     int enabled = 0;
     if (!PE_parse_boot_argn("switch-block-test", &enabled, sizeof(enabled)) || enabled != 1) return;
     block_enabled = 1;
-    block_query.status = IOSW_BLOCK_NOT_READY;
-    switch_block_record[0] = UINT64_C(0x494f5357424c4f43);
+    block_query.status = SWITCH_BLOCK_NOT_READY;
+    switch_block_record[0] = UINT64_C(0x53574348424c4f43);
     switch_block_record[1] = 1;
     switch_block_record[2] = 1;
     __asm__ volatile("mrs %0,cntfrq_el0" : "=r"(block_frequency));
@@ -56,7 +56,7 @@ static void block_start(void)
     if (switch_files_record[2] != 9 || switch_files_record[3] || block_frequency < 1000 ||
         block_frequency > 1000000000) {
         switch_block_record[3] = 300;
-        block_query.status = IOSW_BLOCK_NOT_READY;
+        block_query.status = SWITCH_BLOCK_NOT_READY;
     } else {
         int status = switch_block_publish();
         switch_block_record[4] = (unsigned)status;
@@ -97,37 +97,37 @@ static int block_volume_result_valid(const uint64_t *r, unsigned size)
 static void block_checkpoint(uint64_t pc, uint64_t cpsr, int pid, int code, int error, int64_t result)
 {
     if (!block_enabled || block_finished || (cpsr & 0x1f) || pid != 1 || code != 20 || error || result != 1 ||
-        (pc != IOSW_USER_BLOCK_QUERY_ACK && pc != IOSW_USER_BLOCK_FINAL_ACK))
+        (pc != SWITCH_USER_BLOCK_QUERY_ACK && pc != SWITCH_USER_BLOCK_FINAL_ACK))
         return;
     switch_block_record[16] = pc;
     switch_block_record[14] = block_ticks() - block_started;
-    if (pc == IOSW_USER_BLOCK_QUERY_ACK) {
+    if (pc == SWITCH_USER_BLOCK_QUERY_ACK) {
         switch_block_record[5]++;
-        block_query.status = IOSW_BLOCK_NOT_READY;
+        block_query.status = SWITCH_BLOCK_NOT_READY;
         if (switch_block_record[3])
-            block_query.status = IOSW_BLOCK_CORRUPT;
+            block_query.status = SWITCH_BLOCK_CORRUPT;
         else if (switch_block_record[5] > 200 || switch_block_record[14] > block_frequency * 120) {
             switch_block_record[3] = 302;
-            block_query.status = IOSW_BLOCK_TIMEOUT;
+            block_query.status = SWITCH_BLOCK_TIMEOUT;
         } else {
             int a = switch_block_volume_path(0, block_query.path[0], 64);
             int b = switch_block_volume_path(1, block_query.path[1], 64);
             switch_block_record[6] = (unsigned)a;
             switch_block_record[7] = (unsigned)b;
-            if (a > IOSW_BLOCK_NOT_READY || b > IOSW_BLOCK_NOT_READY) {
+            if (a > SWITCH_BLOCK_NOT_READY || b > SWITCH_BLOCK_NOT_READY) {
                 switch_block_record[3] = 303;
-                block_query.status = IOSW_BLOCK_CORRUPT;
+                block_query.status = SWITCH_BLOCK_CORRUPT;
             } else if (!a && !b) {
-                block_query.status = IOSW_BLOCK_OK;
+                block_query.status = SWITCH_BLOCK_OK;
                 switch_block_record[2] = 3;
             }
         }
-        if (copyout(&block_query, IOSW_USER_BLOCK_QUERY, sizeof(block_query))) switch_block_record[3] = 304;
+        if (copyout(&block_query, SWITCH_USER_BLOCK_QUERY, sizeof(block_query))) switch_block_record[3] = 304;
         if (switch_block_record[5] == 1 || switch_block_record[2] == 3 || switch_block_record[3]) block_screen();
         return;
     }
     block_finished = 1;
-    if (copyin(IOSW_USER_BLOCK_RESULTS, switch_block_user_results, sizeof(switch_block_user_results))) {
+    if (copyin(SWITCH_USER_BLOCK_RESULTS, switch_block_user_results, sizeof(switch_block_user_results))) {
         switch_block_record[3] = 305;
         block_screen();
         return;
@@ -147,9 +147,9 @@ static void block_checkpoint(uint64_t pc, uint64_t cpsr, int pid, int code, int 
     }
     switch_block_record[2] = 4;
     switch_block_record[12] =
-        block_user_hash(IOSW_USER_BLOCK_OS_BYTES, switch_block_file_size_0, switch_block_file_digest_0);
+        block_user_hash(SWITCH_USER_BLOCK_OS_BYTES, switch_block_file_size_0, switch_block_file_digest_0);
     switch_block_record[13] =
-        block_user_hash(IOSW_USER_BLOCK_SYSTEM_BYTES, switch_block_file_size_1, switch_block_file_digest_1);
+        block_user_hash(SWITCH_USER_BLOCK_SYSTEM_BYTES, switch_block_file_size_1, switch_block_file_digest_1);
     if (switch_block_record[12] && switch_block_record[13])
         switch_block_record[2] = 5;
     else

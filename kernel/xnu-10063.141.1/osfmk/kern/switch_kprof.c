@@ -125,14 +125,14 @@ extern int  vsnprintf(char *, size_t, const char *, va_list);
 #define KPROF_TOP_FAULTS  8                 /* processes on the faults by process lines, four per line */
 
 /* r17-faults: vm_fault classes and flags, as vm_fault.c classifies a fault for switch_kprof_fault (vm_protos.h) */
-#define KPROF_F_ZF         IOSW_FAULT_ZF
-#define KPROF_F_COW        IOSW_FAULT_COW
-#define KPROF_F_SOFT       IOSW_FAULT_SOFT
-#define KPROF_F_DEVICE     IOSW_FAULT_DEVICE
-#define KPROF_F_FILE       IOSW_FAULT_FILE
-#define KPROF_F_CMP        IOSW_FAULT_CMP
-#define KPROF_F_FAILED     IOSW_FAULT_FAILED
-#define KPROF_F_CLASSES    IOSW_FAULT_CLASSES
+#define KPROF_F_ZF         SWITCH_FAULT_ZF
+#define KPROF_F_COW        SWITCH_FAULT_COW
+#define KPROF_F_SOFT       SWITCH_FAULT_SOFT
+#define KPROF_F_DEVICE     SWITCH_FAULT_DEVICE
+#define KPROF_F_FILE       SWITCH_FAULT_FILE
+#define KPROF_F_CMP        SWITCH_FAULT_CMP
+#define KPROF_F_FAILED     SWITCH_FAULT_FAILED
+#define KPROF_F_CLASSES    SWITCH_FAULT_CLASSES
 
 struct kprof_fn {
 	uintptr_t key;          /* function start (slid) or 128-byte bucket | KPROF_BUCKET; 0: empty */
@@ -685,7 +685,7 @@ switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_
 	if (!os_atomic_load(&kprof_ready, acquire) || task == TASK_NULL || cls >= KPROF_F_CLASSES) {
 		return;
 	}
-	if (task != kernel_task && !(flags & IOSW_FAULT_KERNEL) && (upcb = thread->machine.upcb) != NULL) {
+	if (task != kernel_task && !(flags & SWITCH_FAULT_KERNEL) && (upcb = thread->machine.upcb) != NULL) {
 		const struct vm_shared_region *sr = task->shared_region;
 		const uint32_t                 ec = ESR_EC(get_saved_state_esr(upcb));
 
@@ -694,7 +694,7 @@ switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_
 		 * The user state holds the last exception from EL0: this fault's own abort, or else the syscall (or trap)
 		 * the kernel is serving, whose copyin/copyout (or vm_map_copyout, IOKit wiring) touched the user map.
 		 */
-		copyio = !(flags & IOSW_FAULT_WIRE) && ec != ESR_EC_DABORT_EL0 && ec != ESR_EC_IABORT_EL0;
+		copyio = !(flags & SWITCH_FAULT_WIRE) && ec != ESR_EC_DABORT_EL0 && ec != ESR_EC_IABORT_EL0;
 		if (cls == KPROF_F_ZF) {
 			pc = get_saved_state_pc(upcb);
 			lr = get_saved_state_lr(upcb);
@@ -714,9 +714,9 @@ switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_
 	if (took > b->faults.max_abs[cls]) {
 		b->faults.max_abs[cls] = took;
 	}
-	b->faults.wired += (flags & IOSW_FAULT_WIRE) != 0;
-	b->faults.kernel += (flags & IOSW_FAULT_KERNEL) != 0;
-	b->faults.purgeable += (flags & IOSW_FAULT_PURGEABLE) != 0;
+	b->faults.wired += (flags & SWITCH_FAULT_WIRE) != 0;
+	b->faults.kernel += (flags & SWITCH_FAULT_KERNEL) != 0;
+	b->faults.purgeable += (flags & SWITCH_FAULT_PURGEABLE) != 0;
 	b->faults.dsc += dsc;
 	b->faults.copyio += copyio;
 	if (around != 0) {
@@ -730,7 +730,7 @@ switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_
 		}
 		ts->faults[cls]++;
 		ts->fault_abs += took;
-		ts->fault_wired += (flags & IOSW_FAULT_WIRE) != 0;
+		ts->fault_wired += (flags & SWITCH_FAULT_WIRE) != 0;
 		ts->fault_dsc += dsc;
 		ts->fault_copyio += copyio;
 		ts->zf_around += around;

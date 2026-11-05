@@ -44,24 +44,24 @@ enum {
 #define AHB_MEM_WRQUE_MST_ID 0x0fc
 #define AHB_MASTER_SE2 (1u << 13) /* nvidia,ahb-master-id of se@70412000 (SE1 is 14) */
 
-#define SEED_WORDS (IOSW_SEED_BYTES / 4u)
+#define SEED_WORDS (SWITCH_SEED_BYTES / 4u)
 
 /* The output list (words 0..2) and the 64 output bytes (words 16..31), each in a cache line of its own. Written into
  * the raw image (link.ld: no .bss). The MMU is off when this runs, so the address is the physical one, below 4 GiB. */
-#ifndef IOSW_SEED_HOST_TEST
+#ifndef SWITCH_SEED_HOST_TEST
 #define SEED_DATA __attribute__((section(".data")))
 #else
 #define SEED_DATA
 #endif
 static volatile uint32_t seed_dma[32] __attribute__((aligned(64))) SEED_DATA;
 
-#ifndef IOSW_SEED_HOST_TEST
-uint32_t iosw_seed_read32(uint64_t pa)
+#ifndef SWITCH_SEED_HOST_TEST
+uint32_t switch_seed_read32(uint64_t pa)
 {
     return *(const volatile uint32_t *)(uintptr_t)pa;
 }
 
-void iosw_seed_write32(uint64_t pa, uint32_t value)
+void switch_seed_write32(uint64_t pa, uint32_t value)
 {
     *(volatile uint32_t *)(uintptr_t)pa = value;
 }
@@ -71,7 +71,7 @@ static void barrier(void)
     __asm__ volatile("dsb sy" ::: "memory");
 }
 #else
-volatile uint32_t *iosw_seed_dma_words(void)
+volatile uint32_t *switch_seed_dma_words(void)
 {
     return seed_dma;
 }
@@ -81,17 +81,17 @@ static void barrier(void) {}
 
 static uint32_t se_read(uint32_t offset)
 {
-    return iosw_seed_read32(IOSW_SEED_SE2_PA + offset);
+    return switch_seed_read32(SWITCH_SEED_SE2_PA + offset);
 }
 
 static void se_write(uint32_t offset, uint32_t value)
 {
-    iosw_seed_write32(IOSW_SEED_SE2_PA + offset, value);
+    switch_seed_write32(SWITCH_SEED_SE2_PA + offset, value);
 }
 
 static uint32_t car_read(uint32_t offset)
 {
-    return iosw_seed_read32(IOSW_SEED_CAR_PA + offset);
+    return switch_seed_read32(SWITCH_SEED_CAR_PA + offset);
 }
 
 /* One DRBG operation: 64 bytes into seed_dma[16..31]. Returns MIXED or the failure, with the register in *detail. */
@@ -100,12 +100,12 @@ static uint32_t generate(uint32_t mode, uint64_t (*ticks)(void), uint64_t timeou
     uint32_t value = se_read(SE_STATUS);
     if (value & SE_STATUS_BUSY) {
         *detail = value;
-        return IOSW_SEED_STATUS_BUSY;
+        return SWITCH_SEED_STATUS_BUSY;
     }
     const uint32_t list = (uint32_t)(uintptr_t)seed_dma, output = (uint32_t)(uintptr_t)(seed_dma + 16);
     seed_dma[0] = 0; /* last entry index */
     seed_dma[1] = output;
-    seed_dma[2] = IOSW_SEED_BYTES;
+    seed_dma[2] = SWITCH_SEED_BYTES;
     for (unsigned i = 16; i < 32; ++i) seed_dma[i] = 0;
     barrier();
 
@@ -113,7 +113,7 @@ static uint32_t generate(uint32_t mode, uint64_t (*ticks)(void), uint64_t timeou
     se_write(SE_CRYPTO_CONFIG, SE_CRYPTO_RNG);
     se_write(SE_RNG_CONFIG, SE_RNG_SRC_ENTROPY | mode);
     se_write(SE_RNG_SRC_CONFIG, se_read(SE_RNG_SRC_CONFIG) | SE_RNG_RO_ENT_SRC);
-    se_write(SE_LAST_BLOCK, IOSW_SEED_BYTES / 16u - 1u);
+    se_write(SE_LAST_BLOCK, SWITCH_SEED_BYTES / 16u - 1u);
     se_write(SE_IN_LL, 0);
     se_write(SE_OUT_LL, list);
     se_write(SE_ERR_STATUS, se_read(SE_ERR_STATUS));
@@ -121,13 +121,13 @@ static uint32_t generate(uint32_t mode, uint64_t (*ticks)(void), uint64_t timeou
     /* An engine that drops our writes (secure-only after all) would never finish: check it took them. */
     value = se_read(SE_CONFIG);
     if (value != SE_CONFIG_RNG || se_read(SE_CRYPTO_CONFIG) != SE_CRYPTO_RNG || se_read(SE_OUT_LL) != list ||
-        se_read(SE_LAST_BLOCK) != IOSW_SEED_BYTES / 16u - 1u) {
+        se_read(SE_LAST_BLOCK) != SWITCH_SEED_BYTES / 16u - 1u) {
         *detail = value;
-        return IOSW_SEED_STATUS_IGNORED;
+        return SWITCH_SEED_STATUS_IGNORED;
     }
     if ((value = se_read(SE_ERR_STATUS)) != 0) {
         *detail = value;
-        return IOSW_SEED_STATUS_ERROR;
+        return SWITCH_SEED_STATUS_ERROR;
     }
 
     barrier();
@@ -136,7 +136,7 @@ static uint32_t generate(uint32_t mode, uint64_t (*ticks)(void), uint64_t timeou
     while (!((value = se_read(SE_INT_STATUS)) & (SE_INT_OP_DONE | SE_INT_ERROR))) {
         if (ticks() - start > timeout) {
             *detail = value;
-            return IOSW_SEED_STATUS_TIMEOUT;
+            return SWITCH_SEED_STATUS_TIMEOUT;
         }
     }
     const uint32_t error = se_read(SE_ERR_STATUS);
@@ -144,19 +144,19 @@ static uint32_t generate(uint32_t mode, uint64_t (*ticks)(void), uint64_t timeou
     se_write(SE_ERR_STATUS, error);
     if (error || (value & SE_INT_ERROR)) {
         *detail = error ? error : value;
-        return IOSW_SEED_STATUS_ERROR;
+        return SWITCH_SEED_STATUS_ERROR;
     }
     /* T210B01: the output is in memory once the engine is idle, its memory interface quiet and the AHB write queue
      * drained (hekate _se_op_wait, L4T tegra_se_start_operation ahb_ack). */
     while (((value = se_read(SE_STATUS)) & SE_STATUS_BUSY) ||
-           (iosw_seed_read32(IOSW_SEED_AHB_ARB_PA + AHB_MEM_WRQUE_MST_ID) & AHB_MASTER_SE2)) {
+           (switch_seed_read32(SWITCH_SEED_AHB_ARB_PA + AHB_MEM_WRQUE_MST_ID) & AHB_MASTER_SE2)) {
         if (ticks() - start > timeout) {
             *detail = value;
-            return IOSW_SEED_STATUS_DRAIN;
+            return SWITCH_SEED_STATUS_DRAIN;
         }
     }
     barrier();
-    return IOSW_SEED_STATUS_MIXED;
+    return SWITCH_SEED_STATUS_MIXED;
 }
 
 /* Output that is all zero, or with two equal 16-byte blocks, is not what a working DRBG gives. */
@@ -179,52 +179,52 @@ static uint32_t engine_seed(uint64_t (*ticks)(void), uint64_t timeout, uint32_t 
 {
     /* A clock-gated or reset APB block can hang the bus: nothing in the engine is read unless its clock runs. */
     if (!(car_read(CAR_CLK_OUT_ENB_V) & CAR_SE) || (car_read(CAR_RST_DEVICES_V) & CAR_SE))
-        return IOSW_SEED_STATUS_SE_CLOCK;
+        return SWITCH_SEED_STATUS_SE_CLOCK;
     const uint32_t security = se_read(SE_SECURITY);
     if (!(security & SE_SECURITY_SOFT_NONSECURE) || (security & SE_SECURITY_ENG_DIS)) {
         *detail = security;
-        return IOSW_SEED_STATUS_SECURE;
+        return SWITCH_SEED_STATUS_SECURE;
     }
     if (!(car_read(CAR_CLK_OUT_ENB_W) & CAR_ENTROPY) || (car_read(CAR_RST_DEVICES_W) & CAR_ENTROPY)) {
-        iosw_seed_write32(IOSW_SEED_CAR_PA + CAR_CLK_ENB_W_SET, CAR_ENTROPY);
-        iosw_seed_write32(IOSW_SEED_CAR_PA + CAR_RST_DEV_W_CLR, CAR_ENTROPY);
-        *flags |= IOSW_SEED_FLAG_ENTROPY_ENABLED;
+        switch_seed_write32(SWITCH_SEED_CAR_PA + CAR_CLK_ENB_W_SET, CAR_ENTROPY);
+        switch_seed_write32(SWITCH_SEED_CAR_PA + CAR_RST_DEV_W_CLR, CAR_ENTROPY);
+        *flags |= SWITCH_SEED_FLAG_ENTROPY_ENABLED;
         const uint64_t start = ticks(); /* a few source cycles before the first use (Linux: udelay(2) after enable) */
         while (ticks() - start < timeout / 512u + 1u) {
         }
         const uint32_t clocks = car_read(CAR_CLK_OUT_ENB_W);
         if (!(clocks & CAR_ENTROPY) || (car_read(CAR_RST_DEVICES_W) & CAR_ENTROPY)) {
             *detail = clocks;
-            return IOSW_SEED_STATUS_ENTROPY;
+            return SWITCH_SEED_STATUS_ENTROPY;
         }
     }
     uint32_t status = generate(SE_RNG_FORCE_RESEED, ticks, timeout, detail);
-    if (status == IOSW_SEED_STATUS_ERROR) status = generate(SE_RNG_FORCE_INSTANTIATION, ticks, timeout, detail);
-    if (status == IOSW_SEED_STATUS_MIXED && !output_plausible()) status = IOSW_SEED_STATUS_OUTPUT;
+    if (status == SWITCH_SEED_STATUS_ERROR) status = generate(SE_RNG_FORCE_INSTANTIATION, ticks, timeout, detail);
+    if (status == SWITCH_SEED_STATUS_MIXED && !output_plausible()) status = SWITCH_SEED_STATUS_OUTPUT;
     return status;
 }
 
-uint32_t iosw_seed_mix(uint64_t seed_pa, uint64_t source_pa, uint64_t (*ticks)(void), uint64_t timeout)
+uint32_t switch_seed_mix(uint64_t seed_pa, uint64_t source_pa, uint64_t (*ticks)(void), uint64_t timeout)
 {
     uint32_t detail = 0, flags = 0;
     const uint32_t status = engine_seed(ticks, timeout, &detail, &flags);
     const uint64_t now = ticks();
-    if (status == IOSW_SEED_STATUS_MIXED) {
+    if (status == SWITCH_SEED_STATUS_MIXED) {
         uint32_t fold = 0;
         for (unsigned i = 0; i < SEED_WORDS; ++i) {
             const uint32_t word = seed_dma[16 + i];
-            iosw_seed_write32(seed_pa + 4 * i, iosw_seed_read32(seed_pa + 4 * i) ^ word);
+            switch_seed_write32(seed_pa + 4 * i, switch_seed_read32(seed_pa + 4 * i) ^ word);
             fold ^= word;
         }
         detail = (fold ^ fold >> 16) & 0xffffu;
     }
     /* The counter too, whatever the engine did: a little variation even for the pinned seed. */
-    iosw_seed_write32(seed_pa, iosw_seed_read32(seed_pa) ^ (uint32_t)now);
-    iosw_seed_write32(seed_pa + 4, iosw_seed_read32(seed_pa + 4) ^ (uint32_t)(now >> 32));
+    switch_seed_write32(seed_pa, switch_seed_read32(seed_pa) ^ (uint32_t)now);
+    switch_seed_write32(seed_pa + 4, switch_seed_read32(seed_pa + 4) ^ (uint32_t)(now >> 32));
     for (unsigned i = 16; i < 32; ++i) seed_dma[i] = 0;
     const uint32_t word = status | flags | (detail & 0xffffu) << 16;
-    iosw_seed_write32(source_pa, IOSW_SEED_MAGIC);
-    iosw_seed_write32(source_pa + 4, word);
+    switch_seed_write32(source_pa, SWITCH_SEED_MAGIC);
+    switch_seed_write32(source_pa + 4, word);
     barrier();
     return word;
 }

@@ -16,7 +16,7 @@ static uint64_t source_first,source_sectors;
 static int phase; // 0 read only, 1 selected image extent, 2 exact GPT metadata
 static char image_paths[MAX_IMAGES][240];
 static unsigned image_count;
-static struct iosw_install_image *image;
+static struct switch_install_image *image;
 static uint8_t *source_buffer,*readback_buffer;
 static FIL source_file;
 static DWORD *source_cltbl;
@@ -147,7 +147,7 @@ static int source_read(void *unused,uint64_t offset,void *out,uint32_t bytes) {
             start+=image->parts[index].bytes;
         }
         if(index==image->count || installer_card_ready(0)) return 1;
-        const struct iosw_install_part *part=&image->parts[index];
+        const struct switch_install_part *part=&image->parts[index];
         if(source_part!=(int)index) {
             close_source();
             if(f_open(&source_file,part->path,FA_READ)!=FR_OK) return 1;
@@ -198,8 +198,8 @@ static int read_manifest(const char *path) {
     FIL file;UINT got;int error=1;
     if(f_open(&file,path,FA_READ)!=FR_OK) return 1;
     FSIZE_t bytes=f_size(&file);
-    if(bytes>=64 && bytes<=IOSW_INSTALL_MAX_MANIFEST_BYTES && f_read(&file,source_buffer,bytes,&got)==FR_OK && got==bytes)
-        error=iosw_install_manifest(source_buffer,bytes,image);
+    if(bytes>=64 && bytes<=SWITCH_INSTALL_MAX_MANIFEST_BYTES && f_read(&file,source_buffer,bytes,&got)==FR_OK && got==bytes)
+        error=switch_install_manifest(source_buffer,bytes,image);
     f_close(&file);
     if(error || installer_card_ready(0)) return 1;
     for(unsigned i=0;i<image->count;i++) {
@@ -208,7 +208,7 @@ static int read_manifest(const char *path) {
         if(mismatch || installer_card_ready(0)) return 1;
     }
     return source_read(0,0,source_buffer,image->block_size) ||
-        iosw_install_nxsb(image,source_buffer,image->block_size);
+        switch_install_nxsb(image,source_buffer,image->block_size);
 }
 static int image_menu(void) {
     DIR dir;FILINFO info;
@@ -306,13 +306,13 @@ static int publish(void) {
     phase=0;free(a);free(b);return error;
 }
 static void run(void) {
-    image=malloc(sizeof(*image));source_buffer=malloc(IOSW_INSTALL_CHUNK);readback_buffer=malloc(IOSW_INSTALL_CHUNK);
+    image=malloc(sizeof(*image));source_buffer=malloc(SWITCH_INSTALL_CHUNK);readback_buffer=malloc(SWITCH_INSTALL_CHUNK);
     if(!image || !source_buffer || !readback_buffer || installer_card_bind() || unchanged() || !source_volume_ok()) {
         gfx_puts("Card identity, source volume\nor memory check failed.\nNo writes were made.\n");return;
     }
     installer_card_permit(permit);
     if(!image_menu() || !partition_menu()) {screen();gfx_puts("Cancelled, or no eligible\nimage/partition. No writes made.\n");return;}
-    struct iosw_install_io io={0,installer_card_ready,source_read,installer_card_transfer,installer_card_sync,progress};
+    struct switch_install_io io={0,installer_card_ready,source_read,installer_card_transfer,installer_card_sync,progress};
     const gpt_entry_t *p=&entries[target_index];
     close_source();
     if(unchanged() || installer_card_qualify()) {
@@ -321,7 +321,7 @@ static void run(void) {
     if(!confirm()) {screen();gfx_puts("Cancelled. No writes were made.\n");return;}
     if(unchanged() || installer_card_qualify()) {screen();gfx_puts("Card changed. No writes were made.\n");return;}
     phase=1;screen();gfx_puts("Installing APFS container.\nKeep power connected.\n");
-    int error=iosw_install_stream(image,&io,p->lba_start,p->lba_end-p->lba_start+1,source_buffer,IOSW_INSTALL_CHUNK);
+    int error=switch_install_stream(image,&io,p->lba_start,p->lba_end-p->lba_start+1,source_buffer,SWITCH_INSTALL_CHUNK);
     phase=0;close_source();
     if(error) {
         installer_card_offline();screen();gfx_puts("INSTALL FAILED.\nTarget contents may be incomplete.\nGPT was not published.\nDo not boot Android here.\n");return;

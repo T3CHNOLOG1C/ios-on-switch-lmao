@@ -20,41 +20,41 @@
  * (drivers/NativeKeyStoreEvents/TegraSecurityEngine.cpp), and an RNG operation touches no keyslot anyway. Polled: there
  * is no interrupt controller yet (like that file's boot probe); each wait is bounded by the counter.
  *
- * The result goes to /chosen/switch-seed-source (two LE32 words: IOSW_SEED_MAGIC, status | detail << 16) and XNU logs
+ * The result goes to /chosen/switch-seed-source (two LE32 words: SWITCH_SEED_MAGIC, status | detail << 16) and XNU logs
  * it once (osfmk/kern/startup.c switch_log_boot_stamps). The detail of a mixed seed is a 16-bit fold of the engine's
  * output, so two boots can be told apart in the log; of a failure, the low 16 bits of the register that showed it. */
 #include <stdint.h>
 
-#define IOSW_SEED_MAGIC 0x44454553u /* "SEED" */
-#define IOSW_SEED_BYTES 64u
-#define IOSW_SEED_SOURCE_BYTES 8u
+#define SWITCH_SEED_MAGIC 0x44454553u /* "SEED" */
+#define SWITCH_SEED_BYTES 64u
+#define SWITCH_SEED_SOURCE_BYTES 8u
 
-enum iosw_seed_status {
-    IOSW_SEED_STATUS_NONE = 0,         /* the loader never ran this (an older loader) */
-    IOSW_SEED_STATUS_MIXED = 1,        /* SE2 DRBG output mixed in */
-    IOSW_SEED_STATUS_SE_CLOCK = 0x10,  /* SE clock off or the engine in reset: not touched */
-    IOSW_SEED_STATUS_SECURE = 0x11,    /* SE_SECURITY: secure-only or engine disabled (detail: SE_SECURITY) */
-    IOSW_SEED_STATUS_BUSY = 0x12,      /* engine not idle before start (detail: SE_STATUS) */
-    IOSW_SEED_STATUS_IGNORED = 0x13,   /* configuration writes did not take (detail: CONFIG read back) */
-    IOSW_SEED_STATUS_TIMEOUT = 0x14,   /* no OP_DONE in time (detail: INT_STATUS) */
-    IOSW_SEED_STATUS_ERROR = 0x15,     /* error bit or ERR_STATUS (detail: ERR_STATUS, or INT_STATUS) */
-    IOSW_SEED_STATUS_DRAIN = 0x16,     /* memory interface or AHB write queue not drained (detail: SE_STATUS) */
-    IOSW_SEED_STATUS_OUTPUT = 0x17,    /* output all zero or blocks repeating: not used */
-    IOSW_SEED_STATUS_ENTROPY = 0x18,   /* the entropy clock would not come on (detail: CLK_OUT_ENB_W) */
+enum switch_seed_status {
+    SWITCH_SEED_STATUS_NONE = 0,         /* the loader never ran this (an older loader) */
+    SWITCH_SEED_STATUS_MIXED = 1,        /* SE2 DRBG output mixed in */
+    SWITCH_SEED_STATUS_SE_CLOCK = 0x10,  /* SE clock off or the engine in reset: not touched */
+    SWITCH_SEED_STATUS_SECURE = 0x11,    /* SE_SECURITY: secure-only or engine disabled (detail: SE_SECURITY) */
+    SWITCH_SEED_STATUS_BUSY = 0x12,      /* engine not idle before start (detail: SE_STATUS) */
+    SWITCH_SEED_STATUS_IGNORED = 0x13,   /* configuration writes did not take (detail: CONFIG read back) */
+    SWITCH_SEED_STATUS_TIMEOUT = 0x14,   /* no OP_DONE in time (detail: INT_STATUS) */
+    SWITCH_SEED_STATUS_ERROR = 0x15,     /* error bit or ERR_STATUS (detail: ERR_STATUS, or INT_STATUS) */
+    SWITCH_SEED_STATUS_DRAIN = 0x16,     /* memory interface or AHB write queue not drained (detail: SE_STATUS) */
+    SWITCH_SEED_STATUS_OUTPUT = 0x17,    /* output all zero or blocks repeating: not used */
+    SWITCH_SEED_STATUS_ENTROPY = 0x18,   /* the entropy clock would not come on (detail: CLK_OUT_ENB_W) */
 };
 /* Set with a status when the entropy clock was off and the loader turned it on. */
-#define IOSW_SEED_FLAG_ENTROPY_ENABLED 0x100u
+#define SWITCH_SEED_FLAG_ENTROPY_ENABLED 0x100u
 
 /* Hardware the module touches (physical; MMU off). */
-#define IOSW_SEED_CAR_PA UINT64_C(0x60006000)
-#define IOSW_SEED_AHB_ARB_PA UINT64_C(0x6000c000)
-#define IOSW_SEED_SE2_PA UINT64_C(0x70412000)
+#define SWITCH_SEED_CAR_PA UINT64_C(0x60006000)
+#define SWITCH_SEED_AHB_ARB_PA UINT64_C(0x6000c000)
+#define SWITCH_SEED_SE2_PA UINT64_C(0x70412000)
 
 /* Mixes the engine's output and `counter` into the 64-byte seed at seed_pa (4-byte aligned, 32-bit accesses) and writes
  * the two status words at source_pa. `ticks` reads the counter; `timeout` is in its units. Returns the status word. */
-uint32_t iosw_seed_mix(uint64_t seed_pa, uint64_t source_pa, uint64_t (*ticks)(void), uint64_t timeout);
+uint32_t switch_seed_mix(uint64_t seed_pa, uint64_t source_pa, uint64_t (*ticks)(void), uint64_t timeout);
 
 /* Supplied by the target (seed.c, MMIO) or by the host test. */
-uint32_t iosw_seed_read32(uint64_t pa);
-void iosw_seed_write32(uint64_t pa, uint32_t value);
+uint32_t switch_seed_read32(uint64_t pa);
+void switch_seed_write32(uint64_t pa, uint32_t value);
 #endif

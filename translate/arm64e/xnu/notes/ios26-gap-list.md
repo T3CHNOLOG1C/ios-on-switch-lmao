@@ -73,7 +73,7 @@ Same steps as `tools/install/sd.py` (compose / write / reprobe / populate / boot
    decrypted image.
 3. **Kernelcache**: keep it whole (`--thin-arm64` does not apply: the 26 cache is an arm64e MH_FILESET); it feeds
    `prelink26/emit26.py` (not NativePrelink) and the bindings regeneration.
-4. **Sizes**: the 32 GiB `IOSW_RAW_BYTES` partition has to hold OS (decrypted, ~8 GB grown), Preboot (5.19 GB SystemOS
+4. **Sizes**: the 32 GiB `SWITCH_RAW_BYTES` partition has to hold OS (decrypted, ~8 GB grown), Preboot (5.19 GB SystemOS
    + 14 MB AppOS + plan) and Data; keep 32 GiB as a minimum and measure the composed image before fixing it.
 5. **Preboot extra**: `/a64x/dyld_shared_cache_arm64e.a64xplan` (20.9 MB, made by `tools/a64plan2` from the decrypted
    SystemOS cryptex's cache; pinned SHA-256), and `/chosen/a64x-plan-sha256` in the boot package's ADT.

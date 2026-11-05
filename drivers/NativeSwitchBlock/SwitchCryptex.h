@@ -17,7 +17,7 @@ struct mount;
  * native RW Preboot device. r17-launch: a read-only block device reading the
  * image's extents straight from the SD card (the direct read map), or, if that
  * map is refused (one log line), the original DiskImages hook. Returns BSD
- * errno (0 success), not iosw_block_status. A failure latches for this index. */
+ * errno (0 success), not switch_block_status. A failure latches for this index. */
 int switch_cryptex_attach(unsigned index, dev_t expectedPrebootDevice, dev_t *volume, char *devicePath,
                             size_t capacity);
 /* The direct-attached image's volume did not mount: detach the map and attach

@@ -120,7 +120,7 @@ IOService *mediaForDevice(dev_t device, const char *bsd) {
 int prebootDevice(dev_t expected) {
   dev_t actual = NODEV; char path[64]; uint64_t bytes = 0;
   int status = switch_raw_volume_status(SWITCH_PREBOOT_UUID, &actual, path, sizeof(path), &bytes);
-  return status == IOSW_BLOCK_OK && actual == expected && bytes >= imageBytes[0] ? 0 : EAUTH;
+  return status == SWITCH_BLOCK_OK && actual == expected && bytes >= imageBytes[0] ? 0 : EAUTH;
 }
 int pathAttributes(const char *path, Binding &b, bool directory, uint64_t bytes, vnode_t *out) {
   vnode_t vp = nullptr;

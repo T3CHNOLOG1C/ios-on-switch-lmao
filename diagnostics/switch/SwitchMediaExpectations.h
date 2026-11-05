@@ -2,39 +2,39 @@
 #ifndef SWITCH_MEDIA_EXPECTATIONS_H
 #define SWITCH_MEDIA_EXPECTATIONS_H
 #include <stdint.h>
-struct iosw_expected_part {
+struct switch_expected_part {
     const char *path;
     uint64_t size_bytes;
 };
-struct iosw_expected_volume {
+struct switch_expected_volume {
     const char *name;
     uint64_t size_bytes;
     uint32_t part_count;
-    const struct iosw_expected_part *parts;
+    const struct switch_expected_part *parts;
 };
-struct iosw_expected_range {
+struct switch_expected_range {
     uint32_t volume_index;
     uint64_t offset;
     uint32_t length;
     uint8_t sha256[32];
 };
-#define IOSW_STORAGE_FIXTURE_PATH "IOS/VERIFY.BIN"
-#define IOSW_STORAGE_FIXTURE_SIZE 131777u
-static const uint8_t iosw_storage_fixture_sha256[32] = {
+#define SWITCH_STORAGE_FIXTURE_PATH "IOS/VERIFY.BIN"
+#define SWITCH_STORAGE_FIXTURE_SIZE 131777u
+static const uint8_t switch_storage_fixture_sha256[32] = {
     0x8b, 0x94, 0xb5, 0x47, 0x38, 0xeb, 0xaf, 0xd5, 0xbe, 0x03, 0x75, 0xae, 0x45, 0x5c, 0xe0, 0xae,
     0xd6, 0x7a, 0x23, 0xac, 0x0b, 0x20, 0x84, 0xcd, 0x7d, 0x84, 0xd2, 0x6c, 0xd0, 0xce, 0xef, 0x5d};
-static const struct iosw_expected_part iosw_storage_parts_0[] = {
+static const struct switch_expected_part switch_storage_parts_0[] = {
     {"IOS/OS/PART0000.BIN", UINT64_C(4000000000)},
     {"IOS/OS/PART0001.BIN", UINT64_C(2077580800)},
 };
-static const struct iosw_expected_part iosw_storage_parts_1[] = {
+static const struct switch_expected_part switch_storage_parts_1[] = {
     {"IOS/SYSTEMOS/PART0000.BIN", UINT64_C(3303014400)},
 };
-static const struct iosw_expected_volume iosw_storage_volumes[] = {
-    {"OS", UINT64_C(6077580800), 2, iosw_storage_parts_0},
-    {"SYSTEMOS", UINT64_C(3303014400), 1, iosw_storage_parts_1},
+static const struct switch_expected_volume switch_storage_volumes[] = {
+    {"OS", UINT64_C(6077580800), 2, switch_storage_parts_0},
+    {"SYSTEMOS", UINT64_C(3303014400), 1, switch_storage_parts_1},
 };
-static const struct iosw_expected_range iosw_storage_ranges[] = {
+static const struct switch_expected_range switch_storage_ranges[] = {
     {0, UINT64_C(0), 4096, {0x99, 0x52, 0xa0, 0x41, 0x1f, 0x72, 0xb7, 0x2a, 0x46, 0xf1, 0xcb,
                             0x39, 0x67, 0x42, 0xdd, 0x10, 0xb9, 0xcc, 0xaa, 0x63, 0x07, 0xf2,
                             0xbf, 0xf2, 0x2d, 0x97, 0x0f, 0xcb, 0x0f, 0x1b, 0xf9, 0x7c}},
@@ -66,6 +66,6 @@ static const struct iosw_expected_range iosw_storage_ranges[] = {
                                      0xd7, 0xd1, 0xd1, 0x6b, 0x02, 0x4f, 0x58, 0x05, 0xff, 0x7c, 0xb4,
                                      0x7c, 0x7a, 0x85, 0xda, 0xbd, 0x8b, 0x48, 0x89, 0x2c, 0xa7}},
 };
-#define IOSW_STORAGE_VOLUME_COUNT 2u
-#define IOSW_STORAGE_RANGE_COUNT  10u
+#define SWITCH_STORAGE_VOLUME_COUNT 2u
+#define SWITCH_STORAGE_RANGE_COUNT  10u
 #endif

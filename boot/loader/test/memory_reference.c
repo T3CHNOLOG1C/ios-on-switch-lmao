@@ -24,8 +24,8 @@ static int overlaps(uint64_t base, uint64_t size, uint64_t start, uint64_t end)
 }
 static int save_range(struct loader_memory_report *r, uint64_t base, uint64_t size)
 {
-    if (!size || size > UINT64_MAX - base || r->ledger.count == IOSW_RAM_RANGES) return 1;
-    r->ledger.reserved[r->ledger.count++] = (struct iosw_ram_range){base, base + size};
+    if (!size || size > UINT64_MAX - base || r->ledger.count == SWITCH_RAM_RANGES) return 1;
+    r->ledger.reserved[r->ledger.count++] = (struct switch_ram_range){base, base + size};
     return 0;
 }
 
@@ -39,7 +39,7 @@ int loader_check_fdt_memory(const uint8_t *fdt, uint32_t capacity, uint64_t star
     r->bank_count = 0;
     volatile uint8_t *clear = (volatile uint8_t *)&r->ledger;
     for (unsigned i = 0; i < sizeof(r->ledger); ++i) clear[i] = 0;
-    r->ledger.magic = IOSW_RAM_MAGIC;
+    r->ledger.magic = SWITCH_RAM_MAGIC;
     r->ledger.version = 1;
     if (capacity < 40 || capacity > 0x40000 || start >= end || be32(fdt) != 0xd00dfeed) return 1;
     uint32_t total = be32(fdt + 4), structure = be32(fdt + 8), strings = be32(fdt + 12), reserve = be32(fdt + 16);
@@ -114,7 +114,7 @@ int loader_check_fdt_memory(const uint8_t *fdt, uint32_t capacity, uint64_t star
                 if (size == 48 && (be64(fdt + pos + 32) || be64(fdt + pos + 40))) return 26;
                 for (unsigned i = 0; i < 2; i++)
                     r->ledger.banks[i] =
-                        (struct iosw_ram_range){expected[i * 2], expected[i * 2] + expected[i * 2 + 1]};
+                        (struct switch_ram_range){expected[i * 2], expected[i * 2] + expected[i * 2 + 1]};
                 r->bank_count = 2;
             }
             if (depth == 1 || (reserved && depth == 2)) {

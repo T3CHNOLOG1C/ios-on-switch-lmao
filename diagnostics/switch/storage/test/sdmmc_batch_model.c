@@ -1,4 +1,4 @@
-/* Independent SDHCI register model for the bounded PIO batch primitive (iosw_sd_read_sectors): sdmmc_batch_cases()
+/* Independent SDHCI register model for the bounded PIO batch primitive (switch_sd_read_sectors): sdmmc_batch_cases()
  * runs every case and is run by sdmmc_batch_test.cpp. */
 #include <stdint.h>
 #include <stdio.h>
@@ -192,7 +192,7 @@ static void barrier(void *ctx)
 {
     (void)ctx;
 }
-static void setup(struct model *m, struct iosw_sd_host *h, enum fault fault)
+static void setup(struct model *m, struct switch_sd_host *h, enum fault fault)
 {
     *m = (struct model){.frequency = 1000000, .fault = fault};
     m->reg[4 / 2] = 0x7200;
@@ -201,7 +201,7 @@ static void setup(struct model *m, struct iosw_sd_host *h, enum fault fault)
     m->reg[8 / 2] = 0x1234;
     m->reg[0x34 / 2] = 0x8003;
     m->reg[0x38 / 2] = 0x8002;
-    *h = (struct iosw_sd_host){.io = {read8, read16, read32, write16, write32, ticks, barrier},
+    *h = (struct switch_sd_host){.io = {read8, read16, read32, write16, write32, ticks, barrier},
                                .context = m,
                                .frequency = m->frequency,
                                .capacity_sectors = UINT64_C(0x100000000),
@@ -213,7 +213,7 @@ static unsigned cases;
 static void run(uint32_t count, enum fault fault, uint32_t fault_block, int expected)
 {
     struct model m;
-    struct iosw_sd_host h;
+    struct switch_sd_host h;
     setup(&m, &h, fault);
     m.fault_block = fault_block;
     uint32_t original[128];
@@ -221,8 +221,8 @@ static void run(uint32_t count, enum fault fault, uint32_t fault_block, int expe
     uint8_t private_data[65538], client[65536];
     memset(private_data, 0xa5, sizeof private_data);
     memset(client, 0x5a, sizeof client);
-    struct iosw_sd_result r = {0};
-    int result = iosw_sd_read_sectors(&h, 100, count, private_data + 1, &r);
+    struct switch_sd_result r = {0};
+    int result = switch_sd_read_sectors(&h, 100, count, private_data + 1, &r);
     CHECK(result == expected);
     CHECK(private_data[0] == 0xa5 && private_data[count * 512 + 1] == 0xa5);
     /* Real caller contract: incomplete private staging is never published. */
@@ -252,7 +252,7 @@ static void run(uint32_t count, enum fault fault, uint32_t fault_block, int expe
         else {
             CHECK(m.commands == 1 && h.blocked && m.reg[0x38 / 2] == 0);
             unsigned writes = m.writes;
-            CHECK(iosw_sd_read_sectors(&h, 100, count, private_data + 1, &r) == IOSW_SD_ALREADY_BLOCKED);
+            CHECK(switch_sd_read_sectors(&h, 100, count, private_data + 1, &r) == SWITCH_SD_ALREADY_BLOCKED);
             CHECK(m.writes == writes);
         }
     }
@@ -267,44 +267,44 @@ unsigned sdmmc_batch_cases(void)
     run(2, NONE, 0, 0);
     run(128, NONE, 0, 0);
     run(128, BUSY_THEN_READY, 0, 0);
-    run(1, END_ERROR, 0, IOSW_SD_CONTROLLER_ERROR);
-    run(128, BAD_POWER, 0, IOSW_SD_NOT_READY);
-    run(128, PREEXISTING, 0, IOSW_SD_PREEXISTING_ERROR);
-    run(128, CMD_ERROR, 0, IOSW_SD_CONTROLLER_ERROR);
-    run(128, CMD_TIMEOUT, 0, IOSW_SD_TIMEOUT);
-    run(128, CARD_ERROR, 0, IOSW_SD_CARD_ERROR);
-    run(128, NO_BUFFER, 1, IOSW_SD_BUFFER_STATE);
-    run(128, EARLY_DONE, 1, IOSW_SD_BUFFER_STATE);
-    run(128, DONE_WITH_READY, 1, IOSW_SD_BUFFER_STATE);
+    run(1, END_ERROR, 0, SWITCH_SD_CONTROLLER_ERROR);
+    run(128, BAD_POWER, 0, SWITCH_SD_NOT_READY);
+    run(128, PREEXISTING, 0, SWITCH_SD_PREEXISTING_ERROR);
+    run(128, CMD_ERROR, 0, SWITCH_SD_CONTROLLER_ERROR);
+    run(128, CMD_TIMEOUT, 0, SWITCH_SD_TIMEOUT);
+    run(128, CARD_ERROR, 0, SWITCH_SD_CARD_ERROR);
+    run(128, NO_BUFFER, 1, SWITCH_SD_BUFFER_STATE);
+    run(128, EARLY_DONE, 1, SWITCH_SD_BUFFER_STATE);
+    run(128, DONE_WITH_READY, 1, SWITCH_SD_BUFFER_STATE);
     run(2, DONE_WITH_READY, 1, 0);
     run(128, DONE_WITH_READY, 127, 0);
-    run(2, DONE_WITH_READY, 0, IOSW_SD_BUFFER_STATE);
-    run(128, EARLY_DONE, 127, IOSW_SD_BUFFER_STATE);
-    run(128, DONE_READY_NO_BUFFER, 127, IOSW_SD_BUFFER_STATE);
-    run(128, DONE_READY_ERROR, 127, IOSW_SD_CONTROLLER_ERROR);
-    run(128, END_ERROR, 0, IOSW_SD_CONTROLLER_ERROR);
-    run(128, END_TIMEOUT, 0, IOSW_SD_TIMEOUT);
-    run(128, AUTO_ERROR, 0, IOSW_SD_CONTROLLER_ERROR);
-    run(128, AUTO_STATUS_ONLY, 0, IOSW_SD_CONTROLLER_ERROR);
-    run(128, STOP_CARD_ERROR, 0, IOSW_SD_CARD_ERROR);
-    run(128, BUSY_TIMEOUT, 0, IOSW_SD_TIMEOUT);
-    run(128, TOTAL_TIMEOUT, 0, IOSW_SD_TIMEOUT);
-    run(128, STOPPED_TIMER, 0, IOSW_SD_TIMEOUT);
-    run(128, LATE_ERROR, 0, IOSW_SD_CONTROLLER_ERROR);
+    run(2, DONE_WITH_READY, 0, SWITCH_SD_BUFFER_STATE);
+    run(128, EARLY_DONE, 127, SWITCH_SD_BUFFER_STATE);
+    run(128, DONE_READY_NO_BUFFER, 127, SWITCH_SD_BUFFER_STATE);
+    run(128, DONE_READY_ERROR, 127, SWITCH_SD_CONTROLLER_ERROR);
+    run(128, END_ERROR, 0, SWITCH_SD_CONTROLLER_ERROR);
+    run(128, END_TIMEOUT, 0, SWITCH_SD_TIMEOUT);
+    run(128, AUTO_ERROR, 0, SWITCH_SD_CONTROLLER_ERROR);
+    run(128, AUTO_STATUS_ONLY, 0, SWITCH_SD_CONTROLLER_ERROR);
+    run(128, STOP_CARD_ERROR, 0, SWITCH_SD_CARD_ERROR);
+    run(128, BUSY_TIMEOUT, 0, SWITCH_SD_TIMEOUT);
+    run(128, TOTAL_TIMEOUT, 0, SWITCH_SD_TIMEOUT);
+    run(128, STOPPED_TIMER, 0, SWITCH_SD_TIMEOUT);
+    run(128, LATE_ERROR, 0, SWITCH_SD_CONTROLLER_ERROR);
     const unsigned failed_blocks[] = {0, 1, 64, 127};
     for (unsigned i = 0; i < 4; i++) {
-        run(128, DATA_ERROR, failed_blocks[i], IOSW_SD_CONTROLLER_ERROR);
-        run(128, DATA_TIMEOUT, failed_blocks[i], IOSW_SD_TIMEOUT);
+        run(128, DATA_ERROR, failed_blocks[i], SWITCH_SD_CONTROLLER_ERROR);
+        run(128, DATA_TIMEOUT, failed_blocks[i], SWITCH_SD_TIMEOUT);
     }
     /* Request/partition/address limits must reject before any MMIO write. */
     for (unsigned scenario = 0; scenario < 10; scenario++) {
         struct model m;
-        struct iosw_sd_host h;
+        struct switch_sd_host h;
         setup(&m, &h, NONE);
         uint64_t lba = 100;
         uint32_t count = 2;
         uint8_t out[65536];
-        struct iosw_sd_result r = {0};
+        struct switch_sd_result r = {0};
         if (scenario == 0) count = 0;
         if (scenario == 1) count = 129;
         if (scenario == 2) lba = 99;
@@ -315,25 +315,25 @@ unsigned sdmmc_batch_cases(void)
         if (scenario == 7) h.permitted_sector_count = UINT64_MAX;
         if (scenario == 8) h.io.write16 = 0;
         if (scenario == 9) h.frequency = 0;
-        CHECK(iosw_sd_read_sectors(&h, lba, count, out, &r) != 0 && !m.writes && !m.commands);
+        CHECK(switch_sd_read_sectors(&h, lba, count, out, &r) != 0 && !m.writes && !m.commands);
         cases++;
     }
     /* High LBA fits CMD18's 32-bit block argument and may end exactly at capacity. */
     struct model m;
-    struct iosw_sd_host h;
+    struct switch_sd_host h;
     setup(&m, &h, NONE);
     h.permitted_first_sector = 0;
     h.permitted_sector_count = h.capacity_sectors;
     uint8_t out[65536];
-    struct iosw_sd_result r = {0};
-    CHECK(iosw_sd_read_sectors(&h, UINT64_C(0xffffff80), 128, out, &r) == 0);
+    struct switch_sd_result r = {0};
+    CHECK(switch_sd_read_sectors(&h, UINT64_C(0xffffff80), 128, out, &r) == 0);
     for (unsigned i = 0; i < sizeof out; i++) CHECK(out[i] == byte_at(0xffffff80, i));
     cases++;
     setup(&m, &h, NONE);
     h.capacity_sectors = h.permitted_sector_count = 1;
     h.permitted_first_sector = 0;
     h.block_addressing_verified = 0;
-    CHECK(iosw_sd_read_sectors(&h, 0, 2, out, &r) == IOSW_SD_ARGUMENT && !m.writes);
+    CHECK(switch_sd_read_sectors(&h, 0, 2, out, &r) == SWITCH_SD_ARGUMENT && !m.writes);
     cases++;
     return cases;
 }

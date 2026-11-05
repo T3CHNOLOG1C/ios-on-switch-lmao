@@ -44,7 +44,7 @@ from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
 from tools.install import renamed  # noqa: E402
 
-DATA_UUID = "D1B1D053-D0A6-496C-8625-A947A3DA863E"   # SwitchRawMount.h IOSW_RAW_DATA_UUID (checked against spec)
+DATA_UUID = "D1B1D053-D0A6-496C-8625-A947A3DA863E"   # SwitchRawMount.h SWITCH_RAW_DATA_UUID (checked against spec)
 # The checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the workspace: --harvest
 # (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
 HARVEST = None

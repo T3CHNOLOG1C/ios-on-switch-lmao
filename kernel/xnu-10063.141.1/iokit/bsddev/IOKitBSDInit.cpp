@@ -594,7 +594,7 @@ native_owner_publish_boot_manifest_impl(dev_t rootDevice, const char *rootUUID,
 	int cache_identity = 0;
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	if (raw) {
-		if (switch_files_storage_profile() == IOSW_STORAGE_RAW)
+		if (switch_files_storage_profile() == SWITCH_STORAGE_RAW)
 			cache_identity = switch_cryptex_manifest_sha384(cacheDevice, cacheUUID, cacheDigest);
 	} else
 #endif

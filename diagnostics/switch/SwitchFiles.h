@@ -5,13 +5,13 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-enum { IOSW_STORAGE_FAT = 0, IOSW_STORAGE_RAW = 1, IOSW_STORAGE_INVALID = -1 };
+enum { SWITCH_STORAGE_FAT = 0, SWITCH_STORAGE_RAW = 1, SWITCH_STORAGE_INVALID = -1 };
 /* Parsed once during probe; absent/fat retains the existing file backend.
  * Unknown values are fatal. raw is root-boot-only, never a fallback. */
 int switch_files_storage_profile(void);
-struct iosw_raw_apfs;
-int switch_files_raw_open(struct iosw_raw_apfs *, void *private_scratch, uint32_t);
-#define IOSW_FILES_MAGIC UINT64_C(0x494f535746494c45)
+struct switch_raw_apfs;
+int switch_files_raw_open(struct switch_raw_apfs *, void *private_scratch, uint32_t);
+#define SWITCH_FILES_MAGIC UINT64_C(0x5357434846494c45)
 /* magic,version,stage,error,FATerror,SDerror,capacity,partitionstart,
  * partitionsize,clusterbytes,sectorsread,lastLBA,SDstatus,SDstage,readymask,
  * blocked,fixturebytes,fixtureverified,volumesopened,rangesverified,
@@ -21,7 +21,7 @@ int switch_files_raw_open(struct iosw_raw_apfs *, void *private_scratch, uint32_
 extern volatile uint64_t switch_files_record[40];
 extern uint8_t switch_files_digest[32];
 extern uint8_t switch_files_expected_digest[32];
-void switch_files_probe(struct iosw_sd_host *);
+void switch_files_probe(struct switch_sd_host *);
 void switch_diag_files_update(void);
 #ifdef __cplusplus
 }

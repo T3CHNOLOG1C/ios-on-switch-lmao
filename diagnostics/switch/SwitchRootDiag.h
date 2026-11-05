@@ -211,14 +211,14 @@ void switch_root_boot_prepare(void)
     if (!PE_parse_boot_argn("switch-root-boot", &enabled, sizeof(enabled)) || enabled != 1)
         panic("native root boot requires explicit switch-root-boot=1");
     root_boot_enabled = 1;
-    switch_root_record[0] = UINT64_C(0x494f5357524f4f54);
+    switch_root_record[0] = UINT64_C(0x53574348524f4f54);
     switch_root_record[1] = 1;
     switch_root_record[8] = switch_root_record[11] = switch_root_record[12] = switch_root_record[13] =
         UINT32_MAX;
     switch_root_record[19] = switch_root_record[20] = UINT64_MAX;
     (void)files;
     (void)legacy;
-    if (switch_files_storage_profile() != IOSW_STORAGE_RAW) panic("Switch: only switch-storage=raw is supported");
+    if (switch_files_storage_profile() != SWITCH_STORAGE_RAW) panic("Switch: only switch-storage=raw is supported");
     /* The SD block driver owns the controller and finds the APFS partition;
      * IOKit and APFS publish the container and volumes from there. */
     int error = switch_block_publish();

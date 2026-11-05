@@ -152,7 +152,7 @@ def instruction_inventory(original_data, parent, modules):
 # (16 bytes, so the same 24 base64 characters long) and apply puts the real one in its place.
 KCID_STAND_IN = b'\xa5\x5a' * 8
 KCID_DOMAIN = b'SWITCH-MEMORY-V21-KCID\0'
-PLAN_MAGIC = b'IOSWPLK1'
+PLAN_MAGIC = b'SWCHPLK1'
 
 
 class Plan:

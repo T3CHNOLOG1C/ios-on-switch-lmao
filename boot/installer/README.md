@@ -20,7 +20,7 @@ The external `.IWI` is stored on FAT, never inside the APFS partition. Version 2
 
 | Offset | Field |
 | --- | --- |
-| 0 | `IOSWIMG2` |
+| 0 | `SWCHIMG2` |
 | 8 | LE32 version = 2 |
 | 12 | LE32 ordered source part count, 1..128 |
 | 16 | LE64 logical APFS bytes |
@@ -33,7 +33,7 @@ Each following 256-byte source record contains a zero-padded, NUL-terminated 240
 
 After the source records, each 24-byte extent contains LE64 **image offset, source offset, byte count**. Source offsets address the concatenated declared parts. All ranges are APFS-block aligned, positive, sorted, disjoint and bounded independently in source and target. Source gaps are allowed. The first extent starts at image/source zero and covers the NXSB block. The whole table is validated before writing. The decoder cannot prove that omitted blocks are APFS-free; the host's allocation proof supplies that property.
 
-`scripts/prepare_native_sparse_install.py` plans retained prefixes and bounded new slices from the qualified allocation map, and encodes this manifest. The current plan has six parts and six extents. The native decoder also accepts dense version-1 `IOSWIMG1` manifests; their legacy SHA field is ignored. Hidden metadata files are excluded from the image menu.
+`scripts/prepare_native_sparse_install.py` plans retained prefixes and bounded new slices from the qualified allocation map, and encodes this manifest. The current plan has six parts and six extents. The native decoder also accepts dense version-1 `SWCHIMG1` manifests; their legacy SHA field is ignored. Hidden metadata files are excluded from the image menu.
 
 ## Build and evidence
 

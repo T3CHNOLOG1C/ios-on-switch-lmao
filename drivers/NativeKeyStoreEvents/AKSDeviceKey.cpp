@@ -115,7 +115,7 @@ extern "C" void native_aks_device_key_start(void)
     if (!uid[2] || uid[2] == ~0u || (!uid[5] && !uid[6])) {
         panic("AppleKeyStore: implausible fuse chip ID (lot0 %#x x %#x y %#x), no device key", uid[2], uid[5], uid[6]);
     }
-    static const char label[] = AKS_LABEL_DOMAIN " AppleKeyStore device key v1";
+    static const char label[] = "Switch AppleKeyStore device key v2";
     const void *parts[2] = {label, uid};
     const size_t lengths[2] = {sizeof label - 1, sizeof uid};
     sha256Parts(parts, lengths, 2, gDeviceKey);
@@ -161,7 +161,14 @@ extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const 
     const aks::Primitives p{&kek, encryptBlock, decryptBlock};
     const bool ok = aks::unwrap(p, wrapped, length, out);
     aks::wipe(&kek, sizeof kek);
-    if (!ok) return (IOReturn)aks::kReturnError;
+    if (!ok) {
+        // Keys wrapped under the v1 labels' device key (an install from before them) never unwrap: say so once.
+        static volatile UInt32 sReported;
+        if (OSCompareAndSwap(0, 1, &sReported))
+            IOLog("AppleKeyStore: a wrapped key does not unwrap under this device key (data from an older install?); "
+                  "refused, as every such key is: reinstall to start fresh\n");
+        return (IOReturn)aks::kReturnError;
+    }
     *written = length - aks::kBlock;
     return kIOReturnSuccess;
 }
@@ -170,7 +177,7 @@ extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const 
 extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16])
 {
     if (!gDeviceKeyReady) return (IOReturn)aks::kReturnNotReady;
-    static const char label[] = AKS_LABEL_DOMAIN " AppleKeyStore bag uuid v1";
+    static const char label[] = "Switch AppleKeyStore bag uuid v2";
     const uint8_t id[4] = {static_cast<uint8_t>(keybag >> 24), static_cast<uint8_t>(keybag >> 16),
                            static_cast<uint8_t>(keybag >> 8), static_cast<uint8_t>(keybag)};
     const void *parts[2] = {label, id};

@@ -27,9 +27,9 @@ int installer_card_ready(void *unused) {
 int installer_card_bind(void) {
     if(bound || !sd_storage.initialized || !sd_storage.has_sector_access ||
        sd_storage.sdmmc!=&sd_sdmmc || sd_sdmmc.id!=SDMMC_1 || !sd_storage.sec_cnt || !sd_storage.rca) return 1;
-    bounce=malloc(IOSW_INSTALL_CHUNK);
+    bounce=malloc(SWITCH_INSTALL_CHUNK);
     if(!bounce || ((uintptr_t)bounce&31) || !mc_client_has_access(bounce) ||
-       !mc_client_has_access(bounce+IOSW_INSTALL_CHUNK-1)) return 1;
+       !mc_client_has_access(bounce+SWITCH_INSTALL_CHUNK-1)) return 1;
     memcpy(cid,sd_storage.raw_cid,16);capacity=sd_storage.sec_cnt;rca=sd_storage.rca;bound=1;
     return installer_card_ready(0);
 }
@@ -39,7 +39,7 @@ static int command(uint32_t index, uint32_t arg, void *bytes, uint32_t size, int
     sdmmc_cmd_t cmd;sdmmc_req_t req;u32 count=0,response;
     sdmmc_init_cmd(&cmd,index,arg,SDMMC_RSP_TYPE_1,0);
     if(size) {
-        if(size>IOSW_INSTALL_CHUNK) return fail();
+        if(size>SWITCH_INSTALL_CHUNK) return fail();
         if(write) memcpy(bounce,bytes,size);
         /* Installer-owned aligned DRAM can receive DMA directly. Small/stack
          * buffers retain the qualified private bounce buffer. Writes always
@@ -74,7 +74,7 @@ int installer_card_sync(void *unused) {
 }
 int installer_card_transfer(void *unused, int write, uint64_t sector, uint32_t count, void *bytes) {
     (void)unused;
-    if(!bytes || !count || count>IOSW_INSTALL_CHUNK/512 || sector>=capacity || count>capacity-sector)
+    if(!bytes || !count || count>SWITCH_INSTALL_CHUNK/512 || sector>=capacity || count>capacity-sector)
         return fail();
     if(write && (!qualified || !write_permit || !write_permit(sector,count))) return fail();
     if(command(write?MMC_WRITE_MULTIPLE_BLOCK:MMC_READ_MULTIPLE_BLOCK,(uint32_t)sector,
@@ -91,7 +91,7 @@ int __wrap_sdmmc_storage_read(sdmmc_storage_t *s,u32 sector,u32 count,void *buff
     if(s!=&sd_storage || !count || !buffer) return fail();
     uint8_t *p=buffer;
     while(count) {
-        uint32_t n=count>IOSW_INSTALL_CHUNK/512?IOSW_INSTALL_CHUNK/512:count;
+        uint32_t n=count>SWITCH_INSTALL_CHUNK/512?SWITCH_INSTALL_CHUNK/512:count;
         if(installer_card_transfer(0,0,sector,n,p)) return 1;
         sector+=n;count-=n;p+=n*512;
     }

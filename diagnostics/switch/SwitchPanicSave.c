@@ -85,11 +85,11 @@ extern unsigned char iso_font[256 * 16];
 #define CONSOLE_SIG       0x43474244u          /* 'DBGC' (hekate PSTORE_RAM_SIG) */
 #define TEXT_MAX          (CONSOLE_BYTES - 16) /* hekate saves it only below 0x80000 */
 #define BLOCK_BYTES       4096u
-#define RECORD_MAGIC      UINT64_C(0x31434e5057534f49) /* "IOSWPNC1" */
+#define RECORD_MAGIC      UINT64_C(0x31434e5048435753) /* "SWCHPNC1" */
 #define SHOT_HEADER       (RECORD_OFFSET + 0x1000u)
 #define SHOT_OFFSET       (RECORD_OFFSET + 0x2000u)
 #define SHOT_MAX          (CONSOLE_OFFSET - SHOT_OFFSET)
-#define SHOT_MAGIC        UINT64_C(0x314b534857534f49) /* "IOSWHSK1" */
+#define SHOT_MAGIC        UINT64_C(0x314b534848435753) /* "SWCHHSK1" */
 #define WATCHDOG_REBOOT_S 60u
 #define DARK_REBOOT_S     15u
 #define MSGBUF_TAIL       (64u << 10)

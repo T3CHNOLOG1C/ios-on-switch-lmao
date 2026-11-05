@@ -1,4 +1,4 @@
-// boot/storage/partition.c (iosw_gpt_find: GPT qualification before the loader trusts a partition) against
+// boot/storage/partition.c (switch_gpt_find: GPT qualification before the loader trusts a partition) against
 // independent sparse GPT images (GptImage below) and zlib's CRC-32: both headers and arrays, every geometry, count,
 // size and CRC field, agreement between the copies, every used entry's bounds, uniqueness and overlap, a callback
 // failure at every metadata sector, 64-bit capacities, and output written only on success.
@@ -191,7 +191,7 @@ int Read512(void *, uint64_t lba, uint8_t output[512])
 class NativePartition : public testing::Test {
 protected:
     GptImage image;
-    iosw_gpt_workspace workspace{};
+    switch_gpt_workspace workspace{};
 
     void SetUp() override { gImage = &image; }
     void Reset(GptImage next)
@@ -201,14 +201,14 @@ protected:
     }
 
     // Finds `guid` (nullptr: none given); `expected` OK commits exactly the target slice, anything else nothing.
-    iosw_gpt_slice Find(int expected = OK, std::optional<Guid> guid = TARGET, bool noGuid = false,
+    switch_gpt_slice Find(int expected = OK, std::optional<Guid> guid = TARGET, bool noGuid = false,
                         std::optional<uint64_t> capacity = std::nullopt)
     {
-        iosw_gpt_slice output;
+        switch_gpt_slice output;
         std::memset(&output, 0xaa, sizeof(output));
-        iosw_gpt_slice before;
+        switch_gpt_slice before;
         std::memcpy(&before, &output, sizeof(output));
-        EXPECT_EQ(iosw_gpt_find(Read512, nullptr, capacity ? *capacity : image.capacity,
+        EXPECT_EQ(switch_gpt_find(Read512, nullptr, capacity ? *capacity : image.capacity,
                                 noGuid ? nullptr : guid->data(), &workspace, &output),
                   expected);
         if (expected) {
@@ -232,7 +232,7 @@ TEST_F(NativePartition, ValidPrimaryBackupExactGuidAndHybridMbr)
     ASSERT_GE(image.reads.size(), 3u);
     EXPECT_EQ(std::vector<uint64_t>(image.reads.begin(), image.reads.begin() + 3),
               (std::vector<uint64_t>{0, 1, image.capacity - 1}));
-    EXPECT_LT(sizeof(iosw_gpt_workspace), 6000u);
+    EXPECT_LT(sizeof(switch_gpt_workspace), 6000u);
     image.mbr[466] = 0x0c;
     image.mbr[462] = 0x80;  // A hybrid entry is not interpreted by GPT selection.
     Find();

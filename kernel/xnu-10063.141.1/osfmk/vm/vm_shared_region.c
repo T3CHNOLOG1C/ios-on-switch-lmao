@@ -117,7 +117,7 @@
 struct vnode;
 extern memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);
-#define IOSW_TEXT_SLOTS 2   /* the most patched ranges one mapping holds (.07: the two widget deadline sites) */
+#define SWITCH_TEXT_SLOTS 2   /* the most patched ranges one mapping holds (.07: the two widget deadline sites) */
 
 /*
  * Switch: replace a few pages of an executable cache mapping, just entered in the shared region, with apple_protect
@@ -131,7 +131,7 @@ static void
 switch_shared_cache_text_patch(vm_map_t sr_map, vm_map_offset_t sr_address,
     const struct shared_file_mapping_slide_np *mapping, const struct _sr_file_mappings *srfmp, vm_object_t file_object)
 {
-	for (unsigned slot = 0; slot < IOSW_TEXT_SLOTS; slot++) {
+	for (unsigned slot = 0; slot < SWITCH_TEXT_SLOTS; slot++) {
 		uint64_t range_offset = 0, range_size = 0;
 		memory_object_t mo = switch_shared_cache_text_pager(file_object, mapping->sms_file_offset,
 		    mapping->sms_size, mapping->sms_address - srfmp->slide, srfmp->vp, slot, &range_offset, &range_size);

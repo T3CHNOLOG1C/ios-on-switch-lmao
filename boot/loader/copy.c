@@ -47,10 +47,10 @@ int loader_copy_build_tables(uint64_t tables[LOADER_COPY_TABLE_PAGES][LOADER_COP
         b->image_end != table_address + LOADER_COPY_TABLE_PAGES * PAGE || b->image_end > REFERENCE ||
         b->rx_end < ADAPTER + PAGE || (b->rx_end & (PAGE - 1)) ||
         b->ro_end < b->rx_end || (b->ro_end & (PAGE - 1)) || b->ro_end > table_address ||
-        b->source != IOSW_STAGE_PA || !b->bytes || (b->bytes & (PAGE - 1)) ||
+        b->source != SWITCH_STAGE_PA || !b->bytes || (b->bytes & (PAGE - 1)) ||
         b->bytes > UINT64_C(0x6000000) ||
         !b->source_bytes || (b->source_bytes & (PAGE - 1)) ||
-        b->source_bytes > IOSW_STAGE_END - PAGE - IOSW_STAGE_PA ||
+        b->source_bytes > SWITCH_STAGE_END - PAGE - SWITCH_STAGE_PA ||
         (b->destination & (PAGE - 1)) || b->destination < UINT64_C(0xb2000000) ||
         b->destination >= UINT64_C(0xc0000000) ||
         b->bytes > UINT64_C(0xc0000000) - b->destination) return 1;

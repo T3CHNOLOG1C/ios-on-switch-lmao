@@ -6,7 +6,7 @@ usage: stage-tegra-gm20b-metal.py <Data mount point> (--build <outdir> | --remov
 <outdir> is the directory //gpu:bundle builds (bazel-bin/gpu/bundle; //deploy:sd --stage-gpu passes it). Exit status 0 on success, else one error line.
 
 Mount the Data volume read-write first, e.g. `diskutil mount -mountOptions nobrowse D1B1D053-D0A6-496C-8625-A947A3DA863E`
-(SwitchRawMount.h IOSW_RAW_DATA_UUID), and eject the card before it goes back into the Switch.
+(SwitchRawMount.h SWITCH_RAW_DATA_UUID), and eject the card before it goes back into the Switch.
 
 As vendor/unixnu/scripts/add-gpu-plugin-data.py --publish (UniXNU-sheng), on the live volume instead of a seed image:
   * <Data>/ngpu/addons/TegraGM20BMetal.bundle from <build outdir>/ngpu/addons (//gpu:bundle). The kernel shows

@@ -29,8 +29,8 @@ extern volatile uint64_t switch_user_record[14];
 volatile uint64_t switch_sd_record[33];
 uint8_t switch_sd_bytes[512];
 uint8_t switch_sd_reference_bytes[512];
-static struct iosw_sd_reference reference;
-static struct iosw_sd_card qualified_card;
+static struct switch_sd_reference reference;
+static struct switch_sd_card qualified_card;
 volatile uint64_t switch_card_record[16];
 static unsigned attempted;
 struct board_io {
@@ -38,7 +38,7 @@ struct board_io {
     uint32_t bounds_error;
 #if !SWITCH_SD_MODEL
     volatile uint8_t *mc;
-    struct iosw_sd_dma dma;
+    struct switch_sd_dma dma;
 #endif
 #if SWITCH_SD_MODEL
     uint32_t mode, phase, words, commands, writes;
@@ -151,7 +151,7 @@ static void dma_write8(void *context, uint32_t offset, uint8_t value)
 static int dma_cache(void *context, void *address, uint32_t length, int after_read)
 {
     struct board_io *b = context;
-    if (b != &board || address != b->dma.bytes || !length || length > IOSW_SD_DMA_BYTES || ((uintptr_t)address & 63) ||
+    if (b != &board || address != b->dma.bytes || !length || length > SWITCH_SD_DMA_BYTES || ((uintptr_t)address & 63) ||
         (after_read != 0 && after_read != 1))
         return -1;
     uintptr_t end = (uintptr_t)address + ((length + 63u) & ~63u);
@@ -164,13 +164,13 @@ static int dma_cache(void *context, void *address, uint32_t length, int after_re
     __asm__ volatile("dsb sy" ::: "memory");
     return 0;
 }
-static int dma_install(struct iosw_sd_host *host)
+static int dma_install(struct switch_sd_host *host)
 {
-    struct iosw_sd_dma *d = &board.dma;
+    struct switch_sd_dma *d = &board.dma;
     host->dma_required = 1; /* No native PIO even when allocation/qualification fails. */
-    switch_dma_record[0] = UINT64_C(0x494f5357444d4131);
+    switch_dma_record[0] = UINT64_C(0x53574348444d4131);
     switch_dma_record[1] = 1;
-    int status = IOSW_SD_UNQUALIFIED;
+    int status = SWITCH_SD_UNQUALIFIED;
     switch_dma_record[8] = r16(&board, 0xfe);
     switch_dma_record[9] = r32(&board, 0x40);
     switch_dma_record[10] = r8(&board, 0x28);
@@ -187,32 +187,32 @@ static int dma_install(struct iosw_sd_host *host)
      * Its deprecated physical-address argument is deliberately unused. */
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    d->bytes = IOMallocContiguous(IOSW_SD_DMA_BYTES, IOSW_SD_DMA_BYTES, NULL);
+    d->bytes = IOMallocContiguous(SWITCH_SD_DMA_BYTES, SWITCH_SD_DMA_BYTES, NULL);
 #pragma clang diagnostic pop
     if (!d->bytes) goto failed;
     switch_dma_record[1] = 4;
-    d->capacity = IOSW_SD_DMA_BYTES;
+    d->capacity = SWITCH_SD_DMA_BYTES;
     d->physical = ml_vtophys((vm_offset_t)d->bytes);
     switch_dma_record[3] = d->physical;
     switch_dma_record[4] = d->capacity;
     /* VM supplied a wired physically contiguous allocation. Independently
      * verify every 4 KiB page and final byte; never assume CPU VA is bus PA. */
-    if (!d->physical || (d->physical & (IOSW_SD_DMA_BYTES - 1)) ||
-        d->physical > UINT64_C(0x1000000000) - IOSW_SD_DMA_BYTES)
+    if (!d->physical || (d->physical & (SWITCH_SD_DMA_BYTES - 1)) ||
+        d->physical > UINT64_C(0x1000000000) - SWITCH_SD_DMA_BYTES)
         goto failed;
-    for (uint32_t at = 0; at < IOSW_SD_DMA_BYTES; at += 4096)
+    for (uint32_t at = 0; at < SWITCH_SD_DMA_BYTES; at += 4096)
         if (ml_vtophys((vm_offset_t)(d->bytes + at)) != d->physical + at) goto failed;
-    if (ml_vtophys((vm_offset_t)(d->bytes + IOSW_SD_DMA_BYTES - 1)) != d->physical + IOSW_SD_DMA_BYTES - 1) goto failed;
+    if (ml_vtophys((vm_offset_t)(d->bytes + SWITCH_SD_DMA_BYTES - 1)) != d->physical + SWITCH_SD_DMA_BYTES - 1) goto failed;
     d->write8 = dma_write8;
     d->bus_ready = dma_bus_ready;
     d->cache = dma_cache;
     switch_dma_record[1] = 5;
-    status = iosw_sd_dma_bind(d, &host->io, &board, host->frequency);
+    status = switch_sd_dma_bind(d, &host->io, &board, host->frequency);
     if (status) goto failed;
     host->dma = d;
     switch_dma_record[1] = 6;
     switch_dma_record[2] = 0;
-    return IOSW_SD_OK;
+    return SWITCH_SD_OK;
 failed:
     host->blocked = 1;
     d->failed = 1;
@@ -242,7 +242,7 @@ static const uint8_t *model_bridge_sector(uint64_t lba)
         uint64_t base = lba & ~UINT64_C(127), count = 128;
         if (base >= qualified_card.capacity_sectors) return 0;
         if (count > qualified_card.capacity_sectors - base) count = qualified_card.capacity_sectors - base;
-        switch_sd_bridge_record[0] = UINT64_C(0x494f535742524447);
+        switch_sd_bridge_record[0] = UINT64_C(0x5357434842524447);
         uint64_t sequence = switch_sd_bridge_record[1] + 1;
         if (!sequence) return 0;
         switch_sd_bridge_record[1] = sequence;
@@ -257,7 +257,7 @@ static const uint8_t *model_bridge_sector(uint64_t lba)
         switch_sd_model_request_checkpoint();
         /* No debugger or an incomplete/error reply fails immediately. */
         if (switch_sd_bridge_record[4] != sequence || switch_sd_bridge_record[5] != 1 ||
-            switch_sd_bridge_record[6] != iosw_sd_crc32(switch_sd_model_cache, (uint32_t)count * 512) ||
+            switch_sd_bridge_record[6] != switch_sd_crc32(switch_sd_model_cache, (uint32_t)count * 512) ||
             switch_sd_bridge_record[7])
             return 0;
         model_cache_lba = base;
@@ -276,7 +276,7 @@ static uint64_t model_u64(const uint8_t *p)
 static int model_image_init(struct board_io *b)
 {
     const uint8_t *image = (const uint8_t *)ml_io_map_with_prot(UINT64_C(0xe8000000), 4096, VM_PROT_READ);
-    static const uint8_t magic[8] = {'I', 'O', 'S', 'W', 'B', 'L', 'K', '1'};
+    static const uint8_t magic[8] = {'S', 'W', 'C', 'H', 'B', 'L', 'K', '1'};
     if (!image) return 0;
     for (unsigned i = 0; i < 8; i++)
         if (image[i] != magic[i]) return 0;
@@ -333,7 +333,7 @@ static const uint8_t *model_sector(struct board_io *b, uint32_t lba)
     uint32_t offset = model_u32(entry + 8);
     if (offset > b->image_size || b->image_size - offset < 512) return 0;
     const uint8_t *sector = b->image + offset;
-    if (iosw_sd_crc32(sector, 512) != model_u32(entry + 12)) return 0;
+    if (switch_sd_crc32(sector, 512) != model_u32(entry + 12)) return 0;
     return sector;
 }
 /* Compile-time model adapter. No physical MMIO dereference exists in this
@@ -502,15 +502,15 @@ void switch_sd_probe(void)
     int enabled = 0;
     if (!PE_parse_boot_argn("switch-sd-test", &enabled, sizeof(enabled)) || enabled != 1 || attempted) return;
     attempted = 1;
-    switch_sd_record[0] = IOSW_SD_DIAG_MAGIC;
+    switch_sd_record[0] = SWITCH_SD_DIAG_MAGIC;
     switch_sd_record[1] = 1;
     switch_sd_record[2] = 1;
     switch_sd_record[4] = SWITCH_SD_MODEL;
     switch_sd_record[5] = 1;
     switch_sd_record[6] = real_ncpus;
     switch_sd_record[17] = UINT64_MAX;
-    switch_sd_record[26] = IOSW_SD_REFERENCE_PA;
-    switch_sd_record[27] = IOSW_SD_CONTROLLER_PA;
+    switch_sd_record[26] = SWITCH_SD_REFERENCE_PA;
+    switch_sd_record[27] = SWITCH_SD_CONTROLLER_PA;
     int cpus = 0;
     int root_boot = 0;
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
@@ -538,30 +538,30 @@ void switch_sd_probe(void)
     unsigned length = 0;
     if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
         SecureDTGetProperty(chosen, "switch-sd-reference", &property, &length) != kSuccess || length != 16 ||
-        !property || le64(property) != IOSW_SD_REFERENCE_PA ||
-        le64((const uint8_t *)property + 8) != IOSW_SD_REFERENCE_BYTES) {
+        !property || le64(property) != SWITCH_SD_REFERENCE_PA ||
+        le64((const uint8_t *)property + 8) != SWITCH_SD_REFERENCE_BYTES) {
         refuse(101);
         return;
     }
     /* The reference lies below managed physBase. Use a read-only explicit map,
      * never phystokv. Loader has committed the checked external page. */
-    vm_offset_t mapped = ml_io_map_with_prot((vm_offset_t)IOSW_SD_REFERENCE_PA, IOSW_SD_REFERENCE_BYTES, VM_PROT_READ);
+    vm_offset_t mapped = ml_io_map_with_prot((vm_offset_t)SWITCH_SD_REFERENCE_PA, SWITCH_SD_REFERENCE_BYTES, VM_PROT_READ);
     if (!mapped) {
         refuse(102);
         return;
     }
     barrier(NULL);
     int reference_error =
-        files ? iosw_sd_card_reference_validate((const volatile uint8_t *)mapped, IOSW_SD_REFERENCE_BYTES, 1,
+        files ? switch_sd_card_reference_validate((const volatile uint8_t *)mapped, SWITCH_SD_REFERENCE_BYTES, 1,
                                                 &reference, &qualified_card)
-              : iosw_sd_reference_validate((const volatile uint8_t *)mapped, IOSW_SD_REFERENCE_BYTES, 1, &reference);
+              : switch_sd_reference_validate((const volatile uint8_t *)mapped, SWITCH_SD_REFERENCE_BYTES, 1, &reference);
     switch_sd_record[7] = (uint64_t)reference_error;
     if (reference_error) {
         refuse(110 + (unsigned)reference_error);
         return;
     }
     if (files) {
-        switch_card_record[0] = UINT64_C(0x494f535743415244);
+        switch_card_record[0] = UINT64_C(0x5357434843415244);
         switch_card_record[1] = 1;
         switch_card_record[2] = qualified_card.capacity_sectors;
         switch_card_record[3] = qualified_card.capacity_bytes;
@@ -605,7 +605,7 @@ void switch_sd_probe(void)
     /* ml_io_map uses VM_WIMG_IO. The pinned pmap maps this non-DRAM PA as
      * Device-nGnRnE and NX. Mapping granularity is4KiB; callbacks constrain all
      * accesses to this controller's first0x200 and never touch eMMC at+0x600. */
-    mapped = ml_io_map((vm_offset_t)IOSW_SD_CONTROLLER_PA, 0x200);
+    mapped = ml_io_map((vm_offset_t)SWITCH_SD_CONTROLLER_PA, 0x200);
     if (!mapped) {
         refuse(121);
         return;
@@ -616,8 +616,8 @@ void switch_sd_probe(void)
     switch_sd_record[31] = 1;
     switch_sd_record[2] = 3;
     switch_sd_record[8] = frequency;
-    static struct iosw_sd_host host;
-    host = (struct iosw_sd_host){.io = {r8, r16, r32, w16, w32, ticks, barrier},
+    static struct switch_sd_host host;
+    host = (struct switch_sd_host){.io = {r8, r16, r32, w16, w32, ticks, barrier},
                                  .context = &board,
                                  .frequency = frequency,
                                  .capacity_sectors = 1,
@@ -636,12 +636,12 @@ void switch_sd_probe(void)
         return;
     }
 #endif
-    struct iosw_sd_result result;
+    struct switch_sd_result result;
     /* No other SD driver exists before this serialized owner is published. Keep CPU interrupt
      * dispatch out of the complete polling operation; transport masks SD IRQs. */
     boolean_t previous = ml_set_interrupts_enabled(FALSE);
     barrier(&board);
-    int error = iosw_sd_read_sector(&host, 0, switch_sd_bytes, &result);
+    int error = switch_sd_read_sector(&host, 0, switch_sd_bytes, &result);
     switch_sd_record[18] = result.present;
     switch_sd_record[19] = result.host_control;
     switch_sd_record[20] = result.power;
@@ -663,7 +663,7 @@ void switch_sd_probe(void)
     if (board.bounds_error) switch_sd_record[3] = 122;
     (void)ml_set_interrupts_enabled(previous);
     if (switch_sd_record[3]) return;
-    switch_sd_record[10] = iosw_sd_crc32(switch_sd_bytes, 512);
+    switch_sd_record[10] = switch_sd_crc32(switch_sd_bytes, 512);
     switch_sd_record[29] = (uint32_t)switch_sd_bytes[510] | (uint32_t)switch_sd_bytes[511] << 8;
     for (unsigned i = 0; i < 512; ++i)
         if (switch_sd_bytes[i] != reference.sector[i]) {

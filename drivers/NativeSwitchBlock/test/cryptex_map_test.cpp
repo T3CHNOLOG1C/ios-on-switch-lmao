@@ -168,7 +168,7 @@ TEST(CryptexMap, PrefetchLogsMergeIntoRuns)
     printf("cryptex map: %lu prefetch logs merged\n", logs);
 }
 
-// The prefetch list's file format IOSWPF02, frozen. A build whose loader refuses the list an earlier build saved makes
+// The prefetch list's file format SWCHPF02, frozen. A build whose loader refuses the list an earlier build saved makes
 // its first boot a recording boot with no prefetch. So this list, laid out byte by byte as SwitchCryptex.cpp writes
 // it, must keep loading: a new format comes with a loader that still reads (converts) this one, and this test is
 // changed to load both.
@@ -203,7 +203,7 @@ TEST(CryptexMap, TheSavedListFormatStaysReadable)
 
     // A saved list: header, then two runs.
     std::vector<uint8_t> file(96 + 2 * 16, 0);
-    for (unsigned i = 0; i < 8; ++i) file[i] = uint8_t("IOSWPF02"[i]);
+    for (unsigned i = 0; i < 8; ++i) file[i] = uint8_t("SWCHPF02"[i]);
     put(file, 8, 2, 4);
     put(file, 12, 96, 4);
     const SwitchImageKey keys[2] = {{3303014400ull, 0x1d2e3full, 1730800000, 123456789},
@@ -230,7 +230,7 @@ TEST(CryptexMap, TheSavedListFormatStaysReadable)
 
     SwitchListHeader header;
     memcpy(&header, file.data(), sizeof(header));
-    EXPECT_EQ(switchListRefusal(header, keys, 1u << 18), nullptr) << "a saved IOSWPF02 list no longer loads";
+    EXPECT_EQ(switchListRefusal(header, keys, 1u << 18), nullptr) << "a saved SWCHPF02 list no longer loads";
     std::vector<SwitchRun> runs(2);
     memcpy(runs.data(), file.data() + 96, 32);
     EXPECT_EQ(switchFnv(reinterpret_cast<const uint8_t *>(runs.data()), 32), header.checksum);
@@ -245,10 +245,10 @@ TEST(CryptexMap, TheSavedListFormatStaysReadable)
     EXPECT_STREQ(switchListRefusal(other, keys, 1u << 18), "saved for other cryptex images");
     other = header;
     other.magic[7] = '1';
-    EXPECT_STREQ(switchListRefusal(other, keys, 1u << 18), "not an IOSWPF02 list");
+    EXPECT_STREQ(switchListRefusal(other, keys, 1u << 18), "not an SWCHPF02 list");
     other = header;
     other.version = 3;
-    EXPECT_STREQ(switchListRefusal(other, keys, 1u << 18), "an IOSWPF02 list of another version");
+    EXPECT_STREQ(switchListRefusal(other, keys, 1u << 18), "an SWCHPF02 list of another version");
     other = header;
     other.runs = 0;
     EXPECT_STREQ(switchListRefusal(other, keys, 1u << 18), "no runs, or too many");

@@ -94,7 +94,7 @@ uint32_t stride(uint32_t size = kBank)
 
 struct SlotOptions {
     uint32_t version = 1;
-    std::string magic = "IOSWNVRM";
+    std::string magic = "SWCHNVRM";
     uint32_t reserved = 0;
 };
 
@@ -268,7 +268,7 @@ TEST(SwitchNVRAMStore, OtherVersionsMagicsSizesAndReservedBits)
 {
     const Bytes image = bank();
     EXPECT_EQ(pick(slot(image, 1, {.version = 2})), Pick(-1, 0));
-    EXPECT_EQ(pick(slot(image, 1, {.magic = "IOSWNVRX"})), Pick(-1, 0));
+    EXPECT_EQ(pick(slot(image, 1, {.magic = "SWCHNVRX"})), Pick(-1, 0));
     EXPECT_EQ(pick(slot(image, 1, {.reserved = 1})), Pick(-1, 0));
     const Bytes small = bank({}, 1, 4096);
     EXPECT_EQ(pick(slot(small, 1), kBank), Pick(-1, 0));

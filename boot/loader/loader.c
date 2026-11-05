@@ -57,38 +57,38 @@ static uint64_t ticks(void) {
 
 #if LOAD_STAMPS_ADT_OFFSET
 /* Pre-kernel timing (stamps.h), written into the ADT just before XNU starts. Diagnostic only: nothing here refuses. */
-static volatile uint64_t boot_stamps[IOSW_STAMP_COUNT] __attribute__((section(".data"))) = {0};
+static volatile uint64_t boot_stamps[SWITCH_STAMP_COUNT] __attribute__((section(".data"))) = {0};
 
 /* The microsecond timer U-Boot sampled, against the counter, once at entry. */
 static void stamps_entry(void) {
-    boot_stamps[IOSW_STAMP_MAGIC] = IOSW_STAMP_RECORD_MAGIC;
-    boot_stamps[IOSW_STAMP_WORDS] = IOSW_STAMP_COUNT;
-    boot_stamps[IOSW_STAMP_FREQUENCY] = probe_record[R_EL1_CNTFRQ];
-    boot_stamps[IOSW_STAMP_LOADER_ENTRY] = probe_record[R_COUNTER_PRE];
+    boot_stamps[SWITCH_STAMP_MAGIC] = SWITCH_STAMP_RECORD_MAGIC;
+    boot_stamps[SWITCH_STAMP_WORDS] = SWITCH_STAMP_COUNT;
+    boot_stamps[SWITCH_STAMP_FREQUENCY] = probe_record[R_EL1_CNTFRQ];
+    boot_stamps[SWITCH_STAMP_LOADER_ENTRY] = probe_record[R_COUNTER_PRE];
     const uint64_t before = ticks();
-    const uint32_t us = *(const volatile uint32_t *)(uintptr_t)IOSW_TIMERUS_PA;
+    const uint32_t us = *(const volatile uint32_t *)(uintptr_t)SWITCH_TIMERUS_PA;
     const uint64_t after = ticks();
-    boot_stamps[IOSW_STAMP_TIMERUS] = us;
-    boot_stamps[IOSW_STAMP_TIMERUS_AT] = before + (after - before) / 2;
+    boot_stamps[SWITCH_STAMP_TIMERUS] = us;
+    boot_stamps[SWITCH_STAMP_TIMERUS_AT] = before + (after - before) / 2;
 }
 
 /* U-Boot's samples (stamps.h slot) as counter values: only those taken after the counter started and before this
  * loader did. The slot is then cleared, so a later boot never reads this one's. The caller checked the slot against
  * the live FDT's reservations. */
 static void stamps_uboot(void) {
-    volatile uint32_t *slot = (volatile uint32_t *)(uintptr_t)IOSW_BOOT_STAMPS_PA;
-    if (slot[0] != IOSW_BOOT_STAMPS_UBOOT_MAGIC) return;
-    const uint64_t frequency = boot_stamps[IOSW_STAMP_FREQUENCY], at = boot_stamps[IOSW_STAMP_TIMERUS_AT];
-    const uint32_t now = (uint32_t)boot_stamps[IOSW_STAMP_TIMERUS];
-    static const uint8_t record[IOSW_BOOT_STAMPS_UBOOT_COUNT] = {
-        IOSW_STAMP_UBOOT_DISTRO, IOSW_STAMP_UBOOT_SCRIPT, IOSW_STAMP_UBOOT_LOADER, IOSW_STAMP_UBOOT_DTB,
-        IOSW_STAMP_UBOOT_WINDOW, IOSW_STAMP_UBOOT_EXPORTER, IOSW_STAMP_UBOOT_PREP, IOSW_STAMP_UBOOT_GO,
-        IOSW_STAMP_UBOOT_MAIN, IOSW_STAMP_UBOOT_SD,
+    volatile uint32_t *slot = (volatile uint32_t *)(uintptr_t)SWITCH_BOOT_STAMPS_PA;
+    if (slot[0] != SWITCH_BOOT_STAMPS_UBOOT_MAGIC) return;
+    const uint64_t frequency = boot_stamps[SWITCH_STAMP_FREQUENCY], at = boot_stamps[SWITCH_STAMP_TIMERUS_AT];
+    const uint32_t now = (uint32_t)boot_stamps[SWITCH_STAMP_TIMERUS];
+    static const uint8_t record[SWITCH_BOOT_STAMPS_UBOOT_COUNT] = {
+        SWITCH_STAMP_UBOOT_DISTRO, SWITCH_STAMP_UBOOT_SCRIPT, SWITCH_STAMP_UBOOT_LOADER, SWITCH_STAMP_UBOOT_DTB,
+        SWITCH_STAMP_UBOOT_WINDOW, SWITCH_STAMP_UBOOT_EXPORTER, SWITCH_STAMP_UBOOT_PREP, SWITCH_STAMP_UBOOT_GO,
+        SWITCH_STAMP_UBOOT_MAIN, SWITCH_STAMP_UBOOT_SD,
     };
-    for (unsigned i = 0; i < IOSW_BOOT_STAMPS_UBOOT_COUNT; ++i) {
+    for (unsigned i = 0; i < SWITCH_BOOT_STAMPS_UBOOT_COUNT; ++i) {
         const uint32_t sample = slot[1 + i];
         const uint64_t back = (uint64_t)(uint32_t)(now - sample) * frequency / 1000000u;
-        if (sample && back < at && at - back <= boot_stamps[IOSW_STAMP_LOADER_ENTRY])
+        if (sample && back < at && at - back <= boot_stamps[SWITCH_STAMP_LOADER_ENTRY])
             boot_stamps[record[i]] = at - back;
     }
     slot[0] = 0;
@@ -98,10 +98,10 @@ static void stamps_uboot(void) {
  * are only 4-byte aligned, so 32-bit stores. A placeholder that is not zero is left alone. */
 static void stamps_commit(void) {
     volatile uint32_t *record = (volatile uint32_t *)(uintptr_t)(LOAD_ADT_PA + LOAD_STAMPS_ADT_OFFSET);
-    for (unsigned i = 0; i < 2 * IOSW_STAMP_COUNT; ++i)
+    for (unsigned i = 0; i < 2 * SWITCH_STAMP_COUNT; ++i)
         if (record[i]) return;
-    boot_stamps[IOSW_STAMP_XNU_ENTRY] = ticks();
-    for (unsigned i = 0; i < IOSW_STAMP_COUNT; ++i) {
+    boot_stamps[SWITCH_STAMP_XNU_ENTRY] = ticks();
+    for (unsigned i = 0; i < SWITCH_STAMP_COUNT; ++i) {
         record[2 * i] = (uint32_t)boot_stamps[i];
         record[2 * i + 1] = (uint32_t)(boot_stamps[i] >> 32);
     }
@@ -130,8 +130,8 @@ static void copy_progress(uint64_t done, uint64_t total, uint64_t started) {
     // before the first payload load/store.
     if (!done) loader_copy_prepare_ticks=elapsed;
 #if LOAD_STAMPS_ADT_OFFSET
-    if (!done) boot_stamps[IOSW_STAMP_UNPACK_START]=now;
-    if (done == total) boot_stamps[IOSW_STAMP_UNPACK_END]=now;
+    if (!done) boot_stamps[SWITCH_STAMP_UNPACK_START]=now;
+    if (done == total) boot_stamps[SWITCH_STAMP_UNPACK_END]=now;
 #endif
     (void)total;
     loader_progress[7]=elapsed;
@@ -178,14 +178,14 @@ void loader_copy_refuse(uint64_t reason) { refuse(reason); }
 /* This build's window, whole, where hekate put it (stage.h): the header and trailer pages around the staged bytes
  * carry their sizes and the stream id this loader was built with. Read with the MMU off, after the FDT check. */
 static uint64_t stage_check(void) {
-    const volatile uint32_t *head = (const volatile uint32_t *)(uintptr_t)IOSW_STAGE_HEADER_PA;
+    const volatile uint32_t *head = (const volatile uint32_t *)(uintptr_t)SWITCH_STAGE_HEADER_PA;
     const volatile uint32_t *tail = (const volatile uint32_t *)(uintptr_t)(LOAD_SOURCE + LOAD_PACKED_BYTES);
     const uint32_t id_low = (uint32_t)LOAD_STAGE_ID, id_high = (uint32_t)(LOAD_STAGE_ID >> 32);
-    if (head[0] != IOSW_STAGE_MAGIC || head[1] != IOSW_STAGE_HEAD || head[2] != IOSW_STAGE_VERSION ||
-        head[3] != LOAD_SOURCE - IOSW_STAGE_HEADER_PA) return 0x6a0;
+    if (head[0] != SWITCH_STAGE_MAGIC || head[1] != SWITCH_STAGE_HEAD || head[2] != SWITCH_STAGE_VERSION ||
+        head[3] != LOAD_SOURCE - SWITCH_STAGE_HEADER_PA) return 0x6a0;
     if (head[4] != LOAD_STREAM_BYTES || head[5] != LOAD_PACKED_BYTES) return 0x6a1;
     if (head[6] != id_low || head[7] != id_high) return 0x6a2;
-    if (tail[0] != IOSW_STAGE_MAGIC || tail[1] != IOSW_STAGE_TAIL || tail[2] != LOAD_STREAM_BYTES ||
+    if (tail[0] != SWITCH_STAGE_MAGIC || tail[1] != SWITCH_STAGE_TAIL || tail[2] != LOAD_STREAM_BYTES ||
         tail[3] != LOAD_PACKED_BYTES || tail[4] != id_low || tail[5] != id_high) return 0x6a3;
     return 0;
 }
@@ -239,11 +239,11 @@ void loader_after_transition(void) {
         const uint64_t emc_start = ticks();
         loader_emc_raise((uint32_t)LOAD_EMC_KHZ, (uint32_t)r[R_EL1_CNTFRQ], &emc);
 #if LOAD_STAMPS_ADT_OFFSET
-        boot_stamps[IOSW_STAMP_EMC_START] = emc_start;
-        boot_stamps[IOSW_STAMP_EMC_END] = ticks();
-        boot_stamps[IOSW_STAMP_EMC_RESULT] = emc.result | (uint64_t)(uint32_t)emc.bpmp_code << 32;
-        boot_stamps[IOSW_STAMP_EMC_RATES] = emc.before_khz | (uint64_t)emc.after_khz << 32;
-        boot_stamps[IOSW_STAMP_EMC_CORE] = emc.core_mv | (uint64_t)emc.area << 32;
+        boot_stamps[SWITCH_STAMP_EMC_START] = emc_start;
+        boot_stamps[SWITCH_STAMP_EMC_END] = ticks();
+        boot_stamps[SWITCH_STAMP_EMC_RESULT] = emc.result | (uint64_t)(uint32_t)emc.bpmp_code << 32;
+        boot_stamps[SWITCH_STAMP_EMC_RATES] = emc.before_khz | (uint64_t)emc.after_khz << 32;
+        boot_stamps[SWITCH_STAMP_EMC_CORE] = emc.core_mv | (uint64_t)emc.area << 32;
 #else
         (void)emc_start;
 #endif
@@ -262,7 +262,7 @@ void loader_after_transition(void) {
     // The reference uses the last page of our existing 128KiB adapter region.
     // The builder checks that every load segment and stack ends before it.
     // Do not access that page until the live FDT rejects any retained overlap.
-    ranges[count] = (struct loader_memory_range){IOSW_SD_REFERENCE_PA, IOSW_SD_REFERENCE_PA + IOSW_SD_REFERENCE_BYTES};
+    ranges[count] = (struct loader_memory_range){SWITCH_SD_REFERENCE_PA, SWITCH_SD_REFERENCE_PA + SWITCH_SD_REFERENCE_BYTES};
     refusals[count++] = 0x600;
 #endif
 #if LOAD_FAST_COPY
@@ -272,9 +272,9 @@ void loader_after_transition(void) {
      * The staged window (in bl33.bin, stage.h) is checked with its header and
      * trailer pages, which are read before the copy. */
     extern char __image_end[];
-    _Static_assert(LOAD_SOURCE == IOSW_STAGE_PA && LOAD_SOURCE + LOAD_PACKED_BYTES + 0x1000 <= IOSW_STAGE_END,
+    _Static_assert(LOAD_SOURCE == SWITCH_STAGE_PA && LOAD_SOURCE + LOAD_PACKED_BYTES + 0x1000 <= SWITCH_STAGE_END,
                    "staged window outside bl33.bin's reserved range");
-    ranges[count] = (struct loader_memory_range){IOSW_STAGE_HEADER_PA, LOAD_SOURCE + LOAD_PACKED_BYTES + 0x1000};
+    ranges[count] = (struct loader_memory_range){SWITCH_STAGE_HEADER_PA, LOAD_SOURCE + LOAD_PACKED_BYTES + 0x1000};
     refusals[count++] = 0x680;
     ranges[count] = (struct loader_memory_range){UINT64_C(0xa0000000), (uint64_t)(uintptr_t)__image_end};
     refusals[count++] = 0x6c0;
@@ -282,7 +282,7 @@ void loader_after_transition(void) {
 #if LOAD_STAMPS_ADT_OFFSET
     /* U-Boot's timing slot sits below the SD reference page, outside the loader image; read only if the live FDT
      * keeps nothing there. */
-    ranges[count] = (struct loader_memory_range){IOSW_BOOT_STAMPS_PA, IOSW_BOOT_STAMPS_PA + IOSW_BOOT_STAMPS_BYTES};
+    ranges[count] = (struct loader_memory_range){SWITCH_BOOT_STAMPS_PA, SWITCH_BOOT_STAMPS_PA + SWITCH_BOOT_STAMPS_BYTES};
     refusals[count++] = 0;
 #endif
     struct loader_memory_report memory;
@@ -301,7 +301,7 @@ void loader_after_transition(void) {
     if (failure) refuse(failure);
 #if LOAD_STAMPS_ADT_OFFSET
     if (slot_usable) stamps_uboot();
-    boot_stamps[IOSW_STAMP_GATES] = ticks();
+    boot_stamps[SWITCH_STAMP_GATES] = ticks();
 #endif
 #if LOAD_VERIFY_KERNEL
     uint64_t isar0;
@@ -309,10 +309,10 @@ void loader_after_transition(void) {
     // CRC32 is optional in Armv8.0; the physical OLED probe reports field=1.
     // Refuse unexpected CPUs before executing the optional instruction.
     if (((isar0 >> 16) & 15) != 1) refuse(0x305);
-    loader_progress[0]=UINT64_C(0x494f535743524332);
+    loader_progress[0]=UINT64_C(0x5357434843524332);
     loader_progress[6]=isar0;
 #else
-    loader_progress[0]=UINT64_C(0x494f5357434f5059);
+    loader_progress[0]=UINT64_C(0x53574348434f5059);
 #endif
     r[L_SOURCE] = LOAD_SOURCE; r[L_DEST] = LOAD_DEST; r[L_BYTES] = LOAD_BYTES;
     r[L_ARGS] = LOAD_ARGS; r[L_ENTRY] = LOAD_ENTRY;
@@ -332,16 +332,16 @@ void loader_after_transition(void) {
     display_text(16,104,"COPY KERNEL",DISPLAY_WHITE);
 #endif
 #if LOAD_SD_REFERENCE
-    struct iosw_sd_reference reference;
+    struct switch_sd_reference reference;
 #if LOAD_SD_CARD
-    struct iosw_sd_card card;
-    failure=(uint64_t)iosw_sd_card_reference_validate(
-        (const volatile uint8_t *)(uintptr_t)IOSW_SD_REFERENCE_PA,
-        IOSW_SD_REFERENCE_BYTES,0,&reference,&card);
+    struct switch_sd_card card;
+    failure=(uint64_t)switch_sd_card_reference_validate(
+        (const volatile uint8_t *)(uintptr_t)SWITCH_SD_REFERENCE_PA,
+        SWITCH_SD_REFERENCE_BYTES,0,&reference,&card);
 #else
-    failure=(uint64_t)iosw_sd_reference_validate(
-        (const volatile uint8_t *)(uintptr_t)IOSW_SD_REFERENCE_PA,
-        IOSW_SD_REFERENCE_BYTES,0,&reference);
+    failure=(uint64_t)switch_sd_reference_validate(
+        (const volatile uint8_t *)(uintptr_t)SWITCH_SD_REFERENCE_PA,
+        SWITCH_SD_REFERENCE_BYTES,0,&reference);
 #endif
     if (failure) refuse(0x640+failure);
 #endif
@@ -366,7 +366,7 @@ void loader_after_transition(void) {
     __asm__ volatile("dsb sy" ::: "memory");
     loader_progress[4]=ticks()-started;
 #if LOAD_STAMPS_ADT_OFFSET
-    boot_stamps[IOSW_STAMP_COPY_DONE]=started+loader_progress[4];
+    boot_stamps[SWITCH_STAMP_COPY_DONE]=started+loader_progress[4];
 #endif
     loader_progress[1]=3;
 #if LOAD_VERIFY_KERNEL
@@ -385,8 +385,8 @@ void loader_after_transition(void) {
     if ((*(volatile uint32_t *)(uintptr_t)0x700b0024 & 0x307) ||
         *(volatile uint8_t *)(uintptr_t)0x700b002f || memory.bank_count != 2)
         refuse(0x710);
-    if (memory.ledger.count+1 > IOSW_RAM_RANGES) refuse(0x711);
-    memory.ledger.reserved[memory.ledger.count++]=(struct iosw_ram_range){0xa0000000,0xa0020000};
+    if (memory.ledger.count+1 > SWITCH_RAM_RANGES) refuse(0x711);
+    memory.ledger.reserved[memory.ledger.count++]=(struct switch_ram_range){0xa0000000,0xa0020000};
     memory.ledger.committed=1;
     volatile uint8_t *ledger=(volatile uint8_t *)(uintptr_t)(LOAD_ADT_PA+LOAD_RAM_ADT_OFFSET);
     const uint8_t *wire=(const uint8_t *)&memory.ledger;
@@ -407,19 +407,19 @@ void loader_after_transition(void) {
         sd_address|=(uint64_t)sd_bytes[i]<<(8*i);
         sd_size|=(uint64_t)sd_bytes[8+i]<<(8*i);
     }
-    if (sd_address!=IOSW_SD_REFERENCE_PA || sd_size!=IOSW_SD_REFERENCE_BYTES)
+    if (sd_address!=SWITCH_SD_REFERENCE_PA || sd_size!=SWITCH_SD_REFERENCE_BYTES)
         refuse(0x650);
 #if LOAD_SD_CARD
-    failure=(uint64_t)iosw_sd_card_reference_validate(
-        (const volatile uint8_t *)(uintptr_t)IOSW_SD_REFERENCE_PA,
-        IOSW_SD_REFERENCE_BYTES,0,&reference,&card);
+    failure=(uint64_t)switch_sd_card_reference_validate(
+        (const volatile uint8_t *)(uintptr_t)SWITCH_SD_REFERENCE_PA,
+        SWITCH_SD_REFERENCE_BYTES,0,&reference,&card);
 #else
-    failure=(uint64_t)iosw_sd_reference_validate(
-        (const volatile uint8_t *)(uintptr_t)IOSW_SD_REFERENCE_PA,
-        IOSW_SD_REFERENCE_BYTES,0,&reference);
+    failure=(uint64_t)switch_sd_reference_validate(
+        (const volatile uint8_t *)(uintptr_t)SWITCH_SD_REFERENCE_PA,
+        SWITCH_SD_REFERENCE_BYTES,0,&reference);
 #endif
     if (failure) refuse(0x660+failure);
-    *(volatile uint32_t *)(uintptr_t)(IOSW_SD_REFERENCE_PA+IOSW_SD_REFERENCE_COMMIT_OFFSET)=1;
+    *(volatile uint32_t *)(uintptr_t)(SWITCH_SD_REFERENCE_PA+SWITCH_SD_REFERENCE_COMMIT_OFFSET)=1;
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
     r[R_STAGE] = 0x52;
@@ -429,7 +429,7 @@ void loader_after_transition(void) {
 #endif
 #if LOAD_SEED_ADT_OFFSET
     /* /chosen/random-seed from SE2's DRBG (seed.h), into the copied ADT; never refuses. 2 ms per wait. */
-    (void)iosw_seed_mix(LOAD_ADT_PA + LOAD_SEED_ADT_OFFSET, LOAD_ADT_PA + LOAD_SEED_SOURCE_ADT_OFFSET, ticks,
+    (void)switch_seed_mix(LOAD_ADT_PA + LOAD_SEED_ADT_OFFSET, LOAD_ADT_PA + LOAD_SEED_SOURCE_ADT_OFFSET, ticks,
                         r[R_EL1_CNTFRQ] / 500u);
 #endif
 #if LOAD_STAMPS_ADT_OFFSET

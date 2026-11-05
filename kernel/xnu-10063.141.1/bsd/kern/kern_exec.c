@@ -7305,7 +7305,7 @@ static int
 native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
 {
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-	if (switch_files_storage_profile() == IOSW_STORAGE_RAW)
+	if (switch_files_storage_profile() == SWITCH_STORAGE_RAW)
 		return native_switch_raw_cache_prepare(p, scratch, envp);
 #endif
 	const char *volume = "8846FE78-2910-4297-AF97-D59BB6F8FC16";
@@ -7552,8 +7552,8 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 #if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	(void)PE_parse_boot_argn("switch-root-boot", &switch_persistent, sizeof(switch_persistent));
-	switch_raw = switch_files_storage_profile() == IOSW_STORAGE_RAW;
-	if (switch_raw) data_uuid = IOSW_RAW_DATA_UUID;
+	switch_raw = switch_files_storage_profile() == SWITCH_STORAGE_RAW;
+	if (switch_raw) data_uuid = SWITCH_RAW_DATA_UUID;
 	if (switch_persistent == 1) {
 		/* Mutable Data has no fixed content digest or contiguous RAM address.
 		 * Select only the exact UUID under this boot's persistent SD child. */
@@ -7564,17 +7564,17 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 			int status = switch_raw ?
 			    switch_raw_volume_status(data_uuid, &device, device_path, sizeof(device_path), &size) :
 			    switch_data_volume_status(data_uuid, &device, device_path, sizeof(device_path), &size);
-			if (status == IOSW_BLOCK_OK) break;
-			if (status != IOSW_BLOCK_NOT_READY) {
-				error = status == IOSW_BLOCK_NOMEM ? ENOMEM :
-				    (status == IOSW_BLOCK_IO ? EIO : EINVAL);
+			if (status == SWITCH_BLOCK_OK) break;
+			if (status != SWITCH_BLOCK_NOT_READY) {
+				error = status == SWITCH_BLOCK_NOMEM ? ENOMEM :
+				    (status == SWITCH_BLOCK_IO ? EIO : EINVAL);
 				goto done;
 			}
 			if (attempt == 100) { error = ETIMEDOUT; goto done; }
 			struct timespec interval = {.tv_sec = 0, .tv_nsec = 100000000};
-			(void)msleep((void *)&native_owner_data_stage, NULL, PWAIT, "ioswData", &interval);
+			(void)msleep((void *)&native_owner_data_stage, NULL, PWAIT, "switchData", &interval);
 		}
-		if (size != (switch_raw ? IOSW_RAW_BYTES : UINT64_C(17179869184))) goto done;
+		if (size != (switch_raw ? SWITCH_RAW_BYTES : UINT64_C(17179869184))) goto done;
 	} else
 #endif
 	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
@@ -7631,7 +7631,7 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 		int status = switch_raw ?
 		    switch_raw_volume_status(data_uuid, &rechecked, rechecked_path, sizeof(rechecked_path), &rechecked_size) :
 		    switch_data_volume_status(data_uuid, &rechecked, rechecked_path, sizeof(rechecked_path), &rechecked_size);
-		if (status != IOSW_BLOCK_OK || rechecked != actual || rechecked_size != size ||
+		if (status != SWITCH_BLOCK_OK || rechecked != actual || rechecked_size != size ||
 		    strcmp(device_path, rechecked_path)) error = EPERM;
 	}
 	if (!error) {
@@ -8015,7 +8015,7 @@ native_switch_portrait(void)
 
 /* The rotation lock earlier builds made (native_switch_portrait), released once: SpringBoard's own
  * SBLastRotationLockedOrientation[iPad] in its user plist still hold it (SpringBoard saves the lock it restored), and
- * it restores every lock it finds at startup. Each key is renamed in place to IOSWasRotationLockedOrientation[iPad] (the
+ * it restores every lock it finds at startup. Each key is renamed in place to SWLastRotationLockedOrientation[iPad] (the
  * same length, so a binary plist's offsets and uniqued values stay as they are): in a binary plist an ASCII string of
  * 15 bytes or more is 0x5F, the integer object 0x10 <length>, then its bytes; in an XML one, <key>name</key>. Then the
  * marker, so the user's own lock from Control Center is never touched again. Before cfprefsd runs (launchd's exec).
@@ -8070,7 +8070,7 @@ native_switch_rotation_lock_release(proc_t p, user_addr_t scratch, mount_t data_
 				name = bytes + at + 5;
 			}
 			if (!name) continue;
-			memcpy(name, "IOSWas", 6);  /* SBLast... -> IOSWas...: the same length */
+			memcpy(name, "SWLast", 6);  /* SBLast... -> SWLast...: the same length */
 			renamed++;
 		}
 	}
@@ -8265,19 +8265,19 @@ enum native_switch_setup_kind { kSetupUser, kSetupOnce, kSetupManaged };
 static int
 native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
-#define IOSW_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
+#define SWITCH_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
 	static const struct { const char *name, *body; enum native_switch_setup_kind kind; } prefs[] = {
-		{"com.apple.purplebuddy", IOSW_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
+		{"com.apple.purplebuddy", SWITCH_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
 		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), kSetupUser},
-		{"com.apple.purplebuddy.notbackedup", IOSW_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
+		{"com.apple.purplebuddy.notbackedup", SWITCH_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
 		    "<key>ShouldRunHSA2MiniBuddy</key><false/><key>ShouldRunKeychainSyncMiniBuddy</key><false/>"
 		    "<key>ShouldRunMesaMiniBuddy</key><false/><key>ShouldRunPaymentMiniBuddy</key><false/>"
 		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), kSetupUser},
 		{"com.apple.managedconfiguration.notbackedup",
-		    IOSW_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), kSetupUser},
-		{"com.apple.springboard", IOSW_PLIST("<key>BKNoWatchdogs</key><true/>"
+		    SWITCH_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), kSetupUser},
+		{"com.apple.springboard", SWITCH_PLIST("<key>BKNoWatchdogs</key><true/>"
 		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
 		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
 		    "<key>SBDontDimOrLockOnAC</key><true/>"
@@ -8291,11 +8291,11 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		     * off, Vol+ (PX6) raises the volume in every interface orientation the Switch rotates to. */
 		    "<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"), kSetupManaged},
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
-		{"com.apple.migration", IOSW_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
+		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
 		    "<key>buildVersion</key><string>21H461</string></dict>"), kSetupOnce},
 	};
-#undef IOSW_PLIST
+#undef SWITCH_PLIST
 	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
 	 * session and persona keybags in keybags/ and aborts at every start without it. */
 	static const struct { const char *path; uid_t owner; mode_t mode; } directories[] = {

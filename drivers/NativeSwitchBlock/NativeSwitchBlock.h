@@ -10,7 +10,7 @@ extern "C" {
  * Returns boolean success, observed device/path and immutable logical capacity.
  * Mutable Data has no fixed digest and cannot authorize an OS root. */
 int switch_data_volume_path(const char *, dev_t *, char *, size_t, uint64_t *);
-/* Same snapshot, returning iosw_block_status: NOT_READY is absent owned media
+/* Same snapshot, returning switch_block_status: NOT_READY is absent owned media
  * or pending BSD properties; CORRUPT is invalid/duplicate identity, IO offline. */
 int switch_data_volume_status(const char *, dev_t *, char *, size_t, uint64_t *);
 /* Raw profile only: exact caller-supplied OS/Data/Preboot UUID under the one
