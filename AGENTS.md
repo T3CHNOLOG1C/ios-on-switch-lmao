@@ -1,3 +1,15 @@
+## Don't poll.
+
+Lean towards using hardware interrupts for anything that would be a PIO poll otherwise. CPU for a kernel is a scarce resource, we need to leave as much as possible for the applications running on it.
+
+## Use DMA over PIO.
+
+When copying data, lean towards using DMA-like solutions instead of forcing the CPU to chaperone every byte to the right destination. Rarely does DMA perform better than spinning on PIO so when a measurement says that its the wrong thing, question it. Scrutinise until you are absolutely certain that it's the right course of action. A 0.1% CPU usage on a USB driver doesn't mean PIO is the right way to do so if USB wasn't under any meaningful load at the time of capture. Apply this same logic to other things.
+
+## Respect Apple's assumptions.
+
+If you see a behavior wherein some persistent Apple service or application keeps using up CPU/GPU resources, don't just say "ah well it just do be like that". Investigate. XNU/Darwin and iOS is built on a certain set of assumptions. It is up to us to conform to them as they're likely more correct than whatever we come up with. If a widget on SpringBoard is using a bunch of CPU, it's likely us that built something wrong instead of the widget just being like that. Always investigate and fix such things.
+
 ## File Length & Random Tips
 
 Don't write stupidly long files. Around 500 lines of code, you should consider splitting them. Keep helpers away from higher level logic. A human needs to be able to read and maintain this codebase. That means you need to keep it readable to a human. This does not conflict with code comments. Your code should be self explanatory to the largest extent possible.
@@ -40,7 +52,7 @@ Remove any that do not meet the criteria above.
 
 ## Naming
 
-Never write the project's former name (any case) in code, file names, logs, paths or identifiers.
+Never write "IOSwitch" or "ioswitch" (any case) in code, file names, logs, paths or identifiers.
 
 - Drivers, classes and log prefixes start with `Switch`: `SwitchSD`, `SwitchCryptex`.
 - C identifiers start with `switch_`; macros start with `SWITCH_`.
