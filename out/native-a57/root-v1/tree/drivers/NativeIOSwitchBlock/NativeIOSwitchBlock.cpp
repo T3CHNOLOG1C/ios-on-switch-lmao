@@ -48,6 +48,7 @@
 #include "NativeIOSwitchBlock.h"
 #include "IOSwitchClientCopy.h"
 #include "IOSwitchAdma.h"
+#include "IOSwitchQueue.h"
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -86,6 +87,9 @@ constexpr uint32_t kBounceSectors = kBounceBytes / kSector;
 constexpr uint32_t kSafeSectors = 256 * 1024 / kSector;
 // Most requests one merged command carries (APFS issues >= 4 KiB, so 256 still fills the buffer).
 constexpr uint32_t kMaxChain = 256;
+// r12-sdio: how many queued requests a read chain looks through for reads that continue it (IOSwitchQueue.h): as many as
+// one chain may hold, so it never takes fewer than the old rule did from a queue of reads right behind each other.
+constexpr unsigned kMergeScan = kMaxChain;
 // r10-adma2: with ADMA2, reads go up to kBounceSectors per command (the cap SDMA had once its boundary check passed) and
 // writes up to kDirectWriteSectors. The first kWriteChecks ADMA2 writes of every boot are read back and compared
 // (proveWrite). r12-sdio: writes up to 1 MiB too. The 256 KiB cap existed for the SDMA boundary resume (0d184ec), which
@@ -289,6 +293,7 @@ struct Request {
     // 1 default, 2 low, 3 background) and when it was queued.
     uint8_t klass;
     uint64_t queuedNs;
+    bool chained;  // r12-sdio: taken into the chain being picked (IOSwitchQueue.h), under queueLock
 };
 // r12-sdio: one chain's way through the worker (worker()): picked, begun (beginBatch: the table built and, when the chain is
 // one ADMA2 command, its pages synced and the command issued), ended (endBatch: that command waited for, retried and
@@ -417,6 +422,8 @@ class NativeIOSwitchBlock : public IOService {
     uint64_t lastEnd = 0;                  // card LBA after the previous request (sequential count)
     uint64_t statsEveryNs = 0, statsLastNs = 0;
     bool merge = true;
+    // r12-sdio: reads merge with continuing reads anywhere in the queue (IOSwitchQueue.h) until a chain fails its check.
+    bool mergeAnywhere = true;
     // Boot-arg ioswitch-sd-copy-flush=1: requests' bytes through IOMemoryDescriptor::readBytes/writeBytes again, with
     // the clean+invalidate of every destination line they add on this kernel (IOSwitchClientCopy.h), for A/B boots.
     // It keeps ADMA2 off too, so every request takes the bounce buffer as before r10-adma2.
@@ -609,7 +616,8 @@ IOReturn NativeIOSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer,
                 direction == kIODirectionOut,
                 *completion,
                 static_cast<uint8_t>(priority >> 6),
-                0};
+                0,
+                false};
     owner->submit(request);
     return kIOReturnSuccess;
 }
@@ -1274,30 +1282,54 @@ Request *NativeIOSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chain
             }
         }
     }
-    Request *last = first;
     uint32_t sectors = first->sectors, count = 1;
-    const uint32_t limit = first->write ? writeSectors : maxSectors;
-    // A passing read's chain passes the older requests too: each request it takes must not overlap any of them either.
-    auto overlapsOlder = [&](const Request *later) {
-        if (!prev) return false;
-        for (const Request *older = head; older != first; older = older->next)
-            if (older->lba < later->lba + later->sectors && later->lba < older->lba + older->sectors) return true;
-        return false;
-    };
-    while (merge && count < kMaxChain && last->next && last->next->write == first->write &&
-           last->next->lba == last->lba + last->sectors && sectors + last->next->sectors <= limit &&
-           !overlapsOlder(last->next)) {
-        last = last->next;
-        sectors += last->sectors;
-        ++count;
+    bool gathered = false;
+    if (merge && mergeAnywhere && !first->write) {
+        // r12-sdio: a read takes every queued read that continues it on the card, before or after it, wherever it is
+        // queued, unless that read overlaps an older request still queued (IOSwitchQueue.h). Back in card order. The
+        // chain must tile its command exactly; one that does not (never seen; host-tested) stays queued as it was, and
+        // this boot goes back to the old rule, with one line.
+        uint64_t start = 0;
+        count = ioswitchGatherReads(head, first, maxSectors, kMaxChain, kMergeScan, &start, &sectors);
+        if (ioswitchChainTiles(head, start, sectors, count)) {
+            first = ioswitchUnlinkChain(head, tail, count);
+            gathered = true;
+        } else {
+            ioswitchClearChain(head);
+            mergeAnywhere = false;
+            IOLog(
+                "IOSwitchSD: read chain lba=%llu n=%u (%u requests) does not tile; reads merge only with the requests "
+                "right behind them until reboot\n",
+                start, sectors, count);
+            sectors = first->sectors;
+            count = 1;
+        }
     }
-    // Unlink first..last (the head's run, or a passing read's from the middle).
-    if (prev)
-        prev->next = last->next;
-    else
-        head = last->next;
-    if (tail == last) tail = prev;
-    last->next = nullptr;
+    if (!gathered) {
+        Request *last = first;
+        const uint32_t limit = first->write ? writeSectors : maxSectors;
+        // A passing read's chain passes the older requests too: each request it takes must not overlap any of them either.
+        auto overlapsOlder = [&](const Request *later) {
+            if (!prev) return false;
+            for (const Request *older = head; older != first; older = older->next)
+                if (older->lba < later->lba + later->sectors && later->lba < older->lba + older->sectors) return true;
+            return false;
+        };
+        while (merge && count < kMaxChain && last->next && last->next->write == first->write &&
+               last->next->lba == last->lba + last->sectors && sectors + last->next->sectors <= limit &&
+               !overlapsOlder(last->next)) {
+            last = last->next;
+            sectors += last->sectors;
+            ++count;
+        }
+        // Unlink first..last (the head's run, or a passing read's from the middle).
+        if (prev)
+            prev->next = last->next;
+        else
+            head = last->next;
+        if (tail == last) tail = prev;
+        last->next = nullptr;
+    }
     queued -= count;
     for (Request *r = first; r; r = r->next) {
         if (!r->write) --queuedReads[r->klass];

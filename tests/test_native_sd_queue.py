@@ -1,0 +1,45 @@
+import pathlib
+import subprocess
+import tempfile
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+DRIVER = ROOT / "out/native-a57/root-v1/tree/drivers/NativeIOSwitchBlock"
+
+
+class NativeSdQueueTests(unittest.TestCase):
+    def test_read_chains(self):
+        """r12-sdio: queued reads that continue the picked read join its command, wherever they are queued."""
+        with tempfile.TemporaryDirectory() as directory:
+            binary = pathlib.Path(directory) / "sd-queue"
+            compile_result = subprocess.run(
+                ["xcrun", "clang++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+                 "-g", "-I", str(DRIVER), str(ROOT / "tests/native_sd_queue_harness.cpp"), "-o", str(binary)],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            self.assertEqual(compile_result.returncode, 0, compile_result.stdout)
+            result = subprocess.run([binary], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=240)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn("PASS: sd queue merging", result.stdout)
+
+    def test_driver_uses_it_for_reads_only(self):
+        """Writes keep their FIFO rule; the read chain is checked to tile its command before it goes anywhere."""
+        source = (DRIVER / "NativeIOSwitchBlock.cpp").read_text()
+        pick = source.split("Request *NativeIOSwitchBlock::pickLocked(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("if (merge && mergeAnywhere && !first->write) {", pick)
+        self.assertIn("ioswitchGatherReads(head, first, maxSectors, kMaxChain, kMergeScan, &start, &sectors)", pick)
+        # The scan reaches as far as a chain can hold: never fewer than the old rule's queue-adjacent reads.
+        self.assertIn("constexpr unsigned kMergeScan = kMaxChain;", source)
+        # The chain is checked before it is unlinked; one that fails stays queued, the boot falls back to the old rule
+        # with one line, and nothing panics.
+        self.assertLess(pick.index("ioswitchChainTiles("), pick.index("ioswitchUnlinkChain("))
+        self.assertIn("ioswitchClearChain(head);", pick)
+        self.assertIn("mergeAnywhere = false;", pick)
+        self.assertNotIn("panic(", pick)
+        # The write path: only the requests right behind, in queue order.
+        self.assertIn("last->next->lba == last->lba + last->sectors", pick)
+        # Every request starts unchained.
+        self.assertRegex(source, r"static_cast<uint8_t>\(priority >> 6\),\s*0,\s*false\};")
+
+
+if __name__ == "__main__":
+    unittest.main()
