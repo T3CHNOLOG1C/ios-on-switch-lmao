@@ -36,6 +36,7 @@ enum : uint32_t {
     COMP_SUCCESS = 1,
     COMP_STALL = 6,
     COMP_SHORT_PACKET = 13,
+    COMP_EVENT_RING_FULL = 21,
     // Endpoint context types.
     EP_BULK_OUT = 2,
     EP_INTR_OUT = 3,
@@ -51,6 +52,12 @@ constexpr uint32_t kRingTrbs = 16;  // EP0's ring (in the control area); the las
 constexpr uint32_t kDataRingTrbs =
     256;  // a data endpoint's ring, one 4 KiB page of its own (SwitchXUDC "Data endpoints")
 constexpr uint32_t kMaxDci = 32;
+// The event ring: two segments of this many events (Linux tegra-xudc's XUDC_EVENT_RING_SIZE), more than the rings can
+// owe at once: each TRB raises at most one event (the ISP event of the short packet that ends its TD, or its IOC event),
+// and 30 data rings of at most kDataRingTrbs - 2 TRBs and EP0's owe at most 7635. A ring sized for one TD per endpoint
+// (64 events) fills: 64 TDs per endpoint can complete in one burst while the drain waits, and an event the controller
+// cannot write is lost.
+constexpr uint32_t kEventSegmentTrbs = 4096;
 // Interrupt moderation (RT_IMOD, 250 ns units, Linux tegra_xudc): at least this long between two interrupts, so a burst
 // of completions is one interrupt; a lone event is not delayed (the interval since the last one has long passed).
 constexpr uint32_t kImodUs = 40;
@@ -140,7 +147,8 @@ private:
     };
     volatile uint8_t *car = nullptr, *pmcPage = nullptr, *fusePage = nullptr, *mc = nullptr, *padctl = nullptr,
                      *xudc = nullptr;
-    DmaBuffer control;  // event ring, contexts, transfer rings
+    DmaBuffer control;  // contexts, EP0's transfer ring
+    DmaBuffer events;   // the event ring's two segments of kEventSegmentTrbs
     Ring rings[kMaxDci];
     uint32_t eventIndex = 0, eventCycle = 1;
 

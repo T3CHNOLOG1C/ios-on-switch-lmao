@@ -151,9 +151,10 @@ enum : uint32_t {
     VBUS_ID_OVR_FLOAT = 8u << 18,
 };
 
-// Control area: two event segments, 32 endpoint contexts, 32 transfer rings.
-constexpr uint32_t kEventTrbs = 32;
-constexpr uint32_t kEventOffset = 0x0000, kContextOffset = 0x0800, kRingOffset = 0x1000, kControlBytes = 0x4000;
+// Control area: 32 endpoint contexts, EP0's transfer ring (data endpoints have rings of their own). The event ring,
+// two segments of kEventSegmentTrbs (XudcHardware.h), is a buffer of its own.
+constexpr uint32_t kContextOffset = 0x0800, kRingOffset = 0x1000, kControlBytes = 0x4000;
+constexpr uint32_t kEventBytes = 2 * kEventSegmentTrbs * 16;
 
 inline void barrier()
 {
@@ -328,7 +329,7 @@ bool Hardware::powerOn(char *why, size_t whySize)
         snprintf(why, whySize, "SMMU translation is on for XUSB_DEV (ASID 0x%08x)", r(mc, MC_SMMU_XUSB_DEV_ASID));
         return false;
     }
-    if (!control.va && !control.allocate(kControlBytes)) {
+    if ((!control.va && !control.allocate(kControlBytes)) || (!events.va && !events.allocate(kEventBytes))) {
         snprintf(why, whySize, "no DMA memory below 4 GiB");
         return false;
     }
@@ -384,15 +385,14 @@ bool Hardware::powerOn(char *why, size_t whySize)
     xw(IPFS_INTR_MASK, xr(IPFS_INTR_MASK) | 1u << 16);
 
     // Event ring: two segments, consumer cycle state 1.
-    uint32_t events = control.pa + kEventOffset;
-    xw(ERST0BALO, events);
+    xw(ERST0BALO, events.pa);
     xw(ERST0BAHI, 0);
-    xw(ERST1BALO, events + kEventTrbs * 16);
+    xw(ERST1BALO, events.pa + kEventSegmentTrbs * 16);
     xw(ERST1BAHI, 0);
-    xw(ERSTSZ, kEventTrbs << 16 | kEventTrbs);
-    xw(EREPLO, (xr(EREPLO) & 0xe) | events | EREP_ECS);
+    xw(ERSTSZ, kEventSegmentTrbs << 16 | kEventSegmentTrbs);
+    xw(EREPLO, (xr(EREPLO) & 0xe) | events.pa | EREP_ECS);
     xw(EREPHI, 0);
-    xw(ERDPLO, (xr(ERDPLO) & 0xf) | events);
+    xw(ERDPLO, (xr(ERDPLO) & 0xf) | events.pa);
     xw(ERDPHI, 0);
     eventIndex = 0;
     eventCycle = 1;
@@ -431,7 +431,7 @@ void Hardware::disconnect()
 
 bool Hardware::nextEvent(Event &event)
 {
-    volatile uint32_t *e = (volatile uint32_t *)(control.va + kEventOffset) + eventIndex * 4;
+    volatile uint32_t *e = (volatile uint32_t *)events.va + eventIndex * 4;
     cacheFlush(e, 16);
     uint32_t d3 = e[3];
     if ((d3 & TRB_CYCLE) != eventCycle) return false;
@@ -439,7 +439,7 @@ bool Hardware::nextEvent(Event &event)
     event.d[1] = e[1];
     event.d[2] = e[2];
     event.d[3] = d3;
-    if (++eventIndex == 2 * kEventTrbs) {
+    if (++eventIndex == 2 * kEventSegmentTrbs) {
         eventIndex = 0;
         eventCycle ^= 1;
     }
@@ -451,7 +451,7 @@ bool Hardware::nextEvent(Event &event)
 void Hardware::finishEvents()
 {
     xw(ERDPHI, 0);
-    xw(ERDPLO, (control.pa + kEventOffset + eventIndex * 16) | ERDP_EHB);
+    xw(ERDPLO, (events.pa + eventIndex * 16) | ERDP_EHB);
 }
 
 bool Hardware::interruptPending()

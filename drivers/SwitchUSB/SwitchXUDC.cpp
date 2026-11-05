@@ -332,12 +332,20 @@ void SwitchXUDC::interruptOccurred(OSObject *owner, IOInterruptEventSource *, in
     static_cast<SwitchXUDC *>(owner)->serviceEvents();
 }
 
+// The whole event ring, as Linux tegra_xudc_process_event_ring drains it (at most one ring's worth per pass, so a pass
+// ends). The ring is sized never to fill (XudcHardware.h kEventSegmentTrbs); should the controller still report it
+// full (completion code 21 on a transfer event or, as xHCI does, a host controller event; a setup event's third word is
+// its sequence number, not looked at), events were lost, and that panics with one line.
 void SwitchXUDC::serviceEvents()
 {
     const uint64_t entered = mach_absolute_time();
     Event e;
-    for (uint32_t handled = 0; handled < 64 && hw.nextEvent(e); ++handled) {
+    for (uint32_t handled = 0; handled < 2 * kEventSegmentTrbs && hw.nextEvent(e); ++handled) {
         ++st.events;
+        if (e.type() != TRB_SETUP_EVENT && e.type() != TRB_PORT_EVENT && e.code() == COMP_EVENT_RING_FULL)
+            panic("SwitchUSB: XUDC event ring full, events were lost (event type %u, DCI %u, TRB %#x, d %08x %08x %08x "
+                  "%08x)",
+                  e.type(), e.dci(), e.trb(), e.d[0], e.d[1], e.d[2], e.d[3]);
         switch (e.type()) {
         case TRB_TRANSFER_EVENT: transferEvent(e); break;
         case TRB_PORT_EVENT: portEvent(); break;
@@ -345,8 +353,8 @@ void SwitchXUDC::serviceEvents()
         default: break;
         }
     }
-    // Always: the ERDP write also clears EHB, without which no further interrupt is raised. Events left over (more
-    // than 64) raise a new one.
+    // Always: the ERDP write also clears EHB, without which no further interrupt is raised. Events left over (a full
+    // ring's worth read) raise a new one.
     hw.finishEvents();
     kickWaiting();
     const uint64_t now = mach_absolute_time();
@@ -581,7 +589,7 @@ void SwitchXUDC::ep0Cancel(IOReturn status)
 }
 
 // ---------------------------------------------------------------------------
-// Data endpoints (r17-iodma). The controller moves data straight between the bus and the functions' own memory: a
+// Data endpoints. The controller moves data straight between the bus and the functions' own memory: a
 // request (AppleUSBDeviceMux's are kernel virtual ranges over its mbufs, IOMemoryDescriptor::withAddressRanges) is
 // prepared once, its physical runs become chained TRBs (XudcTransfer.h plan: whole packets per TRB, IOC on the last,
 // ISP on OUT), and up to kQueueDepth requests sit on a kDataRingTrbs ring at once, so the controller goes from one to
@@ -591,7 +599,7 @@ void SwitchXUDC::ep0Cancel(IOReturn status)
 // 4 KiB pages of the bounce pool, copied in before an IN and out after an OUT; a request with more runs than kMaxRuns
 // or more TRBs than the ring holds, an OUT one too small to probe the residue, or every multi-TRB OUT one once the
 // residue proved broken, takes the serial path: alone on the ring, one TRB at a time through the endpoint's 64 KiB
-// buffer, as every request did before r17. Cache: the controller does not snoop, so an IN's memory is cleaned before
+// buffer. Cache: the controller does not snoop, so an IN's memory is cleaned before
 // the doorbell and an OUT's cleaned and invalidated before it and invalidated again over what arrived
 // (IOMemoryDescriptor::performOperation, as SwitchUSB's host mapper does). Everything runs on the work loop.
 
