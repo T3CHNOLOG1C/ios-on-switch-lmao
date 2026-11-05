@@ -12,7 +12,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools/package'))
-import package_raw_boot as pkg  # noqa: E402
+import bl33 as pkg  # noqa: E402
+from boot_script import boot_script  # noqa: E402
 from build_native_loader import (BL33_BASE, STAGE_HEADER, STAGE_SOURCE, compress_window,  # noqa: E402
                                          pack_window, stage_id, stage_into_bl33)
 
@@ -39,10 +40,10 @@ class Bl33StageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.window, cls.blocks, cls.stream, cls.staged = window_and_stage()
-        cls.original = (pkg.FIRMWARE / 'bl33.bin').read_bytes()
+        cls.original = (ROOT / 'bazel/pinned/firmware/bl33.bin').read_bytes()
         cls.bl33 = stage_into_bl33(pkg.bl33_patch(cls.original), cls.staged, len(cls.stream))
         cls.constants = {'STREAM_BYTES': len(cls.stream), 'STAGE_ID': stage_id(cls.staged)}
-        cls.script = pkg.boot_script(pkg.TEMPLATE.read_text(), 0x1d040, cls.bl33, cls.constants, len(cls.staged))
+        cls.script = boot_script((ROOT / 'boot/raw-v24-boot.cmd').read_text(), 0x1d040, cls.bl33, cls.constants, len(cls.staged))
 
     def word(self, image, address):
         return struct.unpack_from('<I', image, address - BL33_BASE)[0]

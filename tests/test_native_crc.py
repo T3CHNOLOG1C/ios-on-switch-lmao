@@ -7,8 +7,13 @@ import tempfile
 import unittest
 import zlib
 
-import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tools/package'))
-from package_native_handoff import tool
+
+def tool(name):
+    found = shutil.which(name)
+    if not found:
+        raise ValueError(f'missing build tool: {name}')
+    return found
+
 
 ROOT=Path(__file__).resolve().parents[1]
 

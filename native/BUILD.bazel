@@ -30,24 +30,6 @@ py_test(
     tags = ["requires-darwin"],
 )
 
-# What tools/package/build_native_loader.py compiles into loader.uboot.bin (Xcode clang for aarch64-none-elf, LLVM's
-# ld.lld): the native loader, the handoff probe and the SD reference reader.
-filegroup(
-    name = "loader_sources",
-    srcs = glob([
-        "loader/*.c",
-        "loader/*.h",
-        "loader/*.S",
-        "loader/*.ld",
-        "handoff/*.c",
-        "handoff/*.h",
-        "handoff/*.S",
-        "handoff/*.ld",
-        "storage/sd_reference.c",
-        "storage/sd_reference.h",
-    ]),
-)
-
 filegroup(
     name = "all_sources",
     srcs = glob(

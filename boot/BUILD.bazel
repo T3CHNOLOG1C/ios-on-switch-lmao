@@ -3,12 +3,13 @@
 #
 #   bazel build //:boot          -> bazel-bin/boot/ioswitch/   (the CMake flow's out/boot/ioswitch)
 #
-# Boot-args (COMMAND_LINE), the ADT edits and USB_HOST live in tools/package/package_raw_boot.py.
+# Boot-args (COMMAND_LINE) live in tools/package/boot_args.py; the ADT edits, USB_HOST and DISPLAY_GAMUT in
+# tools/package/adt_edit.py; the steps and what each reads in boot/defs.bzl.
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/kernel:inputs.bzl", "tool_output")
-load("//bazel/kernel:package.bzl", "boot_package")
 load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "boot_package")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -16,8 +17,8 @@ lint_files()
 
 exports_files(["raw-v24-boot.cmd"])
 
-# Four cores (package_raw_boot.py --smp: cpus=4 sheng-smp=1 ioswitch-smp=1 and the four-A57 ADT), as the CMake flow
-# was configured (IOSWITCH_SMP=ON).
+# Four cores (boot_args.py --smp: cpus=4 sheng-smp=1 ioswitch-smp=1; adt_edit.py --smp: the four-A57 ADT), as the
+# CMake flow was configured (IOSWITCH_SMP=ON).
 bool_flag(
     name = "smp",
     build_setting_default = True,
@@ -47,10 +48,12 @@ tool_output(
     message = "Generating the native OLED ADT",
 )
 
+NATIVE = "//native"
+
 boot_package(
     name = "package",
     adt = ":adt",
-    app_trust = "@ipsw//:app_cryptex_trust_cache",
+    app_trust = "//ipsw:app_cryptex_trust_cache",
     bl31 = "//bazel/pinned:firmware/bl31.bin",
     bl33 = "//bazel/pinned:firmware/bl33.bin",
     bt_patch = "//bazel/pinned:firmware/BCM4356A3.hcd",
@@ -58,14 +61,55 @@ boot_package(
     dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
     exporter = "//bazel/pinned:firmware/exporter.uimg",
     kernel = "//out/native-a57/root-v1/tree:kernel",
-    overlay = {
+    linker_script = NATIVE + ":loader/link.ld",
+    loader_hdrs = [
+        NATIVE + ":handoff/display.h",
+        NATIVE + ":handoff/entry.S",
+        NATIVE + ":handoff/record.h",
+        NATIVE + ":loader/copy.h",
+        NATIVE + ":loader/emc.h",
+        NATIVE + ":loader/memory.h",
+        NATIVE + ":loader/ram.h",
+        NATIVE + ":loader/seed.h",
+        NATIVE + ":loader/stage.h",
+        NATIVE + ":loader/stamps.h",
+        NATIVE + ":storage/sd_reference.h",
+    ],
+    loader_include_markers = [
+        NATIVE + ":loader/stage.h",
+        NATIVE + ":handoff/record.h",
+        NATIVE + ":storage/sd_reference.h",
+    ],
+    # The cacheable-copy root-boot loader, in link order.
+    loader_srcs = [
+        NATIVE + ":loader/entry.S",
+        NATIVE + ":loader/loader.c",
+        NATIVE + ":loader/memory.c",
+        NATIVE + ":handoff/probe.c",
+        NATIVE + ":loader/copy.c",
+        NATIVE + ":loader/copy.S",
+        NATIVE + ":loader/emc.c",
+        NATIVE + ":loader/seed.c",
+        NATIVE + ":storage/sd_reference.c",
+    ],
+    # The sources that include the window's layout.h or runs.h: only these recompile when the kernel changes.
+    loader_window_srcs = [
+        NATIVE + ":loader/entry.S",
+        NATIVE + ":loader/loader.c",
+        NATIVE + ":loader/copy.c",
+        NATIVE + ":loader/copy.S",
+    ],
+    # The overlay's Mach-Os (the trust module hashes those the manifest trusts) and its other files, each by the
+    # source tree/overlay/manifest.json names it by.
+    overlay_binaries = {
         "//out/native-a57/root-v1/tree:BlueTool": "build/switch-bluetooth/BlueTool",
         "//out/native-a57/root-v1/tree:SwitchAudioHAL": "build/switch-audio/SwitchAudio.driver/SwitchAudio",
         "//out/native-a57/root-v1/tree:joyconpaird": "build/switch-joycon/joyconpaird",
-        "//out/native-a57/root-v1/tree:joyconnfc": "build/switch-joycon/joyconnfc",
         "//out/native-a57/root-v1/tree:HEVCH8": "build/switch-video/HEVCH8.videodecoder",
         "//out/native-a57/root-v1/tree:AVD": "build/switch-video/AVD.videodecoder",
         "//out/native-a57/root-v1/tree:AVE": "build/switch-video/H264H7.videoencoder",
+    },
+    overlay_data = {
         "//bazel/pinned:overlay/apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
         "//bazel/pinned:overlay/wallpaper-1x/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/7570.iPadOS_17_Flat.plist",
         "//bazel/pinned:overlay/wallpaper-1x/7560.Lake_Flat.plist": "build/wallpaper-1x/7560.Lake_Flat.plist",

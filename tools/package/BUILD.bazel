@@ -1,6 +1,15 @@
-# The boot entry's packaging: package_raw_boot.py (boot-args = COMMAND_LINE, the ADT edits, USB_HOST, ...),
-# native_xnu_layout.py, build_native_loader.py, package_native_handoff.py, native_oled_adt.py. //boot:package runs
-# them through :boot with declared inputs.
+# The boot entry's packaging steps, one py_binary each: //boot:package (boot/defs.bzl) runs every one as its own
+# action, so an edit to one module reruns only the steps that import it.
+#
+#   boot_args.py    the kernel's boot-args (COMMAND_LINE)
+#   adt.py          the board ADT (native_oled_adt.py), //boot:adt
+#   overlay.py      the userland overlay: plan, trust module, tree
+#   adt_edit.py     the ADT's iPad identity, hardware nodes, overlay unions, loader slots (USB_HOST, DISPLAY_GAMUT)
+#   trust.py        the static trust cache bundle
+#   build_native_loader.py  the kernel window (native_xnu_layout.py), layout.h and runs.h
+#   loader_link.py  the loader linked and wrapped for bootm
+#   bl33.py         U-Boot's environment edit and the staged window
+#   boot_script.py  boot.cmd / boot.scr
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -11,29 +20,111 @@ package(default_visibility = ["//visibility:public"])
 lint_files()
 
 py_library(
-    name = "packaging",
-    srcs = [
-        "build_native_loader.py",
-        "native_oled_adt.py",
-        "native_xnu_layout.py",
-        "package_native_handoff.py",
-        "package_raw_boot.py",
-    ],
+    name = "loader_abi",
+    srcs = ["loader_abi.py"],
     imports = ["."],
 )
 
-# //boot:package: the whole boot entry (kernel window in bl33.bin, loader, boot.scr, ADT edits, overlay).
+py_library(
+    name = "uimage",
+    srcs = ["uimage.py"],
+    imports = ["."],
+)
+
+py_library(
+    name = "boot_config",
+    srcs = ["boot_config.py"],
+    imports = ["."],
+)
+
+py_library(
+    name = "native_xnu_layout",
+    srcs = ["native_xnu_layout.py"],
+    imports = ["."],
+)
+
+py_library(
+    name = "native_oled_adt",
+    srcs = ["native_oled_adt.py"],
+    imports = ["."],
+)
+
+py_library(
+    name = "kernel_window",
+    srcs = ["build_native_loader.py"],
+    imports = ["."],
+    deps = [
+        ":loader_abi",
+        ":native_oled_adt",
+        ":native_xnu_layout",
+    ],
+)
+
 py_binary(
-    name = "boot",
-    srcs = ["boot.py"],
-    deps = [":packaging"],
+    name = "boot_args",
+    srcs = ["boot_args.py"],
 )
 
 # //boot:adt: the native OLED board's ADT with the pinned /chosen/random-seed.
 py_binary(
     name = "adt",
     srcs = ["adt.py"],
-    deps = [":packaging"],
+    deps = [":native_oled_adt"],
+)
+
+py_binary(
+    name = "overlay",
+    srcs = ["overlay.py"],
+    deps = [":boot_config"],
+)
+
+py_binary(
+    name = "adt_edit",
+    srcs = ["adt_edit.py"],
+    deps = [
+        ":boot_config",
+        ":loader_abi",
+        ":native_xnu_layout",
+    ],
+)
+
+py_binary(
+    name = "trust",
+    srcs = ["trust.py"],
+)
+
+py_binary(
+    name = "window",
+    srcs = ["build_native_loader.py"],
+    main = "build_native_loader.py",
+    deps = [":kernel_window"],
+)
+
+py_binary(
+    name = "loader_link",
+    srcs = ["loader_link.py"],
+    deps = [
+        ":loader_abi",
+        ":uimage",
+    ],
+)
+
+py_binary(
+    name = "bl33",
+    srcs = ["bl33.py"],
+    deps = [
+        ":kernel_window",
+        ":loader_abi",
+    ],
+)
+
+py_binary(
+    name = "boot_script",
+    srcs = ["boot_script.py"],
+    deps = [
+        ":loader_abi",
+        ":uimage",
+    ],
 )
 
 # Remakes bazel/pinned/overlay/apple-logo~ipad.png (ProgressUI's 1x boot logo) from the OS volume image:
@@ -67,8 +158,7 @@ py_test(
 # //boot:snapshot copies a build to out/boot/lkg/<name> (its py_binary lives in boot/).
 exports_files(["snapshot.py"])
 
-# The loader's build ID hashes its builder's sources (build_native_loader.py's source_files): //boot:package passes
-# them as --source, and the host tests read them.
+# The packaging's modules, for the host tests (//tests), which import them.
 filegroup(
     name = "sources",
     srcs = glob(["*.py"]),
