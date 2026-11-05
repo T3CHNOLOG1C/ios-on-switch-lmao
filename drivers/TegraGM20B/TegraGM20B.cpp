@@ -28,10 +28,22 @@ unsigned tegra_gm20b_accelerator_instance_size(void) __attribute__((weak));
 }
 extern kmod_info_t g_kernel_kmod_info;
 
+// drivers/SwitchPower/SwitchThermal.cpp: a CPU raise held back for the bring-up goes ahead (a no-op before that service
+// runs).
+extern "C" void switch_thermal_gpu_ready(void);
+
 namespace
 {
 char gLine[256];
 volatile int gStarted, gBringupDone;
+
+// The bring-up has ended (done or failed): SwitchThermal's CPU raise, which waits for it on the shared MAX77812, goes
+// ahead at once.
+void bringupDone()
+{
+	__atomic_store_n(&gBringupDone, 1, __ATOMIC_RELEASE);
+	switch_thermal_gpu_ready();
+}
 
 // Same staging as UniXNU-sheng's publishMetal() (package/GpuPowerProbe.cpp:1217-1251) and IOSwitchAccelStubPublish.cpp: load
 // IOGPUFamily (already loaded by the stub; idempotent) so the IOAcceleratorES metaclass exists, run our class's static
@@ -97,7 +109,7 @@ void bringup(void *arg, wait_result_t)
 		const int ret = tgm_bringup(s, gLine, sizeof(gLine));
 		IOLog("tegra-gm20b: %s\n", gLine[0] ? gLine : "no result");
 		if (ret) {
-			__atomic_store_n(&gBringupDone, 1, __ATOMIC_RELEASE);
+			bringupDone();
 			return;
 		}
 		// Bring-up: the text console lags the log, and logd flushes every few seconds; let both catch up so a stage
@@ -113,7 +125,7 @@ void bringup(void *arg, wait_result_t)
 			IOLog("tegra-gm20b: M4 ok published AGXAccelerator (MetalPluginName "
 			      "TegraGM20BMetal)\n");
 	}
-	__atomic_store_n(&gBringupDone, 1, __ATOMIC_RELEASE);
+	bringupDone();
 }
 }  // namespace
 
@@ -143,7 +155,7 @@ extern "C" int tegra_gm20b_probe(void)
 	if (kernel_thread_start(bringup, reinterpret_cast<void *>(static_cast<intptr_t>(stage)),
 				&thread) != KERN_SUCCESS) {
 		IOLog("tegra-gm20b: could not start the bring-up thread\n");
-		__atomic_store_n(&gBringupDone, 1, __ATOMIC_RELEASE);
+		bringupDone();
 		return -1;
 	}
 	thread_deallocate(thread);

@@ -23,13 +23,14 @@ int switch_thermal_start(void);
 void switch_thermal_cpu_quiesce(void);
 
 // Performance hints for the CPU's on-demand governor (SwitchPerfGovernor.cpp): the CPU's top operating point at once,
-// held for a while after the last hint (BOOT_DONE instead ends the boot's floor). The GPU has no load governor: it
+// held for a while after the last hint (BOOT_DONE instead ends the boot window: the CPU's floor at its ceiling and
+// the GPU's idle-clock hold, once per boot, one line). The GPU has no load governor: it
 // runs its full clock whenever it has work, and a touch, missed frame or launch brings it back at once from its idle
 // clock (TegraGM20B gpu.c, entered only after 500 ms with no submission and no swap). Any context: thread, work loop,
-// primary interrupt, the scheduler's; a few stores under a spin lock, nothing when the governor is off. Callers:
-// SwitchTouch (each touch interrupt), NativeLegacyDisplay (a present two or more refresh periods after the last one,
-// while frames keep coming), XNU exec_activate_image (LAUNCH) and its boot band lift at IOKit's System Boot Complete
-// (BOOT_DONE).
+// primary interrupt, the scheduler's; a few stores under a spin lock, nothing when the governor is off (BOOT_DONE:
+// thread context, it logs). Callers: SwitchTouch (each touch interrupt), NativeLegacyDisplay (a present two or more
+// refresh periods after the last one, while frames keep coming), XNU exec_activate_image (LAUNCH) and IOPMrootDomain at
+// SpringBoard's System Boot Complete (BOOT_DONE, whether or not the boot band's 60 s bound closed the band first).
 enum {
     SWITCH_PERF_HINT_TOUCH = 1,
     SWITCH_PERF_HINT_FRAME_MISS = 2,

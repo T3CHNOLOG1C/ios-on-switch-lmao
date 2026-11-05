@@ -18,10 +18,17 @@
 //     kCpuTargetPermille share covers the work; down only after kCpuDownHoldUs of lower targets.
 //   * Boosts (switch_perf_hint, SwitchPower.h): a touch (SwitchTouch's interrupt), a frame that took two or more
 //     refresh periods (NativeLegacyDisplay's present stamps), an exec (XNU exec_activate_image), each holding the top
-//     point for a while, applied at once from the hinting context; and the boot itself, held at the top until IOKit's
-//     System Boot Complete (XNU's boot band lift) or kBootFloorUs.
+//     point for a while, applied at once from the hinting context; and the boot itself, held at the top from the
+//     governor's start (as soon as the DFLL is up) until SpringBoard's System Boot Complete (XNU IOPMrootDomain,
+//     SWITCH_PERF_HINT_BOOT_DONE) or kBootFallbackUs of uptime, whichever is first. The GPU's idle clock is held off
+//     for that window too (the idle tick below), so the boot runs both at their full clocks. After it the governor's
+//     own rule holds the top while the post-boot load saturates the CPU (11-05 r8a: 100 % residency at the ceiling
+//     with 0 down-steps from the floor's end at 60 s to 158 s, busy mean 86-100 %), and lowers it once that load ends.
 //   * Thermal: SwitchThermal's DFLL floor/cap indices (L4T's T210B01 trips) become the governor's lowest/highest
-//     points (limits()), applied at once. The DFLL's own voltage cap stays in force underneath in hardware.
+//     points (limits()), applied at once, boot window included (one line if they clip it). The DFLL's own voltage cap
+//     stays in force underneath in hardware.
+//   * Rows held down (SwitchGovernor.h switch_gov_rows): a ceiling row the DFLL ran high at, measured by SwitchThermal,
+//     is skipped as the ceiling until it is re-tried from below at a later periodic window and measures right.
 //   * iPadOS's thermal ceiling: thermalmonitord (CLTM) caps the CPU with the DVD factor it writes on ApplePMGR
 //     (kits/qemu/ShengPlatformPower.cpp hands it to switch_perf_cltm_ceiling, SwitchPower.h): the highest point is
 //     also at or below that share of the top clock (SwitchGovernor.h switch_gov_index_at_fraction), whichever ceiling
@@ -56,8 +63,8 @@ constexpr uint32_t kCpuDownHoldUs = 80000;    // five frames
 constexpr uint32_t kBoostTouchUs = 600000;    // refreshed by every touch event while a finger moves
 constexpr uint32_t kBoostFrameUs = 1000000;   // after a frame that took two refresh periods or more
 constexpr uint32_t kBoostLaunchUs = 1500000;  // after an exec
-constexpr uint64_t kBootFloorUs = 90000000;   // the boot's floor if System Boot Complete never comes
-constexpr uint64_t kLogWindowUs = 10000000;   // the periodic line, as kprof's window
+constexpr uint64_t kBootFallbackUs = switchperf::kBootFallbackSeconds * 1000000ull;  // uptime (SwitchPerfGovernor.h)
+constexpr uint64_t kLogWindowUs = 10000000;  // the periodic line, as kprof's window
 constexpr unsigned kMaxCpus = 8;
 constexpr unsigned kSeqTries = 4;
 
@@ -83,8 +90,14 @@ void *gCtx;
 uint64_t gWindow, gBootUntil, gLogStart, gLogDue;
 uint32_t gFloorMv, gCapMv;  // the DFLL's thermal floor and cap last given to limits() (0: none)
 uint32_t gCltm = 0x10000u;  // thermalmonitord's CPU ceiling, a 16.16 share of the top clock (atomic loads)
-unsigned gTopCap = SWITCH_GOV_MAX_OPPS - 1;  // capTop(): the top this boot measured at or under 1785 MHz
-unsigned gDerate;                            // derate(): rows every ceiling sits below (a ceiling that measured high)
+switch_gov_rows gRows;      // rows held down: ceilings the DFLL ran high at (hold, retryHeld)
+unsigned gLimitHi;          // the ceiling the thermal limits allow, before held rows
+bool gBootDone;             // System Boot Complete came or the fallback passed: no boot window again this boot (atomic)
+// A thermal limit clipped the boot window: noted under the lock, logged once after it (noteClip).
+uint32_t gClipNote;  // atomic
+bool gClipNoted;
+uint32_t gClipKhz, gClipCapMv, gClipCltm;
+uint64_t gClipAt;
 // per log window
 uint32_t gWindows, gBusyPeak, gHints[5];
 uint64_t gBusySum;
@@ -154,18 +167,41 @@ bool claimSignal(uint64_t now)
     return __atomic_exchange_n(&gPending, 1u, __ATOMIC_ACQ_REL) == 0;
 }
 
-// Under gLock: the limits in force from the DFLL's thermal floor/cap and thermalmonitord's ceiling. Returns whether the
-// clock must move (the signal claimed).
+// Under gLock: the limits in force from the DFLL's thermal floor/cap and thermalmonitord's ceiling, then the rows held
+// down below that. Returns whether the clock must move (the signal claimed).
 bool applyLimits(uint64_t now)
 {
-    const unsigned lo = switch_gov_index_at_mv(gMv, gGov.count, gFloorMv);
-    unsigned hi = gCapMv ? switch_gov_index_at_mv(gMv, gGov.count, gCapMv) : gGov.count - 1;
-    const unsigned cltm = switch_gov_index_at_fraction(gGov.khz, gGov.count, __atomic_load_n(&gCltm, __ATOMIC_RELAXED));
+    const unsigned lo = switch_gov_index_at_mv(gMv, gGov.count, gFloorMv), top = gGov.count - 1;
+    unsigned hi = gCapMv ? switch_gov_index_at_mv(gMv, gGov.count, gCapMv) : top;
+    const bool capped = hi < top;  // the DFLL's cap binds (with none in force it reports the LUT's top voltage)
+    const uint32_t share = __atomic_load_n(&gCltm, __ATOMIC_RELAXED);
+    const unsigned cltm = switch_gov_index_at_fraction(gGov.khz, gGov.count, share);
     if (cltm < hi) hi = cltm;
-    if (gTopCap < hi) hi = gTopCap;        // the top this boot measured at or under 1785 MHz
-    hi = hi > gDerate ? hi - gDerate : 0;  // every ceiling a row lower once one measured high
-    switch_gov_limit(&gGov, lo, hi, now);
+    gLimitHi = hi;
+    if (hi < top && now < gBootUntil && !gClipNoted) {  // thermal limits clip the boot window: one line (noteClip)
+        gClipNoted = true;
+        gClipKhz = gGov.khz[hi];
+        gClipCapMv = capped ? gCapMv : 0;
+        gClipCltm = share;
+        gClipAt = now;
+        __atomic_store_n(&gClipNote, 1u, __ATOMIC_RELEASE);
+    }
+    switch_gov_limit(&gGov, lo, switch_gov_rows_ceiling(&gRows, hi), now);
     return gRunning && claimSignal(now);
+}
+
+// After applyLimits, outside the lock, thread context: the boot window's one thermal line, if it was clipped.
+void noteClip()
+{
+    if (!__atomic_exchange_n(&gClipNote, 0u, __ATOMIC_ACQ_REL)) return;
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(gClipAt, &ns);
+    char cap[16] = "none";
+    if (gClipCapMv) snprintf(cap, sizeof(cap), "%u mV", gClipCapMv);
+    IOLog("SwitchPerf: thermal limits clip the boot window at %llu.%llu s of uptime: CPU ceiling %u MHz (DFLL voltage "
+          "cap %s, thermalmonitord %u%%)\n",
+          ns / 1000000000, ns / 100000000 % 10, gClipKhz / 1000, cap,
+          gClipCltm >= 0x10000u ? 100u : (unsigned)(gClipCltm * 100ull >> 16));
 }
 
 // XNU's perfcontrol deadline: the window's tick (interrupts masked; context-switch, quantum or idle-wake context).
@@ -174,20 +210,23 @@ void deadlinePassed(uint64_t)
     if (!__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE)) return;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    bool wake = false;
+    bool wake = false, boot = false;
     if (gRunning) {
         uint32_t busy = windowBusy(now);
         ++gWindows;
         gBusySum += busy;
         if (busy > gBusyPeak) gBusyPeak = busy;
-        if (now < gBootUntil) busy = 1000;  // the boot runs at the top point
+        boot = now < gBootUntil;
+        if (boot) busy = 1000;  // the boot runs at the top point (the ceiling: thermal limits still apply)
         switch_gov_step(&gGov, now, busy);
         wake = claimSignal(now);
         sched_perfcontrol_update_callback_deadline(now + gWindow);
     }
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);
-    tegra_gm20b_idle_tick();  // the GPU's idle clock takes this tick too (loads; a work item once it is idle)
+    // The GPU's idle clock takes this tick too (loads; a work item once it is idle), from the end of the boot window:
+    // until then the GPU never leaves its full clock.
+    if (!boot) tegra_gm20b_idle_tick();
 }
 
 struct sched_perfcontrol_callbacks gCallbacks = {
@@ -198,8 +237,8 @@ struct sched_perfcontrol_callbacks gCallbacks = {
 
 }  // namespace
 
-bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, unsigned startIndex, Signal signal,
-                       void *ctx, char *why, size_t len)
+bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, unsigned startIndex, uint32_t held,
+                       Signal signal, void *ctx, char *why, size_t len)
 {
     if (__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE)) {
         snprintf(why, len, "already running");
@@ -233,11 +272,12 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
     gPrevNow = now;
     gFloorMv = gCapMv = 0;
     gApplied = gGov.cur;
-    gDerate = 0;  // gTopCap is the caller's (capTop before start), kept
+    switch_gov_rows_init(&gRows, held);
     __atomic_store_n(&gAppliedKhz, gGov.khz[gGov.cur], __ATOMIC_RELEASE);
     gSignal = signal;
     gCtx = ctx;
-    gBootUntil = now + absUs(kBootFloorUs);
+    // The boot window, once per boot: up to System Boot Complete, at most to kBootFallbackUs of uptime.
+    gBootUntil = __atomic_load_n(&gBootDone, __ATOMIC_ACQUIRE) ? 0 : absUs(kBootFallbackUs);
     gLogStart = now;
     gLogDue = now + absUs(kLogWindowUs);
     gWindows = gBusyPeak = 0;
@@ -248,6 +288,7 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
     const bool wake = applyLimits(now);  // a ceiling thermalmonitord set before this start: the clock moves down
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);
+    noteClip();
     sched_perfcontrol_register_callbacks(&gCallbacks, 0);
     sched_perfcontrol_update_callback_deadline(now + gWindow);
     return true;
@@ -283,13 +324,19 @@ unsigned switchperf::take(char *line, size_t len)
     const uint64_t now = mach_absolute_time();
     uint64_t residency[SWITCH_GOV_MAX_OPPS], span = 0, busySum = 0;
     uint32_t hints[5], ups = 0, downs = 0, jumps = 0, boosted = 0, clamped = 0, windows = 0, peak = 0;
+    uint32_t held = 0, trial = 0;
     unsigned count = 0, lo = 0, hi = 0;
-    bool logDue = false, boot = false;
+    bool logDue = false, boot = false, fellBack = false;
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     __atomic_store_n(&gPending, 0u, __ATOMIC_RELEASE);
+    if (gBootUntil && now >= gBootUntil) {  // no System Boot Complete by the fallback: the window closed there
+        gBootUntil = 0;
+        fellBack = !__atomic_exchange_n(&gBootDone, true, __ATOMIC_ACQ_REL);
+    }
     const unsigned index = gGov.cur;
     if (gRunning && now >= gLogDue) {
         logDue = true;
+        switch_gov_rows_tick(&gRows);  // a line: held rows' waits count it (retryHeld after its measurement)
         switch_gov_account(&gGov, now);
         count = gGov.count;
         lo = gGov.lo;
@@ -309,10 +356,18 @@ unsigned switchperf::take(char *line, size_t len)
         gBusySum = 0;
         span = now - gLogStart;
         boot = now < gBootUntil;
+        held = gRows.held;
+        trial = gRows.trial;
         gLogStart = now;
         gLogDue = now + absUs(kLogWindowUs);
     }
+    const unsigned ceilingKhz = gGov.khz[gGov.hi];
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
+    if (fellBack) {
+        IOLog("SwitchPerf: boot done at %llu s of uptime (no System Boot Complete by then): the CPU governor (ceiling "
+              "%u MHz) and the GPU's idle clock decide from here\n",
+              kBootFallbackUs / 1000000, ceilingKhz / 1000);
+    }
     if (!logDue || !line || !len) return index;
 
     uint64_t spanUs = 0;
@@ -335,6 +390,15 @@ unsigned switchperf::take(char *line, size_t len)
                               ups, downs, jumps, boosted, clamped, windows ? busySum / windows / 10 : 0, peak / 10,
                               windows, hints[1], hints[2], hints[3], boot ? ", boot floor" : "", gGov.khz[lo] / 1000,
                               gGov.khz[hi] / 1000, gGov.khz[index] / 1000, target / 1000000, measured / 1000000, vdd);
+    }
+    // Rows held down (the DFLL ran high at them as the ceiling) and rows back on trial, not yet measured right.
+    for (unsigned pass = 0; pass < 2; ++pass) {
+        const uint32_t rows = pass ? trial : held;
+        if (!rows || n >= len) continue;
+        n += (size_t)snprintf(line + n, len - n, "; %s", pass ? "on trial" : "held down");
+        for (unsigned i = 0; i < count && n < len; ++i)
+            if (rows >> i & 1u) n += (size_t)snprintf(line + n, len - n, " %u", gGov.khz[i] / 1000);
+        if (n < len) n += (size_t)snprintf(line + n, len - n, " MHz");
     }
     bool external = false;
     const int ma = switch_battery_avg_ma(&external);
@@ -362,6 +426,7 @@ void switchperf::limits(unsigned floorMv, unsigned capMv)
     const bool wake = applyLimits(now);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);
+    noteClip();
 }
 
 unsigned switchperf::indexAt(uint32_t khz)
@@ -380,29 +445,39 @@ unsigned switchperf::ceiling()
     return hi;
 }
 
-void switchperf::capTop(unsigned index)
+unsigned switchperf::hold(unsigned index, bool *again)
 {
-    if (!gLock) {  // before the first start: nothing else runs yet
-        gTopCap = index;
-        return;
-    }
+    if (again) *again = false;
+    if (!gLock || !running()) return 0;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    gTopCap = index;
+    if (again && index < SWITCH_GOV_MAX_OPPS) *again = (gRows.trial >> index & 1u) != 0;
+    const unsigned wait = switch_gov_rows_hold(&gRows, index);
     const bool wake = applyLimits(now);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);
+    return wait;
 }
 
-void switchperf::derate()
+bool switchperf::landed(unsigned index)
 {
-    if (!gLock || !running()) return;
+    if (!gLock) return false;
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
+    const bool back = switch_gov_rows_landed(&gRows, index) != 0;
+    IOSimpleLockUnlockEnableInterrupt(gLock, state);
+    return back;
+}
+
+uint32_t switchperf::retryHeld()
+{
+    if (!gLock || !running()) return 0;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    if (gDerate + 1 < gGov.count) ++gDerate;
-    const bool wake = applyLimits(now);
+    const uint32_t back = switch_gov_rows_retry(&gRows, gLimitHi);
+    const bool wake = back && applyLimits(now);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);
+    return back;
 }
 
 extern "C" unsigned int switch_perf_cltm_ceiling(uint32_t fraction16)
@@ -420,12 +495,40 @@ extern "C" unsigned int switch_perf_cltm_ceiling(uint32_t fraction16)
     }
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);
+    noteClip();
     return khz;
+}
+
+// System Boot Complete (XNU IOPMrootDomain, its thread): the boot window ends, once per boot, with one line.
+static void bootDone()
+{
+    if (__atomic_exchange_n(&gBootDone, true, __ATOMIC_ACQ_REL)) return;  // the fallback came first
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    unsigned khz = 0;
+    if (gLock && __atomic_load_n(&gRunning, __ATOMIC_ACQUIRE)) {
+        IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
+        if (gRunning) {
+            ++gHints[SWITCH_PERF_HINT_BOOT_DONE];
+            gBootUntil = 0;
+            khz = gGov.khz[gGov.hi];
+        }
+        IOSimpleLockUnlockEnableInterrupt(gLock, state);
+    }
+    char cpu[48] = "not governed";
+    if (khz) snprintf(cpu, sizeof(cpu), "ceiling %u MHz", khz / 1000);
+    IOLog("SwitchPerf: boot done at %llu.%llu s of uptime (System Boot Complete): the CPU governor (%s) and the GPU's "
+          "idle clock decide from here\n",
+          ns / 1000000000, ns / 100000000 % 10, cpu);
 }
 
 extern "C" void switch_perf_hint(unsigned int hint)
 {
     tegra_gm20b_perf_hint(hint);  // the GPU back at its full clock if it idles low
+    if (hint == SWITCH_PERF_HINT_BOOT_DONE) {
+        bootDone();
+        return;
+    }
     if (!__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE) || hint >= 5 || !hint) return;
     const uint64_t now = mach_absolute_time();
     const uint32_t us = hint == SWITCH_PERF_HINT_TOUCH        ? kBoostTouchUs
@@ -436,12 +539,8 @@ extern "C" void switch_perf_hint(unsigned int hint)
     bool wake = false;
     if (gRunning) {
         ++gHints[hint];
-        if (hint == SWITCH_PERF_HINT_BOOT_DONE) {
-            gBootUntil = 0;
-        } else {
-            switch_gov_boost(&gGov, gGov.count - 1, until, now);
-            wake = gGov.cur > gApplied && claimSignal(now);
-        }
+        switch_gov_boost(&gGov, gGov.count - 1, until, now);
+        wake = gGov.cur > gApplied && claimSignal(now);
     }
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);

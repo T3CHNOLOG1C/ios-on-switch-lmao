@@ -84,3 +84,49 @@ unsigned gov_index_at_mv(const uint32_t *mv, unsigned count, uint32_t limit_mv)
 {
     return switch_gov_index_at_mv(mv, count, limit_mv);
 }
+
+// Rows held down (switch_gov_rows): a ceiling the DFLL ran high at, skipped until it is tried again from below.
+size_t rows_size(void)
+{
+    return sizeof(struct switch_gov_rows);
+}
+
+void rows_init(struct switch_gov_rows *r, uint32_t held)
+{
+    switch_gov_rows_init(r, held);
+}
+
+unsigned rows_ceiling(const struct switch_gov_rows *r, unsigned hi)
+{
+    return switch_gov_rows_ceiling(r, hi);
+}
+
+uint32_t rows_hold(struct switch_gov_rows *r, unsigned row)
+{
+    return switch_gov_rows_hold(r, row);
+}
+
+int rows_landed(struct switch_gov_rows *r, unsigned row)
+{
+    return switch_gov_rows_landed(r, row);
+}
+
+void rows_tick(struct switch_gov_rows *r)
+{
+    switch_gov_rows_tick(r);
+}
+
+uint32_t rows_retry(struct switch_gov_rows *r, unsigned hi)
+{
+    return switch_gov_rows_retry(r, hi);
+}
+
+uint32_t rows_held(const struct switch_gov_rows *r)
+{
+    return r->held;
+}
+
+uint32_t rows_trial(const struct switch_gov_rows *r)
+{
+    return r->trial;
+}

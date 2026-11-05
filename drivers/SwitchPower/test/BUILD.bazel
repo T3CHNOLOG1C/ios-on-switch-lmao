@@ -32,7 +32,11 @@ host_library(
 
 host_test(
     name = "switch_governor_test",
-    srcs = ["switch_governor_test.cpp"],
+    srcs = [
+        "switch_governor_test.cpp",
+        # kBootFallbackSeconds, checked at compile time.
+        TREE + "SwitchPower/SwitchPerfGovernor.h",
+    ],
     # The tunables, read as the kernel is built with them (a retune is tested as shipped).
     data = ["//drivers/SwitchPower:SwitchPerfGovernor.cpp"],
     deps = [":switch_governor_harness"],
