@@ -43,6 +43,8 @@ struct swlan_bss {
     uint32_t age_ms;
     uint16_t ie_len;
     uint8_t ie[384];  // information elements as the access point sent them
+    uint16_t bw_mhz;  // the width it runs (its chanspec): 20, 40, 80, 160; 0 when not known
+    uint8_t center;   // the channel that width is centred on
 };
 
 struct swlan_status {
@@ -54,7 +56,10 @@ struct swlan_status {
     uint32_t freq_mhz;
     int8_t signal_dbm;
     uint8_t mac[6];
-    uint32_t power;  // radio on
+    uint32_t power;   // radio on
+    uint16_t bw_mhz;  // the joined access point's width and centre channel (swlan_bss)
+    uint8_t center;
+    uint32_t tx_rate_kbps, rx_rate_kbps;  // the link's PHY rates as the firmware last reported them (0: not yet)
 };
 
 // Called from the radio's threads: scan_done, associated, connect_done and link_lost from its worker thread, rx from
@@ -66,6 +71,10 @@ struct swlan_events {
     void (*connect_done)(int result);  // SWLAN_RES_*
     void (*link_lost)(int reason);
     void (*rx)(const uint8_t *eth, size_t length);  // Ethernet header + payload
+    // From the work loop too: after each interrupt's frames (rx_flush: hand what rx gathered to the stack in one go),
+    // and when the radio can take frames again after switch_wlan_tx_room said 0, or the station came up (tx_ready).
+    void (*rx_flush)(void);
+    void (*tx_ready)(void);
 };
 
 // Radio side. Every call only queues work (or copies a snapshot) and returns; any thread context.
@@ -82,7 +91,14 @@ int switch_wlan_connect(const uint8_t *ssid, size_t ssid_len, const uint8_t *bss
                         int key_is_pmk);
 void switch_wlan_disconnect(void);
 int switch_wlan_power(int on);
-int switch_wlan_tx(const uint8_t *eth, size_t length);  // 0 queued
+int switch_wlan_tx(const uint8_t *eth, size_t length);  // 0 queued (one frame, copied)
+// en0's output, from its start routine (thread context): how many frames the radio takes now. 0 while the station
+// is not up or every transmit buffer is in flight; tx_ready follows once that changes.
+unsigned switch_wlan_tx_room(void);
+// Up to `max` frames, each written by `fill` straight into the DMA buffer it goes out of (fill returns the frame's
+// length, at least 14 and at most `room` bytes, or 0 for no more), then one doorbell for them all. Frames taken.
+typedef size_t (*swlan_tx_fill_fn)(void *context, uint8_t *buffer, size_t room);
+unsigned switch_wlan_tx_frames(swlan_tx_fill_fn fill, void *context, unsigned max);
 void switch_wlan_status_get(struct swlan_status *out);
 void switch_wlan_counters(char *text, size_t size);  // frames and losses, one line
 // What wifid says Bluetooth is doing (APPLE80211_IOC_BT_COEX_FLAGS: SWLAN_BT_* of SwitchWLANCoex.h) and whether its
@@ -93,8 +109,13 @@ void switch_wlan_bt_state(uint32_t flags, int power);
 struct swlan_net_counters {
     uint32_t rx_input, rx_no_mbuf, rx_input_errors;  // handed to the stack, dropped for want of an mbuf, refused by it
     uint32_t tx_oversize, tx_refused;                // dropped by if_output: larger than a frame, or not queued
+    uint32_t tx_starts, tx_batches;                  // en0's start routine runs, and the batches it handed over
+    uint32_t rx_batches;                             // frame batches handed to the stack (one ifnet_input each)
+    uint8_t start_model;                             // 1: en0 runs the stack's output queue (0: legacy if_output)
 };
 void switch_wlan_net_counters(struct swlan_net_counters *out);
+// The link's transmit PHY rate (b/s) as en0's baud rate, what the stack and its clients read for the link speed.
+void switch_wlan_net_rate(uint64_t bps);
 
 // SwitchWLAN.cpp: the radio driver behind boot-arg switch-wlan=1 (prints the probe line, publishes the fuse MAC in
 // the device tree, then brings the chip up on its own thread). Returns 0 when the boot-arg is off or the driver

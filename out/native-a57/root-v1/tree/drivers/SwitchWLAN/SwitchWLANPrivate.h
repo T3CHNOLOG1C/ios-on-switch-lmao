@@ -13,6 +13,12 @@
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
+// Every device register access, for the host's msgbuf model (tests/switch_wlan_msgbuf_harness.cpp counts the PCIe reads
+// a received or sent frame costs); nothing in the kernel build.
+#ifndef SWLAN_MMIO_TRACE
+#define SWLAN_MMIO_TRACE(mmio, kind, offset) ((void)0)
+#endif
+
 namespace swlan {
 
 // A device register block mapped by ml_io_map (Device-nGnRE). 32-bit accesses only, except the 16-bit ring indices
@@ -26,10 +32,26 @@ struct Mmio {
         base = reinterpret_cast<volatile uint8_t *>(ml_io_map(static_cast<vm_offset_t>(pa), length));
         return base != nullptr;
     }
-    uint32_t r32(uint32_t offset) const { return *reinterpret_cast<volatile uint32_t *>(base + offset); }
-    void w32(uint32_t offset, uint32_t value) const { *reinterpret_cast<volatile uint32_t *>(base + offset) = value; }
-    uint16_t r16(uint32_t offset) const { return *reinterpret_cast<volatile uint16_t *>(base + offset); }
-    void w16(uint32_t offset, uint16_t value) const { *reinterpret_cast<volatile uint16_t *>(base + offset) = value; }
+    uint32_t r32(uint32_t offset) const
+    {
+        SWLAN_MMIO_TRACE(this, 'r', offset);
+        return *reinterpret_cast<volatile uint32_t *>(base + offset);
+    }
+    void w32(uint32_t offset, uint32_t value) const
+    {
+        SWLAN_MMIO_TRACE(this, 'w', offset);
+        *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
+    }
+    uint16_t r16(uint32_t offset) const
+    {
+        SWLAN_MMIO_TRACE(this, 'r', offset);
+        return *reinterpret_cast<volatile uint16_t *>(base + offset);
+    }
+    void w16(uint32_t offset, uint16_t value) const
+    {
+        SWLAN_MMIO_TRACE(this, 'w', offset);
+        *reinterpret_cast<volatile uint16_t *>(base + offset) = value;
+    }
     uint8_t r8(uint32_t offset) const { return base[offset]; }
     void modify(uint32_t offset, uint32_t clear, uint32_t set) const { w32(offset, (r32(offset) & ~clear) | set); }
     // Bounded wait for a status bit that has no interrupt (PLL locks, calibration, power partitions, link
@@ -67,6 +89,14 @@ inline void dcacheClean(const volatile void *p, size_t n)
     const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
     for (; at < end; at += kCacheLine) __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");
+}
+// Clean without the barrier, for a batch: the dcacheClean (or dsb) that follows completes these too, and must come
+// before the chip is told (the ring index write).
+inline void dcacheCleanLines(const volatile void *p, size_t n)
+{
+    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~(kCacheLine - 1);
+    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
+    for (; at < end; at += kCacheLine) __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
 }
 inline void dcacheFlush(const volatile void *p, size_t n)
 {
@@ -230,6 +260,28 @@ struct Event {
     uint32_t length;
 };
 
+// How the DMA area is cut up (Msgbuf::attach): its length and the receive and transmit buffers it holds. The large
+// layout is the data path's (brcmfmac posts the firmware's max_rxbufpost, 255, and keeps up to 2048 frames in flight);
+// the small one is the layout every boot before r17 ran, taken when 2 MiB contiguous below 4 GiB is not available.
+struct AreaLayout {
+    uint32_t length;
+    uint16_t rxBuffers, txBuffers;
+};
+constexpr AreaLayout kAreaLarge = {2u * 1024 * 1024, 256, 256};
+constexpr AreaLayout kAreaSmall = {512u * 1024, 64, 32};
+constexpr uint32_t kTxBufferSize = 2048, kRxBufferSize = 2048;  // BRCMF_MSGBUF_MAX_PKT_SIZE
+
+// The data path's counters (monotonic, except the peak): what one stats window moved and what it cost.
+struct DataCounters {
+    uint64_t rxFrames, rxBytes, rxReposted;  // completions taken; their frame bytes; buffers given back to the chip
+    uint64_t txFrames, txBytes;              // frames posted and their bytes
+    uint64_t txDone, txFailed;               // their completions; completions with a status
+    uint64_t txRefused, txFull;              // sends refused (ring closed, too large, no room); txRoom() that found 0
+    uint64_t doorbells, indexReads, drains;  // H2D doorbells rung; ring indices read from the chip's RAM; service()s
+    uint32_t txInFlight, txPeak;             // frames the chip holds now; the most it held since the last snapshot
+    uint32_t rxPosted;                       // receive buffers the chip holds now
+};
+
 class Msgbuf {
 public:
     using EventHandler = void (*)(void *context, const Event &event);
@@ -246,6 +298,8 @@ public:
     uint32_t msiPA() const { return msiPA_; }
     void enableInterrupts();
     void disableInterrupts();
+    // One line for the bring-up log: the layout taken and what the firmware asked for.
+    void describe(char *out, size_t length) const;
 
     // Work loop, on the MSI: mailbox status taken (mask dropped meanwhile, as brcmf_pcie_isr_thread, so an event
     // during the drain makes a fresh MSI), mailbox data answered, completion rings drained. Returns the mailbox
@@ -270,11 +324,22 @@ public:
     bool flowCreateSubmit(const uint8_t destination[6], const uint8_t source[6]);
     Flow flow() const { return flow_; }
     uint16_t flowStatus() const { return flowStatus_; }
-    // An Ethernet frame onto the flow ring (brcmf_msgbuf_txflow): its header in the ring item, the payload read
-    // from one of our buffers. The request id (1..32) its completion answers for, 0 when it cannot go now (flow
+    // One Ethernet frame onto the flow ring at once (the supplicant's handshake frames): copied into a transmit
+    // buffer, its header in the ring item. The request id its completion answers for, 0 when it cannot go now (flow
     // ring not open, every buffer in flight, ring full).
     uint32_t send(const uint8_t *frame, size_t length);
     bool sent(uint32_t id, uint16_t *status) const;
+
+    // en0's frames (brcmf_msgbuf_txflow): txRoom() frames fit now; for each, the caller writes the frame into
+    // txBuffer() (its one copy on the way out, straight from the mbuf) and txPost()s it; txFlush() then tells the chip
+    // with one index write and one doorbell for the batch. A txRoom() of 0 is remembered: once completions have freed
+    // enough buffers, txResume() turns true (once), and the caller starts its queue again (no frame is dropped here
+    // for want of room: it waits in the stack's queue).
+    unsigned txRoom();
+    uint8_t *txBuffer();
+    uint32_t txPost(size_t length);
+    void txFlush();
+    bool txResume();
 
     // The AWDL interface's flow rings (the firmware's own AWDL, SwitchWLANAwdl.cpp): one per destination, group
     // addresses sharing the broadcast one, created on first use and deleted when the interface goes. Their memory is
@@ -287,31 +352,33 @@ public:
     unsigned awdlRingCount() const { return awdlRings_; }
     uint32_t awdlRefused() const { return awdlRefused_; }
 
-    uint32_t framesReceived() const { return rxFrames_; }
-    uint32_t framesSent() const { return txFrames_; }
-    uint32_t sendsCompleted() const { return txDone_; }
-    uint32_t sendsRefused() const { return txRefused_; }
+    uint32_t framesReceived() const { return static_cast<uint32_t>(data_.rxFrames); }
+    uint32_t framesSent() const { return static_cast<uint32_t>(data_.txFrames); }
+    uint32_t sendsCompleted() const { return static_cast<uint32_t>(data_.txDone); }
+    uint32_t sendsRefused() const { return static_cast<uint32_t>(data_.txRefused); }
     // Completions whose status was not 0 (the firmware did not get the frame out), and the last such status.
-    uint32_t sendsFailed() const { return txFailed_; }
+    uint32_t sendsFailed() const { return static_cast<uint32_t>(data_.txFailed); }
     uint16_t lastFailStatus() const { return txFailStatus_; }
+    // The data path's counters; the peak of frames in flight starts again from those in flight now.
+    DataCounters takeCounters();
+    unsigned rxBufferCount() const { return rxCount_; }
+    unsigned txBufferCount() const { return txCount_; }
 
 private:
     struct Ring {
         uint8_t *va;
         uint32_t pa;
         uint16_t items, size;
-        uint32_t wIndex, rIndex;     // TCM addresses of the write and read indices
-        uint16_t pos;                // next item to write (H2D) or read (D2H)
+        uint32_t wIndex, rIndex;  // TCM addresses of the write and read indices
+        uint16_t pos;             // next item to write (H2D) or read (D2H)
+        // H2D: the chip's read index as last read from its RAM (read again only when the ring looks full) and the
+        // write index it was last told. D2H: the chip's write index as read at the interrupt.
+        uint16_t seen, told;
         uint64_t consumed, cleared;  // D2H only: bytes read and bytes whose cache lines were zeroed (monotonic)
     };
     struct Buffer {
         uint8_t *va;
         uint32_t pa;
-    };
-    struct TxBuffer {
-        Buffer b;
-        bool busy;
-        uint16_t status;
     };
 
     Chip *chip_ = nullptr;
@@ -320,6 +387,7 @@ private:
     void *context_ = nullptr;
     uint8_t *area_ = nullptr;
     uint32_t areaPA_ = 0, areaUsed_ = 0, msiPA_ = 0;
+    AreaLayout layout_ = {};
     void *memory_ = nullptr;           // IOBufferMemoryDescriptor, kept for the driver's lifetime
     Ring rings_[6 + kAwdlFlows] = {};  // the five common rings, the TX flow ring, then the AWDL flow rings
     struct AwdlFlow {
@@ -334,14 +402,22 @@ private:
     unsigned awdlRings_ = 0;  // how many AWDL flow rings the area and the firmware allow
     uint64_t awdlUse_ = 0;
     uint32_t awdlRefused_ = 0;
-    uint16_t maxFlowRings_ = 0;
+    uint16_t maxFlowRings_ = 0, maxRxPost_ = 0;
     Buffer ioctlBuffer_ = {};
     Buffer control_[16] = {};
-    Buffer rx_[64] = {};
-    TxBuffer tx_[32] = {};
-    unsigned rxCount_ = 0;
-    uint32_t pcie2_ = 0, dataOffset_ = 0, dtohMailbox_ = 0, rxFrames_ = 0, txFrames_ = 0, txDone_ = 0, txRefused_ = 0;
-    uint32_t txFailed_ = 0;
+    // Receive buffers rxCount_ of kRxBufferSize from rxBase_, transmit buffers txCount_ of kTxBufferSize from txBase_
+    // (area offsets; id n is buffer n - 1). Free transmit ids wait in a FIFO, so an id the supplicant waits on
+    // (sent()) is not reused at once; each id's state and last status live in the same allocation (txSlots_).
+    uint32_t rxBase_ = 0, txBase_ = 0;
+    unsigned rxCount_ = 0, txCount_ = 0;
+    uint16_t *txFree_ = nullptr;  // FIFO of free ids
+    uint16_t *txStatus_ = nullptr;
+    uint8_t *txBusy_ = nullptr;
+    void *txSlots_ = nullptr;
+    unsigned txFreeHead_ = 0, txFreeCount_ = 0;
+    bool txWanted_ = false;
+    DataCounters data_ = {};
+    uint32_t pcie2_ = 0, dataOffset_ = 0, dtohMailbox_ = 0;
     uint16_t txFailStatus_ = 0;
     uint16_t transId_ = 0, flowStatus_ = 0;
     Flow flow_ = FLOW_CLOSED;
@@ -350,13 +426,25 @@ private:
     uint8_t reply_[1536] = {};
     size_t replyLength_ = 0;
 
+    bool allocateArea(char *why, size_t whyLength);
     bool allocate(uint32_t length, uint32_t align, Buffer &out);
+    uint8_t *txVa(uint32_t id) const { return area_ + txBase_ + (id - 1) * kTxBufferSize; }
+    uint32_t txPa(uint32_t id) const { return areaPA_ + txBase_ + (id - 1) * kTxBufferSize; }
+    uint8_t *rxVa(uint32_t id) const { return area_ + rxBase_ + id * kRxBufferSize; }
+    uint32_t rxPa(uint32_t id) const { return areaPA_ + rxBase_ + id * kRxBufferSize; }
+    uint16_t readIndex(uint32_t tcmAddress);
+    unsigned space(unsigned ring);
     uint8_t *reserve(unsigned ring);
+    void advance(unsigned ring);
+    void publish(unsigned ring);
     void commit(unsigned ring);
     bool postControl(uint32_t id);
     bool postRx(uint32_t id);
+    void refresh(unsigned ring);
     bool next(unsigned ring, uint8_t *item);
+    uint32_t postFrame(unsigned ring, uint8_t ifidx, size_t length);
     uint32_t post(unsigned ring, uint8_t ifidx, const uint8_t *frame, size_t length);
+    void txRelease(uint32_t id, uint16_t status);
     void retire(unsigned ring);
     void drain();
 };

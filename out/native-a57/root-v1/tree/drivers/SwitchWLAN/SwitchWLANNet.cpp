@@ -175,7 +175,10 @@ bool gKeyed;            // the last join used a key
 bool gLinkAnnounced;    // wifid was told the link is up (an association) and not yet that it went down
 uint32_t gBtFlags;      // wifid's APPLE80211_IOC_BT_COEX_FLAGS: SWLAN_BT_* (SwitchWLANCoex.h)
 uint32_t gBtPower = 1;  // wifid's APPLE80211_IOC_BT_POWER
-uint32_t gRxFrames, gRxErrors, gRxNoBuffer, gTxOversize, gTxRefused;
+uint32_t gRxFrames, gRxErrors, gRxNoBuffer, gTxOversize, gTxRefused, gTxStarts, gTxBatches, gRxBatches;
+// en0 runs the stack's output queue (start model: the stack queues, we take what the radio has buffers for); false
+// when that interface could not be made and en0 fell back to the legacy if_output, which drops what does not fit.
+bool gStartModel;
 int gAssocResult = kAssocOk;
 unsigned gScanCursor, gScanning;
 
@@ -367,11 +370,24 @@ void on_connect_done(int result)
     // A join that failed after the association (the key handshake): the link up wifid was given goes down again.
     if (result != SWLAN_RES_OK && gLinkAnnounced) post_link_event(false, 0);
 }
+// en0's queued frames are for the network that went: dropped (the stack's queue now, frames the start routine holds
+// at its next run), so none go out on the next one.
+bool gTxPurge;
+void tx_purge()
+{
+    if (!gIf || !gStartModel) return;
+    ifnet_purge(gIf);
+    __atomic_store_n(&gTxPurge, true, __ATOMIC_RELEASE);
+}
 void on_link_lost(int reason)
 {
     post_link(false);
     post_link_event(false, reason);
+    tx_purge();
 }
+// Work loop only: frames received in this interrupt, not yet handed to the stack.
+mbuf_t gRxHead, gRxTail;
+uint32_t gRxCount, gRxBytes;
 void on_rx(const uint8_t *eth, size_t length)
 {
     if (!gIf || length < 14) return;
@@ -412,57 +428,162 @@ void on_rx(const uint8_t *eth, size_t length)
     // reached (RouterARPVerified 0), the service is never published and en0 gets no route (r4a: bpf0 "fcount 0").
     bpf_tap_in(gIf, DLT_EN10MB, m, nullptr, 0);
     mbuf_adj(m, 14);  // the stack wants the Ethernet header apart from the payload
+    // Gathered: the interrupt's frames go to the stack together (on_rx_flush), one input-thread wakeup for them all.
+    if (gRxTail)
+        mbuf_setnextpkt(gRxTail, m);
+    else
+        gRxHead = m;
+    gRxTail = m;
+    ++gRxCount;
+    gRxBytes += static_cast<uint32_t>(length);
+}
+// Work loop, after each interrupt's frames: the gathered chain to the stack in one ifnet_input (it frees the chain
+// when it refuses it).
+void on_rx_flush()
+{
+    if (!gRxHead) return;
     struct ifnet_stat_increment_param inc;
     memset(&inc, 0, sizeof inc);
-    inc.packets_in = 1;
-    inc.bytes_in = static_cast<uint32_t>(length);
-    if (ifnet_input(gIf, m, &inc))
-        gRxErrors++;
+    inc.packets_in = gRxCount;
+    inc.bytes_in = gRxBytes;
+    mbuf_t chain = gRxHead;
+    const uint32_t count = gRxCount;
+    gRxHead = gRxTail = nullptr;
+    gRxCount = gRxBytes = 0;
+    if (ifnet_input(gIf, chain, &inc))
+        gRxErrors += count;
     else
-        gRxFrames++;
+        gRxFrames += count;
+    ++gRxBatches;
 }
-const struct swlan_events gEvents = {on_scan_done, on_associated, on_connect_done, on_link_lost, on_rx};
+// Work loop: the radio has room again (or the station is up): en0's start routine runs again.
+void on_tx_ready()
+{
+    if (gIf && gStartModel) ifnet_start(gIf);
+}
+const struct swlan_events gEvents = {on_scan_done, on_associated, on_connect_done, on_link_lost,
+                                     on_rx,        on_rx_flush,   on_tx_ready};
 
 // ---- the interface --------------------------------------------------------------------------------------------------
-errno_t if_output(ifnet_t, mbuf_t m)
+// Frames on their way out: written one at a time into the radio's DMA buffers (switch_wlan_tx_frames, under its
+// gate), each copied once, straight from the mbuf chain. Sent frames go to the packet filter and are freed, with the
+// dropped ones, by the caller after the batch, outside the gate (tx_done).
+struct TxCursor {
+    mbuf_t next;                // not yet written
+    mbuf_t sentHead, sentTail;  // written into the radio's buffers
+    mbuf_t droppedHead;         // too short, too long or unreadable
+    uint32_t packets, bytes, dropped;
+};
+size_t tx_fill(void *context, uint8_t *buffer, size_t room)
 {
-    bpf_tap_out(gIf, DLT_EN10MB, m, nullptr, 0);
-    const size_t length = mbuf_pkthdr_len(m);
-    if (length >= 14 && length <= 2000) {
-        uint8_t frame[2000];
-        mbuf_copydata(m, 0, length, frame);
-        if (!switch_wlan_tx(frame, length))
-            ifnet_stat_increment_out(gIf, 1, static_cast<uint32_t>(length), 0);
-        else {
-            ifnet_stat_increment_out(gIf, 0, 0, 1);
-            __atomic_fetch_add(&gTxRefused, 1u, __ATOMIC_RELAXED);
+    auto *c = static_cast<TxCursor *>(context);
+    while (mbuf_t m = c->next) {
+        c->next = mbuf_nextpkt(m);
+        mbuf_setnextpkt(m, nullptr);
+        const size_t length = mbuf_pkthdr_len(m);
+        if (length < 14 || length > room || mbuf_copydata(m, 0, length, buffer)) {
+            mbuf_setnextpkt(m, c->droppedHead);
+            c->droppedHead = m;
+            ++c->dropped;
+            continue;
         }
-    } else {
-        ifnet_stat_increment_out(gIf, 0, 0, 1);
-        __atomic_fetch_add(&gTxOversize, 1u, __ATOMIC_RELAXED);
+        if (c->sentTail)
+            mbuf_setnextpkt(c->sentTail, m);
+        else
+            c->sentHead = m;
+        c->sentTail = m;
+        ++c->packets;
+        c->bytes += static_cast<uint32_t>(length);
+        return length;
     }
-    mbuf_freem(m);
+    return 0;
+}
+void tx_done(ifnet_t ifp, TxCursor &c)
+{
+    for (mbuf_t m = c.sentHead; m; m = mbuf_nextpkt(m)) bpf_tap_out(gIf, DLT_EN10MB, m, nullptr, 0);
+    if (c.sentHead) mbuf_freem_list(c.sentHead);
+    if (c.droppedHead) mbuf_freem_list(c.droppedHead);
+    ifnet_stat_increment_out(ifp, c.packets, c.bytes, c.dropped);
+    if (c.dropped) __atomic_fetch_add(&gTxOversize, c.dropped, __ATOMIC_RELAXED);
+}
+
+// en0's start routine (the stack's starter thread for en0, one run at a time): frames from the stack's output queue
+// into the radio, as many as it has buffers for. When it has none, switch_wlan_tx_room says 0 and the radio calls
+// tx_ready once completions have freed a batch' worth; the frames wait in the stack's queue meanwhile (its AQM and
+// flow control decide what waits and what is dropped, not a full ring). Frames dequeued but not taken (the room
+// went between the two calls: a handshake frame or AWDL took buffers) are held here and go first next time.
+constexpr unsigned kTxBatch = 64;     // frames per dequeue: one gate hold and one doorbell
+constexpr uint32_t kSendQueue = 512;  // the stack's queue for en0, frames
+mbuf_t gTxHeld;
+void if_start(ifnet_t ifp)
+{
+    __atomic_fetch_add(&gTxStarts, 1u, __ATOMIC_RELAXED);
+    if (__atomic_exchange_n(&gTxPurge, false, __ATOMIC_ACQ_REL) && gTxHeld) {
+        mbuf_freem_list(gTxHeld);
+        gTxHeld = nullptr;
+    }
+    for (;;) {
+        const unsigned room = switch_wlan_tx_room();
+        if (!room) return;  // tx_ready starts this again
+        if (!gTxHeld) {
+            mbuf_t head = nullptr;
+            uint32_t count = 0;
+            if (ifnet_dequeue_multi(ifp, room < kTxBatch ? room : kTxBatch, &head, nullptr, &count, nullptr) || !head)
+                return;  // the queue is empty
+            gTxHeld = head;
+        }
+        TxCursor c = {gTxHeld, nullptr, nullptr, nullptr, 0, 0, 0};
+        switch_wlan_tx_frames(tx_fill, &c, UINT32_MAX);
+        gTxHeld = c.next;
+        tx_done(ifp, c);
+        __atomic_fetch_add(&gTxBatches, 1u, __ATOMIC_RELAXED);
+        if (gTxHeld && !c.packets && !c.dropped) return;  // nothing taken: the radio's tx_ready follows
+    }
+}
+
+// The legacy output (only when en0 could not get the stack's queue): one frame, dropped when the radio has no room.
+errno_t if_output(ifnet_t ifp, mbuf_t m)
+{
+    mbuf_setnextpkt(m, nullptr);
+    TxCursor c = {m, nullptr, nullptr, nullptr, 0, 0, 0};
+    switch_wlan_tx_frames(tx_fill, &c, 1);
+    if (c.next) {  // not taken
+        mbuf_freem(c.next);
+        ifnet_stat_increment_out(ifp, 0, 0, 1);
+        __atomic_fetch_add(&gTxRefused, 1u, __ATOMIC_RELAXED);
+    }
+    tx_done(ifp, c);
     return 0;
 }
 void if_event_stub(ifnet_t, const struct kev_msg *) {}
 
 // ---- Apple80211 -------------------------------------------------------------------------------------------------------
-void fill_channel(channel &c, uint32_t mhz)
+// APPLE80211_C_FLAG_*: 20 MHz 0x2, 40 MHz 0x4 (0x200: its extension channel above), 80 MHz 0x400, 160 MHz 0x800;
+// 2.4 GHz 0x8, 5 GHz 0x10; active scanning 0x80; DFS 0x100.
+void fill_channel(channel &c, uint32_t mhz, uint16_t bw = 20, uint8_t center = 0)
 {
     c.version = 1;
     if (mhz >= 4900) {
         c.channel = (mhz - 5000) / 5;
-        c.flags = 0x2 | 0x10;
+        c.flags = 0x10;
     } else {
         c.channel = mhz == 2484 ? 14 : (mhz - 2407) / 5;
-        c.flags = 0x2 | 0x8;
+        c.flags = 0x8;
     }
+    if (bw >= 160)
+        c.flags |= 0x800;
+    else if (bw >= 80)
+        c.flags |= 0x400;
+    else if (bw >= 40)
+        c.flags |= 0x4 | (center > c.channel ? 0x200 : 0);
+    else
+        c.flags |= 0x2;
 }
 void fill_result(scan_result &r, const swlan_bss &b)
 {
     memset(&r, 0, sizeof r);
     r.version = 1;
-    fill_channel(r.ch, b.freq_mhz);
+    fill_channel(r.ch, b.freq_mhz, b.bw_mhz, b.center);
     r.noise_known = 1;
     r.noise = -95;
     r.rssi = b.signal_dbm;
@@ -631,6 +752,7 @@ int apple80211(bool set, apple80211req &rq)
         case kDeauth:
             switch_wlan_disconnect();
             post_link(false);
+            tx_purge();
             gLinkAnnounced = false;  // wifid's own leaving: it knows
             return 0;
         case kVirtualIfCreate:
@@ -699,7 +821,7 @@ int apple80211(bool set, apple80211req &rq)
     case kChannel:
         if (st.state < SWLAN_STA_AUTH) return ENOENT;
         w[0] = 1;
-        fill_channel(*reinterpret_cast<channel *>(out.raw + 4), st.freq_mhz);
+        fill_channel(*reinterpret_cast<channel *>(out.raw + 4), st.freq_mhz, st.bw_mhz, st.center);
         return copy_out(rq, w, 16);
     case kRssi:
     case kNoise: {  // {version, radios, unit (0: dBm), per chain[4], aggregate, extension per chain[4], its aggregate}
@@ -711,7 +833,8 @@ int apple80211(bool set, apple80211req &rq)
         for (int i = 3; i < 13; i++) w[i] = v;
         return copy_out(rq, w, 13 * 4);
     }
-    case kRate: return answer_value(rq, st.state >= SWLAN_STA_ASSOC ? 54 : 0);
+    case kRate:  // Mb/s: the firmware's transmit rate once known, 54 until then
+        return answer_value(rq, st.state < SWLAN_STA_ASSOC ? 0 : st.tx_rate_kbps ? st.tx_rate_kbps / 1000 : 54);
     case kTxPower: return answer_value(rq, 15);
     case kDriverVersion:
     case kHardwareVersion: {
@@ -730,11 +853,15 @@ int apple80211(bool set, apple80211req &rq)
     case kHwSupportedChannels: {
         out.chans.version = 1;
         unsigned n = 0;
-        static const uint16_t known[] = {2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457,
-                                         2462, 5180, 5200, 5220, 5240, 5745, 5765, 5785, 5805, 5825};
+        // The firmware's regulatory domain (US/0): 2.4 GHz 1-11, 5 GHz 36-48 and 149-165 scanned actively, and the
+        // DFS channels 52-64 and 100-144, scanned passively (its escan covers them; wifid listed a network on 52).
+        static const uint16_t known[] = {2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 5180,
+                                         5200, 5220, 5240, 5745, 5765, 5785, 5805, 5825, 5260, 5280, 5300, 5320,
+                                         5500, 5520, 5540, 5560, 5580, 5600, 5620, 5640, 5660, 5680, 5700, 5720};
         for (uint16_t f : known) {
             fill_channel(*reinterpret_cast<channel *>(&out.chans.list[n]), f);
-            out.chans.list[n].flags |= 0x80;
+            const bool dfs = f >= 5250 && f <= 5730;
+            out.chans.list[n].flags |= dfs ? 0x100 : 0x80;
             n++;
         }
         out.chans.count = n;
@@ -962,9 +1089,44 @@ extern "C" void switch_wlan_net_counters(struct swlan_net_counters *out)
     out->rx_input_errors = gRxErrors;
     out->tx_oversize = __atomic_load_n(&gTxOversize, __ATOMIC_RELAXED);
     out->tx_refused = __atomic_load_n(&gTxRefused, __ATOMIC_RELAXED);
+    out->tx_starts = __atomic_load_n(&gTxStarts, __ATOMIC_RELAXED);
+    out->tx_batches = __atomic_load_n(&gTxBatches, __ATOMIC_RELAXED);
+    out->rx_batches = gRxBatches;
+    out->start_model = gStartModel ? 1 : 0;
+}
+
+extern "C" void switch_wlan_net_rate(uint64_t bps)
+{
+    if (gIf && bps) ifnet_set_baudrate(gIf, bps);
 }
 
 // Called once the radio is up with its address (SwitchWLAN.cpp, worker thread).
+namespace {
+
+// en0 allocated with `p` and attached; nullptr (with the stage and the error) when either fails.
+ifnet_t make_en0(struct ifnet_init_eparams &p, const char *&stage, errno_t &e)
+{
+    ifnet_t ifp = nullptr;
+    stage = "allocation";
+    e = ifnet_allocate_extended(&p, &ifp);
+    if (e || !ifp) return nullptr;
+    ifnet_set_mtu(ifp, 1500);
+    ifnet_set_flags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST, 0xffff);
+    ifnet_set_baudrate(ifp, 54000000ULL);  // until the firmware reports the link's rate (switch_wlan_net_rate)
+    ifnet_set_hdrlen(ifp, 14);
+    ifnet_set_addrlen(ifp, 6);
+    if (p.flags & IFNET_INIT_LEGACY) ifnet_set_eflags(ifp, IFEF_ENQUEUE_MULTI, IFEF_ENQUEUE_MULTI);
+    stage = "attach";
+    e = ifnet_attach(ifp, nullptr);
+    if (e) {
+        ifnet_release(ifp);
+        return nullptr;
+    }
+    return ifp;
+}
+
+}  // namespace
+
 extern "C" void switch_wlan_net_start(const uint8_t mac[6])
 {
     if (gIf) return;
@@ -979,14 +1141,19 @@ extern "C" void switch_wlan_net_start(const uint8_t mac[6])
     p.ver = IFNET_INIT_CURRENT_VERSION;
     p.len = sizeof p;
     // Without NX_NOAUTO the stack puts a compatibility nexus in front of a Wi-Fi "en" interface, and its input no
-    // longer goes through the interface's own input thread (sheng).
-    p.flags = IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO;
+    // longer goes through the interface's own input thread (sheng). Output: the stack's queue and our start routine
+    // (if_start: what the radio has buffers for, the rest waits there, the stack's flow control holds TCP back);
+    // the legacy if_output only if that interface cannot be made (one line). r8a, legacy: 40% of en0's frames at
+    // fast.com's 40 Mb/s were dropped for want of one of 32 buffers (ACKs going down, and uploads' data).
+    p.flags = IFNET_INIT_NX_NOAUTO;
+    p.start = if_start;
+    p.output_sched_model = IFNET_SCHED_MODEL_NORMAL;
+    p.sndq_maxlen = kSendQueue;
     p.name = "en";
     p.unit = 0;
     p.family = IFNET_FAMILY_ETHERNET;
     p.subfamily = IFNET_SUBFAMILY_WIFI;
     p.type = IFT_ETHER;
-    p.output = if_output;
     p.demux = ether_demux;
     p.add_proto = ether_add_proto;
     p.del_proto = ether_del_proto;
@@ -997,22 +1164,24 @@ extern "C" void switch_wlan_net_start(const uint8_t mac[6])
     static const uint8_t bcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     p.broadcast_addr = bcast;
     p.broadcast_len = 6;
-    ifnet_t ifp = nullptr;
-    errno_t e = ifnet_allocate_extended(&p, &ifp);
-    if (e || !ifp) {
-        IOLog("SwitchWLAN: ifnet allocation failed: %d\n", e);
-        return;
+    // The start model first; if the stack will not allocate or attach that interface, one line and the legacy one.
+    const char *stage = "allocation";
+    errno_t e = 0;
+    ifnet_t ifp = make_en0(p, stage, e);
+    gStartModel = ifp != nullptr;
+    if (!gStartModel) {
+        IOLog("SwitchWLAN: en0 with the stack's output queue not made (%s: %d): legacy output, frames past the "
+              "radio's buffers dropped\n",
+              stage, e);
+        p.flags = IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO;
+        p.start = nullptr;
+        p.output_sched_model = 0;
+        p.sndq_maxlen = 0;
+        p.output = if_output;
+        ifp = make_en0(p, stage, e);
     }
-    ifnet_set_mtu(ifp, 1500);
-    ifnet_set_flags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST, 0xffff);
-    ifnet_set_baudrate(ifp, 54000000ULL);
-    ifnet_set_hdrlen(ifp, 14);
-    ifnet_set_addrlen(ifp, 6);
-    ifnet_set_eflags(ifp, IFEF_ENQUEUE_MULTI, IFEF_ENQUEUE_MULTI);
-    e = ifnet_attach(ifp, nullptr);
-    if (e) {
-        IOLog("SwitchWLAN: ifnet attach failed: %d\n", e);
-        ifnet_release(ifp);
+    if (!ifp) {
+        IOLog("SwitchWLAN: ifnet %s failed: %d\n", stage, e);
         return;
     }
     ifnet_set_lladdr(ifp, mac, 6);

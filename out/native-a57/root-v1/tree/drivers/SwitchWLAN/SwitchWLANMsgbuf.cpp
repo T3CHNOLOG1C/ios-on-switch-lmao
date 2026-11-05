@@ -6,6 +6,11 @@
 // commonring.c and msgbuf.c; message layouts checked against CTCaer's switch-l4t-kernel-4.9 brcmfmac (shared area
 // v5, the pre-v7 completion item sizes): control path (ioctls, firmware events), received frames, and one TX flow
 // ring for interface 0 (a station needs no more: brcmfmac's STA mode keys flow rings on the interface alone).
+// The data path's batching follows brcmfmac (ISC; Copyright (c) 2014 Broadcom Corporation): commonring.c's cached
+// read pointer (brcmf_commonring_reserve_for_write reads the chip's index only when the ring looks full) and one
+// write-index update and doorbell per batch (brcmf_commonring_write_complete), msgbuf.c's receive buffers reposted
+// together after a completion pass (brcmf_msgbuf_rxbuf_data_fill) and its TX flush per batch
+// (brcmf_msgbuf_txflow).
 //
 // Memory: the AFI is not cache coherent, and IOBufferMemoryDescriptor hands out a cacheable kernel mapping, so
 // every buffer is cleaned/invalidated by hand (SwitchWLANPrivate.h). Completion rings need one more rule. nxk
@@ -15,6 +20,10 @@
 // overwrite items the chip wrote meanwhile. So lines are zeroed (and cleaned out of the cache) only once every
 // item in them has been consumed, and the read index the chip sees advances only past zeroed lines: the chip never
 // writes into a line the CPU may still hold dirty, and every slot it writes was zero before.
+//
+// Receive buffers are never written by the CPU after attach (the area is cleaned out of the cache then, and frames
+// are only read, after their lines are invalidated), so a buffer goes back to the chip without cache maintenance.
+// Transmit buffers are written once, by the caller copying the frame in, and cleaned before the batch is announced.
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
 #include "SwitchWLANPrivate.h"
@@ -75,9 +84,11 @@ enum : uint8_t {
 constexpr uint32_t kIoctlReqPktId = 0xFFFE;
 constexpr uint32_t kControlBuffers = 8, kControlBufferSize = 8192;  // ioctl responses 0..7, events 8..15
 constexpr uint32_t kIoctlMax = 1518;                                // BRCMF_TX_IOCTL_MAX_MSG_SIZE
-constexpr uint32_t kRxBufferSize = 2048, kTxBufferSize = 2048;      // BRCMF_MSGBUF_MAX_PKT_SIZE
+// brcmf_msgbuf's BRCMF_DEF_MAX_RXBUFPOST: what the chip takes when its shared area leaves max_rxbufpost 0.
+constexpr uint16_t kDefaultMaxRxPost = 255;
 // The TX flow ring: its id follows the two common H2D rings (BRCMF_H2D_MSGRING_FLOWRING_IDSTART), its indices
-// follow theirs in RAM; 512 items of the pre-v7 48-byte TX post.
+// follow theirs in RAM; 512 items of the pre-v7 48-byte TX post (BRCMF_H2D_TXFLOWRING_MAX_ITEM), more than there are
+// transmit buffers, so a frame that has a buffer always has a slot.
 constexpr uint16_t kFlowRingId = 2, kFlowItems = 512, kFlowItemSize = 48;
 // The AWDL interface's flow rings follow the station's (ids 3..), smaller: AirDrop's traffic is a few peers.
 constexpr uint16_t kAwdlFlowItems = 128;
@@ -85,8 +96,18 @@ constexpr uint32_t kRingInfoMaxFlowRings = 52;  // brcmf_pcie_dhi_ringinfo.max_f
 constexpr uint32_t kEthHeader = 14;
 constexpr uint8_t kPktFrame8023 = 0x01;  // BRCMF_MSGBUF_PKT_FLAGS_FRAME_802_3, priority 0
 constexpr uint32_t kScratchLength = 8, kRingUpdLength = 1024;
-constexpr uint32_t kAreaLength = 512 * 1024;
 constexpr uint32_t kLandingSpinUs = 10000;
+// Completions taken from one ring before the others get their turn (a busy receive direction cannot hold back the
+// transmit completions that free buffers for the other direction's ACKs).
+constexpr unsigned kDrainBudget = 64;
+// en0's queue is started again once this many transmit buffers are free: a batch worth a thread wakeup.
+constexpr unsigned kTxResumeFree = 32;
+
+constexpr AreaLayout kLayouts[] = {kAreaLarge, kAreaSmall};
+// The station's flow ring holds at most the frames in flight, so with fewer transmit buffers than ring slots a free
+// buffer always has a slot: txRoom() is the free buffers (the ring's read index is read only when a post finds it
+// full by the index last seen).
+static_assert(kAreaLarge.txBuffers < kFlowItems && kAreaSmall.txBuffers < kFlowItems, "flow ring under the buffers");
 
 // Firmware event frames (brcmf_fweh_process_skb): Ethernet header, 10-byte Broadcom header, the big-endian event
 // message, then its data.
@@ -95,10 +116,55 @@ constexpr uint32_t kEventMsg = 14 + 10, kEventData = kEventMsg + 48;
 
 }  // namespace
 
+// The area, once per driver lifetime: the large layout, else the small one (one line); and the transmit ids'
+// bookkeeping, sized for the large layout.
+bool Msgbuf::allocateArea(char *why, size_t whyLength)
+{
+    uint64_t pa = 0;
+    IOByteCount segment = 0;
+    for (const AreaLayout &layout : kLayouts) {
+        auto *memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+            kernel_task,
+            static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
+                static_cast<IOOptionBits>(kIOMemoryMapperNone),
+            layout.length, 0x00000000FFFFF000ULL);
+        segment = 0;
+        pa = memory ? memory->getPhysicalSegment(0, &segment, kIOMemoryMapperNone) : 0;
+        if (memory && pa && segment >= layout.length && pa + layout.length <= (1ULL << 32)) {
+            memory_ = memory;
+            area_ = static_cast<uint8_t *>(memory->getBytesNoCopy());
+            areaPA_ = static_cast<uint32_t>(pa);
+            layout_ = layout;
+            break;
+        }
+        OSSafeReleaseNULL(memory);
+        if (layout.length == kAreaLarge.length)
+            IOLog("SwitchWLAN: msgbuf: %u KiB contiguous below 4 GiB not available (pa %#llx, run %llu); taking %u KiB "
+                  "with %u receive and %u transmit buffers\n",
+                  kAreaLarge.length / 1024, pa, static_cast<unsigned long long>(segment), kAreaSmall.length / 1024,
+                  kAreaSmall.rxBuffers, kAreaSmall.txBuffers);
+    }
+    if (!memory_) {
+        snprintf(why, whyLength, "DMA area: %u bytes contiguous below 4 GiB not available (pa %#llx, run %llu)",
+                 kAreaSmall.length, pa, static_cast<unsigned long long>(segment));
+        return false;
+    }
+    constexpr size_t kSlots = kAreaLarge.txBuffers;
+    txSlots_ = IOMallocZeroData(kSlots * (2 * sizeof(uint16_t) + 1));
+    if (!txSlots_) {
+        snprintf(why, whyLength, "no memory for the transmit ids");
+        return false;
+    }
+    txFree_ = static_cast<uint16_t *>(txSlots_);
+    txStatus_ = txFree_ + kSlots;
+    txBusy_ = reinterpret_cast<uint8_t *>(txStatus_ + kSlots);
+    return true;
+}
+
 bool Msgbuf::allocate(uint32_t length, uint32_t align, Buffer &out)
 {
     const uint32_t at = (areaUsed_ + align - 1) & ~(align - 1);
-    if (at + length > kAreaLength) return false;
+    if (at + length > layout_.length) return false;
     areaUsed_ = at + length;
     out.va = area_ + at;
     out.pa = areaPA_ + at;
@@ -117,33 +183,18 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
     pcie2_ = pcie2 ? pcie2->base : 0;
 
     // One physically contiguous area below 4 GiB, zeroed and out of the caches before the chip learns of it.
-    if (!memory_) {
-        auto *memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-            kernel_task,
-            static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
-                static_cast<IOOptionBits>(kIOMemoryMapperNone),
-            kAreaLength, 0x00000000FFFFF000ULL);
-        IOByteCount segment = 0;
-        const uint64_t pa = memory ? memory->getPhysicalSegment(0, &segment, kIOMemoryMapperNone) : 0;
-        if (!memory || !pa || segment < kAreaLength || pa + kAreaLength > (1ULL << 32)) {
-            snprintf(why, whyLength, "DMA area: %u bytes contiguous below 4 GiB not available (pa %#llx, run %llu)",
-                     kAreaLength, pa, static_cast<unsigned long long>(segment));
-            OSSafeReleaseNULL(memory);
-            return false;
-        }
-        memory_ = memory;
-        area_ = static_cast<uint8_t *>(memory->getBytesNoCopy());
-        areaPA_ = static_cast<uint32_t>(pa);
-    }
+    if (!memory_ && !allocateArea(why, whyLength)) return false;
     areaUsed_ = 0;
-    bzero(area_, kAreaLength);
-    dcacheFlush(area_, kAreaLength);
+    bzero(area_, layout_.length);
+    dcacheFlush(area_, layout_.length);
     flow_ = FLOW_CLOSED;
     flowStatus_ = 0;
     replyReady_ = false;
     awdlRings_ = 0;
     awdlRefused_ = 0;
     for (auto &f : awdl_) f = {};
+    txWanted_ = false;
+    data_.txInFlight = data_.txPeak = data_.rxPosted = 0;  // the rest counts on across chip resets
 
     Buffer msi;
     allocate(4096, 4096, msi);  // the MSI target page: the AFI decodes writes to it, memory never sees them
@@ -172,7 +223,7 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
         // H2D indices: control submit, rx post, then the flow rings; D2H: the three completion rings.
         const bool h2d = k < 2 || k == FLOW;
         const uint32_t slot = k == FLOW ? 4 * kFlowRingId : (k < 2 ? 4 * k : 4 * (k - 2));
-        rings_[k] = {b.va, b.pa, items, size, (h2d ? h2dW : d2hW) + slot, (h2d ? h2dR : d2hR) + slot, 0, 0, 0};
+        rings_[k] = {b.va, b.pa, items, size, (h2d ? h2dW : d2hW) + slot, (h2d ? h2dR : d2hR) + slot, 0, 0, 0, 0, 0};
     }
     Buffer scratch, ringUpd;
     if (!allocate(kScratchLength, 64, scratch) || !allocate(kRingUpdLength, 64, ringUpd) ||
@@ -192,24 +243,31 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
             return false;
         }
     }
-    for (auto &t : tx_) {
-        t.busy = false;
-        t.status = 0;
-        if (!allocate(kTxBufferSize, 64, t.b)) {
-            snprintf(why, whyLength, "DMA area too small for transmit buffers");
-            return false;
-        }
+    // Transmit buffers, every id free (oldest freed first out).
+    Buffer txBuffers;
+    txCount_ = layout_.txBuffers;
+    if (!allocate(static_cast<uint32_t>(txCount_) * kTxBufferSize, 64, txBuffers)) {
+        snprintf(why, whyLength, "DMA area too small for transmit buffers");
+        return false;
     }
+    txBase_ = static_cast<uint32_t>(txBuffers.va - area_);
+    for (unsigned i = 0; i < txCount_; ++i) {
+        txFree_[i] = static_cast<uint16_t>(i + 1);
+        txBusy_[i] = 0;
+        txStatus_[i] = 0;
+    }
+    txFreeHead_ = 0;
+    txFreeCount_ = txCount_;
     // As many receive buffers as the firmware takes, up to ours.
-    const uint16_t maxRx = tcm.r16(shared + SHARED_MAX_RXBUFPOST);
-    rxCount_ = sizeof(rx_) / sizeof(rx_[0]);
-    if (maxRx && maxRx < rxCount_) rxCount_ = maxRx;
-    for (unsigned i = 0; i < rxCount_; ++i) {
-        if (!allocate(kRxBufferSize, 64, rx_[i])) {
-            rxCount_ = i;
-            break;
-        }
+    maxRxPost_ = tcm.r16(shared + SHARED_MAX_RXBUFPOST);
+    const uint16_t takes = maxRxPost_ ? maxRxPost_ : kDefaultMaxRxPost;
+    rxCount_ = layout_.rxBuffers < takes ? layout_.rxBuffers : takes;
+    Buffer rxBuffers;
+    if (!allocate(static_cast<uint32_t>(rxCount_) * kRxBufferSize, 64, rxBuffers)) {
+        snprintf(why, whyLength, "DMA area too small for receive buffers");
+        return false;
     }
+    rxBase_ = static_cast<uint32_t>(rxBuffers.va - area_);
     dataOffset_ = tcm.r32(shared + SHARED_RX_DATAOFFSET);
     dtohMailbox_ = tcm.r32(shared + SHARED_DTOH_MB_DATA);
 
@@ -223,7 +281,7 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
             !allocate(kTxBufferSize, 64, awdl_[k].pending))
             break;
         const uint32_t slot = 4u * (kFlowRingId + 1 + k);
-        rings_[FLOW + 1 + k] = {b.va, b.pa, kAwdlFlowItems, kFlowItemSize, h2dW + slot, h2dR + slot, 0, 0, 0};
+        rings_[FLOW + 1 + k] = {b.va, b.pa, kAwdlFlowItems, kFlowItemSize, h2dW + slot, h2dR + slot, 0, 0, 0, 0, 0};
         awdlRings_ = k + 1;
     }
 
@@ -239,7 +297,17 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
             return false;
         }
     }
+    publish(RXPOST_SUBMIT);
     return true;
+}
+
+void Msgbuf::describe(char *out, size_t length) const
+{
+    snprintf(out, length,
+             "%u KiB DMA area at %#x: %u receive buffers posted (the firmware takes %u%s), %u transmit buffers, "
+             "TX flow ring of %u",
+             layout_.length / 1024, areaPA_, rxCount_, maxRxPost_ ? maxRxPost_ : kDefaultMaxRxPost,
+             maxRxPost_ ? "" : ", its default", txCount_, kFlowItems);
 }
 
 void Msgbuf::enableInterrupts()
@@ -261,24 +329,66 @@ bool Msgbuf::chipSignalling(uint32_t *mailboxInt, uint32_t *mailboxMask)
     return *mailboxInt != 0xFFFFFFFF && (*mailboxInt & *mailboxMask) != 0;
 }
 
-// Room for one more item on a host-to-dongle ring (one slot always stays free); nullptr when full.
+// A ring index in the chip's RAM: a PCIe read, the one thing on the data path that waits for the bus.
+uint16_t Msgbuf::readIndex(uint32_t tcmAddress)
+{
+    ++data_.indexReads;
+    return chip_->tcm().r16(tcmAddress);
+}
+
+// Free slots on a host-to-dongle ring (one always stays free), by the chip's read index as last seen; read again
+// only when that says the ring is full. A chip gone from the bus (all ones) leaves the ring full.
+unsigned Msgbuf::space(unsigned ring)
+{
+    Ring &r = rings_[ring];
+    auto room = [&r] { return static_cast<unsigned>((r.seen + r.items - r.pos - 1u) % r.items); };
+    if (room() == 0) {
+        const uint16_t read = readIndex(r.rIndex);
+        if (read < r.items) r.seen = read;
+    }
+    return room();
+}
+
+// Room for one more item on a host-to-dongle ring; nullptr when full.
 uint8_t *Msgbuf::reserve(unsigned ring)
 {
     Ring &r = rings_[ring];
-    if ((r.pos + 1) % r.items == chip_->tcm().r16(r.rIndex)) return nullptr;
+    if (!space(ring)) return nullptr;
     uint8_t *item = r.va + static_cast<uint32_t>(r.pos) * r.size;
     memset(item, 0, r.size);
     return item;
 }
 
-// Item written: out of the cache, then the new write index, then the doorbell.
-void Msgbuf::commit(unsigned ring)
+// The reserved item written; the chip learns of it at the next publish().
+void Msgbuf::advance(unsigned ring)
 {
     Ring &r = rings_[ring];
-    dcacheClean(r.va + static_cast<uint32_t>(r.pos) * r.size, r.size);
     r.pos = static_cast<uint16_t>((r.pos + 1) % r.items);
+}
+
+// The items written since the last publish out of the cache (one range, two when they wrap; the barrier also
+// completes any dcacheCleanLines of their buffers), then the new write index, then one doorbell.
+void Msgbuf::publish(unsigned ring)
+{
+    Ring &r = rings_[ring];
+    if (r.pos == r.told) return;
+    const uint32_t from = static_cast<uint32_t>(r.told) * r.size, to = static_cast<uint32_t>(r.pos) * r.size;
+    if (r.pos > r.told) {
+        dcacheClean(r.va + from, to - from);
+    } else {
+        dcacheClean(r.va + from, static_cast<uint32_t>(r.items) * r.size - from);
+        if (to) dcacheClean(r.va, to);
+    }
     chip_->tcm().w16(r.wIndex, r.pos);
+    r.told = r.pos;
     chip_->write(pcie2_ + kH2DMailbox0, 1);
+    ++data_.doorbells;
+}
+
+void Msgbuf::commit(unsigned ring)
+{
+    advance(ring);
+    publish(ring);
 }
 
 // A control buffer back to the firmware: ioctl responses (ids 0..7) or events (8..15). Flushed first, so no line
@@ -297,39 +407,48 @@ bool Msgbuf::postControl(uint32_t id)
     return true;
 }
 
-// brcmf_msgbuf_rxbuf_data_post.
+// brcmf_msgbuf_rxbuf_data_post, without the doorbell: the caller publishes the batch.
 bool Msgbuf::postRx(uint32_t id)
 {
-    dcacheFlush(rx_[id].va, kRxBufferSize);
     uint8_t *p = reserve(RXPOST_SUBMIT);
     if (!p) return false;
     p[0] = MSG_RXBUF_POST;
     put32(p + 4, id);
     put16(p + 10, static_cast<uint16_t>(kRxBufferSize));
-    put32(p + 24, rx_[id].pa);
+    put32(p + 24, rxPa(id));
     put32(p + 28, 0);
-    commit(RXPOST_SUBMIT);
+    advance(RXPOST_SUBMIT);
+    ++data_.rxPosted;
     return true;
 }
 
-// Next completion of `ring`, copied out, if the firmware announced one. An announced item still reading zero is
-// given 10 ms to land (see the top of this file); past that the DMA path is broken, which a panic names.
+// The chip's write index of a completion ring, read once per interrupt (brcmf_commonring_get_read_ptr): whatever
+// the chip writes after this read raises the mailbox interrupt again (service() cleared only the status it read), so
+// the next interrupt takes it.
+void Msgbuf::refresh(unsigned ring)
+{
+    Ring &r = rings_[ring];
+    const uint16_t write = readIndex(r.wIndex);
+    if (write >= r.items) {  // a chip gone from the bus reads all ones: never chase that index
+        IOLog("SwitchWLAN: ring %u write index %#x of %u items, chip gone?\n", ring, write, r.items);
+        return;
+    }
+    r.seen = write;
+}
+
+// Next completion of `ring` up to its write index as last read, copied out. An announced item still reading zero
+// is given 10 ms to land (see the top of this file); past that the DMA path is broken, which a panic names.
 bool Msgbuf::next(unsigned ring, uint8_t *item)
 {
     Ring &r = rings_[ring];
-    const uint16_t write = chip_->tcm().r16(r.wIndex);
-    if (write == r.pos) return false;
-    if (write >= r.items) {  // a chip gone from the bus reads all ones: never chase that index
-        IOLog("SwitchWLAN: ring %u write index %#x of %u items, chip gone?\n", ring, write, r.items);
-        return false;
-    }
+    if (r.pos == r.seen) return false;
     uint8_t *p = r.va + static_cast<uint32_t>(r.pos) * r.size;
     dcacheFlush(p, r.size);
     for (uint32_t waited = 0; !p[0]; waited += 10) {
         if (waited >= kLandingSpinUs) {
             panic("SwitchWLAN: ring %u item %u announced (write index %u) but still empty after %u ms: the chip's DMA "
                   "writes are not reaching memory (area %#x)",
-                  ring, r.pos, write, kLandingSpinUs / 1000, areaPA_);
+                  ring, r.pos, r.seen, kLandingSpinUs / 1000, areaPA_);
         }
         IODelay(10);
         dcacheFlush(p, r.size);
@@ -357,92 +476,119 @@ void Msgbuf::retire(unsigned ring)
     chip_->tcm().w16(r.rIndex, static_cast<uint16_t>((r.cleared / r.size) % r.items));
 }
 
+void Msgbuf::txRelease(uint32_t id, uint16_t status)
+{
+    if (id < 1 || id > txCount_ || !txBusy_[id - 1]) return;  // not one of ours in flight (a stale completion)
+    txBusy_[id - 1] = 0;
+    txStatus_[id - 1] = status;
+    txFree_[(txFreeHead_ + txFreeCount_) % txCount_] = static_cast<uint16_t>(id);
+    ++txFreeCount_;
+    --data_.txInFlight;
+    ++data_.txDone;
+    if (status) {
+        ++data_.txFailed;
+        txFailStatus_ = status;
+    }
+}
+
 void Msgbuf::drain()
 {
     uint8_t item[40];
-    while (next(CONTROL_COMPLETE, item)) {
-        const uint32_t id = le32(item + 4);
-        if (item[0] == MSG_IOCTL_CMPLT && id < kControlBuffers) {
-            size_t length = le16(item + 12);
-            if (length > sizeof(reply_)) length = sizeof(reply_);
-            dcacheFlush(control_[id].va, length);
-            memcpy(reply_, control_[id].va, length);
-            replyLength_ = length;
-            replyStatus_ = static_cast<int16_t>(le16(item + 8));
-            replyReady_ = true;
-            postControl(id);
-        } else if (item[0] == MSG_WL_EVENT && id >= kControlBuffers && id < 2 * kControlBuffers) {
-            uint32_t length = le16(item + 12);
-            if (dataOffset_ + length > kControlBufferSize) length = kControlBufferSize - dataOffset_;
-            const uint8_t *frame = control_[id].va + dataOffset_;
+    refresh(CONTROL_COMPLETE);
+    refresh(TX_COMPLETE);
+    refresh(RX_COMPLETE);
+    for (bool more = true; more;) {
+        while (next(CONTROL_COMPLETE, item)) {
+            const uint32_t id = le32(item + 4);
+            if (item[0] == MSG_IOCTL_CMPLT && id < kControlBuffers) {
+                size_t length = le16(item + 12);
+                if (length > sizeof(reply_)) length = sizeof(reply_);
+                dcacheFlush(control_[id].va, length);
+                memcpy(reply_, control_[id].va, length);
+                replyLength_ = length;
+                replyStatus_ = static_cast<int16_t>(le16(item + 8));
+                replyReady_ = true;
+                postControl(id);
+            } else if (item[0] == MSG_WL_EVENT && id >= kControlBuffers && id < 2 * kControlBuffers) {
+                uint32_t length = le16(item + 12);
+                if (dataOffset_ + length > kControlBufferSize) length = kControlBufferSize - dataOffset_;
+                const uint8_t *frame = control_[id].va + dataOffset_;
+                dcacheFlush(frame, length);
+                if (length >= kEventData && ((frame[12] << 8) | frame[13]) == kEthPLinkCtl && events_) {
+                    Event e;
+                    e.flags = (static_cast<uint32_t>(frame[kEventMsg + 2]) << 8) | frame[kEventMsg + 3];
+                    e.type = be32(frame + kEventMsg + 4);
+                    e.status = be32(frame + kEventMsg + 8);
+                    e.reason = be32(frame + kEventMsg + 12);
+                    const uint32_t dataLength = be32(frame + kEventMsg + 20);
+                    memcpy(e.addr, frame + kEventMsg + 24, 6);
+                    e.ifidx = frame[kEventMsg + 46];  // after the 16-byte interface name
+                    e.bsscfgidx = frame[kEventMsg + 47];
+                    e.data = frame + kEventData;
+                    e.length = dataLength < length - kEventData ? dataLength : length - kEventData;
+                    events_(context_, e);
+                }
+                postControl(id);
+            } else if (item[0] == MSG_FLOW_RING_CREATE_CMPLT && le16(item + 10) > kFlowRingId) {
+                const unsigned k = le16(item + 10) - kFlowRingId - 1u;  // an AWDL flow ring
+                if (k < awdlRings_ && awdl_[k].state == FLOW_PENDING) {
+                    AwdlFlow &f = awdl_[k];
+                    f.state = le16(item + 8) ? FLOW_REFUSED : FLOW_OPEN;
+                    if (f.state == FLOW_OPEN && f.pendingLength)
+                        post(FLOW + 1 + k, f.ifidx, f.pending.va, f.pendingLength);
+                    f.pendingLength = 0;
+                }
+            } else if (item[0] == MSG_FLOW_RING_CREATE_CMPLT) {
+                flowStatus_ = le16(item + 8);
+                flow_ = flowStatus_ ? FLOW_REFUSED : FLOW_OPEN;
+            } else if (item[0] == MSG_FLOW_RING_DELETE_CMPLT && le16(item + 10) > kFlowRingId) {
+                const unsigned k = le16(item + 10) - kFlowRingId - 1u;
+                if (k < awdlRings_) awdl_[k].state = FLOW_CLOSED;
+            }
+            // MSG_IOCTLPTR_REQ_ACK and status messages (general and ring status) need no answer.
+        }
+        retire(CONTROL_COMPLETE);
+        // Transmit completions first: they free the buffers the next batch (and the receive direction's ACKs) go
+        // out of.
+        unsigned n = 0;
+        while (n < kDrainBudget && next(TX_COMPLETE, item)) {
+            ++n;
+            if (item[0] == MSG_TX_STATUS) txRelease(le32(item + 4), le16(item + 8));
+        }
+        retire(TX_COMPLETE);
+        // brcmf_msgbuf_process_rx_complete: the frame at its own offset, or at the firmware's default one; each
+        // buffer back to the chip after its frame was copied out, one doorbell for the pass.
+        n = 0;
+        while (n < kDrainBudget && next(RX_COMPLETE, item)) {
+            ++n;
+            const uint32_t id = le32(item + 4);
+            if (item[0] != MSG_RX_CMPLT || id >= rxCount_) continue;
+            --data_.rxPosted;
+            const uint32_t offset = le16(item + 16) ? le16(item + 16) : dataOffset_;
+            uint32_t length = le16(item + 14);
+            if (offset >= kRxBufferSize)
+                length = 0;
+            else if (offset + length > kRxBufferSize)
+                length = kRxBufferSize - offset;
+            const uint8_t *frame = rxVa(id) + offset;
             dcacheFlush(frame, length);
-            if (length >= kEventData && ((frame[12] << 8) | frame[13]) == kEthPLinkCtl && events_) {
-                Event e;
-                e.flags = (static_cast<uint32_t>(frame[kEventMsg + 2]) << 8) | frame[kEventMsg + 3];
-                e.type = be32(frame + kEventMsg + 4);
-                e.status = be32(frame + kEventMsg + 8);
-                e.reason = be32(frame + kEventMsg + 12);
-                const uint32_t dataLength = be32(frame + kEventMsg + 20);
-                memcpy(e.addr, frame + kEventMsg + 24, 6);
-                e.ifidx = frame[kEventMsg + 46];  // after the 16-byte interface name
-                e.bsscfgidx = frame[kEventMsg + 47];
-                e.data = frame + kEventData;
-                e.length = dataLength < length - kEventData ? dataLength : length - kEventData;
-                events_(context_, e);
-            }
-            postControl(id);
-        } else if (item[0] == MSG_FLOW_RING_CREATE_CMPLT && le16(item + 10) > kFlowRingId) {
-            const unsigned k = le16(item + 10) - kFlowRingId - 1u;  // an AWDL flow ring
-            if (k < awdlRings_ && awdl_[k].state == FLOW_PENDING) {
-                AwdlFlow &f = awdl_[k];
-                f.state = le16(item + 8) ? FLOW_REFUSED : FLOW_OPEN;
-                if (f.state == FLOW_OPEN && f.pendingLength) post(FLOW + 1 + k, f.ifidx, f.pending.va, f.pendingLength);
-                f.pendingLength = 0;
-            }
-        } else if (item[0] == MSG_FLOW_RING_CREATE_CMPLT) {
-            flowStatus_ = le16(item + 8);
-            flow_ = flowStatus_ ? FLOW_REFUSED : FLOW_OPEN;
-        } else if (item[0] == MSG_FLOW_RING_DELETE_CMPLT && le16(item + 10) > kFlowRingId) {
-            const unsigned k = le16(item + 10) - kFlowRingId - 1u;
-            if (k < awdlRings_) awdl_[k].state = FLOW_CLOSED;
+            ++data_.rxFrames;
+            data_.rxBytes += length;
+            if (frames_ && length >= kEthHeader) frames_(context_, frame, length, item[1]);  // copied out here
+            if (postRx(id)) ++data_.rxReposted;
         }
-        // MSG_IOCTLPTR_REQ_ACK and status messages (general and ring status) need no answer.
+        retire(RX_COMPLETE);
+        publish(RXPOST_SUBMIT);
+        // Another round while either ring still has completions announced at the interrupt.
+        more =
+            rings_[TX_COMPLETE].pos != rings_[TX_COMPLETE].seen || rings_[RX_COMPLETE].pos != rings_[RX_COMPLETE].seen;
     }
-    retire(CONTROL_COMPLETE);
-    // brcmf_msgbuf_process_rx_complete: the frame at its own offset, or at the firmware's default one.
-    while (next(RX_COMPLETE, item)) {
-        const uint32_t id = le32(item + 4);
-        if (item[0] != MSG_RX_CMPLT || id >= rxCount_) continue;
-        const uint32_t offset = le16(item + 16) ? le16(item + 16) : dataOffset_;
-        uint32_t length = le16(item + 14);
-        if (offset >= kRxBufferSize)
-            length = 0;
-        else if (offset + length > kRxBufferSize)
-            length = kRxBufferSize - offset;
-        const uint8_t *frame = rx_[id].va + offset;
-        dcacheFlush(frame, length);
-        ++rxFrames_;
-        if (frames_ && length >= kEthHeader) frames_(context_, frame, length, item[1]);  // copied out before the repost
-        postRx(id);
-    }
-    retire(RX_COMPLETE);
-    while (next(TX_COMPLETE, item)) {
-        const uint32_t id = le32(item + 4);
-        if (item[0] != MSG_TX_STATUS || id < 1 || id > sizeof(tx_) / sizeof(tx_[0])) continue;
-        tx_[id - 1].busy = false;
-        tx_[id - 1].status = le16(item + 8);
-        ++txDone_;
-        if (tx_[id - 1].status) {
-            ++txFailed_;
-            txFailStatus_ = tx_[id - 1].status;
-        }
-    }
-    retire(TX_COMPLETE);
 }
 
 uint32_t Msgbuf::service(bool *halted)
 {
     *halted = false;
+    ++data_.drains;
     chip_->write(pcie2_ + kMailboxMask, 0);
     const uint32_t status = chip_->read(pcie2_ + kMailboxInt);
     if (status == 0xFFFFFFFF) return status;  // the chip is gone; the caller reports it, the mask stays off
@@ -510,54 +656,109 @@ bool Msgbuf::flowCreateSubmit(const uint8_t destination[6], const uint8_t source
 uint32_t Msgbuf::send(const uint8_t *frame, size_t length)
 {
     if (flow_ != FLOW_OPEN) {
-        ++txRefused_;
+        ++data_.txRefused;
         return 0;
     }
     return post(FLOW, 0, frame, length);
 }
 
-// One Ethernet frame onto a TX flow ring of interface `ifidx`: its header in the ring item, the payload read from one
-// of our buffers. The request id (1..32) its completion answers for, 0 when it cannot go now.
-uint32_t Msgbuf::post(unsigned ring, uint8_t ifidx, const uint8_t *frame, size_t length)
+unsigned Msgbuf::txRoom()
 {
-    if (length < kEthHeader || length > kTxBufferSize) {
-        ++txRefused_;
+    const unsigned room = flow_ == FLOW_OPEN ? txFreeCount_ : 0;
+    if (!room && flow_ == FLOW_OPEN) {
+        if (!txWanted_) ++data_.txFull;
+        txWanted_ = true;
+    }
+    return room;
+}
+
+uint8_t *Msgbuf::txBuffer()
+{
+    return flow_ == FLOW_OPEN && txFreeCount_ ? txVa(txFree_[txFreeHead_]) : nullptr;
+}
+
+uint32_t Msgbuf::txPost(size_t length)
+{
+    if (flow_ != FLOW_OPEN) {
+        ++data_.txRefused;
         return 0;
     }
-    unsigned slot = 0;
-    while (slot < sizeof(tx_) / sizeof(tx_[0]) && tx_[slot].busy) ++slot;
-    if (slot == sizeof(tx_) / sizeof(tx_[0])) {
-        ++txRefused_;
+    return postFrame(FLOW, 0, length);
+}
+
+void Msgbuf::txFlush()
+{
+    publish(FLOW);
+}
+
+bool Msgbuf::txResume()
+{
+    const unsigned enough = kTxResumeFree < txCount_ / 2 ? kTxResumeFree : txCount_ / 2;
+    if (!txWanted_ || flow_ != FLOW_OPEN || txFreeCount_ < enough) return false;
+    txWanted_ = false;
+    return true;
+}
+
+DataCounters Msgbuf::takeCounters()
+{
+    const DataCounters c = data_;
+    data_.txPeak = data_.txInFlight;
+    return c;
+}
+
+// The frame already in the next free transmit buffer onto a TX flow ring of interface `ifidx`: its header in the
+// ring item, the payload read from the buffer. The request id its completion answers for, 0 when it cannot go now.
+// The ring's write index waits for publish().
+uint32_t Msgbuf::postFrame(unsigned ring, uint8_t ifidx, size_t length)
+{
+    if (!txFreeCount_ || length < kEthHeader || length > kTxBufferSize) {
+        ++data_.txRefused;
         return 0;
     }
     uint8_t *p = reserve(ring);
     if (!p) {
-        ++txRefused_;
+        ++data_.txRefused;
         return 0;
     }
-    TxBuffer &t = tx_[slot];
-    memcpy(t.b.va, frame, length);
-    dcacheClean(t.b.va, length);
-    t.busy = true;
-    const uint32_t id = slot + 1;
+    const uint16_t id = txFree_[txFreeHead_];
+    txFreeHead_ = (txFreeHead_ + 1) % txCount_;
+    --txFreeCount_;
+    const uint8_t *frame = txVa(id);
+    dcacheCleanLines(frame, length);
+    txBusy_[id - 1] = 1;
     p[0] = MSG_TX_POST;
     p[1] = ifidx;
     put32(p + 4, id);
     memcpy(p + 8, frame, kEthHeader);
     p[22] = kPktFrame8023;
     p[23] = 1;  // one segment
-    put32(p + 32, t.b.pa + kEthHeader);
+    put32(p + 32, txPa(id) + kEthHeader);
     put32(p + 36, 0);
     put16(p + 42, static_cast<uint16_t>(length - kEthHeader));
-    commit(ring);
-    ++txFrames_;
+    advance(ring);
+    ++data_.txFrames;
+    data_.txBytes += length;
+    if (++data_.txInFlight > data_.txPeak) data_.txPeak = data_.txInFlight;
+    return id;
+}
+
+// One frame copied into a transmit buffer and onto `ring` at once (handshake frames, AWDL).
+uint32_t Msgbuf::post(unsigned ring, uint8_t ifidx, const uint8_t *frame, size_t length)
+{
+    if (!txFreeCount_ || length < kEthHeader || length > kTxBufferSize) {
+        ++data_.txRefused;
+        return 0;
+    }
+    memcpy(txVa(txFree_[txFreeHead_]), frame, length);
+    const uint32_t id = postFrame(ring, ifidx, length);
+    if (id) publish(ring);
     return id;
 }
 
 bool Msgbuf::sent(uint32_t id, uint16_t *status) const
 {
-    if (id < 1 || id > sizeof(tx_) / sizeof(tx_[0]) || tx_[id - 1].busy) return false;
-    *status = tx_[id - 1].status;
+    if (id < 1 || id > txCount_ || txBusy_[id - 1]) return false;
+    *status = txStatus_[id - 1];
     return true;
 }
 
@@ -607,7 +808,7 @@ int Msgbuf::awdlSend(uint8_t ifidx, const uint8_t *frame, size_t length)
     f.lastUse = ++awdlUse_;
     memcpy(f.pending.va, frame, length);
     f.pendingLength = static_cast<uint16_t>(length);
-    r.pos = 0;  // a fresh ring: both indices from zero
+    r.pos = r.seen = r.told = 0;  // a fresh ring: both indices from zero
     chip_->tcm().w16(r.wIndex, 0);
     bzero(r.va, static_cast<uint32_t>(r.items) * r.size);
     dcacheFlush(r.va, static_cast<uint32_t>(r.items) * r.size);

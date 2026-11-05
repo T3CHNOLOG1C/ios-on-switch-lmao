@@ -40,6 +40,7 @@
 #include "SwitchWLANAwdlRadio.h"
 #include "SwitchWLANCoex.h"
 #include "SwitchWLANCrypto.h"
+#include "SwitchWLANLink.h"
 #include "SwitchWLANPrivate.h"
 #include "SwitchWLANStation.h"
 #include "SwitchWLANWpa.h"
@@ -62,7 +63,8 @@ constexpr uint32_t kIdleTickMs = 5000, kStatsQuietMs = 60000, kStatsTrickleFrame
 constexpr uint32_t kRetryFirstMs = 2000, kRetryMaxMs = 60000;
 
 // Firmware commands (brcmfmac fwil_types.h / nxk wl.rs).
-constexpr uint32_t WLC_UP = 2, WLC_DOWN = 3, WLC_SET_INFRA = 20, WLC_SCAN = 50, WLC_DISASSOC = 52, WLC_GET_PM = 85;
+constexpr uint32_t WLC_GET_VERSION = 1, WLC_UP = 2, WLC_DOWN = 3, WLC_GET_RATE = 12, WLC_SET_INFRA = 20, WLC_SCAN = 50;
+constexpr uint32_t WLC_DISASSOC = 52, WLC_GET_PM = 85;
 constexpr uint32_t WLC_SET_PM = 86;
 constexpr uint32_t WLC_GET_RSSI = 127, WLC_GET_BSS_INFO = 136, WLC_GET_VAR = 262, WLC_SET_VAR = 263;
 // Firmware events (brcmfmac fweh.h).
@@ -118,9 +120,10 @@ void randomBytes(uint8_t *out, size_t length)
 }
 
 // One brcmf_bss_info_le (nxk parse_bss), as escan results and WLC_GET_BSS_INFO give them: its own length, then the
-// BSSID, beacon interval, capabilities, SSID, channel (the control channel, else the chanspec's), RSSI and the
-// information elements. False if the record does not fit in `room` bytes.
-bool parseBss(const uint8_t *b, size_t room, swlan_bss &s)
+// BSSID, beacon interval, capabilities, SSID, channel (the control channel, else the chanspec's), the width its
+// chanspec (in the firmware's `iotype` layout) says, RSSI and the information elements. False if the record does not
+// fit in `room` bytes.
+bool parseBss(const uint8_t *b, size_t room, swlan_bss &s, int iotype)
 {
     if (room < 124) return false;
     const uint32_t length = swlan::le32(b + 4);
@@ -133,6 +136,11 @@ bool parseBss(const uint8_t *b, size_t room, swlan_bss &s)
     memcpy(s.ssid, b + 19, s.ssid_len);
     const uint32_t channel = b[88] ? b[88] : (swlan::le16(b + 72) & 0xFF);
     s.freq_mhz = channelToMhz(channel);
+    swlan_chanspec cs;
+    if (swlan_chanspec_decode(swlan::le16(b + 72), iotype, &cs)) {
+        s.bw_mhz = cs.bw_mhz;
+        s.center = cs.center;
+    }
     const int16_t rssi = static_cast<int16_t>(swlan::le16(b + 78));
     s.signal_dbm = static_cast<int8_t>(rssi < -128 ? -128 : (rssi > 0 ? 0 : rssi));
     const uint32_t ieOffset = swlan::le16(b + 116), ieLength = swlan::le32(b + 120);
@@ -168,6 +176,8 @@ OSDeclareDefaultStructors(SwitchWLAN)
     void requestLeave();
     int requestPower(bool on);
     int transmit(const uint8_t *frame, size_t length);
+    unsigned txRoom();
+    unsigned transmitFrames(swlan_tx_fill_fn fill, void *context, unsigned max);
     void status(swlan_status *out);
     void counters(char *text, size_t size);
     void setMac(const uint8_t mac[6]) { memcpy(mac_, mac, 6); }
@@ -244,6 +254,8 @@ private:
     uint32_t eapolDropped_ = 0, rxToStack_ = 0, losses_ = 0, recoveries_ = 0;
     uint32_t rxGroup_ = 0, rxUnicast_ = 0;  // frames to en0 by destination: group (multicast, broadcast) or ours
     uint64_t rxBytes_ = 0, txBytes_ = 0;    // bytes to and from en0, for the stats line's throughput
+    int iotype_ = SWLAN_IOTYPE_D11AC;       // the firmware's chanspec layout (WLC_GET_VERSION)
+    swlan_peer peer_ = {};                  // the joined access point's HT/VHT/HE, from its full beacon elements
     // Coexistence ("Coexistence" section): what wifid says Bluetooth is doing (SWLAN_BT_*), and its power.
     uint32_t btFlags_ = 0;
     bool btPower_ = true, btChanged_ = false;
@@ -276,6 +288,7 @@ private:
         uint32_t rx, tx, done, refused, failed, rxGroup, rxUnicast;
         uint64_t msis, rxBytes, txBytes;
         swlan_net_counters net;
+        swlan::DataCounters data;
     } lastCounts_ = {};
     void snapshot(Counts &c);
     void logStats();
@@ -284,6 +297,14 @@ private:
     swlan_sta staLast_ = {};
     uint32_t pmDurLast_ = 0;
     bool staRefused_ = false, pmDurRefused_ = false, pmDurHave_ = false, btcStatusRefused_ = false;
+    // The firmware's A-MPDU counters (its "dump ampdu" text) at the last stats line, for MPDUs per A-MPDU each way;
+    // a firmware without that dump, or one whose text has no counters, gets one line and is not asked again.
+    uint32_t ampdu_[4] = {};  // txampdu, txmpdu, rxampdu, rxmpdu
+    bool ampduHave_ = false, ampduRefused_ = false;
+    void ampduWindow(char *out, size_t size);
+    bool varInt(const char *name, uint32_t &value);
+    bool varIntWith(const char *name, uint32_t param, uint32_t &value);
+    void logLink();
     // The power-save mode the station runs (coexApply) and whether the firmware took HOS's sleep return this join.
     uint32_t pm_ = 0;
     bool sleepRetSet_ = false, sleepRetRefused_ = false;
@@ -470,6 +491,12 @@ void SwitchWLAN::msiFired(OSObject *owner, IOInterruptEventSource *, int)
         self->halted_ = true;
         self->kick();
     }
+    // The interrupt's frames to the stack in one go, and en0's queue started again once completions freed a batch of
+    // transmit buffers it ran out of.
+    if (const swlan_events *events = self->events_) {
+        if (events->rx_flush) events->rx_flush();
+        if (self->mb_.txResume() && events->tx_ready) events->tx_ready();
+    }
     self->gate_->commandWakeup(&self->mb_);
 }
 
@@ -606,7 +633,7 @@ void SwitchWLAN::escanResult(const swlan::Event &event)
         uint32_t at = 12;
         for (unsigned i = 0; i < count && at < event.length; ++i) {
             swlan_bss s;
-            if (!parseBss(data + at, event.length - at, s)) break;
+            if (!parseBss(data + at, event.length - at, s, iotype_)) break;
             keepBss(s, now);
             at += swlan::le32(data + at + 4);
         }
@@ -814,6 +841,9 @@ bool SwitchWLAN::bootChip(const char **stage)
         return false;
     *stage = "rings";
     if (!mb_.attach(&chip_, &SwitchWLAN::onEvent, &SwitchWLAN::onFrame, this, why_, sizeof(why_))) return false;
+    char layout[200];
+    mb_.describe(layout, sizeof(layout));
+    IOLog("SwitchWLAN: msgbuf: %s\n", layout);
     *stage = "MSI";
     if (!pcie_.msiEnable(mb_.msiPA(), why_, sizeof(why_))) return false;
     attachInterrupt();
@@ -835,6 +865,11 @@ bool SwitchWLAN::bootChip(const char **stage)
     }
     IOLog("SwitchWLAN: firmware: %s (%llu MSIs so far)\n", reinterpret_cast<const char *>(ver),
           static_cast<unsigned long long>(interrupts_));
+    // The chanspec layout (brcmf_cfg80211_attach's BRCMF_C_GET_VERSION): d11ac unless the firmware says d11n.
+    uint8_t io[4] = {};
+    size_t ioLength = 0;
+    if (ioctl(WLC_GET_VERSION, nullptr, 0, sizeof(io), io, &ioLength) && ioLength >= 4)
+        iotype_ = swlan::le32(io) == SWLAN_IOTYPE_D11N ? SWLAN_IOTYPE_D11N : SWLAN_IOTYPE_D11AC;
     // What this firmware build was compiled with, as brcmfmac reads it (brcmf_feat_firmware_capabilities): "cap"
     // names p2p, mchan, monitor, rtap, awdl and nan when present. AirDrop needs AWDL, or failing that monitor mode with
     // injection; the image's own strings cannot tell (most of the firmware is in the chip's ROM). Read once; a refusal
@@ -1063,7 +1098,14 @@ bool SwitchWLAN::readJoinedBss(swlan_bss &out)
     if (!info) return false;
     swlan::put32(info, kRoom);
     size_t n = 0;
-    const bool ok = ioctl(WLC_GET_BSS_INFO, info, 4, kRoom, info, &n) && n > 4 && parseBss(info + 4, n - 4, out);
+    const bool ok =
+        ioctl(WLC_GET_BSS_INFO, info, 4, kRoom, info, &n) && n > 4 && parseBss(info + 4, n - 4, out, iotype_);
+    // The access point's HT/VHT/HE from every element it sent (the table keeps only the first 384 bytes of them).
+    peer_ = {};
+    if (ok) {
+        const uint32_t ieOffset = swlan::le16(info + 4 + 116), ieLength = swlan::le32(info + 4 + 120);
+        if (4 + ieOffset + ieLength <= n) swlan_peer_parse(info + 4 + ieOffset, ieLength, &peer_);
+    }
     IOFreeData(info, kRoom);
     if (ok) locked([&] { keepBss(out, swlan::nowNs()); });
     return ok;
@@ -1371,6 +1413,9 @@ int SwitchWLAN::joinOnce(const JoinParams &p, char *ssidText)
                 status_.ssid_len = static_cast<uint8_t>(p.ssidLength);
                 status_.freq_mhz = joined.freq_mhz;
                 status_.signal_dbm = joined.signal_dbm;
+                status_.bw_mhz = joined.bw_mhz;
+                status_.center = joined.center;
+                status_.tx_rate_kbps = status_.rx_rate_kbps = 0;
                 status_.state = secured && !keyed ? SWLAN_STA_KEYS : SWLAN_STA_ASSOC;
             });
             if (events_ && events_->associated) events_->associated();
@@ -1421,6 +1466,11 @@ int SwitchWLAN::joinOnce(const JoinParams &p, char *ssidText)
             __atomic_store_n(&gInfraFreq, mhz, __ATOMIC_RELEASE);
             IOLog("SwitchWLAN: joined '%s' (%s) at %u MHz, %d dBm\n", ssidText, secured ? "WPA2" : "open", mhz, rssi);
             coexJoined();
+            logLink();
+            // en0's frames can go now: its start routine runs (it found no room while the station was not up).
+            locked([&] {
+                if (events_ && events_->tx_ready) events_->tx_ready();
+            });
             nextRssiNs_ = swlan::nowNs() + kRssiRefreshMs * 1000000ULL;
             nextStatsNs_ = swlan::nowNs() + kStatsMs * 1000000ULL;
             snapshot(lastCounts_);
@@ -1622,6 +1672,7 @@ void SwitchWLAN::snapshot(Counts &c)
         c.rxBytes = rxBytes_;
         c.txBytes = txBytes_;
         c.msis = interrupts_;
+        c.data = mb_.takeCounters();
     });
     switch_wlan_net_counters(&c.net);
 }
@@ -1682,6 +1733,34 @@ void SwitchWLAN::logStats()
     auto advance = [&](int k) { at += k > 0 ? static_cast<size_t>(k) : 0; };
     if (at < sizeof(out) && now.failed != was.failed)
         advance(snprintf(out + at, sizeof(out) - at, " (status %u)", mb_.lastFailStatus()));
+    // r17-wlanperf, its own line after this one (the kernel's os_log carries about 1 KiB a line): what the data path
+    // moved and what that cost. Mb/s each way (the radio's own byte counts), frames per MSI, doorbells and chip-RAM
+    // index reads per frame (the PCIe round trips), the receive buffers the chip holds and those given back, the
+    // transmit buffers in flight (peak of the window, times en0 found none free), en0's start-routine runs and
+    // batches and its input batches, and the firmware's MPDUs per A-MPDU each way.
+    char data[400];
+    {
+        const swlan::DataCounters &d = now.data, &e = was.data;
+        const uint64_t rxB = d.rxBytes - e.rxBytes, txB = d.txBytes - e.txBytes;
+        const uint64_t frames = (d.rxFrames - e.rxFrames) + (d.txDone - e.txDone);
+        const uint64_t ms = windowMs ? windowMs : 1;
+        char rxMbps[16], txMbps[16], perMsi[16], bells[16], reads[16], ampdu[64];
+        swlan_tenths(rxB * 8, ms * 1000, rxMbps, sizeof(rxMbps));
+        swlan_tenths(txB * 8, ms * 1000, txMbps, sizeof(txMbps));
+        swlan_tenths(frames, now.msis - was.msis, perMsi, sizeof(perMsi));
+        swlan_tenths((d.doorbells - e.doorbells) * 100, frames, bells, sizeof(bells));
+        swlan_tenths((d.indexReads - e.indexReads) * 100, frames, reads, sizeof(reads));
+        ampduWindow(ampdu, sizeof(ampdu));
+        snprintf(data, sizeof(data),
+                 "SwitchWLAN: data %u ms: rx %s tx %s Mb/s, %s frames/MSI, per 100 frames %s doorbells %s index reads, "
+                 "RX %u/%u posted (%llu reposted), TX %u in flight (peak %u of %u, ran out %llu), en0 %s "
+                 "%u starts %u batches, %u input batches, %s",
+                 windowMs, rxMbps, txMbps, perMsi, bells, reads, d.rxPosted, mb_.rxBufferCount(),
+                 static_cast<unsigned long long>(d.rxReposted - e.rxReposted), d.txInFlight, d.txPeak,
+                 mb_.txBufferCount(), static_cast<unsigned long long>(d.txFull - e.txFull),
+                 now.net.start_model ? "queue" : "legacy", now.net.tx_starts - was.net.tx_starts,
+                 now.net.tx_batches - was.net.tx_batches, now.net.rx_batches - was.net.rx_batches, ampdu);
+    }
     // The access point's view of the same window (sta_info): what it acknowledged and what it sent us.
     swlan_sta sta;
     if (readSta(sta)) {
@@ -1689,6 +1768,12 @@ void SwitchWLAN::logStats()
         swlan_sta_describe(&staLast_, &sta, text, sizeof(text));
         if (text[0] && at < sizeof(out)) advance(snprintf(out + at, sizeof(out) - at, "; %s", text));
         staLast_ = sta;
+        // The link's rates for wifid (APPLE80211_IOC_RATE) and en0's baud rate.
+        locked([&] {
+            status_.tx_rate_kbps = sta.tx_rate_kbps;
+            status_.rx_rate_kbps = sta.rx_rate_kbps;
+        });
+        switch_wlan_net_rate(static_cast<uint64_t>(sta.tx_rate_kbps) * 1000);
     }
     // The firmware's time in power save: with PM 0 set by us, only coexistence's own protection puts it there.
     if (!pmDurRefused_) {
@@ -1732,6 +1817,7 @@ void SwitchWLAN::logStats()
     }
     if (at < sizeof(out)) switch_wlan_awdl_stat(out + at, sizeof(out) - at);
     os_log(OS_LOG_DEFAULT, "%s", out);
+    os_log(OS_LOG_DEFAULT, "%s", data);
     lastCounts_ = now;
 }
 
@@ -1756,6 +1842,130 @@ bool SwitchWLAN::readSta(swlan_sta &out)
         return false;
     }
     return true;
+}
+
+bool SwitchWLAN::varInt(const char *name, uint32_t &value)
+{
+    uint8_t v[4] = {};
+    size_t n = 0;
+    if (!getVar(name, v, sizeof(v), &n) || n < 4) return false;
+    value = swlan::le32(v);
+    return true;
+}
+
+bool SwitchWLAN::varIntWith(const char *name, uint32_t param, uint32_t &value)
+{
+    uint8_t p[4], v[4] = {};
+    swlan::put32(p, param);
+    size_t n = 0;
+    if (!getVarWith(name, p, sizeof(p), v, sizeof(v), &n) || n < 4) return false;
+    value = swlan::le32(v);
+    return true;
+}
+
+// Once per join (os_log): what the link runs at and what it could. The firmware's chanspec and transmit rate, the
+// access point's HT/VHT/HE from its beacon, our side (nmode, vhtmode, bw_cap per band, the chains, A-MPDU and
+// A-MSDU), and the best PHY rate both ends allow at the width joined. "-" for whatever the firmware does not answer.
+void SwitchWLAN::logLink()
+{
+    char text[700];
+    size_t at = 0;
+    auto add = [&](int k) { at += k > 0 ? static_cast<size_t>(k) : 0; };
+    auto room = [&] { return at < sizeof(text) ? sizeof(text) - at : 0; };
+    auto num = [&](const char *label, bool ok, uint32_t v, bool hex) {
+        if (!room()) return;
+        if (!ok)
+            add(snprintf(text + at, room(), "%s -", label));
+        else
+            add(snprintf(text + at, room(), hex ? "%s %#x" : "%s %u", label, v));
+    };
+    uint32_t v = 0;
+    swlan_chanspec cs = {};
+    const bool haveCs = varInt("chanspec", v) && swlan_chanspec_decode(static_cast<uint16_t>(v), iotype_, &cs);
+    uint8_t rate[4] = {};
+    size_t n = 0;
+    // 500 kb/s units; anything past 10 Gb/s (the firmware's -1 for "auto", say) is no rate
+    const bool haveRate = ioctl(WLC_GET_RATE, nullptr, 0, sizeof(rate), rate, &n) && n >= 4 && swlan::le32(rate) &&
+                          swlan::le32(rate) <= 20000;
+    const uint32_t rateKbps = haveRate ? swlan::le32(rate) * 500 : 0;
+    if (haveRate) locked([&] { status_.tx_rate_kbps = rateKbps; });
+    if (haveRate) switch_wlan_net_rate(static_cast<uint64_t>(rateKbps) * 1000);
+    swlan_peer ap = peer_;
+    char peer[120];
+    swlan_peer_describe(&ap, peer, sizeof(peer));
+    if (haveCs)
+        add(snprintf(text, sizeof(text), "SwitchWLAN: link: %s channel %u, %u MHz (centre %u), ",
+                     cs.five_ghz ? "5 GHz" : "2.4 GHz", cs.control, cs.bw_mhz, cs.center));
+    else
+        add(snprintf(text, sizeof(text), "SwitchWLAN: link: chanspec %s, ", why_));
+    if (room()) {
+        if (haveRate)
+            add(snprintf(text + at, room(), "rate %u.%u Mb/s", rateKbps / 1000, (rateKbps % 1000) / 100));
+        else
+            add(snprintf(text + at, room(), "rate -"));
+    }
+    const uint32_t best = swlan_link_best_kbps(&ap, haveCs ? cs.bw_mhz : 20);
+    if (room())
+        add(snprintf(text + at, room(), " (best both ends allow here %u Mb/s); AP: %s; ours:", best / 1000, peer));
+    uint32_t value = 0;
+    bool ok = varInt("nmode", value);
+    num(" nmode", ok, value, false);
+    ok = varInt("vhtmode", value);
+    num(" vhtmode", ok, value, false);
+    ok = varIntWith("bw_cap", 2, value);  // WLC_BAND_2G
+    num(" bw_cap 2.4 GHz", ok, value, true);
+    ok = varIntWith("bw_cap", 1, value);  // WLC_BAND_5G
+    num(" 5 GHz", ok, value, true);
+    ok = varInt("txchain", value);
+    num(", chains tx", ok, value, true);
+    ok = varInt("rxchain", value);
+    num(" rx", ok, value, true);
+    ok = varInt("ampdu", value);
+    num("; A-MPDU", ok, value, false);
+    ok = varInt("ampdu_ba_wsize", value);
+    num(" window", ok, value, false);
+    ok = varInt("ampdu_mpdu", value);
+    num(" mpdu", ok, value, false);
+    ok = varInt("amsdu", value);
+    num(", A-MSDU", ok, value, false);
+    os_log(OS_LOG_DEFAULT, "%s", text);
+}
+
+// The firmware's MPDUs per A-MPDU since the last stats line, each way, from its "dump ampdu" text (wlc_ampdu_dump's
+// txampdu/txmpdu/rxampdu/rxmpdu counters). A firmware without the dump, or without those counters in it, gets one
+// line with what it answered and is not asked again.
+void SwitchWLAN::ampduWindow(char *out, size_t size)
+{
+    snprintf(out, size, "A-MPDU -");
+    if (ampduRefused_) return;
+    constexpr size_t kRoom = 1500;  // msgbuf ioctls carry at most 1518 bytes; the counters lead the dump
+    char *text = static_cast<char *>(IOMallocZeroData(kRoom + 1));
+    if (!text) return;
+    size_t n = 0;
+    static const char kAmpdu[] = "ampdu";
+    const bool ok = getVarWith("dump", kAmpdu, sizeof(kAmpdu), reinterpret_cast<uint8_t *>(text), kRoom, &n);
+    uint32_t v[4] = {};
+    static const char *const names[4] = {"txampdu", "txmpdu", "rxampdu", "rxmpdu"};
+    bool found = ok;
+    for (unsigned i = 0; i < 4 && found; ++i) found = swlan_dump_value(text, n, names[i], &v[i]);
+    if (!found) {
+        ampduRefused_ = true;
+        for (size_t i = 0; i < n && i < 120; ++i)
+            if (text[i] && (text[i] < 0x20 || text[i] >= 0x7F)) text[i] = ' ';
+        text[n < 120 ? n : 120] = 0;
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: dump ampdu %s: %s", ok ? "has no txampdu/txmpdu/rxampdu/rxmpdu" : "refused",
+               ok ? text : why_);
+    } else {
+        if (ampduHave_) {
+            char tx[16], rx[16];
+            swlan_tenths(v[1] - ampdu_[1], v[0] - ampdu_[0], tx, sizeof(tx));
+            swlan_tenths(v[3] - ampdu_[3], v[2] - ampdu_[2], rx, sizeof(rx));
+            snprintf(out, size, "A-MPDU tx %s rx %s MPDUs", tx, rx);
+        }
+        memcpy(ampdu_, v, sizeof(ampdu_));
+        ampduHave_ = true;
+    }
+    IOFreeData(text, kRoom + 1);
 }
 
 // ---- Coexistence ----------------------------------------------------------------------------------------------
@@ -1851,6 +2061,7 @@ void SwitchWLAN::btState(uint32_t flags, bool power)
 void SwitchWLAN::coexJoined()
 {
     staLast_ = {};
+    ampduHave_ = false;
     pmDurHave_ = false;
     pm_ = SWLAN_PM_OFF;
     sleepRetSet_ = false;
@@ -2010,6 +2221,35 @@ int SwitchWLAN::transmit(const uint8_t *frame, size_t length)
         if (id) txBytes_ += length;
     });
     return id ? 0 : -1;
+}
+
+// en0's start routine (thread context): frames the station takes now; 0 while it is not up (the join's tx_ready
+// starts en0 again) or every transmit buffer is in flight (Msgbuf::txResume, then tx_ready from the MSI path).
+unsigned SwitchWLAN::txRoom()
+{
+    unsigned room = 0;
+    locked([&] {
+        if (up_ && status_.state == SWLAN_STA_UP) room = mb_.txRoom();
+    });
+    return room;
+}
+
+// en0's frames, under the gate: each written by `fill` straight into its transmit buffer, then one doorbell.
+unsigned SwitchWLAN::transmitFrames(swlan_tx_fill_fn fill, void *context, unsigned max)
+{
+    unsigned taken = 0;
+    locked([&] {
+        if (!up_ || status_.state != SWLAN_STA_UP) return;
+        while (taken < max && mb_.txRoom()) {
+            uint8_t *buffer = mb_.txBuffer();
+            const size_t length = buffer ? fill(context, buffer, swlan::kTxBufferSize) : 0;
+            if (!length || !mb_.txPost(length)) break;
+            txBytes_ += length;
+            ++taken;
+        }
+        mb_.txFlush();
+    });
+    return taken;
 }
 
 void SwitchWLAN::status(swlan_status *out)
@@ -2271,6 +2511,14 @@ extern "C" int switch_wlan_power(int on)
 extern "C" int switch_wlan_tx(const uint8_t *eth, size_t length)
 {
     return gDriver ? gDriver->transmit(eth, length) : -1;
+}
+extern "C" unsigned switch_wlan_tx_room(void)
+{
+    return gDriver ? gDriver->txRoom() : 0;
+}
+extern "C" unsigned switch_wlan_tx_frames(swlan_tx_fill_fn fill, void *context, unsigned max)
+{
+    return gDriver ? gDriver->transmitFrames(fill, context, max) : 0;
 }
 extern "C" void switch_wlan_status_get(struct swlan_status *out)
 {
