@@ -452,6 +452,42 @@ ioswitch_stamp_list(char *line, size_t size, int at, const uint64_t *w, uint64_t
 	return at;
 }
 
+/*
+ * IOSwitch: where this boot's /chosen/random-seed came from (the main repository's native/loader/seed.h, whose status
+ * values this copies). The loader mixes 64 bytes of the Tegra Security Engine's DRBG (SE2) into the seed the package
+ * pins, just before XNU starts; bootseed_init (prng_random.c) has hashed and zeroed it by the time this runs. One line.
+ */
+static void
+ioswitch_log_seed_source(void)
+{
+	static const char *const reasons[] = {
+		"SE clock off or in reset", "SE secure-only or disabled", "SE busy", "SE ignored the configuration",
+		"no operation done in 2 ms", "SE error", "output never drained", "implausible output",
+		"entropy clock would not start",
+	};
+	DTEntry chosen;
+	const void *value;
+	unsigned int bytes;
+	uint32_t w[2];
+
+	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
+	    SecureDTGetProperty(chosen, "ioswitch-seed-source", &value, &bytes) != kSuccess || bytes != sizeof(w)) {
+		return;
+	}
+	memcpy(w, value, sizeof(w));
+	const uint32_t status = w[1] & 0xff, detail = w[1] >> 16;
+	const char *entropy = (w[1] & 0x100) ? ", entropy clock turned on" : "";
+	if (w[0] != 0x44454553) {
+		printf("IOSwitch random-seed: pinned package seed (this loader does not mix one)\n");
+	} else if (status == 1) {
+		printf("IOSwitch random-seed: SE2 DRBG mixed in%s (fold %04x)\n", entropy, detail);
+	} else if (status >= 0x10 && status < 0x10 + sizeof(reasons) / sizeof(reasons[0])) {
+		printf("IOSwitch random-seed: pinned package seed: %s (%#x)%s\n", reasons[status - 0x10], detail, entropy);
+	} else {
+		printf("IOSwitch random-seed: pinned package seed: status %#x\n", w[1]);
+	}
+}
+
 void ioswitch_log_boot_stamps(void);
 void
 ioswitch_log_boot_stamps(void)
@@ -481,6 +517,7 @@ ioswitch_log_boot_stamps(void)
 	int64_t zero_us;
 	uint32_t emc;
 
+	ioswitch_log_seed_source();
 	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
 	    SecureDTGetProperty(chosen, "ioswitch-boot-stamps", &value, &bytes) != kSuccess || bytes != sizeof(w)) {
 		return;
