@@ -98,3 +98,14 @@ TEST(CryptexSource, PrefetchPagesFilesIn)
     EXPECT_THAT(body("uint32_t buildRuns("),
                 HasSubstr("vnode_iterate(gPrefetch.mounts[index], 0, nameVnode, &naming)"));
 }
+
+// A list this build will not replay makes the boot a recording boot with no prefetch: loadList checks it
+// with IOSwitchCryptexMap.h's ioswitchListRefusal (the format frozen by cryptex_map_test.cpp) and the boot says why.
+TEST(CryptexSource, ARefusedListSaysWhy)
+{
+    const std::string load = body("Run *loadList(const ListHeader &key, uint32_t *count, const char **why)");
+    EXPECT_THAT(load, HasSubstr("ioswitchListRefusal(header, key.images, kLogEntries * 4u)"));
+    EXPECT_THAT(load, HasSubstr("ioswitchFnv(reinterpret_cast<const uint8_t *>(runs), bytes) != header.checksum"));
+    EXPECT_THAT(body("void prefetchStart()"), HasSubstr("no list to replay (%s); this boot records one"));
+    EXPECT_THAT(body("bool imageKeys(ListHeader *key)"), HasSubstr("key->version = kIOSwitchListVersion;"));
+}

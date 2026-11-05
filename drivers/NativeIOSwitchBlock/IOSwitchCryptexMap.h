@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // r17-launch: the pure parts of IOSwitchCryptex.cpp's direct read map and boot prefetch list, kept free of kernel types
-// so the host harness (tests/cryptex_map_harness.cpp) checks this exact code.
+// so the host test (test/cryptex_map_test.cpp) checks this exact code.
 //  - extents: the image's bytes as (image offset, SD window offset, length), sorted, contiguous from offset 0;
 //  - pieces: a read of the image split into SD reads that each stay inside one extent and one SD command;
-//  - runs: logged page ranges of the cryptex files merged into the prefetch's page-in runs.
+//  - runs: logged page ranges of the cryptex files merged into the prefetch's page-in runs;
+//  - the list file's header (format IOSWPF02, frozen) and its check.
 #ifndef IOSWITCH_CRYPTEX_MAP_H
 #define IOSWITCH_CRYPTEX_MAP_H
 #include <stdint.h>
@@ -137,5 +138,48 @@ inline int ioswitchCompareRanges(const IOSwitchRange &x, const IOSwitchRange &y)
     if (x.index != y.index) return x.index < y.index ? -1 : 1;
     if (x.fileId != y.fileId) return x.fileId < y.fileId ? -1 : 1;
     return x.first < y.first ? -1 : x.first > y.first;
+}
+
+// The prefetch list file: this header, then `runs` IOSwitchRun. This layout is format IOSWPF02, frozen by
+// cryptex_map_test.cpp: a build whose loader refuses a list an earlier build saved makes its first boot a recording
+// boot with no prefetch. So a new format keeps reading every older one and converts it (the older runs are still the
+// boot's reads), and the test keeps a saved IOSWPF02 list loading.
+constexpr uint32_t kIOSwitchListImages = 2;  // System, App (IOSWITCH_CRYPTEX_COUNT)
+struct IOSwitchImageKey {
+    uint64_t bytes, fileId;
+    int64_t mtimeSec, mtimeNsec;
+};
+struct IOSwitchListHeader {
+    char magic[8];
+    uint32_t version, headerBytes;
+    IOSwitchImageKey images[kIOSwitchListImages];
+    uint32_t runs, files;
+    uint64_t checksum;  // FNV-1a 64 of the runs
+};
+static_assert(sizeof(IOSwitchListHeader) == 96 && sizeof(IOSwitchRun) == 16, "the list format IOSWPF02");
+constexpr char kIOSwitchListMagic[8] = {'I', 'O', 'S', 'W', 'P', 'F', '0', '2'};
+constexpr uint32_t kIOSwitchListVersion = 2;
+
+inline uint64_t ioswitchFnv(const uint8_t *p, uint64_t n)
+{
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (uint64_t i = 0; i < n; ++i) h = (h ^ p[i]) * 0x100000001b3ull;
+    return h;
+}
+
+// Whether a saved header is a list this build replays for these images (at most maxRuns runs), or why not.
+inline const char *ioswitchListRefusal(const IOSwitchListHeader &saved, const IOSwitchImageKey (&images)[2],
+                                       uint32_t maxRuns)
+{
+    for (unsigned i = 0; i < sizeof(kIOSwitchListMagic); ++i)
+        if (saved.magic[i] != kIOSwitchListMagic[i]) return "not an IOSWPF02 list";
+    if (saved.version != kIOSwitchListVersion || saved.headerBytes != sizeof(IOSwitchListHeader))
+        return "an IOSWPF02 list of another version";
+    for (unsigned i = 0; i < kIOSwitchListImages; ++i)
+        if (saved.images[i].bytes != images[i].bytes || saved.images[i].fileId != images[i].fileId ||
+            saved.images[i].mtimeSec != images[i].mtimeSec || saved.images[i].mtimeNsec != images[i].mtimeNsec)
+            return "saved for other cryptex images";
+    if (!saved.runs || saved.runs > maxRuns) return "no runs, or too many";
+    return nullptr;
 }
 #endif

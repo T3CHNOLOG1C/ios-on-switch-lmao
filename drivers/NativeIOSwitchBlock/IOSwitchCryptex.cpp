@@ -726,7 +726,9 @@ extern "C" int ioswitch_cryptex_manifest_sha384(dev_t device, const char *uuid, 
 //    come first served with the foreground's (NativeIOSwitchBlock.cpp), so it keeps a large share of the card and stays
 //    ahead of the foreground, whose page-ins then find their pages resident (or in flight, and wait for them). It stops
 //    when the list is done or when a recording would stop (afterFrame).
-// The volumes are read-only, so a stale list costs only wasted reads; a changed image is re-recorded.
+// The volumes are read-only, so a stale list costs only wasted reads; a changed image is re-recorded. A list this build
+// cannot read is a recording boot with no prefetch, so loadList says why in one line, and the format is frozen
+// (IOSwitchCryptexMap.h): a new one must read the old.
 namespace {
 constexpr uint32_t kPage = 4096;
 constexpr uint32_t kMaxRun = 128;  // pages: 512 KiB per page-in, as the old 512 KiB advisory reads
@@ -739,21 +741,10 @@ constexpr uint32_t kLogEntries = 1u << 16;  // 2 MiB, allocated on recording boo
 // mounts (the 11-04 boots reached SpringBoard 110-135 s after them).
 constexpr uint64_t kRecordBackstopS = 180;
 constexpr char kListSuffix[] = ".boot-prefetch";
-constexpr char kMagic[8] = {'I', 'O', 'S', 'W', 'P', 'F', '0', '2'};
 
-struct ImageKey {
-    uint64_t bytes, fileId;
-    int64_t mtimeSec, mtimeNsec;
-};
-struct ListHeader {
-    char magic[8];
-    uint32_t version, headerBytes;
-    ImageKey images[IOSWITCH_CRYPTEX_COUNT];
-    uint32_t runs, files;
-    uint64_t checksum;  // FNV-1a 64 of the runs
-};
+using ListHeader = IOSwitchListHeader;
 using Run = IOSwitchRun;
-static_assert(sizeof(Run) == 16, "the list's run layout");
+static_assert(kIOSwitchListImages == IOSWITCH_CRYPTEX_COUNT, "the list keys both cryptex images");
 
 struct {
     ListHeader key;  // this boot's images
@@ -766,13 +757,6 @@ struct {
     volatile uint32_t frame = 0, stop = 0, started = 0;
 } gPrefetch;
 
-uint64_t fnv(const uint8_t *p, size_t n)
-{
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (size_t i = 0; i < n; ++i) h = (h ^ p[i]) * 0x100000001b3ull;
-    return h;
-}
-
 void listPath(char *out, size_t capacity)
 {
     snprintf(out, capacity, "%s%s", paths[0], kListSuffix);
@@ -781,8 +765,8 @@ void listPath(char *out, size_t capacity)
 bool imageKeys(ListHeader *key)
 {
     bzero(key, sizeof(*key));
-    memcpy(key->magic, kMagic, sizeof(kMagic));
-    key->version = 2;
+    memcpy(key->magic, kIOSwitchListMagic, sizeof(kIOSwitchListMagic));
+    key->version = kIOSwitchListVersion;
     key->headerBytes = sizeof(*key);
     for (unsigned i = 0; i < IOSWITCH_CRYPTEX_COUNT; ++i) {
         vnode_t image = NULLVP;
@@ -801,31 +785,36 @@ bool imageKeys(ListHeader *key)
     return true;
 }
 
-// The saved runs for these images, or nullptr (none, other images, torn or unreadable: the caller records afresh).
-Run *loadList(const ListHeader &key, uint32_t *count)
+// The saved runs for these images, or nullptr with *why (none, another format, other images, torn or unreadable: the
+// caller records afresh).
+Run *loadList(const ListHeader &key, uint32_t *count, const char **why)
 {
     char path[128];
     listPath(path, sizeof(path));
     vfs_context_t ctx = vfs_context_current();
     vnode_t vp = NULLVP;
-    if (vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) return nullptr;
+    if (vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) return *why = "none saved", nullptr;
     ListHeader header = {};
     int resid = 0;
     Run *runs = nullptr;
-    if (!vn_rdwr(UIO_READ, vp, reinterpret_cast<caddr_t>(&header), sizeof(header), 0, UIO_SYSSPACE, IO_NOAUTH,
-                 vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) &&
-        !resid && !memcmp(header.magic, key.magic, sizeof(key.magic)) && header.version == key.version &&
-        header.headerBytes == sizeof(header) && !memcmp(header.images, key.images, sizeof(key.images)) && header.runs &&
-        header.runs <= kLogEntries * 4u) {
+    if (vn_rdwr(UIO_READ, vp, reinterpret_cast<caddr_t>(&header), sizeof(header), 0, UIO_SYSSPACE, IO_NOAUTH,
+                vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) ||
+        resid) {
+        *why = "its header is unreadable";
+    } else if (!(*why = ioswitchListRefusal(header, key.images, kLogEntries * 4u))) {
         const size_t bytes = header.runs * sizeof(Run);
         runs = static_cast<Run *>(IOMallocData(bytes));
-        if (runs && (vn_rdwr(UIO_READ, vp, reinterpret_cast<caddr_t>(runs), static_cast<int>(bytes), sizeof(header),
-                             UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) ||
-                     resid || fnv(reinterpret_cast<const uint8_t *>(runs), bytes) != header.checksum)) {
+        if (!runs) {
+            *why = "no memory";
+        } else if (vn_rdwr(UIO_READ, vp, reinterpret_cast<caddr_t>(runs), static_cast<int>(bytes), sizeof(header),
+                           UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) ||
+                   resid || ioswitchFnv(reinterpret_cast<const uint8_t *>(runs), bytes) != header.checksum) {
             IOFreeData(runs, bytes);
             runs = nullptr;
+            *why = "torn (its runs do not match its checksum)";
+        } else {
+            *count = header.runs;
         }
-        if (runs) *count = header.runs;
     }
     vnode_close(vp, FREAD, ctx);
     return runs;
@@ -1023,7 +1012,7 @@ void afterFrame(thread_call_param_t, thread_call_param_t)
     ListHeader header = gPrefetch.key;
     header.runs = count;
     header.files = files;
-    header.checksum = fnv(reinterpret_cast<const uint8_t *>(runs), count * sizeof(Run));
+    header.checksum = ioswitchFnv(reinterpret_cast<const uint8_t *>(runs), count * sizeof(Run));
     uint64_t pages = 0;
     for (uint32_t i = 0; i < count; ++i) pages += runs[i].pages;
     char path[128];
@@ -1083,7 +1072,8 @@ void prefetchStart()
     clock_interval_to_deadline(static_cast<uint32_t>(kRecordBackstopS), NSEC_PER_SEC, &backstop);
     thread_call_enter_delayed(gPrefetch.frameCall, backstop);
     uint32_t count = 0;
-    if (Run *runs = loadList(gPrefetch.key, &count)) {
+    const char *why = nullptr;
+    if (Run *runs = loadList(gPrefetch.key, &count, &why)) {
         gPrefetch.runs = runs;
         gPrefetch.runCount = count;
         thread_t thread = THREAD_NULL;
@@ -1093,6 +1083,7 @@ void prefetchStart()
             IOFreeData(runs, count * sizeof(Run));
         return;
     }
+    IOLog("IOSwitch boot prefetch: no list to replay (%s); this boot records one\n", why);
     auto *log = static_cast<ioswitch_record_entry *>(IOMallocZeroData(kLogEntries * sizeof(ioswitch_record_entry)));
     if (!log) return;
     gPrefetch.log = log;

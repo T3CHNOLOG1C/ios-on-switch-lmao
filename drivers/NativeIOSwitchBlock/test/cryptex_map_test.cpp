@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <set>
 #include <vector>
@@ -164,4 +166,91 @@ TEST(CryptexMap, PrefetchLogsMergeIntoRuns)
     }
     EXPECT_EQ(failures, 0u) << "checks failed (the first 20 reported above)";
     printf("cryptex map: %lu prefetch logs merged\n", logs);
+}
+
+// The prefetch list's file format IOSWPF02, frozen. A build whose loader refuses the list an earlier build saved makes
+// its first boot a recording boot with no prefetch. So this list, laid out byte by byte as IOSwitchCryptex.cpp writes
+// it, must keep loading: a new format comes with a loader that still reads (converts) this one, and this test is
+// changed to load both.
+namespace {
+void put(std::vector<uint8_t> &bytes, size_t at, uint64_t value, unsigned size)
+{
+    for (unsigned i = 0; i < size; ++i) bytes[at + i] = uint8_t(value >> (8 * i));  // little-endian, as the device
+}
+}  // namespace
+
+TEST(CryptexMap, TheSavedListFormatStaysReadable)
+{
+    // The layout.
+    EXPECT_EQ(sizeof(IOSwitchListHeader), 96u);
+    EXPECT_EQ(offsetof(IOSwitchListHeader, magic), 0u);
+    EXPECT_EQ(offsetof(IOSwitchListHeader, version), 8u);
+    EXPECT_EQ(offsetof(IOSwitchListHeader, headerBytes), 12u);
+    EXPECT_EQ(offsetof(IOSwitchListHeader, images), 16u);
+    EXPECT_EQ(sizeof(IOSwitchImageKey), 32u);
+    EXPECT_EQ(offsetof(IOSwitchListHeader, runs), 80u);
+    EXPECT_EQ(offsetof(IOSwitchListHeader, files), 84u);
+    EXPECT_EQ(offsetof(IOSwitchListHeader, checksum), 88u);
+    EXPECT_EQ(sizeof(IOSwitchRun), 16u);
+    EXPECT_EQ(offsetof(IOSwitchRun, fileId), 0u);
+    EXPECT_EQ(offsetof(IOSwitchRun, page), 8u);
+    EXPECT_EQ(offsetof(IOSwitchRun, pages), 12u);
+    EXPECT_EQ(offsetof(IOSwitchRun, when), 14u);
+    EXPECT_EQ(offsetof(IOSwitchRun, index), 15u);
+    // The checksum: FNV-1a 64 (its published vectors).
+    EXPECT_EQ(ioswitchFnv(reinterpret_cast<const uint8_t *>(""), 0), 0xcbf29ce484222325ull);
+    EXPECT_EQ(ioswitchFnv(reinterpret_cast<const uint8_t *>("a"), 1), 0xaf63dc4c8601ec8cull);
+
+    // A saved list: header, then two runs.
+    std::vector<uint8_t> file(96 + 2 * 16, 0);
+    for (unsigned i = 0; i < 8; ++i) file[i] = uint8_t("IOSWPF02"[i]);
+    put(file, 8, 2, 4);
+    put(file, 12, 96, 4);
+    const IOSwitchImageKey keys[2] = {{3303014400ull, 0x1d2e3full, 1730800000, 123456789},
+                                      {10485760ull, 0x4a5bull, 1730800001, 987654321}};
+    for (unsigned i = 0; i < 2; ++i) {
+        put(file, 16 + 32 * i, keys[i].bytes, 8);
+        put(file, 24 + 32 * i, keys[i].fileId, 8);
+        put(file, 32 + 32 * i, uint64_t(keys[i].mtimeSec), 8);
+        put(file, 40 + 32 * i, uint64_t(keys[i].mtimeNsec), 8);
+    }
+    put(file, 80, 2, 4);             // runs
+    put(file, 84, 1, 4);             // files
+    put(file, 96, 0x1000123ull, 8);  // run 0: file id, page, pages, when, index
+    put(file, 104, 4096, 4);
+    put(file, 108, 128, 2);
+    file[110] = 3;
+    file[111] = 0;
+    put(file, 112, 0x1000123ull, 8);
+    put(file, 120, 4224, 4);
+    put(file, 124, 17, 2);
+    file[126] = 9;
+    file[127] = 0;
+    put(file, 88, ioswitchFnv(file.data() + 96, 32), 8);
+
+    IOSwitchListHeader header;
+    memcpy(&header, file.data(), sizeof(header));
+    EXPECT_EQ(ioswitchListRefusal(header, keys, 1u << 18), nullptr) << "a saved IOSWPF02 list no longer loads";
+    std::vector<IOSwitchRun> runs(2);
+    memcpy(runs.data(), file.data() + 96, 32);
+    EXPECT_EQ(ioswitchFnv(reinterpret_cast<const uint8_t *>(runs.data()), 32), header.checksum);
+    EXPECT_EQ(runs[1].fileId, 0x1000123ull);
+    EXPECT_EQ(runs[1].page, 4224u);
+    EXPECT_EQ(runs[1].pages, 17u);
+    EXPECT_EQ(runs[1].when, 9u);
+
+    // What it refuses, and says.
+    IOSwitchListHeader other = header;
+    other.images[1].mtimeNsec += 1;
+    EXPECT_STREQ(ioswitchListRefusal(other, keys, 1u << 18), "saved for other cryptex images");
+    other = header;
+    other.magic[7] = '1';
+    EXPECT_STREQ(ioswitchListRefusal(other, keys, 1u << 18), "not an IOSWPF02 list");
+    other = header;
+    other.version = 3;
+    EXPECT_STREQ(ioswitchListRefusal(other, keys, 1u << 18), "an IOSWPF02 list of another version");
+    other = header;
+    other.runs = 0;
+    EXPECT_STREQ(ioswitchListRefusal(other, keys, 1u << 18), "no runs, or too many");
+    EXPECT_STREQ(ioswitchListRefusal(header, keys, 1), "no runs, or too many");
 }
