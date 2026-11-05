@@ -44,6 +44,8 @@
 #include "SwitchPerfGovernor.h"
 #include "SwitchPower.h"
 #include "../TegraDFLL/TegraDFLL.h"
+#include "../TegraGM20B/TegraGM20BGpu.h"     // tegra_gm20b_perf_hint, tegra_gm20b_idle_tick: the GPU's idle clock
+#include "../SwitchBattery/SwitchBattery.h"  // switch_battery_avg_ma: the draw beside the clocks
 
 namespace {
 // Tunables, in microseconds (tests/test_switch_governor.py reads these lines).
@@ -185,6 +187,7 @@ void deadlinePassed(uint64_t)
     }
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);
+    tegra_gm20b_idle_tick();  // the GPU's idle clock takes this tick too (loads; a work item once it is idle)
 }
 
 struct sched_perfcontrol_callbacks gCallbacks = {
@@ -333,6 +336,10 @@ unsigned switchperf::take(char *line, size_t len)
                               windows, hints[1], hints[2], hints[3], boot ? ", boot floor" : "", gGov.khz[lo] / 1000,
                               gGov.khz[hi] / 1000, gGov.khz[index] / 1000, target / 1000000, measured / 1000000, vdd);
     }
+    bool external = false;
+    const int ma = switch_battery_avg_ma(&external);
+    if (ma != INT32_MIN && n < len)
+        n += (size_t)snprintf(line + n, len - n, "; battery %d mA%s", ma, external ? " (external power in)" : "");
     return index;
 }
 
@@ -418,6 +425,7 @@ extern "C" unsigned int switch_perf_cltm_ceiling(uint32_t fraction16)
 
 extern "C" void switch_perf_hint(unsigned int hint)
 {
+    tegra_gm20b_perf_hint(hint);  // the GPU back at its full clock if it idles low
     if (!__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE) || hint >= 5 || !hint) return;
     const uint64_t now = mach_absolute_time();
     const uint32_t us = hint == SWITCH_PERF_HINT_TOUCH        ? kBoostTouchUs

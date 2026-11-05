@@ -206,6 +206,11 @@ void tgm_stats_bind(int map, uint64_t pages, uint64_t ns);
 void tgm_stats_bo_free(uint64_t ns);
 void tgm_stats_prefault(uint64_t bytes);
 
+/* drivers/SwitchPower (gpu.c "idle clock"): switch_perf_hint's touch/missed-frame/launch hints (any context; back to
+ * the run rate at once if idle), and the CPU governor's tick (scheduler context: loads, at most one work item). */
+void tegra_gm20b_perf_hint(unsigned int hint);
+void tegra_gm20b_idle_tick(void);
+
 #ifdef __cplusplus
 }
 #endif

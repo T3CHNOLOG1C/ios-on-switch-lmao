@@ -23,11 +23,13 @@ int switch_thermal_start(void);
 void switch_thermal_cpu_quiesce(void);
 
 // Performance hints for the CPU's on-demand governor (SwitchPerfGovernor.cpp): the CPU's top operating point at once,
-// held for a while after the last hint (BOOT_DONE instead ends the boot's floor). The GPU has no governor: it runs at
-// its fixed clock regardless. Any context: thread, work loop, primary interrupt, the scheduler's; a few stores under a
-// spin lock, nothing when the governor is off. Callers: SwitchTouch (each touch interrupt), NativeLegacyDisplay (a
-// present two or more refresh periods after the last one, while frames keep coming), XNU exec_activate_image (LAUNCH)
-// and its boot band lift at IOKit's System Boot Complete (BOOT_DONE).
+// held for a while after the last hint (BOOT_DONE instead ends the boot's floor). The GPU has no load governor: it
+// runs its full clock whenever it has work, and a touch, missed frame or launch brings it back at once from its idle
+// clock (TegraGM20B gpu.c, entered only after 500 ms with no submission and no swap). Any context: thread, work loop,
+// primary interrupt, the scheduler's; a few stores under a spin lock, nothing when the governor is off. Callers:
+// SwitchTouch (each touch interrupt), NativeLegacyDisplay (a present two or more refresh periods after the last one,
+// while frames keep coming), XNU exec_activate_image (LAUNCH) and its boot band lift at IOKit's System Boot Complete
+// (BOOT_DONE).
 enum {
     SWITCH_PERF_HINT_TOUCH = 1,
     SWITCH_PERF_HINT_FRAME_MISS = 2,

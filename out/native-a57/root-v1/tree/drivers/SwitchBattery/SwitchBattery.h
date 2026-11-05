@@ -26,6 +26,9 @@ int switch_battery_set_otg_boost(bool on, bool ourVbus);
 // battery current (negative: the battery is discharging, into the port too while we source). Thread context (I2C1);
 // 0, or the I2C error (the line says so).
 int switch_battery_describe_otg(char *buffer, size_t size);
+// The fuel gauge's average current at its last reading, mA (positive = charging; INT32_MIN before a reading), and in
+// *external (may be NULL) whether external power was in. Any context.
+int switch_battery_avg_ma(bool *external);
 
 // The battery temperature (MAX17050 TEMP, the pack's thermistor) in m C and when it was read (mach absolute time), for
 // thermalmonitord's battery sensors (drivers/SwitchPower/SwitchSensors.cpp). Kept current by the gauge's temperature

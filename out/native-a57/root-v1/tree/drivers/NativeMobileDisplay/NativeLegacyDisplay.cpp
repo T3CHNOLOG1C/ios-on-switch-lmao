@@ -28,6 +28,10 @@
 #include "DisplaySmmuProbe.h"
 #include "TegraDisplayPower.h"
 #include "../SwitchPower/SwitchPower.h"
+
+// The last swap Core Animation offered (validateSwap, accepted or not; mach time): while swaps keep coming CA is
+// animating, and TegraGM20B's idle clock never drops the GPU (native_display_last_swap_ns below).
+static uint64_t gLastSwapAbs;
 extern "C" __attribute__((noreturn)) void native_legacy_backend_guard(unsigned, void *, void *);
 extern "C" IOService *native_legacy_display_allocate(void);
 extern "C" bool native_legacy_gop_mapping_observed(IOService *, IOMemoryMap *, uint32_t, uint32_t);
@@ -3469,6 +3473,7 @@ public:
         // access. Accept only one full-frame, untransformed, nonplanar BGRA
         // surface with real original backing memory. No generic capability
         // or success is supplied for other layer/format/geometry contracts.
+        __atomic_store_n(&gLastSwapAbs, mach_absolute_time(), __ATOMIC_RELAXED);
         auto bytes = reinterpret_cast<const unsigned char *>(request);
         auto word = [&](unsigned offset) {
             uint32_t value = 0;
@@ -3762,4 +3767,13 @@ IOService *native_legacy_display_allocate(void)
 extern "C" void native_legacy_gpu_complete(void *display, int status)
 {
     if (display) static_cast<NativeLegacyDisplay *>(display)->gpuComplete(status);
+}
+
+// TegraGM20B gpu.c (idle clock): the last swap, in nanoseconds of uptime; 0 before the first. Any context.
+extern "C" uint64_t native_display_last_swap_ns(void)
+{
+    uint64_t ns = 0;
+    const uint64_t abs = __atomic_load_n(&gLastSwapAbs, __ATOMIC_RELAXED);
+    if (abs) absolutetime_to_nanoseconds(abs, &ns);
+    return ns;
 }

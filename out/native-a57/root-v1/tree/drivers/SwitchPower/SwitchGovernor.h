@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The on-demand clock governor's decisions, in plain C with no kernel dependency, so the host tests
 // (tests/test_switch_governor.py) check this same header. Its one user is the A57 cluster's DFLL
-// (SwitchPerfGovernor.cpp, from the scheduler's perfcontrol callouts); the GPU is not governed, it runs at
-// tegra-gpu-mhz's fixed clock (768 MHz) all the time. The caller owns the time base (mach absolute time in the
-// kernel, microseconds in the tests), the locking and the hardware; this file only maps "how busy was the last window"
-// plus hints and thermal limits to an index into an ascending table of operating points, the way Linux's
-// ondemand/schedutil governors and Horizon's boost mode do:
+// (SwitchPerfGovernor.cpp, from the scheduler's perfcontrol callouts). The GPU does not use it: it runs
+// tegra-gpu-mhz's 768 MHz whenever it has work and drops only when truly idle (TegraGM20B gpu.c, "idle clock").
+// The caller owns the time base (mach absolute time in the kernel, microseconds in the tests), the locking and the
+// hardware; this file only maps "how busy was the last window" plus hints and thermal limits to an index into an
+// ascending table of operating points, the way Linux's ondemand/schedutil governors and Horizon's boost mode do:
 //   * up at once: a window at or above up_permille busy goes straight to the ceiling (ondemand's jump: when the
 //     clock is saturated its real demand is unknown); below that, the lowest point whose target_permille share
 //     covers the demand (busy x clock now, schedutil's frequency-invariant rule);

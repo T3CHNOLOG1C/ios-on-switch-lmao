@@ -283,6 +283,10 @@ int readAll(Reading *r)
 }
 }
 
+// switch_battery_avg_ma: the last reading's AvgCurrent (mA) and whether external power was in.
+static int gBatteryAvgMa = INT32_MIN;
+static bool gBatteryExternal;
+
 class SwitchBattery : public IOPMPowerSource {
     OSDeclareDefaultStructors(SwitchBattery) IOWorkLoop *loop = nullptr;
     IOTimerEventSource *timer = nullptr;
@@ -397,6 +401,8 @@ bool SwitchBattery::refresh()
     setMaxCapacity(100);
     setVoltage(r.millivolts);
     setAmperage(r.avgMilliamps);
+    __atomic_store_n(&gBatteryExternal, r.external, __ATOMIC_RELAXED);
+    __atomic_store_n(&gBatteryAvgMa, (int)r.avgMilliamps, __ATOMIC_RELAXED);
     setCycleCount(r.cycles);
     setKey(kIOPMFullyChargedKey, r.full ? kOSBooleanTrue : kOSBooleanFalse);
     setKey("AppleRawExternalConnected", r.external ? kOSBooleanTrue : kOSBooleanFalse);
@@ -478,6 +484,15 @@ void SwitchBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
         IOLog("SwitchBattery: started\n");
     }
     sender->setTimeoutMS(self->published ? kRefreshMS : kIdentifyRetryMS);
+}
+
+// The gauge's average current at the last reading (mA, positive = charging; INT32_MIN before a reading) and whether
+// external power was in (then it is the charger's net, not the console's draw). For SwitchPerf's periodic line, which
+// sets clocks against draw. Any context.
+extern "C" int switch_battery_avg_ma(bool *external)
+{
+    if (external) *external = __atomic_load_n(&gBatteryExternal, __ATOMIC_RELAXED);
+    return __atomic_load_n(&gBatteryAvgMa, __ATOMIC_RELAXED);
 }
 
 extern "C" int switch_battery_start(void)

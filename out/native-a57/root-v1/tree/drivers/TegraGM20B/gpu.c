@@ -951,6 +951,7 @@ struct tgm_chan {
 	u64 submit_ns;   /* when the last fence was kicked */
 	u32 stall_done;  /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
 	u64 stall_ns;
+	u32 gov_done; /* idle clock: last seqno counted retired (gov_fenced) */
 	u32 stat_done; /* tegra-gpu-stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
@@ -2110,6 +2111,345 @@ static void stats_tick(void)
 #undef PT_NS
 }
 
+/* ------------------------------------------------------------------ idle clock: the GPCPLL's output divider
+ * The user: downclock "when it's possible to do so without ruining performance". So the GPU runs at tegra-gpu-mhz's
+ * rate (768 MHz, Horizon's docked maximum) whenever there is any GPU work, and drops to 76.8 MHz (L4T's lowest B01
+ * row, Horizon's own boost-mode GPU clock) only once it has been truly idle:
+ *   * down: no submission kicked, nothing in flight and no display swap for IDLE_DROP_NS (500 ms), checked on the
+ *     CPU governor's tick (SwitchPerfGovernor.cpp calls tegra_gm20b_idle_tick from XNU's perfcontrol deadline, so
+ *     the GPU adds no timer of its own; without the CPU governor the GPU simply never drops). A swap arriving means
+ *     Core Animation is animating, so the clock never drops during an animation, even one that submits little.
+ *   * up: synchronously, before the submission's work is kicked (tgm_chan_exec, tgm_present_copy, and chan_fence as
+ *     a backstop), so no GPU work ever starts at the idle clock; also at once (a work item) on switch_perf_hint's
+ *     touch, missed-frame and launch hints, so the clock is usually back before the frame's first submission.
+ * The change is the output divider alone, VCO left running and locked (1536 MHz: M 1, N 40 from the 38.4 MHz
+ * reference), PL 1 <-> 10. GM20B's GPCPLL changes PL without a glitch (nvgpu clk_gm20b.c: PLDIV_GLITCHLESS; nouveau
+ * gm20b.c gm20b_pllg_program_mnp's pdiv_only path, whose sequence this is: VCO divider 1:2 around it, an interim PL
+ * sharing a bit with both ends). No NDIV slide, no relock, no bypass, no VDD_GPU write (the rail stays at clk_raise's
+ * 800 mV): a few register writes and two 2 us delays, timed on every raise and logged (raise mean/max).
+ * Before first use, gov_start runs one drop and raise at stage 3 (no client yet) and logs both times. Any failure
+ * (the divider not reading back, the PLL not locked, the clock not at the rate) logs one line and leaves the GPU at
+ * 768 MHz for the boot. */
+#define IDLE_DROP_NS (500ULL * 1000000ULL)
+#define IDLE_LOG_NS (10ULL * 1000000000ULL)
+#define GPCPLL_CFG_R 0x137000   /* 0 enable, 17 lock */
+#define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */
+#define GPC2CLK_OUT_R 0x137250  /* VCO divider 13:8: 0 = 1:1, 2 = 1:2 */
+#define SEL_VCO_R 0x137100      /* 0 = GPU on bypass, 1 = on GPCPLL */
+#define PLL_REF_KHZ 38400
+
+extern uint64_t
+native_display_last_swap_ns(void); /* NativeLegacyDisplay.cpp: validateSwap's last call, 0: none */
+
+static struct {
+	int on;       /* the idle clock is in use (atomic) */
+	int low;      /* the GPCPLL runs the idle divider (atomic; changed under clk) */
+	int dropping; /* a drop is queued or running (atomic) */
+	void *clk;    /* mutex: every divider change */
+	void *drop_w, *raise_w;
+	u32 run_pl, idle_pl, run_khz, idle_khz;
+	u64 last_busy; /* atomic: the last kick or hint (ns) */
+	u64 kicked,
+		retired; /* atomic: submissions kicked / seen complete, every channel, since boot */
+	/* the periodic line (under clk) */
+	u64 log_start, low_since, low_ns, raise_sum, raise_max;
+	u32 drops, raises, hinted;
+} idle;
+
+static u64 idle_in_flight(void)
+{
+	return __atomic_load_n(&idle.kicked, __ATOMIC_SEQ_CST) -
+	       __atomic_load_n(&idle.retired, __ATOMIC_SEQ_CST);
+}
+
+/* GM20B's glitchless PL change (nouveau gm20b.c gm20b_pllg_program_mnp, pdiv_only): returns 0 when the GPCPLL is
+ * locked, on the VCO, at PL `pl`. Under idle.clk. */
+static int pl_switch(u32 pl)
+{
+	struct nvkm_device *device = gpu.device;
+	u32 coeff = nvkm_rd32(device, GPCPLL_COEFF_R), old = (coeff >> 16) & 0x3f, back;
+
+	if (old != pl) {
+		/* the VCO divider at 1:2 around the change, written twice (linear divider operation) */
+		nvkm_mask(device, GPC2CLK_OUT_R, 0x3f00, 2 << 8);
+		nvkm_mask(device, GPC2CLK_OUT_R, 0x3f00, 2 << 8);
+		nvkm_rd32(device, GPC2CLK_OUT_R);
+		udelay(2);
+		if (!(old & pl)) { /* an interim PL that shares a set bit with both ends */
+			u32 a = old | (1u << (__builtin_ffs((int)pl) - 1)),
+			    b = pl | (1u << (__builtin_ffs((int)old) - 1));
+			nvkm_wr32(device, GPCPLL_COEFF_R,
+				  (coeff & ~(0x3fu << 16)) | ((a < b ? a : b) << 16));
+		}
+		nvkm_wr32(device, GPCPLL_COEFF_R, (coeff & ~(0x3fu << 16)) | (pl << 16));
+		udelay(2);
+		nvkm_mask(device, GPC2CLK_OUT_R, 0x3f00, 0);
+		nvkm_mask(device, GPC2CLK_OUT_R, 0x3f00, 0);
+		nvkm_rd32(device, GPC2CLK_OUT_R);
+	}
+	back = nvkm_rd32(device, GPCPLL_COEFF_R);
+	return ((back >> 16) & 0x3f) == pl &&
+			       (nvkm_rd32(device, GPCPLL_CFG_R) & 0x20001) == 0x20001 &&
+			       (nvkm_rd32(device, SEL_VCO_R) & 1) &&
+			       !(nvkm_rd32(device, GPC2CLK_OUT_R) & 0x3f3f)
+		       ? 0
+		       : -EIO;
+}
+
+/* Under idle.clk: a divider change failed. One line, then 768 MHz for the boot (the divider, else nouveau's full
+ * reprogram of the rate), the idle clock off. */
+static void idle_fail(const char *what, u32 pl)
+{
+	struct nvkm_device *device = gpu.device;
+	int back;
+
+	WRITE_ONCE(idle.on, 0);
+	back = pl_switch(idle.run_pl);
+	if (back)
+		back = clk_prog_khz(device, idle.run_khz);
+	WRITE_ONCE(idle.low, 0);
+	nvxnu_log("tegra-gm20b: idle clock off: %s to PL %u did not take (GPCPLL_CFG %08x COEFF "
+		  "%08x SEL_VCO %x "
+		  "GPC2CLK_OUT %08x); %d kHz now (%d), for this boot\n",
+		  what, pl, nvkm_rd32(device, GPCPLL_CFG_R), nvkm_rd32(device, GPCPLL_COEFF_R),
+		  nvkm_rd32(device, SEL_VCO_R), nvkm_rd32(device, GPC2CLK_OUT_R),
+		  nvkm_clk_read(device->clk, nv_clk_src_gpc), back);
+}
+
+/* Up to the run rate if the idle divider is in force; returns the ns it took (0: nothing to do). Thread context. */
+static u64 idle_raise(void)
+{
+	u64 t0, dt = 0;
+
+	nvxnu_mutex_lock(idle.clk);
+	if (READ_ONCE(idle.low)) {
+		t0 = nvxnu_nanotime();
+		if (pl_switch(idle.run_pl)) {
+			idle_fail("raise", idle.run_pl);
+		} else {
+			dt = nvxnu_nanotime() - t0;
+			WRITE_ONCE(idle.low, 0);
+			idle.raises++;
+			idle.raise_sum += dt;
+			if (dt > idle.raise_max)
+				idle.raise_max = dt;
+			idle.low_ns += t0 - idle.low_since;
+		}
+	}
+	nvxnu_mutex_unlock(idle.clk);
+	return dt;
+}
+
+/* Before a submission's work is kicked (the submitter's thread): busy now, and the run rate first. The order (busy
+ * stamp, then the drop flags) pairs with gov_drop's (flag, then the stamp): one of the two always sees the other. */
+static void idle_wake(void)
+{
+	if (!READ_ONCE(idle.on))
+		return;
+	__atomic_store_n(&idle.last_busy, nvxnu_nanotime(), __ATOMIC_SEQ_CST);
+	if (__atomic_load_n(&idle.low, __ATOMIC_SEQ_CST) ||
+	    __atomic_load_n(&idle.dropping, __ATOMIC_SEQ_CST))
+		(void)idle_raise();
+}
+
+static void idle_drop(void *arg)
+{
+	u64 now;
+
+	(void)arg;
+	nvxnu_mutex_lock(idle.clk);
+	now = nvxnu_nanotime();
+	if (READ_ONCE(idle.on) && !READ_ONCE(idle.low) && !idle_in_flight() &&
+	    now - __atomic_load_n(&idle.last_busy, __ATOMIC_SEQ_CST) >= IDLE_DROP_NS &&
+	    now - native_display_last_swap_ns() >= IDLE_DROP_NS) {
+		if (pl_switch(idle.idle_pl)) {
+			idle_fail("drop", idle.idle_pl);
+		} else {
+			WRITE_ONCE(idle.low, 1);
+			idle.drops++;
+			idle.low_since = nvxnu_nanotime();
+		}
+	}
+	__atomic_store_n(&idle.dropping, 0, __ATOMIC_SEQ_CST);
+	nvxnu_mutex_unlock(idle.clk);
+}
+
+static void idle_hint_raise(void *arg)
+{
+	(void)arg;
+	if (idle_raise()) {
+		nvxnu_mutex_lock(idle.clk);
+		idle.hinted++;
+		nvxnu_mutex_unlock(idle.clk);
+	}
+}
+
+/* drivers/SwitchPower SwitchPerfGovernor.cpp, on the CPU governor's tick (XNU's perfcontrol deadline: interrupts
+ * masked, scheduler context): a few loads, and a work item queued once the GPU has been idle long enough. */
+void tegra_gm20b_idle_tick(void)
+{
+	u64 now;
+	int expected = 0;
+
+	if (!READ_ONCE(idle.on) || READ_ONCE(idle.low) || READ_ONCE(idle.dropping) ||
+	    idle_in_flight())
+		return;
+	now = nvxnu_nanotime();
+	if (now - __atomic_load_n(&idle.last_busy, __ATOMIC_SEQ_CST) < IDLE_DROP_NS ||
+	    now - native_display_last_swap_ns() < IDLE_DROP_NS)
+		return;
+	if (__atomic_compare_exchange_n(&idle.dropping, &expected, 1, false, __ATOMIC_SEQ_CST,
+					__ATOMIC_SEQ_CST))
+		nvxnu_work_schedule(idle.drop_w);
+}
+
+/* drivers/SwitchPower switch_perf_hint (touch, missed frame, launch): busy now, and back up at once if low. */
+void tegra_gm20b_perf_hint(unsigned int hint)
+{
+	if (!READ_ONCE(idle.on) || hint < 1 || hint > 3)
+		return;
+	__atomic_store_n(&idle.last_busy, nvxnu_nanotime(), __ATOMIC_SEQ_CST);
+	if (READ_ONCE(idle.low))
+		nvxnu_work_schedule(idle.raise_w);
+}
+
+/* chan_fence, after the kick; the nonstall pass (gov_fenced) and channel teardown retire. Counted from boot. */
+static void idle_kicked(void)
+{
+	__atomic_fetch_add(&idle.kicked, 1, __ATOMIC_SEQ_CST);
+}
+
+static void idle_fenced(struct tgm_chan *chan)
+{
+	u32 done = tgm_chan_completed(chan), n = done - chan->gov_done;
+
+	if ((s32)n <= 0)
+		return;
+	chan->gov_done = done;
+	__atomic_fetch_add(&idle.retired, n, __ATOMIC_SEQ_CST);
+}
+
+/* The periodic line (log only), from a kick at most every IDLE_LOG_NS. */
+static void idle_stats(void)
+{
+	u64 now, span, low, sum, max;
+	u32 drops, raises, hinted;
+
+	if (!READ_ONCE(idle.on) || nvxnu_nanotime() - READ_ONCE(idle.log_start) < IDLE_LOG_NS ||
+	    !nvxnu_mutex_trylock(idle.clk))
+		return;
+	now = nvxnu_nanotime();
+	if (now - idle.log_start < IDLE_LOG_NS) {
+		nvxnu_mutex_unlock(idle.clk);
+		return;
+	}
+	span = now - idle.log_start;
+	low = idle.low_ns + (idle.low ? now - idle.low_since : 0);
+	if (idle.low)
+		idle.low_since = now;
+	sum = idle.raise_sum;
+	max = idle.raise_max;
+	drops = idle.drops;
+	raises = idle.raises;
+	hinted = idle.hinted;
+	idle.low_ns = idle.raise_sum = idle.raise_max = 0;
+	idle.drops = idle.raises = idle.hinted = 0;
+	idle.log_start = now;
+	nvxnu_mutex_unlock(idle.clk);
+	nvxnu_stats("tegra-gm20b: idle clock %llu ms: %llu.%llu%% at %u kHz, %u drops, %u raises "
+		    "(%u by a hint), "
+		    "raise mean %llu ns max %llu ns; %llu in flight; now %d kHz",
+		    span / 1000000, low * 100 / span, low * 1000 / span % 10, idle.idle_khz, drops,
+		    raises, hinted, raises ? sum / raises : 0, max, idle_in_flight(),
+		    nvkm_clk_read(gpu.device->clk, nv_clk_src_gpc));
+}
+
+/* GPC 0's clock counter, as clk_measure reads it (NCGPCCLK cycles over 800 cycles of the 38.4 MHz reference, about
+ * 21 us): started, waited for, read. In kHz of what it counts (r15-gpuperf: about twice gpcclk if it counts
+ * gpc2clk). 0 if it could not be read. idle_start only, before any client. */
+static u32 gpc_counted_khz(void)
+{
+	struct nvkm_device *device = gpu.device;
+	u32 cnt;
+
+	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG, NCGPCCLK_CFG_RESET);
+	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG,
+		  NCGPCCLK_CFG_ENABLE | NCGPCCLK_CFG_WRITE_EN | NCGPCCLK_CYCLES);
+	udelay(30);
+	cnt = nvkm_rd32(device, TRIM_GPC0_NCGPCCLK_CNT);
+	return badf(cnt) ? 0
+			 : (u32)((u64)(gk20a_clk(device->clk)->parent_rate / 1000) *
+				 (cnt & 0xfffff) / NCGPCCLK_CYCLES);
+}
+
+/* After stage 3 (no client yet), at the rate clk_raise left: the divider pair, then one drop and raise as a test, each
+ * timed and each rate read back from GPC 0's clock counter. */
+static void idle_start(void)
+{
+	struct nvkm_device *device = gpu.device;
+	u32 coeff = nvkm_rd32(device, GPCPLL_COEFF_R), m = coeff & 0xff, n = (coeff >> 8) & 0xff,
+	    pl = (coeff >> 16) & 0x3f, vco, k, best = 0, i;
+	int run = nvkm_clk_read(device->clk, nv_clk_src_gpc);
+	u64 t0, down, up;
+	u32 at_idle, at_run;
+
+	if (idle.clk || run <= BOOT_KHZ)
+		return; /* tegra-gpu-mhz did not raise it: it already runs the lowest rate */
+	vco = m ? PLL_REF_KHZ * n / m : 0;
+	/* the lowest L4T B01 rate this VCO reaches by its output divider alone (gpcclk = VCO / 2 / PL) */
+	for (i = 0; (k = tegra_gm20b_dvfs_khz(i)); i++)
+		if (k < (u32)run && vco && !(vco % (2 * k)) && vco / (2 * k) <= 31 &&
+		    (!best || k < best))
+			best = k;
+	if (!m || !pl || vco / (2 * pl) != (u32)run || !best) {
+		nvxnu_log("tegra-gm20b: idle clock not used: GPCPLL M %u N %u PL %u (%u kHz VCO) "
+			  "runs %d kHz, "
+			  "no L4T rate below it by the divider alone; the GPU stays at %d kHz\n",
+			  m, n, pl, vco, run, run);
+		return;
+	}
+	idle.run_pl = pl;
+	idle.run_khz = (u32)run;
+	idle.idle_pl = vco / (2 * best);
+	idle.idle_khz = best;
+	idle.clk = nvxnu_mutex_alloc();
+	idle.drop_w = nvxnu_work_alloc(idle_drop, NULL);
+	idle.raise_w = nvxnu_work_alloc(idle_hint_raise, NULL);
+	if (!idle.clk || !idle.drop_w || !idle.raise_w) {
+		nvxnu_log("tegra-gm20b: idle clock not used: no memory; the GPU stays at %d kHz\n",
+			  run);
+		return;
+	}
+	nvxnu_mutex_lock(idle.clk);
+	t0 = nvxnu_nanotime();
+	if (pl_switch(idle.idle_pl) || nvkm_clk_read(device->clk, nv_clk_src_gpc) != (int)best) {
+		idle_fail("test drop", idle.idle_pl);
+		nvxnu_mutex_unlock(idle.clk);
+		return;
+	}
+	down = nvxnu_nanotime() - t0;
+	at_idle = gpc_counted_khz();
+	t0 = nvxnu_nanotime();
+	if (pl_switch(idle.run_pl) || nvkm_clk_read(device->clk, nv_clk_src_gpc) != run) {
+		idle_fail("test raise", idle.run_pl);
+		nvxnu_mutex_unlock(idle.clk);
+		return;
+	}
+	up = nvxnu_nanotime() - t0;
+	at_run = gpc_counted_khz();
+	idle.log_start = nvxnu_nanotime();
+	__atomic_store_n(&idle.last_busy, idle.log_start, __ATOMIC_SEQ_CST);
+	WRITE_ONCE(idle.on, 1);
+	nvxnu_mutex_unlock(idle.clk);
+	nvxnu_log("tegra-gm20b: idle clock: %d kHz while busy, %u kHz after %llu ms with no "
+		  "submission and no "
+		  "swap (GPCPLL M %u N %u: PL %u <-> %u, VCO %u kHz locked throughout, VDD_GPU "
+		  "unchanged); "
+		  "test drop %llu ns (GPC counter %u kHz), raise %llu ns (GPC counter %u kHz)\n",
+		  run, best, IDLE_DROP_NS / 1000000, m, n, pl, idle.idle_pl, vco, down, at_idle, up,
+		  at_run);
+}
+
 /* nouveau_fence_wait_uevent_handler(): a fence's NON_STALL_INTERRUPT arrived; wake the fence waiters. */
 static void present_fenced(struct tgm_chan *chan);
 
@@ -2118,6 +2458,7 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	struct tgm_chan *chan = container_of(event, struct tgm_chan, nonstall);
 	(void)repv;
 	(void)repc;
+	idle_fenced(chan);
 	if (stats_on())
 		stats_fences(chan);
 	if (chan->kernel)
@@ -2359,6 +2700,10 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	/* tearing down a channel that still runs would free pages the GPU is using */
 	if (gpu.stage >= 3 && !chan->error && (s32)(tgm_chan_completed(chan) - chan->submitted) < 0)
 		tgm_chan_hung(chan, "channel destroy", chan->submitted, NSEC_PER_SEC);
+	/* the idle clock's count: what it finished, and (a dead channel) what it never will */
+	idle_fenced(chan);
+	__atomic_fetch_add(&idle.retired, chan->submitted - chan->gov_done, __ATOMIC_SEQ_CST);
+	chan->gov_done = chan->submitted;
 	mutex_lock(&live_lock);
 	list_del(&chan->live);
 	order_forget(chan);
@@ -2691,6 +3036,7 @@ static u32 chan_fence(struct tgm_chan *chan)
 {
 	struct nvif_push *push = &chan->chan.push;
 	u32 next = chan->submitted + 1;
+	idle_wake(); /* backstop: tgm_chan_exec and tgm_present_copy raise it before their first kick */
 	if (l2_on() || chan->kernel) {
 		/* engines idle, their writes committed to the L2 (FB flush: nvgpu gk20a_mm_fb_flush), the L2's dirty lines
 		 * written to DRAM, and those writes committed before the release below. Always on the present channel: its
@@ -2719,6 +3065,8 @@ static u32 chan_fence(struct tgm_chan *chan)
 		WRITE_ONCE(chan->stat_sub_ns[next % CHAN_NSTAMPS], chan->submit_ns);
 	PUSH_KICK(push);
 	chan->submitted = next;
+	idle_kicked();
+	idle_stats();
 	return next;
 }
 
@@ -2741,6 +3089,7 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 		*seqno = chan->submitted;
 		return 0;
 	}
+	idle_wake(); /* the run rate before any of this submission is kicked */
 	/* a push profile (see "push profile"): only with the stats' stamps, one in flight per channel; one whose completion
 	 * the stats' interrupt pass no longer looks at (more than CHAN_NSTAMPS behind) is given up */
 	{
@@ -3106,6 +3455,7 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t
 
 	if (!chan || chan->error)
 		return -ENODEV;
+	idle_wake(); /* the run rate before the copy is kicked */
 	/* dst_va 0: no copy, only the acquires and the fence (direct scanout: the display scans the surface itself once the
 	 * compositor's rendering of it is done) */
 	if (dst_va && (block_height_log2 > 5 || dst_pitch < width * 4))
@@ -3425,6 +3775,7 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		/* Register the host-import coherency backend the kernel's IOSurface lock/unlock hook calls (XNU
 		 * is_io_connect_method, tegra_coherency_register). The GPU does the imports, so it owns the registry. */
 		tegra_coherency_register(tgm_coherency_read_lock, tgm_coherency_write_unlock);
+		idle_start(); /* 768 MHz while busy, 76.8 MHz once truly idle */
 	}
 	return ret;
 }
