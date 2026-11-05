@@ -1,4 +1,4 @@
-// Hardware planes (NativeMobileDisplay/NativePlanes.h, r18-planes) on the host:
+// Hardware planes (NativeMobileDisplay/NativePlanes.h, r18-planes) on the host, one TEST per part:
 //  - every swap Core Animation can build from the published limits is accepted and has a window B image (the rule that
 //    replaces refusals: CA sends a refused swap again every frame), and the ones outside them are refused for their reason;
 //  - window B's register image against the formulas of mainline drm/tegra's tegra_dc_setup_window (DDA 4.12 as
@@ -7,26 +7,33 @@
 //  - which layer is the UI (window A) and which window B shows, in A10X's blend order;
 //  - PlaneLatch against a model of DC A with the ARM copy (assembly -> ARM on UPDATE, ARM -> active at the boundary on
 //    ACT_REQ, a boundary anywhere between the writes): a set the window may scan now or at the next boundary is never free.
+#include <gtest/gtest.h>
+
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
-#include "../drivers/NativeMobileDisplay/NativePlanes.h"
+#include "../NativePlanes.h"
 
 using namespace NativePlanes;
 
 namespace {
-int failures = 0;
-#define CHECK(cond, ...)                                         \
-    do {                                                         \
-        if (!(cond)) {                                           \
-            if (failures++ < 30) {                               \
-                std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-                std::printf(__VA_ARGS__);                        \
-                std::printf("\n");                               \
-            }                                                    \
-        }                                                        \
+__attribute__((format(printf, 1, 2))) std::string format(const char *f, ...)
+{
+    char text[512];
+    va_list ap;
+    va_start(ap, f);
+    std::vsnprintf(text, sizeof(text), f, ap);
+    va_end(ap);
+    return text;
+}
+// A GoogleTest failure at this line, described printf-style; the test goes on.
+#define CHECK(cond, ...)                                   \
+    do {                                                   \
+        if (!(cond)) ADD_FAILURE() << format(__VA_ARGS__); \
     } while (0)
 
 uint64_t rng = 0x9e3779b97f4a7c15ull;
@@ -154,6 +161,9 @@ void testAcceptance()
     }
     std::printf("acceptance: %u of %u swaps within the limits accepted, %u visible\n", accepted, total, visible);
     CHECK(accepted == total && total > 100000, "acceptance %u/%u", accepted, total);
+    // Every one of the 200000 draws is within the limits, and every one is accepted.
+    EXPECT_EQ(total, 200000u);
+    EXPECT_EQ(accepted, 200000u);
 }
 
 void testRefusals()
@@ -384,18 +394,28 @@ void testLatch()
 }
 }  // namespace
 
-int main()
+// One process, in this order: the scenarios draw from one random stream (rng), as the harness always did.
+TEST(DisplayPlanes, AcceptanceWithinThePublishedLimits)
 {
     testAcceptance();
+}
+TEST(DisplayPlanes, RefusalsForTheirReason)
+{
     testRefusals();
+}
+TEST(DisplayPlanes, WindowBImageAgainstDrmTegra)
+{
     testImage();
+}
+TEST(DisplayPlanes, CscAgainstFloatConversions)
+{
     testCsc();
+}
+TEST(DisplayPlanes, LayerRoles)
+{
     testRoles();
+}
+TEST(DisplayPlanes, LatchAgainstDcAModel)
+{
     testLatch();
-    if (failures) {
-        std::printf("%d failures\n", failures);
-        return 1;
-    }
-    std::printf("PASS: display planes\n");
-    return 0;
 }

@@ -1,26 +1,30 @@
 // drivers/TegraSMMU/TegraSMMUDomain.h on the host: entry encodings, table hand-out, identity maps, page maps, translation,
 // limits and dirty tracking; and the tables TegraVIC builds with it, byte for byte against the algorithm TegraVIC used
 // before it moved onto the shared domain (r14-pacing), so VIC's address space is unchanged.
+#include <gtest/gtest.h>
+
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
-#include "../drivers/TegraSMMU/TegraSMMUDomain.h"
+#include "../TegraSMMUDomain.h"
 
 namespace {
-int failures = 0;
-#define CHECK(cond, ...)                                         \
-    do {                                                         \
-        if (!(cond)) {                                           \
-            if (failures++ < 20) {                               \
-                std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-                std::printf(__VA_ARGS__);                        \
-                std::printf("\n");                               \
-            }                                                    \
-        }                                                        \
-    } while (0)
+__attribute__((format(printf, 1, 2))) std::string message(const char *format, ...)
+{
+    char text[512];
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(text, sizeof(text), format, ap);
+    va_end(ap);
+    return text;
+}
+// Every CHECK is a GoogleTest expectation with a printf-formatted message.
+#define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 constexpr uint32_t R = 1u << 31, W = 1u << 30, NS = 1u << 29, NEXT = 1u << 28;
 
@@ -91,15 +95,16 @@ void vicTablesUnchanged()
     struct Case {
         uint64_t tables, fw, fwSize, arena, arenaSize;
     } cases[] = {
-        {0xe1000000, 0xe1200000, 0x14000, 0xe1300000, 1 << 20},   // all in one 4 MiB section
-        {0xf0000000, 0xf03fe000, 0x14000, 0xf07ff000, 1 << 20},   // firmware and arena across section boundaries
-        {0x90000000, 0xa0000000, 0x40000, 0xb0000000, 1 << 20},   // far apart
+        {0xe1000000, 0xe1200000, 0x14000, 0xe1300000, 1 << 20},  // all in one 4 MiB section
+        {0xf0000000, 0xf03fe000, 0x14000, 0xf07ff000, 1 << 20},  // firmware and arena across section boundaries
+        {0x90000000, 0xa0000000, 0x40000, 0xb0000000, 1 << 20},  // far apart
     };
     for (const Case &c : cases) {
         OldVic old(c.tables);
         Buffer now(1 + OldVic::kWindows * OldVic::kWindowTables + OldVic::kIdentityTables, c.tables);
         std::fill(now.words.begin(), now.words.end(), 0);  // contiguous() zeroes VIC's buffer too
-        const bool a = old.setUp(c.fw, c.fwSize, c.arena, c.arenaSize), b = newVic(now, c.fw, c.fwSize, c.arena, c.arenaSize);
+        const bool a = old.setUp(c.fw, c.fwSize, c.arena, c.arenaSize),
+                   b = newVic(now, c.fw, c.fwSize, c.arena, c.arenaSize);
         CHECK(a && b, "VIC set-up failed (old %d new %d) for tables %#llx", a, b, (unsigned long long)c.tables);
         CHECK(old.b.words == now.words, "VIC's tables differ from the old algorithm's for tables at %#llx",
               (unsigned long long)c.tables);
@@ -107,7 +112,8 @@ void vicTablesUnchanged()
     // Out of identity tables: both refuse.
     OldVic old(0xe1000000);
     Buffer now(1 + OldVic::kWindows * OldVic::kWindowTables + OldVic::kIdentityTables, 0xe1000000);
-    const bool a = old.setUp(0x90000000, 0x14000, 0xa0000000, 20ull << 20), b = newVic(now, 0x90000000, 0x14000, 0xa0000000, 20ull << 20);
+    const bool a = old.setUp(0x90000000, 0x14000, 0xa0000000, 20ull << 20),
+               b = newVic(now, 0x90000000, 0x14000, 0xa0000000, 20ull << 20);
     CHECK(!a && !b, "a set-up past the identity tables must fail both ways (old %d new %d)", a, b);
 }
 
@@ -169,14 +175,13 @@ void basics()
 }
 }  // namespace
 
-int main()
+TEST(TegraSMMUDomain, Basics)
 {
     basics();
+}
+
+// The tables TegraVIC builds on the shared domain, byte for byte as TegraVIC built them before (r14-pacing).
+TEST(TegraSMMUDomain, VicTablesUnchanged)
+{
     vicTablesUnchanged();
-    if (failures) {
-        std::printf("FAIL: smmu domain (%d failures)\n", failures);
-        return 1;
-    }
-    std::printf("PASS: smmu domain\n");
-    return 0;
 }

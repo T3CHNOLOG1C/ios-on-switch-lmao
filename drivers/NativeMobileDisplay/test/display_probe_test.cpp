@@ -5,28 +5,31 @@
 // one IOVA slot mapped onto the scanned buffer). Checked: it passes on a working unit and leaves everything as it was; each
 // way it can go wrong fails at its own stage, and every failure leaves window A on the physical address, the swgroup in
 // bypass, the CRC unit off and the pixel restored.
+#include <gtest/gtest.h>
+
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <string>
 #include <map>
+#include <string>
 #include <vector>
 
-#include "../drivers/NativeMobileDisplay/DisplaySmmuProbe.h"
-#include "../drivers/TegraSMMU/TegraSMMUDomain.h"
+#include "../DisplaySmmuProbe.h"
+#include "../../TegraSMMU/TegraSMMUDomain.h"
 
 namespace {
-int failures = 0;
-#define CHECK(cond, ...)                                         \
-    do {                                                         \
-        if (!(cond)) {                                           \
-            if (failures++ < 30) {                               \
-                std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-                std::printf(__VA_ARGS__);                        \
-                std::printf("\n");                               \
-            }                                                    \
-        }                                                        \
-    } while (0)
+__attribute__((format(printf, 1, 2))) std::string message(const char *format, ...)
+{
+    char text[512];
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(text, sizeof(text), format, ap);
+    va_end(ap);
+    return text;
+}
+// Every CHECK is a GoogleTest expectation with a printf-formatted message.
+#define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 constexpr uint64_t kDram = 0x80000000ull, kFrameBytes = 3 * 4096;  // a small frame: three pages
 constexpr uint64_t kBufferPa = 0xf5a00000ull, kOtherPa = 0xc8000000ull, kSlot = 0x10000000ull;
@@ -137,12 +140,13 @@ void expect(Fault f, DisplaySmmuProbe::Stage stage, const char *what, bool lag =
     if (f == kNone)
         CHECK(p.stage == DisplaySmmuProbe::kDone, "%s: ended %s (%s)", what, DisplaySmmuProbe::name(p.stage), p.why);
     else
-        CHECK(p.stage == DisplaySmmuProbe::kFailed && p.failedAt == stage, "%s: ended %s at %s (%s), wanted a failure at %s",
-              what, DisplaySmmuProbe::name(p.stage), DisplaySmmuProbe::name(p.failedAt), p.why,
-              DisplaySmmuProbe::name(stage));
+        CHECK(p.stage == DisplaySmmuProbe::kFailed && p.failedAt == stage,
+              "%s: ended %s at %s (%s), wanted a failure at %s", what, DisplaySmmuProbe::name(p.stage),
+              DisplaySmmuProbe::name(p.failedAt), p.why, DisplaySmmuProbe::name(stage));
     // (a controller that never takes a request still has the last one out: it is for the physical address too)
-    CHECK(m.active == kBufferPa && (!m.request || m.assembly == kBufferPa), "%s: window A left at %#llx (request %d to %#llx)",
-          what, (unsigned long long)m.active, m.request, (unsigned long long)m.assembly);
+    CHECK(m.active == kBufferPa && (!m.request || m.assembly == kBufferPa),
+          "%s: window A left at %#llx (request %d to %#llx)", what, (unsigned long long)m.active, m.request,
+          (unsigned long long)m.assembly);
     CHECK(!m.translated && !m.crcOn && !m.pixelChanged && m.memory[kBufferPa] == before,
           "%s: left translated %d crc %d pixel %d", what, m.translated, m.crcOn, m.pixelChanged);
     std::printf("%-34s %s%s%s\n", what, p.stage == DisplaySmmuProbe::kDone ? "passed" : "failed at ",
@@ -151,25 +155,47 @@ void expect(Fault f, DisplaySmmuProbe::Stage stage, const char *what, bool lag =
 }
 }  // namespace
 
-int main()
+TEST(DisplaySmmuProbe, WorkingUnitPasses)
 {
     expect(kNone, DisplaySmmuProbe::kIdle, "working unit");
+}
+TEST(DisplaySmmuProbe, DeadCrcUnit)
+{
     expect(kDeadCrc, DisplaySmmuProbe::kCrcAgain, "CRC unit reads 0");
+}
+TEST(DisplaySmmuProbe, StuckCrcUnit)
+{
     expect(kStuckCrc, DisplaySmmuProbe::kPixel, "CRC unit stuck");
+}
+TEST(DisplaySmmuProbe, AttachRefused)
+{
     expect(kAttachFails, DisplaySmmuProbe::kAttached, "attach refused");
+}
+TEST(DisplaySmmuProbe, ScannedBufferNotIdentityMapped)
+{
     expect(kNoIdentity, DisplaySmmuProbe::kAttached, "scanned buffer not identity-mapped");
+}
+TEST(DisplaySmmuProbe, SwgroupNotTranslated)
+{
     expect(kNoTranslation, DisplaySmmuProbe::kIova, "swgroup not translated");
+}
+TEST(DisplaySmmuProbe, SlotMappedToOtherPages)
+{
     expect(kWrongSlot, DisplaySmmuProbe::kIova, "slot mapped to other pages");
+}
+TEST(DisplaySmmuProbe, UnderflowThroughTheSmmu)
+{
     expect(kUnderflow, DisplaySmmuProbe::kIova, "underflow through the SMMU");
+}
+TEST(DisplaySmmuProbe, StartAddressNeverTaken)
+{
     expect(kNoLatch, DisplaySmmuProbe::kIova, "start address never taken");
-    // a latched CRC one frame behind: still a pass on a working unit, still caught at the slot
+}
+
+// A latched CRC one frame behind: still a pass on a working unit, still caught at the slot.
+TEST(DisplaySmmuProbe, CrcAFrameLate)
+{
     expect(kNone, DisplaySmmuProbe::kIdle, "working unit, CRC a frame late", true);
     expect(kNoTranslation, DisplaySmmuProbe::kIova, "untranslated, CRC a frame late", true);
     expect(kWrongSlot, DisplaySmmuProbe::kIova, "wrong slot, CRC a frame late", true);
-    if (failures) {
-        std::printf("FAIL: display probe (%d failures)\n", failures);
-        return 1;
-    }
-    std::printf("PASS: display probe\n");
-    return 0;
 }

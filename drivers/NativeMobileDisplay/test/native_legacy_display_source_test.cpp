@@ -1,0 +1,190 @@
+// Guards on NativeLegacyDisplay.cpp for how it drives the code the other tests here and in TegraDisplayFlip/test
+// exercise: those tests run TegraScanoutRing.h, VsyncPhase.h and DisplaySmmuProbe.h against models of DC A, but the
+// display's own wiring (when direct scanout starts, where swaps retire, which registers the vsync phase writes, how the
+// probe is held and aborted) only exists in the driver's source.
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <string>
+
+#include "bazel/testing/source_text.h"
+
+using ioswitch::test::Between;
+using ioswitch::test::SourceText;
+using testing::HasSubstr;
+using testing::Not;
+
+namespace {
+const std::string &display()
+{
+    static const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    return source;
+}
+
+// A member function's body: from its signature to the first line that is just "    }".
+std::string method(const std::string &source, const char *signature)
+{
+    return Between(source, signature, "\n    }\n");
+}
+
+// The text after the first `start` to the end of the file.
+std::string after(const std::string &source, const char *start)
+{
+    const size_t at = source.find(start);
+    if (at == std::string::npos) {
+        ADD_FAILURE() << "not found: " << start;
+        return {};
+    }
+    return source.substr(at + std::string(start).size());
+}
+
+// `first` occurs in `text`, and before `second`.
+void expectBefore(const std::string &text, const char *first, const char *second)
+{
+    const size_t a = text.find(first), b = text.find(second);
+    ASSERT_NE(a, std::string::npos) << first;
+    ASSERT_NE(b, std::string::npos) << second;
+    EXPECT_LT(a, b) << first << " before " << second;
+}
+}  // namespace
+
+// Direct scanout (r14-direct) follows the policy TegraDisplayFlip/test:direct_policy_test proves safe: direct frames
+// only after the SMMU probe passed, a fence-only GPU present per frame, retirement at the latch in queue order never
+// past the frame in flight, no early retire or collapse once direct scanout is on, layouts never replaced across pitch
+// and block-linear.
+TEST(DirectScanoutSource, OnlyAfterTheProbePassed)
+{
+    EXPECT_THAT(method(display(), "    bool startDirect()\n"),
+                HasSubstr("directAttached = directOn = latchRetire = true"));
+    EXPECT_THAT(display(), HasSubstr("d->probe.stage == DisplaySmmuProbe::kDone && d->startDirect()"));
+}
+
+TEST(DirectScanoutSource, FenceOnlyPresentNoRetireAtTheOffer)
+{
+    const std::string offer = method(display(), "    bool offerDirect(");
+    EXPECT_THAT(offer, HasSubstr("TEGRA_SCANOUT_COPY_FENCE_ONLY"));
+    EXPECT_THAT(offer, Not(HasSubstr("retireSwap")));
+}
+
+TEST(DirectScanoutSource, RetireAtTheLatchInQueueOrder)
+{
+    const std::string retire = method(display(), "    void retireThrough(uint64_t seq)\n");
+    EXPECT_THAT(retire, HasSubstr("at > seq"));
+    EXPECT_THAT(retire, HasSubstr("head == gpuRequest"));
+    EXPECT_THAT(display(), HasSubstr("retireThrough(entrySeq[asked])"));
+    EXPECT_THAT(display(), HasSubstr("retireThrough(entrySeq[replaced])"));
+}
+
+TEST(DirectScanoutSource, NoEarlyRetireOrCollapseOnceRetiringAtTheLatch)
+{
+    EXPECT_THAT(display(), HasSubstr("bootEarlyRetire && !latchRetire && retireSwap"));
+    EXPECT_THAT(display(), HasSubstr("asyncCopy == 2 && !latchRetire && retireSwap"));
+    EXPECT_THAT(display(), HasSubstr("if (bootEarlyRetire && !latchRetire) {"));
+    expectBefore(method(display(), "    void finishTransfer("), "if (latchRetire)", "retireSwap");
+}
+
+TEST(DirectScanoutSource, NeverReplacedAcrossLayouts)
+{
+    EXPECT_THAT(method(display(), "    void presentEntry(int i)\n"), HasSubstr("sameLayout(i, ring.pending)"));
+}
+
+// Every flip, latch check and copy target goes through TegraScanoutRing (TegraDisplayFlip/test:scanout_ring_test): the
+// two-buffer state is gone.
+TEST(ScanoutRingSource, DisplayUsesTheRing)
+{
+    EXPECT_THAT(display(), HasSubstr("#include \"../TegraDisplayFlip/TegraScanoutRing.h\""));
+    for (const char *gone : {"flipPending", "front ^ 1", "front ^= 1"}) EXPECT_THAT(display(), Not(HasSubstr(gone)));
+    // r14-direct: scan buffers and direct slots share presentEntry.
+    EXPECT_THAT(method(display(), "    void flip()\n"), HasSubstr("presentEntry(target)"));
+    EXPECT_THAT(method(display(), "    void presentEntry(int i)\n"), HasSubstr("ring.ready("));
+    const std::string check = method(display(), "    void checkFlip(bool atFrameEnd)\n");
+    EXPECT_THAT(check, HasSubstr("ring.latch("));
+    // A flip never taken (a lost frame end) is still one line and a panic.
+    EXPECT_THAT(check, HasSubstr("panic("));
+    // A START_ADDR the model does not explain while flips are replaced is one line and a fallback (never-booted rule);
+    // only once double-buffered again is it the old panic.
+    EXPECT_THAT(check, HasSubstr("recoverFlip("));
+    EXPECT_THAT(check, HasSubstr("if (!ring.replace)"));
+}
+
+// The vsync phase (r17-touch, NativeMobileDisplay/test:vsync_phase_test runs VsyncPhase.h): V_PULSE2 programmed as L4T's
+// tegra_dc_init_vpulse2_int does, through assembly registers only (the flips' own GENERAL_ACT_REQ latches them), at most
+// one vsync a frame, V_BLANK carrying it until V_PULSE2 has fired, a never-firing V_PULSE2 turning the phase off with
+// one line (no panic), and the pacing line's "rate" cause for promptly answered swaps.
+TEST(VsyncPhaseSource, Vpulse2RegistersAsL4T)
+{
+    // L4T dc_reg.h / tegra_dc_init_vpulse2_int (T21x).
+    for (const char *line :
+         {"kVpulse2Int = 1u << 5", "kDcDispSignalOptions0 = 0x400", "kVpulse2Enable = 1u << 19",
+          "kDcDispVpulse2Control = 0x422", "kDcDispVpulse2Position = 0x423", "kVpulse2Last = 1u << 8"})
+        EXPECT_THAT(display(), HasSubstr(line));
+    const std::string registers = method(display(), "    void writePhaseRegisters()");
+    for (const std::string &code : {method(display(), "    void programPhase(uint32_t leadUs)"), registers}) {
+        EXPECT_THAT(code, Not(HasSubstr("kDcStateControl"))) << "the phase never asks for a latch of its own";
+        EXPECT_THAT(code, Not(HasSubstr("kDcRegActControl")));
+    }
+    EXPECT_THAT(registers, HasSubstr("phaseLine | (phaseLine + 1) << 16"));
+}
+
+TEST(VsyncPhaseSource, OneVsyncAFrame)
+{
+    const std::string deliver =
+        method(display(), "    void deliverVsync(uint64_t stamp, uint64_t continuous, uint32_t lead)");
+    EXPECT_THAT(deliver, HasSubstr("if (deliveredFrame == frameEnds) return;"));
+    EXPECT_THAT(method(display(), "    void vblankNotify()"), HasSubstr("if (phaseDelivering()) return;"));
+    EXPECT_THAT(method(display(), "    bool phaseDelivering() const"), HasSubstr("vpulseSeen"));
+    // The irregular gap at a source or line change is never passed on as the interval.
+    EXPECT_THAT(deliver, HasSubstr("!moved && vblankLast"));
+    // A folded action (V_PULSE2 and the frame end together) counts the vsync against that frame, not the next.
+    expectBefore(method(display(), "    void vblankTick()"), "if (status & kVpulse2Int) vpulseNotify();",
+                 "if (status & kFrameEndInt) frameEnds = frameEnds + 1;");
+}
+
+TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
+{
+    const std::string present = method(display(), "    void notePhasePresent(uint64_t stamp, const FrameMark &mark)");
+    EXPECT_THAT(present, HasSubstr("phaseFailed = true;"));
+    EXPECT_THAT(present, Not(HasSubstr("panic("))) << "a V_PULSE2 that never fired costs one line, not the boot";
+    EXPECT_THAT(present, HasSubstr("IOLog(\"IOSwitch display: vsync phase off for this boot"));
+    EXPECT_THAT(method(display(), "    void noteLong(uint32_t frames, const FrameMark &mark)"), HasSubstr("kLongRate"));
+}
+
+TEST(VsyncPhaseSource, ReplacementsAndResume)
+{
+    // noteStatsWindow zeroes stReplaced each window: that is no replacement.
+    expectBefore(after(display(), "    void notePresent(uint64_t stamp, uint64_t latchedAt, const FrameMark &mark)"),
+                 "if (stReplaced < phaseReplacedSeen) phaseReplacedSeen = 0;", "if (stReplaced != phaseReplacedSeen)");
+    // SC7 resets the DC: the phase's registers go back before finishResume's latch request.
+    expectBefore(after(display(), "    bool finishResume()"), "writePhaseRegisters()", "kGeneralActReq | kWinAActReq");
+}
+
+// The display's SMMU probe runs through the same DisplaySmmuProbe::perform that display_probe_test drives, is held but
+// bounded, aborted when the display suspends, stops or goes off, and stays under the flip deadline.
+TEST(DisplayProbeSource, Wiring)
+{
+    EXPECT_THAT(display(), HasSubstr("probe.perform("));
+    EXPECT_THAT(display(), HasSubstr("abortProbe(\"the display suspended (SC7)\")"));
+    EXPECT_THAT(display(), HasSubstr("abortProbe(\"the display stopped\")"));
+    const std::string kick = method(display(), "    void kickOnce()\n");
+    EXPECT_THAT(kick, HasSubstr("(probe.active() || probeRequest) && !releaseProbeHold()"));  // held, but bounded
+    const std::string release = method(display(), "    bool releaseProbeHold()\n");
+    EXPECT_THAT(release, HasSubstr("kProbeHoldMs"));
+    EXPECT_THAT(release, HasSubstr("abortProbe("));
+    // No frame end comes with the scan stopped.
+    EXPECT_THAT(method(display(), "    bool setScanout(bool on)\n"), HasSubstr("abortProbe(\"the display went off\")"));
+}
+
+TEST(DisplayProbeSource, AcceptedSwapTableNeverDropsThePendingHead)
+{
+    const std::string add = method(display(), "    bool addValidated(");
+    EXPECT_THAT(add, Not(HasSubstr("if (slot == 8) slot = 0;")));
+    EXPECT_THAT(add, HasSubstr("validatedAt[i] < validatedAt[slot]"));
+    EXPECT_THAT(method(display(), "    void kickOnce()\n"), HasSubstr("pruneValidated();"));
+}
+
+TEST(DisplayProbeSource, ProbeRequestUnderTheFlipDeadline)
+{
+    // A probe START_ADDR request is under the flip deadline like a flip: a lost DC A interrupt panics, never freezes.
+    EXPECT_THAT(method(display(), "    void checkFlipDeadline()\n"), HasSubstr("!probeRequest"));
+    EXPECT_THAT(Between(display(), "struct ProbeIo", "};"), HasSubstr("flipTimer->setTimeoutMS(kFlipDeadlineMS)"));
+}

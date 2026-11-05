@@ -1,0 +1,80 @@
+# drivers/NativeMobileDisplay on the host:
+#   vsync_phase_test                    VsyncPhase.h (r17-touch) against a model compositor at 60 Hz: r8a's quiet
+#                                       windows, periodic and rare stalls, a 20 Hz client, a copying compositor, one too
+#                                       slow for any phase
+#   display_probe_test                  DisplaySmmuProbe.h against a model of DC A, its CRC unit and the SMMU: passing
+#                                       on a working unit and failing at its own stage, undone, for each fault
+#   request_state_test                  NativeLegacyRequest.h: which swaps the legacy backend shows itself, the fill,
+#                                       the frame scans and colour counts, IOSurface bounds, the bounded row copy
+#   native_legacy_display_source_test   how NativeLegacyDisplay.cpp drives the ring, direct scanout, the vsync phase and
+#                                       the probe (the driver itself is not built for the host)
+#   display_planes_test                 NativePlanes.h (r18-planes): every swap Core Animation can build from the
+#                                       published limits accepted (200000 swaps), the refusals, window B's registers
+#                                       against drm/tegra's formulas, the CSC table, the layer roles, PlaneLatch
+#                                       against a model of DC A with the ARM copy
+#   display_planes_source_test          the driver and XNU follow those rules (validateSwap, the kick, one
+#                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
+#                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
+#
+#   bazel test //drivers/NativeMobileDisplay/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "vsync_phase_test",
+    srcs = [
+        "vsync_phase_test.cpp",
+        "//drivers/NativeMobileDisplay:VsyncPhase.h",
+    ],
+)
+
+host_test(
+    name = "display_probe_test",
+    srcs = [
+        "display_probe_test.cpp",
+        "//drivers/NativeMobileDisplay:DisplaySmmuProbe.h",
+        "//drivers/TegraSMMU:TegraSMMUDomain.h",
+    ],
+    copts = ["-Wno-unused-parameter"],
+)
+
+host_test(
+    name = "request_state_test",
+    srcs = [
+        "request_state_test.cpp",
+        "//drivers/NativeMobileDisplay:NativeLegacyRequest.h",
+    ],
+)
+
+host_test(
+    name = "native_legacy_display_source_test",
+    srcs = ["native_legacy_display_source_test.cpp"],
+    data = ["//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp"],
+)
+
+host_test(
+    name = "display_planes_test",
+    srcs = [
+        "display_planes_test.cpp",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+    ],
+    copts = [
+        "-O1",
+        "-Wno-unused-parameter",
+    ],
+)
+
+host_test(
+    name = "display_planes_source_test",
+    srcs = ["display_planes_source_test.cpp"],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:NativePlanesBindings.S",
+        "//drivers/NativeMobileDisplay:NativePlanesDisplay.inc",
+        "//drivers/TegraVIC:original-bindings.S",
+        "//out/native-a57/root-v1/tree/patches:xnu-ioswitch.diff",
+    ],
+    defines = ['XNU_PATCH=\\"$(rootpath //out/native-a57/root-v1/tree/patches:xnu-ioswitch.diff)\\"'],
+)

@@ -1,0 +1,47 @@
+# drivers/TegraGM20B on the host:
+#   gm20b_pool_policy_test   TegraGM20BPoolPolicy.h (where a coherent BO's memory comes from) over a model of the pool at
+#                            r8a's numbers: Maps' first buffers, refused with 33 MiB of the pool free, now come from system
+#                            memory; MapKit's 4 KiB, the compositor's 16 MiB block, the floor, room for everyone
+#   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
+#                            streams laid out as NVK writes them: every counter, and no profile stamp after a push whose
+#                            method continues, one the kernel could not read or one with an opcode NVK never writes
+#   gm20b_source_test        how the user client and gpu.c use both, the pool's zeroing (nvkm shim, scrubber), and the
+#                            fence-only present (none of which a host model runs)
+#
+#   bazel test //drivers/TegraGM20B/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "gm20b_pool_policy_test",
+    srcs = [
+        "gm20b_pool_policy_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BPoolPolicy.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_push_scan_test",
+    srcs = [
+        "gm20b_push_scan_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BPushScan.h",
+    ],
+    copts = ["-Wno-unused-parameter"],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_source_test",
+    srcs = ["gm20b_source_test.cpp"],
+    # c++20 (not the harnesses' c++17): bazel/testing's headers use string_view and nested namespaces.
+    data = [
+        "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
+        "//drivers/TegraGM20B:gpu.c",
+        "//drivers/TegraGM20B:shim/linux.c",
+        "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+)

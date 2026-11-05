@@ -1,26 +1,21 @@
-// Host test of drivers/NativeMobileDisplay/VsyncPhase.h (test_vsync_phase.py builds and runs it): the adaptive vsync
-// phase against a model compositor at 60 Hz. Each frame boundary latches the newest flip that was asked for before it.
+// Host test of drivers/NativeMobileDisplay/VsyncPhase.h: the adaptive vsync phase against a model compositor at 60 Hz. Each frame boundary latches the newest flip that was asked for before it.
 // The compositor draws when a vsync reaches it (at V_BLANK with no lead, `lead` before the next boundary with one):
 // CPU work, then the swap, then GPU work, then the flip; frames whose flip misses its boundary are shown a frame later or
 // replaced by the next one. Scenarios: r8a's quiet windows (2-3 ms responses), the same with rare 8 ms stalls, a client
 // at 20 Hz (r8a's clock widget), and a compositor that copies (10 ms responses). Checks: latch wait, frames late or lost
 // against no phase, the lead it settles on, the misses it takes, and paced().
+#include <gtest/gtest.h>
+
 #include <cinttypes>
 #include <cstdio>
 #include <random>
 #include <string>
 #include <vector>
-#include "../drivers/NativeMobileDisplay/VsyncPhase.h"
 
-static unsigned gChecks = 0, gFailures = 0;
-static void check(bool ok, const std::string &what)
-{
-    ++gChecks;
-    if (!ok) {
-        ++gFailures;
-        std::fprintf(stderr, "FAIL: %s\n", what.c_str());
-    }
-}
+#include "../VsyncPhase.h"
+
+// Every check is a GoogleTest expectation; its message says what was expected.
+#define check(ok, what) EXPECT_TRUE(ok) << (what)
 
 struct Model {
     double cpuMin, cpuMax, gpuMin, gpuMax;  // ms
@@ -70,7 +65,8 @@ static Result run(const Model &m, bool phase, double seconds, uint64_t seed)
                 if (pending[i].live) {
                     pending[i].live = false;
                     ++r.lost;
-                    if (phase) vp.replaced(pending[i].submit, pending[i].ready, boundary);  // NativeLegacyDisplay's stReplaced
+                    if (phase)
+                        vp.replaced(pending[i].submit, pending[i].ready, boundary);  // NativeLegacyDisplay's stReplaced
                 }
             Flip &fl = pending[newest];
             fl.live = false;
@@ -106,61 +102,67 @@ static void report(const char *name, const Result &off, const Result &on)
                 on.swapToScanMeanMs, on.shown, on.late, on.lost, on.finalLead, on.misses);
 }
 
-int main()
+// r8a quiet windows: queue ~20 us, copy (the compositor's GPU render) 0.1-0.7 ms, and its CPU 1.5-2.5 ms.
+static const Model kQuiet = {1.5, 2.5, 0.1, 0.7};
+
+TEST(VsyncPhase, Quiet)
 {
-    // r8a quiet windows: queue ~20 us, copy (the compositor's GPU render) 0.1-0.7 ms, and its CPU 1.5-2.5 ms.
-    const Model quiet = {1.5, 2.5, 0.1, 0.7};
-    {
-        const Result off = run(quiet, false, 120, 1), on = run(quiet, true, 120, 1);
-        report("quiet", off, on);
-        check(off.latchMeanMs > 12 && off.latchMeanMs < 15, "quiet, no phase: latch ~13 ms as r8a");
-        check(on.latchMeanMs < 4.5, "quiet, phase: latch under 4.5 ms (from ~13)");
-        check(on.finalLead >= 3000 && on.finalLead <= 5500, "quiet: lead settles at p99 + margin, 3-5.5 ms");
-        check(on.misses == 0 && on.late == 0 && on.lost == 0, "quiet: no frame late or lost");
-        check(on.shown + 2 >= off.shown, "quiet: as many frames shown");
-    }
-    // The same with an 8 ms stall one frame in 500: the phase takes at most one late frame per hold-off and backs off.
-    {
-        const Model stalls = {1.5, 2.5, 0.1, 0.7, 500, 8};
-        const Result off = run(stalls, false, 120, 2), on = run(stalls, true, 120, 2);
-        report("stalls", off, on);
-        check(on.misses <= 1, "stalls: the first stall is the only miss (its response joins the peak)");
-        check(on.late + on.lost <= off.late + off.lost + on.misses, "stalls: frames lost only to the misses");
-        check(on.latchMeanMs < off.latchMeanMs - 2, "stalls: the phase still saves part of the wait");
-        check(on.finalLead >= 10000, "stalls: the lead covers the 10.5 ms stalls");
-    }
-    // An 8 ms stall once a minute (rarer than the ~32 s the window peaks remember): the miss floor keeps it to one miss.
-    {
-        const Model rare = {1.5, 2.5, 0.1, 0.7, 3600, 8};
-        const Result off = run(rare, false, 300, 6), on = run(rare, true, 300, 6);
-        report("rare stalls", off, on);
-        check(on.misses <= 2, "rare stalls: at most two misses in 5 minutes");
-        check(on.latchMeanMs < off.latchMeanMs - 2, "rare stalls: the phase still saves part of the wait");
-    }
-    // A client at 20 Hz: three frames apart, every swap prompt after its vsync: paced, not a late compositor.
-    {
-        Model widget = quiet;
-        widget.drawEvery = 3;
-        const Result off = run(widget, false, 90, 3), on = run(widget, true, 90, 3);
-        report("20 Hz client", off, on);
-        check(off.longPresents > 1000 && off.pacedLong == off.longPresents, "20 Hz: every long present is paced");
-        check(on.latchMeanMs < 6 && on.misses == 0 && on.finalLead <= 5500, "20 Hz: the phase works for it too");
-    }
-    // A compositor that copies (9-12 ms responses): room for a short saving only; no frame late or lost for it.
-    {
-        const Model copy = {1.0, 2.0, 8.0, 10.0};
-        const Result off = run(copy, false, 60, 4), on = run(copy, true, 60, 4);
-        report("copying", off, on);
-        check(on.misses == 0 && on.late == 0 && on.lost == 0 && on.shown == off.shown, "copying: no frame late or lost");
-        check(on.latchMeanMs <= off.latchMeanMs, "copying: never a longer wait");
-    }
-    // A compositor slower than the frame allows (14-16 ms): no phase at all.
-    {
-        const Model slow = {2.0, 3.0, 12.0, 13.0};
-        const Result on = run(slow, true, 60, 5);
-        check(on.finalLead == 0 && on.misses == 0, "slow: the phase stays off");
-    }
-    std::printf("vsync phase: %u checks, %u failures\n", gChecks, gFailures);
-    if (!gFailures) std::printf("PASS: vsync phase\n");
-    return gFailures ? 1 : 0;
+    const Result off = run(kQuiet, false, 120, 1), on = run(kQuiet, true, 120, 1);
+    report("quiet", off, on);
+    check(off.latchMeanMs > 12 && off.latchMeanMs < 15, "quiet, no phase: latch ~13 ms as r8a");
+    check(on.latchMeanMs < 4.5, "quiet, phase: latch under 4.5 ms (from ~13)");
+    check(on.finalLead >= 3000 && on.finalLead <= 5500, "quiet: lead settles at p99 + margin, 3-5.5 ms");
+    check(on.misses == 0 && on.late == 0 && on.lost == 0, "quiet: no frame late or lost");
+    check(on.shown + 2 >= off.shown, "quiet: as many frames shown");
+}
+
+// The same with an 8 ms stall one frame in 500: the phase takes at most one late frame per hold-off and backs off.
+TEST(VsyncPhase, Stalls)
+{
+    const Model stalls = {1.5, 2.5, 0.1, 0.7, 500, 8};
+    const Result off = run(stalls, false, 120, 2), on = run(stalls, true, 120, 2);
+    report("stalls", off, on);
+    check(on.misses <= 1, "stalls: the first stall is the only miss (its response joins the peak)");
+    check(on.late + on.lost <= off.late + off.lost + on.misses, "stalls: frames lost only to the misses");
+    check(on.latchMeanMs < off.latchMeanMs - 2, "stalls: the phase still saves part of the wait");
+    check(on.finalLead >= 10000, "stalls: the lead covers the 10.5 ms stalls");
+}
+
+// An 8 ms stall once a minute (rarer than the ~32 s the window peaks remember): the miss floor keeps it to one miss.
+TEST(VsyncPhase, RareStalls)
+{
+    const Model rare = {1.5, 2.5, 0.1, 0.7, 3600, 8};
+    const Result off = run(rare, false, 300, 6), on = run(rare, true, 300, 6);
+    report("rare stalls", off, on);
+    check(on.misses <= 2, "rare stalls: at most two misses in 5 minutes");
+    check(on.latchMeanMs < off.latchMeanMs - 2, "rare stalls: the phase still saves part of the wait");
+}
+
+// A client at 20 Hz: three frames apart, every swap prompt after its vsync: paced, not a late compositor.
+TEST(VsyncPhase, TwentyHzClient)
+{
+    Model widget = kQuiet;
+    widget.drawEvery = 3;
+    const Result off = run(widget, false, 90, 3), on = run(widget, true, 90, 3);
+    report("20 Hz client", off, on);
+    check(off.longPresents > 1000 && off.pacedLong == off.longPresents, "20 Hz: every long present is paced");
+    check(on.latchMeanMs < 6 && on.misses == 0 && on.finalLead <= 5500, "20 Hz: the phase works for it too");
+}
+
+// A compositor that copies (9-12 ms responses): room for a short saving only; no frame late or lost for it.
+TEST(VsyncPhase, CopyingCompositor)
+{
+    const Model copy = {1.0, 2.0, 8.0, 10.0};
+    const Result off = run(copy, false, 60, 4), on = run(copy, true, 60, 4);
+    report("copying", off, on);
+    check(on.misses == 0 && on.late == 0 && on.lost == 0 && on.shown == off.shown, "copying: no frame late or lost");
+    check(on.latchMeanMs <= off.latchMeanMs, "copying: never a longer wait");
+}
+
+// A compositor slower than the frame allows (14-16 ms): no phase at all.
+TEST(VsyncPhase, SlowCompositor)
+{
+    const Model slow = {2.0, 3.0, 12.0, 13.0};
+    const Result on = run(slow, true, 60, 5);
+    check(on.finalLead == 0 && on.misses == 0, "slow: the phase stays off");
 }

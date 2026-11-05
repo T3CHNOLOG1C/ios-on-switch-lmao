@@ -11,24 +11,28 @@
 //  - against a controller that ignores a START_ADDR store while a request is out (one way DC A could differ from the model),
 //    the first replacement reads as inconsistent, recover() falls back to double buffering once, and every check above but
 //    the latest-frame one keeps holding, with presents going on.
+#include <gtest/gtest.h>
+
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
-#include "../drivers/TegraDisplayFlip/TegraScanoutRing.h"
+#include "../TegraScanoutRing.h"
 
 namespace {
-int failures = 0;
-#define CHECK(cond, ...)                                    \
-    do {                                                    \
-        if (!(cond)) {                                      \
-            if (failures++ < 20) {                          \
-                std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-                std::printf(__VA_ARGS__);                   \
-                std::printf("\n");                          \
-            }                                               \
-        }                                                   \
-    } while (0)
+__attribute__((format(printf, 1, 2))) std::string message(const char *format, ...)
+{
+    char text[512];
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(text, sizeof(text), format, ap);
+    va_end(ap);
+    return text;
+}
+// Every CHECK is a GoogleTest expectation with a printf-formatted message.
+#define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 uint64_t state = 0x9e3779b97f4a7c15ull;
 unsigned rnd(unsigned n)
@@ -61,14 +65,15 @@ struct Sim {
     Dc dc;
     unsigned buffers;
     uint64_t seq[TegraScanoutRing::kMaxBuffers] = {};  // the frame each buffer holds
-    uint64_t arrived = 0;       // swaps so far; a swap's number is its arrival
-    uint64_t newestQueued = 0;  // the newest swap waiting in the family's queue (the older ones are collapsed when it goes)
-    unsigned queued = 0;        // swaps waiting in the family's queue
+    uint64_t arrived = 0;                              // swaps so far; a swap's number is its arrival
+    uint64_t newestQueued =
+        0;                // the newest swap waiting in the family's queue (the older ones are collapsed when it goes)
+    unsigned queued = 0;  // swaps waiting in the family's queue
     bool forceAsync = false, torn = true;  // torn: boundaries may land between a flip's stores
     int copying = TegraScanoutRing::kNone;
     bool deferred = false;
-    uint64_t readyBefore = 0;   // the newest frame whose flip was complete (both stores) since the last boundary
-    uint64_t mustShow = 0;      // the newest frame that must be on screen now
+    uint64_t readyBefore = 0;        // the newest frame whose flip was complete (both stores) since the last boundary
+    uint64_t mustShow = 0;           // the newest frame that must be on screen now
     unsigned boundariesPending = 0;  // boundaries the frame-end action has not handled yet
     uint64_t shown = 0, replaced = 0, collapsed = 0, waited = 0, boundaries = 0, latePresents = 0, holds = 0;
     unsigned recoveries = 0;
@@ -87,8 +92,9 @@ struct Sim {
         dc.boundary();
         ++boundaries;
         if (readyBefore > mustShow) mustShow = readyBefore;
-        CHECK(dc.deviant || seq[dc.active] >= mustShow, "boundary %llu scans frame %llu, but frame %llu was ready before it",
-              (unsigned long long)boundaries, (unsigned long long)seq[dc.active], (unsigned long long)mustShow);
+        CHECK(dc.deviant || seq[dc.active] >= mustShow,
+              "boundary %llu scans frame %llu, but frame %llu was ready before it", (unsigned long long)boundaries,
+              (unsigned long long)seq[dc.active], (unsigned long long)mustShow);
         CHECK(copying == TegraScanoutRing::kNone || dc.active != copying, "buffer %d scanned while being copied into",
               copying);
         ++boundariesPending;
@@ -101,8 +107,9 @@ struct Sim {
     void write(int t)
     {
         CHECK(t != TegraScanoutRing::kNone, "no target");
-        CHECK(!latchable(t), "frame written into buffer %d, which DC A scans (%d) or may take (assembly %d, request %d)", t,
-              dc.active, dc.assembly, dc.request);
+        CHECK(!latchable(t),
+              "frame written into buffer %d, which DC A scans (%d) or may take (assembly %d, request %d)", t, dc.active,
+              dc.assembly, dc.request);
     }
     // NativeLegacyDisplay::writeFlip: START_ADDR, then UPDATE and ACT_REQ.
     void writeFlip(int t)
@@ -124,8 +131,7 @@ struct Sim {
             ++replaced;
             CHECK(buffers == 3 && ring.replace, "a flip was replaced with %u buffers or after the fallback", buffers);
             break;
-        case TegraScanoutRing::kFlip:
-            break;
+        case TegraScanoutRing::kFlip: break;
         }
         writeFlip(t);
     }
@@ -179,7 +185,8 @@ struct Sim {
         const TegraScanoutRing::Latch latch = ring.latch(dc.active, dc.request);
         switch (latch) {
         case TegraScanoutRing::kTaken:
-            CHECK(dc.active == pending && ring.front == pending, "taken but DC A scans %d (pending %d)", dc.active, pending);
+            CHECK(dc.active == pending && ring.front == pending, "taken but DC A scans %d (pending %d)", dc.active,
+                  pending);
             ++shown;
             break;
         case TegraScanoutRing::kTakenReplaced:
@@ -194,8 +201,9 @@ struct Sim {
                   dc.active, front);
             break;
         case TegraScanoutRing::kInconsistent:
-            CHECK(dc.deviant && ring.replace, "inconsistent: active %d request %d assembly %d, ring front %d pending %d superseded %d",
-                  dc.active, dc.request, dc.assembly, front, pending, superseded);
+            CHECK(dc.deviant && ring.replace,
+                  "inconsistent: active %d request %d assembly %d, ring front %d pending %d superseded %d", dc.active,
+                  dc.request, dc.assembly, front, pending, superseded);
             if (ring.replace) {  // NativeLegacyDisplay::recoverFlip: one line, then double buffering
                 ++recoveries;
                 shownAtRecovery = shown;
@@ -205,8 +213,8 @@ struct Sim {
             }
             return;
         }
-        CHECK(ring.front == dc.active || latch == TegraScanoutRing::kWaiting, "ring front %d, DC A scans %d", ring.front,
-              dc.active);
+        CHECK(ring.front == dc.active || latch == TegraScanoutRing::kWaiting, "ring front %d, DC A scans %d",
+              ring.front, dc.active);
         if (latch != TegraScanoutRing::kWaiting) {
             const int held = ring.flipHeld();
             if (held != TegraScanoutRing::kNone) writeFlip(held);
@@ -227,17 +235,11 @@ struct Sim {
                 break;
             case 2:
             case 3:
-            case 4:
-                arrive();
-                break;
+            case 4: arrive(); break;
             case 5:
             case 6:
-            case 7:
-                copyDone();
-                break;
-            default:
-                frameEndAction();
-                break;
+            case 7: copyDone(); break;
+            default: frameEndAction(); break;
             }
         }
     }
@@ -264,7 +266,7 @@ unsigned lateFramesAfterOneSlip(unsigned buffers)
 }
 }  // namespace
 
-int main()
+TEST(ScanoutRing, TwoAndThreeBuffers)
 {
     for (unsigned buffers = 2; buffers <= 3; ++buffers) {
         for (unsigned seed = 1; seed <= 200; ++seed) {
@@ -275,10 +277,17 @@ int main()
             if (buffers == 2) CHECK(s.replaced == 0, "double buffering replaced a flip");
             if (buffers == 3 && seed == 1)
                 std::printf("3 buffers: %llu shown, %llu replaced, %llu collapsed, %llu waited of %llu boundaries\n",
-                            (unsigned long long)s.shown, (unsigned long long)s.replaced, (unsigned long long)s.collapsed,
-                            (unsigned long long)s.waited, (unsigned long long)s.boundaries);
+                            (unsigned long long)s.shown, (unsigned long long)s.replaced,
+                            (unsigned long long)s.collapsed, (unsigned long long)s.waited,
+                            (unsigned long long)s.boundaries);
         }
     }
+}
+
+// A controller that ignores a START_ADDR store while a request is out: one fallback to double buffering per run, in
+// every run, and presents going on after it.
+TEST(ScanoutRing, DeviantControllerFallsBackOnce)
+{
     unsigned recovered = 0;
     for (unsigned seed = 1; seed <= 200; ++seed) {
         state = 0x51ed27f1u * seed;
@@ -294,14 +303,15 @@ int main()
     }
     std::printf("deviant controller: fell back to double buffering in %u of 200 runs\n", recovered);
     CHECK(recovered > 150, "the deviant controller should force the fallback (%u)", recovered);
+    EXPECT_EQ(recovered, 200u) << "fell back to double buffering in 200 of 200 runs";
+}
+
+// One late frame: three buffers recover at the next boundary, two stay a frame behind (the r7q pattern).
+TEST(ScanoutRing, OneLateFrame)
+{
+    state = 0x9e3779b97f4a7c15ull;
     const unsigned late2 = lateFramesAfterOneSlip(2), late3 = lateFramesAfterOneSlip(3);
     std::printf("after one late frame: %u late frames with two buffers, %u with three\n", late2, late3);
     CHECK(late2 > 20, "two buffers should stay a frame behind after a slip (%u)", late2);
     CHECK(late3 == 0, "three buffers should recover at the next boundary (%u)", late3);
-    if (failures) {
-        std::printf("FAIL: scanout ring (%d failures)\n", failures);
-        return 1;
-    }
-    std::printf("PASS: scanout ring\n");
-    return 0;
 }

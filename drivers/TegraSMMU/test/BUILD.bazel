@@ -1,0 +1,26 @@
+# drivers/TegraSMMU, the SMMU the display, VIC and the GPU share, on the host:
+#   smmu_domain_test          TegraSMMUDomain.h's entries, tables and translation, and the tables TegraVIC builds with it
+#                             byte for byte against the algorithm TegraVIC had before (r14-pacing)
+#   smmu_owner_source_test    only TegraSMMU.cpp programs the MC's global SMMU registers (reads every driver's C++)
+#
+#   bazel test //drivers/TegraSMMU/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "smmu_domain_test",
+    srcs = [
+        "smmu_domain_test.cpp",
+        "//drivers/TegraSMMU:TegraSMMUDomain.h",
+    ],
+    copts = ["-Wno-unused-parameter"],
+)
+
+# Every driver source: any driver's edit reruns this one (it is about all of them; it takes well under a second).
+host_test(
+    name = "smmu_owner_source_test",
+    srcs = ["smmu_owner_source_test.cpp"],
+    data = ["//kernel:lint_sources"],
+)

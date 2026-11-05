@@ -7,25 +7,29 @@
 //  - frames keep coming (no deadlock with three surfaces) at the display rate when CA keeps up, each on screen at the first
 //    boundary after its rendering finished (latest frame wins);
 //  - the copy path's early retire (at the offer) applied to direct frames does break the first rule (negative control).
+#include <gtest/gtest.h>
+
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <string>
 #include <vector>
 
-#include "../drivers/TegraDisplayFlip/TegraScanoutRing.h"
+#include "../TegraScanoutRing.h"
 
 namespace {
-int failures = 0;
-#define CHECK(cond, ...)                                         \
-    do {                                                         \
-        if (!(cond)) {                                           \
-            if (failures++ < 20) {                               \
-                std::printf("FAIL %s:%d: ", __FILE__, __LINE__); \
-                std::printf(__VA_ARGS__);                        \
-                std::printf("\n");                               \
-            }                                                    \
-        }                                                        \
-    } while (0)
+__attribute__((format(printf, 1, 2))) std::string message(const char *format, ...)
+{
+    char text[512];
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(text, sizeof(text), format, ap);
+    va_end(ap);
+    return text;
+}
+// Every CHECK is a GoogleTest expectation with a printf-formatted message.
+#define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 uint64_t rng = 0x243f6a8885a308d3ull;
 unsigned rnd(unsigned n)
@@ -74,7 +78,8 @@ struct Sim {
     void complete(const Swap &s)
     {
         ++completions;
-        if (lastCompletedSurface != UINT64_MAX && lastCompletedSurface != s.surface) caFree[lastCompletedSurface] = true;
+        if (lastCompletedSurface != UINT64_MAX && lastCompletedSurface != s.surface)
+            caFree[lastCompletedSurface] = true;
         lastCompletedSurface = s.surface;
     }
     Swap *find(uint64_t id)
@@ -98,9 +103,10 @@ struct Sim {
             const int entry = kSlot0 + (int)surface;
             if (latchable(entry) || ring.busy(entry)) {
                 ++violations;  // CA draws into a surface DC A scans, may take, or the ring holds
-                CHECK(earlyRetire, "CA drew into surface %u: active %d assembly %d request %d front %d pending %d "
-                      "superseded %d held %d", surface, active, assembly, request, ring.front, ring.pending,
-                      ring.superseded, ring.held);
+                CHECK(earlyRetire,
+                      "CA drew into surface %u: active %d assembly %d request %d front %d pending %d "
+                      "superseded %d held %d",
+                      surface, active, assembly, request, ring.front, ring.pending, ring.superseded, ring.held);
             }
             caFree[surface] = false;
             queue.push_back({nextId++, surface, 0, tick, tick + renderTicks + (renderJitter ? rnd(renderJitter) : 0)});
@@ -179,8 +185,7 @@ struct Sim {
         case TegraScanoutRing::kInconsistent:
             CHECK(false, "inconsistent latch: active %d assembly %d request %d", active, assembly, request);
             break;
-        case TegraScanoutRing::kWaiting:
-            return;
+        case TegraScanoutRing::kWaiting: return;
         }
         if (deferred) {
             deferred = false;
@@ -194,7 +199,8 @@ struct Sim {
         for (unsigned f = 0; f < frames; ++f) {
             for (unsigned t = 0; t < kTicks; ++t, ++tick) {
                 if (t == 0) {
-                    const uint64_t ready = lastReadyId;  // the newest frame whose rendering finished before this boundary
+                    const uint64_t ready =
+                        lastReadyId;  // the newest frame whose rendering finished before this boundary
                     boundary();
                     if (ready && f > 10) {
                         ++measured;
@@ -211,9 +217,10 @@ struct Sim {
 };
 }  // namespace
 
-int main()
+// CA keeps up: rendering takes a quarter frame.
+TEST(DirectPolicy, FastCoreAnimation)
 {
-    // CA keeps up: rendering takes a quarter frame.
+    rng = 0x243f6a8885a308d3ull;
     Sim fast(false);
     fast.run(2000);
     std::printf("fast: %llu presents, %llu completions in 2000 frames, %llu of %llu on screen at the first boundary\n",
@@ -222,8 +229,11 @@ int main()
     CHECK(fast.presents > 1900, "fast CA: only %llu presents", (unsigned long long)fast.presents);
     CHECK(fast.onTime == fast.measured, "fast CA: a ready frame was not on screen at the next boundary");
     CHECK(!fast.violations, "fast CA: %llu violations", (unsigned long long)fast.violations);
+}
 
-    // CA sometimes late: rendering 2 to 30 ticks (up to two frames), replacements happen.
+// CA sometimes late: rendering 2 to 30 ticks (up to two frames), replacements happen.
+TEST(DirectPolicy, LateCoreAnimation)
+{
     for (unsigned seed = 1; seed <= 50; ++seed) {
         rng = 0x9e3779b97f4a7c15ull * seed;
         Sim slow(false);
@@ -234,8 +244,11 @@ int main()
         CHECK(slow.presents > 300, "seed %u: only %llu presents (deadlock?)", seed, (unsigned long long)slow.presents);
         CHECK(slow.completions + slow.queue.size() + 0 >= slow.nextId - 1 - 3, "seed %u: swaps lost", seed);
     }
+}
 
-    // Negative control: early retire on direct frames lets CA draw into a scanned surface.
+// Negative control: early retire on direct frames lets CA draw into a scanned surface.
+TEST(DirectPolicy, EarlyRetireIsCaught)
+{
     uint64_t bad = 0;
     for (unsigned seed = 1; seed <= 20; ++seed) {
         rng = 0x51ed27f1ull * seed;
@@ -247,11 +260,4 @@ int main()
     }
     std::printf("negative control (retire at the offer): %llu draws into a scanned surface\n", (unsigned long long)bad);
     CHECK(bad > 0, "early retire should be caught drawing into a scanned surface");
-
-    if (failures) {
-        std::printf("FAIL: direct policy (%d failures)\n", failures);
-        return 1;
-    }
-    std::printf("PASS: direct policy\n");
-    return 0;
 }

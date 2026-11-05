@@ -1,0 +1,34 @@
+# drivers/TegraDisplayFlip/TegraScanoutRing.h (window A's scanout buffers, latest frame wins) on the host:
+#   scanout_ring_test    the ring against a model of DC A's frame-boundary latch: no frame written into a buffer DC A
+#                        scans or may take, a ready frame on screen at the next boundary, every latch state read right,
+#                        one late frame no longer leaving every later frame a frame behind (it does with two buffers),
+#                        one fallback to double buffering against a controller that ignores a replaced START_ADDR
+#   direct_policy_test   direct scanout's replace/retire policy (r14-direct) against Core Animation's three framebuffers
+#                        and their recycling on swap completion; retire-at-offer is caught as the hazard
+# NativeLegacyDisplay's use of both is guarded in drivers/NativeMobileDisplay/test.
+#
+#   bazel test //drivers/TegraDisplayFlip/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+RING = "//drivers/TegraDisplayFlip:TegraScanoutRing.h"
+
+host_test(
+    name = "scanout_ring_test",
+    srcs = [
+        "scanout_ring_test.cpp",
+        RING,
+    ],
+    copts = ["-Wno-unused-parameter"],
+)
+
+host_test(
+    name = "direct_policy_test",
+    srcs = [
+        "direct_policy_test.cpp",
+        RING,
+    ],
+    copts = ["-Wno-unused-parameter"],
+)
