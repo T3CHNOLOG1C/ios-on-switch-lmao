@@ -1,0 +1,24 @@
+# XNU xnu-10063.141.1 (apple-oss-distributions/xnu, commit d8b80295118e), vendored: Apple's files as Apple has them,
+# under the Apple Public Source License 2.0 (APPLE_LICENSE) and the notices in each file. Only BUILD.bazel and .bzl
+# files in this tree are ours.
+load("//bazel/lint:defs.bzl", "lint_files")
+
+# XNU's own files keep XNU's style: nothing of theirs is formatted or linted, only our Starlark.
+lint_files(exclude = [
+    "**/*.py",
+    "**/*.c",
+    "**/*.cc",
+    "**/*.cpp",
+    "**/*.h",
+    "**/*.hpp",
+    "**/*.inc",
+    "**/*.m",
+    "**/*.mm",
+    "**/*.rs",
+    "**/*.sh",
+    "**/*.md",
+    "**/*.json",
+    "**/*.toml",
+    "**/.clang-format",
+    "**/.clang-tidy",
+])
