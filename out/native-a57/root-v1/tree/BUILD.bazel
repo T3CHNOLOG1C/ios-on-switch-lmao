@@ -591,6 +591,20 @@ kernel_driver(
     },
 )
 
+# TegraNVJPG: the NVJPG falcon (JPEG codec 1.0) as the system's hardware JPEG decoder (the AppleJPEGDriver service and
+# its AppleJPEGDriverUserClient, which CMPhoto and VideoToolbox's JPEG decoder open): its SMMU domain, job engine, boot
+# self-test (J0..J4) against libjpeg-turbo's decode of embedded JPEGs, and user client; firmware by .incbin.
+kernel_driver(
+    name = "TegraNVJPG",
+    srcs = [
+        "TegraNVJPG.cpp",
+        "TegraNVJPGSelfTest.cpp",
+        "TegraNVJPGUserClient.cpp",
+        "firmware.S",
+    ],
+    stems = {"firmware.S": "nvjpg_firmware"},
+)
+
 # Host checks of driver code: each compiles the driver's sources with Xcode's clang for the Mac and runs them.
 py_test(
     name = "keywrap_test",
@@ -740,6 +754,7 @@ kernel_archive(
         ":TegraNVENC",
         ":TegraSMMU",
         ":TegraVIC",
+        ":TegraNVJPG",
         ":SwitchUSB",
     ],
 )

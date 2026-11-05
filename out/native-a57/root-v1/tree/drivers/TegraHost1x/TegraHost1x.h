@@ -23,11 +23,12 @@ enum {
     TEGRA_HOST1X_ELOST = -5,       // the threshold was reached but its interrupt never came (before strict mode only)
 };
 
-// Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._NVENC, ..._VIC, ..._NVDEC).
+// Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._NVENC, ..._VIC, ..._NVJPG, ..._NVDEC).
 enum {
     TEGRA_HOST1X_CLASS_HOST1X = 0x01,
     TEGRA_HOST1X_CLASS_NVENC = 0x21,
     TEGRA_HOST1X_CLASS_VIC = 0x5d,
+    TEGRA_HOST1X_CLASS_NVJPG = 0xc0,
     TEGRA_HOST1X_CLASS_NVDEC = 0xf0,
 };
 
@@ -85,7 +86,10 @@ void tegra_host1x_resume(void);
 
 // The exports the sleep agent (drivers/SwitchSuspend) calls: the registered clients' quiesce then host1x's suspend,
 // and host1x's resume then the clients' reload. With nothing registered (NVDEC off) they are host1x alone, which is a
-// no-op unless host1x is up. TegraNVDEC, TegraNVENC and TegraVIC register once their engines run (three at most).
+// no-op unless host1x is up. TegraNVDEC, TegraNVENC, TegraVIC and TegraNVJPG register once their engines run (four at
+// most; a fifth is refused with a log line and its engine is then not reloaded after SC7). Clients quiesce in the
+// reverse order of registration and reload in order, so an engine that registers after NVDEC (NVJPG, whose MBIST
+// workaround runs on NVDEC's clock) finds NVDEC already back.
 void tegra_host1x_set_sleep_client(void (*suspend)(void), void (*resume)(void));
 void tegra_nvdec_suspend(void);
 void tegra_nvdec_resume(void);

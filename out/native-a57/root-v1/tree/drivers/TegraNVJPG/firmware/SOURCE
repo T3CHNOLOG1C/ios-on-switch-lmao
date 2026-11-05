@@ -1,0 +1,12 @@
+linux-firmware main (commit bdeb9f0f 2026-10-13 "nvidia: Update and add missing firmware files for Tegra SoCs",
+Mikko Perttunen, NVIDIA), gitlab.com/kernel-firmware/linux-firmware, checked 2026-11-05.
+File: nvidia/tegra210/nvjpg.bin (WHENCE: Driver tegra-nvjpg, Version l4t-r32.7.6), sha256
+85bec091379f6bfd5873e9b657396065024e39b11e72c6f7f86e49a30aa830fe, 16640 bytes.
+Byte-identical to /lib/firmware/tegra21x/nvhost_nvjpg010.fw in NVIDIA's nvidia-l4t-firmware 32.7.6-20241104234540
+(repo.download.nvidia.com/jetson/t210): the image L4T's nvhost nvjpg driver and Linux drm/tegra nvjpg.c (tegra210,
+"nvidia/tegra210/nvjpg.bin") boot non-securely with falcon_boot. Taken from linux-firmware, not the L4T package, for
+the licence: linux-firmware distributes it under LICENCE.nvidia (WHENCE: Redistributable); the L4T package's EULA
+limits redistribution to OSI-licensed operating systems.
+Layout (falcon bin header v1): OS header at 0x100, OS data at 0x200 (0x3f00 bytes): code 0x0+0x300, data 0x3d00+0x200,
+13 apps the OS loads itself through DMATRFBASE; no FCE section (header word 6 is 0xa5a5a5a5).
+Licence: LICENCE.nvidia, the same file as TegraNVDEC/firmware/LICENCE.nvidia.

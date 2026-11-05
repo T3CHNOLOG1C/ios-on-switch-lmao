@@ -9,3 +9,4 @@ drivers/TegraNVDEC/selftest/VP9Picture160.inc
 drivers/TegraNVDEC/selftest/HEVCPicture176.inc
 drivers/SwitchVideoDecoders/test/vp9gen/vpx_config.h
 drivers/TegraNVENC/selftest/E3Vectors.inc
+drivers/TegraNVJPG/selftest/J3Vectors.inc

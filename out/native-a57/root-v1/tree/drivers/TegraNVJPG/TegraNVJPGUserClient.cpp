@@ -1,0 +1,730 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// J4: the AppleJPEGDriver service. CMPhoto (ImageIO's JPEG decodes, UIKit's eager decompression, Photos and its
+// thumbnails) and JPEGH1.videodecoder (VideoToolbox 'jpeg') open IOServiceMatching("AppleJPEGDriver") and talk to its
+// AppleJPEGDriverUserClient; this puts NVJPG behind that pair. The contract (drivers/TegraNVJPG/CONTRACT.md) was read
+// from 21H461: the callers in the dyld cache and Apple's com.apple.driver.AppleJPEGDriver 6.6.2 in the kernelcache.
+//
+// The classes are ours and carry Apple's names: com.apple.driver.AppleJPEGDriver is not in this kernel's prelinked set
+// (nothing among its roots depends on it, and no prelinked kext's OSBundleLibraries names it), so the names are free.
+// Matching (IOServiceMatching is by class) and the sandbox (iokit-open filters by user-client class) go by them, so
+// every process Apple's own profiles let open the client gets it, and no other. The service's registry name is
+// TegraNVJPG, not its class name: JPEGH1.videoencoder registers VideoToolbox's hardware 'jpeg' encoders only if
+// IOServiceNameMatching("AppleJPEGDriver") finds a service, and NVJPG's encoder is not driven here.
+//
+//   sel 1  decode (0x58 bytes in and out), sel 5 decode with Apple's codec extensions (0x1000): the JPEG file in the
+//          source IOSurface (looked up in the caller's task, like Apple's driver), the picture into the destination
+//          IOSurface in its pixel format ('420f', 'BGRA', 'RGBA', 32ARGB), at the request's DCT scale and offset. The
+//          kernel parses the file (TegraNVJPGJpeg.h; Apple's hardware parses the stream itself, so userland sends no
+//          tables) and plans the decode (TegraNVJPGRequest.h) in the calling thread: a refusal is the call's own
+//          result, kIOReturnUnsupported for what NVJPG (or this unit, per its self-test) does not do and
+//          kIOReturnBadArgument for a request that contradicts the file or the surfaces; CMPhoto then decodes that
+//          image on the CPU, JPEGH1 that frame in software. Accepted requests are queued for the engine thread in
+//          order. Without a callback (+0x30) the call sleeps until its decode is done and returns its status; with one
+//          it returns once queued and the result comes back as an IOKit async completion on the port registered with
+//          IOConnectSetNotificationPort: callback(refcon +0x38, status, context +0x40).
+//   sel 0, 2  no-ops (Apple's). sel 3, 4, 6 encode and sel 7 the 2024 decode: kIOReturnUnsupported (CMPhoto's unified
+//          encoder falls back to its software encoder, __encodeBuffer 0x1aaeebef4). sel 8, 9 power on/off: Apple's
+//          entitlement com.apple.applejpegdriver.poweron, else kIOReturnError, as Apple's; with it a no-op.
+//
+// Per decode, in the calling thread: the source wired (IOSurface::prepare), its headers read and parsed, its scan
+// copied into a kernel buffer (the only CPU work proportional to the file: compressed bytes, a few per cent of the
+// picture's); on the engine thread: the destination wired and mapped page by page into NVJPG's output window (past its
+// last page a sink page takes the MCU padding the plan allowed), the scan's buffer into the input window, the
+// destination's cache lines cleaned and invalidated, the decode run (host1x OP_DONE syncpoint, by interrupt), the
+// destination invalidated again for CPU readers, the windows emptied, the surfaces completed and released.
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOLib.h>
+#include <IOKit/IOLocks.h>
+#include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOService.h>
+#include <IOKit/IOUserClient.h>
+#include <kern/clock.h>
+#include <kern/thread.h>
+#include <os/log.h>
+#include <string.h>
+#include "../TegraVIC/TegraVICSurface.h"
+#include "TegraNVJPG.h"
+#include "TegraNVJPGRequest.h"
+
+extern "C" {
+vm_offset_t phystokv(uint64_t pa);
+boolean_t pmap_valid_page(ppnum_t pn);
+}
+
+class AppleJPEGDriverUserClient;
+
+namespace {
+constexpr uint32_t kMaxConnections = 1000;  // Apple's limit (newUserClient: opens minus closes >= 1001 refused)
+constexpr uint32_t kQueueMax = 16;
+constexpr uint64_t kSinkBytes = 1ull << 20;   // MCU padding past a destination's last page (15 rows of 64 KiB)
+constexpr uint32_t kHeaderChunk = 128 << 10;  // headers read first (APP segments: EXIF, ICC, XMP)
+constexpr uint32_t kHeaderMax = 4 << 20;      // ... and at most this far, if the first chunk ends before SOS
+const uint32_t kOutPages = (uint32_t)(kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_OUT] >> 12);
+const uint32_t kInPages = (uint32_t)(kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_IN] >> 12);
+
+uint64_t *gOutList, *gInList;  // the engine thread's page lists
+TegraNVJPGBuffer gSink;        // one arena page, mapped for every sink entry
+volatile uint32_t gConnections;
+IOLock *gQueueLock;
+
+uint64_t nowUs()
+{
+    uint64_t ns;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    return ns / 1000;
+}
+
+IOReturn ioreturn(int err)
+{
+    switch (err) {
+    case 0: return kIOReturnSuccess;
+    case -12: return kIOReturnNoMemory;
+    case -22: return kIOReturnBadArgument;
+    case -60: return kIOReturnTimeout;
+    case -19: return kIOReturnNotReady;
+    default: return kIOReturnIOError;
+    }
+}
+
+// Stats for the unified log: one line per 5 s window with work (boot console stays quiet).
+struct {
+    uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
+} gStats;
+const char *gRefusals[32];  // reasons already logged once
+IOLock *gStatsLock;
+bool gFirstLogged;
+
+void refused(const char *why)
+{
+    IOLockLock(gStatsLock);
+    gStats.refused++;
+    bool seen = false;
+    uint32_t i = 0;
+    for (; i < 32 && gRefusals[i]; i++) seen = seen || gRefusals[i] == why;
+    if (!seen && i < 32) gRefusals[i] = why;
+    IOLockUnlock(gStatsLock);
+    if (!seen)
+        IOLog("TegraNVJPG: decode refused (first of its kind this boot; the caller decodes on the CPU): %s\n", why);
+}
+
+void statsLine()
+{
+    IOLockLock(gStatsLock);
+    const uint64_t now = nowUs();
+    if (!gStats.windowStart) gStats.windowStart = now;
+    if (now - gStats.windowStart < 5000000 || !(gStats.decodes + gStats.refused)) {
+        IOLockUnlock(gStatsLock);
+        return;
+    }
+    char line[220];
+    const uint64_t n = gStats.decodes ? gStats.decodes : 1;
+    snprintf(line, sizeof(line),
+             "TegraNVJPG: %llus decodes=%llu refused=%llu failed=%llu engine=%lluus/decode cpu=%lluus/decode "
+             "pixels=%lluK/decode scan=%lluKB/decode",
+             (now - gStats.windowStart) / 1000000, gStats.decodes, gStats.refused, gStats.failed, gStats.engineUs / n,
+             gStats.cpuUs / n, gStats.pixels / n / 1000, gStats.bytes / n / 1024);
+    bzero(&gStats, sizeof(gStats));
+    gStats.windowStart = now;
+    IOLockUnlock(gStatsLock);
+    os_log(OS_LOG_DEFAULT, "%s", line);
+}
+
+struct Job {
+    Job *next;
+    AppleJPEGDriverUserClient *client;  // retained by async jobs until their completion is sent
+    TegraVICSurface dst;
+    TegraNVJPGPlan plan;
+    TegraNVJPGJob engine;
+    IOBufferMemoryDescriptor *bits;  // the scan, copied
+    uint32_t bitPages;
+    uint64_t cpuUs;
+    bool async;
+    OSAsyncReference64 ref;
+    uint64_t context;
+    IOReturn status;
+    uint32_t bytesUsed, cycles;
+    uint64_t engineUs;
+    bool done;
+};
+Job *gHead, *gTail;
+uint32_t gQueued;
+
+void dropJob(Job *job)
+{
+    tegra_vic_surface_release(&job->dst);
+    OSSafeReleaseNULL(job->bits);
+    IODelete(job, Job, 1);
+}
+
+// The CPU's part of a grey picture into '420f': neutral chroma over the picture's rows, written through the physical
+// aperture of the destination's pages (wired, listed in gOutList), cleaned to DRAM for readers that do not snoop.
+void fillChroma(const TegraNVJPGPlan &p, uint32_t pages)
+{
+    uint64_t ctr;
+    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
+    for (uint64_t row = 0; row < p.fillRows; row++) {
+        for (uint64_t at = p.fillStart + row * p.fillPitch, end = at + p.fillRowBytes; at < end;) {
+            const uint32_t page = (uint32_t)(at >> 12);
+            const uint64_t stop = ((at >> 12) + 1) << 12 < end ? ((at >> 12) + 1) << 12 : end;
+            if (page >= pages || !pmap_valid_page((ppnum_t)(gOutList[page] >> 12))) return;  // the plan bounded it
+            uint8_t *va = (uint8_t *)phystokv(gOutList[page]) + (at & 0xfff);
+            memset(va, 0x80, stop - at);
+            for (uintptr_t a = (uintptr_t)va & ~(line - 1); a < (uintptr_t)va + (stop - at); a += line)
+                __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
+            at = stop;
+        }
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
+// Engine thread: one decode.
+IOReturn runJob(Job *job)
+{
+    const TegraNVJPGPlan &p = job->plan;
+    uint32_t pages = 0;
+    const uint64_t surfaceBytes = (job->dst.desc.length + 0xfff) & ~0xfffull;
+    IOReturn ret = tegra_vic_surface_prepare(&job->dst, job->dst.desc.length, gOutList, kOutPages, &pages);
+    if (ret) return ret == kIOReturnNotAligned ? kIOReturnIOError : ret;
+    // Sink entries for the MCU padding the plan allowed past the surface's pages.
+    uint32_t mapped = pages;
+    while (((uint64_t)mapped << 12) < p.writeEnd && mapped < kOutPages) gOutList[mapped++] = gSink.pa;
+    if (((uint64_t)mapped << 12) < p.writeEnd || surfaceBytes > ((uint64_t)pages << 12)) {
+        tegra_vic_surface_complete(&job->dst);
+        return kIOReturnBadArgument;
+    }
+    for (uint32_t i = 0; i < job->bitPages; i++) {
+        IOByteCount length = 0;
+        gInList[i] = job->bits->getPhysicalSegment((IOByteCount)i << 12, &length, kIOMemoryMapperNone) & ~0xfffull;
+    }
+    gInList[job->bitPages] = gSink.pa;  // the engine may read a little past the scan's end
+    tegra_nvjpg_lock();
+    const uint64_t out = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_OUT, gOutList, mapped, true);
+    const uint64_t in = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_IN, gInList, job->bitPages + 1, false);
+    if (!out || !in) ret = kIOReturnNoSpace;
+    // NVJPG does not snoop the CPU's caches: no dirty line of the destination may be written back over the picture.
+    if (!ret) tegra_nvjpg_cache_flush_pages(gOutList, pages);
+    nvjpg_dec_status status = {};
+    uint64_t busy = 0;
+    if (!ret) {
+        job->engine.bitstream = in;
+        for (uint32_t i = 0; i < p.planes; i++) job->engine.plane[i] = out + p.planeStart[i];
+        ret = ioreturn(tegra_nvjpg_run(&job->engine, &status, &busy));
+        if (!ret && (status.error_status || !status.bytes_offset)) ret = kIOReturnIOError;
+    }
+    // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
+    tegra_nvjpg_cache_flush_pages(gOutList, pages);
+    tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_OUT);
+    tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_IN);
+    tegra_nvjpg_unlock();
+    if (!ret && p.fillChroma) fillChroma(p, pages);
+    tegra_vic_surface_complete(&job->dst);
+    job->engineUs = busy;
+    job->bytesUsed = status.bytes_offset;
+    job->cycles = status.reserved0;  // the cycle count (DUMP_CYCLE_COUNT)
+    if (ret == kIOReturnIOError && status.error_status)
+        IOLog("TegraNVJPG: decode error %#x after %u bytes (MCU %u,%u) of a %ux%u picture\n", status.error_status,
+              status.bytes_offset, status.mcu_x, status.mcu_y, (unsigned)job->engine.setup.frame_width,
+              (unsigned)job->engine.setup.frame_height);
+    return ret;
+}
+
+void finish(Job *job);
+
+void engineThread(void *, wait_result_t)
+{
+    for (;;) {
+        IOLockLock(gQueueLock);
+        while (!gHead) IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
+        Job *job = gHead;
+        gHead = job->next;
+        if (!gHead) gTail = nullptr;
+        gQueued--;
+        IOLockWakeup(gQueueLock, &gQueued, false);
+        IOLockUnlock(gQueueLock);
+        job->status = runJob(job);
+        IOLockLock(gStatsLock);
+        gStats.decodes++;
+        if (job->status) gStats.failed++;
+        gStats.engineUs += job->engineUs;
+        gStats.cpuUs += job->cpuUs;
+        gStats.pixels += (uint64_t)job->plan.extent.width * job->plan.extent.height;
+        gStats.bytes += job->engine.setup.bitstream_size;
+        const bool first = !job->status && !gFirstLogged;
+        gFirstLogged = gFirstLogged || first;
+        IOLockUnlock(gStatsLock);
+        if (first)
+            IOLog("TegraNVJPG: first hardware decode done: %ux%u to %ux%u (format %u, 1/%u) in %llu us engine (%u "
+                  "cycles), %llu us CPU\n",
+                  (unsigned)job->engine.setup.frame_width, (unsigned)job->engine.setup.frame_height,
+                  job->plan.extent.width, job->plan.extent.height, job->plan.target.format,
+                  1u << job->plan.target.scale, job->engineUs, job->cycles, job->cpuUs);
+        statsLine();
+        finish(job);
+    }
+}
+
+void queueJob(Job *job)
+{
+    IOLockLock(gQueueLock);
+    while (gQueued >= kQueueMax) IOLockSleep(gQueueLock, &gQueued, THREAD_UNINT);
+    job->next = nullptr;
+    if (gTail)
+        gTail->next = job;
+    else
+        gHead = job;
+    gTail = job;
+    gQueued++;
+    IOLockWakeup(gQueueLock, &gHead, false);
+    IOLockUnlock(gQueueLock);
+}
+
+// The source: wired for the copy, its headers parsed from a first chunk, the scan copied into a kernel buffer whose
+// pages the input window maps (EOI appended when the file has none). The scan runs from the SOS header to EOI or the
+// data's end (the source's size may be its whole allocation: trailing bytes are cut at EOI).
+const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img, Job *job, IOReturn *ret)
+{
+    *ret = kIOReturnBadArgument;
+    if (size < 4 || size > src->desc.length) return "source size";
+    const uint32_t pageCount = (uint32_t)((size + 0xfff) >> 12);
+    uint64_t *pages = IONewData(uint64_t, pageCount);
+    if (!pages) {
+        *ret = kIOReturnNoMemory;
+        return "no memory";
+    }
+    uint32_t count = 0;
+    *ret = tegra_vic_surface_prepare(src, size, pages, pageCount, &count);
+    IODeleteData(pages, uint64_t, pageCount);
+    if (*ret == kIOReturnNotAligned) *ret = kIOReturnUnsupported;  // never NotAligned: CMPhoto would copy and retry
+    if (*ret) return "source not wired";
+    const char *why = nullptr;
+    uint32_t chunk = (uint32_t)(size < kHeaderChunk ? size : kHeaderChunk);
+    uint8_t *head = nullptr;
+    for (;;) {
+        head = IONewData(uint8_t, chunk);
+        if (!head || src->memory->readBytes(0, head, chunk) != chunk) {
+            *ret = kIOReturnNoMemory;
+            why = "source read";
+            break;
+        }
+        why = tegra_nvjpg_parse_headers(head, chunk, img);
+        if (!why || chunk == size || chunk >= kHeaderMax) break;
+        IODeleteData(head, uint8_t, chunk);
+        head = nullptr;
+        chunk = (uint32_t)(size < kHeaderMax ? size : kHeaderMax);  // headers past the first chunk: read further
+    }
+    if (head) IODeleteData(head, uint8_t, chunk);
+    if (why) {
+        if (*ret != kIOReturnNoMemory) *ret = kIOReturnUnsupported;
+        tegra_vic_surface_complete(src);
+        return why;
+    }
+    const uint64_t scan = size - img->scanOffset;
+    if (scan + 2 > kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_IN] - 4096) {
+        tegra_vic_surface_complete(src);
+        *ret = kIOReturnUnsupported;
+        return "scan larger than the 64 MiB input window";
+    }
+    job->bits = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionOut, scan + 2, 4096);
+    if (!job->bits || job->bits->prepare() != kIOReturnSuccess ||
+        src->memory->readBytes(img->scanOffset, job->bits->getBytesNoCopy(), scan) != scan) {
+        tegra_vic_surface_complete(src);
+        *ret = kIOReturnNoMemory;
+        return "scan copy";
+    }
+    tegra_vic_surface_complete(src);
+    uint8_t *bytes = (uint8_t *)job->bits->getBytesNoCopy();
+    TegraNVJPGImage scanned = *img;
+    scanned.scanOffset = 0;
+    if ((why = tegra_nvjpg_scan_end(bytes, scan, &scanned))) {
+        *ret = kIOReturnUnsupported;
+        return why;
+    }
+    uint32_t used = scanned.scanEnd;
+    if (!scanned.eoi) bytes[used++] = 0xff, bytes[used++] = 0xd9;
+    tegra_nvjpg_cache_clean(bytes, used);
+    img->scanEnd = img->scanOffset + scanned.scanEnd;
+    img->eoi = scanned.eoi;
+    job->engine.setup.bitstream_size = (int)used;
+    job->bitPages = (uint32_t)((used + 0xfff) >> 12);
+    *ret = kIOReturnSuccess;
+    return nullptr;
+}
+
+TegraNVJPGAbility ability()
+{
+    const TegraNVJPGTraits *t = tegra_nvjpg_traits();
+    return TegraNVJPGAbility{t->formats, t->chroma, t->scales, t->clipped ? 1u : 0u, t->greyRgb ? 1u : 0u};
+}
+}  // namespace
+
+// --- The user client ---------------------------------------------------------------------------------------------
+class AppleJPEGDriverUserClient : public IOUserClient {
+    OSDeclareDefaultStructors(AppleJPEGDriverUserClient)
+
+        IOLock *lock_ = nullptr;
+    task_t task_ = nullptr;
+    mach_port_t port_ = MACH_PORT_NULL;
+    uint32_t pending_ = 0;
+    bool counted_ = false, powerEntitled_ = false;
+
+    IOReturn decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize, bool ext);
+
+public:
+    bool setUp(task_t task);
+    void finished(Job *job);
+    IOReturn clientClose() APPLE_KEXT_OVERRIDE;
+    void free() APPLE_KEXT_OVERRIDE;
+    IOReturn registerNotificationPort(mach_port_t port, UInt32 type, UInt32 refCon) APPLE_KEXT_OVERRIDE;
+    IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
+                            OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
+};
+OSDefineMetaClassAndStructors(AppleJPEGDriverUserClient, IOUserClient)
+
+    namespace
+{
+    void finish(Job * job)
+    {
+        job->client->finished(job);
+    }
+}  // namespace
+
+bool AppleJPEGDriverUserClient::setUp(task_t task)
+{
+    task_ = task;
+    counted_ = true;
+    // Apple's client (init 0x52d1c) reads this entitlement for selectors 8 and 9 only.
+    OSObject *entitled = IOUserClient::copyClientEntitlement(task, "com.apple.applejpegdriver.poweron");
+    powerEntitled_ = entitled == kOSBooleanTrue;
+    OSSafeReleaseNULL(entitled);
+    return (lock_ = IOLockAlloc()) != nullptr;
+}
+
+// Engine thread: a job is done. Async: the completion to the registered port; sync: wake the caller.
+void AppleJPEGDriverUserClient::finished(Job *job)
+{
+    if (job->async) {
+        io_user_reference_t argument = job->context;
+        IOUserClient::sendAsyncResult64(job->ref, job->status, &argument, 1);
+        dropJob(job);
+        IOLockLock(lock_);
+        pending_--;
+        IOLockWakeup(lock_, &pending_, false);
+        IOLockUnlock(lock_);
+        release();
+        return;
+    }
+    IOLockLock(lock_);
+    job->done = true;
+    IOLockWakeup(lock_, job, false);
+    IOLockUnlock(lock_);
+}
+
+IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize, bool ext)
+{
+    const uint64_t began = nowUs();
+    union {
+        TegraNVJPGDecodeRequest base;
+        TegraNVJPGDecodeRequestExt ext;
+    } *req = (decltype(req))IOMallocData(sizeof(*req));  // 4 KiB: not on the kernel stack
+    if (!req) return kIOReturnNoMemory;
+    memcpy(req, in, inSize);
+    const TegraNVJPGDecodeRequest &r = req->base;
+    IOReturn ret = kIOReturnSuccess;
+    const char *why = nullptr;
+    Job *job = IONewZero(Job, 1);
+    TegraVICSurface src = {};
+    TegraNVJPGImage img;
+    if (!job) ret = kIOReturnNoMemory;
+    if (!ret && ext && req->ext.crop) {
+        ret = kIOReturnUnsupported;
+        why = "cropped decode (selector 5 crop rectangle)";
+    }
+    // Surfaces in the caller's task, as Apple's driver looks them up (not the task that opened the connection).
+    if (!ret && (tegra_vic_surface_lookup(r.src_id, current_task(), &src) ||
+                 tegra_vic_surface_lookup(r.dst_id, current_task(), &job->dst))) {
+        ret = kIOReturnBadArgument;
+        why = "surface ID not found for this task";
+    }
+    if (!ret && src.desc.protection) {
+        ret = kIOReturnNotPermitted;  // Apple's 0xe00002e2 for a protected source
+        why = "protected source";
+    }
+    // The destination formats NVJPG writes, before any copying: under the interchange formats CMPhoto also asks for
+    // 422f, 444f and yuvf, the commonest refusal, which must cost no more than this.
+    if (!ret) {
+        const uint32_t f = job->dst.desc.fourcc;
+        if (f != TEGRA_NVJPG_FOURCC('4', '2', '0', 'f') && f != TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A') &&
+            f != TEGRA_NVJPG_FOURCC('R', 'G', 'B', 'A') && f != 0x20) {
+            ret = kIOReturnUnsupported;
+            why = "destination pixel format (NVJPG writes 420f, BGRA, RGBA, ARGB)";
+        }
+    }
+    if (!ret) {
+        const uint64_t size = ext ? r.src_size : (r.src_size < src.desc.length ? r.src_size : src.desc.length);
+        why = readSource(&src, size, &img, job, &ret);
+    }
+    tegra_vic_surface_release(&src);
+    if (!ret && job->dst.desc.length + kSinkBytes > kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_OUT]) {
+        ret = kIOReturnUnsupported;
+        why = "destination larger than the 255 MiB output window";
+    }
+    if (!ret) {
+        TegraNVJPGSurface d = {};
+        const TegraVICSurfaceDesc &v = job->dst.desc;
+        d.fourcc = v.fourcc, d.width = v.width, d.height = v.height, d.planes = v.planes;
+        for (uint32_t i = 0; i < 2; i++) {
+            d.planeOffset[i] = v.planeOffset[i];
+            d.planeBytesPerRow[i] = v.planeBytesPerRow[i];
+            d.planeHeight[i] = v.planeHeight[i];
+        }
+        d.length = v.length;
+        d.protection = v.protection;
+        const TegraNVJPGAbility a = ability();
+        uint32_t kind = 0;
+        why = tegra_nvjpg_plan(&r, &img, &d, &a, kSinkBytes, &job->plan, &kind);
+        if (why) ret = kind == TEGRA_NVJPG_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
+    }
+    if (!ret) {
+        const int bytes = job->engine.setup.bitstream_size;
+        tegra_nvjpg_setup_image(&img, (uint32_t)bytes, &job->engine.setup);
+        const char *outWhy = tegra_nvjpg_setup_output(&img, &job->plan.target, !ability().clipped, &job->engine.setup,
+                                                      &job->plan.extent);
+        if (outWhy) {
+            ret = kIOReturnUnsupported;
+            why = outWhy;
+        }
+        job->engine.planes = job->plan.planes;
+        job->engine.pixels = (uint64_t)img.mcusX * img.mcuW * img.mcusY * img.mcuH;
+    }
+    if (ret) {
+        if (why) refused(why);
+        statsLine();
+        if (job) dropJob(job);
+        IOFreeData(req, sizeof(*req));
+        return ret;
+    }
+    job->cpuUs = nowUs() - began;
+    job->async = r.callback != 0;
+    job->context = r.context;
+    IOLockLock(lock_);
+    const mach_port_t port = port_;
+    pending_++;
+    IOLockUnlock(lock_);
+    if (job->async) {
+        IOUserClient::setAsyncReference64(job->ref, port, r.callback, r.refcon, task_);
+        retain();  // the job holds the connection until its completion is sent
+    }
+    job->client = this;
+    const bool async = job->async;
+    queueJob(job);
+    if (async) {
+        IOFreeData(req, sizeof(*req));
+        return kIOReturnSuccess;  // the job is the engine thread's now
+    }
+    IOLockLock(lock_);
+    while (!job->done) IOLockSleep(lock_, job, THREAD_UNINT);
+    pending_--;
+    IOLockWakeup(lock_, &pending_, false);
+    IOLockUnlock(lock_);
+    ret = job->status;
+    // The output: the request back (CMPhoto reads Ext out+0x14/+0x18), with Apple's result words (startDecoder
+    // 0x46330: +0x4c 0 for a decode, +0x50/+0x54 codec registers userland does not read) and, for selector 5, the
+    // engine's time and cycles (startDecoderExt: +0x70 microseconds, +0x74 cycles).
+    if (out && *outSize >= inSize) {
+        memcpy(out, req, inSize);
+        uint32_t *words = (uint32_t *)out;
+        words[0x4c / 4] = 0;
+        words[0x50 / 4] = 0;
+        words[0x54 / 4] = 0;
+        if (ext) {
+            words[0x70 / 4] = (uint32_t)job->engineUs;
+            words[0x74 / 4] = job->cycles;
+        }
+        *outSize = inSize;
+    }
+    dropJob(job);
+    IOFreeData(req, sizeof(*req));
+    return ret;
+}
+
+IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *a,
+                                                   IOExternalMethodDispatch *dispatch, OSObject *target,
+                                                   void *reference)
+{
+    (void)dispatch, (void)target, (void)reference;
+    if (!a || a->structureInputDescriptor || a->structureOutputDescriptor || a->scalarInputCount ||
+        a->scalarOutputCount)
+        return kIOReturnBadArgument;
+    // Apple's IOExternalMethodDispatch2022 table: exact struct sizes, in == out.
+    static const uint32_t kSize[10] = {0, 0x58, 0, 0x58, 0x1000, 0x1000, 0xda0, 0xda0, 0, 0};
+    if (selector >= 10) return kIOReturnBadArgument;
+    if (a->structureInputSize != kSize[selector] ||
+        (a->structureOutputSize != kSize[selector] && a->structureOutputSize != 0))
+        return kIOReturnBadArgument;
+    switch (selector) {
+    case 0:
+    case 2: return kIOReturnSuccess;
+    case 1:
+    case 5: {
+        if (!tegra_nvjpg_ready()) return kIOReturnNotReady;
+        uint32_t outSize = a->structureOutputSize;
+        const IOReturn ret = decode(a->structureInput, a->structureInputSize, outSize ? a->structureOutput : nullptr,
+                                    &outSize, selector == 5);
+        a->structureOutputSize = outSize;
+        return ret;
+    }
+    case 8:
+    case 9: return powerEntitled_ ? kIOReturnSuccess : kIOReturnError;
+    default: return kIOReturnUnsupported;  // 3, 4, 6 encode; 7 the 2024 decode
+    }
+}
+
+// Apple's (0x531f4): the port is kept whatever the type; a second, different port is refused.
+IOReturn AppleJPEGDriverUserClient::registerNotificationPort(mach_port_t port, UInt32 type, UInt32 refCon)
+{
+    (void)type, (void)refCon;
+    IOLockLock(lock_);
+    const bool busy = port_ != MACH_PORT_NULL && port_ != port;
+    if (!busy) port_ = port;
+    IOLockUnlock(lock_);
+    if (busy) {
+        IOUserClient::releaseNotificationPort(port);
+        return kIOReturnError;
+    }
+    return kIOReturnSuccess;
+}
+
+// Queued decodes hold the connection; closing waits for them (each is bounded by the engine), so no completion
+// outlives the port it answers on. Sync callers close right after their call returns.
+IOReturn AppleJPEGDriverUserClient::clientClose()
+{
+    IOLockLock(lock_);
+    while (pending_) IOLockSleep(lock_, &pending_, THREAD_UNINT);
+    IOLockUnlock(lock_);
+    terminate();
+    return kIOReturnSuccess;
+}
+
+void AppleJPEGDriverUserClient::free()
+{
+    if (port_ != MACH_PORT_NULL) IOUserClient::releaseNotificationPort(port_);
+    port_ = MACH_PORT_NULL;
+    if (lock_) IOLockFree(lock_);
+    lock_ = nullptr;
+    if (counted_) __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
+    IOUserClient::free();
+}
+
+// --- The service -------------------------------------------------------------------------------------------------
+class AppleJPEGDriver : public IOService {
+OSDeclareDefaultStructors(AppleJPEGDriver)
+
+    public : IOReturn newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
+                                    IOUserClient **handler) APPLE_KEXT_OVERRIDE;
+    IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE
+    {
+        (void)properties;
+        return kIOReturnUnsupported;
+    }
+};
+OSDefineMetaClassAndStructors(AppleJPEGDriver, IOService)
+
+    // Apple's (0x43f08) ignores `type`, securityID and properties and checks no entitlement: any process the sandbox
+    // lets open the client gets one, up to 1000 open at a time.
+    IOReturn AppleJPEGDriver::newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
+                                            IOUserClient **handler)
+{
+    if (!tegra_nvjpg_ready()) return kIOReturnNotReady;
+    if (__atomic_add_fetch(&gConnections, 1, __ATOMIC_SEQ_CST) > kMaxConnections) {
+        __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
+        return kIOReturnNoResources;
+    }
+    AppleJPEGDriverUserClient *client = OSTypeAlloc(AppleJPEGDriverUserClient);
+    if (!client || !client->initWithTask(task, securityID, type, properties)) {
+        if (client) client->release();
+        __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
+        return kIOReturnNoMemory;
+    }
+    if (!client->setUp(task) || !client->attach(this)) {  // from setUp on, free() gives the slot back
+        client->release();
+        return kIOReturnNoMemory;
+    }
+    if (!client->start(this)) {
+        client->detach(this);
+        client->release();
+        return kIOReturnError;
+    }
+    *handler = client;
+    return kIOReturnSuccess;
+}
+
+namespace {
+void number(IOService *s, const char *key, uint32_t value)
+{
+    s->setProperty(key, (unsigned long long)value, 32);  // 32-bit: JPEGH1 reads AppleJPEGNumCores with size 4
+}
+}  // namespace
+
+extern "C" int tegra_nvjpg_publish(void)
+{
+    const TegraNVJPGTraits *t = tegra_nvjpg_traits();
+    gQueueLock = IOLockAlloc();
+    gStatsLock = IOLockAlloc();
+    gOutList = IONewData(uint64_t, kOutPages);
+    gInList = IONewData(uint64_t, kInPages);
+    if (!gQueueLock || !gStatsLock || !gOutList || !gInList || tegra_nvjpg_buffer(4096, &gSink) ||
+        !tegra_vic_surface_start()) {
+        IOLog("TegraNVJPG: J4 FAIL no memory for the service, or no IOCoreSurfaceRoot\n");
+        return -12;
+    }
+    thread_t thread;
+    if (kernel_thread_start(engineThread, nullptr, &thread) != KERN_SUCCESS) {
+        IOLog("TegraNVJPG: J4 FAIL could not start the engine thread\n");
+        return -12;
+    }
+    thread_deallocate(thread);
+    IOService *resources = IOService::getResourceService();
+    AppleJPEGDriver *service = OSTypeAlloc(AppleJPEGDriver);
+    if (!resources || !service || !service->init()) {
+        OSSafeReleaseNULL(service);
+        IOLog("TegraNVJPG: J4 FAIL could not create the service\n");
+        return -12;
+    }
+    // Apple's properties (start 0x433b8), as NVJPG has them: one core (CMPhoto's two-core strip decode needs two and
+    // RST logging), DCT scaling as proven, missing EOI (the copy appends one), the "interchange" formats (BGRA, RGBA
+    // and 4:2:2/4:4:4 input; CMPhoto's automatic mode, which ImageIO uses, takes the hardware only with them), no
+    // 12-bit or compressed formats, no MCU alignment requirement (read by the encoder only).
+    const bool rgb = (t->formats >> TEGRA_NVJPG_OUT_BGRA & 1) && (t->formats >> TEGRA_NVJPG_OUT_RGBA & 1);
+    number(service, "AppleJPEGNumCores", 1);
+    number(service, "AppleJPEGRequiresMCUAlignment", 0);
+    number(service, "AppleJPEGSupportsDCTScaling", t->scales == 0xf ? 1 : 0);
+    number(service, "AppleJPEGSupportsRSTLogging", 0);
+    number(service, "AppleJPEGSupportsMissingEOI", 1);
+    number(service, "AppleJPEGSupportsAppleInterchangeFormats", rgb ? 1 : 0);
+    number(service, "AppleJPEGSupports12BitsFormat", 0);
+    number(service, "AppleJPEGSupportsCompressedInterchangeFormats", 0);
+    number(service, "TegraNVJPGFormats", t->formats);
+    number(service, "TegraNVJPGSampling", t->chroma);
+    number(service, "TegraNVJPGScales", t->scales);
+    service->setProperty("TegraNVJPGWritesClipped", t->clipped);
+    service->setProperty("IOUserClientClass", "AppleJPEGDriverUserClient");
+    service->setName("TegraNVJPG");  // not "AppleJPEGDriver": JPEGH1.videoencoder name-matches it (see the top)
+    if (!service->attach(resources)) {
+        service->release();
+        IOLog("TegraNVJPG: J4 FAIL could not attach the service\n");
+        return -12;
+    }
+    if (!service->start(resources)) {
+        service->detach(resources);
+        service->release();
+        IOLog("TegraNVJPG: J4 FAIL could not start the service\n");
+        return -12;
+    }
+    service->registerService();
+    IOLog("TegraNVJPG: J4 ok AppleJPEGDriver published (user client AppleJPEGDriverUserClient; formats %#x, sampling "
+          "%#x, scales %#x, interchange formats %u, writes %s)\n",
+          t->formats, t->chroma, t->scales, rgb ? 1u : 0u, t->clipped ? "clipped" : "whole MCUs");
+    service->release();  // the attachment keeps it
+    return 0;
+}

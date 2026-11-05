@@ -453,24 +453,43 @@ extern "C" void tegra_host1x_resume(void)
 }
 
 // The sleep agent's hooks (SwitchSuspend calls them in thread context, interrupts on). They live here, in the file
-// that is always built, so they exist whether or not NVDEC is; NVDEC, NVENC and VIC register their quiesce and reload
-// once they are up. Clients quiesce in the reverse order of registration and reload in order.
+// that is always built, so they exist whether or not NVDEC is; NVDEC, NVENC, VIC and NVJPG register their quiesce and
+// reload once they are up. Clients quiesce in the reverse order of registration and reload in order.
+// Registration may race (each engine registers from its own bring-up thread), so it is serialised by a lock: the
+// entry is written, then published by a release store of the count the sleep agent reads, so the agent never calls a
+// half-written entry and a fifth client can never write past the table. (Before NVJPG, three clients shared a
+// check-then-increment that two racing registrations could both pass.)
 namespace {
-constexpr uint32_t kSleepClients = 3;
+constexpr uint32_t kSleepClients = 4;
 struct SleepClient {
     void (*suspend)(void), (*resume)(void);
 } gSleepClients[kSleepClients];
 uint32_t gSleepClientCount;
+
+IOLock *lazyLock(IOLock **slot)
+{
+    if (!__atomic_load_n(slot, __ATOMIC_ACQUIRE)) {
+        IOLock *fresh = IOLockAlloc(), *expected = nullptr;
+        if (!__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            IOLockFree(fresh);
+    }
+    return *slot;
+}
+IOLock *gRegisterLock;
 }  // namespace
 
 extern "C" void tegra_host1x_set_sleep_client(void (*suspend)(void), void (*resume)(void))
 {
-    if (__atomic_load_n(&gSleepClientCount, __ATOMIC_ACQUIRE) >= kSleepClients) {
-        IOLog("TegraHost1x: a fourth sleep client was refused (three at most)\n");
-        return;
+    IOLock *lock = lazyLock(&gRegisterLock);
+    IOLockLock(lock);
+    const uint32_t i = gSleepClientCount;
+    if (i < kSleepClients) {
+        gSleepClients[i] = {suspend, resume};
+        __atomic_store_n(&gSleepClientCount, i + 1, __ATOMIC_RELEASE);
     }
-    const uint32_t i = __atomic_fetch_add(&gSleepClientCount, 1, __ATOMIC_ACQ_REL);
-    gSleepClients[i] = {suspend, resume};
+    IOLockUnlock(lock);
+    if (i >= kSleepClients)
+        IOLog("TegraHost1x: a fifth sleep client was refused (four at most); its engine is not reloaded after sleep\n");
 }
 
 extern "C" void tegra_nvdec_suspend(void)

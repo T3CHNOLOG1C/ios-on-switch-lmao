@@ -1,0 +1,14 @@
+nvjpg_drv.h (NVIDIA, MIT, "2016-2020") and cle7d0.h (NVIDIA, MIT, "1993-2020"): NVJPG's falcon driver interface
+(nvjpg_dec_drv_pic_setup_s, nvjpg_dec_status) and class methods, from NVIDIA's open-gpu-doc
+(github.com/NVIDIA/open-gpu-doc, classes/video/, commit 97c510e793 2021-02-13 "video classes for Tegra: nvenc, nvdec,
+nvjpg"; sha256 b719a992...4278 and 144aa394...8776). Unmodified. open-gpu-doc master later replaced nvjpg_drv.h with
+the register-level layout of the C9D1 engine (2ef75cf8d6, 2024); the 2021 file is the interface the T210 falcon
+firmware (NVJPG 1.0, host1x class 0xc0) takes: its decoder setup is 0xb2c bytes, the size averne's oss-nvjpg (GPL-3.0,
+github.com/averne/oss-nvjpg, read for facts only, nothing copied) found by reverse engineering, and the layout averne's
+FFmpeg nvtegra branch (libavutil/nvjpg_drv.h, the same file plus stdint typedefs) decodes MJPEG with on the Switch.
+The method offsets in cle7d0.h are the falcon class methods every Tegra NVJPG takes (SET_APPLICATION_ID 0x200,
+EXECUTE 0x300, SET_CONTROL_PARAMS 0x700, SET_IN_DRV_PIC_SETUP 0x708, SET_OUT_STATUS 0x70c, SET_BITSTREAM 0x710,
+SET_CUR_PIC 0x714, SET_CUR_PIC_CHROMA_U 0x718, SET_CUR_PIC_CHROMA_V 0x71c). Used by TegraNVJPGJpeg.h and the host test.
+nvjpg_dec_status's word at +0xc is reserved0 in this file; with SET_CONTROL_PARAMS DUMP_CYCLE_COUNT the firmware
+writes the decode's cycle count there (NVIDIA's 2024 header calls it cycle_count, "read from NV_CNVJPG_PDMA_CYCLE";
+averne's FFmpeg copy renames it so): TegraNVJPG reads reserved0 as the cycle count and leaves the header as published.
