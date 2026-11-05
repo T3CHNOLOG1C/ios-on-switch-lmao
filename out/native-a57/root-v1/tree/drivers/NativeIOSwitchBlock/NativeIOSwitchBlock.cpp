@@ -93,7 +93,7 @@ constexpr uint32_t kMaxChain = 256;
 // kBounceSectors (the bounce fallback already splits a longer chain into SDMA-sized pieces).
 constexpr uint32_t kDirectWriteSectors = kSafeSectors;
 constexpr uint32_t kWriteChecks = 32;
-// r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (directChain, proveHigh).
+// r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (prepareDirect, proveHigh).
 constexpr uint8_t kPoison = 0x5a;
 // Descriptor table: 16 KiB, contiguous, below 4 GiB; 1024 descriptors, four times what a 1 MiB chain of scattered 4 KiB
 // pages needs (256). A chain that needs more takes the bounce buffer.
@@ -288,6 +288,20 @@ struct Request {
     uint8_t klass;
     uint64_t queuedNs;
 };
+// r12-sdio: one chain's way through the worker (worker()): picked, begun (beginBatch: the table built and, when the chain is
+// one ADMA2 command, its pages synced and the command issued), ended (endBatch: that command waited for, retried and
+// checked; or the whole bounce path), then completed (completeBatch). The worker begins the next chain before it completes
+// the previous one, so the completion callbacks (IOStorageFamily, APFS, the VM's page-in wake-ups: on r7p5 100-300 us of
+// card idle per command while requests queued) run while the card moves the next chain's data, not between commands.
+struct Batch {
+    Request *first;  // the chain, in card order
+    uint32_t sectors, count;
+    bool write, direct, proving, issued;
+    IOSwitchAdmaRefusal why;
+    int issueStep;                // issue()'s result when the command never reached the card
+    uint64_t beganNs, overlapNs;  // when beginBatch started; the previous chain's completions that ran inside this one
+    IOReturn result;              // endBatch's, for every request of the chain
+};
 // r6-lows: a high-class read may be taken before older requests of lower classes (worker), never before an older request it
 // overlaps, and never once the oldest request has waited kAgeNs (then FIFO again, so nothing starves). Writes keep FIFO order.
 constexpr unsigned kClasses = 4;
@@ -314,6 +328,9 @@ struct Stats {
     // through the bounce buffer by why (IOSwitchAdmaRefusal; kAdmaOk: ADMA2 off), ADMA2 writes read back and found
     // equal, ADMA errors, worker time on the ADMA2 path's cache maintenance (part of busyNs), and busy time per direction.
     uint64_t direct, descriptors, bounced[kAdmaRefusals], verified, admaErrors, syncNs, readNs, writeNs;
+    // r12-sdio: commands issued before the previous chain's completions ran, and of those the ones already finished when
+    // the worker came back to them (no interrupt taken).
+    uint64_t overlapped, early;
 };
 }
 
@@ -460,15 +477,23 @@ class NativeIOSwitchBlock : public IOService {
     void resetLines();
     void recover(bool data);
     int command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status);
+    // r12-sdio: command()'s halves, so the worker can do other work while the card moves the data.
+    int issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors);
+    int complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early);
     bool failed(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write, unsigned descriptors,
                 bool retry);
     int run(uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
+    int retry(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
     static void worker(void *, wait_result_t);
-    void serviceBatch(Request *, uint32_t sectors);
+    Request *pickLocked(uint32_t *sectors, uint32_t *count);
+    void beginBatch(Batch &);
+    void endBatch(Batch &);
+    void completeBatch(Batch &);
     // r10-adma2: the ADMA2 path, the bounce path in SDMA-sized pieces, the write read-back, the setup check, the
     // power-state hooks.
     IOSwitchAdmaRefusal buildTable(Request *first, uint32_t sectors, bool write);
-    int directChain(uint64_t lba, uint32_t sectors, bool write, bool poison);
+    void prepareDirect(bool write, bool poison);
+    void finishDirect(bool write);
     bool stageChain(Request *first, uint32_t from, uint32_t length, uint8_t *buffer, bool toClient);
     bool bounceChain(Request *first, uint32_t sectors);
     bool proveWrite(Request *first, uint32_t sectors);
@@ -674,10 +699,18 @@ void NativeIOSwitchBlock::recover(bool data)
 
 // One data command: by ADMA2 through the descriptor table when `descriptors` is nonzero (built and synced by the
 // caller), else by SDMA into/out of the bounce buffer. Returns 0 or a nonzero step code; *status receives the last
-// interrupt status sample.
+// interrupt status sample. r12-sdio: issue() then complete(); the worker's ADMA2 commands call the two apart.
 int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status)
 {
     *status = 0;
+    if (const int step = issue(lba, sectors, write, descriptors)) return step;
+    return complete(sectors, write, descriptors, status, nullptr);
+}
+
+// The command's first half: the partition check, the registers and the command itself. 0, or step 1 when the controller
+// never went idle (then nothing was issued).
+int NativeIOSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors)
+{
     // Every card write passes here, whichever path staged it: none may reach outside the APFS partition. (Until setup()
     // has found the partition, sectorCount is 0 and so no write can be issued at all.)
     if (write && (lba < firstSector || sectors > sectorCount || lba - firstSector > sectorCount - sectors))
@@ -698,7 +731,16 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uns
     w16(TRANSFER, static_cast<uint16_t>(1 | (multi ? 0x26 : 0) | (write ? 0 : 0x10)));
     barrier();
     w16(COMMAND, static_cast<uint16_t>(((write ? (multi ? 25 : 24) : (multi ? 18 : 17)) << 8) | 0x3a));
+    return 0;
+}
 
+// The command's second half, for the command issue() started: 0 or a nonzero step code. Its time limit runs from here,
+// not from issue(): the worker may have completed the previous chain's requests in between. `*early` (when asked): the
+// command had already finished when this began, so it took no interrupt.
+int NativeIOSwitchBlock::complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early)
+{
+    *status = 0;
+    const bool multi = sectors > 1;
     // One sleep per command: the worker waits for transfer complete, an error, or an SDMA boundary
     // (transfers over 512 KiB). Command complete latches in STATUS without raising the line and its R1 is
     // checked once the data has moved; a command the card refuses moves no data and so ends as a
@@ -709,6 +751,7 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uns
     const uint64_t start = nowNs();
     const uint64_t limit = write ? 5000000000ull : 2000000000ull;
     uint32_t s, resume = 0;
+    bool waited = false;
     for (;;) {
         s = r32(STATUS);
         *status = s;
@@ -731,6 +774,7 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uns
         }
         uint64_t elapsed = nowNs() - start;
         if (elapsed >= limit) return (s & INT_COMMAND) ? 6 : 7;
+        waited = true;
         if (irqMode) {
             // Sleep until the transfer completes or fails. A wait that times out with an awaited
             // bit latched means the interrupt does not reach the CPU.
@@ -745,6 +789,7 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uns
         // Spin through ordinary reads; yield the CPU for long writes and slow reads.
         if (elapsed > (write ? 1000000ull : 3000000ull)) IOSleep(1);
     }
+    if (early) *early = !waited;
     w32(STATUS, INT_COMMAND | INT_TRANSFER);
     if (!(s & INT_COMMAND) || (r32(RESPONSE) & R1_ERRORS)) return 4;
     if (multi) {
@@ -804,8 +849,15 @@ bool NativeIOSwitchBlock::failed(int step, uint32_t status, uint64_t lba, uint32
 int NativeIOSwitchBlock::run(uint64_t lba, uint32_t sectors, bool write, unsigned descriptors)
 {
     uint32_t status = 0;
-    int step = command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status);
-    if (!step) return 0;
+    const int step = command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status);
+    return step ? retry(step, status, lba, sectors, write, descriptors) : 0;
+}
+
+// run()'s error handling for a command that failed with `step` (also for the worker's split ADMA2 commands): logged and
+// recovered, re-tuned, issued once more.
+int NativeIOSwitchBlock::retry(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write,
+                               unsigned descriptors)
+{
     if (failed(step, status, lba, sectors, write, descriptors, false)) return step;
     stats.retries++;
     if (tuned) retune(false);
@@ -883,11 +935,12 @@ IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sec
     return table.bytes == uint64_t(sectors) * kSector && table.finish() ? kAdmaOk : kAdmaMissing;
 }
 
-// One ADMA2 command for the chain in `table` (buildTable), straight to or from the requests' pages: the descriptors and
-// the pages cleaned (write) or cleaned and invalidated (read) first, a read's pages invalidated again after. `poison`
-// (a read that proves ADMA2 above 4 GiB, proveHigh): the table's pages up there are filled with kPoison first, so bytes
-// the engine never delivered show (the clean+invalidate takes the fill to DRAM before the card's bytes arrive).
-int NativeIOSwitchBlock::directChain(uint64_t lba, uint32_t sectors, bool write, bool poison)
+// An ADMA2 command for the chain in `table` (buildTable) goes straight to or from the requests' pages. Before it
+// (prepareDirect): the descriptors and the pages cleaned (write) or cleaned and invalidated (read). After it
+// (finishDirect): a read's pages invalidated again. `poison` (a read that proves ADMA2 above 4 GiB, proveHigh): the
+// table's pages up there are filled with kPoison first, so bytes the engine never delivered show (the clean+invalidate
+// takes the fill to DRAM before the card's bytes arrive).
+void NativeIOSwitchBlock::prepareDirect(bool write, bool poison)
 {
     const uint64_t began = nowNs();
     for (uintptr_t at = (uintptr_t)table.entries, end = at + table.count * sizeof(IOSwitchAdmaDescriptor); at < end;
@@ -906,16 +959,16 @@ int NativeIOSwitchBlock::directChain(uint64_t lba, uint32_t sectors, bool write,
     else
         syncLines<1>(table);
     barrier();
-    uint64_t synced = nowNs() - began;
-    const int step = run(lba, sectors, write, table.count);
-    if (!write) {
-        const uint64_t after = nowNs();
-        syncLines<2>(table);
-        barrier();
-        synced += nowNs() - after;
-    }
-    stats.syncNs += synced;
-    return step;
+    stats.syncNs += nowNs() - began;
+}
+
+void NativeIOSwitchBlock::finishDirect(bool write)
+{
+    if (write) return;
+    const uint64_t began = nowNs();
+    syncLines<2>(table);
+    barrier();
+    stats.syncNs += nowNs() - began;
 }
 
 // The chain's bytes [from, from + length) between the requests' memory and the start of `buffer` (the bounce buffer, or
@@ -979,7 +1032,7 @@ bool NativeIOSwitchBlock::proveWrite(Request *first, uint32_t sectors)
 }
 
 // r12-sdio: a read chain whose table reached above 4 GiB while that is being proven (high), right after its ADMA2 command
-// (directChain poisoned those pages first): the same blocks again by SDMA into checkBuffer, compared with every byte the
+// (prepareDirect poisoned those pages first): the same blocks again by SDMA into checkBuffer, compared with every byte the
 // table moved. Equal: one proof more (the last one turns ADMA2 above 4 GiB on, one line). Different: SDMA's copy goes into
 // the requests' memory, so they complete with the proven path's bytes, and ADMA2 stays below 4 GiB until reboot (one
 // line). If the SDMA read fails, nothing is proven and the chain is read again through the bounce buffer. False only when
@@ -1046,31 +1099,57 @@ void NativeIOSwitchBlock::releaseChecks()
 // One card command for a chain of requests that continue each other on the card (same
 // direction, each starting where the previous ended, worker() built it in FIFO order); then
 // every request completes with its own length. A single request is a chain of one.
-void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
+// r12-sdio: in three steps (Batch). beginBatch: the checks, the table and, for a chain that is one ADMA2 command, the
+// cache maintenance and the command issued. Nothing in it waits for the card.
+void NativeIOSwitchBlock::beginBatch(Batch &b)
 {
+    Request *const first = b.first;
+    const uint32_t sectors = b.sectors;
     // Each request was checked against the partition window in doAsyncReadWrite and the
     // chain is their contiguous union; checking the command itself keeps any bug here from
-    // ever reaching outside the APFS partition (command() checks every write again).
+    // ever reaching outside the APFS partition (issue() checks every write again).
     if (first->lba < firstSector || sectors > sectorCount || first->lba - firstSector > sectorCount - sectors)
         panic("IOSwitchSD: command lba=%llu n=%u outside the APFS partition [%llu, +%llu)", first->lba, sectors,
               firstSector, sectorCount);
-    const bool write = first->write;
-    const uint64_t start = nowNs();
-    unsigned count = 0;
-    for (Request *r = first; r; r = r->next) ++count;
+    b.write = first->write;
+    b.beganNs = nowNs();
+    b.overlapNs = 0;
+    b.issued = false;
+    b.issueStep = 0;
     // r10-adma2: straight between the card and the requests' pages by ADMA2 when it is on (writes: unless proveWrite
     // turned them off) and the whole chain qualifies; through the bounce buffer otherwise, counted by why.
-    IOSwitchAdmaRefusal why = kAdmaOk;
-    bool direct = adma && (!write || admaWrites) && (why = buildTable(first, sectors, write)) == kAdmaOk;
+    b.why = kAdmaOk;
+    b.direct = adma && (!b.write || admaWrites) && (b.why = buildTable(first, sectors, b.write)) == kAdmaOk;
     // r12-sdio: a read that reaches above 4 GiB while that is unproven is compared with SDMA before it completes.
-    const bool proving = direct && high.proofDue(write, table.high);
+    b.proving = b.direct && high.proofDue(b.write, table.high);
+    if (!b.direct) return;
+    prepareDirect(b.write, b.proving);
+    b.issueStep = issue(static_cast<uint32_t>(first->lba), sectors, b.write, table.count);
+    b.issued = true;
+}
+
+// endBatch: the issued command waited for (the interrupt, unless it finished meanwhile), retried and checked, then the
+// proofs; or the whole bounce path. The stats.
+void NativeIOSwitchBlock::endBatch(Batch &b)
+{
+    Request *const first = b.first;
+    const uint32_t sectors = b.sectors;
+    const bool write = b.write;
     IOReturn result = kIOReturnSuccess;
-    if (direct) {
-        const int step = directChain(first->lba, sectors, write, proving);
-        if (step == kStepAdmaError && proving) {
+    if (b.direct) {
+        uint32_t status = 0;
+        bool early = false;
+        int step = b.issueStep ? b.issueStep : complete(sectors, write, table.count, &status, &early);
+        if (!b.issueStep && b.overlapNs) {
+            ++stats.overlapped;
+            if (early) ++stats.early;
+        }
+        if (step) step = retry(step, status, first->lba, sectors, write, table.count);
+        finishDirect(write);
+        if (step == kStepAdmaError && b.proving) {
             // Only the pages above 4 GiB are new to the engine: they stay out of it, and this chain goes by SDMA.
             high.refuse();
-            direct = false;
+            b.direct = false;
             IOLog(
                 "IOSwitchSD: ADMA2 error on a read above 4 GiB (state 0x%02x at 0x%llx); ADMA2 stays below 4 GiB until "
                 "reboot\n",
@@ -1079,25 +1158,27 @@ void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
         } else if (step == kStepAdmaError) {
             // The host's DMA failed, not the card: this chain and every later one through the bounce buffer.
             adma = false;
-            direct = false;
+            b.direct = false;
             IOLog("IOSwitchSD: ADMA2 off until reboot (step %d); requests go through the bounce buffer\n", step);
         } else if (step) {
             result = kIOReturnIOError;
-        } else if (proving) {
+        } else if (b.proving) {
             if (!proveHigh(first, sectors)) result = kIOReturnIOError;
         } else if ((writeChecks || high.writeCheckDue(write, table.high)) && write && !proveWrite(first, sectors)) {
-            direct = false;
+            b.direct = false;
         }
     }
-    if (direct) {
-        stats.direct += count;
+    if (b.direct) {
+        stats.direct += b.count;
         stats.descriptors += table.count;
     } else {
         if (!bounceChain(first, sectors)) result = kIOReturnIOError;
-        stats.bounced[why] += count;
+        stats.bounced[b.why] += b.count;
     }
+    b.result = result;
     // Card and copies first, completions after: busy time covers the card, the copies and the cache maintenance,
-    // completeNs the callbacks (IOStorageFamily/APFS work that runs on this thread before the next command).
+    // completeNs the callbacks (IOStorageFamily/APFS work that runs on this thread; r12-sdio: while the next command
+    // runs, their time inside this chain's span is not this chain's busy time).
     for (Request *r = first; r; r = r->next) {
         const uint32_t length = r->sectors * kSector;
         if (write) {
@@ -1111,13 +1192,19 @@ void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
         if (r->lba == lastEnd) stats.sequential++;
         lastEnd = r->lba + r->sectors;
     }
-    const uint64_t done = nowNs(), latency = done - start;
+    const uint64_t span = nowNs() - b.beganNs, latency = span > b.overlapNs ? span - b.overlapNs : 0;
     stats.commands++;
     stats.busyNs += latency;
     (write ? stats.writeNs : stats.readNs) += latency;
-    stats.merged += count - 1;
+    stats.merged += b.count - 1;
     if (latency > stats.maxLatencyNs) stats.maxLatencyNs = latency;
-    for (Request *r = first; r;) {
+}
+
+// completeBatch: every request of the chain completes with endBatch's result.
+void NativeIOSwitchBlock::completeBatch(Batch &b)
+{
+    const uint64_t began = nowNs();
+    for (Request *r = b.first; r;) {
         Request *next = r->next;
         const uint32_t length = r->sectors * kSector;
         IOMemoryDescriptor *buffer = r->buffer;
@@ -1125,83 +1212,116 @@ void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
         IOFree(r, sizeof(*r));
         buffer->release();
         // IOStorage::complete, without binding another original IOStorageFamily symbol.
-        if (completion.action) completion.action(completion.target, completion.parameter, result, result ? 0 : length);
+        if (completion.action)
+            completion.action(completion.target, completion.parameter, b.result, b.result ? 0 : length);
         __atomic_fetch_add(&serviced, 1, __ATOMIC_RELAXED);
         r = next;
     }
-    stats.completeNs += nowNs() - done;
+    b.first = nullptr;
+    stats.completeNs += nowNs() - began;
+}
+
+// The next chain off the queue (queueLock held, queue not empty), unlinked: the head, or a passing read (r6-lows), and the
+// queued requests that continue it on the card.
+Request *NativeIOSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCount)
+{
+    // Take the head and every queued request that continues it on the card in the same
+    // direction, up to one command's limit: one command, one card access latency, one
+    // interrupt instead of several. No write passes another.
+    Request *prev = nullptr, *first = head;
+    const uint64_t pickNs = nowNs();
+    // r6-lows: a read of a higher IOStoragePriority class goes first (the UI's page-ins, I/O tier 0, behind up to ~100 queued
+    // background requests at ~0.5 ms each otherwise): the oldest read of the best class queued, unless it overlaps an older
+    // request or the head has waited kAgeNs.
+    if (first->next && first->klass && pickNs - first->queuedNs < kAgeNs) {
+        unsigned better = 0;
+        while (better < first->klass && !queuedReads[better]) ++better;
+        if (better < first->klass) {
+            for (Request *before = first, *candidate = first->next; candidate;
+                 before = candidate, candidate = candidate->next) {
+                if (candidate->write || candidate->klass != better) continue;
+                bool overlaps = false;
+                for (Request *older = head; older != candidate && !overlaps; older = older->next)
+                    overlaps = older->lba < candidate->lba + candidate->sectors &&
+                               candidate->lba < older->lba + older->sectors;
+                if (overlaps) continue;
+                prev = before;
+                first = candidate;
+                ++passed;
+                ++passedTotal;
+                break;
+            }
+        }
+    }
+    Request *last = first;
+    uint32_t sectors = first->sectors, count = 1;
+    const uint32_t limit = first->write ? maxWriteSectors : maxSectors;
+    // A passing read's chain passes the older requests too: each request it takes must not overlap any of them either.
+    auto overlapsOlder = [&](const Request *later) {
+        if (!prev) return false;
+        for (const Request *older = head; older != first; older = older->next)
+            if (older->lba < later->lba + later->sectors && later->lba < older->lba + older->sectors) return true;
+        return false;
+    };
+    while (merge && count < kMaxChain && last->next && last->next->write == first->write &&
+           last->next->lba == last->lba + last->sectors && sectors + last->next->sectors <= limit &&
+           !overlapsOlder(last->next)) {
+        last = last->next;
+        sectors += last->sectors;
+        ++count;
+    }
+    // Unlink first..last (the head's run, or a passing read's from the middle).
+    if (prev)
+        prev->next = last->next;
+    else
+        head = last->next;
+    if (tail == last) tail = prev;
+    last->next = nullptr;
+    queued -= count;
+    for (Request *r = first; r; r = r->next) {
+        if (!r->write) --queuedReads[r->klass];
+        ClassWait &wait = waits[r->klass];
+        const uint64_t waited = pickNs > r->queuedNs ? pickNs - r->queuedNs : 0;
+        ++wait.n;
+        wait.sumNs += waited;
+        if (waited > wait.maxNs) wait.maxNs = waited;
+    }
+    *chainSectors = sectors;
+    *chainCount = count;
+    return first;
 }
 
 void NativeIOSwitchBlock::worker(void *context, wait_result_t)
 {
     auto *self = static_cast<NativeIOSwitchBlock *>(context);
+    // r12-sdio: the chain whose command runs (next) and the one whose requests are still to complete (pending), in turns.
+    Batch batches[2] = {};
+    unsigned turn = 0;
+    Batch *pending = nullptr;
     for (;;) {
         IOLockLock(self->queueLock);
-        while (!self->head || self->suspended) IOLockSleep(self->queueLock, &self->head, THREAD_UNINT);
-        self->working = true;
-        // Take the head and every queued request that continues it on the card in the same
-        // direction, up to one command's limit: one command, one card access latency, one
-        // interrupt instead of several. No write passes another.
-        Request *prev = nullptr, *first = self->head;
-        const uint64_t pickNs = nowNs();
-        // r6-lows: a read of a higher IOStoragePriority class goes first (the UI's page-ins, I/O tier 0, behind up to ~100 queued
-        // background requests at ~0.5 ms each otherwise): the oldest read of the best class queued, unless it overlaps an older
-        // request or the head has waited kAgeNs.
-        if (first->next && first->klass && pickNs - first->queuedNs < kAgeNs) {
-            unsigned better = 0;
-            while (better < first->klass && !self->queuedReads[better]) ++better;
-            if (better < first->klass) {
-                for (Request *before = first, *candidate = first->next; candidate;
-                     before = candidate, candidate = candidate->next) {
-                    if (candidate->write || candidate->klass != better) continue;
-                    bool overlaps = false;
-                    for (Request *older = self->head; older != candidate && !overlaps; older = older->next)
-                        overlaps = older->lba < candidate->lba + candidate->sectors &&
-                                   candidate->lba < older->lba + older->sectors;
-                    if (overlaps) continue;
-                    prev = before;
-                    first = candidate;
-                    ++self->passed;
-                    ++self->passedTotal;
-                    break;
-                }
-            }
-        }
-        Request *last = first;
-        uint32_t sectors = first->sectors, count = 1;
-        // A passing read's chain passes the older requests too: each request it takes must not overlap any of them either.
-        auto overlapsOlder = [&](const Request *later) {
-            if (!prev) return false;
-            for (const Request *older = self->head; older != first; older = older->next)
-                if (older->lba < later->lba + later->sectors && later->lba < older->lba + older->sectors) return true;
-            return false;
-        };
-        while (self->merge && count < kMaxChain && last->next && last->next->write == first->write &&
-               last->next->lba == last->lba + last->sectors &&
-               sectors + last->next->sectors <= (first->write ? self->maxWriteSectors : self->maxSectors) &&
-               !overlapsOlder(last->next)) {
-            last = last->next;
-            sectors += last->sectors;
-            ++count;
-        }
-        // Unlink first..last (the head's run, or a passing read's from the middle).
-        if (prev)
-            prev->next = last->next;
-        else
-            self->head = last->next;
-        if (self->tail == last) self->tail = prev;
-        last->next = nullptr;
-        self->queued -= count;
-        for (Request *r = first; r; r = r->next) {
-            if (!r->write) --self->queuedReads[r->klass];
-            ClassWait &wait = self->waits[r->klass];
-            const uint64_t waited = pickNs > r->queuedNs ? pickNs - r->queuedNs : 0;
-            ++wait.n;
-            wait.sumNs += waited;
-            if (waited > wait.maxNs) wait.maxNs = waited;
+        while (!pending && (!self->head || self->suspended)) IOLockSleep(self->queueLock, &self->head, THREAD_UNINT);
+        Batch *next = nullptr;
+        if (self->head && !self->suspended) {
+            next = &batches[turn];
+            turn ^= 1;
+            next->first = self->pickLocked(&next->sectors, &next->count);
+            self->working = true;
         }
         IOLockUnlock(self->queueLock);
-        self->serviceBatch(first, sectors);
+        // The next chain's command goes to the card first; the previous chain's completions run while it moves data. A
+        // chain that is not one ADMA2 command (the bounce path) only has its table built here, so those completions are
+        // not held behind its several commands.
+        if (next) self->beginBatch(*next);
+        if (pending) {
+            const uint64_t began = nowNs();
+            self->completeBatch(*pending);
+            if (next && next->issued) next->overlapNs = nowNs() - began;
+            pending = nullptr;
+        }
+        if (!next) continue;
+        self->endBatch(*next);
+        pending = next;
         IOLockLock(self->queueLock);
         self->working = false;
         if (self->suspended) IOLockWakeup(self->queueLock, &self->working, false);
@@ -1258,6 +1378,9 @@ void NativeIOSwitchBlock::logThroughput()
         passed = 0;
         IOLockUnlock(queueLock);
     }
+    // r12-sdio: chains (cmds; the bounce path's extra SDMA pieces not counted), SDMMC1 interrupts taken (irq), and of the
+    // ADMA2 commands issued before the previous chain's completions ran, those that had already finished when the worker
+    // came back to them (ovl finished/issued; they took no interrupt).
     // r10-adma2: requests by ADMA2 (dma) and through the bounce buffer, the latter by why when any did (IOSwitchAdmaRefusal:
     // off = ADMA2 off), ADMA2 descriptors per ADMA2 request, ADMA2 writes read back equal (vfy), cache maintenance time
     // (sync), and MB/s per direction over each direction's own busy time.
@@ -1287,17 +1410,19 @@ void NativeIOSwitchBlock::logThroughput()
     const uint64_t writeRate = stats.writeNs ? stats.writeBytes * 10000 / stats.writeNs : 0;
     // Periodic: to the log only (os_log), never the boot console.
     char out[640];
-    snprintf(out, sizeof(out),
-             "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
-             "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu vfy %llu 4G+ %s | "
-             "<=4K %llu%% seq %llu%% merged %llu q%u | err %llu adma %llu retune %llu | %s %u.%02u MHz | wait ms%s",
-             requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
-             stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
-             writeRate / 10, writeRate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000, stats.direct, bounced,
-             bounces, perRequest / 10, perRequest % 10, stats.verified, highState,
-             requests ? stats.small * 100 / requests : 0, requests ? stats.sequential * 100 / requests : 0,
-             stats.merged, stats.maxQueued, stats.errors, stats.admaErrors, stats.retunes, busMode, busKHz / 1000,
-             busKHz % 1000 / 10, classes);
+    snprintf(
+        out, sizeof(out),
+        "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
+        "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu vfy %llu 4G+ %s | "
+        "<=4K %llu%% seq %llu%% merged %llu q%u | cmds %llu irq %llu ovl %llu/%llu | err %llu adma %llu retune %llu | "
+        "%s %u.%02u MHz | wait ms%s",
+        requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
+        stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
+        writeRate / 10, writeRate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000, stats.direct, bounced, bounces,
+        perRequest / 10, perRequest % 10, stats.verified, highState, requests ? stats.small * 100 / requests : 0,
+        requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.maxQueued, stats.commands,
+        __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early, stats.overlapped, stats.errors,
+        stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
 }
 
@@ -1948,7 +2073,8 @@ const char *NativeIOSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *d
         why = "the test pages have no physical address";
     }
     if (!why) {
-        // As directChain, without run()'s retry and re-tune: a failure here only keeps the bounce buffer.
+        // As the data path's ADMA2 commands, without run()'s retry and re-tune: a failure here only keeps the bounce
+        // buffer.
         *descriptors = table.count;
         for (uintptr_t at = (uintptr_t)table.entries, end = at + table.count * sizeof(IOSwitchAdmaDescriptor); at < end;
              at += kAdmaLine)

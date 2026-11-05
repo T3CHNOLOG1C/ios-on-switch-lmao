@@ -24,17 +24,26 @@ class NativeSdAdmaTests(unittest.TestCase):
     def test_driver_guards(self):
         """The driver keeps its partition guards, never polls ADMA2 and never treats its DMA interrupt as SDMA's."""
         source = (DRIVER / "NativeIOSwitchBlock.cpp").read_text()
-        # Every card write is range-checked in command() itself, besides serviceBatch's check of the whole chain.
-        command = source.split("int NativeIOSwitchBlock::command(", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("outside the APFS partition", command)
-        self.assertIn("outside the APFS partition", source.split("void NativeIOSwitchBlock::serviceBatch(", 1)[1])
+        body = lambda signature: source.split(signature, 1)[1].split("\n}\n", 1)[0]
+        # Every card write is range-checked where every data command is issued (issue(), which command() and the
+        # worker's ADMA2 commands both go through), besides beginBatch's check of the whole chain.
+        issue, complete = body("int NativeIOSwitchBlock::issue("), body("int NativeIOSwitchBlock::complete(")
+        self.assertIn("outside the APFS partition", issue)
+        self.assertLess(issue.index("outside the APFS partition"), issue.index("w16(COMMAND"))
+        self.assertIn("issue(lba, sectors, write, descriptors)", body("int NativeIOSwitchBlock::command("))
+        begin = body("void NativeIOSwitchBlock::beginBatch(")
+        self.assertIn("outside the APFS partition", begin)
+        self.assertLess(begin.index("outside the APFS partition"), begin.index("issue("))
+        # issue() is only called from command() and beginBatch().
+        calls = re.findall(r"^.*[^:\w]issue\(static_cast|^.*[^:\w]issue\(lba", source, re.M)
+        self.assertEqual(len(calls), 2, calls)
         # In ADMA2 mode the SDMA boundary interrupt is neither awaited nor acted on (resuming would rewrite the
         # descriptor table's address), and an ADMA error is the host's failure.
-        self.assertIn("INT_TRANSFER | (descriptors ? 0 : INT_DMA) | ERROR_SIGNALS", command)
-        self.assertIn("if (!descriptors && (s & INT_DMA))", command)
-        self.assertLess(command.index("return kStepAdmaError"), command.index("resume += kSdmaBoundary"))
+        self.assertIn("INT_TRANSFER | (descriptors ? 0 : INT_DMA) | ERROR_SIGNALS", complete)
+        self.assertIn("if (!descriptors && (s & INT_DMA))", complete)
+        self.assertLess(complete.index("return kStepAdmaError"), complete.index("resume += kSdmaBoundary"))
         # The data path selects SDMA or ADMA2 for every command, and the bring-up's SDMA read selects SDMA.
-        self.assertIn("(r8(HOST_CONTROL) & ~DMA_SELECT) | (descriptors ? DMA_ADMA2 : 0)", command)
+        self.assertIn("(r8(HOST_CONTROL) & ~DMA_SELECT) | (descriptors ? DMA_ADMA2 : 0)", issue)
         card = source.split("int NativeIOSwitchBlock::cardCommand(", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("w8(HOST_CONTROL, r8(HOST_CONTROL) & ~DMA_SELECT)", card)
         # Writes stay at 256 KiB per command until boots have verified ADMA2 writes (proveWrite).
@@ -54,7 +63,7 @@ class NativeSdAdmaTests(unittest.TestCase):
         self.assertIn("state == kOn || (state == kProving && !write) ? kAdmaDmaLimit : kAdma4GiB", header)
         self.assertIn("!(state == kProving && !write && page - kAdmaIramAlias < kAdmaIramBytes)", header)
         # Only reads are poisoned, and a mismatch puts SDMA's bytes into the requests before they complete.
-        direct = source.split("int NativeIOSwitchBlock::directChain(", 1)[1].split("\n}\n", 1)[0]
+        direct = source.split("void NativeIOSwitchBlock::prepareDirect(", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("poison && !write", direct)
         prove = source.split("bool NativeIOSwitchBlock::proveHigh(", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("high.refuse();", prove)
@@ -62,11 +71,37 @@ class NativeSdAdmaTests(unittest.TestCase):
         self.assertLess(prove.index("high.refuse();"), prove.index("stageChain(first, 0, length, checkBuffer, true)"))
         # A failed SDMA reference read proves nothing: the chain goes through the bounce buffer again.
         self.assertIn("return bounceChain(first, sectors);", prove)
-        batch = source.split("void NativeIOSwitchBlock::serviceBatch(", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("high.proofDue(write, table.high)", batch)
+        self.assertIn("high.proofDue(b.write, table.high)", source.split("void NativeIOSwitchBlock::beginBatch(", 1)[1])
+        batch = source.split("void NativeIOSwitchBlock::endBatch(", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("if (!proveHigh(first, sectors)) result = kIOReturnIOError;", batch)
         # A write from pages above 4 GiB is read back while those checks last.
         self.assertIn("high.writeCheckDue(write, table.high)", batch)
+
+
+    def test_pipelined_worker(self):
+        """r12-sdio: the next chain's command is issued before the previous chain completes; waits stay on the interrupt."""
+        source = (DRIVER / "NativeIOSwitchBlock.cpp").read_text()
+        worker = source.split("void NativeIOSwitchBlock::worker(", 1)[1].split("\n}\n", 1)[0]
+        self.assertLess(worker.index("beginBatch(*next)"), worker.index("completeBatch(*pending)"))
+        self.assertLess(worker.index("completeBatch(*pending)"), worker.index("endBatch(*next)"))
+        # suspend() waits for `working`: it is set before the command is begun and cleared only after endBatch.
+        self.assertLess(worker.index("working = true"), worker.index("beginBatch(*next)"))
+        self.assertLess(worker.index("endBatch(*next)"), worker.index("working = false"))
+        # beginBatch never waits for the card: it only issues (no complete(), command(), run() or transfer() there).
+        begin = source.split("void NativeIOSwitchBlock::beginBatch(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIsNone(re.search(r"\b(complete|command|run|transfer|bounceChain|waitSignal)\(", begin))
+        # complete(): STATUS first (a command that finished meanwhile takes no interrupt), then the interrupt; its time
+        # limit starts there; a lost interrupt still panics, and polling only without the interrupt (ioswitch-sd-irq=0).
+        complete = source.split("int NativeIOSwitchBlock::complete(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("const uint64_t start = nowNs();", complete)
+        self.assertLess(complete.index("s = r32(STATUS);"), complete.index("waitSignal("))
+        self.assertIn("SDMMC1 interrupt lost", complete)
+        self.assertLess(complete.index("if (irqMode)"), complete.index("IOSleep(1)"))
+        # endBatch: a split command's errors take run()'s retry, and a read's pages are invalidated after the command.
+        end = source.split("void NativeIOSwitchBlock::endBatch(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("retry(step, status, first->lba, sectors, write, table.count)", end)
+        self.assertLess(end.index("retry("), end.index("finishDirect(write)"))
+        self.assertLess(end.index("finishDirect(write)"), end.index("proveHigh("))
 
 
 if __name__ == "__main__":
