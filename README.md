@@ -149,14 +149,14 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 
 | Target | What |
 |---|---|
-| `//:boot` (= `//boot:package`) | The boot entry (tree artifact `bazel-bin/boot/ioswitch`). Boot-args, ADT edits and `USB_HOST` live in `tools/package/package_raw_boot.py` |
+| `//:boot` (= `//boot:package`) | The boot entry (tree artifact `bazel-bin/boot/ioswitch`), one action per step (`boot/defs.bzl`). Boot-args live in `tools/package/boot_args.py`; the ADT edits, `USB_HOST` and `DISPLAY_GAMUT` in `tools/package/adt_edit.py` |
 | `//:kernel` | `kernel.macho`: XNU + drivers, linked and prelinked with Apple's kexts |
 | `//:gpu` (= `//gpu:bundle`) | `bazel-bin/gpu/bundle`: `ngpu/addons/{TegraGM20BMetal.bundle, .m2v-seed, .raw/pack.bin}`, `TegraGM20BMetal.trustcache`, `trust.json` |
 | `//gpu:trustcache` | The bundle's trust cache module. `//:boot` appends it to the kernel's static trust cache |
 | `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa 77452b90 + `gpu/nvk`'s patches, meson inside Bazel |
 | `//out/native-a57/root-v1/tree:<driver>` | One driver's objects (e.g. `:SwitchUSB`); `:xnu` is the XNU objroot; `:kernel_unprelinked` is the link |
 | `//ipsw:kernelcache`, `//ipsw:static_system_trust` | The original kernelcache (decompressed) and the root+OS-cryptex trust bundle, from the IPSW |
-| `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | IPSW members (`bazel/ipsw/pins.bzl`). Deflated ones are inflated by a build action (`//bazel/ipsw:<role>`) |
+| `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | The members of the IPSW kind `--//bazel/ipsw:kind` selects (`bazel/ipsw/pins.bzl`, one table of kinds). Deflated ones are inflated by a build action (`//bazel/ipsw:<kind>_<role>`) |
 | `//install:sd`, `//install:artifacts` | SD-card install and what it writes |
 | `//deploy:sd`, `//deploy:pull_logs` | Deploy and log pull |
 | `//boot:snapshot` | Copy this build to `out/boot/lkg/<name>` |
@@ -165,7 +165,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//tools/lint:py_owners`, `//tools/lint:compdb` | Every tracked `.py` file has an owning target; compile_commands.json for clangd |
 | `//bazel/python:requirements.update`, `:requirements_test` | Re-lock the Python packages with uv; check the lock is current |
 | `//tests/...`, `//out/native-a57/root-v1/tree:*_test`, `//native:firmware_export_test`, `//install:*_test`, `//tools/deploy:deploy_test`, `//bazel/pinned:sha256` | Tests |
-| `//tools/repro:check`, `//tools/repro:equivalence` | Reproducibility and old-flow comparison |
+| `//tools/repro:check` | Reproducibility |
 | `//native:firmware_export`, `//gpu/nvk:relink`, `//tools/package:progressui_logo`, `//tools/package:wallpaper_1x` | Regenerate a pinned input: the RAM exporter, a relinked NVK dylib, the ProgressUI logo, the 1x wallpaper plists |
 | `//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:<tool>` | GPU developer tools: the shader corpus (`make_corpus`, `run_corpus`, `report`, …), `ordercheck`, `check_dyld_cache_imports` |
 
@@ -275,7 +275,7 @@ every driver object, because they include XNU's headers.
 
 | Pin | Where | How |
 |---|---|---|
-| IPSW | `bazel/ipsw/pins.bzl` | `bazel run //bazel/ipsw:pin -- <ipsw url> iPad7,1 j120ap > bazel/ipsw/pins.bzl` (streams each member once to hash it; nothing stored) |
+| IPSW | `bazel/ipsw/pins.bzl` | `bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> iPad7,1 j120ap` (pins one kind in place; streams each member once to hash it; nothing stored) |
 | XNU tag | `MODULE.bazel` `@xnu`/`@xnu_base` | New URL and sha256. The patch must apply to it |
 | Apple OSS, corecrypto, lz4 | `MODULE.bazel` | Version in the URL, new sha256, `strip_prefix` |
 | m2v | `bazel/gpu/deps.bzl` | Commit and sha256 of the GitHub tarball. The series is `tree/drivers/TegraGM20BMetal/patches/series` |
@@ -314,14 +314,7 @@ What makes the outputs reproducible:
 - Code signatures are ad hoc, with no timestamp.
 - The GPU plugin uses classic objc_msgSend call sites, because ld's selector stubs come out in a random order.
 
-**The old CMake flow, compared** (`bazel run //tools/repro:equivalence -- <a CMake-built checkout>`, with the Bazel
-build run with `path_root`, `build_date` and `builder` set to that checkout's values):
-- **(C)** Every section of the linked kernel is identical (49 of 49).
-- **(B)** The prelinker, run on the CMake kernel, reproduces its `kernel.macho` bit for bit.
-- **(A)** The packaging, run on the CMake kernel, reproduces its whole `out/boot/ioswitch` bit for bit (23 files at main
-  4b85a5b).
-
-What differs in `//:boot` itself, and why:
+How `//:boot` differs from the old CMake flow's (the comparison tool is gone with that flow):
 - `bl33.bin` (the staged window), `loader.uboot.bin`, `boot.cmd` and `boot.scr` follow from the linker's debug map:
   N_OSO object paths and modification times in `__LINKEDIT`, which name the CMake flow's absolute paths. They change
   the compressed window's length and stage ID, and the loader and boot script embed both.
@@ -410,7 +403,7 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 | `scripts/lint.py format / tidy / compdb` | `bazel run //:format`, `bazel test //:clang_tidy_test`, `bazel run //tools/lint:compdb` |
 | `python3 -m unittest ...` | `bazel test //...` |
 | Edit `cmake/Drivers.cmake` for a new driver | One `kernel_driver()` in the tree's `BUILD.bazel` |
-| Boot-args in `scripts/package_raw_boot.py` | The same file, now `tools/package/package_raw_boot.py` |
+| Boot-args in `scripts/package_raw_boot.py` | `tools/package/boot_args.py` (the ADT edits in `tools/package/adt_edit.py`) |
 | `out/gpu/nvk/build-nvk.sh`, `relink-nvk.py`, the NVK patches | `bazel build //gpu/nvk:ios //gpu/nvk:host` (the patches and `relink-nvk.py` are in `gpu/nvk/`) |
 | `tree/scripts/*` (builders, audits, qemu-entry), `tree/package/Scripts/*` | Gone: their live parts are Bazel rules and tools; the rest was dead |
 

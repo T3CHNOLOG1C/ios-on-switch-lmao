@@ -105,6 +105,7 @@ def main(argv=None):
     parser.add_argument("--no-launchd-log", action="store_true")
     parser.add_argument("--logs-out")
     parser.add_argument("--corpus")
+    parser.add_argument("--harvest", help="harvest.py's path in the checkout (//deploy passes it)")
     parser.add_argument("--launchd-check", nargs="+", metavar="LABEL", default=None)
     parser.add_argument("--awdl", choices=("on", "off"))
     parser.add_argument("--reset-gallery-snapshots", nargs="+", metavar="BUNDLE", default=None)
@@ -117,6 +118,7 @@ def main(argv=None):
     parser.add_argument("--kcdata")
     parser.add_argument("--log")
     args = parser.parse_args(argv)
+    pull_logs.HARVEST = args.harvest and str(Path(args.harvest).parent)
     for name in ("boot_package", "spec", "gpu_bundle", "stager", "kcdata"):
         setattr(args, name, located(getattr(args, name)))
     log = host.Log(args.log or Path.home() / "Library/Logs/ioswitch-install/deploy-{}.log".format(

@@ -32,12 +32,15 @@ py_binary(
         "--gpu-bundle=$(rlocationpath :gpu_bundle)",
         "--stager=$(rlocationpath //out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py)",
         "--kcdata=$(rlocationpath @xnu_base//:tools/lldbmacros/kcdata.py)",
+        # The checkout's harvest.py (run there, so it merges into the checkout's corpus.log).
+        "--harvest=$(rootpath //out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:precompile/harvest.py)",
     ],
     data = [
         ":boot_package",
         ":gpu_bundle",
         "//install:spec",
         "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
+        "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:precompile/harvest.py",
         "@xnu_base//:tools/lldbmacros/kcdata.py",
     ],
     main = "//tools/deploy:deploy.py",
@@ -53,9 +56,11 @@ py_binary(
     args = [
         "--spec=$(rlocationpath //install:spec)",
         "--kcdata=$(rlocationpath @xnu_base//:tools/lldbmacros/kcdata.py)",
+        "--harvest=$(rootpath //out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:precompile/harvest.py)",
     ],
     data = [
         "//install:spec",
+        "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:precompile/harvest.py",
         "@xnu_base//:tools/lldbmacros/kcdata.py",
     ],
     main = "//tools/deploy:pull_logs.py",

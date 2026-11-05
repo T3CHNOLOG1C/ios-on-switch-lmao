@@ -43,7 +43,9 @@ from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
 
 DATA_UUID = "D1B1D053-D0A6-496C-8625-A947A3DA863E"   # IOSwitchRawMount.inc IOSW_RAW_DATA_UUID (checked against spec)
-HARVEST = "out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/precompile"
+# The checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the workspace: --harvest
+# (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
+HARVEST = None
 WEBKIT_IDS = ("com.apple.WebKit.WebContent", "com.apple.WebKit.Networking", "com.apple.WebKit.GPU",
               "com.apple.WebKit.WebContent.CaptivePortal", "WebContentExtension.appex", "com.apple.fskit.exfat")
 BACKBOARDD_CACHE = "m2v/System_6C7A65AF-CB18-421C-A07A-D724B05A7AB6_Library_Caches_m2v"
@@ -215,21 +217,20 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
             (out / "lsdb-webkit.txt").write_text("\n".join(counts) + "\n")
         else:
             log("LaunchServices database NOT copied (not found)")
-    if harvest:
-        script = workspace() / HARVEST / "harvest.py"
-        corpus = Path(corpus or workspace() / HARVEST / "corpus.log")
-        if script.is_file():
-            result = subprocess.run([sys.executable, str(script), str(corpus), "--volume", str(data), "--save",
-                                     str(out / "m2v")], capture_output=True, text=True)
-            log.quiet(result.stdout + result.stderr)
-            log("m2v journals {} into {}".format("harvested" if result.returncode == 0 else "NOT harvested", corpus))
-            if (out / BACKBOARDD_CACHE).is_dir():
-                link = out / "m2v-cache"
-                if link.is_symlink() or link.exists():
-                    link.unlink()
-                link.symlink_to(BACKBOARDD_CACHE)
-        else:
-            log("m2v harvest skipped: no", script)
+    script = workspace() / HARVEST / "harvest.py" if HARVEST else None
+    if harvest and script and script.is_file():
+        corpus = Path(corpus or script.parent / "corpus.log")
+        result = subprocess.run([sys.executable, str(script), str(corpus), "--volume", str(data), "--save",
+                                 str(out / "m2v")], capture_output=True, text=True)
+        log.quiet(result.stdout + result.stderr)
+        log("m2v journals {} into {}".format("harvested" if result.returncode == 0 else "NOT harvested", corpus))
+        if (out / BACKBOARDD_CACHE).is_dir():
+            link = out / "m2v-cache"
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            link.symlink_to(BACKBOARDD_CACHE)
+    elif harvest:
+        log("m2v harvest skipped: no", script)
     if logarchive and (out / "diagnostics/timesync").is_dir():
         try:
             boots = mkarchive.build(out, out / "boot.logarchive")
@@ -280,6 +281,7 @@ def main(argv=None):
     parser.add_argument("disk")
     parser.add_argument("--out")
     parser.add_argument("--corpus", help="precompile corpus to merge into (default: the checkout's corpus.log)")
+    parser.add_argument("--harvest", help="harvest.py's path in the checkout (//deploy passes it)")
     for flag in ("logarchive", "harvest", "csstore", "launchd"):
         parser.add_argument("--no-" + flag, action="store_true")
     parser.add_argument("--log")
@@ -287,6 +289,8 @@ def main(argv=None):
     parser.add_argument("--kcdata", help="XNU's tools/lldbmacros/kcdata.py (decodes a saved panic's stackshot)")
     parser.add_argument("--no-eject", action="store_true", help="leave the card attached (default: unmount and eject)")
     args = parser.parse_args(argv)
+    global HARVEST
+    HARVEST = args.harvest and str(Path(args.harvest).parent)
     log = host.Log(args.log or Path.home() / "Library/Logs/ioswitch-install/pull-logs-{}.log".format(
         time.strftime("%Y%m%d-%H%M%S")))
     try:

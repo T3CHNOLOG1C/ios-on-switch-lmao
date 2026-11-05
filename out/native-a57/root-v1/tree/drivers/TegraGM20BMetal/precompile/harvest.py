@@ -48,7 +48,8 @@ from pathlib import Path
 
 DESCRIPTOR = re.compile(r'(samples|topo|ds|opt|c\d|a\d+)=')
 COMPUTE = re.compile(r'(form|opt|max|tgm|icb|depth|abf|mut)=')
-PROJECT = Path(__file__).resolve().parents[7]   # tree/drivers/TegraGM20BMetal/precompile -> project
+# The checkout: bazel run's (also what //deploy:pull_logs runs this in), else the one this file is in.
+PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).resolve().parents[7])
 DEVICE = PROJECT / 'out/gpu-device-data'
 # /private/var/containers/Data/System/<UUID>/Library/Caches/m2v of the system containers whose processes kept an m2v cache there
 # (the plugin's "device ... ready in" lines, r5d and r6h): their Library and Library/Caches are mode 000.

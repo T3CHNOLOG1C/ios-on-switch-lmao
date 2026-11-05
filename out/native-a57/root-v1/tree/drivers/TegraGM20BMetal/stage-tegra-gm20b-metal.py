@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Stage the TegraGM20B Metal plugin onto the SD card's iPadOS Data volume, mounted on the Mac.
 
-usage: stage-tegra-gm20b-metal.py <Data mount point> [--build <outdir>] [--remove] [--no-raw]
+usage: stage-tegra-gm20b-metal.py <Data mount point> (--build <outdir> | --remove) [--no-raw]
 
-<outdir> defaults to out/gpu; with Bazel pass the directory //gpu:bundle builds (bazel-bin/gpu/bundle). Exit status 0 on success, else one error line.
+<outdir> is the directory //gpu:bundle builds (bazel-bin/gpu/bundle; //deploy:sd --stage-gpu passes it). Exit status 0 on success, else one error line.
 
 Mount the Data volume read-write first, e.g. `diskutil mount -mountOptions nobrowse D1B1D053-D0A6-496C-8625-A947A3DA863E`
 (IOSwitchRawMount.inc IOSW_RAW_DATA_UUID), and eject the card before it goes back into the Switch.
@@ -19,7 +19,7 @@ As vendor/unixnu/scripts/add-gpu-plugin-data.py --publish (UniXNU-sheng), on the
     backboardd draws through the raw path; --no-raw, or TEGRA_RAW_STAGE=0 in the environment, stages the bundle without it, and
     the render server keeps the m2v device);
 --remove deletes the bundle again (the preferences stay; without a Metal device they change nothing).
-The CDHashes must also be in the boot entry's static trust cache (package_raw_boot.py appends <build outdir>/
+The CDHashes must also be in the boot entry's static trust cache (//boot:package appends //gpu:trustcache, the same
 TegraGM20BMetal.trustcache), so stage and package from the same build.
 """
 import os
@@ -39,12 +39,12 @@ def main():
     remove = '--remove' in argv
     raw = '--no-raw' not in argv and os.environ.get('TEGRA_RAW_STAGE', '1') != '0'
     argv = [a for a in argv if a != '--no-raw']
-    build = Path(__file__).resolve().parents[6] / 'out/gpu'   # project root: tree/drivers/TegraGM20BMetal/ is 6 deep
+    build = None   # //gpu:bundle's directory (//deploy:sd passes it)
     if '--build' in argv[:-1]:
         build = Path(argv[argv.index('--build') + 1]).resolve()
         del argv[argv.index('--build'):argv.index('--build') + 2]
     args = [a for a in argv if a != '--remove']
-    if len(args) != 1:
+    if len(args) != 1 or (build is None and not remove):
         sys.exit(__doc__)
     data = Path(args[0]).resolve()
     info = plistlib.loads(subprocess.run(['diskutil', 'info', '-plist', str(data)], capture_output=True, check=True).stdout)
