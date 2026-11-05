@@ -23,6 +23,7 @@
 #include <typeinfo>
 #include "../out/native-a57/root-v1/tree/drivers/SwitchBattery/SwitchBattery.h"
 #include "../out/native-a57/root-v1/tree/drivers/SwitchBattery/SwitchChargePolicy.h"
+#include "../out/native-a57/root-v1/tree/drivers/SwitchSuspend/SwitchWakeSources.h"
 #include "../out/native-a57/root-v1/tree/drivers/SwitchUSB/SwitchPD.h"
 #include "../out/native-a57/root-v1/tree/drivers/TegraGPIO/TegraGPIO.h"
 #include "../out/native-a57/root-v1/tree/drivers/TegraI2C/TegraI2C.h"
@@ -31,6 +32,8 @@ extern "C" int switch_battery_start(void);
 extern "C" int switch_battery_temperature(int *milli_c, unsigned long long *at);
 static unsigned gSensorNotes = 0;
 extern "C" void switch_sensors_note(void) { ++gSensorNotes; }  // r15-thermal's SwitchSensors (SwitchPower.h)
+static std::vector<unsigned> gWakeEvents;
+extern "C" void switch_wake_event(unsigned source) { gWakeEvents.push_back(source); }  // r15-sleep's SwitchWake.h
 
 static unsigned gChecks = 0, gFailures = 0;
 static void check(bool ok, const std::string &what)
@@ -205,7 +208,7 @@ struct PdChip {
     uint16_t alert = 0, status1 = 0, status2 = 0, config1 = 0xc0e0, vendor = 0;
     std::vector<uint32_t> pdos;
     uint32_t curPdo = 0, curRdo = 0, pendingRdo = 0;
-    enum Reply { Accept, Refuse, Silent } rdoReply = Accept;
+    enum Reply { Accept, Refuse, Silent, AbortOnce } rdoReply = Accept;
     bool psRdyReply = true;
     std::vector<std::string> commands;
     static uint32_t fixed(unsigned mv, unsigned ma) { return (uint32_t)(mv / 50) << 10 | (ma / 10); }
@@ -281,6 +284,12 @@ struct PdChip {
                                    !(pendingRdo & charge::kRdoMismatch);
                 check(valid, "RDO " + hex(pendingRdo) + " valid for the source");
                 if (rdoReply == Silent) break;
+                if (rdoReply == AbortOnce) {  // r8a's MacBook port: the first request at attach is aborted
+                    rdoReply = Accept;
+                    status1 = (uint16_t)((status1 & ~0x70) | 2u << 4);
+                    alert |= 0x4;
+                    break;
+                }
                 status1 = (uint16_t)((status1 & ~0x70) | (rdoReply == Accept && valid ? 0 : 6u << 4));
                 if (rdoReply == Accept && valid) {
                     curRdo = pendingRdo;
@@ -619,8 +628,8 @@ static void rebalance()
     advance(300);
     check(iinlim() == 500, "withdrawn: 500 mA while the new request runs: " + std::to_string(iinlim()));
     advance(2300);
-    check(logHas("SwitchPD: contract 9 V 1.5 A (5 V 3 A, *9 V 2 A, 15 V 1 A)"), "new contract 9 V 1.5 A");
-    check(iinlim() == 1500, "1500 mA");
+    check(logHas("SwitchPD: contract 9 V 2 A (5 V 3 A, *9 V 2 A, 15 V 1 A)"), "new contract 9 V 2 A");
+    check(iinlim() == 2000, "2000 mA");
 }
 
 static void oursAlready()
@@ -737,6 +746,198 @@ static void badTemp()
     check(gCharger.writes == 0 && iinlim() == 500, "read only afterwards");
 }
 
+// --- iPadOS's requests and what it reads back (SwitchChargePolicy.h [IOS-*]) ---------------------------------------
+static IOReturn setProperty(const char *key, bool value)
+{
+    OSDictionary dict;
+    dict.setObject(key, value ? kOSBooleanTrue : kOSBooleanFalse);
+    return battery()->setProperties(&dict);
+}
+static IOReturn setProperty(const char *key, unsigned value)
+{
+    OSDictionary dict;
+    OSNumber *n = OSNumber::withNumber(value, 32);
+    dict.setObject(key, n);
+    const IOReturn r = battery()->setProperties(&dict);
+    n->release();
+    return r;
+}
+static unsigned chgConfig() { return (gCharger.reg[1] >> 4) & 3; }
+
+static void iosRequests()
+{
+    bootWithNintendoCharger();
+    advance(2300);
+    IOPMPowerSource *ps = battery();
+    check(chgConfig() == 1 && ps->charging && ps->ps["ChargingOverride"] == 0, "charging");
+    // Optimized Battery Charging (PowerUI): hold, then charge.
+    check(setProperty("PredictiveChargingInhibit", true) == kIOReturnSuccess, "OBC request taken");
+    advance(300);
+    check(chgConfig() == 0 && !ps->charging, "OBC: held");
+    check(ps->ps["ChargingOverride"] == 2, "OBC: ChargingOverride bit 1 (Optimized Battery Charging Engaged)");
+    check(ps->ps["NotChargingReason"] == 0 && ps->external, "OBC: not a temperature hold, still on AC");
+    check(logHas("PredictiveChargingInhibit on: charging held"), "OBC line");
+    setProperty("PredictiveChargingInhibit", false);
+    advance(300);
+    check(chgConfig() == 1 && ps->ps["ChargingOverride"] == 0, "OBC released");
+    // powerd's ChargeInhibit assertion: IsCharging = false / true.
+    setProperty("IsCharging", false);
+    advance(300);
+    check(chgConfig() == 0 && logHas("ChargeInhibit assertion held"), "ChargeInhibit: off");
+    setProperty("IsCharging", true);
+    advance(300);
+    check(chgConfig() == 1, "ChargeInhibit released: charging");
+    // powerd's DisableInflow assertion: ExternalConnected = false: input off (Hi-Z), reported as no AC.
+    setProperty("ExternalConnected", false);
+    advance(300);
+    check((gCharger.reg[0] & 0x80) && chgConfig() == 0, "DisableInflow: Hi-Z, charging off: " + hex(gCharger.reg[0]));
+    check(!ps->external && ps->ps["AppleRawExternalConnected"] == 1, "DisableInflow: no AC, raw still connected");
+    setProperty("ExternalConnected", true);
+    advance(300);
+    check(!(gCharger.reg[0] & 0x80) && iinlim() == 1200 && chgConfig() == 1, "inflow back: contract limit again");
+    // thermalmonitord's charge rate limit index: 70 % / 50 % / 30 % of 2048 mA.
+    setProperty("AppleChargeRateLimitIndex", 1u);
+    advance(300);
+    check(charge::bq::decodeChargeCurrent(gCharger.reg[2]) == 1408, "index 1: 1408 mA: " + hex(gCharger.reg[2]));
+    setProperty("AppleChargeRateLimitIndex", 3u);
+    advance(300);
+    check(charge::bq::decodeChargeCurrent(gCharger.reg[2]) == 576, "index 3: 576 mA");
+    check(ps->ps["AppleChargeRateLimitIndex"] == 3, "index read back");
+    setProperty("AppleChargeRateLimitIndex", 0u);
+    advance(300);
+    check(gCharger.reg[2] == 0x60, "index 0: 2048 mA again");
+    check(setProperty("SomethingElse", true) == kIOReturnUnsupported, "unknown keys refused");
+    check(ps->dicts["ChargerData"].numbers["ChargingCurrent"] == 2048 &&
+              ps->dicts["ChargerData"].numbers["ChargingVoltage"] == 4208 &&
+              ps->dicts["ChargerData"].numbers["InputCurrentLimit"] == 1200,
+          "ChargerData");
+    check(ps->adapter.numbers["PMUConfiguration"] == 1200 && ps->adapter.numbers["IsWireless"] == 0,
+          "AdapterDetails for thermalmonitord");
+    // While we source VBUS (r15-usbhost): ChargeInhibit and DisableInflow never take REG01 or the input from the boost.
+    gCharger.unplug();
+    gPd.unplug();
+    advance(300);
+    check(switch_battery_set_otg_boost(true, false) == 0 && chgConfig() == 2, "boost on");
+    setProperty("IsCharging", false);
+    setProperty("ExternalConnected", false);
+    advance(300);
+    check(chgConfig() == 2 && !(gCharger.reg[0] & 0x80), "boost untouched: OTG, no Hi-Z: " + hex(gCharger.reg[0]));
+    check(switch_battery_set_otg_boost(false, false) == 0 && chgConfig() == 0, "boost off: charging off (inhibited)");
+    setProperty("IsCharging", true);
+    setProperty("ExternalConnected", true);
+    advance(300);
+    check(chgConfig() == 1 && !(gCharger.reg[0] & 0x80), "released: charge mode, input on");
+}
+
+static void temperatureHoldPublished()
+{
+    bootWithNintendoCharger();
+    advance(2300);
+    gGauge.setTemp(5500);
+    advance(300);
+    IOPMPowerSource *ps = battery();
+    check(chgConfig() == 0 && !ps->charging && ps->external, "hot: on AC, not charging");
+    check((ps->ps["NotChargingReason"] & charge::kTlcMask) && (ps->dicts["ChargerData"].numbers["NotChargingReason"] &
+                                                                charge::kTlcMask),
+          "TLC: NotChargingReason in PowerUI's 0x11e mask (Charging On Hold: iPad Temperature)");
+    check((ps->ps["NotChargingReason"] & 0x180) != 0x100, "not PowerLog's penalty box");
+    // An OBC hold on top: both shown; cooling down leaves only OBC.
+    setProperty("PredictiveChargingInhibit", true);
+    gGauge.setTemp(3000);
+    advance(300);
+    check(chgConfig() == 0 && ps->ps["NotChargingReason"] == 0 && ps->ps["ChargingOverride"] == 2, "cool, OBC holds");
+    setProperty("PredictiveChargingInhibit", false);
+    advance(300);
+    check(chgConfig() == 1 && ps->charging, "charging");
+}
+
+static void powerInWake()
+{
+    if (switch_battery_start()) check(false, "switch_battery_start");
+    advance(10);
+    check(gWakeEvents.empty(), "no event at boot");
+    gCharger.plug(500, 2);
+    gPd.sink({kNintendo5V, kNintendo15V}, 0, 0x8 | 0x1000 | 0x4000);
+    advance(300);
+    check(gWakeEvents.size() == 1 && gWakeEvents[0] == SWITCH_WAKE_POWER_IN && battery()->external,
+          "plug: power-in wake event, ExternalConnected at once");
+    advance(3000);
+    check(gWakeEvents.size() == 1, "one per attach");
+    gCharger.unplug();
+    gPd.unplug();
+    advance(300);
+    check(gWakeEvents.size() == 1 && !battery()->external, "unplug: none");
+    gCharger.plug(3000, 2);
+    gPd.sink({}, 0, 0x8);
+    advance(300);
+    check(gWakeEvents.size() == 2, "a plain charger too");
+    gCharger.unplug();
+    gPd.unplug();
+    advance(300);
+    check(switch_battery_set_otg_boost(true, false) == 0, "boost");
+    advance(300);
+    check(gWakeEvents.size() == 2, "our own boost is not power in");
+}
+
+static void sleepWindows()
+{
+    bootWithNintendoCharger();
+    advance(2300);
+    check(gGauge.reg[0x02] == (31u << 8 | 29u) && gGauge.reg[0x03] != 0xff00, "awake: 1 C and SOC windows");
+    switch_battery_suspend();
+    check(gGauge.reg[0x02] == (51u << 8 | 17u) && gGauge.reg[0x03] == 0xff00 && gGauge.line,
+          "asleep: zone edges only, SOC off, ALRT released: " + hex(gGauge.reg[0x02]));
+    const unsigned reads = (unsigned)gLog.size();
+    advance(600000);  // no re-read while asleep (the timer is off); a zone edge would still alert
+    check(!logHas("stats:", reads), "no stats while asleep");
+    gGauge.setTemp(5200);
+    gGauge.update();
+    check(gGauge.edge, "a zone edge raises ALRT (PMC wake 27)");
+    switch_battery_resume();
+    advance(300);
+    check(chgConfig() == 0 && gGauge.reg[0x03] != 0xff00, "after the wake: hot, charging off, normal windows");
+}
+
+static void roleSwap()
+{
+    gCharger.plug(500, 1);
+    gCharger.intPending = false;
+    gPd.sink({PdChip::fixed(5000, 3000)}, 0, 0);  // a Mac
+    if (switch_battery_start()) check(false, "switch_battery_start");
+    advance(2400);
+    check(iinlim() == 2000 && logHas("SwitchPD: contract 5 V 2 A"), "Mac: 5 V 2 A");
+    // The Mac asks for a power-role swap: we come up as the source (no boost here: the partner keeps VBUS for now).
+    gPd.status1 = (uint16_t)(gPd.status1 | 0x1000);
+    gPd.alert |= 0x1000;
+    advance(300);
+    check(iinlim() == 500, "swapped: contract withdrawn, 500 mA: " + std::to_string(iinlim()));
+    gPd.status1 = (uint16_t)(gPd.status1 & ~0x1000);
+    gPd.alert |= 0x1000 | 0x4000;
+    advance(3000);
+    check(iinlim() == 2000, "swapped back: the contract again");
+    // The Nintendo dock: its two-PDO signature.
+    gCharger.unplug();
+    gPd.unplug();
+    advance(500);
+    gCharger.plug(500, 2);
+    gPd.sink({PdChip::fixed(5000, 500), PdChip::fixed(15000, 2600)}, 0, 0x8 | 0x1000 | 0x4000);
+    advance(3000);
+    check(logHas("SwitchPD: contract 15 V 1.2 A (dock: 5 V 0.5 A, *15 V 2.6 A)") && iinlim() == 1200, "dock");
+}
+
+static void macPort()
+{
+    if (switch_battery_start()) check(false, "switch_battery_start");
+    advance(10);
+    gPd.rdoReply = PdChip::AbortOnce;
+    gCharger.plug(500, 1);
+    gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x8 | 0x1000 | 0x4000);
+    gPd.curRdo = 1u << 28 | 50u << 10 | 150u;  // the controller's own contract: 0.5 A of 1.5 A
+    advance(3200);
+    check(logHas("request aborted at attach") && !logHas("no USB-PD request"), "aborted once, asked again");
+    check(logHas("SwitchPD: contract 5 V 1.5 A (*5 V 1.5 A)") && iinlim() == 1500, "5 V 1.5 A: 1500 mA (r8a: 0.9 A)");
+}
+
 static void otgLeftOn()
 {
     gCharger.reg[1] = 0x21;  // an earlier boot rebooted with its boost on
@@ -780,11 +981,12 @@ static void policy()
         {"dock signature, too little", {F(5000, 500), F(15000, 1500)}, 0, 0, 0},
         {"20 V laptop brick", {F(5000, 3000), F(9000, 3000), F(15000, 3000), F(20000, 3250)}, 3, 15000, 1200},
         {"9 V 3 A ties 15 V 1.8 A", {F(5000, 3000), F(9000, 3000), F(15000, 1800)}, 3, 15000, 1200},
-        {"18 W phone charger", {F(5000, 3000), F(9000, 2000), F(12000, 1500)}, 2, 9000, 1500},
-        {"20 W charger", {F(5000, 3000), F(9000, 2220)}, 2, 9000, 1500},
+        {"18 W phone charger", {F(5000, 3000), F(9000, 2000), F(12000, 1500)}, 3, 12000, 1500},
+        {"20 W charger", {F(5000, 3000), F(9000, 2220)}, 2, 9000, 2000},
         {"Mac 5 V 3 A", {F(5000, 3000)}, 1, 5000, 2000},
-        {"USB 5 V 0.9 A", {F(5000, 900)}, 0, 0, 0},
-        {"5 V 1.5 A", {F(5000, 1500)}, 1, 5000, 900},
+        {"USB 5 V 0.9 A", {F(5000, 900)}, 1, 5000, 900},
+        {"USB 5 V 0.4 A", {F(5000, 400)}, 0, 0, 0},
+        {"MacBook port 5 V 1.5 A (r8a)", {F(5000, 1500)}, 1, 5000, 1500},
         {"over 3 A", {F(5000, 3000), F(15000, 5000)}, 1, 5000, 2000},
         {"odd voltage", {F(5000, 3000), F(14800, 3000)}, 1, 5000, 2000},
         {"variable and PPS only beyond 5 V", {F(5000, 3000), (2u << 30) | F(15000, 3000), (3u << 30) | 0x1234}, 1, 5000, 2000},
@@ -877,7 +1079,10 @@ int main(int argc, char **argv)
         {"hotplug", hotplug},       {"refused", refused},            {"silent", silent},
         {"rebalance", rebalance},   {"ours-already", oursAlready},   {"settings-lost", settingsLost},
         {"not-taken", notTaken},    {"otg-left-on", otgLeftOn},      {"linux-left", linuxLeft},
-        {"bad-temp", badTemp},      {"lost-while-hot", lostWhileHot},
+        {"bad-temp", badTemp},      {"lost-while-hot", lostWhileHot},    {"ios-requests", iosRequests},
+        {"temperature-hold", temperatureHoldPublished},                  {"power-in-wake", powerInWake},
+        {"sleep-windows", sleepWindows},                                 {"role-swap", roleSwap},
+        {"mac-port", macPort},
     };
     auto it = kScenarios.find(scenario);
     if (it == kScenarios.end()) {

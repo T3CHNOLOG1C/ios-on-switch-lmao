@@ -18,6 +18,8 @@
 using IOReturn = int;
 constexpr IOReturn kIOReturnSuccess = 0;
 constexpr IOReturn kIOReturnNoResources = 0x2be;
+constexpr IOReturn kIOReturnBadArgument = 0x2c2;
+constexpr IOReturn kIOReturnUnsupported = 0x2c7;
 
 // Fake time in nanoseconds; the absolute-time conversions are the identity.
 inline uint64_t gNow = 0;
@@ -128,6 +130,7 @@ public:
         n->value = v;
         return n;
     }
+    uint32_t unsigned32BitValue() const { return (uint32_t)value; }
 };
 class OSString : public OSObject {
 public:
@@ -151,6 +154,7 @@ public:
 class OSBoolean : public OSObject {
 public:
     bool value = false;
+    bool getValue() const { return value; }
 };
 inline OSBoolean *const kOSBooleanTrue = [] {
     auto *b = new OSBoolean;
@@ -162,12 +166,20 @@ class OSDictionary : public OSObject {
 public:
     std::map<std::string, long long> numbers;
     std::map<std::string, std::string> strings;
+    std::map<std::string, OSObject *> objects;  // as given (not retained: the tests keep them alive)
     static OSDictionary *withCapacity(unsigned) { return new OSDictionary; }
     bool setObject(const char *key, const OSObject *value)
     {
         if (auto *n = dynamic_cast<const OSNumber *>(value)) numbers[key] = (long long)(int32_t)n->value;
         if (auto *s = dynamic_cast<const OSString *>(value)) strings[key] = s->text;
+        if (auto *b = dynamic_cast<const OSBoolean *>(value)) numbers[key] = b->value;
+        objects[key] = const_cast<OSObject *>(value);
         return true;
+    }
+    OSObject *getObject(const char *key) const
+    {
+        auto it = objects.find(key);
+        return it == objects.end() ? nullptr : it->second;
     }
 };
 
@@ -175,6 +187,7 @@ class IOWorkLoop;
 class IOService : public OSObject {
 public:
     virtual IOWorkLoop *getWorkLoop() const { return nullptr; }
+    virtual IOReturn setProperties(OSObject *) { return kIOReturnUnsupported; }
     IOService *provider = nullptr;
     bool registered = false;
     std::string name;
@@ -220,6 +233,7 @@ class IOPMPowerSource : public IOService {
 public:
     std::map<std::string, long long> ps;
     OSDictionary adapter;
+    std::map<std::string, OSDictionary> dicts;  // every dictionary property by key (AdapterDetails, ChargerData)
     bool charging = false, external = false;
     unsigned capacity = 0, updates = 0;
     bool start(IOService *) override { return true; }
@@ -231,12 +245,18 @@ public:
     void setCurrentCapacity(unsigned v) { capacity = v; }
     void setMaxCapacity(unsigned) {}
     void setVoltage(unsigned v) { ps["Voltage"] = v; }
+    // The published booleans by their IOPMPowerSource keys, as powerd reads them.
+    long long isChargingKey() const { return charging; }
     void setAmperage(int v) { ps["Amperage"] = v; }
     void setCycleCount(unsigned v) { ps["CycleCount"] = v; }
     void setPSProperty(const OSSymbol *key, OSObject *value)
     {
         if (auto *n = dynamic_cast<OSNumber *>(value)) ps[key->text] = (long long)(int32_t)n->value;
-        if (auto *d = dynamic_cast<OSDictionary *>(value)) adapter = *d;
+        if (auto *b = dynamic_cast<OSBoolean *>(value)) ps[key->text] = b->value;
+        if (auto *d = dynamic_cast<OSDictionary *>(value)) {
+            dicts[key->text] = *d;
+            if (key->text == kIOPMPSAdapterDetailsKey) adapter = *d;
+        }
     }
     void updateStatus() { ++updates; }
 };

@@ -89,9 +89,9 @@ void pmc_registers(uint64_t events, uint32_t out[6])
     switch_wake_pmc_registers(events, out, out + 2, out + 4);
 }
 
-uint64_t pmc_armed(int usbHigh)
+uint64_t pmc_armed(int usbHigh, int gaugeHigh)
 {
-    return switch_wake_pmc_armed(usbHigh != 0);
+    return switch_wake_pmc_armed(usbHigh != 0, gaugeHigh != 0);
 }
 
 const char *pmc_reason(uint32_t status0, uint32_t status1, uint64_t armed)

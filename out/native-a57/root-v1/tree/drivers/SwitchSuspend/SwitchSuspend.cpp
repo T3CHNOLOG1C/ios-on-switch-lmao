@@ -25,6 +25,7 @@
 #include <libkern/c++/OSSymbol.h>
 #include <os/log.h>
 #include <pexpert/pexpert.h>
+#include "../SwitchBattery/SwitchBattery.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "SwitchSuspend.h"
 #include "SwitchWake.h"
@@ -263,9 +264,12 @@ void SwitchSuspend::sleepDevices()
     switch_power_journal_flush(true);
     timed("sleep", 7, "sd", ioswitch_block_suspend);
     timed("sleep", 8, "rtc", switch_rtc_suspend);
-    // Wake sources (SwitchWakeSources.h): the MAX77620's nIRQ (power key, RTC alarm) and the USB-PD ALERT (USB-C
-    // plug/unplug). Statuses cleared first, as tegra210_pmc_irq_set_wake does.
-    wakeArmed = switch_wake_pmc_armed(tegra_gpio_read(TEGRA_GPIO_PD_ALERT) == 1);
+    timed("sleep", 8, "battery", switch_battery_suspend);  // the gauge's alert: charge-zone edges only
+    // Wake sources (SwitchWakeSources.h): the MAX77620's nIRQ (power key, RTC alarm), the USB-PD ALERT (USB-C
+    // plug/unplug) and the gauge's ALRT (the battery's charge zone). Statuses cleared first, as
+    // tegra210_pmc_irq_set_wake does.
+    wakeArmed =
+        switch_wake_pmc_armed(tegra_gpio_read(TEGRA_GPIO_PD_ALERT) == 1, tegra_gpio_read(TEGRA_GPIO_GAUGE_ALERT) == 1);
     uint32_t mask[2], high[2], low[2];
     switch_wake_pmc_registers(wakeArmed, mask, high, low);
     wr(PMC_SW_WAKE_STATUS, 0);
@@ -325,6 +329,7 @@ void SwitchSuspend::wakeDevices()
         switch_power_journal("SwitchSuspend: wake 1 rtc: %llu us%s", nsSince(at) / 1000, alarm ? " (ALARM1)" : "");
     }
     timed("wake", 2, "sd", ioswitch_block_resume);
+    timed("wake", 2, "battery", switch_battery_resume);  // the normal gauge windows, a re-read
     timed("wake", 3, "thermal", switch_thermal_resume);
     timed("wake", 4, "joycon", switch_joycon_resume);
     timed("wake", 5, "touch", switch_touch_resume);

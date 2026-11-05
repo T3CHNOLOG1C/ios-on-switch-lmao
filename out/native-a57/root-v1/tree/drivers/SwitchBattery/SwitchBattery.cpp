@@ -63,6 +63,7 @@
 #include "SwitchChargePolicy.h"
 #include "../SwitchPower/SwitchPower.h"
 #include "../SwitchPower/SwitchSensors.h"
+#include "../SwitchSuspend/SwitchWake.h"
 
 namespace {
 namespace bq = charge::bq;
@@ -198,11 +199,11 @@ int chargerUpdate(uint8_t reg, uint8_t mask, uint8_t value)
     return err;
 }
 
-// The settings of a zone, watchdog first (the first host write starts it: [TI] 8.4.1), then less charge before more.
-// REG00's IINLIM and Hi-Z are applyInput()'s, REG01 is the arbiter's.
-int writeCharger(charge::Zone zone)
+// The settings of a decision, watchdog first (the first host write starts it: [TI] 8.4.1), then less charge before
+// more. REG00's IINLIM and Hi-Z are applyInput()'s, REG01 is the arbiter's.
+int writeCharger(const charge::Decision &d)
 {
-    const charge::ChargerSetting s = charge::chargerSetting(zone);
+    const charge::ChargerSetting s = charge::chargerSetting(d);
     int err = chargerUpdate(bq::TerminationTimer, charge::kReg05Mask, s.reg05);
     if (!err) err = chargerUpdate(bq::ChargeCurrent, bq::kIchgMask | bq::kForce20Pct, s.reg02);
     if (!err) err = chargerUpdate(bq::PreChargeTermination, 0xff, s.reg03);
@@ -212,9 +213,9 @@ int writeCharger(charge::Zone zone)
     return err;
 }
 
-bool chargerMatches(const uint8_t regs[9], charge::Zone zone)
+bool chargerMatches(const uint8_t regs[9], const charge::Decision &d)
 {
-    const charge::ChargerSetting s = charge::chargerSetting(zone);
+    const charge::ChargerSetting s = charge::chargerSetting(d);
     return (regs[0] & bq::kVindpmMask) == charge::kReg00Vindpm &&
            (regs[2] & (bq::kIchgMask | bq::kForce20Pct)) == s.reg02 && regs[3] == s.reg03 &&
            (regs[4] & bq::kVregMask) == s.reg04 && (regs[5] & charge::kReg05Mask) == s.reg05 &&
@@ -227,6 +228,20 @@ void setNumber(OSDictionary *dict, const char *key, int64_t value)
         dict->setObject(key, n);
         n->release();
     }
+}
+
+// ChargerData ([IOS-TLC]: PowerUI and PowerLog read NotChargingReason from it): what the charger is set to and why it
+// does not charge, as Apple's battery services publish it.
+OSDictionary *chargerData(const charge::Decision &d, uint8_t reg00, bool charging)
+{
+    OSDictionary *dict = OSDictionary::withCapacity(5);
+    if (!dict) return nullptr;
+    setNumber(dict, "NotChargingReason", d.notChargingReason);
+    setNumber(dict, "ChargingCurrent", charging ? d.chargeCurrentMA : 0);
+    setNumber(dict, "ChargingVoltage", d.chargeVoltageMV);
+    setNumber(dict, "VacVoltageLimit", d.chargeVoltageMV);
+    setNumber(dict, "InputCurrentLimit", bq::decodeInputLimit(reg00));
+    return dict;
 }
 
 // Adapter details for powerd/IOPSCopyExternalPowerAdapterDetails: the published USB-PD contract (SwitchPD) at its
@@ -255,6 +270,8 @@ OSDictionary *adapterDetails(bool external, uint8_t reg00, uint8_t reg08, const 
     setNumber(dict, kIOPMPSAdapterDetailsWattsKey, (int64_t)millivolts * milliamps / 1000000);
     setNumber(dict, kIOPMPSAdapterDetailsVoltage, millivolts);
     setNumber(dict, kIOPMPSAdapterDetailsAmperageKey, milliamps);
+    setNumber(dict, "PMUConfiguration", milliamps);  // [IOS-CLTM]: the input current limit thermalmonitord reads
+    dict->setObject("IsWireless", kOSBooleanFalse);
     if (const OSString *text = OSString::withCString(description)) {
         dict->setObject(kIOPMPSAdapterDetailsDescriptionKey, text);
         text->release();
@@ -265,7 +282,7 @@ OSDictionary *adapterDetails(bool external, uint8_t reg00, uint8_t reg08, const 
 // REG01's writers (start-up, the temperature zone, switch_battery_set_otg_boost) under one lock, created on first use.
 IOLock *gBoostLock;
 bool gBoosting;              // this boot's boost is on
-bool gChargeAllowed = true;  // the temperature zone charges
+bool gChargeAllowed = true;  // the decision (charge::decide: temperature zone and iPadOS's requests) charges
 bool gManaged;               // the charger is ours (SYS_MIN too)
 
 IOLock *boostLock()
@@ -378,6 +395,17 @@ void formatCentiC(char *out, size_t size, int centi)
     snprintf(out, size, "%s%u.%02u", centi < 0 ? "-" : "", a / 100, a % 100);
 }
 
+// What REG08 says: external power (not our boost), charging, done.
+void statusFields(Reading *r)
+{
+    const uint8_t status = r->charger[bq::SystemStatus];
+    const unsigned vbus = bq::vbusStat(status), chrg = bq::chargeStat(status);
+    // VBUS 3 = OTG: we power the partner; and while we source the port (the boost on), what the charger sees is ours.
+    r->external = (status & bq::kPowerGood) && vbus != 3 && !__atomic_load_n(&gBoosting, __ATOMIC_RELAXED);
+    r->charging = r->external && (chrg == 1 || chrg == 2);
+    r->full = r->external && chrg == 3;
+}
+
 int readAll(Reading *r)
 {
     uint16_t repCap = 0, repSoc = 0, temp = 0, vcell = 0, current = 0, avgCurrent = 0;
@@ -396,12 +424,7 @@ int readAll(Reading *r)
     if (err) return err;
     r->fault = __atomic_exchange_n(&gFaultsSeen, 0, __ATOMIC_ACQ_REL);  // ours and the other readers' since the last
 
-    const uint8_t status = r->charger[bq::SystemStatus];
-    const unsigned vbus = bq::vbusStat(status), chrg = bq::chargeStat(status);
-    // VBUS 3 = OTG: we power the partner; and while we source the port (the boost on), what the charger sees is ours.
-    r->external = (status & bq::kPowerGood) && vbus != 3 && !__atomic_load_n(&gBoosting, __ATOMIC_RELAXED);
-    r->charging = r->external && (chrg == 1 || chrg == 2);
-    r->full = r->external && chrg == 3;
+    statusFields(r);
     r->rawPercent = repSoc >> 8;
     r->percent = r->full ? 100 : (repSoc + 128u) >> 8;
     if (r->percent > 100) r->percent = 100;
@@ -433,10 +456,16 @@ class SwitchBattery : public IOPMPowerSource {
     uint64_t alertWindowStart[kAlertCount] = {};
     // The charger (file comment).
     bool managed = false;
-    bool zoneControl = false;  // the battery's zone switches charging on/off (also when not managed: never more charge)
+    bool zoneControl = false;  // the decision switches charging on/off (also when not managed: never more charge)
     charge::Zone zone = charge::Zone::Cold;
-    bool appliedPd = false;  // an input limit from a USB-PD contract was programmed since the cable came
-    bool boosting = false;   // this boot's OTG boost, as of the last reading
+    // The one owner of what the charger does: the zone and iPadOS's requests (setProperties) through charge::decide;
+    // `decision` is what the chip was last set to. Both only on the work loop.
+    charge::Requests requests = {};
+    charge::Decision decision = charge::decide(charge::Zone::Cold, charge::Requests{});
+    bool wasExternal = false;  // power in (not ours) as of the last reading: an attach is a wake source
+    int lastCentiCelsius = 0;  // the last reading's battery temperature
+    bool appliedPd = false;    // an input limit from a USB-PD contract was programmed since the cable came
+    bool boosting = false;     // this boot's OTG boost, as of the last reading
     bool statsDue = true;
     unsigned refreshes = 0, lostInARow = 0;
     uint64_t pdWord = 0;  // SwitchPD's last state (packPd), written on its work loop
@@ -450,8 +479,10 @@ class SwitchBattery : public IOPMPowerSource {
     bool reportAsFound(uint8_t found[11]);
     bool setUpCharger(const uint8_t found[11]);
     void manage(Reading &r, const PdSnapshot &pd);
-    void changeZone(charge::Zone next, int centiCelsius);
+    void apply(const charge::Decision &next, const char *why, int centiCelsius);
     void followZone(const Reading &r);
+    static IOReturn requestAction(OSObject *owner, void *dict, void *, void *, void *);
+    IOReturn request(const OSDictionary *dict);
     void applyInput(Reading &r, const PdSnapshot &pd);
     void stats(const Reading &r, const PdSnapshot &pd);
     void setKey(const char *key, OSObject *value);
@@ -460,6 +491,9 @@ class SwitchBattery : public IOPMPowerSource {
 public:
     bool start(IOService *provider) override;
     void free() override;
+    IOReturn setProperties(OSObject *properties) override;
+    IOWorkLoop *getWorkLoop() const override { return loop; }
+    void sleep(bool entering);
 };
 
 OSDefineMetaClassAndStructors(SwitchBattery, IOPMPowerSource);
@@ -577,12 +611,13 @@ bool SwitchBattery::setUpCharger(const uint8_t found[11])
     }
     zone = charge::nextZone(charge::Zone::Cold, centi);  // from no charge: the entry margins apply
     zoneControl = true;
-    if (!err) err = writeCharger(zone);
-    const bool charges = charge::zoneCharges(zone), yes = true;
+    decision = charge::decide(zone, requests);
+    if (!err) err = writeCharger(decision);
+    const bool charges = decision.charge, yes = true;
     if (!err) err = startMode(&charges, &yes);
     uint8_t now[9] = {}, latched = 0, current = 0;
     if (!err) err = readCharger(now, &latched, &current);
-    if (!err && chargerMatches(now, zone)) {
+    if (!err && chargerMatches(now, decision)) {
         __atomic_store_n(&gFaultsSeen, 0, __ATOMIC_RELEASE);  // the as-found faults (default mode) are not news
         IOLog("SwitchBattery: charger set: VINDPM %u mV, ICHG %u mA, VREG %u mV, pre-charge/termination %u/%u mA, "
               "watchdog off, safety timer off, battery %s C (%s%s)\n",
@@ -597,7 +632,7 @@ bool SwitchBattery::setUpCharger(const uint8_t found[11])
         (void)tegra_i2c_write(kBus, kCharger, reg, &found[reg], 1);
     }
     (void)chargerUpdate(bq::InputSource, bq::kVindpmMask, found[bq::InputSource]);
-    const bool allowed = charge::zoneCharges(zone), no = false;
+    const bool allowed = decision.charge, no = false;
     (void)startMode(&allowed, &no);
     if (IOLock *lock = boostLock()) {  // SYS_MIN as found (REG01's other bits are the arbiter's)
         IOLockLock(lock);
@@ -622,16 +657,26 @@ bool SwitchBattery::refresh()
     }
     reportedFailure = false;
     storeTemperature(true, r.milliCelsius);
+    lastCentiCelsius = r.centiCelsius;
     const PdSnapshot pd = unpackPd(__atomic_load_n(&pdWord, __ATOMIC_ACQUIRE));
     if (managed) {
         manage(r, pd);
     } else if (zoneControl) {
         followZone(r);
     }
+    // What the charger does now (manage may just have stopped or started it), for what is published below.
+    if (zoneControl && !tegra_i2c_read(kBus, kCharger, bq::SystemStatus, &r.charger[bq::SystemStatus], 1)) {
+        statusFields(&r);
+    }
+    // Power in that is not ours: SpringBoard lights the screen with the charging UI on this change ([IOS-SB]); with the
+    // panel off it is also a wake source, so the wake guarantee lights it if iPadOS does not (SwitchWake.h).
+    if (published && r.external && !wasExternal) switch_wake_event(SWITCH_WAKE_POWER_IN);
+    wasExternal = r.external;
+    const bool inflowOff = zoneControl && requests.inflowDisabled;  // [IOS-PD] DisableInflow: we report no AC
     setBatteryInstalled(true);
-    setExternalConnected(r.external);
-    setExternalChargeCapable(r.external);
-    setIsCharging(r.charging);
+    setExternalConnected(r.external && !inflowOff);
+    setExternalChargeCapable(r.external && !inflowOff);
+    setIsCharging(r.charging && !inflowOff);
     setAtCriticalLevel(false);
     setCurrentCapacity(r.percent);
     setMaxCapacity(100);
@@ -641,7 +686,18 @@ bool SwitchBattery::refresh()
     __atomic_store_n(&gBatteryAvgMa, (int)r.avgMilliamps, __ATOMIC_RELAXED);
     setCycleCount(r.cycles);
     setKey(kIOPMFullyChargedKey, r.full ? kOSBooleanTrue : kOSBooleanFalse);
-    setKey("AppleRawExternalConnected", r.external ? kOSBooleanTrue : kOSBooleanFalse);
+    setKey("AppleRawExternalConnected", (r.external || (inflowOff && pd.plugged)) ? kOSBooleanTrue : kOSBooleanFalse);
+    // What iPadOS reads back about the charge ([IOS-PS], [IOS-TLC], [IOS-CLTM]); nothing claimed without the decision.
+    const uint32_t notCharging = zoneControl && r.external && !r.charging ? decision.notChargingReason : 0;
+    setKeyNumber("NotChargingReason", notCharging);
+    setKeyNumber("ChargingOverride", zoneControl ? decision.chargingOverride : 0);
+    setKeyNumber("AppleChargeRateLimitIndex", requests.thermalLimitIndex);
+    charge::Decision shown = decision;
+    shown.notChargingReason = notCharging;
+    if (OSDictionary *data = chargerData(shown, r.charger[bq::InputSource], r.charging)) {
+        setKey("ChargerData", data);
+        data->release();
+    }
     setKeyNumber("InstantAmperage", r.milliamps);
     setKeyNumber(kIOPMPSBatteryTemperatureKey, r.centiCelsius);
     setKeyNumber(kIOPMPSDesignCapacityKey, r.designCapacity);
@@ -670,9 +726,9 @@ bool SwitchBattery::refresh()
 // The charger, after every reading: settings still there, the zone, REG01, the input limit.
 void SwitchBattery::manage(Reading &r, const PdSnapshot &pd)
 {
-    if ((r.fault & bq::kFaultWatchdog) || !chargerMatches(r.charger, zone)) {
+    if ((r.fault & bq::kFaultWatchdog) || !chargerMatches(r.charger, decision)) {
         if (++lostInARow > kLostLimit) {
-            const bool allowed = charge::zoneCharges(zone), no = false;
+            const bool allowed = decision.charge, no = false;
             (void)applyReg01(&allowed, &no, nullptr, nullptr, nullptr);
             managed = false;  // zoneControl stays: charging still stops outside 4-51 C
             IOLog("SwitchBattery: charger keeps losing its settings (REG00-06 %02x %02x %02x %02x %02x %02x %02x, "
@@ -685,13 +741,19 @@ void SwitchBattery::manage(Reading &r, const PdSnapshot &pd)
               "again\n",
               r.charger[0], r.charger[1], r.charger[2], r.charger[3], r.charger[4], r.charger[5], r.charger[6],
               r.fault);
-        (void)writeCharger(zone);
+        (void)writeCharger(decision);
         statsDue = true;
     } else {
         lostInARow = 0;
     }
     const charge::Zone next = charge::nextZone(zone, r.centiCelsius);
-    if (next != zone) changeZone(next, r.centiCelsius);
+    if (next != zone) {
+        const charge::Zone from = zone;
+        zone = next;
+        char why[48];
+        snprintf(why, sizeof(why), "%s -> %s", charge::zoneName(from), charge::zoneName(next));
+        apply(charge::decide(zone, requests), why, r.centiCelsius);
+    }
     uint8_t was = 0, now = 0;
     const int err = applyReg01(nullptr, nullptr, &was, &now, &boosting);
     if (!err && was != now) {
@@ -700,14 +762,16 @@ void SwitchBattery::manage(Reading &r, const PdSnapshot &pd)
     applyInput(r, pd);
 }
 
-void SwitchBattery::changeZone(charge::Zone next, int centiCelsius)
+// The one place the charger's charge settings change (managed): REG01 by the arbiter, REG02/REG04, less charge first
+// (charge::raises), one line. A failed write shows as lost settings at the next reading and is set again.
+void SwitchBattery::apply(const charge::Decision &next, const char *why, int centiCelsius)
 {
-    const charge::Zone from = zone;
+    const charge::Decision from = decision;
     const charge::ChargerSetting s = charge::chargerSetting(next);
-    const bool charges = charge::zoneCharges(next);
+    const bool charges = next.charge;
     int err = 0;
-    zone = next;  // what the chip must hold from now (a failed write shows as lost settings next reading)
-    if (charge::zoneRank(next) < charge::zoneRank(from)) {  // less: stop or lower first
+    decision = next;                    // what the chip must hold from now
+    if (!charge::raises(from, next)) {  // less (or the same): stop or lower first
         err = applyReg01(&charges, nullptr, nullptr, nullptr, nullptr);
         if (!err) err = chargerUpdate(bq::ChargeCurrent, bq::kIchgMask | bq::kForce20Pct, s.reg02);
         if (!err) err = chargerUpdate(bq::ChargeVoltage, bq::kVregMask, s.reg04);
@@ -718,9 +782,10 @@ void SwitchBattery::changeZone(charge::Zone next, int centiCelsius)
     }
     char celsius[16];
     formatCentiC(celsius, sizeof(celsius), centiCelsius);
-    IOLog("SwitchBattery: battery %s C: %s -> %s, %s (ICHG %u mA, VREG %u mV)%s\n", celsius, charge::zoneName(from),
-          charge::zoneName(next), charges ? "charging" : "charging off", bq::decodeChargeCurrent(s.reg02),
-          bq::decodeChargeVoltage(s.reg04), err ? " (I2C error: set again at the next reading)" : "");
+    IOLog("SwitchBattery: battery %s C: %s, %s (ICHG %u mA, VREG %u mV%s%s%s)%s\n", celsius, why,
+          charges ? "charging" : "charging off", bq::decodeChargeCurrent(s.reg02), bq::decodeChargeVoltage(s.reg04),
+          requests.osInhibit ? ", inhibited by powerd" : "", requests.predictiveInhibit ? ", held by PowerUI" : "",
+          requests.inflowDisabled ? ", inflow off" : "", err ? " (I2C error: set again at the next reading)" : "");
     statsDue = true;
 }
 
@@ -729,7 +794,8 @@ void SwitchBattery::changeZone(charge::Zone next, int centiCelsius)
 void SwitchBattery::followZone(const Reading &r)
 {
     const charge::Zone next = charge::nextZone(zone, r.centiCelsius);
-    const bool charges = charge::zoneCharges(next);
+    decision = charge::decide(next, requests);
+    const bool charges = decision.charge;
     uint8_t was = 0, now = 0;
     const int err = applyReg01(&charges, nullptr, &was, &now, nullptr);
     if (next == zone) return;
@@ -749,6 +815,25 @@ void SwitchBattery::applyInput(Reading &r, const PdSnapshot &pd)
     if (!pd.plugged) appliedPd = false;  // the next cable starts from the chip's own detection
     uint8_t reg00 = r.charger[bq::InputSource];
     const bool hiZ = reg00 & bq::kHiZ;
+    if (decision.hiZ) {  // [IOS-PD] DisableInflow: the input off, the system on the battery, until it is released
+        if (!hiZ && !boosting) {
+            // Under REG01's lock: a boost SwitchPD starts meanwhile is never put behind a disconnected input.
+            IOLock *lock = boostLock();
+            if (!lock) return;
+            IOLockLock(lock);
+            int err = 0;
+            const uint8_t next = (uint8_t)(reg00 | bq::kHiZ);
+            if (!gBoosting) err = tegra_i2c_write(kBus, kCharger, bq::InputSource, &next, 1);
+            const bool written = !gBoosting && !err;
+            IOLockUnlock(lock);
+            if (written) r.charger[bq::InputSource] = next;
+            if (written || err) {
+                IOLog("SwitchBattery: input off (Hi-Z) for powerd's DisableInflow%s\n", err ? " (I2C error)" : "");
+            }
+            statsDue = true;
+        }
+        return;
+    }
     // Our boost, or no input to limit. Hi-Z is cleared even without power good: in Hi-Z (host mode) the chip neither
     // takes power nor runs its detection again ([TI] 8.3.1.3, 8.3.1.3.5).
     if (boosting || (!(r.charger[bq::SystemStatus] & bq::kPowerGood) && !hiZ)) return;
@@ -834,6 +919,94 @@ void SwitchBattery::stats(const Reading &r, const PdSnapshot &pd)
         managed ? "" : " (charger as found)", r.percent, r.millivolts, celsius, s, r.fault);
 }
 
+// What iPadOS writes to the battery service ([IOS-PD], [IOS-PUI], [IOS-CLTM] in SwitchChargePolicy.h), on our work
+// loop: the requests change, the decision follows (charge::decide), one line per change. Keys we do not know are
+// refused (kIOReturnUnsupported), as IOService does.
+IOReturn SwitchBattery::setProperties(OSObject *properties)
+{
+    OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
+    if (!dict || !loop) return kIOReturnBadArgument;
+    return loop->runAction(&SwitchBattery::requestAction, this, dict);
+}
+
+IOReturn SwitchBattery::requestAction(OSObject *owner, void *dict, void *, void *, void *)
+{
+    return static_cast<SwitchBattery *>(owner)->request(static_cast<const OSDictionary *>(dict));
+}
+
+IOReturn SwitchBattery::request(const OSDictionary *dict)
+{
+    charge::Requests next = requests;
+    bool known = false;
+    if (OSBoolean *b = OSDynamicCast(OSBoolean, dict->getObject("IsCharging"))) {
+        next.osInhibit = !b->getValue();
+        known = true;
+    }
+    if (OSBoolean *b = OSDynamicCast(OSBoolean, dict->getObject("ExternalConnected"))) {
+        next.inflowDisabled = !b->getValue();
+        known = true;
+    }
+    if (OSBoolean *b = OSDynamicCast(OSBoolean, dict->getObject("PredictiveChargingInhibit"))) {
+        next.predictiveInhibit = b->getValue();
+        known = true;
+    }
+    if (OSNumber *n = OSDynamicCast(OSNumber, dict->getObject("AppleChargeRateLimitIndex"))) {
+        next.thermalLimitIndex = n->unsigned32BitValue();
+        known = true;
+    }
+    if (!known) return kIOReturnUnsupported;
+    if (next.osInhibit != requests.osInhibit) {
+        IOLog("SwitchBattery: powerd's ChargeInhibit assertion %s\n",
+              next.osInhibit ? "held: charging off" : "released");
+    }
+    if (next.predictiveInhibit != requests.predictiveInhibit) {
+        IOLog("SwitchBattery: PowerUI PredictiveChargingInhibit %s\n",
+              next.predictiveInhibit ? "on: charging held (Optimized Battery Charging)" : "off");
+    }
+    if (next.inflowDisabled != requests.inflowDisabled) {
+        IOLog("SwitchBattery: powerd's DisableInflow assertion %s\n",
+              next.inflowDisabled ? "held: input off" : "released: input on");
+    }
+    if (next.thermalLimitIndex != requests.thermalLimitIndex) {
+        os_log(OS_LOG_DEFAULT, "SwitchBattery: thermalmonitord AppleChargeRateLimitIndex %u (charge current %u %%)",
+               next.thermalLimitIndex,
+               charge::kThermalRatePercent[next.thermalLimitIndex > 3 ? 3 : next.thermalLimitIndex]);
+    }
+    requests = next;
+    const charge::Decision d = charge::decide(zone, requests);
+    if (managed && !charge::sameDecision(d, decision)) {
+        apply(d, "iPadOS request", lastCentiCelsius);
+    } else if (!managed && zoneControl) {
+        decision = d;
+        const bool charges = decision.charge;
+        (void)applyReg01(&charges, nullptr, nullptr, nullptr, nullptr);
+    }
+    statsDue = true;
+    if (published) timer->setTimeoutMS(kSettleMS);  // republish (and Hi-Z/input limit, applyInput) after the change
+    return kIOReturnSuccess;
+}
+
+// System sleep (SwitchSuspend, SC7): only the battery's zone edges may wake it (the gauge's ALRT, PMC wake 27, armed
+// while it reads high): the SOC and voltage windows off, the temperature window the zone's own (no thermalmonitord
+// degree), no re-read until the wake. Linux arms the gauge the same way (OLED DTB battery-gauge@36
+// nvidia,pmc-wakeup event 27); switchroot's bq2419x keeps charging in suspend with its last settings.
+void SwitchBattery::sleep(bool entering)
+{
+    if (!entering) {
+        if (published) timer->setTimeoutMS(kSettleMS);  // what changed while asleep, and the normal windows
+        return;
+    }
+    timer->cancelTimeout();
+    const uint16_t window = zoneControl ? charge::temperatureWindow(zone, lastCentiCelsius) : 0x7f80;
+    uint16_t status = 0;
+    int err = gaugeWrite(SAlrtTh, 0xff00);
+    if (!err) err = gaugeWrite(VAlrtTh, 0xff00);
+    if (!err) err = gaugeWrite(TAlrtTh, window);
+    if (!err) err = gaugeWord(Status, &status);
+    if (!err && (status & ~kStatusKeep)) err = gaugeWrite(Status, status & kStatusKeep);
+    if (err) IOLog("SwitchBattery: gauge sleep window failed (I2C %d)\n", err);
+}
+
 // The charger's and gauge's alert lines through TegraGPIO (which may sleep until the GIC is up).
 void SwitchBattery::attachAlerts()
 {
@@ -912,6 +1085,8 @@ extern "C" int switch_battery_avg_ma(bool *external)
     return __atomic_load_n(&gBatteryAvgMa, __ATOMIC_RELAXED);
 }
 
+static SwitchBattery *gBatteryService;  // set once started (switch_battery_suspend/resume)
+
 extern "C" int switch_battery_start(void)
 {
     static SwitchBattery *battery;
@@ -929,7 +1104,27 @@ extern "C" int switch_battery_start(void)
         return -1;
     }
     battery = candidate;
+    __atomic_store_n(&gBatteryService, candidate, __ATOMIC_RELEASE);
     return 0;
+}
+
+static IOReturn sleepAction(OSObject *owner, void *entering, void *, void *, void *)
+{
+    static_cast<SwitchBattery *>(owner)->sleep(entering != nullptr);
+    return kIOReturnSuccess;
+}
+
+// SwitchSuspend (SwitchBattery.h). Thread context, I2C up.
+extern "C" void switch_battery_suspend(void)
+{
+    if (SwitchBattery *b = __atomic_load_n(&gBatteryService, __ATOMIC_ACQUIRE))
+        b->getWorkLoop()->runAction(&sleepAction, b, b);
+}
+
+extern "C" void switch_battery_resume(void)
+{
+    if (SwitchBattery *b = __atomic_load_n(&gBatteryService, __ATOMIC_ACQUIRE))
+        b->getWorkLoop()->runAction(&sleepAction, b, nullptr);
 }
 
 // thermalmonitord's battery sensors (SwitchBattery.h). Any context.

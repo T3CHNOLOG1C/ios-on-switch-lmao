@@ -61,7 +61,7 @@ class Wake(unittest.TestCase):
         lib.ring_render.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
         lib.ring_render.restype = ctypes.c_size_t
         lib.pmc_registers.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint32)]
-        lib.pmc_armed.argtypes = [ctypes.c_int]
+        lib.pmc_armed.argtypes = [ctypes.c_int, ctypes.c_int]
         lib.pmc_armed.restype = ctypes.c_uint64
         lib.pmc_reason.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint64]
         lib.pmc_reason.restype = ctypes.c_char_p
@@ -168,8 +168,8 @@ class Wake(unittest.TestCase):
 
     def test_guard_timeout_and_names(self):
         self.assertEqual(self.lib.guard_ms(), 2500)
-        names = [self.lib.source_name(i).decode() for i in range(4)]
-        self.assertEqual(names, ['power key', 'rail Joy-Con Home', 'Bluetooth Home', 'unknown'])
+        names = [self.lib.source_name(i).decode() for i in range(5)]
+        self.assertEqual(names, ['power key', 'rail Joy-Con Home', 'Bluetooth Home', 'power in', 'unknown'])
 
     # --- The journal's ring --------------------------------------------------------------------------------------
     def render(self):
@@ -206,13 +206,16 @@ class Wake(unittest.TestCase):
         return list(out)
 
     def test_pmc_armed_events(self):
-        self.assertEqual(self.lib.pmc_armed(1), (1 << 51) | (1 << 14))
-        self.assertEqual(self.lib.pmc_armed(0), 1 << 51)  # a USB-PD ALERT stuck low is not armed
+        self.assertEqual(self.lib.pmc_armed(1, 0), (1 << 51) | (1 << 14))
+        self.assertEqual(self.lib.pmc_armed(0, 0), 1 << 51)  # a USB-PD ALERT stuck low is not armed
+        # The gauge's ALRT (r15-charging: charge-zone edges only during sleep), armed only while it reads high.
+        self.assertEqual(self.lib.pmc_armed(1, 1), (1 << 51) | (1 << 14) | (1 << 27))
+        self.assertEqual(self.lib.pmc_armed(0, 1), (1 << 51) | (1 << 27))
 
     def test_pmc_registers_match_the_old_constants(self):
         # SwitchSuspend before r15: WAKE_MASK = 1 << 14 (when the ALERT was high), WAKE2_MASK = 1 << (51 - 32), both
         # active low (LVL bits cleared), nothing active high.
-        mask0, mask1, high0, high1, low0, low1 = self.registers(self.lib.pmc_armed(1))
+        mask0, mask1, high0, high1, low0, low1 = self.registers(self.lib.pmc_armed(1, 0))
         self.assertEqual((mask0, mask1), (1 << 14, 1 << 19))
         self.assertEqual((high0, high1), (0, 0))
         self.assertEqual((low0, low1), (1 << 14, 1 << 19))
@@ -220,11 +223,14 @@ class Wake(unittest.TestCase):
         self.assertEqual((mask0, mask1, high0, high1, low0, low1), (1 << 16, 0, 1 << 16, 0, 0, 0))
 
     def test_pmc_reason(self):
-        armed = self.lib.pmc_armed(1)
+        armed = self.lib.pmc_armed(1, 1)
         self.assertEqual(self.lib.pmc_reason(0, 1 << 19, armed), b'pwrbtn')
+        self.assertEqual(self.lib.pmc_reason(1 << 27, 0, armed), b'battery')
+        mask0, mask1, high0, high1, low0, low1 = self.registers(1 << 27)  # gauge ALRT: active low
+        self.assertEqual((mask0, low0, high0), (1 << 27, 1 << 27, 0))
         self.assertEqual(self.lib.pmc_reason(1 << 14, 0, armed), b'usb-c')
         self.assertEqual(self.lib.pmc_reason(1 << 14, 1 << 19, armed), b'pwrbtn')  # table order
-        self.assertEqual(self.lib.pmc_reason(1 << 14, 0, self.lib.pmc_armed(0)), b'unknown')  # not armed
+        self.assertEqual(self.lib.pmc_reason(1 << 14, 0, self.lib.pmc_armed(0, 0)), b'unknown')  # not armed
         self.assertEqual(self.lib.pmc_reason(1 << 8, 1 << 20, armed), b'unknown')  # Wi-Fi/BT wake: not armed
 
     # --- The console buttons' descriptor -------------------------------------------------------------------------

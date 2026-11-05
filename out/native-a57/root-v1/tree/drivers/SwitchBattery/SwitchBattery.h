@@ -39,6 +39,12 @@ int switch_battery_avg_ma(bool *external);
 // 0 before the first reading or after a failed one. Any context.
 int switch_battery_temperature(int *milli_c, unsigned long long *at);
 
+// System sleep (SwitchSuspend, SC7): before the wake events are armed, the gauge's alert is narrowed to the battery's
+// temperature zone edges (SOC and voltage windows off), so its ALRT (PY0, PMC wake 27) wakes the system only for a
+// charge-zone change; after the wake, a re-read restores the normal windows. Thread context, I2C up.
+void switch_battery_suspend(void);
+void switch_battery_resume(void);
+
 #ifdef __cplusplus
 }
 #endif

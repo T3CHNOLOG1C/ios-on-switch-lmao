@@ -18,6 +18,7 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
+#include <os/log.h>
 #include "../SwitchBattery/SwitchBattery.h"
 #include "../SwitchBattery/SwitchChargePolicy.h"
 #include "../TegraGPIO/TegraGPIO.h"
@@ -68,6 +69,7 @@ enum : uint16_t {
     ALERT_PDO = 1u << 14,
     STATUS1_LASTCMD_SHIFT = 4,  // 0 complete, 2 aborted, 4 invalid, 6 rejected, 7 terminated
     STATUS1_LASTCMD_MASK = 7u << 4,
+    LASTCMD_ABORTED = 2,
     SEND_RDO_CMD = 0x0707,
     PS_RDY_CMD = 0x0505,
 };
@@ -535,9 +537,18 @@ void SwitchPD::negotiate(uint16_t alertBits)
         if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
             verify();
         } else if ((alertBits & ALERT_CMD_DONE) && (state.status1 & STATUS1_LASTCMD_MASK)) {
+            const unsigned last = (state.status1 & STATUS1_LASTCMD_MASK) >> STATUS1_LASTCMD_SHIFT;
+            if (last == LASTCMD_ABORTED && ++failedRequests < kMaxFailedRequests) {
+                // r8a: a MacBook's port aborts the first request at attach (the controller still busy with the
+                // partner's own messages) and takes the same one a moment later: once more, kPdoWaitMS on.
+                os_log(OS_LOG_DEFAULT, "SwitchPD: request aborted at attach (last command status 2): again in %u ms",
+                       kPdoWaitMS);
+                nego = Nego::WaitPdos;
+                negoTimer->setTimeoutMS(kPdoWaitMS);
+                break;
+            }
             char why[64];
-            snprintf(why, sizeof(why), "the request was refused (last command status %u)",
-                     (state.status1 & STATUS1_LASTCMD_MASK) >> STATUS1_LASTCMD_SHIFT);
+            snprintf(why, sizeof(why), "the request was refused (last command status %u)", last);
             fail(why);
         }
         break;

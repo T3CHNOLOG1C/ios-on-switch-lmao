@@ -43,6 +43,34 @@
 //   Hot    T >= 51 C        no charge      ([L4T-CHG] off above 50 C; [AMS-PARAM] would allow 3952 mV up to 60 C)
 // A zone with more charge current is entered only 1 C inside it (hysteresis toward the safer side only).
 // Horizon's Aula sleep-only rule (3072 mA / 4000 mV below 23 % in SleepCharge/ShutdownChargeMain) is not used.
+//
+// What iPadOS 21H461 asks of the battery service (the IOPMPowerSource SwitchBattery publishes), and what it reads
+// back; [V] = read in the 21H461 binaries (out/agent-scratch/r15-charging/ref/ios: powerd decompiled with Ghidra,
+// PowerUI/PowerLog/SpringBoard disassembled from the shared cache, thermalmonitord from r15-thermal's decompile):
+//   [IOS-PD]   powerd FUN_100044f88: the kIOPMAssertionTypeInhibitCharging ("ChargeInhibit") assertion sets IsCharging
+//              = false on every IOPMPowerSource while held (true when released); kIOPMAssertionTypeDisableInflow
+//              ("DisableInflow") sets ExternalConnected = false (true when released). [V]
+//   [IOS-PUI]  PowerUI -[PowerUIChargingController setChargingStatus:] (Optimized Battery Charging, Clean Energy
+//              Charging, charge limits): IORegistryEntrySetCFProperties(IOPMPowerSource, {PredictiveChargingInhibit:
+//              true to hold, false to charge}). [V]
+//   [IOS-PS]   powerd FUN_10002e790 reads ExternalConnected, ExternalChargeCapable, BatteryInstalled, IsCharging,
+//              AppleRawExternalConnected, FullyCharged, AtCriticalLevel, CurrentCapacity, MaxCapacity, Voltage,
+//              Amperage, InstantAmperage, CycleCount, AdapterDetails and ChargingOverride: bit 1 publishes "Optimized
+//              Battery Charging Engaged" in the power-source dictionary (FUN_100027ea4). [V]
+//   [IOS-TLC]  PowerUI -[PowerUISmartChargeManager durationToFullChargeFromBatteryLevel:includeTLCDelay:]: ChargerData
+//              NotChargingReason & 0x11e is "TLC Engaged" (temperature-limited charging, BatteryUI's "Charging On Hold:
+//              iPad Temperature"); PowerLog -[PLBatteryAgent checkForPenaltyBox:]: (NotChargingReason & 0x180) ==
+//              0x100 is the penalty box (off on J120: DT charger penalty-box-enable 0). [V]
+//   [IOS-CLTM] thermalmonitord PowerSourceCC (r15-thermal's tmd.ghidra.c 52357): while IsCharging is true, writes
+//              AppleChargeRateLimitIndex (a number, from the plist's ChargeLimitTable, the default one on J120: its
+//              powerSourceComponentControl is empty) to the IOPMPowerSource with BatteryInstalled; reads AdapterDetails
+//              Watts, FamilyCode, Current, PMUConfiguration. [V] The index's meaning is [I]: J120's DT charger
+//              charge-limits are 7533/5273/3766/2260 (100/70/50/30 % of the first), so index i takes entry min(i, 3).
+//   [IOS-SB]   SpringBoard -[SBUIController updateBatteryState:] logs "AC status changed (isOnAC ..., isScreenOn ...)"
+//              and calls -[SBLockScreenManager unlockUIFromSource:withOptions:]: an attach with the screen off lights it
+//              with the charging UI, from the power-source change powerd re-reads on updateStatus(). [V]
+//   Not implemented: the user charge limit (powerd ChargeCtrlPolicy socLimit) goes only to an AppleSMC key (CHLS,
+//   powerd FUN_100014a80); this port has no AppleSMC, so powerd logs "Failed to activate SOC limit" and charges on.
 #pragma once
 #include <stdint.h>
 
@@ -238,6 +266,77 @@ inline constexpr ChargerSetting chargerSetting(Zone z)
                           bq::encodeChargeVoltage(zoneChargeVoltage(z)), kReg05Value, kReg06Value};
 }
 
+// --- What iPadOS asks for, and the one decision ([IOS-*] above) ----------------------------------------------------
+struct Requests {
+    bool osInhibit;              // [IOS-PD] ChargeInhibit assertion held: IsCharging = false written
+    bool predictiveInhibit;      // [IOS-PUI] PredictiveChargingInhibit = true written (OBC/CEC hold)
+    bool inflowDisabled;         // [IOS-PD] DisableInflow assertion held: ExternalConnected = false written
+    unsigned thermalLimitIndex;  // [IOS-CLTM] AppleChargeRateLimitIndex, 0 = no limit
+};
+
+// NotChargingReason (ChargerData and top level) and ChargingOverride bits we publish.
+constexpr uint32_t kTlcMask = 0x11e;                       // [IOS-TLC]
+constexpr uint32_t kNotChargingTemperature = 1u << 1;      // charging off by battery temperature: inside kTlcMask
+constexpr uint32_t kChargingOverridePredictive = 1u << 1;  // [IOS-PS]: "Optimized Battery Charging Engaged"
+// [IOS-CLTM] J120 DT charger charge-limits {7533, 5273, 3766, 2260} as percentages of the first.
+constexpr unsigned kThermalRatePercent[4] = {100, 70, 50, 30};
+
+struct Decision {
+    Zone zone;
+    bool charge;               // REG01 CHG_CONFIG charge (else off)
+    bool hiZ;                  // REG00 EN_HIZ: the input disconnected, the system on the battery
+    unsigned chargeCurrentMA;  // REG02 ICHG
+    unsigned chargeVoltageMV;  // REG04 VREG
+    uint32_t notChargingReason;
+    uint32_t chargingOverride;
+};
+
+// The fast-charge current for a zone under a thermal limit index: a percentage of the zone's, rounded down to the
+// BQ24193's 64 mA step, never below its 512 mA minimum nor above the zone's own.
+inline constexpr unsigned limitedChargeCurrent(Zone z, unsigned thermalLimitIndex)
+{
+    const unsigned zoneMA = zoneChargeCurrent(z);
+    const unsigned percent = kThermalRatePercent[thermalLimitIndex > 3 ? 3 : thermalLimitIndex];
+    unsigned ma = zoneMA * percent / 100;
+    ma = ma < 512 ? 512 : 512 + (ma - 512) / 64 * 64;
+    return ma > zoneMA ? zoneMA : ma;
+}
+
+// Every input in one place: the temperature zone and each request only ever take charge away (lower current, charging
+// off, input off); nothing here can exceed the zone's own setting.
+inline constexpr Decision decide(Zone z, const Requests &q)
+{
+    const bool zoneOk = zoneCharges(z);
+    const bool charge = zoneOk && !q.osInhibit && !q.predictiveInhibit && !q.inflowDisabled;
+    return Decision{z,
+                    charge,
+                    q.inflowDisabled,
+                    charge ? limitedChargeCurrent(z, q.thermalLimitIndex) : kOffChargeCurrentMA,
+                    zoneChargeVoltage(z),
+                    zoneOk ? 0u : kNotChargingTemperature,
+                    q.predictiveInhibit ? kChargingOverridePredictive : 0u};
+}
+
+inline constexpr ChargerSetting chargerSetting(const Decision &d)
+{
+    return ChargerSetting{bq::encodeChargeCurrent(d.chargeCurrentMA), kReg03Value,
+                          bq::encodeChargeVoltage(d.chargeVoltageMV), kReg05Value, kReg06Value};
+}
+
+inline constexpr bool sameDecision(const Decision &a, const Decision &b)
+{
+    return a.zone == b.zone && a.charge == b.charge && a.hiZ == b.hiZ && a.chargeCurrentMA == b.chargeCurrentMA &&
+           a.chargeVoltageMV == b.chargeVoltageMV && a.notChargingReason == b.notChargingReason &&
+           a.chargingOverride == b.chargingOverride;
+}
+
+// More charge current or voltage than before (the order a change is written in: less first).
+inline constexpr bool raises(const Decision &from, const Decision &to)
+{
+    return (to.charge && !from.charge) || to.chargeCurrentMA > from.chargeCurrentMA ||
+           to.chargeVoltageMV > from.chargeVoltageMV;
+}
+
 // The MAX17050 TALRT_Th (0x02) window that holds while the zone stays: high byte TMAX, low byte TMIN, signed degrees C
 // (Linux max17042_battery.c POWER_SUPPLY_PROP_TEMP_ALERT_MIN/MAX; 0x7f80 = off). The gauge alerts when TEMP leaves
 // [TMIN, TMAX]; the reading that follows decides with nextZone(). A temperature already outside its zone's window (only
@@ -299,14 +398,17 @@ inline constexpr unsigned rdoMaxMilliamps(uint32_t r)
 }
 constexpr uint32_t kRdoNoUsbSuspend = 1u << 24, kRdoUsbCommunications = 1u << 25, kRdoMismatch = 1u << 26;
 
-// [L4T-PD] bm92t_calculate_current_limit: keep a USB port's power for the source (4.5 W above 5 V, 2.5 W at 5 V),
-// cap per voltage ([DTB] rohm,pd-*-current-limit-ma), then the BQ24193 step at or below. Unlike bm92txx, a PDO with
-// less current than the reserve gives 0 (bm92txx's unsigned subtraction wrapped to the cap), and 0 means "no usable
-// contract" (below the BQ24193's lowest step).
-inline constexpr unsigned pdInputLimit(unsigned millivolts, unsigned milliamps)
+// The input limit for a PDO: its current, capped per voltage ([DTB] rohm,pd-*-current-limit-ma, the limit), then the
+// BQ24193 step at or below. [L4T-PD] bm92t_calculate_current_limit also keeps a USB port's power for the source (4.5 W
+// above 5 V, 2.5 W at 5 V, "Subtract a USB2 or USB3 port current"): here only for the Nintendo dock's signature
+// (`dock`), whose own USB ports share its adapter. A plain source guarantees what it advertises (USB PD R3.0 7.1), and
+// r8a measured what the reserve costs on a MacBook's port (5 V 1.5 A PDO): 0.9 A taken, 0.83 A on the meter, the
+// input limit binding (DPM) and the battery barely charging. Unlike bm92txx, a PDO with less current than the reserve
+// gives 0 (its unsigned subtraction wrapped to the cap), and 0 means "no usable contract".
+inline constexpr unsigned pdInputLimit(unsigned millivolts, unsigned milliamps, bool dock = false)
 {
     if (!millivolts) return 0;
-    const unsigned reserve = (millivolts > 5000 ? 4500000u : 2500000u) / millivolts;
+    const unsigned reserve = dock ? (millivolts > 5000 ? 4500000u : 2500000u) / millivolts : 0;
     unsigned limit = milliamps > reserve ? milliamps - reserve : 0;
     const unsigned cap = millivolts == 5000 ? 2000 : millivolts == 9000 ? 2000 : millivolts == 12000 ? 1500 : 1200;
     if (limit > cap) limit = cap;
@@ -336,7 +438,7 @@ inline constexpr PdChoice choosePdo(const uint32_t *pdos, unsigned count)
     if (count == 2 && pdoMillivolts(pdos[0]) == 5000 && pdoMilliamps(pdos[0]) == 500) {
         const uint32_t p = pdos[1];
         if (pdoType(p) == 0 && pdoMillivolts(p) == 15000 && pdoMilliamps(p) >= 2600 && pdoMilliamps(p) <= 3000) {
-            return PdChoice{2, p, 15000, pdoMilliamps(p), pdInputLimit(15000, pdoMilliamps(p)), true, nullptr};
+            return PdChoice{2, p, 15000, pdoMilliamps(p), pdInputLimit(15000, pdoMilliamps(p), true), true, nullptr};
         }
         choice.refusal = "dock signature without 15 V 2.6-3 A";
         return choice;
@@ -390,7 +492,16 @@ static_assert(bq::decodeInputVoltage(kReg00Vindpm) == 4360 && kReg00Vindpm == 0x
 static_assert(kReg03Value == 0x00 && kReg01SysMin == 0x00, "128/128 mA, 3000 mV");
 static_assert(kReg05Value == 0x80 && kReg05Mask == 0xb8, "termination on, watchdog off, safety timer off");
 static_assert(pdInputLimit(15000, 2600) == 1200 && pdInputLimit(5000, 3000) == 2000, "PD caps");
-static_assert(pdInputLimit(5000, 300) == 0, "no wrap below the reserve");
+static_assert(pdInputLimit(5000, 1500) == 1500 && pdInputLimit(9000, 2000) == 2000, "a plain source: its PDO current");
+static_assert(pdInputLimit(15000, 2600, true) == 1200 && pdInputLimit(5000, 300, true) == 0, "dock: reserve kept");
 static_assert(chargerSetting(Zone::Normal).reg02 == 0x60 && chargerSetting(Zone::Normal).reg04 == 0xb0, "normal");
+static_assert(limitedChargeCurrent(Zone::Normal, 0) == 2048 && limitedChargeCurrent(Zone::Normal, 1) == 1408 &&
+                  limitedChargeCurrent(Zone::Normal, 9) == 576 && limitedChargeCurrent(Zone::Cool, 3) == 512,
+              "thermal limits");
+static_assert(!decide(Zone::Normal, Requests{false, true, false, 0}).charge &&
+                  decide(Zone::Normal, Requests{false, true, false, 0}).chargingOverride == kChargingOverridePredictive,
+              "OBC hold");
+static_assert((decide(Zone::Hot, Requests{}).notChargingReason & kTlcMask) && !decide(Zone::Hot, Requests{}).charge,
+              "hot: TLC");
 
 }  // namespace charge

@@ -18,6 +18,10 @@
 //       Bluetooth Home   a connected Joy-Con (R) or Pro Controller's Home, seen here in its HID input report on the way
 //                        to bluetoothd (SwitchBluetooth) -> Consumer Menu on the console buttons (SwitchButtons). With
 //                        the panel lit the report only goes to GameController, as before (its AC Home does nothing).
+//       power in         a charger, dock or host plugged in (SwitchBattery: external power that is not our own boost
+//                        appears) -> SpringBoard lights the screen with the charging UI itself (-[SBUIController
+//                        updateBatteryState:] -> unlockUIFromSource:withOptions:, from the power-source change), as on
+//                        an iPad; the wake guarantee covers it if it does not.
 //   * The wake guarantee: any of them with the panel off arms a deadline (kSwitchWakeGuardMS). If the render server has
 //     not asked for the panel on by then, the kernel lights it itself (one journal line, and a stackshot of every task
 //     in /private/var/ioswitch/wake-<UTC>.kcdata), so a hung SpringBoard or backboardd shows as a frozen screen, not as
@@ -37,12 +41,14 @@ enum switch_wake_source {
     SWITCH_WAKE_POWER_KEY = 0,  // MAX77620 EN0 (SwitchButtons)
     SWITCH_WAKE_RAIL_HOME = 1,  // a seated Joy-Con (R)'s Home (SwitchJoyConHID)
     SWITCH_WAKE_BT_HOME = 2,    // a Bluetooth Joy-Con (R) or Pro Controller's Home (SwitchBluetooth)
-    SWITCH_WAKE_SOURCES = 3,
+    SWITCH_WAKE_POWER_IN = 3,   // external power plugged in (SwitchBattery)
+    SWITCH_WAKE_SOURCES = 4,
 };
 
 static inline const char *switch_wake_source_name(unsigned source)
 {
-    static const char *const names[SWITCH_WAKE_SOURCES] = {"power key", "rail Joy-Con Home", "Bluetooth Home"};
+    static const char *const names[SWITCH_WAKE_SOURCES] = {"power key", "rail Joy-Con Home", "Bluetooth Home",
+                                                           "power in"};
     return source < SWITCH_WAKE_SOURCES ? names[source] : "unknown";
 }
 
@@ -207,8 +213,11 @@ struct switch_wake_pmc_event {
     const char *name;
 };
 static const struct switch_wake_pmc_event switch_wake_pmc_events[] = {
-    {51, SWITCH_WAKE_LOW, 1, "pwrbtn"},  // pwr_int_n: MAX77620 nIRQ: power key EN0 (and RTC ALARM1: switch_rtc_resume)
-    {14, SWITCH_WAKE_LOW, 1, "usb-c"},   // gpio_pk4: BM92T36 USB-PD ALERT (armed only while the line is high)
+    {51, SWITCH_WAKE_LOW, 1, "pwrbtn"},   // pwr_int_n: MAX77620 nIRQ: power key EN0 (and RTC ALARM1: switch_rtc_resume)
+    {14, SWITCH_WAKE_LOW, 1, "usb-c"},    // gpio_pk4: BM92T36 USB-PD ALERT (armed only while the line is high)
+    {27, SWITCH_WAKE_LOW, 1, "battery"},  // gpio_py0: MAX17050 ALRT, the battery's charge-zone edges only during sleep
+                                          // (switch_battery_suspend; the DTB's battery-gauge@36 nvidia,pmc-wakeup 27)
+                                          // (armed only while the line is high)
     {16, SWITCH_WAKE_HIGH, 0, "soc-rtc"},  // rtc_irq: the PMC's own RTC (the MAX77620's is used)
     {35, SWITCH_WAKE_LOW, 0, "sd-cd"},     // gpio_pz1: SD card detect (both edges in the DTB)
     {8, SWITCH_WAKE_HIGH, 0, "wifi"},      // WiFi Wake Ap (PH2), commented out
@@ -234,13 +243,15 @@ static inline void switch_wake_pmc_registers(uint64_t events, uint32_t mask[2], 
     }
 }
 
-// The armed events, as a bit set; usbHigh: the USB-PD ALERT line reads high (a line stuck low would wake at once).
-static inline uint64_t switch_wake_pmc_armed(bool usbHigh)
+// The armed events, as a bit set; usbHigh / gaugeHigh: the USB-PD ALERT / gauge ALRT line reads high (a level-low line
+// already low would wake at once).
+static inline uint64_t switch_wake_pmc_armed(bool usbHigh, bool gaugeHigh)
 {
     uint64_t events = 0;
     for (size_t i = 0; i < SWITCH_WAKE_PMC_EVENTS; ++i) {
         if (!switch_wake_pmc_events[i].armed) continue;
         if (switch_wake_pmc_events[i].event == 14 && !usbHigh) continue;
+        if (switch_wake_pmc_events[i].event == 27 && !gaugeHigh) continue;
         events |= (uint64_t)1 << switch_wake_pmc_events[i].event;
     }
     return events;

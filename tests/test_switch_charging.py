@@ -21,7 +21,8 @@ HEADERS = ["IOKit/IOLib.h", "IOKit/IOService.h", "IOKit/IOWorkLoop.h", "IOKit/IO
            "libkern/c++/OSString.h", "libkern/c++/OSSymbol.h", "os/log.h"]
 SCENARIOS = ["policy", "nintendo-boot", "jeita", "hotplug", "refused", "silent", "rebalance", "ours-already",
              "settings-lost", "not-taken", "otg-left-on", "linux-left", "bad-temp",
-             "lost-while-hot"]
+             "lost-while-hot", "ios-requests", "temperature-hold", "power-in-wake", "sleep-windows", "role-swap",
+             "mac-port"]
 FLAGS = ["-std=c++20", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-fsanitize=address,undefined",
          "-fno-sanitize-recover=all", "-g"]
 
@@ -73,6 +74,7 @@ class SwitchChargingTests(unittest.TestCase):
         self.assertIn("kColdBelowC = 4, kCoolBelowC = 17, kHotFromC = 51", policy)
         self.assertIn("kReg05Value = bq::kEnTerm;", policy)  # termination on, watchdog and safety timer off
         self.assertIn("millivolts == 5000 ? 2000 : millivolts == 9000 ? 2000 : millivolts == 12000 ? 1500 : 1200", policy)
+        self.assertIn("kThermalRatePercent[4] = {100, 70, 50, 30}", policy)  # J120 DT charger charge-limits
 
     def test_driver_guards(self):
         """No waits in the PD request (every step is an ALERT or a one-shot timer); the charger's REG05 is written only
