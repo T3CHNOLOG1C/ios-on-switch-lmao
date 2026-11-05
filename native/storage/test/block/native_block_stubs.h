@@ -1,8 +1,11 @@
+// Host stand-ins for the IOKit/libkern interfaces native/storage/NativeIOSwitchBlock.cpp uses, for
+// native_block_test.cpp (BUILD.bazel points <IOKit/...> and <libkern/c++/...> here): reference-counted objects that
+// count what is live, a lock that checks its own discipline, a registry of published services, and failure injection
+// for every allocation, attach, start, property and IOMalloc.
 #ifndef IOSWITCH_TEST_IOKIT_STUBS_H
 #define IOSWITCH_TEST_IOKIT_STUBS_H
 #include <algorithm>
 #include <atomic>
-#include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +14,18 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "bazel/testing/require.h"
+
+// A stand-in's invariant (lock discipline, ownership): printed at once, since it may fail on a worker thread where
+// nothing else would report it, then REQUIRE (never compiled out under NDEBUG).
+#define STUB_REQUIRE(...)                                                                                              \
+    do {                                                                                                               \
+        if (!(__VA_ARGS__)) {                                                                                          \
+            std::fprintf(stderr, "%s:%d: stand-in invariant failed: %s\n", __FILE__, __LINE__, #__VA_ARGS__);         \
+            REQUIRE(__VA_ARGS__);                                                                                      \
+        }                                                                                                              \
+    } while (0)
+
 using UInt64 = uint64_t;
 using UInt32 = uint32_t;
 using IOOptionBits = uint32_t;
@@ -41,14 +56,16 @@ template<class T> T *allocateType() {
 inline thread_local unsigned heldLocks = 0;
 struct IOLock { std::mutex lock; };
 inline IOLock *IOLockAlloc() { return new IOLock; }
-inline void IOLockFree(IOLock *lock) { assert(!heldLocks); delete lock; }
-inline void IOLockLock(IOLock *lock) { assert(!heldLocks); lock->lock.lock(); ++heldLocks; }
-inline void IOLockUnlock(IOLock *lock) { assert(heldLocks == 1); --heldLocks; lock->lock.unlock(); }
+inline void IOLockFree(IOLock *lock) { STUB_REQUIRE(!heldLocks); delete lock; }
+// IOLockLock/IOLockUnlock take and drop the lock across calls, as IOKit's do (clang's -Wthread-safety, which the host
+// toolchain turns on, cannot follow that).
+inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis)) { STUB_REQUIRE(!heldLocks); lock->lock.lock(); ++heldLocks; }
+inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis)) { STUB_REQUIRE(heldLocks == 1); --heldLocks; lock->lock.unlock(); }
 inline void *IOMalloc(size_t bytes) {
  if (++mallocCalls == failMallocCall) return nullptr;
  void *p = std::malloc(bytes); if(p) ++mallocLive; return p;
 }
-inline void IOFree(void *p, size_t) { if(p) { assert(mallocLive); --mallocLive; std::free(p); } }
+inline void IOFree(void *p, size_t) { if(p) { STUB_REQUIRE(mallocLive); --mallocLive; std::free(p); } }
 class OSObject {
  std::atomic<unsigned> refs{1};
 public:
@@ -104,7 +121,7 @@ public:
  virtual bool start(IOService *) { return ++startCalls != failStartCall; }
  virtual void stop(IOService *) { ++superclassStops; }
  virtual bool attach(IOService *parent) { if(++attachCalls==failAttachCall)return false; provider=parent;return true; }
- virtual void detach(IOService *parent) { assert(provider==parent); provider=nullptr; }
+ virtual void detach(IOService *parent) { STUB_REQUIRE(provider==parent); provider=nullptr; }
  virtual void registerService(IOOptionBits=0) { retain(); registered.push_back(this); }
  virtual IOService *getProvider() { return provider; }
  IOService *copyParentEntry(const void *) { if(provider)provider->retain(); return provider; }
@@ -129,7 +146,7 @@ public:
  static OSIterator *getMatchingServices(OSDictionary *dict) {
   auto *props=dynamic_cast<OSDictionary *>(dict->getObject("IOPropertyMatch"));
   auto *uuid=props?dynamic_cast<OSString *>(props->getObject("UUID")):nullptr;
-  assert(uuid); std::vector<OSObject *> matches;
+  STUB_REQUIRE(uuid); std::vector<OSObject *> matches;
   for(auto *media:candidates) {
    auto *identity=dynamic_cast<OSString *>(media->getProperty("UUID"));
    if(identity && !std::strcmp(identity->getCStringNoCopy(),uuid->getCStringNoCopy())) matches.push_back(media);
@@ -156,8 +173,8 @@ public:
  uint64_t getLength() const { return bytes.size(); }
  unsigned getDirection() const { return direction; }
  uint64_t writeBytes(uint64_t off,const void *src,uint64_t count) {
-  assert(heldLocks==1); uint64_t n=std::min(count,copyLimit);
-  assert(off<=bytes.size() && n<=bytes.size()-off); std::memcpy(bytes.data()+off,src,n); return n;
+  STUB_REQUIRE(heldLocks==1); uint64_t n=std::min(count,copyLimit);
+  STUB_REQUIRE(off<=bytes.size() && n<=bytes.size()-off); std::memcpy(bytes.data()+off,src,n); return n;
  }
 };
 class IOBlockStorageDevice : public IOService {

@@ -1,13 +1,15 @@
 // Host test of drivers/NativeIOSwitchBlock/IOSwitchCq.h: the SD driver's command-queue engine against a model card that
-// enforces SD Physical Layer 6.00 4.19 (test_native_sd_cq.py runs this). Every rule the card has is an assert in the
-// model, so the engine (and the driver-like loops below) can never send a command the card would refuse.
+// enforces SD Physical Layer 6.00 4.19. Every rule the card has is a REQUIRE in the model, so the engine (and the
+// driver-like loops below) can never send a command the card would refuse. What the driver does with the engine is
+// guarded by sd_cq_source_test.cpp.
 // r16-sdcq: the model has the card's cache too (9.10 4.17, Table 5-30 bytes 260/261): each write either on flash or held
 // in the cache until a flush, which a power cycle loses; the driver-like loops assert that no completed write is ever
 // lost, whenever the power goes. And the cards r7z could have been: one that takes the queue only with its cache on
 // (4.19.1), one that shows the enable late (the Raspberry Pi kernel's "lazy" cards), one that keeps voluntary mode, one
 // whose cache will not go off, one whose flush never ends. A cost model (kRegisterUs, kProgramUs, kCachedUs: assumed
 // figures, not r7z's) prices each write from its command to its completion, against today's (cache off, no flush).
-#include <cassert>
+#include <gtest/gtest.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -15,7 +17,8 @@
 #include <set>
 #include <vector>
 
-#include "IOSwitchCq.h"
+#include "../IOSwitchCq.h"
+#include "bazel/testing/require.h"
 
 // The cost model: a CMD48/CMD49 (command, one 512-byte block, interrupt), a 4 KiB write programmed (the card busy until it
 // is on flash), the same write into the card's cache, and a flush programming what the cache holds.
@@ -24,14 +27,14 @@ constexpr double kRegisterUs = 60, kProgramUs = 900, kCachedUs = 150;
 struct Card {
     // What kind of card.
     unsigned depth = 32;
-    unsigned lazyLeave = 0;      // read-backs that still show 03h after CMD49 00h
-    bool stuck = false;          // never leaves CQ mode
-    bool refuseEnable = false;   // CMD49 03h answered but the byte stays 00h
-    bool requireCache = false;   // r16-sdcq: CMD49 03h taken only with the cache on (else the byte stays 00h)
-    unsigned lazyEnable = 0;     // r16-sdcq: read-backs that still show 00h after CMD49 03h (the card in CQ mode already)
-    bool voluntaryOnly = false;  // r16-sdcq: CMD49 03h enables the queue but bit 1 does not take (reads 01h)
-    bool refuseCache = false;    // r16-sdcq: CMD49 01h of byte 260 answered, the cache stays off
-    unsigned lazyCache = 0;      // r16-sdcq: read-backs that still show 00h after CMD49 01h of byte 260
+    unsigned lazyLeave = 0;     // read-backs that still show 03h after CMD49 00h
+    bool stuck = false;         // never leaves CQ mode
+    bool refuseEnable = false;  // CMD49 03h answered but the byte stays 00h
+    bool requireCache = false;  // r16-sdcq: CMD49 03h taken only with the cache on (else the byte stays 00h)
+    unsigned lazyEnable = 0;  // r16-sdcq: read-backs that still show 00h after CMD49 03h (the card in CQ mode already)
+    bool voluntaryOnly = false;   // r16-sdcq: CMD49 03h enables the queue but bit 1 does not take (reads 01h)
+    bool refuseCache = false;     // r16-sdcq: CMD49 01h of byte 260 answered, the cache stays off
+    unsigned lazyCache = 0;       // r16-sdcq: read-backs that still show 00h after CMD49 01h of byte 260
     bool flushNeverDone = false;  // r16-sdcq: Flush Cache stays 01h (Linux's quirk for early SanDisk A2 cards)
     bool refuseDisable = false;   // r16-sdcq: CMD49 00h of byte 260 answered, the cache stays on
     long failAt = -1;             // this command (1-based count) fails on the bus and is not taken
@@ -76,37 +79,37 @@ struct Card {
         trace.push_back(index);
         if (fails()) return 2;
         // Class 1 commands are illegal outside CQ mode (4.19.1: no response, Illegal Command in the next R1).
-        assert(cq);
+        REQUIRE(cq);
         // Anything after a valid CMD44 but CMD45 invalidates it (4.19.5): the engine always follows CMD44 with CMD45.
-        assert(!half || index == 45);
+        REQUIRE(!half || index == 45);
         *r1 = 4u << 9;  // CQ Tran
         switch (index) {
         case 44: {
-            assert(!busy);
+            REQUIRE(!busy);
             const uint32_t task = argument >> 16 & 0x1f, blocks = argument & 0xffff;
-            assert(argument >> 30 == 1);        // read; bit 31 reserved 0
-            assert(!(argument & 0x3fe00000u));  // extended address, priority, reserved: 0
-            assert(blocks && task < depth && !tasks[task].used);
+            REQUIRE(argument >> 30 == 1);        // read; bit 31 reserved 0
+            REQUIRE(!(argument & 0x3fe00000u));  // extended address, priority, reserved: 0
+            REQUIRE(blocks && task < depth && !tasks[task].used);
             // Sequential mode: the queue is empty before a group, tasks assigned at once from 0 in order (4.19.1.2).
-            assert(task == assigned && executedNext == 0);
+            REQUIRE(task == assigned && executedNext == 0);
             half = true;
             halfTask = task;
             halfBlocks = blocks;
             return 0;
         }
         case 45:
-            assert(!busy && half);
+            REQUIRE(!busy && half);
             half = false;
             tasks[halfTask] = {true, halfBlocks, argument};
             ++assigned;
             return 0;
         case 43:
-            assert(busy && argument == kSdAbortQueue);  // abort the entire queue
+            REQUIRE(busy && argument == kSdAbortQueue);  // abort the entire queue
             for (Task &t : tasks) t.used = false;
             assigned = executedNext = 0;
             ++aborts;
             return 0;
-        default: assert(false); return 1;
+        default: REQUIRE(false); return 1;
         }
     }
     int control(uint32_t byte, bool write, uint8_t *value)
@@ -114,17 +117,17 @@ struct Card {
         trace.push_back(write ? 49 : 48);
         busyUs += kRegisterUs;
         if (fails()) return 2;
-        assert(!half);
+        REQUIRE(!half);
         // r16-sdcq: the only bytes the driver may touch, and the only values it may write (ioswitchSdPerfWriteAddress).
-        assert(byte == kSdPerfCacheControl || byte == kSdPerfFlushControl || byte == kSdPerfCqControl);
-        if (write) assert(ioswitchSdPerfWriteAddress(IOSwitchSdExtFunction{true, 2, 0}, byte, *value));
+        REQUIRE(byte == kSdPerfCacheControl || byte == kSdPerfFlushControl || byte == kSdPerfCqControl);
+        if (write) REQUIRE(ioswitchSdPerfWriteAddress(IOSwitchSdExtFunction{true, 2, 0}, byte, *value));
         if (byte == kSdPerfCacheControl) {
             if (!write) {
                 *value = cacheLag ? 0 : byte260;
                 if (cacheLag) --cacheLag;
                 return 0;
             }
-            assert(!cq);  // the engine turns the cache on and off out of CQ mode only
+            REQUIRE(!cq);  // the engine turns the cache on and off out of CQ mode only
             if (*value) {
                 if (!refuseCache) {
                     byte260 = 1;
@@ -147,7 +150,7 @@ struct Card {
             // Busy until the flush is done (4.17), so a read-back after it shows 00h. CMD49 is legal in CQ mode (Table
             // 4-74); the engine never flushes with tasks it assigned, but a CMD43 lost on the bus can leave some behind
             // before the stuck card's power cycle (reads only: the flush does not touch them).
-            assert(queueEmpty() || lostCommand);
+            REQUIRE(queueEmpty() || lostCommand);
             ++flushes;
             if (flushNeverDone && byte260) {
                 byte261 = 1;
@@ -169,12 +172,12 @@ struct Card {
             return 0;
         }
         // The CQ control byte, 00h or 03h (sequential mode).
-        assert(*value == 0 || *value == (kSdCqEnable | kSdCqSequential));
+        REQUIRE(*value == 0 || *value == (kSdCqEnable | kSdCqSequential));
         if (*value) {
             ++enables;
             if (refuseEnable || (requireCache && !byte260)) return 0;
             // Enabling needs an empty queue, nothing half-assigned (the engine only enables from legacy mode).
-            assert(!cq || queueEmpty());
+            REQUIRE(!cq || queueEmpty());
             cq = true;
             byte262 = voluntaryOnly ? kSdCqEnable : *value;
             enableLag = lazyEnable;
@@ -197,7 +200,7 @@ struct Card {
     long legacyWrite()
     {
         trace.push_back(25);
-        assert(!cq);
+        REQUIRE(!cq);
         ++legacyCommands;
         const long id = ++legacyWrites;
         if (byte260) {
@@ -225,10 +228,10 @@ struct Card {
     void execute(uint32_t argument)
     {
         trace.push_back(46);
-        assert(cq && !half);
+        REQUIRE(cq && !half);
         const uint32_t task = argument >> 16 & 0x1f;
-        assert(!(argument & ~(0x1fu << 16)));
-        assert(task == executedNext && task < assigned && tasks[task].used);
+        REQUIRE(!(argument & ~(0x1fu << 16)));
+        REQUIRE(task == executedNext && task < assigned && tasks[task].used);
         tasks[task].used = false;
         ++executedNext;
         ++cqReads;
@@ -238,7 +241,7 @@ struct Card {
     void legacy()
     {
         trace.push_back(18);
-        assert(!cq);
+        REQUIRE(!cq);
         ++legacyCommands;
     }
 };
@@ -254,6 +257,8 @@ struct Bus {
     void settle() { ++settles; }
 };
 using Engine = IOSwitchCqEngine<Bus>;
+// r16-sdcq: each control byte is read back at most this many times (a card slow to show it, bounded).
+static_assert(Engine::kReadBacks == 10);
 
 static std::vector<IOSwitchCqTask> group(unsigned n, uint64_t base = 1000)
 {
@@ -283,31 +288,31 @@ static void basics()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(e.state == Engine::kIdle && e.depth == 32);
-        assert(runGroup(e, bus, card, 3) && e.state == Engine::kOn && card.cq);
-        assert(e.leave(bus) && e.state == Engine::kIdle && !card.cq);
+        REQUIRE(e.state == Engine::kIdle && e.depth == 32);
+        REQUIRE(runGroup(e, bus, card, 3) && e.state == Engine::kOn && card.cq);
+        REQUIRE(e.leave(bus) && e.state == Engine::kIdle && !card.cq);
         const std::vector<uint32_t> expected = {49, 48, 44, 45, 44, 45, 44, 45, 46, 46, 46, 49, 48};
-        assert(card.trace == expected);
-        assert(e.groups == 1 && e.tasks == 3 && e.enters == 1 && e.leaves == 1 && !e.why);
+        REQUIRE(card.trace == expected);
+        REQUIRE(e.groups == 1 && e.tasks == 3 && e.enters == 1 && e.leaves == 1 && !e.why);
         // Legacy commands are fine again; a second group re-enters.
         card.legacy();
-        assert(runGroup(e, bus, card, 2) && e.enters == 2);
+        REQUIRE(runGroup(e, bus, card, 2) && e.enters == 2);
         // Two groups back to back stay in CQ mode (no CMD49 in between).
         const size_t before = card.trace.size();
-        assert(runGroup(e, bus, card, 4));
-        assert(card.trace[before] == 44 && e.enters == 2);
-        assert(e.leave(bus));
+        REQUIRE(runGroup(e, bus, card, 4));
+        REQUIRE(card.trace[before] == 44 && e.enters == 2);
+        REQUIRE(e.leave(bus));
     }
     // A card without a queue (depth field 0 or 1) is never used.
     {
         Engine e;
         e.start(0, false);
-        assert(e.state == Engine::kOff);
+        REQUIRE(e.state == Engine::kOff);
         Card card;
         Bus bus{&card};
-        assert(!e.enter(bus) && card.trace.empty());
+        REQUIRE(!e.enter(bus) && card.trace.empty());
         e.start(1, false);
-        assert(e.state == Engine::kOff);
+        REQUIRE(e.state == Engine::kOff);
     }
     // The depth bounds a group; a group may use all of it.
     {
@@ -316,10 +321,10 @@ static void basics()
         Bus bus{&card};
         Engine e;
         e.start(4, false);
-        assert(runGroup(e, bus, card, 4));
-        assert(e.enter(bus));
+        REQUIRE(runGroup(e, bus, card, 4));
+        REQUIRE(e.enter(bus));
         const std::vector<IOSwitchCqTask> t = group(5);
-        assert(!e.submit(bus, t.data(), 5) && e.state == Engine::kOff && !card.cq && e.why);
+        REQUIRE(!e.submit(bus, t.data(), 5) && e.state == Engine::kOff && !card.cq && e.why);
     }
     // Tasks must be assignable: 1..65535 blocks, a 32-bit block address.
     {
@@ -327,15 +332,15 @@ static void basics()
         Bus bus{&card};
         Engine e;
         e.start(8, false);
-        assert(e.enter(bus));
+        REQUIRE(e.enter(bus));
         IOSwitchCqTask bad[1] = {{1ull << 32, 8}};
-        assert(!e.submit(bus, bad, 1) && e.state == Engine::kOff && !card.cq);
+        REQUIRE(!e.submit(bus, bad, 1) && e.state == Engine::kOff && !card.cq);
     }
     // Encodings.
-    assert(ioswitchSdCmd44(true, 0, 8) == 0x40000008u && ioswitchSdCmd44(true, 31, 0xffff) == 0x401fffffu);
-    assert(ioswitchSdCmd44(false, 3, 1) == 0x00030001u);
-    assert(ioswitchSdTaskArgument(5) == 0x50000u && ioswitchSdCmd43(kSdAbortQueue, 0) == 1 &&
-           ioswitchSdCmd43(kSdAbortTask, 7) == 0x70002u);
+    REQUIRE(ioswitchSdCmd44(true, 0, 8) == 0x40000008u && ioswitchSdCmd44(true, 31, 0xffff) == 0x401fffffu);
+    REQUIRE(ioswitchSdCmd44(false, 3, 1) == 0x00030001u);
+    REQUIRE(ioswitchSdTaskArgument(5) == 0x50000u && ioswitchSdCmd43(kSdAbortQueue, 0) == 1 &&
+            ioswitchSdCmd43(kSdAbortTask, 7) == 0x70002u);
 }
 
 static void failures()
@@ -347,11 +352,11 @@ static void failures()
         Engine e;
         e.start(32, false);
         card.failAt = 2 + 2 * 2 + 1;  // 49, 48, then 44/45 twice, then the third CMD44
-        assert(e.enter(bus));
+        REQUIRE(e.enter(bus));
         const std::vector<IOSwitchCqTask> t = group(4);
-        assert(!e.submit(bus, t.data(), 4));
-        assert(e.state == Engine::kOff && !card.cq && card.aborts == 1 && e.why);
-        assert(!e.enter(bus) && card.enables == 1);
+        REQUIRE(!e.submit(bus, t.data(), 4));
+        REQUIRE(e.state == Engine::kOff && !card.cq && card.aborts == 1 && e.why);
+        REQUIRE(!e.enter(bus) && card.enables == 1);
         card.legacy();
     }
     // CMD45 fails: the half-assigned task is covered by the abort too.
@@ -361,9 +366,9 @@ static void failures()
         Engine e;
         e.start(32, false);
         card.failAt = 4;  // 49, 48, 44, then CMD45
-        assert(e.enter(bus));
+        REQUIRE(e.enter(bus));
         const std::vector<IOSwitchCqTask> t = group(2);
-        assert(!e.submit(bus, t.data(), 2) && e.state == Engine::kOff && !card.cq && card.aborts == 1);
+        REQUIRE(!e.submit(bus, t.data(), 2) && e.state == Engine::kOff && !card.cq && card.aborts == 1);
     }
     // A task's data fails (the driver calls fail): abort, leave, off.
     {
@@ -371,13 +376,13 @@ static void failures()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(e.enter(bus));
+        REQUIRE(e.enter(bus));
         const std::vector<IOSwitchCqTask> t = group(3);
-        assert(e.submit(bus, t.data(), 3));
+        REQUIRE(e.submit(bus, t.data(), 3));
         card.execute(e.argument());
         e.executed();
-        assert(e.fail(bus, "CMD46 failed") && e.state == Engine::kOff && !card.cq && card.aborts == 1);
-        assert(!e.pending() && !e.enter(bus));
+        REQUIRE(e.fail(bus, "CMD46 failed") && e.state == Engine::kOff && !card.cq && card.aborts == 1);
+        REQUIRE(!e.pending() && !e.enter(bus));
     }
     // A failure with nothing queued (a proof that differed after leaving): nothing sent, off.
     {
@@ -385,10 +390,10 @@ static void failures()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(runGroup(e, bus, card, 2) && e.leave(bus));
+        REQUIRE(runGroup(e, bus, card, 2) && e.leave(bus));
         const size_t before = card.trace.size();
-        assert(e.fail(bus, "a proof differed") && card.trace.size() == before && e.state == Engine::kOff);
-        assert(!strcmp(e.why, "a proof differed"));
+        REQUIRE(e.fail(bus, "a proof differed") && card.trace.size() == before && e.state == Engine::kOff);
+        REQUIRE(!strcmp(e.why, "a proof differed"));
     }
     // The card does not take the enable: the engine makes sure it is out (writes 00h, reads 00h) and stays off.
     {
@@ -397,8 +402,8 @@ static void failures()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(!e.enter(bus) && e.state == Engine::kOff && !card.cq && e.why);
-        assert(card.trace.back() == 48);
+        REQUIRE(!e.enter(bus) && e.state == Engine::kOff && !card.cq && e.why);
+        REQUIRE(card.trace.back() == 48);
     }
     // The enable's own CMD49 fails on the bus.
     {
@@ -407,7 +412,7 @@ static void failures()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(!e.enter(bus) && e.state == Engine::kOff && !card.cq);
+        REQUIRE(!e.enter(bus) && e.state == Engine::kOff && !card.cq);
     }
     // A card slow to leave: read back until it is out, a settle between read-backs.
     {
@@ -416,8 +421,8 @@ static void failures()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(runGroup(e, bus, card, 2));
-        assert(e.leave(bus) && !card.cq && bus.settles == 3 && e.state == Engine::kIdle);
+        REQUIRE(runGroup(e, bus, card, 2));
+        REQUIRE(e.leave(bus) && !card.cq && bus.settles == 3 && e.state == Engine::kIdle);
         card.legacy();
     }
     // A card that never leaves: false after kLeaveTries read-backs; off (the driver power-cycles it).
@@ -427,14 +432,14 @@ static void failures()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(runGroup(e, bus, card, 2));
-        assert(!e.leave(bus) && e.state == Engine::kOff && e.stuck && card.cq &&
-               bus.settles == Engine::kReadBacks - 1);
+        REQUIRE(runGroup(e, bus, card, 2));
+        REQUIRE(!e.leave(bus) && e.state == Engine::kOff && e.stuck && card.cq &&
+                bus.settles == Engine::kReadBacks - 1);
         // Power-cycled by the driver: the card is out, the engine stays off.
         card.cq = false;
         card.byte262 = 0;
         e.powerCycled();
-        assert(e.state == Engine::kOff && !e.enter(bus));
+        REQUIRE(e.state == Engine::kOff && !e.enter(bus));
     }
     // System sleep between groups: CQ mode does not survive the power cycle; the engine knows.
     {
@@ -442,9 +447,9 @@ static void failures()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(runGroup(e, bus, card, 2) && e.leave(bus));
+        REQUIRE(runGroup(e, bus, card, 2) && e.leave(bus));
         e.powerCycled();
-        assert(e.state == Engine::kIdle && runGroup(e, bus, card, 2) && e.leave(bus));
+        REQUIRE(e.state == Engine::kIdle && runGroup(e, bus, card, 2) && e.leave(bus));
     }
     // Leaving with tasks still queued is a bug in the caller: it aborts them first.
     {
@@ -452,10 +457,10 @@ static void failures()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(e.enter(bus));
+        REQUIRE(e.enter(bus));
         const std::vector<IOSwitchCqTask> t = group(3);
-        assert(e.submit(bus, t.data(), 3));
-        assert(e.leave(bus) && e.state == Engine::kOff && !card.cq && card.aborts == 1);
+        REQUIRE(e.submit(bus, t.data(), 3));
+        REQUIRE(e.leave(bus) && e.state == Engine::kOff && !card.cq && card.aborts == 1);
     }
 }
 
@@ -478,7 +483,7 @@ static WriteResult driverWrite(Engine &e, Bus &bus, Card &card, std::set<long> &
 // No completed write is lost, whenever the power goes (called at every power cycle).
 static void assertKept(const Card &card, const std::set<long> &completed)
 {
-    for (long id : completed) assert(card.onFlash.count(id));
+    for (long id : completed) REQUIRE(card.onFlash.count(id));
 }
 
 // r16-sdcq: what r7z's card could have been, and the cache's contract with the driver.
@@ -492,8 +497,8 @@ static void bringUp()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(!e.enter(bus) && !card.cq && e.cqRead == 0 && e.cqReads == Engine::kReadBacks && e.why);
-        assert(bus.settles == Engine::kReadBacks - 1);  // the enable's read-backs (leaving reads 00h at once)
+        REQUIRE(!e.enter(bus) && !card.cq && e.cqRead == 0 && e.cqReads == Engine::kReadBacks && e.why);
+        REQUIRE(bus.settles == Engine::kReadBacks - 1);  // the enable's read-backs (leaving reads 00h at once)
     }
     {
         Card card;
@@ -501,23 +506,24 @@ static void bringUp()
         Bus bus{&card};
         Engine e;
         e.start(32, true);
-        assert(runGroup(e, bus, card, 4) && e.cacheOn && card.byte260 == 1);
-        assert(e.leave(bus) && !card.cq && !e.cacheOn && card.byte260 == 0 && e.useCache);
-        const std::vector<uint32_t> expected = {49, 48, 49, 48, 44, 45, 44, 45, 44, 45, 44, 45, 46, 46, 46, 46, 49, 48, 49, 48};
-        assert(card.trace == expected);
+        REQUIRE(runGroup(e, bus, card, 4) && e.cacheOn && card.byte260 == 1);
+        REQUIRE(e.leave(bus) && !card.cq && !e.cacheOn && card.byte260 == 0 && e.useCache);
+        const std::vector<uint32_t> expected = {49, 48, 49, 48, 44, 45, 44, 45, 44, 45,
+                                                44, 45, 46, 46, 46, 46, 49, 48, 49, 48};
+        REQUIRE(card.trace == expected);
         // The write: today's command and cost exactly (no flush), on flash when it completes.
         std::set<long> completed;
         const WriteResult w = driverWrite(e, bus, card, completed);
-        assert(w.completed && w.commands == 1 && w.us == kProgramUs && card.held.empty());
+        REQUIRE(w.completed && w.commands == 1 && w.us == kProgramUs && card.held.empty());
         // The next session turns the cache on again; a power cycle in the middle of it loses nothing written.
-        assert(runGroup(e, bus, card, 2) && card.byte260 == 1);
+        REQUIRE(runGroup(e, bus, card, 2) && card.byte260 == 1);
         card.powerCycle();
         e.powerCycled();
         assertKept(card, completed);
-        assert(!e.cacheOn && e.state == Engine::kIdle);
-        assert(runGroup(e, bus, card, 2) && e.leave(bus) && card.byte260 == 0);
+        REQUIRE(!e.cacheOn && e.state == Engine::kIdle);
+        REQUIRE(runGroup(e, bus, card, 2) && e.leave(bus) && card.byte260 == 0);
         // The queue off for the boot: the cache stays off for good.
-        assert(e.fail(bus, "a proof differed") && !e.cacheOn && !e.useCache && card.byte260 == 0);
+        REQUIRE(e.fail(bus, "a proof differed") && !e.cacheOn && !e.useCache && card.byte260 == 0);
     }
     // A lazy card: the enable shows after a few read-backs (settled between), within the engine's window.
     {
@@ -526,8 +532,8 @@ static void bringUp()
         Bus bus{&card};
         Engine e;
         e.start(32, false);
-        assert(e.enter(bus) && e.cqReads == 4 && bus.settles == 3 && e.cqRead == 3);
-        assert(e.leave(bus) && !card.cq);
+        REQUIRE(e.enter(bus) && e.cqReads == 4 && bus.settles == 3 && e.cqRead == 3);
+        REQUIRE(e.leave(bus) && !card.cq);
     }
     // One lazier than the window: off, and out of CQ mode (it was in already).
     {
@@ -536,7 +542,7 @@ static void bringUp()
         Bus bus{&card};
         Engine e;
         e.start(32, true);
-        assert(!e.enter(bus) && !card.cq && e.state == Engine::kOff && e.cqRead == 0 && !e.cacheOn && !card.byte260);
+        REQUIRE(!e.enter(bus) && !card.cq && e.state == Engine::kOff && e.cqRead == 0 && !e.cacheOn && !card.byte260);
         card.legacy();
     }
     // A card that keeps voluntary mode: the read-back says which bit did not take; out of CQ mode, the cache off.
@@ -546,10 +552,11 @@ static void bringUp()
         Bus bus{&card};
         Engine e;
         e.start(32, true);
-        assert(!e.enter(bus) && !card.cq && e.cqRead == kSdCqEnable && !e.cacheOn && card.byte260 == 0);
-        assert(e.cacheRead == kSdCacheEnable);  // the cache did come on first
-        assert(strstr(ioswitchSdCqControlMeaning(e.cqRead), "voluntary"));
-        assert(strstr(ioswitchSdCqControlMeaning(0), "disabled") && strstr(ioswitchSdCqControlMeaning(3), "sequential"));
+        REQUIRE(!e.enter(bus) && !card.cq && e.cqRead == kSdCqEnable && !e.cacheOn && card.byte260 == 0);
+        REQUIRE(e.cacheRead == kSdCacheEnable);  // the cache did come on first
+        REQUIRE(strstr(ioswitchSdCqControlMeaning(e.cqRead), "voluntary"));
+        REQUIRE(strstr(ioswitchSdCqControlMeaning(0), "disabled") &&
+                strstr(ioswitchSdCqControlMeaning(3), "sequential"));
         card.legacy();
     }
     // A cache that will not come on: tried once (read back 00h, 00h written and read back), never again this boot; the
@@ -560,10 +567,10 @@ static void bringUp()
         Bus bus{&card};
         Engine e;
         e.start(32, true);
-        assert(runGroup(e, bus, card, 2) && e.leave(bus) && !e.cacheOn && !e.useCache && e.cacheRead == 0);
+        REQUIRE(runGroup(e, bus, card, 2) && e.leave(bus) && !e.cacheOn && !e.useCache && e.cacheRead == 0);
         const size_t before = card.trace.size();
-        assert(runGroup(e, bus, card, 2) && e.leave(bus));
-        assert(card.trace[before] == 49 && card.trace[before + 1] == 48 && card.trace[before + 2] == 44);  // 262 only
+        REQUIRE(runGroup(e, bus, card, 2) && e.leave(bus));
+        REQUIRE(card.trace[before] == 49 && card.trace[before + 1] == 48 && card.trace[before + 2] == 44);  // 262 only
     }
     // A cache lazier than the window: 00h cancels it; the engine knows it is off.
     {
@@ -572,7 +579,7 @@ static void bringUp()
         Bus bus{&card};
         Engine e;
         e.start(32, true);
-        assert(runGroup(e, bus, card, 2) && !e.cacheOn && card.byte260 == 0 && !e.useCache);
+        REQUIRE(runGroup(e, bus, card, 2) && !e.cacheOn && card.byte260 == 0 && !e.useCache);
     }
     // A cache that will not go off: every write is flushed before it completes (write-through all the same), the cache
     // left alone from then on; with a flush that never ends the write fails, nothing panics, and a power cycle loses
@@ -583,17 +590,17 @@ static void bringUp()
         Bus bus{&card};
         Engine e;
         e.start(32, true);
-        assert(runGroup(e, bus, card, 2) && e.leave(bus) && e.cacheOn && card.byte260 == 1 && !e.useCache);
+        REQUIRE(runGroup(e, bus, card, 2) && e.leave(bus) && e.cacheOn && card.byte260 == 1 && !e.useCache);
         std::set<long> completed;
         const WriteResult w = driverWrite(e, bus, card, completed);
-        assert(w.completed && w.commands == 3 && card.held.empty());  // CMD25, the flush's CMD49 and CMD48
-        assert(w.us == kCachedUs + 2 * kRegisterUs + kProgramUs);
+        REQUIRE(w.completed && w.commands == 3 && card.held.empty());  // CMD25, the flush's CMD49 and CMD48
+        REQUIRE(w.us == kCachedUs + 2 * kRegisterUs + kProgramUs);
         card.powerCycle();
         e.powerCycled();
         assertKept(card, completed);
         // Once it would not go off, no session turns it on again: after the power cycle it stays off, writes as today.
-        assert(runGroup(e, bus, card, 2) && e.leave(bus) && !e.cacheOn && card.byte260 == 0);
-        assert(driverWrite(e, bus, card, completed).us == kProgramUs);
+        REQUIRE(runGroup(e, bus, card, 2) && e.leave(bus) && !e.cacheOn && card.byte260 == 0);
+        REQUIRE(driverWrite(e, bus, card, completed).us == kProgramUs);
     }
     {
         Card card;
@@ -603,10 +610,10 @@ static void bringUp()
         Engine e;
         e.start(32, true);
         std::set<long> completed;
-        assert(driverWrite(e, bus, card, completed).completed);
-        assert(runGroup(e, bus, card, 2) && e.leave(bus) && e.cacheOn);
+        REQUIRE(driverWrite(e, bus, card, completed).completed);
+        REQUIRE(runGroup(e, bus, card, 2) && e.leave(bus) && e.cacheOn);
         const WriteResult lost = driverWrite(e, bus, card, completed);
-        assert(!lost.completed && card.held.size() == 1);
+        REQUIRE(!lost.completed && card.held.size() == 1);
         card.powerCycle();
         e.powerCycled();
         assertKept(card, completed);
@@ -620,13 +627,13 @@ static void bringUp()
         Engine e;
         e.start(32, true);
         std::set<long> completed;
-        assert(driverWrite(e, bus, card, completed).completed);
-        assert(runGroup(e, bus, card, 2) && card.byte260 == 1);
-        assert(!e.fail(bus, "data error") && e.stuck && card.cq && e.cacheOn && !e.flush(bus));
+        REQUIRE(driverWrite(e, bus, card, completed).completed);
+        REQUIRE(runGroup(e, bus, card, 2) && card.byte260 == 1);
+        REQUIRE(!e.fail(bus, "data error") && e.stuck && card.cq && e.cacheOn && !e.flush(bus));
         card.powerCycle();
         e.powerCycled();
         assertKept(card, completed);
-        assert(!e.cacheOn && e.state == Engine::kOff);
+        REQUIRE(!e.cacheOn && e.state == Engine::kOff);
     }
 }
 
@@ -670,10 +677,10 @@ static void randomWork()
         // cycle (resetCard), which needs no flush first.
         const auto out = [&](bool isOut) {
             if (isOut) {
-                assert(!card.cq && !e.stuck);
+                REQUIRE(!card.cq && !e.stuck);
                 return;
             }
-            assert(e.state == Engine::kOff && e.stuck);
+            REQUIRE(e.state == Engine::kOff && e.stuck);
             (void)e.fail(bus, "the card stays in CQ mode");
             powerCycle();
         };
@@ -695,14 +702,14 @@ static void randomWork()
                 ++writes;
                 todayUs += kProgramUs;  // today: CMD25 into a card with its cache off, completed at its busy's end
                 if (!w.completed) {
-                    assert(cacheAtWrite);  // only a flush can fail a write
+                    REQUIRE(cacheAtWrite);  // only a flush can fail a write
                     ++failedWrites;
                     continue;
                 }
                 nowUs += w.us;
                 if (!cacheAtWrite) {
                     // The cache off: today's write exactly, one command, no flush.
-                    assert(w.commands == 1 && w.us == kProgramUs);
+                    REQUIRE(w.commands == 1 && w.us == kProgramUs);
                     ++sameAsToday;
                 } else {
                     ++flushedWrites;
@@ -752,33 +759,41 @@ static void randomWork()
                     e.executed();
                 }
             }
-            if (e.state == Engine::kOff) assert(e.why || card.depth < 2);
+            if (e.state == Engine::kOff) REQUIRE(e.why || card.depth < 2);
             // Whenever the engine is not in CQ mode and has not said the card is stuck, the card is out of CQ mode.
-            assert(e.state == Engine::kOn || !card.cq);
+            REQUIRE(e.state == Engine::kOn || !card.cq);
             // r16-sdcq: the engine never thinks the cache is off while the card has it on (or will show it later); out
             // of CQ mode it is off unless it would not go off; nothing completed is only in the cache.
-            assert(e.cacheOn || !card.byte260);
-            assert(e.state == Engine::kOn || e.stuck || !card.byte260 || !e.useCache || card.cacheLag);
-            for (long id : card.held) assert(!completed.count(id));
+            REQUIRE(e.cacheOn || !card.byte260);
+            REQUIRE(e.state == Engine::kOn || e.stuck || !card.byte260 || !e.useCache || card.cacheLag);
+            for (long id : card.held) REQUIRE(!completed.count(id));
         }
         if (!gone) powerCycle();  // the end of every round: the power goes
     }
     // Every path was exercised.
-    assert(powerCycles > 20000 && groups > 1000 && failures > 100 && sleeps > 1000 && losses > 1000);
-    assert(flushedWrites > 100 && failedWrites > 0 && sameAsToday > 10000);
-    printf("writes %lu: %lu as today (cache off, %.0f us each), %lu flushed (cache would not go off), %lu failed (flush "
-           "failed); mean %.1f us now against %.1f us today (model: register %.0f us, program %.0f us, cached %.0f "
-           "us)\n",
-           writes, sameAsToday, kProgramUs, flushedWrites, failedWrites,
-           nowUs / double(sameAsToday + flushedWrites), todayUs / double(writes), kRegisterUs, kProgramUs, kCachedUs);
+    REQUIRE(powerCycles > 20000 && groups > 1000 && failures > 100 && sleeps > 1000 && losses > 1000);
+    REQUIRE(flushedWrites > 100 && failedWrites > 0 && sameAsToday > 10000);
+    printf(
+        "writes %lu: %lu as today (cache off, %.0f us each), %lu flushed (cache would not go off), %lu failed (flush "
+        "failed); mean %.1f us now against %.1f us today (model: register %.0f us, program %.0f us, cached %.0f "
+        "us)\n",
+        writes, sameAsToday, kProgramUs, flushedWrites, failedWrites, nowUs / double(sameAsToday + flushedWrites),
+        todayUs / double(writes), kRegisterUs, kProgramUs, kCachedUs);
 }
 
-int main()
+TEST(SdCommandQueue, Basics)
 {
     basics();
+}
+TEST(SdCommandQueue, Failures)
+{
     failures();
+}
+TEST(SdCommandQueue, BringUpAndTheCache)
+{
     bringUp();
+}
+TEST(SdCommandQueue, RandomWork)
+{
     randomWork();
-    puts("PASS: sd command queue");
-    return 0;
 }

@@ -1,27 +1,46 @@
 // r17-launch: IOSwitchCryptexMap.h, the direct read map's request splitting and the boot prefetch list's run merging,
-// against brute-force models on random maps, requests and logs.
+// against brute-force models on random maps, requests and logs. What IOSwitchCryptex.cpp does with them is guarded by
+// cryptex_source_test.cpp.
+#include <gtest/gtest.h>
+
 #include <algorithm>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <random>
 #include <set>
 #include <vector>
 
-#include "IOSwitchCryptexMap.h"
+#include "../IOSwitchCryptexMap.h"
 
+// Millions of checks: the first 20 failures of a test are reported (as GoogleTest failures, with their line), the rest
+// counted; a test passes only with none.
 static unsigned long failures;
-#define CHECK(cond, ...)                              \
-    do {                                              \
-        if (!(cond)) {                                \
-            if (failures++ < 20) printf(__VA_ARGS__); \
-        }                                             \
+static void report(const char *file, int line, const char *format, ...) __attribute__((format(printf, 3, 4)));
+static void report(const char *file, int line, const char *format, ...)
+{
+    char text[256];
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(text, sizeof(text), format, ap);
+    va_end(ap);
+    ADD_FAILURE_AT(file, line) << text;
+}
+#define CHECK(cond, ...)                                                  \
+    do {                                                                  \
+        if (!(cond)) {                                                    \
+            if (failures++ < 20) report(__FILE__, __LINE__, __VA_ARGS__); \
+        }                                                                 \
     } while (0)
 
-int main()
+// One random stream for both tests, in order, as when they were one program: the logs' cases follow the maps'.
+static std::mt19937_64 rng(17);
+
+TEST(CryptexMap, RequestsSplitIntoPiecesOfOneExtent)
 {
-    std::mt19937_64 rng(17);
+    failures = 0;
     const uint64_t kBlock = 4096;
-    unsigned long reads = 0, pieces = 0, logs = 0;
+    unsigned long reads = 0, pieces = 0;
 
     // Maps: images of random fragmentation; their extents through ioswitchAppendExtent (adjacent ones merge).
     for (int round = 0; round < 3000; ++round) {
@@ -81,6 +100,14 @@ int main()
         }
     }
 
+    EXPECT_EQ(failures, 0u) << "checks failed (the first 20 reported above)";
+    printf("cryptex map: %lu reads in %lu pieces\n", reads, pieces);
+}
+
+TEST(CryptexMap, PrefetchLogsMergeIntoRuns)
+{
+    failures = 0;
+    unsigned long logs = 0;
     // Logs: random reads of a few files; merged runs must hold every logged page no later than its first read, stay
     // in one file, stay within maxRun pages, not overlap, and hold nothing farther than maxGap from a logged page.
     const uint32_t kMaxRun = 128, kMaxGap = 8;
@@ -135,10 +162,6 @@ int main()
         for (uint32_t i = 1; i < count; ++i) CHECK(runs[i - 1].when <= runs[i].when, "replay order\n");
         ++logs;
     }
-    if (failures) {
-        printf("FAIL: %lu checks failed\n", failures);
-        return 1;
-    }
-    printf("PASS: cryptex map: %lu reads in %lu pieces, %lu prefetch logs merged\n", reads, pieces, logs);
-    return 0;
+    EXPECT_EQ(failures, 0u) << "checks failed (the first 20 reported above)";
+    printf("cryptex map: %lu prefetch logs merged\n", logs);
 }
