@@ -56,7 +56,7 @@ OSDefineMetaClassAndStructors(ArmDTPlatform, IODTPlatformExpert)
 // Top-level nodes that get no IOPlatformDevice nub. "options" is IODTNVRAM already (publishNVRAM ran first, and
 // IODTNVRAM::init took the node's place in the device-tree plane): a nub made from it would take that place in turn,
 // so IODeviceTree:/options, where userland reads and writes NVRAM, would be an empty IOPlatformDevice: nothing to
-// read, and every write refused (sandbox "iokit-set-properties iokit-class:IOPlatformDevice", r7o).
+// read, and every write refused (sandbox "iokit-set-properties iokit-class:IOPlatformDevice").
 const char *ArmDTPlatform::excludeList(void)
 {
     return "('options')";
