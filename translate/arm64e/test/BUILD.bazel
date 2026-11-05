@@ -4,6 +4,7 @@
 #   classify_test    the classifier, the one-word rewrites and the fast-reject table on known encodings
 #   semantics_test   LSE, LDRA and FP stubs against the instructions, from the same random states
 #   macho_test       the loader's translation of small synthetic Mach-Os, verification, chained fixups
+#   kernel_kind_test the kernel header's loader decision against the host mirror (a64x_image_kind vs a64x_kind_of)
 #   vlive_test       (manual) V-register liveness claims re-run against this Mac's own dyld cache
 #   fma16_test       (manual) every half-precision FMA product, scalar and vector, against the hardware
 #
@@ -73,4 +74,17 @@ host_test(
     gtest_main = False,
     sanitize = False,
     tags = ["manual"],
+)
+
+host_test(
+    name = "kernel_kind_test",
+    srcs = [
+        "kernel_kind_test.c",
+        "kernel_kind_test.cpp",
+        "//translate/arm64e:xnu/bsd/sys/a64x_xnu.h",
+    ],
+    deps = [
+        ":macho",
+        "//bazel/testing:c_check",
+    ],
 )

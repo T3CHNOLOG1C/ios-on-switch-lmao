@@ -5,18 +5,22 @@
 #   bazel test //translate/arm64e/...           semantic, layout and Mach-O tests on this Mac
 #
 #   :a64x     the translator: classify, one-word rewrites, stubs, liveness, page translation (freestanding C, also
-#             compiled into XNU)
+#             compiled into XNU from xnu/)
 #   :macho    host side: Mach-O images, the loader's translation of one image offline, chained fixups
 #   :arm64e   the CLI over both (tools/)
 #   :oracle   the classifier and translated words against LLVM (a developer check)
+#   :xnu      the kernel side for xnu-12377.121.6 (sources and diff; not built, see xnu/README.md)
+#   :prelink26  the iPadOS 26.5.2 kext prelinker (a record, xnu/prelink26)
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
 
-lint_files()
+# xnu/ holds XNU drop-ins (XNU's own style), a patch and records of the 12377 port.
+lint_files(exclude = ["xnu/**"])
 
 COPTS = [
     "-std=c11",
@@ -83,4 +87,17 @@ py_binary(
     name = "oracle",
     srcs = ["tools/oracle.py"],
     data = [":arm64e"],
+)
+
+filegroup(
+    name = "xnu",
+    srcs = glob(["xnu/**"]),
+)
+
+# The iPadOS 26.5.2 kext prelinker, kept as a record (xnu/README.md): its paths are those of the 2026-11-04 scratch
+# layout, so it does not run as is.
+py_library(
+    name = "prelink26",
+    srcs = glob(["xnu/prelink26/*.py"]),
+    deps = ["//tools/prelink:native_prelink"],
 )

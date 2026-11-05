@@ -1,0 +1,91 @@
+/*
+ * a64x: run arm64e (Apple A12, ARMv8.3) user code on an ARMv8.0 core (Cortex-A57) by translating it at load time.
+ *
+ * Every executable page of an arm64e image is produced by an apple_protect pager whose "decrypt" step is the
+ * translator: the source page is first validated against the image's code signature (vm_page_validate_cs_mapped in
+ * apple_protect_pager_data_request), then rewritten. Pointer authentication is the identity; LSE atomics and other
+ * multi-word cases branch to stubs generated from the same validated words.
+ */
+#ifndef _SYS_A64X_XNU_H_
+#define _SYS_A64X_XNU_H_
+
+#ifdef XNU_KERNEL_PRIVATE
+#if CONFIG_A64X
+
+#include <sys/types.h>
+#include <sys/vnode.h>
+#include <mach/vm_types.h>
+#include <mach/machine.h>
+#include <mach-o/loader.h>
+
+struct arm_saved_state;
+
+/* true for arm64e: the subtype whose code is always translated (PAC and all); also: its JIT output is not */
+static inline int
+a64x_subtype_translated(cpu_type_t type, cpu_subtype_t subtype)
+{
+	return type == CPU_TYPE_ARM64 && (subtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E;
+}
+
+/*
+ * What the loader does with an image:
+ *   A64X_IMAGE_ARM64E  arm64e: full translation (pointer authentication as the identity, LSE, FP16, ...).
+ *   A64X_IMAGE_ARM64   plain arm64 (ALL or V8): scanned at load; only what the A57 lacks is translated (no PAC
+ *                      rewrites). An image with nothing to translate is mapped as is: byte-identical, no pager.
+ *   A64X_IMAGE_NATIVE  anything else: untouched.
+ * An image carrying the target marker (a section __TEXT,__a64x_target, see A64X_TARGET_SECTNAME) is mapped as is
+ * whatever its subtype: it was built for this core (-march=armv8-a -mcpu=cortex-a57, no PAC, no LSE). It is not
+ * scanned; if it still executes an instruction the A57 lacks, the undefined-instruction path emulates LSE (counted
+ * in kern.a64x.traps) and reports anything else.
+ */
+#define A64X_IMAGE_NATIVE 0
+#define A64X_IMAGE_ARM64E 1
+#define A64X_IMAGE_ARM64  2
+#define A64X_TARGET_SEGNAME  "__TEXT"
+#define A64X_TARGET_SECTNAME "__a64x_target"
+static inline int
+a64x_image_kind(cpu_type_t type, cpu_subtype_t subtype)
+{
+	if (type != CPU_TYPE_ARM64) {
+		return A64X_IMAGE_NATIVE;
+	}
+	switch (subtype & ~CPU_SUBTYPE_MASK) {
+	case CPU_SUBTYPE_ARM64E:
+		return A64X_IMAGE_ARM64E;
+	case CPU_SUBTYPE_ARM64_ALL:
+	case CPU_SUBTYPE_ARM64_V8:
+		return A64X_IMAGE_ARM64;
+	default:
+		return A64X_IMAGE_NATIVE;
+	}
+}
+
+/*
+ * After mach_loader mapped an arm64e or arm64 image (main executable or dyld): translate its executable segment as
+ * a64x_image_kind() and the target marker say (nothing, for a marked image or a clean arm64 one).
+ * `lcmds` holds the mach_header_64 and its load commands as read from the file.
+ */
+int a64x_load_image(vm_map_t map, struct vnode *vp, off_t slice_offset, const void *lcmds, size_t lcmds_size,
+    int64_t slide);
+
+/*
+ * After mmap() mapped an executable range of a file (dyld mapping a dylib's __TEXT): if the range starts with an
+ * arm64e or arm64 Mach-O header, translate it as above. Returns 0 (nothing to do, or translated) or an errno for
+ * mmap to fail with.
+ */
+int a64x_mmap_exec(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset_t addr, vm_map_size_t size);
+
+/*
+ * The dyld shared cache: memory object to map instead of the file's pager for an executable cache mapping, or
+ * MEMORY_OBJECT_NULL if the cache cannot be translated (then the mapping must fail: untranslated arm64e text
+ * cannot run here).
+ */
+void *a64x_shared_cache_pager(void *file_object, uint64_t file_offset, uint64_t size, uint64_t vmaddr,
+    struct vnode *vp);
+
+/* Undefined-instruction fallback (EL0): emulate what the static rewriter left; true if handled. */
+int a64x_emulate_user(struct arm_saved_state *state, uint32_t instr);
+
+#endif /* CONFIG_A64X */
+#endif /* XNU_KERNEL_PRIVATE */
+#endif /* _SYS_A64X_XNU_H_ */
