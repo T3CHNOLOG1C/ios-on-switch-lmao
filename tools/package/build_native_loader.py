@@ -60,6 +60,7 @@ from loader_abi import (
     WINDOW_SHARD_BYTES,
     WINDOW_SHARDS,
     WINDOW_SIZE,
+    staged_bl33_bytes,
 )
 from native_oled_adt import ROOT_MATCHING
 from native_xnu_layout import build_layout, parse_adt, validate_data_seed, validate_trustcache
@@ -219,6 +220,8 @@ def stage_into_bl33(bl33: bytes, staged: bytes, stream_bytes: int) -> bytes:
     header, trailer = stage_pages(staged, stream_bytes)
     image = bl33.ljust(STAGE_HEADER - BL33_BASE, b'\0') + header + staged + trailer
     check_stage(image, bl33, staged, stream_bytes)
+    if len(image) != staged_bl33_bytes(len(staged)):
+        raise ValueError('bl33: not the size boot.cmd reads (loader_abi.staged_bl33_bytes)')
     return image
 
 

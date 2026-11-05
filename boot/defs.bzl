@@ -14,14 +14,14 @@ only the steps it reaches:
                                                a boot-arg, ADT or trust cache edit the tail's)
     build_native_loader.py join ............. layout.h, runs.h, kernel-window.bin, constants.json
     clang -c, one per loader source ......... loader objects (the window's constants only for those including them)
-    loader_link.py ........................... loader.uboot.bin
+    loader_link.py ........................... loader.uboot.bin, boot.cmd, boot.scr (boot_script.py: the loader's
+                                               size and bl33.bin's, which the window's constants give)
     bl33.py patch (once) / stage ............. bl33.bin
-    boot_script.py ........................... boot.cmd, boot.scr
     overlay.py tree  (plan, overlay files) .. overlay/
     cp ...................................... ioswitch/ (the directory //deploy:sd, //install:sd and //boot:snapshot take)
 
 So an overlay plist edit reruns the overlay tree and the final copy; a driver edit reruns the kernel's steps from the
-layout on (the shards it changed, four loader objects, the link, the bl33 stage, the boot script and the copy); a
+layout on (the shards it changed, four loader objects, the link with the boot script, the bl33 stage and the copy); a
 boot-arg edit reruns from the ADT edit on, but compresses only the window's tail. The Python steps run on the hermetic interpreter and need nothing of Xcode; the loader's compiles do (Xcode's
 clang, the declared host input).
 """
@@ -247,7 +247,7 @@ def _boot_package_impl(ctx):
         if src not in ctx.files.loader_srcs:
             fail("loader_window_srcs {} is not in loader_srcs".format(src.short_path))
 
-    loader = out("loader.uboot.bin")
+    loader, cmd, scr = out("loader.uboot.bin"), out("boot.cmd"), out("boot.scr")
     args = ctx.actions.args()
     args.add("--ld-lld", ctx.file._ld_lld)
     args.add("--objcopy", ctx.file._objcopy)
@@ -255,13 +255,17 @@ def _boot_package_impl(ctx):
     args.add("--linker-script", ctx.file.linker_script)
     args.add("--constants", constants)
     args.add("--out", loader)
+    # boot.cmd and boot.scr need only the loader's size and the window's constants (bl33.bin's size follows from them).
+    args.add("--boot-template", ctx.file.template)
+    args.add("--boot-cmd", cmd)
+    args.add("--boot-scr", scr)
     args.add_all(objects)
     ctx.actions.run(
         executable = ctx.executable._loader_link,
         arguments = [args],
-        inputs = objects + [ctx.file.linker_script, constants],
+        inputs = objects + [ctx.file.linker_script, constants, ctx.file.template],
         tools = [ctx.file._ld_lld, ctx.file._objcopy, ctx.file._readelf],
-        outputs = [loader],
+        outputs = [loader, cmd, scr],
         mnemonic = "LoaderLink",
         progress_message = "Linking the native loader",
     )
@@ -277,17 +281,6 @@ def _boot_package_impl(ctx):
     args.add("--constants", constants)
     args.add("--out", bl33)
     _run(ctx, ctx.executable._bl33, [args], [u_boot, window, constants], [bl33], "BootBl33", "Staging the kernel window in bl33.bin")
-
-    cmd, scr = out("boot.cmd"), out("boot.scr")
-    args = ctx.actions.args()
-    args.add("--template", ctx.file.template)
-    args.add("--loader", loader)
-    args.add("--bl33", bl33)
-    args.add("--window", window)
-    args.add("--constants", constants)
-    args.add("--cmd", cmd)
-    args.add("--scr", scr)
-    _run(ctx, ctx.executable._boot_script, [args], [ctx.file.template, loader, bl33, window, constants], [cmd, scr], "BootScript", "Writing boot.scr")
 
     entry = ctx.attr.entry
     ini = out("%s.ini" % entry)
@@ -382,7 +375,6 @@ boot_package = rule(
         "_window": _tool("//tools/package:window"),
         "_loader_link": _tool("//tools/package:loader_link"),
         "_bl33": _tool("//tools/package:bl33"),
-        "_boot_script": _tool("//tools/package:boot_script"),
         # The kernel window's compressor (lz4 -12, one action per shard), built from pinned source; LLVM 23.1.4's
         # linker and binutils.
         "_lz4": attr.label(default = "//tools:lz4", cfg = "exec", allow_single_file = True),

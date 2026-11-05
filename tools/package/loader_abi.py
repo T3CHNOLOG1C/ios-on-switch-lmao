@@ -62,3 +62,9 @@ STAGE_HEADER = 0xAA100000
 STAGE_SOURCE = 0xAA101000
 STAGE_END = 0xB0000000
 STAGE_WORDS = {'magic': 0x57534F49, 'head': 0x4E49574B, 'tail': 0x444E454B, 'version': 1}
+
+
+def staged_bl33_bytes(staged_bytes: int) -> int:
+    """bl33.bin's size with a staged window of staged_bytes: U-Boot's MiB, the header page, the window, the trailer page
+    (build_native_loader.py stage_into_bl33). boot.cmd reads exactly this much (boot_script.py BL33_BYTES)."""
+    return STAGE_SOURCE - BL33_BASE + staged_bytes + PACK_PAGE

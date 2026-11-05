@@ -7,7 +7,7 @@
 #   adt_edit.py     the ADT's iPad identity, hardware nodes, overlay unions, loader slots (USB_HOST, DISPLAY_GAMUT)
 #   trust.py        the static trust cache bundle
 #   build_native_loader.py  the kernel window (native_xnu_layout.py), layout.h and runs.h
-#   loader_link.py  the loader linked and wrapped for bootm
+#   loader_link.py  the loader linked and wrapped for bootm (and, through boot_script.py, boot.cmd / boot.scr)
 #   bl33.py         U-Boot's environment edit and the staged window
 #   boot_script.py  boot.cmd / boot.scr
 load("@rules_python//python:py_binary.bzl", "py_binary")
@@ -103,6 +103,17 @@ py_binary(
 py_binary(
     name = "loader_link",
     srcs = ["loader_link.py"],
+    deps = [
+        ":boot_script_lib",
+        ":loader_abi",
+        ":uimage",
+    ],
+)
+
+py_library(
+    name = "boot_script_lib",
+    srcs = ["boot_script.py"],
+    imports = ["."],
     deps = [
         ":loader_abi",
         ":uimage",
