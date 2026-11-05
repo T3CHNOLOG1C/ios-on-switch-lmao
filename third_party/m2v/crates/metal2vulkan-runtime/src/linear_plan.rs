@@ -819,7 +819,7 @@ pub(super) fn holding(
         return Ok(Holds::Texels);
     };
     let reads = only_reads(usage);
-    if reads && policy == PaddedReadsPolicy::Alias {
+    if policy == PaddedReadsPolicy::AliasWrites || (reads && policy == PaddedReadsPolicy::Alias) {
         return Ok(Holds::Padding);
     }
     let writers = if usage.contains(TextureUsage::RENDER_TARGET) {
