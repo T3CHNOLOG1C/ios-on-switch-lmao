@@ -566,12 +566,15 @@ kernel_link = rule(
 
 def _kernel_prelink_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
-    report = ctx.actions.declare_file(ctx.attr.out[:-len(".macho")] + ".json")
+    stem = ctx.attr.out[:-len(".macho")]
+    plan = ctx.actions.declare_file(stem + ".prelink-plan")
+    report = ctx.actions.declare_file(stem + ".json")
     kernel = ctx.attr.kernel[KernelObjectsInfo]
     new_roots = sorted({r: True for r in kernel.prelink}.keys())
-    args = [
-        "--kernel",
-        kernel.objects[0].path,
+
+    # What the prelink reads of the original kernelcache: the drivers' prelink lists are strings, the native kernel
+    # is not among the plan's inputs, so a driver edit leaves the plan as it was.
+    original = [
         "--prelinked",
         ctx.file.kernelcache.path,
         "--inherit-original-report",
@@ -579,34 +582,54 @@ def _kernel_prelink_impl(ctx):
         "--previous",
         ctx.file.previous.path,
         "--slide=" + ctx.attr.slide,
-        "--output",
-        out.path,
     ]
     for root in ctx.attr.base_roots + new_roots:
-        args += ["--root", root]
+        original += ["--root", root]
     for root in new_roots:
-        args += ["--new-root", root]
+        original += ["--new-root", root]
     for cut in kernel.cuts:
-        args += ["--cut", cut]
+        original += ["--cut", cut]
     for defer in kernel.deferred:
-        args += ["--defer", defer]
+        original += ["--defer", defer]
     for init in ctx.attr.early_security_init:
-        args += ["--early-security-init", init]
+        original += ["--early-security-init", init]
+    original_inputs = [ctx.file.kernelcache, ctx.file.inherit_report, ctx.file.previous]
     run_tool(
         ctx,
         ctx.attr._emit_prelink,
-        args,
-        depset([kernel.objects[0], ctx.file.kernelcache, ctx.file.inherit_report, ctx.file.previous]),
-        [out, report],
+        ["plan"] + original + ["--plan-output", plan.path],
+        depset(original_inputs),
+        [plan],
+        "KernelPrelinkPlan",
+        "Planning the prelink of the original kexts",
+    )
+    run_tool(
+        ctx,
+        ctx.attr._emit_prelink,
+        ["apply", "--plan", plan.path, "--kernel", kernel.objects[0].path, "--output", out.path],
+        depset([plan, kernel.objects[0]]),
+        [out],
         "KernelPrelink",
         "Prelinking the original kexts into " + ctx.attr.out,
+    )
+
+    # The report (--output_groups=report) prelinks again in one process and refuses unless it makes the same bytes.
+    run_tool(
+        ctx,
+        ctx.attr._emit_prelink,
+        ["report"] + original + ["--kernel", kernel.objects[0].path, "--expect", out.path, "--report-output", report.path],
+        depset(original_inputs + [kernel.objects[0], out]),
+        [report],
+        "KernelPrelinkReport",
+        "Reporting the prelink of " + ctx.attr.out,
     )
     return [DefaultInfo(files = depset([out])), OutputGroupInfo(report = depset([report]))]
 
 kernel_prelink = rule(
     implementation = _kernel_prelink_impl,
     doc = "tools/prelink/emit_prelink.py: Apple's original kexts (the V20 roots plus every driver's prelink list) " +
-          "prelinked into the linked kernel.",
+          "prelinked into the linked kernel: a plan from the original kernelcache alone (rerun only when it or the " +
+          "lists change), applied to the native kernel; the report in the report output group.",
     attrs = dict(KERNEL_TOOL_ATTRS, **{
         "out": attr.string(default = "kernel.macho"),
         "kernel": attr.label(mandatory = True, providers = [KernelObjectsInfo]),

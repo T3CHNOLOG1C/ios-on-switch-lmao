@@ -133,13 +133,24 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
     # rebound to the native stub, an 8-byte zero constant, so the GOT load the component does reads NULL.
     # V17 incremental build: identity is inherited from the completed V15 pass.
     # Do not reread/hash old content merely to reproduce an existing digest.
+    report, unbound = plan_original(original_data, roots, slide, inherited_original_sha256=inherited_original_sha256,
+                                    cuts=cuts)
+    bind_native(report, unbound, native_data)
+    return report
+
+
+def plan_original(original_data, roots, slide, *, inherited_original_sha256=None, cuts=None):
+    """plan()'s part that reads only the original kernelcache: the closure, the extents and every pointer site, with
+    the component pointers bound. The kernel and cut pointers' targets (new_target None here) and the checks against
+    the native kernel are bind_native's, from `pending`: {'kernel': [(binding index, target, original export names)],
+    'cut': [(binding index, component, dependency, stub)]}."""
     if (not isinstance(inherited_original_sha256, str) or len(inherited_original_sha256) != 64 or
             any(c not in '0123456789abcdef' for c in inherited_original_sha256)):
         raise ValueError('A valid inherited original identity is required')
     if slide % 4096:
         raise ValueError('Rebasing must preserve native 4K alignment')
-    native, original = macho(native_data), macho(original_data)
-    if native['kind'] != 2 or original['kind'] != 2:
+    original = macho(original_data)
+    if original['kind'] != 2:
         raise ValueError('Expected MH_EXECUTE kernel images')
     parent = original['segments']
     info = next(s for s in parent if s['name'] == '__PRELINK_INFO')
@@ -201,10 +212,6 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
         index = bisect_right(starts, address) - 1
         return owned[index] if index >= 0 and address < owned[index][1] else None
 
-    native_symbols = {}
-    for address, names in exports(native_data, native).items():
-        for name in names:
-            native_symbols.setdefault(name, set()).add(address)
     original_symbols = exports(original_data, original)
     packed = metadata['_PrelinkLinkKASLROffsets']
     count, = struct.unpack_from('<I', packed)
@@ -215,6 +222,7 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
         raise ValueError('Duplicate pointer relocation site')
     base = next(s['va'] for s in parent if s['name'] == '__PRELINK_TEXT')
     bindings = []
+    unbound = {'kernel': [], 'cut': []}
     cut_sites = {edge: 0 for edge in cuts}
     for offset in offsets:
         site = base + offset
@@ -225,12 +233,10 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
             raise ValueError('Pointer spans component extent')
         target, = struct.unpack_from('<Q', original_data, backed_offset(parent, site, 8, len(original_data)))
         destination = owner(target)
+        replacement = None
         if destination and (source[2], destination[2]) in cuts and destination[2] not in selected:
-            stub = cuts[(source[2], destination[2])][1]
-            if not stub or len(native_symbols.get(stub, ())) != 1:
-                raise ValueError(f'Cut {source[2]} -> {destination[2]} needs one native stub {stub}')
-            replacement = next(iter(native_symbols[stub]))
             kind = 'cut'
+            unbound['cut'].append((len(bindings), source[2], destination[2], cuts[(source[2], destination[2])][1]))
             cut_sites[(source[2], destination[2])] += 1
         elif destination:
             if destination[2] not in selected:
@@ -238,11 +244,10 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
             replacement = target + slide
             kind = 'component'
         else:
-            replacement = unique_kernel_binding(target, original_symbols, native_symbols)
-            if not any(s['va'] <= replacement < s['va'] + s['size'] for s in native['segments']):
-                raise ValueError('Native export is outside mapped kernel segments')
             kind = 'kernel'
-        if not 0 <= site + slide < 1 << 64 or not 0 <= replacement < 1 << 64:
+            unbound['kernel'].append((len(bindings), target, original_symbols.get(target, [])))
+        # A native export (the kernel and cut targets) is a 64-bit symbol value: always in range.
+        if not 0 <= site + slide < 1 << 64 or not 0 <= (target if replacement is None else replacement) < 1 << 64:
             raise ValueError('Rebased pointer outside 64-bit address space')
         bindings.append({'site': site, 'target': target, 'new_site': site + slide,
                          'new_target': replacement, 'kind': kind, 'module': source[2]})
@@ -255,12 +260,9 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
             continue
         if not 0 <= start + slide < end + slide <= 1 << 64:
             raise ValueError('Rebased segment outside 64-bit address space')
-        for s in native['segments']:
-            if s['size'] and start + slide < s['va'] + s['size'] and s['va'] < end + slide:
-                raise ValueError(f'Rebased component collides with native {s["name"]}')
         extents.append({'module': identifier, 'segment': segment['name'],
                         'va': start + slide, 'size': end - start})
-    return {'native_sha256': hashlib.sha256(native_data).hexdigest(),
+    return {'native_sha256': None,
             'original_sha256': inherited_original_sha256,
             'slide': slide, 'components': sorted(selected - codeless),
             'codeless_components': sorted(codeless), 'kernel_interfaces': sorted(interfaces),
@@ -268,7 +270,53 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
             'extents': extents, 'bindings': bindings, 'images_modified': False,
             'cut_dependencies': [{'component': c, 'dependency': d, 'pointer_sites': cut_sites[(c, d)],
                                   'stub': cuts[(c, d)][1]} for (c, d) in sorted(cuts) if c in selected],
-            'instruction_relocation_complete': False, 'abi_qualified': False, 'loadable': False}
+            'instruction_relocation_complete': False, 'abi_qualified': False, 'loadable': False}, unbound
+
+
+def native_bindings(native_data, native, kernel_targets, cut_stubs, extents):
+    """The native kernel's half of plan(): each kernel target's native address (kernel_targets: [(target, original
+    export names)]), each cut's stub address (cut_stubs: [(component, dependency, stub)]), and the checks that the
+    rebased extents ([(va, size)]) miss the native segments. The exports, for the caller's own markers."""
+    native_symbols = {}
+    exported = exports(native_data, native)
+    for address, names in exported.items():
+        for name in names:
+            native_symbols.setdefault(name, set()).add(address)
+    addresses = []
+    for target, names in kernel_targets:
+        replacement = unique_kernel_binding(target, {target: names}, native_symbols)
+        if not any(s['va'] <= replacement < s['va'] + s['size'] for s in native['segments']):
+            raise ValueError('Native export is outside mapped kernel segments')
+        addresses.append(replacement)
+    stubs = []
+    for component, dependency, stub in cut_stubs:
+        if not stub or len(native_symbols.get(stub, ())) != 1:
+            raise ValueError(f'Cut {component} -> {dependency} needs one native stub {stub}')
+        stubs.append(next(iter(native_symbols[stub])))
+    for va, size in extents:
+        for s in native['segments']:
+            if s['size'] and va < s['va'] + s['size'] and s['va'] < va + size:
+                raise ValueError(f'Rebased component collides with native {s["name"]}')
+    return addresses, stubs, exported
+
+
+def bind_native(report, unbound, native_data):
+    """plan()'s native half on plan_original's report: the kernel and cut pointers' new targets, the native checks,
+    native_sha256. The exports of the native kernel."""
+    native = macho(native_data)
+    if native['kind'] != 2:
+        raise ValueError('Expected MH_EXECUTE kernel images')
+    bindings = report['bindings']
+    addresses, stubs, exported = native_bindings(
+        native_data, native, [(target, names) for _, target, names in unbound['kernel']],
+        [(component, dependency, stub) for _, component, dependency, stub in unbound['cut']],
+        [(e['va'], e['size']) for e in report['extents']])
+    for (index, _, _), address in zip(unbound['kernel'], addresses):
+        bindings[index]['new_target'] = address
+    for (index, _, _, _), address in zip(unbound['cut'], stubs):
+        bindings[index]['new_target'] = address
+    report['native_sha256'] = hashlib.sha256(native_data).hexdigest()
+    return exported
 
 
 def main():
