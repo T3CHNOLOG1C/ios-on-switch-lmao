@@ -139,6 +139,7 @@ Vulkan-side choices Metal has no counterpart for:
 | `announce_each` | Degradation kinds to announce at every occurrence instead of once. |
 | `metal_level` | The macOS release whose Metal the device answers as (the host's by default). |
 | `record_executions` | Keep, per command buffer, which pipeline each dispatch and draw ran (`CommandBuffer::executions`). Off by default. |
+| `refuse_rebinds` | Refuse every `rebind_bytes_no_copy` (`RebindProblem::Refused`), so the encoders log no calls to encode again while no-copy buffers live. Off by default. |
 
 While a handle lives, equal options give the same device for a physical device, as Metal has one
 `MTLDevice` per GPU. Nothing is read from the environment but the platform's default cache

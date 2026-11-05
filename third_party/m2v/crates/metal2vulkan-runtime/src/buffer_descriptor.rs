@@ -539,6 +539,10 @@ impl Device {
         if self.is_lost() {
             return Err(Error::DeviceLost);
         }
+        // Its encoders logged nothing to encode again (`DeviceOptions::refuse_rebinds`).
+        if self.shared().refuse_rebinds {
+            return Err(invalid(call, Problem::Rebind(RebindProblem::Refused)));
+        }
         let key = buffer.identity().key;
         let encoded = || invalid(call, Problem::Rebind(RebindProblem::EncodedUses));
         if self.rebind_pending(key) {

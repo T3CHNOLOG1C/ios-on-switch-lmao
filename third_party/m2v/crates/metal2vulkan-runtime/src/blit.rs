@@ -160,7 +160,7 @@ impl CommandBuffer {
             core: EncoderCore::open(self, "blit_command_encoder", true)?,
             pattern: None,
             shadows: Vec::new(),
-            log: self.device().shared().rebinds.any().then(CallLog::new),
+            log: self.device().shared().logs_calls().then(CallLog::new),
         })
     }
 }

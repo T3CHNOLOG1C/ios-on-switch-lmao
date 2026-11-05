@@ -169,6 +169,14 @@ pub struct DeviceOptions {
     /// No Metal counterpart.
     #[doc(hidden)]
     pub record_executions: bool,
+    /// Refuse every `rebind_bytes_no_copy`, of a buffer and of a heap (`Invalid`,
+    /// [`RebindProblem::Refused`](crate::RebindProblem::Refused)), for a consumer that never moves
+    /// the host pages of what it made with `new_buffer_with_bytes_no_copy` or
+    /// `new_heap_with_bytes_no_copy`. Off by default. The device's compute, blit and render
+    /// encoders then log no calls (`replay.rs`): a log is read only to encode its encoder again at
+    /// a rebind, so a draw pays nothing for a log no one reads. `detach_backing` is unchanged. No
+    /// Metal counterpart.
+    pub refuse_rebinds: bool,
 }
 
 /// One setting of an instance layer (`VkLayerSettingEXT`).
@@ -1248,6 +1256,7 @@ fn create_on(
         gpu_times_from_host: options.gpu_times_from_host,
         announce_each: options.announce_each.clone(),
         record_executions: options.record_executions,
+        refuse_rebinds: options.refuse_rebinds,
         view_reinterpretation,
         generated_commands,
         host_image_copy,
@@ -1356,6 +1365,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         announce_each,
         metal_level,
         record_executions,
+        refuse_rebinds,
     } = a;
     *policy == b.policy
         && *layers == b.layers
@@ -1374,6 +1384,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *announce_each == b.announce_each
         && *metal_level == b.metal_level
         && *record_executions == b.record_executions
+        && *refuse_rebinds == b.refuse_rebinds
 }
 
 /// The group of `made` for `options`: the live one, or a new one on a new instance. Its index.

@@ -97,6 +97,8 @@ mod private_properties;
 mod queue;
 mod range;
 mod rate_map;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod refuse_rebinds;
 mod resource;
 mod resource_ids;
 mod rotated;

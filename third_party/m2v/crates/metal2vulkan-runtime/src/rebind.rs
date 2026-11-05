@@ -77,6 +77,9 @@ pub enum RebindProblem {
     /// a resource placed in it, or has an encoder open that used one (or one committed whose
     /// commands the runtime records only once earlier work completed): commit or drop it first.
     EncodedUses,
+    /// The device refuses every rebind (`DeviceOptions::refuse_rebinds`): its encoders log no
+    /// calls to encode again.
+    Refused,
 }
 
 /// The device's buffers over host pages, by their hazard-tracking key, with the command buffers
@@ -721,7 +724,8 @@ impl Buffer {
     /// (`NotImplemented(RebindTextures)`: the texture's copies, views and aliasing image are
     /// planned at that offset), or where the device cannot make a texture's aliasing image again
     /// over the new memory (`NotImplemented(RebindTextures)`, which says when); memory the device
-    /// cannot import exactly, as `new_buffer_with_bytes_no_copy` refuses it; a lost device.
+    /// cannot import exactly, as `new_buffer_with_bytes_no_copy` refuses it; a lost device; a
+    /// device made with `DeviceOptions::refuse_rebinds` (`Invalid`, [`RebindProblem::Refused`]).
     ///
     /// # Safety
     ///
@@ -777,7 +781,8 @@ impl Heap {
     /// [`RebindProblem::EncodedUses`]); memory whose first byte is off the import's unit
     /// (`Invalid`, `HeapProblem::HostMemoryAlignment`); memory the device cannot import exactly;
     /// an image the device cannot make again there (as `new_texture_at_offset` refuses it); a
-    /// lost device.
+    /// lost device; a device made with `DeviceOptions::refuse_rebinds` (`Invalid`,
+    /// [`RebindProblem::Refused`]).
     ///
     /// # Safety
     ///

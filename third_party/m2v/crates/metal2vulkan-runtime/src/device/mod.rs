@@ -366,6 +366,9 @@ pub(super) struct DeviceShared {
     /// Its command buffers keep execution records (`DeviceOptions::record_executions`): where
     /// not, its encoders build none (`EncoderCore::executed`).
     pub(crate) record_executions: bool,
+    /// It refuses every rebind (`DeviceOptions::refuse_rebinds`): its encoders log no calls
+    /// ([`DeviceShared::logs_calls`]).
+    pub(crate) refuse_rebinds: bool,
     /// Counts the times an image of the device let its views go, under its views lock (a
     /// rebind's or a storage form's new `VkImage`, a detach's stand-in, a reattach): a view kept
     /// by what it was made of (`binding::BindMemo`) is current while this holds.
@@ -373,6 +376,13 @@ pub(super) struct DeviceShared {
 }
 
 impl DeviceShared {
+    /// Whether an encoder opened now logs its calls (`replay.rs`): where the device has a buffer
+    /// over host pages, unless it refuses every rebind, the only reader of a log
+    /// (`DeviceOptions::refuse_rebinds`).
+    pub(crate) fn logs_calls(&self) -> bool {
+        !self.refuse_rebinds && self.rebinds.any()
+    }
+
     /// What `create` makes with the `VkPipelineCache` it is handed, its `vkCreate*Pipelines` call:
     /// a cache of the making's own, seeded from the record `making` names
     /// (`ShaderCache::make_pipelines`, `shader_cache/driver.rs`). On a pool's thread the exit waits
@@ -754,6 +764,8 @@ pub(super) struct Parts {
     pub(super) announce_each: BTreeSet<Degradation>,
     /// Its command buffers keep execution records (`DeviceOptions::record_executions`).
     pub(super) record_executions: bool,
+    /// It refuses every rebind (`DeviceOptions::refuse_rebinds`).
+    pub(super) refuse_rebinds: bool,
     /// Its views may reinterpret an image's components ([`DeviceShared`]'s field), outside
     /// `enabled`'s vocabulary.
     pub(super) view_reinterpretation: bool,
@@ -821,6 +833,7 @@ impl Device {
             gpu_times_from_host,
             announce_each,
             record_executions,
+            refuse_rebinds,
             view_reinterpretation,
             generated_commands,
             host_image_copy,
@@ -1219,6 +1232,7 @@ impl Device {
             properties,
             announced: Announced::new(&announce_each),
             record_executions,
+            refuse_rebinds,
             views_epoch: AtomicU64::new(0),
             device_address,
             upload_alignment,

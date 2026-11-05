@@ -13,7 +13,8 @@
 //!   over where their buffers lie now. A call refused at its first encoding is refused again,
 //!   which leaves the encoder as it was encoded first ([`Replay::run`] fails, and the encoder is
 //!   not encoded again). The log starts at the encoder's open where the device has a buffer over
-//!   host pages (`Rebinds::any`); else nothing is logged. It costs one push per
+//!   host pages (`Rebinds::any`) and does not refuse every rebind (`DeviceOptions::refuse_rebinds`,
+//!   `DeviceShared::logs_calls`); else nothing is logged. It costs one push per
 //!   call; a slice of buffers, offsets, textures or bytes goes into one of the log's arenas, so
 //!   the common calls allocate nothing of their own.
 //! - **What is kept.** The command buffer keeps an ended encoder's log only where a command of

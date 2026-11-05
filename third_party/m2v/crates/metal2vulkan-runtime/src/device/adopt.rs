@@ -266,6 +266,8 @@ impl Device {
             gpu_times_from_host: raw.gpu_times_from_host,
             // An adopted device keeps no execution record: validation makes its own devices.
             record_executions: false,
+            // An adopted device's rebinds go as a made device's do by default.
+            refuse_rebinds: false,
             announce_each: raw.announce_each,
             view_reinterpretation,
             generated_commands: false,

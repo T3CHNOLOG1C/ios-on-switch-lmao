@@ -226,7 +226,7 @@ impl CommandBuffer {
             indirect_stage_in: None,
             residency: self.inherited_residency(false),
             captures: Captures::default(),
-            log: self.device().shared().rebinds.any().then(CallLog::new),
+            log: self.device().shared().logs_calls().then(CallLog::new),
             dispatches: 0,
         })
     }

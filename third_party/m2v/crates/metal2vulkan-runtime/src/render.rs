@@ -1273,8 +1273,7 @@ impl CommandBuffer {
         let log = match again {
             None => device
                 .shared()
-                .rebinds
-                .any()
+                .logs_calls()
                 .then(|| RenderLog::new(descriptor)),
             Some(_) => None,
         };
