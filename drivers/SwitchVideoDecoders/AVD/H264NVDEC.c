@@ -197,8 +197,6 @@ int h264_decoder_configure(H264Decoder *d)
     return -1;
 }
 
-// ---- Display order -------------------------------------------------------------------------------------------------
-
 static void emitFirst(H264Decoder *d)
 {
     uint32_t best = 0;
@@ -225,8 +223,6 @@ static void discardPending(H264Decoder *d)
     for (uint32_t i = 0; i < d->pending_count; i++) d->b.discard(d->b.ctx, d->pending[i].item);
     d->pending_count = 0;
 }
-
-// ---- Reference marking (8.2.5, frames) -----------------------------------------------------------------------------
 
 static int32_t frameNumWrap(const H264Decoder *d, const RefFrame *f, uint32_t current)
 {
@@ -379,8 +375,6 @@ static void fillGap(H264Decoder *d, uint32_t frameNum)
     }
 }
 
-// ---- Picture order count (8.2.1, frames) ---------------------------------------------------------------------------
-
 static void pictureOrder(H264Decoder *d, const H264Slice *sh, int32_t *top, int32_t *bottom, int32_t *msbOut,
                          uint32_t *offsetOut)
 {
@@ -426,8 +420,6 @@ static void pictureOrder(H264Decoder *d, const H264Slice *sh, int32_t *top, int3
     const int32_t poc = idr ? 0 : 2 * (int32_t)(offset + sh->frame_num) - (sh->nal_ref_idc ? 0 : 1);
     *top = *bottom = poc;
 }
-
-// ---- One picture ---------------------------------------------------------------------------------------------------
 
 static void entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint32_t value, uint32_t offset)
 {

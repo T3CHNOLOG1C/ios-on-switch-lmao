@@ -93,8 +93,6 @@ const VP9FrameHeader *vp9_decoder_last_header(const VP9Decoder *d)
     return &d->header;
 }
 
-// ---- Buffers -------------------------------------------------------------------------------------------------------
-
 // averne's sizes (superblocks of the 16-aligned frame); the filter buffer by height, BSD control data at 912/988 of it.
 static uint32_t superblocks(uint32_t w, uint32_t h)
 {
@@ -178,8 +176,6 @@ static int takeSurface(VP9Decoder *d, uint32_t width, uint32_t height)
     s->va = va;
     return empty;
 }
-
-// ---- NVDEC's tables ------------------------------------------------------------------------------------------------
 
 static void fillProbs(nvdec_vp9EntropyProbs_t *p, const VP9FrameContext *fc, const VP9State *s)
 {
@@ -293,8 +289,8 @@ _Static_assert(offsetof(nvdec_vp9_pic_s, ref2_stride) == offsetof(nvdec_vp9_pic_
 
 // NVDEC numbers the frame's interpolation filter as the header's 2-bit literal does: 0 smooth, 1 regular, 2 sharp,
 // 3 bilinear, 4 switchable (FFmpeg's FilterMode, averne's mapping), not libvpx's INTERP_FILTER (0 regular, 1 smooth).
-// Proven on r7p9d: clip A's frame 7 (fixed regular filter) sent as libvpx's 0 decoded to luma CRC 0xbde1bb6d, which is
-// exactly libvpx's output with that frame's literal rewritten to 0 (smooth); frames with switchable filters matched.
+// On hardware, clip A's frame 7 (fixed regular filter) sent as libvpx's 0 decoded to luma CRC 0xbde1bb6d, which is
+// libvpx's output with that frame's literal rewritten to 0 (smooth); frames with switchable filters matched.
 static const char kNvdecFilter[5] = {1, 0, 2, 3, 4};  // indexed by libvpx EIGHTTAP, SMOOTH, SHARP, BILINEAR, SWITCHABLE
 
 static void fillSetup(const VP9Decoder *d, nvdec_vp9_pic_s *p, const VP9FrameHeader *h, const Surface *cur,
@@ -369,8 +365,6 @@ static void entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint32_t 
     e->value = value;
     e->offset = offset;
 }
-
-// ---- One frame -----------------------------------------------------------------------------------------------------
 
 static void output(VP9Decoder *d, const Surface *s, int status, void *token)
 {

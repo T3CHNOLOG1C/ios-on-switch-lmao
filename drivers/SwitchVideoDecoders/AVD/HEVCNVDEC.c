@@ -195,8 +195,6 @@ static int growInput(HEVCDecoder *d, uint64_t needed)
     return 0;
 }
 
-// ---- The decoded picture buffer (C.5.2) ----------------------------------------------------------------------------
-
 static unsigned countWhere(const HEVCDecoder *d, bool output)
 {
     unsigned n = 0;
@@ -239,8 +237,6 @@ void hevc_decoder_flush(HEVCDecoder *d)
 {
     while (bump(d)) {}
 }
-
-// ---- NVDEC's tables ------------------------------------------------------------------------------------------------
 
 static void entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint32_t value, uint32_t offset)
 {
@@ -412,8 +408,6 @@ static void fillSetup(const HEVCDecoder *d, nvdec_hevc_pic_s *p, const HEVCSPS *
                 for (unsigned k = 0; k < counts[l][s] && i < 16; k++)
                     lists[l][i++] = (unsigned char)(order[l][s][k] >= 0 ? order[l][s][k] : scratch);
 }
-
-// ---- One picture -----------------------------------------------------------------------------------------------
 
 typedef struct {
     const uint8_t *data;

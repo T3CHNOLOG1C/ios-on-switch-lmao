@@ -62,9 +62,8 @@ size_t hevc_unescape(const uint8_t *nal, size_t size, uint8_t *out, size_t cap)
     return n;
 }
 
-// ---- Scaling lists (7.3.4, 7.4.5) -----------------------------------------------------------------------------
-
-// Table 7-6's 8x8 defaults laid out in raster order (the up-right diagonal scan of 6.5.3 applied to its values).
+// Scaling lists (7.3.4, 7.4.5). Table 7-6's 8x8 defaults laid out in raster order (the up-right diagonal scan of
+// 6.5.3 applied to its values).
 static const uint8_t kDefaultIntra[64] = {16, 16, 16, 16, 17, 18, 21, 24, 16, 16, 16, 16, 17, 19, 22, 25,
                                           16, 16, 17, 18, 20, 22, 25, 29, 16, 16, 18, 21, 24, 27, 31, 36,
                                           17, 17, 20, 24, 30, 35, 41, 47, 18, 19, 22, 27, 35, 44, 54, 65,
@@ -142,8 +141,7 @@ const HEVCScalingList *hevc_scaling_list(const HEVCSPS *sps, const HEVCPPS *pps)
     return pps->scaling_list_present ? &pps->scaling : &sps->scaling;
 }
 
-// ---- Reference picture sets (7.3.7, 7.4.8) ----------------------------------------------------------------------
-
+// Reference picture sets (7.3.7, 7.4.8).
 static bool stRefPicSet(Bits *b, const HEVCShortTermRPS *sets, unsigned idx, unsigned count, HEVCShortTermRPS *out)
 {
     memset(out, 0, sizeof(*out));
@@ -205,8 +203,6 @@ static bool stRefPicSet(Bits *b, const HEVCShortTermRPS *sets, unsigned idx, uns
     }
     return !b->bad && poc > -32768 && poc < 32768;
 }
-
-// ---- Parameter sets --------------------------------------------------------------------------------------------
 
 static bool begin(Bits *b, uint8_t *rbsp, size_t cap, const uint8_t *nal, size_t size)
 {
@@ -373,8 +369,7 @@ int hevc_parse_pps(HEVCParams *params, const uint8_t *nal, size_t size)
     return 0;
 }
 
-// ---- Slice segment header (7.3.6.1), as far as the reference picture syntax --------------------------------------
-
+// 7.3.6.1, up to the reference picture syntax.
 int hevc_parse_slice_header(const HEVCParams *params, const uint8_t *nal, size_t size, HEVCSliceHeader *out)
 {
     uint8_t rbsp[1024];

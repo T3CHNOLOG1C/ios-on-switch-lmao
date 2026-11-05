@@ -9,9 +9,9 @@
 // ..., HEVCH8, H8, VCPHEVC, then /System/Library/VideoDecoders/AVD.videodecoder (AVDRegister), the slot of Apple's AVD
 // decoders on later SoCs. iPad7,1 ships no such file; the userland overlay puts this one there.
 //
-// Registration is per process and tells the truth. AVDRegister registers a codec only when the kernel published
-// TegraNVDEC (it proved itself at boot, N4), proved that codec on the engine (N3: TegraNVDECInfo.codecs) and this
-// process may open it (a probe connection, closed at once).
+// Registration is per process. AVDRegister registers a codec only when the kernel published TegraNVDEC (it proved
+// itself at boot, N4), proved that codec on the engine (N3: TegraNVDECInfo.codecs) and this process may open it (a
+// probe connection, closed at once).
 // VTIsHardwareDecodeSupported only asks the registry (VTSelectAndCreateVideoDecoderInstance with no out-pointer
 // returns before any factory runs), so registering in a process the sandbox refuses would be a false YES there.
 //
@@ -20,11 +20,10 @@
 // StartSession is not retried with another decoder, so a stream NVDEC cannot take (interlaced, 4:2:2 or 4:4:4, high
 // bit depth, slice groups, beyond 4096x4096) or one the arena has no room for runs on Apple's software decoder inside
 // this instance: VTSelectAndCreateVideoDecoderInstance with hardware disabled picks it, every class call is forwarded,
-// and UsingHardwareAcceleratedVideoDecoder answers false. Nothing that decoded before decodes worse now. VP9 has no
-// software decoder in 21H461's VideoToolbox to fall back on (and needs kVTVideoDecoderSpecification_AllowVP9Decode,
-// which VideoToolbox gives Fig servers and entitled tasks such as WebKit's), so a VP9 session this decoder cannot take
-// (profile 1-3, beyond 4096x4096, below NVDEC's 144x144) fails in StartSession, which is also what clients see on
-// iPads without VP9 hardware.
+// and UsingHardwareAcceleratedVideoDecoder answers false. VP9 has no software decoder in 21H461's VideoToolbox to fall
+// back on (and needs kVTVideoDecoderSpecification_AllowVP9Decode, which VideoToolbox gives Fig servers and entitled
+// tasks such as WebKit's), so a VP9 session this decoder cannot take (profile 1-3, beyond 4096x4096, below NVDEC's
+// 144x144) fails in StartSession, which is also what clients see on iPads without VP9 hardware.
 //
 // Per picture (the scheduling): H264NVDEC parses and fills NVDEC's setup on the caller's decode thread; the kernel
 // queues the job on host1x channel 0 and the thread sleeps on the syncpoint interrupt (no polling, no GPU, nothing on
@@ -34,12 +33,11 @@
 // The CPU neither de-swizzles nor touches the pixels, and the IOSurface is in DRAM with no CPU line of it dirty when
 // it goes out: the GPU, which does not snoop the CPU's caches, reads what VIC wrote. Where VIC does not take a picture
 // (its block-linear input unproven this boot, an odd size, a surface it cannot address: the first refusal is one line)
-// the CPU de-swizzles it as before and then cleans the buffer's lines to DRAM (sys_dcache_flush). r8a, 720p60 H.264
-// in mediaplaybackd: the CPU copy was 2.47 ms a picture, most of mediaplaybackd's ~2.8 s of CPU every 10 s; the copy's
-// lines could reach the GPU later than its reads (nothing cleaned an IOSurface the compositor had already imported).
-// Frames go out as soon as they are decoded, in decode order, as Apple's H.264 decoders do even
-// under kVTDecodeFrame_EnableTemporalProcessing (observed on macOS 27 with test/vdectest): clients order by
-// presentation time. H264NVDEC's display-order bumping stays available (kReorder).
+// the CPU de-swizzles it and then cleans the buffer's lines to DRAM (sys_dcache_flush). The CPU copy costs 2.47 ms a
+// 720p60 H.264 picture, most of mediaplaybackd's CPU time.
+// Frames go out as soon as they are decoded, in decode order, as Apple's H.264 decoders do even under
+// kVTDecodeFrame_EnableTemporalProcessing (macOS 27, test/vdectest): clients order by presentation time. H264NVDEC's
+// display-order bumping stays available (kReorder).
 //
 // Log (subsystem com.ioswitch.avd, category decoder): per process, a refusal by TegraNVDEC; per session, one line when
 // it starts (on NVDEC, or on the software decoder and why) and one when it ends (frames, mean decode and copy time);
@@ -102,8 +100,6 @@ static double ticksToMs(uint64_t ticks)
     return (double)ticks * base.numer / base.denom / 1e6;
 }
 
-// ---- The software decoder this instance forwards to ----------------------------------------------------------------
-
 static const VTPluginDecoderVTable *softwareVTable(const Decoder *d)
 {
     return CMBaseObjectGetVTable(VTVideoDecoderGetCMBaseObject(d->software));
@@ -140,8 +136,6 @@ static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideo
            size.height, getprogname(), d->codec == kCMVideoCodecType_HEVC ? "HEVC" : "H.264", why);
     return noErr;
 }
-
-// ---- H264Backend: pictures out ---------------------------------------------------------------------------------
 
 // VIC's copy of the picture into the buffer (TegraNVDECPresent); false when it did not (a refusal turns it off for the
 // session, with one line). The kernel is always asked, even for a shape it will refuse (an odd VP9 size), because a
@@ -245,8 +239,6 @@ static void discard(void *ctx, void *item)  // no_output_of_prior_pics: answered
     emit(ctx, out);
 }
 
-// ---- H264Backend: buffers and jobs, on this decoder's connection --------------------------------------------------
-
 static int bufferAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
 {
     return nvdec_alloc(((Decoder *)ctx)->client, size, handle, va);
@@ -264,8 +256,7 @@ static int jobWait(void *ctx, const TegraNVDECWait *wait)
     return nvdec_wait(((Decoder *)ctx)->client, wait);
 }
 
-// ---- Colour: the format description's own tags, else the SPS's VUI (H.273 code points) --------------------------
-
+// The format description's own tag, else the SPS's VUI (H.273 code points).
 static CFTypeRef colourTag(CMFormatDescriptionRef format, CFStringRef key, int code, int kind, uint32_t height)
 {
     CFTypeRef tag = CMFormatDescriptionGetExtension(format, key);
@@ -290,8 +281,6 @@ static CFTypeRef colourTag(CMFormatDescriptionRef format, CFStringRef key, int c
         return NULL;
     }
 }
-
-// ---- VTVideoDecoderClass -------------------------------------------------------------------------------------------
 
 static CFDataRef copyAvcC(CMVideoFormatDescriptionRef format)
 {
@@ -644,8 +633,6 @@ static OSStatus finishDelayedFrames(VTVideoDecoderRef ref)
     return noErr;
 }
 
-// ---- CMBaseClass ---------------------------------------------------------------------------------------------------
-
 static OSStatus invalidate(CMBaseObjectRef ref)
 {
     Decoder *d = storage(ref);
@@ -792,9 +779,7 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
 // is open (gCheckOpen: in the claimer from the claim to the report, elsewhere until the verdict); outside that window
 // VideoToolbox moves on to the next decoder. A process that finds the check running never holds up its registry for
 // the verdict: H.264 is offered at once, 'vp09' and 'hvc1' from a background wait when the verdict comes (the kernel's
-// bounded sleep on it, not polling). r8a: com.apple.WebKit.GPU claimed the check, its VP9 and HEVC sessions went to
-// videocodecd, which had no private registration (-12906), so VP9 and HEVC were off for the boot; videocodecd had
-// meanwhile blocked 3 s in VTLoadVideoDecoders waiting for that same check, then offered neither.
+// bounded sleep on it, not polling). Without the registration a remoted check session fails with -12906.
 #define kCheckImplementation CFSTR("com.ioswitch.avd.check")
 #define kCheckDecoderID      CFSTR("com.ioswitch.avd.check.vp09")
 #define kCheckHEVCDecoderID  CFSTR("com.ioswitch.avd.check.hvc1")
@@ -857,7 +842,7 @@ static OSStatus createCheckInstance(FourCharCode codec, CFAllocatorRef allocator
 {
     if (!__atomic_load_n(&gCheckOpen, __ATOMIC_ACQUIRE)) return kVTCouldNotFindVideoDecoderErr;
     if (!__atomic_load_n(&gClaimer, __ATOMIC_ACQUIRE) && !tSoftwareLookup) {
-        static int logged;  // the next boot's proof that a remoted check session found it here
+        static int logged;  // shows that a remoted check session found this registration
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
             os_log(gLog,
                    "AVD: clip-check decoder '%{public}s' serving a session in %{public}s (the check runs in "

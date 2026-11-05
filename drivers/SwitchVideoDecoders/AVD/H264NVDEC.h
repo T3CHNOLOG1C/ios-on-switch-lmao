@@ -6,8 +6,8 @@
 //
 // Layouts follow averne's FFmpeg nvtegra hwaccel (libavcodec/nvtegra_h264.c, the decoder NXMP uses on the Switch;
 // GPL, read, not copied) and NVIDIA's nvdec_drv.h / clc5b0.h (MIT, vendored in drivers/TegraNVDEC/nvidia).
-// Limits of this version: progressive frames only (frame_mbs_only_flag = 1), 4:2:0 8-bit, one slice group, at most
-// 4096x4096. Anything else is refused at configuration time.
+// Limits: progressive frames only (frame_mbs_only_flag = 1), 4:2:0 8-bit, one slice group, at most 4096x4096.
+// Anything else is refused at configuration time.
 #ifndef H264_NVDEC_H
 #define H264_NVDEC_H
 #include "H264Syntax.h"

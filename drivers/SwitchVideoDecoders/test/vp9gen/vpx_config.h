@@ -1,5 +1,4 @@
 // Hand-written for vp9gen: the layout switches of Homebrew libvpx 1.16.0 (--enable-vp9-highbitdepth, arm64).
-/* Hand-written for Homebrew libvpx 1.16.0 (--enable-vp9-highbitdepth, arm64-darwin): layout-relevant switches only. */
 #ifndef VPX_CONFIG_H
 #define VPX_CONFIG_H
 #define RESTRICT

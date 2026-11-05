@@ -132,8 +132,6 @@ static void fakeDiscard(void *ctx, void *item)
     (void)ctx, free(item);
 }
 
-// ---- --clip: the refusals the kernel must make, each from the clip's first (accepted) submit --------------------
-
 static int entryOf(const TegraNVDECSubmit *s, uint16_t method)
 {
     for (uint32_t i = 0; i < s->entry_count; i++)
@@ -141,6 +139,7 @@ static int entryOf(const TegraNVDECSubmit *s, uint16_t method)
     return -1;
 }
 
+// --clip: the refusals the kernel must make, each from the clip's first (accepted) submit.
 static int refusals(const Fake *f)
 {
     int bad = 0;

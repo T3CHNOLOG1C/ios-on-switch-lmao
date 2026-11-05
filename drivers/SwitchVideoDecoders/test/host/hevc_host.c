@@ -98,8 +98,6 @@ static void testSyntax(void)
           "default scaling lists");
 }
 
-// ---- HEVCNVDEC over a fake engine ------------------------------------------------------------------------------
-
 enum { MAX_BUFFERS = 40 };
 typedef struct {
     uint8_t *va[MAX_BUFFERS + 1];

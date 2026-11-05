@@ -38,7 +38,7 @@ FRAMEWORKS = [
     "IOSurface",
 ]
 
-# --- AVD's decoders, each compiled once ------------------------------------------------------------------------------
+# AVD's decoders, each compiled once.
 host_library(
     name = "nvdec_check",
     hdrs = [
@@ -119,7 +119,7 @@ host_library(
     linkopts = FRAMEWORKS,
 )
 
-# --- The C test hosts, each main() renamed so its GoogleTest wrapper calls it -------------------------------------------
+# Each C test host's main() is renamed so its GoogleTest wrapper calls it.
 host_library(
     name = "blocklinear_host",
     srcs = ["blocklinear_host.c"],
@@ -193,7 +193,6 @@ host_library(
     deps = [":clip_check"],
 )
 
-# --- The tests ---------------------------------------------------------------------------------------------------------
 [host_test(
     name = host + "_test",
     srcs = [
