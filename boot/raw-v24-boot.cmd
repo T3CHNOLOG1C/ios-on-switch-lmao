@@ -4,7 +4,7 @@
 # from the native entry would trigger U-Boot's own reset path before this script.
 # The screen stays dark until the loader draws: U-Boot's output (and echoe's stderr) goes to the serial console only.
 # The video console must still exist (the refusal below writes to it); a refusal switches back to it.
-# Boot timing (native/loader/stamps.h): setexpr.l samples the microsecond timer (TIMERUS_CNTR_1US, 0x60005010) after
+# Boot timing (boot/loader/stamps.h): setexpr.l samples the microsecond timer (TIMERUS_CNTR_1US, 0x60005010) after
 # each step; just before bootm go the samples go to the loader's slot at 0xA001EF00. Diagnostic only: nothing here
 # depends on them. ios_uboot comes from the hekate entry (its scan_dev_for_extlinux); ios_u_main and ios_u_sd from
 # U-Boot's own default environment (package_raw_boot.py bl33_patch).
@@ -114,7 +114,7 @@ fi
 
 # The kernel window (its nonzero extents, LZ4-compressed, back to back; the
 # loader decodes it into XNU's window) rides in bl33.bin after U-Boot
-# (native/loader/stage.h): hekate has already read it, with U-Boot, to
+# (boot/loader/stage.h): hekate has already read it, with U-Boot, to
 # 0xAA101000. fatsize pins bl33.bin's size, as it pinned the old window file's
 # (it is the size check here: this U-Boot's FatFS glue sets filesize to the
 # length asked of load, not the file's, so the itest after each load always
@@ -277,7 +277,7 @@ if test "${handoff_status}" = "READY"; then
         fi
         if test "${handoff_status}" = "READY"; then
             setexpr.l ios_go *0x60005010
-            # The loader's timing slot (native/loader/stamps.h): samples, then the magic. A missing one stays 0.
+            # The loader's timing slot (boot/loader/stamps.h): samples, then the magic. A missing one stays 0.
             mw.l 0xA001EF00 0 0x40
             if env exists ios_uboot; then mw.l 0xA001EF04 ${ios_uboot} 1; fi
             if env exists ios_script; then mw.l 0xA001EF08 ${ios_script} 1; fi

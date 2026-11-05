@@ -1,6 +1,6 @@
 """Host tests: GoogleTest cc_tests of ioswitch's own C and C++, built for this Mac by the host C/C++ toolchain.
 
-Each test lives in a `test/` package beside the code it tests (drivers/SwitchTouch/test, native/loader/test, ...) and
+Each test lives in a `test/` package beside the code it tests (drivers/SwitchTouch/test, boot/loader/test, ...) and
 lists only what it compiles or reads, so an edit reruns only the tests that depend on it. Nothing compiles at test time.
 
     load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")

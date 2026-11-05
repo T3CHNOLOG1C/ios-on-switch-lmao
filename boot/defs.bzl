@@ -32,7 +32,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 # remotely (the key includes @xcode//:identity).
 _XCODE_EXECUTION = {"no-remote-exec": "", "requires-darwin": ""}
 
-# The loader is freestanding AArch64 code entered by U-Boot's bootm with the MMU and caches off (native/loader).
+# The loader is freestanding AArch64 code entered by U-Boot's bootm with the MMU and caches off (boot/loader).
 # PROBE_QUIET: the shared handoff probe draws nothing and skips its FDT CRC/walk unless it refuses (the loader checks
 # the FDT itself); everything before the copy runs with the caches off.
 LOADER_COPTS = [
@@ -56,7 +56,7 @@ LOADER_COPTS = [
 # bootwait=0: hekate always shows its boot logo before an L4T entry and, launched from Nyx, waits [config] bootwait
 # seconds on it (3 by default; the entry's own key wins, main.c _auto_launch). Holding VOL- still opens hekate's menu.
 # scan_dev_for_extlinux: the distro scan's extlinux.conf probe (this entry has none) becomes the first boot timing
-# sample, taken once U-Boot, the SD card and hekate's env are up (native/loader/stamps.h).
+# sample, taken once U-Boot, the SD card and hekate's env are up (boot/loader/stamps.h).
 # bootcmd_mmc0=true: should boot.scr not take over, U-Boot's distro loop goes on to mmc0, the eMMC (initialize, read
 # its partition table, scan it); never. bl33.py's patch also drops mmc0 from boot_targets for failures before hekate's
 # env is imported (an SD card U-Boot cannot read).

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """switchroot's U-Boot (bl33.bin) as this boot entry ships it: its default environment edited, then the staged kernel
-window after it (native/loader/stage.h).
+window after it (boot/loader/stage.h).
 
     bl33.py patch BL33 OUT                                   the environment edit (once: it never reads the kernel)
     bl33.py stage --u-boot PATCHED --window W --constants C --out OUT
@@ -17,7 +17,7 @@ from loader_abi import STAGE_SOURCE
 # binary moves:
 #   * boot_targets: SD (mmc1) only, so U-Boot never falls back to the eMMC, even when it cannot read the SD card and
 #     hekate's env (bootcmd_mmc0=true above) is never imported; bootcmd_mmc0 itself goes.
-#   * two boot timing samples (native/loader/stamps.h) in what runs before hekate's env: bootcmd's start (U-Boot
+#   * two boot timing samples (boot/loader/stamps.h) in what runs before hekate's env: bootcmd's start (U-Boot
 #     initialized) and mmc_boot once `mmc dev 1` has brought the SD card up.
 #   * room for them: four variables nothing on this boot path reads (PXE, ramdisk and DHCP script addresses).
 ENV_START = b'\0bootcmd=run distro_bootcmd\0'

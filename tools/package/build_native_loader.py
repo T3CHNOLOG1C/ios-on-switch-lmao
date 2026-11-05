@@ -15,7 +15,7 @@ whatever is around it, so an edit recompresses only the shards whose blocks it c
 kernel's few; a boot-arg, ADT or trust cache edit: the tail's) and every other shard's compression is a cache hit.
 join reads DIR/NN/<offset>.lz4 (lz4's frames) and writes:
 
-  layout.h        the loader's LOAD_* constants (native/loader/loader.c, copy.c, entry.S, copy.S include it)
+  layout.h        the loader's LOAD_* constants (boot/loader/loader.c, copy.c, entry.S, copy.S include it)
   runs.h          copy.c's table of the staged window's blocks
   window          the staged window: the blocks back to back, padded to 4 KiB (bl33.py appends it to U-Boot)
   constants.json  the same constants for the steps after this one (bl33.py, boot_script.py, loader_link.py)
@@ -177,7 +177,7 @@ def compress_window(
 
 def emc_khz(command_line: str) -> int:
     """The EMC rate the kernel's SwitchPMIC sets for this command line (switch-emc=1: 1600 MHz, switch-emc=<kHz>), which
-    the loader then sets before its copy (native/loader/emc.h); 0 when the kernel leaves EMC alone."""
+    the loader then sets before its copy (boot/loader/emc.h); 0 when the kernel leaves EMC alone."""
     values = [v.split('=', 1)[1] for v in command_line.split() if v.startswith('switch-emc=')]
     if not values or values[-1] in ('0', ''):
         return 0
@@ -188,12 +188,12 @@ def emc_khz(command_line: str) -> int:
 
 
 def stage_id(staged: bytes) -> int:
-    """The staged window's id (native/loader/stage.h): its SHA-256's first 8 bytes, little-endian."""
+    """The staged window's id (boot/loader/stage.h): its SHA-256's first 8 bytes, little-endian."""
     return int.from_bytes(hashlib.sha256(staged).digest()[:8], 'little')
 
 
 def stage_pages(staged: bytes, stream_bytes: int) -> tuple[bytes, bytes]:
-    """The header and trailer pages around the staged window (native/loader/stage.h)."""
+    """The header and trailer pages around the staged window (boot/loader/stage.h)."""
     ident = stage_id(staged)
     words = STAGE_WORDS
     header = struct.pack(
@@ -214,7 +214,7 @@ def stage_pages(staged: bytes, stream_bytes: int) -> tuple[bytes, bytes]:
 
 
 def stage_into_bl33(bl33: bytes, staged: bytes, stream_bytes: int) -> bytes:
-    """bl33.bin with the staged kernel window after U-Boot (native/loader/stage.h), checked by check_stage."""
+    """bl33.bin with the staged kernel window after U-Boot (boot/loader/stage.h), checked by check_stage."""
     if len(staged) % PACK_PAGE or not stream_bytes <= len(staged) < stream_bytes + PACK_PAGE:
         raise ValueError('staged window must be its stream padded to 4 KiB')
     header, trailer = stage_pages(staged, stream_bytes)

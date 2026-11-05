@@ -3,7 +3,7 @@
 import struct
 import zlib
 
-# Where U-Boot's bootm puts the loader and jumps (the loader's link address, native/loader/link.ld).
+# Where U-Boot's bootm puts the loader and jumps (the loader's link address, boot/loader/link.ld).
 LOAD = 0xA0000000
 
 

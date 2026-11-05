@@ -22,7 +22,7 @@ NAME = 'ioswitch'
 
 def boot_script(text: str, loader_bytes: int, bl33: bytes | int, constants: dict, staged_bytes: int) -> str:
     """boot.cmd from the template (TEMPLATE): this entry's paths, the loader's size, and bl33.bin's size (bl33: the file
-    or its size), header and trailer words for the staged kernel window (native/loader/stage.h)."""
+    or its size), header and trailer words for the staged kernel window (boot/loader/stage.h)."""
     bl33_bytes = bl33 if isinstance(bl33, int) else len(bl33)
     prefix = '/switchroot/' + NAME + '/'
     for old in ('/switchroot/ioswitch-native-xnu-v23/', '/switchroot/ioswitch-native-xnu-v10/'):

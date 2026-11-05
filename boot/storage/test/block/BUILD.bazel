@@ -1,0 +1,46 @@
+# boot/storage/NativeIOSwitchBlock.cpp on the host: the boot chain's read-only block driver for the SD card's two APFS
+# containers, the real source included into native_block_test.cpp over native_block_stubs.h, against a pattern-serving
+# backend; one process per scenario.
+#
+#   bazel test //boot/storage/test/block:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = [
+        "IOKit/IOBSD.h",
+        "IOKit/IOKitKeys.h",
+        "IOKit/IOLib.h",
+        "IOKit/storage/IOBlockStorageDevice.h",
+        "libkern/c++/OSDictionary.h",
+        "libkern/c++/OSIterator.h",
+        "libkern/c++/OSNumber.h",
+        "libkern/c++/OSString.h",
+    ],
+    stubs = "native_block_stubs.h",
+    deps = ["//bazel/testing"],
+)
+
+# The driver is one translation unit with the test (the test reaches its statics), so its source is a textual header.
+host_library(
+    name = "driver",
+    textual_hdrs = [
+        "//boot:storage/NativeIOSwitchBlock.cpp",
+        "//boot:storage/block_backend.h",
+    ],
+    deps = [":kernel"],
+)
+
+host_test(
+    name = "native_block_test",
+    srcs = ["native_block_test.cpp"],
+    # (The old flags' -pthread is a no-op on macOS: threads are libSystem's.)
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":driver",
+        ":kernel",
+    ],
+)

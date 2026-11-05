@@ -1,0 +1,34 @@
+# The firmware SD-state exporter's RAM reader (boot/storage/firmware_export/export.c) on the host, against a
+# synthetic RAM image around the pinned bl33.bin. (The exporter image and its Cortex-A57 model run are native/BUILD's.)
+#
+#   bazel test //boot/storage/firmware_export/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+host_library(
+    name = "export",
+    srcs = ["//boot:storage/firmware_export/export.c"],
+    hdrs = [
+        "//boot:storage/firmware_export/export.h",
+        "//boot:storage/firmware_export/signatures.h",
+    ],
+    copts = ["-O2"],
+)
+
+# zlib's crc32 for the expected record (the macOS SDK's libz).
+host_library(
+    name = "zlib",
+    linkopts = ["-lz"],
+)
+
+host_test(
+    name = "firmware_export_test",
+    srcs = ["firmware_export_test.cpp"],
+    data = ["//bazel/pinned:firmware/bl33.bin"],
+    deps = [
+        ":export",
+        ":zlib",
+    ],
+)

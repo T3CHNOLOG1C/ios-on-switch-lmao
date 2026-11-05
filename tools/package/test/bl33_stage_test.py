@@ -1,7 +1,7 @@
-"""The kernel window staged in bl33.bin (native/loader/stage.h), proven on the host: the composed file as hekate puts it
+"""The kernel window staged in bl33.bin (boot/loader/stage.h), proven on the host: the composed file as hekate puts it
 at 0xAA000000 satisfies every boot.cmd memory check, and U-Boot's bytes are untouched apart from its SD-only
 boot_targets. That the loader's own decoder (copy.c) reads the exact window back from the addresses it was built for
-is //native/loader/test:bl33_window_test."""
+is //boot/loader/test:bl33_window_test."""
 
 import random
 import re

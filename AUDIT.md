@@ -1,6 +1,6 @@
 # IOSwitch audit — 29 October 2026
 
-This audit covers the work left by the previous agent. Paths are relative to `out/native-a57/root-v1/tree/` unless they start with `scripts/`, `native/` or `out/`. In the source column:
+This audit covers the work left by the previous agent. Paths are relative to `out/native-a57/root-v1/tree/` unless they start with `scripts/`, `boot/` or `out/`. In the source column:
 
 - **V**: verified by reading the code in this session.
 - **A**: reported by a sub-audit and not independently re-verified.
@@ -50,7 +50,7 @@ This audit covers the work left by the previous agent. Paths are relative to `ou
 | 7 | Kernel | `kern_priv.c:91` grants PRIV_WORK_INTERVAL to every process. `work_interval.c:1118` (`|| 1`) silently drops Core Animation's second interval, which breaks render pacing. | A |
 | 8 | Kernel | `DINetBootHook.cpp:117-124` (raw branch): waits 30 s for IOResources to go quiet, then can exit before DiskImages is ready, so the cryptex attach fails. | A |
 | 9 | Platform | No PSCI reboot or power-off from iPadOS (`ArmDTPlatform.cpp:112-121` uses PSCI only in diagnostic stages). | A |
-| 10 | Installer | `native/installer/main.c:82,89` refuses to run if an APFS GPT entry exists, but the installer itself creates that entry. Reinstalling needs a hand edit of the GPT. | A |
+| 10 | Installer | `boot/installer/main.c:82,89` refuses to run if an APFS GPT entry exists, but the installer itself creates that entry. Reinstalling needs a hand edit of the GPT. | A |
 
 ### Performance
 | # | Finding | Src |
@@ -58,7 +58,7 @@ This audit covers the work left by the previous agent. Paths are relative to `ou
 | 11 | The SD runs at U-Boot's 48 MHz HS, 3.3 V (about 20 MB/s at best). SDR104 (about 90 MB/s) needs PLLC4, LDO2 at 1.8 V, pad calibration and tuning, as in hekate `bdk/storage/sdmmc_driver.c`. The new driver logs the actual clock registers at boot. | A+V |
 | 12 | Console: the framebuffer is mapped uncached, and the rotated console scrolls pixel by pixel with preemption off. With `-v debug=0x14e serial=0`, every printf and kprintf goes there. Likely the largest boot-time cost; drop `-v`/DB_KPRT once diagnosis is done. | A |
 | 13 | Frame copy is pixel-by-pixel into an uncached mapping. The IOSurface is remapped and boot-args re-parsed on every frame. | A |
-| 14 | Loader: U-Boot loads a 67 MiB window (about 14.6 MiB of it padding) to 0xA2000000. The loader then copies it again with the I-cache off, after walking 2×67 MiB of cache-invalidate loops. `native/handoff/probe.c` clears the framebuffer and runs a bit-serial CRC32 of the DTB on every boot. | A |
+| 14 | Loader: U-Boot loads a 67 MiB window (about 14.6 MiB of it padding) to 0xA2000000. The loader then copies it again with the I-cache off, after walking 2×67 MiB of cache-invalidate loops. `boot/handoff/probe.c` clears the framebuffer and runs a bit-serial CRC32 of the DTB on every boot. | A |
 | 15 | `pa_valid` now calls out of line on every pmap operation. Boot runs three scans of 1M pages, each nested over the reservation list. | A |
 | 16 | Single core: `cpus=1`, so three A57s sit idle. The SMP code panics the boot if any core misses its budget, instead of degrading. | A |
 | 17 | Installer: bounce-copies 9.4 GB that is already aligned, sends CMD13 after every read, and writes in 1 MiB chunks. The Mac has raw access to `disk4s9` and could write the extents directly. | A |

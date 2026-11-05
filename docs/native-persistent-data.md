@@ -17,7 +17,7 @@ The SD transport qualifies the card using CMD13, SCR and, where advertised, boun
 
 The mount path selects the preserved Data UUID only under the persistent provider, rechecks the actual APFS device and 16 GiB capacity, and requires a writable mount with ownership enabled, root-owned Data root and UID/GID 501 for `mobile`. Mutable Data cannot authorize an OS root. The watchdog policy accepts an already valid policy/marker pair, creates missing files, syncs policy before marker and syncs parent directories. V18 preserves an existing root-owned, same-mount, non-symlink regular policy without group/other write permission, allowing original launchd to parse and rewrite its own preferences. It creates only a missing initial policy through an exclusive atomic rename after readback and fsync; policy and directory syncing precede marker creation. Publication pending yields for at most ten seconds; corruption, wrong identity and offline errors remain immediate failures.
 
-The active implementation is under `out/native-a57/root-v1/tree/`; the older canonical `native/storage/` files are not the current V17 implementation.
+The active implementation is under `out/native-a57/root-v1/tree/`; the older canonical `boot/storage/` files are not the current V17 implementation.
 
 | Layer | Source / evidence |
 | --- | --- |

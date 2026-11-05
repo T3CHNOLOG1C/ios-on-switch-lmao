@@ -26,6 +26,16 @@ RULES = [
     (re.compile(_T + r'/(drivers|kits|diagnostics|overlay)\b'), r'\1'),
     (re.compile(_T + r'/package\b'), 'third_party/unixnu'),
     (re.compile(re.escape(PASS) + r'/build-options\.json'), 'kernel/build-options.json'),
+    # native/ -> boot/ (after S3): the boot entry's sources in the package that builds them.
+    (re.compile(r'//native:'), '//boot:'),
+    (re.compile(r'//native/'), '//boot/'),
+    (re.compile(r'"//native"'), '"//boot"'),
+    (
+        re.compile(
+            r'(?<![A-Za-z0-9_./-])native/(cpu|display|handoff|installer|inventory|loader|probe|storage|BUILD\.bazel)\b'
+        ),
+        r'boot/\1',
+    ),
 ]
 
 

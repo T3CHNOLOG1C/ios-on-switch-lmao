@@ -59,15 +59,15 @@ A native XNU loader must either implement the needed DarwinBoot/UniXNU loading a
 
 ## Locally built first probe
 
-Source: `native/probe/registers.S` and `native/probe/link.ld`.
+Source: `boot/probe/registers.S` and `boot/probe/link.ld`.
 
 The probe is a position-independent AArch64 ARMv8-A leaf function. It preserves callee-saved registers, `x18`, the incoming stack, and the return address. It reads ID/EL/timer/MMU registers, writes a 256-byte record at its own load address plus `0x200`, then returns status 0. Unsupported ELs return 2 without the completion marker. It contains no system-register writes, MMIO access, storage access, SMC/HVC calls, cache changes, interrupt-controller changes, or exception-level transitions. The only stores target its own in-image result buffer.
 
 Build commands, run from the workspace root with the installed LLVM tools:
 
 ```sh
-clang --target=aarch64-none-elf -march=armv8-a -c native/probe/registers.S -o out/research-native/registers.o
-ld.lld -T native/probe/link.ld -o out/research-native/registers.elf out/research-native/registers.o
+clang --target=aarch64-none-elf -march=armv8-a -c boot/probe/registers.S -o out/research-native/registers.o
+ld.lld -T boot/probe/link.ld -o out/research-native/registers.elf out/research-native/registers.o
 /opt/homebrew/opt/llvm/bin/llvm-objcopy -O binary out/research-native/registers.elf out/research-native/registers.bin
 /opt/homebrew/opt/llvm/bin/llvm-readelf -h -r -s out/research-native/registers.elf
 /opt/homebrew/opt/llvm/bin/llvm-objdump -d out/research-native/registers.elf

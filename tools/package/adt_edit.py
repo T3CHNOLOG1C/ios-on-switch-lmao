@@ -197,9 +197,9 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
         put(buttons, key, value)
     # APFS's no-SEP mode; it also permits the unencrypted Data volume.
     put(child(tree, 'filesystems'), 'DoNotUseSEP', u32(1))
-    # Pre-kernel boot timing (native/loader/stamps.h): zeros here, filled by the loader, logged once by XNU.
+    # Pre-kernel boot timing (boot/loader/stamps.h): zeros here, filled by the loader, logged once by XNU.
     put(chosen, STAMPS_PROPERTY, bytes(STAMPS_BYTES))
-    # Per-boot seed report (native/loader/seed.h): zeros here; the loader mixes SE2's DRBG into /chosen/random-seed
+    # Per-boot seed report (boot/loader/seed.h): zeros here; the loader mixes SE2's DRBG into /chosen/random-seed
     # and says how it went, XNU logs it once.
     put(chosen, SEED_SOURCE_PROPERTY, bytes(SEED_SOURCE_BYTES))
     if smp:

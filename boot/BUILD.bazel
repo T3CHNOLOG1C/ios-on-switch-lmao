@@ -16,7 +16,10 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-exports_files(["raw-v24-boot.cmd"])
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
 
 # Four cores (boot_args.py --smp: cpus=4 sheng-smp=1 ioswitch-smp=1; adt_edit.py --smp: the four-A57 ADT), as the
 # CMake flow was configured (IOSWITCH_SMP=ON).
@@ -49,8 +52,6 @@ tool_output(
     message = "Generating the native OLED ADT",
 )
 
-NATIVE = "//native"
-
 boot_package(
     name = "package",
     adt = ":adt",
@@ -62,43 +63,43 @@ boot_package(
     dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
     exporter = "//bazel/pinned:firmware/exporter.uimg",
     kernel = "//kernel:kernel",
-    linker_script = NATIVE + ":loader/link.ld",
+    linker_script = ":loader/link.ld",
     loader_hdrs = [
-        NATIVE + ":handoff/display.h",
-        NATIVE + ":handoff/entry.S",
-        NATIVE + ":handoff/record.h",
-        NATIVE + ":loader/copy.h",
-        NATIVE + ":loader/emc.h",
-        NATIVE + ":loader/memory.h",
-        NATIVE + ":loader/ram.h",
-        NATIVE + ":loader/seed.h",
-        NATIVE + ":loader/stage.h",
-        NATIVE + ":loader/stamps.h",
-        NATIVE + ":storage/sd_reference.h",
+        ":handoff/display.h",
+        ":handoff/entry.S",
+        ":handoff/record.h",
+        ":loader/copy.h",
+        ":loader/emc.h",
+        ":loader/memory.h",
+        ":loader/ram.h",
+        ":loader/seed.h",
+        ":loader/stage.h",
+        ":loader/stamps.h",
+        ":storage/sd_reference.h",
     ],
     loader_include_markers = [
-        NATIVE + ":loader/stage.h",
-        NATIVE + ":handoff/record.h",
-        NATIVE + ":storage/sd_reference.h",
+        ":loader/stage.h",
+        ":handoff/record.h",
+        ":storage/sd_reference.h",
     ],
     # The cacheable-copy root-boot loader, in link order.
     loader_srcs = [
-        NATIVE + ":loader/entry.S",
-        NATIVE + ":loader/loader.c",
-        NATIVE + ":loader/memory.c",
-        NATIVE + ":handoff/probe.c",
-        NATIVE + ":loader/copy.c",
-        NATIVE + ":loader/copy.S",
-        NATIVE + ":loader/emc.c",
-        NATIVE + ":loader/seed.c",
-        NATIVE + ":storage/sd_reference.c",
+        ":loader/entry.S",
+        ":loader/loader.c",
+        ":loader/memory.c",
+        ":handoff/probe.c",
+        ":loader/copy.c",
+        ":loader/copy.S",
+        ":loader/emc.c",
+        ":loader/seed.c",
+        ":storage/sd_reference.c",
     ],
     # The sources that include the window's layout.h or runs.h: only these recompile when the kernel changes.
     loader_window_srcs = [
-        NATIVE + ":loader/entry.S",
-        NATIVE + ":loader/loader.c",
-        NATIVE + ":loader/copy.c",
-        NATIVE + ":loader/copy.S",
+        ":loader/entry.S",
+        ":loader/loader.c",
+        ":loader/copy.c",
+        ":loader/copy.S",
     ],
     # The overlay's Mach-Os (the trust module hashes those the manifest trusts) and its other files, each by the
     # source tree/overlay/manifest.json names it by.
@@ -163,4 +164,27 @@ py_binary(
     ],
     main = "//tools/package:snapshot.py",
     deps = ["@rules_python//python/runfiles"],
+)
+
+# The RAM metadata exporter (switchroot/ioswitch/exporter.uimg, pinned in bazel/pinned/firmware): its builder and its
+# Cortex-A57 model run, against the pinned bl33.bin (its host test: //boot/storage/firmware_export/test).
+#   bazel run //boot:firmware_export -- --output <dir under out/>
+py_binary(
+    name = "firmware_export",
+    srcs = ["storage/firmware_export/build.py"],
+    main = "storage/firmware_export/build.py",
+)
+
+py_binary(
+    name = "firmware_export_model",
+    srcs = ["storage/firmware_export/model.py"],
+    main = "storage/firmware_export/model.py",
+)
+
+filegroup(
+    name = "all_sources",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
 )

@@ -1,5 +1,5 @@
 /* IOSwitch fixed OLED framebuffer renderer. No display-controller access.
- * Font and rotation adapted from native/handoff/display.h; source identity is
+ * Font and rotation adapted from boot/handoff/display.h; source identity is
  * retained in the diagnostic build receipt. Addresses are supplied as mapped VAs.
  */
 #ifndef IOSWITCH_DIAG_DISPLAY_H
