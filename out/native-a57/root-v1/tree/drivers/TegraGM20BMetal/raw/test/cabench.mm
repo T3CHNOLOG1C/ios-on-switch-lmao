@@ -309,9 +309,13 @@ int main(int argc, char **argv)
         }
         float uniforms[32] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1};
         const NSUInteger ringBytes = 1 << 20;
+        // CABENCH_RING_CA: the ring as Core Animation's buffer pool makes its buffers (options 0: shared, default cache mode;
+        // QuartzCore MetalBufferPool::allocate_buffer), else write-combined
         id<MTLBuffer> ring =
             [dev newBufferWithLength:ringBytes
-                             options:MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
+                             options:getenv("CABENCH_RING_CA")
+                                         ? MTLResourceStorageModeShared
+                                         : MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
         NSUInteger ringAt = 0;
         std::vector<double> cpu, wall;
         uint64_t warm = frames > 20 ? 10 : 0;

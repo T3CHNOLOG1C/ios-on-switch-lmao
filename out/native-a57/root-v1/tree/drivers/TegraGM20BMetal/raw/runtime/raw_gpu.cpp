@@ -585,16 +585,26 @@ static bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
     return true;
 }
 
-bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t)
+bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc)
 {
     if (!shape(width, height, format, t)) return false;
     t.pitch = (width * t.bpp + 255) & ~255u;
     std::lock_guard<std::mutex> l(lock_);
-    if (!poolAlloc(uint64_t(t.pitch) * height, t.span)) return false;
+    const uint64_t bytes = uint64_t(t.pitch) * height;
+    if (wc && wcOn_ && wcAlloc(bytes, t.span)) {
+        t.wc = true;
+        stats.wcBytes += t.span.bytes;
+    } else {
+        if (wc) stats.wcFallbacks++;
+        if (!poolAlloc(bytes, t.span)) return false;
+    }
     t.va = t.span.va;
     t.cpu = t.span.cpu;
     if (!(t.tic = allocTic())) {
-        poolFree(t.span);
+        if (t.wc)
+            wcFree(t.span);
+        else
+            poolFree(t.span);
         return false;
     }
     writeTic(t);
@@ -919,20 +929,113 @@ void Device::destroyTexture(Texture &t)
         t.chain = nullptr;
     }
     if (t.import) release(t.import);
-    if (t.span.valid()) poolFree(t.span);
+    if (t.span.valid()) {
+        if (t.wc)
+            wcFree(t.span);
+        else
+            poolFree(t.span);
+    }
     t = {};
 }
 
-bool Device::createBuffer(uint64_t length, Buffer &b)
+bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
 {
     b = {};
     if (!length) length = 16;
     std::lock_guard<std::mutex> l(lock_);
+    if (wc && wcOn_) {
+        if (wcAlloc(length, b.span)) {
+            b.wc = true;
+            b.va = b.span.va;
+            b.cpu = b.span.cpu;
+            b.length = length;
+            stats.wcBytes += b.span.bytes;
+            return true;
+        }
+        stats.wcFallbacks++;
+    }
     if (!poolAlloc(length, b.span)) return false;
     b.va = b.span.va;
     b.cpu = b.span.cpu;
     b.length = length;
     return true;
+}
+
+// ---- write-combined buffers: the GPU pool (BoAlloc coherent), mapped write-combined for the CPU ----
+
+constexpr uint64_t kWcChunk = 4ull << 20;  // a chunk of buffers (a buffer over half of one gets its own BO)
+
+// lock_ held. First fit by page; a new chunk when none has room (a BoAlloc: tens of microseconds, the GPU pool's own)
+bool Device::wcAlloc(uint64_t bytes, Span &s)
+{
+    bytes = (bytes + pageSize() - 1) & ~uint64_t(pageSize() - 1);
+    s = {};
+    for (int pass = 0; pass < 2; pass++) {
+        for (uint32_t c = 0; c < wcChunks_.size(); c++) {
+            Chunk &ch = wcChunks_[c];
+            if (!ch.bo.handle || ch.dedicated) continue;
+            for (auto it = ch.free.begin(); it != ch.free.end(); ++it) {
+                if (it->second < bytes) continue;
+                const uint64_t at = it->first, left = it->second - bytes;
+                ch.free.erase(it);
+                if (left) ch.free[at + bytes] = left;
+                ch.used += bytes;
+                s = {c, at, bytes, ch.bo.va + at, ch.bo.cpu + at};
+                return true;
+            }
+        }
+        if (pass) break;
+        const bool dedicated = bytes > kWcChunk / 2;
+        const uint64_t size = dedicated ? bytes : kWcChunk;
+        Chunk ch;
+        if (!k_.alloc(size, true, ch.bo)) return false;  // the GPU pool is full: pool memory instead (createBuffer)
+        ch.memory = ch.bo.cpu;
+        ch.bytes = size;
+        ch.dedicated = dedicated;
+        uint32_t c = 0;
+        while (c < wcChunks_.size() && wcChunks_[c].bo.handle) c++;
+        if (c == wcChunks_.size()) wcChunks_.emplace_back();
+        if (dedicated) {
+            ch.used = bytes;
+            s = {c, 0, bytes, ch.bo.va, ch.bo.cpu};
+            wcChunks_[c] = std::move(ch);
+            return true;
+        }
+        ch.free[0] = size;
+        wcChunks_[c] = std::move(ch);
+    }
+    return false;
+}
+
+// lock_ held
+void Device::wcFree(Span &s)
+{
+    if (!s.valid() || s.chunk >= wcChunks_.size()) return;
+    Chunk &ch = wcChunks_[s.chunk];
+    ch.used -= s.bytes;
+    stats.wcBytes -= s.bytes;
+    if (ch.dedicated) {
+        k_.free(ch.bo);
+        ch = Chunk();
+        s = {};
+        return;
+    }
+    uint64_t offset = s.offset, bytes = s.bytes;
+    auto next = ch.free.lower_bound(offset);
+    if (next != ch.free.end() && offset + bytes == next->first) {
+        bytes += next->second;
+        next = ch.free.erase(next);
+    }
+    bool merged = false;
+    if (next != ch.free.begin()) {
+        auto prev = std::prev(next);
+        if (prev->first + prev->second == offset) {
+            prev->second += bytes;
+            merged = true;
+        }
+    }
+    if (!merged) ch.free[offset] = bytes;
+    s = {};
 }
 
 bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b)
@@ -952,7 +1055,12 @@ void Device::destroyBuffer(Buffer &b)
 {
     std::lock_guard<std::mutex> l(lock_);
     if (b.import) release(b.import);
-    if (b.span.valid()) poolFree(b.span);
+    if (b.span.valid()) {
+        if (b.wc)
+            wcFree(b.span);
+        else
+            poolFree(b.span);
+    }
     b = {};
 }
 
@@ -1525,9 +1633,14 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     }
     // the vertices it reads: up to its largest index (the indices are CPU-written, as the vertices). A restart (the all-ones
     // index) reads as 0, which never raises the largest: branch-free per index size, so clang vectorizes it (UMAXV; r9-simd)
+    // (write-combined vertices are cleaned by no one: no largest index wanted; write-combined indices neither cleaned nor read)
     const uint8_t *at = ib->cpu + offset;
-    const uint32_t most = indexSize == 2 ? largestIndex<uint16_t>(at, count) : largestIndex<uint32_t>(at, count);
-    cb_->clean(at, uint64_t(count) * indexSize);
+    const uint8_t slot = pl->rec->vertexSlot;
+    const Buffer *vb = slot < 31 ? bufs_[1][slot].buffer : nullptr;
+    const uint32_t most = !vb || vb->wc || !pl->rec->vertexStride ? 0
+                          : indexSize == 2                        ? largestIndex<uint16_t>(at, count)
+                                                                  : largestIndex<uint32_t>(at, count);
+    if (!ib->wc) cb_->clean(at, uint64_t(count) * indexSize);
     if (!prepare(pl, primitive, 0, 0, most + 1, 0, true, why)) return false;
     const uint64_t va = ib->va + offset, end = va + uint64_t(count) * indexSize - 1;
     if (va != ibVa_ || end != ibEnd_ || indexSize != ibSize_) {
@@ -1624,7 +1737,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
                                 uint32_t(std::min<uint64_t>(b.offset, ~0u))};
                 return false;
             }
-            if (b.buffer) cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range, b.size));
+            if (b.buffer && !b.buffer->wc) cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range, b.size));
             at[0] = uint32_t(b.va);
             at[1] = uint32_t(b.va >> 32);
             at[2] = b.va ? range : 0;
@@ -1709,7 +1822,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             vbVa_ = b.va;
             vbLimit_ = limit;
         }
-        if (b.buffer && r.vertexStride) {  // the vertices this draw reads, CPU-written
+        if (b.buffer && !b.buffer->wc && r.vertexStride) {  // the vertices this draw reads, CPU-written (cached memory)
             const uint64_t from = b.offset + uint64_t(vFirst) * r.vertexStride;
             const uint64_t bytes = std::min<uint64_t>(uint64_t(count) * r.vertexStride,
                                                       b.buffer->length - std::min(from, b.buffer->length));

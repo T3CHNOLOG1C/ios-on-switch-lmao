@@ -682,7 +682,7 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
 // A CPU read after a GPU write: the GPU's bytes, not lines the CPU cached before (clean+invalidate keeps any CPU write)
 - (void)invalidateForCpu
 {
-    if (!_gpuDirty.exchange(false)) return;
+    if (!_gpuDirty.exchange(false) || _raw.wc) return;  // (write-combined: the CPU reads memory itself)
 #if defined(__aarch64__)
     for (uintptr_t a = uintptr_t(_raw.cpu) & ~uintptr_t(63); a < uintptr_t(_raw.cpu) + _raw.length; a += 64)
         __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
@@ -993,8 +993,9 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
         uint8_t *to = _raw.cpu + (r.origin.y + y) * _raw.pitch + r.origin.x * _raw.bpp;
         memcpy(to, (const uint8_t *)bytes + y * row, line);
 #if defined(__aarch64__)
-        for (uintptr_t a = uintptr_t(to) & ~uintptr_t(63); a < uintptr_t(to) + line; a += 64)
-            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
+        if (!_raw.wc)  // (write-combined: in memory once the DSB below drains it)
+            for (uintptr_t a = uintptr_t(to) & ~uintptr_t(63); a < uintptr_t(to) + line; a += 64)
+                __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
 #endif
     }
 #if defined(__aarch64__)
@@ -1027,7 +1028,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     }
     if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height) return;
 #if defined(__aarch64__)
-    if (_gpuDirty.exchange(false)) {
+    if (_gpuDirty.exchange(false) && !_raw.wc) {
         for (uintptr_t a = uintptr_t(_raw.cpu) & ~uintptr_t(63);
              a < uintptr_t(_raw.cpu) + uint64_t(_raw.pitch) * _raw.height; a += 64)
             __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
@@ -2874,7 +2875,8 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
     };
     std::vector<Range> ranges;
     auto range = [&](RMBuffer *b, uint64_t offset, uint64_t bytes, bool flush = false) {
-        if (!b || offset >= b->_raw.length) return;
+        if (!b || offset >= b->_raw.length || b->_raw.wc)
+            return;  // (write-combined: in memory once the DSB below drains it)
         ranges.push_back({b->_raw.cpu + offset, std::min(bytes, b->_raw.length - offset), flush});
     };
     auto use = [&](void *o) -> id {
@@ -3176,7 +3178,7 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
         cleaned += r.bytes;
     }
     for (RMBuffer *b : buffers) {
-        if (!b) continue;
+        if (!b || b->_raw.wc) continue;
 #if defined(__aarch64__)
         for (uintptr_t a = uintptr_t(b->_raw.cpu) & ~uintptr_t(63); a < uintptr_t(b->_raw.cpu) + b->_raw.length;
              a += 64)
@@ -3436,8 +3438,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         case OpCopyBuffer: {
             RMBuffer *s = (__bridge RMBuffer *)c.obj, *t = (__bridge RMBuffer *)c.obj2;
             const uint64_t n = extra(cb, c.x + 1), dof = extra(cb, c.x);
-            rc->clean(s->_raw.cpu + c.c, n);
-            rc->clean(t->_raw.cpu + dof, n, true);
+            if (!s->_raw.wc) rc->clean(s->_raw.cpu + c.c, n);
+            if (!t->_raw.wc) rc->clean(t->_raw.cpu + dof, n, true);
             be->copyBytes(s->_raw.va + c.c, t->_raw.va + dof, n);
             break;
         }
@@ -3452,7 +3454,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 touch(t).l0Fresh = false;
                 t->_mipL0 = false;
             }
-            rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
+            if (!s->_raw.wc) rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
             be->copyRect(s->_raw.va + so, uint32_t(row),
                          t->_raw.va + (o >> 32) * t->_raw.pitch + uint32_t(o) * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
                          uint32_t(h), t->_raw.bpp);
@@ -3463,7 +3465,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             RMBuffer *t = (__bridge RMBuffer *)c.obj2;
             const uint64_t x = c.x, o = extra(cb, x + 2), w = extra(cb, x + 4), h = extra(cb, x + 5),
                            dof = extra(cb, x + 7), row = extra(cb, x + 8);
-            rc->clean(t->_raw.cpu + dof, row * (h - 1) + w * s->_raw.bpp, true);
+            if (!t->_raw.wc) rc->clean(t->_raw.cpu + dof, row * (h - 1) + w * s->_raw.bpp, true);
             be->copyRect(s->_raw.va + (o >> 32) * s->_raw.pitch + uint32_t(o) * s->_raw.bpp, s->_raw.pitch,
                          t->_raw.va + dof, uint32_t(row), uint32_t(w), uint32_t(h), s->_raw.bpp);
             break;
@@ -3675,7 +3677,12 @@ static void commitBuffer(RMCommandBuffer *cb);
     RMBuffer *b = [RMBuffer new];
     b->_device = self;
     b->_options = o;
-    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw)) {  // the pool could not grow: m2v's buffer (its users go to m2v)
+    // a shared buffer: write-combined (raw::Buffer::wc), as every one Core Animation makes is written by the CPU and read by the
+    // GPU (its buffer pool, its gamma and weight tables: QuartzCore MetalBufferPool::allocate_buffer, options 0): nothing to clean
+    // before a draw reads it, nothing to scan for the vertices an indexed draw reads (r16: 600-1300 KB cleaned a command buffer)
+    const bool wc = (o & MTLResourceStorageModeMask) == MTLResourceStorageModeShared;
+    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw,
+                                wc)) {  // the pool could not grow: m2v's buffer (its users go to m2v)
         once([NSString stringWithFormat:@"no raw memory for a %lu-byte buffer: m2v's", (unsigned long)n]);
         if (!predLogged(PredCallBufForeign)) logPred(PredCallBufForeign, 0, n, @"(made: the pool had no room)");
         RMTwinObject *t = [RMTwinObject new];
@@ -3752,7 +3759,9 @@ static void commitBuffer(RMCommandBuffer *cb);
         t->_rawOk = gRM->raw->createMemoryless(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw);
     } else {
         t->_kind = RMTexturePool;
-        t->_rawOk = gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw);
+        // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
+        t->_rawOk = gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
+                                            d.storageMode == MTLStorageModeShared);
     }
     if (!t->_rawOk) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
@@ -4937,6 +4946,18 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
                @"other's "
                @"work to complete");
     gRM = r;
+    {  // write-combined buffers stay on only if m2v makes its twin over one (its import of GPU-pool pages): one line either way
+        raw::Buffer probe;
+        bool twin = false;
+        const NSUInteger page = NSUInteger(getpagesize());
+        if (dev->createBuffer(page, probe, true) && probe.wc && fallback)
+            twin = [fallback newBufferWithBytesNoCopy:probe.cpu length:page options:0 deallocator:nil] != nil;
+        if (probe.cpu) dev->destroyBuffer(probe);
+        if (!twin) dev->setWc(false);
+        os_log(rawLog(),
+               "raw: write-combined buffers %{public}s (a GPU-pool page: %{public}s, m2v's twin over it %{public}s)",
+               dev->wcOn() ? "on" : "off", probe.wc || twin ? "made" : "not made", twin ? "made" : "not made");
+    }
     {  // the stall line's timer (rawStallTick): its own, so nothing the render server's other threads hold delays it
         static dispatch_source_t stall;
         stall =

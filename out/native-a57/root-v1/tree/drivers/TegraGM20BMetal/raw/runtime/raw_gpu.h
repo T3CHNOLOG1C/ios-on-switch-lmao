@@ -76,7 +76,9 @@ struct Texture {
     // renders it through a pool image the copy engine fills from it before and copies back to it after (NVK's own tiled shadow,
     // nvk_linear_render_copy, for the same targets: the texels stored are the same)
     bool shadowTarget = false;
-    bool memoryless = false;   // no memory: a pass gives it a backing (Device::backing)
+    bool memoryless = false;  // no memory: a pass gives it a backing (Device::backing)
+    bool wc =
+        false;  // its span is write-combined GPU-pool memory (createTexture wc): CPU writes need no clean (Buffer::wc)
     uint32_t tic = 0;          // texture header index, 0: none (not sampleable)
     Import *import = nullptr;  // surface or no-copy pages, else
     Span span;                 // pool memory, else a view (memory of the texture it views)
@@ -117,6 +119,10 @@ struct Texture {
 struct Buffer {
     uint64_t va = 0, length = 0;
     uint8_t *cpu = nullptr;
+    // Write-combined (Device::createBuffer wc): the CPU's view is the GPU pool's write-combined mapping, so what the CPU wrote is
+    // in memory once a DSB drains it (CommandBuffer::commit's, the replay's) and nothing is cleaned for the GPU, nor invalidated
+    // after its writes; the CPU reading it is slow (uncached), which Core Animation's buffers (written, then drawn) never do.
+    bool wc = false;
     Import *import = nullptr;  // a caller's no-copy pages, else
     Span span;                 // pool memory
 };
@@ -311,8 +317,9 @@ public:
     Pipeline *pipeline(uint64_t keyHash);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
-    bool createTexture(uint32_t width, uint32_t height, uint32_t format,
-                       Texture &t);  // pool memory, rows 256-byte aligned
+    // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory when wcOn() (a texture the CPU writes with
+    // replaceRegion: no clean after), else pool memory
+    bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false);
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
                               uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t);
     // A two-plane 4:2:0 surface's texture of YCBCR8_420_2P (500), YCBCR8_420_2P_sRGB (520) or RGB8_420_2P (540): its planes at
@@ -347,7 +354,11 @@ public:
         return l.owns_lock();
     }
     void destroyTexture(Texture &t);
-    bool createBuffer(uint64_t length, Buffer &b);
+    // `wc`: from the write-combined GPU pool (Buffer::wc) when wcOn(), else (or full) pool memory as before
+    bool createBuffer(uint64_t length, Buffer &b, bool wc = false);
+    // Whether write-combined buffers are on (RawMetal.mm turns them off at open when m2v cannot make its twin over one)
+    bool wcOn() const { return wcOn_; }
+    void setWc(bool on) { wcOn_ = on; }
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
     void destroyBuffer(Buffer &b);
     bool createSampler(const SamplerDesc &d, Sampler &s);
@@ -383,6 +394,8 @@ public:
         std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
         // mip chains: made, chain bytes, generated (whole) and level-0 refreshes, copies out of a level
         std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainRefreshes{0}, chainCopies{0};
+        // write-combined buffers: live bytes, and the buffers that asked for one and got pool memory (the WC pool full)
+        std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
     } stats;
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
     // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first
@@ -433,6 +446,11 @@ private:
     std::vector<Chunk> chunks_;
     // mip chains' memory: chunks bound with PTE kind 0xFE (fx::kBlockLinearKind), made on demand, never CPU-written
     std::vector<Chunk> blChunks_;
+    // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
+    std::vector<Chunk> wcChunks_;
+    bool wcOn_ = true;
+    bool wcAlloc(uint64_t bytes, Span &s);
+    void wcFree(Span &s);
     bool chainsOn_ = false;
     fx::Sampling sampling_;  // the self-test's winner: how every chain's scaled steps sample
     bool blAlloc(uint64_t bytes, uint64_t align, Span &s);
