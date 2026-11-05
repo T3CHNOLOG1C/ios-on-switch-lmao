@@ -132,6 +132,7 @@ pub(super) enum Key {
     CiTexture,
     CiSampler,
     CiPointer,
+    CiImageblock,
     LocationCount,
 }
 
@@ -299,6 +300,7 @@ const KEYS: &[(&str, Key)] = &[
     ("air.ci_texture", Key::CiTexture),
     ("air.ci_sampler", Key::CiSampler),
     ("air.ci_pointer", Key::CiPointer),
+    ("air.ci_imageblock", Key::CiImageblock),
     ("air.location_count", Key::LocationCount),
 ];
 

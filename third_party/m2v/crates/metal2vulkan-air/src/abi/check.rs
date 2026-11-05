@@ -340,6 +340,7 @@ fn core_image_role_type(m: &Module, role: CoreImageRole, ty: TypeId) -> bool {
         CoreImageRole::Texture { .. } => bare_or_wrapped(&|t| ptr_in(t, Some(AddrSpace::Device))),
         CoreImageRole::Sampler => bare_or_wrapped(&|t| ptr_in(t, Some(AddrSpace::Constant))),
         CoreImageRole::Pointer { .. } => ptr_in(ty, None),
+        CoreImageRole::Imageblock => bare_or_wrapped(&|t| ptr_in(t, None)),
     }
 }
 

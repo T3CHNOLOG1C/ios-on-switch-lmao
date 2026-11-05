@@ -1258,6 +1258,11 @@ pub enum CoreImageRole {
     /// `air.ci_sampler`: a sampler handle, a constant-space pointer passed bare or as the only
     /// field of a struct.
     Sampler,
+    /// `air.ci_imageblock`: the kernel's implicit imageblock (`imageblock<T, layout_implicit>`), a
+    /// by-value struct holding a pointer: what iOS 17's `ci_stdlib` passes its `_ci_*_block`
+    /// helpers on GPUs with imageblocks. Decoded so the rest of the module decodes; a stage that
+    /// reaches it is refused where imageblocks are.
+    Imageblock,
     /// `air.ci_pointer`: a pointer to `size` bytes.
     Pointer {
         /// `air.read`, `air.write`, or `air.read_write`.

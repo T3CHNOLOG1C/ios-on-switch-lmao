@@ -40,13 +40,15 @@ const TEXTURE: &[Key] = &[
     Key::Write,
     Key::ReadWrite,
 ];
-/// The attributes of `air.ci_pointer`.
+/// The attributes of `air.ci_pointer`. `air.struct_type_info` (the pointee's layout, which
+/// `CIPortraitBlurV2`'s `slm_calcV2` states) is read and not kept.
 const POINTER: &[Key] = &[
     Key::Read,
     Key::Write,
     Key::ReadWrite,
     Key::ArgTypeSize,
     Key::ArgTypeAlignSize,
+    Key::StructTypeInfo,
 ];
 
 /// Decode one `!air.ci` entry.
@@ -105,7 +107,7 @@ pub(super) fn kernel(m: &Module, id: MdId, meter: &mut Meter) -> Result<CoreImag
         let allowed: &[&[Key]] = match role_key {
             Key::CiTexture => &[NAMES, TEXTURE],
             Key::CiPointer => &[NAMES, POINTER],
-            Key::CiBuiltin | Key::CiMatrix | Key::CiSampler => &[NAMES],
+            Key::CiBuiltin | Key::CiMatrix | Key::CiSampler | Key::CiImageblock => &[NAMES],
             other => return Err(i.site.err(AbiError::UnknownKey, Some(other.name()))),
         };
         let a = attrs(&mut i, allowed, meter)?;
@@ -130,6 +132,7 @@ pub(super) fn kernel(m: &Module, id: MdId, meter: &mut Meter) -> Result<CoreImag
             },
             Key::CiMatrix => CoreImageRole::Matrix,
             Key::CiSampler => CoreImageRole::Sampler,
+            Key::CiImageblock => CoreImageRole::Imageblock,
             // `air.ci_builtin`: every other key returned above.
             _ => CoreImageRole::Builtin,
         };
@@ -157,6 +160,8 @@ struct Attrs {
     location_count: Option<u32>,
     size: Option<u32>,
     align: Option<u32>,
+    /// `air.struct_type_info` was stated.
+    layout: bool,
 }
 
 /// Read attributes until the node ends. A key outside `allowed` is `UnknownKey`; a repeated key,
@@ -176,6 +181,10 @@ fn attrs(ops: &mut Ops<'_>, allowed: &[&[Key]], meter: &mut Meter) -> Result<Att
             Key::LocationCount => a.location_count.replace(ops.u32(name)?).is_some(),
             Key::ArgTypeSize => a.size.replace(ops.u32(name)?).is_some(),
             Key::ArgTypeAlignSize => a.align.replace(ops.u32(name)?).is_some(),
+            Key::StructTypeInfo => {
+                ops.child(name)?;
+                std::mem::replace(&mut a.layout, true)
+            }
             Key::Sample => a.access.replace(Access::Sample).is_some(),
             Key::Read => a.access.replace(Access::Read).is_some(),
             Key::Write => a.access.replace(Access::Write).is_some(),
