@@ -197,10 +197,22 @@ int main(int argc, char **argv)
                                       : MTLTextureUsageShaderRead;
             if (t == frame::IMAGE2 && getenv("FRAME_YCBCR")) {
                 // FRAME_YCBCR: IMAGE2 a decoded video frame: YCBCR8_420_2P (500) over a '420v' surface of the texture's size
-                // (=padded: its planes past the texture, a decoder's padded surface whose top-left is sampled)
-                const bool padded = !strcmp(getenv("FRAME_YCBCR"), "padded");
-                const size_t w = td.w + (padded ? 1 : 0), h = td.h + (padded ? 3 : 0), row0 = (w + 63) & ~size_t(63),
-                             row1 = (((w + 1) / 2) * 2 + 63) & ~size_t(63), off1 = (row0 * h + 4095) & ~size_t(4095);
+                // (=padded: its planes past the texture, a decoder's padded surface whose top-left is sampled; =pitch16: rows
+                // and the chroma plane's offset 16 bytes apart but not 32, as ImageIO's photo thumbnails lie, which the raw path
+                // samples through pool images the copy engine fills: raw::Texture::sampled). FRAME_YCBCR_FULL: a '420f' surface
+                // (full range: JPEG's, ImageIO's photos); FRAME_YCBCR_SIZE=WxH: the texture's size (a screenshot's thumbnail)
+                const bool padded = !strcmp(getenv("FRAME_YCBCR"), "padded"),
+                           pitch16 = !strcmp(getenv("FRAME_YCBCR"), "pitch16"), full = getenv("FRAME_YCBCR_FULL");
+                frame::TexDesc yt = td;
+                if (const char *size = getenv("FRAME_YCBCR_SIZE")) sscanf(size, "%dx%d", &yt.w, &yt.h);
+                auto odd16 = [](size_t n) {
+                    n = (n + 15) & ~size_t(15);
+                    return n & 31 ? n : n + 16;
+                };
+                const size_t w = yt.w + (padded ? 1 : 0), h = yt.h + (padded ? 3 : 0),
+                             row0 = pitch16 ? odd16(w) : (w + 63) & ~size_t(63),
+                             row1 = pitch16 ? odd16(((w + 1) / 2) * 2) : (((w + 1) / 2) * 2 + 63) & ~size_t(63),
+                             off1 = pitch16 ? odd16(row0 * h) : (row0 * h + 4095) & ~size_t(4095);
                 NSDictionary *p0 = @{
                     (id)kIOSurfacePlaneWidth : @(w),
                     (id)kIOSurfacePlaneHeight : @(h),
@@ -220,19 +232,63 @@ int main(int argc, char **argv)
                 surfaces[t] = IOSurfaceCreate((__bridge CFDictionaryRef) @{
                     (id)kIOSurfaceWidth : @(w),
                     (id)kIOSurfaceHeight : @(h),
-                    (id)kIOSurfacePixelFormat : @((uint32_t)'420v'),
+                    (id)kIOSurfacePixelFormat : @(full ? (uint32_t)'420f' : (uint32_t)'420v'),
                     (id)kIOSurfaceAllocSize : @(off1 + row1 * ((h + 1) / 2)),
                     (id)kIOSurfacePlaneInfo : @[ p0, p1 ]
                 });
                 uint8_t *base = (uint8_t *)IOSurfaceGetBaseAddress(surfaces[t]);
                 for (size_t i = 0; i < off1 + row1 * ((h + 1) / 2); i++) base[i] = uint8_t(i * 37u + (i >> 8));
+                {  // the planes' texels as the conversion must sample them (nvdec NVDEC_TEXELS hashes each pitch header's)
+                    auto rows = [&](size_t at, size_t row, size_t bytes, size_t count) {
+                        uint64_t hash = 0xcbf29ce484222325ull;
+                        for (size_t y = 0; y < count; y++)
+                            for (size_t x = 0; x < bytes; x++)
+                                hash = (hash ^ base[at + y * row + x]) * 0x100000001b3ull;
+                        return (unsigned long long)hash;
+                    };
+                    printf("YCBCR texels luma=%016llx chroma=%016llx\n", rows(0, row0, yt.w, yt.h),
+                           rows(off1, row1, ((yt.w + 1) / 2) * 2, (yt.h + 1) / 2));
+                    // the conversion's fragment buffer's first words (width, height, full range, red's kb: no matrix, BT.601)
+                    printf("YCBCR shape=[%08x %08x %08x %08x\n", yt.w, yt.h, full ? 1u : 0u,
+                           full ? uint32_t(-8) : uint32_t(-9));
+                }
                 MTLTextureDescriptor *yd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormat(500)
-                                                                                              width:td.w
-                                                                                             height:td.h
+                                                                                              width:yt.w
+                                                                                             height:yt.h
                                                                                           mipmapped:NO];
                 yd.usage = MTLTextureUsageShaderRead;
                 yd.storageMode = MTLStorageModeShared;
                 tex[t] = [dev newTextureWithDescriptor:yd iosurface:surfaces[t] plane:0];
+            } else if (t == frame::IMAGE3 && getenv("FRAME_MASK")) {
+                // FRAME_MASK: IMAGE3 a rounded-rect coverage mask as Core Animation makes its corner images: A8Unorm, shared
+                // storage (the raw path's write-combined memory, r17), its texels written by replaceRegion from rows of 61
+                // bytes (no padding), with its expected texels (nvdec NVDEC_TEXELS)
+                constexpr unsigned mw = 61, mh = 47, radius = 12;
+                MTLTextureDescriptor *md =
+                    [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatA8Unorm
+                                                                       width:mw
+                                                                      height:mh
+                                                                   mipmapped:NO];
+                md.usage = MTLTextureUsageShaderRead;
+                md.storageMode = MTLStorageModeShared;
+                tex[t] = [dev newTextureWithDescriptor:md];
+                std::vector<uint8_t> m(mw * mh);
+                uint64_t hash = 0xcbf29ce484222325ull;
+                for (unsigned y = 0; y < mh; y++)
+                    for (unsigned x = 0; x < mw; x++) {
+                        const double cx = x + 0.5 < radius        ? radius
+                                          : x + 0.5 > mw - radius ? mw - radius
+                                                                  : x + 0.5,
+                                     cy = y + 0.5 < radius        ? radius
+                                          : y + 0.5 > mh - radius ? mh - radius
+                                                                  : y + 0.5;
+                        const double dist = std::hypot(x + 0.5 - cx, y + 0.5 - cy);
+                        m[y * mw + x] = uint8_t(std::clamp(radius + 0.5 - dist, 0.0, 1.0) * 255.0 + 0.5);
+                        hash = (hash ^ m[y * mw + x]) * 0x100000001b3ull;
+                    }
+                [tex[t] replaceRegion:MTLRegionMake2D(0, 0, mw, mh) mipmapLevel:0 withBytes:m.data() bytesPerRow:mw];
+                printf("MASK texels=%016llx corner=%u centre=%u\n", (unsigned long long)hash, m[0],
+                       m[(mh / 2) * mw + mw / 2]);
             } else if (t == frame::IMAGE1 &&
                        frame::mipImage()) {  // every level, private: m2v's own image, or the raw path's chain
                 d.mipmapLevelCount = 1 + unsigned(std::log2(double(std::max(td.w, td.h))));

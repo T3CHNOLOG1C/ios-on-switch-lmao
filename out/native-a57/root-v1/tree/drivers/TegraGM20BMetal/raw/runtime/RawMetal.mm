@@ -3289,6 +3289,20 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                     if (t->_raw.planar) conv->convertPlanar(t->_raw);
                 conv->end();
             }
+            // 4:2:0 textures' planes whose rows or offset are 16 bytes apart but not 32 (ImageIO's photo thumbnails, a width of
+            // 360: rows of 368) are sampled through pool images (raw::Texture::sampled, createSurfaceTexture): filled from the
+            // planes by the copy engine first, as refresh() fills a sampled surface's (r7u: without it the conversion read
+            // whatever the pool held, magenta and green stripes of older images)
+            raw::BlitEncoder *fill = nullptr;
+            for (RMTexture *t : planar)
+                if (t->_raw.ycbcr)
+                    for (const raw::Texture *x : {t->_raw.luma, t->_raw.chroma})
+                        if (x && x->sampled) {
+                            if (!fill) fill = rc->blit();
+                            fill->copyRect(x->va, x->pitch, x->sampled->va, x->sampled->pitch, x->width, x->height,
+                                           x->bpp);
+                        }
+            if (fill) fill->end();
             // 4:2:0 textures: a pass of the pack's conversion state each, into the image the draws sample
             for (RMTexture *t : planar) {
                 raw::Texture &x = t->_raw;
@@ -3897,6 +3911,18 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
             uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 0)), uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 1)) - at,
             uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 1)), uint32_t(d.width), uint32_t(d.height),
             uint32_t(d.pixelFormat), shape, t->_raw);
+        // the next boot's check of r18's fix: the first 4:2:0 surface whose planes are sampled through pool images (rows or the
+        // chroma plane 16 bytes off 32), once
+        static std::atomic<bool> said{false};
+        if (t->_rawOk && (t->_raw.luma->sampled || t->_raw.chroma->sampled) && !said.exchange(true))
+            os_log(rawLog(),
+                   "raw: 4:2:0 planes through pool images, filled by the copy engine (%ux%u '%c%c%c%c', rows %zu/%zu, "
+                   "chroma at %lu)",
+                   unsigned(d.width), unsigned(d.height), char(IOSurfaceGetPixelFormat(s) >> 24),
+                   char(IOSurfaceGetPixelFormat(s) >> 16), char(IOSurfaceGetPixelFormat(s) >> 8),
+                   char(IOSurfaceGetPixelFormat(s)), IOSurfaceGetBytesPerRowOfPlane(s, 0),
+                   IOSurfaceGetBytesPerRowOfPlane(s, 1),
+                   (unsigned long)(uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 1)) - at));
     } else if (planar444(d, s, plane)) {  // RGB8_444_2P over a 4:4:4 two-plane surface: an RGBA8 image of its codes
         void *base = IOSurfaceGetBaseAddress(s);
         const uintptr_t at = uintptr_t(base);

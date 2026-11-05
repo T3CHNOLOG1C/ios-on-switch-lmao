@@ -96,8 +96,9 @@ struct Texture {
     Texture *luma = nullptr, *chroma = nullptr;
     uint32_t shape[9] = {};
     uint8_t ycbcr = 0;  // 1 converted, 2 sRGB, 3 codes
-    // m2v's address map of a planar texture's samplers: 1 every mode clamps to the edge (4:2:0), 2 clamp to zero and to the
-    // border clamp to the edge (4:4:4 codes)
+    // m2v's address map of a planar texture's samplers (metal2vulkan texture/ycbcr_image.rs `ycbcr_modes`): 1 the wrapping modes
+    // (repeat, mirrored repeat, mirror-clamp) clamp to the edge (4:2:0 converted), 2 clamp to zero and to the border clamp to the
+    // edge (4:4:4 codes), 3 both (4:2:0 codes)
     uint8_t addressMap = 0;
     // Rows 16 but not 32 bytes apart (or an address off 32): the texture header's pitch takes multiples of 32, so it is sampled
     // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
@@ -138,9 +139,9 @@ void samplerHeader(const SamplerDesc &d, uint32_t w[8]);
 struct Sampler {
     uint32_t tsc = 0;
     SamplerDesc desc;
-    // its headers under a planar texture's address map (Texture::addressMap 1, 2): m2v samples those textures through the sampler
-    // with the map applied (Device::samplerVariant makes them; the same header where the map changes nothing)
-    uint32_t mapped[3] = {};
+    // its headers under a planar texture's address map (Texture::addressMap 1 to 3): m2v samples those textures through the
+    // sampler with the map applied (Device::samplerVariant makes them; the same header where the map changes nothing)
+    uint32_t mapped[4] = {};
 };
 
 struct Pipeline {

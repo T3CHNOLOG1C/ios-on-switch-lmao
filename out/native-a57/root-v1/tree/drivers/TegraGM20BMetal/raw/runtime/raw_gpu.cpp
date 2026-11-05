@@ -1172,16 +1172,19 @@ void Device::destroySampler(Sampler &s)
     s = {};
 }
 
-// m2v's address map of a planar texture (metal2vulkan ycbcr.rs, `address_mode_map`): a 4:2:0 or 4:2:2 texture samples every mode as
-// clamp to the edge; a 4:4:4 texture read as codes clamp to zero and clamp to the border color as clamp to the edge, the others
-// as they are (MTLSamplerAddressMode: ClampToEdge 0, ClampToZero 4, ClampToBorderColor 5)
+// m2v's address map of a planar texture (metal2vulkan texture/ycbcr_image.rs `ycbcr_modes`, Metal's measured reads): a 4:2:0
+// texture samples the wrapping modes (mirror-clamp-to-edge 1, repeat 2, mirrored repeat 3) as clamp to the edge; one read as
+// codes clamp to zero (4) and clamp to the border color (5) too, which a converted one reads as the border (alpha 1: its header's
+// W_SOURCE); a 4:4:4 texture read as codes clamp to zero and to the border as clamp to the edge, the others as they are. (r16 sent
+// every mode of a converted 4:2:0 texture to the edge: its clamps to zero read the edge texels, not the border m2v reads.)
 bool Device::samplerVariant(Sampler &s, uint8_t map)
 {
-    if (!map || map > 2) return false;
+    if (!map || map > 3) return false;
     if (s.mapped[map]) return true;
     SamplerDesc d = s.desc;
+    const bool wrapped = map == 1 || map == 3, clamps = map == 2 || map == 3;
     for (uint8_t *m : {&d.sAddress, &d.tAddress, &d.rAddress})
-        if (map == 1 || *m == 4 || *m == 5) *m = 0;
+        if ((wrapped && *m >= 1 && *m <= 3) || (clamps && (*m == 4 || *m == 5))) *m = 0;
     if (d.sAddress == s.desc.sAddress && d.tAddress == s.desc.tAddress && d.rAddress == s.desc.rAddress) {
         s.mapped[map] = s.tsc;
         return true;
@@ -1243,7 +1246,7 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
     t.chroma = c;
     memcpy(t.shape, shape, sizeof t.shape);
     t.ycbcr = output;
-    t.addressMap = 1;
+    t.addressMap = output == 3 ? 3 : 1;  // (codes: clamps to zero and to the border at the edge too)
     // its alpha read as one, as m2v's view of its own converted image reads it (W_SOURCE ONE_FLOAT; the conversion writes 1 there
     // too: the same texels, now the same header)
     {

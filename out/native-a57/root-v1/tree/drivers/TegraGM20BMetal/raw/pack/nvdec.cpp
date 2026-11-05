@@ -506,8 +506,15 @@ bool Decoder::read(uint64_t va, void *dst, uint64_t bytes)
         src = any ? static_cast<const uint8_t *>(dst) : nullptr;
     } else
         memset(dst, 0, bytes);
-    for (auto it = cbufWrites_.lower_bound(va); it != cbufWrites_.end() && it->first < va + bytes; ++it)
-        if (it->first + 4 <= va + bytes) memcpy(static_cast<uint8_t *>(dst) + (it->first - va), &it->second, 4);
+    // the GPU's writes over it: every overlay word the range overlaps, its overlapping bytes (a row of a copy whose length is no
+    // multiple of 4 ends in part of a word: r18, NVDEC_TEXELS over rows of 1025 bytes)
+    for (auto it = cbufWrites_.lower_bound(va >= 3 ? va - 3 : 0); it != cbufWrites_.end() && it->first < va + bytes;
+         ++it) {
+        const uint64_t lo = std::max(it->first, va), hi = std::min(it->first + 4, va + bytes);
+        if (lo < hi)
+            memcpy(static_cast<uint8_t *>(dst) + (lo - va),
+                   reinterpret_cast<const uint8_t *>(&it->second) + (lo - it->first), hi - lo);
+    }
     return src != nullptr;
 }
 
@@ -614,11 +621,36 @@ std::string Decoder::ticEntry(uint32_t index)
     const uint32_t version = (t[2] >> 21) & 7;
     const uint32_t mask = version == 3 || version == 4 ? 0xfffffe00u : version == 0 ? 0xffffffffu : 0xffffffe0u;
     const uint64_t address = (uint64_t(t[2] & 0xffff) << 32) | (t[1] & mask);
+    // NVDEC_TEXELS: a pitch header's texels as a draw samples them, row by row (the image, wherever and however its rows lie:
+    // a surface's planes and the pool image the copy engine fills from them hash the same)
+    char texels[40] = "";
+    static const bool wantTexels = getenv("NVDEC_TEXELS") != nullptr;
+    if (wantTexels && version == 2) {
+        uint32_t bpp = 0;
+        switch (t[0] & 0x7f) {
+        case 0x1d: bpp = 1; break;   // R8
+        case 0x18: bpp = 2; break;   // G8R8
+        case 0x08: bpp = 4; break;   // A8B8G8R8
+        case 0x03: bpp = 8; break;   // R16G16B16A16
+        case 0x01: bpp = 16; break;  // R32G32B32A32
+        default: break;
+        }
+        const uint32_t pitch = (t[3] & 0xffff) << 5, w = (t[4] & 0xffff) + 1, h = (t[5] & 0xffff) + 1;
+        if (bpp && pitch >= w * bpp && h <= 16384) {
+            std::vector<uint8_t> row(size_t(w) * bpp);
+            uint64_t hash = 0xcbf29ce484222325ull;
+            for (uint32_t y = 0; y < h; y++) {
+                if (!read(address + uint64_t(y) * pitch, row.data(), row.size())) break;
+                hash = fnv(row.data(), row.size(), hash);
+            }
+            snprintf(texels, sizeof texels, " texels=%016llx", (unsigned long long)hash);
+        }
+    }
     t[1] &= ~mask;
     t[2] &= ~0xffffu;
-    char b[160];
-    snprintf(b, sizeof b, "tic[%s %08x %08x %08x %08x %08x %08x %08x %08x]", name(address).c_str(), t[0], t[1], t[2],
-             t[3], t[4], t[5], t[6], t[7]);
+    char b[200];
+    snprintf(b, sizeof b, "tic[%s %08x %08x %08x %08x %08x %08x %08x %08x%s]", name(address).c_str(), t[0], t[1], t[2],
+             t[3], t[4], t[5], t[6], t[7], texels);
     return b;
 }
 
