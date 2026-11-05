@@ -325,8 +325,8 @@ pub use late_resolve::ResolveTarget;
 use metal2vulkan::bind::BindingPlan;
 use metal2vulkan::bind::VertexAmplification;
 use metal2vulkan::bind::{
-    DrawCall, FragmentTests, HeapPlacement, ImageblockSize, IndexBufferRef, IndirectRef,
-    MeshDispatch, MeshGroups, TessellationFactors, ViewSetup, WriteSource,
+    DrawCall, DrawCommands, FragmentTests, HeapPlacement, ImageblockSize, IndexBufferRef,
+    IndirectRef, MeshDispatch, MeshGroups, TessellationFactors, ViewSetup, WriteSource,
 };
 use metal2vulkan::cache::SpecializationKey;
 use metal2vulkan::device::{DriverFact, FormatUsage, VkFeature};
@@ -1121,6 +1121,8 @@ pub struct RenderCommandEncoder {
     /// The last draw's variant, plan and specialization under which the bound values' notices
     /// were quiet (`Device::degrade_bound_values`), where it was.
     quiet_bound_values: Option<QuietBoundValues>,
+    /// The last draw's commands, whose lists the next draw's fill again.
+    draw_commands: Option<DrawCommands>,
     /// The views and sampler descriptions its draws' binds made or found (`binding::BindMemo`).
     bind_memo: binding::BindMemo,
     /// What its last draw retained of its own ([`LastRetained`]).
@@ -1391,6 +1393,7 @@ impl CommandBuffer {
             live: Arc::default(),
             log,
             quiet_bound_values: None,
+            draw_commands: None,
             bind_memo: binding::BindMemo::default(),
             last_retained: LastRetained::default(),
         })
@@ -5961,8 +5964,8 @@ impl RenderCommandEncoder {
                 return Err(Error::NotImplemented(RuntimeGap::ImageblockMasters));
             }
         }
-        let commands = plan
-            .instantiate_draw(&live.state, &draw)
+        let mut commands = self.draw_commands.take().unwrap_or_else(DrawCommands::empty);
+        plan.instantiate_draw_into(&live.state, &draw, &mut commands)
             .map_err(Error::Bind)?;
         self.reaches_unnamed |= !commands.root_tables.is_empty() || reads_handles(&plan);
         // A mesh draw the binder launches no threadgroup of (as plain Metal draws nothing).
@@ -6674,7 +6677,7 @@ impl RenderCommandEncoder {
             binding::bind(call, &device, &mut state, &plan, &command, &tables, memo)?
         };
         // The draw's push bytes, filled in place.
-        let push = binding::push_writes(commands.push_constants, &bound.holes)?;
+        let push = binding::push_writes(std::mem::take(&mut commands.push_constants), &bound.holes)?;
         // A plan that draws one amplification at a time records the draw once per amplification,
         // in order, each after that amplification's push writes.
         let amplified = commands
@@ -7309,6 +7312,7 @@ impl RenderCommandEncoder {
         if capture.is_some() {
             self.capture_uses(uses);
         }
+        self.draw_commands = Some(commands);
         Ok(())
     }
 

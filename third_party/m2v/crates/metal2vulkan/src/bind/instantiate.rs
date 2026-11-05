@@ -469,6 +469,7 @@ pub(crate) fn bound_buffer(
 }
 
 /// What a draw or dispatch binds for the plan's buffer slots.
+#[derive(Default)]
 pub(crate) struct BoundBuffers {
     /// The range of every descriptor-form slot's buffer or inline bytes.
     pub descriptor_ranges: Vec<DescriptorRange>,
@@ -543,13 +544,21 @@ pub(crate) fn bind_buffers(
     buffers: &[PlannedBuffer],
     state: &BindState,
 ) -> Result<BoundBuffers, BindError> {
+    bind_buffers_in(buffers, state, BoundBuffers::default())
+}
+
+/// [`bind_buffers`] into `out`'s vectors, emptied first: a draw that keeps them from the last
+/// (`BindingPlan::instantiate_draw_into`) fills them without allocating.
+pub(crate) fn bind_buffers_in(
+    buffers: &[PlannedBuffer],
+    state: &BindState,
+    mut out: BoundBuffers,
+) -> Result<BoundBuffers, BindError> {
     check_uniform_aliasing(buffers, state)?;
-    let mut out = BoundBuffers {
-        descriptor_ranges: Vec::new(),
-        extents: Vec::new(),
-        residuals: Vec::new(),
-        statics: Vec::new(),
-    };
+    out.descriptor_ranges.clear();
+    out.extents.clear();
+    out.residuals.clear();
+    out.statics.clear();
     for pb in buffers {
         let bound = bound_buffer(state, pb.slot, pb.bound)?;
         let (bind_offset, length) = match bound {

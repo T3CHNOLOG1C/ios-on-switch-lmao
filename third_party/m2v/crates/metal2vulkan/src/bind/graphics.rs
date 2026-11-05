@@ -233,9 +233,9 @@ use std::collections::BTreeMap;
 
 use crate::bind::heap::{planner, HeapPlanner};
 use crate::bind::instantiate::{
-    bind_buffers, descriptor_range, put, slot_field, BufferExtent, BufferRange, DescriptorBytes,
-    DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef, PushConstantWrite, PushHole,
-    RangeError, RootTable,
+    bind_buffers_in, descriptor_range, put, slot_field, BoundBuffers, BufferExtent, BufferRange,
+    DescriptorBytes, DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef, PushConstantWrite,
+    PushHole, RangeError, RootTable,
 };
 use crate::bind::neutral::{zero_buffer_bytes, NeutralResource};
 use crate::bind::plan::compute::{internal, not_implemented, spec_key, tile_memory};
@@ -2209,6 +2209,21 @@ impl BindingPlan {
         state: &BindState,
         draw: &DrawCall,
     ) -> Result<DrawCommands, BindError> {
+        let mut out = DrawCommands::empty();
+        self.instantiate_draw_into(state, draw, &mut out)?;
+        Ok(out)
+    }
+
+    /// [`instantiate_draw`](Self::instantiate_draw) into `out`, whose vectors this draw's commands
+    /// take (emptied first): a consumer that keeps one `DrawCommands` from draw to draw fills it
+    /// without allocating them again. On a refusal nothing `out` holds is a draw's to record: the
+    /// next call fills it again.
+    pub fn instantiate_draw_into(
+        &self,
+        state: &BindState,
+        draw: &DrawCall,
+        out: &mut DrawCommands,
+    ) -> Result<(), BindError> {
         let t = self
             .graphics
             .as_ref()
@@ -2230,8 +2245,43 @@ impl BindingPlan {
                 });
             }
         }
-        instantiate(t, state, draw)
+        instantiate_into(t, state, draw, out)
     }
+}
+
+impl DrawCommands {
+    /// No draw's commands, every vector empty: what [`BindingPlan::instantiate_draw_into`] fills.
+    pub fn empty() -> DrawCommands {
+        DrawCommands {
+            push_constants: Vec::new(),
+            descriptor_bytes: Vec::new(),
+            buffer_offsets: Vec::new(),
+            draw: vk::DrawCommand::Draw {
+                vertex_count: 0,
+                instance_count: 0,
+                first_vertex: 0,
+                first_instance: 0,
+            },
+            indirect_needs_arguments: false,
+            extents: Vec::new(),
+            push_holes: Vec::new(),
+            descriptor_ranges: Vec::new(),
+            root_tables: Vec::new(),
+            vertex_strides: Vec::new(),
+            uses: Vec::new(),
+            index_overrun: None,
+            index_bounds_pass: false,
+            amplifications: Vec::new(),
+            specialization: None,
+            mesh_dispatch: None,
+        }
+    }
+}
+
+/// `v`, emptied: its room kept for the draw that takes it.
+fn emptied<T>(mut v: Vec<T>) -> Vec<T> {
+    v.clear();
+    v
 }
 
 /// The Vulkan draw of a Metal draw, and the base vertex and first instance the
@@ -3272,11 +3322,25 @@ fn capture_draw(
     }
 }
 
+#[cfg(test)]
 fn instantiate(
     t: &GraphicsTemplate,
     state: &BindState,
     draw: &DrawCall,
 ) -> Result<DrawCommands, BindError> {
+    let mut out = DrawCommands::empty();
+    instantiate_into(t, state, draw, &mut out)?;
+    Ok(out)
+}
+
+fn instantiate_into(
+    t: &GraphicsTemplate,
+    state: &BindState,
+    draw: &DrawCall,
+    out: &mut DrawCommands,
+) -> Result<(), BindError> {
+    // The vectors `out` held, which this draw's commands take, emptied.
+    let kept = std::mem::replace(out, DrawCommands::empty());
     let overrun = index_overrun(t.robust_index_fetch, draw);
     let (command, base) = vk_draw(draw, overrun);
     let capture = match t.capture {
@@ -3295,7 +3359,15 @@ fn instantiate(
         }
     };
     let command = mesh.as_ref().map_or(command, |m| m.command);
-    let bound = bind_buffers(&t.buffers, state)?;
+    let bound = bind_buffers_in(
+        &t.buffers,
+        state,
+        BoundBuffers {
+            descriptor_ranges: kept.descriptor_ranges,
+            extents: kept.extents,
+            ..BoundBuffers::default()
+        },
+    )?;
     let mut descriptor_ranges = bound.descriptor_ranges;
     descriptor_ranges.extend(crate::bind::instantiate::texel_ranges(&t.resources, state)?);
     let tables = crate::bind::heap::table_bytes(&t.resources, state)?;
@@ -3309,10 +3381,10 @@ fn instantiate(
     };
     let vertex = state.stages.get(&Stage::Vertex);
 
-    let mut push_constants = Vec::new();
-    let mut descriptor_bytes = Vec::new();
-    let mut push_holes = Vec::new();
-    let mut root_tables = Vec::new();
+    let mut push_constants = emptied(kept.push_constants);
+    let mut descriptor_bytes = emptied(kept.descriptor_bytes);
+    let mut push_holes = emptied(kept.push_holes);
+    let mut root_tables = emptied(kept.root_tables);
     let mut reads_base = false;
     for st in &t.stages {
         let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
@@ -3502,8 +3574,8 @@ fn instantiate(
 
     // Vertex buffers: offsets, per-bind strides, the address rules, and the bytes the draw's
     // vertex and instance ranges fetch.
-    let mut buffer_offsets = Vec::new();
-    let mut vertex_strides = Vec::new();
+    let mut buffer_offsets = emptied(kept.buffer_offsets);
+    let mut vertex_strides = emptied(kept.vertex_strides);
     for vb in &t.vertex_buffers {
         match vertex.and_then(|v| v.buffers.get(&vb.slot.index)) {
             Some(&BoundBuffer::Buffer {
@@ -3595,7 +3667,7 @@ fn instantiate(
         Some(m) => (m.dispatch, Some(m.specialization)),
         None => (None, None),
     };
-    Ok(DrawCommands {
+    *out = DrawCommands {
         push_constants,
         descriptor_bytes,
         buffer_offsets,
@@ -3610,10 +3682,11 @@ fn instantiate(
         uses: {
             // The indexed capture form reads its indices in the vertex stage, by address, and
             // binds no index buffer.
-            let mut uses = match capture.as_ref().and_then(|c| c.indices) {
-                Some(indices) => vec![indices],
-                None => draw_uses(draw, overrun, t.tessellation.as_ref()),
-            };
+            let mut uses = emptied(kept.uses);
+            match capture.as_ref().and_then(|c| c.indices) {
+                Some(indices) => uses.push(indices),
+                None => draw_uses_into(draw, overrun, t.tessellation.as_ref(), &mut uses),
+            }
             // A mesh draw that reads its arguments reads 12 bytes; an emulated one's scan reads
             // them in the compute stage.
             if let vk::DrawCommand::DrawMeshTasksIndirect { .. } = command {
@@ -3637,7 +3710,8 @@ fn instantiate(
         amplifications,
         mesh_dispatch,
         specialization,
-    })
+    };
+    Ok(())
 }
 
 /// The `u32` of amplification push field `field` for amplification `a` of a plan drawing
@@ -3890,12 +3964,25 @@ fn indirect_use(len: u64) -> ResourceUse {
 /// control-point index offset, and argument offset. A direct draw whose indices run past the buffer
 /// (`overrun`) reads the bytes from the index offset to [`IndexBufferRef::fetch_end`] when it is
 /// `Robust`, and only the indices it draws when it is `Clamped` (none, from offset 0, when it draws
-/// none).
+/// none). [`draw_uses_into`] appends them to a list.
+#[cfg(test)]
 fn draw_uses(
     draw: &DrawCall,
     overrun: Option<IndexOverrun>,
     factors: Option<&FactorTemplate>,
 ) -> Vec<ResourceUse> {
+    let mut uses = Vec::new();
+    draw_uses_into(draw, overrun, factors, &mut uses);
+    uses
+}
+
+/// [`draw_uses`], appended to `uses`.
+fn draw_uses_into(
+    draw: &DrawCall,
+    overrun: Option<IndexOverrun>,
+    factors: Option<&FactorTemplate>,
+    uses: &mut Vec<ResourceUse>,
+) {
     let index = |range| ResourceUse {
         resource: UseTarget::IndexBuffer,
         access: AccessSet::READ,
@@ -3911,7 +3998,6 @@ fn draw_uses(
         stages: vk::PipelineStageFlags2::TESSELLATION_CONTROL_SHADER,
         range,
     };
-    let mut uses = Vec::new();
     if let DrawCall::Patches {
         patch_index: Some(_),
         ..
@@ -3995,7 +4081,6 @@ fn draw_uses(
         } => [Some(index(None)), Some(indirect_use(20))],
     };
     uses.extend(own.into_iter().flatten());
-    uses
 }
 
 /// Bytes of one index of `ty`, when it is a fixed-size index type.

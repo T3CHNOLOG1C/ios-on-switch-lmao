@@ -2094,6 +2094,7 @@ impl RenderExecution {
             live: Arc::default(),
             log: None,
             quiet_bound_values: None,
+            draw_commands: None,
             bind_memo: crate::binding::BindMemo::default(),
             last_retained: Default::default(),
         }
