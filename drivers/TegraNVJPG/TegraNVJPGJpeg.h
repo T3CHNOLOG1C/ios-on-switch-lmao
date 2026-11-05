@@ -385,7 +385,6 @@ static inline void tegra_nvjpg_setup_image(const TegraNVJPGImage *img, uint32_t 
     s->stream_chroma_mode = (int)img->chroma;
 }
 
-// --- The output half -------------------------------------------------------------------------------------------
 // Targets NVJPG writes (output_pixel_format, memory_mode): NV12 (YUV, semi-planar: a luma plane and an interleaved
 // CbCr plane at 4:2:0, whatever the file's sampling), planar YUV 4:2:0 (three planes), and 32-bit RGB in its byte
 // orders (planar memory mode, as oss-nvjpg drives RGB surfaces), each optionally downscaled by 2, 4 or 8 (DCT scaling,

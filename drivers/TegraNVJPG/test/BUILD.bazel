@@ -4,8 +4,6 @@
 #                       the JFIF matrix, and the boot self-test's vectors against libjpeg-turbo's decode (nvjpg_host.c)
 #   request_host_test   the AppleJPEGDriver decode request's translation and refusals (request_host.c)
 #   tegra_nvjpg_vendored_test  the vendored firmware and NVIDIA headers are the files their SOURCE files name
-#
-#   bazel test //drivers/TegraNVJPG/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
 

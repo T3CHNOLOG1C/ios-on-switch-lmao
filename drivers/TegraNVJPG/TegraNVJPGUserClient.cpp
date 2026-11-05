@@ -358,7 +358,6 @@ TegraNVJPGAbility ability()
 }
 }  // namespace
 
-// --- The user client ---------------------------------------------------------------------------------------------
 class AppleJPEGDriverUserClient : public IOUserClient {
     OSDeclareDefaultStructors(AppleJPEGDriverUserClient)
 
@@ -616,7 +615,6 @@ void AppleJPEGDriverUserClient::free()
     IOUserClient::free();
 }
 
-// --- The service -------------------------------------------------------------------------------------------------
 class AppleJPEGDriver : public IOService {
 OSDeclareDefaultStructors(AppleJPEGDriver)
 

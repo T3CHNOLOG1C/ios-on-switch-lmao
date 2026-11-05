@@ -14,9 +14,9 @@
 //   J4  the AppleJPEGDriver service and its AppleJPEGDriverUserClient published (TegraNVJPGUserClient.cpp)
 // One line per stage ("TegraNVJPG: J1 ok ..."), or the failing stage's FAIL line and nothing after it. Until J4
 // publishes, every failure is that one line: the swgroup goes back to bypass, the engine back to reset with its clock
-// off, and nothing is published (CMPhoto and VideoToolbox find no hardware JPEG codec and decode on the CPU, as before
-// this driver). From J4 on the engine is proven: a job past its bound panics with one line, and a lost syncpoint
-// interrupt panics in TegraHost1x.
+// off, and nothing is published (CMPhoto and VideoToolbox find no hardware JPEG codec and decode on the CPU). From J4
+// on the engine is proven: a job past its bound panics with one line, and a lost syncpoint interrupt panics in
+// TegraHost1x.
 //
 // Why the SMMU: a decode's destination is another process's IOSurface (scattered pages, half of the Switch's RAM above
 // the 32-bit boundary) and NVJPG has no scatter-gather, so each job maps the destination page by page into a window of
@@ -253,7 +253,6 @@ bool parse(const uint8_t *fw, size_t length, Image *image)
            image->data <= image->binSize && image->dataSize <= image->binSize - image->data;
 }
 
-// --- SMMU domain (TegraSMMUDomain.h; the registers under TegraSMMU.h's lock, shared with TegraVIC) ------------------
 inline uint32_t *table(uint32_t index)
 {
     return gDomain.table(index);
@@ -319,7 +318,6 @@ void smmuDetach()
     tegra_smmu_detach(kAsid, TEGRA_SMMU_NVJPG_ASID);
 }
 
-// --- Power, clock, falcon ----------------------------------------------------------------------------------------
 // tegra_powergate_power_up with the T210 MBIST workaround (tegra210_generic_mbist_war on NVJPG's slcg clock, NVDEC's).
 // A partition the boot chain left on keeps its state; the engine is still reset and re-clocked so the falcon starts
 // from scratch.

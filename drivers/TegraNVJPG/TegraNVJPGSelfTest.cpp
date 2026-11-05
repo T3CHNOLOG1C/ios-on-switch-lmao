@@ -65,7 +65,6 @@ uint64_t nowUs()
     return ns / 1000;
 }
 
-// --- References ---------------------------------------------------------------------------------------------------
 inline uint32_t refY(const Vector &v, uint32_t x, uint32_t y)
 {
     return v.plane[0][y * v.w + x];
@@ -105,7 +104,6 @@ struct Score {
     bool within(const Tolerance &t) const { return count && max <= t.max && sum * 4 <= (uint64_t)t.mean4 * count; }
 };
 
-// --- Decoding -----------------------------------------------------------------------------------------------------
 struct Output {
     uint64_t iova[3];  // where the engine writes each plane
     uint8_t *va[3];    // where the CPU reads it
@@ -292,7 +290,6 @@ int extent(uint32_t format, uint32_t pitch, bool *clipped)
     return 0;
 }
 
-// --- Translation ----------------------------------------------------------------------------------------------------
 // J3A to BGRA at IOVA gPageA.pa, whose four page table entries point at gPageB: the picture must be in B, A untouched.
 int translation()
 {

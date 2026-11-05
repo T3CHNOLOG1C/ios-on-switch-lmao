@@ -44,7 +44,6 @@ static void fail(const char *fmt, ...)
         if (!(cond)) fail(__VA_ARGS__); \
     } while (0)
 
-// --- Byte-level edits of a file -----------------------------------------------------------------------------------
 // The offset of the first marker `m` (its 0xFF), or -1.
 static long find_marker(const uint8_t *d, size_t n, uint8_t m)
 {
@@ -199,7 +198,6 @@ static void without_dht(const char *name, const uint8_t *orig, size_t n)
 
 #endif  // HAVE_LIBJPEG
 
-// --- Mutation fuzzing -------------------------------------------------------------------------------------------
 static uint64_t rng = 0x9e3779b97f4a7c15ull;
 static uint32_t next_random(void)
 {
@@ -236,7 +234,6 @@ static void fuzz(const uint8_t *orig, size_t n, uint32_t rounds)
     free(d);
 }
 
-// --- Target translation -----------------------------------------------------------------------------------------
 static void targets(void)
 {
     TegraNVJPGImage img;
@@ -306,7 +303,6 @@ static void targets(void)
 }
 
 #ifdef HAVE_LIBJPEG
-// --- libjpeg-turbo ----------------------------------------------------------------------------------------------
 static const uint8_t kZigzag[64] = {0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,
                                     12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6,  7,  14, 21, 28,
                                     35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,

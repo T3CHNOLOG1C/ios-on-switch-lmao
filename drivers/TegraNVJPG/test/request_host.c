@@ -128,7 +128,6 @@ int main(void)
     expect("1080p 420f packed, clipped engine", &r, &img, &d, &clipped, TEGRA_NVJPG_PLAN_OK, NULL, &p);
     CHECK(p.extent.rows[0] == 1080 && p.extent.rows[1] == 540, "clipped extent");
 
-    // Formats.
     d = surface(TEGRA_NVJPG_FOURCC('4', '2', '0', 'v'), 1920, 1080);
     expect("420v", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "pixel format", &p);
     d = surface(TEGRA_NVJPG_FOURCC('4', '2', '2', 'f'), 1920, 1080);
@@ -142,7 +141,6 @@ int main(void)
     noArgb.formats &= ~(1u << TEGRA_NVJPG_OUT_ARGB);
     expect("ARGB unproven", &r, &img, &d, &noArgb, TEGRA_NVJPG_PLAN_UNSUPPORTED, "format not proven", &p);
 
-    // Sampling.
     img = image(1600, 1200, TEGRA_NVJPG_CHROMA_422H);
     r = request(1600, 1200, TEGRA_NVJPG_SUB_422, 0);
     d = surface(f420, 1600, 1200);
