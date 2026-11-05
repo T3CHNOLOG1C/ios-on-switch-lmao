@@ -161,8 +161,14 @@ nvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    nvk_init_experimental_flags(instance);
    nvk_init_dri_options(instance);
 
+#ifdef NVK_HAS_DARWIN
+   /* No DRM nodes on Darwin: the darwin nvkmd finds the GPU's IOKit service. */
+   instance->vk.physical_devices.enumerate =
+      nvk_enumerate_darwin_physical_devices;
+#else
    instance->vk.physical_devices.try_create_for_drm =
       nvk_create_drm_physical_device;
+#endif
    instance->vk.physical_devices.destroy = nvk_physical_device_destroy;
 
    const struct build_id_note *note =
@@ -174,7 +180,13 @@ nvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    }
 
    unsigned build_id_len = build_id_length(note);
-   if (build_id_len < BUILD_ID_EXPECTED_HASH_LENGTH) {
+#if DETECT_OS_APPLE
+   /* The Mach-O build id is the 16-byte LC_UUID. */
+   const unsigned min_build_id_len = 16;
+#else
+   const unsigned min_build_id_len = BUILD_ID_EXPECTED_HASH_LENGTH;
+#endif
+   if (build_id_len < min_build_id_len) {
       result = vk_errorf(NULL, VK_ERROR_INITIALIZATION_FAILED,
                         "build-id too short.  It needs to be a SHA");
       goto fail_init;

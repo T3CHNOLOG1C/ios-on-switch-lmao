@@ -3,7 +3,15 @@
 
 subdir('headers')
 subdir('drm')
-subdir('winsys')
+if dep_libdrm.found()
+  subdir('winsys')
+else
+  # No libdrm (Darwin): NVK uses its darwin kernel backend; the winsys headers stay
+  # visible for code that only includes them.
+  idep_nouveau_ws = declare_dependency(
+    include_directories : include_directories('winsys'),
+  )
+endif
 if with_nouveau_vk
   subdir('rust')
   subdir('nil')

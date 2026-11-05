@@ -29,9 +29,18 @@
 static uint32_t
 get_ctr_el0(void)
 {
+#if defined(__APPLE__)
+   /* XNU traps EL0 reads of CTR_EL0 (SIGILL). Cortex-A57 and the other
+    * Darwin ARM64 hosts have 64-byte data cache lines: CWG = DminLine = 4
+    * (16 words). Too small a line only costs extra maintenance; too large
+    * would skip lines. (Same workaround as UniXNU's Turnip darwin port.)
+    */
+   return (4u << 24) | (4u << 16);
+#else
    uint32_t ctr_el0;
    __asm("mrs\t%x0, ctr_el0" : "=r"(ctr_el0));
    return ctr_el0;
+#endif
 }
 
 static uint32_t

@@ -1675,6 +1675,11 @@ endif
 foreach h : ['xlocale.h', 'linux/futex.h', 'endian.h', 'dlfcn.h', 'sys/shm.h',
              'cet.h', 'pthread_np.h', 'poll.h', 'sys/inotify.h',
              'linux/udmabuf.h', 'fenv.h']
+  # The iOS SDK ships Carbon's Endian.h, which a case-insensitive file system
+  # serves for <endian.h>; it is not the BSD header (it defines nil and more).
+  if h == 'endian.h' and host_machine.system() == 'darwin'
+    continue
+  endif
   if cc.check_header(h)
     pre_args += '-DHAVE_@0@'.format(h.to_upper().underscorify())
   endif
@@ -2152,7 +2157,8 @@ if dep_elf.found()
   pre_args += '-DUSE_LIBELF'
 elif with_gallium_radeonsi and with_gfx_compute
   error('Gallium driver radeonsi requires libelf')
-elif with_nouveau_vk
+elif with_nouveau_vk and host_machine.system() != 'darwin'
+  # On Darwin NVK builds without libelf; only cubin import needs it.
   error('NVK requires libelf')
 endif
 

@@ -39,6 +39,16 @@ const VkExternalMemoryProperties nvk_dma_buf_mem_props = {
       VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
 };
 
+/* Host pointers (VK_EXT_external_memory_host), where the kmd imports them:
+ * importable, never dedicated, and exportable as nothing.
+ */
+const VkExternalMemoryProperties nvk_host_ptr_mem_props = {
+   .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT,
+   .exportFromImportedHandleTypes = 0,
+   .compatibleHandleTypes =
+      VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+};
+
 static enum nvkmd_mem_flags
 nvk_memory_type_flags(const VkMemoryType *type,
                       VkExternalMemoryHandleTypeFlagBits handle_types,
@@ -144,6 +154,9 @@ nvk_AllocateMemory(VkDevice device,
 
    const VkImportMemoryFdInfoKHR *fd_info =
       vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_FD_INFO_KHR);
+   const VkImportMemoryHostPointerInfoEXT *host_info =
+      vk_find_struct_const(pAllocateInfo->pNext,
+                           IMPORT_MEMORY_HOST_POINTER_INFO_EXT);
    const VkExportMemoryAllocateInfo *export_info =
       vk_find_struct_const(pAllocateInfo->pNext, EXPORT_MEMORY_ALLOCATE_INFO);
    const VkMemoryDedicatedAllocateInfo *dedicated_info =
@@ -156,6 +169,8 @@ nvk_AllocateMemory(VkDevice device,
       handle_types |= export_info->handleTypes;
    if (fd_info != NULL)
       handle_types |= fd_info->handleType;
+   if (host_info != NULL)
+      handle_types |= host_info->handleType;
 
    const bool not_shared = handle_types == 0;
    bool pinned_to_vram = false;
@@ -209,8 +224,24 @@ nvk_AllocateMemory(VkDevice device,
    const uint64_t aligned_size =
       align64(pAllocateInfo->allocationSize, alignment);
 
-   const bool is_import = fd_info && fd_info->handleType;
-   if (is_import) {
+   const bool is_host_import = host_info && host_info->handleType;
+   const bool is_import = (fd_info && fd_info->handleType) || is_host_import;
+   if (is_host_import) {
+      if (host_info->handleType !=
+             VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT ||
+          ((uintptr_t)host_info->pHostPointer | pAllocateInfo->allocationSize) &
+             (pdev->nvkmd->bind_align_B - 1)) {
+         result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+         goto fail_alloc;
+      }
+
+      result = nvkmd_dev_import_host_mem(dev->nvkmd, &dev->vk.base,
+                                         host_info->pHostPointer,
+                                         pAllocateInfo->allocationSize,
+                                         &mem->mem);
+      if (result != VK_SUCCESS)
+         goto fail_alloc;
+   } else if (is_import) {
       assert(fd_info->handleType ==
                VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT ||
              fd_info->handleType ==
@@ -314,6 +345,41 @@ fail_mem:
 fail_alloc:
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);
    return result;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+nvk_GetMemoryHostPointerPropertiesEXT(
+   VkDevice device,
+   VkExternalMemoryHandleTypeFlagBits handleType,
+   const void *pHostPointer,
+   VkMemoryHostPointerPropertiesEXT *pMemoryHostPointerProperties)
+{
+   VK_FROM_HANDLE(nvk_device, dev, device);
+   const struct nvk_physical_device *pdev = nvk_device_physical(dev);
+
+   if (handleType != VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT ||
+       !pdev->nvkmd->kmd_info.has_host_import ||
+       ((uintptr_t)pHostPointer & (pdev->nvkmd->bind_align_B - 1)))
+      return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+
+   /* Imported pages keep their owner's cacheable CPU mapping, and the GPU
+    * does not snoop the CPU caches (Tegra).  Every host-visible type is
+    * offered: imported as the cached type, the client flushes and
+    * invalidates mapped ranges as Vulkan says; imported as the coherent
+    * type, the importer keeps the CPU caches clean itself.  The Metal
+    * frontend does that for its imports (IOSurfaces): it cleans and
+    * invalidates every imported surface a command buffer uses when it is
+    * committed and again once it completed, Metal's own visibility points
+    * for shared memory.
+    */
+   uint32_t type_bits = 0;
+   for (unsigned t = 0; t < pdev->mem_type_count; t++) {
+      if (pdev->mem_types[t].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+         type_bits |= 1u << t;
+   }
+   pMemoryHostPointerProperties->memoryTypeBits = type_bits;
+
+   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL

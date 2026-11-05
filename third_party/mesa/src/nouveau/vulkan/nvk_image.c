@@ -590,6 +590,17 @@ nvk_GetPhysicalDeviceImageFormatProperties2(
          ext_mem_props = &nvk_dma_buf_mem_props;
          break;
 
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT:
+         /* Host memory holds only images whose layout the client knows:
+          * plain linear ones, at the offset the client binds them.
+          */
+         if (!pdev->nvkmd->kmd_info.has_host_import ||
+             pImageFormatInfo->tiling != VK_IMAGE_TILING_LINEAR)
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+
+         ext_mem_props = &nvk_host_ptr_mem_props;
+         break;
+
       default:
          /* From the Vulkan 1.3.256 spec:
           *

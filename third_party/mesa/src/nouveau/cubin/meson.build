@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 libnouveau_cubin_files = files(
-  'nv_cubin.c',
+  dep_elf.found() ? 'nv_cubin.c' : 'nv_cubin_none.c',
   'nv_fatbin.c',
 )
 

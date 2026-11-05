@@ -4,7 +4,11 @@
  */
 
 #include "nvkmd.h"
+#ifdef NVK_HAS_DARWIN
+#include "darwin/nvkmd_darwin.h"
+#else
 #include "nouveau/nvkmd_nouveau.h"
+#endif
 #include "nv_push.h"
 #include "util/cache_ops.h"
 #include "util/u_math.h"
@@ -88,9 +92,23 @@ nvkmd_try_create_pdev_for_drm(struct _drmDevice *drm_device,
                               enum nvk_debug debug_flags,
                               struct nvkmd_pdev **pdev_out)
 {
+#ifdef NVK_HAS_DARWIN
+   return VK_ERROR_INCOMPATIBLE_DRIVER;
+#else
    return nvkmd_nouveau_try_create_pdev(drm_device, log_obj,
                                         debug_flags, pdev_out);
+#endif
 }
+
+#ifdef NVK_HAS_DARWIN
+VkResult
+nvkmd_darwin_try_create_pdev(struct vk_object_base *log_obj,
+                             enum nvk_debug debug_flags,
+                             struct nvkmd_pdev **pdev_out)
+{
+   return nvkmd_darwin_create_pdev(log_obj, debug_flags, pdev_out);
+}
+#endif
 
 VkResult MUST_CHECK
 nvkmd_dev_alloc_mem(struct nvkmd_dev *dev,
@@ -158,6 +176,23 @@ nvkmd_dev_import_dma_buf(struct nvkmd_dev *dev,
                          int fd, struct nvkmd_mem **mem_out)
 {
    VkResult result = dev->ops->import_dma_buf(dev, log_obj, fd, mem_out);
+   if (result == VK_SUCCESS)
+      nvkmd_dev_add_mem(dev, *mem_out);
+
+   return result;
+}
+
+VkResult MUST_CHECK
+nvkmd_dev_import_host_mem(struct nvkmd_dev *dev,
+                          struct vk_object_base *log_obj,
+                          void *host_ptr, uint64_t size_B,
+                          struct nvkmd_mem **mem_out)
+{
+   if (dev->ops->import_host_mem == NULL)
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+
+   VkResult result = dev->ops->import_host_mem(dev, log_obj, host_ptr,
+                                               size_B, mem_out);
    if (result == VK_SUCCESS)
       nvkmd_dev_add_mem(dev, *mem_out);
 

@@ -216,6 +216,8 @@ nvk_GetPhysicalDeviceExternalBufferProperties(
    const VkPhysicalDeviceExternalBufferInfo *pExternalBufferInfo,
    VkExternalBufferProperties *pExternalBufferProperties)
 {
+   VK_FROM_HANDLE(nvk_physical_device, pdev, physicalDevice);
+
    /* The Vulkan 1.3.256 spec says:
     *
     *    VUID-VkPhysicalDeviceExternalBufferInfo-handleType-parameter
@@ -239,6 +241,12 @@ nvk_GetPhysicalDeviceExternalBufferProperties(
    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT:
       pExternalBufferProperties->externalMemoryProperties =
          nvk_dma_buf_mem_props;
+      return;
+   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT:
+      if (!pdev->nvkmd->kmd_info.has_host_import)
+         goto unsupported;
+      pExternalBufferProperties->externalMemoryProperties =
+         nvk_host_ptr_mem_props;
       return;
    default:
       goto unsupported;

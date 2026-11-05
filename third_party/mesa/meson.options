@@ -796,6 +796,13 @@ option(
 )
 
 option(
+  'nvk-darwin-abi-dir',
+  type : 'string',
+  value : '',
+  description : 'Directory holding TegraGM20BABI.h for the NVK darwin kernel backend (Darwin hosts only)',
+)
+
+option(
   'nvk-build-id',
   type : 'string',
   value : '',

@@ -1,0 +1,138 @@
+/*
+ * Copyright © 2026 IOSwitch
+ * SPDX-License-Identifier: MIT
+ *
+ * NVK kernel backend for Darwin: the TegraGM20B IOKit user client (wire ABI in
+ * TegraGM20BABI.h, semantics in scratchpad/gpu/CONTRACT.md). Structured like
+ * nvkmd_nouveau, with each DRM ioctl replaced by one IOConnectCallStructMethod.
+ * Sync objects live in user space (one kernel fence seqno per channel), as in
+ * UniXNU's Turnip darwin backend.
+ */
+#ifndef NVKMD_DARWIN_H
+#define NVKMD_DARWIN_H 1
+
+#include "nvkmd/nvkmd.h"
+#include "util/u_dynarray.h"
+#include "vk_sync.h"
+#include "vk_sync_timeline.h"
+#include "util/simple_mtx.h"
+#include "util/vma.h"
+
+#include "TegraGM20BABI.h"
+
+#include <IOKit/IOKitLib.h>
+
+struct nvkmd_darwin_conn {
+   io_connect_t conn;
+   bool tunnel;
+   uint32_t selector;
+};
+
+struct nvkmd_darwin_pdev {
+   struct nvkmd_pdev base;
+
+   struct TegraGM20BAbiInfo info;
+
+   struct vk_sync_type sync_type;
+   const struct vk_sync_type *sync_types[2];
+};
+
+NVKMD_DECL_SUBCLASS(pdev, darwin);
+
+VkResult nvkmd_darwin_create_pdev(struct vk_object_base *log_obj,
+                                  enum nvk_debug debug_flags,
+                                  struct nvkmd_pdev **pdev_out);
+
+#define NVKMD_DARWIN_MAX_CHANNELS 16
+
+struct nvkmd_darwin_channel {
+   uint32_t id;                         /* 0 = free slot */
+   const volatile uint32_t *fence;      /* completed seqno, mapped read-only */
+   mach_vm_address_t fence_map;
+   uint32_t fence_token;
+};
+
+struct nvkmd_darwin_dev {
+   struct nvkmd_dev base;
+
+   struct nvkmd_darwin_conn conn;
+
+   simple_mtx_t heap_mutex;
+   struct util_vma_heap heap;
+   struct util_vma_heap replay_heap;
+   uint64_t replay_start;
+
+   simple_mtx_t channels_mutex;
+   struct nvkmd_darwin_channel channels[NVKMD_DARWIN_MAX_CHANNELS];
+};
+
+NVKMD_DECL_SUBCLASS(dev, darwin);
+
+struct nvkmd_darwin_mem {
+   struct nvkmd_mem base;
+
+   uint64_t handle;
+   uint32_t map_token;  /* 0 for host imports */
+   void *host_ptr;      /* host imports: the caller's own mapping */
+};
+
+NVKMD_DECL_SUBCLASS(mem, darwin);
+
+struct nvkmd_darwin_va {
+   struct nvkmd_va base;
+};
+
+NVKMD_DECL_SUBCLASS(va, darwin);
+
+struct nvkmd_darwin_exec_ctx {
+   struct nvkmd_ctx base;
+
+   uint32_t channel;
+   uint32_t last_seqno;  /* last submitted; 0 before the first submission */
+
+   struct TegraGM20BAbiExec req;
+};
+
+NVKMD_DECL_SUBCLASS(ctx, darwin_exec);
+
+struct nvkmd_darwin_bind_ctx {
+   struct nvkmd_ctx base;
+
+   struct nvkmd_va *prev_va;
+   struct TegraGM20BAbiVmBind req;
+};
+
+NVKMD_DECL_SUBCLASS(ctx, darwin_bind);
+
+/* A binary sync: unsignaled, signaled, or pending on one channel's fence. */
+enum nvkmd_darwin_sync_state {
+   NVKMD_DARWIN_SYNC_UNSIGNALED,
+   NVKMD_DARWIN_SYNC_SIGNALED,
+   NVKMD_DARWIN_SYNC_FENCE,
+};
+
+struct nvkmd_darwin_sync {
+   struct vk_sync base;
+
+   /* Binary syncs */
+   enum nvkmd_darwin_sync_state state;
+   struct nvkmd_darwin_dev *dev;
+   uint32_t channel;
+   uint32_t seqno;
+
+   /* Timeline syncs (base.flags & VK_SYNC_IS_TIMELINE): the highest value
+    * known reached, and the submitted signal operations not yet seen
+    * complete, each pending on one channel's seqno.
+    */
+   uint64_t value;
+   struct util_dynarray points; /* struct nvkmd_darwin_sync_point */
+};
+
+struct nvkmd_darwin_sync_point {
+   uint64_t value;
+   struct nvkmd_darwin_dev *dev;
+   uint32_t channel;
+   uint32_t seqno;
+};
+
+#endif /* NVKMD_DARWIN_H */

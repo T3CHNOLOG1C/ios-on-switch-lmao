@@ -92,15 +92,26 @@ nvk_files = files(
   'nvk_wsi.h',
   'layers/nvk_app_workarounds.c',
   'layers/nvk_app_workarounds.h',
-  'nvkmd/nouveau/nvkmd_nouveau.h',
-  'nvkmd/nouveau/nvkmd_nouveau_ctx.c',
-  'nvkmd/nouveau/nvkmd_nouveau_dev.c',
-  'nvkmd/nouveau/nvkmd_nouveau_mem.c',
-  'nvkmd/nouveau/nvkmd_nouveau_pdev.c',
-  'nvkmd/nouveau/nvkmd_nouveau_va.c',
   'nvkmd/nvkmd.c',
   'nvkmd/nvkmd.h',
 )
+
+nvk_with_darwin = host_machine.system() == 'darwin'
+if nvk_with_darwin
+  nvk_files += files(
+    'nvkmd/darwin/nvkmd_darwin.h',
+    'nvkmd/darwin/nvkmd_darwin.c',
+  )
+else
+  nvk_files += files(
+    'nvkmd/nouveau/nvkmd_nouveau.h',
+    'nvkmd/nouveau/nvkmd_nouveau_ctx.c',
+    'nvkmd/nouveau/nvkmd_nouveau_dev.c',
+    'nvkmd/nouveau/nvkmd_nouveau_mem.c',
+    'nvkmd/nouveau/nvkmd_nouveau_pdev.c',
+    'nvkmd/nouveau/nvkmd_nouveau_va.c',
+  )
+endif
 
 nvkcl_files = files(
   'cl/nvk_query.cl',
@@ -266,6 +277,15 @@ nvk_rust_h = custom_target(
 )
 
 nvk_flags = []
+nvk_link_args = []
+
+if nvk_with_darwin
+  nvk_flags += '-DNVK_HAS_DARWIN'
+  nvk_deps += dependency('appleframeworks', modules : ['IOKit', 'CoreFoundation'])
+  nvk_include_directories += include_directories(get_option('nvk-darwin-abi-dir'))
+  # The generated entrypoint tables reference weak symbols nothing defines; ld64 needs them allowed (as Turnip on Darwin).
+  nvk_link_args += ['-Wl,-undefined,dynamic_lookup']
+endif
 
 nvk_build_id = get_option('nvk-build-id')
 if nvk_build_id != ''
@@ -297,7 +317,7 @@ libnvk = static_library(
 libvulkan_nouveau = shared_library(
   'vulkan_nouveau',
   link_whole : [libnvk],
-  link_args: [ld_args_build_id, ld_args_bsymbolic, ld_args_gc_sections],
+  link_args: [ld_args_build_id, ld_args_bsymbolic, ld_args_gc_sections, nvk_link_args],
   gnu_symbol_visibility : 'hidden',
   install : true,
 )

@@ -121,6 +121,7 @@ struct nvkmd_info {
    bool has_map_fixed;
    bool has_overmap;
    bool has_compression;
+   bool has_host_import;
 };
 
 struct nvkmd_pdev_ops {
@@ -181,6 +182,14 @@ struct nvkmd_dev_ops {
    VkResult (*import_dma_buf)(struct nvkmd_dev *dev,
                               struct vk_object_base *log_obj,
                               int fd, struct nvkmd_mem **mem_out);
+
+   /* Optional (kmd_info.has_host_import): memory over the caller's own
+    * pages at host_ptr, for VK_EXT_external_memory_host.
+    */
+   VkResult (*import_host_mem)(struct nvkmd_dev *dev,
+                               struct vk_object_base *log_obj,
+                               void *host_ptr, uint64_t size_B,
+                               struct nvkmd_mem **mem_out);
 
    VkResult (*alloc_va)(struct nvkmd_dev *dev,
                         struct vk_object_base *log_obj,
@@ -384,6 +393,14 @@ nvkmd_try_create_pdev_for_drm(struct _drmDevice *drm_device,
                               enum nvk_debug debug_flags,
                               struct nvkmd_pdev **pdev_out);
 
+#ifdef NVK_HAS_DARWIN
+/* Darwin has no DRM device list; there is at most one GPU (the IOKit service). */
+VkResult MUST_CHECK
+nvkmd_darwin_try_create_pdev(struct vk_object_base *log_obj,
+                             enum nvk_debug debug_flags,
+                             struct nvkmd_pdev **pdev_out);
+#endif
+
 static inline void
 nvkmd_pdev_destroy(struct nvkmd_pdev *pdev)
 {
@@ -462,6 +479,12 @@ VkResult MUST_CHECK
 nvkmd_dev_import_dma_buf(struct nvkmd_dev *dev,
                          struct vk_object_base *log_obj,
                          int fd, struct nvkmd_mem **mem_out);
+
+VkResult MUST_CHECK
+nvkmd_dev_import_host_mem(struct nvkmd_dev *dev,
+                          struct vk_object_base *log_obj,
+                          void *host_ptr, uint64_t size_B,
+                          struct nvkmd_mem **mem_out);
 
 struct nvkmd_mem *
 nvkmd_dev_lookup_mem_by_va(struct nvkmd_dev *dev,
