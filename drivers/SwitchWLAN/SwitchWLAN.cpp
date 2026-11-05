@@ -280,6 +280,7 @@ private:
     // Once a boot, after the first bring-up: GET of every AWDL variable either firmware generation uses, one os_log
     // line each (status, bytes), so one boot settles which AWDL API this firmware's table has (gAwdlProbe).
     void awdlProbe();
+    void monitorProbe();
 
     // Worker only.
     swlan::wpa::Supplicant sup_;
@@ -838,6 +839,7 @@ bool SwitchWLAN::radioInit()
     IOLog("SwitchWLAN: radio up, MAC %02x:%02x:%02x:%02x:%02x:%02x, country %s/%d (%s)\n", mac_[0], mac_[1], mac_[2],
           mac_[3], mac_[4], mac_[5], abbrev, static_cast<int>(swlan::le32(country + 4)), code);
     if (capAwdl_) awdlProbe();  // once a boot, while the radio is up and before the station uses it
+    monitorProbe();
     locked([&] {
         status_.state = powerOn_ ? SWLAN_STA_IDLE : SWLAN_STA_OFF;
         status_.power = powerOn_;
@@ -2566,6 +2568,26 @@ int SwitchWLAN::awdlOpen(const swlan_awdl_caps **caps)
 // firmware generation sets, read with GET on the station's interface. UNSUPPORTED means the name is not in the
 // firmware's table; any other answer means its handler exists. The interface_create query is brcmf_feat_awdl_check's
 // (version 3 = the series' AWDL interface). os_log only: status, bytes returned, the first 16 of them.
+void SwitchWLAN::monitorProbe()
+{
+    static bool tried;
+    if (tried) return;
+    tried = true;
+    for (unsigned i = 0; i < BCM_MONITOR_PROBE_COUNT; ++i) {
+        uint8_t request[32], reply[64] = {};
+        size_t got = 0;
+        int16_t fw = 0;
+        const size_t n = bcm_monitor_probe_request(i, request, sizeof(request));
+        const bool ok = i == BCM_MONITOR_PROBE_GET_MONITOR
+                            ? ioctlOn(0, BCM_WLC_GET_MONITOR, nullptr, 0, 4, reply, &got, &fw)
+                            : n && ioctlOn(0, WLC_GET_VAR, request, n, sizeof(reply), reply, &got, &fw);
+        const int status = ok ? 0 : fw ? fw : BCM_PROBE_NO_ANSWER;
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: monitor probe: %s: %d %s, %u bytes, first word %u",
+               bcm_monitor_probe_names[i], status, bcme_name(status), static_cast<unsigned>(ok ? got : 0),
+               static_cast<unsigned>(ok && got >= 4 ? swlan::le32(reply) : 0));
+    }
+}
+
 void SwitchWLAN::awdlProbe()
 {
     static bool tried;

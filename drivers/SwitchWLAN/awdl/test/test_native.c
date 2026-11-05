@@ -328,6 +328,20 @@ static void probe_7_35_252_108(struct bcm_awdl_probe *p)
     p->done = 1;
 }
 
+static void test_monitor_probe(void)
+{
+    uint8_t b[32];
+    NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_GET_MONITOR, b, sizeof b) == 0);
+    NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_PROMISC_LEVEL, b, sizeof b) == 22 &&
+           !memcmp(b, "monitor_promisc_level", 22));
+    NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_STA_MONITOR, b, sizeof b) == 12 &&
+           !memcmp(b, "sta_monitor", 12));
+    NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_STA_MONITOR, b, 11) == 0);
+    NCHECK(bcm_monitor_probe_request(BCM_MONITOR_PROBE_COUNT, b, sizeof b) == 0);
+    NCHECK(BCM_WLC_GET_MONITOR == 107 &&
+           !strcmp(bcm_monitor_probe_names[BCM_MONITOR_PROBE_GET_MONITOR], "WLC_GET_MONITOR"));
+}
+
 static void test_radio_verdict(void)
 {
     struct bcm_awdl_probe p;
@@ -873,6 +887,7 @@ void test_native_main(void)
 {
     test_encoders();
     test_probe();
+    test_monitor_probe();
     test_radio_verdict();
     test_down_interface();
     test_schedule();

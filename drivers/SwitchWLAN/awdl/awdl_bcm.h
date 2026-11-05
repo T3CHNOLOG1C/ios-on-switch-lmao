@@ -122,6 +122,21 @@ enum bcm_awdl_api {
 enum bcm_awdl_api bcm_awdl_api_of(const struct bcm_awdl_probe *p);
 const char *bcm_awdl_api_name(enum bcm_awdl_api api);
 
+// Monitor mode, the other way to AirDrop (monitor + injection, the soft backend). 7.35.252.108 lists neither "monitor"
+// nor "rtap" in cap, yet its RAM image registers monitor_promisc_level and sta_monitor; the chip's ROM holds the rest
+// of the ioctl and iovar tables. GET only, like the AWDL probe. sta_monitor watches given stations while associated,
+// so it is not a monitor mode itself.
+enum bcm_monitor_probe_item {
+    BCM_MONITOR_PROBE_GET_MONITOR,  // WLC_GET_MONITOR, an ioctl rather than a variable
+    BCM_MONITOR_PROBE_PROMISC_LEVEL,
+    BCM_MONITOR_PROBE_STA_MONITOR,
+    BCM_MONITOR_PROBE_COUNT
+};
+enum { BCM_WLC_GET_MONITOR = 107 };
+extern const char *const bcm_monitor_probe_names[BCM_MONITOR_PROBE_COUNT];
+// The GET_VAR request for a variable item; 0 for the ioctl item, past the table or when `size` is too small.
+size_t bcm_monitor_probe_request(unsigned item, uint8_t *out, size_t size);
+
 enum awdl_radio_mode {
     AWDL_RADIO_UNDECIDED = -1,  // the radio has not read its capability list or run the probe yet: ask again
     AWDL_RADIO_OFF = 0,

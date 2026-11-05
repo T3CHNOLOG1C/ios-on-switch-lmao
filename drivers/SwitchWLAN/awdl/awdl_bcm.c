@@ -113,6 +113,18 @@ size_t bcm_probe_request(unsigned item, uint8_t *out, size_t size)
     return n + params;
 }
 
+const char *const bcm_monitor_probe_names[BCM_MONITOR_PROBE_COUNT] = {"WLC_GET_MONITOR", "monitor_promisc_level",
+                                                                      "sta_monitor"};
+
+size_t bcm_monitor_probe_request(unsigned item, uint8_t *out, size_t size)
+{
+    if (item == BCM_MONITOR_PROBE_GET_MONITOR || item >= BCM_MONITOR_PROBE_COUNT) return 0;
+    const size_t n = strlen(bcm_monitor_probe_names[item]) + 1;
+    if (n > size) return 0;
+    memcpy(out, bcm_monitor_probe_names[item], n);
+    return n;
+}
+
 void bcm_probe_record(struct bcm_awdl_probe *p, unsigned item, int status, const uint8_t *reply, size_t length)
 {
     if (item >= BCM_PROBE_COUNT) return;
