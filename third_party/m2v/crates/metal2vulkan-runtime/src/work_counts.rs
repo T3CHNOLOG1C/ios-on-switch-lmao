@@ -13,6 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// A device's counters (`DeviceShared::counts`), each only ever added to.
 #[derive(Default)]
 pub(crate) struct Counters {
+    /// `replace_region` and `get_bytes` calls by route ([`TexelCopyRoute`], ioswitch).
+    texel_copy_routes: [AtomicU64; TexelCopyRoute::COUNT],
     command_pools_made: AtomicU64,
     live_tables_uploaded: AtomicU64,
     timeline_waits: AtomicU64,
@@ -126,7 +128,31 @@ pub(crate) enum PoolCompiled {
     IndirectDraw,
 }
 
+/// How a host call's texel copy went (ioswitch): `replace_region` into the texture's bytes on the
+/// CPU (a texture over a buffer or a heap's bytes), on the host into its image
+/// (`texture/host_copy.rs`), staged for the next submission, or by a submission waited for
+/// (`texture/staging_copy.rs`'s queue or the device's own); `get_bytes` alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TexelCopyRoute {
+    ReplaceBytes,
+    ReplaceHost,
+    ReplaceDeferred,
+    ReplaceWaited,
+    ReadBytes,
+    ReadHost,
+    ReadWaited,
+}
+
+impl TexelCopyRoute {
+    pub(crate) const COUNT: usize = 7;
+}
+
 impl Counters {
+    /// A host call's texel copy went by `route`.
+    pub(crate) fn texel_copy(&self, route: TexelCopyRoute) {
+        self.texel_copy_routes[route as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
     /// `count` commands of `kind` were recorded (`PoolCompiled`).
     pub(crate) fn pool_compiled(&self, kind: PoolCompiled, count: u64) {
         let counter = match kind {
@@ -758,6 +784,12 @@ pub struct WorkCounts {
     pub spare_block_reuses: u64,
     /// Bytes of the spare dedicated blocks kept now (`memory.rs`, ioswitch).
     pub spare_block_bytes: u64,
+    /// `replace_region` calls by route (ioswitch): into the texture's bytes on the CPU, on the
+    /// host into its image, staged for the next submission, and by a submission waited for.
+    pub replace_region_routes: [u64; 4],
+    /// `get_bytes` calls by route (ioswitch): from the texture's bytes, on the host from its
+    /// image, and by a submission waited for.
+    pub get_bytes_routes: [u64; 3],
     /// Stand-ins made for textures over detached bytes (`texture/stand_in.rs`): one per distinct
     /// image plan among the textures detached at once.
     pub stand_ins_made: u64,
@@ -1043,6 +1075,13 @@ impl Device {
             host_imports_live: census.imported,
             spare_block_reuses: spares.0,
             spare_block_bytes: spares.1,
+            replace_region_routes: std::array::from_fn(|i| {
+                counters.texel_copy_routes[i].load(Ordering::Relaxed)
+            }),
+            get_bytes_routes: std::array::from_fn(|i| {
+                counters.texel_copy_routes[TexelCopyRoute::ReadBytes as usize + i]
+                    .load(Ordering::Relaxed)
+            }),
             stand_ins_made: counters.stand_ins_made.load(Ordering::Relaxed),
             stand_in_bytes: counters.stand_in_bytes.load(Ordering::Relaxed),
             stale_detached_reaches: counters.stale_detached_reaches.load(Ordering::Relaxed),

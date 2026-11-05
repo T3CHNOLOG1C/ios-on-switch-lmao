@@ -57,6 +57,7 @@
 //!   blits of textures over buffers, are refused `NotImplemented`.
 
 use super::address::{ObjectsToken, RangeToken};
+use super::work_counts::TexelCopyRoute;
 use super::key_hash::KeyMap;
 use super::address_map::AddressModeMap;
 use super::attachment_stand_in::KeptBacking;
@@ -3401,9 +3402,11 @@ impl Device {
             // does.
             return Err(Error::NotImplemented(RuntimeGap::Textures));
         }
-        // Dropping `image` on failure releases everything above.
+        // Dropping `image` on failure releases everything above. Started on the host only where
+        // asked ([`host_starts`]): else its move waits for the next submission as any image's,
+        // and its host copies wait for that move (`Texture::read_region`).
         if let (true, Some((length, copies)), Some(functions)) =
-            (host_copies, &zero, self.shared().host_copies.as_ref())
+            (host_copies && host_starts(), &zero, self.shared().host_copies.as_ref())
         {
             let zeros = vec![0; *length as usize];
             let copies: Vec<vk::BufferImageCopy> = copies.iter().map(buffer_image_copy).collect();
@@ -3425,7 +3428,7 @@ impl Device {
         // Its texels are written after (`Start::Moved`). Dropping `image` on failure releases
         // everything above.
         if let (true, true, Some(functions)) =
-            (moved, host_copies, self.shared().host_copies.as_ref())
+            (moved, host_copies && host_starts(), self.shared().host_copies.as_ref())
         {
             // SAFETY: the image is live, made with host-transfer usage and bound to memory of its
             // own, which nothing used yet.
@@ -4200,6 +4203,17 @@ pub(super) fn twin_copy(copy: vk::BufferImageCopy) -> vk::BufferImageCopy {
 }
 
 /// The Vulkan copy region of `region`, from the start of a tightly packed buffer.
+/// Whether a new image with host-transfer usage starts on the host, moved to `GENERAL` and its
+/// zeros written there (`texture/host_copy.rs`): only with `M2V_HOST_START` in the environment
+/// (ioswitch). On TegraGM20B each host copy cleans and invalidates the image's whole plane, so
+/// zeros written that way cost every new `Shared` texture a pass over its bytes on the CPU, where
+/// its move otherwise rides the next submission; its `get_bytes` copies on the host once that move
+/// went (`Texture::read_region`), where a submission waited behind the queue's work before.
+pub(super) fn host_starts() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("M2V_HOST_START").is_some())
+}
+
 pub(super) fn buffer_image_copy(region: &ImageRegion) -> vk::BufferImageCopy {
     let [x, y, z] = region.origin;
     let [width, height, depth] = region.size;
@@ -5364,16 +5378,19 @@ impl Texture {
             }
             None => bytes,
         };
+        let counts = &self.device().shared().counts;
         let image = match &self.0.storage {
             Storage::Image(image) => image,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => {
-                return texels.write(CALL, &image_region, &host, bytes)
+                counts.texel_copy(TexelCopyRoute::ReplaceBytes);
+                return texels.write(CALL, &image_region, &host, bytes);
             }
         };
         // A heap shadow's texels are the heap's bytes.
         if let Owner::HeapShadow(shadow) = &image.owner {
+            counts.texel_copy(TexelCopyRoute::ReplaceBytes);
             return shadow.write(CALL, image.plan(), &image_region, &host, bytes);
         }
         // A two-plane texture's color words over its texels as they are, the alpha words kept.
@@ -5388,10 +5405,15 @@ impl Texture {
         // A shadowed view's texels are its texture's (`texture/view_shadow.rs`).
         let truth = view_shadow::truth(image);
         let copy = buffer_image_copy(&image_region);
-        if truth.takes_host_copies() {
+        // An image whose copies wait for the next submission takes the caller's bytes there
+        // (ioswitch): a host copy on TegraGM20B maps, cleans and invalidates the whole plane each
+        // call (NVK's `nvk_image_plane_map`), where the staged copy is one memcpy, and its start
+        // waits for that submission anyway ([`host_starts`]).
+        if truth.takes_host_copies() && !truth.defers_copies() {
             let mut packed = vec![0; host.packed_len() as usize];
             host.pack(bytes, &mut packed);
             if truth.host_write(copy, &packed)? {
+                counts.texel_copy(TexelCopyRoute::ReplaceHost);
                 if denormal {
                     self.degrade_depth_denormals(CALL, image_region.aspect, true);
                 }
@@ -5405,6 +5427,7 @@ impl Texture {
             let mut packed = vec![0; host.packed_len() as usize];
             host.pack(bytes, &mut packed);
             if truth.staging_write(copy, &packed)? {
+                counts.texel_copy(TexelCopyRoute::ReplaceWaited);
                 // A decoded twin's decode, staged; on the CPU while a batch may read it.
                 return truth.decode_written(&image_region, packed);
             }
@@ -5441,10 +5464,14 @@ impl Texture {
             let firsts = &device.shared().textures.first_moves;
             // Past the bound, the copies staged so far are made now, by a submission waited for.
             if firsts.register_texels(keeper, staged) {
+                counts.texel_copy(TexelCopyRoute::ReplaceWaited);
                 truth.submit_copy(|_, _| {})?;
+            } else {
+                counts.texel_copy(TexelCopyRoute::ReplaceDeferred);
             }
             return Ok(());
         }
+        counts.texel_copy(TexelCopyRoute::ReplaceWaited);
         let mut staging = Staging::new(device, host.packed_len())?;
         host.pack(bytes, staging.bytes());
         let (buffer, twin, image) = (staging.raw, self.twin_image(), truth.raw.get());
@@ -5613,24 +5640,34 @@ impl Texture {
         host: &HostLayout,
         bytes: &mut [u8],
     ) -> Result<(), Error> {
+        let counts = &self.device().shared().counts;
         let image = match &self.0.storage {
             Storage::Image(image) => image,
             Storage::Texels(texels)
             | Storage::Alias { texels, .. }
             | Storage::Shadow { texels, .. } => {
-                return texels.read(call, image_region, host, bytes)
+                counts.texel_copy(TexelCopyRoute::ReadBytes);
+                return texels.read(call, image_region, host, bytes);
             }
         };
         // A heap shadow's texels are the heap's bytes.
         if let Owner::HeapShadow(shadow) = &image.owner {
+            counts.texel_copy(TexelCopyRoute::ReadBytes);
             return shadow.read(call, image.plan(), image_region, host, bytes);
         }
         // A shadowed view's texels are its texture's (`texture/view_shadow.rs`).
         let truth = view_shadow::truth(image);
         let copy = buffer_image_copy(image_region);
-        if truth.takes_host_copies() {
+        // On the host once the image's move went to a submission and no host call's copy into it
+        // waits for one (ioswitch, [`host_starts`]): the program reads texels a command buffer
+        // wrote once it completed, as on Metal, and that command buffer's batch made the move.
+        let firsts = &self.device().shared().textures.first_moves;
+        let at: *const Image = &**truth;
+        let moved = !truth.move_waits() && !firsts.texels_wait(at.cast());
+        if truth.takes_host_copies() && moved {
             let mut packed = vec![0; host.packed_len() as usize];
             if truth.host_read(copy, &mut packed)? {
+                counts.texel_copy(TexelCopyRoute::ReadHost);
                 host.unpack(&packed, bytes);
                 return Ok(());
             }
@@ -5638,10 +5675,12 @@ impl Texture {
         if truth.takes_staging_copies() {
             let mut packed = vec![0; host.packed_len() as usize];
             if truth.staging_read(copy, &mut packed)? {
+                counts.texel_copy(TexelCopyRoute::ReadWaited);
                 host.unpack(&packed, bytes);
                 return Ok(());
             }
         }
+        counts.texel_copy(TexelCopyRoute::ReadWaited);
         let device = self.device();
         let mut staging = Staging::new(device, host.packed_len())?;
         let (buffer, image) = (staging.raw, truth.raw.get());
