@@ -3282,7 +3282,8 @@ impl Device {
     /// its storage mode: a heap texture's in memory of its own where its bytes in the heap are no
     /// layout of its texels (`texture/heap.rs`, `AliasRoute::Lossless`), as a heap's textures hold
     /// what their bytes held; and the shadow of a texture over a buffer whose copy in writes every
-    /// texel of every aspect before any command reads it (`storage_over_buffer`).
+    /// texel of every aspect before any command reads it (`storage_over_buffer`, and a two-plane
+    /// texture's over a surface's planes, `texture/surface_two_planes.rs`).
     fn new_image_as_it_lies(
         &self,
         plan: ImagePlan,
