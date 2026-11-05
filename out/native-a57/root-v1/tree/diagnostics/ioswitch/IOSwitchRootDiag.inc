@@ -139,6 +139,7 @@ extern int switch_battery_start(void);
 extern int switch_touch_start(void);
 extern int switch_buttons_start(void);
 extern int switch_motion_start(void);
+extern int switch_sensors_start(void); /* thermalmonitord's HID temperature sensors, after SwitchThermal/SwitchBattery */
 extern int switch_als_start(void);       /* on unless switch-als=0; after SwitchTouch, which powers the sensor (LDO6) */
 extern int switch_bluetooth_start(void); /* no-op unless switch-bt=1; runs its bring-up on its own thread */
 extern int switch_joycon_start(void);    /* no-op unless switch-joycon-rail=1 */
@@ -174,6 +175,9 @@ static void ioswitch_board_thread(void *parameter __unused, wait_result_t result
         printf("IOSwitch: SwitchThermal did not start\n");
     if (ioswitch_board_enabled("switch-battery") && switch_battery_start())
         printf("IOSwitch: SwitchBattery did not start\n");
+    /* Right after its sources: the 38 services should exist before thermalmonitord first looks (it rebuilds a partial
+     * list only every 20 s) and before watchdogd's open asks for them (it waits for them, at most 20 s). */
+    if (switch_sensors_start()) printf("IOSwitch: SwitchSensors did not start\n");
     if (ioswitch_board_enabled("switch-touch") && switch_touch_start()) printf("IOSwitch: SwitchTouch did not start\n");
     if (ioswitch_board_enabled("switch-buttons") && switch_buttons_start())
         printf("IOSwitch: SwitchButtons did not start\n");

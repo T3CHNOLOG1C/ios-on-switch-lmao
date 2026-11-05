@@ -40,6 +40,29 @@ void switch_perf_hint(unsigned int hint);
 // context (one atomic load): kprof prints it next to its measured per-core clock.
 unsigned int switch_perf_cpu_khz(void);
 
+// The thermal service's last good TMP451 reading: the SoC diode and the PCB (m C) and when it was taken (mach absolute
+// time). 0 before the first one or after the sensor was lost. Any context.
+int switch_thermal_tmp451(int *soc_millic, int *pcb_millic, unsigned long long *at);
+
+// iPadOS's CPU ceiling (thermalmonitord's DVD factor on ApplePMGR, a 16.16 share of the top clock; 0x10000 = none,
+// kits/qemu/ShengPlatformPower.cpp): the CPU governor's highest point is also at or below it, at once. Kept across
+// governor restarts. Thread context (thermalmonitord's property write). Returns the governor's ceiling now in kHz, 0
+// when the CPU is not governed (PLL or fixed DFLL mode: the ceiling has no effect then).
+unsigned int switch_perf_cltm_ceiling(unsigned int fraction16);
+
+// thermalmonitord's HID temperature sensors (SwitchSensors.cpp, CONTRACT.md): SOC_THERM's six on-die sensors brought
+// up, then one HID service per sensor the J120AP thermal model expects, each answering from the Switch sensor nearest
+// to what it measures. Board thread, after SwitchThermal and SwitchBattery; 0, or -1 (one log line) when nothing could
+// be published (thermalmonitord then stays unhealthy and the userspace watchdog stays off, see below).
+int switch_sensors_start(void);
+// Whether every sensor thermalmonitord checks can answer now: all HID services hooked, SOC_THERM's readings valid, a
+// TMP451 and a battery reading. Waits up to wait_ms for that, woken by switch_sensors_note(); false with the missing
+// parts in `why` once the time is up. Thread context. NativeIOSwitchWatchdog asks once, at watchdogd's first open.
+int switch_sensors_wait_ready(unsigned int wait_ms, char *why, unsigned long len);
+// A source changed state (SwitchThermal's and SwitchBattery's readings, a HID service hooked): wakes the wait above.
+// Any thread context, cheap.
+void switch_sensors_note(void);
+
 // PMIC services (SwitchPMIC.cpp): logs the CPU/EMC clock line, turns on the Wi-Fi/Bluetooth module's 32 kHz sleep
 // clock (MAX77620 GPIO4 as 32K_OUT1 and the 32K output enable, as L4T does; Bluetooth needs it), publishes the
 // MAX77620 RTC as the "IORTC" resource, installs PE_halt_restart (Shut Down / Restart), sets the EMC clock through the

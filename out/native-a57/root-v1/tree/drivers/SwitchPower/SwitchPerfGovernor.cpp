@@ -22,6 +22,10 @@
 //     System Boot Complete (XNU's boot band lift) or kBootFloorUs.
 //   * Thermal: SwitchThermal's DFLL floor/cap indices (L4T's T210B01 trips) become the governor's lowest/highest
 //     points (limits()), applied at once. The DFLL's own voltage cap stays in force underneath in hardware.
+//   * iPadOS's thermal ceiling: thermalmonitord (CLTM) caps the CPU with the DVD factor it writes on ApplePMGR
+//     (kits/qemu/ShengPlatformPower.cpp hands it to switch_perf_cltm_ceiling, SwitchPower.h): the highest point is
+//     also at or below that share of the top clock (SwitchGovernor.h switch_gov_index_at_fraction), whichever ceiling
+//     is lower. Applied at once, from thermalmonitord's thread; kept across a governor restart.
 // The callouts and hints only decide; when the clock must move they wake SwitchThermal's work loop (its software
 // interrupt source), which owns the DFLL and calls take()/applied(). Every callout path is a few loads and stores under
 // one spin lock taken with interrupts masked (the perfcontrol rules, machine_routines.h), and never blocks.
@@ -75,6 +79,8 @@ unsigned gApplied;     // its index
 switchperf::Signal gSignal;
 void *gCtx;
 uint64_t gWindow, gBootUntil, gLogStart, gLogDue;
+uint32_t gFloorMv, gCapMv;  // the DFLL's thermal floor and cap last given to limits() (0: none)
+uint32_t gCltm = 0x10000u;  // thermalmonitord's CPU ceiling, a 16.16 share of the top clock (atomic loads)
 // per log window
 uint32_t gWindows, gBusyPeak, gHints[5];
 uint64_t gBusySum;
@@ -144,6 +150,18 @@ bool claimSignal(uint64_t now)
     return __atomic_exchange_n(&gPending, 1u, __ATOMIC_ACQ_REL) == 0;
 }
 
+// Under gLock: the limits in force from the DFLL's thermal floor/cap and thermalmonitord's ceiling. Returns whether the
+// clock must move (the signal claimed).
+bool applyLimits(uint64_t now)
+{
+    const unsigned lo = switch_gov_index_at_mv(gMv, gGov.count, gFloorMv);
+    unsigned hi = gCapMv ? switch_gov_index_at_mv(gMv, gGov.count, gCapMv) : gGov.count - 1;
+    const unsigned cltm = switch_gov_index_at_fraction(gGov.khz, gGov.count, __atomic_load_n(&gCltm, __ATOMIC_RELAXED));
+    if (cltm < hi) hi = cltm;
+    switch_gov_limit(&gGov, lo, hi, now);
+    return gRunning && claimSignal(now);
+}
+
 // XNU's perfcontrol deadline: the window's tick (interrupts masked; context-switch, quantum or idle-wake context).
 void deadlinePassed(uint64_t)
 {
@@ -206,6 +224,7 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
         gPrevTotal[c] = 0;
     }
     gPrevNow = now;
+    gFloorMv = gCapMv = 0;
     gApplied = gGov.cur;
     __atomic_store_n(&gAppliedKhz, gGov.khz[gGov.cur], __ATOMIC_RELEASE);
     gSignal = signal;
@@ -218,7 +237,9 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
     for (uint32_t &h : gHints) h = 0;
     __atomic_store_n(&gPending, 0u, __ATOMIC_RELEASE);
     __atomic_store_n(&gRunning, true, __ATOMIC_RELEASE);
+    const bool wake = applyLimits(now);  // a ceiling thermalmonitord set before this start: the clock moves down
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
+    if (wake) gSignal(gCtx);
     sched_perfcontrol_register_callbacks(&gCallbacks, 0);
     sched_perfcontrol_update_callback_deadline(now + gWindow);
     return true;
@@ -324,12 +345,29 @@ void switchperf::limits(unsigned floorMv, unsigned capMv)
     if (!gLock || !running()) return;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    const unsigned lo = switch_gov_index_at_mv(gMv, gGov.count, floorMv);
-    const unsigned hi = capMv ? switch_gov_index_at_mv(gMv, gGov.count, capMv) : gGov.count - 1;
-    switch_gov_limit(&gGov, lo, hi, now);
-    const bool wake = gRunning && claimSignal(now);
+    gFloorMv = floorMv;
+    gCapMv = capMv;
+    const bool wake = applyLimits(now);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
     if (wake) gSignal(gCtx);
+}
+
+extern "C" unsigned int switch_perf_cltm_ceiling(uint32_t fraction16)
+{
+    if (fraction16 > 0x10000u) fraction16 = 0x10000u;
+    __atomic_store_n(&gCltm, fraction16, __ATOMIC_RELAXED);
+    if (!gLock || !__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE)) return 0;
+    const uint64_t now = mach_absolute_time();
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
+    bool wake = false;
+    unsigned khz = 0;
+    if (gRunning) {
+        wake = applyLimits(now);
+        khz = gGov.khz[gGov.hi];
+    }
+    IOSimpleLockUnlockEnableInterrupt(gLock, state);
+    if (wake) gSignal(gCtx);
+    return khz;
 }
 
 extern "C" void switch_perf_hint(unsigned int hint)

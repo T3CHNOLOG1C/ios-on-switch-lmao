@@ -1,0 +1,230 @@
+# thermalmonitord (CLTM) on the Switch: the contract
+
+iPadOS 17.7.11 (21H461) runs as iPad7,1 / J120AP. Its thermal daemon, `/usr/libexec/thermalmonitord`
+(ThermalMonitor-1952.120.7), reads every temperature sensor of the J120AP thermal model every 5 s, drives CLTM's
+mitigation from them, and reports its health to watchdogd. Before r15-thermal none of its sensors existed, so it
+reported unhealthy from boot (`current 0, mask 3fffffffff, expected 3fffffffff ... Missing sensor(s): TG0B ...`) and
+watchdogd killed it at 60 s and 120 s and panicked at ~199 s (r7t, r7u).
+
+**[V]** = verified (decompiled/disassembled 21H461 code, the plist itself, IOHIDFamily-2031.120.4 kernel source, or
+device logs). **[I]** = inferred (consistent with everything seen, not traced end to end). **[HW]** = needs the next
+boot to confirm.
+
+Sources: `thermalmonitord` and `System/Library/ThermalMonitor/*.plist` extracted from the 21H461 root image
+(`bundles/ipados-17.7.11-tcg/disks/os.raw`), decompiled with Ghidra 11 headless; class/selector names from
+`ipsw macho info --objc`; IOHIDFamily-2031.120.4 (out/agent-scratch/repos/IOHIDFamily, the 21H461 kext's version);
+L4T `CTCaer/switch-l4t-kernel-4.9` 2d0059f (`drivers/thermal/tegra/`); device logs
+`out/switch/device-logs/boot-1105-1224/boot.logarchive` (r7u, boot 12:19:55). Work files:
+`out/agent-scratch/r15-thermal/` (extract/, tmd.ghidra.c, tmd-objc.txt).
+
+## 1. Where the expected sensors come from
+
+- **[V]** `_thermalMonitor_init`: `sysctlbyname("hw.model")` = `J120AP`; the model is
+  `/System/Library/ThermalMonitor/` + model + `-Info.plist`. A model containing `DEV` (a dev board) turns the
+  watchdog health check off and fakes the battery sensor; ours does not.
+- **[V]** The product class is chosen by a hash of the model string (even characters add, odd ones multiply):
+  `J120AP` = 0xd77850 -> `tm2c2215485370d730a0de95e9234264e9` (a `CommonProduct` that only overrides
+  `updateAllThermalLoad:` and `updateCoreAnalyticsInfo`).
+- **[V]** `J120AP-Info.plist` `Sensors`: 43 entries. 38 have `synthSensor` false and are HID sensors; 5 are virtual
+  (SS0F, SS0C, TSBH SoCSkin, TS0A Ambient, TSFD CGCenterSkin), computed by thermalmonitord, with
+  `requiresWatchDog` false.
+- **[V]** `-[HidSensors loadProductTemperatureParameters:]`: `requiresWatchDog` defaults to true, so the watchdog
+  mask has one bit per entry index 0..37 = **0x3fffffffff**. `infoOnly` sensors (TP1d, TP3d-TP5d, TP7d, TR1d, TR2d,
+  TP0j, TQ0B, every `Th*i`/`Tc*i`) are not read unless info-only sensors are active (a -127 C placeholder is stored
+  instead), but **their service must still be matched**: the bit is set for every sensor whose service exists.
+
+## 2. How a sensor is found and read
+
+- **[V]** `-[HidSensors createHIDEventSystemObject]`: `IOHIDEventSystemClientCreate`, matching
+  `{PrimaryUsagePage 0xff00, PrimaryUsage 5}`, `{0xff08, 1}` (power sensors) and `{0x20, 0x31}`;
+  `copySensorArray` keeps services with page 0x20/0xff08/0xff00 and usage 1/5/0x31. None: `no HID services (5)` /
+  `Could not create HIDArray (will retry)` (exactly what r7u logged every 5 s).
+- **[V]** Matching a service to a sensor (`FUN_10000fcb8`): the service's `Product` (CFString) equal to the sensor's
+  `matchName`; otherwise, for a 4-character key, the service's `LocationID` equal to the 4CC as a big-endian integer.
+- **[V]** The read loop is a 5 s `CFRunLoopTimer` (`FUN_100005b10`) calling `-[HidSensors getHIDSensorDict]`: for each
+  matched service, first the SMC (`getTemperatureFromSMCForKey:`; no AppleSMC here, so -1), then
+  **`IOHIDServiceClientCopyEvent(service, 15 /* kIOHIDEventTypeTemperature */, 0, 0)`** (25 for power sensors) and
+  **`IOHIDEventGetFloatValue(event, 0xf0000 /* kIOHIDEventFieldTemperatureLevel */)`**, degrees C as a float, times
+  100 truncated to an int. No event: `Could not get event from service (%@)`. Valid only if
+  `(uint32)(value - 15000) > 0xffffb5c8`, i.e. -40 C < t < 150 C (`isTempSensorDataValid:value:`). Event timestamps
+  matter only for `staleDefault` sensors (none on J120AP).
+- **[V]** A per-sensor IIR filter (`filterParams` = time constant in 5 s samples; `filterParams_INTMIN`: the first
+  sample initialises it), then `FUN_10000613c` sets the sensor's bit in `current`. After a full pass,
+  `(mask & current) == expected` logs `sensors: ...`; otherwise every 4th pass `partial sensors: count %d, current
+  %llx, mask %llx, expected %llx` and the service list is rebuilt (`resetHIDSensorDictionary` releases the cached
+  services array, +0x280, so the next pass copies the services again). So a list taken while services were still being
+  published recovers within 4 passes (20 s), inside watchdogd's 60 s; SwitchSensors starts right after SwitchBattery in
+  the board thread to make that rare.
+- **[V]** PMU tcal (TP0Z): `calibrationResistorSensor` = TP0Z's index; offset = `calibrationResistorTempDefault`
+  (CommonProduct +0x24; J120AP never sets it: **0**) minus the filtered tcal (time constant 6000 samples), added to
+  every `TP?d`/`TP?[A-Z]` sensor (`fourCharCodeNeedsPMUtcal:`). A tcal of 0.00 C leaves them unchanged.
+- **[V]** J120AP's model (`tm2c22...updateAllThermalLoad:`, constants read from the binary's `__TEXT,__const`), in
+  centi-degrees: **SoCSkin TSBH = 68.76 + 0.57 TG0B + 0.42 TP8d**; Ambient TS0A = 155.88 + 1.14 TP2d - 0.29 TP8d;
+  CGCenterSkin TSFD = TG0B. Hotspots (plist): `DieTempHS` target 85 C on `dieTempMaxAverage` (the highest of the
+  `Th*a`/`Tc*a` "avg die" set), `SoCHighHS` 49 C and `SoCLowHS` 43 C on TSBH (PI loops, kp/ki in the plist), each
+  feeding the decision tables (`HotSpotDecisionTableNormal1..3`: dtCPU, dtGPU, dtBacklight, dtCharger, dtRadio,
+  dtRefreshRate, dtThermalLevel).
+- **[I]** The userspace path: `IOHIDServiceClientCopyEvent` -> backboardd's IOHIDEventSystem -> the kernel service's
+  `IOHIDEventServiceUserClient::_copyEvent` -> `IOHIDEventService::copyEvent(type, matching, options)`. The kernel half
+  is **[V]** (IOHIDFamily-2031.120.4 `IOHIDEventServiceUserClient.cpp:419-481`); the userspace plugin's
+  `IOConnectCallMethod` is not in the sources we have.
+- **[V]** `IOHIDEventDriver::copyEvent` (IOHIDFamily `IOHIDEventDriver.cpp:1675`) answers keyboard, orientation and
+  vendor-defined events only; the base `IOHIDEventService::copyEvent` returns NULL. So a temperature service needs its
+  own copyEvent.
+
+## 3. The health string ("SD: 1 BC: 0 RC: -1 BS: 0")
+
+**[V]** `getalive_func` (the `com.apple.thermalmonitord.watchdog` endpoint): unhealthy iff health checks are on
+(`DAT_1000a0710 == 1`: a thermal model was found and the model is not a DEV board) and `(mask & current) != expected`;
+`current` is cleared after every check, so every sensor must answer at least once between two of watchdogd's checks.
+Results within 10 s of a system wake are ignored (`kern.wake_abs_time` / `IOPMGetLastWakeTime`; ours answers
+`0xe00002d8`, logged `Unable to get last wake time`). Only the mask decides; the rest is diagnostics:
+
+| Field | Meaning | Source |
+|---|---|---|
+| SD | sensor data valid: every retrieved sensor gave a valid value in the last pass | `-[HidSensors isSensorDataValid]` (+0x278) |
+| BC | the IOReport `Battery` channel group probe | `FUN_100035c28` (`IOReportCopyChannelsInGroup("Battery")`) |
+| RC | the gas gauge reset count, SMC key `GGRC` >> 24; -1 without an SMC | `FUN_100035f6c` |
+| BS | battery authenticity: `AppleAuthCPRelay` under `IOPMPowerSource`, `isTrustedForUI` (0 unknown, 1 trusted, 2 not) | `FUN_100035f98` |
+
+## 4. What the Switch publishes (the registry shape)
+
+**[V by source; HW]** One `SwitchHIDDevice` (drivers/SwitchTouch, the original IOHIDDevice through NativeHidInput's
+bindings) per HID sensor, 38 in all, under IOResources: VendorID 0x057e, ProductID 0x5108, Transport `I2C`, Built-In,
+**Product = the sensor's matchName**, **LocationID = its 4CC** (big-endian), report descriptor Apple vendor 0xff00 /
+TemperatureSensor 0x0005 with one Sensor-page Report Interval feature (the ALS's shape, so IOHIDEventDriver starts:
+`parseSensorPropertyElement`). IOHIDDevice -> IOHIDInterface -> **IOHIDEventDriver** (our personality, matched by
+VID/PID/usage pair), which as an IOHIDEventService publishes PrimaryUsagePage 0xff00, PrimaryUsage 5 and Product.
+All 38 share one work loop.
+
+copyEvent: each of these event drivers gets one shared copy of IOHIDEventDriver's vtable whose slot 201
+(`IOHIDEventService::copyEvent`, reserved slot 11, declared right after `dispatchEvent` 198 / `getPrimaryUsagePage`
+199 / `getPrimaryUsage` 200; 198 is the edge wrapper's, proven on hardware) answers type 15 from the sensor's source and
+passes every other type to the original. Installed from IOKit's first-publish notification for the driver, and only
+after slots 199/200 answered 0xff00/0x0005 on that driver (otherwise one log line and the sensor stays unhooked). The
+event is an `IOHIDEvent` from its metaclass, `setType(15)` (= initWithType), `setTimeStamp` (the measurement's time),
+`setFixedValue(0xf0000, degrees 16.16)`; the first one is read back (`getType`, `getFixedValue`) and a mismatch turns
+temperature events off for the boot with one line.
+
+## 5. The mapping: every expected sensor and its Switch source
+
+The Switch (T210B01 "Mariko", OLED) measures temperature at: SOC_THERM's six on-die tsensors (**cpu0-cpu3**, one beside
+each A57 core; **gpu**; **pllx**, mid-die at the CPU PLL; T210B01 dropped T210's mem0/mem1), the **TMP451** (remote: the
+SoC's thermal diode, with hekate's -12.5 C offset; local: the PCB at the sensor, next to the SoC), and the **MAX17050**
+fuel gauge's battery-pack thermistor. The BQ24193 charger (REG08 THERM_STAT, REG09 NTC fault bits), the
+MAX77620/MAX77812 PMICs (TJALRM 120/140 C alarm bits) and the BM92T36 USB-PD controller have **no temperature
+readout**, so they back no sensor (making one up from an alarm bit would invent a value).
+
+| # | 4CC | matchName | J120AP use | Switch source | Why this is the nearest point |
+|---|---|---|---|---|---|
+| 0 | TG0B | gas gauge battery | SoCSkin 0.57, CGCenterSkin | MAX17050 TEMP | the same thing: the battery cell, by its gauge |
+| 1-8 | TP1d..TP8d | PMU tdev1..8 | TP8d SoCSkin 0.42 (filter 45), TP2d Ambient; others info | TMP451 local (PCB) | board NTCs; the PCB channel is the Switch's one board-level point away from the cells |
+| 9-10 | TR1d, TR2d | PMU2 tdev1..2 | info | TMP451 local (PCB) | as above |
+| 11 | TP0Z | PMU tcal | tcal offset | none: 0.00 C | the PMU ADC's calibration channel; the Switch's sensors are digital and need no correction, and 0 is exactly "no correction" for J120AP's default 0 |
+| 12 | TP0j | PMU tjunc | info | TMP451 local (PCB) | the PMIC die has no readout; the PCB beside it is the nearest measured point |
+| 13 | TQ0B | Charger tbat | info | MAX17050 TEMP | the battery cell (the BQ24193 only compares the pack NTC against its windows) |
+| 14-16 | Th0i/a/x | PMGR SOC Die Temp Sensor0 | die avg/max, lifetime servo | SOC_THERM gpu | on-die, outside the CPU cores; GPU block |
+| 17-19 | Th1i/a/x | ... Sensor1 | " | SOC_THERM pllx | on-die, mid-die |
+| 20-22 | Th2i/a/x | ... Sensor2 | " | TMP451 remote (SoC diode) | on-die thermal diode |
+| 23-25 | Th3i/a/x | ... Sensor3 | " | SOC_THERM gpu | T210B01 has three die points outside the cores; the fourth slot takes the GPU, the largest block |
+| 26-37 | Tc0..3 i/a/x | ACC Temp Sensor0..3 | die avg/max, lifetime servo | SOC_THERM cpu0..cpu3 | ACC = the CPU complex: core n's own tsensor |
+
+i/a/x on Apple's PMGR are instantaneous / window average / window maximum. The Switch's sensors give one instantaneous
+reading; thermalmonitord reads all three in the same pass, so the one-sample average and maximum of that pass are that
+reading. Consequences to know: TS0A "Ambient" reads high (it is J120's formula over the PCB, ~0.85 x PCB); SoCSkin is
+0.57 x battery + 0.42 x PCB, so SoCLowHS (43 C) starts mitigating with e.g. battery 36 C + PCB 52 C; DieTempHS (85 C)
+watches the hottest of cpu0-3, gpu, pllx and the SoC diode.
+
+How each is read, on thermalmonitord's own 5 s cadence (it calls in; no timer of ours):
+- **SOC_THERM** (`SwitchSensors.cpp`): brought up once, as L4T `soctherm.c` for `nvidia,tegra210b01-soctherm`:
+  fuse clock visible; per-sensor calibration from FUSE_TSENSOR_COMMON (0x180) and each sensor's calibration fuse
+  (`tsensor-fuse.c`, T210B01 config tall 16300, tsample 240, pdiv 12, pdiv_ate 6, tsample_ate 480; alpha/beta from
+  `tegra210b01_tsensors`); SOC_THERM (peripheral 78) under reset, clock 51 MHz from PLLP (CLK_SOURCE_SOC_THERM
+  0x644 = 0x4000000e), TSENSOR (peripheral 100) 400 kHz from CLK_M (0x3b8 = 0x8000005e), out of reset; CONFIG0/1/2 per
+  sensor, SENSOR_PDIV and HOTSPOT_OFF (cpu 10, gpu 5). A read is `TS_x_STATUS1` (valid bit 31, readback 15:0 =
+  degrees, +0.5, negate) at the moment of the call. No SOC_THERM interrupt, throttle or THERMTRIP is programmed (the
+  fan curve stays the safety net). **[HW]** never run on hardware before.
+- **TMP451**: SwitchThermal's last good reading (taken on every ALERT, the window around the fan levels, and at least
+  every 5 s); older than 15 s it is a read failure. SwitchThermal stays the chip's only reader.
+- **MAX17050**: SwitchBattery's last reading, kept current by the gauge's **temperature alert window** (TAlrtTh, one
+  degree either side of the last reading rounded; ALRT on PY0, which SwitchBattery already handles), besides its other
+  alerts and the 120 s re-read. Before r15 the window was wide open.
+
+A source that cannot answer makes that read fail (no event); thermalmonitord then reports the sensor missing. Nothing
+is substituted.
+
+## 6. Mitigation: where CLTM's decisions go
+
+- **[V] CPU**: `-[MitigationController updateCPU]` (no power zones on J120AP) writes four DVD factor contributors on
+  **`IOServiceMatching("ApplePMGR")`** with `IORegistryEntrySetCFProperty`:
+  `AppleARMPerformanceControllerDVDFactor1-slowloop`, `-hip`, `-upo`, `-lpm`, each `value < 100 ? value * 65536 /
+  100 : 0x10000` (a 16.16 share; `cpuComponentControl` maps max load index to DVD factor: 2->0 ... 37->35 ...
+  100->100). It also looks for `AppleCLPC` (absent: `Could not find CLPC service`). Here `ApplePMGR` is
+  ShengPlatformPower (sheng-pmgr=2, a subclass of the original; it grants thermalmonitord its property writes with
+  NativeSandboxGrantProcess, since the sandbox profiles name only original classes); its new `setProperties` takes the
+  four keys (and publishes them), and the lowest becomes **`switch_perf_cltm_ceiling()`**: the CPU governor's highest point is also
+  at or below that share of 1785 MHz (`switch_gov_index_at_fraction`), together with the DFLL's thermal cap, at once
+  and also across governor restarts. **[I]** That a DVD factor is a share of the top clock is our reading (CLPC's
+  side is not in 21H461's userspace); the keys, scaling and target service are **[V]**. One os_log line per change. In PLL or fixed-DFLL mode the ceiling has no
+  effect (the line says so): that includes main's current default (c1e0a4b, r7z: the DFLL fixed at 1785 MHz with the
+  governor off while r7y's slowdown is bisected). Once the governor is the default again, CLTM's cap applies with no
+  further change; until then the CPU's thermal protection is SwitchThermal's DFLL voltage cap (64/84 C) alone.
+- **[V] GPU**: `-[MitigationController updateGPU]` writes `GPUMaxPower` (percent) on
+  **`IOServiceMatching("AppleDieTempController")`**, which does not exist here (`Cannot find AppleDieTempController
+  service`), so GPU caps reach nothing yet. Next step (needs r15-dvfs's GPU governor on main, and a decision on
+  publishing a stand-in of that class name, which LifetimeServoController also looks for): a service accepting
+  `GPUMaxPower` that clamps TegraGM20B's governor ceiling.
+- **[V] Thermal pressure**: ThermalLevelCC -> `OSThermalNotification` / `com.apple.system.thermalpressurelevel`;
+  already delivered (r7u: backupd, audiomxd and mediaserverd received level 0). With real sensors the level now
+  follows dtThermalLevel.
+- **[V]** Other components (backlight, charger, radio, refresh rate) act through their own userspace services;
+  unchanged here.
+- SwitchThermal's fan curve and its CPU/DFLL trips are independent of iOS and stay the hardware safety net.
+
+## 7. The userspace watchdog
+
+NativeIOSwitchWatchdog's stopgap (`off_ = true` at start) is gone. watchdogd's first open of the IOWatchdog now waits
+(at most 20 s, woken whenever a source changes, no polling) for `switch_sensors_wait_ready()`: all 38 HID services
+hooked, every SOC_THERM sensor valid, a TMP451 and a battery reading, temperature events working. Then monitoring
+stays on and the kernel logs `SwitchSensors: thermalmonitord's 38 sensors answer: CPU ... C`. Otherwise monitoring is
+turned off before watchdogd asks (method 0), exactly as after a watchdogd crash: one line
+`IOSwitch watchdog: userspace watchdog off for this boot: thermalmonitord's sensors do not all answer (<what>)`,
+watchdogd reads "disabled" and exits 0, and nothing can end in a watchdog panic that boot.
+
+A source that answered at boot and stops later logs `SwitchSensors: <source> stopped answering: thermalmonitord reports
+its sensors missing` (and `... answers again`). A source that stays dead for 60 s then gets thermalmonitord killed and,
+after 120 s more, the watchdog panic, as on an iPad (watchdogd panics through its own user client; the kernel cannot
+recall that once monitoring is on). SwitchThermal retries a failed TMP451 every second and the fan runs at full speed
+meanwhile.
+
+## 8. Next-boot checks
+
+From the Mac (device on USB): `idevicesyslog -u 166bbe821dd2f22e91eab155cfc9355e1a02593f archive
+r15.tar --age-limit 600`, then `/usr/bin/log show --archive <dir>.logarchive --style compact --info --debug`.
+
+1. Kernel: `SwitchSensors: SOC_THERM up (fuse common ...; CONFIG2 ...)` and no `SwitchSensors: ... off` /
+   `SwitchHID: temperature ...` line.
+2. Kernel: `SwitchSensors: thermalmonitord's 38 sensors answer: CPU a b c d, GPU e, PLLX f, SoC diode g, PCB h,
+   battery i C` with plausible values (CPU/GPU/PLLX within a few degrees of the SoC diode at idle, PCB below them,
+   battery near room temperature), and **no** `userspace watchdog off for this boot`.
+3. Kernel: `IOSwitch watchdog: watchdogd connected; userspace watchdog armed`.
+4. thermalmonitord: no `no HID services (5)`, no `found error sensor result`, no `partial sensors`, no
+   `Could not get event from service`.
+5. watchdogd: no `is_alive_func returned unhealthy` for thermalmonitord; no thermalmonitord crash at 60/120 s (no new
+   `thermalmonitord-*.ips` in mobile/Library/Logs/CrashReporter) and no panic at ~199 s. Uptime past 5 minutes.
+6. ioreg: `ioreg -l -w0 | grep -A3 '"Product" = "PMU tdev8"'` shows PrimaryUsagePage 65280, PrimaryUsage 5.
+7. Load (a game or a long Safari scroll for 5 min): the SoC diode and cpuN rise together; with SoCSkin over 43 C
+   thermalmonitord's decisions show up as `ShengPlatformPower: thermalmonitord CPU ceiling NN%` os_log lines and the
+   periodic `SwitchPerf governor:` line's range top drops; `com.apple.system.thermalpressurelevel` goes above 0 under
+   sustained heat.
+
+## 9. Exact user test
+
+1. Deploy as usual (`bazel run //deploy:sd -- diskN --yes --stage-gpu`), boot, unlock.
+2. Leave it on the home screen for 5 minutes (past 60 s, 120 s and 199 s). It must not panic or reboot.
+3. Pull the log: `idevicesyslog -u 166bbe821dd2f22e91eab155cfc9355e1a02593f archive r15.tar --age-limit 600`, and run
+   `log show ... | grep -E "SwitchSensors|IOSwitch watchdog|is_alive_func|thermalmonitord.*(error sensor|partial|no HID)"`:
+   expect the two SwitchSensors lines and "watchdogd connected; userspace watchdog armed", and nothing else from that
+   pattern.
+4. Then play something heavy for 10 minutes (or loop a 4K video plus a browser): the console stays usable (the CPU
+   governor's top may come down: that is CLTM working), the fan follows SwitchThermal's curve, no panic.

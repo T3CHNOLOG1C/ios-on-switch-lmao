@@ -453,6 +453,23 @@ public:
 OSDefineMetaClassAndStructors(SwitchThermal, IOService)
 
     static SwitchThermal *gThermal;
+// The whole last good reading for thermalmonitord's sensors (switch_thermal_tmp451): written by the work loop only, as
+// generation (odd while writing), values, generation.
+static uint32_t gReadingGen;
+static int gReadingSoc, gReadingPcb;
+static uint64_t gReadingAt;  // 0: none
+
+static void storeReading(bool good, int soc, int pcb)
+{
+    __atomic_store_n(&gReadingGen, gReadingGen + 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    __atomic_store_n(&gReadingSoc, soc, __ATOMIC_RELAXED);
+    __atomic_store_n(&gReadingPcb, pcb, __ATOMIC_RELAXED);
+    const uint64_t before = __atomic_load_n(&gReadingAt, __ATOMIC_RELAXED);
+    __atomic_store_n(&gReadingAt, good ? mach_absolute_time() : 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&gReadingGen, gReadingGen + 1, __ATOMIC_RELEASE);
+    if (!before != !good) switch_sensors_note();  // thermalmonitord's sensors gained or lost the TMP451
+}
 
 bool SwitchThermal::mapRegisters()
 {
@@ -526,6 +543,7 @@ void SwitchThermal::failSafe(const char *what, int err)
     setDrive(kFullDrive);
     publish("FanDrive", kFullDrive);
     sensorReady = false;
+    storeReading(false, 0, 0);
     restoreCpu(what, true);  // no raised clocks without a working sensor, for the rest of the boot
     if (!reportedFailure) IOLog("SwitchThermal: %s (%d), fan at full speed\n", what, err);
     reportedFailure = true;
@@ -631,6 +649,7 @@ bool SwitchThermal::evaluate()
     int soc = 0, pcb = 0;
     if (!readTemperatures(&soc, &pcb)) return false;
     reportedFailure = false;
+    storeReading(true, soc, pcb);
 
     const int socSkin = skin(profile->soc, soc), pcbSkin = skin(profile->pcb, pcb);
     const int estimate = socSkin > pcbSkin ? socSkin : pcbSkin;
@@ -1376,6 +1395,25 @@ extern "C" int switch_thermal_start(void)
     }
     gThermal = candidate;
     return 0;
+}
+
+// thermalmonitord's TMP451-backed sensors (SwitchSensors.cpp): the last good reading and its time. Any context.
+extern "C" int switch_thermal_tmp451(int *soc_millic, int *pcb_millic, unsigned long long *at)
+{
+    for (unsigned tries = 0; tries < 4; ++tries) {
+        const uint32_t g1 = __atomic_load_n(&gReadingGen, __ATOMIC_ACQUIRE);
+        const int soc = __atomic_load_n(&gReadingSoc, __ATOMIC_RELAXED),
+                  pcb = __atomic_load_n(&gReadingPcb, __ATOMIC_RELAXED);
+        const uint64_t when = __atomic_load_n(&gReadingAt, __ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if ((g1 & 1) || g1 != __atomic_load_n(&gReadingGen, __ATOMIC_RELAXED)) continue;
+        if (!when) return 0;
+        *soc_millic = soc;
+        *pcb_millic = pcb;
+        *at = when;
+        return 1;
+    }
+    return 0;  // the work loop kept writing: this read fails, the next one will not
 }
 
 extern "C" void switch_thermal_cpu_quiesce(void)

@@ -16,6 +16,12 @@ extern "C" {
 #define SWITCH_BATTERY_BOOST_VBUS_PRESENT (-2)
 int switch_battery_set_otg_boost(bool on);
 
+// The battery temperature (MAX17050 TEMP, the pack's thermistor) in m C and when it was read (mach absolute time), for
+// thermalmonitord's battery sensors (drivers/SwitchPower/SwitchSensors.cpp). Kept current by the gauge's temperature
+// alert window (a degree either way of the last reading raises ALRT) besides the other alerts and the slow re-read.
+// 0 before the first reading or after a failed one. Any context.
+int switch_battery_temperature(int *milli_c, unsigned long long *at);
+
 #ifdef __cplusplus
 }
 #endif

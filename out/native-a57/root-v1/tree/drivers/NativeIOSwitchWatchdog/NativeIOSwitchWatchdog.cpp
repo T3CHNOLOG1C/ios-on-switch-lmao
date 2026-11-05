@@ -21,6 +21,12 @@
 // wake a minute while watchdogd checks in. Nothing is armed before watchdogd connects (a boot where launchd never starts
 // it keeps running), after it crashed, or between system sleep and wake, where the deadline is paused like the SoC
 // watchdog in SC7.
+// thermalmonitord (CLTM) is one of watchdogd's monitored services: its health check passes only while every
+// temperature sensor of the J120AP thermal model answers (drivers/SwitchPower/SwitchSensors.cpp, CONTRACT.md); an
+// unhealthy thermalmonitord is killed at 60 and 120 s and ends in a "userspace watchdog timeout" panic at ~199 s (r7t,
+// r7u, before the sensors existed). So watchdogd's first open of this service waits (at most kSensorWaitMS, woken as
+// sensors come up) for switch_sensors_wait_ready(): with every sensor answering, monitoring stays on; otherwise it is
+// turned off for the boot before watchdogd asks, with one line naming what is missing.
 // A late object (static initializer staged): NativeIOSwitchWatchdogPublish.cpp registers both classes.
 #include "OriginalIOWatchdog.h"
 #include <IOKit/IOLib.h>
@@ -30,6 +36,7 @@
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <kern/clock.h>
+#include "../SwitchPower/SwitchPower.h"
 
 class NativeIOSwitchWatchdog;
 static NativeIOSwitchWatchdog *gWatchdog;  // set once its start succeeded; never released
@@ -45,12 +52,16 @@ class NativeIOSwitchWatchdog : public IOWatchdog {
     bool asleep_;              // between the system sleep and wake messages: nothing armed
     uint64_t pausedDeadline_;  // the deadline at sleep and the time it had left, 0: none paused
     uint64_t pausedLeft_;
+    IOLock *verdictLock_;  // thermalmonitord's verdict, taken once at watchdogd's first open
+    bool verdictTaken_;
+    static constexpr unsigned kSensorWaitMS = 20000;  // the most watchdogd's first open waits for the sensors
 
     void arm();
     uint64_t snapshot(bool *monitoring);
     static void expired(OSObject *owner, IOTimerEventSource *timer);
     static IOReturn connectedGated(OSObject *owner, void *, void *, void *, void *);
     static IOReturn crashedGated(OSObject *owner, void *pid, void *signal, void *, void *);
+    static IOReturn thermalOffGated(OSObject *owner, void *why, void *, void *, void *);
     static IOReturn sleepGated(OSObject *owner, void *, void *, void *, void *);
     static IOReturn wakeGated(OSObject *owner, void *, void *, void *, void *);
     static IOReturn powerMessage(void *target, void *refCon, UInt32 type, IOService *provider, void *argument,
@@ -84,27 +95,23 @@ OSDefineMetaClassAndStructors(NativeIOSwitchWatchdog, IOWatchdog)
     clearIOKitMonitoring();
     setProperty("IOKitQuiesceWatchdogEnabled", false);
     gWatchdog = this;
-    // Userspace monitoring off for now: thermalmonitord registers with watchdogd and reports itself unhealthy from boot
-    // ("Missing sensor(s): TG0B TP1d ..." -- none of its SMC-style sensors exist here), so watchdogd kills it at 60 s
-    // and 120 s and panics "no successful checkins from thermalmonitord (2 induced crashes)" at ~199 s on every boot
-    // (r7t, r7u). Off as after a watchdogd crash, until thermalmonitord has its sensors: watchdogd reads "disabled" and
-    // exits 0.
-    off_ = true;
-    {
-        IOSimpleLock *lock = checkinLock();
-        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
-        setUserspaceMonitoring(false);
-        setCheckinDeadline(0);
-        IOSimpleLockUnlockEnableInterrupt(lock, state);
-    }
-    IOLog("IOSwitch watchdog: userspace watchdog off (thermalmonitord has no sensors to report healthy)\n");
+    verdictLock_ = IOLockAlloc();
     return true;
 }
 
-// The original user client (entitlement-checked). watchdogd's first connection starts the deadline checks.
+// The original user client (entitlement-checked). watchdogd's first connection starts the deadline checks. Before the
+// first one, thermalmonitord's verdict (see the top of the file).
 IOReturn NativeIOSwitchWatchdog::newUserClient(task_t owningTask, void *securityID, UInt32 type,
                                                OSDictionary *properties, IOUserClient **handler)
 {
+    if (verdictLock_) IOLockLock(verdictLock_);
+    if (!verdictTaken_) {
+        verdictTaken_ = true;
+        char why[256] = "";
+        if (!switch_sensors_wait_ready(kSensorWaitMS, why, sizeof(why)))
+            loop_->runAction(&NativeIOSwitchWatchdog::thermalOffGated, this, why);
+    }
+    if (verdictLock_) IOLockUnlock(verdictLock_);
     const IOReturn opened = IOWatchdog::newUserClient(owningTask, securityID, type, properties, handler);
     if (opened == kIOReturnSuccess) loop_->runAction(&NativeIOSwitchWatchdog::connectedGated, this);
     return opened;
@@ -183,6 +190,25 @@ IOReturn NativeIOSwitchWatchdog::crashedGated(OSObject *owner, void *pid, void *
     IOLog(
         "IOSwitch watchdog: watchdogd[%d] crashed (signal %d): no panic for it; userspace watchdog off for this boot\n",
         (int)(intptr_t)pid, (int)(intptr_t)signal);
+    return kIOReturnSuccess;
+}
+
+// thermalmonitord cannot report healthy this boot (a sensor it checks does not answer): userspace monitoring off before
+// watchdogd's first question (method 0), as after a watchdogd crash, so watchdogd reads "disabled" and exits 0 and an
+// unhealthy thermalmonitord never ends in a watchdog panic. One line with what is missing.
+IOReturn NativeIOSwitchWatchdog::thermalOffGated(OSObject *owner, void *why, void *, void *, void *)
+{
+    auto *self = static_cast<NativeIOSwitchWatchdog *>(owner);
+    if (self->off_) return kIOReturnSuccess;
+    self->off_ = true;
+    IOSimpleLock *lock = self->checkinLock();
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
+    self->setUserspaceMonitoring(false);
+    self->setCheckinDeadline(0);
+    IOSimpleLockUnlockEnableInterrupt(lock, state);
+    self->timer_->cancelTimeout();
+    IOLog("IOSwitch watchdog: userspace watchdog off for this boot: thermalmonitord's sensors do not all answer (%s)\n",
+          static_cast<const char *>(why));
     return kIOReturnSuccess;
 }
 

@@ -8,6 +8,10 @@
 #include <libkern/c++/OSSymbol.h>
 #include <mach/kmod.h>
 #include <pexpert/pexpert.h>
+#include <libkern/c++/OSNumber.h>
+#include <os/log.h>
+#include "../../drivers/SwitchPower/SwitchPower.h"
+#include "../../drivers/SwitchPower/SwitchSensors.h"
 
 extern "C" {
 extern kmod_info_t g_kernel_kmod_info;
@@ -47,6 +51,7 @@ OSDeclareDefaultStructors(ShengPlatformPower) public : void enableCPUCore(unsign
     void exitCPUIdle(UInt64 *) override { unavailable(175); }
     void updateCPUIdle(UInt64 *) override { unavailable(176); }
 #include "GuardedPMGRSlots.inc"
+    IOReturn setProperties(OSObject *properties) override;
 };
 OSDefineMetaClassWithInit(ShengPlatformPower, ApplePMGR, ) OSMetaClassConstructorInit(ShengPlatformPower, ApplePMGR, )
     OSDefineBasicStructors(ShengPlatformPower, ApplePMGR)
@@ -61,6 +66,43 @@ void ShengPlatformPower::operator delete(void *memory, size_t size)
     OSObject::operator delete(memory, size);
 }
 static_assert(sizeof(ShengPlatformPower) == 0x4b8a8, "Exact original provider storage");
+
+// iPadOS's CPU ceiling. thermalmonitord (CLTM, 21H461 -[MitigationController updateCPU], CONTRACT.md) writes its
+// decisions as IORegistryEntrySetCFProperty on IOServiceMatching("ApplePMGR"), this service: four DVD factor
+// contributors, AppleARMPerformanceControllerDVDFactor1-{slowloop,hip,upo,lpm}, each a 16.16 share of the CPU's top
+// performance (CLTM sends value < 100 ? value * 65536 / 100 : 0x10000). On an iPad, ApplePMGR passes them to the
+// performance controller; here the lowest of the four becomes the CPU governor's ceiling (switch_perf_cltm_ceiling,
+// drivers/SwitchPower/SwitchPerfGovernor.cpp). Each value is also published, so ioreg shows what CLTM asks for; one
+// os_log line per change of the ceiling. Other properties are refused as IOService's setProperties does.
+IOReturn ShengPlatformPower::setProperties(OSObject *properties)
+{
+    static uint32_t fraction[SWITCH_CLTM_CONTRIBUTORS] = {0x10000u, 0x10000u, 0x10000u, 0x10000u};
+    static uint32_t ceiling = 0x10000u;
+    OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
+    if (!dict) return kIOReturnBadArgument;
+    unsigned taken = 0;
+    for (unsigned i = 0; i < SWITCH_CLTM_CONTRIBUTORS; ++i) {
+        OSNumber *value = OSDynamicCast(OSNumber, dict->getObject(switch_cltm_keys[i]));
+        if (!value) continue;
+        const uint64_t v = value->unsigned64BitValue();
+        __atomic_store_n(&fraction[i], v > 0x10000u ? 0x10000u : (uint32_t)v, __ATOMIC_RELAXED);
+        setProperty(switch_cltm_keys[i], value);
+        ++taken;
+    }
+    if (!taken) return kIOReturnUnsupported;
+    uint32_t now[SWITCH_CLTM_CONTRIBUTORS];
+    for (unsigned i = 0; i < SWITCH_CLTM_CONTRIBUTORS; ++i) now[i] = __atomic_load_n(&fraction[i], __ATOMIC_RELAXED);
+    const uint32_t next = switch_cltm_ceiling(now);
+    if (__atomic_exchange_n(&ceiling, next, __ATOMIC_RELAXED) != next) {
+        const unsigned khz = switch_perf_cltm_ceiling(next);
+        os_log(OS_LOG_DEFAULT,
+               "ShengPlatformPower: thermalmonitord CPU ceiling %u.%u%% (slowloop %u, hip %u, upo %u, lpm %u /65536): "
+               "%s %u MHz",
+               next * 1000 / 0x10000 / 10, next * 1000 / 0x10000 % 10, now[0], now[1], now[2], now[3],
+               khz ? "governor top" : "CPU not governed, no effect;", khz / 1000);
+    }
+    return taken == dict->getCount() ? kIOReturnSuccess : kIOReturnUnsupported;
+}
 
 static const OSMetaClass *lookup(const char *text)
 {
@@ -154,6 +196,9 @@ extern "C" void sheng_pmgr_run(void)
                 provider->detach(platform);
                 break;
             }
+            // thermalmonitord's DVD factor writes (setProperties below): the original sandbox profiles name only the
+            // original classes, as for SwitchBacklight's brightness writes (XNU native_sandbox_grant).
+            provider->setProperty("NativeSandboxGrantProcess", "thermalmonitord");
             provider->registerService(kIOServiceSynchronous);
             nub->registerService(kIOServiceSynchronous);
             sheng_pmgr_observation[0] = 5;

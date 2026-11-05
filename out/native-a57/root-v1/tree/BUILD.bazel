@@ -292,12 +292,14 @@ kernel_driver(name = "TegraSPI")
 # APB DMA for the UARTs (Joy-Con rails' RX, Bluetooth's TX).
 kernel_driver(name = "TegraAPBDMA")
 
-# SwitchThermal: fan curve, CPU operating point; SwitchPerfGovernor: the CPU's on-demand governor (perfcontrol callouts).
+# SwitchThermal: fan curve, CPU operating point; SwitchPerfGovernor: the CPU's on-demand governor (perfcontrol callouts);
+# SwitchSensors: SOC_THERM and thermalmonitord's HID temperature sensors (drivers/SwitchPower/CONTRACT.md).
 kernel_driver(
     name = "SwitchThermal",
     srcs = [
         "SwitchThermal.cpp",
         "SwitchPerfGovernor.cpp",
+        "SwitchSensors.cpp",
     ],
     dir = "drivers/SwitchPower",
 )

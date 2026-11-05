@@ -3,7 +3,9 @@
 // BQ24193 charger (0x6B) and BM92T36 USB-PD controller (0x18), all on I2C1, published as an
 // IOPMPowerSource. Re-read when one of them interrupts (the charger's and gauge's TegraGPIO pins, see kAlerts; the
 // BM92T36's ALERT through SwitchPD, which owns that pin and its clear-on-read ALERT_STATUS and tells us about every
-// alert), plus a slow re-read that bounds the staleness of what has no interrupt (voltage, current, temperature drift).
+// alert), plus a slow re-read that bounds the staleness of what has no interrupt (voltage, current). The battery
+// temperature has one: the gauge's temperature window, a degree either way of the last reading (thermalmonitord's
+// battery sensors, switch_battery_temperature).
 // There is no polled mode: alerts that cannot be attached, keep firing, or never reach the CPU panic.
 //
 // powerd (iOS 17) matches IOServiceMatching("IOPMPowerSource") with a first-match
@@ -22,7 +24,8 @@
 // start, whatever an earlier boot left (an OTG boost left on blocks charging), and switch_battery_set_otg_boost() for
 // SwitchPD's VBUS to a sink-only partner. The gauge's alert is armed as Linux max17042_battery.c
 // does (max17042_set_soc_threshold, max17042_thread_handler): CONFIG.Aen, an SOC window of +-1 %
-// around the current RepSOC, re-centred on every reading, STATUS alert bits cleared (POR, BST kept).
+// around the current RepSOC and a temperature window of about +-1 C (TAlrtTh), both re-centred on every reading,
+// STATUS alert bits cleared (POR, BST kept).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOWorkLoop.h>
@@ -39,6 +42,8 @@
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../SwitchUSB/SwitchPD.h"
 #include "SwitchBattery.h"
+#include "../SwitchPower/SwitchPower.h"
+#include "../SwitchPower/SwitchSensors.h"
 
 namespace {
 constexpr unsigned kBus = 1;
@@ -95,7 +100,7 @@ constexpr unsigned kAlertCount = sizeof(kAlerts) / sizeof(kAlerts[0]);
 
 struct Reading {
     unsigned percent, rawPercent, millivolts, cycles;
-    int rawCapacity, fullCapacity, designCapacity, milliamps, avgMilliamps, centiCelsius;
+    int rawCapacity, fullCapacity, designCapacity, milliamps, avgMilliamps, centiCelsius, milliCelsius;
     bool external, charging, full;
     OSDictionary *adapter;
 };
@@ -114,14 +119,15 @@ int gaugeWrite(uint8_t reg, uint16_t value)
     return tegra_i2c_write(kBus, kGauge, reg, b, sizeof(b));
 }
 
-// Alert on the next 1 % step of RepSOC either way (voltage and temperature windows wide open, as the DT's
-// maxim,volt-alrt-threshold 0xff00 / temp-alrt-threshold 0x7f80), then clear the alert flags so ALRT releases.
-int armGauge(unsigned percent)
+// Alert on the next 1 % step of RepSOC either way and on a battery temperature about a degree away from this reading
+// (switch_max17050_talrt: thermalmonitord's battery sensors follow the cell by interrupt, CONTRACT.md); the voltage
+// window wide open, as the DT's maxim,volt-alrt-threshold 0xff00. Then clear the alert flags so ALRT releases.
+int armGauge(unsigned percent, int milliCelsius)
 {
     uint16_t config = 0, status = 0;
     int err = gaugeWrite(SAlrtTh, (uint16_t)((percent + 1) << 8 | (percent > 1 ? percent - 1 : 0)));
     if (!err) err = gaugeWrite(VAlrtTh, 0xff00);
-    if (!err) err = gaugeWrite(TAlrtTh, 0x7f80);
+    if (!err) err = gaugeWrite(TAlrtTh, switch_max17050_talrt(milliCelsius));
     if (!err) err = gaugeWord(Config, &config);
     if (!err && !(config & kConfigAen)) err = gaugeWrite(Config, config | kConfigAen);
     if (!err) err = gaugeWord(Status, &status);
@@ -213,6 +219,23 @@ void chargeModeAtStart()
     }
 }
 
+// The battery temperature for thermalmonitord's sensors (switch_battery_temperature): written by the work loop only,
+// generation (odd while writing), value, time, generation.
+uint32_t gTempGen;
+int gTempMilliC;
+uint64_t gTempAt;  // 0: no reading (none yet, or the last read failed)
+
+void storeTemperature(bool good, int milliC)
+{
+    const uint64_t before = __atomic_load_n(&gTempAt, __ATOMIC_RELAXED);
+    __atomic_store_n(&gTempGen, gTempGen + 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    __atomic_store_n(&gTempMilliC, milliC, __ATOMIC_RELAXED);
+    __atomic_store_n(&gTempAt, good ? mach_absolute_time() : 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&gTempGen, gTempGen + 1, __ATOMIC_RELEASE);
+    if (!before != !good) switch_sensors_note();
+}
+
 int readAll(Reading *r)
 {
     uint16_t repCap = 0, repSoc = 0, temp = 0, vcell = 0, current = 0, avgCurrent = 0;
@@ -246,6 +269,7 @@ int readAll(Reading *r)
     r->milliamps = (int16_t)current * 15625 / 100000;
     r->avgMilliamps = (int16_t)avgCurrent * 15625 / 100000;
     r->centiCelsius = (int16_t)temp * 100 / 256;
+    r->milliCelsius = switch_max17050_millic(temp);
     r->adapter = adapterDetails(r->external, input, status);
     return 0;
 }
@@ -351,9 +375,11 @@ bool SwitchBattery::refresh()
     if (err) {
         if (!reportedFailure) IOLog("SwitchBattery: read failed (%d), keeping last values\n", err);
         reportedFailure = true;
+        storeTemperature(false, 0);
         return false;
     }
     reportedFailure = false;
+    storeTemperature(true, r.milliCelsius);
     setBatteryInstalled(true);
     setExternalConnected(r.external);
     setExternalChargeCapable(r.external);
@@ -378,7 +404,7 @@ bool SwitchBattery::refresh()
     }
     updateStatus();
     // Acknowledge: re-centre the gauge window (releases ALRT).
-    if (armGauge(r.rawPercent) && !reportedFailure) IOLog("SwitchBattery: gauge alert setup failed\n");
+    if (armGauge(r.rawPercent, r.milliCelsius) && !reportedFailure) IOLog("SwitchBattery: gauge alert setup failed\n");
     return true;
 }
 
@@ -463,6 +489,23 @@ extern "C" int switch_battery_start(void)
         return -1;
     }
     battery = candidate;
+    return 0;
+}
+
+// thermalmonitord's battery sensors (SwitchBattery.h). Any context.
+extern "C" int switch_battery_temperature(int *milli_c, unsigned long long *at)
+{
+    for (unsigned tries = 0; tries < 4; ++tries) {
+        const uint32_t g1 = __atomic_load_n(&gTempGen, __ATOMIC_ACQUIRE);
+        const int value = __atomic_load_n(&gTempMilliC, __ATOMIC_RELAXED);
+        const uint64_t when = __atomic_load_n(&gTempAt, __ATOMIC_RELAXED);
+        __atomic_thread_fence(__ATOMIC_ACQUIRE);
+        if ((g1 & 1) || g1 != __atomic_load_n(&gTempGen, __ATOMIC_RELAXED)) continue;
+        if (!when) return 0;
+        *milli_c = value;
+        *at = when;
+        return 1;
+    }
     return 0;
 }
 

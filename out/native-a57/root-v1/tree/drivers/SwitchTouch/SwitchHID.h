@@ -26,6 +26,7 @@ enum SwitchHIDKind : unsigned {
     kSwitchHIDAccelerometer = 3,
     kSwitchHIDGyro = 4,
     kSwitchHIDOrientation = 5,
+    kSwitchHIDTemperature = 6,  // switch_hid_create_temperature only
 };
 
 // Touch screen, report ID 1: ten finger slots, slot n always carries contact n. Coordinates are panel pixels in
@@ -91,6 +92,28 @@ struct __attribute__((packed)) SwitchOrientationReport {
     uint8_t id;           // 1
     uint8_t orientation;  // 1u << UIDeviceOrientation
 };
+
+// Temperature sensors (../SwitchPower/SwitchSensors.cpp): thermalmonitord's HID sensors, Apple vendor 0xff00 /
+// TemperatureSensor 0x0005 (the PrimaryUsagePage/PrimaryUsage it matches), one device per sensor, each with its own
+// Product (thermalmonitord's matchName) and LocationID (the 4CC as a big-endian integer). No input reports: thermalmonitord
+// reads them every 5 s with IOHIDServiceClientCopyEvent(kIOHIDEventTypeTemperature), which reaches the event driver's
+// copyEvent through IOHIDEventServiceUserClient. IOHIDEventDriver::copyEvent answers keyboard, orientation and vendor
+// events only, so each temperature device's driver gets a shared vtable copy whose copyEvent (slot 201) hands
+// temperature requests to the device's handler (other types go to the original). Installed from IOKit's first-publish
+// notification for the driver, after slots 199/200 (getPrimaryUsagePage/getPrimaryUsage) have answered 0xff00/0x0005.
+// The handler runs on the client's thread (thermalmonitord's call through backboardd's event system), possibly inside
+// the event service's command gate (the 38 devices share one work loop): it must not sleep long; it returns an event
+// from switch_hid_temperature_event (+1) or nullptr (the read fails).
+typedef OSObject *(*SwitchHIDCopyEventHandler)(void *context);
+// Thread context; nullptr (one log line) on failure. Devices are created from one thread.
+IOService *switch_hid_create_temperature(const char *product, uint32_t locationID, SwitchHIDCopyEventHandler handler,
+                                         void *context);
+// Whether that device's event driver has been found and hooked (then thermalmonitord's reads reach the handler).
+bool switch_hid_temperature_hooked(IOService *device);
+// A kIOHIDEventTypeTemperature event (+1) with kIOHIDEventFieldTemperatureLevel = `fixed` (16.16 degrees C) at
+// `timestamp` (mach absolute time); nullptr without memory, or for the rest of the boot (one log line) once the first
+// event did not read back what was set.
+OSObject *switch_hid_temperature_event(uint64_t timestamp, int32_t fixed);
 
 // Creates, attaches (under IOResources) and starts the device. The first call loads IOHIDFamily, registers the
 // device class and adds the IOHIDEventDriver personalities. Thread context; panics with the reason on failure.

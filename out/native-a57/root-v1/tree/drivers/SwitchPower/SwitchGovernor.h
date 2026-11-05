@@ -178,6 +178,20 @@ static inline unsigned switch_gov_index_at_mv(const uint32_t *mv, unsigned count
     return i;
 }
 
+// iPadOS's thermal ceiling (thermalmonitord's DVD factor on ApplePMGR, a 16.16 fraction of the top point's clock,
+// 0x10000 and above = none; drivers/SwitchPower/CONTRACT.md) as an index: the highest point at or below that share of
+// the top clock, 0 if even the first point is above it.
+static inline unsigned switch_gov_index_at_fraction(const uint32_t *khz, unsigned count, uint32_t fraction16)
+{
+    uint64_t limit;
+    unsigned i = 0;
+    if (!count) return 0;
+    if (fraction16 >= 0x10000u) return count - 1;
+    limit = (uint64_t)khz[count - 1] * fraction16 >> 16;
+    while (i + 1 < count && khz[i + 1] <= limit) ++i;
+    return i;
+}
+
 // The CPU table from the DFLL's OPP rows (L4T cvb.c's table for this chip: ascending kHz with their CVB voltages, the
 // voltages floored at the CVB Vmin): every row up to max_khz (Nintendo's 1785 MHz boost clock), starting at the
 // highest row whose voltage is at or below vmin_mv. Rows under that one share its voltage: the DFLL runs them at the

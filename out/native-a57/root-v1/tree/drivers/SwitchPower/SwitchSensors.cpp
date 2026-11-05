@@ -1,0 +1,353 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// thermalmonitord's sensors on the Switch (SwitchSensors.h has the mapping, CONTRACT.md the contract and evidence).
+//
+// iPadOS's CLTM daemon reads every temperature sensor of its product model (J120AP) every 5 s through the HID event
+// system and reports itself unhealthy to watchdogd until all 38 answer; without them it also has nothing to mitigate
+// on. Here each of those sensors is a HID service (SwitchHIDDevice's temperature kind) whose copyEvent answers from the
+// Switch sensor nearest to what the iPad's sensor measures:
+//   * SOC_THERM (T210B01, 0x700E2000): six on-die tsensors, cpu0-cpu3 beside each A57 core, gpu, pllx, brought up as
+//     L4T's soctherm.c does for "nvidia,tegra210b01-soctherm" (tegra210-soctherm.c tegra210b01_tsensors, fuse
+//     calibration from tsensor-fuse.c; clocks 51 MHz from PLLP and 400 kHz from CLK_M, tegra210-soc-base.dtsi). The
+//     hardware converts continuously; a read is the TS_*_STATUS1 register at the moment thermalmonitord asks (its own
+//     5 s cadence, through its read path: no timer here). No SOC_THERM interrupt, throttle or THERMTRIP is set up.
+//   * TMP451 (SwitchThermal): SwitchThermal's last good reading of the SoC diode and the PCB, which it takes on every
+//     ALERT (the sensor's window around the fan levels) and at least every 5 s; older than kTmp451StaleMS (SwitchThermal
+//     lost the sensor) it is a read failure. One reader of the chip, the fan's.
+//   * MAX17050 (SwitchBattery): the battery thermistor, kept current by the gauge's temperature alert window (a degree
+//     either way, SwitchBattery.cpp) besides its other alerts.
+//   * PMU tcal: the iPad PMU's calibration channel, reported as 0 C: thermalmonitord adds (its default, 0) minus this
+//     to the PMU thermistors, and the Switch's sensors are digital and need no correction.
+// A source that cannot answer makes that read fail (no event), and thermalmonitord reports the sensor missing; nothing
+// is ever made up. Every value is the measurement and its time.
+//
+// The userspace watchdog (NativeIOSwitchWatchdog) asks switch_sensors_wait_ready() once, when watchdogd first opens
+// it: only with every sensor answering does watchdogd keep monitoring thermalmonitord; otherwise it is off for the boot
+// (one line with what is missing) and an unhealthy thermalmonitord can never end in a watchdog panic.
+#include <IOKit/IOLib.h>
+#include <IOKit/IOService.h>
+#include <kern/clock.h>
+#include <os/log.h>
+#include "../SwitchTouch/SwitchHID.h"
+#include "../SwitchBattery/SwitchBattery.h"
+#include "SwitchPower.h"
+#include "SwitchSensors.h"
+
+extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+
+namespace {
+constexpr vm_offset_t kCarPA = 0x60006000, kFusePA = 0x7000F800, kSocThermPA = 0x700E2000;
+
+// CAR (hekate bdk/soc/clock.h; L4T clk-tegra-periph.c): SOC_THERM is peripheral 78 (bank U bit 14, reset too), TSENSOR
+// 100 (bank V bit 4, clock only). CLK_SOURCE_SOC_THERM is MUX8 (31:29: 0 CLK_M, 1 PLLC, 2 PLLP, 3 PLLA), TSENSOR MUX
+// (31:30: 0 PLLP, 1 PLLC, 2 CLK_M, 3 CLK_32K); both 7.1 dividers in 7:0.
+enum : uint32_t {
+    RST_DEVICES_U = 0x00c,
+    CLK_OUT_ENB_U = 0x018,
+    MISC_CLK_ENB = 0x048,
+    RST_DEV_U_SET = 0x310,
+    RST_DEV_U_CLR = 0x314,
+    CLK_ENB_H_SET = 0x328,
+    CLK_ENB_U_SET = 0x330,
+    CLK_OUT_ENB_V = 0x360,
+    CLK_SOURCE_TSENSOR = 0x3b8,
+    CLK_ENB_V_SET = 0x440,
+    CLK_SOURCE_SOC_THERM = 0x644,
+};
+constexpr uint32_t kSocThermBit = 1u << 14, kTsensorBit = 1u << 4;
+constexpr uint32_t kSocThermSource = (2u << 29) | ((408000 / 51000 - 1) * 2);  // PLLP / 8 = 51 MHz
+constexpr uint32_t kTsensorSource = (2u << 30) | ((19200 / 400 - 1) * 2);      // CLK_M / 48 = 400 kHz
+constexpr uint32_t kFuseClock = 1u << 7, kFuseVisible = 1u << 28;  // as SwitchThermal, TegraDFLL, TegraGM20B
+constexpr uint32_t FUSE_CACHE = 0x100;
+
+// SOC_THERM (Linux soctherm.h / soctherm.c).
+enum : uint32_t {
+    CONFIG0 = 0x0,
+    CONFIG1 = 0x4,
+    CONFIG2 = 0x8,
+    STATUS1 = 0x10,
+    SENSOR_PDIV = 0x1c0,
+    HOTSPOT_OFF = 0x1c4
+};
+constexpr uint32_t kTempValid = 1u << 31;
+constexpr uint32_t kPdivCpuShift = 12, kPdivGpuShift = 8, kPdivPllxShift = 0;  // 4 bits each
+constexpr uint32_t kHotspotCpuShift = 16, kHotspotGpuShift = 8;                // 8 bits each
+constexpr uint32_t kHotspotCpu = 10, kHotspotGpu = 5;                          // pllx_hotspot_diff
+
+constexpr uint32_t kTmp451StaleMS = 15000;  // SwitchThermal re-reads every 5 s
+
+inline uint32_t rd(volatile uint8_t *base, uint32_t offset)
+{
+    return *(volatile uint32_t *)(base + offset);
+}
+inline void wr(volatile uint8_t *base, uint32_t offset, uint32_t value)
+{
+    *(volatile uint32_t *)(base + offset) = value;
+}
+
+volatile uint8_t *gSocTherm;  // mapped and brought up: the tsensors can be read
+IOService *gDevices[SWITCH_SENSOR_COUNT];
+bool gStarted, gVerdictLogged;
+IOLock *gLock;
+uint32_t gEvent;       // what switch_sensors_wait_ready sleeps on
+uint32_t gSourceDown;  // atomic: bit per source that failed its last read after the sensors were ready
+const char *const kSourceNames[SWITCH_SRC_COUNT] = {
+    "SOC_THERM cpu0", "SOC_THERM cpu1",   "SOC_THERM cpu2", "SOC_THERM cpu3",   "SOC_THERM gpu",
+    "SOC_THERM pllx", "TMP451 SoC diode", "TMP451 PCB",     "MAX17050 battery", "tcal"};
+
+// The lock switch_sensors_wait_ready sleeps under: created by whichever comes first, the start or the watchdog's wait
+// (watchdogd can open the IOWatchdog before the board thread gets here; not started is then just not ready yet).
+IOLock *sensorsLock()
+{
+    IOLock *lock = __atomic_load_n(&gLock, __ATOMIC_ACQUIRE);
+    if (lock) return lock;
+    IOLock *fresh = IOLockAlloc(), *none = nullptr;
+    if (!fresh) return nullptr;
+    if (__atomic_compare_exchange_n(&gLock, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return fresh;
+    IOLockFree(fresh);
+    return none;
+}
+
+uint64_t msToAbs(uint32_t ms)
+{
+    uint64_t abs = 0;
+    clock_interval_to_absolutetime_interval(ms, kMillisecondScale, &abs);
+    return abs;
+}
+
+// SOC_THERM bring-up. False (one line) if a part is missing: those six sources then never answer.
+bool socThermStart()
+{
+    auto *car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
+    auto *fuse = (volatile uint8_t *)ml_io_map(kFusePA, 0x400);
+    auto *regs = (volatile uint8_t *)ml_io_map(kSocThermPA, 0x1000);
+    if (!car || !fuse || !regs) {
+        IOLog("SwitchSensors: SOC_THERM off: mapping failed\n");
+        return false;
+    }
+    // Fuses readable (the fuse clock and the fuse cache's visibility), then the calibration words.
+    wr(car, CLK_ENB_H_SET, kFuseClock);
+    wr(car, MISC_CLK_ENB, rd(car, MISC_CLK_ENB) | kFuseVisible);
+    (void)rd(car, MISC_CLK_ENB);
+    const uint32_t common = rd(fuse, FUSE_CACHE + SWITCH_FUSE_TSENSOR_COMMON);
+    const switch_tsensor_shared shared = switch_tsensor_shared_calib(common);
+    uint32_t calib[SWITCH_SOCTHERM_SENSORS];
+    for (unsigned i = 0; i < SWITCH_SOCTHERM_SENSORS; ++i) {
+        const uint32_t word = rd(fuse, FUSE_CACHE + switch_tsensors[i].calib_fuse);
+        calib[i] = switch_tsensor_calib(&switch_tsensor_b01, &shared, &switch_tsensors[i], word);
+        if (!calib[i] || !common) {
+            IOLog("SwitchSensors: SOC_THERM off: %s calibration fuse %#x (common %#x) gives no calibration\n",
+                  switch_tsensors[i].name, word, common);
+            return false;
+        }
+    }
+    // Clocks under reset, as L4T's soctherm_clk_enable (rates from its clock init table), then out of reset.
+    wr(car, RST_DEV_U_SET, kSocThermBit);
+    wr(car, CLK_SOURCE_SOC_THERM, kSocThermSource);
+    wr(car, CLK_SOURCE_TSENSOR, kTsensorSource);
+    wr(car, CLK_ENB_U_SET, kSocThermBit);
+    wr(car, CLK_ENB_V_SET, kTsensorBit);
+    (void)rd(car, CLK_OUT_ENB_V);
+    IODelay(2);
+    wr(car, RST_DEV_U_CLR, kSocThermBit);
+    (void)rd(car, RST_DEVICES_U);
+    if (!(rd(car, CLK_OUT_ENB_U) & kSocThermBit) || !(rd(car, CLK_OUT_ENB_V) & kTsensorBit) ||
+        (rd(car, RST_DEVICES_U) & kSocThermBit)) {
+        IOLog("SwitchSensors: SOC_THERM off: clocks did not come up (CLK_OUT_ENB_U %#x, V %#x, RST_DEVICES_U %#x)\n",
+              rd(car, CLK_OUT_ENB_U), rd(car, CLK_OUT_ENB_V), rd(car, RST_DEVICES_U));
+        return false;
+    }
+    // soctherm_init: each tsensor's configuration and calibration, the groups' PDIV and hotspot offsets.
+    for (unsigned i = 0; i < SWITCH_SOCTHERM_SENSORS; ++i) {
+        const uint32_t base = switch_tsensors[i].base;
+        wr(regs, base + CONFIG0, switch_tsensor_config0(&switch_tsensor_b01));
+        wr(regs, base + CONFIG1, switch_tsensor_config1(&switch_tsensor_b01));
+        wr(regs, base + CONFIG2, calib[i]);
+    }
+    uint32_t pdiv = rd(regs, SENSOR_PDIV);
+    pdiv &= ~((0xfu << kPdivCpuShift) | (0xfu << kPdivGpuShift) | (0xfu << kPdivPllxShift));
+    pdiv |= switch_tsensor_b01.pdiv << kPdivCpuShift | switch_tsensor_b01.pdiv << kPdivGpuShift |
+            switch_tsensor_b01.pdiv << kPdivPllxShift;
+    wr(regs, SENSOR_PDIV, pdiv);
+    uint32_t hotspot = rd(regs, HOTSPOT_OFF);
+    hotspot &= ~((0xffu << kHotspotCpuShift) | (0xffu << kHotspotGpuShift));
+    hotspot |= kHotspotCpu << kHotspotCpuShift | kHotspotGpu << kHotspotGpuShift;
+    wr(regs, HOTSPOT_OFF, hotspot);
+    (void)rd(regs, HOTSPOT_OFF);
+    gSocTherm = regs;
+    IOLog(
+        "SwitchSensors: SOC_THERM up (fuse common %#x; CONFIG2 cpu0 %#x cpu1 %#x cpu2 %#x cpu3 %#x gpu %#x pllx %#x)\n",
+        common, calib[0], calib[1], calib[2], calib[3], calib[4], calib[5]);
+    return true;
+}
+
+// One reading of a source: m C and its time. False when it cannot answer now.
+bool read(switch_sensor_source source, int32_t *milliC, uint64_t *at)
+{
+    int soc = 0, pcb = 0, value = 0;
+    unsigned long long when = 0;
+    switch (source) {
+    case SWITCH_SRC_SOC_CPU0:
+    case SWITCH_SRC_SOC_CPU1:
+    case SWITCH_SRC_SOC_CPU2:
+    case SWITCH_SRC_SOC_CPU3:
+    case SWITCH_SRC_SOC_GPU:
+    case SWITCH_SRC_SOC_PLLX: {
+        if (!gSocTherm) return false;
+        const uint32_t status = rd(gSocTherm, switch_tsensors[source].base + STATUS1);
+        if (!(status & kTempValid)) return false;
+        *milliC = switch_soctherm_millic(status & 0xffffu);
+        *at = mach_absolute_time();
+        break;
+    }
+    case SWITCH_SRC_TMP451_SOC:
+    case SWITCH_SRC_TMP451_PCB: {
+        if (!switch_thermal_tmp451(&soc, &pcb, &when)) return false;
+        const uint64_t now = mach_absolute_time();
+        if (now > when && now - when > msToAbs(kTmp451StaleMS)) return false;
+        *milliC = source == SWITCH_SRC_TMP451_SOC ? soc : pcb;
+        *at = when;
+        break;
+    }
+    case SWITCH_SRC_BATTERY:
+        if (!switch_battery_temperature(&value, &when)) return false;
+        *milliC = value;
+        *at = when;
+        break;
+    case SWITCH_SRC_TCAL:
+        *milliC = 0;
+        *at = mach_absolute_time();
+        break;
+    default: return false;
+    }
+    return switch_sensor_plausible(*milliC);
+}
+
+// After the sensors were found ready: one line when a source stops answering, one when it is back.
+void noteSource(switch_sensor_source source, bool ok)
+{
+    if (!__atomic_load_n(&gVerdictLogged, __ATOMIC_ACQUIRE)) return;
+    const uint32_t bit = 1u << source;
+    const uint32_t before = ok ? __atomic_fetch_and(&gSourceDown, ~bit, __ATOMIC_RELAXED)
+                               : __atomic_fetch_or(&gSourceDown, bit, __ATOMIC_RELAXED);
+    if (ok && (before & bit)) IOLog("SwitchSensors: %s answers again\n", kSourceNames[source]);
+    if (!ok && !(before & bit))
+        IOLog("SwitchSensors: %s stopped answering: thermalmonitord reports its sensors missing\n",
+              kSourceNames[source]);
+}
+
+// SwitchHIDDevice's copyEvent handler, on thermalmonitord's call (any thread; maybe inside the HID services' shared
+// command gate): a register read or two atomic loads, then the event.
+OSObject *answer(void *context)
+{
+    const auto &sensor = switch_sensors[(uintptr_t)context];
+    int32_t milliC = 0;
+    uint64_t at = 0;
+    const bool ok = read(sensor.source, &milliC, &at);
+    noteSource(sensor.source, ok);
+    return ok ? switch_hid_temperature_event(at, switch_sensor_fixed(milliC)) : nullptr;
+}
+
+// Whether thermalmonitord's health check can pass; `why` lists what is missing.
+bool ready(char *why, size_t len)
+{
+    size_t n = 0;
+    if (why && len) why[0] = 0;
+    auto add = [&](const char *what) {
+        if (why && n < len) n += (size_t)snprintf(why + n, len - n, "%s%s", n ? ", " : "", what);
+    };
+    unsigned hooked = 0;
+    for (IOService *const &slot : gDevices) {
+        IOService *device = __atomic_load_n(&slot, __ATOMIC_ACQUIRE);
+        if (device && switch_hid_temperature_hooked(device)) ++hooked;
+    }
+    if (hooked != SWITCH_SENSOR_COUNT) {
+        char what[64];
+        snprintf(what, sizeof(what), "%u of %u HID sensors hooked", hooked, SWITCH_SENSOR_COUNT);
+        add(what);
+    }
+    for (unsigned s = 0; s < SWITCH_SRC_COUNT; ++s) {
+        int32_t milliC = 0;
+        uint64_t at = 0;
+        if (!read((switch_sensor_source)s, &milliC, &at)) add(kSourceNames[s]);
+    }
+    OSObject *probe = switch_hid_temperature_event(mach_absolute_time(), 0);
+    if (!probe) add("temperature events");
+    OSSafeReleaseNULL(probe);
+    return why ? !why[0] : false;
+}
+}  // namespace
+
+extern "C" void switch_sensors_note(void)
+{
+    IOLock *lock = __atomic_load_n(&gLock, __ATOMIC_ACQUIRE);
+    if (!lock) return;
+    IOLockLock(lock);
+    IOLockWakeup(lock, &gEvent, false);
+    IOLockUnlock(lock);
+}
+
+extern "C" int switch_sensors_wait_ready(unsigned int wait_ms, char *why, unsigned long len)
+{
+    char missing[256] = "";
+    IOLock *lock = sensorsLock();
+    if (!lock) {
+        snprintf(why, len, "no memory for the sensors' lock");
+        return 0;
+    }
+    uint64_t deadline = 0;
+    clock_interval_to_deadline(wait_ms, kMillisecondScale, &deadline);
+    IOLockLock(lock);
+    bool ok = ready(missing, sizeof(missing));
+    while (!ok && mach_absolute_time() < deadline) {
+        // Woken by a source that changed (switch_sensors_note), or at the deadline.
+        IOLockSleepDeadline(lock, &gEvent, deadline, THREAD_UNINT);
+        ok = ready(missing, sizeof(missing));
+    }
+    IOLockUnlock(lock);
+    snprintf(why, len, "%s", missing);
+    int32_t v[SWITCH_SRC_COUNT] = {};
+    uint32_t down = 0;
+    for (unsigned s = 0; s < SWITCH_SRC_COUNT; ++s) {
+        uint64_t at = 0;
+        if (!read((switch_sensor_source)s, &v[s], &at)) down |= 1u << s;
+    }
+    __atomic_store_n(&gSourceDown, down, __ATOMIC_RELAXED);  // from here on, one line per source that changes
+    if (ok && !__atomic_load_n(&gVerdictLogged, __ATOMIC_RELAXED)) {
+        char line[160];
+        size_t n = 0;
+        static const char *const kLabel[] = {"CPU", "", "", "", ", GPU", ", PLLX", ", SoC diode", ", PCB", ", battery"};
+        for (unsigned s = 0; s <= SWITCH_SRC_BATTERY && n < sizeof(line); ++s) {
+            const int32_t a = v[s] < 0 ? -v[s] : v[s];
+            n += (size_t)snprintf(line + n, sizeof(line) - n, "%s %s%d.%d", kLabel[s], v[s] < 0 ? "-" : "",
+                                  (int)(a / 1000), (int)(a % 1000 / 100));
+        }
+        IOLog("SwitchSensors: thermalmonitord's %u sensors answer: %s C\n", SWITCH_SENSOR_COUNT, line);
+    }
+    __atomic_store_n(&gVerdictLogged, true, __ATOMIC_RELEASE);
+    return ok;
+}
+
+extern "C" int switch_sensors_start(void)
+{
+    if (gStarted) return 0;
+    gStarted = true;
+    if (!sensorsLock()) {
+        IOLog("SwitchSensors: no lock\n");
+        return -1;
+    }
+    (void)socThermStart();  // without it the six SOC_THERM sources fail their reads (one line said why)
+    unsigned published = 0;
+    for (unsigned i = 0; i < SWITCH_SENSOR_COUNT; ++i) {
+        const switch_sensor &sensor = switch_sensors[i];
+        IOService *device = switch_hid_create_temperature(sensor.matchName, switch_sensor_fourcc(sensor.fourcc),
+                                                          &answer, (void *)(uintptr_t)i);
+        __atomic_store_n(&gDevices[i], device, __ATOMIC_RELEASE);  // ready() reads them from the waiter's thread
+        if (device) ++published;
+    }
+    switch_sensors_note();  // a waiting watchdogd re-checks now that the services exist
+    if (published != SWITCH_SENSOR_COUNT) {
+        IOLog("SwitchSensors: %u of %u thermalmonitord sensors published\n", published, SWITCH_SENSOR_COUNT);
+        return published ? 0 : -1;
+    }
+    return 0;
+}
