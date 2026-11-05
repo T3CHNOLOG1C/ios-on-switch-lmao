@@ -33,6 +33,9 @@
 #define DFLL_REF_RATE 51000000UL
 #define MAX77812_UV(code) (250000u + 5000u * (unsigned)(code))
 
+/* clk-dfll.c (clk-dfll.h is not on this file's include path) */
+void tegra_dfll_resume(struct platform_device *pdev, bool on_dfll);
+
 /* clk-tegra124-dfll-fcpu.c: the T210B01 CPU CVB tables (global there, no header declares them) */
 extern struct cvb_table tegra210b01_cpu_cvb_tables[4];
 
@@ -447,4 +450,29 @@ void tegra_dfll_cpu_describe(unsigned long rate_hz, char *buf, size_t len)
 		snprintf(buf + n, len - n, "; monitor waits missed %u", tdfll_poll_timeouts());
 out:
 	unlock();
+}
+
+/* L4T's path after context loss (clk-dfll.c tegra_dfll_resume, from the T210 clock syscore resume): the DFLL's own
+ * registers, LUT and I2C output interface programmed again, left disabled. SwitchThermal leaves the DFLL for PLLX
+ * before SC7 and enables it again afterwards, so on_dfll is false. */
+int tegra_dfll_cpu_resume(char *why, size_t len)
+{
+	int ret = 0;
+
+	lock();
+	if (!st.prepared)
+		goto out;
+	if (st.enabled) {
+		ret = fail(why, len, -EBUSY, "the CPU was on the DFLL through SC7");
+		goto out;
+	}
+	ret = tdfll_platform_resume(why, len);
+	if (!ret)
+		tegra_dfll_resume(tdfll_platform_dfll_device(), false);
+	if (!ret && st.thermal_set && (ret = apply_thermal()))
+		fail(why, len, ret, "thermal indices %u/%u refused after SC7", st.floor_index,
+		     st.cap_index);
+out:
+	unlock();
+	return ret;
 }

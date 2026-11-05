@@ -32,6 +32,9 @@ kernel_driver(
     name = "SwitchSuspend",
     hdr_deps = [
         "drivers/SwitchBattery",
+        "drivers/SwitchMotion",
         "drivers/TegraGPIO",
+        "drivers/TegraHost1x",
+        "drivers/TegraSMMU",
     ],
 )

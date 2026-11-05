@@ -104,6 +104,10 @@ int tegra_dfll_cpu_set_thermal(unsigned floor_index, unsigned cap_index);
 // restored or PLLX is not locked the CPU stays on PLLP at 408 MHz and this fails. 0 if not enabled.
 int tegra_dfll_cpu_disable_to_pllx(char *why, size_t len);
 
+// After SC7 (the DFLL disabled before it): its CAR clocks and its own registers programmed again as after prepare, the
+// thermal indices re-applied; enable may follow. 0 before a prepare; -EBUSY if it was still enabled.
+int tegra_dfll_cpu_resume(char *why, size_t len);
+
 // The OPP table prepare built (L4T cvb.c build_opp_table from this chip's CVB row: rates with their CVB voltages,
 // rounded up to the 5 mV step and clamped to [the CVB Vmin, the table's max_millivolts]), ascending, rates up to
 // max_hz (never above TEGRA_DFLL_CPU_MAX_HZ): kHz into khz[], mV into mv[], at most cap rows. Returns the row count,

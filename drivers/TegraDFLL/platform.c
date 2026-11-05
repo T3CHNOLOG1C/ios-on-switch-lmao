@@ -639,6 +639,29 @@ static int platform_init(char *why, size_t len)
 	return 0;
 }
 
+/* SC7 reset the CAR: the DFLL's gate, its reset and its two 51 MHz sources come back at their reset values while the
+ * clock tree's counts still say they are on. I2C5 must be running again (TegraI2C's resume) before this. */
+int tdfll_platform_resume(char *why, size_t len)
+{
+	if (init_err)
+		return 0;
+	wr(car, CLK_ENB_W_SET, W_DVFS);
+	udelay(2);
+	if (rd(car, RST_DEVICES_W) & W_DVFS) {
+		udelay(5);
+		wr(car, RST_DEV_W_CLR, W_DVFS);
+		udelay(2);
+	}
+	wr(car, CLK_SOURCE_DFLL_SOC, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
+	wr(car, CLK_SOURCE_DFLL_REF, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
+	udelay(2);
+	if (!i2c5_running() || !i2c5_recalc(&i2c5_hw, 0))
+		return fail(why, len, -ENODEV,
+			    "I2C5 is not clocked after SC7 (CLK_SOURCE_I2C5 %#x, CLK_OUT_ENB_H %#x)",
+			    rd(car, CLK_SOURCE_I2C5), rd(car, CLK_OUT_ENB_H));
+	return 0;
+}
+
 int tdfll_platform_init(char *why, size_t len)
 {
 	int err = init_err;

@@ -41,6 +41,8 @@ struct reset_control *tdfll_platform_reset(struct device *dev, const char *id);
  * returns 0 or a negative errno with a one-line reason in `why`.
  */
 int tdfll_platform_init(char *why, size_t len);
+/* After SC7, before tegra_dfll_resume(): the DFLL's CAR gate, reset and sources as init left them. 0 if never inited. */
+int tdfll_platform_resume(char *why, size_t len);
 struct platform_device *tdfll_platform_dfll_device(void);
 /* The CPU runs from PLLX in the RUN state through CCLKG_BURST_POLICY, undivided (what enable moves away from). */
 int tdfll_platform_cpu_on_pllx(char *why, size_t len);

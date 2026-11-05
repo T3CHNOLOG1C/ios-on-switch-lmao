@@ -347,6 +347,31 @@ static inline const char *switch_wake_pmc_reason(const uint32_t status[2], uint6
     return "unknown";
 }
 
+// --- Time and charge asleep (SwitchSuspend's wake line) ------------------------------------------------------------
+// The Tegra RTC (always-on PMC block, 32.768 kHz from the MAX77620) keeps counting through SC7, when the timebase
+// mach_absolute_time() reads stops (XNU cpu_timebase_init rebases it at wake). Reading MILLI_SECONDS latches
+// SHADOW_SECONDS (Linux rtc-tegra.c tegra_rtc_read_time), so one sample is (shadow seconds, milliseconds).
+static inline uint64_t switch_sleep_rtc_ms(uint32_t seconds, uint32_t millis)
+{
+    return (uint64_t)seconds * 1000u + (millis % 1000u);
+}
+
+// Elapsed RTC milliseconds; 0 when the clock went backwards (an RTC write in between).
+static inline uint64_t switch_sleep_elapsed_ms(uint64_t before, uint64_t after)
+{
+    return after > before ? after - before : 0;
+}
+
+// The average current over a sleep from the fuel gauge's coulomb counter: `before` and `after` are its 16-bit QH
+// register (it wraps; counts down while the battery discharges), each count `lsb_uah` uAh. mA, negative while
+// discharging, as the gauge's Current register; 0 for an empty interval.
+static inline int32_t switch_sleep_average_ma(uint16_t before, uint16_t after, uint32_t lsb_uah, uint64_t elapsed_ms)
+{
+    if (!elapsed_ms) return 0;
+    const int64_t counts = (int16_t)(uint16_t)(after - before);
+    return (int32_t)(counts * (int64_t)lsb_uah * 3600 / (int64_t)elapsed_ms);
+}
+
 #ifdef __cplusplus
 }
 #endif

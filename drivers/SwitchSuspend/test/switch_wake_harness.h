@@ -36,6 +36,9 @@ const char *pmc_reason(uint32_t status0, uint32_t status1, uint64_t armed);
 const char *source_name(unsigned source);
 unsigned bt_peek(void);
 unsigned guard_ms(void);
+uint64_t sleep_rtc_ms(uint32_t seconds, uint32_t millis);
+uint64_t sleep_elapsed_ms(uint64_t before, uint64_t after);
+int32_t sleep_average_ma(uint16_t before, uint16_t after, uint32_t lsb_uah, uint64_t elapsed_ms);
 
 #ifdef __cplusplus
 }

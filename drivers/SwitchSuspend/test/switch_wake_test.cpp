@@ -384,4 +384,22 @@ TEST_F(Wake, PmcReason)
     EXPECT_STREQ(pmc_reason(1u << 8, 1u << 20, armed), "unknown");      // Wi-Fi/BT wake: not armed
 }
 
+TEST_F(Wake, SleepTimeFromTheTegraRtc)
+{
+    EXPECT_EQ(sleep_rtc_ms(100, 250), 100250u);
+    EXPECT_EQ(sleep_rtc_ms(0, 1999), 999u);  // MILLI_SECONDS counts 0-999
+    EXPECT_EQ(sleep_elapsed_ms(sleep_rtc_ms(100, 900), sleep_rtc_ms(161, 100)), 60200u);
+    EXPECT_EQ(sleep_elapsed_ms(sleep_rtc_ms(200, 0), sleep_rtc_ms(100, 0)), 0u);  // set backwards in between
+}
+
+TEST_F(Wake, SleepAverageCurrentFromTheCoulombCounter)
+{
+    // 0.5 mAh counts (10 mOhm effective sense): 2 counts down in an hour is -1 mA; 120 down in 6 h is -10 mA.
+    EXPECT_EQ(sleep_average_ma(1000, 998, 500, 3600000), -1);
+    EXPECT_EQ(sleep_average_ma(5000, 4880, 500, 6 * 3600000ull), -10);
+    EXPECT_EQ(sleep_average_ma(2, 0xfffe, 500, 3600000), -2);  // the 16-bit counter wraps
+    EXPECT_EQ(sleep_average_ma(100, 160, 500, 3600000), 30);    // charging while asleep
+    EXPECT_EQ(sleep_average_ma(100, 90, 500, 0), 0);
+}
+
 }  // namespace

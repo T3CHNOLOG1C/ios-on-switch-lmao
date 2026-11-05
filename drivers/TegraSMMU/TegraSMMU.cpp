@@ -4,6 +4,7 @@
 #include <IOKit/IOLocks.h>
 #include <libkern/libkern.h>
 #include "TegraSMMU.h"
+#include "TegraSMMUAttachments.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -19,6 +20,8 @@ enum : uint32_t {
 };
 volatile uint8_t *gMc;
 IOSimpleLock *gLock;
+tegra_smmu_attachments gAttached;  // under gLock
+bool gAttachedFull;                // under gLock: an attachment the table could not keep
 
 inline uint32_t r32(uint32_t o)
 {
@@ -52,6 +55,29 @@ void flushLocked(uint32_t asid)
     w32(TLB_FLUSH, TLB_FLUSH_ASID_MATCH | (asid << 24));  // this ASID, every address
     (void)r32(PTB_ASID);
 }
+
+// Lock held: the directory (read back), a flush, the clients' translation bits, the swgroup, a flush.
+int programLocked(const tegra_smmu_attachment &a, char *line, size_t size)
+{
+    w32(PTB_ASID, a.asid);
+    w32(PTB_DATA, a.ptb);
+    (void)r32(PTB_ASID);
+    w32(PTB_ASID, a.asid);
+    if (r32(PTB_DATA) != a.ptb) {
+        snprintf(line, size, "ASID %u directory did not take (PTB_DATA %#x, wrote %#x)", a.asid, r32(PTB_DATA), a.ptb);
+        return -1;
+    }
+    flushLocked(a.asid);
+    w32(a.translationReg, r32(a.translationReg) | a.translationBits);
+    w32(a.asidReg, ASID_ENABLE | a.asid);
+    (void)r32(a.asidReg);
+    if (r32(a.asidReg) != (ASID_ENABLE | a.asid)) {
+        snprintf(line, size, "swgroup ASID did not take (MC %#x = %#x)", a.asidReg, r32(a.asidReg));
+        return -1;
+    }
+    flushLocked(a.asid);
+    return 0;
+}
 }  // namespace
 
 extern "C" int tegra_smmu_attach(uint32_t asid, uint32_t ptb, uint32_t asidReg, uint32_t translationReg,
@@ -68,24 +94,11 @@ extern "C" int tegra_smmu_attach(uint32_t asid, uint32_t ptb, uint32_t asidReg, 
         snprintf(line, size, "the swgroup is already translated by ASID %u (MC %#x = %#x)", was & 0x7f, asidReg, was);
         goto out;
     }
-    w32(PTB_ASID, asid);
-    w32(PTB_DATA, ptb);
-    (void)r32(PTB_ASID);
-    w32(PTB_ASID, asid);
-    if (r32(PTB_DATA) != ptb) {
-        snprintf(line, size, "ASID %u directory did not take (PTB_DATA %#x, wrote %#x)", asid, r32(PTB_DATA), ptb);
-        goto out;
+    {
+        const tegra_smmu_attachment attachment = {asid, ptb, asidReg, translationReg, translationBits};
+        ret = programLocked(attachment, line, size);
+        if (!ret && !tegra_smmu_attachments_note(&gAttached, &attachment)) gAttachedFull = true;
     }
-    flushLocked(asid);
-    w32(translationReg, r32(translationReg) | translationBits);
-    w32(asidReg, ASID_ENABLE | asid);
-    (void)r32(asidReg);
-    if (r32(asidReg) != (ASID_ENABLE | asid)) {
-        snprintf(line, size, "swgroup ASID did not take (MC %#x = %#x)", asidReg, r32(asidReg));
-        goto out;
-    }
-    flushLocked(asid);
-    ret = 0;
 out:
     IOSimpleLockUnlock(gLock);
     return ret;
@@ -95,6 +108,7 @@ extern "C" void tegra_smmu_detach(uint32_t asid, uint32_t asidReg)
 {
     if (!ready()) return;
     IOSimpleLockLock(gLock);
+    tegra_smmu_attachments_forget(&gAttached, asidReg);
     w32(asidReg, 0);
     (void)r32(asidReg);
     w32(PTB_ASID, asid);
@@ -114,4 +128,23 @@ extern "C" void tegra_smmu_flush(uint32_t asid)
 extern "C" uint32_t tegra_smmu_read(uint32_t offset)
 {
     return ready() ? r32(offset) : 0;
+}
+
+extern "C" int tegra_smmu_resume(void)
+{
+    if (!__atomic_load_n(&gLock, __ATOMIC_ACQUIRE) || !ready()) return 0;
+    char failed[TEGRA_SMMU_ATTACHMENTS][96] = {};
+    IOSimpleLockLock(gLock);
+    const uint32_t count = gAttached.count;
+    const bool full = gAttachedFull;
+    for (uint32_t i = 0; i < count; ++i) (void)programLocked(gAttached.entry[i], failed[i], sizeof(failed[i]));
+    IOSimpleLockUnlock(gLock);
+    int bad = full ? 1 : 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!failed[i][0]) continue;
+        IOLog("TegraSMMU: resume: %s\n", failed[i]);
+        ++bad;
+    }
+    if (full) IOLog("TegraSMMU: resume: over %u swgroups were attached; one was not restored\n", TEGRA_SMMU_ATTACHMENTS);
+    return bad;
 }

@@ -89,6 +89,7 @@ enum : uint8_t {
     VCell = 0x09,
     Current = 0x0a,
     AvgCurrent = 0x0b,
+    QH = 0x4d,
     FullCap = 0x10,
     Cycles = 0x17,
     DesignCap = 0x18,
@@ -1124,6 +1125,19 @@ extern "C" void switch_battery_resume(void)
 {
     if (SwitchBattery *b = __atomic_load_n(&gBatteryService, __ATOMIC_ACQUIRE))
         b->getWorkLoop()->runAction(&sleepAction, b, nullptr);
+}
+
+extern "C" int switch_battery_gauge_sample(struct switch_battery_gauge *sample)
+{
+    uint16_t qh = 0, avg = 0, now = 0;
+    int err = gaugeWord(QH, &qh);
+    if (!err) err = gaugeWord(AvgCurrent, &avg);
+    if (!err) err = gaugeWord(Current, &now);
+    if (err) return err;
+    sample->qh = qh;
+    sample->avg_ma = (int16_t)avg * 15625 / 100000;
+    sample->now_ma = (int16_t)now * 15625 / 100000;
+    return 0;
 }
 
 // thermalmonitord's battery sensors (SwitchBattery.h). Any context.

@@ -134,3 +134,18 @@ unsigned guard_ms(void)
 {
     return SWITCH_WAKE_GUARD_MS;
 }
+
+uint64_t sleep_rtc_ms(uint32_t seconds, uint32_t millis)
+{
+    return switch_sleep_rtc_ms(seconds, millis);
+}
+
+uint64_t sleep_elapsed_ms(uint64_t before, uint64_t after)
+{
+    return switch_sleep_elapsed_ms(before, after);
+}
+
+int32_t sleep_average_ma(uint16_t before, uint16_t after, uint32_t lsb_uah, uint64_t elapsed_ms)
+{
+    return switch_sleep_average_ma(before, after, lsb_uah, elapsed_ms);
+}

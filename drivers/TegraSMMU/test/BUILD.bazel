@@ -2,6 +2,7 @@
 #   smmu_domain_test          TegraSMMUDomain.h's entries, tables and translation, and the tables TegraVIC builds with it
 #                             byte for byte against TegraVIC's original algorithm
 #   smmu_owner_source_test    only TegraSMMU.cpp programs the MC's global SMMU registers (reads every driver's C++)
+#   smmu_attachments_test     the swgroups tegra_smmu_resume programs again after SC7 (TegraSMMUAttachments.h)
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
 
@@ -14,6 +15,14 @@ host_test(
         "//drivers/TegraSMMU:TegraSMMUDomain.h",
     ],
     copts = ["-Wno-unused-parameter"],
+)
+
+host_test(
+    name = "smmu_attachments_test",
+    srcs = [
+        "smmu_attachments_test.cpp",
+        "//drivers/TegraSMMU:TegraSMMUAttachments.h",
+    ],
 )
 
 # Every driver source: any driver's edit reruns this one (it is about all of them; it takes well under a second).

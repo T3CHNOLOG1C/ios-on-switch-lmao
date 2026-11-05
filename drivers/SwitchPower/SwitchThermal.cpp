@@ -145,6 +145,7 @@
 #include <machine/machine_routines.h>
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../SwitchSuspend/SwitchWake.h"
 #include "SwitchClocks.h"
 #include "../TegraDFLL/TegraDFLL.h"
 #include "SwitchGovernor.h"
@@ -405,6 +406,7 @@ class SwitchThermal : public IOService {
     // thermal trip only holds it down until perfHoldUntil.
     bool perfWanted = false, perfRaised = false, perfSettled = false, perfKept = false, perfTrace = false;
     bool perfRelocked = false, perfLimited = false;  // steps 1 and 2 are done once per boot (and SC7)
+    bool pllxLost = false;                           // SC7 left PLLX as the warm boot set it
     bool dfllMode = false, dfllPrepared = false;     // the CPU goes on the DFLL, and it is still usable this boot
     bool governed = false;                           // on the DFLL, the clock follows the load (switchperf)
     unsigned long dfllTopHz = kDfllRateHz;           // the top this boot measured at or under 1785 MHz
@@ -453,7 +455,7 @@ public:
     void resume();
 
 private:
-    void restoreCpu(const char *why, bool forGood);
+    void restoreCpu(const char *why, bool forGood, bool keepDfll = false);
     bool perfPending() const { return perfWanted && !perfSettled && !perfRaised; }
     uint32_t holdRemainingMS() const;
     uint32_t nextTickMS(bool ok) const;
@@ -861,6 +863,20 @@ bool SwitchThermal::raiseCpu(int soc)
 {
     using namespace switchclk;
     if (!perfKept && !preparePerf()) return false;
+    if (dfllMode && pllxLost) {
+        // The DFLL enable starts from PLLX at the boot rate: relock it from wherever the warm boot left the cluster.
+        const unsigned found = readCpu(car).kHz;
+        pllxLost = false;
+        if (!runCpuFromPllx(keptPllx, kStepRelock)) {
+            IOLog("SwitchPerf: after sleep, PLLX did not relock (CPU at %u kHz, CCLKG %#x); PLL mode for this boot\n",
+                  found, rd(car, CCLKG_BURST_POLICY));
+            dfllMode = governed = false;
+        } else {
+            perfRelocked = true;
+            switch_power_journal("SwitchPerf: after sleep: CPU %u -> %u kHz on PLLX, then the DFLL", found / 1000,
+                                 readCpu(car).kHz / 1000);
+        }
+    }
     if (dfllMode) {
         if (!perfLimited && perfSteps >= kStepCurrentLimit && !setCurrentLimit()) {
             perfSettled = true;
@@ -1285,7 +1301,7 @@ void SwitchThermal::suspend()
                 self->alert->disable();
                 self->alertArmed = false;
             }
-            self->restoreCpu("system sleep", false);
+            self->restoreCpu("system sleep", false, true);
             self->setDrive(0);
             self->gpioMasked(kPortA, MSK_OUT, kPinPA5, false);
             return kIOReturnSuccess;
@@ -1301,7 +1317,18 @@ void SwitchThermal::resume()
             self->fanPowerOn();
             self->setDrive(kSafeDrive);
             self->sensorReady = false;
-            self->perfKept = self->perfRelocked = self->perfLimited = false;
+            if (self->dfllMode) {
+                char why[160] = "";
+                const int err = tegra_dfll_cpu_resume(why, sizeof(why));
+                if (err) {
+                    IOLog("SwitchPerf: DFLL not restored after sleep (%d: %s); PLL mode for this boot\n", err, why);
+                    self->dfllMode = self->governed = false;
+                }
+            }
+            // The boot's clocks and VDD_CPU code stay the baseline (the MAX77812 keeps its registers through SC7);
+            // PLLX itself is relocked before the next raise.
+            self->pllxLost = self->perfKept;
+            self->perfRelocked = self->perfLimited = false;
             self->perfRung = 0;
             self->perfHoldUntil = 0;
             self->timer->setTimeoutMS(1);
@@ -1332,7 +1359,7 @@ uint32_t SwitchThermal::nextTickMS(bool ok) const
 // (the sensor was lost while raised) keeps it there for the rest of the boot; otherwise (thermal
 // trip) it goes up again below the hysteresis and after the hold-off. No-op unless raised: a sensor
 // failure before the first raise only delays it (the fan runs at full speed meanwhile).
-void SwitchThermal::restoreCpu(const char *why, bool forGood)
+void SwitchThermal::restoreCpu(const char *why, bool forGood, bool keepDfll)
 {
     using namespace switchclk;
     if (!perfRaised) return;
@@ -1342,7 +1369,7 @@ void SwitchThermal::restoreCpu(const char *why, bool forGood)
     if (dfllMode) {
         char because[160] = "";
         const int err = tegra_dfll_cpu_disable_to_pllx(because, sizeof(because));
-        dfllMode = false;  // after a disable, the rest of the boot is the PLL mode
+        dfllMode = keepDfll;  // otherwise the rest of the boot is the PLL mode
         publish("CPUClockMHz", switchclk::readCpu(car).kHz / 1000);
         IOLog("SwitchPerf: %s: CPU off the DFLL, back on %s%s%s\n", why, err ? "PLLP 408 MHz" : "the inherited PLLX",
               err ? ": " : "", because);

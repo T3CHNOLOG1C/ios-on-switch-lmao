@@ -16,26 +16,22 @@
 //
 // Order (one driver here runs every step, so the order is this list; each hook is <driver>_suspend/_resume):
 //   sleep action, thread context, interrupts on, secondaries still running:
-//     0 switch_als_suspend (BH1730 off: shares LDO6, clocked by DC A)
-//     1 tegra_display_suspend (display agent: panel off, DC quiesced)   2 switch_touch_suspend (FTM4 + LDO6 off)
-//     3 switch_joycon_suspend (controllers agent)                       4 (tegra_nvdec_suspend, once it exists)
-//     5 switch_thermal_suspend (CPU back to the boot clocks, fan off)   PESyncNVRAM (SwitchNVRAM's sync, SD still up)
-//     6 ioswitch_block_suspend (SD drained, off)
-//     7 switch_rtc_suspend (MAX77620 ALARM1 for powerd's next wake)     8 PMC wake events armed (here)
-//     9 tegra_i2c_suspend (last: holds every bus until resume)
+//     0 als (BH1730 off: shares LDO6, clocked by DC A)   1 display (panel off, DC quiesced)   2 touch (FTM4, LDO6 off)
+//     2 motion (IMU off, SPI4 gated)   3 joycon   4 host1x (NVDEC, NVENC, VIC, NVJPG quiesced, then host1x)
+//     5 thermal (CPU off the DFLL to PLLX at the boot clocks, fan off)   6 PESyncNVRAM (SD still up), journal to Data
+//     7 sd (drained, off)   8 rtc (MAX77620 ALARM1 for powerd's next wake)   8 battery (charge-zone alert), gauge read
+//     9 PMC wake events armed   10 i2c (last: holds every bus until resume)
 //   quiesce action, boot CPU, interrupts off, secondaries already off:
-//     tegra_gpio_suspend, pinmux saved (here), arm_gic_suspend
+//     tegra_gpio_suspend, pinmux saved (here), arm_gic_suspend, Tegra RTC read (here)
 //   (PSCI SYSTEM_SUSPEND; the SoC is in SC7)
 //   active action, boot CPU, interrupts off, before the secondaries start:
-//     pinmux restored (here), tegra_gpio_resume, arm_gic_resume, PMC wake status read (here)
-//   wake action, thread context, every core running, the reverse of the sleep action:
-//     tegra_i2c_resume, switch_rtc_resume (wall clock re-read before clock_wakeup_calendar), ioswitch_block_resume,
-//     switch_thermal_resume, (tegra_nvdec_resume), switch_joycon_resume, switch_touch_resume, tegra_display_resume,
-//     switch_als_resume
-// The display and Joy-Con hooks are the display and controllers agents' (no-ops / panics as their headers say). A driver
-// that is turned on but has no suspend path (Wi-Fi, Bluetooth, audio, GPU, EMC/DFLL, NVDEC/host1x, USB-C) holds a CPU
-// power assertion instead, so the system stays awake exactly as without this driver. The display hooks need the DC A
-// interrupt (sheng-vsync / ioswitch-vblank) and SwitchBrightness, as TegraDisplayPower.h says.
+//     Tegra RTC read, pinmux restored (here), tegra_gpio_resume, arm_gic_resume, PMC wake status read (here)
+//   wake action, thread context, every core running:
+//     0 i2c, gauge read   1 rtc (wall clock re-read before clock_wakeup_calendar)   2 smmu (every attached swgroup)
+//     3 sd   4 battery   5 thermal (DFLL re-initialized; SwitchThermal enables it again)   6 host1x (before the display,
+//     which sits behind it)   7 joycon   8 motion   8 touch   9 display   10 als (after LDO6 and the frame ends)
+// A driver that is turned on but has no SC7 path yet holds the system awake instead (switch_suspend_hold). The display
+// hooks need the DC A interrupt (sheng-vsync / ioswitch-vblank) and SwitchBrightness, as TegraDisplayPower.h says.
 //
 // Wake sources: the MAX77620's nIRQ (PMC wake 51, level low) carries the power key (ONOFFIRQ EN0, SwitchButtons) and
 // the RTC alarm (ALARM1, SwitchPMIC); the BM92T36 USB-PD ALERT (PMC wake 14, PK4 level low, SwitchPD) a USB-C plug or
