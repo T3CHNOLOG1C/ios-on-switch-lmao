@@ -567,9 +567,9 @@ IOGetBootManifestHash(char *hash_data, size_t *hash_data_size)
 }
 
 #if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
-#if !DEVELOPMENT && !DEBUG
-#error Owner image-set metadata is an offline development instrument
-#endif
+/* The owner boot manifest (XNU_OWNER_BOOT_MANIFEST) is part of ioswitch's boot path in every kernel
+ * configuration (it was refused outside DEVELOPMENT and DEBUG while it was an offline experiment).
+ */
 #include <libkern/crypto/sha2.h>
 extern "C" int native_verified_block_manifest_sha384(dev_t, const char *, uint8_t[48]);
 extern "C" int native_owner_publish_boot_manifest(dev_t, const char *, dev_t, const char *);

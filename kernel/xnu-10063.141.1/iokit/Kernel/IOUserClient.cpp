@@ -6836,7 +6836,7 @@ OSMetaClassDefineReservedUnused(IOUserClient2022, 1);
 OSMetaClassDefineReservedUnused(IOUserClient2022, 2);
 OSMetaClassDefineReservedUnused(IOUserClient2022, 3);
 
-#if DEVELOPMENT || DEBUG
+#if 1 /* ioswitch: in every kernel configuration (was DEVELOPMENT || DEBUG) */
 extern "C" {
 volatile uint32_t native_mobile_graphics_abstract_null_mask;
 volatile uint64_t native_mobile_graphics_client_object;

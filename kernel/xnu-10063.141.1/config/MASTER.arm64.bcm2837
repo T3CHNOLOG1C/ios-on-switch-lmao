@@ -25,7 +25,7 @@
 #  BSD_DEV =        [ BSD_BASE config_netboot config_imageboot config_coredump pgo config_vnguard ]
 #  BSD_DEBUG =      [ BSD_BASE config_netboot config_imageboot config_coredump pgo config_vnguard ]
 #  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_fse routefs namedstreams bindfs]
-#  FILESYS_RELEASE= [ FILESYS_BASE ]
+#  FILESYS_RELEASE= [ FILESYS_BASE config_union_mounts ]
 #  FILESYS_DEV =    [ FILESYS_BASE config_union_mounts fdesc ]
 #  FILESYS_DEBUG =  [ FILESYS_BASE config_union_mounts fdesc ]
 #  NFS_DEV =        [ nfsserver ]

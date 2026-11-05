@@ -6384,7 +6384,7 @@ exec_add_entropy_key(struct image_params *imgp,
 /*
  * Build up the contents of the apple[] string vector
  */
-#if (DEVELOPMENT || DEBUG)
+#if 1 /* kern_sysctl.c's dyld_flags exists in every configuration; the owner cache startup sets its bit 3 */
 extern uint64_t dyld_flags;
 #endif
 
@@ -7261,9 +7261,9 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
  *		initproc might be different.
  */
 #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
-#if !DEVELOPMENT && !DEBUG
-#error The offline owner cache mount is a development instrument
-#endif
+/* The owner cache mount is part of ioswitch's boot path in every kernel configuration (it was refused
+ * outside DEVELOPMENT and DEBUG while it was an offline experiment); XNU_OWNER_CACHE_MOUNT selects it.
+ */
 extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
 #if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
 extern int native_owner_publish_boot_manifest(dev_t, const char *, dev_t, const char *);

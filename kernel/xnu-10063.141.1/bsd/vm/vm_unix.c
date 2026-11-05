@@ -2229,9 +2229,9 @@ static void shared_region_map_and_slide_cleanup(
 	struct vm_shared_region  *shared_region);
 
 #if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER && !CONFIG_CSR
-#if !DEVELOPMENT && !DEBUG
-#error The independent owner cache carrier is a development instrument
-#endif
+/* The owner cache carrier (XNU_OWNER_CACHE_CARRIER) builds in every kernel configuration (it was refused
+ * outside DEVELOPMENT and DEBUG while it was an offline experiment).
+ */
 extern int native_verified_block_root_authorized(dev_t);
 extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
 unsigned long native_owner_cache_carrier_accepts = 0;

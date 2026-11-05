@@ -480,7 +480,7 @@ bsd_rooted_ramdisk(void)
  * of the tro_ucred field so that the uthread structure can be
  * used like any other.
  */
-#if DEVELOPMENT || DEBUG
+#if 1 /* ioswitch's boot path, in every kernel configuration (was DEVELOPMENT || DEBUG) */
 extern kern_return_t OSKextLoadKextWithIdentifier(const char *identifier);
 volatile int native_apfs_load_status = -1;
 volatile uint32_t native_apfs_registered = 0;
@@ -791,7 +791,7 @@ bsd_init(void)
 	/* Initialize the file systems. */
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
-#if DEVELOPMENT || DEBUG
+#if 1 /* ioswitch's boot path, in every kernel configuration (was DEVELOPMENT || DEBUG) */
 	native_apfs_load_probe();
 	native_mobile_graphics_load_probe();
 	native_iogpu_load_probe();
@@ -944,7 +944,7 @@ bsd_init(void)
 #if CONFIG_DTRACE
 	dtrace_postinit();
 #endif
-#if (DEVELOPMENT || DEBUG) && defined(XNU_NATIVE_OFFLINE_GPU) && XNU_NATIVE_OFFLINE_GPU
+#if defined(XNU_NATIVE_OFFLINE_GPU) && XNU_NATIVE_OFFLINE_GPU
 	extern void native_offline_gpu_publish(void);
 	native_offline_gpu_publish();
 #endif
@@ -1343,7 +1343,7 @@ bsd_autoconf(void)
 	}
 
 	kern_return_t result = IOKitBSDInit();
-#if (DEVELOPMENT || DEBUG) && defined(XNU_NATIVE_LEGACY_DISPLAY) && XNU_NATIVE_LEGACY_DISPLAY
+#if defined(XNU_NATIVE_LEGACY_DISPLAY) && XNU_NATIVE_LEGACY_DISPLAY
 	/* The original IOSurface personality requires the genuine IOBSD resource.
 	 * The default-off framebuffer instrument may start only after publication.
 	 */
