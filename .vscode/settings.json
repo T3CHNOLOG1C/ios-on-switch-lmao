@@ -1,3 +1,88 @@
 {
-  "bazel.commandLine.queriesShareServer": false
+  // Keep the editor light on this repo. 11-05: the Bazel extension's tree, test explorer and code lens left 1,183
+  // `bazel query` clients (16 GB) running. The C/C++ extension and clangd indexed the same files twice, and git
+  // picked up every agent worktree under out/agent-scratch.
+
+  // Bazel: Starlark highlighting and buildifier formatting only. Nothing here runs `bazel query` on its own; build
+  // and test from the terminal.
+  "bazel.workspaceTree.enable": false,
+  "bazel.testExplorer.enable": false,
+  "bazel.codeLens.enable": false,
+  "bazel.enableWorkspaceTree": false,
+  "bazel.enableTestExplorer": false,
+  "bazel.enableCodeLens": false,
+  "bazel.languageSupport.enable": true,
+  "bazel.buildifier.enable": true,
+  "bazel.commandLine.queriesShareServer": false,
+  "bazel.commandLine.queryOutputBase": "~/Library/Caches/bazel/editor-query-ob",
+
+  // C/C++: clangd only. The Microsoft extension's IntelliSense stays off, so the code is parsed once.
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "C_Cpp.autocomplete": "disabled",
+  "C_Cpp.errorSquiggles": "disabled",
+  "C_Cpp.formatting": "disabled",
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}",
+    "--background-index",
+    "-j=4",
+    "--header-insertion=never",
+    "--pch-storage=disk",
+    "--log=error"
+  ],
+  "clangd.onConfigChanged": "restart",
+
+  // Python: Pylance analyses open files only, and never the vendored, generated or scratch trees.
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.analysis.indexing": true,
+  "python.analysis.userFileIndexingLimit": 2000,
+  "python.analysis.exclude": [
+    "**/bazel-*",
+    "out",
+    "vendor",
+    "third_party",
+    "kernel/xnu-*",
+    "**/__pycache__"
+  ],
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  },
+
+  // Git: only the repository itself, never the agent worktrees or vendored clones below it.
+  "git.autoRepositoryDetection": "openEditors",
+  "git.repositoryScanMaxDepth": 1,
+  "git.repositoryScanIgnoredFolders": [
+    "out",
+    "vendor",
+    "third_party",
+    "bazel-bin",
+    "bazel-out",
+    "bazel-testlogs",
+    "bazel-ioswitch"
+  ],
+  "git.detectSubmodules": false,
+
+  // Files: never follow Bazel's output symlinks (they lead into a 10 GB+ output base) or watch the big trees.
+  "search.followSymlinks": false,
+  "files.watcherExclude": {
+    "**/bazel-*/**": true,
+    "**/out/**": true,
+    "**/vendor/**": true,
+    "**/.git/objects/**": true,
+    "**/__pycache__/**": true,
+    "**/.agents/**": true
+  },
+  "files.exclude": {
+    "bazel-bin": true,
+    "bazel-out": true,
+    "bazel-testlogs": true,
+    "bazel-ioswitch": true,
+    "**/__pycache__": true
+  },
+  "search.exclude": {
+    "**/bazel-*": true,
+    "out/**": true,
+    "vendor/**": true,
+    "MODULE.bazel.lock": true,
+    "**/*.logarchive/**": true
+  }
 }

@@ -1,0 +1,7 @@
+# Kept out of Cursor's codebase index: build outputs, scratch, vendored clones, device logs.
+bazel-*
+out/
+vendor/
+**/__pycache__/
+**/*.logarchive/
+MODULE.bazel.lock
