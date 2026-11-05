@@ -90,17 +90,27 @@ def compat_prefix_maps(path_root, bin_dir):
     return maps
 
 
+# Where the @xnu repository (the patched tarball) put XNU's source: its spelling in debug information.
+XNU_REPOSITORY = "external/+http_archive+xnu"
+
+
 def prefix_maps(path_root, bin_dir, xnu_dir):
     """-ffile-prefix-map flags that make every path a compile can embed independent of the sandbox: the patched XNU
     source shows as <root>/out/native-a57/root-v1/tree/.cache/xnu-work (where the CMake flow kept its checkout),
     build outputs as <root>/<package path> (bazel-bin/out/... -> out/...), sources as <root>/<path>."""
     here = execroot()
     tree = path_root.rstrip("/") + "/out/native-a57/root-v1/tree/.cache/xnu-work"
-    return [
+    maps = [
         "-ffile-prefix-map={}/{}={}".format(here, xnu_dir, tree),
         "-ffile-prefix-map={}/{}={}".format(here, bin_dir, path_root.rstrip("/")),
         "-ffile-prefix-map={}={}".format(here, path_root.rstrip("/")),
     ] + compat_prefix_maps(path_root, bin_dir)
+    if xnu_dir != XNU_REPOSITORY:
+        # The vendored XNU (kernel/xnu-<version>) keeps the debug-information spelling it had as the @xnu repository
+        # (debug maps go by the last match: after the execution root's).
+        maps += ["-fdebug-prefix-map={}/{}={}/{}".format(here, xnu_dir, path_root.rstrip("/"), XNU_REPOSITORY),
+                 "-fdebug-prefix-map={}={}".format(xnu_dir, XNU_REPOSITORY)]
+    return maps
 
 
 def copy_tree(source, target):

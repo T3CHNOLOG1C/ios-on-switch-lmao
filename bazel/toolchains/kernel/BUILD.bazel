@@ -16,7 +16,7 @@ lint_files(exclude = ["recipes.bzl"])
 
 kernel_cc_toolchain_config(
     name = "config",
-    sdk = "//kernel:kernel_sdk",
+    sdk = "//kernel:sdk",
     # The main repository's top-level directories with kernel sources (the drivers' tree, the pinned bindings).
     source_roots = [
         "bazel",
@@ -25,7 +25,7 @@ kernel_cc_toolchain_config(
 )
 
 # Xcode's identity is an input of every compile (a new Xcode re-keys them all); the headers come from the targets'
-# CcInfo (//kernel:kernel_sdk and the drivers' own), so .d files prune them per object.
+# CcInfo (//kernel:sdk and the drivers' own), so .d files prune them per object.
 filegroup(
     name = "files",
     srcs = ["@xcode//:identity"],

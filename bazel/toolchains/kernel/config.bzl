@@ -32,14 +32,17 @@ load(
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/toolchains:cc_toolchain_config_info.bzl", "CcToolchainConfigInfo")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
-load("//bazel/kernel:layout.bzl", "compat_prefix_maps", "old_spelling")
+load("//bazel/kernel:layout.bzl", "compat_prefix_maps")
 load("//bazel/kernel:sdk.bzl", "KernelSdkInfo")
 load(":recipes.bzl", "RECIPES")
 
 PATH_ROOT = "/ioswitch"
 
-# Where the CMake flow kept the patched XNU checkout: the XNU source's spelling in every string.
+# Where the CMake flow kept the patched XNU checkout: the XNU source's spelling in every __FILE__.
 XNU_SPELLING = PATH_ROOT + "/out/native-a57/root-v1/tree/.cache/xnu-work"
+
+# The XNU source's spelling in debug information: where the @xnu repository (the patched tarball) had it.
+XNU_REPOSITORY = "external/+http_archive+xnu"
 
 # cmake/Drivers.cmake IOSWITCH_DRIVER_WARNINGS: what every IOKit C++ driver adds to the kernel's flags.
 DRIVER_WARNINGS = [
@@ -75,8 +78,8 @@ def _flags(values):
 def _impl(ctx):
     sdk = ctx.attr.sdk[KernelSdkInfo]
     places = {
-        "{xnu_obj}": sdk.headers.path,
-        "{fakeroot}": sdk.fakeroot.path,
+        "{xnu_obj}": sdk.obj_dir,
+        "{fakeroot}": sdk.sdkroot_dir,
         "{xnu}": sdk.xnu_root,
         # "{tree}/x" is x below the kernel tree (the repository root since the layout move).
         "{tree}/": sdk.tree + "/" if sdk.tree else "",
@@ -90,18 +93,27 @@ def _impl(ctx):
             out.append(value)
         return out
 
-    # The headers tree stands in for XNU's object root (sdk.objroot): strings name the object root, as spelled before the
-    # layout move (bazel/kernel/layout.bzl).
-    objroot = old_spelling(sdk.objroot, sdk.bin_dir)
-    objroot_relative = objroot[len(sdk.bin_dir) + 1:]
+    # XNU's object root and SDK root (each file its own artifact under kernel/xnu-<version>/obj) keep the spellings
+    # they had as make's trees in the kernel package (sdk.objroot, sdk.fakeroot), and XNU's source the spellings it had
+    # as the @xnu repository: XNU_SPELLING in __FILE__, external/+http_archive+xnu in debug information.
+    objroot_relative = sdk.objroot[len(sdk.bin_dir) + 1:]
+    fakeroot_relative = sdk.fakeroot[len(sdk.bin_dir) + 1:]
     macro_maps = ["-fmacro-prefix-map={}/={}/{}/".format(d, PATH_ROOT, d) for d in ctx.attr.source_roots + ["external"]] + [
         "-fmacro-prefix-map={}={}".format(sdk.xnu_root, XNU_SPELLING),
         "-fmacro-prefix-map={}={}".format(sdk.bin_dir, PATH_ROOT),
-        "-fmacro-prefix-map={}={}/{}".format(sdk.headers.path, PATH_ROOT, objroot_relative),
+        "-fmacro-prefix-map={}={}/{}".format(sdk.obj_dir, PATH_ROOT, objroot_relative),
+        "-fmacro-prefix-map={}={}/{}".format(sdk.sdkroot_dir, PATH_ROOT, fakeroot_relative),
     ]
     debug_maps = ["-fdebug-prefix-map={}/={}/{}/".format(d, PATH_ROOT, d) for d in ctx.attr.source_roots + ["external", "bazel-out"]]
     compat_macro, compat_debug = compat_prefix_maps(sdk.bin_dir)
-    debug_maps += compat_debug + ["-fdebug-prefix-map={}={}/{}".format(sdk.headers.path, PATH_ROOT, objroot)]
+
+    # Debug maps go by the last match: the SDK root (inside the object root) after it, XNU's source after the source
+    # roots.
+    debug_maps += compat_debug + [
+        "-fdebug-prefix-map={}={}/{}".format(sdk.obj_dir, PATH_ROOT, sdk.objroot),
+        "-fdebug-prefix-map={}={}/{}".format(sdk.sdkroot_dir, PATH_ROOT, sdk.fakeroot),
+        "-fdebug-prefix-map={}={}/{}".format(sdk.xnu_root, PATH_ROOT, XNU_REPOSITORY),
+    ]
     maps = macro_maps + compat_macro + debug_maps
 
     env = [env_set(
@@ -256,7 +268,7 @@ kernel_cc_toolchain_config = rule(
     implementation = _impl,
     doc = "The kernel's CcToolchainConfigInfo: Apple clang with XNU's recipes as features.",
     attrs = {
-        "sdk": attr.label(mandatory = True, providers = [KernelSdkInfo], doc = "the kernel SDK (//bazel/kernel:sdk.bzl)"),
+        "sdk": attr.label(mandatory = True, providers = [KernelSdkInfo], doc = "the kernel SDK (//kernel:sdk)"),
         "source_roots": attr.string_list(
             mandatory = True,
             doc = "the main repository's top-level directories kernel sources live in (their strings get <root>/)",

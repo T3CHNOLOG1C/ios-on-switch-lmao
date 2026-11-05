@@ -1,0 +1,12 @@
+# Rules for vendored XNU trees (kernel/xnu-<version>/): their headers, generated sources and SDK, replayed from tables
+# recorded from XNU's make (xnu.bzl, defs.bzl; the tables come from xnu_record.py, the actions run xnu_ops.py).
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files([
+    "xnu_ops.py",
+    "xnu_record.py",
+])

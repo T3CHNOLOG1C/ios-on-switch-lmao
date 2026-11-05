@@ -2,8 +2,9 @@ load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/kernel:inputs.bzl", "tool_output")
 load("//bazel/kernel:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_link", "kernel_prelink", "stage_files")
-load("//bazel/kernel:sdk.bzl", "kernel_sdk", "outer_headers", "xnu_headers")
-load("//bazel/kernel:xnu.bzl", "kernel_firehose", "kernel_sdkroot", "xnu_build")
+load("//bazel/kernel:sdk.bzl", "outer_headers")
+load("//bazel/kernel:xnu.bzl", "kernel_firehose", "xnu_build")
+load("//kernel/rules:xnu.bzl", "xnu_tree")
 load("//bazel/lint:defs.bzl", "lint_files")
 # The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
 
@@ -27,7 +28,7 @@ config_setting(
 # The selected XNU's SDK for the kernel's compiles (headers and the paths the kernel toolchain names).
 alias(
     name = "sdk",
-    actual = select({":xnu_10063_141_1": "//kernel:kernel_sdk"}),
+    actual = select({":xnu_10063_141_1": "//kernel/xnu-10063.141.1:sdk"}),
 )
 
 exports_files(["build-options.json"])
@@ -103,18 +104,18 @@ filegroup(
 )
 
 # --- The kernel SDK root (the CMake flow's .cache/fakeroot) -------------------------------------------------------
-# Its headers need the patched XNU (its makedefs take XNU_AVAILABILITY_PL/KERNEL_SDKROOT). Unlike the CMake flow's
-# fakeroot, which installhdrs filled once and never refreshed, this one follows the patch.
-kernel_sdkroot(
+# kernel/xnu-<version>:sdkroot (XNU's installhdrs as Bazel actions, one file each) as one directory, for the tools
+# that still take a directory (firehose, the XNU make build, corecrypto, libpthread).
+xnu_tree(
     name = "fakeroot_headers",
+    src = "//kernel/xnu-10063.141.1:sdkroot",
     out = ".cache/fakeroot-headers",
-    xnu = "@xnu//:all",
 )
 
 kernel_firehose(
     name = "fakeroot",
     sdkroot = ":fakeroot_headers",
-    xnu = "@xnu//:all",
+    xnu = "//kernel/xnu-10063.141.1:srcs",
 )
 
 # --- XNU ------------------------------------------------------------------------------------------------------------
@@ -129,25 +130,10 @@ xnu_build(
     ],
     options = "//kernel:build-options.json",
     sdkroot = ":fakeroot",
-    xnu = "@xnu//:all",
+    xnu = "//kernel/xnu-10063.141.1:srcs",
 )
 
-# --- What the kernel's code compiles against (bazel/kernel/sdk.bzl; the flags are bazel/toolchains/kernel's) -------
-# XNU's headers without its objects: an XNU change that leaves the headers alone recompiles no driver.
-xnu_headers(
-    name = "xnu_headers",
-    xnu = ":xnu",
-    xnu_source = "@xnu//:all",
-)
-
-# The kernel SDK for the kernel's cc targets (every kernel_driver depends on it) and the kernel toolchain (its paths).
-kernel_sdk(
-    name = "kernel_sdk",
-    # XNU's build options put -I diagnostics/ioswitch on every kernel compile (xnu_build.py XNU_EXTRA_CFLAGS).
-    extra = ["//diagnostics/ioswitch:headers"],
-    headers = ":xnu_headers",
-    xnu_source = "@xnu//:all",
-)
+# What the kernel's code compiles against: //kernel:sdk (kernel/xnu-<version>, every header its own file).
 
 # Generated headers the drivers' flags name ({build}/<dir>): built once, in the configuration that asks for the kernel.
 outer_headers(
@@ -249,7 +235,7 @@ tool_output(
         ":fakeroot",
         ":xnu",
         "@libpthread//:all",
-        "@xnu//:all",
+        "//kernel/xnu-10063.141.1:srcs",
     ],
     outs = [
         "build/libpthread-kernel/libpthread_kernel.a",
@@ -258,7 +244,7 @@ tool_output(
     args = [
         "--xcode-env={xcode_env}",
         "--source=external/+http_archive+libpthread",
-        "--xnu=external/+http_archive+xnu",
+        "--xnu=kernel/xnu-10063.141.1",
         "--sdkroot=$(location :fakeroot)",
         "--objroot=$(execpath :xnu)",
         "--out={out0}",
@@ -308,9 +294,9 @@ kernel_archive(
 kernel_driver(
     name = "mockfs",
     srcs = [
-        "@xnu//:bsd/miscfs/mockfs/mockfs_fsnode.c",
-        "@xnu//:bsd/miscfs/mockfs/mockfs_vfsops.c",
-        "@xnu//:bsd/miscfs/mockfs/mockfs_vnops.c",
+        "//kernel/xnu-10063.141.1:bsd/miscfs/mockfs/mockfs_fsnode.c",
+        "//kernel/xnu-10063.141.1:bsd/miscfs/mockfs/mockfs_vfsops.c",
+        "//kernel/xnu-10063.141.1:bsd/miscfs/mockfs/mockfs_vnops.c",
     ],
     c_copts = ["-DMOCKFS=1"],
     c_recipe = ":mockfs_c",

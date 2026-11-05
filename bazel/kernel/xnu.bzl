@@ -8,6 +8,10 @@ load(":layout.bzl", "TREE_ROOT")
 # every source its sanitizer lists name exists.)
 _XNU_CODE = ["c", "cpp", "s", "S", "m", "mm"]
 
+def _xnu_dir(target):
+    """The XNU tree's exec path: a vendored tree's package (kernel/xnu-<version>), or an external repository's root."""
+    return target.label.workspace_root or target.label.package
+
 def _kernel_sdkroot_impl(ctx):
     out = ctx.actions.declare_directory(ctx.attr.out)
     log = ctx.actions.declare_file(ctx.attr.out + ".log")
@@ -29,7 +33,7 @@ def _kernel_sdkroot_impl(ctx):
             "--libdispatch",
             workspace_root(ctx.attr.libdispatch),
             "--xnu",
-            workspace_root(ctx.attr.xnu),
+            _xnu_dir(ctx.attr.xnu),
             "--python-bin",
             py.interpreter.dirname,
         ],
@@ -66,7 +70,7 @@ def _kernel_firehose_impl(ctx):
             "--libdispatch",
             workspace_root(ctx.attr.libdispatch),
             "--xnu",
-            workspace_root(ctx.attr.xnu),
+            _xnu_dir(ctx.attr.xnu),
             "--sdkroot",
             sdkroot.path,
             "--out",
@@ -112,7 +116,7 @@ def _xnu_build_impl(ctx):
             "--xcode-env",
             ctx.file._xcode_env.path,
             "--xnu",
-            workspace_root(ctx.attr.xnu),
+            _xnu_dir(ctx.attr.xnu),
             "--sdkroot",
             ctx.file.sdkroot.path,
             "--options",

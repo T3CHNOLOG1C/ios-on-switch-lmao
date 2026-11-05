@@ -29,6 +29,7 @@ PLACES = [
     (re.compile(r"@EXECROOT@/bazel-out/[^/]+/bin/" + _PACKAGE + r"/build/xnu/ios-obj"), "{xnu_obj}"),
     (re.compile(r"@EXECROOT@/bazel-out/[^/]+/bin/" + _PACKAGE + r"/\.cache/fakeroot"), "{fakeroot}"),
     (re.compile(r"@EXECROOT@/external/\+http_archive\+xnu"), "{xnu}"),
+    (re.compile(r"@EXECROOT@/kernel/xnu-[0-9.]+(?=/|$)"), "{xnu}"),
     (re.compile(r"@EXECROOT@/out/native-a57/root-v1/tree"), "{tree}"),
     # Since the move, the kernel tree's sources are at the repository root: {tree}/x is x.
     (re.compile(r"@EXECROOT@/(?=(?:drivers|kits|diagnostics|overlay)/)"), "{tree}/"),
