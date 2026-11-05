@@ -375,6 +375,9 @@ struct Stats {
     uint64_t cmd23, gapChains, gapBytes, gapProven;
     // r14-sdcq: command-queue tasks executed, and the worker time of their groups (submission, every task, proofs).
     uint64_t cqTasks, cqNs;
+    // r16-sdcq: writes flushed because the card's cache would not go off (commitWrite), those whose flush failed, and
+    // their worker time.
+    uint64_t flushes, flushErrors, flushNs;
 };
 }
 
@@ -428,8 +431,9 @@ public:
         if (changed) *changed = false;
         return kIOReturnSuccess;
     }
-    // Writes complete only after the card releases busy and no card cache is
-    // enabled, so every completed write is already durable.
+    // Writes complete only after the card releases busy and with no card cache enabled, so every completed write is
+    // already durable. r16-sdcq: the card's cache is on only inside a CQ session, which carries reads only; a cache that
+    // would not go off has every write flushed before it completes (commitWrite). Write-through either way.
     IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override { return kIOReturnSuccess; }
     IOReturn doSynchronizeCache() override { return kIOReturnSuccess; }
     IOReturn getWriteCacheState(bool *value) override
@@ -507,7 +511,7 @@ class NativeIOSwitchBlock : public IOService {
     struct CqBus {
         NativeIOSwitchBlock *self;
         int command(uint32_t index, uint32_t argument, bool busy, uint32_t *r1);
-        int control(bool write, uint8_t *value);
+        int control(uint32_t byte, bool write, uint8_t *value);
         void settle() { IOSleep(1); }
     };
     using CqEngine = IOSwitchCqEngine<CqBus>;
@@ -520,7 +524,12 @@ class NativeIOSwitchBlock : public IOService {
     Batch cqGroups[2][kCqMaxTasks] = {};
     unsigned cqTurn = 0;
     uint32_t cqProofs = 0;
-    char cqWhy[128] = {};
+    char cqWhy[320] = {};
+    // r16-sdcq: from legacy mode a group needs this many chains: entering and leaving CQ mode cost what checkCq measured,
+    // so a group must save at least that much at the per-task saving its test group showed (setup()).
+    unsigned cqMinChains = 2;
+    // r16-sdcq: commitWrite's one-shot lines: writes flushed because the cache would not go off; a flush that failed.
+    bool flushingWrites = false, flushFailed = false;
     char admaWhy[128] = {};
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
@@ -601,6 +610,10 @@ class NativeIOSwitchBlock : public IOService {
     void cqLeave();
     void cqStop(const char *why);
     void resetCard();
+    // r16-sdcq: a write's last step (a flush, only while the card's cache would not go off); what a failed enable left
+    // in the performance register, for checkCq's line.
+    bool commitWrite();
+    void describeCq(char *out, size_t size);
     const char *checkCq(uint64_t *queuedNs, uint64_t *serialNs, uint64_t *enterNs, uint64_t *leaveNs, unsigned *tasks);
     // r10-adma2: the ADMA2 path, the bounce path in SDMA-sized pieces, the write read-back, the setup check, the
     // power-state hooks.
@@ -1463,6 +1476,9 @@ void NativeIOSwitchBlock::endBatch(Batch &b)
         if (!bounceChain(first, sectors)) result = kIOReturnIOError;
         stats.bounced[b.why] += b.count;
     }
+    // r16-sdcq: a write completes on flash: with the card's cache off (always, but for one that would not go off) the
+    // card's busy said so already; otherwise a flush first (commitWrite), and the write fails if that does.
+    if (write && !result && !commitWrite()) result = kIOReturnIOError;
     b.result = result;
     account(b);
 }
@@ -1526,8 +1542,10 @@ void NativeIOSwitchBlock::completeBatch(Batch &b)
 // (CMD44/CMD45, R1; CMD43, R1b, whose busy end raises transfer complete on this controller, the hardware busy detection
 // L4T relies on with MMC_CAP_WAIT_WHILE_BUSY), or one 512-byte block by SDMA through regBuffer (CMD48 from the card,
 // CMD49 to it; transfer complete follows CMD49's busy). 0 or a step code (1 controller not idle, 2/3 an error interrupt
-// without/with command complete, 6/7 no end within 1 s, the extension registers' limit); a failure resets the CMD and DAT
-// lines. *response gets the R1.
+// without/with command complete, 6/7 no end within 1.5 s: the extension registers' limit is 1 s of data access (CMD48) or
+// busy (CMD49, a cache flush included: 5.7.2.1/5.7.2.2, 4.17) after the command, plus the block itself; 10 DAT0 still low
+// after a CMD49's transfer complete, as complete() checks a write); a failure resets the CMD and DAT lines. *response gets
+// the R1.
 int NativeIOSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data)
 {
     *response = 0;
@@ -1549,7 +1567,7 @@ int NativeIOSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t f
     w16(COMMAND, static_cast<uint16_t>(index << 8 | flags | (data != kRegNone ? CMD_DATA : 0)));
     const uint32_t done = data != kRegNone || (flags & 3) == 3 ? INT_TRANSFER : INT_COMMAND;
     const uint32_t awaited = done | ERROR_SIGNALS;
-    const uint64_t start = nowNs(), limit = 1000000000ull;
+    const uint64_t start = nowNs(), limit = 1500000000ull;
     int step = 0;
     uint32_t s = 0;
     for (;;) {
@@ -1572,6 +1590,9 @@ int NativeIOSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t f
         }
     }
     if (!step && !(s & INT_COMMAND)) step = 4;
+    // r16-sdcq: transfer complete follows a CMD49's busy (the card applying the byte, or flushing its cache); DAT0
+    // confirms it before the read-back that checks it.
+    if (!step && data == kRegWrite && !waitIdle(true, 1000000000)) step = 10;
     if (step) {
         stats.errors++;
         stats.lastError = static_cast<uint32_t>(step);
@@ -1595,16 +1616,22 @@ int NativeIOSwitchBlock::CqBus::command(uint32_t index, uint32_t argument, bool 
     return self->cqCommand(index, argument, busy ? RSP_R1B : RSP_R1, r1, kRegNone);
 }
 
-// The CQ control byte: CMD49 of `*value`, or CMD48 into it. The only extension-register byte this driver ever writes:
-// byte 262 of the card's performance function (identify(), ioswitchSdCqControlAddress), one byte (LEN 0, no mask write),
-// only its CQ enable and mode bits (00h or 03h). Anything else is a bug here and panics before it reaches the card.
-int NativeIOSwitchBlock::CqBus::control(bool write, uint8_t *value)
+// A host byte of the card's performance function (identify(): byte 262 at ioswitchSdCqControlAddress, 260 and 261 right
+// before it): CMD49 of `*value`, or CMD48 into it, one byte (LEN 0, no mask write; MIO 0, memory). r16-sdcq: the only
+// extension-register bytes this driver ever writes, and only these values (ioswitchSdPerfWriteAddress): 260 Cache Enable
+// 00h/01h, 261 Flush Cache 01h, 262 the CQ enable and mode bits 00h/03h. Anything else is a bug here and panics before
+// it reaches the card.
+int NativeIOSwitchBlock::CqBus::control(uint32_t byte, bool write, uint8_t *value)
 {
-    const uint32_t address = self->cqControlAddress;
-    if (!address || address != ioswitchSdCqControlAddress(self->extInfo.perf) || !self->regBuffer ||
-        (write && *value != 0 && *value != (kSdCqEnable | kSdCqSequential)))
-        panic("IOSwitchSD: extension register %s fno %u @0x%05x value 0x%02x refused", write ? "write" : "read",
-              unsigned(self->extInfo.perf.fno), address, unsigned(*value));
+    const uint32_t cqAt = self->cqControlAddress;
+    const bool known = byte >= kSdPerfCacheControl && byte <= kSdPerfCqControl;
+    const uint32_t address = !known  ? 0
+                             : write ? ioswitchSdPerfWriteAddress(self->extInfo.perf, byte, *value)
+                                     : cqAt - (kSdPerfCqControl - byte);
+    if (!cqAt || cqAt != ioswitchSdCqControlAddress(self->extInfo.perf) || !self->regBuffer || !address ||
+        address != cqAt - (kSdPerfCqControl - byte))
+        panic("IOSwitchSD: extension register %s fno %u byte %u @0x%05x value 0x%02x refused", write ? "write" : "read",
+              unsigned(self->extInfo.perf.fno), byte, address, unsigned(*value));
     if (write) {
         memset(self->regBuffer, 0, kSector);
         self->regBuffer[0] = *value;
@@ -1627,11 +1654,13 @@ void NativeIOSwitchBlock::cqLeave()
 
 // The queue off until reboot, with one line: whatever is queued on the card aborted (CMD43), the card out of CQ mode
 // (CMD49 00h, read back); a card that stays in it is powered off and initialized again (resetCard), the only way out.
+// r16-sdcq: the cache goes off with the queue (IOSwitchCq.h); one that would not go off has every write flushed.
 void NativeIOSwitchBlock::cqStop(const char *why)
 {
     const bool stuck = !cq.fail(cqBus, why) || cq.stuck;
-    IOLog("IOSwitchSD: command queue off until reboot (%s) after %llu tasks in %llu groups%s\n", cq.why, cq.tasks,
-          cq.groups, stuck ? "; the card stayed in CQ mode: power-cycled" : "");
+    IOLog("IOSwitchSD: command queue off until reboot (%s) after %llu tasks in %llu groups%s%s\n", cq.why, cq.tasks,
+          cq.groups, stuck ? "; the card stayed in CQ mode: power-cycled" : "",
+          !stuck && cq.cacheOn ? "; its cache would not go off: every write is flushed" : "");
     if (stuck) {
         resetCard();
         cq.powerCycled();
@@ -1644,6 +1673,8 @@ void NativeIOSwitchBlock::cqStop(const char *why)
 // as at boot. Panics where resume() would (the card cannot be used at all then).
 void NativeIOSwitchBlock::resetCard()
 {
+    // r16-sdcq: nothing to flush first: every completed write is on flash (the cache is off for writes, or each was
+    // flushed: commitWrite); the power cycle clears Cache Enable.
     dmaSuspend();
     if (irqSource) irqSource->disable();
     powerOffCard();
@@ -1661,12 +1692,69 @@ void NativeIOSwitchBlock::resetCard()
     dmaResume();
 }
 
+// r16-sdcq: a write's last step, on the worker after its command (always out of CQ mode: a legacy command). Nothing while
+// the card's cache is off, as it is for every write unless it would not go off at the end of a CQ session; then a flush
+// (IOSwitchCq.h commitWrite), so the write completes on flash all the same. One line the first time a write needs a
+// flush and the first time one fails; false: the write is not known to be on flash (it fails, nothing panics).
+bool NativeIOSwitchBlock::commitWrite()
+{
+    if (!cq.cacheOn) return true;
+    if (!flushingWrites) {
+        flushingWrites = true;
+        IOLog(
+            "IOSwitchSD: the card's cache would not go off (Cache Enable reads 0x%02x): every write is flushed before "
+            "it completes\n",
+            unsigned(cq.lastRead[0]));
+    }
+    const uint64_t began = nowNs();
+    const bool flushed = cq.commitWrite(cqBus);
+    ++stats.flushes;
+    stats.flushNs += nowNs() - began;
+    if (flushed) return true;
+    ++stats.flushErrors;
+    if (!flushFailed) {
+        flushFailed = true;
+        IOLog(
+            "IOSwitchSD: a write's cache flush failed (Flush Cache reads 0x%02x after %u read-backs): that write, and "
+            "any later one whose flush fails, completes with an I/O error\n",
+            unsigned(cq.lastRead[kSdPerfFlushControl - kSdPerfCacheControl]), cq.lastReads);
+    }
+    return false;
+}
+
+// r16-sdcq: what the bring-up left in the card's control bytes (the engine's last read-backs) and Task Error Status
+// (bytes 8-15, one CMD48), for checkCq's one line.
+void NativeIOSwitchBlock::describeCq(char *out, size_t size)
+{
+    const uint8_t cache = cq.cacheRead, control = cq.cqRead;
+    uint32_t r1 = 0;
+    uint64_t errors = 0;
+    const bool read =
+        regBuffer &&
+        !cqCommand(48, ioswitchSdExtArgument(extInfo.perf.fno, extInfo.perf.address, 16), RSP_R1, &r1, kRegRead) &&
+        !(r1 & R1_ERRORS);
+    for (unsigned i = 0; read && i < 8; ++i) errors |= static_cast<uint64_t>(regBuffer[8 + i]) << (8 * i);
+    char tasks[24] = "unread";
+    if (read) snprintf(tasks, sizeof(tasks), "0x%016llx", errors);
+    char cacheState[64] = "not offered";
+    if (perf.cache && cq.cacheReads)
+        snprintf(cacheState, sizeof(cacheState), "read 0x%02x after 01h, %s now", unsigned(cache),
+                 cq.cacheOn ? "would not go off" : "off");
+    else if (perf.cache)
+        strlcpy(cacheState, "not tried", sizeof(cacheState));
+    snprintf(out, size, "CQ control reads 0x%02x (%s) after %u read-backs over ~%u ms; cache %s; task errors %s",
+             unsigned(control), ioswitchSdCqControlMeaning(control), cq.cqReads, cq.cqReads ? cq.cqReads - 1 : 0,
+             cacheState, tasks);
+}
+
 // Whether the chain pickLocked just took starts a command-queue group (queueLock held): a read of at most
 // kCqTaskSectors with no unproven gaps while the queue is on. Then more chains join, each the oldest queued read that
 // overlaps no older queued request (ioswitchNextIndependentRead: never past a write it would see) with the reads that
 // continue it (as pickLocked gathers, up to kCqTaskSectors, gaps once proven), until the card's depth or kCqGroupSectors.
 // From legacy mode a group needs two chains (one is cheaper as a legacy command than CQ mode's way in and out); in CQ
 // mode one will do. The group goes in cqGroups[cqTurn], the picked chain first; returns its size, or 0 for the legacy way.
+// r16-sdcq: from legacy mode, cqMinChains (setup(): enough tasks that the queue's measured saving pays for the way in and
+// out, at least two).
 unsigned NativeIOSwitchBlock::groupLocked(Request *first, uint32_t sectors, uint32_t count)
 {
     if (cq.state == CqEngine::kOff || suspended || first->write || sectors > kCqTaskSectors) return 0;
@@ -1703,7 +1791,7 @@ unsigned NativeIOSwitchBlock::groupLocked(Request *first, uint32_t sectors, uint
         ++n;
         total += chainSectors;
     }
-    return n >= (cq.state == CqEngine::kOn ? 1u : 2u) ? n : 0;
+    return n >= (cq.state == CqEngine::kOn ? 1u : cqMinChains) ? n : 0;
 }
 
 // A task's command (the engine's next CMD46): its table (beginBatch's builder, with nothing above 4 GiB while that is
@@ -2103,7 +2191,8 @@ void NativeIOSwitchBlock::logThroughput()
     // r14-sdcq: the command queue: tasks/groups, times into CQ mode, the worker's ms in groups (all of it: assignment,
     // tasks, proofs), "proving" while the first tasks are read again; or off (never on, or stopped: then "off" after
     // the counts).
-    char cqState[80];
+    // r16-sdcq: then, only if the card's cache would not go off, the writes flushed for it / failed, and their ms.
+    char cqState[120];
     if (cq.state == CqEngine::kOff && !cq.tasks)
         strlcpy(cqState, "off", sizeof(cqState));
     else
@@ -2112,6 +2201,11 @@ void NativeIOSwitchBlock::logThroughput()
                  cq.state == CqEngine::kOff ? " off"
                  : cqProofs                 ? " proving"
                                             : "");
+    if (stats.flushes) {
+        const size_t at = strlen(cqState);
+        snprintf(cqState + at, sizeof(cqState) - at, " wflush %llu/%llu %llums", stats.flushes, stats.flushErrors,
+                 stats.flushNs / 1000000);
+    }
     // r12-sdio: ADMA2 above 4 GiB: on, off, or proofs done/needed.
     char highState[16];
     if (!adma || high.state == IOSwitchAdmaHigh::kOff)
@@ -2815,6 +2909,8 @@ void NativeIOSwitchBlock::suspend()
     // r14-sdcq: the worker leaves CQ mode before it sleeps; this only covers a card that is somehow still in it (the
     // card is about to lose power either way, and CQ mode does not survive that).
     if (cq.state == CqEngine::kOn) (void)cq.leave(cqBus);
+    // r16-sdcq: leaving CQ mode turned the card's cache off; nothing to flush either way (every completed write is on
+    // flash: commitWrite), and the power-off clears Cache Enable.
     dmaSuspend();
     if (irqSource) irqSource->disable();
     powerOffCard();
@@ -3080,27 +3176,39 @@ const char *NativeIOSwitchBlock::checkCmd23(uint64_t *withNs, uint64_t *withoutN
 // must match byte for byte. The same check times the group (*queuedNs, assignment to the last task's end), as many
 // legacy 4 KiB reads of other blocks one at a time (*serialNs), and entering and leaving CQ mode. Any failure stops the
 // queue for the boot (cqStop: the card out of CQ mode, power-cycled if it would not leave).
+// r16-sdcq: each CQ session turns the card's cache on first (4.19.1; IOSwitchCq.h enter) and off when it ends, each
+// byte read back lazily; a failure's line says what the control bytes read back (describeCq). A cache some earlier stage
+// left on goes off before any write. kTests 16: a steadier measurement for setup()'s decision whether the queue is
+// faster at all.
 const char *NativeIOSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, uint64_t *enterNs, uint64_t *leaveNs,
                                          unsigned *tasks)
 {
     *queuedNs = *serialNs = *enterNs = *leaveNs = 0;
     *tasks = 0;
     if (!havePerf) return extWhy ? extWhy : "no performance enhancement function";
-    if (perf.cqDepth < 2) return "the card offers no queue";
     cqControlAddress = ioswitchSdCqControlAddress(extInfo.perf);
     if (!cqControlAddress) return "its control byte crosses a page";
-    if (perf.cqControl & kSdCqEnable) return "its queue is enabled already";
     if (!irqMode) return "boot-arg ioswitch-sd-irq=0";
-    if (!checkBuffer) return "no buffer for its proofs";
     regMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task,
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
         kAdmaPage, 0x00000000ffffffffull & ~(kAdmaPage - 1));
     regBuffer = regMemory ? static_cast<uint8_t *>(regMemory->getBytesNoCopy()) : nullptr;
     regPA = regMemory ? regMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone) : 0;
-    if (!regBuffer || !regPA || (regPA & (kAdmaPage - 1)) || regPA + kAdmaPage > (1ull << 32))
+    if (!regBuffer || !regPA || (regPA & (kAdmaPage - 1)) || regPA + kAdmaPage > (1ull << 32)) {
+        regBuffer = nullptr;
         return "no DMA buffer for its register";
-    constexpr uint32_t kSectors = 8, kBytes = kSectors * kSector, kTests = 8;
+    }
+    // r16-sdcq: a cache some earlier stage left on goes off before any write (one that will not has every write flushed:
+    // commitWrite).
+    if (perf.cacheEnable & kSdCacheEnable) {
+        cq.cacheOn = true;
+        (void)cq.disableCache(cqBus);
+    }
+    if (perf.cqDepth < 2) return "the card offers no queue";
+    if (perf.cqControl & kSdCqEnable) return "its queue is enabled already";
+    if (!checkBuffer) return "no buffer for its proofs";
+    constexpr uint32_t kSectors = 8, kBytes = kSectors * kSector, kTests = 16;
     const unsigned n = perf.cqDepth < kTests ? perf.cqDepth : kTests;
     const uint64_t blocks = sectorCount / kSectors;
     if (blocks < 2 * kTests) return "the partition is too small";
@@ -3127,8 +3235,9 @@ const char *NativeIOSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs,
             return cqWhy;
         }
     }
-    // The engine is usable from here on; every failure below stops it again (the end of this function).
-    cq.start(perf.cqDepth);
+    // The engine is usable from here on; every failure below stops it again (the end of this function). r16-sdcq: with
+    // the card's cache, which enter() turns on first and leaving turns off again (both inside enterNs/leaveNs).
+    cq.start(perf.cqDepth, perf.cache);
     const char *why = nullptr;
     uint64_t t0 = nowNs();
     if (!cq.enter(cqBus)) why = cq.why ? cq.why : "the card would not enter CQ mode";
@@ -3173,14 +3282,20 @@ const char *NativeIOSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs,
     }
     table.reset();
     if (why) {
-        // Off for the boot; the card out of CQ mode first (power-cycled if it would not leave).
+        // Off for the boot; the card out of CQ mode first (power-cycled if it would not leave), its cache off again.
+        // r16-sdcq: the reason with what the control bytes read back (why may be cqWhy itself: copied first).
         const bool stuck = !cq.fail(cqBus, why) || cq.stuck;
+        char reason[128];
+        strlcpy(reason, why, sizeof(reason));
+        char detail[192];
+        describeCq(detail, sizeof(detail));
+        snprintf(cqWhy, sizeof(cqWhy), "%s; %s", reason, detail);
         if (stuck) {
             IOLog("IOSwitchSD: the card stayed in CQ mode: power-cycled\n");
             resetCard();
             cq.powerCycled();
         }
-        return why;
+        return cqWhy;
     }
     *tasks = n;
     return nullptr;
@@ -3392,17 +3507,34 @@ bool NativeIOSwitchBlock::setup()
             // r14-sdcq: the command queue, when the card offers one and its test group reads what the legacy path reads.
             uint64_t queuedNs = 0, serialNs = 0, enterNs = 0, leaveNs = 0;
             unsigned tested = 0;
-            if (const char *cqOff = checkCq(&queuedNs, &serialNs, &enterNs, &leaveNs, &tested)) {
+            const char *cqOff = checkCq(&queuedNs, &serialNs, &enterNs, &leaveNs, &tested);
+            // r16-sdcq: the queue only where it is faster. Its test group's saving per task must pay for CQ mode's way
+            // in and out (CMD49 + CMD48 each) within a group the card can take: from legacy mode a group then needs
+            // cqMinChains chains (at least two). A queue that saves nothing, or too little for its depth, stays off
+            // (with the cache: IOSwitchCq.h fail).
+            const uint64_t saving = !cqOff && tested && serialNs > queuedNs ? (serialNs - queuedNs) / tested : 0;
+            const uint64_t toggle = enterNs + leaveNs;
+            const uint64_t need = saving ? (toggle + saving - 1) / saving : 0;
+            if (!cqOff && (!saving || need > cq.depth)) {
+                snprintf(cqWhy, sizeof(cqWhy),
+                         "its test group was no faster: %u queued 4 KiB reads took %llu us against %llu us one at a "
+                         "time, into and out of CQ mode %llu us",
+                         tested, queuedNs / 1000, serialNs / 1000, toggle / 1000);
+                (void)cq.fail(cqBus, "no faster");
+                cqOff = cqWhy;
+            }
+            if (cqOff) {
                 IOLog("IOSwitchSD: command queue not used (%s); reads stay one command at a time\n", cqOff);
             } else {
                 cqProofs = kCqProofs;
-                IOLog(
-                    "IOSwitchSD: command queue on (sequential mode, depth %u): %u queued 4 KiB reads match the legacy "
-                    "path's; they took %llu us queued against %llu us one at a time; into CQ mode %llu us, out %llu "
-                    "us; two or more independent queued reads go as tasks, the first %u tasks read again the legacy "
-                    "way\n",
-                    unsigned(cq.depth), tested, queuedNs / 1000, serialNs / 1000, enterNs / 1000, leaveNs / 1000,
-                    kCqProofs);
+                cqMinChains = need < 2 ? 2 : static_cast<unsigned>(need);
+                IOLog("IOSwitchSD: command queue on (sequential mode, depth %u, cache %s): %u queued 4 KiB reads match "
+                      "the legacy path's; they took %llu us queued against %llu us one at a time (%llu us saved per "
+                      "task); into CQ mode %llu us, out %llu us; %u or more independent queued reads go as tasks, the "
+                      "first %u tasks read again the legacy way\n",
+                      unsigned(cq.depth), cq.useCache ? "on in CQ mode only, off for every write" : "off", tested,
+                      queuedNs / 1000, serialNs / 1000, saving / 1000, enterNs / 1000, leaveNs / 1000, cqMinChains,
+                      kCqProofs);
             }
         } else {
             IOLog("IOSwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);

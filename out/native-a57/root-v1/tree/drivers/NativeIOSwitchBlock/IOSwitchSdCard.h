@@ -236,10 +236,14 @@ inline IOSwitchSdPower ioswitchSdParsePower(const uint8_t *reg)
 
 // Performance Enhancement register set (Table 5-30), from its first byte. Byte 6 "CQ Support and Depth": 00h none,
 // 01h-1Fh depth 2-32, 20h-FFh reserved (read as none). The second 256 bytes are the host's: 257 FX_EVENT enable, 258
-// maintenance enables, 260 Cache Enable, 261 Flush Cache, 262 Enable CQ (bit 0) and CQ Mode (bit 1: 0 voluntary,
-// 1 sequential).
-constexpr uint32_t kSdPerfCqSupport = 6, kSdPerfCqControl = 262;
-constexpr uint8_t kSdCqEnable = 1, kSdCqSequential = 2;
+// maintenance enables, 260 Cache Enable (bit 0), 261 Flush Cache (bit 0: the host sets it, the card clears it when the
+// flush is done, busy on DAT0 meanwhile, at most 1 s: 4.17), 262 Enable CQ (bit 0) and CQ Mode (bit 1: 0 voluntary,
+// 1 sequential), bits 7:2 reserved. r16-sdcq: the Enable CQ and CQ Mode bits are separate (a card may take bit 0 and keep
+// voluntary mode), and 4.19.1 asks for the cache before the queue ("Cache Feature should be enabled before enabling
+// Command Queue"): Linux (sd.c mmc_sd_init_card) and the Raspberry Pi kernel (sd_ops.c mmc_sd_cmdq_switch) always enable
+// the cache first, and the latter takes CQ support only from cards that also offer the cache and Power Off Notification.
+constexpr uint32_t kSdPerfCqSupport = 6, kSdPerfCacheControl = 260, kSdPerfFlushControl = 261, kSdPerfCqControl = 262;
+constexpr uint8_t kSdCqEnable = 1, kSdCqSequential = 2, kSdCacheEnable = 1, kSdFlushCache = 1;
 struct IOSwitchSdPerf {
     uint8_t revision;
     bool fxEvent, cardMaintenance, hostMaintenance, cache;
@@ -269,6 +273,32 @@ inline uint32_t ioswitchSdCqControlAddress(const IOSwitchSdExtFunction &perf)
 {
     if (!perf.found || !ioswitchSdExtRange(perf.address, kSdPerfCqControl + 1)) return 0;
     return perf.address + kSdPerfCqControl;
+}
+// r16-sdcq: the host bytes the driver writes (IOSwitchCq.h): Cache Enable, Flush Cache and the CQ control byte, and
+// only these values. 0 for any other byte or value (the driver panics on 0 before a command is built), else the byte's
+// address under the same one-page rule as the CQ control byte (they are its neighbours).
+inline uint32_t ioswitchSdPerfWriteAddress(const IOSwitchSdExtFunction &perf, uint32_t byte, uint8_t value)
+{
+    const uint32_t cq = ioswitchSdCqControlAddress(perf);
+    if (!cq) return 0;
+    switch (byte) {
+    case kSdPerfCacheControl: return value == 0 || value == kSdCacheEnable ? cq - 2 : 0;
+    case kSdPerfFlushControl: return value == kSdFlushCache ? cq - 1 : 0;
+    case kSdPerfCqControl: return value == 0 || value == (kSdCqEnable | kSdCqSequential) ? cq : 0;
+    default: return 0;
+    }
+}
+// What a read-back of the CQ control byte says, for the one line a failed enable leaves: whether the enable bit or the
+// mode bit (or reserved bits) did not take.
+inline const char *ioswitchSdCqControlMeaning(uint8_t value)
+{
+    if (value & 0xfc) return "reserved bits set";
+    switch (value & 3) {
+    case 0: return "the queue stays disabled";
+    case 1: return "enabled in voluntary mode: the card did not take sequential mode";
+    case 2: return "sequential mode set but the queue disabled";
+    default: return "enabled, sequential";
+    }
 }
 // ---- Data command framing ------------------------------------------------------------------------------------------
 // SDHCI TRANSFER_MODE (0x0c) bits and the COMMAND (0x0e) low byte of a data command with an R1 response (48-bit, CRC and

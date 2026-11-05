@@ -200,6 +200,21 @@ static void extension()
     shifted.address = 3 * 512 + 249;
     assert(ioswitchSdCqControlAddress(shifted) == 3 * 512 + 511);
     assert(!ioswitchSdCqControlAddress(IOSwitchSdExtFunction{}));
+    // r16-sdcq: the host bytes the driver may write, and only these values: Cache Enable 00h/01h, Flush Cache 01h, the
+    // CQ control byte 00h/03h; the CMD48/CMD49 argument of each (MIO 0, FNO 2, page 3, LEN 0: one byte).
+    assert(ioswitchSdPerfWriteAddress(g.perf, kSdPerfCacheControl, 0) == 3 * 512 + 260);
+    assert(ioswitchSdPerfWriteAddress(g.perf, kSdPerfCacheControl, kSdCacheEnable) == 3 * 512 + 260);
+    assert(ioswitchSdPerfWriteAddress(g.perf, kSdPerfFlushControl, kSdFlushCache) == 3 * 512 + 261);
+    assert(ioswitchSdPerfWriteAddress(g.perf, kSdPerfCqControl, 0) == 3 * 512 + 262);
+    assert(ioswitchSdPerfWriteAddress(g.perf, kSdPerfCqControl, kSdCqEnable | kSdCqSequential) == 3 * 512 + 262);
+    assert(!ioswitchSdPerfWriteAddress(g.perf, kSdPerfFlushControl, 0));  // the card clears it, never the host
+    assert(!ioswitchSdPerfWriteAddress(g.perf, kSdPerfCqControl, kSdCqEnable));  // voluntary mode: never
+    assert(!ioswitchSdPerfWriteAddress(g.perf, kSdPerfCacheControl, 2));
+    assert(!ioswitchSdPerfWriteAddress(g.perf, 257, 1) && !ioswitchSdPerfWriteAddress(g.perf, 258, 0));
+    assert(!ioswitchSdPerfWriteAddress(shifted, kSdPerfCacheControl, 0) || ioswitchSdCqControlAddress(shifted));
+    assert(!ioswitchSdPerfWriteAddress(IOSwitchSdExtFunction{}, kSdPerfCqControl, 0));
+    assert(ioswitchSdExtArgument(2, 3 * 512 + 261, 1) == (2u << 27 | (3u * 512 + 261) << 9));
+    assert(!(ioswitchSdExtArgument(2, 3 * 512 + 262, 1) & (1u << 31 | 1u << 26)));  // MIO 0 (memory), MW 0
     // Layouts it does not trust.
     assert(ioswitchSdParseGeneralInfo(generalInfo(1).data(), 512).why);
     info = generalInfo();
