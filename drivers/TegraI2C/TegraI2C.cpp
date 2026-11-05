@@ -4,7 +4,7 @@
 // FIFO triggers, the interrupt handler and error handling follow Linux i2c-tegra.c (tegra_i2c_xfer_msg,
 // tegra_i2c_isr; T210 has_config_load_reg, has_per_pkt_xfer_complete_irq, supports_bus_clear).
 //
-// Chained buses (I2C3, the touch panel's; r17-touch): a write-then-read is one submission, as L4T's
+// Chained buses (I2C3, the touch panel's): a write-then-read is one submission, as L4T's
 // tegra_i2c_multi_pkt_xfer sends an i2c_transfer of several messages on T210 (switchroot's 4.9 kernel, the one that
 // drives this board's FTM4): the write packet (REPEAT_START, no per-packet interrupt), its payload and the read packet's
 // header go into the TX FIFO together (at most 3 + 2 + 3 words, so writes of up to 8 bytes), and the one completion is
@@ -12,12 +12,11 @@
 // the wait between the packets. A read that fits the 32-byte RX FIFO (hekate i2c_xfer_packet; L4T
 // I2C_PIO_MODE_MAX_LEN) leaves the RX request masked and is drained at the completion, so it takes no RX interrupts.
 // A longer read goes by APB DMA (request 23, tegra210.dtsi i2c@7000c500 dmas; one word per request at the 1-word RX
-// trigger); the completion then also waits for the channel's end of count. Both are never booted: each stays off until
-// the bus's owner has checked it once against the one-packet path (tegra_i2c_transfer_chained / _dma, TegraI2C.h), and
-// a check that fails costs one line and that path for the boot, never a panic: a chain whose completion never comes
-// times out (nothing is left asserted), and a DMA end of count that has never reached the CPU is reported, not
-// panicked on (the 473fb96 rule for never-booted interrupts); once one has, a lost one panics. Other buses keep one
-// packet per message.
+// trigger); the completion then also waits for the channel's end of count. Each stays off until the bus's owner has
+// checked it once against the one-packet path (tegra_i2c_transfer_chained / _dma, TegraI2C.h), and a check that fails
+// costs one line and that path for the boot, never a panic: a chain whose completion never comes times out (nothing is
+// left asserted), and a DMA end of count that has never reached the CPU is reported, not panicked on; once one has, a
+// lost one panics. Other buses keep one packet per message.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOInterruptEventSource.h>
@@ -119,7 +118,7 @@ struct BusInfo {
 // (Atmosphere pinmux_initial_drive_pad_config.inc: Gen1/Gen2/Cam/Pwr I2C 0x1f, Gen3 0x07) and L4T's for the OLED
 // (tegra210b01-fric-pinmux.dtsi drive_default: the same pull-down strengths, pull-up 0); offsets from
 // pinmux_drive_pad_characters.inc and Linux pinctrl-tegra210.c.
-// Chained and DMA: I2C3 only for now (the touch panel, r17-touch); the other buses keep one packet per message.
+// Chained and DMA: I2C3 only (the touch panel); the other buses keep one packet per message.
 constexpr BusInfo kBus[kBuses] = {
     {0x0000, 0x300, 0x320, 0x124, 0x004, 0x010, 12, 4, 0xbc, 0xc0, 38, 0x9a8, 0x9ac, 0x1f, false, 0, 0},  // I2C1 (L)
     {0x0400, 0x308, 0x328, 0x198, 0x008, 0x014, 22, 1, 0xc4, 0xc8, 84, 0x9b0, 0x9b4, 0x1f, false, 0, 0},  // I2C2 (H)
@@ -159,7 +158,7 @@ struct Bus {
     IOInterruptEventSource *dmaDoneSource;
     bool dmaOn, dmaFailed;
     bool chainOn;     // chained write-then-read and drain-at-end short reads, after the owner's check passed
-    bool dmaUnheard;  // a wait ended because the channel's first end of count never reached the CPU (never booted)
+    bool dmaUnheard;  // a wait ended because the channel's first end of count never reached the CPU
     // tegra_i2c_get_counters: interrupt actions, transfers, reads by DMA.
     volatile uint32_t interrupts, transfers, dmaReads;
     // Diagnostics (tegra_i2c_describe): the last failed packet's INT_STATUS and PACKET_TRANSFER_STATUS, as the action
@@ -246,12 +245,12 @@ void clockEnable(const BusInfo &info)
 }
 
 // The bus's two pads: function I2Cx with the input on (hekate pinmux_config_i2c), and on I2C2 the pull-down strength
-// Horizon and L4T give the OLED's GEN2_I2C pads (kBus). Both checked against the references (als test): pinmux 0x40 is
-// Atmosphere pinmux_initial_pad_config_aula.inc Gen2I2cScl/Sda (I2C2, no pull, driven, input, normal voltage) and L4T
-// tegra210b01-fric-pinmux.dtsi; the drive is Atmosphere pinmux_initial_drive_pad_config.inc (DRVDN 0x1f, DRVUP 0, the
-// non-Hoag table) and L4T's drive_default. The drive is not the ALS's problem: r7p5 (reset strength) and r7p8 (this)
-// got the same NACKs. The other buses keep their current strength (touch, the PMIC and the camera bus work with it; a
-// wrong drive on PWR_I2C would cost the boot). The values found first are kept for tegra_i2c_describe().
+// Horizon and L4T give the OLED's GEN2_I2C pads (kBus): pinmux 0x40 is Atmosphere pinmux_initial_pad_config_aula.inc
+// Gen2I2cScl/Sda (I2C2, no pull, driven, input, normal voltage) and L4T tegra210b01-fric-pinmux.dtsi; the drive is
+// Atmosphere pinmux_initial_drive_pad_config.inc (DRVDN 0x1f, DRVUP 0, the non-Hoag table) and L4T's drive_default.
+// The ALS NACKs at reset strength as at this one, so the drive is not its problem. The other buses keep their
+// current strength (touch, the PMIC and the camera bus work with it; a wrong drive on PWR_I2C would cost the boot). The
+// values found first are kept for tegra_i2c_describe().
 void padConfig(Bus &b, const BusInfo &info)
 {
     if (!b.padsSaved) {
@@ -402,7 +401,7 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
         if (!(status & mask) && !dmaEnd) break;
         if (grace) {
             if (dmaEnd && !tegra_apbdma_interrupts(b.dma)) {
-                b.dmaUnheard = true;  // never booted: the caller's check reports it (TegraI2C.h), DMA stays off
+                b.dmaUnheard = true;  // the caller's check reports it (TegraI2C.h), DMA stays off
                 break;
             }
             if (dmaEnd) {

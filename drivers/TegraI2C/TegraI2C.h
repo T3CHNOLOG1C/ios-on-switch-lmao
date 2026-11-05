@@ -43,7 +43,7 @@
 // the BootROM on reset). Call only from thread context, never with a spinlock held or from an interrupt/filter
 // handler. After a failed transfer an owned bus is reset and reinitialized (as Linux i2c-tegra does).
 //
-// I2C3 (r17-touch) is a chained bus: once its owner's check has turned that on (tegra_i2c_set_chained), a write of up
+// I2C3 is a chained bus: once its owner's check has turned that on (tegra_i2c_set_chained), a write of up
 // to 8 bytes then a read is one submission ending in one interrupt and a read that fits the 32-byte RX FIFO takes no RX
 // interrupts; once tegra_i2c_set_dma() has turned that on too, a longer read's payload goes by APB DMA (TegraI2C.cpp's
 // file comment). Until then, and for good after a failed check, the bus works as the others do.
@@ -110,7 +110,7 @@ void tegra_i2c_describe(unsigned bus, char *buffer, size_t size);
 // tegra_i2c_transfer().
 int tegra_i2c_final_transfer(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx, size_t rxlen);
 
-// The never-booted paths of a chained bus (I2C3), for its owner's one-time checks, in this order: the same transfer as
+// A chained bus's (I2C3) optional paths, for its owner's one-time checks, in this order: the same transfer as
 // tegra_i2c_transfer (a write of 1..8 bytes, then the read) as one chained submission by PIO, or with its read by APB
 // DMA whatever its length (up to 4096 bytes; the first call claims the bus's DMA channel; needs the chained path on).
 // TEGRA_I2C_OK with the data, else an error with the reason in `why` and the bus recovered, never a panic for the
