@@ -1186,18 +1186,25 @@ impl LastRetained {
     /// Retain into `core` the samplers a draw's bind named, unless they are the ones the last
     /// draw's named, in order: each by another reference to it, the last first, so they go in
     /// their order (`retained.rs`).
-    fn retain_samplers(&mut self, core: &mut EncoderCore, samplers: Vec<Arc<OwnedSampler>>) {
+    /// Answers the list where it keeps the one it had, which is the same: the next bind fills it.
+    fn retain_samplers(
+        &mut self,
+        core: &mut EncoderCore,
+        samplers: Vec<Arc<OwnedSampler>>,
+    ) -> Option<Vec<Arc<OwnedSampler>>> {
         let same = samplers.len() == self.samplers.len()
             && samplers
                 .iter()
                 .zip(&self.samplers)
                 .all(|(a, b)| Arc::ptr_eq(a, b));
-        if !same {
-            for sampler in samplers.iter().rev() {
-                core.retain_shared(sampler.clone());
-            }
-            self.samplers = samplers;
+        if same {
+            return Some(samplers);
         }
+        for sampler in samplers.iter().rev() {
+            core.retain_shared(sampler.clone());
+        }
+        self.samplers = samplers;
+        None
     }
 }
 
@@ -7306,8 +7313,10 @@ impl RenderCommandEncoder {
         {
             self.core.retain_shared(buffer.held());
         }
-        self.last_retained
+        let unkept = self
+            .last_retained
             .retain_samplers(&mut self.core, bound.samplers);
+        self.bind_memo.give_back(writes, bound.holes, unkept);
         if let Some(unlisted) = unlisted {
             heap_sets::degrade_unlisted(&device, unlisted, "a render pipeline state's draws");
             // A host step's draw, which no commit lists again, fails its command buffer.

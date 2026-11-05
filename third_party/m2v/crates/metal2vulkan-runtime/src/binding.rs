@@ -454,8 +454,17 @@ pub(super) fn bind(
     tables: &Tables<'_>,
     mut memo: Option<&mut BindMemo>,
 ) -> Result<Bound, Error> {
-    let mut writes = Vec::with_capacity(plan.descriptors.len());
-    let mut samplers = Vec::new();
+    // The vectors a memo keeps from the last bind, emptied.
+    let (mut writes, mut holes, mut samplers, mut roots) = match memo.as_deref_mut() {
+        Some(memo) => (
+            std::mem::take(&mut memo.writes),
+            std::mem::take(&mut memo.holes),
+            std::mem::take(&mut memo.bound_samplers),
+            std::mem::take(&mut memo.roots),
+        ),
+        None => Default::default(),
+    };
+    writes.reserve(plan.descriptors.len());
     // The sampler tables, whose regions the command buffer writes again as it commits.
     let sampler_keys = plan.sampler_tables();
     let mut sampler_tables = Vec::with_capacity(sampler_keys.len());
@@ -533,11 +542,11 @@ pub(super) fn bind(
             held,
         });
     }
-    let mut roots = Vec::with_capacity(command.root_tables.len());
+    roots.clear();
     for &(stages, table) in &command.root_tables {
         roots.push((stages, root_table(device, state, table)?));
     }
-    let mut holes = Vec::with_capacity(command.push_holes.len());
+    holes.reserve(command.push_holes.len());
     for hole in command.push_holes {
         holes.push(match *hole {
             PushHole::RootTableAddress { stages, offset } => Hole {
@@ -587,6 +596,9 @@ pub(super) fn bind(
                     .ok_or_else(|| internal("a capture index hole without capture indices"))?,
             },
         });
+    }
+    if let Some(memo) = memo {
+        memo.roots = roots;
     }
     Ok(Bound {
         writes,
@@ -889,6 +901,32 @@ pub(super) struct BindMemo {
     epoch: u64,
     views: HashMap<ViewKey, vk::ImageView>,
     samplers: Vec<KeptSampler>,
+    /// The vectors of the last bind's [`Bound`] its consumer gave back ([`BindMemo::give_back`])
+    /// and its root table addresses, emptied: the next bind fills them.
+    writes: Vec<Write>,
+    holes: Vec<Hole>,
+    bound_samplers: Vec<Arc<OwnedSampler>>,
+    roots: Vec<(metal2vulkan::vk::ShaderStageFlags, u64)>,
+}
+
+impl BindMemo {
+    /// Keep the vectors of a [`Bound`] its consumer is done with for the next bind; samplers
+    /// where the consumer did not keep them.
+    pub(super) fn give_back(
+        &mut self,
+        mut writes: Vec<Write>,
+        mut holes: Vec<Hole>,
+        samplers: Option<Vec<Arc<OwnedSampler>>>,
+    ) {
+        writes.clear();
+        holes.clear();
+        self.writes = writes;
+        self.holes = holes;
+        if let Some(mut samplers) = samplers {
+            samplers.clear();
+            self.bound_samplers = samplers;
+        }
+    }
 }
 
 /// What a view a bind made or found is a function of ([`BindMemo`]): a binding of the texture as
