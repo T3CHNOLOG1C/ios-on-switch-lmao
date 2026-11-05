@@ -118,5 +118,25 @@ class NativeSdAdmaTests(unittest.TestCase):
         self.assertLess(end.index("finishDirect(write)"), end.index("proveHigh("))
 
 
+    def test_read_staging(self):
+        """r12-sdio: a read's refused segments alone go through the bounce buffer, once setup() has run that path."""
+        source = (DRIVER / "NativeIOSwitchBlock.cpp").read_text()
+        body = lambda signature: source.split(signature, 1)[1].split("\n}\n", 1)[0]
+        build = body("IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(")
+        # Reads only, and only once the self-check has passed; writes keep the whole-chain bounce.
+        self.assertIn("if (!write && stagingOn) {", build)
+        # The staged segments are copied out after the read's invalidate and before any proof reuses the buffer.
+        end = body("void NativeIOSwitchBlock::endBatch(")
+        self.assertLess(end.index("finishDirect(write)"), end.index("copyStaged()"))
+        self.assertLess(end.index("copyStaged()"), end.index("proveHigh("))
+        # proveHigh compares the requests' own pages only, never the bounce buffer's runs.
+        self.assertIn("pa >= bouncePA && pa - bouncePA < kBounceBytes", body("bool NativeIOSwitchBlock::proveHigh("))
+        # setup()'s check runs the staging path on the hardware; a failure only keeps it off (no panic in it).
+        check = body("const char *NativeIOSwitchBlock::checkAdma(")
+        self.assertIn("stagingOn = !stagingWhy;", check)
+        self.assertLess(check.index("copyStaged()"), check.index("memcmp(pageBytes, reference, kTestBytes)"))
+        self.assertNotIn("panic(", check)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -101,6 +101,10 @@ constexpr uint32_t kDirectWriteSectors = kBounceSectors;
 constexpr uint32_t kWriteChecks = 32, kLargeWriteChecks = 16;
 // r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (prepareDirect, proveHigh).
 constexpr uint8_t kPoison = 0x5a;
+// r12-sdio: the most separate stretches of a read chain staged through the bounce buffer (IOSwitchAdmaStaging; consecutive
+// segments of one request make one): one per page of a 1 MiB chain of 4 KiB pages. More: the whole chain bounces.
+constexpr uint32_t kStages = 256;
+using Staging = IOSwitchAdmaStaging<IOMemoryDescriptor>;
 // Descriptor table: 16 KiB, contiguous, below 4 GiB; 1024 descriptors, four times what a 1 MiB chain of scattered 4 KiB
 // pages needs (256). A chain that needs more takes the bounce buffer.
 constexpr uint32_t kAdmaDescriptors = 1024;
@@ -303,7 +307,7 @@ struct Request {
 struct Batch {
     Request *first;  // the chain, in card order
     uint32_t sectors, count;
-    bool write, direct, proving, issued;
+    bool write, direct, proving, issued, staged;
     IOSwitchAdmaRefusal why;
     int issueStep;                // issue()'s result when the command never reached the card
     uint64_t beganNs, overlapNs;  // when beginBatch started; the previous chain's completions that ran inside this one
@@ -336,8 +340,9 @@ struct Stats {
     // equal, ADMA errors, worker time on the ADMA2 path's cache maintenance (part of busyNs), and busy time per direction.
     uint64_t direct, descriptors, bounced[kAdmaRefusals], verified, admaErrors, syncNs, readNs, writeNs;
     // r12-sdio: commands issued before the previous chain's completions ran, and of those the ones already finished when
-    // the worker came back to them (no interrupt taken).
-    uint64_t overlapped, early;
+    // the worker came back to them (no interrupt taken). Read chains that went by ADMA2 with some segments staged through
+    // the bounce buffer, and those bytes.
+    uint64_t overlapped, early, stagedChains, stagedBytes;
 };
 }
 
@@ -447,6 +452,11 @@ class NativeIOSwitchBlock : public IOService {
     // proveWrite) compare against: kBounceBytes, freed once no proof is left (releaseChecks).
     IOSwitchAdmaHigh high = {};
     uint8_t *checkBuffer = nullptr;
+    // r12-sdio: a read chain's segments that may not go straight to the card go through the bounce buffer alone
+    // (IOSwitchAdmaStaging), once setup()'s check has run it on the hardware (stagingOn).
+    Staging staging = {};
+    Staging::Stage *stages = nullptr;
+    bool stagingOn = false;
     char admaWhy[128] = {};
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
@@ -510,7 +520,10 @@ class NativeIOSwitchBlock : public IOService {
     bool proveWrite(Request *first, uint32_t sectors);
     bool proveHigh(Request *first, uint32_t sectors);
     void releaseChecks();
-    const char *checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages, uint32_t *highOk);
+    bool copyStaged();
+    const char *checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages, uint32_t *highOk,
+                          uint32_t *staged);
+    char stagingReason[96] = {};
     void dmaSuspend();
     void dmaResume();
     void logStats();
@@ -938,8 +951,26 @@ template <int op> static void syncLines(const IOSwitchAdmaTable &table)
 IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sectors, bool write)
 {
     table.reset();
+    staging.count = 0;
     table.limit = high.limit(write);
     const auto pageOk = [&](uint64_t page) { return cacheableRam(page) && high.pageOk(page, write); };
+    if (!write && stagingOn) {
+        // r12-sdio: a read's refused segments alone through the bounce buffer (IOSwitchAdmaStaging).
+        staging.reset(&table, bouncePA, stages, kStages);
+        table.limit = high.limit(write);
+        for (Request *r = first; r; r = r->next) {
+            const IOSwitchAdmaRefusal why = staging.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
+            if (why) {
+                staging.count = 0;
+                return why;
+            }
+        }
+        if (!staging.finish()) {
+            staging.count = 0;
+            return kAdmaFull;
+        }
+        return table.bytes == uint64_t(sectors) * kSector ? kAdmaOk : kAdmaMissing;
+    }
     for (Request *r = first; r; r = r->next) {
         const IOSwitchAdmaRefusal why = table.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
         if (why) return why;
@@ -972,6 +1003,20 @@ void NativeIOSwitchBlock::prepareDirect(bool write, bool poison)
         syncLines<1>(table);
     barrier();
     stats.syncNs += nowNs() - began;
+}
+
+// r12-sdio: a read's staged segments from the bounce buffer out to their requests (after finishDirect). False when a copy
+// failed (the chain completes with an I/O error).
+bool NativeIOSwitchBlock::copyStaged()
+{
+    const uint64_t began = nowNs();
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < staging.count; ++i) {
+        const Staging::Stage &stageAt = staging.stages[i];
+        ok = stage(stageAt.memory, static_cast<uint32_t>(stageAt.offset), bounce + stageAt.at, stageAt.length, true);
+    }
+    stats.copyNs += nowNs() - began;
+    return ok;
 }
 
 void NativeIOSwitchBlock::finishDirect(bool write)
@@ -1069,11 +1114,16 @@ bool NativeIOSwitchBlock::proveHigh(Request *first, uint32_t sectors)
         done += n;
     }
     if (!checkBuffer) return bounceChain(first, sectors);
-    // The table's descriptors are in chain order and only hold the requests' own pages: compare page by page through the
-    // kernel's physical aperture (as syncLines reaches them), counting what still holds the poison.
+    // The table's descriptors are in chain order: compare the requests' own pages page by page through the kernel's
+    // physical aperture (as syncLines reaches them), counting what still holds the poison. Runs staged in the bounce
+    // buffer were copied out already (and the buffer has been read into since): their bytes are skipped here.
     uint64_t at = 0, poisoned = 0, differs = UINT64_MAX, differsPA = 0;
     for (uint32_t i = 0; i < table.count; ++i) {
         uint64_t pa = ioswitchAdmaAddress(table.entries[i]);
+        if (pa >= bouncePA && pa - bouncePA < kBounceBytes) {
+            at += table.entries[i].length;
+            continue;
+        }
         for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
             const uint64_t page = (pa | (kAdmaPage - 1)) + 1, stop = page < end ? page : end;
             const auto *memory = reinterpret_cast<const uint8_t *>(phystokv(pa));
@@ -1148,6 +1198,7 @@ void NativeIOSwitchBlock::beginBatch(Batch &b)
                (b.why = buildTable(first, sectors, b.write)) == kAdmaOk;
     // r12-sdio: a read that reaches above 4 GiB while that is unproven is compared with SDMA before it completes.
     b.proving = b.direct && high.proofDue(b.write, table.high);
+    b.staged = b.direct && staging.count;
     if (!b.direct) return;
     prepareDirect(b.write, b.proving);
     b.issueStep = issue(static_cast<uint32_t>(first->lba), sectors, b.write, table.count);
@@ -1172,6 +1223,12 @@ void NativeIOSwitchBlock::endBatch(Batch &b)
         }
         if (step) step = retry(step, status, first->lba, sectors, write, table.count);
         finishDirect(write);
+        // r12-sdio: staged segments out to their requests before any proof reuses the bounce buffer.
+        if (!step && b.staged) {
+            if (!copyStaged()) result = kIOReturnIOError;
+            ++stats.stagedChains;
+            stats.stagedBytes += staging.staged;
+        }
         if (step == kStepAdmaError && b.proving) {
             // Only the pages above 4 GiB are new to the engine: they stay out of it, and this chain goes by SDMA.
             high.refuse();
@@ -1436,7 +1493,8 @@ void NativeIOSwitchBlock::logThroughput()
     // came back to them (ovl finished/issued; they took no interrupt).
     // r10-adma2: requests by ADMA2 (dma) and through the bounce buffer, the latter by why when any did (IOSwitchAdmaRefusal:
     // off = ADMA2 off), ADMA2 descriptors per ADMA2 request, ADMA2 writes read back equal (vfy), cache maintenance time
-    // (sync), and MB/s per direction over each direction's own busy time.
+    // (sync), and MB/s per direction over each direction's own busy time. r12-sdio: of the ADMA2 read chains, those with
+    // segments staged through the bounce buffer, and those bytes (part chains/KiB).
     char bounces[96] = "";
     {
         static const char *const names[kAdmaRefusals] = {"off", "align", "mem", "high", "full", "gone"};
@@ -1466,17 +1524,18 @@ void NativeIOSwitchBlock::logThroughput()
     snprintf(
         out, sizeof(out),
         "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
-        "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu vfy %llu wmax %uK 4G+ %s | "
+        "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu part %llu/%lluK vfy %llu "
+        "wmax %uK 4G+ %s | "
         "<=4K %llu%% seq %llu%% merged %llu q%u | cmds %llu irq %llu ovl %llu/%llu | err %llu adma %llu retune %llu | "
         "%s %u.%02u MHz | wait ms%s",
         requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
         stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
         writeRate / 10, writeRate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000, stats.direct, bounced, bounces,
-        perRequest / 10, perRequest % 10, stats.verified, writeSectors * kSector / 1024, highState,
-        requests ? stats.small * 100 / requests : 0, requests ? stats.sequential * 100 / requests : 0, stats.merged,
-        stats.maxQueued, stats.commands, __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early,
-        stats.overlapped, stats.errors, stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10,
-        classes);
+        perRequest / 10, perRequest % 10, stats.stagedChains, stats.stagedBytes >> 10, stats.verified,
+        writeSectors * kSector / 1024, highState, requests ? stats.small * 100 / requests : 0,
+        requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.maxQueued, stats.commands,
+        __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early, stats.overlapped, stats.errors,
+        stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
 }
 
@@ -2063,9 +2122,9 @@ void NativeIOSwitchBlock::resume()
 // have reached RAM: 4 GiB lower lies below DRAM at 0x80000000, outside the memory controller's EMEM aperture; pages
 // whose alias would fall in IRAM at 0x40000000 are not used.)
 const char *NativeIOSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages,
-                                           uint32_t *highOk)
+                                           uint32_t *highOk, uint32_t *staged)
 {
-    *descriptors = *highPages = *highOk = 0;
+    *descriptors = *highPages = *highOk = *staged = 0;
     if (copyFlush) return "boot-arg ioswitch-sd-copy-flush=1";
     if (!(r32(CAPABILITIES) & (1u << 19))) return "the controller reports no ADMA2";
     if ((r16(HOST_CONTROL2) & CONTROL2_V4_64BIT) != CONTROL2_V4_64BIT)
@@ -2160,6 +2219,44 @@ const char *NativeIOSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *d
         else
             why = "the 1 MiB read differs from SDMA's";
     }
+    // r12-sdio: the read path's per-segment staging (IOSwitchAdmaStaging) once on the hardware, before any request uses it:
+    // the partition's first half MiB into the test pages, every page whose number is a multiple of 3 refused and so staged
+    // through the bounce buffer, then copied out as the data path does; all of it must match SDMA's read. A failure leaves
+    // staging off (a read chain with a refused segment then bounces whole, as before), with the reason on the ADMA2 line.
+    *staged = 0;
+    stages = why ? nullptr : static_cast<Staging::Stage *>(IOMalloc(kStages * sizeof(Staging::Stage)));
+    const char *stagingWhy = why ? "" : !stages ? "no memory for the stages" : nullptr;
+    if (!stagingWhy) {
+        constexpr uint32_t kTestBytes = kTestPages * kAdmaPage;
+        for (uint32_t k = 0; k < kTestBytes; ++k) pageBytes[k] = static_cast<uint8_t>(~reference[k]);
+        staging.reset(&table, bouncePA, stages, kStages);
+        table.limit = kAdma4GiB;
+        const auto refuseEveryThird = [](uint64_t page) { return cacheableRam(page) && atop_64(page) % 3; };
+        if (staging.addMemory(pages, kTestBytes, refuseEveryThird) || !staging.finish() || table.bytes != kTestBytes ||
+            !staging.count || staging.staged == kTestBytes) {
+            stagingWhy = "the builder refused the test pages";
+        } else {
+            *staged = static_cast<uint32_t>(staging.staged / kAdmaPage);
+            prepareDirect(false, false);
+            uint32_t status = 0;
+            const int step =
+                command(static_cast<uint32_t>(firstSector), kTestBytes / kSector, false, table.count, &status);
+            finishDirect(false);
+            if (step) {
+                recover(true);
+                stagingWhy = "its read failed";
+            } else if (!copyStaged()) {
+                stagingWhy = "a staged copy failed";
+            } else if (memcmp(pageBytes, reference, kTestBytes)) {
+                stagingWhy = "its read differs from SDMA's";
+            }
+        }
+        staging.count = 0;
+        table.reset();
+    }
+    stagingOn = !stagingWhy;
+    if (stagingWhy && *stagingWhy)
+        snprintf(stagingReason, sizeof(stagingReason), ", per-segment staging off (%s)", stagingWhy);
     pages->complete();
     pages->release();
     // r12-sdio: test pages above 4 GiB that matched prove the high address word; ones that kept their fill disprove it;
@@ -2293,8 +2390,9 @@ bool NativeIOSwitchBlock::setup()
         int step = reference ? 0 : -2;
         for (uint32_t done = 0; !step && done < kBounceSectors; done += kSafeSectors)
             step = transfer(firstSector + done, kSafeSectors, false, reference + done * kSector);
-        uint32_t descriptors = 0, highPages = 0, highOk = 0;
-        const char *why = step ? "the reference read failed" : checkAdma(reference, &descriptors, &highPages, &highOk);
+        uint32_t descriptors = 0, highPages = 0, highOk = 0, staged = 0;
+        const char *why =
+            step ? "the reference read failed" : checkAdma(reference, &descriptors, &highPages, &highOk, &staged);
         if (!why) {
             adma = true;
             maxSectors = kBounceSectors;
@@ -2309,11 +2407,13 @@ bool NativeIOSwitchBlock::setup()
             if (!checkBuffer && high.state == IOSwitchAdmaHigh::kProving) high.refuse();
             static const char *const states[] = {" (above 4 GiB: proven by the first reads that reach there)", "",
                                                  " (ADMA2 stays below 4 GiB)"};
+            if (stagingOn)
+                snprintf(stagingReason, sizeof(stagingReason), ", per-segment staging on (%u pages)", staged);
             IOLog("IOSwitchSD: ADMA2 on: 1 MiB read through %u descriptors matches SDMA, %u of %u test pages above "
-                  "4 GiB right%s; commands up to %u KiB read, %u KiB write%s\n",
+                  "4 GiB right%s; commands up to %u KiB read, %u KiB write%s%s\n",
                   descriptors, highOk, highPages, states[high.state], maxSectors * kSector / 1024,
                   maxWriteSectors * kSector / 1024,
-                  admaWrites ? ", the first writes read back" : ", writes through the bounce buffer");
+                  admaWrites ? ", the first writes read back" : ", writes through the bounce buffer", stagingReason);
         } else {
             IOLog("IOSwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);
         }

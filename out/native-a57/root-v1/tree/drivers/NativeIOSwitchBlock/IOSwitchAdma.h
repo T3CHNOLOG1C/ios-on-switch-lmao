@@ -65,14 +65,21 @@ struct IOSwitchAdmaTable {
         high = 0;
     }
 
-    // [pa, pa + length) as transfer descriptors, continuing the previous descriptor when the memory continues it.
-    template <typename PageOk> IOSwitchAdmaRefusal add(uint64_t pa, uint64_t length, PageOk pageOk)
+    // Why [pa, pa + length) may not go straight to the card, or kAdmaOk; changes nothing.
+    template <typename PageOk> IOSwitchAdmaRefusal check(uint64_t pa, uint64_t length, PageOk pageOk) const
     {
         if (!length) return kAdmaMissing;
         if ((pa | length) & (kAdmaLine - 1)) return kAdmaAlign;
         if (pa >= limit || length > limit - pa) return kAdmaHigh;
         for (uint64_t page = pa & ~(kAdmaPage - 1); page < pa + length; page += kAdmaPage)
             if (!pageOk(page)) return kAdmaMemory;
+        return kAdmaOk;
+    }
+
+    // [pa, pa + length) as transfer descriptors, continuing the previous descriptor when the memory continues it.
+    template <typename PageOk> IOSwitchAdmaRefusal add(uint64_t pa, uint64_t length, PageOk pageOk)
+    {
+        if (const IOSwitchAdmaRefusal refusal = check(pa, length, pageOk)) return refusal;
         if (pa + length > kAdma4GiB) high += pa >= kAdma4GiB ? length : pa + length - kAdma4GiB;
         while (length) {
             // No descriptor crosses a 4 GiB boundary (r12-sdio: the engine's address word pair is only proven per
@@ -127,6 +134,90 @@ inline uint64_t ioswitchAdmaAddress(const IOSwitchAdmaDescriptor &descriptor)
 {
     return static_cast<uint64_t>(descriptor.addressHigh) << 32 | descriptor.addressLow;
 }
+
+// r12-sdio: a read chain's table where each physical segment goes straight to the card when it may (check()) and only the
+// others go through the bounce buffer. Until r12-sdio one such segment sent the whole chain through the bounce buffer:
+// every byte copied, and the chain split into 256 KiB SDMA commands. A refused segment is placed in the bounce buffer at
+// its own offset in the chain (the chain is at most kBounceBytes), consecutive refused segments form one run there, and
+// the table points at that run where the segments would have been; the driver copies each recorded stage out to its
+// request after the command. A segment goes straight only when its offset in the chain is on a cache line too, so every
+// run starts and ends on one (the chain's start, the end of a straight segment, the start of the next one, or the chain's
+// end, a whole sector) and the whole table stays in whole lines. Writes do not use this: a write chain with a refused
+// segment still goes through the bounce buffer whole, the path every write took before r10-adma2.
+template <typename Memory> struct IOSwitchAdmaStaging {
+    struct Stage {
+        Memory *memory;
+        uint64_t offset;  // in the memory
+        uint32_t at;      // in the chain, so also in the bounce buffer
+        uint32_t length;
+    };
+    static constexpr uint64_t kNoRun = ~0ull;
+    IOSwitchAdmaTable *table;
+    uint64_t bouncePA;  // physically contiguous, cacheable RAM below 4 GiB, as long as the longest chain
+    Stage *stages;
+    uint32_t capacity, count;
+    uint64_t at, run, staged;  // the chain offset reached, where the open run began (or kNoRun), bytes staged
+    uint32_t refused[kAdmaRefusals];
+
+    void reset(IOSwitchAdmaTable *t, uint64_t bounce, Stage *s, uint32_t n)
+    {
+        table = t;
+        bouncePA = bounce;
+        stages = s;
+        capacity = n;
+        count = 0;
+        at = 0;
+        run = kNoRun;
+        staged = 0;
+        for (uint32_t &r : refused) r = 0;
+        table->reset();
+    }
+
+    // The open run's descriptor (it precedes whatever comes next).
+    IOSwitchAdmaRefusal closeRun()
+    {
+        if (run == kNoRun) return kAdmaOk;
+        const IOSwitchAdmaRefusal refusal = table->add(bouncePA + run, at - run, [](uint64_t) { return true; });
+        run = kNoRun;
+        return refusal;
+    }
+
+    // The first `length` bytes of `memory` as the chain's next bytes. kAdmaOk, or kAdmaFull / kAdmaMissing when the chain
+    // cannot be built this way at all (then it goes through the bounce buffer whole).
+    template <typename PageOk> IOSwitchAdmaRefusal addMemory(Memory *memory, uint64_t length, PageOk pageOk)
+    {
+        for (uint64_t done = 0; done < length;) {
+            IOByteCount segment = 0;
+            const uint64_t pa = memory->getPhysicalSegment(done, &segment, kIOMemoryMapperNone);
+            if (!pa || !segment) return kAdmaMissing;
+            if (segment > length - done) segment = length - done;
+            const IOSwitchAdmaRefusal why = (at & (kAdmaLine - 1)) ? kAdmaAlign : table->check(pa, segment, pageOk);
+            if (why == kAdmaMissing) return why;
+            if (!why) {
+                if (const IOSwitchAdmaRefusal refusal = closeRun()) return refusal;
+                if (const IOSwitchAdmaRefusal refusal = table->add(pa, segment, pageOk)) return refusal;
+            } else {
+                if (run == kNoRun) run = at;
+                Stage *last = count ? &stages[count - 1] : nullptr;
+                if (last && last->memory == memory && last->offset + last->length == done &&
+                    last->at + last->length == at) {
+                    last->length += static_cast<uint32_t>(segment);
+                } else {
+                    if (count == capacity) return kAdmaFull;
+                    stages[count++] = {memory, done, static_cast<uint32_t>(at), static_cast<uint32_t>(segment)};
+                }
+                ++refused[why];
+                staged += segment;
+            }
+            at += segment;
+            done += segment;
+        }
+        return kAdmaOk;
+    }
+
+    // The last run's descriptor and End. False for an empty table or a full one.
+    bool finish() { return !closeRun() && table->finish(); }
+};
 
 // r12-sdio: whether ADMA2 may reach the requests' pages above 4 GiB (this board's RAM is 0x80000000-0x17fffffff, so half
 // of it). setup()'s check decides it when some of its test pages land up there; at boot the VM hands out pages in rising

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 #include <random>
 #include <vector>
 
@@ -366,6 +367,209 @@ static void highProof() {
   assert(off.state == IOSwitchAdmaHigh::kOff);
 }
 
+// r12-sdio: a read chain's table with refused segments staged through the bounce buffer (IOSwitchAdmaStaging).
+using Staging = IOSwitchAdmaStaging<Memory>;
+constexpr uint64_t kBounce = 0x90000000ull, kBounceSize = 1 << 20;
+
+// Every descriptor of a staged table follows checkTable's rules; the bytes it moves are the chain's, in order.
+static void checkStagedTable(const IOSwitchAdmaTable &t, uint64_t chainBytes)
+{
+    assert(t.count >= 1 && t.bytes == chainBytes);
+    uint64_t bytes = 0;
+    for (uint32_t i = 0; i < t.count; ++i) {
+        const IOSwitchAdmaDescriptor &d = t.entries[i];
+        assert(d.attributes == (i + 1 == t.count ? 0x23 : 0x21));
+        assert(d.length >= 1 && d.length <= kAdmaMaxLength && d.length % kAdmaLine == 0 && d.reserved == 0);
+        const uint64_t pa = ioswitchAdmaAddress(d);
+        assert(pa % kAdmaLine == 0 && pa + d.length <= t.limit && pa >> 32 == (pa + d.length - 1) >> 32);
+        bytes += d.length;
+    }
+    assert(bytes == chainBytes);
+}
+
+static void stagingCases()
+{
+    std::vector<Staging::Stage> stages(64);
+    // Nothing refused: the same table addMemory builds, no stages.
+    {
+        Memory a, b;
+        a.runs = {{0x80001000, 0x1000}, {0x80005000, 0x1000}};
+        b.runs = {{0x80006000, 0x2000}};
+        Table t(1024, 1ull << 32), plain(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x2000, anyPage) && !st.addMemory(&b, 0x2000, anyPage) && st.finish());
+        assert(st.count == 0 && st.staged == 0 && t.t.count == 2);
+        assert(!plain.t.addMemory(&a, 0x2000, anyPage) && !plain.t.addMemory(&b, 0x2000, anyPage) && plain.t.finish());
+        checkTable(t.t, {{0x80001000, 0x1000}, {0x80005000, 0x3000}});
+    }
+    // Pages above the limit: only they are staged, each at its chain offset in the bounce buffer; neighbours that are
+    // staged together form one run (one descriptor), and one request's consecutive segments one stage.
+    {
+        Memory a;
+        a.runs = {{0x80001000, 0x1000}, {0x123400000ull, 0x1000}, {0x123406000ull, 0x1000}, {0x80009000, 0x1000}};
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x4000, anyPage) && st.finish());
+        assert(st.count == 1 && stages[0].memory == &a && stages[0].offset == 0x1000 && stages[0].at == 0x1000);
+        assert(stages[0].length == 0x2000 && st.staged == 0x2000 && st.refused[kAdmaHigh] == 2);
+        checkTable(t.t, {{0x80001000, 0x1000}, {kBounce + 0x1000, 0x2000}, {0x80009000, 0x1000}});
+        assert(t.t.high == 0);
+    }
+    // A segment off a cache line is staged, and so is the next one while the chain offset is off a line too; straight
+    // again from the next line-aligned offset.
+    {
+        Memory a;
+        a.runs = {{0x80001010, 0x64}, {0x80002000, 0x19c}, {0x80003000, 0x200}};  // 100 + 412 bytes, then a sector
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x400, anyPage) && st.finish());
+        assert(st.count == 1 && stages[0].at == 0 && stages[0].length == 0x200 && st.refused[kAdmaAlign] == 2);
+        checkTable(t.t, {{kBounce, 0x200}, {0x80003000, 0x200}});
+    }
+    // Requests' runs that continue each other in the bounce buffer merge into one descriptor across requests, but stay
+    // separate stages (different memory).
+    {
+        Memory a, b;
+        a.runs = {{0x123400000ull, 0x1000}};
+        b.runs = {{0x123500000ull, 0x1000}, {0x80008000, 0x1000}};
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x1000, anyPage) && !st.addMemory(&b, 0x2000, anyPage) && st.finish());
+        assert(st.count == 2 && stages[1].memory == &b && stages[1].offset == 0 && stages[1].at == 0x1000);
+        checkTable(t.t, {{kBounce, 0x2000}, {0x80008000, 0x1000}});
+    }
+    // All staged: one run over the whole chain (split at the length cap only).
+    {
+        Memory a;
+        a.runs = {{0x123400000ull, 0x20000}};
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x20000, anyPage) && st.finish() && st.count == 1);
+        checkTable(t.t, {{kBounce, 0x20000}});
+    }
+    // Too many separate stages, a table too small for the runs, a missing segment: no table at all.
+    {
+        Memory a;
+        for (uint64_t i = 0; i < 6; ++i) a.runs.push_back({0x123400000ull + i * 0x2000, 0x1000});
+        Table t(1024, 1ull << 32);
+        Staging st;
+        std::vector<Staging::Stage> few(3);
+        st.reset(&t.t, kBounce, few.data(), 3);
+        assert(st.addMemory(&a, 0x6000, anyPage) == kAdmaOk);  // one request's segments coalesce into one stage
+        Memory b, c, d, e;
+        b.runs = {{0x123500000ull, 0x1000}};
+        c.runs = {{0x80000000ull, 0x1000}};
+        d.runs = {{0x123600000ull, 0x1000}};
+        e.runs = {{0x123700000ull, 0x1000}};
+        assert(st.addMemory(&b, 0x1000, anyPage) == kAdmaOk && st.addMemory(&c, 0x1000, anyPage) == kAdmaOk);
+        assert(st.addMemory(&d, 0x1000, anyPage) == kAdmaOk && st.addMemory(&e, 0x1000, anyPage) == kAdmaFull);
+        Memory alternating;
+        for (uint64_t i = 0; i < 8; ++i)
+            alternating.runs.push_back({(i % 2 ? 0x80000000ull : 0x123400000ull) + i * 0x2000, 0x1000});
+        Table small(3, 1ull << 32);
+        Staging tight;
+        tight.reset(&small.t, kBounce, stages.data(), 64);
+        assert(tight.addMemory(&alternating, 0x8000, anyPage) == kAdmaFull);
+        Memory hole = alternating;
+        hole.missingAt = 3;
+        Table h(1024, 1ull << 32);
+        Staging holed;
+        holed.reset(&h.t, kBounce, stages.data(), 64);
+        assert(holed.addMemory(&hole, 0x8000, anyPage) == kAdmaMissing);
+    }
+}
+
+// Random read chains, a random mix of refused pages and odd segments: the table, a simulated DMA through it, then the
+// stages copied out must leave every request holding exactly the card's bytes, and nothing else touched.
+static void stagingRandom()
+{
+    std::mt19937_64 random(0x57a9ed);
+    std::vector<Staging::Stage> stages(256);
+    uint64_t stagedTotal = 0, straightTotal = 0;
+    for (unsigned round = 0; round < 300; ++round) {
+        // Requests of whole sectors, each made of physical runs: page-sized, sub-page, odd-sized, low or high.
+        std::vector<Memory> requests(1 + random() % 6);
+        std::vector<uint64_t> lengths;
+        uint64_t chain = 0;
+        uint64_t nextLow = 0x80000000ull + (random() % 1024) * 0x10000, nextHigh = 0x120000000ull;
+        for (Memory &m : requests) {
+            const uint64_t sectors = 1 + random() % (random() % 8 ? 8 : 64);
+            uint64_t left = sectors * 512;
+            while (left) {
+                uint64_t n = random() % 3 ? 0x1000 : (random() % 2 ? 0x200 : 1 + random() % 0x400);
+                if (n > left) n = left;
+                const bool up = random() % 3 == 0, odd = random() % 7 == 0;
+                uint64_t &next = up ? nextHigh : nextLow;
+                if (random() % 3) next += 0x1000 * (1 + random() % 4);
+                const uint64_t pa = next + (odd ? 8 * (1 + random() % 7) : 0);
+                m.runs.push_back({pa, n});
+                next = (pa + n + 0xfff) & ~0xfffull;
+                left -= n;
+            }
+            lengths.push_back(sectors * 512);
+            chain += sectors * 512;
+        }
+        if (chain > kBounceSize) continue;
+        const uint64_t refusedPage = random() % 4 ? ~0ull : nextLow - 0x1000;
+        auto pageOk = [&](uint64_t page) { return page != refusedPage; };
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 256);
+        bool built = true;
+        for (size_t i = 0; i < requests.size() && built; ++i) built = !st.addMemory(&requests[i], lengths[i], pageOk);
+        if (!built) continue;  // more stages than the array: the driver bounces the whole chain
+        assert(st.finish());
+        checkStagedTable(t.t, chain);
+        stagedTotal += st.staged;
+        straightTotal += chain - st.staged;
+        // The card's bytes, moved by the "engine" to wherever the table says, then the stages copied out.
+        std::vector<uint8_t> card(chain);
+        for (uint8_t &b : card) b = uint8_t(random());
+        std::unordered_map<uint64_t, uint8_t> phys;
+        uint64_t at = 0;
+        for (uint32_t i = 0; i < t.t.count; ++i) {
+            const uint64_t pa = ioswitchAdmaAddress(t.t.entries[i]);
+            for (uint64_t k = 0; k < t.t.entries[i].length; ++k) phys[pa + k] = card[at + k];
+            at += t.t.entries[i].length;
+        }
+        for (uint32_t i = 0; i < st.count; ++i) {
+            const Staging::Stage &s = stages[i];
+            assert(s.at + s.length <= chain);
+            for (uint64_t k = 0; k < s.length;) {
+                IOByteCount segment = 0;
+                const uint64_t pa = s.memory->getPhysicalSegment(s.offset + k, &segment, kIOMemoryMapperNone);
+                assert(pa && segment);
+                for (uint64_t j = 0; j < segment && k < s.length; ++j, ++k) phys[pa + j] = phys.at(kBounce + s.at + k);
+            }
+        }
+        // Every request byte is the card's; every byte written is a request's or the bounce buffer's first `chain`.
+        uint64_t offset = 0;
+        std::unordered_map<uint64_t, bool> own;
+        for (size_t i = 0; i < requests.size(); ++i) {
+            for (uint64_t k = 0; k < lengths[i];) {
+                IOByteCount segment = 0;
+                const uint64_t pa = requests[i].getPhysicalSegment(k, &segment, kIOMemoryMapperNone);
+                assert(pa && segment);
+                for (uint64_t j = 0; j < segment && k < lengths[i]; ++j, ++k) {
+                    assert(phys.count(pa + j) && phys[pa + j] == card[offset + k]);
+                    own[pa + j] = true;
+                }
+            }
+            offset += lengths[i];
+        }
+        for (const auto &[pa, value] : phys) {
+            (void)value;
+            assert(own.count(pa) || (pa >= kBounce && pa < kBounce + chain));
+        }
+    }
+    assert(stagedTotal > 0 && straightTotal > 0);  // both kinds were exercised
+}
+
 int main()
 {
     layout();
@@ -376,6 +580,8 @@ int main()
     randomRuns();
     highBytes();
     highProof();
+    stagingCases();
+    stagingRandom();
     puts("PASS: sd adma2 tables");
     return 0;
 }
