@@ -66,6 +66,15 @@ impl Reshape {
         }
         *field = value;
     }
+
+    /// [`field`](Self::field) of `value`, cloned only where it changes the field: a draw of the
+    /// same state copies nothing.
+    pub(super) fn field_from<T: PartialEq + Clone>(&mut self, field: &mut T, value: &T) {
+        if field != value {
+            self.0 = true;
+            field.clone_from(value);
+        }
+    }
 }
 
 /// A render encoder's bind state as its last draw bound it, and its shape while no change may

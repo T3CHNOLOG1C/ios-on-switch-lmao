@@ -7692,8 +7692,8 @@ impl RenderCommandEncoder {
                 &mut state.depth_clamp_range,
                 settings.written_clamp.map(|w| w.range),
             );
-            reshape.field(&mut state.zeroed_colors, settings.zeroed_colors.clone());
-            reshape.field(&mut state.dropped_colors, settings.dropped_colors.clone());
+            reshape.field_from(&mut state.zeroed_colors, &settings.zeroed_colors);
+            reshape.field_from(&mut state.dropped_colors, &settings.dropped_colors);
             reshape.field(&mut state.interlocked_colors, interlocked.clone());
             reshape.field(&mut state.extended_shadows, shadows.clone());
             let depth_stencil = match &settings.failing_state {
