@@ -11,10 +11,14 @@ load("//bazel/kernel:common.bzl", "XCODE_EXECUTION")
 load("//bazel/kernel:kernel.bzl", "KernelObjectsInfo")
 load("//bazel/kernel:layout.bzl", "KERNEL_PACKAGE", "OLD_TREE")
 load(":recipes_development.bzl", "DEVELOPMENT_LINK")
+load(":recipes_release.bzl", "RELEASE_LINK", "RELEASE_LINK_LTO")
 load(":xnu_objects.bzl", "XnuObjectsInfo")
 
+# Per XNU config: (the LTO step, or None; the link). RELEASE is MakeInc.kernel's PRE_LTO pair: the bitcode objects and
+# nonlto.o linked -r into one machine-code object (justlto.o), then the link of the machine-code objects and justlto.o.
 LINKS = {
-    "DEVELOPMENT": DEVELOPMENT_LINK,
+    "DEVELOPMENT": (None, DEVELOPMENT_LINK),
+    "RELEASE": (RELEASE_LINK_LTO, RELEASE_LINK),
 }
 
 # The paths below the link tree's root, as make's (main's) kernel link named them.
@@ -190,6 +194,7 @@ def _xnu_kernel_impl(ctx):
     for f, name in zip(kernel.objects, kernel.names):
         farm.append((f, objdir + "/" + name))
     farm.append((ctx.file.alias_list, objdir + "/all-alias.exp"))
+    farm.append((ctx.file.kpi_list, objdir + "/all-kpi.exp"))
     farm.append((ctx.file.symbolsets, objdir + "/symbolsets.plist"))
     firehose = [f for f in ctx.files.sdkroot if f.basename == "libfirehose_kernel.a"]
     if len(firehose) != 1:
@@ -223,22 +228,26 @@ def _xnu_kernel_impl(ctx):
         else:
             fail("{}: mode {} (force_load or plain)".format(ctx.label, mode))
 
-    argv = []
-    for value in LINKS[config]:
-        if value == "@KERNEL_ARCHIVES@":
-            argv += archives
-            continue
-        if value.startswith("{objdir}//mach."):
-            value = "{out}"
-        argv.append(value.replace("{sdkroot}", "{root}/" + _MAKE_SDKROOT).replace("{objdir}", "{root}/" + objdir))
-    argv.append("-Wl,-oso_prefix,{root}/")
+    def expand(values):
+        out = []
+        for value in values:
+            if value == "@KERNEL_ARCHIVES@":
+                out += archives
+                continue
+            if value.startswith("{objdir}//mach."):
+                value = "{out}"
+            out.append(value.replace("{sdkroot}", "{root}/" + _MAKE_SDKROOT).replace("{objdir}", "{root}/" + objdir))
+        return out
+
+    lto, link = LINKS[config]
+    argv = (expand(lto) if lto else []) + ["--xnu-link--"] + expand(link) + ["-Wl,-oso_prefix,{root}/"]
 
     manifest = ctx.actions.declare_file(ctx.attr.name + ".links")
     ctx.actions.write(manifest, "".join(["{}\t{}\n".format(f.path, p) for f, p in farm]))
     listing = ctx.actions.declare_file(ctx.attr.name + ".filelist")
     ctx.actions.write(listing, "".join(["{root}/" + p + "\n" for p in filelist]))
     arguments = ctx.actions.args()
-    arguments.add_all([manifest, listing, out, objdir])
+    arguments.add_all([manifest, listing, out, objdir, " ".join(kernel.names)])
     arguments.add_all(argv)
     ctx.actions.run_shell(
         inputs = depset([manifest, listing] + [f for f, _ in farm] + [ctx.file._xcode_identity]),
@@ -248,15 +257,28 @@ def _xnu_kernel_impl(ctx):
         # debug map names each object as main's kernel did; -oso_prefix strips the tree's own location.
         command = """set -e
 root="$PWD/$3.tree"
-manifest="$1"; listing="$2"; out="$PWD/$3"; cwd="$root/$4"; shift 4
+manifest="$1"; listing="$2"; out="$PWD/$3"; cwd="$root/$4"; own="$5"; shift 5
 /usr/bin/perl -e 'use File::Path qw(make_path); my ($root, $here) = @ARGV[0, 1]; open(M, "<", $ARGV[2]) or die;
     while (<M>) {{ chomp; my ($src, $dst) = split /\\t/; my $to = "$root/$dst"; (my $dir = $to) =~ s,/[^/]*$,,;
     make_path($dir); symlink("$here/$src", $to) or die "$to: $!"; }}' "$root" "$PWD" "$manifest"
 mkdir -p "$root/{sdk}/usr/local/lib/kernel/platform"
 sed "s#{{root}}#$root#" "$listing" > "$cwd/link.filelist"
-args=()
-for a in "$@"; do a="${{a//\\{{root\\}}/$root}}"; args+=("${{a//\\{{out\\}}/$out}}"); done
+lto=(); args=(); seen=0
+for a in "$@"; do
+    a="${{a//\\{{root\\}}/$root}}"; a="${{a//\\{{out\\}}/$out}}"
+    if [ "$a" = --xnu-link-- ]; then seen=1; elif [ $seen = 0 ]; then lto+=("$a"); else args+=("$a"); fi
+done
 cd "$cwd"
+if [ ${{#lto[@]}} -gt 0 ]; then
+    # MakeInc.kernel PRE_LTO: bitcode objects (the 0x0b17c0de wrapper) to ltolink.filelist, the rest to
+    # nonltolink.filelist, the link's objects then the kernel's own in make's order; then the -r LTO step.
+    : > ltolink.filelist; : > nonltolink.filelist
+    for o in $(cat link.filelist) $own; do
+        if [ "$(/usr/bin/od -An -N4 -tx4 "$o" | tr -d ' ')" = 0b17c0de ]; then echo "$o" >> ltolink.filelist
+        else echo "$o" >> nonltolink.filelist; fi
+    done
+    {clangxx} "${{lto[@]}}"
+fi
 {clangxx} "${{args[@]}}"
 if LC_ALL=C grep -qF "$PWD" "$out"; then echo "the kernel names the execution root $PWD" >&2; exit 1; fi
 """.format(sdk = _MAKE_SDKROOT, clangxx = XCODE_TOOLCHAIN + "/clang++"),
@@ -335,6 +357,7 @@ _xnu_kernel = rule(
         "config": attr.string(default = "DEVELOPMENT"),
         "inputs": attr.label_list(allow_files = True),
         "kernel_objects": attr.label(providers = [XnuObjectsInfo], default = XNU + "config:objects"),
+        "kpi_list": attr.label(allow_single_file = True, default = XNU + "config:all_kpi_exp"),
         "modes": attr.string_list(),
         "out": attr.string(default = "build/xnu/mach.development.bcm2837.unstripped.noctf"),
         "sdkroot": attr.label(allow_files = True, default = "//kernel/xnu-10063.141.1:sdkroot_files"),
@@ -343,14 +366,13 @@ _xnu_kernel = rule(
     },
 )
 
-# XNU's configs per profile: --config=release is RELEASE, which has no recipes and link here yet (it needs one RELEASE
-# reference make's records): until then a release build of the kernel fails as incompatible rather than quietly
-# linking DEVELOPMENT.
-PROFILE_INCOMPATIBLE = select({
-    "//bazel:release": ["@platforms//:incompatible"],
-    "//conditions:default": [],
-})
-
 def xnu_kernel(name, **kwargs):
-    """The kernel link (_xnu_kernel), for the profiles XNU has recipes for."""
-    _xnu_kernel(name = name, target_compatible_with = PROFILE_INCOMPATIBLE, **kwargs)
+    """The kernel link (_xnu_kernel) for the build profile's XNU config (debug DEVELOPMENT, release RELEASE)."""
+    _xnu_kernel(
+        name = name,
+        config = select({
+            "//bazel:release": "RELEASE",
+            "//conditions:default": "DEVELOPMENT",
+        }),
+        **kwargs
+    )

@@ -1,9 +1,20 @@
-"""XNU's libsa objects for XNU config DEVELOPMENT, in link order (make's libsa.filelist), and what
+"""XNU's libsa objects for each XNU config (DEVELOPMENT, RELEASE), in link order (make's libsa.filelist), and what
 each one adds to its component's recipe: copts (conf/Makefile.*'s <object>_CFLAGS_ADD and _CWARNFLAGS_ADD),
 includes (<object>_INCFLAGS, after the recipe's) and segments (the setsegname passes make runs on the object).
 "gen:" sources are generated (MIG, iig, makesyscalls, newvers) in the component's object directory."""
 
 DEVELOPMENT = struct(
+    objects = [
+        "libsa/bootstrap.cpp",
+    ],
+    copts = {},
+    includes = {},
+    segments = {
+        "libsa/bootstrap.cpp": ["-s __TEXT -n __KLD", "-i __KLD -n __KLDDATA"],
+    },
+)
+
+RELEASE = struct(
     objects = [
         "libsa/bootstrap.cpp",
     ],

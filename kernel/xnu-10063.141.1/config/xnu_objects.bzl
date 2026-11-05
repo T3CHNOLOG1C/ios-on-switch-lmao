@@ -24,6 +24,7 @@ load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
 load("//bazel/kernel:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
 load("//bazel/platforms:transitions.bzl", "kernel_transition", "outer_transition")
 load(":recipes_development.bzl", "DEVELOPMENT_RECIPES")
+load(":recipes_release.bzl", "RELEASE_RECIPES")
 
 XnuObjectsInfo = provider(
     doc = "A component's objects in link order, under the names make gave them.",
@@ -38,6 +39,7 @@ XnuObjectsInfo = provider(
 
 RECIPES = {
     "DEVELOPMENT": DEVELOPMENT_RECIPES,
+    "RELEASE": RELEASE_RECIPES,
 }
 
 # make's spellings (main's kernel, built by tools/kernel/xnu_build.py with -ffile-prefix-map=<execroot>=/ioswitch).
@@ -323,7 +325,7 @@ xnu_objects_rule = rule(
     cfg = kernel_transition,
     attrs = {
         "component": attr.string(mandatory = True),
-        "config": attr.string(default = "DEVELOPMENT", values = ["DEVELOPMENT"]),
+        "config": attr.string(default = "DEVELOPMENT", values = ["DEVELOPMENT", "RELEASE"]),
         "copts": attr.string_list_dict(doc = "per object: flags after the recipe's (make's _CFLAGS_ADD, _CWARNFLAGS_ADD)"),
         "export_hdrs": attr.label(mandatory = True, allow_files = True, cfg = outer_transition),
         "gen_hdrs": attr.label(allow_files = True, cfg = outer_transition, doc = "the component's generated headers"),
@@ -349,14 +351,22 @@ xnu_objects_rule = rule(
 # The inputs every component reads: the top-level package's EXPORT_HDRS, generated files and SDK root (r18-xnu-hdrs').
 XNU_INPUTS = "//kernel/xnu-10063.141.1:"
 
-def xnu_objects(name, component, table, srcs = None, **kwargs):
-    """A component's objects.
+# XNU's kernel config per build profile (//bazel:profile): debug DEVELOPMENT, release RELEASE.
+def by_profile(development, release):
+    return select({
+        "//bazel:release": release,
+        "//conditions:default": development,
+    })
+
+def xnu_objects(name, component, table, release, srcs = None, **kwargs):
+    """A component's objects, for the build profile's XNU config.
 
     Args:
         name: the target (every component's is "objects").
         component: osfmk, bsd, ... or config (the kernel's own objects).
-        table: the component's objects.bzl struct (objects, copts, includes, segments).
-        srcs: the vendored sources the table names (default: the package's .c, .cpp and .s files).
+        table: the component's DEVELOPMENT table (objects.bzl struct: objects, copts, includes, segments).
+        release: its RELEASE table.
+        srcs: the vendored sources the tables name (default: the package's .c, .cpp and .s files).
         **kwargs: input overrides (config's objects: gen_srcs = version.c, gen_hdrs = None, gen_relative = False).
     """
     inputs = {
@@ -367,17 +377,18 @@ def xnu_objects(name, component, table, srcs = None, **kwargs):
     xnu_objects_rule(
         name = name,
         component = component,
-        objects = table.objects,
-        copts = table.copts,
-        includes = table.includes,
-        segments = table.segments,
+        config = by_profile("DEVELOPMENT", "RELEASE"),
+        objects = by_profile(table.objects, release.objects),
+        copts = by_profile(table.copts, release.copts),
+        includes = by_profile(table.includes, release.includes),
+        segments = by_profile(table.segments, release.segments),
         srcs = srcs if srcs != None else native.glob(["**/*.c", "**/*.cpp", "**/*.s"], allow_empty = True),
         export_hdrs = XNU_INPUTS + "export_hdrs",
         sdkroot = XNU_INPUTS + "sdkroot_files",
         ignorelists = "//kernel/xnu-10063.141.1/san:ignorelists",
         owner_header = "//kernel/xnu-10063.141.1/bsd:owner_header",
         xnu_headers = ["//kernel/xnu-10063.141.1/{}:headers".format(c) for c in XNU_COMPONENTS] + [
-            "//kernel/xnu-10063.141.1:external_headers",
+            XNU_INPUTS + "external_headers",
         ],
         # The kernel tree's headers XNU's own sources include: the diagnostics (-I diagnostics/ioswitch) and, through
         # IOSwitchRawMount.inc, the block device's and the verified root's.
@@ -391,11 +402,6 @@ def xnu_objects(name, component, table, srcs = None, **kwargs):
             "kernel",
             "no-lint",
         ],
-        # RELEASE has no recipes yet (recipes_<config>.bzl): a release build fails as incompatible, never as DEVELOPMENT.
-        target_compatible_with = select({
-            "//bazel:release": ["@platforms//:incompatible"],
-            "//conditions:default": [],
-        }),
         **inputs
     )
 

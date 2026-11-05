@@ -1,4 +1,4 @@
-"""XNU's san objects for XNU config DEVELOPMENT, in link order (make's san.filelist), and what
+"""XNU's san objects for each XNU config (DEVELOPMENT, RELEASE), in link order (make's san.filelist), and what
 each one adds to its component's recipe: copts (conf/Makefile.*'s <object>_CFLAGS_ADD and _CWARNFLAGS_ADD),
 includes (<object>_INCFLAGS, after the recipe's) and segments (the setsegname passes make runs on the object).
 "gen:" sources are generated (MIG, iig, makesyscalls, newvers) in the component's object directory."""
@@ -6,6 +6,14 @@ includes (<object>_INCFLAGS, after the recipe's) and segments (the setsegname pa
 DEVELOPMENT = struct(
     objects = [
         "san/memory/ubsan_minimal.c",
+    ],
+    copts = {},
+    includes = {},
+    segments = {},
+)
+
+RELEASE = struct(
+    objects = [
     ],
     copts = {},
     includes = {},

@@ -6,7 +6,7 @@
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/xnu-10063.141.1/config:xnu_objects.bzl", "xnu_objects")
-load(":objects.bzl", "DEVELOPMENT")
+load(":objects.bzl", "DEVELOPMENT", "RELEASE")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -80,5 +80,6 @@ xnu_objects(
         "**/*.s",
     ]) + ["//kernel/xnu-10063.141.1/osfmk:kperf/kperfbsd.c"],
     component = "bsd",
+    release = RELEASE,
     table = DEVELOPMENT,
 )
