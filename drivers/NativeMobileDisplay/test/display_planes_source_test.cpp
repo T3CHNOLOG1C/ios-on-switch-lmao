@@ -43,12 +43,13 @@ void ExpectBefore(const std::string &text, const std::string &a, const std::stri
     EXPECT_LT(at, bt) << a << " before " << b;
 }
 
-// XNU's patch, by its runfiles path (XNU_PATCH, the BUILD's $(rootpath)): not a file of this test's package.
-std::string XnuPatch()
+// XNU's kern_exec.c (the vendored kernel/xnu-10063.141.1), by its runfiles path (XNU_KERN_EXEC, the BUILD's
+// $(rootpath)): not a file of this test's package.
+std::string XnuKernExec()
 {
-    std::ifstream file(XNU_PATCH, std::ios::binary);
+    std::ifstream file(XNU_KERN_EXEC, std::ios::binary);
     if (!file) {
-        ADD_FAILURE() << "cannot read " << XNU_PATCH;
+        ADD_FAILURE() << "cannot read " << XNU_KERN_EXEC;
         return {};
     }
     std::ostringstream text;
@@ -135,12 +136,12 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
 
 TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
 {
-    const std::string patch = XnuPatch();
+    const std::string xnu = XnuKernExec();
     // The weak default: never.
-    EXPECT_THAT(patch, HasSubstr("+native_legacy_detach_ready(void)\n+{\n+\treturn false;\n+}"));
-    EXPECT_THAT(patch, HasSubstr("+\t\tconst int single = single_layer && !native_legacy_detach_ready();"));
+    EXPECT_THAT(xnu, HasSubstr("\nnative_legacy_detach_ready(void)\n{\n\treturn false;\n}"));
+    EXPECT_THAT(xnu, HasSubstr("\t\tconst int single = single_layer && !native_legacy_detach_ready();"));
     const std::string exec =
-        Between(patch, "+native_ioswitch_exec_environment(const struct image_params *imgp)", "+}\n");
+        Between(xnu, "\nnative_ioswitch_exec_environment(const struct image_params *imgp)", "\n}\n");
     ASSERT_FALSE(exec.empty());
     EXPECT_THAT(exec, Not(HasSubstr("if (single_layer) {")));
     EXPECT_THAT(exec, Not(HasSubstr("if (vbl && single_layer) {")));

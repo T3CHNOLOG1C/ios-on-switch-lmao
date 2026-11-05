@@ -171,7 +171,7 @@ def kernel_driver(
     """A kernel driver: cc_library targets for the kernel platform, and <name>, its objects in link order.
 
     dir defaults to drivers/<name>; srcs to its .cpp files (sorted) followed by its firmware.S, if it has one. Names in
-    srcs are relative to dir; anything else is a label ("//bazel/pinned:...", "@xnu//:..."). hdr_deps: header
+    srcs are relative to dir; anything else is a label ("//bazel/pinned:...", "//kernel/xnu-10063.141.1:..."). hdr_deps: header
     directories (e.g. "drivers/ArmGIC") the driver includes besides its own; None means every one. The compile
     sandbox holds only those: "fatal error: '../X/Y.h' file not found" means drivers/X belongs in hdr_deps."""
     package = native.package_name()

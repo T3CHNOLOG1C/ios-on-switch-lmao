@@ -35,7 +35,7 @@ host_test(
 genrule(
     name = "xnu_pmap_flags",
     testonly = True,
-    srcs = ["@xnu//:osfmk/vm/pmap.h"],
+    srcs = ["//kernel/xnu-10063.141.1:osfmk/vm/pmap.h"],
     outs = ["xnu_pmap_flags.h"],
     cmd = """
 set -e

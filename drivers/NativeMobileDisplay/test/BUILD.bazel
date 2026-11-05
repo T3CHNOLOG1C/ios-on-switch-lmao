@@ -74,7 +74,7 @@ host_test(
         "//drivers/NativeMobileDisplay:NativePlanesBindings.S",
         "//drivers/NativeMobileDisplay:NativePlanesDisplay.inc",
         "//drivers/TegraVIC:original-bindings.S",
-        "//out/native-a57/root-v1/tree/patches:xnu-ioswitch.diff",
+        "//kernel/xnu-10063.141.1:bsd/kern/kern_exec.c",
     ],
-    defines = ['XNU_PATCH=\\"$(rootpath //out/native-a57/root-v1/tree/patches:xnu-ioswitch.diff)\\"'],
+    defines = ['XNU_KERN_EXEC=\\"$(rootpath //kernel/xnu-10063.141.1:bsd/kern/kern_exec.c)\\"'],
 )

@@ -96,7 +96,7 @@ changed, and recompiles only what you touched.
 | Keep this build (rollback) | `bazel run //boot:snapshot -- 1930-r9-mything` → `out/boot/lkg/1930-r9-mything/` |
 | Deploy a kept build | `bazel run //deploy:sd -- disk4 --yes --stage-gpu --boot-package=$PWD/out/boot/lkg/NAME --gpu-bundle=$PWD/out/boot/lkg/NAME/gpu` |
 | Install iPadOS on a fresh card | `bazel run //install:sd -- disk4` (dry run), then `... --yes` (see below) |
-| Export XNU changes | `bazel run //xnu:patch_export` |
+| Change XNU | Edit `kernel/xnu-10063.141.1/` and commit (see [Changing XNU](#changing-xnu)) |
 | Format everything | `bazel run //:format` (or `bazel run //:format -- PATH...`) |
 | Check format / lint | `bazel test //:format_test //:lint_test //:clang_tidy_test` |
 | compile_commands.json for clangd | `bazel run //tools/lint:compdb` |
@@ -160,7 +160,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//install:sd`, `//install:artifacts` | SD-card install and what it writes |
 | `//deploy:sd`, `//deploy:pull_logs` | Deploy and log pull |
 | `//boot:snapshot` | Copy this build to `out/boot/lkg/<name>` |
-| `//xnu:patch_export`, `:patch_check`, `:patch_apply` | XNU patch ⇄ working repository |
+| `//kernel/xnu-10063.141.1:update_tables` | Re-record XNU's header/MIG/config tables from its make (after a makefile change) |
 | `//:format`, `//:format_test`, `//:lint_test`, `//:clang_tidy_test` | Format and lint every file (see [Format and lint](#format-and-lint)) |
 | `//tools/lint:py_owners`, `//tools/lint:compdb` | Every tracked `.py` file has an owning target; compile_commands.json for clangd |
 | `//bazel/python:requirements.update`, `:requirements_test` | Re-lock the Python packages with uv; check the lock is current |
@@ -258,26 +258,27 @@ pieces; `bazel/kernel/kernel.bzl` documents each.
 
 ## Changing XNU
 
-Bazel builds XNU from the pinned tarball plus `out/native-a57/root-v1/tree/patches/xnu-ioswitch.diff`. Work in the XNU
-repository (`out/native-a57/root-v1/tree/.cache/xnu-work`, branch `ioswitch`) as before. Then:
+XNU is vendored: `kernel/xnu-10063.141.1/` is Apple's xnu-10063.141.1 with our changes as ordinary commits on top
+(`git log -- kernel/xnu-10063.141.1` shows each one). Edit it like any other source and commit:
 
 ```sh
-git -C out/native-a57/root-v1/tree/.cache/xnu-work commit -am "..."
-bazel run //xnu:patch_export      # rewrites the patch from the branch; commit it with your tree change
+$EDITOR kernel/xnu-10063.141.1/osfmk/kern/startup.c
 bazel build //:kernel
 ```
 
-The patch is the source of truth for the build. A tree change that calls new XNU code fails to link until the patch is
-exported. `bazel run //xnu:patch_check` tells you whether the patch is current (it reads this checkout's
-`.cache/xnu-work`; a git worktree has its own copy, possibly stale). Any XNU change recompiles XNU (about 80 s) and
-every driver object, because they include XNU's headers.
+Its headers, MIG stubs, iig, config and syscall files are Bazel actions, one per header or step
+(`kernel/rules/xnu.bzl`), so a header edit recompiles only the drivers that include it. They replay tables recorded
+from XNU's own make (`kernel/xnu-10063.141.1/tables/`): after changing a Makefile, a MASTER file, a `conf/files` list
+or a script those run, `bazel run //kernel/xnu-10063.141.1:update_tables` and commit the tables. Code that differs per
+XNU version tests `#if XNU_10063_141_1` (`//kernel:xnu_version`). XNU files keep Apple's style: `//:format` and the
+linters leave them alone.
 
 ## Bumping a pin
 
 | Pin | Where | How |
 |---|---|---|
 | IPSW | `bazel/ipsw/pins.bzl` | `bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> iPad7,1 j120ap` (pins one kind in place; streams each member once to hash it; nothing stored) |
-| XNU tag | `MODULE.bazel` `@xnu`/`@xnu_base` | New URL and sha256. The patch must apply to it |
+| XNU version | `kernel/xnu-<version>/` | Vendor the new tag next to the old one (pristine commit, then our commits replayed), `bazel run //kernel/xnu-<version>:update_tables`, add the version to `//kernel:xnu_version`. `MODULE.bazel` `@xnu_base` (lldb macros) follows |
 | Apple OSS, corecrypto, lz4 | `MODULE.bazel` | Version in the URL, new sha256, `strip_prefix` |
 | m2v | `bazel/gpu/deps.bzl` | Commit and sha256 of the GitHub tarball. The series is `drivers/TegraGM20BMetal/patches/series` |
 | NVK | `gpu/nvk/BUILD.bazel` | Add the patch to `PATCHES` (in order), set `GIT_SHA1` to the version string's commit, build `//gpu/nvk:ios //gpu/nvk:host`, then pin `EXPECT` (tree id and both sha256s the build prints) |
@@ -291,7 +292,7 @@ every driver object, because they include XNU's headers.
 | Pinned files | `bazel/pinned` | Replace the file, update its line in `SHA256SUMS` (`shasum -a 256 <path>`, path relative to `bazel/pinned`), `bazel test //bazel/pinned:sha256` |
 
 A few BUILD arguments name external repositories by their directory, which Bazel 9 derives from `MODULE.bazel`. For
-example, `external/+http_archive+xnu`, `+http_archive+corecrypto`, `+http_archive+lz4` and
+example, `+http_archive+corecrypto`, `+http_archive+lz4` and
 `+http_archive+iostoragefamily` appear in `kernel/BUILD.bazel` and `tools/BUILD.bazel`. If you
 rename a repository, or change how it is declared, update those paths too.
 
@@ -400,7 +401,7 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 | `cp -R out/boot/ioswitch out/boot/lkg/NAME` (+ `out/gpu`) | `bazel run //boot:snapshot -- NAME` |
 | `PKG=... [STAGE_GPU=1] zsh out/switch/deploy-sd.sh` | `bazel run //deploy:sd -- disk4 --yes [--stage-gpu] [--boot-package=... --gpu-bundle=...]` |
 | Logs part of deploy-sd.sh + `mkarchive.py` + `log show` | `bazel run //deploy:pull_logs -- disk4`, then `log show --archive .../boot.logarchive` |
-| `scripts/xnu-patch.sh export / check / apply` | `bazel run //xnu:patch_export / :patch_check / :patch_apply -- DIR` |
+| `scripts/xnu-patch.sh export / check / apply` | Nothing: edit `kernel/xnu-10063.141.1/` and commit |
 | `scripts/lint.py format / tidy / compdb` | `bazel run //:format`, `bazel test //:clang_tidy_test`, `bazel run //tools/lint:compdb` |
 | `python3 -m unittest ...` | `bazel test //...` |
 | Edit `cmake/Drivers.cmake` for a new driver | One `kernel_driver()` in the tree's `BUILD.bazel` |
@@ -423,8 +424,8 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
   or run `hdiutil detach` on the `_volume` directory in `$(bazel info output_base)/external/+gpu+gpu_apple_libs`.
 - **"the pinned outputs in bazel/pinned/nvk were generated from other inputs"**: a patch changed what Mesa's CL
   kernels (or the ASTC shader) read; regenerate those files with the real tools and update `bazel/pinned/nvk/inputs.txt`.
-- **The link fails with an undefined `ioswitch_*` symbol from XNU code**: the XNU patch is stale. Run
-  `bazel run //xnu:patch_export`.
+- **"no file for o/..." or "no step writes ..." from an XNU target**: a makefile change outran the tables; run
+  `bazel run //kernel/xnu-10063.141.1:update_tables`.
 - **Another Bazel command is running**: one server per checkout. Agents working in the same checkout at the same time
   should pass `--output_base=<own dir> ... --experimental_convenience_symlinks=ignore` (or wait).
 - **A pinned download moved** (`Checksum was ...`): the pin is doing its job. Fix the URL, never the sha256, unless you

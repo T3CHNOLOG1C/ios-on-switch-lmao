@@ -1,4 +1,6 @@
-"""XNU: the kernel SDK root, the XNU build (compile + the exact link command), the final link."""
+"""XNU: libfirehose_kernel.a into the kernel SDK root, the XNU build (compile + the exact link command), the final link.
+
+The SDK root itself is kernel/xnu-<version>:sdkroot (kernel/rules/xnu.bzl), one directory of it the tree's fakeroot_headers."""
 
 load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "python", "run_tool", "setting", "workspace_root")
 load(":layout.bzl", "TREE_ROOT")
@@ -11,51 +13,6 @@ _XNU_CODE = ["c", "cpp", "s", "S", "m", "mm"]
 def _xnu_dir(target):
     """The XNU tree's exec path: a vendored tree's package (kernel/xnu-<version>), or an external repository's root."""
     return target.label.workspace_root or target.label.package
-
-def _kernel_sdkroot_impl(ctx):
-    out = ctx.actions.declare_directory(ctx.attr.out)
-    log = ctx.actions.declare_file(ctx.attr.out + ".log")
-    py = python(ctx)
-    run_tool(
-        ctx,
-        "sdkroot.py",
-        [
-            "--xcode-env",
-            ctx.file._xcode_env.path,
-            "--out",
-            out.path,
-            "--log",
-            log.path,
-            "--availability",
-            workspace_root(ctx.attr.availability_versions),
-            "--libplatform",
-            workspace_root(ctx.attr.libplatform),
-            "--libdispatch",
-            workspace_root(ctx.attr.libdispatch),
-            "--xnu",
-            _xnu_dir(ctx.attr.xnu),
-            "--python-bin",
-            py.interpreter.dirname,
-        ],
-        depset(ctx.files.availability_versions + ctx.files.libplatform + ctx.files.libdispatch + ctx.files.xnu,
-               transitive = [py.files]),
-        [out, log],
-        "KernelSdkRoot",
-        "Assembling the kernel SDK root (XNU installhdrs, libplatform, libdispatch os/, availability.pl)",
-    )
-    return [DefaultInfo(files = depset([out]))]
-
-kernel_sdkroot = rule(
-    implementation = _kernel_sdkroot_impl,
-    attrs = dict(KERNEL_TOOL_ATTRS, **{
-        "out": attr.string(default = ".cache/fakeroot"),
-        "xnu": attr.label(mandatory = True),
-        "libplatform": attr.label(default = "@libplatform//:all"),
-        "libdispatch": attr.label(default = "@libdispatch//:all"),
-        "availability_versions": attr.label(default = "@availability_versions//:all"),
-    }),
-    toolchains = [PY_TOOLCHAIN],
-)
 
 def _kernel_firehose_impl(ctx):
     out = ctx.actions.declare_directory(ctx.attr.out)

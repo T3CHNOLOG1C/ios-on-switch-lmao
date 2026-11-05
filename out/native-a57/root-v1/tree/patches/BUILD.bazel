@@ -2,4 +2,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 
 lint_files()
 
-exports_files(glob(["**/*.diff", "**/*.patch"]))
+exports_files(glob([
+    "**/*.diff",
+    "**/*.patch",
+], allow_empty = True))

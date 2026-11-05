@@ -76,24 +76,13 @@ pinned_files(
     sums = "//bazel/pinned:SHA256SUMS",
 )
 
-# --- Apple open source the kernel is built from (apple-oss-distributions tags), plus our patches ----------------
+# --- Apple open source the kernel is built with (apple-oss-distributions tags), plus our patches ------------------
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 _SOURCE_BUILD = 'exports_files(glob(["**"]))\n\nfilegroup(name = "all", srcs = glob(["**"]), visibility = ["//visibility:public"])\n'
 
-# XNU xnu-10063.141.1 (commit d8b80295118e) with ioswitch's changes. The patch is exported from the XNU working
-# repository (branch ioswitch) by `bazel run //xnu:patch_export`.
-http_archive(
-    name = "xnu",
-    build_file_content = _SOURCE_BUILD,
-    patch_args = ["-p1"],
-    patches = ["//out/native-a57/root-v1/tree/patches:xnu-ioswitch.diff"],
-    sha256 = "ffdc143cbf4c57dac48e7ad6367ab492c6c4180e5698cb2d68e87eaf1781bc48",
-    strip_prefix = "xnu-xnu-10063.141.1",
-    urls = ["https://github.com/apple-oss-distributions/xnu/archive/refs/tags/xnu-10063.141.1.tar.gz"],
-)
-
-# The same tag without our changes: its installhdrs are the kernel SDK headers corecrypto and firehose build against.
+# XNU itself is vendored (kernel/xnu-10063.141.1, with our changes as commits). The tag as Apple publishes it, for its
+# lldb macros (deploy's kcdata decoding).
 http_archive(
     name = "xnu_base",
     build_file_content = _SOURCE_BUILD,
