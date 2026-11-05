@@ -76,10 +76,9 @@ pub(super) struct PendingDraw {
     pub(super) draw: usize,
     pub(super) variant: VariantKey,
     pub(super) specialization: Vec<(SpecKey, u64)>,
-    /// The view mask of the storage barrier it records first
-    /// (`render_target::between_storage_draws`), where it has one, and whether that barrier is
-    /// the draws' whole self-dependency (`render_target::between_draws`: an unordered fetch's).
-    pub(super) storage_barrier: Option<(u32, bool)>,
+    /// The view mask of the barrier it records first, where it has one, and which barrier of the
+    /// draws' self-dependency that is (`render_target::before_draw`).
+    pub(super) storage_barrier: Option<(u32, render_target::DrawsBarrier)>,
     /// The visibility query it counts in.
     pub(super) query: Option<Lent>,
     pub(super) recordings: Vec<OwnedRecording>,
@@ -148,12 +147,8 @@ impl PendingDraw {
         // instance, valid in the pass's subpass; the lent query is a continuation of the offset
         // the encoder's draws count in, with none active in this secondary before it.
         unsafe {
-            match self.storage_barrier {
-                Some((view_mask, true)) => render_target::between_draws(raw, cb, view_mask),
-                Some((view_mask, false)) => {
-                    render_target::between_storage_draws(raw, cb, view_mask)
-                }
-                None => {}
+            if let Some((view_mask, barrier)) = self.storage_barrier {
+                render_target::before_draw(raw, cb, view_mask, barrier);
             }
             if let Some(query) = &self.query {
                 query.begin(raw, cb);

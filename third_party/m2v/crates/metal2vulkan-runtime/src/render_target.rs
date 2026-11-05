@@ -557,6 +557,94 @@ pub(super) const DRAWS_SELF_DEPENDENCY: SelfDependency = SelfDependency {
     ),
 };
 
+/// The scopes of the barrier before a draw that fetches colors through input attachments after
+/// earlier draws of its instance wrote them, where nothing else the two reach meets (`render.rs`'s
+/// `InterlockedStorage::fetches_alone`): within the `DRAWS_SELF_DEPENDENCY`. The earlier draws'
+/// color writes are made visible to the fetch, and the draw's own color writes wait for the
+/// earlier draws' fetches (the attachments are read and written in one subpass). No shader
+/// storage is in either scope: Metal orders a render pass's device memory writes between draws
+/// only through a memory barrier, which records the whole dependency (`between_draws`), so this
+/// barrier is the whole one's answer for these draws. On NVK it waits for idle and invalidates the
+/// texture cache, without the shader caches' flush and invalidation the whole one's shader
+/// writes and reads add.
+pub(super) const FETCH_SELF_DEPENDENCY: SelfDependency = SelfDependency {
+    stages: vk::PipelineStageFlags::from_raw(
+        vk::PipelineStageFlags::FRAGMENT_SHADER.as_raw()
+            | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.as_raw(),
+    ),
+    src_access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+    dst_access: vk::AccessFlags::from_raw(
+        vk::AccessFlags::INPUT_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags::COLOR_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags::COLOR_ATTACHMENT_WRITE.as_raw(),
+    ),
+};
+
+/// Which barrier of the draws' subpass's dependency on itself a draw records before it, after
+/// earlier draws of its instance (`render.rs`'s `InterlockedStorage`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DrawsBarrier {
+    /// The whole dependency (`between_draws`).
+    Whole,
+    /// Color writes to fetches through input attachments alone (`between_fetching_draws`).
+    Fetch,
+    /// The fragment shader's storage alone (`between_storage_draws`).
+    Storage,
+}
+
+/// Record `barrier` into `draws`, as [`between_draws`], [`between_fetching_draws`] or
+/// [`between_storage_draws`] records it.
+///
+/// # Safety
+///
+/// As for [`between_draws`].
+pub(super) unsafe fn before_draw(
+    raw: &ash::Device,
+    draws: vk::CommandBuffer,
+    view_mask: u32,
+    barrier: DrawsBarrier,
+) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        match barrier {
+            DrawsBarrier::Whole => between_draws(raw, draws, view_mask),
+            DrawsBarrier::Fetch => between_fetching_draws(raw, draws, view_mask),
+            DrawsBarrier::Storage => between_storage_draws(raw, draws, view_mask),
+        }
+    }
+}
+
+/// Record, into `draws`, a render pass instance's secondary command buffer whose subpasses have
+/// `view_mask`, a barrier of the `FETCH_SELF_DEPENDENCY`'s scopes: a fetch after it reads what
+/// the color writes of the draws before it wrote, pixel by pixel.
+///
+/// # Safety
+///
+/// As for [`between_draws`].
+pub(super) unsafe fn between_fetching_draws(
+    raw: &ash::Device,
+    draws: vk::CommandBuffer,
+    view_mask: u32,
+) {
+    let scopes = FETCH_SELF_DEPENDENCY;
+    let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(scopes.src_access)
+        .dst_access_mask(scopes.dst_access);
+    // SAFETY: the caller's contract; the scopes are within the pass's subpass's dependency on
+    // itself (`DRAWS_SELF_DEPENDENCY`), with its flags, so the barrier is valid inside it.
+    unsafe {
+        raw.cmd_pipeline_barrier(
+            draws,
+            scopes.stages,
+            scopes.stages,
+            self_dependency_flags(view_mask),
+            &[barrier],
+            &[],
+            &[],
+        );
+    }
+}
+
 /// The flags of the draws' subpass's dependency on itself in a pass whose subpasses have
 /// `view_mask`, which a barrier inside it takes too: by region, and view by view in a subpass of
 /// more than one view (`VUID-VkRenderPassCreateInfo2-pDependencies-03060`).

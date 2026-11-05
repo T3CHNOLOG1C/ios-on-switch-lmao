@@ -731,6 +731,26 @@ impl InterlockedStorage {
         self.inputs && other.inputs
     }
 
+    /// Whether only the unordered fetch meets: the barrier `meets` asks for orders the earlier
+    /// draws' color writes before the fetch and nothing else
+    /// (`render_target::FETCH_SELF_DEPENDENCY`).
+    fn fetches_alone(self, other: Self) -> bool {
+        let storage = Self {
+            inputs: false,
+            ..self
+        };
+        self.whole_barrier(other) && !storage.meets(other)
+    }
+
+    /// The barrier `meets` asks for (`render_target::before_draw`).
+    fn barrier(self, other: Self) -> render_target::DrawsBarrier {
+        match (self.fetches_alone(other), self.whole_barrier(other)) {
+            (true, _) => render_target::DrawsBarrier::Fetch,
+            (false, true) => render_target::DrawsBarrier::Whole,
+            (false, false) => render_target::DrawsBarrier::Storage,
+        }
+    }
+
     /// The kinds of either.
     fn or(self, other: Self) -> Self {
         Self {
@@ -7181,26 +7201,20 @@ impl RenderCommandEncoder {
             // imageblock's, a color's or the depth's stand-in, records after the barrier
             // (`InterlockedStorage`).
             let after_writes = interlocked.meets(self.current.interlocked_writes);
-            let whole = interlocked.whole_barrier(self.current.interlocked_writes);
+            let barrier = interlocked.barrier(self.current.interlocked_writes);
             let mut storage_barrier = None;
             if after_writes {
                 match pending {
-                    Some(_) => storage_barrier = Some((self.current.shape.view_mask, whole)),
+                    Some(_) => storage_barrier = Some((self.current.shape.view_mask, barrier)),
                     // SAFETY: the secondary command buffer is recording inside the compatible
                     // pass, which `render_target` made, and only this encoder records it.
                     None => unsafe {
-                        match whole {
-                            true => render_target::between_draws(
-                                device.shared().vk(),
-                                self.current.draws,
-                                self.current.shape.view_mask,
-                            ),
-                            false => render_target::between_storage_draws(
-                                device.shared().vk(),
-                                self.current.draws,
-                                self.current.shape.view_mask,
-                            ),
-                        }
+                        render_target::before_draw(
+                            device.shared().vk(),
+                            self.current.draws,
+                            self.current.shape.view_mask,
+                            barrier,
+                        )
                     },
                 }
             }
