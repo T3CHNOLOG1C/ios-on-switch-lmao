@@ -189,8 +189,6 @@ def table_snapshot(card):
     return b"".join(parts)
 
 
-# --- volumes -------------------------------------------------------------------------------------------------------
-
 def volumes(card):
     """{uuid: {DeviceIdentifier, Roles, Name, ...}} of the APFS container on the target, {} when none is attached."""
     container = host.container_on(card.slice(card.target))
@@ -223,8 +221,6 @@ def mounted(identifier, log, read_only=False, owners=False):
             host.run("sync")
             host.run("diskutil", "unmount", identifier, log=log, check=False)
 
-
-# --- the FAT boot entry ----------------------------------------------------------------------------------------------
 
 def sha256_file(path):
     digest = hashlib.sha256()
@@ -284,8 +280,6 @@ def sync_boot_entry(fat_root, package, log, dry_run=False):
         "to remove" if dry_run else "removed", len(wanted) - len(changed)), changed + ["-" + r for r in removed])
     return changed, removed
 
-
-# --- the userland overlay on Data --------------------------------------------------------------------------------------
 
 def tree_digest(root):
     root = Path(root)

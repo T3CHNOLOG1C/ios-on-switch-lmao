@@ -81,7 +81,6 @@ class Installer:
         self.want = {k: v["uuid"] for k, v in self.spec["volumes"].items()}
         self.card = None
 
-    # --- state ---------------------------------------------------------------------------------------------------
     def inspect(self):
         self.card = cards.resolve(self.args.disk)
         cards.read_table(self.card)
@@ -133,7 +132,6 @@ class Installer:
         }[state]
         return steps
 
-    # --- 1 compose -------------------------------------------------------------------------------------------------
     def scratch_dir(self):
         return Path(self.args.scratch or (Path.home() / "Library/Caches/ioswitch-install"))
 
@@ -269,7 +267,6 @@ class Installer:
             raise host.HostError("fsck_apfs -n {} ({}): {}".format(store, what, tail[0]))
         self.log("fsck_apfs {} ({}): {}".format(store, what, tail[0]))
 
-    # --- 2 write ---------------------------------------------------------------------------------------------------
     def write(self, image, part_offset, os_bytes):
         """The scratch partition's written regions onto the target partition. [0, os_bytes) is written whole (the
         OS container, checkpoint areas included, so nothing of an earlier container on the card survives there);
@@ -332,7 +329,6 @@ class Installer:
         self.log("retype: {} -> {} {!r} ({} sectors rewritten)".format(self.card.target.describe(),
                                                                        gpt.NAMES[kind], name, len(writes)))
 
-    # --- 3 reprobe -------------------------------------------------------------------------------------------------
     def reprobe(self, expect_container=True):
         if self.card.image:
             image = self.card.image
@@ -357,7 +353,6 @@ class Installer:
                  "again; it continues where it stopped.")
         return False
 
-    # --- 4 populate ------------------------------------------------------------------------------------------------
     def populate(self):
         vols = cards.volumes(self.card)
         missing = [k for k, u in self.want.items() if u not in vols]
@@ -431,7 +426,6 @@ class Installer:
             self.log("preboot: {} staged ({} bytes)".format(relative, pin["size"]))
         host.run("sync")
 
-    # --- 5 boot entry ----------------------------------------------------------------------------------------------
     def boot_entry(self):
         if not self.args.boot_package:
             self.log("boot entry: no boot package given; skipped")
@@ -440,7 +434,6 @@ class Installer:
         with cards.mounted(fat, self.log) as root:
             cards.sync_boot_entry(root, self.args.boot_package, self.log)
 
-    # --- 6 verify --------------------------------------------------------------------------------------------------
     def verify(self, snapshot, retyped):
         self.inspect()
         after = cards.table_snapshot(self.card)
@@ -471,7 +464,6 @@ class Installer:
         self.log("verify: one APFS partition ({} bytes), volumes {}".format(
             self.spec["partition_bytes"], ", ".join("{} {}".format(k, v) for k, v in self.want.items())))
 
-    # --- driver ----------------------------------------------------------------------------------------------------
     def run(self):
         try:
             state = self.inspect()
