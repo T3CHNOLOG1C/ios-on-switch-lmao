@@ -8245,17 +8245,41 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 }
 
 /* The last boot's panic, kept in RAM across the warm reset (boot-arg ioswitch-panic-save, IOSwitchPanicSave.c):
- * /private/var/ioswitch/panic-<UTC time>.log, root 0644, written as the policy files are; the record is cleared once it is
- * on Data. A failure is logged and the record kept for the next boot. */
+ * /private/var/ioswitch/panic-<UTC time>.log, root 0644, written as the policy files are, and its panic stackshot (zlib
+ * kcdata: every task's threads, kernel and user frames, wait info) as panic-<UTC time>.kcdata next to it; the record is
+ * cleared once the text is on Data. A failure is logged and the record kept for the next boot. A copy of both goes to
+ * mobile's CrashReporter directory as ioswitch-panic-<UTC time>.*, where `idevicecrashreport` fetches them over USB;
+ * a failure there is only logged. */
 static void
 native_ioswitch_panic_save(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
-	char path[96];
-	uint32_t length = 0;
+	static const char crash_reporter[] = "/private/var/mobile/Library/Logs/CrashReporter";
+	char path[96], other[160];
+	uint32_t length = 0, shot_length = 0;
 	const char *text = ioswitch_panic_save_pending(&length, path, sizeof(path));
 	if (!text) return;
+	const char *shot = (const char *)ioswitch_panic_save_pending_stackshot(&shot_length);
+	const char *name = strrchr(path, '/') + 1;          /* panic-<UTC>[-damaged].log */
+	const size_t stem = strlen(name) - strlen(".log");
 	int error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
 	if (!error) error = native_ioswitch_watchdog_file(p, scratch, path, text, (int)length, data_mount, 0, 0, 0644);
+	if (!error && shot) {
+		snprintf(other, sizeof(other), "/private/var/ioswitch/%.*s.kcdata", (int)stem, name);
+		int shot_error = native_ioswitch_watchdog_file(p, scratch, other, shot, (int)shot_length, data_mount, 0, 0, 0644);
+		if (shot_error) printf("IOSwitch panic-save: writing %s failed: %d\n", other, shot_error);
+	}
+	vnode_t reports = NULLVP;
+	if (!error && !vnode_lookup(crash_reporter, 0, &reports, vfs_context_current())) {
+		vnode_put(reports);
+		snprintf(other, sizeof(other), "%s/ioswitch-%s", crash_reporter, name);
+		int copy_error = native_ioswitch_watchdog_file(p, scratch, other, text, (int)length, data_mount, 501, 501, 0644);
+		if (!copy_error && shot) {
+			snprintf(other, sizeof(other), "%s/ioswitch-%.*s.kcdata", crash_reporter, (int)stem, name);
+			copy_error = native_ioswitch_watchdog_file(p, scratch, other, shot, (int)shot_length, data_mount, 501, 501,
+			    0644);
+		}
+		if (copy_error) printf("IOSwitch panic-save: copy to %s failed: %d\n", crash_reporter, copy_error);
+	}
 	ioswitch_panic_save_done(error, path);
 }
 
@@ -8264,12 +8288,10 @@ native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 {
 	const uint64_t policy_started = mach_absolute_time();
 	/* Jobs with no hardware or accounts here; the first three deadlock each other (UniXNU-sheng BootWatchdogPolicy.c
-	 * "lite" set). watchdogd is off again: on its first hardware boot (r7p4) it os_crash()ed (SIGTRAP) about 41 s in,
-	 * and its _PanicOnCrash took the system down; drivers/NativeIOSwitchWatchdog stays published for when it returns. */
+	 * "lite" set). */
 #define NATIVE_IOSWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	    "<plist version=\"1.0\"><dict>" \
-	    "<key>com.apple.watchdogd</key><true/>" \
 	    "<key>com.apple.identityservicesd</key><true/>" \
 	    "<key>com.apple.locationd</key><true/>" \
 	    "<key>com.apple.CommCenter</key><true/>"
@@ -8281,6 +8303,13 @@ native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * matches no IOService, so the audio server defers the plug-in before loading any code). So audiomxd runs when
 	 * bluetoothd does or when that stub is on Data, and stays disabled otherwise. */
 #define NATIVE_IOSWITCH_POLICY_BLUETOOTH "<key>com.apple.bluetoothd</key><true/>"
+	/* watchdogd (the userspace watchdog: it pings backboardd, SpringBoard, logd, configd... every 10 s, and a hang
+	 * ends in a "userspace watchdog timeout" panic with a stackshot) runs once drivers/NativeIOSwitchWatchdog
+	 * published both its IOWatchdog and the primary PMU it requires (ioswitch_watchdog_ready); otherwise it stays
+	 * disabled for the boot, with one line. On its first hardware boot (r7p4) it os_crash()ed: its sandbox refused
+	 * the IOWatchdog open ("Protobox: watchdogd(50) deny(1) iokit-open-service NativeIOSwitchWatchdog"), and its
+	 * _PanicOnCrash relaunch panicked. A crash of watchdogd now takes no panic (kern_exit.c). */
+#define NATIVE_IOSWITCH_POLICY_WATCHDOGD "<key>com.apple.watchdogd</key><true/>"
 #define NATIVE_IOSWITCH_POLICY_AUDIO "<key>com.apple.audiomxd</key><true/>"
 #define NATIVE_IOSWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
 	    "<key>com.apple.mediaanalysisd</key><true/>" \
@@ -8326,10 +8355,12 @@ native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<key>com.apple.tailspind</key><true/>" \
 	    "<key>com.apple.accessoryupdaterd</key><true/>"
 	static const char head[] = NATIVE_IOSWITCH_POLICY_HEAD, bluetooth_off[] = NATIVE_IOSWITCH_POLICY_BLUETOOTH,
-	    audio_off[] = NATIVE_IOSWITCH_POLICY_AUDIO, tail[] = NATIVE_IOSWITCH_POLICY_TAIL;
-	static char policy[sizeof(head) + sizeof(bluetooth_off) + sizeof(audio_off) + sizeof(tail)];
+	    audio_off[] = NATIVE_IOSWITCH_POLICY_AUDIO, watchdogd_off[] = NATIVE_IOSWITCH_POLICY_WATCHDOGD,
+	    tail[] = NATIVE_IOSWITCH_POLICY_TAIL;
+	static char policy[sizeof(head) + sizeof(bluetooth_off) + sizeof(audio_off) + sizeof(watchdogd_off) + sizeof(tail)];
 #undef NATIVE_IOSWITCH_POLICY_HEAD
 #undef NATIVE_IOSWITCH_POLICY_BLUETOOTH
+#undef NATIVE_IOSWITCH_POLICY_WATCHDOGD
 #undef NATIVE_IOSWITCH_POLICY_AUDIO
 #undef NATIVE_IOSWITCH_POLICY_TAIL
 #undef NATIVE_IOSWITCH_POLICY_NO_HARDWARE
@@ -8366,11 +8397,15 @@ native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 		const int with_audio = with_bluetooth ||
 		    (with_audio_arg && !vnode_lookup(bluetooth_audio_stub, 0, &stub, vfs_context_current()));
 		if (stub) vnode_put(stub);
+		extern int ioswitch_watchdog_ready(void);
+		const int with_watchdog = ioswitch_watchdog_ready();
 		strlcpy(policy, head, sizeof(policy));
 		if (!with_bluetooth) strlcat(policy, bluetooth_off, sizeof(policy));
 		if (!with_audio) strlcat(policy, audio_off, sizeof(policy));
+		if (!with_watchdog) strlcat(policy, watchdogd_off, sizeof(policy));
 		policy_size = (int)strlcat(policy, tail, sizeof(policy));
 		if (!with_audio) printf("IOSwitch raw boot: audiomxd stays disabled: no %s\n", bluetooth_audio_stub);
+		if (!with_watchdog) printf("IOSwitch raw boot: watchdogd stays disabled: NativeIOSwitchWatchdog not published\n");
 	}
 	if (!error) error = native_ioswitch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
 	if (!error) error = native_ioswitch_watchdog_directory(p, scratch,
