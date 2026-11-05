@@ -38,16 +38,26 @@ exports_files([
     "rustfmt.toml",
 ])
 
-# out/ is build output and agents' scratch: only bazel-ignored or packaged parts of it are tracked. The rest are
-# untracked working-copy state that Bazel would otherwise glob.
-lint_files(exclude = [
-    ".agents/**",
-    ".claude/**",
-    "bundles/**",
-    "out/**",
-    "skills-lock.json",
-    "vendor/**",
-])
+# The root's own files are the top-level ones and docs/. Its directory also holds out/ (build output and agents'
+# scratch, untracked and mostly not bazel-ignored), so neither the files nor the subpackages are found by walking the
+# working copy: globbing and subpackages(**) here took ~25 s of loading on a cold server. The subpackages are the
+# top-level ones, those one level down (drivers/<X>, ...), and the two packages inside out/.
+lint_files(
+    dirs = ["docs"],
+    # Untracked tool state at the top level of working copies.
+    exclude = ["skills-lock.json"],
+    subpackages = subpackages(
+        include = [
+            "*",
+            "*/*",
+            "out/native-a57/root-v1/passes/*",
+            "out/native-a57/root-v1/tree",
+        ],
+        # Each pattern may match nothing yet (no top-level drivers/<X> before r17-bazel's layout move).
+        allow_empty = True,
+        exclude = ["bazel-*"],
+    ),
+)
 
 alias(
     name = "boot",
