@@ -158,6 +158,7 @@ Engine gEngines[kEngines] = {
 volatile uint8_t *gCar, *gAhb;
 IOWorkLoop *gLoop;
 IOLock *gQueue;
+volatile bool gSleeping;  // tegra_se_suspend to tegra_se_resume: callers take the CPU path
 int gQueueEvent;
 char gWhy[224];
 
@@ -360,6 +361,10 @@ Engine *acquire()
 {
     IOLockLock(gQueue);
     for (;;) {
+        if (gSleeping) {
+            IOLockUnlock(gQueue);
+            return nullptr;
+        }
         bool anyUp = false;
         for (Engine &e : gEngines) {
             anyUp |= e.up;
@@ -1455,4 +1460,57 @@ extern "C" int tegra_se_start(void)
     if (kernel_thread_start(seThread, nullptr, &t) != KERN_SUCCESS) return -1;
     thread_deallocate(t);
     return 0;
+}
+
+// System sleep (TegraSE.h). BL31 saves both engines' context at SYSTEM_SUSPEND and expects them idle; its result is
+// only logged, never a refusal, so an operation still running then would corrupt the save silently.
+namespace {
+constexpr uint32_t kOwnerSleep = 0x534c50u;
+constexpr uint32_t kSleepWaitMs = 500;
+}  // namespace
+
+extern "C" void tegra_se_suspend(void)
+{
+    if (!gQueue) return;
+    gSleeping = true;
+    for (unsigned i = 0; i < kEngines; ++i) {
+        Engine &e = gEngines[i];
+        if (!e.up) continue;
+        if (!tegra_se_claim(i + 1, kOwnerSleep, kSleepWaitMs)) {
+            IOLog("TegraSE: %s still owned (%u) at sleep; BL31's context save may see it busy\n", e.name, e.owner);
+            continue;
+        }
+        IOLockLock(gQueue);
+        for (uint32_t waited = 0; e.busy && waited < kSleepWaitMs; ++waited) {
+            uint64_t deadline;
+            clock_interval_to_deadline(1, kMillisecondScale, &deadline);
+            IOLockSleepDeadline(gQueue, &gQueueEvent, deadline, THREAD_UNINT);
+        }
+        e.busy = true;
+        IOLockUnlock(gQueue);
+        e.source->disable();
+    }
+}
+
+extern "C" void tegra_se_resume(void)
+{
+    if (!gQueue) return;
+    for (unsigned i = 0; i < kEngines; ++i) {
+        Engine &e = gEngines[i];
+        if (!e.up || e.owner != kOwnerSleep) continue;
+        if (clockOn()) {
+            wr(e, INT_STATUS, rd(e, INT_STATUS));
+            wr(e, INT_ENABLE, kIntDone | kIntError);
+        }
+        e.source->enable();
+        IOLockLock(gQueue);
+        e.busy = false;
+        IOLockWakeup(gQueue, &gQueueEvent, false);
+        IOLockUnlock(gQueue);
+        tegra_se_release(i + 1, kOwnerSleep);
+    }
+    IOLockLock(gQueue);
+    gSleeping = false;
+    IOLockWakeup(gQueue, &gQueueEvent, false);
+    IOLockUnlock(gQueue);
 }

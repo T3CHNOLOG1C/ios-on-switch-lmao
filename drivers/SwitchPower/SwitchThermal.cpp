@@ -421,6 +421,7 @@ class SwitchThermal : public IOService {
     bool m4CfgKept = false;
     char clockState[256] = "";              // CCLKG, divider, PLLP and its CPU branch as found, for the log
     uint32_t keptPolicy = 0, keptPllx = 0;  // CCLKG_BURST_POLICY and PLLX_BASE as the boot chain left them
+    uint32_t keptOutb = 0;                  // PLLP_OUTB with OUT4 running, the cluster's park clock
 
     static void timerFired(OSObject *owner, IOTimerEventSource *sender);
     static void alertFired(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -806,6 +807,7 @@ bool SwitchThermal::preparePerf()
         ++perfTop;
     keptPolicy = policy;
     keptPllx = cpu.pllx;
+    keptOutb = outb;
     perfKept = true;
     return true;
 }
@@ -863,15 +865,28 @@ bool SwitchThermal::raiseCpu(int soc)
 {
     using namespace switchclk;
     if (!perfKept && !preparePerf()) return false;
-    if (dfllMode && pllxLost) {
-        // The DFLL enable starts from PLLX at the boot rate: relock it from wherever the warm boot left the cluster.
+    if (pllxLost) {
         const unsigned found = readCpu(car).kHz;
         pllxLost = false;
-        if (!runCpuFromPllx(keptPllx, kStepRelock)) {
+        // Every relock parks the cluster on PLLP_OUT4, which preparePerf found running at boot.
+        if ((rd(car, PLLP_OUTB) & kOut4Running) != kOut4Running) {
+            wr(car, PLLP_OUTB, keptOutb);
+            (void)rd(car, PLLP_OUTB);
+            IODelay(2);
+        }
+        if ((rd(car, PLLP_OUTB) & kOut4Running) != kOut4Running) {
+            IOLog("SwitchPerf: after sleep, PLLP_OUT4 is off (PLLP_OUTB %#x); the CPU stays at %u kHz for this boot\n",
+                  rd(car, PLLP_OUTB), found);
+            dfllMode = governed = false;
+            perfSettled = true;
+            return false;
+        }
+        // The DFLL enable starts from PLLX at the boot rate (the PLL ladder relocks in its own first step).
+        if (dfllMode && !runCpuFromPllx(keptPllx, kStepRelock)) {
             IOLog("SwitchPerf: after sleep, PLLX did not relock (CPU at %u kHz, CCLKG %#x); PLL mode for this boot\n",
                   found, rd(car, CCLKG_BURST_POLICY));
             dfllMode = governed = false;
-        } else {
+        } else if (dfllMode) {
             perfRelocked = true;
             switch_power_journal("SwitchPerf: after sleep: CPU %u -> %u kHz on PLLX, then the DFLL", found / 1000,
                                  readCpu(car).kHz / 1000);

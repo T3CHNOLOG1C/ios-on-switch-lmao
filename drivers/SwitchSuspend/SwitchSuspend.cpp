@@ -17,6 +17,7 @@
 // PMC as switchroot L4T's pmc.c sets it up for this DT (tegra20_pmc_init, tegra210_pmc_irq_set_wake/_set_type;
 // OLED DTB pmc@7000e400: core-pwr-good-time 13100/7800 us, core-pwr-off-time 44160 us, core-pwr-req-active-high,
 // sys-clock-req-active-high; max77620 nvidia,pmc-wakeup = wake 51 level low, pwr_int_n).
+#include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOService.h>
@@ -31,6 +32,7 @@
 #include "../TegraBPMP/TegraBPMP.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraHost1x/TegraHost1x.h"
+#include "../TegraSE/TegraSE.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "SwitchSuspend.h"
 #include "SwitchWake.h"
@@ -182,6 +184,15 @@ void SwitchSuspend::missingSuspendPaths(char *list, size_t size)
     if (bootArg("switch-audio")) appendName(list, size, "audio");
     if (bootArg("tegra-gpu")) appendName(list, size, "GM20B");
     if (bootArg("switch-usb-host") || bootArg("switch-dp")) appendName(list, size, "USB-C host/DP");
+    // SwitchUSB runs whenever the packager put the device or host port in the ADT; SC7 resets XUDC/XHCI under it.
+    static const char *const kUsbNodes[] = {"/arm-io/usb-device", "/arm-io/usb-xhci"};
+    for (const char *path : kUsbNodes) {
+        if (IORegistryEntry *node = IORegistryEntry::fromPath(path, gIODTPlane)) {
+            node->release();
+            appendName(list, size, "USB (XUDC/XHCI)");
+            break;
+        }
+    }
 }
 
 // The RTC keeps time through SC7 by itself; only its register interface needs the APB clock, which nothing else here
@@ -318,6 +329,7 @@ void SwitchSuspend::sleepDevices()
     }
     timed("sleep", 4, "host1x", tegra_nvdec_suspend);  // NVDEC, NVENC, VIC, NVJPG quiesced, then host1x
     timed("sleep", 5, "thermal", switch_thermal_suspend);
+    timed("sleep", 5, "se", tegra_se_suspend);  // idle for BL31's context save at SYSTEM_SUSPEND
     timed("sleep", 6, "nvram", [] { PESyncNVRAM(); });  // the NVRAM controller's sync (SwitchNVRAM), SD still up
     // The journal to Data while the SD is up: what follows is in RAM only until the wake (and lost to a forced
     // power-off).
@@ -435,6 +447,7 @@ void SwitchSuspend::wakeDevices()
         switch_power_journal("SwitchSuspend: wake 2 smmu: %llu us%s", nsSince(at) / 1000,
                              lost ? " (a swgroup was not restored)" : "");
     }
+    timed("wake", 2, "se", tegra_se_resume);
     timed("wake", 3, "sd", ioswitch_block_resume);
     timed("wake", 4, "battery", switch_battery_resume);  // the normal gauge windows, a re-read
     timed("wake", 5, "thermal", switch_thermal_resume);

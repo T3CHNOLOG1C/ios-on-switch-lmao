@@ -16,6 +16,12 @@ int tegra_se_start(void);
 // TegraSecurityEngine.cpp) and this driver. engine 1 = SE1, 2 = SE2. Thread context; waits up to `ms`.
 bool tegra_se_claim(unsigned engine, uint32_t owner, uint32_t ms);
 void tegra_se_release(unsigned engine, uint32_t owner);
+
+// System sleep (drivers/SwitchSuspend, one thread): suspend waits, bounded, for each engine's owner and running
+// operation, then holds every engine (callers fall back to the CPU) with its interrupt off; resume re-arms the
+// engines' end interrupts (SC7 clears INT_ENABLE) and lets callers in again.
+void tegra_se_suspend(void);
+void tegra_se_resume(void);
 #define TEGRA_SE_OWNER_AKS_PROBE 1u
 #define TEGRA_SE_OWNER_DRIVER    2u
 // SE2-only forms of tegra_se_claim / tegra_se_release.

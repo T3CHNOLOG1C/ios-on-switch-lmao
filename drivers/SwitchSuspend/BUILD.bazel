@@ -37,6 +37,7 @@ kernel_driver(
         "drivers/TegraBPMP",
         "drivers/TegraGPIO",
         "drivers/TegraHost1x",
+        "drivers/TegraSE",
         "drivers/TegraSMMU",
     ],
 )
