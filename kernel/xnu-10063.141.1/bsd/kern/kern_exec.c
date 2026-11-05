@@ -409,7 +409,8 @@ static errno_t exec_handle_port_actions(struct image_params *imgp,
     struct exec_port_actions *port_actions);
 static errno_t exec_handle_exception_port_actions(const struct image_params *imgp,
     const struct exec_port_actions *port_actions);
-extern void ioswitch_boot_band_spawned(task_t task, const char *path);
+extern int ioswitch_boot_band_classify(const char *path);
+extern void ioswitch_boot_band_spawned(task_t task, int band_class);
 static errno_t exec_handle_spawnattr_policy(proc_t p, thread_t thread, int psa_apptype, uint64_t psa_qos_clamp,
     task_role_t psa_darwin_role, struct exec_port_actions *port_actions);
 static void exec_port_actions_destroy(struct exec_port_actions *port_actions);
@@ -2402,6 +2403,13 @@ encapsulated_binary:
 			    KAUTH_FILEOP_EXEC,
 			    (uintptr_t)ndp->ni_vp, 0);
 		}
+
+		/*
+		 * IOSwitch boot band: classify the image here, while its path exists. The strings area is freed
+		 * below on success too (bad: is the fall-through), so posix_spawn() and execve(), which apply the
+		 * band after this returns, find ip_strings NULL (r7p8: "0 processes held").
+		 */
+		imgp->ip_ioswitch_band = ioswitch_boot_band_classify(imgp->ip_strings + strlen(EXECUTABLE_KEY));
 	}
 bad:
 	proc_transend(p, 0);
@@ -4651,9 +4659,10 @@ bad:
 		    psa->psa_darwin_role, &port_actions);
 	}
 
-	/* IOSwitch: background daemons and widget extensions spawned during boot yield the CPU (ioswitch_boot_band.c). */
-	if (error == 0 && imgp->ip_new_thread != THREAD_NULL && imgp->ip_strings != NULL) {
-		ioswitch_boot_band_spawned(get_threadtask(imgp->ip_new_thread), imgp->ip_strings + strlen(EXECUTABLE_KEY));
+	/* IOSwitch: background daemons and widget extensions spawned during boot yield the CPU (ioswitch_boot_band.c;
+	 * the class was taken in exec_activate_image, which has freed the path by now). */
+	if (error == 0 && imgp->ip_new_thread != THREAD_NULL) {
+		ioswitch_boot_band_spawned(get_threadtask(imgp->ip_new_thread), imgp->ip_ioswitch_band);
 	}
 
 	/* Transfer the turnstile watchport boost to new task if in exec */
@@ -5334,8 +5343,8 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 #endif /* defined(HAS_APPLE_PAC) */
 
 	/* IOSwitch: the boot band for execve() too (xpcproxy may exec the daemon in place; ioswitch_boot_band.c). */
-	if (!error && imgp->ip_new_thread != THREAD_NULL && imgp->ip_strings != NULL) {
-		ioswitch_boot_band_spawned(new_task, imgp->ip_strings + strlen(EXECUTABLE_KEY));
+	if (!error && imgp->ip_new_thread != THREAD_NULL) {
+		ioswitch_boot_band_spawned(new_task, imgp->ip_ioswitch_band);
 	}
 
 	/* flag exec has occurred, notify only if it has not failed due to FP Key error */

@@ -24,10 +24,14 @@
 #include <string.h>
 
 extern void ioswitch_task_set_lowpri_cpu(task_t task, bool on);
-void ioswitch_boot_band_spawned(task_t task, const char *path);
+int ioswitch_boot_band_classify(const char *path);
+void ioswitch_boot_band_spawned(task_t task, int band_class);
 void ioswitch_boot_band_lift(const char *why);
 
 #define BAND_MAX        128
+#define BAND_NONE       0       /* image_params.ip_ioswitch_band (zeroed with the exec's data) */
+#define BAND_DAEMON     1
+#define BAND_WIDGET     2
 #define BAND_UPTIME_NS  60000000000ull
 
 /* Executables (basenames) that nothing on SpringBoard's or backboardd's startup path waits for. */
@@ -43,7 +47,7 @@ static LCK_GRP_DECLARE(band_lck_grp, "ioswitch_boot_band");
 static LCK_MTX_DECLARE(band_lock, &band_lck_grp);
 static bool          band_closed;
 static uint64_t      band_ids[BAND_MAX];
-static unsigned int  band_count, band_refused, band_seen;
+static unsigned int  band_count, band_refused, band_seen, band_widgets;
 static thread_call_t band_call;
 
 /* Widget extensions (WidgetKit .appex): rendered by chronod for the home screen after it is up. */
@@ -55,18 +59,30 @@ band_widget_extension(const char *path, const char *name)
 	       strcmp(name, "NewsTag") == 0);
 }
 
-static bool
-band_member(const char *path)
+/*
+ * exec_activate_image (kern_exec.c), on success, while the executable's path still exists: which band, if any, the image
+ * belongs to. posix_spawn() and execve() apply it after the spawn attributes' policy (ioswitch_boot_band_spawned), by
+ * which time the path has been freed with the exec's strings area.
+ */
+int
+ioswitch_boot_band_classify(const char *path)
 {
-	const char *name = strrchr(path, '/');
+	const char *name;
 
+	if (path == NULL || os_atomic_load(&band_closed, relaxed)) {
+		return BAND_NONE;
+	}
+	name = strrchr(path, '/');
 	name = name ? name + 1 : path;
+	if (band_widget_extension(path, name)) {
+		return BAND_WIDGET;
+	}
 	for (unsigned int i = 0; i < sizeof(band_names) / sizeof(band_names[0]); i++) {
 		if (strcmp(name, band_names[i]) == 0) {
-			return true;
+			return BAND_DAEMON;
 		}
 	}
-	return band_widget_extension(path, name);
+	return BAND_NONE;
 }
 
 static void
@@ -75,17 +91,18 @@ band_timeout(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	ioswitch_boot_band_lift("60 s of uptime");
 }
 
-/* posix_spawn (kern_exec.c), after the spawn attributes' policy: a member spawned while the band is open joins it. */
+/* posix_spawn and execve (kern_exec.c), after the spawn attributes' policy: a member spawned while the band is open
+ * joins it. */
 void
-ioswitch_boot_band_spawned(task_t task, const char *path)
+ioswitch_boot_band_spawned(task_t task, int band_class)
 {
 	uint64_t now_ns;
 
-	if (os_atomic_load(&band_closed, relaxed) || path == NULL) {
+	if (os_atomic_load(&band_closed, relaxed)) {
 		return;
 	}
 	os_atomic_inc(&band_seen, relaxed);
-	if (!band_member(path)) {
+	if (band_class == BAND_NONE) {
 		return;
 	}
 	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
@@ -111,6 +128,9 @@ ioswitch_boot_band_spawned(task_t task, const char *path)
 		return;
 	}
 	band_ids[band_count++] = get_task_uniqueid(task);
+	if (band_class == BAND_WIDGET) {
+		band_widgets++;
+	}
 	ioswitch_task_set_lowpri_cpu(task, true);
 	lck_mtx_unlock(&band_lock);
 }
@@ -155,6 +175,7 @@ ioswitch_boot_band_lift(const char *why)
 	}
 	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
 	os_log(OS_LOG_DEFAULT, "IOSwitch boot band: closed at %llu.%llu s of uptime (%s): %u processes held at background "
-	    "CPU priority, %u still running put back, %u not held (table full); %u execs seen", now_ns / NSEC_PER_SEC,
-	    now_ns % NSEC_PER_SEC / 100000000, why, members, count, band_refused, os_atomic_load(&band_seen, relaxed));
+	    "CPU priority (%u widget extensions), %u still running put back, %u not held (table full); %u execs seen",
+	    now_ns / NSEC_PER_SEC, now_ns % NSEC_PER_SEC / 100000000, why, members, band_widgets, count, band_refused,
+	    os_atomic_load(&band_seen, relaxed));
 }
