@@ -2,7 +2,10 @@
 drivers/SwitchVideoDecoders/test/VDECClip.h
 drivers/SwitchVideoDecoders/test/VP9Clip.h
 drivers/SwitchVideoDecoders/test/VP9Trace.h
+drivers/SwitchVideoDecoders/test/HEVCClip.h
+drivers/SwitchVideoDecoders/test/HEVCTrace.h
 drivers/SwitchVideoDecoders/AVD/VP9Tables.inc
 drivers/TegraNVDEC/selftest/VP9Picture160.inc
+drivers/TegraNVDEC/selftest/HEVCPicture176.inc
 drivers/SwitchVideoDecoders/test/vp9gen/vpx_config.h
 drivers/TegraNVENC/selftest/E3Vectors.inc

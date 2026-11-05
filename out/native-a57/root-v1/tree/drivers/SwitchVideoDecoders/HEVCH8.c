@@ -22,11 +22,16 @@
 // HEVCVideoDecoder_CreateInstance are exported but not in the SDK, so both come from dlsym.
 //
 // The entry is a stand-in, and VTIsHardwareDecodeSupported('hvc1') answers from the registry alone, so it would tell
-// every process that HEVC decodes in hardware. NVDEC does decode HEVC Main/Main10, but AVD.videodecoder does not drive
-// it yet: HEVC video is software. Processes that choose streaming codecs from that answer (Safari's WebKit processes
-// for MSE, MediaCapabilities and HLS; mediaplaybackd and mediaserverd for AVPlayer's HLS variants; videocodecd) get no
-// entry here, so they see NO and pick H.264, which AVD decodes on NVDEC. When AVD drives HEVC on NVDEC, it takes the
-// 'hvc1' hardware slot wherever TegraNVDEC is open to the process and this stand-in steps aside there.
+// every process that HEVC decodes in hardware. Processes that choose streaming codecs from that answer (Safari's WebKit
+// processes for MSE, MediaCapabilities and HLS; mediaplaybackd and mediaserverd for AVPlayer's HLS variants;
+// videocodecd) get no entry here.
+//
+// Where NVDEC decodes HEVC (TegraNVDEC is open to the process, its N3 HEVC picture and this boot's clip check passed),
+// AVD.videodecoder registers its own 'hvc1' with kVTVideoDecoderInfo_Rating 1, which VideoToolbox's registry ranks
+// before this entry (rating 0): sessions run on NVDEC, in streaming processes too, and this entry steps aside without
+// being withdrawn. It stays behind AVD for what AVD does not take: tile sessions (grid HEIC, iPhone photos: AVD has no
+// tile entry points, so VTTileDecompressionSessionCreate moves on to the next decoder) and the streams AVD hands to
+// software itself. Single-picture HEIC goes through an ordinary session, so on NVDEC.
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
 #include <os/log.h>

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// AVD.videodecoder: H.264 and VP9 (profile 0) on the Tegra X1's NVDEC as VideoToolbox's hardware 'avc1' and 'vp09'
-// decoders.
+// AVD.videodecoder: H.264, VP9 (profile 0) and HEVC (Main, Main 10 as 8-bit, Main Still Picture) on the Tegra X1's
+// NVDEC as VideoToolbox's hardware 'avc1', 'vp09' and 'hvc1' decoders. 'hvc1' is registered with rating 1, so it ranks
+// before HEVCH8.videodecoder's stand-in, which stays behind it for tile sessions (grid HEIC) and for streams this
+// decoder hands to Apple's software decoder (registerHEVC).
 //
 // How VideoToolbox finds it (21H461 VTLoadVideoDecoders, disassembled): it dlopens a fixed list of paths and calls each
 // one's register function: H264SW.videocodec first (Apple's NEON H.264, registered with IsHardwareAccelerated false),
@@ -46,6 +48,7 @@
 #include "BlockLinear.h"
 #include "ClipCheck.h"
 #include "H264NVDEC.h"
+#include "HEVCNVDEC.h"
 #include "NVDECClient.h"
 #include "VP9NVDEC.h"
 #include "VTDecoderSPI.h"
@@ -54,11 +57,12 @@ typedef struct {
     pthread_mutex_t lock;
     VTVideoDecoderSession session;
     NVDECClient *client;
-    FourCharCode codec;  // 'avc1' or 'vp09'
+    FourCharCode codec;  // 'avc1', 'vp09' or 'hvc1'
     H264Decoder *h264;
     VP9Decoder *vp9;
+    HEVCDecoder *hevc;
     VTVideoDecoderRef software;  // the session runs on Apple's software decoder (see above)
-    CFDataRef avcC;              // or vpcC
+    CFDataRef avcC;              // or vpcC, hvcC
     unsigned lengthSize;
     OSType pixelFormat;
     CFTypeRef matrix, primaries, transfer;
@@ -94,6 +98,8 @@ static const VTPluginDecoderVTable *softwareVTable(const Decoder *d)
     return CMBaseObjectGetVTable(VTVideoDecoderGetCMBaseObject(d->software));
 }
 
+static _Thread_local bool tSoftwareLookup;  // startSoftware is choosing Apple's decoder on this thread
+
 static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format,
                               const char *why)
 {
@@ -102,8 +108,9 @@ static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideo
     CFDictionaryRef spec =
         CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     VTVideoDecoderRef software = NULL;
-    OSStatus status =
-        VTSelectAndCreateVideoDecoderInstance(kCMVideoCodecType_H264, kCFAllocatorDefault, spec, &software);
+    tSoftwareLookup = true;  // this plug-in's own non-hardware registrations (the check's) decline: Apple's is wanted
+    OSStatus status = VTSelectAndCreateVideoDecoderInstance(d->codec, kCFAllocatorDefault, spec, &software);
+    tSoftwareLookup = false;
     CFRelease(spec);
     const VTPluginDecoderVTable *vtable =
         software ? CMBaseObjectGetVTable(VTVideoDecoderGetCMBaseObject(software)) : NULL;
@@ -112,13 +119,14 @@ static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideo
     if (!status) status = vtable->decoderClass->startSession(software, session, format);
     if (status) {
         if (software) CFRelease(software);
-        os_log_error(gLog, "AVD: %{public}s: no software H.264 decoder either (%d)", why, (int)status);
+        os_log_error(gLog, "AVD: %{public}s: no software %{public}s decoder either (%d)", why,
+                     d->codec == kCMVideoCodecType_HEVC ? "HEVC" : "H.264", (int)status);
         return status;
     }
     d->software = software;
     const CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
-    os_log(gLog, "AVD: session %dx%d in %{public}s on Apple's software H.264 decoder: %{public}s", size.width,
-           size.height, getprogname(), why);
+    os_log(gLog, "AVD: session %dx%d in %{public}s on Apple's software %{public}s decoder: %{public}s", size.width,
+           size.height, getprogname(), d->codec == kCMVideoCodecType_HEVC ? "HEVC" : "H.264", why);
     return noErr;
 }
 
@@ -328,13 +336,77 @@ static OSStatus startVP9(Decoder *d, VTVideoDecoderSession session, CMVideoForma
     return status;
 }
 
+// HEVC ('hvcC', ISO/IEC 14496-15 8.3.3.1): 21 bytes of profile and stream facts (lengthSizeMinusOne in the low bits
+// of byte 21), then arrays of VPS/SPS/PPS/SEI units. A stream NVDEC does not take (another profile or chroma format,
+// Main 10 while it is not proven, beyond 4096x4096 or below 144x144, no arena room) runs on Apple's software decoder
+// inside this instance, as H.264 does.
+static int loadHvcC(Decoder *d, CFDataRef hvcC)
+{
+    const uint8_t *p = CFDataGetBytePtr(hvcC);
+    const size_t size = (size_t)CFDataGetLength(hvcC);
+    if (size < 23 || p[0] != 1) return -1;
+    d->lengthSize = (p[21] & 3) + 1;
+    size_t pos = 23;
+    for (unsigned arrays = p[22]; arrays--;) {
+        if (pos + 3 > size) return -1;
+        unsigned count = (unsigned)p[pos + 1] << 8 | p[pos + 2];
+        pos += 3;
+        while (count--) {
+            if (pos + 2 > size) return -1;
+            const size_t n = (size_t)p[pos] << 8 | p[pos + 1];
+            pos += 2;
+            if (pos + n > size || hevc_decoder_parameter_set(d->hevc, p + pos, n)) return -1;
+            pos += n;
+        }
+    }
+    return hevc_decoder_sps(d->hevc) ? 0 : -1;
+}
+
+static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format)
+{
+    d->avcC = copyAtom(format, CFSTR("hvcC"));
+    const HEVCSPS *sps = d->avcC && !loadHvcC(d, d->avcC) ? hevc_decoder_sps(d->hevc) : NULL;
+    const bool tenBit = nvdec_codecs(d->client) & TEGRA_NVDEC_HEVC_MAIN10;
+    const char *why = !sps                                      ? "not Main, Main 10 or Main Still Picture 4:2:0"
+                      : sps->width > 4096 || sps->height > 4096 ? "beyond NVDEC's 4096x4096"
+                      : sps->width < 144 || sps->height < 144   ? "below NVDEC's HEVC floor of 144x144"
+                      : sps->bit_depth == 10 && !tenBit         ? "Main 10, whose NVDEC check did not pass this boot"
+                      : sps->bit_depth == 10 && sps->colour_description && (sps->transfer == 16 || sps->transfer == 18)
+                          ? "HDR (PQ or HLG): NVDEC writes 8 bits, too few for those transfer curves"
+                      : hevc_decoder_configure(d->hevc) ? "no room in the NVDEC arena (see the AVD alloc line)"
+                                                        : NULL;
+    if (why) {
+        hevc_decoder_destroy(d->hevc);  // NVDEC's buffers go back to the arena before the software decoder starts
+        nvdec_close(d->client);
+        d->hevc = NULL;
+        d->client = NULL;
+        return startSoftware(d, session, format, why);
+    }
+    hevc_decoder_allow_10bit(d->hevc, tenBit);
+    d->width = (uint32_t)(sps->width - sps->crop_left - sps->crop_right);
+    d->height = (uint32_t)(sps->height - sps->crop_top - sps->crop_bottom);
+    const bool vui = sps->colour_description;
+    d->matrix = colourTag(format, kCMFormatDescriptionExtension_YCbCrMatrix, vui ? sps->matrix : 2, 0, d->height);
+    d->primaries =
+        colourTag(format, kCMFormatDescriptionExtension_ColorPrimaries, vui ? sps->colour_primaries : 2, 1, 0);
+    d->transfer = colourTag(format, kCMFormatDescriptionExtension_TransferFunction, vui ? sps->transfer : 2, 2, 0);
+    OSStatus status;
+    setAttributes(d, session, sps->full_range, &status);
+    static const char *const kProfiles[4] = {"", "Main", "Main 10", "Main Still Picture"};
+    if (!status)
+        os_log(gLog, "AVD: session %ux%u in %{public}s on NVDEC (HEVC %{public}s, level %u.%u%{public}s)", d->width,
+               d->height, getprogname(), kProfiles[sps->profile_idc], sps->level_idc / 30, sps->level_idc % 30 / 3,
+               sps->bit_depth == 10 ? ", written as 8-bit NV12" : "");
+    return status;
+}
+
 static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession session, CMVideoFormatDescriptionRef format)
 {
     Decoder *d = storage(ref);
     pthread_mutex_lock(&d->lock);
     d->session = session;
-    if (d->vp9) {
-        const OSStatus status = startVP9(d, session, format);
+    if (d->vp9 || d->hevc) {
+        const OSStatus status = d->vp9 ? startVP9(d, session, format) : startHEVC(d, session, format);
         pthread_mutex_unlock(&d->lock);
         return status;
     }
@@ -404,15 +476,23 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
     const uint64_t began = mach_absolute_time(), copied = d->copyTicks;
     // VP9: a superframe's hidden frames and its shown one; 0 when the sample showed none (answered like H.264's
     // parameter-set-only units).
-    const int ret = d->vp9 ? vp9_decoder_decode(d->vp9, (const uint8_t *)data, size, frame)
-                           : h264_decoder_decode(d->h264, (const uint8_t *)data, size, d->lengthSize, frame,
-                                                 kReorder && (flags & kVTDecodeFrame_EnableTemporalProcessing));
+    const int ret = d->vp9    ? vp9_decoder_decode(d->vp9, (const uint8_t *)data, size, frame)
+                    : d->hevc ? hevc_decoder_decode(d->hevc, (const uint8_t *)data, size, d->lengthSize, frame)
+                              : h264_decoder_decode(d->h264, (const uint8_t *)data, size, d->lengthSize, frame,
+                                                    kReorder && (flags & kVTDecodeFrame_EnableTemporalProcessing));
     if (ret == 1) {
         d->frames++;
         d->decodeTicks += mach_absolute_time() - began - (d->copyTicks - copied);
     }
     if (!ret && d->session)  // parameter sets only: answered at once, without a picture
         VTDecoderSessionEmitDecodedFrame(d->session, frame, noErr, kVTDecodeInfo_FrameDropped, NULL);
+    // A VP9 or HEVC sample that failed is answered through the session with its error: VideoToolbox keeps a frame
+    // whose decodeFrame returned an error outstanding, and VTDecompressionSessionWaitForAsynchronousFrames then
+    // never returns (macOS 27, test/avd_host). Those decoders handle one sample's picture within the call, so the
+    // frame has not been answered yet.
+    const OSStatus error = ret <= -2 ? kVTVideoDecoderMalfunctionErr : ret < 0 ? kVTVideoDecoderBadDataErr : noErr;
+    const bool answered = error && (d->vp9 || d->hevc) && d->session;
+    if (answered) VTDecoderSessionEmitDecodedFrame(d->session, frame, error, 0, NULL);
     pthread_mutex_unlock(&d->lock);
     free(copy);
     if (ret <= -2) {
@@ -420,9 +500,8 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
             os_log_error(gLog, "AVD: %{public}s",
                          ret == -2 ? "NVDEC job failed" : "no NVDEC buffers for a new geometry");
-        return kVTVideoDecoderMalfunctionErr;
     }
-    return ret < 0 ? kVTVideoDecoderBadDataErr : noErr;
+    return answered ? noErr : error;
 }
 
 // VTDecompressionSessionCopyProperty hands a key it does not answer itself to the decoder only when the decoder lists
@@ -459,6 +538,12 @@ static Boolean canAcceptFormatDescription(VTVideoDecoderRef ref, CMVideoFormatDe
         const VTPluginDecoderClass *software = softwareVTable(d)->decoderClass;
         return software->canAcceptFormatDescription && software->canAcceptFormatDescription(d->software, format);
     }
+    if (d->hevc) {  // the same parameter sets keep this instance
+        CFDataRef hvcC = copyAtom(format, CFSTR("hvcC"));
+        const Boolean same = hvcC && d->avcC && CFEqual(hvcC, d->avcC);
+        if (hvcC) CFRelease(hvcC);
+        return same;
+    }
     if (d->vp9) {  // a new size or profile gets a fresh decoder; frames within one session may change size
         const CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
         CFDataRef vpcC = copyAtom(format, CFSTR("vpcC"));
@@ -482,6 +567,7 @@ static OSStatus finishDelayedFrames(VTVideoDecoderRef ref)
     }
     pthread_mutex_lock(&d->lock);
     if (d->h264) h264_decoder_flush(d->h264);  // VP9 frames go out as they are decoded
+    if (d->hevc) hevc_decoder_flush(d->hevc);
     pthread_mutex_unlock(&d->lock);
     return noErr;
 }
@@ -514,6 +600,7 @@ static void finalize(CMBaseObjectRef ref)
     if (d->software) CFRelease(d->software);
     h264_decoder_destroy(d->h264);  // frees its buffers through the client, so before closing it
     vp9_decoder_destroy(d->vp9);
+    hevc_decoder_destroy(d->hevc);
     nvdec_close(d->client);
     if (d->avcC) CFRelease(d->avcC);
     if (d->matrix) CFRelease(d->matrix);
@@ -526,7 +613,10 @@ static CFStringRef copyDebugDescription(CMBaseObjectRef ref)
 {
     Decoder *d = storage(ref);
     return CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("<AVD %s decoder %p on %s>"),
-                                    d->vp9 ? "VP9" : "H.264", ref, d->software ? "Apple's software decoder" : "NVDEC");
+                                    d->vp9                               ? "VP9"
+                                    : d->codec == kCMVideoCodecType_HEVC ? "HEVC"
+                                                                         : "H.264",
+                                    ref, d->software ? "Apple's software decoder" : "NVDEC");
 }
 
 static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRef allocator, void *value)
@@ -560,10 +650,13 @@ static const VTPluginBaseClass kBaseClass = {
     .setProperty = setProperty,
 };
 
-// Version 1: the slots VideoToolbox reads from every decoder. H264SW declares version 3 and leaves setProperties,
-// copySerializableProperties and finishDelayedFrames empty, so VideoToolbox checks the optional slots before calling.
+// Version 2: VideoToolbox calls finishDelayedFrames (+0x38) only for version 2 and up (21H461
+// VTDecompressionSessionFinishDelayedFrames, 0x1978dc40c), and HEVC holds pictures for output order until then;
+// version 3 would add the tile session slots (+0x40 on), which this decoder leaves to the next one (registerHEVC).
+// H264SW declares version 3 and leaves setProperties and copySerializableProperties empty, so VideoToolbox checks the
+// optional slots before calling.
 static const VTPluginDecoderClass kDecoderClass = {
-    .version = 1,
+    .version = 2,
     .startSession = startSession,
     .decodeFrame = decodeFrame,
     .copySupportedPropertyDictionary = copySupportedPropertyDictionary,
@@ -575,10 +668,14 @@ static const VTPluginDecoderVTable kVTable = {NULL, &kBaseClass, &kDecoderClass}
 
 static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTVideoDecoderRef *out)
 {
+    if (tSoftwareLookup) return kVTCouldNotFindVideoDecoderErr;  // VideoToolbox moves on to the next decoder
     int error = 0;
     NVDECClient *client = nvdec_open(&error);
-    if (client && codec == kCMVideoCodecType_VP9 && !(nvdec_codecs(client) & (1u << TEGRA_NVDEC_CODEC_VP9))) {
-        nvdec_close(client);  // VP9 was turned off after this process registered it (its clip check failed)
+    const uint32_t needed = codec == kCMVideoCodecType_VP9    ? 1u << TEGRA_NVDEC_CODEC_VP9
+                            : codec == kCMVideoCodecType_HEVC ? 1u << TEGRA_NVDEC_CODEC_HEVC
+                                                              : 1u << TEGRA_NVDEC_CODEC_H264;
+    if (client && !(nvdec_codecs(client) & needed)) {
+        nvdec_close(client);  // the codec was turned off after this process registered it (its clip check failed)
         return kVTCouldNotFindVideoDecoderErr;
     }
     if (!client) {  // VideoToolbox goes on to H264SW
@@ -600,8 +697,9 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     d->client = client;
     d->codec = codec;
     const H264Backend backend = {d, bufferAlloc, bufferFree, jobSubmit, jobWait, decoded, emit, discard};
-    if (codec == kCMVideoCodecType_VP9 ? !(d->vp9 = vp9_decoder_create(&backend))
-                                       : !(d->h264 = h264_decoder_create(&backend))) {
+    if (codec == kCMVideoCodecType_VP9    ? !(d->vp9 = vp9_decoder_create(&backend))
+        : codec == kCMVideoCodecType_HEVC ? !(d->hevc = hevc_decoder_create(&backend))
+                                          : !(d->h264 = h264_decoder_create(&backend))) {
         CFRelease(object);  // finalize closes the client
         return kVTAllocationFailedErr;
     }
@@ -609,16 +707,18 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     return noErr;
 }
 
-// The clip checks, once per boot, in the process that claimed them from the kernel. VP9 runs on a private registration
-// of this decoder (not flagged hardware, so no VTIsHardwareDecodeSupported('vp09') answers YES from it; named, so only
-// the check selects it); the verdict goes to the kernel, and 'vp09' is offered (here and in every other process) only
-// when the clip matched libvpx. A failure turns VP9 off: TegraNVDECInfo.codecs loses it and Submit refuses it.
+// The clip checks, once per boot, in the process that claimed them from the kernel. VP9 and HEVC run on a private
+// registration of this decoder (not flagged hardware, so no VTIsHardwareDecodeSupported answers YES from it; named, so
+// only the check selects it); the verdicts go to the kernel, and 'vp09' / 'hvc1' are offered (here and in every other
+// process) only when the clips matched their references (libvpx, FFmpeg). A failure turns that codec off:
+// TegraNVDECInfo.codecs loses it and Submit refuses it. HEVC Main 10 has its own clip and verdict.
 #define kCheckImplementation CFSTR("com.ioswitch.avd.check")
 #define kCheckDecoderID      CFSTR("com.ioswitch.avd.check.vp09")
+#define kCheckHEVCDecoderID  CFSTR("com.ioswitch.avd.check.hvc1")
 
 typedef struct {
     NVDECClient *probe;  // holds the claim until the verdict is reported
-    bool vp9;
+    bool vp9, hevc;
 } Check;
 
 static void logCheck(bool ok, const char *line)
@@ -630,38 +730,67 @@ static void logCheck(bool ok, const char *line)
         os_log_error(log, "vdectest: %{public}s (in %{public}s)", line, getprogname());
 }
 
+static bool namedCheck(ClipCheckMode mode, CFStringRef decoderID, char *line, size_t size)
+{
+    const void *keys[] = {kVTVideoDecoderSpecification_DecoderID}, *values[] = {decoderID};
+    CFDictionaryRef spec =
+        CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    const bool ok = clip_check(mode, spec, line, size);
+    CFRelease(spec);
+    logCheck(ok, line);
+    return ok;
+}
+
+// NVDEC's 'hvc1', rated above the default 0: VideoToolbox's registry sorts by rating before the hardware flag, so it
+// is chosen before HEVCH8's stand-in (Apple's software decoder under the hardware flag), which stays registered behind
+// it for what this decoder does not take: tile sessions (grid HEIC: a version-1 decoder class has no tile entry points,
+// and VTTileDecompressionSessionCreate moves on to the next decoder) and the streams startHEVC hands to software.
+static void registerHEVC(void)
+{
+    const int32_t rating = 1;
+    CFNumberRef number = CFNumberCreate(NULL, kCFNumberSInt32Type, &rating);
+    const void *keys[] = {kVTVideoDecoderInfo_Rating}, *values[] = {number};
+    CFDictionaryRef info =
+        CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    const OSStatus status = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_HEVC, info, createInstance);
+    CFRelease(info);
+    CFRelease(number);
+    if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoderWithInfo('hvc1') failed: %d", (int)status);
+}
+
 static void selfTest(void *context)
 {
     Check *check = context;
     char line[512];
     logCheck(clip_check(ClipCheckHardware, NULL, line, sizeof(line)), line);
-    bool vp9Ok = false;
-    if (check->vp9) {
-        const void *keys[] = {kVTVideoDecoderSpecification_DecoderID}, *values[] = {kCheckDecoderID};
-        CFDictionaryRef spec =
-            CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        vp9Ok = clip_check(ClipCheckVP9, spec, line, sizeof(line));
-        CFRelease(spec);
-        logCheck(vp9Ok, line);
-    }
-    nvdec_check_report(check->probe, vp9Ok);
+    const bool vp9Ok = check->vp9 && namedCheck(ClipCheckVP9, kCheckDecoderID, line, sizeof(line));
+    const bool hevcOk = check->hevc && namedCheck(ClipCheckHEVC, kCheckHEVCDecoderID, line, sizeof(line));
+    const bool hevc10Ok = hevcOk && namedCheck(ClipCheckHEVC10, kCheckHEVCDecoderID, line, sizeof(line));
+    nvdec_check_report(check->probe, vp9Ok, hevcOk, hevc10Ok);
     if (vp9Ok) {
         const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
         if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)status);
     } else if (check->vp9) {
         os_log_error(gLog, "AVD: VP9 off until reboot (the clip check failed); sites fall back to H.264");
     }
+    if (hevcOk)
+        registerHEVC();
+    else if (check->hevc)
+        os_log_error(gLog,
+                     "AVD: HEVC off until reboot (the clip check failed); HEVC stays on Apple's software decoder");
+    if (hevcOk && !hevc10Ok)
+        os_log_error(gLog, "AVD: HEVC Main 10 off until reboot (its clip check failed); Main 10 decodes in software");
     nvdec_close(check->probe);
     free(check);
 }
 
-static OSStatus registerCheckDecoder(void)
+static OSStatus registerCheckDecoder(FourCharCode codec)
 {
     const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoDecoder_IsHardwareAccelerated};
     const void *values[] = {kCheckImplementation, kCFBooleanFalse};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus status = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_VP9, info, createInstance);
+    const OSStatus status = VTRegisterVideoDecoderWithInfo(codec, info, createInstance);
     CFRelease(info);
     return status;
 }
@@ -681,8 +810,9 @@ void AVDRegister(void)
     }
     const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_H264, createInstance);
     if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('avc1') failed: %d", (int)status);
-    // VP9 needs the kernel's N3 VP9 picture (it matched libvpx this boot) and then this boot's clip check.
-    const bool vp9Proven = nvdec_codecs(probe) & (1u << TEGRA_NVDEC_CODEC_VP9);
+    // VP9 and HEVC need the kernel's N3 picture (it matched libvpx / FFmpeg this boot) and then this boot's clip check.
+    const uint32_t proven = nvdec_codecs(probe);
+    const bool vp9Proven = proven & (1u << TEGRA_NVDEC_CODEC_VP9), hevcProven = proven & (1u << TEGRA_NVDEC_CODEC_HEVC);
     bool claimed = false;
     uint32_t state = nvdec_check_claim(probe, &claimed);
     if (!claimed && state == TEGRA_NVDEC_CHECK_RUNNING) {
@@ -693,18 +823,29 @@ void AVDRegister(void)
         Check *check = calloc(1, sizeof(*check));
         if (check) {
             check->probe = probe;
-            check->vp9 = vp9Proven && !registerCheckDecoder();
+            check->vp9 = vp9Proven && !registerCheckDecoder(kCMVideoCodecType_VP9);
+            check->hevc = hevcProven && !registerCheckDecoder(kCMVideoCodecType_HEVC);
             // Off the registry's thread: the check's sessions look the registry up once this registration returns.
             dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), check, selfTest);
             return;
         }
-        nvdec_check_report(probe, false);
-    } else if (vp9Proven && state == TEGRA_NVDEC_CHECK_PASSED) {
-        const OSStatus vp9Status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
-        if (vp9Status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)vp9Status);
-    } else if (vp9Proven) {
-        os_log(gLog, "AVD: VP9 not offered in %{public}s: the clip check %{public}s", getprogname(),
-               state == TEGRA_NVDEC_CHECK_FAILED ? "failed" : "gave no verdict within 3 s");
+        nvdec_check_report(probe, false, false, false);
+    } else if (state == TEGRA_NVDEC_CHECK_PASSED || state == TEGRA_NVDEC_CHECK_FAILED) {
+        // The verdicts are the codec bits now: a codec whose clip failed lost its bit.
+        const uint32_t codecs = nvdec_codecs(probe);
+        if (codecs & (1u << TEGRA_NVDEC_CODEC_VP9)) {
+            const OSStatus vp9Status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
+            if (vp9Status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)vp9Status);
+        } else if (vp9Proven) {
+            os_log(gLog, "AVD: VP9 not offered in %{public}s: the clip check failed", getprogname());
+        }
+        if (codecs & (1u << TEGRA_NVDEC_CODEC_HEVC))
+            registerHEVC();
+        else if (hevcProven)
+            os_log(gLog, "AVD: HEVC not on NVDEC in %{public}s: the clip check failed", getprogname());
+    } else if (vp9Proven || hevcProven) {
+        os_log(gLog, "AVD: VP9 and HEVC not offered in %{public}s: the clip check gave no verdict within 3 s",
+               getprogname());
     }
     nvdec_close(probe);
 }

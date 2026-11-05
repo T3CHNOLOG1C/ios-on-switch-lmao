@@ -74,6 +74,9 @@ extern const CFStringRef kVTVideoDecoderSpecification_AllowVP9Decode;
 // key IsHardwareAccelerated (VTRegisterVideoDecoder's default true) decides whether hardware queries count it.
 extern const CFStringRef kVTVideoDecoderSpecification_DecoderID;
 extern const CFStringRef kVTVideoDecoder_IsHardwareAccelerated;
+// The registry's first sort key (21H461 _vtSortRegistryItemsByRating, 0x197abe13c): a higher kVTVideoDecoderInfo_Rating
+// (CFNumber, default 0) ranks before IsHardwareAccelerated is even compared.
+extern const CFStringRef kVTVideoDecoderInfo_Rating;
 extern OSStatus VTRegisterVideoDecoderWithInfo(FourCharCode codecType, CFDictionaryRef info,
                                                VTDecoderCreateInstance create);
 extern OSStatus VTSelectAndCreateVideoDecoderInstance(FourCharCode codecType, CFAllocatorRef allocator,

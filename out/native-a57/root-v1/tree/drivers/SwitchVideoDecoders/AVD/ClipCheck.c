@@ -10,6 +10,7 @@
 #include <time.h>
 #include "../test/VDECClip.h"
 #include "../test/VP9Clip.h"
+#include "../test/HEVCClip.h"
 
 extern const CFStringRef kVTVideoDecoderSpecification_AllowVP9Decode, kVTVideoDecoderSpecification_DecoderID;
 
@@ -126,8 +127,165 @@ static CMVideoFormatDescriptionRef vp9Format(void)
     return format;
 }
 
+// HEVC: an Annex-B clip's access units as 4-byte length-prefixed samples without their parameter sets, which go to
+// the format description (hvcC) instead.
+static int splitHEVC(const HEVCClip *clip, const uint8_t *sets[3], size_t setSizes[3], uint8_t *buffer,
+                     uint8_t *samples[], size_t sizes[], int maxSamples)
+{
+    int count = 0;
+    size_t used = 0;
+    const uint8_t *nal = NULL;
+    for (size_t i = 0; i + 3 <= clip->size || nal; i++) {
+        const bool start = i + 3 <= clip->size && !clip->data[i] && !clip->data[i + 1] && clip->data[i + 2] == 1;
+        if (!start && i < clip->size) continue;
+        if (nal) {
+            size_t e = start ? i : clip->size;
+            while (start && e && !clip->data[e - 1]) e--;
+            const size_t length = (size_t)(clip->data + e - nal);
+            const int type = (nal[0] >> 1) & 0x3f;
+            if (type >= 32 && type <= 34) {
+                if (!sets[type - 32]) sets[type - 32] = nal, setSizes[type - 32] = length;
+            } else if (type < 32 || type == 39) {
+                if (type < 32 && (nal[2] & 0x80)) {  // first_slice_segment_in_pic_flag
+                    if (count == maxSamples) return count;
+                    samples[count] = buffer + used;
+                    sizes[count++] = 0;
+                }
+                if (count) {
+                    uint8_t *p = buffer + used;
+                    p[0] = (uint8_t)(length >> 24), p[1] = (uint8_t)(length >> 16), p[2] = (uint8_t)(length >> 8);
+                    p[3] = (uint8_t)length;
+                    memcpy(p + 4, nal, length);
+                    used += length + 4;
+                    sizes[count - 1] += length + 4;
+                }
+            }
+        }
+        if (i >= clip->size) break;
+        nal = clip->data + i + 3;
+        i += 2;
+    }
+    return count;
+}
+
+// One HEVC clip through a session; appends "A 20/20" or the first mismatch to `parts`. True when every frame matched
+// and (hardware) the session said hardware.
+static bool hevcSession(const HEVCClip *clip, CFDictionaryRef spec, bool hardware, char *parts, size_t partsSize,
+                        bool *onHardware, double *ms)
+{
+    static uint8_t buffer[sizeof(kHEVCClipAData) + 4096];
+    uint8_t *samples[64];
+    size_t sizes[64];
+    const uint8_t *sets[3] = {NULL, NULL, NULL};
+    size_t setSizes[3] = {0, 0, 0};
+    const int count = splitHEVC(clip, sets, setSizes, buffer, samples, sizes, 64);
+    CMVideoFormatDescriptionRef format = NULL;
+    if (count && sets[0] && sets[1] && sets[2])
+        CMVideoFormatDescriptionCreateFromHEVCParameterSets(NULL, 3, sets, setSizes, 4, NULL, &format);
+    char part[160];
+    if (!format) {
+        snprintf(part, sizeof(part), "%s%c: no format description", *parts ? ", " : "", clip->name);
+        strlcat(parts, part, partsSize);
+        return false;
+    }
+    Result result = {.last = -1,
+                     .first = -1,
+                     .width = clip->width,
+                     .height = clip->height,
+                     .frames = clip->shown,
+                     .crcs = clip->crc};
+    int32_t pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    CFNumberRef pf = CFNumberCreate(NULL, kCFNumberSInt32Type, &pixelFormat);
+    const void *attrKeys[] = {kCVPixelBufferPixelFormatTypeKey}, *attrValues[] = {pf};
+    CFDictionaryRef attrs = CFDictionaryCreate(NULL, attrKeys, attrValues, 1, &kCFTypeDictionaryKeyCallBacks,
+                                               &kCFTypeDictionaryValueCallBacks);
+    VTDecompressionOutputCallbackRecord callback = {output, &result};
+    VTDecompressionSessionRef session = NULL;
+    OSStatus status = VTDecompressionSessionCreate(NULL, format, spec, attrs, &callback, &session);
+    CFRelease(attrs), CFRelease(pf);
+    if (status) {
+        CFRelease(format);
+        snprintf(part, sizeof(part), "%s%c: VTDecompressionSessionCreate failed %d", *parts ? ", " : "", clip->name,
+                 (int)status);
+        strlcat(parts, part, partsSize);
+        return false;
+    }
+    CFBooleanRef usingHardware = NULL;
+    VTSessionCopyProperty(session, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL,
+                          &usingHardware);
+    *onHardware = usingHardware == kCFBooleanTrue;
+    if (usingHardware) CFRelease(usingHardware);
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int failed = 0;
+    for (int i = 0; i < count; i++) {
+        CMBlockBufferRef block = NULL;
+        CMSampleBufferRef sample = NULL;
+        CMBlockBufferCreateWithMemoryBlock(NULL, samples[i], sizes[i], kCFAllocatorNull, NULL, 0, sizes[i], 0, &block);
+        const int64_t shown = i < clip->aus && clip->display[i] >= 0 ? clip->display[i] : i;
+        CMSampleTimingInfo timing = {CMTimeMake(1, 30), CMTimeMake(shown, 30), CMTimeMake(i, 30)};
+        CMSampleBufferCreateReady(NULL, block, format, 1, 1, &timing, 1, &sizes[i], &sample);
+        VTDecodeInfoFlags info = 0;
+        if (VTDecompressionSessionDecodeFrame(session, sample, kVTDecodeFrame_EnableTemporalProcessing, NULL, &info))
+            failed++;
+        CFRelease(sample);
+        CFRelease(block);
+    }
+    VTDecompressionSessionFinishDelayedFrames(session);
+    VTDecompressionSessionWaitForAsynchronousFrames(session);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    VTDecompressionSessionInvalidate(session);
+    CFRelease(session);
+    CFRelease(format);
+    *ms += (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+    const bool ok = result.match == result.frames && result.count == result.frames && !failed && !result.errors &&
+                    (!hardware || *onHardware);
+    snprintf(part, sizeof(part), "%s%c %d/%d", *parts ? ", " : "", clip->name, result.match, result.frames);
+    strlcat(parts, part, partsSize);
+    if (result.first >= 0) {
+        snprintf(part, sizeof(part), " (first mismatch frame %d luma CRC %#010x, expected %#010x)", result.first,
+                 result.firstCrc, result.first < result.frames ? result.crcs[result.first] : 0);
+        strlcat(parts, part, partsSize);
+    }
+    if (failed || result.errors || result.count != result.frames) {
+        snprintf(part, sizeof(part), " (%d out, %d decode errors, %d callback errors)", result.count, failed,
+                 result.errors);
+        strlcat(parts, part, partsSize);
+    }
+    return ok;
+}
+
+static bool clipCheckHEVC(ClipCheckMode mode, CFDictionaryRef extraSpec, char *line, size_t size)
+{
+    const bool hardware = mode != ClipCheckHEVCSoftware, tenBit = mode == ClipCheckHEVC10;
+    CFMutableDictionaryRef spec = extraSpec ? CFDictionaryCreateMutableCopy(NULL, 0, extraSpec)
+                                            : CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
+                                                                        &kCFTypeDictionaryValueCallBacks);
+    if (hardware && !CFDictionaryContainsKey(spec, kVTVideoDecoderSpecification_DecoderID))
+        CFDictionarySetValue(spec, kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
+    else if (!hardware)
+        CFDictionarySetValue(spec, kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder, kCFBooleanFalse);
+    char parts[384] = "";
+    bool ok = true, onHardware = true;
+    double ms = 0;
+    for (int i = tenBit ? 2 : 0; i < (tenBit ? 3 : 2); i++) {
+        bool hw = false;
+        ok &= hevcSession(&kHEVCClips[i], spec, hardware, parts, sizeof(parts), &hw, &ms);
+        onHardware &= hw;
+    }
+    CFRelease(spec);
+    snprintf(line, size, "%s: %s decoder, frames matching FFmpeg%s: %s, %.1f ms %s",
+             tenBit     ? "hevc10"
+             : hardware ? "hevc"
+                        : "hevc-software",
+             onHardware ? "hardware" : "software", tenBit ? " (>> 2)" : "", parts, ms, ok ? "OK" : "FAIL");
+    return ok;
+}
+
 bool clip_check(ClipCheckMode mode, CFDictionaryRef extraSpec, char *line, size_t size)
 {
+    if (mode == ClipCheckHEVC || mode == ClipCheckHEVC10 || mode == ClipCheckHEVCSoftware)
+        return clipCheckHEVC(mode, extraSpec, line, size);
     const bool hardware = mode != ClipCheckSoftware, vp9 = mode == ClipCheckVP9;
     const char *name = vp9 ? "vp9" : hardware ? "hardware" : "software";
     static uint8_t buffer[sizeof(kClip) + 4096];

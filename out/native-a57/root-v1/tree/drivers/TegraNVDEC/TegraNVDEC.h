@@ -42,9 +42,9 @@ int tegra_nvdec_run(const TegraNVDECSubmit *submit, TegraNVDECResolve resolve, v
 int tegra_nvdec_wait(uint32_t fence);
 bool tegra_nvdec_ready(void);
 // The userland clip check's verdict (TegraNVDECABI.h): claim (returns the state; *claimed for the one owner), the
-// owner's report (a VP9 failure clears the VP9 codec bit), a bounded wait while it runs, and the owner's release.
+// owner's report (a failure clears that codec's bit: VP9, HEVC, HEVC Main 10), a bounded wait while it runs, and the owner's release.
 uint32_t tegra_nvdec_check_claim(const void *owner, bool *claimed);
-int tegra_nvdec_check_report(const void *owner, bool vp9Ok);
+int tegra_nvdec_check_report(const void *owner, bool vp9Ok, bool hevcOk, bool hevc10Ok);
 uint32_t tegra_nvdec_check_wait(void);
 void tegra_nvdec_check_release(const void *owner);
 
@@ -54,6 +54,7 @@ int tegra_nvdec_await(uint32_t timeoutMs);
 
 int tegra_nvdec_self_test(void);            // N3 H.264: NVDEC itself
 int tegra_nvdec_self_test_vp9(void);        // N3 VP9: decides the VP9 bit of tegra_nvdec_codecs()
+int tegra_nvdec_self_test_hevc(void);       // N3 HEVC: decides the HEVC (and Main 10) bits
 uint32_t tegra_nvdec_codecs(void);          // bit n: TEGRA_NVDEC_CODEC_* n proven at N3 and accepted by Submit
 int tegra_nvdec_publish(uint64_t arenaUs);  // N4
 }

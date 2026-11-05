@@ -5,10 +5,13 @@
 - VP9NVDEC over libvpx's own trace (VP9Trace.h, VP9Clip.h from test/vp9gen): headers, the entropy contexts NVDEC is
   given, the counter mapping and backward adaptation equal libvpx's frame by frame; every submit accepted by the
   kernel's checker, which refuses each kind of bad VP9 submit;
+- HEVCSyntax/HEVCNVDEC over FFmpeg's own trace (HEVCTrace.h, HEVCClip.h from test/hevcgen): every slice header field
+  NVDEC is given (sw_hdr_skip_length included) equals FFmpeg's, pictures come out in FFmpeg's order, every submit is
+  accepted by the kernel's checker, which refuses each kind of bad HEVC submit;
 - AVD.videodecoder itself on this Mac's VideoToolbox over a fake TegraNVDEC client: the plug-in's class layout, session
-  calls and property answers for 'avc1' and 'vp09', and its fall-back onto Apple's software decoder when the arena has
-  no room;
-- the clip check (vdectest) against Apple's own decoders, which proves the clip and its x264 CRCs."""
+  calls and property answers for 'avc1', 'vp09' and 'hvc1', and its fall-back onto Apple's software decoders when the
+  arena has no room;
+- the clip check (vdectest) against Apple's own decoders, which proves the clips and their x264 / FFmpeg CRCs."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -50,10 +53,17 @@ class SwitchVideoTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn("PASS vp9: clip A 18 frames (16 shown), clip B 13 frames", output)
 
+    def test_hevc_against_ffmpeg(self):
+        code, output = build_and_run("hevc", [VIDEO / "test/hevc_host.c", AVD / "HEVCSyntax.c", AVD / "HEVCNVDEC.c"])
+        self.assertEqual(code, 0, output)
+        self.assertIn("syntax: 65 slice segments match FFmpeg", output)
+        self.assertIn("PASS hevc", output)
+
     def test_avd_plugin_on_videotoolbox(self):
         code, output = build_and_run("avd", [VIDEO / "test/avd_host.c", AVD / "H264NVDEC.c", AVD / "H264Syntax.c",
                                              AVD / "BlockLinear.c", AVD / "ClipCheck.c", AVD / "VP9NVDEC.c",
-                                             AVD / "VP9Syntax.c", AVD / "VP9Probs.c"], FRAMEWORKS)
+                                             AVD / "VP9Syntax.c", AVD / "VP9Probs.c", AVD / "HEVCNVDEC.c",
+                                             AVD / "HEVCSyntax.c"], FRAMEWORKS)
         self.assertEqual(code, 0, output)
         self.assertIn("PASS avd", output)
 
@@ -61,6 +71,7 @@ class SwitchVideoTests(unittest.TestCase):
         # Only the software run is required: a Mac (or sandbox) without a reachable hardware decoder fails the other.
         _, output = build_and_run("vdectest", [VIDEO / "test/vdectest.c", AVD / "ClipCheck.c"], FRAMEWORKS)
         self.assertIn("software: software decoder, 30/30 frames match x264", output)
+        self.assertIn("hevc-software: software decoder, frames matching FFmpeg: A 20/20, V 14/14", output)
 
 
 if __name__ == "__main__":

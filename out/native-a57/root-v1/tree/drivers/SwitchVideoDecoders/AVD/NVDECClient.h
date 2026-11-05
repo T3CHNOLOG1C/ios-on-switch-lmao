@@ -15,9 +15,9 @@ void nvdec_close(NVDECClient *client);
 // TegraNVDECInfo.codecs: bit n, codec n proven on the engine at boot.
 uint32_t nvdec_codecs(const NVDECClient *client);
 // The clip check's verdict (TegraNVDECABI.h TEGRA_NVDEC_CHECK_*): claim (the state; *claimed when this connection runs
-// it), report (the owner), wait (at most 3 s while another process runs it).
+// it), report (the owner: VP9, HEVC and HEVC Main 10 verdicts), wait (at most 3 s while another process runs it).
 uint32_t nvdec_check_claim(NVDECClient *client, bool *claimed);
-int nvdec_check_report(NVDECClient *client, bool vp9Ok);
+int nvdec_check_report(NVDECClient *client, bool vp9Ok, bool hevcOk, bool hevc10Ok);
 uint32_t nvdec_check_wait(NVDECClient *client);
 
 // The H264Backend buffer and job callbacks (ctx = the client).

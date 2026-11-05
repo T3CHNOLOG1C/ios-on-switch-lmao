@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVDEC user client ABI, v4 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
+// TegraNVDEC user client ABI, v5 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
 //
 // The service is "TegraNVDEC" (IOServiceMatching), published by default once NVDEC has proven itself (N4). Its user
 // client's class is named AppleD5500UserClient, iPad7,1's own decoder client (VXD393), which some of 21H461's sandbox
@@ -25,7 +25,7 @@
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION  4
+#define TEGRA_NVDEC_ABI_VERSION  5
 #define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
 #define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
@@ -41,8 +41,10 @@ enum TegraNVDECMethod {
     TegraNVDECMethodWaitSelfTest = 8,    // -> TegraNVDECClaim: sleeps while the check runs, at most 3 s
 };
 
-// The userland clip check (AVD's ClipCheck.c): one connection per boot claims it and reports its VP9 verdict; until
-// then 'vp09' is registered nowhere, and a failure turns VP9 off (TegraNVDECInfo.codecs loses it, Submit refuses it).
+// The userland clip check (AVD's ClipCheck.c): one connection per boot claims it and reports its VP9 and HEVC verdicts;
+// until then 'vp09' and 'hvc1' are registered nowhere as NVDEC decoders, and a failure turns that codec off
+// (TegraNVDECInfo.codecs loses it, Submit refuses it). HEVC Main 10 has its own verdict: a failure there clears only
+// TEGRA_NVDEC_HEVC_MAIN10 (Main 10 streams then decode in software; Main stays on NVDEC).
 // A claiming connection that closes before reporting gives the claim back.
 enum {
     TEGRA_NVDEC_CHECK_UNCLAIMED = 0,
@@ -53,7 +55,10 @@ enum {
 
 // NVDEC application ids (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_*). TegraNVDECInfo.codecs has bit n set for each
 // codec whose boot self-test (N3) passed; Submit refuses the others.
-enum { TEGRA_NVDEC_CODEC_H264 = 3, TEGRA_NVDEC_CODEC_VP9 = 9 };
+enum { TEGRA_NVDEC_CODEC_H264 = 3, TEGRA_NVDEC_CODEC_HEVC = 7, TEGRA_NVDEC_CODEC_VP9 = 9 };
+// Not an application id: TegraNVDECInfo.codecs bit 16, HEVC Main 10 written as 8-bit NV12 (disp_output_mode 2/3) is
+// proven (set with HEVC at N3, which decodes an 8-bit picture; cleared by a failed Main 10 clip check).
+#define TEGRA_NVDEC_HEVC_MAIN10 (1u << 16)
 
 typedef struct {
     uint32_t abi_version, nvdec_version;  // nvdec_version 0x20: NVDEC 2.0 (T210)
@@ -108,7 +113,7 @@ typedef struct {
 } TegraNVDECClaim;
 
 typedef struct {
-    uint32_t vp9_ok, reserved;
+    uint32_t vp9_ok, hevc_ok, hevc10_ok, reserved;
 } TegraNVDECReport;
 
 typedef struct {

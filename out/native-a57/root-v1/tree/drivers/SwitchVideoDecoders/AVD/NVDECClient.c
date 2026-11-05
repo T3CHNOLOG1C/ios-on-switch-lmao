@@ -97,9 +97,9 @@ uint32_t nvdec_check_claim(NVDECClient *c, bool *claimed)
     return reply.state;
 }
 
-int nvdec_check_report(NVDECClient *c, bool vp9Ok)
+int nvdec_check_report(NVDECClient *c, bool vp9Ok, bool hevcOk, bool hevc10Ok)
 {
-    const TegraNVDECReport report = {vp9Ok, 0};
+    const TegraNVDECReport report = {vp9Ok, hevcOk, hevc10Ok, 0};
     return call(c, c->selector, TegraNVDECMethodReportSelfTest, &report, sizeof(report), NULL, 0) ? -1 : 0;
 }
 

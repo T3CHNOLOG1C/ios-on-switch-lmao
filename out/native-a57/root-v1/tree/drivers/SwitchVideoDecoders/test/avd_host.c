@@ -10,7 +10,11 @@
 //           (registerCheckDecoder: not flagged hardware, named com.ioswitch.avd.check.vp09, as the device's boot check
 //           uses it) and the fake engine: every superframe and frame through VP9NVDEC and the kernel's checker, all 16
 //           shown frames out of a session that says hardware.
-// Prints "PASS avd ..." when both hold (tests/test_switch_video.py).
+//   hevc:   HEVCClip.h's Main clips A and V and Main 10 clip T as 'hvc1' on the private check registration (named
+//           com.ioswitch.avd.check.hvc1) and the fake engine: every picture through HEVCNVDEC and the kernel's checker,
+//           all out of a hardware session; then with the arena full, Apple's software HEVC decoder in the instance,
+//           matching FFmpeg.
+// Prints "PASS avd ..." when all hold (tests/test_switch_video.py).
 #include "../AVD/AVDDecoder.c"
 #include <stdio.h>
 #include "../../TegraNVDEC/TegraNVDECCheck.h"
@@ -45,7 +49,8 @@ void nvdec_close(NVDECClient *c)
 uint32_t nvdec_codecs(const NVDECClient *c)
 {
     (void)c;
-    return 1u << TEGRA_NVDEC_CODEC_H264 | 1u << TEGRA_NVDEC_CODEC_VP9;
+    return 1u << TEGRA_NVDEC_CODEC_H264 | 1u << TEGRA_NVDEC_CODEC_VP9 | 1u << TEGRA_NVDEC_CODEC_HEVC |
+           TEGRA_NVDEC_HEVC_MAIN10;
 }
 
 uint32_t nvdec_check_claim(NVDECClient *c, bool *claimed)
@@ -55,9 +60,9 @@ uint32_t nvdec_check_claim(NVDECClient *c, bool *claimed)
     return TEGRA_NVDEC_CHECK_PASSED;
 }
 
-int nvdec_check_report(NVDECClient *c, bool vp9Ok)
+int nvdec_check_report(NVDECClient *c, bool vp9Ok, bool hevcOk, bool hevc10Ok)
 {
-    (void)c, (void)vp9Ok;
+    (void)c, (void)vp9Ok, (void)hevcOk, (void)hevc10Ok;
     return 0;
 }
 
@@ -116,13 +121,15 @@ int nvdec_wait(void *ctx, const TegraNVDECWait *w)
 int main(void)
 {
     gLog = os_log_create("com.ioswitch.avd", "host-test");
+    setvbuf(stdout, NULL, _IONBF, 0);  // a hung session still shows how far it got
     // A class ID of our own makes the registry entry "com.ioswitch.avd-host.avc1", which the sessions name below: the
     // Mac's own H.264 decoders would otherwise win the selection.
     const void *keys[] = {CFSTR("CMClassImplementationID")}, *values[] = {CFSTR("com.ioswitch.avd-host")};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus registered =
-        VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, createInstance) || registerCheckDecoder();
+    const OSStatus registered = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, createInstance) ||
+                                registerCheckDecoder(kCMVideoCodecType_VP9) ||
+                                registerCheckDecoder(kCMVideoCodecType_HEVC);
     CFRelease(info);
     if (registered) {
         printf("FAIL avd: VTRegisterVideoDecoderWithInfo %d\n", (int)registered);
@@ -147,14 +154,40 @@ int main(void)
     clip_check(ClipCheckVP9, vp9Spec, vp9, sizeof(vp9));
     CFRelease(vp9Spec);
     printf("vp9: %s (submits %d)\n", vp9, gSubmits - vp9Submits);
+    // HEVC on the private check registration: clips A and V, then the Main 10 clip T, through HEVCNVDEC and the kernel
+    // checker (the fake engine writes nothing, so no frame matches: all must come out, from a hardware session); then
+    // with the arena full, Apple's software HEVC decoder inside the instance, which must match FFmpeg.
+    char hevc[512], hevc10[512], hevcFull[512];
+    const int hevcSubmits = gSubmits;
+    const void *hevcKeys[] = {kVTVideoDecoderSpecification_DecoderID}, *hevcValues[] = {kCheckHEVCDecoderID};
+    CFDictionaryRef hevcSpec = CFDictionaryCreate(NULL, hevcKeys, hevcValues, 1, &kCFTypeDictionaryKeyCallBacks,
+                                                  &kCFTypeDictionaryValueCallBacks);
+    clip_check(ClipCheckHEVC, hevcSpec, hevc, sizeof(hevc));
+    printf("hevc: %s\n", hevc);
+    const int hevcMain = gSubmits - hevcSubmits;
+    clip_check(ClipCheckHEVC10, hevcSpec, hevc10, sizeof(hevc10));
+    printf("hevc10: %s\n", hevc10);
+    const int hevcTen = gSubmits - hevcSubmits - hevcMain;
+    gFull = true;
+    clip_check(ClipCheckHEVC, hevcSpec, hevcFull, sizeof(hevcFull));
+    gFull = false;
+    CFRelease(hevcSpec);
+    printf("hevc: %s (submits %d)\nhevc10: %s (submits %d)\nhevc full: %s\n", hevc, hevcMain, hevc10, hevcTen,
+           hevcFull);
+    const bool hevcOk = strstr(hevc, "hevc: hardware decoder") && strstr(hevc, "A 0/20") && strstr(hevc, "V 0/14") &&
+                        !strstr(hevc, " out,") && hevcMain == 34 && !gRefused &&
+                        strstr(hevc10, "hevc10: hardware decoder") && strstr(hevc10, "T 0/10") &&
+                        !strstr(hevc10, " out,") && hevcTen == 10 && strstr(hevcFull, "software decoder") &&
+                        strstr(hevcFull, "A 20/20, V 14/14");
     printf("engine: %s (opens %d, submits %d, refused %d)\nfull: %s (opens %d)\n", engine, engineOpens, engineSubmits,
            gRefused, full, gOpens - engineOpens);
     const bool ok = engineOpens >= 1 && engineSubmits == 30 && !gRefused &&
                     strstr(engine, "hardware: hardware decoder") && strstr(engine, " 30 out (") &&
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
-                    strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") && gSubmits - vp9Submits == 18;
-    printf("%s avd: plug-in on VideoToolbox (H.264 and VP9 on a fake NVDEC, then Apple's software H.264 in the "
-           "instance)\n",
+                    strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
+                    hevcSubmits - vp9Submits == 18 && hevcOk;
+    printf("%s avd: plug-in on VideoToolbox (H.264, VP9 and HEVC on a fake NVDEC, then Apple's software H.264 and "
+           "HEVC in the instance)\n",
            ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

@@ -1,0 +1,347 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// Host test of HEVCSyntax.c and HEVCNVDEC.c against FFmpeg (test/HEVCTrace.h, test/HEVCClip.h from test/hevcgen):
+//   * every slice segment of clips A, V, T, K parses to FFmpeg's NAL type, slice type, POC LSBs and sw_hdr_skip_length;
+//   * the scaling list defaults equal FFmpeg's raster tables;
+//   * HEVCNVDEC decodes every clip over a fake engine: each submit passes the kernel's own checker
+//     (TegraNVDECCheck.h), pictures come out in FFmpeg's output order, every reference slot names a picture still
+//     in the DPB, and refused submits (encryption, histogram, ecdma, v1-v3, sizes, output modes) are refused;
+//   * --selftest writes the kernel's N3 HEVC picture (clip K) as drivers/TegraNVDEC/selftest/HEVCPicture176.inc.
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "../AVD/HEVCNVDEC.h"
+#include "../AVD/HEVCSyntax.h"
+#include "../../TegraNVDEC/TegraNVDECCheck.h"
+#include "HEVCClip.h"
+#include "HEVCTrace.h"
+
+static int gFailures;
+#define CHECK(cond, ...)                               \
+    do {                                               \
+        if (!(cond)) {                                 \
+            printf("FAIL %s:%d ", __FILE__, __LINE__); \
+            printf(__VA_ARGS__);                       \
+            printf("\n");                              \
+            gFailures++;                               \
+        }                                              \
+    } while (0)
+
+typedef struct {
+    const uint8_t *data;
+    size_t size;
+} Span;
+
+// Annex-B NAL units of a clip, in order.
+static int nalUnits(const uint8_t *data, size_t size, Span *out, int max)
+{
+    int n = 0;
+    for (size_t i = 0; i + 3 <= size;) {
+        if (data[i] || data[i + 1] || data[i + 2] != 1) {
+            i++;
+            continue;
+        }
+        if (n) {
+            size_t e = i;
+            while (e && !data[e - 1]) e--;
+            out[n - 1].size = (size_t)(data + e - out[n - 1].data);
+        }
+        if (n == max) return -1;
+        out[n++].data = data + i + 3;
+        i += 3;
+    }
+    if (n) out[n - 1].size = (size_t)(data + size - out[n - 1].data);
+    return n;
+}
+
+static void testSyntax(void)
+{
+    const uint8_t *data[4] = {kHEVCClips[0].data, kHEVCClips[1].data, kHEVCClips[2].data, kHEVCClipKData};
+    const size_t sizes[4] = {kHEVCClips[0].size, kHEVCClips[1].size, kHEVCClips[2].size, sizeof(kHEVCClipKData)};
+    static Span nal[512];
+    static HEVCParams params;
+    size_t t = 0, explicitRps = 0, nonzero = 0;
+    for (int c = 0; c < 4; c++) {
+        memset(&params, 0, sizeof(params));
+        const int n = nalUnits(data[c], sizes[c], nal, 512);
+        int au = -1;
+        for (int i = 0; i < n; i++) {
+            const int type = (nal[i].data[0] >> 1) & 0x3f;
+            if (type == HEVC_NAL_SPS) CHECK(!hevc_parse_sps(&params, nal[i].data, nal[i].size), "clip %d SPS", c);
+            if (type == HEVC_NAL_PPS) CHECK(!hevc_parse_pps(&params, nal[i].data, nal[i].size), "clip %d PPS", c);
+            if (type >= 32) continue;
+            HEVCSliceHeader h;
+            const int ret = hevc_parse_slice_header(&params, nal[i].data, nal[i].size, &h);
+            if (h.first_slice) au++;
+            CHECK(t < sizeof(kHEVCSlices) / sizeof(kHEVCSlices[0]), "more slices than FFmpeg saw");
+            if (t >= sizeof(kHEVCSlices) / sizeof(kHEVCSlices[0])) return;
+            const HEVCSliceTruth *e = &kHEVCSlices[t++];
+            CHECK(!ret, "clip %d au %d slice parse", c, au);
+            CHECK(e->clip == c && e->au == au && e->nal_type == h.nal_type && e->first == h.first_slice &&
+                      e->dependent == h.dependent,
+                  "clip %d au %d: nal %d/%d first %d/%d", c, au, h.nal_type, e->nal_type, h.first_slice, e->first);
+            if (h.dependent) continue;
+            CHECK(e->slice_type == h.slice_type && e->poc_lsb == h.poc_lsb && e->skip == h.skip_bits,
+                  "clip %d au %d: slice_type %d/%d poc_lsb %d/%d skip %d/%d (FFmpeg's second)", c, au, h.slice_type,
+                  e->slice_type, h.poc_lsb, e->poc_lsb, h.skip_bits, e->skip);
+            explicitRps += !h.st_rps_from_sps && h.st_rps_bits;
+            nonzero += h.skip_bits != 0;
+        }
+    }
+    CHECK(t == sizeof(kHEVCSlices) / sizeof(kHEVCSlices[0]), "%zu of %zu slices parsed", t,
+          sizeof(kHEVCSlices) / sizeof(kHEVCSlices[0]));
+    printf("syntax: %zu slice segments match FFmpeg (%zu with their own RPS, %zu with a non-zero skip length)\n", t,
+           explicitRps, nonzero);
+    HEVCScalingList sl;
+    hevc_default_scaling_list(&sl);
+    static const uint8_t kRow0Intra[8] = {16, 16, 16, 16, 17, 18, 21, 24}, kLastInter = 91;
+    CHECK(!memcmp(sl.sl[1][0], kRow0Intra, 8) && sl.sl[3][3][63] == kLastInter && sl.dc[1][3] == 16,
+          "default scaling lists");
+}
+
+// ---- HEVCNVDEC over a fake engine ------------------------------------------------------------------------------
+
+enum { MAX_BUFFERS = 40 };
+typedef struct {
+    uint8_t *va[MAX_BUFFERS + 1];
+    uint64_t bytes[MAX_BUFFERS + 1];
+    int out[64], outCount, discarded, jobs, selftest;
+    TegraNVDECSubmit last;
+} Fake;
+
+static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
+{
+    Fake *f = ctx;
+    for (uint32_t h = 1; h <= MAX_BUFFERS; h++) {
+        if (f->va[h]) continue;
+        f->va[h] = calloc(1, size);
+        f->bytes[h] = size;
+        *handle = h;
+        *va = f->va[h];
+        return f->va[h] ? 0 : -1;
+    }
+    return -1;
+}
+
+static void fakeFree(void *ctx, uint32_t handle)
+{
+    Fake *f = ctx;
+    free(f->va[handle]);
+    f->va[handle] = NULL;
+    f->bytes[handle] = 0;
+}
+
+static const char *fakeCheck(Fake *f, const TegraNVDECSubmit *s)
+{
+    uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES] = {0};
+    for (uint32_t i = 0; i < s->entry_count; i++) {
+        const TegraNVDECEntry *e = &s->entries[i];
+        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC) continue;
+        if (e->value > MAX_BUFFERS || !f->va[e->value] || e->offset > f->bytes[e->value]) return "bad relocation";
+        avail[i] = f->bytes[e->value] - e->offset;
+    }
+    return tegra_nvdec_check(s, avail);
+}
+
+static int fakeSubmit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
+{
+    Fake *f = ctx;
+    const char *why = fakeCheck(f, s);
+    CHECK(!why, "job %d refused by the kernel checker: %s", f->jobs, why ? why : "");
+    f->last = *s;
+    *fence = (uint32_t)++f->jobs;
+    return why ? -1 : 0;
+}
+
+static int fakeWait(void *ctx, const TegraNVDECWait *w)
+{
+    (void)ctx, (void)w;
+    return 0;
+}
+
+static void *fakeDecoded(void *ctx, const H264Picture *p)
+{
+    (void)ctx;
+    return (void *)(intptr_t)((intptr_t)p->token + 1);
+}
+
+static void fakeEmit(void *ctx, void *item)
+{
+    Fake *f = ctx;
+    if (f->outCount < 64) f->out[f->outCount++] = (int)(intptr_t)item - 1;
+}
+
+static void fakeDiscard(void *ctx, void *item)
+{
+    (void)item;
+    ((Fake *)ctx)->discarded++;
+}
+
+// An Annex-B clip's access units as 4-byte length-prefixed samples.
+static int samples(const uint8_t *data, size_t size, uint8_t *buffer, uint8_t **sample, size_t *sizes, int max)
+{
+    static Span nal[1024];
+    const int n = nalUnits(data, size, nal, 1024);
+    int count = 0;
+    size_t used = 0;
+    bool pendingStart = true;
+    for (int i = 0; i < n; i++) {
+        const int type = (nal[i].data[0] >> 1) & 0x3f;
+        const bool vcl = type < 32, starts = vcl && (nal[i].data[2] & 0x80);
+        if ((starts && !pendingStart) || !count) {
+            if (count == max) return -1;
+            sample[count] = buffer + used;
+            sizes[count++] = 0;
+        }
+        pendingStart = !vcl && (pendingStart || starts);
+        if (vcl) pendingStart = false;
+        uint8_t *p = buffer + used;
+        p[0] = (uint8_t)(nal[i].size >> 24), p[1] = (uint8_t)(nal[i].size >> 16), p[2] = (uint8_t)(nal[i].size >> 8);
+        p[3] = (uint8_t)nal[i].size;
+        memcpy(p + 4, nal[i].data, nal[i].size);
+        used += nal[i].size + 4;
+        sizes[count - 1] += nal[i].size + 4;
+    }
+    return count;
+}
+
+static HEVCDecoder *decodeClip(Fake *f, const uint8_t *data, size_t size, int *aus, bool tenBit)
+{
+    static uint8_t buffer[64 * 1024];
+    uint8_t *sample[64];
+    size_t sizes[64];
+    const H264Backend backend = {f, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, fakeEmit, fakeDiscard};
+    HEVCDecoder *d = hevc_decoder_create(&backend);
+    hevc_decoder_allow_10bit(d, tenBit);
+    *aus = samples(data, size, buffer, sample, sizes, 64);
+    for (int i = 0; i < *aus; i++) {
+        const int ret = hevc_decoder_decode(d, sample[i], sizes[i], 4, (void *)(intptr_t)i);
+        CHECK(ret == 1, "access unit %d: hevc_decoder_decode %d", i, ret);
+        if (f->selftest) return d;
+    }
+    hevc_decoder_flush(d);
+    return d;
+}
+
+static void testDecode(void)
+{
+    for (int c = 0; c < 3; c++) {
+        const HEVCClip *clip = &kHEVCClips[c];
+        Fake f;
+        memset(&f, 0, sizeof(f));
+        int aus = 0;
+        HEVCDecoder *d = decodeClip(&f, clip->data, clip->size, &aus, clip->depth == 10);
+        CHECK(aus == clip->aus && f.jobs == clip->aus, "clip %c: %d access units, %d jobs", clip->name, aus, f.jobs);
+        CHECK(f.outCount == clip->shown && !f.discarded, "clip %c: %d out, %d discarded", clip->name, f.outCount,
+              f.discarded);
+        bool order = true;
+        for (int k = 0; k < f.outCount; k++) order &= clip->display[f.out[k]] == k;
+        CHECK(order, "clip %c: output order differs from FFmpeg's", clip->name);
+        CHECK(!hevc_decoder_missing_refs(d), "clip %c: %u references missing", clip->name,
+              hevc_decoder_missing_refs(d));
+        // A Main 10 clip is refused while Main 10 is not proven.
+        if (clip->depth == 10) {
+            Fake g;
+            memset(&g, 0, sizeof(g));
+            const H264Backend backend = {&g,       fakeAlloc,   fakeFree, fakeSubmit,
+                                         fakeWait, fakeDecoded, fakeEmit, fakeDiscard};
+            HEVCDecoder *e = hevc_decoder_create(&backend);
+            static uint8_t buffer[64 * 1024];
+            uint8_t *sample[64];
+            size_t sizes[64];
+            samples(clip->data, clip->size, buffer, sample, sizes, 64);
+            CHECK(hevc_decoder_decode(e, sample[0], sizes[0], 4, NULL) == -1 && !g.jobs, "Main 10 taken while off");
+            hevc_decoder_destroy(e);
+        }
+        printf("decode: clip %c %dx%d %d-bit, %d access units, every job accepted by the kernel checker, %d pictures "
+               "out in FFmpeg's order\n",
+               clip->name, clip->width, clip->height, clip->depth, aus, f.outCount);
+        if (c == 0) {  // the kernel checker refuses each kind of bad HEVC submit
+            const TegraNVDECSubmit good = f.last;
+            CHECK(!fakeCheck(&f, &good), "the last submit");
+            static const char *const kBad[] = {"encryption", "histogram", "ecdma",  "v3",     "16-bit output",
+                                               "pitch",      "rows",      "motion", "filter", "stream",
+                                               "slot",       "timer",     "size",   "surface"};
+            const size_t kinds = sizeof(kBad) / sizeof(kBad[0]);
+            for (size_t i = 0; i < kinds; i++) {
+                TegraNVDECSubmit s = good;
+                nvdec_hevc_pic_s *p = (nvdec_hevc_pic_s *)s.setup;
+                switch (i) {
+                case 0: p->enable_encryption = 1; break;
+                case 1: p->enable_histogram = 1; break;
+                case 2: p->ecdma_cfg.ecdma_enable = 1; break;
+                case 3: p->v3.slice_decoding_enable = 1; break;
+                case 4: p->disp_output_mode = 1; break;
+                case 5: p->framestride[0] = p->framestride[1] = 256; break;
+                case 6: p->pic_height_in_luma_samples = 4000; break;
+                case 7: p->colMvBuffersize /= 2; break;
+                case 8: p->HevcBsdCtrlOffset *= 4; break;
+                case 9: p->stream_len = 0x7fffffff; break;
+                case 10: p->curr_pic_idx = 16; break;
+                case 11: p->gptimer_timeout_value = 1u << 28; break;
+                case 12: p->pic_width_in_luma_samples = 64; break;
+                default:  // slot 3's chroma 256 bytes before its surface's end
+                    for (uint32_t k = 0; k < s.entry_count; k++)
+                        if (s.entries[k].method == NVC5B0_SET_PICTURE_CHROMA_OFFSET0 + 12)
+                            s.entries[k].offset = (uint32_t)(f.bytes[s.entries[k].value] - 256);
+                }
+                CHECK(fakeCheck(&f, &s), "the checker took a bad HEVC submit (%s)", kBad[i]);
+            }
+            printf("checker: %zu kinds of bad HEVC submit refused\n", kinds);
+        }
+        hevc_decoder_destroy(d);
+        for (int h = 1; h <= MAX_BUFFERS; h++) CHECK(!f.va[h], "clip %c: buffer %d not freed", clip->name, h);
+    }
+}
+
+static void dump(const char *name, const uint8_t *p, size_t n)
+{
+    printf("static const uint8_t %s[%zu] = {", name, n);
+    for (size_t i = 0; i < n; i++) printf("%s0x%02x,", i % 16 ? "" : "\n    ", p[i]);
+    printf("\n};\n");
+}
+
+// Clip K's IDR as the kernel's N3 HEVC test vector: buffers 1 aux (colocated motion, filter), 2 input (status, tile
+// sizes, scaling lists, bitstream), 3 the surface, as the decoder allocates them.
+static int selftest(void)
+{
+    Fake f;
+    memset(&f, 0, sizeof(f));
+    f.selftest = 1;
+    int aus = 0;
+    HEVCDecoder *d = decodeClip(&f, kHEVCClipKData, sizeof(kHEVCClipKData), &aus, false);
+    const TegraNVDECSubmit *s = &f.last;
+    const nvdec_hevc_pic_s *p = (const nvdec_hevc_pic_s *)s->setup;
+    if (gFailures || f.jobs != 1 || !f.va[3] || f.va[4]) return 1;
+    printf("// SPDX-License-Identifier: BSD-2-Clause-Patent\n"
+           "// Generated by SwitchVideoDecoders/test/hevc_host --selftest from clip K (x265, 176x144 IDR, CTU 16); do "
+           "not edit.\n");
+    printf("static const uint32_t kHEVCTestWidth = %u, kHEVCTestHeight = %u, kHEVCTestPitch = %u;\n",
+           p->pic_width_in_luma_samples, p->pic_height_in_luma_samples, p->framestride[0]);
+    printf("static const uint32_t kHEVCTestBytes[4] = {0, %llu, %llu, %llu};  // aux, input, surface\n",
+           (unsigned long long)f.bytes[1], (unsigned long long)f.bytes[2], (unsigned long long)f.bytes[3]);
+    printf("static const TegraNVDECEntry kHEVCTestEntries[%u] = {\n", s->entry_count);
+    for (uint32_t i = 0; i < s->entry_count; i++)
+        printf("    {%#06x, %u, %#x, %#x},\n", s->entries[i].method, s->entries[i].kind, s->entries[i].value,
+               s->entries[i].offset);
+    printf("};\n");
+    dump("kHEVCTestSetup", s->setup, s->setup_bytes);
+    const uint32_t inputBytes = s->clean[0].offset + s->clean[0].length;  // status untouched; tables and bitstream
+    printf("static const uint32_t kHEVCTestInputOff = %u;\n", s->clean[0].offset);
+    dump("kHEVCTestInput", f.va[2] + s->clean[0].offset, inputBytes - s->clean[0].offset);
+    printf("static const uint32_t kHEVCTestLumaCrc = %#010x;  // FFmpeg\n", kHEVCClipKCrc[0]);
+    hevc_decoder_destroy(d);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest();
+    testSyntax();
+    testDecode();
+    if (gFailures) {
+        printf("FAIL hevc: %d failures\n", gFailures);
+        return 1;
+    }
+    printf("PASS hevc\n");
+    return 0;
+}

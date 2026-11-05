@@ -238,7 +238,11 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         const char *why = nullptr;
         const TegraNVDECSubmit *submit = static_cast<const TegraNVDECSubmit *>(in);
         int err = -22;
-        if (submit->codec < 32 && (tegra_nvdec_codecs() & (1u << submit->codec)))
+        const uint32_t codecs = tegra_nvdec_codecs();
+        const bool tenBit = submit->codec == TEGRA_NVDEC_CODEC_HEVC &&
+                            submit->setup_bytes >= sizeof(nvdec_hevc_pic_s) &&
+                            reinterpret_cast<const nvdec_hevc_pic_s *>(submit->setup)->bit_depth_luma > 8;
+        if (submit->codec < 32 && (codecs & (1u << submit->codec)) && (!tenBit || (codecs & TEGRA_NVDEC_HEVC_MAIN10)))
             err = tegra_nvdec_run(submit, resolve, this, &fence, &why);
         else
             why = "codec not proven at boot";
@@ -264,9 +268,12 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         reply->claimed = claimed;
         break;
     }
-    case TegraNVDECMethodReportSelfTest:
-        ret = ioreturn(tegra_nvdec_check_report(this, static_cast<const TegraNVDECReport *>(in)->vp9_ok != 0));
+    case TegraNVDECMethodReportSelfTest: {
+        const TegraNVDECReport *report = static_cast<const TegraNVDECReport *>(in);
+        ret =
+            ioreturn(tegra_nvdec_check_report(this, report->vp9_ok != 0, report->hevc_ok != 0, report->hevc10_ok != 0));
         break;
+    }
     default: ret = kIOReturnUnsupported; break;
     }
     IOLockUnlock(lock_);

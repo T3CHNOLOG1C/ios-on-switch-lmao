@@ -488,6 +488,15 @@ void bringUpStages(uint32_t stage)
         giveUp(true);
         return;
     }
+    // HEVC likewise; its 8-bit picture also opens Main 10 (8-bit output), which the userland clip check proves or
+    // turns off on its own.
+    const int hevc = tegra_nvdec_self_test_hevc();
+    if (!hevc) gCodecs |= (1u << TEGRA_NVDEC_CODEC_HEVC) | TEGRA_NVDEC_HEVC_MAIN10;
+    if (hevc == -60 || hevc == TEGRA_HOST1X_ELOST || gWedged) {
+        gUp = false;
+        giveUp(true);
+        return;
+    }
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     if (stage < 3) return;
     // Proven: from here a lost interrupt or a job past its bound panics (TegraNVDEC.h).
@@ -626,19 +635,33 @@ extern "C" uint32_t tegra_nvdec_check_claim(const void *owner, bool *claimed)
     return state;
 }
 
-extern "C" int tegra_nvdec_check_report(const void *owner, bool vp9Ok)
+extern "C" int tegra_nvdec_check_report(const void *owner, bool vp9Ok, bool hevcOk, bool hevc10Ok)
 {
+    static const struct {
+        uint32_t bit;
+        const char *line;
+    } kOff[3] = {
+        {1u << TEGRA_NVDEC_CODEC_VP9, "TegraNVDEC: the VP9 clip check failed in userland; VP9 is off until reboot\n"},
+        {(1u << TEGRA_NVDEC_CODEC_HEVC) | TEGRA_NVDEC_HEVC_MAIN10,
+         "TegraNVDEC: the HEVC clip check failed in userland; HEVC is off until reboot\n"},
+        {TEGRA_NVDEC_HEVC_MAIN10,
+         "TegraNVDEC: the HEVC Main 10 clip check failed in userland; Main 10 is off until reboot (Main stays on)\n"},
+    };
+    const bool ok[3] = {vp9Ok, hevcOk, hevc10Ok || !hevcOk};  // a failed Main check says all there is about Main 10
     IOLockLock(gCheckLock);
     const bool mine = gCheckState == TEGRA_NVDEC_CHECK_RUNNING && gCheckOwner == owner;
-    const bool hadVP9 = __atomic_load_n(&gCodecs, __ATOMIC_SEQ_CST) & (1u << TEGRA_NVDEC_CODEC_VP9);
+    const uint32_t had = __atomic_load_n(&gCodecs, __ATOMIC_SEQ_CST);
     if (mine) {
-        gCheckState = vp9Ok ? TEGRA_NVDEC_CHECK_PASSED : TEGRA_NVDEC_CHECK_FAILED;
+        // PASSED: every codec the check covered matched. The codec bits say which ones are on either way.
+        gCheckState = ok[0] && ok[1] && ok[2] ? TEGRA_NVDEC_CHECK_PASSED : TEGRA_NVDEC_CHECK_FAILED;
         gCheckOwner = nullptr;
-        if (!vp9Ok) __atomic_and_fetch(&gCodecs, ~(1u << TEGRA_NVDEC_CODEC_VP9), __ATOMIC_SEQ_CST);
+        for (int i = 0; i < 3; i++)
+            if (!ok[i]) __atomic_and_fetch(&gCodecs, ~kOff[i].bit, __ATOMIC_SEQ_CST);
         IOLockWakeup(gCheckLock, &gCheckState, false);
     }
     IOLockUnlock(gCheckLock);
-    if (mine && !vp9Ok && hadVP9) IOLog("TegraNVDEC: the VP9 clip check failed in userland; VP9 is off until reboot\n");
+    for (int i = 0; mine && i < 3; i++)
+        if (!ok[i] && (had & kOff[i].bit) == kOff[i].bit) IOLog("%s", kOff[i].line);
     return mine ? 0 : -22;
 }
 

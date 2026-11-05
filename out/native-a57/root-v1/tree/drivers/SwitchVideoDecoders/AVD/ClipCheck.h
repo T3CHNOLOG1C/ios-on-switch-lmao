@@ -16,10 +16,15 @@
 #include <stddef.h>
 
 typedef enum {
-    ClipCheckHardware,  // kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder
-    ClipCheckSoftware,  // kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder = false
-    ClipCheckVP9,       // test/VP9Clip.h (512x288, superframes, segmentation, 2 tile columns) on a hardware 'vp09'
-                        // decoder, against libvpx's output
+    ClipCheckHardware,      // kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder
+    ClipCheckSoftware,      // kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder = false
+    ClipCheckVP9,           // test/VP9Clip.h (512x288, superframes, segmentation, 2 tile columns) on a hardware 'vp09'
+                            // decoder, against libvpx's output
+    ClipCheckHEVC,          // test/HEVCClip.h's Main clips A (x265: B-pyramid, RASL, explicit RPS, 2 slices, scaling
+                            // lists) and V (Apple's encoder, conformance window) on a hardware 'hvc1' decoder, against
+                            // FFmpeg's output
+    ClipCheckHEVC10,        // clip T (Main 10) the same way, against FFmpeg's samples >> 2 (NVDEC's 8-bit output)
+    ClipCheckHEVCSoftware,  // clips A and V with hardware disabled: on a Mac, Apple's decoder proves clips and CRCs
 } ClipCheckMode;
 
 // One result line ("hardware: hardware decoder, 30/30 frames match x264, ... OK"); true when every frame matched and,

@@ -4,6 +4,7 @@
 // High-profile IDR (CABAC, 8x8 transform); its picture setup, bitstream and slice offsets were produced on the host by
 // the plug-in's own H.264 code (SwitchVideoDecoders/test/h264_host --selftest), and the expected luma CRC is x264's
 // reconstruction. Passing proves firmware, method stream, setup layout and the block-linear surface layout together.
+// VP9 (libvpx's key frame) and HEVC (x265's IDR) each have a picture of their own below.
 #include <IOKit/IOLib.h>
 #include <kern/clock.h>
 #include <string.h>
@@ -12,6 +13,7 @@
 #include "nvidia/clc5b0.h"
 #include "selftest/H264Picture64.inc"
 #include "selftest/VP9Picture160.inc"
+#include "selftest/HEVCPicture176.inc"
 
 namespace {
 enum { kInput = 1, kAux = 2, kSurface = 3 };
@@ -194,7 +196,84 @@ int runVP9(char *line, size_t size)
              kVP9TestLumaCrc, ok ? "" : "; VP9 stays off, H.264 is unaffected");
     return ok ? 0 : -5;
 }
+// N3 HEVC: x265's 176x144 IDR (CTU 16) through the plug-in's own method stream and buffer layout (HEVCPicture176.inc,
+// made by SwitchVideoDecoders/test/hevc_host --selftest), luma CRC against FFmpeg's decode. Buffers 1 aux (colocated
+// motion, filter), 2 input (status, tile sizes, scaling lists, bitstream), 3 surface; every picture slot names it.
+TegraNVDECBlock gHEVCBlocks[4];
+
+bool resolveHEVC(void *, uint32_t handle, TegraNVDECBlock *block)
+{
+    if (handle < 1 || handle > 3) return false;
+    *block = gHEVCBlocks[handle];
+    return true;
+}
+
+int runHEVC(char *line, size_t size)
+{
+    for (int i = 1; i <= 3; i++) {
+        if (tegra_nvdec_arena_alloc(kHEVCTestBytes[i], &gHEVCBlocks[i])) {
+            snprintf(line, size, "N3 HEVC FAIL no arena memory");
+            return -12;
+        }
+    }
+    memcpy(gHEVCBlocks[2].va + kHEVCTestInputOff, kHEVCTestInput, sizeof(kHEVCTestInput));
+    TegraNVDECSubmit *s = IONewZero(TegraNVDECSubmit, 1);
+    if (!s) return -12;
+    s->codec = TEGRA_NVDEC_CODEC_HEVC;
+    s->setup_bytes = sizeof(kHEVCTestSetup);
+    memcpy(s->setup, kHEVCTestSetup, sizeof(kHEVCTestSetup));
+    s->entry_count = sizeof(kHEVCTestEntries) / sizeof(kHEVCTestEntries[0]);
+    memcpy(s->entries, kHEVCTestEntries, sizeof(kHEVCTestEntries));
+    s->clean[0] = {2, kHEVCTestInputOff, (uint32_t)sizeof(kHEVCTestInput), 0};
+    s->clean_count = 1;
+
+    const uint64_t began = nowUs();
+    uint32_t fence = 0;
+    const char *why = nullptr;
+    int ret = tegra_nvdec_run(s, resolveHEVC, nullptr, &fence, &why);
+    IODelete(s, TegraNVDECSubmit, 1);
+    if (ret) {
+        snprintf(line, size, "N3 HEVC FAIL submit refused (%d, %s)", ret, why ? why : "engine");
+        return ret;
+    }
+    if ((ret = tegra_nvdec_wait(fence))) {
+        snprintf(line, size, "N3 HEVC FAIL decode did not finish (%s; see the job line)",
+                 ret == -60  ? "past its bound"
+                 : ret == -5 ? "done, but its interrupt never came"
+                             : "engine refused");
+        return ret;
+    }
+    const uint64_t us = nowUs() - began;
+    const uint32_t rows = (kHEVCTestHeight + 63) & ~63u;
+    tegra_nvdec_cache_flush(gHEVCBlocks[2].va, sizeof(nvdec_status_s));
+    tegra_nvdec_cache_flush(gHEVCBlocks[3].va, kHEVCTestPitch * rows * 3 / 2);
+    const nvdec_status_s *status = (const nvdec_status_s *)gHEVCBlocks[2].va;
+    uint32_t crc = 0xffffffffu;
+    for (uint32_t y = 0; y < kHEVCTestHeight; y++)
+        for (uint32_t x = 0; x < kHEVCTestWidth; x++)
+            crc = crc32(crc, gHEVCBlocks[3].va[blockLinear(x, y, kHEVCTestPitch)]);
+    crc = ~crc;
+    const bool ok = crc == kHEVCTestLumaCrc && !status->error_status;
+    snprintf(line, size,
+             "N3 HEVC %s %ux%u IDR in %llu us: error_status %#x, slice header error %#x, %u cycles; luma CRC %#010x "
+             "(expected %#010x, FFmpeg)%s",
+             ok ? "ok" : "FAIL", kHEVCTestWidth, kHEVCTestHeight, us, status->error_status,
+             status->slice_header_error_code, status->cycle_count, crc, kHEVCTestLumaCrc,
+             ok ? "" : "; HEVC stays off, H.264 and VP9 are unaffected");
+    return ok ? 0 : -5;
+}
 }  // namespace
+
+extern "C" int tegra_nvdec_self_test_hevc(void)
+{
+    char line[288];
+    line[0] = 0;
+    const int ret = runHEVC(line, sizeof(line));
+    IOLog("TegraNVDEC: %s\n", line);
+    if (ret != -60)
+        for (int i = 1; i <= 3; i++) tegra_nvdec_arena_free(&gHEVCBlocks[i]);
+    return ret;
+}
 
 extern "C" int tegra_nvdec_self_test_vp9(void)
 {
