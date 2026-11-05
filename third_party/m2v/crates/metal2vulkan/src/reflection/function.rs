@@ -224,9 +224,12 @@ pub(crate) fn metallib_properties(
                 2 => PatchType::Quad,
                 _ => return Err(unmeasured()),
             };
+            // A count of 0 is `[[patch(quad, 0)]]`: a patch with no control points, whose function
+            // reads its own data by `patch_id` (GFXBench's Car Chase draws its Bezier car body so).
+            // Metal answers it as stated: the patch type and 0.
             let count = match byte >> 2 {
                 63 => None,
-                n @ 1..=32 => Some(u32::from(n)),
+                n @ 0..=32 => Some(u32::from(n)),
                 _ => return Err(unmeasured()),
             };
             Some((kind, count))
