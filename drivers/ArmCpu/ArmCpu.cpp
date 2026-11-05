@@ -30,16 +30,15 @@ extern "C" kern_return_t processor_exit(processor_t);
 extern "C" void ml_arm_sleep(void);
 extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
-// Owned here, used by the kernel once its sleep diff is in (scratchpad sc7/xnu-sleep.diff): arm64_prepare_for_sleep
-// calls ioswitch_cpu_sleep_handler when set, and cpu_machine_idle_init sets the flag at boot, so a kernel without the
-// diff (whose arm64_prepare_for_sleep only parks in WFI) is recognised and sleep stays off.
+// Owned here, read by the kernel (osfmk/arm64/cpu.c): arm64_prepare_for_sleep calls ioswitch_cpu_sleep_handler when
+// set, and cpu_machine_idle_init sets the flag at boot, so a kernel without the hook (whose arm64_prepare_for_sleep
+// only parks in WFI) is recognised and sleep stays off.
 extern "C" {
 void (*ioswitch_cpu_sleep_handler)(boolean_t) = nullptr;
 bool ioswitch_cpu_sleep_hook_present = false;
 }
 
 extern "C" {
-// Native GICv2 SMP is explicit and independently qualified at each startup.
 volatile uint32_t armcpu_gic_version = 0;
 volatile uint32_t armcpu_registered = 0;
 volatile uint32_t armcpu_gic_ready = 0;
@@ -1096,7 +1095,7 @@ void ArmCpu::dispatch(void *target, void *, void *, int)
     static_cast<ArmCpu *>(target)->interrupt();
 }
 
-// r16-idle: every interrupt on every core comes through here, so only what the system needs runs by default: the
+// Every interrupt on every core comes through here, so only what the system needs runs by default: the
 // phase/id breadcrumbs and the global timer/IPI sums (64-bit atomics on one cache line all four cores write) are kept
 // for armcpu-diagnostics=1, and each core's own counters are plain stores (only that core writes its slot, with
 // interrupts masked), not exclusive-monitor read-modify-writes.
@@ -1279,7 +1278,7 @@ extern "C" void armcpu_gic_diag(uint64_t aff, uint32_t *out)
 // kernel never sees it. out[8], out[9]: CNTVCT ticks of one ICC_SGI1R_EL1 write and of one ICC_PMR_EL1 read (a trapped write costs far more). out: 0 MPIDR, 1 INTIDs pending as Group 1, 2 INTIDs pending as Group 0, 3 ICC_PMR, 4 ICC_IGRPEN1, 5 ICC_SRE, 6 ICC_CTLR, 7 ICC_RPR.
 extern "C" void armcpu_sgi_selfprobe(uint64_t *out)
 {
-    // This existing diagnostic specifically probes the v3 system-register path.
+    // This diagnostic probes the GICv3 system-register path only.
     if (armcpu_gic_version == 2) {
         for (unsigned i = 0; i < 10; i++) {
             out[i] = ~0ULL;
@@ -1651,8 +1650,8 @@ kern_return_t ArmCpu::startCPU(vm_offset_t, vm_offset_t)
         }
         cleanToMemory(record, sizeof(*record));
     } else {
-        // Preserve the pre-existing generic GICv3 path. Native GICv2 publishes
-        // actual Mach segments and kernel-owned CPU/table closure above.
+        // The generic GICv3 path. Native GICv2 publishes the actual Mach segments and kernel-owned CPU/table closure
+        // above.
         cleanToMemory(LowResetVectorBase, 0x10000);
         cleanToMemory(ResetHandlerData, 0x1000);
         cleanToMemory(const_boot_args, 0x1000);
