@@ -49,7 +49,7 @@ void bringupDone()
 // IOGPUFamily (already loaded by the stub; idempotent) so the IOAcceleratorES metaclass exists, run our class's static
 // initializer inside preModLoad/postModLoad, then publish with the keys the original discovery reads.
 // NativeSandboxGrantProcess names the processes (comma-separated) whose open our XNU grants in place of the sandbox verdict:
-// .cache/xnu-work iokit/Kernel/IOUserClient.cpp native_sandbox_grant() takes a comma-separated list of process names (as
+// kernel/xnu-10063.141.1/iokit/Kernel/IOUserClient.cpp native_sandbox_grant() takes a comma-separated list of process names (as
 // sheng's later patch zzw-native-adreno-sandbox-grant.patch does), matching each on at most its first 16 characters.
 IOReturn publish()
 {
