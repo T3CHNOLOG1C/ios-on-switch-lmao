@@ -33,6 +33,7 @@
 
 #include <kern/cpu_data.h>
 #include <kern/kalloc.h>
+#include <kern/ledger.h>
 #include <kern/processor.h>
 #include <kern/recount.h>
 #include <kern/startup.h>
@@ -498,6 +499,48 @@ ioswitch_kprof_user_trap(arm_saved_state_t *state, uint32_t esr)
 	    pc & KPROF_U_ADDR,
 	    (lr & ~KPROF_U_ADDR) == KPROF_U_DSC ? "dsc 0x" : (lr & ~KPROF_U_ADDR) == KPROF_U_MAIN ? "main+0x" : "0x",
 	    lr & KPROF_U_ADDR);
+}
+
+/*
+ * kern_memorystatus.c memorystatus_log_exception: what a process's phys_footprint is made of when it crosses a memory
+ * limit (KiB), so a jetsam loop names its memory: anonymous (internal + compressed), IOKit mappings (GPU buffers and
+ * IOSurfaces mapped into it), alternate accounting, page tables, purgeable, and the tagged/network/media/graphics
+ * ledgers that are charged to the footprint.
+ */
+void ioswitch_footprint_breakdown(task_t task, char *buf, size_t size);
+void
+ioswitch_footprint_breakdown(task_t task, char *buf, size_t size)
+{
+	const struct {
+		const char *name;
+		int         entry;
+	} parts[] = {
+		{"footprint", task_ledgers.phys_footprint}, {"internal", task_ledgers.internal},
+		{"compressed", task_ledgers.internal_compressed}, {"iokit_mapped", task_ledgers.iokit_mapped},
+		{"alternate", task_ledgers.alternate_accounting}, {"alternate_compressed", task_ledgers.alternate_accounting_compressed},
+		{"page_table", task_ledgers.page_table}, {"purgeable_nonvolatile", task_ledgers.purgeable_nonvolatile},
+		{"tagged", task_ledgers.tagged_footprint}, {"network", task_ledgers.network_nonvolatile},
+		{"media", task_ledgers.media_footprint}, {"graphics", task_ledgers.graphics_footprint},
+		{"graphics_compressed", task_ledgers.graphics_footprint_compressed},
+	};
+	size_t len = 0;
+
+	buf[0] = '\0';
+	if (task == TASK_NULL || task->ledger == NULL) {
+		return;
+	}
+	for (unsigned int i = 0; i < sizeof(parts) / sizeof(parts[0]) && len < size; i++) {
+		ledger_amount_t balance = 0;
+		int             n;
+
+		if (parts[i].entry < 0 || ledger_get_balance(task->ledger, parts[i].entry, &balance) != KERN_SUCCESS) {
+			continue;
+		}
+		n = snprintf(buf + len, size - len, "%s%s %lld", len ? ", " : "", parts[i].name, (long long)(balance >> 10));
+		if (n > 0) {
+			len += (size_t)n;
+		}
+	}
 }
 
 /* --- summary (thread call) ---------------------------------------------------------------------------------------- */
