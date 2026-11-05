@@ -210,6 +210,7 @@ osfmk/kern/thread_policy.c	standard
 osfmk/kern/timer.c			standard
 osfmk/kern/timer_call.c		standard
 osfmk/kern/ioswitch_kprof.c	standard
+osfmk/kern/ioswitch_boot_band.c	standard
 osfmk/kern/turnstile.c  	standard
 osfmk/kern/ux_handler.c		standard
 osfmk/kern/waitq.c			standard

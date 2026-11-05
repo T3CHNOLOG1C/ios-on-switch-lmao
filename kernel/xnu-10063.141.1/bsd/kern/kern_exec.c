@@ -409,6 +409,7 @@ static errno_t exec_handle_port_actions(struct image_params *imgp,
     struct exec_port_actions *port_actions);
 static errno_t exec_handle_exception_port_actions(const struct image_params *imgp,
     const struct exec_port_actions *port_actions);
+extern void ioswitch_boot_band_spawned(task_t task, const char *path);
 static errno_t exec_handle_spawnattr_policy(proc_t p, thread_t thread, int psa_apptype, uint64_t psa_qos_clamp,
     task_role_t psa_darwin_role, struct exec_port_actions *port_actions);
 static void exec_port_actions_destroy(struct exec_port_actions *port_actions);
@@ -4648,6 +4649,11 @@ bad:
 
 		error = exec_handle_spawnattr_policy(p, imgp->ip_new_thread, psa->psa_apptype, psa->psa_qos_clamp,
 		    psa->psa_darwin_role, &port_actions);
+	}
+
+	/* IOSwitch: background daemons and widget extensions spawned during boot yield the CPU (ioswitch_boot_band.c). */
+	if (error == 0 && imgp->ip_new_thread != THREAD_NULL && imgp->ip_strings != NULL) {
+		ioswitch_boot_band_spawned(get_threadtask(imgp->ip_new_thread), imgp->ip_strings + strlen(EXECUTABLE_KEY));
 	}
 
 	/* Transfer the turnstile watchport boost to new task if in exec */

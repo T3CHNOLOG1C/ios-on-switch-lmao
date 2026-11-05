@@ -1309,6 +1309,8 @@ static SYSCTL_PROC(_kern, OID_AUTO, consoleoptions,
     NULL, 0, sysctl_consoleoptions, "I", "");
 
 
+extern "C" void ioswitch_boot_band_lift(const char *why);
+
 static int
 sysctl_progressoptions SYSCTL_HANDLER_ARGS
 {
@@ -8011,6 +8013,8 @@ IOPMrootDomain::dispatchPowerEvent(
 		DLOG("power event %u args %p 0x%llx\n", event, OBFUSCATE(arg0), arg1);
 		if (systemBooting) {
 			systemBooting = false;
+			/* IOSwitch: SpringBoard finished startup (backboardd sets this): the boot band's daemons get their CPU back. */
+			ioswitch_boot_band_lift("System Boot Complete");
 
 			if (PE_get_default("sleep-disabled", &gSleepDisabledFlag, sizeof(gSleepDisabledFlag))) {
 				DLOG("Setting gSleepDisabledFlag to %u from device tree\n", gSleepDisabledFlag);
