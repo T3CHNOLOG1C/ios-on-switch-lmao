@@ -173,10 +173,18 @@ static_assert(__arch_memset, "architecture must provide memset");
 
 #endif /* KERNEL */
 
+#if defined(__arm64__) && (!defined(__arch_bcmp) || !defined(__arch_memcmp))
+#include <arm64/ioswitch_memcmp.h>      /* IOSwitch (r17-launch): a word at a time, same results */
+#endif
+
 #ifndef __arch_bcmp
 int
 bcmp_impl(const void *pa, const void *pb, size_t len)
 {
+#if defined(__arm64__)
+	/* The byte loop below leaves len at the bytes from the first difference on (0 if none). */
+	len -= ioswitch_cmp_first_difference((const unsigned char *)pa, (const unsigned char *)pb, len);
+#else
 	const char *a = (const char *)pa;
 	const char *b = (const char *)pb;
 
@@ -189,6 +197,7 @@ bcmp_impl(const void *pa, const void *pb, size_t len)
 			break;
 		}
 	} while (--len);
+#endif
 
 	/*
 	 * Check for the overflow case but continue to handle the non-overflow
@@ -208,6 +217,12 @@ MARK_AS_HIBERNATE_TEXT
 int
 memcmp_impl(const void *s1, const void *s2, size_t n)
 {
+#if defined(__arm64__)
+	const unsigned char *p1 = s1, *p2 = s2;
+	const size_t i = ioswitch_cmp_first_difference(p1, p2, n);
+
+	return i < n ? p1[i] - p2[i] : 0;
+#else
 	if (n != 0) {
 		const unsigned char *p1 = s1, *p2 = s2;
 
@@ -218,6 +233,7 @@ memcmp_impl(const void *s1, const void *s2, size_t n)
 		} while (--n != 0);
 	}
 	return 0;
+#endif
 }
 #endif /* __arch_memcmp */
 
