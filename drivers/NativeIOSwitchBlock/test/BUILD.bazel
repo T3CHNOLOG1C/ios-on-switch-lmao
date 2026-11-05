@@ -92,6 +92,16 @@ host_test(
     copts = ["-O2"],
 )
 
+# The direct read map's block cache against a model (random traffic with failing reads and retirements).
+host_test(
+    name = "cryptex_cache_test",
+    srcs = [
+        "cryptex_cache_test.cpp",
+        "//drivers/NativeIOSwitchBlock:IOSwitchCryptexCache.h",
+    ],
+    copts = ["-O1"],
+)
+
 # --- Source guards: what the drivers (not built for the host) do with the engines above --------------------------------
 # (At -O1: std::regex over a 5000-line source is slow at -O0 with ASan.)
 cc_library(
