@@ -35,12 +35,12 @@ static unsigned gSensorNotes = 0;
 extern "C" void switch_sensors_note(void)
 {
     ++gSensorNotes;
-}  // r15-thermal's SwitchSensors (SwitchPower.h)
+}  // SwitchSensors (SwitchPower.h)
 static std::vector<unsigned> gWakeEvents;
 extern "C" void switch_wake_event(unsigned source)
 {
     gWakeEvents.push_back(source);
-}  // r15-sleep's SwitchWake.h
+}  // SwitchWake.h
 
 // Every check is a GoogleTest failure at its call site; the count lets a failed scenario dump the logs it ran on.
 static unsigned gFailures = 0;
@@ -70,7 +70,6 @@ static size_t logCount(const std::string &needle)
     return n;
 }
 
-// --- Chip models ------------------------------------------------------------------------------------------------------
 struct Gauge {
     std::map<uint8_t, uint16_t> reg;
     bool line = true, edge = false;  // ALRT (high = released), a falling edge not yet delivered
@@ -295,7 +294,7 @@ struct PdChip {
                                    !(pendingRdo & charge::kRdoMismatch);
                 check(valid, "RDO " + hex(pendingRdo) + " valid for the source");
                 if (rdoReply == Silent) break;
-                if (rdoReply == AbortOnce) {  // r8a's MacBook port: the first request at attach is aborted
+                if (rdoReply == AbortOnce) {  // a MacBook's port: the first request at attach is aborted
                     rdoReply = Accept;
                     status1 = (uint16_t)((status1 & ~0x70) | 2u << 4);
                     alert |= 0x4;
@@ -396,7 +395,6 @@ extern "C" int tegra_gpio_output(unsigned gpio, int value)
     return 0;
 }
 
-// --- Harness: interrupts and time -------------------------------------------------------------------------------------
 static IOInterruptEventSource *sourceFor(unsigned gpio)
 {
     for (auto *s : IOInterruptEventSource::all)
@@ -470,7 +468,6 @@ static unsigned iinlim()
     return charge::bq::decodeInputLimit(gCharger.reg[0]);
 }
 
-// --- Scenarios --------------------------------------------------------------------------------------------------------
 static void nintendoBoot()
 {
     bootWithNintendoCharger();
@@ -776,7 +773,7 @@ static void badTemp()
     check(gCharger.writes == 0 && iinlim() == 500, "read only afterwards");
 }
 
-// --- iPadOS's requests and what it reads back (SwitchChargePolicy.h [IOS-*]) ---------------------------------------
+// iPadOS's requests and what it reads back (SwitchChargePolicy.h [IOS-*]).
 static IOReturn setProperty(const char *key, bool value)
 {
     OSDictionary dict;
@@ -846,7 +843,7 @@ static void iosRequests()
           "ChargerData");
     check(ps->adapter.numbers["PMUConfiguration"] == 1200 && ps->adapter.numbers["IsWireless"] == 0,
           "AdapterDetails for thermalmonitord");
-    // While we source VBUS (r15-usbhost): ChargeInhibit and DisableInflow never take REG01 or the input from the boost.
+    // While we source VBUS: ChargeInhibit and DisableInflow never take REG01 or the input from the boost.
     gCharger.unplug();
     gPd.unplug();
     advance(300);
@@ -980,7 +977,6 @@ static void otgLeftOn()
     check(logHas("charger was left with CHG_CONFIG 2 (REG01 0x21), now charge (REG01 0x11)"), "OTG left on: charge");
 }
 
-// --- Policy ----------------------------------------------------------------------------------------------------------
 static void policy()
 {
     using namespace charge;
@@ -1092,7 +1088,7 @@ static void policy()
             check(t >= lo * 100 && t <= hi * 100, "window holds " + std::to_string(t) + ": " + hex(w));
         }
     }
-    // Combined with a +-1 C window around the reading (r15-thermal's switch_max17050_talrt shape: nearest degree +-1).
+    // Combined with a +-1 C window around the reading (switch_max17050_talrt's shape: nearest degree +-1).
     for (int t = -2000; t <= 8000; t += 7) {
         const int whole = t >= 0 ? (t + 50) / 100 : -((-t + 50) / 100);
         const uint16_t around = (uint16_t)((uint8_t)(int8_t)(whole + 1) << 8 | (uint8_t)(int8_t)(whole - 1));
@@ -1111,7 +1107,7 @@ static void policy()
     check(chargerSetting(Zone::Cool).reg02 == 0x10 && chargerSetting(Zone::Hot).reg02 == 0x00, "zone ICHG");
 }
 
-// --- One process per scenario (the drivers keep globals) -------------------------------------------------------------
+// One process per scenario: the drivers keep globals.
 static void run(void (*scenario)())
 {
     ioswitch::test::ExpectPassesInFreshProcess([scenario] {

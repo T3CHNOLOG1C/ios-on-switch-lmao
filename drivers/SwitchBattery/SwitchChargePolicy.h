@@ -45,8 +45,8 @@
 // Horizon's Aula sleep-only rule (3072 mA / 4000 mV below 23 % in SleepCharge/ShutdownChargeMain) is not used.
 //
 // What iPadOS 21H461 asks of the battery service (the IOPMPowerSource SwitchBattery publishes), and what it reads
-// back; [V] = read in the 21H461 binaries (out/agent-scratch/r15-charging/ref/ios: powerd decompiled with Ghidra,
-// PowerUI/PowerLog/SpringBoard disassembled from the shared cache, thermalmonitord from r15-thermal's decompile):
+// back; [V] = read in the 21H461 binaries (powerd and thermalmonitord decompiled with Ghidra, PowerUI/PowerLog/
+// SpringBoard disassembled from the shared cache):
 //   [IOS-PD]   powerd FUN_100044f88: the kIOPMAssertionTypeInhibitCharging ("ChargeInhibit") assertion sets IsCharging
 //              = false on every IOPMPowerSource while held (true when released); kIOPMAssertionTypeDisableInflow
 //              ("DisableInflow") sets ExternalConnected = false (true when released). [V]
@@ -61,11 +61,11 @@
 //              NotChargingReason & 0x11e is "TLC Engaged" (temperature-limited charging, BatteryUI's "Charging On Hold:
 //              iPad Temperature"); PowerLog -[PLBatteryAgent checkForPenaltyBox:]: (NotChargingReason & 0x180) ==
 //              0x100 is the penalty box (off on J120: DT charger penalty-box-enable 0). [V]
-//   [IOS-CLTM] thermalmonitord PowerSourceCC (r15-thermal's tmd.ghidra.c 52357): while IsCharging is true, writes
-//              AppleChargeRateLimitIndex (a number, from the plist's ChargeLimitTable, the default one on J120: its
-//              powerSourceComponentControl is empty) to the IOPMPowerSource with BatteryInstalled; reads AdapterDetails
-//              Watts, FamilyCode, Current, PMUConfiguration. [V] The index's meaning is [I]: J120's DT charger
-//              charge-limits are 7533/5273/3766/2260 (100/70/50/30 % of the first), so index i takes entry min(i, 3).
+//   [IOS-CLTM] thermalmonitord PowerSourceCC: while IsCharging is true, writes AppleChargeRateLimitIndex (a number,
+//              from the plist's ChargeLimitTable, the default one on J120: its powerSourceComponentControl is empty) to
+//              the IOPMPowerSource with BatteryInstalled; reads AdapterDetails Watts, FamilyCode, Current,
+//              PMUConfiguration. [V] The index's meaning is [I]: J120's DT charger charge-limits are
+//              7533/5273/3766/2260 (100/70/50/30 % of the first), so index i takes entry min(i, 3).
 //   [IOS-SB]   SpringBoard -[SBUIController updateBatteryState:] logs "AC status changed (isOnAC ..., isScreenOn ...)"
 //              and calls -[SBLockScreenManager unlockUIFromSource:withOptions:]: an attach with the screen off lights it
 //              with the charging UI, from the power-source change powerd re-reads on updateStatus(). [V]
@@ -76,7 +76,6 @@
 
 namespace charge {
 
-// --- Limits ----------------------------------------------------------------------------------------------------------
 constexpr unsigned kChargeCurrentMaxMA = 2048;   // [AMS-PARAM] Medium, [DTB] fast-charge-current-limit
 constexpr unsigned kChargeVoltageMaxMV = 4208;   // [AMS-PARAM] default_charge_voltage_limit, [DTB] charge-voltage-limit
 constexpr unsigned kCoolChargeCurrentMA = 768;   // [AMS-PARAM] Low, [DTB] charge-current-limit[1]
@@ -98,7 +97,7 @@ constexpr int kPlausibleMinCentiC = -2000, kPlausibleMaxCentiC = 8000;
 // BQ24193 input current limit steps (REG00 IINLIM, [TI] Table 7; [AMS-INIT] DecodeInputCurrentLimit).
 constexpr unsigned kInputSteps[8] = {100, 150, 500, 900, 1200, 1500, 2000, 3000};
 
-// --- BQ24193 registers ([TI] 8.5.1) -----------------------------------------------------------------------------------
+// BQ24193 registers ([TI] 8.5.1).
 namespace bq {
 enum : uint8_t {
     InputSource = 0x00,
@@ -214,7 +213,6 @@ constexpr uint8_t kReg06Mask = bq::kBatCompMask | bq::kVclampMask | bq::kTregMas
 constexpr uint8_t kReg00Vindpm = bq::encodeInputVoltage(kInputVoltageLimitMV);
 constexpr uint8_t kReg01SysMin = bq::encodeSystemMinimum(kSystemMinimumMV);
 
-// --- Battery temperature zones -------------------------------------------------------------------------------------
 enum class Zone : uint8_t { Cold, Cool, Normal, Hot };
 
 inline constexpr const char *zoneName(Zone z)
@@ -266,7 +264,6 @@ inline constexpr ChargerSetting chargerSetting(Zone z)
                           bq::encodeChargeVoltage(zoneChargeVoltage(z)), kReg05Value, kReg06Value};
 }
 
-// --- What iPadOS asks for, and the one decision ([IOS-*] above) ----------------------------------------------------
 struct Requests {
     bool osInhibit;              // [IOS-PD] ChargeInhibit assertion held: IsCharging = false written
     bool predictiveInhibit;      // [IOS-PUI] PredictiveChargingInhibit = true written (OBC/CEC hold)
@@ -358,9 +355,8 @@ inline constexpr uint16_t temperatureWindow(Zone z, int centiC)
 }
 
 // Two TALRT_Th windows at once (the narrower edges of each): for a gauge alert that serves another reader too, e.g. a
-// window of about a degree around the reading for thermalmonitord's battery sensors (r15-thermal's
-// switch_max17050_talrt). Both windows hold the current reading, so their intersection does; if they do not overlap,
-// the zone window `zone` is kept.
+// window of about a degree around the reading for thermalmonitord's battery sensors (switch_max17050_talrt). Both
+// windows hold the current reading, so their intersection does; if they do not overlap, the zone window `zone` is kept.
 inline constexpr uint16_t intersectWindows(uint16_t zone, uint16_t other)
 {
     const int zoneHi = (int8_t)(zone >> 8), zoneLo = (int8_t)(zone & 0xff);
@@ -370,7 +366,7 @@ inline constexpr uint16_t intersectWindows(uint16_t zone, uint16_t other)
     return (uint16_t)((uint8_t)(int8_t)hi << 8 | (uint8_t)(int8_t)lo);
 }
 
-// --- USB-PD (BM92T36 READ_PDOS_SRC / CURRENT_PDO / CURRENT_RDO / SET_RDO; USB PD R3.0 6.4.1.2.2 and 6.4.2) -----------
+// USB-PD objects (BM92T36 READ_PDOS_SRC / CURRENT_PDO / CURRENT_RDO / SET_RDO; USB PD R3.0 6.4.1.2.2 and 6.4.2).
 // PDO type (0 fixed, 1 battery, 2 variable, 3 augmented), current (10 mA) and voltage (50 mV) of a fixed PDO.
 inline constexpr unsigned pdoType(uint32_t p)
 {
@@ -401,10 +397,10 @@ constexpr uint32_t kRdoNoUsbSuspend = 1u << 24, kRdoUsbCommunications = 1u << 25
 // The input limit for a PDO: its current, capped per voltage ([DTB] rohm,pd-*-current-limit-ma, the limit), then the
 // BQ24193 step at or below. [L4T-PD] bm92t_calculate_current_limit also keeps a USB port's power for the source (4.5 W
 // above 5 V, 2.5 W at 5 V, "Subtract a USB2 or USB3 port current"): here only for the Nintendo dock's signature
-// (`dock`), whose own USB ports share its adapter. A plain source guarantees what it advertises (USB PD R3.0 7.1), and
-// r8a measured what the reserve costs on a MacBook's port (5 V 1.5 A PDO): 0.9 A taken, 0.83 A on the meter, the
-// input limit binding (DPM) and the battery barely charging. Unlike bm92txx, a PDO with less current than the reserve
-// gives 0 (its unsigned subtraction wrapped to the cap), and 0 means "no usable contract".
+// (`dock`), whose own USB ports share its adapter. A plain source guarantees what it advertises (USB PD R3.0 7.1); with
+// the reserve, a MacBook's port (5 V 1.5 A PDO) gave 0.9 A taken, 0.83 A on the meter, the input limit binding (DPM)
+// and the battery barely charging. Unlike bm92txx, a PDO with less current than the reserve gives 0 (its unsigned
+// subtraction wrapped to the cap), and 0 means "no usable contract".
 inline constexpr unsigned pdInputLimit(unsigned millivolts, unsigned milliamps, bool dock = false)
 {
     if (!millivolts) return 0;
@@ -482,7 +478,6 @@ inline constexpr bool contractMatches(const PdChoice &c, uint32_t currentPdo, ui
            pdoMillivolts(currentPdo) == c.millivolts && pdoMilliamps(currentPdo) == c.milliamps;
 }
 
-// --- Compile-time checks of the limits and encodings -------------------------------------------------------------------
 static_assert(bq::decodeChargeCurrent(bq::encodeChargeCurrent(2048)) == 2048, "ICHG 2048");
 static_assert(bq::decodeChargeCurrent(bq::encodeChargeCurrent(768)) == 768, "ICHG 768");
 static_assert(bq::decodeChargeCurrent(bq::encodeChargeCurrent(4544)) == kChargeCurrentMaxMA, "ICHG capped");

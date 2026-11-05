@@ -17,17 +17,16 @@ extern "C" {
 // The boost needs the charger's OTG pin high too (datasheet 8.3.1.5); REG08 VBUS_STAT 11 says it runs
 // (switch_battery_describe_otg). While it runs the charger's I2C watchdog is off (switchroot ti,no-otg-watchdog): its
 // expiry would reset REG01 and end the boost. With charging off by temperature, the same. SwitchBattery is the one
-// writer of REG01; off = charge, or off in a battery temperature zone that does not charge. Thread context (I2C1); 0 on success,
-// SWITCH_BATTERY_BOOST_VBUS_PRESENT when refused, -1 on an I2C error (logged).
+// writer of REG01; off = charge, or off in a battery temperature zone that does not charge. Thread context (I2C1); 0 on
+// success, SWITCH_BATTERY_BOOST_VBUS_PRESENT when refused, -1 on an I2C error (logged).
 #define SWITCH_BATTERY_BOOST_VBUS_PRESENT (-2)
 int switch_battery_set_otg_boost(bool on, bool ourVbus);
 
 // One line for the USB role report (drivers/SwitchUSB/SwitchUSB.cpp), nothing written: REG01 (CHG_CONFIG, BOOST_LIM),
 // REG05 (I2C watchdog: a write to the charger starts it; when it expires the registers reset, OTG included), REG08
 // (VBUS_STAT, CHRG_STAT, PG), REG09 twice (latched faults, then now: BOOST_FAULT, WATCHDOG_FAULT; what it clears is
-// kept for SwitchBattery's next reading) and the gauge's
-// battery current (negative: the battery is discharging, into the port too while we source). Thread context (I2C1);
-// 0, or the I2C error (the line says so).
+// kept for SwitchBattery's next reading) and the gauge's battery current (negative: the battery is discharging, into
+// the port too while we source). Thread context (I2C1); 0, or the I2C error (the line says so).
 int switch_battery_describe_otg(char *buffer, size_t size);
 // The fuel gauge's average current at its last reading, mA (positive = charging; INT32_MIN before a reading), and in
 // *external (may be NULL) whether external power was in. Any context.

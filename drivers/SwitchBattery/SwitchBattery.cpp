@@ -24,9 +24,9 @@
 // default mode: the chip's I2C watchdog expired, or it never had a host write, and every register is at its reset
 // value). Then, as Horizon (Atmosphere Bq24193Driver::InitializeSession) and switchroot (bq2419x_charger_init) do: the
 // I2C watchdog off (so nothing reverts to defaults behind us, and nothing has to be kicked), the safety timer off,
-// pre-charge/termination 128 mA with termination on, SYS_MIN 3000 mV, VINDPM 4360 mV, TREG 120 C, no IR compensation, and the charge
-// current/voltage of the battery's temperature zone. The zone comes from the MAX17050's TEMP and changes by
-// interrupt: TALRT_Th is set to the zone's window (charge::temperatureWindow), so the gauge's ALRT fires when the
+// pre-charge/termination 128 mA with termination on, SYS_MIN 3000 mV, VINDPM 4360 mV, TREG 120 C, no IR compensation,
+// and the charge current/voltage of the battery's temperature zone. The zone comes from the MAX17050's TEMP and changes
+// by interrupt: TALRT_Th is set to the zone's window (charge::temperatureWindow), so the gauge's ALRT fires when the
 // battery leaves it. The input current limit (REG00 IINLIM): a USB-PD contract SwitchPD requested and verified gives
 // it; a USB-PD source without one (the controller's own contract while the request runs, or a failed request) and a
 // contract withdrawn while the cable stays get 500 mA (Horizon boot: before anything is known about the source); a
@@ -34,7 +34,7 @@
 // and Hi-Z is cleared. A start-up battery temperature that is not plausible leaves the charger as found (one line).
 // Every charger interrupt reads REG09 twice (the chip sends no INT for new faults until it is read) and checks the
 // settings: a chip that lost them (power-on reset) is set again with one line. A setup the chip does not take is put
-// back as found with one line, and the driver then only reads (as before this change).
+// back as found with one line, and the driver then only reads.
 // REG01 has one writer, under one lock: CHG_CONFIG is OTG while this boot's boost runs (switch_battery_set_otg_boost,
 // for SwitchPD's VBUS to a sink-only partner), off in a no-charge temperature zone, charge otherwise; BOOST_LIM 1.3 A
 // with the boost (bq2419x_vbus_enable). An earlier boot that rebooted with its OTG boost on is put back at start.
@@ -296,7 +296,6 @@ IOLock *boostLock()
     return none;
 }
 
-// REG01 from the state above (boost lock held): CHG_CONFIG OTG with the boost, else charge or off by the zone;
 // The BQ24193's I2C watchdog (REG05 5:4), its one owner (boost lock held). A host write starts it (40 s from reset,
 // [TI] 8.4.1) and its expiry resets every register, so it is off whenever that would undo something of ours: always
 // while the charger is managed (writeCharger, as Horizon and switchroot run it: InitializeSession watchdog 0,
@@ -557,7 +556,7 @@ bool SwitchBattery::identify()
     if (!err && (name[0] | name[1] << 8) == 0x00ac && vendor == 0x2f) {
         uint8_t found[11] = {};
         const bool foundRead = reportAsFound(found);
-        managed = foundRead && setUpCharger(found);  // no snapshot to fall back to: read only, as before
+        managed = foundRead && setUpCharger(found);  // no snapshot to fall back to: read only
         if (!managed) (void)startMode(nullptr, nullptr);
         return true;
     }
@@ -626,7 +625,7 @@ bool SwitchBattery::setUpCharger(const uint8_t found[11])
               charge::zoneCharges(zone) ? "" : ": charging off");
         return true;
     }
-    // Back as found (REG02-REG06 and REG00's VINDPM; REG00's IINLIM was not touched); REG01 charges as today, but only
+    // Back as found (REG02-REG06 and REG00's VINDPM; REG00's IINLIM was not touched); REG01 still charges, but only
     // within the temperature zones that charge (zoneControl: the one thing kept, as it only ever stops charging).
     for (uint8_t reg = bq::ChargeCurrent; reg <= bq::IrThermal; ++reg) {
         (void)tegra_i2c_write(kBus, kCharger, reg, &found[reg], 1);
