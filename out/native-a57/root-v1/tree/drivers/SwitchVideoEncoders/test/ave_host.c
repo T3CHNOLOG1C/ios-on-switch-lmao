@@ -390,6 +390,7 @@ static void refusals(void)
         {"input buffer too small", "surface too small"},
         {"stats FIFO", "picture features"},
         {"two slices", "control counts"},
+        {"application id after another method", "application id not first"},
     };
     for (unsigned k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
         TegraNVENCSubmit s = gFirstP;
@@ -431,6 +432,15 @@ static void refusals(void)
             break;
         case 12: pc->stats_fifo_enable = 1; break;
         case 13: pc->num_forced_slices_minus1 = 1; break;
+        case 14: {
+            const TegraNVENCEntry first = s.entries[0];
+            s.entries[0] = s.entries[1];
+            s.entries[1] = first;
+            const uint64_t a = avail[0];
+            avail[0] = avail[1];
+            avail[1] = a;
+            break;
+        }
         }
         const char *why = tegra_nvenc_check(&s, avail);
         EXPECT(why && !strcmp(why, cases[k].why), "%s: checker said \"%s\", expected \"%s\"", cases[k].name,

@@ -90,8 +90,9 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
         if (e->kind == TEGRA_NVENC_ENTRY_VALUE) {
             uint32_t bit;
             switch (m) {
-            case NVC5B7_SET_APPLICATION_ID:
+            case NVC5B7_SET_APPLICATION_ID:  // first: the OS selects the app before methods are stored for it
                 if (e->value != s->codec) return "application id";
+                if (i) return "application id not first";
                 bit = 0;
                 break;
             case NVC5B7_SET_CONTROL_PARAMS:  // H.264, GPTIMER_ON (required), SLICE_STAT_ON, constant QP, nothing else

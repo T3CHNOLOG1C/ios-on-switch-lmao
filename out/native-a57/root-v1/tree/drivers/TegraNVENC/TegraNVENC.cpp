@@ -89,9 +89,12 @@ enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
     FALCON_IRQMSET = 0x1010,
     FALCON_IRQDEST = 0x101c,
     FALCON_MAILBOX0 = 0x1040,
+    FALCON_MAILBOX1 = 0x1044,
     FALCON_ITFEN = 0x1048,
     FALCON_IDLESTATE = 0x104c,
+    FALCON_OS = 0x1080,
     FALCON_DEBUGINFO = 0x1094,
+    FALCON_EXCI = 0x10d0,
     FALCON_CPUCTL = 0x1100,
     FALCON_BOOTVEC = 0x1104,
     FALCON_DMACTL = 0x110c,
@@ -99,6 +102,14 @@ enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
     FALCON_DMATRFMOFFS = 0x1114,
     FALCON_DMATRFCMD = 0x1118,
     FALCON_DMATRFFBOFFS = 0x111c,
+    FALCON_TRACEIDX = 0x1148,  // nvgpu hw_falcon_gm20b.h (falcon base + 0x148 / 0x14c / 0x168 / 0x16c / 0x200 / 0x20c)
+    FALCON_TRACEPC = 0x114c,
+    FALCON_EXTERRADDR = 0x1168,
+    FALCON_EXTERRSTAT = 0x116c,
+    FALCON_ICD_CMD = 0x1200,
+    FALCON_ICD_RDATA = 0x120c,
+    ICD_RREG = 0x8,  // icd_cmd opc rreg; register index << 8: SP 20, PC 21 (nvgpu falcon.h FALCON_REG_*)
+    THI_INT_STATUS = 0x78,
     CPUCTL_STARTCPU = 1u << 1,
     DMACTL_SCRUBBING = (1u << 1) | (1u << 2),
     DMATRFCMD_FULL = 1u << 0,
@@ -174,6 +185,43 @@ const char *falconState()
     snprintf(text, sizeof(text), "falcon CPUCTL %#x IDLESTATE %#x IRQSTAT %#x MAILBOX0 %#x DEBUGINFO %#x",
              r32(gNvenc, FALCON_CPUCTL), r32(gNvenc, FALCON_IDLESTATE), r32(gNvenc, FALCON_IRQSTAT),
              r32(gNvenc, FALCON_MAILBOX0), r32(gNvenc, FALCON_DEBUGINFO));
+    return text;
+}
+
+// A falcon that did not finish, for its one line (nvgpu gk20a_falcon_dump_stats): CPUCTL (bit 4 halted, bit 5
+// stopped, i.e. waiting for work), IDLESTATE (bit 0 the falcon, bits 1.. engine units busy), interrupts, mailboxes,
+// the exception register, the falcon's DMA queue and its external-error capture, the OS's version word, the THI
+// interrupt status, the last branch targets in the trace buffer (newest first), and with `debugger`, PC and SP read three
+// times through the in-circuit debugger (the same PC three times: a tight wait loop or a stall; different: still
+// running code). The debugger is only used on a falcon that is about to be reset or the system with it.
+const char *falconDump(bool debugger)
+{
+    static char text[512];
+    const uint32_t cpuctl = r32(gNvenc, FALCON_CPUCTL);
+    int n = snprintf(text, sizeof(text),
+                     "falcon CPUCTL %#x (%s) IDLESTATE %#x IRQSTAT %#x MAILBOX %#x %#x EXCI %#x OS %#x DEBUGINFO %#x "
+                     "DMATRFCMD %#x EXTERR %#x@%#x THI_INT %#x",
+                     cpuctl,
+                     cpuctl & 0x10   ? "halted"
+                     : cpuctl & 0x20 ? "stopped"
+                                     : "running",
+                     r32(gNvenc, FALCON_IDLESTATE), r32(gNvenc, FALCON_IRQSTAT), r32(gNvenc, FALCON_MAILBOX0),
+                     r32(gNvenc, FALCON_MAILBOX1), r32(gNvenc, FALCON_EXCI), r32(gNvenc, FALCON_OS),
+                     r32(gNvenc, FALCON_DEBUGINFO), r32(gNvenc, FALCON_DMATRFCMD), r32(gNvenc, FALCON_EXTERRSTAT),
+                     r32(gNvenc, FALCON_EXTERRADDR), r32(gNvenc, THI_INT_STATUS));
+    const uint32_t traced = (r32(gNvenc, FALCON_TRACEIDX) >> 16) & 0xff;
+    n += snprintf(text + n, sizeof(text) - (size_t)n, " trace(%u)", traced);
+    for (uint32_t i = 0; i < traced && i < 6; i++) {
+        w32(gNvenc, FALCON_TRACEIDX, i);
+        n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x", r32(gNvenc, FALCON_TRACEPC) & 0xffffff);
+    }
+    if (debugger) n += snprintf(text + n, sizeof(text) - (size_t)n, " PC/SP");
+    for (int i = 0; debugger && i < 3; i++) {
+        w32(gNvenc, FALCON_ICD_CMD, ICD_RREG | 21u << 8);
+        const uint32_t pc = r32(gNvenc, FALCON_ICD_RDATA);
+        w32(gNvenc, FALCON_ICD_CMD, ICD_RREG | 20u << 8);
+        n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x/%#x", pc, r32(gNvenc, FALCON_ICD_RDATA));
+    }
     return text;
 }
 
@@ -370,11 +418,11 @@ void timedOut(uint32_t fence)
     tegra_host1x_describe(host, sizeof(host));
     if (gPublished)
         panic("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s",
-              fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+              fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconDump(true), host);
     if (gWedged) return;
     gWedged = true;
     IOLog("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u); %s; %s\n", fence, kWaitBoundUs / 1000,
-          gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+          gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconDump(true), host);
 }
 
 // Back to reset with the clock off after a failed bring-up: nothing will use the engine this boot.
@@ -471,8 +519,12 @@ extern "C" const TegraNVENCProven *tegra_nvenc_proven(void)
     return &gProven;
 }
 
-extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uint32_t *fence,
-                               const char **why)
+namespace {
+// tegra_nvenc_run; `probeMagic` (E3's first job only) replaces the checked setup's magic in the kernel copy, so the
+// firmware's own magic check answers: the rest of the setup is the checked one, so whatever the firmware does with it
+// stays inside the checked buffers.
+int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uint32_t *fence, const char **why,
+        bool probeMagic)
 {
     *why = nullptr;
     if (!gUp) return -19;
@@ -503,8 +555,9 @@ extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve reso
         tegra_nvenc_cache_clean(b.va + r->offset, r->length);
     }
 
-    // SETCLASS; the scratch buffer in every method of kSinkMethods (the checker admits none of them from a submit);
-    // the submit's methods with the setup slot before EXECUTE (INCR METHOD0 x2: method, value, each); OP_DONE
+    // SETCLASS; the submit's methods, SET_APPLICATION_ID first (the checker requires it: the OS selects the app before
+    // anything is stored for it), then just before EXECUTE the scratch buffer in every method of kSinkMethods (the
+    // checker admits none of them from a submit) and the setup slot (INCR METHOD0 x2: method, value, each); OP_DONE
     // increment.
     constexpr uint32_t kSinks = sizeof(kSinkMethods) / sizeof(kSinkMethods[0]);
     uint32_t words[1 + 3 * (kSinks + TEGRA_NVENC_MAX_ENTRIES + 1) + 1], n = 0;
@@ -514,7 +567,6 @@ extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve reso
         words[n++] = offset / 4;
         words[n++] = value;
     };
-    for (uint32_t k = 0; k < kSinks; k++) method(kSinkMethods[k], (uint32_t)(gSink.pa >> 8));
     IOLockLock(gEngineLock);
     while (gSuspended) IOLockSleep(gEngineLock, &gSuspended, THREAD_UNINT);
     if (gWedged) {
@@ -532,11 +584,14 @@ extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve reso
     }
     const uint32_t slot = job % kSetupSlots;
     memcpy(gSetup.va + slot * kSetupSlotBytes, s->setup, s->setup_bytes);
+    if (probeMagic) ((nvenc_h264_drv_pic_setup_s *)(gSetup.va + slot * kSetupSlotBytes))->magic = 0;
     tegra_nvenc_cache_clean(gSetup.va + slot * kSetupSlotBytes, s->setup_bytes);
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
-        if (i == s->entry_count - 1)  // EXECUTE, last by the check
+        if (i == s->entry_count - 1) {  // EXECUTE, last by the check
+            for (uint32_t k = 0; k < kSinks; k++) method(kSinkMethods[k], (uint32_t)(gSink.pa >> 8));
             method(NVC5B7_SET_IN_DRV_PIC_SETUP, (uint32_t)((gSetup.pa + slot * kSetupSlotBytes) >> 8));
+        }
         method(e->method, e->kind == TEGRA_NVENC_ENTRY_RELOC ? (uint32_t)((blocks[i].pa + e->offset) >> 8) : e->value);
     }
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
@@ -547,6 +602,24 @@ extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve reso
     }
     IOLockUnlock(gEngineLock);
     return ret;
+}
+}  // namespace
+
+extern "C" int tegra_nvenc_run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uint32_t *fence,
+                               const char **why)
+{
+    return run(s, resolve, context, fence, why, false);
+}
+
+extern "C" int tegra_nvenc_run_magic_probe(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context,
+                                           uint32_t *fence, const char **why)
+{
+    return gPublished ? -1 : run(s, resolve, context, fence, why, true);
+}
+
+extern "C" const char *tegra_nvenc_falcon_dump(void)
+{
+    return falconDump(false);
 }
 
 extern "C" int tegra_nvenc_wait(uint32_t fence)

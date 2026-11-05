@@ -46,8 +46,9 @@ enum TegraNVENCMethod {
 
 enum { TEGRA_NVENC_CODEC_H264 = 1 };  // NVENC application id (clc5b7.h NVC5B7_SET_APPLICATION_ID_ID_NVENC_H264)
 
-// Input picture layouts (nvenc_h264_surface_cfg_s of input_cfg). E3 tries them in this order and keeps the first
-// whose picture NVDEC decodes back to the source; TegraNVENCInfo.input_layout names it.
+// Input picture layouts (nvenc_h264_surface_cfg_s of input_cfg). E3 tries them (16x16 tiles first, pitch linear last:
+// TegraNVENCSelfTest.cpp kSearch) and keeps the first whose picture NVDEC decodes back to the source;
+// TegraNVENCInfo.input_layout names it.
 enum {
     TEGRA_NVENC_LAYOUT_PITCH = 0,    // pitch linear: block_height 0, tiled_16x16 0
     TEGRA_NVENC_LAYOUT_BL2_LOG = 1,  // Tegra block linear, 64Bx8 GOBs two to a block; block_height 1 (log2 GOBs)

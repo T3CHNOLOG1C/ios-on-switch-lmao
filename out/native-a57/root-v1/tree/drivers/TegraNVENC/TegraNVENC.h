@@ -44,6 +44,11 @@ void tegra_nvenc_cache_flush(const void *va, size_t size);  // dc civac: the nex
 // job's fence, or a negative errno-style value.
 int tegra_nvenc_run(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context, uint32_t *fence,
                     const char **why);
+// E3 only (refused once published): the same job with the setup's magic zeroed in the kernel's copy, which the
+// firmware must refuse (nvenc_drv.h: "terminate with error code ...BadMagic").
+int tegra_nvenc_run_magic_probe(const TegraNVENCSubmit *submit, TegraNVENCResolve resolve, void *context,
+                                uint32_t *fence, const char **why);
+const char *tegra_nvenc_falcon_dump(void);  // the falcon's state without its debugger (a job's own line has PC/SP)
 // Sleeps until the fence is reached (syncpoint interrupt), bounded per queued job. Past that bound: a one-line panic
 // once published (E4); during the E3 self-test, -60 and the engine refuses work.
 int tegra_nvenc_wait(uint32_t fence);

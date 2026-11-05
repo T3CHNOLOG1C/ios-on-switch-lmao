@@ -1,27 +1,35 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// E3: NVENC encodes a 64x64 picture through the same path user clients use (tegra_nvenc_run: checker, relocations,
+// E3: NVENC encodes 64x64 pictures through the same path user clients use (tegra_nvenc_run: checker, relocations,
 // scratch methods, kernel setup slot, syncpoint fence by interrupt), and NVDEC, proven at its own N3, decodes the
-// slice NVENC wrote; the decoded picture is compared with the source. That checks firmware, method stream, the
-// nvenc_drv.h setup layout on NVENC 5.0 (never run on this firmware before) and the input surface layout together,
-// against an independent decoder, with nothing taken on trust from the encoder's own status.
+// slices NVENC wrote; the decoded pictures are compared with the source. That checks firmware, method stream, the
+// nvenc_drv.h setup layout on NVENC 5.0 and the input surface layout together, against an independent decoder, with
+// nothing taken on trust from the encoder's own status.
 //
 // The vectors (selftest/E3Vectors.inc) come from the code that runs on the device: the plug-in's H264NVENC.c builds the
 // two NVENC submits (an IDR, then a P picture predicting from NVENC's reconstruction of it; High profile, CABAC, 8x8
 // transform, QP 26) and AVD's H264NVDEC.c the two NVDEC submits from this stream's own SPS, PPS and slice headers
-// (SwitchVideoEncoders/test/e3gen). What nvenc_drv.h leaves open is found here, not assumed:
-//   * the input layout: each TEGRA_NVENC_LAYOUT_* in turn (the source written that way, block_height/tiled_16x16 set
-//     to match), until NVDEC's luma comes back within 30 dB of the source;
-//   * how chroma is addressed: TEGRA_NVENC_CHROMA_OFFSET first (the surface-config offset nvenc_drv.h's figure
-//     shows), then METHOD; both stay inside the buffers whatever the firmware reads (TegraNVENCABI.h);
-//   * whether P pictures work: NVENC's 16x16-tiled reconstruction is never read by the CPU, so the P picture is the
-//     only check of it; a P failure leaves NVENC on, intra only (TegraNVENCInfo.p_frames 0).
-// Only a NAL unit that looks like the slice (start code, nal_unit_type, nal_ref_idc, a sane size) goes to NVDEC: NVDEC
-// is published by now, and a job past its bound panics there. An NVENC job past its bound wedges NVENC (not published yet: one line,
-// the engine parked). NVENC's own status is logged for diagnosis, not trusted.
-// PSNR >= 30 dB is checked as MSE <= 65 (255^2 / 10^3); the log line gives MSE x100 and CRCs a later build can pin.
+// (SwitchVideoEncoders/test/e3gen). The steps go from what needs least of the firmware to what needs most, each with
+// its own line, so a first boot that fails says where:
+//   1. probe: the IDR's job with the setup's magic zeroed in the kernel copy. The H.264 app must read the setup, see
+//      the magic and give up (nvenc_drv.h: BadMagic), so this job ends without any encode hardware. It proves the app
+//      loads, takes methods, reads the setup through its DMA and returns; its status and mailboxes are logged.
+//   2. IPCM: the IDR with md_control.force_ipcm, so every macroblock is coded raw (no mode decision, no transform) and
+//      NVDEC's picture must equal the source. That finds what nvenc_drv.h leaves open:
+//        * the input layout: 16x16 tiles, then block linear, then pitch linear (kSearch: the source written that way,
+//          block_height/tiled_16x16 set to match), moving on only when a layout's picture comes back wrong;
+//        * how chroma is addressed: TEGRA_NVENC_CHROMA_OFFSET first (the surface-config offset nvenc_drv.h's figure
+//          shows), then METHOD; both stay inside the buffers whatever the firmware reads (TegraNVENCABI.h).
+//   3. the IDR as the plug-in sends it (mode decision, CABAC, 8x8), within 30 dB of the source;
+//   4. the P picture: NVENC's 16x16-tiled reconstruction is never read by the CPU, so this is the only check of it;
+//      a P failure leaves NVENC on, intra only (TegraNVENCInfo.p_frames 0).
+// A job that does not finish stops E3 at once (the job's own line carries the falcon's state: tegra_nvenc_falcon_dump),
+// and the engine is parked. Only a NAL unit that looks like the slice (start code, nal_unit_type, nal_ref_idc, a sane
+// size) goes to NVDEC: NVDEC is published by now, and a job past its bound panics there.
+// PSNR >= 30 dB is checked as MSE <= 65 (255^2 / 10^3); the lines give MSE x100 and CRCs a later build can pin.
 #include <IOKit/IOLib.h>
 #include <kern/clock.h>
 #include <string.h>
+#include "../TegraHost1x/TegraHost1x.h"
 #include "../TegraNVDEC/TegraNVDEC.h"
 #include "../TegraNVDEC/nvidia/clc5b0.h"
 #include "TegraNVENC.h"
@@ -132,11 +140,13 @@ struct Outcome {
     uint32_t bytes, status;  // NVENC's slice size and error_status | ucode_error_status << 2
     uint8_t head[6];         // the bitstream's first bytes
     uint32_t mse[3];         // x100, Y U V; ~0u when nothing decoded
-    uint32_t sliceCrc, lumaCrc, decodeErrors;
+    uint32_t sliceCrc, lumaCrc, decodeErrors, us;
 };
 
-// One NVENC picture (0: IDR, 1: P) in `layout` and `chroma`, then NVDEC on its slice.
-void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Outcome *o)
+enum Mode { kEncode, kIpcm, kProbe };
+
+// One NVENC picture (0: IDR, 1: P) in `layout` and `chroma`, then NVDEC on its slice (not for the probe).
+void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Outcome *o)
 {
     memset(o, 0, sizeof(*o));
     o->mse[0] = o->mse[1] = o->mse[2] = ~0u;
@@ -156,6 +166,7 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Outcome *o)
                                 : layout == TEGRA_NVENC_LAYOUT_BL2_RAW || layout == TEGRA_NVENC_LAYOUT_BL4_LOG ? 2
                                                                                                                : 0;
     p->input_cfg.tiled_16x16 = layout == TEGRA_NVENC_LAYOUT_TILED16;
+    if (mode == kIpcm) ((nvenc_h264_md_control_s *)(s->setup + p->pic_control.md_control_offset))->force_ipcm = 1;
     const bool method = chroma == TEGRA_NVENC_CHROMA_METHOD;
     if (method)
         p->input_cfg.chroma_top_frm_offset = p->outputpic_cfg.chroma_top_frm_offset =
@@ -173,9 +184,12 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Outcome *o)
     tegra_nvenc_cache_flush(gEnc[5].va, 4096);
     uint32_t fence = 0;
     const char *why = nullptr;
-    o->ret = tegra_nvenc_run(s, resolveEnc, nullptr, &fence, &why);
+    const uint64_t began = nowUs();
+    o->ret = mode == kProbe ? tegra_nvenc_run_magic_probe(s, resolveEnc, nullptr, &fence, &why)
+                            : tegra_nvenc_run(s, resolveEnc, nullptr, &fence, &why);
     IODelete(s, TegraNVENCSubmit, 1);
     if (o->ret || (o->ret = tegra_nvenc_wait(fence))) return;
+    o->us = (uint32_t)(nowUs() - began);
 
     tegra_nvenc_cache_flush(gEnc[5].va, sizeof(nvenc_pic_stat_s));
     const nvenc_pic_stat_s *stat = (const nvenc_pic_stat_s *)gEnc[5].va;
@@ -186,6 +200,7 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Outcome *o)
     const uint8_t *bits = gEnc[4].va;
     memcpy(o->head, bits, sizeof(o->head));
     o->sliceCrc = crc32(0, bits, o->bytes);
+    if (mode == kProbe) return;
     // The slice: the first NAL unit of nal_unit_type 5 (IDR) or 1 (P) with nal_ref_idc set (NVENC may put an access
     // unit delimiter, SEI or filler ahead of it), up to the next start code; with room for a slice body. Only that NAL
     // unit goes to NVDEC, as H264NVDEC only ever gives it slices.
@@ -288,6 +303,19 @@ void describe(char *line, size_t size, uint32_t layout, const Outcome &o)
                  o.head[5]);
 }
 
+// The input layouts in the order E3 tries them: the 16x16 tiles NVENC reads its references in first (the one input
+// format its hardware surely fetches; nvenc_drv.h 1.5 names only it and block linear for inputs), then block linear,
+// pitch linear last. A layout the hardware cannot fetch could stall it, and a job that does not finish ends E3 (the
+// first hardware boot, r7p9d, stalled on pitch linear, tried first then).
+const uint32_t kSearch[TEGRA_NVENC_LAYOUTS] = {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_LAYOUT_BL2_LOG,
+                                               TEGRA_NVENC_LAYOUT_BL2_RAW, TEGRA_NVENC_LAYOUT_BL4_LOG,
+                                               TEGRA_NVENC_LAYOUT_BL1,     TEGRA_NVENC_LAYOUT_PITCH};
+
+bool hung(const Outcome &o)
+{
+    return o.ret == -60 || o.ret == -19 || o.ret == TEGRA_HOST1X_ELOST;
+}
+
 int run(TegraNVENCProven *proven, char *line, size_t size)
 {
     if (!tegra_nvdec_await(kNvdecWaitMs)) {  // settled before E0; here only if NVDEC stopped decoding since
@@ -305,33 +333,68 @@ int run(TegraNVENCProven *proven, char *line, size_t size)
             return -12;
         }
     const uint64_t began = nowUs();
-    snprintf(line, size, "E3 FAIL no input layout decoded back (High CABAC 64x64 IDR, NVENC result per layout):");
-    Outcome idr = {}, p = {};
-    uint32_t layout = 0, chroma = TEGRA_NVENC_CHROMA_OFFSET;
-    for (; layout < TEGRA_NVENC_LAYOUTS; layout++) {
-        encodeAndDecode(0, layout, chroma, &idr);
-        if (idr.ret == -60 || idr.ret == -19) {  // NVENC wedged: nothing more to try
+
+    // 1. The probe.
+    Outcome probe;
+    encodeAndDecode(0, kSearch[0], TEGRA_NVENC_CHROMA_OFFSET, kProbe, &probe);
+    if (probe.ret) {
+        snprintf(line, size,
+                 "E3 FAIL probe: a setup with a wrong magic did not come back (%d; the job line has the falcon): the "
+                 "H.264 app does not get as far as reading its setup, or does not return",
+                 probe.ret);
+        return probe.ret;
+    }
+    IOLog("TegraNVENC: E3 probe ok a setup with a wrong magic came back in %u us: status %#x (error | ucode << 2), %u "
+          "bytes, %02x %02x %02x %02x; %s\n",
+          probe.us, probe.status, probe.bytes, probe.head[0], probe.head[1], probe.head[2], probe.head[3],
+          tegra_nvenc_falcon_dump());
+
+    // 2. IPCM: the input layout and chroma addressing.
+    snprintf(line, size, "E3 FAIL IPCM: no input layout decoded back exactly (64x64 IDR, NVENC result per layout):");
+    Outcome idr = {};
+    uint32_t tried = 0, layout = kSearch[0], chroma = TEGRA_NVENC_CHROMA_OFFSET;
+    for (; tried < TEGRA_NVENC_LAYOUTS; tried++) {
+        layout = kSearch[tried];
+        encodeAndDecode(0, layout, chroma, kIpcm, &idr);
+        if (hung(idr)) {  // NVENC did not finish: nothing more to try
             describe(line, size, layout, idr);
             return idr.ret;
         }
         if (good(idr.mse[0])) break;
         describe(line, size, layout, idr);
     }
-    if (layout == TEGRA_NVENC_LAYOUTS) return -5;
+    if (tried == TEGRA_NVENC_LAYOUTS) return -5;
     if (!good(idr.mse[1]) || !good(idr.mse[2])) {
         const Outcome offset = idr;
         chroma = TEGRA_NVENC_CHROMA_METHOD;
-        encodeAndDecode(0, layout, chroma, &idr);
-        if (!good(idr.mse[0]) || !good(idr.mse[1]) || !good(idr.mse[2])) {
-            snprintf(line, size, "E3 FAIL %s luma decodes but chroma does not:", kLayoutName[layout]);
+        encodeAndDecode(0, layout, chroma, kIpcm, &idr);
+        if (hung(idr) || !good(idr.mse[0]) || !good(idr.mse[1]) || !good(idr.mse[2])) {
+            snprintf(line, size,
+                     "E3 FAIL IPCM: %s luma decodes but chroma does not (offset, then method):", kLayoutName[layout]);
             describe(line, size, layout, offset);
             describe(line, size, layout, idr);
-            return idr.ret == -60 ? -60 : -5;
+            return hung(idr) ? idr.ret : -5;
         }
     }
-    encodeAndDecode(1, layout, chroma, &p);
-    if (p.ret == -60 || p.ret == -19) {
-        snprintf(line, size, "E3 FAIL the P picture wedged NVENC:");
+    IOLog("TegraNVENC: E3 IPCM ok input layout %s, chroma %s: %u bytes in %u us, MSE %u.%02u/%u.%02u/%u.%02u (luma CRC "
+          "%#010x)\n",
+          kLayoutName[layout], chroma ? "method" : "offset", idr.bytes, idr.us, idr.mse[0] / 100, idr.mse[0] % 100,
+          idr.mse[1] / 100, idr.mse[1] % 100, idr.mse[2] / 100, idr.mse[2] % 100, idr.lumaCrc);
+
+    // 3. The IDR as the plug-in sends it.
+    encodeAndDecode(0, layout, chroma, kEncode, &idr);
+    if (hung(idr) || !good(idr.mse[0]) || !good(idr.mse[1]) || !good(idr.mse[2])) {
+        snprintf(line, size, "E3 FAIL the IDR with mode decision %s (IPCM was right):",
+                 hung(idr) ? "did not finish" : "decodes wrong");
+        describe(line, size, layout, idr);
+        return hung(idr) ? idr.ret : -5;
+    }
+
+    // 4. The P picture.
+    Outcome p;
+    encodeAndDecode(1, layout, chroma, kEncode, &p);
+    if (hung(p)) {
+        snprintf(line, size, "E3 FAIL the P picture did not finish:");
         describe(line, size, layout, p);
         return p.ret;
     }
@@ -357,7 +420,7 @@ extern "C" int tegra_nvenc_self_test(TegraNVENCProven *proven)
     line[0] = 0;
     const int ret = run(proven, line, sizeof(line));
     IOLog("TegraNVENC: %s\n", line);
-    if (ret != -60) {  // a job still in an engine keeps its buffers
+    if (ret != -60 && ret != TEGRA_HOST1X_ELOST) {  // a job still in an engine keeps its buffers
         for (uint32_t h = 1; h < kEncHandles; h++) tegra_nvenc_arena_free(&gEnc[h]);
         for (uint32_t h = 0; h < kDecHandles; h++) tegra_nvenc_arena_free(&gDec[h]);
     }
