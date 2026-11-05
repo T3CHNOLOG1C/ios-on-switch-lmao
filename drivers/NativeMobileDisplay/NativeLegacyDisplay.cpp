@@ -4081,6 +4081,21 @@ public:
         OSSafeReleaseNULL(requirements);
         publishPlaneLimits();
     }
+    // r18-planes, from native_legacy_detach_ready (thread context, before backboardd): the row and plane-base alignment
+    // Core Animation sizes its surfaces by, once detaching is allowed. Multiples of what was published before (128, 64), so
+    // everything validateSwap and the scanouts take stays taken; NVK still renders 256-byte rows in place.
+    void publishDetachAlignment(uint32_t rows, uint32_t bases)
+    {
+        auto publish = [this](const char *name, const char *key, uint64_t value) {
+            OSDictionary *dict = OSDictionary::withCapacity(1);
+            OSNumber *number = OSNumber::withNumber(value, 32);
+            if (dict && number && dict->setObject(key, number)) setProperty(name, dict);
+            OSSafeReleaseNULL(number);
+            OSSafeReleaseNULL(dict);
+        };
+        publish("DisplayPipeStrideRequirements", "StrideLinearHorizontal", rows);
+        publish("DisplayPipePlaneBaseAlignment", "PlaneBaseAlignmentLinear", bases);
+    }
     // r18-planes: the limits Core Animation detaches a layer within (AppleDisplay::update_display_limits reads them once, at
     // the display's creation; NativePlanes::Limits has the values and why). With backboardd still under CA_DISABLE_DETACHED
     // (native_legacy_detach_ready false) nothing is detached and these change nothing.
@@ -4211,21 +4226,31 @@ extern "C" void native_legacy_gpu_complete(void *display, int status)
 }
 
 // r18-planes, XNU kern_exec.c (native_ioswitch_exec_environment, when it starts backboardd): may Core Animation detach layers?
-// Only when the plane probe passed (window B scans through the SMMU) and TegraVIC proved the IOSurfaceAccelerator quarter
-// turns (transforms 4 and 7) and 4:2:0 to RGB, since on an internal display every rotated detached layer (here: every video,
-// the UI being landscape in a portrait panel) is first copied through it, and what Core Animation does when that copy is
-// refused is not known: until then backboardd keeps CA_DISABLE_DETACHED=1, as before. One line per call.
+// Only on what is proven this boot: the plane probe passed (window B scans through the SMMU), and TegraVIC proved the
+// IOSurfaceAccelerator quarter turns (transforms 4 and 7), 4:2:0 to RGB and a row pitch (V4 pitch: 16, 64 or else 256
+// bytes), since on an internal display every rotated detached layer (here: every landscape video) is first copied through
+// it into a destination Core Animation allocates, and what Core Animation does when that copy is refused is not known.
+// When it may, the row and plane-base alignment Core Animation sizes its surfaces by become ones VIC writes (rows: the
+// proven pitch, at least the GPU's 128; bases: VIC's 256), published here, before backboardd reads them at its display's
+// creation [I: that its IOSA destinations follow DisplayPipeStrideRequirements/PlaneBaseAlignment]. Otherwise
+// backboardd keeps CA_DISABLE_DETACHED=1 and nothing changes. One line per call.
 extern "C" bool native_legacy_detach_ready(void)
 {
     NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
     const bool planes = display && display->planesReady();
     const TegraVICTraits *vic = tegra_vic_ready() ? tegra_vic_traits() : nullptr;
     const bool turns = vic && (vic->rotations & 0x90) == 0x90 && (vic->yccIn & TEGRA_VIC_YCC_IN_RGB);
+    const uint32_t pitch = vic ? vic->pitchAlign : 0;
+    const bool pitched = pitch && pitch <= 256 && !(pitch & (pitch - 1));
+    const uint32_t rows = pitched && pitch > 128 ? pitch : 128, bases = 256;
+    const bool ok = planes && turns && pitched;
+    if (ok) display->publishDetachAlignment(rows, bases);
     IOLog("IOSwitch display: backboardd %s detach layers: planes %s, IOSurfaceAccelerator quarter turns %s (transforms "
-          "%#x)\n",
-          planes && turns ? "may" : "may not", planes ? "on" : "off", turns ? "proven" : "not proven",
-          vic ? vic->rotations : 0);
-    return planes && turns;
+          "%#x), VIC row pitch %u%s (rows %u, plane bases %u)\n",
+          ok ? "may" : "may not", planes ? "on" : "off", turns ? "proven" : "not proven", vic ? vic->rotations : 0,
+          pitch, pitched ? "" : " (not proven)", ok ? rows : 128u,
+          ok ? bases : NativePlanes::Limits().planeBaseAlignment);
+    return ok;
 }
 
 // TegraGM20B gpu.c (idle clock): the last swap, in nanoseconds of uptime; 0 before the first. Any context.

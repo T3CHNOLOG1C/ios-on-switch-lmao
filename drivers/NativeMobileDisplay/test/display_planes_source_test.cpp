@@ -2,7 +2,8 @@
 // the ones NativeLegacyDisplay.cpp follows (validateSwap through checkUpdated, the kick on the family's effective
 // layers with video-only swaps costing no GPU work, window B written with window A in one STATE_CONTROL pair, retire
 // at the latch, the panic hook taking window B down, the published limits), the plane accessors are the IOSurface
-// functions TegraVIC binds, and backboardd loses CA_DISABLE_DETACHED only when native_legacy_detach_ready() says so.
+// functions TegraVIC binds, and backboardd loses CA_DISABLE_DETACHED only when native_legacy_detach_ready() says so
+// (planes on, VIC's quarter turns and a row pitch proven; the alignment published from that proof).
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -132,6 +133,11 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const std::string gate = Function(source, "extern \"C\" bool native_legacy_detach_ready(void)\n");
     EXPECT_THAT(gate, HasSubstr("planesReady()"));
     EXPECT_THAT(gate, HasSubstr("(vic->rotations & 0x90) == 0x90"));
+    // And VIC's proven row pitch: the alignment Core Animation sizes surfaces by follows it before backboardd reads it.
+    EXPECT_THAT(gate, HasSubstr("vic->pitchAlign"));
+    EXPECT_THAT(gate, HasSubstr("const bool ok = planes && turns && pitched;"));
+    EXPECT_THAT(gate, HasSubstr("if (ok) display->publishDetachAlignment(rows, bases);"));
+    ExpectBefore(gate, "publishDetachAlignment", "return ok;");
 }
 
 TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
