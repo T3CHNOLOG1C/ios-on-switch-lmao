@@ -411,6 +411,9 @@ static errno_t exec_handle_exception_port_actions(const struct image_params *img
     const struct exec_port_actions *port_actions);
 extern int ioswitch_boot_band_classify(const char *path);
 extern void ioswitch_boot_band_spawned(task_t task, int band_class);
+/* drivers/SwitchPower/SwitchPerfGovernor.cpp (SwitchPower.h SWITCH_PERF_HINT_LAUNCH = 3): the CPU and GPU at their top
+ * clocks for a while, from any context */
+extern void switch_perf_hint(unsigned int hint);
 static errno_t exec_handle_spawnattr_policy(proc_t p, thread_t thread, int psa_apptype, uint64_t psa_qos_clamp,
     task_role_t psa_darwin_role, struct exec_port_actions *port_actions);
 static void exec_port_actions_destroy(struct exec_port_actions *port_actions);
@@ -2410,6 +2413,19 @@ encapsulated_binary:
 		 * band after this returns, find ip_strings NULL (r7p8: "0 processes held").
 		 */
 		imgp->ip_ioswitch_band = ioswitch_boot_band_classify(imgp->ip_strings + strlen(EXECUTABLE_KEY));
+
+		/*
+		 * IOSwitch: an app is starting (its executable sits in a .app bundle: /Applications, the containers'
+		 * Bundle/Application, the cryptexes' apps): the clock governors go to their top points now, as Horizon's
+		 * boost mode does for a title's loading, instead of a window or two later when the load shows (dyld, the
+		 * first frame). Daemons and app extensions (.appex) do not.
+		 */
+		{
+			const char *path = imgp->ip_strings + strlen(EXECUTABLE_KEY);
+			if (strnstr(path, ".app/", strlen(path)) != NULL) {
+				switch_perf_hint(3);
+			}
+		}
 	}
 bad:
 	proc_transend(p, 0);

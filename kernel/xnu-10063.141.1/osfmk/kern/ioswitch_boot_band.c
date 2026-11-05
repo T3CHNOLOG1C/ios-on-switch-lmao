@@ -27,6 +27,8 @@ extern void ioswitch_task_set_lowpri_cpu(task_t task, bool on);
 int ioswitch_boot_band_classify(const char *path);
 void ioswitch_boot_band_spawned(task_t task, int band_class);
 void ioswitch_boot_band_lift(const char *why);
+/* drivers/SwitchPower/SwitchPerfGovernor.cpp (SwitchPower.h SWITCH_PERF_HINT_BOOT_DONE = 4): the boot's CPU floor ends */
+extern void switch_perf_hint(unsigned int hint);
 
 #define BAND_MAX        128
 #define BAND_NONE       0       /* image_params.ip_ioswitch_band (zeroed with the exec's data) */
@@ -150,6 +152,7 @@ ioswitch_boot_band_lift(const char *why)
 		return;
 	}
 	band_closed = true;
+	switch_perf_hint(4); /* SWITCH_PERF_HINT_BOOT_DONE: the CPU governor follows the load from here */
 	members = band_count;
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_iterate(&tasks, task, task_t, tasks) {

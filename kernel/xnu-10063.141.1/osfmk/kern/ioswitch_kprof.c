@@ -163,7 +163,11 @@ struct kprof_cpu {
 	uint64_t          last_irqs, last_ipis, last_exc;  /* cpu_stat counts at the last summary */
 	bool              primed;     /* last_idle/last_irq hold a previous summary's values */
 	uint64_t          probe_ticks; /* the clock probe's timebase ticks in the last cross-call (kprof_clock_probe) */
+	uint32_t          governor_khz; /* the CPU governor's clock at the probe (drivers/SwitchPower), 0: not governed */
 };
+
+/* drivers/SwitchPower/SwitchPerfGovernor.cpp: the clock the on-demand CPU governor last applied, in kHz (0: none). */
+extern unsigned int switch_perf_cpu_khz(void);
 
 struct kprof_thread {
 	uint64_t tid;
@@ -708,6 +712,7 @@ kprof_flip_cpu(__unused void *arg)
 		return;
 	}
 	kc->active ^= 1;
+	kc->governor_khz = switch_perf_cpu_khz();
 	kc->probe_ticks = kprof_clock_probe();
 	if (!kc->armed) {
 		kc->armed = true;
@@ -1317,6 +1322,13 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	kprof_put("; core MHz (probe):");
 	for (unsigned int c = 0; c < kprof_ncpus; c++) {
 		kprof_put(" %llu", kprof_probe_mhz(kprof_cpus[c].probe_ticks));
+	}
+	/* the governed DFLL's clock as each CPU saw it just before its probe: the probe should read the same (+-1 %) */
+	if (kprof_cpus[0].governor_khz) {
+		kprof_put("; governor MHz:");
+		for (unsigned int c = 0; c < kprof_ncpus; c++) {
+			kprof_put(" %u", kprof_cpus[c].governor_khz / 1000);
+		}
 	}
 	kprof_flush();
 
