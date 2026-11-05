@@ -31,6 +31,7 @@ load(
 )
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/toolchains:cc_toolchain_config_info.bzl", "CcToolchainConfigInfo")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
 load("//bazel/kernel:layout.bzl", "compat_prefix_maps")
 load("//bazel/kernel:sdk.bzl", "KernelSdkInfo")
@@ -165,6 +166,16 @@ def _impl(ctx):
         flag_sets = [flag_set(actions = _C, flag_groups = _flags(["-arch", "arm64"]))],
     ))
 
+    # The XNU the kernel is built from (//kernel:xnu_version) as a macro, for code that differs per version:
+    # #if XNU_10063_141_1.
+    features.append(feature(
+        name = "xnu_version_macro",
+        enabled = True,
+        flag_sets = [flag_set(actions = _COMPILE, flag_groups = _flags(
+            ["-DXNU_{}=1".format(ctx.attr._xnu_version[BuildSettingInfo].value.replace(".", "_"))],
+        ))],
+    ))
+
     # PLAIN_ASM: bindings, firmware .incbin units.
     features.append(feature(
         name = "kernel_plain_asm",
@@ -269,6 +280,7 @@ kernel_cc_toolchain_config = rule(
     doc = "The kernel's CcToolchainConfigInfo: Apple clang with XNU's recipes as features.",
     attrs = {
         "sdk": attr.label(mandatory = True, providers = [KernelSdkInfo], doc = "the kernel SDK (//kernel:sdk)"),
+        "_xnu_version": attr.label(default = "//kernel:xnu_version"),
         "source_roots": attr.string_list(
             mandatory = True,
             doc = "the main repository's top-level directories kernel sources live in (their strings get <root>/)",
