@@ -29,6 +29,7 @@
 #include "../SwitchBattery/SwitchBattery.h"
 #include "../SwitchBluetooth/SwitchBluetooth.h"
 #include "../SwitchMotion/SwitchMotion.h"
+#include "../SwitchWLAN/SwitchWLANStation.h"
 #include "../TegraBPMP/TegraBPMP.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraHost1x/TegraHost1x.h"
@@ -66,6 +67,8 @@ void tegra_display_suspend(void);
 void tegra_display_resume(void);
 void switch_joycon_suspend(void);
 void switch_joycon_resume(void);
+void switch_audio_suspend(void);  // SwitchAudio
+void switch_audio_resume(void);
 bool switch_display_power_enabled(void);  // SwitchBrightness
 }
 
@@ -81,6 +84,8 @@ enum : uint32_t {
     PMC_WAKE_LVL = kPmc + 0x010,
     PMC_WAKE_STATUS = kPmc + 0x014,
     PMC_SW_WAKE_STATUS = kPmc + 0x018,
+    PMC_DPD_SAMPLE = kPmc + 0x020,
+    PMC_DPD_ENABLE = kPmc + 0x024,
     PMC_COREPWRGOOD_TIMER = kPmc + 0x03c,
     PMC_COREPWROFF_TIMER = kPmc + 0x0e0,
     PMC_WAKE2_MASK = kPmc + 0x160,
@@ -135,7 +140,8 @@ class SwitchSuspend : public IOService {
     uint64_t wakeArmed = 0;  // PMC wake events, bit n = event n
     bool btWake = false;     // the Bluetooth controller was set up to wake the console for this sleep
     IOPMDriverAssertionID wakeHold = 0;  // after a radio wake, until its controller reconnects or the window ends
-    thread_call_t wakeHoldEnd = nullptr;
+    thread_call_t wakeHoldBegin = nullptr, wakeHoldEnd = nullptr;
+    static void beginWakeHold(thread_call_param_t owner, thread_call_param_t);
     static void endWakeHold(thread_call_param_t owner, thread_call_param_t);
     uint64_t quiesceNS = 0, activateNS = 0, suspendedAt = 0;
     uint64_t rtcBeforeMS = 0, rtcAfterMS = 0;  // the Tegra RTC at quiesce and at activate
@@ -180,8 +186,6 @@ void appendName(char *list, size_t size, const char *name)
 void SwitchSuspend::missingSuspendPaths(char *list, size_t size)
 {
     list[0] = 0;
-    if (bootArg("switch-wlan")) appendName(list, size, "Wi-Fi");
-    if (bootArg("switch-audio")) appendName(list, size, "audio");
     if (bootArg("tegra-gpu")) appendName(list, size, "GM20B");
     if (bootArg("switch-usb-host") || bootArg("switch-dp")) appendName(list, size, "USB-C host/DP");
     // SwitchUSB runs whenever the packager put the device or host port in the ADT; SC7 resets XUDC/XHCI under it.
@@ -276,6 +280,7 @@ bool SwitchSuspend::start(IOService *provider)
         registerService();
         return true;
     }
+    wakeHoldBegin = thread_call_allocate(&SwitchSuspend::beginWakeHold, this);
     wakeHoldEnd = thread_call_allocate(&SwitchSuspend::endWakeHold, this);
     switch_rtc_sleep_enable();
     // IOService::registerService() installs these as platform actions (iokit/Kernel/IOPlatformActions.cpp).
@@ -327,7 +332,9 @@ void SwitchSuspend::sleepDevices()
         btWake = switch_bluetooth_suspend();
         switch_power_journal("SwitchSuspend: sleep 3 bluetooth: %llu us", nsSince(at) / 1000);
     }
+    timed("sleep", 3, "wifi", switch_wlan_suspend);
     timed("sleep", 4, "host1x", tegra_nvdec_suspend);  // NVDEC, NVENC, VIC, NVJPG quiesced, then host1x
+    timed("sleep", 4, "audio", switch_audio_suspend);
     timed("sleep", 5, "thermal", switch_thermal_suspend);
     timed("sleep", 5, "se", tegra_se_suspend);  // idle for BL31's context save at SYSTEM_SUSPEND
     timed("sleep", 6, "nvram", [] { PESyncNVRAM(); });  // the NVRAM controller's sync (SwitchNVRAM), SD still up
@@ -400,6 +407,11 @@ void SwitchSuspend::activate()
     for (uint32_t i = 0; i < kPadWords; ++i) *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * i) = pad[i];
     __asm__ volatile("dsb sy" ::: "memory");
     tegra_gpio_resume();
+    // The pads held their levels in deep power-down through SC7; released as Linux tegra_pmc_resume does, once the
+    // pinmux and GPIO state they come back to is in place.
+    wr(PMC_DPD_SAMPLE, 0);
+    wr(PMC_DPD_ENABLE, 0);
+    (void)rd(PMC_DPD_ENABLE);
     arm_gic_resume();
     wakeStatus = rd(PMC_WAKE_STATUS) | rd(PMC_SW_WAKE_STATUS);
     wake2Status = rd(PMC_WAKE2_STATUS) | rd(PMC_SW_WAKE2_STATUS);
@@ -453,6 +465,8 @@ void SwitchSuspend::wakeDevices()
     timed("wake", 5, "thermal", switch_thermal_resume);
     timed("wake", 5, "sensors", switch_sensors_resume);
     timed("wake", 6, "host1x", tegra_nvdec_resume);  // before the display, which sits behind host1x
+    timed("wake", 6, "audio", switch_audio_resume);
+    timed("wake", 7, "wifi", switch_wlan_resume);  // the bring-up runs on SwitchWLAN's worker
     timed("wake", 7, "bluetooth", switch_bluetooth_resume);
     timed("wake", 7, "joycon", switch_joycon_resume);
     timed("wake", 8, "motion", switch_motion_resume);
@@ -468,9 +482,7 @@ void SwitchSuspend::wakeDevices()
         // The page that woke the console is a controller reconnecting: keep the system up while it does, and let its
         // first report light the panel (SwitchWake).
         switch_wake_bt_slept();
-        if (root && !wakeHold)
-            wakeHold = root->createPMAssertion(kIOPMDriverAssertionCPUBit, kIOPMDriverAssertionLevelOn, this,
-                                               "SwitchSuspend Bluetooth wake");
+        if (wakeHoldBegin) thread_call_enter(wakeHoldBegin);  // after IOCPUSleepKernel has let the root domain go
         uint64_t deadline;
         clock_interval_to_deadline(SWITCH_BT_RECONNECT_MS, kMillisecondScale, &deadline);
         if (wakeHoldEnd) thread_call_enter_delayed(wakeHoldEnd, deadline);
@@ -483,6 +495,18 @@ void SwitchSuspend::wakeDevices()
               "%#llx)\n",
               sleeps, wakeStatus, wake2Status, (unsigned long long)wakeArmed);
     }
+}
+
+void SwitchSuspend::beginWakeHold(thread_call_param_t owner, thread_call_param_t)
+{
+    auto *self = static_cast<SwitchSuspend *>(owner);
+    IOPMrootDomain *root = getPMRootDomain();
+    if (!root || __atomic_load_n(&self->wakeHold, __ATOMIC_ACQUIRE)) return;
+    const IOPMDriverAssertionID id = root->createPMAssertion(kIOPMDriverAssertionCPUBit, kIOPMDriverAssertionLevelOn,
+                                                             self, "SwitchSuspend Bluetooth wake");
+    IOPMDriverAssertionID none = 0;
+    if (id && !__atomic_compare_exchange_n(&self->wakeHold, &none, id, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        root->releasePMAssertion(id);
 }
 
 void SwitchSuspend::endWakeHold(thread_call_param_t owner, thread_call_param_t)

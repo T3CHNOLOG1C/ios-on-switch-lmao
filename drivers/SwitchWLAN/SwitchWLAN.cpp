@@ -45,6 +45,7 @@
 #include "SwitchWLANStation.h"
 #include "SwitchWLANTrace.h"
 #include "SwitchWLANWpa.h"
+#include "../SwitchSuspend/SwitchWake.h"
 #include "awdl/awdl_bcm.h"
 
 // firmware.S
@@ -165,6 +166,10 @@ class SwitchWLAN : public IOService {
 OSDeclareDefaultStructors(SwitchWLAN)
 
     public : bool start(IOService *provider) override;
+
+    // System sleep (switch_wlan_suspend / switch_wlan_resume), SwitchSuspend's thread.
+    void systemSleep();
+    void systemWake();
 
     // The station interface (SwitchWLANStation.h), any thread: each takes the gate briefly.
     void setEvents(const swlan_events *events);
@@ -407,7 +412,14 @@ private:
     bool popEapol(EapolFrame &frame);
     void watchdog();
     void lost(const char *why);
-    bool recover();
+    bool recover(bool afterSleep = false);
+    void parkForSleep();
+    // Under the gate: the worker's part in system sleep (kAwake; kSleepAsked by systemSleep; kParked while the worker
+    // waits for the wake; kWakeAsked by systemWake) and whether the worker loop runs at all.
+    enum : uint8_t { kAwake, kSleepAsked, kParked, kWakeAsked };
+    uint8_t sleep_ = kAwake;
+    bool workerRunning_ = false;
+    bool sleptRecover_ = false;  // worker thread: the next recovery follows SC7
     void setState(uint32_t state);
 };
 
@@ -1000,10 +1012,13 @@ void SwitchWLAN::lost(const char *why)
 
 // nxk `recover`: module reset under PERST#, link, endpoint (the same BARs), firmware, rings, radio; then the last
 // network again with the key wifid gave for it.
-bool SwitchWLAN::recover()
+bool SwitchWLAN::recover(bool afterSleep)
 {
     swlan::TegraPcie::Endpoint ep = {};
-    if (!pcie_.restart(ep, why_, sizeof(why_))) return false;
+    if (!(afterSleep ? pcie_.bringUp(ep, why_, sizeof(why_)) : pcie_.restart(ep, why_, sizeof(why_)))) {
+        sleptRecover_ = afterSleep;  // the next try needs the whole bring-up too
+        return false;
+    }
     if (ep.bar0 != ep_.bar0 || ep.bar2 != ep_.bar2) {
         snprintf(why_, sizeof(why_), "BARs moved to %#x and %#x", ep.bar0, ep.bar2);
         return false;
@@ -1019,6 +1034,54 @@ bool SwitchWLAN::recover()
         }
     });
     return true;
+}
+
+// ---- system sleep -------------------------------------------------------------------------------------------------
+//
+// SC7 powers the PCIe controller, its PHY and PLLE off; the chip's firmware state does not survive the bring-up after
+// it (moduleReset power-cycles it, as switchroot's brcm,reset_on_wake does), so the chip is let go before sleep and
+// brought up whole after it, back on the last network with the key wifid gave (recover). The worker parks for the
+// sleep: nothing touches the controller from the sleep action on.
+void SwitchWLAN::parkForSleep()
+{
+    bool wasUp = false;
+    locked([&] { wasUp = up_; });
+    if (wasUp) lost("system sleep");
+    if (msi_) msi_->disable();
+    locked([&] {
+        sleep_ = kParked;
+        gate_->commandWakeup(&sleep_);
+        while (sleep_ == kParked) gate_->commandSleep(&sleep_, THREAD_UNINT);
+        sleep_ = kAwake;
+    });
+    if (msi_) msi_->enable();
+}
+
+void SwitchWLAN::systemSleep()
+{
+    bool parked = false;
+    locked([&] {
+        if (!workerRunning_) return;
+        sleep_ = kSleepAsked;
+        kick();
+        const uint64_t deadline = deadlineIn(3000);
+        while (sleep_ == kSleepAsked && gate_->commandSleep(&sleep_, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {}
+        parked = sleep_ == kParked;
+    });
+    switch_power_journal("SwitchWLAN: sleep: %s", parked ? "chip let go, worker parked"
+                         : workerRunning_ ? "the worker did not park in 3 s" : "not running");
+}
+
+void SwitchWLAN::systemWake()
+{
+    locked([&] {
+        if (sleep_ == kParked) {
+            sleep_ = kWakeAsked;
+            gate_->commandWakeup(&sleep_);
+        } else if (sleep_ == kSleepAsked) {
+            sleep_ = kAwake;
+        }
+    });
 }
 
 // ---- scans -------------------------------------------------------------------------------------------------------
@@ -1555,6 +1618,7 @@ void SwitchWLAN::join(const JoinParams &p)
 void SwitchWLAN::run()
 {
     if (!bringUp()) return;
+    locked([&] { workerRunning_ = true; });
     switch_wlan_net_start(mac_);
     netStarted_ = true;
     switch_wlan_awdl_capable();  // a radio without AWDL gets its down awdl0 before userspace asks for it
@@ -1564,6 +1628,15 @@ void SwitchWLAN::run()
     uint32_t backoff = kRetryFirstMs, tickMs = kWatchdogMs;
     for (;;) {
         waitWork(tickMs);
+        uint8_t sleeping = kAwake;
+        locked([&] { sleeping = sleep_; });
+        if (sleeping == kSleepAsked) {
+            parkForSleep();
+            retryAt = 0;  // SC7 powered the controller off: the whole bring-up, at once
+            backoff = kRetryFirstMs;
+            sleptRecover_ = true;
+            continue;
+        }
         const uint64_t now = swlan::nowNs();
         bool chipUp = false, scanning = false;
         locked([&] {
@@ -1582,7 +1655,9 @@ void SwitchWLAN::run()
         }
         if (!chipUp) {
             if (now < retryAt) continue;
-            if (recover()) {
+            const bool afterSleep = sleptRecover_;
+            sleptRecover_ = false;
+            if (recover(afterSleep)) {
                 backoff = kRetryFirstMs;
             } else {
                 IOLog("SwitchWLAN: recovery failed: %s; next try in %u s\n", why_, backoff / 1000);
@@ -2858,4 +2933,14 @@ extern "C" int switch_wlan_publish(void)
         return -1;
     }
     return 0;
+}
+
+extern "C" void switch_wlan_suspend(void)
+{
+    if (gDriver) gDriver->systemSleep();
+}
+
+extern "C" void switch_wlan_resume(void)
+{
+    if (gDriver) gDriver->systemWake();
 }

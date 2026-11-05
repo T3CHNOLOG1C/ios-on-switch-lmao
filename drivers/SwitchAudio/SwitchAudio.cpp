@@ -204,10 +204,13 @@ enum : uint32_t {
     CLK_SOURCE_EXTERN1 = 0x3ec,
     CLK_SOURCE_APE = 0x6c0,
     CLK_ENB_L_SET = 0x320,
+    RST_DEV_L_SET = 0x300,
     RST_DEV_L_CLR = 0x304,
     CLK_ENB_V_SET = 0x440,
+    RST_DEV_V_SET = 0x430,
     RST_DEV_V_CLR = 0x434,
     CLK_ENB_Y_SET = 0x29c,
+    RST_DEV_Y_SET = 0x2a8,
     RST_DEV_Y_CLR = 0x2ac,
 };
 // Clock numbers: i2s0 30 (L), d_audio 106, apb2ape 107, extern1 120 (V), ape 198 (Y).
@@ -234,6 +237,9 @@ static_assert(kI2sDiv == 30, "I2S0 = PLLA_OUT0 / 16");
 
 // APBDEV_PMC (hekate bdk/soc/pmc_t210.h; mainline pmc.c tegra210_io_pads/io_pad_vctrls).
 enum : uint32_t {
+    CLAMP_STATUS = 0x2c,
+    PWRGATE_TOGGLE = 0x30,
+    REMOVE_CLAMPING = 0x34,
     PWRGATE_STATUS = 0x38,
     NO_IOPOWER = 0x44,
     PWR_DET = 0x48,
@@ -243,6 +249,7 @@ enum : uint32_t {
     IO_DPD2_STATUS = 0x1c4,
 };
 constexpr uint32_t kPartitionAud = 1u << 27;          // POWER_RAIL_AUD
+constexpr uint32_t kPartitionAudId = 27, kToggleStart = 1u << 8;
 constexpr uint32_t kPad33V = (1u << 5) | (1u << 18);  // audio, audio-hv: 1 = 3.3 V
 constexpr uint32_t kNoIoPowerAudioHv = 1u << 18;
 constexpr uint32_t kClkOut1Mask = (3u << 6) | (1u << 2), kClkOut1Extern1 = (3u << 6) | (1u << 2);  // src 3, force on
@@ -510,6 +517,7 @@ class SwitchAudio : public IOService {
     IOInterruptEventSource *jackSource = nullptr;
     IOTimerEventSource *jackTimer = nullptr, *idleTimer = nullptr;
     bool codecOn = false, jackKnown = false, jackIn = false, headset = false, speakerOnly = false;
+    bool hardwareLost = false;  // the APE did not come back after sleep: the hardware is never touched again
     Route route = kRouteNone;
     // switch-audio-stats: counted on the audio work loop, printed (and the peak reset) on the codec work loop.
     IOTimerEventSource *statsTimer = nullptr;
@@ -757,6 +765,7 @@ class SwitchAudio : public IOService {
 
     void tegraStart()
     {
+        if (hardwareLost) return;  // the play position stands still: the plug-in sees no progress, never noise
         switch_audio_sample_t *out = ring(SwitchAudioMemoryOutput), *in = ring(SwitchAudioMemoryInput);
         bzero(out, kOutBytes);
         cacheClean(out, kOutBytes);
@@ -1012,12 +1021,17 @@ class SwitchAudio : public IOService {
     // rt5640_i2c_probe, rt5640_probe, rt5640_enable_jack_detect, then the static link setup the machine driver and
     // hw_params give it (CBS_CFS, I2S, NB_NF; sysclk MCLK 12.288 MHz, 48 kHz, 24-bit, BCLK 64 fs) and the mixer
     // switches of nvaudio_conf.xml's rt5640-speaker and rt5640-headphone paths. Power follows the route later.
-    void codecProbe()
+    void codecProbe(bool afterSleep = false)
     {
         if (tegra_i2c_init(kCodecBus) != TEGRA_I2C_OK) panic("SwitchAudio: I2C1 did not start");
-        if (tegra_gpio_output(kCodecPower, 1)) panic("SwitchAudio: cannot drive PZ4 (RT5639 LDO1_EN)");
-        IOSleep(400);
         uint8_t id[2] = {};
+        // After SC7 PZ4 held LDO1_EN high throughout: the codec answers at once and needs no 400 ms power-up.
+        const bool powered = afterSleep && !tegra_i2c_read(kCodecBus, kCodecAddr, VENDOR_ID2, id, sizeof(id)) &&
+                             id[0] == 0x62 && id[1] == 0x31;
+        if (!powered) {
+            if (tegra_gpio_output(kCodecPower, 1)) panic("SwitchAudio: cannot drive PZ4 (RT5639 LDO1_EN)");
+            IOSleep(400);
+        }
         const int error = tegra_i2c_read(kCodecBus, kCodecAddr, VENDOR_ID2, id, sizeof(id));
         if (error || id[0] != 0x62 || id[1] != 0x31) {
             panic("SwitchAudio: no RT5639 on I2C1 0x1c (VENDOR_ID2 %02x%02x, error %d)", id[0], id[1], error);
@@ -1393,7 +1407,91 @@ class SwitchAudio : public IOService {
         return kIOReturnSuccess;
     }
 
+    // SC7 powers the APE partition and the codec's link down and resets the CAR, ADMA, AHUB and AGIC; the codec keeps
+    // its supply only as LDO1_EN (PZ4) is held, so it is set up again from reset like at boot. The partition comes
+    // back as powergate-t21x.c powers a partition on: modules in reset with clocks on, toggle, unclamp.
+    bool apePartitionOn()
+    {
+        if (r32(pmc, PWRGATE_STATUS) & kPartitionAud) return true;
+        w32(car, RST_DEV_Y_SET, kClkY);
+        w32(car, RST_DEV_V_SET, kClkV);
+        w32(car, RST_DEV_L_SET, kClkL);
+        w32(car, CLK_ENB_Y_SET, kClkY);
+        w32(car, CLK_ENB_V_SET, kClkV);
+        w32(car, CLK_ENB_L_SET, kClkL);
+        IODelay(10);
+        if (!waitBits(pmc, PWRGATE_TOGGLE, kToggleStart, 0, 5000)) return false;
+        w32(pmc, PWRGATE_TOGGLE, kPartitionAudId | kToggleStart);
+        if (!waitBits(pmc, PWRGATE_STATUS, kPartitionAud, kPartitionAud, 5000)) return false;
+        IODelay(10);
+        w32(pmc, REMOVE_CLAMPING, kPartitionAud);
+        return waitBits(pmc, CLAMP_STATUS, kPartitionAud, 0, 5000);
+    }
+
+    static IOReturn sleepGated(OSObject *owner, void *entering, void *, void *, void *)
+    {
+        auto *self = static_cast<SwitchAudio *>(owner);
+        if (entering) {
+            if (self->control->state) self->tegraStop();  // iOS holds sleep off while audio plays; nothing runs here
+            self->timer->cancelTimeout();
+            self->cascade->disable();
+            return kIOReturnSuccess;
+        }
+        if (!self->apePartitionOn()) {
+            IOLog("SwitchAudio: APE partition did not power on after sleep (PMC PWRGATE_STATUS %#x CLAMP %#x); audio off\n",
+                  r32(self->pmc, PWRGATE_STATUS), r32(self->pmc, CLAMP_STATUS));
+            self->hardwareLost = true;
+            return kIOReturnSuccess;
+        }
+        self->tegraClocksAndPads();
+        self->tegraAhubAndDma();
+        self->tegraAgic();
+        self->cascade->enable();
+        if (self->control->state) self->tegraStart();
+        return kIOReturnSuccess;
+    }
+
+    static IOReturn codecSleepGated(OSObject *owner, void *entering, void *, void *, void *)
+    {
+        auto *self = static_cast<SwitchAudio *>(owner);
+        if (entering) {
+            self->jackSource->disable();
+            self->jackTimer->cancelTimeout();
+            self->idleTimer->cancelTimeout();
+            if (self->statsTimer) self->statsTimer->cancelTimeout();
+            if (self->codecOn) {
+                self->codecRouteDown();
+                self->codecBiasOff();
+                self->codecOn = false;
+            }
+            self->headset = false;
+            return kIOReturnSuccess;
+        }
+        if (self->hardwareLost) return kIOReturnSuccess;
+        self->route = kRouteNone;
+        self->codecProbe(true);
+        self->jackKnown = false;
+        self->jackSource->enable();
+        self->jackTimer->setTimeoutMS(kJackSettleMS);
+        if (self->statsTimer) self->statsResume();
+        return kIOReturnSuccess;
+    }
+
 public:
+    // System sleep (switch_audio_suspend/resume, SwitchSuspend's thread): the hardware first, the codec after it on
+    // sleep; the reverse on wake. Null backend: nothing to do.
+    void systemSleep(bool entering)
+    {
+        if (!tegra) return;
+        if (entering) {
+            gate->runAction(&SwitchAudio::sleepGated, reinterpret_cast<void *>(1));
+            codecGate->runAction(&SwitchAudio::codecSleepGated, reinterpret_cast<void *>(1));
+        } else {
+            gate->runAction(&SwitchAudio::sleepGated, nullptr);
+            codecGate->runAction(&SwitchAudio::codecSleepGated, nullptr);
+        }
+    }
+
     bool start(IOService *provider) override
     {
         if (!IOService::start(provider)) return false;
@@ -1564,7 +1662,9 @@ OSDefineMetaClassAndStructors(SwitchAudioUserClient, IOUserClient)
 
     // Publishes the service under IOResources. Call once from the board thread (the Tegra backend sleeps on the GIC, the
     // GPIO controller and I2C1), any point before launchd starts audiomxd; returns 0 on success.
-    extern "C" int ioswitch_audio_publish(void)
+    static SwitchAudio *gAudio;  // set once published (switch_audio_suspend/resume)
+
+extern "C" int ioswitch_audio_publish(void)
 {
     static bool published;
     if (published) return 0;
@@ -1581,8 +1681,19 @@ OSDefineMetaClassAndStructors(SwitchAudioUserClient, IOUserClient)
         IOLog("SwitchAudio: start failed\n");
         return -1;
     }
+    gAudio = audio;
     audio->release();  // the attachment keeps it
     published = true;
     IOLog("SwitchAudio: started\n");
     return 0;
+}
+
+extern "C" void switch_audio_suspend(void)
+{
+    if (SwitchAudio *audio = __atomic_load_n(&gAudio, __ATOMIC_ACQUIRE)) audio->systemSleep(true);
+}
+
+extern "C" void switch_audio_resume(void)
+{
+    if (SwitchAudio *audio = __atomic_load_n(&gAudio, __ATOMIC_ACQUIRE)) audio->systemSleep(false);
 }

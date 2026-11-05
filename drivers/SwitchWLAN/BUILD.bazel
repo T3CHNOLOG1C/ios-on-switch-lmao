@@ -58,6 +58,7 @@ kernel_driver(
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/SwitchBluetooth",
+        "drivers/SwitchSuspend",
         "drivers/TegraI2C",
     ],
 )

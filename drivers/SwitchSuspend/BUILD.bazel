@@ -34,6 +34,7 @@ kernel_driver(
         "drivers/SwitchBattery",
         "drivers/SwitchBluetooth",
         "drivers/SwitchMotion",
+        "drivers/SwitchWLAN",
         "drivers/TegraBPMP",
         "drivers/TegraGPIO",
         "drivers/TegraHost1x",

@@ -130,6 +130,10 @@ void switch_wlan_net_start(const uint8_t mac[6]);
 // SwitchWLANProbe.cpp
 void switch_wlan_probe(void);                         // read-only state report, boot-arg switch-wlan=1
 int switch_wlan_mac(uint8_t wifi[6], uint8_t bt[6]);  // 0: fuse-derived addresses as switchroot U-Boot makes them
+// System sleep (drivers/SwitchSuspend's sleep and wake actions, one thread): suspend lets the chip go and parks the
+// worker (bounded at 3 s); resume brings PCIe and the chip up whole on the worker, back on the last network.
+void switch_wlan_suspend(void);
+void switch_wlan_resume(void);
 
 #ifdef __cplusplus
 }
