@@ -4,7 +4,7 @@
 //  - the user client decides a coherent BO's memory through TegraGM20BPoolPolicy.h, serves a BO the pool does not from
 //    ordinary pages under a write-combined physical view, never refuses a coherent BO for want of pool room, and the
 //    stats line names the pool's holders;
-//  - the CPU no longer clears the reserved pool at boot; every page an allocation hands out is zero whether the CPU or
+//  - the CPU does not clear the reserved pool at boot; every page an allocation hands out is zero whether the CPU or
 //    the copy engine zeroed it; the scrubber gives a range back clean only from its fence's interrupt pass, never waits
 //    on the CPU, and panics with one line on a range not back in time;
 //  - the user client reads pushes only through TegraGM20BPushScan.h and profiles only what it read;
@@ -92,7 +92,7 @@ TEST(GM20BPoolPolicySource, BoAllocNeverRefusesACoherentBoForPoolRoom)
 		flat(definition(client(), "IOReturn AGXDeviceUserClient::boAlloc("));
 	EXPECT_THAT(alloc, HasSubstr("refused = poolRefusal(in->bytes, pool_bytes_, critical_);"));
 	EXPECT_THAT(alloc, HasSubstr("tgm_pool::coherentSource(refused, bo->pool_va != nullptr)"));
-	// The refusal no longer fails the BO: no NoMemory between the tier check and the pool allocation.
+	// A refusal does not fail the BO: no NoMemory between the tier check and the pool allocation.
 	EXPECT_THAT(Between(alloc, "if (!ret && (in->flags & TegraGM20BBoCoherent)) {",
 			    "if (!ret && bo->pool_va)"),
 		    Not(HasSubstr("kIOReturnNoMemory")));

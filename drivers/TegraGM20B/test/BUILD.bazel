@@ -1,7 +1,7 @@
 # drivers/TegraGM20B on the host:
-#   gm20b_pool_policy_test   TegraGM20BPoolPolicy.h (where a coherent BO's memory comes from) over a model of the pool at
-#                            r8a's numbers: Maps' first buffers, refused with 33 MiB of the pool free, now come from system
-#                            memory; MapKit's 4 KiB, the compositor's 16 MiB block, the floor, room for everyone
+#   gm20b_pool_policy_test   TegraGM20BPoolPolicy.h (where a coherent BO's memory comes from) over a model of the pool
+#                            when Maps opened: its first buffers come from system memory instead of being refused;
+#                            MapKit's 4 KiB, the compositor's 16 MiB block, the floor, room for everyone
 #   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
 #                            streams laid out as NVK writes them: every counter, and no profile stamp after a push whose
 #                            method continues, one the kernel could not read or one with an opcode NVK never writes

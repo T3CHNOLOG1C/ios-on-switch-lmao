@@ -14,7 +14,6 @@
 
 using namespace tgm_scan;
 
-// Every CHECK is a GoogleTest expectation (the condition is the message).
 #define CHECK(cond) EXPECT_TRUE(cond) << #cond
 
 // NV906F DMA headers
@@ -33,7 +32,7 @@ static uint32_t immd(uint32_t subc, uint32_t mthd, uint32_t data)
 
 using Push = std::vector<uint32_t>;
 
-// nvk_BeginCommandBuffer's prologue for a primary (begin_compute + begin_graphics), as the r15 host twin dumped it
+// nvk_BeginCommandBuffer's prologue for a primary (begin_compute + begin_graphics)
 static void prologue(Push &p)
 {
 	for (uint32_t w : {0x800020a6u, 0x80002509u, 0x80002091u, 0x20020509u, 0u, 0u, 0x90000369u})
@@ -78,7 +77,6 @@ static Result scan(const std::vector<const Push *> &pushes)
 	return r;
 }
 
-// 1. A Core Animation-like submission
 struct CoreAnimation {
 	Push p0, p1, p2, p3, p4, p5;
 	CoreAnimation()
@@ -117,7 +115,6 @@ TEST(GM20BPushScan, CoreAnimationSubmission)
 	CHECK(a.cls[5] == TGM_PC_SYNC);
 }
 
-// 2. A multisampled pass with depth into a block-linear 1280x720 target, a real copy, a small clear pass
 TEST(GM20BPushScan, MultisampledPassCopyClearDispatch)
 {
 	Push q0, q1, q2, q3;
@@ -143,7 +140,6 @@ TEST(GM20BPushScan, MultisampledPassCopyClearDispatch)
 	CHECK(b.cls[3] == TGM_PC_COMPUTE);
 }
 
-// 3. A push the kernel cannot read: neither it nor any push after it is stamped
 TEST(GM20BPushScan, UnreadablePushEndsTheStamps)
 {
 	const CoreAnimation ca;
@@ -153,7 +149,6 @@ TEST(GM20BPushScan, UnreadablePushEndsTheStamps)
 	CHECK(c.c.draws == 3);  // still counted
 }
 
-// 4. An opcode NVK never writes ends the stamps too
 TEST(GM20BPushScan, UnknownOpcodeEndsTheStamps)
 {
 	const CoreAnimation ca;

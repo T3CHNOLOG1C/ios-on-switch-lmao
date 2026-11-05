@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-// drivers/TegraGM20B/TegraGM20BPoolPolicy.h on the host: a model of the GPU pool at r8a's
-// numbers (256 MiB, 221 used, 63 of them the compositor's: 35 free) and what Maps asked of it when it opened (23 coherent
-// BOs, 74400 KiB, the first 4096 KiB refused and VectorKit aborting on the nil buffer), run with the tiers as they were
-// (a refused BO failed) and as they are (it comes from system memory). Also MapKit's 4 KiB refused with 11 MiB free and the
-// compositor's 16 MiB m2v block with the pool full.
+// drivers/TegraGM20B/TegraGM20BPoolPolicy.h on the host: a model of the GPU pool when Maps opened (256 MiB, 221 used,
+// 63 of them the compositor's: 35 free) and what Maps asked of it (23 coherent BOs, 74400 KiB, the first 4096 KiB
+// refused and VectorKit aborting on the nil buffer), run with the legacy tiers (a refused BO fails) and the current
+// ones (it comes from system memory). Also MapKit's 4 KiB with 11 MiB free and the compositor's 16 MiB m2v block with
+// the pool full.
 #include <gtest/gtest.h>
 
 #include <cstdio>
@@ -34,12 +34,12 @@ struct Result {
 	uint64_t systemBytes = 0;
 };
 
-// One coherent BoAlloc as AGXDeviceUserClient::BoAlloc decides it: `legacy` the r8a build (a refusal fails the BO)
+// One coherent BoAlloc as AGXDeviceUserClient::BoAlloc decides it; `legacy`: a refusal fails the BO
 bool alloc(Pool &p, Client &c, uint64_t bytes, bool legacy, Result &r)
 {
 	const char *refused =
 		legacy && c.compositor
-			? nullptr  // (the r8a build: the compositor past every tier)
+			? nullptr  // legacy: the compositor passes every tier
 			: tgm_pool::refusal(bytes, c.held, p.avail(), kLimits, c.compositor);
 	const bool poolHasIt = !refused && p.avail() >= bytes;
 	if (legacy && !poolHasIt) {
@@ -57,10 +57,9 @@ bool alloc(Pool &p, Client &c, uint64_t bytes, bool legacy, Result &r)
 	return true;
 }
 
-// Every check is a GoogleTest expectation; its message says what was expected.
 #define check(ok, what) EXPECT_TRUE(ok) << (what)
 
-// Maps' 23 BOs (mem3 line at 15:39:52: 74400 KiB): eighteen of VectorKit's 4096 KiB buffers and five small ones
+// Maps' 23 BOs (74400 KiB): eighteen of VectorKit's 4096 KiB buffers and five small ones
 std::vector<uint64_t> mapsOpening()
 {
 	std::vector<uint64_t> b(18, 4096 * KiB);
@@ -71,7 +70,7 @@ std::vector<uint64_t> mapsOpening()
 
 Result runR8a(bool legacy, Pool &p, Client &compositor)
 {
-	p.used = 221 * MiB;  // stats2 15:39:44: pool 221/256 MiB (compositor 63)
+	p.used = 221 * MiB;
 	compositor.held = 63 * MiB;
 	Client maps{false};
 	Result r;
@@ -81,7 +80,7 @@ Result runR8a(bool legacy, Pool &p, Client &compositor)
 }
 }  // namespace
 
-// r8a: Maps opens with 35 MiB of the pool free
+// Maps opens with 35 MiB of the pool free
 TEST(GM20BPoolPolicy, MapsOpeningAtR8a)
 {
 	Pool p;
@@ -107,7 +106,7 @@ TEST(GM20BPoolPolicy, MapsOpeningAtR8a)
 	      "the compositor's next 16 MiB block is the pool's");
 }
 
-// MapKit at 15:14:58: 4 KiB refused with 11 MiB free (the pool's last 16 MiB)
+// MapKit's 4 KiB with 11 MiB free (inside the pool's last 16 MiB)
 TEST(GM20BPoolPolicy, MapKitSmallBo)
 {
 	Pool p;
@@ -120,7 +119,7 @@ TEST(GM20BPoolPolicy, MapKitSmallBo)
 	check(now.failed == 0 && now.fromSystem == 1, "MapKit's 4 KiB from system memory");
 }
 
-// The compositor's 16 MiB m2v block with the pool full (15:14:50, twelve refusals)
+// The compositor's 16 MiB m2v block with the pool full
 TEST(GM20BPoolPolicy, CompositorBlockWithPoolFull)
 {
 	Pool p;
