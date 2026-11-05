@@ -336,12 +336,17 @@ extern "C" void native_aks_se_probe(void)
             IOLog("AppleKeyStore: SE probe: no DMA page below 4 GiB\n");
             goto out;
         }
-        probeSlot(se1, dma, ahb, 14, r14);
-        probeSlot(se1, dma, ahb, 15, r15);
-        // SE2 is TegraSE's too (drivers/TegraSE): one owner at a time.
-        if (tegra_se2_claim(TEGRA_SE2_OWNER_AKS_PROBE, 1000)) {
+        // SE1 and SE2 are TegraSE's AES/SHA engines too (drivers/TegraSE): one owner at a time.
+        if (tegra_se_claim(1, TEGRA_SE_OWNER_AKS_PROBE, 1000)) {
+            probeSlot(se1, dma, ahb, 14, r14);
+            probeSlot(se1, dma, ahb, 15, r15);
+            tegra_se_release(1, TEGRA_SE_OWNER_AKS_PROBE);
+        } else {
+            r14.refusal = r15.refusal = "SE1 held by TegraSE";
+        }
+        if (tegra_se_claim(2, TEGRA_SE_OWNER_AKS_PROBE, 1000)) {
             probeSlot(se2, dma, ahb, 14, r2);
-            tegra_se2_release(TEGRA_SE2_OWNER_AKS_PROBE);
+            tegra_se_release(2, TEGRA_SE_OWNER_AKS_PROBE);
         } else {
             r2.refusal = "SE2 held by TegraSE";
         }

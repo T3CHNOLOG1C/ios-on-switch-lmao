@@ -1,24 +1,47 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraSE: the T210B01 Security Engine SE2 for the kernel (TegraSE.cpp). Never booted (r17-crypto).
+// TegraSE: the T210B01 Security Engines SE1 and SE2 as the kernel's AES and SHA engines (TegraSE.cpp). Never booted.
 #ifndef TEGRA_SE_H
 #define TEGRA_SE_H
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// From the board thread (IOSwitchRootDiag.inc): starts the driver's own thread and returns. That thread checks the
-// engine (registers, interrupt, known answers), reseeds the kernel PRNG from SE2's DRBG, and 90 s later times SE2
-// against the A57s' crypto instructions and logs the numbers. Any check that fails is one line and the driver off.
+// From the board thread (IOSwitchRootDiag.inc): starts the driver's own thread and returns.
 int tegra_se_start(void);
 
-// SE2's one owner at a time: the AppleKeyStore stand-in's boot probe (NativeKeyStoreEvents/TegraSecurityEngine.cpp)
-// and this driver. Thread context; waits up to `ms` for the other; false if it did not get the engine.
+// One owner of an engine at a time: the AppleKeyStore stand-in's boot probe (NativeKeyStoreEvents/
+// TegraSecurityEngine.cpp) and this driver. engine 1 = SE1, 2 = SE2. Thread context; waits up to `ms`.
+bool tegra_se_claim(unsigned engine, uint32_t owner, uint32_t ms);
+void tegra_se_release(unsigned engine, uint32_t owner);
+#define TEGRA_SE_OWNER_AKS_PROBE 1u
+#define TEGRA_SE_OWNER_DRIVER    2u
+// The previous round's names (SE2 only).
 bool tegra_se2_claim(uint32_t owner, uint32_t ms);
 void tegra_se2_release(uint32_t owner);
-#define TEGRA_SE2_OWNER_AKS_PROBE 1u
-#define TEGRA_SE2_OWNER_DRIVER    2u
+#define TEGRA_SE2_OWNER_AKS_PROBE TEGRA_SE_OWNER_AKS_PROBE
+#define TEGRA_SE2_OWNER_DRIVER    TEGRA_SE_OWNER_DRIVER
+
+// Kernel callers. Each returns 0 when the engine did the work (bit-identical to the CPU's), or nonzero, and then the
+// caller must do it on the CPU: an algorithm a check turned off, a buffer the engine cannot reach, or a context that
+// cannot sleep. Thread context with preemption enabled; buffers are kernel virtual addresses (any alignment, any
+// physical layout: scatter-gather, pages above 4 GiB through a bounce buffer).
+enum tegra_se_mode {
+    TEGRA_SE_ECB = 0,
+    TEGRA_SE_CBC = 1,
+    TEGRA_SE_CTR = 2,  // 128-bit big-endian counter in iv, advanced by the blocks done; a tail is done here too
+    TEGRA_SE_OFB = 3,
+};
+// AES-128/192/256 (keyBytes 16/24/32). ECB/CBC: len a multiple of 16. iv (16 bytes, not ECB) is updated to the next
+// operation's: CBC the last ciphertext block, CTR the next counter, OFB the next keystream input.
+int tegra_se_aes(enum tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned keyBytes, uint8_t *iv,
+                 const void *in, void *out, size_t len);
+// AES-CMAC (RFC 4493 / NIST SP 800-38B) of len bytes.
+int tegra_se_cmac(const uint8_t *key, unsigned keyBytes, const void *in, size_t len, uint8_t mac[16]);
+// One-shot digest: alg 1 (SHA-1), 224, 256, 384, 512.
+int tegra_se_digest(unsigned alg, const void *in, size_t len, uint8_t *out);
 
 #ifdef __cplusplus
 }

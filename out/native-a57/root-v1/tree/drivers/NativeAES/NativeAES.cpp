@@ -9,6 +9,7 @@
 #pragma clang diagnostic pop
 #include <corecrypto/cc.h>
 #include <kern/task.h>
+#include "../TegraSE/TegraSE.h"
 
 extern "C" {
 volatile uint32_t native_aes_kat_status = 0;
@@ -45,6 +46,9 @@ OSDefineMetaClassAndStructors(NativeAES, IOAESAccelerator)
     } context;
     unsigned char nextIV[16];
     int result;
+    // The Security Engine first (drivers/TegraSE: it updates iv the same way); the CPU if it declines.
+    if (!tegra_se_aes(TEGRA_SE_CBC, operation != IOAESDecrypt, key.bytes, key.bits / 8, iv, input, output, bytes))
+        return 0;
     if (operation == IOAESDecrypt) {
         memcpy(nextIV, input + bytes - 16, 16);
         result = aes_decrypt_key(key.bytes, key.bits / 8, &context.decrypt);
