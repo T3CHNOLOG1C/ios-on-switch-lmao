@@ -131,8 +131,8 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
     # cuts: {(component, declared dependency): (exact pointer count, native stub symbol or None)}. A cut dependency is
     # left out of the closure; each of its pointer sites in the component (exactly that many, or the plan fails) is
     # rebound to the native stub, an 8-byte zero constant, so the GOT load the component does reads NULL.
-    # V17 incremental build: identity is inherited from the completed V15 pass.
-    # Do not reread/hash old content merely to reproduce an existing digest.
+    # The original kernelcache's identity is inherited from the completed pass that made it: do not reread or hash it
+    # merely to reproduce an existing digest.
     report, unbound = plan_original(original_data, roots, slide, inherited_original_sha256=inherited_original_sha256,
                                     cuts=cuts)
     bind_native(report, unbound, native_data)
