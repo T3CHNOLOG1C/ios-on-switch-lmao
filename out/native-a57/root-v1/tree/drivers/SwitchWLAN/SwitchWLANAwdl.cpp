@@ -785,8 +785,12 @@ void publishService()
     s->setProperty("IOInterfaceName", gName);
     s->setProperty("BSD Name", gName);
     s->setProperty("IOInterfaceNamePrefix", "awdl");
+    // The role is a string under IO80211InterfaceRole, the one wifip2pd prints and matches ("Infrastructure" for en0;
+    // the real AppleBCMWLAN driver sets "AWDL" here for awdl0 and sets nothing else). IO80211VirtualInterfaceRole is
+    // only for NAN sub-roles ("WiFi-Aware Discovery"/"+Data"); setting it sent wifip2pd down its virtual-interface
+    // path (AppleDevice.swift:362), which does not know "AWDL", so it logged "Unable to find role for interface:
+    // awdl0" and never built an AWDLInterface or enabled AWDL (r7u, 11-05). Only the normal role key, as the driver does.
     s->setProperty("IO80211InterfaceRole", "AWDL");
-    s->setProperty("IO80211VirtualInterfaceRole", "AWDL");
     if (OSNumber *n = OSNumber::withNumber(static_cast<unsigned long long>(gUnit), 32)) {
         s->setProperty("IOInterfaceUnit", n);
         n->release();
