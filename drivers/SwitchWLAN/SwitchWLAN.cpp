@@ -323,6 +323,12 @@ private:
     // The coexistence mode (coexMode): the firmware's own at bring-up (its idle mode), the one we last set, refusals.
     uint32_t btcIdleMode_ = SWLAN_BTC_HYBRID, btcMode_ = 0;
     bool btcModeRefused_ = false;
+    // The dynamic coexistence profile the firmware held at bring-up (btc_dynctl, the NVRAM's), and the flags of the
+    // one it holds now.
+    uint8_t btcProfile_[50] = {};
+    bool btcProfileHave_ = false, btcProfileRefused_ = false;
+    int btcProfileFlags_ = -1;
+    void coexProfile(unsigned links);
     bool readSta(swlan_sta &out);
     void coexBringUp();
     void coexJoined();
@@ -2154,31 +2160,30 @@ void SwitchWLAN::btLinks(unsigned links)
     });
 }
 
-// Bring-up (radioInit, after coexBringUp): the NVRAM's dynamic coexistence control off (SwitchWLANCoex.h, "The
-// coexistence mode we run"), the firmware's current mode kept as the idle mode, then the mode for the links there are
-// (after a recovery Bluetooth may have some). One line with what the firmware reads back.
+// Bring-up (radioInit, after coexBringUp): the firmware's dynamic coexistence profile and mode kept as the idle state,
+// then the state for the links there are (after a recovery Bluetooth may have some). One line.
 void SwitchWLAN::coexConfigure()
 {
     uint8_t v[64] = {};
     size_t n = 0;
-    const char *dynamic = "left (no version 1 profile)";
-    if (getVar("btc_dynctl", v, sizeof(v), &n) && swlan_btc_profile_static(v, n))
-        dynamic = setVar("btc_dynctl", v, 50) ? "off" : "left (refused)";
-    uint8_t back[64] = {};
-    size_t m = 0;
-    const int flags = getVar("btc_dynctl", back, sizeof(back), &m) && m >= 2 && back[0] == 1 ? back[1] : -1;
+    btcProfileHave_ = getVar("btc_dynctl", v, sizeof(v), &n) && n >= sizeof(btcProfile_) && v[0] == 1;
+    if (btcProfileHave_) memcpy(btcProfile_, v, sizeof(btcProfile_));
+    btcProfileFlags_ = btcProfileHave_ ? btcProfile_[1] : -1;
+    btcProfileRefused_ = false;
     if (getVar("btc_mode", v, sizeof(v), &n) && n >= 4) btcIdleMode_ = swlan::le32(v);
     btcMode_ = btcIdleMode_;
     btcModeRefused_ = false;
     os_log(OS_LOG_DEFAULT,
-           "SwitchWLAN: coex: dynamic coexistence (desense) %s, firmware reads btcdyn flags %d; idle "
-           "mode %u",
-           dynamic, flags, btcIdleMode_);
+           "SwitchWLAN: coex: dynamic coexistence (btcdyn flags %d) while Bluetooth has no link, off with one%s; "
+           "idle mode %u",
+           btcProfileFlags_, btcProfileHave_ ? "" : " (no version 1 profile: left as it is)", btcIdleMode_);
     coexMode();
 }
 
-// Worker, chip up: full TDM while Bluetooth has any link, the idle mode without (swlan_coex_mode). One line per change
-// with the firmware's readback; a refusal is one line and the mode is left as it is for the boot.
+// Worker, chip up: full TDM and the dynamic control off while Bluetooth has any link, the idle mode and the NVRAM's
+// dynamic control without (swlan_coex_mode, swlan_btc_profile_for). The dynamic control goes off before full TDM is
+// set and comes back only after the idle mode is, so its mode switching never overrides the mode we set. One line per
+// change with the firmware's readback; a refusal is one line and that setting is left as it is for the boot.
 void SwitchWLAN::coexMode()
 {
     unsigned links = 0;
@@ -2186,21 +2191,47 @@ void SwitchWLAN::coexMode()
         links = btLinks_;
         btChanged_ = false;  // (coexApply, when joined, runs on the same change: the caller read the flag first)
     });
+    if (links) coexProfile(links);
     const uint32_t want = swlan_coex_mode(links, btcIdleMode_);
-    if (btcModeRefused_ || want == btcMode_) return;
-    uint8_t le[4];
-    swlan::put32(le, want);
-    if (!setVar("btc_mode", le, sizeof(le))) {
-        btcModeRefused_ = true;
-        os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: btc_mode %u refused (%s); left at %u", want, why_, btcMode_);
+    if (!btcModeRefused_ && want != btcMode_) {
+        uint8_t le[4];
+        swlan::put32(le, want);
+        if (setVar("btc_mode", le, sizeof(le))) {
+            btcMode_ = want;
+            uint8_t v[4] = {};
+            size_t n = 0;
+            const int readBack = getVar("btc_mode", v, sizeof(v), &n) && n >= 4 ? static_cast<int>(swlan::le32(v)) : -1;
+            os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: btc_mode %u (%s; firmware reads %d): %u Bluetooth link%s", want,
+                   want == SWLAN_BTC_FULL_TDM ? "full TDM" : "the firmware's own", readBack, links,
+                   links == 1 ? "" : "s");
+        } else {
+            btcModeRefused_ = true;
+            os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: btc_mode %u refused (%s); left at %u", want, why_, btcMode_);
+        }
+    }
+    if (!links) coexProfile(links);
+}
+
+void SwitchWLAN::coexProfile(unsigned links)
+{
+    uint8_t profile[sizeof(btcProfile_)];
+    if (!btcProfileHave_ || btcProfileRefused_ ||
+        !swlan_btc_profile_for(btcProfile_, sizeof(btcProfile_), links, profile) || profile[1] == btcProfileFlags_)
+        return;
+    if (!setVar("btc_dynctl", profile, sizeof(profile))) {
+        btcProfileRefused_ = true;
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: btc_dynctl flags %#x refused (%s); left at %d", profile[1], why_,
+               btcProfileFlags_);
         return;
     }
-    btcMode_ = want;
-    uint8_t v[4] = {};
+    btcProfileFlags_ = profile[1];
+    uint8_t back[64] = {};
     size_t n = 0;
-    const int readBack = getVar("btc_mode", v, sizeof(v), &n) && n >= 4 ? static_cast<int>(swlan::le32(v)) : -1;
-    os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: btc_mode %u (%s; firmware reads %d): %u Bluetooth link%s", want,
-           want == SWLAN_BTC_FULL_TDM ? "full TDM" : "the firmware's own", readBack, links, links == 1 ? "" : "s");
+    const int readBack = getVar("btc_dynctl", back, sizeof(back), &n) && n >= 2 && back[0] == 1 ? back[1] : -1;
+    os_log(OS_LOG_DEFAULT,
+           "SwitchWLAN: coex: dynamic coexistence %s (btcdyn flags %#x, firmware reads %d): %u Bluetooth "
+           "link%s",
+           profile[1] ? "on" : "off", profile[1], readBack, links, links == 1 ? "" : "s");
 }
 
 // Worker, once per join (joinOnce left the station at PM 0): the counters' baselines, then our power-save mode.

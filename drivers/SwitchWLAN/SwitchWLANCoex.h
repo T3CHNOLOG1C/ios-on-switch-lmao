@@ -206,17 +206,14 @@ static inline int swlan_btc_status_describe(const struct swlan_btc_status *s, ch
                     s->bt_pwr, s->bt_rssi, s->wl_rssi);
 }
 
-// ---- The coexistence mode we run -------------------------------------------------------------------------------
-//
-// r8a (11-05 15:00-15:20, fast.com on 2.4 GHz channel 6, PM 2): whenever Bluetooth had a link, the NVRAM's dynamic
-// desense (btcdyn, hybrid mode 5) turned the receiver down (btc_dynctl_status desense 22 at Wi-Fi RSSI -52 or less, 24
-// above, against 99 with no link) and the access point's rate to us fell from 130-144 Mb/s to 14-65: 40 Mbps with no
-// link, 13-14 with one Joy-Con, 5-10 with two and the AirPods. The same 25 minutes, bluetoothd logged 107 A2DP packets
-// flushed by the controller (not on air within the 60 ms flush timeout) while Wi-Fi was busy. So: the dynamic control
-// and its desense off (btc_dynctl flags 0), and while any Bluetooth link is up full TDM (btc_mode 1: the radios take
-// turns on the shared antenna, Bluetooth's slots its own, nothing received through Bluetooth's transmissions, so
-// nothing to desense against; what Apple's BCM4355C0 iPads and the Nexus 6's BCM4356 ship); with no link the
-// firmware's own mode (5, hybrid) as HOS runs it.
+// With a Bluetooth link up, the NVRAM's dynamic coexistence (btcdyn, hybrid mode 5) turns the receiver down
+// (btc_dynctl_status desense 22 at Wi-Fi RSSI -52 or less, 24 above): the access point's rate to us fell from 130-144
+// Mb/s to 14-65 (40 Mbps with no link, 13-14 with one Joy-Con, 5-10 with two and the AirPods) and the controller
+// flushed A2DP packets it could not get on air within their 60 ms. So while any link is up the dynamic control and its
+// desense are off (btc_dynctl flags 0) and the radios take turns (btc_mode 1, full TDM: Bluetooth's slots its own,
+// nothing received through Bluetooth's transmissions, so nothing to desense against; what Apple's BCM4355C0 iPads and
+// the Nexus 6's BCM4356 ship). With no link the firmware runs its own coexistence as the NVRAM configures it (dynamic
+// control on, mode 5, no desense), the state HOS runs: mode 5 with the dynamic control off has no such baseline.
 enum { SWLAN_BTC_FULL_TDM = 1, SWLAN_BTC_HYBRID = 5 };
 
 // dctl_prof_t (50 bytes, version 1) with the dynamic control off: flags 0 (no dynamic control, desense or mode
@@ -225,6 +222,16 @@ static inline bool swlan_btc_profile_static(uint8_t *b, size_t n)
 {
     if (n < 50 || b[0] != 1) return false;
     b[1] = 0;
+    return true;
+}
+
+// The profile for the links Bluetooth has, from the one the firmware held at bring-up (the NVRAM's): static with any
+// link, the NVRAM's as it is with none. False (out untouched) unless that is a version 1 profile.
+static inline bool swlan_btc_profile_for(const uint8_t *nvram, size_t n, unsigned links, uint8_t out[50])
+{
+    if (n < 50 || nvram[0] != 1) return false;
+    for (unsigned i = 0; i < 50; ++i) out[i] = nvram[i];
+    if (links) out[1] = 0;
     return true;
 }
 

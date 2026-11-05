@@ -125,6 +125,11 @@ int btc_profile_static(uint8_t *profile, size_t length)
     return swlan_btc_profile_static(profile, length);
 }
 
+int btc_profile_for(const uint8_t *nvram, size_t length, unsigned links, uint8_t *out)
+{
+    return swlan_btc_profile_for(nvram, length, links, out);
+}
+
 unsigned coex_mode(unsigned links, unsigned idle_mode)
 {
     return swlan_coex_mode(links, idle_mode);

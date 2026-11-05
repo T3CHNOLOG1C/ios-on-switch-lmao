@@ -362,7 +362,6 @@ TEST_F(Coex, NvramValuesFromTheLoadedFile)
     EXPECT_FALSE(nvram_value("boardflags=zz\n", 14, "boardflags", &value));
 }
 
-// --- Wi-Fi: the coexistence mode (r8a: desense with any Bluetooth link) --------------------------------------------
 TEST_F(Coex, DynamicCoexistenceOffAndTdmWithLinks)
 {
     // the firmware's btc_dynctl as r8a read it back: version 1, flags 0x3, levels 99/0/22/24, default mode 5
@@ -378,6 +377,22 @@ TEST_F(Coex, DynamicCoexistenceOffAndTdmWithLinks)
     EXPECT_EQ(coex_mode(0, 5), 5u);                        // no link: the firmware's own (hybrid)
     EXPECT_EQ(coex_mode(1, 5), 1u);                        // a Joy-Con: full TDM
     EXPECT_EQ(coex_mode(3, 5), 1u);                        // two Joy-Cons and the AirPods
+}
+
+TEST_F(Coex, DynamicCoexistenceOnlyWithoutLinks)
+{
+    const Bytes nvram = btcdynProfile();
+    Bytes idle(50, 0xAA), linked(50, 0xAA);
+    EXPECT_TRUE(btc_profile_for(nvram.data(), nvram.size(), 0, idle.data()));
+    EXPECT_EQ(idle, Bytes(nvram.begin(), nvram.begin() + 50));  // the NVRAM's, flags 0x3
+    EXPECT_TRUE(btc_profile_for(nvram.data(), nvram.size(), 2, linked.data()));
+    EXPECT_EQ(linked[1], 0);
+    linked[1] = nvram[1];
+    EXPECT_EQ(linked, idle);  // only the flags differ
+    Bytes other = cat(Bytes{2, 3}, Bytes(48, 0)), out(50, 0xAA);
+    EXPECT_FALSE(btc_profile_for(other.data(), other.size(), 1, out.data()));
+    EXPECT_FALSE(btc_profile_for(nvram.data(), 40, 1, out.data()));
+    EXPECT_EQ(out, Bytes(50, 0xAA));
 }
 
 }  // namespace

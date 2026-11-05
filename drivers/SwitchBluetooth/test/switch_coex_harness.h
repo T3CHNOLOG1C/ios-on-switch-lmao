@@ -25,6 +25,7 @@ int btc_status_describe(const uint8_t *buffer, size_t length, char *out, size_t 
 int btc_profile_describe(const uint8_t *buffer, size_t length, char *out, size_t size);
 int nvram_value(const char *text, size_t length, const char *key, uint32_t *out);
 int btc_profile_static(uint8_t *profile, size_t length);
+int btc_profile_for(const uint8_t *nvram, size_t length, unsigned links, uint8_t *out);
 unsigned coex_mode(unsigned links, unsigned idle_mode);
 
 #ifdef __cplusplus
