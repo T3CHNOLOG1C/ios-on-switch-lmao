@@ -73,6 +73,9 @@
 // (r3v: "ACHome page:0xC usage:0x223 ... source:gamepad", destination Preferences). The Joy-Con reports still reach
 // the plugin unchanged, so games see both buttons and the combine gesture works. Backboardd routes the device like
 // the console buttons (Built-In, Consumer Control: "(display: builtin) desc: (Keyboard) -> <system>").
+// Bluetooth Joy-Cons and Pro Controllers get the same two usages, clicked on the console buttons device from their
+// reports on the way to bluetoothd (../SwitchSuspend/SwitchWakeSources.h, "Bluetooth controllers' Home and Capture"):
+// 21H461's GameController gives Nintendo devices no game-intent component, so their Home reaches nothing system-wide.
 #include "OriginalHidDeviceABI.h"
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOCatalogue.h>

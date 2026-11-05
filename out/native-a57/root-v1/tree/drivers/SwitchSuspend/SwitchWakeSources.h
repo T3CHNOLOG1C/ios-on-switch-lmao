@@ -16,8 +16,9 @@
 //                        rails keep running with the panel off (r15: they used to pause, so a seated Joy-Con could not
 //                        wake the console);
 //       Bluetooth Home   a connected Joy-Con (R) or Pro Controller's Home, seen here in its HID input report on the way
-//                        to bluetoothd (SwitchBluetooth) -> Consumer Menu on the console buttons (SwitchButtons). With
-//                        the panel lit the report only goes to GameController, as before (its AC Home does nothing).
+//                        to bluetoothd (SwitchBluetooth) -> a Consumer Menu click on the console buttons
+//                        (SwitchButtons) the moment it goes down. With the panel lit the same reports click Menu and
+//                        Snapshot at their release ("Bluetooth controllers' Home and Capture" below, r17).
 //       power in         a charger, dock or host plugged in (SwitchBattery: external power that is not our own boost
 //                        appears) -> SpringBoard lights the screen with the charging UI itself (-[SBUIController
 //                        updateBatteryState:] -> unlockUIFromSource:withOptions:, from the power-source change), as on
@@ -52,19 +53,24 @@ static inline const char *switch_wake_source_name(unsigned source)
     return source < SWITCH_WAKE_SOURCES ? names[source] : "unknown";
 }
 
-// --- Bluetooth Home ------------------------------------------------------------------------------------------------
+// --- Bluetooth controllers' Home and Capture ------------------------------------------------------------------------
 // An inbound HCI ACL packet from its 4-byte header (handle and flags, length; no H4 type byte), `length` bytes of it
 // (it may be cut short: only the first SWITCH_WAKE_BT_PEEK bytes are looked at). A Nintendo controller's input report
 // rides one unfragmented L2CAP frame on the HID interrupt channel (a dynamic CID) behind the HIDP header 0xA1 (DATA |
-// INPUT): report 0x30 (full, every 15 ms), 0x21 (subcommand reply) and 0x31 (NFC/IR) carry the shared button byte at
-// report offset 4 (Minus 0x01, Plus 0x02, sticks, Home 0x10, Capture 0x20), 0x3F (simple HID, on button changes) its
-// second button byte at offset 2 with the same bits (dekuNukem Nintendo_Switch_Reverse_Engineering
-// bluetooth_hid_notes.md; the 0x3F layout is the Joy-Con's own SDP descriptor, 16 buttons then the hat). Returns 1
-// (Home down in this report), 0 (a report without Home) or -1 (not a Nintendo controller input report); *handle is set
-// for 0 and 1. A Joy-Con (L) has Capture there instead and never reports Home.
+// INPUT): report 0x30 (full, every 15 ms) and 0x21 (subcommand reply), 49 bytes with the ID, and 0x31 (NFC/IR), 362,
+// carry the shared button byte at report offset 4 (Minus 0x01, Plus 0x02, sticks, Home 0x10, Capture 0x20); 0x3F
+// (simple HID, on button changes), 12 bytes, its second button byte at offset 2 with the same bits (dekuNukem
+// Nintendo_Switch_Reverse_Engineering bluetooth_hid_notes.md; the 0x3F layout is the Joy-Con's own SDP descriptor,
+// 16 buttons then the hat; the 49 and 362 bytes are what SwitchJoyConHID.cpp's rail reports and descriptor carry). The
+// lengths are exact so that other pads' reports with the same IDs (a DualSense's 0x31 is 78 bytes) never count.
+// Returns SWITCH_BT_HOME | SWITCH_BT_CAPTURE as held in this report (0: neither), or -1 (not a Nintendo controller
+// input report); *handle and *report (its ID) are set for >= 0. A Joy-Con (L) has only Capture, (R) only Home; a Pro
+// Controller both.
 #define SWITCH_WAKE_BT_PEEK 16u
+#define SWITCH_BT_HOME      0x01u
+#define SWITCH_BT_CAPTURE   0x02u
 
-static inline int switch_wake_bt_home(const uint8_t *acl, size_t length, uint16_t *handle)
+static inline int switch_wake_bt_buttons(const uint8_t *acl, size_t length, uint16_t *handle, uint8_t *report)
 {
     if (!acl || length < 4) return -1;
     const unsigned flags = (unsigned)(acl[1] >> 4) & 3u;  // packet boundary: 1 = continuation
@@ -75,12 +81,15 @@ static inline int switch_wake_bt_home(const uint8_t *acl, size_t length, uint16_
     const uint8_t *hid = acl + 8;
     const size_t have = length - 8 < l2capLength ? length - 8 : l2capLength;
     if (hid[0] != 0xa1) return -1;
-    const uint8_t report = hid[1];
+    const uint8_t id = hid[1];
     size_t at;
-    if (report == 0x30 || report == 0x21 || report == 0x31) {
-        if (l2capLength < 1 + 13) return -1;  // HIDP header + the standard input's 13 bytes at least
+    if (id == 0x30 || id == 0x21) {
+        if (l2capLength != 1 + 49) return -1;  // HIDP header + the standard 49-byte report
         at = 1 + 4;
-    } else if (report == 0x3f) {
+    } else if (id == 0x31) {
+        if (l2capLength != 1 + 362) return -1;  // HIDP header + the NFC/IR report
+        at = 1 + 4;
+    } else if (id == 0x3f) {
         if (l2capLength != 1 + 12) return -1;  // HIDP header + 0x3F's 12 bytes
         at = 1 + 2;
     } else {
@@ -88,41 +97,112 @@ static inline int switch_wake_bt_home(const uint8_t *acl, size_t length, uint16_
     }
     if (have <= at) return -1;
     *handle = (uint16_t)((unsigned)(acl[0] | acl[1] << 8) & 0x0fffu);
-    return (hid[at] & 0x10) ? 1 : 0;
+    *report = id;
+    return (int)(((hid[at] & 0x10) ? SWITCH_BT_HOME : 0u) | ((hid[at] & 0x20) ? SWITCH_BT_CAPTURE : 0u));
 }
 
-// Home edges per connection: true when this report has Home down and the connection's last one did not. A table full
-// of other handles takes the oldest entry's slot.
-#define SWITCH_WAKE_BT_LINKS 8u
-struct switch_wake_bt_edges {
-    uint16_t handle[SWITCH_WAKE_BT_LINKS];
-    uint8_t home[SWITCH_WAKE_BT_LINKS];
-    uint8_t used[SWITCH_WAKE_BT_LINKS];
-    uint32_t age[SWITCH_WAKE_BT_LINKS];
+// Home and Capture of every connected Nintendo controller as the console's Home button (Consumer Menu) and screenshot
+// key (Consumer Snapshot), as a rail Joy-Con's are (SwitchJoyConHID.cpp), with the panel lit or off. iPadOS's own
+// handling does nothing system-wide for them: JoyConHIDServicePlugin turns either into an AC Home click that
+// SpringBoard gives the focused app, and 21H461's GameController gives Nintendo devices (_GCNintendoJoyConDevice) no
+// game-intent component, so GamepadHIDServiceFilter's Home gesture reaches nobody (it does for _GCDefaultPhysicalDevice
+// pads). The reports still go to bluetoothd unchanged, so games keep both buttons. A press clicks the system button
+// when it is released (press and release together), not while held:
+//   * Home and Capture held together (any controllers) is GameController's gesture that combines two Joy-Cons, so
+//     neither clicks;
+//   * a press held SWITCH_BT_CLICK_LIMIT_NS or longer clicks nothing (holds belong to the controller's own gestures);
+//   * with the panel off, Home clicks at once when it goes down (it wakes the console, as on Horizon) and not again at
+//     its release.
+// Per connection, the buttons its last report held; a table full of other handles takes the oldest entry's slot. A
+// disconnection drops a connection's buttons without a click.
+#define SWITCH_BT_BUTTON_LINKS   8u
+#define SWITCH_BT_CLICK_LIMIT_NS 1000000000ull
+struct switch_bt_buttons {
+    uint16_t handle[SWITCH_BT_BUTTON_LINKS];
+    uint8_t held[SWITCH_BT_BUTTON_LINKS];
+    uint8_t used[SWITCH_BT_BUTTON_LINKS];
+    uint32_t age[SWITCH_BT_BUTTON_LINKS];
     uint32_t clock;
+    uint8_t down;     // the buttons any connection holds
+    uint8_t spoiled;  // of those, the ones whose release clicks nothing
+    uint64_t since[2];
+};
+struct switch_bt_buttons_step {
+    uint8_t click;    // the system buttons to click now
+    uint8_t pressed;  // the buttons that went down (any connection's first)
+    bool fresh;       // the report was its connection's first
 };
 
-static inline bool switch_wake_bt_edge(struct switch_wake_bt_edges *e, uint16_t handle, bool home)
+static inline void switch_bt_buttons_settle(struct switch_bt_buttons *b, uint64_t now, bool dark,
+                                            struct switch_bt_buttons_step *step)
 {
-    unsigned slot = SWITCH_WAKE_BT_LINKS;
-    for (unsigned i = 0; i < SWITCH_WAKE_BT_LINKS && slot == SWITCH_WAKE_BT_LINKS; ++i)
-        if (e->used[i] && e->handle[i] == handle) slot = i;
-    if (slot == SWITCH_WAKE_BT_LINKS) {
-        for (unsigned i = 0; i < SWITCH_WAKE_BT_LINKS && slot == SWITCH_WAKE_BT_LINKS; ++i)
-            if (!e->used[i]) slot = i;
-        if (slot == SWITCH_WAKE_BT_LINKS) {
-            slot = 0;
-            for (unsigned i = 1; i < SWITCH_WAKE_BT_LINKS; ++i)
-                if (e->age[i] < e->age[slot]) slot = i;
+    uint8_t down = 0;
+    for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS; ++i)
+        if (b->used[i]) down = (uint8_t)(down | b->held[i]);
+    const uint8_t pressed = (uint8_t)(down & ~b->down), released = (uint8_t)(b->down & ~down);
+    for (unsigned k = 0; k < 2; ++k) {
+        const uint8_t bit = (uint8_t)(1u << k);
+        if (released & bit) {
+            if (!(b->spoiled & bit) && now - b->since[k] < SWITCH_BT_CLICK_LIMIT_NS) step->click |= bit;
+            b->spoiled = (uint8_t)(b->spoiled & ~bit);
         }
-        e->used[slot] = 1;
-        e->handle[slot] = handle;
-        e->home[slot] = 0;
+        if (pressed & bit) {
+            b->since[k] = now;
+            b->spoiled = (uint8_t)(b->spoiled & ~bit);
+            if (bit == SWITCH_BT_HOME && dark) {
+                step->click |= bit;
+                b->spoiled |= bit;
+            }
+        }
     }
-    e->age[slot] = ++e->clock;
-    const bool edge = home && !e->home[slot];
-    e->home[slot] = home ? 1 : 0;
-    return edge;
+    if ((down & (SWITCH_BT_HOME | SWITCH_BT_CAPTURE)) == (SWITCH_BT_HOME | SWITCH_BT_CAPTURE))
+        b->spoiled |= SWITCH_BT_HOME | SWITCH_BT_CAPTURE;
+    step->pressed |= pressed;
+    b->down = down;
+}
+
+// One controller report (switch_wake_bt_buttons >= 0) at `now` (nanoseconds, monotonic); dark: the panel is off.
+static inline struct switch_bt_buttons_step switch_bt_buttons_report(struct switch_bt_buttons *b, uint16_t handle,
+                                                                     uint8_t held, uint64_t now, bool dark)
+{
+    struct switch_bt_buttons_step step = {0, 0, false};
+    unsigned slot = SWITCH_BT_BUTTON_LINKS;
+    for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS && slot == SWITCH_BT_BUTTON_LINKS; ++i)
+        if (b->used[i] && b->handle[i] == handle) slot = i;
+    if (slot == SWITCH_BT_BUTTON_LINKS) {
+        for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS && slot == SWITCH_BT_BUTTON_LINKS; ++i)
+            if (!b->used[i]) slot = i;
+        if (slot == SWITCH_BT_BUTTON_LINKS) {
+            slot = 0;
+            for (unsigned i = 1; i < SWITCH_BT_BUTTON_LINKS; ++i)
+                if (b->age[i] < b->age[slot]) slot = i;
+            b->used[slot] = 0;  // the oldest connection's buttons go, without a click
+            struct switch_bt_buttons_step none = {0, 0, false};
+            switch_bt_buttons_settle(b, now, dark, &none);
+        }
+        b->used[slot] = 1;
+        b->handle[slot] = handle;
+        step.fresh = true;
+    }
+    b->age[slot] = ++b->clock;
+    b->held[slot] = (uint8_t)(held & (SWITCH_BT_HOME | SWITCH_BT_CAPTURE));
+    switch_bt_buttons_settle(b, now, dark, &step);
+    return step;
+}
+
+// HCI Disconnection Complete for `handle`: its buttons go without a click.
+static inline void switch_bt_buttons_gone(struct switch_bt_buttons *b, uint16_t handle)
+{
+    for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS; ++i) {
+        if (!b->used[i] || b->handle[i] != handle) continue;
+        b->used[i] = 0;
+        b->held[i] = 0;
+    }
+    uint8_t down = 0;
+    for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS; ++i)
+        if (b->used[i]) down = (uint8_t)(down | b->held[i]);
+    b->spoiled = (uint8_t)(b->spoiled & down);
+    b->down = down;
 }
 
 // --- The wake guarantee --------------------------------------------------------------------------------------------

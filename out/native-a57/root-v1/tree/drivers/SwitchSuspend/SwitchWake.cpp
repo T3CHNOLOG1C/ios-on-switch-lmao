@@ -3,7 +3,9 @@
 //
 // Locks: the journal's ring and the per-source rate limits take one IOLock for a copy; the file writes run on their own
 // thread calls, serialized by a second IOLock, so no caller (SwitchBacklight's and SwitchButtons' work loops,
-// SwitchBluetooth's receive path) waits for the SD.
+// SwitchBluetooth's receive path) waits for the SD. The Bluetooth controllers' buttons (switch_bt_buttons) belong to
+// SwitchBluetooth's receive path, which is serialized (its framing state has no lock either); a reset from a client
+// change is a flag that path takes at its next packet.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <kern/clock.h>
@@ -41,8 +43,9 @@ uint64_t gLastSource[SWITCH_WAKE_SOURCES], gLastShot;        // gLock
 char gShotWhy[96];                                           // gLock
 bool gCopiedPrevious, gWriteFailed;                          // gWriteLock
 char gRender[SWITCH_POWER_LINES * SWITCH_POWER_LINE + 256];  // gWriteLock
-switch_wake_bt_edges gEdges;                                 // SwitchBluetooth's receive path only
-volatile bool gEdgesStale;
+switch_bt_buttons gButtons;  // SwitchBluetooth's receive path only (its ACL packets and link events)
+bool gButtonsLogged;         // the same: the first controller report of the boot was logged
+volatile bool gButtonsStale;  // a client came or went: every connection's buttons go (switch_wake_bt_reset)
 
 IOLock *once(IOLock *volatile *slot)
 {
@@ -242,24 +245,44 @@ extern "C" void switch_wake_event(unsigned source)
     IOLockUnlock(lock);
     if (!fresh) return;
     switch_power_journal("wake source: %s with the panel off%s", switch_wake_source_name(source),
-                         source == SWITCH_WAKE_BT_HOME ? " (console Home pressed for it)" : "");
-    if (source == SWITCH_WAKE_BT_HOME) switch_buttons_home_pulse();
+                         source == SWITCH_WAKE_BT_HOME ? " (console Home clicked for it)" : "");
     switch_backlight_expect_wake(source);
-}
-
-extern "C" void switch_wake_display(bool on)
-{
-    if (!on) __atomic_store_n(&gEdgesStale, true, __ATOMIC_RELEASE);
 }
 
 extern "C" void switch_wake_bt_acl(const uint8_t *acl, size_t length)
 {
     uint16_t handle = 0;
-    const int home = switch_wake_bt_home(acl, length, &handle);
-    if (home < 0) return;
-    // A press seen before this dark period does not count as held now: the first report of each starts afresh.
-    if (__atomic_exchange_n(&gEdgesStale, false, __ATOMIC_ACQ_REL)) bzero(&gEdges, sizeof(gEdges));
-    if (switch_wake_bt_edge(&gEdges, handle, home == 1)) switch_wake_event(SWITCH_WAKE_BT_HOME);
+    uint8_t report = 0;
+    const int held = switch_wake_bt_buttons(acl, length, &handle, &report);
+    if (held < 0) return;
+    if (__atomic_exchange_n(&gButtonsStale, false, __ATOMIC_ACQ_REL)) bzero(&gButtons, sizeof(gButtons));
+    const bool dark = !switch_display_is_on();
+    const switch_bt_buttons_step step =
+        switch_bt_buttons_report(&gButtons, handle, (uint8_t)held, nanoseconds(mach_absolute_time()), dark);
+    const bool first = !gButtonsLogged;
+    gButtonsLogged = true;
+    if (first) {
+        os_log(OS_LOG_DEFAULT,
+               "SwitchWake: first Nintendo controller report of the boot: handle %#x, report %#04x, "
+               "Home/Capture %#x; their clicks go to the console buttons",
+               handle, report, held);
+    }
+    // A connection's first report with the panel off (a controller that reconnected to wake the console): what it held.
+    if (step.fresh && dark)
+        switch_power_journal("Bluetooth controller %#x connected with the panel off: report %#04x, Home/Capture %#x",
+                             handle, report, held);
+    if (step.pressed & SWITCH_BT_HOME) switch_wake_event(SWITCH_WAKE_BT_HOME);  // nothing with the panel lit
+    if (step.click) switch_buttons_bt_click(step.click);
+}
+
+extern "C" void switch_wake_bt_gone(uint16_t handle)
+{
+    switch_bt_buttons_gone(&gButtons, handle);
+}
+
+extern "C" void switch_wake_bt_reset(void)
+{
+    __atomic_store_n(&gButtonsStale, true, __ATOMIC_RELEASE);
 }
 
 extern "C" void switch_wake_stackshot(const char *why)

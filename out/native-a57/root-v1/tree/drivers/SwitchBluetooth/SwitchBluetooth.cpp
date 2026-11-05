@@ -143,8 +143,6 @@
 #include "../TegraAPBDMA/TegraAPBDMA.h"
 #include "../SwitchSuspend/SwitchWake.h"
 
-extern "C" bool switch_display_is_on(void);  // ../SwitchBrightness/SwitchBrightness.h
-
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 // The rail Joy-Con driver's strong definition wins when it is linked (../SwitchJoyCon/SwitchJoyCon.h).
@@ -1578,7 +1576,8 @@ void SwitchBluetooth::resetClientFraming()
     sentCount = 0;
     sentOverflow = false;
     answerHead = answerTail = 0;
-    links = {};  // a new client: the controller has no links (a used one was brought up again)
+    links = {};              // a new client: the controller has no links (a used one was brought up again)
+    switch_wake_bt_reset();  // nor any controller's buttons held
     requests = {};
     role = SWITCH_BT_ROLE_UNKNOWN;
     switch_coex_bt_reset(&coex);  // and none of its scans or priorities
@@ -1779,21 +1778,19 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
     case H4_ACL: {
         if (avail < 5) return false;
         total = 5u + (uint32_t)(at(3) | at(4) << 8);
-        // With the panel off a Nintendo controller's Home is a wake source (../SwitchSuspend/SwitchWake.h): the
-        // packet's start (ACL, L2CAP and HIDP headers, the button bytes) is looked at once it is in the ring.
-        const bool dark = !switch_display_is_on();
+        // A Nintendo controller's Home and Capture are the console's Home button and screenshot key, and its Home
+        // wakes the console (../SwitchSuspend/SwitchWake.h): the packet's start (ACL, L2CAP and HIDP headers, the
+        // button bytes) is looked at once it is in the ring; the packet goes on unchanged.
         const uint32_t peek = 1u + SWITCH_WAKE_BT_PEEK < total ? 1u + SWITCH_WAKE_BT_PEEK : total;
-        if (dark && avail < peek) return false;
+        if (avail < peek) return false;
         ++st.acl;
         const uint8_t header[2] = {at(1), at(2)};
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
         switch_bt_link_rx(&links, switch_bt_acl_handle(header));
         IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
-        if (dark) {
-            uint8_t acl[SWITCH_WAKE_BT_PEEK];
-            for (uint32_t i = 1; i < peek; ++i) acl[i - 1] = at(i);
-            switch_wake_bt_acl(acl, peek - 1);
-        }
+        uint8_t acl[SWITCH_WAKE_BT_PEEK];
+        for (uint32_t i = 1; i < peek; ++i) acl[i - 1] = at(i);
+        switch_wake_bt_acl(acl, peek - 1);
         break;
     }
     case H4_SCO:
@@ -2282,6 +2279,7 @@ void SwitchBluetooth::linkEvent(uint8_t code, uint32_t length)
         break;
     case SWITCH_BT_EV_DISCONNECTION_COMPLETE:
         if (length >= 4 && !p[0]) wasOpen = switch_bt_link_close(&links, switch_bt_le16(p + 1), &closed);
+        if (length >= 4 && !p[0]) switch_wake_bt_gone(switch_bt_le16(p + 1));  // its controller's buttons go
         break;
     case SWITCH_BT_EV_ROLE_CHANGE:
         if (length >= 8 && !p[0]) {
@@ -3166,6 +3164,7 @@ errno_t SwitchBluetooth::ctlDisconnect(kern_ctl_ref, u_int32_t unit, void *)
     IOLockUnlock(self->stateLock);
     if (mine) {
         self->setMode(kIdle);
+        switch_wake_bt_reset();  // every connection went with the client: no controller holds a button
         char line[400];
         self->describe(line, sizeof(line));
         IOLog("SwitchBluetooth: client %u gone%s: %s\n", unit, self->rxStalled ? " (RX was stalled)" : "", line);

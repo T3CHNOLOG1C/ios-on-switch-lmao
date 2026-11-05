@@ -4,23 +4,41 @@
 #include <string.h>
 #include "SwitchWakeSources.h"
 
-static struct switch_wake_bt_edges edges;
+static struct switch_bt_buttons buttons;
 static struct switch_wake_guard guard;
 static struct switch_power_ring ring;
 
-int wake_bt_home(const uint8_t *acl, size_t length, uint16_t *handle)
+int wake_bt_buttons(const uint8_t *acl, size_t length, uint16_t *handle, uint8_t *report)
 {
-    return switch_wake_bt_home(acl, length, handle);
+    return switch_wake_bt_buttons(acl, length, handle, report);
 }
 
-void wake_edges_reset(void)
+void bt_buttons_reset(void)
 {
-    memset(&edges, 0, sizeof(edges));
+    memset(&buttons, 0, sizeof(buttons));
 }
 
-int wake_bt_edge(uint16_t handle, int home)
+// One report's step packed: click | pressed << 4 | fresh << 8.
+unsigned bt_report(uint16_t handle, unsigned held, uint64_t now, int dark)
 {
-    return switch_wake_bt_edge(&edges, handle, home != 0);
+    const struct switch_bt_buttons_step step =
+        switch_bt_buttons_report(&buttons, handle, (uint8_t)held, now, dark != 0);
+    return (unsigned)step.click | (unsigned)step.pressed << 4 | (step.fresh ? 1u << 8 : 0u);
+}
+
+void bt_gone(uint16_t handle)
+{
+    switch_bt_buttons_gone(&buttons, handle);
+}
+
+unsigned bt_down(void)
+{
+    return buttons.down;
+}
+
+uint64_t bt_click_limit(void)
+{
+    return SWITCH_BT_CLICK_LIMIT_NS;
 }
 
 void wake_guard_reset(void)

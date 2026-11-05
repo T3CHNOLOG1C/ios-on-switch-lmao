@@ -19,9 +19,10 @@
 // Failures panic with a one-line reason; there is no polled mode. A 10 s watchdog checks that latched volume edges
 // reached the CPU (tegra_gpio_check_delivery), and a PMIC interrupt storm panics with the registers.
 // Waking (../SwitchSuspend/SwitchWake.h): a power-key press with the panel off is a wake source (journal line, wake
-// guarantee); the press itself goes to SpringBoard as always. Menu (0x0C/0x40, J120's Home button) is this device's
-// fourth usage: switch_buttons_home_pulse() presses and releases it (a Bluetooth controller's Home with the panel off),
-// from a software event source on this work loop, so any context may ask.
+// guarantee); the press itself goes to SpringBoard as always. Menu (0x0C/0x40, J120's Home button) and Snapshot
+// (0x0C/0x65, the screenshot key) are this device's fourth and fifth usages: switch_buttons_bt_click() clicks them
+// (press, then release, each its own report) for a Bluetooth Nintendo controller's Home and Capture
+// (../SwitchSuspend/SwitchWakeSources.h), from a software event source on this work loop, so any context may ask.
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -84,7 +85,8 @@ class SwitchButtons : public IOService {
         IOWorkLoop *loop = nullptr;
     IOInterruptEventSource *volume[kVolumeCount] = {};
     IOInterruptEventSource *pmic = nullptr;
-    IOInterruptEventSource *home = nullptr;  // software source (no provider): switch_buttons_home_pulse
+    IOInterruptEventSource *home = nullptr;  // software source (no provider): switch_buttons_bt_click
+    uint8_t clicks = 0;                      // SWITCH_BT_HOME | SWITCH_BT_CAPTURE asked for (atomics)
     IOTimerEventSource *watchdog = nullptr;
     IOService *hid = nullptr;
     uint8_t buttons = 0;
@@ -94,7 +96,7 @@ class SwitchButtons : public IOService {
     static void volumeChanged(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void pmicInterrupt(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
-    static void homePulse(OSObject *owner, IOInterruptEventSource *sender, int count);
+    static void btClicks(OSObject *owner, IOInterruptEventSource *sender, int count);
     void setUpPmic();
     void change(uint8_t button, bool pressed, bool pulse);
     void post();
@@ -102,7 +104,11 @@ class SwitchButtons : public IOService {
 public:
     bool start(IOService *provider) override;
     void free() override;
-    void pressHome() { home->interruptOccurred(nullptr, nullptr, 0); }
+    void click(uint8_t which)
+    {
+        __atomic_fetch_or(&clicks, which, __ATOMIC_ACQ_REL);
+        home->interruptOccurred(nullptr, nullptr, 0);
+    }
 };
 
 static SwitchButtons *volatile gButtons;  // set once started
@@ -139,8 +145,8 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
     if (!pmic || loop->addEventSource(pmic) != kIOReturnSuccess)
         panic("SwitchButtons: cannot attach the MAX77620 interrupt (INTID 118)");
 
-    home = IOInterruptEventSource::interruptEventSource(this, &SwitchButtons::homePulse);
-    if (!home || loop->addEventSource(home) != kIOReturnSuccess) panic("SwitchButtons: Home pulse source setup failed");
+    home = IOInterruptEventSource::interruptEventSource(this, &SwitchButtons::btClicks);
+    if (!home || loop->addEventSource(home) != kIOReturnSuccess) panic("SwitchButtons: click source setup failed");
 
     for (auto *source : volume) source->enable();
     pmic->enable();
@@ -262,15 +268,23 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
         switch_wake_event(SWITCH_WAKE_POWER_KEY);
 }
 
-// Work loop: one press and release of Menu (J120's Home button), each its own report as for a real press.
-void SwitchButtons::homePulse(OSObject *owner, IOInterruptEventSource *, int)
+// Work loop: one press and release of Menu (J120's Home button) and/or Snapshot per click asked for since the last
+// run, each its own report as for a real press.
+void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchButtons, owner);
     if (!self) return;
-    self->buttons |= kSwitchButtonHome;
-    self->post();
-    self->buttons &= (uint8_t)~kSwitchButtonHome;
-    self->post();
+    const uint8_t which = __atomic_exchange_n(&self->clicks, (uint8_t)0, __ATOMIC_ACQ_REL);
+    const struct {
+        uint8_t bt, button;
+    } kClicks[] = {{SWITCH_BT_HOME, kSwitchButtonHome}, {SWITCH_BT_CAPTURE, kSwitchButtonSnapshot}};
+    for (const auto &c : kClicks) {
+        if (!(which & c.bt)) continue;
+        self->buttons |= c.button;
+        self->post();
+        self->buttons &= (uint8_t)~c.button;
+        self->post();
+    }
 }
 
 void SwitchButtons::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
@@ -295,7 +309,7 @@ extern "C" int switch_buttons_start(void)
     return 0;
 }
 
-extern "C" void switch_buttons_home_pulse(void)
+extern "C" void switch_buttons_bt_click(uint8_t which)
 {
-    if (SwitchButtons *buttons = __atomic_load_n(&gButtons, __ATOMIC_ACQUIRE)) buttons->pressHome();
+    if (SwitchButtons *buttons = __atomic_load_n(&gButtons, __ATOMIC_ACQUIRE)) buttons->click(which);
 }

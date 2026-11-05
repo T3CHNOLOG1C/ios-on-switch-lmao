@@ -321,7 +321,6 @@ void SwitchBacklight::powerOff()
     scanoutStopped = native_legacy_display_set_scanout(false);
     panelOn = false;
     sentRaw = ~0u;
-    switch_wake_display(false);
     switch_power_journal(
         "SwitchBacklight: display off in %llu ms (als %llu, touch %llu, panel %llu %s, scanout %llu %s)",
         msSince(start), msBetween(start, als), msBetween(als, touch), msBetween(touch, panel),
@@ -349,7 +348,6 @@ void SwitchBacklight::powerOn()
     if (target == 0 && level >= 0) target = current = lit;
     gDisplayOn = true;
     switch_als_set_active(true);  // last: frame ends run again, and LDO6 came back with the touch panel meanwhile
-    switch_wake_display(true);
     switch_motion_display_power(true);
     switch_power_journal("SwitchBacklight: display on in %llu ms (touch %llu, scanout %llu, panel %llu %s, als %llu; "
                          "level %d)",
