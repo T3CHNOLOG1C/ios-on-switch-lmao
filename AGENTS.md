@@ -1,3 +1,6 @@
+## File Length & Random Tips
+
+Don't write stupidly long files. Around 500 lines of code, you should consider splitting them. Keep helpers away from higher level logic. A human needs to be able to read and maintain this codebase. That means you need to keep it readable to a human. This does not conflict with code comments. Your code should be self explanatory to the largest extent possible.
 
 ## Code Comments
 
@@ -5,6 +8,7 @@ Default to writing no new comments.
 
 Add a comment only when it conveys information that a competent
 reader cannot reasonably infer from the code itself, such as:
+
 - Non-obvious invariants or constraints
 - Why an unconventional implementation is necessary
 - Hardware, protocol, or platform-specific quirks
@@ -12,6 +16,7 @@ reader cannot reasonably infer from the code itself, such as:
 - Important tradeoffs that future maintainers might otherwise undo
 
 Never write comments that:
+
 - Narrate what the next line or block of code does
 - Restate names, types, or obvious control flow
 - Divide code into sections with decorative headings
