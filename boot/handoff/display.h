@@ -2,7 +2,7 @@
 #define IOSWITCH_HANDOFF_DISPLAY_H
 #include <stdint.h>
 
-// Live OLED firmware description, photographed in IMG_5509:
+// The OLED firmware's live framebuffer, as read on hardware:
 // 720 x 1280, a8b8g8r8, rot=3, pitch=2880, span=0x384000.
 // No controller/MMIO access: only aligned stores inside the pixel buffer.
 #define DISPLAY_BASE UINT64_C(0xf5a00000)

@@ -87,7 +87,7 @@ loader_copy_run:
     bl loader_copy_prepare
     cbnz w0, .Ltables_fail
     /* The staged file and the window (89 MB: 1.4 million lines by VA, ~200 ms
-     * measured on r7n) are cleaned and invalidated by set/way instead: every
+     * on hardware) are cleaned and invalidated by set/way instead: every
      * L1/L2 data line, ~33K operations. Clean-and-invalidate, never
      * invalidate-only, so no dirty line anywhere (ours, U-Boot's, or the
      * secure world's in the shared L2) is ever dropped; with U-Boot's

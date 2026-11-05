@@ -1,5 +1,4 @@
 // Share the measured EL2 -> EL1 sequence, vectors and private stacks.
-// The standalone handoff diagnostic retains its original callback.
 #define UINT64_C(value) value
 #include "layout.h"
 #if defined(LOAD_FAST_COPY) && LOAD_FAST_COPY

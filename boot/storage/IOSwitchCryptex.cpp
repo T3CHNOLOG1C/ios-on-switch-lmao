@@ -34,7 +34,7 @@ const char *const uuids[IOSWITCH_CRYPTEX_COUNT] = {
   IOSWITCH_SYSTEM_CRYPTEX_UUID, IOSWITCH_APP_CRYPTEX_UUID
 };
 const uint64_t imageBytes[IOSWITCH_CRYPTEX_COUNT] = {UINT64_C(3303014400), UINT64_C(10485760)};
-// Same prior SystemOS development identifier, not a computed/authenticated hash.
+// A fixed SystemOS development identifier, not a computed/authenticated hash.
 const uint8_t systemIdentifier[48] = {
   0x13,0x14,0x8b,0xb4,0x2c,0x8c,0xe4,0xb5,0x6d,0x83,0x5d,0x89,
   0xf9,0x1a,0x4c,0xea,0x1a,0xc0,0x48,0x21,0x11,0xdc,0x34,0xa0,

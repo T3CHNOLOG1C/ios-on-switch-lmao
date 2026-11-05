@@ -75,8 +75,8 @@ def main():
         for line in p.read_text().splitlines():
             cols=line.split('\t');stack[cols[0].rsplit(':',1)[-1]]=int(cols[1])
     if sum(stack.values())>=8192:raise ValueError('stack upper bound too large')
-    # Optional standalone legacy wrapper: root's packager chooses how to
-    # publish code through the already reviewed cache-maintenance sequence.
+    # Optional standalone uImage wrapper: the root packager chooses how to
+    # publish the code through its cache-maintenance sequence.
     header=struct.pack('>7I4B32s',0x27051956,0,0,len(data),LOAD,LOAD,zlib.crc32(data),
                        17,22,1,0,b'IOSwitch MMC RAM Export v1'.ljust(32,b'\0'))
     header=header[:4]+struct.pack('>I',zlib.crc32(header))+header[8:]

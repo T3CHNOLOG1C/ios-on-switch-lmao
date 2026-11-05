@@ -193,13 +193,13 @@ static uint64_t stage_check(void) {
 
 static uint64_t native_gate(void) {
 #if LOAD_NATIVE_GATES
-    // Recognize the photographed inherited stack before switching to ours.
+    // U-Boot's inherited stack must be where hardware showed it before we switch to ours.
     // The full RAM profile later retires completed U-Boot allocations; live
     // FDT reservations, secure carveouts and the display remain protected.
     if (probe_record[R_ENTRY_SP] < UINT64_C(0xf0001000) ||
         probe_record[R_ENTRY_SP] >= UINT64_C(0xffd00000)) return 0x401;
-    // Exact bounded configuration reads already photographed in IMG_5510.
-    // Refuse a changed carveout layout instead of inferring new free memory.
+    // Memory-controller carveout registers as read on hardware. Refuse a
+    // changed carveout layout instead of inferring new free memory.
     static const uint32_t mc[][2] = {
         {0x70019050,0x1000}, {0x70019670,0}, {0x70019674,0}, {0x700199d4,0},
         {0x700199a0,0xfff00000}, {0x700199a4,0}, {0x700199a8,0},
@@ -250,9 +250,8 @@ void loader_after_transition(void) {
     }
 #endif
     /* Every range the loader will touch, against the live FDT's reservations in one walk (memory.c): the walk reads
-     * the FDT uncached, so one walk instead of one per range. Each range keeps the refusal it always had; the first
-     * failing one in this order wins, as when they were checked one after another. 0: no refusal (the timing slot
-     * is only skipped). */
+     * the FDT uncached, so one walk instead of one per range. The first failing range in this order sets the
+     * refusal; a refusal of 0 only skips that range (the timing slot). */
     struct loader_memory_range ranges[LOADER_MEMORY_RANGES_MAX];
     uint64_t refusals[LOADER_MEMORY_RANGES_MAX];
     unsigned count = 0, index = 0;
