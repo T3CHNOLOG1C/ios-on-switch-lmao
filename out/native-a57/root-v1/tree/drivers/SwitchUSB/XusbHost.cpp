@@ -68,8 +68,10 @@ enum : uint32_t {  // FPCI configuration space of the host (xhci-tegra.c)
     SMI_INTR_EN = 1u << 3,
 };
 enum : uint32_t {  // IPFS
+    IPFS_MSI_EN_VEC0 = 0x140,
     IPFS_CONFIGURATION = 0x180,
     IPFS_INTR_MASK = 0x188,
+    IPFS_INTR_ENABLE = 0x198,  // xhci-tegra.c XUSB_HOST_IPFS_INTR_ENABLE_0: saved and restored, never set
     IPFS_CLKGATE_HYSTERESIS = 0x1bc,
     IPFS_EN_FPCI = 1u << 0,
     IPFS_IP_INT_MASK = 1u << 16,
@@ -165,7 +167,10 @@ void Controller::padctlUp()
 // clamps removed. The caller releases the reset. A partition already on is left as it is.
 bool Controller::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit)
 {
-    if (pmc(PWRGATE_STATUS) & (1u << partition)) return true;
+    if (pmc(PWRGATE_STATUS) & (1u << partition)) {
+        partitionsFound |= 1u << partition;
+        return true;
+    }
     w(car, resetSet, bit);
     if (!waitBits(pmcPage, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000)) return false;
     pmcWrite(PWRGATE_TOGGLE, partition | TOGGLE_START);
@@ -465,12 +470,34 @@ bool Controller::serviceMailbox()
     return true;
 }
 
+// The interrupt path from the xHCI to the GIC, as tegra_xusb_config programs it: the interrupter (IMAN0 IP/IE), the
+// controller (USBCMD.INTE, USBSTS.EINT), the FPCI bridge (CFG_1 memory and bus master), the IPFS wrapper (EN_FPCI,
+// INTR_MASK.IP_INT_MASK; INTR_ENABLE and MSI_EN_VEC0 as the chip has them: Linux never writes them), the mailbox
+// (SMI_INTR, owner), and whether powerOn found the partitions already on (a boot stage left them: reset not pulsed).
 void Controller::describe(char *buffer, size_t size) const
 {
+    const uint32_t op = capLength(), rt = runtimeOffset(), iman = xhci(rt + 0x20), cmd = xhci(op), sts = xhci(op + 4);
+    const unsigned port = usb2First;
+    snprintf(
+        buffer, size,
+        "USBCMD %#x (INTE %u) USBSTS %#x (EINT %u) IMAN0 %#x (IP %u IE %u) ERDP0 %#x PORTSC%u %#x; FPCI CFG_1 %#x; "
+        "IPFS CONFIGURATION %#x INTR_MASK %#x INTR_ENABLE %#x MSI_EN_VEC0 %#x; SMI %#x MBOX_OWNER %#x; "
+        "partitions found on %#x",
+        cmd, !!(cmd & XHCI_USBCMD_INTE), sts, !!(sts & XHCI_USBSTS_EINT), iman, !!(iman & XHCI_IMAN_IP),
+        !!(iman & XHCI_IMAN_IE), xhci(rt + 0x38), port, port ? xhci(xhci_portsc_offset(op, port)) : 0,
+        r(fpci, XUSB_CFG_1), r(ipfs, IPFS_CONFIGURATION), r(ipfs, IPFS_INTR_MASK), r(ipfs, IPFS_INTR_ENABLE),
+        r(ipfs, IPFS_MSI_EN_VEC0), r(fpci, XUSB_CFG_ARU_SMI_INTR), r(fpci, XUSB_CFG_ARU_MBOX_OWNER), partitionsFound);
+}
+
+bool Controller::interruptSample(uint32_t &iman, uint32_t &usbcmd, uint32_t &usbsts, uint32_t &erdp) const
+{
+    if (!isPowered) return false;
     const uint32_t op = capLength(), rt = runtimeOffset();
-    snprintf(buffer, size, "USBSTS %#x USBCMD %#x IMAN0 %#x ERDP0 %#x SMI %#x MBOX_OWNER %#x IPFS_INTR_MASK %#x",
-             xhci(op + 4), xhci(op), xhci(rt + 0x20), xhci(rt + 0x38), r(fpci, XUSB_CFG_ARU_SMI_INTR),
-             r(fpci, XUSB_CFG_ARU_MBOX_OWNER), r(ipfs, IPFS_INTR_MASK));
+    iman = xhci(rt + 0x20);
+    usbcmd = xhci(op);
+    usbsts = xhci(op + 4);
+    erdp = xhci(rt + 0x38);
+    return true;
 }
 
 }  // namespace xhost

@@ -85,15 +85,20 @@ public:
     // answers it (ACK/NAK), returns false only on a firmware hang.
     bool takeMailboxInterrupt();
     bool serviceMailbox();
-    bool sendMailbox(uint32_t cmd, uint32_t data);   // takes ownership, waits (bounded) for the firmware to take it
-    bool mailboxPending() const;                     // SMI_INTR raised and not yet acknowledged
-    void describe(char *buffer, size_t size) const;  // one line: USBSTS, IMAN0, ERDP0, SMI, owner, IPFS mask
+    bool sendMailbox(uint32_t cmd, uint32_t data);  // takes ownership, waits (bounded) for the firmware to take it
+    bool mailboxPending() const;                    // SMI_INTR raised and not yet acknowledged
+    // One line of the interrupt path, xHCI to IPFS: USBCMD/USBSTS/IMAN0/ERDP0, the OTG port's PORTSC, FPCI CFG_1, the
+    // IPFS configuration/mask/enable/MSI, SMI and mailbox owner, the partitions powerOn found already on.
+    void describe(char *buffer, size_t size) const;
+    // IMAN0, USBCMD, USBSTS, ERDP0 for the interrupt check (false before powerOn).
+    bool interruptSample(uint32_t &iman, uint32_t &usbcmd, uint32_t &usbsts, uint32_t &erdp) const;
 
 private:
     volatile uint8_t *car = nullptr, *pmcPage = nullptr, *fusePage = nullptr, *mc = nullptr, *padctl = nullptr,
                      *regs = nullptr, *fpci = nullptr, *ipfs = nullptr;
     bool mailboxHang = false, isMapped = false, isPowered = false;
     unsigned usb2First = 0, usb2Count = 0;
+    uint32_t partitionsFound = 0;  // PMC partitions powerOn found already powered (bits as PWRGATE_STATUS)
 
     void padctlUp();
 

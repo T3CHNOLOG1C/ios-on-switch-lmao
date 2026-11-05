@@ -72,6 +72,9 @@ bool switchxhci_start(char *why, size_t whySize);
 // cycles the OTG port's PORTSC.PP. Thread context.
 void switchxhci_set_host_role(bool host);
 void switchxhci_expect_port_change(void);  // a device appeared in host role: arm the lost-interrupt check
+// SwitchUSB.cpp: host mode off for this boot (a never-booted interrupt line did not deliver; the caller logged it).
+// Thread context.
+void switch_usb_host_failed(void);
 // The role line's xHCI part: USBCMD, USBSTS, every PORTSC (once powered), the last PP cycle and the pad controller.
 void switchxhci_describe(char *buffer, size_t size);
 #endif

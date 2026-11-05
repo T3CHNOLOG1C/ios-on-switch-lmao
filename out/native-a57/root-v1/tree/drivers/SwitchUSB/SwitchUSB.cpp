@@ -29,6 +29,7 @@ IOLock *gLock;
 thread_call_t gRoleCall, gReportCall;
 bool gWantHost, gHostCable;            // from the last PD state
 bool gHostUp, gHostBroken, gHostRole;  // what has been done
+bool gHostFailed;                      // switch_usb_host_failed (SwitchXHCI's interrupt check), any thread
 uint32_t gRoleChanges;                 // role changes applied (the report names the one it follows)
 constexpr uint32_t kReportMS = 1000;   // the role line: this long after a change, when the port has settled
 
@@ -104,6 +105,7 @@ void applyRole(thread_call_param_t, thread_call_param_t)
     IOLockLock(gLock);
     const bool wantHost = gWantHost, hostCable = gHostCable;
     IOLockUnlock(gLock);
+    if (__atomic_load_n(&gHostFailed, __ATOMIC_ACQUIRE)) gHostBroken = true;
     if (wantHost && !gHostRole && !gHostBroken) {
         char why[160] = "";
         switchxudc_set_host_owns_port(true);
@@ -171,6 +173,14 @@ IOService *publishedNode(const char *path)
     return nub;
 }
 }  // namespace
+
+// SwitchXHCI's interrupt check gave host mode up for this boot (it logged why): SwitchPD stops sourcing and keeps the
+// port sink-only, which ends the host role through pdChanged; the role thread never takes the host role again.
+void switch_usb_host_failed(void)
+{
+    __atomic_store_n(&gHostFailed, true, __ATOMIC_RELEASE);
+    (void)switch_pd_allow_source(false);
+}
 
 extern "C" int switch_usb_start(void)
 {

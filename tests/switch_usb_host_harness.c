@@ -76,3 +76,14 @@ uint32_t chrg_ctl0_host(uint32_t v) { return xusb_chrg_ctl0_host(v); }
 uint32_t chrg_ctl1_host(uint32_t v) { return xusb_chrg_ctl1_host(v); }
 uint32_t oc_map_host(uint32_t v) { return xusb_oc_map_host(v); }
 const char *id_name(uint32_t v) { return xusb_id_name(v); }
+
+// verdict of xusb_irq_judge for an armed and a current sample
+int irq_judge(uint32_t armed_count, uint32_t armed_erdp, int armed_pending, int armed_deliverable, uint32_t now_count,
+              uint32_t now_erdp, int now_pending, int now_deliverable, int first, unsigned stage)
+{
+    const struct xusb_irq_sample armed = {armed_count, armed_erdp, armed_pending != 0, armed_deliverable != 0};
+    const struct xusb_irq_sample now = {now_count, now_erdp, now_pending != 0, now_deliverable != 0};
+    return (int)xusb_irq_judge(armed, now, first != 0, stage);
+}
+int xhci_pending(uint32_t iman, uint32_t usbsts) { return xusb_xhci_pending(iman, usbsts); }
+int xhci_deliverable(uint32_t iman, uint32_t usbcmd) { return xusb_xhci_deliverable(iman, usbcmd); }

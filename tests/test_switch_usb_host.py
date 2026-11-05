@@ -8,6 +8,12 @@ sink-only partner and never on at boot, for a charger or for the Mac (dual-role)
 (SPDSRC1/2 closed, as with the rails up first) sources, a VSAFE nobody of ours drives does not; and over a fuzzed walk
 nothing but a classified re-attach ever sources, and nothing sources without host mode.
 
+The host interrupts (INTID 71 xHCI, 72 falcon mailbox) were never booted: until a line has reached its handler once,
+a missing delivery (an event waiting, or nothing at all after the controller's first start) turns host mode off with
+one line, never a panic; once it has fired, a lost interrupt panics only when the controller asked for it (IMAN.IE and
+USBCMD.INTE) and nothing consumed the event; the routing the kernel relies on (DT GIC_SPI 39/40 level-high through the
+LIC, IPFS as tegra_xusb_config) is checked against the OLED DT and the driver sources.
+
 The host role: the USB 2.0 ports come from the xHCI Supported Protocol capabilities (pad 0 = the first one; a broken
 list ends the walk), PORTSC writes never set a write-1 bit (PED, PR, the change bits) and only move PP, and the pad
 controller values for each role (ID grounded with the VBUS override dropped first, floating for the XUDC; the charger
@@ -79,6 +85,10 @@ def setUpModule():
         getattr(lib, name).restype = u32
     lib.id_name.argtypes = [u32]
     lib.id_name.restype = ctypes.c_char_p
+    lib.irq_judge.argtypes = [u32, u32, i, i, u32, u32, i, i, i, uint]
+    lib.irq_judge.restype = i
+    lib.xhci_pending.argtypes = [u32, u32]
+    lib.xhci_deliverable.argtypes = [u32, u32]
 
 
 def tearDownModule():
@@ -390,6 +400,123 @@ class HostRoleTest(unittest.TestCase):
         self.assertEqual(lib.chrg_ctl0_host(1), 1)  # PD_CHG as found
         self.assertEqual(lib.oc_map_host(0xfff0), 0xffff)
         self.assertEqual(lib.oc_map_host(0xffff), 0xffff)
+
+
+FINE, CONFIRM, OFF, PANIC = range(4)
+
+
+def judge(armed, now, first=False, stage=1):
+    """armed/now: (count, erdp, pending, deliverable)."""
+    return Lib.lib.irq_judge(armed[0], armed[1], int(armed[2]), int(armed[3]), now[0], now[1], int(now[2]),
+                             int(now[3]), int(first), stage)
+
+
+class InterruptCheckTest(unittest.TestCase):
+    def run_check(self, armed, stage1, stage2, first=False):
+        """SwitchXHCI::checkFired: stage 1 at 2 s, stage 2 50 ms later against the stage-1 sample."""
+        verdict = judge(armed, stage1, first, 1)
+        if verdict != CONFIRM:
+            return verdict
+        return judge(stage1, stage2, first, 2)
+
+    def test_never_fired_first_start(self):
+        """r7w: host up, device on the port, no port event and INTID 71 never fired: one line, host off, no panic."""
+        quiet = (0, 0x1000, False, True)
+        self.assertEqual(self.run_check(quiet, quiet, quiet, first=True), OFF)
+        waiting = (0, 0x1000, True, True)
+        self.assertEqual(self.run_check(quiet, waiting, waiting, first=True), OFF)
+        self.assertEqual(self.run_check(quiet, waiting, waiting, first=False), OFF)  # a later role, event stuck
+        masked = (0, 0x1000, True, False)  # IP set but IE/INTE off: still never delivered, still not a panic
+        self.assertEqual(self.run_check(quiet, masked, masked, first=True), OFF)
+
+    def test_delivered(self):
+        before = (0, 0x1000, False, True)
+        self.assertEqual(self.run_check(before, (1, 0x1040, False, True), (1, 0x1040, False, True), first=True), FINE)
+        # fired before the check was armed (the first PSC came at once): proven, nothing waiting
+        self.assertEqual(self.run_check((1, 0x1040, False, True), (1, 0x1040, False, True), (1, 0x1040, False, True),
+                                        first=True), FINE)
+        # delivered between stage 1 and stage 2
+        self.assertEqual(self.run_check(before, (0, 0x1000, True, True), (1, 0x1040, False, True), first=True), FINE)
+
+    def test_proven_line_lost(self):
+        armed = (3, 0x1100, False, True)
+        stuck = (3, 0x1100, True, True)
+        self.assertEqual(self.run_check(armed, stuck, stuck), PANIC)
+        # the controller masked its interrupter (IE or INTE off): not a lost interrupt
+        self.assertEqual(self.run_check(armed, (3, 0x1100, True, False), (3, 0x1100, True, False)), FINE)
+        # the event was consumed (ERDP moved) or delivered
+        self.assertEqual(self.run_check(armed, (3, 0x1140, True, True), (3, 0x1140, True, True)), FINE)
+        self.assertEqual(self.run_check(armed, (4, 0x1100, True, True), (4, 0x1100, True, True)), FINE)
+        # nothing due on a later role of a proven line
+        self.assertEqual(self.run_check(armed, armed, armed), FINE)
+
+    def test_no_evidence(self):
+        quiet = (0, 0x1000, False, True)
+        self.assertEqual(self.run_check(quiet, quiet, quiet, first=False), FINE)
+
+    def test_mailbox(self):
+        """INTID 72: an SMI waiting with no handler run, never fired: host off; fired before: panic."""
+        self.assertEqual(self.run_check((0, 0, False, True), (0, 0, True, True), (0, 0, True, True)), OFF)
+        self.assertEqual(self.run_check((2, 0, False, True), (2, 0, True, True), (2, 0, True, True)), PANIC)
+        self.assertEqual(self.run_check((0, 0, False, True), (0, 0, False, True), (0, 0, False, True)), FINE)
+
+    def test_stage_one_never_acts(self):
+        for count in (0, 5):
+            for pending in (False, True):
+                for first in (False, True):
+                    self.assertIn(judge((count, 0, False, True), (count, 0, pending, True), first, 1), (FINE, CONFIRM))
+
+    def test_register_bits(self):
+        lib = Lib.lib
+        self.assertTrue(lib.xhci_pending(1, 0))      # IMAN.IP
+        self.assertTrue(lib.xhci_pending(0, 1 << 3))  # USBSTS.EINT
+        self.assertFalse(lib.xhci_pending(2, 1))      # IE, HCH
+        self.assertTrue(lib.xhci_deliverable(2, 1 << 2))
+        self.assertFalse(lib.xhci_deliverable(2, 0))
+        self.assertFalse(lib.xhci_deliverable(1, 1 << 2))
+
+
+class InterruptRoutingTest(unittest.TestCase):
+    """The routing SwitchXHCI's comment claims, against the OLED DT (as decompiled in L4T's nx-platform sources: the
+    xusb node's interrupts) and the driver sources."""
+
+    def test_driver_constants(self):
+        host = (USB / 'XusbHost.h').read_text()
+        self.assertIn('kHostIntid = 32 + 39, kMailboxIntid = 32 + 40', host)  # DT <0 0x27 4>, <0 0x28 4>: SPI 39, 40
+        xhci = (USB / 'SwitchXHCI.cpp').read_text()
+        self.assertIn('ioswitch_interrupt_nub(xhost::kHostIntid, false)', xhci)      # level, as IRQ_TYPE_LEVEL_HIGH
+        self.assertIn('ioswitch_interrupt_nub(xhost::kMailboxIntid, false)', xhci)
+
+    def test_ipfs_as_tegra_xusb_config(self):
+        source = (USB / 'XusbHost.cpp').read_text()
+        power = re.search(r'bool Controller::powerOn\(.*?\n}\n', source, re.S).group(0)
+        order = ['rmw(ipfs, IPFS_CONFIGURATION, 0, IPFS_EN_FPCI)', 'rmw(fpci, XUSB_CFG_4, CFG_4_BASE_MASK',
+                 'rmw(fpci, XUSB_CFG_1, 0, CFG_1_ENABLES)', 'rmw(ipfs, IPFS_INTR_MASK, 0, IPFS_IP_INT_MASK)',
+                 'w(ipfs, IPFS_CLKGATE_HYSTERESIS, 0x80)']
+        positions = [power.index(step) for step in order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn('IPFS_CONFIGURATION = 0x180', source)
+        self.assertIn('IPFS_INTR_MASK = 0x188', source)
+        self.assertIn('IPFS_IP_INT_MASK = 1u << 16', source)
+        self.assertIn('IPFS_INTR_ENABLE = 0x198', source)
+        self.assertNotIn('w(ipfs, IPFS_INTR_ENABLE', source)  # Linux never writes it
+        self.assertNotIn('rmw(ipfs, IPFS_INTR_ENABLE', source)
+
+    def test_gic_level_spi_with_lic(self):
+        gic = (TREE / 'drivers/ArmGIC/ArmGIC.cpp').read_text()
+        init = re.search(r'void ArmGIC::initVector\(.*?\n}\n', gic, re.S).group(0)
+        self.assertIn('isEdge(intid) ? (read32(config) | edgeBit) : (read32(config) & ~edgeBit)', init)
+        self.assertIn('ICTLR_CPU_IEP_CLASS', init)
+        enable = re.search(r'void ArmGIC::enableVector\(.*?\n}\n', gic, re.S).group(0)
+        self.assertLess(enable.index('ICTLR_CPU_IER_SET'), enable.index('writeBit(GICD_ISENABLER, intid)'))
+        self.assertIn('uint32_t ioswitch_interrupt_count(uint32_t intid)', gic)
+
+    def test_no_panic_before_proof(self):
+        xhci = (USB / 'SwitchXHCI.cpp').read_text()
+        check = re.search(r'void SwitchXHCI::checkFired\(.*?\n}\n', xhci, re.S).group(0)
+        self.assertEqual(check.count('panic('), 1)
+        self.assertLess(check.index('if (verdict == XUSB_IRQ_PANIC)'), check.index('panic('))
+        self.assertIn('switch_usb_host_failed()', check)
 
 
 class KernelSourcesTest(unittest.TestCase):

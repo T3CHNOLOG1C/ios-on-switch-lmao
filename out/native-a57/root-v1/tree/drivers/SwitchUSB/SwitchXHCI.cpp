@@ -15,14 +15,26 @@
 // 290-293: AppleUSBXHCIInterrupter::enable reads ERSTBA and ERDP back through regRead64); which case ran is logged once.
 //
 // Interrupts only: AppleUSBXHCI's own filter owns INTID 71, the mailbox filter (INTID 72) is ours. No timer runs in
-// steady state. A lost interrupt is checked only on positive evidence: when the PD controller reports a device on the
-// port in host role, a port-status event is due (SwitchUSB.cpp calls switchxhci_expect_port_change); 2 s later IMAN0.IP
-// pending with ERDP0 unmoved, or a mailbox interrupt pending with no filter run, still so 50 ms later, panics. A
-// mailbox line that fires with nothing to take is turned off with one line, never left to storm CPU0.
+// steady state. Routing (checked against the sources): the OLED DT's xusb@70090000 has interrupts GIC_SPI 39 (host)
+// and 40 (mailbox), IRQ_TYPE_LEVEL_HIGH, through the root interrupt-parent, the Tegra LIC, into the GIC: INTID 71 and
+// 72. ArmGIC programs a level SPI (ICFGR edge bit clear), CPU0, priority 0xa0, and the LIC gate (IEP_CLASS IRQ, IER
+// set) with GICD_ISENABLER at enable; makeNub gives AppleUSBXHCI the GIC nub's own interrupt specifier. The Tegra side
+// is xhci-tegra.c tegra_xusb_config exactly: IPFS EN_FPCI, BAR0, FPCI CFG_1 bus master, IPFS INTR_MASK IP_INT_MASK,
+// hysteresis 0x80 (IPFS INTR_ENABLE and the MSI vectors are left at reset, as Linux leaves them). IMAN0.IE and
+// USBCMD.INTE are AppleUSBXHCI's.
+// Neither line had fired on this hardware when this was written, so their check is a never-booted one until they
+// have (XusbPorts.h xusb_irq_judge): when the PD controller reports a device on the port in host role a port-status
+// event is due (SwitchUSB.cpp calls switchxhci_expect_port_change); 2 s later, and again 50 ms after that, a line that
+// has not reached its handler once this boot (ioswitch_interrupt_count) with an event waiting, or, after the
+// controller's first start, with nothing delivered at all, logs one line with the whole path (xHCI, FPCI, IPFS, GIC)
+// and turns host mode off for the boot (switch_usb_host_failed: device mode stays). Once a line has fired, IMAN0.IP
+// pending (with IE and INTE) and ERDP0 unmoved, or a mailbox interrupt pending with no handler run, panics as for every
+// proven line. A mailbox line that fires with nothing to take is turned off with one line, never left to storm CPU0.
 #include "OriginalAppleUSBXHCI.h"
 #include "SwitchUSB.h"
 #include "UsbDmaMapper.h"
 #include "XusbHost.h"
+#include "XusbPorts.h"
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
@@ -60,8 +72,9 @@ class SwitchXHCI : public AppleUSBXHCI {
     volatile uint32_t mailboxInterrupts;
     uint32_t unclaimed;  // primary interrupt context only
     volatile bool mailboxStorm;
-    uint32_t mailboxAtCheck, erdpAtCheck;
+    xusb_irq_sample hostAtCheck, mailboxAtCheck;
     uint8_t checkStage;
+    bool firstCheck, checked, gaveUp;
     // Interrupter fold (see the top comment).
     uint32_t hardwareInterrupters, runtimeOffset;
     uint64_t capBase;  // AppleUSBXHCI's mapping of the capability registers
@@ -71,6 +84,8 @@ class SwitchXHCI : public AppleUSBXHCI {
     static void mailboxAction(OSObject *owner, IOInterruptEventSource *, int);
     void armCheck(uint32_t ms, uint8_t stage);
     void checkFired(IOTimerEventSource *);
+    xusb_irq_sample hostSample() const;
+    xusb_irq_sample mailboxSample() const;
     uint32_t *shadowFor(uint64_t address);
 
 public:
@@ -180,40 +195,70 @@ void SwitchXHCI::mailboxAction(OSObject *owner, IOInterruptEventSource *, int)
     }
 }
 
-// A device just appeared on the port in host role: its port-status event is due.
+// A device just appeared on the port in host role: its port-status event is due. The first time after the
+// controller's start, a port event is due even if none is pending (the device was on the port as it powered up).
 IOReturn SwitchXHCI::expectPortChange()
 {
-    if (!checkStage) armCheck(kCheckMS, 1);
+    if (checkStage || gaveUp) return kIOReturnSuccess;
+    firstCheck = !checked;
+    checked = true;
+    armCheck(kCheckMS, 1);
     return kIOReturnSuccess;
+}
+
+xusb_irq_sample SwitchXHCI::hostSample() const
+{
+    uint32_t iman = 0, usbcmd = 0, usbsts = 0, erdp = 0;
+    (void)gHost.interruptSample(iman, usbcmd, usbsts, erdp);
+    return {ioswitch_interrupt_count(xhost::kHostIntid), erdp, xusb_xhci_pending(iman, usbsts),
+            xusb_xhci_deliverable(iman, usbcmd)};
+}
+
+xusb_irq_sample SwitchXHCI::mailboxSample() const
+{
+    return {ioswitch_interrupt_count(xhost::kMailboxIntid), 0, !mailboxStorm && gHost.mailboxPending(), true};
 }
 
 void SwitchXHCI::armCheck(uint32_t ms, uint8_t stage)
 {
     checkStage = stage;
-    erdpAtCheck = gHost.xhci(runtimeOffset + 0x38);
-    mailboxAtCheck = __atomic_load_n(&mailboxInterrupts, __ATOMIC_RELAXED);
+    hostAtCheck = hostSample();
+    mailboxAtCheck = mailboxSample();
     check->setTimeoutMS(ms);
 }
 
 void SwitchXHCI::checkFired(IOTimerEventSource *)
 {
-    const uint32_t iman = gHost.xhci(runtimeOffset + 0x20);
-    const bool hostLost = (iman & 3) == 3 && gHost.xhci(runtimeOffset + 0x38) == erdpAtCheck;  // IP and IE
-    const bool mailboxLost = !mailboxStorm && gHost.mailboxPending() &&
-                             __atomic_load_n(&mailboxInterrupts, __ATOMIC_RELAXED) == mailboxAtCheck;
-    if (!hostLost && !mailboxLost) {
+    const xusb_irq_sample host = hostSample(), mailbox = mailboxSample();
+    const xusb_irq_verdict hostVerdict = xusb_irq_judge(hostAtCheck, host, firstCheck, checkStage);
+    const xusb_irq_verdict mailboxVerdict = xusb_irq_judge(mailboxAtCheck, mailbox, false, checkStage);
+    const bool hostSide = hostVerdict >= mailboxVerdict;
+    const xusb_irq_verdict verdict = hostSide ? hostVerdict : mailboxVerdict;
+    if (verdict == XUSB_IRQ_FINE) {
         checkStage = 0;
+        firstCheck = false;
         return;
     }
-    if (checkStage == 1) {
+    if (verdict == XUSB_IRQ_CONFIRM) {
         armCheck(kConfirmMS, 2);
         return;
     }
-    const uint32_t intid = hostLost ? xhost::kHostIntid : xhost::kMailboxIntid;
-    char state[200], gic[192];
+    const uint32_t intid = hostSide ? xhost::kHostIntid : xhost::kMailboxIntid;
+    char state[480], gic[192];
     gHost.describe(state, sizeof(state));
     ioswitch_interrupt_describe(intid, gic, sizeof(gic));
-    panic("SwitchUSB: XUSB %s interrupt lost (INTID %u): %s, %s", hostLost ? "host" : "mailbox", intid, state, gic);
+    if (verdict == XUSB_IRQ_PANIC) {
+        panic("SwitchUSB: XUSB %s interrupt lost (INTID %u): %s, %s", hostSide ? "host" : "mailbox", intid, state, gic);
+    }
+    checkStage = 0;
+    gaveUp = true;
+    const bool waiting = hostSide ? host.pending : mailbox.pending;
+    IOLog("SwitchUSB: host mode off for this boot: the XUSB %s interrupt (INTID %u, never fired this boot) did not "
+          "reach the CPU %s: %s; %s\n",
+          hostSide ? "host" : "mailbox", intid,
+          waiting ? "with an event waiting" : "2 s after the controller's first start (no event waiting either)", state,
+          gic);
+    switch_usb_host_failed();
 }
 
 // Interrupter register sets (runtime base + 0x20 + 32 * n) that the hardware does not have.
@@ -437,11 +482,14 @@ void switchxhci_describe(char *buffer, size_t size)
     gHost.describePads(pads, sizeof(pads));
     gHost.describePorts(ports, sizeof(ports));
     const PowerCycle cycle = gCycle;
+    const unsigned host = ioswitch_interrupt_count(xhost::kHostIntid),
+                   mailbox = ioswitch_interrupt_count(xhost::kMailboxIntid);
     if (cycle.port) {
-        snprintf(buffer, size, "%s; last PP cycle port %u %#x>%#x>%#x%s; %s", ports, cycle.port, cycle.trace[0],
-                 cycle.trace[1], cycle.trace[2], cycle.followed ? "" : " (PP did not follow)", pads);
+        snprintf(buffer, size, "%s; INTID 71 x%u 72 x%u; last PP cycle port %u %#x>%#x>%#x%s; %s", ports, host, mailbox,
+                 cycle.port, cycle.trace[0], cycle.trace[1], cycle.trace[2],
+                 cycle.followed ? "" : " (PP did not follow)", pads);
     } else {
-        snprintf(buffer, size, "%s; no PP cycle; %s", ports, pads);
+        snprintf(buffer, size, "%s; INTID 71 x%u 72 x%u; no PP cycle; %s", ports, host, mailbox, pads);
     }
 }
 

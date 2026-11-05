@@ -147,4 +147,55 @@ static inline const char *xusb_id_name(uint32_t vbus_id)
     }
 }
 
+// --- The host interrupts' check (SwitchXHCI.cpp) --------------------------------------------------------------------
+// INTID 71 (xHCI, DT xusb@70090000 GIC_SPI 39, level high, through the LIC) and INTID 72 (falcon mailbox, xusb_mbox
+// GIC_SPI 40) had never fired on this hardware when this was written. Until a line has reached its handler once this
+// boot (ioswitch_interrupt_count), a missing delivery is a never-booted path failing: one line and host mode off for the
+// boot (device mode is the proven path), no panic. Once it has fired, a lost interrupt panics as for every proven line.
+//   - delivered: the INTID's handler count moved since the check was armed;
+//   - pending: the interrupter has an event (IMAN.IP, or USBSTS.EINT) that nobody consumed (ERDP unmoved);
+//   - first: the check follows the controller's first start with a device on the port, so a port event is due even
+//     if nothing is pending (no connect seen, or no interrupt asserted at all);
+//   - deliverable: IMAN.IE and USBCMD.INTE are on (a proven line is only judged lost when the controller asks for it).
+// Stage 1 runs kCheckMS after arming; anything short of fine is looked at once more 50 ms later (stage 2) before it acts.
+#define XHCI_USBCMD_INTE (1u << 2)
+#define XHCI_USBSTS_EINT (1u << 3)
+#define XHCI_IMAN_IP     (1u << 0)
+#define XHCI_IMAN_IE     (1u << 1)
+
+enum xusb_irq_verdict {
+    XUSB_IRQ_FINE,     // delivered, or nothing due
+    XUSB_IRQ_CONFIRM,  // looks lost: check again in 50 ms
+    XUSB_IRQ_OFF,      // never fired this boot and still not delivered: one line, host mode off for the boot
+    XUSB_IRQ_PANIC,    // fired before, now lost
+};
+
+struct xusb_irq_sample {
+    uint32_t count;    // the INTID's handler count (ioswitch_interrupt_count)
+    uint32_t erdp;     // ERDP0 (low word), or for the mailbox anything constant
+    bool pending;      // an event waits: IMAN.IP or USBSTS.EINT (xHCI), SMI_INTR (mailbox)
+    bool deliverable;  // the source asks for an interrupt: IMAN.IE and USBCMD.INTE (xHCI); always (mailbox)
+};
+
+static inline enum xusb_irq_verdict xusb_irq_judge(struct xusb_irq_sample armed, struct xusb_irq_sample now, bool first,
+                                                   unsigned stage)
+{
+    const bool delivered = now.count != armed.count;
+    const bool waiting = now.pending && now.erdp == armed.erdp && !delivered;
+    const enum xusb_irq_verdict act = stage >= 2 ? (now.count ? XUSB_IRQ_PANIC : XUSB_IRQ_OFF) : XUSB_IRQ_CONFIRM;
+    if (now.count) return waiting && now.deliverable ? act : XUSB_IRQ_FINE;
+    if (waiting || (first && !delivered)) return act;
+    return XUSB_IRQ_FINE;
+}
+
+static inline bool xusb_xhci_pending(uint32_t iman, uint32_t usbsts)
+{
+    return (iman & XHCI_IMAN_IP) || (usbsts & XHCI_USBSTS_EINT);
+}
+
+static inline bool xusb_xhci_deliverable(uint32_t iman, uint32_t usbcmd)
+{
+    return (iman & XHCI_IMAN_IE) && (usbcmd & XHCI_USBCMD_INTE);
+}
+
 #endif

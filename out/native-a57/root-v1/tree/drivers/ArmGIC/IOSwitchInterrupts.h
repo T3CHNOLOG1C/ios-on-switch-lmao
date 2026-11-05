@@ -33,6 +33,10 @@ bool ioswitch_interrupts_ready(void);
 // or if it was asked for with the other trigger. Thread context only.
 IOService *ioswitch_interrupt_nub(uint32_t intid, bool edgeTriggered);
 
+// How many times the INTID has reached its handler since boot (ArmCpu dispatched it to a registered vector): proof
+// that a never-booted driver's interrupt path works before it may panic on a lost one. Any context.
+uint32_t ioswitch_interrupt_count(uint32_t intid);
+
 // One line of the INTID's controller state (times handled, distributor enable/
 // pending/active, trigger, priority, target, Tegra LIC gate) for a panic message.
 void ioswitch_interrupt_describe(uint32_t intid, char *buffer, size_t size);

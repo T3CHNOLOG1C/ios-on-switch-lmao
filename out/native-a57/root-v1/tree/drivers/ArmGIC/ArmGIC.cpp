@@ -163,6 +163,10 @@ public:
     void resume();
     IOService *nubFor(uint32_t intid, bool edgeTriggered);
     void describe(uint32_t intid, char *buffer, size_t size) const;
+    uint32_t count(uint32_t intid) const
+    {
+        return intid >= kFirstSpi && intid < intids ? __atomic_load_n(&fired[intid], __ATOMIC_RELAXED) : 0;
+    }
 
     IOReturn handleInterrupt(void *refCon, IOService *nub, int source) override;
     bool vectorCanBeShared(IOInterruptVectorNumber, IOInterruptVector *) override { return false; }
@@ -528,6 +532,12 @@ IOService *ioswitch_interrupt_nub(uint32_t intid, bool edgeTriggered)
         }
     }
     return gic->nubFor(intid, edgeTriggered);
+}
+
+uint32_t ioswitch_interrupt_count(uint32_t intid)
+{
+    ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
+    return gic ? gic->count(intid) : 0;
 }
 
 void ioswitch_interrupt_describe(uint32_t intid, char *buffer, size_t size)
