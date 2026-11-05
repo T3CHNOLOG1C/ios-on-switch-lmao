@@ -1,5 +1,5 @@
 use crate::memory::{
-    candidates, host_cached, host_cached_placement, host_incoherent, MemoryClass, Pool,
+    candidates, host_cached, host_cached_placement, host_incoherent, spare_fits, MemoryClass, Pool,
 };
 use ash::vk;
 
@@ -273,6 +273,26 @@ fn dedicated_blocks_take_no_other_placement_and_free_with_their_resource() {
 /// A pool has room for a placement where a pooled block holds a free range that long at the
 /// largest alignment asked of the pool so far; a dedicated block's room counts for none.
 #[test]
+fn a_released_dedicated_block_names_its_size_and_a_pooled_one_none() {
+    let mut pool = Pool::default();
+    let dedicated = pool.add(9 << 20, true, "dedicated", 9 << 20);
+    assert_eq!(pool.release_block(dedicated, 0, 9 << 20), Some(("dedicated", Some(9 << 20))));
+    let first = pool.add(4 << 20, false, "first", 100);
+    let second = pool.add(4 << 20, false, "second", 100);
+    assert_eq!(pool.release_block(first, 0, 100), None, "the one empty pooled block is kept");
+    assert_eq!(pool.release_block(second, 0, 100), Some(("second", None)));
+}
+
+#[test]
+fn a_spare_serves_a_request_it_fits_closely() {
+    assert!(spare_fits(9 << 20, 9 << 20));
+    assert!(spare_fits(9 << 20, 8 << 20), "1 MiB over a small request");
+    assert!(spare_fits(20 << 20, 16 << 20), "a quarter over");
+    assert!(!spare_fits(21 << 20, 16 << 20), "past a quarter");
+    assert!(!spare_fits(4 << 20, 5 << 20), "too small");
+}
+
+#[test]
 fn room_is_a_pooled_block_s_free_range_at_the_largest_alignment_asked() {
     let mut pool: Pool<u32> = Pool::default();
     assert!(!pool.has_room(1), "no block yet");
@@ -283,10 +303,10 @@ fn room_is_a_pooled_block_s_free_range_at_the_largest_alignment_asked() {
     );
     let block = pool.add(256, false, 2, 0);
     assert!(pool.has_room(256), "an empty block");
-    assert_eq!(pool.place(8, 1), Some((block, 0)));
+    assert_eq!(pool.place(8, 1), Some((block, 0, true)));
     assert!(pool.has_room(248) && !pool.has_room(249));
     // A placement aligned to 64 asks the pool's later room at 64: 192 bytes from offset 64.
-    assert_eq!(pool.place(8, 64), Some((block, 64)));
+    assert_eq!(pool.place(8, 64), Some((block, 64, true)));
     assert!(pool.has_room(128) && !pool.has_room(129));
     assert_eq!(pool.release(block, 64, 8), None);
     assert!(pool.has_room(192) && !pool.has_room(193));
@@ -329,7 +349,7 @@ fn short_buffers_are_placed_without_gaps() {
             alignment: 16,
             memory_type_bits: 1,
         });
-        let (at, offset) = pool
+        let (at, offset, _) = pool
             .place(requirements.size, requirements.alignment)
             .unwrap();
         assert_eq!((at, offset), (block, end), "{length} bytes");

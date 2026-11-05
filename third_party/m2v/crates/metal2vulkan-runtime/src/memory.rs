@@ -8,6 +8,13 @@
 //!   on many devices) stays out of reach. A request larger than half a block takes a dedicated
 //!   block of its own size, freed with it. A pooled block is freed when it empties, except one
 //!   empty block per memory type that is kept for the next request.
+//! - **Spare dedicated blocks** (ioswitch). A dedicated block that goes is kept as a spare, up to
+//!   [`spare_cap`] bytes of them, for the next dedicated request of its pool it fits closely
+//!   ([`Memory::take_spare`]); a spare unused for [`SPARE_AGE`] goes at the next request or release,
+//!   and the oldest go first past the cap. WebKit's GPU process made and dropped a texture and its
+//!   upload past half a 4 MiB block at nearly every command buffer (r7j: 492 MB of blocks in 5 s,
+//!   15 pooled and 4 dedicated live): each a `vkAllocateMemory`, a kernel BO mapped whole into the
+//!   process and faulted in page by page, then unmapped and freed.
 //! - **Entry point.** [`allocate`] with the resource's memory requirements and its
 //!   [`MemoryClass`]; [`Memory::free`] with the placement it gave. Buffers use it in step 1;
 //!   textures and heaps add their classes and callers in their own steps. Imported host memory
@@ -66,6 +73,35 @@ fn block_cap() -> u64 {
             .and_then(|mib| mib.trim().parse::<u64>().ok())
             .map_or(BLOCK_BYTES, |mib| (mib << 20).clamp(FIRST_BLOCK_BYTES, BLOCK_BYTES))
     })
+}
+
+/// How long a spare dedicated block waits for a request before it goes (the module docs).
+pub(super) const SPARE_AGE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The most bytes of spare dedicated blocks a device keeps (the module docs): 32 MiB, or
+/// `M2V_SPARE_MIB` MiB from the environment (0 keeps none).
+fn spare_cap() -> u64 {
+    static CAP: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("M2V_SPARE_MIB")
+            .ok()
+            .and_then(|mib| mib.trim().parse::<u64>().ok())
+            .map_or(32 << 20, |mib| mib << 20)
+    })
+}
+
+/// Whether a spare of `spare` bytes serves a dedicated request of `size`: at least as large, and
+/// at most a quarter (or 1 MiB) larger, so a spare never holds much more than it serves.
+pub(super) fn spare_fits(spare: u64, size: u64) -> bool {
+    spare >= size && spare - size <= (size / 4).max(1 << 20)
+}
+
+/// A dedicated block kept for a later request of its pool ([`Memory::take_spare`]).
+struct Spare {
+    pool: (Holds, u32),
+    size: u64,
+    block: Block,
+    since: std::time::Instant,
 }
 
 /// The first pooled block of a pool: later ones grow with the pool ([`Memory::next_block_bytes`]),
@@ -387,7 +423,19 @@ impl<T> Pool<T> {
     /// Return `[offset, offset + size)` of block `index`. The block's payload when the block
     /// must now be freed: a dedicated block, or a pooled block that emptied while another empty
     /// pooled block is kept.
+    #[cfg(test)]
     pub(super) fn release(&mut self, index: usize, offset: u64, size: u64) -> Option<T> {
+        self.release_block(index, offset, size)
+            .map(|(payload, _)| payload)
+    }
+
+    /// [`release`](Self::release), and the freed block's size where it was dedicated.
+    pub(super) fn release_block(
+        &mut self,
+        index: usize,
+        offset: u64,
+        size: u64,
+    ) -> Option<(T, Option<u64>)> {
         let block = self.blocks.get_mut(index)?.as_mut()?;
         block.ranges.free(offset, size);
         if !block.ranges.is_empty() {
@@ -403,7 +451,10 @@ impl<T> Pool<T> {
         if keep {
             return None;
         }
-        self.blocks[index].take().map(|block| block.payload)
+        self.blocks[index].take().map(|block| {
+            let dedicated = block.dedicated.then(|| block.ranges.len());
+            (block.payload, dedicated)
+        })
     }
 
     /// Every block's payload, emptying the pool.
@@ -712,6 +763,10 @@ pub(super) struct Memory {
     families: Vec<u32>,
     /// The bytes of the blocks allocated so far ([`Memory::allocated`]).
     allocated: u64,
+    /// Dedicated blocks kept for a later request (the module docs), oldest first.
+    spares: Vec<Spare>,
+    /// Dedicated requests a spare served, and the bytes of spares kept now.
+    spare_reuses: u64,
 }
 
 impl Memory {
@@ -739,7 +794,60 @@ impl Memory {
             unified,
             families,
             allocated: 0,
+            spares: Vec::new(),
+            spare_reuses: 0,
         }
+    }
+
+    /// Dedicated requests a spare served so far, and the bytes of spares kept now (the module
+    /// docs).
+    pub(super) fn spares(&self) -> (u64, u64) {
+        (
+            self.spare_reuses,
+            self.spares.iter().map(|spare| spare.size).sum(),
+        )
+    }
+
+    /// Free the spares unused for [`SPARE_AGE`], then the oldest while their bytes pass `cap`.
+    fn trim_spares(&mut self, device: &ash::Device, cap: u64) {
+        let now = std::time::Instant::now();
+        let mut kept: u64 = self.spares.iter().map(|spare| spare.size).sum();
+        let mut index = 0;
+        while index < self.spares.len() {
+            let spare = &self.spares[index];
+            if kept > cap || now.duration_since(spare.since) >= SPARE_AGE {
+                kept -= spare.size;
+                let spare = self.spares.remove(index);
+                // SAFETY: nothing is placed in a spare, and no command reads it (it went as a
+                // released block does).
+                unsafe { spare.block.release(device) };
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    /// A spare of `pool` for a dedicated request of `size` bytes ([`spare_fits`]), with a buffer
+    /// of addresses where `addressed` (the request's needs it): added back as a dedicated block
+    /// of the pool with `size` bytes at its start placed, its placement not fresh (a spare's bytes
+    /// are what its last placement left).
+    fn take_spare(
+        &mut self,
+        device: &ash::Device,
+        pool: (Holds, u32),
+        size: u64,
+        addressed: bool,
+    ) -> Option<Placement> {
+        self.trim_spares(device, spare_cap());
+        let position = self.spares.iter().position(|spare| {
+            spare.pool == pool
+                && spare_fits(spare.size, size)
+                && spare.block.addresses.is_some() == (addressed && self.device_address)
+        })?;
+        let spare = self.spares.remove(position);
+        self.spare_reuses += 1;
+        let index = self.pool(pool.0, pool.1).add(spare.size, true, spare.block, size);
+        Some(self.placement(pool, index, 0, size, (addressed, false)))
     }
 
     /// The bytes of `VkDeviceMemory` allocated so far for blocks of the runtime's own memory,
@@ -1009,9 +1117,23 @@ impl Memory {
         offset: u64,
         size: u64,
     ) {
-        if let Some(block) = self.pool(holds, type_index).release(block, offset, size) {
+        let Some((block, dedicated)) = self.pool(holds, type_index).release_block(block, offset, size)
+        else {
+            return;
+        };
+        let cap = spare_cap();
+        match dedicated {
+            Some(bytes) if !block.imported && bytes <= cap => {
+                self.spares.push(Spare {
+                    pool: (holds, type_index),
+                    size: bytes,
+                    block,
+                    since: std::time::Instant::now(),
+                });
+                self.trim_spares(device, cap);
+            }
             // SAFETY: no resource is placed in the block any more.
-            unsafe { block.release(device) };
+            _ => unsafe { block.release(device) },
         }
     }
 
@@ -1159,6 +1281,10 @@ impl Memory {
 
     /// Free every block: the device is being destroyed and no resource is left.
     pub(super) fn destroy(&mut self, device: &ash::Device) {
+        for spare in self.spares.drain(..) {
+            // SAFETY: no resource is left, and the device is idle.
+            unsafe { spare.block.release(device) };
+        }
         for pool in &mut self.pools {
             for block in pool.drain() {
                 // SAFETY: no resource is left, and the device is idle.
@@ -1438,6 +1564,14 @@ fn place(
                 lock(memory).place_pooled(device, pool, size, align, addressed)?
             {
                 return Ok(placement);
+            }
+            // A dedicated request past half a block takes a spare it fits (the module docs): a
+            // block placed apart (`Fit::Apart`) never does, its memory one no submission used.
+            if dedicated {
+                let spare = lock(memory).take_spare(device, pool, size, addressed.is_some());
+                if let Some(placement) = spare {
+                    return Ok(placement);
+                }
             }
         }
         match maker.make(device, type_index, block_size, addressed) {

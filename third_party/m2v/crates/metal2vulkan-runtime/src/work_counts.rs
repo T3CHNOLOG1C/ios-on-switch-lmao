@@ -753,6 +753,11 @@ pub struct WorkCounts {
     pub dedicated_memory_blocks_live: u64,
     /// Its live imports of the caller's host memory, a block each (`Memory::import_host`).
     pub host_imports_live: u64,
+    /// Dedicated requests a spare dedicated block served instead of a new allocation
+    /// (`memory.rs`, ioswitch).
+    pub spare_block_reuses: u64,
+    /// Bytes of the spare dedicated blocks kept now (`memory.rs`, ioswitch).
+    pub spare_block_bytes: u64,
     /// Stand-ins made for textures over detached bytes (`texture/stand_in.rs`): one per distinct
     /// image plan among the textures detached at once.
     pub stand_ins_made: u64,
@@ -984,9 +989,9 @@ impl Device {
     #[doc(hidden)]
     pub fn work_counts(&self) -> WorkCounts {
         let counters = &self.shared().counts;
-        let (allocated, census) = {
+        let (allocated, census, spares) = {
             let memory = lock(&self.shared().memory);
-            (memory.allocated(), memory.census())
+            (memory.allocated(), memory.census(), memory.spares())
         };
         WorkCounts {
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed),
@@ -1036,6 +1041,8 @@ impl Device {
             empty_memory_blocks_live: census.empty,
             dedicated_memory_blocks_live: census.dedicated,
             host_imports_live: census.imported,
+            spare_block_reuses: spares.0,
+            spare_block_bytes: spares.1,
             stand_ins_made: counters.stand_ins_made.load(Ordering::Relaxed),
             stand_in_bytes: counters.stand_in_bytes.load(Ordering::Relaxed),
             stale_detached_reaches: counters.stale_detached_reaches.load(Ordering::Relaxed),
