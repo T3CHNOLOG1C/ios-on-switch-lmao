@@ -42,6 +42,44 @@ class NativeSdCardTests(unittest.TestCase):
         self.assertIn("if (!resume && !cardCommand(9, rca << 16, RSP_R2, nullptr))", reinit)
         self.assertLess(reinit.index("cardCommand(9, rca << 16"), reinit.index("cardCommand(7, rca << 16"))
 
+    def test_cmd23_framing_is_proven_and_gated(self):
+        """Auto CMD23 only for multi-block ADMA2 commands, after setup()'s A/B reads match and the SCR lists CMD23; retries
+        and every SDMA command (bounce path, proofs, setup reads) stop by CMD12 as before; CMD23 writes are read back."""
+        source = (DRIVER / "NativeIOSwitchBlock.cpp").read_text()
+        body = lambda signature: source.split(signature, 1)[1].split("\n}\n", 1)[0]
+        issue = body("int NativeIOSwitchBlock::issue(")
+        self.assertIn("const IOSwitchSdFrame frame = ioswitchSdBlockFrame(sectors, write, cmd23);", issue)
+        # Argument 2 before the command that uses it, and the partition guard still first.
+        self.assertLess(issue.index("outside the APFS partition"), issue.index("w32(ARGUMENT2, frame.argument2)"))
+        self.assertLess(issue.index("w32(ARGUMENT2, frame.argument2)"), issue.index("w16(COMMAND, frame.command)"))
+        complete = body("int NativeIOSwitchBlock::complete(")
+        self.assertIn("if (r16(AUTO_CMD_ERROR) & 0x9f) return 8;", complete)
+        self.assertIn("if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS)) return 9;", complete)
+        # The data path: direct (ADMA2) multi-block commands only, per direction.
+        begin = body("void NativeIOSwitchBlock::beginBatch(")
+        self.assertIn("b.cmd23 = b.direct && sectors > 1 && (b.write ? cmd23Writes : cmd23Reads);", begin)
+        # Retries go back to CMD12 (command()'s default), as do transfer()/run() (the bounce path and the proofs).
+        self.assertIn("step = command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status);",
+                      body("int NativeIOSwitchBlock::retry("))
+        self.assertIn("command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status);",
+                      body("int NativeIOSwitchBlock::run("))
+        self.assertRegex(source, r"int command\(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, "
+                                 r"uint32_t \*status, bool cmd23 = false\);")
+        # setup(): gated on the SCR and on the A/B check; writes only with their read-backs.
+        setup = body("bool NativeIOSwitchBlock::setup()")
+        self.assertIn("if (!haveScr || !(scr.cmdSupport & kSdCmd23))", setup)
+        self.assertLess(setup.index("checkCmd23(&withNs, &withoutNs)"), setup.index("cmd23Reads = true;"))
+        self.assertIn("cmd23Writes = admaWrites;", setup)
+        check = body("const char *NativeIOSwitchBlock::checkCmd23(")
+        self.assertIn("memcmp(bounce, bounce + kBytes, kBytes)", check)
+        self.assertIn("memset(bounce + at, with ? 0x00 : 0xff, kBytes);", check)
+        end = body("void NativeIOSwitchBlock::endBatch(")
+        self.assertIn("(b.cmd23 && cmd23WriteChecks)", end)
+        self.assertIn("!proveWrite(first, sectors, b.cmd23)", end)
+        prove = body("bool NativeIOSwitchBlock::proveWrite(")
+        self.assertRegex(prove, r"if \(cmd23\) \{[^}]*cmd23Writes = false;")
+        self.assertIn("(admaWrites && cmd23Writes && cmd23WriteChecks)", body("void NativeIOSwitchBlock::releaseChecks()"))
+
 
 if __name__ == "__main__":
     unittest.main()

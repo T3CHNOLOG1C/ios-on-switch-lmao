@@ -100,6 +100,11 @@ constexpr unsigned kMergeScan = kMaxChain;
 // commands from then on (writeSectors; the advertised maximum cannot shrink once IOBlockStorageDriver has read it).
 constexpr uint32_t kDirectWriteSectors = kBounceSectors;
 constexpr uint32_t kWriteChecks = 32, kLargeWriteChecks = 16;
+// r14-sdcq: multi-block ADMA2 commands announce their length with Auto CMD23 (SET_BLOCK_COUNT) instead of ending with
+// Auto CMD12, once setup()'s check (checkCmd23) has read kCmd23Pairs 4 KiB blocks both ways with equal bytes. The first
+// kCmd23WriteChecks such writes of every boot are read back as proveWrite does for ADMA2's; one that differs is written
+// again through the bounce buffer (CMD12 framing) and writes go back to CMD12 until reboot.
+constexpr uint32_t kCmd23Pairs = 16, kCmd23WriteChecks = 16;
 // r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (prepareDirect, proveHigh).
 constexpr uint8_t kPoison = 0x5a;
 // r12-sdio: the most separate stretches of a read chain staged through the bounce buffer (IOSwitchAdmaStaging; consecutive
@@ -124,6 +129,7 @@ const uint8_t kRootIdentifier[48] = {0xfd, 0x86, 0xb9, 0x5b, 0x70, 0x33, 0xe3, 0
 
 // SDHCI register offsets and bits.
 enum : uint32_t {
+    ARGUMENT2 = 0x00,  // SDMA System Address / Argument 2; in v4 mode (SDMA at 0x58) only the Auto CMD23 argument
     BLOCK_SIZE = 0x04,
     BLOCK_COUNT = 0x06,
     ARGUMENT = 0x08,
@@ -309,6 +315,7 @@ struct Batch {
     Request *first;  // the chain, in card order
     uint32_t sectors, count;
     bool write, direct, proving, issued, staged;
+    bool cmd23;  // r14-sdcq: framed with Auto CMD23 (a multi-block ADMA2 command while that is on for its direction)
     IOSwitchAdmaRefusal why;
     int issueStep;                // issue()'s result when the command never reached the card
     uint64_t beganNs, overlapNs;  // when beginBatch started; the previous chain's completions that ran inside this one
@@ -344,6 +351,8 @@ struct Stats {
     // the worker came back to them (no interrupt taken). Read chains that went by ADMA2 with some segments staged through
     // the bounce buffer, and those bytes.
     uint64_t overlapped, early, stagedChains, stagedBytes;
+    // r14-sdcq: data commands framed with Auto CMD23.
+    uint64_t cmd23;
 };
 }
 
@@ -458,6 +467,10 @@ class NativeIOSwitchBlock : public IOService {
     Staging staging = {};
     Staging::Stage *stages = nullptr;
     bool stagingOn = false;
+    // r14-sdcq: Auto CMD23 framing per direction (checkCmd23 passed; writes off again if a CMD23 write read back
+    // different) and the CMD23 writes still to read back this boot.
+    bool cmd23Reads = false, cmd23Writes = false;
+    uint32_t cmd23WriteChecks = 0;
     char admaWhy[128] = {};
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
@@ -508,10 +521,11 @@ class NativeIOSwitchBlock : public IOService {
     bool waitSignal(uint32_t signals, uint64_t timeoutNs);
     void resetLines();
     void recover(bool data);
-    int command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status);
-    // r12-sdio: command()'s halves, so the worker can do other work while the card moves the data.
-    int issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors);
-    int complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early);
+    int command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool cmd23 = false);
+    // r12-sdio: command()'s halves, so the worker can do other work while the card moves the data. r14-sdcq: `cmd23`
+    // frames a multi-block command with Auto CMD23 instead of Auto CMD12 (ioswitchSdBlockFrame).
+    int issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, bool cmd23 = false);
+    int complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early, bool cmd23 = false);
     bool failed(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write, unsigned descriptors,
                 bool retry);
     int run(uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
@@ -528,12 +542,14 @@ class NativeIOSwitchBlock : public IOService {
     void finishDirect(bool write);
     bool stageChain(Request *first, uint32_t from, uint32_t length, uint8_t *buffer, bool toClient);
     bool bounceChain(Request *first, uint32_t sectors);
-    bool proveWrite(Request *first, uint32_t sectors);
+    bool proveWrite(Request *first, uint32_t sectors, bool cmd23);
     bool proveHigh(Request *first, uint32_t sectors);
     void releaseChecks();
     bool copyStaged();
     const char *checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages, uint32_t *highOk,
                           uint32_t *staged);
+    const char *checkCmd23(uint64_t *withNs, uint64_t *withoutNs);
+    char cmd23Why[96] = {};
     char stagingReason[96] = {};
     void dmaSuspend();
     void dmaResume();
@@ -740,16 +756,17 @@ void NativeIOSwitchBlock::recover(bool data)
 // One data command: by ADMA2 through the descriptor table when `descriptors` is nonzero (built and synced by the
 // caller), else by SDMA into/out of the bounce buffer. Returns 0 or a nonzero step code; *status receives the last
 // interrupt status sample. r12-sdio: issue() then complete(); the worker's ADMA2 commands call the two apart.
-int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status)
+int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status,
+                                 bool cmd23)
 {
     *status = 0;
-    if (const int step = issue(lba, sectors, write, descriptors)) return step;
-    return complete(sectors, write, descriptors, status, nullptr);
+    if (const int step = issue(lba, sectors, write, descriptors, cmd23)) return step;
+    return complete(sectors, write, descriptors, status, nullptr, cmd23);
 }
 
 // The command's first half: the partition check, the registers and the command itself. 0, or step 1 when the controller
 // never went idle (then nothing was issued).
-int NativeIOSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors)
+int NativeIOSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, bool cmd23)
 {
     // Every card write passes here, whichever path staged it: none may reach outside the APFS partition. (Until setup()
     // has found the partition, sectorCount is 0 and so no write can be issued at all.)
@@ -766,18 +783,21 @@ int NativeIOSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsig
     w16(BLOCK_SIZE, kSector | 0x7000);  // 512 KiB SDMA boundary (ADMA2 ignores it)
     w16(BLOCK_COUNT, static_cast<uint16_t>(sectors));
     w32(ARGUMENT, lba);
-    const bool multi = sectors > 1;
-    // DMA | block-count | Auto CMD12 | read | multi, as the qualified sequence.
-    w16(TRANSFER, static_cast<uint16_t>(1 | (multi ? 0x26 : 0) | (write ? 0 : 0x10)));
+    // DMA | block-count | Auto CMD12 (or r14-sdcq: Auto CMD23, its block count in Argument 2) | read | multi, as the
+    // qualified sequence.
+    const IOSwitchSdFrame frame = ioswitchSdBlockFrame(sectors, write, cmd23);
+    if (frame.argument2) w32(ARGUMENT2, frame.argument2);
+    w16(TRANSFER, frame.transfer);
     barrier();
-    w16(COMMAND, static_cast<uint16_t>(((write ? (multi ? 25 : 24) : (multi ? 18 : 17)) << 8) | 0x3a));
+    w16(COMMAND, frame.command);
     return 0;
 }
 
 // The command's second half, for the command issue() started: 0 or a nonzero step code. Its time limit runs from here,
 // not from issue(): the worker may have completed the previous chain's requests in between. `*early` (when asked): the
 // command had already finished when this began, so it took no interrupt.
-int NativeIOSwitchBlock::complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early)
+int NativeIOSwitchBlock::complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early,
+                                  bool cmd23)
 {
     *status = 0;
     const bool multi = sectors > 1;
@@ -833,8 +853,9 @@ int NativeIOSwitchBlock::complete(uint32_t sectors, bool write, unsigned descrip
     w32(STATUS, INT_COMMAND | INT_TRANSFER);
     if (!(s & INT_COMMAND) || (r32(RESPONSE) & R1_ERRORS)) return 4;
     if (multi) {
+        // Auto CMD12's or (r14-sdcq) Auto CMD23's errors; only a CMD12 leaves a response in STOP_RESPONSE.
         if (r16(AUTO_CMD_ERROR) & 0x9f) return 8;
-        if (r32(STOP_RESPONSE) & R1_STOP_ERRORS) return 9;
+        if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS)) return 9;
     }
     // Transfer complete follows the write busy period; DAT0 confirms it.
     if (!waitIdle(write, 2000000000)) return 10;
@@ -894,7 +915,7 @@ int NativeIOSwitchBlock::run(uint64_t lba, uint32_t sectors, bool write, unsigne
 }
 
 // run()'s error handling for a command that failed with `step` (also for the worker's split ADMA2 commands): logged and
-// recovered, re-tuned, issued once more.
+// recovered, re-tuned, issued once more. r14-sdcq: the retry stops by Auto CMD12 whatever the first try's framing was.
 int NativeIOSwitchBlock::retry(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write,
                                unsigned descriptors)
 {
@@ -1076,7 +1097,7 @@ bool NativeIOSwitchBlock::bounceChain(Request *first, uint32_t sectors)
 // (the proven path) and compared with the requests' memory. False only for data that differs: the caller then writes the
 // chain again through the bounce buffer and ADMA2 writes stay off until reboot. A read-back that fails proves nothing
 // either way and is not counted.
-bool NativeIOSwitchBlock::proveWrite(Request *first, uint32_t sectors)
+bool NativeIOSwitchBlock::proveWrite(Request *first, uint32_t sectors, bool cmd23)
 {
     const uint32_t length = sectors * kSector;
     if (!checkBuffer || sectors > kBounceSectors) return true;
@@ -1091,12 +1112,20 @@ bool NativeIOSwitchBlock::proveWrite(Request *first, uint32_t sectors)
         if (writeChecks) --writeChecks;
         if (table.high) high.writeChecked();
         if (sectors > kSafeSectors && largeWriteChecks) --largeWriteChecks;
+        if (cmd23 && cmd23WriteChecks) --cmd23WriteChecks;
         releaseChecks();
         return true;
     }
     uint32_t at = 0;
     while (bounce[at] == checkBuffer[at]) ++at;
-    if (sectors > kSafeSectors) {
+    if (cmd23) {
+        // r14-sdcq: Auto CMD23 is what is new about this write (ADMA2 writes have read back equal for many boots).
+        IOLog(
+            "IOSwitchSD: CMD23 write lba=%llu n=%u reads back different from byte %u; written again through the bounce "
+            "buffer, writes stop by CMD12 until reboot\n",
+            first->lba, sectors, at);
+        cmd23Writes = false;
+    } else if (sectors > kSafeSectors) {
         // r12-sdio: only writes over 256 KiB are new: they take the bounce path's 256 KiB SDMA commands from now on.
         IOLog(
             "IOSwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
@@ -1180,7 +1209,7 @@ bool NativeIOSwitchBlock::proveHigh(Request *first, uint32_t sectors)
 void NativeIOSwitchBlock::releaseChecks()
 {
     if (!checkBuffer || (admaWrites && (writeChecks || (largeWriteChecks && writeSectors > kSafeSectors))) ||
-        (adma && high.checking(admaWrites)))
+        (adma && high.checking(admaWrites)) || (admaWrites && cmd23Writes && cmd23WriteChecks))
         return;
     IOFreeData(checkBuffer, kBounceBytes);
     checkBuffer = nullptr;
@@ -1214,9 +1243,10 @@ void NativeIOSwitchBlock::beginBatch(Batch &b)
     // r12-sdio: a read that reaches above 4 GiB while that is unproven is compared with SDMA before it completes.
     b.proving = b.direct && high.proofDue(b.write, table.high);
     b.staged = b.direct && staging.count;
+    b.cmd23 = b.direct && sectors > 1 && (b.write ? cmd23Writes : cmd23Reads);
     if (!b.direct) return;
     prepareDirect(b.write, b.proving);
-    b.issueStep = issue(static_cast<uint32_t>(first->lba), sectors, b.write, table.count);
+    b.issueStep = issue(static_cast<uint32_t>(first->lba), sectors, b.write, table.count, b.cmd23);
     b.issued = true;
 }
 
@@ -1231,7 +1261,8 @@ void NativeIOSwitchBlock::endBatch(Batch &b)
     if (b.direct) {
         uint32_t status = 0;
         bool early = false;
-        int step = b.issueStep ? b.issueStep : complete(sectors, write, table.count, &status, &early);
+        int step = b.issueStep ? b.issueStep : complete(sectors, write, table.count, &status, &early, b.cmd23);
+        if (b.cmd23) ++stats.cmd23;
         if (!b.issueStep && b.overlapNs) {
             ++stats.overlapped;
             if (early) ++stats.early;
@@ -1264,8 +1295,8 @@ void NativeIOSwitchBlock::endBatch(Batch &b)
             if (!proveHigh(first, sectors)) result = kIOReturnIOError;
         } else if (write &&
                    (writeChecks || high.writeCheckDue(write, table.high) ||
-                    (sectors > kSafeSectors && largeWriteChecks)) &&
-                   !proveWrite(first, sectors)) {
+                    (sectors > kSafeSectors && largeWriteChecks) || (b.cmd23 && cmd23WriteChecks)) &&
+                   !proveWrite(first, sectors, b.cmd23)) {
             b.direct = false;
         }
     }
@@ -1503,7 +1534,8 @@ void NativeIOSwitchBlock::logThroughput()
         passed = 0;
         IOLockUnlock(queueLock);
     }
-    // r12-sdio: chains (cmds; the bounce path's extra SDMA pieces not counted), SDMMC1 interrupts taken (irq), and of the
+    // r12-sdio: chains (cmds; the bounce path's extra SDMA pieces not counted; r14-sdcq: c23 of them framed with Auto
+    // CMD23), SDMMC1 interrupts taken (irq), and of the
     // ADMA2 commands issued before the previous chain's completions ran, those that had already finished when the worker
     // came back to them (ovl finished/issued; they took no interrupt).
     // r10-adma2: requests by ADMA2 (dma) and through the bounce buffer, the latter by why when any did (IOSwitchAdmaRefusal:
@@ -1541,14 +1573,15 @@ void NativeIOSwitchBlock::logThroughput()
         "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
         "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu part %llu/%lluK vfy %llu "
         "wmax %uK 4G+ %s | "
-        "<=4K %llu%% seq %llu%% merged %llu q%u | cmds %llu irq %llu ovl %llu/%llu | err %llu adma %llu retune %llu | "
+        "<=4K %llu%% seq %llu%% merged %llu q%u | cmds %llu c23 %llu irq %llu ovl %llu/%llu | err %llu adma %llu "
+        "retune %llu | "
         "%s %u.%02u MHz | wait ms%s",
         requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
         stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
         writeRate / 10, writeRate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000, stats.direct, bounced, bounces,
         perRequest / 10, perRequest % 10, stats.stagedChains, stats.stagedBytes >> 10, stats.verified,
         writeSectors * kSector / 1024, highState, requests ? stats.small * 100 / requests : 0,
-        requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.maxQueued, stats.commands,
+        requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.maxQueued, stats.commands, stats.cmd23,
         __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early, stats.overlapped, stats.errors,
         stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
@@ -2427,6 +2460,56 @@ const char *NativeIOSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *d
     return why;
 }
 
+// r14-sdcq: setup(): nullptr when multi-block ADMA2 commands may announce their length with Auto CMD23 (SET_BLOCK_COUNT)
+// instead of stopping with Auto CMD12, else why not; and what one 4 KiB read took each way (the card's access time is
+// most of it; the difference is the stop command's cost, or CMD23's). kCmd23Pairs 4 KiB reads (the size two-thirds of
+// requests have) at blocks spread over the APFS partition, each read once with CMD12 and once with CMD23 by ADMA2 into
+// the bounce buffer's first two pages, which start as 0xff and 0x00 so a read that delivered nothing differs. The order
+// alternates so the card's own read cache favours neither. Every pair must match byte for byte; an error or a difference
+// keeps CMD12, with the reason. Runs once in setup() after checkAdma (it uses the same table and syncs).
+const char *NativeIOSwitchBlock::checkCmd23(uint64_t *withNs, uint64_t *withoutNs)
+{
+    constexpr uint32_t kSectors = 8, kBytes = kSectors * kSector;
+    *withNs = *withoutNs = 0;
+    const uint64_t blocks = sectorCount / kSectors;
+    if (blocks < kCmd23Pairs) return "the partition is too small";
+    const char *why = nullptr;
+    for (uint32_t i = 0; i < kCmd23Pairs && !why; ++i) {
+        // A multiplicative hash spreads the reads over the whole partition, 4 KiB-aligned.
+        const uint64_t lba = firstSector + (static_cast<uint64_t>(i + 1) * 2654435761ull % blocks) * kSectors;
+        for (unsigned pass = 0; pass < 2 && !why; ++pass) {
+            const bool with = (pass == 0) == ((i & 1) != 0);
+            const uint32_t at = with ? kBytes : 0;
+            memset(bounce + at, with ? 0x00 : 0xff, kBytes);
+            table.reset();
+            if (table.add(bouncePA + at, kBytes, cacheableRam) || !table.finish()) {
+                why = "the builder refused the bounce buffer";
+                break;
+            }
+            prepareDirect(false, false);
+            uint32_t status = 0;
+            const uint64_t began = nowNs();
+            const int step = command(static_cast<uint32_t>(lba), kSectors, false, table.count, &status, with);
+            (with ? *withNs : *withoutNs) += nowNs() - began;
+            finishDirect(false);
+            if (step) {
+                recover(true);
+                snprintf(cmd23Why, sizeof(cmd23Why), "read %u with %s failed: step %d, STATUS 0x%08x", i,
+                         with ? "CMD23" : "CMD12", step, status);
+                why = cmd23Why;
+            }
+        }
+        if (!why && memcmp(bounce, bounce + kBytes, kBytes)) {
+            uint32_t at = 0;
+            while (bounce[at] == bounce[kBytes + at]) ++at;
+            snprintf(cmd23Why, sizeof(cmd23Why), "read %u (lba %llu) differs from CMD12's at byte %u", i, lba, at);
+            why = cmd23Why;
+        }
+    }
+    table.reset();
+    return why;
+}
+
 bool NativeIOSwitchBlock::setup()
 {
     regs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kControllerPA, 0x1000));
@@ -2577,6 +2660,27 @@ bool NativeIOSwitchBlock::setup()
                   descriptors, highOk, highPages, states[high.state], maxSectors * kSector / 1024,
                   maxWriteSectors * kSector / 1024,
                   admaWrites ? ", the first writes read back" : ", writes through the bounce buffer", stagingReason);
+            // r14-sdcq: Auto CMD23 when the card's SCR lists CMD23 and both framings read the same bytes.
+            if (!haveScr || !(scr.cmdSupport & kSdCmd23)) {
+                IOLog("IOSwitchSD: CMD23 not used (%s); multi-block commands stop by CMD12\n",
+                      haveScr ? "the card's SCR does not list it" : "no SCR");
+            } else {
+                uint64_t withNs = 0, withoutNs = 0;
+                if (const char *cmd23Off = checkCmd23(&withNs, &withoutNs)) {
+                    IOLog("IOSwitchSD: CMD23 off (%s); multi-block commands stop by CMD12\n", cmd23Off);
+                } else {
+                    cmd23Reads = true;
+                    cmd23Writes = admaWrites;
+                    cmd23WriteChecks = cmd23Writes ? kCmd23WriteChecks : 0;
+                    const uint64_t with = withNs / kCmd23Pairs, without = withoutNs / kCmd23Pairs;
+                    IOLog("IOSwitchSD: CMD23 on: %u 4 KiB reads match CMD12's; %llu.%llu us per read with CMD23, "
+                          "%llu.%llu us with CMD12 (%lld ns saved per command); multi-block reads%s announce their "
+                          "length%s\n",
+                          kCmd23Pairs, with / 1000, with / 100 % 10, without / 1000, without / 100 % 10,
+                          static_cast<long long>(without) - static_cast<long long>(with),
+                          cmd23Writes ? " and writes" : "", cmd23Writes ? ", the first CMD23 writes read back" : "");
+                }
+            }
         } else {
             IOLog("IOSwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);
         }

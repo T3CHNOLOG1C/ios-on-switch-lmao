@@ -248,11 +248,45 @@ static void extension()
     assert(f.cqDepth == 2 && f.taskErrors == 0x40);
 }
 
+// The data command framing issue() programs: without CMD23 exactly what every command used before r14-sdcq; with CMD23,
+// Auto CMD23 (TRANSFER bits 3:2 = 10b) and the block count in Argument 2, no stop command.
+static void framing()
+{
+    for (uint32_t sectors = 1; sectors <= 2048; ++sectors) {
+        for (int write = 0; write < 2; ++write) {
+            const bool multi = sectors > 1;
+            const IOSwitchSdFrame old = ioswitchSdBlockFrame(sectors, write, false);
+            assert(old.transfer == (1 | (multi ? 0x26 : 0) | (write ? 0 : 0x10)));
+            assert(old.command == (((write ? (multi ? 25 : 24) : (multi ? 18 : 17)) << 8) | 0x3a));
+            assert(old.argument2 == 0 && old.autoStop == multi);
+            const IOSwitchSdFrame with = ioswitchSdBlockFrame(sectors, write, true);
+            assert(with.command == old.command);
+            if (!multi) {
+                // A single block never has an auto command either way.
+                assert(with.transfer == old.transfer && with.argument2 == 0 && !with.autoStop);
+                continue;
+            }
+            assert(with.transfer == ((old.transfer & ~kSdTransferAutoCmd12) | kSdTransferAutoCmd23));
+            assert(!(with.transfer & kSdTransferAutoCmd12) && with.argument2 == sectors && !with.autoStop);
+        }
+    }
+    // The register values a 4 KiB read and a 1 MiB write program.
+    IOSwitchSdFrame f = ioswitchSdBlockFrame(8, false, true);
+    assert(f.transfer == 0x3b && f.command == 0x123a && f.argument2 == 8);
+    f = ioswitchSdBlockFrame(8, false, false);
+    assert(f.transfer == 0x37 && f.command == 0x123a && f.argument2 == 0 && f.autoStop);
+    f = ioswitchSdBlockFrame(2048, true, true);
+    assert(f.transfer == 0x2b && f.command == 0x193a && f.argument2 == 2048);
+    f = ioswitchSdBlockFrame(1, true, true);
+    assert(f.transfer == 0x01 && f.command == 0x183a && f.argument2 == 0);
+}
+
 int main()
 {
     fields();
     identity();
     extension();
+    framing();
     printf("PASS: sd card registers\n");
     return 0;
 }

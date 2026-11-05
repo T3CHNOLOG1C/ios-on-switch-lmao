@@ -30,7 +30,7 @@ class NativeSdAdmaTests(unittest.TestCase):
         issue, complete = body("int NativeIOSwitchBlock::issue("), body("int NativeIOSwitchBlock::complete(")
         self.assertIn("outside the APFS partition", issue)
         self.assertLess(issue.index("outside the APFS partition"), issue.index("w16(COMMAND"))
-        self.assertIn("issue(lba, sectors, write, descriptors)", body("int NativeIOSwitchBlock::command("))
+        self.assertIn("issue(lba, sectors, write, descriptors, cmd23)", body("int NativeIOSwitchBlock::command("))
         begin = body("void NativeIOSwitchBlock::beginBatch(")
         self.assertIn("outside the APFS partition", begin)
         self.assertLess(begin.index("outside the APFS partition"), begin.index("issue("))

@@ -270,3 +270,30 @@ inline uint32_t ioswitchSdCqControlAddress(const IOSwitchSdExtFunction &perf)
     if (!perf.found || !ioswitchSdExtRange(perf.address, kSdPerfCqControl + 1)) return 0;
     return perf.address + kSdPerfCqControl;
 }
+// ---- Data command framing ------------------------------------------------------------------------------------------
+// SDHCI TRANSFER_MODE (0x0c) bits and the COMMAND (0x0e) low byte of a data command with an R1 response (48-bit, CRC and
+// index checked, data present).
+constexpr uint16_t kSdTransferDma = 0x01, kSdTransferBlockCount = 0x02, kSdTransferAutoCmd12 = 0x04,
+                   kSdTransferAutoCmd23 = 0x08, kSdTransferRead = 0x10, kSdTransferMulti = 0x20;
+constexpr uint16_t kSdDataR1 = 0x3a;
+
+struct IOSwitchSdFrame {
+    uint16_t transfer, command;
+    uint32_t argument2;  // the Auto CMD23 argument (SDHCI 0x00 "Argument 2"), 0 when unused
+    bool autoStop;       // an Auto CMD12 follows the data (its response and error bits mean something)
+};
+
+// CMD17/18 (read) or CMD24/25 (write). A multi-block command stops by Auto CMD12 after the data (`cmd23` false: what
+// every command did before r14-sdcq) or is preceded by Auto CMD23 SET_BLOCK_COUNT with the block count in Argument 2, so
+// the card knows the length up front and no stop command follows (SDHCI 3.00+, the mode L4T's sdhci.c uses on this
+// controller with SD cards whose SCR lists CMD23).
+inline IOSwitchSdFrame ioswitchSdBlockFrame(uint32_t sectors, bool write, bool cmd23)
+{
+    const bool multi = sectors > 1;
+    uint16_t transfer = static_cast<uint16_t>(kSdTransferDma | (write ? 0 : kSdTransferRead));
+    if (multi)
+        transfer = static_cast<uint16_t>(transfer | kSdTransferBlockCount | kSdTransferMulti |
+                                         (cmd23 ? kSdTransferAutoCmd23 : kSdTransferAutoCmd12));
+    const uint16_t index = static_cast<uint16_t>(write ? (multi ? 25 : 24) : (multi ? 18 : 17));
+    return {transfer, static_cast<uint16_t>(index << 8 | kSdDataR1), multi && cmd23 ? sectors : 0, multi && !cmd23};
+}
