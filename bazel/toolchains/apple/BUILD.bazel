@@ -1,0 +1,67 @@
+# iOS and macOS user-space C/C++/Objective-C toolchains (config.bzl): Xcode's Apple clang with the target and SDK and
+# no other flags of their own, for //bazel/platforms:ios_arm64 and the macOS user platform (host twins of iOS code,
+# such as NVK's). Registered in MODULE.bazel before any host toolchain; the host platform (no :user constraint) never
+# resolves to them.
+load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":config.bzl", "apple_cc_toolchain_config")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+# Xcode's identity is an input of every action (a new Xcode re-keys them all); headers come from the targets' CcInfo,
+# so .d files prune them per object.
+filegroup(
+    name = "files",
+    srcs = ["@xcode//:identity"],
+)
+
+[apple_cc_toolchain_config(
+    name = platform + "_config",
+    platform = platform,
+) for platform in ("ios", "macos")]
+
+[cc_toolchain(
+    name = platform + "_cc_toolchain",
+    all_files = ":files",
+    ar_files = ":files",
+    as_files = ":files",
+    compiler_files = ":files",
+    dwp_files = ":files",
+    linker_files = ":files",
+    objcopy_files = ":files",
+    strip_files = ":files",
+    supports_param_files = False,
+    toolchain_config = ":{}_config".format(platform),
+) for platform in ("ios", "macos")]
+
+toolchain(
+    name = "ios",
+    exec_compatible_with = [
+        "@platforms//os:osx",
+        "@platforms//cpu:arm64",
+    ],
+    target_compatible_with = [
+        "@platforms//os:ios",
+        "@platforms//cpu:arm64",
+        "//bazel/platforms:user",
+    ],
+    toolchain = ":ios_cc_toolchain",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+toolchain(
+    name = "macos",
+    exec_compatible_with = [
+        "@platforms//os:osx",
+        "@platforms//cpu:arm64",
+    ],
+    target_compatible_with = [
+        "@platforms//os:osx",
+        "@platforms//cpu:arm64",
+        "//bazel/platforms:user",
+    ],
+    toolchain = ":macos_cc_toolchain",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)

@@ -73,6 +73,13 @@ single_version_override(
 # --- C/C++ toolchains, by target platform (bazel/platforms): the kernel's Apple clang with XNU's recipes ----------
 register_toolchains("//bazel/toolchains/kernel:toolchain")
 
+# iOS user space and the macOS twins of iOS code (NVK's): Xcode's Apple clang, no flags of its own
+# (bazel/toolchains/apple). Before any host toolchain; they need //bazel/platforms:user, which the host platform lacks.
+register_toolchains(
+    "//bazel/toolchains/apple:ios",
+    "//bazel/toolchains/apple:macos",
+)
+
 # --- The declared host input: Xcode (pinned version + SDK digests) ---------------------------------------------
 xcode_host = use_repo_rule("//bazel/host:xcode.bzl", "xcode_host")
 
