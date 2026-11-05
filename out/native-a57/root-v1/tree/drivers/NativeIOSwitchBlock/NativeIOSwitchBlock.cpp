@@ -49,6 +49,7 @@
 #include "IOSwitchClientCopy.h"
 #include "IOSwitchAdma.h"
 #include "IOSwitchQueue.h"
+#include "IOSwitchSdCard.h"
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -129,7 +130,7 @@ enum : uint32_t {
     TRANSFER = 0x0c,
     COMMAND = 0x0e,
     RESPONSE = 0x10,
-    STOP_RESPONSE = 0x1c,
+    STOP_RESPONSE = 0x1c,  // also RESPONSE word 3 of an R2
     PRESENT = 0x24,
     HOST_CONTROL = 0x28,
     POWER = 0x29,
@@ -476,6 +477,16 @@ class NativeIOSwitchBlock : public IOService {
     // is taken back there after SC7); LBA 1 as read at boot, compared after re-initialization.
     bool suspended = false, working = false, lowVoltageBus = false;
     uint8_t gptHeader[kSector] = {};
+    // r14-sdcq: the card's registers as identify() read them once at boot (CID and CSD during reinitialize(), the rest in
+    // transfer state), for the identification lines and for what CMD23 and the command queue may use.
+    uint8_t cid[16] = {}, csd[16] = {}, scrBytes[8] = {}, ssrBytes[64] = {};
+    bool haveCid = false, haveCsd = false, haveScr = false, haveSsr = false, havePerf = false, havePower = false;
+    IOSwitchSdScr scr = {};
+    IOSwitchSdStatus sdStatus = {};
+    IOSwitchSdGeneralInfo extInfo = {};
+    IOSwitchSdPerf perf = {};
+    IOSwitchSdPower power = {};
+    const char *extWhy = nullptr;
 
     uint8_t r8(uint32_t o) { return regs[o]; }
     uint16_t r16(uint32_t o) { return *(volatile uint16_t *)(regs + o); }
@@ -530,7 +541,11 @@ class NativeIOSwitchBlock : public IOService {
     void logThroughput();
     // SDR104 bring-up (bounded register polling, setup() and re-tuning only).
     int cardCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response, uint32_t data = 0);
-    int appCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response);
+    int appCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response, uint32_t data = 0);
+    void readR2(uint8_t out[16]);
+    // r14-sdcq: the card's identity and capabilities, read and logged once at boot.
+    bool extRead(uint8_t fno, uint32_t address, uint32_t length, uint8_t *out);
+    void identify();
     int switchFunction(bool set, unsigned group, uint32_t value);
     void setTiming(int uhs, bool highSpeed, int source, uint32_t carDivider, uint32_t divider);
     bool calibratePads();
@@ -1607,13 +1622,20 @@ int NativeIOSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flag
     return 0;
 }
 
-// CMD55 (with the current RCA, 0 before CMD3) then the application command.
-int NativeIOSwitchBlock::appCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response)
+// CMD55 (with the current RCA, 0 before CMD3) then the application command (`data` as cardCommand's).
+int NativeIOSwitchBlock::appCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response, uint32_t data)
 {
     uint32_t r55 = 0;
     if (int error = cardCommand(55, rca << 16, RSP_R1, &r55)) return error;
     if (!(r55 & R1_APP_CMD) || (r55 & R1_ERRORS)) return 5;
-    return cardCommand(index, arg, flags, response);
+    return cardCommand(index, arg, flags, response, data);
+}
+
+// r14-sdcq: the R2 response cardCommand() just received (CMD2's CID, CMD9's CSD), most significant byte first.
+void NativeIOSwitchBlock::readR2(uint8_t out[16])
+{
+    const uint32_t rep[4] = {r32(RESPONSE), r32(RESPONSE + 4), r32(RESPONSE + 8), r32(RESPONSE + 12)};
+    ioswitchSdR2(rep, out);
 }
 
 // CMD6, check (set=false) or switch, of `value` in function group `group` (0-based: 0 access
@@ -1626,6 +1648,136 @@ int NativeIOSwitchBlock::switchFunction(bool set, unsigned group, uint32_t value
     arg = (arg & ~(0xfu << (group * 4))) | value << (group * 4);
     int error = cardCommand(6, arg, RSP_R1, &r, 64);
     return error ? error : (r & R1_ERRORS) ? 6 : 0;
+}
+
+// r14-sdcq: CMD48, `length` bytes of the extension register space at `address` (page * 512 + offset, one page) of
+// function `fno`, into `out`. The data block is always 512 bytes, the register's bytes first (5.7.2.1). Setup only.
+bool NativeIOSwitchBlock::extRead(uint8_t fno, uint32_t address, uint32_t length, uint8_t *out)
+{
+    uint32_t r = 0;
+    if (!ioswitchSdExtRange(address, length)) return false;
+    if (cardCommand(48, ioswitchSdExtArgument(fno, address, length), RSP_R1, &r, kSector) || (r & R1_ERRORS))
+        return false;
+    memcpy(out, bounce, length);
+    return true;
+}
+
+// r14-sdcq: who the card is and what it can do, read once at boot in transfer state and logged as two lines (IOLog,
+// one-shot): the identity and the verdict first (is it A2, does it offer the command queue), then the raw registers and
+// the extension functions. SCR (ACMD51), SD Status (ACMD13) and, when the SCR lists CMD48/49, the General Information
+// and the Power Management and Performance Enhancement register sets (CMD48). Read-only: nothing here writes the card.
+// A command that fails only leaves its part out. Needs the RCA, so the re-initialized bus (raiseBusSpeed).
+void NativeIOSwitchBlock::identify()
+{
+    if (!rca) {
+        IOLog("IOSwitchSD: card identification skipped (inherited bus, RCA unknown)\n");
+        return;
+    }
+    uint32_t r = 0;
+    if (!appCommand(51, 0, RSP_R1, &r, sizeof(scrBytes)) && !(r & R1_ERRORS)) {
+        memcpy(scrBytes, bounce, sizeof(scrBytes));
+        scr = ioswitchSdParseScr(scrBytes);
+        haveScr = true;
+    }
+    if (!appCommand(13, 0, RSP_R1, &r, sizeof(ssrBytes)) && !(r & R1_ERRORS)) {
+        memcpy(ssrBytes, bounce, sizeof(ssrBytes));
+        sdStatus = ioswitchSdParseStatus(ssrBytes);
+        haveSsr = true;
+    }
+    static uint8_t regs[1024];  // setup() runs once; too big for its stack
+    if (!haveScr) {
+        extWhy = "no SCR";
+    } else if (!(scr.cmdSupport & kSdCmd48)) {
+        extWhy = "SCR lists no CMD48/49";
+    } else if (!extRead(0, 0, kSector, regs)) {
+        extWhy = "general information read failed";
+    } else {
+        extInfo = ioswitchSdParseGeneralInfo(regs, kSector);
+        if (extInfo.why && extInfo.length > kSector && extInfo.length <= sizeof(regs) &&
+            extRead(0, kSector, kSector, regs + kSector))
+            extInfo = ioswitchSdParseGeneralInfo(regs, sizeof(regs));
+        extWhy = extInfo.why;
+        if (!extWhy && extInfo.power.found && ioswitchSdExtRange(extInfo.power.address, 2) &&
+            extRead(extInfo.power.fno, extInfo.power.address, 2, regs)) {
+            power = ioswitchSdParsePower(regs);
+            havePower = true;
+        }
+        // The performance register set is used only when its first 263 bytes (up to the CQ control byte) sit in one page.
+        if (!extWhy && extInfo.perf.found) {
+            if (!ioswitchSdCqControlAddress(extInfo.perf))
+                extWhy = "performance register set crosses a page";
+            else if (!extRead(extInfo.perf.fno, extInfo.perf.address, kSdPerfCqControl + 1, regs))
+                extWhy = "performance register read failed";
+            else {
+                perf = ioswitchSdParsePerf(regs);
+                havePerf = true;
+            }
+        }
+    }
+    const IOSwitchSdCid id = ioswitchSdParseCid(cid);
+    const IOSwitchSdCsd size = ioswitchSdParseCsd(csd);
+    const char *maker = ioswitchSdMaker(id.mid);
+    char makerHex[8];
+    snprintf(makerHex, sizeof(makerHex), "0x%02x", id.mid);
+    static const char *const kinds[] = {"SDSC", "SDHC/SDXC", "SDUC", "?"};
+    const uint8_t queue = havePerf ? perf.cqDepth : haveSsr ? sdStatus.cqDepth : 0;
+    const bool a2 = haveSsr && sdStatus.appClass >= 2;
+    const char *verdict = a2 && queue ? "A2 with a command queue: queued reads can overlap on the card"
+                          : queue     ? "not A2, but it offers a command queue"
+                          : a2        ? "A2 by its SD Status, but no command queue in its registers"
+                          : haveSsr   ? "not A2 and no command queue: reads stay one command at a time"
+                                      : "SD Status unread: A2 and command queue unknown";
+    char classes[48] = "SD Status unread";
+    if (haveSsr)
+        snprintf(classes, sizeof(classes), "class %u U%u V%u A%u", unsigned(sdStatus.speedClass),
+                 unsigned(sdStatus.uhsGrade), unsigned(sdStatus.videoClass), unsigned(sdStatus.appClass));
+    char line[512];
+    snprintf(line, sizeof(line),
+             "IOSwitchSD: card %s%s%s%s \"%s\" OEM \"%s\" rev %u.%u #%08x %04u-%02u, %llu GiB %s | SD %u.x, CMD23 %s, "
+             "CMD48/49 %s | %s | queue depth %u, cache %s -> %s",
+             maker ? maker : makerHex, maker ? " (" : "", maker ? makerHex : "", maker ? ")" : "",
+             haveCid ? id.pnm : "?", haveCid ? id.oid : "?", unsigned(id.prv >> 4), unsigned(id.prv & 0xf), id.psn,
+             unsigned(id.year), unsigned(id.month), size.bytes >> 30, haveCsd ? kinds[size.structure & 3] : "(no CSD)",
+             haveScr ? unsigned(scr.major) : 0u,
+             !haveScr                      ? "?"
+             : (scr.cmdSupport & kSdCmd23) ? "yes"
+                                           : "no",
+             !haveScr                      ? "?"
+             : (scr.cmdSupport & kSdCmd48) ? "yes"
+                                           : "no",
+             classes, unsigned(queue),
+             havePerf  ? (perf.cache ? "yes" : "no")
+             : haveSsr ? (sdStatus.cache ? "yes" : "no")
+                       : "?",
+             verdict);
+    IOLog("%s\n", line);
+    // The raw registers (the CID's serial included) and the extension functions as read.
+    char hex[4][132];
+    const uint8_t *const raw[4] = {cid, csd, scrBytes, ssrBytes};
+    static const unsigned lengths[4] = {16, 16, 8, 25};  // SD Status: bits 511..312, every field defined
+    for (unsigned k = 0; k < 4; ++k) {
+        hex[k][0] = 0;
+        for (unsigned i = 0; i < lengths[k]; ++i) snprintf(hex[k] + 2 * i, sizeof(hex[k]) - 2 * i, "%02x", raw[k][i]);
+    }
+    char ext[256];
+    if (extWhy || !extInfo.extensions) {
+        snprintf(ext, sizeof(ext), "ext registers: %s", extWhy ? extWhy : "no functions");
+    } else {
+        snprintf(
+            ext, sizeof(ext),
+            "ext rev %u len %u, %u functions; power %sfno %u @0x%05x (rev %u, off-notify %u, sustain %u, down %u); "
+            "perf %sfno %u @0x%05x (rev %u, FX %u, maint card %u host %u, cache %u on %u, queue %u control 0x%02x, "
+            "task errors 0x%02x)",
+            unsigned(extInfo.revision), unsigned(extInfo.length), unsigned(extInfo.extensions),
+            havePower ? "" : "unread ", unsigned(extInfo.power.fno), extInfo.power.address, unsigned(power.revision),
+            unsigned(power.offNotification), unsigned(power.sustenance), unsigned(power.powerDown),
+            havePerf ? "" : "unread ", unsigned(extInfo.perf.fno), extInfo.perf.address, unsigned(perf.revision),
+            unsigned(perf.fxEvent), unsigned(perf.cardMaintenance), unsigned(perf.hostMaintenance),
+            unsigned(perf.cache), unsigned(perf.cacheEnable & 1), unsigned(perf.cqDepth), unsigned(perf.cqControl),
+            unsigned(perf.taskErrors));
+    }
+    IOLog("IOSwitchSD: card registers CID %s CSD %s SCR %s SSR %s | %s\n", haveCid ? hex[0] : "-",
+          haveCsd ? hex[1] : "-", haveScr ? hex[2] : "-", haveSsr ? hex[3] : "-", ext);
 }
 
 // hekate sdmmc_setup_clock (sdmmc_driver.c:307): card clock gated, default tap (TAP_HW_UPDATED
@@ -1931,11 +2083,21 @@ bool NativeIOSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs,
         if (!switchTo1V8(ldo2)) fail("1.8 V switch (DAT[3:0] not released)", int((r32(PRESENT) >> 20) & 0xf));
     }
     if ((error = cardCommand(2, 0, RSP_R2, nullptr))) fail("CMD2", error);
+    if (!resume) {
+        readR2(cid);
+        haveCid = true;
+    }
     for (uint64_t ready = nowNs(); !rca;) {
         if ((error = cardCommand(3, 0, RSP_R1, &r))) fail("CMD3", error);
         if ((rca = r >> 16)) break;
         if (nowNs() - ready > 1500000000ull) fail("CMD3 RCA 0", 0);
         IOSleep(1);  // hekate _sd_storage_get_rca: ask again 1 ms later
+    }
+    // r14-sdcq: the CSD while the card is in stand-by (CMD9 is a class 0 command of that state only). Logged by identify();
+    // a failure only leaves it out.
+    if (!resume && !cardCommand(9, rca << 16, RSP_R2, nullptr)) {
+        readR2(csd);
+        haveCsd = true;
     }
     // Out of identification: default speed (24 MHz) at 3.3 V as hekate (sdmmc.c:2054); the 1.8 V path
     // already runs SDR12 at that clock since switchTo1V8.
@@ -2346,6 +2508,7 @@ bool NativeIOSwitchBlock::setup()
             panic("IOSwitchSD: LBA 1 differs after switching to %s (read step %d); boot without ioswitch-sd-uhs=1",
                   busMode, step);
     }
+    identify();
     uint64_t entriesLBA = le64(header + 72);
     uint32_t entryCount = le32(header + 80), entrySize = le32(header + 84);
     if (memcmp(header, "EFI PART", 8) || entrySize < 128 || entrySize > 512 || (entrySize & 7) || !entryCount ||
