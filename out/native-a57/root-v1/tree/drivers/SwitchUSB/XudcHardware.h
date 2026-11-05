@@ -29,6 +29,7 @@ enum : uint32_t {
     TRB_CYCLE = 1u << 0,
     TRB_TOGGLE = 1u << 1,
     TRB_ISP = 1u << 2,
+    TRB_CHAIN = 1u << 4,
     TRB_IOC = 1u << 5,
     TRB_DIR_IN = 1u << 16,
     // Completion codes.
@@ -46,8 +47,13 @@ constexpr uint32_t trbType(uint32_t type)
 {
     return type << 10;
 }
-constexpr uint32_t kRingTrbs = 16;  // per endpoint; the last one is the link TRB
+constexpr uint32_t kRingTrbs = 16;  // EP0's ring (in the control area); the last one is the link TRB
+constexpr uint32_t kDataRingTrbs =
+    256;  // a data endpoint's ring, one 4 KiB page of its own (SwitchXUDC "Data endpoints")
 constexpr uint32_t kMaxDci = 32;
+// Interrupt moderation (RT_IMOD, 250 ns units, Linux tegra_xudc): at least this long between two interrupts, so a burst
+// of completions is one interrupt; a lone event is not delayed (the interval since the last one has long passed).
+constexpr uint32_t kImodUs = 40;
 
 // Event TRB as copied out of the ring.
 struct Event {
@@ -99,8 +105,9 @@ public:
     void describeInterrupt(char *buffer, size_t size);  // ST, CTRL, ERDP, EREP, PORTSC, IPFS mask: for a panic line
     PortChange portChange();                            // Linux __tegra_xudc_handle_port_status, every change acked
 
-    // Endpoints (DCI = 2 * number + IN; EP0 is DCI 0).
-    void initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uint32_t interval);
+    // Endpoints (DCI = 2 * number + IN; EP0 is DCI 0). A data endpoint's first call allocates its kDataRingTrbs ring
+    // (false: no DMA memory); maxBurst 0 below SuperSpeed.
+    bool initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uint32_t interval, uint32_t maxBurst = 0);
     void disableEndpoint(uint32_t dci);
     bool reloadEndpoint(uint32_t dci);
     void setHalt(uint32_t dci, bool halt);
@@ -108,6 +115,19 @@ public:
     void resetSequence(uint32_t dci);  // CLEAR_FEATURE(HALT): data toggle 0, ring position kept
     void dropQueued(uint32_t dci);     // discard every TRB not yet completed, keep the toggle
     uint32_t push(uint32_t dci, uint32_t bufferPA, uint32_t length, uint32_t flags);  // returns TRB PA
+    // Data endpoints: one TRB at the enqueue position (buffer, length, TD size = TRBs after it in the TD, flags without
+    // the cycle bit); returns its ring index. The ring's indices, the TRB at one (as written), the index of a TRB
+    // address.
+    uint32_t pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, uint32_t tdSize, uint32_t flags);
+    uint32_t ringTrbs(uint32_t dci) const { return rings[dci].trbs; }
+    uint32_t nextIndex(uint32_t dci, uint32_t index) const { return index + 1 == rings[dci].trbs - 1 ? 0 : index + 1; }
+    uint32_t trbLength(uint32_t dci, uint32_t index) const { return rings[dci].trb[index * 4 + 2] & 0x1ffff; }
+    uint64_t trbBuffer(uint32_t dci, uint32_t index) const
+    {
+        return rings[dci].trb[index * 4] | (uint64_t)rings[dci].trb[index * 4 + 1] << 32;
+    }
+    bool trbIndex(uint32_t dci, uint32_t trbPA, uint32_t *index) const;
+    bool ringReady(uint32_t dci) const { return rings[dci].trb != nullptr; }
     void doorbell(uint32_t dci, uint16_t sequence = 0);
     void setAddress(uint32_t address);
     void run();  // CTRL.RUN (first data endpoint)
@@ -115,7 +135,8 @@ public:
 private:
     struct Ring {
         volatile uint32_t *trb = nullptr;
-        uint32_t pa = 0, enqueue = 0, cycle = 1;
+        uint32_t pa = 0, enqueue = 0, cycle = 1, trbs = kRingTrbs;
+        DmaBuffer own;  // a data endpoint's ring (EP0's is in `control`)
     };
     volatile uint8_t *car = nullptr, *pmcPage = nullptr, *fusePage = nullptr, *mc = nullptr, *padctl = nullptr,
                      *xudc = nullptr;

@@ -332,10 +332,10 @@ bool Hardware::powerOn(char *why, size_t whySize)
         snprintf(why, whySize, "no DMA memory below 4 GiB");
         return false;
     }
-    for (uint32_t i = 0; i < kMaxDci; ++i) {
-        rings[i].trb = (volatile uint32_t *)(control.va + kRingOffset + i * kRingTrbs * 16);
-        rings[i].pa = control.pa + kRingOffset + i * kRingTrbs * 16;
-    }
+    // EP0's ring in the control area; data endpoints get their own at their first initEndpoint.
+    rings[0].trb = (volatile uint32_t *)(control.va + kRingOffset);
+    rings[0].pa = control.pa + kRingOffset;
+    rings[0].trbs = kRingTrbs;
 
     // The legacy USB2 device controller stays off; XUSB and its pad block on.
     w(car, RST_DEV_L_SET, L_USBD);
@@ -404,10 +404,11 @@ bool Hardware::powerOn(char *why, size_t whySize)
     return true;
 }
 
-// hekate xusb_device_enumerate(): no interrupt moderation, VBUS/ID overrides, enable, port to RxDetect, pull-up on.
+// hekate xusb_device_enumerate(): VBUS/ID overrides, enable, port to RxDetect, pull-up on; interrupt moderation as
+// Linux tegra_xudc_init sets it (IMODI and the counter, kImodUs).
 void Hardware::connect()
 {
-    xw(RT_IMOD, 0);
+    xw(RT_IMOD, (kImodUs * 4) << 16 | (kImodUs * 4));
     w(padctl, ELPG_PROGRAM_0, 0);
     w(padctl, ELPG_PROGRAM_1, 0);
     w(padctl, USB2_VBUS_ID,
@@ -561,32 +562,42 @@ volatile uint32_t *Hardware::context(uint32_t dci)
 void Hardware::resetRing(uint32_t dci)
 {
     Ring &ring = rings[dci];
-    for (uint32_t i = 0; i < kRingTrbs * 4; ++i) ring.trb[i] = 0;
-    volatile uint32_t *link = ring.trb + (kRingTrbs - 1) * 4;
+    for (uint32_t i = 0; i < ring.trbs * 4; ++i) ring.trb[i] = 0;
+    volatile uint32_t *link = ring.trb + (ring.trbs - 1) * 4;
     link[0] = ring.pa;
     link[3] = trbType(TRB_LINK) | TRB_TOGGLE;
     ring.enqueue = 0;
     ring.cycle = 1;
-    cacheFlush(ring.trb, kRingTrbs * 16);
+    cacheFlush(ring.trb, ring.trbs * 16);
 }
 
 // hekate xusb_ep_ctx_t / Linux tegra_xudc_ep_context_setup: state running, CErr/CEC 3, dequeue = ring start with
-// DCS 1; EP0 keeps the current device address.
-void Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uint32_t interval)
+// DCS 1, Linux's average TRB length per type (control 8, interrupt 1024, bulk 3072), the max burst (SuperSpeed); EP0
+// keeps the current device address.
+bool Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uint32_t interval, uint32_t maxBurst)
 {
+    Ring &ring = rings[dci];
+    if (dci && !ring.trb) {
+        if (!ring.own.allocate(kDataRingTrbs * 16)) return false;
+        ring.trb = (volatile uint32_t *)ring.own.va;
+        ring.pa = ring.own.pa;
+        ring.trbs = kDataRingTrbs;
+    }
     resetRing(dci);
     volatile uint32_t *c = context(dci);
     uint32_t address = dci == 0 ? (xr(CTRL) >> 24) & 0x7f : 0;
-    uint32_t average = type == EP_CONTROL ? 8 : maxPacket;
-    uint32_t esit = (type == EP_INTR_IN || type == EP_INTR_OUT) ? maxPacket : 0;
+    const bool interrupt = type == EP_INTR_IN || type == EP_INTR_OUT;
+    uint32_t average = type == EP_CONTROL ? 8 : interrupt ? 1024 : 3072;
+    uint32_t esit = interrupt ? maxPacket * (maxBurst + 1) : 0;
     for (uint32_t i = 0; i < 16; ++i) c[i] = 0;
     c[0] = 1 | interval << 16;
-    c[1] = 3u << 1 | type << 3 | maxPacket << 16;
+    c[1] = 3u << 1 | type << 3 | (maxBurst & 0xff) << 8 | maxPacket << 16;
     c[2] = (rings[dci].pa & ~0xfu) | 1;
     c[4] = average | esit << 16;
     c[6] = 3u << 18;
     c[11] = address;
     cacheFlush(c, 64);
+    return true;
 }
 
 bool Hardware::reloadEndpoint(uint32_t dci)
@@ -664,22 +675,37 @@ void Hardware::dropQueued(uint32_t dci)
 
 uint32_t Hardware::push(uint32_t dci, uint32_t bufferPA, uint32_t length, uint32_t flags)
 {
+    const uint32_t index = pushData(dci, bufferPA, length, 0, flags);
+    return rings[dci].pa + index * 16;
+}
+
+// The TRB (the controller reads it once its line is cleaned), and the link TRB's cycle when the ring wraps.
+uint32_t Hardware::pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, uint32_t tdSize, uint32_t flags)
+{
     Ring &ring = rings[dci];
-    volatile uint32_t *t = ring.trb + ring.enqueue * 4;
-    uint32_t at = ring.pa + ring.enqueue * 16;
-    t[0] = bufferPA;
-    t[1] = 0;
-    t[2] = length;
+    const uint32_t index = ring.enqueue;
+    volatile uint32_t *t = ring.trb + index * 4;
+    t[0] = (uint32_t)bufferPA;
+    t[1] = (uint32_t)(bufferPA >> 32);
+    t[2] = (length & 0x1ffff) | (tdSize > 31 ? 31 : tdSize) << 17;
     t[3] = flags | ring.cycle;
     cacheFlush(t, 16);
-    if (++ring.enqueue == kRingTrbs - 1) {
+    if (++ring.enqueue == ring.trbs - 1) {
         volatile uint32_t *link = ring.trb + ring.enqueue * 4;
         link[3] = (link[3] & ~TRB_CYCLE) | ring.cycle;
         cacheFlush(link, 16);
         ring.enqueue = 0;
         ring.cycle ^= 1;
     }
-    return at;
+    return index;
+}
+
+bool Hardware::trbIndex(uint32_t dci, uint32_t trbPA, uint32_t *index) const
+{
+    const Ring &ring = rings[dci];
+    if (!ring.trb || trbPA < ring.pa || trbPA >= ring.pa + (ring.trbs - 1) * 16 || (trbPA & 15)) return false;
+    *index = (trbPA - ring.pa) / 16;
+    return true;
 }
 
 void Hardware::doorbell(uint32_t dci, uint16_t sequence)
