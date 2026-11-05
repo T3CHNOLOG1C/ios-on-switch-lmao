@@ -159,6 +159,11 @@ struct awdl_host {
     void (*deliver)(void *ctx, const uint8_t *eth, size_t len);
     // One line of log, already formatted. May be NULL.
     void (*log)(void *ctx, const char *line);
+    // Native backend only (the firmware runs AWDL): set one firmware iovar (bsscfg < 0: not bsscfg-prefixed). Called
+    // with the lock held: queue it and send it in order from a thread. 0 when queued.
+    int (*iovar)(void *ctx, int32_t bsscfg, const char *name, const void *buf, size_t len);
+    // Native backend only: an Ethernet frame for the firmware's AWDL interface. 0 when queued.
+    int (*tx_eth)(void *ctx, const uint8_t *eth, size_t len);
 };
 
 struct awdl_config {
@@ -169,7 +174,13 @@ struct awdl_config {
     uint8_t awdl_version;  // e.g. 0x34 = 3.4
     uint8_t device_class;  // 1 macOS, 2 iOS
     char country[3];
+    // Who runs the protocol. NATIVE (the default on this chip): the firmware's own AWDL does sync, election, PSF/MIF
+    // and the AWDL data encapsulation; the core configures it with iovars, learns peers from the action frames the
+    // firmware forwards and adds them for data. SOFT: the core does everything over monitor + injection.
+    uint8_t backend;
+    int32_t bsscfg;  // the firmware bsscfg index for awdl_if (native)
 };
+enum { AWDL_BACKEND_SOFT = 0, AWDL_BACKEND_NATIVE = 1 };
 void awdl_config_default(struct awdl_config *c, const uint8_t addr[6]);
 
 enum awdl_role { AWDL_ROLE_OFF, AWDL_ROLE_ROOT, AWDL_ROLE_FOLLOWER };
@@ -194,6 +205,7 @@ struct awdl_peer {
 struct awdl_stats {
     uint32_t af_rx, af_bad, af_tx, psf_tx, mif_tx, data_rx, data_tx, data_bad, data_drop, tx_refused, resyncs;
     int32_t last_sync_error_us;
+    uint32_t fw_events, fw_unknown, iovars, iovar_refused, peer_adds, peer_dels, aws;
 };
 
 struct awdl_core;
@@ -211,6 +223,16 @@ void awdl_core_rx(struct awdl_core *c, const uint8_t *frame, size_t len, const s
 int awdl_core_output(struct awdl_core *c, const uint8_t *eth, size_t len, uint64_t now);
 // Run what is due at `now`; returns the local TSF of the next deadline (the caller arms one timer for it).
 uint64_t awdl_core_timer(struct awdl_core *c, uint64_t now);
+// Native backend: one firmware event (awdl_bcm.h numbers) with its payload; `now` is the host's TSF estimate.
+struct awdl_fw_event;
+void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, const uint8_t *data, size_t len,
+                        uint64_t now);
+// Native backend: a data frame the firmware delivered from a peer (Ethernet); refreshes the peer. The integration
+// hands it to awdl0 itself.
+void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *eth, size_t len, uint64_t now);
+// The TLVs our MIFs carry beyond sync and election (service params, HT caps, data path state, arpa, version): the
+// "awdl_payload" the firmware appends to its frames in the native backend. Returns the length or 0.
+size_t awdl_core_build_payload(struct awdl_core *c, uint8_t *buf, size_t size);
 
 // Inspection
 enum awdl_role awdl_core_role(const struct awdl_core *c);

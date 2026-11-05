@@ -333,6 +333,7 @@ kernel_driver(
         "SwitchWLANAwdl.cpp",
         "awdl/awdl_wire.c",
         "awdl/awdl_core.c",
+        "awdl/awdl_bcm.c",
         "awdl/awdl_apple80211.c",
         "firmware.S",
     ],

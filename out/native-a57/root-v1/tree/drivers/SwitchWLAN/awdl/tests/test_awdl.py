@@ -9,7 +9,8 @@ import tempfile
 
 here = Path(__file__).resolve().parent
 awdl = here.parent
-sources = [awdl / 'awdl_wire.c', awdl / 'awdl_core.c', awdl / 'awdl_apple80211.c', here / 'test_awdl.c']
+sources = [awdl / 'awdl_wire.c', awdl / 'awdl_core.c', awdl / 'awdl_bcm.c', awdl / 'awdl_apple80211.c',
+           here / 'test_awdl.c', here / 'test_native.c']
 with tempfile.TemporaryDirectory() as directory:
     binary = Path(directory) / 'test_awdl'
     subprocess.run(['cc', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-missing-field-initializers',

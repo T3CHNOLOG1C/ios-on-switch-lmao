@@ -10,7 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int failures;
+int test_failures;
+#define failures test_failures
+void test_native_main(void);  // test_native.c
 #define CHECK(x)                                                         \
     do {                                                                 \
         if (!(x)) {                                                      \
@@ -160,6 +162,7 @@ static void sim_node(int i, uint8_t last, uint32_t metric, int64_t offset, int32
     struct awdl_config cfg;
     awdl_config_default(&cfg, addr);
     cfg.self_metric = metric;
+    cfg.backend = AWDL_BACKEND_SOFT;  // the simulated air: the core runs the whole protocol
     snprintf(cfg.hostname, sizeof cfg.hostname, "node%d", i);
     const struct awdl_host h = {(void *)(intptr_t)i, sim_tx, sim_schedule, sim_peer, sim_deliver, sim_log};
     CHECK(awdl_core_init(n->core, &h, &cfg) == 0);
@@ -689,6 +692,7 @@ int main(int argc, char **argv)
     test_tsf_clock();
     test_ring();
     test_facade();
+    test_native_main();
     sim_reset(0);
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
@@ -696,6 +700,8 @@ int main(int argc, char **argv)
     }
     puts("AWDL: hand-built MIF parse + fuzz, PSF/MIF round trip, data encap/decap, two-node sync (40 ppm), "
          "three-node chain election + root loss, two-channel sequence, TSF clock, IO80211 event ring, awdl0 requests "
-         "and PEER_PRESENCE: ok");
+         "and PEER_PRESENCE; native firmware backend: iovar layouts, bring-up order, peers from "
+         "WLC_E_AWDL_RX_ACT_FRAME, "
+         "awdl_peer_op add/del, firmware role, data to the firmware: ok");
     return 0;
 }

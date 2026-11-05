@@ -82,6 +82,25 @@ typedef void (*swlan_evt_fn)(void *ctx, const struct swlan_awdl_event *e);
 int swlan_awdl_events(swlan_evt_fn fn, void *ctx);
 int swlan_awdl_tsf_read(uint64_t *tsf_us);
 
+// ---- §6 native AWDL: the firmware's own AWDL (cap "awdl", r7p8). PROPOSED by r12-awdl-stack (AWDL-NATIVE.md) --------
+// Set or get one firmware iovar (bsscfg < 0: plain; >= 0: "bsscfg:<name>" with that index). Thread context only
+// (never from a callback): waits for the firmware's answer, bounded like every SwitchWLAN ioctl. 0 or < 0 errno.
+int swlan_awdl_iovar_set(int32_t bsscfg, const char *name, const void *buf, size_t len);
+int swlan_awdl_iovar_get(int32_t bsscfg, const char *name, void *buf, size_t len, size_t *returned);
+// The firmware events of an AWDL session (WLC_E_IF for the AWDL bsscfg and WLC_E 96-98, 111-120; awdl_bcm.h): set
+// in "event_msgs" and delivered from the work loop, payload after the wl_event_msg_t.
+struct swlan_fw_event {
+    uint32_t type, status, reason;
+    uint8_t addr[6];
+    uint8_t ifidx, bsscfgidx;
+};
+typedef void (*swlan_fw_event_fn)(void *ctx, const struct swlan_fw_event *e, const uint8_t *data, size_t len);
+int swlan_awdl_fw_events(swlan_fw_event_fn fn, void *ctx);
+// Ethernet frames on the firmware's AWDL interface (the ifidx its WLC_E_IF ADD names; its own msgbuf flow ring).
+int swlan_awdl_eth_tx(const uint8_t *eth, size_t len);  // 0 queued
+typedef void (*swlan_eth_rx_fn)(void *ctx, const uint8_t *eth, size_t len);
+int swlan_awdl_eth_rx(swlan_eth_rx_fn fn, void *ctx);
+
 // ---- SwitchWLANAwdl.cpp (r12-awdl-stack) -> SwitchWLANNet.cpp ---------------------------------------------------
 // Whether en0 advertises AWDL (CARD_CAPABILITIES bit 32): the Data flag /private/var/ioswitch/awdl-enable exists and
 // the radio opened with what the stack needs. Evaluated once userland runs; cheap after that.

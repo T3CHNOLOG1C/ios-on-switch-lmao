@@ -42,6 +42,7 @@ extern "C" {
 #include "SwitchWLANStation.h"
 #include "awdl/awdl.h"
 #include "awdl/awdl_apple80211.h"
+#include "awdl/awdl_bcm.h"
 
 #define SIOCSA80211 0x802869c8UL
 #define SIOCGA80211 0xc02869c9UL
@@ -86,6 +87,26 @@ __attribute__((weak)) int swlan_awdl_tsf_read(uint64_t *)
 {
     return -EOPNOTSUPP;
 }
+__attribute__((weak)) int swlan_awdl_iovar_set(int32_t, const char *, const void *, size_t)
+{
+    return -EOPNOTSUPP;
+}
+__attribute__((weak)) int swlan_awdl_iovar_get(int32_t, const char *, void *, size_t, size_t *)
+{
+    return -EOPNOTSUPP;
+}
+__attribute__((weak)) int swlan_awdl_fw_events(swlan_fw_event_fn, void *)
+{
+    return -EOPNOTSUPP;
+}
+__attribute__((weak)) int swlan_awdl_eth_tx(const uint8_t *, size_t)
+{
+    return -EOPNOTSUPP;
+}
+__attribute__((weak)) int swlan_awdl_eth_rx(swlan_eth_rx_fn, void *)
+{
+    return -EOPNOTSUPP;
+}
 }
 
 namespace {
@@ -110,7 +131,7 @@ struct awdl_core *gCore;
 a80211_awdl gFacade;
 awdl_tsf_clock gClock;
 uint64_t gLastAnchorNs;
-thread_call_t gTimer, gDeferred, gCreate;
+thread_call_t gTimer, gDeferred, gCreate, gIovarWork;
 ifnet_t gIf;
 uint8_t gMac[6];
 unsigned gUnit;
@@ -242,6 +263,50 @@ void hostLog(void *, const char *line)
     IOLog("SwitchWLAN: %s\n", line);
 }
 
+// Native backend: the core's iovars, in order, from a thread (they wait for the firmware's answer).
+struct Iovar {
+    int32_t bsscfg;
+    char name[32];
+    uint16_t length;
+    uint8_t value[512];
+};
+Iovar gIovars[24];
+unsigned gIovarHead, gIovarCount;
+int hostIovar(void *, int32_t bsscfg, const char *name, const void *buf, size_t length)
+{
+    if (gIovarCount == sizeof gIovars / sizeof gIovars[0] || length > sizeof gIovars[0].value) return -1;
+    Iovar &v = gIovars[(gIovarHead + gIovarCount++) % (sizeof gIovars / sizeof gIovars[0])];
+    v.bsscfg = bsscfg;
+    strlcpy(v.name, name, sizeof v.name);
+    v.length = static_cast<uint16_t>(length);
+    memcpy(v.value, buf, length);
+    if (gIovarWork) thread_call_enter(gIovarWork);
+    return 0;
+}
+void iovarWork(thread_call_param_t, thread_call_param_t)
+{
+    static Iovar v;  // one worker (thread_call_enter does not run it twice at once)
+    for (;;) {
+        IOLockLock(gLock);
+        if (!gIovarCount) {
+            IOLockUnlock(gLock);
+            return;
+        }
+        v = gIovars[gIovarHead];
+        gIovarHead = (gIovarHead + 1) % (sizeof gIovars / sizeof gIovars[0]);
+        gIovarCount--;
+        IOLockUnlock(gLock);
+        const int e = swlan_awdl_iovar_set(v.bsscfg, v.name, v.value, v.length);
+        static unsigned said;
+        if (e < 0 && said++ < 16)
+            IOLog("SwitchWLAN: AWDL: the firmware refused %s (%d bytes): %d\n", v.name, v.length, e);
+    }
+}
+int hostTxEth(void *, const uint8_t *eth, size_t length)
+{
+    return swlan_awdl_eth_tx(eth, length) < 0 ? -1 : 0;
+}
+
 // Neighbour entries and received packets, outside gLock (ifnet_notice_node_presence takes the routing lock, which
 // the stack's output path may hold while it calls us).
 void drain()
@@ -317,6 +382,31 @@ void radioRx(void *, const uint8_t *frame, size_t length, const struct swlan_rx_
     IOLockUnlock(gLock);
     if (gInputHead || gPresenceCount) drain();
 }
+// Native backend: the firmware's AWDL events and the frames of its AWDL interface.
+void fwEvent(void *, const struct swlan_fw_event *e, const uint8_t *data, size_t length)
+{
+    IOLockLock(gLock);
+    if (gCore && awdl_core_running(gCore)) {
+        const struct awdl_fw_event fe = {
+            e->type,  e->status,   e->reason, {e->addr[0], e->addr[1], e->addr[2], e->addr[3], e->addr[4], e->addr[5]},
+            e->ifidx, e->bsscfgidx};
+        awdl_core_fw_event(gCore, &fe, data, length, nowTsf());
+        rearm();
+    }
+    IOLockUnlock(gLock);
+    if (gInputHead || gPresenceCount) drain();
+}
+void ethRx(void *, const uint8_t *eth, size_t length)
+{
+    IOLockLock(gLock);
+    if (gCore && awdl_core_running(gCore)) {
+        awdl_core_rx_eth(gCore, eth, length, nowTsf());
+        hostDeliver(nullptr, eth, length);
+    }
+    IOLockUnlock(gLock);
+    drain();
+}
+
 void radioEvent(void *, const struct swlan_awdl_event *e)
 {
     if (e->type != SWLAN_AWDL_CHIP_LOST) return;
@@ -332,6 +422,16 @@ void radioEvent(void *, const struct swlan_awdl_event *e)
 // ---- the facade's operations (gLock held) ---------------------------------------------------------------------------
 int opStart(void *)
 {
+    if (!gRxStarted && gCaps->has_native_awdl) {
+        int e = swlan_awdl_fw_events(fwEvent, nullptr);
+        if (e >= 0) e = swlan_awdl_eth_rx(ethRx, nullptr);
+        if (e < 0) {
+            IOLog("SwitchWLAN: AWDL: the radio would not deliver the firmware's AWDL events and frames (%d): off\n", e);
+            return ENXIO;
+        }
+        swlan_awdl_events(radioEvent, nullptr);  // chip loss
+        gRxStarted = true;
+    }
     if (!gRxStarted) {
         const int e = swlan_awdl_rx_start(radioRx, nullptr);
         if (e < 0) {
@@ -348,9 +448,11 @@ int opStart(void *)
 void opStop(void *)
 {
     if (gTimer) thread_call_cancel(gTimer);
-    swlan_awdl_chanseq_clear();
-    swlan_awdl_rx_stop();
-    gRxStarted = false;
+    if (!gCaps->has_native_awdl) {  // native: the core's "awdl_if down" stops the firmware; its events stay on
+        swlan_awdl_chanseq_clear();
+        swlan_awdl_rx_stop();
+        gRxStarted = false;
+    }
 }
 void opPost(void *, uint32_t event, const void *payload, uint32_t length)
 {
@@ -749,15 +851,15 @@ extern "C" int switch_wlan_awdl_capable(void)
             IOLog("SwitchWLAN: AWDL: radio ABI %u, the stack speaks %u: off\n", caps->abi_version,
                   SWLAN_AWDL_ABI_VERSION);
             swlan_awdl_close();
-        } else if (!(caps->can_monitor && caps->can_inject)) {
-            IOLog(
-                "SwitchWLAN: AWDL: radio native=%u monitor=%u inject=%u: the native backend is not written yet: off\n",
-                caps->has_native_awdl, caps->can_monitor, caps->can_inject);
+        } else if (!caps->has_native_awdl && !(caps->can_monitor && caps->can_inject)) {
+            IOLog("SwitchWLAN: AWDL: radio native=%u monitor=%u inject=%u: neither backend can run: off\n",
+                  caps->has_native_awdl, caps->can_monitor, caps->can_inject);
             swlan_awdl_close();
         } else if (!(gLock = IOLockAlloc()) || !(gCore = static_cast<awdl_core *>(IOMallocZero(awdl_core_size()))) ||
                    !(gTimer = thread_call_allocate_with_priority(timerFired, nullptr, THREAD_CALL_PRIORITY_HIGH)) ||
                    !(gDeferred = thread_call_allocate(deferredWork, nullptr)) ||
-                   !(gCreate = thread_call_allocate(createInterface, nullptr))) {
+                   !(gCreate = thread_call_allocate(createInterface, nullptr)) ||
+                   !(gIovarWork = thread_call_allocate(iovarWork, nullptr))) {
             IOLog("SwitchWLAN: AWDL: no memory for the stack: off\n");
             swlan_awdl_close();
         } else {
@@ -765,11 +867,15 @@ extern "C" int switch_wlan_awdl_capable(void)
             memcpy(gMac, caps->self_mac, 6);
             awdl_config cfg;
             awdl_config_default(&cfg, gMac);
-            const awdl_host host = {nullptr, hostTx, hostSchedule, hostPeer, hostDeliver, hostLog};
+            // the firmware's own AWDL when it has it (this chip: cap "awdl"); monitor + injection otherwise
+            cfg.backend = caps->has_native_awdl ? AWDL_BACKEND_NATIVE : AWDL_BACKEND_SOFT;
+            const awdl_host host = {nullptr,     hostTx,  hostSchedule, hostPeer,
+                                    hostDeliver, hostLog, hostIovar,    hostTxEth};
             awdl_core_init(gCore, &host, &cfg);
-            IOLog("SwitchWLAN: AWDL: available (monitor %u, inject %u timed %u, hops %u, mchan %u, TSF +-%u us)\n",
-                  caps->can_monitor, caps->can_inject, caps->can_inject_timed, caps->can_scheduled_hops,
-                  caps->can_stay_assoc, caps->tsf_read_us_err);
+            IOLog("SwitchWLAN: AWDL: available, %s backend (native %u, monitor %u, inject %u timed %u, hops %u, mchan "
+                  "%u)\n",
+                  caps->has_native_awdl ? "firmware" : "monitor+inject", caps->has_native_awdl, caps->can_monitor,
+                  caps->can_inject, caps->can_inject_timed, caps->can_scheduled_hops, caps->can_stay_assoc);
             verdict = 1;
         }
         __atomic_store_n(&gCapable, verdict, __ATOMIC_RELEASE);

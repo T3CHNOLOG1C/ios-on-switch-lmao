@@ -9,6 +9,7 @@
 // the time they meant to send (target_tx_time) and actually sent (phy_tx_time). A receiver places the sender's next AW
 // at rx_tsf - (phy_tx_time - target_tx_time) + down_counter TU.
 #include "awdl_internal.h"
+#include "awdl_bcm.h"
 
 void awdl_config_default(struct awdl_config *c, const uint8_t addr[6])
 {
@@ -23,6 +24,8 @@ void awdl_config_default(struct awdl_config *c, const uint8_t addr[6])
     c->device_class = 2;
     c->country[0] = 'X';
     c->country[1] = 'X';
+    c->backend = AWDL_BACKEND_NATIVE;  // this chip's firmware has AWDL (cap "awdl", r7p8)
+    c->bsscfg = 1;
 }
 
 size_t awdl_core_size(void)
@@ -48,6 +51,28 @@ static int is_group(const uint8_t *a)
 static int addr_eq(const uint8_t *a, const uint8_t *b)
 {
     return !memcmp(a, b, 6);
+}
+static int native(const struct awdl_core *c)
+{
+    return c->cfg.backend == AWDL_BACKEND_NATIVE;
+}
+// Native backend: one iovar to the firmware, through the integration's ordered queue.
+static void fw_set(struct awdl_core *c, const char *name, const void *buf, size_t len)
+{
+    c->stats.iovars++;
+    if (!c->host.iovar || c->host.iovar(c->host.ctx, -1, name, buf, len)) {
+        c->stats.iovar_refused++;
+        awdl_log(c, "AWDL: iovar %s not queued", name);
+    }
+}
+static void fw_peer_op(struct awdl_core *c, uint8_t op, const uint8_t addr[6])
+{
+    uint8_t b[BCM_AWDL_PEER_OP_LEN];
+    fw_set(c, "awdl_peer_op", b, bcm_awdl_peer_op(b, op, addr, 0));
+    if (op == BCM_AWDL_PEER_OP_ADD)
+        c->stats.peer_adds++;
+    else
+        c->stats.peer_dels++;
 }
 
 // ---- timing ------------------------------------------------------------------------------------------------------
@@ -167,6 +192,7 @@ static struct awdl_peer *peer_get(struct awdl_core *c, const uint8_t addr[6], ui
 }
 static void peer_lost(struct awdl_core *c, struct awdl_peer *p, const char *why)
 {
+    if (p->reachable && native(c)) fw_peer_op(c, BCM_AWDL_PEER_OP_DEL, p->addr);
     if (p->reachable && c->host.peer) c->host.peer(c->host.ctx, p->addr, 0, p->rssi);
     awdl_log(c, "AWDL: peer %02x:%02x:%02x:%02x:%02x:%02x lost (%s)", p->addr[0], p->addr[1], p->addr[2], p->addr[3],
              p->addr[4], p->addr[5], why);
@@ -244,19 +270,73 @@ static void handle_af(struct awdl_core *c, const struct awdl_af *a, const struct
         p->next_aw_tsf = sender_next_aw(a, m->tsf);
         p->next_aw_seq = (uint16_t)(a->sync.aw_seq + 1);
     }
-    run_election(c, m->tsf);
-    if (timed && c->role == AWDL_ROLE_FOLLOWER && addr_eq(p->addr, c->adv.parent)) sync_to(c, p, m->tsf);
+    if (!native(c)) {  // the firmware does election and synchronisation in the native backend
+        run_election(c, m->tsf);
+        if (timed && c->role == AWDL_ROLE_FOLLOWER && addr_eq(p->addr, c->adv.parent)) sync_to(c, p, m->tsf);
+    }
     if (!p->reachable && timed && p->has_seq &&
         (a->subtype == AWDL_SUBTYPE_MIF || (a->present & (1u << AWDL_TLV_DATA_PATH_STATE)))) {
         p->reachable = 1;
         awdl_log(c, "AWDL: peer %02x:%02x:%02x:%02x:%02x:%02x \"%s\" reachable, %d dBm, version %#x class %u",
                  p->addr[0], p->addr[1], p->addr[2], p->addr[3], p->addr[4], p->addr[5], p->hostname, p->rssi,
                  p->awdl_version, p->device_class);
+        if (native(c)) fw_peer_op(c, BCM_AWDL_PEER_OP_ADD, p->addr);  // the firmware sends data to it from now on
         if (c->host.peer) c->host.peer(c->host.ctx, p->addr, 1, p->rssi);
     }
 }
 
 // ---- frames we send ------------------------------------------------------------------------------------------------
+// Service params, and for a MIF HT caps, data path state, arpa and version: what our frames carry beyond sync and
+// election (in the native backend, the "awdl_payload" the firmware appends).
+static void write_extras(struct awdl_core *c, struct awdl_writer *w, int mif)
+{
+    awdl_w_begin(w, AWDL_TLV_SERVICE_PARAMS);
+    awdl_w_u8(w, 0);
+    awdl_w_u16(w, 0);
+    awdl_w_u16(w, c->service_update_indicator);
+    awdl_w_u8(w, 0);  // no SSTH values
+    awdl_w_end(w);
+    if (!mif) return;
+
+    awdl_w_begin(w, AWDL_TLV_HT_CAPS);
+    awdl_w_u16(w, 0);
+    awdl_w_u16(w, 0x11ce);  // HT20/40, SM power save off, short GI 20, greenfield off
+    awdl_w_u8(w, 0x17);     // A-MPDU: 64 KiB, 8 us spacing
+    awdl_w_u8(w, 0xff);     // MCS 0-7
+    awdl_w_u16(w, 0);
+    awdl_w_end(w);
+
+    awdl_w_begin(w, AWDL_TLV_DATA_PATH_STATE);
+    awdl_w_u16(w, AWDL_DPS_COUNTRY_CODE | AWDL_DPS_SOCIAL_CHANNEL_MAP | AWDL_DPS_AWDL_ADDRESS);
+    awdl_w_u8(w, (uint8_t)c->cfg.country[0]);
+    awdl_w_u8(w, (uint8_t)c->cfg.country[1]);
+    awdl_w_u8(w, 0);
+    awdl_w_u16(w, 0x0004);  // social channels: 149
+    awdl_w_bytes(w, c->cfg.addr, 6);
+    awdl_w_end(w);
+
+    awdl_w_begin(w, AWDL_TLV_ARPA);
+    awdl_w_u8(w, 3);
+    const size_t n = strnlen(c->cfg.hostname, sizeof c->cfg.hostname);
+    awdl_w_u8(w, (uint8_t)n);
+    awdl_w_bytes(w, c->cfg.hostname, n);
+    awdl_w_u8(w, 0xc0);  // ".local"
+    awdl_w_u8(w, 0x0c);
+    awdl_w_end(w);
+
+    awdl_w_begin(w, AWDL_TLV_VERSION);
+    awdl_w_u8(w, c->cfg.awdl_version);
+    awdl_w_u8(w, c->cfg.device_class);
+    awdl_w_end(w);
+}
+
+size_t awdl_core_build_payload(struct awdl_core *c, uint8_t *buf, size_t size)
+{
+    struct awdl_writer w = {buf, size, 0, 0, 0};
+    write_extras(c, &w, 1);
+    return w.overflow ? 0 : w.at;
+}
+
 // A frame built at `now` is aimed at a whole number of TU before the next AW starts, at or after now: *counter gets
 // that number (the sync parameters' down counter).
 static uint64_t af_target(const struct awdl_core *c, uint64_t now, uint16_t *counter)
@@ -342,45 +422,7 @@ size_t awdl_core_build_af(struct awdl_core *c, uint8_t subtype, uint64_t now, ui
     awdl_w_u32(&w, c->self_counter);
     awdl_w_end(&w);
 
-    awdl_w_begin(&w, AWDL_TLV_SERVICE_PARAMS);
-    awdl_w_u8(&w, 0);
-    awdl_w_u16(&w, 0);
-    awdl_w_u16(&w, c->service_update_indicator);
-    awdl_w_u8(&w, 0);  // no SSTH values
-    awdl_w_end(&w);
-
-    if (subtype == AWDL_SUBTYPE_MIF) {
-        awdl_w_begin(&w, AWDL_TLV_HT_CAPS);
-        awdl_w_u16(&w, 0);
-        awdl_w_u16(&w, 0x11ce);  // HT20/40, SM power save off, short GI 20, greenfield off
-        awdl_w_u8(&w, 0x17);     // A-MPDU: 64 KiB, 8 us spacing
-        awdl_w_u8(&w, 0xff);     // MCS 0-7
-        awdl_w_u16(&w, 0);
-        awdl_w_end(&w);
-
-        awdl_w_begin(&w, AWDL_TLV_DATA_PATH_STATE);
-        awdl_w_u16(&w, AWDL_DPS_COUNTRY_CODE | AWDL_DPS_SOCIAL_CHANNEL_MAP | AWDL_DPS_AWDL_ADDRESS);
-        awdl_w_u8(&w, (uint8_t)c->cfg.country[0]);
-        awdl_w_u8(&w, (uint8_t)c->cfg.country[1]);
-        awdl_w_u8(&w, 0);
-        awdl_w_u16(&w, 0x0004);  // social channels: 149
-        awdl_w_bytes(&w, c->cfg.addr, 6);
-        awdl_w_end(&w);
-
-        awdl_w_begin(&w, AWDL_TLV_ARPA);
-        awdl_w_u8(&w, 3);
-        const size_t n = strnlen(c->cfg.hostname, sizeof c->cfg.hostname);
-        awdl_w_u8(&w, (uint8_t)n);
-        awdl_w_bytes(&w, c->cfg.hostname, n);
-        awdl_w_u8(&w, 0xc0);  // ".local"
-        awdl_w_u8(&w, 0x0c);
-        awdl_w_end(&w);
-
-        awdl_w_begin(&w, AWDL_TLV_VERSION);
-        awdl_w_u8(&w, c->cfg.awdl_version);
-        awdl_w_u8(&w, c->cfg.device_class);
-        awdl_w_end(&w);
-    }
+    write_extras(c, &w, subtype == AWDL_SUBTYPE_MIF);
     return w.overflow ? 0 : w.at;
 }
 
@@ -454,6 +496,14 @@ int awdl_core_output(struct awdl_core *c, const uint8_t *eth, size_t len, uint64
         c->stats.data_drop++;  // no such peer: no route (the kernel only knows peers we announced)
         return -2;
     }
+    if (native(c)) {  // the firmware's AWDL interface encapsulates and schedules
+        if (!c->host.tx_eth || c->host.tx_eth(c->host.ctx, eth, len)) {
+            c->stats.tx_refused++;
+            return -3;
+        }
+        c->stats.data_tx++;
+        return 0;
+    }
     const uint16_t seq = c->data_seq++;
     if (listening(c, eth, now) && !c->txq_count) {
         const size_t n = awdl_data_encap(eth, len, c->cfg.addr, seq, c->scratch, sizeof c->scratch);
@@ -513,10 +563,56 @@ int awdl_core_init(struct awdl_core *c, const struct awdl_host *host, const stru
     return 0;
 }
 
+// Native bring-up, in the order a Mac's driver sends it (AWDL-NATIVE.md): the AWDL bsscfg up with our address, then
+// its parameters, the frame header, the channel sequence, extension counts, election, our TLV payload, and the
+// operating mode (auto: the firmware elects).
+static void native_start(struct awdl_core *c)
+{
+    uint8_t b[512];
+    fw_set(c, "awdl_if", b, bcm_awdl_if2(b, c->cfg.bsscfg, 1, awdl_bssid, c->cfg.addr));
+    struct bcm_awdl_config cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.channel = awdl_chan_primary(c->cfg.seq[0]);
+    cfg.aw_period = AWDL_AW_TU;
+    cfg.aw_cmn_length = AWDL_AW_TU;
+    cfg.action_frame_period = AWDL_PSF_INTERVAL_TU;
+    cfg.pkt_lifetime_ms = 500;
+    cfg.max_no_master = 8;
+    cfg.ext_count = 3;
+    cfg.aw_ext_length = AWDL_AW_TU;
+    cfg.nmode = 2;  // 11n with A-MPDU
+    memset(cfg.dest, 0xff, 6);
+    fw_set(c, "awdl_config", b, bcm_awdl_config_encode(b, &cfg));
+    fw_set(c, "awdl_af_hdr", b, bcm_awdl_af_hdr(b, cfg.dest));
+    fw_set(c, "awdl_chan_seq", b, bcm_awdl_chan_seq(b, sizeof b, c->cfg.seq, AWDL_SEQ_SLOTS));
+    fw_set(c, "awdl_extcounts", b, bcm_awdl_extcounts(b, 3, 3, 3, 3));
+    struct bcm_awdl_election_tree e;
+    memset(&e, 0, sizeof e);
+    e.self_metric = c->cfg.self_metric;
+    e.close_sync_rssi = -65;
+    e.edge_sync_rssi = -80;
+    e.close_range_rssi = -60;
+    e.mid_range_rssi = -75;
+    e.max_tree_depth = AWDL_ELECTION_MAX_HOPS;
+    fw_set(c, "awdl_election_tree", b, bcm_awdl_election_tree_encode(b, &e));
+    uint8_t tlvs[256];
+    const size_t n = awdl_core_build_payload(c, tlvs, sizeof tlvs);
+    if (n) fw_set(c, "awdl_payload", b, bcm_awdl_payload(b, sizeof b, tlvs, n));
+    fw_set(c, "awdl_opmode", b, bcm_awdl_opmode(b, BCM_AWDL_OPMODE_AUTO, BCM_AWDL_ROLE_SLAVE, 0, NULL));
+    c->role = AWDL_ROLE_OFF;  // until the firmware reports its role
+    awdl_log(c, "AWDL: started (firmware AWDL), channel %u, bsscfg %d", awdl_chan_primary(c->cfg.seq[0]),
+             (int)c->cfg.bsscfg);
+}
+
 void awdl_core_start(struct awdl_core *c, uint64_t now)
 {
     if (c->running) return;
     c->running = 1;
+    if (native(c)) {
+        c->next_slot = now + 1000000;  // peer expiry once a second
+        native_start(c);
+        return;
+    }
     c->base_tsf = now - now % AWDL_AW_US;
     c->base_seq = 0;
     c->self_counter = 0;
@@ -534,6 +630,10 @@ void awdl_core_stop(struct awdl_core *c)
     if (!c->running) return;
     for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i)
         if (c->peers[i].used) peer_lost(c, &c->peers[i], "stopped");
+    if (native(c)) {
+        uint8_t b[BCM_AWDL_IF2_LEN];
+        fw_set(c, "awdl_if", b, bcm_awdl_if2(b, c->cfg.bsscfg, 0, awdl_bssid, c->cfg.addr));
+    }
     c->txq_count = 0;
     c->running = 0;
     c->role = AWDL_ROLE_OFF;
@@ -597,6 +697,13 @@ void awdl_core_rx(struct awdl_core *c, const uint8_t *f, size_t len, const struc
 uint64_t awdl_core_timer(struct awdl_core *c, uint64_t now)
 {
     if (!c->running) return UINT64_MAX;
+    if (native(c)) {
+        if (now >= c->next_slot) {
+            expire_peers(c, now);
+            c->next_slot = now + 1000000;
+        }
+        return c->next_slot;
+    }
     if (now - c->last_counter_tick >= AWDL_ROOT_COUNTER_US) {
         c->last_counter_tick = now;
         if (c->role == AWDL_ROLE_ROOT) c->self_counter++;
@@ -616,6 +723,65 @@ uint64_t awdl_core_timer(struct awdl_core *c, uint64_t now)
         c->next_psf = now + AWDL_PSF_US;
     }
     return c->next_psf < c->next_slot ? c->next_psf : c->next_slot;
+}
+
+// ---- native backend: firmware events ------------------------------------------------------------------------------
+void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, const uint8_t *data, size_t len,
+                        uint64_t now)
+{
+    if (!c->running || !native(c)) return;
+    c->stats.fw_events++;
+    switch (e->type) {
+    case WLC_E_AWDL_RX_ACT_FRAME: {
+        struct bcm_rx_frame meta;
+        const uint8_t *frame;
+        size_t n;
+        struct awdl_af a;
+        if (bcm_awdl_rx_frame_decode(data, len, &meta, &frame, &n) || awdl_af_parse(frame, n, &a)) {
+            c->stats.af_bad++;
+            return;
+        }
+        c->stats.af_rx++;
+        const int32_t r = meta.rssi < -128 ? -128 : meta.rssi > 0 ? 0 : meta.rssi;
+        const struct awdl_rx_meta m = {now, 0, (int8_t)r};
+        handle_af(c, &a, &m);
+        return;
+    }
+    case WLC_E_AWDL_ROLE: {
+        struct bcm_awdl_role r;
+        if (bcm_awdl_role_decode(data, len, &r)) return;
+        const enum awdl_role was = c->role;
+        c->role = r.role == BCM_AWDL_ROLE_SLAVE ? AWDL_ROLE_FOLLOWER : AWDL_ROLE_ROOT;
+        memcpy(c->adv.root, r.role == BCM_AWDL_ROLE_SLAVE ? r.master : c->cfg.addr, 6);
+        memcpy(c->adv.parent, r.master, 6);
+        if (was != c->role)
+            awdl_log(c, "AWDL: firmware role %s, master %02x:%02x:%02x:%02x:%02x:%02x",
+                     r.role == BCM_AWDL_ROLE_SLAVE    ? "slave"
+                     : r.role == BCM_AWDL_ROLE_MASTER ? "master"
+                                                      : "non-election master",
+                     r.master[0], r.master[1], r.master[2], r.master[3], r.master[4], r.master[5]);
+        return;
+    }
+    case WLC_E_AWDL_AW: {
+        struct bcm_awdl_aw aw;
+        if (!bcm_awdl_aw_decode(data, len, &aw)) c->stats.aws++;
+        return;
+    }
+    default:
+        // Payloads not settled yet (AWDL-NATIVE.md): the first few events of other kinds are logged with their size.
+        if (c->stats.fw_unknown++ < 8)
+            awdl_log(c, "AWDL: firmware event %u status %u reason %u, %u bytes", (unsigned)e->type, (unsigned)e->status,
+                     (unsigned)e->reason, (unsigned)len);
+        return;
+    }
+}
+
+void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *eth, size_t len, uint64_t now)
+{
+    if (!c->running || len < 14) return;
+    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i)
+        if (c->peers[i].used && addr_eq(c->peers[i].addr, eth + 6)) c->peers[i].last_seen = now;
+    c->stats.data_rx++;
 }
 
 // ---- TSF clock ----------------------------------------------------------------------------------------------------------
