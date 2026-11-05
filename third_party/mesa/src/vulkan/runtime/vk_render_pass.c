@@ -656,19 +656,37 @@ vk_common_CreateRenderPass2(VkDevice _device,
             VK_PIPELINE_CREATE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
       }
 
-      /* Figure out any self-dependencies */
+      /* Figure out any self-dependencies
+       *
+       * An attachment the subpass both reads as an input and writes keeps
+       * VK_IMAGE_LAYOUT_GENERAL where the application gave GENERAL for both
+       * references: GENERAL already allows the feedback loop, and moving it
+       * to ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT and back to a GENERAL
+       * initial/final layout costs a layout transition at each end of every
+       * render pass instance (two pipeline barriers with transfer writes in
+       * their source scope: on NVK a WAIT_FOR_IDLE and two
+       * INVALIDATE_SHADER_CACHES with data flushes per pass) for a driver
+       * whose images have one layout.  The pipeline still learns of the loop
+       * through the feedback-loop pipeline flag.
+       */
       assert(desc->colorAttachmentCount <= 32);
       for (uint32_t a = 0; a < desc->inputAttachmentCount; a++) {
          if (desc->pInputAttachments[a].attachment == VK_ATTACHMENT_UNUSED)
             continue;
 
+         const bool input_general =
+            desc->pInputAttachments[a].layout == VK_IMAGE_LAYOUT_GENERAL;
+
          for (uint32_t c = 0; c < desc->colorAttachmentCount; c++) {
             if (desc->pColorAttachments[c].attachment ==
                 desc->pInputAttachments[a].attachment) {
-               subpass->input_attachments[a].layout =
-                  VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
-               subpass->color_attachments[c].layout =
-                  VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+               if (!input_general ||
+                   desc->pColorAttachments[c].layout != VK_IMAGE_LAYOUT_GENERAL) {
+                  subpass->input_attachments[a].layout =
+                     VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+                  subpass->color_attachments[c].layout =
+                     VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+               }
                subpass->pipeline_flags |=
                   VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
             }
@@ -2252,6 +2270,22 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
    for (uint32_t d = 0; d < pass->dependency_count; d++) {
       const struct vk_subpass_dependency *dep = &pass->dependencies[d];
       if (dep->dst_subpass != subpass_idx)
+         continue;
+
+      /* From the Vulkan 1.3.204 spec:
+       *
+       *    "If srcSubpass is equal to dstSubpass then the
+       *    VkSubpassDependency does not directly define a dependency.
+       *    Instead, it enables pipeline barriers to be used in a render pass
+       *    instance within the identified subpass, where the scopes of one
+       *    pipeline barrier must be a subset of those described by one
+       *    subpass dependency."
+       *
+       * So a subpass's dependency on itself is no barrier at its start
+       * (where one with shader writes in its source scope cost NVK a
+       * WAIT_FOR_IDLE with a shader data flush in every render pass).
+       */
+      if (dep->src_subpass == dep->dst_subpass)
          continue;
 
       if (dep->flags & VK_DEPENDENCY_VIEW_LOCAL_BIT) {
