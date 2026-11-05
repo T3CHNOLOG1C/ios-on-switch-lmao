@@ -768,6 +768,10 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     MTLTextureDescriptor *_descriptor;
     IOSurfaceRef _surface;
     NSUInteger _plane;
+    // a planar texture's image (4:2:0 converted, 4:4:4 codes) holds its surface at this seed (_imageCurrent): converted
+    // again only once the surface's seed moves (r8a: a YouTube page's thumbnails converted again at every command buffer)
+    uint32_t _imageSeed;
+    bool _imageCurrent;
     RMTexture *_parent;  // a view's
     RMBuffer *_buffer;   // a texture over a buffer's
     // A mipmapped texture's (raw::Texture::chain): _twin is m2v's in-place texture over level 0 (one level: where m2v renders and
@@ -3259,6 +3263,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
     // nothing between this command buffer's passes writes the planes, refused below), then the passes, whose prologue's full
     // barrier orders the copies before their reads. A sampler that clamps to zero or to the border reads a 4:4:4 code texture
     // as clamp to edge (m2v's address map), which the raw path does not derive: such a command buffer is m2v's.
+    std::vector<std::pair<RMTexture *, uint32_t>> converted;  // planar images converted here, at their surfaces' seeds
     {
         std::vector<RMTexture *> planar;
         std::vector<RMSampler *> samplers;
@@ -3285,6 +3290,18 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 for (RMSampler *sm : samplers)
                     if (!d.samplerVariant(sm->_raw, t->_raw.addressMap))
                         return fail(PredEncPlanarClamp, "no sampler header for an address map");
+            // an image converted already from its surface at the surface's seed now is not converted again: the work that
+            // converted it went before on this channel (the decoder and ImageIO write a surface under a write lock, which
+            // moves its seed). The new seeds take effect once this command buffer is submitted.
+            std::vector<RMTexture *> stale;
+            for (RMTexture *t : planar) {
+                const uint32_t seed = t->_surface ? IOSurfaceGetSeed(t->_surface) : 0;
+                if (!t->_surface || !t->_imageCurrent || t->_imageSeed != seed) {
+                    stale.push_back(t);
+                    converted.push_back({t, seed});
+                }
+            }
+            planar.swap(stale);
             // 4:4:4 code textures: two copy-engine remaps each
             bool copies = false;
             for (RMTexture *t : planar) copies |= t->_raw.planar;
@@ -3497,6 +3514,10 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
     if (be) be->end();
     uint32_t seq = 0;
     if (!rc->commit(seq)) return fail(PredEncKernel, "the kernel refused the submission");
+    for (const auto &c : converted) {  // (submitted: their images hold the surfaces at these seeds)
+        c.first->_imageSeed = c.second;
+        c.first->_imageCurrent = true;
+    }
     cb->_seqno = seq;
     gRM->stats.draws += rc->draws;
     gRM->stats.passes += rc->passes;

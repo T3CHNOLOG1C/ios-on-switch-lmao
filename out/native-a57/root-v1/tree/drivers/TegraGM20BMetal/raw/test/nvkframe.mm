@@ -389,7 +389,16 @@ int main(int argc, char **argv)
             uint8_t *b = (uint8_t *)mipSource.contents;
             for (NSUInteger i = 0; i < NSUInteger(td.w) * td.h * 4; i++) b[i] = uint8_t(i * 131u + (i >> 9) * 7u + 3u);
         }
+        // FRAME_YCBCR_WRITE=k: every k-th frame from the k-th, the 4:2:0 surface written under a write lock (its seed moves:
+        // a decoder's next frame), so the raw path converts its image again then and only then (RMTexture _imageSeed)
+        const unsigned ycbcrWrite = getenv("FRAME_YCBCR_WRITE") ? unsigned(atoi(getenv("FRAME_YCBCR_WRITE"))) : 0;
         for (unsigned f = 0; f < frames; f++) {
+            if (ycbcrWrite && f && f % ycbcrWrite == 0 && surfaces[frame::IMAGE2] && getenv("FRAME_YCBCR")) {
+                IOSurfaceLock(surfaces[frame::IMAGE2], 0, nullptr);
+                uint8_t *base = (uint8_t *)IOSurfaceGetBaseAddress(surfaces[frame::IMAGE2]);
+                base[0] = uint8_t(base[0] + 1);
+                IOSurfaceUnlock(surfaces[frame::IMAGE2], 0, nullptr);
+            }
             @autoreleasepool {
                 const uint64_t c0 = threadNs();
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
