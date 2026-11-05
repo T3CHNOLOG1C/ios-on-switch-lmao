@@ -34,7 +34,18 @@ __attribute__((format(printf, 1, 2))) std::string message(const char *format, ..
 constexpr uint64_t kDram = 0x80000000ull, kFrameBytes = 3 * 4096;  // a small frame: three pages
 constexpr uint64_t kBufferPa = 0xf5a00000ull, kOtherPa = 0xc8000000ull, kSlot = 0x10000000ull;
 
-enum Fault { kNone, kDeadCrc, kNoTranslation, kWrongSlot, kNoIdentity, kUnderflow, kNoLatch, kAttachFails, kStuckCrc };
+enum Fault {
+    kNone,
+    kDeadCrc,
+    kNoTranslation,
+    kWrongSlot,
+    kNoIdentity,
+    kUnderflow,
+    kNoLatch,
+    kAttachFails,
+    kStuckCrc,
+    kNoisyCrc,  // a different CRC every frame of a still picture
+};
 
 struct Model {
     Fault fault;
@@ -43,6 +54,10 @@ struct Model {
     bool request = false, translated = false, crcOn = false, pixelChanged = false;
     uint32_t latched = 0, savedPixel = 0, previous = 0;
     bool lag = false;  // the latched CRC trails by a frame
+    // the Switch's unit: the register reads 0 for this many frame ends after the unit went on (the frame the enable waits for, and
+    // the latch trailing the first CRC'd frame)
+    unsigned silent = 0, boundaries = 0;
+    bool partialFirst = false;  // the first CRC the unit latches is of a part of a frame (another value)
     TegraSMMUDomain domain;
     std::vector<uint32_t> tables = std::vector<uint32_t>(16 * 1024);
     unsigned attaches = 0;
@@ -79,7 +94,18 @@ struct Model {
             active = assembly;
             request = false;
         }
-        if (crcOn) latched = fault == kDeadCrc ? 0 : fault == kStuckCrc ? 0x1234567u : lag ? previous : crc;
+        if (crcOn) {
+            latched = fault == kDeadCrc    ? 0
+                      : fault == kStuckCrc ? 0x1234567u
+                      : fault == kNoisyCrc ? crc ^ (0x9e3779b9u * (boundaries + 1))
+                      : lag                ? previous
+                                           : crc;
+            if (boundaries < silent)
+                latched = 0;
+            else if (partialFirst && boundaries == silent && latched)
+                latched ^= 0x5a5a5a5au;
+            ++boundaries;
+        }
         previous = crc;
         return fault == kUnderflow && translated && active == kSlot;
     }
@@ -131,15 +157,25 @@ DisplaySmmuProbe run(Model &m)
     return probe;
 }
 
-void expect(Fault f, DisplaySmmuProbe::Stage stage, const char *what, bool lag = false)
+struct Latch {
+    bool lag = false;
+    unsigned silent = 0;
+    bool partialFirst = false;
+};
+
+void expect(Fault f, DisplaySmmuProbe::Stage stage, const char *what, Latch latch = {})
 {
     Model m(f);
-    m.lag = lag;
+    m.lag = latch.lag;
+    m.silent = latch.silent;
+    m.partialFirst = latch.partialFirst;
     const uint32_t before = m.memory[kBufferPa];
     DisplaySmmuProbe p = run(m);
-    if (f == kNone)
+    if (f == kNone) {
         CHECK(p.stage == DisplaySmmuProbe::kDone, "%s: ended %s (%s)", what, DisplaySmmuProbe::name(p.stage), p.why);
-    else
+        // within the direct probe's swap hold (NativeLegacyDisplay kProbeHoldMs 600: 36 frames at 60 Hz)
+        CHECK(p.frames <= 30, "%s: %u frame ends", what, p.frames);
+    } else
         CHECK(p.stage == DisplaySmmuProbe::kFailed && p.failedAt == stage,
               "%s: ended %s at %s (%s), wanted a failure at %s", what, DisplaySmmuProbe::name(p.stage),
               DisplaySmmuProbe::name(p.failedAt), p.why, DisplaySmmuProbe::name(stage));
@@ -149,7 +185,8 @@ void expect(Fault f, DisplaySmmuProbe::Stage stage, const char *what, bool lag =
           (unsigned long long)m.assembly);
     CHECK(!m.translated && !m.crcOn && !m.pixelChanged && m.memory[kBufferPa] == before,
           "%s: left translated %d crc %d pixel %d", what, m.translated, m.crcOn, m.pixelChanged);
-    std::printf("%-34s %s%s%s\n", what, p.stage == DisplaySmmuProbe::kDone ? "passed" : "failed at ",
+    std::printf("%-34s %2u frame ends, %s%s%s\n", what, p.frames,
+                p.stage == DisplaySmmuProbe::kDone ? "passed" : "failed at ",
                 p.stage == DisplaySmmuProbe::kDone ? "" : DisplaySmmuProbe::name(p.failedAt),
                 p.stage == DisplaySmmuProbe::kDone ? "" : (std::string(": ") + p.why).c_str());
 }
@@ -161,7 +198,7 @@ TEST(DisplaySmmuProbe, WorkingUnitPasses)
 }
 TEST(DisplaySmmuProbe, DeadCrcUnit)
 {
-    expect(kDeadCrc, DisplaySmmuProbe::kCrcAgain, "CRC unit reads 0");
+    expect(kDeadCrc, DisplaySmmuProbe::kCrc, "CRC unit reads 0");
 }
 TEST(DisplaySmmuProbe, StuckCrcUnit)
 {
@@ -195,7 +232,53 @@ TEST(DisplaySmmuProbe, StartAddressNeverTaken)
 // A latched CRC one frame behind: still a pass on a working unit, still caught at the slot.
 TEST(DisplaySmmuProbe, CrcAFrameLate)
 {
-    expect(kNone, DisplaySmmuProbe::kIdle, "working unit, CRC a frame late", true);
-    expect(kNoTranslation, DisplaySmmuProbe::kIova, "untranslated, CRC a frame late", true);
-    expect(kWrongSlot, DisplaySmmuProbe::kIova, "wrong slot, CRC a frame late", true);
+    expect(kNone, DisplaySmmuProbe::kIdle, "working unit, CRC a frame late", {true});
+    expect(kNoTranslation, DisplaySmmuProbe::kIova, "untranslated, CRC a frame late", {true});
+    expect(kWrongSlot, DisplaySmmuProbe::kIova, "wrong slot, CRC a frame late", {true});
+}
+
+// On the Switch the register reads 0 at the second frame end after the unit went on and the CRC from the third; a 0 taken
+// as the base would fail a working unit as "not stable". A 0 is never a sample: the probe reads on at each frame end until
+// two agree, and every fault is still caught at its own stage.
+TEST(DisplaySmmuProbe, FirstLatchLate)
+{
+    for (unsigned silent : {2u, 3u, 5u}) {
+        const Latch late = {true, silent};
+        expect(kNone, DisplaySmmuProbe::kIdle, "working unit, first CRC late", late);
+        expect(kStuckCrc, DisplaySmmuProbe::kPixel, "stuck unit, first CRC late", late);
+        expect(kNoIdentity, DisplaySmmuProbe::kAttached, "no identity, first CRC late", late);
+        expect(kNoTranslation, DisplaySmmuProbe::kIova, "untranslated, first CRC late", late);
+        expect(kWrongSlot, DisplaySmmuProbe::kIova, "wrong slot, first CRC late", late);
+    }
+}
+
+TEST(DisplaySmmuProbe, NeverAZeroSample)
+{
+    // a unit that never latches fails at the first stage, saying so, with no CRC taken as the base
+    Model m(kDeadCrc);
+    DisplaySmmuProbe p = run(m);
+    CHECK(p.stage == DisplaySmmuProbe::kFailed && p.failedAt == DisplaySmmuProbe::kCrc && p.base == 0 && !p.firstLatch,
+          "dead unit: ended %s at %s (%s), base %#x", DisplaySmmuProbe::name(p.stage),
+          DisplaySmmuProbe::name(p.failedAt), p.why, p.base);
+    CHECK(std::string(p.why).find("reads 0") != std::string::npos, "dead unit: why %s", p.why);
+    // and the working unit's base is the frame's CRC, never the 0 before the first latch
+    Model w(kNone);
+    w.silent = 3;
+    DisplaySmmuProbe q = run(w);
+    CHECK(q.stage == DisplaySmmuProbe::kDone && q.base != 0 && q.base == w.frameCrc() && q.firstLatch == 4,
+          "late unit: ended %s, base %#x (frame %#x), first latch at frame end %u", DisplaySmmuProbe::name(q.stage),
+          q.base, w.frameCrc(), q.firstLatch);
+}
+
+// The first CRC latched after the enable covers part of a frame: it does not repeat, so it is not the base.
+TEST(DisplaySmmuProbe, PartialFirstFrame)
+{
+    expect(kNone, DisplaySmmuProbe::kIdle, "working unit, partial first CRC", {false, 2, true});
+    expect(kNone, DisplaySmmuProbe::kIdle, "working unit, partial first CRC, late", {true, 2, true});
+}
+
+// A CRC that moves on a still frame never settles: the unit is not trusted.
+TEST(DisplaySmmuProbe, NoisyCrcUnit)
+{
+    expect(kNoisyCrc, DisplaySmmuProbe::kCrc, "CRC unit noisy");
 }

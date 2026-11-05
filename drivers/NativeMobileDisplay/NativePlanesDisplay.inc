@@ -533,7 +533,7 @@ void planeProbeWritePixel(uint32_t value)
 }
 // True while the probe owns window B. It runs once, about half a second after the start, before the first client frame:
 // window B covers the screen (opaque, in front) with a copy of what window A shows (the console tape's window or the boot
-// framebuffer), so the CRC depends on window B alone and the console seems to pause for about 15 frames.
+// framebuffer), so the CRC depends on window B alone and the console seems to pause for about 20 frames.
 bool planeProbeTick()
 {
     if (planeProbe.active()) {
@@ -687,20 +687,20 @@ void planeProbeFinish()
         kickSwapQueue();
     }
     if (planeProbe.stage == DisplaySmmuProbe::kDone && planesOn)
-        IOLog("IOSwitch display: plane probe ok: window B reads through the SMMU (ASID %u, display0b, "
-              "TRANSLATION_ENABLE_0 "
-              "%#x): CRC %#x by physical address, 1:1 and at IOVA %#x, %#x with one pixel changed; planes on (%u slots "
-              "of "
-              "%llu MiB)\n",
-              (unsigned)TEGRA_SMMU_ASID_DISPLAY, tegra_smmu_read(TEGRA_SMMU_TRANSLATION_ENABLE_0), planeProbe.base,
-              planeSlotIova(0), planeProbe.tweaked, kPlaneSlots, (unsigned long long)(kPlaneSlotSpan >> 20));
+        IOLog(
+            "IOSwitch display: plane probe ok: window B reads through the SMMU (ASID %u, display0b, "
+            "TRANSLATION_ENABLE_0 "
+            "%#x): CRC %#x by physical address, 1:1 and at IOVA %#x, %#x with one pixel changed (first CRC latched at "
+            "frame end %u, %u frame ends); planes on (%u slots of %llu MiB)\n",
+            (unsigned)TEGRA_SMMU_ASID_DISPLAY, tegra_smmu_read(TEGRA_SMMU_TRANSLATION_ENABLE_0), planeProbe.base,
+            planeSlotIova(0), planeProbe.tweaked, planeProbe.firstLatch, planeProbe.frames, kPlaneSlots,
+            (unsigned long long)(kPlaneSlotSpan >> 20));
     else
-        IOLog("IOSwitch display: plane probe failed at %s: %s%s%s (CRC base %#x again %#x pixel %#x last %#x); planes "
-              "off, "
-              "Core Animation keeps compositing every layer\n",
+        IOLog("IOSwitch display: plane probe failed at %s: %s%s%s (CRC base %#x again %#x pixel %#x last %#x, first "
+              "latched at frame end %u of %u); planes off, Core Animation keeps compositing every layer\n",
               DisplaySmmuProbe::name(planeProbe.stage == DisplaySmmuProbe::kDone ? DisplaySmmuProbe::kDone
                                                                                  : planeProbe.failedAt),
               planeProbe.stage == DisplaySmmuProbe::kDone ? "the plane slots" : planeProbe.why,
               planeProbeLine[0] ? ": " : "", planeProbeLine, planeProbe.base, planeProbe.again, planeProbe.tweaked,
-              planeProbe.seen);
+              planeProbe.seen, planeProbe.firstLatch, planeProbe.frames);
 }

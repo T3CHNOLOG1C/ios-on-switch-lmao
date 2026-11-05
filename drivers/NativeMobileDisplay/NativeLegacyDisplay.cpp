@@ -665,7 +665,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // Core Animation's detached layer (a video under the UI) is scanned by window B through the display's SMMU domain, from
     // one of kPlaneSlots IOVA slots above the direct-scanout ones, while window A shows the composited UI blending over it
     // (premultiplied). The domain comes up at the start, before backboardd: the plane probe (DisplaySmmuProbe's stages on
-    // window B, which covers the screen with a frozen copy of it for about 15 frames) proves window B reads through it; only
+    // window B, which covers the screen with a frozen copy of it for about 20 frames) proves window B reads through it; only
     // then are planes on (planesOn), and only then may XNU start backboardd without CA_DISABLE_DETACHED
     // (native_legacy_detach_ready below). Window B's register sets move through DC A as NativePlanes::PlaneLatch follows them;
     // a set is a slot index (kOff: window off). A swap retires when the latch that shows it (or a newer one) is seen.
@@ -2150,10 +2150,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                   tegra_smmu_read(TEGRA_SMMU_TRANSLATION_ENABLE_0), probe.base, (unsigned long long)kProbeSlot,
                   probe.tweaked, directOn ? "the domain stays: direct scanout on" : "back in bypass");
         else
-            IOLog("IOSwitch display: SMMU probe failed at %s: %s%s%s (CRC base %#x again %#x pixel %#x last %#x); "
-                  "undone, direct scanout stays off\n",
+            IOLog("IOSwitch display: SMMU probe failed at %s: %s%s%s (CRC base %#x again %#x pixel %#x last %#x, "
+                  "first latched at frame end %u of %u); undone, direct scanout stays off\n",
                   DisplaySmmuProbe::name(probe.failedAt), probe.why, probeLine[0] ? ": " : "", probeLine, probe.base,
-                  probe.again, probe.tweaked, probe.seen);
+                  probe.again, probe.tweaked, probe.seen, probe.firstLatch, probe.frames);
         if (!probeRequest) probeHoldSince = 0;
         if (kickDeferred && !probeRequest) {  // else at the frame end that shows the last request taken
             kickDeferred = false;
