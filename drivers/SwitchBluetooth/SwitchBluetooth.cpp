@@ -69,7 +69,7 @@
 // an isolated packet is one interrupt) and a transfer's end of count, which also starts the next one, sized
 // (SwitchBluetoothRxDma.h) to end 5 bytes (the longest H4 header) past the end of the packet it starts in, so a packet
 // sent back to back with the next, no idle between, is seen 5 characters after its end where PIO's 16-byte trigger took
-// up to 16 (host model at the peak load, tests/test_switch_bluetooth_rx_dma.py: 1531 interrupts/s and 0.96% of CPU0
+// up to 16 (host model at the peak load, test/switch_bluetooth_rx_dma_test: 1531 interrupts/s and 0.96% of CPU0
 // against 4343 and 4.5%, the worst HID report's last byte taken 30 us after it against 64). Nothing waits on a timer,
 // no transfer is stopped while bytes may flow, no PIO read ever races the channel. A ring with no room for what moved
 // leaves the rest in rxBuf and the next transfer unstarted: the FIFO fills and RTS holds the chip, as PIO's stall did;
@@ -843,7 +843,7 @@ void SwitchBluetooth::setupPins()
 // (RX trigger 16, TX trigger 16), 115200, hardware flow control. Interrupts stay off until the event source is up.
 //
 // RX trigger (r15-offload): above 16 bytes, Linux serial-tegra's choice for RX by PIO (UART_FCR_R_TRIG_11), not 8. A
-// controller packet then takes about a third fewer interrupts (the host model in tests/test_switch_bluetooth_rx.py: a
+// controller packet then takes about a third fewer interrupts (the host model in test/switch_bluetooth_rx_test.cpp: a
 // Joy-Con's 59-byte HID report 6 -> 4, an LE advertising report 5 -> 3, a 300-byte ACL burst 18 -> 9.5). A packet's
 // last bytes below the trigger still come by the RX timeout, 4 characters (13 us at 3 Mbaud) after the last one, as
 // before for any packet that did not end on a trigger: no byte waits longer than that timeout plus the interrupt's own

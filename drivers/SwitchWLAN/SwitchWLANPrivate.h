@@ -13,7 +13,7 @@
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
-// Every device register access, for the host's msgbuf model (tests/switch_wlan_msgbuf_harness.cpp counts the PCIe reads
+// Every device register access, for the host's msgbuf model (test/switch_wlan_msgbuf_test.cpp counts the PCIe reads
 // a received or sent frame costs); nothing in the kernel build.
 #ifndef SWLAN_MMIO_TRACE
 #define SWLAN_MMIO_TRACE(mmio, kind, offset) ((void)0)

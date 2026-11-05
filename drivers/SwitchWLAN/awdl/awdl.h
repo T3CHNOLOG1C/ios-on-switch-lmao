@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // AWDL (Apple Wireless Direct Link) protocol core: the on-air frame format, the availability-window timing model,
 // master election, the peer table and the data path. Portable C11 with no OS calls: the kernel (SwitchWLANAwdl.cpp)
-// and the host tests (awdl/tests) drive it through struct awdl_host and the entry points below.
+// and the host tests (awdl/test) drive it through struct awdl_host and the entry points below.
 //
 // Written from the published descriptions of the protocol: Stute, Kreitschmann, Hollick, "One Billion Apples' Secret
 // Sauce: Recipe for the Apple Wireless Direct Link Ad hoc Protocol" (MobiCom 2018) and the AWDL field definitions of

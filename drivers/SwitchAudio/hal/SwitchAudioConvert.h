@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /* The plug-in's sample conversions between CoreAudio's float32 and the rings' S32_LE (../SwitchAudioAbi.h), shared with
- * the host test (tests/test_switch_audio_format.py through tests/switch_audio_format_harness.c).
+ * the host test (../test/switch_audio_format_test.cpp through ../test/switch_audio_format_harness.c).
  *
  * Mixing adds an IO cycle's output, times the volume control's gain, into what the ring holds, saturating at full
  * scale, so two IO contexts on the device would sum (the service clears each period it plays). Full scale is 2^31:

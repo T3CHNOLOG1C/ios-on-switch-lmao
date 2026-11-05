@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /* The sample format SwitchAudio's Tegra backend runs the APE in, as plain C (the kernel service, and the host test
- * tests/test_switch_audio_format.py through tests/switch_audio_format_harness.c, use this one header).
+ * test/switch_audio_format_test.cpp through test/switch_audio_format_harness.c, use this one header).
  *
  * S32_LE from memory to the codec: the rings hold 32-bit samples, ADMAIF1 moves them to the XBAR without packing
  * (32-bit audio and client words), I2S1 sends each in a 32-bit slot (bit clock 64 fs, 3.072 MHz at 48 kHz, an exact

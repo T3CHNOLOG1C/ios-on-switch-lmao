@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The on-demand clock governor's decisions, in plain C with no kernel dependency, so the host tests
-// (tests/test_switch_governor.py) check this same header. Its one user is the A57 cluster's DFLL
+// (test/switch_governor_test.cpp) check this same header. Its one user is the A57 cluster's DFLL
 // (SwitchPerfGovernor.cpp, from the scheduler's perfcontrol callouts). The GPU does not use it: it runs
 // tegra-gpu-mhz's 768 MHz whenever it has work and drops only when truly idle (TegraGM20B gpu.c, "idle clock").
 // The caller owns the time base (mach absolute time in the kernel, microseconds in the tests), the locking and the

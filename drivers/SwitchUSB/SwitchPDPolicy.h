@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchPD's power-role decisions (SwitchPD.h), in plain C with no kernel dependency, so the host tests
-// (tests/test_switch_usb_host.py) run this same header against the BM92T36 traces r7w recorded. SwitchPD.cpp owns the
+// (test/switch_usb_host_test.cpp) run this same header against the BM92T36 traces r7w recorded. SwitchPD.cpp owns the
 // controller, the GPIOs, the charger call and the one-shot windows; this file maps (phase, ALERT_STATUS, STATUS1,
 // STATUS2) to the next step and says, for every phase, which outputs are on:
 //   - source switches (CONFIG1 SPDSRC): on in Empty, Held, Reattach and Source when host mode is packaged, off in

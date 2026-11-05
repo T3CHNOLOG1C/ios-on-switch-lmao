@@ -177,7 +177,7 @@ volatile uint8_t *gI2C, *gCar, *gPinmux, *gApbMisc;
 IOWorkLoop *gLoop;
 Bus gBus[kBuses];
 
-#ifndef TEGRA_I2C_HOST_MODEL  // tests/switch_touch_harness.cpp supplies these over its controller model
+#ifndef TEGRA_I2C_HOST_MODEL  // SwitchTouch/test/switch_touch_test.cpp supplies these over its controller model
 inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
@@ -246,7 +246,7 @@ void clockEnable(const BusInfo &info)
 }
 
 // The bus's two pads: function I2Cx with the input on (hekate pinmux_config_i2c), and on I2C2 the pull-down strength
-// Horizon and L4T give the OLED's GEN2_I2C pads (kBus). Both checked against the references (test_als.py): pinmux 0x40 is
+// Horizon and L4T give the OLED's GEN2_I2C pads (kBus). Both checked against the references (als test): pinmux 0x40 is
 // Atmosphere pinmux_initial_pad_config_aula.inc Gen2I2cScl/Sda (I2C2, no pull, driven, input, normal voltage) and L4T
 // tegra210b01-fric-pinmux.dtsi; the drive is Atmosphere pinmux_initial_drive_pad_config.inc (DRVDN 0x1f, DRVUP 0, the
 // non-Hoag table) and L4T's drive_default. The drive is not the ALS's problem: r7p5 (reset strength) and r7p8 (this)

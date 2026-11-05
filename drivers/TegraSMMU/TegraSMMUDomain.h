@@ -5,7 +5,7 @@
 //
 // Plain state over the caller's physically contiguous, below-4-GiB table buffer: page 0 is the directory, the others are
 // handed out as tables in order (so the tables reserve() installs for a range are consecutive pages). No IOKit: TegraVIC,
-// the display's domain and tests/smmu_domain_harness.cpp share it. Every change records the bytes it wrote (takeDirty):
+// the display's domain and test/smmu_domain_test.cpp share it. Every change records the bytes it wrote (takeDirty):
 // the caller cleans them to memory, which the SMMU reads without snooping, then flushes the SMMU's caches for its ASID
 // (TegraSMMU.h tegra_smmu_flush). The registers that select a directory are global, so attaching is TegraSMMU.h's job.
 #pragma once

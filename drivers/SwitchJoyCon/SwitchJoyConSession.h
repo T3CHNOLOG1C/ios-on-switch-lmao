@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // When a rail Joy-Con's HID device has to be published again (SwitchJoyConHID.cpp keeps the session,
-// SwitchJoyConRail.cpp republishes; tests/test_switch_joycon_session.py drives this header on the host and models the
+// SwitchJoyConRail.cpp republishes; test/switch_joycon_session_test.cpp drives this header on the host and models the
 // daemons around it).
 //
 // gamecontrollerd takes exactly one JoyConHIDServicePlugin session per HID service (21H461 GameController.framework):

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// AES-CMAC (RFC 4493, NIST SP 800-38B) over a one-block encrypt callback, free of kernel headers so test_keywrap.py checks it
+// AES-CMAC (RFC 4493, NIST SP 800-38B) over a one-block encrypt callback, free of kernel headers so keywrap_test checks it
 // against the RFC vectors on the host. The kernel passes one Security Engine ECB block per call (TegraSecurityEngine.cpp), so a
 // keyslot that can be used but never read gives a MAC without the key leaving the engine; only the chaining runs here.
 #pragma once

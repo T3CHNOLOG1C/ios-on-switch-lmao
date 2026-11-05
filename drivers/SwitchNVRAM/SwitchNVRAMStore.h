@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The file SwitchNVRAM keeps the NVRAM bank in (/private/var/ioswitch/nvram.bin on the Data volume): its format, in
-// plain C with no kernel dependency, so the host tests (tests/test_switch_nvram_store.py) check this same header.
+// plain C with no kernel dependency, so the host tests (test/switch_nvram_store_test.cpp) check this same header.
 //
 // Two slots, written alternately. A slot is a 32-byte header, then the bank image IODTNVRAM serialized (a CHRP bank:
 // the "nvram" header with its adler32, then the common partition), zero-padded to a 4 KiB multiple (the stride):

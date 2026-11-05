@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// BH1730FVC lux and gain steps for SwitchALS.cpp, header-only so the host check (test_als.py) runs this exact code
+// BH1730FVC lux and gain steps for SwitchALS.cpp, header-only so the host check (test/) runs this exact code
 // against a port of Linux's.
 //
 // Calibration: switchroot L4T tegra210-nx-sensor.dtsi bh1730fvc@29 (rohm,integration-cycle 38, rohm,lux-multiplier 3600)
 // with the OLED's rohm,opt-win-coeff and rohm,gain-coeff from tegra210b01-fric.dts (unchanged in switchroot's newest OLED
 // tree, linux-5.0.0-dev and lineage-20 tegra210b01-frig.dts), except row 0's ci: 30300 as hekate bdk/input/als.c's Aula
 // table, not the DT's 7502 (the Icosa table's row-0 ci, copied). Every boundary of both tables is continuous (each row
-// meets the next at its rc: test_als.py), and only 30300 makes row 0 meet row 1 at 231 (2697 vs 2691; 7502 jumps to
+// meets the next at its rc: als_math_test), and only 30300 makes row 0 meet row 1 at 231 (2697 vs 2691; 7502 jumps to
 // 7964, 3x). It matters only in low-infrared light (DATA1 < 23% of DATA0, e.g. LED lighting), where 7502 read high.
 // Scale: at the IR ratios r7r saw (about 0.35, row 1) this gives 16.8 times the datasheet's bare-sensor lux, the optical
 // window's loss; Nintendo's Icosa table (hekate's default) gives 16.7 there. Maths: CTCaer/switch-l4t-kernel-4.9

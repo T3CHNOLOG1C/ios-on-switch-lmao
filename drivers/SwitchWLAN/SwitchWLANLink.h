@@ -2,7 +2,7 @@
 // What the Wi-Fi link runs at, for SwitchWLAN.cpp's once-per-join link line, its stats line and the channel widths
 // wifid is shown: the firmware's chanspecs decoded, the access point's HT/VHT/HE capabilities and operation read
 // from its information elements, the best PHY rate both ends allow, and "name value" counters out of a firmware
-// dump. Plain C, no state: tests/test_switch_wlan_msgbuf.py drives it on the host.
+// dump. Plain C, no state: test/switch_wlan_msgbuf_test.cpp drives it on the host.
 //
 // The chanspec layouts are brcmutil's (Linux drivers/net/wireless/broadcom/brcm80211/brcmutil/d11.c and
 // include/brcmu_wifi.h, ISC: Copyright (c) 2013 Broadcom Corporation; permission to use, copy, modify and/or

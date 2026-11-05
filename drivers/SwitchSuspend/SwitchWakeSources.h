@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// What wakes the Switch OLED, as plain C on byte buffers and integers so that tests/test_switch_wake.py drives it on the
+// What wakes the Switch OLED, as plain C on byte buffers and integers so that test/switch_wake_test drives it on the
 // host: the wake sources, the Bluetooth controllers' Home button (an HID input report in an inbound HCI ACL packet), the
 // wake guarantee's state machine, the power journal's ring, and the PMC wake events system sleep arms (SwitchSuspend).
 // The kernel half is SwitchWake.cpp (SwitchWake.h).

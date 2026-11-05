@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SwitchBacklight's panel model, header-only so the host check (test_als.py) runs this exact code.
+// SwitchBacklight's panel model, header-only so the host check (test/als_math_test) runs this exact code.
 //
 // The panel's DCS 0x51 level (0..2047) is taken as linear in luminance, its maximum as kNitsMax: the OLED's luminance has
 // not been measured, and 400 nits is CoreBrightness's own figure for an uncalibrated display (DisplayCreateWithID's

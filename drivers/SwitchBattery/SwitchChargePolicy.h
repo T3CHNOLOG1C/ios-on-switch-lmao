@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Charging policy for the Switch OLED (Aula): pure functions and limits, no IOKit, so the drivers that act on them
 // (SwitchPD: the BM92T36 USB-PD request; SwitchBattery: the BQ24193 charger and the MAX17050 temperature window) and
-// the host test (tests/switch_charge_policy_harness.cpp) share one copy.
+// the host test (test/switch_charge_policy_test.cpp) share one copy.
 //
 // Every limit is the stricter of Nintendo's and switchroot's for this board; none is ever exceeded:
 //   [AMS-PARAM] Atmosphere libstratosphere/source/powctl/driver/impl/powctl_charger_parameters.board.nintendo_nx.inc,

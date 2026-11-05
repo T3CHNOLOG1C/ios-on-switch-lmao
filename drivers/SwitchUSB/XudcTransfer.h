@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // How SwitchXUDC.cpp lays a request out on a transfer ring (header "Data endpoints"), and what an OUT transfer event
-// says it received. No IOKit: tests/test_switch_xudc_transfer.py drives the same code on the host.
+// says it received. No IOKit: test/xudc_transfer_test.cpp drives the same code on the host.
 //
 // A request is one TD: its physically contiguous runs (IOMemoryDescriptor::getPhysicalSegment after prepare()) become
 // chained Normal TRBs pointing at the client's memory, IOC on the last only. Every TRB but the last holds whole packets

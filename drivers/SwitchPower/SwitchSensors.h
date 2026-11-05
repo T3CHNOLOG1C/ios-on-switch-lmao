@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The Switch's temperature sensors as iPadOS's thermalmonitord (CLTM) reads them: which physical measurement answers
 // each sensor the J120AP thermal model expects, and the unit conversions on the way. Plain C with no kernel dependency,
-// so the host tests (tests/test_switch_thermal_sensors.py) check this same header; SwitchSensors.cpp is the kernel
+// so the host tests (test/switch_thermal_sensors_test.cpp) check this same header; SwitchSensors.cpp is the kernel
 // side and drivers/SwitchPower/CONTRACT.md the full contract with its evidence.
 //
 // thermalmonitord (21H461, ThermalMonitor-1952.120.7) on J120AP: /System/Library/ThermalMonitor/J120AP-Info.plist

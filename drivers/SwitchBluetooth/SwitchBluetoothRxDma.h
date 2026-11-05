@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchBluetooth's receive side by APB DMA (SwitchBluetooth.cpp, header "RX by APB DMA"): the H4 framing the
 // interrupt path keeps of what it takes, the length of each DMA transfer, and what a transfer shows as moved. Plain C,
-// so tests/test_switch_bluetooth_rx_dma.py drives the very same code on the host against a byte-timed model of UART-D.
+// so test/switch_bluetooth_rx_dma_test.cpp drives the very same code on the host against a byte-timed model of UART-D.
 //
 // Why each transfer is as long as it is. Every byte the controller sends goes through the channel, one APB read and one
 // word each (TegraAPBDMA.h tegra_apbdma_start_rx_words: the UART's RX trigger at one byte), so no byte is ever left in

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The host role's register arithmetic, in plain C with no kernel dependency, so the host tests
-// (tests/test_switch_usb_host.py) check this same header: which xHCI port is the USB-C port's USB 2.0 pad, how to
+// (test/switch_usb_host_test.cpp) check this same header: which xHCI port is the USB-C port's USB 2.0 pad, how to
 // write a PORTSC without touching its write-1-to-clear bits, and the XUSB pad controller values for each role.
 //
 // Sources: xHCI 1.2 (5.3.6 HCCPARAMS1.xECP, 7.2 Supported Protocol capability, 5.4.8 PORTSC), Linux

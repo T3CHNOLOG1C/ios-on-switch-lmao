@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchBluetooth's view of the controller's links (SwitchBluetooth.cpp, "Links"): a per-handle table of ACL packet
 // counts and the one-line descriptions of the link commands and events it traces. Plain C on byte buffers, so
-// tests/test_switch_bluetooth_links.py drives it on the host with captured HCI. The includer declares snprintf
+// test/switch_bluetooth_links_test.cpp drives it on the host with captured HCI. The includer declares snprintf
 // (IOLib.h in the kernel, stdio.h on the host).
 //
 // Credits. The host may have at most the controller's HCI_Total_Num_ACL_Data_Packets (Read Buffer Size) ACL packets

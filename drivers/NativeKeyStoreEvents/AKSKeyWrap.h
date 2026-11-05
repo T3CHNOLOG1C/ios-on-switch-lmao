@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The AppleKeyStore stand-in's key material and key wrapping, free of kernel headers so test_keywrap.py checks it against the RFC
+// The AppleKeyStore stand-in's key material and key wrapping, free of kernel headers so keywrap_test checks it against the RFC
 // vectors on the host. The block cipher and the hash come in as callbacks: the kernel passes libkern's corecrypto AES-256 and
 // SHA-256 (AKSDeviceKey.cpp), the host test CommonCrypto.
 //

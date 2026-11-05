@@ -312,7 +312,7 @@ constexpr size_t kBurst = 12;
 }  // namespace icm42607
 static_assert((unsigned)icm40607::WhoAmI == (unsigned)icm42607::WhoAmI, "both ICM maps have WHO_AM_I at 0x75");
 
-// Sample decode (host tests: tests/switch_motion_harness.cpp). ST: STATUS, then gyroscope and accelerometer
+// Sample decode (host tests: test/switch_motion_test.cpp). ST: STATUS, then gyroscope and accelerometer
 // little-endian from offset 4 (st::Status burst). ICM: accelerometer then gyroscope, big-endian, from the burst's
 // start; a sensor that is off reads -32768.
 void decodeST(const uint8_t *b, int16_t accel[3], int16_t gyro[3], bool fresh[2])

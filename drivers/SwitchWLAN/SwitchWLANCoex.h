@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchWLAN's side of Wi-Fi/Bluetooth coexistence (the BCM4356's one 2.4 GHz antenna): what wifid says Bluetooth
 // is doing, and what the firmware says the access point's link did, for the 5 s stats line. Plain C on byte buffers,
-// so tests/test_switch_coex.py drives it on the host. The includer declares snprintf.
+// so SwitchBluetooth/test's coex test drives it on the host. The includer declares snprintf.
 //
 // wifid (21H461, __WiFiManagerBluetoothServiceCallback / __WiFiManagerBluetoothLocalDeviceCallback) keeps a bit mask
 // of what Bluetooth does and hands every change to the driver as APPLE80211_IOC_BT_COEX_FLAGS (102), the value in

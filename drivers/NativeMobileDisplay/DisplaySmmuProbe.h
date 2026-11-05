@@ -15,7 +15,7 @@
 //          the slot's translation); no underflow while it scans through the SMMU
 //   back   window A to the physical address again: base; then the swgroup goes back to bypass
 // Any other CRC, a latch not seen in kLatchFrames frame ends, an underflow after the attach, or a failed attach ends it at that
-// stage: the driver undoes what was done (abort) and logs the one line. Plain state: tests/display_probe_harness.cpp runs it
+// stage: the driver undoes what was done (abort) and logs the one line. Plain state: test/display_probe_test.cpp runs it
 // against a model of DC A, its CRC and the SMMU.
 #pragma once
 #include <stdint.h>

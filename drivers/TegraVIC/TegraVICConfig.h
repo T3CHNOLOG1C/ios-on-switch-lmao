@@ -2,7 +2,7 @@
 // VIC 4.0 (Tegra X1's Video Image Compositor, host1x class 0x5D) job generation: the configuration structure the
 // falcon firmware reads, the class methods that point it at the surfaces, the colour matrices, and the checker that
 // bounds every byte the engine may read or write. Plain C, header only: TegraVIC (kernel C++) and the host test
-// (drivers/TegraVIC/test/vic_host.c, tests/test_tegra_vic.py) compile the same code.
+// (drivers/TegraVIC/test/vic_host.c, test:tegra_vic_test) compile the same code.
 //
 // Sources (written from them; layouts checked bit for bit by the host test against libdrm's MIT-licensed vic40.h):
 //   libdrm tests/tegra/vic40.h, vic40.c, vic.h (NVIDIA, MIT): ConfigStruct and its sub-structures, the class methods

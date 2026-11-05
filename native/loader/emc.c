@@ -52,7 +52,7 @@ static const uint32_t emc_core_mv[][2] = {
 };
 
 #ifdef LOADER_EMC_HOST_TEST
-/* tests/native_loader_emc_harness.c: a model of the BPMP mailbox, I2C5 and the counter. */
+/* test/emc_model.c: a model of the BPMP mailbox, I2C5 and the counter. */
 uint32_t rd(uint64_t address);
 void wr(uint64_t address, uint32_t value);
 uint64_t now(void);

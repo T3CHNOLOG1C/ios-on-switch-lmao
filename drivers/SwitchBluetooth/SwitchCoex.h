@@ -2,7 +2,7 @@
 // Wi-Fi/Bluetooth coexistence on the BCM4356 combo chip (one 2.4 GHz antenna for both radios): what the Bluetooth
 // controller has been asked to do with the air, as SwitchBluetooth sees bluetoothd's commands go out, kept so that
 // SwitchWLAN can print it next to its own traffic (its 5 s stats line) and both drivers can log a change once. Plain C
-// on byte buffers, so tests/test_switch_coex.py drives it on the host. The includer declares snprintf (IOLib.h in the
+// on byte buffers, so test/switch_coex_test.cpp drives it on the host. The includer declares snprintf (IOLib.h in the
 // kernel, stdio.h on the host).
 //
 // What is followed (Bluetooth Core 4.2 parameters, little-endian; times in 0.625 ms slots):

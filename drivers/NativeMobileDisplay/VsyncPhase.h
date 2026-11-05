@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The compositor's vsync phase (r17-touch): when, before the frame boundary that latches its flip, the render server is
 // told to draw. NativeLegacyDisplay feeds this the times it sees and programs what it decides; nothing here touches
-// hardware, so tests/vsync_phase_harness.cpp runs it against a model compositor.
+// hardware, so test/vsync_phase_test.cpp runs it against a model compositor.
 //
 // Why: backboardd draws as soon as its vsync arrives, finishes 2-3 ms in, and its flip then waits for the next boundary:
 // r8a's quiet windows show latch 12.5-14 ms mean with a tight spread, a whole frame of touch-to-photon spent waiting.
