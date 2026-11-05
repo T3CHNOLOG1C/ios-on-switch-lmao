@@ -30,6 +30,7 @@
 #include <libkern/crypto/sha2.h>
 #include <string.h>
 #include "AKSCmac.h"
+#include "../TegraSE/TegraSE.h"
 
 namespace {
 constexpr uint64_t kCarPA = 0x60006000, kAhbArbPA = 0x6000C000, kFusePagePA = 0x7000F000, kMcPA = 0x70019000;
@@ -337,7 +338,13 @@ extern "C" void native_aks_se_probe(void)
         }
         probeSlot(se1, dma, ahb, 14, r14);
         probeSlot(se1, dma, ahb, 15, r15);
-        probeSlot(se2, dma, ahb, 14, r2);
+        // SE2 is TegraSE's too (drivers/TegraSE): one owner at a time.
+        if (tegra_se2_claim(TEGRA_SE2_OWNER_AKS_PROBE, 1000)) {
+            probeSlot(se2, dma, ahb, 14, r2);
+            tegra_se2_release(TEGRA_SE2_OWNER_AKS_PROBE);
+        } else {
+            r2.refusal = "SE2 held by TegraSE";
+        }
 
         // What an empty (all-zero) slot would give, so a slot the boot ROM never loaded is told from a real key.
         uint8_t zeroKeyMac[16], zeroKey[16] = {};

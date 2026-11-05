@@ -313,6 +313,10 @@ kernel_driver(name = "TegraSPI")
 # APB DMA for the UARTs (Joy-Con rails' RX, Bluetooth's TX).
 kernel_driver(name = "TegraAPBDMA")
 
+# The Security Engine SE2: known answers over its interrupt, the kernel PRNG reseeded from its DRBG, and a timing run
+# against the A57s' crypto instructions (r17-crypto); the AppleKeyStore probe shares SE2 through tegra_se2_claim.
+kernel_driver(name = "TegraSE")
+
 # SwitchThermal: fan curve, CPU operating point; SwitchPerfGovernor: the CPU's on-demand governor (perfcontrol callouts);
 # SwitchSensors: SOC_THERM and thermalmonitord's HID temperature sensors (drivers/SwitchPower/CONTRACT.md).
 kernel_driver(
@@ -764,6 +768,7 @@ kernel_archive(
         ":TegraI2C",
         ":TegraSPI",
         ":TegraAPBDMA",
+        ":TegraSE",
         ":SwitchThermal",
         ":SwitchBattery",
         ":SwitchBluetooth",
