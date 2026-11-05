@@ -8,7 +8,7 @@
 // GPL-2.0); switchroot ATF plat/nvidia/tegra/soc/t210/drivers/se (NVIDIA; BSD-3-Clause); L4T drivers/crypto/tegra-se.c
 // (NVIDIA; GPL-2.0). Written from the register facts in those sources, no code copied.
 //
-// What reaches XNU (sources read 2026-11-04):
+// What reaches XNU:
 //   - hekate's _config_se_brom rewrites slot 14 from the fuses only while FUSE_PRIVATE_KEY0 still answers (once the boot ROM has
 //     disabled the private key it reads all ones), and its L4T launch (launch_l4t, hw_deinit, _l4t_late_hw_config) never touches
 //     the SE. _se_lock, which makes every slot secure-only, runs only on the HOS path.

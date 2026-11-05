@@ -183,8 +183,8 @@ extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16])
     return kIOReturnSuccess;
 }
 
-// One console line the first time each unimplemented selector is called, naming the caller, so the next one the system needs is
-// visible in a boot photo instead of only as an e00002c7 in some daemon's log.
+// One console line the first time each unimplemented selector is called, naming the caller, so the next selector the system
+// needs shows on the console, not only as an e00002c7 in some daemon's log.
 extern "C" void native_aks_unsupported(uint32_t selector)
 {
     const uint32_t word = selector < 256 ? selector / 64 : 3, bit = selector < 256 ? selector % 64 : 63;

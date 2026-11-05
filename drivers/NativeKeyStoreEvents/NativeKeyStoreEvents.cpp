@@ -239,7 +239,7 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
             }
             case kSelWrapKey:
             case kSelUnwrapKey:
-                // ioswitch-aks-wrap=0: the earlier stand-in (no device key, every wrap refused) for a boot that cannot read it.
+                // ioswitch-aks-wrap=0: no device key and every wrap refused, for a boot that cannot read the fuses.
                 rc = aksWrapEnabled() ? keyOperation(selector, args) : kAksUnsupported;
                 break;
             case kSelGetBagUUID: {
