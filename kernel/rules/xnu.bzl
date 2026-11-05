@@ -413,3 +413,31 @@ xnu_tree = rule(
         "out": attr.string(mandatory = True),
     },
 )
+
+# --- Files out of one directory -----------------------------------------------------------------------------------
+def _xnu_extract_impl(ctx):
+    tree = ctx.file.src
+    outs = [ctx.actions.declare_file(ctx.attr.out_dir + "/" + f) for f in ctx.attr.files]
+    ctx.actions.run_shell(
+        inputs = [tree],
+        outputs = outs,
+        arguments = [tree.path] + [o.path for o in outs] + ["--"] + ctx.attr.files,
+        command = """set -e
+src=$1; shift
+outs=""; while [ "$1" != "--" ]; do outs="$outs $1"; shift; done; shift
+for o in $outs; do /bin/cp "$src/$1" "$o"; shift; done
+""",
+        mnemonic = "XnuExtract",
+        progress_message = "Taking {} file(s) out of {}".format(len(outs), ctx.attr.src.label),
+    )
+    return [DefaultInfo(files = depset(outs))]
+
+xnu_extract = rule(
+    implementation = _xnu_extract_impl,
+    doc = "Files of a tree artifact (a tool's output directory) as files of their own, below out_dir.",
+    attrs = {
+        "src": attr.label(mandatory = True, allow_single_file = True),
+        "files": attr.string_list(mandatory = True),
+        "out_dir": attr.string(mandatory = True),
+    },
+)

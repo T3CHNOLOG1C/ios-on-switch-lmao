@@ -12,6 +12,7 @@ Targets (all public):
                             export_hdrs[_<comp>], gen_<comp>_hdrs, gen_<comp>_srcs, config_makefile_<comp>, as
                             filegroups of the same names
   :sdkroot                  the kernel SDK root (obj/sdkroot/: Kernel.framework, usr/include, usr/local/include, ...)
+  :sdkroot_files            :sdkroot and :firehose (libfirehose_kernel.a and its header, in obj/sdkroot/usr/local/)
   :config, :decomment, :setsegname, :kextsymboltool   host tools from SETUP/
   :external_headers         EXTERNAL_HEADERS/**
   :update_tables            bazel run: re-record tables/*.bzl from make (after a makefile, MASTER, conf/files change)
@@ -19,7 +20,7 @@ Targets (all public):
 
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":xnu.bzl", "xnu_host_tool", "xnu_pass", "xnu_sdk")
+load(":xnu.bzl", "xnu_extract", "xnu_host_tool", "xnu_pass", "xnu_sdk")
 
 # XNU's own files keep XNU's style: lint_files() in the vendored tree checks only our Starlark.
 XNU_FOREIGN = [
@@ -71,7 +72,7 @@ _SDKROOT_EXTRA = [
     {"kind": "write", "out": "d/usr/local/include/kernel/.keep", "content": ""},
 ]
 
-def xnu_package(version, installhdrs, build, kernel_package, extra_headers):
+def xnu_package(version, installhdrs, build, kernel_package, extra_headers, firehose):
     """The SDK root, the object root and the SDK of kernel/xnu-<version>, from its recorded tables.
 
     Args:
@@ -80,6 +81,8 @@ def xnu_package(version, installhdrs, build, kernel_package, extra_headers):
         build: {"debug": DEVELOPMENT table, "release": RELEASE table}.
         kernel_package: the package of the kernel's other generated files (bazel/kernel/layout.bzl KERNEL_PACKAGE).
         extra_headers: the headers XNU's build options put on every kernel compile (-I <tree>/diagnostics/ioswitch).
+        firehose: the SDK root with libdispatch's libfirehose_kernel.a installed (a directory): its files go into
+            obj/sdkroot beside installhdrs' (:firehose), :sdkroot_files is both.
     """
     root = native.package_name()
     xnu_sources(name = "srcs")
@@ -124,6 +127,18 @@ def xnu_package(version, installhdrs, build, kernel_package, extra_headers):
         config = ":config",
         decomment = ":decomment",
     )
+    # libdispatch's firehose library and the header it installs, where make's link and compiles find them.
+    xnu_extract(
+        name = "firehose",
+        src = firehose,
+        files = [
+            "usr/local/include/kernel/os/firehose_buffer_private.h",
+            "usr/local/lib/kernel/libfirehose_kernel.a",
+        ],
+        out_dir = "obj/sdkroot",
+    )
+    native.filegroup(name = "sdkroot_files", srcs = [":sdkroot", ":firehose"])
+
     groups = ["export_hdrs", "sdk_headers"]
     for comp in COMPONENTS:
         groups += ["export_hdrs_" + comp, "gen_{}_hdrs".format(comp), "gen_{}_srcs".format(comp), "config_makefile_" + comp]

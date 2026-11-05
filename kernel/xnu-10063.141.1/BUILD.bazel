@@ -27,6 +27,7 @@ xnu_package(
         "release": BUILD_RELEASE,
     },
     extra_headers = "//diagnostics/ioswitch:headers",
+    firehose = "//kernel:fakeroot",
     installhdrs = INSTALLHDRS,
     kernel_package = KERNEL_PACKAGE,
     version = "10063.141.1",
