@@ -397,7 +397,6 @@ class SwitchThermal : public IOService {
     bool dfllMode = false, dfllPrepared = false;     // the CPU goes on the DFLL, and it is still usable this boot
     bool governed = false;                           // on the DFLL, the clock follows the load (switchperf)
     IOInterruptEventSource *governor = nullptr;      // switchperf's signal: a software interrupt of this work loop
-    int lastSoc = 0;                                 // the last good SoC reading (m C)
     unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;  // the driver's boot defaults
     unsigned perfRaises = 0, perfSteps = ~0u;                                     // switch-perf-steps
     unsigned perfTop = 0, perfRung = 0;  // rungs this chip may use; the rung running now (0: boot clock)
@@ -454,8 +453,6 @@ public:
 OSDefineMetaClassAndStructors(SwitchThermal, IOService)
 
     static SwitchThermal *gThermal;
-// The last good SoC reading for other drivers (switch_thermal_soc_millic); INT32_MIN without one.
-static int gSocMilliC = INT32_MIN;
 
 bool SwitchThermal::mapRegisters()
 {
@@ -529,7 +526,6 @@ void SwitchThermal::failSafe(const char *what, int err)
     setDrive(kFullDrive);
     publish("FanDrive", kFullDrive);
     sensorReady = false;
-    __atomic_store_n(&gSocMilliC, INT32_MIN, __ATOMIC_RELAXED);
     restoreCpu(what, true);  // no raised clocks without a working sensor, for the rest of the boot
     if (!reportedFailure) IOLog("SwitchThermal: %s (%d), fan at full speed\n", what, err);
     reportedFailure = true;
@@ -635,8 +631,6 @@ bool SwitchThermal::evaluate()
     int soc = 0, pcb = 0;
     if (!readTemperatures(&soc, &pcb)) return false;
     reportedFailure = false;
-    lastSoc = soc;
-    __atomic_store_n(&gSocMilliC, soc, __ATOMIC_RELAXED);
 
     const int socSkin = skin(profile->soc, soc), pcbSkin = skin(profile->pcb, pcb);
     const int estimate = socSkin > pcbSkin ? socSkin : pcbSkin;
@@ -1382,13 +1376,6 @@ extern "C" int switch_thermal_start(void)
     }
     gThermal = candidate;
     return 0;
-}
-
-// The SoC diode's last good reading in m C (INT32_MIN before one, or after the sensor was lost): TegraGM20B's governor
-// holds VDD_GPU at its ceiling below 21 C (L4T's 800 mV floor under 20 C). Any context.
-extern "C" int switch_thermal_soc_millic(void)
-{
-    return __atomic_load_n(&gSocMilliC, __ATOMIC_RELAXED);
 }
 
 extern "C" void switch_thermal_cpu_quiesce(void)

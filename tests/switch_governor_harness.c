@@ -54,8 +54,3 @@ unsigned gov_index_at_mv(const uint32_t *mv, unsigned count, uint32_t limit_mv)
 {
     return switch_gov_index_at_mv(mv, count, limit_mv);
 }
-
-int32_t gov_gpu_uv(int32_t na_uv, uint32_t margin_pct, int32_t floor_uv, int32_t ceil_uv, int cold)
-{
-    return switch_gov_gpu_uv(na_uv, margin_pct, floor_uv, ceil_uv, cold);
-}

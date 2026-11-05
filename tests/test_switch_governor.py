@@ -1,13 +1,12 @@
-"""The on-demand clock governor (drivers/SwitchPower/SwitchGovernor.h): load traces in, operating points out, with the
-tunables the kernel uses (read from SwitchPerfGovernor.cpp and TegraGM20B gpu.c, so a retune is tested as shipped).
+"""The CPU's on-demand clock governor (drivers/SwitchPower/SwitchGovernor.h): load traces in, operating points out, with
+the tunables the kernel uses (read from SwitchPerfGovernor.cpp, so a retune is tested as shipped).
 
 Checks: saturation reaches the ceiling within one window and a partial burst within two (a frame at 60 Hz is two
 CPU windows); idle and short dips keep the clock until the down hold has passed, then the clock goes to the highest
 target the hold saw; boosts raise at once and expire; thermal ceilings and the cold floor clamp at once; nothing ever
-leaves [lo, hi] or the table (fuzzed). The tables: the CPU's from L4T's T210B01 CVB rows (clk-tegra124-dfll-fcpu.c
-CPUB01_CVB_TABLE, evaluated as cvb.c does) cut at Horizon's 1785 MHz boost clock, the GPU's from L4T's B01 noise-aware
-table (tegra210-dvfs.c GPUB01_NA_CVB_TABLE, as TegraGM20B platform.c evaluates it) cut at Horizon's 768 MHz, each
-re-derived here independently and compared with what the header picks."""
+leaves [lo, hi] or the table (fuzzed). The table: L4T's T210B01 CVB rows (clk-tegra124-dfll-fcpu.c CPUB01_CVB_TABLE,
+evaluated as cvb.c does) cut at Horizon's 1785 MHz boost clock, re-derived here independently and compared with what
+the header picks. The GPU is not governed: it runs at its fixed clock."""
 import ctypes
 import random
 import re
@@ -23,7 +22,6 @@ HARNESS = ROOT / 'tests/switch_governor_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I', str(POWER)]
 
 NINTENDO_CPU_MAX_KHZ = 1785000   # Horizon's boost-mode CPU clock (sys-clk README's table: "1785 -> max clock, boost mode")
-NINTENDO_GPU_MAX_KHZ = 768000    # Horizon's docked GPU clock, its highest ("768 -> official docked")
 CPU_VMIN_MV = 620                # CPUB01_CVB_TABLE vmin_coefficients {620000, 0, 0}
 CPU_COLD_FLOOR_MV = 800          # tegra210b01_thermal_floor_table: below 20 C
 CPU_CAPS_MV = (1060, 1010)       # tegra210b01_thermal_cap_table: from 64 C, from 84 C
@@ -40,15 +38,6 @@ CPUB01_CVB = [
     (2014500, 1716501, -39395, 27), (2091000, 1716501, -39395, 27), (2193000, 1775132, -40505, 27),
     (2295000, 1866287, -42005, 27),
 ]
-# TegraGM20B platform.c gpu_b01_cvb (L4T tegra210-dvfs.c GPUB01_NA_CVB_TABLE "NAPLL En - p4v3") and its trips.
-GPUB01_NA = [
-    (76800, 610000, 0, 0, 0, 0, 0), (153600, 610000, 0, 0, 0, 0, 0), (230400, 610000, 0, 0, 0, 0, 0),
-    (307200, 610000, 0, 0, 0, 0, 0), (384000, 610000, 0, 0, 0, 0, 0), (460800, 610000, 0, 0, 0, 0, 0),
-    (537600, 801688, -10900, -163, 298, -10599, 162), (614400, 824214, -5743, -452, 238, -6325, 81),
-    (691200, 848830, -3903, -552, 119, -4030, -2), (768000, 891575, -4409, -584, 0, -2849, 39),
-    (844800, 940071, -5367, -602, -60, -63, -93), (921600, 986765, -6637, -614, -179, 1905, -13),
-]
-GPU_TRIPS_C = (-25, 20, 30, 50, 70, 90)
 
 
 def c_div(a, b):
@@ -74,28 +63,9 @@ def cpu_rows(speedo):
     return rows
 
 
-def gpu_na_uv(khz, speedo):
-    """TegraGM20B platform.c tegra_gm20b_dvfs_na_uv: worst over the trips, 5 mV step, 610 mV floor."""
-    row = next(r for r in GPUB01_NA if r[0] == khz)
-    worst = 610000
-    for t in GPU_TRIPS_C:
-        uv = div_round_closest(row[3] * speedo, 100)
-        uv = div_round_closest((uv + row[2]) * speedo, 100) + row[1]
-        tv = div_round_closest(row[4] * speedo, 100) + row[5] + div_round_closest(row[6] * t, 10)
-        uv += div_round_closest(tv * t, 10)
-        uv = -(-uv // 5000) * 5000 if uv > 0 else 0
-        worst = max(worst, uv)
-    return worst
-
-
 def constant(path, name):
     """A constexpr tunable from a kernel source, or None when the source does not have it (yet)."""
     match = path.is_file() and re.search(r'\b' + re.escape(name) + r'\s*=\s*([0-9]+)', path.read_text())
-    return int(match.group(1)) if match else None
-
-
-def define(path, name):
-    match = path.is_file() and re.search(r'#define\s+' + re.escape(name) + r'\s+\(?([0-9]+)', path.read_text())
     return int(match.group(1)) if match else None
 
 
@@ -138,11 +108,9 @@ class SwitchGovernorTests(unittest.TestCase):
         lib.gov_cpu_table.restype = uint
         lib.gov_index_at_mv.argtypes = [ctypes.POINTER(u32), uint, u32]
         lib.gov_index_at_mv.restype = uint
-        lib.gov_gpu_uv.argtypes = [ctypes.c_int32, u32, ctypes.c_int32, ctypes.c_int32, ctypes.c_int]
-        lib.gov_gpu_uv.restype = ctypes.c_int32
 
         # The kernel's tunables, as shipped (the governor's state machine is checked with them; without the kernel
-        # sources that carry them, the traces run on ondemand-like stand-ins and the GPU checks are skipped).
+        # source that carries them, the traces run on ondemand-like stand-ins).
         cpu = POWER / 'SwitchPerfGovernor.cpp'
         cls.cpu_tuned = constant(cpu, 'kCpuWindowUs') is not None
         cls.cpu_window = constant(cpu, 'kCpuWindowUs') or 8000
@@ -150,12 +118,6 @@ class SwitchGovernorTests(unittest.TestCase):
         cls.cpu_target = constant(cpu, 'kCpuTargetPermille') or 750
         cls.cpu_hold = constant(cpu, 'kCpuDownHoldUs') or 80000
         cls.touch_hold = constant(cpu, 'kBoostTouchUs') or 600000
-        gpu = TREE / 'drivers/TegraGM20B/gpu.c'
-        cls.gpu_window = define(gpu, 'GOV_WINDOW_US')
-        cls.gpu_up = define(gpu, 'GOV_UP_PERMILLE')
-        cls.gpu_target = define(gpu, 'GOV_TARGET_PERMILLE')
-        cls.gpu_hold = define(gpu, 'GOV_DOWN_HOLD_US')
-        cls.gpu_margin = define(gpu, 'FIXED_PLL_MARGIN_PCT')
 
     @classmethod
     def tearDownClass(cls):
@@ -234,23 +196,6 @@ class SwitchGovernorTests(unittest.TestCase):
         table = (ctypes.c_uint32 * len(mv))(*mv)
         self.assertEqual(khz[self.lib.gov_index_at_mv(table, len(mv), CPU_COLD_FLOOR_MV)], 1428000)
 
-    def test_gpu_voltages(self):
-        """GPU speedo 1673: NA table + the fixed PLL's 20 % margin, on the 5 mV step, inside [610, 800] mV; every
-        Horizon rate up to 768 MHz fits, 844.8 MHz does not (and is above Horizon's maximum anyway); cold: 800 mV."""
-        got = {}
-        for row in GPUB01_NA:
-            uv = self.lib.gov_gpu_uv(gpu_na_uv(row[0], 1673), self.gpu_margin, 610000, 800000, 0)
-            got[row[0]] = uv
-            if uv > 0:
-                self.assertGreaterEqual(uv, gpu_na_uv(row[0], 1673))
-                self.assertEqual(uv % 5000, 0)
-                self.assertEqual(self.lib.gov_gpu_uv(gpu_na_uv(row[0], 1673), self.gpu_margin, 610000, 800000, 1),
-                                 800000)
-        self.assertEqual(got[76800], 735000)
-        self.assertEqual(got[460800], 735000)
-        self.assertEqual(got[768000], 800000)
-        self.assertEqual(got[844800], -1)
-        self.assertEqual(max(k for k, v in got.items() if v > 0), NINTENDO_GPU_MAX_KHZ)
 
     # ---------------------------------------------------------------------------------------------- traces
     def test_saturation_reaches_the_ceiling_in_one_window(self):
@@ -385,16 +330,6 @@ class SwitchGovernorTests(unittest.TestCase):
                 if busy >= self.cpu_up:
                     self.assertEqual(cur, self.lib.gov_hi(g))
 
-    def test_gpu_tunables_reach_the_top_within_two_frames(self):
-        if self.gpu_window is None:
-            self.skipTest('TegraGM20B gpu.c has no governor')
-        rates = [r[0] for r in GPUB01_NA if r[0] <= NINTENDO_GPU_MAX_KHZ]
-        g = self.governor(rates, start=0, up=self.gpu_up, target=self.gpu_target, hold=self.gpu_hold)
-        out = self.trace(g, [1000], window=self.gpu_window)
-        self.assertEqual(rates[out[0]], NINTENDO_GPU_MAX_KHZ)
-        self.assertLessEqual(self.gpu_window, 2 * 16667)
-        out = self.trace(g, [0] * (self.gpu_hold // self.gpu_window + 2), start=self.gpu_window, window=self.gpu_window)
-        self.assertEqual(rates[out[-1]], 76800)
 
     def test_tunables_are_sane(self):
         if not self.cpu_tuned:

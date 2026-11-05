@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The on-demand clock governor's decisions, in plain C with no kernel dependency, so the host tests
-// (tests/test_switch_governor.py) check this same header. One instance per clock: the A57 cluster's DFLL
-// (SwitchPerfGovernor.cpp, from the scheduler's perfcontrol callouts) and the GM20B's GPCPLL (TegraGM20B gpu.c, from
-// its fence interrupts). The caller owns the time base (mach absolute time in the kernel, microseconds in the tests),
-// the locking and the hardware; this file only maps "how busy was the last window" plus hints and thermal limits to an
-// index into an ascending table of operating points, the way Linux's ondemand/schedutil governors and Horizon's
-// boost mode do:
+// (tests/test_switch_governor.py) check this same header. Its one user is the A57 cluster's DFLL
+// (SwitchPerfGovernor.cpp, from the scheduler's perfcontrol callouts); the GPU is not governed, it runs at
+// tegra-gpu-mhz's fixed clock (768 MHz) all the time. The caller owns the time base (mach absolute time in the
+// kernel, microseconds in the tests), the locking and the hardware; this file only maps "how busy was the last window"
+// plus hints and thermal limits to an index into an ascending table of operating points, the way Linux's
+// ondemand/schedutil governors and Horizon's boost mode do:
 //   * up at once: a window at or above up_permille busy goes straight to the ceiling (ondemand's jump: when the
 //     clock is saturated its real demand is unknown); below that, the lowest point whose target_permille share
 //     covers the demand (busy x clock now, schedutil's frequency-invariant rule);
@@ -14,7 +14,7 @@
 //   * boosts (touch, a missed frame, an app launch, the boot): a floor until a deadline, applied at once;
 //   * limits [lo, hi]: the thermal ceiling and the cold floor, applied at once in either direction.
 // Nothing here can pick a point outside the table or outside [lo, hi]; the table itself is built from the L4T CVB/DVFS
-// rows by the caller and never goes above Nintendo's own Mariko maxima (switch_gov_cpu_table below; TegraGM20B).
+// rows by the caller and never goes above Nintendo's own Mariko maximum (switch_gov_cpu_table below: 1785 MHz).
 #ifndef SWITCH_GOVERNOR_H
 #define SWITCH_GOVERNOR_H
 
@@ -198,22 +198,6 @@ static inline unsigned switch_gov_cpu_table(const uint32_t *khz, const uint32_t 
         mv_out[n] = mv[i];
     }
     return n;
-}
-
-// The GPU point's VDD_GPU, in uV: the L4T B01 noise-aware table's voltage for this rate and GPU speedo (worst over
-// the trips, TegraGM20B platform.c tegra_gm20b_dvfs_na_uv) plus margin_pct for the fixed-frequency GPCPLL that runs it
-// (TegraGM20B gpu.c FIXED_PLL_MARGIN_PCT), rounded up to the MAX77812's 5 mV step, inside [floor_uv, ceil_uv]; at
-// ceil_uv while cold (L4T's gpu_scaling_cdev floor below 20 C is the rail's ceiling here). -1 if the rate has no
-// table voltage or does not fit under ceil_uv.
-static inline int32_t switch_gov_gpu_uv(int32_t na_uv, uint32_t margin_pct, int32_t floor_uv, int32_t ceil_uv, int cold)
-{
-    int64_t uv;
-    if (na_uv <= 0) return -1;
-    uv = ((int64_t)na_uv * (100 + margin_pct) + 99) / 100;
-    uv = (uv + 4999) / 5000 * 5000;
-    if (uv > ceil_uv) return -1;
-    if (cold || uv < floor_uv) uv = cold ? ceil_uv : floor_uv;
-    return (int32_t)uv;
 }
 
 #endif
