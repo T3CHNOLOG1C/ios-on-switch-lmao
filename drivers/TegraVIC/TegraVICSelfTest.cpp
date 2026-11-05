@@ -6,23 +6,28 @@
 //   transforms  each of the 8 OutputFlipX/FlipY/Transpose combinations is run on a 32x16 card whose every pixel names
 //               its own coordinates; the map it produced (one of the 8 flips and rotations, or garbage) decides which
 //               combination implements which IOSurfaceAccelerator transform, and whether the rectangles and,
-//               apart, the output surface size of a transposed job are given before or after the transpose (four
-//               conventions; r8a's two, both together, gave no quarter turn: a diag line then says what came out)
+//               apart, the output surface (size and memory geometry) of a transposed job are given before or after
+//               the transpose (four conventions, TegraVICProbe.h; the plain transpose's four each log a diag line)
+//   placement   a destination rectangle inside a larger surface under each proven transform: not a gate (a transform
+//               whose rectangle lands elsewhere keeps whole-surface jobs only)
 //   colour      flat patches BGRA -> 420f (BT.709, full range) through the output matrix, and 420f -> BGRA through the
 //               slot matrix, exact to one 8-bit step against the engine's arithmetic (TegraVICConfig.h), in the chroma
 //               channel order measured on T210B01 or, failing that, the other one
 //   scaling     a 2:1 downscale of flat patches with the 2-tap filter (patch interiors exact to one step), else 1-tap
 //   pitch       a source whose row pitch is 64- but not 256-byte aligned (as a 720-pixel BGRA row), else 256 is required
-//   recording   the Screen Recording shape in small: BGRA rotated into 420f
+//   recording   the Screen Recording shape in small: BGRA turned a quarter each way (transforms 4 and 7) into 420f;
+//               not a gate: off, the quarter turns are dropped
 //   block linear a 420f picture in Tegra block linear (NVDEC's output: 16Bx2 sectors, GOB height 2) copied 1:1 into
 //               pitch linear, every sample through to a step; not a gate: without it NVDEC's pictures are copied by
 //               the CPU (TegraVICPresent.h)
 // A failure is one "V3 FAIL" / "V4 FAIL" line with what was seen, and the service is not published.
 #include <IOKit/IOLib.h>
 #include <kern/clock.h>
+#include <os/log.h>
 #include <string.h>
 #include "../TegraHost1x/TegraHost1x.h"
 #include "TegraVIC.h"
+#include "TegraVICProbe.h"
 
 namespace {
 TegraVICBuffer gSrc, gDst, gPageA, gPageB;
@@ -65,8 +70,6 @@ void dumpLastJob(const char *what)
         n += snprintf(text + n, sizeof(text) - n, " %03x=%08x", j.method[i], j.value[i]);
     IOLog("%s\n", text);
 }
-constexpr uint32_t kCardW = 32, kCardH = 16;
-
 uint64_t nowUs()
 {
     uint64_t ns;
@@ -192,128 +195,36 @@ bool smmuProof(char *line, size_t size)
 }
 
 // --- V4 ----------------------------------------------------------------------------------------------------------
-// Card pixel (x, y): R = 8x, G = 16y, B = a checksum, A = 0xff. Every output pixel names its source.
-inline uint32_t cardPixel(uint32_t x, uint32_t y)
+// Probe diag lines go to the log only (os_log), not the boot console.
+int probeRun(void *, const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op, const TegraVICTraits *t,
+             const char **why)
 {
-    const uint32_t b = (x * 7 + y * 13 + 0x21) & 0xff;
-    return 0xff000000u | (8 * x) << 16 | (16 * y) << 8 | b;
+    return run(src, dst, op, t, why);
 }
 
-void drawCard()
+void probeNote(void *, const char *line)
 {
-    bzero(gSrc.va, gSrc.size);
-    for (uint32_t y = 0; y < kCardH; y++)
-        for (uint32_t x = 0; x < kCardW; x++) ((uint32_t *)(gSrc.va + y * kPitch))[x] = cardPixel(x, y);
+    os_log(OS_LOG_DEFAULT, "%s", line);
 }
 
-// Where source (x, y) goes under IOSurfaceAccelerator transform t (flips first, then a clockwise quarter turn), for a
-// w x h source: output (u, v).
-void transformPoint(uint32_t t, uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t *u, uint32_t *v)
+TegraVICProbeEnv probeEnv()
 {
-    if (t & TEGRA_VIC_FLIP_H) x = w - 1 - x;
-    if (t & TEGRA_VIC_FLIP_V) y = h - 1 - y;
-    if (t & TEGRA_VIC_ROT90) {
-        *u = h - 1 - y;
-        *v = x;
-    } else {
-        *u = x;
-        *v = y;
-    }
-}
-
-// Where an output pixel came from: "x,y" of the card pixel it holds, "-" unwritten (the poison), "?" anything else.
-void cardSource(uint32_t pixel, char *out, size_t size)
-{
-    const uint32_t x = ((pixel >> 16) & 0xff) / 8, y = ((pixel >> 8) & 0xff) / 16;
-    if (pixel == 0xababababu)
-        snprintf(out, size, "-");
-    else if (x < kCardW && y < kCardH && pixel == cardPixel(x, y))
-        snprintf(out, size, "%u,%u", x, y);
-    else
-        snprintf(out, size, "?%08x", pixel);
-}
-
-// One line for a transposed probe nothing recognised: the card pixels at its output's corners and next to its origin.
-void transposeDiag(const char *what, uint32_t ow, uint32_t oh)
-{
-    const uint32_t at[6][2] = {{0, 0}, {1, 0}, {0, 1}, {ow - 1, 0}, {0, oh - 1}, {ow - 1, oh - 1}};
-    char text[240];
-    int n = snprintf(text, sizeof(text), "TegraVIC: diag transpose %s (%ux%u out of %ux%u): output pixel <- card", what,
-                     ow, oh, kCardW, kCardH);
-    for (uint32_t i = 0; i < 6 && n > 0 && n < (int)sizeof(text); i++) {
-        char from[16];
-        cardSource(((const uint32_t *)(gDst.va + at[i][1] * kPitch))[at[i][0]], from, sizeof(from));
-        n += snprintf(text + n, sizeof(text) - n, " (%u,%u)<-%s", at[i][0], at[i][1], from);
-    }
-    IOLog("%s\n", text);
-}
-
-// Which transform the output in gDst (ow x oh BGRA, pitch kPitch) is of the card, or -1.
-int recognise(uint32_t ow, uint32_t oh)
-{
-    for (uint32_t t = 0; t < 8; t++) {
-        const bool rot = t & TEGRA_VIC_ROT90;
-        if ((rot ? kCardH : kCardW) != ow || (rot ? kCardW : kCardH) != oh) continue;
-        bool match = true;
-        for (uint32_t y = 0; match && y < kCardH; y++)
-            for (uint32_t x = 0; match && x < kCardW; x++) {
-                uint32_t u, v;
-                transformPoint(t, kCardW, kCardH, x, y, &u, &v);
-                match = ((const uint32_t *)(gDst.va + v * kPitch))[u] == cardPixel(x, y);
-            }
-        if (match) return (int)t;
-    }
-    return -1;
+    TegraVICProbeEnv e = {};
+    e.run = probeRun;
+    e.note = probeNote;
+    e.srcVa = gSrc.va;
+    e.dstVa = gDst.va;
+    e.srcIova = gSrc.pa;
+    e.srcBytes = gSrc.size;
+    e.dstIova = gDst.pa;
+    e.dstBytes = gDst.size;
+    return e;
 }
 
 bool transforms(TegraVICTraits *t, char *line, size_t size)
 {
-    drawCard();
-    TegraVICImage src = bgra(gSrc, kCardW, kCardH, kPitch);
-    // Each VIC combination, tried through a trait that maps IOSurfaceAccelerator transform 0 onto it.
-    int pre = -1;
-    for (uint32_t combo = 0; combo < 8; combo++) {
-        const uint32_t fx = combo & 1, fy = (combo >> 1) & 1, tr = (combo >> 2) & 1;
-        int found = -1;
-        // Conventions of a transposed job: bit 0 rectangles, bit 1 the surface size, given before the transpose.
-        for (uint32_t convention = 0; convention < 4 && found < 0; convention++) {
-            if (!tr && convention) break;
-            if (pre >= 0 && (int)convention != pre) continue;
-            TegraVICTraits probe = *t;
-            probe.vicFlips[0][0] = (uint8_t)fx;
-            probe.vicFlips[0][1] = (uint8_t)fy;
-            probe.vicFlips[0][2] = (uint8_t)tr;
-            probe.preTransposeRects = convention & 1;
-            probe.preTransposeSurface = convention >> 1;
-            probe.rotations = 1;
-            const uint32_t ow = tr ? kCardH : kCardW, oh = tr ? kCardW : kCardH;
-            TegraVICImage dst = bgra(gDst, ow, oh, kPitch);
-            TegraVICOp op = copyOp(kCardW, kCardH, ow, oh, 0);
-            const char *why = nullptr;
-            if (run(&src, &dst, &op, &probe, &why)) {
-                snprintf(line, size, "V4 FAIL transform probe %u%u%u: %s", fx, fy, tr, why);
-                return false;
-            }
-            found = recognise(ow, oh);
-            if (found >= 0 && tr) pre = (int)convention;
-            if (found < 0 && tr && !fx && !fy && (convention == 0 || convention == 3))
-                transposeDiag(convention ? "rects and surface before" : "rects and surface after", ow, oh);
-        }
-        if (found < 0) continue;
-        t->vicFlips[found][0] = (uint8_t)fx;
-        t->vicFlips[found][1] = (uint8_t)fy;
-        t->vicFlips[found][2] = (uint8_t)tr;
-        t->rotations |= 1u << found;
-    }
-    t->preTransposeRects = pre > 0 && (pre & 1);
-    t->preTransposeSurface = pre > 0 && (pre >> 1);
-    if (!(t->rotations & 1)) {
-        const uint32_t *p = (const uint32_t *)gDst.va;
-        snprintf(line, size, "V4 FAIL a 1:1 BGRA copy is not the source (first pixels %#x %#x, want %#x %#x)", p[0],
-                 p[1], cardPixel(0, 0), cardPixel(1, 0));
-        return false;
-    }
-    return true;
+    const TegraVICProbeEnv e = probeEnv();
+    return tegra_vic_probe_transforms(&e, t, line, size) != 0;
 }
 
 // Flat-patch cards: 4 x 2 patches of 16 x 16 in 64 x 32 (BGRA) with these colours.
@@ -634,43 +545,64 @@ bool pitch(TegraVICTraits *t, char *line, size_t size)
             snprintf(line, size, "V4 FAIL %u-byte pitch copy: %s", rowBytes, why);
             return false;
         }
-        uint32_t bad = 0;
+        uint32_t bad = 0, firstX = 0, firstY = 0, got = 0;
         for (uint32_t y = 0; y < 32; y++)
-            for (uint32_t x = 0; x < w; x++)
-                bad += ((const uint32_t *)(gDst.va + y * kPitch))[x] != kPatches[(y / 16) * 4 + x / 16];
-        if (!bad) t->pitchAlign = kNarrow[i][1];
+            for (uint32_t x = 0; x < w; x++) {
+                const uint32_t px = ((const uint32_t *)(gDst.va + y * kPitch))[x];
+                if (px != kPatches[(y / 16) * 4 + x / 16] && !bad++) firstX = x, firstY = y, got = px;
+            }
+        if (!bad) {
+            t->pitchAlign = kNarrow[i][1];
+        } else {
+            char text[200];
+            snprintf(
+                text, sizeof(text),
+                "TegraVIC: diag %u-byte source pitch: %u of %u pixels off in a 1:1 copy, first at %u,%u wrote %#x, "
+                "want %#x",
+                rowBytes, bad, w * 32, firstX, firstY, got, kPatches[(firstY / 16) * 4 + firstX / 16]);
+            probeNote(nullptr, text);
+        }
     }
     return true;
 }
 
-// Screen Recording in small: a portrait BGRA card turned a quarter (transform 4) into a landscape 420f.
-bool recording(TegraVICTraits *t, char *line, size_t size)
+// Screen Recording in small, and a landscape video turned for a detached layer: a 64x32 BGRA patch card turned a quarter
+// each way (transforms 4 and 7, the two the display-planes gate needs) into a 32x64 420f, the transposed 4:2:0 output
+// geometry (luma and chroma planes described before the transpose). Not a gate: if either is off, transforms 4-7 are
+// dropped (such jobs are refused and callers fall back), one line says why in `note`, and V4 goes on.
+void recording(TegraVICTraits *t, char *note, size_t size)
 {
-    if (!(t->rotations & (1u << TEGRA_VIC_ROT90))) return true;  // rotation unproven: such requests are refused
-    drawPatches(kPitch);
-    TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
-    TegraVICImage dst = nv12(gDst, 32, 64);
-    TegraVICOp op = copyOp(64, 32, 32, 64, TEGRA_VIC_ROT90);
-    const char *why = nullptr;
-    if (run(&src, &dst, &op, t, &why)) {
-        snprintf(line, size, "V4 FAIL BGRA -> 420f rotated: %s", why);
-        return false;
+    static const uint32_t kTurns[2] = {TEGRA_VIC_ROT90, TEGRA_VIC_ROT90 | TEGRA_VIC_FLIP_H | TEGRA_VIC_FLIP_V};
+    for (uint32_t turn : kTurns) {
+        if (!(t->rotations & (1u << turn))) continue;  // unproven: such requests are refused anyway
+        drawPatches(kPitch);
+        TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
+        TegraVICImage dst = nv12(gDst, 32, 64);
+        TegraVICOp op = copyOp(64, 32, 32, 64, turn);
+        const char *why = nullptr;
+        uint32_t bad = 0;
+        if (!run(&src, &dst, &op, t, &why)) {
+            TegraVICMatrix m;
+            tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &m);
+            // Patch (px, py) of the 64 x 32 source (4 x 2 patches of 16) lands at output patch (u, v) of the 32 x 64
+            // output (2 x 4): the transform of the patch grid.
+            uint32_t want[8][3];
+            for (uint32_t i = 0; i < 8; i++) {
+                uint32_t u, v;
+                tegra_vic_transform_point(turn, 4, 2, i % 4, i / 4, &u, &v);
+                expectYcc(&m, &t->out, kPatches[i], want[v * 2 + u]);
+            }
+            if (checkNv12(32, 64, 16, 16, want, 2, &bad)) continue;
+        }
+        const uint8_t *yp = gDst.va, *uv = gDst.va + (uint64_t)kPitch * 64;
+        snprintf(note, size, "off: transform %u into 420f %s (%u samples off; output patch 0,0 Y %u Cb %u Cr %u)", turn,
+                 why ? why : "not the patches turned", bad, yp[8 * kPitch + 8], uv[4 * kPitch + 8], uv[4 * kPitch + 9]);
+        dumpLastJob("BGRA -> 420f turned");
+        t->rotations &= 0x0f;
+        return;
     }
-    TegraVICMatrix m;
-    tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &m);
-    // Patch (px, py) of the 64 x 32 source lands at output patch (1 - py, px) of the 32 x 64 output (2 x 4 patches).
-    uint32_t want[8][3];
-    for (uint32_t i = 0; i < 8; i++) {
-        const uint32_t px = i % 4, py = i / 4;
-        expectYcc(&m, &t->out, kPatches[i], want[px * 2 + (1 - py)]);
-    }
-    uint32_t bad = 0;
-    if (!checkNv12(32, 64, 16, 16, want, 2, &bad)) {
-        snprintf(line, size, "V4 FAIL BGRA -> 420f rotated is off (%u samples)", bad);
-        return false;
-    }
-    return true;
 }
+
 // --- Block-linear input: NVDEC's pictures -------------------------------------------------------------------------
 // Byte (x, y) of a Tegra block-linear plane `pitch` bytes wide, GOB height 2 (BlockLinear.h's formula: 64Bx8 GOBs of
 // 16Bx2 sectors, two GOBs to a 16-row block, blocks left to right).
@@ -750,7 +682,7 @@ void blockLinear(TegraVICTraits *t, char *note, size_t size)
 
 extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
 {
-    char line[300], note[300] = "", blNote[200] = "";
+    char line[300], note[300] = "", blNote[200] = "", turnsNote[200] = "";
     if (tegra_vic_buffer(64 * 1024, &gSrc) || tegra_vic_buffer(64 * 1024, &gDst) || tegra_vic_buffer(4096, &gPageA) ||
         tegra_vic_buffer(4096, &gPageB)) {
         IOLog("TegraVIC: V3 FAIL no self-test buffers in the arena\n");
@@ -769,9 +701,13 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
     gJobs = 0;
     gBusyUs = 0;
     const bool ok = transforms(&t, line, sizeof(line)) && colour(&t, line, sizeof(line), note, sizeof(note)) &&
-                    scaling(&t, line, sizeof(line)) && pitch(&t, line, sizeof(line)) &&
-                    recording(&t, line, sizeof(line));
-    if (ok) blockLinear(&t, blNote, sizeof(blNote));
+                    scaling(&t, line, sizeof(line)) && pitch(&t, line, sizeof(line));
+    if (ok) {
+        recording(&t, turnsNote, sizeof(turnsNote));
+        const TegraVICProbeEnv e = probeEnv();
+        tegra_vic_probe_placement(&e, &t);
+        blockLinear(&t, blNote, sizeof(blNote));
+    }
     tegra_vic_unlock();
     if (!ok) {
         dumpLastJob("V4");
@@ -779,18 +715,17 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
         return -5;
     }
     *traits = t;
-    const bool turns = t.rotations & 0xf0;
-    IOLog("TegraVIC: V4 ok transforms %#x of 0xff (quarter turns %s%s%s), RGB to 420f BT.709 full (Cb in "
-          "channel %u), fill %s, %s scaling, pitch %u-byte aligned; %u jobs, engine %llu us, %llu us in all\n",
-          t.rotations, !turns ? "none: see the transpose diag lines" : "with rectangles ",
-          !turns                ? ""
-          : t.preTransposeRects ? "before, surface "
-                                : "after, surface ",
-          !turns                  ? ""
-          : t.preTransposeSurface ? "before the transpose"
-                                  : "after the transpose",
-          t.out.cbChannel, t.fillThroughMatrix ? "through the matrix" : "converted here",
-          t.bilinear ? "2-tap" : "1-tap only", t.pitchAlign, gJobs, gBusyUs, nowUs() - began);
+    char turns[220];
+    if (t.rotations & 0xf0)
+        snprintf(turns, sizeof(turns), "with rectangles %s, surface %s the transpose",
+                 tegra_vic_probe_when(t.preTransposeRects), tegra_vic_probe_when(t.preTransposeSurface));
+    else
+        snprintf(turns, sizeof(turns), "%s", turnsNote[0] ? turnsNote : "none: see the transpose diag lines");
+    IOLog("TegraVIC: V4 ok transforms %#x of 0xff (quarter turns %s), sub-rectangles %#x, RGB to 420f BT.709 full (Cb "
+          "in channel %u), fill %s, %s scaling, pitch %u-byte aligned; %u jobs, engine %llu us, %llu us in all\n",
+          t.rotations, turns, t.subRects, t.out.cbChannel,
+          t.fillThroughMatrix ? "through the matrix" : "converted here", t.bilinear ? "2-tap" : "1-tap only",
+          t.pitchAlign, gJobs, gBusyUs, nowUs() - began);
     IOLog("TegraVIC: V4 %s\n", note);
     IOLog("TegraVIC: V4 %s\n", blNote);
     return 0;

@@ -369,12 +369,14 @@ typedef struct {
     uint32_t preTransposeRects;    // 1: a transposed job's target/destination rectangles are given before the transpose
     uint32_t preTransposeSurface;  // 1: and its whole output surface (size, luma and chroma memory geometry): measured
                                    // apart from the rectangles
-    uint32_t rotations;            // bit t: transform t proven
+    uint32_t rotations;            // bit t: transform t proven (a whole-surface copy lands as that transform)
     uint32_t bilinear;             // 2-tap filtering proven (else every job is 1-tap)
     uint32_t pitchAlign;           // smallest pitch alignment proven (64 or 256 bytes)
     uint32_t fillThroughMatrix;  // 1: the background colour goes through the output matrix (else it is converted here)
     uint32_t yccIn;              // what reading a 4:2:0 source was proven to do: TEGRA_VIC_YCC_IN_*
     uint32_t blockLinearIn;      // 1: a block-linear 4:2:0 source (NVDEC's layout) copies exactly into pitch linear
+    uint32_t subRects;           // bit t: under transform t a destination rectangle inside a larger surface lands in
+                                 // place (where the flips mirror is measured, not assumed); transform 0 always
 } TegraVICTraits;
 
 #define TEGRA_VIC_MAX_METHODS 12
@@ -464,6 +466,9 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     }
     if (dst->format->subsampled && ((op->dstX | op->dstY | op->dstW | op->dstH) & 1))
         return "4:2:0 destination rectangle on odd coordinates";
+    if (!op->fill && op->transform && !(t->subRects & (1u << op->transform)) &&
+        (op->dstX || op->dstY || op->dstW != dst->width || op->dstH != dst->height))
+        return "destination sub-rectangle this transform has not proven";
     if (!op->fill && src->blockLinear && !t->blockLinearIn) return "block-linear source this engine has not proven";
     if (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB) {
         const int same = dst->format->kind == src->format->kind && src->standard == dst->standard &&

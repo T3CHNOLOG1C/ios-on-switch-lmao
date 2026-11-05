@@ -254,6 +254,7 @@ static TegraVICTraits traits(void)
                                         {1, 0, 1}, {1, 1, 1}, {0, 0, 1}, {0, 1, 1}};
     memcpy(t.vicFlips, flips, sizeof(flips));
     t.rotations = 0xff;
+    t.subRects = 0xff;
     t.bilinear = 1;
     t.pitchAlign = 64;
     t.fillThroughMatrix = 1;
@@ -437,6 +438,7 @@ static void jobs(void)
         {14, "transform outside the 8 flips and rotations"},
         {15, "plane shorter than the surface"},
         {16, "configuration not 256-byte aligned"},
+        {17, "destination sub-rectangle this transform has not proven"},
     };
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         TegraVICImage s2 = src, d2 = dst;
@@ -483,6 +485,11 @@ static void jobs(void)
         case 14: o2.transform = 8; break;
         case 15: d2.rows[1] = 359; break;
         case 16: cfg = 0x80001080; break;
+        case 17:
+            t2.subRects = 0x01;
+            o2.dstY = 2;
+            o2.dstH = 718;
+            break;
         }
         why = tegra_vic_build(&s2, &d2, &o2, &t2, cfg, 0x80002000, &job);
         CHECK(why && !strcmp(why, cases[i].why), "case %d: wanted \"%s\", got \"%s\"", cases[i].what, cases[i].why,

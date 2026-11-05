@@ -144,16 +144,16 @@ Apple's code that still runs: the classes' constructors, `getMetaClass`, the ser
 
 1. Look up both surfaces in the caller's task (IOSurface kext, by address: `original-bindings.S`, checked against the
    kernelcache by `abi_check.py` on every build). `IOCoreSurfaceRoot` is the root.
-2. Translate (`tegra_vic_plan`, `TegraVICRequest.h`): empty rects → whole surfaces; ZeroFill and BorderFill become
-   fills before the transform; WriteOnlyMode becomes a fill of the destination rect (4:2:0 fills widened to even
-   coordinates); Transform, NearestFilter and the destination's chroma siting are used; quality hints (dither,
-   enhance, noise estimation, directional scaling, pixel averaging, edge mirroring, pseudo-linear, fix-upscaling,
-   fractional precision, blit clip, lock-in, read-only, unwire, power, coalescing, Comm records) are accepted and
-   ignored. Refused as **kIOReturnUnsupported** (callers fall back): histogram, HDR, film grain, colour remap, shared
-   events, alpha override into a surface with alpha, formats other than BGRA/RGBA/420v/420f, protected-to-less-protected,
-   and any shape the checker refuses (pitch the unit cannot address, odd 4:2:0 rects, >16x scaling, sizes outside
-   2..8192, transforms not proven, a same-format 4:2:0 pass-through V4 did not prove). Refused as
-   **kIOReturnBadArgument**: unknown surface IDs, Transform bits 3-5.
+2. Translate (`tegra_vic_plan`, `TegraVICRequest.h`): empty rects → whole surfaces; ZeroFill and BorderFill become fills
+   before the transform; WriteOnlyMode becomes a fill of the destination rect (4:2:0 fills widened to even coordinates);
+   Transform, NearestFilter and the destination's chroma siting are used; quality hints (dither, enhance, noise
+   estimation, directional scaling, pixel averaging, edge mirroring, pseudo-linear, fix-upscaling, fractional precision,
+   blit clip, lock-in, read-only, unwire, power, coalescing, Comm records) are accepted and ignored. Refused as
+   **kIOReturnUnsupported** (callers fall back): histogram, HDR, film grain, colour remap, shared events, alpha override
+   into a surface with alpha, formats other than BGRA/RGBA/420v/420f, protected-to-less-protected, and any shape the
+   checker refuses (pitch the unit cannot address, odd 4:2:0 rects, >16x scaling, sizes outside 2..8192, transforms not
+   proven, a destination sub-rectangle under a transform whose placement V4 did not prove, a same-format 4:2:0
+   pass-through V4 did not prove). Refused as **kIOReturnBadArgument**: unknown surface IDs, Transform bits 3-5.
 3. Build and check every VIC job in the calling thread (`tegra_vic_build`, `TegraVICConfig.h`), so refusals are the
    call's own result; then queue (16 deep, FIFO) for the engine thread. Sync calls sleep until their jobs are done.
 4. Engine thread: `IOSurface::prepare`, map each surface page by page into its SMMU window (source read-only), clean
@@ -193,6 +193,17 @@ are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host aga
 - Rotation direction: TegraVIC takes bit 2 as a clockwise quarter turn applied after the flips (Android's HAL order)
   [I]; the self-test maps each IOSA transform to VIC's flip/transpose bits by measurement, so only this convention, not
   VIC's, is assumed. Screen Recording's clone does not rotate (Transform 0).
+- Transposed jobs (`OutputTranspose`): VIC composes the target rectangle before the transpose and writes composed
+  pixel (x, y) to memory row x, column y, so the whole OutputSurfaceConfig is given in pre-transpose geometry: surface
+  size swapped, `OutLumaWidth` = rows - 1 and `OutLumaHeight` = pitch / bpe - 1 (chroma likewise) [V: hekate's Nyx
+  rotation programs exactly that on this SoC; the unit's V4 diag lines with the luma geometry left post-transpose show
+  a row stride of `OutLumaHeight` + 1 pixels]. V4 still tries the four conventions (rectangles × surface, before or
+  after) and logs one "diag transpose" line for each (os_log); the first that copies the card as a transform is used
+  [T]. Transposed 4:2:0 output is proven by turning a BGRA patch card into 420f both ways (transforms 4 and 7); if that
+  fails, transforms 4-7 are dropped, V4 does not fail.
+- Destination sub-rectangles under a flip or quarter turn: whether VIC mirrors within the target rectangle or the
+  whole surface is not known [I]; V4 copies the card into a sub-rectangle of a larger surface under each proven
+  transform (`subRects`), and a transform whose rectangle lands elsewhere keeps whole-surface jobs only.
 
 ## 10. NVDEC's pictures (not IOSurfaceAccelerator)
 
