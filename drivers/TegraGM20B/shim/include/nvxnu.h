@@ -57,7 +57,6 @@ void nvxnu_rw_unlock_shared(void *rw);
 void nvxnu_rw_lock_exclusive(void *rw);
 void nvxnu_rw_unlock_exclusive(void *rw);
 
-/* time */
 nvxnu_u64 nvxnu_nanotime(void);
 void nvxnu_udelay(nvxnu_u32 us); /* busy wait */
 void nvxnu_usleep(nvxnu_u32 us); /* may block */
@@ -71,7 +70,6 @@ void nvxnu_work_cancel_wait(void *w);
 void nvxnu_work_schedule_after(void *w, nvxnu_u64 ns);
 void nvxnu_work_cancel(void *w);
 
-/* MMIO */
 volatile void *nvxnu_ioremap(nvxnu_u64 pa, nvxnu_u64 size, int write_combined);
 void nvxnu_iounmap(volatile void *va, nvxnu_u64 size);
 
@@ -120,7 +118,6 @@ void nvxnu_wake(void);
 int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns);
 void nvxnu_wake_due(nvxnu_u32 seq, const char *what, nvxnu_u32 value);
 
-/* boot-args */
 int nvxnu_bootarg_int(const char *name, long long *value);
 int nvxnu_bootarg_str(const char *name, char *buf, int len);
 
@@ -133,7 +130,7 @@ int tegra_gm20b_rail_max_uv(void);
 nvxnu_u32 tegra_gm20b_dvfs_khz(int row); /* L4T B01 GPU rate of table row, 0 past the end */
 int tegra_gm20b_dvfs_na_uv(
 	nvxnu_u32 khz, int speedo); /* its NAPLL voltage, worst over temperature; -22 off-table */
-int tegra_gm20b_clk_enable(int id, int on); /* ids below */
+int tegra_gm20b_clk_enable(int id, int on);
 unsigned long tegra_gm20b_clk_get_rate(int id);
 int tegra_gm20b_clk_set_rate(int id, unsigned long rate);
 void tegra_gm20b_reset(int assert);

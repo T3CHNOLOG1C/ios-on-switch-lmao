@@ -12,7 +12,6 @@
 #include <stdint.h>
 #include "../nvxnu.h"
 
-/* ---------------------------------------------------------------- config */
 #define CONFIG_NOUVEAU_PLATFORM_DRIVER 1
 #define CONFIG_ARCH_TEGRA 1
 #define CONFIG_ARCH_TEGRA_210_SOC 1
@@ -27,7 +26,6 @@
 #define IS_BUILTIN(option) __is_defined(option)
 #define IS_REACHABLE(option) __is_defined(option)
 
-/* ---------------------------------------------------------------- types */
 typedef uint8_t u8;
 typedef int8_t s8;
 typedef uint16_t u16;
@@ -131,7 +129,6 @@ typedef struct {
 		};                                                            \
 	}
 
-/* ---------------------------------------------------------------- numbers */
 #define U8_MAX ((u8)~0U)
 #define U16_MAX ((u16)~0U)
 #define U32_MAX ((u32)~0U)
@@ -336,7 +333,6 @@ static inline size_t size_add(size_t a, size_t b)
 #define check_add_overflow(a, b, d) __builtin_add_overflow(a, b, d)
 #define check_mul_overflow(a, b, d) __builtin_mul_overflow(a, b, d)
 
-/* ---------------------------------------------------------------- errors */
 #define EPERM 1
 #define ENOENT 2
 #define ESRCH 3
@@ -395,7 +391,6 @@ static inline int PTR_ERR_OR_ZERO(const void *ptr)
 	return IS_ERR(ptr) ? (int)PTR_ERR(ptr) : 0;
 }
 
-/* ---------------------------------------------------------------- strings */
 void *memcpy(void *, const void *, size_t);
 void *memmove(void *, const void *, size_t);
 void *memset(void *, int, size_t);
@@ -475,7 +470,6 @@ static inline char *skip_spaces(const char *s)
 void sort(void *base, size_t num, size_t size, int (*cmp)(const void *, const void *),
 	  void (*swap_fn)(void *, void *, int));
 
-/* ---------------------------------------------------------------- printk */
 #define KERN_EMERG ""
 #define KERN_ALERT ""
 #define KERN_CRIT ""
@@ -560,7 +554,6 @@ struct lock_class_key {
 	int dummy;
 };
 
-/* ---------------------------------------------------------------- barriers / atomics */
 #define mb() __asm__ __volatile__("dsb sy" ::: "memory")
 #define rmb() __asm__ __volatile__("dsb ld" ::: "memory")
 #define wmb() __asm__ __volatile__("dsb st" ::: "memory")
@@ -664,7 +657,6 @@ static inline int kref_get_unless_zero(struct kref *k)
 	return refcount_inc_not_zero(&k->refcount);
 }
 
-/* ---------------------------------------------------------------- locks */
 struct mutex {
 	void *lck;
 };
@@ -762,7 +754,6 @@ void up_write(struct rw_semaphore *s);
 	do {             \
 	} while (0)
 
-/* ---------------------------------------------------------------- lists */
 struct list_head {
 	struct list_head *next, *prev;
 };
@@ -925,7 +916,7 @@ static inline void list_rotate_left(struct list_head *h)
 void list_sort(void *priv, struct list_head *head,
 	       int (*cmp)(void *priv, const struct list_head *a, const struct list_head *b));
 
-/* ---------------------------------------------------------------- rbtree (shim/linux.c, own implementation) */
+/* rbtree: shim/linux.c's own implementation */
 struct rb_node {
 	unsigned long __rb_parent_color;
 	struct rb_node *rb_right;
@@ -962,7 +953,6 @@ struct rb_node *rb_last(const struct rb_root *);
 struct rb_node *rb_next(const struct rb_node *);
 struct rb_node *rb_prev(const struct rb_node *);
 
-/* ---------------------------------------------------------------- bitmaps */
 #define BITS_TO_LONGS(n) DIV_ROUND_UP(n, BITS_PER_LONG)
 #define DECLARE_BITMAP(n, bits) unsigned long n[BITS_TO_LONGS(bits)]
 #define BIT_WORD(n) ((n) / BITS_PER_LONG)
@@ -1029,7 +1019,6 @@ static inline void bitmap_copy(unsigned long *d, const unsigned long *s, unsigne
 	memcpy(d, s, BITS_TO_LONGS(n) * sizeof(long));
 }
 
-/* ---------------------------------------------------------------- memory */
 #define GFP_KERNEL 0x01u
 #define GFP_ATOMIC 0x02u
 #define GFP_NOWAIT 0x04u
@@ -1128,7 +1117,6 @@ static inline pgprot_t pgprot_noncached(pgprot_t p)
 void *vmap(struct page **pages, unsigned int count, unsigned long flags, pgprot_t prot);
 void vunmap(const void *addr);
 
-/* ---------------------------------------------------------------- device model */
 struct dev_pm_domain;
 struct device {
 	const char *init_name;
@@ -1175,7 +1163,6 @@ static inline struct platform_device *to_platform_device(struct device *d)
 #define dev_is_pci(d) false
 #define dev_is_platform(d) true
 
-/* ---------------------------------------------------------------- MMIO */
 void __iomem *ioremap(phys_addr_t pa, size_t size);
 void __iomem *ioremap_wc(phys_addr_t pa, size_t size);
 void iounmap(volatile void __iomem *va);
@@ -1252,7 +1239,7 @@ static inline void memset_io(volatile void __iomem *d, int c, size_t n)
 	memset((void *)d, c, n);
 }
 
-/* ---------------------------------------------------------------- DMA (pool backed, no IOMMU) */
+/* DMA: pool backed, no IOMMU */
 enum dma_data_direction {
 	DMA_BIDIRECTIONAL = 0,
 	DMA_TO_DEVICE = 1,
@@ -1297,7 +1284,6 @@ static inline int dma_set_mask_and_coherent(struct device *d, u64 m)
 void dma_sync_single_for_device(struct device *, dma_addr_t, size_t, enum dma_data_direction);
 void dma_sync_single_for_cpu(struct device *, dma_addr_t, size_t, enum dma_data_direction);
 
-/* ---------------------------------------------------------------- time */
 unsigned long nvxnu_jiffies(void);
 #define jiffies nvxnu_jiffies()
 static inline ktime_t ktime_get(void)
@@ -1417,8 +1403,7 @@ static inline void schedule(void)
 }
 long schedule_timeout(long timeout);
 
-/* ---------------------------------------------------------------- wait queues / completion / work
- * Every wait sleeps in nvxnu_idle() until the GPU interrupt work loop (or wake_up()/complete() from a work item)
+/* Every wait sleeps in nvxnu_idle() until the GPU interrupt work loop (or wake_up()/complete() from a work item)
  * wakes it or its timeout passes; Linux semantics otherwise (the condition is tested once more at the end). */
 typedef struct wait_queue_head {
 	atomic_t seq;
@@ -1534,7 +1519,7 @@ static inline bool flush_work(struct work_struct *w)
 #define cancel_work_sync flush_work
 #define system_wq ((struct workqueue_struct *)0)
 
-/* ---------------------------------------------------------------- interrupts (handler run by nvxnu_poll_irqs) */
+/* interrupts: the handler runs from nvxnu_poll_irqs */
 typedef enum irqreturn { IRQ_NONE = 0, IRQ_HANDLED = 1, IRQ_WAKE_THREAD = 2 } irqreturn_t;
 typedef irqreturn_t (*irq_handler_t)(int, void *);
 #define IRQF_SHARED 0x80
@@ -1557,7 +1542,6 @@ const void *free_irq(unsigned int irq, void *dev);
 #define in_atomic() 0
 #define irqs_disabled() 0
 
-/* ---------------------------------------------------------------- firmware */
 struct firmware {
 	size_t size;
 	const u8 *data;
@@ -1568,7 +1552,6 @@ int request_firmware(const struct firmware **fw, const char *name, struct device
 #define firmware_request_nowarn request_firmware
 void release_firmware(const struct firmware *fw);
 
-/* ---------------------------------------------------------------- clk / regulator / reset / tegra */
 struct clk;
 struct clk *devm_clk_get(struct device *, const char *id);
 #define devm_clk_get_optional devm_clk_get
@@ -1612,7 +1595,6 @@ extern struct tegra_sku_info tegra_sku_info;
 int tegra_fuse_readl(unsigned long offset, u32 *value);
 #define TEGRA_REVISION_A01 1
 
-/* ---------------------------------------------------------------- unaligned / endian */
 static inline u16 get_unaligned_le16(const void *p)
 {
 	u16 v;
@@ -1657,7 +1639,7 @@ static inline void put_unaligned_le32(u32 v, void *p)
 #define cpu_to_be32(x) __builtin_bswap32(x)
 #define swab32(x) __builtin_bswap32(x)
 
-/* ---------------------------------------------------------------- scatterlists (only carried, never walked on XNU) */
+/* scatterlists: only carried, never walked on XNU */
 struct scatterlist {
 	unsigned long page_link;
 	unsigned int offset, length;
@@ -1780,7 +1762,6 @@ static inline int i2c_transfer(struct i2c_adapter *a, struct i2c_msg *m, int n)
 /* power supply: the Switch is battery powered; nvkm only asks for AC presence */
 #define power_supply_is_system_supplied() 1
 
-/* ---------------------------------------------------------------- misc kernel bits referenced by nvkm */
 struct module;
 #define THIS_MODULE ((struct module *)0)
 struct notifier_block {

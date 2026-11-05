@@ -1,3 +1,3 @@
 /* SPDX-License-Identifier: MIT */
-/* IOSwitch: force-included into every vendored nvkm unit (tools/cc.py, build step). */
+/* IOSwitch: force-included into every vendored nvkm unit (kernel/rules/driver_flags.bzl). */
 #include <nvif/os.h>

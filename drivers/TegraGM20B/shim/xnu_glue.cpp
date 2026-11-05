@@ -64,8 +64,8 @@ extern "C" void nvxnu_log(const char *fmt, ...)
 }
 
 // Bring-up step trace (M1/M2/CLK steps): only with boot-arg tegra-gpu-trace=1, which also gives the console time to draw
-// each line before the next step (10-30: three freezes with no trace line drawn). Without it nothing is printed: the
-// stage results (M1..M4 ok) are TegraGM20B.cpp's own lines, and every GPU failure panics with one line.
+// each line before the next step. Without it nothing is printed: the stage results (M1..M4 ok) are TegraGM20B.cpp's own
+// lines, and every GPU failure panics with one line.
 extern "C" void nvxnu_step(const char *fmt, ...)
 {
 	if (!nvxnu_trace_paced())
@@ -149,7 +149,7 @@ extern "C" const char *nvxnu_gpu_errors(void)
 	return gIrqErrors;
 }
 
-// ------------------------------------------------------------------ heap: 16-byte size header
+// A 16-byte size header in front of every block: nvxnu_free needs no size.
 extern "C" void *nvxnu_malloc(unsigned long size, int zero)
 {
 	if (size > (1UL << 30))
@@ -175,7 +175,6 @@ extern "C" unsigned long nvxnu_malloc_size(void *ptr)
 	return ptr ? (static_cast<unsigned long *>(ptr) - 2)[0] : 0;
 }
 
-// ------------------------------------------------------------------ locks
 extern "C" void *nvxnu_mutex_alloc(void)
 {
 	return lck_mtx_alloc_init(nvxnu_grp(), LCK_ATTR_NULL);
@@ -243,7 +242,6 @@ extern "C" void nvxnu_rw_unlock_exclusive(void *rw)
 	lck_rw_unlock_exclusive(static_cast<lck_rw_t *>(rw));
 }
 
-// ------------------------------------------------------------------ time and deferred work
 extern "C" nvxnu_u64 nvxnu_nanotime(void)
 {
 	uint64_t ns;
@@ -263,7 +261,6 @@ extern "C" void nvxnu_yield(void)
 	delay(1);
 }
 
-// ------------------------------------------------------------------ GPU interrupts and waiting
 // No polled mode: both GPU lines are claimed at the end of M1 (panic if they cannot be), every wait sleeps until a
 // wake, and a GPU interrupt that stays pending without reaching us panics with the PMC and GIC state.
 extern "C" int
@@ -445,7 +442,6 @@ extern "C" void nvxnu_work_cancel(void *w)
 		thread_call_cancel(static_cast<thread_call_t>(w));
 }
 
-// ------------------------------------------------------------------ MMIO
 extern "C" volatile void *nvxnu_ioremap(nvxnu_u64 pa, nvxnu_u64 size, int write_combined)
 {
 	vm_offset_t va = write_combined ? ml_io_map_wcomb(pa, size) : ml_io_map(pa, size);
@@ -457,7 +453,6 @@ extern "C" void nvxnu_iounmap(volatile void *va, nvxnu_u64 size)
 	(void)size;
 }
 
-// ------------------------------------------------------------------ cache maintenance by VA
 static void dcache_op(const void *va, nvxnu_u64 size, bool invalidate)
 {
 	uint64_t ctr;
@@ -490,7 +485,7 @@ extern "C" void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size)
 }
 
 // A DSB waits for every maintenance op issued before it, so one before the list (prior stores ordered first) and one after
-// it (all lines at the point of coherency) cover all pages; a pair per page made a 3.6 MB import ~1800 barriers.
+// it (all lines at the point of coherency) cover all pages; a pair per page is ~1800 barriers for a 3.6 MB import.
 extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 count)
 {
 	uint64_t ctr;
@@ -508,8 +503,8 @@ extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 c
 }
 
 // The system's page faults so far (every vm_fault) and those that zero-filled a page: XNU's own counters, as vm_stat reads
-// them (tegra-gpu-stats' "mem" line takes the window's deltas). user_* stay 0: the user-fault timing is the XNU diff
-// r6-surfacecost/diffs/xnu-user-fault-timing.diff with its pair, which fills them.
+// them (tegra-gpu-stats' "mem" line takes the window's deltas). user_* stay 0: they need user-fault timing, which this
+// kernel's XNU does not carry.
 extern "C" void nvxnu_vm_faults(struct nvxnu_faults *f)
 {
 	f->faults = counter_load(&vm_statistics_faults);
@@ -517,10 +512,10 @@ extern "C" void nvxnu_vm_faults(struct nvxnu_faults *f)
 	f->user_n = f->user_ns = f->user_max_ns = 0;
 }
 
-// ------------------------------------------------------------------ GPU memory pool
-// Preferred: a physical range the kernel keeps out of the VM at boot (boot-args tegra-gpu-pool-pa=<pa>
-// tegra-gpu-pool-mb=<MiB>; arm_vm_init.c pmap_ioswitch_ram_init), which its physical aperture maps write-combined and
-// nothing maps cacheable: phystokv() is the pool's only mapping (a 128 MiB ml_io_map_wcomb runs out of kernel VA).
+// The GPU memory pool, preferably a physical range the kernel keeps out of the VM at boot (boot-args
+// tegra-gpu-pool-pa=<pa> tegra-gpu-pool-mb=<MiB>; arm_vm_init.c pmap_ioswitch_ram_init), which its physical aperture
+// maps write-combined and nothing maps cacheable: phystokv() is the pool's only mapping (a 128 MiB ml_io_map_wcomb runs
+// out of kernel VA).
 // Fallback: a contiguous IOBufferMemoryDescriptor below 4 GiB whose pages are switched to write-combined
 // for every mapping (the NativeAdreno writeCombinePool() recipe, after cleaning the cacheable alias).
 static struct {
@@ -541,8 +536,8 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 	const uint64_t bytes = static_cast<uint64_t>(mib) << 20;
 	if (nvxnu_bootarg_int("tegra-gpu-pool-pa", &pa) && pa > 0 && !(pa & 0xfff) &&
 	    static_cast<uint64_t>(pa) + bytes <= (1ULL << 32)) {
-		// Bring-up trace (10-30: the first boot past the pool froze with nothing on screen): one console line before
-		// each step that touches memory or hardware for the first time, so the last line names the step that hung.
+		// Bring-up trace: one console line before each step that touches memory or hardware for the first time, so
+		// the last line names the step that hung.
 		pool.va = reinterpret_cast<void *>(phystokv(static_cast<uint64_t>(pa)));
 		nvxnu_step(
 			"tegra-gm20b: M1 step: reserved pool %#llx + %llu MiB at physmap va %p\n",
@@ -551,7 +546,7 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 			return -12;
 		pool.pa = static_cast<uint64_t>(pa);
 		pool.size = bytes;
-		// No CPU clear (it was 0.3 s of the boot, 256 MiB through the write-combined aperture): every page starts
+		// No CPU clear (0.3 s of boot for 256 MiB through the write-combined aperture): every page starts
 		// dirty, an allocation before the GPU runs zeroes the pages it takes, and the copy engine zeroes the rest
 		// once the GPU is up (gpu.c "pool scrub").
 		return 0;
@@ -666,7 +661,7 @@ extern "C" void nvxnu_vunmap(void *va)
 	IOLockUnlock(vmaps_lock);
 }
 
-// ------------------------------------------------------------------ embedded firmware (firmware.S)
+// The firmware table is firmware.S's.
 struct nvxnu_fw_entry {
 	const char *name;
 	const unsigned char *start, *end;
@@ -685,7 +680,6 @@ extern "C" int nvxnu_firmware_find(const char *name, const void **data, unsigned
 	return -2;
 }
 
-// ------------------------------------------------------------------ boot-args
 extern "C" int nvxnu_bootarg_int(const char *name, long long *value)
 {
 	long long v = 0;

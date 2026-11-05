@@ -15,7 +15,6 @@ const char *dev_name(const struct device *dev)
 	return dev && dev->init_name ? dev->init_name : "gpu";
 }
 
-/* ------------------------------------------------------------------ locks */
 static void *lazy(void **slot, void *(*alloc)(void), void (*release)(void *))
 {
 	void *have = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
@@ -139,7 +138,6 @@ void up_write(struct rw_semaphore *s)
 	nvxnu_rw_unlock_exclusive(s->lck);
 }
 
-/* ------------------------------------------------------------------ time / work */
 unsigned long nvxnu_jiffies(void)
 {
 	return (unsigned long)(nvxnu_nanotime() / (NSEC_PER_SEC / HZ));
@@ -158,8 +156,7 @@ void nvxnu_work_trampoline(void *work)
 	w->func(w);
 }
 
-/* ------------------------------------------------------------------ interrupts
- * request_irq() only records the handler; nvxnu_poll_irqs() runs it in thread context, from the GPU interrupt work
+/* request_irq() only records the handler; nvxnu_poll_irqs() runs it in thread context, from the GPU interrupt work
  * loop (shim/xnu_glue.cpp) and nowhere else. Never from primary interrupt context: nvkm's handlers take
  * lck_spin/lck_mtx based locks that are not IRQ-safe here. */
 static struct {
@@ -202,7 +199,6 @@ int nvxnu_poll_irqs(void)
 	return ret;
 }
 
-/* ------------------------------------------------------------------ strings */
 char *kstrdup(const char *s, gfp_t gfp)
 {
 	return s ? kmemdup(s, strlen(s) + 1, gfp) : NULL;
@@ -406,7 +402,6 @@ void list_sort(void *priv, struct list_head *head,
 	list_splice(&sorted, head);
 }
 
-/* ------------------------------------------------------------------ bitmaps */
 unsigned long find_next_bit(const unsigned long *a, unsigned long size, unsigned long off)
 {
 	for (; off < size; off++)
@@ -443,7 +438,6 @@ unsigned int bitmap_weight(const unsigned long *map, unsigned int bits)
 	return w;
 }
 
-/* ------------------------------------------------------------------ red-black tree */
 #define RB_RED 0
 #define RB_BLACK 1
 #define rb_color(n) ((n)->__rb_parent_color & 1)
@@ -694,9 +688,8 @@ struct rb_node *rb_prev(const struct rb_node *n)
 	return p;
 }
 
-/* ------------------------------------------------------------------ GPU pool pages, DMA, vmap
- * One physically contiguous pool (nvxnu_pool_*); struct page is an entry of a descriptor array so
- * page_to_phys()/page_address() are O(1). Allocation is first-fit over a bitmap, under a spinlock. */
+/* GPU pool pages, DMA, vmap: one physically contiguous pool (nvxnu_pool_*); struct page is an entry of a descriptor
+ * array so page_to_phys()/page_address() are O(1). Allocation is first-fit over a bitmap, under a spinlock. */
 static struct page *pool_pages;
 static unsigned long *pool_map;
 /* Free pages not known to hold zeros: set by a free that did not zero (nvkm's, a BO's freed straight back), clear for a
@@ -785,7 +778,7 @@ struct page *alloc_pages(gfp_t gfp, unsigned int order)
 	long i = pool_map ? pool_alloc(1UL << order, 1UL << order) : -ENOMEM;
 	if (i < 0)
 		return NULL;
-	/* zeroed whatever the flags: before the scrubber, the pool's initial clear gave every caller zeros */
+	/* zeroed whatever the flags: nvkm's callers may rely on pool pages being zero */
 	pool_zero_dirty(i, 1UL << order, 0);
 	return &pool_pages[i];
 }
@@ -849,7 +842,7 @@ void dma_free_attrs(struct device *dev, size_t size, void *va, dma_addr_t handle
 }
 
 /* The GPU driver's BOs in the pool (tgm_pool_alloc): first fit, then only the pages a free left dirty are zeroed, so a
- * range nvxnu_pool_free_zeroed gave back costs nothing to hand out again. Zeroed memory either way, as before. */
+ * range nvxnu_pool_free_zeroed gave back costs nothing to hand out again. Zeroed memory either way. */
 void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long long *pa)
 {
 	unsigned long n = PAGE_ALIGN(size) >> PAGE_SHIFT;
@@ -1017,7 +1010,6 @@ void dma_unmap_sgtable(struct device *d, struct sg_table *t, enum dma_data_direc
 	(void)attrs;
 }
 
-/* ------------------------------------------------------------------ MMIO and platform device */
 void __iomem *ioremap(phys_addr_t pa, size_t size)
 {
 	return (void __iomem *)nvxnu_ioremap(pa, size, 0);
@@ -1053,7 +1045,6 @@ void __iomem *devm_platform_ioremap_resource(struct platform_device *pdev, unsig
 	return va ? va : ERR_PTR(-ENOMEM);
 }
 
-/* ------------------------------------------------------------------ firmware (embedded) */
 int request_firmware(const struct firmware **pfw, const char *name, struct device *dev)
 {
 	struct firmware *fw;
