@@ -109,13 +109,23 @@ struct Texture {
     // fills from level 0 (BlitEncoder::generate). The chain's own level 0 is a copy: `l0Fresh` says it holds what the texture's
     // level 0 holds now, `levelsFresh` that its later levels were generated since the last generateMipmaps (encode order, under
     // the submit lock: the GPU's order).
+    // `rawLevels`: levels written directly (a pass into the level, chainLevelTarget, or a copy from a mirror) since the last
+    // generate, so not what generating from level 0 gives: m2v gets them by copies (RawMetal.mm mirrorsForM2v).
+    // `mirrorLevels`: levels m2v rendered since, held by the RMTexture's mirror of each and copied into the chain before
+    // the raw path next reads it (BlitEncoder::copyToLevel).
     struct Chain {
         fx::MipChain layout;
         uint64_t va = 0;
         Span span;
         uint32_t fmt2d = 0;
         bool l0Fresh = false, levelsFresh = false;
+        uint16_t rawLevels = 0, mirrorLevels = 0;
     } *chain = nullptr;
+    // A chain level as a render target (chainLevelTarget: no memory or header of its own, tic 0): block-linear at the level's
+    // address, pitch its row stride, `blockHeight` its block height (log2 GOBs), `layerBytes` the chain's size
+    bool blockLinear = false;
+    uint8_t blockHeight = 0;
+    uint64_t layerBytes = 0;
 };
 struct Buffer {
     uint64_t va = 0, length = 0;
@@ -133,6 +143,9 @@ struct SamplerDesc {                                      // the MTLSamplerDescr
     uint8_t maxAnisotropy = 1;
     float lodMin = 0, lodMax = 3.402823466e+38f;
 };
+// Level `level` (1 .. levels - 1) of mipmapped texture `t`'s chain as a render target (raw_target.h: NVK's block-linear
+// target of that level), for a pass to render into: `out` names the chain's memory, it owns nothing. False: not a level of it.
+bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out);
 // The sampler header NVK writes for the Vulkan sampler m2v makes of `d` (Mesa nvk_sampler_get_header; checked against the twin for
 // Core Animation's combinations: pack/mksamplers.py, test/samplercheck.cpp)
 void samplerHeader(const SamplerDesc &d, uint32_t w[8]);
@@ -260,6 +273,8 @@ public:
     // level below the first); 1:1 on the 2D engine
     void copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx,
                        uint32_t dy, uint32_t w, uint32_t h);
+    // The whole of chain level `level` of `t` from the pitch texture `src` of its size (its mirror); 1:1 on the 2D engine
+    void copyToLevel(Texture &t, uint32_t level, const Texture &src);
     void end();
 
 private:
@@ -407,6 +422,8 @@ public:
         std::atomic<uint64_t> wcBytes{0}, wcFallbacks{0};
         // the copy engine's work encoded: launches and the bytes they write (copies, remaps, the pass prologue's shadow copies)
         std::atomic<uint64_t> ceOps{0}, ceBytes{0};
+        // passes into a chain level, and levels copied between a chain and its mirrors (out: for m2v; in: what m2v rendered)
+        std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
     } stats;
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
     // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first

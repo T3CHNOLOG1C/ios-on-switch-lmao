@@ -5,6 +5,7 @@
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
 #include "raw_gpu.h"
+#include "raw_target.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
@@ -1459,6 +1460,11 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
+    // the render hardware takes one memory layout for all of a pass's color targets
+    bool blockLinear = false, pitch = false;
+    for (uint32_t j = 0; j < pass.count && j < 8; j++)
+        if (const Texture *t = pass.color[j].texture) (t->blockLinear ? blockLinear : pitch) = true;
+    if (blockLinear && pitch) return nullptr;
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
         const Texture *t = pass.color[j].texture;
         if (!t) continue;
@@ -1839,6 +1845,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             tic = t ? t->tic : 0;
         } else if (e.kind == EntryFetch) {
             const Texture *t = pass_.color[e.slot].texture;
+            if (t && !t->tic) {  // a chain level target has no texture header of its own to fetch through
+                *why = "framebuffer fetch from a target the raw path cannot sample (a mip level)";
+                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                return false;
+            }
             tic = t ? t->tic : 0;
         }
         const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
@@ -1984,6 +1995,41 @@ void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t d
 }
 }  // namespace
 
+static void targetWords(Push &p, uint32_t m, const Texture &t)
+{
+    ColorTargetDesc d;
+    d.va = t.va;
+    d.pitch = t.pitch;
+    d.height = t.height;
+    d.bpp = t.bpp;
+    d.rtFormat = formatInfo(t.format)->rt;
+    d.blockLinear = t.blockLinear;
+    d.blockHeight = t.blockHeight;
+    d.layerBytes = t.layerBytes;
+    uint32_t w[kColorTargetWords];
+    colorTargetWords(d, w);
+    p.incArray(m, w, kColorTargetWords);
+}
+
+bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
+{
+    const FormatInfo *f = formatInfo(t.format);
+    ColorTargetDesc d;
+    if (!t.chain || !f || !f->rt || !chainLevelDesc(t.chain->layout, t.chain->va, level, f->rt, d)) return false;
+    out = Texture();
+    out.va = d.va;
+    out.width = t.chain->layout.level[level].width;
+    out.height = d.height;
+    out.format = t.format;
+    out.pitch = d.pitch;
+    out.bpp = t.bpp;
+    out.renderable = true;
+    out.blockLinear = true;
+    out.blockHeight = d.blockHeight;
+    out.layerBytes = d.layerBytes;
+    return true;
+}
+
 void RenderEncoder::end()
 {
     Device &d = *dev_;
@@ -2018,8 +2064,7 @@ void RenderEncoder::end()
     for (const Clear &c : cl) {
         if (!c.own) continue;
         const Texture *t = pass_.color[c.target].texture;
-        p.inc(COLOR_TARGET, {uint32_t(t->va >> 32), uint32_t(t->va), t->pitch, t->height, formatInfo(t->format)->rt,
-                             0x1000u, 1, 0u, 0});
+        targetWords(p, COLOR_TARGET, *t);
         p.m(COLOR_COMPRESSION, 0);
         uint32_t map = 0;
         for (uint32_t k = 0; k < 8; k++) map |= k << (4 + 3 * k);
@@ -2045,10 +2090,7 @@ void RenderEncoder::end()
     for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
         const Texture *t = pass_.color[j].texture;
         if (!t) continue;
-        const uint32_t m = COLOR_TARGET + 0x40 * j;
-        // pitch: WIDTH is the row's bytes, MEMORY 0x1000 (LAYOUT_PITCH), ARRAY_PITCH 0
-        p.inc(m, {uint32_t(t->va >> 32), uint32_t(t->va), t->pitch, t->height, formatInfo(t->format)->rt, 0x1000u, 1,
-                  0u, 0});
+        targetWords(p, COLOR_TARGET + 0x40 * j, *t);
         p.m(COLOR_COMPRESSION + 4 * j, 0);
         count++;
     }
@@ -2267,6 +2309,7 @@ void BlitEncoder::generate(Texture &t, bool all)
     c->l0Fresh = true;
     if (all) {
         c->levelsFresh = true;
+        c->rawLevels = c->mirrorLevels = 0;
         dev_->stats.chainGenerates++;
     } else {
         dev_->stats.chainRefreshes++;
@@ -2282,6 +2325,16 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
     const fx::Pitch d{dst.va, dst.pitch, dst.width, dst.height};
     fx::emitCopyFromLevel(p_, c->layout, c->va, level, d, c->fmt2d, sx, sy, dx, dy, w, h);
     dev_->stats.chainCopies++;
+}
+
+void BlitEncoder::copyToLevel(Texture &t, uint32_t level, const Texture &src)
+{
+    Texture::Chain *c = t.chain;
+    if (!c || !level || level >= c->layout.levels) return;
+    const fx::MipLevel &l = c->layout.level[level];
+    room(uint32_t(fx::copyWords()));
+    const fx::Pitch s{src.va, src.pitch, src.width, src.height};
+    fx::emitCopyToLevel(p_, c->layout, c->va, level, s, c->fmt2d, 0, 0, 0, 0, l.width, l.height);
 }
 
 void BlitEncoder::end()
