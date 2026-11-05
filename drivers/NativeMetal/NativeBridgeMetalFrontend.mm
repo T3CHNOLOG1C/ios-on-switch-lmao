@@ -32,7 +32,7 @@
 #include <mach/mach_time.h>
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
-#include "AsyncPipelines.h"  // r7-async: render pipeline states made off the asking thread
+#include "AsyncPipelines.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
 
@@ -68,7 +68,7 @@ struct Timed {
 static Timed gTimePipeline, gTimeLibrary, gTimeFunction, gTimeEncodeToCommit;
 static Timed gTimeWaitScheduled, gTimeWaitCompleted;
 static Timed gTimeResourceWait;
-// r6-lows: per-command-buffer time distributions for the rates line (the kernel's display stats line has the presents): fixed bins
+// Per-command-buffer time distributions for the rates line (the kernel's display stats line has the presents): fixed bins
 // (1 ms to 64 ms, 4 ms to 128, 8 ms to 256, 64 ms to 1024, one beyond) of relaxed atomics, added from any thread, read and cleared
 // by native_bridge_metal_rates. A quantile is its bin's upper edge, capped at the window's maximum.
 struct NBHist {
@@ -233,10 +233,9 @@ static NSString *lastError()
 // The render pipeline journal: one line per render pipeline creation (when, on which thread, how long, the outcome, both functions with
 // every constant value, the attachments, blending and vertex descriptor) appended to pipelines.log in the runtime's cache directory, which
 // the board log exports with the caches (CacheExport.h): every pipeline a boot made, or was refused, can be made again on the host.
-// r10-rawapps: the file is opened once (fopen's "a": append, created 0666 less the umask) and each line is one write(2) of the line
-// and its newline, so a line lands whole even if the process dies right after; each line used to open, write and close the file,
-// on the thread making the state (a sandbox evaluation and an APFS lookup per line, three lines per render pipeline). A journal the
-// sandbox refuses is not asked again. The device open renames a journal past 2 MiB before the first line (native_bridge_metal_open).
+// The file is opened once (fopen's "a": append, created 0666 less the umask) and each line is one write(2) of the line and its
+// newline, so a line lands whole even if the process dies right after; an open per line would cost the thread making the state a
+// sandbox evaluation and an APFS lookup each. A journal the sandbox refuses is not asked again. The device open renames a journal past 2 MiB before the first line (native_bridge_metal_open).
 static std::mutex gJournalLock;
 static std::string gJournalPath;
 static uint64_t gJournalBegan;
@@ -273,13 +272,10 @@ static void journal(const std::string &line)
 }
 @end
 
-// ---- Metal selectors this file lacks, answered zero (native_bridge_metal_answer_unimplemented) ----
-// Moved here from TegraGM20BMetalPlugin.mm (r14-maps), where every forwarded call looked its selector up in every protocol the
-// process has: objc_copyProtocolList walks the shared cache's protocols (tens of thousands) and the runtime's, and mallocs the list
-// it returns (fresh zero-filled pages each time). Maps sends -[MTLRenderCommandEncoder setDepthClipMode:], which this file did
-// not implement, many times a frame: r7q's kernel profiler put 70-80% of Maps' CPU in objc_copyProtocolList and its hash tables
-// (libobjc and dyld), 0.7-2.7 s and 5,000-25,000 page faults per command buffer, about one frame a second. Now the protocols are
-// walked once per selector, its signature kept; a forwarded call costs the runtime's forwarding (an NSInvocation) and no more.
+// Metal selectors this file lacks, answered zero (native_bridge_metal_answer_unimplemented). The protocols are walked once per
+// selector and its signature kept, never per call: objc_copyProtocolList walks the shared cache's protocols (tens of thousands)
+// and the runtime's and mallocs the list it returns, and an app can send an unimplemented selector many times a frame (per call,
+// 70-80% of Maps' CPU and about one frame a second). A forwarded call costs the runtime's forwarding (an NSInvocation) and no more.
 static void (*gAnsweredZero)(const char *, const char *);
 static std::mutex gForwardLock;
 static std::unordered_map<SEL, NSMethodSignature *> *gForwardSignatures;  // under gForwardLock; never shrinks
@@ -316,7 +312,7 @@ static NSMethodSignature *forwardSignature(id self, SEL _cmd, SEL selector)
             if (found != gForwardSignatures->end()) return found->second;
         }
     }
-    // First sight of the selector (or one no Metal protocol declares, which raises as before: not kept).
+    // First sight of the selector (or one no Metal protocol declares, which raises as usual: not kept).
     const char *types = metalProtocolTypes(selector);
     NSMethodSignature *signature = types ? [NSMethodSignature signatureWithObjCTypes:types] : nil;
     if (!signature) return nil;
@@ -353,7 +349,7 @@ static void forwardZero(id self, SEL, NSInvocation *invocation)
 }
 // A selector some MTL* protocol declares that `cls` (or a subclass) lacks is answered zero/nil/NO, as an absent optional feature
 // would be, `answered` told the class and selector once; respondsToSelector: still says NO, so optional paths take their
-// unsupported branch. A selector no Metal protocol declares raises as before (doesNotRecognizeSelector:). The plugin's: an exception
+// unsupported branch. A selector no Metal protocol declares raises as usual (doesNotRecognizeSelector:). The plugin's: an exception
 // in the render server restarts it into the same exception, no UI at all.
 extern "C" void native_bridge_metal_answer_unimplemented(Class cls, void (*answered)(const char *, const char *))
 {
@@ -370,7 +366,7 @@ static NSMutableSet *gInFlight;
 // How long waitUntilScheduled waits before it asks whether a shared event holds the command buffer (heldBehindEvent).
 static constexpr unsigned kHeldGraceMs = 500;
 static std::atomic<uint64_t> gHeldReturns;
-// The bound on every wait the frontend makes (r9-hang: no userland wait without an end): 20 s, past the kernel's GPU-wait panics
+// The bound on every wait the frontend makes (no userland wait without an end): 20 s, past the kernel's GPU-wait panics
 // (10 s) and Core Animation's own 5 s shared-event timeout. A host test may shorten it (NMB_WAIT_LIMIT_MS, macOS only).
 static uint64_t waitLimitMs()
 {
@@ -400,8 +396,8 @@ static void waitForResource(id resource);
 // Resource SPI the runtime has no state for: no protected content (Metal's default options), and no owner transfer
 // (memory attribution is the kernel driver's, by the importing task), refused as not supported. makeAliasable and
 // isAliasable are the runtime's (kind: buffer or texture): an automatic heap's resource gives its range to the next one
-// the heap places. Espresso and MPS size their heaps for that; dropped, Vision's networks ran out of heap mid-plan (11-01:
-// Spotlight 1438, Photos 108 `heap texture: OutOfMemory(Heap)`, each run ending in an Espresso exception).
+// the heap places. Espresso and MPS size their heaps for that; without it Vision's networks run out of heap mid-plan (`heap
+// texture: OutOfMemory(Heap)`, then an Espresso exception).
 #define NB_RESOURCE_SPI(kind)                                                                                      \
     -(uint64_t)protectionOptions                                                                                   \
     {                                                                                                              \
@@ -443,22 +439,22 @@ static void waitForResource(id resource);
 @end
 // Two-plane render targets. RenderBox renders widget and poster snapshots into '_RB4' surfaces as RGB8_444_2P (542) on an Apple3
 // device or later (RB::ColorMode::pixel_format), with blends and loads; the runtime renders no pass into a two-plane code format
-// (r7m/r7n: every WidgetRenderer_Default pass refused). Metal holds such an attachment as half texels and stores each channel's
+// (it refuses every WidgetRenderer_Default pass). Metal holds such an attachment as half texels and stores each channel's
 // code round(h * 255), green into the luma plane and blue and red as the chroma plane's pairs (an M4 under macOS 27.0.1: clears,
 // source-over blends and loads into '_RB4' beside RGBA8Unorm, which rounds its float tile and lands up to 1 off). So a pass renders
 // such an attachment into the texture's RGBA16Float stand-in (made at its first pass and kept with it), the pipelines target
 // RGBA16Float in its place (renderDescriptor), a pass that loads it first moves the planes' codes into the stand-in, and the
 // encoder's end stores the stand-in into the planes through R8Unorm and RG8Unorm textures over them (TwoPlaneStandIn.metal): one
 // full-target draw each, ordered on the GPU like any pass, no CPU wait. Samples, blits and CPU copies of the texture read and
-// write its planes as before.
+// write its planes directly.
 static bool rendersThroughStandIn(NSUInteger format)
 {
     return format == 542;  // MTLPixelFormatRGB8_444_2P
 }
 @class NBTwoPlaneStandIn;
 // RG8Unorm_sRGB held as RGBA8Unorm_sRGB (heldAsRGBA8): a texture the device samples with its sRGB decode before the filter, as
-// Metal's does, where the device has no sampled R8G8_SRGB (GM20B: KaleidoscopePoster's wallpaper drew black, every draw refused
-// "Format VK_FORMAT_R8G8_SRGB SampledImage"). Its texels are the RG pairs widened to (r, g, 0, 255), which Metal's own RG8 texture
+// Metal's does, where the device has no sampled R8G8_SRGB (GM20B refuses every such draw with "Format VK_FORMAT_R8G8_SRGB
+// SampledImage", and KaleidoscopePoster's wallpaper draws black). Its texels are the RG pairs widened to (r, g, 0, 255), which Metal's own RG8 texture
 // reads as; its CPU copies and buffer blits narrow and widen them (rgWide).
 static bool gHoldRG8SrgbAsRGBA8;
 @interface NBTexture : NBObject
@@ -572,8 +568,8 @@ NB_RESOURCE_SPI(buffer)
 // caller-owned no-copy buffers do not enter this cache.
 static NSMapTable<NSValue *, NBBuffer *> *gSurfaceImports;
 static std::mutex gSurfaceImportLock;
-// Associations kept before the dead ones are dropped. Above the live imports a busy screen holds (r5c: 307), so a live import's
-// association is never the one dropped: a lookup that missed it imported the same surface a second time.
+// Associations kept before the dead ones are dropped. Above the live imports a busy screen holds (307), so a live import's
+// association is never the one dropped: a lookup that missed it would import the same surface a second time.
 static constexpr NSUInteger kSurfaceImportKeys = 1024;
 static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
 {
@@ -943,13 +939,13 @@ static NBTexture *textureOnBuffer(NBBuffer *buffer, MTLTextureDescriptor *d, NSU
 // A texture over plane `plane` of a planar surface, made by the runtime over the surface's whole allocation with the surface's facts
 // (its OSType, plane 0's size, plane 1's place, its kIOSurfaceYCbCrMatrix): Metal's two-plane formats over plane 0 and plain
 // formats over either plane, as the runtime holds them (`new_texture_with_iosurface_plane`):
-//  - 'b3a8' as RGB10A8_2P_XR10 (550/551): WebKit's deep-color tiles (r8: refused, every web page drew black);
-//  - '_RB4' as RGB8_444_2P (542): the widget and poster snapshots Chrono and PosterBoard hand the render server (r7j: refused, no
-//    widget drew and Core Animation logged "Failed to allocate MTLTexture from IOSurface" for each, 3226 in one boot);
+//  - 'b3a8' as RGB10A8_2P_XR10 (550/551): WebKit's deep-color tiles (without them every web page draws black);
+//  - '_RB4' as RGB8_444_2P (542): the widget and poster snapshots Chrono and PosterBoard hand the render server (without them no
+//    widget draws and Core Animation logs "Failed to allocate MTLTexture from IOSurface" for each);
 //  - '420f'/'420v' (and the other CoreVideo YCbCr surfaces) as YCBCR8_420_2P (500), its sRGB twin (520) or RGB8_420_2P (540): decoded
 //    photos and video frames, converted at each encoder that samples them (ycbcr.rs; M2V_YCBCR_MEMO skips unchanged ones);
 //  - R8Unorm/RG8Unorm and kin over plane 0 or 1 (the decoders' and Core Image's per-plane views).
-// The runtime refuses what it does not hold exactly (logged once per reason; the texture is then nil, as before).
+// The runtime refuses what it does not hold exactly (logged once per reason; the texture is then nil).
 static NBTexture *planarSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef surface, NSUInteger plane)
 {
     const size_t planes = IOSurfaceGetPlaneCount(surface);
@@ -1454,10 +1450,10 @@ static NSData *functionBitcode(NBFunction *function)
 @end
 @interface NBRenderPipeline : NBObject
 @property (nonatomic) NmbRenderPipeline *handle;
-@property (nonatomic) std::shared_ptr<nbasync::Making> making;  // r7-async: being made on a worker (AsyncPipelines.h)
+@property (nonatomic) std::shared_ptr<nbasync::Making> making;  // being made on a worker (AsyncPipelines.h)
 @end
 @implementation NBRenderPipeline
-// r7-async: a state made on a worker draws with the handle of the state the synchronous path made there, once made.
+// A state made on a worker draws with the handle of the state the synchronous path made there, once made.
 - (NmbRenderPipeline *)handle
 {
     if (!_making) return _handle;
@@ -1476,7 +1472,7 @@ static NSData *functionBitcode(NBFunction *function)
     return s[0];
 }
 @end
-// r7-async (AsyncPipelines.h): a worker's own creation takes the synchronous path.
+// A worker's own creation takes the synchronous path (AsyncPipelines.h).
 static thread_local bool tAsyncWorker;
 // Whether a render pass skips the draws of a state still being made: the display's (its first color attachment an IOSurface).
 static bool asyncSkips(MTLRenderPassDescriptor *d)
@@ -1487,7 +1483,7 @@ static bool asyncSkips(MTLRenderPassDescriptor *d)
     return nbasync::onscreen(surface, t ? (uint64_t)t.width * t.height : 0);
 }
 // Whether newRenderPipelineStateWithDescriptor: makes `d` on a worker (the policy's, AsyncPipelines.h), unless archives must be
-// read (FailOnBinaryArchiveMiss refuses at the call) or a function is another device's (refused at the call, as before).
+// read (FailOnBinaryArchiveMiss refuses at the call) or a function is another device's (refused at the call).
 static bool asyncRenderPipelineWanted(MTLRenderPipelineDescriptor *d, MTLPipelineOption options)
 {
     if (tAsyncWorker || !nbasync::policy().on || !d || d.binaryArchives.count) return false;
@@ -2121,8 +2117,8 @@ static void waitForResource(id resource)
 @end
 
 @interface NBRenderEncoder : NBEncoder
-@property (nonatomic) bool skipsPending;  // r7-async: the display's pass: a state still being made skips its draws
-@property (nonatomic) bool skipDraws;     // r7-async: the state set last is being made (or failed): its draws are skipped
+@property (nonatomic) bool skipsPending;  // the display's pass: a state still being made skips its draws
+@property (nonatomic) bool skipDraws;     // the state set last is being made (or failed): its draws are skipped
 @property (nonatomic, strong) NSArray<NBTwoPlaneStandIn *> *storeBacks;  // stored into their planes at endEncoding
 @end
 @implementation NBRenderEncoder
@@ -2141,8 +2137,8 @@ static void waitForResource(id resource)
         [self.commandBuffer refuse:@"foreign render pipeline"];
         return;
     }
-    // r7-async (AsyncPipelines.h): a state still being made is set once made, after a bounded wait in the display's pass;
-    // until then nothing is set and this encoder's draws are skipped.
+    // A state still being made (AsyncPipelines.h) is set once made, after a bounded wait in the display's pass; until then
+    // nothing is set and this encoder's draws are skipped.
     _skipDraws = false;
     if (const std::shared_ptr<nbasync::Making> making = ((NBRenderPipeline *)state).making;
         making && !nbasync::ready(making, _skipsPending)) {
@@ -2257,8 +2253,7 @@ static void waitForResource(id resource)
     [self check:nmb_render_set_depth_bias(self.handle, bias, slope, clamp) what:"setDepthBias"];
 }
 // Metal's default is Clip until set. Clamp needs the device's depthClamp: refused there, the draws keep clipping (one line), the
-// closest picture the device draws, rather than a failed command buffer. Was unimplemented, answered zero through forwarding at a
-// protocol walk per call (r7q: Maps' lag).
+// closest picture the device draws, rather than a failed command buffer.
 - (void)setDepthClipMode:(MTLDepthClipMode)mode
 {
     NBApiTime timed;
@@ -2338,7 +2333,7 @@ static void waitForResource(id resource)
           baseInstance:(NSUInteger)b
 {
     NBApiTime timed;
-    if (_skipDraws) {  // r7-async: its state is still being made
+    if (_skipDraws) {  // its state is still being made
         nbasync::counters().skippedDraws++;
         return;
     }
@@ -2368,7 +2363,7 @@ static void waitForResource(id resource)
                  baseInstance:(NSUInteger)bi
 {
     NBApiTime timed;
-    if (_skipDraws) {  // r7-async: its state is still being made
+    if (_skipDraws) {  // its state is still being made
         nbasync::counters().skippedDraws++;
         return;
     }
@@ -2653,8 +2648,8 @@ static bool standInStates()
     return gStandInLoad && gStandInStore;
 }
 // The stand-in of `texture` where a pass renders it through one (rendersThroughStandIn; a surface texture's level 0), made at its
-// first pass and kept with the texture; nil for any other texture, or where the stand-in cannot be made (logged once, the pass
-// then refused by the runtime as before).
+// first pass and kept with the texture; nil for any other texture, or where the stand-in cannot be made (logged once; the
+// runtime then refuses the pass).
 static NBTwoPlaneStandIn *standInOf(id texture)
 {
     if (![texture isKindOfClass:[NBTexture class]]) return nil;
@@ -2826,9 +2821,8 @@ static void scheduled(void *context);
     return nmb_command_buffer_gpu_time(_handle, true);
 }
 // Metal never answers an encoder request with nil, and clients rely on it: RenderBox's DirectRenderCommandEncoder::reset caches
-// the encoder's IMPs through methodForSelector: and calls them, so a nil encoder was a jump to 0 (r7m: WidgetRenderer_Default
-// SIGSEGV at pc 0 from RB::RenderQueue::encode, its RGB8_444_2P pass refused). A refused request answers an encoder without a
-// handle (refusedEncoder:): each call on it refuses again (the command buffer logs its first reason only) and the command buffer
+// the encoder's IMPs through methodForSelector: and calls them, so a nil encoder is a jump to 0 (a SIGSEGV at pc 0 from
+// RB::RenderQueue::encode). A refused request answers an encoder without a handle (refusedEncoder:): each call on it refuses again (the command buffer logs its first reason only) and the command buffer
 // completes with an error, as a Metal command buffer that failed to encode does.
 - (id)refusedEncoder:(NBEncoder *)encoder
 {
@@ -2928,7 +2922,7 @@ static void scheduled(void *context);
         out.load = a.loadAction;
         out.store = a.storeAction;
         // The MSAA resolve target (WebGL's antialiased drawing buffer, ANGLE's depth resolve): m2v resolves into it where the
-        // store action resolves (without it a color resolve wrote nothing and a depth or stencil one refused the pass).
+        // store action resolves (without it a color resolve writes nothing and a depth or stencil one refuses the pass).
         if (id<MTLTexture> resolve = a.resolveTexture) {
             if (![(id)resolve isKindOfClass:[NBTexture class]]) return false;
             [_resourceOwners addObject:resolve];
@@ -2977,7 +2971,7 @@ static void scheduled(void *context);
     [self notePass:d];
     NBRenderEncoder *render = [NBRenderEncoder new];
     render.storeBacks = storeBacks;
-    render.skipsPending = asyncSkips(d);  // r7-async
+    render.skipsPending = asyncSkips(d);
     return [self encoder:render
                   handle:self.committed ? nullptr : nmb_render_encoder_new(_handle, &pass)
                     what:@"renderCommandEncoder"];
@@ -3048,9 +3042,7 @@ static void scheduled(void *context);
 }
 // Presentation, as Metal's own -[_MTLCommandBuffer presentDrawable:] (21H461 Metal.framework): a scheduled handler that presents
 // the drawable unless the command buffer failed, so a CAMetalLayer frame reaches Core Animation once its work is submitted, in
-// commit order. Answered zero before (forwardZero), the drawable was never presented and its layer stayed empty: ClockKitUI's
-// CLKUIMetalQuadView (KaleidoscopePoster) and HelloPoster end every frame with presentDrawable: + commit, so their gallery
-// snapshots were black; MediaRemoteUI and Freeform asked for it too.
+// commit order.
 - (void)presentDrawable:(id<MTLDrawable>)drawable
 {
     if (!drawable) return;
@@ -3173,11 +3165,9 @@ static void scheduled(void *context);
     else
         run();
 }
-// r17-widgets: what drives a process's command buffers. One commit every 30 s keeps the stack that committed it (frame
-// pointers, up to 20 frames below this call), each frame as image+offset (dladdr), and the plugin logs it once beside the rates
-// line. In the shared cache, image load address + offset is the unslid address `ipsw dyld a2s` names: for WidgetRenderer's
-// steady 20 commits/s with the clock widget showing, whether a display link, a timer or a transaction flush drives them, and which
-// SwiftUI/RenderBox update asks for that rate. Costs one backtrace() per 30 s per process.
+// What drives a process's command buffers. One commit every 30 s keeps the stack that committed it (frame pointers, up to 20
+// frames below this call), each frame as image+offset (dladdr), and the plugin logs it once beside the rates line. In the shared
+// cache, image load address + offset is the unslid address `ipsw dyld a2s` names. Costs one backtrace() per 30 s per process.
 static std::atomic<uint64_t> gOriginNextUs{0};
 static std::mutex gOriginLock;
 static void *gOriginFrames[21];
@@ -3275,7 +3265,7 @@ extern "C" size_t native_bridge_metal_commit_origin(char *out, size_t size)
     if (!self.encodeFailure) {
         // No cache maintenance on the submit path: CPU writes into imports reach the GPU through the import-time clean
         // (BoImport, every import). The kernel's IOSurface-unlock clean does not run: IOSurfaceUnlock is an IOKit trap, and
-        // the XNU hook sits on external methods (r7-text). A CPU redraw into a still-live import is not cleaned.
+        // the XNU hook sits on external methods. A CPU redraw into a still-live import is not cleaned.
         // Completion owns this reference; the runtime orders the non-owning scheduled callback before it.
         void *context = (__bridge_retained void *)self;
         bool committed = nmb_command_buffer_on_completed(_handle, completed, context) &&
@@ -3315,7 +3305,7 @@ static bool heldBehindEvent()
 {
     if (!self.committed) return;
     const uint64_t began = nowUs();
-    // Bounded (r9-hang): the kernel's GPU waits panic within 10 s, so past waitLimitMs this is a hang (a shared event no one
+    // Bounded: the kernel's GPU waits panic within 10 s, so past waitLimitMs this is a hang (a shared event no one
     // signals, a handler that never returns): one line and abort(), a crash report with the stack, not a silent freeze.
     if (!self.failedLocally && nmb_command_buffer_wait_completed_for(_handle, waitLimitMs()) == 1)
         waitTooLong("waitUntilCompleted of command buffer", (__bridge void *)self,
@@ -3334,8 +3324,8 @@ static bool heldBehindEvent()
             // Behind a shared event no one reached yet (its own wait, or an earlier command buffer's that holds it in order):
             // Metal's command buffer is scheduled there, its GPU waiting for the event, so this returns. Core Animation's render
             // thread flushes with waitUntilScheduled every frame and forces the per-surface event of a client that died or was
-            // suspended after 5 s (CA::WindowServer::SharedEvent::is_complete_with_timeout): blocked here it never could (r7n,
-            // r7o: the display froze for good).
+            // suspended after 5 s (CA::WindowServer::SharedEvent::is_complete_with_timeout): blocked here it never could, and
+            // the display would freeze for good.
             if (heldBehindEvent()) {
                 gHeldReturns++;
                 static std::atomic<bool> said{false};
@@ -3388,8 +3378,7 @@ static void completed(void *context)
 {
     nmb_queue_release(_handle);
 }
-// The queue holds its 64 uncompleted command buffers past the bound (r7p8: the render server froze in [queue commandBuffer] with
-// no line): one fault naming the queue, its slots (held by uncompleted command buffers, of them not committed), and its oldest
+// The queue holds its 64 uncompleted command buffers past the bound: one fault naming the queue, its slots (held by uncompleted command buffers, of them not committed), and its oldest
 // committed command buffer still in flight with its state, then abort() for the stack, as every other wait past its bound.
 [[noreturn]] static void slotWaitTooLong(NBQueue *queue, const uint64_t slots[4])
 {
@@ -3481,10 +3470,9 @@ template <typename T> static T failWith(NSError **error, NSString *what, T value
 // 0x189429000 is the address in that image's disassembly), the global feature flags it ORs into every context's flags, and its
 // CA_DISABLE_GENERIC_SHADERS, CA_FORCE_GENERIC_SHADERS and CA_DISABLE_PRECOMPILED_PIPELINES debug options (ca_debug_options +0x55..0x57,
 // read only where dladdr places that address in QuartzCore).
-// r10-rawapps: QuartzCore's image is found once in dyld's image list (looked for again only after an image loads): its header,
-// the end of its __TEXT and whether its debug options lie in it; each frame is compared with that range. A dladdr per frame (up
-// to 24 a line, each searching an image's symbols for the nearest one) put about a millisecond between the tablet's journal
-// lines, three lines per render pipeline state, on the thread making it. Same output.
+// QuartzCore's image is found once in dyld's image list (looked for again only after an image loads): its header, the end of its
+// __TEXT and whether its debug options lie in it; each frame is compared with that range, not dladdr'd (a dladdr per frame, up to
+// 24 a line, costs about a millisecond per journal line on the thread making the state).
 struct NBQuartzCoreImage {
     uintptr_t header = 0, end = 0;  // [header, end): QuartzCore's __TEXT, 0 until QuartzCore is loaded
     bool optionsInImage = false;    // whether dladdr places the debug options' address in QuartzCore (below)
@@ -3541,8 +3529,8 @@ static std::string quartzCoreCallers()
     // The context's own flags (int-154: the draws never took the generic path, which only bit 18 of MetalContext +0x1a0 or the debug byte
     // can cause, and the debug byte was 0). MetalContext::create_pipeline_state (header +0x143000) saves its caller's x19 at fp-8, and its
     // caller MetalContext::draw keeps `this` in x19: the frame record whose return address is +0x143214 links to that frame. Read with
-    // vm_read so a different stack layout reports ctx=? instead of faulting. In the render server only (its MetalContext is the one
-    // int-154 asked about): elsewhere a sandbox may refuse the vm_read_overwrite MIG routine (WebKit's GPU process does), ctx=? then.
+    // vm_read so a different stack layout reports ctx=? instead of faulting. In the render server only: elsewhere a sandbox may
+    // refuse the vm_read_overwrite MIG routine (WebKit's GPU process does), ctx=? then.
     static const bool renderServer = !strcmp(getprogname(), "backboardd");
     if (header && !renderServer) out += " ctx=?";
     if (header && renderServer) {
@@ -4132,7 +4120,6 @@ static bool pipelineArchives(NSArray *list, std::vector<NmbBinaryArchive *> &arc
     return true;
 }
 
-// ---- the system's Metal front end ----
 // Core Image makes its kernels at run time: 21H461's CoreImage imports newLibraryWithSource:options:error: (CIKL and generated kernels,
 // CI::MetalMainProgram) and newLibraryWithDescriptorSPI:error: (its stitched DAGs, CI::StitchableFunctionDAGDescriptor; Core Image
 // stitches by default, CI_ENABLE_METAL_DAG and CI_ENABLE_FUNCTION_STITCHING), and CoreUI draws every graphic icon (Settings' rows) through
@@ -4145,7 +4132,7 @@ static bool pipelineArchives(NSArray *list, std::vector<NmbBinaryArchive *> &arc
 static std::string
     gCompileCache;  // <the runtime's cache>/msl: the compiler's replies, kept across respawns (empty: none kept)
 static std::atomic<uint64_t> gCompiles, gCompilesKept, gCompileRefusals;
-// The compiler was written for MTLCompilerService's threads and recurses deeply; a dispatch worker's 512 KiB stack was too small for it
+// The compiler was written for MTLCompilerService's threads and recurses deeply; a dispatch worker's 512 KiB stack is too small for it
 // (MaliMetal: a stack-protector abort inside libGPUCompilerImplLazy). A request runs on a thread of its own with a 16 MiB stack, the
 // caller waiting (the asynchronous forms below run on a queue already).
 static void *runBlock(void *block)
@@ -4373,7 +4360,7 @@ static void refuseLibrary(NSString *what)
     if (told.fetch_add(1) < 8) NBLOG(@"native-metal: %@ refused (not implemented)", what);
 }
 // Whether this process compiles Metal source and stitched libraries (NMB_SYSTEM_COMPILER=1, which the plugin sets in every process but the
-// render server: its requests stay refused as before, so it never loads the compiler or waits for one).
+// render server: its requests stay refused, so it never loads the compiler or waits for one).
 static bool systemCompiler()
 {
     static const bool on = [] {
@@ -4389,8 +4376,8 @@ static bool systemCompiler()
 // The base class's limits table (-[_MTLDevice limits], the words after isa in 21H461). Metal's accessors read their field from it
 // (-[_MTLDevice maxTextureWidth2D] is limits+0x84), and frameworks read it directly, past this device's methods: PhotosUICore's texture
 // converter takes its largest image from 0x84/0x88 (-[PXGMetalTextureConverter createTextureFromCGImage:transform:alpha:options:],
-// PXGCreateMetalTextureFromBytesInCGImage); with them 0 every image was "too large", was redrawn to fit 0x0 and PXGCreateContext asserted
-// (r5d: Photos aborted twice on launch). CoreRE reads minBufferNoCopyAlignmentBytes at 0x7c. The offsets are those accessors' loads (the
+// PXGCreateMetalTextureFromBytesInCGImage); with them 0 every image is "too large", is redrawn to fit 0x0 and PXGCreateContext asserts.
+// CoreRE reads minBufferNoCopyAlignmentBytes at 0x7c. The offsets are those accessors' loads (the
 // 61 integer fields; maxLineWidth and maxPointSize are floats, not filled).
 @protocol NBOriginalLimits
 - (void *)limits;
@@ -4749,14 +4736,14 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 }
 // A pipeline library (RenderBox's default.pipelinelib; TextInputUI, PencilKit, SiriUICore and others have their own) is pipelines.desc, the
 // functions and pipelines.<target>: one Apple GPU's compiled pipelines. The base class's MTLPipelineLibraryBuilder::newLibraryWithFile names
-// that file from -targetDeviceInfo, which _MTLDevice answers NULL (only a device that does not respond to it gets a stand-in), and read
-// NULL+0x10 at Metal+0x52b64 (r5d: every WidgetRenderer_Default and MobileSafari, from RB::Device::render_pipeline_state). A library holds
+// that file from -targetDeviceInfo, which _MTLDevice answers NULL (only a device that does not respond to it gets a stand-in), and reads
+// NULL+0x10 at Metal+0x52b64 (from RB::Device::render_pipeline_state). A library holds
 // no pipelines for this GPU, so it is refused as Metal refuses one without the device's target file; RenderBox and the others then build
 // their pipelines from their own metallib.
 - (id)newPipelineLibraryWithFilePath:(NSString *)path error:(NSError **)error
 {
     // Not a failure the caller waits on or retries: Metal's own answer for a GPU its library has no pipelines of, after which
-    // RenderBox, PencilKit and the rest make their states from their metallib at once (r7j: once per library and process).
+    // RenderBox, PencilKit and the rest make their states from their metallib at once (once per library and process).
     static std::atomic<int> told{0};
     if (told.fetch_add(1) < 8)
         NBLOG(@"native-metal: pipeline library %@: none for this GPU (file not found, as Metal answers; the caller "
@@ -5099,7 +5086,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 {
     return [(id<MTLDevice>)self newDefaultLibraryWithBundle:[NSBundle mainBundle] error:nil];
 }
-// The asynchronous forms make the state on a worker and call back there (r7-async, asyncCall; Core Image's, Espresso's): the
+// The asynchronous forms make the state on a worker and call back there (asyncCall; Core Image's, Espresso's): the
 // base class would queue a request to Apple's compiler service. The descriptor is copied at the call, as Metal does.
 - (void)newComputePipelineStateWithFunction:(id<MTLFunction>)function
                           completionHandler:(MTLNewComputePipelineStateCompletionHandler)handler
@@ -5218,7 +5205,7 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
                                                              error:(NSError **)error
 {
     if (reflection) *reflection = nil;
-    // r7-async (AsyncPipelines.h): the render server's states are made on a worker, the call returning at once.
+    // The render server's states are made on a worker (AsyncPipelines.h), the call returning at once.
     if (asyncRenderPipelineWanted(d, options)) {
         if (error) *error = nil;
         return asyncRenderPipeline(self, d, options);
@@ -5317,8 +5304,8 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
 
 // The device queries the runtime answers (nmb_device_answer_selector), as methods of the device class. One without an argument is read once
 // and installed only where the device has an answer of its own; one with an argument asks the runtime once per argument and keeps the answer
-// (each is a fixed property of the device, and QuartzCore asks thousands a second while the screen moves: about 140 us each on Adreno,
-// AdrenoMetal f875e531), a refusal answering 0/NO with the reason logged once. NMB_ANSWER_CACHE=0 asks the runtime every call again.
+// (each is a fixed property of the device, and QuartzCore asks thousands a second while the screen moves: about 140 us each on Adreno),
+// a refusal answering 0/NO with the reason logged once. NMB_ANSWER_CACHE=0 asks the runtime every call again.
 static std::unordered_map<SEL, uint64_t> gAnswers;
 static NSUInteger countAnswer(id, SEL cmd)
 {
@@ -5382,11 +5369,10 @@ static void installAnswers(Class cls)
             }
             // Extended-range 10-bit (XR10) framebuffers are withheld from the render server: this display chain presents 8-bit BGRX scanout
             // only, and backboardd picks its wide-gamut 64-bit (and Apple-compressed) framebuffer when a device offers them, which the display
-            // driver could not show (int-089: the swap's surface was '&w4a', 8 bytes per pixel, and every swap was refused). Everyone else gets
+            // driver cannot show (its swap's surface is '&w4a', 8 bytes per pixel, and every swap is refused). Everyone else gets
             // the runtime's answer: CAMetalLayer raises CAMetalLayerInvalid ("unsupported extended range format") at setPixelFormat: of an
             // XR10 format on a device without them, and ClockKitUI's quad views ask for one whatever the display (AegirPoster's colorSpace 2
-            // is BGR10_XR_sRGB: r7m crash-looped every ~1 s). Their 'w30r'/'w40a' drawables are textures and render targets here, and the
-            // render server samples them as before.
+            // is BGR10_XR_sRGB). Their 'w30r'/'w40a' drawables are textures and render targets here, and the render server samples them.
             if (!strcmp(name, "supportsExtendedXR10Formats") && !strcmp(getprogname(), "backboardd")) value = 0;
             // Command buffer jumps are withheld: on YES MPSGraph and MPSImageCanny send the AGX encoder's encodeStartWhile/If/Else/EndIf SPI,
             // which this frontend's encoders do not implement.
@@ -5414,7 +5400,7 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
     }
     if (cache) {
         gCompileCache = std::string(cache) + "/msl";
-        // The journal now lives in a cache that survives reboots: past 2 MiB it starts again, the previous one kept as pipelines.log.old.
+        // The journal lives in a cache that survives reboots: past 2 MiB it starts again, the previous one kept as pipelines.log.old.
         gJournalPath = std::string(cache) + "/pipelines.log";
         gJournalBegan = nowUs();
         struct stat journalStat;
@@ -5699,7 +5685,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
     const Snapshot was = last;
     last = now;
     const uint64_t commits = now.commits - was.commits, pso = now.psoN - was.psoN, vk = now.work[0] - was.work[0];
-    // r6-lows: this window's command-buffer distributions, taken (and cleared) whether or not the line is written.
+    // This window's command-buffer distributions, taken (and cleared) whether or not the line is written.
     const NBHist::Taken enc = gHistEncode.take(17000, 34000), gap = gHistGap.take(25000, 34000),
                         sched = gHistSched.take(17000, 34000);
     const NBHist::Taken gpu = gHistGpu.take(17000, 34000), made = gHistPso.take(17000, 34000);
@@ -5743,7 +5729,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         (unsigned long long)(now.impHits - was.impHits), (unsigned long long)(now.stxN - was.stxN),
         (double)(now.stxUs - was.stxUs) / 1000.0);
     size_t at = n > 0 ? std::min<size_t>((size_t)n, size ? size - 1 : 0) : 0;
-    // r6-lows, in ms: encp and cgap (one thread's commit to its next) p50/p99/max with the counts at 17 ms and over (past a 60 Hz
+    // In ms: encp and cgap (one thread's commit to its next) p50/p99/max with the counts at 17 ms and over (past a 60 Hz
     // frame) and, for cgap, at 25 and 34 ms and over (1.5x and over 2x the frame); swait (waitUntilScheduled) and gpuq (commit to
     // completion) p50/p99/max; the slowest render pipeline state made. Bins are whole ms.
     auto ms = [](uint64_t us) { return (unsigned long long)(us / 1000); };
@@ -5757,7 +5743,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
                      ms(sched.p99), ms(sched.max), ms(gpu.p50), ms(gpu.p99), ms(gpu.max), ms(made.max));
         if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);
     }
-    if (at + 1 < size) at += nbasync::appendRates(out + at, size - at);  // r7-async: apso= ... (AsyncPipelines.h)
+    if (at + 1 < size) at += nbasync::appendRates(out + at, size - at);  // apso= ... (AsyncPipelines.h)
     // spare=: dedicated memory requests a kept block served instead of a new BoAlloc (m2v 0113, memory.rs).
     if (at + 1 < size) {
         // held=: waitUntilScheduled calls that returned behind a shared event not reached (heldBehindEvent). rr= and gb=:
@@ -5777,8 +5763,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
     }
     if (at + 1 < size) {
         // fwd=: calls of Metal selectors this file lacks, answered zero through message forwarding
-        // (native_bridge_metal_answer_unimplemented), and their time from the signature asked to the zero returned. Near 0: each
-        // used to walk every protocol in the process (r7q Maps, setDepthClipMode:: 70-80% of its CPU).
+        // (native_bridge_metal_answer_unimplemented), and their time from the signature asked to the zero returned.
         const int more = snprintf(out + at, size - at, " fwd=%llu/%.1fms", (unsigned long long)(now.fwdN - was.fwdN),
                                   (double)(now.fwdUs - was.fwdUs) / 1000.0);
         if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);

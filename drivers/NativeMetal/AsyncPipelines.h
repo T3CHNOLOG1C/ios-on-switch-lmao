@@ -1,4 +1,4 @@
-// r7-async: render pipeline states made off the asking thread (NativeBridgeMetalFrontend.mm includes this once).
+// Render pipeline states made off the asking thread (NativeBridgeMetalFrontend.mm includes this once).
 //
 // Core Animation makes a pipeline state the first time a frame needs it and draws with it at once, on its render thread. A
 // state the shader cache misses costs that thread 100-330 ms (translation, then NAK's compile at creation); a hit 4-16 ms.
@@ -7,15 +7,16 @@
 //
 // - **Set.** In a pass that skips (below), an encoder that sets a state still being made waits for it up to a bound
 //   (NMB_ASYNC_PSO_WAIT_US, 4 ms), within a budget of waits per frame on that thread (NMB_ASYNC_PSO_FRAME_US, 4 ms; a frame
-//   is 16.7 ms of that thread's time). Made by then, it is set as before. Otherwise the encoder sets nothing and skips
-//   every draw until its next set (the m2v encoder keeps its earlier state bound, so a draw must never reach it): the pass
-//   itself (its attachments, loads, stores, barriers) records exactly as before, only those draws are missing.
+//   is 16.7 ms of that thread's time). Made by then, it is set. Otherwise the encoder sets nothing and skips every draw
+//   until its next set (the m2v encoder keeps its earlier state bound, so a draw must never reach it): the pass itself
+//   (its attachments, loads, stores, barriers) records unchanged, only those draws are missing.
 // - **Which passes skip.** In the render server, only a pass whose first color attachment is an IOSurface of at least
 //   NMB_ASYNC_PSO_MIN_PIXELS (half a 720p frame): the display's composite, which Core Animation draws again. Any other pass
 //   (offscreen: a blur chain's steps, a rasterized or masked layer, filters) holds output a later frame reads without
-//   drawing it again, so its set waits until the state is made, as before (counted: off=). In every other process no pass
-//   skips (an app's backing store is drawn once): a set waits until the state is made, so a run of creations before their
-//   first draws (an app's launch) is made side by side on the workers, and a creation drawn at once costs what it did.
+//   drawing it again, so its set waits until the state is made (counted: off=). In every other process no pass skips (an
+//   app's backing store is drawn once): a set waits until the state is made, so a run of creations before their first
+//   draws (an app's launch) is made side by side on the workers, and a creation drawn at once costs as much as a
+//   synchronous one.
 // - **Drawn again.** Core Animation redraws only what changed, so a skipped draw could stay missing. Once a state a draw
 //   skipped for is made, the server's displays are invalidated whole and an update is scheduled, through
 //   -[CAWindowServerDisplay setInvertsColors:] with the value it holds (QuartzCore 21H461: IOMFBDisplay::set_inverse_color
@@ -28,9 +29,9 @@
 //   worker's creation lends that worker its own class meanwhile (a QoS override).
 // - **The asynchronous API** (newRenderPipelineStateWithDescriptor:completionHandler: and the compute forms) makes the state
 //   on a global queue of the caller's class (not these workers) and calls back there, in every process (NMB_ASYNC_PSO_API=0:
-//   on the caller's thread, as before).
+//   on the caller's thread).
 //
-// NMB_ASYNC_PSO and NMB_ASYNC_PSO_API: 1 on, 0 every creation on the asking thread as before; both on by default on the
+// NMB_ASYNC_PSO and NMB_ASYNC_PSO_API: 1 on, 0 every creation on the asking thread; both on by default on the
 // device, off on the host (its tools make states and exit: precompile.mm's seed). NMB_ASYNC_PSO_ONSCREEN: surfaces (the render
 // server's default), none (every other process's: never skip), all (every pass skips: host tests). Counters: the rates
 // line's apso= part (appendRates).
@@ -298,7 +299,7 @@ inline bool ready(const std::shared_ptr<Making> &m, bool skips)
         run(m);
         std::unique_lock<std::mutex> g(m->lock);
         Lend lend(*m);
-        // Bounded (r9-hang: no userland wait without an end): a making past a minute is a hang, not a compile.
+        // Bounded, as is every userland wait: a making past a minute is a hang, not a compile.
         if (!m->finished.wait_for(g, std::chrono::seconds(60), [&] { return m->done(); })) {
             os_log_fault(OS_LOG_DEFAULT,
                          "native-metal: render pipeline state %{public}s not made after 60 s: abort() for the stack",
