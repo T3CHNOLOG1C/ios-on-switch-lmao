@@ -2415,6 +2415,7 @@ fn llvm_math(op: &LlvmIntrinsic) -> Result<Fun, Error> {
             LlvmIntOp::Fshr => IntFn::Fshr,
             LlvmIntOp::Bswap => IntFn::Bswap,
             LlvmIntOp::Ctpop => IntFn::Popcount,
+            LlvmIntOp::Bitreverse => IntFn::ReverseBits,
             LlvmIntOp::UAddSat => IntFn::AddSat(Sign::Unsigned),
             LlvmIntOp::USubSat => IntFn::SubSat(Sign::Unsigned),
             LlvmIntOp::SAddSat => IntFn::AddSat(Sign::Signed),

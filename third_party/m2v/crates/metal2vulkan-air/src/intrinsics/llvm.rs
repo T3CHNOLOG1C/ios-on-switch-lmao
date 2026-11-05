@@ -56,6 +56,8 @@ pub enum LlvmIntOp {
     Bswap,
     /// `llvm.ctpop`: the number of set bits.
     Ctpop,
+    /// `llvm.bitreverse`: the bits in reverse order (what `reverse_bits` compiles to).
+    Bitreverse,
     /// `llvm.uadd.sat`: unsigned saturating addition.
     UAddSat,
     /// `llvm.usub.sat`: unsigned saturating subtraction.
@@ -340,6 +342,7 @@ pub(super) const BASES: &[(&str, Base)] = &[
     ("fshr", Base::Int(LlvmIntOp::Fshr)),
     ("bswap", Base::Int(LlvmIntOp::Bswap)),
     ("ctpop", Base::Int(LlvmIntOp::Ctpop)),
+    ("bitreverse", Base::Int(LlvmIntOp::Bitreverse)),
     ("uadd.sat", Base::Int(LlvmIntOp::UAddSat)),
     ("usub.sat", Base::Int(LlvmIntOp::USubSat)),
     ("sadd.sat", Base::Int(LlvmIntOp::SAddSat)),
@@ -393,7 +396,7 @@ impl LlvmFloatOp {
 impl LlvmIntOp {
     fn arity(self) -> usize {
         match self {
-            LlvmIntOp::Bswap | LlvmIntOp::Ctpop => 1,
+            LlvmIntOp::Bswap | LlvmIntOp::Ctpop | LlvmIntOp::Bitreverse => 1,
             LlvmIntOp::Fshl | LlvmIntOp::Fshr => 3,
             _ => 2,
         }
