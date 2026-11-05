@@ -40,10 +40,11 @@ int switch_joycon_start(void);
 void switch_joycon_suspend(void);
 void switch_joycon_resume(void);
 
-// Display power, from SwitchBacklight's work loop as the panel goes off and comes back (thread context, may sleep;
-// no-ops unless the rail driver runs). Off: both rails stop all traffic (no timer runs, the detect interrupt is masked,
-// rail HID devices terminated; charging is left as it is). On: both rails wait for Joy-Cons again, and a seated one
-// is handshaken as on a fresh attach.
+// Display power (thread context, may sleep; no-ops unless the rail driver runs). Off: both rails stop all traffic (no
+// timer runs, the detect interrupt is masked, rail HID devices terminated; charging is left as it is). On: both rails
+// wait for Joy-Cons again, and a seated one is handshaken as on a fresh attach. Not called since r15: SwitchBacklight
+// leaves the rails running with the panel off, so a seated Joy-Con (R)'s Home wakes the console as on Horizon
+// (../SwitchSuspend/SwitchWakeSources.h); the rails stop only for system sleep (switch_joycon_suspend).
 void switch_joycon_display_power(bool on);
 
 // SwitchBluetooth, once it has programmed the controller's BD address (display order) for its first client: the address

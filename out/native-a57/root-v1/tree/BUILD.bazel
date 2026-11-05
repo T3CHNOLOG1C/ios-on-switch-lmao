@@ -316,7 +316,8 @@ kernel_driver(
     dir = "drivers/SwitchPower",
 )
 
-# System sleep (SC7) coordinator, inert unless switch-sleep=2.
+# System sleep (SC7) coordinator, inert unless switch-sleep=2; waking from the lock (wake sources with the panel off, the
+# wake guarantee's stackshot) and the power journal (SwitchWake.cpp).
 kernel_driver(name = "SwitchSuspend")
 
 # SwitchAudio: kernel service + Tegra I2S1/ADMA/RT5639 backend.

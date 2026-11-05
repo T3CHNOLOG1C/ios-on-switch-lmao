@@ -16,7 +16,8 @@
 //    it switches the driver to collection dispatch (parseDigitizerElement), one collection event with a child per
 //    finger, which is what backboardd's touch processing takes. Contact Identifier is the slot number, so a lifted
 //    finger's slot reports tip 0 once (the driver sends the lift) and is then dropped by the driver as a repeat.
-//  * Buttons: Consumer/Consumer Control with Power (0x30), Volume Increment (0xE9), Volume Decrement (0xEA); the
+//  * Buttons: Consumer/Consumer Control with Power (0x30), Volume Increment (0xE9), Volume Decrement (0xEA) and Menu
+//    (0x40, J120's Home button, which SwitchButtons presses for a Bluetooth controller's Home with the panel off); the
 //    driver's parseKeyboardElement takes every consumer usage and dispatches keyboard events with usage page 0x0C,
 //    the pairs iOS's button handling uses (as AppleM68Buttons; ios-sweet SweetHIDButtons uses the same).
 //
@@ -77,8 +78,8 @@ static_assert(sizeof(SwitchTouchReport) == 1 + kSwitchTouchSlots * 6, "touch rep
 
 const uint8_t kButtonsDescriptor[] = {
     0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x85, 0x01,  // Consumer: Consumer Control, Collection (Application), Report ID 1
-    0x09, 0x30, 0x09, 0xe9, 0x09, 0xea,              // Power, Volume Increment, Volume Decrement
-    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x03, 0x81, 0x02, 0x95, 0x05, 0x81, 0x03, 0xc0,
+    0x09, 0x30, 0x09, 0xe9, 0x09, 0xea, 0x09, 0x40,  // Power, Volume Increment, Volume Decrement, Menu (Home)
+    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x04, 0x81, 0x02, 0x95, 0x04, 0x81, 0x03, 0xc0,
 };
 
 // Ambient light sensor (SwitchHID.h): Apple vendor AmbientLightSensor, feature report 1 = Sensor Report Interval (0x030e),

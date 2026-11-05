@@ -36,6 +36,9 @@
 // checkins from watchdogd ...") is a hang, not a bug report to photograph: without ioswitch-panic-reboot it warm-resets
 // 60 s after the panic (WATCHDOG_REBOOT_S), so the device restarts and the record (with the hung process's threads in the
 // stackshot) reaches Data, where holding POWER would have lost it.
+// A panic with the panel off (display power: the Switch was locked) has no screen to read or photograph either: without
+// ioswitch-panic-reboot it warm-resets DARK_REBOOT_S after the panic, for the same reason (r7t panicked locked, looked
+// like a Switch that would not wake, and was forced off, record and all).
 // Boot-args: ioswitch-panic-save=1 (off by default), ioswitch-panic-reboot=<s> (default 0: hold the panic screen),
 // ioswitch-panic-hekate=1 (TPAN: hekate also copies the text to SD:/L4T_panic.* and waits for a button), ioswitch-panic-test=<s>
 // (a test panic s seconds after the Data mount, on boots without a saved panic).
@@ -55,6 +58,13 @@
 #include "IOSwitchDiag.h"
 #include "IOSwitchDiagDisplay.h"
 #include "IOSwitchPanicSave.h"
+
+/* SwitchBrightness (SwitchBacklight.cpp): false from a display-off request until the panel is lit again; a plain read.
+ * This weak default (a kernel without the backlight) has the panel lit. */
+__attribute__((weak)) _Bool switch_display_is_on(void)
+{
+    return 1;
+}
 
 extern int vsnprintf(char *, size_t, const char *, va_list);
 extern int snprintf(char *, size_t, const char *, ...);
@@ -78,6 +88,7 @@ extern unsigned char iso_font[256 * 16];
 #define SHOT_MAX          (CONSOLE_OFFSET - SHOT_OFFSET)
 #define SHOT_MAGIC        UINT64_C(0x314b534857534f49) /* "IOSWHSK1" */
 #define WATCHDOG_REBOOT_S 60u
+#define DARK_REBOOT_S     15u
 #define MSGBUF_TAIL       (64u << 10)
 #define PMC_PA            UINT64_C(0x7000e000) /* the page; APBDEV_PMC at +0x400 (hekate t210.h PMC_BASE) */
 #define PMC_CNTRL         (0x400u + 0x000u)
@@ -502,6 +513,7 @@ int ioswitch_panic_begin(const char *format, va_list *args, unsigned long caller
     watchdog_panic = starts_with(panic_line, "userspace watchdog timeout:") ||
                      starts_with(panic_line, "watchdog timeout: no checkins from ");
     if (watchdog_panic && !reboot_arg) reboot_s = WATCHDOG_REBOOT_S;
+    if (!switch_display_is_on() && !reboot_arg && !reboot_s) reboot_s = DARK_REBOOT_S; /* nothing to photograph */
     screen_taken = take_screen && screen;
     if (save_on && region) {
         clock_sec_t secs = 0;

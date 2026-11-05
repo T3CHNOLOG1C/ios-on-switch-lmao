@@ -15,6 +15,12 @@ Copies into <out> (default <workspace>/out/switch/device-logs/boot-<MMDD-HHMM>):
                                         kcdata.py into panic-<UTC>.stackshot.ips (every task's threads, as stacks-*.ips)
                                         and panic-<UTC>.threads.txt (the threads of the process the panic names, e.g.
                                         the one a "userspace watchdog timeout" found hung)
+  power.log, power.prev.log            the power journal (SwitchWake.h: every display off/on, wake source, wake
+                                        guarantee and system sleep step) of the last boot and the one before
+  wake-<UTC>.kcdata                     a stackshot of every task taken when the wake guarantee lit the panel itself (a
+                                        wake source with the panel off and no display-on from the render server),
+                                        decoded as the panic ones into wake-<UTC>.stackshot.ips and wake-<UTC>.threads.txt
+                                        (SpringBoard's and backboardd's threads)
   com.apple.LaunchServices-*.csstore + lsdb-webkit.txt   (--no-csstore skips them)
   m2v/ (+ m2v-cache -> backboardd's)    every process's m2v shader cache, whose journals are merged into the
                                         precompile corpus (tree/drivers/TegraGM20BMetal/precompile/corpus.log, a source
@@ -103,20 +109,50 @@ def thread_summary(report, process):
     return lines
 
 
+def decode_stackshot(shot, kcdata, log, what):
+    """<shot>.kcdata -> <stem>.stackshot.ips (kcdata.py -s); the .ips path, or None (logged)."""
+    stem = shot.with_suffix("")
+    if not kcdata or not Path(kcdata).is_file():
+        log(what, "stackshot", shot.name, "NOT decoded: no kcdata.py (run as bazel run //deploy:pull_logs)")
+        return None
+    ips = stem.with_name(stem.name + ".stackshot.ips")
+    result = subprocess.run([sys.executable, "-I", str(kcdata), "-s", str(ips), str(shot)], capture_output=True,
+                            text=True)
+    if result.returncode or not ips.is_file():
+        log(what, "stackshot", shot.name, "NOT decoded:", (result.stderr or result.stdout).strip()[-300:])
+        return None
+    log(what, "stackshot ->", ips)
+    return ips
+
+
+def decode_wakes(out, kcdata, log):
+    """wake-*.kcdata (the wake guarantee's stackshots) -> .stackshot.ips and .threads.txt for SpringBoard and
+    backboardd, the two that should have turned the panel on."""
+    for shot in sorted(Path(out).glob("wake-*.kcdata")):
+        ips = decode_stackshot(shot, kcdata, log, "wake")
+        if not ips:
+            continue
+        body = report_body(ips.read_text())
+        lines = []
+        for process in ("springboard", "backboardd"):
+            lines += thread_summary(body, process)
+        if lines:
+            stem = shot.with_suffix("")
+            summary = stem.with_name(stem.name + ".threads.txt")
+            summary.write_text("# SpringBoard's and backboardd's threads in the wake stackshot {} (S: dyld shared cache "
+                               "offsets)\n{}\n".format(ips.name, "\n".join(lines)))
+            log("wake stackshot threads ->", summary)
+
+
 def decode_panics(out, kcdata, log):
     """panic-*.kcdata -> .stackshot.ips (kcdata.py -s) and .threads.txt for the process its panic string names."""
     for shot in sorted(Path(out).glob("panic-*.kcdata")):
         stem = shot.with_suffix("")
-        if not kcdata or not Path(kcdata).is_file():
-            log("panic stackshot", shot.name, "NOT decoded: no kcdata.py (run as bazel run //deploy:pull_logs)")
-            return
-        ips = stem.with_name(stem.name + ".stackshot.ips")
-        result = subprocess.run([sys.executable, "-I", str(kcdata), "-s", str(ips), str(shot)], capture_output=True,
-                                text=True)
-        if result.returncode or not ips.is_file():
-            log("panic stackshot", shot.name, "NOT decoded:", (result.stderr or result.stdout).strip()[-300:])
+        ips = decode_stackshot(shot, kcdata, log, "panic")
+        if not ips:
+            if not kcdata or not Path(kcdata).is_file():
+                return
             continue
-        log("panic stackshot ->", ips)
         text = stem.with_suffix(".log")
         process = panic_process(text.read_text(errors="replace")) if text.is_file() else None
         if not process:
@@ -150,6 +186,15 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
     if panics:
         log("saved panics:", ", ".join(panic.name for panic in panics))
         decode_panics(out, kcdata, log)
+    power = sorted((data / "ioswitch").glob("power*.log")) if (data / "ioswitch").is_dir() else []
+    wakes = sorted((data / "ioswitch").glob("wake-*.kcdata")) if (data / "ioswitch").is_dir() else []
+    for path in power + wakes:
+        shutil.copyfile(path, out / path.name)
+    if power:
+        log("power journal:", ", ".join(path.name for path in power))
+    if wakes:
+        log("wake guarantee stackshots:", ", ".join(path.name for path in wakes))
+        decode_wakes(out, kcdata, log)
     lines = []
     for name in ("staged_system_apps", "datamigrator", "ioswitch"):
         path = data / name

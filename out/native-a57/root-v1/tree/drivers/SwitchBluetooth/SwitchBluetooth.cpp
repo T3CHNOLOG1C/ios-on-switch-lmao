@@ -112,6 +112,9 @@
 #include "SwitchBluetoothLinks.h"
 #include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraAPBDMA/TegraAPBDMA.h"
+#include "../SwitchSuspend/SwitchWake.h"
+
+extern "C" bool switch_display_is_on(void);  // ../SwitchBrightness/SwitchBrightness.h
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -1439,11 +1442,21 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
     case H4_ACL: {
         if (avail < 5) return false;
         total = 5u + (uint32_t)(at(3) | at(4) << 8);
+        // With the panel off a Nintendo controller's Home is a wake source (../SwitchSuspend/SwitchWake.h): the
+        // packet's start (ACL, L2CAP and HIDP headers, the button bytes) is looked at once it is in the ring.
+        const bool dark = !switch_display_is_on();
+        const uint32_t peek = 1u + SWITCH_WAKE_BT_PEEK < total ? 1u + SWITCH_WAKE_BT_PEEK : total;
+        if (dark && avail < peek) return false;
         ++st.acl;
         const uint8_t header[2] = {at(1), at(2)};
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
         switch_bt_link_rx(&links, switch_bt_acl_handle(header));
         IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+        if (dark) {
+            uint8_t acl[SWITCH_WAKE_BT_PEEK];
+            for (uint32_t i = 1; i < peek; ++i) acl[i - 1] = at(i);
+            switch_wake_bt_acl(acl, peek - 1);
+        }
         break;
     }
     case H4_SCO:

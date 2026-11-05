@@ -48,8 +48,14 @@ struct __attribute__((packed)) SwitchTouchReport {
     SwitchTouchSlot slot[kSwitchTouchSlots];
 };
 
-// Buttons, report ID 1: one bit per Consumer usage (Power 0x30, Volume Increment 0xE9, Volume Decrement 0xEA).
-enum : uint8_t { kSwitchButtonPower = 1u << 0, kSwitchButtonVolumeUp = 1u << 1, kSwitchButtonVolumeDown = 1u << 2 };
+// Buttons, report ID 1: one bit per Consumer usage (Power 0x30, Volume Increment 0xE9, Volume Decrement 0xEA, Menu 0x40:
+// J120's Home button, pressed for a Bluetooth controller's Home while the panel is off, ../SwitchSuspend/SwitchWake.h).
+enum : uint8_t {
+    kSwitchButtonPower = 1u << 0,
+    kSwitchButtonVolumeUp = 1u << 1,
+    kSwitchButtonVolumeDown = 1u << 2,
+    kSwitchButtonHome = 1u << 3,
+};
 struct __attribute__((packed)) SwitchButtonsReport {
     uint8_t id;  // 1
     uint8_t buttons;

@@ -116,6 +116,31 @@ class SyncTest(unittest.TestCase):
         self.assertIn("kernel: U:74f305ba+0x10", summary)
         self.assertNotIn("SpringBoard", summary)
 
+    def test_pull_logs_copies_the_power_journal_and_wake_stackshots(self):
+        data = self.root / "data"
+        (data / "ioswitch").mkdir(parents=True)
+        (data / "ioswitch/power.log").write_text("IOSwitch power journal\n12.345 SwitchBacklight: display off\n")
+        (data / "ioswitch/power.prev.log").write_text("IOSwitch power journal\n")
+        (data / "ioswitch/wake-2026-11-05-120000.kcdata").write_bytes(b"kcdata")
+        report = {"binaryImages": [["590d839a-82d2-30f1-a17d-0cc053420f73", 6442450944, "S"]],
+                  "processByPid": {"53": {"procname": "backboardd", "threadById": {
+                      "764": {"name": "com.apple.coreanimation.render-server", "state": ["TH_WAIT", "TH_UNINT"],
+                              "userFrames": [[0, 4096]]}}},
+                                   "27": {"procname": "SpringBoard", "threadById": {
+                                       "388": {"state": ["TH_WAIT"], "userFrames": [[0, 8192]]}}},
+                                   "99": {"procname": "mediaserverd", "threadById": {}}}}
+        tool = self.root / "kcdata.py"
+        tool.write_text("import json, sys\nopen(sys.argv[2], 'w').write('{}\\n' + json.dumps(%r))\n" % report)
+        out = pull_logs.pull(data, self.root / "logs", Log(), harvest=False, kcdata=tool)
+        self.assertIn("display off", (out / "power.log").read_text())
+        self.assertTrue((out / "power.prev.log").is_file())
+        self.assertEqual((out / "wake-2026-11-05-120000.kcdata").read_bytes(), b"kcdata")
+        summary = (out / "wake-2026-11-05-120000.threads.txt").read_text()
+        self.assertIn("SpringBoard[27]: 1 threads", summary)
+        self.assertIn("backboardd[53]: 1 threads", summary)
+        self.assertIn("com.apple.coreanimation.render-server TH_WAIT,TH_UNINT", summary)
+        self.assertNotIn("mediaserverd", summary)
+
     def test_panic_process_names(self):
         self.assertEqual(pull_logs.panic_process("panic: userspace watchdog timeout: no successful checkins from "
                                                  "com.apple.SpringBoard (0 induced crashes)"), "springboard")

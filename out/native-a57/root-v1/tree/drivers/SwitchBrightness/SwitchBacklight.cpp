@@ -38,9 +38,16 @@
 // switch_display_power_request(), and this work loop plays it: off = TegraPanel's L4T suspend sequence while the DC still
 // scans out, then the display stops the DC (no fetches, no frame-end or vblank interrupts, so the cores sit in WFI); on =
 // the display restarts the DC, then TegraPanel wakes the panel and restores the brightness. The touch controller goes
-// down with the screen and comes back up while the panel wakes (SwitchTouch's display power), and so do the rail
-// Joy-Cons' traffic and timers (switch_joycon_display_power). On by default; boot-arg
+// down with the screen and comes back up while the panel wakes (SwitchTouch's display power). The rail Joy-Cons keep
+// running (r15: they used to pause here, so a seated Joy-Con's Home could not wake the console; see
+// ../SwitchSuspend/SwitchWakeSources.h). On by default; boot-arg
 // switch-sleep=0 leaves the render server's requests to the original user client (the panel stays lit when locked).
+//
+// Waking (../SwitchSuspend/SwitchWake.h): every display off and on is one power-journal line with each step's time, and
+// the journal goes to Data after every display off. A wake source with the panel off (power key, a Joy-Con's Home)
+// arms the wake guarantee: if the render server has not asked for the panel on within SWITCH_WAKE_GUARD_MS, this loop
+// lights it as if it had (one journal line and a stackshot of every task), so a hung SpringBoard or backboardd shows as
+// a frozen screen instead of a Switch that does not wake, and says where it is stuck.
 // QuartzCore ignores the request's return value (IOMFBDisplay::update_power_state_locked, 21H461), so answering it here
 // changes nothing on its side.
 //
@@ -67,6 +74,7 @@
 #include "TegraPanel.h"
 #include "SwitchBacklightMath.h"
 #include "SwitchBrightness.h"
+#include "../SwitchSuspend/SwitchWake.h"
 
 // The original AppleARMBacklight::gMetaClass (original-bindings.S), declared with a concrete type so that its address is
 // a constant initializer. Nothing here constructs or calls it.
@@ -83,9 +91,8 @@ extern "C" __attribute__((weak)) bool native_legacy_display_set_scanout(bool)
     return false;
 }
 
-// SwitchTouch's and SwitchJoyCon's strong definitions win when they are linked (SwitchTouch.h, SwitchJoyCon.h).
+// SwitchTouch's strong definition wins when it is linked (SwitchTouch.h).
 extern "C" __attribute__((weak)) void switch_touch_display_power(bool) {}
-extern "C" __attribute__((weak)) void switch_joycon_display_power(bool) {}
 
 namespace {
 using namespace switch_backlight;
@@ -158,6 +165,13 @@ bool bootArg(const char *name)
     return PE_parse_boot_argn(name, &value, sizeof(value)) && value == 1;
 }
 
+uint64_t msBetween(uint64_t from, uint64_t to)
+{
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(to - from, &ns);
+    return ns / 1000000;
+}
+
 uint64_t msSince(uint64_t start)
 {
     uint64_t ns = 0;
@@ -178,7 +192,8 @@ extern "C" bool switch_display_power_enabled(void)
 class SwitchBacklight : public IOService {
     OSDeclareDefaultStructors(SwitchBacklight) IOWorkLoop *loop = nullptr;
     IOTimerEventSource *work = nullptr;
-    IOTimerEventSource *quiet = nullptr;  // quietFired
+    IOTimerEventSource *quiet = nullptr;       // quietFired
+    IOTimerEventSource *guardTimer = nullptr;  // the wake guarantee's deadline
     IOLock *requestLock = nullptr;
 
     // Requests, under requestLock.
@@ -186,6 +201,8 @@ class SwitchBacklight : public IOService {
     uint32_t requestValue = 0;
     uint64_t requestFadeNS = 0;
     unsigned nitsRequests = 0, brightnessRequests = 0;  // since the last settle line
+    switch_wake_guard guard = {};
+    uint64_t guardTimeout = 0;  // SWITCH_WAKE_GUARD_MS in mach_absolute_time units
 
     // Work loop state.
     uint32_t current = 0, from = 0, target = 0;     // brightness, 0..kMax
@@ -197,6 +214,7 @@ class SwitchBacklight : public IOService {
     bool panelOn = true, scanoutStopped = false, reportedFailure = false;
 
     static void workFired(OSObject *owner, IOTimerEventSource *sender);
+    static void guardFired(OSObject *owner, IOTimerEventSource *sender);
     void kick() { work->setTimeoutUS(1); }
     void startRamp(uint32_t value, uint64_t fadeNS);
     void step();
@@ -212,6 +230,7 @@ public:
     void free() override;
     IOReturn setProperties(OSObject *properties) override;
     void requestPower(bool on);
+    void expectWake(unsigned source);
 };
 
 // OSDefineMetaClassAndStructors(SwitchBacklight, IOService), except that the metaclass's superclass is the original
@@ -276,37 +295,48 @@ void SwitchBacklight::powerOff()
     // The ALS first: it shares LDO6 with the touch panel, which turns it off, and its 2 s frame-end deadline must be
     // disarmed before the scanout stops.
     switch_als_set_active(false);
+    const uint64_t als = mach_absolute_time();
     switch_touch_display_power(false);
-    switch_joycon_display_power(false);  // rail traffic and timers stop (returns at once)
+    const uint64_t touch = mach_absolute_time();
     const int err = tegra_panel_power_off();
     if (err) IOLog("SwitchBacklight: panel off failed (%d): the display is not running\n", err);
+    const uint64_t panel = mach_absolute_time();
     scanoutStopped = native_legacy_display_set_scanout(false);
     panelOn = false;
     sentRaw = ~0u;
-    os_log(OS_LOG_DEFAULT, "SwitchBacklight: display off in %llu ms (panel %s, scanout %s)", msSince(start),
-           err ? "not running" : "asleep", scanoutStopped ? "stopped" : "still running");
+    switch_wake_display(false);
+    switch_power_journal(
+        "SwitchBacklight: display off in %llu ms (als %llu, touch %llu, panel %llu %s, scanout %llu %s)",
+        msSince(start), msBetween(start, als), msBetween(als, touch), msBetween(touch, panel),
+        err ? "not running" : "asleep", msSince(panel), scanoutStopped ? "stopped" : "still running");
+    switch_power_journal_flush(false);  // to Data now, while nothing is wrong yet
 }
 
 // Work loop. TegraPanel's first step waits for a frame end of the restarted DC, and panics if none comes.
 void SwitchBacklight::powerOn()
 {
     const uint64_t start = mach_absolute_time();
-    switch_touch_display_power(true);   // the controller comes up on its own work loop while the panel wakes
-    switch_joycon_display_power(true);  // so do seated Joy-Cons, on the rail's
+    switch_touch_display_power(true);  // the controller comes up on its own work loop while the panel wakes
+    const uint64_t touch = mach_absolute_time();
     if (scanoutStopped && !native_legacy_display_set_scanout(true)) {
         panic("SwitchBacklight: the display did not restart DC A's scanout for wake");
     }
     scanoutStopped = false;
+    const uint64_t scanout = mach_absolute_time();
     const int level = brightnessCommands ? (int)toRaw(target ? target : lit) : -1;
     const int err = tegra_panel_power_on(level);
     if (err) IOLog("SwitchBacklight: panel on failed (%d): the display is not running\n", err);
+    const uint64_t panel = mach_absolute_time();
     panelOn = true;
     sentRaw = err || level < 0 ? ~0u : (unsigned)level;
     if (target == 0 && level >= 0) target = current = lit;
     gDisplayOn = true;
     switch_als_set_active(true);  // last: frame ends run again, and LDO6 came back with the touch panel meanwhile
-    os_log(OS_LOG_DEFAULT, "SwitchBacklight: display on in %llu ms (panel %s, level %d)", msSince(start),
-           err ? "not running" : "awake", level);
+    switch_wake_display(true);
+    switch_power_journal("SwitchBacklight: display on in %llu ms (touch %llu, scanout %llu, panel %llu %s, als %llu; "
+                         "level %d)",
+                         msSince(start), msBetween(start, touch), msBetween(touch, scanout), msBetween(scanout, panel),
+                         err ? "not running" : "awake", msSince(panel), level);
 }
 
 // Work loop: the latest requests, display power first, then one step of the current ramp. Re-arms itself until the
@@ -382,6 +412,29 @@ void SwitchBacklight::workFired(OSObject *owner, IOTimerEventSource *)
     if (auto *self = OSDynamicCast(SwitchBacklight, owner)) self->step();
 }
 
+// Work loop, at the wake guarantee's deadline: with the panel still off and no display-on asked for, light it as the
+// render server would have (wantOn), then play it.
+void SwitchBacklight::guardFired(OSObject *owner, IOTimerEventSource *sender)
+{
+    auto *self = OSDynamicCast(SwitchBacklight, owner);
+    if (!self) return;
+    IOLockLock(self->requestLock);
+    const unsigned source = self->guard.source;
+    const int verdict = switch_wake_guard_check(&self->guard, mach_absolute_time(), self->panelOn, self->wantOn);
+    if (verdict == 1) self->wantOn = true;
+    IOLockUnlock(self->requestLock);
+    if (verdict < 0) {
+        sender->setTimeoutMS(50);  // a timer that came early: look again
+        return;
+    }
+    if (verdict == 0) return;
+    switch_power_journal("SwitchBacklight: %s with the panel off and no display-on request from the render server in "
+                         "%u ms: the kernel lights the panel (SpringBoard or backboardd not answering?)",
+                         switch_wake_source_name(source), SWITCH_WAKE_GUARD_MS);
+    switch_wake_stackshot(switch_wake_source_name(source));
+    self->step();
+}
+
 IOReturn SwitchBacklight::setProperties(OSObject *properties)
 {
     OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
@@ -428,8 +481,18 @@ void SwitchBacklight::requestPower(bool on)
     if (!on) gDisplayOn = false;  // input is ignored from the request on, not only once the panel is dark
     IOLockLock(requestLock);
     wantOn = on;
+    if (on) switch_wake_guard_display_on(&guard);
     IOLockUnlock(requestLock);
     kick();
+}
+
+// Any thread context (a wake source with the panel off, SwitchWake.cpp). Never blocks on this loop.
+void SwitchBacklight::expectWake(unsigned source)
+{
+    IOLockLock(requestLock);
+    const bool armed = switch_wake_guard_arm(&guard, source, mach_absolute_time(), guardTimeout, gDisplayOn || wantOn);
+    IOLockUnlock(requestLock);
+    if (armed) guardTimer->setTimeoutMS(SWITCH_WAKE_GUARD_MS);
 }
 
 bool SwitchBacklight::start(IOService *provider)
@@ -438,12 +501,14 @@ bool SwitchBacklight::start(IOService *provider)
     brightnessCommands = bootArg("switch-backlight");
     nanoseconds_to_absolutetime(kSendIntervalNS, &sendInterval);
     sleepEnabled = switch_display_power_enabled();
+    nanoseconds_to_absolutetime(SWITCH_WAKE_GUARD_MS * 1000000ull, &guardTimeout);
     requestLock = IOLockAlloc();
     loop = IOWorkLoop::workLoop();
     work = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::workFired) : nullptr;
     quiet = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::quietFired) : nullptr;
-    if (!requestLock || !work || !quiet || loop->addEventSource(work) != kIOReturnSuccess ||
-        loop->addEventSource(quiet) != kIOReturnSuccess) {
+    guardTimer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::guardFired) : nullptr;
+    if (!requestLock || !work || !quiet || !guardTimer || loop->addEventSource(work) != kIOReturnSuccess ||
+        loop->addEventSource(quiet) != kIOReturnSuccess || loop->addEventSource(guardTimer) != kIOReturnSuccess) {
         IOLog("SwitchBacklight: work loop setup failed\n");
         return false;
     }
@@ -495,6 +560,11 @@ void SwitchBacklight::free()
         if (loop) loop->removeEventSource(quiet);
         quiet->release();
     }
+    if (guardTimer) {
+        guardTimer->cancelTimeout();
+        if (loop) loop->removeEventSource(guardTimer);
+        guardTimer->release();
+    }
     OSSafeReleaseNULL(loop);
     if (requestLock) IOLockFree(requestLock);
     IOService::free();
@@ -538,4 +608,10 @@ extern "C" bool switch_display_power_request(bool on)
 extern "C" bool switch_display_is_on(void)
 {
     return gDisplayOn;
+}
+
+extern "C" void switch_backlight_expect_wake(unsigned source)
+{
+    SwitchBacklight *backlight = __atomic_load_n(&gBacklight, __ATOMIC_ACQUIRE);
+    if (backlight && backlight->sleepEnabled) backlight->expectWake(source);
 }
