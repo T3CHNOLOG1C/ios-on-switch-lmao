@@ -18,6 +18,10 @@
 #include <string.h>
 #include "TegraGM20BABI.h"
 #include "TegraGM20BGpu.h"
+#include "TegraGM20BPushScan.h"
+using tgm_scan::PushCounts;
+using tgm_scan::PushParse;
+using tgm_scan::scanPush;
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 
 namespace
@@ -571,24 +575,26 @@ void ownerNote(const char *owner, uint64_t bytes, uint64_t ns, bool made)
 	IOLockUnlock(p->lock);
 }
 
-// boot-arg tegra-gpu-stats=1 (also gpu.c's stats lines): the method stream of every kScanEvery-th submission is read
-// back and what it asks of the GPU is counted, one line per 5 s ("tegra-gm20b: push"), per submission: render passes,
-// bound color targets (RTs) and the pitch-linear ones, draws, 3D wait-for-idles (WFI), texture and shader cache
-// invalidates, clears, copy-engine copies and their bytes, 2D blits, compute dispatches, semaphore acquires and host
-// flushes (MEM_OP, SET_REFERENCE, WFI); "bad" counts streams with an opcode NVK does not emit. Pushes in host imports
-// (no kernel mapping) are not read; the line says what share of the push bytes was. Encoding: NV906F DMA headers (opcode
-// 31:29, count or immediate 28:16, subchannel 15:13, dword method 11:0); NVK's subchannels (Mesa nv_push.h: 0 3D,
-// 1 compute, 3 2D, 4 copy) and MME macros (nvk_mme.h: 2 CLEAR, 11..16 the draws); method numbers from Mesa's clb197.h,
-// clb1c0.h, cl902d.h and cla0b5.h.
-constexpr uint32_t kScanEvery = 4;
+// boot-arg tegra-gpu-stats=1 (also gpu.c's stats lines): the method stream of every kScanEvery-th submission of each
+// connection is read back and what it asks of the GPU is counted, one line per process every 5 s ("tegra-gm20b: push
+// <process>", the window's first kPushOwners - 1 processes by name, the rest as "(others)"), per submission: render passes
+// (and of those, the ones with a depth target and the multisampled ones), bound color targets (RTs) and the pitch-linear
+// ones, draws, clears; every 3D wait-for-idle (WFI), shader cache invalidate that waits for idle and flushes (INVALIDATE_SHADER_CACHES,
+// NVK's FLUSH_SHADER_DATA barrier) and the ones that do not (_NO_WFI), texture data cache invalidate, host SET_REFERENCE
+// (a host wait for idle: NVK's HOST_WFI_FLUSH_SYSMEM and MME-data barriers), MEM_OP_D L2 system-memory invalidate and
+// host WFI; copy-engine copies with their bytes and the zero-length LAUNCH_DMAs NVK uses as a copy-engine WFI, 2D blits,
+// compute dispatches and semaphore acquires; "bad" counts streams with an opcode NVK does not emit. Pushes in host
+// imports (no kernel mapping) are not read; the line says what share of the push bytes was. The reader:
+// TegraGM20BPushScan.h. Every kProfileEvery-th submission read is also profiled (gpu.c "push profile").
+constexpr uint32_t kScanEvery = 4, kPushOwners = 4, kProfileEvery = 16;  // 1 submission in 64 profiled (its pushes WFI-stamped)
 constexpr uint64_t kScanMaxBytes = 512 << 10, kScanWindowNs = 5000000000ULL;
-struct PushCounts {
-	uint64_t submits, scanned, bytes, readBytes, unparsed;
-	uint64_t passes, targets, linearTargets, draws, wfi, texInval, shaderInval, clears,
-		ceCopies, ceBytes, blits, dispatches, acquires, hostFlushes;
+struct PushOwner {
+	char name[17];
+	PushCounts c;
 };
-PushCounts gPush;
+PushOwner gPushOwners[kPushOwners];
 uint64_t gPushSince;
+IOLock *gPushLock;
 
 bool pushScanOn()
 {
@@ -598,100 +604,6 @@ bool pushScanOn()
 		on = PE_parse_boot_argn("tegra-gpu-stats", &v, sizeof(v)) && v;
 	}
 	return on;
-}
-
-struct PushParse {
-	uint32_t op, subc, mthd,
-		left;  // the method in progress (it may continue in the next push of the submission)
-	uint32_t ceLine, ceCount;  // the copy engine's LINE_LENGTH_IN / LINE_COUNT
-};
-
-void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd, uint32_t data)
-{
-	if (mthd < 0x100) {                          // host methods, any subchannel
-		if (mthd == 0x001c && (data & 0xd))  // SEMAPHORED: ACQUIRE, ACQ_GEQ, ACQ_AND
-			c.acquires++;
-		else if (mthd == 0x0034 || mthd == 0x0050 ||
-			 mthd == 0x0078)  // MEM_OP_D, SET_REFERENCE (NVK's membar), WFI
-			c.hostFlushes++;
-		return;
-	}
-	const bool target =
-		mthd >= 0x0800 && mthd < 0x0a00;  // SET_COLOR_TARGET_*(j), 64 bytes apart
-	switch (subc) {
-	case 0:  // MAXWELL_B
-		if (mthd == 0x0110)
-			c.wfi++;  // WAIT_FOR_IDLE
-		else if (mthd == 0x1288 || mthd == 0x1338)
-			c.texInval++;  // INVALIDATE_TEXTURE_DATA_CACHE(_NO_WFI)
-		else if (mthd == 0x021c)
-			c.shaderInval++;  // INVALIDATE_SHADER_CACHES (waits for idle)
-		else if (mthd == 0x1538)
-			c.passes++;  // SET_ZT_SELECT: once per vkCmdBeginRendering
-		else if (mthd == 0x19d0)
-			c.clears++;  // CLEAR_SURFACE
-		else if (mthd == 0x1618)
-			c.draws++;  // BEGIN outside an MME macro
-		else if (target && (mthd & 0x3f) == 0x10 && data)
-			c.targets++;  // SET_COLOR_TARGET_FORMAT, not DISABLED
-		else if (target && (mthd & 0x3f) == 0x14 && (data & (1u << 12)))
-			c.linearTargets++;  // SET_COLOR_TARGET_MEMORY LAYOUT_PITCH
-		else if (mthd >= 0x3800 && mthd < 0x3c00 && !(mthd & 7)) {  // CALL_MME_MACRO(j)
-			const uint32_t j = (mthd - 0x3800) / 8;
-			c.draws += j >= 11 && j <= 16;
-			c.clears += j == 2;
-		}
-		break;
-	case 1:                                  // MAXWELL_COMPUTE_B
-		c.dispatches += mthd == 0x02b4;  // SEND_PCAS_A
-		c.wfi += mthd == 0x0110;
-		break;
-	case 3:                             // FERMI_TWOD_A
-		c.blits += mthd == 0x08dc;  // PIXELS_FROM_MEMORY_SRC_Y0_INT
-		break;
-	case 4:  // MAXWELL_DMA_COPY_A
-		if (mthd == 0x0418)
-			p.ceLine = data;
-		else if (mthd == 0x041c)
-			p.ceCount = data;
-		else if (mthd == 0x0300) {  // LAUNCH_DMA (bit 9 MULTI_LINE)
-			c.ceCopies++;
-			c.ceBytes += uint64_t(p.ceLine) * ((data & (1u << 9)) ? p.ceCount : 1);
-		}
-		break;
-	default:
-		break;
-	}
-}
-
-void pushParse(PushCounts &c, PushParse &p, const uint32_t *w, uint64_t n)
-{
-	for (uint64_t i = 0; i < n; i++) {
-		if (p.left) {  // a data word of the method in progress
-			pushMethod(c, p, p.subc, p.mthd, w[i]);
-			if (p.op == 1) {  // INC: the next word to the next method
-				p.mthd += 4;
-			} else if (p.op ==
-				   5) {  // ONE_INC: every word after the first to the next method
-				p.op = 3;
-				p.mthd += 4;
-			}
-			p.left--;
-			continue;
-		}
-		const uint32_t h = w[i], op = h >> 29, count = (h >> 16) & 0x1fff,
-			       subc = (h >> 13) & 7, mthd = (h & 0xfff) << 2;
-		if (!h)
-			continue;  // padding
-		if (op == 4) {     // IMMD_DATA_METHOD: the data is the count field
-			pushMethod(c, p, subc, mthd, count);
-		} else if (op == 1 || op == 3 || op == 5) {  // INC, NON_INC, ONE_INC
-			p = PushParse{op, subc, mthd, count, p.ceLine, p.ceCount};
-		} else {
-			c.unparsed++;
-			return;
-		}
-	}
 }
 
 IOReturn ioreturn(int err)
@@ -813,6 +725,10 @@ class AGXDeviceUserClient : public IOUserClient
 	bool counted_ = false;
 	bool closing_ = false;  // clientClose/free: BOs still mapped are expected (a dying task's)
 	char owner_[17] = {};   // the opening process
+	uint32_t pushSubmits_ =
+		0;  // tegra-gpu-stats: its submissions, every kScanEvery-th read (scanPushes)
+	uint32_t pushScans_ =
+		0;  // the ones read, every kProfileEvery-th also profiled (gpu.c "push profile")
 	bool critical_ =
 		true;  // its GPU errors panic; no pool quota (all but the compositor with all-clients)
 	bool dead_ = false;  // a channel was killed for a GPU error: no new work, BOs or binds
@@ -824,7 +740,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void releaseBo(Bo *bo);
 	void reap(bool force);
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
-	void scanPushes(const tgm_push *pushes, uint32_t count);
+	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof);
 	IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out,
 		     uint32_t *outSize);
 
@@ -1427,13 +1343,16 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 
 // tegra-gpu-stats (see pushScanOn): count what this submission's pushes ask of the GPU, through the kernel's view of the
 // BOs they lie in (pool BOs write-combined, cached BOs their kernel mapping); every 5 s the window's line.
-void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count)
+void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof)
 {
 	PushCounts c = {};
 	PushParse p = {};
 	const Binding *hit = nullptr;
 	uint64_t budget = kScanMaxBytes;
+	bool whole = true;  // scanPush
 	for (uint32_t i = 0; i < count; i++) {
+		if (prof && i < TGM_PROF_MAX)
+			prof->cls[i] = TGM_PC_SKIP;
 		const uint64_t va = pushes[i].va, bytes = uint64_t(pushes[i].dwords) * 4;
 		c.bytes += bytes;
 		if (!hit || va < hit->va || va + bytes > hit->va + hit->range) {
@@ -1448,57 +1367,90 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count)
 				   : hit->bo->bmd     ? hit->bo->bmd->getBytesNoCopy()
 						      : nullptr;
 		if (!base || bytes > budget) {
-			p.left =
-				0;  // a method straddling into a push not read is lost, not misread
+			scanPush(c, p, whole, nullptr, 0);  // not read: no later push is stamped
 			continue;
 		}
 		budget -= bytes;
 		c.readBytes += bytes;
-		pushParse(c, p,
-			  reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(base) +
-							     hit->bo_offset + (va - hit->va)),
-			  bytes / 4);
+		const uint8_t cls = scanPush(
+			c, p, whole,
+			reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(base) +
+							   hit->bo_offset + (va - hit->va)),
+			bytes / 4);
+		if (prof && i < TGM_PROF_MAX)
+			prof->cls[i] = cls;
 	}
 	c.scanned = 1;
-	for (size_t k = 0; k < sizeof(c) / sizeof(uint64_t); k++)
-		__atomic_fetch_add(&reinterpret_cast<uint64_t *>(&gPush)[k],
-				   reinterpret_cast<uint64_t *>(&c)[k], __ATOMIC_RELAXED);
-
-	const uint64_t now = nowNs();
-	uint64_t since = __atomic_load_n(&gPushSince, __ATOMIC_RELAXED);
-	if (!since) {
-		__atomic_compare_exchange_n(&gPushSince, &since, now, false, __ATOMIC_RELAXED,
-					    __ATOMIC_RELAXED);
-		return;
+	c.submits = kScanEvery;  // this connection's submissions since its last one read
+	if (!gPushLock) {
+		IOLock *fresh = IOLockAlloc(), *expected = nullptr;
+		if (!__atomic_compare_exchange_n(&gPushLock, &expected, fresh, false,
+						 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+			IOLockFree(fresh);
+		if (!gPushLock)
+			return;
 	}
-	if (now - since < kScanWindowNs ||
-	    !__atomic_compare_exchange_n(&gPushSince, &since, now, false, __ATOMIC_RELAXED,
-					 __ATOMIC_RELAXED))
+	const uint64_t now = nowNs();
+	// static: only the submission that ends a window (one per 5 s, chosen under the lock) logs from them
+	static PushOwner window[kPushOwners];
+	static char line[700];
+	bool log = false;
+	IOLockLock(gPushLock);
+	PushOwner *o = nullptr;
+	for (uint32_t i = 0; i < kPushOwners - 1 && !o; i++)
+		if (!gPushOwners[i].c.scanned ||
+		    !strncmp(gPushOwners[i].name, owner_, sizeof(gPushOwners[i].name) - 1))
+			o = &gPushOwners[i];
+	if (!o) {  // more processes than lines this window: the last line takes the rest
+		o = &gPushOwners[kPushOwners - 1];
+		strlcpy(o->name, "(others)", sizeof(o->name));
+	} else if (!o->c.scanned) {
+		strlcpy(o->name, owner_, sizeof(o->name));
+	}
+	for (size_t k = 0; k < sizeof(c) / sizeof(uint64_t); k++)
+		reinterpret_cast<uint64_t *>(&o->c)[k] += reinterpret_cast<const uint64_t *>(&c)[k];
+	if (!gPushSince) {
+		gPushSince = now;
+	} else if (now - gPushSince >= kScanWindowNs) {
+		gPushSince = now;
+		memcpy(window, gPushOwners, sizeof(window));
+		bzero(gPushOwners, sizeof(gPushOwners));
+		log = true;
+	}
+	IOLockUnlock(gPushLock);
+	if (!log)
 		return;
-	PushCounts w;
-	for (size_t k = 0; k < sizeof(w) / sizeof(uint64_t); k++)
-		reinterpret_cast<uint64_t *>(&w)[k] = __atomic_exchange_n(
-			&reinterpret_cast<uint64_t *>(&gPush)[k], 0, __ATOMIC_RELAXED);
-	const uint64_t n = w.scanned ? w.scanned : 1;
-	char v[15][24];
-	const uint64_t per[15] = {w.passes,      w.targets,     w.linearTargets, w.draws,
-				  w.wfi,         w.texInval,    w.shaderInval,   w.clears,
-				  w.ceCopies,    w.blits,       w.dispatches,    w.acquires,
-				  w.hostFlushes, w.bytes >> 10, w.ceBytes >> 10};
-	for (int k = 0; k < 15; k++)
-		snprintf(v[k], sizeof(v[k]), "%llu.%llu", per[k] / n, per[k] * 10 / n % 10);
-	// one string argument: os_log drops a message whose scalar arguments outgrow its buffer (gpu.c stats_tick)
-	char line[600];
-	snprintf(line, sizeof(line),
-		 "%llu/%llu submits read, %s KiB each (%llu%% readable); per submit: %s passes, %s "
-		 "RTs "
-		 "(%s pitch), %s draws, %s WFI, %s texinv, %s shinv, %s clears, %s CE (%s KiB), %s "
-		 "2D, %s disp, %s acq, %s host; "
-		 "%llu bad",
-		 w.scanned, w.submits, v[13], w.bytes ? w.readBytes * 100 / w.bytes : 0, v[0], v[1],
-		 v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[14], v[9], v[10], v[11], v[12],
-		 w.unparsed);
-	os_log(OS_LOG_DEFAULT, "tegra-gm20b: push %s", line); /* log only */
+	for (uint32_t i = 0; i < kPushOwners; i++) {
+		const PushCounts &w = window[i].c;
+		if (!w.scanned)
+			continue;
+		const uint64_t n = w.scanned;
+		const uint64_t per[] = {w.bytes >> 10, w.passes,           w.depthPasses,
+					w.msaaPasses,  w.targets,          w.linearTargets,
+					w.draws,       w.clears,           w.wfi,
+					w.shaderInval, w.shaderInvalNoWfi, w.texInval,
+					w.setRef,      w.l2Inval,          w.hostWfi,
+					w.ceCopies,    w.ceBytes >> 10,    w.ceWfi,
+					w.blits,       w.dispatches,       w.acquires};
+		constexpr size_t kFields = sizeof(per) / sizeof(per[0]);
+		char v[kFields][24];
+		for (size_t k = 0; k < kFields; k++)
+			snprintf(v[k], sizeof(v[k]), "%llu.%llu", per[k] / n, per[k] * 10 / n % 10);
+		// one string argument: os_log drops a message whose scalar arguments outgrow its buffer (gpu.c stats_tick)
+		snprintf(line, sizeof(line),
+			 "%s: %llu of %llu submits read, %s KiB each (%llu%% readable); per "
+			 "submit: %s passes "
+			 "(%s depth, %s MSAA), %s RTs (%s pitch), %s draws, %s clears; %s WFI, %s "
+			 "shinv+WFI, %s "
+			 "shinv, %s texinv, %s setref, %s L2 inv, %s host WFI; %s CE (%s KiB), %s "
+			 "CE WFI, %s 2D, "
+			 "%s disp, %s acq; %llu bad",
+			 window[i].name, w.scanned, w.submits, v[0],
+			 w.bytes ? w.readBytes * 100 / w.bytes : 0, v[1], v[2], v[3], v[4], v[5],
+			 v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16],
+			 v[17], v[18], v[19], v[20], w.unparsed);
+		os_log(OS_LOG_DEFAULT, "tegra-gm20b: push %s", line); /* log only */
+	}
 }
 
 IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
@@ -1533,11 +1485,15 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 			if (bo->coh && !bo->readOnly)
 				tgm_coherency_wrote(bo->coh);
 	}
-	if (count && pushScanOn() &&
-	    __atomic_fetch_add(&gPush.submits, 1, __ATOMIC_RELAXED) % kScanEvery == 0)
-		scanPushes(pushes, count);
+	tgm_prof prof;
+	bool profiled = false;
+	if (count && pushScanOn() && pushSubmits_++ % kScanEvery == 0) {
+		profiled = count <= TGM_PROF_MAX && pushScans_++ % kProfileEvery == 0;
+		scanPushes(pushes, count, profiled ? &prof : nullptr);
+	}
 	uint32_t seqno = 0;
-	IOReturn ret = ioreturn(tgm_chan_exec(chan, pushes, count, &seqno));
+	IOReturn ret =
+		ioreturn(tgm_chan_exec(chan, pushes, count, &seqno, profiled ? &prof : nullptr));
 	reap(false);
 	if (ret)
 		return ret;

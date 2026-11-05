@@ -28,8 +28,18 @@ PATCHES = [
     # client's mapping; a submission's CPU wait for a sync ends after 20 s with one line and abort() (r9-hang).
     "nvk-0006-host-image-copy-tegra.patch",
     "nvk-0007-bounded-submission-waits.patch",
+    # r15-gpuperf: no render-pass barriers NVK does not need. Mesa's render pass emulation made a subpass's dependency on
+    # itself a barrier at the subpass's start, and moved every GENERAL feedback loop (metal2vulkan's framebuffer fetch:
+    # each of Core Animation's passes) to ATTACHMENT_FEEDBACK_LOOP_OPTIMAL and back, a layout transition at each end, all
+    # on top of the barriers the program asked for. Host twin, one Core Animation frame of 23 passes (a blurred card over
+    # a 720x1280 layer tree): 32 WAIT_FOR_IDLE, 53 flushing INVALIDATE_SHADER_CACHES and 68 texture cache invalidates
+    # before, 15, 13 and 28 after.
+    "nvk-0008-render-pass-barriers.patch",
 ]
 
+# r15 (r15-gpuperf): the series + nvk-0008-render-pass-barriers.patch, built here; GIT_SHA1 unchanged (the version string
+# still names r10's commit), so only the tree and the two dylibs' sha256 moved.
+#
 # r10: the version string's commit (the hand build's checkout HEAD, r8-webgpu's 02d6432d39) and the patched tree's git id
 # (its .source). Against the hand-built r10 dylib (out/agent-scratch/r8-webgpu/nvk-r10, the same tree 8d5d979b): `strip -S`
 # of both leaves 16911008 bytes that differ only in LC_UUID's 16, as r9's below.
@@ -45,9 +55,9 @@ PATCHES = [
 GIT_SHA1 = "02d6432d39"
 
 EXPECT = {
-    "tree": "8d5d979beb05f299812c6761a581ce648823663c",
-    "ios": "e5b2c97b4fa8be5fb13f6feb4b5b700b8a1551e956d830113487d33fe085f138",
-    "macos": "4d043fd10f7f0372c0767565c84634ded13e95b41349aadfde73fa60070eb138",
+    "tree": "615cfd2ddf8c8970ee518f7930bad06c16dd1db8",
+    "ios": "720a54df27fc078f7979bc49aeccec387958b816aadc6ae25edbee259eee7d7f",
+    "macos": "8006acbaea071acd6ac20d9234169a49bbca39ec509d1a1bc2816fbf3cd5d127",
 }
 
 # Panic locations in the Rust standard library, as r9's rustup toolchain (with rust-src) spelled them.

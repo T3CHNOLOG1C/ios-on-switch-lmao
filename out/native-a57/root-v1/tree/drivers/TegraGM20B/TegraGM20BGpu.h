@@ -84,8 +84,32 @@ struct tgm_push {
  * the last GPU present queued before this call has finished reading its surface (a GPU-side wait), and after what the
  * acquires tgm_chan_order queued for the channel wait for. -EBUSY when the GPFIFO stays full for 1 s (a panic from the
  * self-test on), -EIO on a dead channel. */
+struct tgm_prof;
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
-		  uint32_t *seqno);
+		  uint32_t *seqno, const struct tgm_prof *prof);
+/* tegra-gpu-stats push profile (gpu.c "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
+ * asks of the GPU (TegraGM20BUserClient.cpp scanPushes); the submission then stamps the GPU's time after each push whose
+ * class is not TGM_PC_SKIP, and each window's "gpuprof" line gives every process's GPU time by class. Draws and clears
+ * are split by their pass's first color target: its size (full >= 600k pixels, mid >= 100k, small), pitch-linear or
+ * block-linear, multisampled or not. */
+#define TGM_PROF_MAX 128
+enum {
+	TGM_PC_DRAW = 0,   /* + size * 4 + pitch * 2 + msaa */
+	TGM_PC_CLEAR = 12, /* + the same */
+	TGM_PC_PASS = 24,  /* begins a render pass, draws and clears nothing */
+	TGM_PC_SYNC,       /* only waits, cache invalidates and host flushes */
+	TGM_PC_COMPUTE,
+	TGM_PC_COPY,
+	TGM_PC_2D,
+	TGM_PC_STATE, /* state and anything else */
+	TGM_PC_FENCE, /* the kernel's fence push (WFI, L2 flush): the end stamp's share */
+	TGM_PC_COUNT,
+	TGM_PC_SKIP =
+		0xff, /* no stamp after this push: a method may continue into the next one, or it was not read */
+};
+struct tgm_prof {
+	uint8_t cls[TGM_PROF_MAX];
+};
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);
 uint32_t tgm_chan_completed(struct tgm_chan *chan);
 /* The group a channel belongs to (its connection's task): tgm_chan_order relates the channels of one group. */

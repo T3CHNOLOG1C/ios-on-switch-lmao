@@ -32,6 +32,7 @@
 #include <subdev/acr.h>
 #include <subdev/clk.h>
 #include <subdev/clk/priv.h> /* nvkm_clk_func: clk_raise() runs calc/prog as gm20b_clk_init() does */
+#include <subdev/clk/gk20a.h> /* gk20a_clk.parent_rate: clk_measure()'s reference */
 #include <subdev/devinit.h>
 #include <subdev/fb.h>
 #include <subdev/timer.h>
@@ -351,8 +352,17 @@ static int clk_raise(char *line, unsigned int len)
 		   nvkm_rd32(device, 0x137000), nvkm_rd32(device, 0x137004),
 		   nvkm_clk_read(device->clk, nv_clk_src_gpc), khz);
 	ret = clk_prog_khz(device, khz);
-	if (clk_state(device, "raised", ret, khz))
+	if (clk_state(device, "raised", ret, khz)) {
+		/* the one result line (nvxnu_step prints only with tegra-gpu-trace): the rate the PLL now holds, from
+		 * its own registers; the stats line measures it every window (clk_measure) */
+		u32 coeff = nvkm_rd32(device, 0x137004);
+		nvxnu_log("tegra-gm20b: GPU clock %d kHz (GPCPLL M %u N %u PL %u, "
+			  "tegra-gpu-mhz=%lld), "
+			  "VDD_GPU %d uV\n",
+			  nvkm_clk_read(device->clk, nv_clk_src_gpc), coeff & 0xff,
+			  (coeff >> 8) & 0xff, (coeff >> 16) & 0x3f, mhz, uv);
 		return 0;
+	}
 
 	/* not at the target: one way back to the M1 rate, at the same voltage */
 	back = clk_prog_khz(device, BOOT_KHZ);
@@ -887,9 +897,12 @@ static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int r
 #define CHAN_PUSH_BYTES 0x10000  /* nouveau_channel_ctor: plength */
 #define CHAN_GPFIFO_BYTES 0x2000 /* ilength: 1024 entries */
 #define CHAN_SEMA_BYTES \
-	0x1000 /* nvif's GET semaphore at +0; tegra-gpu-stats stamps at CHAN_STAMPS */
+	0x2000 /* nvif's GET semaphore at +0; tegra-gpu-stats stamps at CHAN_STAMPS, push profile at CHAN_PROF */
 #define CHAN_BYTES (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + CHAN_SEMA_BYTES)
 #define CHAN_STAMPS (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + 0x800)
+#define CHAN_PROF                              \
+	(CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + \
+	 0x1000) /* one 16-byte stamp per push, TGM_PROF_MAX */
 #define CHAN_NSTAMPS \
 	64 /* by seqno; one record = two 16-byte semaphore releases (payload, 0, PTIMER ns) */
 
@@ -941,6 +954,15 @@ struct tgm_chan {
 	u32 stat_done; /* tegra-gpu-stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
+	u64 stat_exec,
+		stat_exec_max; /* tegra-gpu-stats: this window's stamped exec time (PTIMER units), for its owner */
+	u32 stat_exec_n;
+	/* push profile: the profiled submission in flight (0: none), its pushes' classes, and this window's GPU time by
+	 * class (PTIMER units) and the pushes counted, for its owner */
+	u32 prof_seqno, prof_count, prof_subs;
+	u8 prof_cls[TGM_PROF_MAX];
+	u64 prof_ns[TGM_PC_COUNT];
+	u32 prof_n[TGM_PC_COUNT];
 	/* tgm_chan_order: its connection's task (tgm_chan_set_group), the acquires queued for its next submission
 	 * (live_lock), and the last one kicked (a hang's line names it while it has not passed) */
 	const void *group;
@@ -1735,6 +1757,57 @@ static u64 chan_stamps_va(struct tgm_chan *chan, u32 seqno)
  * (present_gap: and the gap before it). */
 static u64 present_gap(u32 seqno, u64 start);
 
+/* ------------------------------------------------------------------ push profile (tegra-gpu-stats=1)
+ * What each push of a submission costs the GPU, sampled: one submission in 16 of each connection (the user client's
+ * choice, with each push's class from the method stream it read, struct tgm_prof) stamps the GPU's time after each of its
+ * pushes, a 16-byte semaphore release after wait-for-idle (push_stamp, as the submission's own start and end stamps) into
+ * its own slot of the channel's CHAN_PROF page, each kicked as an entry of its own after the push's. So each push's time
+ * is the GPU's from the end of the push before (the start stamp for the first) until its own work has drained, and the
+ * fence push (WFI, L2 flush) takes the rest up to the end stamp; a push not stamped (TGM_PC_SKIP: a method may continue
+ * into the next push, or the method stream was not read) has its time counted with the next one stamped. The stamps' wait
+ * for idle keeps pushes from overlapping in a profiled submission, so those run slightly longer than others: one in 16
+ * per connection, no more than one in flight per channel, and none with more than TGM_PROF_MAX pushes. Each window, the
+ * "gpuprof" line gives every process's time by class (stats_exec_owners). */
+static void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
+{
+	volatile struct tgm_stamp *slot =
+		(volatile struct tgm_stamp *)((u8 *)chan->ring + CHAN_PROF);
+	u64 prev = start, t;
+	u32 i, n = min_t(u32, READ_ONCE(chan->prof_count), TGM_PROF_MAX);
+
+	for (i = 0; i < n; i++) {
+		u8 c = chan->prof_cls[i];
+		if (c == TGM_PC_SKIP)
+			continue;
+		if (c >= TGM_PC_COUNT || slot[i].payload != seqno)
+			return; /* not this submission's stamp: drop the rest */
+		t = slot[i].ns;
+		if (t < prev)
+			return;
+		__atomic_fetch_add(&chan->prof_ns[c], t - prev, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&chan->prof_n[c], 1, __ATOMIC_RELAXED);
+		prev = t;
+	}
+	if (end >= prev) {
+		__atomic_fetch_add(&chan->prof_ns[TGM_PC_FENCE], end - prev, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&chan->prof_n[TGM_PC_FENCE], 1, __ATOMIC_RELAXED);
+	}
+	__atomic_fetch_add(&chan->prof_subs, 1, __ATOMIC_RELAXED);
+}
+
+static const char *prof_name(unsigned int c, char *buf, unsigned int len)
+{
+	static const char *const size[] = {"full", "mid", "small"};
+	static const char *const other[] = {"pass", "sync",  "compute", "copy",
+					    "2D",   "state", "fence"};
+	if (c < TGM_PC_PASS)
+		scnprintf(buf, len, "%s %s %s%s", c < TGM_PC_CLEAR ? "draw" : "clear",
+			  size[(c % 12) / 4], c & 2 ? "pitch" : "block", c & 1 ? " MSAA" : "");
+	else
+		scnprintf(buf, len, "%s", other[c - TGM_PC_PASS]);
+	return buf;
+}
+
 static void stats_fences(struct tgm_chan *chan)
 {
 	u32 done = tgm_chan_completed(chan), s = chan->stat_done, i;
@@ -1751,6 +1824,11 @@ static void stats_fences(struct tgm_chan *chan)
 				  now - READ_ONCE(chan->stat_sub_ns[i]));
 		}
 		st = chan_stamps(chan, s + 1);
+		if (!chan->kernel && s + 1 == READ_ONCE(chan->prof_seqno)) {
+			if (st->start.payload == s + 1 && st->end.payload == s + 1)
+				prof_collect(chan, s + 1, st->start.ns, st->end.ns);
+			WRITE_ONCE(chan->prof_seqno, 0);
+		}
 		if (st->start.payload != s + 1 || st->end.payload != s + 1)
 			continue; /* overwritten by a later submission, or not stamped */
 		start = st->start.ns;
@@ -1768,11 +1846,149 @@ static void stats_fences(struct tgm_chan *chan)
 		stats_add(&stats.queue_sum, &stats.queue_max,
 			  start - READ_ONCE(chan->stat_sub_ptimer[i]));
 		stats_add(&stats.exec_sum, &stats.exec_max, end - start);
+		__atomic_fetch_add(&chan->stat_exec_n, 1, __ATOMIC_RELAXED);
+		stats_add(&chan->stat_exec, &chan->stat_exec_max, end - start);
 	}
 	chan->stat_done = done;
 }
 
 static void present_stats(u32 *presents, u64 *sum, u64 *max);
+
+/* The stats line's GPU clock, every window: the rate the GPCPLL is programmed for (nvkm_clk_read: its M/N/PL registers),
+ * whether the GPU runs from it (SEL_VCO bit 0, GPC2CLK_OUT's bypass divider 0 = 1:1), and the rate GPC 0's clock
+ * counter measured (nvgpu gm20b_clk_get_gpcclk_clock_counter: NCGPCCLK cycles counted over 800 cycles of the PLL's
+ * 38.4 MHz reference, hw_trim_gm20b.h trim_gpc_clk_cntr_ncgpcclk_cfg/cnt). A count takes 21 us; each window reads the
+ * count the previous window started and starts the next, so nothing waits for it. A measured rate below the programmed
+ * one would show a slowdown or gating the PLL's registers do not: with it the line prints THERM's idle slowdown factor
+ * (CLK_SLOWDOWN_0 bits 21:16, 0 = off; gm20b_clk_init clears it) and GR's engine clock gating mode (THERM_GATE_CTRL(0)
+ * bits 1:0: 0 run, 1 auto, 2 stop). Called by one submission at a time (the window's winner, stats_tick). */
+#define TRIM_GPC0_NCGPCCLK_CFG 0x134124
+#define TRIM_GPC0_NCGPCCLK_CNT 0x134128
+#define NCGPCCLK_CFG_RESET 0x01000000
+#define NCGPCCLK_CFG_ENABLE 0x00100000
+#define NCGPCCLK_CFG_WRITE_EN 0x00010000
+#define NCGPCCLK_CYCLES 800
+static void clk_measure(char *buf, unsigned int len)
+{
+	static int started;
+	struct nvkm_device *device = gpu.device;
+	u32 cnt = nvkm_rd32(device, TRIM_GPC0_NCGPCCLK_CNT);
+	u32 ref_khz = gk20a_clk(device->clk)->parent_rate / 1000;
+	u32 vco = nvkm_rd32(device, 0x137100), out = nvkm_rd32(device, 0x137250);
+	u32 slow = nvkm_rd32(device, 0x020160), gate = nvkm_rd32(device, 0x020200);
+	int pll = nvkm_clk_read(device->clk, nv_clk_src_gpc);
+	char meas[40] = "-";
+
+	if (started && !badf(cnt))
+		scnprintf(meas, sizeof(meas), "%llu kHz",
+			  (unsigned long long)ref_khz * (cnt & 0xfffff) / NCGPCCLK_CYCLES);
+	else if (started)
+		scnprintf(meas, sizeof(meas), "unread (%08x)", cnt);
+	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG, NCGPCCLK_CFG_RESET);
+	nvkm_wr32(device, TRIM_GPC0_NCGPCCLK_CFG,
+		  NCGPCCLK_CFG_ENABLE | NCGPCCLK_CFG_WRITE_EN | NCGPCCLK_CYCLES);
+	started = 1;
+	scnprintf(buf, len, "GPU clock %d kHz%s, measured %s (slowdown %u, ELCG %u)", pll,
+		  !(vco & 1)     ? " BYPASSED"
+		  : out & 0x3f00 ? " DIVIDED"
+				 : "",
+		  meas, (slow >> 16) & 0x3f, gate & 3);
+}
+
+/* The window's "exec" line: each process's stamped GPU time per submission (start to end stamp, the L2 flush included:
+ * what its work held the GPU for, other channels' time slices inside it included), summed over its channels and taken from
+ * them; the window's first EXEC_OWNERS - 1 processes by name, the rest as "(others)". `rate` converts PTIMER units to ns
+ * (16.16, stats_tick). Called from the submission that won the window, never with live_lock held. */
+#define EXEC_OWNERS 5
+static void stats_exec_owners(char *line, unsigned int len, u64 rate)
+{
+	/* static: one caller at a time (the window's winner, stats_tick) */
+	static struct {
+		char name[17];
+		u64 sum, max;
+		u32 n, subs;
+		u64 prof_ns[TGM_PC_COUNT];
+		u32 prof_n[TGM_PC_COUNT];
+	} o[EXEC_OWNERS];
+	struct tgm_chan *chan;
+	unsigned int used = 0, i, c, at = 0;
+	char name[32];
+
+	memset(o, 0, sizeof(o));
+	mutex_lock(&live_lock);
+	list_for_each_entry(chan, &live_chans, live)
+	{
+		u32 n = __atomic_exchange_n(&chan->stat_exec_n, 0, __ATOMIC_RELAXED);
+		u64 sum = __atomic_exchange_n(&chan->stat_exec, 0, __ATOMIC_RELAXED);
+		u64 max = __atomic_exchange_n(&chan->stat_exec_max, 0, __ATOMIC_RELAXED);
+		u32 subs = __atomic_exchange_n(&chan->prof_subs, 0, __ATOMIC_RELAXED);
+		if ((!n && !subs) || chan->kernel)
+			continue;
+		for (i = 0; i < used && strncmp(o[i].name, chan->owner, sizeof(o[i].name)); i++)
+			;
+		if (i == used && used < EXEC_OWNERS - 1)
+			strlcpy(o[used++].name, chan->owner, sizeof(o[0].name));
+		else if (i == used) {
+			i = EXEC_OWNERS - 1;
+			strlcpy(o[i].name, "(others)", sizeof(o[0].name));
+		}
+		o[i].n += n;
+		o[i].sum += sum;
+		if (max > o[i].max)
+			o[i].max = max;
+		o[i].subs += subs;
+		for (c = 0; c < TGM_PC_COUNT; c++) {
+			o[i].prof_ns[c] +=
+				__atomic_exchange_n(&chan->prof_ns[c], 0, __ATOMIC_RELAXED);
+			o[i].prof_n[c] +=
+				__atomic_exchange_n(&chan->prof_n[c], 0, __ATOMIC_RELAXED);
+		}
+	}
+	mutex_unlock(&live_lock);
+	line[0] = 0;
+	for (i = 0; i < EXEC_OWNERS; i++) {
+		if (!o[i].n)
+			continue;
+		at += scnprintf(line + at, len - at, "%s%s %u x mean %llu us max %llu us",
+				at ? "; " : "", o[i].name, o[i].n,
+				((o[i].sum / o[i].n) * rate >> 16) / 1000,
+				(o[i].max * rate >> 16) / 1000);
+	}
+	if (at)
+		nvxnu_stats("tegra-gm20b: exec by process: %s", line);
+	/* each process's profiled submissions: their GPU time by push class, the largest first, per submission */
+	for (i = 0; i < EXEC_OWNERS; i++) {
+		u64 total = 0, left;
+		u32 shown = 0;
+		if (!o[i].subs)
+			continue;
+		for (c = 0; c < TGM_PC_COUNT; c++)
+			total += o[i].prof_ns[c];
+		at = scnprintf(line, len,
+			       "%s: %u profiled submits, %llu us of GPU each:", o[i].name,
+			       o[i].subs, ((total / o[i].subs) * rate >> 16) / 1000);
+		left = total;
+		while (shown < 10 && left) {
+			unsigned int best = 0;
+			for (c = 1; c < TGM_PC_COUNT; c++)
+				if (o[i].prof_ns[c] > o[i].prof_ns[best])
+					best = c;
+			if (!o[i].prof_ns[best])
+				break;
+			at += scnprintf(
+				line + at, len - at, "%s %s %u x %llu us (%llu us/submit)",
+				shown ? ";" : "", prof_name(best, name, sizeof(name)),
+				o[i].prof_n[best],
+				((o[i].prof_ns[best] / max_t(u32, o[i].prof_n[best], 1)) * rate >>
+				 16) / 1000,
+				((o[i].prof_ns[best] / o[i].subs) * rate >> 16) / 1000);
+			left -= o[i].prof_ns[best];
+			o[i].prof_ns[best] = 0;
+			shown++;
+		}
+		nvxnu_stats("tegra-gm20b: gpuprof %s", line);
+	}
+}
 
 /* Run by each submission: the first one after a window's end logs it. */
 static void stats_tick(void)
@@ -1783,7 +1999,7 @@ static void stats_tick(void)
 		mc_err, mc_adr, copies, gaps;
 	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, l2s, l2m, busy;
 	u32 l2n;
-	char line[640];
+	char line[640], clk[120];
 
 	__atomic_fetch_add(&stats.submits, 1, __ATOMIC_RELAXED);
 	if (!since) {
@@ -1836,6 +2052,7 @@ static void stats_tick(void)
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
+	clk_measure(clk, sizeof(clk));
 	/* formatted here and logged as one string: os_log drops a message whose scalar arguments outgrow its 256-byte buffer
 	 * (libkern/os/log.h OS_LOG_BUFFER_MAX_SIZE), which a string argument does not count against */
 	scnprintf(line, sizeof(line),
@@ -1845,13 +2062,13 @@ static void stats_tick(void)
 		  "%llu%% (PTIMER x%llu.%03llu), "
 		  "L2 %s (invalidate mean %llu us max %llu us), %u presents (%u writer-only), "
 		  "offer to done mean %llu us max "
-		  "%llu us",
+		  "%llu us, %s",
 		  ms, submits, submits * 1000ULL / (ms ? ms : 1), fences ? sum / fences / 1000 : 0,
 		  max / 1000, fences, timed ? PT_NS(qs) / timed / 1000 : 0, PT_NS(qm) / 1000,
 		  timed ? PT_NS(es) / timed / 1000 : 0, PT_NS(em) / 1000, timed, busy, rate >> 16,
 		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile",
 		  l2n ? l2s / l2n / 1000 : 0, l2m / 1000, presents, writer,
-		  presents ? ps / presents / 1000 : 0, pm / 1000);
+		  presents ? ps / presents / 1000 : 0, pm / 1000, clk);
 	nvxnu_stats("tegra-gm20b: stats %s", line);
 	scnprintf(
 		line, sizeof(line),
@@ -1871,6 +2088,7 @@ static void stats_tick(void)
 		nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20,
 		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, mc_int, mc_err, mc_adr);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
+	stats_exec_owners(line, sizeof(line), rate);
 	stats_mem(ms);
 	/* The lazy IOSurface-coherency hooks' work this window (the XNU lock/unlock hook; tgm_coherency_*): GPU-written imports
 	 * invalidated for a CPU read lock, and CPU-written imports cleaned for the GPU at a write unlock. Zero on the render
@@ -2511,10 +2729,10 @@ static DEFINE_MUTEX(order_lock);
 static void present_order(struct tgm_chan *chan);
 
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
-		  uint32_t *seqno)
+		  uint32_t *seqno, const struct tgm_prof *prof)
 {
 	int ordered = present_order_on() && !chan->kernel && chan->vm->pfence_va;
-	u32 i;
+	u32 i, stamps = 0;
 	int ret;
 
 	if (chan->error)
@@ -2523,11 +2741,23 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 		*seqno = chan->submitted;
 		return 0;
 	}
+	/* a push profile (see "push profile"): only with the stats' stamps, one in flight per channel; one whose completion
+	 * the stats' interrupt pass no longer looks at (more than CHAN_NSTAMPS behind) is given up */
+	{
+		u32 ps = READ_ONCE(chan->prof_seqno);
+		if (ps && (s32)(tgm_chan_completed(chan) - ps) > CHAN_NSTAMPS)
+			WRITE_ONCE(chan->prof_seqno, 0);
+	}
+	if (prof &&
+	    (!stats_on() || chan->kernel || count > TGM_PROF_MAX || READ_ONCE(chan->prof_seqno)))
+		prof = NULL;
+	for (i = 0; prof && i < count; i++)
+		stamps += prof->cls[i] != TGM_PC_SKIP;
 	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
 	 * them, a present wait, the task order's acquires and (tegra-gpu-stats) a start stamp, one more nvif GET semaphore
-	 * with each; nvif polls GET for up to ~1 s */
-	ret = nvif_chan_gpfifo_wait(&chan->chan, count + 4,
-				    CHAN_FENCE_DWORDS + 24 + 5 * TGM_ORDER_MAX);
+	 * with each; nvif polls GET for up to ~1 s. A profile's stamps: an entry each, a stamp and a GET semaphore. */
+	ret = nvif_chan_gpfifo_wait(&chan->chan, count + 4 + stamps,
+				    CHAN_FENCE_DWORDS + 24 + 5 * TGM_ORDER_MAX + 16 * stamps);
 	if (ret == -ETIMEDOUT && gpu.stage >= 3)
 		tgm_chan_hung(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
 			      NSEC_PER_SEC);
@@ -2549,9 +2779,22 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 			   chan_stamps_va(chan, next) + offsetof(struct tgm_stamps, start), next);
 		PUSH_KICK(&chan->chan.push);
 	}
-	for (i = 0; i < count; i++)
+	if (prof) {
+		memcpy(chan->prof_cls, prof->cls, count);
+		WRITE_ONCE(chan->prof_count, count);
+		WRITE_ONCE(chan->prof_seqno,
+			   chan->submitted + 1); /* before the fence that completes it */
+	}
+	for (i = 0; i < count; i++) {
 		nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
 				      pushes[i].no_prefetch);
+		if (prof && prof->cls[i] != TGM_PC_SKIP) {
+			push_stamp(&chan->chan.push,
+				   chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
+				   chan->submitted + 1);
+			PUSH_KICK(&chan->chan.push);
+		}
+	}
 
 	*seqno = chan_fence(chan);
 	if (ordered)
