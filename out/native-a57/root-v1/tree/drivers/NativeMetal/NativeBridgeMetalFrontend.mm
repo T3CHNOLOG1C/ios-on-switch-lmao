@@ -273,6 +273,96 @@ static void journal(const std::string &line)
 }
 @end
 
+// ---- Metal selectors this file lacks, answered zero (native_bridge_metal_answer_unimplemented) ----
+// Moved here from TegraGM20BMetalPlugin.mm (r14-maps), where every forwarded call looked its selector up in every protocol the
+// process has: objc_copyProtocolList walks the shared cache's protocols (tens of thousands) and the runtime's, and mallocs the list
+// it returns (fresh zero-filled pages each time). Maps sends -[MTLRenderCommandEncoder setDepthClipMode:], which this file did
+// not implement, many times a frame: r7q's kernel profiler put 70-80% of Maps' CPU in objc_copyProtocolList and its hash tables
+// (libobjc and dyld), 0.7-2.7 s and 5,000-25,000 page faults per command buffer, about one frame a second. Now the protocols are
+// walked once per selector, its signature kept; a forwarded call costs the runtime's forwarding (an NSInvocation) and no more.
+static void (*gAnsweredZero)(const char *, const char *);
+static std::mutex gForwardLock;
+static std::unordered_map<SEL, NSMethodSignature *> *gForwardSignatures;  // under gForwardLock; never shrinks
+static std::vector<std::pair<Class, SEL>> *gForwardReported;  // under gForwardLock: one line per class and selector
+static std::atomic<uint64_t> gForwardCalls, gForwardUs;       // the rates line's fwd=
+static thread_local uint64_t tForwardBegan;
+// The types of `selector` as the first MTL* protocol that declares it has them (required methods before optional ones), or null.
+static const char *metalProtocolTypes(SEL selector)
+{
+    unsigned count = 0;
+    Protocol *__unsafe_unretained *protocols = objc_copyProtocolList(&count);
+    const char *types = nullptr;
+    for (unsigned i = 0; i < count && !types; ++i) {
+        if (strncmp(protocol_getName(protocols[i]), "MTL", 3) != 0) continue;
+        for (int required = 1; required >= 0 && !types; --required) {
+            const objc_method_description d = protocol_getMethodDescription(protocols[i], selector, required, YES);
+            if (d.name) types = d.types;
+        }
+    }
+    free(protocols);
+    return types;
+}
+static NSMethodSignature *forwardSignature(id self, SEL _cmd, SEL selector)
+{
+    // NSObject's own answer (the methods the object really has) first; the same IMP serves every class it is added to.
+    static auto base = (NSMethodSignature * (*)(id, SEL, SEL))
+        class_getMethodImplementation([NSObject class], @selector(methodSignatureForSelector:));
+    if (NSMethodSignature *signature = base(self, _cmd, selector)) return signature;
+    tForwardBegan = nowUs();
+    {
+        std::lock_guard<std::mutex> lock(gForwardLock);
+        if (gForwardSignatures) {
+            auto found = gForwardSignatures->find(selector);
+            if (found != gForwardSignatures->end()) return found->second;
+        }
+    }
+    // First sight of the selector (or one no Metal protocol declares, which raises as before: not kept).
+    const char *types = metalProtocolTypes(selector);
+    NSMethodSignature *signature = types ? [NSMethodSignature signatureWithObjCTypes:types] : nil;
+    if (!signature) return nil;
+    std::lock_guard<std::mutex> lock(gForwardLock);
+    if (!gForwardSignatures) gForwardSignatures = new std::unordered_map<SEL, NSMethodSignature *>;
+    return gForwardSignatures->emplace(selector, signature).first->second;
+}
+static void forwardZero(id self, SEL, NSInvocation *invocation)
+{
+    const SEL selector = invocation.selector;
+    Class cls = object_getClass(self);
+    bool first = false;
+    {
+        std::lock_guard<std::mutex> lock(gForwardLock);
+        if (!gForwardReported) gForwardReported = new std::vector<std::pair<Class, SEL>>;
+        const std::pair<Class, SEL> key(cls, selector);
+        if (std::find(gForwardReported->begin(), gForwardReported->end(), key) == gForwardReported->end()) {
+            gForwardReported->push_back(key);
+            first = true;
+        }
+    }
+    if (first && gAnsweredZero) gAnsweredZero(class_getName(cls), sel_getName(selector));
+    if (const NSUInteger length = invocation.methodSignature.methodReturnLength) {
+        uint64_t small[8] = {};
+        void *zero = length <= sizeof small ? small : calloc(1, length);
+        [invocation setReturnValue:zero];
+        if (zero != small) free(zero);
+    }
+    gForwardCalls++;
+    if (const uint64_t began = tForwardBegan) {
+        gForwardUs += nowUs() - began;
+        tForwardBegan = 0;
+    }
+}
+// A selector some MTL* protocol declares that `cls` (or a subclass) lacks is answered zero/nil/NO, as an absent optional feature
+// would be, `answered` told the class and selector once; respondsToSelector: still says NO, so optional paths take their
+// unsupported branch. A selector no Metal protocol declares raises as before (doesNotRecognizeSelector:). The plugin's: an exception
+// in the render server restarts it into the same exception, no UI at all.
+extern "C" void native_bridge_metal_answer_unimplemented(Class cls, void (*answered)(const char *, const char *))
+{
+    if (!cls) return;
+    if (answered) gAnsweredZero = answered;
+    class_addMethod(cls, @selector(methodSignatureForSelector:), (IMP)forwardSignature, "@@::");
+    class_addMethod(cls, @selector(forwardInvocation:), (IMP)forwardZero, "v@:@");
+}
+
 // ---- resources ----
 // The wait takes a strong snapshot of already-committed buffers; new commits require the
 // caller's usual resource synchronization. Storage dependency checks are in the runtime.
@@ -2165,6 +2255,18 @@ static void waitForResource(id resource)
 - (void)setDepthBias:(float)bias slopeScale:(float)slope clamp:(float)clamp
 {
     [self check:nmb_render_set_depth_bias(self.handle, bias, slope, clamp) what:"setDepthBias"];
+}
+// Metal's default is Clip until set. Clamp needs the device's depthClamp: refused there, the draws keep clipping (one line), the
+// closest picture the device draws, rather than a failed command buffer. Was unimplemented, answered zero through forwarding at a
+// protocol walk per call (r7q: Maps' lag).
+- (void)setDepthClipMode:(MTLDepthClipMode)mode
+{
+    NBApiTime timed;
+    if (!self.handle || nmb_render_set_depth_clip_mode(self.handle, mode)) return;
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true))
+        NBLOG(@"native-metal: setDepthClipMode:%lu refused, draws keep the mode before: %@", (unsigned long)mode,
+              lastError());
 }
 - (void)setLineWidth:(float)width
 {
@@ -5483,7 +5585,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
     struct Snapshot {
         uint64_t at, cpu, sys, faults, commits, encode, submitN, submitUs, waitN, waitUs, gpuN, gpuUs, draws, passes,
             apiUs, joinable, psoN, psoUs, texN, texUs, asked, kept, planar, rb, rbBytes, rbUs, impN, impUs, impHits,
-            stxN, stxUs;
+            stxN, stxUs, fwdN, fwdUs;
         uint64_t work[10], counts[10], waits[4], routes[7];
         NmbShaderCacheStats cache;
     };
@@ -5524,6 +5626,8 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
     now.impHits = gSurfaceImportHits.load();
     now.stxN = gTimeSurfaceTexture.count.load();
     now.stxUs = gTimeSurfaceTexture.total.load();
+    now.fwdN = gForwardCalls.load();
+    now.fwdUs = gForwardUs.load();
     if (gDevice) {
         nmb_device_work_stats(gDevice, now.work);
         nmb_device_shader_cache_stats(gDevice, &now.cache);
@@ -5609,6 +5713,14 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
                                   (unsigned long long)d[1], (unsigned long long)d[2], (unsigned long long)d[3],
                                   (unsigned long long)d[4], (unsigned long long)d[5], (unsigned long long)d[6]);
         heldWas = held;
+        if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);
+    }
+    if (at + 1 < size) {
+        // fwd=: calls of Metal selectors this file lacks, answered zero through message forwarding
+        // (native_bridge_metal_answer_unimplemented), and their time from the signature asked to the zero returned. Near 0: each
+        // used to walk every protocol in the process (r7q Maps, setDepthClipMode:: 70-80% of its CPU).
+        const int more = snprintf(out + at, size - at, " fwd=%llu/%.1fms", (unsigned long long)(now.fwdN - was.fwdN),
+                                  (double)(now.fwdUs - was.fwdUs) / 1000.0);
         if (more > 0) at = std::min<size_t>(at + (size_t)more, size - 1);
     }
     return at;

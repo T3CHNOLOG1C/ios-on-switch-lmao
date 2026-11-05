@@ -346,54 +346,13 @@ void missing(const char *cls, const char *selector)
 
 // The frontend raises on a Metal selector it does not implement (NBObject / device -doesNotRecognizeSelector:), and an
 // exception in the render server restarts it into the same exception: no UI at all. Instead, a selector that some MTL*
-// protocol declares is answered zero/nil/NO with one log line, as an absent optional feature would be; respondsToSelector:
-// still says NO, so optional paths take their unsupported branch. A selector no Metal protocol declares raises as before.
-const char *metalTypes(SEL selector)
+// protocol declares is answered zero/nil/NO (native_bridge_metal_answer_unimplemented), with this line once per class and
+// selector, as an absent optional feature would be; respondsToSelector: still says NO, so optional paths take their
+// unsupported branch. A selector no Metal protocol declares raises as before. The protocol walk that finds a selector's types
+// is the frontend's, once per selector (r14-maps: here it ran per call, Maps' setDepthClipMode: lag).
+void answeredZero(const char *cls, const char *selector)
 {
-    unsigned count = 0;
-    Protocol *__unsafe_unretained *protocols = objc_copyProtocolList(&count);
-    const char *types = nullptr;
-    for (unsigned i = 0; i < count && !types; ++i) {
-        if (strncmp(protocol_getName(protocols[i]), "MTL", 3) != 0) continue;
-        for (int required = 1; required >= 0 && !types; --required) {
-            const objc_method_description d = protocol_getMethodDescription(protocols[i], selector, required, YES);
-            if (d.name) types = d.types;
-        }
-    }
-    free(protocols);
-    return types;
-}
-NSMethodSignature *forwardSignature(id self, SEL _cmd, SEL selector)
-{
-    // NSObject's own answer (the methods the object really has) first; the same IMP serves NBObject's subclasses.
-    static auto base = (NSMethodSignature * (*)(id, SEL, SEL))
-        class_getMethodImplementation([NSObject class], @selector(methodSignatureForSelector:));
-    if (NSMethodSignature *signature = base(self, _cmd, selector)) return signature;
-    const char *types = metalTypes(selector);
-    return types ? [NSMethodSignature signatureWithObjCTypes:types] : nil;
-}
-void forwardZero(id self, SEL, NSInvocation *invocation)
-{
-    static NSMutableSet<NSString *> *reported = [NSMutableSet set];  // one line per class and selector, not per frame
-    NSString *key =
-        [NSString stringWithFormat:@"%s %s", class_getName(object_getClass(self)), sel_getName(invocation.selector)];
-    @synchronized(reported) {
-        if (![reported containsObject:key]) {
-            [reported addObject:key];
-            os_log_error(logger(), "TegraGM20BMetal: unimplemented -[%{public}@] answered zero", key);
-        }
-    }
-    const NSUInteger length = invocation.methodSignature.methodReturnLength;
-    if (!length) return;
-    void *zero = calloc(1, length);
-    [invocation setReturnValue:zero];
-    free(zero);
-}
-void answerUnimplemented(Class cls)
-{
-    if (!cls) return;
-    class_addMethod(cls, @selector(methodSignatureForSelector:), (IMP)forwardSignature, "@@::");
-    class_addMethod(cls, @selector(forwardInvocation:), (IMP)forwardZero, "v@:@");
+    os_log_error(logger(), "TegraGM20BMetal: unimplemented -[%{public}s %{public}s] answered zero", cls, selector);
 }
 
 id openDevice(unsigned port)
@@ -518,8 +477,9 @@ id openDevice(unsigned port)
                          nmb_last_error());
             return nil;
         }
-        answerUnimplemented(NSClassFromString(@"NBObject"));  // every frontend object but the device
-        answerUnimplemented(object_getClass(device));
+        // Every frontend object (NBObject), then the device.
+        native_bridge_metal_answer_unimplemented(NSClassFromString(@"NBObject"), answeredZero);
+        native_bridge_metal_answer_unimplemented(object_getClass(device), answeredZero);
         // The render server draws through the raw GM20B path when the build's pack is staged (above); the m2v device stays
         // inside it for every answer, object and command buffer the raw path has no own for.
         // One line either way, so a boot shows which device Core Animation got.
