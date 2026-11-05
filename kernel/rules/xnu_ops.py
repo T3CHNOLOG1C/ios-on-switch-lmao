@@ -255,7 +255,14 @@ AVAILABILITY_TEMPLATES = [
     'VersionMap.h',
     'for_dyld_priv.inc',
     'os_availability.h',
+    'dyld_version_defines.h',
 ]
+# AvailabilityVersions-157 dropped the module maps; each is installed only where the checkout still has its template.
+AVAILABILITY_MODULEMAPS = {
+    'os_availability.modulemap': 'usr/include',
+    'os_availability_private.modulemap': 'usr/local/include',
+    'AvailabilityPrivate.modulemap': 'usr/local/include',
+}
 
 
 def install_base(availability, libplatform, libdispatch, out, env, python3=None) -> None:
@@ -289,17 +296,19 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
     (libexec / 'availability.pl').chmod(0o755)
     with tempfile.TemporaryDirectory() as scratch:
         generated = Path(scratch)
-        for name in AVAILABILITY_TEMPLATES:
+        templates = availability / 'templates'
+        for name in [n for n in AVAILABILITY_TEMPLATES if (templates / n).exists()]:
             check(
                 [
                     python3,
                     libexec / 'availability.pl',
                     '--preprocess',
-                    availability / 'templates' / name,
+                    templates / name,
                     generated / name,
                 ]
             )
-        for name in ['os_availability.modulemap', 'os_availability_private.modulemap', 'AvailabilityPrivate.modulemap']:
+        modulemaps = {n: d for n, d in AVAILABILITY_MODULEMAPS.items() if (templates / n).exists()}
+        for name in modulemaps:
             check(
                 [
                     'sh',
@@ -307,7 +316,7 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
                     '-UBUILD_FOR_DRIVERKIT',
                     '-o',
                     generated / name,
-                    availability / 'templates' / name,
+                    templates / name,
                 ]
             )
         public = [
@@ -321,13 +330,11 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
         kernel = out / 'System/Library/Frameworks/Kernel.framework/Versions/A'
         places = [(name, out / 'usr/local/include/dyld' / name) for name in ('VersionMap.h', 'for_dyld_priv.inc')]
         places += [(name, out / 'usr/local/include' / name) for name in local]
-        places += [
-            (name, out / 'usr/local/include' / name)
-            for name in ('os_availability_private.modulemap', 'AvailabilityPrivate.modulemap')
-        ]
+        places += [(name, out / directory / name) for name, directory in modulemaps.items()]
         places += [('os_availability.h', out / 'usr/include/os/availability.h')]
         places += [(name, out / 'usr/include' / name) for name in public]
-        places += [('os_availability.modulemap', out / 'usr/include/os_availability.modulemap')]
+        if (generated / 'dyld_version_defines.h').exists():
+            places += [('dyld_version_defines.h', out / 'usr/local/include/mach-o/dyld_version_defines.h')]
         places += [(name, kernel / 'PrivateHeaders' / name) for name in local]
         places += [('os_availability.h', kernel / 'Headers/os/availability.h')]
         places += [(name, kernel / 'Headers' / name) for name in public]
