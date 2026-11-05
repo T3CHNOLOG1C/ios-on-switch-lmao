@@ -1,9 +1,3 @@
-# House style for all of ioswitch's own C, C++, Objective-C and Objective-C++ (clang-format 23.1.4, @llvm).
-#   bazel run //:format          format everything (with the other formatters)
-#   bazel test //:format_test    check it, one cached action per file
-# Directories with code that is not ours turn formatting off with their own .clang-format (DisableFormat: Linux ports,
-# nouveau, NVIDIA, Mesa, libdrm); TegraBPMP, TegraDFLL and TegraGM20B follow the Linux kernel style of the code they
-# sit beside. Generated files are left out of //bazel/lint's file sets (lint_files(exclude = ...)).
 BasedOnStyle: LLVM
 ColumnLimit: 120
 IndentWidth: 4
@@ -16,12 +10,12 @@ BraceWrapping:
   AfterFunction: true
   SplitEmptyFunction: false
   SplitEmptyRecord: false
-AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: WithoutElse
-AllowShortLoopsOnASingleLine: true
-AllowShortBlocksOnASingleLine: Empty
-AllowShortCaseLabelsOnASingleLine: true
-AllowShortEnumsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
 AlignTrailingComments:
   Kind: Always
   OverEmptyLines: 0
@@ -39,6 +33,9 @@ IndentPPDirectives: None
 KeepEmptyLines:
   AtStartOfBlock: false
 MaxEmptyLinesToKeep: 1
+SeparateDefinitionBlocks: Always
+EmptyLineBeforeAccessModifier: LogicalBlock
+AllowShortLambdasOnASingleLine: Empty
 ObjCBlockIndentWidth: 4
 ObjCSpaceAfterProperty: true
 ObjCSpaceBeforeProtocolList: true
