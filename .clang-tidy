@@ -150,8 +150,7 @@ ExcludeHeaderFilterRegex: '.*/(external|bazel-out|third_party|kernel/xnu-[^/]+|n
 SystemHeaders: false
 FormatStyle: file
 CheckOptions:
-  # Complexity limits: readability-function-cognitive-complexity at clang-tidy's default (25); the size limits are
-  # what a function past which a reader loses the thread looks like in this tree (see the r17-lint report).
+  # Cognitive complexity at clang-tidy's default (25) everywhere, kernel code included: a function past it is split.
   readability-function-cognitive-complexity.Threshold: 25
   readability-function-cognitive-complexity.IgnoreMacros: true
   readability-function-size.LineThreshold: 150

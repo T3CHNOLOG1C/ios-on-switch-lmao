@@ -78,7 +78,6 @@ known-first-party = ["tools"]
 combine-as-imports = true
 
 [lint.per-file-ignores]
-# Tests are unittest (and become GoogleTest, see r17-bazel): their assertions are unittest's, their names say what
-# they test, and annotating test methods `-> None` adds nothing.
+# Tests are unittest: their assertions are unittest's, their names say what they test, and `-> None` adds nothing.
 "**/test_*.py" = ["PT009", "PT027", "D101", "D102", "ANN201"]
 "**/*_test.py" = ["PT009", "PT027", "D101", "D102", "ANN201"]

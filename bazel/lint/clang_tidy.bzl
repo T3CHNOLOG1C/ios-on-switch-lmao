@@ -22,7 +22,7 @@ load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 
 TidyInfo = provider(doc = "clang-tidy reports of a target and everything it reaches.", fields = ["reports"])
 
-# The attributes the aspect follows to reach cc targets (r17-bazel's kernel and boot rules, and rules_cc's own).
+# The attributes the aspect follows to reach cc targets (the kernel and boot rules', and rules_cc's own).
 ATTRS = [
     "cc_deps",
     "deps",

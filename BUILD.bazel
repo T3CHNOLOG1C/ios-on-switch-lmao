@@ -39,10 +39,9 @@ exports_files([
     "rustfmt.toml",
 ])
 
-# The root's own files are the top-level ones and docs/. Its directory also holds out/ (build output and agents'
-# scratch, untracked and mostly not bazel-ignored), so neither the files nor the subpackages are found by walking the
-# working copy: globbing and subpackages(**) here took ~25 s of loading on a cold server. The subpackages are the
-# top-level ones and those one level down (drivers/<X>, ...).
+# Never walk the root: its directory also holds out/ (agents' scratch, large and untracked), and a recursive glob or
+# subpackages(**) here costs every Bazel command tens of seconds of loading. The root's own files are the top-level
+# ones and docs/; its subpackages are those at the top level and one below it (drivers/<X>, ...).
 lint_files(
     dirs = ["docs"],
     # Untracked tool state at the top level of working copies.
@@ -89,7 +88,7 @@ lint_test(
         "rustfmt",
         "shfmt",
     ],
-    # Until main is formatted (bazel run //:format; r17-lint phase 2).
+    # Not in `bazel test //...` until the tree is formatted.
     tags = ["manual"],
 )
 
@@ -102,13 +101,13 @@ lint_test(
         "rumdl",
         "shellcheck",
     ],
-    # Until the findings are fixed (r17-lint phase 3).
+    # Not in `bazel test //...` until the tree's findings are fixed.
     tags = ["manual"],
 )
 
 clang_tidy_test(
     name = "clang_tidy_test",
-    # Until the drivers are cc_library targets (r17-bazel) and their findings are fixed (r17-lint phase 3).
+    # Not in `bazel test //...` until the drivers' findings are fixed.
     tags = ["manual"],
     targets = [
         ":boot",
