@@ -225,6 +225,7 @@ size_t nvramConvert(const uint8_t *text, size_t textLength, uint8_t *out, size_t
 struct Event {
     uint32_t type, status, reason, flags;
     uint8_t addr[6];
+    uint8_t ifidx, bsscfgidx;  // wl_event_msg_t: the interface and bsscfg the event is about
     const uint8_t *data;
     uint32_t length;
 };
@@ -232,8 +233,9 @@ struct Event {
 class Msgbuf {
 public:
     using EventHandler = void (*)(void *context, const Event &event);
-    using FrameHandler = void (*)(void *context, const uint8_t *frame, size_t length);  // Ethernet header + payload
-    enum Flow { FLOW_CLOSED, FLOW_PENDING, FLOW_OPEN, FLOW_REFUSED };
+    // Ethernet header + payload, and the firmware interface it came in on (0: the station)
+    using FrameHandler = void (*)(void *context, const uint8_t *frame, size_t length, uint8_t ifidx);
+    enum Flow { FLOW_CLOSED, FLOW_PENDING, FLOW_OPEN, FLOW_REFUSED, FLOW_DELETING };
 
     // Rings, scratch and ring-update buffers, control, receive and transmit buffers and the TX flow ring, all in one
     // contiguous DMA area below 4 GiB (the AFI's FPCI window is 32-bit and nxk keeps DMA32), told to the firmware
@@ -271,6 +273,17 @@ public:
     uint32_t send(const uint8_t *frame, size_t length);
     bool sent(uint32_t id, uint16_t *status) const;
 
+    // The AWDL interface's flow rings (the firmware's own AWDL, SwitchWLANAwdl.cpp): one per destination, group
+    // addresses sharing the broadcast one, created on first use and deleted when the interface goes. Their memory is
+    // at the end of the DMA area, after everything the station uses, so the station's layout never changes.
+    // awdlSend: 1 posted, 0 kept until its flow ring is open (one frame per ring), -1 refused.
+    static constexpr unsigned kAwdlFlows = 4;
+    int awdlSend(uint8_t ifidx, const uint8_t *frame, size_t length);
+    void awdlClose();  // flow rings deleted (or forgotten when the chip is gone)
+    bool awdlAvailable() const { return awdlRings_ > 0; }
+    unsigned awdlRingCount() const { return awdlRings_; }
+    uint32_t awdlRefused() const { return awdlRefused_; }
+
     uint32_t framesReceived() const { return rxFrames_; }
     uint32_t framesSent() const { return txFrames_; }
     uint32_t sendsCompleted() const { return txDone_; }
@@ -301,8 +314,21 @@ private:
     void *context_ = nullptr;
     uint8_t *area_ = nullptr;
     uint32_t areaPA_ = 0, areaUsed_ = 0, msiPA_ = 0;
-    void *memory_ = nullptr;  // IOBufferMemoryDescriptor, kept for the driver's lifetime
-    Ring rings_[6] = {};      // the five common rings, then the TX flow ring
+    void *memory_ = nullptr;           // IOBufferMemoryDescriptor, kept for the driver's lifetime
+    Ring rings_[6 + kAwdlFlows] = {};  // the five common rings, the TX flow ring, then the AWDL flow rings
+    struct AwdlFlow {
+        uint8_t da[6];
+        uint8_t ifidx;
+        Flow state;
+        uint64_t lastUse;
+        Buffer pending;  // one frame held while its ring is being created
+        uint16_t pendingLength;
+    };
+    AwdlFlow awdl_[kAwdlFlows] = {};
+    unsigned awdlRings_ = 0;  // how many AWDL flow rings the area and the firmware allow
+    uint64_t awdlUse_ = 0;
+    uint32_t awdlRefused_ = 0;
+    uint16_t maxFlowRings_ = 0;
     Buffer ioctlBuffer_ = {};
     Buffer control_[16] = {};
     Buffer rx_[64] = {};
@@ -322,6 +348,7 @@ private:
     bool postControl(uint32_t id);
     bool postRx(uint32_t id);
     bool next(unsigned ring, uint8_t *item);
+    uint32_t post(unsigned ring, uint8_t ifidx, const uint8_t *frame, size_t length);
     void retire(unsigned ring);
     void drain();
 };

@@ -730,7 +730,8 @@ void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, cons
                         uint64_t now)
 {
     if (!c->running || !native(c)) return;
-    c->stats.fw_events++;
+    if (c->stats.fw_events++ == 0)
+        awdl_log(c, "AWDL: first firmware AWDL event: %u (%u bytes)", (unsigned)e->type, (unsigned)len);
     switch (e->type) {
     case WLC_E_AWDL_RX_ACT_FRAME: {
         struct bcm_rx_frame meta;
@@ -741,7 +742,10 @@ void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, cons
             c->stats.af_bad++;
             return;
         }
-        c->stats.af_rx++;
+        if (c->stats.af_rx++ == 0)  // the native backend's first question: do the firmware's AWDL frames reach us
+            awdl_log(c, "AWDL: first AWDL action frame from the firmware: %02x:%02x:%02x:%02x:%02x:%02x, %s, %u bytes",
+                     a.src[0], a.src[1], a.src[2], a.src[3], a.src[4], a.src[5],
+                     a.subtype == AWDL_SUBTYPE_MIF ? "MIF" : "PSF", (unsigned)n);
         const int32_t r = meta.rssi < -128 ? -128 : meta.rssi > 0 ? 0 : meta.rssi;
         const struct awdl_rx_meta m = {now, 0, (int8_t)r};
         handle_af(c, &a, &m);

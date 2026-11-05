@@ -33,8 +33,10 @@
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
+#include <sys/errno.h>
 #include <sys/random.h>
 #include "../ArmGIC/IOSwitchInterrupts.h"
+#include "SwitchWLANAwdlRadio.h"
 #include "SwitchWLANCrypto.h"
 #include "SwitchWLANPrivate.h"
 #include "SwitchWLANStation.h"
@@ -72,6 +74,13 @@ enum : uint32_t {
 };
 constexpr uint32_t kEventsWanted[] = {E_SET_SSID, E_JOIN,         E_AUTH, E_DEAUTH,    E_DEAUTH_IND, E_ASSOC,
                                       E_DISASSOC, E_DISASSOC_IND, E_LINK, E_EAPOL_MSG, E_IF,         E_ESCAN_RESULT};
+// The firmware's own AWDL (Infineon WHD numbering, as in drivers/SwitchWLAN/awdl/awdl_bcm.h): AW, role, generic,
+// then 111-120 (frames, status, AW start/end/extension, peer cache). Asked for only while AWDL is open.
+constexpr uint32_t kAwdlEvents[] = {96, 97, 98, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120};
+bool isAwdlEvent(uint32_t type)
+{
+    return (type >= 96 && type <= 98) || (type >= 111 && type <= 120);
+}
 constexpr uint32_t kStatusPartial = 8, kLinkUp = 1;
 constexpr uint32_t kWpa2AuthPsk = 0x80, kAesEnabled = 4, kReasonLeaving = 3;
 // brcmf_wsec_key_le (164 bytes): index, len, data[32], ..., algo @112, flags @116, iv_initialized @132,
@@ -154,6 +163,17 @@ OSDeclareDefaultStructors(SwitchWLAN)
     void counters(char *text, size_t size);
     void setMac(const uint8_t mac[6]) { memcpy(mac_, mac, 6); }
 
+    // The firmware's own AWDL for SwitchWLANAwdl.cpp (SwitchWLANAwdlRadio.h §6). Open/close and the iovars wait for
+    // the firmware: thread context only, never the work loop. The callbacks are only stored here; the work loop calls
+    // them with the gate held (the stack never calls back into a gated call while holding its own lock).
+    int awdlOpen(const swlan_awdl_caps **caps);
+    void awdlClose();
+    int awdlVar(bool set, int32_t bsscfg, const char *name, const void *in, size_t inLength, void *out,
+                size_t outLength, size_t *returned);
+    int awdlTransmit(const uint8_t *eth, size_t length);
+    void awdlCallbacks(swlan_fw_event_fn events, void *eventsContext, swlan_eth_rx_fn rx, void *rxContext,
+                       swlan_evt_fn loss, void *lossContext);
+
 private:
     struct JoinParams {
         uint8_t ssid[32];
@@ -212,6 +232,20 @@ private:
     unsigned eapolHead_ = 0, eapolCount_ = 0;
     uint32_t eapolDropped_ = 0, rxToStack_ = 0, losses_ = 0, recoveries_ = 0;
 
+    // AWDL: the firmware's cap list has "awdl"; open (event mask on, frames and events routed); the AWDL
+    // interface's firmware index from its WLC_E_IF (-1 until then).
+    bool capAwdl_ = false, awdlOpen_ = false;
+    int awdlIfidx_ = -1;
+    uint32_t awdlRxDropped_ = 0, awdlEventsIn_ = 0;
+    swlan_fw_event_fn awdlEventFn_ = nullptr;
+    void *awdlEventCtx_ = nullptr;
+    swlan_eth_rx_fn awdlRxFn_ = nullptr;
+    void *awdlRxCtx_ = nullptr;
+    swlan_evt_fn awdlLossFn_ = nullptr;
+    void *awdlLossCtx_ = nullptr;
+    bool setEventMask(bool awdl);
+    void awdlEvent(const swlan::Event &event);
+
     // Worker only.
     swlan::wpa::Supplicant sup_;
     bool secured_ = false;
@@ -249,7 +283,7 @@ private:
     void attachInterrupt();
     static void msiFired(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void onEvent(void *context, const swlan::Event &event);
-    static void onFrame(void *context, const uint8_t *frame, size_t length);
+    static void onFrame(void *context, const uint8_t *frame, size_t length, uint8_t ifidx);
     void escanResult(const swlan::Event &event);
     void keepBss(const swlan_bss &bss, uint64_t now);
     void pushEapol(const uint8_t *frame, size_t length);
@@ -393,6 +427,13 @@ void SwitchWLAN::attachInterrupt()
 void SwitchWLAN::onEvent(void *context, const swlan::Event &event)
 {
     auto *self = static_cast<SwitchWLAN *>(context);
+    // WLC_E_IF about any interface but the station's (in the header or in wl_event_data_if_t's ifidx/bssidx)
+    const bool otherIf = event.type == E_IF &&
+                         (event.ifidx || event.bsscfgidx || (event.length >= 5 && (event.data[0] || event.data[3])));
+    if (self->awdlOpen_ && (isAwdlEvent(event.type) || otherIf)) {
+        self->awdlEvent(event);
+        return;
+    }
     switch (event.type) {
     case E_ESCAN_RESULT: self->escanResult(event); break;
     case E_EAPOL_MSG: {
@@ -445,9 +486,16 @@ void SwitchWLAN::pushEapol(const uint8_t *frame, size_t length)
 
 // Work loop: a received frame. EAPOL to the supplicant, the rest to en0 once joined (a station has no carrier
 // before that).
-void SwitchWLAN::onFrame(void *context, const uint8_t *frame, size_t length)
+void SwitchWLAN::onFrame(void *context, const uint8_t *frame, size_t length, uint8_t ifidx)
 {
     auto *self = static_cast<SwitchWLAN *>(context);
+    if (ifidx) {  // another firmware interface: AWDL's, while it is open
+        if (self->awdlOpen_ && self->awdlRxFn_ && static_cast<int>(ifidx) == self->awdlIfidx_)
+            self->awdlRxFn_(self->awdlRxCtx_, frame, length);
+        else
+            ++self->awdlRxDropped_;
+        return;
+    }
     if (swlan::wpa::isEapol(frame, length)) {
         self->pushEapol(frame, length);
         return;
@@ -609,13 +657,12 @@ bool SwitchWLAN::cmdInt(uint32_t cmd, uint32_t value)
 // same network's 5 GHz at -44, sharing the air with Bluetooth), interface up; then the regulatory domain.
 bool SwitchWLAN::radioInit()
 {
-    uint8_t mask[16] = {};
-    for (uint32_t e : kEventsWanted) mask[e / 8] |= static_cast<uint8_t>(1u << (e % 8));
     const uint8_t on[4] = {1, 0, 0, 0};
     // brcmf_join_pref_params {type, length, RSSI gain, band}: RSSI_DELTA (4) +8 dB on WLC_BAND_5G (1), then RSSI (1)
     const uint8_t joinPref[8] = {4, 2, 8, 1, 1, 2, 0, 0};
-    if (!setVar("cur_etheraddr", mac_, 6) || !setVar("event_msgs", mask, sizeof(mask)) || !cmdInt(WLC_SET_INFRA, 1) ||
-        !cmdInt(WLC_SET_PM, 0))
+    bool awdl = false;
+    locked([&] { awdl = awdlOpen_; });  // after a recovery an open AWDL keeps its events
+    if (!setVar("cur_etheraddr", mac_, 6) || !setEventMask(awdl) || !cmdInt(WLC_SET_INFRA, 1) || !cmdInt(WLC_SET_PM, 0))
         return false;
     if (!setVar("roam_off", on, sizeof(on))) IOLog("SwitchWLAN: roam_off refused: %s\n", why_);
     if (!setVar("allmulti", on, sizeof(on))) IOLog("SwitchWLAN: allmulti refused: %s\n", why_);
@@ -692,6 +739,11 @@ bool SwitchWLAN::bootChip(const char **stage)
             if (cap[i] < 0x20 || cap[i] >= 0x7F) cap[i] = ' ';
         }
         IOLog("SwitchWLAN: firmware capabilities: %s\n", reinterpret_cast<const char *>(cap));
+        // the firmware's own AWDL (r7p8: present on 7.35.252.108); used only when the Data flag asks for it
+        capAwdl_ = false;
+        for (size_t i = 0; i + 4 <= capLength && cap[i]; ++i)
+            if (!memcmp(cap + i, "awdl", 4) && (i == 0 || cap[i - 1] == ' ') && (cap[i + 4] == ' ' || !cap[i + 4]))
+                capAwdl_ = true;
     } else {
         IOLog("SwitchWLAN: firmware capabilities not read: %s\n", why_);
     }
@@ -764,6 +816,15 @@ void SwitchWLAN::lost(const char *why)
     secured_ = false;
     sup_.wipe();
     if (wasUp && events_ && events_->link_lost) events_->link_lost(-1);
+    bool awdl = false;
+    locked([&] {
+        awdl = awdlOpen_;
+        awdlIfidx_ = -1;  // the firmware's AWDL interface went with it; its rings are rebuilt at the next attach
+    });
+    if (awdl && awdlLossFn_) {
+        const swlan_awdl_event e = {SWLAN_AWDL_CHIP_LOST, 0, 0, 0};
+        awdlLossFn_(awdlLossCtx_, &e);
+    }
 }
 
 // nxk `recover`: module reset under PERST#, link, endpoint (the same BARs), firmware, rings, radio; then the last
@@ -1591,10 +1652,156 @@ void SwitchWLAN::counters(char *text, size_t size)
     locked([&] {
         snprintf(text, size,
                  "rx %u (to en0 %u), tx %u done %u refused %u, eapol dropped %u, MSIs %llu, losses %u "
-                 "recovered %u",
+                 "recovered %u%s",
                  mb_.framesReceived(), rxToStack_, mb_.framesSent(), mb_.sendsCompleted(), mb_.sendsRefused(),
-                 eapolDropped_, static_cast<unsigned long long>(interrupts_), losses_, recoveries_);
+                 eapolDropped_, static_cast<unsigned long long>(interrupts_), losses_, recoveries_,
+                 awdlOpen_ ? ", AWDL open" : "");
     });
+}
+
+// ---- the firmware's own AWDL (SwitchWLANAwdl.cpp) -----------------------------------------------------------------
+
+// The events the firmware reports (brcmf_fweh "event_msgs": one bit per event), with the AWDL ones while AWDL is open.
+bool SwitchWLAN::setEventMask(bool awdl)
+{
+    uint8_t mask[16] = {};
+    for (uint32_t e : kEventsWanted) mask[e / 8] |= static_cast<uint8_t>(1u << (e % 8));
+    if (awdl)
+        for (uint32_t e : kAwdlEvents) mask[e / 8] |= static_cast<uint8_t>(1u << (e % 8));
+    return setVar("event_msgs", mask, sizeof(mask));
+}
+
+// Work loop, gate held: an AWDL event to the stack. WLC_E_IF names the AWDL interface's index (its frames and flow
+// rings) or takes it away.
+void SwitchWLAN::awdlEvent(const swlan::Event &event)
+{
+    ++awdlEventsIn_;
+    if (event.type == E_IF && event.length >= 5) {
+        const uint8_t ifidx = event.data[0], opcode = event.data[1];
+        if (opcode == 1)
+            awdlIfidx_ = ifidx;
+        else if (opcode == 2 && static_cast<int>(ifidx) == awdlIfidx_) {
+            awdlIfidx_ = -1;
+            mb_.awdlClose();
+        }
+        IOLog("SwitchWLAN: AWDL: firmware interface %u %s (bsscfg %u, role %u)\n", ifidx,
+              opcode == 1   ? "added"
+              : opcode == 2 ? "removed"
+                            : "changed",
+              event.data[3], event.data[4]);
+    }
+    if (!awdlEventFn_) return;
+    swlan_fw_event e = {event.type, event.status, event.reason, {}, event.ifidx, event.bsscfgidx};
+    memcpy(e.addr, event.addr, 6);
+    awdlEventFn_(awdlEventCtx_, &e, event.data, event.length);
+}
+
+int SwitchWLAN::awdlOpen(const swlan_awdl_caps **caps)
+{
+    if (loop_->onThread()) return -EDEADLK;
+    bool up = false, open = false;
+    locked([&] {
+        up = up_;
+        open = awdlOpen_;
+    });
+    static swlan_awdl_caps c;
+    if (!up) {
+        IOLog("SwitchWLAN: AWDL: not opened: the radio is not up\n");
+        return -ENXIO;
+    }
+    if (!capAwdl_) {
+        IOLog("SwitchWLAN: AWDL: not opened: the firmware's capabilities do not list awdl\n");
+        return -ENODEV;
+    }
+    if (!mb_.awdlAvailable()) {
+        IOLog("SwitchWLAN: AWDL: not opened: no flow rings for an AWDL interface (DMA area or firmware limit)\n");
+        return -ENOSPC;
+    }
+    if (!open) {
+        locked([&] { awdlOpen_ = true; });
+        if (!setEventMask(true)) {
+            IOLog("SwitchWLAN: AWDL: not opened: the AWDL events were refused: %s\n", why_);
+            locked([&] { awdlOpen_ = false; });
+            return -EIO;
+        }
+        IOLog("SwitchWLAN: AWDL: firmware AWDL opened (AWDL events on, %u AWDL flow rings)\n", mb_.awdlRingCount());
+    }
+    memset(&c, 0, sizeof(c));
+    c.abi_version = SWLAN_AWDL_ABI_VERSION;
+    c.has_native_awdl = 1;
+    memcpy(c.self_mac, mac_, 6);
+    *caps = &c;
+    return 0;
+}
+
+void SwitchWLAN::awdlClose()
+{
+    bool was = false;
+    locked([&] {
+        was = awdlOpen_;
+        awdlOpen_ = false;
+        awdlIfidx_ = -1;
+        if (up_) mb_.awdlClose();
+    });
+    if (was && !loop_->onThread()) setEventMask(false);
+}
+
+// "<name>\0<value>", or brcmf_fil_bsscfg_data_set's "bsscfg:<name>\0<s32 index><value>".
+int SwitchWLAN::awdlVar(bool set, int32_t bsscfg, const char *name, const void *in, size_t inLength, void *out,
+                        size_t outLength, size_t *returned)
+{
+    if (loop_->onThread()) return -EDEADLK;
+    uint8_t request[1024];
+    size_t n = 0;
+    const size_t nameLength = strlen(name) + 1;
+    if (7 + nameLength + 4 + inLength > sizeof(request)) return -EMSGSIZE;
+    if (bsscfg >= 0) {
+        memcpy(request, "bsscfg:", 7);
+        n = 7;
+    }
+    memcpy(request + n, name, nameLength);
+    n += nameLength;
+    if (bsscfg >= 0) {
+        swlan::put32(request + n, static_cast<uint32_t>(bsscfg));
+        n += 4;
+    }
+    if (inLength) memcpy(request + n, in, inLength);
+    n += inLength;
+    const bool ok = set ? ioctl(WLC_SET_VAR, request, n, 0, nullptr, nullptr)
+                        : ioctl(WLC_GET_VAR, request, n, outLength, static_cast<uint8_t *>(out), returned);
+    if (!ok) {
+        static unsigned said;
+        if (said++ < 16) IOLog("SwitchWLAN: AWDL: %s %s: %s\n", set ? "set" : "get", name, why_);
+        return -EIO;
+    }
+    return 0;
+}
+
+int SwitchWLAN::awdlTransmit(const uint8_t *eth, size_t length)
+{
+    int r = -1;
+    locked([&] {
+        if (up_ && awdlOpen_ && awdlIfidx_ >= 0) r = mb_.awdlSend(static_cast<uint8_t>(awdlIfidx_), eth, length);
+    });
+    return r < 0 ? -1 : 0;
+}
+
+// Only stored (any thread, no gate): pointer-sized stores, the context before its function.
+void SwitchWLAN::awdlCallbacks(swlan_fw_event_fn events, void *eventsContext, swlan_eth_rx_fn rx, void *rxContext,
+                               swlan_evt_fn loss, void *lossContext)
+{
+    if (events) {
+        __atomic_store_n(&awdlEventCtx_, eventsContext, __ATOMIC_RELEASE);
+        __atomic_store_n(&awdlEventFn_, events, __ATOMIC_RELEASE);
+    }
+    if (rx) {
+        __atomic_store_n(&awdlRxCtx_, rxContext, __ATOMIC_RELEASE);
+        __atomic_store_n(&awdlRxFn_, rx, __ATOMIC_RELEASE);
+    }
+    if (loss) {
+        __atomic_store_n(&awdlLossCtx_, lossContext, __ATOMIC_RELEASE);
+        __atomic_store_n(&awdlLossFn_, loss, __ATOMIC_RELEASE);
+    }
 }
 
 // ---- C entry points ------------------------------------------------------------------------------------------------
@@ -1649,6 +1856,48 @@ extern "C" void switch_wlan_counters(char *text, size_t size)
         gDriver->counters(text, size);
     else if (size)
         text[0] = 0;
+}
+
+// SwitchWLANAwdlRadio.h §6, the firmware's own AWDL. The monitor+inject calls (§2-§5) keep SwitchWLANAwdl.cpp's
+// weak "unavailable" definitions: this firmware has no monitor or injection.
+extern "C" int swlan_awdl_open(const struct swlan_awdl_caps **caps_out)
+{
+    if (caps_out) *caps_out = nullptr;
+    return gDriver ? gDriver->awdlOpen(caps_out) : -ENXIO;
+}
+extern "C" void swlan_awdl_close(void)
+{
+    if (gDriver) gDriver->awdlClose();
+}
+extern "C" int swlan_awdl_iovar_set(int32_t bsscfg, const char *name, const void *buf, size_t len)
+{
+    return gDriver ? gDriver->awdlVar(true, bsscfg, name, buf, len, nullptr, 0, nullptr) : -ENXIO;
+}
+extern "C" int swlan_awdl_iovar_get(int32_t bsscfg, const char *name, void *buf, size_t len, size_t *returned)
+{
+    return gDriver ? gDriver->awdlVar(false, bsscfg, name, nullptr, 0, buf, len, returned) : -ENXIO;
+}
+extern "C" int swlan_awdl_fw_events(swlan_fw_event_fn fn, void *ctx)
+{
+    if (!gDriver || !fn) return -ENXIO;
+    gDriver->awdlCallbacks(fn, ctx, nullptr, nullptr, nullptr, nullptr);
+    return 0;
+}
+extern "C" int swlan_awdl_eth_rx(swlan_eth_rx_fn fn, void *ctx)
+{
+    if (!gDriver || !fn) return -ENXIO;
+    gDriver->awdlCallbacks(nullptr, nullptr, fn, ctx, nullptr, nullptr);
+    return 0;
+}
+extern "C" int swlan_awdl_events(swlan_evt_fn fn, void *ctx)
+{
+    if (!gDriver || !fn) return -ENXIO;
+    gDriver->awdlCallbacks(nullptr, nullptr, nullptr, nullptr, fn, ctx);
+    return 0;
+}
+extern "C" int swlan_awdl_eth_tx(const uint8_t *eth, size_t len)
+{
+    return gDriver ? gDriver->awdlTransmit(eth, len) : -ENXIO;
 }
 
 // The radio's address where the system reads it, before userland starts: /chosen mac-address-wifi0 (MobileGestalt's

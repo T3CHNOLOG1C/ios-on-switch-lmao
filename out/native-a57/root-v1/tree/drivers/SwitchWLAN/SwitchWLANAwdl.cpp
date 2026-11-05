@@ -126,6 +126,7 @@ constexpr IOOptionBits kSharedOptions =
 constexpr uint32_t kMaxRequest = 4096;  // largest awdl0 request payload we copy (CHANNELS_INFO is answered EOPNOTSUPP)
 
 IOLock *gLock;      // the core, the facade, the ring and the interface state
+IOLock *gSend;      // one awdl0 output at a time: taken before gLock, held across the radio's transmit
 int gCapable = -1;  // -1 not decided yet (Data not mounted), 0 off, 1 on
 const struct swlan_awdl_caps *gCaps;
 struct awdl_core *gCore;
@@ -296,7 +297,7 @@ int hostIovar(void *, int32_t bsscfg, const char *name, const void *buf, size_t 
 }
 void iovarWork(thread_call_param_t, thread_call_param_t)
 {
-    static Iovar v;  // one worker (thread_call_enter does not run it twice at once)
+    Iovar v;  // (about 560 bytes of stack)
     for (;;) {
         IOLockLock(gLock);
         if (!gIovarCount) {
@@ -313,22 +314,37 @@ void iovarWork(thread_call_param_t, thread_call_param_t)
             IOLog("SwitchWLAN: AWDL: the firmware refused %s (%d bytes): %d\n", v.name, v.length, e);
     }
 }
+// The firmware's AWDL interface takes frames under the radio's gate, and the radio calls the stack (under gLock)
+// from its work loop with that gate held: so a frame is never handed over with gLock held. ifOutput gives the core a
+// stash for the one frame it may send, and passes it on after dropping gLock.
+struct TxStash {
+    size_t length;
+    uint8_t frame[AWDL_MAX_FRAME];
+};
+TxStash *gStash;  // only while ifOutput holds gLock
 int hostTxEth(void *, const uint8_t *eth, size_t length)
 {
-    return swlan_awdl_eth_tx(eth, length) < 0 ? -1 : 0;
+    if (!gStash || gStash->length || length > sizeof gStash->frame) return -1;
+    memcpy(gStash->frame, eth, length);
+    gStash->length = length;
+    return 0;
 }
 
 // Neighbour entries and received packets, outside gLock (ifnet_notice_node_presence takes the routing lock, which
 // the stack's output path may hold while it calls us).
-void drain()
+// From the radio's work loop only packets are passed on (presence = false): neighbour entries take the routing lock and
+// wait for gDeferred's thread.
+void drain(bool presence = true)
 {
     Presence todo[16];
-    unsigned n;
+    unsigned n = 0;
     mbuf_t input;
     IOLockLock(gLock);
-    n = gPresenceCount;
-    memcpy(todo, gPresence, n * sizeof todo[0]);
-    gPresenceCount = 0;
+    if (presence) {
+        n = gPresenceCount;
+        memcpy(todo, gPresence, n * sizeof todo[0]);
+        gPresenceCount = 0;
+    }
     input = gInputHead;
     gInputHead = gInputTail = nullptr;
     const ifnet_t ifp = gIf;
@@ -407,7 +423,7 @@ void radioRx(void *, const uint8_t *frame, size_t length, const struct swlan_rx_
         rearm();
     }
     IOLockUnlock(gLock);
-    if (gInputHead || gPresenceCount) drain();
+    if (gInputHead) drain(false);
 }
 // Native backend: the firmware's AWDL events and the frames of its AWDL interface.
 void fwEvent(void *, const struct swlan_fw_event *e, const uint8_t *data, size_t length)
@@ -421,7 +437,7 @@ void fwEvent(void *, const struct swlan_fw_event *e, const uint8_t *data, size_t
         rearm();
     }
     IOLockUnlock(gLock);
-    if (gInputHead || gPresenceCount) drain();
+    if (gInputHead) drain(false);
 }
 void ethRx(void *, const uint8_t *eth, size_t length)
 {
@@ -431,7 +447,7 @@ void ethRx(void *, const uint8_t *eth, size_t length)
         hostDeliver(nullptr, eth, length);
     }
     IOLockUnlock(gLock);
-    drain();
+    drain(false);
 }
 
 void radioEvent(void *, const struct swlan_awdl_event *e)
@@ -495,13 +511,20 @@ errno_t ifOutput(ifnet_t ifp, mbuf_t m)
     bpf_tap_out(ifp, DLT_EN10MB, m, nullptr, 0);
     const size_t length = mbuf_pkthdr_len(m);
     static uint8_t frame[AWDL_MAX_FRAME];  // under gLock
+    static TxStash stash;                  // filled under gLock, sent after it (one output at a time: gSend)
     int r = -1;
+    IOLockLock(gSend);
     IOLockLock(gLock);
+    stash.length = 0;
     if (length >= ETHER_HDR_LEN && length <= sizeof frame - 64 && gCore && !mbuf_copydata(m, 0, length, frame)) {
+        gStash = &stash;
         r = awdl_core_output(gCore, frame, length, nowTsf());
+        gStash = nullptr;
         rearm();
     }
     IOLockUnlock(gLock);
+    if (!r && stash.length && swlan_awdl_eth_tx(stash.frame, stash.length) < 0) r = -1;
+    IOLockUnlock(gSend);
     if (r)
         ifnet_stat_increment_out(ifp, 0, 0, 1);
     else
@@ -841,7 +864,10 @@ void createInterface(thread_call_param_t, thread_call_param_t)
           gMac[4], gMac[5]);
 }
 
+// The switch: an empty file on Data, where the deploy writes (/private/var/ioswitch), or where AFC reaches over USB
+// (/private/var/mobile/Media, AFC's root: "/ioswitch/awdl-enable" in an AFC client).
 const char kFlag[] = "/private/var/ioswitch/awdl-enable";
+const char kFlagAfc[] = "/private/var/mobile/Media/ioswitch/awdl-enable";
 
 bool pathExists(const char *path)
 {
@@ -858,10 +884,10 @@ bool pathExists(const char *path)
 extern "C" int switch_wlan_awdl_capable(void)
 {
     if (__atomic_load_n(&gCapable, __ATOMIC_ACQUIRE) >= 0) return gCapable;
-    if (!pathExists(kFlag)) {
+    if (!pathExists(kFlag) && !pathExists(kFlagAfc)) {
         // decided only once Data is mounted (its ioswitch directory exists); before that, ask again later
         if (pathExists("/private/var/ioswitch")) {
-            IOLog("SwitchWLAN: AWDL: off (no %s)\n", kFlag);
+            IOLog("SwitchWLAN: AWDL: off (no %s or %s)\n", kFlag, kFlagAfc);
             __atomic_store_n(&gCapable, 0, __ATOMIC_RELEASE);
         }
         return 0;
@@ -874,7 +900,7 @@ extern "C" int switch_wlan_awdl_capable(void)
         const struct swlan_awdl_caps *caps = nullptr;
         const int e = swlan_awdl_open(&caps);
         if (e < 0 || !caps) {
-            IOLog("SwitchWLAN: AWDL: %s is set but the radio has no AWDL (%d): off\n", kFlag, e);
+            IOLog("SwitchWLAN: AWDL: the flag file is set but the radio has no AWDL (%d): off\n", e);
         } else if (caps->abi_version != SWLAN_AWDL_ABI_VERSION) {
             IOLog("SwitchWLAN: AWDL: radio ABI %u, the stack speaks %u: off\n", caps->abi_version,
                   SWLAN_AWDL_ABI_VERSION);
@@ -883,7 +909,8 @@ extern "C" int switch_wlan_awdl_capable(void)
             IOLog("SwitchWLAN: AWDL: radio native=%u monitor=%u inject=%u: neither backend can run: off\n",
                   caps->has_native_awdl, caps->can_monitor, caps->can_inject);
             swlan_awdl_close();
-        } else if (!(gLock = IOLockAlloc()) || !(gCore = static_cast<awdl_core *>(IOMallocZero(awdl_core_size()))) ||
+        } else if (!(gLock = IOLockAlloc()) || !(gSend = IOLockAlloc()) ||
+                   !(gCore = static_cast<awdl_core *>(IOMallocZero(awdl_core_size()))) ||
                    !(gTimer = thread_call_allocate_with_priority(timerFired, nullptr, THREAD_CALL_PRIORITY_HIGH)) ||
                    !(gDeferred = thread_call_allocate(deferredWork, nullptr)) ||
                    !(gCreate = thread_call_allocate(createInterface, nullptr)) ||
