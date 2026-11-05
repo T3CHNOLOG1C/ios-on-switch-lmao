@@ -2,7 +2,12 @@
 // The radio services the AWDL stack uses, exactly as agreed in out/agent-scratch/r12-awdl/RADIO-API.md (r12-awdl owns
 // the radio side and implements these in SwitchWLAN; r12-awdl-stack's SwitchWLANAwdl.cpp calls them). Until the radio
 // side lands, SwitchWLANAwdl.cpp carries weak defaults that answer "unavailable", so AWDL stays off.
-// Plain C types only. Every function: any thread, never blocks; completions come through the callbacks.
+// Plain C types only. Every function: any thread, never blocks; completions come through the callbacks. The
+// exceptions wait for the firmware (swlan_awdl_tsf_read, swlan_awdl_iovar_set/get): the stack calls them only from
+// its own threads, with its lock dropped, never from a callback of this API. The registration calls
+// (swlan_awdl_rx_start, swlan_awdl_events, swlan_awdl_fw_events, swlan_awdl_eth_rx) only store the callback: the
+// stack calls them with its lock held. Whatever the firmware needs for them (event_msgs bits, monitor) is set up by
+// swlan_awdl_open, which the stack calls without its lock.
 #ifndef SWITCH_WLAN_AWDL_RADIO_H
 #define SWITCH_WLAN_AWDL_RADIO_H
 
@@ -87,8 +92,9 @@ int swlan_awdl_tsf_read(uint64_t *tsf_us);
 // (never from a callback): waits for the firmware's answer, bounded like every SwitchWLAN ioctl. 0 or < 0 errno.
 int swlan_awdl_iovar_set(int32_t bsscfg, const char *name, const void *buf, size_t len);
 int swlan_awdl_iovar_get(int32_t bsscfg, const char *name, void *buf, size_t len, size_t *returned);
-// The firmware events of an AWDL session (WLC_E_IF for the AWDL bsscfg and WLC_E 96-98, 111-120; awdl_bcm.h): set
-// in "event_msgs" and delivered from the work loop, payload after the wl_event_msg_t.
+// The firmware events of an AWDL session (WLC_E_IF for the AWDL bsscfg and WLC_E 96-98, 111-120; awdl_bcm.h):
+// enabled in "event_msgs" by swlan_awdl_open; this call only stores the callback. Delivered from the work loop,
+// payload after the wl_event_msg_t.
 struct swlan_fw_event {
     uint32_t type, status, reason;
     uint8_t addr[6];

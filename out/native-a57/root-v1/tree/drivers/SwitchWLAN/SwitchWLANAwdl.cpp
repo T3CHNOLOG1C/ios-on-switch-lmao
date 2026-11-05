@@ -22,6 +22,7 @@
 #include <libkern/c++/OSNumber.h>
 #include <kern/clock.h>
 #include <kern/thread_call.h>
+#include <os/log.h>
 #include <sys/param.h>  // (before sys/mbuf.h: the cluster sizes)
 #include <sys/errno.h>
 #include <sys/mbuf.h>
@@ -161,22 +162,32 @@ uint64_t hostNs()
     return ns;
 }
 // The radio's TSF now, from the last (TSF, host clock) pair; re-read once a second.
-void anchor()
-{
-    uint64_t tsf = 0;
-    const uint64_t ns = hostNs();
-    if (swlan_awdl_tsf_read(&tsf) == 0) {
-        awdl_tsf_clock_anchor(&gClock, tsf, ns);
-    } else if (!gClock.valid) {
-        awdl_tsf_clock_anchor(&gClock, ns / 1000, ns);  // no TSF from the radio: the host clock stands in
-    }
-    gLastAnchorNs = ns;
-}
+// The rule for every radio call that waits on the firmware (swlan_awdl_tsf_read, swlan_awdl_iovar_*): never under
+// gLock and never from a radio callback (the radio's work loop would wait on itself). They run from iovarWork or
+// timerFired only, with gLock dropped.
+//
+// Under gLock: the clock as last anchored; the host clock stands in until the radio's TSF is read (the native backend
+// never needs it: the firmware keeps AWDL time, the stack only times peer expiry).
 uint64_t nowTsf()
 {
     const uint64_t ns = hostNs();
-    if (!gClock.valid || ns - gLastAnchorNs > 1000000000ull) anchor();
-    return awdl_tsf_clock_now(&gClock, hostNs());
+    if (!gClock.valid) {
+        awdl_tsf_clock_anchor(&gClock, ns / 1000, ns);
+        gLastAnchorNs = ns;
+    }
+    return awdl_tsf_clock_now(&gClock, ns);
+}
+// Soft backend only, from timerFired without gLock: re-read the radio's TSF once a second.
+void reanchorUnlocked()
+{
+    if (!gCaps || gCaps->has_native_awdl || hostNs() - gLastAnchorNs < 1000000000ull) return;
+    uint64_t tsf = 0;
+    const uint64_t ns = hostNs();
+    if (swlan_awdl_tsf_read(&tsf) != 0) return;
+    IOLockLock(gLock);
+    awdl_tsf_clock_anchor(&gClock, tsf, ns);
+    gLastAnchorNs = ns;
+    IOLockUnlock(gLock);
 }
 void armTimer(uint64_t tsf)
 {
@@ -357,10 +368,26 @@ void deferredWork(thread_call_param_t, thread_call_param_t)
 {
     drain();
 }
+// Once a minute, to the unified log (not the console): whether the firmware's AWDL frames and events arrive at all.
+void statsLine()
+{
+    static uint64_t last;
+    const uint64_t ns = hostNs();
+    if (ns - last < 60000000000ull || !gCore) return;
+    last = ns;
+    const awdl_stats *st = awdl_core_stats(gCore);
+    os_log(OS_LOG_DEFAULT,
+           "SwitchWLAN: AWDL stats: fw events %u (unknown %u), AWs %u, frames %u bad %u, peers +%u -%u, iovars %u "
+           "refused %u, data rx %u tx %u drop %u refused %u",
+           st->fw_events, st->fw_unknown, st->aws, st->af_rx, st->af_bad, st->peer_adds, st->peer_dels, st->iovars,
+           st->iovar_refused, st->data_rx, st->data_tx, st->data_drop, st->tx_refused);
+}
 void timerFired(thread_call_param_t, thread_call_param_t)
 {
+    reanchorUnlocked();
     IOLockLock(gLock);
     rearm();
+    statsLine();
     IOLockUnlock(gLock);
     drain();
 }
@@ -442,7 +469,6 @@ int opStart(void *)
         swlan_awdl_rx_filter(gMac, awdl_bssid, 0);  // our address, so the radio ACKs unicast to it (STATUS.md Q1)
         gRxStarted = true;
     }
-    anchor();
     return 0;
 }
 void opStop(void *)
@@ -527,6 +553,8 @@ errno_t ifIoctl(ifnet_t ifp, unsigned long cmd, void *arg)
         const struct ifreq *ifr = static_cast<const struct ifreq *>(arg);
         if (ifr->ifr_addr.sa_len != ETHER_ADDR_LEN) return EINVAL;
         const uint8_t *mac = reinterpret_cast<const uint8_t *>(ifr->ifr_addr.sa_data);
+        // While AWDL runs on the firmware, its awdl_if and payload carry the address: change it only while off
+        if (gCaps && gCaps->has_native_awdl && gCore && awdl_core_running(gCore)) return EBUSY;
         const errno_t e = ifnet_set_lladdr(ifp, mac, ETHER_ADDR_LEN);
         if (e) return e;
         IOLockLock(gLock);

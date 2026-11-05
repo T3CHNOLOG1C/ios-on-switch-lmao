@@ -209,9 +209,14 @@ static void test_native_flow(void)
     }
     NCHECK(awdl_core_role(core) == AWDL_ROLE_OFF);
 
-    // the firmware syncs to the phone: WLC_E_AWDL_ROLE slave, master = phone
+    // the firmware made the AWDL bsscfg: WLC_E_IF add (a known event, not "unknown")
     struct awdl_fw_event ev;
     memset(&ev, 0, sizeof ev);
+    ev.type = WLC_E_IF;
+    const uint8_t ifadd[5] = {2, 1, 0, 1, 8};
+    awdl_core_fw_event(core, &ev, ifadd, sizeof ifadd, 1050000);
+    NCHECK(awdl_core_stats(core)->fw_unknown == 0 && awdl_core_stats(core)->fw_events == 1);
+    // the firmware syncs to the phone: WLC_E_AWDL_ROLE slave, master = phone
     ev.type = WLC_E_AWDL_ROLE;
     uint8_t role[7] = {BCM_AWDL_ROLE_SLAVE};
     memcpy(role + 1, phone_addr, 6);

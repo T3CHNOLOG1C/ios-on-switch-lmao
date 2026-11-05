@@ -762,6 +762,17 @@ void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, cons
                      r.master[0], r.master[1], r.master[2], r.master[3], r.master[4], r.master[5]);
         return;
     }
+    case WLC_E_IF: {  // the AWDL bsscfg the firmware made (or removed) for awdl_if
+        struct bcm_if_event ie;
+        if (bcm_if_event_decode(data, len, &ie)) return;
+        if (ie.opcode == 1) c->cfg.bsscfg = ie.bssidx;
+        awdl_log(c, "AWDL: firmware interface %s: ifidx %u bsscfg %u role %u",
+                 ie.opcode == 1   ? "added"
+                 : ie.opcode == 2 ? "removed"
+                                  : "changed",
+                 ie.ifidx, ie.bssidx, ie.role);
+        return;
+    }
     case WLC_E_AWDL_AW: {
         struct bcm_awdl_aw aw;
         if (!bcm_awdl_aw_decode(data, len, &aw)) c->stats.aws++;
