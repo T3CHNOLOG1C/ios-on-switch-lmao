@@ -14,8 +14,9 @@ py_test(
     deps = ["//tools/package:native_xnu_layout"],
 )
 
-# The kernel window staged in bl33.bin (build_native_loader.py's stage_into_bl33, bl33.py's bl33_patch, boot_script.py): the composed file satisfies every boot.cmd memory check and U-Boot's bytes are untouched apart from its
-# SD-only boot_targets. The loader's decoder reading it back is //boot/loader/test:bl33_window_test.
+# The kernel window staged in bl33.bin (build_native_loader.py's stage_into_bl33, bl33.py's bl33_patch, boot_script.py):
+# the composed file satisfies every boot.cmd memory check and U-Boot's bytes are untouched apart from its SD-only
+# boot_targets. The loader's decoder reading it back is //boot/loader/test:bl33_window_test.
 py_test(
     name = "bl33_stage_test",
     size = "small",
