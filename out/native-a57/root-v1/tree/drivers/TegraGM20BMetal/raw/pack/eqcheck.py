@@ -121,17 +121,22 @@ def main():
     a, b = frames(sys.argv[1]), frames(sys.argv[2])
     print('frames: nvk %d raw %d' % (len(a), len(b)))
     if OWN:  # (before the names: what is left out names nothing)
-        # m2v's own draws (a shadow image's copy through a pass of its own, say): programs no draw of the other log runs
+        # each driver's own draws: programs no draw of the other log runs (m2v's shadow copies and mip work; the raw path's
+        # 4:2:0 conversions through the pack's ycbcr states, where m2v converts with its own)
         def programs(e):
             return tuple(l.split()[1] for l in e['lines'] if l.startswith('stage'))
-        theirs = {programs(e) for events in b for e in events if e['head'].startswith('DRAW')}
-        dropped = 0
-        for events in a:
-            keep = [e for e in events if not e['head'].startswith('DRAW') or programs(e) in theirs]
-            dropped += len(events) - len(keep)
-            events[:] = keep
-        if dropped:
-            print('%d draws of programs only the nvk log runs left out (m2v\'s own: shadow copies, mip work)' % dropped)
+        def drop(frames_of, other, who):
+            theirs = {programs(e) for events in other for e in events if e['head'].startswith('DRAW')}
+            dropped = 0
+            for events in frames_of:
+                keep = [e for e in events if not e['head'].startswith('DRAW') or programs(e) in theirs]
+                dropped += len(events) - len(keep)
+                events[:] = keep
+            if dropped:
+                print('%d draws of programs only the %s log runs left out (its own work)' % (dropped, who))
+        theirs_b = [list(events) for events in b]
+        drop(a, theirs_b, 'nvk')
+        drop(b, a, 'raw')
     a, b = rename_all(a), rename_all(b)
     mism = collections.Counter(); examples = collections.defaultdict(list)
     reg_diff = collections.Counter(); bar_missing = collections.Counter(); bar_extra = collections.Counter()

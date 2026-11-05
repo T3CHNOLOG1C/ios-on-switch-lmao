@@ -195,8 +195,46 @@ int main(int argc, char **argv)
                                                                                      mipmapped:NO];
             d.usage = td.renderTarget ? MTLTextureUsageRenderTarget | (td.memoryless ? 0 : MTLTextureUsageShaderRead)
                                       : MTLTextureUsageShaderRead;
-            if (t == frame::IMAGE1 &&
-                frame::mipImage()) {  // every level, private: m2v's own image, or the raw path's chain
+            if (t == frame::IMAGE2 && getenv("FRAME_YCBCR")) {
+                // FRAME_YCBCR: IMAGE2 a decoded video frame: YCBCR8_420_2P (500) over a '420v' surface of the texture's size
+                // (=padded: its planes past the texture, a decoder's padded surface whose top-left is sampled)
+                const bool padded = !strcmp(getenv("FRAME_YCBCR"), "padded");
+                const size_t w = td.w + (padded ? 1 : 0), h = td.h + (padded ? 3 : 0), row0 = (w + 63) & ~size_t(63),
+                             row1 = (((w + 1) / 2) * 2 + 63) & ~size_t(63), off1 = (row0 * h + 4095) & ~size_t(4095);
+                NSDictionary *p0 = @{
+                    (id)kIOSurfacePlaneWidth : @(w),
+                    (id)kIOSurfacePlaneHeight : @(h),
+                    (id)kIOSurfacePlaneBytesPerElement : @1,
+                    (id)kIOSurfacePlaneBytesPerRow : @(row0),
+                    (id)kIOSurfacePlaneOffset : @0,
+                    (id)kIOSurfacePlaneSize : @(row0 * h)
+                };
+                NSDictionary *p1 = @{
+                    (id)kIOSurfacePlaneWidth : @((w + 1) / 2),
+                    (id)kIOSurfacePlaneHeight : @((h + 1) / 2),
+                    (id)kIOSurfacePlaneBytesPerElement : @2,
+                    (id)kIOSurfacePlaneBytesPerRow : @(row1),
+                    (id)kIOSurfacePlaneOffset : @(off1),
+                    (id)kIOSurfacePlaneSize : @(row1 * ((h + 1) / 2))
+                };
+                surfaces[t] = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+                    (id)kIOSurfaceWidth : @(w),
+                    (id)kIOSurfaceHeight : @(h),
+                    (id)kIOSurfacePixelFormat : @((uint32_t)'420v'),
+                    (id)kIOSurfaceAllocSize : @(off1 + row1 * ((h + 1) / 2)),
+                    (id)kIOSurfacePlaneInfo : @[ p0, p1 ]
+                });
+                uint8_t *base = (uint8_t *)IOSurfaceGetBaseAddress(surfaces[t]);
+                for (size_t i = 0; i < off1 + row1 * ((h + 1) / 2); i++) base[i] = uint8_t(i * 37u + (i >> 8));
+                MTLTextureDescriptor *yd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormat(500)
+                                                                                              width:td.w
+                                                                                             height:td.h
+                                                                                          mipmapped:NO];
+                yd.usage = MTLTextureUsageShaderRead;
+                yd.storageMode = MTLStorageModeShared;
+                tex[t] = [dev newTextureWithDescriptor:yd iosurface:surfaces[t] plane:0];
+            } else if (t == frame::IMAGE1 &&
+                       frame::mipImage()) {  // every level, private: m2v's own image, or the raw path's chain
                 d.mipmapLevelCount = 1 + unsigned(std::log2(double(std::max(td.w, td.h))));
                 d.storageMode = MTLStorageModePrivate;
                 tex[t] = [dev newTextureWithDescriptor:d];

@@ -17,7 +17,7 @@ usage: mkpack.py <probe.out> <probe.log> <programs.bin> <out dir> [<probe16 dir 
   descriptor type (a uniform buffer's range NVK rounds up to 256 bytes) and the function's window on the slot
 writes <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt (decoder tables), and prints a report.
 """
-import hashlib, json, os, struct, sys
+import hashlib, json, os, re, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probelog, layouts
 
@@ -219,7 +219,9 @@ def main():
             mask |= 1 << ((o - 0x700) // 4); words[(o - 0x700) // 4] = val
         push = struct.pack('<I32I', mask, *words)
         vb = rec['vbs'][0] if rec['vbs'] else {'slot': 0xff, 'stride': 0}
-        keyhash = fnv(rec['key'].encode())
+        # the raw path's own states (probe.mm PROBE_YCBCR_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline)
+        own = re.search(r'\| f (ycbcr_\w+)', rec['key'])
+        keyhash = fnv(('raw.ycbcr.' + own.group(1)).encode() if own else rec['key'].encode())
         flags = (1 if rec['fetch'] else 0)
         pipe_bin += struct.pack('<QIHHIIBBBBHHI', keyhash, string(rec['key']), rec['vs'], rec['fs'], blob_off, len(rec['blob']) * 2,
                                 len(rec['entries']), len(rec['push']), vb['slot'], 0, vb['stride'], rec['set_size'], flags)

@@ -28,6 +28,9 @@ size_t raw_metal_rates(char *out, size_t size);
 // Host tests: the CPU's view of the image the raw path samples for `texture` (a planar texture's converted image), its row pitch
 // in *pitch; null when the raw path holds none.
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch);
+// Whether the raw path keeps `texture` (host tests: test/shapecheck.mm), and whether mip chains are on (the self-test at open)
+bool raw_metal_texture_kept(id<MTLTexture> texture);
+bool raw_metal_chains_on(void);
 #ifdef __cplusplus
 }
 #endif

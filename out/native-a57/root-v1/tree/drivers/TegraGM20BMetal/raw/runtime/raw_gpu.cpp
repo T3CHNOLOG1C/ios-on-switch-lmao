@@ -1136,6 +1136,13 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
     memcpy(t.shape, shape, sizeof t.shape);
     t.ycbcr = output;
     t.addressMap = 1;
+    // its alpha read as one, as m2v's view of its own converted image reads it (W_SOURCE ONE_FLOAT; the conversion writes 1 there
+    // too: the same texels, now the same header)
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        uint32_t *w = reinterpret_cast<uint32_t *>(tic_.cpu + 32 * t.tic);
+        w[0] = (w[0] & ~(7u << 28)) | 7u << 28;
+    }
     return true;
 }
 

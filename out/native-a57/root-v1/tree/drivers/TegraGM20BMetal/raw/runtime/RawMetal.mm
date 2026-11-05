@@ -261,7 +261,8 @@ static bool rawShape(MTLTextureDescriptor *d)
            d.depth <= 1 && !turned && raw::formatInfo(uint32_t(d.pixelFormat));
 }
 // A mipmapped texture the raw path keeps as a pool texture and a block-linear chain of its levels (raw::Device::createMipTexture,
-// raw/fx): 2D, one sample, one layer, no rotation, private (no CPU access to any level: every write is GPU work the tape orders),
+// raw/fx): 2D, one sample, one layer, no rotation, private or memoryless (no CPU access to any level: every write is GPU work the
+// tape orders; r7r: Core Animation makes 776x24 mipmapped surfaces memoryless too, kept here as private ones, a superset),
 // of a format the 2D engine filters (not sRGB) and renders; chains on (the device's self-test)
 static bool chainShape(MTLTextureDescriptor *d)
 {
@@ -270,8 +271,9 @@ static bool chainShape(MTLTextureDescriptor *d)
         [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
     const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
     return d.textureType == MTLTextureType2D && d.mipmapLevelCount > 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
-           d.depth <= 1 && !turned && d.storageMode == MTLStorageModePrivate && f && f->rt && !f->srgb &&
-           raw::fx::twodFormat(uint32_t(d.pixelFormat));
+           d.depth <= 1 && !turned &&
+           (d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeMemoryless) && f && f->rt &&
+           !f->srgb && raw::fx::twodFormat(uint32_t(d.pixelFormat));
 }
 // Diagnostics: which rawShape term fails (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format; 0 none)
 static uint32_t rawShapeTerm(MTLTextureDescriptor *d)
@@ -302,6 +304,8 @@ static NSString *describe(MTLTextureDescriptor *d)
 }
 // A texture the raw path does not keep: its predicate, and the predicate's first line with the texture's details
 @class RMTexture;
+static NSString *
+surfaceShape(RMTexture *t);  // a surface texture's pixel format, planes and 4:2:0 verdict (after RMTexture)
 static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSString *kind, NSString *extra);
 
 // MTLDataType sizes, as the frontend journals constants (NativeBridgeMetalFrontend.mm constantBytes)
@@ -818,6 +822,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
             if (_raw.chain) {  // level 0 (the chain's levels are the m2v texture of every level's: rmMipTwin)
                 d = [_descriptor copy];
                 d.mipmapLevelCount = 1;
+                if (d.storageMode == MTLStorageModeMemoryless) d.storageMode = MTLStorageModePrivate;  // (memory here)
             }
             if (pages && native_bridge_metal_texture_in_place)
                 made = native_bridge_metal_texture_in_place(pages, d, 0, _raw.pitch);
@@ -1061,6 +1066,27 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 }
 @end
 
+static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane);
+static NSString *surfaceShape(RMTexture *t)
+{
+    IOSurfaceRef s = t->_surface;
+    if (!s) return @"";
+    const OSType fourcc = IOSurfaceGetPixelFormat(s);
+    const size_t planes = IOSurfaceGetPlaneCount(s);
+    NSMutableString *out =
+        [NSMutableString stringWithFormat:@" surface '%c%c%c%c' %zux%zu planes %zu plane %lu", char(fourcc >> 24),
+                                          char(fourcc >> 16), char(fourcc >> 8), char(fourcc), IOSurfaceGetWidth(s),
+                                          IOSurfaceGetHeight(s), planes, (unsigned long)t->_plane];
+    for (size_t k = 0; k < planes && k < 3; k++)
+        [out appendFormat:@" p%zu %zux%zu/%zuB row %zu", k, IOSurfaceGetWidthOfPlane(s, k),
+                          IOSurfaceGetHeightOfPlane(s, k), IOSurfaceGetBytesPerElementOfPlane(s, k),
+                          IOSurfaceGetBytesPerRowOfPlane(s, k)];
+    const NSUInteger f = t->_descriptor.pixelFormat;
+    if (f == 500 || f == 520 || f == 540)
+        [out appendFormat:@" 4:2:0 not taken: %s", ycbcr420Why(t->_descriptor, s, t->_plane)];
+    return out;
+}
+
 static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSString *kind, NSString *extra)
 {
     t->_pred = p;
@@ -1068,6 +1094,24 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
         logPred(p, a, b,
                 [NSString
                     stringWithFormat:@"(%@ %@%@%@)", kind, describe(t->_descriptor), extra ? @" " : @"", extra ?: @""]);
+    // and one line per new shape of texture the raw path leaves to m2v (the predicate's first line names only the first:
+    // r7r's Tips replays were tex.shape of textures no line described), up to 32 per process: the predicate, its term, the
+    // descriptor, and for a surface its pixel format, planes and what the 4:2:0 path did not take
+    static std::mutex lock;
+    static NSMutableSet<NSString *> *seen;
+    MTLTextureDescriptor *d = t->_descriptor;
+    NSString *shape = [NSString
+        stringWithFormat:@"%s %llu %@ %lux%lu f%lu t%lu l%lu s%lu u%lx m%lu%@", kPredNames[p], (unsigned long long)a,
+                         kind, (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat,
+                         (unsigned long)d.textureType, (unsigned long)d.mipmapLevelCount, (unsigned long)d.sampleCount,
+                         (unsigned long)d.usage, (unsigned long)d.storageMode, surfaceShape(t)];
+    {
+        std::lock_guard<std::mutex> l(lock);
+        if (!seen) seen = [NSMutableSet set];
+        if (seen.count >= 32 || [seen containsObject:shape]) return;
+        [seen addObject:shape];
+    }
+    os_log(rawLog(), "raw: texture on m2v: %{public}@", shape);
 }
 
 @implementation RMBuffer (Textures)
@@ -3735,6 +3779,7 @@ static bool planar444(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane)
            IOSurfaceGetBytesPerElementOfPlane(s, 0) == 1 && IOSurfaceGetBytesPerElementOfPlane(s, 1) == 2;
 }
 // YCBCR8_420_2P (500), YCBCR8_420_2P_sRGB (520) or RGB8_420_2P (540) over plane 0 of a CoreVideo '420v' or '420f' surface
+// (plane 0 the texture's size, as m2v takes it: a padded surface m2v cannot read stays m2v's, so no frame differs by driver)
 // (decoded photos and video frames, the photo wallpaper): Metal reads it converted by the surface's range and matrix (500), that
 // through the sRGB curve (520), or its codes (540), each with its chroma filtered 9/3/3/1 (m2v ycbcr.rs), which the raw path
 // draws into an image of its own with the pack's conversion state (pack/ycbcr.metal, exact against Metal's measured reads:
@@ -3788,6 +3833,42 @@ static bool ycbcr420(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, 
     shape[2] = full;
     for (int i = 0; i < 6; i++) shape[3 + i] = uint32_t(k[full][matrix][i]);
     return true;
+}
+
+// Which of ycbcr420's terms a 4:2:0 texture failed (the per-shape line): its checks in its order
+static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane)
+{
+    if (plane != 0) return "a plane other than 0";
+    if (IOSurfaceGetPlaneCount(s) != 2) return "not two planes";
+    const uint32_t fourcc = IOSurfaceGetPixelFormat(s);
+    if (fourcc != '420f' && fourcc != '420v') return "pixel format";
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    const NSUInteger turned =
+        [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
+    if (d.textureType != MTLTextureType2D || d.mipmapLevelCount != 1 || d.sampleCount != 1 || turned) return "shape";
+    if (d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView)) return "usage";
+    const size_t w = d.width, h = d.height;
+    if (IOSurfaceGetWidthOfPlane(s, 0) != w || IOSurfaceGetHeightOfPlane(s, 0) != h ||
+        IOSurfaceGetWidthOfPlane(s, 1) < (w + 1) / 2 || IOSurfaceGetHeightOfPlane(s, 1) < (h + 1) / 2)
+        return "plane sizes";
+    if (IOSurfaceGetBytesPerElementOfPlane(s, 0) != 1 || IOSurfaceGetBytesPerElementOfPlane(s, 1) != 2)
+        return "plane element sizes";
+    const uintptr_t base = uintptr_t(IOSurfaceGetBaseAddress(s));
+    for (size_t p : {0, 1})
+        if (((uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, p)) - base) & 15) ||
+            (IOSurfaceGetBytesPerRowOfPlane(s, p) & 15))
+            return "plane offset or row not 16-byte";
+    if (CFTypeRef value = IOSurfaceCopyValue(s, CFSTR("IOSurfaceYCbCrMatrix"))) {
+        static char name[48];
+        name[0] = 0;
+        if (CFGetTypeID(value) == CFStringGetTypeID())
+            CFStringGetCString((CFStringRef)value, name, sizeof name, kCFStringEncodingUTF8);
+        CFRelease(value);
+        if (strcmp(name, "ITU_R_709_2") && strcmp(name, "SMPTE_240M_1995") && strcmp(name, "ITU_R_2020") &&
+            strcmp(name, "ITU_R_601_4"))
+            return "matrix";
+    }
+    return "taken (refused later: the import or the pool)";
 }
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
@@ -4521,6 +4602,16 @@ static struct {
         switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, abortUs, replayUs, replayClean,
         rtUnaligned, predOnly[PredCount], splits, splitM2v;
 } gRates;
+
+bool raw_metal_texture_kept(id<MTLTexture> texture)
+{
+    return [(id)texture isKindOfClass:[RMTexture class]] && ((RMTexture *)texture)->_rawOk;
+}
+
+bool raw_metal_chains_on(void)
+{
+    return gRM && gRM->raw->chainsOn();
+}
 
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
 {

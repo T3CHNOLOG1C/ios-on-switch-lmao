@@ -185,6 +185,25 @@ int main(int argc, char **argv)
                                                        withTemplate:@""];
             lines.push_back(plain.UTF8String);
         }
+        // PROBE_YCBCR_LIB=<metallib>: the raw path's own states after Core Animation's, drawn and read alike: the conversions of
+        // 4:2:0 YCbCr textures (pack/ycbcr.metal), lines marked "@Y " (their functions are that library's); mkpack.py keys
+        // them by name ("raw.ycbcr.<fragment function>"), which the runtime asks for
+        id<MTLLibrary> ycbcr = nil;
+        if (const char *path = getenv("PROBE_YCBCR_LIB")) {
+            ycbcr = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(path)] error:&error];
+            if (!ycbcr) {
+                fprintf(stderr, "ycbcr library: %s\n", error.localizedDescription.UTF8String);
+                return 1;
+            }
+            for (const char *out :
+                 {"115 | v ycbcr_vert | f ycbcr_converted_frag", "125 | v ycbcr_vert | f ycbcr_srgb_frag",
+                  "70 | v ycbcr_vert | f ycbcr_codes_frag"}) {
+                std::string o = out;
+                const size_t bar = o.find(' ');
+                lines.push_back("@Y R ok=1 label=raw.ycbcr samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) +
+                                ":15:0:1:0:0:1:0:0" + o.substr(bar));
+            }
+        }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         // tagged textures and samplers
         std::vector<id<MTLTexture>> textures;
@@ -434,9 +453,11 @@ int main(int argc, char **argv)
             printf("WARMUP\n");
             break;
         }
-        for (const std::string &line : lines) {
+        for (const std::string &marked : lines) {
             State s;
-            if (!parseState(qc, line, s)) {
+            const bool own = marked.rfind("@Y ", 0) == 0;
+            const std::string line = own ? marked.substr(3) : marked;
+            if (!parseState(own ? ycbcr : qc, line, s)) {
                 fprintf(stderr, "UNPARSED %s\n", line.substr(0, 80).c_str());
                 refused++;
                 continue;

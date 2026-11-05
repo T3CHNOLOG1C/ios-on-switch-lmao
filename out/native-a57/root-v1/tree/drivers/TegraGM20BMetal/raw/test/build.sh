@@ -50,3 +50,7 @@ xcrun clang++ $OBJC -Wall -Wextra -x objective-c++ "$HERE/mipframe.mm" "$RAW/run
   -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" -x none "$BRIDGE" $LIBS \
   -o "$OUT/mipframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/mipframe"
+xcrun clang++ $OBJC -Wall -Wextra -x objective-c++ "$HERE/shapecheck.mm" "$RAW/runtime/RawMetal.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+  -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" -x none "$BRIDGE" $LIBS \
+  -o "$OUT/shapecheck" 2>&1 | grep -v "duplicate libraries" || true
+echo "built $OUT/shapecheck"

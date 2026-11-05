@@ -73,6 +73,11 @@ def main():
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('NAK_', 'NVK_', 'MESA_', 'NMB_', 'M2V_', 'METAL2VULKAN_', 'TEGRA_', 'MTL_', 'NVDEC_', 'RAWCAP_', 'PROBE_'))}
     env.update(MESA_SHADER_CACHE_DISABLE='true', NVDEC_PROBE='1', NVDEC_SCRUB='1', NVDEC_TRACE='3', NMB_ASYNC_PSO='0', NMB_ASYNC_PSO_API='0')
+    # the raw path's own states: the 4:2:0 YCbCr conversions (ycbcr.metal), an iOS library like QuartzCore's, drawn after
+    # Core Animation's (probe.mm PROBE_YCBCR_LIB)
+    run(['xcrun', '-sdk', 'iphoneos', 'metal', '-c', HERE / 'ycbcr.metal', '-I', HERE, '-o', work / 'ycbcr.air'])
+    run(['xcrun', '-sdk', 'iphoneos', 'metallib', work / 'ycbcr.air', '-o', work / 'ycbcr.metallib'])
+    env.update(PROBE_YCBCR_LIB=str(work / 'ycbcr.metallib'))
     # first a run that only fills the m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
     # name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache
     cache = work / 'cache'
