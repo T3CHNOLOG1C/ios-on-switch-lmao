@@ -230,6 +230,10 @@ void nmb_depth_stencil_release(NmbDepthStencil *);
 NmbQueue *nmb_queue_new(NmbDevice *);
 void nmb_queue_release(NmbQueue *);
 NmbCommandBuffer *nmb_command_buffer_new(NmbQueue *);
+/* nmb_command_buffer_new with its wait for a queue slot bounded by timeout_ms: null and out[0] = 1 when every slot is still held
+   past it (out[1] slots held by uncompleted command buffers, out[2] of them not committed, out[3] the queue's most); null and
+   out[0] = 0 on another refusal (nmb_last_error). out: 4 words. */
+NmbCommandBuffer *nmb_command_buffer_new_within(NmbQueue *, uint64_t timeout_ms, uint64_t *out);
 void nmb_command_buffer_release(NmbCommandBuffer *);
 /* 1 storage dependency, 0 unrelated/already complete, -1 unknown (caller must wait).
  * Includes texture roots, buffer-backed textures, heaps and overlapping imported host ranges.

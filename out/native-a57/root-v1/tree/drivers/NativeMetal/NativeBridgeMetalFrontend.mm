@@ -3183,10 +3183,43 @@ static void completed(void *context)
 {
     nmb_queue_release(_handle);
 }
+// The queue holds its 64 uncompleted command buffers past the bound (r7p8: the render server froze in [queue commandBuffer] with
+// no line): one fault naming the queue, its slots (held by uncompleted command buffers, of them not committed), and its oldest
+// committed command buffer still in flight with its state, then abort() for the stack, as every other wait past its bound.
+[[noreturn]] static void slotWaitTooLong(NBQueue *queue, const uint64_t slots[4])
+{
+    NBCommandBuffer *oldest = nil;
+    NSUInteger inFlight = 0;
+    @synchronized(gInFlight) {
+        for (NBCommandBuffer *cb in gInFlight) {
+            if (cb.queue != queue) continue;
+            inFlight++;
+            if (!oldest || cb.commitIndex < oldest.commitIndex) oldest = cb;
+        }
+    }
+    const uint64_t now = nowUs();
+    os_log_fault(OS_LOG_DEFAULT,
+                 "native-metal: commandBuffer of queue %p (%{public}s) not made after %llu ms: %llu of %llu slots held by "
+                 "uncompleted command buffers (%llu not committed), %lu committed in flight; oldest #%u '%{public}s' committed "
+                 "%llu ms ago, scheduled %d, waits for an unreached event %d, failed %d: abort() for the stack",
+                 queue, queue.label.UTF8String ?: "", (unsigned long long)waitLimitMs(), (unsigned long long)slots[1],
+                 (unsigned long long)slots[3], (unsigned long long)slots[2], (unsigned long)inFlight,
+                 oldest ? oldest.commitIndex : 0, oldest.label.UTF8String ?: "",
+                 oldest ? (unsigned long long)((now - oldest.committedUs) / 1000) : 0ull, oldest ? (int)oldest.schedulingDelivered : -1,
+                 oldest ? (int)[oldest waitsUnreached] : -1, oldest ? (int)(oldest.failedLocally || oldest.encodeFailure != nil) : -1);
+#if !TARGET_OS_IPHONE
+    fprintf(stderr, "native-metal: commandBuffer of queue %p not made after %llu ms: %llu of %llu slots held (%llu not committed)\n",
+            (__bridge void *)queue, (unsigned long long)waitLimitMs(), (unsigned long long)slots[1],
+            (unsigned long long)slots[3], (unsigned long long)slots[2]);
+#endif
+    abort();
+}
 - (id<MTLCommandBuffer>)commandBuffer
 {
     NBApiTime timed;
-    NmbCommandBuffer *handle = nmb_command_buffer_new(_handle);
+    uint64_t slots[4] = {};
+    NmbCommandBuffer *handle = nmb_command_buffer_new_within(_handle, waitLimitMs(), slots);
+    if (!handle && slots[0]) slotWaitTooLong(self, slots);
     if (!handle) {
         NBLOG(@"native-metal: commandBuffer refused: %@", lastError());
         return nil;

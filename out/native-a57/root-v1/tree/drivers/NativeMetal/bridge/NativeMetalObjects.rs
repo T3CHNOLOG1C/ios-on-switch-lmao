@@ -1616,6 +1616,27 @@ pub extern "C" fn nmb_command_buffer_new(queue: *mut NmbQueue) -> *mut NmbComman
     guard(std::ptr::null_mut(), || Ok(boxed(NmbCommandBuffer(get(queue)?.0.command_buffer().map_err(e("command buffer"))?))))
 }
 
+/// `commandBuffer`, its wait for one of the queue's slots bounded by `timeout_ms`: null with `out[0]` 1 once the queue still
+/// holds every slot past it (out[1..4]: the slots held by uncompleted command buffers, of which not committed, the most), null
+/// with `out[0]` 0 on another refusal (nmb_last_error), else the command buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_command_buffer_new_within(queue: *mut NmbQueue, timeout_ms: u64, out: *mut u64) -> *mut NmbCommandBuffer {
+    guard(std::ptr::null_mut(), || {
+        let queue = &get(queue)?.0;
+        let made = queue.command_buffer_within(std::time::Duration::from_millis(timeout_ms)).map_err(e("command buffer"))?;
+        let (all, open, max) = queue.slots_held();
+        if !out.is_null() {
+            // SAFETY: the caller's four words.
+            let out = unsafe { std::slice::from_raw_parts_mut(out, 4) };
+            out.copy_from_slice(&[made.is_none() as u64, all as u64, open as u64, max as u64]);
+        }
+        match made {
+            Some(command_buffer) => Ok(boxed(NmbCommandBuffer(command_buffer))),
+            None => Err("no slot of the queue within the bound".into()),
+        }
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_command_buffer_release(command_buffer: *mut NmbCommandBuffer) {
     release(command_buffer)

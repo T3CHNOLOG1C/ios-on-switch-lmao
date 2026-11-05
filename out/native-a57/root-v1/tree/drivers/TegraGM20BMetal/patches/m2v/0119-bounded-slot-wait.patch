@@ -1,0 +1,93 @@
+diff --git a/crates/metal2vulkan-runtime/src/queue.rs b/crates/metal2vulkan-runtime/src/queue.rs
+--- a/crates/metal2vulkan-runtime/src/queue.rs
++++ b/crates/metal2vulkan-runtime/src/queue.rs
+@@ -27,7 +27,7 @@ use super::command_buffer::CommandBuffer;
+ use super::contexts;
+ use super::degradation::Degradation;
+ use super::device::{lock, Device};
+-use super::error::{Error, Invalid, Problem};
++use super::error::{internal, Error, Invalid, Problem};
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+ 
+@@ -268,12 +268,48 @@ impl CommandQueue {
+         Ok(CommandBuffer::new(self, slot))
+     }
+ 
++    /// [`command_buffer`](Self::command_buffer), its wait for a slot bounded by `timeout`:
++    /// `None` once the queue still holds its `maxCommandBufferCount` uncompleted command
++    /// buffers past it (ioswitch r8-webgpu: the caller reports and ends the process, as every
++    /// other wait of the plugin past its bound, where Metal's would wait for ever: the render
++    /// server froze in it, r7p8). Every other answer is `command_buffer`'s.
++    pub fn command_buffer_within(
++        &self,
++        timeout: std::time::Duration,
++    ) -> Result<Option<CommandBuffer>, Error> {
++        if self.0.device.is_lost() {
++            return Err(Error::DeviceLost);
++        }
++        let Some(slot) = self.slot_within(Some(std::time::Instant::now() + timeout))? else {
++            return Ok(None);
++        };
++        if self.0.device.is_lost() {
++            return Err(Error::DeviceLost);
++        }
++        self.0.device.storage_form_wait();
++        Ok(Some(CommandBuffer::new(self, slot)))
++    }
++
++    /// The queue's slots: (held by uncompleted command buffers, of which not committed, most).
++    pub fn slots_held(&self) -> (usize, usize, usize) {
++        let held = self.0.slots.lock();
++        (held.all, held.open, self.0.slots.max)
++    }
++
+     /// A slot for a new command buffer, waiting for one to come back while all are held.
+     fn slot(&self) -> Result<Slot, Error> {
++        match self.slot_within(None)? {
++            Some(slot) => Ok(slot),
++            None => Err(internal("an unbounded slot wait timed out")),
++        }
++    }
++
++    /// [`slot`](Self::slot), waiting until `deadline` at most where one is given (`None` past it).
++    fn slot_within(&self, deadline: Option<std::time::Instant>) -> Result<Option<Slot>, Error> {
+         let slots = &self.0.slots;
+         let mut held = slots.lock();
+         if let Some(slot) = slots.take(&mut held) {
+-            return Ok(slot);
++            return Ok(Some(slot));
+         }
+         let context = self.context();
+         let _blocked = match slot_wait(running(), context, held.open > 0) {
+@@ -289,12 +325,25 @@ impl CommandQueue {
+         };
+         loop {
+             if let Some(slot) = slots.take(&mut held) {
+-                return Ok(slot);
++                return Ok(Some(slot));
+             }
+-            held = slots
+-                .freed
+-                .wait(held)
+-                .unwrap_or_else(std::sync::PoisonError::into_inner);
++            held = match deadline {
++                None => slots
++                    .freed
++                    .wait(held)
++                    .unwrap_or_else(std::sync::PoisonError::into_inner),
++                Some(deadline) => {
++                    let now = std::time::Instant::now();
++                    if now >= deadline {
++                        return Ok(None);
++                    }
++                    slots
++                        .freed
++                        .wait_timeout(held, deadline - now)
++                        .unwrap_or_else(std::sync::PoisonError::into_inner)
++                        .0
++                }
++            };
+         }
+     }
+ 
