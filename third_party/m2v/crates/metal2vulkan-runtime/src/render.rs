@@ -7324,6 +7324,8 @@ impl RenderCommandEncoder {
         } else {
             self.uses_room = uses.into_room();
         }
+        // The push writes' vectors go back to the commands, which the next draw fills.
+        commands.push_constants = binding::push_room(push);
         self.draw_commands = Some(commands);
         // The states go; the list stays for the next draw's.
         argument_samplers.clear();

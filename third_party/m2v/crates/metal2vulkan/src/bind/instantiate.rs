@@ -25,6 +25,18 @@ pub struct PushConstantWrite {
     pub bytes: Vec<u8>,
 }
 
+impl PushConstantWrite {
+    /// A write of `bytes` at `offset` for `stages`: a consumer giving back the vectors of the
+    /// writes it took, which the next instantiation fills again.
+    pub fn new(stages: vk::ShaderStageFlags, offset: u32, bytes: Vec<u8>) -> Self {
+        Self {
+            stages,
+            offset,
+            bytes,
+        }
+    }
+}
+
 /// Bytes the consumer uploads into the buffer behind a plan binding (argument table, handle
 /// table) before recording the draw or dispatch.
 #[non_exhaustive]

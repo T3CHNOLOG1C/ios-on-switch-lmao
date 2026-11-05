@@ -757,6 +757,17 @@ pub(super) fn push_writes(
     Ok(filled)
 }
 
+/// `push_writes`'s writes, given back as the plan's: the next draw's instantiation fills their
+/// vectors again instead of allocating its own.
+pub(super) fn push_room(push: Vec<PushWrite>) -> Vec<PushConstantWrite> {
+    push.into_iter()
+        .map(|(stages, offset, bytes)| {
+            let stages = metal2vulkan::vk::ShaderStageFlags::from_raw(stages.as_raw());
+            PushConstantWrite::new(stages, offset, bytes)
+        })
+        .collect()
+}
+
 /// The descriptor writes [`write_sets`] hands the driver in one call: their infos sit on the stack.
 const WRITES_AT_ONCE: usize = 16;
 

@@ -3340,7 +3340,7 @@ fn instantiate_into(
     out: &mut DrawCommands,
 ) -> Result<(), BindError> {
     // The vectors `out` held, which this draw's commands take, emptied.
-    let kept = std::mem::replace(out, DrawCommands::empty());
+    let mut kept = std::mem::replace(out, DrawCommands::empty());
     let overrun = index_overrun(t.robust_index_fetch, draw);
     let (command, base) = vk_draw(draw, overrun);
     let capture = match t.capture {
@@ -3381,22 +3381,38 @@ fn instantiate_into(
     };
     let vertex = state.stages.get(&Stage::Vertex);
 
-    let mut push_constants = emptied(kept.push_constants);
-    let mut descriptor_bytes = emptied(kept.descriptor_bytes);
+    // The last draw's push and table writes, whose byte vectors this draw's stages take (a plan's
+    // stages write the same ranges, so the room is the same): a draw allocates them once.
+    let mut push_constants = std::mem::take(&mut kept.push_constants);
+    let mut descriptor_bytes = std::mem::take(&mut kept.descriptor_bytes);
     let mut push_holes = emptied(kept.push_holes);
     let mut root_tables = emptied(kept.root_tables);
     let mut reads_base = false;
+    // The writes made so far: the stages with push fields, and those with a table.
+    let (mut pushes, mut tables_written) = (0usize, 0usize);
     for st in &t.stages {
         let (push_start, push_size) = st.push_range.unwrap_or((0, 0));
-        let mut push = vec![0u8; push_size as usize];
-        let mut table = vec![
-            0u8;
+        // Only a stage that writes them takes a slot's vector: one without would leave the next
+        // stage's slot emptied.
+        let mut push = match push_constants.get_mut(pushes) {
+            Some(write) if push_size > 0 => std::mem::take(&mut write.bytes),
+            _ => Vec::new(),
+        };
+        push.clear();
+        push.resize(push_size as usize, 0);
+        let mut table = match descriptor_bytes.get_mut(tables_written) {
+            Some(write) if st.table.is_some() => std::mem::take(&mut write.bytes),
+            _ => Vec::new(),
+        };
+        table.clear();
+        table.resize(
             if st.table.is_some() {
                 st.table_size as usize
             } else {
                 0
-            }
-        ];
+            },
+            0,
+        );
         for f in &st.fields {
             let bytes: FieldBytes = match f.field {
                 PushField::RootTableAddress
@@ -3557,20 +3573,33 @@ fn instantiate_into(
             root_tables.push((st.flags, stage_root_table(&statics, first, resident)));
         }
         if push_size > 0 {
-            push_constants.push(PushConstantWrite {
+            let write = PushConstantWrite {
                 stages: st.flags,
                 offset: push_start,
                 bytes: push,
-            });
+            };
+            match push_constants.get_mut(pushes) {
+                Some(slot) => *slot = write,
+                None => push_constants.push(write),
+            }
+            pushes += 1;
         }
         if let Some((set, binding)) = st.table {
-            descriptor_bytes.push(DescriptorBytes {
+            let write = DescriptorBytes {
                 set,
                 binding,
                 bytes: table,
-            });
+            };
+            match descriptor_bytes.get_mut(tables_written) {
+                Some(slot) => *slot = write,
+                None => descriptor_bytes.push(write),
+            }
+            tables_written += 1;
         }
     }
+    // The last draw's writes this one has fewer of: their vectors' room is not kept.
+    push_constants.truncate(pushes);
+    descriptor_bytes.truncate(tables_written);
 
     // Vertex buffers: offsets, per-bind strides, the address rules, and the bytes the draw's
     // vertex and instance ranges fetch.
