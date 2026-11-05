@@ -37,7 +37,7 @@ host_library(
 host_test(
     name = "native_block_test",
     srcs = ["native_block_test.cpp"],
-    # (The old flags' -pthread is a no-op on macOS: threads are libSystem's.)
+    # No -pthread: a no-op on macOS, where threads are libSystem's.
     copts = ["-Wno-unused-parameter"],
     deps = [
         ":driver",
