@@ -53,6 +53,7 @@
 #include <kern/debug.h>
 #include <kern/thread_call.h>
 #include <machine/machine_routines.h>
+#include <os/log.h>
 #include <pexpert/pexpert.h>
 #include <sys/msgbuf.h>
 #include "IOSwitchDiag.h"
@@ -68,6 +69,8 @@ __attribute__((weak)) _Bool switch_display_is_on(void)
 
 extern int vsnprintf(char *, size_t, const char *, va_list);
 extern int snprintf(char *, size_t, const char *, ...);
+/* osfmk/kern/clock.c: lock-free (a panic may hold the clock lock) and in RELEASE, which has no DTrace. */
+extern void ioswitch_clock_calendar_nowait(clock_sec_t *secs, clock_nsec_t *nanosecs);
 extern uint32_t crc32(uint32_t crc, const void *buf, size_t size);
 extern uint64_t mach_absolute_time(void);
 extern boolean_t pmap_ioswitch_ram_reserved(ppnum_t pnum);
@@ -518,7 +521,7 @@ int ioswitch_panic_begin(const char *format, va_list *args, unsigned long caller
     if (save_on && region) {
         clock_sec_t secs = 0;
         clock_nsec_t nsecs = 0;
-        clock_get_calendar_nanotime_nowait(&secs, &nsecs);
+        ioswitch_clock_calendar_nowait(&secs, &nsecs);
         uint64_t ns = 0;
         absolutetime_to_nanoseconds(panic_at, &ns);
         char when[32], head[256];
@@ -611,12 +614,13 @@ const char *ioswitch_panic_save_pending(uint32_t *bytes, char *path, size_t path
     static const char *const resets[8] = {"power-on", "watchdog", "thermal sensor", "software (PMC)",
                                           "LP0 wake", "AOTAG",    "unknown 6",      "unknown 7"};
     if (!save_on || !region) {
-        if (save_on) printf("IOSwitch panic-save: off: %s\n", save_off_reason);
+        if (save_on) os_log(OS_LOG_DEFAULT, "IOSwitch panic-save: off: %s", save_off_reason);
         return NULL;
     }
     if (!pending) {
-        printf("IOSwitch panic-save: armed (%u MiB at %#llx, warm reset %u s after a panic), last reset %s, no saved "
-               "panic\n",
+        os_log(OS_LOG_DEFAULT,
+               "IOSwitch panic-save: armed (%u MiB at %#llx, warm reset %u s after a panic), last reset %s, no saved "
+               "panic",
                REGION_BYTES >> 20, (unsigned long long)REGION_PA, reboot_s, last_reset < 8 ? resets[last_reset] : "?");
         arm_test_panic();
         return NULL;
@@ -624,7 +628,8 @@ const char *ioswitch_panic_save_pending(uint32_t *bytes, char *path, size_t path
     char when[32];
     format_time(when, sizeof(when), record()->time_s);
     snprintf(path, path_bytes, "/private/var/ioswitch/panic-%s%s.log", when, pending_damaged ? "-damaged" : "");
-    printf("IOSwitch panic-save: armed, last reset %s, saved panic of %s UTC: %u bytes, %d of %u blocks damaged\n",
+    os_log(OS_LOG_DEFAULT,
+           "IOSwitch panic-save: armed, last reset %s, saved panic of %s UTC: %u bytes, %d of %u blocks damaged",
            last_reset < 8 ? resets[last_reset] : "?", when, record()->text_bytes, pending_damaged, record()->blocks);
     *bytes = record()->text_bytes;
     return (const char *)(uintptr_t)console()->text;
@@ -639,7 +644,8 @@ const void *ioswitch_panic_save_pending_stackshot(uint32_t *bytes)
         return NULL;
     const volatile uint8_t *data = region + SHOT_OFFSET;
     if (k->crc != crc_of(data, k->bytes)) {
-        printf("IOSwitch panic-save: the saved panic stackshot is damaged (%u bytes): not written\n", k->bytes);
+        os_log(OS_LOG_DEFAULT, "IOSwitch panic-save: the saved panic stackshot is damaged (%u bytes): not written",
+               k->bytes);
         return NULL;
     }
     *bytes = k->bytes;
@@ -650,7 +656,7 @@ void ioswitch_panic_save_done(int error, const char *path)
 {
     if (!pending) return;
     if (error) {
-        printf("IOSwitch panic-save: writing %s failed: %d (kept for the next boot)\n", path, error);
+        os_log(OS_LOG_DEFAULT, "IOSwitch panic-save: writing %s failed: %d (kept for the next boot)", path, error);
         return;
     }
     pending = 0;
@@ -658,5 +664,5 @@ void ioswitch_panic_save_done(int error, const char *path)
     shot()->magic = 0;
     console()->sig = 0;
     drain();
-    printf("IOSwitch panic-save: %s written\n", path);
+    os_log(OS_LOG_DEFAULT, "IOSwitch panic-save: %s written", path);
 }
