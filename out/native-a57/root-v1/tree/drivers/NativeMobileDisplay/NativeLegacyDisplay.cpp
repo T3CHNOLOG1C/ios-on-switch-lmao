@@ -26,6 +26,8 @@
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
+#include "NativePlanes.h"
+#include "../TegraVIC/TegraVICConfig.h"
 #include "TegraDisplayPower.h"
 #include "VsyncPhase.h"
 #include "../SwitchPower/SwitchPower.h"
@@ -48,6 +50,20 @@ extern "C" int tegra_gm20b_sync_for_cpu(const void *, uint64_t, uint64_t) __attr
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
+// IOSurface plane accessors (NativePlanesBindings.S): offset, bytes per row, height and width of plane `plane`.
+extern "C" uint64_t native_planes_surface_plane_offset(OSObject *, uint32_t),
+    native_planes_surface_plane_bytes_per_row(OSObject *, uint32_t),
+    native_planes_surface_plane_height(OSObject *, uint32_t), native_planes_surface_plane_width(OSObject *, uint32_t);
+// TegraVIC (the IOSurfaceAccelerator Core Animation copies a rotated detached layer through): what its boot self-test proved.
+// Weak defaults for a kernel without it: not ready, nothing proven.
+extern "C" __attribute__((weak)) bool tegra_vic_ready(void)
+{
+    return false;
+}
+extern "C" __attribute__((weak)) const TegraVICTraits *tegra_vic_traits(void)
+{
+    return nullptr;
+}
 extern "C" void native_legacy_frame_observed(unsigned kind, uint64_t count, uint64_t minx, uint64_t miny, uint64_t maxx,
                                              uint64_t maxy);
 extern "C" void native_legacy_frame_colors_observed(const uint32_t *colors, const uint64_t *counts, uint64_t other);
@@ -227,6 +243,14 @@ static constexpr uint32_t kGeneralActReq = 1u << 0, kWinAActReq = 1u << 1, kGene
                           kWinAUpdate = 1u << 9;
 static constexpr uint32_t kHDirection = 1u << 0, kVDirection = 1u << 2, kScanColumn = 1u << 4, kWinEnable = 1u << 30,
                           kWinAUnderflowInt = 1u << 8;
+// Hardware planes (r18-planes, NativePlanes.h): window B through its own register aperture (mainline dc.c tegra_plane_offset:
+// DC_WIN 0x700 + i at 0xd80 + i, DC_WINBUF 0x800 + i at 0xdc0 + i, WINC 0x500 + i at 0xc00 + i; window A's DC_WIN at 0xb80 + i),
+// so window A's flips, the console tape and the panic hook never find WINDOW_HEADER moved under them. STATE_CONTROL
+// WIN_B_ACT_REQ bit 2 / WIN_B_UPDATE bit 10; REG_ACT_CONTROL WIN_B_ACT_HCNTR_SEL bit 4 and window C's bit 6 (hekate sets both:
+// line-counter latching, which tears); INT_STATUS WIN_B_UF_INT bit 9; MC TRANSLATION_ENABLE_0 display0b bit 3 (swgroup dc).
+static constexpr uint32_t kWinBBase = 0xd80, kWinbufBBase = 0xdc0, kWincBBase = 0xc00, kWinABase = 0xb80;
+static constexpr uint32_t kWinBActReq = 1u << 2, kWinBUpdate = 1u << 10, kWinBActHcntrSel = 1u << 4,
+                          kWinCActHcntrSel = 1u << 6, kWinBUnderflowInt = 1u << 9, kDisplay0bTranslation = 1u << 3;
 // _di_winA_block: BLOCK | BLOCK_HEIGHT(4); the stride is the landscape line; H_OFFSET is the last byte of a line, where
 // H_DIRECTION starts (L4T window.c: (x + w) * Bpp - 1 = 0x13FF, the value hekate quotes for Horizon's own block scanout).
 // Portrait-native (IOSwitchPortrait.h): the same block layout scanned row by row, unrotated, as hekate's pitch window
@@ -280,6 +304,8 @@ struct PanicRestore {
     volatile bool armed;      // window A is rotated: a panic must put the pitch window back
     volatile bool tape;       // window A scans the console tape: it must too, unless the console still owns the screen
     volatile bool panicking;  // a panic began: window A is the panic's
+    volatile bool planes;     // window B may scan a plane, window A may blend over it: both go back (r18-planes)
+    uint32_t blend[3];        // window A's BLEND_LAYER_CONTROL, MATCH and NOMATCH as hekate left them
 };
 PanicRestore gPanicRestore;
 void restorePitchOnPanic(const char *message)
@@ -301,9 +327,23 @@ void restorePitchOnPanic(const char *message)
         dc[kWinbufStartAddr] = gPanicRestore.start;
         dc[kWinbufStartAddrHi] = 0;
         dc[kWinOptions] = gPanicRestore.options;
+        uint32_t update = kGeneralUpdate | kWinAUpdate, request = kGeneralActReq | kWinAActReq;
+        if (gPanicRestore.planes) {  // the panic screen over nothing: window B off, window A opaque again
+            dc[kWinBBase + NativePlanes::kOptions] = 0;
+            for (unsigned i = 0; i < 3; ++i) dc[kWinABase + NativePlanes::kBlendLayer + i] = gPanicRestore.blend[i];
+            update |= kWinBUpdate;
+            request |= kWinBActReq;
+        }
         __asm__ volatile("dsb sy" ::: "memory");
-        dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
-        dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
+        dc[kDcStateControl] = update;
+        dc[kDcStateControl] = request;
+    } else if (gPanicRestore
+                   .planes) {  // the plane probe covers the screen before the first frame: off, the console shows
+        volatile uint32_t *dc = gPanicRestore.dc;
+        dc[kWinBBase + NativePlanes::kOptions] = 0;
+        __asm__ volatile("dsb sy" ::: "memory");
+        dc[kDcStateControl] = kGeneralUpdate | kWinBUpdate;
+        dc[kDcStateControl] = kGeneralActReq | kWinBActReq;
     }
     if (gPanicRestore.previous) gPanicRestore.previous(message);
 }
@@ -577,7 +617,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr uint32_t kDcCrcControl = 0x300, kDcCrcLatched = 0x329, kCrcOn = (1u << 3) | (1u << 2) | (1u << 0);
     static constexpr uint32_t kDisplay0aTranslation = 1u << 1;  // client display0a (id 1) in TRANSLATION_ENABLE_0
     static constexpr uint64_t kProbeSlot = 0x10000000ull;  // below DRAM (0x80000000): only a translation reaches it
-    static constexpr unsigned kProbeTables = 16, kProbeAfterFrames = 600;
+    static constexpr unsigned kProbeTables = 64, kProbeAfterFrames = 600;  // r18-planes: 40 tables for the plane slots
     IOBufferMemoryDescriptor *probeTables = nullptr;
     uint64_t probeTablesPa = 0, probeAt = 0;
     TegraSMMUDomain probeDomain;
@@ -621,6 +661,50 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     const OriginalLegacySwapRequest *flipRequest = nullptr;  // the swap the next flip shows (noteTaken)
     uint64_t entrySeq[TegraScanoutRing::kMaxEntries] = {};   // the take sequence of the swap each entry shows
     uint32_t stDirect = 0;
+    // --- Hardware planes (r18-planes; NativePlanes.h has the rules and their sources) ------------------------------------
+    // Core Animation's detached layer (a video under the UI) is scanned by window B through the display's SMMU domain, from
+    // one of kPlaneSlots IOVA slots above the direct-scanout ones, while window A shows the composited UI blending over it
+    // (premultiplied). The domain comes up at the start, before backboardd: the plane probe (DisplaySmmuProbe's stages on
+    // window B, which covers the screen with a frozen copy of it for about 15 frames) proves window B reads through it; only
+    // then are planes on (planesOn), and only then may XNU start backboardd without CA_DISABLE_DETACHED
+    // (native_legacy_detach_ready below). Window B's register sets move through DC A as NativePlanes::PlaneLatch follows them;
+    // a set is a slot index (kOff: window off). A swap retires when the latch that shows it (or a newer one) is seen.
+    static constexpr unsigned kPlaneSlots = 8;
+    static constexpr uint64_t kPlaneSlotSpan = 20ull << 20, kPlaneSlot0 = kProbeSlot + (uint64_t)kSlots * kSlotSpan;
+    static constexpr unsigned kPlaneUnderflowFrames = 3;
+    struct PlaneSlot {
+        IOMemoryDescriptor *memory;  // retained and prepared while mapped
+        uint64_t low, high;          // the surface bytes mapped (page-aligned) at the slot's IOVA
+        uint64_t used;
+    };
+    PlaneSlot planeSlots[kPlaneSlots] = {};
+    uint64_t planeSlotUses = 0;
+    struct PlaneSet {
+        bool on;
+        int slot;
+        NativePlanes::Image image;
+        uint64_t seq;  // the take sequence of the newest swap this set shows
+    };
+    PlaneSet planeSets[kPlaneSlots + 1] = {};  // by slot; [kPlaneSlots] is the window off
+    NativePlanes::PlaneLatch planeLatch;
+    bool planesOn = false, planesAttached = false, planeProbeRan = false, planeProbing = false;
+    uint64_t planeProbeAt = 0;
+    // The plane change the next window A flip carries (the swap being taken), and the one each ring entry carried.
+    bool planeNextSet = false;
+    PlaneSet planeNext = {};
+    bool entryPlaneSet[TegraScanoutRing::kMaxEntries] = {};
+    PlaneSet entryPlane[TegraScanoutRing::kMaxEntries] = {};
+    bool planeHeldSet = false;  // a window B change waiting for the frame end that settles the last two (PlaneLatch)
+    PlaneSet planeHeld = {};
+    int planeCsc[2] = {-1, -1};  // the CSC window B has: matrix, full range (-1: none written)
+    bool planeFiltersWritten = false, planeBlending = false;
+    unsigned planeUnderflowRun = 0;
+    uint32_t planeBlendSaved[3] = {};
+    // Stats (the pacing line): window B flips written, of them swaps that changed only window B (no UI composite at all),
+    // B sets seen latched, new slot mappings, detached layers not shown (planes off, or a layer more than window B takes),
+    // window B underflow frames, ready-mask mismatches at a kick.
+    uint32_t stPlaneFlips = 0, stPlaneOnly = 0, stPlaneLatched = 0, stPlaneMaps = 0, stPlaneDropped = 0,
+             stPlaneUnderflows = 0, stPlaneUnready = 0;
     bool kickDeferred = false;                  // a swap is waiting for a frame end (or for the SC7 resume)
     uint64_t flipRequested = 0, flipWaits = 0;  // frameEnds when the last flip went out; swaps that waited for a buffer
     IOTimerEventSource *flipTimer =
@@ -1009,6 +1093,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             checkFlip(false);
         if ((status & kFrameEndInt) && tapeSettle) checkTapeSettled();
         if (status & kFrameEndInt) probeFrameEnd();
+        if (status & kFrameEndInt) planeFrameEnd();
         if ((status & kFrameEndInt) && stats) noteStatsWindow();
     }
     // At a frame end, under the gate: after 5 s, the one stats line for the window, then a new window. The line is formatted here and
@@ -1113,6 +1198,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             : stFallbacks                 ? " (fell back to double buffering now)"
                                           : " (double-buffered)",
             stReplaced, stCollapsed);
+        // r18-planes: window B sets written (of them by swaps that changed only window B: video frames with no UI composite),
+        // seen latched, new slot mappings, detached layers not shown, window B underflow frames, ready-mask mismatches.
+        add("; planes %s: flips %u (b-only %u) latched %u, maps %u, dropped %u, underflow %u, unready %u",
+            planesOn         ? "on"
+            : planesAttached ? "off"
+                             : "-",
+            stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneDropped, stPlaneUnderflows, stPlaneUnready);
+        stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneDropped = stPlaneUnderflows =
+            stPlaneUnready = 0;
         add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u rate %u/%u",
             stLong[kLongIdle] + stLong[kLongCa] + stLong[kLongGpu] + stLong[kLongQueue] + stLong[kLongLatch] +
                 stLong[kLongRate],
@@ -1713,7 +1807,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // taken by the filter but not yet handled (the gate was busy, e.g. with a copy) only moves the deadline.
     void checkFlipDeadline()
     {
-        if ((ring.pending == kNoBuffer && !probeRequest) || hwSuspended || scanoutStopped || gPanicRestore.panicking)
+        // r18-planes: a window B set still out counts while planes are on; once they are off it is planeFrameEnd's alone
+        // (one line, never a panic: a path that has not run on hardware).
+        if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested())) || hwSuspended ||
+            scanoutStopped || gPanicRestore.panicking)
             return;
         if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE) & kFrameEndInt) {
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
@@ -1799,6 +1896,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         const bool mayReplace = ring.pending == kNoBuffer || sameLayout(i, ring.pending);
         const TegraScanoutRing::Ready how = ring.ready(i, mayReplace);
         entrySeq[i] = seqOf(flipRequest);
+        // r18-planes: the window B change of the swap this frame shows goes out with it (writeFlip), now or at the latch
+        // that releases a held frame.
+        entryPlaneSet[i] = planeNextSet;
+        if (planeNextSet) {
+            entryPlane[i] = planeNext;
+            entryPlane[i].seq = entrySeq[i];
+            planeTarget = entryPlane[i];
+            planeNextSet = false;
+        }
         markFlip(i);
         if (how != TegraScanoutRing::kHold) writeFlip(i);
     }
@@ -1817,8 +1923,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             dc[kWinbufHOffset] = hOffset;
         }
         dc[kWinbufStartAddr] = surfaceAddress(i);
-        dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
-        dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
+        // Window B's change for this frame, if any, into its assembly registers: one UPDATE write arms both windows and one
+        // ACT_REQ write latches them at the same boundary (the ARM copy makes a replaced pair whole either way).
+        uint32_t update = kGeneralUpdate | kWinAUpdate, request = kGeneralActReq | kWinAActReq;
+        if (entryPlaneSet[i]) {
+            entryPlaneSet[i] = false;
+            planeStage(entryPlane[i], update, request);
+        }
+        dc[kDcStateControl] = update;
+        dc[kDcStateControl] = request;
         flipRequested = frameEnds;  // a replaced flip's boundary is this one's too
         flipTimer->setTimeoutMS(kFlipDeadlineMS);
     }
@@ -1912,6 +2025,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         void detach()
         {
             if (d->probe.stage == DisplaySmmuProbe::kDone && d->startDirect()) return;  // passed: the domain stays
+            if (d->planesAttached) {  // window B's planes use the domain: only the probe's slot goes
+                d->probeDomain.unmap(kProbeSlot, (uint32_t)(kNativeBlockBytes / 4096));
+                d->cleanDomain();
+                return;
+            }
             tegra_smmu_detach(TEGRA_SMMU_ASID_DISPLAY, TEGRA_SMMU_DC_ASID);
         }
         void crcOff()
@@ -1946,7 +2064,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // then the "dc" swgroup pointed at it. False (probeLine says why) leaves the swgroup as it was.
     bool probeAttach()
     {
-        if (!probeDomain.init(probeTables->getBytesNoCopy(), probeTablesPa, kProbeTables)) {
+        // With planes on, the domain is the plane probe's already (window A's surfaces 1:1 in it): it is extended, not made.
+        if (!planesAttached && !probeDomain.init(probeTables->getBytesNoCopy(), probeTablesPa, kProbeTables)) {
             snprintf(probeLine, sizeof(probeLine), "the table buffer cannot hold a directory");
             return false;
         }
@@ -1992,6 +2111,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 return;
             probeRan = true;
             probeSurface = ring.front;
+            if (planesAttached &&
+                (planeOnScreen() || planeHeldSet)) {  // a plane is shown: its frames would move the CRC
+                probeRan = false;
+                probeAt = frameEnds + 60;
+                return;
+            }
             if (otherWindowEnabled()) {
                 IOLog("IOSwitch display: SMMU probe not run: window B or C is enabled (it would fetch through the SMMU "
                       "too)\n");
@@ -2173,9 +2298,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         underflowRun = 0;
         if (doubleBuffer) {
             ring.ready(target);
+            // r18-planes: its swap retires at this latch (latchRetire is on from the plane probe).
+            entrySeq[target] = seqOf(flipRequest);
             flipRequested = frameEnds;
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
             markFlip(target);
+        }
+        if (planeNextSet) {  // r18-planes: the first frame's window B change, latched at the same boundary
+            planeNextSet = false;
+            planeFlipOnly(planeNext);
         }
         IOLog("IOSwitch display: window A to block-linear %s surface requested (ACT_CONTROL %#x -> %#x)\n",
               kBlockScanName, pitchActControl, pitchActControl & ~kWinAActHcntrSel);
@@ -2222,6 +2353,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                     if (replaced != kNoBuffer) ++stReplaced;
                     notePresent(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), frameEnds - flipRequested, marks[asked]);
                 }
+                retireThrough(entrySeq[asked]);  // r18-planes: retiring at the latch from the first frame on
                 flipLatched();
             }
             return;
@@ -2332,6 +2464,11 @@ public:
     bool setScanout(bool on)
     {
         if (!dc) return false;
+        if (!on && !hwSuspended && planeProbe.active()) {  // r18-planes: no frame end comes once the scan stops
+            PlaneProbeIo io = {this};
+            planeProbe.perform(planeProbe.fail("the display went off"), io);
+            planeProbeFinish();
+        }
         if (!on && !hwSuspended && (probe.active() || probeRequest)) {
             // No frame end comes once the scan stops: undo the probe now, and its last request is taken when the scan
             // restarts (the assembly copy holds the physical address); the swaps it held go.
@@ -2382,6 +2519,7 @@ public:
     void quiesceForSuspend()
     {
         abortProbe("the display suspended (SC7)");
+        planesQuiesce();  // r18-planes
         resumeLit = !scanoutStopped;
         setScanout(false);
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
@@ -2406,7 +2544,7 @@ public:
     bool finishResume()
     {
         if (!hwSuspended) panic("IOSwitch display: tegra_display_resume without tegra_display_suspend");
-        if (directAttached) reattachDirect();  // SC7 reset the MC: the dc swgroup is in bypass again
+        if (directAttached || planesAttached) reattachDirect();  // SC7 reset the MC: the dc swgroup is in bypass again
         dc[kDcStateAccess] = 0;
         dc[kDcWindowHeader] = kWindowASelect;
         dc[kWinOptions] = 0;
@@ -2446,6 +2584,7 @@ public:
             kickDeferred = false;
             kickSwapQueue();
         }
+        planesResume();  // r18-planes: window B and window A's blending, after the cold init
         return resumeLit;
     }
     // Called by the GPU client's completion (any thread): the swap is finished on the framebuffer's work loop. The GPU frame copy's
@@ -2670,10 +2809,28 @@ public:
             kickDeferred = true;
             return;
         }
+        if (planeProbe.active()) {  // r18-planes: window B covers the screen and the probe's CRC must not move
+            kickDeferred = true;
+            return;
+        }
         pruneValidated();
+        // r18-planes: what this swap does to each window, from the family's effective layers (a layer it does not update keeps
+        // its surface). A swap that leaves window A alone (a video frame under a still UI) changes window B only: no GPU work.
+        if (hwSuspended) {
+            kickDeferred = true;
+            return;
+        }
+        PlaneDecision pd;
+        planeDecide(request, pd);
+        if (!pd.uiNew) {
+            kickPlaneOnly(request, pd, stats ? mach_absolute_time() : 0);
+            return;
+        }
+        planeNextSet = pd.planeChange;
+        planeNext = pd.set;
         // Every surface is held (one scanned, one asked for, and with three a replaced one not yet known to be untaken, or a flip
         // out with two), or the controller is unclocked during SC7: the frame end that settles a latch, or the resume, kicks again.
-        const bool direct = directOn && !gpuBypass && directCandidate(request);
+        const bool direct = directOn && !gpuBypass && directCandidate(pd.ui);
         const bool noSurface = doubleBuffer && (direct ? ring.held != kNoBuffer || ring.superseded != kNoBuffer
                                                        : ring.target() == kNoBuffer);
         if (noSurface || hwSuspended) {
@@ -2689,12 +2846,22 @@ public:
         // copy's start, and the newest one goes. Only with early retirement (the default): with sheng-early-retire=0 every swap
         // retires after its own copy.
         if (bootEarlyRetire && !latchRetire) {
+            const OriginalLegacySwapRequest *first = request;
             for (const OriginalLegacySwapRequest *next = queuedAfter(request); next && isValidated(next);
                  next = queuedAfter(request)) {
                 if (!retireSwap(request, true)) break;
                 if (stats) ++stCollapsed;
                 request = pendingSwapRequest();
                 if (!request || !isValidated(request)) return;
+            }
+            if (request != first) {  // the newest swap goes: its own layers (planes are off here: no window B change)
+                planeDecide(request, pd);
+                if (!pd.uiNew) {
+                    kickPlaneOnly(request, pd, stats ? mach_absolute_time() : 0);
+                    return;
+                }
+                planeNextSet = pd.planeChange;
+                planeNext = pd.set;
             }
         }
         const uint64_t kickAt = stats ? mach_absolute_time() : 0;
@@ -2705,8 +2872,8 @@ public:
         // The owned GPU instrument completes its work before submission.
         // The separate original software-renderer experiment uses completed
         // synchronous CPU surfaces, with no GPU or display fence fabricated.
-        OSObject *surface = nullptr;
-        memcpy(&surface, reinterpret_cast<const unsigned char *>(request) + 2624, sizeof(surface));
+        // Window A's surface: the topmost full-frame BGRA layer (layer 0 alone, or layer 1 over a detached layer).
+        OSObject *surface = pd.blank ? nullptr : pd.ui;
         if (!surface) {
             // Validated blank swap (all layers disabled over black): solid-fill the actual GOP.
             PE_Video blank = {};
@@ -2753,6 +2920,7 @@ public:
             return;
         }
         if (!surface->metaCast("IOSurface")) return;
+        planeShownUi = surface;
         IOMemoryDescriptor *memory = native_legacy_surface_descriptor(surface);
         PE_Video video = {};
         uint32_t width = 0, height = 0;
@@ -3472,6 +3640,10 @@ public:
         // Only after the real copy and store barrier: select the actual pending head and let the unchanged family release it and wake
         // waiters. This reports memory scanout completion, not a panel vblank or hardware fence.
         if (latchRetire) {  // retiring at the latch (direct scanout on): checkFlip retires it once it is seen on screen
+            // r18-planes: a frame no flip carries (a blank fill of the pitch window before the first rotation, or the single
+            // buffer) is on screen now.
+            if (ring.pending == kNoBuffer && ring.held == kNoBuffer && !planeLatch.requested() && !planeHeldSet)
+                retireThrough(seqOf(request));
             transferred = false;
             kickSwapQueue();
             return;
@@ -3528,11 +3700,9 @@ public:
     }
     // A swap window A can scan in place: one full-frame BGRA surface (validateSwap's single layer), its rows a multiple of 64
     // bytes, at most one slot. The portrait-native layout only: window A then scans rows unrotated, as hekate's pitch window does.
-    bool directCandidate(const OriginalLegacySwapRequest *request) const
+    bool directCandidate(OSObject *surface) const
     {
         if (!IOSWITCH_PORTRAIT_NATIVE) return false;
-        OSObject *surface = nullptr;
-        memcpy(&surface, reinterpret_cast<const unsigned char *>(request) + 2624, sizeof(surface));
         if (!surface || !surface->metaCast("IOSurface")) return false;
         const uint64_t stride = native_legacy_surface_stride(surface),
                        allocation = native_legacy_surface_allocation(surface);
@@ -3657,17 +3827,24 @@ public:
         directAttached = directOn = latchRetire = true;
         return true;
     }
-    // Resume from SC7 (the MC was reset): the same directory again; refused, window A back to the boot framebuffer.
+    // Resume from SC7 (the MC was reset): the same directory again; refused, window A back to the boot framebuffer and
+    // planes off.
     void reattachDirect()
     {
         char why[160];
+        const uint32_t bits =
+            (directAttached ? kDisplay0aTranslation : 0) | (planesAttached ? kDisplay0bTranslation : 0);
         if (!tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
-                               TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation, why, sizeof(why)))
+                               TEGRA_SMMU_TRANSLATION_ENABLE_0, bits, why, sizeof(why)))
             return;
-        IOLog("IOSwitch display: SMMU domain not re-attached after SC7 (%s): direct scanout off, window A back on the "
-              "boot "
-              "framebuffer\n",
-              why);
+        IOLog(
+            "IOSwitch display: SMMU domain not re-attached after SC7 (%s): direct scanout%s off, window A back on the "
+            "boot "
+            "framebuffer\n",
+            why, planesAttached ? " and planes" : "");
+        planesOff(nullptr, false);
+        planesAttached = false;
+        if (!directAttached) return;
         directOn = directAttached = false;
         for (size_t i = 0; i < sizeof(kWindowAState) / sizeof(kWindowAState[0]); ++i) {
             if (kWindowAState[i] == kWinbufStartAddr) savedWindow[i] = surfaceAddress(0);
@@ -3680,11 +3857,13 @@ public:
     // The display stops: the swgroup back to bypass, every slot given back.
     void stopDirect()
     {
-        if (!directAttached) return;
+        stopPlanes();
+        if (!directAttached && !planesAttached) return;
         tegra_smmu_detach(TEGRA_SMMU_ASID_DISPLAY, TEGRA_SMMU_DC_ASID);
         for (unsigned k = 0; k < kSlots; ++k) dropSlot(k);
-        directOn = directAttached = false;
+        directOn = directAttached = planesAttached = false;
     }
+#include "NativePlanesDisplay.inc"
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {
         // The original completion helper passes null optional outputs and
@@ -3694,10 +3873,11 @@ public:
     }
     bool validateSwap(const OriginalLegacySwapRequest *request) override
     {
-        // Qualified original request fields are packed; use memcpy for each
-        // access. Accept only one full-frame, untransformed, nonplanar BGRA
-        // surface with real original backing memory. No generic capability
-        // or success is supplied for other layer/format/geometry contracts.
+        // Qualified original request fields are packed; use memcpy for each access. r18-planes: every swap Core Animation
+        // can build from the limits this display publishes is accepted (NativePlanes.h: a refused swap is sent again every
+        // frame, the r6h freezes): the UI as one full-frame, untransformed BGRA surface with real original backing memory
+        // (the rule since r6), plus one detached layer window B shows exactly. Updated layers only: the family fills in the
+        // ones a swap does not update after this (0xa60), and the kick reads those.
         __atomic_store_n(&gLastSwapAbs, mach_absolute_time(), __ATOMIC_RELAXED);
         auto bytes = reinterpret_cast<const unsigned char *>(request);
         auto word = [&](unsigned offset) {
@@ -3709,59 +3889,54 @@ public:
         unsigned reason = 1;
         bool accepted = false;
         if (bootValidate && logicalPM && primary && bootMapping && request) {
-            reason = 2;
-            OSObject *surfaces[4] = {};
-            memcpy(surfaces, bytes + 2624, sizeof(surfaces));
-            surface = surfaces[0];
+            OSObject *surfaces[NativePlanes::kLayers] = {};
+            memcpy(surfaces, bytes + NativePlanes::kSurfaces, sizeof(surfaces));
             uint32_t width = 0, height = 0;
             getDisplayDimensions(&width, &height);
-            if (surface && surface->metaCast("IOSurface") && !surfaces[1] && !surfaces[2] && !surfaces[3] &&
-                native_legacy_single_layer_state(word(792), word(796), word(800))) {
-                reason = 3;
-                bool rectangles = true;
-                const unsigned rectOffsets[] = {17, 81};
-                for (unsigned offset : rectOffsets) {
-                    uint32_t rect[4] = {};
-                    memcpy(rect, bytes + offset, sizeof(rect));
-                    rectangles = rectangles && rect[0] == 0 && rect[1] == 0 && rect[2] == width && rect[3] == height;
-                }
-                bool options = true;
-                for (unsigned offset = 804; offset <= 812; offset += 4) options = options && word(offset) == 0;
-                if (width && height && rectangles && options && word(816) == width && word(820) == height) {
-                    reason = 4;
-                    IOMemoryDescriptor *memory = native_legacy_surface_descriptor(surface);
-                    // A surface larger than the display (rows or lines padded to the GPU's alignment) is accepted: only the visible rectangle,
-                    // which the request's rectangles already name as the whole display, is copied.
-                    if (native_legacy_surface_width(surface) >= width &&
-                        native_legacy_surface_height(surface) >= height &&
-                        nativeBgra(native_legacy_surface_format(surface), native_legacy_surface_planes(surface)) &&
-                        memory && memory->metaCast("IOMemoryDescriptor") &&
-                        native_legacy_surface_bounds(width, height, native_legacy_surface_stride(surface),
-                                                     native_legacy_surface_allocation(surface), memory->getLength())) {
-                        reason = 0;
-                        accepted = true;
-                    } else {
-                        native_legacy_surface_rejected(
-                            native_legacy_surface_width(surface), native_legacy_surface_height(surface),
-                            native_legacy_surface_format(surface), native_legacy_surface_planes(surface),
-                            native_legacy_surface_stride(surface), native_legacy_surface_allocation(surface),
-                            memory ? memory->getLength() : 0);
-                    }
-                }
-            }
-        }
-        if (!accepted && reason == 2 && !surface && bootValidate) {
-            // No surface in any slot and every updated layer disabled over black: present a blank screen.
-            OSObject *none[4] = {};
-            memcpy(none, bytes + 2624, sizeof(none));
-            uint32_t width = 0, height = 0;
-            getDisplayDimensions(&width, &height);
+            const uint32_t updated = word(NativePlanes::kUpdated), background = word(NativePlanes::kBackground);
             bool options = true;
             for (unsigned offset = 804; offset <= 812; offset += 4) options = options && word(offset) == 0;
-            if (!none[0] && !none[1] && !none[2] && !none[3] && width && height && options && word(816) == width &&
-                word(820) == height && native_legacy_blank_state(word(792), word(796), word(800))) {
-                reason = 5;
-                accepted = true;
+            bool hasSurface[NativePlanes::kLayers] = {}, any = false, objects = true;
+            NativePlanes::Layer layers[NativePlanes::kLayers];
+            for (unsigned i = 0; i < NativePlanes::kLayers; ++i) {
+                if (!(updated & (1u << i)) || !surfaces[i]) continue;
+                if (!surfaces[i]->metaCast("IOSurface")) objects = false;
+                if (!surface) surface = surfaces[i];
+                hasSurface[i] = any = true;
+                if (objects) layers[i] = planeLayerOf(bytes, i, surfaces[i]);
+            }
+            if (!width || !height || !options || word(816) != width || word(820) != height)
+                reason = 3;
+            else if (!objects)
+                reason = 4;
+            else if (!any) {
+                // No surface in any slot and every updated layer disabled over black: present a blank screen.
+                reason = native_legacy_blank_state(updated, word(NativePlanes::kReady), background) ? 5 : 2;
+                accepted = reason == 5;
+            } else {
+                reason = NativePlanes::checkUpdated(updated, background, hasSurface, layers, width, height);
+                // The UI's own memory: its rows within the descriptor (a surface larger than the display, rows or lines
+                // padded to the GPU's alignment, is accepted: only the visible rectangle is read).
+                for (unsigned i = 0; !reason && i < NativePlanes::kLayers; ++i) {
+                    if (!hasSurface[i] || !NativePlanes::isUi(layers[i], width, height)) continue;
+                    IOMemoryDescriptor *memory = native_legacy_surface_descriptor(surfaces[i]);
+                    if (!memory || !memory->metaCast("IOMemoryDescriptor") ||
+                        !native_legacy_surface_bounds(width, height, native_legacy_surface_stride(surfaces[i]),
+                                                      native_legacy_surface_allocation(surfaces[i]),
+                                                      memory->getLength())) {
+                        reason = 4;
+                        surface = surfaces[i];
+                    }
+                }
+                accepted = !reason;
+                if (reason == 4 || reason == NativePlanes::kFormat || reason == NativePlanes::kAlignment)
+                    native_legacy_surface_rejected(
+                        native_legacy_surface_width(surface), native_legacy_surface_height(surface),
+                        native_legacy_surface_format(surface), native_legacy_surface_planes(surface),
+                        native_legacy_surface_stride(surface), native_legacy_surface_allocation(surface),
+                        native_legacy_surface_descriptor(surface)
+                            ? native_legacy_surface_descriptor(surface)->getLength()
+                            : 0);
             }
         }
         if (accepted)
@@ -3904,6 +4079,47 @@ public:
             setProperty("DisplayPipeStrideRequirements", requirements);
         OSSafeReleaseNULL(horizontal);
         OSSafeReleaseNULL(requirements);
+        publishPlaneLimits();
+    }
+    // r18-planes: the limits Core Animation detaches a layer within (AppleDisplay::update_display_limits reads them once, at
+    // the display's creation; NativePlanes::Limits has the values and why). With backboardd still under CA_DISABLE_DETACHED
+    // (native_legacy_detach_ready false) nothing is detached and these change nothing.
+    void publishPlaneLimits()
+    {
+        const NativePlanes::Limits limits;
+        struct Entry {
+            const char *key;
+            uint64_t value;
+        };
+        auto publish = [this](const char *name, const Entry *entries, unsigned count, unsigned bits) {
+            OSDictionary *dict = OSDictionary::withCapacity(count);
+            for (unsigned i = 0; dict && i < count; ++i)
+                if (OSNumber *n = OSNumber::withNumber(entries[i].value, bits)) {
+                    dict->setObject(entries[i].key, n);
+                    n->release();
+                }
+            if (dict) setProperty(name, dict);
+            OSSafeReleaseNULL(dict);
+        };
+        const Entry scaling[] = {{"RGBLayer_MinScaleFraction", limits.minScaleFraction},
+                                 {"RGBLayer_MaxScale", limits.maxScale},
+                                 {"YUVLayer_MinScaleFraction", limits.minScaleFraction},
+                                 {"YUVLayer_MaxScale", limits.maxScale}};
+        publish("IOMFBScalingLimits", scaling, 4, 32);
+        // The panel's pixel clock (TegraDisplayPower.cpp: PLLD 468 MHz, 78 MHz for 60 Hz) as both clocks [I: what
+        // valid_clocking_p compares them with is not reversed; A10X computes MaxVideoSrcDownscalingWidth from its own].
+        const Entry source[] = {{"MaxSrcRectWidth", limits.maxSrcRectWidth},
+                                {"MaxSrcRectTotal", limits.maxSrcRectTotal},
+                                {"MaxSrcBufferWidth", limits.maxSrcBuffer},
+                                {"MaxSrcBufferHeight", limits.maxSrcBuffer},
+                                {"MaxVideoSrcDownscalingWidth", limits.maxSrcRectWidth},
+                                {"VideoClock", 78000000},
+                                {"PixelClock", 78000000}};
+        publish("IOMFBMaxSrcPixels", source, 7, 64);
+        const Entry base[] = {{"PlaneBaseAlignmentLinear", limits.planeBaseAlignment}};
+        publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
+        const Entry layers[] = {{"MaxNumLayers", limits.maxLayers}};
+        publish("IOMFBNumLayers", layers, 1, 32);
     }
 #define LEAF(n)                                                            \
     __attribute__((noreturn, noinline)) void opaque##n() override          \
@@ -3992,6 +4208,24 @@ IOService *native_legacy_display_allocate(void)
 extern "C" void native_legacy_gpu_complete(void *display, int status)
 {
     if (display) static_cast<NativeLegacyDisplay *>(display)->gpuComplete(status);
+}
+
+// r18-planes, XNU kern_exec.c (native_ioswitch_exec_environment, when it starts backboardd): may Core Animation detach layers?
+// Only when the plane probe passed (window B scans through the SMMU) and TegraVIC proved the IOSurfaceAccelerator quarter
+// turns (transforms 4 and 7) and 4:2:0 to RGB, since on an internal display every rotated detached layer (here: every video,
+// the UI being landscape in a portrait panel) is first copied through it, and what Core Animation does when that copy is
+// refused is not known: until then backboardd keeps CA_DISABLE_DETACHED=1, as before. One line per call.
+extern "C" bool native_legacy_detach_ready(void)
+{
+    NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
+    const bool planes = display && display->planesReady();
+    const TegraVICTraits *vic = tegra_vic_ready() ? tegra_vic_traits() : nullptr;
+    const bool turns = vic && (vic->rotations & 0x90) == 0x90 && (vic->yccIn & TEGRA_VIC_YCC_IN_RGB);
+    IOLog("IOSwitch display: backboardd %s detach layers: planes %s, IOSurfaceAccelerator quarter turns %s (transforms "
+          "%#x)\n",
+          planes && turns ? "may" : "may not", planes ? "on" : "off", turns ? "proven" : "not proven",
+          vic ? vic->rotations : 0);
+    return planes && turns;
 }
 
 // TegraGM20B gpu.c (idle clock): the last swap, in nanoseconds of uptime; 0 before the first. Any context.

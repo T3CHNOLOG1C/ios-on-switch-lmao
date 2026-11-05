@@ -67,6 +67,16 @@ this tree; **[I]** = inferred, to check; **[T]** = to be proven by a boot self-t
 
 ## Phase 2: video on its own DC window
 
+**Done in r18-planes** (11-05); the rules, their sources and tags are in `NativePlanes.h`, the driver side in
+`NativePlanesDisplay.inc`. What changed from the plan below: Core Animation never retries a refused swap (it sends it
+again every frame), so the display publishes the limits it can show (IOMFBScalingLimits 4/4, IOMFBMaxSrcPixels 1920
+wide and 2048x2048 buffers, IOMFBNumLayers 2, plane bases 64) and accepts every swap within them; on this internal
+display CA copies any rotated, out-of-limit or converted layer through the IOSurfaceAccelerator (TegraVIC) first, so
+window B only scans display-ready layers; window B's SMMU proof runs at the display's start (the plane probe), before
+backboardd, and backboardd drops CA_DISABLE_DETACHED only once it passed and TegraVIC proved quarter turns
+(`native_legacy_detach_ready`). The plan as written before:
+
+
 1. **What CA wants [V names, I semantics]:** QuartzCore decides per layer with `kCADetachReasonCode*` (DisplayRejected,
    NoDisplayCompositing, WindowServerRejected, Rotation, NonOpaque, NonAffine, RectClipped, UnderBackdrop, ...), reads
    `IOMFBScalingLimits`, `IOMFBMaxSrcPixels` and `DisplayPipePlaneBaseAlignment` from the framebuffer, and disables detach
