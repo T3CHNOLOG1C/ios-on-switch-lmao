@@ -1,0 +1,76 @@
+# translate/arm64e on this Mac. The semantic tests run each replaced instruction natively next to its stub, so they
+# need Apple silicon (LSE, FP16, FCMA, JSCVT, RDM).
+#
+#   classify_test    the classifier, the one-word rewrites and the fast-reject table on known encodings
+#   semantics_test   LSE, LDRA and FP stubs against the instructions, from the same random states
+#   macho_test       the loader's translation of small synthetic Mach-Os, verification, chained fixups
+#   vlive_test       (manual) V-register liveness claims re-run against this Mac's own dyld cache
+#   fma16_test       (manual) every half-precision FMA product, scalar and vector, against the hardware
+#
+#   bazel test //translate/arm64e/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+host_library(
+    name = "a64x",
+    srcs = [
+        "//translate/arm64e:a64x/a64x_classify.c",
+        "//translate/arm64e:a64x/a64x_fp16.inc",
+        "//translate/arm64e:a64x/a64x_image.c",
+        "//translate/arm64e:a64x/a64x_rewrite.c",
+        "//translate/arm64e:a64x/a64x_vlive.inc",
+    ],
+    hdrs = ["//translate/arm64e:a64x/a64x.h"],
+)
+
+host_library(
+    name = "macho",
+    srcs = ["//translate/arm64e:macho/macho.c"],
+    hdrs = ["//translate/arm64e:macho/macho.h"],
+    deps = [":a64x"],
+)
+
+host_test(
+    name = "classify_test",
+    srcs = ["classify_test.cpp"],
+    deps = [":a64x"],
+)
+
+# The harnesses jump into generated code: UBSan's function-type check cannot see a prototype there.
+host_test(
+    name = "semantics_test",
+    srcs = [
+        "fp_semantics.c",
+        "lse_semantics.c",
+        "semantics_test.cpp",
+    ],
+    copts = ["-fno-sanitize=function"],
+    deps = [":a64x"],
+)
+
+host_test(
+    name = "macho_test",
+    srcs = ["macho_test.cpp"],
+    deps = [":macho"],
+)
+
+host_test(
+    name = "vlive_test",
+    srcs = ["vlive.c"],
+    args = ["/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e"],
+    copts = ["-fno-sanitize=function"],
+    gtest_main = False,
+    tags = ["manual"],
+    deps = [":a64x"],
+)
+
+host_test(
+    name = "fma16_test",
+    size = "enormous",
+    srcs = ["fma16.c"],
+    gtest_main = False,
+    sanitize = False,
+    tags = ["manual"],
+)
