@@ -93,11 +93,14 @@ vnode_pager_isSSD(vnode_t vp)
 	return disk_conditioner_mount_is_ssd(vp->v_mount);
 }
 
-/* IOSwitch (r14-launch): the file is on a disk image's volume (here: the System/App cryptex), for the kprof waits line. */
+/* IOSwitch (r14-launch): the file is on a cryptex volume (DiskImages-backed or, r17-launch, on the direct read map, which
+ * is not a virtual device) or another disk image's, for the kprof waits line's "cx". */
+extern bool ioswitch_cluster_is_cryptex_mount(mount_t mp);   /* bsd/vfs/vfs_cluster.c */
 boolean_t
 vnode_pager_virtualdev(vnode_t vp)
 {
-	return vp->v_mount != NULL && (vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) != 0;
+	return vp->v_mount != NULL &&
+	       ((vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) != 0 || ioswitch_cluster_is_cryptex_mount(vp->v_mount));
 }
 
 /*

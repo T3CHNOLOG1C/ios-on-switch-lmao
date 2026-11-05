@@ -35,8 +35,9 @@
  *       the dyld shared cache), cached-read misses (count, ms waited; kernel_task's are DiskImages reading the cryptex
  *       images), decmpfs page-ins, and "new +N ms" for a process started in the window (its age at the summary): the
  *       launch decomposition is wall = CPU + these waits + the rest (IPC, locks, scheduling)
- *   IOSwitch kprof image (r14-launch): the cryptex images' cached reads, those that missed, the 64 KiB windows read
- *       ahead (vfs_cluster.c ioswitch_image_window) and the card reads issued for the images
+ *   IOSwitch kprof image (r14-launch, r17-launch): the cryptex images' reads on the direct read map (requests, KiB,
+ *       card reads: IOSwitchCryptex.cpp), or, when DiskImages serves them, the cached reads of the image files, those
+ *       that missed, the 64 KiB windows read ahead (vfs_cluster.c ioswitch_image_window) and the card reads issued
  *   IOSwitch kprof faults (r17-faults): every completed vm_fault of the window by class, with the time spent in
  *       vm_fault (entry to return, so a page-in's I/O wait is in it) and the longest: zf (zero fill), cow, soft (a
  *       resident page mapped again), device (an IOKit/device pager page: GPU pool views, IOSurfaces of physical
@@ -1312,19 +1313,24 @@ kprof_waits_line(void)
 	}
 }
 
-/* r14-launch: the cryptex images' reads this window (vfs_cluster.c ioswitch_image_window). */
-extern void ioswitch_cluster_image_stats(uint64_t stats[6]);
+/* r14-launch, r17-launch: the cryptex images' reads this window: on the direct read map (IOSwitchCryptex.cpp), or
+ * through the image files when DiskImages serves them (vfs_cluster.c ioswitch_image_window). */
+extern void ioswitch_cluster_image_stats(uint64_t stats[9]);
 
 static void
 kprof_image_line(void)
 {
-	static uint64_t last[6];
-	uint64_t        now[6], d[6];
+	static uint64_t last[9];
+	uint64_t        now[9], d[9];
 
 	ioswitch_cluster_image_stats(now);
-	for (unsigned int i = 0; i < 6; i++) {
+	for (unsigned int i = 0; i < 9; i++) {
 		d[i] = now[i] - last[i];
 		last[i] = now[i];
+	}
+	if (d[6] != 0) {
+		kprof_put("IOSwitch kprof image: %llu direct reads (%llu KiB) in %llu card reads", d[6], d[7] >> 10, d[8]);
+		kprof_flush();
 	}
 	if (d[0] == 0 && d[4] == 0) {
 		return;
