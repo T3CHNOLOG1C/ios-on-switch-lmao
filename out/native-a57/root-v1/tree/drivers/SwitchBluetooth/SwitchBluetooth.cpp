@@ -171,7 +171,7 @@ enum : uint32_t {
     FCR_CLEAR_RX = 1u << 1,
     FCR_CLEAR_TX = 1u << 2,
     FCR_TX_TRIG_16 = 0u << 4,  // Tegra's TX trigger runs backwards: 0 = interrupt at 16 bytes left
-    FCR_RX_TRIG_8 = 2u << 6,   // RX data interrupt above 8 bytes; the timeout one takes the rest
+    FCR_RX_TRIG_16 = 3u << 6,  // RX data interrupt above 16 bytes; the timeout one takes the rest (RX trigger below)
     LCR_8N1 = 3u,
     LCR_DLAB = 1u << 7,
     MCR_RTS = 1u << 1,
@@ -744,7 +744,15 @@ void SwitchBluetooth::setupPins()
 }
 
 // Reset and clock UART-D, then hekate uart_init's order with Linux tegra_uart_hw_init's FIFO setup: 8N1, FIFOs on
-// (RX trigger 8, TX trigger 16), 115200, hardware flow control. Interrupts stay off until the event source is up.
+// (RX trigger 16, TX trigger 16), 115200, hardware flow control. Interrupts stay off until the event source is up.
+//
+// RX trigger (r15-offload): above 16 bytes, Linux serial-tegra's choice for RX by PIO (UART_FCR_R_TRIG_11), not 8. A
+// controller packet then takes about a third fewer interrupts (the host model in tests/test_switch_bluetooth_rx.py: a
+// Joy-Con's 59-byte HID report 6 -> 4, an LE advertising report 5 -> 3, a 300-byte ACL burst 18 -> 9.5). A packet's
+// last bytes below the trigger still come by the RX timeout, 4 characters (13 us at 3 Mbaud) after the last one, as
+// before for any packet that did not end on a trigger: no byte waits longer than that timeout plus the interrupt's own
+// latency (19 us in the model, the same worst case as at 8). The FIFO's other 15 bytes are 50 us at 3 Mbaud; past
+// that RTS holds the chip (MCR RTS_EN), as when the ring is full, so nothing is lost.
 void SwitchBluetooth::setupUart()
 {
     w32(car, RST_DEV_U_SET, kUartDBit);
@@ -762,7 +770,7 @@ void SwitchBluetooth::setupUart()
     (void)r32(uart, SPR);
     IODelay(20);
     setBaudLocked(kInitBaud);
-    w32(uart, FCR, FCR_ENABLE | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_RX_TRIG_8 | FCR_TX_TRIG_16);
+    w32(uart, FCR, FCR_ENABLE | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_RX_TRIG_16 | FCR_TX_TRIG_16);
     w32(uart, MCR, MCR_CTS_EN | MCR_RTS_EN | MCR_RTS);
     (void)r32(uart, SPR);
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
@@ -817,8 +825,8 @@ void SwitchBluetooth::setHostBaud(uint32_t rate)
 // GPU fence interrupt it shares CPU0 with is not starved. Nor by a condition that no read clears: that masks RX (and,
 // should something else be left, every source) before the filter returns, so the line drops either way.
 //
-// Received bytes wake the work loop once per controller packet in client mode, not at every RX FIFO trigger (8 bytes,
-// ~27 us at 3 Mbaud: about 125 wakeups for one 1021-byte ACL packet of an A2DP stream): the filter frames the H4
+// Received bytes wake the work loop once per controller packet in client mode, not at every RX FIFO trigger (16 bytes,
+// ~53 us at 3 Mbaud: about 60 wakeups for one 1021-byte ACL packet of an A2DP stream): the filter frames the H4
 // stream it puts in the ring (frameByteLocked) and wakes the work loop when a packet has ended there, when the line
 // went idle (RX timeout: the controller paused, a packet's last bytes below the FIFO trigger come this way anyway), and
 // for whatever the work loop must see at once (RX stalled, a fault, a line error, framing it could not follow). Bytes
@@ -2353,7 +2361,7 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
 void SwitchBluetooth::resetRxFifoLocked()
 {
     rxFrame.lost = true;  // whatever the FIFO held is gone (a flush starts the framing afresh after this)
-    const uint32_t fcr = FCR_RX_TRIG_8 | FCR_TX_TRIG_16;
+    const uint32_t fcr = FCR_RX_TRIG_16 | FCR_TX_TRIG_16;
     w32(uart, FCR, fcr);
     IODelay(60);
     w32(uart, FCR, fcr | FCR_CLEAR_RX);
