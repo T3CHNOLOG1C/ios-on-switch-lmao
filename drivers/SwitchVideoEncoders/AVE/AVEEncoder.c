@@ -17,8 +17,8 @@
 // kernel client only when a session starts; a process the kernel refuses gets kVTCouldNotFindVideoEncoderErr there.
 //
 // Sessions: what NVENC takes (TegraNVENCCheck.h: progressive 4:2:0, 32..4096 a side, at most 4096x2304 macroblocks'
-// worth) runs on NVENC; anything else is refused at StartSession, and VideoToolbox has no other H.264 encoder to try,
-// exactly as before this plug-in. No software encoder inside: there is no Apple one on 21H461 to fall back to.
+// worth) runs on NVENC; anything else is refused at StartSession, and VideoToolbox has no other H.264 encoder to try.
+// No software encoder inside: there is no Apple one on 21H461 to fall back to.
 // Pixel buffers are asked for as NV12 ('420v'/'420f'); VideoToolbox's pixel transfer converts anything else (BGRA
 // screen captures) before EncodeFrame.
 //
@@ -72,12 +72,10 @@ typedef struct {
     CMVideoFormatDescriptionRef format;
     uint8_t *avcc;  // AVCC scratch for one picture
     size_t avccCap;
-    // Properties.
     int32_t maxKeyInterval, averageBitRate, constantBitRate;
     double maxKeyDuration, quality, expectedFrameRate, limitBytes, limitSeconds;
     bool allowTemporal, realTime;
     CFStringRef profileLevel, entropy, primaries, transfer, matrix;
-    // Stream state.
     bool haveRef, keyPending;
     uint32_t frameNum, idrPicId, pictureIndex, pocCount, sinceKey;
     CMTime lastKeyTime;
@@ -113,8 +111,7 @@ static bool number(CFTypeRef value, double *out)
     return CFNumberGetValue(value, kCFNumberDoubleType, out);
 }
 
-// ---- Colour: session properties, else the first picture's attachments, as H.273 code points ----------------------
-
+// Colour: session properties, else the first picture's attachments, as H.273 code points.
 static uint8_t primariesCode(CFTypeRef v)
 {
     if (!v) return 2;
@@ -144,8 +141,6 @@ static uint8_t matrixCode(CFTypeRef v)
     if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_2020)) return 9;
     return 2;
 }
-
-// ---- Kernel buffers ------------------------------------------------------------------------------------------------
 
 static void releaseBuffers(Encoder *e)
 {
@@ -268,8 +263,6 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     return noErr;
 }
 
-// ---- One picture ---------------------------------------------------------------------------------------------------
-
 static bool wantsKey(Encoder *e, CMTime pts, CFDictionaryRef options)
 {
     if (!e->haveRef || e->keyPending || !e->allowTemporal || !e->info.p_frames) return true;
@@ -391,8 +384,6 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     e->bytes += size;
     return emitSample(e, frame, size, key, pts, duration);
 }
-
-// ---- VTVideoEncoderClass -------------------------------------------------------------------------------------------
 
 static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession session, CMVideoDimensions size,
                              CFTypeRef unused)
@@ -538,8 +529,6 @@ static OSStatus copySupportedPropertyDictionary(VTVideoEncoderRef ref, CFDiction
     *out = s;
     return noErr;
 }
-
-// ---- CMBaseClass ---------------------------------------------------------------------------------------------------
 
 static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef value)
 {

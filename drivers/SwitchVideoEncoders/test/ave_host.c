@@ -103,8 +103,6 @@ int nvenc_wait(void *ctx, const TegraNVENCWait *w)
     return 0;
 }
 
-// ---- The fake engine -----------------------------------------------------------------------------------------------
-
 static const TegraNVENCEntry *find(const TegraNVENCSubmit *s, uint16_t method)
 {
     for (uint32_t i = 0; i < s->entry_count; i++)
@@ -261,8 +259,6 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence)
     *fence = (uint32_t)++gSubmits;
     return 0;
 }
-
-// ---- Checks of their own ---------------------------------------------------------------------------------------------
 
 static int failures;
 #define EXPECT(cond, ...)                 \

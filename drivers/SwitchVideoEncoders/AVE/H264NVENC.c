@@ -17,8 +17,6 @@
 enum { LOG2_MAX_FRAME_NUM = 16, LOG2_MAX_POC_LSB = 16, SLICE_OFF = 512, ME_OFF = 640, MD_OFF = 832, Q_OFF = 960 };
 enum { SETUP_BYTES = Q_OFF + 192 };
 
-// ---- Bits --------------------------------------------------------------------------------------------------------
-
 void h264bits_init(H264Bits *b, uint8_t *data, size_t cap)
 {
     memset(b, 0, sizeof(*b));
@@ -96,8 +94,6 @@ size_t h264enc_nal(uint8_t header, const uint8_t *rbsp, size_t size, uint8_t *ou
     return n;
 }
 
-// ---- Configuration ------------------------------------------------------------------------------------------------
-
 uint32_t h264enc_width_mbs(const H264EncConfig *c)
 {
     return (c->width + 15) / 16;
@@ -165,8 +161,6 @@ void h264enc_layout(const H264EncConfig *c, H264EncLayout *l)
     l->coloc_offset = l->history_offset + l->history_bytes;
     l->aux_bytes = l->coloc_offset + l->coloc_bytes;
 }
-
-// ---- Parameter sets -------------------------------------------------------------------------------------------------
 
 static size_t finish(H264Bits *b, uint8_t header, uint8_t *out, size_t cap)
 {
@@ -328,8 +322,6 @@ void h264enc_slice_header(const H264EncConfig *c, const H264EncPicture *p, H264B
     h264bits_se(b, 0);                          // slice_alpha_c0_offset_div2
     h264bits_se(b, 0);                          // slice_beta_offset_div2
 }
-
-// ---- The picture setup ----------------------------------------------------------------------------------------------
 
 static void surfaceConfig(const H264EncConfig *c, const H264EncSurface *s, nvenc_h264_surface_cfg_s *cfg, bool input)
 {
@@ -570,8 +562,6 @@ void h264enc_fill_submit(const H264EncConfig *c, const H264EncLayout *l, const H
     s->clean_count = 1;
 }
 
-// ---- Input pictures -------------------------------------------------------------------------------------------------
-
 // A 64-byte x 8-row GOB of 16-byte x 2-row sectors (the layout NVDEC writes and BlockLinear.c reads).
 static size_t gob(uint32_t x, uint32_t y)
 {
@@ -631,8 +621,6 @@ void h264enc_put_input(const H264EncConfig *c, const H264EncLayout *l, uint8_t *
     putPlane(c->input_layout, l->input.pitch, buffer + l->input.chroma_offset, chroma, chromaStride, c->width,
              c->height / 2, codedW, codedH / 2, 1);
 }
-
-// ---- Output -----------------------------------------------------------------------------------------------------
 
 size_t h264enc_annexb_to_avcc(const uint8_t *in, size_t size, uint8_t *out, size_t cap)
 {
