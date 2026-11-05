@@ -107,6 +107,7 @@
 
 use super::attachment_stand_in::Cause;
 use super::attachmentless;
+use super::key_hash::KeyMap;
 use super::binding_view::VkView;
 use super::device::lock;
 use super::error::{internal, Error};
@@ -124,7 +125,6 @@ use crate::release;
 use ash::vk;
 use metal2vulkan::bind::ViewSetup;
 use metal2vulkan::device::{DeviceProfile, DriverFact};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// What makes two passes compatible: each color index's format (`None` without a texture), the
@@ -652,7 +652,7 @@ const KEPT_SHAPES: usize = 64;
 
 /// The compatible passes a device keeps, by shape ([`shared_compatible_pass`]).
 #[derive(Default)]
-pub(super) struct KeptCompatible(HashMap<PassShape, vk::RenderPass>);
+pub(super) struct KeptCompatible(KeyMap<PassShape, vk::RenderPass>);
 
 impl KeptCompatible {
     /// Destroy every kept pass; the device is idle, and is destroyed next.
@@ -859,7 +859,7 @@ impl<'a> std::borrow::Borrow<dyn FinalKeyed + 'a> for FinalMakings {
 
 /// The final passes a device keeps, by what they are made of ([`kept_final_pass`]).
 #[derive(Default)]
-pub(super) struct KeptFinal(HashMap<FinalMakings, vk::RenderPass>);
+pub(super) struct KeptFinal(KeyMap<FinalMakings, vk::RenderPass>);
 
 impl KeptFinal {
     /// Destroy every kept pass; the device is idle, and is destroyed next.

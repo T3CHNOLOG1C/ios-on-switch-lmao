@@ -179,7 +179,6 @@ use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{
     Format, FormatFeatureFlags2, ImageAspectFlags, ImageUsageFlags, SampleCountFlags,
 };
-use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -2094,7 +2093,7 @@ impl Device {
             options: binding.options,
             allow_gpu_optimized_contents: binding.allow_gpu_optimized_contents,
             identity: binding.identity,
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(Default::default()),
             twin: None,
             decoded: None,
             form: Default::default(),
@@ -2130,7 +2129,7 @@ impl Device {
             options: binding.options,
             allow_gpu_optimized_contents: binding.allow_gpu_optimized_contents,
             identity: binding.identity,
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(Default::default()),
             twin: None,
             decoded: None,
             form: Default::default(),

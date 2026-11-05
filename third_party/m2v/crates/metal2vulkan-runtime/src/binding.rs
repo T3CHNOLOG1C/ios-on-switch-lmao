@@ -51,6 +51,7 @@ use super::command_buffer::{NotedTable, State};
 use super::error::{internal, Error, RuntimeGap};
 use super::function_table::{self, TableSnapshot, VisibleFunctionTable};
 use super::heap_sets::{Keeper, TextureTable, HEAP_SET};
+use super::key_hash::KeyMap;
 use super::render_pass::{PassLayout, Target};
 use super::render_target;
 use super::residency::{Residency, Used};
@@ -69,7 +70,7 @@ use metal2vulkan::bind::{
 };
 use metal2vulkan::metal::sampler::OpaqueBlackBorder;
 use metal2vulkan::pipeline::{HandleClass, SlotClass, SlotRef, Stage, StorageAttachmentView};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -899,7 +900,7 @@ const KEPT_VIEWS: usize = 256;
 pub(super) struct BindMemo {
     /// The views epoch the views were kept under.
     epoch: u64,
-    views: HashMap<ViewKey, vk::ImageView>,
+    views: KeyMap<ViewKey, vk::ImageView>,
     samplers: Vec<KeptSampler>,
     /// The vectors of the last bind's [`Bound`] its consumer gave back ([`BindMemo::give_back`])
     /// and its root table addresses, emptied: the next bind fills them.

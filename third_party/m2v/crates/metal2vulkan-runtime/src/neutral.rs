@@ -26,6 +26,7 @@
 //! work samples, its bind waited for that work on NVIDIA's driver (`memory.rs`'s `Fit`).
 
 use super::device::lock;
+use super::key_hash::KeyMap;
 use super::error::{vulkan, Error};
 use super::memory::{Memory, MemoryClass, Placement};
 use super::resource::ResourceKey;
@@ -85,9 +86,9 @@ impl Filled for NeutralTexels {
 /// A device's neutral images, texel buffers and samplers, made at first use.
 #[derive(Default)]
 pub(super) struct Neutrals {
-    images: HashMap<NeutralResource, Arc<NeutralImage>>,
+    images: KeyMap<NeutralResource, Arc<NeutralImage>>,
     /// By format and whether the view is a storage texel buffer's.
-    texels: HashMap<(Format, bool), Arc<NeutralTexels>>,
+    texels: KeyMap<(Format, bool), Arc<NeutralTexels>>,
     /// By whether depth comparison is enabled.
     samplers: HashMap<bool, vk::Sampler>,
 }

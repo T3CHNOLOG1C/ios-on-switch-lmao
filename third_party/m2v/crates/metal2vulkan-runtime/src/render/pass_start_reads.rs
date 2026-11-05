@@ -54,7 +54,7 @@ use crate::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMo
 use crate::Device;
 use ash::vk;
 use metal2vulkan::pipeline::{PipelineInterface, SlotClass, SlotInterface, Stage};
-use std::collections::HashMap;
+use crate::key_hash::KeyMap;
 use std::ops::Range;
 
 /// The byte ranges one key holds before they are merged into their hull.
@@ -74,7 +74,7 @@ const MESH_STAGES: vk::PipelineStageFlags2 = vk::PipelineStageFlags2::from_raw(
 
 /// Byte ranges of buffers, tracked or not, by key.
 #[derive(Clone, Default)]
-struct Written(HashMap<ResourceKey, Vec<Range<u64>>>);
+struct Written(KeyMap<ResourceKey, Vec<Range<u64>>>);
 
 impl Written {
     fn add(&mut self, key: ResourceKey, range: &Range<u64>) {
@@ -89,7 +89,9 @@ impl Written {
     }
 
     fn overlaps(&self, key: ResourceKey, range: &Range<u64>) -> bool {
-        self.0.get(&key).is_some_and(|ranges| {
+        // Most passes' fragment stages write no buffer: no key to hash.
+        !self.0.is_empty()
+            && self.0.get(&key).is_some_and(|ranges| {
             ranges
                 .iter()
                 .any(|r| r.start < range.end && range.start < r.end)

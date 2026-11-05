@@ -57,6 +57,7 @@
 //!   blits of textures over buffers, are refused `NotImplemented`.
 
 use super::address::{ObjectsToken, RangeToken};
+use super::key_hash::KeyMap;
 use super::address_map::AddressModeMap;
 use super::attachment_stand_in::KeptBacking;
 use super::attributes::PurgeableState;
@@ -452,7 +453,7 @@ struct Image {
     identity: Identity,
     /// The `VkImageView`s bindings of the image's textures needed (`binding_view.rs`), made at
     /// their first bind. A finite set per image: its view types, formats and level ranges.
-    views: Mutex<HashMap<VkView, vk::ImageView>>,
+    views: Mutex<KeyMap<VkView, vk::ImageView>>,
     /// The image's depth twin: a `D32_SFLOAT` image of the same texels, which the views a
     /// comparison reads present, for an `R32_SFLOAT` image holding a `Depth32Float` texture.
     twin: Option<Box<Image>>,
@@ -1642,7 +1643,7 @@ impl Device {
             options: ResourceOptions::new(StorageMode::Private, cache, hazard),
             allow_gpu_optimized_contents: allow,
             identity: Identity::new(hazard, false),
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(KeyMap::default()),
             twin: None,
             decoded: None,
             form: Default::default(),
@@ -1765,7 +1766,7 @@ impl Device {
             options: ResourceOptions::new(StorageMode::Private, cache, hazard),
             allow_gpu_optimized_contents,
             identity: Identity::new(hazard, false),
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(KeyMap::default()),
             twin: None,
             decoded: None,
             form: Default::default(),
@@ -2331,7 +2332,7 @@ impl Device {
                 tracked: texels.tracked(),
                 ..texels.buffer.identity()
             },
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(KeyMap::default()),
             twin: None,
             decoded: None,
             form: Default::default(),
@@ -2419,7 +2420,7 @@ impl Device {
                 tracked: texels.tracked(),
                 ..texels.buffer.identity()
             },
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(KeyMap::default()),
             twin: None,
             decoded: None,
             form: Default::default(),
@@ -2555,7 +2556,7 @@ impl Device {
             options,
             allow_gpu_optimized_contents,
             identity,
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(KeyMap::default()),
             twin: None,
             decoded: None,
             form: Default::default(),
@@ -3383,7 +3384,7 @@ impl Device {
             options: descriptor.resource_options,
             allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,
             identity,
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(KeyMap::default()),
             twin: None,
             decoded: None,
             form: Default::default(),

@@ -611,7 +611,7 @@ impl Device {
             options,
             allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,
             identity,
-            views: Mutex::new(HashMap::new()),
+            views: Mutex::new(Default::default()),
             twin: None,
             decoded: None,
             form: Default::default(),
