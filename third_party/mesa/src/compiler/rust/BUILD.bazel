@@ -1,0 +1,626 @@
+# Mesa's src/compiler/rust/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "mesa_args", "mesa_cc_library", "mesa_genrule")
+load("//third_party/mesa/bazel:rust.bzl", "NOUVEAU_RUST_ARGS", "RUST_GLOBAL_ARGS", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ),
+)
+
+mesa_cc_library(
+    name = "compiler_bindings",
+    c_args = mesa_args(
+        "c",
+        extra = {
+            "ios": [
+                "-Werror=implicit-function-declaration",
+                "-Werror=missing-prototypes",
+                "-Werror=return-type",
+                "-Werror=empty-body",
+                "-Werror=incompatible-pointer-types",
+                "-Werror=int-conversion",
+                "-Wimplicit-fallthrough",
+                "-Wmisleading-indentation",
+                "-Wno-missing-field-initializers",
+                "-Wno-format-truncation",
+                "-fno-math-errno",
+                "-fno-trapping-math",
+                "-Qunused-arguments",
+                "-fno-common",
+                "-Wno-unknown-pragmas",
+                "-Wno-microsoft-enum-value",
+                "-Wno-unused-function",
+                "-Werror=format",
+                "-Wformat-security",
+                "-Werror=thread-safety",
+                "-Wno-unused-variable",
+                "-Wno-unused-but-set-variable",
+                "-Wno-error=incompatible-function-pointer-types",
+                "-DXXH_FORCE_ALIGN_CHECK=0",
+                "-DXXH_FORCE_MEMORY_ACCESS=0",
+                "-D__STDC_CONSTANT_MACROS",
+                "-D__STDC_FORMAT_MACROS",
+                "-D__STDC_LIMIT_MACROS",
+                "-DPACKAGE_VERSION=\"27.0.0-devel\"",
+                "-DHAVE_OPENGL=0",
+                "-DHAVE_OPENGL_ES_1=0",
+                "-DHAVE_OPENGL_ES_2=0",
+                "-DMESA_SYSTEM_HAS_KMS_DRM=0",
+                "-DHAVE_NVK",
+                "-DBUILDING_MESA",
+                "-DVK_ENABLE_BETA_EXTENSIONS",
+                "-DVIDEO_CODEC_VC1DEC=0",
+                "-DVIDEO_CODEC_H264DEC=0",
+                "-DVIDEO_CODEC_H264ENC=0",
+                "-DVIDEO_CODEC_H265DEC=0",
+                "-DVIDEO_CODEC_H265ENC=0",
+                "-DVIDEO_CODEC_AV1DEC=1",
+                "-DVIDEO_CODEC_AV1ENC=1",
+                "-DVIDEO_CODEC_VP9DEC=1",
+                "-DVIDEO_CODEC_MPEG12DEC=1",
+                "-DVIDEO_CODEC_JPEGDEC=1",
+                "-DUSE_LIBGLVND=0",
+                "-DHAVE_GFX_COMPUTE",
+                "-DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1",
+                "-DALLOW_KCMP",
+                "-DMESA_DEBUG=0",
+                "-DHAVE___BUILTIN_BSWAP32",
+                "-DHAVE___BUILTIN_BSWAP64",
+                "-DHAVE___BUILTIN_CLZ",
+                "-DHAVE___BUILTIN_CLZLL",
+                "-DHAVE___BUILTIN_CTZ",
+                "-DHAVE___BUILTIN_EXPECT",
+                "-DHAVE___BUILTIN_FFS",
+                "-DHAVE___BUILTIN_FFSLL",
+                "-DHAVE___BUILTIN_POPCOUNT",
+                "-DHAVE___BUILTIN_POPCOUNTLL",
+                "-DHAVE___BUILTIN_UNREACHABLE",
+                "-DHAVE___BUILTIN_TYPES_COMPATIBLE_P",
+                "-DHAVE___BUILTIN_ADD_OVERFLOW",
+                "-DHAVE_FUNC_ATTRIBUTE_CONST",
+                "-DHAVE_FUNC_ATTRIBUTE_FLATTEN",
+                "-DHAVE_FUNC_ATTRIBUTE_MALLOC",
+                "-DHAVE_FUNC_ATTRIBUTE_PURE",
+                "-DHAVE_FUNC_ATTRIBUTE_UNUSED",
+                "-DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT",
+                "-DHAVE_FUNC_ATTRIBUTE_WEAK",
+                "-DHAVE_FUNC_ATTRIBUTE_FORMAT",
+                "-DHAVE_FUNC_ATTRIBUTE_PACKED",
+                "-DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL",
+                "-DHAVE_FUNC_ATTRIBUTE_NORETURN",
+                "-DHAVE_FUNC_ATTRIBUTE_COLD",
+                "-DHAVE_FUNC_ATTRIBUTE_VISIBILITY",
+                "-DHAVE_UINT128",
+                "-DHAVE_FMEMOPEN",
+                "-DUSE_GCC_ATOMIC_BUILTINS",
+                "-DHAS_SCHED_H",
+                "-DHAVE_SYS_SYSCTL_H",
+                "-DHAVE_XLOCALE_H",
+                "-DHAVE_DLFCN_H",
+                "-DHAVE_SYS_SHM_H",
+                "-DHAVE_CET_H",
+                "-DHAVE_POLL_H",
+                "-DHAVE_FENV_H",
+                "-DHAVE_STRTOF",
+                "-DHAVE_MKOSTEMP",
+                "-DHAVE_FLOCK",
+                "-DHAVE_STRTOK_R",
+                "-DHAVE_SYSCONF",
+                "-DHAVE_SC_PHYS_PAGES",
+                "-DHAVE_BSD_QSORT_R",
+                "-DHAVE_STRUCT_TIMESPEC",
+                "-DHAVE_POSIX_MEMALIGN",
+                "-DHAVE_DIRENT_D_TYPE",
+                "-DHAVE_STRTOD_L",
+                "-DHAVE_DLADDR",
+                "-DHAVE_PTHREAD",
+                "-DDRAW_LLVM_AVAILABLE=0",
+                "-DAMD_LLVM_AVAILABLE=0",
+                "-DGALLIVM_USE_ORCJIT=0",
+                "-DTHREAD_SANITIZER=0",
+                "-DHAVE_DRI2",
+                "-DHAVE_RENDERDOC_INTEGRATION=0",
+                "-Wno-missing-prototypes",
+            ],
+            "macos": [
+                "-Werror=implicit-function-declaration",
+                "-Werror=missing-prototypes",
+                "-Werror=return-type",
+                "-Werror=empty-body",
+                "-Werror=incompatible-pointer-types",
+                "-Werror=int-conversion",
+                "-Wimplicit-fallthrough",
+                "-Wmisleading-indentation",
+                "-Wno-missing-field-initializers",
+                "-Wno-format-truncation",
+                "-fno-math-errno",
+                "-fno-trapping-math",
+                "-Qunused-arguments",
+                "-fno-common",
+                "-Wno-unknown-pragmas",
+                "-Wno-microsoft-enum-value",
+                "-Wno-unused-function",
+                "-Werror=format",
+                "-Wformat-security",
+                "-Werror=thread-safety",
+                "-Wno-unused-variable",
+                "-Wno-unused-but-set-variable",
+                "-DXXH_FORCE_ALIGN_CHECK=0",
+                "-DXXH_FORCE_MEMORY_ACCESS=0",
+                "-D__STDC_CONSTANT_MACROS",
+                "-D__STDC_FORMAT_MACROS",
+                "-D__STDC_LIMIT_MACROS",
+                "-DPACKAGE_VERSION=\"27.0.0-devel\"",
+                "-DHAVE_OPENGL=0",
+                "-DHAVE_OPENGL_ES_1=0",
+                "-DHAVE_OPENGL_ES_2=0",
+                "-DMESA_SYSTEM_HAS_KMS_DRM=0",
+                "-DHAVE_NVK",
+                "-DBUILDING_MESA",
+                "-DVK_ENABLE_BETA_EXTENSIONS",
+                "-DVIDEO_CODEC_VC1DEC=0",
+                "-DVIDEO_CODEC_H264DEC=0",
+                "-DVIDEO_CODEC_H264ENC=0",
+                "-DVIDEO_CODEC_H265DEC=0",
+                "-DVIDEO_CODEC_H265ENC=0",
+                "-DVIDEO_CODEC_AV1DEC=1",
+                "-DVIDEO_CODEC_AV1ENC=1",
+                "-DVIDEO_CODEC_VP9DEC=1",
+                "-DVIDEO_CODEC_MPEG12DEC=1",
+                "-DVIDEO_CODEC_JPEGDEC=1",
+                "-DUSE_LIBGLVND=0",
+                "-DHAVE_GFX_COMPUTE",
+                "-DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1",
+                "-DALLOW_KCMP",
+                "-DMESA_DEBUG=0",
+                "-DHAVE___BUILTIN_BSWAP32",
+                "-DHAVE___BUILTIN_BSWAP64",
+                "-DHAVE___BUILTIN_CLZ",
+                "-DHAVE___BUILTIN_CLZLL",
+                "-DHAVE___BUILTIN_CTZ",
+                "-DHAVE___BUILTIN_EXPECT",
+                "-DHAVE___BUILTIN_FFS",
+                "-DHAVE___BUILTIN_FFSLL",
+                "-DHAVE___BUILTIN_POPCOUNT",
+                "-DHAVE___BUILTIN_POPCOUNTLL",
+                "-DHAVE___BUILTIN_UNREACHABLE",
+                "-DHAVE___BUILTIN_TYPES_COMPATIBLE_P",
+                "-DHAVE___BUILTIN_ADD_OVERFLOW",
+                "-DHAVE_FUNC_ATTRIBUTE_CONST",
+                "-DHAVE_FUNC_ATTRIBUTE_FLATTEN",
+                "-DHAVE_FUNC_ATTRIBUTE_MALLOC",
+                "-DHAVE_FUNC_ATTRIBUTE_PURE",
+                "-DHAVE_FUNC_ATTRIBUTE_UNUSED",
+                "-DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT",
+                "-DHAVE_FUNC_ATTRIBUTE_WEAK",
+                "-DHAVE_FUNC_ATTRIBUTE_FORMAT",
+                "-DHAVE_FUNC_ATTRIBUTE_PACKED",
+                "-DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL",
+                "-DHAVE_FUNC_ATTRIBUTE_NORETURN",
+                "-DHAVE_FUNC_ATTRIBUTE_COLD",
+                "-DHAVE_FUNC_ATTRIBUTE_VISIBILITY",
+                "-DHAVE_UINT128",
+                "-DHAVE_FMEMOPEN",
+                "-DUSE_GCC_ATOMIC_BUILTINS",
+                "-DHAS_SCHED_H",
+                "-DHAVE_SYS_SYSCTL_H",
+                "-DHAVE_XLOCALE_H",
+                "-DHAVE_DLFCN_H",
+                "-DHAVE_SYS_SHM_H",
+                "-DHAVE_CET_H",
+                "-DHAVE_POLL_H",
+                "-DHAVE_FENV_H",
+                "-DHAVE_STRTOF",
+                "-DHAVE_MKOSTEMP",
+                "-DHAVE_FLOCK",
+                "-DHAVE_STRTOK_R",
+                "-DHAVE_SYSCONF",
+                "-DHAVE_SC_PHYS_PAGES",
+                "-DHAVE_BSD_QSORT_R",
+                "-DHAVE_STRUCT_TIMESPEC",
+                "-DHAVE_POSIX_MEMALIGN",
+                "-DHAVE_DIRENT_D_TYPE",
+                "-DHAVE_STRTOD_L",
+                "-DHAVE_DLADDR",
+                "-DHAVE_PTHREAD",
+                "-DDRAW_LLVM_AVAILABLE=0",
+                "-DAMD_LLVM_AVAILABLE=0",
+                "-DGALLIVM_USE_ORCJIT=0",
+                "-DTHREAD_SANITIZER=0",
+                "-DHAVE_DRI2",
+                "-DHAVE_RENDERDOC_INTEGRATION=0",
+                "-Wno-missing-prototypes",
+            ],
+        },
+        include_dirs = [
+            "gen:src/compiler/rust",
+            "src/compiler/rust",
+            "gen:",
+            "gen:src/compiler/nir",
+            "src/compiler/nir",
+            "gen:src/compiler",
+            "src/compiler",
+            "gen:src",
+            "src",
+            "gen:include",
+            "include",
+            "gen:src/util",
+            "gen:src/util/format",
+            "execroot:",
+        ],
+        pre = False,
+        proj = False,
+    ),
+    sources = [
+        "bindings.c",
+    ],
+)
+
+mesa_cc_library(
+    name = "compiler_c_helpers",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-Wno-override-init",
+            "-Wno-initializer-overrides",
+        ],
+        include_dirs = [
+            "gen:src/compiler/rust",
+            "src/compiler/rust",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+        ],
+    ),
+    sources = [
+        "rust_helpers.c",
+    ],
+)
+
+mesa_genrule(
+    name = "_gen_bindings_rs",
+    srcs = [
+        "bindings.h",
+        "//third_party/mesa:header_files",
+    ],
+    outs = [
+        "_gen/bindings.rs",
+        "bindings.c",
+    ],
+    cmd = select({
+        "//third_party/mesa/bazel:ios": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath bindings.h) --output $(execpath _gen/bindings.rs) --wrap-unsafe-ops --raw-line '#![allow(clippy::all)]' --raw-line '#![allow(warnings)]' --raw-line '#![allow(unsafe_op_in_unsafe_fn)]' --allowlist-var 'NIR_.*' --allowlist-var 'nir_.*_infos' --allowlist-var 'rust_.*' --allowlist-function 'glsl_.*' --allowlist-function _mesa_shader_stage_to_string --allowlist-function '_mesa_.*half.*' --allowlist-function '_mesa_.*float16.*' --allowlist-function 'nir_.*' --allowlist-function 'compiler_rs.*' --allowlist-function 'u_memstream.*' --allowlist-function 'util_dynarray.*' --allowlist-type u_memstream --no-prepend-enum-name --with-derive-default --wrap-static-fns-suffix _compiler_rs_extern --allowlist-type exec_list --allowlist-type exec_node --allowlist-type float_controls --allowlist-type gc_ctx --allowlist-type gl_access_qualifier --allowlist-type gl_frag_result --allowlist-type gl_interp_mode --allowlist-type mesa_shader_stage --allowlist-type gl_subgroup_size --allowlist-type gl_system_value --allowlist-type gl_tess_spacing --allowlist-type gl_varying_slot --allowlist-type gl_vert_attrib --allowlist-type glsl_sampler_dim --allowlist-type glsl_type --allowlist-type glsl_matrix_layout --allowlist-type 'nir_.*' --allowlist-type mesa_scope --allowlist-type mesa_prim --allowlist-type mesa_shader_stage --allowlist-type shader_info --allowlist-type tess_primitive_mode --allowlist-type u_printf_info --allowlist-type util_dynarray --experimental --wrap-static-fns --wrap-static-fns-path $(execpath bindings.c) --rust-target 1.96.1 --rust-edition 2021 -- -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 --target=aarch64-apple-ios -DNDEBUG -Ithird_party/mesa/src/compiler/nir/. -I$(GENDIR)/third_party/mesa/src/compiler/nir/. -Ithird_party/mesa/src/compiler/. -I$(GENDIR)/third_party/mesa/src/compiler/. -Ithird_party/mesa/src/. -I$(GENDIR)/third_party/mesa/src/. -Ithird_party/mesa/include/. -I$(GENDIR)/third_party/mesa/include/. -Ithird_party/mesa/include/. -I$(GENDIR)/third_party/mesa/include/. -Ithird_party/mesa/src/util/.. -I$(GENDIR)/third_party/mesa/src/util/.. -DXXH_FORCE_ALIGN_CHECK=0 -DXXH_FORCE_MEMORY_ACCESS=0 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+        "//conditions:default": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath bindings.h) --output $(execpath _gen/bindings.rs) --wrap-unsafe-ops --raw-line '#![allow(clippy::all)]' --raw-line '#![allow(warnings)]' --raw-line '#![allow(unsafe_op_in_unsafe_fn)]' --allowlist-var 'NIR_.*' --allowlist-var 'nir_.*_infos' --allowlist-var 'rust_.*' --allowlist-function 'glsl_.*' --allowlist-function _mesa_shader_stage_to_string --allowlist-function '_mesa_.*half.*' --allowlist-function '_mesa_.*float16.*' --allowlist-function 'nir_.*' --allowlist-function 'compiler_rs.*' --allowlist-function 'u_memstream.*' --allowlist-function 'util_dynarray.*' --allowlist-type u_memstream --no-prepend-enum-name --with-derive-default --wrap-static-fns-suffix _compiler_rs_extern --allowlist-type exec_list --allowlist-type exec_node --allowlist-type float_controls --allowlist-type gc_ctx --allowlist-type gl_access_qualifier --allowlist-type gl_frag_result --allowlist-type gl_interp_mode --allowlist-type mesa_shader_stage --allowlist-type gl_subgroup_size --allowlist-type gl_system_value --allowlist-type gl_tess_spacing --allowlist-type gl_varying_slot --allowlist-type gl_vert_attrib --allowlist-type glsl_sampler_dim --allowlist-type glsl_type --allowlist-type glsl_matrix_layout --allowlist-type 'nir_.*' --allowlist-type mesa_scope --allowlist-type mesa_prim --allowlist-type mesa_shader_stage --allowlist-type shader_info --allowlist-type tess_primitive_mode --allowlist-type u_printf_info --allowlist-type util_dynarray --experimental --wrap-static-fns --wrap-static-fns-path $(execpath bindings.c) --rust-target 1.96.1 --rust-edition 2021 -- -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -DNDEBUG -Ithird_party/mesa/src/compiler/nir/. -I$(GENDIR)/third_party/mesa/src/compiler/nir/. -Ithird_party/mesa/src/compiler/. -I$(GENDIR)/third_party/mesa/src/compiler/. -Ithird_party/mesa/src/. -I$(GENDIR)/third_party/mesa/src/. -Ithird_party/mesa/include/. -I$(GENDIR)/third_party/mesa/include/. -Ithird_party/mesa/include/. -I$(GENDIR)/third_party/mesa/include/. -Ithird_party/mesa/src/util/.. -I$(GENDIR)/third_party/mesa/src/util/.. -DXXH_FORCE_ALIGN_CHECK=0 -DXXH_FORCE_MEMORY_ACCESS=0 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+    }),
+    toolchains = ["//third_party/mesa/bazel:bindgen_vars"],
+    tools = [
+        "//third_party/mesa/bazel:bindgen",
+        "//third_party/mesa/bazel:libclang",
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_libclang//:lib/libclang.dylib",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_as_slice_rs",
+    srcs = [
+        "as_slice.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/as_slice.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_bindings_c",
+    srcs = [
+        "bindings.c",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/bindings.c",
+    ],
+    cmd = "cp $< $@",
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_bindings_rs",
+    srcs = [
+        "_gen/bindings.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/bindings.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_bitset_rs",
+    srcs = [
+        "bitset.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/bitset.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_cfg_rs",
+    srcs = [
+        "cfg.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/cfg.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_dataflow_rs",
+    srcs = [
+        "dataflow.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/dataflow.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_depth_first_search_rs",
+    srcs = [
+        "depth_first_search.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/depth_first_search.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_enum_as_u8_rs",
+    srcs = [
+        "enum_as_u8.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/enum_as_u8.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_float16_rs",
+    srcs = [
+        "float16.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/float16.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_lib_rs",
+    srcs = [
+        "lib.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/lib.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_lower_bounded_rs",
+    srcs = [
+        "lower_bounded.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/lower_bounded.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_memstream_rs",
+    srcs = [
+        "memstream.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/memstream.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_nir_rs",
+    srcs = [
+        "nir.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/nir.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_nir_instr_printer_rs",
+    srcs = [
+        "nir_instr_printer.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/nir_instr_printer.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_smallvec_rs",
+    srcs = [
+        "smallvec.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/smallvec.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_union_find_rs",
+    srcs = [
+        "union_find.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/union_find.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "libcompiler_rlib_p_structured_vec_pair_rs",
+    srcs = [
+        "vec_pair.rs",
+    ],
+    outs = [
+        "libcompiler.rlib.p/structured/vec_pair.rs",
+    ],
+    cmd = "cp $< $@",
+    tools = [
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+# --- Rust ------------------------------------------------------------------------------------------------------------
+# The compiler crate is compiled from meson's structured_sources copy (libcompiler.rlib.p/structured): its panic
+# locations name those paths.
+mesa_rust_library(
+    name = "compiler",
+    srcs = ["libcompiler.rlib.p/structured/" + f for f in [
+        "as_slice.rs",
+        "bindings.rs",
+        "bitset.rs",
+        "cfg.rs",
+        "dataflow.rs",
+        "depth_first_search.rs",
+        "enum_as_u8.rs",
+        "float16.rs",
+        "lib.rs",
+        "lower_bounded.rs",
+        "memstream.rs",
+        "nir.rs",
+        "nir_instr_printer.rs",
+        "smallvec.rs",
+        "union_find.rs",
+        "vec_pair.rs",
+    ]],
+    crate_name = "compiler",
+    crate_root = "libcompiler.rlib.p/structured/lib.rs",
+    lints = NOUVEAU_RUST_ARGS,
+    metadata = "56103fb@@compiler@rlib",
+    native_libs = [
+        "compiler_bindings",
+        "mesa_util",
+        "mesa_util_simd",
+        "blake3",
+        "mesa_util_c11",
+        "compiler_c_helpers",
+    ],
+)
+
+# compiler_proc: the proc-macro helpers nak_ir_proc builds on (a host crate).
+mesa_rust_library(
+    name = "compiler_proc",
+    srcs = glob(["proc/**/*.rs"]),
+    crate_name = "compiler_proc",
+    crate_root = "proc/lib.rs",
+    lints = RUST_GLOBAL_ARGS,
+    metadata = "56103fb@@compiler_proc@rlib",
+    deps = [
+        "//third_party/mesa/subprojects/proc-macro2-1.0.86:proc_macro2",
+        "//third_party/mesa/subprojects/quote-1.0.35:quote",
+        "//third_party/mesa/subprojects/syn-2.0.87:syn",
+        "//third_party/mesa/subprojects/unicode-ident-1.0.12:unicode_ident",
+    ],
+)

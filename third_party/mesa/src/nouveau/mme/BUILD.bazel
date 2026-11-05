@@ -1,0 +1,125 @@
+# Mesa's src/nouveau/mme/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "mesa_args", "mesa_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ),
+)
+
+mesa_cc_library(
+    name = "nouveau_mme",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-DXXH_FORCE_ALIGN_CHECK=0",
+            "-DXXH_FORCE_MEMORY_ACCESS=0",
+        ],
+        include_dirs = [
+            "gen:src/nouveau/mme",
+            "src/nouveau/mme",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/nouveau/headers",
+            "src/nouveau/headers",
+            "src/nouveau/headers/nvidia/classes",
+            "gen:src/util",
+            "gen:src/util/format",
+        ],
+    ),
+    sources = [
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl85b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl902d.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl9039.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl906f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl9097.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl90b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl90c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl91c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cl9297.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla040.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla0b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla06f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla097.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla140.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla16f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla1c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla197.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla26f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla297.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clb06f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clb097.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clb0b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clb0c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clb197.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clb1c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc06f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc097.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc197.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc1b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc1c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_cla0c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc0b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc0c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc36f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc397.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc3b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc3c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc46f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc56f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc597.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc5b0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc5b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc5c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc697.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc6b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc6c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc797.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc7b0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc7b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc7c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc86f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc8b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc96f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc997.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc9b0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc9b5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clc9c0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clca6f.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clcab5.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clcb97.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clcbc0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clcd97.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clcdc0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clcec0.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push_clce97.c",
+        "mme_fermi.c",
+        "mme_fermi_builder.c",
+        "mme_fermi_sim.c",
+        "mme_sim.c",
+        "mme_tu104.c",
+        "mme_tu104_builder.c",
+        "mme_tu104_sim.c",
+        "//third_party/mesa/src/nouveau/headers:nv_push.c",
+    ],
+)

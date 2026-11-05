@@ -1,0 +1,318 @@
+# Mesa's src/util/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_args", "mesa_cc_library", "mesa_genrule")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        "driconf_static.h",
+        "shader_stats.h",
+    ],
+)
+
+mesa_cc_library(
+    name = "mesa_util",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+        ],
+        include_dirs = [
+            "gen:src/util",
+            "src/util",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/util/format",
+            "src/util/format",
+        ],
+    ),
+    cpp_args = mesa_args(
+        "cxx",
+        include_dirs = [
+            "gen:src/util",
+            "src/util",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/util/format",
+            "src/util/format",
+        ],
+    ),
+    sources = [
+        "//third_party/mesa/src/util/format:u_format_table.c",
+        "format_srgb.c",
+        "anon_file.c",
+        "bitscan.c",
+        "blob.c",
+        "build_id.c",
+        "cnd_monotonic.c",
+        "compress.c",
+        "thread_sched.c",
+        "crc32.c",
+        "dag.c",
+        "disk_cache.c",
+        "disk_cache_os.c",
+        "double.c",
+        "fast_idiv_by_const.c",
+        "float8.c",
+        "fossilize_db.c",
+        "futex.c",
+        "half_float.c",
+        "hash_table.c",
+        "helpers.c",
+        "u_idalloc.c",
+        "log.c",
+        "lut.c",
+        "memstream.c",
+        "mesa-blake3.c",
+        "os_time.c",
+        "os_file.c",
+        "os_file_notify.c",
+        "os_memory_fd.c",
+        "os_misc.c",
+        "os_socket.c",
+        "pb_slab.c",
+        "perf/u_trace.c",
+        "u_process.c",
+        "u_qsort.cpp",
+        "rwlock.c",
+        "ralloc.c",
+        "rand_xor.c",
+        "range_minimum_query.c",
+        "rb_tree.c",
+        "register_allocate.c",
+        "rgtc.c",
+        "set.c",
+        "simple_mtx.c",
+        "slab.c",
+        "softfloat.c",
+        "sparse_array.c",
+        "string_buffer.c",
+        "strndup.c",
+        "strtod.c",
+        "texcompress_astc_luts.cpp",
+        "texcompress_astc_luts_wrap.cpp",
+        "texcompress_astc.cpp",
+        "texcompress_etc.c",
+        "u_atomic.c",
+        "u_call_once.c",
+        "u_dl.c",
+        "u_dynarray.c",
+        "u_hash_table.c",
+        "u_queue.c",
+        "u_range_remap.c",
+        "u_shader_variant_cache.c",
+        "u_string.c",
+        "u_thread.c",
+        "u_vector.c",
+        "u_math.c",
+        "u_mm.c",
+        "u_debug.c",
+        "u_debug_memory.c",
+        "u_cpu_detect.c",
+        "u_printf.c",
+        "u_worklist.c",
+        "vl_zscan_data.c",
+        "vma.c",
+        "mesa_cache_db.c",
+        "mesa_cache_db_multipart.c",
+        "cache_ops_aarch64.c",
+        "//third_party/mesa/src/util/format:u_format.c",
+        "//third_party/mesa/src/util/format:u_format_bptc.c",
+        "//third_party/mesa/src/util/format:u_format_etc.c",
+        "//third_party/mesa/src/util/format:u_format_fxt1.c",
+        "//third_party/mesa/src/util/format:u_format_latc.c",
+        "//third_party/mesa/src/util/format:u_format_other.c",
+        "//third_party/mesa/src/util/format:u_format_rgtc.c",
+        "//third_party/mesa/src/util/format:u_format_s3tc.c",
+        "//third_party/mesa/src/util/format:u_format_tests.c",
+        "//third_party/mesa/src/util/format:u_format_unpack_neon.c",
+        "//third_party/mesa/src/util/format:u_format_yuv.c",
+        "//third_party/mesa/src/util/format:u_format_zs.c",
+        "u_debug_stack.c",
+        "u_debug_symbol.c",
+    ],
+)
+
+mesa_cc_library(
+    name = "mesa_util_simd",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+        ],
+        include_dirs = [
+            "gen:src/util",
+            "src/util",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+        ],
+    ),
+    sources = [
+        "streaming-load-memcpy.c",
+    ],
+)
+
+mesa_cc_library(
+    name = "xmlconfig",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-DXXH_FORCE_ALIGN_CHECK=0",
+            "-DXXH_FORCE_MEMORY_ACCESS=0",
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+            "-DWITH_XMLCONFIG=0",
+            "-DSYSCONFDIR=\"/usr/local/etc\"",
+            "-DDATADIR=\"/usr/local/share\"",
+        ],
+        include_dirs = [
+            "gen:src/util",
+            "src/util",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/util/format",
+        ],
+    ),
+    sources = [
+        "xmlconfig.c",
+    ],
+)
+
+mesa_genrule(
+    name = "driconf_static_h",
+    srcs = [
+        "00-mesa-defaults.conf",
+        "//third_party/mesa/src/nouveau/vulkan:00-nvk-defaults.conf",
+    ],
+    outs = [
+        "driconf_static.h",
+    ],
+    cmd = "$(execpath :driconf_static) $(execpath 00-mesa-defaults.conf) $(execpath //third_party/mesa/src/nouveau/vulkan:00-nvk-defaults.conf) $(execpath driconf_static.h)",
+    tools = [
+        ":driconf_static",
+    ],
+)
+
+mesa_genrule(
+    name = "format_srgb_c",
+    outs = [
+        "format_srgb.c",
+    ],
+    cmd = "$(execpath :format_srgb) > $(execpath format_srgb.c)",
+    tools = [
+        ":format_srgb",
+    ],
+)
+
+mesa_genrule(
+    name = "shader_stats_h",
+    srcs = [
+        "shader_stats.rnc",
+        "shader_stats.xml",
+    ],
+    outs = [
+        "shader_stats.h",
+    ],
+    cmd = "$(execpath :process_shader_stats) $(execpath shader_stats.rnc) $(execpath shader_stats.xml) > $(execpath shader_stats.h)",
+    tools = [
+        ":process_shader_stats",
+    ],
+)
+
+py_binary(
+    name = "driconf_static",
+    srcs = [
+        "driconf_static.py",
+    ],
+    imports = ["."],
+    main = "driconf_static.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "format_srgb",
+    srcs = [
+        "format_srgb.py",
+    ],
+    imports = ["."],
+    main = "format_srgb.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "process_shader_stats",
+    srcs = [
+        "process_shader_stats.py",
+    ],
+    imports = ["."],
+    main = "process_shader_stats.py",
+    deps = MESA_PY_DEPS,
+)

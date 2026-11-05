@@ -1,0 +1,49 @@
+# Mesa's src/c11/impl/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "mesa_args", "mesa_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ),
+)
+
+mesa_cc_library(
+    name = "mesa_util_c11",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+        ],
+        include_dirs = [
+            "gen:src/c11/impl",
+            "src/c11/impl",
+            "gen:src",
+            "src",
+        ],
+    ),
+    sources = [
+        "time.c",
+        "threads_posix.c",
+    ],
+)

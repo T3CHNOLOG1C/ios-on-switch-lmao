@@ -1,0 +1,141 @@
+# Mesa's src/compiler/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_args", "mesa_cc_library", "mesa_genrule")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        "builtin_types.h",
+        "ir_expression_operation.h",
+    ],
+)
+
+mesa_cc_library(
+    name = "compiler",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+            "-Wno-override-init",
+            "-Wno-initializer-overrides",
+        ],
+        include_dirs = [
+            "gen:src/compiler",
+            "src/compiler",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+        ],
+    ),
+    sources = [
+        "builtin_types.c",
+        "glsl_types.c",
+        "shader_enums.c",
+    ],
+)
+
+mesa_genrule(
+    name = "builtin_types_c_gen",
+    srcs = [
+        "builtin_types.py",
+    ],
+    outs = [
+        "builtin_types.c",
+    ],
+    cmd = "$(execpath :builtin_types_c) $(execpath builtin_types.c)",
+    tools = [
+        ":builtin_types_c",
+    ],
+)
+
+mesa_genrule(
+    name = "builtin_types_h_gen",
+    srcs = [
+        "builtin_types.py",
+        "//third_party/mesa/src/util/format:u_format_gen.h",
+    ],
+    outs = [
+        "builtin_types.h",
+    ],
+    cmd = "$(execpath :builtin_types_h) $(execpath builtin_types.h)",
+    tools = [
+        ":builtin_types_h",
+    ],
+)
+
+mesa_genrule(
+    name = "ir_expression_operation_h",
+    outs = [
+        "ir_expression_operation.h",
+    ],
+    cmd = "$(execpath :ir_expression_operation) enum > $(execpath ir_expression_operation.h)",
+    tools = [
+        ":ir_expression_operation",
+    ],
+)
+
+py_binary(
+    name = "builtin_types_c",
+    srcs = [
+        "builtin_types.py",
+        "builtin_types_c.py",
+    ],
+    imports = ["."],
+    main = "builtin_types_c.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "builtin_types_h",
+    srcs = [
+        "builtin_types.py",
+        "builtin_types_h.py",
+    ],
+    imports = ["."],
+    main = "builtin_types_h.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "ir_expression_operation",
+    srcs = [
+        "glsl/ir_expression_operation.py",
+    ],
+    imports = ["glsl"],
+    main = "glsl/ir_expression_operation.py",
+    deps = MESA_PY_DEPS,
+)

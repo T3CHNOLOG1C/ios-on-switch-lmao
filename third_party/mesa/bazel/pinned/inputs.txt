@@ -1,6 +1,6 @@
-# What the pinned nvkcl.* and astc_spv.h were generated from (gpu/nvk/build_nvk.py's stand-ins for mesa_clc,
-# vtn_bindgen2 and glslangValidator): <tool> <sha256>  <path>, paths in the patched Mesa tree or build/<path> for
-# a file the build generates. A stand-in refuses to run when any of its inputs differs.
+# What the pinned nvkcl.* and astc_spv.h were generated from by mesa_clc + vtn_bindgen2 and glslangValidator, which
+# this build does not build: <tool> <sha256>  <path>, paths in third_party/mesa or build/<path> for a file the build
+# generates. //third_party/mesa/bazel/pinned:inputs_test fails when any of them differs.
 mesa_clc e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  src/compiler/libcl/stddef.h
 mesa_clc 6d15a2272b942fde922c35b4369dde168410fa8f0b3a40d56429fe202fba205d  src/nouveau/vulkan/cl/nvk_copy_indirect.cl
 mesa_clc e8f16b9384018e5445832480b8213aae5fb543753c8a17a2850c96c28142297e  src/nouveau/headers/nv_push.h

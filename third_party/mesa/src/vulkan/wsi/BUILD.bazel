@@ -1,0 +1,77 @@
+# Mesa's src/vulkan/wsi/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "mesa_args", "mesa_cc_library", "mesa_genrule")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        "wsi_common_entrypoints.h",
+    ],
+)
+
+mesa_cc_library(
+    name = "vulkan_wsi",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-DXXH_FORCE_ALIGN_CHECK=0",
+            "-DXXH_FORCE_MEMORY_ACCESS=0",
+        ],
+        include_dirs = [
+            "gen:src/vulkan/wsi",
+            "src/vulkan/wsi",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/vulkan/util",
+            "src/vulkan/util",
+            "gen:src/vulkan/runtime",
+            "src/vulkan/runtime",
+            "src/vulkan/runtime/bvh",
+            "gen:src/compiler/spirv",
+            "gen:src/util",
+            "gen:src/util/format",
+        ],
+    ),
+    sources = [
+        "wsi_common.c",
+        "wsi_common_headless.c",
+        "wsi_common_entrypoints.c",
+    ],
+)
+
+mesa_genrule(
+    name = "wsi_common_entrypoints_h",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_entrypoints.py",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+    ],
+    outs = [
+        "wsi_common_entrypoints.c",
+        "wsi_common_entrypoints.h",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_entrypoints_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --proto --weak --out-h $(execpath wsi_common_entrypoints.h) --out-c $(execpath wsi_common_entrypoints.c) --prefix wsi --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_entrypoints_gen",
+    ],
+)

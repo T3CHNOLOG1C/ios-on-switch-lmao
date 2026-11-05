@@ -1,0 +1,33 @@
+# proc-macro2-1.0.86 from crates.io, unchanged (the source meson extracts from its wrap, subprojects/proc-macro2-1-rs.wrap);
+# built with the arguments meson's packagefiles give it (subprojects/packagefiles).
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE")
+load("//third_party/mesa/bazel:rust.bzl", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+mesa_rust_library(
+    name = "proc_macro2",
+    srcs = glob(["src/**/*.rs"]),
+    cap_lints = True,
+    crate_features = [
+        "proc-macro",
+        "default",
+    ],
+    crate_name = "proc_macro2",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    extra_flags = [
+        "--cfg=use_proc_macro",
+        "--cfg=wrap_proc_macro",
+    ],
+    metadata = "b904f81@@proc_macro2@rlib",
+    deps = [
+        "//third_party/mesa/subprojects/unicode-ident-1.0.12:unicode_ident",
+    ],
+)

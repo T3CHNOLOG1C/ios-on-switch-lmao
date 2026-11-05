@@ -1,0 +1,106 @@
+# Mesa's src/nouveau/compiler/latencies/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_genrule")
+load("//third_party/mesa/bazel:rust.bzl", "RUST_GLOBAL_ARGS", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ),
+)
+
+mesa_genrule(
+    name = "lib_rs",
+    srcs = [
+        "sm100.rs",
+        "//third_party/mesa/src/nouveau/headers:util.py",
+    ],
+    outs = [
+        "lib.rs",
+    ],
+    cmd = "PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" $(execpath :lib_rs_gen) -p third_party/mesa/src/nouveau/headers --out-rs $(execpath lib.rs) sm100",
+    tools = [
+        ":lib_rs_gen",
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "sm100_rs",
+    srcs = [
+        "sm100/pred_raw.csv",
+        "sm100/pred_war.csv",
+        "sm100/pred_waw.csv",
+        "sm100/reg_raw.csv",
+        "sm100/reg_war.csv",
+        "sm100/reg_waw.csv",
+        "sm100/upred_raw.csv",
+        "sm100/upred_war.csv",
+        "sm100/upred_waw.csv",
+        "sm100/ureg_raw.csv",
+        "sm100/ureg_war.csv",
+        "sm100/ureg_waw.csv",
+        "//third_party/mesa/src/nouveau/headers:util.py",
+    ],
+    outs = [
+        "sm100.rs",
+    ],
+    cmd = "PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" $(execpath :lat_rs_gen) $(execpath sm100/pred_raw.csv) $(execpath sm100/pred_war.csv) $(execpath sm100/pred_waw.csv) $(execpath sm100/reg_raw.csv) $(execpath sm100/reg_war.csv) $(execpath sm100/reg_waw.csv) $(execpath sm100/upred_raw.csv) $(execpath sm100/upred_war.csv) $(execpath sm100/upred_waw.csv) $(execpath sm100/ureg_raw.csv) $(execpath sm100/ureg_war.csv) $(execpath sm100/ureg_waw.csv) -p third_party/mesa/src/nouveau/headers --out-rs $(execpath sm100.rs) --sm sm100",
+    tools = [
+        ":lat_rs_gen",
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+py_binary(
+    name = "lib_rs_gen",
+    srcs = [
+        "lib_rs_gen.py",
+    ],
+    imports = ["."],
+    main = "lib_rs_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "lat_rs_gen",
+    srcs = [
+        "lat_rs_gen.py",
+    ],
+    imports = ["."],
+    main = "lat_rs_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+# --- Rust ------------------------------------------------------------------------------------------------------------
+mesa_rust_library(
+    name = "nak_latencies",
+    srcs = [
+        "lib.rs",
+        "sm100.rs",
+    ],
+    crate_name = "nak_latencies",
+    crate_root = "lib.rs",
+    lints = RUST_GLOBAL_ARGS,
+    metadata = "44965b4@@nak_latencies@rlib",
+)

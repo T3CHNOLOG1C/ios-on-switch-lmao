@@ -1,0 +1,38 @@
+# syn-2.0.87 from crates.io, unchanged (the source meson extracts from its wrap, subprojects/syn-2-rs.wrap);
+# built with the arguments meson's packagefiles give it (subprojects/packagefiles).
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE")
+load("//third_party/mesa/bazel:rust.bzl", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+mesa_rust_library(
+    name = "syn",
+    srcs = glob(["src/**/*.rs"]),
+    cap_lints = True,
+    crate_features = [
+        "default",
+        "derive",
+        "parsing",
+        "printing",
+        "clone-impls",
+        "proc-macro",
+        "quote",
+        "full",
+        "visit-mut",
+    ],
+    crate_name = "syn",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    metadata = "38f9817@@syn@rlib",
+    deps = [
+        "//third_party/mesa/subprojects/proc-macro2-1.0.86:proc_macro2",
+        "//third_party/mesa/subprojects/quote-1.0.35:quote",
+        "//third_party/mesa/subprojects/unicode-ident-1.0.12:unicode_ident",
+    ],
+)

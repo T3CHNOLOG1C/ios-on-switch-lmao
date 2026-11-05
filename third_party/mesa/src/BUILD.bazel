@@ -1,0 +1,39 @@
+# Mesa's src/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "mesa_genrule")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        "git_sha1.h",
+    ],
+)
+
+mesa_genrule(
+    name = "git_sha1_h",
+    outs = [
+        "git_sha1.h",
+    ],
+    cmd = "MESA_GIT_SHA1_OVERRIDE=02d6432d39 $(execpath //third_party/mesa:git_sha1_gen) --output $(execpath git_sha1.h)",
+    tools = [
+        "//third_party/mesa:git_sha1_gen",
+    ],
+)

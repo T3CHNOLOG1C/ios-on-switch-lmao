@@ -1,0 +1,272 @@
+# Mesa's src/vulkan/util/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_args", "mesa_cc_library", "mesa_genrule")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        "vk_dispatch_table.h",
+        "vk_enum_defines.h",
+        "vk_enum_to_str.h",
+        "vk_extensions.h",
+        "vk_struct_type_cast.h",
+    ],
+)
+
+mesa_cc_library(
+    name = "vulkan_util",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-DXXH_FORCE_ALIGN_CHECK=0",
+            "-DXXH_FORCE_MEMORY_ACCESS=0",
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+        ],
+        include_dirs = [
+            "gen:src/vulkan/util",
+            "src/vulkan/util",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/compiler/nir",
+            "src/compiler/nir",
+            "gen:src/compiler",
+            "src/compiler",
+            "gen:src/util",
+            "gen:src/util/format",
+        ],
+    ),
+    sources = [
+        "vk_dispatch_table.c",
+        "vk_enum_to_str.c",
+        "vk_extensions.c",
+        "vk_alloc.c",
+        "vk_format.c",
+        "vk_util.c",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_dispatch_table_c",
+    srcs = [
+        "vk_entrypoints.py",
+        "vk_extensions.py",
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+    ],
+    outs = [
+        "vk_dispatch_table.c",
+        "vk_dispatch_table.h",
+    ],
+    cmd = "$(execpath :vk_dispatch_table_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_dispatch_table.c) --out-h $(execpath vk_dispatch_table.h) --beta true",
+    tools = [
+        ":vk_dispatch_table_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_enum_to_str_c",
+    srcs = [
+        "vk_extensions.py",
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+    ],
+    outs = [
+        "vk_enum_defines.h",
+        "vk_enum_to_str.c",
+        "vk_enum_to_str.h",
+    ],
+    cmd = "$(execpath :gen_enum_to_str) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_enum_to_str.c) --out-h $(execpath vk_enum_to_str.h) --out-d $(execpath vk_enum_defines.h) --beta true",
+    tools = [
+        ":gen_enum_to_str",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_extensions_c",
+    srcs = [
+        "vk_extensions.py",
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+    ],
+    outs = [
+        "vk_extensions.c",
+        "vk_extensions.h",
+    ],
+    cmd = "$(execpath :vk_extensions_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_extensions.c) --out-h $(execpath vk_extensions.h)",
+    tools = [
+        ":vk_extensions_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_struct_type_cast_h",
+    srcs = [
+        "vk_extensions.py",
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+    ],
+    outs = [
+        "vk_struct_type_cast.h",
+    ],
+    cmd = "$(execpath :vk_struct_type_cast_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out $(execpath vk_struct_type_cast.h) --beta true",
+    tools = [
+        ":vk_struct_type_cast_gen",
+    ],
+)
+
+py_binary(
+    name = "vk_entrypoints_gen",
+    srcs = [
+        "vk_entrypoints.py",
+        "vk_entrypoints_gen.py",
+        "vk_extensions.py",
+    ],
+    imports = ["."],
+    main = "vk_entrypoints_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_cmd_queue_gen",
+    srcs = [
+        "vk_cmd_queue_gen.py",
+        "vk_entrypoints.py",
+        "vk_extensions.py",
+    ],
+    imports = ["."],
+    main = "vk_cmd_queue_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_dispatch_trampolines_gen",
+    srcs = [
+        "vk_dispatch_trampolines_gen.py",
+        "vk_entrypoints.py",
+        "vk_extensions.py",
+    ],
+    imports = ["."],
+    main = "vk_dispatch_trampolines_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_physical_device_features_gen",
+    srcs = [
+        "vk_extensions.py",
+        "vk_physical_device_features_gen.py",
+    ],
+    imports = ["."],
+    main = "vk_physical_device_features_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_physical_device_properties_gen",
+    srcs = [
+        "vk_extensions.py",
+        "vk_physical_device_properties_gen.py",
+    ],
+    imports = ["."],
+    main = "vk_physical_device_properties_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_physical_device_spirv_caps_gen",
+    srcs = [
+        "vk_extensions.py",
+        "vk_physical_device_features_gen.py",
+        "vk_physical_device_spirv_caps_gen.py",
+    ],
+    imports = ["."],
+    main = "vk_physical_device_spirv_caps_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_synchronization_helpers_gen",
+    srcs = [
+        "vk_extensions.py",
+        "vk_synchronization_helpers_gen.py",
+    ],
+    imports = ["."],
+    main = "vk_synchronization_helpers_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_dispatch_table_gen",
+    srcs = [
+        "vk_dispatch_table_gen.py",
+        "vk_entrypoints.py",
+        "vk_extensions.py",
+    ],
+    imports = ["."],
+    main = "vk_dispatch_table_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "gen_enum_to_str",
+    srcs = [
+        "gen_enum_to_str.py",
+        "vk_extensions.py",
+    ],
+    imports = ["."],
+    main = "gen_enum_to_str.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_extensions_gen",
+    srcs = [
+        "vk_extensions.py",
+        "vk_extensions_gen.py",
+    ],
+    imports = ["."],
+    main = "vk_extensions_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vk_struct_type_cast_gen",
+    srcs = [
+        "vk_extensions.py",
+        "vk_struct_type_cast_gen.py",
+    ],
+    imports = ["."],
+    main = "vk_struct_type_cast_gen.py",
+    deps = MESA_PY_DEPS,
+)

@@ -1,0 +1,37 @@
+# Mesa's src/util/rust/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE")
+load("//third_party/mesa/bazel:rust.bzl", "NOUVEAU_RUST_ARGS", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ),
+)
+
+# --- Rust ------------------------------------------------------------------------------------------------------------
+mesa_rust_library(
+    name = "mesa_util",
+    srcs = glob(["**/*.rs"]),
+    crate_name = "mesa_util",
+    crate_root = "lib.rs",
+    lints = NOUVEAU_RUST_ARGS,
+    metadata = "e7386fa@@mesa_util@rlib",
+)

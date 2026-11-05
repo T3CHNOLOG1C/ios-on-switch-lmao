@@ -1,26 +1,16 @@
-"""NVK's external inputs (the `nvk` module extension in MODULE.bazel), each pinned by sha256 or commit.
+"""The tools Mesa's NVK build runs that are not Mesa (the `mesa_tools` module extension in MODULE.bazel), each pinned by
+sha256. Mesa itself is vendored (third_party/mesa), as are the crates of its meson wraps (third_party/mesa/subprojects).
 
-@mesa            Mesa at MESA_COMMIT, unpatched, as mesa.tar (`git archive` of the commit: modes and symlinks kept, so
-                 the build can name the patched tree by its git tree id), fetched by commit with the host's git.
-                 The build action applies the patch series (gpu/nvk/BUILD.bazel).
-@mesa_wraps      The meson wrap packages the NVK build uses (Rust crates NAK needs), from the wraps' own sha256s,
-                 laid out as subprojects/packagecache.
-@nvk_rust        Rust 1.96.1 (the rustc r9 was built with, commit 31fca3adb): rustc, cargo, rustfmt, rust-std for
-                 aarch64-apple-darwin and aarch64-apple-ios, rust-src, merged into one sysroot.
+@nvk_rust        Rust 1.96.1 (the rustc NVK has been built with, commit 31fca3adb): rustc, cargo, rustfmt, rust-std for
+                 aarch64-apple-darwin and aarch64-apple-ios, rust-src, merged into one sysroot, and rules_rust toolchains
+                 over it for //bazel/rust:toolchain_version = 1.96.1 (MODULE.bazel registers them).
 @nvk_bindgen_src / @nvk_cbindgen_src  bindgen-cli 0.73.2 and cbindgen 0.29.4 from crates.io, with every crate of
-                 their own Cargo.lock vendored (built by //gpu/nvk:bindgen and :cbindgen).
+                 their own Cargo.lock vendored (built by //third_party/mesa/bazel:bindgen and :cbindgen).
 @nvk_libclang    libclang.dylib and clang's builtin headers from the LLVM 23.1.4 release (bindgen loads it; the archive
                  is the one @llvm already fetched, so the repository cache holds it once).
-@nvk_ninja       ninja 1.13.2's macOS release binary.
 """
 
 load("//bazel/gpu:deps.bzl", "LLVM_RELEASE", "lock_packages")
-
-MESA_COMMIT = "77452b9092cc44d76d92180a12d3aaaf27a98382"
-
-MESA_REMOTE = "https://gitlab.freedesktop.org/mesa/mesa.git"
-
-RUST_VERSION = "1.96.1"
 
 _RUST_DIST = "https://static.rust-lang.org/dist/2026-06-30/"
 
@@ -36,23 +26,10 @@ RUST_COMPONENTS = [
     ("rustfmt-1.96.1-aarch64-apple-darwin", "rustfmt-preview", "ed0cc9d72c04e7c3c4b7a82ab7f1ce5e33132017d062d8f9be6adf6472e8f165"),
 ]
 
-# subprojects/<name>.wrap: (source_filename, source_hash). The URL is crates.io's for the crate.
-MESA_WRAPS = {
-    "paste-1.0.14.tar.gz": "de3145af08024dea9fa9914f381a17b8fc6034dfb00f3a84013f7ff43f29ed4c",
-    "proc-macro2-1.0.86.tar.gz": "5e719e8df665df0d1c8fbfd238015744736151d4445ec0836b8e628aae103b77",
-    "quote-1.0.35.tar.gz": "291ec9ab5efd934aaf503a6466c5d5251535d108ee747472c3977cc5acc868ef",
-    "rustc-hash-2.1.1.tar.gz": "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d",
-    "syn-2.0.87.tar.gz": "25aa4ce346d03a6dcd68dd8b4010bcb74e54e62c90c573f394c46eae99aba32d",
-    "unicode-ident-1.0.12.tar.gz": "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b",
-}
-
 CARGO_TOOLS = {
     "nvk_bindgen_src": ("bindgen-cli", "0.73.2", "5622e043625b6d1f32c84f53699690a44d1419e657879de26eb252699f5ebb7c"),
     "nvk_cbindgen_src": ("cbindgen", "0.29.4", "2ecb53484c9c167ba674026b656d8a27d7657a58e6066aa902bfb1a4aa00ae20"),
 }
-
-NINJA = ("https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-mac.zip",
-         "c99048673aa765960a99cf10c6ddb9f1fad506099ff0a0e137ad8960a88f321b")
 
 _ALL_FILES = """\
 package(default_visibility = ["//visibility:public"])
@@ -63,32 +40,71 @@ filegroup(
 )
 """
 
-def _git(rctx, *args):
-    result = rctx.execute(["/usr/bin/git"] + list(args), timeout = 1800)
-    if result.return_code:
-        fail("git {}: {}".format(" ".join(args), result.stderr))
-    return result.stdout.strip()
+# Rust 1.96.1 as rules_rust toolchains, chosen where //bazel/rust:toolchain_version is 1.96.1 (NVK's Rust, through
+# third_party/mesa/bazel/defs.bzl's mesa_platform). Built here rather than by rules_rust's own repository_set because
+# the standard library's sources (rust-src) must be in the sysroot rustc is given: with them rustc names the std code
+# it instantiates in NAK by its real path (lib/rustlib/src/rust/library/...), which --remap-path-prefix spells as the
+# rustup path main's dylib carries; without them those panic locations read /rustc/<commit>/library/....
+_RUST_TOOLCHAINS = """
+load("@rules_rust//rust:toolchain.bzl", "rust_stdlib_filegroup", "rust_toolchain")
 
-def _mesa_source_impl(rctx):
-    rctx.report_progress("fetching mesa " + MESA_COMMIT[:10] + " (one commit, depth 1)")
-    _git(rctx, "init", "-q", "repo")
-    _git(rctx, "-C", "repo", "fetch", "-q", "--depth=1", MESA_REMOTE, MESA_COMMIT)
-    fetched = _git(rctx, "-C", "repo", "rev-parse", "FETCH_HEAD")
-    if fetched != MESA_COMMIT:
-        fail("fetched mesa {}, wanted {}".format(fetched, MESA_COMMIT))
-    tree = _git(rctx, "-C", "repo", "rev-parse", "FETCH_HEAD^{tree}")
-    _git(rctx, "-C", "repo", "archive", "--format=tar", "-o", "../mesa.tar", "FETCH_HEAD")
-    rctx.delete("repo")
-    rctx.file("tree", tree + "\n")
-    rctx.file("BUILD.bazel", """\
-# Mesa {commit} (tree {tree}) as `git archive` made it.
-exports_files(["mesa.tar", "tree"], visibility = ["//visibility:public"])
-""".format(commit = MESA_COMMIT, tree = tree))
+exports_files(["bin/rustc", "bin/cargo", "bin/rustfmt", "bin/rustdoc"])
 
-    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
-    return rctx.repo_metadata(reproducible = True)
+# rustfmt and the compiler libraries it loads (@rpath ../lib).
+filegroup(
+    name = "rustfmt",
+    srcs = ["bin/rustfmt"] + glob(["lib/*.dylib"]),
+)
 
-mesa_source = repository_rule(implementation = _mesa_source_impl)
+filegroup(
+    name = "rustc_lib",
+    srcs = glob([
+        "lib/*.dylib*",
+        "lib/rustlib/aarch64-apple-darwin/codegen-backends/*.dylib",
+        "lib/rustlib/aarch64-apple-darwin/lib/*.dylib*",
+        "lib/rustlib/aarch64-apple-darwin/lib/*.rmeta",
+    ], allow_empty = True),
+)
+
+[rust_stdlib_filegroup(
+    name = "rust_std-" + triple,
+    srcs = glob([
+        "lib/rustlib/{}/lib/*.rlib".format(triple),
+        "lib/rustlib/{}/lib/*.rmeta".format(triple),
+        "lib/rustlib/{}/lib/*.dylib*".format(triple),
+        "lib/rustlib/{}/lib/*.a".format(triple),
+        "lib/rustlib/{}/lib/self-contained/**".format(triple),
+        "lib/rustlib/src/rust/**",
+    ], allow_empty = True),
+) for triple in ("aarch64-apple-darwin", "aarch64-apple-ios")]
+
+[rust_toolchain(
+    name = "rust_toolchain-" + triple,
+    binary_ext = "",
+    cargo = "bin/cargo",
+    default_edition = "2021",
+    dylib_ext = ".dylib",
+    exec_triple = "aarch64-apple-darwin",
+    rust_doc = "bin/rustdoc",
+    rust_std = ":rust_std-" + triple,
+    rustc = "bin/rustc",
+    rustc_lib = ":rustc_lib",
+    rustfmt = "bin/rustfmt",
+    staticlib_ext = ".a",
+    stdlib_linkflags = ["-lSystem", "-lresolv"],
+    target_triple = triple,
+    version = "1.96.1",
+) for triple in ("aarch64-apple-darwin", "aarch64-apple-ios")]
+
+[toolchain(
+    name = "rust-" + triple,
+    exec_compatible_with = ["@platforms//cpu:aarch64", "@platforms//os:osx"],
+    target_compatible_with = ["@platforms//cpu:aarch64", os],
+    target_settings = ["@@//bazel/rust:toolchain_1.96.1"],
+    toolchain = ":rust_toolchain-" + triple,
+    toolchain_type = "@rules_rust//rust:toolchain",
+) for triple, os in (("aarch64-apple-darwin", "@platforms//os:osx"), ("aarch64-apple-ios", "@platforms//os:ios"))]
+"""
 
 def _rust_sysroot_impl(rctx):
     for archive, component, sha256 in RUST_COMPONENTS:
@@ -96,31 +112,13 @@ def _rust_sysroot_impl(rctx):
             url = _RUST_DIST + archive + ".tar.xz",
             sha256 = sha256,
             stripPrefix = archive + "/" + component,
-            output = "sysroot",
         )
-    rctx.file("BUILD.bazel", _ALL_FILES + """
-exports_files(["sysroot/bin/rustc", "sysroot/bin/cargo"])
-""")
+    rctx.file("BUILD.bazel", _ALL_FILES + _RUST_TOOLCHAINS)
 
     # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
     return rctx.repo_metadata(reproducible = True)
 
 nvk_rust_sysroot = repository_rule(implementation = _rust_sysroot_impl)
-
-def _mesa_wraps_impl(rctx):
-    for filename, sha256 in MESA_WRAPS.items():
-        name, _, version = filename[:-len(".tar.gz")].rpartition("-")
-        rctx.download(
-            url = "https://static.crates.io/crates/{}/{}/download".format(name, version),
-            output = "packagecache/" + filename,
-            sha256 = sha256,
-        )
-    rctx.file("BUILD.bazel", _ALL_FILES)
-
-    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
-    return rctx.repo_metadata(reproducible = True)
-
-mesa_wraps = repository_rule(implementation = _mesa_wraps_impl)
 
 def _cargo_tool_source_impl(rctx):
     crate, version, sha256 = rctx.attr.crate, rctx.attr.version, rctx.attr.sha256
@@ -158,8 +156,8 @@ cargo_tool_source = repository_rule(
     implementation = _cargo_tool_source_impl,
     attrs = {
         "crate": attr.string(mandatory = True),
-        "version": attr.string(mandatory = True),
         "sha256": attr.string(mandatory = True),
+        "version": attr.string(mandatory = True),
     },
 )
 
@@ -167,8 +165,15 @@ def _libclang_impl(rctx):
     archive = "llvm.tar.xz"
     rctx.download(url = LLVM_RELEASE["url"], output = archive, sha256 = LLVM_RELEASE["sha256"])
     prefix = LLVM_RELEASE["prefix"]
-    result = rctx.execute(["/usr/bin/tar", "-xJf", archive, "--strip-components", "1",
-                           prefix + "/lib/libclang.dylib", prefix + "/lib/clang/23/include"])
+    result = rctx.execute([
+        "/usr/bin/tar",
+        "-xJf",
+        archive,
+        "--strip-components",
+        "1",
+        prefix + "/lib/libclang.dylib",
+        prefix + "/lib/clang/23/include",
+    ])
     if result.return_code:
         fail("extracting libclang: " + result.stderr)
     rctx.delete(archive)
@@ -179,13 +184,11 @@ def _libclang_impl(rctx):
 
 nvk_libclang = repository_rule(implementation = _libclang_impl)
 
-def _nvk_impl(module_ctx):
-    mesa_source(name = "mesa")
+def _mesa_tools_impl(module_ctx):
     nvk_rust_sysroot(name = "nvk_rust")
-    mesa_wraps(name = "mesa_wraps")
     for name, (crate, version, sha256) in CARGO_TOOLS.items():
         cargo_tool_source(name = name, crate = crate, version = version, sha256 = sha256)
     nvk_libclang(name = "nvk_libclang")
     return module_ctx.extension_metadata(reproducible = True)
 
-nvk = module_extension(implementation = _nvk_impl)
+mesa_tools = module_extension(implementation = _mesa_tools_impl)

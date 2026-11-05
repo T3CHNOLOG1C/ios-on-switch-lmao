@@ -1,0 +1,29 @@
+# quote-1.0.35 from crates.io, unchanged (the source meson extracts from its wrap, subprojects/quote-1-rs.wrap);
+# built with the arguments meson's packagefiles give it (subprojects/packagefiles).
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE")
+load("//third_party/mesa/bazel:rust.bzl", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+mesa_rust_library(
+    name = "quote",
+    srcs = glob(["src/**/*.rs"]),
+    cap_lints = True,
+    crate_features = [
+        "default",
+        "proc-macro",
+    ],
+    crate_name = "quote",
+    crate_root = "src/lib.rs",
+    edition = "2018",
+    metadata = "ba9d1f0@@quote@rlib",
+    deps = [
+        "//third_party/mesa/subprojects/proc-macro2-1.0.86:proc_macro2",
+    ],
+)

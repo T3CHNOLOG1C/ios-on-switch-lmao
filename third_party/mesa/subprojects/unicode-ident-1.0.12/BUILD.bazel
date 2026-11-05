@@ -1,0 +1,22 @@
+# unicode-ident-1.0.12 from crates.io, unchanged (the source meson extracts from its wrap, subprojects/unicode-ident-1-rs.wrap);
+# built with the arguments meson's packagefiles give it (subprojects/packagefiles).
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE")
+load("//third_party/mesa/bazel:rust.bzl", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+mesa_rust_library(
+    name = "unicode_ident",
+    srcs = glob(["src/**/*.rs"]),
+    cap_lints = True,
+    crate_name = "unicode_ident",
+    crate_root = "src/lib.rs",
+    edition = "2018",
+    metadata = "3bc8ba2@@unicode_ident@rlib",
+)

@@ -1,0 +1,78 @@
+# The Mesa build's own pieces (defs.bzl): the platform settings its BUILD files select on, the macOS user platform the
+# host twin builds for, and the tools its generators run (bindgen, cbindgen, rustfmt, libclang).
+load("@xcode//:defs.bzl", "IPHONEOS_SDK", "MACOSX_SDK")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "cargo_tool", "mesa_make_variables")
+load(":rust.bzl", "mesa_rust_release_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+# Which platform a Mesa target is configured for: iOS (the device's NVK) or macOS (its host twin).
+config_setting(
+    name = "ios",
+    constraint_values = ["@platforms//os:ios"],
+)
+
+config_setting(
+    name = "macos",
+    constraint_values = ["@platforms//os:osx"],
+)
+
+# macOS user space (the host twin of an iOS library), until //bazel/platforms has it: the same name and constraints.
+platform(
+    name = "macos_user_arm64",
+    constraint_values = [
+        "@platforms//os:osx",
+        "@platforms//cpu:arm64",
+        "//bazel/platforms:user",
+    ],
+)
+
+# bindgen-cli 0.73.2 and cbindgen 0.29.4, built by Rust 1.96.1's cargo from their own Cargo.lock; they never rebuild
+# on a Mesa edit.
+cargo_tool(
+    name = "bindgen",
+    srcs = "@nvk_bindgen_src//:all",
+    bin = "bindgen",
+    manifest = "@nvk_bindgen_src//:src/Cargo.toml",
+)
+
+cargo_tool(
+    name = "cbindgen",
+    srcs = "@nvk_cbindgen_src//:all",
+    bin = "cbindgen",
+    manifest = "@nvk_cbindgen_src//:src/Cargo.toml",
+)
+
+# The generators format the Rust they write with rustfmt 1.96.1 from PATH (they skip formatting without it, and the
+# line numbers reach the binary through panic locations); bindgen loads libclang 23.1.4.
+alias(
+    name = "rustfmt",
+    actual = "@nvk_rust//:rustfmt",
+)
+
+alias(
+    name = "libclang",
+    actual = "@nvk_libclang//:all",
+)
+
+# bindgen's clang target and SDK (BINDGEN_EXTRA_CLANG_ARGS) as main's dylibs were built with, for $(BINDGEN_CLANG_ARGS).
+mesa_make_variables(
+    name = "bindgen_vars",
+    variables = select({
+        ":ios": {"BINDGEN_CLANG_ARGS": "--target=arm64-apple-ios17.0 -isysroot " + IPHONEOS_SDK},
+        "//conditions:default": {"BINDGEN_CLANG_ARGS": "--target=arm64-apple-macosx14.0 -isysroot " + MACOSX_SDK},
+    }),
+)
+
+mesa_rust_release_staticlib(
+    name = "nvk_release_rs",
+    crate_root = "nvk_release_rs.rs",
+    deps = [
+        "//third_party/mesa/src/nouveau/compiler:nak_rs_rlib",
+        "//third_party/mesa/src/nouveau/nil:nil_rlib",
+        "//third_party/mesa/src/nouveau/vulkan:nvk_rs_rlib",
+    ],
+)

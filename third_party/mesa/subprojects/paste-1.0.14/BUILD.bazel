@@ -1,0 +1,23 @@
+# paste-1.0.14 from crates.io, unchanged (the source meson extracts from its wrap, subprojects/paste-1-rs.wrap);
+# built with the arguments meson's packagefiles give it (subprojects/packagefiles).
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE")
+load("//third_party/mesa/bazel:rust.bzl", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+mesa_rust_library(
+    name = "paste",
+    srcs = glob(["src/**/*.rs"]),
+    cap_lints = True,
+    crate_name = "paste",
+    crate_root = "src/lib.rs",
+    crate_type = "proc-macro",
+    edition = "2018",
+    metadata = "3c4235a@@paste@sha",
+)

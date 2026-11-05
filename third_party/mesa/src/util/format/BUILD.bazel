@@ -1,0 +1,90 @@
+# Mesa's src/util/format/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_genrule")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        "u_format_gen.h",
+        "u_format_pack.h",
+    ],
+)
+
+mesa_genrule(
+    name = "u_format_gen_h",
+    srcs = [
+        "u_format.yaml",
+        "u_format_pack.py",
+        "u_format_parse.py",
+    ],
+    outs = [
+        "u_format_gen.h",
+    ],
+    cmd = "$(execpath :u_format_table) $(execpath u_format.yaml) --enums > $(execpath u_format_gen.h)",
+    tools = [
+        ":u_format_table",
+    ],
+)
+
+mesa_genrule(
+    name = "u_format_pack_h",
+    srcs = [
+        "u_format.yaml",
+        "u_format_pack.py",
+        "u_format_parse.py",
+    ],
+    outs = [
+        "u_format_pack.h",
+    ],
+    cmd = "$(execpath :u_format_table) $(execpath u_format.yaml) --header > $(execpath u_format_pack.h)",
+    tools = [
+        ":u_format_table",
+    ],
+)
+
+mesa_genrule(
+    name = "u_format_table_c",
+    srcs = [
+        "u_format.yaml",
+        "u_format_pack.py",
+        "u_format_parse.py",
+    ],
+    outs = [
+        "u_format_table.c",
+    ],
+    cmd = "$(execpath :u_format_table) $(execpath u_format.yaml) > $(execpath u_format_table.c)",
+    tools = [
+        ":u_format_table",
+    ],
+)
+
+py_binary(
+    name = "u_format_table",
+    srcs = [
+        "u_format_pack.py",
+        "u_format_parse.py",
+        "u_format_table.py",
+    ],
+    imports = ["."],
+    main = "u_format_table.py",
+    deps = MESA_PY_DEPS,
+)

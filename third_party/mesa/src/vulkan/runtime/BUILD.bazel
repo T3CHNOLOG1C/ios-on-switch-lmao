@@ -1,0 +1,401 @@
+# Mesa's src/vulkan/runtime/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_args", "mesa_cc_library", "mesa_file", "mesa_genrule")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        "astc_spv.h",
+        "vk_cmd_enqueue_entrypoints.h",
+        "vk_cmd_queue.h",
+        "vk_common_entrypoints.h",
+        "vk_dispatch_trampolines.h",
+        "vk_format_info.h",
+        "vk_physical_device_features.h",
+        "vk_physical_device_properties.h",
+    ],
+)
+
+mesa_cc_library(
+    name = "vulkan_lite_runtime",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-DXXH_FORCE_ALIGN_CHECK=0",
+            "-DXXH_FORCE_MEMORY_ACCESS=0",
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+            "-DMESA_VK_LOG=0",
+        ],
+        include_dirs = [
+            "gen:src/vulkan/runtime",
+            "src/vulkan/runtime",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/compiler/nir",
+            "src/compiler/nir",
+            "gen:src/compiler",
+            "src/compiler",
+            "gen:src/vulkan/util",
+            "src/vulkan/util",
+            "gen:src/util",
+            "gen:src/util/format",
+            "gen:src/compiler/spirv",
+        ],
+    ),
+    sources = [
+        "rmv/vk_rmv_common.c",
+        "rmv/vk_rmv_exporter.c",
+        "vk_blend.c",
+        "vk_buffer.c",
+        "vk_buffer_view.c",
+        "vk_cmd_copy.c",
+        "vk_cmd_enqueue.c",
+        "vk_command_buffer.c",
+        "vk_command_pool.c",
+        "vk_debug_report.c",
+        "vk_debug_utils.c",
+        "vk_deferred_operation.c",
+        "vk_descriptor_set_layout.c",
+        "vk_descriptors.c",
+        "vk_descriptor_update_template.c",
+        "vk_device.c",
+        "vk_device_generated_commands.c",
+        "vk_device_memory.c",
+        "vk_fence.c",
+        "vk_framebuffer.c",
+        "vk_frame_pacer.c",
+        "vk_graphics_state.c",
+        "vk_image.c",
+        "vk_log.c",
+        "vk_meta_object_list.c",
+        "vk_object.c",
+        "vk_physical_device.c",
+        "vk_pipeline_layout.c",
+        "vk_query_pool.c",
+        "vk_queue.c",
+        "vk_render_pass.c",
+        "vk_sampler.c",
+        "vk_semaphore.c",
+        "vk_standard_sample_locations.c",
+        "vk_sync.c",
+        "vk_sync_binary.c",
+        "vk_sync_dummy.c",
+        "vk_sync_timeline.c",
+        "vk_synchronization.c",
+        "vk_video.c",
+        "vk_ycbcr_conversion.c",
+        "vk_cmd_enqueue_entrypoints.c",
+        "vk_cmd_queue.c",
+        "vk_common_entrypoints.c",
+        "vk_dispatch_trampolines.c",
+        "vk_format_info.c",
+        "vk_physical_device_features.c",
+        "vk_physical_device_properties.c",
+        "vk_physical_device_spirv_caps.c",
+        "vk_synchronization_helpers.c",
+    ],
+)
+
+mesa_cc_library(
+    name = "vulkan_runtime",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-DXXH_FORCE_ALIGN_CHECK=0",
+            "-DXXH_FORCE_MEMORY_ACCESS=0",
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+        ],
+        include_dirs = [
+            "gen:src/vulkan/runtime",
+            "src/vulkan/runtime",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/compiler/nir",
+            "src/compiler/nir",
+            "gen:src/compiler",
+            "src/compiler",
+            "gen:src/vulkan/util",
+            "src/vulkan/util",
+            "gen:src/util",
+            "gen:src/util/format",
+            "gen:src/compiler/spirv",
+        ],
+    ),
+    sources = [
+        "vk_meta.c",
+        "vk_meta_blit_resolve.c",
+        "vk_meta_clear.c",
+        "vk_meta_copy_fill_update.c",
+        "vk_meta_draw_rects.c",
+        "vk_nir.c",
+        "vk_nir_convert_ycbcr.c",
+        "vk_nir_lower_descriptor_heaps.c",
+        "vk_pipeline.c",
+        "vk_pipeline_cache.c",
+        "vk_shader.c",
+        "vk_shader_module.c",
+        "vk_texcompress_etc2.c",
+        "vk_texcompress_astc.c",
+    ],
+)
+
+mesa_cc_library(
+    name = "vulkan_instance",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-DXXH_FORCE_ALIGN_CHECK=0",
+            "-DXXH_FORCE_MEMORY_ACCESS=0",
+            "-DVK_LITE_RUNTIME_INSTANCE=0",
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+        ],
+        include_dirs = [
+            "gen:src/vulkan/runtime",
+            "src/vulkan/runtime",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/compiler/nir",
+            "src/compiler/nir",
+            "gen:src/compiler",
+            "src/compiler",
+            "gen:src/vulkan/util",
+            "src/vulkan/util",
+            "gen:src/util",
+            "gen:src/util/format",
+            "gen:src/compiler/spirv",
+        ],
+    ),
+    sources = [
+        "vk_instance.c",
+    ],
+)
+
+# Not built: astc_spv.h (Mesa CL and GLSL compilers): the output checked in at third_party/mesa/bazel/pinned.
+mesa_file(
+    name = "astc_spv_h",
+    src = "//third_party/mesa/bazel/pinned:astc_spv.h",
+    out = "astc_spv.h",
+)
+
+mesa_genrule(
+    name = "vk_cmd_enqueue_entrypoints_h",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_entrypoints.py",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+    ],
+    outs = [
+        "vk_cmd_enqueue_entrypoints.c",
+        "vk_cmd_enqueue_entrypoints.h",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_entrypoints_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --proto --weak --out-h $(execpath vk_cmd_enqueue_entrypoints.h) --out-c $(execpath vk_cmd_enqueue_entrypoints.c) --prefix vk_cmd_enqueue --prefix vk_cmd_enqueue_unless_primary --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_entrypoints_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_cmd_queue_c",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_entrypoints.py",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+    ],
+    outs = [
+        "vk_cmd_queue.c",
+        "vk_cmd_queue.h",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_cmd_queue_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_cmd_queue.c) --out-h $(execpath vk_cmd_queue.h) --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_cmd_queue_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_common_entrypoints_h",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_entrypoints.py",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+    ],
+    outs = [
+        "vk_common_entrypoints.c",
+        "vk_common_entrypoints.h",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_entrypoints_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --proto --weak --out-h $(execpath vk_common_entrypoints.h) --out-c $(execpath vk_common_entrypoints.c) --prefix vk_common --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_entrypoints_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_dispatch_trampolines_c",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_entrypoints.py",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+    ],
+    outs = [
+        "vk_dispatch_trampolines.c",
+        "vk_dispatch_trampolines.h",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_dispatch_trampolines_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_dispatch_trampolines.c) --out-h $(execpath vk_dispatch_trampolines.h) --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_dispatch_trampolines_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_format_info_c",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+    ],
+    outs = [
+        "vk_format_info.c",
+        "vk_format_info.h",
+    ],
+    cmd = "$(execpath :vk_format_info_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_format_info.c) --out-h $(execpath vk_format_info.h)",
+    tools = [
+        ":vk_format_info_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_physical_device_features_c",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+    ],
+    outs = [
+        "vk_physical_device_features.c",
+        "vk_physical_device_features.h",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_physical_device_features_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_physical_device_features.c) --out-h $(execpath vk_physical_device_features.h) --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_physical_device_features_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_physical_device_properties_c",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+    ],
+    outs = [
+        "vk_physical_device_properties.c",
+        "vk_physical_device_properties.h",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_physical_device_properties_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_physical_device_properties.c) --out-h $(execpath vk_physical_device_properties.h) --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_physical_device_properties_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_physical_device_spirv_caps_c",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+        "//third_party/mesa/src/vulkan/util:vk_physical_device_features_gen.py",
+    ],
+    outs = [
+        "vk_physical_device_spirv_caps.c",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_physical_device_spirv_caps_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_physical_device_spirv_caps.c) --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_physical_device_spirv_caps_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vk_synchronization_helpers_c",
+    srcs = [
+        "//third_party/mesa/src:vulkan/registry/vk.xml",
+        "//third_party/mesa/src/vulkan/util:vk_extensions.py",
+    ],
+    outs = [
+        "vk_synchronization_helpers.c",
+    ],
+    cmd = "$(execpath //third_party/mesa/src/vulkan/util:vk_synchronization_helpers_gen) --xml $(execpath //third_party/mesa/src:vulkan/registry/vk.xml) --out-c $(execpath vk_synchronization_helpers.c) --beta true",
+    tools = [
+        "//third_party/mesa/src/vulkan/util:vk_synchronization_helpers_gen",
+    ],
+)
+
+py_binary(
+    name = "vk_format_info_gen",
+    srcs = [
+        "vk_format_info_gen.py",
+    ],
+    imports = ["."],
+    main = "vk_format_info_gen.py",
+    deps = MESA_PY_DEPS,
+)

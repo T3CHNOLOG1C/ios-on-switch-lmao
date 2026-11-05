@@ -1,0 +1,358 @@
+# Mesa's src/nouveau/headers/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_args", "mesa_cc_library", "mesa_genrule")
+load("//third_party/mesa/bazel:nouveau.bzl", "nvidia_class_generators")
+load("//third_party/mesa/bazel:rust.bzl", "RUST_GLOBAL_ARGS", "mesa_rust_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        ":nv_class_headers",
+    ],
+)
+
+mesa_cc_library(
+    name = "nvidia_headers_c",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-Wno-override-init",
+            "-Wno-initializer-overrides",
+        ],
+        include_dirs = [
+            "gen:src/nouveau/headers",
+            "src/nouveau/headers",
+            "src/nouveau/headers/nvidia/classes",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+        ],
+    ),
+    sources = [
+        "nv_push_cl85b5.c",
+        "nv_push_cl902d.c",
+        "nv_push_cl9039.c",
+        "nv_push_cl906f.c",
+        "nv_push_cl9097.c",
+        "nv_push_cl90b5.c",
+        "nv_push_cl90c0.c",
+        "nv_push_cl91c0.c",
+        "nv_push_cl9297.c",
+        "nv_push_cla040.c",
+        "nv_push_cla0b5.c",
+        "nv_push_cla06f.c",
+        "nv_push_cla097.c",
+        "nv_push_cla140.c",
+        "nv_push_cla16f.c",
+        "nv_push_cla1c0.c",
+        "nv_push_cla197.c",
+        "nv_push_cla26f.c",
+        "nv_push_cla297.c",
+        "nv_push_clb06f.c",
+        "nv_push_clb097.c",
+        "nv_push_clb0b5.c",
+        "nv_push_clb0c0.c",
+        "nv_push_clb197.c",
+        "nv_push_clb1c0.c",
+        "nv_push_clc06f.c",
+        "nv_push_clc097.c",
+        "nv_push_clc197.c",
+        "nv_push_clc1b5.c",
+        "nv_push_clc1c0.c",
+        "nv_push_cla0c0.c",
+        "nv_push_clc0b5.c",
+        "nv_push_clc0c0.c",
+        "nv_push_clc36f.c",
+        "nv_push_clc397.c",
+        "nv_push_clc3b5.c",
+        "nv_push_clc3c0.c",
+        "nv_push_clc46f.c",
+        "nv_push_clc56f.c",
+        "nv_push_clc597.c",
+        "nv_push_clc5b0.c",
+        "nv_push_clc5b5.c",
+        "nv_push_clc5c0.c",
+        "nv_push_clc697.c",
+        "nv_push_clc6b5.c",
+        "nv_push_clc6c0.c",
+        "nv_push_clc797.c",
+        "nv_push_clc7b0.c",
+        "nv_push_clc7b5.c",
+        "nv_push_clc7c0.c",
+        "nv_push_clc86f.c",
+        "nv_push_clc8b5.c",
+        "nv_push_clc96f.c",
+        "nv_push_clc997.c",
+        "nv_push_clc9b0.c",
+        "nv_push_clc9b5.c",
+        "nv_push_clc9c0.c",
+        "nv_push_clca6f.c",
+        "nv_push_clcab5.c",
+        "nv_push_clcb97.c",
+        "nv_push_clcbc0.c",
+        "nv_push_clcd97.c",
+        "nv_push_clcdc0.c",
+        "nv_push_clcec0.c",
+        "nv_push_clce97.c",
+        "nv_push.c",
+    ],
+)
+
+mesa_genrule(
+    name = "nvh_hwref_gh100_mmu_rs",
+    srcs = [
+        "nvidia/hwref/hopper/gh100/dev_mmu.h",
+        "//third_party/mesa:header_files",
+    ],
+    outs = [
+        "nvh_hwref_gh100_mmu.rs",
+    ],
+    cmd = select({
+        "//third_party/mesa/bazel:ios": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath nvidia/hwref/hopper/gh100/dev_mmu.h) --output $(execpath nvh_hwref_gh100_mmu.rs) --allowlist-var 'NV_MMU_.*' --rust-target 1.96.1 --rust-edition 2021 -- --target=aarch64-apple-ios -DNDEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+        "//conditions:default": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath nvidia/hwref/hopper/gh100/dev_mmu.h) --output $(execpath nvh_hwref_gh100_mmu.rs) --allowlist-var 'NV_MMU_.*' --rust-target 1.96.1 --rust-edition 2021 -- -DNDEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+    }),
+    toolchains = ["//third_party/mesa/bazel:bindgen_vars"],
+    tools = [
+        "//third_party/mesa/bazel:bindgen",
+        "//third_party/mesa/bazel:libclang",
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_libclang//:lib/libclang.dylib",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "nvh_hwref_gm107_mmu_rs",
+    srcs = [
+        "nvidia/hwref/maxwell/gm107/dev_mmu.h",
+        "//third_party/mesa:header_files",
+    ],
+    outs = [
+        "nvh_hwref_gm107_mmu.rs",
+    ],
+    cmd = select({
+        "//third_party/mesa/bazel:ios": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath nvidia/hwref/maxwell/gm107/dev_mmu.h) --output $(execpath nvh_hwref_gm107_mmu.rs) --allowlist-var 'NV_MMU_.*' --rust-target 1.96.1 --rust-edition 2021 -- --target=aarch64-apple-ios -DNDEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+        "//conditions:default": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath nvidia/hwref/maxwell/gm107/dev_mmu.h) --output $(execpath nvh_hwref_gm107_mmu.rs) --allowlist-var 'NV_MMU_.*' --rust-target 1.96.1 --rust-edition 2021 -- -DNDEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+    }),
+    toolchains = ["//third_party/mesa/bazel:bindgen_vars"],
+    tools = [
+        "//third_party/mesa/bazel:bindgen",
+        "//third_party/mesa/bazel:libclang",
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_libclang//:lib/libclang.dylib",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "nvh_hwref_gp100_mmu_rs",
+    srcs = [
+        "nvidia/hwref/pascal/gp100/dev_mmu.h",
+        "//third_party/mesa:header_files",
+    ],
+    outs = [
+        "nvh_hwref_gp100_mmu.rs",
+    ],
+    cmd = select({
+        "//third_party/mesa/bazel:ios": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath nvidia/hwref/pascal/gp100/dev_mmu.h) --output $(execpath nvh_hwref_gp100_mmu.rs) --allowlist-var 'NV_MMU_.*' --rust-target 1.96.1 --rust-edition 2021 -- --target=aarch64-apple-ios -DNDEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+        "//conditions:default": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath nvidia/hwref/pascal/gp100/dev_mmu.h) --output $(execpath nvh_hwref_gp100_mmu.rs) --allowlist-var 'NV_MMU_.*' --rust-target 1.96.1 --rust-edition 2021 -- -DNDEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+    }),
+    toolchains = ["//third_party/mesa/bazel:bindgen_vars"],
+    tools = [
+        "//third_party/mesa/bazel:bindgen",
+        "//third_party/mesa/bazel:libclang",
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_libclang//:lib/libclang.dylib",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+mesa_genrule(
+    name = "nvh_hwref_tu102_mmu_rs",
+    srcs = [
+        "nvidia/hwref/turing/tu102/dev_mmu.h",
+        "//third_party/mesa:header_files",
+    ],
+    outs = [
+        "nvh_hwref_tu102_mmu.rs",
+    ],
+    cmd = select({
+        "//third_party/mesa/bazel:ios": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath nvidia/hwref/turing/tu102/dev_mmu.h) --output $(execpath nvh_hwref_tu102_mmu.rs) --allowlist-var 'NV_MMU_.*' --rust-target 1.96.1 --rust-edition 2021 -- --target=aarch64-apple-ios -DNDEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+        "//conditions:default": "LIBCLANG_PATH=\"$$PWD/$$(dirname $(execpath @nvk_libclang//:lib/libclang.dylib))\" PATH=\"$$PWD/$$(dirname $(execpath @nvk_rust//:bin/rustfmt)):$$PATH\" BINDGEN_EXTRA_CLANG_ARGS=\"$(BINDGEN_CLANG_ARGS)\" $(execpath //third_party/mesa/bazel:bindgen) $(execpath nvidia/hwref/turing/tu102/dev_mmu.h) --output $(execpath nvh_hwref_tu102_mmu.rs) --allowlist-var 'NV_MMU_.*' --rust-target 1.96.1 --rust-edition 2021 -- -DNDEBUG -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS '-DPACKAGE_VERSION=\"27.0.0-devel\"' -DHAVE_OPENGL=0 -DHAVE_OPENGL_ES_1=0 -DHAVE_OPENGL_ES_2=0 -DMESA_SYSTEM_HAS_KMS_DRM=0 -DHAVE_NVK -DBUILDING_MESA -DVK_ENABLE_BETA_EXTENSIONS -DVIDEO_CODEC_VC1DEC=0 -DVIDEO_CODEC_H264DEC=0 -DVIDEO_CODEC_H264ENC=0 -DVIDEO_CODEC_H265DEC=0 -DVIDEO_CODEC_H265ENC=0 -DVIDEO_CODEC_AV1DEC=1 -DVIDEO_CODEC_AV1ENC=1 -DVIDEO_CODEC_VP9DEC=1 -DVIDEO_CODEC_MPEG12DEC=1 -DVIDEO_CODEC_JPEGDEC=1 -DUSE_LIBGLVND=0 -DHAVE_GFX_COMPUTE -DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1 -DALLOW_KCMP -DMESA_DEBUG=0 -DHAVE___BUILTIN_BSWAP32 -DHAVE___BUILTIN_BSWAP64 -DHAVE___BUILTIN_CLZ -DHAVE___BUILTIN_CLZLL -DHAVE___BUILTIN_CTZ -DHAVE___BUILTIN_EXPECT -DHAVE___BUILTIN_FFS -DHAVE___BUILTIN_FFSLL -DHAVE___BUILTIN_POPCOUNT -DHAVE___BUILTIN_POPCOUNTLL -DHAVE___BUILTIN_UNREACHABLE -DHAVE___BUILTIN_TYPES_COMPATIBLE_P -DHAVE___BUILTIN_ADD_OVERFLOW -DHAVE_FUNC_ATTRIBUTE_CONST -DHAVE_FUNC_ATTRIBUTE_FLATTEN -DHAVE_FUNC_ATTRIBUTE_MALLOC -DHAVE_FUNC_ATTRIBUTE_PURE -DHAVE_FUNC_ATTRIBUTE_UNUSED -DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT -DHAVE_FUNC_ATTRIBUTE_WEAK -DHAVE_FUNC_ATTRIBUTE_FORMAT -DHAVE_FUNC_ATTRIBUTE_PACKED -DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL -DHAVE_FUNC_ATTRIBUTE_NORETURN -DHAVE_FUNC_ATTRIBUTE_COLD -DHAVE_FUNC_ATTRIBUTE_VISIBILITY -DHAVE_UINT128 -DHAVE_FMEMOPEN -DUSE_GCC_ATOMIC_BUILTINS -DHAS_SCHED_H -DHAVE_SYS_SYSCTL_H -DHAVE_XLOCALE_H -DHAVE_DLFCN_H -DHAVE_SYS_SHM_H -DHAVE_CET_H -DHAVE_POLL_H -DHAVE_FENV_H -DHAVE_STRTOF -DHAVE_MKOSTEMP -DHAVE_FLOCK -DHAVE_STRTOK_R -DHAVE_SYSCONF -DHAVE_SC_PHYS_PAGES -DHAVE_BSD_QSORT_R -DHAVE_STRUCT_TIMESPEC -DHAVE_POSIX_MEMALIGN -DHAVE_DIRENT_D_TYPE -DHAVE_STRTOD_L -DHAVE_DLADDR -DHAVE_PTHREAD -DDRAW_LLVM_AVAILABLE=0 -DAMD_LLVM_AVAILABLE=0 -DGALLIVM_USE_ORCJIT=0 -DTHREAD_SANITIZER=0 -DHAVE_DRI2 -DHAVE_RENDERDOC_INTEGRATION=0 -std=c11",
+    }),
+    toolchains = ["//third_party/mesa/bazel:bindgen_vars"],
+    tools = [
+        "//third_party/mesa/bazel:bindgen",
+        "//third_party/mesa/bazel:libclang",
+        "//third_party/mesa/bazel:rustfmt",
+        "@nvk_libclang//:lib/libclang.dylib",
+        "@nvk_rust//:bin/rustfmt",
+    ],
+)
+
+py_binary(
+    name = "lib_rs_gen",
+    srcs = [
+        "lib_rs_gen.py",
+        "util.py",
+    ],
+    imports = ["."],
+    main = "lib_rs_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "class_parser",
+    srcs = [
+        "class_parser.py",
+        "util.py",
+    ],
+    imports = ["."],
+    main = "class_parser.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "nv_push_class_dump_h",
+    srcs = [
+        "nv_push_class_dump_h.py",
+        "util.py",
+    ],
+    imports = ["."],
+    main = "nv_push_class_dump_h.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "struct_parser",
+    srcs = [
+        "struct_parser.py",
+        "util.py",
+    ],
+    imports = ["."],
+    main = "struct_parser.py",
+    deps = MESA_PY_DEPS,
+)
+
+# --- Rust ------------------------------------------------------------------------------------------------------------
+# meson.build's nv_classes, in its order (the order is the generated lib.rs's and nv_push_class_dump.h's).
+NV_CLASSES = [
+    "cl85b5",
+    "cl902d",
+    "cl9039",
+    "cl906f",
+    "cl9097",
+    "cl90b5",
+    "cl90c0",
+    "cl91c0",
+    "cl9297",
+    "cla040",
+    "cla0b5",
+    "cla06f",
+    "cla097",
+    "cla140",
+    "cla16f",
+    "cla1c0",
+    "cla197",
+    "cla26f",
+    "cla297",
+    "clb06f",
+    "clb097",
+    "clb0b5",
+    "clb0c0",
+    "clb197",
+    "clb1c0",
+    "clc06f",
+    "clc097",
+    "clc197",
+    "clc1b5",
+    "clc1c0",
+    "cla0c0",
+    "clc0b5",
+    "clc0c0",
+    "clc36f",
+    "clc397",
+    "clc3b5",
+    "clc3c0",
+    "clc46f",
+    "clc56f",
+    "clc597",
+    "clc5b0",
+    "clc5b5",
+    "clc5c0",
+    "clc697",
+    "clc6b5",
+    "clc6c0",
+    "clc797",
+    "clc7b0",
+    "clc7b5",
+    "clc7c0",
+    "clc86f",
+    "clc8b5",
+    "clc96f",
+    "clc997",
+    "clc9b0",
+    "clc9b5",
+    "clc9c0",
+    "clca6f",
+    "clcab5",
+    "clcb97",
+    "clcbc0",
+    "clcd97",
+    "clcdc0",
+    "clcec0",
+    "clce97",
+]
+
+nvidia_class_generators(
+    name = "nv_class_headers",
+    classes = NV_CLASSES,
+    # The hwref modules (bindgen, below), after the classes' as meson lists them.
+    extra_rs = [
+        "nvh_hwref_gm107_mmu.rs",
+        "nvh_hwref_gp100_mmu.rs",
+        "nvh_hwref_gh100_mmu.rs",
+        "nvh_hwref_tu102_mmu.rs",
+    ],
+    qmd_headers = glob(["nvidia/classes/*qmd.h"]),
+    sph_headers = glob(["nvidia/classes/*sph.h"]),
+)
+
+# nvidia_headers: every file of it is generated (lib.rs, the class and hwref modules).
+mesa_rust_library(
+    name = "nvidia_headers",
+    srcs = [":nvidia_headers_rs_srcs"],
+    crate_name = "nvidia_headers",
+    crate_root = "lib.rs",
+    metadata = "ce0a4d2@@nvidia_headers@rlib",
+)
+
+mesa_rust_library(
+    name = "nv_push_rs",
+    srcs = glob(["nv_push_rs/**/*.rs"]),
+    crate_name = "nv_push_rs",
+    crate_root = "nv_push_rs/lib.rs",
+    lints = RUST_GLOBAL_ARGS,
+    metadata = "ce0a4d2@@nv_push_rs@rlib",
+    deps = [":nvidia_headers"],
+)

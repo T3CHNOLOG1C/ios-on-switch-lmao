@@ -190,30 +190,6 @@ rust.toolchain(
     target_settings = ["//bazel/rust:toolchain_1.98.0"],
     versions = ["1.98.0"],
 )
-
-# Rust 1.96.1, NVK's (NAK and NIL as Mesa built them: gpu/nvk), for the targets that transition
-# //bazel/rust:toolchain_version to it. The dist archives are the ones @nvk_rust pins (one repository cache entry each).
-rust.repository_set(
-    name = "rust_1_96_1",
-    edition = "2021",
-    exec_triple = "aarch64-apple-darwin",
-    rustfmt_version = "1.96.1",
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
-    target_settings = ["//bazel/rust:toolchain_1.96.1"],
-    target_triple = "aarch64-apple-darwin",
-    versions = ["1.96.1"],
-)
-rust.repository_set(
-    name = "rust_1_96_1",
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:ios",
-    ],
-    target_triple = "aarch64-apple-ios",
-)
 use_repo(
     rust,
     "rust_macos_aarch64__aarch64-apple-darwin__stable_tools",
@@ -230,13 +206,12 @@ include("//bazel/rust:crates.MODULE.bazel")
 gpu = use_extension("//bazel/gpu:deps.bzl", "gpu")
 use_repo(gpu, "gpu_apple_libs", "gpu_device_data", "gpu_llvm_as")
 
-# --- NVK (gpu/nvk): Mesa by commit, built here with meson; its tools pinned (gpu/nvk/repos.bzl) ----------------------
-http_archive(
-    name = "nvk_ninja",
-    build_file_content = 'exports_files(["ninja"], visibility = ["//visibility:public"])',
-    sha256 = "c99048673aa765960a99cf10c6ddb9f1fad506099ff0a0e137ad8960a88f321b",
-    url = "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-mac.zip",
-)
+# --- NVK (gpu/nvk): Mesa vendored in third_party/mesa and built natively; the tools it runs, pinned ------------------
+mesa_tools = use_extension("//third_party/mesa/bazel:repos.bzl", "mesa_tools")
+use_repo(mesa_tools, "nvk_bindgen_src", "nvk_cbindgen_src", "nvk_libclang", "nvk_rust")
 
-nvk = use_extension("//gpu/nvk:repos.bzl", "nvk")
-use_repo(nvk, "mesa", "mesa_wraps", "nvk_bindgen_src", "nvk_cbindgen_src", "nvk_libclang", "nvk_rust")
+# Rust 1.96.1 (@nvk_rust, with rust-src in its sysroot) for //bazel/rust:toolchain_version = 1.96.1: NVK's Rust.
+register_toolchains(
+    "@nvk_rust//:rust-aarch64-apple-darwin",
+    "@nvk_rust//:rust-aarch64-apple-ios",
+)

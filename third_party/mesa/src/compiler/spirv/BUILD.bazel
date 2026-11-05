@@ -1,0 +1,162 @@
+# Mesa's src/compiler/spirv/meson.build, in Bazel: what NVK's build needs of it (third_party/mesa/bazel/defs.bzl).
+# Translated from the compile, archive and generator commands of the meson builds that reproduce main's NVK dylibs.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//third_party/mesa/bazel:defs.bzl", "MESA_LINT_EXCLUDE", "MESA_PY_DEPS", "mesa_args", "mesa_cc_library", "mesa_genrule")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(
+    dirs = [],
+    exclude = MESA_LINT_EXCLUDE,
+)
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every header of this package, its generated ones included: //third_party/mesa:headers gathers them.
+filegroup(
+    name = "headers",
+    srcs = glob(
+        ["**/*.h"],
+        allow_empty = True,
+    ) + [
+        "spirv_info.h",
+        "vtn_generator_ids.h",
+    ],
+)
+
+mesa_cc_library(
+    name = "vtn",
+    c_args = mesa_args(
+        "c",
+        extra = [
+            "-DXXH_FORCE_ALIGN_CHECK=0",
+            "-DXXH_FORCE_MEMORY_ACCESS=0",
+            "-Werror=pointer-arith",
+            "-Werror=vla",
+            "-Werror=gnu-empty-initializer",
+            "-Wgnu-pointer-arith",
+            "-Werror=date-time",
+            "-Werror=gnu-alignof-expression",
+            "-Werror=ignored-qualifiers",
+            "-Werror=implicit-fallthrough",
+            "-Werror=int-conversion",
+            "-Werror=missing-prototypes",
+            "-Werror=pragma-pack",
+            "-Werror=pragma-pack-suspicious-include",
+            "-Werror=sizeof-array-div",
+            "-Werror=string-plus-int",
+            "-Werror=unreachable-code-loop-increment",
+            "-Wno-override-init",
+            "-Wno-initializer-overrides",
+        ],
+        include_dirs = [
+            "gen:src/compiler/spirv",
+            "src/compiler/spirv",
+            "gen:include",
+            "include",
+            "gen:src",
+            "src",
+            "gen:src/compiler/nir",
+            "src/compiler/nir",
+            "gen:src/compiler",
+            "src/compiler",
+            "gen:src/util",
+            "gen:src/util/format",
+        ],
+    ),
+    sources = [
+        "spirv_info.c",
+        "vtn_gather_types.c",
+        "gl_spirv.c",
+        "spirv_to_nir.c",
+        "vtn_alu.c",
+        "vtn_amd.c",
+        "vtn_cfg.c",
+        "vtn_cmat.c",
+        "vtn_constants.c",
+        "vtn_debug.c",
+        "vtn_glsl450.c",
+        "vtn_opencl.c",
+        "vtn_structured_cfg.c",
+        "vtn_subgroup.c",
+        "vtn_variables.c",
+    ],
+)
+
+mesa_genrule(
+    name = "spirv_info_h",
+    srcs = [
+        "spirv.core.grammar.json",
+    ],
+    outs = [
+        "spirv_info.c",
+        "spirv_info.h",
+    ],
+    cmd = "$(execpath :spirv_info_gen) --json $(execpath spirv.core.grammar.json) --out-h $(execpath spirv_info.h) --out-c $(execpath spirv_info.c)",
+    tools = [
+        ":spirv_info_gen",
+    ],
+)
+
+mesa_genrule(
+    name = "vtn_gather_types_c_gen",
+    srcs = [
+        "spirv.core.grammar.json",
+    ],
+    outs = [
+        "vtn_gather_types.c",
+    ],
+    cmd = "$(execpath :vtn_gather_types_c) $(execpath spirv.core.grammar.json) $(execpath vtn_gather_types.c)",
+    tools = [
+        ":vtn_gather_types_c",
+    ],
+)
+
+mesa_genrule(
+    name = "vtn_generator_ids_h_gen",
+    srcs = [
+        "spir-v.xml",
+    ],
+    outs = [
+        "vtn_generator_ids.h",
+    ],
+    cmd = "$(execpath :vtn_generator_ids_h) $(execpath spir-v.xml) $(execpath vtn_generator_ids.h)",
+    tools = [
+        ":vtn_generator_ids_h",
+    ],
+)
+
+py_binary(
+    name = "spirv_info_gen",
+    srcs = [
+        "spirv_info_gen.py",
+    ],
+    imports = ["."],
+    main = "spirv_info_gen.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vtn_gather_types_c",
+    srcs = [
+        "vtn_gather_types_c.py",
+    ],
+    imports = ["."],
+    main = "vtn_gather_types_c.py",
+    deps = MESA_PY_DEPS,
+)
+
+py_binary(
+    name = "vtn_generator_ids_h",
+    srcs = [
+        "vtn_generator_ids_h.py",
+    ],
+    imports = ["."],
+    main = "vtn_generator_ids_h.py",
+    deps = MESA_PY_DEPS,
+)

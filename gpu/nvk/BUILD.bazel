@@ -1,80 +1,34 @@
-# NVK, the Vulkan driver //gpu:bundle ships (libvulkan_nouveau.dylib) and its macOS host twin (the seed and raw pack
-# compile shaders with it): Mesa 77452b90 + this directory's patch series, built by meson inside Bazel.
+# NVK, the Vulkan driver //gpu:bundle ships (libvulkan_nouveau.dylib), and its macOS host twin (the seed and the raw
+# pack compile shaders with it): Mesa vendored with ioswitch's commits on top (third_party/mesa, README.ioswitch.md),
+# built by Bazel action by action the way meson builds it (third_party/mesa/bazel).
 #
 #   bazel build //gpu/nvk:ios //gpu/nvk:host     bazel-bin/gpu/nvk/{ios,host}/libvulkan_nouveau.dylib (+ .source)
 #
-# Hermetic but for Xcode (clang, ld, the SDKs; the repository's one host input): Mesa by commit, Rust 1.96.1,
-# bindgen 0.73.2 and cbindgen 0.29.4 (built here), libclang 23.1.4, meson 1.12.1 + mako (rules_python), ninja 1.13.2,
-# the meson wrap crates. mesa_clc, vtn_bindgen2 and glslangValidator are not built: their outputs for this tree are
-# pinned (bazel/pinned/nvk, with every input they were generated from), see build_nvk.py.
-#
-# A new NVK revision: add its patch to PATCHES, set GIT_SHA1 (the version string's commit), build, and pin the new
-# dylib's sha256 in EXPECT (or leave it empty while iterating).
-load("@rules_python//python:py_binary.bzl", "py_binary")
+# An edit to one Mesa source recompiles that file and relinks the two dylibs; a generator's input reruns that
+# generator only. Toolchains: Xcode's clang (bazel/toolchains/apple) and Rust 1.96.1 (@nvk_rust); the profile
+# (//bazel:profile) picks meson's options: debug is the NVK main has always shipped (buildtype=release, b_ndebug,
+# no LTO), release adds full LTO.
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":defs.bzl", "cargo_tool", "nvk_dylib")
+load(":defs.bzl", "nvk_dylib")
 
 package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-# The series, in order (r10).
-PATCHES = [
-    "nvk-darwin.patch",
-    "nvk-0002-cmd-mem-written-range.patch",
-    "nvk-linear-color-attachments.patch",
-    "nvk-0003-linear-color-attachment-rule.patch",
-    "nvk-0004-sandbox-safe-darwin.patch",
-    "nvk-0005-join-copy-regions.patch",
-    # r10 (r8-webgpu): VK_EXT_host_image_copy on Tegra SoCs from Maxwell (getBytes without a GPU wait), copies through the
-    # client's mapping; a submission's CPU wait for a sync ends after 20 s with one line and abort() (r9-hang).
-    "nvk-0006-host-image-copy-tegra.patch",
-    "nvk-0007-bounded-submission-waits.patch",
-    # r15-gpuperf: no render-pass barriers NVK does not need. Mesa's render pass emulation made a subpass's dependency on
-    # itself a barrier at the subpass's start, and moved every GENERAL feedback loop (metal2vulkan's framebuffer fetch:
-    # each of Core Animation's passes) to ATTACHMENT_FEEDBACK_LOOP_OPTIMAL and back, a layout transition at each end, all
-    # on top of the barriers the program asked for. Host twin, one Core Animation frame of 23 passes (a blurred card over
-    # a 720x1280 layer tree): 32 WAIT_FOR_IDLE, 53 flushing INVALIDATE_SHADER_CACHES and 68 texture cache invalidates
-    # before, 15, 13 and 28 after.
-    "nvk-0008-render-pass-barriers.patch",
-]
-
-# r15 (r15-gpuperf): the series + nvk-0008-render-pass-barriers.patch, built here; GIT_SHA1 unchanged (the version string
-# still names r10's commit), so only the tree and the two dylibs' sha256 moved.
-#
-# r10: the version string's commit (the hand build's checkout HEAD, r8-webgpu's 02d6432d39) and the patched tree's git id
-# (its .source). Against the hand-built r10 dylib (out/agent-scratch/r8-webgpu/nvk-r10, the same tree 8d5d979b): `strip -S`
-# of both leaves 16911008 bytes that differ only in LC_UUID's 16, as r9's below.
-#
-# r9: the version string's commit (the hand build's checkout HEAD) and the patched tree's git id (its .source).
-#
-# Against the hand-built r9 dylib (sha256 276260dc…): every section and every symbol is identical.
-# `strip -S` of both leaves 15426480 bytes that differ only in LC_UUID. The difference is the linker's debug map: r9's
-# names the hand build's directory (/Users/…/out/agent-scratch/r8-webgpu/nvk-ios-build/…libnvk_rs.a), and ld derives
-# LC_UUID from it; this build writes it relative (-oso_prefix), so it is the same wherever the action runs. The host
-# twin matches the same way but for five imports: r9's twin was linked against Homebrew's SPIRV-Tools (found by
-# pkg-config; SPIR-V disassembly for debug output only), which a hermetic build does not have.
-GIT_SHA1 = "02d6432d39"
-
-EXPECT = {
-    "tree": "615cfd2ddf8c8970ee518f7930bad06c16dd1db8",
-    "ios": "720a54df27fc078f7979bc49aeccec387958b816aadc6ae25edbee259eee7d7f",
-    "macos": "8006acbaea071acd6ac20d9234169a49bbca39ec509d1a1bc2816fbf3cd5d127",
-}
-
-# Panic locations in the Rust standard library, as r9's rustup toolchain (with rust-src) spelled them.
-RUST_SRC_PREFIX = "/Users/brunostjohn/.rustup/toolchains/stable-aarch64-apple-darwin"
+# The .source files' mesa-tree line: the git tree of Mesa 77452b90 with the series third_party/mesa's commits carry, as
+# the meson build named its checkout. Both dylibs come from the one Bazel graph, so they always agree; the line
+# only has to be equal in the two (tools/gpu/nvk_twin.py, tools/gpu/seed.py check that).
+MESA_TREE = "615cfd2ddf8c8970ee518f7930bad06c16dd1db8"
 
 [nvk_dylib(
     name = name,
-    abi_header = "//drivers/TegraGM20B:TegraGM20BABI.h",
-    expect_sha256 = EXPECT.get(platform, ""),
-    expect_tree = EXPECT.get("tree", ""),
-    git_sha1 = GIT_SHA1,
-    patches = PATCHES,
+    dylib = "//third_party/mesa/src/nouveau/vulkan:vulkan_nouveau",
+    mesa_tree = MESA_TREE,
     platform = platform,
-    rust_src_prefix = RUST_SRC_PREFIX,
-) for name, platform in (("ios", "ios"), ("host", "macos"))]
+) for name, platform in (
+    ("ios", "ios"),
+    ("host", "macos"),
+)]
 
 [filegroup(
     name = "{}_{}".format(name, group),
@@ -92,32 +46,3 @@ RUST_SRC_PREFIX = "/Users/brunostjohn/.rustup/toolchains/stable-aarch64-apple-da
     ("twin", ":host_dylib"),
     ("twin_source", ":host_source"),
 )]
-
-exports_files(glob(["*.patch"]))
-
-py_binary(
-    name = "build_nvk",
-    srcs = ["build_nvk.py"],
-)
-
-# Relinks an NVK darwin dylib so the entrypoint tables' absent weak references are absolute symbols at 0 (build_nvk
-# runs it; `bazel run //gpu/nvk:relink -- <meson build dir> [<target>]` by hand).
-py_binary(
-    name = "relink",
-    srcs = ["relink-nvk.py"],
-    main = "relink-nvk.py",
-)
-
-cargo_tool(
-    name = "bindgen",
-    srcs = "@nvk_bindgen_src//:all",
-    bin = "bindgen",
-    manifest = "@nvk_bindgen_src//:src/Cargo.toml",
-)
-
-cargo_tool(
-    name = "cbindgen",
-    srcs = "@nvk_cbindgen_src//:all",
-    bin = "cbindgen",
-    manifest = "@nvk_cbindgen_src//:src/Cargo.toml",
-)
