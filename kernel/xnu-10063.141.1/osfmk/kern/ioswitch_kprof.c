@@ -29,6 +29,13 @@
  *   IOSwitch kprof masked: where the samples that land on ml_set_interrupts_enabled come from. A timer sample taken
  *       while interrupts are masked is delivered at the unmask, so these samples are masked time; three return
  *       addresses name the code that masked (the scheduler's context switch, a driver's spinlock, ...)
+ *   IOSwitch kprof waits (r14-launch): where processes waited rather than ran, the busiest by wait plus CPU: exact CPU
+ *       (recount, not samples), page-ins (count, KiB asked, ms the faulting threads waited; "cx" those from a cryptex,
+ *       the dyld shared cache), cached-read misses (count, ms waited; kernel_task's are DiskImages reading the cryptex
+ *       images), decmpfs page-ins, and "new +N ms" for a process started in the window (its age at the summary): the
+ *       launch decomposition is wall = CPU + these waits + the rest (IPC, locks, scheduling)
+ *   IOSwitch kprof image (r14-launch): the cryptex images' cached reads, those that missed, the 64 KiB windows read
+ *       ahead (vfs_cluster.c ioswitch_image_window) and the card reads issued for the images
  *   The first line also carries each CPU's interrupts, IPIs and synchronous exceptions (faults and traps) per second.
  * User trap sites: a process's first brk (os_crash, __builtin_trap, Swift traps) prints one console line with the trap
  * site as main+<offset> or dsc <unslid address>, so a crash that takes the boot down (launchd _PanicOnCrash) still names
@@ -108,7 +115,21 @@ struct kprof_task {
 	uint16_t kernel;
 	char     name[28];
 	bool     used;
+	bool     fresh;         /* merged table: the process started in this window (age_ms) */
+	/* r14-launch, ioswitch_kprof_wait: this window's waits (mach time) and counts */
+	uint32_t pageins, pagein_kib, image_pageins, reads, read_kib, decmpfs, decmpfs_kib;
+	uint64_t pagein_abs, image_abs, read_abs;
+	uint64_t cpu_abs;       /* merged table: exact user+system CPU this window (kprof_refresh_names) */
+	uint32_t age_ms;
 };
+
+/* r14-launch: each live process's lifetime CPU at the last summary, by unique id, for exact per-window CPU. */
+struct kprof_cpu_last {
+	uint64_t  uniqueid;     /* 0: empty */
+	uintptr_t task;         /* an exec in place keeps the proc's unique id but makes a new task */
+	uint64_t  cpu_abs;
+};
+#define KPROF_CPU_LAST    2048
 
 struct kprof_user {
 	uint64_t key;           /* KPROF_U_* | bucket; 0: empty */
@@ -165,6 +186,9 @@ static struct kprof_masked *kprof_masks;        /* merged window */
 static uintptr_t           kprof_unmask[2];     /* ml_set_interrupts_enabled(_with_debug) as function keys */
 static struct kprof_thread *kprof_threads[2];   /* kernel_task threads: this window, last window (sorted by tid) */
 static uint64_t           *kprof_vals;          /* top-N scratch, KPROF_USER entries */
+static struct kprof_cpu_last *kprof_cpu_last[2]; /* this summary, the last (r14-launch) */
+static unsigned int        kprof_cpu_last_cur;
+static bool                kprof_cpu_last_primed;
 static uint32_t            kprof_nthreads[2];
 static unsigned int        kprof_thread_cur;
 static uint64_t            kprof_last_summary;
@@ -499,6 +523,57 @@ ioswitch_kprof_running_setup(processor_t processor, uint64_t now)
 	running_timer_setup(processor, RUNNING_TIMER_IOSWITCH_KPROF, NULL, kc->deadline, now);
 }
 
+/*
+ * r14-launch: a wait (or a count) for the current process, into this CPU's active table like a sample (interrupts off,
+ * so the summary's cross-call cannot flip the table under it). Called by the vnode pager around a fault's page-in
+ * (kind 0, or 3 for a cryptex file: the dyld shared cache), by cluster_read_copy for a cached read that missed (1), and by
+ * decmpfs for a compressed page-in (2, bytes only). Never on an interrupt path; costs one table probe per page-in.
+ */
+void ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
+void
+ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes)
+{
+	task_t             task = current_task();
+	struct kprof_task *ts;
+	boolean_t          istate;
+	unsigned int       cpu;
+	uint32_t           kib = (uint32_t)MIN(bytes >> 10, UINT32_MAX);
+
+	if (!os_atomic_load(&kprof_ready, acquire) || task == TASK_NULL) {
+		return;
+	}
+	istate = ml_set_interrupts_enabled(FALSE);
+	cpu = (unsigned int)cpu_number();
+	if (cpu < kprof_ncpus && (ts = kprof_task_slot(kprof_cpus[cpu].buf[kprof_cpus[cpu].active]->task, 7,
+	    task_pid(task))) != NULL) {
+		if (ts->name[0] == '\0') {
+			task_best_name(task, ts->name, sizeof(ts->name));
+		}
+		switch (kind) {
+		case 0:
+		case 3:
+			ts->pageins++;
+			ts->pagein_kib += kib;
+			ts->pagein_abs += elapsed;
+			if (kind == 3) {
+				ts->image_pageins++;
+				ts->image_abs += elapsed;
+			}
+			break;
+		case 1:
+			ts->reads++;
+			ts->read_kib += kib;
+			ts->read_abs += elapsed;
+			break;
+		default:
+			ts->decmpfs++;
+			ts->decmpfs_kib += kib;
+			break;
+		}
+	}
+	ml_set_interrupts_enabled(istate);
+}
+
 /* sleh.c handle_breakpoint, EL0: one console line for a process's first trap (os_crash and friends end in brk). */
 void ioswitch_kprof_user_trap(arm_saved_state_t *state, uint32_t esr);
 void
@@ -831,20 +906,23 @@ kprof_kernel_task_threads(uint64_t window)
 	kprof_thread_cur ^= 1;
 }
 
-/* bsd/kern/decmpfs.c: compressed page-ins of chunked files, their bytes and the 64 KiB chunks those bytes touched. */
+/* bsd/kern/decmpfs.c: compressed page-ins of chunked files, their bytes and the 64 KiB chunks those bytes touched;
+ * osfmk/vm/vm_object.c: the page-ins grown to whole chunks and the pages that added (r14-launch). */
 extern uint64_t ioswitch_decmpfs_pageins, ioswitch_decmpfs_small, ioswitch_decmpfs_bytes, ioswitch_decmpfs_chunk_bytes;
+extern uint64_t ioswitch_decmpfs_aligned, ioswitch_decmpfs_aligned_pages;
 
 static void
 kprof_decmpfs_line(void)
 {
-	static uint64_t last[4];
-	uint64_t        now[4] = {
+	static uint64_t last[6];
+	uint64_t        now[6] = {
 		os_atomic_load(&ioswitch_decmpfs_pageins, relaxed), os_atomic_load(&ioswitch_decmpfs_small, relaxed),
 		os_atomic_load(&ioswitch_decmpfs_bytes, relaxed), os_atomic_load(&ioswitch_decmpfs_chunk_bytes, relaxed),
+		os_atomic_load(&ioswitch_decmpfs_aligned, relaxed), os_atomic_load(&ioswitch_decmpfs_aligned_pages, relaxed),
 	};
-	uint64_t        d[4];
+	uint64_t        d[6];
 
-	for (unsigned int i = 0; i < 4; i++) {
+	for (unsigned int i = 0; i < 6; i++) {
 		d[i] = now[i] - last[i];
 		last[i] = now[i];
 	}
@@ -852,8 +930,8 @@ kprof_decmpfs_line(void)
 		return;
 	}
 	kprof_put("IOSwitch kprof decmpfs: %llu chunked page-ins (%llu of one page), %llu KiB paged in from %llu KiB of "
-	    "64 KiB chunks (%llu.%llux)", d[0], d[1], d[2] >> 10, d[3] >> 10, d[3] / MAX(d[2], 1),
-	    d[3] * 10 / MAX(d[2], 1) % 10);
+	    "64 KiB chunks (%llu.%llux); %llu grown to whole chunks (+%llu KiB)", d[0], d[1], d[2] >> 10, d[3] >> 10,
+	    d[3] / MAX(d[2], 1), d[3] * 10 / MAX(d[2], 1) % 10, d[4], d[5] * (PAGE_SIZE >> 10));
 	kprof_flush();
 }
 
@@ -901,24 +979,148 @@ kprof_user_hot_spots(void)
  * A process keeps the name it had at its first sample of the window, and a spawn's first sample is often still
  * xpcproxy (it execs the daemon in place): once per summary, every process still alive gets its current name.
  */
+extern void proc_starttime_kdp(void *p, uint64_t *tv_sec, uint64_t *tv_usec, uint64_t *abstime);
+
+static struct kprof_cpu_last *
+kprof_cpu_last_slot(struct kprof_cpu_last *table, uint64_t uniqueid, task_t task, bool insert)
+{
+	uint32_t i = kprof_hash(uniqueid, 11);
+
+	for (unsigned int probe = 0; probe < KPROF_PROBES; probe++, i = (i + 1) & (KPROF_CPU_LAST - 1)) {
+		if (table[i].uniqueid == uniqueid && table[i].task == (uintptr_t)task) {
+			return &table[i];
+		}
+		if (table[i].uniqueid == 0) {
+			if (!insert) {
+				return NULL;
+			}
+			table[i].uniqueid = uniqueid;
+			table[i].task = (uintptr_t)task;
+			return &table[i];
+		}
+	}
+	return NULL;
+}
+
+/*
+ * r14-launch: also each process's exact CPU in this window (its recount lifetime user+system against the last
+ * summary's; a process started since then counts its whole life and is marked fresh, with its age).
+ */
 static void
 kprof_refresh_names(void)
 {
-	task_t task;
+	struct kprof_cpu_last *cur = kprof_cpu_last[kprof_cpu_last_cur ^ 1];
+	struct kprof_cpu_last *prev = kprof_cpu_last[kprof_cpu_last_cur];
+	clock_sec_t            now_s;
+	clock_usec_t           now_us;
+	task_t                 task;
 
+	bzero(cur, KPROF_CPU_LAST * sizeof(cur[0]));
+	clock_get_calendar_microtime(&now_s, &now_us);
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_iterate(&tasks, task, task_t, tasks) {
-		const int32_t pid = task_pid(task);
-		uint32_t      i = kprof_hash((uint64_t)(uint32_t)pid + 1, 8);
+		const int32_t                    pid = task_pid(task);
+		const uint64_t                   id = get_task_uniqueid(task);
+		/* a task without a proc (UINT64_MAX) or kernel_task (0): keyed by pid instead, never 0 (the empty key) */
+		const uint64_t                   uniqueid = (id == 0 || id == UINT64_MAX) ? (1ull << 63) | (uint32_t)pid : id;
+		const struct recount_times_mach  times = recount_task_times(task);
+		const uint64_t                   cpu = times.rtm_user + times.rtm_system;
+		const struct kprof_cpu_last     *was = kprof_cpu_last_slot(prev, uniqueid, task, false);
+		struct kprof_cpu_last           *is = kprof_cpu_last_slot(cur, uniqueid, task, true);
+		struct kprof_task               *t = NULL;
+		uint32_t                         i = kprof_hash((uint64_t)(uint32_t)pid + 1, 8);
 
+		if (is != NULL) {
+			is->cpu_abs = cpu;
+		}
 		for (unsigned int probe = 0; probe < KPROF_PROBES && kprof_tasks[i].used; probe++, i = (i + 1) & 255) {
 			if (kprof_tasks[i].pid == pid) {
-				task_best_name(task, kprof_tasks[i].name, sizeof(kprof_tasks[i].name));
+				t = &kprof_tasks[i];
+				task_best_name(task, t->name, sizeof(t->name));
 				break;
+			}
+		}
+		if (t == NULL) {
+			continue;
+		}
+		t->cpu_abs = was == NULL ? cpu : cpu - MIN(cpu, was->cpu_abs);
+		if (was == NULL && kprof_cpu_last_primed && !(uniqueid >> 63)) {
+			void    *p = get_bsdtask_info(task);
+			uint64_t sec = 0, usec = 0;
+
+			t->fresh = true;
+			if (p != NULL) {
+				proc_starttime_kdp(p, &sec, &usec, NULL);
+			}
+			if (sec != 0 && ((uint64_t)now_s > sec || ((uint64_t)now_s == sec && (uint64_t)now_us >= usec))) {
+				t->age_ms = (uint32_t)MIN(((uint64_t)now_s - sec) * 1000 + (uint64_t)now_us / 1000 - usec / 1000,
+				    UINT32_MAX);
 			}
 		}
 	}
 	lck_mtx_unlock(&tasks_threads_lock);
+	kprof_cpu_last_cur ^= 1;
+	kprof_cpu_last_primed = true;
+}
+
+static uint64_t
+kprof_abs_ms(uint64_t abs)
+{
+	uint64_t ns;
+
+	absolutetime_to_nanoseconds(abs, &ns);
+	return ns / NSEC_PER_MSEC;
+}
+
+/* r14-launch: the processes that waited most (page-ins, cached-read misses) this window, with their exact CPU. */
+static void
+kprof_waits_line(void)
+{
+	unsigned int top[8], ntop, lines;
+
+	for (unsigned int i = 0; i < KPROF_TASKS; i++) {
+		kprof_vals[i] = kprof_tasks[i].used ? kprof_tasks[i].pagein_abs + kprof_tasks[i].read_abs : 0;
+	}
+	ntop = kprof_top(kprof_vals, KPROF_TASKS, top, 8);
+	lines = (ntop + 3) / 4;   /* four processes per line: each line stays under KPROF_LINE */
+	for (unsigned int line = 0; line < lines; line++) {
+		kprof_put("IOSwitch kprof waits %u/%u (cpu ms; page-ins n/KiB/ms, cx: of them from a cryptex n/ms; read misses "
+		    "n/ms; decmpfs page-ins):", line + 1, lines);
+		for (unsigned int i = line * 4; i < MIN(ntop, (line + 1) * 4); i++) {
+			const struct kprof_task *t = &kprof_tasks[top[i]];
+
+			kprof_put(" %s[%d] cpu %llu, pin %u/%u/%llu cx %u/%llu, rd %u/%llu, dz %u", t->name, t->pid,
+			    kprof_abs_ms(t->cpu_abs), t->pageins, t->pagein_kib, kprof_abs_ms(t->pagein_abs), t->image_pageins,
+			    kprof_abs_ms(t->image_abs), t->reads, kprof_abs_ms(t->read_abs), t->decmpfs);
+			if (t->fresh) {
+				kprof_put(", new +%u ms", t->age_ms);
+			}
+			kprof_put(";");
+		}
+		kprof_flush();
+	}
+}
+
+/* r14-launch: the cryptex images' reads this window (vfs_cluster.c ioswitch_image_window). */
+extern void ioswitch_cluster_image_stats(uint64_t stats[6]);
+
+static void
+kprof_image_line(void)
+{
+	static uint64_t last[6];
+	uint64_t        now[6], d[6];
+
+	ioswitch_cluster_image_stats(now);
+	for (unsigned int i = 0; i < 6; i++) {
+		d[i] = now[i] - last[i];
+		last[i] = now[i];
+	}
+	if (d[0] == 0 && d[4] == 0) {
+		return;
+	}
+	kprof_put("IOSwitch kprof image: %llu cached reads, %llu missed, %llu windows read ahead (%llu KiB), "
+	    "%llu card reads (%llu KiB)", d[0], d[1], d[2], d[3] >> 10, d[4], d[5] >> 10);
+	kprof_flush();
 }
 
 /* The same processes' user samples by 1 MiB region, one line each: which images (SwiftUI, CoreText, libobjc...) a flat
@@ -1052,6 +1254,16 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 			}
 			dst->user += src->user;
 			dst->kernel += src->kernel;
+			dst->pageins += src->pageins;
+			dst->pagein_kib += src->pagein_kib;
+			dst->image_pageins += src->image_pageins;
+			dst->reads += src->reads;
+			dst->read_kib += src->read_kib;
+			dst->decmpfs += src->decmpfs;
+			dst->decmpfs_kib += src->decmpfs_kib;
+			dst->pagein_abs += src->pagein_abs;
+			dst->image_abs += src->image_abs;
+			dst->read_abs += src->read_abs;
 			if (dst->name[0] == '\0') {
 				strlcpy(dst->name, src->name, sizeof(dst->name));
 			}
@@ -1112,10 +1324,13 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 		kprof_vals[i] = kprof_tasks[i].used ? (uint64_t)kprof_tasks[i].user + kprof_tasks[i].kernel : 0;
 	}
 	ntop = kprof_top(kprof_vals, KPROF_TASKS, top, KPROF_TOP_TASKS);
-	kprof_put("IOSwitch kprof tasks (user+kernel samples):");
+	kprof_put("IOSwitch kprof tasks (user+kernel samples=exact CPU):");
 	for (unsigned int i = 0; i < ntop; i++) {
 		const struct kprof_task *t = &kprof_tasks[top[i]];
-		kprof_put("%s %s[%d] %u+%u", i ? "," : "", t->name, t->pid, t->user, t->kernel);
+		kprof_put("%s %s[%d] %u+%u=%llums", i ? "," : "", t->name, t->pid, t->user, t->kernel, kprof_abs_ms(t->cpu_abs));
+		if (t->fresh) {
+			kprof_put(" new +%ums", t->age_ms);
+		}
 	}
 	kprof_flush();
 
@@ -1155,6 +1370,8 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	}
 
 	kprof_decmpfs_line();
+	kprof_waits_line();
+	kprof_image_line();
 	kprof_kernel_task_threads(window);
 	kprof_user_hot_spots();
 	kprof_user_images();
@@ -1261,8 +1478,10 @@ kprof_init(void)
 	kprof_threads[1] = kalloc_data(KPROF_THREADS * sizeof(struct kprof_thread), Z_WAITOK | Z_ZERO);
 	kprof_vals = kalloc_data(KPROF_USER * sizeof(uint64_t), Z_WAITOK | Z_ZERO);
 	kprof_masks = kalloc_data(KPROF_MASKED * sizeof(kprof_masks[0]), Z_WAITOK | Z_ZERO);
-	if (!tables || kprof_fns == NULL || kprof_tasks == NULL || kprof_users == NULL || kprof_images == NULL ||
-	    kprof_threads[0] == NULL ||
+	kprof_cpu_last[0] = kalloc_data(KPROF_CPU_LAST * sizeof(struct kprof_cpu_last), Z_WAITOK | Z_ZERO);
+	kprof_cpu_last[1] = kalloc_data(KPROF_CPU_LAST * sizeof(struct kprof_cpu_last), Z_WAITOK | Z_ZERO);
+	if (!tables || kprof_cpu_last[0] == NULL || kprof_cpu_last[1] == NULL || kprof_fns == NULL || kprof_tasks == NULL ||
+	    kprof_users == NULL || kprof_images == NULL || kprof_threads[0] == NULL ||
 	    kprof_threads[1] == NULL || kprof_vals == NULL || kprof_masks == NULL) {
 		os_log(OS_LOG_DEFAULT, "IOSwitch kprof: off (a sample table could not be allocated)");
 		return;

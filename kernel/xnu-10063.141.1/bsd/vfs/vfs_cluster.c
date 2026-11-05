@@ -203,6 +203,13 @@ static inline bool ioswitch_cluster_verified_mount(mount_t mp);
 static thread_t ioswitch_prefetch_thread;
 static vnode_t ioswitch_prefetch_vp;
 static uint64_t ioswitch_image_reads, ioswitch_image_ios;
+/* IOSwitch (r14-launch): the cryptex images' reads (ioswitch_image_window), for the kprof image line:
+ * cached-read calls, those that missed, windows read ahead and their bytes, card reads issued for an image and bytes. */
+static uint64_t ioswitch_image_stat[6];
+static void ioswitch_image_window(vnode_t vp, off_t offset, u_int32_t size, off_t filesize,
+    int (*callback)(buf_t, void *), void *callback_arg, int bflag);
+/* osfmk/kern/ioswitch_kprof.c */
+extern void ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
 static inline bool
 ioswitch_prefetch_foreground(vnode_t vp)
 {
@@ -1285,6 +1292,11 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 	/* IOSwitch boot prefetch: the foreground's reads of the System image that still go to the card. */
 	if ((flags & CL_READ) && ioswitch_prefetch_foreground(vp)) {
 		os_atomic_inc(&ioswitch_image_ios, relaxed);
+	}
+	/* r14-launch: every card read of a cryptex image (demand, window, boot prefetch), for the kprof image line. */
+	if ((flags & CL_READ) && ioswitch_cluster_is_image(vp)) {
+		os_atomic_inc(&ioswitch_image_stat[4], relaxed);
+		os_atomic_add(&ioswitch_image_stat[5], (uint64_t)non_rounded_size, relaxed);
 	}
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 22)) | DBG_FUNC_START, (int)f_offset, size, upl_offset, flags, 0);
@@ -4125,6 +4137,53 @@ ioswitch_cluster_record(vnode_t vp, struct uio *uio)
 	}
 }
 
+/*
+ * IOSwitch (r14-launch): read-ahead for the cryptex images' small reads. The cryptex APFS (on a DiskImages device, so
+ * without cluster-layer verification) pages the dyld shared cache in one 4 KiB block at a time, and DiskImages reads each
+ * block from the image file here: one page, which cluster_read_copy never reads ahead for, so each was one 4 KiB card
+ * command (~0.5 ms, 68 % of the card's commands after boot). Those blocks are dense: in the 11-04 boot census 89 % of
+ * every 64 KiB window of the System image that was read at all was read (81 % of 128 KiB). So a small read of an image
+ * that misses first queues an asynchronous read of the absent pages of its aligned 64 KiB window (advisory_read_ext,
+ * one card command when the window is all absent); the demand read then waits for its page with the rest (the UPL
+ * waits on the busy page) instead of issuing its own. A 64 KiB command costs ~1.25 ms against ~0.5 ms for 4 KiB, so it
+ * pays from the third block of the window used. Read-ahead pages go to the speculative queue like any read-ahead and are
+ * the first reclaimed if unused. Not when this thread's I/O is being throttled (as cluster_read_copy's own prefetch).
+ */
+#define IOSWITCH_IMAGE_WINDOW (64 * 1024)
+#ifndef IOSWITCH_IMAGE_READ_AHEAD
+#define IOSWITCH_IMAGE_READ_AHEAD 1     /* 0: no window (an A/B build); the counters stay */
+#endif
+
+static void
+ioswitch_image_window(vnode_t vp, off_t offset, u_int32_t size, off_t filesize, int (*callback)(buf_t, void *),
+    void *callback_arg, int bflag)
+{
+	off_t start, end;
+
+	if (!IOSWITCH_IMAGE_READ_AHEAD || size == 0 || size > IOSWITCH_IMAGE_WINDOW / 2 || offset < 0 ||
+	    offset >= filesize || cluster_is_throttled(vp)) {
+		return;
+	}
+	start = offset & ~(off_t)(IOSWITCH_IMAGE_WINDOW - 1);
+	end = (offset + (off_t)size + IOSWITCH_IMAGE_WINDOW - 1) & ~(off_t)(IOSWITCH_IMAGE_WINDOW - 1);
+	if (end > filesize) {
+		end = filesize;
+	}
+	os_atomic_inc(&ioswitch_image_stat[2], relaxed);
+	os_atomic_add(&ioswitch_image_stat[3], (uint64_t)(end - start), relaxed);
+	(void)cluster_read_prefetch(vp, start, (u_int)(end - start), filesize, callback, callback_arg, bflag);
+}
+
+/* The image counters since boot (ioswitch_image_stat), for the kprof image line. */
+void ioswitch_cluster_image_stats(uint64_t stats[6]);
+void
+ioswitch_cluster_image_stats(uint64_t stats[6])
+{
+	for (unsigned i = 0; i < 6; i++) {
+		stats[i] = os_atomic_load(&ioswitch_image_stat[i], relaxed);
+	}
+}
+
 int
 cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*callback)(buf_t, void *), void *callback_arg)
 {
@@ -4254,6 +4313,9 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 	int              take_reference = 1;
 	int              policy = IOPOL_DEFAULT;
 	boolean_t        iolock_inited = FALSE;
+	const bool       ioswitch_image = !(flags & IO_NOCACHE) && ioswitch_cluster_is_image(vp);
+	uint64_t         ioswitch_miss_began = 0;
+	uint64_t         ioswitch_miss_bytes = 0;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 32)) | DBG_FUNC_START,
 	    (int)uio->uio_offset, io_req_size, (int)filesize, flags, 0);
@@ -4263,6 +4325,9 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 	}
 
 	policy = throttle_get_io_policy(NULL);
+	if (ioswitch_image) {
+		os_atomic_inc(&ioswitch_image_stat[0], relaxed);
+	}
 
 	/*
 	 * IOSwitch (r8-sdboot): the cryptex images' cached pages take a reference like any foreground read, whatever tier
@@ -4459,6 +4524,18 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 					break;
 				}
 			}
+		}
+
+		/*
+		 * IOSwitch (r14-launch): this request missed the cache from here on. The wait from here to the end of this round
+		 * (the UPL waiting for busy pages, the I/O) is this thread's read wait (kprof waits line); a small read of a
+		 * cryptex image first reads its 64 KiB window ahead (ioswitch_image_window).
+		 */
+		ioswitch_miss_began = mach_absolute_time();
+		ioswitch_miss_bytes = io_size;
+		if (ioswitch_image) {
+			os_atomic_inc(&ioswitch_image_stat[1], relaxed);
+			ioswitch_image_window(vp, uio->uio_offset, io_size, filesize, callback, callback_arg, bflag);
 		}
 
 		/*
@@ -4765,6 +4842,10 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 		}
 		if (retval == 0) {
 			retval = error;
+		}
+		if (ioswitch_miss_began) {
+			ioswitch_kprof_wait(1 /* read wait */, mach_absolute_time() - ioswitch_miss_began, ioswitch_miss_bytes);
+			ioswitch_miss_began = 0;
 		}
 
 		if (io_req_size) {

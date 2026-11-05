@@ -210,6 +210,7 @@ struct ubc_info {
 #define UI_MAPPEDWRITE    0x00000080    /* it's mapped with PROT_WRITE */
 #define UI_CSBLOBINVALID  0x00000100    /* existing csblobs are invalid */
 #define UI_WASMAPPEDWRITE 0x00000200    /* was mapped writable at some point */
+#define UI_IOSWITCH_CHUNKED 0x00000400  /* IOSwitch: decmpfs-compressed in 64 KiB chunks (decmpfs.c sets it) */
 
 /*
  * exported primitives for loadable file systems.

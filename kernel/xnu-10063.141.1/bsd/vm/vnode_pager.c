@@ -77,6 +77,7 @@
 
 #include <sys/kdebug_triage.h>
 #include <vfs/vfs_disk_conditioner.h>
+#include <os/atomic_private.h>
 
 void
 vnode_pager_throttle(void)
@@ -90,6 +91,31 @@ boolean_t
 vnode_pager_isSSD(vnode_t vp)
 {
 	return disk_conditioner_mount_is_ssd(vp->v_mount);
+}
+
+/* IOSwitch (r14-launch): the file is on a disk image's volume (here: the System/App cryptex), for the kprof waits line. */
+boolean_t
+vnode_pager_virtualdev(vnode_t vp)
+{
+	return vp->v_mount != NULL && (vp->v_mount->mnt_kern_flag & MNTK_VIRTUALDEV) != 0;
+}
+
+/*
+ * IOSwitch (r14-launch): the chunk a page-in of this file should cover whole, or 0. decmpfs_pagein_compressed marks a
+ * file compressed in 64 KiB chunks (the resource-fork types) at its first compressed page-in, and vm_object_cluster_size
+ * then grows each later page-in of it to the chunks it touches: the decompressor decodes whole chunks whatever the
+ * page-in asks for, so the rest of each chunk is decoded anyway and was thrown away (the kprof decmpfs line: 2.5-3.6x).
+ * Read without the vnode lock: a stale answer only costs one unaligned page-in.
+ */
+uint32_t
+vnode_pager_decmpfs_chunk(vnode_t vp)
+{
+	struct ubc_info *uip = vp->v_ubcinfo;
+
+	if (!UBCINFOEXISTS(vp) || uip == NULL) {
+		return 0;
+	}
+	return (os_atomic_load(&uip->ui_flags, relaxed) & UI_IOSWITCH_CHUNKED) ? 64 * 1024 : 0;
 }
 
 #if FBDP_DEBUG_OBJECT_NO_PAGER

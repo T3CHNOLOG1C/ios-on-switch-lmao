@@ -313,6 +313,13 @@ extern uint32_t vnode_pager_isinuse(
 	struct vnode *);
 extern boolean_t vnode_pager_isSSD(
 	struct vnode *);
+extern uint32_t vnode_pager_decmpfs_chunk(
+	struct vnode *);
+extern boolean_t vnode_pager_virtualdev(
+	struct vnode *);
+/* osfmk/kern/ioswitch_kprof.c: a wait (or count) for the current process, kprof waits line. kind: 0 page-in, 1 read
+ * I/O wait, 2 decmpfs page-in (count and bytes only), 3 page-in from a disk image's volume (the cryptexes). */
+extern void ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
 #if FBDP_DEBUG_OBJECT_NO_PAGER
 extern bool vnode_pager_forced_unmount(
 	struct vnode *);
@@ -384,6 +391,8 @@ extern kern_return_t vnode_pager_get_isinuse(
 extern kern_return_t vnode_pager_get_isSSD(
 	memory_object_t,
 	boolean_t *);
+extern uint32_t vnode_pager_get_decmpfs_chunk(
+	memory_object_t);
 #if FBDP_DEBUG_OBJECT_NO_PAGER
 extern kern_return_t vnode_pager_get_forced_unmount(
 	memory_object_t,

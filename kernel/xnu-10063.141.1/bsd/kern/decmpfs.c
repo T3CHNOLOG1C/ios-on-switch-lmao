@@ -67,6 +67,7 @@ UNUSED_SYMBOL(decmpfs_validate_compressed_file)
 #include <sys/user.h>
 #include <sys/mount_internal.h>
 #include <sys/ubc.h>
+#include <sys/ubc_internal.h>
 #include <sys/decmpfs.h>
 #include <sys/uio_internal.h>
 #include <libkern/OSByteOrder.h>
@@ -1282,14 +1283,26 @@ commit_upl(upl_t upl, upl_offset_t pl_offset, size_t uplSize, int flags, int abo
  */
 extern uint64_t ioswitch_decmpfs_pageins, ioswitch_decmpfs_small, ioswitch_decmpfs_bytes, ioswitch_decmpfs_chunk_bytes;
 uint64_t ioswitch_decmpfs_pageins, ioswitch_decmpfs_small, ioswitch_decmpfs_bytes, ioswitch_decmpfs_chunk_bytes;
+/* osfmk/kern/ioswitch_kprof.c */
+extern void ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
 static void
-ioswitch_decmpfs_count_pagein(uint32_t type, off_t offset, user_ssize_t size)
+ioswitch_decmpfs_count_pagein(vnode_t vp, uint32_t type, off_t offset, user_ssize_t size)
 {
 	const uint64_t chunk = 64 * 1024;
+	struct ubc_info *uip;
 
 	if (size <= 0 || (type & 1) != 0) {
 		return;
 	}
+	/* r14-launch: mark the file so its later page-ins cover whole chunks (vm_object_cluster_size) */
+	if (UBCINFOEXISTS(vp) && (uip = vp->v_ubcinfo) != NULL && !(uip->ui_flags & UI_IOSWITCH_CHUNKED)) {
+		vnode_lock_spin(vp);
+		if (UBCINFOEXISTS(vp)) {
+			SET(vp->v_ubcinfo->ui_flags, UI_IOSWITCH_CHUNKED);
+		}
+		vnode_unlock(vp);
+	}
+	ioswitch_kprof_wait(2 /* decmpfs page-in, this process */, 0, (uint64_t)size);
 	os_atomic_inc(&ioswitch_decmpfs_pageins, relaxed);
 	if (size <= (user_ssize_t)PAGE_SIZE) {
 		os_atomic_inc(&ioswitch_decmpfs_small, relaxed);
@@ -1460,7 +1473,7 @@ decompress:
 	} else {
 		if (verify_block_size <= PAGE_SIZE) {
 			err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, uplPos, uplSize, 1, &vec, &did_read);
-			ioswitch_decmpfs_count_pagein(hdr->compression_type, uplPos, uplSize);
+			ioswitch_decmpfs_count_pagein(vp, hdr->compression_type, uplPos, uplSize);
 			/* zero out whatever wasn't read */
 			if (did_read < rounded_uplSize) {
 				memset((char*)vec.buf + did_read, 0, (size_t)(rounded_uplSize - did_read));
