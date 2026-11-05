@@ -20,7 +20,7 @@
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSSymbol.h>
 #include "TegraGPIO.h"
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -206,7 +206,7 @@ bool TegraGPIO::start(IOService *provider)
     loop = IOWorkLoop::workLoop();
     if (!loop) return false;
     for (unsigned b = 0; b < kBanks; ++b) {
-        IOService *nub = ioswitch_interrupt_nub(32 + kBankSpi[b], false);  // sleeps until the GIC is up
+        IOService *nub = switch_interrupt_nub(32 + kBankSpi[b], false);  // sleeps until the GIC is up
         banks[b] = IOFilterInterruptEventSource::filterInterruptEventSource(this, &TegraGPIO::unused,
                                                                             &TegraGPIO::bankInterrupt, nub, 0);
         if (!banks[b] || loop->addEventSource(banks[b]) != kIOReturnSuccess) {
@@ -476,7 +476,7 @@ void TegraGPIO::describe(unsigned pin, char *buffer, size_t size) const
 {
     char gic[160];
     const uint32_t bit = pinBit(pin);
-    ioswitch_interrupt_describe(32 + kBankSpi[pin >> 5], gic, sizeof(gic));
+    switch_interrupt_describe(32 + kBankSpi[pin >> 5], gic, sizeof(gic));
     snprintf(buffer, size, "GPIO %u: cnf %u oe %u in %u int_enb %u int_sta %u int_lvl %#x trigger %u, bank %u: %s", pin,
              !!(rd(portReg(pin, CNF)) & bit), !!(rd(portReg(pin, OE)) & bit), !!(rd(portReg(pin, IN)) & bit),
              !!(rd(portReg(pin, INT_ENB)) & bit), !!(rd(portReg(pin, INT_STA)) & bit),

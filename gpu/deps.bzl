@@ -6,8 +6,8 @@
                OS image only for a file the cache lacks: once per machine.
 @gpu_device_data  what only the Switch makes (precompile/harvest.py --pack): the driver records m2v wrote and the Metal
                libraries Core Image compiled there, one tar pinned by sha256 (DEVICE_DATA), fetched into the repository
-               cache once from ~/Library/Application Support/ioswitch/gpu-device-data/ (or
-               $IOSWITCH_HOME/gpu-device-data/), where harvest.py --pack writes it; never from a checkout.
+               cache once from ~/Library/Application Support/switch-ios/gpu-device-data/ (or
+               $SWITCH_HOME/gpu-device-data/), where harvest.py --pack writes it; never from a checkout.
 @gpu_llvm_as   bin/llvm-as of the LLVM 23.1.4 release.
 """
 
@@ -78,7 +78,7 @@ llvm_tools = repository_rule(
 # only their sha256 is checked in.
 
 # A URL nothing serves: a download of it succeeds only from the repository cache, by its sha256.
-_CACHE_ONLY = "file:///ioswitch/repository-cache-only/"
+_CACHE_ONLY = "file:///switch-ios/repository-cache-only/"
 
 _HDIUTIL = "/usr/bin/hdiutil"
 
@@ -147,8 +147,8 @@ apple_libraries = repository_rule(
 # --- @gpu_device_data ----------------------------------------------------------------------------------------------
 
 def state_dir(rctx):
-    """Where the tools keep what is not the repository's: ~/Library/Application Support/ioswitch, or $IOSWITCH_HOME."""
-    return rctx.getenv("IOSWITCH_HOME") or rctx.getenv("HOME", "") + "/Library/Application Support/ioswitch"
+    """Where the tools keep what is not the repository's: ~/Library/Application Support/switch-ios, or $SWITCH_HOME."""
+    return rctx.getenv("SWITCH_HOME") or rctx.getenv("HOME", "") + "/Library/Application Support/switch-ios"
 
 def _device_data_impl(rctx):
     if DEVICE_DATA:

@@ -10,7 +10,7 @@
 // - the target translation: strides, plane extents (padded and clipped), formats, the JFIF matrix against the float
 //   formula;
 // - mutation fuzzing of the parser under ASan/UBSan;
-// - the boot self-test's vectors (selftest/J3Vectors.inc): the committed JPEGs parse, and their reference planes are
+// - the boot self-test's vectors (selftest/J3Vectors.h): the committed JPEGs parse, and their reference planes are
 //   libjpeg-turbo's decode of those bytes (integer IDCT, raw YCbCr), byte for byte. `--write FILE` regenerates them.
 // Without libjpeg-turbo (no HAVE_LIBJPEG) only the checks that need no encoder run.
 #include <math.h>
@@ -20,7 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../TegraNVJPGJpeg.h"
-#include "../selftest/J3Vectors.inc"
+#include "../selftest/J3Vectors.h"
 #ifdef HAVE_LIBJPEG
 #include <jpeglib.h>
 #define STR2(x)                      #x
@@ -739,7 +739,7 @@ static void vectors(void)
     }
 #endif
 #else
-    fail("selftest/J3Vectors.inc holds no vectors (run nvjpg_host --write)");
+    fail("selftest/J3Vectors.h holds no vectors (run nvjpg_host --write)");
 #endif
 }
 

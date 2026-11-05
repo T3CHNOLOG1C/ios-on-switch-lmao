@@ -1384,14 +1384,14 @@ task_sfi_reevaluate_cb(coalition_t coal, void *ctx, task_t task)
 #endif /* CONFIG_SCHED_SFI */
 
 /*
- * IOSwitch boot band (ioswitch_boot_band.c): the CPU half of DARWIN_BG for a whole task, through the suppression policy's
+ * SwitchBootBand (switch_boot_band.c): the CPU half of DARWIN_BG for a whole task, through the suppression policy's
  * lowpri-cpu bit. Its threads are capped at MAXPRI_THROTTLE (the clutch's background bucket, which still gets its share),
  * with no disk, network or timer throttling; an importance boost lifts it, and turnstile pushes from a waiter still raise
  * the thread that owns what the waiter needs.
  */
-void ioswitch_task_set_lowpri_cpu(task_t task, bool on);
+void switch_task_set_lowpri_cpu(task_t task, bool on);
 void
-ioswitch_task_set_lowpri_cpu(task_t task, bool on)
+switch_task_set_lowpri_cpu(task_t task, bool on)
 {
 	struct task_pend_token pend_token = {};
 

@@ -29,7 +29,7 @@ USB_HOST = True
 # say sRGB), UIKit's _supportsDeepColor, and WebCore's screenSupportsExtendedColor, so WebKit tiles are BGRA8 rather than
 # two-plane b3a8 and Core Animation stops making w30r surfaces, formats the GM20B only reaches through copies. 'P3' is
 # J120's own. Asset catalog images that this IPSW ships only in P3 (some onboarding and tips art) are not found under
-# sRGB. The kernel drops MobileGestalt's cache when this changes (kern_exec.c native_ioswitch_gamut_cache).
+# sRGB. The kernel drops MobileGestalt's cache when this changes (kern_exec.c native_switch_gamut_cache).
 DISPLAY_GAMUT = 'sRGB'
 
 
@@ -105,13 +105,13 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
     put(tree, 'model', b'iPad7,1\0')            # hw.model; idle code matches "compatible"
     put(tree, 'target-type', b'J120\0')
     # The audio server keys its routing database on the board name; the Switch entries stay
-    # after it (ioswitch_idle_board looks for nintendo,aula).
+    # after it (switch_idle_board looks for nintendo,aula).
     compatible = next(p[2] for p in tree[0] if p[0] == 'compatible')
     if not compatible.startswith(b'J120AP\0'):
         put(tree, 'compatible', b'J120AP\0' + compatible)
     chosen = child(tree, 'chosen')
     put(chosen, 'ephemeral-storage', u32(0))    # Data is a persistent APFS volume
-    # Portrait-native kernel (IOSwitchPortrait.h): iOS is given the 720x1280 panel and runs landscape with the panel's
+    # Portrait-native kernel (SwitchPortrait.h): iOS is given the 720x1280 panel and runs landscape with the panel's
     # top on the user's right. MobileGestalt DisplayBootRotation reads this: SpringBoard starts in interface orientation
     # 4 (landscape left, -[SpringBoard _bootOrientation]) and ProgressUI turns the boot Apple logo the same way. The
     # kernel also restores SpringBoard's rotation lock to 4 when it is set (kern_exec.c). display-rotation stays 0
@@ -143,7 +143,7 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
     # IOService named "bluetooth" bluetoothd looks up (local-mac-address, transport-speed, transport-encoding: J120's 3,
     # H4BC, which also opens /dev/btwake, SwitchBluetooth's; bluetoothd takes its transport from kern_exec.c's
     # BT_HCI_TRANSPORT, the same H4BC, as plain H4 has no prepare-to-terminate step and crashed whenever Bluetooth was
-    # turned off). The kernel downloads ioswitch,patchram itself, since BlueTool has no BCM4356A3 firmware, and replaces
+    # turned off). The kernel downloads switch,patchram itself, since BlueTool has no BCM4356A3 firmware, and replaces
     # local-mac-address (and /chosen mac-address-bluetooth0) with the unit's own address from the fuse lot code when it
     # can read it.
     # Only when the boot-arg is in the command line: without the radio, the node would only change what wifid and
@@ -154,7 +154,7 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
                            ('transport-speed', u32(3000000)), ('transport-encoding', u32(3))):
             put(bluetooth, key, value)
         if bt_patch is not None:
-            put(bluetooth, 'ioswitch,patchram', bt_patch)
+            put(bluetooth, 'switch,patchram', bt_patch)
     # Wi-Fi (drivers/SwitchWLAN, switch-wlan=1): /arm-io/wlan as J120 has it. With the boot-arg the kernel replaces
     # local-mac-address (and /chosen mac-address-wifi0) with the unit's own address from the fuse lot code, the one
     # the chip is given, before userland starts.
@@ -189,7 +189,7 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
             put(xhci, key, value)
     # Directories the kernel shows the Data overlay over: NUL-terminated "<directory>[:<boot-arg>]".
     if overlay_dirs:
-        put(chosen, 'ioswitch-overlay', b''.join(f'{d}:{g}\0'.encode() if g else f'{d}\0'.encode()
+        put(chosen, 'switch-overlay', b''.join(f'{d}:{g}\0'.encode() if g else f'{d}\0'.encode()
                                                  for d, g in overlay_dirs))
     buttons = child(tree, 'buttons')
     for key, value in (('compatible', b'buttons\0'), ('device_type', b'buttons\0'),

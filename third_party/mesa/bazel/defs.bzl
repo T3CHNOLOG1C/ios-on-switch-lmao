@@ -28,7 +28,7 @@ MESA = "third_party/mesa"
 # configuration skips them. Its tools (the generators' py_binary targets, the proc-macros) build for the host.
 MESA_ONLY = ["//bazel/platforms:user"]
 
-# Mesa's own files in a package: never ioswitch's to format or lint (lint_files(dirs = [], exclude = ...)).
+# Mesa's own files in a package: never ios-on-switch-lmao's to format or lint (lint_files(dirs = [], exclude = ...)).
 MESA_LINT_EXCLUDE = [
     "*.c",
     "*.cc",
@@ -50,8 +50,8 @@ MESA_LINT_EXCLUDE = [
 
 # What the generators' Python imports beyond the standard library.
 MESA_PY_DEPS = [
-    "@ioswitch_pypi//mako",
-    "@ioswitch_pypi//pyyaml",
+    "@switch_pypi//mako",
+    "@switch_pypi//pyyaml",
 ]
 
 # meson's buildtype and b_ndebug arguments, which it puts after a target's include directories and visibility: the
@@ -157,7 +157,7 @@ def mesa_cc_library(name, sources, c_args = [], cpp_args = [], **kwargs):
         cxxopts = cpp_args,
         deps = ["//third_party/mesa:headers"],
         linkstatic = True,
-        # Mesa's own code: never ioswitch's to lint (clang-tidy skips no-lint targets).
+        # Mesa's own code: never ios-on-switch-lmao's to lint (clang-tidy skips no-lint targets).
         tags = ["no-lint"],
         target_compatible_with = MESA_ONLY,
         **kwargs

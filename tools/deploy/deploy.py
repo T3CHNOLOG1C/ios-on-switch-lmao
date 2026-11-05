@@ -7,16 +7,16 @@
 Steps (each can be switched off):
   1 pull logs      the last boots' logs, logarchive and m2v journals (//deploy:pull_logs; --no-pull-logs skips it,
                    --no-csstore/--no-harvest/--no-launchd-log narrow it)
-  2 boot entry     switchroot/ioswitch/* and bootloader/ini/ioswitch.ini on the FAT: only files that differ are
-                   copied, stale files in switchroot/ioswitch/ removed, AppleDouble files by name; nothing else on the FAT
-  3 overlay        <Data>/ioswitch/overlay := the package's overlay/; also removes the r3 Wi-Fi bring-up's configd Debug
+  2 boot entry     switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are
+                   copied, stale files in switchroot/ios/ removed, AppleDouble files by name; nothing else on the FAT
+  3 overlay        <Data>/Switch/overlay := the package's overlay/; also removes the r3 Wi-Fi bring-up's configd Debug
                    logging profile (STALE_LOGGING_PROFILES) if a card still has it; and stages hekate's "Dump Joy-Con
-                   BT" (the FAT's switchroot/joycon_mac.ini, only read) as <Data>/ioswitch/bluetooth/{host-address,
+                   BT" (the FAT's switchroot/joycon_mac.ini, only read) as <Data>/Switch/bluetooth/{host-address,
                    joycon-pairing.plist}, removed when the FAT has none (joycon_pairing.py; --no-joycon-pairing skips it)
   4 GPU bundle     --stage-gpu: <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed} from --//deploy:gpu_bundle, via
                    the plugin's stager (its CDHashes must be in the same build's kernel window: deploy the boot package
                    built with that bundle); --remove-gpu removes it
-  4a AWDL           --awdl on|off: creates or removes <Data>/ioswitch/awdl-enable, the empty file SwitchWLAN's AWDL
+  4a AWDL           --awdl on|off: creates or removes <Data>/Switch/awdl-enable, the empty file SwitchWLAN's AWDL
                    (AirDrop's Wi-Fi link) is off without (read once per boot, after Data mounts)
   4b gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from PosterBoard's
                    data store (poster_snapshots.py), so the next "Add New Wallpaper" renders them again
@@ -47,8 +47,8 @@ from tools.install import host  # noqa: E402
 STALE_LOGGING_PROFILES = ("preferences/Logging/Subsystems/com.apple.SystemConfiguration.plist",)
 
 
-# SwitchWLANAwdl.cpp kFlag, /private/var/ioswitch/awdl-enable on the device.
-AWDL_FLAG = "ioswitch/awdl-enable"
+# SwitchWLANAwdl.cpp kFlag, /private/var/Switch/awdl-enable on the device.
+AWDL_FLAG = "Switch/awdl-enable"
 
 
 def remove_stale_logging_profiles(data_root, log):
@@ -88,7 +88,7 @@ def launchd_check(data, labels, log):
         log("launchd: disabled.501.plist is never read by launchd (no per-user database on iOS)")
     missing = [label for label in labels if label not in disabled]
     if missing:
-        log("launchd: NOT disabled: {} (add them to native_ioswitch_watchdog_policy in kern_exec.c)".format(missing))
+        log("launchd: NOT disabled: {} (add them to native_switch_watchdog_policy in kern_exec.c)".format(missing))
     return not missing
 
 
@@ -121,7 +121,7 @@ def main(argv=None):
     pull_logs.HARVEST = args.harvest and str(Path(args.harvest).parent)
     for name in ("boot_package", "spec", "gpu_bundle", "stager", "kcdata"):
         setattr(args, name, located(getattr(args, name)))
-    log = host.Log(args.log or Path.home() / "Library/Logs/ioswitch-install/deploy-{}.log".format(
+    log = host.Log(args.log or Path.home() / "Library/Logs/switch-ios-install/deploy-{}.log".format(
         time.strftime("%Y%m%d-%H%M%S")))
     try:
         host.check_tools(log)
@@ -147,7 +147,7 @@ def main(argv=None):
                 "stage {} controller(s) for host {}".format(len(pairing["controllers"]), pairing["host"])
                 if pairing else "remove any staged dump")]) + \
             (["stage the GPU bundle"] if args.stage_gpu else []) + (["remove the GPU bundle"] if args.remove_gpu else []) + \
-            (["AWDL {} (<Data>/ioswitch/awdl-enable)".format(args.awdl)] if args.awdl else []) + \
+            (["AWDL {} (<Data>/Switch/awdl-enable)".format(args.awdl)] if args.awdl else []) + \
             (["reset gallery snapshots of {}".format(" ".join(args.reset_gallery_snapshots))]
              if args.reset_gallery_snapshots else []) + \
             (["launchd check {}".format(args.launchd_check)] if args.launchd_check else []) + \

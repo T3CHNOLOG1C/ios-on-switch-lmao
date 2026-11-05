@@ -112,28 +112,28 @@
 #include <vm/vm_shared_region.h>
 
 #include <vm/vm_protos.h>
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
 /* bsd/vm/vm_unix.c (bsd headers are not visible here) */
 struct vnode;
-extern memory_object_t ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
+extern memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);
 #define IOSW_TEXT_SLOTS 2   /* the most patched ranges one mapping holds (.07: the two widget deadline sites) */
 
 /*
- * IOSwitch: replace a few pages of an executable cache mapping, just entered in the shared region, with apple_protect
- * pagers over the same file (see ioswitch_shared_cache_text_pager()), one per patched range. Fails open: when there is
+ * Switch: replace a few pages of an executable cache mapping, just entered in the shared region, with apple_protect
+ * pagers over the same file (see switch_shared_cache_text_pager()), one per patched range. Fails open: when there is
  * nothing to patch or anything goes wrong, the stock mapping stays as it is (vm_map_enter() puts the overwritten
  * entries back if the new mapping fails). Same pager as the arm64e translator's cache mappings (r8-arm64e
  * a64x_shared_cache_pager), which replaces the whole mapping's pager before it is entered; if both ever live in
  * one tree, this one must take the translator's object as its backing object instead of the file's.
  */
 static void
-ioswitch_shared_cache_text_patch(vm_map_t sr_map, vm_map_offset_t sr_address,
+switch_shared_cache_text_patch(vm_map_t sr_map, vm_map_offset_t sr_address,
     const struct shared_file_mapping_slide_np *mapping, const struct _sr_file_mappings *srfmp, vm_object_t file_object)
 {
 	for (unsigned slot = 0; slot < IOSW_TEXT_SLOTS; slot++) {
 		uint64_t range_offset = 0, range_size = 0;
-		memory_object_t mo = ioswitch_shared_cache_text_pager(file_object, mapping->sms_file_offset,
+		memory_object_t mo = switch_shared_cache_text_pager(file_object, mapping->sms_file_offset,
 		    mapping->sms_size, mapping->sms_address - srfmp->slide, srfmp->vp, slot, &range_offset, &range_size);
 		if (mo == MEMORY_OBJECT_NULL) {
 			continue;
@@ -145,7 +145,7 @@ ioswitch_shared_cache_text_patch(vm_map_t sr_map, vm_map_offset_t sr_address,
 		    mapping->sms_init_prot & VM_PROT_ALL, mapping->sms_max_prot & VM_PROT_ALL, VM_INHERIT_DEFAULT);
 		memory_object_deallocate(mo); /* the mapping holds its own reference */
 		if (kr != KERN_SUCCESS) {
-			printf("IOSwitch cache text: mapping the patched pages at +0x%llx failed (0x%x), left stock\n",
+			printf("SwitchCache text: mapping the patched pages at +0x%llx failed (0x%x), left stock\n",
 			    range_offset, (unsigned int)kr);
 		}
 	}
@@ -1871,10 +1871,10 @@ vm_shared_region_map_file_setup(
 					mappings[i].sms_init_prot & VM_PROT_ALL,
 					mappings[i].sms_max_prot & VM_PROT_ALL,
 					VM_INHERIT_DEFAULT);
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
-				/* a few known constants in the cache text: see ioswitch_shared_cache_text_pager() */
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+				/* a few known constants in the cache text: see switch_shared_cache_text_pager() */
 				if (kr == KERN_SUCCESS && (mappings[i].sms_init_prot & VM_PROT_EXECUTE)) {
-					ioswitch_shared_cache_text_patch(sr_map, target_address, &mappings[i], srfmp, file_object);
+					switch_shared_cache_text_patch(sr_map, target_address, &mappings[i], srfmp, file_object);
 				}
 #endif
 			}

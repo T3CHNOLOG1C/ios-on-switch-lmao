@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-// From the board thread (IOSwitchRootDiag.inc): starts the driver's own thread and returns.
+// From the board thread (SwitchRootDiag.h): starts the driver's own thread and returns.
 int tegra_se_start(void);
 
 // One owner of an engine at a time: the AppleKeyStore stand-in's boot probe (NativeKeyStoreEvents/

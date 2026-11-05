@@ -90,7 +90,7 @@ kernel_driver(
         "com.apple.iokit.IOPCIFamily",
     ],
     # Declared dependencies left out of the prelink (COMPONENT=DEPENDENCY=pointer sites; a nonzero cut rebinds each
-    # site to _ioswitch_prelink_cut_null in SwitchUSB.cpp, so OSDynamicCast yields NULL):
+    # site to _switch_prelink_cut_null in SwitchUSB.cpp, so OSDynamicCast yields NULL):
     # - AppleSMC (Mac SMC): IOUSBHostFamily's one site is OSDynamicCast(AppleSMC, waitForMatchingService(AppleSMC)) on
     #   a path taken only for a port with a "UsbCPortNumber" property (fn 0xfffffff005e4fe88), never published here;
     # - AppleUSBHostPlatformProperties: codeless, no personalities (the planner cannot carry it); no pointers;

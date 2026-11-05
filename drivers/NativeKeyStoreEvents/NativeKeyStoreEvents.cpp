@@ -38,11 +38,11 @@ extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16]);
 extern "C" void native_aks_unsupported(uint32_t selector);
 
 namespace {
-// Key wrapping under the fuse-derived device key (AKSDeviceKey.cpp), on unless ioswitch-aks-wrap=0.
+// Key wrapping under the fuse-derived device key (AKSDeviceKey.cpp), on unless switch-aks-wrap=0.
 static bool aksWrapEnabled()
 {
     unsigned enabled = 1;
-    PE_parse_boot_argn("ioswitch-aks-wrap", &enabled, sizeof(enabled));
+    PE_parse_boot_argn("switch-aks-wrap", &enabled, sizeof(enabled));
     return enabled != 0;
 }
 constexpr uint32_t kSelLockState = 7, kSelWrapKey = 10, kSelUnwrapKey = 11, kSelGetSystem = 14, kSelDeviceState = 17,
@@ -239,7 +239,7 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
             }
             case kSelWrapKey:
             case kSelUnwrapKey:
-                // ioswitch-aks-wrap=0: no device key and every wrap refused, for a boot that cannot read the fuses.
+                // switch-aks-wrap=0: no device key and every wrap refused, for a boot that cannot read the fuses.
                 rc = aksWrapEnabled() ? keyOperation(selector, args) : kAksUnsupported;
                 break;
             case kSelGetBagUUID: {

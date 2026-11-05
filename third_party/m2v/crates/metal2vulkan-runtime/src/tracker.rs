@@ -349,7 +349,7 @@ impl Barrier {
     /// and the host's reads follow the batch's own [`Barrier::to_host`]). On NVK the generic
     /// `MEMORY_READ` also stood for indirect-command reads, an MME-data invalidate: a host
     /// wait for idle (`SET_REFERENCE`) on top of the barrier's own wait, at each of these
-    /// barriers (ioswitch r15-gpuperf: 15 per Core Animation frame on the host twin).
+    /// barriers (ios-on-switch-lmao r15-gpuperf: 15 per Core Animation frame on the host twin).
     const ATTACHMENT_PASS_DST: vk::AccessFlags2 = vk::AccessFlags2::from_raw(
         vk::AccessFlags2::SHADER_READ.as_raw()
             | vk::AccessFlags2::SHADER_WRITE.as_raw()

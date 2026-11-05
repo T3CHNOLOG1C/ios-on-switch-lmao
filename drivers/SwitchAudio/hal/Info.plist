@@ -11,7 +11,7 @@
 	<key>CFBundleExecutable</key>
 	<string>SwitchAudio</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.ioswitch.audio</string>
+	<string>com.brunostjohn.switch.audio</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

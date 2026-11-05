@@ -4,14 +4,14 @@
     bazel run //deploy:pull_logs -- <diskN> [--out DIR] [--no-logarchive] [--no-harvest] [--no-csstore] [--no-launchd]
                                             [--no-eject]
 
-Copies into <out> (default <state>/device-logs/boot-<MMDD-HHMM>, <state> being ~/Library/Application Support/ioswitch or
-$IOSWITCH_HOME: outside every checkout):
+Copies into <out> (default <state>/device-logs/boot-<MMDD-HHMM>, <state> being ~/Library/Application Support/switch-ios or
+$SWITCH_HOME: outside every checkout):
   diagnostics/, uuidtext/               the unified log (Data db/), and <out>/boot.logarchive built from them
                                         (`/usr/bin/log show --archive <out>/boot.logarchive --style compact --info --debug`)
   launchd.log                           (--no-launchd skips it)
   mobile-CrashReporter/, *.ips          crash reports, the WebKit ones also at the top level
   mobileactivationd/, migration-state.txt, boot-io-census.bin
-  panic-<UTC>.log, .kcdata              the last saved kernel panic (IOSwitchPanicSave.c: the panic string, kernel log
+  panic-<UTC>.log, .kcdata              the last saved kernel panic (SwitchPanicSave.c: the panic string, kernel log
                                         tail and XNU's panic log; its stackshot), with the stackshot decoded by XNU's
                                         kcdata.py into panic-<UTC>.stackshot.ips (every task's threads, as stacks-*.ips)
                                         and panic-<UTC>.threads.txt (the threads of the process the panic names, e.g.
@@ -43,7 +43,7 @@ from tools.deploy import mkarchive  # noqa: E402
 from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
 
-DATA_UUID = "D1B1D053-D0A6-496C-8625-A947A3DA863E"   # IOSwitchRawMount.inc IOSW_RAW_DATA_UUID (checked against spec)
+DATA_UUID = "D1B1D053-D0A6-496C-8625-A947A3DA863E"   # SwitchRawMount.h IOSW_RAW_DATA_UUID (checked against spec)
 # The checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the workspace: --harvest
 # (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
 HARVEST = None
@@ -53,8 +53,8 @@ BACKBOARDD_CACHE = "m2v/System_6C7A65AF-CB18-421C-A07A-D724B05A7AB6_Library_Cach
 
 
 def state_dir():
-    """Where the tools keep what is not the repository's: ~/Library/Application Support/ioswitch, or $IOSWITCH_HOME."""
-    return Path(os.environ.get("IOSWITCH_HOME") or Path.home() / "Library/Application Support/ioswitch")
+    """Where the tools keep what is not the repository's: ~/Library/Application Support/switch-ios, or $SWITCH_HOME."""
+    return Path(os.environ.get("SWITCH_HOME") or Path.home() / "Library/Application Support/switch-ios")
 
 
 def workspace():
@@ -185,17 +185,17 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
     for report in sorted(crash.glob("com.apple.WebKit.*.ips")) if crash.is_dir() else []:
         shutil.copyfile(report, out / report.name)
     copytree(data / "mobile/Library/Logs/mobileactivationd", out / "mobileactivationd", log)
-    census = data / "ioswitch/boot-io-census.bin"
+    census = data / "Switch/boot-io-census.bin"
     if census.is_file():
         shutil.copyfile(census, out / census.name)
-    panics = sorted((data / "ioswitch").glob("panic-*")) if (data / "ioswitch").is_dir() else []
+    panics = sorted((data / "Switch").glob("panic-*")) if (data / "Switch").is_dir() else []
     for panic in panics:
         shutil.copyfile(panic, out / panic.name)
     if panics:
         log("saved panics:", ", ".join(panic.name for panic in panics))
         decode_panics(out, kcdata, log)
-    power = sorted((data / "ioswitch").glob("power*.log")) if (data / "ioswitch").is_dir() else []
-    wakes = sorted((data / "ioswitch").glob("wake-*.kcdata")) if (data / "ioswitch").is_dir() else []
+    power = sorted((data / "Switch").glob("power*.log")) if (data / "Switch").is_dir() else []
+    wakes = sorted((data / "Switch").glob("wake-*.kcdata")) if (data / "Switch").is_dir() else []
     for path in power + wakes:
         shutil.copyfile(path, out / path.name)
     if power:
@@ -204,7 +204,7 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
         log("wake guarantee stackshots:", ", ".join(path.name for path in wakes))
         decode_wakes(out, kcdata, log)
     lines = []
-    for name in ("staged_system_apps", "datamigrator", "ioswitch"):
+    for name in ("staged_system_apps", "datamigrator", "Switch"):
         path = data / name
         lines.append("{}: {}".format(name, sorted(p.name for p in path.iterdir()) if path.is_dir() else "missing"))
     apps = data / "containers/Bundle/Application"
@@ -297,7 +297,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     global HARVEST
     HARVEST = args.harvest and str(Path(args.harvest).parent)
-    log = host.Log(args.log or Path.home() / "Library/Logs/ioswitch-install/pull-logs-{}.log".format(
+    log = host.Log(args.log or Path.home() / "Library/Logs/switch-ios-install/pull-logs-{}.log".format(
         time.strftime("%Y%m%d-%H%M%S")))
     try:
         host.check_tools(log)

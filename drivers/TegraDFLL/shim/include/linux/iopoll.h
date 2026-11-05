@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: register polls. IOSwitch rule: no polling loops for hardware status. The DFLL monitor's DATA_NEW
+ * Switch shim: register polls. Switch rule: no polling loops for hardware status. The DFLL monitor's DATA_NEW
  * flag (clk-dfll.c dfll_wait_monitor_data, two sample periods = 160 us at the DT's 12.5 kHz) has no interrupt line
  * (the DFLL's SPI 62 only reports output min/max limits, and L4T leaves it masked: DFLL_INTR_EN = 0), so the wait is
  * one bounded busy-delay of the full timeout followed by a single check. A miss returns -ETIMEDOUT exactly as Linux

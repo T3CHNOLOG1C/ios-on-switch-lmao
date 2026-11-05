@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_SDMMC_DMA_H
-#define IOSWITCH_SDMMC_DMA_H
+#ifndef SWITCH_SDMMC_DMA_H
+#define SWITCH_SDMMC_DMA_H
 #include <stdint.h>
 #ifdef __cplusplus
 extern "C" {

@@ -2,14 +2,14 @@
 // path, a register value as Linux programs it, an API other drivers rely on). Keep them few and meaningful: a value
 // reachable through a header is a static_assert instead, and behaviour belongs in the test's scenarios.
 //
-//   const std::string source = ioswitch::test::SourceText("../SwitchTouch.cpp");   // relative to the test's package
-//   const std::string action = ioswitch::test::Body(source, "void SwitchTouch::interruptOccurred(");
+//   const std::string source = switch_ios::test::SourceText("../SwitchTouch.cpp");   // relative to the test's package
+//   const std::string action = switch_ios::test::Body(source, "void SwitchTouch::interruptOccurred(");
 //   EXPECT_THAT(action, Not(HasSubstr("IOSleep")));
 //
-// The file must be in the test's `data`. Paths are relative to the test's own package (IOSWITCH_TEST_PACKAGE, set by
+// The file must be in the test's `data`. Paths are relative to the test's own package (SWITCH_TEST_PACKAGE, set by
 // host_test), so a driver directory that moves with its test/ package keeps its guards working.
-#ifndef IOSWITCH_BAZEL_TESTING_SOURCE_TEXT_H
-#define IOSWITCH_BAZEL_TESTING_SOURCE_TEXT_H
+#ifndef SWITCH_BAZEL_TESTING_SOURCE_TEXT_H
+#define SWITCH_BAZEL_TESTING_SOURCE_TEXT_H
 
 #include <gtest/gtest.h>
 
@@ -19,16 +19,16 @@
 #include <string>
 #include <string_view>
 
-#ifndef IOSWITCH_TEST_PACKAGE
-#error "IOSWITCH_TEST_PACKAGE is set by //bazel/testing:defs.bzl host_test"
+#ifndef SWITCH_TEST_PACKAGE
+#error "SWITCH_TEST_PACKAGE is set by //bazel/testing:defs.bzl host_test"
 #endif
 
-namespace ioswitch::test {
+namespace switch_ios::test {
 
 // The workspace-relative path of `relative` (to the test's package), with "dir/../" folded.
 inline std::string PackagePath(std::string_view relative)
 {
-    std::string path = IOSWITCH_TEST_PACKAGE;
+    std::string path = SWITCH_TEST_PACKAGE;
     while (relative.substr(0, 3) == "../") {
         const size_t slash = path.rfind('/');
         path = slash == std::string::npos ? std::string() : path.substr(0, slash);
@@ -82,6 +82,6 @@ inline size_t Count(std::string_view text, std::string_view needle)
     return count;
 }
 
-}  // namespace ioswitch::test
+}  // namespace switch_ios::test
 
-#endif  // IOSWITCH_BAZEL_TESTING_SOURCE_TEXT_H
+#endif  // SWITCH_BAZEL_TESTING_SOURCE_TEXT_H

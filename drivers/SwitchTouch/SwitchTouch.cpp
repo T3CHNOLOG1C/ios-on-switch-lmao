@@ -33,7 +33,7 @@
 // That landscape frame is the one the display shows iOS (NativeScanout.h and the rotate-3 console both put landscape
 // pixel (x, y) at portrait row 1279 - x, column y, upright in handheld use, as hekate's GUI). Boot-arg
 // switch-touch-flip: bit 0 mirrors X, bit 1 mirrors Y, in case the hardware shows otherwise. Portrait-native
-// (IOSwitchPortrait.h): iOS's screen is the portrait panel, so contacts are reported at that row and column (position).
+// (SwitchPortrait.h): iOS's screen is the portrait panel, so contacts are reported at that row and column (position).
 //
 // Failures panic with a one-line reason; there is no polled mode. A 10 s watchdog only checks that a latched INT
 // reached the CPU (tegra_gpio_check_delivery).
@@ -46,7 +46,7 @@
 #include <os/log.h>
 #include <pexpert/pexpert.h>
 #include <string.h>
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../SwitchPower/SwitchPower.h"
@@ -92,7 +92,7 @@ constexpr unsigned kRealMaxX = 1264, kRealMaxY = 704, kEdgeOffset = 15;
 // needs the pad on the glass, and the finger travels a few mm per scan), so a 3 mm band missed most of them (r8a: 2 of
 // 9 touches from the edge; the app switcher hard to reach). The geometry line measures where edge swipes start.
 constexpr unsigned kEdgeBand = 40;
-constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (ioswitch_check_after_ms): no wakeup of its own
+constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (switch_check_after_ms): no wakeup of its own
 constexpr unsigned kEmptyLimit = 64;     // interrupts in a row that found the FIFO empty: INT is stuck low
 
 // Touch-down slop (r17-touch; file comment), report-frame pixels (8.26 px/mm): a contact is reported at its first point
@@ -495,7 +495,7 @@ void SwitchTouch::timerFired(OSObject *owner, IOTimerEventSource *sender)
         self->logStats();
         tegra_gpio_check_delivery(TEGRA_GPIO_TOUCH_INT, "SwitchTouch");
     }
-    ioswitch_check_after_ms(sender, kWatchdogMS);
+    switch_check_after_ms(sender, kWatchdogMS);
 }
 
 // Primary interrupt context, PX1's vector (TegraGPIO::serviceBank): when INT reached the CPU, and the CPU governor to its
@@ -651,8 +651,8 @@ void SwitchTouch::position(const uint8_t *event, int &x, int &y) const
     if (flip & 1) lx = (uint16_t)(kSwitchTouchWidth - 1 - lx);
     if (flip & 2) ly = (uint16_t)(kSwitchTouchHeight - 1 - ly);
     // Portrait-native (SwitchHID.h): the panel's frame, as the display maps landscape pixel (x, y) to row 1279 - x, column y.
-    x = IOSWITCH_PORTRAIT_NATIVE ? ly : lx;
-    y = IOSWITCH_PORTRAIT_NATIVE ? (int)(kSwitchTouchWidth - 1 - lx) : ly;
+    x = SWITCH_PORTRAIT_NATIVE ? ly : lx;
+    y = SWITCH_PORTRAIT_NATIVE ? (int)(kSwitchTouchWidth - 1 - lx) : ly;
 }
 
 void SwitchTouch::report(Contact &contact, int x, int y)

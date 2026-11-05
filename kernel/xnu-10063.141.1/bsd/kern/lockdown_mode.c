@@ -84,7 +84,7 @@ STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, lockdown_mode_init);
 #endif
 
 /*
- * IOSwitch: the NVRAM saved on the Data volume was restored (drivers/SwitchNVRAM, on a kernel thread, before launchd)
+ * Switch: the NVRAM saved on the Data volume was restored (drivers/SwitchNVRAM, on a kernel thread, before launchd)
  * after lockdown_mode_init read the empty bank the boot hands over; read the state again.
  */
 void

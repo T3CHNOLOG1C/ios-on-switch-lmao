@@ -1,9 +1,9 @@
-# IOSwitch read-only firmware inventory. No new CPU payload or OS handoff.
+# Switch read-only firmware inventory. No new CPU payload or OS handoff.
 # Only existing firmware display, environment and inspection commands execute.
 # Changing stdout and the working-FDT pointer affects this boot session only.
-echoe "IOSWITCH MEMORY CHECK: SCRIPT ENTERED"
+echoe "SWITCH MEMORY CHECK: SCRIPT ENTERED"
 if setenv stdout vidconsole; then
-    echoe "IOSWITCH MEMORY CHECK: SCREEN OUTPUT SELECTED"
+    echoe "SWITCH MEMORY CHECK: SCREEN OUTPUT SELECTED"
 else
     echoe "CANNOT SELECT SCREEN OUTPUT - HOLDING"
     while true; do
@@ -36,7 +36,7 @@ while true; do
         echo
     done
     setcurs 0 0
-    echo "IOSWITCH MEMORY CHECK - PAGE 1 OF 3 - U-BOOT RAM"
+    echo "SWITCH MEMORY CHECK - PAGE 1 OF 3 - U-BOOT RAM"
     echo "Photograph all three pages; changes every 20 seconds and repeats."
     echo "Exit: hold POWER at least 20 seconds; then start Hekate normally."
     echo
@@ -58,7 +58,7 @@ while true; do
         echo
     done
     setcurs 0 0
-    echo "IOSWITCH MEMORY CHECK - PAGE 2 OF 3 - DISPLAY / CONTROL TREE"
+    echo "SWITCH MEMORY CHECK - PAGE 2 OF 3 - DISPLAY / CONTROL TREE"
     echo "Photograph this page. Next page in 20 seconds; all pages repeat."
     echo "Exit: hold POWER at least 20 seconds; then start Hekate normally."
     echo
@@ -85,7 +85,7 @@ while true; do
         echo
     done
     setcurs 0 0
-    echo "IOSWITCH MEMORY CHECK - PAGE 3 OF 3 - CARVEOUT REGISTERS"
+    echo "SWITCH MEMORY CHECK - PAGE 3 OF 3 - CARVEOUT REGISTERS"
     echo "Photograph this page. Page 1 returns in 20 seconds."
     echo "Exit: hold POWER at least 20 seconds; then start Hekate normally."
     echo

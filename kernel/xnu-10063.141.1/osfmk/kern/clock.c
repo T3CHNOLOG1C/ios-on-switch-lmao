@@ -1792,13 +1792,13 @@ absolutetime_to_continuoustime(uint64_t abstime)
 }
 
 /*
- * IOSwitch: the calendar time without the clock lock, in every configuration (clock_get_calendar_nanotime_nowait is
+ * Switch: the calendar time without the clock lock, in every configuration (clock_get_calendar_nanotime_nowait is
  * DTrace only), for a panic that may hold the lock: the boot time plus the uptime, which every calendar change and
  * wake keeps equal to the calendar. A read that races a calendar change can mix the old and new boot time.
  */
-void ioswitch_clock_calendar_nowait(clock_sec_t *secs, clock_nsec_t *nanosecs);
+void switch_clock_calendar_nowait(clock_sec_t *secs, clock_nsec_t *nanosecs);
 void
-ioswitch_clock_calendar_nowait(clock_sec_t *secs, clock_nsec_t *nanosecs)
+switch_clock_calendar_nowait(clock_sec_t *secs, clock_nsec_t *nanosecs)
 {
 	uint64_t now_ns = 0;
 	const uint64_t boot_us = (uint64_t)os_atomic_load(&clock_boottime, relaxed) * USEC_PER_SEC +

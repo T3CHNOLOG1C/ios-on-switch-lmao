@@ -64,7 +64,7 @@ ios_binary(
     ],
     coreaudio_headers = True,
     pagesize = "4096",
-    sign_identifier = "com.ioswitch.audio",
+    sign_identifier = "com.brunostjohn.switch.audio",
 )
 
 # The overlay files of this driver that overlay/manifest.json names.

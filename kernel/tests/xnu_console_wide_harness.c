@@ -1,5 +1,5 @@
 /* XNU video_console.c's rotated-console wide helpers (vc_rotate3_wide/store4/copy4, cut out of @xnu's video_console.c
- * into helpers.inc by BUILD.bazel) against the 32-bit loops they replaced: scroll up and down for every region
+ * into helpers.h by BUILD.bazel) against the 32-bit loops they replaced: scroll up and down for every region
  * and shift step, clears, and glyph columns written four pixels at a time over a previous glyph. */
 #include <stdint.h>
 #include <stdio.h>
@@ -16,7 +16,7 @@
 typedef int boolean_t;
 #define TRUE  1
 #define FALSE 0
-#include "helpers.inc"
+#include "helpers.h"
 #define ROWS  1280
 #define WIDTH 720 /* pixels per portrait row */
 #define LINE  16

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Install iPadOS 17.7.11 (21H461) for ioswitch onto a Nintendo Switch SD card.
+"""Install iPadOS 17.7.11 (21H461) for ios-on-switch-lmao onto a Nintendo Switch SD card.
 
     bazel run //install:sd -- <diskN>                 dry run: check the card, print the plan, write nothing
     bazel run //install:sd -- <diskN> --yes           do it (asks you to type diskN, then runs itself under sudo)
 
 Writes ONLY: the card's userdata partition (an APFS container: System, Data, Preboot), that partition's GPT entry
-(type APFS, name IOSWITCH; primary and backup copies, nothing else in the partition table, never the hybrid MBR),
-and on the FAT: switchroot/ioswitch/* and bootloader/ini/ioswitch.ini. See tools/install/card.py for the guards.
+(type APFS, name iOS; primary and backup copies, nothing else in the partition table, never the hybrid MBR),
+and on the FAT: switchroot/ios/* and bootloader/ini/ios.ini. See tools/install/card.py for the guards.
 
 Steps, each skipped when the card already has its result (so a rerun only does what is missing or changed):
   1 compose  In a scratch image (not the card): the IPSW's OS container (System volume 04769D26...) grown to the
@@ -17,7 +17,7 @@ Steps, each skipped when the card already has its result (so a rerun only does w
              you reinsert it and run the same command again (it continues at step 4).
   4 populate Data from the System volume's /private/var (only when Data is empty, or with --reseed-data); the two
              cryptex images into Preboot (by sha256 against the IPSW pins); the userland overlay.
-  5 boot     The hekate entry on the FAT (only files that differ; stale files in switchroot/ioswitch removed).
+  5 boot     The hekate entry on the FAT (only files that differ; stale files in switchroot/ios removed).
   6 verify   One APFS partition of the right size, the partition table unchanged but for our entry, the volume UUIDs,
              fsck_apfs -n clean. Then the card is ejected (--no-eject keeps it).
 """
@@ -52,7 +52,7 @@ def punch(fd, offset, length):
 
 def default_log():
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    return Path.home() / "Library/Logs/ioswitch-install/install-{}.log".format(stamp)
+    return Path.home() / "Library/Logs/switch-ios-install/install-{}.log".format(stamp)
 
 
 def resolve_inputs(args):
@@ -110,7 +110,7 @@ class Installer:
         if target.type == gpt.APFS:
             if not self.ours(found):
                 raise cards.Refused(
-                    "{} is APFS but not an ioswitch container (volumes {}); rerun with --reinstall-container to "
+                    "{} is APFS but not an ios-on-switch-lmao container (volumes {}); rerun with --reinstall-container to "
                     "replace it".format(target.describe(), found))
             if not cards.volumes(self.card):
                 return "reprobe"            # written, retyped, but macOS has not attached it yet
@@ -125,15 +125,15 @@ class Installer:
                        "compose", "write", "retype to APFS", "reprobe", "populate", "boot entry", "verify"],
             "compose": ["compose the container in {} (about {} GB free needed)".format(self.scratch_dir(), 7),
                         "write it to {} ({})".format(self.card.slice(self.card.target), self.card.target.describe()),
-                        "retype the GPT entry to APFS, name IOSWITCH", "reprobe", "populate", "boot entry", "verify"],
-            "retype": ["retype the GPT entry to APFS, name IOSWITCH", "reprobe", "populate", "boot entry", "verify"],
+                        "retype the GPT entry to APFS, name iOS", "reprobe", "populate", "boot entry", "verify"],
+            "retype": ["retype the GPT entry to APFS, name iOS", "reprobe", "populate", "boot entry", "verify"],
             "reprobe": ["reprobe", "populate", "boot entry", "verify"],
             "populate": ["populate (only what differs)", "boot entry", "verify"],
         }[state]
         return steps
 
     def scratch_dir(self):
-        return Path(self.args.scratch or (Path.home() / "Library/Caches/ioswitch-install"))
+        return Path(self.args.scratch or (Path.home() / "Library/Caches/switch-ios-install"))
 
     def attach_os(self):
         out = host.plist("hdiutil", "attach", "-plist", "-readonly", "-nomount", "-noverify", "-noautofsck",
@@ -308,7 +308,7 @@ class Installer:
         self.log("write: {} bytes in {} extents onto {}".format(written, len(extents),
                                                                  self.card.slice(self.card.target)))
 
-    def retype(self, kind=gpt.APFS, name="IOSWITCH"):
+    def retype(self, kind=gpt.APFS, name="iOS"):
         fat = self.card.slice(self.card.fat)
         if host.mount_point(fat):
             host.run("diskutil", "unmount", fat, log=self.log)
@@ -569,7 +569,7 @@ def main(argv=None):
     parser.add_argument("--unprivileged-test", action="store_true",
                         help="disk images you own only: run without root, skipping file ownership (NOT bootable)")
     parser.add_argument("--scratch", help="scratch directory for the composed container (default ~/Library/Caches/"
-                                          "ioswitch-install; needs about 7 GB free)")
+                                          "switch-install; needs about 7 GB free)")
     parser.add_argument("--log")
     parser.add_argument("--spec", required=True)
     parser.add_argument("--ipsw", required=True)

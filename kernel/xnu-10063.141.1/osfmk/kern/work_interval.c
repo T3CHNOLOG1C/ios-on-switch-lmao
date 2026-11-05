@@ -1079,7 +1079,7 @@ kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_a
 }
 
 /*
- * ioswitch: the work interval instance operations (libsystem_kernel's work_interval_instance_start, _update and
+ * ios-on-switch-lmao: the work interval instance operations (libsystem_kernel's work_interval_instance_start, _update and
  * _finish, under os_workgroup_interval_start and friends) are private and missing from this source, so they failed
  * with ENOTSUP. Without a performance controller there is nothing to pass on: an instance operation is valid when the
  * calling thread has joined the interval and belongs to the task that created it, the checks a notify makes.

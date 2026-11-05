@@ -3,7 +3,7 @@
 This standalone `go` payload reads the already initialized SD card objects in
 one exact retained U-Boot/BL33 build. It issues no firmware calls, card commands,
 MMIO accesses, reset, recovery, power change or media writes. It is specific to
-the IOSwitch native OLED profile and must refuse any layout or state mismatch.
+the Switch native OLED profile and must refuse any layout or state mismatch.
 
 The pinned artifact is `out/switch/boot-reference/bl33.bin`, 390,884 bytes,
 SHA-256 `b492a4017580ca11c9cd49075a899a65f62069d3750615217fc10308954c9faa`.

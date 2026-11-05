@@ -23,7 +23,7 @@
 // (libvpx also grants patent rights in its PATENTS file.)
 #include "VP9Probs.h"
 #include <string.h>
-#include "VP9Tables.inc"
+#include "VP9Tables.h"
 
 typedef int8_t TreeIndex;
 

@@ -1,4 +1,4 @@
-# boot/storage/NativeIOSwitchBlock.cpp on the host: the boot chain's read-only block driver for the SD card's two APFS
+# boot/storage/NativeSwitchBlock.cpp on the host: the boot chain's read-only block driver for the SD card's two APFS
 # containers, the real source included into native_block_test.cpp over native_block_stubs.h, against a pattern-serving
 # backend; one process per scenario.
 #
@@ -28,7 +28,7 @@ host_shims(
 host_library(
     name = "driver",
     textual_hdrs = [
-        "//boot:storage/NativeIOSwitchBlock.cpp",
+        "//boot:storage/NativeSwitchBlock.cpp",
         "//boot:storage/block_backend.h",
     ],
     deps = [":kernel"],

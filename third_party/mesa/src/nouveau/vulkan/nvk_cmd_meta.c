@@ -569,7 +569,7 @@ nvk_CmdCopyMemoryKHR(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
 
-   /* ioswitch: regions that continue one another (a buffer's rows copied
+   /* ios-on-switch-lmao: regions that continue one another (a buffer's rows copied
     * one region each, as metal2vulkan's shadows copy back a surface's rows)
     * become one copy: the meta path is a compute dispatch per region, ~1000
     * for one 512-row tile, and the copy engine a launch per region.

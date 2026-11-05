@@ -1,4 +1,4 @@
-# IOSurfaceAccelerator on ioswitch: the contract TegraVIC implements
+# IOSurfaceAccelerator on ios-on-switch-lmao: the contract TegraVIC implements
 
 iPadOS 17.7.11 (21H461). What `IOSurfaceAccelerator.framework` asks of the kernel, who calls it and how, and how
 TegraVIC answers it on the Tegra X1's VIC. **[V]** = read in the 21H461 binaries (dyld cache, kernelcache) or the

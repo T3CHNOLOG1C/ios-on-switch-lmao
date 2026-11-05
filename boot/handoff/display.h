@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_HANDOFF_DISPLAY_H
-#define IOSWITCH_HANDOFF_DISPLAY_H
+#ifndef SWITCH_HANDOFF_DISPLAY_H
+#define SWITCH_HANDOFF_DISPLAY_H
 #include <stdint.h>
 
 // The OLED firmware's live framebuffer, as read on hardware:

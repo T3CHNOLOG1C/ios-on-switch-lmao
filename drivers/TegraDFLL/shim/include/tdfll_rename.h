@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch: link-level names. TegraGM20B's nouveau shim is linked into the same kernel and defines many of the same
+ * Switch: link-level names. TegraGM20B's nouveau shim is linked into the same kernel and defines many of the same
  * Linux symbols (clk_enable, clk_get_rate, devm_clk_get, tegra_sku_info, tegra_fuse_readl, ...), and the vendored L4T
  * files define globals of their own. Every global the Linux side of TegraDFLL defines or calls is therefore renamed
  * into tdfll_* here, before any other header, so the vendored sources stay verbatim. The only unprefixed globals left

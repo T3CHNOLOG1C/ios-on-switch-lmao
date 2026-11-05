@@ -9,7 +9,7 @@
 
 #include "bazel/testing/source_text.h"
 
-using ioswitch::test::SourceText;
+using switch_ios::test::SourceText;
 using testing::ContainsRegex;
 using testing::HasSubstr;
 

@@ -210,7 +210,7 @@ Tests (all pass):
 - Trap path (unplaced cache LSE, ~46% of sites, all in WebKit/3D/ML frameworks): exception + emulation, roughly
   0.1-0.3 us per op on the A57 (estimate, not measured).
 
-## 5. iPadOS 26.5.2 on ioswitch: state and plan
+## 5. iPadOS 26.5.2 on ios-on-switch-lmao: state and plan
 
 What exists:
 
@@ -221,9 +221,9 @@ What a bootable 26.5.2 still needs (in order):
 
 1. **Kernel**: xnu-12377.121.6 + UniXNU's `patches/xnu-12377` series as in its arm64e profile minus
    `native-pac-keys.patch`, `arm64e-threaded-starts.patch`, `native-arm-pan.patch` (A57 has no PAC, no PAN), built
-   **arm64** for `MACHINE_CONFIGS=BCM2837` with `a64x` enabled + the ioswitch board/driver changes. The ioswitch
-   XNU diff (`tree/patches/xnu-ioswitch.diff`, against xnu-10063.141.1) has to be ported to 12377 hunk by hunk
-   (raw SD mount, IOSwitchRawMount/cryptex binding, ArmCpu SMP fixes, interrupt plumbing, display hooks...).
+   **arm64** for `MACHINE_CONFIGS=BCM2837` with `a64x` enabled + the ios-on-switch-lmao board/driver changes. The ios-on-switch-lmao
+   XNU diff (`tree/patches/xnu-switch.diff`, against xnu-10063.141.1) has to be ported to 12377 hunk by hunk
+   (raw SD mount, SwitchRawMount/cryptex binding, ArmCpu SMP fixes, interrupt plumbing, display hooks...).
    UniXNU-sheng's iPadOS 27 bring-up patch shows the 12377-era equivalents (bindfs/vm_unix cryptex paths,
    shared-region 4K slide, posix_spawnattr layout).
 2. **Kexts**: the 26.5.2 kernelcache is an arm64e MH_FILESET (240 kexts). UniXNU's 26.5.2 profile lists the prelink
@@ -236,7 +236,7 @@ What a bootable 26.5.2 still needs (in order):
    itself, which we replace; LDOP 8.3k), LDAPR 1k, FP16 15. APFS: 336k words, 1,472 LDOP, 16 CAS, 3 LDAPR;
    AMFI 2 CAS; sandbox 51 LDOP + 4 CAS + 1 SWP; IOSurface 9 + 6; corecrypto has SHA3/SVE paths behind its CPU checks.
    Here the layout is ours (the prelinker places each kext), so every LSE site gets an adjacent stub: no planner.
-3. **Drivers**: every ioswitch IOKit driver (SD, GIC, display, GPU, touch, buttons, audio, Wi-Fi, BT, power) rebuilt
+3. **Drivers**: every ios-on-switch-lmao IOKit driver (SD, GIC, display, GPU, touch, buttons, audio, Wi-Fi, BT, power) rebuilt
    against the 12377 KPIs; the m2v/NVK Metal plugin rebuilt for the iOS 26 SDK (its shader cache keys change).
 4. **Identity**: ADT as J171aAP/iPad11,6 (or keep the iPad7,1-style generic iPad identity with the 26 product keys);
    delete the MobileGestalt cache on Data after the identity change (springboard-blockers note).
@@ -246,11 +246,11 @@ What a bootable 26.5.2 still needs (in order):
 6. **Daemons**: the 17.7 workarounds (disabled.plist set, AKS stand-in, keybag dirs, setup-skip prefs) re-checked
    against 26; JIT is refused for arm64e processes so WebKit runs JavaScriptCore without JIT.
 
-Booting it later without touching 17.7 (single entry `switchroot/ioswitch`, as the user wants):
+Booting it later without touching 17.7 (single entry `switchroot/ios`, as the user wants):
 
 - Keep **one** Hekate entry and one folder. Put the 26 build next to the 17.7 one inside it:
-  `switchroot/ioswitch/kernel-window.bin` (17.7) and `switchroot/ioswitch/kernel-window-26.bin`, and give the
-  native loader one choice: if **Vol-** is held when it starts (or a file `switchroot/ioswitch/boot-26` exists),
+  `switchroot/ios/kernel-window.bin` (17.7) and `switchroot/ios/kernel-window-26.bin`, and give the
+  native loader one choice: if **Vol-** is held when it starts (or a file `switchroot/ios/boot-26` exists),
   load `kernel-window-26.bin`, else the 17.7 window. The ini, the menu and the entry name stay the same.
 - In the APFS container on the SD's data partition, add the 26 volume group (OS, Data, Preboot) next to 17.7's; the
   26 kernel-window's ADT names the 26 volume UUIDs (`root_match_volume_uuid`), so 17.7 never sees 26's volumes. Space:
@@ -260,7 +260,7 @@ Booting it later without touching 17.7 (single entry `switchroot/ioswitch`, as t
 
 Layout facts for 23F84: the dyld cache lives in the SystemOS cryptex (`/System/Library/Caches/com.apple.dyld/`,
 main + 83 subcaches + .symbols; text 3.63 GB in three packed regions), AppOS cryptex 14 MB; same cryptex scheme as
-17.7, so IOSwitchRawMount's cryptex binding carries over. Kernelcache `kernelcache.release.ipad11b` (MH_FILESET,
+17.7, so SwitchRawMount's cryptex binding carries over. Kernelcache `kernelcache.release.ipad11b` (MH_FILESET,
 arm64e, 240 kexts, `xnu-12377.122.8~1/RELEASE_ARM64_T8020`). Use the iPad11,6 / J171aAP identity: the userland and
 its MobileGestalt answers were built for the ipad11b device class.
 
@@ -283,7 +283,7 @@ and libfirehose from the main tree's `.cache/fakeroot`, read only; OBJROOT etc. 
   from xnu-8796.101.5 and an unconditional `__builtin_ptrauth_strip` in `unixnu_fileset_unmapped` (debug.c); and
   `IPHONEOS_DEPLOYMENT_TARGET=27.0` in the environment for the final link. Only the post-link symbol-set export
   check fails (Apple DART/UAT symbols absent on BCM2837), which does not affect the kernel binary.
-- Not in it yet: the ioswitch board/driver port to 12377, UniXNU's component archives (ArmCpu, ArmDTPlatform,
+- Not in it yet: the ios-on-switch-lmao board/driver port to 12377, UniXNU's component archives (ArmCpu, ArmDTPlatform,
   source corecrypto, pthread) and the prelinked kexts. Never booted.
 
 ## 7. Files and disk
@@ -398,7 +398,7 @@ the same random state and compares X0-X30, NZCV and Q0-Q31 (FPSR not compared). 
   operands permuted with REV64/EXT/TRN/FNEG/DUP, so each lane is the same fused operation on the same values (NaN sign
   included). All 1,012 distinct cache words x 3,000 states + 116 synthetic (all rotations, 2s/4s/2d, aliasing) x
   20,000: 0 mismatches, sNaN included.
-- **FP16** (69,741 sites, ~100 forms: BNNS, VideoToolbox, CoreGraphics, ...; `a64x/a64x_fp16.inc`): widen (exact),
+- **FP16** (69,741 sites, ~100 forms: BNNS, VideoToolbox, CoreGraphics, ...; `a64x/a64x_fp16.h`): widen (exact),
   operate in single, narrow once; exact because 24 >= 2*11+2. Fused ops (FMADD family, FMLA/FMLS incl. by element,
   FRECPS/FRSQRTS) go through double and narrow with FCVTXN (round to odd) then FCVTN. FABS/FNEG/FMOV/FCSEL work on raw
   bits. **All 20,360 distinct cache words have a stub; 300 states each: 0 mismatches without signaling NaNs.** With
@@ -461,14 +461,14 @@ Still to do: the prelinker step that appends the stub section per kext and write
 
 ### 9.6 Not done this round
 
-- Porting the ioswitch XNU diff (10063 -> 12377): not started.
+- Porting the ios-on-switch-lmao XNU diff (10063 -> 12377): not started.
 - The kernel files were edited without a tree to compile them (the pristine 12377 tree was deleted for disk): the
   shared a64x/*.c compile and are tested on the host; `a64x_xnu.c` changes are small but **not compiled**.
   `kernel/src/` holds every new kernel file; `scripts/diff_newfiles.py` rewrites them into the diff.
 
 ### 9.7 Files and disk after round 3
 
-- Code: `a64x/` (now with `a64x_fp16.inc`), `tools/a64plan2.c` (cache planner: function-scoped liveness, data islands,
+- Code: `a64x/` (now with `a64x_fp16.h`), `tools/a64plan2.c` (cache planner: function-scoped liveness, data islands,
   landing pads, jump tables, FP classes, full-path verification), `tools/a64check.c` (loader decision for any
   Mach-O/fileset), `tools/mnemhist.py`, `tests/test_p2.c`, `tests/test_fma16.c`, `tests/passthrough/`,
   `kernel/src/` + `scripts/diff_newfiles.py` (the diff's new files), `kernel/a64x-xnu-12377.diff` (regenerated).
@@ -510,7 +510,7 @@ Libm (CPU-gated paths).
 
 ### 10.3 V-register liveness (FP stubs stop spilling)
 
-`a64x/a64x_vlive.inc`: per instruction, the V registers read and those written in full (loads/stores, scalar FP,
+`a64x/a64x_vlive.h`: per instruction, the V registers read and those written in full (loads/stores, scalar FP,
 every Advanced SIMD group; partial writes and accumulators count as reads; unknown reads all it names; SVE/SME read
 everything); calls kill V16-V31 and read V0-V15; same path walk as the X-register analysis.
 **Checked natively** (`tests/test_vlive.c`, this Mac's own dyld cache): every claim tested by re-running the word with
@@ -568,9 +568,9 @@ Re-planned with V liveness: 897,714 sites, 100% placed, 0 traps, 0 veneers, 2.38
 every stub verified (0 broken); LLVM cortex-a57 over all 43,200,598 distinct translated words: same as round 3 (no
 PAC/LSE/LDAPR/FP16/FCMA/FJCVTZS left). LSE regression: 74,256 + 12,288 checks, 0 failures.
 
-### 10.6 ioswitch XNU diff 10063 -> 12377: plan only
+### 10.6 ios-on-switch-lmao XNU diff 10063 -> 12377: plan only
 
-`kernel/ioswitch-12377-port-plan.md`: dry run of the 120-file / 331-hunk diff against the 12377 tree: 128 hunks fail in
+`kernel/switch-12377-port-plan.md`: dry run of the 120-file / 331-hunk diff against the 12377 tree: 128 hunks fail in
 57 files, 27 already present, 36 files clean, 31 new files; conflicts grouped by area with an order of work. Nothing
 was changed.
 
@@ -579,19 +579,19 @@ was changed.
 - The kext prelinker step (append a stub section per kext, plain auth pointers): not started.
 - Nothing ran on the Switch.
 
-## 11. Round 5 (2026-11-04 night): ioswitch's XNU diff on 12377, linked
+## 11. Round 5 (2026-11-04 night): ios-on-switch-lmao's XNU diff on 12377, linked
 
 ### 11.1 Port
 
-Regenerated the diff from the XNU working repo (read only): `git diff d8b8029..ioswitch` at 3515591 (home grid pager
-included) -> `port/xnu-ioswitch-3515591.diff`, 120 files / 336 hunks. 3-way merge per file (base 10063, ours =
-12377+UniXNU+a64x, theirs = ioswitch), conflicts resolved by region with a reason each; record, per-hunk table and
-the one-line reasons for every place ours was kept: `kernel/ioswitch-12377-port-plan.md`, `port/hunks.md`,
+Regenerated the diff from the XNU working repo (read only): `git diff d8b8029..ios-on-switch-lmao` at 3515591 (home grid pager
+included) -> `port/xnu-switch-3515591.diff`, 120 files / 336 hunks. 3-way merge per file (base 10063, ours =
+12377+UniXNU+a64x, theirs = ios-on-switch-lmao), conflicts resolved by region with a reason each; record, per-hunk table and
+the one-line reasons for every place ours was kept: `kernel/switch-12377-port-plan.md`, `port/hunks.md`,
 `port/conflict-decisions.json`. Hunks: applied 212 (+2 with a 12377 API change), kept ours 77 (26 as is, 23
 hand-merged, 15 relocated into 12377's code, 10 ported by hand, 3 next to 12377's), already in 12377/UniXNU 24,
 took UniXNU/12377's equivalent 12, dropped 9 (PGZ x3, I/O submap, RPi timer routing, uat_bootstrap guard, 3 DriverKit
 headers). Home grid (3515591) chained onto the a64x cache pager: the apple_protect pager backs onto the a64x pager's
-object when the text is translated, onto the file otherwise. ioswitch's own code (299 build steps: drivers,
+object when the text is translated, onto the file otherwise. ios-on-switch-lmao's own code (299 build steps: drivers,
 diagnostics, kits, 11 archives) is built against the 12377 headers by `port/ext_build.py` from the main CMake
 build's commands (read only), with recipes regenerated from the 12377 build's compile records.
 
@@ -600,10 +600,10 @@ build's commands (read only), with recipes regenerated from the 12377 build's co
 `build/xnu-port/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837(.unstripped)` (copied to
 `out/xnu-12377-port/`): Mach-O arm64 subtype ALL, NOUNDEFS, 0 undefined symbols, Darwin 25.5.0, 26,703,160 bytes
 unstripped (sha256 5ead9776...71cac), 22,163,120 stripped (e336fc76...a4da). Same 15 link inputs as the main 10063
-kernel. Symbols: of the 614 main-kernel symbols the ioswitch diff defines or touches, 602 are present; the 12 absent
+kernel. Symbols: of the 614 main-kernel symbols the ios-on-switch-lmao diff defines or touches, 602 are present; the 12 absent
 are PGZ (4, gone in 12377), `vm_map_set_page_shift` (12377 passes the shift to `vm_map_create_with_page_shift`; same
 4K rule), `proc_ref_tracking_disabled` (TUNABLE replaced by a constant, same behaviour), 3 now-static VM counters and
-3 inline queue helpers. 115 a64x symbols. Full XNU rebuild: 38.6 s wall; ioswitch's archives: 7.6 s.
+3 inline queue helpers. 115 a64x symbols. Full XNU rebuild: 38.6 s wall; ios-on-switch-lmao's archives: 7.6 s.
 
 ### 11.3 The A57 pin (bug found and fixed; also affects 10.1)
 
@@ -615,7 +615,7 @@ at 17.0 and never needed it. Round 4's 12377 kernel (10.1) had the same flags an
 SFLAGS has no CFLAGS_EXTRA), and the `iokit_cxx_generic` recipe keeps `-mcpu` (main's Drivers.cmake drops it: harmless
 at 17.0, wrong at 26+). After: the classifier finds 40 non-v8.0 words in the port kernel,
 **the same 40 at the same symbols as the main 10063 kernel** (K256 and lz4 tables, data after exception vectors, guarded
-Apple-impdef sysregs in awl_* and `_ioswitch_secondary_entry`): `port/verify/flagged-{port,main}.txt`. ioswitch's 302
+Apple-impdef sysregs in awl_* and `_switch_secondary_entry`): `port/verify/flagged-{port,main}.txt`. ios-on-switch-lmao's 302
 objects: 0. When the main tree or the Bazel build moves to 12377, both changes have to go with it.
 
 ### 11.4 Not verified
@@ -640,9 +640,9 @@ Inputs and numbers exist (`tools/a64check` fileset mode, `out/kernelcache-kext-c
 
 Kept: `src/xnu-port` (the ported tree, 96 MB), `out/xnu-12377-port/` (the two kernels, 47 MB), `port/` (diffs, merge
 inputs, scripts, decisions, `hunks.md`, `verify/`). Removed: the pristine 12377 tree (re-fetch the
-apple-oss-distributions tarball), `build/xnu-port` and `build/ext` (rebuild: `KEEPGOING=1 port/build-ioswitch.sh`
+apple-oss-distributions tarball), `build/xnu-port` and `build/ext` (rebuild: `KEEPGOING=1 port/build-switch.sh`
 (compiles; the link needs the archives), then `port/ext_build.py -j 10`, then
-`LD_ARCHIVES="$(cat port/ld-archives.txt)" port/build-ioswitch.sh` after deleting the linked kernel). Scratch dir: 259
+`LD_ARCHIVES="$(cat port/ld-archives.txt)" port/build-switch.sh` after deleting the linked kernel). Scratch dir: 259
 MB; disk: 32 GB free.
 
 ## 12. Round 6 (2026-11-04 night): the 26.5.2 kexts prelinked into our 12377 kernel
@@ -685,7 +685,7 @@ __PRELINK_DATA, XML prelink info with `_PrelinkLinkKASLROffsets`; kext segments 
   blraa, 20,838 retab, 6,459 xpac, 4,497 braa -> identity; LDAPR 34; MSR/MRS DIT/SSBS/PAN 21), 1,707 LSE + 6 FP16 + 1 SB
   stubs = 11,938 stub words, each kext's in its own block after the kexts' text;
 - pointers: all 125,057 fixups written plain (45,226 kext->kext, 78,716 kext->our kernel by name, 2 cuts,
-  898 + 215 unresolved -> trampoline / `_ioswitch_prelink_cut_null`), all in the KASLR list;
+  898 + 215 unresolved -> trampoline / `_switch_prelink_cut_null`), all in the KASLR list;
 - branches: 51,988 kext->kernel BL/B re-aimed at our kernel, 10,378 unresolved -> a per-address trampoline
   (`adr x0, msg; b _panic`: "kext called Apple kernel function 0x..., which has no name here"), 33 in data islands left;
 - `prelink26/verify26.py` from the output bytes: every one of the 125,057 KASLR pointers lands in a mapped segment;

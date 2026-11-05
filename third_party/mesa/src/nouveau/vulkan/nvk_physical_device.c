@@ -85,7 +85,7 @@ nvk_get_vk_version(const struct nv_device_info *info)
    return VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION);
 }
 
-/* VK_EXT_host_image_copy: Turing+, and Tegra SoCs from Maxwell (ioswitch,
+/* VK_EXT_host_image_copy: Turing+, and Tegra SoCs from Maxwell (ios-on-switch-lmao,
  * the GM20B: getBytes of a Shared texture without waiting for the queue).
  */
 static bool
@@ -274,7 +274,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_graphics_pipeline_library = true,
       .EXT_hdr_metadata = true,
       .EXT_host_query_reset = true,
-      /* ioswitch: and on Tegra SoCs from Maxwell (nil copies their TegraColor
+      /* ios-on-switch-lmao: and on Tegra SoCs from Maxwell (nil copies their TegraColor
        * GOBs, the K1-to-Parker sector layout of the block-linear modifier).
        */
       .EXT_host_image_copy = nvk_has_host_image_copy(info),

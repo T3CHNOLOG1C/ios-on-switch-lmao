@@ -1,15 +1,15 @@
 """Flag lists several kernel drivers share (moved out of the kernel tree's BUILD.bazel by the layout move)."""
 
-# NativeIOSwitchBlock: the SD card's block device (+ cryptex files), and the board drivers riding in its archive.
+# NativeSwitchBlock: the SD card's block device (+ cryptex files), and the board drivers riding in its archive.
 BLOCK_FLAGS = [
     "-mgeneral-regs-only",
     "-mstrict-align",
     "-I",
     "{build}/storage-abi/include",
     "-I",
-    "{tree}/diagnostics/ioswitch/storage",
+    "{tree}/diagnostics/switch/storage",
     "-I",
-    "{tree}/diagnostics/ioswitch",
+    "{tree}/diagnostics/switch",
     "-I",
     "{tree}/kits/VerifiedRoot/include",
 ]

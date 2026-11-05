@@ -2258,7 +2258,7 @@ CastCompileTest(OSObject *obj)
 
 #if !(DEVELOPMENT || DEBUG)
 /*
- * ioswitch: libkern/c++/OSValueObject.cpp instantiates OSValueObject<int> in every config (GetOSValueObjectKTV); the
+ * ios-on-switch-lmao: libkern/c++/OSValueObject.cpp instantiates OSValueObject<int> in every config (GetOSValueObjectKTV); the
  * only other definition of its metaclass constructor is above, inside #if DEVELOPMENT || DEBUG. It stays at the end of
  * the file so that no DEVELOPMENT object's line numbers move.
  */

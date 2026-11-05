@@ -4,7 +4,7 @@
 //
 // The power journal: every sleep and wake step of SwitchBacklight (display power), SwitchSuspend (system sleep), the
 // wake sources and the wake guarantee writes one line: os_log (the unified log; and the kernel log, which a saved panic
-// keeps) and a RAM ring of the last 64. The ring is written to /private/var/ioswitch/power.log on Data (root 0644, the
+// keeps) and a RAM ring of the last 64. The ring is written to /private/var/Switch/power.log on Data (root 0644, the
 // whole file, fsynced) after every display off, every wake guarantee and before system sleep, so the last steps before
 // a forced power-off survive it: logd keeps minutes of the unified log in RAM (r7t's persisted log ended two minutes
 // before the device died). The first write of a boot first copies the last boot's file to power.prev.log.
@@ -53,8 +53,8 @@ unsigned switch_wake_bt_controllers(uint16_t *handles, unsigned max);
 void switch_wake_bt_slept(void);
 
 // The wake guarantee fired (SwitchBacklight, which lights the panel): a stackshot of every task (kernel and user frames,
-// wait info) is written to /private/var/ioswitch/wake-<UTC>.kcdata and, for `idevicecrashreport`, to mobile's
-// CrashReporter as ioswitch-wake-<UTC>.kcdata. On a kernel thread call; returns at once. At most one per 60 s.
+// wait info) is written to /private/var/Switch/wake-<UTC>.kcdata and, for `idevicecrashreport`, to mobile's
+// CrashReporter as Switch-wake-<UTC>.kcdata. On a kernel thread call; returns at once. At most one per 60 s.
 void switch_wake_stackshot(const char *why);
 
 // SwitchButtons (SwitchButtons.cpp): one press and release of the console's Home button (Consumer Menu) for

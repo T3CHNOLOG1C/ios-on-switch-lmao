@@ -214,13 +214,13 @@ enum running_timer {
 #if KPERF
 	RUNNING_TIMER_KPERF,
 #endif /* KPERF */
-	RUNNING_TIMER_IOSWITCH_KPROF,   /* ioswitch_kprof.c: the kernel sampling profiler (ioswitch-diag=3) */
+	RUNNING_TIMER_SWITCH_KPROF,   /* switch_kprof.c: the kernel sampling profiler (switch-diag=3) */
 	RUNNING_TIMER_MAX,
 };
 
-/* ioswitch_kprof.c: the sample (running timer callback) and the re-arm when a CPU leaves idle (thread_dispatch). */
-void ioswitch_kprof_expire(void *processor, void *unused);
-void ioswitch_kprof_running_setup(processor_t processor, uint64_t now);
+/* switch_kprof.c: the sample (running timer callback) and the re-arm when a CPU leaves idle (thread_dispatch). */
+void switch_kprof_expire(void *processor, void *unused);
+void switch_kprof_running_setup(processor_t processor, uint64_t now);
 
 /*
  * Get the earliest active deadline for this processor.

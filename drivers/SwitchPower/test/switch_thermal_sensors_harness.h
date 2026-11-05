@@ -1,7 +1,7 @@
 // switch_thermal_sensors_harness.c's exported wrappers of drivers/SwitchPower/SwitchSensors.h and SwitchGovernor.h's
 // switch_gov_index_at_fraction, for switch_thermal_sensors_test.cpp.
-#ifndef IOSWITCH_SWITCH_THERMAL_SENSORS_HARNESS_H
-#define IOSWITCH_SWITCH_THERMAL_SENSORS_HARNESS_H
+#ifndef SWITCH_SWITCH_THERMAL_SENSORS_HARNESS_H
+#define SWITCH_SWITCH_THERMAL_SENSORS_HARNESS_H
 
 #include <stdint.h>
 
@@ -37,4 +37,4 @@ const char *cltm_key(unsigned i);
 }
 #endif
 
-#endif  // IOSWITCH_SWITCH_THERMAL_SENSORS_HARNESS_H
+#endif  // SWITCH_SWITCH_THERMAL_SENSORS_HARNESS_H

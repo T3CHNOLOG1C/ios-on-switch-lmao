@@ -1,4 +1,4 @@
-# Hardware JPEG on ioswitch: the contract TegraNVJPG implements
+# Hardware JPEG on ios-on-switch-lmao: the contract TegraNVJPG implements
 
 iPadOS 17.7.11 (21H461). What CMPhoto, ImageIO, UIKit and VideoToolbox's JPEG plug-ins ask of Apple's hardware JPEG
 codec driver, and how TegraNVJPG answers on the Tegra X1's NVJPG. **[V]** = read in the 21H461 binaries (dyld cache,

@@ -1,5 +1,5 @@
 """What the packaging reads of the kernel's configuration: the boot-args (boot_args.py's output) and the display mode
-(IOSwitchPortrait.h)."""
+(SwitchPortrait.h)."""
 
 import re
 from pathlib import Path
@@ -16,8 +16,8 @@ def boot_arg_on(command_line: str, name: str) -> bool:
 
 
 def portrait_native(header) -> bool:
-    """True when the kernel is built portrait-native: IOSwitchPortrait.h's default for IOSWITCH_PORTRAIT_NATIVE."""
-    found = re.search(r'^#define IOSWITCH_PORTRAIT_NATIVE ([01])\b', Path(header).read_text(), re.M)
+    """True when the kernel is built portrait-native: SwitchPortrait.h's default for SWITCH_PORTRAIT_NATIVE."""
+    found = re.search(r'^#define SWITCH_PORTRAIT_NATIVE ([01])\b', Path(header).read_text(), re.M)
     if not found:
-        raise SystemExit(f'{header}: no IOSWITCH_PORTRAIT_NATIVE default')
+        raise SystemExit(f'{header}: no SWITCH_PORTRAIT_NATIVE default')
     return found.group(1) == '1'

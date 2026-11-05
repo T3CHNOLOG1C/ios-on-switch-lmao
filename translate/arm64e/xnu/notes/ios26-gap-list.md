@@ -3,13 +3,13 @@
 Target as chosen in round 2 (NOTES 1): `iPad_10.2_2020_26.5.2_23F84_Restore.ipsw` (iPad 8, A12, Lightning, home
 button; kernelcache `kernelcache.release.ipad11b`, xnu-12377.122.8 RELEASE_ARM64_T8020, kexts built for 23F82).
 Today's userland: 17.7.11 21H461 from `iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw` (iPad7,1, A10X, j120ap). Each
-item below says what it is, the evidence, and what to do. "Ours" is the ioswitch 12377 port (round 5).
+item below says what it is, the evidence, and what to do. "Ours" is the ios-on-switch-lmao 12377 port (round 5).
 
 ## A. The 17 UniXNU helpers cut from kern_exec (round 5): what comes back
 
 | helper(s) | what UniXNU uses it for | needed for 26.5.2? | form |
 |---|---|---|---|
-| `native_cryptex_os_view`, `native_cryptex_os_bind` | binds the SystemOS cryptex's /System and /usr at /private/preboot/Cryptexes/OS so the root's /System/Cryptexes/OS links resolve (WebKit's ExtensionKit processes) | No as code. Ours mounts the two cryptex volumes at /private/preboot/Cryptexes/{OS,App} itself (IOSwitchRawMount.inc), which is what those links reach; 23F84 uses the same cryptex scheme (NOTES 5). | Keep ours. Check once on 26 that `/System/Cryptexes/OS/System/Library/ExtensionKit/Extensions/WebContentExtension.appex` resolves. |
+| `native_cryptex_os_view`, `native_cryptex_os_bind` | binds the SystemOS cryptex's /System and /usr at /private/preboot/Cryptexes/OS so the root's /System/Cryptexes/OS links resolve (WebKit's ExtensionKit processes) | No as code. Ours mounts the two cryptex volumes at /private/preboot/Cryptexes/{OS,App} itself (SwitchRawMount.h), which is what those links reach; 23F84 uses the same cryptex scheme (NOTES 5). | Keep ours. Check once on 26 that `/System/Cryptexes/OS/System/Library/ExtensionKit/Extensions/WebContentExtension.appex` resolves. |
 | `native_gestalt_cache_drop` | deletes MobileGestalt's cache once after a device-tree answer changed (P3 -> sRGB) | Not on a fresh 26 Data volume (no stale cache). Needed if the ADT identity or display answers change on an installed Data volume. | Not code: the installer (or a one-shot marker like ours) removes `/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist` when the boot package's ADT identity changes. |
 | `native_ls_store_drop` | rebuilds LaunchServices' database once after it was built while /System/Cryptexes/OS led nowhere | No: on 26 the cryptex path exists from the first boot (ours mounts before launchd). | None. |
 | `native_staged_apps_*` (6) | copies OS-volume /private/var/staged_system_apps into Data before launchd | No as code: our installer seeds Data from the System volume's /private/var (incl. staged_system_apps) and ours triggers DataMigrator with its sentinel. | Keep ours; the migration prefs must name 23F84 (B2). |
@@ -19,23 +19,23 @@ item below says what it is, the evidence, and what to do. "Ours" is the ioswitch
 
 Identifiers that are per IPSW and are compiled in today (all must become generated from the IPSW pins, the way
 `tools/install/spec.py` already reads them back):
-1. **System volume UUID** `04769D26-2CA0-4825-B443-E2E5F88300F2` (21H461's OS container): `NativeIOSwitchBlock.cpp`
-   `kRootUUID` (also the ADT root-matching UUID), `IOSwitchRawMount.inc:172` and `kern_exec.c` (owner boot manifest).
+1. **System volume UUID** `04769D26-2CA0-4825-B443-E2E5F88300F2` (21H461's OS container): `NativeSwitchBlock.cpp`
+   `kRootUUID` (also the ADT root-matching UUID), `SwitchRawMount.h:172` and `kern_exec.c` (owner boot manifest).
    23F84's OS volume has its own UUID.
-2. **SystemOS cryptex volume UUID** `8846FE78-...` (`IOSwitchCryptex.h`, `IOSwitchRawMount.inc:173`) and App cryptex
-   `C0DCFAA8-...`; **cryptex image names** `044-76034-038.dmg` / `044-75188-038.dmg` (`IOSwitchCryptex.cpp` paths) ->
+2. **SystemOS cryptex volume UUID** `8846FE78-...` (`SwitchCryptex.h`, `SwitchRawMount.h:173`) and App cryptex
+   `C0DCFAA8-...`; **cryptex image names** `044-76034-038.dmg` / `044-75188-038.dmg` (`SwitchCryptex.cpp` paths) ->
    23F84: `094-54813-109.dmg` (SystemOS, after AEA decryption) and `094-54871-112.dmg` (AppOS).
 3. **First-boot prefs** (`kern_exec.c` around 8930): `com.apple.migration` LastSystemVersion/buildVersion `21H461`
    -> `23F84`; `com.apple.purplebuddy` `SetupVersion 11` -> 23F84's value (read it from Setup.app / UniXNU's
    skip-setup seed for its 23F84 profile); the 29 staged apps are the 21H461 set (23F84's list comes from the image).
-4. **Cryptex-only code directories** (`IOSwitchRawMount.inc` `cryptex_only[]`, "21H461: these are all of them"):
+4. **Cryptex-only code directories** (`SwitchRawMount.h` `cryptex_only[]`, "21H461: these are all of them"):
    recompute for 23F84 by diffing the SystemOS cryptex against the OS volume (directories with Mach-Os only in the
    cryptex).
 5. **launchd override database** (`kern_exec.c` ~9050): "the only override database 21H461 launchd reads" and the
    disabled labels (nfcd, seld, coreidvd, biometrickitd.mesa, nearbyd, tailspind, ...). Re-read which files 26's
    launchd consults and re-check every label (26 adds and renames daemons; anything for absent hardware must be
    listed again).
-6. **AMFI launch constraints** (`native_ioswitch_overlay_image`, `native_ioswitch_cryptex_image`; UniXNU's
+6. **AMFI launch constraints** (`native_switch_overlay_image`, `native_switch_cryptex_image`; UniXNU's
    zzyc-owner-skip-launch-constraints): written against 21H461 AMFI's self constraint (on-system-volume or authorized
    authapfs volume, launch-type 1, validation-category 1). With 26's AMFI kext the constraint set may differ; check the
    `Launch Constraint Violation` lines of the first 26 boot against these two exceptions.
@@ -82,6 +82,6 @@ Same steps as `tools/install/sd.py` (compose / write / reprobe / populate / boot
 7. **Data seeding**: from 23F84's System /private/var, as today; plus the B3 prefs with 23F84 values.
 8. **Boot package**: kernel = our 12377 kernel prelinked with the 26 kexts (`prelink26/out/kernel.macho` shape),
    26 original-bindings linked into it, ADT with the J171aAP identity and the 26 volume UUIDs; same single Hekate
-   entry `switchroot/ioswitch` (user rule) with the 17.7 / 26 choice made by the native loader (NOTES 5).
+   entry `switchroot/ios` (user rule) with the 17.7 / 26 choice made by the native loader (NOTES 5).
 9. **Trust**: static trust cache bundle = 23F84's OS + SystemOS trust caches; App cryptex trust cache appended, as
    for 17.7.11.

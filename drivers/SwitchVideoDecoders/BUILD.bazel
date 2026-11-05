@@ -9,7 +9,7 @@ lint_files(exclude = [
     "**/linux/**",
     "**/nouveau/**",
     "**/nvidia/**",
-    "AVD/VP9Tables.inc",
+    "AVD/VP9Tables.h",
     "test/HEVCClip.h",
     "test/HEVCTrace.h",
     "test/VDECClip.h",
@@ -51,7 +51,7 @@ ios_binary(
         "/System/Library/VideoDecoders/HEVCH8.videodecoder",
     ],
     pagesize = "4096",
-    sign_identifier = "com.ioswitch.hevch8",
+    sign_identifier = "com.brunostjohn.switch.hevch8",
 )
 
 # AVD.videodecoder: H.264, VP9 and HEVC on NVDEC as VideoToolbox's hardware 'avc1', 'vp09' and 'hvc1' decoders
@@ -76,7 +76,6 @@ ios_binary(
     hdrs = glob(
         [
             "AVD/*.h",
-            "AVD/*.inc",
         ],
         allow_empty = True,
     ) + ["//drivers/TegraNVDEC:headers"] + [
@@ -107,7 +106,7 @@ ios_binary(
         "IOSurface",
     ],
     pagesize = "4096",
-    sign_identifier = "com.ioswitch.avd",
+    sign_identifier = "com.brunostjohn.switch.avd",
 )
 
 # vdectest: the clip check as a command (AVD/ClipCheck.c); on the device the same check runs inside AVD.videodecoder.
@@ -138,5 +137,5 @@ ios_binary(
         "-framework",
         "VideoToolbox",
     ],
-    sign_identifier = "com.ioswitch.vdectest",
+    sign_identifier = "com.brunostjohn.switch.vdectest",
 )

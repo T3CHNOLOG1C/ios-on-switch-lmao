@@ -164,7 +164,7 @@ def mesa_rust_release_staticlib(name, crate_root, deps):
         crate_name = name,
         crate_root = crate_root,
         edition = "2021",
-        rustc_flags = _BUILDTYPE + ["-Cmetadata=ioswitch@@{}@sta".format(name)] + _EMBED + _LTO + _REMAP,
+        rustc_flags = _BUILDTYPE + ["-Cmetadata=switch-ios@@{}@sta".format(name)] + _EMBED + _LTO + _REMAP,
         target_compatible_with = _RUST_1_96_1,
         toolchains = _TOOLCHAINS,
         deps = deps,

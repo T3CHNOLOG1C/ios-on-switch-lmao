@@ -11,7 +11,7 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-# The boot package deploy and install write (a directory: switchroot/ioswitch/, bootloader/ini/, overlay/).
+# The boot package deploy and install write (a directory: switchroot/ios/, bootloader/ini/, overlay/).
 label_flag(
     name = "boot_package",
     build_setting_default = "//:boot",

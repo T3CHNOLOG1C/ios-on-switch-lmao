@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_BLOCK_BACKEND_H
-#define IOSWITCH_BLOCK_BACKEND_H
+#ifndef SWITCH_BLOCK_BACKEND_H
+#define SWITCH_BLOCK_BACKEND_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -63,14 +63,14 @@ void iosw_block_destroy(struct iosw_block_backend *backend);
 
 /* Built-in IOKit bridge. Called after the diagnostic qualification succeeds.
  * Returns iosw_block_status; repeated calls never publish duplicate devices. */
-int ioswitch_block_publish(void);
+int switch_block_publish(void);
 
 /* One non-waiting registry snapshot: exact expected APFS volume UUID plus
  * provider ancestry to the selected published child. OK returns observed
  * /dev/<BSDName>; NOT_READY means the fixture may retry within its own bound.
  * Duplicate UUID matches are CORRUPT. Clears path on error. This establishes
  * media identity only and does not authorize root or authenticate contents. */
-int ioswitch_block_volume_path(unsigned index, char *path, unsigned capacity);
+int switch_block_volume_path(unsigned index, char *path, unsigned capacity);
 
 #ifdef __cplusplus
 }

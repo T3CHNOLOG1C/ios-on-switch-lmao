@@ -1,5 +1,5 @@
 # NVK, the Vulkan driver //gpu:bundle ships (libvulkan_nouveau.dylib), and its macOS host twin (the seed and the raw
-# pack compile shaders with it): Mesa vendored with ioswitch's commits on top (third_party/mesa, README.ioswitch.md),
+# pack compile shaders with it): Mesa vendored with ios-on-switch-lmao's commits on top (third_party/mesa, README.ios-on-switch-lmao.md),
 # built by Bazel action by action the way meson builds it (third_party/mesa/bazel).
 #
 #   bazel build //gpu/nvk:ios //gpu/nvk:host     bazel-bin/gpu/nvk/{ios,host}/libvulkan_nouveau.dylib (+ .source)

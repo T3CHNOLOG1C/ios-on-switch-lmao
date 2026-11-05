@@ -1,14 +1,14 @@
 // A scenario in a process of its own, for host tests of code that keeps boot-wide state (a driver's statics, a model's
 // globals): the scenario sees a fresh process, as at boot, whatever ran before it in the test binary.
 //
-//   TEST(SwitchTouch, Drag) { ioswitch::test::ExpectPassesInFreshProcess([] { scenarioDrag(); }); }
-//   TEST(SwitchUSB, Lost) { ioswitch::test::ExpectExitInFreshProcess([] { scenarioLost(); }, 3, "panic: .*lost"); }
+//   TEST(SwitchTouch, Drag) { switch_ios::test::ExpectPassesInFreshProcess([] { scenarioDrag(); }); }
+//   TEST(SwitchUSB, Lost) { switch_ios::test::ExpectExitInFreshProcess([] { scenarioLost(); }, 3, "panic: .*lost"); }
 //
 // GoogleTest's death-test machinery runs it: the "threadsafe" style re-executes this binary for just this test, which
 // runs the body and exits 1 if any EXPECT/ASSERT/REQUIRE of the body failed, after printing those failures to its stderr,
 // which the parent shows in its own failure ("Actual msg"). The parent never runs the body itself.
-#ifndef IOSWITCH_BAZEL_TESTING_FRESH_PROCESS_H
-#define IOSWITCH_BAZEL_TESTING_FRESH_PROCESS_H
+#ifndef SWITCH_BAZEL_TESTING_FRESH_PROCESS_H
+#define SWITCH_BAZEL_TESTING_FRESH_PROCESS_H
 
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
@@ -20,7 +20,7 @@
 #include <string>
 #include <utility>
 
-namespace ioswitch::test {
+namespace switch_ios::test {
 
 namespace detail {
 // In the child: runs the body with every assertion result captured, prints the failures to stderr (the parent shows
@@ -70,6 +70,6 @@ template <class Body> void ExpectExitInFreshProcess(Body &&body, int code, const
         ::testing::ExitedWithCode(code), stderr_regex);
 }
 
-}  // namespace ioswitch::test
+}  // namespace switch_ios::test
 
-#endif  // IOSWITCH_BAZEL_TESTING_FRESH_PROCESS_H
+#endif  // SWITCH_BAZEL_TESTING_FRESH_PROCESS_H

@@ -477,7 +477,7 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
             // bounded, as every wait of the plugin's: a chunk not wired in 20 s is a stuck kernel import, said once and
             // stopped for the stack (a wait with no bound froze r7p8's compositor with nothing in the log)
             if (!grown_.wait_for(l, std::chrono::seconds(20), [&] { return !growing_; })) {
-                os_log_fault(os_log_create("com.ioswitch.TegraGM20BMetal", "raw"),
+                os_log_fault(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
                              "raw: pool chunk not wired after 20 s (the grower's import): abort() for the stack");
                 abort();
             }
@@ -500,7 +500,7 @@ void Device::warm()
     if (!grower_.joinable())
         grower_ = std::thread([this] {
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-            pthread_setname_np("com.ioswitch.raw.pool");
+            pthread_setname_np("com.brunostjohn.switch.raw.pool");
             growLoop();
         });
 }

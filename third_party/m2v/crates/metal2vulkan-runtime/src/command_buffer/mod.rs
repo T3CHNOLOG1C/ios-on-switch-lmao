@@ -1991,7 +1991,7 @@ impl CommandBuffer {
         Ok(())
     }
 
-    /// [`wait_until_scheduled`](Self::wait_until_scheduled) for at most `timeout` (ioswitch): `Ok(true)`
+    /// [`wait_until_scheduled`](Self::wait_until_scheduled) for at most `timeout` (ios-on-switch-lmao): `Ok(true)`
     /// once scheduled, `Ok(false)` where `timeout` passed first; refused as that one is.
     pub fn wait_until_scheduled_within(&self, timeout: Duration) -> Result<bool, Error> {
         let deadline = Instant::now() + timeout;
@@ -2020,7 +2020,7 @@ impl CommandBuffer {
         Ok(true)
     }
 
-    /// [`wait_until_completed`](Self::wait_until_completed) for at most `timeout` (ioswitch):
+    /// [`wait_until_completed`](Self::wait_until_completed) for at most `timeout` (ios-on-switch-lmao):
     /// `Ok(true)` once completed, `Ok(false)` where `timeout` passed first; refused as that one
     /// is (where [`wait_until_completed_for`](Self::wait_until_completed_for) answers `TimedOut`).
     pub fn wait_until_completed_within(&self, timeout: Duration) -> Result<bool, Error> {

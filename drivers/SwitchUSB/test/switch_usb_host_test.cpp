@@ -92,7 +92,7 @@ void invariant(bool ok, const std::string &what)
 {
     if (!ok) {
         ADD_FAILURE() << "model invariant: " << what;
-        throw ioswitch::test::RequireFailed();
+        throw switch_ios::test::RequireFailed();
     }
 }
 

@@ -42,7 +42,7 @@ extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSU
 
 static os_log_t rawLog()
 {
-    static os_log_t l = os_log_create("com.ioswitch.TegraGM20BMetal", "raw");
+    static os_log_t l = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw");
     return l;
 }
 
@@ -5194,7 +5194,7 @@ void raw_metal_prepare(const char *packPath, uint64_t stack)
     gPrepared.stack = stack;
     gPrepared.thread = std::thread([] {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-        pthread_setname_np("com.ioswitch.raw.open");
+        pthread_setname_np("com.brunostjohn.switch.raw.open");
         std::string err;
         raw::Device *dev = openDevice(gPrepared.path.c_str(), gPrepared.stack, err);
         std::lock_guard<std::mutex> m(gPrepared.lock);
@@ -5270,7 +5270,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         }
     }
     r->handlers = dispatch_queue_create(
-        "com.ioswitch.raw.handlers",
+        "com.brunostjohn.switch.raw.handlers",
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
     r->rawSignals = [NSMapTable weakToStrongObjectsMapTable];
     r->m2vSignals = [NSMapTable weakToStrongObjectsMapTable];
@@ -5318,12 +5318,12 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     // both threads at the render thread's class: what they hold up is the frame
     std::thread([] {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-        pthread_setname_np("com.ioswitch.raw.submit");
+        pthread_setname_np("com.brunostjohn.switch.raw.submit");
         submitLoop();
     }).detach();
     std::thread([] {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-        pthread_setname_np("com.ioswitch.raw.completion");
+        pthread_setname_np("com.brunostjohn.switch.raw.completion");
         completionLoop();
     }).detach();
     return (id<MTLDevice>)r->device;

@@ -1,6 +1,6 @@
 """Just enough APFS to give two volumes the UUIDs the kernel was built with.
 
-The kernel finds Data and Preboot by fixed volume UUIDs (diagnostics/ioswitch/IOSwitchRawMount.inc), but macOS
+The kernel finds Data and Preboot by fixed volume UUIDs (diagnostics/switch/SwitchRawMount.h), but macOS
 picks a random UUID for every new volume and has no option to choose one (newfs_apfs only has -D, a UUID derived
 from the role). So after `diskutil apfs addVolume`, with the container detached, this rewrites apfs_vol_uuid in
 every physical copy of the two volume superblocks the container's object maps point at (all checkpoints), each with

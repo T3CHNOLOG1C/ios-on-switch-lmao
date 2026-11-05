@@ -2,7 +2,7 @@
 
 Not built. This is what an iPadOS 26 kernel needs from the translator. `kernel/xnu-12377.121.6/` holds pristine
 xnu-12377.121.6 (selected by `--//kernel:xnu_version=12377.121.6`, macro `XNU_12377_121_6`); these files land there
-as commits after the BCM2837 restore and the ioswitch series, with `a64x` added to `config/MASTER.arm64.bcm2837`
+as commits after the BCM2837 restore and the ios-on-switch-lmao series, with `a64x` added to `config/MASTER.arm64.bcm2837`
 next to `config_code_decryption`.
 
 ## Contents
@@ -12,8 +12,8 @@ next to `config_code_decryption`.
 | `bsd/kern/a64x_xnu.c`, `bsd/sys/a64x_xnu.h` | The loader glue: load-time translation of arm64e/arm64 images through `apple_protect` pagers, the dyld-cache pager with the plan, the EL0 undefined-instruction fallback, `kern.a64x.*` sysctls |
 | `a64x-hooks-xnu-12377.121.6.diff` | The hooks in XNU itself, against pristine xnu-12377.121.6 plus UniXNU's series (below): `bsd/conf/files`, `config/MASTER` (`CONFIG_A64X`), `mach_loader.c`, `kern_mman.c` (mmap of an arm64e `__TEXT`, MAP_JIT refused for arm64e processes), `cpuid.c` (reports ARMv8E), `copyio.c` and `machine_routines_asm.s` (user atomics for the fallback), `sleh.c`, `vm_dyld_pager.c` (identity `signPointer`), `vm_shared_region.c` (auth rebases written plain) |
 | `unixnu-arm64e-series.txt` | UniXNU's `profiles/arch/arm64e/patches/xnu/series`, the order its `patches/xnu-12377/*` apply in |
-| `notes/` | Building UniXNU's series as plain arm64 (`unixnu-12377-arm64-fixes.md`), the toolchain at an iOS 26+ deployment target (`toolchain-notes-12377.md`), what iPadOS 26 still needs (`ios26-gap-list.md`), the plan of the 10063 to 12377 port (`ioswitch-12377-port-plan.md`) |
-| `port-12377/` | ioswitch's own XNU changes, merged onto 12377 + UniXNU + a64x: `ioswitch-on-12377.diff` (58 files), the per-hunk record `hunks.md` and the reason for every conflict resolved `conflict-decisions.json` |
+| `notes/` | Building UniXNU's series as plain arm64 (`unixnu-12377-arm64-fixes.md`), the toolchain at an iOS 26+ deployment target (`toolchain-notes-12377.md`), what iPadOS 26 still needs (`ios26-gap-list.md`), the plan of the 10063 to 12377 port (`switch-12377-port-plan.md`) |
+| `port-12377/` | ios-on-switch-lmao's own XNU changes, merged onto 12377 + UniXNU + a64x: `switch-on-12377.diff` (58 files), the per-hunk record `hunks.md` and the reason for every conflict resolved `conflict-decisions.json` |
 | `prelink26/` | The iPadOS 26.5.2 kext prelinker: names Apple's stripped kernel addresses (vtable PAC discriminators, GOT order, symbolicator signatures), translates kext text in kernel mode through `arm64e kext`, writes every chained fixup plain, re-aims kext-to-kernel branches; `bindings/` holds the 26.5.2 bindings it found. Paths are those of the scratch layout it ran in |
 
 ## The core is the package's
@@ -33,7 +33,7 @@ How it was built on 2026-11-04, outside Bazel:
    `__builtin_ptrauth_strip` in `debug.c`).
 3. `patch -p1 < a64x-hooks-xnu-12377.121.6.diff`; copy `bsd/` here and `translate/arm64e/a64x/*` to `bsd/kern/a64x/`;
    add `a64x` to `config/MASTER.arm64.bcm2837` next to `config_code_decryption`.
-4. `patch -p1 < port-12377/ioswitch-on-12377.diff` for ioswitch's board and driver changes.
+4. `patch -p1 < port-12377/switch-on-12377.diff` for ios-on-switch-lmao's board and driver changes.
 
 Built this way on 2026-11-04 (`MACHINE_CONFIGS=BCM2837`, DEVELOPMENT), the kernel linked: Mach-O arm64 (subtype ALL),
 0 undefined symbols, Darwin 25.5.0. It has never booted.

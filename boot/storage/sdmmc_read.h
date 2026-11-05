@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_SDMMC_READ_H
-#define IOSWITCH_SDMMC_READ_H
+#ifndef SWITCH_SDMMC_READ_H
+#define SWITCH_SDMMC_READ_H
 #include <stdint.h>
 
 /* Single-owner, read-only SDHCI PIO transport. No physical MMIO is selected by

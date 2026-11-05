@@ -257,7 +257,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The making log (ioswitch r8-webgpu): with `METAL2VULKAN_MAKING_LOG` naming a file, each record
+/// The making log (ios-on-switch-lmao r8-webgpu): with `METAL2VULKAN_MAKING_LOG` naming a file, each record
 /// this process writes (a making the cache and its seed did not hold: a compile) appends one line
 /// to it, `<record name> <making's parts as text>`, a part named by a digest (`@<16 hex>`) printed
 /// once on a line of its own before it (`= <16 hex> <its parts>`). Two builds or two devices that

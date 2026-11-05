@@ -25,7 +25,7 @@
 // Neither line had fired on this hardware when this was written, so their check is a never-booted one until they
 // have (XusbPorts.h xusb_irq_judge): when the PD controller reports a device on the port in host role a port-status
 // event is due (SwitchUSB.cpp calls switchxhci_expect_port_change); 2 s later, and again 50 ms after that, a line that
-// has not reached its handler once this boot (ioswitch_interrupt_count) with an event waiting, or, after the
+// has not reached its handler once this boot (switch_interrupt_count) with an event waiting, or, after the
 // controller's first start, with nothing delivered at all, logs one line with the whole path (xHCI, FPCI, IPFS, GIC)
 // and turns host mode off for the boot (switch_usb_host_failed: device mode stays). Once a line has fired, IMAN0.IP
 // pending (with IE and INTE) and ERDP0 unmoved, or a mailbox interrupt pending with no handler run, panics as for every
@@ -46,7 +46,7 @@
 #include <libkern/c++/OSKext.h>
 #include <libkern/c++/OSSymbol.h>
 #include <mach/kmod.h>
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 
 extern "C" {
 extern kmod_info_t g_kernel_kmod_info;
@@ -125,7 +125,7 @@ bool SwitchXHCI::start(IOService *provider)
                             this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &SwitchXHCI::checkFired))
                       : nullptr;
     if (!check || tegraLoop->addEventSource(check) != kIOReturnSuccess) return false;
-    IOService *nub = ioswitch_interrupt_nub(xhost::kMailboxIntid, false);
+    IOService *nub = switch_interrupt_nub(xhost::kMailboxIntid, false);
     mailbox = IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchXHCI::mailboxAction,
                                                                        &SwitchXHCI::mailboxFilter, nub, 0);
     if (!mailbox || tegraLoop->addEventSource(mailbox) != kIOReturnSuccess) {
@@ -210,13 +210,13 @@ xusb_irq_sample SwitchXHCI::hostSample() const
 {
     uint32_t iman = 0, usbcmd = 0, usbsts = 0, erdp = 0;
     (void)gHost.interruptSample(iman, usbcmd, usbsts, erdp);
-    return {ioswitch_interrupt_count(xhost::kHostIntid), erdp, xusb_xhci_pending(iman, usbsts),
+    return {switch_interrupt_count(xhost::kHostIntid), erdp, xusb_xhci_pending(iman, usbsts),
             xusb_xhci_deliverable(iman, usbcmd)};
 }
 
 xusb_irq_sample SwitchXHCI::mailboxSample() const
 {
-    return {ioswitch_interrupt_count(xhost::kMailboxIntid), 0, !mailboxStorm && gHost.mailboxPending(), true};
+    return {switch_interrupt_count(xhost::kMailboxIntid), 0, !mailboxStorm && gHost.mailboxPending(), true};
 }
 
 void SwitchXHCI::armCheck(uint32_t ms, uint8_t stage)
@@ -246,7 +246,7 @@ void SwitchXHCI::checkFired(IOTimerEventSource *)
     const uint32_t intid = hostSide ? xhost::kHostIntid : xhost::kMailboxIntid;
     char state[480], gic[192];
     gHost.describe(state, sizeof(state));
-    ioswitch_interrupt_describe(intid, gic, sizeof(gic));
+    switch_interrupt_describe(intid, gic, sizeof(gic));
     if (verdict == XUSB_IRQ_PANIC) {
         panic("SwitchUSB: XUSB %s interrupt lost (INTID %u): %s, %s", hostSide ? "host" : "mailbox", intid, state, gic);
     }
@@ -310,7 +310,7 @@ void SwitchXHCI::regWrite64(uint64_t base, uint32_t offset, uint64_t value)
 
 // ---------------------------------------------------------------------------
 // Bring-up. SwitchXHCI's metaclass needs the loaded original AppleUSBXHCI, so its static initializer is staged
-// (Drivers.cmake ioswitch_late_object) and runs here.
+// (Drivers.cmake switch_late_object) and runs here.
 namespace {
 const OSMetaClass *lookupClass(const char *text)
 {
@@ -346,7 +346,7 @@ bool addResourcePersonality(const char *ioClass, const char *category, const cha
 // IOService resolves it through ArmGIC).
 IOService *makeNub()
 {
-    IOService *gic = ioswitch_interrupt_nub(xhost::kHostIntid, false);
+    IOService *gic = switch_interrupt_nub(xhost::kHostIntid, false);
     OSObject *controllers = gic ? gic->copyProperty(gIOInterruptControllersKey) : nullptr;
     OSObject *specifiers = gic ? gic->copyProperty(gIOInterruptSpecifiersKey) : nullptr;
     OSDictionary *dict = OSDictionary::withCapacity(4);
@@ -482,8 +482,8 @@ void switchxhci_describe(char *buffer, size_t size)
     gHost.describePads(pads, sizeof(pads));
     gHost.describePorts(ports, sizeof(ports));
     const PowerCycle cycle = gCycle;
-    const unsigned host = ioswitch_interrupt_count(xhost::kHostIntid),
-                   mailbox = ioswitch_interrupt_count(xhost::kMailboxIntid);
+    const unsigned host = switch_interrupt_count(xhost::kHostIntid),
+                   mailbox = switch_interrupt_count(xhost::kMailboxIntid);
     if (cycle.port) {
         snprintf(buffer, size, "%s; INTID 71 x%u 72 x%u; last PP cycle port %u %#x>%#x>%#x%s; %s", ports, host, mailbox,
                  cycle.port, cycle.trace[0], cycle.trace[1], cycle.trace[2],

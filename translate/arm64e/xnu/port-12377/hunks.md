@@ -1,4 +1,4 @@
-# ioswitch XNU diff d8b8029..3515591 on xnu-12377.121.6: per-hunk result
+# ios-on-switch-lmao XNU diff d8b8029..3515591 on xnu-12377.121.6: per-hunk result
 
 336 hunks in 120 files: applied 212, kept ours 26, already in 12377 24, kept ours (hand-merged) 23, kept ours (relocated) 15, took 12377/UniXNU 12, kept ours (ported by hand) 10, dropped 9, kept ours (+12377) 3, applied (adapted) 2
 
@@ -14,29 +14,29 @@
 | `bsd/dev/arm/systemcalls.c` | 1 | applied | 1/1 added lines in the result | 3-way merge, no conflict |
 | `bsd/dev/arm/systemcalls.c` | 2 | applied | 3/3 added lines in the result | 3-way merge, no conflict |
 | `bsd/kern/bsd_init.c` | 1 | applied | 2/2 added lines in the result | 3-way merge, no conflict in this hunk |
-| `bsd/kern/bsd_init.c` | 2 | applied | 76/76 added lines in the result | auto: 12377/UniXNU already has all of ioswitch's lines |
+| `bsd/kern/bsd_init.c` | 2 | applied | 76/76 added lines in the result | auto: 12377/UniXNU already has all of ios-on-switch-lmao's lines |
 | `bsd/kern/bsd_init.c` | 3 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
-| `bsd/kern/bsd_init.c` | 4 | applied | 6/6 added lines in the result | auto: 12377/UniXNU already has all of ioswitch's lines |
-| `bsd/kern/bsd_init.c` | 5 | kept ours | 27/27 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
-| `bsd/kern/bsd_init.c` | 6 | kept ours | 22/22 added lines in the result | kept ours: with XNU_IOSWITCH_VERIFIED_ROOT the SD disk is published after bsd_autoconf, UniXNU's probe otherwise |
-| `bsd/kern/bsd_init.c` | 7 | kept ours | 12/12 added lines in the result | kept ours: with XNU_IOSWITCH_VERIFIED_ROOT the SD disk is published after bsd_autoconf, UniXNU's probe otherwise |
+| `bsd/kern/bsd_init.c` | 4 | applied | 6/6 added lines in the result | auto: 12377/UniXNU already has all of ios-on-switch-lmao's lines |
+| `bsd/kern/bsd_init.c` | 5 | kept ours | 27/27 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
+| `bsd/kern/bsd_init.c` | 6 | kept ours | 22/22 added lines in the result | kept ours: with XNU_SWITCH_VERIFIED_ROOT the SD disk is published after bsd_autoconf, UniXNU's probe otherwise |
+| `bsd/kern/bsd_init.c` | 7 | kept ours | 12/12 added lines in the result | kept ours: with XNU_SWITCH_VERIFIED_ROOT the SD disk is published after bsd_autoconf, UniXNU's probe otherwise |
 | `bsd/kern/bsd_init.c` | 8 | kept ours | 45/45 added lines in the result | kept ours: raw-SD root authorization (owner-signed development policy for the exact OS root) on UniXNU's audit block |
 | `bsd/kern/bsd_init.c` | 9 | kept ours | 25/25 added lines in the result | kept ours: raw-SD root authorization (owner-signed development policy for the exact OS root) on UniXNU's audit block |
-| `bsd/kern/bsd_init.c` | 10 | applied | 9/9 added lines in the result | auto: 12377/UniXNU already has all of ioswitch's lines |
+| `bsd/kern/bsd_init.c` | 10 | applied | 9/9 added lines in the result | auto: 12377/UniXNU already has all of ios-on-switch-lmao's lines |
 | `bsd/kern/kern_descrip.c` | 1 | applied | 10/10 added lines in the result | 3-way merge, no conflict |
 | `bsd/kern/kern_exec.c` | 1 | applied | 3/3 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/kern/kern_exec.c` | 2 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/kern/kern_exec.c` | 3 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
-| `bsd/kern/kern_exec.c` | 4 | kept ours (relocated) | 3/3 added lines in the result | ioswitch's migration-process declaration placed before 12377's next function |
-| `bsd/kern/kern_exec.c` | 5 | kept ours (relocated) | 13/13 added lines in the result | auto: ioswitch's inserted lines relocated into 12377's version of this code |
+| `bsd/kern/kern_exec.c` | 4 | kept ours (relocated) | 3/3 added lines in the result | ios-on-switch-lmao's migration-process declaration placed before 12377's next function |
+| `bsd/kern/kern_exec.c` | 5 | kept ours (relocated) | 13/13 added lines in the result | auto: ios-on-switch-lmao's inserted lines relocated into 12377's version of this code |
 | `bsd/kern/kern_exec.c` | 6 | kept ours (relocated) | 4/4 added lines in the result | boot-progress/diag around load_machfile, relocated to 12377's call |
-| `bsd/kern/kern_exec.c` | 7 | kept ours (ported by hand) | 146/146 added lines in the result | ioswitch's exec helpers (daemon environment, iconagent refusal, overlay/cryptex launch-constraint images) moved before exec_extract_strings: see POST |
+| `bsd/kern/kern_exec.c` | 7 | kept ours (ported by hand) | 146/146 added lines in the result | ios-on-switch-lmao's exec helpers (daemon environment, iconagent refusal, overlay/cryptex launch-constraint images) moved before exec_extract_strings: see POST |
 | `bsd/kern/kern_exec.c` | 8 | kept ours (relocated) | 18/18 added lines in the result | iconagent refusal + daemon environment strings before the envv terminator, relocated |
-| `bsd/kern/kern_exec.c` | 9 | kept ours | 982/982 added lines in the result | kept ours: IOSwitchRawMount.inc and the owner/raw boot helpers (watchdog policy, migration, portrait, first-boot state) |
+| `bsd/kern/kern_exec.c` | 9 | kept ours | 982/982 added lines in the result | kept ours: SwitchRawMount.h and the owner/raw boot helpers (watchdog policy, migration, portrait, first-boot state) |
 | `bsd/kern/kern_exec.c` | 10 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
-| `bsd/kern/kern_exec.c` | 11 | kept ours (relocated) | 6/6 added lines in the result | auto: ioswitch's inserted lines relocated into 12377's version of this code |
+| `bsd/kern/kern_exec.c` | 11 | kept ours (relocated) | 6/6 added lines in the result | auto: ios-on-switch-lmao's inserted lines relocated into 12377's version of this code |
 | `bsd/kern/kern_exec.c` | 12 | applied | 2/2 added lines in the result | 3-way merge, no conflict in this hunk |
-| `bsd/kern/kern_exec.c` | 13 | kept ours (hand-merged) | 49/49 added lines in the result | kept ours: UniXNU's 12377 owner mounts (init_envp, os_log) with ioswitch's boot progress, root events, watchdog policy and raw overlay |
+| `bsd/kern/kern_exec.c` | 13 | kept ours (hand-merged) | 49/49 added lines in the result | kept ours: UniXNU's 12377 owner mounts (init_envp, os_log) with ios-on-switch-lmao's boot progress, root events, watchdog policy and raw overlay |
 | `bsd/kern/kern_exec.c` | 14 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/kern/kern_exec.c` | 15 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/kern/kern_exec.c` | 16 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
@@ -49,9 +49,9 @@
 | `bsd/kern/kern_exit.c` | 4 | applied | 3/3 added lines in the result | 3-way merge, no conflict |
 | `bsd/kern/kern_exit.c` | 5 | applied | 4/4 added lines in the result | 3-way merge, no conflict |
 | `bsd/kern/kern_exit.c` | 6 | applied | 14/14 added lines in the result | 3-way merge, no conflict |
-| `bsd/kern/kern_memorystatus_freeze.c` | 1 | took 12377/UniXNU | 0/1 added lines in the result | 12377 already enables the freezer on iOS ((IOS && !XR) || WATCH); ioswitch only repaired 10063's broken #if |
+| `bsd/kern/kern_memorystatus_freeze.c` | 1 | took 12377/UniXNU | 0/1 added lines in the result | 12377 already enables the freezer on iOS ((IOS && !XR) || WATCH); ios-on-switch-lmao only repaired 10063's broken #if |
 | `bsd/kern/kern_priv.c` | 1 | applied | 9/9 added lines in the result | 3-way merge, no conflict |
-| `bsd/kern/kern_proc.c` | 1 | kept ours (ported by hand) | 3/6 added lines in the result | 12377 replaced the TUNABLE by kern_feature_override; ours (tracking off with diagnostics) re-applied there: see POST; adapted: 12377 has no proc_ref_tracking_disabled TUNABLE; IOSWITCH_PROCREF_TRACKING_OFF makes every kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD) site off, as ours was |
+| `bsd/kern/kern_proc.c` | 1 | kept ours (ported by hand) | 3/6 added lines in the result | 12377 replaced the TUNABLE by kern_feature_override; ours (tracking off with diagnostics) re-applied there: see POST; adapted: 12377 has no proc_ref_tracking_disabled TUNABLE; SWITCH_PROCREF_TRACKING_OFF makes every kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD) site off, as ours was |
 | `bsd/kern/mach_loader.c` | 1 | took 12377/UniXNU | 3/4 added lines in the result | 12377 already maps 4K pages when !APPLE_ARM64_ARCH_FAMILY (same rule, new vm_map_pageshift variable) |
 | `bsd/kern/source_pthread_bootstrap.c` | 1 | already in 12377 | 21/21 added lines in the result | identical file already in the 12377 tree (UniXNU or 12377 itself) |
 | `bsd/kern/sys_work_interval.c` | 1 | kept ours | 22/22 added lines in the result | 12377's sys/work_interval.h still lacks the INSTANCE_START/UPDATE/FINISH operations libsystem_kernel uses |
@@ -59,13 +59,13 @@
 | `bsd/kern/sys_work_interval.c` | 3 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/kern/sys_work_interval.c` | 4 | kept ours | 18/18 added lines in the result | 12377's sys/work_interval.h still lacks the INSTANCE_START/UPDATE/FINISH operations libsystem_kernel uses |
 | `bsd/kern/ubc_subr.c` | 1 | applied | 1/1 added lines in the result | 12377 already includes vm/vm_map.h |
-| `bsd/kern/ubc_subr.c` | 2 | kept ours (hand-merged) | 3/3 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ioswitch's skip when integrity checks are off |
-| `bsd/kern/ubc_subr.c` | 3 | kept ours (hand-merged) | 5/5 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ioswitch's skip when integrity checks are off |
-| `bsd/kern/ubc_subr.c` | 4 | kept ours (hand-merged) | 7/7 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ioswitch's skip when integrity checks are off |
-| `bsd/kern/ubc_subr.c` | 5 | kept ours (hand-merged) | 7/7 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ioswitch's skip when integrity checks are off |
-| `bsd/kern/ubc_subr.c` | 6 | kept ours (hand-merged) | 105/117 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ioswitch's skip when integrity checks are off |
+| `bsd/kern/ubc_subr.c` | 2 | kept ours (hand-merged) | 3/3 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ios-on-switch-lmao's skip when integrity checks are off |
+| `bsd/kern/ubc_subr.c` | 3 | kept ours (hand-merged) | 5/5 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ios-on-switch-lmao's skip when integrity checks are off |
+| `bsd/kern/ubc_subr.c` | 4 | kept ours (hand-merged) | 7/7 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ios-on-switch-lmao's skip when integrity checks are off |
+| `bsd/kern/ubc_subr.c` | 5 | kept ours (hand-merged) | 7/7 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ios-on-switch-lmao's skip when integrity checks are off |
+| `bsd/kern/ubc_subr.c` | 6 | kept ours (hand-merged) | 105/117 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ios-on-switch-lmao's skip when integrity checks are off |
 | `bsd/kern/ubc_subr.c` | 7 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
-| `bsd/kern/ubc_subr.c` | 8 | kept ours (hand-merged) | 24/24 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ioswitch's skip when integrity checks are off |
+| `bsd/kern/ubc_subr.c` | 8 | kept ours (hand-merged) | 24/24 added lines in the result | took UniXNU's newer cs_native4k (1 MiB chunks, uncached above 32 MiB, timing counters) plus ios-on-switch-lmao's skip when integrity checks are off |
 | `bsd/kern/ubc_subr.c` | 9 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/miscfs/bindfs/bind_vfsops.c` | 1 | applied | 1/1 added lines in the result | UniXNU 12377 has native_bindfs_boot_mount and keeps BINDFS_ENTITLEMENT just below |
 | `bsd/miscfs/bindfs/bind_vfsops.c` | 2 | applied | 3/3 added lines in the result | 3-way merge, no conflict in this hunk |
@@ -111,20 +111,20 @@
 | `bsd/vfs/vfs_cluster.c` | 1 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/vfs/vfs_cluster.c` | 2 | applied | 13/13 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/vfs/vfs_cluster.c` | 3 | applied | 4/4 added lines in the result | 3-way merge, no conflict in this hunk |
-| `bsd/vfs/vfs_cluster.c` | 4 | kept ours (hand-merged) | 1/1 added lines in the result | kept ours: cluster verification also for ioswitch's verified virtual-device mounts, on 12377's condition |
+| `bsd/vfs/vfs_cluster.c` | 4 | kept ours (hand-merged) | 1/1 added lines in the result | kept ours: cluster verification also for ios-on-switch-lmao's verified virtual-device mounts, on 12377's condition |
 | `bsd/vfs/vfs_cluster.c` | 5 | applied | 132/132 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/vfs/vfs_cluster.c` | 6 | applied | 6/6 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/vfs/vfs_cluster.c` | 7 | applied | 6/6 added lines in the result | 3-way merge, no conflict in this hunk |
 | `bsd/vfs/vfs_syscalls.c` | 1 | applied | 28/28 added lines in the result | 3-way merge, no conflict |
 | `bsd/vfs/vfs_syscalls.c` | 2 | applied | 4/4 added lines in the result | 3-way merge, no conflict |
 | `bsd/vm/vm_unix.c` | 1 | kept ours (relocated) | 3/3 added lines in the result | page_decrypt.h for the home grid pager |
-| `bsd/vm/vm_unix.c` | 2 | kept ours | 186/189 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept); adapted: home grid pager takes the text object's base offset (object_base), so it can back onto the a64x translator's object as well as the cache file's |
+| `bsd/vm/vm_unix.c` | 2 | kept ours | 186/189 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept); adapted: home grid pager takes the text object's base offset (object_base), so it can back onto the a64x translator's object as well as the cache file's |
 | `bsd/vm/vm_unix.c` | 3 | kept ours | 6/6 added lines in the result | kept ours: the OS cryptex mounted read-only at Cryptexes/OS counts as preboot for the shared cache |
 | `bsd/vm/vm_unix.c` | 4 | kept ours | 21/21 added lines in the result | kept ours: the OS cryptex mounted read-only at Cryptexes/OS counts as preboot for the shared cache |
 | `bsd/vm/vm_unix.c` | 5 | kept ours | 5/5 added lines in the result | kept ours: the OS cryptex mounted read-only at Cryptexes/OS counts as preboot for the shared cache |
 | `config/MASTER` | 1 | applied | 1/1 added lines in the result | 3-way merge, no conflict |
 | `config/MASTER.arm64.bcm2837` | 1 | took 12377/UniXNU | 0/1 added lines in the result | UniXNU 12377 already adds nos_arm_asm nos_arm_pmap (via ARM_EXTRAS_BASE) |
-| `config/MASTER.arm64.bcm2837` | 2 | kept ours (hand-merged) | 0/2 added lines in the result | kept ours: no sched_hygiene_debug in DEV/DEBUG (ioswitch removed it); 12377's other new options kept |
+| `config/MASTER.arm64.bcm2837` | 2 | kept ours (hand-merged) | 0/2 added lines in the result | kept ours: no sched_hygiene_debug in DEV/DEBUG (ios-on-switch-lmao removed it); 12377's other new options kept |
 | `iokit/DriverKit/IOKernelReportStructs.h` | 1 | already in 12377 | 82/82 added lines in the result | identical file already in the 12377 tree (UniXNU or 12377 itself) |
 | `iokit/DriverKit/IOKitKeys.h` | 1 | dropped | 245/245 added lines in the result | 12377 ships its own newer copy of this DriverKit header |
 | `iokit/DriverKit/IORPC.h` | 1 | already in 12377 | 218/218 added lines in the result | identical file already in the 12377 tree (UniXNU or 12377 itself) |
@@ -153,7 +153,7 @@
 | `iokit/Kernel/IOService.cpp` | 2 | applied | 10/10 added lines in the result | 3-way merge, no conflict |
 | `iokit/Kernel/IOStartIOKit.cpp` | 1 | kept ours (ported by hand) | 6/6 added lines in the result | 12377 dropped the #ifndef BCM2837 around the IORTC wait; ours (switch_pmic_start) re-applied: see POST |
 | `iokit/Kernel/IOStartIOKit.cpp` | 2 | kept ours (ported by hand) | 3/3 added lines in the result | 12377 dropped the #ifndef BCM2837 around the IORTC wait; ours (switch_pmic_start) re-applied: see POST |
-| `iokit/Kernel/IOUserClient.cpp` | 1 | kept ours | 1/1 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
+| `iokit/Kernel/IOUserClient.cpp` | 1 | kept ours | 1/1 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
 | `iokit/Kernel/IOUserClient.cpp` | 2 | took 12377/UniXNU | 0/5 added lines in the result | UniXNU 12377 already lets a native grant cover set-properties (with a NULL check) |
 | `iokit/Kernel/IOUserClient.cpp` | 3 | kept ours | 34/34 added lines in the result | kept ours: grant list with '*' (all clients) and a NULL service check |
 | `iokit/Kernel/IOUserClient.cpp` | 4 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
@@ -178,7 +178,7 @@
 | `makedefs/MakeInc.def` | 2 | took 12377/UniXNU | 1/2 added lines in the result | UniXNU kernel-sdk-root.patch: same include paths (superset) |
 | `makedefs/MakeInc.kernel` | 1 | applied | 2/2 added lines in the result | 3-way merge, no conflict |
 | `osfmk/arm/arm_init.c` | 1 | applied | 3/3 added lines in the result | 3-way merge, no conflict in this hunk |
-| `osfmk/arm/arm_init.c` | 2 | kept ours (relocated) | 2/2 added lines in the result | auto: ioswitch's inserted lines relocated into 12377's version of this code |
+| `osfmk/arm/arm_init.c` | 2 | kept ours (relocated) | 2/2 added lines in the result | auto: ios-on-switch-lmao's inserted lines relocated into 12377's version of this code |
 | `osfmk/arm/arm_init.c` | 3 | applied | 2/2 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm/arm_init.c` | 4 | applied | 4/4 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm/arm_init.c` | 5 | applied | 5/5 added lines in the result | 3-way merge, no conflict in this hunk |
@@ -200,11 +200,11 @@
 | `osfmk/arm/pmap/pmap.c` | 6 | kept ours (hand-merged) | 24/24 added lines in the result | kept ours: dense-RAM mode skips reserved pages before handing out the next page |
 | `osfmk/arm/pmap/pmap.c` | 7 | applied | 6/6 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm/pmap/pmap.c` | 8 | kept ours (hand-merged) | 9/9 added lines in the result | kept ours: dense-RAM mode skips reserved pages before handing out the next page |
-| `osfmk/arm/pmap/pmap.c` | 9 | applied | 3/3 added lines in the result | auto: 12377/UniXNU already has all of ioswitch's lines |
+| `osfmk/arm/pmap/pmap.c` | 9 | applied | 3/3 added lines in the result | auto: 12377/UniXNU already has all of ios-on-switch-lmao's lines |
 | `osfmk/arm/pmap/pmap.c` | 10 | took 12377/UniXNU | 0/4 added lines in the result | 12377 already prints the iommu ptep the same way |
 | `osfmk/arm/pmap/pmap.c` | 11 | applied | 3/3 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm/pmap/pmap.c` | 12 | kept ours (hand-merged) | 16/16 added lines in the result | kept ours: dense-RAM mode skips reserved pages before handing out the next page |
-| `osfmk/arm/pmap/pmap.c` | 13 | applied | 3/3 added lines in the result | auto: 12377/UniXNU already has all of ioswitch's lines |
+| `osfmk/arm/pmap/pmap.c` | 13 | applied | 3/3 added lines in the result | auto: 12377/UniXNU already has all of ios-on-switch-lmao's lines |
 | `osfmk/arm/pmap/pmap.c` | 14 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm/pmap/pmap.c` | 15 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm/pmap/pmap.c` | 16 | kept ours (hand-merged) | 37/37 added lines in the result | kept ours: dense-RAM mode skips reserved pages before handing out the next page |
@@ -227,7 +227,7 @@
 | `osfmk/arm64/arm_vm_init.c` | 10 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm64/arm_vm_init.c` | 11 | applied | 2/2 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm64/arm_vm_init.c` | 12 | applied | 2/2 added lines in the result | 3-way merge, no conflict in this hunk |
-| `osfmk/arm64/arm_vm_init.c` | 13 | kept ours (relocated) | 6/6 added lines in the result | auto: ioswitch's inserted lines relocated into 12377's version of this code |
+| `osfmk/arm64/arm_vm_init.c` | 13 | kept ours (relocated) | 6/6 added lines in the result | auto: ios-on-switch-lmao's inserted lines relocated into 12377's version of this code |
 | `osfmk/arm64/arm_vm_init.c` | 14 | applied | 16/16 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm64/arm_vm_init.c` | 15 | applied | 4/4 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm64/caches_asm.s` | 1 | applied | 4/4 added lines in the result | UniXNU 12377 already defines CleanPoC_DcacheRegion_Force_nopreempt_nohid |
@@ -236,9 +236,9 @@
 | `osfmk/arm64/cpu.c` | 3 | applied | 16/16 added lines in the result | 3-way merge, no conflict |
 | `osfmk/arm64/cpu.c` | 4 | applied | 6/6 added lines in the result | 3-way merge, no conflict |
 | `osfmk/arm64/genassym.c` | 1 | applied | 1/1 added lines in the result | 3-way merge, no conflict |
-| `osfmk/arm64/ioswitch_ram.h` | 1 | applied | 12/12 added lines in the result | new file |
-| `osfmk/arm64/ioswitch_smp.h` | 1 | applied | 70/70 added lines in the result | new file |
-| `osfmk/arm64/ioswitch_smp_tables.inc` | 1 | applied | 50/50 added lines in the result | new file |
+| `osfmk/arm64/switch_ram.h` | 1 | applied | 12/12 added lines in the result | new file |
+| `osfmk/arm64/switch_smp.h` | 1 | applied | 70/70 added lines in the result | new file |
+| `osfmk/arm64/switch_smp_tables.h` | 1 | applied | 50/50 added lines in the result | new file |
 | `osfmk/arm64/machine_routines_asm.s` | 1 | applied | 67/67 added lines in the result | 3-way merge, no conflict |
 | `osfmk/arm64/machine_routines_asm.s` | 2 | applied | 11/11 added lines in the result | 3-way merge, no conflict |
 | `osfmk/arm64/proc_reg.h` | 1 | applied | 12/12 added lines in the result | 3-way merge, no conflict |
@@ -249,24 +249,24 @@
 | `osfmk/arm64/sleh.c` | 5 | applied | 5/5 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm64/sleh.c` | 6 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm64/sptm/pmap/pmap.c` | 1 | applied | 3/3 added lines in the result | 3-way merge, no conflict |
-| `osfmk/arm64/start.s` | 1 | kept ours | 5/5 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
+| `osfmk/arm64/start.s` | 1 | kept ours | 5/5 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
 | `osfmk/arm64/start.s` | 2 | kept ours (relocated) | 47/47 added lines in the result | Switch A57 PSCI first-start entry kept, after 12377's KTRR/CTRR/PV_CTRR #endif |
 | `osfmk/arm64/start.s` | 3 | kept ours (relocated) | 26/26 added lines in the result | Switch A57 PSCI first-start entry kept, after 12377's KTRR/CTRR/PV_CTRR #endif |
 | `osfmk/arm64/start.s` | 4 | applied | 2/2 added lines in the result | 3-way merge, no conflict in this hunk |
-| `osfmk/arm64/start.s` | 5 | kept ours | 80/80 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
+| `osfmk/arm64/start.s` | 5 | kept ours | 80/80 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
 | `osfmk/arm64/start.s` | 6 | kept ours (relocated) | 346/346 added lines in the result | Switch A57 PSCI first-start entry kept, after 12377's KTRR/CTRR/PV_CTRR #endif |
 | `osfmk/arm64/start.s` | 7 | kept ours (relocated) | 32/32 added lines in the result | Switch A57 PSCI first-start entry kept, after 12377's KTRR/CTRR/PV_CTRR #endif |
 | `osfmk/arm64/start.s` | 8 | applied | 4/4 added lines in the result | 3-way merge, no conflict in this hunk |
-| `osfmk/arm64/start.s` | 9 | kept ours | 72/72 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
+| `osfmk/arm64/start.s` | 9 | kept ours | 72/72 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
 | `osfmk/arm64/start.s` | 10 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/arm64/start.s` | 11 | applied | 2/2 added lines in the result | 3-way merge, no conflict in this hunk |
-| `osfmk/arm64/start.s` | 12 | kept ours | 20/20 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
-| `osfmk/arm64/start.s` | 13 | kept ours | 38/38 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
+| `osfmk/arm64/start.s` | 12 | kept ours | 20/20 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
+| `osfmk/arm64/start.s` | 13 | kept ours | 38/38 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
 | `osfmk/arm64/start.s` | 14 | dropped | 0/1 added lines in the result | 12377 removed the Raspberry Pi core-timer routing block; ours disabled it under XNU_NATIVE_ARCH_TIMER anyway |
 | `osfmk/arm64/start.s` | 15 | kept ours (relocated) | 5/5 added lines in the result | Switch A57 PSCI first-start entry kept, after 12377's KTRR/CTRR/PV_CTRR #endif |
-| `osfmk/arm64/start.s` | 16 | kept ours | 48/48 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
+| `osfmk/arm64/start.s` | 16 | kept ours | 48/48 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
 | `osfmk/arm64/start.s` | 17 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
-| `osfmk/arm64/start.s` | 18 | kept ours | 2/2 added lines in the result | auto: ioswitch extends the 12377/UniXNU block (all its lines kept) |
+| `osfmk/arm64/start.s` | 18 | kept ours | 2/2 added lines in the result | auto: ios-on-switch-lmao extends the 12377/UniXNU block (all its lines kept) |
 | `osfmk/arm64/start.s` | 19 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/conf/Makefile.template` | 1 | applied | 1/1 added lines in the result | 3-way merge, no conflict |
 | `osfmk/conf/files.arm64` | 1 | took 12377/UniXNU | 3/4 added lines in the result | UniXNU 12377 already gates the AMCC files on apple_amcc |
@@ -291,7 +291,7 @@
 | `osfmk/kern/boot_progress.h` | 1 | applied | 34/34 added lines in the result | new file |
 | `osfmk/kern/debug.c` | 1 | applied | 2/2 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/kern/debug.c` | 2 | applied | 1/1 added lines in the result | 3-way merge, no conflict in this hunk |
-| `osfmk/kern/debug.c` | 3 | kept ours (hand-merged) | 2/2 added lines in the result | ioswitch_panic_logged after 12377's SavePanicInfo (new initiator argument) |
+| `osfmk/kern/debug.c` | 3 | kept ours (hand-merged) | 2/2 added lines in the result | switch_panic_logged after 12377's SavePanicInfo (new initiator argument) |
 | `osfmk/kern/debug.c` | 4 | applied | 4/4 added lines in the result | 3-way merge, no conflict in this hunk |
 | `osfmk/kern/kalloc.c` | 1 | applied | 1/1 added lines in the result | 3-way merge, no conflict |
 | `osfmk/kern/kalloc.c` | 2 | applied | 36/36 added lines in the result | 3-way merge, no conflict |
@@ -313,7 +313,7 @@
 | `osfmk/kern/work_interval.c` | 3 | applied | 2/2 added lines in the result | 3-way merge, no conflict |
 | `osfmk/kern/work_interval.h` | 1 | applied | 2/2 added lines in the result | 3-way merge, no conflict |
 | `osfmk/kern/zalloc.c` | 1 | dropped | 0/3 added lines in the result | dropped: PGZ defaults (ours: off with diagnostics) - 12377 has no PGZ |
-| `osfmk/kern/zalloc.c` | 2 | dropped | 0/2 added lines in the result | dropped: every ioswitch hunk here is about PGZ (decode fix, alignment probe, default off); 12377 has no PGZ |
+| `osfmk/kern/zalloc.c` | 2 | dropped | 0/2 added lines in the result | dropped: every ios-on-switch-lmao hunk here is about PGZ (decode fix, alignment probe, default off); 12377 has no PGZ |
 | `osfmk/kern/zalloc.c` | 3 | dropped | 14/81 added lines in the result | dropped: UniXNU's PGZ alignment probe (off by default) has no PGZ to probe in 12377 |
 | `osfmk/prng/prng_random.c` | 1 | took 12377/UniXNU | 27/28 added lines in the result | UniXNU 12377's corecrypto14 bootstrap is the newer one (original corecrypto as sole provider) |
 | `osfmk/vm/pmap.h` | 1 | applied | 9/9 added lines in the result | 3-way merge, no conflict |

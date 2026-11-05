@@ -27,8 +27,8 @@ extern "C" kern_return_t stack_snapshot_from_kernel(int pid, void *buf, uint32_t
                                                     unsigned *bytes_traced);
 
 namespace {
-const char kJournal[] = "/private/var/ioswitch/power.log";
-const char kPrevious[] = "/private/var/ioswitch/power.prev.log";
+const char kJournal[] = "/private/var/Switch/power.log";
+const char kPrevious[] = "/private/var/Switch/power.prev.log";
 const char kCrashReporter[] = "/private/var/mobile/Library/Logs/CrashReporter";
 constexpr uint64_t kSourceGapNS = 500000000ull, kShotGapNS = 60000000000ull;
 constexpr uint32_t kShotBytes = 4u << 20, kShotMaxBytes = 8u << 20;  // XNU caps one at max_tracebuf_size (8 MiB here)
@@ -148,7 +148,7 @@ void writeJournal()
     }
     char stamp[24];
     utcStamp(stamp, sizeof(stamp));
-    int used = snprintf(gRender, sizeof(gRender), "IOSwitch power journal, written %s UTC at %llu ms uptime\n", stamp,
+    int used = snprintf(gRender, sizeof(gRender), "SwitchPower journal, written %s UTC at %llu ms uptime\n", stamp,
                         nanoseconds(mach_absolute_time()) / 1000000);
     if (used < 0) used = 0;
     IOLockLock(lock);
@@ -156,7 +156,7 @@ void writeJournal()
         (size_t)used + switch_power_ring_render(&gRing, gRender + used, sizeof(gRender) - (size_t)used);
     IOLockUnlock(lock);
     const int error = writeFile(kJournal, gRender, length, 0644, -1);
-    if (error && !gWriteFailed) IOLog("IOSwitch power: %s not written (%d)\n", kJournal, error);
+    if (error && !gWriteFailed) IOLog("SwitchPower: %s not written (%d)\n", kJournal, error);
     gWriteFailed = error != 0;
     IOLockUnlock(writeLock);
 }
@@ -197,9 +197,9 @@ void shotCall(thread_call_param_t, thread_call_param_t)
     }
     char stamp[24], path[160];
     utcStamp(stamp, sizeof(stamp));
-    snprintf(path, sizeof(path), "/private/var/ioswitch/wake-%s.kcdata", stamp);
+    snprintf(path, sizeof(path), "/private/var/Switch/wake-%s.kcdata", stamp);
     int error = writeFile(path, buffer, bytes, 0644, -1);
-    snprintf(path, sizeof(path), "%s/ioswitch-wake-%s.kcdata", kCrashReporter, stamp);
+    snprintf(path, sizeof(path), "%s/Switch-wake-%s.kcdata", kCrashReporter, stamp);
     const int copyError = error ? error : writeFile(path, buffer, bytes, 0644, 501);
     IOFreeData(buffer, size);
     switch_power_journal("wake stackshot (%s): wake-%s.kcdata, %u bytes (written: %d, CrashReporter copy: %d)", why,
@@ -217,7 +217,7 @@ extern "C" void switch_power_journal(const char *format, ...)
     va_end(args);
     const uint64_t ms = nanoseconds(mach_absolute_time()) / 1000000;
     snprintf(line, sizeof(line), "%llu.%03llu %s", ms / 1000, ms % 1000, text);
-    os_log(OS_LOG_DEFAULT, "IOSwitch power: %s", line);
+    os_log(OS_LOG_DEFAULT, "SwitchPower: %s", line);
     IOLock *lock = once(&gLock);
     if (!lock) return;
     IOLockLock(lock);

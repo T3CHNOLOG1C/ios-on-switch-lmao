@@ -35,17 +35,17 @@ int runFp(std::initializer_list<const char *> args)
 
 TEST(LseStubs, SystematicEncodingsMatchTheInstruction)
 {
-    ioswitch::test::ExpectPassesInFreshProcess([] { EXPECT_EQ(0, runLse({"--gen", "6"})); });
+    switch_ios::test::ExpectPassesInFreshProcess([] { EXPECT_EQ(0, runLse({"--gen", "6"})); });
 }
 
 TEST(LseStubs, RandomEncodingsMatchTheInstruction)
 {
-    ioswitch::test::ExpectPassesInFreshProcess([] { EXPECT_EQ(0, runLse({"--random", "3000", "4"})); });
+    switch_ios::test::ExpectPassesInFreshProcess([] { EXPECT_EQ(0, runLse({"--random", "3000", "4"})); });
 }
 
 TEST(LseStubs, ACorruptedStubIsCaught)
 {
-    ioswitch::test::ExpectPassesInFreshProcess([] {
+    switch_ios::test::ExpectPassesInFreshProcess([] {
         setenv("A64X_TEST_BREAK", "1", 1);
         EXPECT_NE(0, runLse({"--gen", "1"}));
     });
@@ -55,7 +55,7 @@ TEST(LseStubs, ACorruptedStubIsCaught)
 // (no form it flags is unallocated).
 void expectExact(enum a64x_class cls, const char *samples)
 {
-    ioswitch::test::ExpectPassesInFreshProcess([cls, samples] {
+    switch_ios::test::ExpectPassesInFreshProcess([cls, samples] {
         char c[8];
         snprintf(c, sizeof(c), "%d", static_cast<int>(cls));
         EXPECT_EQ(0, runFp({"300", "--gen", samples, c}));
@@ -81,7 +81,7 @@ TEST(FpStubs, JscvtMatchesTheInstruction)
 // in __text is kept away by the island pass). Every form the host executes must match.
 void expectMatches(enum a64x_class cls, const char *samples)
 {
-    ioswitch::test::ExpectPassesInFreshProcess([cls, samples] {
+    switch_ios::test::ExpectPassesInFreshProcess([cls, samples] {
         char c[8];
         snprintf(c, sizeof(c), "%d", static_cast<int>(cls));
         EXPECT_EQ(0, runFp({"200", "--gen", samples, c}));
@@ -105,7 +105,7 @@ TEST(FpStubs, RdmFormsMatchTheInstruction)
 // The min forms of the FP16 across-lanes and scalar pairwise reductions differ from the max forms only in bit 23.
 TEST(FpStubs, Fp16MinReductionsMatchTheInstruction)
 {
-    ioswitch::test::ExpectPassesInFreshProcess([] {
+    switch_ios::test::ExpectPassesInFreshProcess([] {
         // FMINV h, FMINNMV h, FMINP h, FMINNMP h
         EXPECT_EQ(0, runFp({"2000", "0eb0fa66", "4eb0c8d3", "5eb0f97a", "5eb0c927"}));
         uint64_t n[4];

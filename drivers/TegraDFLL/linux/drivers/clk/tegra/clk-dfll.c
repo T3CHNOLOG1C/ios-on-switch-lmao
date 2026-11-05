@@ -1845,7 +1845,7 @@ static u8 find_mv_out_floor(struct tegra_dfll *td, int mv)
 	u8 i;
 
 	for (i = td->lut_bottom; i < td->lut_size; i++) {
-		/* IOSWITCH: 64-bit product, same result. The "no cap" thermal state passes INT_MAX (fcpu
+		/* SWITCH: 64-bit product, same result. The "no cap" thermal state passes INT_MAX (fcpu
 		 * tegra210b01_thermal_cap_table[0]) and Linux's -fno-strict-overflow wraps INT_MAX * 1000 to -1000,
 		 * which the unsigned compare never exceeds; the XNU C recipe traps signed overflow instead. */
 		if (td->lut_uv[i] > (s64)mv * 1000) {

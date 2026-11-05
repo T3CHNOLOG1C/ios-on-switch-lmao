@@ -170,8 +170,8 @@ processor_up_update_counts(processor_t processor)
  *	Flag processor as up and running, and available
  *	for scheduling.
  */
-#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
-extern void ioswitch_smp_scheduler_online(unsigned int cpu);
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+extern void switch_smp_scheduler_online(unsigned int cpu);
 #endif
 
 void
@@ -230,8 +230,8 @@ processor_up(
 		(*dtrace_cpu_state_changed_hook)(processor->cpu_id, TRUE);
 	}
 #endif
-#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
-	ioswitch_smp_scheduler_online(processor->cpu_id);
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+	switch_smp_scheduler_online(processor->cpu_id);
 #endif
 }
 #include <atm/atm_internal.h>

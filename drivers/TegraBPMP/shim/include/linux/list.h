@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: the doubly linked list subset mailman.c uses (include/linux/list.h semantics). */
+/* Switch TegraBPMP shim: the doubly linked list subset mailman.c uses (include/linux/list.h semantics). */
 #ifndef BPXNU_LINUX_LIST_H
 #define BPXNU_LINUX_LIST_H
 #include <stddef.h>

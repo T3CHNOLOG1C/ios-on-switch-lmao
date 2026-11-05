@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_LOADER_STAGE_H
-#define IOSWITCH_LOADER_STAGE_H
+#ifndef SWITCH_LOADER_STAGE_H
+#define SWITCH_LOADER_STAGE_H
 /* The kernel window rides in bl33.bin, so hekate reads it (its SD at SDR104) together with U-Boot, instead of U-Boot
  * reading a separate file at 48 MHz. hekate's L4T launcher loads the whole of bl33.bin at 0xAA000000 (l4t.c
  * _l4t_sd_load, no size limit) and jumps there; U-Boot only ever runs from the first 1 MiB of it (its image, DTB and

@@ -981,7 +981,7 @@ impl Device {
         // SAFETY: the device is live, of `physical`, and enables timeline semaphores, and
         // `bufferDeviceAddress` where `device_address` says so; `queues` holds at least one of
         // its queues, which nothing uses yet.
-        // Not `VK_EXT_device_generated_commands`' objects (ioswitch): NVK compiles an indirect
+        // Not `VK_EXT_device_generated_commands`' objects (ios-on-switch-lmao): NVK compiles an indirect
         // commands layout's preprocessing shader as the layout is made, a NAK compile in every
         // process that opens a device (the largest share of a device's opening on the host, ~11 of
         // ~60 ms, and seconds on a Tegra X1). Their first call in a section primes them instead,

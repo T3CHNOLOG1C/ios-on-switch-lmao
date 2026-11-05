@@ -76,7 +76,7 @@ typedef struct vc_progress_user_options vc_progress_user_options;
 void vcputc(char);
 void vcputc_options(char, bool);
 
-/* Hardware scroll for the rotated text console (vc_tape in video_console.c; IOSwitch NativeLegacyDisplay). */
+/* Hardware scroll for the rotated text console (vc_tape in video_console.c; Switch NativeLegacyDisplay). */
 int vc_tape_attach(vm_offset_t va, uint32_t stride, uint32_t gap, uint32_t lines,
     void (*show)(void *, uint32_t), int (*latched)(void *), int (*wait)(void *), void *ctx);
 void vc_tape_detach(void);

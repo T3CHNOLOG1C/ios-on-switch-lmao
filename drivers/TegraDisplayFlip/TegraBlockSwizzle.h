@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Pitch-linear 32-bit landscape frame -> the Maxwell block-linear surface window A column-scans (NativeLegacyDisplay,
-// boot-arg ioswitch-fast-swizzle=1): byte for byte the layout of drivers/NativeMobileDisplay/NativeScanout.h
+// boot-arg switch-fast-swizzle=1): byte for byte the layout of drivers/NativeMobileDisplay/NativeScanout.h
 // native_legacy_block_copy (GOBs of 64 bytes x 8 lines, BLOCK_HEIGHT(4) = 16 GOBs per block, blocks row-major), which keeps
 // its bounds checks and remains the fallback.
 //

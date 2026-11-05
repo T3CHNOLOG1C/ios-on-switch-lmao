@@ -1988,10 +1988,10 @@ workq_sched_callback(int type, thread_t thread)
 
 #pragma mark workq lifecycle
 
-/* IOSwitch stall reports (ioswitch_stall.c): the process of a workqueue a locked turnstile holds as its inheritor. */
-int ioswitch_workq_pid(void *workq);
+/* Switch stall reports (switch_stall.c): the process of a workqueue a locked turnstile holds as its inheritor. */
+int switch_workq_pid(void *workq);
 int
-ioswitch_workq_pid(void *workq)
+switch_workq_pid(void *workq)
 {
 	return proc_getpid(((struct workqueue *)workq)->wq_proc);
 }

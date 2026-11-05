@@ -29,7 +29,7 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "../SwitchTouch/SwitchHID.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
@@ -55,7 +55,7 @@ constexpr uint8_t kTopOnOff = 1u << 1, kTopRtc = 1u << 3, kGlobalMask = 1u << 0,
 constexpr uint32_t kPmicIntid = 118;  // GIC SPI 86
 constexpr vm_offset_t kPmcPA = 0x7000E400;
 constexpr uint32_t kPmcIntrPolarity = 1u << 17;
-constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (ioswitch_check_after_ms): no wakeup of its own
+constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (switch_check_after_ms): no wakeup of its own
 constexpr unsigned kPmicBurst = 20;      // PMIC interrupts per second that mean the line is stuck
 
 struct Volume {
@@ -141,7 +141,7 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
 
     setUpPmic();
     pmic = IOInterruptEventSource::interruptEventSource(this, &SwitchButtons::pmicInterrupt,
-                                                        ioswitch_interrupt_nub(kPmicIntid, false), 0);
+                                                        switch_interrupt_nub(kPmicIntid, false), 0);
     if (!pmic || loop->addEventSource(pmic) != kIOReturnSuccess)
         panic("SwitchButtons: cannot attach the MAX77620 interrupt (INTID 118)");
 
@@ -151,7 +151,7 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
     for (auto *source : volume) source->enable();
     pmic->enable();
     home->enable();
-    ioswitch_check_after_ms(watchdog, kWatchdogMS);
+    switch_check_after_ms(watchdog, kWatchdogMS);
     IOLog("SwitchButtons: started\n");
     return true;
 }
@@ -255,7 +255,7 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
     }
     if (++self->pmicCount > kPmicBurst) {
         char gic[160];
-        ioswitch_interrupt_describe(kPmicIntid, gic, sizeof(gic));
+        switch_interrupt_describe(kPmicIntid, gic, sizeof(gic));
         panic("SwitchButtons: MAX77620 interrupt (INTID 118) fired %u times in %llu ms: IRQTOP %#x ONOFFIRQ %#x "
               "ONOFFSTAT %#x, %s",
               self->pmicCount, elapsedNS / 1000000, top, edges, state, gic);
@@ -290,7 +290,7 @@ void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
 void SwitchButtons::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
 {
     for (const Volume &v : kVolume) tegra_gpio_check_delivery(v.gpio, "SwitchButtons");
-    ioswitch_check_after_ms(sender, kWatchdogMS);
+    switch_check_after_ms(sender, kWatchdogMS);
 }
 
 extern "C" int switch_buttons_start(void)

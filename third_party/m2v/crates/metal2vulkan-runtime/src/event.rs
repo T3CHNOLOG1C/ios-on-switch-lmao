@@ -485,7 +485,7 @@ impl SharedEventListener {
             // handlers (`exit_guard::spawn_user_interactive`): a notification is how Core
             // Animation learns a CAMetalLayer drawable's work is done (`layer_private_present`),
             // so a frame waits on this thread; at the default class it queued behind every busy
-            // app's threads (ioswitch r8-webgpu).
+            // app's threads (ios-on-switch-lmao r8-webgpu).
             exit_guard::spawn_user_interactive(
                 std::thread::Builder::new().name("metal2vulkan-listener".into()),
                 move || listen(&queue),

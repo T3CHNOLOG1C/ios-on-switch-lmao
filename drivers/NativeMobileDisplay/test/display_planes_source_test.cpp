@@ -15,9 +15,9 @@
 
 #include "bazel/testing/source_text.h"
 
-using ioswitch::test::Between;
-using ioswitch::test::Count;
-using ioswitch::test::SourceText;
+using switch_ios::test::Between;
+using switch_ios::test::Count;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 
@@ -86,8 +86,8 @@ TEST(DisplayPlanesSource, BindingsAreTegraVics)
 TEST(DisplayPlanesSource, DriverFollowsTheRules)
 {
     const std::string source = SourceText("../NativeLegacyDisplay.cpp");
-    const std::string planes = SourceText("../NativePlanesDisplay.inc");
-    EXPECT_THAT(source, HasSubstr("#include \"NativePlanesDisplay.inc\""));
+    const std::string planes = SourceText("../NativePlanesDisplay.h");
+    EXPECT_THAT(source, HasSubstr("#include \"NativePlanesDisplay.h\""));
     // validateSwap mirrors the published limits through checkUpdated; the UI's memory is still bounded.
     const std::string validate =
         Method(source, "    bool validateSwap(const OriginalLegacySwapRequest *request) override\n");
@@ -147,7 +147,7 @@ TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
     EXPECT_THAT(xnu, HasSubstr("\nnative_legacy_detach_ready(void)\n{\n\treturn false;\n}"));
     EXPECT_THAT(xnu, HasSubstr("\t\tconst int single = single_layer && !native_legacy_detach_ready();"));
     const std::string exec =
-        Between(xnu, "\nnative_ioswitch_exec_environment(const struct image_params *imgp)", "\n}\n");
+        Between(xnu, "\nnative_switch_exec_environment(const struct image_params *imgp)", "\n}\n");
     ASSERT_FALSE(exec.empty());
     EXPECT_THAT(exec, Not(HasSubstr("if (single_layer) {")));
     EXPECT_THAT(exec, Not(HasSubstr("if (vbl && single_layer) {")));

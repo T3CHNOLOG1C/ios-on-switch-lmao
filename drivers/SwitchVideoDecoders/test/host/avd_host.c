@@ -7,7 +7,7 @@
 //   full:   the fake arena refuses every buffer, so the instance runs Apple's software decoder: the test wants 30/30
 //           frames matching x264 from a session that says software.
 //   vp9:    VP9Clip.h as 'vp09' (kVTVideoDecoderSpecification_AllowVP9Decode) on AVD's private check registration
-//           (registerCheckDecoder: not flagged hardware, named com.ioswitch.avd.check.vp09, as the device's boot check
+//           (registerCheckDecoder: not flagged hardware, named com.brunostjohn.switch.avd.check.vp09, as the device's boot check
 //           uses it) and the fake engine: every superframe and frame through VP9NVDEC and the kernel's checker, all 16
 //           shown frames out of a session that says hardware.
 //   present: the engine session again with TegraNVDECPresent on: every picture handed to the fake VIC, whose pool
@@ -15,7 +15,7 @@
 //           no wait invalidates the surface, and the CPU path's pictures come out.
 //   gate:   the private registration outside an open check (gCheckOpen false): no instance, so no session by its name.
 //   hevc:   HEVCClip.h's Main clips A and V and Main 10 clip T as 'hvc1' on the private check registration (named
-//           com.ioswitch.avd.check.hvc1) and the fake engine: every picture through HEVCNVDEC and the kernel's checker,
+//           com.brunostjohn.switch.avd.check.hvc1) and the fake engine: every picture through HEVCNVDEC and the kernel's checker,
 //           all out of a hardware session; then with the arena full, Apple's software HEVC decoder in the instance,
 //           matching FFmpeg.
 // Prints "PASS avd ..." when all hold (avd_host_test).
@@ -168,11 +168,11 @@ int nvdec_wait(void *ctx, const TegraNVDECWait *w)
 
 int main(void)
 {
-    gLog = os_log_create("com.ioswitch.avd", "host-test");
+    gLog = os_log_create("com.brunostjohn.switch.avd", "host-test");
     setvbuf(stdout, NULL, _IONBF, 0);  // a hung session still shows how far it got
-    // A class ID of our own makes the registry entry "com.ioswitch.avd-host.avc1", which the sessions name below: the
+    // A class ID of our own makes the registry entry "com.brunostjohn.switch.avd-host.avc1", which the sessions name below: the
     // Mac's own H.264 decoders would otherwise win the selection.
-    const void *keys[] = {CFSTR("CMClassImplementationID")}, *values[] = {CFSTR("com.ioswitch.avd-host")};
+    const void *keys[] = {CFSTR("CMClassImplementationID")}, *values[] = {CFSTR("com.brunostjohn.switch.avd-host")};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     const OSStatus registered = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_H264, info, createInstance) ||
@@ -187,7 +187,7 @@ int main(void)
         return 1;
     }
     const void *specKeys[] = {kVTVideoDecoderSpecification_DecoderID},
-               *specValues[] = {CFSTR("com.ioswitch.avd-host.avc1")};
+               *specValues[] = {CFSTR("com.brunostjohn.switch.avd-host.avc1")};
     CFDictionaryRef spec = CFDictionaryCreate(NULL, specKeys, specValues, 1, &kCFTypeDictionaryKeyCallBacks,
                                               &kCFTypeDictionaryValueCallBacks);
     char engine[512], full[512], present[512];

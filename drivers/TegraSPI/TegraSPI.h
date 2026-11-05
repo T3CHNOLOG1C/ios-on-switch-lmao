@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Tegra210 (T210/T210B01) SPI master for statically linked IOSwitch drivers. Only SPI4 (SBC4, 0x7000DA00) is described:
+// Tegra210 (T210/T210B01) SPI master for statically linked Switch drivers. Only SPI4 (SBC4, 0x7000DA00) is described:
 // it carries the console's 6-axis IMU (drivers/SwitchMotion), its only device.
 //
 // Hardware (Linux drivers/spi/spi-tegra114.c, "nvidia,tegra210-spi": intr_mask_reg, no DMA here; tegra210.dtsi
@@ -8,7 +8,7 @@
 // "IMU access": spi4_mosi_pc7/miso_pd0/sck_pc5/cs0_pc6, function spi4, MISO pulled up and input-enabled):
 //   * tegra_spi_init() resets and clocks the controller from PLLP (408 MHz / 51 = 8 MHz, the 7.1 divider 100), muxes
 //     the four pads, programs master mode 3 with the chip select under software control, and claims the controller's
-//     interrupt (INTID 125), sleeping in ioswitch_interrupt_nub() until the GIC is up.
+//     interrupt (INTID 125), sleeping in switch_interrupt_nub() until the GIC is up.
 //   * A transfer is one PIO block of 8-bit unpacked words (at most the 64-word FIFO), full duplex, with the chip select
 //     held low from before the first clock to after the last. The caller sleeps until the controller's RDY interrupt,
 //     whose filter (primary interrupt context) clears it and wakes the caller, which drains the RX FIFO. There is no
@@ -35,7 +35,7 @@ enum {
 #define TEGRA_SPI_MAX_TRANSFER 64
 
 // Maps the controller, CAR and pinmux (once), brings the bus up and claims its interrupt. Idempotent and
-// thread-safe. May sleep until the GIC is up (panics after 10 s, in ioswitch_interrupt_nub).
+// thread-safe. May sleep until the GIC is up (panics after 10 s, in switch_interrupt_nub).
 int tegra_spi_init(unsigned bus);
 
 // Clocks len bytes out of tx (zeros if tx is null) while clocking len bytes into rx (dropped if rx is null), with

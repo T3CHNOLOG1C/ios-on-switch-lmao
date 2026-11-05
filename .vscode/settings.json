@@ -57,8 +57,7 @@
     "third_party",
     "bazel-bin",
     "bazel-out",
-    "bazel-testlogs",
-    "bazel-ioswitch"
+    "bazel-testlogs"
   ],
   "git.detectSubmodules": false,
 
@@ -73,10 +72,7 @@
     "**/.agents/**": true
   },
   "files.exclude": {
-    "bazel-bin": true,
-    "bazel-out": true,
-    "bazel-testlogs": true,
-    "bazel-ioswitch": true,
+    "bazel-*": true,
     "**/__pycache__": true
   },
   "search.exclude": {

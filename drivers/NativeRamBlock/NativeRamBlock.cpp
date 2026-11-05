@@ -84,7 +84,7 @@ public:
     {
         return kIOReturnUnsupported;
     }
-    char *getVendorString() override { return const_cast<char *>("IOSwitch"); }
+    char *getVendorString() override { return const_cast<char *>("Switch"); }
     char *getProductString() override { return const_cast<char *>("Disposable RAM Data"); }
     char *getRevisionString() override { return const_cast<char *>("2.0"); }
     char *getAdditionalDeviceInfoString() override
@@ -134,7 +134,7 @@ OSDefineMetaClassAndStructors(NativeRamBlock, IOBlockStorageDevice)
     // Native SD root boots publish persistent Data through the shared SD owner.
     // Refuse before claiming the seed or allocating its duplicate-UUID RAM disk.
     uint32_t rootBoot = 0;
-    if (PE_parse_boot_argn("ioswitch-root-boot", &rootBoot, sizeof(rootBoot)) && rootBoot == 1) return false;
+    if (PE_parse_boot_argn("switch-root-boot", &rootBoot, sizeof(rootBoot)) && rootBoot == 1) return false;
     // One Data seed/provider per boot. A failed first attempt is not retried.
     uint32_t expected = 0;
     if (!__atomic_compare_exchange_n(&native_ram_block_stage, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))

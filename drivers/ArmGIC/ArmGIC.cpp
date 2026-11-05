@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// GICv2 shared peripheral interrupts (INTID 32..1019) as an IOInterruptController, so IOSwitch drivers use the
-// ordinary IOInterruptEventSource / IOFilterInterruptEventSource on their own work loops (IOSwitchInterrupts.h).
+// GICv2 shared peripheral interrupts (INTID 32..1019) as an IOInterruptController, so Switch drivers use the
+// ordinary IOInterruptEventSource / IOFilterInterruptEventSource on their own work loops (SwitchInterrupts.h).
 //
 // Division of the GIC (Arm IHI 0048B): ArmCpu brings up the distributor and the CPU interfaces, disables every
 // SPI at boot, owns SGIs and PPIs, and is the only code that touches GICC: it acknowledges each interrupt
-// (GICC_IAR), hands SPIs to ioswitch_gic_dispatch() and ends them (GICC_EOIR, EOImode 0). This file only
+// (GICC_IAR), hands SPIs to switch_gic_dispatch() and ends them (GICC_EOIR, EOImode 0). This file only
 // writes per-SPI distributor state: ISENABLER/ICENABLER, ISPENDR/ICPENDR, IPRIORITYR, ITARGETSR and ICFGR.
 //
 // Vector model (XNU iokit/Kernel/IOInterruptController.cpp): the vector number is the INTID, and a nub's
@@ -32,7 +32,7 @@
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSymbol.h>
 #include "ArmGIC.h"
-#include "IOSwitchInterrupts.h"
+#include "SwitchInterrupts.h"
 
 // ArmCpu's GIC state (drivers/ArmCpu/ArmCpu.cpp): version, distributor/CPU interface enabled, and each logical
 // CPU's GICv2 target mask (its GICD_ITARGETSR0 byte), written once that CPU's interface is up.
@@ -74,7 +74,7 @@ enum : uint32_t {
     ICTLR_CPU_IEP_CLASS = 0x2c
 };
 
-const char kControllerName[] = "IOSwitchGIC";
+const char kControllerName[] = "SwitchGIC";
 }
 
 class ArmGIC : public IOInterruptController {
@@ -489,27 +489,27 @@ extern "C" void arm_gic_resume(void)
     if (gic) gic->resume();
 }
 
-extern "C" bool ioswitch_gic_dispatch(uint32_t intid)
+extern "C" bool switch_gic_dispatch(uint32_t intid)
 {
     ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
     return gic && gic->handleInterrupt(nullptr, nullptr, static_cast<int>(intid)) == kIOReturnSuccess;
 }
 
-int ioswitch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
+int switch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
 {
     uint64_t interval = 0;
     clock_interval_to_absolutetime_interval(ms, kMillisecondScale, &interval);
     return timer->setTimeout(kIOTimeOptionsWithLeeway, interval, interval);
 }
 
-bool ioswitch_interrupts_ready(void)
+bool switch_interrupts_ready(void)
 {
     return ArmGIC::shared() != nullptr;
 }
 
 // A driver may start before ArmCpu has CPU0's interface up: it sleeps until ArmCpu publishes CPU0's target
 // (publishGicTarget wakes this event), and panics if that never happens.
-IOService *ioswitch_interrupt_nub(uint32_t intid, bool edgeTriggered)
+IOService *switch_interrupt_nub(uint32_t intid, bool edgeTriggered)
 {
     ArmGIC *gic = ArmGIC::shared();
     if (!gic) {
@@ -533,13 +533,13 @@ IOService *ioswitch_interrupt_nub(uint32_t intid, bool edgeTriggered)
     return gic->nubFor(intid, edgeTriggered);
 }
 
-uint32_t ioswitch_interrupt_count(uint32_t intid)
+uint32_t switch_interrupt_count(uint32_t intid)
 {
     ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
     return gic ? gic->count(intid) : 0;
 }
 
-void ioswitch_interrupt_describe(uint32_t intid, char *buffer, size_t size)
+void switch_interrupt_describe(uint32_t intid, char *buffer, size_t size)
 {
     ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
     if (gic)

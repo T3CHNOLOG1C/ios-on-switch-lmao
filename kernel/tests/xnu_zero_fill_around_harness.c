@@ -1,7 +1,7 @@
 /*
- * Host harness for XNU osfmk/vm/vm_fault.c ioswitch_zero_fill_around (r17-faults): the zero-fill fault-around that
+ * Host harness for XNU osfmk/vm/vm_fault.c switch_zero_fill_around (r17-faults): the zero-fill fault-around that
  * makes one fault enter the rest of its 16 KiB group. The function is compiled from the XNU source as is (BUILD.bazel
- * cuts it out of @xnu's vm_fault.c into fault_around.inc) against the stubs below, which model one VM object, its
+ * cuts it out of @xnu's vm_fault.c into fault_around.h) against the stubs below, which model one VM object, its
  * resident pages and the pmap, and record every page the function allocates and enters.
  */
 #include <stdbool.h>
@@ -166,7 +166,7 @@ static kern_return_t vm_fault_enter(vm_page_t m, pmap_t pmap, vm_map_offset_t va
     return KERN_SUCCESS;
 }
 
-#include "fault_around.inc"
+#include "fault_around.h"
 
 static struct vm_object object;
 static struct vm_object_fault_info info;
@@ -192,7 +192,7 @@ static void reset(vm_object_offset_t size, vm_object_offset_t lo, vm_object_offs
 static unsigned int fault(vm_object_offset_t off, vm_map_offset_t va, vm_prot_t prot)
 {
     resident[nresident++] = off;
-    return ioswitch_zero_fill_around(&object, off, &user_pmap_store, va, prot, VM_PROT_WRITE, &info);
+    return switch_zero_fill_around(&object, off, &user_pmap_store, va, prot, VM_PROT_WRITE, &info);
 }
 
 static int cases;
@@ -279,7 +279,7 @@ int main(void)
         case 8: dynamic_paging = false; break;
         }
         resident[nresident++] = 0x8000;
-        CHECK(ioswitch_zero_fill_around(&object, 0x8000, pmap, base, prot, VM_PROT_WRITE, &info) == 0);
+        CHECK(switch_zero_fill_around(&object, 0x8000, pmap, base, prot, VM_PROT_WRITE, &info) == 0);
         CHECK(nentered == 0 && npages == 0);
         cases++;
     }

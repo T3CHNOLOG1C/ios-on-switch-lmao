@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_RAM_TEST_IOKIT_STUBS_H
-#define IOSWITCH_RAM_TEST_IOKIT_STUBS_H
+#ifndef SWITCH_RAM_TEST_IOKIT_STUBS_H
+#define SWITCH_RAM_TEST_IOKIT_STUBS_H
 #include <algorithm>
 #include <atomic>
 #include <cassert>

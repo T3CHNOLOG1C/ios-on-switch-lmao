@@ -1,4 +1,4 @@
-# Toolchain notes for building ioswitch on xnu-12377 (for the CMake/Bazel builds)
+# Toolchain notes for building ios-on-switch-lmao on xnu-12377 (for the CMake/Bazel builds)
 
 Measured with Apple clang 2100.3.20.102 (Xcode beta, iOS 27 SDK), round 5/6.
 
@@ -13,12 +13,12 @@ Measured with Apple clang 2100.3.20.102 (Xcode beta, iOS 27 SDK), round 5/6.
    `machine_routines_asm.s` read UAO/DIT and use CASA under `__ARM_ARCH_8_2__`/`__ARM_ARCH_8_4__`. Keep
    `-march=armv8-a` in CFLAGS_EXTRA as today (with both, -march decides the features: no CRC, as in the 10063 build).
 2. **Recipes derived from the kernel's compile records keep `-mcpu`.** `cmake/Drivers.cmake:21`
-   `ioswitch_recipe(iokit_cxx_generic ... DROP -mcpu= -march= -flto)` must become `DROP -march= -flto`
+   `switch_recipe(iokit_cxx_generic ... DROP -mcpu= -march= -flto)` must become `DROP -march= -flto`
    (port/ext_build.py does that): dropping `-mcpu` was harmless at 17.0 and gives NativeRamBlock.o LSE (4 words) at 26+.
 3. **Check, don't assume.** After every kernel link, classify every instruction word (round 5's
    `port/verify/flagged_syms.py` with `build/a64class`, or `build/a64scan -A macho <kernel>`): the result must be the
    same 40 data/guarded words at the same symbols as the 10063 kernel (K256 and lz4 tables, data after the exception
-   vectors, guarded impdef sysregs in awl_* and `_ioswitch_secondary_entry`). Before the pin it was 2,464 LSE + 403
+   vectors, guarded impdef sysregs in awl_* and `_switch_secondary_entry`). Before the pin it was 2,464 LSE + 403
    LDAPR words more. Our own objects (302 of them): 0.
 4. **Command-line per-file flags replace the Makefile's.** `<file>.o_CFLAGS_ADD=` on the make command line overrides
    12377's per-file `$1_CFLAGS_ADD +=` (e.g. `-DVM_UNSAFE_TYPES` for bsd/vm/*.o): append theirs when setting ours.

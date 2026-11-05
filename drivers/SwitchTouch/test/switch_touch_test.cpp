@@ -539,19 +539,19 @@ void dmaRxChanged(unsigned bus)
 
 // --- GIC, GPIO, HID and power stubs -------------------------------------------------------------------------------
 static std::map<uint32_t, IOService *> gInterruptNubs;
-IOService *ioswitch_interrupt_nub(uint32_t intid, bool)
+IOService *switch_interrupt_nub(uint32_t intid, bool)
 {
     IOService *&nub = gInterruptNubs[intid];
     if (!nub) nub = new IOService;
     return nub;
 }
-void ioswitch_interrupt_describe(uint32_t intid, char *buffer, size_t size)
+void switch_interrupt_describe(uint32_t intid, char *buffer, size_t size)
 {
     snprintf(buffer, size, "GIC model INTID %u", intid);
 }
-bool ioswitch_interrupts_ready(void) { return true; }
-uint32_t ioswitch_interrupt_count(uint32_t) { return 0; }
-int ioswitch_check_after_ms(IOTimerEventSource *timer, uint32_t ms) { return timer->setTimeoutMS(ms); }
+bool switch_interrupts_ready(void) { return true; }
+uint32_t switch_interrupt_count(uint32_t) { return 0; }
+int switch_check_after_ms(IOTimerEventSource *timer, uint32_t ms) { return timer->setTimeoutMS(ms); }
 
 static IOService gTouchNub;
 static int gResetLine = -1;
@@ -1190,7 +1190,7 @@ static void scenarioMeasure()
 // --- One process per scenario (the drivers keep boot-wide state) ------------------------------------------------------
 static void run(void (*scenario)())
 {
-    ioswitch::test::ExpectPassesInFreshProcess([scenario] {
+    switch_ios::test::ExpectPassesInFreshProcess([scenario] {
         try {
             scenario();
         } catch (const Panic &p) {

@@ -139,7 +139,7 @@
 #include "SwitchBluetoothLinks.h"
 #include "SwitchBluetoothRxDma.h"
 #include "SwitchCoex.h"
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraAPBDMA/TegraAPBDMA.h"
 #include "../SwitchSuspend/SwitchWake.h"
 
@@ -162,7 +162,7 @@ constexpr uint32_t kIntid = 32 + 90;
 constexpr uint32_t kPllpHz = 408000000;
 constexpr uint32_t kInitBaud = 115200, kFastBaud = 3000000;
 constexpr const char *kControlName = "com.apple.uart.bluetooth";
-constexpr const char *kStagedAddressPath = "/private/var/ioswitch/bluetooth/host-address";  // see the header
+constexpr const char *kStagedAddressPath = "/private/var/Switch/bluetooth/host-address";  // see the header
 
 // Clock and reset controller (hekate bdk/soc/clock.h, clock.c _clock_uart[3]): UARTD is bit 1 of the U registers.
 enum : uint32_t {
@@ -783,12 +783,12 @@ bool SwitchBluetooth::start(IOService *provider)
     // The packager's /arm-io/bluetooth node (it is also the IOService bluetoothd finds by name). The patch must be
     // whole Write_RAM records ending in Launch_RAM before the chip ever sees it.
     if (IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane)) {
-        OSData *data = OSDynamicCast(OSData, node->getProperty("ioswitch,patchram"));
+        OSData *data = OSDynamicCast(OSData, node->getProperty("switch,patchram"));
         if (data && validPatch(static_cast<const uint8_t *>(data->getBytesNoCopy()), data->getLength())) {
             patch = data;
             patch->retain();
         } else if (data) {
-            IOLog("SwitchBluetooth: ioswitch,patchram is not a .hcd record list (%u bytes); ignored\n",
+            IOLog("SwitchBluetooth: switch,patchram is not a .hcd record list (%u bytes); ignored\n",
                   data->getLength());
         }
         data = OSDynamicCast(OSData, node->getProperty("local-mac-address"));  // the unit's, see publishAddress()
@@ -806,14 +806,14 @@ bool SwitchBluetooth::start(IOService *provider)
     setupPins();
     setupUart();
 
-    // UART-D's level interrupt (ioswitch_interrupt_nub sleeps until ArmCpu has the GIC up).
-    IOService *nub = ioswitch_interrupt_nub(kIntid, false);
+    // UART-D's level interrupt (switch_interrupt_nub sleeps until ArmCpu has the GIC up).
+    IOService *nub = switch_interrupt_nub(kIntid, false);
     irq = nub ? IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchBluetooth::action,
                                                                          &SwitchBluetooth::filter, nub, 0)
               : nullptr;
     if (!irq || loop->addEventSource(irq) != kIOReturnSuccess) {
         char gic[160];
-        ioswitch_interrupt_describe(kIntid, gic, sizeof(gic));
+        switch_interrupt_describe(kIntid, gic, sizeof(gic));
         panic("SwitchBluetooth: cannot attach the UART-D interrupt (INTID %u): %s", kIntid, gic);
     }
     // RX interrupts stay off: setupPins left the core unpowered (see power()); the first flush after power-on enables them.
@@ -2629,7 +2629,7 @@ void SwitchBluetooth::checkDelivery(const char *what)
 void SwitchBluetooth::describe(char *buffer, size_t size)
 {
     char gic[160];
-    ioswitch_interrupt_describe(kIntid, gic, sizeof(gic));
+    switch_interrupt_describe(kIntid, gic, sizeof(gic));
     const uint32_t port = portReg(PH4, 0);
     auto mux = [this](uint32_t o) { return r32(pinmux, o) & PM_LOW; };
     snprintf(buffer, size,
@@ -3308,7 +3308,7 @@ void SwitchBluetooth::run()
     const errno_t registered = ctl_register(&reg, &control);
     if (registered) IOLog("SwitchBluetooth: kernel control %s not registered (%d)\n", kControlName, registered);
 
-    if (!patch) IOLog("SwitchBluetooth: no /arm-io/bluetooth ioswitch,patchram; trying the ROM firmware\n");
+    if (!patch) IOLog("SwitchBluetooth: no /arm-io/bluetooth switch,patchram; trying the ROM firmware\n");
     char why[128] = "";
     bool ok = false;
     uint32_t offMs = kPowerOffMs;
@@ -3545,7 +3545,7 @@ extern "C" int switch_bluetooth_start(void)
     return 0;
 }
 
-// kern_exec.c load_init_program, through SwitchNVRAM's ioswitch_nvram_data_mounted: Data is mounted and launchd not yet
+// kern_exec.c load_init_program, through SwitchNVRAM's switch_nvram_data_mounted: Data is mounted and launchd not yet
 // started. A staged address is published now, so that bluetoothd reads it as local-mac-address when it starts and
 // never sees another one (see the header, "BD address"); the controller gets it at bluetoothd's first connect.
 extern "C" void switch_bluetooth_data_mounted(void)

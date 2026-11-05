@@ -196,19 +196,19 @@ static void cluster_iostate_wait(struct clios *iostate, u_int target, const char
 static void cluster_syncup(vnode_t vp, off_t newEOF, int (*)(buf_t, void *), void *callback_arg, int flags);
 
 static void cluster_read_upl_release(upl_t upl, int start_pg, int last_pg, int take_reference);
-static inline bool ioswitch_cluster_is_image(vnode_t vp);
-static inline int ioswitch_cluster_cryptex_index(mount_t mp);
-static void ioswitch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size);
-/* IOSwitch boot prefetch (r17-launch): the cryptex file reads being recorded (ioswitch_cluster_record_start), if any. */
-static struct ioswitch_record_entry *ioswitch_record_log;
-/* IOSwitch (r14-launch, r17-launch): the cryptex images' reads, for the kprof image line: through the image files
+static inline bool switch_cluster_is_image(vnode_t vp);
+static inline int switch_cluster_cryptex_index(mount_t mp);
+static void switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size);
+/* SwitchBootPrefetch (r17-launch): the cryptex file reads being recorded (switch_cluster_record_start), if any. */
+static struct switch_record_entry *switch_record_log;
+/* Switch (r14-launch, r17-launch): the cryptex images' reads, for the kprof image line: through the image files
  * (DiskImages; cached-read calls, those that missed, windows read ahead and their bytes, card reads issued for an image
- * and bytes), then through the direct read map (IOSwitchCryptex.cpp: requests, bytes, card reads). */
-static uint64_t ioswitch_image_stat[9];
-static void ioswitch_image_window(vnode_t vp, off_t offset, u_int32_t size, off_t filesize,
+ * and bytes), then through the direct read map (SwitchCryptex.cpp: requests, bytes, card reads). */
+static uint64_t switch_image_stat[9];
+static void switch_image_window(vnode_t vp, off_t offset, u_int32_t size, off_t filesize,
     int (*callback)(buf_t, void *), void *callback_arg, int bflag);
-/* osfmk/kern/ioswitch_kprof.c */
-extern void ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
+/* osfmk/kern/switch_kprof.c */
+extern void switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
 static int cluster_copy_ubc_data_internal(vnode_t vp, struct uio *uio, int *io_resid, int mark_dirty, int take_reference);
 
 static int cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t filesize, int flags,
@@ -1282,18 +1282,18 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 	}
 	upl_end_offset = upl_offset + size;
 
-	/* IOSwitch boot prefetch (r17-launch): a recording boot notes every read of a cryptex volume's file. */
-	if ((flags & CL_READ) && !(flags & CL_PAGEOUT) && os_atomic_load(&ioswitch_record_log, relaxed) != NULL) {
-		const int index = ioswitch_cluster_cryptex_index(mp);
+	/* SwitchBootPrefetch (r17-launch): a recording boot notes every read of a cryptex volume's file. */
+	if ((flags & CL_READ) && !(flags & CL_PAGEOUT) && os_atomic_load(&switch_record_log, relaxed) != NULL) {
+		const int index = switch_cluster_cryptex_index(mp);
 
 		if (index >= 0) {
-			ioswitch_cluster_record(vp, index, f_offset, (uint64_t)non_rounded_size);
+			switch_cluster_record(vp, index, f_offset, (uint64_t)non_rounded_size);
 		}
 	}
 	/* r14-launch: every card read of a cryptex image (demand, window), for the kprof image line. */
-	if ((flags & CL_READ) && ioswitch_cluster_is_image(vp)) {
-		os_atomic_inc(&ioswitch_image_stat[4], relaxed);
-		os_atomic_add(&ioswitch_image_stat[5], (uint64_t)non_rounded_size, relaxed);
+	if ((flags & CL_READ) && switch_cluster_is_image(vp)) {
+		os_atomic_inc(&switch_image_stat[4], relaxed);
+		os_atomic_add(&switch_image_stat[5], (uint64_t)non_rounded_size, relaxed);
 	}
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 22)) | DBG_FUNC_START, (int)f_offset, size, upl_offset, flags, 0);
@@ -3992,41 +3992,41 @@ cluster_read(vnode_t vp, struct uio *uio, off_t filesize, int xflags)
 }
 
 /*
- * IOSwitch (r8-sdboot): the System/App cryptex disk images when DiskImages serves them (IOSwitchCryptex.cpp's fallback,
- * when the direct read map is refused): IOSwitchCryptex registers their backing files after the attach and clears
+ * Switch (r8-sdboot): the System/App cryptex disk images when DiskImages serves them (SwitchCryptex.cpp's fallback,
+ * when the direct read map is refused): SwitchCryptex registers their backing files after the attach and clears
  * DiskImages' VNOCACHE_DATA on them, so their reads go through the page cache. Matched by pointer and vid, never
  * dereferenced from the table, so a recycled vnode simply stops matching. Registered images' cached reads always take
  * a page reference (cluster_read_copy), whatever tier the disk image's I/O thread runs at, instead of landing
  * unreferenced on the speculative queue, the first pages the pageout scan frees.
  */
-#define IOSWITCH_IMAGE_VNODES 2
+#define SWITCH_IMAGE_VNODES 2
 static struct {
 	vnode_t  vp;
 	uint32_t vid;
-} ioswitch_image_vnodes[IOSWITCH_IMAGE_VNODES];
+} switch_image_vnodes[SWITCH_IMAGE_VNODES];
 
-void ioswitch_cluster_register_image(vnode_t vp);
+void switch_cluster_register_image(vnode_t vp);
 void
-ioswitch_cluster_register_image(vnode_t vp)
+switch_cluster_register_image(vnode_t vp)
 {
-	for (unsigned i = 0; i < IOSWITCH_IMAGE_VNODES; i++) {
-		if (os_atomic_load(&ioswitch_image_vnodes[i].vp, relaxed) == NULLVP) {
-			ioswitch_image_vnodes[i].vid = vnode_vid(vp);
-			os_atomic_store(&ioswitch_image_vnodes[i].vp, vp, release);
+	for (unsigned i = 0; i < SWITCH_IMAGE_VNODES; i++) {
+		if (os_atomic_load(&switch_image_vnodes[i].vp, relaxed) == NULLVP) {
+			switch_image_vnodes[i].vid = vnode_vid(vp);
+			os_atomic_store(&switch_image_vnodes[i].vp, vp, release);
 			return;
 		}
 	}
 }
 
 static inline bool
-ioswitch_cluster_is_image(vnode_t vp)
+switch_cluster_is_image(vnode_t vp)
 {
-	for (unsigned i = 0; i < IOSWITCH_IMAGE_VNODES; i++) {
-		vnode_t image = os_atomic_load(&ioswitch_image_vnodes[i].vp, acquire);
+	for (unsigned i = 0; i < SWITCH_IMAGE_VNODES; i++) {
+		vnode_t image = os_atomic_load(&switch_image_vnodes[i].vp, acquire);
 		if (image == NULLVP) {
 			return false;
 		}
-		if (image == vp && ioswitch_image_vnodes[i].vid == vp->v_id) {
+		if (image == vp && switch_image_vnodes[i].vid == vp->v_id) {
 			return true;
 		}
 	}
@@ -4034,52 +4034,52 @@ ioswitch_cluster_is_image(vnode_t vp)
 }
 
 /*
- * IOSwitch (r17-launch): the two cryptex volumes' mounts (System 0, App 1; IOSwitchCryptex.cpp registers them right
- * after IOSwitchRawMount.inc mounts them), for the boot prefetch recording below and the kprof waits line's "cx".
+ * Switch (r17-launch): the two cryptex volumes' mounts (System 0, App 1; SwitchCryptex.cpp registers them right
+ * after SwitchRawMount.h mounts them), for the boot prefetch recording below and the kprof waits line's "cx".
  */
-static mount_t ioswitch_cryptex_mounts[2];
+static mount_t switch_cryptex_mounts[2];
 
-void ioswitch_cluster_register_cryptex_mount(unsigned int index, mount_t mp);
+void switch_cluster_register_cryptex_mount(unsigned int index, mount_t mp);
 void
-ioswitch_cluster_register_cryptex_mount(unsigned int index, mount_t mp)
+switch_cluster_register_cryptex_mount(unsigned int index, mount_t mp)
 {
 	if (index < 2) {
-		os_atomic_store(&ioswitch_cryptex_mounts[index], mp, release);
+		os_atomic_store(&switch_cryptex_mounts[index], mp, release);
 	}
 }
 
 static inline int
-ioswitch_cluster_cryptex_index(mount_t mp)
+switch_cluster_cryptex_index(mount_t mp)
 {
 	if (mp == NULL) {
 		return -1;
 	}
-	if (os_atomic_load(&ioswitch_cryptex_mounts[0], acquire) == mp) {
+	if (os_atomic_load(&switch_cryptex_mounts[0], acquire) == mp) {
 		return 0;
 	}
-	if (os_atomic_load(&ioswitch_cryptex_mounts[1], acquire) == mp) {
+	if (os_atomic_load(&switch_cryptex_mounts[1], acquire) == mp) {
 		return 1;
 	}
 	return -1;
 }
 
-bool ioswitch_cluster_is_cryptex_mount(mount_t mp);
+bool switch_cluster_is_cryptex_mount(mount_t mp);
 bool
-ioswitch_cluster_is_cryptex_mount(mount_t mp)
+switch_cluster_is_cryptex_mount(mount_t mp)
 {
-	return ioswitch_cluster_cryptex_index(mp) >= 0;
+	return switch_cluster_cryptex_index(mp) >= 0;
 }
 
 /*
- * IOSwitch boot prefetch recording (r17-launch): on a boot with no valid prefetch list, IOSwitchCryptex arms a log
+ * SwitchBootPrefetch recording (r17-launch): on a boot with no valid prefetch list, SwitchCryptex arms a log
  * (allocated once, never freed: a read racing the stop may still be writing an entry) and every read of a cryptex
  * volume's file that goes to the device (cluster_io: page-in clusters, cached-read misses, read-ahead) appends one entry
  * here: the vnode and its vid (never dereferenced here), the cryptex, the file range and the whole second since the log
- * was armed. Entries past the capacity are counted, not stored. IOSwitchCryptex stops it after the first frame, names
+ * was armed. Entries past the capacity are counted, not stored. SwitchCryptex stops it after the first frame, names
  * the files and saves their ranges as the next boots' page-in runs (it reads only entries whose `when` is set, which is
  * stored last).
  */
-struct ioswitch_record_entry {
+struct switch_record_entry {
 	vnode_t  vp;
 	uint64_t offset;
 	uint32_t length;
@@ -4088,44 +4088,44 @@ struct ioswitch_record_entry {
 	uint16_t when;  /* 1 + whole seconds since armed; 0 while the entry is being written */
 	uint32_t reserved;
 };
-static uint32_t ioswitch_record_capacity, ioswitch_record_next;
-static uint64_t ioswitch_record_start, ioswitch_record_second;
+static uint32_t switch_record_capacity, switch_record_next;
+static uint64_t switch_record_start, switch_record_second;
 
-void ioswitch_cluster_record_start(struct ioswitch_record_entry *log, uint32_t capacity);
+void switch_cluster_record_start(struct switch_record_entry *log, uint32_t capacity);
 void
-ioswitch_cluster_record_start(struct ioswitch_record_entry *log, uint32_t capacity)
+switch_cluster_record_start(struct switch_record_entry *log, uint32_t capacity)
 {
-	nanoseconds_to_absolutetime(NSEC_PER_SEC, &ioswitch_record_second);
-	ioswitch_record_start = mach_absolute_time();
-	ioswitch_record_capacity = capacity;
-	os_atomic_store(&ioswitch_record_next, 0, relaxed);
-	os_atomic_store(&ioswitch_record_log, log, release);
+	nanoseconds_to_absolutetime(NSEC_PER_SEC, &switch_record_second);
+	switch_record_start = mach_absolute_time();
+	switch_record_capacity = capacity;
+	os_atomic_store(&switch_record_next, 0, relaxed);
+	os_atomic_store(&switch_record_log, log, release);
 }
 
 /* Stops the recording; returns how many entries were appended (some may be past the capacity). */
-uint32_t ioswitch_cluster_record_stop(void);
+uint32_t switch_cluster_record_stop(void);
 uint32_t
-ioswitch_cluster_record_stop(void)
+switch_cluster_record_stop(void)
 {
-	os_atomic_store(&ioswitch_record_log, (struct ioswitch_record_entry *)NULL, release);
-	return os_atomic_load(&ioswitch_record_next, relaxed);
+	os_atomic_store(&switch_record_log, (struct switch_record_entry *)NULL, release);
+	return os_atomic_load(&switch_record_next, relaxed);
 }
 
 static void
-ioswitch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size)
+switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size)
 {
-	struct ioswitch_record_entry *log = os_atomic_load(&ioswitch_record_log, acquire);
+	struct switch_record_entry *log = os_atomic_load(&switch_record_log, acquire);
 	uint32_t slot;
 	uint64_t elapsed;
 
 	if (log == NULL || offset < 0 || size == 0 || size > UINT32_MAX || vp->v_type != VREG) {
 		return;
 	}
-	slot = os_atomic_inc_orig(&ioswitch_record_next, relaxed);
-	if (slot >= ioswitch_record_capacity) {
+	slot = os_atomic_inc_orig(&switch_record_next, relaxed);
+	if (slot >= switch_record_capacity) {
 		return;
 	}
-	elapsed = (mach_absolute_time() - ioswitch_record_start) / ioswitch_record_second;
+	elapsed = (mach_absolute_time() - switch_record_start) / switch_record_second;
 	log[slot].vp = vp;
 	log[slot].offset = (uint64_t)offset;
 	log[slot].length = (uint32_t)size;
@@ -4134,18 +4134,18 @@ ioswitch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size)
 	os_atomic_store(&log[slot].when, (uint16_t)(elapsed < 65534 ? elapsed + 1 : 65535), release);
 }
 
-/* r17-launch: one request of the direct read map (IOSwitchCryptex.cpp): its bytes and the card reads it took. */
-void ioswitch_cluster_image_direct(uint64_t bytes, uint32_t card_reads);
+/* r17-launch: one request of the direct read map (SwitchCryptex.cpp): its bytes and the card reads it took. */
+void switch_cluster_image_direct(uint64_t bytes, uint32_t card_reads);
 void
-ioswitch_cluster_image_direct(uint64_t bytes, uint32_t card_reads)
+switch_cluster_image_direct(uint64_t bytes, uint32_t card_reads)
 {
-	os_atomic_inc(&ioswitch_image_stat[6], relaxed);
-	os_atomic_add(&ioswitch_image_stat[7], bytes, relaxed);
-	os_atomic_add(&ioswitch_image_stat[8], (uint64_t)card_reads, relaxed);
+	os_atomic_inc(&switch_image_stat[6], relaxed);
+	os_atomic_add(&switch_image_stat[7], bytes, relaxed);
+	os_atomic_add(&switch_image_stat[8], (uint64_t)card_reads, relaxed);
 }
 
 /*
- * IOSwitch (r14-launch): read-ahead for the cryptex images' small reads. The cryptex APFS (on a DiskImages device, so
+ * Switch (r14-launch): read-ahead for the cryptex images' small reads. The cryptex APFS (on a DiskImages device, so
  * without cluster-layer verification) pages the dyld shared cache in one 4 KiB block at a time, and DiskImages reads each
  * block from the image file here: one page, which cluster_read_copy never reads ahead for, so each was one 4 KiB card
  * command (~0.5 ms, 68 % of the card's commands after boot). Those blocks are dense: in the 11-04 boot census 89 % of
@@ -4156,38 +4156,38 @@ ioswitch_cluster_image_direct(uint64_t bytes, uint32_t card_reads)
  * pays from the third block of the window used. Read-ahead pages go to the speculative queue like any read-ahead and are
  * the first reclaimed if unused. Not when this thread's I/O is being throttled (as cluster_read_copy's own prefetch).
  */
-#define IOSWITCH_IMAGE_WINDOW (64 * 1024)
-#ifndef IOSWITCH_IMAGE_READ_AHEAD
-#define IOSWITCH_IMAGE_READ_AHEAD 1     /* 0: no window (an A/B build); the counters stay */
+#define SWITCH_IMAGE_WINDOW (64 * 1024)
+#ifndef SWITCH_IMAGE_READ_AHEAD
+#define SWITCH_IMAGE_READ_AHEAD 1     /* 0: no window (an A/B build); the counters stay */
 #endif
 
 static void
-ioswitch_image_window(vnode_t vp, off_t offset, u_int32_t size, off_t filesize, int (*callback)(buf_t, void *),
+switch_image_window(vnode_t vp, off_t offset, u_int32_t size, off_t filesize, int (*callback)(buf_t, void *),
     void *callback_arg, int bflag)
 {
 	off_t start, end;
 
-	if (!IOSWITCH_IMAGE_READ_AHEAD || size == 0 || size > IOSWITCH_IMAGE_WINDOW / 2 || offset < 0 ||
+	if (!SWITCH_IMAGE_READ_AHEAD || size == 0 || size > SWITCH_IMAGE_WINDOW / 2 || offset < 0 ||
 	    offset >= filesize || cluster_is_throttled(vp)) {
 		return;
 	}
-	start = offset & ~(off_t)(IOSWITCH_IMAGE_WINDOW - 1);
-	end = (offset + (off_t)size + IOSWITCH_IMAGE_WINDOW - 1) & ~(off_t)(IOSWITCH_IMAGE_WINDOW - 1);
+	start = offset & ~(off_t)(SWITCH_IMAGE_WINDOW - 1);
+	end = (offset + (off_t)size + SWITCH_IMAGE_WINDOW - 1) & ~(off_t)(SWITCH_IMAGE_WINDOW - 1);
 	if (end > filesize) {
 		end = filesize;
 	}
-	os_atomic_inc(&ioswitch_image_stat[2], relaxed);
-	os_atomic_add(&ioswitch_image_stat[3], (uint64_t)(end - start), relaxed);
+	os_atomic_inc(&switch_image_stat[2], relaxed);
+	os_atomic_add(&switch_image_stat[3], (uint64_t)(end - start), relaxed);
 	(void)cluster_read_prefetch(vp, start, (u_int)(end - start), filesize, callback, callback_arg, bflag);
 }
 
-/* The image counters since boot (ioswitch_image_stat), for the kprof image line. */
-void ioswitch_cluster_image_stats(uint64_t stats[9]);
+/* The image counters since boot (switch_image_stat), for the kprof image line. */
+void switch_cluster_image_stats(uint64_t stats[9]);
 void
-ioswitch_cluster_image_stats(uint64_t stats[9])
+switch_cluster_image_stats(uint64_t stats[9])
 {
 	for (unsigned i = 0; i < 9; i++) {
-		stats[i] = os_atomic_load(&ioswitch_image_stat[i], relaxed);
+		stats[i] = os_atomic_load(&switch_image_stat[i], relaxed);
 	}
 }
 
@@ -4314,9 +4314,9 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 	int              take_reference = 1;
 	int              policy = IOPOL_DEFAULT;
 	boolean_t        iolock_inited = FALSE;
-	const bool       ioswitch_image = !(flags & IO_NOCACHE) && ioswitch_cluster_is_image(vp);
-	uint64_t         ioswitch_miss_began = 0;
-	uint64_t         ioswitch_miss_bytes = 0;
+	const bool       switch_image = !(flags & IO_NOCACHE) && switch_cluster_is_image(vp);
+	uint64_t         switch_miss_began = 0;
+	uint64_t         switch_miss_bytes = 0;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 32)) | DBG_FUNC_START,
 	    (int)uio->uio_offset, io_req_size, (int)filesize, flags, 0);
@@ -4326,16 +4326,16 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 	}
 
 	policy = throttle_get_io_policy(NULL);
-	if (ioswitch_image) {
-		os_atomic_inc(&ioswitch_image_stat[0], relaxed);
+	if (switch_image) {
+		os_atomic_inc(&switch_image_stat[0], relaxed);
 	}
 
 	/*
-	 * IOSwitch (r8-sdboot): the cryptex images' cached pages take a reference like any foreground read, whatever tier
-	 * the disk image's I/O thread runs at (see ioswitch_cluster_register_image).
+	 * Switch (r8-sdboot): the cryptex images' cached pages take a reference like any foreground read, whatever tier
+	 * the disk image's I/O thread runs at (see switch_cluster_register_image).
 	 */
 	if ((policy == THROTTLE_LEVEL_TIER3 || policy == THROTTLE_LEVEL_TIER2 || (flags & IO_NOCACHE)) &&
-	    ((flags & IO_NOCACHE) || !ioswitch_cluster_is_image(vp))) {
+	    ((flags & IO_NOCACHE) || !switch_cluster_is_image(vp))) {
 		take_reference = 0;
 	}
 
@@ -4528,15 +4528,15 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 		}
 
 		/*
-		 * IOSwitch (r14-launch): this request missed the cache from here on. The wait from here to the end of this round
+		 * Switch (r14-launch): this request missed the cache from here on. The wait from here to the end of this round
 		 * (the UPL waiting for busy pages, the I/O) is this thread's read wait (kprof waits line); a small read of a
-		 * cryptex image first reads its 64 KiB window ahead (ioswitch_image_window).
+		 * cryptex image first reads its 64 KiB window ahead (switch_image_window).
 		 */
-		ioswitch_miss_began = mach_absolute_time();
-		ioswitch_miss_bytes = io_size;
-		if (ioswitch_image) {
-			os_atomic_inc(&ioswitch_image_stat[1], relaxed);
-			ioswitch_image_window(vp, uio->uio_offset, io_size, filesize, callback, callback_arg, bflag);
+		switch_miss_began = mach_absolute_time();
+		switch_miss_bytes = io_size;
+		if (switch_image) {
+			os_atomic_inc(&switch_image_stat[1], relaxed);
+			switch_image_window(vp, uio->uio_offset, io_size, filesize, callback, callback_arg, bflag);
 		}
 
 		/*
@@ -4844,9 +4844,9 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 		if (retval == 0) {
 			retval = error;
 		}
-		if (ioswitch_miss_began) {
-			ioswitch_kprof_wait(1 /* read wait */, mach_absolute_time() - ioswitch_miss_began, ioswitch_miss_bytes);
-			ioswitch_miss_began = 0;
+		if (switch_miss_began) {
+			switch_kprof_wait(1 /* read wait */, mach_absolute_time() - switch_miss_began, switch_miss_bytes);
+			switch_miss_began = 0;
 		}
 
 		if (io_req_size) {

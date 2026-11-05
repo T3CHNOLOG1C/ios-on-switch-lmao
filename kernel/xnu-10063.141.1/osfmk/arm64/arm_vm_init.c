@@ -1,4 +1,4 @@
-#include "IOSwitchDiag.h"
+#include "SwitchDiag.h"
 /*
  * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
  *
@@ -46,7 +46,7 @@
 #include <arm/misc_protos.h>
 #include <pexpert/arm64/boot.h>
 #include <pexpert/device_tree.h>
-#include <arm64/ioswitch_ram.h>
+#include <arm64/switch_ram.h>
 
 #include <libkern/kernel_mach_header.h>
 #include <libkern/section_keywords.h>
@@ -359,13 +359,13 @@ static pmap_paddr_t iosw_kernel_start, iosw_bootstrap_start, iosw_bootstrap_limi
  * physical aperture write-combined only (no cacheable alias anywhere): the GPU driver reaches it with phystokv(). A
  * separate 128 MiB ml_io_map_wcomb fails, kernel VA (10-30: "kmem_alloc(.., 134217728, ..): failed with 3"). */
 static pmap_paddr_t iosw_gpu_start, iosw_gpu_end;
-static bool iosw_physmap_wcomb;   /* set only while arm_vm_ioswitch_physmap maps the GPU pool */
+static bool iosw_physmap_wcomb;   /* set only while arm_vm_switch_physmap maps the GPU pool */
 
 boolean_t
-pmap_ioswitch_ram_enabled(void) { return iosw_ram.committed == 1; }
+pmap_switch_ram_enabled(void) { return iosw_ram.committed == 1; }
 
 boolean_t
-pmap_ioswitch_pa_valid(pmap_paddr_t pa)
+pmap_switch_pa_valid(pmap_paddr_t pa)
 {
     if (!iosw_ram.committed) return TRUE;
     if (pa >= 0xa0000000ULL && pa < 0xa0020000ULL) return FALSE;
@@ -376,11 +376,11 @@ pmap_ioswitch_pa_valid(pmap_paddr_t pa)
 }
 
 boolean_t
-pmap_ioswitch_ram_reserved(ppnum_t pnum)
+pmap_switch_ram_reserved(ppnum_t pnum)
 {
     pmap_paddr_t pa = (pmap_paddr_t)pnum << PAGE_SHIFT;
     if (!iosw_ram.committed) return FALSE;
-    if (!pmap_ioswitch_pa_valid(pa)) return TRUE;
+    if (!pmap_switch_pa_valid(pa)) return TRUE;
     if (pa < first_avail_phys && pa + PAGE_SIZE > iosw_kernel_start) return TRUE;
     for (unsigned i=0; i<iosw_ram.count; ++i) {
         if (pa < iosw_ram.reserved[i].end && pa+PAGE_SIZE > iosw_ram.reserved[i].start) return TRUE;
@@ -389,19 +389,19 @@ pmap_ioswitch_ram_reserved(ppnum_t pnum)
 }
 
 void
-pmap_ioswitch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
+pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
 {
     if (iosw_ram.committed && (start < iosw_bootstrap_start || end < start || end > iosw_bootstrap_limit))
         panic("native bootstrap allocation outside contiguous free RAM");
 }
 
 static void
-pmap_ioswitch_ram_init(boot_args *args)
+pmap_switch_ram_init(boot_args *args)
 {
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
     DTEntry entry; const void *wire; unsigned int bytes;
     if (SecureDTLookupEntry(NULL, "/chosen", &entry) != kSuccess ||
-        SecureDTGetProperty(entry, "ioswitch-ram-ledger", &wire, &bytes) != kSuccess) {
+        SecureDTGetProperty(entry, "switch-ram-ledger", &wire, &bytes) != kSuccess) {
         if (args->physBase == 0x80000000ULL && args->memSize == 0x100000000ULL)
             panic("native full RAM requires live ownership ledger");
         return;
@@ -575,7 +575,7 @@ alloc_ptpage(boolean_t map_static)
 
 		return vaddr;
 	} else {
-		pmap_ioswitch_bootstrap_check(avail_start, avail_start + ARM_PGBYTES);
+		pmap_switch_bootstrap_check(avail_start, avail_start + ARM_PGBYTES);
 		vaddr = phystokv(avail_start);
 		avail_start += ARM_PGBYTES;
 
@@ -1626,7 +1626,7 @@ arm_vm_physmap_slide(ptov_table_entry *temp_ptov_table, vm_map_address_t orig_va
 }
 
 static void
-arm_vm_ioswitch_physmap(ptov_table_entry *table, pmap_paddr_t start, pmap_paddr_t end)
+arm_vm_switch_physmap(ptov_table_entry *table, pmap_paddr_t start, pmap_paddr_t end)
 {
     static const struct iosw_ram_range regions[] = {
         {0x80000000ULL,0xa0000000ULL}, {0xa0020000ULL,0xf5a00000ULL},
@@ -1734,7 +1734,7 @@ arm_vm_physmap_init(boot_args *args)
 	bzero(temp_ptov_table, sizeof(temp_ptov_table));
 
 	// Will be handed back to VM layer through ml_static_mfree() in arm_vm_prot_finalize()
-    if (iosw_ram.committed) arm_vm_ioswitch_physmap(temp_ptov_table,gPhysBase,segLOWEST-gVirtBase+gPhysBase);
+    if (iosw_ram.committed) arm_vm_switch_physmap(temp_ptov_table,gPhysBase,segLOWEST-gVirtBase+gPhysBase);
     else {
 	arm_vm_physmap_slide(temp_ptov_table, gVirtBase, segLOWEST - gVirtBase, AP_RWNA,
 	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
@@ -1743,7 +1743,7 @@ arm_vm_physmap_init(boot_args *args)
 	arm_vm_page_granular_RWNX(end_kern, phystokv(args->topOfKernelData) - end_kern,
 	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); /* Device Tree (if not locked down), RAM Disk (if present), bootArgs */
 
-    if (iosw_ram.committed) arm_vm_ioswitch_physmap(temp_ptov_table,args->topOfKernelData,real_avail_end);
+    if (iosw_ram.committed) arm_vm_switch_physmap(temp_ptov_table,args->topOfKernelData,real_avail_end);
     else {
 	arm_vm_physmap_slide(temp_ptov_table, (args->topOfKernelData - gPhysBase + gVirtBase),
 	    real_avail_end - args->topOfKernelData, AP_RWNA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // rest of physmem
@@ -1977,7 +1977,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 */
 	gVirtBase = args->virtBase;
 	gPhysBase = args->physBase;
-	pmap_ioswitch_ram_init(args);
+	pmap_switch_ram_init(args);
 #if KASAN
 	real_phys_size = args->memSize + (shadow_ptop - shadow_pbase);
 #else
@@ -2017,13 +2017,13 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	physmap_base = phystokv(args->topOfKernelData);
 #endif
 
-	ioswitch_diag_early_stage(17, "VM memory bounds ready");
+	switch_diag_early_stage(17, "VM memory bounds ready");
 	// Slide the physical aperture to a random page-aligned location within the slide range
 	uint64_t physmap_slide = early_random() & ARM64_PHYSMAP_SLIDE_MASK & ~((uint64_t)PAGE_MASK);
 	assert(physmap_slide < ARM64_PHYSMAP_SLIDE_RANGE);
 
 	physmap_base += physmap_slide;
-	ioswitch_diag_early_stage(18, "VM random slide ready");
+	switch_diag_early_stage(18, "VM random slide ready");
 
 #if XNU_MONITOR
 	physmap_base = ROUND_TWIG(physmap_base);
@@ -2294,17 +2294,17 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 
 	arm_set_user_tbi();
 
-	ioswitch_diag_early_stage(19, "VM preparing final tables");
+	switch_diag_early_stage(19, "VM preparing final tables");
 	arm_vm_physmap_init(args);
 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
-	ioswitch_diag_early_stage(20, "VM final kernel tables active");
+	switch_diag_early_stage(20, "VM final kernel tables active");
 
 #if XNU_MONITOR
 	ml_enable_monitor();
 #endif
 
-	ioswitch_diag_early_stage(21, "VM retiring early diagnostics");
-	ioswitch_diag_early_leave();
+	switch_diag_early_stage(21, "VM retiring early diagnostics");
+	switch_diag_early_leave();
 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
 
 	flush_mmu_tlb();
@@ -2365,7 +2365,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
     if (iosw_ram.committed) {
         uint64_t eligible=0, free_bytes=0;
         for (pmap_paddr_t pa=gPhysBase;pa<gPhysBase+mem_size;pa+=PAGE_SIZE) {
-            if (pmap_ioswitch_pa_valid(pa)) {
+            if (pmap_switch_pa_valid(pa)) {
                 boolean_t reserved=FALSE;
                 for (unsigned i=0;i<iosw_ram.count;i++)
                     if (pa<iosw_ram.reserved[i].end && pa+PAGE_SIZE>iosw_ram.reserved[i].start) reserved=TRUE;

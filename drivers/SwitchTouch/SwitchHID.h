@@ -14,7 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <IOKit/IOReturn.h>
-#include "../NativeMobileDisplay/IOSwitchPortrait.h"
+#include "../NativeMobileDisplay/SwitchPortrait.h"
 
 class IOService;
 class OSObject;
@@ -33,12 +33,12 @@ enum SwitchHIDKind : unsigned {
 // the landscape frame iOS draws in (0..1279 left to right, 0..719 top to bottom); the descriptor's logical range
 // is the whole panel, so backboardd scales them to whatever logical size the UI uses.
 constexpr unsigned kSwitchTouchSlots = 10, kSwitchTouchWidth = 1280, kSwitchTouchHeight = 720;
-// Portrait-native (IOSwitchPortrait.h): reports carry the panel's own frame instead, the one iOS is given as its screen
+// Portrait-native (SwitchPortrait.h): reports carry the panel's own frame instead, the one iOS is given as its screen
 // (0..719 left to right, 0..1279 top to bottom of the portrait panel): landscape (x, y) is reported as (y, 1279 - x),
 // the display's own mapping. backboardd's digitizer-to-panel rotation is 0, and iOS turns touches into its landscape
 // interface itself.
-constexpr unsigned kSwitchTouchReportWidth = IOSWITCH_PORTRAIT_NATIVE ? kSwitchTouchHeight : kSwitchTouchWidth,
-                   kSwitchTouchReportHeight = IOSWITCH_PORTRAIT_NATIVE ? kSwitchTouchWidth : kSwitchTouchHeight;
+constexpr unsigned kSwitchTouchReportWidth = SWITCH_PORTRAIT_NATIVE ? kSwitchTouchHeight : kSwitchTouchWidth,
+                   kSwitchTouchReportHeight = SWITCH_PORTRAIT_NATIVE ? kSwitchTouchWidth : kSwitchTouchHeight;
 enum : uint8_t { kSwitchTouchTip = 1u << 0, kSwitchTouchValid = 1u << 1 };  // bit 2 (Untouch) stays 0
 struct __attribute__((packed)) SwitchTouchSlot {
     uint8_t flags, contact;
@@ -83,7 +83,7 @@ struct __attribute__((packed)) SwitchButtonsReport {
 //    second (kIOHIDEventTypeGyro in rad/s).
 //  * Device orientation, Sensor 0x20/0x008a (what CoreMotion's orientation notifier matches): input report 1 =
 //    kSwitchOrientationDescriptor, SwitchOrientationReport.
-// Vectors are in iPadOS's device frame: the portrait panel's (IOSwitchPortrait.h), +X to its right, +Y to its top, +Z
+// Vectors are in iPadOS's device frame: the portrait panel's (SwitchPortrait.h), +X to its right, +Y to its top, +Z
 // out of the screen; acceleration is the gravity vector (lying face up reads z = -1 g), as Apple's AOP reports it.
 struct __attribute__((packed)) SwitchMotionReport {
     uint8_t id;  // 1

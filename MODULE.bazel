@@ -1,11 +1,11 @@
-"""ioswitch: iPadOS 17.7.11 (21H461, iPad7,1) on the Nintendo Switch OLED.
+"""ios-on-switch-lmao: iPadOS 17.7.11 (21H461, iPad7,1) on the Nintendo Switch OLED.
 
 Everything the build reads is pinned here (or in a .bzl this file loads) by version and sha256, except the one
 declared host input: Xcode and its SDKs (Apple's licence forbids redistributing them), which bazel/host checks
 against the pins in bazel/host/xcode.bzl.
 """
 
-module(name = "ioswitch")
+module(name = "switch-ios")
 
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
@@ -32,11 +32,11 @@ python.toolchain(
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
-    hub_name = "ioswitch_pypi",
+    hub_name = "switch_pypi",
     python_version = "3.13",
     requirements_lock = "//bazel/python:requirements_lock.txt",
 )
-use_repo(pip, "ioswitch_pypi")
+use_repo(pip, "switch_pypi")
 
 # uv 0.13.0 (the version the editor uses), only for `bazel run //bazel/python:requirements.update`, which locks
 # bazel/python/requirements.in into requirements_lock.txt. Pinned by URL and sha256 rather than uv's release manifest.

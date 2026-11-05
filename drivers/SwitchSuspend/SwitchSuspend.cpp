@@ -51,8 +51,8 @@ void tegra_gpio_suspend(void);
 void tegra_gpio_resume(void);
 void tegra_i2c_suspend(void);
 void tegra_i2c_resume(void);
-void ioswitch_block_suspend(void);
-void ioswitch_block_resume(void);
+void switch_block_suspend(void);
+void switch_block_resume(void);
 void switch_thermal_suspend(void);
 void switch_thermal_resume(void);
 void switch_sensors_resume(void);
@@ -334,7 +334,7 @@ void SwitchSuspend::sleepDevices()
     // The journal to Data while the SD is up: what follows is in RAM only until the wake (and lost to a forced
     // power-off).
     switch_power_journal_flush(true);
-    timed("sleep", 7, "sd", ioswitch_block_suspend);
+    timed("sleep", 7, "sd", switch_block_suspend);
     timed("sleep", 8, "rtc", switch_rtc_suspend);
     timed("sleep", 8, "battery", switch_battery_suspend);  // the gauge's alert: charge-zone edges only
     gaugeBeforeErr = switch_battery_gauge_sample(&gaugeBefore);
@@ -453,7 +453,7 @@ void SwitchSuspend::wakeDevices()
                              lost ? " (a swgroup was not restored)" : "");
     }
     timed("wake", 2, "se", tegra_se_resume);
-    timed("wake", 3, "sd", ioswitch_block_resume);
+    timed("wake", 3, "sd", switch_block_resume);
     timed("wake", 4, "battery", switch_battery_resume);  // the normal gauge windows, a re-read
     timed("wake", 5, "thermal", switch_thermal_resume);
     timed("wake", 5, "sensors", switch_sensors_resume);

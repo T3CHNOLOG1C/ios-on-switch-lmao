@@ -156,7 +156,7 @@ impl HeapPlaneCopies {
             ResourceOptions::new(StorageMode::Private, CpuCacheMode::DefaultCache, hazard);
         let buffer = device.own_buffer(span.next_multiple_of(4), options)?;
         let (_, start) = buffer.at(0);
-        // Back as one copy of the span (ioswitch), not one per row of each plane: the staging
+        // Back as one copy of the span (ios-on-switch-lmao), not one per row of each plane: the staging
         // buffer holds every byte of the span as the copy in found it, the kernel rewrote only
         // the texels' words, so the bytes between the rows and the planes go back as they were.
         // A copy per row was a compute dispatch each on NVK (`vk_meta_copy_memory`): ~1000 per

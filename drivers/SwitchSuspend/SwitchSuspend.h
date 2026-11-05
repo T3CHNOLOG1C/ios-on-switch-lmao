@@ -8,7 +8,7 @@
 //   ArmCpu::haltCPU() on each running secondary and then the boot CPU = processor_exit() -> cpu_sleep() on that
 //   core -> ArmCpu::quiesceCPU() -> ml_arm_sleep() -> arm64_prepare_for_sleep() -> ArmCpu's PSCI handler:
 //   CPU_OFF on a secondary, SYSTEM_SUSPEND (ATF -> BPMP firmware -> SC7) on the boot CPU.
-//   Wake: PMC wake event -> bootrom -> warmboot (hekate's sc7exit_b01.bin) -> ATF -> ioswitch_secondary_entry
+//   Wake: PMC wake event -> bootrom -> warmboot (hekate's sc7exit_b01.bin) -> ATF -> switch_secondary_entry
 //   (EL2 -> EL1) -> XNU reset vector -> start_cpu -> arm_init_cpu -> ArmCpu::initCPU(false) -> back in
 //   IOCPUSleepKernel, which CPU_ONs the secondaries and runs the platform wake actions.
 //   The ADT's /defaults sleep-disabled is 0 (tools/package/adt_edit.py); while sleep cannot be taken this driver
@@ -40,7 +40,7 @@
 //     on the bus; the role again from SwitchPD)   7 joycon   8 motion   8 touch
 //     9 display   10 als (after LDO6 and the frame ends)
 // A driver that is turned on but has no SC7 path yet holds the system awake instead (switch_suspend_hold). The display
-// hooks need the DC A interrupt (sheng-vsync / ioswitch-vblank) and SwitchBrightness, as TegraDisplayPower.h says.
+// hooks need the DC A interrupt (sheng-vsync / switch-vblank) and SwitchBrightness, as TegraDisplayPower.h says.
 //
 // Wake sources (SwitchWakeSources.h switch_wake_pmc_events): the MAX77620's nIRQ (PMC wake 51, level low) carries the
 // power key (ONOFFIRQ EN0, SwitchButtons) and the RTC alarm (ALARM1, SwitchPMIC); the BM92T36 USB-PD ALERT (14, PK4

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: struct device and the device-managed allocators. Like Linux 4.9's <linux/device.h>, this also brings
+ * Switch shim: struct device and the device-managed allocators. Like Linux 4.9's <linux/device.h>, this also brings
  * in what the vendored files reach through it implicitly (timers, notifiers, pinctrl consumer calls, pm ops).
  * devm_* allocations are never released: the DFLL device is probed once per boot and never removed.
  */

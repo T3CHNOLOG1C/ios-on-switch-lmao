@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Tegra210 (T210/T210B01) GPIO controller with per-pin interrupts, for statically linked IOSwitch drivers.
+// Tegra210 (T210/T210B01) GPIO controller with per-pin interrupts, for statically linked Switch drivers.
 //
 // TegraGPIO is an IOInterruptController. tegra_gpio_interrupt_nub() hands out one IOService nub per pin whose
 // interrupt index 0 is that pin, so a driver uses the ordinary IOKit event sources on its own work loop:
@@ -18,7 +18,7 @@
 // the OLED DTB gpio@6000d000, hekate gpio.c:43-50). Numbering is Linux's (dt-bindings/gpio/tegra-gpio.h):
 // port A=0 .. Z=25, AA=26 .. FF=31, gpio = port * 8 + pin, bank = gpio / 32.
 //
-// Pins used by IOSwitch drivers (Switch OLED, tegra210b01-fric DTB; switchroot tegra210b01-nx-common.dtsi):
+// Pins used by Switch drivers (Switch OLED, tegra210b01-fric DTB; switchroot tegra210b01-nx-common.dtsi):
 //   PX1 185  FTM4 touch INT (I2C3 0x49)      level low   bank 5 SPI 87
 //   PX2 186  IMU INT2 data-ready (SPI4 CS0)  level high  bank 5 SPI 87
 //   PX4 188  TMP451 ALERT (I2C1 0x4c)        level low   bank 5 SPI 87
@@ -31,7 +31,7 @@
 //   PX3 187  v_vdd5v3 enable (USB-C source) output, active high (DT tegra210-nx-power-fixed regulator@0xb)
 //   PK5  85  BM92T36 VCONN enable            output, active high (DT rohm,vconn-en-gpio)
 // The power button is not a GPIO on this board (gpio-keys "power" PX5 is disabled, "Not connected"): it is the
-// MAX77620 ONOFF interrupt on the PMIC's nIRQ, GIC SPI 86 (ioswitch_interrupt_nub(118, false)).
+// MAX77620 ONOFF interrupt on the PMIC's nIRQ, GIC SPI 86 (switch_interrupt_nub(118, false)).
 //
 // For these pins the pinmux is set here too (inputs: input enabled, tristate, the DT pull; the outputs PJ7, PX3, PK5: driven,
 // input disabled, pull-down; tegra210b01-fric-pinmux.dtsi); any other pin must already be muxed. Call everything
@@ -128,7 +128,7 @@ extern "C" {
 #endif
 
 // Starts the controller: maps it, masks every pin interrupt, claims the eight bank SPIs from the GIC
-// (ioswitch_interrupt_nub: sleeps until the GIC is up, panics after 10 s) and registers the "TegraGPIO" interrupt
+// (switch_interrupt_nub: sleeps until the GIC is up, panics after 10 s) and registers the "TegraGPIO" interrupt
 // controller. tegra_gpio_interrupt_nub() calls it on first use, so calling it is optional. Returns 0 on success (or
 // if already started), -1 only if memory or the register mappings could not be had. Panics if a bank's interrupt
 // cannot be attached.
@@ -150,7 +150,7 @@ int tegra_gpio_sample(unsigned gpio, unsigned *config);
 int tegra_gpio_config(unsigned gpio);
 
 // One line for a panic message: the pin's CNF/OE/IN/INT_ENB/INT_STA/INT_LVL bits and trigger, then its bank's GIC
-// state (ioswitch_interrupt_describe).
+// state (switch_interrupt_describe).
 void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size);
 
 // Lost-interrupt check for consumers without a natural wait (call it from a slow timer or before trusting a level

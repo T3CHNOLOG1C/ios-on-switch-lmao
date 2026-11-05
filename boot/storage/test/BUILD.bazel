@@ -1,6 +1,6 @@
 # The loader's storage code (boot/storage) on the host, each against an independent model or image built here:
 # GPT qualification, the FAT32 reader, the raw APFS block backend, the same-boot SD reference page and the read-only
-# SDHCI PIO reader. (block/: the NativeIOSwitchBlock driver of boot/storage.)
+# SDHCI PIO reader. (block/: the NativeSwitchBlock driver of boot/storage.)
 #
 #   bazel test //boot/storage/test/...
 load("//bazel/lint:defs.bzl", "lint_files")

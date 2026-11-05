@@ -1110,7 +1110,7 @@ static void policy()
 // One process per scenario: the drivers keep globals.
 static void run(void (*scenario)())
 {
-    ioswitch::test::ExpectPassesInFreshProcess([scenario] {
+    switch_ios::test::ExpectPassesInFreshProcess([scenario] {
         gCharger.gauge = &gGauge;
         try {
             scenario();

@@ -386,7 +386,7 @@ def build_layout(kernel_path: Path, adt_path: Path, output_dir: Path, *,
     boot_virt = kernel.base - physical_base + boot_phys
     boot_size = (4 << 30) if full_ram else window_size
     boot_actual = ((4 << 30) - (3 << 20)) if full_ram else window_size
-    if full_ram and (physical_base != 0xb207c000 or adt.properties.get(("/chosen","ioswitch-ram-ledger"),(0,0))[1] != 1584):
+    if full_ram and (physical_base != 0xb207c000 or adt.properties.get(("/chosen","switch-ram-ledger"),(0,0))[1] != 1584):
         raise LayoutError("full RAM requires the measured native profile and runtime ledger")
     boot_args = bytearray(BOOT_ARGS_SIZE)
     struct.pack_into("<HHI4Q6Q", boot_args, 0, 2, 2, 0, boot_virt, boot_phys,

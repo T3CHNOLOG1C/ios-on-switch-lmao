@@ -3,7 +3,7 @@ only the steps it reaches:
 
     boot_args.py ............................ boot-args.txt
     overlay.py plan  (manifest, boot-args) .. overlay-plan.json
-    adt_edit.py      (board ADT, plan) ...... ioswitch.adt
+    adt_edit.py      (board ADT, plan) ...... ios.adt
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU) ... trustcache.bundle
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
@@ -18,7 +18,7 @@ only the steps it reaches:
                                                size and bl33.bin's, which the window's constants give)
     bl33.py patch (once) / stage ............. bl33.bin
     overlay.py tree  (plan, overlay files) .. overlay/
-    cp ...................................... ioswitch/ (the directory //deploy:sd, //install:sd and //boot:snapshot take)
+    cp ...................................... ios/ (the directory //deploy:sd, //install:sd and //boot:snapshot take)
 
 So an overlay plist edit reruns the overlay tree and the final copy; a driver edit reruns the kernel's steps from the
 layout on (the shards it changed, four loader objects, the link with the boot script, the bl33 stage and the copy); a
@@ -60,7 +60,7 @@ LOADER_COPTS = [
 # bootcmd_mmc0=true: should boot.scr not take over, U-Boot's distro loop goes on to mmc0, the eMMC (initialize, read
 # its partition table, scan it); never. bl33.py's patch also drops mmc0 from boot_targets for failures before hekate's
 # env is imported (an SD card U-Boot cannot read).
-_HEKATE_ENTRY = ("[IOSwitch]\nl4t=1\nboot_prefixes=/switchroot/{name}/\nid=IOSWITCH\nbootwait=0\n" +
+_HEKATE_ENTRY = ("[iOS]\nl4t=1\nboot_prefixes=/switchroot/{name}/\nid=iOS\nbootwait=0\n" +
                  "scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\nbootcmd_mmc0=true\n")
 
 # The shell that runs an Xcode tool: DEVELOPER_DIR from @xcode//:xcode.env (its first argument), then the tool.
@@ -149,7 +149,7 @@ def _boot_package_impl(ctx):
     args.add("--out", plan)
     _run(ctx, ctx.executable._overlay, [args], [ctx.file.overlay_manifest, boot_args, ctx.file.portrait_header], [plan], "OverlayPlan", "Planning the userland overlay")
 
-    adt = out("ioswitch.adt")
+    adt = out("ios.adt")
     args = ctx.actions.args()
     args.add("--adt", ctx.file.adt)
     args.add("--boot-args", boot_args)
@@ -322,7 +322,7 @@ def _boot_package_impl(ctx):
         inputs = [overlay, ini] + switchroot.values(),
         outputs = [package],
         mnemonic = "BootPackage",
-        progress_message = "Assembling the IOSwitch boot entry",
+        progress_message = "Assembling the iOS boot entry",
     )
     return [
         DefaultInfo(files = depset([package])),
@@ -343,8 +343,8 @@ boot_package = rule(
     doc = "The Hekate boot entry (switchroot/<entry>/*, bootloader/ini/<entry>.ini, overlay/<absolute path>) from the " +
           "prelinked kernel, the IPSW's trust caches, the GPU trust cache, the overlay and the native loader's sources.",
     attrs = {
-        "out": attr.string(default = "ioswitch"),
-        "entry": attr.string(default = "ioswitch", doc = "the entry's folder (switchroot/<entry>/) and ini name"),
+        "out": attr.string(default = "ios"),
+        "entry": attr.string(default = "ios", doc = "the entry's folder (switchroot/<entry>/) and ini name"),
         "kernel": attr.label(mandatory = True, allow_single_file = True),
         "adt": attr.label(mandatory = True, allow_single_file = True, doc = "the board ADT (//boot:adt)"),
         "static_trust": attr.label(mandatory = True, allow_single_file = True),

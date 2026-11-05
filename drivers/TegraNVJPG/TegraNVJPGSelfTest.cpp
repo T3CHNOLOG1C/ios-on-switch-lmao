@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // NVJPG's boot self-test (J3): embedded JPEGs decoded by the engine and compared with libjpeg-turbo's decode of the
-// same bytes (selftest/J3Vectors.inc: libjpeg-turbo's encoding of a synthetic picture with fine luma texture and
+// same bytes (selftest/J3Vectors.h: libjpeg-turbo's encoding of a synthetic picture with fine luma texture and
 // chroma ramps, and its integer-IDCT raw YCbCr planes; the host test checks the planes against a fresh decode). NVJPG's
 // IDCT is not libjpeg's, so pixels are compared within a tolerance (a few 8-bit steps per pixel, under one on average);
 // a decode with a wrong table, stride, plane order or sampling misses by tens. RGB expectations are the reference
@@ -25,7 +25,7 @@
 #include <string.h>
 #include "../TegraHost1x/TegraHost1x.h"
 #include "TegraNVJPG.h"
-#include "selftest/J3Vectors.inc"
+#include "selftest/J3Vectors.h"
 
 namespace {
 TegraNVJPGBuffer gBits, gOut, gPageA, gPageB;

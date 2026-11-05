@@ -2482,7 +2482,7 @@ attr_pack_common_extended(mount_t mp, struct vnode *vp, struct attrlist *alp,
 }
 
 /*
- * IOSwitch: the Data volume is APFS without content protection (MNT_CPROTECT clear: no per-file keys), so
+ * Switch: the Data volume is APFS without content protection (MNT_CPROTECT clear: no per-file keys), so
  * ATTR_CMN_DATA_PROTECT_FLAGS carries no class (1-4) and NSURLFileProtectionKey reads as nil. Every file there is
  * unprotected, which iOS calls class D (NSFileProtectionNone), and clients that check for it fail on nil:
  * PosterBoard requires its data store to read back as NSFileProtectionNone, never creates the store, and the
@@ -4645,7 +4645,7 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 	/* Support setattrlist of data protection class */
 	if (al.commonattr & ATTR_CMN_DATA_PROTECT_FLAGS) {
 		ATTR_UNPACK(va.va_dataprotect_class);
-		/* IOSwitch: no content protection on the volume, so a valid class is a no-op (as F_SETPROTECTIONCLASS). */
+		/* Switch: no content protection on the volume, so a valid class is a no-op (as F_SETPROTECTIONCLASS). */
 		if (!(vfs_flags(vnode_mount(vp)) & MNT_CPROTECT)) {
 			if (!cp_is_valid_class(vnode_isdir(vp), (int32_t)va.va_dataprotect_class)) {
 				error = EINVAL;

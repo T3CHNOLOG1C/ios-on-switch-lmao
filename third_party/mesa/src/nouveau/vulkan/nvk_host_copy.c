@@ -55,7 +55,7 @@ memcpy2d(void *dst, size_t dst_stride_B,
    }
 }
 
-/* ioswitch: a copy goes through the client's mapping of the memory where it
+/* ios-on-switch-lmao: a copy goes through the client's mapping of the memory where it
  * has one (the runtime maps its blocks whole, for good), and maps it only
  * where it has none: on nvkmd_darwin each internal map is a kernel mapping of
  * the whole BO, faulted in page by page, then unmapped. A read cleans nothing

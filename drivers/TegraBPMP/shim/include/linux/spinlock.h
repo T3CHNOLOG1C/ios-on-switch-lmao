@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: spin locks on IOSimpleLock, allocated on first use (shim/linux.c). Nothing here runs in
+/* Switch TegraBPMP shim: spin locks on IOSimpleLock, allocated on first use (shim/linux.c). Nothing here runs in
  * primary interrupt context: the doorbell filter only acknowledges the LIC, and mail.c's handler runs on a work loop
  * thread, so the irqsave variants only have to keep the caller from being preempted by another locker. */
 #ifndef BPXNU_LINUX_SPINLOCK_H

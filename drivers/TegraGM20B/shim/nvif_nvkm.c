@@ -1,4 +1,4 @@
-/* IOSwitch: verbatim copy of nouveau drivers/gpu/drm/nouveau/nouveau_nvif.c (torvalds/linux d89e1d1),
+/* Switch: verbatim copy of nouveau drivers/gpu/drm/nouveau/nouveau_nvif.c (torvalds/linux d89e1d1),
  * with its #include "nouveau_drv.h" (DRM driver state) replaced by <core/event.h>, which it got from there. */
 /*
  * Copyright 2014 Red Hat Inc.

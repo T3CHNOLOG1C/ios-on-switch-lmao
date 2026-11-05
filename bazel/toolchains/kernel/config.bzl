@@ -38,7 +38,7 @@ load("//kernel/rules:sdk.bzl", "KernelSdkInfo")
 load(":recipes.bzl", DEVELOPMENT_RECIPES = "RECIPES")
 load(":recipes_release.bzl", RELEASE_RECIPES = "RECIPES")
 
-PATH_ROOT = "/ioswitch"
+PATH_ROOT = "/switch-ios"
 
 # Where the CMake flow kept the patched XNU checkout: the XNU source's spelling in every __FILE__.
 XNU_SPELLING = PATH_ROOT + "/out/native-a57/root-v1/tree/.cache/xnu-work"
@@ -46,7 +46,7 @@ XNU_SPELLING = PATH_ROOT + "/out/native-a57/root-v1/tree/.cache/xnu-work"
 # The XNU source's spelling in debug information: where the @xnu repository (the patched tarball) had it.
 XNU_REPOSITORY = "external/+http_archive+xnu"
 
-# cmake/Drivers.cmake IOSWITCH_DRIVER_WARNINGS: what every IOKit C++ driver adds to the kernel's flags.
+# cmake/Drivers.cmake SWITCH_DRIVER_WARNINGS: what every IOKit C++ driver adds to the kernel's flags.
 DRIVER_WARNINGS = [
     "-Wall",
     "-Wextra",
@@ -173,7 +173,7 @@ def _impl(ctx):
                 flag_sets = [flag_set(actions = actions, flag_groups = _flags(["-fno-lto"]))],
             ))
 
-    # cmake/XnuRecipes.cmake ioswitch_compile_command: `xcrun --sdk iphoneos clang -arch arm64 -mkernel ...` (link stubs).
+    # cmake/XnuRecipes.cmake switch_compile_command: `xcrun --sdk iphoneos clang -arch arm64 -mkernel ...` (link stubs).
     features.append(feature(
         name = "kernel_plain_c",
         provides = ["kernel_c_recipe"],
@@ -282,7 +282,7 @@ def _impl(ctx):
     ]
     return cc_common.create_cc_toolchain_config_info(
         ctx = ctx,
-        toolchain_identifier = "ioswitch-kernel",
+        toolchain_identifier = "switch-kernel",
         host_system_name = "aarch64-apple-darwin",
         target_system_name = "arm64-apple-ios17.0-kernel",
         target_cpu = "arm64",

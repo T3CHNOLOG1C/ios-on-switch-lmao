@@ -1047,7 +1047,7 @@ bool SwitchThermal::raiseDfll(int soc)
 }
 
 // The cluster's clock, measured where it runs: a chain of dependent adds (one per cycle on the A57) timed by the
-// generic timer with interrupts masked, as XNU's kprof_clock_probe (ioswitch_kprof.c) does, 4x longer (131072
+// generic timer with interrupts masked, as XNU's kprof_clock_probe (switch_kprof.c) does, 4x longer (131072
 // adds: about 73 us at 1785 MHz, 0.07 % timer resolution). kprof's probe read 995-997 MHz at 998.4, 1664-1668 at
 // 1670.4 and 1782-1787 at 1785 on this console: within 0.3 % low, against DFLL steps 1.4 % apart. In kHz.
 static uint32_t probeCpuKhz()

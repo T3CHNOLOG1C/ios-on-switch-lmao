@@ -42,8 +42,8 @@ RECIPES = {
     "RELEASE": RELEASE_RECIPES,
 }
 
-# make's spellings (main's kernel, built by make's xnu_build.py with -ffile-prefix-map=<execroot>=/ioswitch).
-_ROOT = "/ioswitch"
+# make's spellings (main's kernel, built by make's xnu_build.py with -ffile-prefix-map=<execroot>=/switch-ios).
+_ROOT = "/switch-ios"
 _MAKE_OBJ = "out/native-a57/root-v1/tree/build/xnu/ios-obj"
 _MAKE_BIN = "bazel-out/darwin_arm64-fastbuild/bin"
 LEGACY = struct(
@@ -395,11 +395,11 @@ def xnu_objects(name, component, table, release, srcs = None, **kwargs):
         xnu_headers = ["//kernel/xnu-10063.141.1/{}:headers".format(c) for c in XNU_COMPONENTS] + [
             XNU_INPUTS + "external_headers",
         ],
-        # The kernel tree's headers XNU's own sources include: the diagnostics (-I diagnostics/ioswitch) and, through
-        # IOSwitchRawMount.inc, the block device's and the verified root's.
+        # The kernel tree's headers XNU's own sources include: the diagnostics (-I diagnostics/switch) and, through
+        # SwitchRawMount.h, the block device's and the verified root's.
         tree_headers = [
-            "//diagnostics/ioswitch:headers",
-            "//drivers/NativeIOSwitchBlock:headers",
+            "//diagnostics/switch:headers",
+            "//drivers/NativeSwitchBlock:headers",
             "//kits/VerifiedRoot:headers",
         ],
         # XNU is Apple's code: no clang-tidy or other linting of its compiles.

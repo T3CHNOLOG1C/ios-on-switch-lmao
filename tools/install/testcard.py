@@ -36,7 +36,7 @@ OTHER_FILES = {
     "bootloader/hekate_ipl.ini": b"[config]\nautoboot=0\n",
     "bootloader/ini/ubuntu.ini": b"[Ubuntu]\nl4t=1\nboot_prefixes=/switchroot/ubuntu/\n",
     "switchroot/ubuntu/boot.scr": b"not ours\n",
-    "switchroot/ioswitch/stale-old-file.bin": b"left by an older ioswitch build\n",
+    "switchroot/ios/stale-old-file.bin": b"left by an older ios-on-switch-lmao build\n",
     "atmosphere/config/system_settings.ini": b"[eupld]\n",
     "payload.bin": b"\0" * 64,
 }

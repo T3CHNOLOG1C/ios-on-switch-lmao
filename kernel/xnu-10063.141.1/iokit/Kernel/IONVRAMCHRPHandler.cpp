@@ -122,7 +122,7 @@ public:
 	virtual uint32_t getCommonUsed(void) const APPLE_KEXT_OVERRIDE;
 	virtual bool     getSystemPartitionActive(void) const APPLE_KEXT_OVERRIDE;
 
-	static IOReturn ioswitchRestore(IODTNVRAM *nvram, const uint8_t *image, IOByteCount length,
+	static IOReturn switchRestore(IODTNVRAM *nvram, const uint8_t *image, IOByteCount length,
 	    const char * const *skip, uint32_t *added, uint32_t *refused);
 };
 
@@ -901,14 +901,14 @@ exit:
 }
 
 /*
- * IOSwitch (drivers/SwitchNVRAM): a bank its controller saved on storage that is only readable once the root file
+ * Switch (drivers/SwitchNVRAM): a bank its controller saved on storage that is only readable once the root file
  * systems are mounted, long after initImageFormat took the /chosen proxy (no iBoot hands it over). The image is parsed
  * exactly as the proxy is, by a handler of its own that never gets a controller; each of its variables is added unless
  * it was set since boot (newer; the empty boot-args unserializeVariables creates does not count) or is named in skip.
  * An image the proxy path would panic on (bad adler) is refused instead. The generation carries on from the saved one.
  */
 IOReturn
-IONVRAMCHRPHandler::ioswitchRestore(IODTNVRAM *nvram, const uint8_t *image, IOByteCount length,
+IONVRAMCHRPHandler::switchRestore(IODTNVRAM *nvram, const uint8_t *image, IOByteCount length,
     const char * const *skip, uint32_t *added, uint32_t *refused)
 {
 	OSSharedPtr<OSDictionary>         restored;
@@ -978,10 +978,10 @@ IONVRAMCHRPHandler::ioswitchRestore(IODTNVRAM *nvram, const uint8_t *image, IOBy
 }
 
 extern "C" IOReturn
-ioswitch_nvram_restore(IODTNVRAM *nvram, const uint8_t *image, size_t length, const char * const *skip,
+switch_nvram_restore(IODTNVRAM *nvram, const uint8_t *image, size_t length, const char * const *skip,
     uint32_t *added, uint32_t *refused)
 {
-	return IONVRAMCHRPHandler::ioswitchRestore(nvram, image, length, skip, added, refused);
+	return IONVRAMCHRPHandler::switchRestore(nvram, image, length, skip, added, refused);
 }
 
 uint32_t

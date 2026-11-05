@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* IOSwitch shim: of_match_device() (best match by the node's compatible order, as Linux __of_match_node does). */
+/* Switch shim: of_match_device() (best match by the node's compatible order, as Linux __of_match_node does). */
 #ifndef TDFLL_LINUX_OF_DEVICE_H
 #define TDFLL_LINUX_OF_DEVICE_H
 #include <linux/device.h>

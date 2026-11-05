@@ -30,7 +30,7 @@
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "SwitchBrightness.h"
 #include "TegraPanel.h"
 
@@ -150,7 +150,7 @@ uint64_t frameDeadline()
 [[noreturn]] void lostFrameEnd(const char *what)
 {
     char gic[192];
-    ioswitch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
+    switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
     panic("TegraPanel: %s: no DC A frame end in 50 ms (step %u): INT_STATUS %#x MASK %#x ENABLE %#x CMD %#x DBG_TIMING "
           "%#x, %s",
           what, step(), gDc[DC_CMD_INT_STATUS], gDc[DC_CMD_INT_MASK], gDc[DC_CMD_INT_ENABLE],
@@ -164,7 +164,7 @@ void play(const uint32_t *words, unsigned count, const char *what)
 {
     if (!__atomic_load_n(&gFrameEndsDriven, __ATOMIC_ACQUIRE)) {
         panic("TegraPanel: %s: the display reports no DC A frame ends (its vblank source is off: "
-              "sheng-vsync/ioswitch-vblank, "
+              "sheng-vsync/switch-vblank, "
               "or it does not call tegra_panel_frame_end_filter)",
               what);
     }

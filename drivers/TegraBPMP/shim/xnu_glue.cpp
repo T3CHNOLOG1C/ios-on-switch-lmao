@@ -21,7 +21,7 @@
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
-#include "../../ArmGIC/IOSwitchInterrupts.h"
+#include "../../ArmGIC/SwitchInterrupts.h"
 #include "include/bpxnu.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -115,7 +115,7 @@ bool TegraBPMPDoorbells::claim()
 		return false;
 	for (unsigned i = 0; i < kDoorbells; ++i) {
 		const uint32_t intid = 32 + kInboundSpi[i];
-		IOService *nub = ioswitch_interrupt_nub(intid, false);
+		IOService *nub = switch_interrupt_nub(intid, false);
 		if (!nub)
 			panic("TegraBPMP: no interrupt for BPMP doorbell %u (INTID %u)", i, intid);
 		sources[i] = IOFilterInterruptEventSource::filterInterruptEventSource(
@@ -182,7 +182,7 @@ void bpxnu_doorbell_lost(int ch, int mrq)
 		}
 	}
 	char gic[160];
-	ioswitch_interrupt_describe(32 + spi, gic, sizeof(gic));
+	switch_interrupt_describe(32 + spi, gic, sizeof(gic));
 	panic("TegraBPMP: doorbell lost: BPMP answered mrq %d on ch %d, no interrupt in 4 s; LIC "
 	      "FIR %08x IER %08x; %s",
 	      mrq, ch, fir, ier, gic);

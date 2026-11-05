@@ -1,4 +1,4 @@
-"""Host tests: GoogleTest cc_tests of ioswitch's own C and C++, built for this Mac by the host C/C++ toolchain.
+"""Host tests: GoogleTest cc_tests of ios-on-switch-lmao's own C and C++, built for this Mac by the host C/C++ toolchain.
 
 Each test lives in a `test/` package beside the code it tests (drivers/SwitchTouch/test, boot/loader/test, ...) and
 lists only what it compiles or reads, so an edit reruns only the tests that depend on it. Nothing compiles at test time.
@@ -189,7 +189,7 @@ def host_test(
         linkopts = flags.linkopts + linkopts,
         # source_text.h resolves package-relative paths through this (the test's package, so a directory move that
         # carries the test along keeps working).
-        local_defines = defines + ['IOSWITCH_TEST_PACKAGE=\\"%s\\"' % native.package_name()],
+        local_defines = defines + ['SWITCH_TEST_PACKAGE=\\"%s\\"' % native.package_name()],
         features = flags.features,
         size = size,
         **kwargs

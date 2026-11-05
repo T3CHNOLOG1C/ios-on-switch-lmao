@@ -41,15 +41,15 @@ WINDOW_SHARD_BYTES = 1 << 20
 WINDOW_SHARDS = 0x6000000 // WINDOW_SHARD_BYTES  # the staged window's limit (build_native_loader.py window_checks)
 LZ4_MAGIC = b'\x04\x22\x4d\x18'
 
-# /chosen/ioswitch-boot-stamps: boot/loader/stamps.h IOSW_STAMP_COUNT 64-bit words, zero until the loader fills it.
-STAMPS_PROPERTY = 'ioswitch-boot-stamps'
+# /chosen/switch-boot-stamps: boot/loader/stamps.h IOSW_STAMP_COUNT 64-bit words, zero until the loader fills it.
+STAMPS_PROPERTY = 'switch-boot-stamps'
 STAMPS_BYTES = 26 * 8
 STAMPS_SLOT = 0xA001EF00
-# /chosen/random-seed (the pinned 64 bytes) and /chosen/ioswitch-seed-source (8 zero bytes): the loader mixes SE2's
+# /chosen/random-seed (the pinned 64 bytes) and /chosen/switch-seed-source (8 zero bytes): the loader mixes SE2's
 # DRBG output into the first and reports in the second (boot/loader/seed.h).
 SEED_PROPERTY = 'random-seed'
 SEED_BYTES = 64
-SEED_SOURCE_PROPERTY = 'ioswitch-seed-source'
+SEED_SOURCE_PROPERTY = 'switch-seed-source'
 SEED_SOURCE_BYTES = 8
 
 # The fixed same-boot SD reference page (boot/storage/sd_reference.h): the loader's code, data and stacks end below.

@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_FAT32_H
-#define IOSWITCH_FAT32_H
+#ifndef SWITCH_FAT32_H
+#define SWITCH_FAT32_H
 #include <stdint.h>
 
 /* A deliberately small, read-only FAT32 profile: 512-byte sectors, one or two

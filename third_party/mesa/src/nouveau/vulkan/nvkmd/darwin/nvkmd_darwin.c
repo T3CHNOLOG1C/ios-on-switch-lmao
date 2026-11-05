@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 IOSwitch
+ * Copyright © 2026 Switch
  * SPDX-License-Identifier: MIT
  */
 
@@ -1238,7 +1238,7 @@ const struct nvkmd_va_ops nvkmd_darwin_va_ops = {
  * Contexts
  */
 
-/* ioswitch: a submission's CPU wait for a sync no one submits ends: past
+/* ios-on-switch-lmao: a submission's CPU wait for a sync no one submits ends: past
  * NVKMD_DARWIN_WAIT_LIMIT_NS, one line naming the sync and then abort(), a crash
  * report with the stack instead of a silent freeze (r9-hang: r7n's and r7o's
  * freezes were a userland wait with no end; the kernel's own GPU waits panic

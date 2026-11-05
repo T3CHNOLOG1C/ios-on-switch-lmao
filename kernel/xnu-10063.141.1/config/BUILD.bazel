@@ -1,6 +1,6 @@
 # XNU's config/: the kernel's own objects (version.o, lastkerneldataconst.o, lastkernelconstructor.o, nonlto.o), the KPI
 # export lists and symbol sets, and the rules that compile XNU natively (xnu_objects.bzl) and link the kernel
-# (xnu_kernel.bzl; the kernel tree's kernel_unprelinked calls it with the ioswitch archives). Apple's files as Apple
+# (xnu_kernel.bzl; the kernel tree's kernel_unprelinked calls it with the ios-on-switch-lmao archives). Apple's files as Apple
 # has them (APPLE_LICENSE); only BUILD.bazel and .bzl files are ours.
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")

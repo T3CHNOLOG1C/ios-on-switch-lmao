@@ -4,9 +4,9 @@
 # exercised by the native CPU probe. The following main bootm start resets
 # U-Boot's temporary image state before preparing the actual kernel handoff.
 if test "${handoff_status}" = "READY"; then
-    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-xnu/exporter.uimg; then
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ios-native-xnu/exporter.uimg; then
         if itest.l ${filesize} == @EXPORTER_BYTES_HEX@; then
-            if load mmc ${devnum}:${distro_bootpart} 0xA7100000 /switchroot/ioswitch-native-xnu/exporter.uimg @EXPORTER_BYTES_HEX@; then
+            if load mmc ${devnum}:${distro_bootpart} 0xA7100000 /switchroot/ios-native-xnu/exporter.uimg @EXPORTER_BYTES_HEX@; then
                 if itest.l ${filesize} == @EXPORTER_BYTES_HEX@ && crc32 -v 0xA7100000 @EXPORTER_BYTES_HEX@ @EXPORTER_CRC32@; then
                     if setenv verify yes && setenv autostart no && bootm start 0xA7100000; then
                         if bootm loados; then

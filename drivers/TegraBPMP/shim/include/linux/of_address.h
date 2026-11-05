@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: a device_node is the one static node TegraBPMP.c fills from the L4T DT; of_iomap maps its
+/* Switch TegraBPMP shim: a device_node is the one static node TegraBPMP.c fills from the L4T DT; of_iomap maps its
  * idx'th reg entry. */
 #ifndef BPXNU_LINUX_OF_ADDRESS_H
 #define BPXNU_LINUX_OF_ADDRESS_H

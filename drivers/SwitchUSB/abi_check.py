@@ -15,7 +15,7 @@ Checks, against the kernelcache the prelinker uses:
 - the only original imports are the audited ones, all inside the original kexts, and no abstract-base D0/D1;
 - the bindings file binds exactly those imports at original address + prelink slide (-0x1000000); --write regenerates it
   instead of comparing;
-- the late object (static initializer staged, Drivers.cmake ioswitch_late_object) has the same instructions as the
+- the late object (static initializer staged, Drivers.cmake switch_late_object) has the same instructions as the
   object and no __mod_init_func.
 Then copies the late object to --output, which the archive takes.
 """

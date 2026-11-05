@@ -1,21 +1,21 @@
-# IOSwitch returning register probe v3. CRC token is fixed by the packager.
+# Switch returning register probe v3. CRC token is fixed by the packager.
 # No OS image, initramfs, device tree, storage-write command, or reset is used.
 # The default U-Boot distro script resets after its sourced script returns.
 # Every outcome below therefore ends in the final sleep hold.
 # This firmware defaults stdout to serial but stderr to serial,vidconsole.
 # echoe is its built-in stderr command; make the first checkpoint visible before
 # changing stdout, then route md.l and other normal output to the screen too.
-echoe "IOSWITCH V3 STAGE 0: SCRIPT ENTERED"
+echoe "SWITCH V3 STAGE 0: SCRIPT ENTERED"
 if setenv stdout vidconsole; then
-    echoe "IOSWITCH V3 STAGE 1: SCREEN OUTPUT SELECTED"
+    echoe "SWITCH V3 STAGE 1: SCREEN OUTPUT SELECTED"
 else
-    echoe "IOSWITCH V3: CANNOT SELECT SCREEN OUTPUT - HOLDING"
+    echoe "SWITCH V3: CANNOT SELECT SCREEN OUTPUT - HOLDING"
     while true; do
         sleep 1
     done
 fi
 echo
-echo "IOSwitch native CPU probe v3 - OLED only"
+echo "SwitchNative CPU probe v3 - OLED only"
 echo "Firmware register test; this does not start iPadOS"
 echo "Recovery: hold POWER at least 20 seconds; then start Hekate normally"
 echo "At Hekate startup hold VOL- to cancel Hekate autoboot if needed"
@@ -39,9 +39,9 @@ fi
 if test "${probe_status}" = "READY"; then
     # This firmware reports a nonzero requested read length even at EOF.
     # Query the FAT directory entry independently before a bounded exact read.
-    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-probe-v3/registers.uboot.bin; then
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ios-probe-v3/registers.uboot.bin; then
         if itest.l ${filesize} == 0x340; then
-            echoe "IOSWITCH V3: FAT METADATA SIZE IS 832 BYTES"
+            echoe "SWITCH V3: FAT METADATA SIZE IS 832 BYTES"
         else
             setenv probe_status IMAGE_SIZE_FAILED
         fi
@@ -51,10 +51,10 @@ if test "${probe_status}" = "READY"; then
 fi
 
 if test "${probe_status}" = "READY"; then
-    if load mmc ${devnum}:${distro_bootpart} 0xA0100000 /switchroot/ioswitch-probe-v3/registers.uboot.bin 0x340; then
+    if load mmc ${devnum}:${distro_bootpart} 0xA0100000 /switchroot/ios-probe-v3/registers.uboot.bin 0x340; then
         if itest.l ${filesize} == 0x340; then
             if crc32 -v 0xA0100000 0x340 @IMAGE_CRC32@; then
-                echoe "IOSWITCH V3 STAGE 2: EXACT PROBE IMAGE VERIFIED"
+                echoe "SWITCH V3 STAGE 2: EXACT PROBE IMAGE VERIFIED"
             else
                 setenv probe_status IMAGE_CHECKSUM_FAILED
             fi
@@ -74,7 +74,7 @@ if test "${probe_status}" = "READY"; then
     setenv autostart no
     if bootm start 0xA0100000; then
         if bootm loados; then
-            echoe "IOSWITCH V3 STAGE 3: PROBE LOADED AND DATA CACHE PUBLISHED"
+            echoe "SWITCH V3 STAGE 3: PROBE LOADED AND DATA CACHE PUBLISHED"
         else
             setenv probe_status IMAGE_LOAD_FAILED
         fi
@@ -88,13 +88,13 @@ if test "${probe_status}" = "READY"; then
     # First: IC IALLUIS; ISB; RET. Second: DSB SY; ISB; RET.
     # Together with loados: DC clean -> DSB -> IC -> DSB -> ISB.
     echo "Next two firmware helper rc=1 values are expected"
-    echoe "IOSWITCH V3 STAGE 4: BEFORE INSTRUCTION CACHE HELPER"
+    echoe "SWITCH V3 STAGE 4: BEFORE INSTRUCTION CACHE HELPER"
     go 0xAA001920
-    echoe "IOSWITCH V3 STAGE 5: BEFORE BARRIER HELPER"
+    echoe "SWITCH V3 STAGE 5: BEFORE BARRIER HELPER"
     go 0xAA001A64
-    echoe "IOSWITCH V3 STAGE 6: BEFORE CPU PROBE"
+    echoe "SWITCH V3 STAGE 6: BEFORE CPU PROBE"
     if go 0xA0000000; then
-        echoe "IOSWITCH V3 STAGE 7: CPU PROBE RETURNED ZERO"
+        echoe "SWITCH V3 STAGE 7: CPU PROBE RETURNED ZERO"
         if itest.l *0xA0000200 == 0x57534f49 && itest.l *0xA0000204 == 0x31425250 && itest.l *0xA0000208 == 1 && itest.l *0xA0000210 == 0x100; then
             setenv probe_status COMPLETE
         else
@@ -106,7 +106,7 @@ if test "${probe_status}" = "READY"; then
 fi
 
 echo
-echoe "IOSWITCH V3 RESULT: ${probe_status}"
+echoe "SWITCH V3 RESULT: ${probe_status}"
 if test "${probe_status}" = "COMPLETE"; then
     echo "Result at A0000200, 64-bit little-endian fields shown as 32-bit words"
     echo "00 marker; 18 EL; 20 MIDR; 28 MPIDR; 30 PFR0; 38 MMFR0; 40 MMFR1"

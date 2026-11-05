@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Are kext GOT entries sorted by imported symbol name? Checked on the symbolized iOS 17 (21H461) kernelcache."""
-import sys, struct
+import os, sys, struct
 from native_prelink import macho, exports, backed_offset, unserialize_xml
-d = open("/Users/brunostjohn/Development/Projects/ioswitch/vendor/unixnu/out/ipsw/21H461/kernelcache.decompressed", "rb").read()
+d = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../../vendor/unixnu/out/ipsw/21H461/kernelcache.decompressed"), "rb").read()
 k = macho(d); ex = exports(d, k)
 names = {a: sorted(v)[0] for a, v in ex.items()}
 parent = k["segments"]

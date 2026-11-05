@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_LOADER_EMC_H
-#define IOSWITCH_LOADER_EMC_H
+#ifndef SWITCH_LOADER_EMC_H
+#define SWITCH_LOADER_EMC_H
 #include <stdint.h>
 
 /* The EMC (DRAM) clock raised before the kernel window is copied, the way the kernel's TegraBPMP.c raises it at

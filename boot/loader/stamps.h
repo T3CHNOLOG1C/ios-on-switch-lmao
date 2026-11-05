@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_LOADER_STAMPS_H
-#define IOSWITCH_LOADER_STAMPS_H
+#ifndef SWITCH_LOADER_STAMPS_H
+#define SWITCH_LOADER_STAMPS_H
 /* Pre-kernel boot timing, handed to XNU in one record.
  *
  * The record's clock is the system counter (19.2 MHz) that CNTPCT_EL0 reads and XNU's mach_absolute_time is, so its
@@ -15,8 +15,8 @@
  * (loader.c stamps_uboot puts them in record order); the rest zero. A slot without the magic is ignored, never refused.
  *
  * The loader samples the microsecond timer and CNTPCT together, converts U-Boot's samples to counter values, adds its
- * own and writes the record into the ADT placeholder /chosen/ioswitch-boot-stamps (LE64 words, IOSW_STAMP_* order);
- * XNU logs it once (startup.c ioswitch_log_boot_stamps, which keeps its own copy of this layout). */
+ * own and writes the record into the ADT placeholder /chosen/switch-boot-stamps (LE64 words, IOSW_STAMP_* order);
+ * XNU logs it once (startup.c switch_log_boot_stamps, which keeps its own copy of this layout). */
 #define IOSW_BOOT_STAMPS_PA UINT64_C(0xa001ef00)
 #define IOSW_BOOT_STAMPS_BYTES 0x100u
 #define IOSW_BOOT_STAMPS_UBOOT_MAGIC 0x544f4255u /* "UBOT" */
@@ -32,7 +32,7 @@ enum iosw_stamp {
     IOSW_STAMP_TIMERUS_AT,     /* ... this count */
     IOSW_STAMP_UBOOT_MAIN,     /* U-Boot: initialized, its bootcmd starts */
     IOSW_STAMP_UBOOT_SD,       /* the SD card initialized (mmc dev 1) */
-    IOSW_STAMP_UBOOT_DISTRO,   /* U-Boot: hekate env imported, distro scan of /switchroot/ioswitch/ starts */
+    IOSW_STAMP_UBOOT_DISTRO,   /* U-Boot: hekate env imported, distro scan of /switchroot/ios/ starts */
     IOSW_STAMP_UBOOT_SCRIPT,   /* boot.scr's first command */
     IOSW_STAMP_UBOOT_LOADER,   /* loader.uboot.bin read */
     IOSW_STAMP_UBOOT_DTB,      /* oled-sku3.dtb read */

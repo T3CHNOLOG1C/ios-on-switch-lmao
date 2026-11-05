@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_BLOCK_BACKEND_SOURCE_H
-#define IOSWITCH_BLOCK_BACKEND_SOURCE_H
+#ifndef SWITCH_BLOCK_BACKEND_SOURCE_H
+#define SWITCH_BLOCK_BACKEND_SOURCE_H
 
 #include "block_backend.h"
 #include "split_disk.h"
@@ -26,6 +26,6 @@ struct iosw_block_source {
 
 /* Return an iosw_block_status. begin/end delimit one bounded read operation;
  * only one operation can be active, and an error never permits an SD retry. */
-int ioswitch_files_block_source(struct iosw_block_source *source);
+int switch_files_block_source(struct iosw_block_source *source);
 
 #endif

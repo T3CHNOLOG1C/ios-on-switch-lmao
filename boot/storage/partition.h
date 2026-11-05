@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_PARTITION_H
-#define IOSWITCH_PARTITION_H
+#ifndef SWITCH_PARTITION_H
+#define SWITCH_PARTITION_H
 #include "fat32.h"
 
 #define IOSW_GPT_MAX_ENTRIES 128u

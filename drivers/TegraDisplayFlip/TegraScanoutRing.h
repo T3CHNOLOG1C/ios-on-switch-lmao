@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Window A's block-linear scanout buffers (NativeLegacyDisplay, ioswitch-scanout-double=1): which one DC A scans, which one a
+// Window A's block-linear scanout buffers (NativeLegacyDisplay, switch-scanout-double=1): which one DC A scans, which one a
 // flip asked for, and which one a frame is being written into. Plain state, no IOKit: NativeLegacyDisplay keeps one under its work-loop
 // gate, and test/scanout_ring_test.cpp drives it against a model of DC A's frame-boundary latch.
 //

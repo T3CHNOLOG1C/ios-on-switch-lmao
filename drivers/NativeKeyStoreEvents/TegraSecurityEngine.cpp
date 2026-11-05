@@ -236,7 +236,7 @@ bool softwareEncrypt(void *context, const uint8_t in[16], uint8_t out[16])
 }
 
 // The probe's domain label: not the device key's, so the logged fingerprints say nothing about that key.
-const char kProbeLabel[] = "IOSwitch SE probe v1";
+const char kProbeLabel[] = "Switch SE probe v1";
 
 struct Result {
     const char *refusal = nullptr;

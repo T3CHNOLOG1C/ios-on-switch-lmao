@@ -17,7 +17,7 @@
 #include "SwitchUSB.h"
 #include "UsbDmaMapper.h"
 
-extern "C" __attribute__((used)) const unsigned long long ioswitch_prelink_cut_null = 0;
+extern "C" __attribute__((used)) const unsigned long long switch_prelink_cut_null = 0;
 
 namespace {
 IOService *gDevicePort;

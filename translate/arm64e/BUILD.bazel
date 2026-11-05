@@ -34,10 +34,10 @@ filegroup(
     srcs = [
         "a64x/a64x.h",
         "a64x/a64x_classify.c",
-        "a64x/a64x_fp16.inc",
+        "a64x/a64x_fp16.h",
         "a64x/a64x_image.c",
         "a64x/a64x_rewrite.c",
-        "a64x/a64x_vlive.inc",
+        "a64x/a64x_vlive.h",
     ],
 )
 
@@ -59,8 +59,8 @@ cc_library(
     hdrs = ["a64x/a64x.h"],
     copts = COPTS,
     textual_hdrs = [
-        "a64x/a64x_fp16.inc",
-        "a64x/a64x_vlive.inc",
+        "a64x/a64x_fp16.h",
+        "a64x/a64x_vlive.h",
     ],
 )
 

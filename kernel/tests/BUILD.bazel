@@ -1,17 +1,17 @@
-# XNU code ioswitch changes, compiled for the host from the vendored kernel/xnu-10063.141.1 (our changes included) and
+# XNU code ios-on-switch-lmao changes, compiled for the host from the vendored kernel/xnu-10063.141.1 (our changes included) and
 # run against the code it replaced:
 #   xnu_console_wide_test    video_console.c's rotated text console's 16-byte LDP/STP paths (r9-preboot round 3) give
 #                            the same pixels as the 32-bit loops they replaced (arm64 inline assembly: arm64 hosts)
-#   xnu_memcmp_test          osfmk/arm64/ioswitch_memcmp.h's word-at-a-time memcmp/bcmp (r17-launch) against the byte
+#   xnu_memcmp_test          osfmk/arm64/switch_memcmp.h's word-at-a-time memcmp/bcmp (r17-launch) against the byte
 #                            loops, exhaustively to 80 bytes at every alignment and over random inputs, guard pages
 #                            after both buffers
 #   xnu_memcmp_source_test   subrs.c uses it on arm64 only, through the two bodies the harness copies
-#   xnu_stall_test           osfmk/kern/ioswitch_stall.h's decisions: which samples of a UI main thread are a stall,
+#   xnu_stall_test           osfmk/kern/switch_stall.h's decisions: which samples of a UI main thread are a stall,
 #                            one report and one end per episode, wait names by block_hint.h value, user addresses
-#   xnu_zero_fill_around_test  vm_fault.c's ioswitch_zero_fill_around (r17-faults) enters exactly the absent pages of
+#   xnu_zero_fill_around_test  vm_fault.c's switch_zero_fill_around (r17-faults) enters exactly the absent pages of
 #                            the faulting page's 16 KiB group in its map entry and VM object, and nothing outside the
 #                            plain case, against a model of the object and pmap
-#   xnu_render_senders_test  osfmk/ipc/ioswitch_render_senders.h's table and line: the render server's senders by
+#   xnu_render_senders_test  osfmk/ipc/switch_render_senders.h's table and line: the render server's senders by
 #                            process, largest first, with their rates and top ids, the rest as others
 #   xnu_render_senders_source_test  ipc_kmsg_send counts a message under its destination port's lock, only for the
 #                            watched space and not for a kernel reply
@@ -24,11 +24,11 @@ load("//bazel/testing:defs.bzl", "host_library", "host_test")
 lint_files()
 
 # --- video_console.c's wide helpers -----------------------------------------------------------------------------------
-# helpers.inc: video_console.c from "static inline boolean_t\nvc_rotate3_wide(" up to "static void\nvc_clear_screen(".
+# helpers.h: video_console.c from "static inline boolean_t\nvc_rotate3_wide(" up to "static void\nvc_clear_screen(".
 genrule(
     name = "console_helpers",
     srcs = ["//kernel/xnu-10063.141.1/osfmk:console/video_console.c"],
-    outs = ["helpers.inc"],
+    outs = ["helpers.h"],
     cmd = """awk '
         on && prev == "static void" && $$0 ~ /^vc_clear_screen\\(/ { done = 1; exit }
         on { print prev }
@@ -41,7 +41,7 @@ genrule(
 host_library(
     name = "console_wide",
     srcs = [
-        "helpers.inc",
+        "helpers.h",
         "xnu_console_wide_harness.c",
     ],
     copts = ["-O2"],
@@ -56,18 +56,18 @@ host_test(
     deps = [":console_wide"],
 )
 
-# --- ioswitch_memcmp.h ----------------------------------------------------------------------------------------------
+# --- switch_memcmp.h ----------------------------------------------------------------------------------------------
 copy_file(
-    name = "ioswitch_memcmp",
-    src = "//kernel/xnu-10063.141.1/osfmk:arm64/ioswitch_memcmp.h",
-    out = "ioswitch_memcmp.h",
+    name = "switch_memcmp",
+    src = "//kernel/xnu-10063.141.1/osfmk:arm64/switch_memcmp.h",
+    out = "switch_memcmp.h",
 )
 
 # UBSan only (ASan's own memcmp interceptors are not what is measured; the guard pages catch over-reads), -O2 as XNU.
 host_library(
     name = "memcmp",
     srcs = [
-        "ioswitch_memcmp.h",
+        "switch_memcmp.h",
         "xnu_memcmp_harness.c",
     ],
     hdrs = ["xnu_memcmp_harness.h"],
@@ -103,15 +103,15 @@ host_test(
     ],
 )
 
-# --- vm_fault.c's ioswitch_zero_fill_around -----------------------------------------------------------------------------
-# fault_around.inc: vm_fault.c from "#ifndef IOSWITCH_ZERO_FILL_AROUND" up to "uint64_t vm_fault_resilient_media_initiate".
+# --- vm_fault.c's switch_zero_fill_around -----------------------------------------------------------------------------
+# fault_around.h: vm_fault.c from "#ifndef SWITCH_ZERO_FILL_AROUND" up to "uint64_t vm_fault_resilient_media_initiate".
 genrule(
     name = "fault_around",
     srcs = ["//kernel/xnu-10063.141.1/osfmk:vm/vm_fault.c"],
-    outs = ["fault_around.inc"],
+    outs = ["fault_around.h"],
     cmd = """awk '
         /^uint64_t vm_fault_resilient_media_initiate/ { if (on) { done = 1; exit } }
-        /^#ifndef IOSWITCH_ZERO_FILL_AROUND/ { on = 1 }
+        /^#ifndef SWITCH_ZERO_FILL_AROUND/ { on = 1 }
         on { print }
         END { if (!done) exit 1 }
     ' $< > $@""",
@@ -120,7 +120,7 @@ genrule(
 host_library(
     name = "zero_fill_around",
     srcs = [
-        "fault_around.inc",
+        "fault_around.h",
         "xnu_zero_fill_around_harness.c",
     ],
     copts = [
@@ -137,17 +137,17 @@ host_test(
     deps = [":zero_fill_around"],
 )
 
-# --- ioswitch_render_senders.h ----------------------------------------------------------------------------------------
+# --- switch_render_senders.h ----------------------------------------------------------------------------------------
 copy_file(
-    name = "ioswitch_render_senders",
-    src = "//kernel/xnu-10063.141.1/osfmk:ipc/ioswitch_render_senders.h",
-    out = "ioswitch_render_senders.h",
+    name = "switch_render_senders",
+    src = "//kernel/xnu-10063.141.1/osfmk:ipc/switch_render_senders.h",
+    out = "switch_render_senders.h",
 )
 
 host_test(
     name = "xnu_render_senders_test",
     srcs = [
-        "ioswitch_render_senders.h",
+        "switch_render_senders.h",
         "xnu_render_senders_test.cpp",
     ],
     includes = ["."],
@@ -161,15 +161,15 @@ host_test(
 )
 
 copy_file(
-    name = "ioswitch_stall",
-    src = "//kernel/xnu-10063.141.1/osfmk:kern/ioswitch_stall.h",
-    out = "ioswitch_stall.h",
+    name = "switch_stall",
+    src = "//kernel/xnu-10063.141.1/osfmk:kern/switch_stall.h",
+    out = "switch_stall.h",
 )
 
 host_library(
     name = "stall",
     srcs = [
-        "ioswitch_stall.h",
+        "switch_stall.h",
         "xnu_stall_harness.c",
     ],
     hdrs = ["xnu_stall_harness.h"],

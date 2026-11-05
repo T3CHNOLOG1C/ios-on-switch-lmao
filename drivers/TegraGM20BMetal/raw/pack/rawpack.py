@@ -59,9 +59,9 @@ def build(work, bridge):
     """The mock GPU with nvdec on every submission, the probe through the frontend + host bridge (beside it: rpath
     @executable_path) and the raw path's own states: the 4:2:0 YCbCr conversions (ycbcr.metal), an iOS library like
     QuartzCore's, drawn after Core Animation's (probe.mm PROBE_YCBCR_LIB)."""
-    # Source paths (Mesa's asserts' __FILE__) as /ioswitch/..., whichever checkout or sandbox this runs in: the probe and
+    # Source paths (Mesa's asserts' __FILE__) as /switch-ios/..., whichever checkout or sandbox this runs in: the probe and
     # the mock are an action's outputs, and the run's cache key is their bytes.
-    maps = ['-ffile-prefix-map=%s=/ioswitch/tree' % RAW.parents[2], '-ffile-prefix-map=%s=/ioswitch' % Path.cwd()]
+    maps = ['-ffile-prefix-map=%s=/switch-ios/tree' % RAW.parents[2], '-ffile-prefix-map=%s=/switch-ios' % Path.cwd()]
     cflags = ['-O2', '-Wall', *maps, '-I', ABI]
     objs = []
     for src in ('mesa/mme_fermi.c', 'mesa/mme_fermi_sim.c'):

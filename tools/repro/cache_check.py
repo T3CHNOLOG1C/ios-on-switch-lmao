@@ -47,7 +47,7 @@ def main():
                            capture_output=True, text=True, check=True).stdout
     if dirty.strip():
         sys.exit("commit or stash first (the second worktree builds the commit):\n" + dirty)
-    scratch = Path(tempfile.mkdtemp(prefix="ioswitch-cache-check-"))
+    scratch = Path(tempfile.mkdtemp(prefix="switch-cache-check-"))
     tree, base, log = scratch / "worktree", scratch / "output-base", scratch / "exec.json"
     subprocess.run(["git", "-C", workspace, "worktree", "add", "--detach", str(tree), "HEAD"], check=True)
     try:

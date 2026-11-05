@@ -7,7 +7,7 @@
 // It derives from the original IOAcceleratorES of IOGPUFamily (prelinked; drivers/NativeMetal/OriginalAcceleratorABI.h), so it
 // is a late object (kernel_driver's `late`): its static initializer is taken out of __mod_init_func and exported as
 // __GLOBAL__sub_I_TegraGM20BAccelerator.cpp, which TegraGM20B.cpp runs once IOGPUFamily has loaded. Its three IOAcceleratorES
-// imports (gMetaClass, the C2 constructor, the D2 destructor) are bound by drivers/IOSwitchAccelStub/original-bindings.S,
+// imports (gMetaClass, the C2 constructor, the D2 destructor) are bound by drivers/SwitchAccelStub/original-bindings.S,
 // which is in the same kernel link; this driver carries no bindings of its own.
 //
 // The accelerator keeps the Apple class name AGXAccelerator and its connection is AGXDeviceUserClient, so the original

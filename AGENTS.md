@@ -40,7 +40,7 @@ Remove any that do not meet the criteria above.
 
 ## Naming
 
-Never write "IOSwitch" or "ioswitch" (any case) in code, file names, logs, paths or identifiers.
+Never write the project's former name (any case) in code, file names, logs, paths or identifiers.
 
 - Drivers, classes and log prefixes start with `Switch`: `SwitchSD`, `SwitchCryptex`.
 - C identifiers start with `switch_`; macros start with `SWITCH_`.

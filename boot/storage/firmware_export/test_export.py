@@ -36,7 +36,7 @@ class Reader(ctypes.Structure):
 class TestExport(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp=tempfile.TemporaryDirectory(prefix='ioswitch-fw-export-')
+        cls.temp=tempfile.TemporaryDirectory(prefix='switch-fw-export-')
         path=Path(cls.temp.name)/'export.dylib'
         subprocess.run(['clang','-std=c11','-O2','-shared','-fPIC','-Wall','-Wextra','-Werror',
                         str(HERE/'export.c'),'-o',str(path)],check=True)

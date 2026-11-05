@@ -19,7 +19,7 @@
 #include <arm/caches_internal.h>
 #include <kern/debug.h>
 #include <libkern/section_keywords.h>
-#include "IOSwitchPanicSave.h"
+#include "SwitchPanicSave.h"
 #include <os/overflow.h>
 
 #include <pexpert/arm64/board_config.h>
@@ -131,17 +131,17 @@ check_for_panic_log(void)
 	 * embedded-panic-log-size is the maximum amount of data to store in the buffer
 	 */
 	if (kSuccess != SecureDTLookupEntry(0, "pram", &entry)) {
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 		/* No iBoot panic region on this boot chain: without one, SavePanicInfo spins at its first line and no panic
-		 * log is ever written. Boot-arg ioswitch-panic-save gives it RAM kept across a warm reset (IOSwitchPanicSave.c). */
-		uintptr_t ioswitch_base = 0;
-		unsigned int ioswitch_bytes = 0;
-		if (ioswitch_panic_save_xnu_buffer(&ioswitch_base, &ioswitch_bytes) &&
-		    ioswitch_bytes > sizeof(struct embedded_panic_header)) {
-			gPanicBase = ioswitch_base;
-			gPanicSize = ioswitch_bytes;
-			panic_text_len = ioswitch_bytes - sizeof(struct embedded_panic_header);
-			goto ioswitch_panic_region;
+		 * log is ever written. Boot-arg switch-panic-save gives it RAM kept across a warm reset (SwitchPanicSave.c). */
+		uintptr_t switch_base = 0;
+		unsigned int switch_bytes = 0;
+		if (switch_panic_save_xnu_buffer(&switch_base, &switch_bytes) &&
+		    switch_bytes > sizeof(struct embedded_panic_header)) {
+			gPanicBase = switch_base;
+			gPanicSize = switch_bytes;
+			panic_text_len = switch_bytes - sizeof(struct embedded_panic_header);
+			goto switch_panic_region;
 		}
 #endif
 		return;
@@ -187,8 +187,8 @@ check_for_panic_log(void)
 	}
 #endif /* DEVELOPMENT && defined(XNU_TARGET_OS_BRIDGE) */
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-ioswitch_panic_region:
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+switch_panic_region:
 #endif
 #endif
 	panic_info = (struct embedded_panic_header *)gPanicBase;
@@ -283,18 +283,18 @@ PE_init_iokit(void)
 	uint32_t        populate_registry_time_value = 0;
 
 	PE_init_printf(TRUE);
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	{
-		/* IOSwitch: what attaching the text console cost (video_console.c vcattach), once. */
-		extern long ioswitch_vcattach_skipped, ioswitch_vcattach_bytes;
-		extern uint64_t ioswitch_vcattach_ticks;
+		/* Switch: what attaching the text console cost (video_console.c vcattach), once. */
+		extern long switch_vcattach_skipped, switch_vcattach_bytes;
+		extern uint64_t switch_vcattach_ticks;
 		uint64_t ns;
-		absolutetime_to_nanoseconds(ioswitch_vcattach_ticks, &ns);
-		printf("IOSwitch console attach: %llu.%llu ms, early log %ld bytes, %ld of them not redrawn (scrolled off)\n",
-		    ns / 1000000, ns / 100000 % 10, ioswitch_vcattach_bytes, ioswitch_vcattach_skipped);
+		absolutetime_to_nanoseconds(switch_vcattach_ticks, &ns);
+		printf("SwitchConsole attach: %llu.%llu ms, early log %ld bytes, %ld of them not redrawn (scrolled off)\n",
+		    ns / 1000000, ns / 100000 % 10, switch_vcattach_bytes, switch_vcattach_skipped);
 		/* The pre-kernel timing lines (startup.c): here, once firehose is configured, not in the boot chunk. */
-		extern void ioswitch_log_boot_stamps(void);
-		ioswitch_log_boot_stamps();
+		extern void switch_log_boot_stamps(void);
+		switch_log_boot_stamps();
 	}
 #endif
 

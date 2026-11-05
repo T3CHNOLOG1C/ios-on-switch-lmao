@@ -1,5 +1,5 @@
 /*
- * Copyright © 2026 IOSwitch
+ * Copyright © 2026 Switch
  * SPDX-License-Identifier: MIT
  *
  * NVK kernel backend for Darwin: the TegraGM20B IOKit user client (wire ABI in

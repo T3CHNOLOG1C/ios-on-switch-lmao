@@ -21,7 +21,7 @@
 #include <kern/thread.h>
 #include <string.h>
 #include "TegraHost1x.h"
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -219,7 +219,7 @@ void syncConfigure()
 bool attachInterrupt()
 {
     gLoop = IOWorkLoop::workLoop();
-    IOService *nub = ioswitch_interrupt_nub(kIntid, false);
+    IOService *nub = switch_interrupt_nub(kIntid, false);
     gIrq = gLoop && nub ? IOInterruptEventSource::interruptEventSource(gLoop, &interruptOccurred, nub, 0) : nullptr;
     if (!gIrq || gLoop->addEventSource(gIrq) != kIOReturnSuccess) return false;
     gIrq->enable();
@@ -345,7 +345,7 @@ extern "C" int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_
                 break;
             }
             char gic[192];
-            ioswitch_interrupt_describe(kIntid, gic, sizeof(gic));
+            switch_interrupt_describe(kIntid, gic, sizeof(gic));
             panic("TegraHost1x: syncpoint %u threshold interrupt lost (INTID %u): value %u threshold %u INT_STATUS[%u] "
                   "%#x, %s",
                   id, kIntid, tegra_host1x_syncpt_read(id), threshold, word, sync(SYNC_INT_STATUS + 4 * word), gic);

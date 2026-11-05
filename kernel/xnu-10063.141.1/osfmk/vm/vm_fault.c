@@ -4148,7 +4148,7 @@ vm_fault_type_for_tracing(boolean_t need_copy_on_read, int type_of_fault)
 }
 
 /*
- * IOSwitch (r17-faults): zero-fill fault-around, the iPad's 16 KiB VM page on this 4 KiB kernel (the Cortex-A57 has no
+ * Switch (r17-faults): zero-fill fault-around, the iPad's 16 KiB VM page on this 4 KiB kernel (the Cortex-A57 has no
  * 16 KiB translation granule). iPadOS userland touches anonymous memory as it would on 16 KiB pages, so every 16 KiB
  * it first touches costs four zero-fill faults here instead of one: four exception entries, map and object lookups,
  * page grabs and pmap_enters, for the same bytes zeroed. Once a zero-fill fault has entered its own page, the other
@@ -4162,13 +4162,13 @@ vm_fault_type_for_tracing(boolean_t need_copy_on_read, int type_of_fault)
  * blocking ends the group. A zero page entered early is exactly what its own fault would have entered: semantics stay;
  * the footprint is the 16 KiB-page footprint iPadOS's limits are made for. Counted on the kprof faults line.
  */
-#ifndef IOSWITCH_ZERO_FILL_AROUND
-#define IOSWITCH_ZERO_FILL_AROUND 1     /* 0: one page per zero-fill fault, as XNU (an A/B build); the counters stay */
+#ifndef SWITCH_ZERO_FILL_AROUND
+#define SWITCH_ZERO_FILL_AROUND 1     /* 0: one page per zero-fill fault, as XNU (an A/B build); the counters stay */
 #endif
-#define IOSWITCH_ZF_GROUP       (16ULL * 1024)
+#define SWITCH_ZF_GROUP       (16ULL * 1024)
 
 static unsigned int
-ioswitch_zero_fill_around(
+switch_zero_fill_around(
 	vm_object_t             object,
 	vm_object_offset_t      offset,
 	pmap_t                  pmap,
@@ -4177,19 +4177,19 @@ ioswitch_zero_fill_around(
 	vm_prot_t               caller_prot,
 	vm_object_fault_info_t  fault_info)
 {
-	const vm_map_offset_t   group = vaddr & ~(vm_map_offset_t)(IOSWITCH_ZF_GROUP - 1);
+	const vm_map_offset_t   group = vaddr & ~(vm_map_offset_t)(SWITCH_ZF_GROUP - 1);
 	unsigned int            around = 0;
 
 	vm_object_lock_assert_exclusive(object);
 	/* the main page's pmap_enter may have dropped the object lock: test the object again */
-	if (!IOSWITCH_ZERO_FILL_AROUND || PAGE_SIZE >= IOSWITCH_ZF_GROUP || !object->internal ||
+	if (!SWITCH_ZERO_FILL_AROUND || PAGE_SIZE >= SWITCH_ZF_GROUP || !object->internal ||
 	    object->shadow != VM_OBJECT_NULL || object->vo_copy != VM_OBJECT_NULL || object->pager_created ||
 	    object->purgable != VM_PURGABLE_DENY || object->all_reusable || object->blocked_access ||
 	    object->phys_contiguous || is_kernel_object(object) || pmap == kernel_pmap ||
 	    (prot & VM_PROT_EXECUTE) || !VM_DYNAMIC_PAGING_ENABLED()) {
 		return 0;
 	}
-	for (vm_map_offset_t va = group; va < group + IOSWITCH_ZF_GROUP; va += PAGE_SIZE) {
+	for (vm_map_offset_t va = group; va < group + SWITCH_ZF_GROUP; va += PAGE_SIZE) {
 		vm_object_offset_t      off;
 		vm_page_t               m;
 		boolean_t               need_retry = FALSE;
@@ -4329,7 +4329,7 @@ vm_fault_internal(
 	 * this heuristic, but vm_object_unlock currently takes > 30 cycles.
 	 */
 	bool                    object_is_contended = false;
-	/* IOSwitch (r17-faults): for the kprof faults lines (ioswitch_kprof_fault, at done) */
+	/* Switch (r17-faults): for the kprof faults lines (switch_kprof_fault, at done) */
 	const uint64_t          iosw_began = mach_absolute_time();
 	bool                    iosw_device = false;    /* the page entered was a device pager's */
 	bool                    iosw_purgeable = false; /* a zero fill in a purgeable object */
@@ -5828,12 +5828,12 @@ zero_fill_cleanup:
 				}
 				vm_fault_enqueue_page(object, m, wired, change_wiring, wire_tag, fault_info.no_cache, &type_of_fault, kr);
 
-				/* IOSwitch (r17-faults): the rest of this page's 16 KiB group, under the same locks */
+				/* Switch (r17-faults): the rest of this page's 16 KiB group, under the same locks */
 				if (kr == KERN_SUCCESS && need_retry == FALSE && type_of_fault == DBG_ZERO_FILL_FAULT &&
 				    !change_wiring && !wired && !rtfault && caller_pmap == PMAP_NULL && physpage_p == NULL &&
 				    top_object == VM_OBJECT_NULL && map == original_map && real_map == map &&
 				    fault_page_size == PAGE_SIZE && !map->no_zero_fill) {
-					iosw_around = ioswitch_zero_fill_around(object, vm_object_trunc_page(offset), pmap, vaddr,
+					iosw_around = switch_zero_fill_around(object, vm_object_trunc_page(offset), pmap, vaddr,
 					    prot, caller_prot, &fault_info);
 				}
 
@@ -6672,7 +6672,7 @@ done:
 		DEBUG4K_FAULT("map %p original %p vaddr 0x%llx -> 0x%x\n", map, original_map, (uint64_t)trace_real_vaddr, kr);
 	}
 
-	/* IOSwitch (r17-faults): this fault for the kprof faults lines */
+	/* Switch (r17-faults): this fault for the kprof faults lines */
 	{
 		unsigned int iosw_class;
 
@@ -6701,7 +6701,7 @@ done:
 				break;
 			}
 		}
-		ioswitch_kprof_fault(iosw_class,
+		switch_kprof_fault(iosw_class,
 		    (change_wiring ? IOSW_FAULT_WIRE : 0) | (original_map->pmap == kernel_pmap ? IOSW_FAULT_KERNEL : 0) |
 		    (iosw_purgeable && iosw_class == IOSW_FAULT_ZF ? IOSW_FAULT_PURGEABLE : 0),
 		    iosw_began, (uint64_t)vaddr, iosw_around);

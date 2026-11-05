@@ -1,7 +1,7 @@
-// xnu_stall_harness.c: osfmk/kern/ioswitch_stall.h's decisions, compiled as the kernel compiles them (C), for
+// xnu_stall_harness.c: osfmk/kern/switch_stall.h's decisions, compiled as the kernel compiles them (C), for
 // xnu_stall_test.cpp.
-#ifndef IOSWITCH_XNU_STALL_HARNESS_H
-#define IOSWITCH_XNU_STALL_HARNESS_H
+#ifndef SWITCH_XNU_STALL_HARNESS_H
+#define SWITCH_XNU_STALL_HARNESS_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,4 +37,4 @@ int xnu_stall_user_where(uint64_t pc, uint64_t sr_base, uint64_t sr_size, uint64
 }
 #endif
 
-#endif  // IOSWITCH_XNU_STALL_HARNESS_H
+#endif  // SWITCH_XNU_STALL_HARNESS_H

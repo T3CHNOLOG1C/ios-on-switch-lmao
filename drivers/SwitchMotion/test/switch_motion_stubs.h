@@ -2,8 +2,8 @@
 // switch_motion_test.cpp. BUILD.bazel points <IOKit/...> and <os/log.h> here (host_shims). The work loop runs
 // everything at once on the caller's thread; time is a fake clock that IOSleep and IODelay advance. A stand-in used
 // wrongly (a detach from another provider, a timer fired that is not armed) panics: the scenario fails.
-#ifndef IOSWITCH_TEST_SWITCH_MOTION_STUBS_H
-#define IOSWITCH_TEST_SWITCH_MOTION_STUBS_H
+#ifndef SWITCH_TEST_SWITCH_MOTION_STUBS_H
+#define SWITCH_TEST_SWITCH_MOTION_STUBS_H
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>

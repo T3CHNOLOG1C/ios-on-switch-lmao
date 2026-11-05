@@ -19,7 +19,7 @@
 
 namespace {
 
-using ioswitch::test::SourceText;
+using switch_ios::test::SourceText;
 using switch_audio_linux::Fraction;
 using testing::HasSubstr;
 using testing::Not;

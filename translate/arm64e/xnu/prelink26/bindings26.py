@@ -78,7 +78,7 @@ for c in classes:
         if len(cands) == 1: slot_name26[(c, m["index"])] = cands[0]
 dm = demangle(sorted(set(slot_name26.values()) | set(r["symbol"] for r in rows)))
 # --- 21H461 vtables -----------------------------------------------------------------------------------------------
-d17 = open("/Users/brunostjohn/Development/Projects/ioswitch/vendor/unixnu/out/ipsw/21H461/kernelcache.decompressed", "rb").read()
+d17 = open(os.path.join(HERE, "../../../../vendor/unixnu/out/ipsw/21H461/kernelcache.decompressed"), "rb").read()
 k17 = macho(d17); s17 = k17["segments"]
 exe17 = [(s["va"], s["va"] + s["size"]) for s in s17 if s["initprot"] & 4]
 vt17 = {}

@@ -24,7 +24,7 @@
 //                        an iPad; the wake guarantee covers it if it does not.
 //   * The wake guarantee: any of them with the panel off arms a deadline (kSwitchWakeGuardMS). If the render server has
 //     not asked for the panel on by then, the kernel lights it itself (one journal line, and a stackshot of every task
-//     in /private/var/ioswitch/wake-<UTC>.kcdata), so a hung SpringBoard or backboardd shows as a frozen screen, not as
+//     in /private/var/Switch/wake-<UTC>.kcdata), so a hung SpringBoard or backboardd shows as a frozen screen, not as
 //     a Switch that will not wake, and the stackshot says where they are stuck. Holding POWER 6 s is the PMIC's own
 //     power-off (hekate sets ONOFFCNFG1 MRT), whatever the kernel does.
 //   * System sleep (SwitchSuspend, SC7) arms the PMC wake events in switch_wake_pmc_events.

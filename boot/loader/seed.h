@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_LOADER_SEED_H
-#define IOSWITCH_LOADER_SEED_H
+#ifndef SWITCH_LOADER_SEED_H
+#define SWITCH_LOADER_SEED_H
 /* A per-boot /chosen/random-seed from the Security Engine's DRBG.
  *
  * XNU seeds early_random() and the kernel PRNG (cckprng) from the 64 bytes of /chosen/random-seed and a timebase nonce
@@ -20,8 +20,8 @@
  * (drivers/NativeKeyStoreEvents/TegraSecurityEngine.cpp), and an RNG operation touches no keyslot anyway. Polled: there
  * is no interrupt controller yet (like that file's boot probe); each wait is bounded by the counter.
  *
- * The result goes to /chosen/ioswitch-seed-source (two LE32 words: IOSW_SEED_MAGIC, status | detail << 16) and XNU logs
- * it once (osfmk/kern/startup.c ioswitch_log_boot_stamps). The detail of a mixed seed is a 16-bit fold of the engine's
+ * The result goes to /chosen/switch-seed-source (two LE32 words: IOSW_SEED_MAGIC, status | detail << 16) and XNU logs
+ * it once (osfmk/kern/startup.c switch_log_boot_stamps). The detail of a mixed seed is a 16-bit fold of the engine's
  * output, so two boots can be told apart in the log; of a failure, the low 16 bits of the register that showed it. */
 #include <stdint.h>
 

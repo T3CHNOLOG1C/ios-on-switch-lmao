@@ -1,4 +1,4 @@
-#include "IOSwitchDiag.h"
+#include "SwitchDiag.h"
 #include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
@@ -224,7 +224,7 @@ static inline void
 kernel_bootstrap_log(const char *message)
 {
 	boot_progress_stage(message);
-	ioswitch_diag_stage(message);
+	switch_diag_stage(message);
 	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
 	    startup_phase >= STARTUP_SUB_KPRINTF) {
 		kprintf("kernel_bootstrap: %s\n", message);
@@ -236,7 +236,7 @@ static inline void
 kernel_bootstrap_thread_log(const char *message)
 {
 	boot_progress_stage(message);
-	ioswitch_diag_stage(message);
+	switch_diag_stage(message);
 	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
 	    startup_phase >= STARTUP_SUB_KPRINTF) {
 		kprintf("kernel_bootstrap_thread: %s\n", message);
@@ -425,9 +425,9 @@ kernel_startup_initialize_upto(startup_subsystem_id_t upto)
 	startup_phase = upto;
 }
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 /*
- * IOSwitch: the pre-kernel timing record the loader leaves in /chosen/ioswitch-boot-stamps (the main repository's
+ * Switch: the pre-kernel timing record the loader leaves in /chosen/switch-boot-stamps (the main repository's
  * native/loader/stamps.h, whose word order this copies), logged once as milliseconds of the counter that the log's own
  * times use. 0 is when hekate's BL31 enabled the counter; "-" marks a step without a sample (an older U-Boot,
  * boot.scr or hekate entry, or the EMC raise off). "counter 0" is how long after SoC reset (the microsecond timer's 0)
@@ -435,10 +435,10 @@ kernel_startup_initialize_upto(startup_subsystem_id_t upto)
  *
  * Called from PE_init_iokit (pexpert/arm/pe_init.c), after firehose is configured: anything logged before that sits
  * in the 4 KB firehose_boot_chunk, which r7o's log never received (its archive starts at "Firehose configured").
- * The record also stays in the device tree for the whole boot: /chosen ioswitch-boot-stamps in the IORegistry.
+ * The record also stays in the device tree for the whole boot: /chosen switch-boot-stamps in the IORegistry.
  */
 static int
-ioswitch_stamp_list(char *line, size_t size, int at, const uint64_t *w, uint64_t frequency, unsigned first,
+switch_stamp_list(char *line, size_t size, int at, const uint64_t *w, uint64_t frequency, unsigned first,
     unsigned last, const char *const *names)
 {
 	for (unsigned i = first; i <= last && at > 0 && (size_t)at < size; ++i) {
@@ -453,12 +453,12 @@ ioswitch_stamp_list(char *line, size_t size, int at, const uint64_t *w, uint64_t
 }
 
 /*
- * IOSwitch: where this boot's /chosen/random-seed came from (the main repository's native/loader/seed.h, whose status
+ * Switch: where this boot's /chosen/random-seed came from (the main repository's native/loader/seed.h, whose status
  * values this copies). The loader mixes 64 bytes of the Tegra Security Engine's DRBG (SE2) into the seed the package
  * pins, just before XNU starts; bootseed_init (prng_random.c) has hashed and zeroed it by the time this runs. One line.
  */
 static void
-ioswitch_log_seed_source(void)
+switch_log_seed_source(void)
 {
 	static const char *const reasons[] = {
 		"SE clock off or in reset", "SE secure-only or disabled", "SE busy", "SE ignored the configuration",
@@ -471,26 +471,26 @@ ioswitch_log_seed_source(void)
 	uint32_t w[2];
 
 	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
-	    SecureDTGetProperty(chosen, "ioswitch-seed-source", &value, &bytes) != kSuccess || bytes != sizeof(w)) {
+	    SecureDTGetProperty(chosen, "switch-seed-source", &value, &bytes) != kSuccess || bytes != sizeof(w)) {
 		return;
 	}
 	memcpy(w, value, sizeof(w));
 	const uint32_t status = w[1] & 0xff, detail = w[1] >> 16;
 	const char *entropy = (w[1] & 0x100) ? ", entropy clock turned on" : "";
 	if (w[0] != 0x44454553) {
-		printf("IOSwitch random-seed: pinned package seed (this loader does not mix one)\n");
+		printf("SwitchRandomSeed: pinned package seed (this loader does not mix one)\n");
 	} else if (status == 1) {
-		printf("IOSwitch random-seed: SE2 DRBG mixed in%s (fold %04x)\n", entropy, detail);
+		printf("SwitchRandomSeed: SE2 DRBG mixed in%s (fold %04x)\n", entropy, detail);
 	} else if (status >= 0x10 && status < 0x10 + sizeof(reasons) / sizeof(reasons[0])) {
-		printf("IOSwitch random-seed: pinned package seed: %s (%#x)%s\n", reasons[status - 0x10], detail, entropy);
+		printf("SwitchRandomSeed: pinned package seed: %s (%#x)%s\n", reasons[status - 0x10], detail, entropy);
 	} else {
-		printf("IOSwitch random-seed: pinned package seed: status %#x\n", w[1]);
+		printf("SwitchRandomSeed: pinned package seed: status %#x\n", w[1]);
 	}
 }
 
-void ioswitch_log_boot_stamps(void);
+void switch_log_boot_stamps(void);
 void
-ioswitch_log_boot_stamps(void)
+switch_log_boot_stamps(void)
 {
 	enum {
 		MAGIC, WORDS, FREQUENCY, TIMERUS, TIMERUS_AT,
@@ -517,21 +517,21 @@ ioswitch_log_boot_stamps(void)
 	int64_t zero_us;
 	uint32_t emc;
 
-	ioswitch_log_seed_source();
+	switch_log_seed_source();
 	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
-	    SecureDTGetProperty(chosen, "ioswitch-boot-stamps", &value, &bytes) != kSuccess || bytes != sizeof(w)) {
+	    SecureDTGetProperty(chosen, "switch-boot-stamps", &value, &bytes) != kSuccess || bytes != sizeof(w)) {
 		return;
 	}
 	memcpy(w, value, sizeof(w));
 	if (w[MAGIC] != 0x33504d4154534f49ULL || w[WORDS] != COUNT || !w[FREQUENCY]) {
 		return;
 	}
-	at = snprintf(line, sizeof(line), "IOSwitch pre-kernel ms, u-boot:");
-	ioswitch_stamp_list(line, sizeof(line), at, w, w[FREQUENCY], UBOOT_FIRST, UBOOT_LAST, uboot);
+	at = snprintf(line, sizeof(line), "SwitchPreKernel ms, u-boot:");
+	switch_stamp_list(line, sizeof(line), at, w, w[FREQUENCY], UBOOT_FIRST, UBOOT_LAST, uboot);
 	printf("%s\n", line);
 
-	at = snprintf(line, sizeof(line), "IOSwitch pre-kernel ms, loader:");
-	at = ioswitch_stamp_list(line, sizeof(line), at, w, w[FREQUENCY], LOADER_FIRST, LOADER_LAST, loader);
+	at = snprintf(line, sizeof(line), "SwitchPreKernel ms, loader:");
+	at = switch_stamp_list(line, sizeof(line), at, w, w[FREQUENCY], LOADER_FIRST, LOADER_LAST, loader);
 	/* The microsecond timer is 32 bits: SoC reset is only known modulo ~71.6 minutes. */
 	zero_us = (int64_t)(uint32_t)w[TIMERUS] - (int64_t)(w[TIMERUS_AT] * 1000000 / w[FREQUENCY]);
 	if (at > 0 && (size_t)at < sizeof(line)) {
@@ -541,15 +541,15 @@ ioswitch_log_boot_stamps(void)
 
 	emc = (uint32_t)w[EMC_RESULT];
 	if (!w[LOADER_FIRST + 1]) {
-		printf("IOSwitch pre-kernel EMC: raise off\n");
+		printf("SwitchPreKernel EMC: raise off\n");
 	} else {
-		printf("IOSwitch pre-kernel EMC: %s (BPMP %d): %u -> %u MHz, VDD_CORE %u mV, channel area %#x\n",
+		printf("SwitchPreKernel EMC: %s (BPMP %d): %u -> %u MHz, VDD_CORE %u mV, channel area %#x\n",
 		    emc < sizeof(emc_results) / sizeof(emc_results[0]) ? emc_results[emc] : "?",
 		    (int)(int32_t)(w[EMC_RESULT] >> 32), (uint32_t)w[EMC_RATES] / 1000, (uint32_t)(w[EMC_RATES] >> 32) / 1000,
 		    (uint32_t)w[EMC_CORE], (uint32_t)(w[EMC_CORE] >> 32));
 	}
 }
-#endif /* XNU_IOSWITCH_VERIFIED_ROOT */
+#endif /* XNU_SWITCH_VERIFIED_ROOT */
 
 void
 kernel_bootstrap(void)

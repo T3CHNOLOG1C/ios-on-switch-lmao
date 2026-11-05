@@ -5,7 +5,7 @@
 B=$1; P=$2; O=$3; L=$4; shift 4
 NVK=${NVK:-${0:A:h}/../../../../bazel-bin/gpu/nvk/host/libvulkan_nouveau.dylib}   # bazel build //gpu/nvk:host
 QC=${0:A:h}/../../eq/qc/QuartzCore.framework/default.metallib   # the path suffix the facade keys QuartzCore by
-C=/Users/brunostjohn/Development/Projects/ioswitch/drivers/TegraGM20BMetal/precompile/corpus.log
+C=${0:A:h}/../../precompile/corpus.log
 mkdir -p $O/cache-$L
 # the states the frame may use: the pack's (FRAME_KEYS=all: every corpus state, the ones m2v draws included)
 if [[ "$FRAME_KEYS" != all ]]; then

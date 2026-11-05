@@ -6,22 +6,22 @@
 //
 // It works in any function (ASSERT_* only returns from void ones): the failure is recorded, then RequireFailed is
 // thrown; GoogleTest ends the TEST there, and a fresh-process scenario (fresh_process.h) exits failed.
-#ifndef IOSWITCH_BAZEL_TESTING_REQUIRE_H
-#define IOSWITCH_BAZEL_TESTING_REQUIRE_H
+#ifndef SWITCH_BAZEL_TESTING_REQUIRE_H
+#define SWITCH_BAZEL_TESTING_REQUIRE_H
 
 #include <gtest/gtest.h>
 
-namespace ioswitch::test {
+namespace switch_ios::test {
 // Not a std::exception: a model's `catch (const std::exception &)` must not swallow a failed check.
 struct RequireFailed {};
-}  // namespace ioswitch::test
+}  // namespace switch_ios::test
 
 #define REQUIRE(...)                                                                                                   \
     do {                                                                                                               \
         if (!(__VA_ARGS__)) {                                                                                          \
             ADD_FAILURE() << "REQUIRE(" #__VA_ARGS__ ") failed";                                                       \
-            throw ::ioswitch::test::RequireFailed();                                                                   \
+            throw ::switch_ios::test::RequireFailed();                                                                   \
         }                                                                                                              \
     } while (0)
 
-#endif  // IOSWITCH_BAZEL_TESTING_REQUIRE_H
+#endif  // SWITCH_BAZEL_TESTING_REQUIRE_H

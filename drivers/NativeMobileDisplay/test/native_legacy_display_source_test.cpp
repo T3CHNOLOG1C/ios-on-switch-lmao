@@ -9,8 +9,8 @@
 
 #include "bazel/testing/source_text.h"
 
-using ioswitch::test::Between;
-using ioswitch::test::SourceText;
+using switch_ios::test::Between;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 
@@ -145,7 +145,7 @@ TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
     const std::string present = method(display(), "    void notePhasePresent(uint64_t stamp, const FrameMark &mark)");
     EXPECT_THAT(present, HasSubstr("phaseFailed = true;"));
     EXPECT_THAT(present, Not(HasSubstr("panic("))) << "a V_PULSE2 that never fired costs one line, not the boot";
-    EXPECT_THAT(present, HasSubstr("IOLog(\"IOSwitch display: vsync phase off for this boot"));
+    EXPECT_THAT(present, HasSubstr("IOLog(\"SwitchDisplay: vsync phase off for this boot"));
     EXPECT_THAT(method(display(), "    void noteLong(uint32_t frames, const FrameMark &mark)"), HasSubstr("kLongRate"));
 }
 
@@ -190,21 +190,21 @@ TEST(DisplayProbeSource, ProbeRequestUnderTheFlipDeadline)
 }
 
 // The panic-time screen restore works in every kernel config: PE_arm_debug_panic_hook is a const NULL outside DEVELOPMENT
-// and DEBUG, so the driver hangs it on IOSwitchDiag's ioswitch_display_panic_hook, which ioswitch_diag_panic calls before
-// anything draws the panic screen (the first call blacks the pitch area) and ioswitch_panic_halted calls again.
+// and DEBUG, so the driver hangs it on SwitchDiag's switch_display_panic_hook, which switch_diag_panic calls before
+// anything draws the panic screen (the first call blacks the pitch area) and switch_panic_halted calls again.
 TEST(PanicRestoreSource, EveryKernelConfig)
 {
     EXPECT_THAT(display(), Not(HasSubstr("PE_arm_debug_panic_hook")));
     EXPECT_THAT(display(), Not(HasSubstr("DEVELOPMENT")));
     const std::string chain = method(display(), "    void chainPanicHook()\n");
     expectBefore(chain, "gPanicRestore.start = surfaceAddress(0);", "dmb ish");
-    expectBefore(chain, "dmb ish", "ioswitch_display_panic_hook = restorePitchOnPanic;");
-    static const std::string diag = SourceText("../../../diagnostics/ioswitch/IOSwitchDiag.c");
-    const std::string panic = Between(diag, "void ioswitch_diag_panic(const char *format", "\n}\n");
-    expectBefore(panic, "if (display) display(format);", "ioswitch_panic_begin(");
-    expectBefore(panic, "if (display) display(format);", "ioswitch_diag_pixel(");
-    static const std::string save = SourceText("../../../diagnostics/ioswitch/IOSwitchPanicSave.c");
-    const std::string halted = Between(save, "void ioswitch_panic_halted(void)\n", "\n}\n");
+    expectBefore(chain, "dmb ish", "switch_display_panic_hook = restorePitchOnPanic;");
+    static const std::string diag = SourceText("../../../diagnostics/switch/SwitchDiag.c");
+    const std::string panic = Between(diag, "void switch_diag_panic(const char *format", "\n}\n");
+    expectBefore(panic, "if (display) display(format);", "switch_panic_begin(");
+    expectBefore(panic, "if (display) display(format);", "switch_diag_pixel(");
+    static const std::string save = SourceText("../../../diagnostics/switch/SwitchPanicSave.c");
+    const std::string halted = Between(save, "void switch_panic_halted(void)\n", "\n}\n");
     EXPECT_THAT(halted, HasSubstr("if (display) display(\"\");"));
     EXPECT_THAT(halted, Not(HasSubstr("PE_panic_hook")));
 }
@@ -215,6 +215,6 @@ TEST(DisplayStatsSource, QuietDisplayWindowsAreLogged)
 {
     const std::string stats = method(display(), "    void noteStatsWindow()");
     EXPECT_THAT(stats, HasSubstr("if (stVsyncs && !stSwaps && !stPresents)"));
-    expectBefore(stats, "IOSwitch display: quiet display: ", "stSwaps = stVsyncs = ");
-    expectBefore(stats, "IOSwitch display: quiet display: ", "if (logged) os_log(");
+    expectBefore(stats, "SwitchDisplay: quiet display: ", "stSwaps = stVsyncs = ");
+    expectBefore(stats, "SwitchDisplay: quiet display: ", "if (logged) os_log(");
 }

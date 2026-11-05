@@ -61,7 +61,7 @@ def _one_package():
     return native.package_name() == TREE_ROOT
 
 def _headers_label(directory):
-    """The header library of a directory below the kernel tree (drivers/X, kits/X, diagnostics/ioswitch)."""
+    """The header library of a directory below the kernel tree (drivers/X, kits/X, diagnostics/switch)."""
     if _one_package():
         return ":hdrs_" + directory.replace("/", "_")
     return "//{}:hdrs".format(directory)
@@ -354,7 +354,7 @@ def _kernel_driver_objects_impl(ctx):
         ctx.actions.symlink(output = obj, target_file = compiled_obj)
         final = obj
         if src.basename in late:
-            # cmake/XnuRecipes.cmake ioswitch_late_object.
+            # cmake/XnuRecipes.cmake switch_late_object.
             late_obj = ctx.actions.declare_file(out_dir + "/" + stem + ".late.o")
             ctx.actions.run(
                 executable = ctx.executable._objcopy,
@@ -446,7 +446,7 @@ def _kernel_archive_impl(ctx):
     args.add("rcs")
     args.add(out)
     args.add_all(members)
-    # Xcode's ar (cmake/XnuRecipes.cmake ioswitch_archive: `xcrun ar rcs`); ZERO_AR_DATE=1 zeroes the member dates.
+    # Xcode's ar (cmake/XnuRecipes.cmake switch_archive: `xcrun ar rcs`); ZERO_AR_DATE=1 zeroes the member dates.
     ctx.actions.run(
         executable = XCODE_TOOLCHAIN + "/ar",
         arguments = [args],

@@ -59,7 +59,7 @@ def sign(xcode, path, identifier):
 
 def trust_module(cdhashes):
     hashes = sorted(bytes.fromhex(h) for h in cdhashes)
-    identifier = uuid.uuid5(uuid.NAMESPACE_URL, 'org.ioswitch.tegra-gm20b-metal:' + ''.join(h.hex() for h in hashes))
+    identifier = uuid.uuid5(uuid.NAMESPACE_URL, 'com.brunostjohn.switch.tegra-gm20b-metal:' + ''.join(h.hex() for h in hashes))
     return struct.pack('<I16sI', 2, identifier.bytes, len(hashes)) + b''.join(h + bytes([2, 0, 0, 0]) for h in hashes)
 
 
@@ -85,12 +85,12 @@ def main():
     dylib.chmod(0o755)
     xcode.run('strip', '-x', dylib)
     arm64(dylib)
-    nvk_cdhash = sign(xcode, dylib, 'org.ioswitch.nvk')
+    nvk_cdhash = sign(xcode, dylib, 'com.brunostjohn.switch.nvk')
     (bundle / 'Info.plist').write_bytes(plistlib.dumps(dict(
-        CFBundleIdentifier='org.ioswitch.' + NAME, CFBundleExecutable=NAME, CFBundlePackageType='BNDL',
+        CFBundleIdentifier='com.brunostjohn.switch.' + NAME, CFBundleExecutable=NAME, CFBundlePackageType='BNDL',
         CFBundleVersion='1', CFBundleShortVersionString='1', NSPrincipalClass='TegraGM20BMetalDevice',
         MinimumOSVersion='17.0'), fmt=plistlib.FMT_XML))
-    plugin_cdhash = sign(xcode, bundle, 'org.ioswitch.' + NAME)
+    plugin_cdhash = sign(xcode, bundle, 'com.brunostjohn.switch.' + NAME)
     for path in [bundle, *bundle.rglob('*')]:
         path.chmod(0o755 if path.is_dir() or path in (exe, dylib) else 0o644)
 

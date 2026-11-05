@@ -5,7 +5,7 @@ WallpaperKit loads a wallpaper bundle only when the logicalScreenClass in its Wa
 device's (+[WKWallpaperBundle shouldLoadWallpaperBundleAtURL:]). WKLogicalScreenClassString builds the device's from
 MobileGestalt's standard display zoom size, which follows ADT /product artwork-device-subtype and artwork-scale-factor
 (2732 and 2: 1024x1366), and UIScreen.scale as an NSNumber: '1024w-1366h@1.6x~ipad' at the 1.6 UI scale
-(kernel/xnu-10063.141.1/bsd/vm/vm_unix.c, IOSwitch UI scale), while 21H461 ships only @2x iPad bundles. Without
+(kernel/xnu-10063.141.1/bsd/vm/vm_unix.c, SwitchUIScale), while 21H461 ships only @2x iPad bundles. Without
 these the iPadOS 17 and Lake collections load empty, the iPad's default wallpaper (7570) is "not found on disk", and
 WKDefaultWallpaperManager falls back to its synthesized 'Solid Black' (400).
 

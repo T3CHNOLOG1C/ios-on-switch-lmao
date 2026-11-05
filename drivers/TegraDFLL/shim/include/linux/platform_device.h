@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: platform devices and drivers. There is no driver core: platform.c builds the one platform_device
+ * Switch shim: platform devices and drivers. There is no driver core: platform.c builds the one platform_device
  * (the DFLL at 0x70110000, resources from the DT reg property) and dfll.c calls the vendored driver's probe through
  * builtin_platform_driver(), which here only exports the driver structure instead of registering an initcall.
  */

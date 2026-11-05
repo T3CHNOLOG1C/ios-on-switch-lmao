@@ -1,4 +1,4 @@
-/* IOSwitch: trimmed by tools/trim_base.py from nouveau nvkm/engine/device/base.c (torvalds/linux d89e1d1):
+/* Switch: trimmed by tools/trim_base.py from nouveau nvkm/engine/device/base.c (torvalds/linux d89e1d1):
  * all chipset tables except nv12b (GM20B) and their switch cases removed; nothing else changed. */
 /*
  * Copyright 2012 Red Hat Inc.

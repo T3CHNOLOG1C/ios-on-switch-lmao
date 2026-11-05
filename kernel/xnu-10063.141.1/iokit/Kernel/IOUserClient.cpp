@@ -5032,7 +5032,7 @@ is_io_connect_method_var_output
 	return ret;
 }
 
-/* IOSwitch lazy IOSurface coherency (GPU <-> CPU). On Tegra the GPU does not snoop the CPU caches. The TegraGM20B GPU
+/* Switch lazy IOSurface coherency (GPU <-> CPU). On Tegra the GPU does not snoop the CPU caches. The TegraGM20B GPU
  * driver registers the backend below (tegra_coherency_register, a down-call from the driver at start). It keeps, per
  * imported surface (keyed by its first physical page), whether the GPU may have written it since the last CPU read lock.
  * Here, at the surface's IOSurface lock/unlock (whoever touches it on the CPU, in any process), the backend does the one
@@ -5200,7 +5200,7 @@ is_io_connect_method
 		ret = client->callExternalMethod( selector, &args );
 	}
 
-	// IOSwitch lazy IOSurface coherency: after the surface's own lock/unlock ran, the GPU driver's backend does the one
+	// Switch lazy IOSurface coherency: after the surface's own lock/unlock ran, the GPU driver's backend does the one
 	// cache op the direction needs (invalidate at a lock, clean at a write unlock), only for surfaces it imported.
 	if (kIOReturnSuccess == ret && g_tegra_coh.read_lock &&
 	    (selector == kTegraIOSurfaceLock || selector == kTegraIOSurfaceUnlock)) {
@@ -6836,7 +6836,7 @@ OSMetaClassDefineReservedUnused(IOUserClient2022, 1);
 OSMetaClassDefineReservedUnused(IOUserClient2022, 2);
 OSMetaClassDefineReservedUnused(IOUserClient2022, 3);
 
-#if 1 /* ioswitch: in every kernel configuration (was DEVELOPMENT || DEBUG) */
+#if 1 /* ios-on-switch-lmao: in every kernel configuration (was DEVELOPMENT || DEBUG) */
 extern "C" {
 volatile uint32_t native_mobile_graphics_abstract_null_mask;
 volatile uint64_t native_mobile_graphics_client_object;

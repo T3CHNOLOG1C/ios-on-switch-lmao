@@ -1,4 +1,4 @@
-# The platforms ioswitch builds for. Toolchain resolution picks the C/C++ toolchain (bazel/toolchains) from the target
+# The platforms ios-on-switch-lmao builds for. Toolchain resolution picks the C/C++ toolchain (bazel/toolchains) from the target
 # platform; rules whose outputs belong to one platform move their dependencies there with a transition
 # (bazel/platforms/transitions.bzl), so `bazel build //:boot` builds each part for the right platform.
 #

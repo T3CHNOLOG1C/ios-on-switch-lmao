@@ -138,7 +138,7 @@
 #include <libkern/c++/OSData.h>
 #include <os/log.h>
 #include <pexpert/pexpert.h>
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraAPBDMA/TegraAPBDMA.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "SwitchJoyCon.h"
@@ -825,7 +825,7 @@ void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sende
     if (!s) return;
     if (s->stuck) {
         char gic[160];
-        ioswitch_interrupt_describe(s->cfg->intid, gic, sizeof(gic));
+        switch_interrupt_describe(s->cfg->intid, gic, sizeof(gic));
         panic("SwitchJoyCon: UART-%c interrupt stuck (INTID %u): IIR %#x LSR %#x, %s", s->cfg->uart, s->cfg->intid,
               rd(*s, IIR_FCR), rd(*s, LSR), gic);
     }
@@ -1584,7 +1584,7 @@ void SwitchJoyConRail::checkDelivery(Side &s, const char *why)
             continue;
         }
         char gic[160];
-        ioswitch_interrupt_describe(s.cfg->intid, gic, sizeof(gic));
+        switch_interrupt_describe(s.cfg->intid, gic, sizeof(gic));
         panic(
             "SwitchJoyCon: UART-%c interrupt lost (INTID %u, %s): LSR %#x IER %#x MCR %#x tx %u/%u dma %u ring %u/%u, "
             "%s",
@@ -1711,7 +1711,7 @@ void SwitchJoyConRail::setUp(Side &s, const SideConfig *cfg)
     if (!s.lock || !s.outLock) panic("SwitchJoyCon: no memory for the UART-%c locks", cfg->uart);
     initHardware(s);
 
-    IOService *uartNub = ioswitch_interrupt_nub(cfg->intid, false);
+    IOService *uartNub = switch_interrupt_nub(cfg->intid, false);
     s.irq = IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchJoyConRail::uartAction,
                                                                      &SwitchJoyConRail::uartFilter, uartNub, 0);
     if (!s.irq || loop->addEventSource(s.irq) != kIOReturnSuccess) {
@@ -1882,7 +1882,7 @@ bool SwitchJoyConRail::start(IOService *provider)
     return true;
 }
 
-// The marker launchd starts joyconnfc on (helper/com.ioswitch.joyconnfc.plist: IOKit matching on this class), so the
+// The marker launchd starts joyconnfc on (helper/com.brunostjohn.switch.joyconnfc.plist: IOKit matching on this class), so the
 // helper runs only with switch-joycon-nfc=1 whatever the overlay shows.
 class SwitchJoyConNFC : public IOService {
     OSDeclareDefaultStructors(SwitchJoyConNFC)

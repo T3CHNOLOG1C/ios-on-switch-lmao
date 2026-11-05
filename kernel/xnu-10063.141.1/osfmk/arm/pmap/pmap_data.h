@@ -74,7 +74,7 @@ extern pmap_paddr_t vm_first_phys, vm_last_phys;
 static inline bool
 pa_valid(pmap_paddr_t pa)
 {
-	return (pa >= vm_first_phys) && (pa < vm_last_phys) && pmap_ioswitch_pa_valid(pa);
+	return (pa >= vm_first_phys) && (pa < vm_last_phys) && pmap_switch_pa_valid(pa);
 }
 
 /**

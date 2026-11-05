@@ -83,10 +83,10 @@ py_test(
     name = "spec_test",
     srcs = ["spec_test.py"],
     data = [
-        "//diagnostics/ioswitch:IOSwitchRawMount.inc",
-        "//drivers/NativeIOSwitchBlock:IOSwitchCryptex.cpp",
-        "//drivers/NativeIOSwitchBlock:IOSwitchCryptex.h",
-        "//drivers/NativeIOSwitchBlock:NativeIOSwitchBlock.cpp",
+        "//diagnostics/switch:SwitchRawMount.h",
+        "//drivers/NativeSwitchBlock:SwitchCryptex.cpp",
+        "//drivers/NativeSwitchBlock:SwitchCryptex.h",
+        "//drivers/NativeSwitchBlock:NativeSwitchBlock.cpp",
     ],
     deps = [
         ":spec_lib",

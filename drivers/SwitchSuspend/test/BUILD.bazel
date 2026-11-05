@@ -42,7 +42,7 @@ host_test(
     name = "switch_wake_source_test",
     srcs = [
         "switch_wake_source_test.cpp",
-        "//drivers/NativeMobileDisplay:IOSwitchPortrait.h",
+        "//drivers/NativeMobileDisplay:SwitchPortrait.h",
         "//drivers/SwitchTouch:SwitchHID.h",
     ],
     data = [

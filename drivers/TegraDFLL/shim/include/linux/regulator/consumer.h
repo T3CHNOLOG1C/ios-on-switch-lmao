@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: the regulator consumer calls clk-dfll.c and the fcpu driver make on "vdd-cpu". They only ask about
+ * Switch shim: the regulator consumer calls clk-dfll.c and the fcpu driver make on "vdd-cpu". They only ask about
  * the voltage map (selectors, linear step, constraints) and the vsel register, so the regulator here is a description
  * of the MAX77812 M4 output (platform.c) plus the PMIC's I2C client: nothing in this API talks to the PMIC.
  * Semantics follow Linux 4.9 drivers/regulator/core.c (_regulator_list_voltage drops selectors outside constraints).

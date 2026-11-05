@@ -52,7 +52,7 @@
 //
 // Panics keep their screen: PE_halt_restart is also handed the panic callouts and, from halt_all_cpus(TRUE) at the
 // end of a panic, kPERestartCPU; with a panic in progress it returns -1 and XNU spins with the panic on the display,
-// as it did with PE_halt_restart unset (IOSwitchPanicSave.c's ioswitch-panic-reboot decides about a reset there).
+// as it did with PE_halt_restart unset (SwitchPanicSave.c's switch-panic-reboot decides about a reset there).
 //
 // The Wi-Fi/Bluetooth module's 32.768 kHz sleep clock (the BCM4356's LPO) comes from the MAX77620, set as L4T sets it
 // when the PMIC is probed (switchroot tegra210b01-nx-pmic.dtsi): GPIO4 in its alternate function 32K_OUT1 (pin_gpio4
@@ -302,7 +302,7 @@ int haltRestart(unsigned int type)
     if ((type != kPEHaltCPU && type != kPERestartCPU) || panic_active()) return -1;
     const bool restart = type == kPERestartCPU;
     // Storage needs nothing more: reboot_kernel() synced and unmounted every file system and waited out the dirty
-    // buffers before halt_all_cpus(), and NativeIOSwitchBlock completes a write only once the card has it.
+    // buffers before halt_all_cpus(), and NativeSwitchBlock completes a write only once the card has it.
     bool dark = false;
     // XNU's path is thread context; both steps below sleep (the panel's commands ride DC frame ends).
     if (preemption_enabled()) {
@@ -532,7 +532,7 @@ void reportClocks(const char *when)
     using namespace switchclk;
     volatile uint8_t *car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
     if (!car) {
-        IOLog("IOSwitch clocks %s: CAR not mapped\n", when);
+        IOLog("SwitchClocks %s: CAR not mapped\n", when);
         return;
     }
     const Cpu cpu = readCpu(car);
@@ -547,7 +547,7 @@ void reportClocks(const char *when)
         snprintf(rail, sizeof(rail), "VDD_CPU unreadable (I2C5 %d)", err);
     else
         snprintf(rail, sizeof(rail), "VDD_CPU %u mV (MAX77812 0x%02x)", voutMilliVolts(vout), address);
-    IOLog("IOSwitch clocks %s: CPU %s from %s (CCLK %#x; PLLX %s = %u.%u x %u / %u / %u), %s; EMC %s from %s"
+    IOLog("SwitchClocks %s: CPU %s from %s (CCLK %#x; PLLX %s = %u.%u x %u / %u / %u), %s; EMC %s from %s"
           " (CLK_SOURCE_EMC %#x)\n",
           when, cpuRate, cpuSourceName(cpu.source), cpu.policy, pllRate, refKHz(car) / 1000, refKHz(car) % 1000 / 100,
           (cpu.pllx >> 8) & 0xff, cpu.pllx & 0xff, qlinDivider(cpu.pllx), rail, emcRate, emcSourceName(emc.source),
@@ -639,7 +639,7 @@ extern "C" int switch_pmic_start(void)
     if (emcKHz) {
         char line[256];
         const int emcErr = tegra_bpmp_emc_boot(emcKHz, line, sizeof(line));
-        IOLog("IOSwitch EMC: %s\n", line);
+        IOLog("SwitchEMC: %s\n", line);
         if (!emcErr) reportClocks("after EMC");
     }
     if (thermal && switch_thermal_start()) IOLog("SwitchPMIC: SwitchThermal did not start, the board thread retries\n");

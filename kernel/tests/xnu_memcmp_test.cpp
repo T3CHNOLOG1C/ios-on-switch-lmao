@@ -1,4 +1,4 @@
-// r17-launch: XNU's arm64 memcmp/bcmp compare a word at a time (osfmk/arm64/ioswitch_memcmp.h) with the byte loops'
+// r17-launch: XNU's arm64 memcmp/bcmp compare a word at a time (osfmk/arm64/switch_memcmp.h) with the byte loops'
 // exact results; AMFI's entitlement-key lookups spent 2.9 s per boot in the byte loop (kprof r7v).
 #include <gtest/gtest.h>
 

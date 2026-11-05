@@ -8,7 +8,7 @@
 //!   on many devices) stays out of reach. A request larger than half a block takes a dedicated
 //!   block of its own size, freed with it. A pooled block is freed when it empties, except one
 //!   empty block per memory type that is kept for the next request.
-//! - **Spare dedicated blocks** (ioswitch). A dedicated block that goes is kept as a spare, up to
+//! - **Spare dedicated blocks** (ios-on-switch-lmao). A dedicated block that goes is kept as a spare, up to
 //!   [`spare_cap`] bytes of them, for the next dedicated request of its pool it fits closely
 //!   ([`Memory::take_spare`]); a spare unused for [`SPARE_AGE`] goes at the next request or release,
 //!   and the oldest go first past the cap. WebKit's GPU process made and dropped a texture and its

@@ -4,7 +4,7 @@
 //   2  M2: + nvkm device init (ACR HS boot, LS PMU), GR (FECS/GPCCS through ACR, golden context)
 //   3  M3: + GPU self-test (VM, GPFIFO channel, copy-engine fill, semaphore fence)
 //   4  M4: + publish AGXAccelerator : IOAcceleratorES (MetalPluginName TegraGM20BMetal) for the NVK userland
-// The work runs on its own kernel thread, so the probe returns at once; ioswitch_root_boot_prepare() calls it once the
+// The work runs on its own kernel thread, so the probe returns at once; switch_root_boot_prepare() calls it once the
 // SD disk is published. From the end of stage 1 the GPU interrupts (SPI 157/158) drive nvkm; there is no polled mode.
 // Logs one line per stage reached ("tegra-gm20b: M1 ok ..."), or the line of the stage that failed.
 #include <IOKit/IOLib.h>
@@ -24,7 +24,7 @@ extern "C" {
 boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
 kern_return_t OSKextLoadKextWithIdentifier(const char *kextIdentifier);
 int nvxnu_trace_paced(void);  // shim/xnu_glue.cpp: boot-arg tegra-gpu-trace
-// The staged accelerator class (TegraGM20BAccelerator.cpp, a late object like IOSwitchAccelStub.cpp): weak, so this file links
+// The staged accelerator class (TegraGM20BAccelerator.cpp, a late object like SwitchAccelStub.cpp): weak, so this file links
 // and stages 1..3 work without it.
 void tegra_gm20b_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_TegraGM20BAccelerator.cpp")
 	__attribute__((weak));
@@ -77,7 +77,7 @@ void waitBringup()
 	}
 }
 
-// Staged as UniXNU-sheng's publishMetal() (package/GpuPowerProbe.cpp:1217-1251) and IOSwitchAccelStubPublish.cpp: load
+// Staged as UniXNU-sheng's publishMetal() (package/GpuPowerProbe.cpp:1217-1251) and SwitchAccelStubPublish.cpp: load
 // IOGPUFamily (already loaded by the stub; idempotent) so the IOAcceleratorES metaclass exists, run our class's static
 // initializer inside preModLoad/postModLoad, then publish with the keys the original discovery reads.
 // NativeSandboxGrantProcess: the comma-separated process names whose open our XNU grants in place of the sandbox

@@ -63,16 +63,16 @@ def _xcode_run(ctx, mnemonic, message, command, inputs, outputs, env = {}):
 _IOS = ["-target", "arm64-apple-ios17.0", "-isysroot", "@IPHONEOS_SDK@"]
 
 # The old script's one clang++ line, split into compile and link so each object is its own cached action. Paths in
-# debug info and __FILE__ are mapped to /ioswitch, and the link keeps no object paths (oso_prefix) or times.
+# debug info and __FILE__ are mapped to /switch-ios, and the link keeps no object paths (oso_prefix) or times.
 # -fno-objc-msgsend-selector-stubs: ld's own objc_msgSend selector stubs (its default "fast" __objc_stubs, which the
 # old build had) come out in a different order in about half of all links (measured: 2 outputs in 10 links), so the
 # plugin's CDHash, and with it the trust cache and the kernel window, changed on every build. Classic call sites
 # (selector loaded inline, objc_msgSend through __stubs) take the same instructions per message and link identically
 # (10 of 10), at +10 KB of __text.
 _PLUGIN_CFLAGS = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fstack-protector-strong", "-std=c++17", "-fobjc-arc",
-                  "-Wno-deprecated-declarations", "-fno-objc-msgsend-selector-stubs", "-ffile-prefix-map=@PWD@=/ioswitch"] + [
+                  "-Wno-deprecated-declarations", "-fno-objc-msgsend-selector-stubs", "-ffile-prefix-map=@PWD@=/switch-ios"] + [
     # The layout move's old spellings (kernel/rules/layout.bzl): the plugin's strings name its sources as before.
-    "-ffile-prefix-map=@PWD@/{r}=/ioswitch/{o}/{r}".format(r = r, o = OLD_TREE)
+    "-ffile-prefix-map=@PWD@/{r}=/switch-ios/{o}/{r}".format(r = r, o = OLD_TREE)
     for r in MOVED_ROOTS
     if TREE_ROOT != OLD_TREE
 ] + [

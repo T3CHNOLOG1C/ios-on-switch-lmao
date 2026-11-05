@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: the common clock framework consumer API, implemented by a small clock tree in shim/linux.c that
+ * Switch shim: the common clock framework consumer API, implemented by a small clock tree in shim/linux.c that
  * follows L4T 4.9 drivers/clk/clk.c where the DFLL depends on it: clk_set_parent() sends PRE_PARENT_CHANGE before and
  * POST_PARENT_CHANGE after the mux write and migrates the prepare/enable counts of a prepared clock to its new parent
  * (that is what puts the DFLL into open loop before cclk_g switches to it and closes the loop after), and clk_set_rate()

@@ -14,8 +14,8 @@
 //     0x64..0x6a; the sample time from child 0 (0x194241298: no children, "Event has no children", 0; else page 0xff15,
 //     usage 2, 8 data bytes, their u64); 0x1941e5564: dropped unless above the last time taken ("Skipping stale
 //     orientation (N @ T)"), else taken and delivered as orientation usage - 0x64.
-#ifndef IOSWITCH_TEST_ORIENTATION_PIPELINE_MODEL_H
-#define IOSWITCH_TEST_ORIENTATION_PIPELINE_MODEL_H
+#ifndef SWITCH_TEST_ORIENTATION_PIPELINE_MODEL_H
+#define SWITCH_TEST_ORIENTATION_PIPELINE_MODEL_H
 #include <cstddef>
 #include <cstdint>
 #include <cstring>

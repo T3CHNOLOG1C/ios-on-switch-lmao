@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* IOSwitch shim: struct i2c_client, as dfll_fetch_i2c_params() reaches the PMIC's address through the regmap's device. */
+/* Switch shim: struct i2c_client, as dfll_fetch_i2c_params() reaches the PMIC's address through the regmap's device. */
 #ifndef TDFLL_LINUX_I2C_H
 #define TDFLL_LINUX_I2C_H
 #include <linux/device.h>

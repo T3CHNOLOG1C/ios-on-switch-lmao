@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The userland overlay: files shown over sealed system directories (IOSwitchRawMount.inc native_ioswitch_raw_overlay),
-kept on Data under /private/var/ioswitch/overlay (the deploy copies the boot package's overlay/ there).
+"""The userland overlay: files shown over sealed system directories (SwitchRawMount.h native_switch_raw_overlay),
+kept on Data under /private/var/Switch/overlay (the deploy copies the boot package's overlay/ there).
 
 Three steps of //boot:package, so that each overlay edit reruns only what reads it:
 
@@ -29,7 +29,7 @@ from pathlib import Path
 
 from boot_config import boot_arg_on, portrait_native, read_command_line
 
-OVERLAY_ROOT = '/private/var/ioswitch/overlay'
+OVERLAY_ROOT = '/private/var/Switch/overlay'
 
 
 def plan(manifest: dict, command_line: str, portrait: bool, given=None) -> dict:
@@ -55,7 +55,7 @@ def plan(manifest: dict, command_line: str, portrait: bool, given=None) -> dict:
         directory, gate = entry.get('union', posixpath.dirname(path)), entry.get('boot-arg', '')
         if not path.startswith(directory.rstrip('/') + '/'):
             raise SystemExit(f'overlay: {path} is not inside its union {directory}')
-        # native_ioswitch_raw_overlay's buffers: "<directory>[:<boot-arg>]" in char[128] and the overlay source path
+        # native_switch_raw_overlay's buffers: "<directory>[:<boot-arg>]" in char[128] and the overlay source path
         # in char[176]; a longer entry would be skipped (or its source cut short) at boot without a word.
         if len(directory) + (len(gate) + 1 if gate else 0) >= 128 or len(OVERLAY_ROOT + directory) >= 176:
             raise SystemExit(f'overlay: union {directory} is too long for the kernel (128/176 bytes)')

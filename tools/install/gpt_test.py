@@ -50,12 +50,12 @@ class GptTest(unittest.TestCase):
         before = {lba: os.pread(self.fd, 512, lba * 512) for lba in
                   [0, 1, 2, 3, 4, table.disk_sectors - 33, table.disk_sectors - 32, table.disk_sectors - 31,
                    table.disk_sectors - 1]}
-        writes = gpt.edit(table, 8, gpt.APFS, "IOSWITCH")
+        writes = gpt.edit(table, 8, gpt.APFS, "iOS")
         self.assertNotIn(0, [lba for lba, _ in writes])
         gpt.apply(self.fd, writes)
         after = gpt.read(self.fd, self.size)
         self.assertEqual(after.entries[8].type, gpt.APFS)
-        self.assertEqual(after.entries[8].name, "IOSWITCH")
+        self.assertEqual(after.entries[8].name, "iOS")
         for i, entry in enumerate(after.entries):
             if i != 8:
                 self.assertEqual(entry, table.entries[i])

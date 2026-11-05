@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: Linux scalar types for the vendored L4T BPMP sources. */
+/* Switch TegraBPMP shim: Linux scalar types for the vendored L4T BPMP sources. */
 #ifndef BPXNU_LINUX_TYPES_H
 #define BPXNU_LINUX_TYPES_H
 #include <stdbool.h>

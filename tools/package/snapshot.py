@@ -1,13 +1,13 @@
 """snapshot.py --boot DIR --gpu DIR NAME: copy the built boot entry and Metal bundle to <state>/lkg/<NAME>, where
-<state> is ~/Library/Application Support/ioswitch ($IOSWITCH_HOME overrides it), outside every checkout
+<state> is ~/Library/Application Support/switch-ios ($SWITCH_HOME overrides it), outside every checkout
 (switchroot/, bootloader/, overlay/ and gpu/), for rollback and for deploying exactly that build later:
 
     bazel run //boot:snapshot -- 1900-r9-something
-    LKG="$HOME/Library/Application Support/ioswitch/lkg/1900-r9-something"
+    LKG="$HOME/Library/Application Support/switch-ios/lkg/1900-r9-something"
     bazel run //deploy:sd -- disk4 --yes --stage-gpu --boot-package="$LKG" --gpu-bundle="$LKG/gpu"
 
 The snapshot also keeps the build's kernel.macho, which names the unslid kernel addresses in panics and in the
-"IOSwitch kprof" lines: `xcrun atos -o "$LKG/kernel.macho" -arch arm64 <addr>...`.
+"SwitchKprof" lines: `xcrun atos -o "$LKG/kernel.macho" -arch arm64 <addr>...`.
 
 Refuses to overwrite an existing snapshot."""
 import argparse
@@ -19,8 +19,8 @@ from pathlib import Path
 
 
 def state_dir():
-    """Where the tools keep what is not the repository's: ~/Library/Application Support/ioswitch, or $IOSWITCH_HOME."""
-    return Path(os.environ.get("IOSWITCH_HOME") or Path.home() / "Library/Application Support/ioswitch")
+    """Where the tools keep what is not the repository's: ~/Library/Application Support/switch-ios, or $SWITCH_HOME."""
+    return Path(os.environ.get("SWITCH_HOME") or Path.home() / "Library/Application Support/switch-ios")
 
 
 def located(path):
@@ -58,7 +58,7 @@ def main():
     for path in target.rglob("*"):
         path.chmod(0o755 if path.is_dir() or os.access(path, os.X_OK) else 0o644)
     print(target)
-    for path in sorted((target / "switchroot/ioswitch").iterdir()):
+    for path in sorted((target / "switchroot/ios").iterdir()):
         print("  {} sha256 {}".format(path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
 
 

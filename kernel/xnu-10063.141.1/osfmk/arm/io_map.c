@@ -62,7 +62,7 @@
 
 extern vm_offset_t virtual_space_start;     /* Next available kernel VA */
 
-/* IOSwitch: 8 MiB (Apple's value: its drivers map registers through IODeviceMemory into kernel_map) cannot hold the
+/* Switch: 8 MiB (Apple's value: its drivers map registers through IODeviceMemory into kernel_map) cannot hold the
  * Tegra drivers' ml_io_map windows, the GM20B register aperture alone is 16 MiB (10-30: "kmem_alloc(.., 16777216,
  * ..): failed with 3"). Kernel VA is not scarce. */
 #define IO_MAP_SIZE            (128ul << 20)

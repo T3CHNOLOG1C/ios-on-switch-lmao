@@ -17,7 +17,7 @@
 //   - AES-128/192/256 ECB, CBC, CTR, OFB (both directions), AES-CMAC, SHA-1/224/256/384/512 one-shot, and SHA-1/256/
 //     384/512 compress from any state (the state loaded into HASH_RESULT, SHA_CONFIG continue, MSG_LEFT past the end
 //     so the engine does not pad): that is what corecrypto's digest compress does, so XNU's own hashing (the
-//     code-signing page hashes included) runs here through ioswitch_digest_compress_hook (libkern/crypto/
+//     code-signing page hashes included) runs here through switch_digest_compress_hook (libkern/crypto/
 //     register_crypto.c). Every check is still corecrypto's; only the block arithmetic moves.
 //   - The DRBG: 64 bytes into the kernel PRNG (write_random) at start.
 //   - Small, one-off, latency-bound work stays on the A57s' AES/SHA instructions (code-signing's 16 KiB page hashes on
@@ -55,7 +55,7 @@
 #include <corecrypto/ccmode_impl.h>
 #pragma clang diagnostic pop
 #include "TegraSE.h"
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 
 extern "C" {
 extern task_t kernel_task;
@@ -65,9 +65,9 @@ kern_return_t kernel_thread_start(thread_continue_t continuation, void *paramete
 void thread_deallocate(thread_t thread);
 int get_preemption_level(void);
 // libkern/crypto/register_crypto.c (xnu patch): XNU's SHA digests' compress offers its blocks here first.
-extern int (*volatile ioswitch_digest_compress_hook)(const struct ccdigest_info *original, ccdigest_state_t state,
+extern int (*volatile switch_digest_compress_hook)(const struct ccdigest_info *original, ccdigest_state_t state,
                                                      size_t nblocks, const void *data);
-extern const struct ccdigest_info *ioswitch_digest_originals[4];  // corecrypto's SHA-1, -256, -384, -512
+extern const struct ccdigest_info *switch_digest_originals[4];  // corecrypto's SHA-1, -256, -384, -512
 }
 
 namespace {
@@ -316,7 +316,7 @@ bool run(Engine &e, uint32_t in, uint32_t out)
     if (result == THREAD_TIMED_OUT || e.seen == seen) {
         const uint32_t status = rd(e, INT_STATUS);
         char gic[160];
-        ioswitch_interrupt_describe(e.intid, gic, sizeof gic);
+        switch_interrupt_describe(e.intid, gic, sizeof gic);
         const bool ended = status & (kIntDone | kIntError);
         if (e.proven)
             panic("TegraSE: %s %s in %u ms (INT_STATUS %#x STATUS %#x ERR %#x; %s)", e.name,
@@ -915,7 +915,7 @@ extern "C" int tegra_se_digest(unsigned which, const void *in, size_t len, uint8
 }
 
 namespace {
-// ioswitch_digest_compress_hook: corecrypto's compress of XNU's SHA-1/256/384/512, from any state, on an engine.
+// switch_digest_compress_hook: corecrypto's compress of XNU's SHA-1/256/384/512, from any state, on an engine.
 int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, size_t nblocks, const void *data)
 {
     unsigned alg;
@@ -1097,7 +1097,7 @@ bool engineUp(Engine &e)
         IOLog("TegraSE: %s: no DMA memory below 4 GiB, off\n", e.name);
         return false;
     }
-    IOService *nub = ioswitch_interrupt_nub(e.intid, false);  // sleeps until the GIC is up
+    IOService *nub = switch_interrupt_nub(e.intid, false);  // sleeps until the GIC is up
     e.source =
         nub ? IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, nullptr, &filter, nub, 0) : nullptr;
     if (!e.source || gLoop->addEventSource(e.source) != kIOReturnSuccess) {
@@ -1196,7 +1196,7 @@ int engineCall(const Row &row, const uint8_t *in, uint8_t *out, size_t n)
 void cpuCall(const Row &row, const uint8_t *in, uint8_t *out, size_t n)
 {
     if (row.alg <= SHA512) {  // SHA-224 costs SHA-256's compress, SHA-384 SHA-512's
-        const struct ccdigest_info *di = ioswitch_digest_originals[row.alg == SHA1 ? 0 : row.alg <= SHA256 ? 1 : 3];
+        const struct ccdigest_info *di = switch_digest_originals[row.alg == SHA1 ? 0 : row.alg <= SHA256 ? 1 : 3];
         if (di) {
             uint32_t st[16];
             memcpy(st, di->initial_state, di->state_size);
@@ -1374,7 +1374,7 @@ void seThread(void *, wait_result_t)
                            " %s up, %u keyslots, known answers %#x in %llu us, "
                            "INTID %u (%u interrupts);",
                            e.name, __builtin_popcount(e.slotsUsable), good, us, e.intid,
-                           ioswitch_interrupt_count(e.intid));
+                           switch_interrupt_count(e.intid));
     }
     if (!up) {
         IOLog("TegraSE: off for this boot: no engine up\n");
@@ -1385,11 +1385,11 @@ void seThread(void *, wait_result_t)
     for (Engine &e : gEngines) {
         if (!e.up) continue;
         gStateLoad =
-            gStateLoad && (answered & (1u << SHA256)) && stateLoadWorks(e, SHA256, ioswitch_digest_originals[1]);
+            gStateLoad && (answered & (1u << SHA256)) && stateLoadWorks(e, SHA256, switch_digest_originals[1]);
         gStateLoad =
-            gStateLoad && (answered & (1u << SHA512)) && stateLoadWorks(e, SHA512, ioswitch_digest_originals[3]);
+            gStateLoad && (answered & (1u << SHA512)) && stateLoadWorks(e, SHA512, switch_digest_originals[3]);
         if (answered & (1u << SHA1)) {
-            if (!stateLoadWorks(e, SHA1, ioswitch_digest_originals[0])) answered &= ~(1u << SHA1);
+            if (!stateLoadWorks(e, SHA1, switch_digest_originals[0])) answered &= ~(1u << SHA1);
         }
     }
     for (unsigned alg = 0; alg < ALGS; ++alg) gAlg[alg].on = answered & (1u << alg);
@@ -1410,7 +1410,7 @@ void seThread(void *, wait_result_t)
     if (reseeded) write_random(seed, sizeof seed);
     bzero(seed, sizeof seed);
     gReady = true;
-    if (gStateLoad) ioswitch_digest_compress_hook = compressHook;
+    if (gStateLoad) switch_digest_compress_hook = compressHook;
     IOLog("%s\n", line);
     IOLog("TegraSE: on the engines: %#x of %#x (sha1 sha224 sha256 sha384 sha512 ecb cbc ctr ofb cmac); XNU's SHA "
           "compress %s; kernel PRNG %s\n",

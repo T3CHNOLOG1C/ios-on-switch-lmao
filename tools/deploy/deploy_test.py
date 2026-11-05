@@ -24,11 +24,11 @@ class Log:
 def package(root, generation=0):
     root = Path(root)
     for name in ("loader.uboot.bin", "kernel-window.bin", "boot.scr"):
-        path = root / "switchroot/ioswitch" / name
+        path = root / "switchroot/ios" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(name.encode() * (10 + (generation if name == "kernel-window.bin" else 0)))
     (root / "bootloader/ini").mkdir(parents=True, exist_ok=True)
-    (root / "bootloader/ini/ioswitch.ini").write_text("[IOSwitch]\nl4t=1\n")
+    (root / "bootloader/ini/ios.ini").write_text("[iOS]\nl4t=1\n")
     overlay = root / "overlay/usr/sbin/BlueTool"
     overlay.parent.mkdir(parents=True, exist_ok=True)
     overlay.write_bytes(b"tool %d" % generation)
@@ -42,8 +42,8 @@ class SyncTest(unittest.TestCase):
         package(self.root / "pkg0")
         package(self.root / "pkg1", generation=1)
         self.fat = self.root / "fat"
-        for relative in ("bootloader/hekate_ipl.ini", "switchroot/ubuntu/boot.scr", "switchroot/ioswitch/old.bin",
-                         "switchroot/ioswitch/._old.bin", "payload.bin"):
+        for relative in ("bootloader/hekate_ipl.ini", "switchroot/ubuntu/boot.scr", "switchroot/ios/old.bin",
+                         "switchroot/ios/._old.bin", "payload.bin"):
             (self.fat / relative).parent.mkdir(parents=True, exist_ok=True)
             (self.fat / relative).write_bytes(b"x")
 
@@ -57,21 +57,21 @@ class SyncTest(unittest.TestCase):
         log = Log()
         changed, removed = cards.sync_boot_entry(self.fat, self.root / "pkg0", log)
         self.assertEqual(len(changed), 4)
-        self.assertEqual(removed, ["switchroot/ioswitch/old.bin"])
+        self.assertEqual(removed, ["switchroot/ios/old.bin"])
         files = self.snapshot()
         for untouched in ("bootloader/hekate_ipl.ini", "switchroot/ubuntu/boot.scr", "payload.bin"):
             self.assertEqual(files[untouched], b"x")
-        self.assertNotIn("switchroot/ioswitch/._old.bin", files)
+        self.assertNotIn("switchroot/ios/._old.bin", files)
         self.assertEqual(cards.sync_boot_entry(self.fat, self.root / "pkg0", log), ([], []))
         changed, _ = cards.sync_boot_entry(self.fat, self.root / "pkg1", log)
-        self.assertEqual(changed, ["switchroot/ioswitch/kernel-window.bin"])
+        self.assertEqual(changed, ["switchroot/ios/kernel-window.bin"])
 
     def test_overlay_replaced_only_when_different(self):
         data = self.root / "data"
         data.mkdir()
         log = Log()
         self.assertTrue(cards.sync_overlay(data, self.root / "pkg0", log))
-        self.assertTrue(os.access(data / "ioswitch/overlay/usr/sbin/BlueTool", os.X_OK))
+        self.assertTrue(os.access(data / "Switch/overlay/usr/sbin/BlueTool", os.X_OK))
         self.assertFalse(cards.sync_overlay(data, self.root / "pkg0", log))
         self.assertTrue(cards.sync_overlay(data, self.root / "pkg1", log))
 
@@ -90,11 +90,11 @@ class SyncTest(unittest.TestCase):
 
     def test_pull_logs_copies_and_decodes_a_saved_panic(self):
         data = self.root / "data"
-        (data / "ioswitch").mkdir(parents=True)
-        (data / "ioswitch/panic-2026-11-05-120000.log").write_text(
-            "IOSwitch panic record 1: ...\npanic: userspace watchdog timeout: no successful checkins from "
+        (data / "Switch").mkdir(parents=True)
+        (data / "Switch/panic-2026-11-05-120000.log").write_text(
+            "SwitchPanic record 1: ...\npanic: userspace watchdog timeout: no successful checkins from "
             "com.apple.backboardd (2 induced crashes) in 60 seconds\n")
-        (data / "ioswitch/panic-2026-11-05-120000.kcdata").write_bytes(b"kcdata")
+        (data / "Switch/panic-2026-11-05-120000.kcdata").write_bytes(b"kcdata")
         # A stand-in for XNU's kcdata.py -s: the report a panic stackshot decodes to.
         report = {"binaryImages": [["590d839a-82d2-30f1-a17d-0cc053420f73", 6442450944, "S"],
                                    ["74f305ba-7e28-4e3f-6e7d-bd42b4ee7da1", 0, "U"]],
@@ -118,10 +118,10 @@ class SyncTest(unittest.TestCase):
 
     def test_pull_logs_copies_the_power_journal_and_wake_stackshots(self):
         data = self.root / "data"
-        (data / "ioswitch").mkdir(parents=True)
-        (data / "ioswitch/power.log").write_text("IOSwitch power journal\n12.345 SwitchBacklight: display off\n")
-        (data / "ioswitch/power.prev.log").write_text("IOSwitch power journal\n")
-        (data / "ioswitch/wake-2026-11-05-120000.kcdata").write_bytes(b"kcdata")
+        (data / "Switch").mkdir(parents=True)
+        (data / "Switch/power.log").write_text("SwitchPower journal\n12.345 SwitchBacklight: display off\n")
+        (data / "Switch/power.prev.log").write_text("SwitchPower journal\n")
+        (data / "Switch/wake-2026-11-05-120000.kcdata").write_bytes(b"kcdata")
         report = {"binaryImages": [["590d839a-82d2-30f1-a17d-0cc053420f73", 6442450944, "S"]],
                   "processByPid": {"53": {"procname": "backboardd", "threadById": {
                       "764": {"name": "com.apple.coreanimation.render-server", "state": ["TH_WAIT", "TH_UNINT"],

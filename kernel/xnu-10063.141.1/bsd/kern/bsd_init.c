@@ -1,4 +1,4 @@
-#include "IOSwitchDiag.h"
+#include "SwitchDiag.h"
 #include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
@@ -480,7 +480,7 @@ bsd_rooted_ramdisk(void)
  * of the tro_ucred field so that the uthread structure can be
  * used like any other.
  */
-#if 1 /* ioswitch's boot path, in every kernel configuration (was DEVELOPMENT || DEBUG) */
+#if 1 /* ios-on-switch-lmao's boot path, in every kernel configuration (was DEVELOPMENT || DEBUG) */
 extern kern_return_t OSKextLoadKextWithIdentifier(const char *identifier);
 volatile int native_apfs_load_status = -1;
 volatile uint32_t native_apfs_registered = 0;
@@ -567,7 +567,7 @@ void
 bsd_init(void)
 {
 	boot_progress_stage("bsd_init enter");
-	ioswitch_diag_stage("bsd_init entered");
+	switch_diag_stage("bsd_init entered");
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
 	struct proc_ro_data kernproc_ro_data = {
@@ -791,15 +791,15 @@ bsd_init(void)
 	/* Initialize the file systems. */
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
-#if 1 /* ioswitch's boot path, in every kernel configuration (was DEVELOPMENT || DEBUG) */
+#if 1 /* ios-on-switch-lmao's boot path, in every kernel configuration (was DEVELOPMENT || DEBUG) */
 	native_apfs_load_probe();
 	native_mobile_graphics_load_probe();
 	native_iogpu_load_probe();
 	/* After IOMobileGraphicsFamily: IOGPUFamily then brings no new dependency (AppleARMPlatform, AMFI, IOSurface,
 	 * IOReportFamily are loaded) and has no personalities. QuartzCore polls 30 s for an IOAcceleratorES otherwise. */
 	{
-		extern void ioswitch_accel_stub_publish(void);
-		ioswitch_accel_stub_publish();
+		extern void switch_accel_stub_publish(void);
+		switch_accel_stub_publish();
 	}
 #if defined(XNU_ADRENO_FIRMWARE_PROBE) && XNU_ADRENO_FIRMWARE_PROBE
 	extern void native_adreno_firmware_probe(void);
@@ -919,7 +919,7 @@ bsd_init(void)
 
 	bsd_init_kprintf("calling sysctl_mib_init\n");
 	sysctl_mib_init();
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	/* The SD disk is published after bsd_autoconf() below, not here. */
 #elif defined(XNU_VERIFIED_ROOT_PROBE) && XNU_VERIFIED_ROOT_PROBE
 	{
@@ -933,12 +933,12 @@ bsd_init(void)
 
 	bsd_init_kprintf("calling bsd_autoconf\n");
 	bsd_autoconf();
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	/* Publish the SD disk only once IOBSD exists. APFS's container start takes
 	 * its container lock and then waits for IOBSD; APFS's IOBSD-matched service
 	 * takes the same lock in its start. If the disk appears first, the two IOKit
 	 * matching threads deadlock (four cores lose that race every time). */
-	ioswitch_root_boot_prepare();
+	switch_root_boot_prepare();
 #endif
 
 #if CONFIG_DTRACE
@@ -1032,18 +1032,18 @@ bsd_init(void)
 
 		bsd_init_kprintf("vfs_mountroot\n");
 		boot_progress_stage("vfs_mountroot enter");
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-		ioswitch_root_event(6,0,0);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		switch_root_event(6,0,0);
 #endif
 		if (0 == (err = vfs_mountroot())) {
 			boot_progress_stage("vfs_mountroot mounted; authentication pending");
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-			ioswitch_root_event(7,0,0);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+			switch_root_event(7,0,0);
 #endif
 			break;
 		}
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-		ioswitch_root_event(7,err,0);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		switch_root_event(7,err,0);
 		panic("native original root mount failed: %d",err);
 #endif
 		rootdevice[0] = '\0';
@@ -1108,7 +1108,7 @@ bsd_init(void)
 				vnode_t device_vnode = vfs_devvp(root_mount);
 				dev_t device = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
 				int readonly = (vfs_flags(root_mount) & MNT_RDONLY) != 0;
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 				extern int native_verified_block_os_root_authorized(dev_t,dev_t);
 				/* Only the expected missing Apple personalization may use the
 				 * explicit owner-signed development policy for this exact root. */
@@ -1127,8 +1127,8 @@ bsd_init(void)
 				owner_authorized = owner;
 #endif
 				native_owner_root_checkpoint(autherr, owner, device);
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-				ioswitch_root_event(8,autherr,((uint64_t)(uint32_t)device<<32)|(unsigned)owner);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+				switch_root_event(8,autherr,((uint64_t)(uint32_t)device<<32)|(unsigned)owner);
 #endif
 			}
 #endif

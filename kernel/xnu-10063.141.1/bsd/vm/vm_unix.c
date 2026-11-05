@@ -106,8 +106,8 @@
 #include <vm/vm_dyld_pager.h>
 
 #include <vm/vm_protos.h>
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
-#include <kern/page_decrypt.h>   /* IOSwitch home grid pager */
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+#include <kern/page_decrypt.h>   /* SwitchHomeGrid pager */
 #endif
 
 #include <sys/kern_memorystatus.h>
@@ -2287,9 +2287,9 @@ out:
 }
 #endif
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
 /*
- * IOSwitch home grid: 6 columns x 4 rows on the landscape home screen.
+ * SwitchHomeGrid: 6 columns x 4 rows on the landscape home screen.
  *
  * SpringBoardHome takes its grid sizes from a constant table, _defaultRootMetrics (__TEXT.__const, in the r-x
  * TEXT mapping of the iOS 17.7 21H461 cache file dyld_shared_cache_arm64.25), indexed by screen type only.
@@ -2350,7 +2350,7 @@ iosw_home_grid_page(const void *src, void *dst, unsigned long long src_offset, _
 				    memcmp(out + at, stock, sizeof(stock)) != 0 ||
 				    memcmp(out + at + IOSW_HG_WIDGETS_OFFSET, widgets, sizeof(widgets)) != 0) {
 					if (!os_atomic_xchg(&iosw_hg_mismatch_logged, 1, relaxed)) {
-						printf("IOSwitch home grid: cache bytes at 0x%llx are not the shipped ones, "
+						printf("SwitchHomeGrid: cache bytes at 0x%llx are not the shipped ones, "
 						    "page left stock\n", fileoff);
 					}
 					return 0;
@@ -2368,7 +2368,7 @@ iosw_home_grid_page(const void *src, void *dst, unsigned long long src_offset, _
 	uint32_t all = (1u << (IOSW_HG_CHUNKS_SIZE / IOSW_HG_CHUNK)) - 1;
 	uint32_t before = os_atomic_or_orig(&iosw_hg_chunks_done, 1u << chunk, relaxed);
 	if (before != all && (before | (1u << chunk)) == all) {
-		printf("IOSwitch home grid: 6x4 (%u entries, %llu pages)\n", IOSW_HG_ENTRIES,
+		printf("SwitchHomeGrid: 6x4 (%u entries, %llu pages)\n", IOSW_HG_ENTRIES,
 		    IOSW_HG_PAGES_SIZE / PAGE_SIZE);
 	}
 	return 0;
@@ -2391,12 +2391,12 @@ iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t siz
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
 	if (error != 0 || resid != 0) {
-		printf("IOSwitch home grid: cache header read failed (%d), cache text left stock\n", error);
+		printf("SwitchHomeGrid: cache header read failed (%d), cache text left stock\n", error);
 		return MEMORY_OBJECT_NULL;
 	}
 	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
 	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_hg_uuid, sizeof(iosw_hg_uuid)) != 0) {
-		printf("IOSwitch home grid: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		printf("SwitchHomeGrid: not the 21H461 subcache (UUID differs), cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 
@@ -2411,7 +2411,7 @@ iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t siz
 	    IOSW_HG_PAGES_FILEOFF + IOSW_HG_CHUNKS_OFFSET, &crypt_info,
 	    IOSW_HG_CHUNKS_OFFSET, IOSW_HG_CHUNKS_OFFSET + IOSW_HG_CHUNKS_SIZE, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
-		printf("IOSwitch home grid: pager setup failed, cache text left stock\n");
+		printf("SwitchHomeGrid: pager setup failed, cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 	*range_offset = IOSW_HG_PAGES_VMADDR - unslid_address;
@@ -2420,7 +2420,7 @@ iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t siz
 }
 
 /*
- * IOSwitch settings icons: Settings' icon cache at a screen scale below 2.
+ * SwitchSettingsIcons: Settings' icon cache at a screen scale below 2.
  *
  * +[PKIconImageCache settingsIconCacheWithScale:] (Preferences, cache text in dyld_shared_cache_arm64.13 of 21H461)
  * takes iconCache@3x.artwork for scale >= 3, iconCache@2x.artwork for scale >= 2, and no file for anything less.
@@ -2428,7 +2428,7 @@ iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t siz
  * after the artwork is read), so every specifier with an "iconCache" key gets no icon and Preferences logs
  * "Icon for key ... is missing from the cache": Wi-Fi and some 35 more Settings root rows (Mail, Safari, Photos,
  * App Store, Music...), and Privacy and Restrictions rows. 21H461 ships only the @2x artwork; this screen is
- * scale 1.6 (IOSwitch UI scale, below). Here the method works at scale 2 whatever the screen: fmov d8, d0 (the scale
+ * scale 1.6 (SwitchUIScale, below). Here the method works at scale 2 whatever the screen: fmov d8, d0 (the scale
  * argument, the first instruction after the prologue) becomes fmov d8, #2.0, so the cache is the @2x artwork plus
  * IconServices' icons at 2x: 29-point icons from 58-pixel bitmaps, drawn downsampled (never upscaled). Same pager and
  * checks as the home grid, on one 4 KB chunk: the instruction and the two after it must read as shipped.
@@ -2460,14 +2460,14 @@ iosw_settings_icons_page(const void *src, void *dst, unsigned long long src_offs
 	uint64_t at = IOSW_SI_INSN_FILEOFF - src_offset;
 	if (memcmp(out + at, stock, sizeof(stock)) != 0) {
 		if (!os_atomic_xchg(&iosw_si_logged, 1, relaxed)) {
-			printf("IOSwitch settings icons: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
+			printf("SwitchSettingsIcons: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
 			    IOSW_SI_INSN_FILEOFF);
 		}
 		return 0;
 	}
 	memcpy(out + at, scale2, sizeof(scale2));
 	if (!os_atomic_xchg(&iosw_si_logged, 1, relaxed)) {
-		printf("IOSwitch settings icons: icon cache at scale 2\n");
+		printf("SwitchSettingsIcons: icon cache at scale 2\n");
 	}
 	return 0;
 }
@@ -2489,12 +2489,12 @@ iosw_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
 	if (error != 0 || resid != 0) {
-		printf("IOSwitch settings icons: cache header read failed (%d), cache text left stock\n", error);
+		printf("SwitchSettingsIcons: cache header read failed (%d), cache text left stock\n", error);
 		return MEMORY_OBJECT_NULL;
 	}
 	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
 	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_si_uuid, sizeof(iosw_si_uuid)) != 0) {
-		printf("IOSwitch settings icons: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		printf("SwitchSettingsIcons: not the 21H461 subcache (UUID differs), cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 
@@ -2508,7 +2508,7 @@ iosw_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_
 	    IOSW_SI_PAGES_FILEOFF + IOSW_SI_CHUNK_OFFSET, &crypt_info,
 	    IOSW_SI_CHUNK_OFFSET, IOSW_SI_CHUNK_OFFSET + IOSW_HG_CHUNK, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
-		printf("IOSwitch settings icons: pager setup failed, cache text left stock\n");
+		printf("SwitchSettingsIcons: pager setup failed, cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 	*range_offset = IOSW_SI_PAGES_VMADDR - unslid_address;
@@ -2517,7 +2517,7 @@ iosw_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_
 }
 
 /*
- * IOSwitch keyboard: the software keyboard as wide as the screen from its first layout.
+ * Switch keyboard: the software keyboard as wide as the screen from its first layout.
  *
  * MobileGestalt's ArtworkDeviceSubType is 2732 (the ADT's iPad7,1 artwork, tools/package/package_raw_boot.py), so
  * TextInput's IsLargeIPad() is true, the KeyboardUseProLayout preference defaults to YES, and UIKit gives the keyboard
@@ -2564,14 +2564,14 @@ iosw_keyboard_page(const void *src, void *dst, unsigned long long src_offset, __
 	uint64_t at = IOSW_KB_INSN_FILEOFF - src_offset;
 	if (memcmp(out + at, stock, sizeof(stock)) != 0) {
 		if (!os_atomic_xchg(&iosw_kb_logged, 1, relaxed)) {
-			printf("IOSwitch keyboard: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
+			printf("SwitchKeyboard: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
 			    IOSW_KB_INSN_FILEOFF);
 		}
 		return 0;
 	}
 	memcpy(out + at, derived, sizeof(derived));
 	if (!os_atomic_xchg(&iosw_kb_logged, 1, relaxed)) {
-		printf("IOSwitch keyboard: Pro-class keyboard derived to the screen width\n");
+		printf("SwitchKeyboard: Pro-class keyboard derived to the screen width\n");
 	}
 	return 0;
 }
@@ -2593,12 +2593,12 @@ iosw_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
 	if (error != 0 || resid != 0) {
-		printf("IOSwitch keyboard: cache header read failed (%d), cache text left stock\n", error);
+		printf("SwitchKeyboard: cache header read failed (%d), cache text left stock\n", error);
 		return MEMORY_OBJECT_NULL;
 	}
 	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
 	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_kb_uuid, sizeof(iosw_kb_uuid)) != 0) {
-		printf("IOSwitch keyboard: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		printf("SwitchKeyboard: not the 21H461 subcache (UUID differs), cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 
@@ -2612,7 +2612,7 @@ iosw_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size
 	    IOSW_KB_PAGES_FILEOFF + IOSW_KB_CHUNK_OFFSET, &crypt_info,
 	    IOSW_KB_CHUNK_OFFSET, IOSW_KB_CHUNK_OFFSET + IOSW_HG_CHUNK, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
-		printf("IOSwitch keyboard: pager setup failed, cache text left stock\n");
+		printf("SwitchKeyboard: pager setup failed, cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 	*range_offset = IOSW_KB_PAGES_VMADDR - unslid_address;
@@ -2621,7 +2621,7 @@ iosw_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size
 }
 
 /*
- * IOSwitch widgets: chronod's placeholder deadline scaled to this CPU, so a widget's placeholder batch completes once
+ * Switch widgets: chronod's placeholder deadline scaled to this CPU, so a widget's placeholder batch completes once
  * and is cached instead of being discarded and redone every boot.
  *
  * chronod asks a widget extension for its gallery placeholders in one batch, getPlaceholders(n), and arms a watchdog
@@ -2695,14 +2695,14 @@ iosw_widget_deadline_page(const void *src, void *dst, unsigned long long src_off
 	uint64_t at = site->case_fileoff - src_offset;
 	if (memcmp(out + at, site->stock, sizeof(site->stock)) != 0) {
 		if (!os_atomic_xchg(&iosw_wd_logged[which], 1, relaxed)) {
-			printf("IOSwitch widgets: cache bytes at 0x%llx (%s) are not the shipped ones, placeholder deadline "
+			printf("SwitchWidgets: cache bytes at 0x%llx (%s) are not the shipped ones, placeholder deadline "
 			    "left stock\n", site->case_fileoff, site->name);
 		}
 		return 0;
 	}
 	memcpy(out + at + IOSW_WD_PATCH_OFFSET, scaled, sizeof(scaled));
 	if (!os_atomic_xchg(&iosw_wd_logged[which], 1, relaxed)) {
-		printf("IOSwitch widgets: placeholder batch deadline (n + 10) x 5 s (%s)\n", site->name);
+		printf("SwitchWidgets: placeholder batch deadline (n + 10) x 5 s (%s)\n", site->name);
 	}
 	return 0;
 }
@@ -2724,12 +2724,12 @@ iosw_widget_deadline_pager(const struct iosw_wd_site *site, vm_object_t file_obj
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
 	if (error != 0 || resid != 0) {
-		printf("IOSwitch widgets: cache header read failed (%d), cache text left stock\n", error);
+		printf("SwitchWidgets: cache header read failed (%d), cache text left stock\n", error);
 		return MEMORY_OBJECT_NULL;
 	}
 	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
 	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_wd_uuid, sizeof(iosw_wd_uuid)) != 0) {
-		printf("IOSwitch widgets: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		printf("SwitchWidgets: not the 21H461 subcache (UUID differs), cache text left stock\n");
 		return MEMORY_OBJECT_NULL;
 	}
 
@@ -2743,7 +2743,7 @@ iosw_widget_deadline_pager(const struct iosw_wd_site *site, vm_object_t file_obj
 	    site->page_fileoff + site->chunk_offset, &crypt_info,
 	    site->chunk_offset, site->chunk_offset + IOSW_HG_CHUNK, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
-		printf("IOSwitch widgets: pager setup failed (%s), cache text left stock\n", site->name);
+		printf("SwitchWidgets: pager setup failed (%s), cache text left stock\n", site->name);
 		return MEMORY_OBJECT_NULL;
 	}
 	*range_offset = site->page_vmaddr - unslid_address;
@@ -2752,7 +2752,7 @@ iosw_widget_deadline_pager(const struct iosw_wd_site *site, vm_object_t file_obj
 }
 
 /*
- * IOSwitch UI scale: 1.6 pixels per point on the 720x1280 panel, every pixel rendered natively.
+ * SwitchUIScale: 1.6 pixels per point on the 720x1280 panel, every pixel rendered natively.
  *
  * At the panel's 209.8 ppi, 1.6 px/pt gives a point the physical size of a 9.7- to 12.9-inch iPad's (264 ppi at
  * scale 2: 132 points per inch). The screen is 450x800 points, 800x450 in landscape. iPadOS has no fractional scale
@@ -2778,7 +2778,7 @@ iosw_widget_deadline_pager(const struct iosw_wd_site *site, vm_object_t file_obj
  *   property holds the float's bits (movz/movk over its read, fmov over the scvtf). Its one other use, the screen
  *   class lookup, finds no class for 720x1280 at scale 1 either. QuartzCore's own scale stays 1 (fcvtzu of 1.6f).
  * MobileGestalt keeps the answer in its build-keyed cache; kern_exec.c drops that cache once for this scale
- * (native_ioswitch_ui_scale_cache).
+ * (native_switch_ui_scale_cache).
  */
 struct iosw_us_edit {
 	uint64_t fileoff;                           /* the first byte that must read as shipped */
@@ -2850,7 +2850,7 @@ iosw_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, vo
 		}
 		if (memcmp(out + (edit->fileoff - src_offset), edit->stock, edit->length) != 0) {
 			if (!os_atomic_xchg(&iosw_us_logged[which], 1, relaxed)) {
-				printf("IOSwitch UI scale: %s cache bytes at 0x%llx are not the shipped ones, page left stock\n",
+				printf("SwitchUIScale: %s cache bytes at 0x%llx are not the shipped ones, page left stock\n",
 				    site->name, edit->fileoff);
 			}
 			return 0;
@@ -2861,7 +2861,7 @@ iosw_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, vo
 		memcpy(out + (edit->fileoff - src_offset) + edit->at, edit->patched, edit->size);
 	}
 	if (!os_atomic_xchg(&iosw_us_logged[which], 1, relaxed)) {
-		printf("IOSwitch UI scale: %s %s\n", site->name, site->applied);
+		printf("SwitchUIScale: %s %s\n", site->name, site->applied);
 	}
 	return 0;
 }
@@ -2883,12 +2883,12 @@ iosw_ui_scale_pager(const struct iosw_us_site *site, vm_object_t file_object, ui
 	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
 	if (error != 0 || resid != 0) {
-		printf("IOSwitch UI scale: %s cache header read failed (%d), cache text left stock\n", site->name, error);
+		printf("SwitchUIScale: %s cache header read failed (%d), cache text left stock\n", site->name, error);
 		return MEMORY_OBJECT_NULL;
 	}
 	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
 	    memcmp(header + IOSW_HG_UUID_OFFSET, site->uuid, sizeof(site->uuid)) != 0) {
-		printf("IOSwitch UI scale: %s is not in the 21H461 subcache (UUID differs), cache text left stock\n",
+		printf("SwitchUIScale: %s is not in the 21H461 subcache (UUID differs), cache text left stock\n",
 		    site->name);
 		return MEMORY_OBJECT_NULL;
 	}
@@ -2903,7 +2903,7 @@ iosw_ui_scale_pager(const struct iosw_us_site *site, vm_object_t file_object, ui
 	    site->page_fileoff + site->chunk_offset, &crypt_info,
 	    site->chunk_offset, site->chunk_offset + IOSW_HG_CHUNK, TRUE);
 	if (mo == MEMORY_OBJECT_NULL) {
-		printf("IOSwitch UI scale: %s pager setup failed, cache text left stock\n", site->name);
+		printf("SwitchUIScale: %s pager setup failed, cache text left stock\n", site->name);
 		return MEMORY_OBJECT_NULL;
 	}
 	*range_offset = site->page_vmaddr - unslid_address;
@@ -2918,10 +2918,10 @@ iosw_ui_scale_pager(const struct iosw_us_site *site, vm_object_t file_object, ui
  * grid, settings icons, keyboard and UI scale ranges are in different subcaches (.25, .13, .03, .09, .11), one per
  * mapping, so they only answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k.
  */
-memory_object_t ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
+memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);
 memory_object_t
-ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
+switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size)
 {
 	memory_object_t mo = MEMORY_OBJECT_NULL;
@@ -2948,7 +2948,7 @@ ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, 
 	}
 	return mo;
 }
-#endif /* XNU_IOSWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION */
+#endif /* XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION */
 
 /*
  * Setup part of _shared_region_map_and_slide().
@@ -3296,14 +3296,14 @@ after_root_check:
 #define PREBOOT_CRYPTEX_PATH "/private/preboot/Cryptexes"
 #endif
 			error = vnode_lookup(PREBOOT_CRYPTEX_PATH, 0, &preboot_vp, vfs_context_current());
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-			/* IOSwitch mounts the OS cryptex as its own read-only APFS volume
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+			/* Switch mounts the OS cryptex as its own read-only APFS volume
 			 * at Cryptexes/OS instead of grafting it into Preboot. */
-			boolean_t ioswitch_cryptex = FALSE;
+			boolean_t switch_cryptex = FALSE;
 			if (!error && srfmp->vp->v_mount != preboot_vp->v_mount) {
 				vnode_t cryptex_vp = NULL;
 				if (!vnode_lookup(PREBOOT_CRYPTEX_PATH "/OS", 0, &cryptex_vp, vfs_context_current())) {
-					ioswitch_cryptex = cryptex_vp->v_mount == srfmp->vp->v_mount &&
+					switch_cryptex = cryptex_vp->v_mount == srfmp->vp->v_mount &&
 					    (vfs_flags(cryptex_vp->v_mount) & MNT_RDONLY);
 					(void)vnode_put(cryptex_vp);
 				}
@@ -3313,8 +3313,8 @@ after_root_check:
 #if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER
 			    && !owner_carrier
 #endif
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-			    && !ioswitch_cryptex
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+			    && !switch_cryptex
 #endif
 			    ) {
 				SHARED_REGION_TRACE_ERROR(

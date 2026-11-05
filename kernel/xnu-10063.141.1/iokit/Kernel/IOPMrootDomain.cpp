@@ -1309,7 +1309,7 @@ static SYSCTL_PROC(_kern, OID_AUTO, consoleoptions,
     NULL, 0, sysctl_consoleoptions, "I", "");
 
 
-extern "C" void ioswitch_boot_band_lift(const char *why);
+extern "C" void switch_boot_band_lift(const char *why);
 /* drivers/SwitchPower/SwitchPerfGovernor.cpp (SwitchPower.h SWITCH_PERF_HINT_BOOT_DONE = 4): the boot's clock window ends */
 extern "C" void switch_perf_hint(unsigned int hint);
 
@@ -8015,10 +8015,10 @@ IOPMrootDomain::dispatchPowerEvent(
 		DLOG("power event %u args %p 0x%llx\n", event, OBFUSCATE(arg0), arg1);
 		if (systemBooting) {
 			systemBooting = false;
-			/* IOSwitch: SpringBoard finished startup (backboardd sets this): the boot band's daemons get their CPU back
+			/* Switch: SpringBoard finished startup (backboardd sets this): the boot band's daemons get their CPU back
 			 * (if its 60 s bound has not already), and the boot's full clocks end: from here the CPU governor and the
 			 * GPU's idle clock decide, whenever this comes (r8a: 74 s of uptime, after the band's bound). */
-			ioswitch_boot_band_lift("System Boot Complete");
+			switch_boot_band_lift("System Boot Complete");
 			switch_perf_hint(4); /* SWITCH_PERF_HINT_BOOT_DONE */
 
 			if (PE_get_default("sleep-disabled", &gSleepDisabledFlag, sizeof(gSleepDisabledFlag))) {

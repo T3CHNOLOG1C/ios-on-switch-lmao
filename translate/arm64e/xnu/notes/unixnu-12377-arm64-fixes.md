@@ -27,4 +27,4 @@ the iOS objects. `<fakeroot>` = the main tree's `.cache/fakeroot`, used read onl
 Result (2026-11-04): `mach.development.bcm2837.unstripped`, Mach-O arm64 (CPU subtype ALL, no PAC), 21.5 MB,
 NOUNDEFS, a64x inside (kern.a64x sysctls, strings). The only failure is the post-link `check_all_exports`
 (`Private.symbolset`: Apple DART/UAT symbols `t8020dart_*`, `uat_get_desc` that no BCM2837 kernel has), which only
-matters for linking Apple's kexts against the symbol sets; the UniXNU/ioswitch prelinker does its own binding.
+matters for linking Apple's kexts against the symbol sets; the UniXNU/ios-on-switch-lmao prelinker does its own binding.

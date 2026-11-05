@@ -67,7 +67,7 @@ def _xcode_host_impl(rctx):
     found = {"version": version, "build": build, "clang": clang, "ld": ld, "sha256": digests}
     mismatches = [k for k in found if found[k] != XCODE_PINS[k]]
     pins = json.encode_indent(found, indent = "    ")
-    if mismatches and rctx.getenv("IOSWITCH_ALLOW_UNPINNED_XCODE") != "1":
+    if mismatches and rctx.getenv("SWITCH_ALLOW_UNPINNED_XCODE") != "1":
         fail(("\n\nThe selected Xcode ({}) does not match the pin in bazel/host/xcode.bzl ({} differ).\n" +
               "Select the pinned Xcode {} ({}) with `sudo xcode-select -s <Xcode.app>` or export DEVELOPER_DIR,\n" +
               "or bump the pin to this Xcode (every kernel object rebuilds):\n\nXCODE_PINS = {}\n").format(
@@ -111,7 +111,7 @@ def _xcode_host_impl(rctx):
 
 xcode_host = repository_rule(
     implementation = _xcode_host_impl,
-    environ = ["DEVELOPER_DIR", "IOSWITCH_ALLOW_UNPINNED_XCODE"],
+    environ = ["DEVELOPER_DIR", "SWITCH_ALLOW_UNPINNED_XCODE"],
     local = True,
     doc = "Finds and checks the host Xcode (the build's only undownloadable input).",
 )

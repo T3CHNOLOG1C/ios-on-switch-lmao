@@ -46,7 +46,7 @@
 //   xcrun clang -target arm64-apple-ios17.0 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -IH -I.. -O2 -Wall \
 //     -Wextra -Werror -bundle -fvisibility=hidden -framework CoreFoundation -framework IOKit SwitchAudioPlugIn.c \
 //     -o SwitchAudio.driver/SwitchAudio
-//   codesign -f -s - --pagesize 4096 --identifier com.ioswitch.audio SwitchAudio.driver/SwitchAudio
+//   codesign -f -s - --pagesize 4096 --identifier com.brunostjohn.switch.audio SwitchAudio.driver/SwitchAudio
 // The executable alone (the Data overlay ships it and Info.plist, no resource seal), with 4 KiB code pages as the
 // system's own binaries here; scripts/package_raw_boot.py puts its CDHash in the boot trust cache.
 #include <CoreAudio/AudioServerPlugIn.h>
@@ -397,7 +397,7 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
         case kAudioObjectPropertyBaseClass: REPLY(AudioClassID, kAudioObjectClassID);
         case kAudioObjectPropertyClass: REPLY(AudioClassID, kAudioPlugInClassID);
         case kAudioObjectPropertyOwner: REPLY(AudioObjectID, kAudioObjectUnknown);
-        case kAudioObjectPropertyManufacturer: REPLY_STR("IOSwitch");
+        case kAudioObjectPropertyManufacturer: REPLY_STR("Switch");
         case kAudioObjectPropertyOwnedObjects:
         case kAudioPlugInPropertyDeviceList: {
             static const AudioObjectID devices[] = {kSpeaker, kMic, kHawking};
@@ -431,7 +431,7 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
             if (o == kSpeaker) REPLY_STR("Speaker");
             if (o == kMic) REPLY_STR("Microphone");
             REPLY_STR("Hawking");
-        case kAudioObjectPropertyManufacturer: REPLY_STR("IOSwitch");
+        case kAudioObjectPropertyManufacturer: REPLY_STR("Switch");
         case kAudioDevicePropertyDeviceUID:
             if (o == kSpeaker) REPLY_STR(kSpeakerUID);
             if (o == kMic) REPLY_STR(kMicUID);

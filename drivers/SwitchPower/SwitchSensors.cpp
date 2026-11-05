@@ -24,7 +24,7 @@
 // when that has not fired, from hookPass once the device's matching is quiet. The publish notification alone has
 // never been seen to hook a sensor on hardware; hookPass's line says which path did.
 //
-// The userspace watchdog (NativeIOSwitchWatchdog) asks switch_sensors_wait_ready() once, when watchdogd first opens
+// The userspace watchdog (NativeSwitchWatchdog) asks switch_sensors_wait_ready() once, when watchdogd first opens
 // it: only once thermalmonitord itself has read every sensor it reads, and every source answers, does watchdogd keep
 // monitoring thermalmonitord; otherwise it is off for the boot (one line with what is missing) and an unhealthy
 // thermalmonitord can never end in a watchdog panic. "Read" means the hook returned an event to a client's copyEvent

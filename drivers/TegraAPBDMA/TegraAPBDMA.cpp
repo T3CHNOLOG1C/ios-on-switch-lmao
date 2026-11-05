@@ -13,7 +13,7 @@
 #include <IOKit/IOWorkLoop.h>
 #include <string.h>
 #include "TegraAPBDMA.h"
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 
 extern "C" {
 extern task_t kernel_task;
@@ -262,12 +262,12 @@ tegra_apbdma_channel *tegra_apbdma_open(unsigned channel, IOWorkLoop *loop, tegr
     if (!fail) {
         ch->handler = handler;
         ch->context = context;
-        IOService *nub = ioswitch_interrupt_nub(intidOf(channel), false);
+        IOService *nub = switch_interrupt_nub(intidOf(channel), false);
         ch->source =
             nub ? IOFilterInterruptEventSource::filterInterruptEventSource(loop, &action, &filter, nub, 0) : nullptr;
         if (!ch->source || loop->addEventSource(ch->source) != kIOReturnSuccess) {
             char gic[160];
-            ioswitch_interrupt_describe(intidOf(channel), gic, sizeof(gic));
+            switch_interrupt_describe(intidOf(channel), gic, sizeof(gic));
             panic("TegraAPBDMA: cannot attach channel %u's interrupt (INTID %u): %s", channel, intidOf(channel), gic);
         }
         ch->source->enable();
@@ -353,7 +353,7 @@ uint32_t tegra_apbdma_interrupts(tegra_apbdma_channel *ch)
 void tegra_apbdma_describe(tegra_apbdma_channel *ch, char *buffer, size_t size)
 {
     char gic[160];
-    ioswitch_interrupt_describe(intidOf(ch->number), gic, sizeof(gic));
+    switch_interrupt_describe(intidOf(ch->number), gic, sizeof(gic));
     snprintf(buffer, size, "APB DMA ch%u csr %#x status %#x count %#x ahb %#x/%#x apb %#x irqs %u, %s", ch->number,
              rd(ch, CSR), rd(ch, STATUS), rd(ch, WORD_TRANSFER), rd(ch, AHB_PTR), rd(ch, AHB_SEQ), rd(ch, APB_PTR),
              ch->interrupts, gic);

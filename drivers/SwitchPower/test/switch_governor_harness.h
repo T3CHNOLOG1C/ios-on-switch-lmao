@@ -1,8 +1,8 @@
 // switch_governor_harness.c's exported wrappers of drivers/SwitchPower/SwitchGovernor.h, for switch_governor_test.cpp.
 // The governor's state is opaque here (gov_size bytes): the test drives it only through these, as the kernel does
 // through the header.
-#ifndef IOSWITCH_SWITCH_GOVERNOR_HARNESS_H
-#define IOSWITCH_SWITCH_GOVERNOR_HARNESS_H
+#ifndef SWITCH_SWITCH_GOVERNOR_HARNESS_H
+#define SWITCH_SWITCH_GOVERNOR_HARNESS_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -50,4 +50,4 @@ uint32_t rows_trial(const struct switch_gov_rows *r);
 }
 #endif
 
-#endif  // IOSWITCH_SWITCH_GOVERNOR_HARNESS_H
+#endif  // SWITCH_SWITCH_GOVERNOR_HARNESS_H

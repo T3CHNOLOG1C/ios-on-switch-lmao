@@ -150,7 +150,7 @@ static uint32_t gc_buffer_rows;
 static uint32_t gc_buffer_size;
 
 /*
- * Hardware scroll ("tape") for the Switch's rotated text console (vc_rotate3_32), attached by IOSwitch's display driver
+ * Hardware scroll ("tape") for the Switch's rotated text console (vc_rotate3_32), attached by Switch's display driver
  * (NativeLegacyDisplay.cpp) while the console owns the screen. A text line is 16 columns of the portrait scanout, 64
  * bytes of every memory row, so moving the scanout's start address 64 bytes scrolls the whole screen one line. The
  * tape is that portrait frame with `gap' spare lines after every row (rows `stride' bytes apart): a scroll clears its
@@ -3384,10 +3384,10 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 void vcattach(void); /* XXX gcc 4 warning cleanup */
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 /* vcattach's replay of the early log, for the one line PE_init_iokit logs (pe_init.c). */
-long ioswitch_vcattach_skipped, ioswitch_vcattach_bytes;
-uint64_t ioswitch_vcattach_ticks;
+long switch_vcattach_skipped, switch_vcattach_bytes;
+uint64_t switch_vcattach_ticks;
 #endif
 
 void
@@ -3419,7 +3419,7 @@ vcattach(void)
 
 	if (gc_graphics_boot == FALSE) {
 		long index, start = 0;
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 		const uint64_t attach_start = mach_absolute_time();
 #endif
 
@@ -3429,9 +3429,9 @@ vcattach(void)
 
 		initialize_screen(NULL, kPEAcquireScreen);
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 		/*
-		 * IOSwitch: replay only the lines the screen can show. Every earlier one would be drawn and then scrolled off,
+		 * Switch: replay only the lines the screen can show. Every earlier one would be drawn and then scrolled off,
 		 * one whole-screen copy per line (the rotated console copies pixel by pixel); the screen ends up the same:
 		 * the last v_rows - 1 lines and the cursor's. Wrapped lines take more rows and simply scroll as before.
 		 */
@@ -3444,8 +3444,8 @@ vcattach(void)
 				}
 			}
 		}
-		ioswitch_vcattach_skipped = start;
-		ioswitch_vcattach_bytes = msgbufp->msg_bufx;
+		switch_vcattach_skipped = start;
+		switch_vcattach_bytes = msgbufp->msg_bufx;
 #endif
 
 		for (index = start; index < msgbufp->msg_bufx; index++) {
@@ -3459,8 +3459,8 @@ vcattach(void)
 				vcputc( '\r' );
 			}
 		}
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-		ioswitch_vcattach_ticks = mach_absolute_time() - attach_start;
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		switch_vcattach_ticks = mach_absolute_time() - attach_start;
 #endif
 	}
 }

@@ -2,8 +2,8 @@
 // IOBufferMemoryDescriptor, panic), for switch_wlan_msgbuf_test.cpp. BUILD.bazel points <IOKit/IOLib.h> and
 // <IOKit/IOBufferMemoryDescriptor.h> here (host_shims). The DMA area is host memory given a fake 32-bit
 // physical address; every register access of the driver's Mmio goes to the harness's counter (SWLAN_MMIO_TRACE).
-#ifndef IOSWITCH_TEST_SWITCH_WLAN_MSGBUF_STUBS_H
-#define IOSWITCH_TEST_SWITCH_WLAN_MSGBUF_STUBS_H
+#ifndef SWITCH_TEST_SWITCH_WLAN_MSGBUF_STUBS_H
+#define SWITCH_TEST_SWITCH_WLAN_MSGBUF_STUBS_H
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>

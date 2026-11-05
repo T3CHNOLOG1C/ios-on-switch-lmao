@@ -3,7 +3,7 @@
 //
 // SwitchJoyConDevice subclasses the original IOHIDDevice through NativeHidInput's qualified ABI and bindings
 // (build/native-hid-input: OriginalHidDeviceABI.h, hid-original-bindings.o), like ../SwitchTouch/SwitchHIDDevice.cpp,
-// so it is a late object (Drivers.cmake ioswitch_late_object) whose static initializer runs from
+// so it is a late object (Drivers.cmake switch_late_object) whose static initializer runs from
 // switch_joycon_hid_prepare() once IOHIDFamily is loaded. Overrides: NativeHidInput's set (free, start, stop,
 // getWorkLoop, newTransportString, newProductString, newReportDescriptor; the bindings leave exactly those IOHIDDevice
 // slots unbound), slot 183, setReport (below), and handleOpen/handleClose, which call the bound originals and keep

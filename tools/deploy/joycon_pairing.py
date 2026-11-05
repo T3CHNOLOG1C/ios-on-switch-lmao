@@ -11,7 +11,7 @@ switchroot/joycon_mac.ini on the FAT, one section per Joy-Con:
 
 switchroot uses it as is: U-Boot sets the controller's address to `host` (boot.txt, from joycon_mac.bin) and the
 BlueZ import writes `ltk` as the link key (Lakka switch-bsp pair-joycon.sh: Key=ltk, Type=4). Here the deploy tool
-reads it, read-only, and stages two files under <Data>/ioswitch/bluetooth/ (/private/var/ioswitch/bluetooth/):
+reads it, read-only, and stages two files under <Data>/Switch/bluetooth/ (/private/var/Switch/bluetooth/):
 
     host-address            6 bytes, display order: SwitchBluetooth programs it into the controller at bluetoothd's
                             first connect (drivers/SwitchBluetooth/SwitchBluetooth.cpp)
@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 
 INI = "switchroot/joycon_mac.ini"
-STAGED = "ioswitch/bluetooth"
+STAGED = "Switch/bluetooth"
 PRODUCTS = {1: ("Joy-Con (L)", 0x2006), 2: ("Joy-Con (R)", 0x2007), 3: ("Pro Controller", 0x2009)}
 _ADDRESS = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 
@@ -89,7 +89,7 @@ def read(fat_root, log):
 
 
 def stage(data_root, pairing, log, dry_run=False):
-    """<Data>/ioswitch/bluetooth/{host-address,joycon-pairing.plist} := the dump, or removed when there is none.
+    """<Data>/Switch/bluetooth/{host-address,joycon-pairing.plist} := the dump, or removed when there is none.
     Returns whether anything changed."""
     directory = Path(data_root) / STAGED
     address, plist = directory / "host-address", directory / "joycon-pairing.plist"

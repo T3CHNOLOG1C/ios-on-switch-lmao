@@ -150,7 +150,7 @@ static inline const char *xusb_id_name(uint32_t vbus_id)
 // --- The host interrupts' check (SwitchXHCI.cpp) --------------------------------------------------------------------
 // INTID 71 (xHCI, DT xusb@70090000 GIC_SPI 39, level high, through the LIC) and INTID 72 (falcon mailbox, xusb_mbox
 // GIC_SPI 40) had never fired on this hardware when this was written. Until a line has reached its handler once this
-// boot (ioswitch_interrupt_count), a missing delivery is a never-booted path failing: one line and host mode off for the
+// boot (switch_interrupt_count), a missing delivery is a never-booted path failing: one line and host mode off for the
 // boot (device mode is the proven path), no panic. Once it has fired, a lost interrupt panics as for every proven line.
 //   - delivered: the INTID's handler count moved since the check was armed;
 //   - pending: the interrupter has an event (IMAN.IP, or USBSTS.EINT) that nobody consumed (ERDP unmoved);
@@ -171,7 +171,7 @@ enum xusb_irq_verdict {
 };
 
 struct xusb_irq_sample {
-    uint32_t count;    // the INTID's handler count (ioswitch_interrupt_count)
+    uint32_t count;    // the INTID's handler count (switch_interrupt_count)
     uint32_t erdp;     // ERDP0 (low word), or for the mailbox anything constant
     bool pending;      // an event waits: IMAN.IP or USBSTS.EINT (xHCI), SMI_INTR (mailbox)
     bool deliverable;  // the source asks for an interrupt: IMAN.IE and USBCMD.INTE (xHCI); always (mailbox)

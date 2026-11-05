@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* IOSwitch: no debugfs on XNU. */
+/* Switch: no debugfs on XNU. */
 #ifndef NVXNU_LINUX_DEBUGFS_H
 #define NVXNU_LINUX_DEBUGFS_H
 struct dentry;

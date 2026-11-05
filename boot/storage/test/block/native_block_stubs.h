@@ -1,9 +1,9 @@
-// Host stand-ins for the IOKit/libkern interfaces boot/storage/NativeIOSwitchBlock.cpp uses, for
+// Host stand-ins for the IOKit/libkern interfaces boot/storage/NativeSwitchBlock.cpp uses, for
 // native_block_test.cpp (BUILD.bazel points <IOKit/...> and <libkern/c++/...> here): reference-counted objects that
 // count what is live, a lock that checks its own discipline, a registry of published services, and failure injection
 // for every allocation, attach, start, property and IOMalloc.
-#ifndef IOSWITCH_TEST_IOKIT_STUBS_H
-#define IOSWITCH_TEST_IOKIT_STUBS_H
+#ifndef SWITCH_TEST_IOKIT_STUBS_H
+#define SWITCH_TEST_IOKIT_STUBS_H
 #include <algorithm>
 #include <atomic>
 #include <cstdint>

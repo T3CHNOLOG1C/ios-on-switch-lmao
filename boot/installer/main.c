@@ -89,7 +89,7 @@ static int load_partitions(void) {
     return source_count==1 && !apfs_count;
 }
 static void screen(void) {
-    gfx_clear_color(0xff000000);gfx_con_setpos(24,24);gfx_puts("IOSwitch installer\n\n");
+    gfx_clear_color(0xff000000);gfx_con_setpos(24,24);gfx_puts("iOS installer\n\n");
 }
 static void image_label(char out[41], const char *name) {
     unsigned n=strlen(name);
@@ -212,14 +212,14 @@ static int read_manifest(const char *path) {
 }
 static int image_menu(void) {
     DIR dir;FILINFO info;
-    if(f_opendir(&dir,"IOSWITCH/INSTALL")!=FR_OK) return 0;
+    if(f_opendir(&dir,"IOS/INSTALL")!=FR_OK) return 0;
     for(;;) {
         if(f_readdir(&dir,&info)!=FR_OK) {f_closedir(&dir);return 0;}
         if(!info.fname[0]) break;
         unsigned n=strlen(info.fname);
         if(!(info.fattrib&AM_DIR) && info.fname[0]!='.' && n>4 && n<220 && !strcmp(info.fname+n-4,".IWI")) {
             if(image_count==MAX_IMAGES) {f_closedir(&dir);return 0;}
-            strcpy(image_paths[image_count],"IOSWITCH/INSTALL/");strcat(image_paths[image_count++],info.fname);
+            strcpy(image_paths[image_count],"IOS/INSTALL/");strcat(image_paths[image_count++],info.fname);
         }
     }
     f_closedir(&dir);
@@ -295,7 +295,7 @@ static int publish(void) {
     if(!a || !b) {free(a);free(b);return 1;}
     memcpy(a,entries,table_sectors*512);memcpy(b,backup_entries,table_sectors*512);
     memcpy(a[target_index].type_guid,apfs_type,16);memset(a[target_index].name,0,72);
-    const char *name="IOSWITCH";for(unsigned i=0;name[i];i++) a[target_index].name[i]=name[i];
+    const char *name="iOS";for(unsigned i=0;name[i];i++) a[target_index].name[i]=name[i];
     memcpy(&b[target_index],&a[target_index],sizeof(gpt_entry_t));
     uint32_t crc=crc32_calc(0,(const uint8_t *)a,table_bytes);
     header_crc(&new_primary,crc);header_crc(&new_backup,crc);
@@ -330,7 +330,7 @@ static void run(void) {
     if(publish()) {
         installer_card_offline();gfx_puts("\nGPT UPDATE FAILED.\nRecovery may be required.\nDo not boot this partition.\n");return;
     }
-    screen();gfx_puts("Installation complete.\nDMA writes and GPT update complete.\n\nStandard APFS partition: IOSWITCH\nPower off, return to Hekate, then select\nIOSwitch Native APFS.\n");
+    screen();gfx_puts("Installation complete.\nDMA writes and GPT update complete.\n\nStandard APFS partition: iOS\nPower off, return to Hekate, then select\niOS.\n");
 }
 void ipl_main(void) {
     hw_init();pivot_stack(IPL_LOAD_ADDR);heap_init((void *)IPL_HEAP_START);

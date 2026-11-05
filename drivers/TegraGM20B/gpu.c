@@ -3268,7 +3268,7 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 }
 
 /* GPU present (TegraDisplayFlip/TegraScanoutCopy.h):
- * The display's swap path (boot-arg ioswitch-gpu-copy=1) hands a frame (an IOSurface, pitch-linear BGRA) to the GPU instead
+ * The display's swap path (boot-arg switch-gpu-copy=1) hands a frame (an IOSurface, pitch-linear BGRA) to the GPU instead
  * of waiting for the GPU and swizzling it with the CPU (TegraGM20BUserClient.cpp tegra_gm20b_scanout_copy). One kernel
  * channel in its own address space, which maps the scanout surfaces, the swapped surfaces and every connection's fence
  * page (tgm_fence_page_get), does per frame:

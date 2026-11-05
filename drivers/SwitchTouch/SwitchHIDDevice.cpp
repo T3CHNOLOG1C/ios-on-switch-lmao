@@ -6,7 +6,7 @@
 // the ones NativeHidInput overrides, so this class overrides exactly that set: free, start, stop, getWorkLoop,
 // newTransportString, newProductString, newReportDescriptor; plus slot 183, setReport, as ../SwitchJoyCon does (the
 // motion sensors' Report Interval feature, SwitchHID.h). Its metaclass can only be registered once IOHIDFamily is
-// loaded, so this file is a late object (Drivers.cmake ioswitch_late_object) whose static initializer
+// loaded, so this file is a late object (Drivers.cmake switch_late_object) whose static initializer
 // switch_hid_create() runs, as HidInputProbe.cpp does for NativeHidInput.
 //
 // Report descriptors are what IOHIDEventDriver (IOHIDFamily-2031.120.4, the 21H461 kext's version) turns into iOS
@@ -52,14 +52,14 @@ constexpr uint32_t kVendorID = 0x057e;   // Nintendo
 constexpr uint32_t kProbeScore = 10000;  // over AppleUserHIDEventDriver's 1 and IOHIDEventDriver's own 0
 
 // Logical maxima of X and Y, little endian: the report frame (SwitchHID.h kSwitchTouchReportWidth/Height).
-#if IOSWITCH_PORTRAIT_NATIVE
+#if SWITCH_PORTRAIT_NATIVE
 #define TOUCH_X_MAX 0xcf, 0x02 /* 719 */
 #define TOUCH_Y_MAX 0xff, 0x04 /* 1279 */
 #else
 #define TOUCH_X_MAX 0xff, 0x04 /* 1279 */
 #define TOUCH_Y_MAX 0xcf, 0x02 /* 719 */
 #endif
-static_assert(kSwitchTouchReportWidth == (IOSWITCH_PORTRAIT_NATIVE ? 720 : 1280), "touch descriptor X range");
+static_assert(kSwitchTouchReportWidth == (SWITCH_PORTRAIT_NATIVE ? 720 : 1280), "touch descriptor X range");
 #define FINGER                                                                                                    \
     0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02,                             /* Digitizer: Finger, Collection (Logical) */ \
         0x09, 0x42, 0x09, 0x47, 0x09, 0x34,                         /* Tip Switch, Touch Valid, Untouch */        \
@@ -482,7 +482,7 @@ OSDefineMetaClassAndStructors(SwitchHIDDevice, IOHIDDevice)
     //   * Placement 1, kIOHIDPlacementTypeTop (IOHIDFamily AppleEmbeddedHIDKeys.h): the front of the device. CoreBrightness
     //     takes 2 (Bottom) for its rear ALS (-[CBABModuleiOS addHIDServiceClient:]) and anything else for the front.
     //   * Orientation 8, kIOHIDOrientationTypeSouthWest: where the sensor sits on the screen iOS is given. The BH1730 is
-    //     behind the top-left of the bezel in handheld (landscape) use; the portrait panel (IOSwitchPortrait.h) shows
+    //     behind the top-left of the bezel in handheld (landscape) use; the portrait panel (SwitchPortrait.h) shows
     //     landscape (x, y) at (y, 1279 - x), so the landscape top left is the portrait bottom left. Used only to place
     //     CBDigitizerFilter's hotspot, which needs the device tree's digitizer-filter-window-type (not set here).
     //   * ALSFastIntegrationTime, ALSSuperFastIntegrationTime, ALSSlowIntegrationTime: microseconds (its defaults 99000,

@@ -13,7 +13,7 @@ pins_path, role, mib, out_file, out_pins = sys.argv[1:]
 digest = hashlib.sha256()
 with open(out_file, "wb") as f:
     for i in range(int(mib)):
-        block = hashlib.sha256(b"ioswitch test member %d" % i).digest() * (1 << 15)
+        block = hashlib.sha256(b"SwitchTest member %d" % i).digest() * (1 << 15)
         f.write(block)
         digest.update(block)
 pins = json.loads(Path(pins_path).read_text())

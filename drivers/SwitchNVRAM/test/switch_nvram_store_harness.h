@@ -1,7 +1,7 @@
 // switch_nvram_store_harness.c's exported wrappers of drivers/SwitchNVRAM/SwitchNVRAMStore.h, for
 // switch_nvram_store_test.cpp.
-#ifndef IOSWITCH_SWITCH_NVRAM_STORE_HARNESS_H
-#define IOSWITCH_SWITCH_NVRAM_STORE_HARNESS_H
+#ifndef SWITCH_SWITCH_NVRAM_STORE_HARNESS_H
+#define SWITCH_SWITCH_NVRAM_STORE_HARNESS_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -20,4 +20,4 @@ int nv_pick(const uint8_t *file, size_t length, uint32_t bytes, uint64_t *sequen
 }
 #endif
 
-#endif  // IOSWITCH_SWITCH_NVRAM_STORE_HARNESS_H
+#endif  // SWITCH_SWITCH_NVRAM_STORE_HARNESS_H

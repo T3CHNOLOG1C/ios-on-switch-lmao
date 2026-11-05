@@ -34,7 +34,7 @@ using Bytes = std::vector<uint8_t>;
 
 const std::string &Bl33()
 {
-    static const std::string bytes = ioswitch::test::SourceText("../../../../bazel/pinned/firmware/bl33.bin");
+    static const std::string bytes = switch_ios::test::SourceText("../../../../bazel/pinned/firmware/bl33.bin");
     return bytes;
 }
 

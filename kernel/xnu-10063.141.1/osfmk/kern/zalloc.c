@@ -710,10 +710,10 @@ static struct zone_bool_gen {
  *   Specific zones for which to enable probabilistic guard malloc.
  *   There must be no numbering gap (names after the gap will be ignored).
  */
-#if (DEBUG || DEVELOPMENT) && !(defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS)
+#if (DEBUG || DEVELOPMENT) && !(defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS)
 static TUNABLE(bool, pgz_all, "pgz", true);
 #else
-/* RELEASE, and IOSwitch: a sampled allocation costs a guard-page pmap_enter, a kernel TLB shootdown at its free
+/* RELEASE, and Switch: a sampled allocation costs a guard-page pmap_enter, a kernel TLB shootdown at its free
  * and two backtraces. pgz=1 (or pgz1=<zone>...) still turns it on. */
 static TUNABLE(bool, pgz_all, "pgz", false);
 #endif
@@ -3067,7 +3067,7 @@ kasan_quarantine_resolve(vm_address_t addr, zone_t *zonep)
 /*
  * Peform zero validation on every 5th allocation
  *
- * IOSwitch (r15-offload): on arm64 too. The Tegra X1's A57s spend 4.6 s of a 9.5-minute
+ * Switch (r15-offload): on arm64 too. The Tegra X1's A57s spend 4.6 s of a 9.5-minute
  * boot (kprof r7v 12:33: memcmp_zero_ptr_aligned under zalloc_item/zalloc_ext, 1159
  * samples of 4 ms, the costliest kernel function after the interrupt-masked chains) in
  * the check every allocation makes; Apple's own cores hide it. Freed elements are still

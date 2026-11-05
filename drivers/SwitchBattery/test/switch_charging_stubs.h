@@ -4,8 +4,8 @@
 // translation unit. A work loop runs actions at once on the caller's thread; timers keep a deadline on a fake clock
 // that the test advances; interrupt sources are fired by the test. A stand-in used wrongly (a lock released that is
 // not held, a detach from another provider, a timer fired that is not armed) panics: the scenario fails.
-#ifndef IOSWITCH_TEST_SWITCH_CHARGING_STUBS_H
-#define IOSWITCH_TEST_SWITCH_CHARGING_STUBS_H
+#ifndef SWITCH_TEST_SWITCH_CHARGING_STUBS_H
+#define SWITCH_TEST_SWITCH_CHARGING_STUBS_H
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>

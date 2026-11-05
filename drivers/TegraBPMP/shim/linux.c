@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
- * IOSwitch TegraBPMP shim: the Linux primitives the vendored L4T mail.c / mail_t210.c / mailman.c use, on top of the
+ * Switch TegraBPMP shim: the Linux primitives the vendored L4T mail.c / mail_t210.c / mailman.c use, on top of the
  * XNU boundary in bpxnu.h. Semantics follow the Linux originals closely enough for those three files:
  *   - spin locks are IOSimpleLocks allocated on first use (a compare-and-swap installs one, the loser frees its own);
  *   - completions and semaphores sleep on an event (assert_wait under the spin lock, then block), so a waiter is

@@ -1,4 +1,4 @@
-Vendored, unmodified unless marked "IOSWITCH:":
+Vendored, unmodified unless marked "SWITCH:":
   drivers/firmware/tegra/{bpmp.h,mail.c,mail_t210.c,mailman.c}, include/soc/tegra/{bpmp_abi.h,bpmp_t210_abi.h,tegra_bpmp.h}
     from github.com/CTCaer/switch-l4t-kernel-nvidia, branch linux-dev (switchroot L4T, NVIDIA kernel-4.9 "nvidia" tree)
   include/soc/tegra/doorbell.h

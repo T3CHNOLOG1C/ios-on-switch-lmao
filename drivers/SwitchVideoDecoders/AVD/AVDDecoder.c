@@ -39,7 +39,7 @@
 // kVTDecodeFrame_EnableTemporalProcessing (macOS 27, test/vdectest): clients order by presentation time. H264NVDEC's
 // display-order bumping stays available (kReorder).
 //
-// Log (subsystem com.ioswitch.avd, category decoder): per process, a refusal by TegraNVDEC; per session, one line when
+// Log (subsystem com.brunostjohn.switch.avd, category decoder): per process, a refusal by TegraNVDEC; per session, one line when
 // it starts (on NVDEC, or on the software decoder and why) and one when it ends (frames, mean decode and copy time);
 // once per boot, the clip check (ClipCheck.c) in the first process that may open NVDEC, category selftest.
 #include <CoreFoundation/CoreFoundation.h>
@@ -780,9 +780,9 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
 // VideoToolbox moves on to the next decoder. A process that finds the check running never holds up its registry for
 // the verdict: H.264 is offered at once, 'vp09' and 'hvc1' from a background wait when the verdict comes (the kernel's
 // bounded sleep on it, not polling). Without the registration a remoted check session fails with -12906.
-#define kCheckImplementation CFSTR("com.ioswitch.avd.check")
-#define kCheckDecoderID      CFSTR("com.ioswitch.avd.check.vp09")
-#define kCheckHEVCDecoderID  CFSTR("com.ioswitch.avd.check.hvc1")
+#define kCheckImplementation CFSTR("com.brunostjohn.switch.avd.check")
+#define kCheckDecoderID      CFSTR("com.brunostjohn.switch.avd.check.vp09")
+#define kCheckHEVCDecoderID  CFSTR("com.brunostjohn.switch.avd.check.hvc1")
 
 enum { kVerdictWaits = 10 };  // the kernel's 3 s waits for a verdict: a check that gives none in 30 s is stuck
 
@@ -796,7 +796,7 @@ typedef struct {
 
 static void logCheck(bool ok, const char *line)
 {
-    os_log_t log = os_log_create("com.ioswitch.avd", "selftest");
+    os_log_t log = os_log_create("com.brunostjohn.switch.avd", "selftest");
     if (ok)
         os_log(log, "vdectest: %{public}s (in %{public}s)", line, getprogname());
     else
@@ -940,7 +940,7 @@ __attribute__((visibility("default"))) void AVDRegister(void);
 
 void AVDRegister(void)
 {
-    gLog = os_log_create("com.ioswitch.avd", "decoder");
+    gLog = os_log_create("com.brunostjohn.switch.avd", "decoder");
     if (!nvdec_service_present()) return;  // switch-nvdec=0, or NVDEC did not prove itself at boot: nothing changes
     int error = 0;
     NVDECClient *probe = nvdec_open(&error);

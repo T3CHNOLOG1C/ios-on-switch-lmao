@@ -15,7 +15,7 @@
 #include "TegraGM20BABI.h"
 #include "nvdec.h"
 namespace {
-#include "parse.inc"
+#include "parse.h"
 struct Bind {
     uint64_t range;
     int fd;

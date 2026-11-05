@@ -490,7 +490,7 @@ vnode_pager_get_isSSD(
 	return KERN_SUCCESS;
 }
 
-/* IOSwitch (r14-launch): vnode_pager_decmpfs_chunk for a vnode pager, 0 for any other pager. */
+/* Switch (r14-launch): vnode_pager_decmpfs_chunk for a vnode pager, 0 for any other pager. */
 uint32_t
 vnode_pager_get_decmpfs_chunk(
 	memory_object_t         mem_obj)
@@ -634,12 +634,12 @@ vnode_pager_data_request(
 	    offset < base_offset + size);
 
 	/*
-	 * IOSwitch (r14-launch): the faulting thread's wait for this page-in, for its process (kprof waits line): on a
+	 * Switch (r14-launch): the faulting thread's wait for this page-in, for its process (kprof waits line): on a
 	 * cryptex (a disk image: the dyld shared cache) or any other volume.
 	 */
 	const uint64_t began = mach_absolute_time();
 	const kern_return_t kr = vnode_pager_cluster_read(vnode_object, base_offset, offset, io_streaming, size);
-	ioswitch_kprof_wait(vnode_pager_virtualdev(vnode_object->vnode_handle) ? 3 : 0, mach_absolute_time() - began,
+	switch_kprof_wait(vnode_pager_virtualdev(vnode_object->vnode_handle) ? 3 : 0, mach_absolute_time() - began,
 	    (uint64_t)size);
 	return kr;
 }

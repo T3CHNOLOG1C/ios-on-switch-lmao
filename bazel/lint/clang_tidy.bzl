@@ -50,7 +50,7 @@ LANGUAGES = {
 # Apple clang's XNU type-system builtins (kalloc_type, IOMallocType) take a type; upstream clang has none of them. For
 # analysis only, macros that drop the type stand in (they never reach a real compile).
 EXTRA_ARGS = [
-    "-D__builtin_xnu_type_signature(t)=\"ioswitch-lint\"",
+    "-D__builtin_xnu_type_signature(t)=\"switch-lint\"",
     "-D__builtin_xnu_type_summary(t)=0u",
     "-D__builtin_xnu_types_compatible(a,b)=1",
     "-Wno-unknown-warning-option",

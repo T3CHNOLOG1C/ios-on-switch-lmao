@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: the Linux errno values the vendored sources return (asm-generic/errno*.h). */
+/* Switch TegraBPMP shim: the Linux errno values the vendored sources return (asm-generic/errno*.h). */
 #ifndef BPXNU_LINUX_ERRNO_H
 #define BPXNU_LINUX_ERRNO_H
 #define EPERM 1

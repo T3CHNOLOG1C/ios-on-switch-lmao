@@ -11,7 +11,7 @@ _PrelinkLinkKASLROffsets), with what an arm64e MH_FILESET source needs on top:
   * branches: the kernel collection builder removed the kexts' stubs (BL straight into Apple's kernel), so every
     B/BL into the kernel is re-aimed at our kernel's function of the same name;
   * kernel targets without a name: functions go to a trampoline that panics naming the Apple address, data to
-    _ioswitch_prelink_cut_null; both are listed in the report (nothing is silently wrong).
+    _switch_prelink_cut_null; both are listed in the report (nothing is silently wrong).
 usage: emit26.py OUR_KERNEL KERNELCACHE OUTPUT   (writes OUTPUT and OUTPUT.json)
 """
 import base64, bisect, collections, copy, hashlib, json, os, struct, subprocess, sys, tempfile
@@ -22,9 +22,9 @@ sys.path.insert(0, HERE)
 from kcinfo import KC, ROOTS, decode8
 from native_prelink import macho, exports, backed_offset
 
-CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"): "_ioswitch_prelink_cut_null",
+CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"): "_switch_prelink_cut_null",
         ("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBHostPlatformProperties"): None,
-        ("com.apple.iokit.IOAccessoryManager", "com.apple.driver.AppleOnboardSerial"): "_ioswitch_prelink_cut_null",
+        ("com.apple.iokit.IOAccessoryManager", "com.apple.driver.AppleOnboardSerial"): "_switch_prelink_cut_null",
         ("com.apple.iokit.IOAccessoryManager", "com.apple.iokit.IOSerialFamily"): None}
 DEFERRED_PERSONALITIES = {"com.apple.iokit.IOUSBHostFamily": ("AppleUSBHostResources", "AppleUSBHostResourcesTypeC"),
                           "com.apple.iokit.IOUSBMassStorageDriver": ("IOUSBMassStorageResource",)}
@@ -184,12 +184,12 @@ def main():
     tramp_words = []
     tramp_base = stub_va + len(stubs)
     panic = nsym.get("_panic")
-    cut_null = nsym.get("_ioswitch_prelink_cut_null")
+    cut_null = nsym.get("_switch_prelink_cut_null")
     def trampoline(apple):
         if apple not in tramp:
             at = tramp_base + 4 * len(tramp_words)
             tramp[apple] = at
-            msg = b"ioswitch prelink: kext called Apple kernel function 0x%x, which has no name here\n" % apple
+            msg = b"SwitchPrelink: kext called Apple kernel function 0x%x, which has no name here\n" % apple
             msg += b"\0" * (-len(msg) % 4)
             # adr x0, msg ; b _panic ; msg
             imm = 8
@@ -343,7 +343,7 @@ def main():
     if offsets and (offsets[0] < 0 or offsets[-1] > 0xFFFFFFFF): raise SystemExit("KASLR offset outside 32 bits")
     metadata = {"_PrelinkInfoDictionary": entries,
                 "_PrelinkLinkKASLROffsets": struct.pack("<%dI" % (len(offsets) + 1), len(offsets), *offsets),
-                "_PrelinkKCID": hashlib.sha256(b"IOSWITCH-26.5.2-A64X-KCID\0" + native_data + hashlib.sha256(d).digest()).digest()[:16]}
+                "_PrelinkKCID": hashlib.sha256(b"SWITCH-26.5.2-A64X-KCID\0" + native_data + hashlib.sha256(d).digest()).digest()[:16]}
     xml = ET.tostring(to_xml(metadata), encoding="utf-8").replace(b" />", b"/>") + b"\0"
     xml += bytes(-len(xml) % PAGE)
     info_va = (max(s["va"] + s["size"] for s in native["segments"] if s["size"]) + PAGE - 1) & ~(PAGE - 1)

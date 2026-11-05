@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: operating performance points (Linux 4.9 drivers/base/power/opp) as one sorted table per device,
+ * Switch shim: operating performance points (Linux 4.9 drivers/base/power/opp) as one sorted table per device,
  * which is all cvb.c builds and clk-dfll.c searches (CPU0's DFLL table: frequency -> CVB voltage).
  */
 #ifndef TDFLL_LINUX_PM_OPP_H

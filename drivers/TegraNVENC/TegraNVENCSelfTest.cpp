@@ -5,7 +5,7 @@
 // nvenc_drv.h setup layout on NVENC 5.0 and the input surface layout together, against an independent decoder, with
 // nothing taken on trust from the encoder's own status.
 //
-// The vectors (selftest/E3Vectors.inc) come from the code that runs on the device: the plug-in's H264NVENC.c builds the
+// The vectors (selftest/E3Vectors.h) come from the code that runs on the device: the plug-in's H264NVENC.c builds the
 // two NVENC submits (an IDR, then a P picture predicting from NVENC's reconstruction of it; High profile, CABAC, 8x8
 // transform, QP 26) and AVD's H264NVDEC.c the two NVDEC submits from this stream's own SPS, PPS and slice headers
 // (SwitchVideoEncoders/test/e3gen). The steps go from what needs least of the firmware to what needs most, each with
@@ -45,11 +45,11 @@
 #pragma clang diagnostic ignored "-Wunused-const-variable"
 #pragma clang diagnostic ignored "-Wunused-variable"
 #include "../TegraNVDEC/nvidia/nvdec_drv.h"
-#include "selftest/E3Vectors.inc"
+#include "selftest/E3Vectors.h"
 #pragma clang diagnostic pop
 
 static_assert(sizeof(kE3DecSetup0) == sizeof(nvdec_h264_pic_s) && sizeof(kE3DecSetup1) == sizeof(nvdec_h264_pic_s),
-              "E3Vectors.inc was generated against another nvdec_drv.h");
+              "E3Vectors.h was generated against another nvdec_drv.h");
 static_assert(sizeof(kE3EncSetup0) == kE3EncSetupBytes && kE3EncSetupBytes <= TEGRA_NVENC_MAX_SETUP, "setup");
 
 namespace {

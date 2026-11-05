@@ -1882,19 +1882,19 @@ proc_handle_critical_exit(proc_t p, int rv)
 	}
 }
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT /* global; XNU_NATIVE_RAM_BLOCK is kern_exec.o's only */
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT /* global; XNU_NATIVE_RAM_BLOCK is kern_exec.o's only */
 /*
  * watchdogd's launchd job is _PanicOnCrash (PanicOnConsecutiveCrash): launchd spawns its relaunch with
  * POSIX_SPAWN_PANIC_ON_CRASH. Here a watchdogd that dies is a fault in our userspace-watchdog support (r7p4: its sandbox
  * refused the IOWatchdog open and it os_crash()ed), never a hang, so it takes no panic: its crash behavior is dropped and
- * drivers/NativeIOSwitchWatchdog turns userspace monitoring off, so the next relaunch reads "disabled" and exits 0 and
+ * drivers/NativeSwitchWatchdog turns userspace monitoring off, so the next relaunch reads "disabled" and exits 0 and
  * launchd leaves it down (one kernel log line). exit(0) is watchdogd's own way out and is left alone, and so is its end
  * at shutdown. Only a hang that a running watchdogd reports panics (the IOWatchdog's "userspace watchdog timeout").
  */
-extern void ioswitch_watchdogd_crashed(int pid, int signal);
+extern void switch_watchdogd_crashed(int pid, int signal);
 extern int get_system_inshutdown(void);
 static void
-native_ioswitch_watchdogd_exit(proc_t p, int rv)
+native_switch_watchdogd_exit(proc_t p, int rv)
 {
 	/* At shutdown launchd's SIGTERM ends it (no crash), and the kernel's shutdown check stays Apple's. */
 	if (strncmp(p->p_name, "watchdogd", sizeof(p->p_name)) != 0 || (WIFEXITED(rv) && WEXITSTATUS(rv) == 0) ||
@@ -1903,7 +1903,7 @@ native_ioswitch_watchdogd_exit(proc_t p, int rv)
 	}
 	p->p_crash_behavior = 0;
 	p->p_crash_behavior_deadline = 0;
-	ioswitch_watchdogd_crashed(proc_getpid(p), WIFSIGNALED(rv) ? WTERMSIG(rv) : 0);
+	switch_watchdogd_crashed(proc_getpid(p), WIFSIGNALED(rv) ? WTERMSIG(rv) : 0);
 }
 #endif
 
@@ -1927,8 +1927,8 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 	    p->p_exit_reason ? p->p_exit_reason->osr_namespace : 0,
 	    p->p_exit_reason ? p->p_exit_reason->osr_code : 0);
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT /* global; XNU_NATIVE_RAM_BLOCK is kern_exec.o's only */
-	native_ioswitch_watchdogd_exit(p, rv);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT /* global; XNU_NATIVE_RAM_BLOCK is kern_exec.o's only */
+	native_switch_watchdogd_exit(p, rv);
 #endif
 	if (p->p_crash_behavior != 0 || p == initproc) {
 		proc_handle_critical_exit(p, rv);
@@ -2177,9 +2177,9 @@ skipcheck:
 void
 proc_exit(proc_t p)
 {
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-	extern void native_ioswitch_migration_process(proc_t, int, int);
-	native_ioswitch_migration_process(p, 1, p->p_xstat);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	extern void native_switch_migration_process(proc_t, int, int);
+	native_switch_migration_process(p, 1, p->p_xstat);
 #endif
 	proc_t q;
 	proc_t pp;
@@ -2234,12 +2234,12 @@ proc_exit(proc_t p)
 	proc_unlock(p);
 	pid = proc_getpid(p);
 	exitval = p->p_xstat;
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	{
 		static int proclog = -1;
 		if (proclog < 0) {
 			int value = 0;
-			(void)PE_parse_boot_argn("ioswitch-proclog", &value, sizeof(value));
+			(void)PE_parse_boot_argn("switch-proclog", &value, sizeof(value));
 			proclog = value;
 		}
 		if (proclog) {

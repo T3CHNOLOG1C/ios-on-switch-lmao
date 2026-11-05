@@ -17,7 +17,7 @@ _T = re.escape(OLD_TREE)
 RULES = [
     # Files of the tree package by label.
     (re.compile(r'//' + _T + r":(drivers|kits)/([^/:\"'\s]+)/"), r'//\1/\2:'),
-    (re.compile(r'//' + _T + r':diagnostics/ioswitch/'), r'//diagnostics/ioswitch:'),
+    (re.compile(r'//' + _T + r':diagnostics/switch/'), r'//diagnostics/switch:'),
     (re.compile(r'//' + _T + r':overlay/'), r'//overlay:'),
     # The tree's own subpackages (drivers/NativeMetal, drivers/TegraGM20BMetal, their tests).
     (re.compile(r'//' + _T + r'/(drivers|kits|diagnostics|overlay)/'), r'//\1/'),

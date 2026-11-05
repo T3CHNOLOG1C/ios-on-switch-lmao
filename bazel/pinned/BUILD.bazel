@@ -4,10 +4,10 @@
 #
 #   kernel/*/original-bindings.S, kernel/*/*ABI.h, GuardedPMGRSlots.inc
 #       Absolute-address tables into the 21H461 kernelcache and ABI headers, written by the kernel tree's audit scripts
-#       (build-ioswitch-root-block.py, build-native-legacy-display.py, build-native-hid-input.py,
+#       (build-switch-root-block.py, build-native-legacy-display.py, build-native-hid-input.py,
 #       build-platform-power.py, all retired) from QEMU-boot interface audits that cannot run in a sandbox.
 #       kernel/native-aes/original-bindings.S: NativeAES's, from the same audits.
-#   kernel/verified-root-ioswitch/trusted-key.S
+#   kernel/verified-root-switch/trusted-key.S
 #       The owner verification key (openssl, never regenerated).
 #   data-seed/data-v10.dbr
 #       NativeRamBlock's packed 1 GiB Data seed (DBRDISK1). Contains Apple-derived /private/var content from the

@@ -5,7 +5,7 @@
 //   * HEVCNVDEC decodes every clip over a fake engine: each submit passes the kernel's own checker
 //     (TegraNVDECCheck.h), pictures come out in FFmpeg's output order, every reference slot names a picture still
 //     in the DPB, and refused submits (encryption, histogram, ecdma, v1-v3, sizes, output modes) are refused;
-//   * --selftest writes the kernel's N3 HEVC picture (clip K) as drivers/TegraNVDEC/selftest/HEVCPicture176.inc.
+//   * --selftest writes the kernel's N3 HEVC picture (clip K) as drivers/TegraNVDEC/selftest/HEVCPicture176.h.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

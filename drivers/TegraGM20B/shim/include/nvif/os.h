@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * IOSwitch replacement for nouveau's include/nvif/os.h: the small slice of the Linux kernel API that
+ * Switch replacement for nouveau's include/nvif/os.h: the small slice of the Linux kernel API that
  * the vendored nvkm code uses, implemented on XNU (shim/linux.c + shim/xnu_glue.cpp via nvxnu.h).
  * Nothing in here includes an XNU header.
  */

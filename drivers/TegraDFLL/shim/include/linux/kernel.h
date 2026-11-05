@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: the slice of the Linux 4.9 kernel API that the vendored L4T DFLL sources use (clk-dfll.c,
+ * Switch shim: the slice of the Linux 4.9 kernel API that the vendored L4T DFLL sources use (clk-dfll.c,
  * clk-tegra124-dfll-fcpu.c, cvb.c, speedo-tegra210.c), freestanding. Everything that is not a subsystem of its own
  * lives here; the other shim headers include this one. Semantics follow Linux 4.9 (include/linux/kernel.h, err.h,
  * compiler.h, printk.h, bug.h, jiffies.h, ktime.h, spinlock.h, io.h, iopoll.h) wherever the vendored code depends on

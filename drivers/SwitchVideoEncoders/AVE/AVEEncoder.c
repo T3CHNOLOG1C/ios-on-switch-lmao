@@ -30,7 +30,7 @@
 // picture predicts from the previous picture's reconstruction (two buffers in turn); a key frame is an IDR. When E3
 // could not prove P pictures (TegraNVENCInfo.p_frames 0), every picture is an IDR.
 //
-// Log (subsystem com.ioswitch.ave, category encoder): per process, a refusal by TegraNVENC; per session, one line when
+// Log (subsystem com.brunostjohn.switch.ave, category encoder): per process, a refusal by TegraNVENC; per session, one line when
 // it starts and one when it ends (frames, bytes, mean copy and encode time); once per boot, the encode check
 // (EncodeCheck.c) in the first process that may open NVENC, category selftest.
 #include <CoreFoundation/CoreFoundation.h>
@@ -718,7 +718,7 @@ static void selfTest(void *context)
     (void)context;
     char line[512];
     const bool ok = encode_check(NULL, NULL, 30.0, line, sizeof(line));
-    os_log_t log = os_log_create("com.ioswitch.ave", "selftest");
+    os_log_t log = os_log_create("com.brunostjohn.switch.ave", "selftest");
     if (ok)
         os_log(log, "vetest: %{public}s (in %{public}s)", line, getprogname());
     else
@@ -741,7 +741,7 @@ __attribute__((visibility("default"))) void H264H7EncoderRegister(void);
 
 void H264H7EncoderRegister(void)
 {
-    gLog = os_log_create("com.ioswitch.ave", "encoder");
+    gLog = os_log_create("com.brunostjohn.switch.ave", "encoder");
     if (!nvenc_service_present()) return;  // switch-nvdec=0, or NVENC did not prove itself at boot: nothing changes
     const OSStatus status = registerEncoder();
     if (status) {

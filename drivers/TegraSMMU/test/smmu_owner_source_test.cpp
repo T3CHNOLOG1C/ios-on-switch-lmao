@@ -11,8 +11,8 @@
 
 #include "bazel/testing/source_text.h"
 
-using ioswitch::test::PackagePath;
-using ioswitch::test::SourceText;
+using switch_ios::test::PackagePath;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 
 TEST(TegraSMMUSource, OneOwnerOfTheGlobalRegisters)

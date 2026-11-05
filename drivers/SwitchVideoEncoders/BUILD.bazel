@@ -64,5 +64,5 @@ ios_binary(
         "IOKit",
     ],
     pagesize = "4096",
-    sign_identifier = "com.ioswitch.ave",
+    sign_identifier = "com.brunostjohn.switch.ave",
 )

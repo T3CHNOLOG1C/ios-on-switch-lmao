@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_RAM_LEDGER_H
-#define IOSWITCH_RAM_LEDGER_H
+#ifndef SWITCH_RAM_LEDGER_H
+#define SWITCH_RAM_LEDGER_H
 /* Native little-endian ADT wire format. Filled only after live FDT/MC gates. */
 #define IOSW_RAM_MAGIC 0x324d4152u
 #define IOSW_RAM_RANGES 96u

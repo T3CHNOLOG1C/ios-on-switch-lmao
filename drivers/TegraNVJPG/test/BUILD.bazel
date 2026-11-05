@@ -15,7 +15,7 @@ host_library(
         "nvjpg_host.c",
         "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
         "//drivers/TegraNVJPG:nvidia/nvjpg_drv.h",
-        "//drivers/TegraNVJPG:selftest/J3Vectors.inc",
+        "//drivers/TegraNVJPG:selftest/J3Vectors.h",
     ],
     copts = ["-O1"],
     defines = [

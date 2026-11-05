@@ -32,8 +32,8 @@ host_shims(
 host_library(
     name = "headers",
     hdrs = [
-        "//drivers/ArmGIC:IOSwitchInterrupts.h",
-        "//drivers/NativeMobileDisplay:IOSwitchPortrait.h",
+        "//drivers/ArmGIC:SwitchInterrupts.h",
+        "//drivers/NativeMobileDisplay:SwitchPortrait.h",
         "//drivers/SwitchPower:SwitchPower.h",
         "//drivers/SwitchTouch:SwitchHID.h",
         "//drivers/SwitchTouch:SwitchTouch.h",

@@ -782,7 +782,7 @@ pub(crate) fn raise_to_user_initiated() {}
 
 /// Run this thread at the user-interactive quality of service, whatever its class: a thread of
 /// the runtime's own that takes command buffers to their handlers ([`spawn_user_interactive`]).
-// iOS as macOS (ioswitch r6-lows): built for aarch64-apple-ios, these threads ran at QOS_CLASS_DEFAULT, below the render
+// iOS as macOS (ios-on-switch-lmao r6-lows): built for aarch64-apple-ios, these threads ran at QOS_CLASS_DEFAULT, below the render
 // server that waits on them (waitUntilScheduled each frame) and level with every busy daemon: under load commit to completion
 // took 11-38 ms (frontend gpu=) where the kernel's fence took 2-5 ms, and waitUntilScheduled 5-34 ms per command buffer.
 #[cfg(any(target_os = "macos", target_os = "ios"))]

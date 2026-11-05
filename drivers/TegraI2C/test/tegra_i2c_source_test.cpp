@@ -11,7 +11,7 @@
 TEST(TegraI2CSource, OnlyI2C3IsChained)
 {
     const std::string table =
-        ioswitch::test::Between(ioswitch::test::SourceText("../TegraI2C.cpp"), "constexpr BusInfo kBus[kBuses] = {", "};");
+        switch_ios::test::Between(switch_ios::test::SourceText("../TegraI2C.cpp"), "constexpr BusInfo kBus[kBuses] = {", "};");
     // One entry per bus: "{base, ..., chained, request, channel},  // name".
     std::vector<std::string> chained;
     const std::regex entry(R"(\{\s*(0x[0-9a-fA-F]+),[^{}]*?,\s*(true|false),[^{}]*\})");

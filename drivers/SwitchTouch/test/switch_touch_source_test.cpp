@@ -9,9 +9,9 @@
 
 #include "bazel/testing/source_text.h"
 
-using ioswitch::test::Between;
-using ioswitch::test::Body;
-using ioswitch::test::SourceText;
+using switch_ios::test::Between;
+using switch_ios::test::Body;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 

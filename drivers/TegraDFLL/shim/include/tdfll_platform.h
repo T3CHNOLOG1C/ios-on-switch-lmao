@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch: the seam between the generic Linux shim (shim/linux.c) and the T210B01 board pieces (platform.c), and what
+ * Switch: the seam between the generic Linux shim (shim/linux.c) and the T210B01 board pieces (platform.c), and what
  * dfll.c needs from both. Linux-side only (force-included prelude assumed).
  */
 #ifndef TDFLL_PLATFORM_H

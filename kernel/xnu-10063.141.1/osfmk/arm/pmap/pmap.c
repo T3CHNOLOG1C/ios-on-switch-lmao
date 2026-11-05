@@ -2296,7 +2296,7 @@ pmap_bootstrap(
 	asid_bitmap = (bitmap_t*)phystokv(avail_start);
 	avail_start = round_page(avail_start + asid_table_size);
 
-	pmap_ioswitch_bootstrap_check(pmap_struct_start, avail_start);
+	pmap_switch_bootstrap_check(pmap_struct_start, avail_start);
 	memset((char *)phystokv(pmap_struct_start), 0, avail_start - pmap_struct_start);
 
 	vm_first_phys = gPhysBase;
@@ -2609,7 +2609,7 @@ pmap_virtual_region(
 	unsigned long low_global_vr_mask = 0;
 	vm_map_size_t low_global_vr_size = 0;
 
-	if (pmap_ioswitch_ram_enabled()) {
+	if (pmap_switch_ram_enabled()) {
 		/* Full native RAM starts below low globals. Reserve the union of
 		 * the low ranges once, then retain the separate high window. */
 		if (region_select == 0) {
@@ -2682,22 +2682,22 @@ static bool iosw_dense_pages;
 static pmap_paddr_t iosw_stolen_end;
 
 unsigned int
-pmap_ioswitch_dense_page_count(void)
+pmap_switch_dense_page_count(void)
 {
-    return pmap_ioswitch_ram_enabled() ? 0x100000 : 0;
+    return pmap_switch_ram_enabled() ? 0x100000 : 0;
 }
 
 boolean_t
-pmap_ioswitch_page_reserved(ppnum_t pnum)
+pmap_switch_page_reserved(ppnum_t pnum)
 {
     pmap_paddr_t pa=(pmap_paddr_t)pnum << PAGE_SHIFT;
-    return pmap_ioswitch_ram_reserved(pnum) || pa < iosw_stolen_end;
+    return pmap_switch_ram_reserved(pnum) || pa < iosw_stolen_end;
 }
 
 boolean_t
-pmap_ioswitch_begin_dense_pages(void)
+pmap_switch_begin_dense_pages(void)
 {
-    if (!pmap_ioswitch_dense_page_count()) return FALSE;
+    if (!pmap_switch_dense_page_count()) return FALSE;
     if (need_ram_ranges_init) initialize_ram_ranges();
     iosw_stolen_end=first_avail;
     first_avail=gPhysBase;
@@ -2736,11 +2736,11 @@ initialize_ram_ranges(void)
 	assert(first <= end);
 	assert(first == (first & ~PAGE_MASK));
 	assert(end == (end & ~PAGE_MASK));
-    if (pmap_ioswitch_dense_page_count()) {
+    if (pmap_switch_dense_page_count()) {
         first_avail=gPhysBase;
         avail_page_count=0;
         for (pmap_paddr_t pa=gPhysBase;pa<end;pa+=PAGE_SIZE)
-            if (!pmap_ioswitch_page_reserved((ppnum_t)atop(pa))) ++avail_page_count;
+            if (!pmap_switch_page_reserved((ppnum_t)atop(pa))) ++avail_page_count;
     } else avail_page_count = atop(end - first);
 
 	need_ram_ranges_init = false;
@@ -2784,14 +2784,14 @@ pmap_next_page(
 		initialize_ram_ranges();
 	}
 
-    if (pmap_ioswitch_dense_page_count() && !iosw_dense_pages) {
-        while (first_avail<avail_end && pmap_ioswitch_page_reserved((ppnum_t)atop(first_avail)))
+    if (pmap_switch_dense_page_count() && !iosw_dense_pages) {
+        while (first_avail<avail_end && pmap_switch_page_reserved((ppnum_t)atop(first_avail)))
             first_avail+=PAGE_SIZE;
     }
     if (first_avail != avail_end) {
 		*pnum = (ppnum_t)atop(first_avail);
 		first_avail += PAGE_SIZE;
-        if (!iosw_dense_pages || !pmap_ioswitch_page_reserved(*pnum)) {
+        if (!iosw_dense_pages || !pmap_switch_page_reserved(*pnum)) {
             assert(avail_page_count > 0);
             --avail_page_count;
         }
@@ -15075,6 +15075,6 @@ pmap_test_text_corruption_internal(pmap_paddr_t pa)
 
 #endif /* DEVELOPMENT || DEBUG */
 
-#if defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS && !XNU_MONITOR
-#include <arm64/ioswitch_smp_tables.inc>
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS && !XNU_MONITOR
+#include <arm64/switch_smp_tables.h>
 #endif

@@ -599,7 +599,7 @@ static void rateControl(void)
 
 int main(void)
 {
-    gLog = os_log_create("com.ioswitch.ave", "host-test");
+    gLog = os_log_create("com.brunostjohn.switch.ave", "host-test");
     sizes();
     driverControls();
     parameterSets();
@@ -607,7 +607,7 @@ int main(void)
     rateControl();
     // A class ID of our own, which the sessions name below: the Mac's own H.264 encoders would otherwise win.
     const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoEncoder_IsHardwareAccelerated};
-    const void *values[] = {CFSTR("com.ioswitch.ave-host"), kCFBooleanTrue};
+    const void *values[] = {CFSTR("com.brunostjohn.switch.ave-host"), kCFBooleanTrue};
     CFDictionaryRef info =
         CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     const OSStatus registered = VTRegisterVideoEncoderWithInfo(kCMVideoCodecType_H264, info, createInstance);
@@ -617,7 +617,7 @@ int main(void)
         return 1;
     }
     const void *specKeys[] = {kVTVideoEncoderSpecification_EncoderID};
-    const void *specValues[] = {CFSTR("com.ioswitch.ave-host")};
+    const void *specValues[] = {CFSTR("com.brunostjohn.switch.ave-host")};
     CFDictionaryRef spec = CFDictionaryCreate(NULL, specKeys, specValues, 1, &kCFTypeDictionaryKeyCallBacks,
                                               &kCFTypeDictionaryValueCallBacks);
     static const struct {

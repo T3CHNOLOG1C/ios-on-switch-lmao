@@ -296,7 +296,7 @@ pub extern "C" fn nmb_device_work_stats(device: *const NmbDevice, out: *mut u64)
 
 /// The runtime's own counts into the caller's ten words: device memory allocated (bytes), pooled, dedicated and imported blocks
 /// live, timeline waits (CPU waits for the GPU), render variants' VkPipelines made, those linked from libraries, fragment
-/// shader libraries made, textures given shadow images, and dedicated requests a spare block served (the runtime's ioswitch
+/// shader libraries made, textures given shadow images, and dedicated requests a spare block served (the runtime's ios-on-switch-lmao
 /// spare dedicated blocks, `memory.rs`).
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_device_counts(device: *const NmbDevice, out: *mut u64) -> bool {
@@ -316,7 +316,7 @@ pub extern "C" fn nmb_device_counts(device: *const NmbDevice, out: *mut u64) -> 
     })
 }
 
-/// The runtime's host texel copies by route, into the caller's seven words (ioswitch m2v 0116): `replaceRegion` into the texture's
+/// The runtime's host texel copies by route, into the caller's seven words (ios-on-switch-lmao m2v 0116): `replaceRegion` into the texture's
 /// bytes on the CPU, on the host into its image, staged for the next submission, by a submission waited for; then `getBytes` from
 /// the texture's bytes, on the host from its image, by a submission waited for.
 #[unsafe(no_mangle)]

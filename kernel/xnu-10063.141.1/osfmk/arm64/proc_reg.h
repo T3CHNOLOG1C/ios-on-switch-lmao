@@ -2376,15 +2376,15 @@ typedef enum {
 #define CTR_EL0_IDC       (1ULL << CTR_EL0_IDC_SHIFT)
 
 /*
- * Operations of ioswitch_user_cache_maintenance() (machine_routines_asm.s), which performs EL0 cache maintenance
+ * Operations of switch_user_cache_maintenance() (machine_routines_asm.s), which performs EL0 cache maintenance
  * trapped by SCTLR_EL1.UCI (sleh.c handle_msr_trap) on cores whose instruction fetch is not coherent with their data
- * caches (CTR_EL0.IDC == 0). IOSWITCH_UCM_SYNC_I is what IC IVAU has to mean there: DC CVAU over the range, DSB ISH,
+ * caches (CTR_EL0.IDC == 0). SWITCH_UCM_SYNC_I is what IC IVAU has to mean there: DC CVAU over the range, DSB ISH,
  * IC IVAU over the range, DSB ISH.
  */
-#define IOSWITCH_UCM_SYNC_I   0
-#define IOSWITCH_UCM_DC_CVAU  1
-#define IOSWITCH_UCM_DC_CVAC  2
-#define IOSWITCH_UCM_DC_CIVAC 3
+#define SWITCH_UCM_SYNC_I   0
+#define SWITCH_UCM_DC_CVAU  1
+#define SWITCH_UCM_DC_CVAC  2
+#define SWITCH_UCM_DC_CIVAC 3
 
 
 #ifdef __ASSEMBLER__

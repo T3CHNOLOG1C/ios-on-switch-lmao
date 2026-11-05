@@ -640,7 +640,7 @@ uint32_t a64x_dead_regs_flow_fn(const uint32_t *fn, int n, int site, uint32_t ca
     return dead;
 }
 
-#include "a64x_vlive.inc"
+#include "a64x_vlive.h"
 
 struct emit {
     uint32_t *out;
@@ -1263,7 +1263,7 @@ static int stub_fcma(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t vde
     return e.n;
 }
 
-#include "a64x_fp16.inc"
+#include "a64x_fp16.h"
 
 int a64x_stub(uint32_t w, uint64_t site_pc, uint64_t stub_pc, uint32_t dead, uint32_t *out, int max)
 {

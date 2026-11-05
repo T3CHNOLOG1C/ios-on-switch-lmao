@@ -1,7 +1,7 @@
 // switch_usb_host_harness.c's exported wrappers of drivers/SwitchUSB/SwitchPDPolicy.h and XusbPorts.h (and its fake
 // xHCI capability space), for switch_usb_host_test.cpp.
-#ifndef IOSWITCH_SWITCH_USB_HOST_HARNESS_H
-#define IOSWITCH_SWITCH_USB_HOST_HARNESS_H
+#ifndef SWITCH_SWITCH_USB_HOST_HARNESS_H
+#define SWITCH_SWITCH_USB_HOST_HARNESS_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -44,4 +44,4 @@ int xhci_deliverable(uint32_t iman, uint32_t usbcmd);
 }
 #endif
 
-#endif  // IOSWITCH_SWITCH_USB_HOST_HARNESS_H
+#endif  // SWITCH_SWITCH_USB_HOST_HARNESS_H

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* IOSwitch shim: notifier blocks and return codes (Linux 4.9 include/linux/notifier.h). */
+/* Switch shim: notifier blocks and return codes (Linux 4.9 include/linux/notifier.h). */
 #ifndef TDFLL_LINUX_NOTIFIER_H
 #define TDFLL_LINUX_NOTIFIER_H
 struct notifier_block;

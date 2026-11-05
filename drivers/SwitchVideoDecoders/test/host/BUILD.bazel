@@ -76,7 +76,7 @@ host_library(
         "//drivers/SwitchVideoDecoders:AVD/VP9NVDEC.c",
         "//drivers/SwitchVideoDecoders:AVD/VP9Probs.c",
         "//drivers/SwitchVideoDecoders:AVD/VP9Syntax.c",
-        "//drivers/SwitchVideoDecoders:AVD/VP9Tables.inc",
+        "//drivers/SwitchVideoDecoders:AVD/VP9Tables.h",
         "//drivers/TegraNVDEC:nvidia/clc5b0.h",
         "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
     ],

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: zeroed kernel heap (IOMalloc via shim/xnu_glue.cpp). */
+/* Switch TegraBPMP shim: zeroed kernel heap (IOMalloc via shim/xnu_glue.cpp). */
 #ifndef BPXNU_LINUX_SLAB_H
 #define BPXNU_LINUX_SLAB_H
 #include <linux/kernel.h>

@@ -13,7 +13,7 @@
 //   SwitchWLAN: firmware: wl0: ... version 7.35.252.108 ... / radio up, MAC ... / en0 ready
 //   SwitchWLAN: joining '<ssid>' (WPA2) ... / joined '<ssid>' on channel C, -R dBm / link lost (reason N)
 // A failed bring-up stage prints "SwitchWLAN: stopped at <stage>: <why>" and leaves the radio idle; the boot goes on.
-// Interrupt rules (drivers/ArmGIC/IOSwitchInterrupts.h): no polled mode. The MSI line that cannot be attached, or
+// Interrupt rules (drivers/ArmGIC/SwitchInterrupts.h): no polled mode. The MSI line that cannot be attached, or
 // a chip interrupt latched but never delivered, panics with one line naming the registers and the GIC state. The
 // watchdog is not a polling fallback: once a second it looks at what no interrupt reports (the firmware's crash
 // flags, a bus reading all ones, the chip's memory decoding turned off by a self-reset, all seen by nxk on Erista).
@@ -35,7 +35,7 @@
 #include <pexpert/pexpert.h>
 #include <sys/errno.h>
 #include <sys/random.h>
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "../SwitchBluetooth/SwitchCoex.h"
 #include "SwitchWLANAwdlRadio.h"
 #include "SwitchWLANCoex.h"
@@ -539,11 +539,11 @@ void SwitchWLAN::msiFired(OSObject *owner, IOInterruptEventSource *, int)
 void SwitchWLAN::attachInterrupt()
 {
     if (msi_) return;  // one owner per INTID: kept across chip recoveries
-    IOService *nub = ioswitch_interrupt_nub(kMsiIntid, false);
+    IOService *nub = switch_interrupt_nub(kMsiIntid, false);
     msi_ = nub ? IOInterruptEventSource::interruptEventSource(this, &SwitchWLAN::msiFired, nub, 0) : nullptr;
     if (!msi_ || loop_->addEventSource(msi_) != kIOReturnSuccess) {
         char gic[160];
-        ioswitch_interrupt_describe(kMsiIntid, gic, sizeof(gic));
+        switch_interrupt_describe(kMsiIntid, gic, sizeof(gic));
         panic("SwitchWLAN: cannot attach the PCIe MSI interrupt (INTID %u, nub %p): %s", kMsiIntid, nub, gic);
     }
     msi_->enable();
@@ -735,7 +735,7 @@ IOReturn SwitchWLAN::ioctlGated(OSObject *owner, void *argument, void *, void *,
             if (!self->mb_.replyReady() &&
                 (self->mb_.chipSignalling(&mailboxInt, &mailboxMask) || self->pcie_.msiPending())) {
                 char gic[160], state[200];
-                ioswitch_interrupt_describe(kMsiIntid, gic, sizeof(gic));
+                switch_interrupt_describe(kMsiIntid, gic, sizeof(gic));
                 self->pcie_.describe(state, sizeof(state));
                 panic(
                     "SwitchWLAN: chip interrupt not delivered: mailbox int %08x mask %08x, %u MSIs so far; %s; GIC %s",
@@ -2894,7 +2894,7 @@ static void publishMac(const uint8_t mac[6])
     }
 }
 
-// Called once from the kernel's boot path (IOSwitchRootDiag.inc, after the SD block device): the address in the device
+// Called once from the kernel's boot path (SwitchRootDiag.h, after the SD block device): the address in the device
 // tree, then the driver on IOResources if the boot-arg asks for it. Returns 0 when off or started. (The bring-up
 // register report, switch_wlan_probe, is no longer printed at boot.)
 extern "C" int switch_wlan_publish(void)

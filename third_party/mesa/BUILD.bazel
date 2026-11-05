@@ -1,4 +1,4 @@
-# Mesa 77452b90 for NVK (README.ioswitch.md), built by Bazel the way meson builds it: one BUILD.bazel beside each
+# Mesa 77452b90 for NVK (README.ios-on-switch-lmao.md), built by Bazel the way meson builds it: one BUILD.bazel beside each
 # meson.build NVK's build uses (bazel/defs.bzl), every compile, archive and generator its own action.
 #
 #   bazel build //gpu/nvk:ios //gpu/nvk:host      the dylib and its macOS host twin (gpu/nvk/BUILD.bazel)

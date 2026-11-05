@@ -70,7 +70,7 @@ SECURITY_READ_ONLY_LATE(static IOPlatformExpertDevice*) gRootNub;
 #include <sys/time.h>
 
 #ifdef BCM2837
-// IOSwitch (Switch OLED): drivers/SwitchPower/SwitchPMIC.cpp logs the boot clock line, reads the MAX77620
+// Switch (Switch OLED): drivers/SwitchPower/SwitchPMIC.cpp logs the boot clock line, reads the MAX77620
 // RTC over I2C5 and publishes it as the "IORTC" resource (ArmDTPlatform forwards PEGetUTCTimeOfDay() to
 // it), and installs PE_halt_restart. Synchronous: done, or failed and logged, when it returns.
 extern "C" int switch_pmic_start(void);

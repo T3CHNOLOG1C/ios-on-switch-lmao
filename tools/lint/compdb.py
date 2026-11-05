@@ -44,7 +44,7 @@ DROP_PREFIX = (
 )
 # Apple clang's XNU type-system builtins (kalloc_type, IOMallocType) take a type; upstream clangd has none of them.
 KERNEL_COMPAT = [
-    '-D__builtin_xnu_type_signature(t)="ioswitch-lint"',
+    '-D__builtin_xnu_type_signature(t)="switch-lint"',
     '-D__builtin_xnu_type_summary(t)=0u',
     '-D__builtin_xnu_types_compatible(a,b)=1',
     '-Wno-unknown-warning-option',

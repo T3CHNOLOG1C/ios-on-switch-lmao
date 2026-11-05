@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_SPLIT_DISK_H
-#define IOSWITCH_SPLIT_DISK_H
+#ifndef SWITCH_SPLIT_DISK_H
+#define SWITCH_SPLIT_DISK_H
 #include "fat32.h"
 #define IOSW_SPLIT_MAX_PARTS 16u
 struct iosw_split_part {

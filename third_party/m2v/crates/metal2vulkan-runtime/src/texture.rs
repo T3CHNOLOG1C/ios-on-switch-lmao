@@ -4205,7 +4205,7 @@ pub(super) fn twin_copy(copy: vk::BufferImageCopy) -> vk::BufferImageCopy {
 /// The Vulkan copy region of `region`, from the start of a tightly packed buffer.
 /// Whether a new image with host-transfer usage starts on the host, moved to `GENERAL` and its
 /// zeros written there (`texture/host_copy.rs`): only with `M2V_HOST_START` in the environment
-/// (ioswitch). On TegraGM20B each host copy cleans and invalidates the image's whole plane, so
+/// (ios-on-switch-lmao). On TegraGM20B each host copy cleans and invalidates the image's whole plane, so
 /// zeros written that way cost every new `Shared` texture a pass over its bytes on the CPU, where
 /// its move otherwise rides the next submission; its `get_bytes` copies on the host once that move
 /// went (`Texture::read_region`), where a submission waited behind the queue's work before.
@@ -5406,7 +5406,7 @@ impl Texture {
         let truth = view_shadow::truth(image);
         let copy = buffer_image_copy(&image_region);
         // An image whose copies wait for the next submission takes the caller's bytes there
-        // (ioswitch): a host copy on TegraGM20B maps, cleans and invalidates the whole plane each
+        // (ios-on-switch-lmao): a host copy on TegraGM20B maps, cleans and invalidates the whole plane each
         // call (NVK's `nvk_image_plane_map`), where the staged copy is one memcpy, and its start
         // waits for that submission anyway ([`host_starts`]).
         if truth.takes_host_copies() && !truth.defers_copies() {
@@ -5659,7 +5659,7 @@ impl Texture {
         let truth = view_shadow::truth(image);
         let copy = buffer_image_copy(image_region);
         // On the host once the image's move went to a submission and no host call's copy into it
-        // waits for one (ioswitch, [`host_starts`]): the program reads texels a command buffer
+        // waits for one (ios-on-switch-lmao, [`host_starts`]): the program reads texels a command buffer
         // wrote once it completed, as on Metal, and that command buffer's batch made the move.
         let firsts = &self.device().shared().textures.first_moves;
         let at: *const Image = &**truth;

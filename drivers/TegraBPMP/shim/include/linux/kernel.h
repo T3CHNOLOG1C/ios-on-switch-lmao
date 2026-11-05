@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: the include/linux/kernel.h subset the vendored L4T BPMP sources use. */
+/* Switch TegraBPMP shim: the include/linux/kernel.h subset the vendored L4T BPMP sources use. */
 #ifndef BPXNU_LINUX_KERNEL_H
 #define BPXNU_LINUX_KERNEL_H
 #include <linux/types.h>

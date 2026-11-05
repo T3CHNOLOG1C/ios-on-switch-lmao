@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Tegra210 (T210/T210B01) I2C master for statically linked IOSwitch drivers.
+// Tegra210 (T210/T210B01) I2C master for statically linked Switch drivers.
 //
 // Buses use Tegra numbering, 1..5 (I2C1 0x7000C000 .. I2C5/PWR_I2C 0x7000D000):
 //   I2C1 100 kHz  MAX17050 fuel gauge 0x36, BQ24193 charger 0x6B, BM92T36 USB-PD 0x18
@@ -32,7 +32,7 @@
 //
 // Transfers are serialized per bus with an IOLock; the API is synchronous and every completion comes by interrupt.
 // tegra_i2c_init() claims the bus's SPI, I2C1 38, I2C2 84, I2C3 92, I2C4 120, I2C5 53 (Linux tegra210.dtsi:676/691/
-// 706/721/739; the OLED DTB i2c@7000c000.. nodes), sleeping in ioswitch_interrupt_nub() until the GIC is up; a caller
+// 706/721/739; the OLED DTB i2c@7000c000.. nodes), sleeping in switch_interrupt_nub() until the GIC is up; a caller
 // sleeps until the work loop action reports packet completion, NACK or arbitration loss (FIFO refills and drains
 // happen there too; the bus clear completes by INT_BUS_CLEAR_DONE). There is no polled mode (tegra_i2c_final_transfer,
 // the power-off's last transfers, aside): an interrupt that cannot be attached, or a wait that times out while the
@@ -83,7 +83,7 @@ struct tegra_i2c_counters {
 
 // Maps the controller, CAR and pinmux (once), claims the bus's interrupt and brings the bus up.
 // Idempotent and thread-safe; later calls for an initialized bus return TEGRA_I2C_OK immediately.
-// May sleep until the GIC is up (panics after 10 s, in ioswitch_interrupt_nub).
+// May sleep until the GIC is up (panics after 10 s, in switch_interrupt_nub).
 int tegra_i2c_init(unsigned bus);
 
 // Write tx (if txlen) then, after a repeated START, read rx (if rxlen). 7-bit address.

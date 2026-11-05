@@ -47,12 +47,12 @@ def main():
     try:
         source.write_bytes(original + b"// cache demo\n")
         build(workspace, "comment added")
-        source.write_bytes(original + b'extern "C" __attribute__((used)) int ioswitch_cache_demo(void) { return 1104; }\n')
+        source.write_bytes(original + b'extern "C" __attribute__((used)) int switch_cache_demo(void) { return 1104; }\n')
         build(workspace, "code changed")
     finally:
         source.write_bytes(original)
     build(workspace, "code reverted")
-    scratch = Path(tempfile.mkdtemp(prefix="ioswitch-bench-"))
+    scratch = Path(tempfile.mkdtemp(prefix="switch-bench-"))
     try:
         quiet = ["--experimental_convenience_symlinks=ignore"]
         build(workspace, "fresh base", ["--output_base=" + str(scratch / "warm")], quiet)

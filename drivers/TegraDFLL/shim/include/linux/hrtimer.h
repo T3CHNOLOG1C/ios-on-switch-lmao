@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: the hrtimer subset clk-dfll.c uses for its low->high tuning state machine (dfll_tune_timer_cb), on an
+ * Switch shim: the hrtimer subset clk-dfll.c uses for its low->high tuning state machine (dfll_tune_timer_cb), on an
  * XNU thread_call. Only HRTIMER_MODE_REL and HRTIMER_NORESTART are used by the vendored code (a callback that wants to
  * run again calls hrtimer_start itself), so HRTIMER_RESTART is not supported.
  */

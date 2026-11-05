@@ -111,7 +111,7 @@ def _run(command, env):
 
 def mock(args, root, work):
     env = _xcode_env(args.xcode_env, work)
-    _run(['/usr/bin/xcrun', 'clang', '-O1', '-Wall', '-dynamiclib', '-ffile-prefix-map=%s=/ioswitch' % root, '-I',
+    _run(['/usr/bin/xcrun', 'clang', '-O1', '-Wall', '-dynamiclib', '-ffile-prefix-map=%s=/switch-ios' % root, '-I',
           Path(args.abi_header).parent, args.mock_iokit, '-framework', 'IOKit', '-framework', 'CoreFoundation',
           '-install_name', '@rpath/libmock_iokit.dylib', '-o', args.out], env)
 
@@ -120,7 +120,7 @@ def tool(args, root, work):
     """The precompile tool, linked against the mock IOKit beside it (the run puts the two side by side)."""
     env = _xcode_env(args.xcode_env, work)
     _run(['/usr/bin/xcrun', 'clang++', '-O2', '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations',
-          '-ffile-prefix-map=%s=/ioswitch' % root, '-I', Path(args.metal_header).parent, '-x', 'objective-c++',
+          '-ffile-prefix-map=%s=/switch-ios' % root, '-I', Path(args.metal_header).parent, '-x', 'objective-c++',
           args.precompile, args.frontend, '-x', 'none', args.host_bridge, '-L', Path(args.mock).parent, '-lmock_iokit',
           '-Wl,-rpath,@executable_path', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface',
           '-framework', 'IOKit', '-o', args.out], env)

@@ -92,7 +92,7 @@ struct Tunables {
 const Tunables &tunables()
 {
     static const Tunables t = [] {
-        const std::string cpu = ioswitch::test::SourceText("../SwitchPerfGovernor.cpp");
+        const std::string cpu = switch_ios::test::SourceText("../SwitchPerfGovernor.cpp");
         return Tunables{tunable(cpu, "kCpuWindowUs"), tunable(cpu, "kCpuUpPermille"),
                         tunable(cpu, "kCpuTargetPermille"), tunable(cpu, "kCpuDownHoldUs"),
                         tunable(cpu, "kBoostTouchUs")};

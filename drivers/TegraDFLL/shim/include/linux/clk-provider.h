@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* IOSwitch shim: clock provider types (L4T 4.9 include/linux/clk-provider.h) for the shim's clock tree. */
+/* Switch shim: clock provider types (L4T 4.9 include/linux/clk-provider.h) for the shim's clock tree. */
 #ifndef TDFLL_LINUX_CLK_PROVIDER_H
 #define TDFLL_LINUX_CLK_PROVIDER_H
 #include <linux/clk.h>

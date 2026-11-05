@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Generates drivers/TegraNVENC/selftest/E3Vectors.inc, the kernel's E3 test vectors, from the code that runs on the
+// Generates drivers/TegraNVENC/selftest/E3Vectors.h, the kernel's E3 test vectors, from the code that runs on the
 // device, so E3 proves what the plug-in will send:
 //   * the two NVENC submits (a 64x64 IDR, then a P picture predicting from it) exactly as AVE's H264NVENC.c builds
 //     them, High profile, CABAC, 8x8 transform, QP 26, for the pitch-linear input layout and the OFFSET chroma mode

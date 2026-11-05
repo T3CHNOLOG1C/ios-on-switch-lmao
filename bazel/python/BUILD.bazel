@@ -1,4 +1,4 @@
-# The Python packages the build runs (@ioswitch_pypi, MODULE.bazel's pip.parse): requirements.in names them with exact
+# The Python packages the build runs (@switch_pypi, MODULE.bazel's pip.parse): requirements.in names them with exact
 # versions, uv (rules_python's lock rule, uv 0.13.0 pinned in MODULE.bazel) locks them with every file's sha256.
 #
 #   bazel run //bazel/python:requirements.update    re-lock requirements_lock.txt after editing requirements.in

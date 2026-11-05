@@ -1,6 +1,6 @@
 # Standalone BPMP APFS installer
 
-**V28 is installed and the SD is safely ejected.** Select **More Configs → IOSwitch APFS Installer → RAW27.IWI → userdata (32768 MiB)**. Press **VOL UP once** on the erase screen to start. VOL DOWN cancels. After **Installation complete**, return to Hekate and select **IOSwitch Native APFS**. [Current procedure](../../docs/native-raw-apfs.md), [installation receipt](../../out/switch/native-installer-button-v28-install.json).
+**V28 is installed and the SD is safely ejected.** Select **More Configs → Switch APFS Installer → RAW27.IWI → userdata (32768 MiB)**. Press **VOL UP once** on the erase screen to start. VOL DOWN cancels. After **Installation complete**, return to Hekate and select **iOS**. [Current procedure](../../docs/native-raw-apfs.md), [installation receipt](../../out/switch/native-installer-button-v28-install.json).
 
 The prepared container retains its full **32 GiB capacity**, including System, Data and Preboot. Its SD image files now occupy **8.96 GiB**. The installer reads and writes **8.77 GiB**, skipping **23.23 GiB** proved free by the current APFS allocation map. Allocated zero blocks are included. The update reused existing files, trimmed/deleted unused dense parts, and copied only a new **16 KiB** tail. [Plan](../../out/native-sparse-v27-plan/plan.json), [allocation proof](../../out/research-native/raw-profile-v24/sparse-apfs-research.md).
 
@@ -12,7 +12,7 @@ FatFs builds a bounded cluster-link map and batches contiguous clusters into req
 
 Both GPT headers and entry arrays must agree and pass their CRCs. Used entries must have valid bounds, unique GUIDs and no overlap. Only Android `userdata`/`UDA` partitions outside the source FAT partition are selectable; an existing APFS GPT entry is refused. The screen shows the selected target's exact name, first LBA, sectors, capacity and bytes to copy. VOL DOWN cancels. A fresh VOL UP press after the buttons have been released permits writes to the selected image bounds. POWER is not required, and VOL DOWN takes priority if both volume buttons are pressed.
 
-After all declared ranges finish programming, the installer changes only the selected GPT entry's type to Apple APFS and name to `IOSWITCH`. Its unique GUID, extent and attributes remain unchanged. Backup entries/header are written and read back before primary entries/header, with recalculated CRCs. GPT publication is not atomic across power loss. A failed transfer stops without publishing GPT; interrupted installation leaves Android userdata unusable. The host update did not write Android or GPT.
+After all declared ranges finish programming, the installer changes only the selected GPT entry's type to Apple APFS and name to `SWITCH`. Its unique GUID, extent and attributes remain unchanged. Backup entries/header are written and read back before primary entries/header, with recalculated CRCs. GPT publication is not atomic across power loss. A failed transfer stops without publishing GPT; interrupted installation leaves Android userdata unusable. The host update did not write Android or GPT.
 
 ## External sparse manifest
 

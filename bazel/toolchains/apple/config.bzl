@@ -139,7 +139,7 @@ def _impl(ctx):
     ]
     return cc_common.create_cc_toolchain_config_info(
         ctx = ctx,
-        toolchain_identifier = "ioswitch-apple-" + ctx.attr.platform,
+        toolchain_identifier = "switch-apple-" + ctx.attr.platform,
         host_system_name = "aarch64-apple-darwin",
         target_system_name = platform.triple,
         target_cpu = "arm64",

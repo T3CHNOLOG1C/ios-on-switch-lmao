@@ -317,7 +317,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         'SD reference ADT source changed',
     )
     properties = parse_adt(adt).properties
-    ram_offset, ram_bytes = properties.get(('/chosen', 'ioswitch-ram-ledger'), (-1, 0))
+    ram_offset, ram_bytes = properties.get(('/chosen', 'switch-ram-ledger'), (-1, 0))
     _require(
         ram_bytes == 1584 and adt[ram_offset : ram_offset + ram_bytes] == bytes(ram_bytes),
         'full RAM requires zeroed runtime ledger slot',
@@ -332,7 +332,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     def in_window(offset, size):
         return payload[start + offset : start + offset + size]
 
-    sd_reference_offset, size = properties.get(('/chosen', 'ioswitch-sd-reference'), (-1, 0))
+    sd_reference_offset, size = properties.get(('/chosen', 'switch-sd-reference'), (-1, 0))
     expected = struct.pack('<QQ', SD_REFERENCE, SD_REFERENCE_BYTES)
     _require(
         size == 16
@@ -419,7 +419,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
 
     # The boot-args the loader gates on, and the line in the window's boot_args.
     words = m['command_line'].split()
-    _require([v for v in words if v.startswith('ioswitch-sd-test=')] == ['ioswitch-sd-test=1'], 'SD probe requires one explicit boot argument')
+    _require([v for v in words if v.startswith('switch-sd-test=')] == ['switch-sd-test=1'], 'SD probe requires one explicit boot argument')
     command_at = m['boot_args_pa'] - m['phys_base'] + 0x6C
     encoded = m['command_line'].encode('ascii')
     _require(
@@ -427,16 +427,16 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         'SD boot argument manifest does not match the staged boot arguments',
     )
     _require(
-        [v for v in words if v.startswith('ioswitch-sd-files=')] == ['ioswitch-sd-files=1'],
+        [v for v in words if v.startswith('switch-sd-files=')] == ['switch-sd-files=1'],
         'SD file boot argument requires the card-enabled loader',
     )
     _require(len(payload) <= 0x5000000, 'kernel staging overlaps the firmware exporter')
     _require(
-        [v for v in words if v.startswith('ioswitch-root-boot=')] == ['ioswitch-root-boot=1'],
+        [v for v in words if v.startswith('switch-root-boot=')] == ['switch-root-boot=1'],
         'root_boot requires its exact explicit boot argument',
     )
     _require(
-        not any(v.startswith(('rd=', 'boot-uuid=', 'ioswitch-user-test=', 'ioswitch-block-test=')) for v in words),
+        not any(v.startswith(('rd=', 'boot-uuid=', 'switch-user-test=', 'switch-block-test=')) for v in words),
         'root_boot cannot use diagnostic PID1 or alternate root selection',
     )
 

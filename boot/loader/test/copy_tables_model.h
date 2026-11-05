@@ -1,6 +1,6 @@
 /* copy_tables_model.c's entry points, for copy_tables_test.cpp. */
-#ifndef IOSWITCH_TEST_COPY_TABLES_MODEL_H
-#define IOSWITCH_TEST_COPY_TABLES_MODEL_H
+#ifndef SWITCH_TEST_COPY_TABLES_MODEL_H
+#define SWITCH_TEST_COPY_TABLES_MODEL_H
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -53,7 +53,7 @@ NEW_ORIGINAL_COMPONENTS = set()     # --new-root BUNDLE
 # kernelcache has a different number of sites): (component, dependency) -> (pointer sites, native stub). A nonzero cut
 # rebinds each site, a GOT entry of the dependency's metaclass, to the stub (8 zero bytes), so that OSDynamicCast yields
 # NULL. The emitted prelink info drops the declaration.
-CUT_STUB = '_ioswitch_prelink_cut_null'
+CUT_STUB = '_switch_prelink_cut_null'
 CUT_DEPENDENCIES = {}               # --cut COMPONENT=DEPENDENCY=SITES (the stub when SITES > 0)
 DEFERRED_PERSONALITIES = {}         # --defer COMPONENT=PERSONALITY
 # main() requires the --root list to be the V20 roots followed by sorted(NEW_ORIGINAL_COMPONENTS).
@@ -151,7 +151,7 @@ def instruction_inventory(original_data, parent, modules):
 # The prelink info's KCID is the one native-dependent value in its XML: prepare renders the XML with this stand-in
 # (16 bytes, so the same 24 base64 characters long) and apply puts the real one in its place.
 KCID_STAND_IN = b'\xa5\x5a' * 8
-KCID_DOMAIN = b'IOSWITCH-MEMORY-V21-KCID\0'
+KCID_DOMAIN = b'SWITCH-MEMORY-V21-KCID\0'
 PLAN_MAGIC = b'IOSWPLK1'
 
 

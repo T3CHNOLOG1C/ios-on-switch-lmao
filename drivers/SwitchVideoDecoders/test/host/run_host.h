@@ -1,7 +1,7 @@
 // Runs a C test host's main() (renamed by its host_library) with its stdout captured, and echoes what it printed into
 // the test's log.
-#ifndef IOSWITCH_SWITCH_VIDEO_DECODERS_TEST_HOST_RUN_HOST_H
-#define IOSWITCH_SWITCH_VIDEO_DECODERS_TEST_HOST_RUN_HOST_H
+#ifndef SWITCH_SWITCH_VIDEO_DECODERS_TEST_HOST_RUN_HOST_H
+#define SWITCH_SWITCH_VIDEO_DECODERS_TEST_HOST_RUN_HOST_H
 
 #include <gtest/gtest.h>
 
@@ -26,4 +26,4 @@ template <class Main> HostRun RunHost(Main main, std::vector<std::string> args =
     return run;
 }
 
-#endif  // IOSWITCH_SWITCH_VIDEO_DECODERS_TEST_HOST_RUN_HOST_H
+#endif  // SWITCH_SWITCH_VIDEO_DECODERS_TEST_HOST_RUN_HOST_H

@@ -621,7 +621,7 @@ const Core *Chip::find(uint16_t coreId) const
 }  // namespace swlan
 
 // --- One process per scenario (the driver's Msgbuf, the chip and the firmware model are globals) ---------------------
-using ioswitch::test::ExpectPassesInFreshProcess;
+using switch_ios::test::ExpectPassesInFreshProcess;
 constexpr uint64_t kFrame = 1514;
 
 // Attach posts every receive buffer in one doorbell.

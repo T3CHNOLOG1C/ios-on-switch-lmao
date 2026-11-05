@@ -1,6 +1,6 @@
-# ioswitch: iPadOS 17.7.11 (21H461, iPad7,1) on the Nintendo Switch OLED. README.md has the whole map.
+# ios-on-switch-lmao: iPadOS 17.7.11 (21H461, iPad7,1) on the Nintendo Switch OLED. README.md has the whole map.
 #
-#   bazel build //:boot        the Hekate boot entry (bazel-bin/boot/ioswitch: switchroot/, bootloader/, overlay/)
+#   bazel build //:boot        the Hekate boot entry (bazel-bin/boot/ios: switchroot/, bootloader/, overlay/)
 #   bazel build //:kernel      the prelinked kernel (XNU + drivers + Apple's kexts)
 #   bazel build //:gpu         the TegraGM20B Metal bundle, its m2v seed and trust cache
 #   bazel test //...           unit tests, pinned-input checks, format and lint

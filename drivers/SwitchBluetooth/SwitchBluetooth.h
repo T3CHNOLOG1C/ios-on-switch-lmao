@@ -11,7 +11,7 @@
 // audiomxd off without it.
 //
 // ADT, from the packager: /arm-io/bluetooth with
-//   "ioswitch,patchram"  the .hcd file (HCI Write_RAM / Launch_RAM records), downloaded at every bring-up
+//   "switch,patchram"  the .hcd file (HCI Write_RAM / Launch_RAM records), downloaded at every bring-up
 //   "local-mac-address"  6 bytes, display order; written to the controller (Broadcom 0xFC01) after the patch. When
 //                        the fuses are readable the unit's own address (U-Boot's 98:B6:E9 + lot code scheme)
 //                        replaces it here and in /chosen mac-address-bluetooth0 before userland starts; when deploy
@@ -33,8 +33,8 @@ extern "C" {
 // interrupt panics. Call from thread context, any time after IOKit is up.
 int switch_bluetooth_start(void);
 
-// kern_exec.c load_init_program through SwitchNVRAM (ioswitch_nvram_data_mounted), once Data is mounted and before
-// launchd: with switch-bt=1, publishes the address deploy staged on Data (/private/var/ioswitch/bluetooth/host-address)
+// kern_exec.c load_init_program through SwitchNVRAM (switch_nvram_data_mounted), once Data is mounted and before
+// launchd: with switch-bt=1, publishes the address deploy staged on Data (/private/var/Switch/bluetooth/host-address)
 // as local-mac-address and mac-address-bluetooth0, so bluetoothd reads it at its start. One line if the file is
 // malformed; nothing without one.
 void switch_bluetooth_data_mounted(void);

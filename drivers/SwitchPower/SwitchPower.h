@@ -60,7 +60,7 @@ unsigned int switch_perf_cltm_ceiling(unsigned int fraction16);
 int switch_sensors_start(void);
 // Whether every sensor thermalmonitord checks can answer now: all HID services hooked, SOC_THERM's readings valid, a
 // TMP451 and a battery reading. Waits up to wait_ms for that, woken by switch_sensors_note(); false with the missing
-// parts in `why` once the time is up. Thread context. NativeIOSwitchWatchdog asks once, at watchdogd's first open.
+// parts in `why` once the time is up. Thread context. NativeSwitchWatchdog asks once, at watchdogd's first open.
 int switch_sensors_wait_ready(unsigned int wait_ms, char *why, unsigned long len);
 // A source changed state (SwitchThermal's and SwitchBattery's readings, a HID service hooked, a sensor's first read by
 // thermalmonitord): wakes the wait above. Any thread context, cheap.

@@ -1276,17 +1276,17 @@ commit_upl(upl_t upl, upl_offset_t pl_offset, size_t uplSize, int flags, int abo
 
 
 /*
- * IOSwitch: what compressed page-ins cost (reported by kprof, ioswitch_kprof.c). The resource-fork types (even numbers:
+ * Switch: what compressed page-ins cost (reported by kprof, switch_kprof.c). The resource-fork types (even numbers:
  * zlib 4, LZVN 8, LZFSE 12) store 64 KiB chunks and the decompressor decodes whole chunks, while page-ins come in the
  * fault's cluster size (4 KiB pages here, 16 KiB on the iPad): requested bytes against the chunks they touch is the
  * decompression done per byte used.
  */
-extern uint64_t ioswitch_decmpfs_pageins, ioswitch_decmpfs_small, ioswitch_decmpfs_bytes, ioswitch_decmpfs_chunk_bytes;
-uint64_t ioswitch_decmpfs_pageins, ioswitch_decmpfs_small, ioswitch_decmpfs_bytes, ioswitch_decmpfs_chunk_bytes;
-/* osfmk/kern/ioswitch_kprof.c */
-extern void ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
+extern uint64_t switch_decmpfs_pageins, switch_decmpfs_small, switch_decmpfs_bytes, switch_decmpfs_chunk_bytes;
+uint64_t switch_decmpfs_pageins, switch_decmpfs_small, switch_decmpfs_bytes, switch_decmpfs_chunk_bytes;
+/* osfmk/kern/switch_kprof.c */
+extern void switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
 static void
-ioswitch_decmpfs_count_pagein(vnode_t vp, uint32_t type, off_t offset, user_ssize_t size)
+switch_decmpfs_count_pagein(vnode_t vp, uint32_t type, off_t offset, user_ssize_t size)
 {
 	const uint64_t chunk = 64 * 1024;
 	struct ubc_info *uip;
@@ -1295,20 +1295,20 @@ ioswitch_decmpfs_count_pagein(vnode_t vp, uint32_t type, off_t offset, user_ssiz
 		return;
 	}
 	/* r14-launch: mark the file so its later page-ins cover whole chunks (vm_object_cluster_size) */
-	if (UBCINFOEXISTS(vp) && (uip = vp->v_ubcinfo) != NULL && !(uip->ui_flags & UI_IOSWITCH_CHUNKED)) {
+	if (UBCINFOEXISTS(vp) && (uip = vp->v_ubcinfo) != NULL && !(uip->ui_flags & UI_SWITCH_CHUNKED)) {
 		vnode_lock_spin(vp);
 		if (UBCINFOEXISTS(vp)) {
-			SET(vp->v_ubcinfo->ui_flags, UI_IOSWITCH_CHUNKED);
+			SET(vp->v_ubcinfo->ui_flags, UI_SWITCH_CHUNKED);
 		}
 		vnode_unlock(vp);
 	}
-	ioswitch_kprof_wait(2 /* decmpfs page-in, this process */, 0, (uint64_t)size);
-	os_atomic_inc(&ioswitch_decmpfs_pageins, relaxed);
+	switch_kprof_wait(2 /* decmpfs page-in, this process */, 0, (uint64_t)size);
+	os_atomic_inc(&switch_decmpfs_pageins, relaxed);
 	if (size <= (user_ssize_t)PAGE_SIZE) {
-		os_atomic_inc(&ioswitch_decmpfs_small, relaxed);
+		os_atomic_inc(&switch_decmpfs_small, relaxed);
 	}
-	os_atomic_add(&ioswitch_decmpfs_bytes, (uint64_t)size, relaxed);
-	os_atomic_add(&ioswitch_decmpfs_chunk_bytes,
+	os_atomic_add(&switch_decmpfs_bytes, (uint64_t)size, relaxed);
+	os_atomic_add(&switch_decmpfs_chunk_bytes,
 	    ((((uint64_t)offset + (uint64_t)size - 1) / chunk) - ((uint64_t)offset / chunk) + 1) * chunk, relaxed);
 }
 
@@ -1473,7 +1473,7 @@ decompress:
 	} else {
 		if (verify_block_size <= PAGE_SIZE) {
 			err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, uplPos, uplSize, 1, &vec, &did_read);
-			ioswitch_decmpfs_count_pagein(vp, hdr->compression_type, uplPos, uplSize);
+			switch_decmpfs_count_pagein(vp, hdr->compression_type, uplPos, uplSize);
 			/* zero out whatever wasn't read */
 			if (did_read < rounded_uplSize) {
 				memset((char*)vec.buf + did_read, 0, (size_t)(rounded_uplSize - did_read));

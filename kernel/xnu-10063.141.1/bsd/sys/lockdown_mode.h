@@ -40,7 +40,7 @@ extern int lockdown_mode_state;
 void lockdown_mode_init(void);
 
 /**
- * IOSwitch: reads the state again once the NVRAM saved on Data is restored
+ * Switch: reads the state again once the NVRAM saved on Data is restored
  */
 void lockdown_mode_nvram_restored(void);
 

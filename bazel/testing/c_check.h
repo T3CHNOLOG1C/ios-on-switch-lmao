@@ -5,8 +5,8 @@
  *   if (!CHECK(p != NULL)) return 0;            stop where later code relies on the check
  *   FAIL_C("read outside the model: %#x", pa);  a failure described by the C code
  */
-#ifndef IOSWITCH_TEST_C_CHECK_H
-#define IOSWITCH_TEST_C_CHECK_H
+#ifndef SWITCH_TEST_C_CHECK_H
+#define SWITCH_TEST_C_CHECK_H
 #ifdef __cplusplus
 extern "C" {
 #endif

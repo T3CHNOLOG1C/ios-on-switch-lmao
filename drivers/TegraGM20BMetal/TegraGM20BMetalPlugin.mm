@@ -81,7 +81,7 @@
 namespace {
 os_log_t logger()
 {
-    static os_log_t log = os_log_create("com.ioswitch.TegraGM20BMetal", "plugin");
+    static os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "plugin");
     return log;
 }
 
@@ -494,7 +494,7 @@ id openDevice(unsigned port)
                 entryID(port, &registryID);
         }
         // NVK opens the first service of this class (nvkmd_darwin.c darwin_open): ours, never the IOAcceleratorES stub
-        // (drivers/IOSwitchAccelStub) that only ends QuartzCore's accelerator poll.
+        // (drivers/SwitchAccelStub) that only ends QuartzCore's accelerator poll.
         setenv("NVK_DARWIN_SERVICE", "AGXAccelerator", 0);
         // The render server compresses its framebuffer and surfaces in an Apple GPU layout unless told not to; this GPU and the
         // display driver take plain rows. The kernel also writes these as backboardd's preferences (read before this code runs).

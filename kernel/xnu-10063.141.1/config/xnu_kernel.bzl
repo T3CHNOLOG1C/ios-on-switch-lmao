@@ -78,7 +78,7 @@ xnu_version_c = rule(
     doc = "version.c (config/version.c.template stamped by config/newvers.pl), at make's path below obj/.",
     attrs = {
         "build_date": attr.string(default = "Thu  1 Jan 1970 00:00:00 UTC", doc = "//kernel/rules:build_date"),
-        "builder": attr.string(default = "ioswitch", doc = "whoami's answer (//kernel/rules:builder)"),
+        "builder": attr.string(default = "switch-ios", doc = "whoami's answer (//kernel/rules:builder)"),
         "config": attr.string(default = "DEVELOPMENT"),
         "darwin_version": attr.string(default = "23.6.0", doc = "RC_DARWIN_KERNEL_VERSION"),
         "newvers": attr.label(default = "newvers.pl", allow_single_file = True),
@@ -284,7 +284,7 @@ if LC_ALL=C grep -qF "$PWD" "$out"; then echo "the kernel names the execution ro
 """.format(sdk = _MAKE_SDKROOT, clangxx = XCODE_TOOLCHAIN + "/clang++", iphoneos_sdk = IPHONEOS_SDK, nm = XCODE_TOOLCHAIN + "/nm"),
         env = _env(),
         mnemonic = "XnuKernelLink",
-        progress_message = "Linking XNU's kernel ({} objects and the ioswitch archives)".format(len(filelist)),
+        progress_message = "Linking XNU's kernel ({} objects and the ios-on-switch-lmao archives)".format(len(filelist)),
         execution_requirements = XCODE_EXECUTION,
     )
     prelink, cuts, deferred = [], [], []
@@ -345,7 +345,7 @@ xnu_link_objects = rule(
 
 _xnu_kernel = rule(
     implementation = _xnu_kernel_impl,
-    doc = "XNU's kernel (mach.<config>.bcm2837.unstripped.noctf) from its native objects and the ioswitch archives " +
+    doc = "XNU's kernel (mach.<config>.bcm2837.unstripped.noctf) from its native objects and the ios-on-switch-lmao archives " +
           "(inputs, modes: force_load or plain, in LD_KERNEL_ARCHIVES order).",
     attrs = {
         "alias_list": attr.label(allow_single_file = True, default = XNU + "config:all_alias_exp"),

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: completions (shim/linux.c), woken by event, never polled. */
+/* Switch TegraBPMP shim: completions (shim/linux.c), woken by event, never polled. */
 #ifndef BPXNU_LINUX_COMPLETION_H
 #define BPXNU_LINUX_COMPLETION_H
 /* The GM20B shim (same kernel) defines Linux names too: every function here is bpmp_linux_-prefixed. */

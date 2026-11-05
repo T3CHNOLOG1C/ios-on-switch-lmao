@@ -1,7 +1,7 @@
 // switch_wake_harness.c's exported wrappers of drivers/SwitchSuspend/SwitchWakeSources.h (with the button table, wake
 // guard and power journal ring it keeps), for switch_wake_test.cpp.
-#ifndef IOSWITCH_SWITCH_WAKE_HARNESS_H
-#define IOSWITCH_SWITCH_WAKE_HARNESS_H
+#ifndef SWITCH_SWITCH_WAKE_HARNESS_H
+#define SWITCH_SWITCH_WAKE_HARNESS_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -49,4 +49,4 @@ int bt_reconnect_open_now(void);
 }
 #endif
 
-#endif  // IOSWITCH_SWITCH_WAKE_HARNESS_H
+#endif  // SWITCH_SWITCH_WAKE_HARNESS_H

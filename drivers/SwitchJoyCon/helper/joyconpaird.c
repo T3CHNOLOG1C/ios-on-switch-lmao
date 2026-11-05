@@ -72,9 +72,9 @@ static int (*BTAccessoryManagerSetLinkKeyEx)(BTAccessoryManager manager, const B
                                              const uint8_t key[16], BTDevice *device);
 
 enum { kServiceHID = 0x20 };
-static const char kStagedPath[] = "/private/var/ioswitch/bluetooth/joycon-pairing.plist";  // deploy's, read-only here
-static const char kImportedPath[] = "/private/var/mobile/Library/com.ioswitch.joycon-pairing.imported.plist";
-static const char kLockPath[] = "/private/var/tmp/com.ioswitch.joyconpaird.lock";
+static const char kStagedPath[] = "/private/var/Switch/bluetooth/joycon-pairing.plist";  // deploy's, read-only here
+static const char kImportedPath[] = "/private/var/mobile/Library/com.brunostjohn.switch.joycon-pairing.imported.plist";
+static const char kLockPath[] = "/private/var/tmp/com.brunostjohn.switch.joyconpaird.lock";
 
 static dispatch_queue_t queue;
 static BTAccessoryManager manager;
@@ -273,7 +273,7 @@ static void sessionEvent(BTSession session, int event, int result, void *context
 
 int main(void)
 {
-    logger = os_log_create("com.ioswitch.joyconpaird", "pairing");
+    logger = os_log_create("com.brunostjohn.switch.joyconpaird", "pairing");
     // One instance: BlueTool starts this at every chip boot, and the lock goes with the process. An agent whose session
     // just ended may still be on its way out: a few tries, 200 ms apart.
     const int lock = open(kLockPath, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0644);
@@ -283,7 +283,7 @@ int main(void)
         if (!locked) usleep(200000);
     }
     if (!locked) return 0;
-    queue = dispatch_queue_create("com.ioswitch.joyconpaird", DISPATCH_QUEUE_SERIAL);
+    queue = dispatch_queue_create("com.brunostjohn.switch.joyconpaird", DISPATCH_QUEUE_SERIAL);
     void *mb = dlopen("/System/Library/PrivateFrameworks/MobileBluetooth.framework/MobileBluetooth", RTLD_NOW);
     BTSessionAttachWithQueue = mb ? dlsym(mb, "BTSessionAttachWithQueue") : NULL;
     BTAccessoryManagerGetDefault = mb ? dlsym(mb, "BTAccessoryManagerGetDefault") : NULL;
@@ -296,7 +296,7 @@ int main(void)
     }
     static const BTSessionCallbacks callbacks = {sessionEvent, {NULL, NULL, NULL}};
     dispatch_async(queue, ^{
-        int error = BTSessionAttachWithQueue("com.ioswitch.joyconpaird", &callbacks, NULL, queue);
+        int error = BTSessionAttachWithQueue("com.brunostjohn.switch.joyconpaird", &callbacks, NULL, queue);
         if (error) {
             os_log_error(logger, "joyconpaird: BTSessionAttachWithQueue: %d", error);
             exit(1);

@@ -12,7 +12,7 @@
 
 namespace {
 
-using ioswitch::test::SourceText;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 

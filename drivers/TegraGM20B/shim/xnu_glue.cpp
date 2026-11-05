@@ -18,7 +18,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "include/nvxnu.h"
-#include "../../ArmGIC/IOSwitchInterrupts.h"
+#include "../../ArmGIC/SwitchInterrupts.h"
 
 extern "C" {
 vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_init.c)
@@ -300,8 +300,8 @@ bool pmcPending()
 [[noreturn]] void gpuPanic(const char *why, const char *what, uint32_t value)
 {
 	char stall[192], nonstall[192];
-	ioswitch_interrupt_describe(kGpuIntids[0], stall, sizeof(stall));
-	ioswitch_interrupt_describe(kGpuIntids[1], nonstall, sizeof(nonstall));
+	switch_interrupt_describe(kGpuIntids[0], stall, sizeof(stall));
+	switch_interrupt_describe(kGpuIntids[1], nonstall, sizeof(nonstall));
 	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
 		panic("tegra-gm20b: GPU interrupt %s (%s %u, INTID %u/%u) while the GPU is powered "
 		      "down for system sleep: %s | %s",
@@ -398,7 +398,7 @@ extern "C" void nvxnu_wake_due(nvxnu_u32 seq, const char *what, nvxnu_u32 value)
 	gpuPanic("lost", what, value);
 }
 
-// Claims both GPU lines on a work loop (ioswitch_interrupt_nub sleeps until the GIC is up). Called at the end of M1:
+// Claims both GPU lines on a work loop (switch_interrupt_nub sleeps until the GIC is up). Called at the end of M1:
 // request_irq() has recorded nvkm's handler (nvkm_device_ctor) and nvkm has not armed anything yet, so the PMC
 // enables are still at reset and neither line can be asserted.
 extern "C" void nvxnu_irq_start(void)
@@ -408,7 +408,7 @@ extern "C" void nvxnu_irq_start(void)
 	gPmc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kGpuBar0, 0x1000));
 	gIrqLoop = IOWorkLoop::workLoop();
 	for (int i = 0; i < 2; i++) {
-		IOService *nub = ioswitch_interrupt_nub(kGpuIntids[i], false);
+		IOService *nub = switch_interrupt_nub(kGpuIntids[i], false);
 		gIrqSources[i] = gIrqLoop ? IOInterruptEventSource::interruptEventSource(
 						    gIrqLoop, gpuInterrupt, nub, 0)
 					  : nullptr;
@@ -570,7 +570,7 @@ extern "C" void nvxnu_vm_faults(struct nvxnu_faults *f)
 }
 
 // The GPU memory pool, preferably a physical range the kernel keeps out of the VM at boot (boot-args
-// tegra-gpu-pool-pa=<pa> tegra-gpu-pool-mb=<MiB>; arm_vm_init.c pmap_ioswitch_ram_init), which its physical aperture
+// tegra-gpu-pool-pa=<pa> tegra-gpu-pool-mb=<MiB>; arm_vm_init.c pmap_switch_ram_init), which its physical aperture
 // maps write-combined and nothing maps cacheable: phystokv() is the pool's only mapping (a 128 MiB ml_io_map_wcomb runs
 // out of kernel VA).
 // Fallback: a contiguous IOBufferMemoryDescriptor below 4 GiB whose pages are switched to write-combined

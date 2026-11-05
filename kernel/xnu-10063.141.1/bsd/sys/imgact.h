@@ -133,8 +133,8 @@ struct image_params {
 	uint64_t ip_dyld_fsobjid;
 	uint64_t ip_inherited_jop_pid;
 	unsigned int    ip_simulator_binary;    /* simulator binary flags */
-	int             ip_ioswitch_band;       /* IOSwitch boot band class, set while the path still exists
-	                                         * (exec_activate_image; ioswitch_boot_band.c) */
+	int             ip_switch_band;       /* SwitchBootBand class, set while the path still exists
+	                                         * (exec_activate_image; switch_boot_band.c) */
 };
 
 /*

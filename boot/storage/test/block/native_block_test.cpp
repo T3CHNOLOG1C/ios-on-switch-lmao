@@ -1,4 +1,4 @@
-// Host test of boot/storage/NativeIOSwitchBlock.cpp, the boot chain's read-only block driver for the SD card's two
+// Host test of boot/storage/NativeSwitchBlock.cpp, the boot chain's read-only block driver for the SD card's two
 // APFS containers: the real driver, included into this translation unit over native_block_stubs.h (BUILD.bazel points
 // its IOKit headers there) and a backend that serves a pattern. Each scenario runs in a process of its own (the driver
 // keeps its published state in statics): bounds and refused mutations, backend errors and short copies, a completion
@@ -11,7 +11,7 @@
 
 #include "bazel/testing/fresh_process.h"
 #include "bazel/testing/require.h"
-#include "../../NativeIOSwitchBlock.cpp"
+#include "../../NativeSwitchBlock.cpp"
 
 struct iosw_block_backend { iosw_block_allocator allocator; };
 static unsigned creates=0,destroys=0,reads=0;
@@ -42,8 +42,8 @@ extern "C" int iosw_block_read(iosw_block_backend *,unsigned index,uint64_t offs
  for(unsigned i=0;i<bytes;++i)static_cast<uint8_t *>(dst)[i]=pattern(index,offset+i);
  --activeReads;return readStatus;
 }
-static NativeIOSwitchBlockDevice *child(unsigned index) {
- REQUIRE(IOService::registered.size()==2); return dynamic_cast<NativeIOSwitchBlockDevice *>(IOService::registered[index]);
+static NativeSwitchBlockDevice *child(unsigned index) {
+ REQUIRE(IOService::registered.size()==2); return dynamic_cast<NativeSwitchBlockDevice *>(IOService::registered[index]);
 }
 static void cleanup() {
  for(auto *media:IOService::candidates) { if(media->getProvider())media->detach(media->getProvider());media->release(); }
@@ -58,7 +58,7 @@ static void cleanup() {
  allocationCalls=failAllocationCall=attachCalls=failAttachCall=startCalls=failStartCall=0;
  propertyCalls=failPropertyCall=superclassStops=mallocCalls=failMallocCall=0;
  creates=destroys=reads=0;createStatus=readStatus=infoStatus=0;invalidSize=false;maximumReads=0;
- ioswitch_block_devices_published=0;ioswitch_block_read_requests=0;ioswitch_block_read_bytes=0;ioswitch_block_read_failures=0;
+ switch_block_devices_published=0;switch_block_read_requests=0;switch_block_read_bytes=0;switch_block_read_failures=0;
 }
 struct Result {unsigned calls=0;IOReturn status=123;UInt64 actual=999;};
 static void complete(void *ctx,void *,IOReturn status,UInt64 bytes) {
@@ -70,9 +70,9 @@ static bool matches(IOMemoryDescriptor &data,unsigned disk,uint64_t offset) {
  return true;
 }
 static void verify(IOMemoryDescriptor &data,unsigned disk,uint64_t offset) { REQUIRE(matches(data,disk,offset)); }
-static void publish() { REQUIRE(ioswitch_block_publish()==0 && creates==1 && IOService::registered.size()==2); }
+static void publish() { REQUIRE(switch_block_publish()==0 && creates==1 && IOService::registered.size()==2); }
 static void basic() {
- publish();REQUIRE(ioswitch_block_publish()==0 && creates==1);
+ publish();REQUIRE(switch_block_publish()==0 && creates==1);
  for(unsigned i=0;i<2;++i) {
   UInt64 n=0;bool b=false;auto *d=child(i);
   REQUIRE(d->reportBlockSize(&n)==0 && n==512);
@@ -130,13 +130,13 @@ static void concurrent() {
  std::thread a(worker,0),b(worker,1);a.join();b.join();REQUIRE(maximumReads==1 && reads==62);cleanup();
 }
 static void failures() {
- for(unsigned call=1;call<=3;++call) {failAllocationCall=call;REQUIRE(ioswitch_block_publish()!=0 && IOService::registered.empty());REQUIRE(ioswitch_block_publish()!=0);REQUIRE(creates==destroys);cleanup();}
- for(unsigned call=1;call<=3;++call) {failAttachCall=call;REQUIRE(ioswitch_block_publish()!=0 && IOService::registered.empty());REQUIRE(creates==destroys);cleanup();}
- for(unsigned call=1;call<=3;++call) {failStartCall=call;REQUIRE(ioswitch_block_publish()!=0 && IOService::registered.empty());REQUIRE(creates==destroys);cleanup();}
- for(unsigned call=1;call<=4;++call) {failPropertyCall=call;REQUIRE(ioswitch_block_publish()!=0 && IOService::registered.empty());REQUIRE(creates==destroys);cleanup();}
- for(unsigned call=1;call<=2;++call) {failMallocCall=call;REQUIRE(ioswitch_block_publish()!=0 && IOService::registered.empty());REQUIRE(creates==(call==2?1:0));cleanup();}
- invalidSize=true;REQUIRE(ioswitch_block_publish()==IOSW_BLOCK_CORRUPT && IOService::registered.empty() && creates==destroys);cleanup();
- createStatus=IOSW_BLOCK_IO;REQUIRE(ioswitch_block_publish()==IOSW_BLOCK_IO && IOService::registered.empty());cleanup();
+ for(unsigned call=1;call<=3;++call) {failAllocationCall=call;REQUIRE(switch_block_publish()!=0 && IOService::registered.empty());REQUIRE(switch_block_publish()!=0);REQUIRE(creates==destroys);cleanup();}
+ for(unsigned call=1;call<=3;++call) {failAttachCall=call;REQUIRE(switch_block_publish()!=0 && IOService::registered.empty());REQUIRE(creates==destroys);cleanup();}
+ for(unsigned call=1;call<=3;++call) {failStartCall=call;REQUIRE(switch_block_publish()!=0 && IOService::registered.empty());REQUIRE(creates==destroys);cleanup();}
+ for(unsigned call=1;call<=4;++call) {failPropertyCall=call;REQUIRE(switch_block_publish()!=0 && IOService::registered.empty());REQUIRE(creates==destroys);cleanup();}
+ for(unsigned call=1;call<=2;++call) {failMallocCall=call;REQUIRE(switch_block_publish()!=0 && IOService::registered.empty());REQUIRE(creates==(call==2?1:0));cleanup();}
+ invalidSize=true;REQUIRE(switch_block_publish()==IOSW_BLOCK_CORRUPT && IOService::registered.empty() && creates==destroys);cleanup();
+ createStatus=IOSW_BLOCK_IO;REQUIRE(switch_block_publish()==IOSW_BLOCK_IO && IOService::registered.empty());cleanup();
 }
 static void textProperty(IOService *service,const char *key,const char *text) {auto *s=OSString::withCString(text);service->setProperty(key,s);s->release();}
 static IOService *media(unsigned disk,const char *name,IOService *parent=nullptr) {
@@ -145,21 +145,21 @@ static IOService *media(unsigned disk,const char *name,IOService *parent=nullptr
  REQUIRE(m->attach(parent?parent:child(disk)));IOService::candidates.push_back(m);return m;
 }
 static void registry() {
- publish();char path[64];REQUIRE(ioswitch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY && !path[0]);
- media(0,"disk7s1");media(1,"disk12s2");REQUIRE(ioswitch_block_volume_path(0,path,sizeof(path))==0 && !std::strcmp(path,"/dev/disk7s1"));
- REQUIRE(ioswitch_block_volume_path(1,path,sizeof(path))==0 && !std::strcmp(path,"/dev/disk12s2"));
- REQUIRE(ioswitch_block_volume_path(2,path,sizeof(path))==IOSW_BLOCK_INVALID && !path[0]);
- REQUIRE(ioswitch_block_volume_path(0,path,11)==IOSW_BLOCK_NOT_READY && !path[0]);
- media(0,"disk99s1");REQUIRE(ioswitch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_CORRUPT && !path[0]);cleanup();
- publish();auto *m=media(0,"disk1s1",child(1));REQUIRE(ioswitch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY);cleanup();
- publish();m=media(0,"../../disk1");REQUIRE(ioswitch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY);cleanup();
- publish();m=media(0,"disk1s1");m->inactive=true;REQUIRE(ioswitch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY);cleanup();
- publish();m=media(0,"disk1s1");infoStatus=IOSW_BLOCK_NOT_READY;REQUIRE(ioswitch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY && !path[0]);cleanup();
+ publish();char path[64];REQUIRE(switch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY && !path[0]);
+ media(0,"disk7s1");media(1,"disk12s2");REQUIRE(switch_block_volume_path(0,path,sizeof(path))==0 && !std::strcmp(path,"/dev/disk7s1"));
+ REQUIRE(switch_block_volume_path(1,path,sizeof(path))==0 && !std::strcmp(path,"/dev/disk12s2"));
+ REQUIRE(switch_block_volume_path(2,path,sizeof(path))==IOSW_BLOCK_INVALID && !path[0]);
+ REQUIRE(switch_block_volume_path(0,path,11)==IOSW_BLOCK_NOT_READY && !path[0]);
+ media(0,"disk99s1");REQUIRE(switch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_CORRUPT && !path[0]);cleanup();
+ publish();auto *m=media(0,"disk1s1",child(1));REQUIRE(switch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY);cleanup();
+ publish();m=media(0,"../../disk1");REQUIRE(switch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY);cleanup();
+ publish();m=media(0,"disk1s1");m->inactive=true;REQUIRE(switch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY);cleanup();
+ publish();m=media(0,"disk1s1");infoStatus=IOSW_BLOCK_NOT_READY;REQUIRE(switch_block_volume_path(0,path,sizeof(path))==IOSW_BLOCK_NOT_READY && !path[0]);cleanup();
 }
 // One process per scenario: the driver's publication and the stand-ins' registry are boot-wide. The resource service
 // the driver publishes under comes and goes with the scenario, and nothing it allocated outlives it.
 static void scenario(void (*body)()) {
- ioswitch::test::ExpectPassesInFreshProcess([body] {
+ switch_ios::test::ExpectPassesInFreshProcess([body] {
   IOService::resource=new IOService;
   body();
   IOService::resource->release();IOService::resource=nullptr;
@@ -167,9 +167,9 @@ static void scenario(void (*body)()) {
  });
 }
 
-TEST(NativeIOSwitchBlock, BasicReads) { scenario(basic); }
-TEST(NativeIOSwitchBlock, RejectedRequestsAndMutations) { scenario(rejected); }
-TEST(NativeIOSwitchBlock, BackendErrorsAndShortCopies) { scenario(errors); }
-TEST(NativeIOSwitchBlock, ReentryAndTwoThreadSerialization) { scenario(concurrent); }
-TEST(NativeIOSwitchBlock, PublicationRollback) { scenario(failures); }
-TEST(NativeIOSwitchBlock, VolumePathByUuid) { scenario(registry); }
+TEST(NativeSwitchBlock, BasicReads) { scenario(basic); }
+TEST(NativeSwitchBlock, RejectedRequestsAndMutations) { scenario(rejected); }
+TEST(NativeSwitchBlock, BackendErrorsAndShortCopies) { scenario(errors); }
+TEST(NativeSwitchBlock, ReentryAndTwoThreadSerialization) { scenario(concurrent); }
+TEST(NativeSwitchBlock, PublicationRollback) { scenario(failures); }
+TEST(NativeSwitchBlock, VolumePathByUuid) { scenario(registry); }

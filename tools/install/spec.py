@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """What the kernel expects on the SD card, read from the kernel's own sources (they are the spec, not a copy).
 
-    spec.py --raw-mount IOSwitchRawMount.inc --cryptex-h IOSwitchCryptex.h --cryptex-cpp IOSwitchCryptex.cpp
-            --block-cpp NativeIOSwitchBlock.cpp --out spec.json
+    spec.py --raw-mount SwitchRawMount.h --cryptex-h SwitchCryptex.h --cryptex-cpp SwitchCryptex.cpp
+            --block-cpp NativeSwitchBlock.cpp --out spec.json
 
-  IOSwitchRawMount.inc     IOSW_RAW_DATA_UUID, IOSW_RAW_PREBOOT_UUID, IOSW_RAW_BYTES (the APFS partition's exact size)
-  IOSwitchCryptex.h        IOSWITCH_PREBOOT_UUID (must agree), the two cryptex volume UUIDs
-  IOSwitchCryptex.cpp      the Preboot paths of the two cryptex images
-  NativeIOSwitchBlock.cpp  kRootUUID (the System volume, also the ADT root-matching UUID) and the APFS type GUID it
+  SwitchRawMount.h     IOSW_RAW_DATA_UUID, IOSW_RAW_PREBOOT_UUID, IOSW_RAW_BYTES (the APFS partition's exact size)
+  SwitchCryptex.h        SWITCH_PREBOOT_UUID (must agree), the two cryptex volume UUIDs
+  SwitchCryptex.cpp      the Preboot paths of the two cryptex images
+  NativeSwitchBlock.cpp  kRootUUID (the System volume, also the ADT root-matching UUID) and the APFS type GUID it
                            selects the partition by
 """
 import argparse
@@ -41,11 +41,11 @@ def parse(raw_mount, cryptex_h, cryptex_cpp, block_cpp):
     if not size_match:
         raise SystemExit("{}: IOSW_RAW_BYTES is not a number: {}".format(raw_mount, size))
     partition_bytes = int(size_match.group(1))
-    if preboot != _uuid(_define(h_text, "IOSWITCH_PREBOOT_UUID", cryptex_h), "IOSWITCH_PREBOOT_UUID"):
-        raise SystemExit("IOSwitchRawMount.inc and IOSwitchCryptex.h disagree on the Preboot UUID")
-    system_cryptex = _uuid(_define(h_text, "IOSWITCH_SYSTEM_CRYPTEX_UUID", cryptex_h), "IOSWITCH_SYSTEM_CRYPTEX_UUID")
-    app_cryptex = _uuid(_define(h_text, "IOSWITCH_APP_CRYPTEX_UUID", cryptex_h), "IOSWITCH_APP_CRYPTEX_UUID")
-    paths = re.search(r"paths\[IOSWITCH_CRYPTEX_COUNT\]\s*=\s*\{([^}]*)\}", cpp_text)
+    if preboot != _uuid(_define(h_text, "SWITCH_PREBOOT_UUID", cryptex_h), "SWITCH_PREBOOT_UUID"):
+        raise SystemExit("SwitchRawMount.h and SwitchCryptex.h disagree on the Preboot UUID")
+    system_cryptex = _uuid(_define(h_text, "SWITCH_SYSTEM_CRYPTEX_UUID", cryptex_h), "SWITCH_SYSTEM_CRYPTEX_UUID")
+    app_cryptex = _uuid(_define(h_text, "SWITCH_APP_CRYPTEX_UUID", cryptex_h), "SWITCH_APP_CRYPTEX_UUID")
+    paths = re.search(r"paths\[SWITCH_CRYPTEX_COUNT\]\s*=\s*\{([^}]*)\}", cpp_text)
     if not paths:
         raise SystemExit("{}: no cryptex paths table".format(cryptex_cpp))
     images = re.findall(r'"(/private/preboot/[^"]+)"', paths.group(1))
@@ -68,8 +68,8 @@ def parse(raw_mount, cryptex_h, cryptex_cpp, block_cpp):
         "partition_type": str(uuid.UUID(bytes_le=type_bytes)).upper(),
         "volumes": {
             "system": {"uuid": _uuid(root.group(1), "kRootUUID"), "role": 0x0001},
-            "data": {"uuid": data, "role": 0x0040, "name": "IOSwitchDataTrial"},
-            "preboot": {"uuid": preboot, "role": 0x0010, "name": "IOSwitchPrebootTrial"},
+            "data": {"uuid": data, "role": 0x0040, "name": "SwitchDataTrial"},
+            "preboot": {"uuid": preboot, "role": 0x0010, "name": "SwitchPrebootTrial"},
         },
         "cryptexes": [
             {"path": images[0], "volume_uuid": system_cryptex, "member": "system_cryptex"},

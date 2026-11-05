@@ -1,5 +1,5 @@
-#ifndef IOSWITCH_LOADER_MEMORY_H
-#define IOSWITCH_LOADER_MEMORY_H
+#ifndef SWITCH_LOADER_MEMORY_H
+#define SWITCH_LOADER_MEMORY_H
 #include <stdint.h>
 #include "ram.h"
 struct loader_memory_report {

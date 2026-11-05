@@ -39,7 +39,7 @@ def main():
     args = parser.parse_args()
     workspace = os.environ.get("BUILD_WORKSPACE_DIRECTORY") or sys.exit("run with bazel run")
     bazel = os.environ.get("BAZEL", "bazel")
-    scratch = Path(tempfile.mkdtemp(prefix="ioswitch-repro-"))
+    scratch = Path(tempfile.mkdtemp(prefix="switch-repro-"))
     results = []
     try:
         for n in (1, 2):

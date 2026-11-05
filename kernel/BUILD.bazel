@@ -55,18 +55,18 @@ cc_library(
 filegroup(
     name = "lint_sources",
     srcs = [
-        "//diagnostics/ioswitch:all_files",
+        "//diagnostics/switch:all_files",
         "//drivers/ArmCpu:all_files",
         "//drivers/ArmDTPlatform:all_files",
         "//drivers/ArmGIC:all_files",
         "//drivers/ArmVirtPlatform:all_files",
-        "//drivers/IOSwitchAccelStub:all_files",
+        "//drivers/SwitchAccelStub:all_files",
         "//drivers/NativeAES:all_files",
         "//drivers/NativeAdreno:all_files",
         "//drivers/NativeGeniSpi:all_files",
         "//drivers/NativeHidInput:all_files",
-        "//drivers/NativeIOSwitchBlock:all_files",
-        "//drivers/NativeIOSwitchWatchdog:all_files",
+        "//drivers/NativeSwitchBlock:all_files",
+        "//drivers/NativeSwitchWatchdog:all_files",
         "//drivers/NativeKeyStoreEvents:all_files",
         "//drivers/NativeMobileDisplay:all_files",
         "//drivers/NativeRamBlock:all_files",
@@ -257,10 +257,10 @@ tool_output(
 )
 
 kernel_archive(
-    name = "libNativeIOSwitchBlockDevice",
-    out = "build/native-ioswitch-root/libNativeIOSwitchBlockDevice.a",
+    name = "libNativeSwitchBlockDevice",
+    out = "build/native-switch-root/libNativeSwitchBlockDevice.a",
     members = [
-        "//drivers/NativeIOSwitchBlock:NativeIOSwitchBlock",
+        "//drivers/NativeSwitchBlock:NativeSwitchBlock",
         "//drivers/SwitchNVRAM:SwitchNVRAM",
         "//drivers/TegraGPIO:TegraGPIO",
         "//drivers/TegraI2C:TegraI2C",
@@ -316,8 +316,8 @@ kernel_archive(
         "//drivers/SwitchMotion:SwitchMotion",
         "//drivers/SwitchBrightness:SwitchBrightness",
         "//drivers/SwitchJoyCon:SwitchJoyCon",
-        "//drivers/IOSwitchAccelStub:IOSwitchAccelStub",
-        "//drivers/NativeIOSwitchWatchdog:NativeIOSwitchWatchdog",
+        "//drivers/SwitchAccelStub:SwitchAccelStub",
+        "//drivers/NativeSwitchWatchdog:NativeSwitchWatchdog",
         "//drivers/NativeKeyStoreEvents:AKSDeviceKey",
     ],
 )
@@ -345,7 +345,7 @@ kernel_archive(
 
 kernel_archive(
     name = "libVerifiedRootProbe",
-    out = "build/verified-root-ioswitch/libVerifiedRootProbe.a",
+    out = "build/verified-root-switch/libVerifiedRootProbe.a",
     members = ["//kits/VerifiedRoot:VerifiedRoot"],
 )
 
@@ -362,9 +362,9 @@ kernel_archive(
 )
 
 kernel_archive(
-    name = "libIOSwitchDiag",
-    out = "build/ioswitch-diag/libIOSwitchDiag.a",
-    members = ["//diagnostics/ioswitch:IOSwitchDiag"],
+    name = "libSwitchDiag",
+    out = "build/switch-diag/libSwitchDiag.a",
+    members = ["//diagnostics/switch:SwitchDiag"],
 )
 
 kernel_archive(
@@ -384,13 +384,13 @@ xnu_kernel(
         ":libArmCpu",
         ":libNativeLegacyDisplay",
         ":libNativeAES",
-        ":libNativeIOSwitchBlockDevice",
+        ":libNativeSwitchBlockDevice",
         "//drivers/NativeRamBlock:NativeRamBlock",
         ":libpthread",
         ":libVerifiedRootProbe",
         ":libmockfs_fixture",
         ":libShengPlatformPower",
-        ":libIOSwitchDiag",
+        ":libSwitchDiag",
         ":libLinkStubs",
     ],
     modes = [

@@ -1,4 +1,4 @@
-# IOSwitch native XNU experiment v17 (persistent Data; cacheable copy). Generated constants pin both inputs.
+# Switch native XNU experiment v17 (persistent Data; cacheable copy). Generated constants pin both inputs.
 # This script reads bounded payload files and mutates their RAM staging areas.
 # All script refusals hold. bootm go is a nonreturning kernel handoff: returning
 # from the native entry would trigger U-Boot's own reset path before this script.
@@ -65,7 +65,7 @@ if test "${handoff_status}" = "READY"; then
 fi
 
 if test "${handoff_status}" = "READY"; then
-    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-xnu-v23/loader.uboot.bin; then
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ios-native-xnu-v23/loader.uboot.bin; then
         if itest.l ${filesize} == 0x1c040; then
             true
         else
@@ -76,7 +76,7 @@ if test "${handoff_status}" = "READY"; then
     fi
 fi
 if test "${handoff_status}" = "READY"; then
-    if load mmc ${devnum}:${distro_bootpart} 0xA0100000 /switchroot/ioswitch-native-xnu-v23/loader.uboot.bin 0x1c040; then
+    if load mmc ${devnum}:${distro_bootpart} 0xA0100000 /switchroot/ios-native-xnu-v23/loader.uboot.bin 0x1c040; then
         if itest.l ${filesize} == 0x1c040; then
             echoe "LOADER READY"
             setexpr.l ios_loader *0x60005010
@@ -89,7 +89,7 @@ if test "${handoff_status}" = "READY"; then
 fi
 
 if test "${handoff_status}" = "READY"; then
-    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-xnu-v10/oled-sku3.dtb; then
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ios-native-xnu-v10/oled-sku3.dtb; then
         if itest.l ${filesize} == 0x28c52; then
             true
         else
@@ -100,7 +100,7 @@ if test "${handoff_status}" = "READY"; then
     fi
 fi
 if test "${handoff_status}" = "READY"; then
-    if load mmc ${devnum}:${distro_bootpart} 0x8D000000 /switchroot/ioswitch-native-xnu-v10/oled-sku3.dtb 0x28c52; then
+    if load mmc ${devnum}:${distro_bootpart} 0x8D000000 /switchroot/ios-native-xnu-v10/oled-sku3.dtb 0x28c52; then
         if itest.l ${filesize} == 0x28c52; then
             echoe "DTB READY"
             setexpr.l ios_dtb *0x60005010
@@ -122,7 +122,7 @@ fi
 # its sizes and its id (the staged bytes' SHA-256, also built into the loader):
 # this build's window, whole, in RAM. No CRC pass: SD reads have their own card CRC.
 if test "${handoff_status}" = "READY"; then
-    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-xnu-v23/bl33.bin; then
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ios-native-xnu-v23/bl33.bin; then
         if itest.l ${filesize} == @BL33_BYTES@; then
             true
         else
@@ -147,9 +147,9 @@ fi
 
 # Select raw only in the staged XNU command; the inherited payload stays intact.
 if test "${handoff_status}" = "READY"; then
-    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-raw-v24/raw-args.bin; then
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ios-native-raw-v24/raw-args.bin; then
         if itest.l ${filesize} == 0x400; then
-            if load mmc ${devnum}:${distro_bootpart} 0xa617c06c /switchroot/ioswitch-native-raw-v24/raw-args.bin 0x400; then
+            if load mmc ${devnum}:${distro_bootpart} 0xa617c06c /switchroot/ios-native-raw-v24/raw-args.bin 0x400; then
                 if itest.l ${filesize} == 0x400; then
                     echoe "APFS PROFILE READY"
                 else
@@ -192,9 +192,9 @@ fi
 # exercised by the native CPU probe. The following main bootm start resets
 # U-Boot's temporary image state before preparing the actual kernel handoff.
 if test "${handoff_status}" = "READY"; then
-    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ioswitch-native-xnu-v10/exporter.uimg; then
+    if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ios-native-xnu-v10/exporter.uimg; then
         if itest.l ${filesize} == 0x5e90; then
-            if load mmc ${devnum}:${distro_bootpart} 0xA7100000 /switchroot/ioswitch-native-xnu-v10/exporter.uimg 0x5e90; then
+            if load mmc ${devnum}:${distro_bootpart} 0xA7100000 /switchroot/ios-native-xnu-v10/exporter.uimg 0x5e90; then
                 if itest.l ${filesize} == 0x5e90; then
                     if setenv verify no && setenv autostart no && bootm start 0xA7100000; then
                         if bootm loados; then
@@ -226,7 +226,7 @@ fi
 if test "${handoff_status}" = "READY"; then
     # These environment changes exist only for this boot. No saveenv is used.
     # All-ones fdt_high is the exact ARM64 U-Boot in-place FDT contract.
-    if setenv fdt_high ffffffffffffffff && setenv bootm_low 0x80000000 && setenv bootm_size 0x7FD00000 && setenv bootm_mapsize 0x7FD00000 && setenv bootargs ioswitch_native_xnu=1 && setenv verify no; then
+    if setenv fdt_high ffffffffffffffff && setenv bootm_low 0x80000000 && setenv bootm_size 0x7FD00000 && setenv bootm_mapsize 0x7FD00000 && setenv bootargs switch_native_xnu=1 && setenv verify no; then
         if bootm start 0xA0100000 - 0x8D000000; then
             if bootm loados; then
                 echoe "LOADER LOADED"

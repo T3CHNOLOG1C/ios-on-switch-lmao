@@ -6,10 +6,10 @@ load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
 
-# raw/pack/mesa is Mesa's code, kept as upstream has it; srgb_knots.inc is m2v's SRGB_KNOTS table, generated.
+# raw/pack/mesa is Mesa's code, kept as upstream has it; srgb_knots.h is m2v's SRGB_KNOTS table, generated.
 lint_files(exclude = [
     "raw/pack/mesa/**",
-    "raw/pack/srgb_knots.inc",
+    "raw/pack/srgb_knots.h",
 ])
 
 exports_files(glob(
@@ -40,7 +40,7 @@ filegroup(
 
 filegroup(
     name = "raw_stack_sources",
-    srcs = glob(["raw/**/*.%s" % suffix for suffix in ("h", "c", "cpp", "mm", "py", "inc")]),
+    srcs = glob(["raw/**/*.%s" % suffix for suffix in ("h", "c", "cpp", "mm", "py")]),
 )
 
 # The pack generator (raw/pack/rawpack.py and the modules it imports); //tools/gpu:rawpack runs it.

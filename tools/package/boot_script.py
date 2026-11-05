@@ -17,7 +17,7 @@ from loader_abi import STAGE_SOURCE, staged_bl33_bytes
 from uimage import legacy_image
 
 # The entry's folder on the SD card's FAT (switchroot/<NAME>/) and its hekate ini (bootloader/ini/<NAME>.ini).
-NAME = 'ioswitch'
+NAME = 'ios'
 
 
 def boot_script(text: str, loader_bytes: int, bl33: bytes | int, constants: dict, staged_bytes: int) -> str:
@@ -25,7 +25,7 @@ def boot_script(text: str, loader_bytes: int, bl33: bytes | int, constants: dict
     or its size), header and trailer words for the staged kernel window (boot/loader/stage.h)."""
     bl33_bytes = bl33 if isinstance(bl33, int) else len(bl33)
     prefix = '/switchroot/' + NAME + '/'
-    for old in ('/switchroot/ioswitch-native-xnu-v23/', '/switchroot/ioswitch-native-xnu-v10/'):
+    for old in ('/switchroot/ios-native-xnu-v23/', '/switchroot/ios-native-xnu-v10/'):
         text = text.replace(old, prefix)
     text = text.replace('0x1c040', hex(loader_bytes))
     trailer = STAGE_SOURCE + staged_bytes

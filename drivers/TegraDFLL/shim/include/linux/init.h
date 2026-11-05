@@ -1,3 +1,3 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* IOSwitch shim: <linux/init.h> is part of <linux/kernel.h> here. */
+/* Switch shim: <linux/init.h> is part of <linux/kernel.h> here. */
 #include <linux/kernel.h>

@@ -11,9 +11,9 @@
 #include "TegraNVDEC.h"
 #include "nvidia/nvdec_drv.h"
 #include "nvidia/clc5b0.h"
-#include "selftest/H264Picture64.inc"
-#include "selftest/VP9Picture160.inc"
-#include "selftest/HEVCPicture176.inc"
+#include "selftest/H264Picture64.h"
+#include "selftest/VP9Picture160.h"
+#include "selftest/HEVCPicture176.h"
 
 namespace {
 enum { kInput = 1, kAux = 2, kSurface = 3 };
@@ -123,7 +123,7 @@ int run(char *line, size_t size)
              status->error_status, status->cycle_count, crc, kTestLumaCrc);
     return ok ? 0 : -5;
 }
-// N3 VP9: libvpx's 160x144 key frame through the plug-in's own method stream and buffer layout (VP9Picture160.inc, made
+// N3 VP9: libvpx's 160x144 key frame through the plug-in's own method stream and buffer layout (VP9Picture160.h, made
 // by SwitchVideoDecoders/test/vp9_host --selftest), luma CRC against libvpx's decode. Buffers 1 input (status,
 // probability table, tile data), 2 aux (tile sizes, segmentation maps, counters, motion vectors, filter), 3 surface.
 TegraNVDECBlock gVP9Blocks[4];
@@ -196,7 +196,7 @@ int runVP9(char *line, size_t size)
              kVP9TestLumaCrc, ok ? "" : "; VP9 stays off, H.264 is unaffected");
     return ok ? 0 : -5;
 }
-// N3 HEVC: x265's 176x144 IDR (CTU 16) through the plug-in's own method stream and buffer layout (HEVCPicture176.inc,
+// N3 HEVC: x265's 176x144 IDR (CTU 16) through the plug-in's own method stream and buffer layout (HEVCPicture176.h,
 // made by SwitchVideoDecoders/test/hevc_host --selftest), luma CRC against FFmpeg's decode. Buffers 1 aux (colocated
 // motion, filter), 2 input (status, tile sizes, scaling lists, bitstream), 3 surface; every picture slot names it.
 TegraNVDECBlock gHEVCBlocks[4];

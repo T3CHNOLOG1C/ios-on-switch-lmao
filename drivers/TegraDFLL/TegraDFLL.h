@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-// Tegra210B01 (Switch OLED) CPU DFLL (CL-DVFS, closed-loop CPU DVFS) for statically linked IOSwitch drivers.
+// Tegra210B01 (Switch OLED) CPU DFLL (CL-DVFS, closed-loop CPU DVFS) for statically linked Switch drivers.
 //
 // The DFLL is a CPU-voltage-tracking oscillator (DVCO) plus a control loop that drives VDD_CPU over its own I2C
 // master: given a target frequency it raises or lowers VDD_CPU until the DVCO, which clocks the A57 cluster, runs at

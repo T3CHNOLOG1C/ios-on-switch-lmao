@@ -1,4 +1,4 @@
-// osfmk/kern/ioswitch_stall.h, the decisions of XNU's UI stall reports: which samples of SpringBoard's or backboardd's
+// osfmk/kern/switch_stall.h, the decisions of XNU's UI stall reports: which samples of SpringBoard's or backboardd's
 // main thread are a stall, that a stall is reported once and its end once, how waits and user addresses are named.
 #include <gtest/gtest.h>
 
@@ -120,7 +120,7 @@ TEST(XnuStall, StarvationIsReportedFromWhenItWasMadeRunnable)
 // The names follow block_hint.h's thread_snapshot_wait_flags by value.
 TEST(XnuStall, WaitNamesFollowBlockHint)
 {
-    const std::string hints = ioswitch::test::SourceText("../xnu-10063.141.1/osfmk/kern/block_hint.h");
+    const std::string hints = switch_ios::test::SourceText("../xnu-10063.141.1/osfmk/kern/block_hint.h");
     const std::regex entry("(kThreadWait[A-Za-z]+) += 0x([0-9a-f]+),");
     unsigned count = 0;
     for (std::sregex_iterator it(hints.begin(), hints.end(), entry), end; it != end; ++it) {

@@ -1,5 +1,5 @@
 {
-  "checksum": "15f951aa1d977dcb1dbf216a3ba4bdd8ffe431fe3a076de7d43f6719e9e62535",
+  "checksum": "658c06911c52353ce64f73b4356e08ccd6247ea2cfa7037dc742a21423676411",
   "conditions": {
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"
@@ -47,7 +47,7 @@
         "rustc_flags": [
           "-Cmetadata=352f79ac2963a554",
           "-Cextra-filename=-8c611b457fff094a",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__ash-0.38.0-1.3.281=/ioswitch/external/+gpu+m2v_crates/ash-0.38.0+1.3.281"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__ash-0.38.0-1.3.281=/switch-ios/external/+gpu+m2v_crates/ash-0.38.0+1.3.281"
         ]
       },
       "library_target_name": "ash",
@@ -93,7 +93,7 @@
         "rustc_flags": [
           "-Cmetadata=8c55dfe3739ad777",
           "-Cextra-filename=-08bbbb8a4846ecb7",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__block-buffer-0.10.4=/ioswitch/external/+gpu+m2v_crates/block-buffer-0.10.4"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__block-buffer-0.10.4=/switch-ios/external/+gpu+m2v_crates/block-buffer-0.10.4"
         ]
       },
       "library_target_name": "block_buffer",
@@ -166,7 +166,7 @@
         "rustc_flags": [
           "-Cmetadata=3aff44da6a8953b9",
           "-Cextra-filename=-9829afcf1eacb3a3",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__cfg-if-1.0.5=/ioswitch/external/+gpu+m2v_crates/cfg-if-1.0.5"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__cfg-if-1.0.5=/switch-ios/external/+gpu+m2v_crates/cfg-if-1.0.5"
         ]
       },
       "library_target_name": "cfg_if",
@@ -229,7 +229,7 @@
         "rustc_flags": [
           "-Cmetadata=d330a47f9a2cc180",
           "-Cextra-filename=-88e1b827dde6d7de",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__cpufeatures-0.2.17=/ioswitch/external/+gpu+m2v_crates/cpufeatures-0.2.17"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__cpufeatures-0.2.17=/switch-ios/external/+gpu+m2v_crates/cpufeatures-0.2.17"
         ]
       },
       "library_target_name": "cpufeatures",
@@ -276,7 +276,7 @@
         "rustc_flags": [
           "-Cmetadata=a62114f1cf15fd19",
           "-Cextra-filename=-de6bbebdcd4f7318",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__crypto-common-0.1.7=/ioswitch/external/+gpu+m2v_crates/crypto-common-0.1.7"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__crypto-common-0.1.7=/switch-ios/external/+gpu+m2v_crates/crypto-common-0.1.7"
         ]
       },
       "library_target_name": "crypto_common",
@@ -327,7 +327,7 @@
         "rustc_flags": [
           "-Cmetadata=37fc15d9c550accf",
           "-Cextra-filename=-8d933be04d24430d",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__digest-0.10.7=/ioswitch/external/+gpu+m2v_crates/digest-0.10.7"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__digest-0.10.7=/switch-ios/external/+gpu+m2v_crates/digest-0.10.7"
         ]
       },
       "library_target_name": "digest",
@@ -445,7 +445,7 @@
         "rustc_flags": [
           "-Cmetadata=2f6c03ff0b25d8b5",
           "-Cextra-filename=-904144865195202f",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__generic-array-0.14.7=/ioswitch/external/+gpu+m2v_crates/generic-array-0.14.7"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__generic-array-0.14.7=/switch-ios/external/+gpu+m2v_crates/generic-array-0.14.7"
         ]
       },
       "library_target_name": "generic_array",
@@ -484,7 +484,7 @@
         "rustc_flags": [
           "-Cmetadata=7aabbc6593744dce",
           "-Cextra-filename=-5bbc855f3d4ecebc",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__itoa-1.0.18=/ioswitch/external/+gpu+m2v_crates/itoa-1.0.18"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__itoa-1.0.18=/switch-ios/external/+gpu+m2v_crates/itoa-1.0.18"
         ]
       },
       "library_target_name": "itoa",
@@ -526,7 +526,7 @@
         "rustc_flags": [
           "-Cmetadata=803b2d2d57b547a6",
           "-Cextra-filename=-6a2856f9644a61e6",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__libc-0.2.191=/ioswitch/external/+gpu+m2v_crates/libc-0.2.191"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__libc-0.2.191=/switch-ios/external/+gpu+m2v_crates/libc-0.2.191"
         ]
       },
       "library_target_name": "libc",
@@ -583,7 +583,7 @@
         "rustc_flags": [
           "-Cmetadata=9baf276cd6639d7d",
           "-Cextra-filename=-4da28b856ecfffeb",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__libloading-0.8.9=/ioswitch/external/+gpu+m2v_crates/libloading-0.8.9"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__libloading-0.8.9=/switch-ios/external/+gpu+m2v_crates/libloading-0.8.9"
         ]
       },
       "library_target_name": "libloading",
@@ -620,7 +620,7 @@
         "rustc_flags": [
           "-Cmetadata=8e10fdde55d4e892",
           "-Cextra-filename=-1ff1a266c5e346c5",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__memchr-2.8.3=/ioswitch/external/+gpu+m2v_crates/memchr-2.8.3"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__memchr-2.8.3=/switch-ios/external/+gpu+m2v_crates/memchr-2.8.3"
         ]
       },
       "library_target_name": "memchr",
@@ -813,7 +813,7 @@
         "rustc_flags": [
           "-Cmetadata=4077337934c446dd",
           "-Cextra-filename=-d99c2c85844bbcb9",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__serde_core-1.0.229=/ioswitch/external/+gpu+m2v_crates/serde_core-1.0.229"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__serde_core-1.0.229=/switch-ios/external/+gpu+m2v_crates/serde_core-1.0.229"
         ]
       },
       "library_target_name": "serde_core",
@@ -932,7 +932,7 @@
         "rustc_flags": [
           "-Cmetadata=3970bc0bfe8bd852",
           "-Cextra-filename=-3c3742b7f724ed96",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__serde_json-1.0.154=/ioswitch/external/+gpu+m2v_crates/serde_json-1.0.154"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__serde_json-1.0.154=/switch-ios/external/+gpu+m2v_crates/serde_json-1.0.154"
         ]
       },
       "library_target_name": "serde_json",
@@ -1002,7 +1002,7 @@
         "rustc_flags": [
           "-Cmetadata=e4da127270afa1a8",
           "-Cextra-filename=-909bcf8f2362a581",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__sha2-0.10.9=/ioswitch/external/+gpu+m2v_crates/sha2-0.10.9"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__sha2-0.10.9=/switch-ios/external/+gpu+m2v_crates/sha2-0.10.9"
         ]
       },
       "library_target_name": "sha2",
@@ -1054,7 +1054,7 @@
         "rustc_flags": [
           "-Cmetadata=abefad0bff350234",
           "-Cextra-filename=-3fe95fed770081cb",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__sha2-asm-0.6.4=/ioswitch/external/+gpu+m2v_crates/sha2-asm-0.6.4"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__sha2-asm-0.6.4=/switch-ios/external/+gpu+m2v_crates/sha2-asm-0.6.4"
         ]
       },
       "library_target_name": "sha2_asm",
@@ -1176,7 +1176,7 @@
         "rustc_flags": [
           "-Cmetadata=5b68734e02b5901c",
           "-Cextra-filename=-82b5615311a1400b",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__typenum-1.20.1=/ioswitch/external/+gpu+m2v_crates/typenum-1.20.1"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__typenum-1.20.1=/switch-ios/external/+gpu+m2v_crates/typenum-1.20.1"
         ]
       },
       "library_target_name": "typenum",
@@ -1302,7 +1302,7 @@
         "rustc_flags": [
           "-Cmetadata=18011039993036ea",
           "-Cextra-filename=-68b4594a61e3f2c0",
-          "--remap-path-prefix=external/rules_rust++crate+rust_crates__zmij-1.0.23=/ioswitch/external/+gpu+m2v_crates/zmij-1.0.23"
+          "--remap-path-prefix=external/rules_rust++crate+rust_crates__zmij-1.0.23=/switch-ios/external/+gpu+m2v_crates/zmij-1.0.23"
         ]
       },
       "library_target_name": "zmij",

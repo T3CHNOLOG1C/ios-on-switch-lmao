@@ -13,8 +13,8 @@
 
 #include "bazel/testing/source_text.h"
 
-using ioswitch::test::Count;
-using ioswitch::test::SourceText;
+using switch_ios::test::Count;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 
@@ -119,7 +119,7 @@ TEST(SwitchXudcSource, StatsLinesFitTheKernelsOsLogBuffer)
 TEST(SwitchXudcSource, SleepPowersOnWholeBeforeTheBus)
 {
     const std::string source = SourceText("../SwitchXUDC.cpp");
-    const std::string sleep = ioswitch::test::Between(source, "IOReturn SwitchXUDC::systemSleep(bool entering)",
+    const std::string sleep = switch_ios::test::Between(source, "IOReturn SwitchXUDC::systemSleep(bool entering)",
                                                       "void switchxudc_sleep(bool entering)");
     const size_t cancel = sleep.find("delivery->cancelTimeout();"), off = sleep.find("setBus(false);"),
                  masked = sleep.find("interrupt->disable();"), power = sleep.find("hw.powerOn(why, sizeof(why))"),
@@ -143,11 +143,11 @@ TEST(SwitchXudcSource, AttachedHostHoldsIdleSleep)
     EXPECT_EQ(Count(source, "hostPresent = "), 1u) << "only setHostPresent writes it";
     EXPECT_EQ(Count(source, "setHostPresent(true);"), 2u);   // bus reset with a host, resume from a bus suspend
     EXPECT_EQ(Count(source, "setHostPresent(false);"), 3u);  // disconnect, bus suspend, off the bus
-    const std::string set = ioswitch::test::Between(source, "void SwitchXUDC::setHostPresent(bool present)", "\n}\n");
+    const std::string set = switch_ios::test::Between(source, "void SwitchXUDC::setHostPresent(bool present)", "\n}\n");
     EXPECT_THAT(set, HasSubstr("thread_call_enter(idleHoldCall);"));
     EXPECT_THAT(set, Not(HasSubstr("PMAssertion"))) << "never on the work loop";
     const std::string hold =
-        ioswitch::test::Between(source, "void SwitchXUDC::applyIdleHold(thread_call_param_t owner", "\n}\n");
+        switch_ios::test::Between(source, "void SwitchXUDC::applyIdleHold(thread_call_param_t owner", "\n}\n");
     EXPECT_THAT(hold, HasSubstr("kIOPMDriverAssertionPreventSystemIdleSleepBit"));
     EXPECT_THAT(hold, HasSubstr("releasePMAssertion(self->idleHold);"));
     EXPECT_THAT(hold, Not(HasSubstr("kIOPMDriverAssertionCPUBit")));

@@ -44,7 +44,7 @@ crate.spec(
 # rules_rust.patch), so its symbols, the order fat LTO merges the crates' modules in, and with them the
 # release bridge's bytes are cargo's. The values are the Metal bridge's `cargo build --release --target
 # aarch64-apple-ios -v` at 720ef1ce; a crate whose version changes takes rules_rust's own (delete its line). Its sources
-# are named as cargo's vendor directory named them (/ioswitch/external/+gpu+m2v_crates/<name>-<version>/...: panic
+# are named as cargo's vendor directory named them (/switch-ios/external/+gpu+m2v_crates/<name>-<version>/...: panic
 # locations in the plugin), whatever the repository's own name.
 [
     crate.annotation(
@@ -52,7 +52,7 @@ crate.spec(
         rustc_flags = [
             "-Cmetadata=" + metadata,
             "-Cextra-filename=-" + extra,
-            "--remap-path-prefix=external/rules_rust++crate+rust_crates__{0}-{1}=/ioswitch/external/+gpu+m2v_crates/{0}-{1}".format(name, version),
+            "--remap-path-prefix=external/rules_rust++crate+rust_crates__{0}-{1}=/switch-ios/external/+gpu+m2v_crates/{0}-{1}".format(name, version),
         ],
         version = version,
     )
@@ -81,7 +81,7 @@ crate.annotation(
     rustc_flags = [
         "-Cmetadata=352f79ac2963a554",
         "-Cextra-filename=-8c611b457fff094a",
-        "--remap-path-prefix=external/rules_rust++crate+rust_crates__ash-0.38.0-1.3.281=/ioswitch/external/+gpu+m2v_crates/ash-0.38.0+1.3.281",
+        "--remap-path-prefix=external/rules_rust++crate+rust_crates__ash-0.38.0-1.3.281=/switch-ios/external/+gpu+m2v_crates/ash-0.38.0+1.3.281",
     ],
     version = "0.38.0+1.3.281",
 )
@@ -98,7 +98,7 @@ crate.annotation(
     rustc_flags = [
         "-Cmetadata=abefad0bff350234",
         "-Cextra-filename=-3fe95fed770081cb",
-        "--remap-path-prefix=external/rules_rust++crate+rust_crates__sha2-asm-0.6.4=/ioswitch/external/+gpu+m2v_crates/sha2-asm-0.6.4",
+        "--remap-path-prefix=external/rules_rust++crate+rust_crates__sha2-asm-0.6.4=/switch-ios/external/+gpu+m2v_crates/sha2-asm-0.6.4",
     ],
     version = "0.6.4",
 )

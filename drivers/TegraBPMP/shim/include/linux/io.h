@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: MMIO accessors. The BPMP channel areas are device memory, so copies use naturally aligned
+/* Switch TegraBPMP shim: MMIO accessors. The BPMP channel areas are device memory, so copies use naturally aligned
  * 32-bit accesses where they can and single bytes otherwise (no unaligned or paired accesses to Device memory). */
 #ifndef BPXNU_LINUX_IO_H
 #define BPXNU_LINUX_IO_H

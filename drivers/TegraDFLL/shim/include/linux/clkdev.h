@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* IOSwitch shim: clkdev lookups. Consumers find clocks by name in shim/linux.c's clock table instead. */
+/* Switch shim: clkdev lookups. Consumers find clocks by name in shim/linux.c's clock table instead. */
 #ifndef TDFLL_LINUX_CLKDEV_H
 #define TDFLL_LINUX_CLKDEV_H
 #include <linux/clk.h>

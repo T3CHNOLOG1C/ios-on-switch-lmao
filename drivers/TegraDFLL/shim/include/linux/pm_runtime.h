@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: runtime PM as a usage count. While enabled, 0 -> 1 runs the driver's runtime_resume
+ * Switch shim: runtime PM as a usage count. While enabled, 0 -> 1 runs the driver's runtime_resume
  * (tegra_dfll_runtime_resume: enable ref/soc/i2c clocks) and 1 -> 0 runs runtime_suspend, synchronously.
  */
 #ifndef TDFLL_LINUX_PM_RUNTIME_H

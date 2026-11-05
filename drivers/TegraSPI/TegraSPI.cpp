@@ -12,7 +12,7 @@
 #include <kern/sched_prim.h>
 #include <libkern/OSAtomic.h>
 #include "TegraSPI.h"
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -249,7 +249,7 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
         if (!(trans & TRANS_RDY) || (mask & INTR_ALL)) break;
         if (grace) {
             char gic[192];
-            ioswitch_interrupt_describe(intid(bus), gic, sizeof(gic));
+            switch_interrupt_describe(intid(bus), gic, sizeof(gic));
             panic("TegraSPI: SPI%u interrupt lost (INTID %u): TRANS_STATUS %#x FIFO_STATUS %#x INTR_MASK %#x, %s", bus,
                   intid(bus), trans, r32(b.regs, FIFO_STATUS), mask, gic);
         }
@@ -319,7 +319,7 @@ int bringUp(unsigned bus, Bus &b)
     const int result = configure(b, info);
     if (result != TEGRA_SPI_OK) return result;
     w32(b.regs, INTR_MASK, r32(b.regs, INTR_MASK) | INTR_ALL);  // quiet until the event source is in place
-    IOService *nub = ioswitch_interrupt_nub(intid(bus), false);
+    IOService *nub = switch_interrupt_nub(intid(bus), false);
     b.irq = IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, &noAction, &filterInterrupt, nub, 0);
     if (!b.irq || gLoop->addEventSource(b.irq) != kIOReturnSuccess) {
         panic("TegraSPI: cannot attach the SPI%u interrupt (INTID %u)", bus, intid(bus));

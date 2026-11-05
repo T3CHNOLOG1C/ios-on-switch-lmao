@@ -8,8 +8,8 @@ lint_files(exclude = [
     "**/linux/**",
     "**/nouveau/**",
     "**/nvidia/**",
-    "selftest/HEVCPicture176.inc",
-    "selftest/VP9Picture160.inc",
+    "selftest/HEVCPicture176.h",
+    "selftest/VP9Picture160.h",
 ])
 
 exports_files(glob(

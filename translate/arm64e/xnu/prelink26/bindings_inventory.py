@@ -4,12 +4,12 @@ import json, os, re, sys, bisect
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import kc17
-T = "/Users/brunostjohn/Development/Projects/ioswitch/out/native-a57/root-v1/tree"
-FILES = ["build/native-ioswitch-root/original-bindings.S", "build/native-ram-block/original-bindings.S",
+T = os.path.join(HERE, "../../../../out/native-a57/root-v1/tree")
+FILES = ["build/native-switch-root/original-bindings.S", "build/native-ram-block/original-bindings.S",
          "build/sheng-platform-power/original-bindings.S", "build/native-legacy-display/original-bindings.S",
          "build/native-hid-input/original-bindings.S", "drivers/SwitchUSB/original-bindings.S",
          "drivers/SwitchUSB/xhci-original-bindings.S", "drivers/SwitchBrightness/original-bindings.S",
-         "drivers/IOSwitchAccelStub/original-bindings.S", "scripts/data/native-aes-original-bindings.S"]
+         "drivers/SwitchAccelStub/original-bindings.S", "scripts/data/native-aes-original-bindings.S"]
 SLIDE17 = -0x1000000
 d, kn, names, kexts, gots = kc17.load()
 # 17 extents per kext

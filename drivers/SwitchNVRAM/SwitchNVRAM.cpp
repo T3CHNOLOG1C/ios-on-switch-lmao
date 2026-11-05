@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// NVRAM controller for XNU's IODTNVRAM, kept in a file on the Data volume: /private/var/ioswitch/nvram.bin (format in
+// NVRAM controller for XNU's IODTNVRAM, kept in a file on the Data volume: /private/var/Switch/nvram.bin (format in
 // SwitchNVRAMStore.h).
 //
 // IODTNVRAM builds its variables from /chosen/nvram-proxy-data (an empty bank from the packaging) when the platform
@@ -10,8 +10,8 @@
 //
 // Restore. Nothing can read the Data volume before the kernel mounts it, just before launchd starts (kern_exec.c
 // load_init_program), so until then IODTNVRAM has only the proxy and what the kernel set since boot (AppleImage4, the
-// boot-args default). ioswitch_nvram_data_mounted(), called there, reads the file on a kernel thread and gives its
-// newest valid bank to IODTNVRAM (IONVRAMCHRPHandler::ioswitchRestore, XNU patch), which adds each variable not set
+// boot-args default). switch_nvram_data_mounted(), called there, reads the file on a kernel thread and gives its
+// newest valid bank to IODTNVRAM (IONVRAMCHRPHandler::switchRestore, XNU patch), which adds each variable not set
 // since boot; then Lockdown Mode, which the kernel read before, is read again. Userland sees the saved NVRAM from its
 // first read. A missing or unusable file means an empty NVRAM and one log line.
 //
@@ -41,14 +41,14 @@
 
 // XNU patch (iokit/Kernel/IONVRAMCHRPHandler.cpp): adds the variables of a saved CHRP bank to IODTNVRAM, except those
 // set since boot and those named in skip; counts the ones added and the ones that did not fit.
-extern "C" IOReturn ioswitch_nvram_restore(IODTNVRAM *nvram, const uint8_t *image, size_t length,
+extern "C" IOReturn switch_nvram_restore(IODTNVRAM *nvram, const uint8_t *image, size_t length,
                                            const char *const *skip, uint32_t *added, uint32_t *refused);
 // XNU patch (bsd/kern/lockdown_mode.c): reads Lockdown Mode's ldm again, which lockdown_mode_init read before Data was
 // mounted. ldm is kernel-only: the kernel task's read.
 extern "C" void lockdown_mode_nvram_restored(void);
 
 namespace {
-const char kPath[] = "/private/var/ioswitch/nvram.bin";
+const char kPath[] = "/private/var/Switch/nvram.bin";
 constexpr uint32_t kWriteDelayMs = 2000;
 // The apple_nvram_header (CHRP header, adler32, generation): what changes on every IODTNVRAM sync even when no
 // variable did. The variables follow it.
@@ -311,7 +311,7 @@ uint32_t SwitchNVRAM::dataMounted()
               static_cast<unsigned>(length));
     } else {
         const uint8_t *image = file + static_cast<unsigned>(picked) * stride + SWITCH_NVRAM_STORE_HEADER;
-        const IOReturn result = ioswitch_nvram_restore(nvram, image, bankSize, kNotRestored, &added, &refused);
+        const IOReturn result = switch_nvram_restore(nvram, image, bankSize, kNotRestored, &added, &refused);
         if (result == kIOReturnSuccess) {
             // The writer's state (no writer runs before mounted is set).
             memcpy(saved, image, bankSize);
@@ -404,7 +404,7 @@ IOReturn SwitchNVRAM::powerMessage(void *target, void *, UInt32 type, IOService 
     return kIOReturnSuccess;
 }
 
-extern "C" int ioswitch_nvram_publish(void)
+extern "C" int switch_nvram_publish(void)
 {
     static int status = -1;  // boot-only: -1 untouched, 0 published, 1 failed
     if (status >= 0) return status;
@@ -433,7 +433,7 @@ extern "C" int ioswitch_nvram_publish(void)
 // SwitchBluetooth's strong definition wins when it is linked (../SwitchBluetooth/SwitchBluetooth.h).
 extern "C" __attribute__((weak)) void switch_bluetooth_data_mounted(void) {}
 
-extern "C" uint32_t ioswitch_nvram_data_mounted(void)
+extern "C" uint32_t switch_nvram_data_mounted(void)
 {
     const uint32_t added = SwitchNVRAM::restoreFromData();
     switch_bluetooth_data_mounted();

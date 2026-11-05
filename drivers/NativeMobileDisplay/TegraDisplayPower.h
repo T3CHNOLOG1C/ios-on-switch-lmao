@@ -14,7 +14,7 @@ extern "C" {
 // The hooks (NativeLegacyDisplay.cpp). Thread context; they sleep; never from the display's work loop or with its gate held
 // (the panel's DCS commands wait for the frame ends that loop delivers). Call them with SwitchBacklight idle, i.e. no display
 // power request (switch-sleep) in flight. Each one panics with one line if the display never started, if it lacks the DC A
-// interrupt (sheng-vsync / ioswitch-vblank off), if SwitchBrightness is not linked, or if the panel is not the AMS699VC01.
+// interrupt (sheng-vsync / switch-vblank off), if SwitchBrightness is not linked, or if the panel is not the AMS699VC01.
 //
 // tegra_display_suspend: if the panel is lit, TegraPanel's power-off (brightness 0, display off, sleep in; what display power off
 // does); DC A stopped with its interrupts masked and window A's registers kept; then tegra_display_power_down(). About 0.45 s lit.

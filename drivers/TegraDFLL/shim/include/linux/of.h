@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * IOSwitch shim: a read-only device tree of static nodes (platform.c holds the DFLL node with the properties the
+ * Switch shim: a read-only device tree of static nodes (platform.c holds the DFLL node with the properties the
  * switchroot OLED DT gives it). Properties are stored decoded: u32 cells, strings, or presence-only booleans.
  */
 #ifndef TDFLL_LINUX_OF_H

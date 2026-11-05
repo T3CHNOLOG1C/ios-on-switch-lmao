@@ -1,4 +1,4 @@
-# clang-tidy (LLVM 23.1.4, @llvm) for all of ioswitch's own C, C++, Objective-C and Objective-C++: the kernel's IOKit
+# clang-tidy (LLVM 23.1.4, @llvm) for all of ios-on-switch-lmao's own C, C++, Objective-C and Objective-C++: the kernel's IOKit
 # drivers, kits and diagnostics, the boot chain, host tools and tests.
 #   bazel test //:clang_tidy_test   every unit the build compiles, one cached action each, warnings as errors
 # Strong on purpose: whole families on (bugprone, clang-analyzer, concurrency, cppcoreguidelines, misc, modernize,

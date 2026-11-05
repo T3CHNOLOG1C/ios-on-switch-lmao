@@ -20,7 +20,7 @@ usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log 
           (a compile), its name and the making's description; a precompile run with METAL2VULKAN_MAKING_LOG=<file> writes the
           host's, so a seeded making the device made again shows where the two descriptions part.
 --device  the device data staging directory (default <state>/gpu-device-data/staging; <state> is ~/Library/Application
-          Support/ioswitch or $IOSWITCH_HOME): with --volume, and for every
+          Support/switch-ios or $SWITCH_HOME): with --volume, and for every
           saved cache below --records-from, each driver record (the content directory's v1/<content>/<xx>/<name>, m2v's
           VkPipelineCache data of one pipeline making, named by what the making reads and the NVK identity) whose envelope
           checks out is copied to <device>/records/<xx>/<name>, and every cache's libs/<SHA-256>.metallib (a library a process
@@ -53,7 +53,7 @@ COMPUTE = re.compile(r'(form|opt|max|tgm|icb|depth|abf|mut)=')
 PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).resolve().parents[3])
 # The device's data, outside every checkout (it is Apple-derived, so never tracked): where --pack writes the tar
 # @gpu_device_data's first fetch on a machine reads (gpu/deps.bzl), and the staging directory beside it.
-DEVICE = Path(os.environ.get('IOSWITCH_HOME') or Path.home() / 'Library/Application Support/ioswitch') / 'gpu-device-data'
+DEVICE = Path(os.environ.get('SWITCH_HOME') or Path.home() / 'Library/Application Support/switch-ios') / 'gpu-device-data'
 # /private/var/containers/Data/System/<UUID>/Library/Caches/m2v of the system containers whose processes kept an m2v cache there
 # (the plugin's "device ... ready in" lines, r5d and r6h): their Library and Library/Caches are mode 000.
 SYSTEM_CACHES = {'6C7A65AF-CB18-421C-A07A-D724B05A7AB6': 'backboardd', '532E562F-2888-4C55-9BF8-E6F0B246BBDA': 'SpringBoard',

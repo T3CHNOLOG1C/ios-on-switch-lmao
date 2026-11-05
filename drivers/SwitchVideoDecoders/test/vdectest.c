@@ -4,14 +4,14 @@
 // with x264's reconstruction in display order; then test/HEVCClip.h's HEVC clips (Main on hardware, Main 10 on
 // hardware against the reference >> 2, Main in software) against FFmpeg's. On a Mac it checks the clip and the check itself against Apple's
 // decoders (tests/test_switch_video.py). On the Switch the same check runs inside AVD.videodecoder once per boot
-// (launchd does not start jobs of ours: 21H461's launchd reads only its signed cache), logged under com.ioswitch.avd.
+// (launchd does not start jobs of ours: 21H461's launchd reads only its signed cache), logged under com.brunostjohn.switch.avd.
 #include <os/log.h>
 #include <stdio.h>
 #include "../AVD/ClipCheck.h"
 
 int main(void)
 {
-    os_log_t log = os_log_create("com.ioswitch.avd", "vdectest");
+    os_log_t log = os_log_create("com.brunostjohn.switch.avd", "vdectest");
     char line[512];
     int failed = 0;
     static const ClipCheckMode kModes[] = {ClipCheckHardware, ClipCheckSoftware, ClipCheckHEVC, ClipCheckHEVC10,

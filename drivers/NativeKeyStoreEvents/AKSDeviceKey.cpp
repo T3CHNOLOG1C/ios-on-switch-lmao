@@ -115,13 +115,13 @@ extern "C" void native_aks_device_key_start(void)
     if (!uid[2] || uid[2] == ~0u || (!uid[5] && !uid[6])) {
         panic("AppleKeyStore: implausible fuse chip ID (lot0 %#x x %#x y %#x), no device key", uid[2], uid[5], uid[6]);
     }
-    static const char label[] = "IOSwitch AppleKeyStore device key v1";
+    static const char label[] = AKS_LABEL_DOMAIN " AppleKeyStore device key v1";
     const void *parts[2] = {label, uid};
     const size_t lengths[2] = {sizeof label - 1, sizeof uid};
     sha256Parts(parts, lengths, 2, gDeviceKey);
     aks::wipe(uid, sizeof uid);
     // A non-secret identifier of the key (not the key, not the chip ID) so two boots can be compared on the console.
-    static const char idLabel[] = "IOSwitch AppleKeyStore key id";
+    static const char idLabel[] = "Switch AppleKeyStore key id";
     uint8_t id[32];
     const void *idParts[1] = {idLabel};
     const size_t idLengths[1] = {sizeof idLabel - 1};
@@ -170,7 +170,7 @@ extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const 
 extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16])
 {
     if (!gDeviceKeyReady) return (IOReturn)aks::kReturnNotReady;
-    static const char label[] = "IOSwitch AppleKeyStore bag uuid v1";
+    static const char label[] = AKS_LABEL_DOMAIN " AppleKeyStore bag uuid v1";
     const uint8_t id[4] = {static_cast<uint8_t>(keybag >> 24), static_cast<uint8_t>(keybag >> 16),
                            static_cast<uint8_t>(keybag >> 8), static_cast<uint8_t>(keybag)};
     const void *parts[2] = {label, id};

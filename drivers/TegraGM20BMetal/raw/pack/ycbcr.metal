@@ -83,7 +83,7 @@ fragment float4 ycbcr_converted_frag(Out in [[stage_in]], texture2d<float, acces
 }
 
 constant ushort kSrgbKnots[513] = {
-#include "srgb_knots.inc"
+#include "srgb_knots.h"
 };
 
 static float srgbStep(int t)

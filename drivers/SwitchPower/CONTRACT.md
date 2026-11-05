@@ -191,7 +191,7 @@ is substituted.
 
 ## 7. The userspace watchdog
 
-NativeIOSwitchWatchdog's stopgap (`off_ = true` at start) is gone. watchdogd's first open of the IOWatchdog waits (at
+NativeSwitchWatchdog's stopgap (`off_ = true` at start) is gone. watchdogd's first open of the IOWatchdog waits (at
 most 180 s, woken whenever a source changes, a driver is hooked or a sensor is first read; no polling) for
 `switch_sensors_wait_ready()`: all 38 HID services hooked, **thermalmonitord has read each of the 21 sensors it reads
 (the non-infoOnly ones) through the hook at least once** (end to end: the hook returned an event to a client's
@@ -204,7 +204,7 @@ silent for 60 s and panics at the third; r8e's SpringBoard main thread never wen
 first line and the logo, and the pre-sensor boots with monitoring on (r7t, r7u) killed only thermalmonitord. Otherwise
 monitoring is
 turned off before watchdogd asks (method 0), exactly as after a watchdogd crash: one line
-`IOSwitch watchdog: userspace watchdog off for this boot: thermalmonitord's sensors do not all answer (<what>)`,
+`SwitchWatchdog: userspace watchdog off for this boot: thermalmonitord's sensors do not all answer (<what>)`,
 watchdogd reads "disabled" and exits 0, and nothing can end in a watchdog panic that boot.
 
 A source that answered at boot and stops later logs `SwitchSensors: <source> stopped answering: thermalmonitord reports
@@ -225,7 +225,7 @@ r15.tar --age-limit 600`, then `/usr/bin/log show --archive <dir>.logarchive --s
    then `SwitchSensors: thermalmonitord's 38 sensors answer (it has read all 21 it reads): CPU a b c d, GPU e, PLLX f,
    SoC diode g, PCB h, battery i C` with plausible values (CPU/GPU/PLLX within a few degrees of the SoC diode at idle, PCB below them,
    battery near room temperature), and **no** `userspace watchdog off for this boot`.
-3. Kernel: `IOSwitch watchdog: watchdogd connected; userspace watchdog armed`.
+3. Kernel: `SwitchWatchdog: watchdogd connected; userspace watchdog armed`.
 4. thermalmonitord: no `no HID services (5)`, no `found error sensor result`, no `partial sensors`, no
    `Could not get event from service`.
 5. watchdogd: no `is_alive_func returned unhealthy` for thermalmonitord; no thermalmonitord crash at 60/120 s (no new
@@ -241,7 +241,7 @@ r15.tar --age-limit 600`, then `/usr/bin/log show --archive <dir>.logarchive --s
 1. Deploy as usual (`bazel run //deploy:sd -- diskN --yes --stage-gpu`), boot, unlock.
 2. Leave it on the home screen for 5 minutes (past 60 s, 120 s and 199 s). It must not panic or reboot.
 3. Pull the log: `idevicesyslog -u 166bbe821dd2f22e91eab155cfc9355e1a02593f archive r15.tar --age-limit 600`, and run
-   `log show ... | grep -E "SwitchSensors|IOSwitch watchdog|is_alive_func|thermalmonitord.*(error sensor|partial|no HID)"`:
+   `log show ... | grep -E "SwitchSensors|Switch watchdog|is_alive_func|thermalmonitord.*(error sensor|partial|no HID)"`:
    expect the two SwitchSensors lines and "watchdogd connected; userspace watchdog armed", and nothing else from that
    pattern.
 4. Then play something heavy for 10 minutes (or loop a 4K video plus a browser): the console stays usable (the CPU

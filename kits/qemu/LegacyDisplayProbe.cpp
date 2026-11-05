@@ -325,8 +325,8 @@ extern "C" unsigned native_legacy_prepare_report(char *out, unsigned cap)
 static unsigned displayLogAccepted, displayLogRejected, displayLogShown, displayLogFailed, displayLogClients;
 void native_legacy_swap_validation_observed(bool accepted, unsigned reason, const void *request, const void *surface)
 {
-    if (accepted && !displayLogAccepted++) IOLog("IOSwitch display: first frame accepted\n");
-    if (!accepted && displayLogRejected++ < 4) IOLog("IOSwitch display: frame rejected (reason %u)\n", reason);
+    if (accepted && !displayLogAccepted++) IOLog("SwitchDisplay: first frame accepted\n");
+    if (!accepted && displayLogRejected++ < 4) IOLog("SwitchDisplay: frame rejected (reason %u)\n", reason);
     if (accepted) native_legacy_swap_stage(0);
     if (accepted)
         native_legacy_swap_accepted_count = native_legacy_swap_accepted_count + 1;
@@ -361,15 +361,15 @@ __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status, 
     native_legacy_transfer_request = (uintptr_t)request;
     native_legacy_transfer_bytes = bytes;
     if (status == kIOReturnSuccess && !displayLogShown++)
-        IOLog("IOSwitch display: first frame on screen (%llu bytes)\n", bytes);
+        IOLog("SwitchDisplay: first frame on screen (%llu bytes)\n", bytes);
     if (status != kIOReturnSuccess && displayLogFailed++ < 4)
-        IOLog("IOSwitch display: frame copy failed status=%08x prepare=%u\n", (unsigned)status,
+        IOLog("SwitchDisplay: frame copy failed status=%08x prepare=%u\n", (unsigned)status,
               native_legacy_prepare_reason);
     // Only before the first frame: once a client frame was on screen, re-acquiring the console would clear and redraw the
     // boot framebuffer at 0xf5a00000, which is double-buffer surface 0, a live scanout buffer.
     if (status != kIOReturnSuccess && boot_progress_stage && !displayLogShown) {
         if (boot_progress_cancel_scanout) boot_progress_cancel_scanout();
-        IOLog("IOSwitch: display copy failed status=%08x prepare=%u tries=%u\n", (unsigned)status,
+        IOLog("Switch: display copy failed status=%08x prepare=%u tries=%u\n", (unsigned)status,
               native_legacy_prepare_reason, native_legacy_prepare_attempts);
         char message[120];
         snprintf(message, sizeof(message), "DISPLAY COPY FAILED status=%08x prepare=%u tries=%u", (unsigned)status,
@@ -382,7 +382,7 @@ static volatile uint64_t vsyncEvents[6];
 extern "C" void native_legacy_vsync_observed(unsigned event, unsigned hz)
 {
     if (event < 6) vsyncEvents[event] = vsyncEvents[event] + 1;
-    if (event == 4) IOLog("IOSwitch display: vsync timer at %u Hz\n", hz);
+    if (event == 4) IOLog("SwitchDisplay: vsync timer at %u Hz\n", hz);
 }
 bool native_legacy_gpu_offer(void *display, IOMemoryDescriptor *memory, uint64_t stride, uint32_t width,
                              uint32_t height)
@@ -614,7 +614,7 @@ extern "C" unsigned native_legacy_clients_dump(char *out, unsigned cap)
 void native_legacy_client_observed(IOReturn status, IOUserClient *client)
 {
     if (displayLogClients++ < 4)
-        IOLog("IOSwitch display: client pid %d opened the display: %08x\n", (int)native_legacy_client_pid,
+        IOLog("SwitchDisplay: client pid %d opened the display: %08x\n", (int)native_legacy_client_pid,
               (unsigned)status);
     if (client && !status) interpose(client, native_legacy_client_pid);
     native_legacy_client_status = status;
@@ -866,7 +866,7 @@ void native_legacy_display_late_probe(void)
                             unsigned on = switch_display_power_enabled() ? 1 : 0, arg = 0;
                             if (PE_parse_boot_argn("switch-backlight", &arg, sizeof(arg)) && arg) on = 1;
                             if (PE_parse_boot_argn("switch-als", &arg, sizeof(arg)) && arg) on = 1;
-                            if (on && switch_backlight_start()) IOLog("IOSwitch: SwitchBacklight did not start\n");
+                            if (on && switch_backlight_start()) IOLog("Switch: SwitchBacklight did not start\n");
                         }
                         native_legacy_display_checkpoint();
                         return;

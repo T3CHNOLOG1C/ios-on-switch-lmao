@@ -317,11 +317,11 @@ extern uint32_t vnode_pager_decmpfs_chunk(
 	struct vnode *);
 extern boolean_t vnode_pager_virtualdev(
 	struct vnode *);
-/* osfmk/kern/ioswitch_kprof.c: a wait (or count) for the current process, kprof waits line. kind: 0 page-in, 1 read
+/* osfmk/kern/switch_kprof.c: a wait (or count) for the current process, kprof waits line. kind: 0 page-in, 1 read
  * I/O wait, 2 decmpfs page-in (count and bytes only), 3 page-in from a disk image's volume (the cryptexes). */
-extern void ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
+extern void switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
 /*
- * osfmk/kern/ioswitch_kprof.c (r17-faults): a completed vm_fault for the current process, kprof faults lines. cls is
+ * osfmk/kern/switch_kprof.c (r17-faults): a completed vm_fault for the current process, kprof faults lines. cls is
  * how vm_fault_internal resolved it, flags IOSW_FAULT_WIRE/KERNEL/PURGEABLE, began the mach time it was entered,
  * vaddr the fault address, around the pages the zero-fill fault-around entered with it (vm_fault.c).
  */
@@ -336,10 +336,10 @@ extern void ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t by
 #define IOSW_FAULT_WIRE      0x01u  /* change_wiring: vm_map_wire, IOKit prepare */
 #define IOSW_FAULT_KERNEL    0x02u  /* in a kernel map */
 #define IOSW_FAULT_PURGEABLE 0x04u  /* a zero fill in a purgeable object */
-extern void ioswitch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr,
+extern void switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr,
     unsigned int around);
 /* osfmk/arm64/sleh.c (r17-faults): a fault arm_fast_fault resolved (pmap ref/mod emulation, never reaches vm_fault) */
-extern void ioswitch_kprof_fast_fault(bool access_flag);
+extern void switch_kprof_fast_fault(bool access_flag);
 #if FBDP_DEBUG_OBJECT_NO_PAGER
 extern bool vnode_pager_forced_unmount(
 	struct vnode *);

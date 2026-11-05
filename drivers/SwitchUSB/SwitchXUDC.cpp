@@ -50,7 +50,7 @@
 #include <mach/kmod.h>
 #include <os/log.h>
 #include <string.h>
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "SwitchUSB.h"
 
 using namespace xudc;
@@ -331,7 +331,7 @@ void SwitchXUDC::free()
 // Interrupt (work loop context: the family's gate is held).
 void SwitchXUDC::attachInterrupt()
 {
-    IOService *nub = ioswitch_interrupt_nub(kXudcIntid, false);
+    IOService *nub = switch_interrupt_nub(kXudcIntid, false);
     interrupt = IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchXUDC::interruptOccurred,
                                                                          &SwitchXUDC::interruptFilter, nub, 0);
     if (!interrupt || loop->addEventSource(interrupt) != kIOReturnSuccess) {
@@ -477,7 +477,7 @@ void SwitchXUDC::deliveryCheck(IOTimerEventSource *)
     }
     char state[192], gic[192];
     hw.describeInterrupt(state, sizeof(state));
-    ioswitch_interrupt_describe(kXudcIntid, gic, sizeof(gic));
+    switch_interrupt_describe(kXudcIntid, gic, sizeof(gic));
     panic("SwitchUSB: XUDC interrupt lost (INTID %u): %s, %s", kXudcIntid, state, gic);
 }
 
@@ -1341,7 +1341,7 @@ IOBufferMemoryDescriptor *SwitchXUDC::createIOBuffer(IOOptionBits options, uint6
 
 // ---------------------------------------------------------------------------
 // Registration: SwitchXUDC's metaclass needs the loaded original family, so its static initializer is staged
-// (Drivers.cmake ioswitch_late_object) and runs here.
+// (Drivers.cmake switch_late_object) and runs here.
 namespace {
 const OSMetaClass *lookupClass(const char *text)
 {

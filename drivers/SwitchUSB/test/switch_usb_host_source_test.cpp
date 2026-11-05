@@ -12,9 +12,9 @@
 
 #include "bazel/testing/source_text.h"
 
-using ioswitch::test::Body;
-using ioswitch::test::Count;
-using ioswitch::test::SourceText;
+using switch_ios::test::Body;
+using switch_ios::test::Count;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 
@@ -37,8 +37,8 @@ TEST(SwitchUsbHostSource, DriverConstants)
     // DT <0 0x27 4>, <0 0x28 4>: SPI 39, 40
     EXPECT_THAT(SourceText("../XusbHost.h"), HasSubstr("kHostIntid = 32 + 39, kMailboxIntid = 32 + 40"));
     const std::string xhci = SourceText("../SwitchXHCI.cpp");
-    EXPECT_THAT(xhci, HasSubstr("ioswitch_interrupt_nub(xhost::kHostIntid, false)"));  // level, as IRQ_TYPE_LEVEL_HIGH
-    EXPECT_THAT(xhci, HasSubstr("ioswitch_interrupt_nub(xhost::kMailboxIntid, false)"));
+    EXPECT_THAT(xhci, HasSubstr("switch_interrupt_nub(xhost::kHostIntid, false)"));  // level, as IRQ_TYPE_LEVEL_HIGH
+    EXPECT_THAT(xhci, HasSubstr("switch_interrupt_nub(xhost::kMailboxIntid, false)"));
 }
 
 TEST(SwitchUsbHostSource, IpfsAsTegraXusbConfig)
@@ -67,7 +67,7 @@ TEST(SwitchUsbHostSource, GicLevelSpiWithLic)
     EXPECT_THAT(init, HasSubstr("ICTLR_CPU_IEP_CLASS"));
     const std::string enable = Body(gic, "void ArmGIC::enableVector(");
     EXPECT_LT(at(enable, "ICTLR_CPU_IER_SET"), at(enable, "writeBit(GICD_ISENABLER, intid)"));
-    EXPECT_THAT(gic, HasSubstr("uint32_t ioswitch_interrupt_count(uint32_t intid)"));
+    EXPECT_THAT(gic, HasSubstr("uint32_t switch_interrupt_count(uint32_t intid)"));
 }
 
 TEST(SwitchUsbHostSource, NoPanicBeforeProof)

@@ -1336,7 +1336,7 @@ bootloader_valid_page(ppnum_t ppn)
 }
 
 /*
- * IOSwitch: every blocked thread whose kernel stack runs through a kext, as
+ * Switch: every blocked thread whose kernel stack runs through a kext, as
  * "T<tid> h<block hint> <kext> [owner T<tid>]" plus its saved return addresses
  * below the context switch (unslid, low 36 bits). For a kernel-mutex wait the
  * owner comes from kdp_lck_mtx_find_owner, and each owner's own stack follows.
@@ -1344,7 +1344,7 @@ bootloader_valid_page(ppnum_t ppn)
 #include <libkern/kernel_mach_header.h>
 extern vm_offset_t kernel_stack_size;
 static unsigned
-ioswitch_thread_frames(thread_t thread, uint64_t *frames, unsigned max)
+switch_thread_frames(thread_t thread, uint64_t *frames, unsigned max)
 {
 	const vm_offset_t low = thread->kernel_stack, high = low + kernel_stack_size;
 	arm_kernel_saved_state_t *saved = &thread_get_kernel_state(thread)->machine.ss;
@@ -1358,7 +1358,7 @@ ioswitch_thread_frames(thread_t thread, uint64_t *frames, unsigned max)
 	return count;
 }
 static void
-ioswitch_print_frames(const uint64_t *frames, unsigned count)
+switch_print_frames(const uint64_t *frames, unsigned count)
 {
 	printf("   ");
 	for (unsigned i = 2; i < count && i < 14; i++) {
@@ -1366,9 +1366,9 @@ ioswitch_print_frames(const uint64_t *frames, unsigned count)
 	}
 	printf("\n");
 }
-void ioswitch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsigned max_threads);
+void switch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsigned max_threads);
 void
-ioswitch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsigned max_threads)
+switch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsigned max_threads)
 {
 	unsigned printed = 0, blocked = 0, owners = 0;
 	uint64_t owner_ids[4];
@@ -1380,7 +1380,7 @@ ioswitch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsign
 		}
 		blocked++;
 		uint64_t frames[32];
-		unsigned count = ioswitch_thread_frames(thread, frames, 32);
+		unsigned count = switch_thread_frames(thread, frames, 32);
 		/* OSKextKextForAddress returns the kext's load address, or the kernel's header. */
 		unsigned deepest = count;
 		for (unsigned i = 0; i < count; i++) {
@@ -1403,7 +1403,7 @@ ioswitch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsign
 			}
 		}
 		printf("\n");
-		ioswitch_print_frames(frames, count);
+		switch_print_frames(frames, count);
 		printed++;
 	}
 	for (unsigned o = 0; o < owners; o++) {
@@ -1415,7 +1415,7 @@ ioswitch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsign
 			    thread->last_processor ? thread->last_processor->cpu_id : -1);
 			if (thread->kernel_stack && thread != current_thread()) {
 				uint64_t frames[32];
-				ioswitch_print_frames(frames, ioswitch_thread_frames(thread, frames, 32));
+				switch_print_frames(frames, switch_thread_frames(thread, frames, 32));
 			}
 		}
 	}
@@ -1424,15 +1424,15 @@ ioswitch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsign
 }
 
 /*
- * IOSwitch: one line per processor (state, recommendation, running thread,
+ * Switch: one line per processor (state, recommendation, running thread,
  * queued thread count), then the runnable threads still waiting on a run
  * queue with the processor they are queued on and their saved return
  * addresses. Shows threads that are ready but never get a CPU.
  */
 #include <kern/sched_prim.h>
-void ioswitch_print_sched_state(unsigned max_threads);
+void switch_print_sched_state(unsigned max_threads);
 void
-ioswitch_print_sched_state(unsigned max_threads)
+switch_print_sched_state(unsigned max_threads)
 {
 	uint64_t vct, pct;
 	__asm__ volatile ("isb\nmrs %0, cntvct_el0\nmrs %1, cntpct_el0" : "=r"(vct), "=r"(pct));

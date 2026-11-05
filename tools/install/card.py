@@ -7,9 +7,9 @@ Guard rails (every command):
   * it must look like a Switch card: valid primary and backup GPT, entry #0 "hos_data" a Microsoft basic data (FAT32)
     partition that the hybrid MBR also lists;
   * the target is exactly one entry whose partition GUID is the card's userdata GUID or whose name is userdata, UDA or
-    IOSWITCH, exactly the kernel's IOSW_RAW_BYTES (32 GiB), Linux-data or APFS typed, not the FAT, not emuMMC;
+    iOS, exactly the kernel's IOSW_RAW_BYTES (32 GiB), Linux-data or APFS typed, not the FAT, not emuMMC;
   * no other APFS-typed entry on the card (the kernel takes the only one).
-Writes on the FAT go only to switchroot/ioswitch/* and bootloader/ini/ioswitch.ini (by name); on the iPad volumes
+Writes on the FAT go only to switchroot/ios/* and bootloader/ini/ios.ini (by name); on the iPad volumes
 only to the paths the caller names.
 """
 import contextlib
@@ -24,9 +24,9 @@ from pathlib import Path
 from tools.install import gpt, host
 
 USERDATA_GUID = uuid.UUID("5703F8E9-0032-DF6B-2674-B1A569FFC4EE")
-TARGET_NAMES = {"userdata", "UDA", "IOSWITCH"}
-BOOT_ENTRY = "switchroot/ioswitch"
-INI = "bootloader/ini/ioswitch.ini"
+TARGET_NAMES = {"userdata", "UDA", "iOS"}
+BOOT_ENTRY = "switchroot/ios"
+INI = "bootloader/ini/ios.ini"
 HASH_CHUNK = 8 << 20
 
 
@@ -110,7 +110,7 @@ def check_layout(card, spec):
         raise Refused("{}: hos_data is {}, not FAT".format(card.disk, fat_info.get("FilesystemType")))
     candidates = [e for e in entries if e.guid == USERDATA_GUID or e.name in TARGET_NAMES]
     if len(candidates) != 1:
-        raise Refused("{}: expected exactly one userdata/UDA/IOSWITCH entry, found {}".format(
+        raise Refused("{}: expected exactly one userdata/UDA/iOS entry, found {}".format(
             card.disk, [e.describe() for e in candidates]))
     target = candidates[0]
     if target.index == first.index or target.type == gpt.EMUMMC:
@@ -163,7 +163,7 @@ def check_layout_unprivileged(card, spec):
         raise Refused("{}: the first partition is not the Switch's hos_data FAT32".format(card.disk))
     targets = [p for p in parts if p.guid == str(USERDATA_GUID).upper() or p.name in TARGET_NAMES]
     if len(targets) != 1:
-        raise Refused("{}: expected exactly one userdata/UDA/IOSWITCH partition, found {}".format(
+        raise Refused("{}: expected exactly one userdata/UDA/iOS partition, found {}".format(
             card.disk, [p.identifier for p in targets]))
     target = targets[0]
     if target.size != spec["partition_bytes"]:
@@ -207,7 +207,7 @@ def mounted(identifier, log, read_only=False, owners=False):
             raise host.HostError("{} is mounted read-only at {}".format(identifier, current))
         yield Path(current)
         return
-    with tempfile.TemporaryDirectory(prefix="ioswitch-") as directory:
+    with tempfile.TemporaryDirectory(prefix="switch-") as directory:
         args = ["mount"]
         if read_only:
             args.append("readOnly")
@@ -231,7 +231,7 @@ def sha256_file(path):
 
 
 def boot_entry_files(package):
-    """{relative path on the FAT: source} of the boot package: switchroot/ioswitch/* and the hekate ini."""
+    """{relative path on the FAT: source} of the boot package: switchroot/ios/* and the hekate ini."""
     package = Path(package)
     files = {}
     entry = package / BOOT_ENTRY
@@ -246,7 +246,7 @@ def boot_entry_files(package):
 
 
 def sync_boot_entry(fat_root, package, log, dry_run=False):
-    """Make switchroot/ioswitch/ and bootloader/ini/ioswitch.ini on the FAT equal the package; nothing else."""
+    """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package; nothing else."""
     fat_root = Path(fat_root)
     wanted = boot_entry_files(package)
     changed, removed = [], []
@@ -258,7 +258,7 @@ def sync_boot_entry(fat_root, package, log, dry_run=False):
         changed.append(relative)
         if not dry_run:
             target.parent.mkdir(parents=True, exist_ok=True)
-            partial = target.with_name(".ioswitch-partial-" + target.name)
+            partial = target.with_name(".switch-partial-" + target.name)
             shutil.copyfile(source, partial)
             os.replace(partial, target)
     entry = fat_root / BOOT_ENTRY
@@ -299,8 +299,8 @@ def tree_digest(root):
 
 
 def sync_overlay(data_root, package, log, dry_run=False):
-    """<Data>/ioswitch/overlay := the package's overlay/ (whole tree, like the old deploy script)."""
-    source, target = Path(package) / "overlay", Path(data_root) / "ioswitch/overlay"
+    """<Data>/Switch/overlay := the package's overlay/ (whole tree, like the old deploy script)."""
+    source, target = Path(package) / "overlay", Path(data_root) / "Switch/overlay"
     if not source.is_dir():
         log("overlay: the boot package has none; left as is")
         return False

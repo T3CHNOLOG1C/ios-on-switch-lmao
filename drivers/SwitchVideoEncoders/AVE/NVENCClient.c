@@ -105,7 +105,7 @@ void nvenc_close(NVENCClient *c)
 static void logOnce(int *flag, const char *what, kern_return_t kr, uint64_t size)
 {
     if (__atomic_exchange_n(flag, 1, __ATOMIC_RELAXED)) return;
-    os_log_error(os_log_create("com.ioswitch.ave", "encoder"), "AVD: %{public}s %#x (%llu bytes)", what, kr,
+    os_log_error(os_log_create("com.brunostjohn.switch.ave", "encoder"), "AVD: %{public}s %#x (%llu bytes)", what, kr,
                  (unsigned long long)size);
 }
 

@@ -30,7 +30,7 @@ kernel_driver(
     srcs = [
         "src/verified_root.c",
         "adapters/xnu_crypto.c",
-        "//bazel/pinned:kernel/verified-root-ioswitch/trusted-key.S",
+        "//bazel/pinned:kernel/verified-root-switch/trusted-key.S",
     ],
     c_copts = [
         "-I{tree}/kits/VerifiedRoot/include",

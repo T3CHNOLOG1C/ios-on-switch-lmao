@@ -5,8 +5,8 @@
 // iPadOS has no NFC stack to hand tags to: CoreNFC's readingAvailable is an XPC question to nfcd
 // (com.apple.nfcd.service.corenfc), which drives Apple's NXP controller through libPN548_API and the Stockholm kernel
 // driver, none of which a J120 has. So this tool reads the tag itself and leaves the result where a person or another
-// program can use it: the UID and page dump go to the system log (subsystem com.ioswitch.joyconnfc) and to
-// /private/var/ioswitch/nfc/<UID>.bin (the raw pages, 540 bytes for an NTAG215, the format amiibo tools use).
+// program can use it: the UID and page dump go to the system log (subsystem com.brunostjohn.switch.joyconnfc) and to
+// /private/var/Switch/nfc/<UID>.bin (the raw pages, 540 bytes for an NTAG215, the format amiibo tools use).
 //
 // Transport: the Joy-Con's own HID protocol through its IOHIDDevice, opened shared (JoyConHIDServicePlugin keeps it
 // open as well), so one code path serves the rail (SwitchJoyConDevice, the kernel carries the reports, see
@@ -25,7 +25,7 @@
 // Writing is not offered: the MCU's NTAG write (command 0x08, yuzu WriteAmiiboData) is an amiibo-shaped transfer
 // carrying the tag's magic, write counter and version, not a page write.
 //
-// Started by launchd (com.ioswitch.joyconnfc.plist) when the kernel publishes SwitchJoyConNFC, which it does only with
+// Started by launchd (com.brunostjohn.switch.joyconnfc.plist) when the kernel publishes SwitchJoyConNFC, which it does only with
 // switch-joycon-nfc=1. It then stays and scans once for 30 s each time a Joy-Con (R) or Pro Controller appears (attach
 // it to the rail again, or reconnect it, to scan again). "joyconnfc --once" scans the controllers present now.
 // IOKit's HID calls are exported by IOKit.framework on iOS but the iOS SDK has no hid/ headers: the prototypes below are
@@ -241,9 +241,9 @@ static void saveTag(const Pad *pad, const uint8_t *uid, unsigned uidLength, cons
     }
     if (!length) return;
     char path[96];
-    mkdir("/private/var/ioswitch", 0755);
-    mkdir("/private/var/ioswitch/nfc", 0755);
-    snprintf(path, sizeof(path), "/private/var/ioswitch/nfc/%s.bin", hex);
+    mkdir("/private/var/Switch", 0755);
+    mkdir("/private/var/Switch/nfc", 0755);
+    snprintf(path, sizeof(path), "/private/var/Switch/nfc/%s.bin", hex);
     const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0 || write(fd, pages, length) != (ssize_t)length) {
         os_log_error(logger, "joyconnfc: %{public}s: %{public}s", path, strerror(errno));
@@ -427,9 +427,9 @@ static bool enabled(void)
 
 int main(int argc, char **argv)
 {
-    logger = os_log_create("com.ioswitch.joyconnfc", "nfc");
-    hidQueue = dispatch_queue_create("com.ioswitch.joyconnfc.hid", DISPATCH_QUEUE_SERIAL);
-    scanQueue = dispatch_queue_create("com.ioswitch.joyconnfc.scan", DISPATCH_QUEUE_SERIAL);
+    logger = os_log_create("com.brunostjohn.switch.joyconnfc", "nfc");
+    hidQueue = dispatch_queue_create("com.brunostjohn.switch.joyconnfc.hid", DISPATCH_QUEUE_SERIAL);
+    scanQueue = dispatch_queue_create("com.brunostjohn.switch.joyconnfc.scan", DISPATCH_QUEUE_SERIAL);
     if (!enabled()) {
         fprintf(stderr, "joyconnfc: switch-joycon-nfc is not set\n");
         return 0;

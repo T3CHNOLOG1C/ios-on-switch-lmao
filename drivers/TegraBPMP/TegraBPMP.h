@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // TegraBPMP: the CPU side of the T210 BPMP mailbox (L4T's drivers/firmware/tegra mail.c / mail_t210.c / mailman.c,
-// vendored under linux/ with an XNU shim), and the one thing IOSwitch asks the BPMP firmware for: the EMC (DRAM)
+// vendored under linux/ with an XNU shim), and the one thing Switch asks the BPMP firmware for: the EMC (DRAM)
 // clock, which on T210B01 belongs to the BPMP-FW that hekate starts (TegraBPMP.c says how and why).
 #ifndef TEGRA_BPMP_PUBLIC_H
 #define TEGRA_BPMP_PUBLIC_H

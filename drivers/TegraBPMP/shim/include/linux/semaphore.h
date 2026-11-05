@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
-/* IOSwitch TegraBPMP shim: counting semaphore (shim/linux.c). `count` is read by mail.c's WARN_ON. */
+/* Switch TegraBPMP shim: counting semaphore (shim/linux.c). `count` is read by mail.c's WARN_ON. */
 #ifndef BPXNU_LINUX_SEMAPHORE_H
 #define BPXNU_LINUX_SEMAPHORE_H
 /* The GM20B shim (same kernel) defines Linux names too: every function here is bpmp_linux_-prefixed. */

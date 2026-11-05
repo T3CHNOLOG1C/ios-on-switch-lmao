@@ -97,9 +97,9 @@ def generate_adt(seed: bytes | None = None, *, userspace_fixture: bool = False,
         bootstrap += [("ephemeral-storage", struct.pack("<I", 1)),
                       ("root-matching", ROOT_MATCHING)]
     if storage_probe:
-        bootstrap.append(("ioswitch-sd-reference", struct.pack("<QQ", 0xA001F000, 0x1000)))
+        bootstrap.append(("switch-sd-reference", struct.pack("<QQ", 0xA001F000, 0x1000)))
     if full_ram:
-        bootstrap.append(("ioswitch-ram-ledger", bytes(16+32+96*16)))
+        bootstrap.append(("switch-ram-ledger", bytes(16+32+96*16)))
     memory_map = ([("NativeDataSeed", bytes(16)), ("TrustCache", bytes(16))] if root_boot else
                   [("RAMDisk", bytes(16)), ("TrustCache", bytes(16))] if userspace_fixture else [])
     return _node("device-tree", [

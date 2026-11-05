@@ -48,7 +48,7 @@
 extern "C" {
 #endif
 
-// From the board thread (IOSwitchRootDiag.inc), thread context. Returns at once: 0 when started on its own thread or
+// From the board thread (SwitchRootDiag.h), thread context. Returns at once: 0 when started on its own thread or
 // not configured (neither ADT node), -1 if the thread could not be created.
 int switch_usb_start(void);
 
@@ -59,7 +59,7 @@ void switch_usb_suspend(void);
 void switch_usb_resume(void);
 
 // Prelink cut stub (emit_prelink.py CUT_DEPENDENCIES): 8 zero bytes; a cut dependency's metaclass GOT entry points here.
-extern const unsigned long long ioswitch_prelink_cut_null;
+extern const unsigned long long switch_prelink_cut_null;
 
 // SwitchXUDC.cpp, from the role manager: a host's cable is in (its bus reset is due); USB2 pad 0 to or from the host.
 void switchxudc_host_expected(void);

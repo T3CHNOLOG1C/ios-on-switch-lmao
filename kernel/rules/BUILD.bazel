@@ -17,7 +17,7 @@ exports_files([
 # --config=cmake-equivalence sets it to the checkout, which reproduces the CMake flow's strings exactly.
 string_flag(
     name = "path_root",
-    build_setting_default = "/ioswitch",
+    build_setting_default = "/switch-ios",
 )
 
 # XNU's version string date (newvers.pl reads KERNEL_BUILD_DATE): fixed, so a rebuild is bit-identical.
@@ -29,5 +29,5 @@ string_flag(
 # XNU's version string builder (newvers.pl runs whoami; the build puts a whoami printing this first on PATH).
 string_flag(
     name = "builder",
-    build_setting_default = "ioswitch",
+    build_setting_default = "switch-ios",
 )

@@ -377,7 +377,7 @@ xnu_sdk = rule(
     attrs = {
         "extra": attr.label_list(
             allow_files = True,
-            doc = "headers XNU's own flags put on every kernel compile (-I <tree>/diagnostics/ioswitch)",
+            doc = "headers XNU's own flags put on every kernel compile (-I <tree>/diagnostics/switch)",
         ),
         "kernel_config": attr.string(mandatory = True, doc = "DEVELOPMENT or RELEASE: the configuration obj is for"),
         "kernel_package": attr.string(mandatory = True, doc = "the package of the kernel's other generated files"),

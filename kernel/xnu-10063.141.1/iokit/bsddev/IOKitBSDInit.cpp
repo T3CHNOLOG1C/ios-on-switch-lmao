@@ -567,7 +567,7 @@ IOGetBootManifestHash(char *hash_data, size_t *hash_data_size)
 }
 
 #if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
-/* The owner boot manifest (XNU_OWNER_BOOT_MANIFEST) is part of ioswitch's boot path in every kernel
+/* The owner boot manifest (XNU_OWNER_BOOT_MANIFEST) is part of ios-on-switch-lmao's boot path in every kernel
  * configuration (it was refused outside DEVELOPMENT and DEBUG while it was an offline experiment).
  */
 #include <libkern/crypto/sha2.h>
@@ -578,9 +578,9 @@ volatile int native_owner_boot_manifest_status = -1;
 uint8_t native_owner_boot_manifest_hash[48];
 }
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-#include "IOSwitchFiles.h"
-extern "C" int ioswitch_cryptex_manifest_sha384(dev_t, const char *, uint8_t[48]);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#include "SwitchFiles.h"
+extern "C" int switch_cryptex_manifest_sha384(dev_t, const char *, uint8_t[48]);
 extern "C" int native_owner_publish_raw_boot_manifest(dev_t, const char *, dev_t, const char *);
 #endif
 
@@ -592,10 +592,10 @@ native_owner_publish_boot_manifest_impl(dev_t rootDevice, const char *rootUUID,
 	uint8_t rootDigest[48], cacheDigest[48], digest[48];
 	uint8_t rootRole = 1, cacheRole = 2;
 	int cache_identity = 0;
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	if (raw) {
-		if (ioswitch_files_storage_profile() == IOSW_STORAGE_RAW)
-			cache_identity = ioswitch_cryptex_manifest_sha384(cacheDevice, cacheUUID, cacheDigest);
+		if (switch_files_storage_profile() == IOSW_STORAGE_RAW)
+			cache_identity = switch_cryptex_manifest_sha384(cacheDevice, cacheUUID, cacheDigest);
 	} else
 #endif
 	if (!raw) cache_identity = native_verified_block_manifest_sha384(cacheDevice, cacheUUID, cacheDigest);
@@ -647,7 +647,7 @@ native_owner_publish_boot_manifest(dev_t rootDevice, const char *rootUUID,
 {
 	return native_owner_publish_boot_manifest_impl(rootDevice, rootUUID, cacheDevice, cacheUUID, false);
 }
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 extern "C" int
 native_owner_publish_raw_boot_manifest(dev_t rootDevice, const char *rootUUID,
     dev_t cacheDevice, const char *cacheUUID)
@@ -755,9 +755,9 @@ do_reboot:
 	return true;
 }
 
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && \
-    defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
-extern "C" void ioswitch_raw_root_wait_diagnostic(void);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && \
+    defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+extern "C" void switch_raw_root_wait_diagnostic(void);
 #endif
 
 kern_return_t
@@ -1014,9 +1014,9 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 			// The disk isn't found - have the user pick from System Recovery.
 			(void)IOSetRecoveryBoot(BSD_BOOTFAIL_MEDIA_MISSING, NULL, true);
 #elif XNU_TARGET_OS_IOS
-#if defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT && \
-    defined(IOSWITCH_XNU_DIAGNOSTICS) && IOSWITCH_XNU_DIAGNOSTICS
-			ioswitch_raw_root_wait_diagnostic();
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && \
+    defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+			switch_raw_root_wait_diagnostic();
 #endif
 			panic("Failed to mount root device");
 #endif

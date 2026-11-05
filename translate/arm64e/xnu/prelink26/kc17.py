@@ -2,7 +2,7 @@
 """The symbolized iOS 17 (21H461) prelinked kernelcache: kernel exports, kext symbols, kext GOT import names."""
 import sys, struct, os, json
 from native_prelink import macho, backed_offset, unserialize_xml
-PATH = "/Users/brunostjohn/Development/Projects/ioswitch/vendor/unixnu/out/ipsw/21H461/kernelcache.decompressed"
+PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../../vendor/unixnu/out/ipsw/21H461/kernelcache.decompressed")
 
 def symtab(d, image, all_defined=True):
     out = {}

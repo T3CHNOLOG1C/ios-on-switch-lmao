@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* IOSwitch shim: the dmaengine types drivers/soc/tegra/fuse/fuse.h names for Tegra20 fuse reads (unused on T210). */
+/* Switch shim: the dmaengine types drivers/soc/tegra/fuse/fuse.h names for Tegra20 fuse reads (unused on T210). */
 #ifndef TDFLL_LINUX_DMAENGINE_H
 #define TDFLL_LINUX_DMAENGINE_H
 #include <linux/kernel.h>

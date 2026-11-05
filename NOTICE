@@ -1,11 +1,11 @@
-IOSwitch's local Python integration and documentation were authored for this project.
+Switch's local Python integration and documentation were authored for this project.
 It does not include Apple's proprietary OS images in its tracked source.
 
 The optional HakiOS checkout is fetched from:
 https://github.com/oosexgang/hakios-xnu-kernel
 Its kernel changes, drivers, loader, binaries and other components retain their
 upstream licenses. See that repository's LICENSE/NOTICE, COMPLIANCE.md and
-THIRD_PARTY_LICENSES.md. IOSwitch verifies the upstream binary hashes; it does
+THIRD_PARTY_LICENSES.md. Switch verifies the upstream binary hashes; it does
 not claim that those binaries were rebuilt locally.
 
 UniXNU and its QEMU device port are separate upstream projects:

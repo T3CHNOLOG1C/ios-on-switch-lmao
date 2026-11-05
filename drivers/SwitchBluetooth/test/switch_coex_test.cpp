@@ -346,7 +346,7 @@ TEST_F(Coex, BtcDynctlStatusAndProfile)
 
 TEST_F(Coex, NvramValuesFromTheLoadedFile)
 {
-    const std::string text = ioswitch::test::SourceText("../../SwitchWLAN/firmware/brcm/brcmfmac4356A3-pcie.txt");
+    const std::string text = switch_ios::test::SourceText("../../SwitchWLAN/firmware/brcm/brcmfmac4356A3-pcie.txt");
     ASSERT_FALSE(text.empty());
     const std::vector<std::pair<const char *, uint32_t>> want = {
         {"boardflags", 0x02400001}, {"boardflags2", 0xc0802000}, {"muxenab", 0x10},

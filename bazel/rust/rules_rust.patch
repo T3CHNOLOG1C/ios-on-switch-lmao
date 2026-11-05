@@ -38,7 +38,7 @@ index 72d776f..bcaf261 100644
 +_INCREMENTAL = "-Cincremental="
 +
 +def incremental_base(flags):
-+    """The base directory of an `-Cincremental=<base>` among a crate's extra rustc flags, or None (ioswitch).
++    """The base directory of an `-Cincremental=<base>` among a crate's extra rustc flags, or None (ios-on-switch-lmao).
 +
 +    rustc's incremental compilation for a crate a per-crate rustc flag opts in (bazel/rust/defs.bzl: the debug profile's
 +    first-party crates). rustc keeps one session directory per crate below the base; this makes the base one per
@@ -58,11 +58,11 @@ index 72d776f..bcaf261 100644
 +    return None
 +
 +def incremental_dir(ctx, base):
-+    """The session base of a crate's actions: <base>/<configuration's bin directory> (ioswitch)."""
++    """The session base of a crate's actions: <base>/<configuration's bin directory> (ios-on-switch-lmao)."""
 +    return "{}/{}".format(base, ctx.bin_dir.path)
 +
 +def _incremental_requirements(ctx, toolchain, crate_info, requirements):
-+    """`requirements` plus no-sandbox when the crate compiles incrementally (ioswitch): rustc writes its session below
++    """`requirements` plus no-sandbox when the crate compiles incrementally (ios-on-switch-lmao): rustc writes its session below
 +    the output base, outside the sandbox. The rlib is still a declared output (cached, path-independent); only the
 +    session directory is outside Bazel."""
 +    if not incremental_base(collect_extra_rustc_flags(ctx, toolchain, crate_info.root, crate_info.type)):
@@ -126,7 +126,7 @@ index 476651a..591fce8 100644
      return libname
  
 +def own_codegen_value(rustc_flags, option):
-+    """The value of the `-C<option>=` a crate's `rustc_flags` carry, or None (ioswitch).
++    """The value of the `-C<option>=` a crate's `rustc_flags` carry, or None (ios-on-switch-lmao).
 +
 +    A crate that names its own `metadata` and `extra-filename` (the values cargo or meson gives it, so that its symbols and
 +    its rlib's member names are theirs) gets neither from rules_rust as well: rustc hashes every `-C metadata` value into
@@ -146,7 +146,7 @@ index 476651a..591fce8 100644
 +    return None
 +
 +def own_output_hash(rustc_flags):
-+    """The output hash a crate's own `-Cextra-filename=-<hash>` or `-Cmetadata=<hash>` names, or None (ioswitch).
++    """The output hash a crate's own `-Cextra-filename=-<hash>` or `-Cmetadata=<hash>` names, or None (ios-on-switch-lmao).
 +
 +    Args:
 +        rustc_flags (list): The crate's `rustc_flags` attribute.

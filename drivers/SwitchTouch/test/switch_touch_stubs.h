@@ -7,8 +7,8 @@
 // wake-ups in time order. Time is a fake clock in nanoseconds (mach ticks are nanoseconds here). A thread that sleeps
 // (IOLockSleepDeadline, IOSleep, IODelay) runs the queue until it is woken or its time is up, so the I2C controller's
 // interrupt actions run nested inside the touch work loop's wait, as they would on the I2C work loop's own thread.
-#ifndef IOSWITCH_TEST_SWITCH_TOUCH_STUBS_H
-#define IOSWITCH_TEST_SWITCH_TOUCH_STUBS_H
+#ifndef SWITCH_TEST_SWITCH_TOUCH_STUBS_H
+#define SWITCH_TEST_SWITCH_TOUCH_STUBS_H
 #include <cassert>
 #include <cstdarg>
 #include <cstdint>

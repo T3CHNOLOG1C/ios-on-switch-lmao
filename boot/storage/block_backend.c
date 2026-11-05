@@ -45,7 +45,7 @@ int iosw_block_create(const struct iosw_block_allocator *allocator,
     if (!allocator || !allocator->allocate || !allocator->release)
         return IOSW_BLOCK_INVALID;
     struct iosw_block_source source = {0};
-    int status = ioswitch_files_block_source(&source);
+    int status = switch_files_block_source(&source);
     if (status != IOSW_BLOCK_OK) return status;
     if (!source.volume || !source.volume->mounted || !source.ready ||
         !source.begin || !source.end) return IOSW_BLOCK_CORRUPT;

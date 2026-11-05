@@ -55,7 +55,7 @@ native_wi_note(const char *what, int error, int kret, uint32_t flags)
 }
 
 /*
- * ioswitch: libsystem_kernel's private instance operations (work_interval_instance_start, _update, _finish pass
+ * ios-on-switch-lmao: libsystem_kernel's private instance operations (work_interval_instance_start, _update, _finish pass
  * the interval ID, their struct work_interval_instance and its size, 0x60). Not in this source's sys/work_interval.h,
  * whose operation numbers skip from JOIN (5) to GET_FLAGS (9).
  */
@@ -295,7 +295,7 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 	case WORK_INTERVAL_OPERATION_INSTANCE_UPDATE:
 	case WORK_INTERVAL_OPERATION_INSTANCE_FINISH:
 		/*
-		 * ioswitch: audiomxd's IO thread starts an interval every IO cycle (os_workgroup_interval_start); answered
+		 * ios-on-switch-lmao: audiomxd's IO thread starts an interval every IO cycle (os_workgroup_interval_start); answered
 		 * ENOTSUP, it logged "HALS_IOThread.mm:323 Failed to start the workgroup with code: -1 - Operation not
 		 * supported" every 21 ms. There is no performance controller to inform, so a valid call only succeeds. The
 		 * caller's instance is left as it is: its instance ID stays 0, which libsystem_kernel treats as a legacy

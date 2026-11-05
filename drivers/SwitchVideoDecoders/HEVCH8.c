@@ -57,7 +57,7 @@ static bool choosesStreamingCodecs(const char *process)
 void HEVCH8Register(void)
 {
     if (choosesStreamingCodecs(getprogname())) return;  // HEVC is software here, and this process is told so
-    os_log_t log = os_log_create("com.ioswitch.hevc", "register");
+    os_log_t log = os_log_create("com.brunostjohn.switch.hevc", "register");
     void *codec = dlopen("/System/Library/VideoCodecs/VCPHEVC.videocodec", RTLD_NOW | RTLD_LOCAL);
     CreateInstance create = codec ? (CreateInstance)dlsym(codec, "HEVCVideoDecoder_CreateInstance") : NULL;
     RegisterDecoder registerDecoder = (RegisterDecoder)dlsym(RTLD_DEFAULT, "VTRegisterVideoDecoder");

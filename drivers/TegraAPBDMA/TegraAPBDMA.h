@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra210 APB DMA controller (T210/T210B01, "nvidia,tegra210-apbdma" = tegra148 chip data) for statically linked
-// IOSwitch drivers: the UARTs' DMA, as Linux serial-tegra.c drives it through drivers/dma/tegra20-apb-dma.c, and I2C3's
+// Switch drivers: the UARTs' DMA, as Linux serial-tegra.c drives it through drivers/dma/tegra20-apb-dma.c, and I2C3's
 // long reads (TegraI2C), as Linux i2c-tegra.c does.
 //
 // Hardware (Linux tegra20-apb-dma.c, tegra210.dtsi dma@60020000): 0x60020000, 32 channels of 0x40 bytes from +0x1000

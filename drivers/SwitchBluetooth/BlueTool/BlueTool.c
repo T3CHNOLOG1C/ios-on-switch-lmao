@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Stand-in for /usr/sbin/BlueTool on the Switch, shown over the original through the IOSwitch overlay
-// (/private/var/ioswitch/overlay/usr/sbin/BlueTool, see tree/overlay/manifest.json). Built for iOS arm64, ad hoc
+// Stand-in for /usr/sbin/BlueTool on the Switch, shown over the original through the Switch overlay
+// (/private/var/Switch/overlay/usr/sbin/BlueTool, see tree/overlay/manifest.json). Built for iOS arm64, ad hoc
 // signed as com.apple.BlueTool with the original's entitlements; its CDHash goes into the static trust cache.
 //
 // On an iPad, bluetoothd's chip boot (21H461 bluetoothd FUN_1002ef860 / FUN_1002f0268) sends XPC messages to the
@@ -21,7 +21,7 @@
 // It also starts the Joy-Con pairing agent, /usr/libexec/joyconpaird (../../SwitchJoyCon/helper/joyconpaird.c), after
 // answering each of bluetoothd's chip-boot requests: bluetoothd is then up, and this is the one process of ours launchd
 // starts (Apple's com.apple.BlueTool plist). launchd does not load LaunchDaemons plists from the Data overlay
-// (it bootstraps from its cache, launchd_cache_loader: com.ioswitch.joyconnfc never ran on 11-04). For that the
+// (it bootstraps from its cache, launchd_cache_loader: com.brunostjohn.switch.joyconnfc never ran on 11-04). For that the
 // stand-in has no sandbox profile (the original's com.apple.private.sandbox.profile:embedded "BlueTool" would refuse
 // the spawn); it touches nothing but its XPC listener and that one spawn. Children are not waited for (SIGCHLD
 // ignored): joyconpaird runs for the boot and keeps a single instance itself.

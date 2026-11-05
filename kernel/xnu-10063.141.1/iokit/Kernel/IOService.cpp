@@ -9155,10 +9155,10 @@ OSMetaClassDefineReservedUnused(IOService, 45);
 OSMetaClassDefineReservedUnused(IOService, 46);
 OSMetaClassDefineReservedUnused(IOService, 47);
 
-/* IOSwitch: the matching job pool, for stall diagnostics. */
-extern "C" void ioswitch_iokit_jobs(int *outstanding, int *threads, int *waiting, int *max_threads);
+/* Switch: the matching job pool, for stall diagnostics. */
+extern "C" void switch_iokit_jobs(int *outstanding, int *threads, int *waiting, int *max_threads);
 void
-ioswitch_iokit_jobs(int *outstanding, int *threads, int *waiting, int *max_threads)
+switch_iokit_jobs(int *outstanding, int *threads, int *waiting, int *max_threads)
 {
 	*outstanding = gOutstandingJobs;
 	*threads = gNumConfigThreads;

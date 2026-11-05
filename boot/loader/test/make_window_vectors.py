@@ -34,11 +34,11 @@ def unpack_window() -> bytes:
             pattern = rng.randbytes(rng.randrange(2, 16))
             window[at : at + 4096] = (pattern * 4096)[:4096]  # periods 2..15
         elif kind == 3:
-            words = [b'IOSWITCH', b'__TEXT', b'__DATA', b'kernel', b'\0\0\0\0']
+            words = [b'NXSWITCH', b'__TEXT', b'__DATA', b'kernel', b'\0\0\0\0']
             window[at : at + 4096] = b''.join(rng.choice(words) for _ in range(700))[:4096].ljust(4096, b'\0')
         else:
             window[at + rng.randrange(4096)] = rng.randrange(1, 256)
-    window[0:8] = b'IOSWITCH'
+    window[0:8] = b'NXSWITCH'
     return bytes(window)
 
 

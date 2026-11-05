@@ -202,13 +202,13 @@ extern void mapping_free_prime(void); /* Primes the mapping block release list *
  * Routines to return the next unused physical page.
  */
 #if defined(__arm64__)
-extern unsigned int pmap_ioswitch_dense_page_count(void);
-extern boolean_t pmap_ioswitch_begin_dense_pages(void);
-extern boolean_t pmap_ioswitch_page_reserved(ppnum_t pnum);
-extern boolean_t pmap_ioswitch_ram_enabled(void);
-extern boolean_t pmap_ioswitch_ram_reserved(ppnum_t pnum);
-extern boolean_t pmap_ioswitch_pa_valid(pmap_paddr_t pa);
-extern void pmap_ioswitch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end);
+extern unsigned int pmap_switch_dense_page_count(void);
+extern boolean_t pmap_switch_begin_dense_pages(void);
+extern boolean_t pmap_switch_page_reserved(ppnum_t pnum);
+extern boolean_t pmap_switch_ram_enabled(void);
+extern boolean_t pmap_switch_ram_reserved(ppnum_t pnum);
+extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa);
+extern void pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end);
 #endif
 extern boolean_t pmap_next_page(ppnum_t *pnum);
 extern boolean_t pmap_next_page_hi(ppnum_t *pnum, boolean_t might_free);

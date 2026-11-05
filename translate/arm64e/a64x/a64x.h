@@ -86,7 +86,7 @@ uint32_t a64x_dead_regs_budget(const uint32_t *window, int n, int site, int budg
 uint32_t a64x_dead_regs_flow(const uint32_t *window, int n, int site, uint32_t candidates, int budget);
 /* same over a whole function (fn[0] = its first word): branches out of it are tail calls */
 uint32_t a64x_dead_regs_flow_fn(const uint32_t *fn, int n, int site, uint32_t candidates, int budget);
-/* SIMD&FP registers dead after the site (a64x_vlive.inc); whole_function: branches out of fn are tail calls */
+/* SIMD&FP registers dead after the site (a64x_vlive.h); whole_function: branches out of fn are tail calls */
 uint32_t a64x_dead_vregs_flow(const uint32_t *fn, int n, int site, uint32_t candidates, int budget,
                               bool whole_function);
 /* V registers one instruction may read / writes in full (conservative; false = not decoded, reads all) */

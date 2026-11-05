@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* IOSwitch shim: reset controls by name, backed by platform.c (the DFLL's "dvco" = CAR RST_DFLL_DVCO bit 0). */
+/* Switch shim: reset controls by name, backed by platform.c (the DFLL's "dvco" = CAR RST_DFLL_DVCO bit 0). */
 #ifndef TDFLL_LINUX_RESET_H
 #define TDFLL_LINUX_RESET_H
 #include <linux/device.h>

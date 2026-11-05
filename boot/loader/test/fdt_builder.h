@@ -1,8 +1,8 @@
 // Flattened device trees for the memory gate tests (memory_gate_test, memory_ranges_test): a /reserved-memory node
 // with ramoops and a zero-sized placeholder, the bootloader's reservations
 // (BPMP carveout, the framebuffer, ...), and every knob a test turns (cells, ranges, nodes, the header's fields).
-#ifndef IOSWITCH_TEST_FDT_BUILDER_H
-#define IOSWITCH_TEST_FDT_BUILDER_H
+#ifndef SWITCH_TEST_FDT_BUILDER_H
+#define SWITCH_TEST_FDT_BUILDER_H
 
 #include <cstdint>
 #include <optional>
@@ -138,4 +138,4 @@ inline Bytes Tree(const Options &o = {})
 
 }  // namespace fdt
 
-#endif  // IOSWITCH_TEST_FDT_BUILDER_H
+#endif  // SWITCH_TEST_FDT_BUILDER_H

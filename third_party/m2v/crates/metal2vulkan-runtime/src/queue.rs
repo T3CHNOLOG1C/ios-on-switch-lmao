@@ -270,7 +270,7 @@ impl CommandQueue {
 
     /// [`command_buffer`](Self::command_buffer), its wait for a slot bounded by `timeout`:
     /// `None` once the queue still holds its `maxCommandBufferCount` uncompleted command
-    /// buffers past it (ioswitch r8-webgpu: the caller reports and ends the process, as every
+    /// buffers past it (ios-on-switch-lmao r8-webgpu: the caller reports and ends the process, as every
     /// other wait of the plugin past its bound, where Metal's would wait for ever: the render
     /// server froze in it, r7p8). Every other answer is `command_buffer`'s.
     pub fn command_buffer_within(

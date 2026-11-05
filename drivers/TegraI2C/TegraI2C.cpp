@@ -27,7 +27,7 @@
 #include <sys/types.h>
 #include <string.h>
 #include "TegraI2C.h"
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraAPBDMA/TegraAPBDMA.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -410,7 +410,7 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
                 panic("TegraI2C: I2C%u DMA end of count lost: %s", bus, dma);
             }
             char gic[192];
-            ioswitch_interrupt_describe(intid(bus), gic, sizeof(gic));
+            switch_interrupt_describe(intid(bus), gic, sizeof(gic));
             panic("TegraI2C: I2C%u interrupt lost (INTID %u): INT_STATUS %#x INT_MASK %#x FIFO_STATUS %#x, %s", bus,
                   intid(bus), status, mask, r32(b.regs, FIFO_STATUS), gic);
         }
@@ -467,13 +467,13 @@ int configure(unsigned bus, Bus &b)
     return TEGRA_I2C_OK;
 }
 
-// The bus's SPI on the shared work loop; ioswitch_interrupt_nub() sleeps until the GIC is up. Only called once the
+// The bus's SPI on the shared work loop; switch_interrupt_nub() sleeps until the GIC is up. Only called once the
 // controller is clocked, so the action never reads an unclocked block.
 void attachInterrupt(unsigned bus, Bus &b)
 {
     if (b.irq) return;
     w32(b.regs, INT_MASK, 0);
-    IOService *nub = ioswitch_interrupt_nub(intid(bus), false);
+    IOService *nub = switch_interrupt_nub(intid(bus), false);
     b.irq = IOInterruptEventSource::interruptEventSource(gLoop, &interruptOccurred, nub, 0);
     if (!b.irq || gLoop->addEventSource(b.irq) != kIOReturnSuccess) {
         panic("TegraI2C: cannot attach the I2C%u interrupt (INTID %u)", bus, intid(bus));

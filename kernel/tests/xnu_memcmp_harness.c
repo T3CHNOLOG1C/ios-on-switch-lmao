@@ -1,4 +1,4 @@
-// r17-launch: XNU's arm64 memcmp/bcmp (osfmk/arm64/ioswitch_memcmp.h, from @xnu, the patched source) against the
+// r17-launch: XNU's arm64 memcmp/bcmp (osfmk/arm64/switch_memcmp.h, from @xnu, the patched source) against the
 // portable byte loops they replace (osfmk/device/subrs.c), exhaustively for every first difference and length up to 80
 // bytes at every alignment, plus random inputs; each buffer ends right before an unreadable page, so a load past n
 // faults. xnu_memcmp_test.cpp runs the two halves; each returns how many cases differed.
@@ -10,7 +10,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "ioswitch_memcmp.h"
+#include "switch_memcmp.h"
 #include "xnu_memcmp_harness.h"
 
 static int reference_memcmp(const void *s1, const void *s2, size_t n)
@@ -39,13 +39,13 @@ static int reference_bcmp(const void *pa, const void *pb, size_t len)
 static int fast_memcmp(const void *s1, const void *s2, size_t n)
 {
     const unsigned char *p1 = s1, *p2 = s2;
-    const size_t i = ioswitch_cmp_first_difference(p1, p2, n);
+    const size_t i = switch_cmp_first_difference(p1, p2, n);
     return i < n ? p1[i] - p2[i] : 0;
 }
 
 static int fast_bcmp(const void *pa, const void *pb, size_t len)
 {
-    len -= ioswitch_cmp_first_difference((const unsigned char *)pa, (const unsigned char *)pb, len);
+    len -= switch_cmp_first_difference((const unsigned char *)pa, (const unsigned char *)pb, len);
     if ((len & 0xFFFFFFFF00000000ULL) && !(len & 0x00000000FFFFFFFFULL)) return ~0;
     return (int)len;
 }

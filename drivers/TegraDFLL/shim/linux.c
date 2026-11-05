@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * IOSwitch: the Linux 4.9 kernel services the vendored L4T DFLL sources call, on XNU (through dfllxnu.h only).
+ * Switch: the Linux 4.9 kernel services the vendored L4T DFLL sources call, on XNU (through dfllxnu.h only).
  * Board specifics (which clocks, which regulator, the device tree node) live in platform.c.
  *
  * Concurrency: every clock-framework, OPP, of_*, pm_runtime, regulator and devm call here comes from the public API
@@ -809,7 +809,7 @@ long clk_round_rate(struct clk *clk, unsigned long rate)
 /*
  * L4T clk.c clk_set_rate -> clk_core_set_rate_nolock -> clk_calc_new_rates / clk_change_rate for a clock that sets
  * its own rate (the DFLL output): skip a rate equal to the current one, validate with determine_rate (round_rate),
- * PRE_RATE_CHANGE, set_rate, POST_RATE_CHANGE. IOSWITCH difference: L4T ignores set_rate's return value; here it is
+ * PRE_RATE_CHANGE, set_rate, POST_RATE_CHANGE. SWITCH difference: L4T ignores set_rate's return value; here it is
  * returned, after the POST notification (clk-dfll.c's notifier ignores rate events either way).
  */
 int clk_set_rate(struct clk *clk, unsigned long rate)
@@ -861,7 +861,7 @@ int clk_set_rate(struct clk *clk, unsigned long rate)
  *   a prepared clock first prepares+enables its new parent (clk-dfll.c: prepare = open loop), the mux write,
  *   the old parent is disabled+unprepared (clk-dfll.c: unprepare = disable a DFLL being left),
  *   POST_PARENT_CHANGE (clk-dfll.c: closes the loop on a DFLL just switched to), POST_RATE_CHANGE.
- * IOSWITCH difference: L4T ignores a failure to prepare/enable the new parent and switches anyway; switching the CPU to
+ * SWITCH difference: L4T ignores a failure to prepare/enable the new parent and switches anyway; switching the CPU to
  * a DFLL that did not start would stop its clock, so here that aborts the switch (ABORT_PARENT_CHANGE, error).
  */
 int clk_set_parent(struct clk *clk, struct clk *parent)

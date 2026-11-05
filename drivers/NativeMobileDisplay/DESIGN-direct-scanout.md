@@ -6,13 +6,13 @@ this tree; **[I]** = inferred, to check; **[T]** = to be proven by a boot self-t
 
 ## Where things stand (r7q, main eae4371)
 
-- CA renders 720x1280 portrait at 1:1 (`IOSWITCH_PORTRAIT_NATIVE=1`, backboardd `nativeRotation:0`) [V]. The GPU copy
+- CA renders 720x1280 portrait at 1:1 (`SWITCH_PORTRAIT_NATIVE=1`, backboardd `nativeRotation:0`) [V]. The GPU copy
   (`tegra_gm20b_scanout_copy`) does not rotate: it converts CA's pitch-linear BGRA (rows of 2944 bytes) to the block-linear
   layout window A row-scans. It costs 0.46 ms on the copy engine (`stats2 copy mean 460 us`); offer to done is otherwise
   CA's own GPU tail (the copy starts 3 us after it) [V]. Direct scanout saves that copy, ~7.5 MB of DRAM traffic a frame
   and one GPU job a frame; it is worth ~0.5 ms of swap-to-scan, not a frame. The frame was the two-buffer flip-wait.
 - The blocker is memory, not orientation: CA's framebuffer IOSurfaces are 3.75 MiB in 240-959 physical pieces (largest
-  8-36 KiB, `IOSwitch display: client surface N` lines) [V], and DC A reads physical addresses: its swgroups are in
+  8-36 KiB, `SwitchDisplay: client surface N` lines) [V], and DC A reads physical addresses: its swgroups are in
   bypass. Window A can scan pitch (hekate's own window is pitch, 2880-byte rows) and BGRA [V].
 - SMMU users today [V]: TegraVIC owns ASID 127 on the `vic` swgroup (MC 0x284, clients vicsrd/vicswr in
   TRANSLATION_ENABLE_3 bits 12/13), its own page directory, and drives the global `PTB_ASID`/`PTB_DATA`/`TLB_FLUSH`/
@@ -69,7 +69,7 @@ this tree; **[I]** = inferred, to check; **[T]** = to be proven by a boot self-t
 ## Phase 2: video on its own DC window
 
 **Done in r18-planes** (11-05); the rules, their sources and tags are in `NativePlanes.h`, the driver side in
-`NativePlanesDisplay.inc`. What changed from the plan below: Core Animation never retries a refused swap (it sends it
+`NativePlanesDisplay.h`. What changed from the plan below: Core Animation never retries a refused swap (it sends it
 again every frame), so the display publishes the limits it can show (IOMFBScalingLimits 4/4, IOMFBMaxSrcPixels 1920
 wide and 2048x2048 buffers, IOMFBNumLayers 2, plane bases 64) and accepts every swap within them; on this internal
 display CA copies any rotated, out-of-limit or converted layer through the IOSurfaceAccelerator (TegraVIC) first, so

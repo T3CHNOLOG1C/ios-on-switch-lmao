@@ -8,7 +8,7 @@
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
 #include <libkern/kernel_mach_header.h>
-#include <arm64/ioswitch_smp.h>
+#include <arm64/switch_smp.h>
 #include "../ArmGIC/ArmGIC.h"
 
 // Exact private entry from Darwin 23 arm/rtclock.h. Its full data header is
@@ -22,7 +22,7 @@ extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), vo
 extern "C" void thread_deallocate(thread_t);
 extern "C" thread_t current_thread(void);
 extern "C" kern_return_t thread_terminate(thread_t);
-extern "C" int ioswitch_smp_publish_cpu_state(void);
+extern "C" int switch_smp_publish_cpu_state(void);
 extern "C" boolean_t pmap_valid_page(ppnum_t);
 // System sleep (drivers/SwitchSuspend): the scheduler's processor exit, XNU's sleep path, the platform quiesce/active
 // actions.
@@ -30,12 +30,12 @@ extern "C" kern_return_t processor_exit(processor_t);
 extern "C" void ml_arm_sleep(void);
 extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
-// Owned here, read by the kernel (osfmk/arm64/cpu.c): arm64_prepare_for_sleep calls ioswitch_cpu_sleep_handler when
+// Owned here, read by the kernel (osfmk/arm64/cpu.c): arm64_prepare_for_sleep calls switch_cpu_sleep_handler when
 // set, and cpu_machine_idle_init sets the flag at boot, so a kernel without the hook (whose arm64_prepare_for_sleep
 // only parks in WFI) is recognised and sleep stays off.
 extern "C" {
-void (*ioswitch_cpu_sleep_handler)(boolean_t) = nullptr;
-bool ioswitch_cpu_sleep_hook_present = false;
+void (*switch_cpu_sleep_handler)(boolean_t) = nullptr;
+bool switch_cpu_sleep_hook_present = false;
 }
 
 extern "C" {
@@ -74,7 +74,7 @@ volatile uint32_t armcpu_smp_self_ipi_ack[8], armcpu_smp_cross_out[8], armcpu_sm
 }
 
 // A CPU's GICv2 interface mask, once its interface is up. ArmGIC hands out SPI nubs only after CPU0's, and a
-// driver that asks earlier sleeps on this event (ioswitch_interrupt_nub).
+// driver that asks earlier sleeps on this event (switch_interrupt_nub).
 static void publishGicTarget(uint32_t logicalId, uint32_t target)
 {
     __atomic_store_n(&armcpu_gic_targets[logicalId], target, __ATOMIC_RELEASE);
@@ -228,7 +228,7 @@ volatile uint64_t armcpu_spi_unhandled = 0;
 volatile uint32_t armcpu_spi_unhandled_id = 0;
 }
 
-extern "C" void ioswitch_smp_scheduler_online(unsigned int cpu)
+extern "C" void switch_smp_scheduler_online(unsigned int cpu)
 {
     if (cpu < ARMCPU_SMP_SLOTS) {
         __atomic_store_n(&armcpu_smp_scheduler_ack[cpu], 1U, __ATOMIC_RELEASE);
@@ -239,7 +239,7 @@ static bool nativeSmpOptIn(void)
 {
     unsigned smp = 0, native = 0;
     PE_parse_boot_argn("sheng-smp", &smp, sizeof(smp));
-    PE_parse_boot_argn("ioswitch-smp", &native, sizeof(native));
+    PE_parse_boot_argn("switch-smp", &native, sizeof(native));
     return smp == 1 && native == 1;
 }
 
@@ -828,7 +828,7 @@ static bool qualifyNativePsci(uint64_t target)
     return psciCall(false, 0xc4000004, gBootAffinity, 0, 0) == 0 && psciCall(false, 0xc4000004, target, 0, 0) == 1;
 }
 
-static void invalidateSecondaryStatus(ioswitch_smp_record *record)
+static void invalidateSecondaryStatus(switch_smp_record *record)
 {
     const uintptr_t status = reinterpret_cast<uintptr_t>(record) + IOSW_SMP_STATUS_OFFSET;
     // This cache line belongs exclusively to the secondary after CPU_ON. The
@@ -909,7 +909,7 @@ void ArmCpu::observeThread(void *argument, wait_result_t)
     const uint64_t started = counter();
     bool requested = false;
     for (;;) {
-        ioswitch_smp_record *record = &ioswitch_secondary_records[self->logicalId];
+        switch_smp_record *record = &switch_secondary_records[self->logicalId];
         const uint32_t cpu = self->logicalId;
         const bool issued = __atomic_load_n(&armcpu_smp_step[cpu], __ATOMIC_ACQUIRE) >= 4;
         if (issued) {
@@ -938,7 +938,7 @@ void ArmCpu::observeThread(void *argument, wait_result_t)
         }
         IOSleep(10);
     }
-    ioswitch_smp_record *record = &ioswitch_secondary_records[self->logicalId];
+    switch_smp_record *record = &switch_secondary_records[self->logicalId];
     // A core that never acknowledged the scheduler gets no work: leave it out and continue. One that joined
     // the scheduler but cannot take interrupts would hang the system, so that still stops the boot.
     if (!__atomic_load_n(&armcpu_smp_scheduler_ack[self->logicalId], __ATOMIC_ACQUIRE)) {
@@ -1150,7 +1150,7 @@ void ArmCpu::interrupt(void)
         } else {
             const uint32_t intid = static_cast<uint32_t>(id & 0xffffff);
             if (diagnosePower) armcpu_irq_phase = 7;
-            if (intid >= 32 && ioswitch_gic_dispatch(intid)) {
+            if (intid >= 32 && switch_gic_dispatch(intid)) {
                 // A driver's vector ran (or masked its soft-disabled line); the EOI below is still the only one.
             } else if (intid >= 32 && gDist != 0) {
                 armcpu_spi_unhandled = armcpu_spi_unhandled + 1;
@@ -1456,7 +1456,7 @@ void ArmCpu::resumeCPU(void)
 // 0022D): CPU_OFF 0x84000002, AFFINITY_INFO 0xC4000004 (1 = OFF), SYSTEM_SUSPEND 0xC400000E. SYSTEM_SUSPEND is
 // refused while another core is still on at the firmware, and ml_arm_sleep() only waits for their sleep tokens,
 // which come just before their CPU_OFF: the boot CPU waits (bounded) for AFFINITY_INFO to report each one off.
-// The boot CPU resumes at ioswitch_secondary_entry (EL2 -> EL1, then XNU's reset vector, start.s) with record 0.
+// The boot CPU resumes at switch_secondary_entry (EL2 -> EL1, then XNU's reset vector, start.s) with record 0.
 static void cleanToMemory(const void *start, size_t length);
 
 static void psciSleep(boolean_t)
@@ -1478,7 +1478,7 @@ static void psciSleep(boolean_t)
             }
         }
     }
-    ioswitch_smp_record *record = &ioswitch_secondary_records[0];
+    switch_smp_record *record = &switch_secondary_records[0];
     memset(record, 0, sizeof(*record));
     record->magic = IOSW_SMP_MAGIC;
     record->mpidr = 0;
@@ -1501,12 +1501,12 @@ extern "C" int armcpu_system_sleep_enable(char *why, size_t size)
     int64_t rc = 0;
     uint64_t frequency;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
-    if (!ioswitch_cpu_sleep_hook_present) {
-        reason = "the kernel does not call ioswitch_cpu_sleep_handler (XNU sleep diff)";
+    if (!switch_cpu_sleep_hook_present) {
+        reason = "the kernel does not call switch_cpu_sleep_handler (XNU sleep diff)";
     } else if (armcpu_gic_version != 2 || !armcpu_gic_ready) {
         reason = "no GICv2 up";
     } else if (ml_get_max_cpu_number() != 0 && !gNativeSmp) {
-        reason = "secondary cores without native SMP (sheng-smp=1 ioswitch-smp=1)";
+        reason = "secondary cores without native SMP (sheng-smp=1 switch-smp=1)";
     }
     // A core parked after a failed start stays on at the firmware, and SYSTEM_SUSPEND would wait for it forever.
     else if (gNativeSmp && __atomic_load_n(&armcpu_smp_running, __ATOMIC_ACQUIRE) != IOSW_SMP_CORE_COUNT - 1) {
@@ -1525,10 +1525,10 @@ extern "C" int armcpu_system_sleep_enable(char *why, size_t size)
         reason = "CNTFRQ is not 19.2 MHz";
     }
     if (!reason) {
-        gSleepEntryPA = ml_static_vtop(reinterpret_cast<vm_offset_t>(ioswitch_secondary_entry));
-        gSleepRecordPA = ml_static_vtop(reinterpret_cast<vm_offset_t>(&ioswitch_secondary_records[0]));
+        gSleepEntryPA = ml_static_vtop(reinterpret_cast<vm_offset_t>(switch_secondary_entry));
+        gSleepRecordPA = ml_static_vtop(reinterpret_cast<vm_offset_t>(&switch_secondary_records[0]));
         if (!gSleepEntryPA || gSleepEntryPA >= UINT64_C(0x100000000) || !gSleepRecordPA || (gSleepRecordPA & 63) ||
-            ml_vtophys(reinterpret_cast<vm_offset_t>(&ioswitch_secondary_records[0])) != gSleepRecordPA) {
+            ml_vtophys(reinterpret_cast<vm_offset_t>(&switch_secondary_records[0])) != gSleepRecordPA) {
             reason = "the PSCI entry or record 0 is not a usable physical address";
         }
     }
@@ -1537,7 +1537,7 @@ extern "C" int armcpu_system_sleep_enable(char *why, size_t size)
         return -1;
     }
     gSystemSleep = true;
-    ioswitch_cpu_sleep_handler = psciSleep;
+    switch_cpu_sleep_handler = psciSleep;
     return 0;
 }
 
@@ -1625,10 +1625,10 @@ kern_return_t ArmCpu::startCPU(vm_offset_t, vm_offset_t)
         }
         uint64_t frequency;
         __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
-        ioswitch_smp_record *record = &ioswitch_secondary_records[logicalId];
+        switch_smp_record *record = &switch_secondary_records[logicalId];
         context = ml_static_vtop(reinterpret_cast<vm_offset_t>(record));
         const uint64_t reset = entry;
-        entry = ml_static_vtop(reinterpret_cast<vm_offset_t>(ioswitch_secondary_entry));
+        entry = ml_static_vtop(reinterpret_cast<vm_offset_t>(switch_secondary_entry));
         if (frequency != UINT64_C(19200000) || !entry || entry >= UINT64_C(0x100000000) || !reset ||
             reset >= UINT64_C(0x100000000) || !context || (context & 63) ||
             context > UINT64_C(0x100000000) - sizeof(*record) ||
@@ -1644,7 +1644,7 @@ kern_return_t ArmCpu::startCPU(vm_offset_t, vm_offset_t)
         record->cntfrq = frequency;
         record->cntvoff = 0;
         record->reset_pa = reset;
-        if (!cleanKernelSegments() || ioswitch_smp_publish_cpu_state()) {
+        if (!cleanKernelSegments() || switch_smp_publish_cpu_state()) {
             armcpu_smp_psci_rc[logicalId] = -1004;
             return KERN_FAILURE;
         }

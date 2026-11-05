@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// A device's counters (`DeviceShared::counts`), each only ever added to.
 #[derive(Default)]
 pub(crate) struct Counters {
-    /// `replace_region` and `get_bytes` calls by route ([`TexelCopyRoute`], ioswitch).
+    /// `replace_region` and `get_bytes` calls by route ([`TexelCopyRoute`], ios-on-switch-lmao).
     texel_copy_routes: [AtomicU64; TexelCopyRoute::COUNT],
     command_pools_made: AtomicU64,
     live_tables_uploaded: AtomicU64,
@@ -128,7 +128,7 @@ pub(crate) enum PoolCompiled {
     IndirectDraw,
 }
 
-/// How a host call's texel copy went (ioswitch): `replace_region` into the texture's bytes on the
+/// How a host call's texel copy went (ios-on-switch-lmao): `replace_region` into the texture's bytes on the
 /// CPU (a texture over a buffer or a heap's bytes), on the host into its image
 /// (`texture/host_copy.rs`), staged for the next submission, or by a submission waited for
 /// (`texture/staging_copy.rs`'s queue or the device's own); `get_bytes` alike.
@@ -780,14 +780,14 @@ pub struct WorkCounts {
     /// Its live imports of the caller's host memory, a block each (`Memory::import_host`).
     pub host_imports_live: u64,
     /// Dedicated requests a spare dedicated block served instead of a new allocation
-    /// (`memory.rs`, ioswitch).
+    /// (`memory.rs`, ios-on-switch-lmao).
     pub spare_block_reuses: u64,
-    /// Bytes of the spare dedicated blocks kept now (`memory.rs`, ioswitch).
+    /// Bytes of the spare dedicated blocks kept now (`memory.rs`, ios-on-switch-lmao).
     pub spare_block_bytes: u64,
-    /// `replace_region` calls by route (ioswitch): into the texture's bytes on the CPU, on the
+    /// `replace_region` calls by route (ios-on-switch-lmao): into the texture's bytes on the CPU, on the
     /// host into its image, staged for the next submission, and by a submission waited for.
     pub replace_region_routes: [u64; 4],
-    /// `get_bytes` calls by route (ioswitch): from the texture's bytes, on the host from its
+    /// `get_bytes` calls by route (ios-on-switch-lmao): from the texture's bytes, on the host from its
     /// image, and by a submission waited for.
     pub get_bytes_routes: [u64; 3],
     /// Stand-ins made for textures over detached bytes (`texture/stand_in.rs`): one per distinct

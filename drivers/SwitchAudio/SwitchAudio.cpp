@@ -17,7 +17,7 @@
 // line reports the jack, and an interrupt that does not arrive, a DMA that stalls or runs fast, or hardware that does
 // not answer, panics with one line.
 //
-// The OLED's audio path. Sources: the shipped DTB (switchroot/ioswitch/oled-sku3.dtb = CTCaer
+// The OLED's audio path. Sources: the shipped DTB (switchroot/ios/oled-sku3.dtb = CTCaer
 // switch-l4t-platform-t210-nx tegra210b01-fric.dts over tegra210b01-nx-common.dtsi:864-950), switchroot Android
 // android_device_nintendo_nx media/nvaudio_conf.xml (the mixer paths), CTCaer switch-l4t-kernel-nvidia
 // sound/soc/codecs/rt5640.c and sound/soc/tegra-alt (tegra_machine_driver_mobile.c, tegra_asoc_utils_alt.c,
@@ -47,7 +47,7 @@
 //    ADMA request line 1 = ADMAIF1 (DTB admaif dmas). ADSP and the AHUB effect blocks are not used.
 //  - Interrupts: ADMA channel n raises SPI 24+n on the AGIC, the APE's own GICv2 (distributor 0x702f9000, CPU
 //    interface 0x702fa000; DTB adma@702e2000 interrupts), whose host output is main-GIC SPI 102 = INTID 134 (DTB
-//    agic@702f9000 interrupts <0 0x66 ..>). This driver claims ioswitch_interrupt_nub(134, false) and runs the
+//    agic@702f9000 interrupts <0 0x66 ..>). This driver claims switch_interrupt_nub(134, false) and runs the
 //    cascade: the channel's AGIC SPI targeted at the interface the CPU reads in its banked ITARGETSR0, IAR/EOIR on the
 //    AGIC, ADMA_CH_INT_STATUS/CLEAR. Channels 0 (playback) and 1 (capture) are host channels.
 //
@@ -58,7 +58,7 @@
 // mixes, this driver cleans what it clears and invalidates what the ADMA wrote. Sample time 0 is the host time the
 // playback DMA started.
 //
-// Started by ioswitch_audio_publish() from the board thread; the classes register through the normal static
+// Started by switch_audio_publish() from the board thread; the classes register through the normal static
 // initializer (they derive only from XNU's own IOService and IOUserClient).
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -73,7 +73,7 @@
 #include <pexpert/pexpert.h>
 #include "SwitchAudioAbi.h"
 #include "SwitchAudioFormat.h"
-#include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 
@@ -724,7 +724,7 @@ class SwitchAudio : public IOService {
         tegraClocksAndPads();
         tegraAhubAndDma();
         tegraAgic();
-        IOService *nub = ioswitch_interrupt_nub(kCascadeIntid, false);  // sleeps until the GIC is up
+        IOService *nub = switch_interrupt_nub(kCascadeIntid, false);  // sleeps until the GIC is up
         cascade = IOInterruptEventSource::interruptEventSource(this, &SwitchAudio::cascadeFired, nub, 0);
         if (!cascade || loop->addEventSource(cascade) != kIOReturnSuccess) {
             panic("SwitchAudio: cannot attach the APE interrupt (INTID %u)", kCascadeIntid);
@@ -971,7 +971,7 @@ class SwitchAudio : public IOService {
         }
         if (xfer != self->xferSeen[kChOut]) {
             char state[160];
-            ioswitch_interrupt_describe(kCascadeIntid, state, sizeof(state));
+            switch_interrupt_describe(kCascadeIntid, state, sizeof(state));
             const uint32_t id = kAgicAdma + kChOut, bit = 1u << (id % 32), word = 4 * (id / 32);
             panic("SwitchAudio: ADMA ch0 period interrupt lost: XFER %u seen %u INT_STATUS %#x, AGIC en %u pend %u act "
                   "%u, %s",
@@ -1664,7 +1664,7 @@ OSDefineMetaClassAndStructors(SwitchAudioUserClient, IOUserClient)
     // GPIO controller and I2C1), any point before launchd starts audiomxd; returns 0 on success.
     static SwitchAudio *gAudio;  // set once published (switch_audio_suspend/resume)
 
-extern "C" int ioswitch_audio_publish(void)
+extern "C" int switch_audio_publish(void)
 {
     static bool published;
     if (published) return 0;

@@ -4,7 +4,7 @@ A driver compiles with the flags XNU compiles one of its objects with: kernel/xn
 component and language (config/recipes_<config>.bzl: CFLAGS+CWARNFLAGS, then INCFLAGS) with the object's own
 additions (<component>/objects.bzl: copts after the flags, includes after the recipe's), followed by what this Xcode's
 clang driver appends to every compile (its -Xclang vendor features, -mlinker-version, --target: asked of the driver
-itself, so a new Xcode shows here). What cmake/XnuRecipes.cmake's ioswitch_recipe did with make's records, from the
+itself, so a new Xcode shows here). What cmake/XnuRecipes.cmake's switch_recipe did with make's records, from the
 tables the XNU build itself compiles from.
 
 A recipe is those arguments without -W flags (unless keep_warnings) and without arguments starting with a drop prefix;
@@ -53,7 +53,7 @@ LANGUAGES = {'.c': 'c', '.cpp': 'cxx', '.s': 'asm'}
 PROBE = ['-arch', 'arm64', '-mios-version-min=17.0', '-mkernel']
 # The compilation directory make's objects carried (the old layout's object root): the native XNU objects keep it
 # (kernel/xnu-<version>/config/xnu_objects.bzl LEGACY), and so do the drivers.
-MAKE_OBJ = '/ioswitch/bazel-out/darwin_arm64-fastbuild/bin/out/native-a57/root-v1/tree/build/xnu/ios-obj'
+MAKE_OBJ = '/switch-ios/bazel-out/darwin_arm64-fastbuild/bin/out/native-a57/root-v1/tree/build/xnu/ios-obj'
 PLACEHOLDERS = ('{xnu_obj}', '{fakeroot}', '{xnu}', '{tree}')
 UPDATE = 'bazel run //bazel/toolchains/kernel:update_recipes'
 
@@ -80,7 +80,7 @@ def driver_tail(xcode_env: str) -> list[str]:
     xcode = common.xcode_env(xcode_env)
     with tempfile.TemporaryDirectory() as scratch:
         work = Path(scratch)
-        (work / 'empty.c').write_text('int ioswitch_recipe_probe;\n')
+        (work / 'empty.c').write_text('int switch_recipe_probe;\n')
         clang = xcode['XCODE_TOOLCHAIN'] + '/clang'
         command = [
             clang,

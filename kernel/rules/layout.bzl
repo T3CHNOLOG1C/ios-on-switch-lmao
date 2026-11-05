@@ -9,7 +9,7 @@ spellings is a later, separate change (old_spelling and the compat maps become i
 tools/kernel/common.py mirrors this table for the tools (keep the two in step).
 """
 
-PATH_ROOT = "/ioswitch"
+PATH_ROOT = "/switch-ios"
 
 # The kernel tree's location before the move: the old spelling of every moved path.
 OLD_TREE = "out/native-a57/root-v1/tree"
@@ -42,7 +42,7 @@ def old_spelling(path, bin_dir = None):
 def old_output_spelling(path):
     """The pre-move spelling of an output-directory-relative path (unchanged while nothing has moved).
 
-    A moved package's outputs (the kernel package's, drivers/<X>'s, kits/<X>'s, diagnostics/ioswitch's, overlay's) were
+    A moved package's outputs (the kernel package's, drivers/<X>'s, kits/<X>'s, diagnostics/switch's, overlay's) were
     the kernel tree package's: what the kernel link (kernel/xnu-<version>/config:xnu_kernel) names them by, so its
     debug map keeps its paths.
 
@@ -61,7 +61,7 @@ def old_output_spelling(path):
         if "/".join(parts[:2]) in OLD_SUBPACKAGES:
             return OLD_TREE + "/" + path
         return "/".join([OLD_TREE] + parts[2:])
-    if parts[:2] == ["diagnostics", "ioswitch"]:
+    if parts[:2] == ["diagnostics", "switch"]:
         return "/".join([OLD_TREE] + parts[2:])
     if parts[0] == "overlay":
         return "/".join([OLD_TREE] + parts[1:])

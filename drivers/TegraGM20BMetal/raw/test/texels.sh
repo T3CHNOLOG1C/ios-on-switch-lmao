@@ -7,7 +7,7 @@
 B=$1; P=$2; O=$3; shift 3
 NVK=${NVK:-${0:A:h}/../../../../bazel-bin/gpu/nvk/host/libvulkan_nouveau.dylib}   # bazel build //gpu/nvk:host
 QC=${QC:-${0:A:h}/../../eq/qc/QuartzCore.framework/default.metallib}
-C=${CORPUS:-/Users/brunostjohn/Development/Projects/ioswitch/drivers/TegraGM20BMetal/precompile/corpus.log}
+C=${CORPUS:-${0:A:h}/../../precompile/corpus.log}
 mkdir -p $O
 export RAWCAP_PROGRAMS=$P/work/programs.bin RAWCAP_LAYOUTS=$P/layouts.txt NVDEC_REGS=1 NVDEC_TEXELS=1 NVDEC_HEAD=1 MESA_SHADER_CACHE_DISABLE=true NMB_ASYNC_PSO=0 NMB_ASYNC_PSO_API=0
 fail=0

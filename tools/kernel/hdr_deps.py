@@ -9,7 +9,7 @@ name every other package whose headers its files reach. Starting from the driver
 the driver's -I {tree}/<dir> flags) and followed into the headers it names, so a header that includes another
 package's header counts too. A package counts when its BUILD.bazel declares its headers (kernel_headers()); includes
 of XNU, the SDK and generated headers ({xnu}, {build}) are not packages and need no hdr_deps, nor does
-diagnostics/ioswitch, whose headers every kernel compile has (the kernel SDK's extra headers).
+diagnostics/switch, whose headers every kernel compile has (the kernel SDK's extra headers).
 """
 
 import argparse
@@ -26,8 +26,8 @@ ROOTS = ('drivers', 'kits', 'diagnostics')
 INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
 SOURCES = ('.c', '.cpp', '.h', '.hpp', '.inc', '.S', '.s', '.m', '.mm')
 # Header packages every kernel compile already has (kernel/BUILD.bazel's kernel_sdk extra: the recipes' -I
-# {tree}/diagnostics/ioswitch): followed, never needed in hdr_deps.
-SDK_PACKAGES = ('diagnostics/ioswitch',)
+# {tree}/diagnostics/switch): followed, never needed in hdr_deps.
+SDK_PACKAGES = ('diagnostics/switch',)
 
 
 @dataclass
@@ -82,7 +82,7 @@ def drivers_in(root: Path, build: Path) -> list[Driver]:
 
 
 def package_of(root: Path, path: Path, packages: set[str]) -> str | None:
-    """Return the header package (drivers/<X>, kits/<X>, diagnostics/ioswitch) a repository file belongs to."""
+    """Return the header package (drivers/<X>, kits/<X>, diagnostics/switch) a repository file belongs to."""
     try:
         rel = path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:

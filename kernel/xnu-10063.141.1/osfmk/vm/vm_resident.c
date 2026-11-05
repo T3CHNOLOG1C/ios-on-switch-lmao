@@ -1422,8 +1422,8 @@ pmap_startup(
 	uint64_t        now_ns;
 	uint_t          low_page_count = 0;
 	unsigned int   native_dense_pages = 0, native_reserved_pages = 0;
-#if defined(__arm64__) && defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-	native_dense_pages = pmap_ioswitch_dense_page_count();
+#if defined(__arm64__) && defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	native_dense_pages = pmap_switch_dense_page_count();
 #endif
 
 #if    defined(__LP64__)
@@ -1460,8 +1460,8 @@ pmap_startup(
 	    (uint_t)(mem_sz / (PAGE_SIZE + sizeof(*vm_pages)));    /* scaled to include the vm_page_ts */
 
 	vm_pages = (vm_page_t) pmap_steal_freeable_memory(npages * sizeof *vm_pages);
-#if defined(__arm64__) && defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-	if (native_dense_pages && !pmap_ioswitch_begin_dense_pages()) {
+#if defined(__arm64__) && defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	if (native_dense_pages && !pmap_switch_begin_dense_pages()) {
 		panic("native dense memory setup failed");
 	}
 #endif
@@ -1568,8 +1568,8 @@ pmap_startup(
 		}
 
 		boolean_t native_reserved = FALSE;
-#if defined(__arm64__) && defined(XNU_IOSWITCH_VERIFIED_ROOT) && XNU_IOSWITCH_VERIFIED_ROOT
-		native_reserved = native_dense_pages && pmap_ioswitch_page_reserved(phys_page);
+#if defined(__arm64__) && defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		native_reserved = native_dense_pages && pmap_switch_page_reserved(phys_page);
 #endif
 		if (!native_reserved && phys_page < max_valid_low_ppnum) {
 			++low_page_count;

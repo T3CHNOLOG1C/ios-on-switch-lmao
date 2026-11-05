@@ -29,8 +29,8 @@ static_assert(std::is_same_v<decltype(&tegra_apbdma_start_once),
                              void (*)(tegra_apbdma_channel *, uint32_t, unsigned, uint32_t, uint32_t)>);
 static_assert(std::is_same_v<decltype(&tegra_apbdma_alloc), bool (*)(uint32_t, tegra_apbdma_buffer *)>);
 
-using ioswitch::test::Body;
-using ioswitch::test::SourceText;
+using switch_ios::test::Body;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 

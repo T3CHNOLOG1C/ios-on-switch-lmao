@@ -84,7 +84,7 @@ struct FatImage {
         Put32(&bpb[36], fat_sectors);
         Put32(&bpb[44], 2);
         bpb[510] = 0x55, bpb[511] = 0xaa;
-        Directory(2, {Dirent("IOSWITCH", 3, 0, 0x10)});
+        Directory(2, {Dirent("IOS", 3, 0, 0x10)});
         Directory(3, {Dirent("VERIFY.BIN", 5, 1200), Dirent("OS", 4, 0, 0x10), Dirent("EMPTY.BIN", 0)});
         Directory(4, {Dirent("PART0000.BIN", 5, 1200)});
     }
@@ -211,7 +211,7 @@ TEST_F(NativeFat32, FragmentedPartialSectorExactFileAndCasefoldedPath)
 {
     Mount();
     EXPECT_EQ(volume->cluster_count, 65525u);
-    ASSERT_EQ(Open("/ioswitch/verify.bin"), OK);
+    ASSERT_EQ(Open("/ios/verify.bin"), OK);
     Bytes expected =
         Concat({FatImage::Payload(image->lba(5)), FatImage::Payload(image->lba(7)), FatImage::Payload(image->lba(6))});
     expected.resize(1200);
@@ -224,7 +224,7 @@ TEST_F(NativeFat32, FragmentedPartialSectorExactFileAndCasefoldedPath)
 TEST_F(NativeFat32, InvalidReadsDoNotTouchOutputOrReadDevice)
 {
     Mount();
-    ASSERT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    ASSERT_EQ(Open("IOS/VERIFY.BIN"), OK);
     const size_t before = image->reads.size();
     for (auto [offset, n] : {std::pair<uint64_t, uint32_t>{1201, 0}, {1200, 1}, {1199, 2}, {UINT64_MAX, 1}})
         EXPECT_EQ(Read(offset, n, RANGE), Bytes(n, 0xaa)) << offset;
@@ -234,11 +234,11 @@ TEST_F(NativeFat32, InvalidReadsDoNotTouchOutputOrReadDevice)
 TEST_F(NativeFat32, EmptyFileAndNonFile)
 {
     Mount();
-    ASSERT_EQ(Open("IOSWITCH/EMPTY.BIN"), OK);
+    ASSERT_EQ(Open("IOS/EMPTY.BIN"), OK);
     Read(0, 0);
     Read(0, 1, RANGE);
-    EXPECT_EQ(Open("IOSWITCH/OS"), NOT_FILE);
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN/X"), NOT_FILE);
+    EXPECT_EQ(Open("IOS/OS"), NOT_FILE);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN/X"), NOT_FILE);
 }
 
 TEST_F(NativeFat32, PathsAreBoundedAnd83Only)
@@ -246,14 +246,14 @@ TEST_F(NativeFat32, PathsAreBoundedAnd83Only)
     Mount();
     const std::vector<std::string> invalid{"",
                                            "/",
-                                           "//IOSWITCH",
-                                           "IOSWITCH/",
-                                           "IOSWITCH//VERIFY.BIN",
+                                           "//IOS",
+                                           "IOS/",
+                                           "IOS//VERIFY.BIN",
                                            "../VERIFY.BIN",
-                                           "IOSWITCH/./VERIFY.BIN",
-                                           "IOSWITCH/VERIFY.",
-                                           "IOSWITCH/PART-0000.BIN",
-                                           "IOSWITCH/VERI*.BIN",
+                                           "IOS/./VERIFY.BIN",
+                                           "IOS/VERIFY.",
+                                           "IOS/PART-0000.BIN",
+                                           "IOS/VERI*.BIN",
                                            std::string(105, 'A')};
     const size_t before = image->reads.size();
     for (const std::string &path : invalid) EXPECT_EQ(Open(path.c_str()), ARG) << '"' << path << '"';
@@ -283,11 +283,11 @@ TEST_F(NativeFat32, TrustedSliceAnd64BitPartitionAddressing)
     image->capacity = image->first + image->total + 4096;
     // Rebuild directory locations after moving the partition above 2TiB.
     image->sectors.clear();
-    image->Directory(2, {Dirent("IOSWITCH", 3, 0, 0x10)});
+    image->Directory(2, {Dirent("IOS", 3, 0, 0x10)});
     image->Directory(3, {Dirent("VERIFY.BIN", 5, 1200)});
     EXPECT_EQ(iosw_fat_mount_slice(volume.get(), Read512, nullptr, image->capacity, image->first, image->total), OK);
     EXPECT_EQ(image->reads, std::vector<uint64_t>{image->first}) << "MBR not consulted";
-    ASSERT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    ASSERT_EQ(Open("IOS/VERIFY.BIN"), OK);
     const Sector payload = FatImage::Payload(image->lba(5));
     EXPECT_EQ(Read(0, 512), Bytes(payload.begin(), payload.end()));
     for (auto [first, count] : {std::pair<uint64_t, uint64_t>{0, 10},
@@ -345,11 +345,11 @@ TEST_F(NativeFat32, MirrorDisagreementAndReservedHighBits)
 {
     image->fat_overrides[{1, 7}] = 8;
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), MIRROR);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), MIRROR);
     image->fat_overrides[{1, 7}] = 0xa0000006;
     image->entries[5] |= 0xf0000000;
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), OK);
 }
 
 TEST_F(NativeFat32, ActiveNonmirroredFatIsSelected)
@@ -360,7 +360,7 @@ TEST_F(NativeFat32, ActiveNonmirroredFatIsSelected)
         image->entries[cluster] = 0x0ffffff7;
     }
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), OK);
     for (uint64_t lba : image->reads)
         EXPECT_FALSE(image->fat_start() <= lba && lba < image->fat_start() + image->fat_sectors) << lba;
 }
@@ -370,13 +370,13 @@ TEST_F(NativeFat32, BadFreeReservedOutOfRangeAndShortLongCyclicFileChains)
     for (uint32_t value : {0u, 1u, 0x0ffffff0u, 0x0ffffff7u, image->clusters + 2, 0x0fffffffu, 5u, 7u}) {
         image->entries[7] = value;
         Mount();
-        EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), CHAIN) << "FAT[7] = " << value;
+        EXPECT_EQ(Open("IOS/VERIFY.BIN"), CHAIN) << "FAT[7] = " << value;
     }
     image->entries[7] = 6;
     image->entries[6] = 8;
     image->entries[8] = 0x0fffffff;
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), CHAIN);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), CHAIN);
 }
 
 TEST_F(NativeFat32, DirectorySkipsDeletedLfnVolumeAndStopsAtZero)
@@ -386,10 +386,10 @@ TEST_F(NativeFat32, DirectorySkipsDeletedLfnVolumeAndStopsAtZero)
     image->Directory(3, {deleted, Dirent("VERIFY.BIN", 8, 512, 0x0f), Dirent("VERIFY.BIN", 8, 512, 8),
                          Dirent("VERIFY.BIN", 5, 1200)});
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), OK);
     image->Directory(3, {Bytes(32, 0), Dirent("VERIFY.BIN", 5, 1200)});
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), NOT_FOUND);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), NOT_FOUND);
 }
 
 namespace {
@@ -408,12 +408,12 @@ TEST_F(NativeFat32, FragmentedDirectoryChainAndCycle)
     image->entries[129] = 0x0fffffff;
     image->Directory(129, {Dirent("VERIFY.BIN", 5, 1200)});
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), OK);
     image->entries[129] = 3;
     image->sectors[image->lba(129)] = image->sectors[image->lba(3)];
     Mount();
     const size_t before = image->reads.size();
-    EXPECT_EQ(Open("IOSWITCH/MISSING.BIN"), CHAIN);
+    EXPECT_EQ(Open("IOS/MISSING.BIN"), CHAIN);
     EXPECT_LT(image->reads.size() - before, 16u);
 }
 
@@ -430,7 +430,7 @@ TEST_F(NativeFat32, DirectoryHasFiniteSectorBudget)
     };
     Mount();
     const size_t before = image->reads.size();
-    EXPECT_EQ(Open("IOSWITCH/MISSING.BIN"), LIMIT);
+    EXPECT_EQ(Open("IOS/MISSING.BIN"), LIMIT);
     EXPECT_LT(image->reads.size() - before, 4200u);
 }
 
@@ -440,7 +440,7 @@ TEST_F(NativeFat32, FileChainAndCallbackBudgetsAreFinite)
     image->Directory(3, {Dirent("HUGE.BIN", 100, 1048577u * 512u)});
     Mount();
     size_t before = image->reads.size();
-    EXPECT_EQ(Open("IOSWITCH/HUGE.BIN"), LIMIT);
+    EXPECT_EQ(Open("IOS/HUGE.BIN"), LIMIT);
     EXPECT_LT(image->reads.size() - before, 10u);
 
     // An otherwise valid operation cannot make an unlimited number of sector callbacks, even when its requested file
@@ -453,7 +453,7 @@ TEST_F(NativeFat32, FileChainAndCallbackBudgetsAreFinite)
     x.fill('x');
     image->synthetic_sector = [x](uint64_t) -> std::optional<Sector> { return x; };
     Mount();
-    ASSERT_EQ(Open("IOSWITCH/LARGE.BIN"), OK);
+    ASSERT_EQ(Open("IOS/LARGE.BIN"), OK);
     before = image->reads.size();
     const Bytes output = Read(0, size, LIMIT);
     EXPECT_EQ(image->reads.size() - before, 32768u);
@@ -469,10 +469,10 @@ TEST_F(NativeFat32, IoFailureMountOpenReadAndOutputPrefixContract)
     Mount(IO);
     image->failed_lbas = {image->fat_start()};
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), IO);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), IO);
     image->failed_lbas = {image->lba(7)};
     Mount();
-    ASSERT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    ASSERT_EQ(Open("IOS/VERIFY.BIN"), OK);
     const Bytes output = Read(0, 1024, IO);
     const Sector first = FatImage::Payload(image->lba(5));
     EXPECT_EQ(Bytes(output.begin(), output.begin() + 512), Bytes(first.begin(), first.end()));
@@ -482,14 +482,14 @@ TEST_F(NativeFat32, IoFailureMountOpenReadAndOutputPrefixContract)
 TEST_F(NativeFat32, SuccessfulAndFailedRemountInvalidateOldFilesAndCache)
 {
     Mount();
-    ASSERT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    ASSERT_EQ(Open("IOS/VERIFY.BIN"), OK);
     Mount();
     Read(0, 1, ARG);
     image->entries[7] = 0;
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), CHAIN);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), CHAIN);
     image->entries[7] = 6;
     Mount();
-    EXPECT_EQ(Open("IOSWITCH/VERIFY.BIN"), OK);
+    EXPECT_EQ(Open("IOS/VERIFY.BIN"), OK);
     Mount(ARG, std::nullopt, 4);
     Read(0, 1, ARG);
 }
@@ -501,7 +501,7 @@ TEST_F(NativeFat32, SixtyFourKiBClustersAndFourBillionByteFile)
     image->runs = {{first, count}};
     image->Directory(3, {Dirent("LARGE.BIN", first, size)});
     Mount();
-    ASSERT_EQ(Open("IOSWITCH/LARGE.BIN"), OK);
+    ASSERT_EQ(Open("IOS/LARGE.BIN"), OK);
     EXPECT_LT(image->reads.size(), 1000u) << "cached FAT sectors, not one read per link";
     const uint64_t offset = size - 513;
     Bytes expected;

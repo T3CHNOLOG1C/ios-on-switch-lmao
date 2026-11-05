@@ -387,7 +387,7 @@ static int bpmp_trywait(int ch, int mrq, void *ob_data, int ob_sz)
 
 	if (mail_ops->master_acked(mail_ops, ch)) {
 		spin_unlock_irqrestore(&lock, flags);
-		/* IOSWITCH: the BPMP answered but its doorbell never reached the CPU. That is a lost
+		/* SWITCH: the BPMP answered but its doorbell never reached the CPU. That is a lost
 		 * interrupt, which this port does not paper over (no polled mode): panic with the
 		 * doorbell and GIC state instead of taking the answer late. */
 		bpxnu_doorbell_lost(ch, mrq);
