@@ -188,9 +188,8 @@ int configure(Bus &b, const BusInfo &info)
 // FIFO error are cleared (which drops the line) and the waiter is woken; it reads the RX FIFO itself, which keeps its
 // words until read or flushed, as in spi-tegra114.c, whose hard interrupt (tegra_spi_isr) reads FIFO_STATUS and
 // clears the status and whose thread (tegra_spi_isr_thread, handle_cpu_based_xfer) then drains the RX FIFO.
-// r16-idle: the work-loop action this was woke a thread that woke the caller, two thread switches per transfer,
-// 100-400 transfers a second for the IMU; now one, and the interrupt is masked for three register accesses, not for
-// the drain.
+// A work-loop action here would cost a second thread switch per transfer (the IMU does 100-400 a second) and keep the
+// interrupt masked for the drain, not just three register accesses.
 bool filterInterrupt(OSObject *, IOFilterInterruptEventSource *sender)
 {
     for (Bus &b : gBus) {
