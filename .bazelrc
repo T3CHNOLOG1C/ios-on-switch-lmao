@@ -73,6 +73,9 @@ build:release --nokeep_going
 build:release --verbose_failures
 # dev: the old name of the default preset.
 build:dev --config=debug
+# agent: what an agent worktree adds on the shared machine (16 cores, many agents at once): fewer parallel actions.
+build:agent --jobs=4
+build:agent --local_resources=cpu=4
 # reproducible-check: ignore every cache so each action really runs, and write an execution log; `bazel run
 # //tools/repro:check` builds twice like this in two fresh output bases and diffs every artifact bit for bit.
 build:reproducible-check --noremote_accept_cached
