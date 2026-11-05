@@ -5,7 +5,7 @@
 # and range, and the frame's shared A8 corner mask (written by replaceRegion into write-combined memory) its texels.
 # usage: texels.sh <build dir> <pack dir> <out dir> <case>...   a case: layout[:full][:WxH], layout exact, padded or pitch16
 B=$1; P=$2; O=$3; shift 3
-NVK=${NVK:-/Users/brunostjohn/Development/Projects/ioswitch/out/gpu/nvk/libvulkan_nouveau.r9.host.dylib}
+NVK=${NVK:-${0:A:h}/../../../../../../../../bazel-bin/gpu/nvk/host/libvulkan_nouveau.dylib}   # bazel build //gpu/nvk:host
 QC=${QC:-${0:A:h}/../../eq/qc/QuartzCore.framework/default.metallib}
 C=${CORPUS:-/Users/brunostjohn/Development/Projects/ioswitch/out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/precompile/corpus.log}
 mkdir -p $O

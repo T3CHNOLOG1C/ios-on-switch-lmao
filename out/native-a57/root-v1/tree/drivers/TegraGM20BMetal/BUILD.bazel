@@ -29,9 +29,18 @@ filegroup(
     srcs = glob(["raw/runtime/*.h", "raw/fx/*.h"]),
 )
 
+# Not a hand run's leftovers: a .pyc of the modules (the host Python's) in a checkout would change the raw pack's action key
+# there and nowhere else, so that checkout's pack never hits the disk cache another checkout filled, and the other way round.
 filegroup(
     name = "raw_pack_generator",
-    srcs = glob(["raw/pack/**"]),
+    srcs = glob(
+        ["raw/pack/**"],
+        exclude = [
+            "**/__pycache__/**",
+            "**/*.pyc",
+            "**/.DS_Store",
+        ],
+    ),
 )
 
 filegroup(
@@ -74,14 +83,15 @@ py_binary(
     main = "check-dyld-cache-imports.py",
 )
 
-# Merges the shader journals of a mounted Data volume into precompile/corpus.log (deploy's log pull runs it).
+# Merges the shader journals of a mounted Data volume into precompile/corpus.log and stages the device's own data (deploy's
+# log pull runs it); --pack makes @gpu_device_data's tar of it.
 py_binary(
     name = "harvest",
     srcs = ["precompile/harvest.py"],
     main = "precompile/harvest.py",
 )
 
-# Resolves corpus lines against the library store (the seed build runs it).
+# The OS volume's library pins (pins), names.json (names: //gpu:library_names) and the corpus's libraries (resolve: the seed).
 py_binary(
     name = "libraries",
     srcs = ["precompile/libraries.py"],

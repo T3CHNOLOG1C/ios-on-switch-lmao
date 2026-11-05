@@ -164,6 +164,8 @@ use_repo(
     "ipsw_app_cryptex_trust_cache",
     "ipsw_device_tree",
     "ipsw_kernelcache",
+    # The OS volume image itself (stored, not deflated): @gpu_apple_libs reads its Metal libraries.
+    "ipsw_os",
     "ipsw_static_trust_cache",
     "ipsw_system_cryptex",
     "ipsw_system_cryptex_trust_cache",
@@ -191,9 +193,10 @@ use_repo(
 )
 
 # m2v (steelbrain/metal2vulkan at 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's crates.io
-# dependencies (vendored from its Cargo.lock), and the GPU's checked host inputs (bazel/gpu/deps.bzl).
+# dependencies (vendored from its Cargo.lock), the Apple Metal libraries of the IPSW's OS volume and the device's own
+# data (bazel/gpu/deps.bzl).
 gpu = use_extension("//bazel/gpu:deps.bzl", "gpu")
-use_repo(gpu, "gpu_host_inputs", "gpu_llvm_as", "m2v", "m2v_crates", "nvk_prebuilt")
+use_repo(gpu, "gpu_apple_libs", "gpu_device_data", "gpu_llvm_as", "m2v", "m2v_crates")
 
 # --- NVK (gpu/nvk): Mesa by commit, built here with meson; its tools pinned (gpu/nvk/repos.bzl) ----------------------
 http_archive(

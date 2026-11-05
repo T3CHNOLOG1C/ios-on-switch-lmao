@@ -9,6 +9,7 @@ out/build
 out/cmake
 out/gpu
 out/gpu-artifacts
+out/gpu-device-data
 out/native-apfs-installer-v24
 out/native-raw-v24-boot
 out/native-single-apfs-trial-v1

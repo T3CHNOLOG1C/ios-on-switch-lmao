@@ -1,6 +1,7 @@
 # m2v-corpus: every function of a metallib through the metal2vulkan runtime on the host NVK over the mock GM20B (corpus/tools).
-# Build: cargo +1.98.0 build --release --offline --target-dir <scratch>/target  (paths: the metal2vulkan checkout the plugin
-# build uses, with patches/series applied as //gpu:bundle does: bazel/gpu/deps.bzl @m2v)
+# Build: cargo +1.98.0 build --release --offline --target-dir <scratch>/target, with m2v/ here a link to the metal2vulkan
+# source the plugin build uses (@m2v: 720ef1ce with patches/series applied, bazel/gpu/deps.bzl):
+#   ln -s "$(bazel info output_base)/external/+gpu+m2v" m2v
 [package]
 name = "m2v-corpus"
 version = "0.1.0"
@@ -10,9 +11,9 @@ edition = "2024"
 name = "m2v-corpus"
 path = "src/main.rs"
 [dependencies]
-metal2vulkan = { path = "../../../../../../../gpu-artifacts/m2v-src/metal2vulkan/crates/metal2vulkan", features = ["ash"] }
-metal2vulkan-runtime = { path = "../../../../../../../gpu-artifacts/m2v-src/metal2vulkan/crates/metal2vulkan-runtime" }
-metal2vulkan-air = { path = "../../../../../../../gpu-artifacts/m2v-src/metal2vulkan/crates/metal2vulkan-air" }
+metal2vulkan = { path = "m2v/crates/metal2vulkan", features = ["ash"] }
+metal2vulkan-runtime = { path = "m2v/crates/metal2vulkan-runtime" }
+metal2vulkan-air = { path = "m2v/crates/metal2vulkan-air" }
 [profile.release]
 panic = "unwind"
 debug = 1

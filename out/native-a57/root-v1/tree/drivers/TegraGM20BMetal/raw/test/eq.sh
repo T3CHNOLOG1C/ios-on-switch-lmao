@@ -3,7 +3,7 @@
 # usage: eq.sh <build dir> <pack dir (pack.bin, layouts.txt, work/programs.bin)> <out dir> <label> <frames> [blur draws ubytes vbytes]
 # environment passes through (FRAME_ALL_STATES, FRAME_RING, FRAME_DRAW_FORMS, FRAME_STATES ...)
 B=$1; P=$2; O=$3; L=$4; shift 4
-NVK=${NVK:-/Users/brunostjohn/Development/Projects/ioswitch/out/gpu/nvk/libvulkan_nouveau.r9.host.dylib}
+NVK=${NVK:-${0:A:h}/../../../../../../../../bazel-bin/gpu/nvk/host/libvulkan_nouveau.dylib}   # bazel build //gpu/nvk:host
 QC=${0:A:h}/../../eq/qc/QuartzCore.framework/default.metallib   # the path suffix the facade keys QuartzCore by
 C=/Users/brunostjohn/Development/Projects/ioswitch/out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/precompile/corpus.log
 mkdir -p $O/cache-$L

@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""The Metal libraries the shader cache precompile (precompile.mm) loads on the host, kept in a store outside the tree (Apple's
-binaries; default out/gpu-artifacts/m2v-libs):
+"""The Metal libraries the shader cache precompile (precompile.mm) loads on the host. The seed build (tools/gpu/seed.py) lays
+them out as the store precompile.mm reads:
 
-  <store>/root/<device path>        a library the device loaded from a file (the journal's lib=<path>): the 21H461 OS volume's
-                                    or OS cryptex's, or an app bundle's from the Data volume
-  <store>/data/<sha256>.metallib    a library the device made from bytes (lib=data:<sha256>: Core Image's compiled source and
-                                    stitched kernels, an app's own data), which the frontend dumps to <cache>/libs/ and
-                                    harvest.py collects
-  <store>/names.json                every function name of the OS volume's and cryptex's libraries -> their device paths
+  <store>/root/<device path>        a library the device loaded from a file (the journal's lib=<path>): 21H461's OS volume's,
+                                    extracted from the IPSW by @gpu_apple_libs (bazel/gpu/deps.bzl, pinned in
+                                    bazel/gpu/apple-libs.sha256)
+  <store>/data/<sha256>.metallib    a library the device made from bytes (lib=data:<sha256>): any of the above or of the
+                                    frontend's own (TwoPlaneStandIn.h) whose bytes they are, or one only the device made (Core
+                                    Image's compiled kernels: @gpu_device_data, precompile/harvest.py --pack)
+  <names.json>                      every function name of the pinned libraries -> their device paths (`names`, a build action)
 
-usage: libraries.py <store> index <OS volume mount> <OS cryptex mount> [<Data volume mount>]
-                                                                           names.json and every library of the volumes, copied into
-                                                                           root/ (the Data volume's: its app bundles', read only)
-       libraries.py <store> resolve <corpus.log> <out.log>                 the corpus with lib=<path> added to the stages of journal
+usage: libraries.py pins <mounted OS volume>                               the `shasum -a 256` listing of every Metal library of
+                                                                           the volume with a function (bazel/gpu/apple-libs.sha256)
+       libraries.py names <root> <names.json> <device path>...             names.json of the libraries at <root>/<device path>
+       libraries.py resolve <names.json> <corpus.log> <out.log>            the corpus with lib=<path> added to the stages of journal
                                                                            lines from before the journal named libraries (no lib=)
                                                                            whose function names are in exactly one library (QuartzCore's
                                                                            names stay QuartzCore's, the precompile's default; a line
@@ -23,9 +24,9 @@ A journal line names its library from the frontend that writes lib= on; an older
 function name, and the table keeps the two apart. A wrong guess costs nothing on the device: m2v's keys hash the function's AIR,
 so a translation of another library's function is never found there.
 """
+import hashlib
 import json
 import re
-import shutil
 import struct
 import sys
 from collections import Counter, defaultdict
@@ -64,29 +65,26 @@ def names(data):
     return found
 
 
-def index(store, os_volume, cryptex, data=None):
+def pins(volume):
+    """`<sha256>  <path>` of every *.metallib below `volume` that is a Metal library with a function, by path (LC_ALL=C)."""
+    for path in sorted(str(p.relative_to(volume)) for p in Path(volume).rglob('*.metallib') if p.is_file()):
+        data = (Path(volume) / path).read_bytes()
+        if names(data):
+            print('%s  %s' % (hashlib.sha256(data).hexdigest(), path))
+
+
+def index(root, out, devices):
+    """names.json: every function name of the libraries at <root>/<device path> -> the device paths of those that have it, each
+    list in the order of the paths' components."""
     table = defaultdict(list)
-    copied = 0
-    volumes = [(Path(os_volume), '', '.'), (Path(cryptex), '', '.')]
-    if data:   # /private/var on the device; the installed apps' bundles alone
-        volumes.append((Path(data), '/private/var', 'containers/Bundle/Application'))
-    for mount, prefix, within in volumes:
-        for path in sorted((mount / within).rglob('*.metallib')):
-            device = prefix + '/' + str(path.relative_to(mount))
-            data = path.read_bytes()
-            found = names(data)
-            if found is None:
-                continue
-            target = store / 'root' / device.lstrip('/')
-            if not target.is_file() or target.stat().st_size != len(data):
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(data)
-                copied += 1
-            for name in set(found):
-                table[name].append(device)
-    (store / 'names.json').write_text(json.dumps(dict(sorted(table.items())), indent=0) + '\n')
-    print('%s: %d function names in %d libraries (%d copied)' %
-          (store, len(table), len({p for v in table.values() for p in v}), copied))
+    for device in sorted(('/' + d.lstrip('/') for d in devices), key=lambda d: Path(d).parts):
+        found = names((Path(root) / device.lstrip('/')).read_bytes())
+        if found is None:
+            sys.exit('%s/%s is not a Metal library' % (root, device))
+        for name in set(found):
+            table[name].append(device)
+    Path(out).write_text(json.dumps(dict(sorted(table.items())), indent=0) + '\n')
+    print('%s: %d function names in %d libraries' % (out, len(table), len({p for v in table.values() for p in v})))
 
 
 STAGE = re.compile(r'\| ([vfklp]) (\S+)( [^|]*?)?(?= \|)')
@@ -95,8 +93,8 @@ STAGE = re.compile(r'\| ([vfklp]) (\S+)( [^|]*?)?(?= \|)')
 GUESSES = 3   # a name in up to this many libraries is replayed in each of them (seed space only: m2v's keys hash the AIR)
 
 
-def resolve(store, corpus, out):
-    table = json.loads((store / 'names.json').read_text())
+def resolve(index_json, corpus, out):
+    table = json.loads(Path(index_json).read_text())
     qc = set(n for n, paths in table.items() if QC in paths)
     lines, rows = [], defaultdict(Counter)
 
@@ -150,14 +148,13 @@ def resolve(store, corpus, out):
 
 
 def main():
-    if len(sys.argv) < 3:
-        sys.exit(__doc__)
-    store, verb, rest = Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
-    store.mkdir(parents=True, exist_ok=True)
-    if verb == 'index' and len(rest) in (2, 3):
-        index(store, *rest)
-    elif verb == 'resolve' and len(rest) == 2:
-        resolve(store, *rest)
+    verb, rest = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else (None, [])
+    if verb == 'pins' and len(rest) == 1:
+        pins(rest[0])
+    elif verb == 'names' and len(rest) >= 3:
+        index(rest[0], rest[1], rest[2:])
+    elif verb == 'resolve' and len(rest) == 3:
+        resolve(*rest)
     else:
         sys.exit(__doc__)
 

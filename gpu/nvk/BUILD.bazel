@@ -10,7 +10,6 @@
 #
 # A new NVK revision: add its patch to PATCHES, set GIT_SHA1 (the version string's commit), build, and pin the new
 # dylib's sha256 in EXPECT (or leave it empty while iterating).
-load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "cargo_tool", "nvk_dylib")
@@ -49,7 +48,7 @@ PATCHES = [
 #
 # r9: the version string's commit (the hand build's checkout HEAD) and the patched tree's git id (its .source).
 #
-# Against the hand-built r9 dylib (sha256 276260dc…, in out/gpu/nvk): every section and every symbol is identical.
+# Against the hand-built r9 dylib (sha256 276260dc…): every section and every symbol is identical.
 # `strip -S` of both leaves 15426480 bytes that differ only in LC_UUID. The difference is the linker's debug map: r9's
 # names the hand build's directory (/Users/…/out/agent-scratch/r8-webgpu/nvk-ios-build/…libnvk_rs.a), and ld derives
 # LC_UUID from it; this build writes it relative (-oso_prefix), so it is the same wherever the action runs. The host
@@ -77,35 +76,21 @@ RUST_SRC_PREFIX = "/Users/brunostjohn/.rustup/toolchains/stable-aarch64-apple-da
     rust_src_prefix = RUST_SRC_PREFIX,
 ) for name, platform in (("ios", "ios"), ("host", "macos"))]
 
-# What //gpu:bundle takes: the dylibs built here, or (--//gpu/nvk:prebuilt) the hand-built r9 pair, sha-checked
-# host inputs in out/gpu/nvk (@nvk_prebuilt, bazel/gpu/deps.bzl NVK_PREBUILT).
-bool_flag(
-    name = "prebuilt",
-    build_setting_default = False,
-)
-
-config_setting(
-    name = "use_prebuilt",
-    flag_values = {":prebuilt": "true"},
-)
-
 [filegroup(
     name = "{}_{}".format(name, group),
     srcs = [":" + name],
     output_group = group,
 ) for name in ("ios", "host") for group in ("dylib", "source")]
 
+# What //gpu:bundle takes.
 [alias(
     name = name,
-    actual = select({
-        ":use_prebuilt": "@nvk_prebuilt//:nvk/" + prebuilt,
-        "//conditions:default": built,
-    }),
-) for name, built, prebuilt in (
-    ("dylib", ":ios_dylib", "libvulkan_nouveau.dylib"),
-    ("dylib_source", ":ios_source", "libvulkan_nouveau.dylib.source"),
-    ("twin", ":host_dylib", "libvulkan_nouveau.host.dylib"),
-    ("twin_source", ":host_source", "libvulkan_nouveau.host.dylib.source"),
+    actual = built,
+) for name, built in (
+    ("dylib", ":ios_dylib"),
+    ("dylib_source", ":ios_source"),
+    ("twin", ":host_dylib"),
+    ("twin_source", ":host_source"),
 )]
 
 exports_files(glob(["*.patch"]))

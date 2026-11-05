@@ -1,7 +1,9 @@
 # GM20B kernel <-> userland contract (v1)
 
+(Was out/gpu-artifacts/CONTRACT.md, the scratchpad/gpu/CONTRACT.md that TegraGM20BABI.h and the NVK darwin backend name.)
+
 **Owner and status.** The userland agent owns this file; the kernel agent implements it. Kernel feedback goes in
-`./CONTRACT-kernel-notes.md`.
+`./gm20b-contract-kernel-notes.md`.
 
 **Wire format.** The exact records are in `./userland/abi/TegraGM20BABI.h`. Copy it verbatim into `drivers/TegraGM20B/`.
 The C and C++ static asserts both pass.
@@ -176,4 +178,4 @@ All in `M/src/nouveau/winsys` and `M/src/nouveau/vulkan/nvkmd/nouveau`:
 | `GEM_PUSHBUF` with nr_push = 0 (`nouveau_context.c:303-317`), EXEC with no pushes | Exec count 0 / GetStatus. |
 | PRIME/dma-buf | Not supported; BoImport covers IOSurfaces. |
 
-**Changes in v1.** None yet; kernel notes (`./CONTRACT-kernel-notes.md`) did not exist when this was written.
+**Changes in v1.** None yet; kernel notes (`./gm20b-contract-kernel-notes.md`) did not exist when this was written.

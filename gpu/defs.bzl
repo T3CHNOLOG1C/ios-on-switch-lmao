@@ -323,6 +323,40 @@ metal_bundle = rule(
 
 # --- The shader cache seed ---------------------------------------------------------------------------------------
 
+def _m2v_library_names_impl(ctx):
+    out = ctx.actions.declare_file(ctx.attr.name + ".json")
+    root = _repo_root(ctx.files.libraries) + "/root/"
+    args = ctx.actions.args()
+    args.add("names")
+    args.add(root)
+    args.add(out)
+    devices = [f.path[len(root):] for f in ctx.files.libraries if f.path.startswith(root)]
+    if len(devices) != len(ctx.files.libraries):
+        fail("every library must be below " + root)
+    args.add_all(devices)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = ctx.files.libraries,
+        outputs = [out],
+        mnemonic = "M2vLibraryNames",
+        progress_message = "Indexing the function names of %d Metal libraries" % len(ctx.files.libraries),
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+m2v_library_names = rule(
+    implementation = _m2v_library_names_impl,
+    doc = "names.json (precompile/libraries.py names): every function name of the libraries -> their device paths.",
+    attrs = {
+        "libraries": attr.label(mandatory = True, doc = "@gpu_apple_libs//:libraries (root/<device path>)"),
+        "_tool": attr.label(
+            default = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:libraries",
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+)
+
 def _metal_seed_impl(ctx):
     out = ctx.actions.declare_directory(ctx.attr.name)
     args = ctx.actions.args()
@@ -336,21 +370,24 @@ def _metal_seed_impl(ctx):
     args.add("--nvk", ctx.file.nvk)
     args.add("--twin", ctx.file.twin)
     args.add("--qc", ctx.file.qc)
-    args.add("--store", ctx.file.store_index.dirname)
+    args.add("--root", _repo_root(ctx.files.libraries) + "/root")
+    args.add("--names", ctx.file.names)
+    args.add_all(ctx.files.embedded, before_each = "--embedded")
+    args.add_all(ctx.files.device_libraries, before_each = "--data")
     args.add("--corpus", ctx.file.corpus)
-    args.add("--libraries", ctx.file.libraries)
-    # Each record is <store>/<xx>/<name>: the store is the directory two levels above any of them.
+    args.add("--libraries", ctx.file.libraries_tool)
     if ctx.files.records:
-        args.add("--records", ctx.files.records[0].dirname.rsplit("/", 1)[0])
+        args.add("--records", _repo_root(ctx.files.records) + "/records")
     args.add("--out", out.path)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
         inputs = depset(
             [ctx.file.host_bridge, ctx.file.mock_iokit, ctx.file.abi_header, ctx.file.precompile, ctx.file.frontend,
-             ctx.file.metal_header, ctx.file.nvk, ctx.file.twin, ctx.file.qc, ctx.file.store_index, ctx.file.corpus,
-             ctx.file.libraries, ctx.file._xcode_env, ctx.file._xcode_identity] +
-            ctx.files.hdrs + ctx.files.store + ctx.files.nvk_sources + ctx.files.records,
+             ctx.file.metal_header, ctx.file.nvk, ctx.file.twin, ctx.file.qc, ctx.file.names, ctx.file.corpus,
+             ctx.file.libraries_tool, ctx.file._xcode_env, ctx.file._xcode_identity] +
+            ctx.files.hdrs + ctx.files.libraries + ctx.files.embedded + ctx.files.device_libraries +
+            ctx.files.nvk_sources + ctx.files.records,
         ),
         outputs = [out],
         mnemonic = "MetalSeed",
@@ -374,12 +411,17 @@ metal_seed = rule(
         "nvk": attr.label(mandatory = True, allow_single_file = True),
         "twin": attr.label(mandatory = True, allow_single_file = True),
         "nvk_sources": attr.label_list(allow_files = True, doc = "the two dylibs' .source files"),
-        "qc": attr.label(mandatory = True, allow_single_file = True),
-        "store": attr.label(mandatory = True),
-        "records": attr.label(allow_files = True, doc = "the device's driver records (harvest.py --records): merged where of the twin's identity"),
-        "store_index": attr.label(mandatory = True, allow_single_file = True, doc = "the store's names.json"),
+        "qc": attr.label(mandatory = True, allow_single_file = True, doc = "21H461's QuartzCore default.metallib"),
+        "libraries": attr.label(mandatory = True, doc = "the OS volume's Metal libraries (@gpu_apple_libs//:libraries)"),
+        "names": attr.label(mandatory = True, allow_single_file = [".json"], doc = "their names.json (m2v_library_names)"),
+        "embedded": attr.label_list(
+            allow_files = [".h"],
+            doc = "headers of metallibs the frontend makes libraries of (a C array of the bytes), stored by their sha256",
+        ),
+        "device_libraries": attr.label(allow_files = True, doc = "libraries only the device made (@gpu_device_data)"),
+        "records": attr.label(allow_files = True, doc = "the device's driver records (@gpu_device_data): merged where of the twin's identity"),
         "corpus": attr.label(mandatory = True, allow_single_file = True),
-        "libraries": attr.label(mandatory = True, allow_single_file = True),
+        "libraries_tool": attr.label(mandatory = True, allow_single_file = True, doc = "precompile/libraries.py"),
         "_tool": attr.label(default = "//tools/gpu:seed", executable = True, cfg = "exec"),
     },
 )

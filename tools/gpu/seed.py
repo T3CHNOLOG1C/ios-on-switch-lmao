@@ -3,23 +3,28 @@
 
     seed.py --xcode-env F --host-bridge <darwin libnative_metal_bridge.a> --mock-iokit mock_iokit.c --abi-header
             TegraGM20BABI.h --precompile precompile.mm --frontend NativeBridgeMetalFrontend.mm --metal-header
-            NativeBridgeMetalFrontend.h --nvk <iOS dylib> --twin <host dylib> --qc default.metallib --store <dir>
-            --corpus corpus.log --libraries libraries.py [--records <driver record store>] --out <seed dir>
+            NativeBridgeMetalFrontend.h --nvk <iOS dylib> --twin <host dylib> --qc default.metallib --root <dir>
+            --names names.json [--embedded <header>]... [--data <sha256>.metallib]... --corpus corpus.log
+            --libraries libraries.py [--records <driver record store>] --out <seed dir>
 
 The cache the device would write with this build for the corpus's states, made on this Mac: every function
 specialization and render pipeline state of precompile/corpus.log, translated by this build's frontend and m2v
 built for this Mac (the cache's build directory hashes the sources) and compiled by the NVK twin, which takes the
 iOS dylib's pipeline cache identity, over a GM20B mock of the kernel's user client. Writes <out>/SEED and <out>/v1.
---records: the device's own driver records (precompile/harvest.py --records, @gpu_host_inputs//:m2v_records), each m2v's
-VkPipelineCache data of one pipeline making named by what the making reads: those of the precompile's driver identity
-(vendor, device, driver version, pipelineCacheUUID: this NVK's) whose envelope checks out join the seed's content directory
-beside the precompile's own (which win a name both have). They cover the makings no corpus state's creation predicts (a
-draw's variant) and those the precompile makes otherwise than the device; another NVK's records are left out.
+The libraries the corpus names come from the store precompile.mm reads (precompile/libraries.py), laid out here: root/ the
+OS volume's (--root, @gpu_apple_libs), data/<sha256>.metallib every library a process may make from bytes: those files', the
+frontend's own (--embedded, a C array of a metallib's bytes) and the ones only the device made (--data, @gpu_device_data).
+--records: the device's own driver records (@gpu_device_data, precompile/harvest.py --pack), each m2v's VkPipelineCache data
+of one pipeline making named by what the making reads: those of the precompile's driver identity (vendor, device, driver
+version, pipelineCacheUUID: this NVK's) whose envelope checks out join the seed's content directory beside the precompile's
+own (which win a name both have). They cover the makings no corpus state's creation predicts (a draw's variant) and those
+the precompile makes otherwise than the device; another NVK's records are left out.
 Gates (as before): the twin's .source must equal the iOS dylib's, and the QuartzCore metallib must be 21H461's.
 """
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,11 +64,37 @@ def merge_records(store, content, made):
     return merged, here, other, refused
 
 
+def store_view(store, root, embedded, data):
+    """The library store precompile.mm reads (precompile/libraries.py) at `store`: root/ -> `root`, and data/<sha256>.metallib
+    for every library of `root`, each metallib of the `embedded` headers and each of `data`. Returns the data/ count."""
+    (store / 'data').mkdir(parents=True)
+    (store / 'root').symlink_to(root.absolute())
+    made = {}
+    for path in sorted(p for p in root.rglob('*') if p.is_file()):
+        made[hashlib.sha256(path.read_bytes()).hexdigest()] = path
+    for header in embedded:
+        text = Path(header).read_text()
+        library = bytes(int(byte, 16) for byte in re.findall(r'0x([0-9a-fA-F]{2})', text[text.index('{'):text.rindex('}')]))
+        name = hashlib.sha256(library).hexdigest()
+        (store / 'data' / (name + '.metallib')).write_bytes(library)
+        made.pop(name, None)
+    for path in map(Path, data):
+        name = path.name.removesuffix('.metallib')
+        if hashlib.sha256(path.read_bytes()).hexdigest() != name:
+            sys.exit('%s is not the library its name says' % path)
+        made[name] = path.absolute()
+    for name, path in made.items():
+        (store / 'data' / (name + '.metallib')).symlink_to(path)
+    return sum(1 for _ in (store / 'data').iterdir())
+
+
 def main():
     parser = argparse.ArgumentParser()
     for name in ('xcode-env', 'host-bridge', 'mock-iokit', 'abi-header', 'precompile', 'frontend', 'metal-header',
-                 'nvk', 'twin', 'qc', 'store', 'corpus', 'libraries', 'out'):
+                 'nvk', 'twin', 'qc', 'root', 'names', 'corpus', 'libraries', 'out'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--embedded', action='append', default=[])
+    parser.add_argument('--data', action='append', default=[])
     parser.add_argument('--records')
     args = parser.parse_args()
     root = Path.cwd()
@@ -96,11 +127,10 @@ def main():
     dylib = work / 'libvulkan_nouveau.dylib'
     make_twin(args.nvk, args.twin, dylib, tool_env)
 
-    store = Path(args.store)
-    corpus = Path(args.corpus)
-    if (store / 'names.json').is_file():
-        corpus = work / 'corpus.log'
-        print(run([sys.executable, '-I', args.libraries, store, 'resolve', args.corpus, corpus]).rstrip())
+    store = work / 'store'
+    print('library store: %d libraries made from bytes' % store_view(store, root / args.root, args.embedded, args.data))
+    corpus = work / 'corpus.log'
+    print(run([sys.executable, '-I', args.libraries, 'resolve', args.names, args.corpus, corpus]).rstrip())
     cache = work / 'cache'
     env = dict(tool_env, MESA_SHADER_CACHE_DISABLE='true')
     made = run([work / 'precompile', '--libs', store, dylib, cache, args.qc, corpus], env=env)

@@ -1,4 +1,4 @@
-# Kernel notes on CONTRACT.md v1 (from the GPU kernel agent)
+# Kernel notes on gm20b-contract.md (CONTRACT.md) v1 (from the GPU kernel agent)
 
 **Bring-up log (2026-10-29, plugin round).** Each stage now logs its own line: `tegra-gm20b: M1 ok ...`, `M2 ok ...`,
 `M3 ok ...`, then `M4 ok published AGXAccelerator (MetalPluginName TegraGM20BMetal)`, or the failing stage's `Mn FAIL ...`

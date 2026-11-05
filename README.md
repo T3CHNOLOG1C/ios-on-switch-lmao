@@ -33,7 +33,8 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
 ## Prerequisites
 
 - **A Mac on Apple silicon** with about 25 GB free. The build takes 10–13 GB; the IPSW members the installer
-  needs take another 6.5 GB, fetched only when you install.
+  needs take another 6.5 GB, fetched when you install, except the 5.2 GB OS image, which `//:gpu`'s first build fetches
+  once for its Metal libraries.
 - **Xcode-beta 27.0 (27A5194q)**, selected with `sudo xcode-select -s /Applications/Xcode-beta.app`, or named by
   exporting `DEVELOPER_DIR`.
   - The kernel is compiled with Apple clang, and its code generation depends on clang's version. So the build refuses
@@ -42,10 +43,10 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
     yourself.
 - **bazelisk**: `brew install bazelisk`. `.bazelversion` pins Bazel 9.3.1, and bazelisk fetches it on first use.
   Nothing else comes from Homebrew: lz4 and the LLVM tools are pinned downloads, and the unit tests get them too.
-- **For the GPU bundle only**: `out/gpu-artifacts/` (the m2v library store and QuartzCore's `default.metallib`), each
-  file checked by sha256 (`bazel/gpu/deps.bzl`). It can live elsewhere: export `IOSWITCH_GPU_ARTIFACTS`, or put
-  `common --repo_env=IOSWITCH_GPU_ARTIFACTS=...` in `user.bazelrc`. NVK is built here (`//gpu/nvk`); the hand-built
-  r9 pair in `out/gpu/nvk/` is only read with `--//gpu/nvk:prebuilt` (`IOSWITCH_NVK_DIR` moves it).
+- **For the GPU bundle only**: `out/gpu-device-data/m2v-device-<sha>.tar` once per machine, the data only the Switch
+  makes (its driver records and Core Image's compiled kernels: `harvest.py --pack`, pinned in `bazel/gpu/deps.bzl`
+  `DEVICE_DATA`). The first build copies it into the repository cache, and no checkout reads it after that. The Apple
+  Metal libraries the seed and the raw pack read (QuartzCore's `default.metallib` among them) come from the IPSW, below.
 
 ## First build
 
@@ -64,7 +65,10 @@ The first build downloads, all by sha256 into the shared repository cache:
 - Rust 1.98.0;
 - m2v and its crates;
 - lz4 1.10.0;
-- a few MB of the IPSW (kernelcache, trust caches, device tree), by HTTP range request.
+- a few MB of the IPSW (kernelcache, trust caches, device tree), by HTTP range request;
+- for `//:gpu`, the IPSW's 5.2 GB OS image (the member the installer also needs), once per machine: Bazel attaches it
+  read-only and copies out the 152 Metal libraries `bazel/gpu/apple-libs.sha256` pins (231 MB), each into the repository
+  cache by its sha256. Later fetches take them from the cache and read neither the image nor the network.
 
 It then compiles XNU (about 80 s), about 300 driver objects, corecrypto and libpthread, links, prelinks and packages.
 The Rust bridges add about 5 minutes the first time.
@@ -149,7 +153,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//:kernel` | `kernel.macho`: XNU + drivers, linked and prelinked with Apple's kexts |
 | `//:gpu` (= `//gpu:bundle`) | `bazel-bin/gpu/bundle`: `ngpu/addons/{TegraGM20BMetal.bundle, .m2v-seed, .raw/pack.bin}`, `TegraGM20BMetal.trustcache`, `trust.json` |
 | `//gpu:trustcache` | The bundle's trust cache module. `//:boot` appends it to the kernel's static trust cache |
-| `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa 77452b90 + `gpu/nvk`'s patches, meson inside Bazel. `--//gpu/nvk:prebuilt` makes `//gpu` use the hand-built r9 pair instead |
+| `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa 77452b90 + `gpu/nvk`'s patches, meson inside Bazel |
 | `//out/native-a57/root-v1/tree:<driver>` | One driver's objects (e.g. `:SwitchUSB`); `:xnu` is the XNU objroot; `:kernel_unprelinked` is the link |
 | `//ipsw:kernelcache`, `//ipsw:static_system_trust` | The original kernelcache (decompressed) and the root+OS-cryptex trust bundle, from the IPSW |
 | `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | IPSW members (`bazel/ipsw/pins.bzl`). Deflated ones are inflated by a build action (`//bazel/ipsw:<role>`) |
@@ -210,14 +214,16 @@ measured while other agents loaded the machine; expect less on an idle one.
 
 | Where | What | Cap |
 |---|---|---|
-| `~/Library/Caches/ioswitch-bazel/repository` | Downloads by sha256, plus Bazel 9's unpacked-repository cache. Shared by every checkout | None; about 3.5 GB for the build, plus 6.5 GB of IPSW members after an install |
+| `~/Library/Caches/ioswitch-bazel/repository` | Downloads by sha256, plus Bazel 9's unpacked-repository cache. Shared by every checkout | None; about 3.5 GB for the build, 5.4 GB more after `//:gpu`'s first build (the OS image and its 231 MB of Metal libraries), 1.3 GB more after an install |
 | `~/Library/Caches/ioswitch-bazel/disk` | Action results (the disk cache) | `--experimental_disk_cache_gc_max_size=10G`, entries older than 30 days dropped, collected after 2 min idle |
 | `~/Library/Caches/bazel/_bazel_$USER/<hash>` | The output base: this checkout's bazel-out and external repos | About 1.5–2.5 GB. `bazel clean` empties it; the disk cache refills it in seconds |
 
 Notes:
 - IPSW members are stored once, as fetched. On APFS, the copy Bazel makes from the repository cache is a clone.
-- The OS image (5.16 GB) is only fetched by `//install:sd`. The system cryptex is held compressed (1.3 GB) and
-  inflated (3.3 GB) into the output base only for an install; that action stays out of the disk cache.
+- The OS image (5.16 GB) is fetched by `//install:sd` and, once per machine, by `@gpu_apple_libs` (`//:gpu`), which
+  then keeps its Metal libraries in the repository cache file by file; neither builds nor fetches read the image again.
+  The system cryptex is held compressed (1.3 GB) and inflated (3.3 GB) into the output base only for an install; that
+  action stays out of the disk cache.
 - To shrink everything: `bazel clean --expunge`; delete `~/Library/Caches/ioswitch-bazel/disk` (rebuilt on demand);
   delete `~/Library/Caches/ioswitch-bazel/repository/contents` (unpacked repositories, re-extracted on demand).
 
@@ -275,7 +281,8 @@ every driver object, because they include XNU's headers.
 | m2v | `bazel/gpu/deps.bzl` | Commit and sha256 of the GitHub tarball. The series is `tree/drivers/TegraGM20BMetal/patches/series` |
 | NVK | `gpu/nvk/BUILD.bazel` | Add the patch to `PATCHES` (in order), set `GIT_SHA1` to the version string's commit, build `//gpu/nvk:ios //gpu/nvk:host`, then pin `EXPECT` (tree id and both sha256s the build prints) |
 | Mesa | `gpu/nvk/repos.bzl` `MESA_COMMIT` | A new commit; the series must apply. If `nvk_query.cl`, `nvk_copy_indirect.cl` or their headers change, regenerate `bazel/pinned/nvk` with Mesa's mesa_clc/vtn_bindgen2 (LLVM 23.1.4) |
-| m2v library store | `bazel/gpu/m2v-libs.sha256` | Regenerate with the command in its header (per-file `shasum -a 256`) |
+| The IPSW's Metal libraries | `bazel/gpu/apple-libs.sha256` | After an IPSW bump: attach the OS image read-only and regenerate with the command in its header (`libraries.py pins`) |
+| Device data | `bazel/gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:harvest -- --pack` writes `out/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
 | Rust | `MODULE.bazel` GPU section | `rust.toolchain(versions = [...])` |
 | LLVM | `bazel/llvm/llvm.bzl` and `bazel/gpu/deps.bzl` | URL and sha256 in both (one archive) |
 | Python packages | not used yet | — |
@@ -411,8 +418,15 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 
 - **"The selected Xcode does not match the pin"**: select Xcode-beta 27.0, or re-pin (see [Bumping a pin](#bumping-a-pin)).
   `IOSWITCH_ALLOW_UNPINNED_XCODE=1` builds anyway, with a warning; the output won't match.
-- **"GPU host input … is missing"**: put the store and QuartzCore's metallib in `out/gpu-artifacts` (or set
-  `IOSWITCH_GPU_ARTIFACTS`); with `--//gpu/nvk:prebuilt`, also the NVK r9 dylibs in `out/gpu/nvk`.
+- **`@gpu_device_data` fails to fetch (`out/gpu-device-data/m2v-device-….tar` not found)**: the repository cache doesn't
+  have the device data yet. Copy the tar named in `bazel/gpu/deps.bzl` `DEVICE_DATA` into `out/gpu-device-data/` of
+  this checkout, or make a new one from the device's caches: `bazel run //deploy:pull_logs -- disk4` stages them, then
+  `bazel run //out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:harvest -- --pack` writes the tar and prints the pin.
+  Without any device data (another machine), set `DEVICE_DATA = None`: the seed then lacks the device's records and Core
+  Image's 2 device-compiled kernels, which the device compiles on first use.
+- **`hdiutil attach` fails while fetching `@gpu_apple_libs`**: the first fetch on a machine attaches the IPSW's OS image
+  read-only (no root needed). A fetch interrupted while it was attached leaves the mount behind: the next fetch detaches it,
+  or run `hdiutil detach` on the `_volume` directory in `$(bazel info output_base)/external/+gpu+gpu_apple_libs`.
 - **"the pinned outputs in bazel/pinned/nvk were generated from other inputs"**: a patch changed what Mesa's CL
   kernels (or the ASTC shader) read; regenerate those files with the real tools and update `bazel/pinned/nvk/inputs.txt`.
 - **The link fails with an undefined `ioswitch_*` symbol from XNU code**: the XNU patch is stale. Run

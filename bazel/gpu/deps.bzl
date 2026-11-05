@@ -8,16 +8,18 @@
                relative path into the shader cache's build id, which must equal a plain cargo build's.
 @m2v_crates    every crates.io package of the bridge's Cargo.lock (drivers/TegraGM20BMetal/bridge/Cargo.lock)
                as a cargo `vendor` directory: each .crate fetched by the lock's own sha256.
-@gpu_host_inputs  inputs that exist only on the build Mac, each checked against a pin here (like Xcode): 21H461's
-               QuartzCore default.metallib and the precompile's library store (Apple metallibs harvested from the
-               device), under $IOSWITCH_GPU_ARTIFACTS, default <workspace>/out/gpu-artifacts.
-@nvk_prebuilt  the hand-built NVK r9 pair (dylib + host twin, Mesa 77452b90 + gpu/nvk's six patches), under
-               $IOSWITCH_NVK_DIR, default <workspace>/out/gpu/nvk: fetched only with --//gpu/nvk:prebuilt. NVK is
-               built by //gpu/nvk otherwise.
+@gpu_apple_libs  the Apple Metal libraries the seed and the raw pack read (QuartzCore's default.metallib among them),
+               extracted from 21H461's OS volume (@ipsw_os, the IPSW's 044-76040-038.dmg) and pinned file by file
+               in bazel/gpu/apple-libs.sha256. Each file is a repository cache entry of its own, so a fetch reads the
+               OS image only for a file the cache lacks: once per machine.
+@gpu_device_data  what only the Switch makes (precompile/harvest.py --pack): the driver records m2v wrote and the Metal
+               libraries Core Image compiled there, one tar pinned by sha256 (DEVICE_DATA), fetched into the repository
+               cache from out/gpu-device-data/ of the checkout once.
 @gpu_llvm_as   bin/llvm-as of the LLVM 23.1.4 release.
 """
 
-load("//bazel/host:files.bzl", "copy_checked", "sha256_lines")
+load("//bazel/host:files.bzl", "sha256_lines")
+load("//bazel/ipsw:pins.bzl", "IPSW")
 
 M2V = {
     "commit": "720ef1ce9ae2a2068999a8675717418b9416283e",
@@ -26,25 +28,13 @@ M2V = {
     "strip_prefix": "metal2vulkan-720ef1ce9ae2a2068999a8675717418b9416283e",
 }
 
-# Host inputs: file name in the repository -> (environment variable naming the directory, default below the
-# workspace, file name there, sha256). Directories: (variable, default, name, per-file `shasum -a 256` listing).
-# The hand-built NVK r9 (out/gpu/nvk; its recipe was out/gpu/nvk/build-nvk.sh): Mesa 77452b90 + nvk-darwin, nvk-0002,
-# nvk-linear-color-attachments, nvk-0003, nvk-0004-sandbox-safe-darwin, nvk-0005-join-copy-regions, then relink-nvk.py.
-NVK_PREBUILT = {
-    "nvk/libvulkan_nouveau.dylib": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.dylib", "276260dc81da7c40edd8cf7b95f796d41cc4eb84344bddcf78bae8f1d2876a58"),
-    "nvk/libvulkan_nouveau.dylib.source": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.dylib.source", "5e5a48d11e3b141e8b59697fef1c9a82bc50ebb4487b00d0f55a0b6cb64930c2"),
-    "nvk/libvulkan_nouveau.host.dylib": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.host.dylib", "de205f8f0779ddc583f5e7f25c8d8235497d395c2e142e10fd7509c20c6d34da"),
-    "nvk/libvulkan_nouveau.host.dylib.source": ("IOSWITCH_NVK_DIR", "out/gpu/nvk", "libvulkan_nouveau.r9.host.dylib.source", "5e5a48d11e3b141e8b59697fef1c9a82bc50ebb4487b00d0f55a0b6cb64930c2"),
-}
-
-HOST_FILES = {
-    "QuartzCore-21H461.default.metallib": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "QuartzCore-21H461.default.metallib", "606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9"),
-}
-HOST_DIRS = {
-    "m2v-libs": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "m2v-libs", "//bazel/gpu:m2v-libs.sha256"),
-    # The device's driver records (precompile/harvest.py --records): m2v's VkPipelineCache data of each pipeline making the
-    # device did, named by what the making reads; the seed takes those of its NVK's identity (tools/gpu/seed.py).
-    "m2v-records": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "m2v-records", "//bazel/gpu:m2v-records.sha256"),
+# @gpu_device_data: the tar harvest.py --pack wrote (out/gpu-device-data/<file>), by its sha256. Its records are of the
+# NVK identities the device booted (vendor, device, driver version, pipelineCacheUUID); the seed takes its own NVK's.
+# None on a machine without the tar: the seed then has no device records and lacks the 2 S and 2 C lines of Core Image's
+# device-compiled kernels, which the device compiles on first use.
+DEVICE_DATA = {
+    "file": "m2v-device-533beda1b80c203d.tar",
+    "sha256": "533beda1b80c203d6f5f52576c0254304cc80e2fe26a0a750e51e7172d8acf7a",
 }
 
 _SERIES = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/series"
@@ -103,6 +93,9 @@ def _m2v_source_impl(rctx):
         rctx.watch(patch)
         _run(rctx, ["/usr/bin/patch", "-p1", "-F0", "-N", "-s", "--no-backup-if-mismatch", "-i", str(patch)])
     rctx.file("BUILD.bazel", _M2V_BUILD)
+    # A pinned download and the patches it watches: the repository contents cache shares this across output bases and
+    # worktrees.
+    return rctx.repo_metadata(reproducible = True)
 
 m2v_source = repository_rule(
     implementation = _m2v_source_impl,
@@ -159,6 +152,8 @@ filegroup(
     srcs = glob(["**"], exclude = ["BUILD.bazel", "REPO.bazel"]),
 )
 """.format(count = len(names), lock = rctx.attr.lockfile))
+    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
 
 cargo_vendor = repository_rule(
     implementation = _cargo_vendor_impl,
@@ -184,67 +179,115 @@ def _llvm_tools_impl(rctx):
     rctx.file("BUILD.bazel", 'package(default_visibility = ["//visibility:public"])\n\nexports_files({})\n'.format(
         repr(["bin/" + tool for tool in rctx.attr.tools]),
     ))
+    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
 
 llvm_tools = repository_rule(
     implementation = _llvm_tools_impl,
     attrs = {"tools": attr.string_list(mandatory = True)},
 )
 
-# --- @gpu_host_inputs ----------------------------------------------------------------------------------------------
+# --- @gpu_apple_libs -----------------------------------------------------------------------------------------------
+# Apple's binaries stay out of the repository: they are read from the IPSW the build already fetches (bazel/ipsw), and
+# only their sha256 is checked in.
 
-def _host_dir(rctx, variable, default):
-    return rctx.getenv(variable) or (str(rctx.workspace_root) + "/" + default)
+# A URL nothing serves: a download of it succeeds only from the repository cache, by its sha256.
+_CACHE_ONLY = "file:///ioswitch/repository-cache-only/"
 
-def _host_input(rctx, name, variable, default, source, sha256):
-    path = rctx.path(_host_dir(rctx, variable, default) + "/" + source)
-    if not path.exists:
-        fail("GPU host input {} is missing: {} (set {} to its directory)".format(name, path, variable))
-    copy_checked(rctx, path, name, sha256)
+_HDIUTIL = "/usr/bin/hdiutil"
 
-def _nvk_prebuilt_impl(rctx):
-    for name, (variable, default, source, sha256) in NVK_PREBUILT.items():
-        _host_input(rctx, name, variable, default, source, sha256)
+def _from_image(rctx, files):
+    """`files` ([(sha256, path below the volume's root)]) copied to root/<path> from the OS image (or the repository
+    cache), each through Bazel's sha256 check, which adds it to the cache."""
+    image = rctx.path(rctx.attr.image)
+    mount = rctx.path("_volume")
+    rctx.report_progress("Reading {} Metal libraries from {}".format(len(files), image.basename))
+    if mount.exists:
+        # A fetch interrupted while the image was attached.
+        rctx.execute([_HDIUTIL, "detach", "-force", str(mount)], quiet = True)
+        rctx.delete(mount)
+    _run(rctx, [_HDIUTIL, "attach", "-readonly", "-nobrowse", "-noverify", "-noautoopen", "-mountpoint", str(mount), str(image)])
+    failed = [
+        path
+        for sha256, path in files
+        if not rctx.download(
+            url = "file://{}/{}".format(mount, path),
+            output = "root/" + path,
+            sha256 = sha256,
+            allow_fail = True,
+        ).success
+    ]
+    detached = rctx.execute([_HDIUTIL, "detach", str(mount)], quiet = True)
+    if failed:
+        fail("{} has no file of the pinned sha256 at {} ({})".format(image.basename, ", ".join(failed), rctx.attr.pins))
+    if detached.return_code:
+        fail("hdiutil detach {} failed:\n{}{}".format(mount, detached.stdout, detached.stderr))
+    rctx.delete(mount)
+
+def _apple_libraries_impl(rctx):
+    pins = sha256_lines(rctx.read(rctx.attr.pins))
+    for at, (sha256, path) in enumerate(pins):
+        if not rctx.download(url = _CACHE_ONLY + sha256, output = "root/" + path, sha256 = sha256, allow_fail = True).success:
+            # The rest from the image: a download from it is still a cache hit for a file the cache has.
+            _from_image(rctx, pins[at:])
+            break
     rctx.file("BUILD.bazel", """\
 package(default_visibility = ["//visibility:public"])
 
-exports_files({files})
-""".format(files = repr(sorted(NVK_PREBUILT.keys()))))
-
-nvk_prebuilt = repository_rule(
-    implementation = _nvk_prebuilt_impl,
-    environ = ["IOSWITCH_NVK_DIR"],
+# {count} Metal libraries of {image}, at their paths below the volume's root (root/<device path>).
+filegroup(
+    name = "libraries",
+    srcs = {files},
 )
 
-def _gpu_host_inputs_impl(rctx):
-    files = []
-    for name, (variable, default, source, sha256) in HOST_FILES.items():
-        _host_input(rctx, name, variable, default, source, sha256)
-        files.append(name)
-    for name, (variable, default, source, listing) in HOST_DIRS.items():
-        for sha256, relative in sha256_lines(rctx.read(Label(listing))):
-            _host_input(rctx, name + "/" + relative, variable, default, source + "/" + relative, sha256)
+alias(
+    name = "quartzcore",
+    actual = "root/System/Library/Frameworks/QuartzCore.framework/default.metallib",
+)
+""".format(count = len(pins), image = rctx.attr.image, files = repr(["root/" + path for _, path in pins])))
+    # Not marked reproducible: every file is already its own repository cache entry (a fetch is 152 hard links), and a
+    # contents-cache entry made by a fetch that read the image would be checked against the 5.2 GB image it recorded.
+
+apple_libraries = repository_rule(
+    implementation = _apple_libraries_impl,
+    doc = "The files a `shasum -a 256` listing names (paths below the OS volume's root) from the repository cache, or " +
+          "from the OS image (attached read-only with hdiutil) for those the cache lacks.",
+    attrs = {
+        "pins": attr.label(mandatory = True, allow_single_file = True),
+        "image": attr.label(mandatory = True, allow_single_file = True, doc = "the IPSW's OS volume image (@ipsw_os)"),
+    },
+)
+
+# --- @gpu_device_data ----------------------------------------------------------------------------------------------
+
+def _device_data_impl(rctx):
+    if DEVICE_DATA:
+        # Only a repository cache miss reads the file: the first fetch on a machine, from the checkout harvest.py ran
+        # in.
+        rctx.download_and_extract(
+            url = "file://{}/out/gpu-device-data/{}".format(rctx.workspace_root, DEVICE_DATA["file"]),
+            sha256 = DEVICE_DATA["sha256"],
+            type = "tar",
+        )
     rctx.file("BUILD.bazel", """\
 package(default_visibility = ["//visibility:public"])
 
-exports_files({files} + ["m2v-libs/names.json"])
+# {file} (sha256 {sha256}): precompile/harvest.py --pack of the device's m2v caches.
+filegroup(
+    name = "records",
+    srcs = glob(["records/**"], allow_empty = True),
+)
 
 filegroup(
-    name = "m2v_libs",
-    srcs = glob(["m2v-libs/**"]),
+    name = "libraries",
+    srcs = glob(["data/**"], allow_empty = True),
 )
+""".format(**(DEVICE_DATA or {"file": "no device data", "sha256": "none"})))
+    # A download pinned by sha256 (the URL only seeds the repository cache): the repository contents cache shares this
+    # across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
 
-filegroup(
-    name = "m2v_records",
-    srcs = glob(["m2v-records/**"]),
-)
-""".format(files = repr(sorted(files))))
-
-# Each input is copied in through Bazel's own sha256 check (bazel/host/files.bzl copy_checked) and watched, so
-# changing one refetches the repository and a wrong one fails the fetch.
-gpu_host_inputs = repository_rule(
-    implementation = _gpu_host_inputs_impl,
-    environ = ["IOSWITCH_GPU_ARTIFACTS"],
-)
+device_data = repository_rule(implementation = _device_data_impl)
 
 # --- The extension -------------------------------------------------------------------------------------------------
 
@@ -265,8 +308,12 @@ def _gpu_impl(module_ctx):
     )
     cargo_vendor(name = "m2v_crates", lockfile = Label(_CARGO_LOCK))
     llvm_tools(name = "gpu_llvm_as", tools = ["llvm-as"])
-    gpu_host_inputs(name = "gpu_host_inputs")
-    nvk_prebuilt(name = "nvk_prebuilt")
-    return module_ctx.extension_metadata(reproducible = False)
+    apple_libraries(
+        name = "gpu_apple_libs",
+        pins = Label("//bazel/gpu:apple-libs.sha256"),
+        image = Label("@ipsw_os//:" + IPSW["members"]["os"]["member"]),
+    )
+    device_data(name = "gpu_device_data")
+    return module_ctx.extension_metadata(reproducible = True)
 
 gpu = module_extension(implementation = _gpu_impl)

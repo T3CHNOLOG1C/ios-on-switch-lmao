@@ -9,10 +9,11 @@
 # Inputs: m2v (@m2v: steelbrain/metal2vulkan 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's
 # crates (@m2v_crates, from drivers/TegraGM20BMetal/bridge/Cargo.lock), Rust 1.98.0 and LLVM 23.1.4's llvm-as
 # (pinned downloads), Xcode (the declared host input), NVK and its host twin (//gpu/nvk: Mesa 77452b90 + the series,
-# built here; --//gpu/nvk:prebuilt takes the hand-built r9 pair from @gpu_host_inputs instead), and
-# @gpu_host_inputs: QuartzCore's default.metallib and the precompile's library store. See bazel/gpu/deps.bzl.
+# built here), the Apple Metal libraries the seed and the raw pack read (@gpu_apple_libs: 21H461's OS volume's, QuartzCore's
+# default.metallib among them, extracted from the IPSW) and what only the device makes (@gpu_device_data: its driver
+# records and Core Image's compiled kernels, a pinned tar). See bazel/gpu/deps.bzl.
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_bridge", "metal_bundle", "metal_plugin", "metal_raw_pack", "metal_seed", "raw_stack")
+load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_bridge", "m2v_library_names", "metal_bundle", "metal_plugin", "metal_raw_pack", "metal_seed", "raw_stack")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -165,23 +166,32 @@ filegroup(
     output_group = "bundle",
 )
 
+# names.json of the OS volume's libraries: which library an older journal line's function is from (precompile/libraries.py).
+m2v_library_names(
+    name = "library_names",
+    libraries = "@gpu_apple_libs//:libraries",
+)
+
 metal_seed(
     name = "seed",
     abi_header = GM20B_ABI,
     corpus = GM20B_METAL + ":precompile/corpus.log",
+    device_libraries = "@gpu_device_data//:libraries",
+    # The frontend's own library (the two-plane stand-in's functions), which it makes from these bytes.
+    embedded = [METAL + ":TwoPlaneStandIn.h"],
     frontend = METAL + ":NativeBridgeMetalFrontend.mm",
     hdrs = [METAL + ":frontend_headers"],
     host_bridge = ":bridge_host",
-    libraries = GM20B_METAL + ":precompile/libraries.py",
+    libraries = "@gpu_apple_libs//:libraries",
+    libraries_tool = GM20B_METAL + ":precompile/libraries.py",
     metal_header = METAL + ":NativeBridgeMetalFrontend.h",
     mock_iokit = GM20B_METAL + ":precompile/mock_iokit.c",
+    names = ":library_names",
     nvk = NVK,
     nvk_sources = NVK_SOURCES,
     precompile = GM20B_METAL + ":precompile/precompile.mm",
-    qc = "@gpu_host_inputs//:QuartzCore-21H461.default.metallib",
-    records = "@gpu_host_inputs//:m2v_records",
-    store = "@gpu_host_inputs//:m2v_libs",
-    store_index = "@gpu_host_inputs//:m2v-libs/names.json",
+    qc = "@gpu_apple_libs//:quartzcore",
+    records = "@gpu_device_data//:records",
     twin = NVK_TWIN,
 )
 
@@ -195,7 +205,7 @@ metal_raw_pack(
     host_bridge = ":bridge_host",
     nvk = NVK,
     nvk_sources = NVK_SOURCES,
-    qc = "@gpu_host_inputs//:QuartzCore-21H461.default.metallib",
+    qc = "@gpu_apple_libs//:quartzcore",
     srcs = [
         GM20B_METAL + ":raw_pack_generator",
         METAL + ":NativeBridgeMetalFrontend.mm",
