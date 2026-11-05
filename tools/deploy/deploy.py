@@ -16,6 +16,8 @@ Steps (each can be switched off):
   4 GPU bundle     --stage-gpu: <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed} from --//deploy:gpu_bundle, via
                    the plugin's stager (its CDHashes must be in the same build's kernel window: deploy the boot package
                    built with that bundle); --remove-gpu removes it
+  4b gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from PosterBoard's
+                   data store (poster_snapshots.py), so the next "Add New Wallpaper" renders them again
   5 launchd check  --launchd-check LABEL...: read-only, the jobs Data's launchd database disables (exit 1 if a label
                    is not among them; the kernel rewrites that database at every boot)
   6 eject          unmount the iPad volumes, eject the card (--no-eject keeps it)
@@ -31,6 +33,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
 from tools.deploy import joycon_pairing  # noqa: E402
+from tools.deploy import poster_snapshots  # noqa: E402
 from tools.deploy import pull_logs  # noqa: E402
 from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
@@ -87,6 +90,7 @@ def main(argv=None):
     parser.add_argument("--logs-out")
     parser.add_argument("--corpus")
     parser.add_argument("--launchd-check", nargs="+", metavar="LABEL", default=None)
+    parser.add_argument("--reset-gallery-snapshots", nargs="+", metavar="BUNDLE", default=None)
     parser.add_argument("--no-eject", action="store_true")
     parser.add_argument("--no-joycon-pairing", action="store_true")
     parser.add_argument("--boot-package", required=True)
@@ -123,6 +127,8 @@ def main(argv=None):
                 "stage {} controller(s) for host {}".format(len(pairing["controllers"]), pairing["host"])
                 if pairing else "remove any staged dump")]) + \
             (["stage the GPU bundle"] if args.stage_gpu else []) + (["remove the GPU bundle"] if args.remove_gpu else []) + \
+            (["reset gallery snapshots of {}".format(" ".join(args.reset_gallery_snapshots))]
+             if args.reset_gallery_snapshots else []) + \
             (["launchd check {}".format(args.launchd_check)] if args.launchd_check else []) + \
             ([] if args.no_eject else ["unmount the iPad volumes and eject"])
         for step in plan:
@@ -155,6 +161,8 @@ def main(argv=None):
                 log("gpu:", (result.stdout + result.stderr).strip())
                 if result.returncode:
                     raise host.HostError("GPU bundle NOT staged")
+            if args.reset_gallery_snapshots:
+                poster_snapshots.reset(data_root, args.reset_gallery_snapshots, log)
             if args.launchd_check is not None:
                 ok = launchd_check(data_root, args.launchd_check, log)
         if not args.no_eject:

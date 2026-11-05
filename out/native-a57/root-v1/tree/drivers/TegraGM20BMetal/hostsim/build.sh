@@ -4,6 +4,7 @@
 # metal2vulkan's acceptance of NVK's feature set and NAK's SM53 compile of QuartzCore's shaders; nothing executes on a GPU.
 # qc_frontend.mm: QuartzCore's pipelines through the frontend (sheng's 24 recipes, the framebuffer-fetch filters, the uber
 # shader under 33 constant sets), each made and drawn three times in one pass: <outdir>/qc_frontend <nvk> <cache> <QC metallib>.
+# present_frontend.mm: the command buffer's presentDrawable: contract (Metal's): <outdir>/present_frontend <nvk> <cache>.
 # usage: build.sh <host libnative_metal_bridge.a> <outdir>
 #   the bridge: bazel build //gpu:bridge_darwin (bazel-bin/gpu/bridge_darwin/libnative_metal_bridge.a)
 #   then: <outdir>/m2v_gm20b <host libvulkan_nouveau.dylib> <cache dir> [<QuartzCore default.metallib> <pairs>]
@@ -19,4 +20,7 @@ xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TRE
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
   "$HERE/qc_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
   -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/qc_frontend"
-echo "built $2/m2v_gm20b $2/qc_frontend"
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
+  "$HERE/present_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
+  -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/present_frontend"
+echo "built $2/m2v_gm20b $2/qc_frontend $2/present_frontend"

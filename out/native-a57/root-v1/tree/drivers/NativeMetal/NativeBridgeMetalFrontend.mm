@@ -6,7 +6,7 @@
 // refuses fails its command buffer (status Error, handlers run) instead of being dropped. A selector this frontend does not implement is
 // reported through the missing-selector hook before the usual exception, so a hardware run names the gap.
 // Shared events work within this process (no cross-process handle yet). Not yet implemented here: indirect command buffers, visible function
-// tables, function stitching, drawables/presentation.
+// tables, function stitching. Drawables are Core Animation's (CAMetalLayer, IOSurface textures); command buffers present them.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <IOSurface/IOSurfaceRef.h>
@@ -1675,7 +1675,7 @@ struct PassTarget {
 @property (nonatomic, strong) NSMutableSet *resourceOwners;
 @property (nonatomic, strong) dispatch_group_t handlers;
 @property (nonatomic, strong) dispatch_group_t schedulingHandlers;
-@property (nonatomic) BOOL schedulingDelivered;
+@property (nonatomic) BOOL schedulingDelivered, completedDelivered;
 // SPI: the dictionary MPS and Core Image keep per command buffer (MPS's ~85 call sites), and a process-unique ID for tools.
 @property (nonatomic, strong, readonly) NSMutableDictionary *userDictionary;
 @property (nonatomic, readonly) uint64_t globalTraceObjectID;
@@ -2916,17 +2916,59 @@ static void scheduled(void *context);
     lastWidth = d.renderTargetWidth;
     lastHeight = d.renderTargetHeight;
 }
+// A handler added once its point has passed (didSchedule or finish took the list) runs behind them, as RawMetal's does: added to
+// the list, no one would read it again (a present that never happened, a waiter that never woke).
 - (void)addScheduledHandler:(MTLCommandBufferHandler)block
 {
-    if (block) @synchronized(self) {
-            [_scheduledHandlers addObject:[block copy]];
-        }
+    if (!block) return;
+    bool now;
+    @synchronized(self) {
+        now = _schedulingDelivered;
+        if (!now) [_scheduledHandlers addObject:[block copy]];
+    }
+    if (now)
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+                       ^{ block((id<MTLCommandBuffer>)self); });
 }
 - (void)addCompletedHandler:(MTLCommandBufferHandler)block
 {
-    if (block) @synchronized(self) {
-            [_completedHandlers addObject:[block copy]];
-        }
+    if (!block) return;
+    bool now;
+    @synchronized(self) {
+        now = _completedDelivered;
+        if (!now) [_completedHandlers addObject:[block copy]];
+    }
+    if (now) {
+        dispatch_queue_t queue = _queue.completionQueue;
+        dispatch_async(queue ? queue : dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+                       ^{ block((id<MTLCommandBuffer>)self); });
+    }
+}
+// Presentation, as Metal's own -[_MTLCommandBuffer presentDrawable:] (21H461 Metal.framework): a scheduled handler that presents
+// the drawable unless the command buffer failed, so a CAMetalLayer frame reaches Core Animation once its work is submitted, in
+// commit order. Answered zero before (forwardZero), the drawable was never presented and its layer stayed empty: ClockKitUI's
+// CLKUIMetalQuadView (KaleidoscopePoster) and HelloPoster end every frame with presentDrawable: + commit, so their gallery
+// snapshots were black; MediaRemoteUI and Freeform asked for it too.
+- (void)presentDrawable:(id<MTLDrawable>)drawable
+{
+    if (!drawable) return;
+    [self addScheduledHandler:^(id<MTLCommandBuffer> commandBuffer) {
+        if (!commandBuffer.error) [drawable present];
+    }];
+}
+- (void)presentDrawable:(id<MTLDrawable>)drawable atTime:(CFTimeInterval)presentationTime
+{
+    if (!drawable) return;
+    [self addScheduledHandler:^(id<MTLCommandBuffer> commandBuffer) {
+        if (!commandBuffer.error) [drawable presentAtTime:presentationTime];
+    }];
+}
+- (void)presentDrawable:(id<MTLDrawable>)drawable afterMinimumDuration:(CFTimeInterval)duration
+{
+    if (!drawable) return;
+    [self addScheduledHandler:^(id<MTLCommandBuffer> commandBuffer) {
+        if (!commandBuffer.error) [drawable presentAfterMinimumDuration:duration];
+    }];
 }
 - (void)enqueue
 {}
@@ -3015,6 +3057,7 @@ static void scheduled(void *context);
             [_scheduledHandlers removeAllObjects];
             dispatch_group_leave(_schedulingHandlers);
         }
+        _completedDelivered = YES;
         completedHandlers = [_completedHandlers copy];
         [_completedHandlers removeAllObjects];
     }

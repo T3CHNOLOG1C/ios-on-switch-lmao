@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from tools.deploy import joycon_pairing
+from tools.deploy import poster_snapshots
 from tools.deploy import pull_logs
 from tools.install import card as cards
 
@@ -146,6 +147,61 @@ class JoyConPairingTest(unittest.TestCase):
             pairing = joycon_pairing.parse(text)
             got = [c["Name"] for c in pairing["controllers"]] if pairing and pairing["controllers"] else None
             self.assertEqual(got, names)
+
+
+class PosterSnapshotsTest(unittest.TestCase):
+    TILE = "SNAPSHOT_GALLERY-dC(b[{{0, 0}, {720, 1280}}]-s[1.000000]-o[4]-ui[2]-ax[0]-s[0])-cP(ab).atx"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = Path(self.tmp.name)
+        apps = self.data / poster_snapshots.APPLICATIONS
+        for uuid, identifier in (("A-SETTINGS", "com.apple.Preferences"), ("B-POSTERBOARD", "com.apple.PosterBoard")):
+            (apps / uuid).mkdir(parents=True)
+            with open(apps / uuid / poster_snapshots.METADATA, "wb") as handle:
+                plistlib.dump({"MCMMetadataIdentifier": identifier}, handle)
+        self.store = apps / "B-POSTERBOARD" / poster_snapshots.STORE / "61/Extensions"
+        self.files = {}
+        for bundle, kind, uuid, name in (
+                ("com.apple.PridePoster.PridePosterExtension", "descriptors", "20E10D08", self.TILE),
+                ("com.apple.PridePoster.PridePosterExtension", "descriptors", "20E10D08", "descriptor.plist"),
+                ("com.apple.WatchFacesWallpaperSupport.KaleidoscopePoster", "staticdescriptors", "A063BC49", self.TILE),
+                ("com.apple.WallpaperKit.CollectionsPoster", "configurations", "2AB99B7D",
+                 "SNAPSHOT_GALLERY_WITH_COMPLICATIONS-x.atx"),
+                ("com.apple.WallpaperKit.CollectionsPoster", "descriptors", "81552EBA", self.TILE),
+                ("com.apple.EmojiPoster.EmojiPosterExtension", "descriptors", "B763AC6A", self.TILE)):
+            path = self.store / bundle / kind / uuid / "versions/0" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"atx")
+            self.files[(bundle, kind, name)] = path
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_only_the_named_extensions_descriptor_tiles_go(self):
+        bundles = ["com.apple.PridePoster.PridePosterExtension", "com.apple.WatchFacesWallpaperSupport.KaleidoscopePoster",
+                   "com.apple.WallpaperKit.CollectionsPoster"]
+        log = Log()
+        self.assertEqual(poster_snapshots.reset(self.data, bundles, log, dry_run=True), 3)
+        self.assertTrue(all(path.exists() for path in self.files.values()))
+        self.assertEqual(poster_snapshots.reset(self.data, bundles, log), 3)
+        gone = {key for key, path in self.files.items() if not path.exists()}
+        self.assertEqual(gone, {("com.apple.PridePoster.PridePosterExtension", "descriptors", self.TILE),
+                                ("com.apple.WatchFacesWallpaperSupport.KaleidoscopePoster", "staticdescriptors",
+                                 self.TILE),
+                                ("com.apple.WallpaperKit.CollectionsPoster", "descriptors", self.TILE)})
+        self.assertIn("gallery snapshots: removed 1 of com.apple.PridePoster.PridePosterExtension", log.lines)
+        self.assertEqual(poster_snapshots.reset(self.data, bundles, log), 0)
+
+    def test_no_posterboard_container(self):
+        log = Log()
+        self.assertEqual(poster_snapshots.reset(self.root_without_posterboard(), ["x"], log), 0)
+        self.assertIn("gallery snapshots: no PosterBoard container on Data", log.lines)
+
+    def root_without_posterboard(self):
+        root = self.data / "empty"
+        root.mkdir()
+        return root
 
 
 if __name__ == "__main__":
