@@ -1,0 +1,14 @@
+# drivers/TegraI2C's bus table: only I2C3 (the touch panel's bus) chains its transactions; the other buses' devices
+# were never run that way. The driver's behaviour is tested under drivers/SwitchTouch/test.
+#
+#   bazel test //drivers/TegraI2C/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "tegra_i2c_source_test",
+    srcs = ["tegra_i2c_source_test.cpp"],
+    data = ["//drivers/TegraI2C:TegraI2C.cpp"],
+)

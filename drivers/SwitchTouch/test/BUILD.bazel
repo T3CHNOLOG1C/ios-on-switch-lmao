@@ -1,0 +1,91 @@
+# drivers/SwitchTouch over drivers/TegraI2C on the host (r17-touch): both real drivers, each its own translation unit,
+# against switch_touch_stubs.h, under the models in switch_touch_test.cpp (Tegra210 I2C controllers in packet mode,
+# the FTM4 on I2C3, the MAX77620 on I2C5, APB DMA channel 4), one process per scenario. Plus guards on what the models
+# cannot see (switch_touch_source_test).
+#
+#   bazel test //drivers/SwitchTouch/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = [
+        "IOKit/IOFilterInterruptEventSource.h",
+        "IOKit/IOInterruptEventSource.h",
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOReturn.h",
+        "IOKit/IOService.h",
+        "IOKit/IOTimerEventSource.h",
+        "IOKit/IOWorkLoop.h",
+        "kern/clock.h",
+        "libkern/OSAtomic.h",
+        "os/log.h",
+        "pexpert/pexpert.h",
+    ],
+    stubs = "switch_touch_stubs.h",
+)
+
+# The headers the drivers and the models share.
+host_library(
+    name = "headers",
+    hdrs = [
+        "//drivers/ArmGIC:IOSwitchInterrupts.h",
+        "//drivers/NativeMobileDisplay:IOSwitchPortrait.h",
+        "//drivers/SwitchPower:SwitchPower.h",
+        "//drivers/SwitchTouch:SwitchHID.h",
+        "//drivers/SwitchTouch:SwitchTouch.h",
+        "//drivers/TegraAPBDMA:TegraAPBDMA.h",
+        "//drivers/TegraGPIO:TegraGPIO.h",
+        "//drivers/TegraI2C:TegraI2C.h",
+    ],
+)
+
+# TegraI2C with its register accessors and DMA cache maintenance left to the controller model (TEGRA_I2C_HOST_MODEL).
+host_library(
+    name = "tegra_i2c",
+    srcs = ["//drivers/TegraI2C:TegraI2C.cpp"],
+    copts = ["-Wno-unused-parameter"],
+    defines = ["TEGRA_I2C_HOST_MODEL"],
+    force_includes = ["tegra_i2c_host_model.h"],
+    deps = [
+        ":headers",
+        ":kernel",
+    ],
+)
+
+host_library(
+    name = "switch_touch",
+    srcs = ["//drivers/SwitchTouch:SwitchTouch.cpp"],
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":headers",
+        ":kernel",
+    ],
+)
+
+host_test(
+    name = "switch_touch_test",
+    srcs = [
+        "switch_touch_test.cpp",
+        "tegra_i2c_host_model.h",
+    ],
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":headers",
+        ":kernel",
+        ":switch_touch",
+        ":tegra_i2c",
+    ],
+)
+
+host_test(
+    name = "switch_touch_source_test",
+    srcs = ["switch_touch_source_test.cpp"],
+    data = [
+        "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
+        "//drivers/SwitchTouch:SwitchTouch.cpp",
+    ],
+)

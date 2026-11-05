@@ -1,6 +1,6 @@
-// Host test of drivers/SwitchTouch/SwitchTouch.cpp over drivers/TegraI2C/TegraI2C.cpp (test_switch_touch.py compiles the
-// three as separate translation units over tests/switch_touch_stubs.h and runs one scenario per process). Everything
-// below the drivers is a model:
+// Host test of drivers/SwitchTouch/SwitchTouch.cpp over drivers/TegraI2C/TegraI2C.cpp: the two drivers and this file
+// are separate translation units over switch_touch_stubs.h (BUILD.bazel), and each scenario runs in a process of its
+// own (the drivers keep boot-wide state). Everything below the drivers is a model:
 //   * Tegra210 I2C controllers (all five; I2C3 and I2C5 have devices): packet-mode TX and RX FIFOs of 8 words, packet
 //     headers parsed from the TX FIFO (generic header, payload size, I2C header with READ / REPEAT_START / IE), bytes on
 //     the wire at 400 kHz (9 bit times each, 10 for (repeated) START + address), a write stalls on an empty TX FIFO and
@@ -25,22 +25,19 @@
 #include <deque>
 #include <memory>
 #include <set>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "bazel/testing/fresh_process.h"
+#include "bazel/testing/source_text.h"
 #include "switch_touch_stubs.h"
 #include "tegra_i2c_host_model.h"
-#include "../drivers/SwitchTouch/SwitchHID.h"
-#include "../drivers/SwitchTouch/SwitchTouch.h"
-#include "../drivers/TegraAPBDMA/TegraAPBDMA.h"
-#include "../drivers/TegraGPIO/TegraGPIO.h"
+#include "../SwitchHID.h"
+#include "../SwitchTouch.h"
+#include "../../TegraAPBDMA/TegraAPBDMA.h"
+#include "../../TegraGPIO/TegraGPIO.h"
 
-static unsigned gChecks = 0, gFailures = 0;
-static void check(bool ok, const std::string &what)
-{
-    ++gChecks;
-    if (!ok) {
-        ++gFailures;
-        std::fprintf(stderr, "FAIL: %s\n", what.c_str());
-    }
-}
+// Every check is a GoogleTest expectation; its message says what was expected.
+#define check(ok, what) EXPECT_TRUE(ok) << (what)
 static std::string format(const char *f, ...) __attribute__((format(printf, 1, 2)));
 static std::string format(const char *f, ...)
 {
@@ -812,6 +809,9 @@ static void scenarioDrag()
     const std::string line = logLine("SwitchTouch stats:");
     std::printf("%s\n", line.c_str());
     check(!line.empty(), "stats line");
+    // Periodic stats go to os_log only, never the console (IOLog).
+    check(line.rfind("os_log: SwitchTouch stats: ", 0) == 0, "stats line by os_log");
+    check(!logged("IOLog: SwitchTouch stats"), "stats never on the console");
     check(line.find("62 interrupts (0 empty), 62 reports, 62 events (max 1)") != std::string::npos, "stats counts");
     check(line.find("report interval 8333/") != std::string::npos && line.find("120.0 Hz") != std::string::npos,
           "report interval 8333 us, 120 Hz");
@@ -1145,12 +1145,14 @@ static void scenarioFourFingers()
     fireWatchdog();
     const std::string geometry = logLine("SwitchTouch geometry:");
     std::printf("%s\n", geometry.c_str());
+    check(geometry.rfind("os_log: SwitchTouch geometry: ", 0) == 0, "geometry line by os_log");
     check(geometry.find("4-finger arrival 16/16/16 ms (1)") != std::string::npos, "geometry: arrival spread 16 ms");
 }
 
-// The same drags over this tree's drivers or main's (test_switch_touch.py's before/after): per touch interrupt, the
-// transactions on the wire, I2C3 interrupt actions, and INT-to-last-report time.
-static void measureDrag(unsigned fingers, const char *name)
+// The same drags over this tree's drivers or main's (the before/after of r17-touch): per touch interrupt, the
+// transactions on the wire, I2C3 interrupt actions, and INT-to-last-report time. `actions` is the I2C3 interrupt
+// actions per touch interrupt expected (as printed, two decimals); returns the mean INT-to-last-report time in us.
+static uint64_t measureDrag(unsigned fingers, const char *name, const char *actionsPer)
 {
     const size_t irqsBefore = gIrqs.size();
     drag(fingers, 60, 8333333);
@@ -1165,55 +1167,61 @@ static void measureDrag(unsigned fingers, const char *name)
         worst = std::max(worst, posted - r.filter);
     }
     check(n == 62, format("%s: 62 interrupts (got %zu)", name, n));
-    if (!n) return;
+    if (!n) return 0;
     std::printf("measure %s: %zu interrupts, %.2f transactions and %.2f I2C3 interrupt actions per interrupt, "
                 "INT->last report mean %" PRIu64 " us max %" PRIu64 " us\n",
                 name, n, (double)ops / (double)n, (double)actions / (double)n, sum / n / 1000, worst / 1000);
+    EXPECT_EQ(format("%.2f", (double)ops / (double)n), "2.00") << name << ": transactions per interrupt";
+    EXPECT_EQ(format("%.2f", (double)actions / (double)n), actionsPer) << name << ": I2C3 interrupt actions per interrupt";
+    return sum / n / 1000;
 }
 
 static void scenarioMeasure()
 {
     bringUp();
-    measureDrag(1, "1-finger");
-    measureDrag(2, "2-finger");
-    measureDrag(5, "5-finger");
+    const uint64_t oneFinger = measureDrag(1, "1-finger", "2.00");
+    measureDrag(2, "2-finger", "2.00");
+    measureDrag(5, "5-finger", "3.00");
+    // Two chained transactions at 400 kHz after the work loop's 40 us: under 0.6 ms for one finger (main's three
+    // transactions of two packets each took 1.04 ms in this model).
+    EXPECT_LT(oneFinger, 650u) << "1-finger INT->last report mean, us";
 }
 
-int main(int argc, char **argv)
+// --- One process per scenario (the drivers keep boot-wide state) ------------------------------------------------------
+static void run(void (*scenario)())
 {
-    const std::string which = argc > 1 ? argv[1] : "";
-    try {
-        if (which == "drag") scenarioDrag();
-        else if (which == "five-dma") scenarioFiveFingers(true);
-        else if (which == "five-dma-early") {
-            gEarlyDone = true;
-            scenarioFiveFingers(true);
+    ioswitch::test::ExpectPassesInFreshProcess([scenario] {
+        try {
+            scenario();
+        } catch (const Panic &p) {
+            check(false, format("unexpected panic: %s", p.what()));
+        } catch (const std::exception &e) {
+            check(false, format("exception: %s", e.what()));
         }
-        else if (which == "five-pio") scenarioFiveFingers(false);
-        else if (which == "same-batch") scenarioSameBatch();
-        else if (which == "deep") scenarioDeepFifo();
-        else if (which == "untimed") scenarioUntimed();
-        else if (which == "nack") scenarioNack();
-        else if (which == "dma-first-lost") scenarioDmaFirstLost();
-        else if (which == "dma-lost-later") scenarioDmaLostLater();
-        else if (which == "chain-broken") scenarioChainBroken();
-        else if (which == "dma-open-fails") scenarioDmaOpenFails();
-        else if (which == "measure") scenarioMeasure();
-        else if (which == "filter") scenarioFilter();
-        else if (which == "palm") scenarioPalm();
-        else if (which == "edge") scenarioEdge();
-        else if (which == "four-fingers") scenarioFourFingers();
-        else {
-            std::fprintf(stderr, "unknown scenario %s\n", which.c_str());
-            return 2;
-        }
-    } catch (const Panic &p) {
-        check(false, format("unexpected panic: %s", p.what()));
-    } catch (const std::exception &e) {
-        check(false, format("exception: %s", e.what()));
-    }
-    for (const std::string &e : gFtm4.errors) check(false, "FTM4 model: " + e);
-    std::printf("%s: %u checks, %u failures\n", which.c_str(), gChecks, gFailures);
-    if (!gFailures) std::printf("PASS: switch touch %s\n", which.c_str());
-    return gFailures ? 1 : 0;
+        for (const std::string &e : gFtm4.errors) check(false, "FTM4 model: " + e);
+    });
 }
+
+TEST(SwitchTouch, Drag) { run(scenarioDrag); }
+TEST(SwitchTouch, FiveFingersDma) { run([] { scenarioFiveFingers(true); }); }
+TEST(SwitchTouch, FiveFingersDmaEarlyCompletion)
+{
+    run([] {
+        gEarlyDone = true;
+        scenarioFiveFingers(true);
+    });
+}
+TEST(SwitchTouch, FiveFingersPio) { run([] { scenarioFiveFingers(false); }); }
+TEST(SwitchTouch, SameBatch) { run(scenarioSameBatch); }
+TEST(SwitchTouch, DeepFifo) { run(scenarioDeepFifo); }
+TEST(SwitchTouch, Untimed) { run(scenarioUntimed); }
+TEST(SwitchTouch, Nack) { run(scenarioNack); }
+TEST(SwitchTouch, DmaFirstEndOfCountLost) { run(scenarioDmaFirstLost); }
+TEST(SwitchTouch, DmaEndOfCountLostLater) { run(scenarioDmaLostLater); }
+TEST(SwitchTouch, ChainBroken) { run(scenarioChainBroken); }
+TEST(SwitchTouch, DmaOpenFails) { run(scenarioDmaOpenFails); }
+TEST(SwitchTouch, Measure) { run(scenarioMeasure); }
+TEST(SwitchTouch, Filter) { run(scenarioFilter); }
+TEST(SwitchTouch, Palm) { run(scenarioPalm); }
+TEST(SwitchTouch, Edge) { run(scenarioEdge); }
+TEST(SwitchTouch, FourFingers) { run(scenarioFourFingers); }

@@ -1,0 +1,17 @@
+# drivers/TegraAPBDMA's interface (its users' channels and request lines, the calls the UART drivers were written
+# against) checked at compile time, and the device-to-memory word transfer programmed as Linux programs it.
+#
+#   bazel test //drivers/TegraAPBDMA/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "tegra_apbdma_test",
+    srcs = [
+        "tegra_apbdma_test.cpp",
+        "//drivers/TegraAPBDMA:TegraAPBDMA.h",
+    ],
+    data = ["//drivers/TegraAPBDMA:TegraAPBDMA.cpp"],
+)
