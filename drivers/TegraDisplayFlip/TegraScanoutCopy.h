@@ -32,7 +32,7 @@ struct TegraScanoutCopy {
     uint64_t sourceStride;  // bytes per row, >= width * 4 (5120 or padded)
     uint64_t sourceBytes;   // the surface's allocation, >= sourceStride * height
     // The block-linear target: physically contiguous, below 4 GiB, 128 KiB aligned, targetBytes long. At most three addresses ever
-    // occur (the boot framebuffer 0xf5a00000 and the display's other two buffers, r14-pacing); window A is not scanning it and cannot
+    // occur (the boot framebuffer 0xf5a00000 and the display's other two buffers); window A is not scanning it and cannot
     // take it while the copy runs, and the display writes it neither on the CPU nor with another copy until this one completes.
     uint64_t target;
     uint64_t targetBytes;      // 0x3C0000

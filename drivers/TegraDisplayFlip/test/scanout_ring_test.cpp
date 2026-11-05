@@ -31,7 +31,6 @@ __attribute__((format(printf, 1, 2))) std::string message(const char *format, ..
     va_end(ap);
     return text;
 }
-// Every CHECK is a GoogleTest expectation with a printf-formatted message.
 #define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 uint64_t state = 0x9e3779b97f4a7c15ull;
@@ -246,7 +245,7 @@ struct Sim {
 };
 
 // The steady case the ring is for: the compositor draws every frame a few milliseconds after the boundary and the copy is quick,
-// but one frame was late. With three buffers the lateness is gone at the next boundary; with two it stays (the r7q pattern).
+// but one frame was late. With three buffers the lateness is gone at the next boundary; with two it stays.
 unsigned lateFramesAfterOneSlip(unsigned buffers)
 {
     Sim s(buffers);
@@ -306,7 +305,7 @@ TEST(ScanoutRing, DeviantControllerFallsBackOnce)
     EXPECT_EQ(recovered, 200u) << "fell back to double buffering in 200 of 200 runs";
 }
 
-// One late frame: three buffers recover at the next boundary, two stay a frame behind (the r7q pattern).
+// One late frame: three buffers recover at the next boundary, two stay a frame behind.
 TEST(ScanoutRing, OneLateFrame)
 {
     state = 0x9e3779b97f4a7c15ull;

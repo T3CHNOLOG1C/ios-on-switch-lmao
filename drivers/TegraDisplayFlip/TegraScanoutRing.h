@@ -3,26 +3,26 @@
 // flip asked for, and which one a frame is being written into. Plain state, no IOKit: NativeLegacyDisplay keeps one under its work-loop
 // gate, and test/scanout_ring_test.cpp drives it against a model of DC A's frame-boundary latch.
 //
-// Three buffers, latest frame wins (r14-pacing). With two, a frame that came while the previous flip was out could not be written
-// until that flip latched (the only other buffer was being scanned): it waited for the frame end, was copied, and latched one frame
-// later. Once one frame was late every later one was too, for as long as the compositor kept drawing every frame (r7q: swap-to-
-// scan p50 31-48 ms at a steady 60 Hz, 266 of 267 swaps flip-waited). With a third buffer a frame is copied as soon as it comes,
-// and when its copy is done while an older flip is still out, window A is pointed at the newer frame instead: DC A takes whatever
-// START_ADDR its assembly copy holds at the frame boundary, so a frame finished before vblank N scans out at N, and the older one
-// is not shown (it was late; the compositor draws by time, so the newer frame is the right picture for N).
+// Three buffers, latest frame wins. With two, a frame that came while the previous flip was out could not be written until
+// that flip latched (the only other buffer was being scanned): it waited for the frame end, was copied, and latched one frame
+// later, and once one frame was late every later one was too, for as long as the compositor kept drawing every frame. With a
+// third buffer a frame is copied as soon as it comes, and when its copy is done while an older flip is still out, window A is
+// pointed at the newer frame instead: DC A takes whatever START_ADDR its assembly copy holds at the frame boundary, so a frame
+// finished before vblank N scans out at N, and the older one is not shown (it was late; the compositor draws by time, so the
+// newer frame is the right picture for N).
 //
 // A replaced flip may still have been taken: the boundary can fall before the new START_ADDR is stored. Its buffer is held
 // (superseded) until a frame end shows which buffer window A scans; only then may a frame be written into it. The five roles are
 // disjoint: front (scanned), pending (asked for, not seen taken), superseded (asked for, then replaced: maybe scanned), drawing (a
 // copy is writing it), held (complete, waiting for a flip; double buffering only). A frame goes only into a buffer in none of them.
 //
-// Replacing a flip still out is the one thing the two-buffer path never did to DC A. Should the controller not take a replaced
+// Replacing a flip still out is the one thing double buffering never does to DC A. Should the controller not take a replaced
 // START_ADDR as modelled (latch() says kInconsistent), recover() turns replacement off for good: from then on a frame finished
-// while a flip is out is held and flipped at that flip's latch, and no frame is written while a flip is out, which is the double
-// buffering as before (with two buffers, no third could be had, it is that from the start).
+// while a flip is out is held and flipped at that flip's latch, and no frame is written while a flip is out, which is double
+// buffering (with two buffers, when no third could be had, it is that from the start).
 #pragma once
 
-// Direct scanout (r14-direct): entries kMaxBuffers..kMaxEntries-1 are the compositor's own surfaces, mapped into SMMU slots.
+// Direct scanout: entries kMaxBuffers..kMaxEntries-1 are the compositor's own surfaces, mapped into SMMU slots.
 // They take the same roles (front, pending, superseded, held) but are never a copy target: target() hands out scan buffers
 // only. A frame whose window layout (pitch slot or block-linear buffer, stride) differs from the flip still out never
 // replaces it (a boundary between the stores would latch a mix): ready(i, false) holds it for that flip's latch instead.
@@ -98,8 +98,8 @@ struct TegraScanoutRing {
     // At a frame end or vblank with a flip out (pending != kNone): window A's active START_ADDR as a buffer index (kNone: none of
     // these buffers) and whether STATE_CONTROL still holds an ACT_REQ. A boundary between the START_ADDR store and the ACT_REQ store
     // takes the new address under the old request and leaves the new request standing, so "taken" is decided by the address alone.
-    // Double-buffered (after recover()) it is the path as before r14: taken only once ACT_REQ is clear, and then window A must scan
-    // the flip asked for; so no START_ADDR is ever stored while a request is out.
+    // Double-buffered (after recover()) it is taken only once ACT_REQ is clear, and then window A must scan the flip asked for; so
+    // no START_ADDR is ever stored while a request is out.
     Latch latch(int active, bool requested)
     {
         if (pending == kNone) return kWaiting;

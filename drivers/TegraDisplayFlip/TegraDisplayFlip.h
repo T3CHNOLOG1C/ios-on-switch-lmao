@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra X1 display controller A: flip window A to another physically contiguous buffer and poll for vblank.
 //
-// Prototype helper, not wired in, and superseded: NativeLegacyDisplay double-buffers window A itself (ioswitch-scanout-double=1),
-// latching flips on the DC A frame-end interrupt instead of polling. Kept for its register notes. Hekate leaves window A scanning the 720x1280 portrait panel surface
-// (B8G8R8A8, pitch-linear, stride 2880) at 0xF5A00000 (hekate bdk/display/di.inl _di_winA_pitch,
-// bdk/memory_map.h IPL_FB_ADDRESS). This class only swaps the start address; every other window register stays.
+// Not wired in: NativeLegacyDisplay double-buffers window A itself (ioswitch-scanout-double=1), latching flips on the
+// DC A frame-end interrupt rather than polling. Kept for its register notes. Hekate leaves window A scanning the
+// 720x1280 portrait panel surface (B8G8R8A8, pitch-linear, stride 2880) at 0xF5A00000 (hekate bdk/display/di.inl
+// _di_winA_pitch, bdk/memory_map.h IPL_FB_ADDRESS). This class only swaps the start address; every other window
+// register stays.
 //
 // Registers are 32-bit words; offsets below are word indices (byte offset = index * 4), as in hekate
 // bdk/display/di.h (DISPLAY_A(off) is MMIO_REG32(0x54200000, off << 2)) and L4T switch-l4t-kernel-nvidia

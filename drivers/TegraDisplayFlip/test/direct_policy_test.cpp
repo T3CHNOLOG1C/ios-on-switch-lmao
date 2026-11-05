@@ -1,4 +1,4 @@
-// Direct scanout's replace/retire policy (NativeLegacyDisplay, r14-direct) on the host: Core Animation with its three
+// Direct scanout's replace/retire policy (NativeLegacyDisplay) on the host: Core Animation with its three
 // framebuffers, recycling a surface when a later swap completes (QuartzCore "swap %u completed, recycling surface 0x%x from
 // swap %u"); the display's policy (the real TegraScanoutRing; a fence-only GPU present per swap, one in flight; the frame
 // replaces a flip still out; every swap retires at the latch that shows it or a newer one, in queue order, never the one in
@@ -28,7 +28,6 @@ __attribute__((format(printf, 1, 2))) std::string message(const char *format, ..
     va_end(ap);
     return text;
 }
-// Every CHECK is a GoogleTest expectation with a printf-formatted message.
 #define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 uint64_t rng = 0x243f6a8885a308d3ull;
