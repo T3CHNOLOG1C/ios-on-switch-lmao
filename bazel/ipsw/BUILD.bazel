@@ -1,10 +1,11 @@
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":ipsw.bzl", "ipsw_members")
+load(":ipsw.bzl", "ipsw_kinds")
 
 lint_files()
 
-# `bazel run //bazel/ipsw:pin -- <ipsw url> <product> <device class> > $PWD/bazel/ipsw/pins.bzl`
+# `bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> <product> <device class>`: pins one IPSW kind's members in
+# bazel/ipsw/pins.bzl (the others and every kind's derived pins are kept).
 py_binary(
     name = "pin",
     srcs = ["pin.py"],
@@ -16,5 +17,6 @@ py_binary(
     srcs = ["inflate.py"],
 )
 
-# The deflated members, inflated: //bazel/ipsw:<role> (what @ipsw//:<role> names).
-ipsw_members()
+# --//bazel/ipsw:kind (default pins.bzl's DEFAULT_KIND), a config_setting per kind (//bazel/ipsw:<kind>), the deflated
+# members inflated (//bazel/ipsw:<kind>_<role>, what @ipsw//:<role> selects), :current (the kind's IpswInfo).
+ipsw_kinds()

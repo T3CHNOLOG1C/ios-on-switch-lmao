@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Pin an IPSW's members for bazel/ipsw/pins.bzl, without storing the IPSW.
+"""Pin one IPSW kind's members in bazel/ipsw/pins.bzl, without storing the IPSW.
 
-    bazel run //bazel/ipsw:pin -- <ipsw url> <product e.g. iPad7,1> <device class e.g. j120ap> > bazel/ipsw/pins.bzl
+    bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> <product e.g. iPad7,1> <device class e.g. j120ap>
+
+Rewrites the kind's entry of pins.bzl's IPSWS (a declared slot such as "next" is replaced by --kind; the build is
+checked against the IPSW's own) and keeps every other kind and the kind's "derived" pins, which are kept by hand.
 
 Reads the zip's central directory and BuildManifest.plist over HTTP range requests, selects the Erase build
 identity for the device class, then streams each member the build needs once to compute two sha256s:
@@ -9,8 +12,11 @@ identity for the device class, then streams each member the build needs once to 
 repository cache) and `content_sha256` of the member itself (after inflating a deflated member). Nothing is
 written to disk. The OS dmg alone is several GB, so expect a few minutes.
 """
+import argparse
+import ast
 import hashlib
 import json
+import os
 import plistlib
 import struct
 import sys
@@ -109,14 +115,27 @@ def stream(remote, member, offset):
 
 
 def main():
-    if len(sys.argv) != 4:
-        raise SystemExit(__doc__)
-    url, product, device_class = sys.argv[1:]
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--kind", required=True, help="the IPSW kind: its build (ProductBuildVersion)")
+    parser.add_argument("--replace", help="a declared slot (e.g. next) this kind takes the place of")
+    parser.add_argument("url")
+    parser.add_argument("product")
+    parser.add_argument("device_class")
+    args = parser.parse_args()
+    url, product, device_class = args.url, args.product, args.device_class
+    workspace = os.environ.get("BUILD_WORKSPACE_DIRECTORY") or sys.exit("run with bazel run")
+    pins_path = os.path.join(workspace, "bazel/ipsw/pins.bzl")
+    with open(pins_path) as f:
+        text = f.read()
+    head, _, table = text.partition("IPSWS = ")
+    kinds = ast.literal_eval(table)
     remote = Remote(url)
     members = central_directory(remote)
     manifest_member = members["BuildManifest.plist"]
     raw = remote.read(data_offset(remote, manifest_member), data_offset(remote, manifest_member) + manifest_member["csize"])
     manifest = plistlib.loads(zlib.decompress(raw, -15) if manifest_member["method"] == 8 else raw)
+    if manifest["ProductBuildVersion"] != args.kind:
+        raise SystemExit("{} is build {}, not {}".format(url, manifest["ProductBuildVersion"], args.kind))
     if product not in manifest["SupportedProductTypes"]:
         raise SystemExit("{} is not in this IPSW ({})".format(product, manifest["SupportedProductTypes"]))
     identity = next(i for i in manifest["BuildIdentities"]
@@ -142,8 +161,7 @@ def main():
             "sha256": sha256,
             "content_sha256": content_sha256,
         }
-    print('"""IPSW member pins, written by `bazel run //bazel/ipsw:pin` (bazel/ipsw/pin.py). Do not edit by hand."""\n')
-    print("IPSW = " + json.dumps({
+    entry = {
         "url": url,
         "size": remote.size,
         "product": product,
@@ -151,7 +169,16 @@ def main():
         "version": manifest["ProductVersion"],
         "build": manifest["ProductBuildVersion"],
         "members": pins,
-    }, indent = 4, sort_keys = True).replace(": true", ": True").replace(": false", ": False"))
+    }
+    if args.replace:
+        kinds.pop(args.replace)
+    entry["derived"] = kinds.get(args.kind, {}).get("derived", {})
+    kinds[args.kind] = entry
+    table = json.dumps(kinds, indent=4, sort_keys=True).replace(": true", ": True").replace(": false", ": False")
+    with open(pins_path, "w") as f:
+        f.write(head + "IPSWS = " + table + "\n")
+    print("{}: {} pinned ({} members); fill in its derived pins by hand".format(pins_path, args.kind, len(pins)),
+          file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -1,21 +1,34 @@
-"""The IPSW's members, fetched by HTTP range request (no full IPSW download).
+"""The IPSWs' members, fetched by HTTP range request (no full IPSW download), one set per IPSW kind (pins.bzl).
 
-Each member is its own repository (@ipsw_<role>), so building something that needs the 16 MB kernelcache never
-fetches the 5 GB OS image. Bazel downloads exactly the member's stored bytes with a `Range` header and checks them
-against the pinned sha256, which puts them in the repository cache (content-addressed, shared by every output base).
+Each member of each pinned kind is its own repository (@ipsw_<kind>_<role>), so building something that needs the
+16 MB kernelcache never fetches the 5 GB OS image. Bazel downloads exactly the member's stored bytes with a `Range`
+header and checks them against the pinned sha256, which puts them in the repository cache (content-addressed, shared
+by every output base).
 
 A stored member (the OS dmg) is used as fetched. A deflated one is inflated by a build action (ipsw_inflate,
 //bazel/ipsw:inflate) that checks the content against its pin; only the deflated bytes live in the repository cache.
 
-@ipsw is a hub of aliases, one per role: @ipsw//:kernelcache, @ipsw//:os, ... (to //bazel/ipsw:<role> for deflated
-members, the inflated file).
+@ipsw is the hub the build names members by: @ipsw//:<role> (kernelcache, os, system_cryptex, ...) is the member of
+the kind --//bazel/ipsw:kind selects (a select() over //bazel/ipsw:<kind>). //bazel/ipsw:current gives rules the
+selected kind's identity and derived pins (IpswInfo). Nothing outside pins.bzl names a build or a member file.
 """
 
-load(":pins.bzl", "IPSW")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo", "string_flag")
+load(":pins.bzl", "DEFAULT_KIND", "IPSWS")
+
+# Members above this are inflated only on demand (the SD install): they stay out of `bazel build //...`, out of the
+# disk cache, and out of every output base that does not install.
+_LARGE = 256 << 20
 
 _STORED_BUILD = """\
 exports_files([{name}], visibility = ["//visibility:public"])
 """
+
+def pinned_kinds():
+    return [kind for kind, ipsw in IPSWS.items() if ipsw.get("members")]
+
+def _filename(pin):
+    return pin["member"].split("/")[-1]
 
 def _ipsw_member_impl(rctx):
     first, last = rctx.attr.byte_range.split("-")
@@ -41,48 +54,110 @@ ipsw_member = repository_rule(
 
 def _ipsw_hub_impl(rctx):
     lines = ['package(default_visibility = ["//visibility:public"])', ""]
-    for role, actual in sorted(rctx.attr.members.items()):
-        lines.append('alias(name = "{}", actual = "{}")'.format(role, actual))
-    lines.append("")
-    lines.append("# {} {} ({}) for {}".format(rctx.attr.version, rctx.attr.build, rctx.attr.url, rctx.attr.product))
+    for role, by_kind in sorted(json.decode(rctx.attr.members).items()):
+        lines.append("alias(")
+        lines.append('    name = "{}",'.format(role))
+        lines.append("    actual = select({")
+        for kind, actual in sorted(by_kind.items()):
+            lines.append('        "@@//bazel/ipsw:{}": "{}",'.format(kind, actual))
+        lines.append("    }),")
+        lines.append(")")
+        lines.append("")
+    # The deflated members' stored bytes, by kind, for //bazel/ipsw's inflate actions.
+    for name, actual in sorted(rctx.attr.stored.items()):
+        lines.append('alias(name = "{}", actual = "{}")'.format(name, actual))
     rctx.file("BUILD.bazel", "\n".join(lines) + "\n")
 
 _ipsw_hub = repository_rule(
     implementation = _ipsw_hub_impl,
     attrs = {
-        "members": attr.string_dict(doc = "role -> label of its file"),
-        "url": attr.string(),
-        "version": attr.string(),
-        "build": attr.string(),
-        "product": attr.string(),
+        "members": attr.string(doc = "JSON: role -> {kind -> label of its file}"),
+        "stored": attr.string_dict(doc = "stored_<kind>_<role> -> the deflated member's stored bytes"),
     },
 )
 
 def _ipsw_extension_impl(module_ctx):
-    members = {}
-    for role, pin in IPSW["members"].items():
-        filename = pin["member"].split("/")[-1]
-        output = "stored.deflate" if pin["deflated"] else filename
-        ipsw_member(
-            name = "ipsw_" + role,
-            url = IPSW["url"],
-            member = pin["member"],
-            byte_range = "{}-{}".format(pin["offset"], pin["offset"] + pin["stored_size"] - 1),
-            output = output,
-            sha256 = pin["sha256"],
-        )
-        members[role] = "@@//bazel/ipsw:" + role if pin["deflated"] else "@ipsw_{}//:{}".format(role, filename)
-    _ipsw_hub(
-        name = "ipsw",
-        members = members,
-        url = IPSW["url"],
-        version = IPSW["version"],
-        build = IPSW["build"],
-        product = IPSW["product"],
-    )
+    roles = {}
+    for ipsw in IPSWS.values():
+        for role in ipsw.get("members", {}):
+            roles[role] = {}
+    stored = {}
+    for kind, ipsw in IPSWS.items():
+        for role in roles:
+            pin = ipsw.get("members", {}).get(role)
+            if not pin:
+                # A declared slot, or a kind without this member: analysis of anything that reads it fails, with why.
+                roles[role][kind] = "@@//bazel/ipsw:{}_unpinned".format(kind)
+                continue
+            repo = "ipsw_{}_{}".format(kind, role)
+            ipsw_member(
+                name = repo,
+                url = ipsw["url"],
+                member = pin["member"],
+                byte_range = "{}-{}".format(pin["offset"], pin["offset"] + pin["stored_size"] - 1),
+                output = "stored.deflate" if pin["deflated"] else _filename(pin),
+                sha256 = pin["sha256"],
+            )
+            if pin["deflated"]:
+                roles[role][kind] = "@@//bazel/ipsw:{}_{}".format(kind, role)
+                stored["stored_{}_{}".format(kind, role)] = "@{}//:stored.deflate".format(repo)
+            else:
+                roles[role][kind] = "@{}//:{}".format(repo, _filename(pin))
+    _ipsw_hub(name = "ipsw", members = json.encode(roles), stored = stored)
     return module_ctx.extension_metadata(reproducible = True)
 
 ipsw = module_extension(implementation = _ipsw_extension_impl)
+
+def ipsw_member_label(kind, role):
+    """The file of a stored (not deflated) member of a pinned kind, for repository rules (which cannot select())."""
+    pin = IPSWS[kind]["members"][role]
+    if pin["deflated"]:
+        fail("{} {} is deflated: only a build action inflates it".format(kind, role))
+    return Label("@@+ipsw+ipsw_{}_{}//:{}".format(kind, role, _filename(pin)))
+
+# --- The kind, and what rules read of it ----------------------------------------------------------------------------
+
+_UNPINNED = ("IPSW kind {kind} is declared in bazel/ipsw/pins.bzl but not pinned (or lacks this member): " +
+             "bazel run //bazel/ipsw:pin -- --kind=<its build> --replace={kind} <ipsw url> <product> <device class>")
+
+IpswInfo = provider(
+    doc = "The selected IPSW kind: its identity (pins.bzl, without the members) and derived pins.",
+    fields = {
+        "kind": "the kind's name (its build)",
+        "build": "ProductBuildVersion",
+        "version": "ProductVersion",
+        "product": "the product type the members are for",
+        "device_class": "the build identity's device class",
+        "derived": "dict: the pins of what the build derives from the members",
+        "pins": "the kind's pins.bzl entry without derived (what //install checks Preboot copies against)",
+    },
+)
+
+def _ipsw_info_impl(ctx):
+    kind = ctx.attr._kind[BuildSettingInfo].value
+    ipsw = IPSWS[kind]
+    if not ipsw.get("members"):
+        fail(_UNPINNED.format(kind = kind))
+    return [IpswInfo(
+        kind = kind,
+        build = ipsw["build"],
+        version = ipsw["version"],
+        product = ipsw["product"],
+        device_class = ipsw["device_class"],
+        derived = ipsw.get("derived", {}),
+        pins = {k: v for k, v in ipsw.items() if k != "derived"},
+    )]
+
+ipsw_info = rule(
+    implementation = _ipsw_info_impl,
+    doc = "IpswInfo of the kind --//bazel/ipsw:kind selects.",
+    attrs = {"_kind": attr.label(default = "//bazel/ipsw:kind")},
+)
+
+def _ipsw_unpinned_impl(ctx):
+    fail(_UNPINNED.format(kind = ctx.attr.kind))
+
+_ipsw_unpinned = rule(implementation = _ipsw_unpinned_impl, attrs = {"kind": attr.string()})
 
 def _ipsw_inflate_impl(ctx):
     out = ctx.actions.declare_file(ctx.label.name + "/" + ctx.attr.filename)
@@ -110,15 +185,38 @@ ipsw_inflate = rule(
     },
 )
 
-def ipsw_members():
-    """One ipsw_inflate per deflated member of bazel/ipsw/pins.bzl (in //bazel/ipsw)."""
-    for role, pin in IPSW["members"].items():
-        if pin["deflated"]:
+def ipsw_kinds():
+    """In //bazel/ipsw: the kind flag, a config_setting per kind, the deflated members inflated (<kind>_<role>), the
+    unpinned stand-ins (<kind>_unpinned) and :current (IpswInfo)."""
+    string_flag(
+        name = "kind",
+        build_setting_default = DEFAULT_KIND,
+        values = list(IPSWS),
+        visibility = ["//visibility:public"],
+    )
+    roles = {role: True for ipsw in IPSWS.values() for role in ipsw.get("members", {})}
+    for kind, ipsw in IPSWS.items():
+        native.config_setting(
+            name = kind,
+            flag_values = {":kind": kind},
+            visibility = ["//visibility:public"],
+        )
+        if [role for role in roles if role not in ipsw.get("members", {})]:
+            # What @ipsw//:<role> selects for a declared slot (or a kind without that member): analysis fails with
+            # the pin command. Manual, so `bazel build //...` does not analyze it.
+            _ipsw_unpinned(name = kind + "_unpinned", kind = kind, tags = ["manual"], visibility = ["//visibility:public"])
+        for role, pin in ipsw.get("members", {}).items():
+            if not pin["deflated"]:
+                continue
+            large = pin["stored_size"] > _LARGE
             ipsw_inflate(
-                name = role,
-                src = "@ipsw_{}//:stored.deflate".format(role),
-                filename = pin["member"].split("/")[-1],
+                name = "{}_{}".format(kind, role),
+                src = "@ipsw//:stored_{}_{}".format(kind, role),
+                filename = _filename(pin),
                 content_sha256 = pin["content_sha256"],
-                large = pin["stored_size"] > (256 << 20),
+                large = large,
+                # Only the SD install reads the large ones: `bazel build //...` leaves them alone.
+                tags = ["manual"] if large else [],
                 visibility = ["//visibility:public"],
             )
+    ipsw_info(name = "current", visibility = ["//visibility:public"])

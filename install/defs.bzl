@@ -1,16 +1,9 @@
 """Rules behind //install: the kernel-derived install spec, the IPSW pins as JSON, the install artifacts."""
 
-load("//bazel/ipsw:pins.bzl", "IPSW")
+load("//ipsw:defs.bzl", _ipsw_pins = "ipsw_pins")
 
-def _ipsw_pins_impl(ctx):
-    out = ctx.actions.declare_file(ctx.label.name + ".json")
-    ctx.actions.write(out, json.encode_indent(IPSW, indent = "  ") + "\n")
-    return [DefaultInfo(files = depset([out]))]
-
-ipsw_pins = rule(
-    implementation = _ipsw_pins_impl,
-    doc = "bazel/ipsw/pins.bzl as JSON (the installer checks Preboot copies against the content sha256s).",
-)
+# The selected IPSW kind's member pins as JSON (//ipsw:defs.bzl).
+ipsw_pins = _ipsw_pins
 
 def _install_spec_impl(ctx):
     out = ctx.actions.declare_file(ctx.label.name + ".json")

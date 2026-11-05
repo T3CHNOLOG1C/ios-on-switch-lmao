@@ -156,23 +156,11 @@ http_archive(
     urls = ["https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz"],
 )
 
-# --- iPadOS 17.7.11 (21H461) for iPad7,1: only the members the build and the SD install read, fetched by HTTP
-# range request into the repository cache (bazel/ipsw/pins.bzl, `bazel run //bazel/ipsw:pin` to bump). ---------
+# --- The IPSW: per IPSW kind (bazel/ipsw/pins.bzl, --//bazel/ipsw:kind), only the members the build and the SD install
+# read, fetched by HTTP range request into the repository cache (`bazel run //bazel/ipsw:pin` to pin a kind). The
+# build names them @ipsw//:<role>, the selected kind's. --------------------------------------------------------------
 ipsw = use_extension("//bazel/ipsw:ipsw.bzl", "ipsw")
-use_repo(
-    ipsw,
-    "ipsw",
-    # The deflated members' stored bytes, which //bazel/ipsw inflates.
-    "ipsw_app_cryptex",
-    "ipsw_app_cryptex_trust_cache",
-    "ipsw_device_tree",
-    "ipsw_kernelcache",
-    # The OS volume image itself (stored, not deflated): @gpu_apple_libs reads its Metal libraries.
-    "ipsw_os",
-    "ipsw_static_trust_cache",
-    "ipsw_system_cryptex",
-    "ipsw_system_cryptex_trust_cache",
-)
+use_repo(ipsw, "ipsw")
 
 # --- GPU (owned by gpu/) -----------------------------------------------------------------------------------------
 # Rust 1.98.0 (the bridge's `cargo +1.98.0`), with the iOS standard library: the Metal bridge is built by this

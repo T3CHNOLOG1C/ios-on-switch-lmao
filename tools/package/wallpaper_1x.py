@@ -16,7 +16,7 @@ volume's: no artwork is copied, and the 2x image is drawn into the 720x1280 pane
 
 The output is metadata only (identifiers, names, file names) and is pinned in bazel/pinned/overlay/wallpaper-1x/.
 
-Usage: wallpaper_1x.py [<OS volume .dmg> [<output directory>]]
+Usage: wallpaper_1x.py <OS volume .dmg> <output directory>   (the IPSW's OS member: @ipsw//:os, bazel/ipsw/pins.bzl)
 """
 import plistlib
 import subprocess
@@ -24,9 +24,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-DMG = ROOT / 'vendor/unixnu-qemu/.cache/firmware/target-volumes/044-76040-038.dmg'
-OUT = ROOT / 'bazel/pinned/overlay/wallpaper-1x'
 COLLECTIONS = 'Library/Wallpaper/Collections'
 # (collection, bundle, output name): the J120 bundles of the iPad's default collection and of Lake.
 BUNDLES = (
@@ -49,8 +46,9 @@ def one_x(data, name):
 
 
 def main():
-    dmg = Path(sys.argv[1]) if len(sys.argv) > 1 else DMG
-    out = Path(sys.argv[2]) if len(sys.argv) > 2 else OUT
+    if len(sys.argv) != 3:
+        raise SystemExit(__doc__)
+    dmg, out = Path(sys.argv[1]), Path(sys.argv[2])
     with tempfile.TemporaryDirectory() as mount:
         subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-noverify', '-mountpoint', mount, str(dmg)],
                        check=True, stdout=subprocess.DEVNULL)

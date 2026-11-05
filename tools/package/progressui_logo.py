@@ -11,7 +11,7 @@ upscaled) into a standard 300x300 RGBA PNG. The overlay (tree/overlay/manifest.j
 ProgressUI.framework; the logo is rotated for landscape by ProgressUI itself (ADT /chosen display-boot-rotation,
 package_raw_boot.py). The output stays under tree/build/ (not in git: it is Apple's artwork).
 
-Usage: progressui_logo.py [<OS volume .dmg> [<output .png>]]
+Usage: progressui_logo.py <OS volume .dmg> <output .png>   (the IPSW's OS member: @ipsw//:os, bazel/ipsw/pins.bzl)
 """
 import struct
 import subprocess
@@ -20,9 +20,6 @@ import tempfile
 import zlib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-DMG = ROOT / 'vendor/unixnu-qemu/.cache/firmware/target-volumes/044-76040-038.dmg'
-OUT = ROOT / 'out/native-a57/root-v1/tree/build/progressui/apple-logo~ipad.png'
 SOURCE = 'System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo@2x~ipad.png'
 
 
@@ -107,8 +104,9 @@ def write_png(path, width, height, rows):
 
 
 def main():
-    dmg = Path(sys.argv[1]) if len(sys.argv) > 1 else DMG
-    out = Path(sys.argv[2]) if len(sys.argv) > 2 else OUT
+    if len(sys.argv) != 3:
+        raise SystemExit(__doc__)
+    dmg, out = Path(sys.argv[1]), Path(sys.argv[2])
     with tempfile.TemporaryDirectory() as mount:
         subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-noverify', '-mountpoint', mount, str(dmg)],
                        check=True, stdout=subprocess.DEVNULL)

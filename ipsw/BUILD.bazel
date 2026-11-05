@@ -1,44 +1,26 @@
-# What the build derives from the IPSW's members (@ipsw//:<member>, fetched by range request; bazel/ipsw).
-load("//bazel/kernel:inputs.bzl", "tool_output")
+# What the build derives from the IPSW's members: @ipsw//:<role>, the kind --//bazel/ipsw:kind selects (fetched by
+# range request; bazel/ipsw). The kind's own pins (the decompressed kernelcache's sha256, ...) are in
+# bazel/ipsw/pins.bzl, which the rules read through //bazel/ipsw:current.
 load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "ipsw_kernelcache", "ipsw_static_trust")
 
 package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
 # The original kernelcache, decompressed: what the prelinker takes Apple's kexts from and the ABI checks read.
-# (vendor/unixnu's kernelcache.decompressed: IM4P 'krnl' payload, LZFSE, arm64 slice; pinned.)
-tool_output(
+ipsw_kernelcache(
     name = "kernelcache",
-    srcs = ["@ipsw//:kernelcache"],
-    outs = ["kernelcache.decompressed"],
-    args = [
-        "$(location @ipsw//:kernelcache)",
-        "{out}",
-        "--expect-type=krnl",
-        "--lzfse",
-        "--thin-arm64",
-        "--sha256=f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7",
-    ],
-    message = "Decompressing the 21H461 kernelcache",
-    tool = "im4p.py",
+    src = "@ipsw//:kernelcache",
+    out = "kernelcache.decompressed",
 )
 
 # The static trust cache bundle for the root and the OS cryptex (vendor/unixnu's original-static-system.bundle).
-tool_output(
+ipsw_static_trust(
     name = "static_system_trust",
-    srcs = [
-        "@ipsw//:static_trust_cache",
-        "@ipsw//:system_cryptex_trust_cache",
-    ],
-    outs = ["original-static-system.bundle"],
-    args = [
-        "{out}",
-        "$(location @ipsw//:static_trust_cache)",
-        "$(location @ipsw//:system_cryptex_trust_cache)",
-    ],
-    message = "Bundling the root and OS cryptex trust caches",
-    tool = "trust_bundle.py",
+    out = "original-static-system.bundle",
+    static = "@ipsw//:static_trust_cache",
+    system = "@ipsw//:system_cryptex_trust_cache",
 )
 
 # The App cryptex's trust cache (an IM4P 'trca'), as the package appends it.

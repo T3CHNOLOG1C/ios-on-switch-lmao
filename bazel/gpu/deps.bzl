@@ -19,7 +19,8 @@
 """
 
 load("//bazel/host:files.bzl", "sha256_lines")
-load("//bazel/ipsw:pins.bzl", "IPSW")
+load("//bazel/ipsw:ipsw.bzl", "ipsw_member_label")
+load("//bazel/ipsw:pins.bzl", "DEFAULT_KIND")
 
 M2V = {
     "commit": "720ef1ce9ae2a2068999a8675717418b9416283e",
@@ -311,7 +312,7 @@ def _gpu_impl(module_ctx):
     apple_libraries(
         name = "gpu_apple_libs",
         pins = Label("//bazel/gpu:apple-libs.sha256"),
-        image = Label("@ipsw_os//:" + IPSW["members"]["os"]["member"]),
+        image = ipsw_member_label(DEFAULT_KIND, "os"),
     )
     device_data(name = "gpu_device_data")
     return module_ctx.extension_metadata(reproducible = True)
