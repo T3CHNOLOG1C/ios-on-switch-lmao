@@ -45,24 +45,26 @@ inline bool ioswitchClientCopy(Memory *memory, uint8_t *bounce, uint32_t length,
     return true;
 }
 
-// The bytes [from, from + length) of a chain of requests that follow each other on the card (`next`; `sectors` of 512
-// bytes each), against bounce[0, length): `stage(request, offset in its memory, bounce address, bytes)` once for each
-// request the window touches, in chain order. False when a stage fails or the chain ends before the window does. The
-// bounce path uses it to move a chain longer than one SDMA command in pieces.
+// The bytes [from, from + length) of a chain of requests in rising card order (`next`; `lba`, `sectors` of 512 bytes),
+// against bounce[0, length): `stage(request, offset in its memory, bounce address, bytes)` once for each request the
+// window touches, in chain order, each at its own place in the chain ((lba - first's lba) * 512). The bounce path uses it
+// to move a chain longer than one SDMA command in pieces. r14-sdcq: a read chain may have gaps between its requests (the
+// card reads through them, IOSwitchQueue.h); with `gaps` the window's bytes in a gap are left alone. False when a stage
+// fails, or without `gaps` when part of the window lies in no request (a chain that ends before the window does, or a
+// gap: what a write puts on the card must all come from its requests).
 template <typename Request, typename Stage>
-inline bool ioswitchChainCopy(Request *first, uint32_t from, uint32_t length, uint8_t *bounce, Stage stage)
+inline bool ioswitchChainCopy(Request *first, uint32_t from, uint32_t length, uint8_t *bounce, Stage stage,
+                              bool gaps = false)
 {
-    for (Request *r = first; r && length; r = r->next) {
-        const uint32_t size = r->sectors * 512;
-        if (from >= size) {
-            from -= size;
-            continue;
-        }
-        const uint32_t n = size - from < length ? size - from : length;
-        if (!stage(r, from, bounce, n)) return false;
-        bounce += n;
-        length -= n;
-        from = 0;
+    const uint64_t base = first->lba, window = static_cast<uint64_t>(from) + length;
+    uint64_t covered = 0;
+    for (Request *r = first; r; r = r->next) {
+        const uint64_t at = (r->lba - base) * 512, end = at + static_cast<uint64_t>(r->sectors) * 512;
+        const uint64_t low = at > from ? at : from, high = end < window ? end : window;
+        if (low >= high) continue;
+        if (!stage(r, static_cast<uint32_t>(low - at), bounce + (low - from), static_cast<uint32_t>(high - low)))
+            return false;
+        covered += high - low;
     }
-    return !length;
+    return gaps || covered == length;
 }

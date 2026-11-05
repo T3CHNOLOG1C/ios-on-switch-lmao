@@ -172,9 +172,10 @@ int main()
     // touches is staged once, at its own offset and at the window's bounce offset; nothing else.
     struct Request {
         Request *next;
+        uint64_t lba;
         uint32_t sectors;
     };
-    Request c = {nullptr, 16}, b = {&c, 1}, a = {&b, 8};
+    Request c = {nullptr, 1009, 16}, b = {&c, 1008, 1}, a = {&b, 1000, 8};
     struct Stage {
         const Request *request;
         uint32_t offset;
@@ -208,6 +209,27 @@ int main()
         return ++stages < 2;
     }));
     assert(stages == 2);
+
+    // r14-sdcq: a read chain with gaps (8 sectors, a 4-sector gap, 1, a 3-sector gap, 16): each request at its card
+    // offset, the gaps' bytes untouched; without `gaps` a window over a gap is refused (writes never have one).
+    Request z = {nullptr, 1016, 16}, y = {&z, 1012, 1}, x = {&y, 1000, 8};
+    staged2.clear();
+    assert(ioswitchChainCopy(&x, 0, 32 * 512, window, record, true) && staged2.size() == 3);
+    assert(staged2[0].request == &x && staged2[0].offset == 0 && staged2[0].at == window && staged2[0].bytes == 4096);
+    assert(staged2[1].request == &y && staged2[1].offset == 0 && staged2[1].at == window + 12 * 512 &&
+           staged2[1].bytes == 512);
+    assert(staged2[2].request == &z && staged2[2].offset == 0 && staged2[2].at == window + 16 * 512 &&
+           staged2[2].bytes == 8192);
+    staged2.clear();
+    assert(!ioswitchChainCopy(&x, 0, 32 * 512, window, record));  // the same window, gaps not allowed
+    // A window that starts in a gap and ends inside the last request.
+    staged2.clear();
+    assert(ioswitchChainCopy(&x, 14 * 512, 4 * 512, window, record, true) && staged2.size() == 1);
+    assert(staged2[0].request == &z && staged2[0].offset == 0 && staged2[0].at == window + 2 * 512 &&
+           staged2[0].bytes == 1024);
+    // A window wholly inside a gap stages nothing.
+    staged2.clear();
+    assert(ioswitchChainCopy(&x, 9 * 512, 2 * 512, window, record, true) && staged2.empty());
 
     puts("PASS: sd client copy");
     return 0;

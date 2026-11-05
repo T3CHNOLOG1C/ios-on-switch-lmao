@@ -105,6 +105,13 @@ constexpr uint32_t kWriteChecks = 32, kLargeWriteChecks = 16;
 // kCmd23WriteChecks such writes of every boot are read back as proveWrite does for ADMA2's; one that differs is written
 // again through the bounce buffer (CMD12 framing) and writes go back to CMD12 until reboot.
 constexpr uint32_t kCmd23Pairs = 16, kCmd23WriteChecks = 16;
+// r14-sdcq: a read chain also takes queued reads that start up to kGapSectors past its end (or end that far before its
+// start), and the card reads straight through the gap into a sink nobody reads (IOSwitchQueue.h). On r7r a command cost
+// ~0.58 ms plus ~10 us per KiB moved (r12-sdio's model, 4 KiB reads at 0.62 ms): a 32 KiB gap is ~0.32 ms of transfer
+// against ~0.58 ms for the separate command it saves, so even the longest gap taken saves ~0.26 ms; kGapBudget keeps one
+// command's read-through to 64 KiB (~0.64 ms, against ~1.16 ms for the two commands its two longest gaps save). The first
+// kGapProofs such chains of every boot are read again by SDMA and compared before they complete (proveGaps).
+constexpr uint32_t kGapSectors = 32 * 1024 / kSector, kGapBudget = 64 * 1024 / kSector, kGapProofs = 8;
 // r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (prepareDirect, proveHigh).
 constexpr uint8_t kPoison = 0x5a;
 // r12-sdio: the most separate stretches of a read chain staged through the bounce buffer (IOSwitchAdmaStaging; consecutive
@@ -316,6 +323,7 @@ struct Batch {
     uint32_t sectors, count;
     bool write, direct, proving, issued, staged;
     bool cmd23;  // r14-sdcq: framed with Auto CMD23 (a multi-block ADMA2 command while that is on for its direction)
+    uint32_t gapSectors;  // r14-sdcq: of `sectors`, those in gaps between the requests (read and discarded)
     IOSwitchAdmaRefusal why;
     int issueStep;                // issue()'s result when the command never reached the card
     uint64_t beganNs, overlapNs;  // when beginBatch started; the previous chain's completions that ran inside this one
@@ -351,8 +359,9 @@ struct Stats {
     // the worker came back to them (no interrupt taken). Read chains that went by ADMA2 with some segments staged through
     // the bounce buffer, and those bytes.
     uint64_t overlapped, early, stagedChains, stagedBytes;
-    // r14-sdcq: data commands framed with Auto CMD23.
-    uint64_t cmd23;
+    // r14-sdcq: data commands framed with Auto CMD23; read chains with gaps, the gaps' bytes read through and discarded,
+    // and of those chains the ones compared with SDMA and found equal.
+    uint64_t cmd23, gapChains, gapBytes, gapProven;
 };
 }
 
@@ -471,6 +480,13 @@ class NativeIOSwitchBlock : public IOService {
     // different) and the CMD23 writes still to read back this boot.
     bool cmd23Reads = false, cmd23Writes = false;
     uint32_t cmd23WriteChecks = 0;
+    // r14-sdcq: read chains with gaps (IOSwitchQueue.h) while gapsOn: the sink their gaps are read into (kGapSectors,
+    // contiguous below 4 GiB, never read or written by the CPU after setup) and the proofs still to do this boot.
+    IOBufferMemoryDescriptor *sinkMemory = nullptr;
+    uint64_t sinkPA = 0;
+    bool gapsOn = false;
+    uint32_t gapProofs = 0;
+    bool inSink(uint64_t pa) const { return sinkPA && pa >= sinkPA && pa - sinkPA < uint64_t(kGapSectors) * kSector; }
     char admaWhy[128] = {};
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
@@ -544,6 +560,7 @@ class NativeIOSwitchBlock : public IOService {
     bool bounceChain(Request *first, uint32_t sectors);
     bool proveWrite(Request *first, uint32_t sectors, bool cmd23);
     bool proveHigh(Request *first, uint32_t sectors);
+    bool proveGaps(Request *first, uint32_t sectors);
     void releaseChecks();
     bool copyStaged();
     const char *checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages, uint32_t *highOk,
@@ -963,10 +980,12 @@ static bool cacheableRam(uint64_t page)
 // reads what the CPU wrote), clean+invalidate (before a read: no dirty line of the client's can later be evicted over
 // what the card wrote) or invalidate (after a read: drops what the A57 prefetched meanwhile). The table only holds whole
 // lines of managed RAM (IOSwitchAdma.h), so no other data shares a line and phystokv covers every page.
-template <int op> static void syncLines(const IOSwitchAdmaTable &table)
+// r14-sdcq: entries into [skip, skip + skipBytes) (the gap sink, which the CPU never touches) are left out.
+template <int op> static void syncLines(const IOSwitchAdmaTable &table, uint64_t skip = 0, uint64_t skipBytes = 0)
 {
     for (uint32_t i = 0; i < table.count; ++i) {
         uint64_t pa = ioswitchAdmaAddress(table.entries[i]);
+        if (pa - skip < skipBytes) continue;
         for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
             const uint64_t page = (pa | (kAdmaPage - 1)) + 1, stop = page < end ? page : end;
             for (uintptr_t at = phystokv(pa), last = at + (stop - pa); at < last; at += kAdmaLine) {
@@ -990,16 +1009,24 @@ IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sec
     staging.count = 0;
     table.limit = high.limit(write);
     const auto pageOk = [&](uint64_t page) { return cacheableRam(page) && high.pageOk(page, write); };
+    // r14-sdcq: a read chain's gaps go to the sink, one descriptor each (no gap is longer than the sink).
+    uint64_t lba = first->lba;
+    const auto gap = [&](const Request *r) -> uint64_t { return (r->lba - lba) * kSector; };
     if (!write && stagingOn) {
         // r12-sdio: a read's refused segments alone through the bounce buffer (IOSwitchAdmaStaging).
         staging.reset(&table, bouncePA, stages, kStages);
         table.limit = high.limit(write);
         for (Request *r = first; r; r = r->next) {
-            const IOSwitchAdmaRefusal why = staging.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
+            IOSwitchAdmaRefusal why = kAdmaOk;
+            if (gap(r))
+                why = gap(r) > uint64_t(kGapSectors) * kSector || !sinkPA ? kAdmaMissing
+                                                                          : staging.addSink(sinkPA, gap(r));
+            if (!why) why = staging.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
             if (why) {
                 staging.count = 0;
                 return why;
             }
+            lba = r->lba + r->sectors;
         }
         if (!staging.finish()) {
             staging.count = 0;
@@ -1008,8 +1035,12 @@ IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sec
         return table.bytes == uint64_t(sectors) * kSector ? kAdmaOk : kAdmaMissing;
     }
     for (Request *r = first; r; r = r->next) {
-        const IOSwitchAdmaRefusal why = table.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
+        IOSwitchAdmaRefusal why = kAdmaOk;
+        if (gap(r))
+            why = gap(r) > uint64_t(kGapSectors) * kSector || !sinkPA ? kAdmaMissing : table.addSealed(sinkPA, gap(r));
+        if (!why) why = table.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
         if (why) return why;
+        lba = r->lba + r->sectors;
     }
     return table.bytes == uint64_t(sectors) * kSector && table.finish() ? kAdmaOk : kAdmaMissing;
 }
@@ -1036,7 +1067,7 @@ void NativeIOSwitchBlock::prepareDirect(bool write, bool poison)
     if (write)
         syncLines<0>(table);
     else
-        syncLines<1>(table);
+        syncLines<1>(table, sinkPA, sinkPA ? uint64_t(kGapSectors) * kSector : 0);
     barrier();
     stats.syncNs += nowNs() - began;
 }
@@ -1059,20 +1090,21 @@ void NativeIOSwitchBlock::finishDirect(bool write)
 {
     if (write) return;
     const uint64_t began = nowNs();
-    syncLines<2>(table);
+    syncLines<2>(table, sinkPA, sinkPA ? uint64_t(kGapSectors) * kSector : 0);
     barrier();
     stats.syncNs += nowNs() - began;
 }
 
 // The chain's bytes [from, from + length) between the requests' memory and the start of `buffer` (the bounce buffer, or
-// the proofs' SDMA copy).
+// the proofs' SDMA copy). r14-sdcq: toward the requests a read chain's gaps are skipped; from the requests (a write, or a
+// read-back's comparison copy) every byte must come from one (ioswitchChainCopy).
 bool NativeIOSwitchBlock::stageChain(Request *first, uint32_t from, uint32_t length, uint8_t *buffer, bool toClient)
 {
     const uint64_t began = nowNs();
-    const bool ok =
-        ioswitchChainCopy(first, from, length, buffer, [&](Request *r, uint32_t offset, uint8_t *at, uint32_t n) {
-            return stage(r->buffer, offset, at, n, toClient);
-        });
+    const bool ok = ioswitchChainCopy(
+        first, from, length, buffer,
+        [&](Request *r, uint32_t offset, uint8_t *at, uint32_t n) { return stage(r->buffer, offset, at, n, toClient); },
+        toClient);
     stats.copyNs += nowNs() - began;
     return ok;
 }
@@ -1164,8 +1196,8 @@ bool NativeIOSwitchBlock::proveHigh(Request *first, uint32_t sectors)
     uint64_t at = 0, poisoned = 0, differs = UINT64_MAX, differsPA = 0;
     for (uint32_t i = 0; i < table.count; ++i) {
         uint64_t pa = ioswitchAdmaAddress(table.entries[i]);
-        if (pa >= bouncePA && pa - bouncePA < kBounceBytes) {
-            at += table.entries[i].length;
+        if ((pa >= bouncePA && pa - bouncePA < kBounceBytes) || inSink(pa)) {
+            at += table.entries[i].length;  // r14-sdcq: a gap's bytes in the sink are nobody's
             continue;
         }
         for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
@@ -1205,11 +1237,50 @@ bool NativeIOSwitchBlock::proveHigh(Request *first, uint32_t sectors)
     return repaired;
 }
 
+// r14-sdcq: the first kGapProofs read chains with gaps of every boot, right after their command: the command's blocks again
+// by SDMA into checkBuffer (the proven path, stopped by CMD12), and each request's bytes compared with their place there.
+// Equal: one proof more (the last one logs). Different: SDMA's bytes go into the requests, so they complete with the
+// proven path's data, and gap reads stay off until reboot (one line). If the SDMA read fails nothing is proven and the
+// chain is read again through the bounce buffer. False only when the requests' bytes could not be made right.
+bool NativeIOSwitchBlock::proveGaps(Request *first, uint32_t sectors)
+{
+    if (!checkBuffer) return true;
+    for (uint32_t done = 0; done < sectors;) {
+        const uint32_t n = sectors - done < kSafeSectors ? sectors - done : kSafeSectors;
+        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector)) return bounceChain(first, sectors);
+        done += n;
+    }
+    // Each request's bytes into the bounce buffer at its place in the command (the gaps' places stay as they are).
+    uint64_t differs = UINT64_MAX;
+    for (Request *r = first; r && differs == UINT64_MAX; r = r->next) {
+        const uint32_t at = static_cast<uint32_t>(r->lba - first->lba) * kSector, length = r->sectors * kSector;
+        if (!stage(r->buffer, 0, bounce + at, length, false))
+            return stageChain(first, 0, sectors * kSector, checkBuffer, true);
+        if (!memcmp(bounce + at, checkBuffer + at, length)) continue;
+        differs = at;
+        while (bounce[differs] == checkBuffer[differs]) ++differs;
+    }
+    if (differs == UINT64_MAX) {
+        ++stats.gapProven;
+        if (gapProofs && !--gapProofs)
+            IOLog("IOSwitchSD: gap reads proven: %u chains read through their gaps match SDMA\n", kGapProofs);
+        releaseChecks();
+        return true;
+    }
+    gapsOn = false;
+    IOLog("IOSwitchSD: read chain lba=%llu n=%u with gaps differs from SDMA at byte %llu; SDMA's copy used, "
+          "gap reads off until reboot\n",
+          first->lba, sectors, differs);
+    const bool repaired = stageChain(first, 0, sectors * kSector, checkBuffer, true);
+    releaseChecks();
+    return repaired;
+}
+
 // The proofs' SDMA buffer, once neither the first writes nor ADMA2 above 4 GiB need one.
 void NativeIOSwitchBlock::releaseChecks()
 {
     if (!checkBuffer || (admaWrites && (writeChecks || (largeWriteChecks && writeSectors > kSafeSectors))) ||
-        (adma && high.checking(admaWrites)) || (admaWrites && cmd23Writes && cmd23WriteChecks))
+        (adma && high.checking(admaWrites)) || (admaWrites && cmd23Writes && cmd23WriteChecks) || (gapsOn && gapProofs))
         return;
     IOFreeData(checkBuffer, kBounceBytes);
     checkBuffer = nullptr;
@@ -1230,6 +1301,13 @@ void NativeIOSwitchBlock::beginBatch(Batch &b)
     if (first->lba < firstSector || sectors > sectorCount || first->lba - firstSector > sectorCount - sectors)
         panic("IOSwitchSD: command lba=%llu n=%u outside the APFS partition [%llu, +%llu)", first->lba, sectors,
               firstSector, sectorCount);
+    // r14-sdcq: the sectors no request of the chain covers (a read chain's gaps). A write chain has none: every byte it
+    // puts on the card comes from its requests (pickLocked takes only the requests right behind a write).
+    uint64_t payload = 0;
+    for (const Request *r = first; r; r = r->next) payload += r->sectors;
+    if (first->write && payload != sectors)
+        panic("IOSwitchSD: write chain lba=%llu n=%u carries %llu sectors of requests", first->lba, sectors, payload);
+    b.gapSectors = static_cast<uint32_t>(sectors - payload);
     b.write = first->write;
     b.beganNs = nowNs();
     b.overlapNs = 0;
@@ -1293,6 +1371,8 @@ void NativeIOSwitchBlock::endBatch(Batch &b)
             result = kIOReturnIOError;
         } else if (b.proving) {
             if (!proveHigh(first, sectors)) result = kIOReturnIOError;
+        } else if (b.gapSectors && gapProofs) {
+            if (!proveGaps(first, sectors)) result = kIOReturnIOError;
         } else if (write &&
                    (writeChecks || high.writeCheckDue(write, table.high) ||
                     (sectors > kSafeSectors && largeWriteChecks) || (b.cmd23 && cmd23WriteChecks)) &&
@@ -1326,6 +1406,10 @@ void NativeIOSwitchBlock::endBatch(Batch &b)
     }
     const uint64_t span = nowNs() - b.beganNs, latency = span > b.overlapNs ? span - b.overlapNs : 0;
     stats.commands++;
+    if (b.gapSectors) {
+        ++stats.gapChains;
+        stats.gapBytes += uint64_t(b.gapSectors) * kSector;
+    }
     stats.busyNs += latency;
     (write ? stats.writeNs : stats.readNs) += latency;
     stats.merged += b.count - 1;
@@ -1390,20 +1474,21 @@ Request *NativeIOSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chain
     if (merge && mergeAnywhere && !first->write) {
         // r12-sdio: a read takes every queued read that continues it on the card, before or after it, wherever it is
         // queued, unless that read overlaps an older request still queued (IOSwitchQueue.h). Back in card order. The
-        // chain must tile its command exactly; one that does not (never seen; host-tested) stays queued as it was, and
-        // this boot goes back to the old rule, with one line.
+        // chain must fit its command exactly (tile it, but for gaps within the bounds); one that does not (never seen;
+        // host-tested) stays queued as it was, and this boot goes back to the old rule, with one line.
+        // r14-sdcq: and, while gap reads are on, queued reads up to kGapSectors away (kGapBudget per command).
         uint64_t start = 0;
-        count = ioswitchGatherReads(head, first, maxSectors, kMaxChain, kMergeScan, &start, &sectors);
-        if (ioswitchChainTiles(head, start, sectors, count)) {
+        const uint32_t gap = gapsOn ? kGapSectors : 0, budget = gapsOn ? kGapBudget : 0;
+        count = ioswitchGatherReads(head, first, maxSectors, kMaxChain, kMergeScan, &start, &sectors, gap, budget);
+        if (ioswitchChainFits(head, start, sectors, count, gap, budget)) {
             first = ioswitchUnlinkChain(head, tail, count);
             gathered = true;
         } else {
             ioswitchClearChain(head);
             mergeAnywhere = false;
-            IOLog(
-                "IOSwitchSD: read chain lba=%llu n=%u (%u requests) does not tile; reads merge only with the requests "
-                "right behind them until reboot\n",
-                start, sectors, count);
+            IOLog("IOSwitchSD: read chain lba=%llu n=%u (%u requests) does not fit; reads merge only with the requests "
+                  "right behind them until reboot\n",
+                  start, sectors, count);
             sectors = first->sectors;
             count = 1;
         }
@@ -1534,6 +1619,7 @@ void NativeIOSwitchBlock::logThroughput()
         passed = 0;
         IOLockUnlock(queueLock);
     }
+    // r14-sdcq: read chains with gaps and the KiB read through those gaps (gap chains/KiB).
     // r12-sdio: chains (cmds; the bounce path's extra SDMA pieces not counted; r14-sdcq: c23 of them framed with Auto
     // CMD23), SDMMC1 interrupts taken (irq), and of the
     // ADMA2 commands issued before the previous chain's completions ran, those that had already finished when the worker
@@ -1573,17 +1659,18 @@ void NativeIOSwitchBlock::logThroughput()
         "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
         "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu part %llu/%lluK vfy %llu "
         "wmax %uK 4G+ %s | "
-        "<=4K %llu%% seq %llu%% merged %llu q%u | cmds %llu c23 %llu irq %llu ovl %llu/%llu | err %llu adma %llu "
-        "retune %llu | "
+        "<=4K %llu%% seq %llu%% merged %llu gap %llu/%lluK q%u | cmds %llu c23 %llu irq %llu ovl %llu/%llu | err %llu "
+        "adma %llu retune %llu | "
         "%s %u.%02u MHz | wait ms%s",
         requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
         stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
         writeRate / 10, writeRate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000, stats.direct, bounced, bounces,
         perRequest / 10, perRequest % 10, stats.stagedChains, stats.stagedBytes >> 10, stats.verified,
         writeSectors * kSector / 1024, highState, requests ? stats.small * 100 / requests : 0,
-        requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.maxQueued, stats.commands, stats.cmd23,
-        __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early, stats.overlapped, stats.errors,
-        stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
+        requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.gapChains, stats.gapBytes >> 10,
+        stats.maxQueued, stats.commands, stats.cmd23, __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early,
+        stats.overlapped, stats.errors, stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10,
+        classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
 }
 
@@ -2681,6 +2768,38 @@ bool NativeIOSwitchBlock::setup()
                           cmd23Writes ? " and writes" : "", cmd23Writes ? ", the first CMD23 writes read back" : "");
                 }
             }
+            // r14-sdcq: gap reads need the sink and, for their proofs, checkBuffer; queue merging must be on.
+            sinkMemory = checkBuffer && merge ? IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+                                                    kernel_task,
+                                                    static_cast<IOOptionBits>(kIODirectionInOut) |
+                                                        static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
+                                                    kGapSectors * kSector, 0x00000000ffffffffull & ~(kAdmaPage - 1))
+                                              : nullptr;
+            if (sinkMemory) {
+                sinkPA = sinkMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
+                auto *sinkBytes = static_cast<uint8_t *>(sinkMemory->getBytesNoCopy());
+                if (!sinkBytes || !sinkPA || (sinkPA & (kAdmaPage - 1)) ||
+                    sinkPA + kGapSectors * kSector > (1ull << 32) || !cacheableRam(sinkPA)) {
+                    sinkPA = 0;
+                } else {
+                    // No line of the sink is dirty in the cache from here on: the engine's writes there are never
+                    // overwritten by an eviction, and nobody reads them.
+                    for (uintptr_t at = (uintptr_t)sinkBytes, end = at + kGapSectors * kSector; at < end;
+                         at += kAdmaLine)
+                        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+                    barrier();
+                }
+            }
+            gapsOn = sinkPA != 0;
+            gapProofs = gapsOn ? kGapProofs : 0;
+            if (gapsOn)
+                IOLog("IOSwitchSD: gap reads on: a read chain takes queued reads up to %u KiB beyond it (%u KiB per "
+                      "command), the card reading through the gap; the first %u such chains are compared with SDMA\n",
+                      kGapSectors * kSector / 1024, kGapBudget * kSector / 1024, kGapProofs);
+            else
+                IOLog("IOSwitchSD: gap reads off (%s)\n", !checkBuffer ? "no buffer for their proofs"
+                                                          : !merge     ? "boot-arg ioswitch-sd-merge=0"
+                                                                       : "no sink page below 4 GiB");
         } else {
             IOLog("IOSwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);
         }

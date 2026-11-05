@@ -43,7 +43,7 @@ struct Table {
     IOSwitchAdmaTable t;
     explicit Table(uint32_t capacity = 1024, uint64_t limit = 1ull << 34) : entries(capacity + 1)
     {
-        t = {entries.data(), capacity, limit, 0, 0, 0};
+        t = {entries.data(), capacity, limit, 0, 0, 0, 0};
         // A guard entry past the capacity: the builder must never write it.
         entries[capacity] = {0xdead, 0xbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef};
     }
@@ -570,6 +570,98 @@ static void stagingRandom()
     assert(stagedTotal > 0 && straightTotal > 0);  // both kinds were exercised
 }
 
+// r14-sdcq: a read chain with gaps: each gap one descriptor into the sink, between the requests' own descriptors; staged
+// runs keep their place in the chain (their bounce offsets count the gaps), and a run open before a gap closes there.
+static void sinkCases()
+{
+    constexpr uint64_t kSink = 0x88000000ull;
+    std::vector<Staging::Stage> stages(64);
+    // Straight requests with a 4 KiB and a 512-byte gap.
+    {
+        Memory a, b, c;
+        a.runs = {{0x80001000, 0x1000}};
+        b.runs = {{0x80003000, 0x2000}};
+        c.runs = {{0x80008000, 0x200}};
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x1000, anyPage) && !st.addSink(kSink, 0x1000) && !st.addMemory(&b, 0x2000, anyPage));
+        assert(!st.addSink(kSink, 0x200) && !st.addMemory(&c, 0x200, anyPage) && st.finish());
+        assert(st.count == 0 && st.at == 0x4400);
+        checkTable(t.t,
+                   {{0x80001000, 0x1000}, {kSink, 0x1000}, {0x80003000, 0x2000}, {kSink, 0x200}, {0x80008000, 0x200}});
+        checkStagedTable(t.t, 0x4400);
+    }
+    // A staged run before a gap ends at the gap; a staged segment after it sits at its chain offset (gap included).
+    {
+        Memory a, b;
+        a.runs = {{0x123400000ull, 0x1000}};
+        b.runs = {{0x123500000ull, 0x1000}};
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x1000, anyPage) && !st.addSink(kSink, 0x800) && !st.addMemory(&b, 0x1000, anyPage));
+        assert(st.finish() && st.count == 2 && stages[0].at == 0 && stages[1].at == 0x1800 && st.staged == 0x2000);
+        checkTable(t.t, {{kBounce, 0x1000}, {kSink, 0x800}, {kBounce + 0x1800, 0x1000}});
+    }
+    // Plain tables (no staging) take the sink the same way, and two gaps never merge into one descriptor.
+    {
+        Memory a, b, c;
+        a.runs = {{0x80001000, 0x200}};
+        b.runs = {{0x80002000, 0x200}};
+        c.runs = {{0x80003000, 0x200}};
+        Table t(1024, 1ull << 32);
+        assert(!t.t.addMemory(&a, 0x200, anyPage) && !t.t.add(kSink, 0x400, anyPage) &&
+               !t.t.addMemory(&b, 0x200, anyPage));
+        assert(!t.t.add(kSink, 0x400, anyPage) && !t.t.addMemory(&c, 0x200, anyPage) && t.t.finish());
+        assert(t.t.count == 5);
+        checkTable(t.t,
+                   {{0x80001000, 0x200}, {kSink, 0x400}, {0x80002000, 0x200}, {kSink, 0x400}, {0x80003000, 0x200}});
+    }
+    // The sink and staged runs never share a descriptor with a request's pages, whatever is next to them in physical
+    // memory: a client run ending right where the sink starts, the longest gap followed by a client page right after the
+    // sink, a staged run in the bounce buffer with a client page right below it and one right after it.
+    {
+        Memory a, b;
+        a.runs = {{kSink - 0x1000, 0x1000}};
+        b.runs = {{kSink + 0x8000, 0x1000}};
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x1000, anyPage) && !st.addSink(kSink, 0x8000) && !st.addMemory(&b, 0x1000, anyPage));
+        assert(st.finish() && t.t.count == 3);
+        checkTable(t.t, {{kSink - 0x1000, 0x1000}, {kSink, 0x8000}, {kSink + 0x8000, 0x1000}});
+        Table plain(1024, 1ull << 32);
+        assert(!plain.t.addMemory(&a, 0x1000, anyPage) && !plain.t.addSealed(kSink, 0x8000));
+        assert(!plain.t.addMemory(&b, 0x1000, anyPage) && plain.t.finish() && plain.t.count == 3);
+        // Ordinary contiguous memory still merges after a sealed descriptor's neighbour.
+        Memory c;
+        c.runs = {{kSink + 0x9000, 0x1000}};
+        assert(!plain.t.addMemory(&c, 0x1000, anyPage) && plain.t.count == 3);
+    }
+    {
+        Memory below, high, above;
+        below.runs = {{kBounce - 0x1000, 0x1000}};
+        high.runs = {{0x123400000ull, 0x1000}};
+        above.runs = {{kBounce + 0x2000, 0x1000}};  // where the run (chain offset 0x1000, 0x1000 long) ends
+        Table t(1024, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&below, 0x1000, anyPage) && !st.addMemory(&high, 0x1000, anyPage));
+        assert(!st.addMemory(&above, 0x1000, anyPage) && st.finish() && t.t.count == 3);
+        checkTable(t.t, {{kBounce - 0x1000, 0x1000}, {kBounce + 0x1000, 0x1000}, {kBounce + 0x2000, 0x1000}});
+    }
+    // A full table refuses the sink like any other descriptor.
+    {
+        Memory a;
+        a.runs = {{0x80001000, 0x200}};
+        Table t(1, 1ull << 32);
+        Staging st;
+        st.reset(&t.t, kBounce, stages.data(), 64);
+        assert(!st.addMemory(&a, 0x200, anyPage) && st.addSink(kSink, 0x200) == kAdmaFull);
+    }
+}
+
 int main()
 {
     layout();
@@ -582,6 +674,7 @@ int main()
     highProof();
     stagingCases();
     stagingRandom();
+    sinkCases();
     puts("PASS: sd adma2 tables");
     return 0;
 }

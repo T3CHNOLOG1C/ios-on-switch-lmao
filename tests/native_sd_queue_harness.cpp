@@ -52,18 +52,25 @@ struct Picked {
     uint32_t sectors;
 };
 
-static Picked pick(Queue &q, int first, uint32_t limit = 2048, uint32_t maxCount = 256, unsigned scan = 128)
+static Picked pick(Queue &q, int first, uint32_t limit = 2048, uint32_t maxCount = 256, unsigned scan = 128,
+                   uint32_t maxGap = 0, uint32_t budget = 0)
 {
     Picked p{};
-    const uint32_t count = ioswitchGatherReads(q.head, q.at(first), limit, maxCount, scan, &p.start, &p.sectors);
-    assert(ioswitchChainTiles(q.head, p.start, p.sectors, count));  // what the driver checks before unlinking
+    const uint32_t count =
+        ioswitchGatherReads(q.head, q.at(first), limit, maxCount, scan, &p.start, &p.sectors, maxGap, budget);
+    // What the driver checks before unlinking.
+    assert(ioswitchChainFits(q.head, p.start, p.sectors, count, maxGap, budget));
+    if (!maxGap && !budget) assert(ioswitchChainTiles(q.head, p.start, p.sectors, count));
     Request *chain = ioswitchUnlinkChain(q.head, q.tail, count);
-    uint64_t at = p.start;
+    uint64_t at = p.start, gaps = 0;
     for (Request *r = chain; r; r = r->next) {
-        assert(r->lba == at && !r->write && !r->chained);
-        at += r->sectors;
+        // Card order; each gap within the bound (none without gaps).
+        assert(r->lba >= at && r->lba - at <= maxGap && !r->write && !r->chained);
+        gaps += r->lba - at;
+        at = r->lba + r->sectors;
         p.chain.push_back(r->id);
     }
+    assert(chain->lba == p.start && gaps <= budget);
     assert(p.chain.size() == count && at == p.start + p.sectors && p.sectors <= limit);
     for (const Request *r = q.head; r; r = r->next) assert(!r->chained);
     q.checkTail();
@@ -259,6 +266,113 @@ static void tiling()
     assert((q.ids() == std::vector<int>{0, 1, 2, 3, 4}));
 }
 
+// r14-sdcq: reads that are near the chain but do not continue it join through a gap, within the bounds.
+static void gaps()
+{
+    // A read 8 sectors past the chain's end joins (gap 8); one 65 sectors past does not (bound 64).
+    {
+        Queue q({{100, 8, false}, {116, 8, false}, {189, 8, false}});
+        Picked p = pick(q, 0, 2048, 256, 128, 64, 128);
+        assert((p.chain == std::vector<int>{0, 1}) && p.start == 100 && p.sectors == 24);
+        assert(q.ids() == std::vector<int>{2});
+    }
+    // ...before the chain's start too, and exactly at the bound.
+    {
+        Queue q({{1000, 8, false}, {928, 8, false}});
+        Picked p = pick(q, 0, 2048, 256, 128, 64, 128);
+        assert((p.chain == std::vector<int>{1, 0}) && p.start == 928 && p.sectors == 80);
+    }
+    // Without gap bounds nothing changes: the same queue tiles only.
+    {
+        Queue q({{100, 8, false}, {116, 8, false}});
+        assert(pick(q, 0).chain == std::vector<int>{0});
+    }
+    // The budget: two 40-sector gaps fit 128 but not 64; the second stays queued.
+    {
+        Queue q({{100, 8, false}, {148, 8, false}, {196, 8, false}});
+        assert((pick(q, 0, 2048, 256, 128, 64, 128).chain == std::vector<int>{0, 1, 2}));
+        Queue r({{100, 8, false}, {148, 8, false}, {196, 8, false}});
+        Picked p = pick(r, 0, 2048, 256, 128, 64, 64);
+        assert((p.chain == std::vector<int>{0, 1}) && r.ids() == std::vector<int>{2});
+    }
+    // A read inside a gap fills it (taken in a later pass, or in the same one after the far read).
+    {
+        Queue q({{100, 8, false}, {124, 8, false}, {108, 8, false}});
+        Picked p = pick(q, 0, 2048, 256, 128, 64, 128);
+        assert((p.chain == std::vector<int>{0, 2, 1}) && p.sectors == 32);
+    }
+    // ...but not when it overlaps a member: it stays queued.
+    {
+        Queue q({{100, 8, false}, {124, 8, false}, {104, 8, false}});
+        Picked p = pick(q, 0, 2048, 256, 128, 64, 128);
+        assert((p.chain == std::vector<int>{0, 1}) && q.ids() == std::vector<int>{2});
+    }
+    // The command length counts the gaps.
+    {
+        Queue q({{0, 8, false}, {40, 8, false}});
+        assert(pick(q, 0, 40, 256, 128, 64, 128).chain == std::vector<int>{0});
+        Queue r({{0, 8, false}, {40, 8, false}});
+        assert((pick(r, 0, 48, 256, 128, 64, 128).chain == std::vector<int>{0, 1}));
+    }
+    // A gap never lets a read pass an older write it overlaps, nor take a write.
+    {
+        Queue q({{100, 8, false}, {120, 8, true}, {120, 8, false}, {140, 8, true}});
+        Picked p = pick(q, 0, 2048, 256, 128, 64, 128);
+        assert(p.chain == std::vector<int>{0} && (q.ids() == std::vector<int>{1, 2, 3}));
+    }
+    // A write between the members on the card (in a gap) is no obstacle: the gap's bytes are discarded.
+    {
+        Queue q({{100, 8, false}, {110, 4, true}, {120, 8, false}});
+        Picked p = pick(q, 0, 2048, 256, 128, 64, 128);
+        assert((p.chain == std::vector<int>{0, 2}) && q.ids() == std::vector<int>{1});
+    }
+    // ioswitchChainFits: the bounds it checks.
+    {
+        Queue q({{100, 8, false}, {116, 8, false}, {180, 8, false}});
+        auto mark = [&](std::vector<int> ids) {
+            ioswitchClearChain(q.head);
+            for (int id : ids) q.at(id)->chained = true;
+        };
+        mark({0, 1});
+        assert(ioswitchChainFits(q.head, 100, 24, 2, 8, 8) && !ioswitchChainFits(q.head, 100, 24, 2, 7, 8) &&
+               !ioswitchChainFits(q.head, 100, 24, 2, 8, 7) && !ioswitchChainTiles(q.head, 100, 24, 2));
+        assert(!ioswitchChainFits(q.head, 100, 28, 2, 64, 64));  // the range must end with a member
+        assert(!ioswitchChainFits(q.head, 96, 28, 2, 64, 64));   // ...and start with one
+        mark({0, 1, 2});
+        assert(ioswitchChainFits(q.head, 100, 88, 3, 56, 64) && !ioswitchChainFits(q.head, 100, 88, 3, 55, 64));
+        ioswitchClearChain(q.head);
+    }
+}
+
+// Random queues with gap bounds: whatever joins fits the bounds, and no read moves ahead of an older overlapping request.
+static void randomGaps()
+{
+    std::mt19937_64 random(0x9a95);
+    for (unsigned round = 0; round < 20000; ++round) {
+        const unsigned n = 1 + unsigned(random() % 40);
+        std::vector<std::tuple<uint64_t, uint32_t, bool>> items;
+        for (unsigned i = 0; i < n; ++i)
+            items.push_back({(random() % 128) * 4, 4 * uint32_t(1 + random() % 4), random() % 5 == 0});
+        Queue q(items);
+        std::vector<int> reads;
+        for (unsigned i = 0; i < n; ++i)
+            if (!std::get<2>(items[i])) reads.push_back(int(i));
+        if (reads.empty()) continue;
+        const int first = reads[random() % reads.size()];
+        const uint32_t maxGap = uint32_t(random() % 3) * 16, budget = maxGap * uint32_t(random() % 3);
+        const uint32_t limit = random() % 2 ? 2048 : 16 * uint32_t(1 + random() % 8);
+        if (std::get<1>(items[size_t(first)]) > limit) continue;
+        Picked p = pick(q, first, limit, 256, 128, maxGap, budget);  // pick() checks bounds, order and fit
+        std::vector<bool> taken(n);
+        for (int id : p.chain) taken[size_t(id)] = true;
+        for (int id : p.chain) {
+            if (id == first) continue;
+            for (int older = 0; older < id; ++older)
+                if (!taken[size_t(older)]) assert(!ioswitchOverlaps(&q.storage[size_t(older)], &q.storage[size_t(id)]));
+        }
+    }
+}
+
 int main()
 {
     tiling();
@@ -266,6 +380,8 @@ int main()
     ordering();
     limits();
     randomQueues();
+    gaps();
+    randomGaps();
     puts("PASS: sd queue merging");
     return 0;
 }

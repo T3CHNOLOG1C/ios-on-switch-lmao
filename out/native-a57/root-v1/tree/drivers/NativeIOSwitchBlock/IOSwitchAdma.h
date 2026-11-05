@@ -56,13 +56,15 @@ struct IOSwitchAdmaTable {
     uint64_t limit;  // the first physical address the engine may not reach
     uint32_t count;
     uint64_t bytes;
-    uint64_t high;  // of `bytes`, those at or above 4 GiB (the engine's high address word in use)
+    uint64_t high;    // of `bytes`, those at or above 4 GiB (the engine's high address word in use)
+    uint32_t sealed;  // r14-sdcq: while count == sealed the last descriptor takes no more bytes (addSealed)
 
     void reset()
     {
         count = 0;
         bytes = 0;
         high = 0;
+        sealed = 0;
     }
 
     // Why [pa, pa + length) may not go straight to the card, or kAdmaOk; changes nothing.
@@ -87,7 +89,8 @@ struct IOSwitchAdmaTable {
             const uint64_t boundary = (pa | (kAdma4GiB - 1)) + 1;
             IOSwitchAdmaDescriptor *last = count ? &entries[count - 1] : nullptr;
             uint64_t room = 0;
-            if (last && (static_cast<uint64_t>(last->addressHigh) << 32 | last->addressLow) + last->length == pa &&
+            if (last && count != sealed &&
+                (static_cast<uint64_t>(last->addressHigh) << 32 | last->addressLow) + last->length == pa &&
                 pa != (pa & ~(kAdma4GiB - 1)))
                 room = kAdmaMaxLength - last->length;
             if (!room) {
@@ -104,6 +107,18 @@ struct IOSwitchAdmaTable {
             bytes += n;
         }
         return kAdmaOk;
+    }
+
+    // r14-sdcq: [pa, pa + length) in descriptors of their own: they continue no earlier descriptor and no later bytes
+    // continue them, whatever lies next to them in physical memory. For the driver's own buffers in a request's table
+    // (a gap's sink, a run staged in the bounce buffer): the cache maintenance and the proofs pass over those descriptors
+    // by their start address, which must never take a request's page along (or a request's descriptor theirs).
+    IOSwitchAdmaRefusal addSealed(uint64_t pa, uint64_t length)
+    {
+        sealed = count;
+        const IOSwitchAdmaRefusal refusal = add(pa, length, [](uint64_t) { return true; });
+        sealed = count;
+        return refusal;
     }
 
     // The first `length` bytes of `memory`, one physical segment at a time (getPhysicalSegment, CPU addresses).
@@ -177,7 +192,7 @@ template <typename Memory> struct IOSwitchAdmaStaging {
     IOSwitchAdmaRefusal closeRun()
     {
         if (run == kNoRun) return kAdmaOk;
-        const IOSwitchAdmaRefusal refusal = table->add(bouncePA + run, at - run, [](uint64_t) { return true; });
+        const IOSwitchAdmaRefusal refusal = table->addSealed(bouncePA + run, at - run);
         run = kNoRun;
         return refusal;
     }
@@ -212,6 +227,17 @@ template <typename Memory> struct IOSwitchAdmaStaging {
             at += segment;
             done += segment;
         }
+        return kAdmaOk;
+    }
+
+    // r14-sdcq: `length` bytes of a read chain's gap (IOSwitchQueue.h), read into the sink at `pa`, which nothing reads: a
+    // descriptor of its own (the open run closed first), so the chain's offsets after it stay right. `pa` is physically
+    // contiguous, cacheable RAM below 4 GiB, line-aligned, as long as the longest gap.
+    IOSwitchAdmaRefusal addSink(uint64_t pa, uint64_t length)
+    {
+        if (const IOSwitchAdmaRefusal refusal = closeRun()) return refusal;
+        if (const IOSwitchAdmaRefusal refusal = table->addSealed(pa, length)) return refusal;
+        at += length;
         return kAdmaOk;
     }
 

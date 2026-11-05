@@ -11,6 +11,12 @@
 //   the same blocks (the same rule the r6-lows priority pass applies to its pick);
 // - the chain stays within one command (`limit` sectors, `maxCount` requests).
 // The chain comes back in card order (rising LBA), so the descriptor table and the bounce path walk it as before.
+//
+// r14-sdcq: with `maxGap` and `gapBudget` (sectors) a queued read also joins when it starts up to `maxGap` past the chain's
+// end (or ends up to `maxGap` before its start), or falls inside the chain's range without overlapping a member: the
+// card reads straight through the gaps between members, into a sink the driver never looks at, so two nearby reads cost
+// one command plus the gap's transfer instead of two commands. No single gap is longer than `maxGap` and all of one
+// chain's gaps add up to at most `gapBudget`. With both 0 (the default) nothing changes: members tile the range.
 #pragma once
 
 #include <stdint.h>
@@ -20,33 +26,47 @@ template <typename Request> inline bool ioswitchOverlaps(const Request *a, const
     return a->lba < b->lba + b->sectors && b->lba < a->lba + a->sectors;
 }
 
-// Marks `first` and the reads that join it (`chained`), returns how many, and the chain's first LBA and length. `first`
-// is in the queue; nothing is unlinked yet (ioswitchUnlinkChain does that).
+// Marks `first` and the reads that join it (`chained`), returns how many, and the chain's first LBA and length (gaps
+// included). `first` is in the queue; nothing is unlinked yet (ioswitchUnlinkChain does that).
 template <typename Request>
 inline uint32_t ioswitchGatherReads(Request *head, Request *first, uint32_t limit, uint32_t maxCount, unsigned scan,
-                                    uint64_t *start, uint32_t *sectors)
+                                    uint64_t *start, uint32_t *sectors, uint32_t maxGap = 0, uint32_t gapBudget = 0)
 {
     first->chained = true;
-    uint64_t low = first->lba, high = first->lba + first->sectors;
+    uint64_t low = first->lba, high = first->lba + first->sectors, payload = first->sectors;
     uint32_t count = 1;
     // Passes over the queue until one adds nothing: requests queued in rising order join in one pass.
-    for (bool grew = true; grew && count < maxCount && high - low < limit;) {
+    for (bool grew = true; grew && count < maxCount;) {
         grew = false;
         unsigned seen = 0;
         for (Request *r = head; r && seen < scan && count < maxCount; r = r->next, ++seen) {
             if (r->write || r->chained) continue;
-            const bool after = r->lba == high, before = r->lba + r->sectors == low;
-            if ((!after && !before) || high - low + r->sectors > limit) continue;
+            const uint64_t from = r->lba, to = r->lba + r->sectors;
+            uint64_t newLow = low, newHigh = high, gap = 0;
+            bool inside = false;
+            if (from >= high) {
+                gap = from - high;
+                newHigh = to;
+            } else if (to <= low) {
+                gap = low - to;
+                newLow = from;
+            } else if (maxGap && from >= low && to <= high) {
+                inside = true;  // fills (part of) a gap, if it overlaps no member
+            } else {
+                continue;
+            }
+            if (gap > maxGap || newHigh - newLow > limit) continue;
             bool overlaps = false;
             for (const Request *older = head; older != r && !overlaps; older = older->next)
                 overlaps = !older->chained && ioswitchOverlaps(older, r);
-            if (overlaps) continue;
+            for (const Request *member = head; inside && member && !overlaps; member = member->next)
+                overlaps = member->chained && ioswitchOverlaps(member, r);
+            if (overlaps || (newHigh - newLow) - (payload + r->sectors) > gapBudget) continue;
             r->chained = true;
             ++count;
-            if (after)
-                high += r->sectors;
-            else
-                low -= r->sectors;
+            payload += r->sectors;
+            low = newLow;
+            high = newHigh;
             grew = true;
         }
     }
@@ -55,23 +75,44 @@ inline uint32_t ioswitchGatherReads(Request *head, Request *first, uint32_t limi
     return count;
 }
 
-// Whether the `count` requests marked `chained` are reads that tile [start, start + sectors) exactly: inside it, pairwise
-// disjoint, their lengths adding up to it. The driver checks this before it unlinks a chain (ioswitchGatherReads is
-// host-tested, but a chain that does not tile would put the card's bytes in the wrong requests).
+// Whether the `count` requests marked `chained` are reads that fit [start, start + sectors) as a chain may: inside it,
+// pairwise disjoint, one starting at `start` and one ending at its end, no gap between neighbours longer than `maxGap`
+// and the gaps together at most `gapBudget`. With both 0: they tile it exactly. The driver checks this before it unlinks
+// a chain (ioswitchGatherReads is host-tested, but a chain that does not fit would put the card's bytes in the wrong
+// requests).
 template <typename Request>
-inline bool ioswitchChainTiles(const Request *head, uint64_t start, uint32_t sectors, uint32_t count)
+inline bool ioswitchChainFits(const Request *head, uint64_t start, uint32_t sectors, uint32_t count, uint32_t maxGap,
+                              uint32_t gapBudget)
 {
     uint64_t total = 0;
     uint32_t found = 0;
+    bool atStart = false, atEnd = false;
     for (const Request *r = head; r; r = r->next) {
         if (!r->chained) continue;
         ++found;
         if (r->write || !r->sectors || r->lba < start || r->lba + r->sectors > start + sectors) return false;
         total += r->sectors;
-        for (const Request *other = r->next; other; other = other->next)
-            if (other->chained && ioswitchOverlaps(r, other)) return false;
+        atStart |= r->lba == start;
+        atEnd |= r->lba + r->sectors == start + sectors;
+        // Disjoint from every other member, and the gap before it (to the nearest member ending at or before it).
+        uint64_t before = start;
+        for (const Request *other = head; other; other = other->next) {
+            if (!other->chained || other == r) continue;
+            if (ioswitchOverlaps(r, other)) return false;
+            const uint64_t end = other->lba + other->sectors;
+            if (end <= r->lba && end > before) before = end;
+        }
+        if (r->lba - before > maxGap) return false;
     }
-    return found == count && total == sectors;
+    if (!found) return !count && !sectors;
+    return found == count && atStart && atEnd && total <= sectors && sectors - total <= gapBudget;
+}
+
+// The same with no gaps: the members tile [start, start + sectors) exactly.
+template <typename Request>
+inline bool ioswitchChainTiles(const Request *head, uint64_t start, uint32_t sectors, uint32_t count)
+{
+    return ioswitchChainFits(head, start, sectors, count, 0, 0);
 }
 
 // Clears every `chained` mark (a chain that failed ioswitchChainTiles stays queued as it was).
