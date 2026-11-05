@@ -18,16 +18,16 @@ extern "C" {
 //                           SwitchBluetooth has programmed the controller's address (switch_joycon_bluetooth_address),
 //                           each rail Joy-Con's active pairing slot is read, and the Joy-Con is paired to that address
 //                           over the rail unless the slot already names it; the link key is published for joyconpaird
-//                           to hand to bluetoothd (helper/). switch-joycon-bt=1 is the old name and does the same;
+//                           to hand to bluetoothd (helper/). switch-joycon-bt=1 is an alias;
 //   switch-gc-personality=1 use iPadOS's own AppleGameControllerPersonality.kext personalities (Xbox, DualShock 4,
 //                           DualSense, Luna, Nintendo, and the generic-gamepad AppleGCHIDEventDummyService) instead of
 //                           this driver's Nintendo-only set. Needs the kext in the prelink set (panics if it is not);
 //                           without the boot-arg its personalities are taken out of the catalogue at start, so a kernel
 //                           that has it prelinked boots as one without it (SwitchJoyConHID.cpp);
-//   switch-joycon-nfc=1     Joy-Con (R) / Pro Controller NFC (dropped 11-04: off, and joyconnfc is not in the overlay;
-//                           launchd would not load its plist from there anyway): the rail keeps feeding GameController
-//                           standard reports while the NFC/IR MCU streams 0x31 reports, and the SwitchJoyConNFC marker
-//                           service is published for joyconnfc (helper/).
+//   switch-joycon-nfc=1     Joy-Con (R) / Pro Controller NFC (joyconnfc is not in the overlay, and launchd would not
+//                           load its plist from there): the rail keeps feeding GameController standard reports while
+//                           the NFC/IR MCU streams 0x31 reports, and the SwitchJoyConNFC marker service is published
+//                           for joyconnfc (helper/).
 // Thread context, after bsd_autoconf() with the GIC up (the board thread). Idempotent. Returns 0; failures panic.
 int switch_joycon_start(void);
 
@@ -42,7 +42,7 @@ void switch_joycon_resume(void);
 
 // Display power (thread context, may sleep; no-ops unless the rail driver runs). Off: both rails stop all traffic (no
 // timer runs, the detect interrupt is masked, rail HID devices terminated; charging is left as it is). On: both rails
-// wait for Joy-Cons again, and a seated one is handshaken as on a fresh attach. Not called since r15: SwitchBacklight
+// wait for Joy-Cons again, and a seated one is handshaken as on a fresh attach. Nothing calls it: SwitchBacklight
 // leaves the rails running with the panel off, so a seated Joy-Con (R)'s Home wakes the console as on Horizon
 // (../SwitchSuspend/SwitchWakeSources.h); the rails stop only for system sleep (switch_joycon_suspend).
 void switch_joycon_display_power(bool on);

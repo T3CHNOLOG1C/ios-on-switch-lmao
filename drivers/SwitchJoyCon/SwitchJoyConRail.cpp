@@ -35,7 +35,7 @@
 //   3 Mbaud, deaf to the 1 Mbaud wake, until its 2 s HID timeout: the driver resends 91/11 every 5 ms, and after a
 //   failure past the switch waits those 2 s before the next wake. 91/10 and 91/12 are sent once and given 1 s, as
 //   L4T gives every step (J:2690, 2722, HZ); hekate takes the 94/12 whenever it comes (joycon.c 1357), and a
-//   Joy-Con (R) did not answer 91/12 within 250 ms.
+//   Joy-Con (R) may take longer than 250 ms to answer 91/12.
 //   then cmd 92 carries Bluetooth HID reports both ways: the host sends output reports (01 subcommand, 10 rumble) or
 //   the "request input" payload 1F (J:1525-1543), the Joy-Con answers with input reports (21, 30). The Joy-Con only
 //   speaks when spoken to (91/12 sets the interval it expects, it does not make it push: hekate and L4T keep asking)
@@ -51,11 +51,11 @@
 //   deku bluetooth_hid_notes.md "global packet number"), so a repeated rumble report is a new packet. The rail stays
 //   in input report mode 0x30, as the console and L4T keep it: JoyConHIDServicePlugin asks for 0x3F ("simple HID",
 //   which pushes only on button changes, deku bluetooth_hid_subcommands_notes.md 66-81) as soon as gamecontrollerd
-//   connects, and a rail Joy-Con in 0x3F stops answering 1F, so it looked detached 500 ms later. That subcommand 0x03
-//   goes out with 0x30 instead; the plugin serves its HID mode from 0x30 reports (21H461
+//   connects, and a rail Joy-Con in 0x3F stops answering 1F, so it would look detached 500 ms later. That subcommand
+//   0x03 goes out with 0x30 instead; the plugin serves its HID mode from 0x30 reports (21H461
 //   handleStandardFullPayload:withData:timestamp: checks _inputReportMode == 0x3F) and gets the Joy-Con's own ACK.
 //
-// Interrupts, no polling (house rule): the UART interrupt is an IOFilterInterruptEventSource whose filter, in primary
+// Interrupts, no polling: the UART interrupt is an IOFilterInterruptEventSource whose filter, in primary
 // interrupt context, drains the RX FIFO into a ring and refills the TX FIFO (3 Mbaud fills the 32-byte FIFO in ~110 us,
 // so the drain cannot wait for a thread, and the line is never left masked for one); its action parses on the work
 // loop. Hardware RTS flow control backs this up for long replies. Attach is the detect pin's GPIO
@@ -63,31 +63,29 @@
 // interrupt (bytes sit in the FIFO with RX interrupts enabled, or the TX FIFO is empty with THRI enabled): that
 // panics in one line with the UART registers and the GIC state. A rail waiting for an attach arms nothing but the
 // detect pin's interrupt; tegra_gpio_check_delivery() (as SwitchButtons) looks at that pin when the display goes off,
-// not on a timer. Every packet also takes one
-// THR-empty interrupt, so the interrupt count proves the UART's line reaches the CPU even when nothing comes back.
-// Giving up on an attach logs one line with the first bytes received since the attach (or none), that interrupt
-// count, what happened at 3 Mbaud (packets sent, bytes and line errors received), the bytes the failing step got,
-// the UART registers and clock, the four pads' levels, GPIO modes and pinmux, and the rail and pad power. A
-// running Joy-Con that falls silent logs one line with the number of input reports it sent.
+// not on a timer. Every packet also takes one THR-empty interrupt, so the interrupt count proves the UART's line
+// reaches the CPU even when nothing comes back.
+// Giving up on an attach logs one line of rail state (describe); a running Joy-Con that falls silent logs one line
+// with the number of input reports it sent.
 //
-// RX by APB DMA while running (r15-offload; TegraAPBDMA.h): a running Joy-Con's reply (~61 bytes of 0x30 report every
-// 15 ms per rail) took about eight interrupts by FIFO trigger, around 1000 a second on CPU0 for two rails. While a rail
+// RX by APB DMA while running (TegraAPBDMA.h): by FIFO trigger, a running Joy-Con's reply (~61 bytes of 0x30 report
+// every 15 ms per rail) takes about eight interrupts, around 1000 a second on CPU0 for two rails. While a rail
 // runs, the UART is in DMA mode as Linux serial-tegra puts it (FCR DMA select, 4-byte RX trigger, IER RLSI | RTOIE |
 // EORD and no RDI): channel 0 (UART-B) / 1 (UART-C) moves every 4 bytes into a 4 KiB ring, continuously, and the reply
 // takes one interrupt, EORD or RX timeout once the line has been idle for 4 characters. The filter then takes what the
 // DMA put in the ring (cache lines invalidated first) and, by PIO, the 1-3 bytes below the burst still in the FIFO
-// (serial-tegra tegra_uart_rx_buffer_push + tegra_uart_handle_rx_pio), into the same ring and framing as before, and
+// (serial-tegra tegra_uart_rx_buffer_push + tegra_uart_handle_rx_pio), into the same ring and framing as PIO, and
 // wakes the action once. Reading the FIFO while the channel runs is safe here because a Joy-Con only speaks when spoken
 // to: nothing arrives between its reply and the next request; should the ring move during that read anyway, the order
 // of those bytes is unknown and they count as a line error (the packet is dropped and the stream resynchronises, as
 // for any line error). TX stays PIO (a request fits the FIFO: one THR-empty interrupt). Handshake and pairing keep PIO,
 // so their give-up lines see every byte. The DMA's end-of-count at every wrap is counted: more wraps than the bytes
 // taken account for means the ring was overrun, data lost, and the action panics with one line; bytes in the ring that
-// no interrupt took, after 50 ms, are a lost interrupt (checkDelivery). Never booted: a channel that does not open, a
-// first reply that does not start with the reply magic, or 4 bytes or more left in the FIFO with the ring not moving
-// turn DMA off for that rail with one log line; it keeps working by interrupt per FIFO trigger as before.
+// no interrupt took, after 50 ms, are a lost interrupt (checkDelivery). Non-fatal checks: a channel that does not open,
+// a first reply that does not start with the reply magic, or 4 bytes or more left in the FIFO with the ring not moving
+// turn DMA off for that rail with one log line; it keeps working by interrupt per FIFO trigger.
 //
-// Pairing (switch-bt=1, or the old switch-joycon-bt=1): the address to pair to is the one SwitchBluetooth programs
+// Pairing (switch-bt=1, or its alias switch-joycon-bt=1): the address to pair to is the one SwitchBluetooth programs
 // into the controller for bluetoothd: the unit's own (fuses, as switchroot's U-Boot derives it) or, when deploy staged
 // hekate's "Dump Joy-Con BT" (switchroot/joycon_mac.ini), Horizon's, as switchroot's U-Boot takes it from joycon_mac.bin
 // (SwitchBluetooth.cpp). SwitchBluetooth knows it only when bluetoothd first connects, well after the rails handshake
@@ -276,7 +274,6 @@ const SideConfig kSides[2] = {
      PIN_PULL_DOWN | 1},
 };
 
-// Protocol.
 enum : uint8_t { kCmdExtSend = 0x91, kCmdExtRet = 0x92, kCmdInitRet = 0x94, kCmdHandshake = 0xa5 };
 enum : uint8_t {
     kInitMac = 0x01,
@@ -473,7 +470,6 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     bool hostKnown = false;     // `host` is the address SwitchBluetooth programmed
     uint8_t host[6] = {};
 
-    // Registers.
     static uint32_t rd(Side &s, uint32_t reg) { return *(volatile uint32_t *)(s.uart + reg); }
     static void wr(Side &s, uint32_t reg, uint32_t value) { *(volatile uint32_t *)(s.uart + reg) = value; }
     void carWrite(uint32_t reg, uint32_t value) { *(volatile uint32_t *)(car + reg) = value; }
@@ -485,7 +481,6 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     void gpioMask(unsigned pin, uint32_t reg, bool on);
     unsigned gpioBit(unsigned pin, uint32_t reg);
 
-    // Interrupt paths.
     static bool uartFilter(OSObject *owner, IOFilterInterruptEventSource *sender);
     static void uartAction(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void detectAction(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -575,8 +570,6 @@ SwitchJoyConRail::Side *SwitchJoyConRail::sideFor(const OSObject *source)
     }
     return nullptr;
 }
-
-// ---- Primary interrupt context ------------------------------------------------------------------------------------
 
 // The action is scheduled with signalInterrupt() and the filter returns false: returning true on a level line makes
 // IOFilterInterruptEventSource::disableInterruptOccurred mask it until the work loop has run the action, and at
@@ -676,9 +669,9 @@ void SwitchJoyConRail::frameByte(Side &s, uint8_t byte)
 
 void SwitchJoyConRail::fillTx(Side &s)
 {
-    // r16-idle: an empty TX FIFO (THRE, the FIFO is always on) takes a 16-byte burst (serial-tegra's PIO burst,
-    // TEGRA_UART_MIN_DMA; the FIFO holds 32) with one status read, not one per byte: a 13-byte request was 14 LSR
-    // reads, 133 times a second with both rails running. The rest goes byte by byte while LSR shows room, as before.
+    // An empty TX FIFO (THRE, the FIFO is always on) takes a 16-byte burst (serial-tegra's PIO burst,
+    // TEGRA_UART_MIN_DMA; the FIFO holds 32) with one status read, not one per byte, which would be 14 LSR reads per
+    // 13-byte request, 133 times a second with both rails running. The rest goes byte by byte while LSR shows room.
     if (s.txPosition < s.txLength && (rd(s, LSR) & LSR_THRE)) {
         const uint32_t end = s.txLength - s.txPosition > kTxBurst ? s.txPosition + kTxBurst : s.txLength;
         while (s.txPosition < end) wr(s, RBR_THR, s.tx[s.txPosition++]);
@@ -717,7 +710,7 @@ bool SwitchJoyConRail::drainRx(Side &s)
 // `lock` held, DMA mode, RX interrupts masked (filter): what the channel put in the ring since the last take (its cache
 // lines invalidated first: the engine does not snoop), then the bytes below its 4-byte burst still in the FIFO, by PIO
 // (drainRx), all into `ring` with the same framing. More end-of-counts (wraps) than the bytes taken account for is an
-// overrun (the action panics). The never-booted checks (header) turn DMA off for the rail (dmaFailedLocked), which
+// overrun (the action panics). The non-fatal DMA checks (header) turn DMA off for the rail (dmaFailedLocked), which
 // loses nothing: the PIO drain takes whatever the FIFO holds.
 bool SwitchJoyConRail::takeDma(Side &s)
 {
@@ -817,15 +810,13 @@ void SwitchJoyConRail::stopDmaLocked(Side &s)
     wr(s, IER, s.ier);
 }
 
-// `lock` held: a never-booted check failed (header): PIO for this rail from now on; the action logs `why` once.
+// `lock` held: a non-fatal DMA check failed (header): PIO for this rail from now on; the action logs `why` once.
 void SwitchJoyConRail::dmaFailedLocked(Side &s, const char *why)
 {
     stopDmaLocked(s);
     s.dmaOff = true;
     s.dmaFailed = why;
 }
-
-// ---- Work loop: receive -------------------------------------------------------------------------------------------
 
 void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sender, int)
 {
@@ -921,8 +912,6 @@ void SwitchJoyConRail::received(Side &s, const uint8_t *packet, size_t length)
     default: break;  // a late reply to an attempt that already failed
     }
 }
-
-// ---- Work loop: transmit ------------------------------------------------------------------------------------------
 
 void SwitchJoyConRail::send(Side &s, const uint8_t *bytes, size_t length)
 {
@@ -1024,8 +1013,6 @@ void SwitchJoyConRail::sessionEnded(void *context, int32_t servedPid, int32_t op
     IOLockUnlock(s.outLock);
     s.owner->sessions->interruptOccurred(nullptr, nullptr, 0);
 }
-
-// ---- Work loop: states --------------------------------------------------------------------------------------------
 
 // UART at 1 or 3 Mbaud (hekate uart_init order; Linux tegra_uart_hw_init for the FIFO and interrupt setup).
 void SwitchJoyConRail::configureUart(Side &s, bool fast)
@@ -1186,8 +1173,6 @@ void SwitchJoyConRail::failAttempt(Side &s, const char *why)
     s.timer->setTimeoutMS(s.fast ? kJoyConTimeoutMS : kRetryMS);
 }
 
-// ---- Work loop: pairing -------------------------------------------------------------------------------------------
-
 // From the attach, or for a running Joy-Con when the address arrives (bluetoothAddress): the HID device goes while the
 // pairing subcommands and their replies use the rail, and comes back with run().
 void SwitchJoyConRail::startPairing(Side &s)
@@ -1331,8 +1316,6 @@ void SwitchJoyConRail::publishPairing(Side &s, const char *source)
     record->registerService();
     s.record = record;
 }
-
-// ---- Work loop: running -------------------------------------------------------------------------------------------
 
 void SwitchJoyConRail::run(Side &s)
 {
@@ -1662,8 +1645,6 @@ void SwitchJoyConRail::describe(Side &s, char *buffer, size_t size)
         *(volatile uint32_t *)(apbMisc + PP_PINMUX_GLOBAL) & kClampTristatedInputs);
 }
 
-// ---- Set-up -------------------------------------------------------------------------------------------------------
-
 // The pads both rails share (see the header): UART pads powered and out of deep power-down (a bounded handshake, as
 // Linux tegra_io_pad_power_enable and TegraDisplayPower), tristated inputs unclamped. Each is touched only when wrong;
 // a change means the boot chain left the rails deaf and is worth one line. The pad voltage (PWR_DET_VAL) is only
@@ -1759,8 +1740,6 @@ void SwitchJoyConRail::setUp(Side &s, const SideConfig *cfg)
     if (!s.dma) IOLog("SwitchJoyCon: UART-%c RX DMA off (%s): RX by interrupt per FIFO trigger\n", cfg->uart, why);
 }
 
-// ---- SC7 ----------------------------------------------------------------------------------------------------------
-
 // Work loop. A running Joy-Con is sent to sleep first (L4T joycon_serdev_suspend: joycon_set_hci_state(0), which it
 // does not answer); the packet fits the TX FIFO, so waiting for the transmitter to empty is a bounded handshake.
 void SwitchJoyConRail::quiesce(Side &s)
@@ -1822,8 +1801,6 @@ void SwitchJoyConRail::resume()
         this);
 }
 
-// ---- Display power and the Bluetooth address --------------------------------------------------------------------
-
 void SwitchJoyConRail::displayPower(bool on)
 {
     loop->runAction(
@@ -1868,8 +1845,6 @@ void SwitchJoyConRail::bluetoothAddress(const uint8_t address[6])
         },
         this, const_cast<uint8_t *>(address));
 }
-
-// ---- Start --------------------------------------------------------------------------------------------------------
 
 bool SwitchJoyConRail::start(IOService *provider)
 {

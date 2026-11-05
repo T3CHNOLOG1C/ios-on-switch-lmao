@@ -16,7 +16,7 @@
 //     drops it.
 // backboardd's plugin and filter reconnect at once when gamecontrollerd cancels them ("interrupted.  Attempting to
 // re-establish."), so a second plugin session on a service gamecontrollerd has already prepared is a connection storm:
-// 68094 connections in 7 minutes and gamecontrollerd the top CPU user after the 10:13:56 respring of r7p9d.
+// tens of thousands of connections in minutes, with gamecontrollerd the top CPU user.
 //
 // That second session is what a backboardd restart gives a device that outlives it: the kernel device and its registry
 // ID stay, and gamecontrollerd's IOHIDEventSystemClient, reconnecting to the new backboardd
@@ -78,7 +78,7 @@ static inline enum switch_joycon_session_event switch_joycon_session_close(struc
     return kSwitchJoyConSessionClosed;
 }
 
-// The rail's loop check (never-booted code: log one line and turn the feature off). Every backboardd restart is a new
+// The rail's loop check (non-fatal: log one line and turn the feature off). Every backboardd restart is a new
 // pid, so republishing for each one is fine however often it comes; two sessions ended by the same backboardd within
 // kSwitchJoyConRepublishGapMS of each other would be a plugin that drops every new device, which republishing would
 // only feed.

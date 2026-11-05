@@ -41,12 +41,11 @@
 // So this device only has to look like bluetoothd's Joy-Con IOHIDUserDevice: same IDs, descriptor and report bytes.
 //
 // With one addition: a rail device outlives a backboardd restart (a respring), and gamecontrollerd takes only one
-// plugin session per HID service: the restarted backboardd's plugin and GamepadHIDServiceFilter were refused and
-// reconnected in a loop (68094 connections in 7 minutes after the r7p9d respring, gamecontrollerd the top CPU user).
-// So handleOpen/handleClose keep the device's backboardd session (SwitchJoyConSession.h: the first backboardd user
-// client to open it, in practice the plugin's HIDDevice) and report its end, the serving client's close or a different
-// backboardd's open, once to the rail driver, which publishes a new device for the new backboardd
-// (SwitchJoyConRail.cpp, "Sessions").
+// plugin session per HID service, so the restarted backboardd's plugin and GamepadHIDServiceFilter would be refused
+// and reconnect in a loop (gamecontrollerd the top CPU user). So handleOpen/handleClose keep the device's backboardd
+// session (SwitchJoyConSession.h: the first backboardd user client to open it, in practice the plugin's HIDDevice) and
+// report its end, the serving client's close or a different backboardd's open, once to the rail driver, which
+// publishes a new device for the new backboardd (SwitchJoyConRail.cpp, "Sessions").
 //
 // The descriptor is the Joy-Con's own, from its SDP HIDDescriptorList (attribute 0x0206) as captured in switchroot's
 // l4t-initramfs init (line 247): 170 bytes, Generic Desktop/Game Pad; inputs 0x21, 0x30 (48 bytes), 0x31-0x33
@@ -64,13 +63,13 @@
 //   * Capture -> Consumer Snapshot (0x0C/0x65): the same SpringBoard method hands it to
 //     -[SpringBoard _handleSnapshotButtonHIDEvent:buttonIsDown:fromSource:], which on the release calls takeScreenshot
 //     (flash, thumbnail, saved to Photos) unless the screen is off ("Snapshot button triggering screenshot").
-// Not a Home + Lock chord: this SpringBoard runs with homeButtonType 2 ("screenshot configured for lock + volume up"
-// in every boot log; -[SpringBoard _completeStartupAfterMainSceneConnect:] gives the Screenshot recognizer
+// Not a Home + Lock chord: this SpringBoard runs with homeButtonType 2 (it logs "screenshot configured for lock +
+// volume up"; -[SpringBoard _completeStartupAfterMainSceneConnect:] gives the Screenshot recognizer
 // lock + home only for other types). Not GameController's own handling either: for a single Joy-Con
 // JoyConHIDServicePlugin turns either button into one 0x0C/0x223 (AC Home) click at its release
 // (-[JoyConHIDServicePlugin homeButtonPressed:], 3 s hold = the combine gesture), and SpringBoard's SB-Default rule
 // (-[SBHIDEventDispatchController init]) sends 0x0C/0x223 from gamepads to the focused app, where it does nothing
-// (r3v: "ACHome page:0xC usage:0x223 ... source:gamepad", destination Preferences). The Joy-Con reports still reach
+// ("ACHome page:0xC usage:0x223 ... source:gamepad"). The Joy-Con reports still reach
 // the plugin unchanged, so games see both buttons and the combine gesture works. Backboardd routes the device like
 // the console buttons (Built-In, Consumer Control: "(display: builtin) desc: (Keyboard) -> <system>").
 // Bluetooth Joy-Cons and Pro Controllers get the same two usages, clicked on the console buttons device from their
@@ -224,10 +223,9 @@ public:
     }
 
     // IOService::open/close call these with the device's arbitration lock held, on the opener's thread for a user
-    // client (IOHIDLibUserClient opens from its external method, through its gate: the same thread; the log's
-    // "SwitchJoyConDevice ... open by IOHIDLibUserClient" carries backboardd's thread ID) and on a kernel thread for a
-    // close when the client's task has gone. The originals are IOHIDDevice's (bound); the session needs only the
-    // client's identity, compared and never dereferenced.
+    // client (IOHIDLibUserClient opens from its external method, through its gate: the same thread) and on a kernel
+    // thread for a close when the client's task has gone. The originals are IOHIDDevice's (bound); the session needs
+    // only the client's identity, compared and never dereferenced.
     bool handleOpen(IOService *client, IOOptionBits options, void *arg) override
     {
         if (!IOHIDDevice::handleOpen(client, options, arg)) return false;
@@ -482,11 +480,11 @@ static OSDictionary *catalogueMatch(const char *key, const char *value)
 
 // The prelinked kext's personalities reach the catalogue at bootstrap (OSKext::sendAllKextPersonalitiesToCatalog);
 // none can match before a game controller exists, and none exists before the board thread (Bluetooth HID devices
-// come from bluetoothd, USB is not integrated), so taking them out here leaves the default boot as it was. Both
-// removal keys are needed: IOPersonalityPublisher marks the 44 IOHIDFamily-class entries, CFBundleIdentifier the
-// kext's own class. Double matching cannot happen with both sets present either (same classes, one default match
-// category: one IOHIDEventDummyService wins per interface; mergers fail their probe after setting absent keys), but
-// one source of truth is simpler to reason about.
+// come from bluetoothd, USB is not integrated), so taking them out here is safe. Both removal keys are needed:
+// IOPersonalityPublisher marks the 44 IOHIDFamily-class entries, CFBundleIdentifier the kext's own class. Double
+// matching cannot happen with both sets present either (same classes, one default match category: one
+// IOHIDEventDummyService wins per interface; mergers fail their probe after setting absent keys), but one source of
+// truth is simpler to reason about.
 void switch_joycon_hid_select_personalities(void)
 {
     static bool done;

@@ -1,5 +1,5 @@
 // The rail Joy-Con's HID session rule (drivers/SwitchJoyCon/SwitchJoyConSession.h, compiled as C by
-// switch_joycon_session_harness.c), and the r7p9d gamecontrollerd connection storm it ends, reproduced on the host.
+// switch_joycon_session_harness.c), and the gamecontrollerd connection storm it ends, reproduced on the host.
 //
 // Around the header runs a model of the three parties, each step the 21H461 code path it is named after
 // (GameController.framework, IOKit's IOHIDEventSystemClient, JoyConHIDServicePlugin):
@@ -13,8 +13,7 @@
 //   * backboardd: one JoyConHIDServicePlugin per Joy-Con service, which opens the HID device, and whose filter and
 //     plugin connections reconnect at once when gamecontrollerd cancels them;
 //   * the kernel: SwitchJoyConDevice registry IDs, the session the device keeps (the header), and the rail's republish.
-// With the session rule off (the code before r13) a respring is the storm; with it, gamecontrollerd takes the new devices
-// and refuses nothing.
+// With the session rule off a respring is the storm; with it, gamecontrollerd takes the new devices and refuses nothing.
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -34,9 +33,9 @@
 namespace {
 
 constexpr int kNone = 0, kClosed = 1, kReplaced = 2;
-constexpr unsigned kBudget = 4000;  // connections: far past any healthy run (four per respring), short of 68094
+constexpr unsigned kBudget = 4000;  // connections: far past any healthy run (four per respring)
 
-// A dict that keeps insertion order (Python's), for the model's maps whose iteration order the model depends on.
+// A map that keeps insertion order, for the model's maps whose iteration order the model depends on.
 template <class K, class V> class Ordered {
 public:
     V *find(const K &key)
@@ -82,7 +81,7 @@ struct Connection {
     std::string kind;  // "filter" or "driver"
     uint64_t client;
 };
-using ConnectionRef = std::shared_ptr<Connection>;  // compared by identity, as the model's tuples are
+using ConnectionRef = std::shared_ptr<Connection>;  // compared by identity
 
 // SwitchJoyConDevice: a registry ID and, with the rule on, the header's session (handleOpen/handleClose).
 struct Device {
@@ -116,7 +115,7 @@ struct Rail {
 };
 
 // JoyConHIDServicePlugin with GamepadHIDServiceFilter on one service: opens the HID device in initWithService, the
-// filter connects ~14 ms later and the plugin after the Joy-Con's device-info reply (~80 ms, r7p9d).
+// filter connects ~14 ms later and the plugin after the Joy-Con's device-info reply (~80 ms).
 struct Plugin {
     Backboardd *server;
     Device *device;
@@ -463,7 +462,6 @@ void Gamecontrollerd::peerInvalidated(const ConnectionRef &connection)
         if (device.driver == connection) device.driver = nullptr;
 }
 
-// --- The header ----------------------------------------------------------------------------------------------------
 TEST(SwitchJoyConSession, Layout)
 {
     // The C harness's structs are the ones the C++ driver (SwitchJoyConHID.cpp) lays out.
@@ -522,7 +520,6 @@ TEST(SwitchJoyConSession, Guard)
     EXPECT_TRUE(allowed(52, 1000 + gap));
 }
 
-// --- The storm and the rule ----------------------------------------------------------------------------------------
 TEST(SwitchJoyConSession, StormReproducedWithoutTheRule)
 {
     World world(false);
@@ -555,7 +552,7 @@ TEST(SwitchJoyConSession, RespringWithTheRule)
     }
     EXPECT_TRUE(world.healthy());
     for (const auto &[side, id] : before) EXPECT_EQ(world.gcd.physical.count(id), 0u) << "block .110 retired " << side;
-    world.respring(300, false, 100);  // again at once, as a crash on the next screen recording would
+    world.respring(300, false, 100);  // again at once, as a backboardd crash right after a respring would
     EXPECT_EQ(world.rejected, 0u);
     EXPECT_TRUE(world.healthy());
     EXPECT_FALSE(world.rail.off);

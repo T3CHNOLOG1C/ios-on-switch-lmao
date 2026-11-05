@@ -11,11 +11,11 @@
 //     Joy-Cons reconnect without ever touching the rail. A dump is imported once (kImportedPath keeps a copy of the
 //     one imported): bluetoothd keeps the keys, and a later boot must not put back a key the rail has replaced since.
 //     A Joy-Con whose rail record is present is taken from the rail (it was just read from the Joy-Con itself).
-// bluetoothd keeps classic link keys in the system keychain (generic password,
-// service "MobileBluetooth", account = address, access group com.apple.bluetooth: BTKCSetData in bluetoothd) and the
-// device records in the com.apple.MobileBluetooth.devices preferences domain. Neither is reachable from the kernel,
-// and writing them behind bluetoothd's back would race its caches; MobileBluetooth.framework has the call Apple uses
-// for accessories paired over a wire instead:
+// bluetoothd keeps classic link keys in the system keychain (generic password, service "MobileBluetooth", account =
+// address, access group com.apple.bluetooth: BTKCSetData in bluetoothd) and the device records in the
+// com.apple.MobileBluetooth.devices preferences domain. Neither is reachable from the kernel, and writing them behind
+// bluetoothd's back would race its caches; MobileBluetooth.framework has the call Apple uses for accessories paired
+// over a wire instead:
 //   BTAccessoryManagerSetLinkKeyEx(manager, address[6], name, classOfDevice, serviceMask, linkKey[16], &device)
 // (XPC kCBMsgIdAccessorySetLinkKeyExMsg; bluetoothd BTAccessoryMsgHandler::handleBTAccessorySetLinkKeyExMsg creates
 // the paired device and stores the key itself). The address bytes come from BTDeviceAddressFromString, so they are in

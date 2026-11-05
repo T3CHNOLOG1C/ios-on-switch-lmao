@@ -107,8 +107,6 @@ static uint8_t mcuCrc(const uint8_t *data, size_t length)
     return crc;
 }
 
-// ---- Reports ------------------------------------------------------------------------------------------------------
-
 static void inputReport(void *context, IOReturn result, void *sender, IOHIDReportType type, uint32_t reportID,
                         uint8_t *report, CFIndex length)
 {
@@ -227,8 +225,6 @@ static bool waitNfcState(Pad *pad, uint8_t state, uint8_t *reply)
     }
     return false;
 }
-
-// ---- Scan ---------------------------------------------------------------------------------------------------------
 
 static void saveTag(const Pad *pad, const uint8_t *uid, unsigned uidLength, const uint8_t *pages, size_t length)
 {
@@ -349,8 +345,6 @@ static void scan(Pad *pad)
     subcommand(pad, kSubMcuState, &mcuOff, 1);
     subcommand(pad, kSubReportMode, &standardMode, 1);
 }
-
-// ---- Devices ------------------------------------------------------------------------------------------------------
 
 static void scanService(io_service_t service, dispatch_group_t group, int64_t settle)
 {
