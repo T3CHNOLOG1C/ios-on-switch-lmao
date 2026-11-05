@@ -2,17 +2,21 @@
 // The Switch OLED's 6-axis IMU as iPadOS's accelerometer and gyroscope (CoreMotion, UIAccelerometer), and optionally its
 // device-orientation sensor (backboardd's interface rotation; kOrientationPolicy below, off).
 //
-// Hardware (switchroot nx-platforms/tegra210-nx-sensor.dtsi imu@0 on spi@7000da00, enabled for the OLED "fric"; L4T
-// drivers/iio/imu/st_lsm6dsx and inv_icm42600 with CTCaer's "multi-driver" probing, switch-l4t-kernel-4.9):
-//   * One of four parts, told apart by WHO_AM_I: ST LSM6DS3H (0x69), LSM6DSE (0x6a) or LSM6DSO (0x6c) at 0x0f, or
-//     InvenSense ICM-40607 (0x38) at 0x75. SPI4 chip select 0, mode 3, 8 MHz (../TegraSPI). Supplied from the battery
-//     rail (vdd/vddio-supply = battery_reg), so it is always powered and keeps what an earlier OS set: it is reset here.
-//     The OLED's part behaves as an ICM-40607 (r7p2, inferred: the started line names it), whose soft reset drops it to
-//     3-wire SPI until INTF_CONFIG4 is set again (icm4Wire).
+// Hardware (switchroot/LineageOS nx-platforms/tegra210-nx-sensor.dtsi imu@0 on spi@7000da00, "multi-driver" probing of
+// every part below; L4T drivers/iio/imu/st_lsm6dsx and inv_icm42600, LineageOS inv_icm42607x):
+//   * One of six parts, told apart by WHO_AM_I: InvenSense ICM-42607-P (0x60), ICM-42607 (0x67) or ICM-40607 (0x38) at
+//     0x75, or ST LSM6DS3H (0x69), LSM6DSE (0x6a) or LSM6DSO (0x6c) at 0x0f. This OLED's is an ICM-42607-P (r7p5-r7p8:
+//     0x75 = 0x60; 0x0f = 0x80 is its ACCEL_DATA_Z1 while the accelerometer is off). SPI4 chip select 0, mode 3, 8 MHz
+//     (../TegraSPI). Supplied from the battery rail (vdd/vddio-supply = battery_reg), so it is always powered and keeps
+//     what an earlier OS set: it is reset here.
+//   * Three register maps: the ICM-42607's (TDK DS-000451, the ICM-42670-P's, which the ICM-42607-P shares; TDK's
+//     inv_imu_driver.c; Linux inv_icm42607), the ICM-40607's (Linux inv_icm42600) and the ST parts' (st_lsm6dsx).
 //   * Data-ready on the part's INT2 (ST st,drdy-int-pin = 2; ICM irq-int2) to GPIO PX2, level high, latched until the
-//     data is read (tegra210b01-fric-pinmux.dtsi motion_int_px2: pull-down, input).
+//     status is read (tegra210b01-fric-pinmux.dtsi motion_int_px2: pull-down, input).
 //   * Mounting, the DT mount matrices from the part's axes to the console's (handheld landscape: +X right, +Y up, +Z out
-//     of the screen): ST X = +y, Y = +x, Z = -z; ICM X = -y, Y = +x, Z = -z.
+//     of the screen): ST X = +y, Y = +x, Z = -z (the 2019-2023 DT); ICM X = -y, Y = +x, Z = +z (CTCaer's 2025 DT, the
+//     one that added the ICM-42607-P; the 2023 ICM matrix had Z = -z, a reflection, so one of its signs was wrong). The
+//     ICM Z sign is not yet confirmed on this console: the first accelerometer sample of a boot is logged once (post).
 //   * Full scale ±8 g and ±2000 dps (ST 0.244 mg and 70 mdps per LSB; ICM 4096 LSB/g and 16.4 LSB/dps, big-endian).
 // iPadOS 21H461 (locationd, backboardd and the r7n device logs; SwitchHID.h has the HID side):
 //   * locationd and in-process CoreMotion (CLIoHidInterface) open the built-in HID services with usage pairs
@@ -30,10 +34,11 @@
 // Sampling: the part converts only while a client has a nonzero report interval (the services' Report Interval
 // feature, SwitchHID.h) or the orientation detector runs. The output data rate is the lowest supported rate at or above
 // the fastest request; the gyroscope's data-ready leads when it is on (both then share the rate) and each service is
-// decimated to its own interval. Each data-ready interrupt reads status and data in one SPI burst, which lets the line
-// drop. A 1 s watchdog, armed only while converting, panics if data-ready is raised but never arrives (lost at the GPIO
-// controller or the GIC); a part that raises none, or a line that stays high without new data, turns motion off with one
-// log line (giveUp). No polling anywhere.
+// decimated to its own interval. Each data-ready interrupt reads status and data (one SPI burst; the ICM-42607's status
+// register is apart from its data, so status first, then data), which lets the line drop. A 1 s watchdog, armed only
+// while converting, panics if data-ready is raised but never arrives (lost at the GPIO controller or the GIC); a part
+// that raises none, or a line that stays high without new data, turns motion off with one log line (giveUp). No polling
+// anywhere.
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -61,29 +66,35 @@ constexpr unsigned kOrientationStable = 10;      // consecutive samples (about 0
 enum : uint8_t { Unknown, Portrait, PortraitUpsideDown, LandscapeLeft, LandscapeRight, FaceUp, FaceDown };
 
 enum Sensor : unsigned { Accel = 0, Gyro = 1 };
-enum class Family : uint8_t { ST, ICM };
+enum class Family : uint8_t { ST, ICM40607, ICM42607 };
 struct Axis {
     uint8_t index;
     int8_t sign;
 };
+// An output data rate: its register code and, for the ICM-42607 only, its UI low-pass filter's bandwidth code
+// (GYRO_CONFIG1, ACCEL_CONFIG1).
 struct Rate {
     uint32_t milliHz;
-    uint8_t code;
+    uint8_t code, filter;
 };
 struct Part {
     const char *name;
     Family family;
     uint8_t whoAmI;
 };
+// The ICM parts first: their WHO_AM_I at 0x75 decides before the ST one at 0x0f, which on an ICM-42607 is
+// ACCEL_DATA_Z1 and holds live data if an earlier OS left the accelerometer on. On the ST parts 0x75 is not WHO_AM_I
+// (not checked against their datasheets: reserved or a user register). WHO_AM_I 0x67 is the ICM-42607 and also the
+// ICM-42670-P (DS-000451): one map.
 const Part kParts[] = {
-    {"LSM6DS3H", Family::ST, 0x69},
-    {"LSM6DSE", Family::ST, 0x6a},
-    {"LSM6DSO", Family::ST, 0x6c},
-    {"ICM-40607", Family::ICM, 0x38},
+    {"ICM-42607-P", Family::ICM42607, 0x60}, {"ICM-42607", Family::ICM42607, 0x67},
+    {"ICM-40607", Family::ICM40607, 0x38},   {"LSM6DS3H", Family::ST, 0x69},
+    {"LSM6DSE", Family::ST, 0x6a},           {"LSM6DSO", Family::ST, 0x6c},
 };
 // Per family: the DT mount matrix (rows: console X, Y, Z), data rates, LSB scale to micro-g and micro-rad/s, and how
 // long a sensor's first samples are dropped after it is turned on (ST: DRDY_MASK already holds data-ready until the
-// filters settle; ICM: inv_icm42600 ACCEL_STARTUP 20 ms, GYRO_STARTUP 60 ms and GYRO_STOP 150 ms).
+// filters settle; ICM-40607: inv_icm42600 ACCEL_STARTUP 20 ms, GYRO_STOP 150 ms; ICM-42607: TDK drops 20 ms of
+// accelerometer and 60 ms of gyroscope data after enable, the gyroscope starting within 40 ms).
 struct FamilyInfo {
     Axis mount[3];
     Rate rates[5];
@@ -92,7 +103,7 @@ struct FamilyInfo {
 };
 const FamilyInfo kST = {
     {{1, +1}, {0, +1}, {2, -1}},
-    {{12500, 0x1}, {26000, 0x2}, {52000, 0x3}, {104000, 0x4}, {208000, 0x5}},
+    {{12500, 0x1, 0}, {26000, 0x2, 0}, {52000, 0x3, 0}, {104000, 0x4, 0}, {208000, 0x5, 0}},
     244,
     1,
     122173,
@@ -100,15 +111,28 @@ const FamilyInfo kST = {
     20,
     80,
 };
-const FamilyInfo kICM = {
-    {{1, -1}, {0, +1}, {2, -1}},
-    {{12500, 11}, {25000, 10}, {50000, 9}, {100000, 8}, {200000, 7}},
+const FamilyInfo kICM40607 = {
+    {{1, -1}, {0, +1}, {2, +1}},
+    {{12500, 11, 0}, {25000, 10, 0}, {50000, 9, 0}, {100000, 8, 0}, {200000, 7, 0}},
     15625,
     64,
     1064225,
     1000,  // 1e6 / 4096 ug; pi / 180 / 16.4 rad = 1064.225 urad/s
     20,
     150,
+};
+// The ICM-42607's ODR codes are one above the ICM-40607's (GYRO_CONFIG0/ACCEL_CONFIG0: 200 Hz = 8 .. 12.5 Hz = 12), and
+// its UI filter is set per rate near a quarter of it (7 = 16 Hz, the lowest; 6 = 25 Hz; 4 = 53 Hz): its reset value,
+// 180 Hz, would alias at these rates. Scale as the ICM-40607 (DS-000451: 4096 LSB/g, 16.4 LSB/dps).
+const FamilyInfo kICM42607 = {
+    {{1, -1}, {0, +1}, {2, +1}},
+    {{12500, 12, 7}, {25000, 11, 7}, {50000, 10, 7}, {100000, 9, 6}, {200000, 8, 4}},
+    15625,
+    64,
+    1064225,
+    1000,
+    20,
+    60,
 };
 
 // ST LSM6DS3H/DSE/DSO registers (the same addresses and bits in all three, st_lsm6dsx_core.c and the datasheets).
@@ -138,7 +162,7 @@ constexpr size_t kBurst = 16;
 }  // namespace st
 
 // InvenSense ICM-40607 registers, user bank 0 (inv_icm42600.h).
-namespace icm {
+namespace icm40607 {
 enum : uint8_t {
     DeviceConfig = 0x11,
     DriveConfig = 0x13,
@@ -154,8 +178,6 @@ enum : uint8_t {
     IntSource0 = 0x65,
     IntSource3 = 0x68,
     WhoAmI = 0x75,
-    BankSel = 0x76,      // REG_BANK_SEL, in every bank
-    IntfConfig4 = 0x7a,  // bank 1: SPI_AP_4WIRE (bit 1)
 };
 enum : uint8_t {
     SoftReset = 1u << 0,
@@ -172,11 +194,97 @@ enum : uint8_t {
     AccelLowNoise = 3u << 0,  // PWR_MGMT0
     Fs2000dps = 0u << 5,
     Fs8g = 1u << 5,
-    Spi4Wire = 1u << 1,  // INTF_CONFIG4: TDK's ICM426XX_INTF_CONFIG4_AP_SPI4W
 };
 constexpr size_t kBurst = 15;
-constexpr int16_t kInvalid = -32768;
-}  // namespace icm
+}  // namespace icm40607
+
+// InvenSense ICM-42607-P / ICM-42607 registers, user bank 0 (TDK DS-000451 and inv_imu_regmap_rev_a.h; Linux
+// inv_icm42607.h). Everything here is in bank 0: the MREG banks (BLK_SEL/MADDR/M_W) hold nothing this driver uses.
+namespace icm42607 {
+enum : uint8_t {
+    DeviceConfig = 0x01,     // SPI_AP_4WIRE bit 2 (reset value 0x04: 4-wire), SPI_MODE bit 0 (0: modes 0 and 3)
+    SignalPathReset = 0x02,  // SOFT_RESET_DEVICE_CONFIG bit 4
+    DriveConfig3 = 0x05,     // SPI_SLEW_RATE 2:0
+    IntConfig = 0x06,
+    AccelData = 0x0b,  // the burst: ACCEL X1..Z0, GYRO X1..Z0 (big-endian)
+    PwrMgmt0 = 0x1f,
+    GyroConfig0 = 0x20,   // FS 6:5, ODR 3:0
+    AccelConfig0 = 0x21,  // FS 6:5, ODR 3:0
+    GyroConfig1 = 0x23,   // UI filter bandwidth 2:0
+    AccelConfig1 = 0x24,  // averaging 6:4 (low-power mode only), UI filter bandwidth 2:0
+    IntSource0 = 0x2b,    // INT1 sources (reset value 0x10: RESET_DONE)
+    IntSource3 = 0x2d,    // INT2 sources
+    IntfConfig0 = 0x35,
+    IntfConfig1 = 0x36,
+    IntStatusDrdy = 0x39,  // DATA_RDY_INT bit 0, cleared by the read
+    IntStatus = 0x3a,      // RESET_DONE_INT bit 4, cleared by the read
+    WhoAmI = 0x75,
+    BlkSelW = 0x79,
+    BlkSelR = 0x7c,
+};
+enum : uint8_t {
+    Spi4Wire = 1u << 2,
+    SoftReset = 1u << 4,
+    ResetDone = 1u << 4,
+    DataReady = 1u << 0,  // INT_STATUS_DRDY
+    DrdyInt2 = 1u << 3,   // INT_SOURCE3
+    Int2LatchedPushPullHigh = (1u << 5) | (1u << 4) | (1u << 3),
+    SpiSlewFastest = 5,  // DRIVE_CONFIG3, its reset value (bits 7:3 reserved, 0)
+    I3cSdr = 1u << 3,
+    I3cDdr = 1u << 2,
+    ClkSelMask = 3,
+    ClkSelPll = 1,  // INTF_CONFIG1: PLL when available, else the RC oscillator (the reset value)
+    BigEndian = 1u << 4,
+    I2CDisable = 3,           // INTF_CONFIG0 1:0, TDK's "shared SPI bus" setting (AN-000352)
+    GyroLowNoise = 3u << 2,   // PWR_MGMT0
+    AccelLowNoise = 3u << 0,  // PWR_MGMT0
+    Fs2000dps = 0u << 5,
+    Fs8g = 1u << 5,
+    GyroConfig1Upper = 0x30,   // GYRO_CONFIG1 7:3 (reserved), as reset (0x31)
+    AccelConfig1Upper = 0x40,  // ACCEL_CONFIG1 7:3, as reset (0x41: 32x averaging, low-power mode only)
+};
+constexpr size_t kBurst = 12;
+}  // namespace icm42607
+static_assert((unsigned)icm40607::WhoAmI == (unsigned)icm42607::WhoAmI, "both ICM maps have WHO_AM_I at 0x75");
+
+// Sample decode (host tests: tests/switch_motion_harness.cpp). ST: STATUS, then gyroscope and accelerometer
+// little-endian from offset 4 (st::Status burst). ICM: accelerometer then gyroscope, big-endian, from the burst's
+// start; a sensor that is off reads -32768.
+void decodeST(const uint8_t *b, int16_t accel[3], int16_t gyro[3], bool fresh[2])
+{
+    fresh[Accel] = b[0] & st::DrdyXl;
+    fresh[Gyro] = b[0] & st::DrdyG;
+    for (unsigned i = 0; i < 3; ++i) {
+        gyro[i] = (int16_t)(b[4 + 2 * i] | b[5 + 2 * i] << 8);
+        accel[i] = (int16_t)(b[10 + 2 * i] | b[11 + 2 * i] << 8);
+    }
+}
+
+void decodeICM(const uint8_t *b, bool dataReady, int16_t accel[3], int16_t gyro[3], bool fresh[2])
+{
+    constexpr int16_t kInvalid = -32768;
+    fresh[Accel] = fresh[Gyro] = dataReady;
+    for (unsigned i = 0; i < 3; ++i) {
+        accel[i] = (int16_t)(b[2 * i] << 8 | b[1 + 2 * i]);
+        gyro[i] = (int16_t)(b[6 + 2 * i] << 8 | b[7 + 2 * i]);
+        if (accel[i] == kInvalid) fresh[Accel] = false;
+        if (gyro[i] == kInvalid) fresh[Gyro] = false;
+    }
+}
+
+// iPadOS's device frame from the part's axes (file comment and SwitchHID.h): the console's frame by the DT mount
+// matrix, then the portrait panel's, where +X is the console's down and +Y its right (SwitchTouch's landscape (x, y) ->
+// portrait (row 1279 - x, column y)). Acceleration is reported as the gravity vector, the negated specific force.
+SwitchMotionReport deviceReport(const FamilyInfo &info, Sensor sensor, const int16_t raw[3])
+{
+    int32_t console[3];
+    for (unsigned i = 0; i < 3; ++i) console[i] = info.mount[i].sign * (int32_t)raw[info.mount[i].index];
+    const int32_t sign = sensor == Accel ? -1 : 1;
+    const int32_t device[3] = {-console[1] * sign, console[0] * sign, console[2] * sign};
+    const int64_t num = sensor == Accel ? info.accelNum : info.gyroNum;
+    const int64_t den = sensor == Accel ? info.accelDen : info.gyroDen;
+    return {1, (int32_t)(device[0] * num / den), (int32_t)(device[1] * num / den), (int32_t)(device[2] * num / den)};
+}
 
 uint64_t msToAbs(uint32_t ms)
 {
@@ -207,8 +315,9 @@ class SwitchMotion : public IOService {
 
     // Work loop state.
     bool converting = false, suspended = false, on[2] = {};
-    bool broken = false;  // the part misbehaved on its first boots: logged once, motion off for this boot (giveUp)
-    unsigned rate = 0;    // index into info->rates while converting
+    bool broken = false;       // the part misbehaved on its first boots: logged once, motion off for this boot (giveUp)
+    bool firstLogged = false;  // the boot's first trusted accelerometer sample was logged (post)
+    unsigned rate = 0;         // index into info->rates while converting
     unsigned every[2] = {}, count[2] = {};  // decimation per service
     uint64_t settle[2] = {};                // first sample time each sensor's output is trusted
     unsigned samples = 0, empty = 0;
@@ -222,7 +331,6 @@ class SwitchMotion : public IOService {
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender);
     void readRegisters(uint8_t reg, uint8_t *buffer, size_t length);
     void writeRegister(uint8_t reg, uint8_t value);
-    void icm4Wire();
     void giveUp();
     bool identify();
     bool reset();
@@ -258,54 +366,39 @@ void SwitchMotion::writeRegister(uint8_t reg, uint8_t value)
     if (err) panic("SwitchMotion: SPI4 write of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
 }
 
-// An ICM-426xx answers reads on SDO only in 4-wire mode (INTF_CONFIG4 SPI_AP_4WIRE), and its soft reset puts it back in
-// 3-wire mode, where it answers on SDI instead. TDK's own driver sets the bit, without reading it, at init and again right
-// after every soft reset "to keep the communication link alive" (Icm426xxDriver_HL.c inv_icm426xx_configure_serial_interface
-// and inv_icm426xx_device_reset). Writes reach the part in either mode. r7p2: the reset below, without this, left the OLED's
-// part in 3-wire mode (it is never unpowered), and every read since returned the same garbage (0x80, 0x60).
-void SwitchMotion::icm4Wire()
-{
-    writeRegister(icm::BankSel, 1);
-    writeRegister(icm::IntfConfig4, icm::Spi4Wire);
-    writeRegister(icm::BankSel, 0);
-}
-
-// WHO_AM_I at 0x0f (ST) first: an ST part answers it in any state, and the ICM writes below would land on ST reserved
-// registers. Then 4-wire mode for an ICM and its WHO_AM_I at 0x75. An IMU that is missing or does not come out of reset
-// leaves motion off with one log line (r7p: the reset check panicked the board thread at boot); a lost SPI interrupt still
-// panics in the transfer.
+// Both WHO_AM_I addresses, read only: nothing is written to a part before it is known (as the Linux drivers, which read
+// WHO_AM_I first; the ICM-42607's DEVICE_CONFIG resets to 4-wire SPI). The saved r7p5-r7p8 logs read 0x0f = 0x80,
+// 0x75 = 0x60, with and without the ICM-40607 bank-1 INTF_CONFIG4 write r10 added here (6238ae2, on the theory that the
+// part was a 40607 left in 3-wire mode): it is an ICM-42607-P, where that write landed on reserved 0x76 and MADDR_W,
+// and it is gone. An IMU that is missing leaves motion off with one log line; a lost SPI interrupt still panics in the
+// transfer.
 bool SwitchMotion::identify()
 {
-    uint8_t stId = 0, icmId = 0;
+    uint8_t icmId = 0, stId = 0;
+    readRegisters(icm42607::WhoAmI, &icmId, 1);
     readRegisters(st::WhoAmI, &stId, 1);
     for (const Part &p : kParts) {
-        if (p.family == Family::ST && stId == p.whoAmI) {
-            part = &p;
-            info = &kST;
-            return true;
-        }
-    }
-    icm4Wire();
-    readRegisters(icm::WhoAmI, &icmId, 1);
-    for (const Part &p : kParts) {
-        if ((p.family == Family::ST ? stId : icmId) == p.whoAmI) {
-            part = &p;
-            info = p.family == Family::ST ? &kST : &kICM;
-            return true;
-        }
+        if ((p.family == Family::ST ? stId : icmId) != p.whoAmI) continue;
+        part = &p;
+        info = p.family == Family::ST ? &kST : p.family == Family::ICM40607 ? &kICM40607 : &kICM42607;
+        return true;
     }
     char sck[256];
     tegra_gpio_describe(TEGRA_GPIO(C, 5), sck, sizeof(sck));
-    IOLog("SwitchMotion: off: no IMU on SPI4 CS0: WHO_AM_I 0x0f = %#x, 0x75 = %#x after 4-wire mode (expected LSM6DS3H "
-          "0x69, LSM6DSE 0x6a, LSM6DSO 0x6c, ICM-40607 0x38); SCK pad %s\n",
-          stId, icmId, sck);
+    IOLog("SwitchMotion: off: no IMU on SPI4 CS0: WHO_AM_I 0x75 = %#x, 0x0f = %#x (expected ICM-42607-P 0x60, "
+          "ICM-42607 0x67, ICM-40607 0x38 at 0x75; LSM6DS3H 0x69, LSM6DSE 0x6a, LSM6DSO 0x6c at 0x0f); SCK pad %s\n",
+          icmId, stId, sck);
     return false;
 }
 
-// Software reset, then the FIFO in bypass (a reset leaves the FIFO and its interrupt as they were, st_lsm6dsx_init_device).
+// Software reset and its completion. ST and ICM-40607: then the FIFO in bypass (a reset leaves the FIFO and its
+// interrupt as they were, st_lsm6dsx_init_device). ICM-42607 (TDK inv_imu_device_reset): both MREG block selects to 0
+// first, the reset, 1 ms, the SPI interface restated (4-wire, modes 0 and 3: the reset value), then RESET_DONE; the
+// reset leaves its FIFO bypassed (FIFO_CONFIG1 0x01). A reset that does not complete leaves motion off with one line.
 bool SwitchMotion::reset()
 {
-    if (info == &kST) {
+    switch (part->family) {
+    case Family::ST: {
         writeRegister(st::Ctrl3C, st::SwReset);
         IOSleep(10);
         uint8_t ctrl3 = 0, who = 0;
@@ -317,43 +410,81 @@ bool SwitchMotion::reset()
             return false;
         }
         writeRegister(st::FifoCtrl, 0);
-    } else {
-        writeRegister(icm::DeviceConfig, icm::SoftReset);
+        return true;
+    }
+    case Family::ICM40607: {
+        writeRegister(icm40607::DeviceConfig, icm40607::SoftReset);
         IOSleep(2);  // TDK: 1 ms before any further access
-        icm4Wire();  // the reset left the part in 3-wire mode (icm4Wire)
         uint8_t status = 0, config = 0, who = 0;
-        readRegisters(icm::IntStatus, &status, 1);
-        if (!(status & icm::ResetDone)) {
-            readRegisters(icm::DeviceConfig, &config, 1);
-            readRegisters(icm::WhoAmI, &who, 1);
-            IOLog("SwitchMotion: off: %s software reset did not complete (INT_STATUS %#x, DEVICE_CONFIG %#x, WHO_AM_I "
-                  "now "
-                  "%#x)\n",
+        readRegisters(icm40607::IntStatus, &status, 1);
+        if (!(status & icm40607::ResetDone)) {
+            readRegisters(icm40607::DeviceConfig, &config, 1);
+            readRegisters(icm40607::WhoAmI, &who, 1);
+            IOLog("SwitchMotion: off: %s software reset did not complete (INT_STATUS %#x, DEVICE_CONFIG %#x, "
+                  "WHO_AM_I now %#x)\n",
                   part->name, status, config, who);
             return false;
         }
-        writeRegister(icm::FifoConfig, 0);
+        writeRegister(icm40607::FifoConfig, 0);
+        return true;
     }
-    return true;
+    case Family::ICM42607: {
+        writeRegister(icm42607::BlkSelR, 0);
+        writeRegister(icm42607::BlkSelW, 0);
+        writeRegister(icm42607::SignalPathReset, icm42607::SoftReset);
+        IOSleep(2);  // TDK: 1 ms before any further access
+        writeRegister(icm42607::DeviceConfig, icm42607::Spi4Wire);
+        uint8_t status = 0, config = 0, who = 0;
+        readRegisters(icm42607::IntStatus, &status, 1);
+        if (!(status & icm42607::ResetDone)) {
+            readRegisters(icm42607::DeviceConfig, &config, 1);
+            readRegisters(icm42607::WhoAmI, &who, 1);
+            IOLog("SwitchMotion: off: %s software reset did not complete (INT_STATUS %#x, DEVICE_CONFIG %#x, "
+                  "WHO_AM_I now %#x)\n",
+                  part->name, status, config, who);
+            return false;
+        }
+        return true;
+    }
+    }
+    return false;
 }
 
 // Interface and interrupt pin setup, everything converting off. After the reset, and again after sleep.
 void SwitchMotion::configurePart()
 {
-    if (info == &kST) {
+    uint8_t value = 0;
+    switch (part->family) {
+    case Family::ST:
         writeRegister(st::Ctrl3C, st::Bdu | st::IfInc);  // INT pins active high, push-pull (H_LACTIVE = PP_OD = 0)
         writeRegister(st::Ctrl4C, st::DrdyMask);
         writeRegister(st::Int1Ctrl, 0);
-    } else {
-        uint8_t value = 0;
-        readRegisters(icm::DriveConfig, &value, 1);
-        writeRegister(icm::DriveConfig, (uint8_t)((value & ~7u) | icm::SpiSlewFastest));
-        readRegisters(icm::IntfConfig0, &value, 1);
-        writeRegister(icm::IntfConfig0, (uint8_t)((value & ~icm::SifsMask) | icm::I2CDisable | icm::BigEndian));
-        writeRegister(icm::IntConfig, icm::Int2LatchedPushPullHigh);
-        readRegisters(icm::IntConfig1, &value, 1);
-        writeRegister(icm::IntConfig1, (uint8_t)(value & ~icm::AsyncReset));
-        writeRegister(icm::IntSource0, 0);
+        break;
+    case Family::ICM40607:
+        readRegisters(icm40607::DriveConfig, &value, 1);
+        writeRegister(icm40607::DriveConfig, (uint8_t)((value & ~7u) | icm40607::SpiSlewFastest));
+        readRegisters(icm40607::IntfConfig0, &value, 1);
+        writeRegister(icm40607::IntfConfig0,
+                      (uint8_t)((value & ~icm40607::SifsMask) | icm40607::I2CDisable | icm40607::BigEndian));
+        writeRegister(icm40607::IntConfig, icm40607::Int2LatchedPushPullHigh);
+        readRegisters(icm40607::IntConfig1, &value, 1);
+        writeRegister(icm40607::IntConfig1, (uint8_t)(value & ~icm40607::AsyncReset));
+        writeRegister(icm40607::IntSource0, 0);
+        break;
+    case Family::ICM42607:
+        // Linux inv_icm42607 spi_bus_setup and setup, TDK configure_serial_interface: I3C off and the PLL clock,
+        // the fastest SPI slew, I2C off (INTF_CONFIG0 1:0, reserved in DS-000451 but set by TDK's own driver) and
+        // big-endian data (the reset value); INT2 latched, push-pull, active high; nothing on INT1.
+        readRegisters(icm42607::IntfConfig1, &value, 1);
+        writeRegister(
+            icm42607::IntfConfig1,
+            (uint8_t)((value & ~(icm42607::I3cSdr | icm42607::I3cDdr | icm42607::ClkSelMask)) | icm42607::ClkSelPll));
+        writeRegister(icm42607::DriveConfig3, icm42607::SpiSlewFastest);
+        readRegisters(icm42607::IntfConfig0, &value, 1);
+        writeRegister(icm42607::IntfConfig0, (uint8_t)(value | icm42607::I2CDisable | icm42607::BigEndian));
+        writeRegister(icm42607::IntConfig, icm42607::Int2LatchedPushPullHigh);
+        writeRegister(icm42607::IntSource0, 0);
+        break;
     }
     program(false, false, 0);
 }
@@ -363,26 +494,40 @@ void SwitchMotion::configurePart()
 // turning off the reverse, so INT2 is low when nothing converts.
 void SwitchMotion::program(bool accel, bool gyro, unsigned rateIndex)
 {
-    const uint8_t code = info->rates[rateIndex].code;
-    if (info == &kST) {
+    const Rate &r = info->rates[rateIndex];
+    const bool any = accel || gyro;
+    switch (part->family) {
+    case Family::ST: {
         const uint8_t route = gyro ? st::DrdyG : (accel ? st::DrdyXl : 0);
         if (!route) writeRegister(st::Int2Ctrl, 0);
-        writeRegister(st::Ctrl1Xl, accel ? (uint8_t)(code << 4 | st::Fs8g) : 0);
-        writeRegister(st::Ctrl2G, gyro ? (uint8_t)(code << 4 | st::Fs2000dps) : 0);
+        writeRegister(st::Ctrl1Xl, accel ? (uint8_t)(r.code << 4 | st::Fs8g) : 0);
+        writeRegister(st::Ctrl2G, gyro ? (uint8_t)(r.code << 4 | st::Fs2000dps) : 0);
         if (route) writeRegister(st::Int2Ctrl, route);
-    } else {
-        const bool any = accel || gyro;
-        if (!any) writeRegister(icm::IntSource3, 0);
-        writeRegister(icm::GyroConfig0, (uint8_t)(icm::Fs2000dps | code));
-        writeRegister(icm::AccelConfig0, (uint8_t)(icm::Fs8g | code));
-        writeRegister(icm::PwrMgmt0,
-                      (uint8_t)(icm::TempDisable | (gyro ? icm::GyroLowNoise : 0) | (accel ? icm::AccelLowNoise : 0)));
+        break;
+    }
+    case Family::ICM40607:
+        if (!any) writeRegister(icm40607::IntSource3, 0);
+        writeRegister(icm40607::GyroConfig0, (uint8_t)(icm40607::Fs2000dps | r.code));
+        writeRegister(icm40607::AccelConfig0, (uint8_t)(icm40607::Fs8g | r.code));
+        writeRegister(icm40607::PwrMgmt0, (uint8_t)(icm40607::TempDisable | (gyro ? icm40607::GyroLowNoise : 0) |
+                                                    (accel ? icm40607::AccelLowNoise : 0)));
         IODelay(200);  // no register writes for 200 us after a sensor leaves off (datasheet)
-        if (any) writeRegister(icm::IntSource3, icm::DataReady);
+        if (any) writeRegister(icm40607::IntSource3, icm40607::DataReady);
+        break;
+    case Family::ICM42607:
+        if (!any) writeRegister(icm42607::IntSource3, 0);
+        writeRegister(icm42607::GyroConfig0, (uint8_t)(icm42607::Fs2000dps | r.code));
+        writeRegister(icm42607::AccelConfig0, (uint8_t)(icm42607::Fs8g | r.code));
+        writeRegister(icm42607::GyroConfig1, (uint8_t)(icm42607::GyroConfig1Upper | r.filter));
+        writeRegister(icm42607::AccelConfig1, (uint8_t)(icm42607::AccelConfig1Upper | r.filter));
+        writeRegister(icm42607::PwrMgmt0,
+                      (uint8_t)((gyro ? icm42607::GyroLowNoise : 0) | (accel ? icm42607::AccelLowNoise : 0)));
+        IODelay(200);  // no register writes for 200 us after a sensor leaves off (DS-000451 PWR_MGMT0)
+        if (any) writeRegister(icm42607::IntSource3, icm42607::DrdyInt2);
+        break;
     }
 }
 
-// Work loop: the clients' intervals (and the orientation detector) to a rate, sensors, routing and decimation.
 // Work loop. A part that does not behave as expected on hardware that has not booted this driver before is not worth the
 // boot: one log line (the caller's), the part stopped, motion off until the next boot. A lost interrupt still panics
 // (tegra_gpio_check_delivery, TegraSPI).
@@ -398,6 +543,7 @@ void SwitchMotion::giveUp()
     on[Accel] = on[Gyro] = false;
 }
 
+// Work loop: the clients' intervals (and the orientation detector) to a rate, sensors, routing and decimation.
 void SwitchMotion::apply()
 {
     if (suspended || broken) return;
@@ -450,20 +596,20 @@ void SwitchMotion::apply()
     }
 }
 
-// iPadOS's device frame from the part's axes (file comment and SwitchHID.h): the console's frame by the DT mount
-// matrix, then the portrait panel's, where +X is the console's down and +Y its right (SwitchTouch's landscape (x, y) ->
-// portrait (row 1279 - x, column y)). Acceleration is reported as the gravity vector, the negated specific force.
+// One trusted sample to its HID service (deviceReport has the frames). The boot's first accelerometer sample is logged
+// once with its raw axes, so one look at the log settles the mount matrix's signs: lying face up, the device frame
+// reads z near -1000 mg; held upright in handheld landscape, x near +1000 mg (the portrait panel's +X is the
+// console's bottom).
 void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
 {
     if (now < settle[sensor]) return;
-    int32_t console[3];
-    for (unsigned i = 0; i < 3; ++i) console[i] = info->mount[i].sign * (int32_t)raw[info->mount[i].index];
-    const int32_t sign = sensor == Accel ? -1 : 1;
-    const int32_t device[3] = {-console[1] * sign, console[0] * sign, console[2] * sign};
-    const int64_t num = sensor == Accel ? info->accelNum : info->gyroNum;
-    const int64_t den = sensor == Accel ? info->accelDen : info->gyroDen;
-    SwitchMotionReport report = {1, (int32_t)(device[0] * num / den), (int32_t)(device[1] * num / den),
-                                 (int32_t)(device[2] * num / den)};
+    const SwitchMotionReport report = deviceReport(*info, sensor, raw);
+    if (sensor == Accel && !firstLogged) {
+        firstLogged = true;
+        IOLog("SwitchMotion: %s first accelerometer sample: raw %d %d %d, device frame %d %d %d mg (face up: z near "
+              "-1000; upright: x near +1000)\n",
+              part->name, raw[0], raw[1], raw[2], report.x / 1000, report.y / 1000, report.z / 1000);
+    }
     if (sensor == Accel && kOrientationPolicy != OrientationPolicy::Off) {
         const int32_t vector[3] = {report.x, report.y, report.z};
         detectOrientation(vector);
@@ -513,31 +659,33 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
     (void)switch_hid_post(orientationHid, &report, sizeof(report));
 }
 
-// Work loop, PX2 masked until return: one burst of status and data, which releases the latched data-ready.
+// Work loop, PX2 masked until return: status and data, which releases the latched data-ready.
 void SwitchMotion::sample()
 {
     const uint64_t now = mach_absolute_time();
-    int16_t accel[3], gyro[3];
-    bool fresh[2];
-    if (info == &kST) {
+    int16_t accel[3] = {}, gyro[3] = {};
+    bool fresh[2] = {};
+    switch (part->family) {
+    case Family::ST: {
         uint8_t b[st::kBurst];
         readRegisters(st::Status, b, sizeof(b));
-        fresh[Accel] = b[0] & st::DrdyXl;
-        fresh[Gyro] = b[0] & st::DrdyG;
-        for (unsigned i = 0; i < 3; ++i) {
-            gyro[i] = (int16_t)(b[4 + 2 * i] | b[5 + 2 * i] << 8);
-            accel[i] = (int16_t)(b[10 + 2 * i] | b[11 + 2 * i] << 8);
-        }
-    } else {
-        uint8_t b[icm::kBurst];
-        readRegisters(icm::AccelData, b, sizeof(b));
-        fresh[Accel] = fresh[Gyro] = b[14] & icm::DataReady;
-        for (unsigned i = 0; i < 3; ++i) {
-            accel[i] = (int16_t)(b[2 * i] << 8 | b[1 + 2 * i]);
-            gyro[i] = (int16_t)(b[6 + 2 * i] << 8 | b[7 + 2 * i]);
-        }
-        if (accel[0] == icm::kInvalid || accel[1] == icm::kInvalid || accel[2] == icm::kInvalid) fresh[Accel] = false;
-        if (gyro[0] == icm::kInvalid || gyro[1] == icm::kInvalid || gyro[2] == icm::kInvalid) fresh[Gyro] = false;
+        decodeST(b, accel, gyro, fresh);
+        break;
+    }
+    case Family::ICM40607: {
+        uint8_t b[icm40607::kBurst];
+        readRegisters(icm40607::AccelData, b, sizeof(b));
+        decodeICM(b, b[14] & icm40607::DataReady, accel, gyro, fresh);
+        break;
+    }
+    case Family::ICM42607: {
+        // TDK inv_imu_get_data_from_registers: INT_STATUS_DRDY first (the read clears it and drops INT2), then data.
+        uint8_t status = 0, b[icm42607::kBurst];
+        readRegisters(icm42607::IntStatusDrdy, &status, 1);
+        readRegisters(icm42607::AccelData, b, sizeof(b));
+        decodeICM(b, status & icm42607::DataReady, accel, gyro, fresh);
+        break;
+    }
     }
     fresh[Accel] = fresh[Accel] && on[Accel];
     fresh[Gyro] = fresh[Gyro] && on[Gyro];
