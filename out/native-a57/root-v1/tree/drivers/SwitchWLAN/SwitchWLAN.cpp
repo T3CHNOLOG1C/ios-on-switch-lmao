@@ -182,6 +182,7 @@ OSDeclareDefaultStructors(SwitchWLAN)
     void counters(char *text, size_t size);
     void setMac(const uint8_t mac[6]) { memcpy(mac_, mac, 6); }
     void btState(uint32_t flags, bool power);
+    void btLinks(unsigned links);
 
     // The firmware's own AWDL for SwitchWLANAwdl.cpp (SwitchWLANAwdlRadio.h §6). Open/close and the iovars wait for
     // the firmware: thread context only, never the work loop. The callbacks are only stored here; the work loop calls
@@ -259,6 +260,7 @@ private:
     // Coexistence ("Coexistence" section): what wifid says Bluetooth is doing (SWLAN_BT_*), and its power.
     uint32_t btFlags_ = 0;
     bool btPower_ = true, btChanged_ = false;
+    unsigned btLinks_ = 0;  // SwitchBluetooth's links (switch_wlan_bt_links)
 
     // AWDL: the firmware's cap list has "awdl"; open (event mask on, frames and events routed); the AWDL
     // interface's firmware index from its WLC_E_IF (-1 until then).
@@ -308,10 +310,15 @@ private:
     // The power-save mode the station runs (coexApply) and whether the firmware took HOS's sleep return this join.
     uint32_t pm_ = 0;
     bool sleepRetSet_ = false, sleepRetRefused_ = false;
+    // The coexistence mode (coexMode): the firmware's own at bring-up (its idle mode), the one we last set, refusals.
+    uint32_t btcIdleMode_ = SWLAN_BTC_HYBRID, btcMode_ = 0;
+    bool btcModeRefused_ = false;
     bool readSta(swlan_sta &out);
     void coexBringUp();
     void coexJoined();
     void coexApply();
+    void coexConfigure();
+    void coexMode();
 
     template <typename F> void locked(F f)
     {
@@ -802,6 +809,7 @@ bool SwitchWLAN::radioInit()
     if (!setVar("join_pref", joinPref, sizeof(joinPref))) IOLog("SwitchWLAN: join_pref refused: %s\n", why_);
     if (!cmdInt(WLC_UP, 1)) return false;
     coexBringUp();
+    coexConfigure();
     uint8_t country[12] = {};
     size_t n = 0;
     char abbrev[5] = "?", code[5] = "?";
@@ -1621,7 +1629,10 @@ void SwitchWLAN::run()
             state = status_.state;
             btChanged = btChanged_;
         });
-        if (btChanged && state == SWLAN_STA_UP) coexApply();
+        if (btChanged) {
+            coexMode();
+            if (state == SWLAN_STA_UP) coexApply();
+        }
         FwEvent e;
         while (popEvent(e)) {
             if (state != SWLAN_STA_UP) continue;
@@ -2055,6 +2066,66 @@ void SwitchWLAN::btState(uint32_t flags, bool power)
     swlan_bt_flags_describe(flags, text, sizeof(text));
     os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: wifid says Bluetooth %s, %s (flags %#x)", power ? "on" : "off", text,
            flags);
+}
+
+// Any thread (SwitchBluetooth's work loop): the controller's link count changed; the worker sets the mode (coexMode).
+void SwitchWLAN::btLinks(unsigned links)
+{
+    locked([&] {
+        if (links == btLinks_) return;
+        btLinks_ = links;
+        btChanged_ = true;
+        kick();
+    });
+}
+
+// Bring-up (radioInit, after coexBringUp): the NVRAM's dynamic coexistence control off (SwitchWLANCoex.h, "The
+// coexistence mode we run"), the firmware's current mode kept as the idle mode, then the mode for the links there are
+// (after a recovery Bluetooth may have some). One line with what the firmware reads back.
+void SwitchWLAN::coexConfigure()
+{
+    uint8_t v[64] = {};
+    size_t n = 0;
+    const char *dynamic = "left (no version 1 profile)";
+    if (getVar("btc_dynctl", v, sizeof(v), &n) && swlan_btc_profile_static(v, n))
+        dynamic = setVar("btc_dynctl", v, 50) ? "off" : "left (refused)";
+    uint8_t back[64] = {};
+    size_t m = 0;
+    const int flags = getVar("btc_dynctl", back, sizeof(back), &m) && m >= 2 && back[0] == 1 ? back[1] : -1;
+    if (getVar("btc_mode", v, sizeof(v), &n) && n >= 4) btcIdleMode_ = swlan::le32(v);
+    btcMode_ = btcIdleMode_;
+    btcModeRefused_ = false;
+    os_log(OS_LOG_DEFAULT,
+           "SwitchWLAN: coex: dynamic coexistence (desense) %s, firmware reads btcdyn flags %d; idle "
+           "mode %u",
+           dynamic, flags, btcIdleMode_);
+    coexMode();
+}
+
+// Worker, chip up: full TDM while Bluetooth has any link, the idle mode without (swlan_coex_mode). One line per change
+// with the firmware's readback; a refusal is one line and the mode is left as it is for the boot.
+void SwitchWLAN::coexMode()
+{
+    unsigned links = 0;
+    locked([&] {
+        links = btLinks_;
+        btChanged_ = false;  // (coexApply, when joined, runs on the same change: the caller read the flag first)
+    });
+    const uint32_t want = swlan_coex_mode(links, btcIdleMode_);
+    if (btcModeRefused_ || want == btcMode_) return;
+    uint8_t le[4];
+    swlan::put32(le, want);
+    if (!setVar("btc_mode", le, sizeof(le))) {
+        btcModeRefused_ = true;
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: btc_mode %u refused (%s); left at %u", want, why_, btcMode_);
+        return;
+    }
+    btcMode_ = want;
+    uint8_t v[4] = {};
+    size_t n = 0;
+    const int readBack = getVar("btc_mode", v, sizeof(v), &n) && n >= 4 ? static_cast<int>(swlan::le32(v)) : -1;
+    os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: btc_mode %u (%s; firmware reads %d): %u Bluetooth link%s", want,
+           want == SWLAN_BTC_FULL_TDM ? "full TDM" : "the firmware's own", readBack, links, links == 1 ? "" : "s");
 }
 
 // Worker, once per join (joinOnce left the station at PM 0): the counters' baselines, then our power-save mode.
@@ -2526,6 +2597,10 @@ extern "C" void switch_wlan_status_get(struct swlan_status *out)
         gDriver->status(out);
     else
         memset(out, 0, sizeof(*out));
+}
+extern "C" void switch_wlan_bt_links(unsigned links)
+{
+    if (gDriver) gDriver->btLinks(links);
 }
 extern "C" void switch_wlan_bt_state(uint32_t flags, int power)
 {

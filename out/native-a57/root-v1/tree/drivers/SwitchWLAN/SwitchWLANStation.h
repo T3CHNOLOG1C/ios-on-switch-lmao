@@ -104,6 +104,8 @@ void switch_wlan_counters(char *text, size_t size);  // frames and losses, one l
 // What wifid says Bluetooth is doing (APPLE80211_IOC_BT_COEX_FLAGS: SWLAN_BT_* of SwitchWLANCoex.h) and whether its
 // power is on (APPLE80211_IOC_BT_POWER), for the radio's coexistence handling and its stats line.
 void switch_wlan_bt_state(uint32_t flags, int power);
+// SwitchBluetooth: how many links (ACL and LE) the controller has, at every change; the coexistence mode follows it.
+void switch_wlan_bt_links(unsigned links);
 
 // SwitchWLANNet.cpp: what en0 did with the frames, for the radio's stats line.
 struct swlan_net_counters {

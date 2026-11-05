@@ -152,6 +152,8 @@ extern "C" __attribute__((weak)) uint16_t swlan_awdl_infra_freq(void)
 {
     return 0;
 }
+// SwitchWLAN.cpp: the controller's link count, at every change (the Wi-Fi coexistence mode follows it).
+extern "C" __attribute__((weak)) void switch_wlan_bt_links(unsigned) {}
 
 namespace {
 constexpr vm_offset_t kUartPA = 0x70006000, kUartD = 0x300;  // UART-A page; UART-D at +0x300 (hekate uart.c)
@@ -274,6 +276,8 @@ enum : uint16_t {
 enum : uint8_t { H4_COMMAND = 1, H4_ACL = 2, H4_SCO = 3, H4_EVENT = 4 };
 enum : uint8_t { EV_COMMAND_COMPLETE = 0x0e, EV_COMMAND_STATUS = 0x0f, EV_HARDWARE_ERROR = 0x10 };
 enum : uint8_t { EV_NUM_COMPLETED = 0x13, EV_LE_META = 0x3e, EV_VENDOR = 0xff, LE_ADV_REPORT = 0x02 };
+enum : uint8_t { EV_FLUSH_OCCURRED = 0x11 };      // {handle}: an ACL packet flushed after its flush timeout
+constexpr uint16_t OP_READ_BUFFER_SIZE = 0x1005;  // returns {ACL length, SCO length, ACL packets, SCO packets}
 enum : uint8_t { LE_CONN_COMPLETE = 0x01, LE_ENH_CONN_COMPLETE = 0x0a };
 // LE commands bluetoothd's own (Apple-chip) choices meet on this controller (BLE section in the client-mode comments).
 enum : uint16_t {
@@ -541,6 +545,11 @@ class SwitchBluetooth : public IOService {
     // for (0: every channel usable, as after a reset), when to read the links' maps back, and whether it refused.
     uint16_t injectOp = 0;
     uint8_t injectStatus = 0, injectLength = 0, injectRet[16] = {};
+    // Air-time evidence for the stats lines: Flush Occurred events (packets the controller dropped after the flush
+    // timeout, A2DP's 60 or 200 ms) and the controller's ACL buffers (Read Buffer Size), against which a link's most
+    // held packets in a window is read.
+    uint32_t coexFlushes = 0, coexFlushesSeen = 0;  // atomic / coexSnapshot
+    uint16_t aclBuffers = 0;
     uint16_t afhMhz = 0;                      // the Wi-Fi channel the checks below are for (0: none on 2.4 GHz)
     uint64_t afhCheckAt = 0;                  // when to read the links' AFH maps (0: not due)
     unsigned afhLinks = 0;                    // ACL links at the last check
@@ -1572,11 +1581,13 @@ void SwitchBluetooth::resetClientFraming()
     role = SWITCH_BT_ROLE_UNKNOWN;
     switch_coex_bt_reset(&coex);  // and none of its scans or priorities
     injectOp = 0;
+    coexFlushesSeen = __atomic_load_n(&coexFlushes, __ATOMIC_RELAXED);
     afhMhz = 0;
     afhCheckAt = 0;
     afhLinks = 0;
     afhSet = false;
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    switch_wlan_bt_links(0);
 }
 
 // Client thread, before the bytes go out: the commands in the client's H4 stream join `sentCmds`. ACL and SCO
@@ -1683,6 +1694,10 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
         case EV_COMMAND_STATUS: ++st.cs; break;
         case EV_NUM_COMPLETED: ++st.nocp; break;
         case EV_VENDOR: ++st.vendor; break;
+        case EV_FLUSH_OCCURRED:  // a packet the controller gave up on after the flush timeout ("Coexistence")
+            __atomic_fetch_add(&coexFlushes, 1, __ATOMIC_RELAXED);
+            ++st.otherEvents;
+            break;
         case EV_LE_META: {
             ++st.le;
             const uint8_t sub = at(2) >= 1 ? at(3) : 0;
@@ -1731,6 +1746,7 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
                 !status && at(2) > 4 ? (at(2) - 4u < kTraceReturn ? at(2) - 4u : kTraceReturn) : 0;
             for (uint32_t i = 0; i < retLength; ++i) ret[i] = at(7 + i);
             countCompletion(opcode, (uint8_t)was);
+            if (opcode == OP_READ_BUFFER_SIZE && !was && retLength >= 5) aclBuffers = (uint16_t)(ret[3] | ret[4] << 8);
             traceCompletion(opcode, status, (uint8_t)was, ret, retLength);
             linkCompletion(opcode, status, (uint8_t)was);
         }
@@ -1994,15 +2010,26 @@ bool SwitchBluetooth::coexSnapshot(switch_coex_bt *out, char *linksText, size_t 
     if (mode != kClient || !cmdLock) return false;
     uint16_t active[SWITCH_BT_LINKS];
     unsigned acl = 0, le = 0, activeCount = 0;
+    uint32_t held = 0;  // the most ACL packets one link had in the controller since the last snapshot
+    uint16_t heldBy = 0;
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
     *out = coex;
-    for (const switch_bt_link &l : links.link) {
+    for (switch_bt_link &l : links.link) {
         if (l.kind == SWITCH_BT_LINK_LE) ++le;
+        if (l.kind == SWITCH_BT_LINK_FREE) continue;
+        if (l.window > held) {
+            held = l.window;
+            heldBy = l.handle;
+        }
+        l.window = l.tx - l.done;  // the next window starts with what it holds now
         if (l.kind != SWITCH_BT_LINK_ACL) continue;
         ++acl;
         if (l.mode == 0) active[activeCount++] = l.handle;
     }
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    const uint32_t flushes = __atomic_load_n(&coexFlushes, __ATOMIC_RELAXED);
+    const uint32_t flushed = flushes - coexFlushesSeen;
+    coexFlushesSeen = flushes;
     if (!size) return true;
     int n = snprintf(linksText, size, "%u ACL", acl);
     size_t at = n > 0 ? static_cast<size_t>(n) : 0;
@@ -2012,6 +2039,15 @@ bool SwitchBluetooth::coexSnapshot(switch_coex_bt *out, char *linksText, size_t 
     }
     for (unsigned i = 0; i < activeCount && at < size; ++i) {
         n = snprintf(linksText + at, size - at, "%s%04x", i ? " " : ", active ", active[i]);
+        at += n > 0 ? static_cast<size_t>(n) : 0;
+    }
+    // Air time: the most packets a link waited with in the controller (of its aclBuffers), and the packets it flushed.
+    if (at < size && held) {
+        n = snprintf(linksText + at, size - at, ", held at most %u of %u (%04x)", held, aclBuffers, heldBy);
+        at += n > 0 ? static_cast<size_t>(n) : 0;
+    }
+    if (at < size && flushed) {
+        n = snprintf(linksText + at, size - at, ", %u flushed", flushed);
         at += n > 0 ? static_cast<size_t>(n) : 0;
     }
     return true;
@@ -2268,7 +2304,13 @@ void SwitchBluetooth::linkEvent(uint8_t code, uint32_t length)
     }
     default: break;
     }
+    unsigned linkCount = 0;
+    const bool linksMayChange = code == SWITCH_BT_EV_CONNECTION_COMPLETE || code == SWITCH_BT_EV_LE_META ||
+                                code == SWITCH_BT_EV_DISCONNECTION_COMPLETE;
+    if (linksMayChange)
+        for (const switch_bt_link &l : links.link) linkCount += l.kind != SWITCH_BT_LINK_FREE;
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    if (linksMayChange) switch_wlan_bt_links(linkCount);  // the Wi-Fi coexistence mode follows ("Coexistence")
     if (code == SWITCH_BT_EV_NUM_COMPLETED) return;
     switch_bt_describe_event(linkText, sizeof(linkText), code, p, length);
     linkLog("<-", linkText, wasOpen ? &closed : nullptr);

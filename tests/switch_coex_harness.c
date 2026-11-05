@@ -118,3 +118,13 @@ int nvram_value(const char *text, size_t length, const char *key, uint32_t *out)
 {
     return swlan_nvram_value(text, length, key, out);
 }
+
+int btc_profile_static(uint8_t *profile, size_t length)
+{
+    return swlan_btc_profile_static(profile, length);
+}
+
+unsigned coex_mode(unsigned links, unsigned idle_mode)
+{
+    return swlan_coex_mode(links, idle_mode);
+}

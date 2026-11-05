@@ -61,6 +61,9 @@ class Coex(unittest.TestCase):
         lib.btc_status_describe.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t]
         lib.btc_profile_describe.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t]
         lib.nvram_value.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint32)]
+        lib.btc_profile_static.argtypes = [ctypes.c_char_p, ctypes.c_size_t]
+        lib.coex_mode.argtypes = [ctypes.c_uint, ctypes.c_uint]
+        lib.coex_mode.restype = ctypes.c_uint
 
     @classmethod
     def tearDownClass(cls):
@@ -262,6 +265,23 @@ class Coex(unittest.TestCase):
                                  b'btc_params84': 0x8, b'btcdyn_flags': 0x3, b'xtalfreq': 37400})
         self.assertFalse(self.lib.nvram_value(text, len(text), b'btc_mode', ctypes.byref(value)))  # HOS sets none
         self.assertFalse(self.lib.nvram_value(b'boardflags=zz\n', 14, b'boardflags', ctypes.byref(value)))
+
+
+    # Wi-Fi: the coexistence mode (r8a: desense with any Bluetooth link)
+    def test_dynamic_coexistence_off_and_tdm_with_links(self):
+        # the firmware's btc_dynctl as r8a read it back: version 1, flags 0x3, levels 99/0/22/24, default mode 5
+        profile = bytes([1, 3, 99, 0, 22, 24, 5, 5, 0, 1]) + bytes(20) + struct.pack('<bbbbb', 5, -120, 0, -52, -72)
+        profile = ctypes.create_string_buffer(profile + bytes(50 - len(profile)), 50)
+        self.assertTrue(self.lib.btc_profile_static(profile, 50))
+        self.assertEqual(profile.raw[:10], bytes([1, 0, 99, 0, 22, 24, 5, 5, 0, 1]))  # only the flags change
+        self.assertEqual(struct.unpack('<bbbbb', profile.raw[30:35]), (5, -120, 0, -52, -72))
+        other = ctypes.create_string_buffer(bytes([2, 3]) + bytes(48), 50)
+        self.assertFalse(self.lib.btc_profile_static(other, 50))  # another version: left alone
+        self.assertEqual(other.raw[1], 3)
+        self.assertFalse(self.lib.btc_profile_static(profile, 40))  # short
+        self.assertEqual(self.lib.coex_mode(0, 5), 5)  # no link: the firmware's own (hybrid)
+        self.assertEqual(self.lib.coex_mode(1, 5), 1)  # a Joy-Con: full TDM
+        self.assertEqual(self.lib.coex_mode(3, 5), 1)  # two Joy-Cons and the AirPods
 
 
 if __name__ == '__main__':

@@ -35,6 +35,7 @@ struct switch_bt_link {
     uint32_t tx;        // ACL packets to it
     uint32_t done;      // completed (Number Of Completed Packets)
     uint32_t peak;      // the most tx - done ever was
+    uint32_t window;    // the most tx - done since the coexistence snapshot last looked (SwitchBluetooth.cpp)
 };
 
 struct switch_bt_links {
@@ -69,7 +70,7 @@ static inline struct switch_bt_link *switch_bt_link_open(struct switch_bt_links 
     for (unsigned i = 0; !slot && i < SWITCH_BT_LINKS; ++i)
         if (links->link[i].kind == SWITCH_BT_LINK_FREE) slot = &links->link[i];
     if (!slot) return NULL;
-    const struct switch_bt_link fresh = {handle, kind, role, {0}, 0, 0, 0, 0, 0, 0, 0};
+    const struct switch_bt_link fresh = {handle, kind, role, {0}, 0, 0, 0, 0, 0, 0, 0, 0};
     *slot = fresh;
     for (unsigned i = 0; i < 6; ++i) slot->addr[i] = addr[i];
     return slot;
@@ -100,6 +101,7 @@ static inline void switch_bt_link_tx(struct switch_bt_links *links, uint16_t han
     }
     ++slot->tx;
     if (slot->tx - slot->done > slot->peak) slot->peak = slot->tx - slot->done;
+    if (slot->tx - slot->done > slot->window) slot->window = slot->tx - slot->done;
 }
 
 // HCI_Number_Of_Completed_Packets parameters (Num_Handles, then handle and count pairs): the counts added to their

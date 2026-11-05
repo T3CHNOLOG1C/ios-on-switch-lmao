@@ -206,6 +206,34 @@ static inline int swlan_btc_status_describe(const struct swlan_btc_status *s, ch
                     s->bt_pwr, s->bt_rssi, s->wl_rssi);
 }
 
+// ---- The coexistence mode we run -------------------------------------------------------------------------------
+//
+// r8a (11-05 15:00-15:20, fast.com on 2.4 GHz channel 6, PM 2): whenever Bluetooth had a link, the NVRAM's dynamic
+// desense (btcdyn, hybrid mode 5) turned the receiver down (btc_dynctl_status desense 22 at Wi-Fi RSSI -52 or less, 24
+// above, against 99 with no link) and the access point's rate to us fell from 130-144 Mb/s to 14-65: 40 Mbps with no
+// link, 13-14 with one Joy-Con, 5-10 with two and the AirPods. The same 25 minutes, bluetoothd logged 107 A2DP packets
+// flushed by the controller (not on air within the 60 ms flush timeout) while Wi-Fi was busy. So: the dynamic control
+// and its desense off (btc_dynctl flags 0), and while any Bluetooth link is up full TDM (btc_mode 1: the radios take
+// turns on the shared antenna, Bluetooth's slots its own, nothing received through Bluetooth's transmissions, so
+// nothing to desense against; what Apple's BCM4355C0 iPads and the Nexus 6's BCM4356 ship); with no link the
+// firmware's own mode (5, hybrid) as HOS runs it.
+enum { SWLAN_BTC_FULL_TDM = 1, SWLAN_BTC_HYBRID = 5 };
+
+// dctl_prof_t (50 bytes, version 1) with the dynamic control off: flags 0 (no dynamic control, desense or mode
+// switching); the rest as the NVRAM made it. False for any other layout (the profile is left alone).
+static inline bool swlan_btc_profile_static(uint8_t *b, size_t n)
+{
+    if (n < 50 || b[0] != 1) return false;
+    b[1] = 0;
+    return true;
+}
+
+// The mode for the links Bluetooth has: full TDM with any, else the firmware's idle mode.
+static inline unsigned swlan_coex_mode(unsigned links, unsigned idle_mode)
+{
+    return links ? SWLAN_BTC_FULL_TDM : idle_mode;
+}
+
 // "btcdyn v1 flags 0x3, desense levels 99/0/22/24, default mode 5, desense rows 5,-120,0,-52,-72"; 0 when the
 // answer is too short or not version 1.
 static inline int swlan_btc_profile_describe(const uint8_t *b, size_t n, char *out, size_t size)
