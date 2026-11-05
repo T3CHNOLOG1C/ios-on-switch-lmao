@@ -1,4 +1,4 @@
-// TegraAPBDMA's interface stays what its users were written against (r17-iodma's UART channels, r17-touch's I2C3), and
+// TegraAPBDMA's interface stays what its users were written against (the UART channels, I2C3), and
 // the I2C3 word transfer is programmed as Linux's tegra20-apb-dma.c programs DMA_DEV_TO_MEM with a 4-byte slave width
 // and maxburst 1 (no register model here: the source is checked).
 #include <gmock/gmock.h>
@@ -15,7 +15,7 @@
 static_assert(TEGRA_APBDMA_CH_UARTB_RX == 0);
 static_assert(TEGRA_APBDMA_CH_UARTC_RX == 1);
 static_assert(TEGRA_APBDMA_CH_UARTD_TX == 2);
-static_assert(TEGRA_APBDMA_CH_UARTD_RX == 3);  // r17-iodma's UART-D RX
+static_assert(TEGRA_APBDMA_CH_UARTD_RX == 3);
 static_assert(TEGRA_APBDMA_CH_I2C3_RX == 4);
 static_assert(TEGRA_APBDMA_REQ_UARTB == 9);
 static_assert(TEGRA_APBDMA_REQ_UARTC == 10);
