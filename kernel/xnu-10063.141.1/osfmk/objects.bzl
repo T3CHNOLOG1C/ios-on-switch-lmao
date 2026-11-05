@@ -595,3 +595,14 @@ DEVELOPMENT = struct(
         "osfmk/kern/memset_s.c": ["-n __HIB"],
     },
 )
+
+# libpthread's XNU side (our patch adds it): bsd/kern/source_pthread_bootstrap.c, compiled as osfmk's prng_random.c is
+# (tools/kernel/libpthread.py took that object's compile record); it rides in libpthread_kernel.a, not in osfmk's link.
+PTHREAD_BOOTSTRAP = struct(
+    objects = ["bsd/kern/source_pthread_bootstrap.c"],
+    copts = {
+        "bsd/kern/source_pthread_bootstrap.c": ["-U", "XNU_SOURCE_CORECRYPTO14", "-Wno-sign-conversion"],
+    },
+    includes = {},
+    segments = {},
+)

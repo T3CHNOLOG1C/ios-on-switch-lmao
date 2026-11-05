@@ -5,7 +5,7 @@
 # source: add it to objects.bzl where conf/files would put it, with any flags its conf/Makefile.* entry adds.
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/xnu-10063.141.1/config:xnu_objects.bzl", "xnu_objects")
-load(":objects.bzl", "DEVELOPMENT")
+load(":objects.bzl", "DEVELOPMENT", "PTHREAD_BOOTSTRAP")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -74,4 +74,12 @@ xnu_objects(
     # assym.s, which osfmk's assembly includes: genassym.c's constants (osfmk/conf/Makefile.template).
     genassym = "arm64/genassym.c",
     table = DEVELOPMENT,
+)
+
+# libpthread_kernel.a's XNU object (//kernel:libpthread).
+xnu_objects(
+    name = "pthread_bootstrap",
+    srcs = ["//kernel/xnu-10063.141.1/bsd:kern/source_pthread_bootstrap.c"],
+    component = "osfmk",
+    table = PTHREAD_BOOTSTRAP,
 )

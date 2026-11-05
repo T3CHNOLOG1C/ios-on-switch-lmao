@@ -238,9 +238,9 @@ tool_output(
     name = "libpthread",
     srcs = [
         ":fakeroot",
-        ":xnu",
+        ":xnu_symbols",
+        "//kernel/xnu-10063.141.1/osfmk:pthread_bootstrap",
         "@libpthread//:all",
-        "//kernel/xnu-10063.141.1:srcs",
     ],
     outs = [
         "build/libpthread-kernel/libpthread_kernel.a",
@@ -249,9 +249,9 @@ tool_output(
     args = [
         "--xcode-env={xcode_env}",
         "--source=external/+http_archive+libpthread",
-        "--xnu=kernel/xnu-10063.141.1",
         "--sdkroot=$(location :fakeroot)",
-        "--objroot=$(execpath :xnu)",
+        "--kernel-names=$(execpath :xnu_symbols)",
+        "--bootstrap=$(execpath //kernel/xnu-10063.141.1/osfmk:pthread_bootstrap)",
         "--out={out0}",
         "--bootstrap-out={out1}",
         "--path-root={path_root}",
