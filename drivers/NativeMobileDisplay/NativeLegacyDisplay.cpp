@@ -47,6 +47,10 @@ extern "C" IOMemoryDescriptor *native_legacy_surface_descriptor(OSObject *);
 // drivers/TegraGM20B gpu.c: waits for every GPU submission, then cleans+invalidates the range. Weak: absent, the copy is unchanged.
 // 0, or -ETIMEDOUT once the deadline passed (the range is invalidated either way); with no GPU channel it returns at once.
 extern "C" int tegra_gm20b_sync_for_cpu(const void *, uint64_t, uint64_t) __attribute__((weak));
+// XNU ipc_kmsg.c (osfmk/ipc/ioswitch_render_senders.h): the mach messages the render server receives, by sender
+extern "C" void ioswitch_render_server_watch(task_t);
+extern "C" void proc_selfname(char *, int);
+extern "C" size_t ioswitch_render_senders_line(char *, size_t, uint64_t, unsigned);
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
@@ -1229,6 +1233,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         stPhaseLead = Span{};
         if (quiet) add("%s", "; quiet (the next quiet windows are not logged)");
         if (logged) os_log(OS_LOG_DEFAULT, "IOSwitch display pacing: %s", line);  // log only, never the boot console
+        // who drew in this window: Core Animation's clients send each commit to the render server as a mach message
+        if (ioswitch_render_senders_line(line, sizeof(line), us / 1000, 6) && logged)
+            os_log(OS_LOG_DEFAULT, "IOSwitch display clients: %llu ms to the render server: %s",
+                   (unsigned long long)(us / 1000), line);
         stTouchSwap = Span{};
         stTouchScan = FrameHist{};
         stPQueue = stPWait = stPCopy = stPLatch = Span{};
@@ -3984,6 +3992,9 @@ public:
     IOReturn newUserClient(task_t task, void *security, UInt32 type, IOUserClient **client) override
     {
         native_legacy_client_enter(task, type);
+        char opener[17] = {};
+        proc_selfname(opener, sizeof(opener));
+        if (!strcmp(opener, "backboardd")) ioswitch_render_server_watch(task);  // the opener, in its own context
         IOReturn status = IOMobileFramebufferLegacy::newUserClient(task, security, type, client);
         native_legacy_client_observed(status, status == kIOReturnSuccess && client ? *client : nullptr);
         if (status == kIOReturnSuccess && client && *client && primary && displaySleepEnabled())

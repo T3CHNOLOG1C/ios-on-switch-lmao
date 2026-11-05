@@ -9,6 +9,10 @@
 #   xnu_zero_fill_around_test  vm_fault.c's ioswitch_zero_fill_around (r17-faults) enters exactly the absent pages of
 #                            the faulting page's 16 KiB group in its map entry and VM object, and nothing outside the
 #                            plain case, against a model of the object and pmap
+#   xnu_render_senders_test  osfmk/ipc/ioswitch_render_senders.h's table and line: the render server's senders by
+#                            process, largest first, with their rates and top ids, the rest as others
+#   xnu_render_senders_source_test  ipc_kmsg_send counts a message under its destination port's lock, only for the
+#                            watched space and not for a kernel reply
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -129,4 +133,27 @@ host_test(
     name = "xnu_zero_fill_around_test",
     srcs = ["xnu_zero_fill_around_test.cpp"],
     deps = [":zero_fill_around"],
+)
+
+# --- ioswitch_render_senders.h ----------------------------------------------------------------------------------------
+copy_file(
+    name = "ioswitch_render_senders",
+    src = "//kernel/xnu-10063.141.1/osfmk:ipc/ioswitch_render_senders.h",
+    out = "ioswitch_render_senders.h",
+)
+
+host_test(
+    name = "xnu_render_senders_test",
+    srcs = [
+        "ioswitch_render_senders.h",
+        "xnu_render_senders_test.cpp",
+    ],
+    includes = ["."],
+)
+
+host_test(
+    name = "xnu_render_senders_source_test",
+    srcs = ["xnu_render_senders_source_test.cpp"],
+    data = ["//kernel/xnu-10063.141.1/osfmk:ipc/ipc_kmsg.c"],
+    defines = ['IPC_KMSG=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:ipc/ipc_kmsg.c)\\"'],
 )

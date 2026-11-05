@@ -137,6 +137,7 @@
 #if __has_feature(ptrauth_calls)
 #include <libkern/ptrauth_utils.h>
 #endif
+#include <ipc/ioswitch_render_senders.h>
 
 
 /*
@@ -5202,6 +5203,46 @@ ipc_kmsg_copyin_from_kernel(
 }
 
 /*
+ * IOSwitch: messages to the render server by sender and id (ioswitch_render_senders.h). The display names the render
+ * server's task; its space pointer is only ever compared, so a stale one (the server exited) costs nothing but a
+ * miscount until the next server opens the display.
+ */
+static void *volatile ioswitch_render_server_space;
+static struct ioswitch_render_senders ioswitch_render_senders;
+static LCK_GRP_DECLARE(ioswitch_render_senders_grp, "ioswitch_render_senders");
+static LCK_SPIN_DECLARE(ioswitch_render_senders_lock, &ioswitch_render_senders_grp);
+extern char *proc_best_name(struct proc *proc);
+
+void
+ioswitch_render_server_watch(task_t task)
+{
+	ioswitch_render_server_space = task ? (void *)task->itk_space : NULL;
+}
+
+size_t
+ioswitch_render_senders_line(char *out, size_t size, uint64_t window_ms, unsigned top)
+{
+	struct ioswitch_render_senders taken;
+	lck_spin_lock(&ioswitch_render_senders_lock);
+	taken = ioswitch_render_senders;
+	ioswitch_render_senders.used = ioswitch_render_senders.dropped = 0;
+	lck_spin_unlock(&ioswitch_render_senders_lock);
+	return ioswitch_render_senders_format(&taken, window_ms, top, out, size);
+}
+
+/* Under the destination port's lock (a spin lock, so this lock nests inside it and takes nothing else). */
+static void
+ioswitch_render_sender_note(mach_msg_id_t id)
+{
+	task_t task = current_task();
+	struct proc *proc = (struct proc *)get_bsdtask_info(task);
+	const char *name = proc ? proc_best_name(proc) : "kernel";
+	lck_spin_lock(&ioswitch_render_senders_lock);
+	ioswitch_render_senders_note(&ioswitch_render_senders, task_pid(task), id, name);
+	lck_spin_unlock(&ioswitch_render_senders_lock);
+}
+
+/*
  *	Routine:	ipc_kmsg_send
  *	Purpose:
  *		Send a message.  The message holds a reference
@@ -5365,6 +5406,11 @@ retry:
 		 * call mqueue_send() on its message queue.
 		 */
 		ipc_special_reply_port_msg_sent(port);
+
+		if (__improbable(ioswitch_render_server_space != NULL) && !kernel_reply &&
+		    ip_in_space(port, (ipc_space_t)ioswitch_render_server_space)) {
+			ioswitch_render_sender_note(hdr->msgh_id);
+		}
 
 		error = ipc_mqueue_send_locked(&port->ip_messages, kmsg,
 		    options, send_timeout);
