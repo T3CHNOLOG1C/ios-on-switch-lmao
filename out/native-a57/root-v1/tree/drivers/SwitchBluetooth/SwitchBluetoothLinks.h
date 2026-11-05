@@ -121,6 +121,78 @@ static inline int switch_bt_links_completed(struct switch_bt_links *links, const
     return total;
 }
 
+// ---- Incoming gamepads: accepted as central ---------------------------------------------------------------------
+//
+// A Joy-Con reconnecting pages its host, so it is the link's central (master) at first. bluetoothd accepts with Role 1
+// (stay peripheral) and leaves the switch to the Joy-Con, which asks for it ~170-290 ms after Connection Complete and
+// only then authenticates and opens HID (r7v 11-05 12:34). The left one always went on from there; the right one
+// often did not: after its switch it went quiet and disconnected 160 ms later (reason 0x13, 12:34:01.061 and 03.291),
+// or it never switched and never authenticated until bluetoothd gave up 4 s later (05.591, 11.196, 16.080, 42.740),
+// ignoring the SDP requests sent meanwhile (rx 0, tx 4 at 16.080). That this switch is the cause is a hypothesis
+// (the left Joy-Con went through the same sequence fine); taking it out of the picture is the test. A console ends
+// up central of its Joy-Cons, and a host that becomes central at the accept has no role switch left for the Joy-Con
+// to make. So bluetoothd's Accept Connection Request for a gamepad or joystick (Class of Device major class
+// Peripheral, minor 1 or 2, as its Connection Request said) goes out with Role 0: the controller switches roles
+// before Connection Complete (a Role Change event first), and the host is central of every Joy-Con and of the
+// AirPods it connects itself, with no scatternet. A remote that refuses the switch keeps its role and the connection
+// completes as before.
+
+#define SWITCH_BT_REQUESTS 4
+
+struct switch_bt_request {
+    uint8_t addr[6];  // HCI byte order
+    uint8_t used;
+    uint32_t cod;  // Class of Device
+};
+
+struct switch_bt_requests {
+    struct switch_bt_request entry[SWITCH_BT_REQUESTS];
+    uint32_t next;
+};
+
+// A gamepad or joystick: major device class Peripheral (5), minor bits 5:2 joystick (1) or gamepad (2).
+static inline bool switch_bt_cod_is_gamepad(uint32_t cod)
+{
+    const uint32_t minor = (cod >> 2) & 0x0f;
+    return ((cod >> 8) & 0x1f) == 0x05 && (minor == 1 || minor == 2);
+}
+
+// Connection Request (address, class): kept until its Accept Connection Request, the oldest entry replaced.
+static inline void switch_bt_request_note(struct switch_bt_requests *requests, const uint8_t addr[6], uint32_t cod)
+{
+    struct switch_bt_request *slot = NULL;
+    for (unsigned i = 0; i < SWITCH_BT_REQUESTS && !slot; ++i) {
+        struct switch_bt_request *e = &requests->entry[i];
+        bool same = e->used;
+        for (unsigned b = 0; b < 6 && same; ++b) same = e->addr[b] == addr[b];
+        if (same) slot = e;
+    }
+    if (!slot) slot = &requests->entry[requests->next++ % SWITCH_BT_REQUESTS];
+    for (unsigned b = 0; b < 6; ++b) slot->addr[b] = addr[b];
+    slot->cod = cod;
+    slot->used = 1;
+}
+
+// Accept Connection Request parameters (address, role): for a gamepad's request still held, a Role 1 becomes 0 and
+// the request is consumed. Returns true when it changed the role; *cod gets the class when it did.
+static inline bool switch_bt_accept_as_central(struct switch_bt_requests *requests, uint8_t *params, uint32_t length,
+                                               uint32_t *cod)
+{
+    if (length < 7) return false;
+    for (unsigned i = 0; i < SWITCH_BT_REQUESTS; ++i) {
+        struct switch_bt_request *e = &requests->entry[i];
+        bool same = e->used;
+        for (unsigned b = 0; b < 6 && same; ++b) same = e->addr[b] == params[b];
+        if (!same) continue;
+        e->used = 0;
+        if (params[6] != 1 || !switch_bt_cod_is_gamepad(e->cod)) return false;
+        params[6] = 0;
+        if (cod) *cod = e->cod;
+        return true;
+    }
+    return false;
+}
+
 // ---- Tracing ------------------------------------------------------------------------------------------------------
 
 enum {

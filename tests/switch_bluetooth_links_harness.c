@@ -63,3 +63,21 @@ void bt_describe_command(char *out, size_t size, uint16_t opcode, const uint8_t 
 }
 
 int bt_command_traced(uint16_t opcode) { return switch_bt_link_command_name(opcode) != NULL; }
+
+static struct switch_bt_requests requests;
+
+void bt_requests_reset(void)
+{
+    const struct switch_bt_requests empty = {0};
+    requests = empty;
+}
+
+void bt_request_note(const uint8_t *addr, uint32_t cod) { switch_bt_request_note(&requests, addr, cod); }
+
+// Accept Connection Request parameters in place (7 bytes: address, role); the class when the role was changed.
+int bt_accept_as_central(uint8_t *params, uint32_t length, uint32_t *cod)
+{
+    return switch_bt_accept_as_central(&requests, params, length, cod);
+}
+
+int bt_cod_is_gamepad(uint32_t cod) { return switch_bt_cod_is_gamepad(cod); }

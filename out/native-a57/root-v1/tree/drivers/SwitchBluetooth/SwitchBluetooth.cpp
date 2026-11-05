@@ -229,6 +229,7 @@ enum : uint16_t {
     OP_LE_SET_SCAN_ENABLE = 0x200c,
     OP_BCM_LE_META = 0xfce9,           // Broadcom LE meta VSC: sub-operation first (bluetoothd _BCM_LEMeta*)
     OP_BCM_MULTI_ADV_PARAMS = 0xfd4a,  // bluetoothd _BCM_SetMultipleAdvInstanceParams
+    OP_ACCEPT_CONNECTION = 0x0409,     // Accept Connection Request {address, role} (SwitchBluetoothLinks.h)
 };
 // 0xFCE9 sub-operations not passed on (BLE section): enable features, PCF feature selection, PCF service UUID (and
 // its V2/V3 forms).
@@ -415,6 +416,7 @@ class SwitchBluetooth : public IOService {
         uint32_t leAdv, leAdvReports, leConn, leOther;   // LE meta events by sub-event
         uint32_t commands, leCommands, vendorCommands;   // client commands
         uint32_t answered, advFixed, scanOn, scanOff;    // answered here, intervals raised, LE scan enables
+        uint32_t central;                                // gamepads accepted as central (acceptAsCentral)
     } st = {}, stLogged = {};
     struct Failed {
         uint16_t opcode;
@@ -438,7 +440,17 @@ class SwitchBluetooth : public IOService {
     switch_bt_links links = {};
     uint8_t roleAddr[6] = {};  // the last Role Change's address and role, for a link whose Connection Complete follows
     uint8_t role = SWITCH_BT_ROLE_UNKNOWN;
-    uint32_t linkLines = 0;  // link trace lines logged this boot (atomic)
+    uint32_t linkLines = 0;            // link trace lines logged this boot (atomic)
+    switch_bt_requests requests = {};  // incoming Connection Requests until their Accept (cmdLock)
+    bool centralLogged = false;
+    bool acceptAsCentral(uint8_t *params, uint8_t length);
+    // Scratch for the work loop's link event and stats line (both under the work-loop gate: action or runAction), off
+    // the stack of whichever thread runs deliver() (it can be bluetoothd's, through ctlSend or ctlRcvd).
+    uint8_t linkParams[255] = {};
+    char linkText[200] = {};
+    switch_bt_links statsLinks = {};
+    char statsHeld[520] = {};
+    char statsLine[1024] = {};
     void linkEvent(uint8_t code, uint32_t length);
     void linkCommand(uint16_t opcode, const uint8_t *params, uint8_t length);
     void linkCompletion(uint16_t opcode, bool status, uint8_t result);
@@ -1149,6 +1161,7 @@ void SwitchBluetooth::resetClientFraming()
     sentOverflow = false;
     answerHead = answerTail = 0;
     links = {};  // a new client: the controller has no links (a used one was brought up again)
+    requests = {};
     role = SWITCH_BT_ROLE_UNKNOWN;
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
 }
@@ -1360,6 +1373,8 @@ errno_t SwitchBluetooth::clientCommand(uint8_t *packet, size_t size)
         return 0;
     }
     if (fixAdvertising(opcode, params, length)) __atomic_fetch_add(&st.advFixed, 1, __ATOMIC_RELAXED);
+    if (opcode == OP_ACCEPT_CONNECTION && acceptAsCentral(params, length))
+        __atomic_fetch_add(&st.central, 1, __ATOMIC_RELAXED);
     traceCommand(opcode, params, length, false);
     linkCommand(opcode, params, length);
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
@@ -1566,7 +1581,7 @@ void SwitchBluetooth::linkCompletion(uint16_t opcode, bool status, uint8_t resul
 // into the table and the trace. Number Of Completed Packets is only counted.
 void SwitchBluetooth::linkEvent(uint8_t code, uint32_t length)
 {
-    uint8_t p[255];
+    uint8_t *const p = linkParams;
     const uint32_t tail = rx.tail;
     for (uint32_t i = 0; i < length; ++i) p[i] = rx.data[(tail + 3 + i) & (kRingBytes - 1)];
     switch_bt_link closed = {};
@@ -1574,6 +1589,9 @@ void SwitchBluetooth::linkEvent(uint8_t code, uint32_t length)
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
     switch (code) {
     case SWITCH_BT_EV_NUM_COMPLETED: (void)switch_bt_links_completed(&links, p, length); break;
+    case SWITCH_BT_EV_CONNECTION_REQUEST:
+        if (length >= 10) switch_bt_request_note(&requests, p, (uint32_t)(p[6] | p[7] << 8 | p[8] << 16));
+        break;
     case SWITCH_BT_EV_CONNECTION_COMPLETE:
         if (length >= 11 && !p[0])
             (void)switch_bt_link_open(&links, switch_bt_le16(p + 1), SWITCH_BT_LINK_ACL, p + 3,
@@ -1612,9 +1630,27 @@ void SwitchBluetooth::linkEvent(uint8_t code, uint32_t length)
     }
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
     if (code == SWITCH_BT_EV_NUM_COMPLETED) return;
-    char line[200];
-    switch_bt_describe_event(line, sizeof(line), code, p, length);
-    linkLog("<-", line, wasOpen ? &closed : nullptr);
+    switch_bt_describe_event(linkText, sizeof(linkText), code, p, length);
+    linkLog("<-", linkText, wasOpen ? &closed : nullptr);
+}
+
+// Client thread (clientCommand): bluetoothd's Accept Connection Request for a gamepad that paged us, Role 1 (stay
+// peripheral) made 0 (become central; SwitchBluetoothLinks.h). One line the first time.
+bool SwitchBluetooth::acceptAsCentral(uint8_t *params, uint8_t length)
+{
+    uint32_t cod = 0;
+    const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    const bool changed = switch_bt_accept_as_central(&requests, params, length, &cod);
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    if (changed && !__atomic_exchange_n(&centralLogged, true, __ATOMIC_RELAXED)) {
+        char a[18];
+        switch_bt_format_addr(a, params);
+        IOLog(
+            "SwitchBluetooth: gamepad %s (class %#08x) accepted as central, so the controller switches roles while it "
+            "connects instead of the gamepad after it\n",
+            a, cod);
+    }
+    return changed;
 }
 
 // Work loop: a completion with a non-zero status, counted by opcode and status for the stats line.
@@ -1651,6 +1687,7 @@ void SwitchBluetooth::logStats(bool force)
     n.advFixed = __atomic_load_n(&st.advFixed, __ATOMIC_RELAXED);
     n.scanOn = __atomic_load_n(&st.scanOn, __ATOMIC_RELAXED);
     n.scanOff = __atomic_load_n(&st.scanOff, __ATOMIC_RELAXED);
+    n.central = __atomic_load_n(&st.central, __ATOMIC_RELAXED);
     const uint32_t irqsNow = irqs, rxNow = rxBytes, txNow = txBytes;
     const Stats &o = stLogged;
     if (n.events == o.events && n.acl == o.acl && n.sco == o.sco && n.commands == o.commands &&
@@ -1667,50 +1704,54 @@ void SwitchBluetooth::logStats(bool force)
     }
     // The links as they are now (totals since each came up; "Links" section): tx - done is what each holds of the
     // controller's ACL buffers.
-    switch_bt_links snapshot = {};
+    switch_bt_links &snapshot = statsLinks;
     IOInterruptState locked = IOSimpleLockLockDisableInterrupt(cmdLock);
     snapshot = links;
     IOSimpleLockUnlockEnableInterrupt(cmdLock, locked);
-    char held[520] = "";
+    char *const held = statsHeld;
+    constexpr size_t kHeld = sizeof(statsHeld);
+    held[0] = '\0';
     size_t used = 0;  // what is in `held`; an entry that would not fit ends it (snprintf returns what it wanted)
     for (const switch_bt_link &l : snapshot.link) {
         if (l.kind == SWITCH_BT_LINK_FREE) continue;
         char a[18];
         switch_bt_format_addr(a, l.addr);
-        const int n = snprintf(held + used, sizeof(held) - used,
+        const int w = snprintf(held + used, kHeld - used,
                                " %04x %s %s role %s %s %u, rx %u tx %u done %u outstanding %u peak %u;", l.handle, a,
                                l.kind == SWITCH_BT_LINK_LE ? "LE" : "ACL",
                                l.role == 0   ? "central"
                                : l.role == 1 ? "peripheral"
                                              : "?",
                                l.mode == 2 ? "sniff" : "active", l.interval, l.rx, l.tx, l.done, l.tx - l.done, l.peak);
-        if (n < 0 || used + (size_t)n >= sizeof(held)) {
+        if (w < 0 || used + (size_t)w >= kHeld) {
             held[used] = '\0';
             break;
         }
-        used += (size_t)n;
+        used += (size_t)w;
     }
     if (snapshot.strayTx || snapshot.strayDone) {
-        const int n = snprintf(held + used, sizeof(held) - used, " unknown handles: tx %u done %u", snapshot.strayTx,
+        const int w = snprintf(held + used, kHeld - used, " unknown handles: tx %u done %u", snapshot.strayTx,
                                snapshot.strayDone);
-        if (n < 0 || used + (size_t)n >= sizeof(held)) held[used] = '\0';
+        if (w < 0 || used + (size_t)w >= kHeld) held[used] = '\0';
     }
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(now - statsAt, &ns);
-    char line[1024];
+    char *const line = statsLine;
     snprintf(
-        line, sizeof(line),
+        line, sizeof(statsLine),
         "SwitchBluetooth: stats %llu ms: rx %u B, tx %u B, %u interrupts, %u wakeups; from the controller %u events "
         "(complete %u, status %u, completed packets %u, vendor %u, other %u), LE meta %u (advertising reports "
         "%u in %u events, connections %u, other %u), ACL %u, SCO %u; to it %u commands (LE %u, vendor %u), "
-        "answered here %u, advertising intervals raised %u, scan on %u off %u; failed:%s; links:%s",
+        "answered here %u, advertising intervals raised %u, scan on %u off %u, gamepads accepted as central %u; "
+        "failed:%s; "
+        "links:%s",
         (unsigned long long)(ns / 1000000), rxNow - rxBytesLogged, txNow - txBytesLogged, irqsNow - irqsLogged,
         n.actions - o.actions, n.events - o.events, n.cc - o.cc, n.cs - o.cs, n.nocp - o.nocp, n.vendor - o.vendor,
         n.otherEvents - o.otherEvents, n.le - o.le, n.leAdvReports - o.leAdvReports, n.leAdv - o.leAdv,
         n.leConn - o.leConn, n.leOther - o.leOther, n.acl - o.acl, n.sco - o.sco, n.commands - o.commands,
         n.leCommands - o.leCommands, n.vendorCommands - o.vendorCommands, n.answered - o.answered,
-        n.advFixed - o.advFixed, n.scanOn - o.scanOn, n.scanOff - o.scanOff, at ? fails : " none",
-        held[0] ? held : " none");
+        n.advFixed - o.advFixed, n.scanOn - o.scanOn, n.scanOff - o.scanOff, n.central - o.central,
+        at ? fails : " none", held[0] ? held : " none");
     os_log(OS_LOG_DEFAULT, "%s", line);
     stLogged = n;
     memcpy(failedLogged, failed, sizeof(failed));

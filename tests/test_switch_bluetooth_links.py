@@ -50,6 +50,9 @@ class Links(unittest.TestCase):
         lib.bt_describe_event.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_uint8, u8p, ctypes.c_uint32]
         lib.bt_describe_command.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_uint16, u8p, ctypes.c_uint32]
         lib.bt_command_traced.argtypes = [ctypes.c_uint16]
+        lib.bt_request_note.argtypes = [u8p, ctypes.c_uint32]
+        lib.bt_accept_as_central.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+        lib.bt_cod_is_gamepad.argtypes = [ctypes.c_uint32]
 
     @classmethod
     def tearDownClass(cls):
@@ -57,6 +60,7 @@ class Links(unittest.TestCase):
 
     def setUp(self):
         self.lib.bt_links_reset()
+        self.lib.bt_requests_reset()
 
     # helpers
     def event(self, code, params):
@@ -144,6 +148,52 @@ class Links(unittest.TestCase):
         self.assertTrue(wanted(0x3e, 0x01))
         self.assertTrue(wanted(0x3e, 0x0a))
         self.assertFalse(wanted(0x3e, 0x02))  # advertising reports: hundreds a second, never held back
+
+    # incoming gamepads accepted as central
+    def accept(self, addr, role):
+        params = (ctypes.c_uint8 * 7)(*(hci_addr(addr) + bytes([role])))
+        cod = ctypes.c_uint32(0)
+        changed = self.lib.bt_accept_as_central(params, 7, ctypes.byref(cod))
+        return changed, params[6], cod.value
+
+    def test_classes(self):
+        gamepad = self.lib.bt_cod_is_gamepad
+        self.assertTrue(gamepad(0x000508))   # Joy-Con (L), (R), r7v Connection Requests
+        self.assertTrue(gamepad(0x002508))   # gamepad with Limited Discoverable / other service bits
+        self.assertTrue(gamepad(0x000504))   # joystick
+        self.assertFalse(gamepad(0x240418))  # AirPods: audio, headphones
+        self.assertFalse(gamepad(0x002540))  # keyboard
+        self.assertFalse(gamepad(0x002580))  # mouse
+        self.assertFalse(gamepad(0x5a020c))  # phone
+
+    def test_joycon_accepted_as_central(self):
+        self.lib.bt_request_note(hci_addr(RIGHT), 0x000508)
+        self.assertEqual(self.accept(RIGHT, 1), (1, 0, 0x000508))
+        # The request is consumed: a second Accept (bluetoothd retrying) is left alone.
+        self.assertEqual(self.accept(RIGHT, 1), (0, 1, 0))
+
+    def test_others_left_alone(self):
+        self.lib.bt_request_note(hci_addr(AIRPODS), 0x240418)
+        self.assertEqual(self.accept(AIRPODS, 1), (0, 1, 0))
+        self.lib.bt_request_note(hci_addr(LEFT), 0x000508)
+        self.assertEqual(self.accept(LEFT, 0), (0, 0, 0))  # bluetoothd asked to become central itself
+        self.assertEqual(self.accept(RIGHT, 1), (0, 1, 0))  # no Connection Request seen for it
+        short = (ctypes.c_uint8 * 7)(*hci_addr(RIGHT), 1)
+        self.assertEqual(self.lib.bt_accept_as_central(short, 6, None), 0)
+
+    def test_requests_kept_per_address(self):
+        note = self.lib.bt_request_note
+        note(hci_addr(LEFT), 0x000508)   # slot 0
+        note(hci_addr(RIGHT), 0x000508)  # slot 1
+        note(hci_addr(LEFT), 0x240418)   # the same address again: slot 0 updated, not a second entry
+        self.assertEqual(self.accept(LEFT, 1), (0, 1, 0))  # its newest class (audio) decides, and it is consumed
+        note(hci_addr(LEFT), 0x000508)   # slot 2
+        for i in range(2):               # slots 3 and 0 (the oldest): four entries at most
+            note(bytes([i, 1, 2, 3, 4, 5]), 0x000508)
+        self.assertEqual(self.accept(RIGHT, 1), (1, 0, 0x000508))
+        self.assertEqual(self.accept(LEFT, 1), (1, 0, 0x000508))
+        self.assertEqual(self.accept('05:04:03:02:01:01', 1), (1, 0, 0x000508))
+        self.assertEqual(self.accept('05:04:03:02:01:00', 1), (1, 0, 0x000508))
 
     # the table
     def test_two_joycons_and_airpods_share_the_credits(self):
