@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The Tegra210 memory controller's SMMU registers, shared by every driver that translates a swgroup (TegraVIC, TegraNVJPG;
-// the display's direct scanout next). Selecting a directory takes two global registers in turn (PTB_ASID, then PTB_DATA) and
+// The Tegra210 memory controller's SMMU registers, shared by every driver that translates a swgroup (TegraVIC, TegraNVJPG,
+// the display). Selecting a directory takes two global registers in turn (PTB_ASID, then PTB_DATA) and
 // the PTC/TLB flushes are global too, so two drivers programming at once would program each other's ASID: every access
 // goes through here, under one lock. Page tables are TegraSMMUDomain.h.
 //

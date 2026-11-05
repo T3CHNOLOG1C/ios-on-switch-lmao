@@ -1,6 +1,6 @@
 // drivers/TegraSMMU/TegraSMMUDomain.h on the host: entry encodings, table hand-out, identity maps, page maps, translation,
-// limits and dirty tracking; and the tables TegraVIC builds with it, byte for byte against the algorithm TegraVIC used
-// before it moved onto the shared domain (r14-pacing), so VIC's address space is unchanged.
+// limits and dirty tracking; and the tables TegraVIC builds with it, byte for byte against TegraVIC's own original
+// algorithm, so VIC's address space is unchanged.
 #include <gtest/gtest.h>
 
 #include <cstdarg>
@@ -23,7 +23,6 @@ __attribute__((format(printf, 1, 2))) std::string message(const char *format, ..
     va_end(ap);
     return text;
 }
-// Every CHECK is a GoogleTest expectation with a printf-formatted message.
 #define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 constexpr uint32_t R = 1u << 31, W = 1u << 30, NS = 1u << 29, NEXT = 1u << 28;
@@ -35,7 +34,7 @@ struct Buffer {
     uint32_t *va() { return words.data(); }
 };
 
-// TegraVIC's tables before r14-pacing (TegraVIC.cpp at eae4371: smmuSetUp, pte, identity), on its own buffer.
+// TegraVIC's original tables (TegraVIC.cpp at eae4371: smmuSetUp, pte, identity), on its own buffer.
 struct OldVic {
     static constexpr uint64_t kWindowBase = 0x10000000ull, kWindowBytes = 128ull << 20;
     static constexpr uint32_t kWindows = 2, kWindowTables = (uint32_t)(kWindowBytes >> 22), kIdentityTables = 4;
@@ -80,7 +79,7 @@ struct OldVic {
     }
 };
 
-// TegraVIC's tables now (TegraVIC.cpp smmuSetUp).
+// TegraVIC's tables on the shared domain (TegraVIC.cpp smmuSetUp).
 bool newVic(Buffer &b, uint64_t fwPa, uint64_t fwSize, uint64_t arenaPa, uint64_t arenaSize)
 {
     TegraSMMUDomain d;
@@ -109,7 +108,6 @@ void vicTablesUnchanged()
         CHECK(old.b.words == now.words, "VIC's tables differ from the old algorithm's for tables at %#llx",
               (unsigned long long)c.tables);
     }
-    // Out of identity tables: both refuse.
     OldVic old(0xe1000000);
     Buffer now(1 + OldVic::kWindows * OldVic::kWindowTables + OldVic::kIdentityTables, 0xe1000000);
     const bool a = old.setUp(0x90000000, 0x14000, 0xa0000000, 20ull << 20),
@@ -128,14 +126,12 @@ void basics()
     CHECK(d.ptb() == ((uint32_t)(b.pa >> 12) | R | W | NS), "PTB %#x", d.ptb());
     CHECK(d.translate(0x10000000) == UINT64_MAX, "unmapped address translates");
 
-    // identity, read-only and writable entries
     CHECK(d.identity(0xf5a00000, 0x3c0000, false), "identity of the boot framebuffer");
     CHECK(d.translate(0xf5a00000) == 0xf5a00000 && d.translate(0xf5dbfff8) == 0xf5dbfff8, "identity translation");
     CHECK(d.translate(0xf5dc0000) == UINT64_MAX, "identity ran past its end");
     CHECK(*d.pte(0xf5a00000, false) == (0xf5a00u | R | NS), "read-only entry %#x", *d.pte(0xf5a00000, false));
     CHECK(d.identity(0xe3000000, 4096, true) && *d.pte(0xe3000000, false) == (0xe3000u | R | W | NS), "writable entry");
 
-    // a scattered surface into a slot, then out
     uint64_t pages[5] = {0x81234000, 0x9abc0000, 0x1fffff000ull & 0xfffff000, 0xc0001000, 0x80002000};
     CHECK(d.map(0x10000000, pages, 5, false), "map");
     for (uint32_t i = 0; i < 5; ++i)
@@ -143,7 +139,6 @@ void basics()
     d.unmap(0x10000000, 5);
     CHECK(d.translate(0x10000000) == UINT64_MAX && d.translate(0x10004000) == UINT64_MAX, "unmap left entries");
 
-    // limits: 4 GiB, and running out of tables
     CHECK(!d.pte(1ull << 32, true), "address past 4 GiB accepted");
     uint32_t got = 0;
     for (uint64_t at = 0x40000000; at < 0x80000000 && d.reserve(at, 4096); at += 4ull << 20) ++got;
@@ -151,7 +146,6 @@ void basics()
     CHECK(d.used == d.pages && got == 3, "tables handed out %u (used %u of %u)", got, d.used, d.pages);
     CHECK(!d.identity(0x70000000, 4096, true), "a map with no table left succeeded");
 
-    // dirty tracking covers what was written
     Buffer c(4, 0xe4000000);
     TegraSMMUDomain e;
     uintptr_t low, high;
@@ -164,7 +158,6 @@ void basics()
     const uintptr_t pte = reinterpret_cast<uintptr_t>(e.pte(0x88001000, false));
     CHECK(low <= pde && high >= pde + 4 && low <= pte && high >= pte + 4, "dirty range misses the entries");
 
-    // consecutive tables for a reserved range
     Buffer f(1 + 32 + 1, 0xe5000000);
     TegraSMMUDomain g;
     g.init(f.va(), f.pa, 1 + 32 + 1);
@@ -180,7 +173,7 @@ TEST(TegraSMMUDomain, Basics)
     basics();
 }
 
-// The tables TegraVIC builds on the shared domain, byte for byte as TegraVIC built them before (r14-pacing).
+// The tables TegraVIC builds on the shared domain, byte for byte as its original algorithm built them.
 TEST(TegraSMMUDomain, VicTablesUnchanged)
 {
     vicTablesUnchanged();

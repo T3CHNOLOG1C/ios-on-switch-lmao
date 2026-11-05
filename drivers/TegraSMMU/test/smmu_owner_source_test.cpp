@@ -1,7 +1,6 @@
 // The MC SMMU's PTB_ASID/PTB_DATA/TLB_FLUSH/PTC_FLUSH registers are global to every swgroup: only TegraSMMU.cpp
 // programs them (under its lock). This reads every driver's C++ (the tree's sources, in the test's data) for their
-// names; and TegraVIC, which once had tables and register writes of its own, attaches through TegraSMMU with a
-// TegraSMMUDomain.
+// names; and TegraVIC attaches through TegraSMMU with a TegraSMMUDomain.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
