@@ -4,8 +4,9 @@
 // Planner, over random scatter-gather layouts (whole pages, mbuf-like ranges at odd offsets, pages above 4 GiB, runs
 // across 64 KiB boundaries): the pieces cover the request once and in order; a direct piece is exactly the client's
 // memory at its offset, below 4 GiB, within one 64 KiB window and at most 64 KiB; every piece but the last is whole
-// packets; an OUT direct piece at a run's edge starts or ends on a cache line; a bounce piece fits a 4 KiB page; the
-// residue probe's first piece is one packet. Whole pages below 4 GiB, contiguous or not, are never bounced.
+// packets; every cache line an OUT direct piece touches is inside its run; a bounce piece fits a 4 KiB page; the
+// residue probe's first piece is one packet. Whole pages below 4 GiB, contiguous or not, are never bounced. OUT data
+// through a model of the CPU cache (XudcOutCache): the client reads what the host sent, its neighbours their own.
 //
 // OUT residue: against a model controller of either kind (residue of the whole TD, as Linux tegra-xudc reads it, or of
 // the event's TRB, as xHCI hosts report it), the driver's protocol (probe while unknown, then read each event the
@@ -15,12 +16,15 @@
 // the serial bounce path it replaces; the same per-request costs at SuperSpeed rates.
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <optional>
 #include <random>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -140,10 +144,12 @@ void checkPlan(const Runs &runs, uint32_t total, uint32_t mps, bool out, bool pr
             ASSERT_LE(piece.pa + piece.length, kGiB4);
             ASSERT_LE(piece.length, 65536u);
             ASSERT_EQ(piece.pa >> 16, (piece.pa + piece.length - 1) >> 16) << "no 64 KiB boundary inside a TRB";
-            if (out) {  // a run's own edges on a cache line (inside a run, lines are all this transfer's)
-                const uint64_t runStart = want - (piece.offset - runOffset(runs, piece.offset));
-                if (piece.pa == runStart) ASSERT_EQ(piece.pa % 64, 0u);
-                if (piece.length == runLeft) ASSERT_EQ((piece.pa + piece.length) % 64, 0u);
+            if (out) {  // every cache line it touches inside its run (inside a run, lines are all this transfer's)
+                const uint64_t runStart = want - (piece.offset - runOffset(runs, piece.offset)),
+                               runEnd = want + runLeft;
+                ASSERT_GE(piece.pa & ~63ull, runStart) << "its first line holds memory before the run";
+                ASSERT_LE((piece.pa + piece.length + 63) & ~63ull, runEnd)
+                    << "its last line holds memory after the run";
             }
         }
         offset += piece.length;
@@ -215,6 +221,13 @@ TEST(XudcPlanner, BouncedOnlyWhatMustBe)
     // OUT at an odd start: the first packet (cache-line edge) and the short last one are copied.
     ASSERT_NO_FATAL_FAILURE(checkPlan({{0x8000'0020, 4096}}, 4096, 512, true, false, &p));
     EXPECT_EQ(p.stats.edge, 2u);
+    // OUT, a 500-byte mbuf then a cluster starting 16 bytes into a line: the packet across the break is copied (12 of
+    // its bytes in the cluster), and so is the next one, whose first line holds the 16 bytes before the cluster, and
+    // the last, off the cluster's end; the two between go direct.
+    ASSERT_NO_FATAL_FAILURE(checkPlan({{0x8000'0000, 500}, {0x8100'0010, 2048}}, 2548, 512, true, false, &p));
+    EXPECT_EQ(bounces(p), (std::vector<bool>{true, false, true}));
+    EXPECT_EQ(p.stats.discontinuity, 1u);
+    EXPECT_EQ(p.stats.edge, 2u) << "the packet beside the break and the last one";
 }
 
 TEST(XudcPlanner, TooManyPiecesAndZeroLength)
@@ -316,6 +329,186 @@ TEST(XudcOutResidue, NonsenseFailsTheRequest)
     r = xudc::outEvent(xudc::kResidueUnknown, two, 2, 0, 4096, false);  // the probe, per TD
     EXPECT_FALSE(r.done);
     EXPECT_EQ(r.learned, xudc::kResiduePerTd);
+}
+
+// OUT data through the A57's data cache, which the controller does not snoop. A model of it over the request's memory
+// and whatever shares its cache lines: 64-byte lines cached clean or dirty or not at all; the CPU reads and writes
+// through it (a read may also be a speculative fill), the controller reads and writes memory only, any line may be
+// evicted (written back if dirty) at any moment. The driver's sequence (SwitchXUDC.cpp admit and releaseTrbs): bounce
+// pages and the request cleaned and invalidated before the doorbell (performOperation kIOMemoryIncoherentIOFlush), the
+// controller writes what the host sent, then the request's first `actual` bytes cleaned and invalidated again and the
+// bounced bytes copied in by the CPU (writeBytes). Meanwhile the owners of the memory around the request's runs write
+// theirs. After that the client must read exactly what the host sent and every neighbour its own bytes: no stale or
+// partial OUT data, whatever the layout. A direct piece whose cache line holds a neighbour's bytes fails it: the
+// neighbour's dirty line, written back by the second clean, carries the line's bytes from before the transfer over the
+// data.
+namespace {
+struct CacheModel {
+    struct Line {
+        std::array<uint8_t, 64> bytes;
+        bool dirty;
+    };
+    std::unordered_map<uint64_t, std::array<uint8_t, 64>> memory;  // by line address; untouched memory reads 0xC1
+    std::map<uint64_t, Line> cached;
+
+    std::array<uint8_t, 64> &mem(uint64_t line)
+    {
+        auto it = memory.find(line);
+        if (it == memory.end()) {
+            std::array<uint8_t, 64> fresh;
+            fresh.fill(0xC1);
+            it = memory.emplace(line, fresh).first;
+        }
+        return it->second;
+    }
+    Line &fill(uint64_t line)
+    {
+        auto it = cached.find(line);
+        if (it == cached.end()) it = cached.emplace(line, Line{mem(line), false}).first;
+        return it->second;
+    }
+    void cpuWrite(uint64_t pa, uint8_t v)
+    {
+        Line &l = fill(pa & ~63ull);
+        l.bytes[pa & 63] = v;
+        l.dirty = true;
+    }
+    uint8_t cpuRead(uint64_t pa) { return fill(pa & ~63ull).bytes[pa & 63]; }
+    void dmaWrite(uint64_t pa, uint8_t v) { mem(pa & ~63ull)[pa & 63] = v; }
+    void evict(uint64_t line)
+    {
+        const auto it = cached.find(line);
+        if (it == cached.end()) return;
+        if (it->second.dirty) mem(line) = it->second.bytes;
+        cached.erase(it);
+    }
+    void civac(uint64_t pa, uint64_t length)  // dc civac over [pa, pa + length)
+    {
+        for (uint64_t line = pa & ~63ull; line < pa + length; line += 64) evict(line);
+    }
+    void evictAny(Rng &rng)
+    {
+        if (cached.empty()) return;
+        evict(std::next(cached.begin(), static_cast<long>(rng.randrange(cached.size())))->first);
+    }
+};
+
+// The physical ranges of request bytes [from, to).
+template <class F> void forRange(const Runs &runs, uint32_t from, uint32_t to, F f)
+{
+    uint32_t start = 0;
+    for (const xudc::Run &r : runs) {
+        const uint32_t a = std::max(from, start), b = std::min(to, start + r.length);
+        if (a < b) f(r.pa + (a - start), b - a);
+        start += r.length;
+    }
+}
+
+uint64_t paOf(const Runs &runs, uint32_t offset)
+{
+    return paAt(runs, offset)->first;
+}
+
+// One OUT request through the model; returns false (with ADD_FAILUREs) when the client or a neighbour reads wrong.
+bool outThroughCache(Rng &rng, const Runs &runs, uint32_t total, uint32_t mps)
+{
+    std::map<uint64_t, uint8_t> owner;  // every byte of every line the runs touch: 0 the request's, 1 a neighbour's
+    forRange(runs, 0, total, [&](uint64_t pa, uint32_t length) {
+        for (uint64_t line = pa & ~63ull; line < pa + length; line += 64)
+            for (uint64_t b = line; b < line + 64; ++b) owner.emplace(b, 1);
+    });
+    forRange(runs, 0, total, [&](uint64_t pa, uint32_t length) {
+        for (uint64_t b = pa; b < pa + length; ++b) owner[b] = 0;
+    });
+    CacheModel cache;
+    std::map<uint64_t, uint8_t> neighbour;  // what each neighbour byte should read
+    std::vector<uint64_t> neighbours, lines;
+    for (const auto &[b, who] : owner) {
+        if (who) neighbours.push_back(b);
+        if ((b & 63) == 0) lines.push_back(b);
+    }
+    auto neighbourWrites = [&](unsigned n) {
+        for (unsigned i = 0; i < n && !neighbours.empty(); ++i) {
+            const uint64_t b = neighbours[rng.randrange(neighbours.size())];
+            const auto v = static_cast<uint8_t>(rng.randrange(256));
+            cache.cpuWrite(b, v);
+            neighbour[b] = v;
+        }
+    };
+    auto background = [&]() {  // neighbours at work, speculative fills, evictions
+        neighbourWrites(static_cast<unsigned>(rng.randrange(3)));
+        if (!lines.empty() && rng.random() < 0.5) cache.fill(lines[rng.randrange(lines.size())]);
+        if (rng.random() < 0.3) cache.evictAny(rng);
+    };
+    neighbourWrites(64);
+    for (int i = 0; i < 8; ++i) background();
+
+    Plan p = plan(runs, total, mps, true, false);
+    if (p.pieces.empty()) return true;  // the serial path
+    for (size_t k = 0; k < p.pieces.size(); ++k)
+        if (p.pieces[k].bounce) p.pieces[k].pa = 0x7000'0000 + k * kPage;
+    // admit: bounce pages and the request cleaned and invalidated before the doorbell.
+    for (const xudc::Piece &piece : p.pieces)
+        if (piece.bounce) cache.civac(piece.pa, piece.length ? piece.length : 1);
+    forRange(runs, 0, total, [&](uint64_t pa, uint32_t length) { cache.civac(pa, length); });
+    // The host sends `actual` bytes (a short transfer, or all of it); the controller writes them, packet by packet.
+    const uint32_t actual = rng.random() < 0.3 ? total : static_cast<uint32_t>(rng.randint(0, total));
+    std::vector<uint8_t> host(actual);
+    for (uint8_t &b : host) b = static_cast<uint8_t>(rng.randrange(256));
+    for (const xudc::Piece &piece : p.pieces) {
+        for (uint32_t i = 0; i < piece.length && piece.offset + i < actual; ++i) {
+            cache.dmaWrite(piece.pa + i, host[piece.offset + i]);
+            if (i % mps == 0) background();
+        }
+    }
+    background();
+    // releaseTrbs: the request's first `actual` bytes cleaned and invalidated, then the bounced bytes copied in.
+    forRange(runs, 0, actual, [&](uint64_t pa, uint32_t length) { cache.civac(pa, length); });
+    for (const xudc::Piece &piece : p.pieces) {
+        if (!piece.bounce || piece.offset >= actual) continue;
+        const uint32_t got = std::min(actual - piece.offset, piece.length);
+        cache.civac(piece.pa, got);
+        for (uint32_t i = 0; i < got; ++i) cache.cpuWrite(paOf(runs, piece.offset + i), cache.cpuRead(piece.pa + i));
+    }
+    for (int i = 0; i < 16; ++i) background();
+    bool ok = true;
+    for (uint32_t i = 0; i < actual && ok; ++i) {
+        const uint8_t got = cache.cpuRead(paOf(runs, i));
+        if (got != host[i]) {
+            ADD_FAILURE() << "byte " << i << " of " << actual << " reads " << int(got) << ", the host sent "
+                          << int(host[i]);
+            ok = false;
+        }
+    }
+    for (const auto &[b, v] : neighbour) {
+        if (cache.cpuRead(b) != v) {
+            ADD_FAILURE() << "a neighbour's byte at " << std::hex << b << " changed";
+            ok = false;
+            break;
+        }
+    }
+    return ok;
+}
+}  // namespace
+
+TEST(XudcOutCache, NoStaleOrPartialData)
+{
+    Rng rng(19);
+    unsigned direct = 0;
+    for (unsigned c = 0; c < 700; ++c) {
+        const auto [runs, total] = randomLayout(rng, c % 4 ? Kind::Mbufs : Kind::Pages);
+        bool overlap = false;  // two runs of a layout on the same bytes: not a buffer
+        for (size_t i = 0; i < runs.size() && !overlap; ++i)
+            for (size_t j = i + 1; j < runs.size(); ++j)
+                if (runs[i].pa < runs[j].pa + runs[j].length && runs[j].pa < runs[i].pa + runs[i].length)
+                    overlap = true;
+        if (overlap || total > 32768) continue;
+        SCOPED_TRACE("case " + std::to_string(c) + ": " + std::to_string(runs.size()) + " runs, " +
+                     std::to_string(total) + " bytes");
+        ASSERT_TRUE(outThroughCache(rng, runs, total, 512));
+        ++direct;
+    }
+    EXPECT_GT(direct, 300u);
 }
 
 // A cost model, the same costs for both paths (microseconds; assumptions, for the next boot's stats line to replace):

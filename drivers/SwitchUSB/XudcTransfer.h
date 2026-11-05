@@ -9,10 +9,12 @@
 // makes of TRB boundaries inside a packet (Linux tegra-xudc never gives it one; an mbuf chain from AppleUSBDeviceMux
 // would). A packet that cannot go straight to the client's memory goes through a 4 KiB page of the driver's bounce pool
 // instead, packets in a run sharing a page: one that crosses a physical discontinuity, a 64 KiB boundary (no TRB may),
-// or 4 GiB (the XUDC is 32-bit here, as upstream Linux treats it on T210); and for OUT, one holding a run's start or
-// end off a 64-byte cache line: the rest of that line is someone else's memory, which invalidating the line after the
-// transfer would roll back (inside a run, a line two packets share is all this transfer's). A buffer of whole pages
-// below 4 GiB, what large I/O is, goes entirely direct.
+// or 4 GiB (the XUDC is 32-bit here, as upstream Linux treats it on T210); and for OUT, one with a 64-byte cache line
+// that reaches past its run (a run's start or end off a line, under that packet or the one beside a packet across a
+// break): the rest of that line is someone else's memory, and their dirty copy of it, written back by the clean and
+// invalidate after the transfer, would carry the line's old bytes over what the controller wrote (inside a run, a line
+// two packets share is all this transfer's). A buffer of whole pages below 4 GiB, what large I/O is, goes entirely
+// direct.
 //
 // OUT residue. Linux tegra-xudc takes a TD's actual length as its length minus the transfer event's residue, which
 // holds only if the controller reports what is left of the whole TD (its context keeps EDTLA, the bytes of the TD so
@@ -120,9 +122,10 @@ inline uint32_t plan(const Run *runs, uint32_t runCount, uint32_t total, uint32_
         const bool inRun = offset + packet <= runStart + runs[run].length;
         const bool crosses = (pa >> 16) != ((pa + packet - 1) >> 16);
         const bool high = pa + packet > reach;
+        const uint64_t lineMask = ~(uint64_t)(kCacheLine - 1);
         const bool edge = out && inRun &&
-                          ((offset == runStart && (pa & (kCacheLine - 1))) ||
-                           (offset + packet == runStart + runs[run].length && ((pa + packet) & (kCacheLine - 1))));
+                          ((pa & lineMask) < runs[run].pa ||
+                           ((pa + packet + kCacheLine - 1) & lineMask) > runs[run].pa + runs[run].length);
         const bool bounce = !inRun || crosses || high || edge;
         if (bounce) {
             stats->bounceBytes += packet;
