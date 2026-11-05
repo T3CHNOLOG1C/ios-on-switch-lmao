@@ -159,7 +159,7 @@ struct FatImage {
     }
 };
 
-// The reader's callback carries no context of ours (the old ctypes wrapper passed 0): the image under test.
+// The reader's callback carries no context of ours: the image under test.
 FatImage *gImage;
 int Read512(void *, uint64_t lba, uint8_t output[512])
 {

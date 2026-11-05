@@ -14,7 +14,6 @@ host_library(
     linkopts = ["-lz"],
 )
 
-# --- partition.c: GPT ---------------------------------------------------------------------------------------------
 host_library(
     name = "partition",
     srcs = ["//boot:storage/partition.c"],
@@ -34,7 +33,6 @@ host_test(
     ],
 )
 
-# --- fat32.c ----------------------------------------------------------------------------------------------------------
 host_library(
     name = "fat32",
     srcs = ["//boot:storage/fat32.c"],
@@ -48,7 +46,6 @@ host_test(
     deps = [":fat32"],
 )
 
-# --- raw_apfs.c: the raw APFS block backend --------------------------------------------------------------------------
 host_library(
     name = "raw_apfs",
     srcs = [
@@ -67,7 +64,6 @@ host_test(
     deps = [":raw_apfs"],
 )
 
-# --- sd_reference.c: the same-boot sector-reference page ------------------------------------------------------------
 host_library(
     name = "sd_reference",
     srcs = ["//boot:storage/sd_reference.c"],
@@ -84,7 +80,6 @@ host_test(
     ],
 )
 
-# --- sdmmc_read.c: the read-only PIO reader -------------------------------------------------------------------------
 host_library(
     name = "sdmmc_read",
     srcs = [

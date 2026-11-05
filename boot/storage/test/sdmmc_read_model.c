@@ -44,7 +44,7 @@ static uint32_t r32(void *p, uint32_t o)
     struct model *m = p;
     m->reads[o]++;
     if (o == 0x24) {
-        uint32_t v = 0x1fb0000; /* actual OLED pre-command photo */
+        uint32_t v = 0x1fb0000; /* as read on the OLED before a command */
         if (m->mode == 5) v |= 1;
         if (m->mode == 6) v &= ~0x10000;
         if (m->mode == 17) v |= 4;

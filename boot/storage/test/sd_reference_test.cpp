@@ -109,7 +109,7 @@ TEST(SdReference, CrcAgainstZlibKnownVectorsAndNonWordLengths)
         vectors.push_back(value);
     }
     for (const Bytes &value : vectors) {
-        auto raw = std::make_unique<uint8_t[]>(value.size() + 1);  // a C string's room, as before
+        auto raw = std::make_unique<uint8_t[]>(value.size() + 1);  // a C string's room
         if (!value.empty()) std::memcpy(raw.get(), value.data(), value.size());
         EXPECT_EQ(iosw_sd_crc32(raw.get(), (uint32_t)value.size()), Crc(value.data(), value.size()))
             << value.size() << " bytes";
