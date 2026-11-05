@@ -962,8 +962,11 @@ struct tgm_chan {
 	 * class (PTIMER units) and the pushes counted, for its owner */
 	u32 prof_seqno, prof_count, prof_subs;
 	u8 prof_cls[TGM_PROF_MAX];
+	u16 prof_draws[TGM_PROF_MAX], prof_sdraws[TGM_PROF_MAX];
 	u64 prof_ns[TGM_PC_COUNT];
 	u32 prof_n[TGM_PC_COUNT];
+	u64 prof_dn[TGM_PC_COUNT],
+		prof_sdn[TGM_PC_COUNT]; /* draws, and draws shaded per sample, by class */
 	/* tgm_chan_order: its connection's task (tgm_chan_set_group), the acquires queued for its next submission
 	 * (live_lock), and the last one kicked (a hang's line names it while it has not passed) */
 	const void *group;
@@ -1777,10 +1780,14 @@ static void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
 	volatile struct tgm_stamp *slot =
 		(volatile struct tgm_stamp *)((u8 *)chan->ring + CHAN_PROF);
 	u64 prev = start, t;
-	u32 i, n = min_t(u32, READ_ONCE(chan->prof_count), TGM_PROF_MAX);
+	u32 i, n = min_t(u32, READ_ONCE(chan->prof_count), TGM_PROF_MAX), draws = 0, sdraws = 0;
 
 	for (i = 0; i < n; i++) {
 		u8 c = chan->prof_cls[i];
+		draws +=
+			chan->prof_draws
+				[i]; /* a push not stamped: its draws ran in the next stamped one's time */
+		sdraws += chan->prof_sdraws[i];
 		if (c == TGM_PC_SKIP)
 			continue;
 		if (c >= TGM_PC_COUNT || slot[i].payload != seqno)
@@ -1790,6 +1797,9 @@ static void prof_collect(struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
 			return;
 		__atomic_fetch_add(&chan->prof_ns[c], t - prev, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&chan->prof_n[c], 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&chan->prof_dn[c], draws, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&chan->prof_sdn[c], sdraws, __ATOMIC_RELAXED);
+		draws = sdraws = 0;
 		prev = t;
 	}
 	if (end >= prev) {
@@ -1914,6 +1924,7 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 		u32 n, subs;
 		u64 prof_ns[TGM_PC_COUNT];
 		u32 prof_n[TGM_PC_COUNT];
+		u64 prof_dn[TGM_PC_COUNT], prof_sdn[TGM_PC_COUNT];
 	} o[EXEC_OWNERS];
 	struct tgm_chan *chan;
 	unsigned int used = 0, i, c, at = 0;
@@ -1947,6 +1958,10 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 				__atomic_exchange_n(&chan->prof_ns[c], 0, __ATOMIC_RELAXED);
 			o[i].prof_n[c] +=
 				__atomic_exchange_n(&chan->prof_n[c], 0, __ATOMIC_RELAXED);
+			o[i].prof_dn[c] +=
+				__atomic_exchange_n(&chan->prof_dn[c], 0, __ATOMIC_RELAXED);
+			o[i].prof_sdn[c] +=
+				__atomic_exchange_n(&chan->prof_sdn[c], 0, __ATOMIC_RELAXED);
 		}
 	}
 	mutex_unlock(&live_lock);
@@ -1981,12 +1996,18 @@ static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 			if (!o[i].prof_ns[best])
 				break;
 			at += scnprintf(
-				line + at, len - at, "%s %s %u x %llu us (%llu us/submit)",
+				line + at, len - at, "%s %s %u x %llu us (%llu us/submit",
 				shown ? ";" : "", prof_name(best, name, sizeof(name)),
 				o[i].prof_n[best],
 				((o[i].prof_ns[best] / max_t(u32, o[i].prof_n[best], 1)) * rate >>
 				 16) / 1000,
 				((o[i].prof_ns[best] / o[i].subs) * rate >> 16) / 1000);
+			if (o[i].prof_dn[best])
+				at += scnprintf(
+					line + at, len - at, ", %llu draws/push, %llu per-sample",
+					o[i].prof_dn[best] / max_t(u32, o[i].prof_n[best], 1),
+					o[i].prof_sdn[best] / max_t(u32, o[i].prof_n[best], 1));
+			at += scnprintf(line + at, len - at, ")");
 			left -= o[i].prof_ns[best];
 			o[i].prof_ns[best] = 0;
 			shown++;
@@ -2004,7 +2025,7 @@ static void stats_tick(void)
 		mc_err, mc_adr, copies, gaps;
 	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, l2s, l2m, busy;
 	u32 l2n;
-	char line[640], clk[120], scrubbed[120];
+	char line[896], clk[120], scrubbed[120];
 
 	__atomic_fetch_add(&stats.submits, 1, __ATOMIC_RELAXED);
 	if (!since) {
@@ -3148,6 +3169,8 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 	}
 	if (prof) {
 		memcpy(chan->prof_cls, prof->cls, count);
+		memcpy(chan->prof_draws, prof->draws, count * sizeof(prof->draws[0]));
+		memcpy(chan->prof_sdraws, prof->sampleDraws, count * sizeof(prof->sampleDraws[0]));
 		WRITE_ONCE(chan->prof_count, count);
 		WRITE_ONCE(chan->prof_seqno,
 			   chan->submitted + 1); /* before the fence that completes it */

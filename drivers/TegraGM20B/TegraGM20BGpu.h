@@ -113,6 +113,8 @@ enum {
 };
 struct tgm_prof {
 	uint8_t cls[TGM_PROF_MAX];
+	/* each push's draws, and those shaded per sample (PushCounts::sampleDraws) */
+	uint16_t draws[TGM_PROF_MAX], sampleDraws[TGM_PROF_MAX];
 };
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);
 uint32_t tgm_chan_completed(struct tgm_chan *chan);

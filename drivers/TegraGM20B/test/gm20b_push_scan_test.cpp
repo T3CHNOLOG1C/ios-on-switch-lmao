@@ -157,3 +157,42 @@ TEST(GM20BPushScan, UnknownOpcodeEndsTheStamps)
 	CHECK(d.cls[0] == TGM_PC_SYNC && d.cls[1] == TGM_PC_SKIP && d.cls[2] == TGM_PC_SKIP &&
 	      d.c.unparsed == 1);
 }
+
+// 5. Draws shaded per sample: NVK's SET_ANTI_ALIAS macro keeps samples (bits 7:4) and log2(1 / minSampleShading) (bits
+// 3:0) by masked writes (nvk_mme_set_anti_alias); a draw runs log2 samples - that passes of its fragment shader. A 4x pass
+// with sample shading off (minSampleShading 0: 1 / 16, log2 4) shades once a pixel; with minSampleShading 1 (log2 0) four
+// times; before this submission wrote the shading half, a draw is not counted either way.
+static void min_sample_shading(Push &p, uint32_t rcp_log2)
+{
+	p.push_back(one_inc(0, 0x3800 + 10 * 8, 1));
+	p.push_back((0x0fu << 16) | rcp_log2);
+}
+
+TEST(GM20BPushScan, PerSampleDraws)
+{
+	Push r0, r1, r2, r3;
+	prologue(r0);
+	begin_pass(r0, 1280, 720, false, 2, true);
+	draws(r0, 2);  // shading half not written in this submission
+	min_sample_shading(r1, 4);
+	draws(r1, 3);  // one pass
+	min_sample_shading(r2, 0);
+	draws(r2, 5);  // four passes
+	min_sample_shading(r3, 1);
+	draws(r3, 1);  // two passes
+	Result e = scan({&r0, &r1, &r2, &r3});
+	CHECK(e.c.draws == 11);
+	CHECK(e.c.sampleDraws == 6);
+	CHECK(e.c.msaaPasses == 1);
+	for (uint8_t cls : e.cls)
+		CHECK(cls ==
+		      TGM_PC_DRAW + 0 * 4 + 0 + 1);  // the shading writes keep the pass's samples
+	// a one-sample pass never shades per sample
+	Push s0;
+	prologue(s0);
+	begin_pass(s0, 1280, 720, false, 0, false);
+	min_sample_shading(s0, 0);
+	draws(s0, 4);
+	Result f = scan({&s0});
+	CHECK(f.c.draws == 4 && f.c.sampleDraws == 0);
+}

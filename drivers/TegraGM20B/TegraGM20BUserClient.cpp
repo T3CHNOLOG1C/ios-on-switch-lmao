@@ -1435,8 +1435,10 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	uint64_t budget = kScanMaxBytes;
 	bool whole = true;
 	for (uint32_t i = 0; i < count; i++) {
-		if (prof && i < TGM_PROF_MAX)
+		if (prof && i < TGM_PROF_MAX) {
 			prof->cls[i] = TGM_PC_SKIP;
+			prof->draws[i] = prof->sampleDraws[i] = 0;
+		}
 		const uint64_t va = pushes[i].va, bytes = uint64_t(pushes[i].dwords) * 4;
 		c.bytes += bytes;
 		if (!hit || va < hit->va || va + bytes > hit->va + hit->range) {
@@ -1458,13 +1460,19 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 		}
 		budget -= bytes;
 		c.readBytes += bytes;
+		const uint64_t drawsBefore = c.draws, sampleBefore = c.sampleDraws;
 		const uint8_t cls = scanPush(
 			c, p, whole,
 			reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(base) +
 							   hit->bo_offset + (va - hit->va)),
 			bytes / 4);
-		if (prof && i < TGM_PROF_MAX)
+		if (prof && i < TGM_PROF_MAX) {
 			prof->cls[i] = cls;
+			const uint64_t draws = c.draws - drawsBefore,
+				       sample = c.sampleDraws - sampleBefore;
+			prof->draws[i] = uint16_t(draws > 0xffff ? 0xffff : draws);
+			prof->sampleDraws[i] = uint16_t(sample > 0xffff ? 0xffff : sample);
+		}
 	}
 	c.scanned = 1;
 	c.submits = kScanEvery;  // this connection's submissions since its last one read

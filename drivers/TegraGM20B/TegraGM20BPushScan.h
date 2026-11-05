@@ -14,6 +14,8 @@ namespace tgm_scan
 struct PushCounts {
 	uint64_t submits, scanned, bytes, readBytes, unparsed;
 	uint64_t passes, depthPasses, msaaPasses, targets, linearTargets, draws, clears;
+	uint64_t
+		sampleDraws;  // draws shaded once per sample (or per sample pair): NVK's min sample shading above 1 pass
 	uint64_t wfi, shaderInval, shaderInvalNoWfi, texInval, setRef, l2Inval, hostWfi;
 	uint64_t ceCopies, ceBytes, ceWfi, blits, dispatches, acquires;
 };
@@ -25,7 +27,18 @@ struct PushParse {
 	// the sample count of the last SET_ANTI_ALIAS
 	uint32_t rtWidth, rtHeight;
 	bool rtPitch, msaa;
+	// NVK's ANTI_ALIAS scratch as the SET_ANTI_ALIAS macro keeps it (nvk_mme_set_anti_alias: masked writes; bits 7:4
+	// log2 samples, 3:0 log2 of 1 / minSampleShading), and whether this submission wrote its shading half yet
+	uint32_t antiAlias;
+	bool shadingKnown;
 };
+
+// Fragment shading passes per pixel, log2, as the macro derives them: log2 samples - log2(1 / minSampleShading), at least 0
+inline uint32_t shadingPassesLog2(const PushParse &p)
+{
+	const int32_t passes = int32_t((p.antiAlias >> 4) & 0xf) - int32_t(p.antiAlias & 0xf);
+	return passes > 0 ? uint32_t(passes) : 0;
+}
 
 inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd, uint32_t data)
 {
@@ -57,9 +70,10 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 			c.depthPasses += data & 1;
 		} else if (mthd == 0x19d0)
 			c.clears++;  // CLEAR_SURFACE
-		else if (mthd == 0x1618)
+		else if (mthd == 0x1618) {
 			c.draws++;  // BEGIN outside an MME macro
-		else if (mthd == 0x0808)
+			c.sampleDraws += p.shadingKnown && shadingPassesLog2(p);
+		} else if (mthd == 0x0808)
 			p.rtWidth = data;  // SET_COLOR_TARGET_WIDTH(0)
 		else if (mthd == 0x080c)
 			p.rtHeight = data;  // SET_COLOR_TARGET_HEIGHT(0)
@@ -73,7 +87,14 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 				p.rtPitch = pitch;
 		} else if (mthd >= 0x3800 && mthd < 0x3c00 && !(mthd & 7)) {  // CALL_MME_MACRO(j)
 			const uint32_t j = (mthd - 0x3800) / 8;
+			if (j == 10) {
+				const uint32_t mask = data >> 16;
+				p.antiAlias = (p.antiAlias & ~mask) | (data & mask);
+				p.shadingKnown = p.shadingKnown || (mask & 0xf);
+			}
 			c.draws += j >= 11 && j <= 16;
+			c.sampleDraws +=
+				j >= 11 && j <= 16 && p.shadingKnown && shadingPassesLog2(p);
 			c.clears += j == 2;
 			// SET_ANTI_ALIAS (once per vkCmdBeginRendering), its argument the macro's data: a sample count
 			// (log2 in bits 7:4, under mask 0xf0 in bits 23:16) above one
