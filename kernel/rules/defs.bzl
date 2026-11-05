@@ -64,7 +64,7 @@ def xnu_sources(name):
 # Steps make's flow had besides the recorded ones: the empty directories the compiles' -I name (a marker each, as
 # tools/kernel/xnu_build.py made), and the sanitizer ignore list the kernel recipes name (san/Makefile's sed).
 _OBJ_EXTRA = [
-    {"kind": "write", "out": "o/EXPORT_HDRS/libsa/.keep", "content": ""},
+    {"content": "", "kind": "write", "out": "o/EXPORT_HDRS/libsa/.keep"},
     {"kind": "ignorelist", "out": "o/san/kasan-blacklist-arm64", "srcs": [
         "s/san/memory/kasan-blacklist",
         "s/san/memory/ubsan-blacklist",
@@ -72,7 +72,7 @@ _OBJ_EXTRA = [
     ]},
 ]
 _SDKROOT_EXTRA = [
-    {"kind": "write", "out": "d/usr/local/include/kernel/.keep", "content": ""},
+    {"content": "", "kind": "write", "out": "d/usr/local/include/kernel/.keep"},
 ]
 
 def xnu_package(version, installhdrs, build, kernel_package, extra_headers, firehose):
@@ -130,6 +130,7 @@ def xnu_package(version, installhdrs, build, kernel_package, extra_headers, fire
         config = ":config",
         decomment = ":decomment",
     )
+
     # libdispatch's firehose library and the header it installs, where make's link and compiles find them.
     xnu_extract(
         name = "firehose",

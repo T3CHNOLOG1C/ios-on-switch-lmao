@@ -16,6 +16,7 @@ XNU as <root>/out/native-a57/root-v1/tree/.cache/xnu-work, build outputs as <roo
 <root>/<path>. (Apple clang resolves macro maps by the most specific prefix and debug maps by the last match.)
 """
 
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@rules_cc//cc:action_names.bzl", "ACTION_NAMES")
 load(
     "@rules_cc//cc:cc_toolchain_config_lib.bzl",
@@ -31,7 +32,6 @@ load(
 )
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/toolchains:cc_toolchain_config_info.bzl", "CcToolchainConfigInfo")
-load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
 load("//bazel/kernel:layout.bzl", "compat_prefix_maps")
 load("//bazel/kernel:sdk.bzl", "KernelSdkInfo")

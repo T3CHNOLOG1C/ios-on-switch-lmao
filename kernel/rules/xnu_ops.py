@@ -24,7 +24,7 @@ HERE = os.getcwd()
 
 
 class Spec:
-    def __init__(self, data):
+    def __init__(self, data) -> None:
         self.data = data
         self.roots = data['roots']
 
@@ -48,15 +48,19 @@ class Spec:
         return re.sub(r'\{(\w)\}', repl, value)
 
 
-def fail(message):
+def fail(message) -> None:
     sys.exit('xnu_ops: ' + message)
 
 
 def run(command, cwd=None, env=None, stdout=None):
-    result = subprocess.run(
-        [str(c) for c in command], cwd=cwd, env=env, stdout=stdout or subprocess.PIPE, stderr=subprocess.PIPE
+    return subprocess.run(
+        [str(c) for c in command],
+        cwd=cwd,
+        env=env,
+        stdout=stdout or subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
     )
-    return result
 
 
 def environment(spec, step):
@@ -74,14 +78,14 @@ def environment(spec, step):
     return env
 
 
-def writable(path):
+def writable(path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     if os.path.lexists(path):
         os.chmod(path, 0o644)
         os.unlink(path)
 
 
-def do_copy(spec, step):
+def do_copy(spec, step) -> None:
     out = spec.path(step['out'])
     writable(out)
     shutil.copyfile(spec.path(step['src']), out)
@@ -90,13 +94,13 @@ def do_copy(spec, step):
 def unifdef(spec, step):
     tool = spec.roots['x'] + '/Toolchains/XcodeDefault.xctoolchain/usr/bin/unifdef'
     flags = [spec.text(f) for f in step['flags']]
-    result = run([tool] + flags + [spec.path(step['src'])])
+    result = run([tool, *flags, spec.path(step['src'])])
     if result.returncode not in (0, 1):
         fail('unifdef: parse failure for {}: {}'.format(step['src'], result.stderr.decode(errors='replace')))
     return result.stdout
 
 
-def do_unifdef(spec, step):
+def do_unifdef(spec, step) -> None:
     data = unifdef(spec, step)
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(data)
@@ -114,7 +118,7 @@ def do_unifdef(spec, step):
     Path(out).write_bytes(data)
 
 
-def do_unifdef_to(spec, step):
+def do_unifdef_to(spec, step) -> None:
     out = spec.path(step['out'])
     writable(out)
     Path(out).write_bytes(unifdef(spec, step))
@@ -124,15 +128,15 @@ def parse_deps(text):
     """The files a make-style dependency file lists (its first target's prerequisites)."""
     text = text.replace('\\\n', ' ')
     _, _, prereqs = text.partition(':')
-    out, cur = [], ''
-    for token in re.split(r'(?<!\\) ', prereqs.strip()):
-        token = token.replace('\\ ', ' ').strip()
+    out = []
+    for raw in re.split(r'(?<!\\) ', prereqs.strip()):
+        token = raw.replace('\\ ', ' ').strip()
         if token:
             out.append(token)
     return out
 
 
-def write_unused(spec, used):
+def write_unused(spec, used) -> None:
     """Bazel's unused_inputs_list: the declared inputs (exec paths) a step did not read."""
     target = spec.data.get('unused')
     if not target:
@@ -142,7 +146,7 @@ def write_unused(spec, used):
     Path(target).write_text(''.join(p + '\n' for p in unused))
 
 
-def do_mig(spec, step, used):
+def do_mig(spec, step, used) -> bool:
     cwd = spec.path(step['cwd'])
     os.makedirs(cwd, exist_ok=True)
     for o in step['outs']:
@@ -150,7 +154,7 @@ def do_mig(spec, step, used):
     before = set(os.listdir(cwd))
     argv = ['-MD'] + [spec.text(a) for a in step['argv']]
     tool = spec.roots['x'] + '/Toolchains/XcodeDefault.xctoolchain/usr/bin/mig'
-    result = run([tool] + argv, cwd=cwd, env=environment(spec, step))
+    result = run([tool, *argv], cwd=cwd, env=environment(spec, step))
     if result.returncode:
         fail(
             'mig {} failed:\n{}{}'.format(
@@ -169,7 +173,7 @@ def do_mig(spec, step, used):
     return True
 
 
-def do_iig(spec, step, used):
+def do_iig(spec, step, used) -> bool:
     cwd = spec.path(step['cwd'])
     os.makedirs(cwd, exist_ok=True)
     for o in step['outs']:
@@ -177,7 +181,7 @@ def do_iig(spec, step, used):
     argv = [spec.text(a) for a in step['argv']]
     tool = spec.roots['x'] + '/Toolchains/XcodeDefault.xctoolchain/usr/bin/iig'
     env = environment(spec, step)
-    result = run([tool] + argv, cwd=cwd, env=env)
+    result = run([tool, *argv], cwd=cwd, env=env)
     if result.returncode:
         fail(
             'iig {} failed:\n{}{}'.format(
@@ -188,7 +192,7 @@ def do_iig(spec, step, used):
     clang = spec.roots['x'] + '/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang'
     source = argv[argv.index('--def') + 1]
     flags = argv[argv.index('--') + 1 :]
-    deps = run([clang, '-M', '-MG'] + flags + [source], cwd=cwd, env=env)
+    deps = run([clang, '-M', '-MG', *flags, source], cwd=cwd, env=env)
     if deps.returncode:
         return False
     used.update(parse_deps(deps.stdout.decode()))
@@ -196,7 +200,7 @@ def do_iig(spec, step, used):
     return True
 
 
-def do_script(spec, step):
+def do_script(spec, step) -> None:
     cwd = spec.path(step['cwd'])
     os.makedirs(cwd, exist_ok=True)
     for o in step['outs']:
@@ -233,7 +237,7 @@ def do_script(spec, step):
             path.write_bytes(data.replace(HERE.encode() + b'/', b'').replace(HERE.encode(), b'.'))
 
 
-def do_write(spec, step):
+def do_write(spec, step) -> None:
     out = spec.path(step['out'])
     writable(out)
     Path(out).write_text(step['content'])
@@ -254,7 +258,7 @@ AVAILABILITY_TEMPLATES = [
 ]
 
 
-def install_base(availability, libplatform, libdispatch, out, env, python3=None):
+def install_base(availability, libplatform, libdispatch, out, env, python3=None) -> None:
     """availability.pl and AvailabilityVersions' headers (its CMake install, INSTALL_KERNEL_HEADERS=1), libplatform's
     public and private headers, libdispatch's os/ headers reduced to their kernel view.
     """
@@ -265,7 +269,9 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
     libexec.mkdir(parents=True, exist_ok=True)
 
     def check(command, cwd=None, stdout=None):
-        r = subprocess.run([str(c) for c in command], cwd=cwd, env=env, stdout=stdout, stderr=subprocess.PIPE)
+        r = subprocess.run(
+            [str(c) for c in command], cwd=cwd, env=env, stdout=stdout, stderr=subprocess.PIPE, check=False
+        )
         if r.returncode:
             fail('{} failed: {}'.format(command[0], r.stderr.decode(errors='replace')))
         return r
@@ -356,6 +362,7 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
             ],
             capture_output=True,
             env=env,
+            check=False,
         )
         if r.returncode not in (0, 1):
             fail(r.stderr.decode())
@@ -363,7 +370,7 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
     (out / '.xnu-10063.141.1-headers').write_text('')
 
 
-def do_base(spec, step):
+def do_base(spec, step) -> None:
     """The base step writes into a scratch root, then only its declared outputs move into place (installhdrs owns
     the rest of the SDK root's files).
     """
@@ -387,7 +394,7 @@ def do_base(spec, step):
             shutil.copyfile(root / rel, out)
 
 
-def do_ignorelist(spec, step):
+def do_ignorelist(spec, step) -> None:
     """A sanitizer ignore list, as san/Makefile's sed makes it: its parts, src:./ entries rooted at the XNU tree."""
     text = ''.join(Path(spec.path(s)).read_text() for s in step['srcs'])
     out = spec.path(step['out'])
@@ -406,7 +413,7 @@ KINDS = {
 }
 
 
-def main():
+def main() -> None:
     spec = Spec(json.loads(Path(sys.argv[1]).read_text()))
     # The include directories' files (mig/iig): the parameter file Bazel writes, one exec path per line.
     if len(sys.argv) > 2 and sys.argv[2].startswith('@'):

@@ -25,10 +25,10 @@ load("//bazel/platforms:transitions.bzl", "outer_transition")
 XnuTreeInfo = provider(
     doc = "Files below one directory, by their path below it.",
     fields = {
-        "root": "the directory's exec path (bazel-out/<cfg>/bin/<package>/<dir>)",
-        "files": "dict: path below root -> File",
         "base": "dict: the subset an earlier step wrote that later steps of the same pass may read (installhdrs: " +
                 "the SDK root's other parts)",
+        "files": "dict: path below root -> File",
+        "root": "the directory's exec path (bazel-out/<cfg>/bin/<package>/<dir>)",
     },
 )
 
@@ -63,13 +63,13 @@ def _xnu_pass_impl(ctx):
             sources[f.path[len(xnu_root) + 1:]] = f
     sdk = ctx.attr.sdkroot[XnuTreeInfo] if ctx.attr.sdkroot else None
     package_dir = ctx.label.package
-    dirs = {"o": ctx.attr.obj_dir, "d": ctx.attr.dst_dir}
+    dirs = {"d": ctx.attr.dst_dir, "o": ctx.attr.obj_dir}
     bin_dir = ctx.bin_dir.path
     roots = {
-        "s": xnu_root,
-        "o": "{}/{}/{}".format(bin_dir, package_dir, ctx.attr.obj_dir),
         "d": "{}/{}/{}".format(bin_dir, package_dir, ctx.attr.dst_dir) if ctx.attr.dst_dir else None,
         "k": sdk.root if sdk else None,
+        "o": "{}/{}/{}".format(bin_dir, package_dir, ctx.attr.obj_dir),
+        "s": xnu_root,
         "x": DEVELOPER_DIR,
     }
 
@@ -127,7 +127,7 @@ def _xnu_pass_impl(ctx):
         below_cache[incdir] = found
         return found
 
-    tools = {"decomment": ctx.executable.decomment.path, "config": ctx.executable.config.path}
+    tools = {"config": ctx.executable.config.path, "decomment": ctx.executable.decomment.path}
     tool_inputs = [ctx.executable.decomment, ctx.executable.config, ctx.file._xcode_identity]
     py = ctx.toolchains[PY_TOOLCHAIN].py3_runtime
     base_sources = {}
@@ -171,7 +171,7 @@ def _xnu_pass_impl(ctx):
         own = {o.path: True for o in outs}
         pruned = [f for f in depset(pruned).to_list() if f.path not in own]
         spec = ctx.actions.declare_file("steps/{}/{}-{}.json".format(ctx.label.name, index, kind))
-        data = {"roots": roots, "steps": steps, "tools": tools, "base_sources": base_sources}
+        data = {"base_sources": base_sources, "roots": roots, "steps": steps, "tools": tools}
         unused = None
         if kind in ("mig", "iig"):
             unused = ctx.actions.declare_file("steps/{}/{}-{}.unused".format(ctx.label.name, index, kind))
@@ -247,6 +247,7 @@ def _groups(root, rest):
     name = parts[-1]
     source = name.endswith(".c") or name.endswith(".cpp") or name.endswith(".s")
     out = []
+
     # doconf's Makefile and its config.<CONFIG>_<ARCH> are not headers (config.h is).
     doconf = name == "Makefile" or (name.startswith("config.") and name[len("config."):].isupper())
     if _in_sdk(root, rest, parts) and not source and not doconf:
@@ -269,18 +270,18 @@ xnu_pass = rule(
     implementation = _xnu_pass_impl,
     doc = "One recorded XNU make pass (a table from xnu_record.py), replayed as Bazel actions.",
     attrs = {
-        "table": attr.string(mandatory = True, doc = "the table, json.encode()d"),
-        "srcs": attr.label_list(allow_files = True, doc = "every file of the XNU tree (xnu_sources)"),
-        "xnu_root": attr.string(mandatory = True, doc = "the XNU tree's directory (kernel/xnu-<version>)"),
-        "obj_dir": attr.string(mandatory = True, doc = "the pass's object root, below this package's output directory"),
-        "dst_dir": attr.string(doc = "installhdrs: the DSTROOT (the SDK root), below this package's output directory"),
-        "sdkroot": attr.label(providers = [XnuTreeInfo], doc = "build: the SDK root (KERNEL_SDKROOT)"),
-        "_availability": attr.label(default = "@availability_versions//:all"),
-        "_libplatform": attr.label(default = "@libplatform//:all"),
-        "_libdispatch": attr.label(default = "@libdispatch//:all"),
-        "_ops": attr.label(default = "//kernel/rules:xnu_ops.py", allow_single_file = True),
-        "decomment": attr.label(mandatory = True, executable = True, cfg = "exec", doc = "SETUP/decomment"),
         "config": attr.label(mandatory = True, executable = True, cfg = "exec", doc = "SETUP/config"),
+        "decomment": attr.label(mandatory = True, executable = True, cfg = "exec", doc = "SETUP/decomment"),
+        "dst_dir": attr.string(doc = "installhdrs: the DSTROOT (the SDK root), below this package's output directory"),
+        "obj_dir": attr.string(mandatory = True, doc = "the pass's object root, below this package's output directory"),
+        "sdkroot": attr.label(providers = [XnuTreeInfo], doc = "build: the SDK root (KERNEL_SDKROOT)"),
+        "srcs": attr.label_list(allow_files = True, doc = "every file of the XNU tree (xnu_sources)"),
+        "table": attr.string(mandatory = True, doc = "the table, json.encode()d"),
+        "xnu_root": attr.string(mandatory = True, doc = "the XNU tree's directory (kernel/xnu-<version>)"),
+        "_availability": attr.label(default = "@availability_versions//:all"),
+        "_libdispatch": attr.label(default = "@libdispatch//:all"),
+        "_libplatform": attr.label(default = "@libplatform//:all"),
+        "_ops": attr.label(default = "//kernel/rules:xnu_ops.py", allow_single_file = True),
         "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
     },
     toolchains = [PY_TOOLCHAIN],
@@ -325,12 +326,12 @@ xnu_host_tool = rule(
     implementation = _xnu_host_tool_impl,
     doc = "A host (macOS arm64) tool from XNU's SETUP/, built as its SETUP Makefile does (bison/flex for config).",
     attrs = {
-        "srcs": attr.label_list(allow_files = [".c"], mandatory = True),
-        "hdrs": attr.label_list(allow_files = [".h"]),
-        "yacc": attr.label(allow_single_file = [".y"]),
-        "lex": attr.label(allow_single_file = [".l"]),
         "copts": attr.string_list(),
+        "hdrs": attr.label_list(allow_files = [".h"]),
+        "lex": attr.label(allow_single_file = [".l"]),
         "linkopts": attr.string_list(),
+        "srcs": attr.label_list(allow_files = [".c"], mandatory = True),
+        "yacc": attr.label(allow_single_file = [".y"]),
         "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
     },
     executable = True,
@@ -374,18 +375,18 @@ xnu_sdk = rule(
     doc = "The kernel SDK of one XNU for the kernel configuration: its object root's and SDK root's headers (built in " +
           "the outer configuration, once) and its source's headers, as CcInfo, and the paths the kernel toolchain names.",
     attrs = {
-        "obj": attr.label(mandatory = True, providers = [XnuTreeInfo], cfg = outer_transition),
-        "sdkroot": attr.label(mandatory = True, providers = [XnuTreeInfo], cfg = outer_transition),
-        "xnu_source": attr.label_list(allow_files = True),
-        "xnu_root": attr.string(mandatory = True),
-        "package_dir": attr.string(mandatory = True, doc = "the package of obj (kernel/xnu-<version>)"),
-        "obj_dir": attr.string(mandatory = True),
-        "kernel_config": attr.string(mandatory = True, doc = "DEVELOPMENT or RELEASE: the configuration obj is for"),
-        "kernel_package": attr.string(mandatory = True, doc = "the package of the kernel's other generated files"),
         "extra": attr.label_list(
             allow_files = True,
             doc = "headers XNU's own flags put on every kernel compile (-I <tree>/diagnostics/ioswitch)",
         ),
+        "kernel_config": attr.string(mandatory = True, doc = "DEVELOPMENT or RELEASE: the configuration obj is for"),
+        "kernel_package": attr.string(mandatory = True, doc = "the package of the kernel's other generated files"),
+        "obj": attr.label(mandatory = True, providers = [XnuTreeInfo], cfg = outer_transition),
+        "obj_dir": attr.string(mandatory = True),
+        "package_dir": attr.string(mandatory = True, doc = "the package of obj (kernel/xnu-<version>)"),
+        "sdkroot": attr.label(mandatory = True, providers = [XnuTreeInfo], cfg = outer_transition),
+        "xnu_root": attr.string(mandatory = True),
+        "xnu_source": attr.label_list(allow_files = True),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
     },
 )
@@ -412,8 +413,8 @@ xnu_tree = rule(
     implementation = _xnu_tree_impl,
     doc = "An xnu_pass's files as one tree artifact (for tools that take a directory: make, xcodebuild).",
     attrs = {
-        "src": attr.label(mandatory = True, providers = [XnuTreeInfo]),
         "out": attr.string(mandatory = True),
+        "src": attr.label(mandatory = True, providers = [XnuTreeInfo]),
     },
 )
 
@@ -439,8 +440,8 @@ xnu_extract = rule(
     implementation = _xnu_extract_impl,
     doc = "Files of a tree artifact (a tool's output directory) as files of their own, below out_dir.",
     attrs = {
-        "src": attr.label(mandatory = True, allow_single_file = True),
         "files": attr.string_list(mandatory = True),
         "out_dir": attr.string(mandatory = True),
+        "src": attr.label(mandatory = True, allow_single_file = True),
     },
 )
