@@ -3173,6 +3173,65 @@ static void scheduled(void *context);
     else
         run();
 }
+// r17-widgets: what drives a process's command buffers. One commit every 30 s keeps the stack that committed it (frame
+// pointers, up to 20 frames below this call), each frame as image+offset (dladdr), and the plugin logs it once beside the rates
+// line. In the shared cache, image load address + offset is the unslid address `ipsw dyld a2s` names: for WidgetRenderer's
+// steady 20 commits/s with the clock widget showing, whether a display link, a timer or a transaction flush drives them, and which
+// SwiftUI/RenderBox update asks for that rate. Costs one backtrace() per 30 s per process.
+static std::atomic<uint64_t> gOriginNextUs{0};
+static std::mutex gOriginLock;
+static void *gOriginFrames[21];
+static int gOriginCount;
+static char gOriginThread[32];
+static unsigned gOriginQos;
+
+__attribute__((noinline)) static void noteCommitOrigin(uint64_t now)
+{
+    uint64_t next = gOriginNextUs.load(std::memory_order_relaxed);
+    if (now < next || !gOriginNextUs.compare_exchange_strong(next, now + 30000000, std::memory_order_relaxed)) return;
+    void *frames[21];
+    const int n = backtrace(frames, 21);
+    char thread[32] = "";
+    pthread_getname_np(pthread_self(), thread, sizeof thread);
+    std::lock_guard<std::mutex> lock(gOriginLock);
+    gOriginCount = n > 1 ? n - 1 : 0;  // frames[0] is this function
+    if (gOriginCount) memcpy(gOriginFrames, frames + 1, sizeof(void *) * (size_t)gOriginCount);
+    strlcpy(gOriginThread, thread, sizeof gOriginThread);
+    gOriginQos = (unsigned)qos_class_self();
+}
+
+extern "C" size_t native_bridge_metal_commit_origin(char *out, size_t size)
+{
+    void *frames[21];
+    int n;
+    char thread[32];
+    unsigned qos;
+    {
+        std::lock_guard<std::mutex> lock(gOriginLock);
+        if (!gOriginCount || !out || !size) return 0;
+        n = gOriginCount;
+        memcpy(frames, gOriginFrames, sizeof(void *) * (size_t)n);
+        strlcpy(thread, gOriginThread, sizeof thread);
+        qos = gOriginQos;
+        gOriginCount = 0;
+    }
+    int m = snprintf(out, size, "commit stack (thread '%s' qos 0x%x):", thread, qos);
+    size_t at = m > 0 ? std::min<size_t>((size_t)m, size - 1) : 0;
+    for (int i = 0; i < n && at + 1 < size; i++) {
+        Dl_info info{};
+        if (dladdr(frames[i], &info) && info.dli_fname && info.dli_fbase) {
+            const char *name = strrchr(info.dli_fname, '/');
+            m = snprintf(out + at, size - at, " %s+0x%lx", name ? name + 1 : info.dli_fname,
+                         (unsigned long)((uintptr_t)frames[i] - (uintptr_t)info.dli_fbase));
+        } else {
+            m = snprintf(out + at, size - at, " 0x%lx", (unsigned long)(uintptr_t)frames[i]);
+        }
+        if (m <= 0) break;
+        at = std::min<size_t>(at + (size_t)m, size - 1);
+    }
+    return at;
+}
+
 - (void)commit
 {
     const uint64_t began = apiTiming() ? mach_absolute_time() : 0;
@@ -3190,6 +3249,7 @@ static void scheduled(void *context);
     }
     self.committed = YES;
     self.committedUs = nowUs();
+    noteCommitOrigin(self.committedUs);
     {
         std::lock_guard<std::mutex> lock(gCommitLock);
         // Assign once under the same lock as publication. A concurrent commit cannot reuse this index.

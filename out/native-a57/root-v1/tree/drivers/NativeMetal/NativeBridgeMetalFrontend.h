@@ -24,6 +24,8 @@ size_t native_bridge_metal_telemetry(char *out, size_t size);
 // One line of rates since the previous call (commits/s, CPU per commit, submission and waits, surface maintenance, compiles, cache
 // hits); 0 when nothing was committed or compiled since. The plugin logs it every 5 s.
 size_t native_bridge_metal_rates(char *out, size_t size);
+// The caller stack of one sampled commit (one per 30 s), frames as image+offset; 0 when none was sampled since the last call.
+size_t native_bridge_metal_commit_origin(char *out, size_t size);
 // Structured cumulative artifact/driver-cache counters for offline qualification.
 struct NmbShaderCacheStats;
 bool native_bridge_metal_shader_cache_stats(struct NmbShaderCacheStats *out);

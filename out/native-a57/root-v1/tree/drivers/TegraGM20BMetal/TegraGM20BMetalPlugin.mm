@@ -51,7 +51,9 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <algorithm>
+#include <atomic>
 #include <initializer_list>
+#include <mutex>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -59,6 +61,7 @@
 #include <os/log.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
+#include <string.h>
 #include <unistd.h>
 #include "NativeBridgeMetalFrontend.h"
 #include "RawMetal.h"
@@ -318,12 +321,96 @@ bool rawPack(char *path, size_t size)
 
 bool gRaw;  // the render server's device is the raw facade
 
+// r17-widgets: the frame rates this process's display links are asked for. Each distinct request (a CAFrameRateRange or a
+// preferredFramesPerSecond, with the image+offset that made it) is logged once, up to 8 per process, and passed on unchanged.
+// With the commit stack line this tells where WidgetRenderer's steady 20 commits/s (the clock widget) come from: a rate SwiftUI
+// or RenderBox asks the display link for (quantised to 60/3 on this 60 Hz panel) or a cadence of their own.
+struct FrameRateRange {  // CAFrameRateRange's layout
+    float minimum, maximum, preferred;
+};
+using SetRange = void (*)(id, SEL, FrameRateRange);
+using SetFps = void (*)(id, SEL, NSInteger);
+SetRange gSetRange;
+SetFps gSetFps;
+
+void callerName(const void *pc, char *out, size_t size)
+{
+    Dl_info info = {};
+    if (dladdr(pc, &info) && info.dli_fname && info.dli_fbase) {
+        const char *name = strrchr(info.dli_fname, '/');
+        snprintf(out, size, "%s+0x%lx", name ? name + 1 : info.dli_fname,
+                 (unsigned long)((uintptr_t)pc - (uintptr_t)info.dli_fbase));
+    } else {
+        snprintf(out, size, "0x%lx", (unsigned long)(uintptr_t)pc);
+    }
+}
+
+bool firstRequest(uint64_t key)
+{
+    static std::mutex lock;
+    static uint64_t seen[8];
+    static unsigned count;
+    std::lock_guard<std::mutex> guard(lock);
+    for (unsigned i = 0; i < count; i++)
+        if (seen[i] == key) return false;
+    if (count == 8) return false;
+    seen[count++] = key;
+    return true;
+}
+
+void observedSetRange(id link, SEL cmd, FrameRateRange range)
+{
+    const void *pc = __builtin_return_address(0);
+    uint32_t bits[3];
+    memcpy(bits, &range, sizeof bits);
+    if (firstRequest(((uint64_t)bits[0] * 31 + bits[1]) * 31 + bits[2] + ((uint64_t)(uintptr_t)pc << 20))) {
+        char who[128];
+        callerName(pc, who, sizeof who);
+        os_log(logger(),
+               "TegraGM20BMetal: %{public}s display link frame rate range min %.1f max %.1f preferred %.1f from "
+               "%{public}s",
+               getprogname(), (double)range.minimum, (double)range.maximum, (double)range.preferred, who);
+    }
+    gSetRange(link, cmd, range);
+}
+
+void observedSetFps(id link, SEL cmd, NSInteger fps)
+{
+    const void *pc = __builtin_return_address(0);
+    if (firstRequest(((uint64_t)fps << 1 | 1) + ((uint64_t)(uintptr_t)pc << 20))) {
+        char who[128];
+        callerName(pc, who, sizeof who);
+        os_log(logger(), "TegraGM20BMetal: %{public}s display link preferredFramesPerSecond %ld from %{public}s",
+               getprogname(), (long)fps, who);
+    }
+    gSetFps(link, cmd, fps);
+}
+
+void observeDisplayLinkRates()
+{
+    static std::atomic<bool> done;  // swapped once per process: a second swap would make the observer its own original
+    if (done.exchange(true)) return;
+    if (!strcmp(getprogname(), "backboardd")) return;  // the render server's own display links stay untouched
+    Class cls = objc_getClass("CADisplayLink");
+    if (!cls) return;  // no QuartzCore in this process
+    if (Method m = class_getInstanceMethod(cls, sel_registerName("setPreferredFrameRateRange:"))) {
+        // The original first: a call may land as soon as the method is swapped.
+        gSetRange = (SetRange)method_getImplementation(m);
+        method_setImplementation(m, (IMP)observedSetRange);
+    }
+    if (Method m = class_getInstanceMethod(cls, sel_registerName("setPreferredFramesPerSecond:"))) {
+        gSetFps = (SetFps)method_getImplementation(m);
+        method_setImplementation(m, (IMP)observedSetFps);
+    }
+}
+
 // The frontend's rates line, every 5 s while the device works (it says nothing when idle). r16-idle: with a whole
 // interval of leeway, so the timer rides a wakeup the process or the kernel takes anyway instead of waking every
 // Metal process every 5 s; both rates functions measure their own window, so a late tick only makes a longer one.
 void startRates()
 {
     if (!knobOn("TEGRA_M2V_TELEMETRY", "tegra-m2v-telemetry", true)) return;
+    observeDisplayLinkRates();
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
@@ -332,6 +419,9 @@ void startRates()
         // 768: the rates line passed 512 with r6-lows' frame distributions (encp= cgap= swait= gpuq= psomax=).
         char line[768];
         if (native_bridge_metal_rates(line, sizeof line))
+            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
+        // r17-widgets: the stack of one commit per 30 s (what drives this process's commit rate).
+        if (native_bridge_metal_commit_origin(line, sizeof line))
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
         // The raw path's own: command buffers on each path, encode, draws.
         if (gRaw && raw_metal_rates(line, sizeof line))
