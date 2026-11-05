@@ -280,6 +280,8 @@ struct DataCounters {
     uint64_t doorbells, indexReads, drains;  // H2D doorbells rung; ring indices read from the chip's RAM; service()s
     uint32_t txInFlight, txPeak;             // frames the chip holds now; the most it held since the last snapshot
     uint32_t rxPosted;                       // receive buffers the chip holds now
+    uint64_t txReread, txRereadDiffer;       // txReadBack: buffers read back from memory; those that differed
+    uint32_t txRereadAt;                     // the first byte that differed, in the last one that did
 };
 
 class Msgbuf {
@@ -340,6 +342,10 @@ public:
     uint32_t txPost(size_t length);
     void txFlush();
     bool txResume();
+    // After txFlush: the first `length` bytes of posted buffer `id` as the chip reads them (out of the cache, from
+    // memory) against the `written` copy the CPU wrote, counted in DataCounters. Same gate as the post, so no
+    // completion can recycle the buffer in between.
+    void txReadBack(uint32_t id, const uint8_t *written, size_t length);
 
     // The AWDL interface's flow rings (the firmware's own AWDL, SwitchWLANAwdl.cpp): one per destination, group
     // addresses sharing the broadcast one, created on first use and deleted when the interface goes. Their memory is

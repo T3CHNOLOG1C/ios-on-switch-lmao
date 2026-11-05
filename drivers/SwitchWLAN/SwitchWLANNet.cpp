@@ -33,10 +33,12 @@ extern "C" {
 #include <net/if_types.h>
 #include <netinet/in.h>
 #include <sys/mbuf.h>
+#include <kern/clock.h>
 #include <kern/thread_call.h>
 #include <stdarg.h>
 #include "SwitchWLANAwdlRadio.h"
 #include "SwitchWLANStation.h"
+#include "SwitchWLANTrace.h"
 
 #define SIOCSA80211 0x802869c8UL  // _IOW('i', 200, struct apple80211req)
 #define SIOCGA80211 0xc02869c9UL  // _IOWR('i', 201, struct apple80211req)
@@ -388,9 +390,19 @@ void on_link_lost(int reason)
 // Work loop only: frames received in this interrupt, not yet handed to the stack.
 mbuf_t gRxHead, gRxTail;
 uint32_t gRxCount, gRxBytes;
+// Fed by on_rx and tx_fill, both under SwitchWLAN's gate (the work loop's); read under it too.
+swlan_trace gTrace;
+uint64_t trace_now()
+{
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    return ns;
+}
 void on_rx(const uint8_t *eth, size_t length)
 {
     if (!gIf || length < 14) return;
+    const swlan_frame_facts facts = swlan_frame_classify(eth, length);
+    if (facts.kind != SWLAN_FRAME_OTHER) swlan_trace_note_received(&gTrace, facts, !(eth[0] & 1), trace_now());
     // Two bytes ahead of the Ethernet header put the IP header on a 4-byte boundary. The packet may come back as a
     // chain: each buffer gets only what fits in it (sheng i469: setting the whole length on the first one let the stack
     // read past that buffer's end).
@@ -487,6 +499,8 @@ size_t tx_fill(void *context, uint8_t *buffer, size_t room)
             ++c->dropped;
             continue;
         }
+        const swlan_frame_facts facts = swlan_frame_classify(buffer, length);
+        if (facts.kind != SWLAN_FRAME_OTHER) swlan_trace_note_sent(&gTrace, facts, trace_now());
         if (c->sentTail)
             mbuf_setnextpkt(c->sentTail, m);
         else
@@ -1093,6 +1107,11 @@ extern "C" void switch_wlan_net_counters(struct swlan_net_counters *out)
     out->tx_batches = __atomic_load_n(&gTxBatches, __ATOMIC_RELAXED);
     out->rx_batches = gRxBatches;
     out->start_model = gStartModel ? 1 : 0;
+}
+
+extern "C" void switch_wlan_net_trace(struct swlan_trace_counts *out)
+{
+    *out = gTrace.c;
 }
 
 extern "C" void switch_wlan_net_rate(uint64_t bps)

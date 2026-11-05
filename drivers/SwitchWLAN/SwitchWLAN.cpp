@@ -43,6 +43,7 @@
 #include "SwitchWLANLink.h"
 #include "SwitchWLANPrivate.h"
 #include "SwitchWLANStation.h"
+#include "SwitchWLANTrace.h"
 #include "SwitchWLANWpa.h"
 #include "awdl/awdl_bcm.h"
 
@@ -291,9 +292,18 @@ private:
         uint64_t msis, rxBytes, txBytes;
         swlan_net_counters net;
         swlan::DataCounters data;
+        swlan_trace_counts trace;
     } lastCounts_ = {};
     void snapshot(Counts &c);
     void logStats();
+    void logProbe(const Counts &now, const Counts &was, uint32_t windowMs);
+    // The firmware's "counters" block now and at the last stats line (worker only; too large for its stack).
+    uint8_t fwCounters_[1536] = {}, fwCountersNow_[1536] = {};
+    size_t fwCountersLength_ = 0;
+    bool fwCountersRefused_ = false, pmReadRefused_ = false, sleepRetReadRefused_ = false;
+    // Under the gate: the bytes of the transmit buffer read back next (one DNS query a second at most).
+    uint8_t txWritten_[96] = {};
+    uint64_t nextReadBackNs_ = 0;
     // The access point's counters (sta_info) and the firmware's time in power save (pm_dur, ms) at the last stats
     // line; an iovar the firmware refused once is not asked again.
     swlan_sta staLast_ = {};
@@ -1684,6 +1694,7 @@ void SwitchWLAN::snapshot(Counts &c)
         c.txBytes = txBytes_;
         c.msis = interrupts_;
         c.data = mb_.takeCounters();
+        switch_wlan_net_trace(&c.trace);
     });
     switch_wlan_net_counters(&c.net);
 }
@@ -1829,7 +1840,71 @@ void SwitchWLAN::logStats()
     if (at < sizeof(out)) switch_wlan_awdl_stat(out + at, sizeof(out) - at);
     os_log(OS_LOG_DEFAULT, "%s", out);
     os_log(OS_LOG_DEFAULT, "%s", data);
+    logProbe(now, was, windowMs);
     lastCounts_ = now;
+}
+
+// Where an unanswered query was lost: "probe" has what crossed en0 for DNS and ARP, whether the transmit buffers held
+// in memory what the CPU wrote, and the firmware's power-save state; "fw counters" has the firmware's receive drops
+// that sta_info does not count (bad address, replay, undecryptable, duplicate) and its null/PS-Poll frames, raw by slot.
+void SwitchWLAN::logProbe(const Counts &now, const Counts &was, uint32_t windowMs)
+{
+    char out[1024];
+    int n = snprintf(out, sizeof(out), "SwitchWLAN: probe %u ms: ", windowMs);
+    size_t at = n > 0 ? static_cast<size_t>(n) : 0;
+    auto advance = [&](int k) { at += k > 0 ? static_cast<size_t>(k) : 0; };
+    if (at < sizeof(out)) advance(swlan_trace_describe(&now.trace, &was.trace, out + at, sizeof(out) - at));
+    const swlan::DataCounters &d = now.data, &e = was.data;
+    if (at < sizeof(out))
+        advance(snprintf(out + at, sizeof(out) - at, "; TX buffers read back %llu, %llu differ",
+                         static_cast<unsigned long long>(d.txReread - e.txReread),
+                         static_cast<unsigned long long>(d.txRereadDiffer - e.txRereadDiffer)));
+    if (at < sizeof(out) && d.txRereadDiffer != e.txRereadDiffer)
+        advance(snprintf(out + at, sizeof(out) - at, " (first at byte %u)", d.txRereadAt));
+    uint8_t v[24] = {};
+    size_t got = 0;
+    int pm = -1;
+    if (!pmReadRefused_) {
+        if (ioctl(WLC_GET_PM, nullptr, 0, 4, v, &got) && got >= 4)
+            pm = static_cast<int>(swlan::le32(v));
+        else
+            pmReadRefused_ = true;
+    }
+    int low = -1, high = -1, logic = -1;
+    if (!sleepRetReadRefused_) {
+        got = 0;
+        if (getVar("pm2_sleep_ret_ext", v, sizeof(v), &got) && got >= 6) {
+            logic = v[0];
+            low = v[2] | (v[3] << 8);
+            high = v[4] | (v[5] << 8);
+        } else {
+            sleepRetReadRefused_ = true;
+        }
+    }
+    int btcdyn = -1;
+    got = 0;
+    uint8_t profile[64] = {};
+    if (getVar("btc_dynctl", profile, sizeof(profile), &got) && got >= 2 && profile[0] == 1) btcdyn = profile[1];
+    if (at < sizeof(out))
+        advance(snprintf(out + at, sizeof(out) - at,
+                         "; firmware PM %d, sleep return logic %d %d/%d ms, btcdyn flags %d", pm, logic, low, high,
+                         btcdyn));
+    os_log(OS_LOG_DEFAULT, "%s", out);
+
+    if (fwCountersRefused_) return;
+    uint8_t *block = fwCountersNow_;
+    got = 0;
+    if (!getVar("counters", block, 1518, &got) || got < 4) {
+        fwCountersRefused_ = true;
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: fw counters not available (%zu bytes): %s", got, why_);
+        return;
+    }
+    char text[900];
+    swlan_fw_counters_delta(block, got, fwCountersLength_ ? fwCounters_ : nullptr, fwCountersLength_, text,
+                            sizeof(text));
+    os_log(OS_LOG_DEFAULT, "SwitchWLAN: fw counters %u ms: %s", windowMs, text);
+    memcpy(fwCounters_, block, got);
+    fwCountersLength_ = got;
 }
 
 // The access point's counters (sta_info by its address). A firmware that refuses or answers in a layout not known
@@ -2311,14 +2386,30 @@ unsigned SwitchWLAN::transmitFrames(swlan_tx_fill_fn fill, void *context, unsign
     unsigned taken = 0;
     locked([&] {
         if (!up_ || status_.state != SWLAN_STA_UP) return;
+        const uint64_t now = swlan::nowNs();
+        uint32_t readBackId = 0;
+        size_t readBackLength = 0;
         while (taken < max && mb_.txRoom()) {
             uint8_t *buffer = mb_.txBuffer();
             const size_t length = buffer ? fill(context, buffer, swlan::kTxBufferSize) : 0;
-            if (!length || !mb_.txPost(length)) break;
+            if (!length) break;
+            const bool readBack = !readBackId && now >= nextReadBackNs_ && length <= sizeof(txWritten_) * 8 &&
+                                  swlan_frame_classify(buffer, length).kind == SWLAN_FRAME_DNS_QUERY;
+            if (readBack) {
+                readBackLength = length < sizeof(txWritten_) ? length : sizeof(txWritten_);
+                memcpy(txWritten_, buffer, readBackLength);
+            }
+            const uint32_t id = mb_.txPost(length);
+            if (!id) break;
+            if (readBack) readBackId = id;
             txBytes_ += length;
             ++taken;
         }
         mb_.txFlush();
+        if (readBackId) {
+            mb_.txReadBack(readBackId, txWritten_, readBackLength);
+            nextReadBackNs_ = now + 1000000000ULL;
+        }
     });
     return taken;
 }

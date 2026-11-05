@@ -691,6 +691,21 @@ void Msgbuf::txFlush()
     publish(FLOW);
 }
 
+void Msgbuf::txReadBack(uint32_t id, const uint8_t *written, size_t length)
+{
+    if (id < 1 || id > txCount_ || length > kTxBufferSize) return;
+    const uint8_t *chip = txVa(id);
+    dcacheFlush(chip, length);
+    ++data_.txReread;
+    for (size_t i = 0; i < length; ++i) {
+        if (chip[i] != written[i]) {
+            ++data_.txRereadDiffer;
+            data_.txRereadAt = static_cast<uint32_t>(i);
+            return;
+        }
+    }
+}
+
 bool Msgbuf::txResume()
 {
     const unsigned enough = kTxResumeFree < txCount_ / 2 ? kTxResumeFree : txCount_ / 2;

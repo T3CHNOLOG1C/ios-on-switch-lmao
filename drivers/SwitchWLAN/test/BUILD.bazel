@@ -47,3 +47,14 @@ host_test(
         ":switch_wlan_msgbuf",
     ],
 )
+
+host_library(
+    name = "trace",
+    hdrs = ["//drivers/SwitchWLAN:SwitchWLANTrace.h"],
+)
+
+host_test(
+    name = "switch_wlan_trace_test",
+    srcs = ["switch_wlan_trace_test.cpp"],
+    deps = [":trace"],
+)

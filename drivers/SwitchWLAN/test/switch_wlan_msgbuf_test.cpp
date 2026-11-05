@@ -724,6 +724,35 @@ TEST(SwitchWlanMsgbuf, HandshakeFrameSentAndItsStatusRead)
     });
 }
 
+// A posted buffer read back after the flush: what the chip fetched matches the CPU's copy, and a copy that does not
+// match is counted with the first byte that differs.
+TEST(SwitchWlanMsgbuf, TransmitBufferReadBackComparesWhatTheChipFetches)
+{
+    ExpectPassesInFreshProcess([] {
+        REQUIRE(bringUp());
+        REQUIRE(openFlow());
+        const Frame f = makeFrame(3, 90);
+        uint8_t *buffer = gMb.txBuffer();
+        REQUIRE(buffer != nullptr);
+        memcpy(buffer, f.bytes.data(), f.bytes.size());
+        const uint32_t id = gMb.txPost(f.bytes.size());
+        REQUIRE(id != 0);
+        gMb.txFlush();
+        gMb.txReadBack(id, f.bytes.data(), f.bytes.size());
+        std::vector<uint8_t> other = f.bytes;
+        other[41] ^= 0x20;
+        gMb.txReadBack(id, other.data(), other.size());
+        gMb.txReadBack(id, f.bytes.data(), swlan::kTxBufferSize + 1);
+        const swlan::DataCounters d = gMb.takeCounters();
+        EXPECT_EQ(d.txReread, 2u);
+        EXPECT_EQ(d.txRereadDiffer, 1u);
+        EXPECT_EQ(d.txRereadAt, 41u);
+        firmware();
+        EXPECT_EQ(gFw.txSeen.size(), 1u);
+        if (!gFw.txSeen.empty()) EXPECT_EQ(gFw.txSeen[0].bytes, f.bytes);
+    });
+}
+
 // No contiguous 2 MiB: the old layout, with one line.
 TEST(SwitchWlanMsgbuf, NoContiguous2MiBTakesTheOldLayoutWithOneLine)
 {
