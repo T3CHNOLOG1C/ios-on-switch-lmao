@@ -280,7 +280,9 @@ kernel_driver(
 # NativeAES.
 kernel_driver(
     name = "NativeAES",
-    hdr_deps = [],
+    hdr_deps = [
+        "drivers/TegraSE",
+    ],
     srcs = [
         "NativeAES.cpp",
         "//bazel/pinned:kernel/native-aes/original-bindings.S",
