@@ -2,8 +2,12 @@
 - BlockLinear.c's de-swizzle against the per-byte GOB formula;
 - H264NVDEC over test/VDECClip.h's clip: every submit accepted by the kernel's own checker (TegraNVDECCheck.h), pictures
   out in x264's display order, and the checker refusing each kind of bad submit;
+- VP9NVDEC over libvpx's own trace (VP9Trace.h, VP9Clip.h from test/vp9gen): headers, the entropy contexts NVDEC is
+  given, the counter mapping and backward adaptation equal libvpx's frame by frame; every submit accepted by the
+  kernel's checker, which refuses each kind of bad VP9 submit;
 - AVD.videodecoder itself on this Mac's VideoToolbox over a fake TegraNVDEC client: the plug-in's class layout, session
-  calls and property answers, and its fall-back onto Apple's software decoder when the arena has no room;
+  calls and property answers for 'avc1' and 'vp09', and its fall-back onto Apple's software decoder when the arena has
+  no room;
 - the clip check (vdectest) against Apple's own decoders, which proves the clip and its x264 CRCs."""
 from pathlib import Path
 import subprocess
@@ -22,7 +26,8 @@ FRAMEWORKS = ["-framework", "CoreFoundation", "-framework", "CoreMedia", "-frame
 def build_and_run(name, sources, extra=(), args=()):
     with tempfile.TemporaryDirectory(prefix="ioswitch-video-") as directory:
         executable = Path(directory) / name
-        subprocess.run(["clang", *FLAGS, *[str(s) for s in sources], *extra, "-o", str(executable)], check=True)
+        subprocess.run(["clang", *FLAGS, "-I", str(VIDEO / "test"), *[str(s) for s in sources], *extra, "-o",
+                        str(executable)], check=True)
         result = subprocess.run([str(executable), *args], capture_output=True, text=True)
         return result.returncode, result.stdout + result.stderr
 
@@ -39,9 +44,16 @@ class SwitchVideoTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn("PASS h264 clip: 30 access units, 30 pictures", output)
 
+    def test_vp9_against_libvpx(self):
+        code, output = build_and_run("vp9", [VIDEO / "test/vp9_host.c", AVD / "VP9NVDEC.c", AVD / "VP9Syntax.c",
+                                             AVD / "VP9Probs.c"], ["-lz"])
+        self.assertEqual(code, 0, output)
+        self.assertIn("PASS vp9: clip A 18 frames (16 shown), clip B 13 frames", output)
+
     def test_avd_plugin_on_videotoolbox(self):
         code, output = build_and_run("avd", [VIDEO / "test/avd_host.c", AVD / "H264NVDEC.c", AVD / "H264Syntax.c",
-                                             AVD / "BlockLinear.c", AVD / "ClipCheck.c"], FRAMEWORKS)
+                                             AVD / "BlockLinear.c", AVD / "ClipCheck.c", AVD / "VP9NVDEC.c",
+                                             AVD / "VP9Syntax.c", AVD / "VP9Probs.c"], FRAMEWORKS)
         self.assertEqual(code, 0, output)
         self.assertIn("PASS avd", output)
 

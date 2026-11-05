@@ -1,2 +1,7 @@
 # Generated files clang-format must not touch (paths relative to this directory).
 drivers/SwitchVideoDecoders/test/VDECClip.h
+drivers/SwitchVideoDecoders/test/VP9Clip.h
+drivers/SwitchVideoDecoders/test/VP9Trace.h
+drivers/SwitchVideoDecoders/AVD/VP9Tables.inc
+drivers/TegraNVDEC/selftest/VP9Picture160.inc
+drivers/SwitchVideoDecoders/test/vp9gen/vpx_config.h

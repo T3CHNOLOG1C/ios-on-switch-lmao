@@ -67,6 +67,9 @@ extern const void *CMBaseObjectGetVTable(CMBaseObjectRef object);  // a VTPlugin
 extern CMBaseObjectRef VTVideoDecoderGetCMBaseObject(VTVideoDecoderRef decoder);
 // The registry's choice for a codec under a decoder specification (21H461 VideoToolbox, exported): with an out-pointer
 // it runs the candidates' factories in rating order until one succeeds; with none it only answers whether one exists.
+// A decoder specification for 'vp09' is refused unless it carries this (true): VideoToolbox's selection returns no
+// decoder otherwise (21H461 0x19789ee98); VTIsHardwareDecodeSupported sets it in Fig servers and entitled tasks.
+extern const CFStringRef kVTVideoDecoderSpecification_AllowVP9Decode;
 extern OSStatus VTSelectAndCreateVideoDecoderInstance(FourCharCode codecType, CFAllocatorRef allocator,
                                                       CFDictionaryRef specification, VTVideoDecoderRef *out);
 extern OSStatus VTDecoderSessionSetPixelBufferAttributes(VTVideoDecoderSession session, CFDictionaryRef attributes);

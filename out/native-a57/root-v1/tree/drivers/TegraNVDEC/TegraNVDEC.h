@@ -44,7 +44,9 @@ bool tegra_nvdec_ready(void);
 // True for exactly one caller per boot: the process that runs the userland clip check (AVD.videodecoder).
 bool tegra_nvdec_claim_self_test(void);
 
-int tegra_nvdec_self_test(void);            // N3
+int tegra_nvdec_self_test(void);            // N3 H.264: NVDEC itself
+int tegra_nvdec_self_test_vp9(void);        // N3 VP9: decides the VP9 bit of tegra_nvdec_codecs()
+uint32_t tegra_nvdec_codecs(void);          // bit n: TEGRA_NVDEC_CODEC_* n proven at N3 and accepted by Submit
 int tegra_nvdec_publish(uint64_t arenaUs);  // N4
 }
 

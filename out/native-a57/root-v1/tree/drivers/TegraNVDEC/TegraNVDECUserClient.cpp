@@ -186,7 +186,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         memset(info, 0, sizeof(*info));
         info->abi_version = TEGRA_NVDEC_ABI_VERSION;
         info->nvdec_version = 0x20;
-        info->codecs = 1u << TEGRA_NVDEC_CODEC_H264;
+        info->codecs = tegra_nvdec_codecs();
         info->max_width = info->max_height = 4096;
         tegra_nvdec_arena_usage(&info->arena_bytes, &info->arena_free);
         break;
@@ -226,7 +226,12 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
     case TegraNVDECMethodSubmit: {
         uint32_t fence = 0;
         const char *why = nullptr;
-        const int err = tegra_nvdec_run(static_cast<const TegraNVDECSubmit *>(in), resolve, this, &fence, &why);
+        const TegraNVDECSubmit *submit = static_cast<const TegraNVDECSubmit *>(in);
+        int err = -22;
+        if (submit->codec < 32 && (tegra_nvdec_codecs() & (1u << submit->codec)))
+            err = tegra_nvdec_run(submit, resolve, this, &fence, &why);
+        else
+            why = "codec not proven at boot";
         if (err) {
             static volatile int logged;
             if (why &&

@@ -1131,8 +1131,9 @@ ios_binary(
     sign_identifier = "com.ioswitch.hevch8",
 )
 
-# AVD.videodecoder: H.264 on NVDEC as VideoToolbox's hardware 'avc1' decoder (registered where TegraNVDEC is open to
-# the process), with the once-per-boot clip check (ClipCheck.c over test/VDECClip.h).
+# AVD.videodecoder: H.264 and VP9 on NVDEC as VideoToolbox's hardware 'avc1' and 'vp09' decoders (registered where
+# TegraNVDEC is open to the process and the codec passed its boot self-test), with the once-per-boot clip checks
+# (ClipCheck.c over test/VDECClip.h and test/VP9Clip.h).
 ios_binary(
     name = "AVD",
     srcs = [
@@ -1142,11 +1143,18 @@ ios_binary(
         "drivers/SwitchVideoDecoders/AVD/NVDECClient.c",
         "drivers/SwitchVideoDecoders/AVD/BlockLinear.c",
         "drivers/SwitchVideoDecoders/AVD/ClipCheck.c",
+        "drivers/SwitchVideoDecoders/AVD/VP9NVDEC.c",
+        "drivers/SwitchVideoDecoders/AVD/VP9Syntax.c",
+        "drivers/SwitchVideoDecoders/AVD/VP9Probs.c",
     ],
     hdrs = glob([
         "drivers/SwitchVideoDecoders/AVD/*.h",
+        "drivers/SwitchVideoDecoders/AVD/*.inc",
         "drivers/TegraNVDEC/**/*.h",
-    ]) + ["drivers/SwitchVideoDecoders/test/VDECClip.h"],
+    ]) + [
+        "drivers/SwitchVideoDecoders/test/VDECClip.h",
+        "drivers/SwitchVideoDecoders/test/VP9Clip.h",
+    ],
     copts = [
         "-O2",
         "-Wall",
@@ -1182,6 +1190,7 @@ ios_binary(
     hdrs = [
         "drivers/SwitchVideoDecoders/AVD/ClipCheck.h",
         "drivers/SwitchVideoDecoders/test/VDECClip.h",
+        "drivers/SwitchVideoDecoders/test/VP9Clip.h",
     ],
     copts = [
         "-O2",

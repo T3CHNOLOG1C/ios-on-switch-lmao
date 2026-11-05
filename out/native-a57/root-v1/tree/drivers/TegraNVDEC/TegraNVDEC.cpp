@@ -6,7 +6,8 @@
 //   N1  power partition, clock, reset, falcon firmware loaded and started
 //   N2  proof of life through host1x channel 0 in NVDEC's class: an IMMEDIATE syncpoint increment (the engine's host
 //       interface answers) then an OP_DONE one (the falcon firmware answers), each completed by interrupt
-//   N3  (stage 2) an embedded H.264 picture decoded and checked (TegraNVDECSelfTest.cpp)
+//   N3  (stage 2) an embedded H.264 picture decoded and checked, then a VP9 key frame (TegraNVDECSelfTest.cpp); a VP9
+//       failure with the engine still answering turns VP9 off and leaves H.264 on
 //   N4  (stage 3) the TegraNVDEC service and its user client published (TegraNVDECUserClient.cpp)
 // One line per stage ("TegraNVDEC: N1 ok ..."), or the failing stage's FAIL line and nothing after it. Until N4
 // publishes, every failure (a register that does not settle, an engine that does not answer, an interrupt that never
@@ -129,6 +130,7 @@ constexpr uint32_t kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
 bool gUp, gWedged, gSuspended, gPublished;
+uint32_t gCodecs;               // proven at N3 (tegra_nvdec_codecs)
 volatile int gSelfTestClaimed;  // the userland clip check runs in one process per boot (tegra_nvdec_claim_self_test)
 uint64_t gArenaUs;
 TegraNVDECBlock gSetup;  // kSetupSlots picture setups, never mapped into a client
@@ -451,6 +453,16 @@ void bringUp(void *stageArg, wait_result_t)
         giveUp(true);
         return;
     }
+    gCodecs = 1u << TEGRA_NVDEC_CODEC_H264;
+    // VP9 has a picture of its own: a failure that leaves the engine answering keeps VP9 off and H.264 on; one that
+    // does not (a job past its bound, a lost interrupt) is the engine's, and everything stays off.
+    const int vp9 = tegra_nvdec_self_test_vp9();
+    if (!vp9) gCodecs |= 1u << TEGRA_NVDEC_CODEC_VP9;
+    if (vp9 == -60 || vp9 == TEGRA_HOST1X_ELOST || gWedged) {
+        gUp = false;
+        giveUp(true);
+        return;
+    }
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     if (stage < 3) return;
     // Proven: from here a lost interrupt or a job past its bound panics (TegraNVDEC.h).
@@ -459,6 +471,11 @@ void bringUp(void *stageArg, wait_result_t)
     tegra_nvdec_publish(gArenaUs);
 }
 }  // namespace
+
+extern "C" uint32_t tegra_nvdec_codecs(void)
+{
+    return gCodecs;
+}
 
 extern "C" bool tegra_nvdec_ready(void)
 {

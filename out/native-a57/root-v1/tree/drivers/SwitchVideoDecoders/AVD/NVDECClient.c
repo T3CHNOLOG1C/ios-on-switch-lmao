@@ -12,7 +12,7 @@
 
 struct NVDECClient {
     io_connect_t connection;
-    uint32_t selector;
+    uint32_t selector, codecs;
     os_unfair_lock lock;
     struct {
         uint32_t handle;
@@ -78,7 +78,13 @@ NVDECClient *nvdec_open(int *error)
         return NULL;
     }
     c->lock = OS_UNFAIR_LOCK_INIT;
+    c->codecs = info.codecs;
     return c;
+}
+
+uint32_t nvdec_codecs(const NVDECClient *c)
+{
+    return c->codecs;
 }
 
 bool nvdec_claim_self_test(NVDECClient *c)

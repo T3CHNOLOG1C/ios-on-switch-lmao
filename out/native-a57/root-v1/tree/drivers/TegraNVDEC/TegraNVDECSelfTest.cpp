@@ -11,6 +11,7 @@
 #include "nvidia/nvdec_drv.h"
 #include "nvidia/clc5b0.h"
 #include "selftest/H264Picture64.inc"
+#include "selftest/VP9Picture160.inc"
 
 namespace {
 enum { kInput = 1, kAux = 2, kSurface = 3 };
@@ -120,7 +121,91 @@ int run(char *line, size_t size)
              status->error_status, status->cycle_count, crc, kTestLumaCrc);
     return ok ? 0 : -5;
 }
+// N3 VP9: libvpx's 160x144 key frame through the plug-in's own method stream and buffer layout (VP9Picture160.inc, made
+// by SwitchVideoDecoders/test/vp9_host --selftest), luma CRC against libvpx's decode. Buffers 1 input (status,
+// probability table, tile data), 2 aux (tile sizes, segmentation maps, counters, motion vectors, filter), 3 surface.
+TegraNVDECBlock gVP9Blocks[4];
+
+bool resolveVP9(void *, uint32_t handle, TegraNVDECBlock *block)
+{
+    if (handle < 1 || handle > 3) return false;
+    *block = gVP9Blocks[handle];
+    return true;
+}
+
+int runVP9(char *line, size_t size)
+{
+    for (int i = 1; i <= 3; i++) {
+        if (tegra_nvdec_arena_alloc(kVP9TestBytes[i], &gVP9Blocks[i])) {
+            snprintf(line, size, "N3 VP9 FAIL no arena memory");
+            return -12;
+        }
+    }
+    uint8_t *input = gVP9Blocks[1].va, *aux = gVP9Blocks[2].va;
+    memcpy(input + kVP9TestProbOff, kVP9TestProbs, sizeof(kVP9TestProbs));
+    memcpy(input + kVP9TestBitsOff, kVP9TestBitstream, sizeof(kVP9TestBitstream));
+    memset(input + kVP9TestBitsOff + sizeof(kVP9TestBitstream), 0, 64);  // the plug-in's padding after the tile data
+    memcpy(aux + kVP9TestTilesOff, kVP9TestTiles, sizeof(kVP9TestTiles));
+    ((uint16_t *)(aux + kVP9TestTilesOff))[0x37a] = 9;  // the tile size table's tail, as the plug-in sets it
+    ((uint16_t *)(aux + kVP9TestTilesOff))[0x37b] = 1;
+    TegraNVDECSubmit *s = IONewZero(TegraNVDECSubmit, 1);
+    if (!s) return -12;
+    s->codec = TEGRA_NVDEC_CODEC_VP9;
+    s->setup_bytes = sizeof(kVP9TestSetup);
+    memcpy(s->setup, kVP9TestSetup, sizeof(kVP9TestSetup));
+    s->entry_count = sizeof(kVP9TestEntries) / sizeof(kVP9TestEntries[0]);
+    memcpy(s->entries, kVP9TestEntries, sizeof(kVP9TestEntries));
+    s->clean[0] = {1, kVP9TestProbOff, (uint32_t)(kVP9TestBitsOff - kVP9TestProbOff + sizeof(kVP9TestBitstream) + 64),
+                   0};
+    s->clean[1] = {2, kVP9TestTilesOff, 0x700, 0};
+    s->clean_count = 2;
+
+    const uint64_t began = nowUs();
+    uint32_t fence = 0;
+    const char *why = nullptr;
+    int ret = tegra_nvdec_run(s, resolveVP9, nullptr, &fence, &why);
+    IODelete(s, TegraNVDECSubmit, 1);
+    if (ret) {
+        snprintf(line, size, "N3 VP9 FAIL submit refused (%d, %s)", ret, why ? why : "engine");
+        return ret;
+    }
+    if ((ret = tegra_nvdec_wait(fence))) {
+        snprintf(line, size, "N3 VP9 FAIL decode did not finish (%s; see the job line)",
+                 ret == -60  ? "past its bound"
+                 : ret == -5 ? "done, but its interrupt never came"
+                             : "engine refused");
+        return ret;
+    }
+    const uint64_t us = nowUs() - began;
+    const uint32_t rows = (kVP9TestHeight + 63) & ~63u;
+    tegra_nvdec_cache_flush(input, sizeof(nvdec_status_s));
+    tegra_nvdec_cache_flush(gVP9Blocks[3].va, kVP9TestPitch * rows * 3 / 2);
+    const nvdec_status_s *status = (const nvdec_status_s *)input;
+    uint32_t crc = 0xffffffffu;
+    for (uint32_t y = 0; y < kVP9TestHeight; y++)
+        for (uint32_t x = 0; x < kVP9TestWidth; x++)
+            crc = crc32(crc, gVP9Blocks[3].va[blockLinear(x, y, kVP9TestPitch)]);
+    crc = ~crc;
+    const bool ok = crc == kVP9TestLumaCrc && !status->error_status;
+    snprintf(line, size,
+             "N3 VP9 %s %ux%u key frame in %llu us: error_status %#x, %u cycles; luma CRC %#010x (expected %#010x, "
+             "libvpx)%s",
+             ok ? "ok" : "FAIL", kVP9TestWidth, kVP9TestHeight, us, status->error_status, status->cycle_count, crc,
+             kVP9TestLumaCrc, ok ? "" : "; VP9 stays off, H.264 is unaffected");
+    return ok ? 0 : -5;
+}
 }  // namespace
+
+extern "C" int tegra_nvdec_self_test_vp9(void)
+{
+    char line[256];
+    line[0] = 0;
+    const int ret = runVP9(line, sizeof(line));
+    IOLog("TegraNVDEC: %s\n", line);
+    if (ret != -60)
+        for (int i = 1; i <= 3; i++) tegra_nvdec_arena_free(&gVP9Blocks[i]);
+    return ret;
+}
 
 extern "C" int tegra_nvdec_self_test(void)
 {

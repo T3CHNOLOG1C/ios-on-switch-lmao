@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVDEC user client ABI, v2 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
+// TegraNVDEC user client ABI, v3 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
 //
 // The service is "TegraNVDEC" (IOServiceMatching), published by default once NVDEC has proven itself (N4). Its user
 // client's class is named AppleD5500UserClient, iPad7,1's own decoder client (VXD393), which some of 21H461's sandbox
@@ -25,7 +25,7 @@
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION  2
+#define TEGRA_NVDEC_ABI_VERSION  3
 #define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
 #define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
@@ -39,7 +39,9 @@ enum TegraNVDECMethod {
     TegraNVDECMethodClaimSelfTest = 6,  // -> TegraNVDECClaim: claimed = 1 for exactly one caller per boot
 };
 
-enum { TEGRA_NVDEC_CODEC_H264 = 3 };  // NVDEC application id (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_H264)
+// NVDEC application ids (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_*). TegraNVDECInfo.codecs has bit n set for each
+// codec whose boot self-test (N3) passed; Submit refuses the others.
+enum { TEGRA_NVDEC_CODEC_H264 = 3, TEGRA_NVDEC_CODEC_VP9 = 9 };
 
 typedef struct {
     uint32_t abi_version, nvdec_version;  // nvdec_version 0x20: NVDEC 2.0 (T210)
@@ -79,7 +81,7 @@ enum { TEGRA_NVDEC_ENTRY_VALUE = 0, TEGRA_NVDEC_ENTRY_RELOC = 1 };
 typedef struct {
     uint32_t codec;  // TEGRA_NVDEC_CODEC_*
     uint32_t entry_count, clean_count;
-    uint32_t setup_bytes;                              // sizeof(nvdec_h264_pic_s) for H.264
+    uint32_t setup_bytes;                              // sizeof(nvdec_h264_pic_s) / sizeof(nvdec_vp9_pic_s)
     TegraNVDECEntry entries[TEGRA_NVDEC_MAX_ENTRIES];  // no SET_DRV_PIC_SETUP_OFFSET: the kernel adds it
     TegraNVDECRange clean[TEGRA_NVDEC_MAX_RANGES];
     uint8_t setup[TEGRA_NVDEC_MAX_SETUP];
