@@ -218,13 +218,69 @@ TEST(GM20BPushScanSource, KernelUsesTheHeader)
 	EXPECT_THAT(scan, HasSubstr("scanPush(c, p, whole, nullptr, 0)"));
 	EXPECT_THAT(scan, HasSubstr("prof->cls[i] = cls;"));
 	// A stamp only after a push whose class is not SKIP, only on a profiled submission.
-	EXPECT_THAT(Between(gpu(), "int tgm_chan_exec(", "\n}\n"),
+	EXPECT_THAT(Between(gpu(), "static int chan_exec(", "\n}\n"),
 		    HasSubstr("if (prof && prof->cls[i] != TGM_PC_SKIP) {"));
 }
 
 // Direct scanout's fence-only present (NativeMobileDisplay, TEGRA_SCANOUT_COPY_FENCE_ONLY) launches no copy.
 TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 {
-	expectBefore(Between(gpu(), "int tgm_present_copy(", "\n}\n"), "if (dst_va) {",
+	expectBefore(Between(gpu(), "static int present_copy(", "\n}\n"), "if (dst_va) {",
 		     "NVB0B5_LAUNCH_DMA_NON_PIPELINED");
+}
+
+// System sleep (gpu.c "system sleep"): every path that touches the GPU outside gpu.lock goes through the gate
+// gm20b_sleep_test runs, and sleep and wake keep the orders the hardware needs.
+TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
+{
+	for (const char *waits : {"int tgm_chan_exec(", "int tgm_chan_new("}) {
+		const std::string body = flat(definition(gpu(), waits));
+		expectBefore(body, "gate_enter();", "gate_leave();");
+	}
+	for (const char *refused :
+	     {"int tgm_present_copy(", "int tgm_pool_scrub(uint64_t pa, uint64_t bytes)",
+	      "static void scrub_work(void *arg)"}) {
+		const std::string body = flat(definition(gpu(), refused));
+		expectBefore(body, "if (!gate_try())", "gate_leave();");
+	}
+	// the drain's and the wake's fence waits are woken by the scrubber's fences too
+	EXPECT_THAT(flat(definition(gpu(), "static int chan_nonstall(struct nvif_event *event, "
+					   "void *repv, u32 repc)")),
+		    HasSubstr("if (tgm_gate_is_shut(&sc7_gate)) nvxnu_wake();"));
+	// a pass for an interrupt taken before the GPU's power went reads nothing
+	EXPECT_THAT(
+		flat(definition(SourceText("../shim/xnu_glue.cpp"),
+				"void gpuInterrupt(OSObject *, IOInterruptEventSource *, int)")),
+		HasSubstr("if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE)) return;"));
+}
+
+TEST(GM20BSleepSource, SleepAndWakeOrder)
+{
+	const std::string body = flat(definition(gpu(), "void tgm_sleep(void)"));
+	const std::string sleep = body.substr(body.find("case TGM_SLEEP_FULL:"));
+	expectBefore(sleep, "sleep_gate();", "sleep_fences();");
+	expectBefore(sleep, "sleep_fences();", "mutex_lock(&gpu.lock);");
+	expectBefore(sleep, "sleep_idle_off();", "sleep_nvkm();");
+	expectBefore(sleep, "sleep_nvkm();", "sleep_power_down();");
+	const std::string nvkm = flat(definition(gpu(), "static void sleep_nvkm(void)"));
+	expectBefore(nvkm, "nvif_client_suspend(&gpu.client, false)", "nvkm_ltc_flush(");
+	expectBefore(nvkm, "nvkm_ltc_flush(", "nvkm_device_fini(device, NVKM_SUSPEND)");
+	expectBefore(flat(definition(gpu(), "static void sleep_power_down(void)")),
+		     "nvxnu_irq_suspend();", "regulator_disable(");
+	// the boot's order: the GPCPLL relock (clk_raise) before ACR, the PMU and GR (m2_device_init); interrupts on before
+	// nvkm's first init that may wait for one
+	const std::string woken = flat(definition(gpu(), "void tgm_wake(void)"));
+	const std::string wake = woken.substr(woken.find("case TGM_SLEEP_FULL:"));
+	expectBefore(wake, "wake_power_up();", "wake_m1();");
+	expectBefore(wake, "wake_m1();", "wake_clock();");
+	expectBefore(wake, "wake_clock();", "wake_device();");
+	expectBefore(wake, "wake_device();", "wake_nvkm();");
+	expectBefore(wake, "wake_nvkm();", "wake_fence();");
+	expectBefore(wake, "wake_fence();", "wake_open();");
+	expectBefore(flat(definition(gpu(), "static void wake_power_up(void)")), "power_up(",
+		     "nvxnu_irq_resume();");
+	EXPECT_THAT(flat(definition(gpu(), "static void wake_clock(void)")),
+		    HasSubstr("clk_raise(line, sizeof(line))"));
+	EXPECT_THAT(flat(definition(gpu(), "static void wake_device(void)")),
+		    HasSubstr("m2_device_init(device, &at)"));
 }

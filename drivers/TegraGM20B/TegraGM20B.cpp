@@ -12,8 +12,13 @@
 #include <IOKit/IOPlatformExpert.h>
 #include <libkern/OSKextLib.h>
 #include <mach/kmod.h>
+#include <kern/clock.h>
+#include <kern/sched_prim.h>
 #include <kern/thread.h>
+#include <stdarg.h>
+#include "../SwitchSuspend/SwitchWake.h"
 #include "TegraGM20BGpu.h"
+#include "TegraGM20BSleep.h"
 
 extern "C" {
 boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
@@ -32,17 +37,44 @@ extern kmod_info_t g_kernel_kmod_info;
 // runs).
 extern "C" void switch_thermal_gpu_ready(void);
 
+extern "C" int vsnprintf(char *, size_t, const char *, va_list);
+
 namespace
 {
 char gLine[256];
 volatile int gStarted, gBringupDone;
+// From tegra_gm20b_suspend() to the end of tegra_gm20b_resume(): the wake's power-up, GPCPLL raise and GR init are the
+// bring-up's again, so SwitchThermal holds its CPU raise for them as it does at boot (tegra_gm20b_bringup_busy()).
+volatile int gSleeping;
 
 // The bring-up has ended (done or failed): SwitchThermal's CPU raise, which waits for it on the shared MAX77812, goes
-// ahead at once.
+// ahead at once, and a system sleep waiting for it goes on.
 void bringupDone()
 {
 	__atomic_store_n(&gBringupDone, 1, __ATOMIC_RELEASE);
+	thread_wakeup(const_cast<int *>(&gBringupDone));
 	switch_thermal_gpu_ready();
+}
+
+// System sleep may not power the GPU down under its bring-up thread. No bring-up can start later: tegra_gm20b_probe()
+// runs when the SD disk is published, before the userland that asks for sleep exists.
+void waitBringup()
+{
+	constexpr uint32_t kBringupWaitMs = 30000;
+	uint64_t deadline;
+	clock_interval_to_deadline(kBringupWaitMs, kMillisecondScale, &deadline);
+	while (!__atomic_load_n(&gBringupDone, __ATOMIC_ACQUIRE)) {
+		assert_wait_deadline(const_cast<int *>(&gBringupDone), THREAD_UNINT, deadline);
+		if (__atomic_load_n(&gBringupDone, __ATOMIC_ACQUIRE)) {
+			clear_wait(current_thread(), THREAD_AWAKENED);
+			break;
+		}
+		if (thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT &&
+		    !__atomic_load_n(&gBringupDone, __ATOMIC_ACQUIRE))
+			panic("tegra-gm20b: system sleep: the GPU bring-up still runs %u ms into "
+			      "it",
+			      kBringupWaitMs);
+	}
 }
 
 // Staged as UniXNU-sheng's publishMetal() (package/GpuPowerProbe.cpp:1217-1251) and IOSwitchAccelStubPublish.cpp: load
@@ -139,7 +171,36 @@ extern "C" int tegra_gm20b_bringup_busy(void)
 		int stage = 0;
 		wanted = PE_parse_boot_argn("tegra-gpu", &stage, sizeof(stage)) && stage > 0;
 	}
-	return wanted && !__atomic_load_n(&gBringupDone, __ATOMIC_ACQUIRE);
+	return wanted && (!__atomic_load_n(&gBringupDone, __ATOMIC_ACQUIRE) ||
+			  __atomic_load_n(&gSleeping, __ATOMIC_ACQUIRE));
+}
+
+extern "C" void tgm_journal(const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	switch_power_journal("%s", line);
+}
+
+extern "C" void tegra_gm20b_suspend(void)
+{
+	if (!__atomic_load_n(&gStarted, __ATOMIC_ACQUIRE))
+		return;
+	waitBringup();
+	__atomic_store_n(&gSleeping, 1, __ATOMIC_RELEASE);
+	tgm_sleep();
+}
+
+extern "C" void tegra_gm20b_resume(void)
+{
+	if (!__atomic_load_n(&gSleeping, __ATOMIC_ACQUIRE))
+		return;
+	tgm_wake();
+	__atomic_store_n(&gSleeping, 0, __ATOMIC_RELEASE);
+	switch_thermal_gpu_ready();
 }
 
 extern "C" int tegra_gm20b_probe(void)

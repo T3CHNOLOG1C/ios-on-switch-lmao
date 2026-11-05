@@ -29,6 +29,12 @@ struct tgm_info {
 /* Bring the GPU up to `stage` (1 = M1 power/ring/GPCPLL, 2 = + ACR/PMU/FECS/GPCCS, 3 = + channel/CE/fence
  * self-test). Writes one human-readable result line into `line`. Returns 0 or a negative errno. */
 int tgm_bringup(int stage, char *line, unsigned int len);
+/* System sleep (gpu.c "system sleep", TegraGM20BSleep.h): the GPU off and back, for whatever stage the finished bring-up
+ * reached; each step is one tgm_journal() line, and a step that cannot be done panics with one line. */
+void tgm_sleep(void);
+void tgm_wake(void);
+/* One power-journal line (TegraGM20B.cpp: drivers/SwitchSuspend switch_power_journal). Thread context. */
+void tgm_journal(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int tgm_stage(void);
 void tgm_get_info(struct tgm_info *info);
 uint64_t tgm_timestamp_ns(void);

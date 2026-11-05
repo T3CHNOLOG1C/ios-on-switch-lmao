@@ -45,6 +45,9 @@ void nvxnu_mutex_free(void *m);
 void nvxnu_mutex_lock(void *m);
 void nvxnu_mutex_unlock(void *m);
 int nvxnu_mutex_trylock(void *m);
+/* With `m` held: releases it, sleeps until nvxnu_wakeup(event) or the deadline (~0: none), takes it again. 1 if woken. */
+int nvxnu_mutex_sleep(void *m, const void *event, nvxnu_u64 deadline_ns);
+void nvxnu_wakeup(const void *event);
 void *nvxnu_spin_alloc(void);
 void nvxnu_spin_free(void *s);
 void nvxnu_spin_lock(void *s);
@@ -113,6 +116,10 @@ int nvxnu_firmware_find(const char *name, const void **data, unsigned long *size
  * its waiter since `seq`; after 50 ms for a wake under way it panics with the PMC and GIC state.
  */
 void nvxnu_irq_start(void);
+/* System sleep: nvxnu_irq_suspend() before the GPU's power goes (both lines masked, no pass reads the GPU from then on,
+ * nvxnu_idle() no longer looks at PMC); nvxnu_irq_resume() once it is back, before nvkm arms its interrupts. */
+void nvxnu_irq_suspend(void);
+void nvxnu_irq_resume(void);
 nvxnu_u32 nvxnu_wake_seq(void);
 void nvxnu_wake(void);
 int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns);
@@ -140,6 +147,8 @@ nvxnu_u32 tegra_gm20b_fuse_read(nvxnu_u32 offset); /* Linux tegra_fuse_readl() o
 /* MC_INTSTATUS (cleared after the read), MC_ERR_STATUS, MC_ERR_ADR (Linux drivers/memory/tegra/mc.h): what the memory
  * controller refused since the previous call */
 void tegra_gm20b_mc_errors(nvxnu_u32 *intstatus, nvxnu_u32 *status, nvxnu_u32 *addr);
+/* The MC's carveout 2, the GPU's WPR1: CFG0, BOM, SIZE_128KB, CLIENT_ACCESS2, CLIENT_ACCESS4 */
+void tegra_gm20b_mc_gpu_wpr(nvxnu_u32 v[5]);
 enum { TEGRA_GM20B_CLK_GPU = 0, TEGRA_GM20B_CLK_REF = 1, TEGRA_GM20B_CLK_PWR = 2 };
 
 #ifdef __cplusplus

@@ -5,8 +5,12 @@
 #   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
 #                            streams laid out as NVK writes them: every counter, and no profile stamp after a push whose
 #                            method continues, one the kernel could not read or one with an opcode NVK never writes
-#   gm20b_source_test        how the user client and gpu.c use both, the pool's zeroing (nvkm shim, scrubber), and the
-#                            fence-only present (none of which a host model runs)
+#   gm20b_sleep_test         TegraGM20BSleepGate.h (system sleep's gate and plan): every transition, and on threads with
+#                            gpu.c's sleeping protocol around it, no caller inside between the drain and the wake, a
+#                            submission waiting at the gate goes on at the wake, a caller that never leaves fails the drain
+#   gm20b_source_test        how the user client and gpu.c use both, the pool's zeroing (nvkm shim, scrubber), the
+#                            fence-only present, and which paths go through the sleep gate in what order (none of which a
+#                            host model runs)
 #
 #   bazel test //drivers/TegraGM20B/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -31,6 +35,15 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BPushScan.h",
     ],
     copts = ["-Wno-unused-parameter"],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_sleep_test",
+    srcs = [
+        "gm20b_sleep_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
+    ],
     cxx_std = "c++17",
 )
 

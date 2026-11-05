@@ -277,7 +277,7 @@ constexpr uint64_t kCheckNs = 1000000000;  // a quiet wait looks at PMC this oft
 constexpr uint64_t kGraceNs = 50000000;    // for a wake already under way
 constexpr uint32_t kStorm = 1000;          // consecutive interrupts nvkm did not handle
 volatile uint32_t gWakeSeq, gIrqRuns;
-volatile int gIrqActive;
+volatile int gIrqActive, gGpuOff;
 uint32_t gUnhandled;
 volatile uint32_t *gPmc;
 IOWorkLoop *gIrqLoop;
@@ -288,9 +288,11 @@ uint32_t pmc(uint32_t offset)
 	return gPmc[offset / 4];
 }
 
-// An enabled PMC tree with something pending drives its GIC line.
+// An enabled PMC tree with something pending drives its GIC line. A powered-down GPU has none (and no PMC to read).
 bool pmcPending()
 {
+	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
+		return false;
 	return (pmc(PMC_INTR_0) && (pmc(PMC_INTR_EN_0) & 1)) ||
 	       (pmc(PMC_INTR_1) && (pmc(PMC_INTR_EN_1) & 1));
 }
@@ -300,6 +302,10 @@ bool pmcPending()
 	char stall[192], nonstall[192];
 	ioswitch_interrupt_describe(kGpuIntids[0], stall, sizeof(stall));
 	ioswitch_interrupt_describe(kGpuIntids[1], nonstall, sizeof(nonstall));
+	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
+		panic("tegra-gm20b: GPU interrupt %s (%s %u, INTID %u/%u) while the GPU is powered "
+		      "down for system sleep: %s | %s",
+		      why, what, value, kGpuIntids[0], kGpuIntids[1], stall, nonstall);
 	panic("tegra-gm20b: GPU interrupt %s (%s %u, INTID %u/%u): PMC INTR %#x/%#x EN %#x/%#x, %s "
 	      "| %s",
 	      why, what, value, kGpuIntids[0], kGpuIntids[1], pmc(PMC_INTR_0), pmc(PMC_INTR_1),
@@ -311,6 +317,9 @@ bool pmcPending()
 // keeps finding nothing on is stuck: panic rather than spin. Errors nvkm reported in the pass panic (nvxnu_error).
 void gpuInterrupt(OSObject *, IOInterruptEventSource *, int)
 {
+	// a line taken before nvxnu_irq_suspend() whose pass runs after it: the GPU is off now
+	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
+		return;
 	__atomic_fetch_add(&gIrqRuns, 1, __ATOMIC_RELAXED);
 	gIrqErrorsLen = 0;
 	gIrqErrors[0] = 0;
@@ -411,6 +420,54 @@ extern "C" void nvxnu_irq_start(void)
 	__atomic_store_n(&gIrqActive, 1, __ATOMIC_RELEASE);
 	for (auto *source : gIrqSources)
 		source->enable();
+}
+
+// System sleep: the GPU's power goes after this returns. Both lines are masked first; the flag is set on the work loop, so
+// a pass already running finishes before it and a pass for an interrupt taken earlier, which IOInterruptEventSource still
+// delivers after disable(), returns without reading the GPU.
+extern "C" void nvxnu_irq_suspend(void)
+{
+	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE))
+		return;
+	for (auto *source : gIrqSources)
+		source->disable();
+	gIrqLoop->runAction(
+		[](OSObject *, void *, void *, void *, void *) -> IOReturn {
+			__atomic_store_n(&gGpuOff, 1, __ATOMIC_RELEASE);
+			return kIOReturnSuccess;
+		},
+		nullptr);
+}
+
+// After the power-up, before nvkm arms anything (as nvxnu_irq_start() at the end of M1): the PMC enables are at reset.
+extern "C" void nvxnu_irq_resume(void)
+{
+	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE))
+		return;
+	gUnhandled = 0;
+	__atomic_store_n(&gGpuOff, 0, __ATOMIC_RELEASE);
+	for (auto *source : gIrqSources)
+		source->enable();
+}
+
+extern "C" int nvxnu_mutex_sleep(void *m, const void *event, nvxnu_u64 deadline_ns)
+{
+	auto *mtx = static_cast<lck_mtx_t *>(m);
+	auto *ev = reinterpret_cast<event_t>(const_cast<void *>(event));
+	if (deadline_ns == ~0ULL)
+		return lck_mtx_sleep(mtx, LCK_SLEEP_DEFAULT, ev, THREAD_UNINT) != THREAD_TIMED_OUT;
+	const uint64_t now = nvxnu_nanotime();
+	if (deadline_ns <= now)
+		return 0;
+	uint64_t interval;
+	nanoseconds_to_absolutetime(deadline_ns - now, &interval);
+	return lck_mtx_sleep_deadline(mtx, LCK_SLEEP_DEFAULT, ev, THREAD_UNINT,
+				      mach_absolute_time() + interval) != THREAD_TIMED_OUT;
+}
+
+extern "C" void nvxnu_wakeup(const void *event)
+{
+	thread_wakeup(reinterpret_cast<event_t>(const_cast<void *>(event)));
 }
 
 extern "C" void *nvxnu_work_alloc(void (*fn)(void *), void *arg)

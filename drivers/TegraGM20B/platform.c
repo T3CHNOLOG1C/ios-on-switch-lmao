@@ -391,6 +391,24 @@ void tegra_gm20b_mc_errors(uint32_t *intstatus, uint32_t *status, uint32_t *addr
 		wr(mc, 0x000, *intstatus);
 }
 
+/* hekate bdk/mem/mc_t210.h; hekate l4t.c makes carveout 2 the GPU's WPR1 (ACR's) and saves its BOM, SIZE_128KB and CFG0 for
+ * the SC7 exit firmware to restore, not its CLIENT_ACCESS registers */
+#define MC_SECURITY_CARVEOUT2_CFG0 0xc58
+#define MC_SECURITY_CARVEOUT2_BOM 0xc5c
+#define MC_SECURITY_CARVEOUT2_SIZE_128KB 0xc64
+#define MC_SECURITY_CARVEOUT2_CLIENT_ACCESS2 0xc70
+#define MC_SECURITY_CARVEOUT2_CLIENT_ACCESS4 0xc78
+
+void tegra_gm20b_mc_gpu_wpr(uint32_t v[5])
+{
+	static const uint32_t regs[5] = {MC_SECURITY_CARVEOUT2_CFG0, MC_SECURITY_CARVEOUT2_BOM,
+					 MC_SECURITY_CARVEOUT2_SIZE_128KB,
+					 MC_SECURITY_CARVEOUT2_CLIENT_ACCESS2,
+					 MC_SECURITY_CARVEOUT2_CLIENT_ACCESS4};
+	for (int i = 0; i < 5; i++)
+		v[i] = mc ? rd(mc, regs[i]) : 0;
+}
+
 /* flush=1: block GPU memory traffic and wait until it drained; flush=0: unblock. No interrupt reports the drain: a
  * bounded spin like tegra_mc_flush(), which takes the status only after 5 identical reads (L4T mc.c:158-176,208-230). */
 int tegra_gm20b_mc_flush(int flush)
