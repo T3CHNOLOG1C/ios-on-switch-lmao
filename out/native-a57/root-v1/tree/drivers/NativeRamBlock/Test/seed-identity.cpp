@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Host-only: the identity SeedDisk.h computes for a packed seed file, to compare with drivers/DarwinBoot/Test/packed_ramdisk.py.
+// Host-only: the identity SeedDisk.h computes for a packed seed file, to compare with DarwinBoot's packed ramdisk
+// (git show 27f2155:out/native-a57/root-v1/tree/drivers/DarwinBoot/DarwinBootPkg/Driver/PackedRamdisk.h).
 #include <CommonCrypto/CommonDigest.h>
 #include <assert.h>
 #include <stdio.h>

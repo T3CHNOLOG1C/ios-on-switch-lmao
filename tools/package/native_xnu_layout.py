@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Build a host-only fixed XNU layout from the pinned DarwinBoot contract.
 
+DarwinBoot was UniXNU's EDK2 XNU loader (github.com/UniXNU/DarwinBoot); our copy, whose ParseKernel this mirrors, is
+in git history: `git show 27f2155:out/native-a57/root-v1/tree/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c`.
+
 This writes a new local directory, never a boot entry or storage device. An
 explicit window and reservation list are inputs, not proof of native ownership.
 Packed root ramdisks, relocations and virtual slides are deliberately unsupported.

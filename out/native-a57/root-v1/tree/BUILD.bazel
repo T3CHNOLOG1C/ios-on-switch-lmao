@@ -23,15 +23,14 @@ exports_files(glob(
 ))
 
 # What //bazel/lint formats and checks here: everything of ours. Left out: code that is not ours (kept exactly as
-# upstream has it, and DisableFormat in its own .clang-format for editors), generated files (also listed in
-# .clang-format-ignore, which editors read), and package/, a third-party UEFI package (its own LICENSE) no target builds.
+# upstream has it, and DisableFormat in its own .clang-format for editors) and generated files (also listed in
+# .clang-format-ignore, which editors read).
 # drivers/NativeMetal and drivers/TegraGM20BMetal are packages of their own, with their own lint_files().
 lint_files(exclude = [
     "**/linux/**",
     "**/nouveau/**",
     "**/nvidia/**",
     "drivers/TegraVIC/test/libdrm/**",
-    "package/**",
     # generated
     "drivers/SwitchVideoDecoders/AVD/VP9Tables.inc",
     "drivers/SwitchVideoDecoders/test/HEVCClip.h",
