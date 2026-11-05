@@ -8,6 +8,7 @@
 #include "stamps.h"
 #include "stage.h"
 #include "emc.h"
+#include "seed.h"
 
 #ifndef LOAD_FAST_COPY
 #define LOAD_FAST_COPY 0
@@ -17,6 +18,9 @@
 #endif
 #ifndef LOAD_EMC_KHZ
 #define LOAD_EMC_KHZ 0
+#endif
+#ifndef LOAD_SEED_ADT_OFFSET
+#define LOAD_SEED_ADT_OFFSET 0
 #endif
 
 extern volatile uint64_t probe_record[R_RECORD_WORDS];
@@ -423,6 +427,11 @@ void loader_after_transition(void) {
     loader_progress[1]=4;
 #if !LOAD_FAST_COPY
     display_text(16, 200, "COPY COMPLETE", DISPLAY_GREEN);
+#endif
+#if LOAD_SEED_ADT_OFFSET
+    /* /chosen/random-seed from SE2's DRBG (seed.h), into the copied ADT; never refuses. 2 ms per wait. */
+    (void)iosw_seed_mix(LOAD_ADT_PA + LOAD_SEED_ADT_OFFSET, LOAD_ADT_PA + LOAD_SEED_SOURCE_ADT_OFFSET, ticks,
+                        r[R_EL1_CNTFRQ] / 500u);
 #endif
 #if LOAD_STAMPS_ADT_OFFSET
     stamps_commit();

@@ -19,8 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import native_xnu_layout  # noqa: E402
-from build_native_loader import (NATIVE_FULL_RAM_EXCLUSIONS, STAGE_SOURCE, STAMPS_BYTES,  # noqa: E402
-                                 STAMPS_PROPERTY, build as build_loader, stage_into_bl33)
+from build_native_loader import (NATIVE_FULL_RAM_EXCLUSIONS, SEED_SOURCE_BYTES, SEED_SOURCE_PROPERTY,  # noqa: E402
+                                 STAGE_SOURCE, STAMPS_BYTES, STAMPS_PROPERTY, build as build_loader, stage_into_bl33)
 from package_native_handoff import legacy_image, LOAD  # noqa: E402
 
 NAME = 'ioswitch'
@@ -453,6 +453,9 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
     put(child(tree, 'filesystems'), 'DoNotUseSEP', u32(1))
     # Pre-kernel boot timing (native/loader/stamps.h): zeros here, filled by the loader, logged once by XNU.
     put(chosen, STAMPS_PROPERTY, bytes(STAMPS_BYTES))
+    # Per-boot seed report (native/loader/seed.h): zeros here; the loader mixes SE2's DRBG into /chosen/random-seed
+    # and says how it went, XNU logs it once.
+    put(chosen, SEED_SOURCE_PROPERTY, bytes(SEED_SOURCE_BYTES))
     if smp:
         four_cores(tree)
     return adt_serialize(tree)

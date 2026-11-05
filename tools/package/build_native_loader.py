@@ -51,6 +51,12 @@ LZ4_MAGIC = b'\x04\x22\x4d\x18'
 STAMPS_PROPERTY = 'ioswitch-boot-stamps'
 STAMPS_BYTES = 26 * 8
 STAMPS_SLOT = 0xA001EF00
+# /chosen/random-seed (the pinned 64 bytes) and /chosen/ioswitch-seed-source (8 zero bytes): the cacheable-copy loader
+# mixes SE2's DRBG output into the first and reports in the second (native/loader/seed.h).
+SEED_PROPERTY = 'random-seed'
+SEED_BYTES = 64
+SEED_SOURCE_PROPERTY = 'ioswitch-seed-source'
+SEED_SOURCE_BYTES = 8
 # The cacheable-copy loader's window rides in bl33.bin (native/loader/stage.h): hekate reads it with U-Boot at SDR104.
 BL33_BASE = 0xAA000000
 STAGE_HEADER = 0xAA100000
@@ -296,6 +302,7 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     ram_offset = 0
     sd_reference_offset = 0
     stamps_offset = 0
+    seed_offset = seed_source_offset = 0
     if storage_probe:
         sidecars = ('NativeDataSeed','TrustCache') if root_boot else ('RAMDisk','TrustCache')
         if m['phys_base'] != 0xB207C000 or set(sidecars) - m['sources'].keys():
@@ -330,6 +337,19 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
                               original_adt[stamps_offset:stamps_offset + stamps_bytes] != bytes(stamps_bytes) or
                               payload[start + stamps_offset:start + stamps_offset + stamps_bytes] != bytes(stamps_bytes)):
             raise ValueError('boot timing placeholder must be a zeroed, aligned, exact-size /chosen property')
+        # Optional per-boot seed (native/loader/seed.h): only with its zeroed report slot, both 4-byte aligned.
+        seed_source_offset, seed_source_bytes = properties.get(('/chosen', SEED_SOURCE_PROPERTY), (0, 0))
+        if seed_source_offset:
+            seed_offset, seed_bytes = properties.get(('/chosen', SEED_PROPERTY), (0, 0))
+            if (seed_source_bytes != SEED_SOURCE_BYTES or seed_source_offset % 4 or
+                    original_adt[seed_source_offset:seed_source_offset + seed_source_bytes] != bytes(seed_source_bytes) or
+                    payload[start + seed_source_offset:start + seed_source_offset + seed_source_bytes] !=
+                    bytes(seed_source_bytes)):
+                raise ValueError('seed report placeholder must be a zeroed, aligned, exact-size /chosen property')
+            if (not seed_offset or seed_bytes != SEED_BYTES or seed_offset % 4 or
+                    payload[start + seed_offset:start + seed_offset + seed_bytes] !=
+                    original_adt[seed_offset:seed_offset + seed_bytes]):
+                raise ValueError('random-seed must be a 64-byte, aligned /chosen property carried into the window')
         if root_boot:
             required = {'osenvironment':b'main\0', 'root-matching':ROOT_MATCHING,
                         'crypto-hash-method':b'sha2-384\0',
@@ -398,6 +418,8 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
         raise ValueError('native cacheable copy requires a page-aligned payload')
     if stamps_offset and not fast_copy:
         raise ValueError('the boot timing record needs the cacheable-copy loader')
+    if seed_offset and not fast_copy:
+        raise ValueError('the per-boot seed needs the cacheable-copy loader')
     runs, packed = pack_window(payload) if fast_copy else ([], payload)
     blocks, stream = compress_window(payload, runs) if fast_copy else ([], packed)
     if fast_copy:
@@ -407,6 +429,7 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
             raise ValueError('compressed kernel window does not fit before ramoops')
     constants = {'SOURCE': staging_pa, 'DEST': m['phys_base'], 'BYTES': len(payload), 'PACKED_BYTES': len(packed),
                  'STREAM_BYTES': len(stream), 'STAMPS_ADT_OFFSET': stamps_offset,
+                 'SEED_ADT_OFFSET': seed_offset, 'SEED_SOURCE_ADT_OFFSET': seed_source_offset,
                  'STAGE_ID': stage_id(packed) if fast_copy else 0, 'EMC_KHZ': emc_khz(m['command_line']) if fast_copy else 0,
                  'ARGS': m['boot_args_pa'], 'ENTRY': m['entry_pa'],
                  'CRC': 0 if root_boot else zlib.crc32(payload), 'VERIFY_KERNEL': int(not root_boot),
@@ -438,12 +461,13 @@ def build(layout_dir: Path, output: Path, *, native_experiment: bool = False,
     sources = [ROOT/'native/loader/entry.S', ROOT/'native/loader/loader.c', ROOT/'native/loader/memory.c', ROOT/'native/handoff/probe.c']
     linker = ROOT / ('native/loader/link.ld' if fast_copy else 'native/handoff/link.ld')
     if fast_copy:
-        sources += [ROOT/'native/loader/copy.c', ROOT/'native/loader/copy.S', ROOT/'native/loader/emc.c']
+        sources += [ROOT/'native/loader/copy.c', ROOT/'native/loader/copy.S', ROOT/'native/loader/emc.c',
+                    ROOT/'native/loader/seed.c']
     if not root_boot:
         sources.append(ROOT/'native/loader/checksum.S')
     if storage_probe:
         sources.append(ROOT/'native/storage/sd_reference.c')
-    source_files = [*sources, ROOT/'native/loader/copy.h', ROOT/'native/loader/memory.h', ROOT/'native/loader/ram.h', ROOT/'native/loader/stamps.h', ROOT/'native/loader/stage.h', ROOT/'native/loader/emc.h', ROOT/'native/storage/sd_reference.h', *(ROOT/'native/handoff').glob('*.h'), ROOT/'native/handoff/entry.S', linker, ROOT/'tools/package/build_native_loader.py', ROOT/'tools/package/package_native_handoff.py']
+    source_files = [*sources, ROOT/'native/loader/copy.h', ROOT/'native/loader/memory.h', ROOT/'native/loader/ram.h', ROOT/'native/loader/stamps.h', ROOT/'native/loader/stage.h', ROOT/'native/loader/emc.h', ROOT/'native/loader/seed.h', ROOT/'native/storage/sd_reference.h', *(ROOT/'native/handoff').glob('*.h'), ROOT/'native/handoff/entry.S', linker, ROOT/'tools/package/build_native_loader.py', ROOT/'tools/package/package_native_handoff.py']
     if root_boot:
         source_files += [ROOT/'tools/package/native_xnu_layout.py', ROOT/'tools/package/native_oled_adt.py']
     source_hashes = {str(p.relative_to(ROOT)): hashlib.sha256(read_regular(p)).hexdigest() for p in source_files}
