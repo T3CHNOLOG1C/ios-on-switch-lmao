@@ -1,6 +1,6 @@
 """Records what XNU's make does to make its headers and generated sources: the tables kernel/rules/xnu.bzl replays as
 one Bazel action per step (bazel run //kernel/xnu-<version>:update_tables, after a change to XNU's makefiles, MASTER
-files, conf/files or a script they run; //kernel/xnu-<version>:tables_test says when that is due).
+files, conf/files, a script they run or Xcode; bazel test //kernel/xnu-<version>:tables_test says when it is due).
 
 In a scratch directory, on a copy of kernel/xnu-<version>, it runs make as the earlier Bazel flow did:
   installhdrs  SDKROOT=macosx into a DSTROOT that already holds the SDK root's other parts (tools/kernel/sdkroot.py):

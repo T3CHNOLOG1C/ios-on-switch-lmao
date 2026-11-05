@@ -15,10 +15,13 @@ Targets (all public):
   :sdkroot_files            :sdkroot and :firehose (libfirehose_kernel.a and its header, in obj/sdkroot/usr/local/)
   :config, :decomment, :setsegname, :kextsymboltool   host tools from SETUP/
   :external_headers         EXTERNAL_HEADERS/**
-  :update_tables            bazel run: re-record tables/*.bzl from make (after a makefile, MASTER, conf/files change)
+  :update_tables            bazel run: re-record tables/*.bzl from make (after a makefile, MASTER, conf/files change,
+                            or a new Xcode: the tables name its SDKs)
+  :tables_test              bazel test (manual): the tables are what make does now
 """
 
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":xnu.bzl", "xnu_extract", "xnu_host_tool", "xnu_pass", "xnu_sdk")
 
@@ -174,4 +177,15 @@ def xnu_package(version, installhdrs, build, kernel_package, extra_headers, fire
         args = record_args,
         data = record_data,
         tags = ["manual"],
+    )
+
+    # Whether the tables are what make does now (a few minutes of make: manual, run it after a makefile change).
+    py_test(
+        name = "tables_test",
+        size = "large",
+        srcs = ["//kernel/rules:xnu_record.py", "//kernel/rules:xnu_ops.py"],
+        main = "//kernel/rules:xnu_record.py",
+        args = record_args + ["--check"],
+        data = record_data + [":srcs"] + native.glob(["tables/*.bzl"]),
+        tags = ["manual", "no-remote-exec", "requires-darwin"],
     )
