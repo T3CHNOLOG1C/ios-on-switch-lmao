@@ -135,7 +135,6 @@ static int fail(char *why, size_t len, int err, const char *fmt, ...)
 	return err;
 }
 
-/* ------------------------------------------------------------------ device tree: the DFLL node and its supply */
 static struct device_node max77812_m4 = {
 	.name = "m4vout",
 	.full_name = "/i2c@7000d000/max77812@33/regulators/m4vout",
@@ -222,7 +221,6 @@ struct device *get_cpu_device(unsigned cpu)
 	return cpu == 0 ? &cpu0 : NULL;
 }
 
-/* ------------------------------------------------------------------ VDD_CPU: MAX77812 M4 on I2C5 */
 static struct regulator vdd_cpu = {
 	.supply = "vdd-cpu",
 	.min_uV = 250000,
@@ -276,7 +274,6 @@ int tdfll_platform_vout_write(u8 code)
 	return err;
 }
 
-/* ------------------------------------------------------------------ reset: the DFLL's DVCO */
 static void dvco_reset_set(bool assert)
 {
 	u32 v = rd(car, RST_DFLL_DVCO);
@@ -291,7 +288,7 @@ struct reset_control *tdfll_platform_reset(struct device *dev, const char *id)
 	return (dev == &dfll_pdev.dev && id && !strcmp(id, "dvco")) ? &dvco_reset : NULL;
 }
 
-/* ------------------------------------------------------------------ fuses and chip revision (L4T fuse subset) */
+/* fuses and chip revision: a subset of L4T's fuse code */
 struct tegra_sku_info tegra_sku_info = {
 	/* fuse-tegra.c:33-38 */
 	.cpu_iddq_value = -ENOTSUPP,
@@ -369,7 +366,6 @@ void tdfll_platform_describe_chip(char *buf, size_t len)
 		 s->cpu_iddq_value);
 }
 
-/* ------------------------------------------------------------------ clocks */
 static unsigned long pllp_recalc(struct clk_hw *hw, unsigned long parent_rate)
 {
 	return PLLP_RATE;
@@ -531,7 +527,6 @@ static const struct clk_init_data cclk_g_init = {
 };
 static struct clk_hw cclk_g_hw = {.init = &cclk_g_init};
 
-/* ------------------------------------------------------------------ checks dfll.c makes before switching */
 int tdfll_platform_cpu_on_pllx(char *why, size_t len)
 {
 	u32 policy = rd(car, CCLKG_BURST_POLICY), alias = rd(car, CCLK_BURST_POLICY),
@@ -572,7 +567,7 @@ u32 tdfll_platform_dfll_readl(u32 offset)
 	return rd(dfll, offset);
 }
 
-/* ------------------------------------------------------------------ bring-up (no CPU clock or VDD_CPU change) */
+/* bring-up: no CPU clock or VDD_CPU change */
 static int platform_init(char *why, size_t len)
 {
 	struct clk_hw *hws[] = {&pllp_hw,         &pllx_hw, &dfll_soc_clk.hw,

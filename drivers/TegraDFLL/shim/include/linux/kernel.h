@@ -16,7 +16,7 @@
 #include <stdint.h>
 #include "../dfllxnu.h"
 
-/* ---------------------------------------------------------------- config: what the L4T build enables here */
+/* config: what the L4T build enables here */
 #define CONFIG_ARCH_TEGRA 1
 #define CONFIG_ARCH_TEGRA_210_SOC 1
 #define CONFIG_COMMON_CLK 1
@@ -29,7 +29,6 @@
 #define ____is_defined(arg1_or_junk) __take_second_arg(arg1_or_junk 1, 0)
 #define IS_ENABLED(option) __is_defined(option)
 
-/* ---------------------------------------------------------------- types */
 typedef uint8_t u8;   typedef int8_t s8;
 typedef uint16_t u16; typedef int16_t s16;
 typedef uint32_t u32; typedef int32_t s32;
@@ -85,7 +84,6 @@ typedef struct { int counter; } atomic_t;
 #define container_of(ptr, type, member) ((type *)(void *)((char *)(ptr) - offsetof(type, member)))
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
-/* ---------------------------------------------------------------- numbers */
 #ifndef INT_MAX
 #define INT_MAX ((int)(~0U >> 1))
 #define INT_MIN (-INT_MAX - 1)
@@ -129,7 +127,7 @@ typedef struct { int counter; } atomic_t;
 #define round_down(x, y) ((x) & ~((__typeof__(x))((y) - 1)))
 #define round_up(x, y) ((((x) - 1) | ((__typeof__(x))((y) - 1))) + 1)
 
-/* ---------------------------------------------------------------- errors (include/uapi/asm-generic/errno*.h) */
+/* errno values: include/uapi/asm-generic/errno*.h */
 #define EPERM 1
 #define ENOENT 2
 #define EIO 5
@@ -157,7 +155,7 @@ static inline bool IS_ERR(const void *ptr) { return IS_ERR_VALUE((unsigned long)
 static inline bool IS_ERR_OR_NULL(const void *ptr) { return !ptr || IS_ERR_VALUE((unsigned long)ptr); }
 static inline void *ERR_CAST(const void *ptr) { return (void *)(uintptr_t)ptr; }
 
-/* ---------------------------------------------------------------- strings (XNU's libkern, linked by symbol) */
+/* strings: XNU's libkern, linked by symbol */
 void *memcpy(void *, const void *, size_t);
 void *memset(void *, int, size_t);
 size_t strlen(const char *);
@@ -166,7 +164,6 @@ int strncmp(const char *, const char *, size_t);
 int snprintf(char *, size_t, const char *, ...) __printf(3, 4);
 int vsnprintf(char *, size_t, const char *, va_list);
 
-/* ---------------------------------------------------------------- printk */
 #define KERN_EMERG ""
 #define KERN_ALERT ""
 #define KERN_CRIT ""
@@ -185,7 +182,7 @@ int printk(const char *fmt, ...) __printf(1, 2);
 #define pr_debug(fmt, ...) no_printk(fmt, ##__VA_ARGS__)
 #define pr_cont(fmt, ...) printk(fmt, ##__VA_ARGS__)
 
-/* ---------------------------------------------------------------- BUG/WARN: BUG panics with one line */
+/* BUG panics with one line */
 __attribute__((noreturn)) void panic(const char *fmt, ...);
 #define BUG() panic("TegraDFLL: BUG at %s:%d", __FILE__, __LINE__)
 #define BUG_ON(c) do { if (unlikely(c)) BUG(); } while (0)
@@ -193,18 +190,17 @@ __attribute__((noreturn)) void panic(const char *fmt, ...);
 #define WARN_ON_ONCE(c) WARN_ON(c)
 #define WARN(c, fmt, ...) ({ int __w = !!(c); if (unlikely(__w)) printk("WARNING: " fmt, ##__VA_ARGS__); unlikely(__w); })
 
-/* ---------------------------------------------------------------- RCU: the OPP table here is static after build */
+/* RCU: the OPP table here is static after build */
 #define rcu_read_lock() do { } while (0)
 #define rcu_read_unlock() do { } while (0)
 
-/* ---------------------------------------------------------------- delays */
 #define udelay(us) dfllxnu_udelay((u32)(us))
 #define ndelay(ns) dfllxnu_udelay((u32)DIV_ROUND_UP((ns), 1000))
 #define mdelay(ms) dfllxnu_udelay((u32)(ms) * 1000u)
 #define msleep(ms) dfllxnu_msleep((u32)(ms))
 #define usleep_range(lo, hi) dfllxnu_msleep((u32)DIV_ROUND_UP((hi), 1000))
 
-/* ---------------------------------------------------------------- time: jiffies at HZ 1000 over XNU's clock */
+/* time: jiffies at HZ 1000 over XNU's clock */
 #define HZ 1000
 unsigned long tdfll_jiffies(void);
 #define jiffies tdfll_jiffies()
@@ -221,7 +217,7 @@ static inline s64 ktime_to_ms(const ktime_t kt) { return kt / NSEC_PER_MSEC; }
 static inline s64 ktime_us_delta(const ktime_t later, const ktime_t earlier) { return ktime_to_us(later - earlier); }
 static inline s64 ktime_ms_delta(const ktime_t later, const ktime_t earlier) { return ktime_to_ms(later - earlier); }
 
-/* ---------------------------------------------------------------- MMIO (arm64 asm/io.h ordering) */
+/* MMIO, with arm64 asm/io.h ordering */
 static inline u32 __raw_readl(const volatile void __iomem *addr) { return *(const volatile u32 *)addr; }
 static inline void __raw_writel(u32 val, volatile void __iomem *addr) { *(volatile u32 *)addr = val; }
 #define readl_relaxed(a) __raw_readl(a)
@@ -238,7 +234,7 @@ static inline void writel(u32 val, volatile void __iomem *addr)
 	__raw_writel(val, addr);
 }
 
-/* ---------------------------------------------------------------- spinlocks: interrupts off on this CPU + a word */
+/* spinlocks: interrupts off on this CPU + a word */
 typedef struct { volatile unsigned int slock; } spinlock_t;
 #define __SPIN_LOCK_UNLOCKED(x) { 0 }
 #define DEFINE_SPINLOCK(x) spinlock_t x = __SPIN_LOCK_UNLOCKED(x)

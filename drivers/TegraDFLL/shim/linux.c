@@ -22,7 +22,7 @@
 #include <tdfll_platform.h>
 #include <soc/tegra/cvb.h>
 
-/* ------------------------------------------------------------------ printk: one kernel log line per call */
+/* printk: one kernel log line per call */
 int printk(const char *fmt, ...)
 {
 	char line[256];
@@ -42,7 +42,7 @@ int printk(const char *fmt, ...)
 	return n;
 }
 
-/* ------------------------------------------------------------------ memory (devm_* is never released, see device.h) */
+/* devm_* memory is never released (see device.h) */
 void *kmalloc(size_t size, gfp_t flags)
 {
 	return dfllxnu_malloc(size);
@@ -89,7 +89,7 @@ int pinctrl_select_state(struct pinctrl *p, struct pinctrl_state *s)
 	return -ENODEV;
 }
 
-/* ------------------------------------------------------------------ spinlocks: interrupts off + a test-and-set word */
+/* spinlocks: interrupts off + a test-and-set word */
 unsigned long tdfll_spin_lock_irqsave(spinlock_t *l)
 {
 	unsigned long flags = dfllxnu_irq_save();
@@ -106,7 +106,6 @@ void tdfll_spin_unlock_irqrestore(spinlock_t *l, unsigned long flags)
 	dfllxnu_irq_restore(flags);
 }
 
-/* ------------------------------------------------------------------ time, timers */
 unsigned long tdfll_jiffies(void)
 {
 	return (unsigned long)(dfllxnu_nanotime() / NSEC_PER_MSEC);
@@ -186,7 +185,7 @@ int hrtimer_cancel(struct hrtimer *timer)
 	return timer->tdfll_call ? dfllxnu_call_cancel(timer->tdfll_call) : 0;
 }
 
-/* ------------------------------------------------------------------ device tree (static nodes, see of.h) */
+/* device tree: static nodes (see of.h) */
 static const struct tdfll_property *of_find_prop(const struct device_node *np, const char *name)
 {
 	const struct tdfll_property *p;
@@ -273,7 +272,6 @@ const struct of_device_id *of_match_node(const struct of_device_id *matches,
 	return NULL;
 }
 
-/* ------------------------------------------------------------------ platform resources, MMIO */
 struct resource *platform_get_resource(struct platform_device *pdev, unsigned int type,
 				       unsigned int num)
 {
@@ -303,7 +301,6 @@ void __iomem *devm_ioremap_resource(struct device *dev, struct resource *res)
 	return va ? va : ERR_PTR(-ENOMEM);
 }
 
-/* ------------------------------------------------------------------ runtime PM (see pm_runtime.h) */
 void pm_runtime_enable(struct device *dev)
 {
 	dev->tdfll_rpm_enabled = true;
@@ -341,7 +338,7 @@ int pm_runtime_put_sync(struct device *dev)
 	return 0;
 }
 
-/* ------------------------------------------------------------------ reset controls, regulators (from platform.c) */
+/* reset controls and regulators come from platform.c */
 struct reset_control *devm_reset_control_get(struct device *dev, const char *id)
 {
 	struct reset_control *rstc = tdfll_platform_reset(dev, id);
@@ -431,7 +428,7 @@ unsigned int regulator_get_linear_step(struct regulator *regulator)
 	return (unsigned int)regulator->uV_step;
 }
 
-/* ------------------------------------------------------------------ OPP: one sorted table per device */
+/* OPP: one sorted table per device */
 struct dev_pm_opp {
 	unsigned long rate;
 	unsigned long u_volt;
@@ -543,7 +540,7 @@ int dev_pm_opp_get_opp_count(struct device *dev)
 	return t ? t->count : -ENODEV;
 }
 
-/* ------------------------------------------------------------------ clocks (see clk.h for which L4T semantics hold) */
+/* clocks: clk.h says which L4T semantics hold */
 struct clk {
 	const char *name;
 	struct clk_hw *hw;

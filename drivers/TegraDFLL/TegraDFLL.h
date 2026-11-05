@@ -12,12 +12,12 @@
 //
 // Nothing here runs unless called. The caller (SwitchThermal: its on-demand governor by default, or a fixed 1785 MHz
 // with switch-cpu-mode=dfll) owns the policy: it picks the rate, maps temperature to the L4T thermal indices below and
-// decides when to leave DFLL mode. Every call
-// is thread context only (I2C5 and IOSleep), serialized internally; none may run from an interrupt or with a spinlock
-// held. Interrupts: none needed. L4T keeps the DFLL interrupt (GIC SPI 62, output min/max limits) masked
-// (DFLL_INTR_EN = 0) and drives the loop from two timers, both XNU thread calls here: the low->high tuning step
-// (clk-dfll.c dfll_tune_timer_cb: re-checks every 2 ms that the DFLL's I2C output reached the tuning threshold, then
-// waits 500 us for the PMIC; there is no interrupt for "PMIC reached a voltage") and the Vmin calibration at low rates.
+// decides when to leave DFLL mode. Every call is thread context only (I2C5 and IOSleep), serialized internally; none may
+// run from an interrupt or with a spinlock held. Interrupts: none needed. L4T keeps the DFLL interrupt (GIC SPI 62,
+// output min/max limits) masked (DFLL_INTR_EN = 0) and drives the loop from two timers, both XNU thread calls here: the
+// low->high tuning step (clk-dfll.c dfll_tune_timer_cb: re-checks every 2 ms that the DFLL's I2C output reached the
+// tuning threshold, then waits 500 us for the PMIC; there is no interrupt for "PMIC reached a voltage") and the Vmin
+// calibration at low rates.
 //
 // Coexistence with drivers/TegraI2C on PWR_I2C (I2C5 pads PY3/PY4): the pads have one pinmux function (I2CPMU, L4T
 // pinctrl-tegra210.c:1605-1606) and two masters sit on them, the I2C5 controller (0x7000d000) and the DFLL's
