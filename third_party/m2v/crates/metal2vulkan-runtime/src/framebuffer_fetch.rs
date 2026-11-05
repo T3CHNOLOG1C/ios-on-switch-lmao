@@ -14,8 +14,16 @@
 //! `DeviceOptions::policy`, the compile layer also emits input attachments without that access
 //! where neither form is open to the pipeline (a device with neither feature, or a pipeline
 //! state the storage form cannot keep exact, such as a blending fetched attachment), recording
-//! `PrecisionNote::UnorderedFramebufferFetch`. The runtime runs only the ordered forms, which
-//! are Metal's, so it refuses such a pipeline where it makes it ([`ordered`]).
+//! `PrecisionNote::UnorderedFramebufferFetch`. On a device with neither ordered form (NVK on
+//! Maxwell: no rasterization-order attachment access, no pixel interlock) the runtime runs that
+//! form ([`unordered_inputs`]): every color render target is an input attachment as in the
+//! ordered form, the subpass and pipelines state no rasterization order, and a draw that fetches
+//! records after a barrier of the draws' subpass's self-dependency from the earlier draws of its
+//! instance (`render.rs`, `InterlockedStorage::inputs`). So a fetch reads what earlier draws
+//! wrote, as Metal's does; within one draw, a fragment reading a pixel that an earlier primitive
+//! of the same draw covered reads either value (Vulkan's feedback loop without rasterization
+//! order). Elsewhere the runtime runs only the ordered forms, which are Metal's, and refuses such
+//! a pipeline where it makes it ([`ordered`]).
 //!
 //! The input attachment form ([`through_inputs`]): a pass cannot foresee which of its draws
 //! fetch, so on such a device every color render target is also an input attachment
@@ -86,7 +94,9 @@ use super::error::Error;
 use super::image_plan::ImagePlan;
 use super::Device;
 use metal2vulkan::bind::PlanesCopy;
-use metal2vulkan::device::{DeviceProfile, FormatUsage, VkFeature, VkProperty};
+use metal2vulkan::device::{
+    DeviceProfile, FormatUsage, FramebufferFetchPolicy, VkFeature, VkProperty,
+};
 use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::TextureType;
 use metal2vulkan::pipeline::{GraphicsState, StorageAttachmentUse};
@@ -97,7 +107,18 @@ use std::collections::VecDeque;
 /// in rasterization order (`lower::fragment::fetch`): where the device has
 /// `rasterizationOrderColorAttachmentAccess`.
 pub(crate) fn through_inputs(profile: &DeviceProfile) -> bool {
-    profile.fragment().rasterization_order_color_access
+    profile.fragment().rasterization_order_color_access || unordered_inputs(profile)
+}
+
+/// Whether `profile` fetches through input attachments without rasterization order: its policy
+/// accepts the unordered fetch (`FramebufferFetchPolicy::AcceptUnordered`) and it has neither
+/// ordered form (the module docs). Its passes and pipelines then state no rasterization order, and
+/// a fetching draw records after a barrier from the earlier draws of its instance.
+pub(crate) fn unordered_inputs(profile: &DeviceProfile) -> bool {
+    let fragment = profile.fragment();
+    profile.framebuffer_fetch() == FramebufferFetchPolicy::AcceptUnordered
+        && !fragment.rasterization_order_color_access
+        && !fragment.pixel_interlock
 }
 
 /// Whether the compile layer reads `profile`'s fetched color attachments as storage images in the
@@ -344,11 +365,14 @@ impl Device {
 }
 
 /// Refuse a pipeline of `graphics` whose framebuffer fetch the compile layer left unordered:
-/// input attachments without rasterization-order attachment access. The refusal names that
-/// access, with which the compile layer orders every fetch; compiling under `RequireOrdered`
-/// names each alternative the device lacks.
-pub(crate) fn ordered(graphics: &GraphicsState) -> Result<(), Error> {
-    if graphics.input_attachments.is_empty() || graphics.rasterization_order_attachment_access {
+/// input attachments without rasterization-order attachment access, unless `profile` runs that
+/// form ([`unordered_inputs`]). The refusal names that access, with which the compile layer
+/// orders every fetch; compiling under `RequireOrdered` names each alternative the device lacks.
+pub(crate) fn ordered(graphics: &GraphicsState, profile: &DeviceProfile) -> Result<(), Error> {
+    if graphics.input_attachments.is_empty()
+        || graphics.rasterization_order_attachment_access
+        || unordered_inputs(profile)
+    {
         return Ok(());
     }
     Err(Error::Unsupported(Unsupported::needs(

@@ -1359,9 +1359,14 @@ fn create(
     }
     let mut draws = graphics().color_attachments(&references);
     if shape.fetch_inputs {
-        draws = draws
-            .input_attachments(&inputs)
-            .flags(vk::SubpassDescriptionFlags::RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_EXT);
+        draws = draws.input_attachments(&inputs);
+        // Without rasterization order (`framebuffer_fetch::unordered_inputs`) a fetching draw
+        // records after a barrier of the subpass's self-dependency instead.
+        if !super::framebuffer_fetch::unordered_inputs(device.compile_device().profile()) {
+            draws = draws.flags(
+                vk::SubpassDescriptionFlags::RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_EXT,
+            );
+        }
     }
     if resolve_references
         .iter()

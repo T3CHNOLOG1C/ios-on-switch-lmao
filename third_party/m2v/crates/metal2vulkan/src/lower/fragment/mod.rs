@@ -324,7 +324,22 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
     let storage = !cx.families.fragment.fetch.is_empty() || shadow;
     let interlock =
         if rog::declared(cx.entry) || cx.families.fragment.imageblock.is_some() || storage {
-            Some(rog::mode(cx)?)
+            match rog::mode(cx) {
+                Ok(mode) => Some(mode),
+                // A function whose groups name only its own buffers and textures, on a device
+                // with no interlock whose policy accepts an unordered fetch, runs its body
+                // unordered (`rog::unordered`).
+                Err(_)
+                    if cx.families.fragment.imageblock.is_none()
+                        && !storage
+                        && rog::unordered(cx) =>
+                {
+                    cx.precision
+                        .insert(PrecisionNote::UnorderedFramebufferFetch);
+                    None
+                }
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };

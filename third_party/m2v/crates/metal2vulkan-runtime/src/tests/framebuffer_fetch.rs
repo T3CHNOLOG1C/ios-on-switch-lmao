@@ -18,12 +18,12 @@ use crate::error::Error;
 use crate::framebuffer_fetch::{
     fetch_candidate, ordered, planes_candidate, planes_copies, planes_copies_gap,
     storage_candidate, stores_samples, through_inputs, through_multisampled_storage,
-    through_planes, through_storage, UsageAnswers,
+    through_planes, through_storage, unordered_inputs, UsageAnswers,
 };
 use crate::image_plan::{plan_image, ImagePlan};
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
 use metal2vulkan::bind::PlanesCopy;
-use metal2vulkan::device::{FormatUsage, VkFeature};
+use metal2vulkan::device::{Device, DevicePolicy, FormatUsage, FramebufferFetchPolicy, VkFeature};
 use metal2vulkan::error::{Capability, Feature, Needs};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::pipeline::{
@@ -64,26 +64,57 @@ fn fetching(input: bool, access: bool) -> GraphicsState {
 }
 
 /// The ordered forms are made, as is a pipeline that fetches nothing; the unordered input
-/// attachment is refused, naming the access that orders it.
+/// attachment is refused, naming the access that orders it, on every committed profile under the
+/// default policy.
 #[test]
 fn only_ordered_framebuffer_fetch_is_made() {
     let mut plain = fetching(true, false);
     plain.input_attachments.clear();
-    assert_eq!(ordered(&plain), Ok(()));
-    assert_eq!(ordered(&fetching(true, true)), Ok(()));
-    assert_eq!(ordered(&fetching(false, false)), Ok(()));
-    match ordered(&fetching(true, false)) {
-        Err(Error::Unsupported(u)) => assert_eq!(
-            (u.feature, u.needs),
-            (
-                Feature::FramebufferFetch,
-                Needs::AnyOf(vec![vec![Capability::Feature(
-                    VkFeature::RasterizationOrderColorAttachmentAccess
-                )]])
-            )
-        ),
-        other => panic!("the unordered fetch is made: {other:?}"),
+    for (name, _, device) in committed() {
+        let profile = device.profile();
+        assert!(!unordered_inputs(profile), "{name}");
+        assert_eq!(ordered(&plain, profile), Ok(()), "{name}");
+        assert_eq!(ordered(&fetching(true, true), profile), Ok(()), "{name}");
+        assert_eq!(ordered(&fetching(false, false), profile), Ok(()), "{name}");
+        match ordered(&fetching(true, false), profile) {
+            Err(Error::Unsupported(u)) => assert_eq!(
+                (u.feature, u.needs),
+                (
+                    Feature::FramebufferFetch,
+                    Needs::AnyOf(vec![vec![Capability::Feature(
+                        VkFeature::RasterizationOrderColorAttachmentAccess
+                    )]])
+                ),
+                "{name}"
+            ),
+            other => panic!("{name}: the unordered fetch is made: {other:?}"),
+        }
     }
+}
+
+/// Under `AcceptUnordered`, a device with neither rasterization-order access nor the pixel
+/// interlock (NVK on Maxwell) fetches through unordered input attachments: the runtime makes that
+/// pipeline, and its color targets take input attachment usage as the ordered form's do. A device
+/// with either feature keeps its ordered form.
+#[test]
+fn unordered_fetch_is_made_where_neither_ordered_form_exists() {
+    let mut policy = DevicePolicy::default();
+    policy.framebuffer_fetch = FramebufferFetchPolicy::AcceptUnordered;
+    let mut neither = 0;
+    for (name, desc, _) in committed() {
+        let device = Device::new(desc.clone(), policy.clone()).expect("derives");
+        let profile = device.profile();
+        let fragment = profile.fragment();
+        let expected = !fragment.rasterization_order_color_access && !fragment.pixel_interlock;
+        assert_eq!(unordered_inputs(profile), expected, "{name}");
+        assert!(!(through_inputs(profile) && through_storage(profile)), "{name}");
+        if expected {
+            neither += 1;
+            assert!(through_inputs(profile), "{name}");
+            assert_eq!(ordered(&fetching(true, false), profile), Ok(()), "{name}");
+        }
+    }
+    assert!(neither > 0, "a committed profile has neither ordered form");
 }
 
 /// A checked layout of a 2D texture of `pf`, `width` by 8, with `samples` (a multisample type

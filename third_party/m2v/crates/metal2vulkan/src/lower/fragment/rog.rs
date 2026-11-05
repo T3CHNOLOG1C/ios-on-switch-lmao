@@ -143,6 +143,22 @@ fn sample_rate(objects: &[IoObject]) -> bool {
     })
 }
 
+/// Whether a fragment function in a raster order group may run without the interlock: the
+/// profile has neither interlock and its policy accepts an unordered framebuffer fetch
+/// (`FramebufferFetchPolicy::AcceptUnordered`), the same trade on such a device. Its group's
+/// accesses then run in no order between the fragments of one draw that cover the same pixel (a
+/// later draw's still follow an earlier draw's in a pass, as any write does), recorded as
+/// `PrecisionNote::UnorderedFramebufferFetch`. Only for a function whose groups name its own
+/// buffers, textures and color inputs: an imageblock or an attachment in the storage form needs
+/// the critical section to be read at all.
+pub(super) fn unordered(cx: &SelectCx<'_>) -> bool {
+    let f = cx.profile.fields();
+    cx.stage == Stage::Fragment
+        && f.framebuffer_fetch == crate::device::FramebufferFetchPolicy::AcceptUnordered
+        && !f.fragment.pixel_interlock
+        && !f.fragment.sample_interlock
+}
+
 /// The interlock mode of a function in a raster order group, or its refusal. Called once the
 /// stage interface is planned (`fragment::finish`).
 pub(super) fn mode(cx: &SelectCx<'_>) -> Result<ExecMode, Error> {

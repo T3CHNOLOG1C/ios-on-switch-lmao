@@ -816,7 +816,11 @@ impl VariantObjects {
                 "a pipeline fetching in rasterization order outside a pass that does",
             ));
         }
-        let blend_flags = match key.pass.fetch_inputs {
+        // Without rasterization order (`framebuffer_fetch::unordered_inputs`) none is stated: a
+        // fetching draw records after a barrier from the draws before it instead.
+        let unordered =
+            crate::framebuffer_fetch::unordered_inputs(self.device.compile_device().profile());
+        let blend_flags = match key.pass.fetch_inputs && !unordered {
             true => {
                 vk::PipelineColorBlendStateCreateFlags::RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXT
             }

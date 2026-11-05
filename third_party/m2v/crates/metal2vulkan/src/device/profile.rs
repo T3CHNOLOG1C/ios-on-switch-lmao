@@ -106,6 +106,11 @@ impl DeviceProfile {
         crate::device::subgroup::tier(class, stage, &self.fields.subgroup)
     }
 
+    /// The framebuffer-fetch ordering its policy states (`DevicePolicy::framebuffer_fetch`).
+    pub fn framebuffer_fetch(&self) -> FramebufferFetchPolicy {
+        self.fields.framebuffer_fetch
+    }
+
     /// How this profile contains an out-of-bounds access: on, relying on the buffer robustness it
     /// enables, or off.
     pub fn containment(&self) -> Containment {

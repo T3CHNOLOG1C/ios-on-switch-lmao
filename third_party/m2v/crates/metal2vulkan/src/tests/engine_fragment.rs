@@ -509,13 +509,21 @@ fn framebuffer_fetch_reads_in_an_ordered_form_where_the_device_has_one() {
         let lenient = profile(&stem, policy).expect("profile");
         let frag = strict.fields().fragment;
         for (entry, colors, formats) in entries {
-            // A color input in a raster order group needs the interlock.
+            // A color input in a raster order group needs the interlock; on a device with neither
+            // interlock, `AcceptUnordered` runs the group unordered (`rog::unordered`), as it runs
+            // the fetch itself.
             if entry == "fetch_ordered" && !frag.pixel_interlock {
-                assert_eq!(
-                    refusal(&bc, entry, &lenient),
-                    (Feature::RasterOrderGroups, pixel_interlock()),
-                    "{stem}"
-                );
+                if frag.sample_interlock {
+                    assert_eq!(
+                        refusal(&bc, entry, &lenient),
+                        (Feature::RasterOrderGroups, pixel_interlock()),
+                        "{stem}"
+                    );
+                } else {
+                    let a = compile(&bc, entry, &lenient)
+                        .unwrap_or_else(|e| panic!("{entry} on {stem}: {e}"));
+                    assert!(unordered(&a), "{entry} on {stem}");
+                }
                 continue;
             }
             let clean = fetch_state(colors, formats, false);

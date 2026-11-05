@@ -2150,7 +2150,7 @@ impl RenderVariant {
             }
             Remembered::Compiled(pipeline) => pipeline,
         };
-        framebuffer_fetch::ordered(&pipeline.graphics)?;
+        framebuffer_fetch::ordered(&pipeline.graphics, device.compile_device().profile())?;
         // Before the variant's shader modules, whose creation the layer reports.
         device.degrade_requirements(&pipeline.requirements, Occurrence::Made);
         // Where the creation log is on, the stages' SPIR-V it names hashed on a thread of its
