@@ -166,7 +166,7 @@ py_test(
     imports = ["."],
 )
 
-# //boot:snapshot copies a build to out/boot/lkg/<name> (its py_binary lives in boot/).
+# //boot:snapshot copies a build to ~/Library/Application Support/ioswitch/lkg/<name> (its py_binary lives in boot/).
 exports_files(["snapshot.py"])
 
 # The packaging's modules, for the host tests (//tests), which import them.

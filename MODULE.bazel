@@ -136,7 +136,7 @@ http_archive(
     name = "libpthread",
     build_file_content = _SOURCE_BUILD,
     patch_args = ["-p1"],
-    patches = ["//out/native-a57/root-v1/tree/patches:libpthread/explicit-kernel-address.patch"],
+    patches = ["//kernel/libpthread:explicit-kernel-address.patch"],
     sha256 = "82f9ec53344f80b164535b47a12bac05eec6ffb78130ea0f016a9cb2e904aa04",
     strip_prefix = "libpthread-libpthread-519.120.4",
     urls = ["https://github.com/apple-oss-distributions/libpthread/archive/refs/tags/libpthread-519.120.4.tar.gz"],

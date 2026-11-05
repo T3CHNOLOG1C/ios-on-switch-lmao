@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy a new build to an installed card (replaces out/switch/deploy-sd.sh). No sudo needed.
+"""Deploy a new build to an installed card. No sudo needed.
 
     bazel run //deploy:sd -- <diskN>                       dry run: check the card, show what would change
     bazel run //deploy:sd -- <diskN> --yes [--stage-gpu]   deploy (type the disk identifier to confirm)
@@ -165,7 +165,7 @@ def main(argv=None):
         ok = True
         with cards.mounted(data, log) as data_root:
             if not args.no_pull_logs:
-                out = args.logs_out or pull_logs.workspace() / "out/switch/device-logs" / time.strftime(
+                out = args.logs_out or pull_logs.state_dir() / "device-logs" / time.strftime(
                     "boot-%m%d-%H%M")
                 pull_logs.pull(data_root, out, log, harvest=not args.no_harvest, csstore=not args.no_csstore,
                                launchd=not args.no_launchd_log, corpus=args.corpus, kcdata=args.kcdata)

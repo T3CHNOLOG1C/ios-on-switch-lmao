@@ -6,7 +6,8 @@
                OS image only for a file the cache lacks: once per machine.
 @gpu_device_data  what only the Switch makes (precompile/harvest.py --pack): the driver records m2v wrote and the Metal
                libraries Core Image compiled there, one tar pinned by sha256 (DEVICE_DATA), fetched into the repository
-               cache from out/gpu-device-data/ of the checkout once.
+               cache once from ~/Library/Application Support/ioswitch/gpu-device-data/ (or
+               $IOSWITCH_HOME/gpu-device-data/), where harvest.py --pack writes it; never from a checkout.
 @gpu_llvm_as   bin/llvm-as of the LLVM 23.1.4 release.
 """
 
@@ -14,7 +15,7 @@ load("//bazel/host:files.bzl", "sha256_lines")
 load("//bazel/ipsw:ipsw.bzl", "ipsw_member_label")
 load("//bazel/ipsw:pins.bzl", "DEFAULT_KIND")
 
-# @gpu_device_data: the tar harvest.py --pack wrote (out/gpu-device-data/<file>), by its sha256. Its records are of the
+# @gpu_device_data: the tar harvest.py --pack wrote (<state dir>/gpu-device-data/<file>), by its sha256. Its records are of the
 # NVK identities the device booted (vendor, device, driver version, pipelineCacheUUID); the seed takes its own NVK's.
 # None on a machine without the tar: the seed then has no device records and lacks the 2 S and 2 C lines of Core Image's
 # device-compiled kernels, which the device compiles on first use.
@@ -145,15 +146,29 @@ apple_libraries = repository_rule(
 
 # --- @gpu_device_data ----------------------------------------------------------------------------------------------
 
+def state_dir(rctx):
+    """Where the tools keep what is not the repository's: ~/Library/Application Support/ioswitch, or $IOSWITCH_HOME."""
+    return rctx.getenv("IOSWITCH_HOME") or rctx.getenv("HOME", "") + "/Library/Application Support/ioswitch"
+
 def _device_data_impl(rctx):
     if DEVICE_DATA:
-        # Only a repository cache miss reads the file: the first fetch on a machine, from the checkout harvest.py ran
-        # in.
-        rctx.download_and_extract(
-            url = "file://{}/out/gpu-device-data/{}".format(rctx.workspace_root, DEVICE_DATA["file"]),
+        # Only a repository cache miss reads the file (the first fetch on a machine): from the tools' state directory,
+        # where harvest.py --pack writes it, never from a checkout. The device's data is Apple-derived (Core Image's
+        # compiled kernels, NVK's records of Apple's shaders), so it stays out of the repository, like the IPSW.
+        where = state_dir(rctx) + "/gpu-device-data/" + DEVICE_DATA["file"]
+        fetched = rctx.download_and_extract(
+            url = "file://" + where.replace(" ", "%20"),
             sha256 = DEVICE_DATA["sha256"],
             type = "tar",
+            allow_fail = True,
         )
+        if not fetched.success:
+            fail(("@gpu_device_data: {} (sha256 {}) is in neither the repository cache nor {}: copy it there from a " +
+                  "machine that has it, or remake it (drivers/TegraGM20BMetal/precompile/harvest.py --pack)").format(
+                DEVICE_DATA["file"],
+                DEVICE_DATA["sha256"],
+                where,
+            ))
     rctx.file("BUILD.bazel", """\
 package(default_visibility = ["//visibility:public"])
 

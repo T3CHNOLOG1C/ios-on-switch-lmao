@@ -43,7 +43,7 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
     yourself.
 - **bazelisk**: `brew install bazelisk`. `.bazelversion` pins Bazel 9.3.1, and bazelisk fetches it on first use.
   Nothing else comes from Homebrew: lz4 and the LLVM tools are pinned downloads, and the unit tests get them too.
-- **For the GPU bundle only**: `out/gpu-device-data/m2v-device-<sha>.tar` once per machine, the data only the Switch
+- **For the GPU bundle only**: `~/Library/Application Support/ioswitch/gpu-device-data/m2v-device-<sha>.tar` once per machine, the data only the Switch
   makes (its driver records and Core Image's compiled kernels: `harvest.py --pack`, pinned in `bazel/gpu/deps.bzl`
   `DEVICE_DATA`). The first build copies it into the repository cache, and no checkout reads it after that. The Apple
   Metal libraries the seed and the raw pack read (QuartzCore's `default.metallib` among them) come from the IPSW, below.
@@ -92,9 +92,9 @@ changed, and recompiles only what you touched.
 | Deploy with the Metal bundle | `bazel run //deploy:sd -- disk4 --yes --stage-gpu` |
 | Remove the Metal bundle from the card | `bazel run //deploy:sd -- disk4 --yes --remove-gpu` |
 | Pull logs only (+ logarchive + shader harvest) | `bazel run //deploy:pull_logs -- disk4` |
-| Read the logs | `/usr/bin/log show --archive out/switch/device-logs/boot-MMDD-HHMM/boot.logarchive --style compact --info --debug` |
-| Keep this build (rollback) | `bazel run //boot:snapshot -- 1930-r9-mything` → `out/boot/lkg/1930-r9-mything/` |
-| Deploy a kept build | `bazel run //deploy:sd -- disk4 --yes --stage-gpu --boot-package=$PWD/out/boot/lkg/NAME --gpu-bundle=$PWD/out/boot/lkg/NAME/gpu` |
+| Read the logs | `/usr/bin/log show --archive "$HOME/Library/Application Support/ioswitch/device-logs/boot-MMDD-HHMM/boot.logarchive" --style compact --info --debug` |
+| Keep this build (rollback) | `bazel run //boot:snapshot -- 1930-r9-mything` → `~/Library/Application Support/ioswitch/lkg/1930-r9-mything/` |
+| Deploy a kept build | `LKG="$HOME/Library/Application Support/ioswitch/lkg/NAME"; bazel run //deploy:sd -- disk4 --yes --stage-gpu --boot-package="$LKG" --gpu-bundle="$LKG/gpu"` |
 | Install iPadOS on a fresh card | `bazel run //install:sd -- disk4` (dry run), then `... --yes` (see below) |
 | Change XNU | Edit `kernel/xnu-10063.141.1/` and commit (see [Changing XNU](#changing-xnu)) |
 | Format everything | `bazel run //:format` (or `bazel run //:format -- PATH...`) |
@@ -159,7 +159,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | The members of the IPSW kind `--//bazel/ipsw:kind` selects (`bazel/ipsw/pins.bzl`, one table of kinds). Deflated ones are inflated by a build action (`//bazel/ipsw:<kind>_<role>`) |
 | `//install:sd`, `//install:artifacts` | SD-card install and what it writes |
 | `//deploy:sd`, `//deploy:pull_logs` | Deploy and log pull |
-| `//boot:snapshot` | Copy this build to `out/boot/lkg/<name>` |
+| `//boot:snapshot` | Copy this build to `~/Library/Application Support/ioswitch/lkg/<name>` |
 | `//kernel/xnu-10063.141.1:update_tables` | Re-record XNU's header/MIG/config tables from its make (after a makefile change) |
 | `//:format`, `//:format_test`, `//:lint_test`, `//:clang_tidy_test` | Format and lint every file (see [Format and lint](#format-and-lint)) |
 | `//tools/lint:py_owners`, `//tools/lint:compdb` | Every tracked `.py` file has an owning target; compile_commands.json for clangd |
@@ -287,7 +287,7 @@ linters leave them alone.
 | NVK | `third_party/mesa` | Edit Mesa's sources and commit (one commit per change, as the series is); `bazel build //gpu/nvk:ios //gpu/nvk:host` rebuilds what the edit touches |
 | Mesa | `third_party/mesa/README.ioswitch.md` | A new import, ioswitch's commits rebased onto it, the BUILD files updated where meson.build changed. If `nvk_query.cl`, `nvk_copy_indirect.cl` or their headers change, regenerate `third_party/mesa/bazel/pinned` with Mesa's mesa_clc/vtn_bindgen2 (LLVM 23.1.4) |
 | The IPSW's Metal libraries | `bazel/gpu/apple-libs.sha256` | After an IPSW bump: attach the OS image read-only and regenerate with the command in its header (`libraries.py pins`) |
-| Device data | `bazel/gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes `out/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
+| Device data | `bazel/gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes `~/Library/Application Support/ioswitch/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
 | Rust | `MODULE.bazel` | `rust.toolchain(versions = [...])` and the values of `//bazel/rust:toolchain_version` |
 | LLVM | `bazel/llvm/llvm.bzl` and `bazel/gpu/deps.bzl` | URL and sha256 in both (one archive) |
 | Python packages | not used yet | — |
@@ -401,7 +401,7 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 | `cmake --build out/cmake --target kernel` | `bazel build //:kernel` |
 | `python3 drivers/TegraGM20BMetal/build-tegra-gm20b-metal.py ...` | `bazel build //:gpu` (and `//:boot` picks up its trust cache automatically) |
 | `touch scripts/package_raw_boot.py` after a GPU rebuild | Not needed: `//:boot` depends on `//gpu:trustcache` |
-| `cp -R out/boot/ioswitch out/boot/lkg/NAME` (+ `out/gpu`) | `bazel run //boot:snapshot -- NAME` |
+| `cp -R out/boot/ioswitch out/boot/lkg/NAME` (+ `out/gpu`) | `bazel run //boot:snapshot -- NAME` (into `~/Library/Application Support/ioswitch/lkg/NAME`) |
 | `PKG=... [STAGE_GPU=1] zsh out/switch/deploy-sd.sh` | `bazel run //deploy:sd -- disk4 --yes [--stage-gpu] [--boot-package=... --gpu-bundle=...]` |
 | Logs part of deploy-sd.sh + `mkarchive.py` + `log show` | `bazel run //deploy:pull_logs -- disk4`, then `log show --archive .../boot.logarchive` |
 | `scripts/xnu-patch.sh export / check / apply` | Nothing: edit `kernel/xnu-10063.141.1/` and commit |
@@ -416,9 +416,9 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 
 - **"The selected Xcode does not match the pin"**: select Xcode-beta 27.0, or re-pin (see [Bumping a pin](#bumping-a-pin)).
   `IOSWITCH_ALLOW_UNPINNED_XCODE=1` builds anyway, with a warning; the output won't match.
-- **`@gpu_device_data` fails to fetch (`out/gpu-device-data/m2v-device-….tar` not found)**: the repository cache doesn't
-  have the device data yet. Copy the tar named in `bazel/gpu/deps.bzl` `DEVICE_DATA` into `out/gpu-device-data/` of
-  this checkout, or make a new one from the device's caches: `bazel run //deploy:pull_logs -- disk4` stages them, then
+- **`@gpu_device_data` fails to fetch (`m2v-device-….tar` in neither the repository cache nor
+  `~/Library/Application Support/ioswitch/gpu-device-data/`)**: copy the tar named in `bazel/gpu/deps.bzl` `DEVICE_DATA` there
+  (`$IOSWITCH_HOME/gpu-device-data/` if you set it; it stays out of the repository: it is Apple-derived), or make a new one from the device's caches: `bazel run //deploy:pull_logs -- disk4` stages them, then
   `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes the tar and prints the pin.
   Without any device data (another machine), set `DEVICE_DATA = None`: the seed then lacks the device's records and Core
   Image's 2 device-compiled kernels, which the device compiles on first use.

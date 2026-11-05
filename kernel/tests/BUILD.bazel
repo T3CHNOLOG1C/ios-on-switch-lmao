@@ -10,7 +10,7 @@
 #                            the faulting page's 16 KiB group in its map entry and VM object, and nothing outside the
 #                            plain case, against a model of the object and pmap
 #
-#   bazel test //out/native-a57/root-v1/tree/patches/test:all
+#   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")

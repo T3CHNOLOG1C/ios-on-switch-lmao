@@ -19,35 +19,9 @@ bundles/
 *.orig
 *.rej
 
-# out/ is build output, device logs, boot snapshots and agent scratch. Only its source parts are tracked:
-/out/*
-
-# The kernel tree: our drivers, kits, diagnostics, scripts, patches and package inputs, without its build output,
-# the XNU checkout (.cache/xnu-work is its own git repository) and the reference sources.
-!/out/native-a57/
-/out/native-a57/*
-!/out/native-a57/root-v1/
-/out/native-a57/root-v1/*
-!/out/native-a57/root-v1/tree/
-/out/native-a57/root-v1/tree/build/
-/out/native-a57/root-v1/tree/.cache/
-/out/native-a57/root-v1/tree/refer/
-/out/native-a57/root-v1/tree/compile_commands.json
-/out/native-a57/root-v1/tree/.git-empty-unused/
-
-# The build pass CMake reads (build-options.json, prelink-command.json, the prelink tool), not its kernel binaries.
-!/out/native-a57/root-v1/passes/
-/out/native-a57/root-v1/passes/*
-!/out/native-a57/root-v1/passes/native-root-smp-v1/
-/out/native-a57/root-v1/passes/native-root-smp-v1/*
-!/kernel/build-options.json
-!/out/native-a57/root-v1/passes/native-root-smp-v1/prelink-command.json
-!/out/native-a57/root-v1/passes/native-root-smp-v1/BUILD.bazel
-!/out/native-a57/root-v1/passes/native-root-smp-v1/source/
-
-# Deploy tools (not the device logs, photos or receipts beside them)
-!/out/switch/
-/out/switch/*
+# out/: agents' scratch only (build output is bazel-out, boot snapshots and device logs live in
+# ~/Library/Application Support/ioswitch). Nothing in it is tracked.
+/out/
 
 # Claude Code worktrees and local state
 .claude/

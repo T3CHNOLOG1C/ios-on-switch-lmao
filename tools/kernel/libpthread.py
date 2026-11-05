@@ -1,5 +1,5 @@
 """libpthread_kernel.a (tree/scripts/build-libpthread-kernel.py): libpthread-519.120.4's three kernel sources (patched by
-tree/patches/libpthread), names shared with XNU renamed pthread519_<name>, and XNU's source_pthread_bootstrap.o (our
+kernel/libpthread), names shared with XNU renamed pthread519_<name>, and XNU's source_pthread_bootstrap.o (our
 XNU patch adds the source; //kernel/xnu-10063.141.1/osfmk:pthread_bootstrap compiles it as prng_random.c is).
 --kernel-names is xnu_symbols' list of XNU's names (every one, global or local, may collide).
 

@@ -5,7 +5,7 @@ seen, without the times, threads, costs and callers. The corpus keeps what it ha
 library (lib=: the file's path, or data:<SHA-256> of a library made from bytes); a line from before the journal named libraries
 has none, and precompile/libraries.py guesses it by the function's name.
 
-usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log out/switch/device-logs/*/m2v-cache/pipelines.log
+usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log <state>/device-logs/*/m2v-cache/pipelines.log
        harvest.py <corpus.log> --volume <mounted Data volume> [--save <dir>] [--open <container UUID>]... [--open-all]
 
 --volume  every process's m2v cache on the iPad's Data volume (the plugin's cacheCandidates: a container's
@@ -19,7 +19,8 @@ usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log 
           log folder. makings.log (m2v 0118, the plugin turns it on in every cache): one line per driver record the process wrote
           (a compile), its name and the making's description; a precompile run with METAL2VULKAN_MAKING_LOG=<file> writes the
           host's, so a seeded making the device made again shows where the two descriptions part.
---device  the device data staging directory (default out/gpu-device-data/staging of the checkout): with --volume, and for every
+--device  the device data staging directory (default <state>/gpu-device-data/staging; <state> is ~/Library/Application
+          Support/ioswitch or $IOSWITCH_HOME): with --volume, and for every
           saved cache below --records-from, each driver record (the content directory's v1/<content>/<xx>/<name>, m2v's
           VkPipelineCache data of one pipeline making, named by what the making reads and the NVK identity) whose envelope
           checks out is copied to <device>/records/<xx>/<name>, and every cache's libs/<SHA-256>.metallib (a library a process
@@ -27,11 +28,11 @@ usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log 
           and each one the precompile makes otherwise than the device (r8-webgpu: 1268 of the 1293 records of the 23:17
           boot's caches were not in the seed). The seed takes those of its NVK's identity.
           harvest.py --records-from <dir>... [--device <dir>]: only the records of every m2v cache below each <dir> (the
-          --save copies, e.g. out/switch/device-logs/*/m2v), no corpus.
+          --save copies, e.g. <state>/device-logs/*/m2v), no corpus.
 --pack    harvest.py --pack [--device <dir>]: the staging directory as the build's @gpu_device_data: a tar (sorted, no times or
           owners) of its records and of the libraries made from bytes that the corpus names and the build cannot make itself
           (not one of bazel/gpu/apple-libs.sha256's, not the frontend's TwoPlaneStandIn.h: Core Image's kernels compiled on the
-          device), written to out/gpu-device-data/m2v-device-<sha256[:16]>.tar; prints the DEVICE_DATA pin for
+          device), written to <state>/gpu-device-data/m2v-device-<sha256[:16]>.tar; prints the DEVICE_DATA pin for
           bazel/gpu/deps.bzl. The first build after the pin copies the tar into the repository cache; no build reads the
           staging directory.
 """
@@ -50,7 +51,9 @@ DESCRIPTOR = re.compile(r'(samples|topo|ds|opt|c\d|a\d+)=')
 COMPUTE = re.compile(r'(form|opt|max|tgm|icb|depth|abf|mut)=')
 # The checkout: bazel run's (also what //deploy:pull_logs runs this in), else the one this file is in.
 PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).resolve().parents[3])
-DEVICE = PROJECT / 'out/gpu-device-data'
+# The device's data, outside every checkout (it is Apple-derived, so never tracked): where --pack writes the tar
+# @gpu_device_data's first fetch on a machine reads (bazel/gpu/deps.bzl), and the staging directory beside it.
+DEVICE = Path(os.environ.get('IOSWITCH_HOME') or Path.home() / 'Library/Application Support/ioswitch') / 'gpu-device-data'
 # /private/var/containers/Data/System/<UUID>/Library/Caches/m2v of the system containers whose processes kept an m2v cache there
 # (the plugin's "device ... ready in" lines, r5d and r6h): their Library and Library/Caches are mode 000.
 SYSTEM_CACHES = {'6C7A65AF-CB18-421C-A07A-D724B05A7AB6': 'backboardd', '532E562F-2888-4C55-9BF8-E6F0B246BBDA': 'SpringBoard',

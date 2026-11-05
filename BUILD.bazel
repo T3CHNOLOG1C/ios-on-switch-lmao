@@ -41,7 +41,7 @@ exports_files([
 # The root's own files are the top-level ones and docs/. Its directory also holds out/ (build output and agents'
 # scratch, untracked and mostly not bazel-ignored), so neither the files nor the subpackages are found by walking the
 # working copy: globbing and subpackages(**) here took ~25 s of loading on a cold server. The subpackages are the
-# top-level ones, those one level down (drivers/<X>, ...), and the two packages inside out/.
+# top-level ones and those one level down (drivers/<X>, ...).
 lint_files(
     dirs = ["docs"],
     # Untracked tool state at the top level of working copies.
@@ -50,7 +50,6 @@ lint_files(
         include = [
             "*",
             "*/*",
-            "out/native-a57/root-v1/tree/patches",
         ],
         allow_empty = True,
         exclude = ["bazel-*"],

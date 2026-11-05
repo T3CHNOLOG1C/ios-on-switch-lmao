@@ -1,0 +1,6 @@
+# Our change to Apple's libpthread (MODULE.bazel's @libpthread applies it): the kernel half's addresses explicit.
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
+exports_files(["explicit-kernel-address.patch"])

@@ -1,13 +1,13 @@
-"""snapshot.py --boot DIR --gpu DIR NAME: copy the built boot entry and Metal bundle to out/boot/lkg/<NAME> in the
-checkout (switchroot/, bootloader/, overlay/ and gpu/, the layout deploy-sd.sh's PKG= took), for rollback and for
-deploying exactly that build later:
+"""snapshot.py --boot DIR --gpu DIR NAME: copy the built boot entry and Metal bundle to <state>/lkg/<NAME>, where
+<state> is ~/Library/Application Support/ioswitch ($IOSWITCH_HOME overrides it), outside every checkout
+(switchroot/, bootloader/, overlay/ and gpu/), for rollback and for deploying exactly that build later:
 
     bazel run //boot:snapshot -- 1900-r9-something
-    bazel run //deploy:sd -- disk4 --yes --stage-gpu \\
-        --boot-package=$PWD/out/boot/lkg/1900-r9-something --gpu-bundle=$PWD/out/boot/lkg/1900-r9-something/gpu
+    LKG="$HOME/Library/Application Support/ioswitch/lkg/1900-r9-something"
+    bazel run //deploy:sd -- disk4 --yes --stage-gpu --boot-package="$LKG" --gpu-bundle="$LKG/gpu"
 
 The snapshot also keeps the build's kernel.macho, which names the unslid kernel addresses in panics and in the
-"IOSwitch kprof" lines: `xcrun atos -o out/boot/lkg/<NAME>/kernel.macho -arch arm64 <addr>...`.
+"IOSwitch kprof" lines: `xcrun atos -o "$LKG/kernel.macho" -arch arm64 <addr>...`.
 
 Refuses to overwrite an existing snapshot."""
 import argparse
@@ -16,6 +16,11 @@ import os
 import shutil
 import sys
 from pathlib import Path
+
+
+def state_dir():
+    """Where the tools keep what is not the repository's: ~/Library/Application Support/ioswitch, or $IOSWITCH_HOME."""
+    return Path(os.environ.get("IOSWITCH_HOME") or Path.home() / "Library/Application Support/ioswitch")
 
 
 def located(path):
@@ -38,8 +43,7 @@ def main():
     args = parser.parse_args()
     if "/" in args.name or args.name.startswith("."):
         sys.exit("snapshot name must be a plain directory name")
-    workspace = Path(os.environ.get("BUILD_WORKSPACE_DIRECTORY") or sys.exit("run with bazel run"))
-    target = workspace / "out/boot/lkg" / args.name
+    target = state_dir() / "lkg" / args.name
     if target.exists():
         sys.exit("{} exists: pick another name".format(target))
     boot = located(args.boot)

@@ -145,8 +145,9 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
-# bazel run //boot:snapshot -- <name>: this build's boot entry and Metal bundle as out/boot/lkg/<name> (rollback, or
-# deploy exactly that build later with //deploy:sd --boot-package=... --gpu-bundle=...).
+# bazel run //boot:snapshot -- <name>: this build's boot entry and Metal bundle as <state>/lkg/<name> (<state>: ~/Library/
+# Application Support/ioswitch, or $IOSWITCH_HOME), for rollback or to deploy exactly that build later with //deploy:sd
+# --boot-package=... --gpu-bundle=....
 py_binary(
     name = "snapshot",
     srcs = ["//tools/package:snapshot.py"],

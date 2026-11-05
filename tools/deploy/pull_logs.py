@@ -4,7 +4,8 @@
     bazel run //deploy:pull_logs -- <diskN> [--out DIR] [--no-logarchive] [--no-harvest] [--no-csstore] [--no-launchd]
                                             [--no-eject]
 
-Copies into <out> (default <workspace>/out/switch/device-logs/boot-<MMDD-HHMM>):
+Copies into <out> (default <state>/device-logs/boot-<MMDD-HHMM>, <state> being ~/Library/Application Support/ioswitch or
+$IOSWITCH_HOME: outside every checkout):
   diagnostics/, uuidtext/               the unified log (Data db/), and <out>/boot.logarchive built from them
                                         (`/usr/bin/log show --archive <out>/boot.logarchive --style compact --info --debug`)
   launchd.log                           (--no-launchd skips it)
@@ -49,6 +50,11 @@ HARVEST = None
 WEBKIT_IDS = ("com.apple.WebKit.WebContent", "com.apple.WebKit.Networking", "com.apple.WebKit.GPU",
               "com.apple.WebKit.WebContent.CaptivePortal", "WebContentExtension.appex", "com.apple.fskit.exfat")
 BACKBOARDD_CACHE = "m2v/System_6C7A65AF-CB18-421C-A07A-D724B05A7AB6_Library_Caches_m2v"
+
+
+def state_dir():
+    """Where the tools keep what is not the repository's: ~/Library/Application Support/ioswitch, or $IOSWITCH_HOME."""
+    return Path(os.environ.get("IOSWITCH_HOME") or Path.home() / "Library/Application Support/ioswitch")
 
 
 def workspace():
@@ -301,7 +307,7 @@ def main(argv=None):
         volume = data_volume(card, spec["volumes"]["data"]["uuid"])
         if not volume:
             raise host.HostError("no iPad Data volume {} on {}".format(spec["volumes"]["data"]["uuid"], card.disk))
-        out = Path(args.out or workspace() / "out/switch/device-logs" / time.strftime("boot-%m%d-%H%M"))
+        out = Path(args.out or state_dir() / "device-logs" / time.strftime("boot-%m%d-%H%M"))
         with cards.mounted(volume, log) as data:
             pull(data, out, log, logarchive=not args.no_logarchive, harvest=not args.no_harvest,
                  csstore=not args.no_csstore, launchd=not args.no_launchd, corpus=args.corpus,

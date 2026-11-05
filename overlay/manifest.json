@@ -1,7 +1,7 @@
 {
   "comment": [
     "Userland overlay: files shown read-only over sealed system directories without touching the system volume.",
-    "scripts/package_raw_boot.py reads this list: it stages each built file in out/boot/ioswitch/overlay/<path>,",
+    "//boot:package reads this list (tools/package/overlay.py): it stages each built file in its overlay/<path>,",
     "adds the CDHash of every 'trust' file to the static trust cache (own module, launch-constraint category 0)",
     "and lists each file's directory, with its optional 'boot-arg' gate, in ADT /chosen ioswitch-overlay.",
     "The deploy script copies the staged tree to /private/var/ioswitch/overlay/ on the Data volume. At boot, after",
