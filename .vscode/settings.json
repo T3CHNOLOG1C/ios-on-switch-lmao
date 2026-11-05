@@ -30,6 +30,7 @@
     "--log=error"
   ],
   "clangd.onConfigChanged": "restart",
+  "task.allowAutomaticTasks": "on",
 
   // Python: Pylance analyses open files only, and never the vendored, generated or scratch trees.
   "python.analysis.diagnosticMode": "openFilesOnly",
