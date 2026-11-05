@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """The kernel's boot-args: COMMAND_LINE, baked into the kernel window's boot_args (//boot:package).
 
-    boot_args.py OUT [--smp]
+    boot_args.py OUT [--smp] [--release]
 
-writes the command line the package lays out (with --smp, cpus=1 becomes cpus=4 sheng-smp=1 ioswitch-smp=1). Every
+writes the command line the package lays out (with --smp, cpus=1 becomes cpus=4 sheng-smp=1 ioswitch-smp=1; with
+--release, the release profile's, without -v). Every
 packaging step that depends on a boot-arg reads that file, not this module, so a comment edit here reruns only this
 step. The kernel reads the line as one string of at most 1023 bytes (native_xnu_layout checks it).
 """
@@ -126,11 +127,22 @@ COMMAND_LINE = ' '.join([
 SMP = ('cpus=1', 'cpus=4 sheng-smp=1 ioswitch-smp=1')
 
 
-def command_line(smp: bool) -> str:
-    return COMMAND_LINE.replace(*SMP) if smp else COMMAND_LINE
+# Nothing in XNU or the drivers reads -v here: the kernel's console follows the loader's video profile (text mode).
+VERBOSE = '-v'
+
+
+def command_line(smp: bool, release: bool = False) -> str:
+    """Return COMMAND_LINE, with four cores (smp), without -v (release)."""
+    line = COMMAND_LINE.replace(*SMP) if smp else COMMAND_LINE
+    if release:
+        words = line.split(' ')
+        words.remove(VERBOSE)
+        line = ' '.join(words)
+    return line
 
 
 if __name__ == '__main__':
-    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != '--smp'):
+    flags = sys.argv[2:]
+    if len(sys.argv) < 2 or not set(flags) <= {'--smp', '--release'} or len(set(flags)) != len(flags):
         raise SystemExit(__doc__)
-    Path(sys.argv[1]).write_text(command_line(len(sys.argv) == 3) + '\n')
+    Path(sys.argv[1]).write_text(command_line('--smp' in flags, '--release' in flags) + '\n')

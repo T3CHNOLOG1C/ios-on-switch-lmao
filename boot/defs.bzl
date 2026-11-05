@@ -118,10 +118,12 @@ def _boot_package_impl(ctx):
         return ctx.actions.declare_file(name + "_work/" + path)
 
     smp = ctx.attr._smp[BuildSettingInfo].value
+    release = ctx.attr._profile[BuildSettingInfo].value == "release"
 
     # --- boot-args, overlay plan, ADT ------------------------------------------------------------------------------
     boot_args = out("boot-args.txt")
-    _run(ctx, ctx.executable._boot_args, [boot_args.path] + (["--smp"] if smp else []), [], [boot_args], "BootArgs", "Writing the boot-args")
+    flags = (["--smp"] if smp else []) + (["--release"] if release else [])
+    _run(ctx, ctx.executable._boot_args, [boot_args.path] + flags, [], [boot_args], "BootArgs", "Writing the boot-args")
 
     # Manifest source -> file: the Mach-Os the trust module may name, then every other overlay file.
     binaries = {source: _one(target, "overlay binary") for target, source in ctx.attr.overlay_binaries.items()}
@@ -365,6 +367,7 @@ boot_package = rule(
         "loader_include_markers": attr.label_list(allow_files = True, doc = "one file per -I directory, in order"),
         "linker_script": attr.label(mandatory = True, allow_single_file = True),
         "_gpu_trustcache": attr.label(default = "//boot:gpu_trustcache"),
+        "_profile": attr.label(default = "//bazel:profile"),
         "_smp": attr.label(default = "//boot:smp"),
         "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
         "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
