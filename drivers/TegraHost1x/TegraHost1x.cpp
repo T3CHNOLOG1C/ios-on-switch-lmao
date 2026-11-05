@@ -215,7 +215,7 @@ void syncConfigure()
 }
 
 // Before any engine behind host1x is proven, a missing interrupt is a bring-up failure (one line, nothing published),
-// not a panic: host1x comes up by default for NVDEC and has never run on this board.
+// not a panic: host1x comes up by default for NVDEC, and an unproven engine must not stop the boot.
 bool attachInterrupt()
 {
     gLoop = IOWorkLoop::workLoop();
@@ -376,7 +376,7 @@ extern "C" int tegra_host1x_submit(const uint32_t *words, uint32_t count)
     const uint32_t room = (get + kPushBytes - gPut - 4) % kPushBytes;
     // A job must not straddle the RESTART slot: Linux's push buffer only holds two-word GATHERs, but these are the
     // job's own opcodes, and a RESTART landing inside an opcode's data is taken as data, so the command processor runs
-    // on to DMAEND and stops (r7p5: DMAGET 0x4004, DMAPUT 0x84, fence never reached). Such a job starts at 0, the rest
+    // on to DMAEND and stops (DMAGET 0x4004, DMAPUT 0x84, the fence never reached). Such a job starts at 0, the rest
     // of the buffer NOPs (host1x_opcode_nop: NONINCR, count 0) up to the RESTART.
     const uint32_t tail = kPushBytes - gPut, bytes = count * 4;
     const uint32_t pad = bytes > tail ? tail : 0;
@@ -457,8 +457,7 @@ extern "C" void tegra_host1x_resume(void)
 // reload once they are up. Clients quiesce in the reverse order of registration and reload in order.
 // Registration may race (each engine registers from its own bring-up thread), so it is serialised by a lock: the
 // entry is written, then published by a release store of the count the sleep agent reads, so the agent never calls a
-// half-written entry and a fifth client can never write past the table. (Before NVJPG, three clients shared a
-// check-then-increment that two racing registrations could both pass.)
+// half-written entry and a fifth client can never write past the table.
 namespace {
 constexpr uint32_t kSleepClients = 4;
 struct SleepClient {
