@@ -1900,8 +1900,10 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
 		*options = kIOMapAnywhere |
 			   ((bo->flags & TegraGM20BBoCoherent) ? kIOMapWriteCombineCache
 							       : kIOMapDefaultCache);
-		// Pool views are physical: IOKit enters their pages at map time already (populateDevicePager). A cached BO's
-		// buffer is prepared (BoAlloc), which kIOMapPrefault requires.
+		// Pool views are physical: IOKit puts their pages in the mapping's device pager at map time
+		// (populateDevicePager), but enters them in the pmap only for kernel_map, so a task's first CPU touch of each
+		// 4 KiB still faults (the "device" class on the kprof faults line), and IOKit drops kIOMapPrefault for device
+		// pager memory. A cached BO's buffer is prepared (BoAlloc), which kIOMapPrefault requires.
 		if (bo->bmd && bo->view == bo->bmd && bo->bytes <= kPrefaultMaxBytes) {
 			*options |= kIOMapPrefault;
 			tgm_stats_prefault(bo->bytes);
