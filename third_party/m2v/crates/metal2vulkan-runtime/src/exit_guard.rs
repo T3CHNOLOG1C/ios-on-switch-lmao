@@ -303,6 +303,8 @@ calls! {
     // (`Device::drain_queues`).
     QueueWaitIdle => c"vkQueueWaitIdle",
     ResetFences => c"vkResetFences",
+    // A command pool given back reset (`spares.rs`), on the completion thread.
+    ResetCommandPool => c"vkResetCommandPool",
     DestroyCommandPool => c"vkDestroyCommandPool",
     DestroyFence => c"vkDestroyFence",
     DestroySemaphore => c"vkDestroySemaphore",
@@ -470,7 +472,7 @@ pub(crate) const HOST_STEP: &[Call] = &[
 ];
 
 impl Call {
-    /// Its bit. The table fills 88 of the word's 128 (widened from 64): when it next outgrows the
+    /// Its bit. The table fills 90 of the word's 128 (widened from 64): when it next outgrows the
     /// word, widen the word (here, [`CALLED`], `PENDING` and the priming's calls); do not add a
     /// second table.
     pub(crate) fn bit(self) -> u128 {

@@ -1136,7 +1136,7 @@ impl Drop for CommandBufferShared {
         // state.
         let pool = lock(&self.state).pool.take();
         if let Some(pool) = pool {
-            self.device.shared().spares.give_command_pool(pool);
+            self.device.shared().spares.give_command_pool(self.device.shared(), pool);
         }
     }
 }
@@ -2723,7 +2723,7 @@ impl CommandBufferShared {
             // buffer that completed gives back its descriptor pools too, one that failed releases
             // them here.
             if let Some(pool) = state.pool.take() {
-                self.device.shared().spares.give_command_pool(pool);
+                self.device.shared().spares.give_command_pool(self.device.shared(), pool);
             }
             if state.status == CommandBufferStatus::Completed {
                 state.descriptors.give_back();

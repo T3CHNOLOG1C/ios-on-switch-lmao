@@ -20,7 +20,12 @@
 //! - **Descriptor pools are bounded.** At most [`DESCRIPTOR_POOLS`] descriptor pools of at most
 //!   [`DESCRIPTORS`] descriptors together; a descriptor pool given back past them releases the
 //!   oldest spares first, so the spares follow the shapes in use.
-//! - **Reset by the taker**, on the thread that encodes: the program's own, or one running the
+//! - **Reset as given back**, inside a section on the thread that completed the command buffer
+//!   (the completion thread's, or the dropping one's), so the encoding thread takes a pool ready
+//!   to record: turnip's reset of a frame's command buffers cost ~30 us of the program's thread
+//!   per commit on the host (m2vsim), about three times that in the guest. A pool whose reset
+//!   there failed is released; one given back as the process exits stays unreset and is
+//!   **reset by the taker**, on the thread that encodes: the program's own, or one running the
 //!   program's code (a handler). A section of the exit guard (a host step's recording on the
 //!   scheduler's thread) calls only the guard's table of entry points, which holds no reset, so a
 //!   command buffer or command recorded there makes its pools as before; what it made is given back
@@ -62,6 +67,8 @@ pub(super) struct CommandPool {
     family: u32,
     made: [Vec<vk::CommandBuffer>; 2],
     handed: [usize; 2],
+    /// Reset since a command buffer last recorded into it (as it was given back).
+    reset: bool,
 }
 
 impl CommandPool {
@@ -72,6 +79,7 @@ impl CommandPool {
             family,
             made: [Vec::new(), Vec::new()],
             handed: [0, 0],
+            reset: false,
         }
     }
 
@@ -127,6 +135,10 @@ impl Spares {
         let Some(mut pool) = take_command_pool(&mut lock(&self.command_pools), family) else {
             return Ok(None);
         };
+        if std::mem::take(&mut pool.reset) {
+            pool.reset_handed();
+            return Ok(Some(pool));
+        }
         // SAFETY: the pool is the caller's alone now, and nothing of it is pending: a command
         // buffer that completed gave it back.
         let reset = unsafe {
@@ -143,9 +155,25 @@ impl Spares {
         Ok(Some(pool))
     }
 
-    /// Keep `pool`, of a command buffer whose work ended or that was never submitted: nothing of
-    /// it is pending, and nothing else holds it. Never released here (the module docs).
-    pub(super) fn give_command_pool(&self, pool: CommandPool) {
+    /// Keep `pool` of `device`, of a command buffer whose work ended or that was never
+    /// submitted: nothing of it is pending, and nothing else holds it. Reset here, inside a
+    /// section; released only where that reset failed (the module docs).
+    pub(super) fn give_command_pool(&self, device: &DeviceShared, mut pool: CommandPool) {
+        if let Some(_busy) = exit_guard::enter() {
+            // SAFETY: nothing of the pool is pending, and nothing else holds it.
+            let reset = unsafe {
+                device
+                    .vk()
+                    .reset_command_pool(pool.raw, vk::CommandPoolResetFlags::empty())
+            };
+            exit_guard::called(exit_guard::Call::ResetCommandPool);
+            if reset.is_err() {
+                // SAFETY: as above.
+                unsafe { release::object(device.vk(), pool.raw) };
+                return;
+            }
+            pool.reset = true;
+        }
         keep_command_pool(&mut lock(&self.command_pools), pool);
     }
 
