@@ -46,6 +46,8 @@
 #include <kern/thread.h>
 #include <string.h>
 #include "../TegraHost1x/TegraHost1x.h"
+#include "../TegraSMMU/TegraSMMU.h"
+#include "../TegraSMMU/TegraSMMUDomain.h"
 #include "TegraVIC.h"
 
 extern "C" {
@@ -65,7 +67,7 @@ constexpr vm_offset_t kCarPA = 0x60006000, kPmcPagePA = 0x7000E000, kMcPA = 0x70
 constexpr uint32_t kPmcOffset = 0x400, kPartition = 23;  // TEGRA_POWERGATE_VIC
 constexpr uint64_t kArenaBytes = 1ull << 20;
 constexpr uint32_t kNvdecWaitMs = 20000;
-constexpr uint32_t kAsid = 127;
+constexpr uint32_t kAsid = TEGRA_SMMU_ASID_VIC;
 
 enum : uint32_t {  // clock and reset controller, X bank
     CLK_OUT_ENB_X = 0x280,
@@ -82,22 +84,10 @@ enum : uint32_t {  // clock and reset controller, X bank
     VIC_DIV_1 = 0,
 };
 enum : uint32_t { PWRGATE_TOGGLE = 0x30, REMOVE_CLAMPING = 0x34, PWRGATE_STATUS = 0x38, TOGGLE_START = 1u << 8 };
-enum : uint32_t {
-    MC_SMMU_PTB_ASID = 0x1c,
-    MC_SMMU_PTB_DATA = 0x20,
-    MC_SMMU_TLB_FLUSH = 0x30,
-    MC_SMMU_PTC_FLUSH = 0x34,
+enum : uint32_t {  // the SMMU's own registers are TegraSMMU.h's
     MC_HOTRESET_CTRL = 0x200,
     MC_HOTRESET_VIC = 1u << 18,
-    MC_SMMU_TRANSLATION_ENABLE_3 = 0x234,
-    TRANSLATION_VIC = (1u << 12) | (1u << 13),  // vicsrd, vicswr
-    MC_SMMU_VIC_ASID = 0x284,
-    SMMU_ASID_ENABLE = 1u << 31,
-    TLB_FLUSH_ASID_MATCH = 1u << 31,
-    SMMU_READ = 1u << 31,
-    SMMU_WRITE = 1u << 30,
-    SMMU_NONSECURE = 1u << 29,
-    SMMU_PDE_NEXT = 1u << 28,
+    TRANSLATION_VIC = (1u << 12) | (1u << 13),  // vicsrd, vicswr in TRANSLATION_ENABLE_3
 };
 enum : uint32_t {  // VIC private registers
     THI_SLCG_OVERRIDE_LOW = 0x8c,
@@ -147,8 +137,7 @@ char gLine[256];
 constexpr uint32_t kWindowTables = (uint32_t)(kTegraVICWindowBytes >> 22);  // 4 MiB per table
 constexpr uint32_t kIdentityTables = 4;  // the arena and the firmware: at most two 4 MiB sections each
 constexpr uint32_t kTables = 1 + TEGRA_VIC_WINDOWS * kWindowTables + kIdentityTables;
-uint32_t *gPd;
-uint32_t gIdentityUsed;
+TegraSMMUDomain gDomain;  // directory = page 0, the windows' tables pages 1.., then the identity tables
 uint32_t gWindowMapped[TEGRA_VIC_WINDOWS];  // pages mapped from each window's start
 
 // The job engine. A job's wait is bounded by kQueueUs (VIC shares host1x channel 0 with NVDEC and NVENC, whose queued
@@ -289,61 +278,48 @@ bool parse(const uint8_t *fw, size_t length, Image *image)
            image->fceSize <= image->size - image->fceData;
 }
 
-// --- SMMU domain -----------------------------------------------------------------------------------------------
+// --- SMMU domain (TegraSMMUDomain.h; the registers under TegraSMMU.h's lock) ---------------------------------------
 inline uint32_t *table(uint32_t index)
 {
-    return (uint32_t *)(gTables.va + (uint64_t)index * 4096);
+    return gDomain.table(index);
 }
-inline uint64_t tablePa(uint32_t index)
+
+// The table entries just written, to memory (the SMMU does not snoop the CPU's caches).
+void cleanDomain()
 {
-    return gTables.pa + (uint64_t)index * 4096;
+    uintptr_t low, high;
+    if (gDomain.takeDirty(&low, &high)) cacheOp<false>(reinterpret_cast<const void *>(low), high - low);
 }
 
 void smmuFlush()
 {
-    w32(gMc, MC_SMMU_PTC_FLUSH, 0);  // all
-    (void)r32(gMc, MC_SMMU_PTB_ASID);
-    w32(gMc, MC_SMMU_TLB_FLUSH, TLB_FLUSH_ASID_MATCH | (kAsid << 24));  // this ASID, every address
-    (void)r32(gMc, MC_SMMU_PTB_ASID);
-}
-
-// The page table entry for `iova` (its table is installed on first use; the windows' tables are fixed).
-uint32_t *pte(uint64_t iova)
-{
-    const uint32_t pdi = (uint32_t)(iova >> 22);
-    if (!(gPd[pdi] & SMMU_PDE_NEXT)) {
-        if (gIdentityUsed == kIdentityTables) return nullptr;
-        const uint32_t index = 1 + TEGRA_VIC_WINDOWS * kWindowTables + gIdentityUsed++;
-        gPd[pdi] = (uint32_t)(tablePa(index) >> 12) | SMMU_READ | SMMU_WRITE | SMMU_NONSECURE | SMMU_PDE_NEXT;
-        cacheOp<false>(&gPd[pdi], 4);
-    }
-    const uint64_t index = (((uint64_t)(gPd[pdi] & 0x3fffff) << 12) - gTables.pa) / 4096;  // every table is ours
-    return &table((uint32_t)index)[(iova >> 12) & 1023];
+    tegra_smmu_flush(kAsid);
 }
 
 bool identity(const TegraVICBuffer &b, bool writable)
 {
-    for (uint64_t at = b.pa; at < b.pa + b.size; at += 4096) {
-        uint32_t *p = pte(at);
-        if (!p) return false;
-        *p = (uint32_t)(at >> 12) | SMMU_READ | SMMU_NONSECURE | (writable ? SMMU_WRITE : 0);
-        cacheOp<false>(p, 4);
-    }
-    return true;
+    return gDomain.identity(b.pa, b.size, writable);
 }
 
-// The directory, the windows' tables (fixed, empty) and the identity maps; then the ASID's directory and the swgroup.
+// The directory, the windows' tables (fixed, empty; installed first, so they are the consecutive pages 1..) and the
+// identity maps; then the ASID's directory and the swgroup.
 bool smmuSetUp()
 {
-    gPd = table(0);
+    if (!gDomain.init(gTables.va, gTables.pa, kTables)) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL the SMMU table buffer at %#llx cannot hold a directory",
+                 (unsigned long long)gTables.pa);
+        return false;
+    }
     for (uint32_t w = 0; w < TEGRA_VIC_WINDOWS; w++)
-        for (uint32_t t = 0; t < kWindowTables; t++) {
-            const uint64_t iova = kTegraVICWindowBase + w * kTegraVICWindowBytes + ((uint64_t)t << 22);
-            gPd[iova >> 22] = (uint32_t)(tablePa(1 + w * kWindowTables + t) >> 12) | SMMU_READ | SMMU_WRITE |
-                              SMMU_NONSECURE | SMMU_PDE_NEXT;
+        if (!gDomain.reserve(kTegraVICWindowBase + w * kTegraVICWindowBytes, kTegraVICWindowBytes)) {
+            snprintf(gLine, sizeof(gLine), "V1 FAIL no SMMU tables for window %u", w);
+            return false;
         }
+    const bool identities = identity(gFirmware, false) && identity(gArena, true);
     cacheOp<false>(gTables.va, gTables.size);
-    if (!identity(gFirmware, false) || !identity(gArena, true)) {
+    uintptr_t low, high;
+    gDomain.takeDirty(&low, &high);  // all of it was just cleaned
+    if (!identities) {
         snprintf(gLine, sizeof(gLine), "V1 FAIL kernel buffers need more than %u identity tables", kIdentityTables);
         return false;
     }
@@ -353,42 +329,19 @@ bool smmuSetUp()
 // Programs the ASID's directory and points the swgroup at it (also after SC7, which resets the MC).
 bool smmuAttach()
 {
-    if (r32(gMc, MC_SMMU_VIC_ASID) & SMMU_ASID_ENABLE && (r32(gMc, MC_SMMU_VIC_ASID) & 0x7f) != kAsid) {
-        snprintf(gLine, sizeof(gLine), "V1 FAIL the vic swgroup is already translated by ASID %u (MC 0x284 = %#x)",
-                 r32(gMc, MC_SMMU_VIC_ASID) & 0x7f, r32(gMc, MC_SMMU_VIC_ASID));
+    char why[160];
+    if (tegra_smmu_attach(kAsid, gDomain.ptb(), TEGRA_SMMU_VIC_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_3, TRANSLATION_VIC,
+                          why, sizeof(why))) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL vic swgroup: %s", why);
         return false;
     }
-    const uint32_t ptb = (uint32_t)(gTables.pa >> 12) | SMMU_READ | SMMU_WRITE | SMMU_NONSECURE;
-    w32(gMc, MC_SMMU_PTB_ASID, kAsid);
-    w32(gMc, MC_SMMU_PTB_DATA, ptb);
-    (void)r32(gMc, MC_SMMU_PTB_ASID);
-    w32(gMc, MC_SMMU_PTB_ASID, kAsid);
-    if (r32(gMc, MC_SMMU_PTB_DATA) != ptb) {
-        snprintf(gLine, sizeof(gLine), "V1 FAIL ASID %u directory did not take (PTB_DATA %#x, wrote %#x)", kAsid,
-                 r32(gMc, MC_SMMU_PTB_DATA), ptb);
-        return false;
-    }
-    smmuFlush();
-    w32(gMc, MC_SMMU_TRANSLATION_ENABLE_3, r32(gMc, MC_SMMU_TRANSLATION_ENABLE_3) | TRANSLATION_VIC);
-    w32(gMc, MC_SMMU_VIC_ASID, SMMU_ASID_ENABLE | kAsid);
-    (void)r32(gMc, MC_SMMU_VIC_ASID);
-    if (r32(gMc, MC_SMMU_VIC_ASID) != (SMMU_ASID_ENABLE | kAsid)) {
-        snprintf(gLine, sizeof(gLine), "V1 FAIL vic swgroup ASID did not take (MC 0x284 = %#x)",
-                 r32(gMc, MC_SMMU_VIC_ASID));
-        return false;
-    }
-    smmuFlush();
     return true;
 }
 
 void smmuDetach()
 {
     if (!gMc) return;
-    w32(gMc, MC_SMMU_VIC_ASID, 0);
-    (void)r32(gMc, MC_SMMU_VIC_ASID);
-    w32(gMc, MC_SMMU_PTB_ASID, kAsid);
-    w32(gMc, MC_SMMU_PTB_DATA, 0);
-    smmuFlush();
+    tegra_smmu_detach(kAsid, TEGRA_SMMU_VIC_ASID);
 }
 
 // --- Power, clock, falcon ----------------------------------------------------------------------------------------
@@ -706,10 +659,10 @@ extern "C" uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages,
     const uint32_t limit = (uint32_t)(kTegraVICWindowBytes >> 12);
     if (window >= TEGRA_VIC_WINDOWS || count > limit) return 0;
     uint32_t *pt = table(1 + window * kWindowTables);  // the window's tables are consecutive pages
-    const uint32_t attr = SMMU_READ | SMMU_NONSECURE | (writable ? SMMU_WRITE : 0);
-    for (uint32_t i = 0; i < count; i++) pt[i] = (uint32_t)(pages[i] >> 12) | attr;
+    for (uint32_t i = 0; i < count; i++) pt[i] = TegraSMMUDomain::entry(pages[i], writable);
     for (uint32_t i = count; i < gWindowMapped[window]; i++) pt[i] = 0;
-    cacheOp<false>(pt, (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) * 4);
+    cacheOp<false>(pt,
+                   (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) * 4);  // pages in a row
     gWindowMapped[window] = count;
     smmuFlush();
     return base;
@@ -727,10 +680,11 @@ extern "C" void tegra_vic_window_clear(uint32_t window)
 
 extern "C" void tegra_vic_identity_override(uint64_t iova, uint64_t pa)
 {
-    uint32_t *p = pte(iova);
+    uint32_t *p = gDomain.pte(iova, true);
     if (!p) return;
-    *p = (uint32_t)(pa >> 12) | SMMU_READ | SMMU_WRITE | SMMU_NONSECURE;
-    cacheOp<false>(p, 4);
+    *p = TegraSMMUDomain::entry(pa, true);
+    gDomain.touch(p, sizeof(*p));
+    cleanDomain();
     smmuFlush();
 }
 
