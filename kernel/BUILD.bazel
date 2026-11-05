@@ -366,6 +366,7 @@ kernel_archive(
 # script assembled it for these options
 xnu_kernel(
     name = "kernel_unprelinked",
+    extra_exports = ["prelink.exports"],
     inputs = [
         ":corecrypto",
         ":libArmDTPlatform",

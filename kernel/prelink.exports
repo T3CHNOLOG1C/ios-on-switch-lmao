@@ -1,0 +1,8 @@
+# Names the prelink (tools/prelink/native_prelink.py) binds in the native kernel beyond XNU's KPI exports. A RELEASE
+# kernel links with an export list (all-kpi.exp, xnu_kernel's extra_exports), and a global left off it loses N_EXT,
+# which the prelink reads. DEVELOPMENT links without a list and exports every global anyway.
+# emit_prelink.py CUT_STUB (drivers/SwitchUSB): the zero word a cut dependency's metaclass pointers are rebound to.
+_ioswitch_prelink_cut_null
+# The ABI markers emit_prelink.py checks the native kernel for (kits/NativePrelink's XNU patches).
+_kalloc_sparse_prelink_index_version
+_native_prelink_security_init_version

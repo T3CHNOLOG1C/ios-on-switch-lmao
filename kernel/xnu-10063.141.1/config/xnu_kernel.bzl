@@ -155,8 +155,8 @@ xnu_exports = rule(
 
 # --- The link ----------------------------------------------------------------------------------------------------
 def _xnu_kernel_impl(ctx):
-    out = ctx.actions.declare_file(ctx.attr.out)
     config = ctx.attr.config
+    out = ctx.actions.declare_file(ctx.attr.out or "build/xnu/mach.{}.bcm2837.unstripped.noctf".format(config.lower()))
     objdir = "{}/{}_ARM64_BCM2837".format(_MAKE_OBJROOT, config)
     farm = []  # (file, path below the link tree's root)
     filelist = []
@@ -227,10 +227,11 @@ def _xnu_kernel_impl(ctx):
 
     kpi = "{root}/" + objdir + "/all-kpi.exp" if [a for a in link if a.startswith("-Wl,-exported_symbols_list,")] else ""
     arguments = ctx.actions.args()
-    arguments.add_all([manifest, listing, out, objdir, " ".join(kernel.names), kpi, " ".join(archive_paths)])
+    extras = " ".join([f.path for f in ctx.files.extra_exports])
+    arguments.add_all([manifest, listing, out, objdir, " ".join(kernel.names), kpi, " ".join(archive_paths), extras])
     arguments.add_all(argv)
     ctx.actions.run_shell(
-        inputs = depset([manifest, listing] + [f for f, _ in farm] + [ctx.file._xcode_identity]),
+        inputs = depset([manifest, listing] + [f for f, _ in farm] + ctx.files.extra_exports + [ctx.file._xcode_identity]),
         outputs = [out],
         arguments = [arguments],
         # The link tree: make's object root (and SDK root, and the archives' paths) as links to the inputs, so the
@@ -238,7 +239,7 @@ def _xnu_kernel_impl(ctx):
         command = """set -e
 root="$PWD/$3.tree"
 manifest="$1"; listing="$2"; out="$PWD/$3"; cwd="$root/$4"; own="$5"; kpi="${{6//\\{{root\\}}/$root}}"
-archives="${{7//\\{{root\\}}/$root}}"; shift 7
+archives="${{7//\\{{root\\}}/$root}}"; extras=""; for e in $8; do extras="$extras $PWD/$e"; done; shift 8
 /usr/bin/perl -e 'use File::Path qw(make_path); my ($root, $here) = @ARGV[0, 1]; open(M, "<", $ARGV[2]) or die;
     while (<M>) {{ chomp; my ($src, $dst) = split /\\t/; my $to = "$root/$dst"; (my $dir = $to) =~ s,/[^/]*$,,;
     make_path($dir); symlink("$here/$src", $to) or die "$to: $!"; }}' "$root" "$PWD" "$manifest"
@@ -266,7 +267,7 @@ if [ -n "$kpi" ]; then
     # tree has no source for (the DART, SART and UAT translators, the PPL IOMMU calls, IOUnifiedAddressTranslator), which
     # no DEVELOPMENT kernel defines either. The list keeps its comments, its patterns and the names the link's inputs
     # define (after the LTO step: justlto.o, the machine-code objects, the archives) or alias; kpi.dropped lists the
-    # rest.
+    # rest. Then extra_exports: names the kernel exports beyond XNU's lists, which ld requires to be defined.
     {{ [ -e justlto.o ] && echo justlto.o
        if [ -e nonltolink.filelist ]; then cat nonltolink.filelist; else cat link.filelist; printf '%s\\n' $own; fi
        printf '%s\\n' $archives; }} > kpi.inputs
@@ -275,6 +276,7 @@ if [ -n "$kpi" ]; then
         FILENAME == ARGV[2] {{ if ($1 in d) d[$2] = 1; next }}
         /^[[:space:]]*#/ || /[*?[]/ || ($1 in d) {{ print; next }}
         NF {{ print $1 > dropped }}' kpi.defined "$cwd/all-alias.exp" "$kpi" > kpi.exp
+    for e in $extras; do /usr/bin/grep -v '^#' "$e" >> kpi.exp; done
     rm "$kpi"; mv kpi.exp "$kpi"
 fi
 {clangxx} "${{args[@]}}"
@@ -353,11 +355,15 @@ _xnu_kernel = rule(
             doc = "the components, in make's link order (link.filelist)",
         ),
         "config": attr.string(default = "DEVELOPMENT"),
+        "extra_exports": attr.label_list(
+            allow_files = [".exports"],
+            doc = "names (one per line, # comments) a RELEASE kernel exports beside XNU's KPI lists",
+        ),
         "inputs": attr.label_list(allow_files = True),
         "kernel_objects": attr.label(providers = [XnuObjectsInfo], default = XNU + "config:objects"),
         "kpi_list": attr.label(allow_single_file = True, default = XNU + "config:all_kpi_exp"),
         "modes": attr.string_list(),
-        "out": attr.string(default = "build/xnu/mach.development.bcm2837.unstripped.noctf"),
+        "out": attr.string(doc = "the kernel's path in the package (default: make's, build/xnu/mach.<config>.bcm2837.unstripped.noctf)"),
         "sdkroot": attr.label(allow_files = True, default = "//kernel/xnu-10063.141.1:sdkroot_files"),
         "symbolsets": attr.label(allow_single_file = True, default = XNU + "config:symbolsets_plist"),
         "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
