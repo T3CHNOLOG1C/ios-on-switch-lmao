@@ -1,9 +1,7 @@
 # drivers/SwitchAudio's S32 link on the host: SwitchAudioFormat.h's APE and codec register words against Linux's
 # formulas for that stream, and the plug-in's float32 <-> S32 conversions (hal/SwitchAudioConvert.h) with NEON, as on
 # the device, against the scalar fallback (switch_audio_format_test); the driver and plug-in use them, and the I2S clock
-# is still 47999.878 Hz on PLLA (switch_audio_source_test).
-#
-#   bazel test //drivers/SwitchAudio/test:all
+# is 47999.878 Hz on PLLA (switch_audio_source_test).
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
@@ -14,7 +12,6 @@ HEADERS = [
     "//drivers/SwitchAudio:hal/SwitchAudioConvert.h",
 ]
 
-# The flags the plain-C headers were always checked with.
 C_FLAGS = [
     "-O1",
     "-Wconversion",

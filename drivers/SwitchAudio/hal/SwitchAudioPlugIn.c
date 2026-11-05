@@ -8,11 +8,11 @@
 //    speaker device must have a tap stream (an input whose 'taps' is 1): every product's speaker policy sets
 //    "tap stream required" when VirtualAudio's expanseEnabled feature is on, as it is, and without one the speaker
 //    device throws ("TapStream is enabled by policy but not found") and plays nothing. Real hardware carries what
-//    the speaker plays there, for echo cancellation; this one is silence, as there was no reference before.
+//    the speaker plays there, for echo cancellation; this one is silence.
 //  - "SwitchAudioMic" (Thunderbolt): the mono input, the headset microphone on the jack (the Switch has no built-in
-//    one). An unknown UID with the Thunderbolt transport is a driver device with a generic input port (ptbi), as the
-//    single device was before; built-in devices with unknown UIDs would need Apple port descriptions, and a
-//    "Codec"-UID device is Apple's own codec (headphones, data-source microphones), not published here.
+//    one). An unknown UID with the Thunderbolt transport is a driver device with a generic input port (ptbi);
+//    built-in devices with unknown UIDs would need Apple port descriptions, and a "Codec"-UID device is Apple's own
+//    codec (headphones, data-source microphones), not published here.
 //  - "Hawking" (built in): one silent mono input, the Hawking port (phki) of the J120's routing tables, which
 //    otherwise put the null input in its place.
 // Speaker and microphone run on the service's one timeline (one clock domain, so their aggregate needs no drift
@@ -25,11 +25,11 @@
 // /Library/Audio/Tunings/J120/VAD/j120_speaker_*.austrip only gives each of those AUs its preset and bypass flag,
 // matched by subtype and occurrence. The system volume is software on this port: J120's routing database gives its
 // hardware part a 0..0 dB range, so VirtualAudio leaves the control below at 0 dB and sets vrq2's gain instead. With
-// their defaults the eight other AUs added about 20 dB and compressed after vrq2 (r7p5: PostDSP 7 to 13 dB over PreDSP
-// with -14 to -4 dB of volume, peaks clipping), so the speaker was loud at any volume and volume steps barely changed
-// it. ../tunings lists every AU of each J120 speaker chain, bypassed except the volume (vrq2; AUVolume in measurement),
+// their defaults the eight other AUs add about 20 dB and compress after vrq2 (PostDSP 7 to 13 dB over PreDSP at -14 to
+// -4 dB of volume, peaks clipping), so the speaker is loud at any volume and volume steps barely change it.
+// ../tunings lists every AU of each J120 speaker chain, bypassed except the volume (vrq2; AUVolume in measurement),
 // and the Data overlay shows those strips over J120's (tree/overlay/manifest.json): the speaker plays the mix times the
-// volume. The plug-in's own volume control was the hardware volume of the old Thunderbolt port (ptbo).
+// volume.
 //
 // Derived from UniXNU-sheng's hal/ShengAudioPlugIn.c (BSD-2-Clause-Patent), which plays on iPadOS 17.7.11 hardware;
 // its diagnostics, property trace and VirtualAudio rebinding are left out. What it established and this keeps:
@@ -95,7 +95,6 @@ static Float64 gTicksPerFrame;      // the service's clock (its control page), n
 static Float64 gHostTicksPerFrame;  // the host clock's nominal rate: Hawking's
 static uint64_t gZeroOrigin, gZeroSeed, gHawkingOrigin, gHawkingSeed;
 
-// ---- Kernel service ----------------------------------------------------------------------------------------------
 static int mapType(uint32_t type, void **out)
 {
     mach_vm_address_t address = 0;
@@ -170,7 +169,6 @@ static void cleanToMemory(const void *start, size_t bytes)
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
-// ---- Helpers -----------------------------------------------------------------------------------------------------
 static AudioStreamBasicDescription format(UInt32 channels)
 {
     AudioStreamBasicDescription f = {0};
@@ -209,7 +207,6 @@ static Float32 gain(void)
     return gVolume <= 0.0f ? 0.0f : powf(10.0f, toDb(gVolume) / 20.0f);
 }
 
-// ---- Object model --------------------------------------------------------------------------------------------
 static Boolean isDevice(AudioObjectID o)
 {
     return o == kSpeaker || o == kMic || o == kHawking;
@@ -239,7 +236,6 @@ static UInt32 usersOf(AudioObjectID device)
     return device == kSpeaker ? gSpeakerUsers : device == kMic ? gMicUsers : gHawkingUsers;
 }
 
-// ---- IUnknown and lifecycle --------------------------------------------------------------------------------------
 static HRESULT QueryInterface(void *self, REFIID uuid, LPVOID *out);
 static ULONG AddRef(void *self)
 {
@@ -309,7 +305,6 @@ static OSStatus AbortDeviceConfigurationChange(AudioServerPlugInDriverRef d, Aud
     return 0;
 }
 
-// ---- Properties --------------------------------------------------------------------------------------------------
 static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid,
                                 const AudioObjectPropertyAddress *a, UInt32 qs, const void *q, UInt32 inDataSize,
                                 UInt32 *outDataSize, void *outData);
@@ -562,7 +557,6 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
     return kAudioHardwareBadObjectError;
 }
 
-// ---- IO ----------------------------------------------------------------------------------------------------------
 // The play position now, in sample time on the service's timeline.
 static uint64_t nowFrames(void)
 {

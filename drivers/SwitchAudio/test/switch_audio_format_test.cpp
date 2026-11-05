@@ -1,4 +1,4 @@
-// SwitchAudio's S32 link (r17-audio): the APE and codec register words for S32_LE samples from memory to the RT5639,
+// SwitchAudio's S32 link: the APE and codec register words for S32_LE samples from memory to the RT5639,
 // and the plug-in's float32 <-> S32 conversions, as shipped (drivers/SwitchAudio/SwitchAudioFormat.h,
 // hal/SwitchAudioConvert.h, compiled as C through switch_audio_format_harness.c).
 //
@@ -58,11 +58,10 @@ std::vector<int32_t> mix(std::vector<int32_t> dst, const std::vector<float> &src
     return dst;
 }
 
-// --- Register words ------------------------------------------------------------------------------------------------
 TEST(SwitchAudioFormat, AdmaifWordsAreL4tS32)
 {
     for (uint32_t channels : {1u, 2u}) EXPECT_EQ(neon_h_admaif_cif(channels), linux_::admaif("S32_LE", channels));
-    // The format it replaces, for the record: PACK16 with 16-bit audio and client bits.
+    // S16_LE, for contrast: PACK16 with 16-bit audio and client bits.
     EXPECT_EQ(linux_::admaif("S16_LE", 2), (1u << 30) | 0x00113300u);
 }
 
@@ -98,7 +97,6 @@ TEST(SwitchAudioFormat, CodecWordsAreRt5640TwentyFourBit)
     EXPECT_FALSE(linux_::rt5640(32, kChannels, kRate, 256 * kRate).has_value());
 }
 
-// --- Conversions ---------------------------------------------------------------------------------------------------
 TEST(SwitchAudioFormat, FullScaleAndSaturation)
 {
     const float inf = std::numeric_limits<float>::infinity(), nan = std::numeric_limits<float>::quiet_NaN();
@@ -134,7 +132,7 @@ TEST(SwitchAudioFormat, EveryLengthNeonMatchesScalar)
 {
     std::mt19937_64 rng(17);
     std::uniform_real_distribution<double> sample(-1.3, 1.3), unit(0.0, 1.0);
-    std::uniform_int_distribution<int64_t> any(kInt32Min, kInt32Max - 1);  // Python's randrange(INT32_MIN, INT32_MAX)
+    std::uniform_int_distribution<int64_t> any(kInt32Min, kInt32Max - 1);
     EXPECT_EQ(kNeon.neon(), 1);
     EXPECT_EQ(kScalar.neon(), 0);
     std::vector<uint32_t> lengths;
@@ -185,7 +183,7 @@ TEST(SwitchAudioFormat, CaptureBackToFloat)
     EXPECT_EQ(neon_h_s32_to_float(1 << 30), 0.5f);
     EXPECT_EQ(neon_h_s32_to_float(0), 0.0f);
     std::mt19937_64 rng(5);
-    std::uniform_int_distribution<int32_t> codec(-(1 << 23), (1 << 23) - 1);  // randrange(-2^23, 2^23)
+    std::uniform_int_distribution<int32_t> codec(-(1 << 23), (1 << 23) - 1);
     for (int i = 0; i < 2000; ++i) {
         const int32_t v24 = codec(rng);  // the codec's 24 bits, top-aligned in the slot
         const int32_t sample = (int32_t)((uint32_t)v24 << 8);

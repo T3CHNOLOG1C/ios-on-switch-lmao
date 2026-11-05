@@ -36,7 +36,7 @@
 //    (dai-link-1: format i2s, no bitclock-master), stereo, 48 kHz. Samples are S32_LE from memory to the I2S
 //    (SwitchAudioFormat.h): 32-bit slots, BCLK 64 fs, and the codec reads 24 bits of each (I2S1 data length 24, BCLK
 //    64 fs), as rt5640_hw_params sets it for 24-bit samples in a 64-bit frame. (The DTB's dai-link says s16_le, BCLK
-//    32 fs: what L4T and this driver ran until r17-audio.) MCLK 256 fs = 12.288 MHz (mclk-fs 256) on AUD_MCLK = PMC
+//    32 fs, as L4T runs it.) MCLK 256 fs = 12.288 MHz (mclk-fs 256) on AUD_MCLK = PMC
 //    clk_out_1 <- extern1 <- PLLA_OUT0 (clk-tegra210.c init table); the codec runs from MCLK directly (sysclk source
 //    MCLK, pre-divider 1). Pins DAP1_FS/DIN/DOUT/SCLK (function i2s1), AUD_MCLK.
 //  - Clocks for 48 kHz (tegra_asoc_utils_alt.c): PLLA 368.64 MHz (T210B01 table, clk-tegra210b01.c:1789-1793:
@@ -136,7 +136,6 @@ IOReturn setHostClock(task_t task, uint64_t address)
     return result;
 }
 
-// ---- Tegra backend constants -----------------------------------------------------------------------------------
 constexpr unsigned kPeriods = 8;                                         // ADMA_CH_CONFIG_MAX_BUFS
 constexpr uint32_t kPeriodFrames = SWITCH_AUDIO_RING_FRAMES / kPeriods;  // 2048
 constexpr uint32_t kOutPeriodBytes = kOutBytes / kPeriods, kInPeriodBytes = kInBytes / kPeriods;
@@ -264,10 +263,8 @@ constexpr Pin kPins[] = {
     {0x214, 0x50},  // touch_rst_pv6: the headphone-detect net, no pull, tristate, input
     {0x28c, 0x05},  // pz4: rsvd1, pull-down, driven (codec LDO1_EN)
 };
-// 10-31 (every boot through r3v): with nothing in the jack INT_IRQ_ST read 0 at start and at every stats line, JD_STATUS
-// and GPIO2_STATUS both low, so every stream went to the headphone amplifier. Nothing in the boot chain (hekate,
-// U-Boot's pinmux table, TegraGPIO) muxed PV6, which sits on that net; L4T sets it as above. The value found is logged
-// with the first jack reading.
+// Nothing in the boot chain (hekate, U-Boot's pinmux table, TegraGPIO) muxes PV6; L4T sets it as above. The value
+// found is logged with the first jack reading.
 constexpr uint32_t kPinJackDetect = 0x214;
 constexpr uint32_t kPinFields = 0x7f;
 
@@ -352,7 +349,6 @@ enum : uint32_t {
     GICC_EOIR = 0x1010,
 };
 
-// ---- RT5639 -----------------------------------------------------------------------------------------------------
 constexpr unsigned kCodecBus = 1;
 constexpr uint8_t kCodecAddr = 0x1c;
 constexpr unsigned kCodecPower = TEGRA_GPIO(Z, 4), kCodecIrq = TEGRA_GPIO(BB, 4);
@@ -536,7 +532,6 @@ class SwitchAudio : public IOService {
         return static_cast<switch_audio_sample_t *>(memory[type]->getBytesNoCopy());
     }
 
-    // ---- Null backend -------------------------------------------------------------------------------------------
     // Playback up to now is "played"; clear it so the next turn of the ring mixes onto silence.
     void advance()
     {
@@ -564,7 +559,6 @@ class SwitchAudio : public IOService {
         source->setTimeoutMS(kTickMS);
     }
 
-    // ---- Tegra: clocks, pads, AHUB, ADMA, AGIC (once, at start) -----------------------------------------------------
     static volatile uint8_t *map(vm_offset_t pa, vm_size_t size, const char *what)
     {
         auto *base = reinterpret_cast<volatile uint8_t *>(ml_io_map(pa, size));
@@ -730,7 +724,6 @@ class SwitchAudio : public IOService {
         cascade->enable();
     }
 
-    // ---- Tegra: streams (audio work loop) --------------------------------------------------------------------------
     void softReset(uint32_t reg, const char *what)
     {
         w32(ahub, reg, 1);
@@ -774,9 +767,8 @@ class SwitchAudio : public IOService {
         control->out_written = 0;
         // I2S1 and ADMAIF1, each session in L4T's order (tegra210_i2s_alt.c): set_fmt (CTRL with master mode, I2S_EN),
         // hw_params (timing, data offset, CIF), then the DAPM PRE_PMU sw reset of each direction it powers up
-        // (tegra210_i2s_rx_stop/tx_stop), which keeps that configuration. 10-30 15:55: with the reset written first, at
-        // CTRL's reset default (slave), "I2S1 RX soft reset did not finish". Then the ADMAIF resets and
-        // tegra_admaif_hw_params.
+        // (tegra210_i2s_rx_stop/tx_stop), which keeps that configuration and needs master mode (i2sSoftReset). Then
+        // the ADMAIF resets and tegra_admaif_hw_params.
         w32(ahub, I2S_CTRL, kI2sCtrl);
         w32(ahub, I2S_ENABLE, 1);
         w32(ahub, I2S_TIMING, kI2sTiming);
@@ -863,15 +855,15 @@ class SwitchAudio : public IOService {
                 done, now, r32(ahub, I2S_RX_STATUS), r32(ahub, I2S_CTRL), r32(ahub, I2S_TIMING));
         }
     }
-    // switch-audio-stats: the period that just played, before it is cleared: its loudest sample (in 16-bit units, as
-    // the line has always shown it: 32767 is full scale), an underrun when the plug-in had not written up to its end,
-    // how far past it the plug-in had written (the write-ahead margin: the safety offset in use, less the IO thread's
-    // lateness), and how late this interrupt runs after the period's end on the I2S clock model the plug-in's zero
-    // time stamps use (anchor_host + frames * ticks_per_frame_q32). The model and the host timer both run from the
+    // switch-audio-stats: the period that just played, before it is cleared: its loudest sample (in 16-bit units:
+    // 32767 is full scale), an underrun when the plug-in had not written up to its end, how far past it the plug-in
+    // had written (the write-ahead margin: the safety offset in use, less the IO thread's lateness), and how late this
+    // interrupt runs after the period's end on the I2S clock model the plug-in's zero time stamps use
+    // (anchor_host + frames * ticks_per_frame_q32). The model and the host timer both run from the
     // 38.4 MHz oscillator, so the lag only holds the DMA's start offset and the interrupt latency: one that drifts
     // over a session means the time stamps do. The first kSettlePeriods of a start stay out of lead and lag (the audio
-    // server's first IO cycle comes after them: "under" has always counted one per start). (The plug-in's writes are
-    // already in this CPU-coherent mapping.)
+    // server's first IO cycle comes after them, so "under" counts one per start). (The plug-in's writes are already in
+    // this CPU-coherent mapping.)
     void notePlayed(const switch_audio_sample_t *slot, uint64_t done)
     {
         statFrames += kPeriodFrames;
@@ -983,7 +975,6 @@ class SwitchAudio : public IOService {
             r32(self->ahub, I2S_RX_STATUS), r32(self->ahub, I2S_ENABLE));
     }
 
-    // ---- RT5639 (codec work loop) ----------------------------------------------------------------------------------
     uint16_t codecRead(uint8_t reg)
     {
         uint8_t bytes[2] = {};
@@ -1052,7 +1043,6 @@ class SwitchAudio : public IOService {
         codecUpdate(MICBIAS, (3u << 9) | (1u << 11), 1u << 11);
         codecUpdate(IRQ_CTRL2, 1u << 11, 0);  // external microphone: no sticky over-current
         codecWrite(IRQ_CTRL1, 1u << 15);      // IRQ_JD_NOR
-        // Link and clocks.
         // Slave, normal BCLK, 24-bit, I2S; sysclk = MCLK; BCLK 64 fs, pre-divider 1 (256 fs) (SwitchAudioFormat.h).
         codecUpdate(I2S1_SDP, SWITCH_AUDIO_RT5640_SDP_MASK, SWITCH_AUDIO_RT5640_SDP);
         codecUpdate(GLB_CLK, 3u << 14, 0);
@@ -1275,7 +1265,7 @@ class SwitchAudio : public IOService {
     // STATUS and completed periods, I2S1 enable and RX (playback) status, ADMAIF1 TX status, the jack (INT_IRQ_ST,
     // bit 4 set = empty; PV6, 1 = empty) and route, and PWR_DIG1, PWR_ANLG1, PWR_MIXER, PWR_VOL, SPK_VOL, HP_VOL,
     // DAC1_DIG_VOL.
-    // r16-idle: the line runs while there is audio to report: the first window after boot, then from a stream's start
+    // The line runs while there is audio to report: the first window after boot, then from a stream's start
     // (codecRun arms it) until a window with no stream, no start, nothing moved and the codec powered down; that window
     // reads nothing, writes no line and leaves the timer off, so a silent console takes no stats wakeups.
     static void statsFired(OSObject *owner, IOTimerEventSource *sender)
@@ -1344,10 +1334,9 @@ class SwitchAudio : public IOService {
         // stays masked: the codec's IRQ reports the jack.
         if (!tegra_gpio_interrupt_nub(kJackDetect, TEGRA_GPIO_EDGE_BOTH))
             panic("SwitchAudio: cannot make PV6 a GPIO input");
-        // The jack is read first once its line has settled, with the IRQ already armed so no change is missed meanwhile.
-        // 10-31 14:17: read right after the setup above (and before the IRQ was armed), JD_STATUS said plugged with
-        // nothing in the jack and was never read again, so every stream went to the headphone amplifier and the speakers
-        // stayed silent. (Linux reads it from a work item and confirms a plug for a second: rt5640_detect_headset.)
+        // The jack is first read once its line has settled, with the IRQ already armed so no change is missed
+        // meanwhile: read right after the setup above, JD_STATUS says plugged with nothing in the jack. (Linux reads it
+        // from a work item and confirms a plug for a second: rt5640_detect_headset.)
         IOService *nub = tegra_gpio_interrupt_nub(kCodecIrq, TEGRA_GPIO_EDGE_BOTH);
         jackSource = nub ? IOInterruptEventSource::interruptEventSource(this, &SwitchAudio::jackEdge, nub, 0) : nullptr;
         if (!jackSource || codecLoop->addEventSource(jackSource) != kIOReturnSuccess) {
@@ -1364,7 +1353,6 @@ class SwitchAudio : public IOService {
         }
     }
 
-    // ---- Requests ------------------------------------------------------------------------------------------------
     static IOReturn requestGated(OSObject *owner, void *selector, void *, void *, void *)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
@@ -1548,7 +1536,6 @@ public:
     }
     IOReturn clientClose() override
     {
-        // The audio server went away: nothing feeds the rings any more.
         audio->request(SwitchAudioStopOutput);
         audio->request(SwitchAudioStopInput);
         terminate();

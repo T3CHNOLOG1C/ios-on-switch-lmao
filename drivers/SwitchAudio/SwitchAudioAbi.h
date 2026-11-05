@@ -4,9 +4,8 @@
  *
  * The plug-in opens the service, maps three memory types and starts and stops each direction. Memory type 0 is the
  * control page, 1 the playback ring, 2 the capture ring. Rings hold 32-bit little-endian signed interleaved samples
- * (S32_LE, full scale +-2^31; version 3, 16-bit before), ring_frames frames each; sample time t lives at frame
- * t % ring_frames. The Tegra backend hands them to the APE as they are (SwitchAudioFormat.h): the codec plays the top
- * 24 bits of each.
+ * (S32_LE, full scale +-2^31), ring_frames frames each; sample time t lives at frame t % ring_frames. The Tegra
+ * backend hands them to the APE as they are (SwitchAudioFormat.h): the codec plays the top 24 bits of each.
  *
  * Sample time 0 is host time anchor_host, and one frame lasts ticks_per_frame_q32 / 2^32 host ticks. The null backend
  * sets both once; the Tegra I2S backend sets anchor_host again each time the hardware starts (the host time its DMA

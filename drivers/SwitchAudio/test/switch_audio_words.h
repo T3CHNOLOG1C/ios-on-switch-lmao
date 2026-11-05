@@ -107,7 +107,7 @@ constexpr std::optional<Rt5640> rt5640(unsigned width, uint32_t channels, uint32
     return Rt5640{kSdpFmtMask | kI2sDlMask, sdp, kAddaMask, adda, 32u << bclkMs};
 }
 
-// An exact fraction (Python's fractions.Fraction for the clock checks), always reduced, denominator positive.
+// An exact fraction for the clock checks, always reduced, denominator positive.
 struct Fraction {
     __int128 n, d;
     static __int128 gcd(__int128 a, __int128 b)
@@ -131,7 +131,6 @@ struct Fraction {
     friend Fraction operator/(const Fraction &a, const Fraction &b) { return {a.n * b.d, a.d * b.n}; }
     friend Fraction operator+(const Fraction &a, const Fraction &b) { return {a.n * b.d + b.n * a.d, a.d * b.d}; }
     friend bool operator==(const Fraction &a, const Fraction &b) { return a.n == b.n && a.d == b.d; }
-    // floor(this), as Python's math.floor of a Fraction.
     __int128 floor() const { return n >= 0 ? n / d : -((-n + d - 1) / d); }
     double value() const { return (double)n / (double)d; }
 };

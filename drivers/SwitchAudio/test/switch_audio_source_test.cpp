@@ -1,6 +1,6 @@
 // SwitchAudio's driver and plug-in use the S32 link as switch_audio_format_test checks it: the driver programs
-// exactly SwitchAudioFormat.h's words (no hand-written duplicates), its I2S clock is still 47999.878 Hz on PLLA (its
-// own PLLA constants through the header's divider and rate helpers), and the ABI and plug-in are S32 throughout.
+// exactly SwitchAudioFormat.h's words (no hand-written duplicates), its I2S clock is 47999.878 Hz on PLLA (its own
+// PLLA constants through the header's divider and rate helpers), and the ABI and plug-in are S32 throughout.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -64,7 +64,7 @@ TEST(SwitchAudioSource, I2sClockIsASixteenthOfPllaOut0)
     EXPECT_EQ(divider, 30u);
     const Fraction bclk = pllaOut0 / (Fraction(divider, 2) + Fraction(1));  // 7.1 divider: ratio = value / 2 + 1
     const Fraction fs = bclk / Fraction(neon_h_bclk_fs());
-    EXPECT_TRUE(fs == plla / (Fraction(15, 2) * Fraction(32 * 32)));  // the 16-bit link's rate: unchanged
+    EXPECT_TRUE(fs == plla / (Fraction(15, 2) * Fraction(32 * 32)));
     EXPECT_EQ(std::round((fs.value() - 47999.878) * 1000), 0.0) << fs.value();
     // (The values fit 64 bits; the arithmetic is exact in 128.)
     EXPECT_EQ(

@@ -52,7 +52,7 @@ SWITCH_AUDIO_FN uint32_t switch_audio_admaif_cif(uint32_t channels)
     return switch_audio_cif(0, channels, channels, SWITCH_AUDIO_BITS_32, SWITCH_AUDIO_BITS_32);
 }
 /* I2S1 playback (AXBAR RX: XBAR stereo -> DAP stereo) and capture (AXBAR TX: DAP stereo -> XBAR mono, the left slot;
- * the codec puts IN1 on both), with the RX FIFO threshold this driver has always used. */
+ * the codec puts IN1 on both). */
 SWITCH_AUDIO_FN uint32_t switch_audio_i2s_rx_cif(void)
 {
     return switch_audio_cif(3, 2, 2, SWITCH_AUDIO_BITS_32, SWITCH_AUDIO_BITS_32);

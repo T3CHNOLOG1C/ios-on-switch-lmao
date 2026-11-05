@@ -6,7 +6,7 @@
  * scale, so two IO contexts on the device would sum (the service clears each period it plays). Full scale is 2^31:
  * +1.0 saturates to INT32_MAX, -1.0 is INT32_MIN, NaN is 0 (FCVTZS). With NEON one FMUL, one FCVTZS #31 (scale,
  * truncate and saturate in one) and one SQADD per four samples: about 4.5 Cortex-A57 cycles per stereo frame by
- * llvm-mca, against about 36 for the int16 loop it replaces (an FDIV per sample to read the ring back). */
+ * llvm-mca, against about 36 for an int16 loop (an FDIV per sample to read the ring back). */
 #ifndef SWITCH_AUDIO_CONVERT_H
 #define SWITCH_AUDIO_CONVERT_H
 #include <stdint.h>
