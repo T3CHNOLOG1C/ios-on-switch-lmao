@@ -9,7 +9,7 @@
 # Inputs: m2v (@m2v: steelbrain/metal2vulkan 720ef1ce + drivers/TegraGM20BMetal/patches/series), the bridge's
 # crates (@m2v_crates, from drivers/TegraGM20BMetal/bridge/Cargo.lock), Rust 1.98.0 and LLVM 23.1.4's llvm-as
 # (pinned downloads), Xcode (the declared host input), NVK and its host twin (//gpu/nvk: Mesa 77452b90 + the series,
-# built here), the Apple Metal libraries the seed and the raw pack read (@gpu_apple_libs: 21H461's OS volume's, QuartzCore's
+# built here), the Apple Metal libraries the seed and the raw pack read (@gpu_apple_libs: the IPSW kind's OS volume's, QuartzCore's
 # default.metallib among them, extracted from the IPSW) and what only the device makes (@gpu_device_data: its driver
 # records and Core Image's compiled kernels, a pinned tar). See bazel/gpu/deps.bzl.
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -183,7 +183,7 @@ metal_seed(
     hdrs = [METAL + ":frontend_headers"],
     host_bridge = ":bridge_host",
     libraries = "@gpu_apple_libs//:libraries",
-    libraries_tool = GM20B_METAL + ":precompile/libraries.py",
+    libraries_tool = GM20B_METAL + ":libraries",
     metal_header = METAL + ":NativeBridgeMetalFrontend.h",
     mock_iokit = GM20B_METAL + ":precompile/mock_iokit.c",
     names = ":library_names",

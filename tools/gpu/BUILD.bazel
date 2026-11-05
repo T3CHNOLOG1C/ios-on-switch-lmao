@@ -33,14 +33,12 @@ py_binary(
     deps = [":nvk_twin"],
 )
 
-# Runs the pack generator (--generator, the //out/.../TegraGM20BMetal:raw_pack library's rawpack.py).
+# Runs the pack generator (--generator, the //out/.../TegraGM20BMetal:raw_pack library's rawpack.py) with the twin
+# seed.py twin made.
 py_binary(
     name = "rawpack",
     srcs = ["rawpack.py"],
-    deps = [
-        ":nvk_twin",
-        "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:raw_pack",
-    ],
+    deps = ["//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:raw_pack"],
 )
 
 py_binary(

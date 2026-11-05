@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Generate the shared m2v shader cache seed for one build (the precompile half of the old build-tegra-gm20b-metal.py).
+"""The shared m2v shader cache seed for one build (the precompile half of the old build-tegra-gm20b-metal.py), as four
+steps of //gpu:seed (gpu/defs.bzl metal_seed), each its own action:
 
-    seed.py --xcode-env F --host-bridge <darwin libnative_metal_bridge.a> --mock-iokit mock_iokit.c --abi-header
-            TegraGM20BABI.h --precompile precompile.mm --frontend NativeBridgeMetalFrontend.mm --metal-header
-            NativeBridgeMetalFrontend.h --nvk <iOS dylib> --twin <host dylib> --qc default.metallib --root <dir>
-            --names names.json [--embedded <header>]... [--data <sha256>.metallib]... --corpus corpus.log
-            --libraries libraries.py [--records <driver record store>] --out <seed dir>
+    seed.py mock --xcode-env F --abi-header TegraGM20BABI.h --mock-iokit mock_iokit.c --out libmock_iokit.dylib
+    seed.py tool --xcode-env F --metal-header NativeBridgeMetalFrontend.h --precompile precompile.mm
+                 --frontend NativeBridgeMetalFrontend.mm --host-bridge <darwin libnative_metal_bridge.a>
+                 --mock libmock_iokit.dylib --out precompile
+    seed.py twin --nvk <iOS dylib> --twin <host dylib> --out libvulkan_nouveau.dylib   (the raw pack runs it too)
+    seed.py run  --xcode-env F --tool precompile --mock libmock_iokit.dylib --nvk libvulkan_nouveau.dylib
+                 --qc default.metallib --qc-sha256 H --root <dir> [--embedded <header>]... [--data <sha256>.metallib]...
+                 --corpus <resolved corpus.log> [--records <driver record store>] --out <seed dir>
+
+The corpus is resolved before the run by precompile/libraries.py resolve (its own action), so a corpus edit reruns that
+and the run, a frontend edit the tool and the run, an NVK edit the twin and the run.
 
 The cache the device would write with this build for the corpus's states, made on this Mac: every function
 specialization and render pipeline state of precompile/corpus.log, translated by this build's frontend and m2v
@@ -19,7 +26,8 @@ of one pipeline making named by what the making reads: those of the precompile's
 version, pipelineCacheUUID: this NVK's) whose envelope checks out join the seed's content directory beside the precompile's
 own (which win a name both have). They cover the makings no corpus state's creation predicts (a draw's variant) and those
 the precompile makes otherwise than the device; another NVK's records are left out.
-Gates (as before): the twin's .source must equal the iOS dylib's, and the QuartzCore metallib must be 21H461's.
+Gates (as before): the twin's .source must equal the iOS dylib's, and the QuartzCore metallib must be the IPSW kind's
+(--qc-sha256, bazel/ipsw/pins.bzl's quartzcore_metallib_sha256).
 """
 import argparse
 import hashlib
@@ -32,7 +40,6 @@ from pathlib import Path
 
 from tools.gpu.nvk_twin import make_twin
 
-QC_SHA256 = '606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9'   # 21H461 QuartzCore default.metallib
 CONTENT = '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'     # m2v's content directory
 
 
@@ -88,52 +95,56 @@ def store_view(store, root, embedded, data):
     return sum(1 for _ in (store / 'data').iterdir())
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    for name in ('xcode-env', 'host-bridge', 'mock-iokit', 'abi-header', 'precompile', 'frontend', 'metal-header',
-                 'nvk', 'twin', 'qc', 'root', 'names', 'corpus', 'libraries', 'out'):
-        parser.add_argument('--' + name, required=True)
-    parser.add_argument('--embedded', action='append', default=[])
-    parser.add_argument('--data', action='append', default=[])
-    parser.add_argument('--records')
-    args = parser.parse_args()
-    root = Path.cwd()
-    xcode = dict(line.split('=', 1) for line in Path(args.xcode_env).read_text().splitlines() if '=' in line)
-    work = root / '_seed_work'
-    if work.exists():
-        shutil.rmtree(work)
-    (work / 'home').mkdir(parents=True)
-    tool_env = {'PATH': '/usr/bin:/bin', 'DEVELOPER_DIR': xcode['DEVELOPER_DIR'], 'ZERO_AR_DATE': '1',
-                'HOME': str(work / 'home'), 'TMPDIR': os.environ.get('TMPDIR', str(work))}
+def _xcode_env(path, work):
+    xcode = dict(line.split('=', 1) for line in Path(path).read_text().splitlines() if '=' in line)
+    (work / 'home').mkdir(parents=True, exist_ok=True)
+    return {'PATH': '/usr/bin:/bin', 'DEVELOPER_DIR': xcode['DEVELOPER_DIR'], 'ZERO_AR_DATE': '1',
+            'HOME': str(work / 'home'), 'TMPDIR': os.environ.get('TMPDIR', str(work))}
 
-    def run(command, env=tool_env):
-        result = subprocess.run([str(c) for c in command], env=env, capture_output=True, text=True)
-        if result.returncode:
-            sys.exit('FAILED: %s\n%s%s' % (' '.join(map(str, command))[:600], result.stdout[-4000:], result.stderr[-6000:]))
-        return result.stdout + result.stderr
 
-    if hashlib.sha256(Path(args.qc).read_bytes()).hexdigest() != QC_SHA256:
-        sys.exit('%s is not 21H461\'s QuartzCore default.metallib' % args.qc)
+def _run(command, env):
+    result = subprocess.run([str(c) for c in command], env=env, capture_output=True, text=True)
+    if result.returncode:
+        sys.exit('FAILED: %s\n%s%s' % (' '.join(map(str, command))[:600], result.stdout[-4000:], result.stderr[-6000:]))
+    return result.stdout + result.stderr
 
-    prefix_maps = ['-ffile-prefix-map=%s=/ioswitch' % root]
-    run(['/usr/bin/xcrun', 'clang', '-O1', '-Wall', '-dynamiclib', *prefix_maps, '-I', Path(args.abi_header).parent,
-         args.mock_iokit, '-framework', 'IOKit', '-framework', 'CoreFoundation',
-         '-install_name', '@rpath/libmock_iokit.dylib', '-o', work / 'libmock_iokit.dylib'])
-    run(['/usr/bin/xcrun', 'clang++', '-O2', '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations', *prefix_maps,
-         '-I', Path(args.metal_header).parent, '-x', 'objective-c++', args.precompile, args.frontend, '-x', 'none',
-         args.host_bridge, '-L', work, '-lmock_iokit', '-Wl,-rpath,' + str(work), '-framework', 'Foundation',
-         '-framework', 'Metal', '-framework', 'IOSurface', '-framework', 'IOKit', '-o', work / 'precompile'])
+
+def mock(args, root, work):
+    env = _xcode_env(args.xcode_env, work)
+    _run(['/usr/bin/xcrun', 'clang', '-O1', '-Wall', '-dynamiclib', '-ffile-prefix-map=%s=/ioswitch' % root, '-I',
+          Path(args.abi_header).parent, args.mock_iokit, '-framework', 'IOKit', '-framework', 'CoreFoundation',
+          '-install_name', '@rpath/libmock_iokit.dylib', '-o', args.out], env)
+
+
+def tool(args, root, work):
+    """The precompile tool, linked against the mock IOKit beside it (the run puts the two side by side)."""
+    env = _xcode_env(args.xcode_env, work)
+    _run(['/usr/bin/xcrun', 'clang++', '-O2', '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations',
+          '-ffile-prefix-map=%s=/ioswitch' % root, '-I', Path(args.metal_header).parent, '-x', 'objective-c++',
+          args.precompile, args.frontend, '-x', 'none', args.host_bridge, '-L', Path(args.mock).parent, '-lmock_iokit',
+          '-Wl,-rpath,@executable_path', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface',
+          '-framework', 'IOKit', '-o', args.out], env)
+
+
+def twin(args, root, work):
     # The twin with the device's pipeline cache identity (tools/gpu/nvk_twin.py).
-    dylib = work / 'libvulkan_nouveau.dylib'
-    make_twin(args.nvk, args.twin, dylib, tool_env)
+    (work / 'home').mkdir()
+    make_twin(args.nvk, args.twin, args.out,
+              {'PATH': '/usr/bin:/bin', 'HOME': str(work / 'home'), 'TMPDIR': os.environ.get('TMPDIR', str(work))})
 
+
+def run(args, root, work):
+    env = _xcode_env(args.xcode_env, work)
+    if hashlib.sha256(Path(args.qc).read_bytes()).hexdigest() != args.qc_sha256:
+        sys.exit("%s is not the IPSW kind's QuartzCore default.metallib (%s)" % (args.qc, args.qc_sha256))
+    for name, path in (('precompile', args.tool), ('libmock_iokit.dylib', args.mock), ('libvulkan_nouveau.dylib', args.nvk)):
+        shutil.copyfile(path, work / name)
+        (work / name).chmod(0o755)
     store = work / 'store'
     print('library store: %d libraries made from bytes' % store_view(store, root / args.root, args.embedded, args.data))
-    corpus = work / 'corpus.log'
-    print(run([sys.executable, '-I', args.libraries, 'resolve', args.names, args.corpus, corpus]).rstrip())
     cache = work / 'cache'
-    env = dict(tool_env, MESA_SHADER_CACHE_DISABLE='true')
-    made = run([work / 'precompile', '--libs', store, dylib, cache, args.qc, corpus], env=env)
+    made = _run([work / 'precompile', '--libs', store, work / 'libvulkan_nouveau.dylib', cache, args.qc, args.corpus],
+                dict(env, MESA_SHADER_CACHE_DISABLE='true'))
     print('\n'.join(line for line in made.splitlines() if line.startswith(('library ', 'precompile:'))))
     builds = sorted(p.name for p in (cache / 'v1').iterdir() if p.name != CONTENT)
     records = sorted((cache / 'v1' / CONTENT).glob('*/*'))
@@ -154,11 +165,34 @@ def main():
     (out / 'SEED').write_text(seed + '\n')
     for path in [out, *out.rglob('*')]:
         path.chmod(0o755 if path.is_dir() else 0o644)
-    shutil.rmtree(work)
     print('seed shared:', seed)
     if merged:
         print('seed records: %d precompiled, %d of the device\'s merged (%d already made here, %d of another identity, '
               '%d refused)' % (len(records), *merged))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    steps = parser.add_subparsers(dest='step', required=True)
+    for step, names in (('mock', ('xcode-env', 'abi-header', 'mock-iokit', 'out')),
+                        ('tool', ('xcode-env', 'metal-header', 'precompile', 'frontend', 'host-bridge', 'mock', 'out')),
+                        ('twin', ('nvk', 'twin', 'out')),
+                        ('run', ('xcode-env', 'tool', 'mock', 'nvk', 'qc', 'qc-sha256', 'root', 'corpus', 'out'))):
+        p = steps.add_parser(step)
+        for name in names:
+            p.add_argument('--' + name, required=True)
+        if step == 'run':
+            p.add_argument('--embedded', action='append', default=[])
+            p.add_argument('--data', action='append', default=[])
+            p.add_argument('--records')
+    args = parser.parse_args()
+    root = Path.cwd()
+    work = root / ('_seed_%s_work' % args.step)
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    {'mock': mock, 'tool': tool, 'twin': twin, 'run': run}[args.step](args, root, work)
+    shutil.rmtree(work)
 
 
 if __name__ == '__main__':

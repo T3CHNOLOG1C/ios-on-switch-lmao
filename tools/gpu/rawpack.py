@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rawpack.py --xcode-env F --host-bridge <darwin bridge .a> --nvk <iOS dylib> --twin <host dylib> --qc default.metallib
+"""rawpack.py --xcode-env F --host-bridge <darwin bridge .a> --twin-dylib <seed.py twin's dylib> --qc default.metallib
               --corpus corpus.log --stack <stack file> --generator <raw/pack/rawpack.py> --tree <tree> --out <dir>
 
 The raw GM20B path's pipeline pack (drivers/TegraGM20BMetal/raw/pack/rawpack.py) as the old build made it beside the
@@ -12,12 +12,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tools.gpu.nvk_twin import make_twin
-
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ('xcode-env', 'host-bridge', 'nvk', 'twin', 'qc', 'corpus', 'stack', 'generator', 'tree', 'out'):
+    for name in ('xcode-env', 'host-bridge', 'twin-dylib', 'qc', 'corpus', 'stack', 'generator', 'tree', 'out'):
         parser.add_argument('--' + name, required=True)
     args = parser.parse_args()
     root = Path.cwd()
@@ -28,8 +26,10 @@ def main():
     (work / 'home').mkdir(parents=True)
     env = {'PATH': '/usr/bin:/bin', 'DEVELOPER_DIR': xcode['DEVELOPER_DIR'], 'ZERO_AR_DATE': '1',
            'HOME': str(work / 'home'), 'TMPDIR': os.environ.get('TMPDIR', str(work)), 'RAWPACK_TREE': str(root / args.tree)}
+    # The twin with the device's pipeline cache identity (seed.py twin, its own action), at the path it had here.
     dylib = work / 'libvulkan_nouveau.dylib'
-    make_twin(args.nvk, args.twin, dylib, env)
+    shutil.copyfile(args.twin_dylib, dylib)
+    dylib.chmod(0o755)
     generated = work / 'out'
     stack = Path(args.stack).read_text().strip()
     result = subprocess.run([sys.executable, str(root / args.generator), '--bridge', str(root / args.host_bridge),
