@@ -1,0 +1,29 @@
+# drivers/SwitchJoyCon's HID session rule (SwitchJoyConSession.h, compiled as C by its harness) on the host, and the
+# r7p9d gamecontrollerd connection storm it ends, reproduced by a model of gamecontrollerd, backboardd and the rail.
+#
+#   bazel test //drivers/SwitchJoyCon/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+host_library(
+    name = "session_harness",
+    srcs = ["switch_joycon_session_harness.c"],
+    hdrs = [
+        "switch_joycon_session_harness.h",
+        "//drivers/SwitchJoyCon:SwitchJoyConSession.h",
+    ],
+    # The flags the plain-C header was always checked with.
+    copts = [
+        "-O1",
+        "-Wconversion",
+        "-Wsign-conversion",
+    ],
+)
+
+host_test(
+    name = "switch_joycon_session_test",
+    srcs = ["switch_joycon_session_test.cpp"],
+    deps = [":session_harness"],
+)

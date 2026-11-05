@@ -1,10 +1,11 @@
-// Host harness for Wi-Fi/Bluetooth coexistence (tests/test_switch_coex.py): drivers/SwitchBluetooth/SwitchCoex.h
-// (the Bluetooth controller's scans and ACL priority) and drivers/SwitchWLAN/SwitchWLANCoex.h (wifid's Bluetooth
-// flags, the access point's sta_info), their static inline functions as exported ones for ctypes.
+// Host harness for Wi-Fi/Bluetooth coexistence (switch_coex_test.cpp): drivers/SwitchBluetooth/SwitchCoex.h (the
+// Bluetooth controller's scans and ACL priority) and drivers/SwitchWLAN/SwitchWLANCoex.h (wifid's Bluetooth flags, the
+// access point's sta_info), their static inline functions compiled as C and exported (switch_coex_harness.h).
 #include <stdio.h>
 
-#include "SwitchCoex.h"
-#include "SwitchWLANCoex.h"
+#include "../../SwitchWLAN/SwitchWLANCoex.h"
+#include "../SwitchCoex.h"
+#include "switch_coex_harness.h"
 
 static struct switch_coex_bt state;
 

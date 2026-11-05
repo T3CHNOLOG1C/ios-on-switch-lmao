@@ -1,0 +1,89 @@
+# drivers/SwitchBluetooth on the host. Its plain-C headers are compiled as C, as their harnesses export them
+# (-Wconversion -Wsign-conversion), and driven from GoogleTest:
+# - switch_bluetooth_links_test: the link table and link trace (SwitchBluetoothLinks.h) with r7r's HCI.
+# - switch_bluetooth_rx_test: the PIO RX path's interrupts and FIFO waits, as a byte-timed UART model.
+# - switch_bluetooth_rx_dma_test: RX by APB DMA (SwitchBluetoothRxDma.h's framing and transfer lengths) at the peak
+#   load, against the PIO model.
+# - switch_coex_test: Wi-Fi/Bluetooth coexistence (SwitchCoex.h with SwitchWLAN's SwitchWLANCoex.h and NVRAM).
+# - switch_bluetooth_source_test: guards that SwitchBluetooth.cpp programs the UART as both models assume.
+#
+#   bazel test //drivers/SwitchBluetooth/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+# The flags the plain-C headers were always checked with.
+C_FLAGS = [
+    "-O1",
+    "-Wconversion",
+    "-Wsign-conversion",
+]
+
+host_library(
+    name = "links_harness",
+    srcs = [
+        "switch_bluetooth_links_harness.c",
+        "//drivers/SwitchBluetooth:SwitchBluetoothLinks.h",
+    ],
+    hdrs = ["switch_bluetooth_links_harness.h"],
+    copts = C_FLAGS,
+)
+
+host_test(
+    name = "switch_bluetooth_links_test",
+    srcs = ["switch_bluetooth_links_test.cpp"],
+    deps = [":links_harness"],
+)
+
+host_test(
+    name = "switch_bluetooth_rx_test",
+    srcs = [
+        "pio_rx_model.h",
+        "switch_bluetooth_rx_test.cpp",
+    ],
+)
+
+host_library(
+    name = "rx_dma_harness",
+    srcs = [
+        "switch_bluetooth_rx_dma_harness.c",
+        "//drivers/SwitchBluetooth:SwitchBluetoothRxDma.h",
+    ],
+    hdrs = ["switch_bluetooth_rx_dma_harness.h"],
+    copts = C_FLAGS,
+)
+
+host_test(
+    name = "switch_bluetooth_rx_dma_test",
+    srcs = [
+        "pio_rx_model.h",
+        "switch_bluetooth_rx_dma_test.cpp",
+    ],
+    deps = [":rx_dma_harness"],
+)
+
+host_library(
+    name = "coex_harness",
+    srcs = [
+        "switch_coex_harness.c",
+        "//drivers/SwitchBluetooth:SwitchCoex.h",
+        "//drivers/SwitchWLAN:SwitchWLANCoex.h",
+    ],
+    hdrs = ["switch_coex_harness.h"],
+    copts = C_FLAGS,
+)
+
+host_test(
+    name = "switch_coex_test",
+    srcs = ["switch_coex_test.cpp"],
+    # The NVRAM the driver loads (SwitchWLAN's firmware), read by the test.
+    data = ["//drivers/SwitchWLAN:firmware/brcm/brcmfmac4356A3-pcie.txt"],
+    deps = [":coex_harness"],
+)
+
+host_test(
+    name = "switch_bluetooth_source_test",
+    srcs = ["switch_bluetooth_source_test.cpp"],
+    data = ["//drivers/SwitchBluetooth:SwitchBluetooth.cpp"],
+)

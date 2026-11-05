@@ -1,8 +1,10 @@
-// Host harness for drivers/SwitchBluetooth/SwitchBluetoothRxDma.h (tests/test_switch_bluetooth_rx_dma.py): the header's
-// static inline framing and transfer-length functions as exported ones for ctypes, on one frame of the header's struct.
+// Host harness for drivers/SwitchBluetooth/SwitchBluetoothRxDma.h (switch_bluetooth_rx_dma_test.cpp): the header's
+// static inline framing and transfer-length functions, compiled as C, exported (switch_bluetooth_rx_dma_harness.h) on
+// one frame of the header's struct.
 #include <string.h>
 
-#include "SwitchBluetoothRxDma.h"
+#include "../SwitchBluetoothRxDma.h"
+#include "switch_bluetooth_rx_dma_harness.h"
 
 static struct switch_bt_h4_frame frame;
 
