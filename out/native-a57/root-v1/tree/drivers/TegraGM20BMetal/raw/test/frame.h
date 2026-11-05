@@ -136,26 +136,18 @@ struct TexDesc {
     bool iosurface, memoryless, renderTarget;
     uint32_t format = 80;  // MTLPixelFormat: BGRA8Unorm, or R32Float (55) for the A3 states' third attachment
 };
-// FRAME_PITCH: the surfaces' rows as clients' and the render server's can lie since r12a (its needed alignment back at 16): the
-// framebuffers 1272 wide (rows of 5088 bytes, not a multiple of 128: a pitch target the raw path renders through a pool image)
-// and IMAGE2 132 wide (rows of 528, not a multiple of 32: sampled through a pool image the copy engine fills)
-inline bool pitchShapes(const char *which = nullptr)
-{
-    const char *v = getenv("FRAME_PITCH");
-    return v && (!which || !strcmp(v, "1") || !strcmp(v, which));
-}
 inline TexDesc texture(int t)
 {
     switch (t) {
     case FB0:
-    case FB1: return {pitchShapes("fb") ? 1272 : 1280, 720, true, false, true};
+    case FB1: return {1280, 720, true, false, true};
     case MEMORYLESS: return {1280, 720, false, true, true};
     case BLUR0:
     case BLUR1: return {320, 180, false, false, true};
     case BLUR_MEMORYLESS: return {320, 180, false, true, true};
     case IMAGE0: return {1280, 720, true, false, false};
     case A3TARGET: return {1280, 720, false, false, true, 55};
-    default: return {t == IMAGE2 && pitchShapes("image") ? 132 : 128, 128, t == IMAGE2, false, false};
+    default: return {128, 128, t == IMAGE2, false, false};
     }
 }
 struct SamplerSpec {

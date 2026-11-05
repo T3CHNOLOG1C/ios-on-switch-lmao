@@ -589,39 +589,17 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
                                   uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, uint32_t format,
                                   Texture &t)
 {
-    // rows and offset a multiple of 16, as m2v takes a surface (linear_plan.rs); the texture header's 32 through `sampled`
-    if (!shape(width, height, format, t) || (pitch & 15) || (offset & 15) || pitch < width * t.bpp ||
+    if (!shape(width, height, format, t) || (pitch & 31) || (offset & 31) || pitch < width * t.bpp ||
         offset + uint64_t(pitch) * height > allocBytes || (uintptr_t(base) & (pageSize() - 1)))
         return false;
-    const bool unaligned = (pitch | offset) & 31;
-    Texture *sampled = nullptr;
-    if (unaligned) {
-        sampled = new Texture;
-        if (!createTexture(width, height, format, *sampled)) {
-            delete sampled;
-            return false;
-        }
-    }
-    std::unique_lock<std::mutex> l(lock_);
+    std::lock_guard<std::mutex> l(lock_);
     t.pitch = pitch;
     if (!(t.import =
-              importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface))) {
-        l.unlock();
-        if (sampled) {
-            destroyTexture(*sampled);
-            delete sampled;
-        }
+              importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface)))
         return false;
-    }
     t.va = t.import->bo.va + offset;
     t.cpu = static_cast<uint8_t *>(base) + offset;
-    t.shadowTarget = t.renderable && !linearTarget(t);
     t.renderable = t.renderable && linearTarget(t);
-    if (sampled) {  // sampled through its pool image's header
-        t.sampled = sampled;
-        t.tic = sampled->tic;
-        return true;
-    }
     if (!(t.tic = allocTic())) {
         release(t.import);
         t.import = nullptr;
@@ -667,7 +645,6 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
     std::lock_guard<std::mutex> l(lock_);
     t.pitch = pitch;
     t.va = b.va + offset;
-    t.shadowTarget = t.renderable && !linearTarget(t);
     t.renderable = t.renderable && linearTarget(t);
     t.cpu = b.cpu + offset;
     if (!(t.tic = allocTic())) return false;
@@ -678,12 +655,11 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
 bool Device::createView(const Texture &of, uint32_t format, Texture &t)
 {
     const FormatInfo *f = formatInfo(format);
-    if (!f || f->bpp != of.bpp || of.memoryless || of.sampled) return false;
+    if (!f || f->bpp != of.bpp || of.memoryless) return false;
     std::lock_guard<std::mutex> l(lock_);
     t = of;
     t.format = format;
     t.renderable = f->rt != 0 && linearTarget(t);
-    t.shadowTarget = f->rt != 0 && !linearTarget(t);
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
     if (!(t.tic = allocTic())) return false;
@@ -706,12 +682,6 @@ void Device::destroyTexture(Texture &t)
             delete plane;
         }
     t.luma = t.chroma = nullptr;
-    if (t.sampled) {  // its header is the pool image's
-        destroyTexture(*t.sampled);
-        delete t.sampled;
-        t.sampled = nullptr;
-        t.tic = 0;
-    }
     std::lock_guard<std::mutex> l(lock_);
     if (t.tic) {
         memset(tic_.cpu + 32 * t.tic, 0, 32);
@@ -940,11 +910,10 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
 
 // A memoryless attachment's memory: one per size and format, kept while passes use it (m2v 0105 gives a memoryless attachment
 // linear memory in a pass that renders to linear memory, as every raw pass does). Called with the device lock held.
-Texture *Device::backing(const Texture &m, uint32_t tag)
+Texture *Device::backing(const Texture &m)
 {
     for (Backing *b : backings_)
-        if (b->texture.width == m.width && b->texture.height == m.height && b->texture.format == m.format &&
-            b->tag == tag) {
+        if (b->texture.width == m.width && b->texture.height == m.height && b->texture.format == m.format) {
             b->lastCommit = commitCount_;
             return &b->texture;
         }
@@ -966,9 +935,7 @@ Texture *Device::backing(const Texture &m, uint32_t tag)
         delete b;
         return nullptr;
     }
-    t.renderable = t.renderable && linearTarget(t);
     writeTic(t);
-    b->tag = tag;
     b->lastCommit = commitCount_;
     backings_.push_back(b);
     return &t;
@@ -1062,18 +1029,11 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
         const Texture *t = pass.color[j].texture;
         if (!t) continue;
-        if (!t->renderable && !t->shadowTarget) return nullptr;
-        if (t->shadowTarget) {  // rendered through a pool image (end(): copied in before, back after)
+        if (!t->renderable) return nullptr;
+        if (!t->memoryless && ((t->va | t->pitch) & 127)) {  // diagnostics only: NVK would render it through a shadow
             dev_->stats.rtUnaligned++;
             dev_->stats.rtUnalignedPitch = t->pitch;
             dev_->stats.rtUnalignedVa = uint32_t(t->va & 255);
-            std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, 1 + j);
-            if (!b || !b->renderable) return nullptr;
-            e.pass_.color[j].texture = b;
-            e.shadowOf_[j] = t;
-            backings_.push_back(b);
-            continue;
         }
         if (t->memoryless) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
@@ -1559,26 +1519,6 @@ static void clearValue(uint32_t format, const float in[4], uint32_t out[4])
         }
 }
 
-// NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
-namespace {
-constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
-// `lines` rows of `width` texels of `bpp` bytes, pitch to pitch: a remap of min(bpp, 4)-byte components, so the line length counts
-// texels (about 12 dwords)
-void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
-              uint32_t bpp)
-{
-    if (!width || !lines || !bpp) return;
-    const uint32_t comp = std::min(bpp, 4u), n = bpp / comp;
-    // DST_X..W = SRC_X..W, COMPONENT_SIZE, NUM_SRC_COMPONENTS, NUM_DST_COMPONENTS
-    p.m(CE_SET_REMAP_COMPONENTS, 0 | 1 << 4 | 2 << 8 | 3 << 12 | (comp - 1) << 16 | (n - 1) << 20 | (n - 1) << 24,
-        SUBC_COPY);
-    p.inc(CE_OFFSET_IN_UPPER,
-          {uint32_t(src >> 32), uint32_t(src), uint32_t(dst >> 32), uint32_t(dst), srcPitch, dstPitch, width, lines},
-          SUBC_COPY);
-    p.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);  // REMAP_ENABLE
-}
-}  // namespace
-
 void RenderEncoder::end()
 {
     Device &d = *dev_;
@@ -1586,27 +1526,13 @@ void RenderEncoder::end()
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clears();
-    const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48;
+    const uint32_t room = 160 + 8 * 12 + uint32_t(cl.size()) * 48;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
     p.m(WAIT_FOR_IDLE, 0);
     p.m(INVALIDATE_SHADER_CACHES, 0x14);
     p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    // shadow targets' pool images: their texels over the render area first, as NVK's tiled shadow loads them (a load that
-    // keeps them: Load, and a DontCare the clears leave; a Clear clears it all), then the barrier to the pass
-    bool copied = false;
-    for (uint32_t j = 0; j < pass_.count && j < 8; j++)
-        if (const Texture *o = shadowOf_[j]) {
-            if (pass_.color[j].load == ColorAttachment::Clear) continue;
-            const Texture *s = pass_.color[j].texture;
-            copyRows(p, o->va, o->pitch, s->va, s->pitch, areaW_, areaH_, o->bpp);
-            copied = true;
-        }
-    if (copied) {
-        p.m(WAIT_FOR_IDLE, 0);
-        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    }
     // the clears m2v makes by passes of their own first (Clear loads reaching past the render area): each its attachment alone
     // as target 0, over its reach, then the barrier between passes
     bool own = false;
@@ -1671,31 +1597,6 @@ void RenderEncoder::end()
     }
     d.stats.pushBytes += uint64_t(p.at - start) * 4;
     bodies_.clear();
-    // shadow targets the pass stores: their pool images back over what it rendered (the render area; a Clear's reach past it),
-    // after the 3D engine is done with them
-    bool stores = false;
-    for (uint32_t j = 0; j < pass_.count && j < 8; j++) stores |= shadowOf_[j] && pass_.color[j].store;
-    if (stores) {
-        const uint32_t room2 = 8 + 8 * 16;
-        uint32_t *at = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room2 * 4, 256, va));
-        Push q{at, at + room2};
-        q.m(WAIT_FOR_IDLE, 0);
-        for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
-            const Texture *o = shadowOf_[j];
-            if (!o || !pass_.color[j].store) continue;
-            uint32_t w = areaW_, h = areaH_;
-            for (const Clear &c : cl)
-                if (c.target == j && pass_.color[j].load == ColorAttachment::Clear) {
-                    w = std::max(w, c.x1);
-                    h = std::max(h, c.y1);
-                }
-            const Texture *s = pass_.color[j].texture;
-            copyRows(q, s->va, s->pitch, o->va, o->pitch, w, h, o->bpp);
-        }
-        cb_->segment(at, q.at);
-        d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
-        d.stats.pushBytes += uint64_t(q.at - at) * 4;
-    }
 }
 
 // The pass's clears, before its draws: each Clear load, and each DontCare load m2v answers with a clear (metal2vulkan
@@ -1787,6 +1688,9 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
 // NVK's copies of pitch memory: a byte copy (vkCmdCopyBuffer, nvk_cmd_copy_memory_ce: 128 KiB per launch, no remap) or a
 // rectangle of pitch rows (vkCmdCopyImage of linear images, nouveau_copy_rect: remap of min(bpp, 4)-byte components, so the line
 // length counts pixels). LAUNCH_DMA: DATA_TRANSFER_TYPE PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE.
+namespace {
+constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
+}
 
 void BlitEncoder::room()
 {
@@ -1817,7 +1721,14 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
 {
     if (!width || !lines || !bpp) return;
     room();
-    copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp);
+    const uint32_t comp = std::min(bpp, 4u), n = bpp / comp;
+    // DST_X..W = SRC_X..W, COMPONENT_SIZE, NUM_SRC_COMPONENTS, NUM_DST_COMPONENTS
+    p_.m(CE_SET_REMAP_COMPONENTS, 0 | 1 << 4 | 2 << 8 | 3 << 12 | (comp - 1) << 16 | (n - 1) << 20 | (n - 1) << 24,
+         SUBC_COPY);
+    p_.inc(CE_OFFSET_IN_UPPER,
+           {uint32_t(src >> 32), uint32_t(src), uint32_t(dst >> 32), uint32_t(dst), srcPitch, dstPitch, width, lines},
+           SUBC_COPY);
+    p_.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);  // REMAP_ENABLE
 }
 
 // The codes Metal reads of RGB8_444_2P (pack/../m2v ycbcr_convert.rs: "Codes"): red Cr, green Y, blue Cb, each code / 255, alpha

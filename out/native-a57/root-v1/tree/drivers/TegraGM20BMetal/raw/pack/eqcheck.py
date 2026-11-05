@@ -1,4 +1,4 @@
-#!/ usr / bin / env python3
+#!/usr/bin/env python3
 """eqcheck (r7-raw): compare two nvdec logs (capture/cap.cpp RAWCAP_LOG, NVDEC_REGS=1) of the same frames, one from the shipped
 m2v + NVK path and one from the raw path, draw by draw. Submissions without draws or clears (context init, NVK's own setup) are
 skipped; then the i-th frame of one log is compared with the i-th of the other.
@@ -8,7 +8,7 @@ the vertex data, each stage's program and register count, and the bytes each pro
 what they point to, handles by their texture/sampler headers). Barriers are compared as sets: the raw path must cover what NVK
 emitted before each draw that reads memory written earlier (WFI + TEXINV before a framebuffer fetch).
 
-usage: eqcheck.py <nvk.log> <raw.log> [--show N] [--flat] [--layouts]
+usage: eqcheck.py <nvk.log> <raw.log> [--show N]
 """
 import re, sys, collections
 
@@ -30,12 +30,8 @@ def frames(path):
                 ev['lines'].append(l.strip())
         if any(e['head'].startswith('DRAW') for e in events):
             out.append(events)
-#-- flat : every submission's events as one stream (a command buffer the raw path submits in segments is several submissions,
-#each of its driver, where m2v makes one)
-    if FLAT and out:
-        out = [[e for events in out for e in events]]
-#persistent resources renamed in order of first appearance in draws(clears of textures no draw uses, such as m2v's
-#initialisation of new textures, would otherwise shift every name)
+    # persistent resources renamed in order of first appearance in draws (clears of textures no draw uses, such as m2v's
+    # initialisation of new textures, would otherwise shift every name)
     names = {}
     def rename(text, assign):
         def sub(m):
@@ -54,32 +50,8 @@ def frames(path):
                 e['head'] = rename(e['head'], False)
     return out
 
-#-- layouts : render targets and sampled images compared by what their texels are, \
-    not where or how they lie.The raw path renders
-#a target NVK renders through a tiled shadow(rows not 128 apart) through a pitch pool image, \
-    and samples a surface m2v samples
-#through a shadow image(rows not 32 apart) through a pitch pool image : the texels are the same, their headers' addresses,
-#pitches and layouts are not.So : a texture header is its format word, width and height; a target its format; a target's
-#address, pitch, memory layout and array registers are dropped; \
-    and the hash of a constant buffer that holds handles is not
-#compared(its handles are, normalized; buffer contents keep their own hashes).
-def layout_tic(m):
-    w = [int(x, 16) for x in m.group(2).split()]
-    return 'tic[%08x %04x %04x]' % (w[0], w[4] & 0xffff, w[5] & 0xffff)
-
-def normalize_layouts(text):
-    text = re.sub(r'tic\[(\S+) ([0-9a-f]{8}(?: [0-9a-f]{8}){7})\]', layout_tic, text)
-    if 'handle{' in text:
-        text = re.sub(r'(?<=[={])[0-9a-f]{1,16}:', '*:', text)
-    return text
-
-LAYOUT_REGS = {'%x' % (0x800 + 0x40 * j + k) for j in range(8) for k in (0x8, 0x14, 0x18, 0x1c)}
-
 def fields(ev):
     f = collections.OrderedDict()
-    if LAYOUTS:
-        ev = {'head': re.sub(r'rt=\w+,\d+x\d+,(fmt=\w+),mem=\w+', r'rt=\1', ev['head']),
-              'lines': [re.sub(r'^(rt\d+)=\S+ \S+ (fmt=\w+).*$', r'\1=\2', normalize_layouts(l)) for l in ev['lines']]}
     h = ev['head']
     if h.startswith('DRAW'):
         m = re.match(r'DRAW(?:-INDEXED)? first=(\d+) count=(\d+) begin=(\w+) barriers=(.*)', h)
@@ -93,9 +65,6 @@ def fields(ev):
     for l in ev['lines']:
         if l.startswith('R '):
             f['R'] = dict(x.split('=') for x in l[2:].split())
-            if LAYOUTS:
-                f['R'] = {
-k: v for k, v in f['R'].items() if k not in LAYOUT_REGS}
         elif l.startswith('regs='):
             f['regs'] = l[5:]
         elif l.startswith('stage'):
@@ -107,31 +76,14 @@ k: v for k, v in f['R'].items() if k not in LAYOUT_REGS}
             f[l.split('=')[0].split()[0]] = l
     return f
 
-#TIC_POOL_C /                                                                                                        \
-    TSC_POOL_C : the header pools ' last index. The raw path sizes its pools for the render server' s live textures( \
-        8192
-#texture headers, 1024 samplers; NVK's init: 1024 and 4096): a limit, not draw state. Not compared.
+# TIC_POOL_C / TSC_POOL_C: the header pools' last index. The raw path sizes its pools for the render server's live textures (8192
+# texture headers, 1024 samplers; NVK's init: 1024 and 4096): a limit, not draw state. Not compared.
 POOL_LIMITS = {'1564', '157c'}
-
-FLAT = '--flat' in sys.argv
-LAYOUTS = '--layouts' in sys.argv
 
 def main():
     show = int(sys.argv[sys.argv.index('--show') + 1]) if '--show' in sys.argv else 3
     a, b = frames(sys.argv[1]), frames(sys.argv[2])
     print('frames: nvk %d raw %d' % (len(a), len(b)))
-    if LAYOUTS:
-#m2v 's own draws (a shadow image' s copy through a pass of its own, say) : programs no draw of the other log runs
-        def programs(e):
-            return tuple(l.split()[1] for l in e['lines'] if l.startswith('stage'))
-        theirs = {programs(e) for events in b for e in events if e['head'].startswith('DRAW')}
-        dropped = 0
-        for events in a:
-            keep = [e for e in events if not e['head'].startswith('DRAW') or programs(e) in theirs]
-            dropped += len(events) - len(keep)
-            events[:] = keep
-        if dropped:
-            print('%d draws of programs only the nvk log runs left out (m2v\'s own: shadow copies)' % dropped)
     mism = collections.Counter(); examples = collections.defaultdict(list)
     reg_diff = collections.Counter(); bar_missing = collections.Counter(); bar_extra = collections.Counter()
     draws = same = clears = 0
