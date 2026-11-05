@@ -77,7 +77,6 @@ py_binary(
     ],
 )
 
-# --- test stand-ins --------------------------------------------------------------------------------------------------
 # A boot package with dummy contents and the real layout (--//deploy:boot_package=//install:fake_boot_package), and a
 # second generation of it (two files differ) for the rerun test.
 fake_boot_package(name = "fake_boot_package")
