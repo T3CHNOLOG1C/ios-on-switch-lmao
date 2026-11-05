@@ -100,8 +100,16 @@ All 38 share one work loop.
 copyEvent: each of these event drivers gets one shared copy of IOHIDEventDriver's vtable whose slot 201
 (`IOHIDEventService::copyEvent`, reserved slot 11, declared right after `dispatchEvent` 198 / `getPrimaryUsagePage`
 199 / `getPrimaryUsage` 200; 198 is the edge wrapper's, proven on hardware) answers type 15 from the sensor's source and
-passes every other type to the original. Installed from IOKit's first-publish notification for the driver, and only
-after slots 199/200 answered 0xff00/0x0005 on that driver (otherwise one log line and the sensor stays unhooked). The
+passes every other type to the original. Installed only after slots 199/200 answered 0xff00/0x0005 on that driver
+(otherwise one log line and the sensor stays unhooked), by whichever comes first: IOKit's first-publish notification
+for IOHIDEventDrivers (any driver; the callback keeps those whose provider is a temperature device), or the hook pass,
+a one-shot thread call queued once the 38 devices exist that waits for each device's matching (`IOService::waitQuiet`,
+at most 10 s for all of them) and hooks the IOHIDEventDriver that has opened its interface. The watchdog's verdict
+(section 7) hooks any driver that matched later. r8a-r8e booted with the notification matching an IOPropertyMatch on the
+driver's VendorID/ProductID and no hook pass: every event driver started and was published, thermalmonitord found all
+38 services, and none was hooked (`0 of 38 HID sensors hooked`; thermalmonitord: 21 `Could not get event from service`
+per pass and `partial sensors: ... current 9249276ba`, exactly the 17 infoOnly bits). One line says how they were
+hooked: `SwitchSensors: 38 of 38 HID sensors hooked (P by the publish notification, Q once matching was quiet)`. The
 event is an `IOHIDEvent` from its metaclass, `setType(15)` (= initWithType), `setTimeStamp` (the measurement's time),
 `setFixedValue(0xf0000, degrees 16.16)`; the first one is read back (`getType`, `getFixedValue`) and a mismatch turns
 temperature events off for the boot with one line.
@@ -183,10 +191,18 @@ is substituted.
 
 ## 7. The userspace watchdog
 
-NativeIOSwitchWatchdog's stopgap (`off_ = true` at start) is gone. watchdogd's first open of the IOWatchdog now waits
-(at most 20 s, woken whenever a source changes, no polling) for `switch_sensors_wait_ready()`: all 38 HID services
-hooked, every SOC_THERM sensor valid, a TMP451 and a battery reading, temperature events working. Then monitoring
-stays on and the kernel logs `SwitchSensors: thermalmonitord's 38 sensors answer: CPU ... C`. Otherwise monitoring is
+NativeIOSwitchWatchdog's stopgap (`off_ = true` at start) is gone. watchdogd's first open of the IOWatchdog waits (at
+most 180 s, woken whenever a source changes, a driver is hooked or a sensor is first read; no polling) for
+`switch_sensors_wait_ready()`: all 38 HID services hooked, **thermalmonitord has read each of the 21 sensors it reads
+(the non-infoOnly ones) through the hook at least once** (end to end: the hook returned an event to a client's
+copyEvent), every SOC_THERM sensor valid, a TMP451 and a battery reading, temperature events working. Then monitoring
+stays on and the kernel logs `SwitchSensors: thermalmonitord's 38 sensors answer (it has read all 21 it reads): CPU ...
+C`. The wait is long because thermalmonitord's first pass is late on a slow boot: r8e's watchdogd opened at 38 s of
+uptime, thermalmonitord's first pass came at 90 s, the boot logo at 137 s. Nothing is monitored during the wait.
+Watchdog timing against the slow boot: from the verdict, watchdogd pings each monitored service every 10 s, kills one
+silent for 60 s and panics at the third; r8e's SpringBoard main thread never went 6 s without a log line between its
+first line and the logo, and the pre-sensor boots with monitoring on (r7t, r7u) killed only thermalmonitord. Otherwise
+monitoring is
 turned off before watchdogd asks (method 0), exactly as after a watchdogd crash: one line
 `IOSwitch watchdog: userspace watchdog off for this boot: thermalmonitord's sensors do not all answer (<what>)`,
 watchdogd reads "disabled" and exits 0, and nothing can end in a watchdog panic that boot.
@@ -195,7 +211,8 @@ A source that answered at boot and stops later logs `SwitchSensors: <source> sto
 its sensors missing` (and `... answers again`). A source that stays dead for 60 s then gets thermalmonitord killed and,
 after 120 s more, the watchdog panic, as on an iPad (watchdogd panics through its own user client; the kernel cannot
 recall that once monitoring is on). SwitchThermal retries a failed TMP451 every second and the fan runs at full speed
-meanwhile.
+meanwhile. SC7 resets SOC_THERM: SwitchSuspend's wake programs it again (`switch_sensors_resume`) right after the
+thermal service, among the first wake steps.
 
 ## 8. Next-boot checks
 
@@ -204,8 +221,9 @@ r15.tar --age-limit 600`, then `/usr/bin/log show --archive <dir>.logarchive --s
 
 1. Kernel: `SwitchSensors: SOC_THERM up (fuse common ...; CONFIG2 ...)` and no `SwitchSensors: ... off` /
    `SwitchHID: temperature ...` line.
-2. Kernel: `SwitchSensors: thermalmonitord's 38 sensors answer: CPU a b c d, GPU e, PLLX f, SoC diode g, PCB h,
-   battery i C` with plausible values (CPU/GPU/PLLX within a few degrees of the SoC diode at idle, PCB below them,
+2. Kernel: `SwitchSensors: 38 of 38 HID sensors hooked (P by the publish notification, Q once matching was quiet)`,
+   then `SwitchSensors: thermalmonitord's 38 sensors answer (it has read all 21 it reads): CPU a b c d, GPU e, PLLX f,
+   SoC diode g, PCB h, battery i C` with plausible values (CPU/GPU/PLLX within a few degrees of the SoC diode at idle, PCB below them,
    battery near room temperature), and **no** `userspace watchdog off for this boot`.
 3. Kernel: `IOSwitch watchdog: watchdogd connected; userspace watchdog armed`.
 4. thermalmonitord: no `no HID services (5)`, no `found error sensor result`, no `partial sensors`, no

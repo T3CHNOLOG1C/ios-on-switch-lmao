@@ -22,6 +22,14 @@ int sensor_source(unsigned i)
 {
     return i < SWITCH_SENSOR_COUNT ? (int)switch_sensors[i].source : -1;
 }
+int sensor_info_only(unsigned i)
+{
+    return i < SWITCH_SENSOR_COUNT ? switch_sensors[i].info_only : -1;
+}
+uint64_t sensors_read_mask(void)
+{
+    return switch_sensors_read_mask();
+}
 unsigned sensor_fourcc_value(unsigned i)
 {
     return switch_sensor_fourcc(switch_sensors[i].fourcc);

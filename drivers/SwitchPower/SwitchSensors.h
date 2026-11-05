@@ -45,6 +45,7 @@ struct switch_sensor {
     const char *fourcc;     // the plist's 4CharCode
     const char *matchName;  // the plist's matchName: the HID service's Product
     enum switch_sensor_source source;
+    int info_only;  // the plist's infoOnly: never read (a -127 C placeholder), but its service must exist
 };
 
 // The J120AP-Info.plist Sensors array, non-synth entries, in order (index = thermalmonitord's sensor index and watchdog
@@ -56,45 +57,56 @@ struct switch_sensor {
 // 0-3 are SOC_THERM's per-core cpu0-cpu3.
 #define SWITCH_SENSOR_COUNT 38u
 static const struct switch_sensor switch_sensors[SWITCH_SENSOR_COUNT] = {
-    {"TG0B", "gas gauge battery", SWITCH_SRC_BATTERY},
-    {"TP1d", "PMU tdev1", SWITCH_SRC_TMP451_PCB},
-    {"TP2d", "PMU tdev2", SWITCH_SRC_TMP451_PCB},
-    {"TP3d", "PMU tdev3", SWITCH_SRC_TMP451_PCB},
-    {"TP4d", "PMU tdev4", SWITCH_SRC_TMP451_PCB},
-    {"TP5d", "PMU tdev5", SWITCH_SRC_TMP451_PCB},
-    {"TP6d", "PMU tdev6", SWITCH_SRC_TMP451_PCB},
-    {"TP7d", "PMU tdev7", SWITCH_SRC_TMP451_PCB},
-    {"TP8d", "PMU tdev8", SWITCH_SRC_TMP451_PCB},
-    {"TR1d", "PMU2 tdev1", SWITCH_SRC_TMP451_PCB},
-    {"TR2d", "PMU2 tdev2", SWITCH_SRC_TMP451_PCB},
-    {"TP0Z", "PMU tcal", SWITCH_SRC_TCAL},
-    {"TP0j", "PMU tjunc", SWITCH_SRC_TMP451_PCB},
-    {"TQ0B", "Charger tbat", SWITCH_SRC_BATTERY},
-    {"Th0i", "PMGR SOC Die Temp Sensor0", SWITCH_SRC_SOC_GPU},
-    {"Th0a", "Avg: PMGR SOC Die Temp Sensor0", SWITCH_SRC_SOC_GPU},
-    {"Th0x", "Max: PMGR SOC Die Temp Sensor0", SWITCH_SRC_SOC_GPU},
-    {"Th1i", "PMGR SOC Die Temp Sensor1", SWITCH_SRC_SOC_PLLX},
-    {"Th1a", "Avg: PMGR SOC Die Temp Sensor1", SWITCH_SRC_SOC_PLLX},
-    {"Th1x", "Max: PMGR SOC Die Temp Sensor1", SWITCH_SRC_SOC_PLLX},
-    {"Th2i", "PMGR SOC Die Temp Sensor2", SWITCH_SRC_TMP451_SOC},
-    {"Th2a", "Avg: PMGR SOC Die Temp Sensor2", SWITCH_SRC_TMP451_SOC},
-    {"Th2x", "Max: PMGR SOC Die Temp Sensor2", SWITCH_SRC_TMP451_SOC},
-    {"Th3i", "PMGR SOC Die Temp Sensor3", SWITCH_SRC_SOC_GPU},
-    {"Th3a", "Avg: PMGR SOC Die Temp Sensor3", SWITCH_SRC_SOC_GPU},
-    {"Th3x", "Max: PMGR SOC Die Temp Sensor3", SWITCH_SRC_SOC_GPU},
-    {"Tc0i", "ACC Temp Sensor0", SWITCH_SRC_SOC_CPU0},
-    {"Tc0a", "Avg: ACC Temp Sensor0", SWITCH_SRC_SOC_CPU0},
-    {"Tc0x", "Max: ACC Temp Sensor0", SWITCH_SRC_SOC_CPU0},
-    {"Tc1i", "ACC Temp Sensor1", SWITCH_SRC_SOC_CPU1},
-    {"Tc1a", "Avg: ACC Temp Sensor1", SWITCH_SRC_SOC_CPU1},
-    {"Tc1x", "Max: ACC Temp Sensor1", SWITCH_SRC_SOC_CPU1},
-    {"Tc2i", "ACC Temp Sensor2", SWITCH_SRC_SOC_CPU2},
-    {"Tc2a", "Avg: ACC Temp Sensor2", SWITCH_SRC_SOC_CPU2},
-    {"Tc2x", "Max: ACC Temp Sensor2", SWITCH_SRC_SOC_CPU2},
-    {"Tc3i", "ACC Temp Sensor3", SWITCH_SRC_SOC_CPU3},
-    {"Tc3a", "Avg: ACC Temp Sensor3", SWITCH_SRC_SOC_CPU3},
-    {"Tc3x", "Max: ACC Temp Sensor3", SWITCH_SRC_SOC_CPU3},
+    {"TG0B", "gas gauge battery", SWITCH_SRC_BATTERY, 0},
+    {"TP1d", "PMU tdev1", SWITCH_SRC_TMP451_PCB, 1},
+    {"TP2d", "PMU tdev2", SWITCH_SRC_TMP451_PCB, 0},
+    {"TP3d", "PMU tdev3", SWITCH_SRC_TMP451_PCB, 1},
+    {"TP4d", "PMU tdev4", SWITCH_SRC_TMP451_PCB, 1},
+    {"TP5d", "PMU tdev5", SWITCH_SRC_TMP451_PCB, 1},
+    {"TP6d", "PMU tdev6", SWITCH_SRC_TMP451_PCB, 0},
+    {"TP7d", "PMU tdev7", SWITCH_SRC_TMP451_PCB, 1},
+    {"TP8d", "PMU tdev8", SWITCH_SRC_TMP451_PCB, 0},
+    {"TR1d", "PMU2 tdev1", SWITCH_SRC_TMP451_PCB, 1},
+    {"TR2d", "PMU2 tdev2", SWITCH_SRC_TMP451_PCB, 1},
+    {"TP0Z", "PMU tcal", SWITCH_SRC_TCAL, 0},
+    {"TP0j", "PMU tjunc", SWITCH_SRC_TMP451_PCB, 1},
+    {"TQ0B", "Charger tbat", SWITCH_SRC_BATTERY, 1},
+    {"Th0i", "PMGR SOC Die Temp Sensor0", SWITCH_SRC_SOC_GPU, 1},
+    {"Th0a", "Avg: PMGR SOC Die Temp Sensor0", SWITCH_SRC_SOC_GPU, 0},
+    {"Th0x", "Max: PMGR SOC Die Temp Sensor0", SWITCH_SRC_SOC_GPU, 0},
+    {"Th1i", "PMGR SOC Die Temp Sensor1", SWITCH_SRC_SOC_PLLX, 1},
+    {"Th1a", "Avg: PMGR SOC Die Temp Sensor1", SWITCH_SRC_SOC_PLLX, 0},
+    {"Th1x", "Max: PMGR SOC Die Temp Sensor1", SWITCH_SRC_SOC_PLLX, 0},
+    {"Th2i", "PMGR SOC Die Temp Sensor2", SWITCH_SRC_TMP451_SOC, 1},
+    {"Th2a", "Avg: PMGR SOC Die Temp Sensor2", SWITCH_SRC_TMP451_SOC, 0},
+    {"Th2x", "Max: PMGR SOC Die Temp Sensor2", SWITCH_SRC_TMP451_SOC, 0},
+    {"Th3i", "PMGR SOC Die Temp Sensor3", SWITCH_SRC_SOC_GPU, 1},
+    {"Th3a", "Avg: PMGR SOC Die Temp Sensor3", SWITCH_SRC_SOC_GPU, 0},
+    {"Th3x", "Max: PMGR SOC Die Temp Sensor3", SWITCH_SRC_SOC_GPU, 0},
+    {"Tc0i", "ACC Temp Sensor0", SWITCH_SRC_SOC_CPU0, 1},
+    {"Tc0a", "Avg: ACC Temp Sensor0", SWITCH_SRC_SOC_CPU0, 0},
+    {"Tc0x", "Max: ACC Temp Sensor0", SWITCH_SRC_SOC_CPU0, 0},
+    {"Tc1i", "ACC Temp Sensor1", SWITCH_SRC_SOC_CPU1, 1},
+    {"Tc1a", "Avg: ACC Temp Sensor1", SWITCH_SRC_SOC_CPU1, 0},
+    {"Tc1x", "Max: ACC Temp Sensor1", SWITCH_SRC_SOC_CPU1, 0},
+    {"Tc2i", "ACC Temp Sensor2", SWITCH_SRC_SOC_CPU2, 1},
+    {"Tc2a", "Avg: ACC Temp Sensor2", SWITCH_SRC_SOC_CPU2, 0},
+    {"Tc2x", "Max: ACC Temp Sensor2", SWITCH_SRC_SOC_CPU2, 0},
+    {"Tc3i", "ACC Temp Sensor3", SWITCH_SRC_SOC_CPU3, 1},
+    {"Tc3a", "Avg: ACC Temp Sensor3", SWITCH_SRC_SOC_CPU3, 0},
+    {"Tc3x", "Max: ACC Temp Sensor3", SWITCH_SRC_SOC_CPU3, 0},
 };
+
+// The sensors thermalmonitord reads every 5 s (copyEvent), as a mask of table indices. It sets an infoOnly sensor's
+// health bit whenever its service exists, so with no service hooked its "current" mask is exactly the infoOnly bits
+// (0x9249276ba).
+static inline uint64_t switch_sensors_read_mask(void)
+{
+    uint64_t mask = 0;
+    for (unsigned i = 0; i < SWITCH_SENSOR_COUNT; ++i)
+        if (!switch_sensors[i].info_only) mask |= 1ull << i;
+    return mask;
+}
 
 // A 4CC as the 32-bit big-endian integer thermalmonitord compares a service's LocationID with.
 static inline uint32_t switch_sensor_fourcc(const char *fourcc)

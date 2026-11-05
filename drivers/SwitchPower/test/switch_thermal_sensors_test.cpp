@@ -156,6 +156,22 @@ TEST(SwitchThermalSensors, TableIsThePlist)
     }
 }
 
+// J120AP-Info.plist's infoOnly entries: thermalmonitord never reads them, but sets their health bit when the service
+// exists. r8e logged "partial sensors: ... current 9249276ba" with every read failing: exactly these bits.
+TEST(SwitchThermalSensors, InfoOnlyIsThePlist)
+{
+    const std::set<std::string> infoOnly = {"TP1d", "TP3d", "TP4d", "TP5d", "TP7d", "TR1d", "TR2d", "TP0j", "TQ0B",
+                                            "Th0i", "Th1i", "Th2i", "Th3i", "Tc0i", "Tc1i", "Tc2i", "Tc3i"};
+    uint64_t infoBits = 0;
+    for (unsigned i = 0; i < sensors_count(); ++i) {
+        EXPECT_EQ(sensor_info_only(i), infoOnly.count(sensor_fourcc(i)) ? 1 : 0) << sensor_fourcc(i);
+        if (infoOnly.count(sensor_fourcc(i))) infoBits |= 1ull << i;
+    }
+    EXPECT_EQ(infoBits, 0x9249276baull);
+    EXPECT_EQ(sensors_read_mask(), kExpectedMask & ~0x9249276baull);
+    EXPECT_EQ(__builtin_popcountll(sensors_read_mask()), 21);
+}
+
 TEST(SwitchThermalSensors, EveryValueIsTheNearestMeasurement)
 {
     const std::regex board("PMU2? (tdev\\d|tjunc)");

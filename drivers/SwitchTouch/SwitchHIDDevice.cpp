@@ -322,6 +322,7 @@ class SwitchHIDDevice : public IOHIDDevice {
     SwitchHIDCopyEventHandler copyHandler = nullptr;
     void *copyContext = nullptr;
     volatile bool hooked = false;  // its event driver answers temperature events through copyHandler
+    bool hookedAtPublish = false;
 
 public:
     bool initWithProfile(const Profile *p)
@@ -339,7 +340,12 @@ public:
     }
     bool isTemperature() const { return profile == &kProfiles[kSwitchHIDTemperature]; }
     bool isHooked() const { return hooked; }
-    void setHooked() { hooked = true; }
+    bool isHookedAtPublish() const { return hookedAtPublish; }
+    void setHooked(bool atPublish)
+    {
+        hookedAtPublish = atPublish;
+        hooked = true;
+    }
     OSObject *answer() { return copyHandler ? copyHandler(copyContext) : nullptr; }
     IOWorkLoop *getWorkLoop() const override { return loop; }
     OSString *newTransportString() const override { return OSString::withCString(profile->transport); }
@@ -577,51 +583,59 @@ OSObject *answer(void *device)
     return static_cast<SwitchHIDDevice *>(device)->answer();
 }
 
-// Gives a temperature device's IOHIDEventDriver the shared vtable copy whose copyEvent is ours. Under `lock`. False
-// (one line) if the driver does not look like the one this was written against; the device then stays unhooked.
-bool install(IOService *driver, SwitchHIDDevice *device)
+// Gives a temperature device's IOHIDEventDriver the shared vtable copy whose copyEvent is ours. Under `lock`. A driver
+// that does not look like the one this was written against stays unhooked (one line for the first of each kind).
+// The driver may already be published: both tables are complete and the pointer store is single-copy atomic, so a
+// concurrent virtual call takes one table or the other.
+SwitchHIDHook install(IOService *driver, SwitchHIDDevice *device, bool atPublish)
 {
+    static bool slotsLogged, vtableLogged;
     const uint32_t page = edge::call<uint32_t>(driver, kPrimaryUsagePage),
                    usage = edge::call<uint32_t>(driver, kPrimaryUsage);
     uintptr_t *vtable = *reinterpret_cast<uintptr_t **>(driver);
     if (page != 0xff00 || usage != 0x05) {
-        IOLog("SwitchHID: temperature sensor not hooked: event driver slots 199/200 answer %#x/%#x, not 0xff00/0x5 "
-              "(IOHIDEventService's reserved slots moved)\n",
-              page, usage);
-        return false;
+        if (!slotsLogged)
+            IOLog("SwitchHID: temperature sensor not hooked: event driver slots 199/200 answer %#x/%#x, not 0xff00/0x5 "
+                  "(IOHIDEventService's reserved slots moved)\n",
+                  page, usage);
+        slotsLogged = true;
+        return kSwitchHIDHookWrongSlots;
     }
     if (!table) {
         auto *copy = static_cast<uintptr_t *>(IOMalloc(kSlots * sizeof(uintptr_t)));
-        if (!copy) return false;
+        if (!copy) return kSwitchHIDHookNoMemory;
         memcpy(copy, vtable, kSlots * sizeof(uintptr_t));
         originalTable = reinterpret_cast<uintptr_t>(vtable);
         original = copy[kCopyEvent];
         copy[kCopyEvent] = reinterpret_cast<uintptr_t>(&copyEvent);
         table = copy;
     } else if (reinterpret_cast<uintptr_t>(vtable) != originalTable) {
-        IOLog("SwitchHID: temperature sensor not hooked: its event driver has another vtable (%p, first %p)\n", vtable,
-              reinterpret_cast<void *>(originalTable));
-        return false;
+        if (!vtableLogged)
+            IOLog("SwitchHID: temperature sensor not hooked: its event driver has another vtable (%p, first %p)\n",
+                  vtable, reinterpret_cast<void *>(originalTable));
+        vtableLogged = true;
+        return kSwitchHIDHookOtherVtable;
     }
     const uint32_t n = entryCount;
-    if (n >= kMaxDevices) return false;
+    if (n >= kMaxDevices) return kSwitchHIDHookNoMemory;
     entries[n] = {driver, device};
     __atomic_store_n(&entryCount, n + 1, __ATOMIC_RELEASE);
     __asm__ volatile("dmb ish" ::: "memory");
     *reinterpret_cast<uintptr_t **>(driver) = table;
-    device->setHooked();
-    return true;
+    device->setHooked(atPublish);
+    return kSwitchHIDHooked;
 }
 
-// IOKit's first-publish notification for our temperature devices' IOHIDEventDrivers (the matching thread, before any
-// client can open them: the event system learns of the service from the same publish, later).
+// IOKit's first-publish notification for every IOHIDEventDriver (the matching thread, before the event system learns of
+// the service from the same publish). Temperature devices are told apart by their provider: an IOPropertyMatch on the
+// driver's VendorID/ProductID never fired for them on hardware.
 bool published(void *, void *, IOService *driver, IONotifier *)
 {
     IOService *interface = driver ? driver->getProvider() : nullptr;
     auto *device = interface ? OSDynamicCast(SwitchHIDDevice, interface->getProvider()) : nullptr;
     if (!device || !device->isTemperature()) return true;
     IOLockLock(lock);
-    const bool done = device->isHooked() || install(driver, device);
+    const bool done = device->isHooked() || install(driver, device, true) == kSwitchHIDHooked;
     IOLockUnlock(lock);
     if (done) switch_sensors_note();
     return true;
@@ -630,22 +644,13 @@ bool published(void *, void *, IOService *driver, IONotifier *)
 // Once, before the first temperature device: the notification above. Callers serialized by createLock().
 void prepare()
 {
-    if (notifier) return;
+    if (lock) return;
     lock = IOLockAlloc();
+    if (!lock) return;
     OSDictionary *matching = IOService::serviceMatching("IOHIDEventDriver");
-    OSNumber *product = OSNumber::withNumber(kProfiles[kSwitchHIDTemperature].productID, 32);
-    OSNumber *vendor = OSNumber::withNumber(kVendorID, 32);
-    OSDictionary *properties = OSDictionary::withCapacity(2);
-    if (lock && matching && product && vendor && properties) {
-        properties->setObject("ProductID", product);
-        properties->setObject("VendorID", vendor);
-        matching->setObject(gIOPropertyMatchKey, properties);
+    if (matching)
         notifier = IOService::addMatchingNotification(gIOFirstPublishNotification, matching, &published, nullptr);
-    }
     OSSafeReleaseNULL(matching);
-    OSSafeReleaseNULL(product);
-    OSSafeReleaseNULL(vendor);
-    OSSafeReleaseNULL(properties);
     if (!notifier) IOLog("SwitchHID: temperature sensors: no publish notification for their event drivers\n");
 }
 }  // namespace temperature
@@ -704,7 +709,7 @@ IOService *switch_hid_create_temperature(const char *product, uint32_t locationI
     prepare();
     temperature::prepare();
     IOLockUnlock(lock);
-    if (!temperature::notifier) return nullptr;
+    if (!temperature::lock) return nullptr;  // without the notifier, switch_hid_temperature_hook still hooks
 
     IOService *resources = IOService::getResourceService();
     auto *device = OSTypeAlloc(SwitchHIDDevice);
@@ -728,6 +733,23 @@ bool switch_hid_temperature_hooked(IOService *device)
 {
     auto *hid = OSDynamicCast(SwitchHIDDevice, device);
     return hid && hid->isHooked();
+}
+
+SwitchHIDHook switch_hid_temperature_hook(IOService *device)
+{
+    auto *hid = OSDynamicCast(SwitchHIDDevice, device);
+    if (!hid || !hid->isTemperature() || !temperature::lock) return kSwitchHIDHookNoDriver;
+    if (hid->isHooked()) return hid->isHookedAtPublish() ? kSwitchHIDHookedAtPublish : kSwitchHIDHooked;
+    IOService *driver = edge::findDriver(hid);
+    if (!driver) return kSwitchHIDHookNoDriver;
+    IOLockLock(temperature::lock);
+    SwitchHIDHook result = kSwitchHIDHooked;
+    if (hid->isHooked())
+        result = hid->isHookedAtPublish() ? kSwitchHIDHookedAtPublish : kSwitchHIDHooked;
+    else
+        result = temperature::install(driver, hid, false);
+    IOLockUnlock(temperature::lock);
+    return result;
 }
 
 OSObject *switch_hid_temperature_event(uint64_t timestamp, int32_t fixed)

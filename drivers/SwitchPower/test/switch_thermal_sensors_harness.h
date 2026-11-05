@@ -13,6 +13,8 @@ unsigned sensors_count(void);
 const char *sensor_fourcc(unsigned i);
 const char *sensor_name(unsigned i);
 int sensor_source(unsigned i);
+int sensor_info_only(unsigned i);
+uint64_t sensors_read_mask(void);
 unsigned sensor_fourcc_value(unsigned i);
 int fixed_of(int milli_c);
 int cltm_centi(int fixed);

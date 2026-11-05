@@ -62,9 +62,12 @@ int switch_sensors_start(void);
 // TMP451 and a battery reading. Waits up to wait_ms for that, woken by switch_sensors_note(); false with the missing
 // parts in `why` once the time is up. Thread context. NativeIOSwitchWatchdog asks once, at watchdogd's first open.
 int switch_sensors_wait_ready(unsigned int wait_ms, char *why, unsigned long len);
-// A source changed state (SwitchThermal's and SwitchBattery's readings, a HID service hooked): wakes the wait above.
-// Any thread context, cheap.
+// A source changed state (SwitchThermal's and SwitchBattery's readings, a HID service hooked, a sensor's first read by
+// thermalmonitord): wakes the wait above. Any thread context, cheap.
 void switch_sensors_note(void);
+// After SC7 (SwitchSuspend's wake, thread context): SOC_THERM programmed again (SC7 resets it); its six sources fail
+// their reads until then. A no-op when SOC_THERM never came up.
+void switch_sensors_resume(void);
 
 // PMIC services (SwitchPMIC.cpp): logs the CPU/EMC clock line, turns on the Wi-Fi/Bluetooth module's 32 kHz sleep
 // clock (MAX77620 GPIO4 as 32K_OUT1 and the 32K output enable, as L4T does; Bluetooth needs it), publishes the

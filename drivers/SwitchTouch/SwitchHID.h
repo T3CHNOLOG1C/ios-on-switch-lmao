@@ -130,8 +130,10 @@ struct __attribute__((packed)) SwitchOrientationReport {
 // reads them every 5 s with IOHIDServiceClientCopyEvent(kIOHIDEventTypeTemperature), which reaches the event driver's
 // copyEvent through IOHIDEventServiceUserClient. IOHIDEventDriver::copyEvent answers keyboard, orientation and vendor
 // events only, so each temperature device's driver gets a shared vtable copy whose copyEvent (slot 201) hands
-// temperature requests to the device's handler (other types go to the original). Installed from IOKit's first-publish
-// notification for the driver, after slots 199/200 (getPrimaryUsagePage/getPrimaryUsage) have answered 0xff00/0x0005.
+// temperature requests to the device's handler (other types go to the original). Installed, after slots 199/200
+// (getPrimaryUsagePage/getPrimaryUsage) have answered 0xff00/0x0005, from IOKit's first-publish notification for the
+// driver, or by switch_hid_temperature_hook once the device's matching is quiet (the notification has not been seen
+// to fire for these drivers on hardware).
 // The handler runs on the client's thread (thermalmonitord's call through backboardd's event system), possibly inside
 // the event service's command gate (the 38 devices share one work loop): it must not sleep long; it returns an event
 // from switch_hid_temperature_event (+1) or nullptr (the read fails).
@@ -141,6 +143,18 @@ IOService *switch_hid_create_temperature(const char *product, uint32_t locationI
                                          void *context);
 // Whether that device's event driver has been found and hooked (then thermalmonitord's reads reach the handler).
 bool switch_hid_temperature_hooked(IOService *device);
+// Hooks the IOHIDEventDriver that has opened the device's interface, unless the publish notification has. Thread
+// context, never waits.
+enum SwitchHIDHook : unsigned {
+    kSwitchHIDHooked = 0,       // by switch_hid_temperature_hook
+    kSwitchHIDHookedAtPublish,  // by the publish notification
+    kSwitchHIDHookNoDriver,     // no IOHIDEventDriver has opened its interface (yet)
+    kSwitchHIDHookWrongSlots,   // slots 199/200 did not answer 0xff00/0x0005 (one log line, the first time)
+    kSwitchHIDHookOtherVtable,  // its driver's vtable is not the one the other drivers share (one log line)
+    kSwitchHIDHookNoMemory,
+    kSwitchHIDHookKinds,
+};
+SwitchHIDHook switch_hid_temperature_hook(IOService *device);
 // A kIOHIDEventTypeTemperature event (+1) with kIOHIDEventFieldTemperatureLevel = `fixed` (16.16 degrees C) at
 // `timestamp` (mach absolute time); nullptr without memory, or for the rest of the boot (one log line) once the first
 // event did not read back what was set.

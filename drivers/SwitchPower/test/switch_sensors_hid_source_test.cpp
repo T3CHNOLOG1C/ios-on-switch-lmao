@@ -26,6 +26,10 @@ TEST(SwitchSensorsHidSource, HidShapes)
     // IOHIDEvent: setTimeStamp 17, getType 18, setType 19 (as SwitchALS), getFixedValue 25, setFixedValue 26.
     EXPECT_THAT(hid, HasSubstr("kSetTimeStamp = 17, kGetType = 18, kSetType = 19, kGetFixed = 25, kSetFixed = 26"));
     EXPECT_THAT(hid, HasSubstr("kType = 15, kFieldLevel = 0xf0000"));  // what IOHIDEventGetFloatValue(e, 0xf0000) reads
+    // The publish notification matches every IOHIDEventDriver: one with an IOPropertyMatch on VendorID/ProductID never
+    // fired for the temperature drivers on hardware.
+    EXPECT_THAT(hid, HasSubstr("addMatchingNotification(gIOFirstPublishNotification, matching, &published"));
+    EXPECT_THAT(hid, testing::Not(HasSubstr("gIOPropertyMatchKey")));
     const std::string als = SourceText("../../SwitchBrightness/SwitchALS.cpp");
     EXPECT_THAT(als, HasSubstr("kSetTimeStamp = 17, kSetType = 19, kSetIntegerValue = 24"));
 }

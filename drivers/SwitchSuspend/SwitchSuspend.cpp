@@ -46,6 +46,7 @@ void ioswitch_block_suspend(void);
 void ioswitch_block_resume(void);
 void switch_thermal_suspend(void);
 void switch_thermal_resume(void);
+void switch_sensors_resume(void);
 void switch_rtc_sleep_enable(void);
 void switch_rtc_suspend(void);
 int switch_rtc_resume(void);  // 1 when ALARM1 is what woke the console
@@ -351,6 +352,7 @@ void SwitchSuspend::wakeDevices()
     timed("wake", 2, "sd", ioswitch_block_resume);
     timed("wake", 2, "battery", switch_battery_resume);  // the normal gauge windows, a re-read
     timed("wake", 3, "thermal", switch_thermal_resume);
+    timed("wake", 3, "sensors", switch_sensors_resume);
     timed("wake", 4, "joycon", switch_joycon_resume);
     timed("wake", 5, "touch", switch_touch_resume);
     timed("wake", 6, "display", tegra_display_resume);

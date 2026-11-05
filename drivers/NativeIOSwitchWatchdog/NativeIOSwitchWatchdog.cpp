@@ -25,8 +25,12 @@
 // temperature sensor of the J120AP thermal model answers (drivers/SwitchPower/SwitchSensors.cpp, CONTRACT.md); an
 // unhealthy thermalmonitord is killed at 60 and 120 s and ends in a "userspace watchdog timeout" panic at ~199 s (r7t,
 // r7u, before the sensors existed). So watchdogd's first open of this service waits (at most kSensorWaitMS, woken as
-// sensors come up) for switch_sensors_wait_ready(): with every sensor answering, monitoring stays on; otherwise it is
+// sensors come up and as thermalmonitord first reads each one) for switch_sensors_wait_ready(): once thermalmonitord
+// has read every sensor it reads through our hook and every source answers, monitoring stays on; otherwise it is
 // turned off for the boot before watchdogd asks, with one line naming what is missing.
+// thermalmonitord's first read pass can come a minute after watchdogd's open on a slow boot (38 s and 90 s of uptime,
+// logo at 137 s), so the wait is long. Nothing is monitored while it lasts; after the verdict Apple's timeouts apply
+// (60 s silent: killed; the third time: panic).
 // A late object (static initializer staged): NativeIOSwitchWatchdogPublish.cpp registers both classes.
 #include "OriginalIOWatchdog.h"
 #include <IOKit/IOLib.h>
@@ -54,7 +58,7 @@ class NativeIOSwitchWatchdog : public IOWatchdog {
     uint64_t pausedLeft_;
     IOLock *verdictLock_;  // thermalmonitord's verdict, taken once at watchdogd's first open
     bool verdictTaken_;
-    static constexpr unsigned kSensorWaitMS = 20000;  // the most watchdogd's first open waits for the sensors
+    static constexpr unsigned kSensorWaitMS = 180000;  // the most watchdogd's first open waits for the sensors
 
     void arm();
     uint64_t snapshot(bool *monitoring);
