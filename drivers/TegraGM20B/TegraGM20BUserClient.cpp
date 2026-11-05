@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // AGXDeviceUserClient: one connection = one GPU address space, implementing scratchpad/gpu/CONTRACT.md v1 over the wire
-// records of TegraGM20BABI.h (copied verbatim from the userland side). Transport modelled on
-// drivers/NativeAdreno/NativeAdrenoPublish.cpp: Apple user-client class name (sandbox profiles admit it), one open type,
-// struct-in/struct-out methods with exact sizes, the same methods tunnelled through any admitted selector, and
-// clientMemoryForType views cached per token so IOConnectUnmapMemory64 finds the same descriptor.
-// GPU work goes through gpu.c (TegraGM20BGpu.h). Fence waits sleep until the GPU's nonstall interrupt wakes them;
-// a fence found complete without that wake panics (no polled mode), and so does one that never completes.
+// records of TegraGM20BABI.h. Transport modelled on drivers/NativeAdreno/NativeAdrenoPublish.cpp: Apple user-client
+// class name (sandbox profiles admit it), one open type, struct-in/struct-out methods with exact sizes, the same
+// methods tunnelled through any admitted selector, and clientMemoryForType views cached per token so
+// IOConnectUnmapMemory64 finds the same descriptor. GPU work goes through gpu.c (TegraGM20BGpu.h). Fence waits sleep
+// until the GPU's nonstall interrupt wakes them; a fence found complete without that wake panics (no polled mode), and
+// so does one that never completes.
 #include <os/log.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -34,8 +34,8 @@ constexpr uint32_t kFenceToken = 0xfe000001u;
 constexpr uint32_t kMaxConnections = 16, kMaxConnectionsAll = 64;
 // GPU pool pages are outside the VM (arm_vm_init.c pmap_ioswitch_ram_init), so the kernel reports them as device
 // memory, and for a physical descriptor IOKit fixes the user mapping's memory type from that default when the descriptor
-// is made: kIOMapWriteCombineCache at map time does not change it. Without this the client got Device-nGnRE and its first
-// unaligned memmove into a BO was an alignment fault (10-30: backboardd SIGBUS in Texture::replace_region).
+// is made: kIOMapWriteCombineCache at map time does not change it. Without this the client gets Device-nGnRE and its
+// first unaligned memmove into a BO is an alignment fault (backboardd SIGBUS in Texture::replace_region).
 constexpr IOOptionBits kPoolCacheMode = static_cast<IOOptionBits>(kIOWriteCombineCache)
 					<< kIOMemoryBufferCacheShift;
 volatile uint32_t gConnections;
@@ -100,14 +100,12 @@ bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes);
 // vm_object_paging_wait) for every UPL on that object to be committed, and the retain count does not show those: an import
 // of the view's mapping (BoImport of the WC pages, m2v's twin of a raw buffer) holds one until its own BO is released,
 // maybe on another connection, maybe later on the very thread that freed the view. So no client thread releases a view:
-//  - r7u: a dying task closes its connections one after the other on one thread; the raw connection's view went first,
-//    and the twin's connection, which would complete that UPL, never got closed (backboardd's abort became a frozen
-//    screen, its exit stuck in vm_object_destroy under AGXDeviceUserClient::releaseBo <- clientClose, then the watchdog
-//    panic at 199 s).
-//  - the same wait on a live task's thread: a BoFree of a raw buffer no task maps any more, or a BoAlloc that released
-//    orphans inline (as this did before), with the buffer's twin import still live: the compositor's thread waits for
-//    an import only it would free. (r7x froze on a Joy-Con screenshot; no log of it reached us, so that it was this
-//    wait is inferred, not shown. With no client thread left to wait here, a freeze that remains is something else.)
+//  - a dying task closes its connections one after the other on one thread; if the raw connection's view goes first,
+//    the twin's connection, which would complete that UPL, never gets closed (the task's exit hangs in
+//    vm_object_destroy under AGXDeviceUserClient::releaseBo <- clientClose until the watchdog panics);
+//  - the same wait on a live task's thread: a BoFree of a raw buffer no task maps any more, or a BoAlloc that releases
+//    orphans inline, with the buffer's twin import still live: the compositor's thread waits for an import only it
+//    would free.
 // Here a run that meets such a view waits for its import to go, with the rest of the batch it took behind it; orphans
 // freed meanwhile get a run of their own (the call is not ONCE: XNU thread_call.c _pending_call_enqueue queues a running
 // non-ONCE call again, and the kernel group is TCG_PARALLEL, so another thread runs it). A view whose twin a long-lived
@@ -209,8 +207,7 @@ bool poolZeroNow();
 // zeroed yet are room too: when short, they are zeroed now rather than the BO sent elsewhere.
 const char *poolRefusal(uint64_t bytes, uint64_t held, bool compositor)
 {
-	// (the compositor zeroes pending ranges on its thread only where the floor would refuse it, as it did only when the
-	// pool had no room)
+	// (the compositor zeroes pending ranges on its thread only where the floor would refuse it)
 	uint64_t avail = tgm_pool_avail();
 	if (avail < bytes + (compositor ? kPoolFloorBytes : poolReserveBytes()) && poolZeroNow())
 		avail = tgm_pool_avail();
@@ -220,21 +217,20 @@ const char *poolRefusal(uint64_t bytes, uint64_t held, bool compositor)
 		compositor);
 }
 
-// ------------------------------------------------------------------ BoAlloc without waiting: spare BOs
-// What a BoAlloc cost its caller before (r7l, after 315c6e5): a cached BO is allocated and zero-filled by the VM and then
-// cleaned to DRAM line by line (0.34 ms per MiB), 18-26 ms for backboardd's 16 MiB m2v blocks, which Core Animation makes
-// on its render thread; a pool BO was memset on the caller's thread (4.5 ms for 16 MiB). Now:
+// BoAlloc without waiting: spare BOs. Made on the caller's thread, a cached BO is allocated and zero-filled by the VM
+// and then cleaned to DRAM line by line (0.34 ms per MiB): 18-26 ms for backboardd's 16 MiB m2v blocks, which Core
+// Animation makes on its render thread; a pool BO's memset takes 4.5 ms for 16 MiB. So:
 //  - Cached BOs come from spares in size classes (4-64 KiB by powers of two, then quarter steps to 256 MiB, so a BO
 //    wastes at most a quarter of its spare): a BoAlloc takes the smallest ready spare of its class or up to twice its size
 //    (classUp, spareTake) and maps it: no allocation, no zeroing, no clean on the caller's thread. A BO smaller than its
 //    spare is a view of the spare's first pages. The class of a size missed is kept warm from then on, and a few classes
 //    from the start (kWarm: what NVK and m2v make most: 64 KiB pieces, m2v's 4 MiB blocks, backboardd's 8 and 16 MiB
 //    ones, two of the 16 MiB so that a pair of them in one frame waits for neither).
-//  - A freed cached BO no task maps any more goes to the spares as it is (a list push: BoFree no longer unwires and
-//    frees); a thread call zeroes it through its kernel mapping and cleans it to DRAM once, then files it by class, or
-//    gives it back to the VM past kSpareCapBytes. The thread call runs on a free, a miss or a take below a class's mark:
-//    never on a timer. Under memory pressure (memorystatus' level, the one apps' memory warnings follow) it gives every
-//    spare back and keeps none.
+//  - A freed cached BO no task maps any more goes to the spares as it is (a list push: BoFree does not unwire and
+//    free it); a thread call zeroes it through its kernel mapping and cleans it to DRAM once, then files it by class,
+//    or gives it back to the VM past kSpareCapBytes. The thread call runs on a free, a miss or a take below a class's
+//    mark: never on a timer. Under memory pressure (memorystatus' level, the one apps' memory warnings follow) it gives
+//    every spare back and keeps none.
 //  - A freed pool BO is zeroed by the GPU's copy engine (tgm_pool_scrub; by the same thread call where the scrubber cannot
 //    take it) and given back clean, so the next pool BoAlloc of those pages does no memset (shim nvxnu_pool_alloc_clean
 //    zeroes only pages a plain free left dirty).
@@ -808,7 +804,6 @@ public:
 };
 OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
-	// ------------------------------------------------------------------ lifetime
 	bool AGXDeviceUserClient::setUp(task_t task)
 {
 	task_ = task;
@@ -883,7 +878,6 @@ void AGXDeviceUserClient::free()
 	IOUserClient::free();
 }
 
-// ------------------------------------------------------------------ BOs
 AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo(uint64_t handle)
 {
 	for (Bo *bo = bos_; bo; bo = bo->next)
@@ -994,7 +988,7 @@ void AGXDeviceUserClient::reap(bool force)
 }
 
 // The page list of a prepared descriptor: one getPhysicalSegment per physically contiguous run (each call is a walk of the
-// descriptor's DMA state; per 4 KiB page that was 900 walks for a 1280x720 surface).
+// descriptor's DMA state; per 4 KiB page that would be 900 walks for a 1280x720 surface).
 static IOReturn collectPages(IOMemoryDescriptor *md, uint64_t bytes, uint64_t *pas)
 {
 	for (uint64_t off = 0; off < bytes;) {
@@ -1002,7 +996,7 @@ static IOReturn collectPages(IOMemoryDescriptor *md, uint64_t bytes, uint64_t *p
 		addr64_t pa = md->getPhysicalSegment(off, &len, kIOMemoryMapperNone);
 		len &= ~0xfffULL;
 		if (!len)
-			len = 4096;  // a run shorter than a page: that page alone, as per-page collection took it
+			len = 4096;  // a run shorter than a page: that page alone
 		if (len > bytes - off)
 			len = bytes - off;
 		// GM20B on Tegra210 addresses 34-bit physical memory (nvgpu platform_gk20a_tegra.c dma_mask DMA_BIT_MASK(34),
@@ -1060,7 +1054,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	const char *refused = nullptr;
 	// A coherent BO the pool does not serve (its tiers keep it out, or the pool has no room) is not refused: ordinary pages,
 	// made below as a cached BO's are (never a spare's: those are another BO's cacheable pages), mapped write-combined
-	// (tgm_pool::FromSystem). r8a: refusing Maps' first 4 MiB buffer with 33 MiB of the pool free made VectorKit abort.
+	// (tgm_pool::FromSystem). A refusal would abort clients such as VectorKit (on Maps' first 4 MiB buffer).
 	bool system = false;
 	if (!ret && (in->flags & TegraGM20BBoCoherent)) {
 		refused = poolRefusal(in->bytes, pool_bytes_, critical_);
@@ -1119,11 +1113,11 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		if (in->flags & TegraGM20BBoContiguous)
 			options |= kIOMemoryPhysicallyContiguous;
 		// 34-bit, not 32: a mask below 4 GiB on a non-contiguous buffer makes IOKit use KMA_LOMEM, and arm64 XNU keeps
-		// no low-page pool, so every such BO failed (10-30: NVK "device refused: OutOfMemory(Device)")
+		// no low-page pool, so every such BO fails (NVK "device refused: OutOfMemory(Device)")
 		// The alignment goes into the mask only for Contiguous BOs (ABI: "physical alignment only matters with
 		// Contiguous"): IOBufferMemoryDescriptor takes the mask's low zero bits as the alignment, and any alignment
 		// above the page size makes IOKernelAllocateWithPhysicalRestrict use kmem_alloc_contig, a physically
-		// contiguous search that took up to 130 ms per BO on 11-04 for NVK's 64 KiB-aligned buffers. The GMMU maps
+		// contiguous search that takes up to 130 ms per BO for NVK's 64 KiB-aligned buffers. The GMMU maps
 		// these page by page (bo->pas), so ordinary BOs need no physical alignment.
 		const uint64_t mask = (in->flags & TegraGM20BBoContiguous)
 					      ? 0x3ffffffffULL & ~((1ULL << in->align_log2) - 1)
@@ -1141,7 +1135,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			// The pages come zeroed: the mask makes IOKit allocate with KMA_ZERO (IOKernelAllocateWithPhysicalRestrict),
 			// and vm_page_alloc_list zero-fills each page through the cacheable physical aperture. Clean those zeros to
 			// DRAM and drop the lines, so the GPU and a fresh client view see zeros and no dirty line is written back
-			// later over what the GPU wrote. (A bzero here was a second pass over the whole buffer.)
+			// later over what the GPU wrote. (A bzero here would be a second pass over the whole buffer.)
 			void *va = bo->bmd->getBytesNoCopy();
 			cleanZeros(va, backing, false);
 			lap(1);
@@ -1322,7 +1316,6 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 	return kIOReturnSuccess;
 }
 
-// ------------------------------------------------------------------ VA binds
 // Binds are tracked whole. A Map or Unmap that overlaps a recorded bind removes that whole bind first (NVK binds and
 // unbinds whole VA ranges); this keeps nvkm's raw get/put page-table references balanced.
 void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only)
@@ -1382,7 +1375,6 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 	return kIOReturnSuccess;
 }
 
-// ------------------------------------------------------------------ channels
 IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in,
 					    TegraGM20BAbiChannelCreateReply *out)
 {
@@ -1441,7 +1433,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	PushParse p = {};
 	const Binding *hit = nullptr;
 	uint64_t budget = kScanMaxBytes;
-	bool whole = true;  // scanPush
+	bool whole = true;
 	for (uint32_t i = 0; i < count; i++) {
 		if (prof && i < TGM_PROF_MAX)
 			prof->cls[i] = TGM_PC_SKIP;
@@ -1652,11 +1644,11 @@ IOReturn AGXDeviceUserClient::getStatus(const TegraGM20BAbiChannel *in, TegraGM2
 	return kIOReturnSuccess;
 }
 
-// ------------------------------------------------------------------ CPU mappings (methods 12, 13)
-// What io_connect_map_memory_into_task and io_connect_unmap_memory_from_task do for a task mapping its own connection's
-// memory (IOUserClient::mapClientMemory64 over clientMemoryForType, the same options, the map kept until unmapped or the
-// connection closes), reached through io_connect_method, which WebKit's GPU process profile admits where it refuses those two
-// MIG routines (21H461 syscall-mig list). The same kernel work as IOConnectMapMemory64: nothing is slower.
+// CPU mappings (methods 12, 13): what io_connect_map_memory_into_task and io_connect_unmap_memory_from_task do for a
+// task mapping its own connection's memory (IOUserClient::mapClientMemory64 over clientMemoryForType, the same options,
+// the map kept until unmapped or the connection closes), reached through io_connect_method, which WebKit's GPU process
+// profile admits where it refuses those two MIG routines (21H461 syscall-mig list). The same kernel work as
+// IOConnectMapMemory64: nothing is slower.
 IOReturn AGXDeviceUserClient::mapToken(const TegraGM20BAbiMap *in, TegraGM20BAbiMapReply *out)
 {
 	const uint32_t known = TegraGM20BMapReadOnly | TegraGM20BMapFixed;
@@ -1749,7 +1741,6 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	return kIOReturnSuccess;
 }
 
-// ------------------------------------------------------------------ transport
 template <typename T> static bool reservedZero(const T &v)
 {
 	return v == 0;
@@ -1834,7 +1825,6 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (tgm_stage() < 2)
 		return kIOReturnNotReady;
 
-	// reserved fields must be zero
 	switch (method) {
 	case TegraGM20BMethodVmBind:
 		if (!reservedZero(static_cast<const TegraGM20BAbiVmBind *>(in)->reserved))
@@ -2049,12 +2039,12 @@ extern "C" IOReturn tegra_gm20b_new_user_client(IOService *provider, task_t task
 	return kIOReturnSuccess;
 }
 
-// ------------------------------------------------------------------ GPU frame copy for the display (TegraScanoutCopy.h)
-// The display (boot-args ioswitch-gpu-copy=1 ioswitch-scanout-double=1) offers each swapped surface; gpu.c's present channel
-// copies it, after the compositor's GPU work, into the block-linear target, and calls native_legacy_gpu_complete from the
-// GPU interrupt pass. Offers come one at a time under the display's gate: nothing here waits for the GPU. tegra-gpu-present=0
-// declines every offer (the display then copies on the CPU).
-//   targets   the display's scanout buffers (three: r14-pacing's latest-frame-wins flips), physically contiguous, mapped once
+// GPU frame copy for the display (TegraScanoutCopy.h). The display (boot-args ioswitch-gpu-copy=1
+// ioswitch-scanout-double=1) offers each swapped surface; gpu.c's present channel copies it, after the compositor's GPU
+// work, into the block-linear target, and calls native_legacy_gpu_complete from the GPU interrupt pass. Offers come one
+// at a time under the display's gate: nothing here waits for the GPU. tegra-gpu-present=0 declines every offer (the
+// display then copies on the CPU).
+//   targets   the display's scanout buffers (three: latest-frame-wins flips), physically contiguous, mapped once
 //             each at kPresentTarget + i * 4 MiB, kind 0xfe
 //   surfaces  the last four swapped surfaces, like the display's own surface maps: each keeps a retained and prepared
 //             (wired) descriptor and its GPU mapping at kPresentSurface + i * 16 MiB; the least recently offered one goes
@@ -2123,8 +2113,8 @@ uint64_t presentTarget(uint64_t pa, uint64_t bytes)
 	for (uint32_t i = 0; i < npages; i++)
 		t.pas[i] = pa + (uint64_t(i) << 12);
 	// The copy engine only places whole GOBs; the 16-byte sector order inside a GOB comes from the page kind. With kind 0
-	// (pitch) the 10-31 r3l boot showed every GOB's inside scrambled (jagged edges, sliced text) while GOBs sat in the
-	// right places. L4T maps display surfaces as 0xfe (generic 16Bx2, uncompressed), which the display reads.
+	// (pitch) every GOB's inside comes out scrambled (jagged edges, sliced text) while GOBs sit in the right
+	// places. L4T maps display surfaces as 0xfe (generic 16Bx2, uncompressed), which the display reads.
 	// tegra-gpu-present-kind=N overrides it for a hardware test.
 	uint32_t kind = 0xfe;
 	PE_parse_boot_argn("tegra-gpu-present-kind", &kind, sizeof(kind));
