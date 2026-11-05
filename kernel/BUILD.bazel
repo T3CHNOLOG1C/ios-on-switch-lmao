@@ -18,7 +18,10 @@ lint_files()
 string_flag(
     name = "xnu_version",
     build_setting_default = "10063.141.1",
-    values = ["10063.141.1"],
+    values = [
+        "10063.141.1",
+        "12377.121.6",
+    ],
 )
 
 config_setting(
@@ -26,10 +29,18 @@ config_setting(
     flag_values = {":xnu_version": "10063.141.1"},
 )
 
+config_setting(
+    name = "xnu_12377_121_6",
+    flag_values = {":xnu_version": "12377.121.6"},
+)
+
 # The selected XNU's SDK for the kernel's compiles (headers and the paths the kernel toolchain names).
 alias(
     name = "sdk",
-    actual = select({":xnu_10063_141_1": "//kernel/xnu-10063.141.1:sdk"}),
+    actual = select({
+        ":xnu_10063_141_1": "//kernel/xnu-10063.141.1:sdk",
+        ":xnu_12377_121_6": "//kernel/xnu-12377.121.6:sdk",
+    }),
 )
 
 # Headers every driver may include besides its own (kernel/rules/kernel.bzl EXTRA_HEADERS).

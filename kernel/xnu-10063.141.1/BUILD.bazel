@@ -26,9 +26,11 @@ xnu_package(
         "debug": BUILD_DEVELOPMENT,
         "release": BUILD_RELEASE,
     },
+    darwin = "23.6.0",
     extra_headers = "//diagnostics/ioswitch:headers",
     firehose = "//kernel:fakeroot",
     installhdrs = INSTALLHDRS,
+    ios_min = "17.0",
     kernel_package = KERNEL_PACKAGE,
     version = "10063.141.1",
 )

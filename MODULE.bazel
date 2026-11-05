@@ -132,6 +132,32 @@ http_archive(
     urls = ["https://github.com/apple-oss-distributions/AvailabilityVersions/archive/refs/tags/AvailabilityVersions-141.1.tar.gz"],
 )
 
+# The SDK root's other parts for kernel/xnu-12377.121.6 (the macOS 26.5 release's tags that pair with it): what its
+# recorder installs beside installhdrs.
+http_archive(
+    name = "availability_versions_157_2",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "d92a052edb3c817caa4407868f66f1d93727425a353c2200a41481c27310fdc2",
+    strip_prefix = "AvailabilityVersions-AvailabilityVersions-157.2",
+    urls = ["https://github.com/apple-oss-distributions/AvailabilityVersions/archive/refs/tags/AvailabilityVersions-157.2.tar.gz"],
+)
+
+http_archive(
+    name = "libplatform_375_120_2",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "c0962595da8899cf54445698fd71bddc2118edb8ce8e3d6e11a29ef96ad754bc",
+    strip_prefix = "libplatform-libplatform-375.120.2",
+    urls = ["https://github.com/apple-oss-distributions/libplatform/archive/refs/tags/libplatform-375.120.2.tar.gz"],
+)
+
+http_archive(
+    name = "libdispatch_1542_100_32",
+    build_file_content = _SOURCE_BUILD,
+    sha256 = "b251152f46d2cc16b87be85d32880144b44aadab62eb0712c31b27ca86556718",
+    strip_prefix = "libdispatch-libdispatch-1542.100.32",
+    urls = ["https://github.com/apple-oss-distributions/libdispatch/archive/refs/tags/libdispatch-1542.100.32.tar.gz"],
+)
+
 http_archive(
     name = "libpthread",
     build_file_content = _SOURCE_BUILD,

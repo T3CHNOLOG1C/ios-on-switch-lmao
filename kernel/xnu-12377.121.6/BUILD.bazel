@@ -1,6 +1,34 @@
 # apple-oss-distributions/xnu tag xnu-12377.121.6 (commit ac9718fb1af6), vendored unmodified: Apple's files are under
 # the Apple Public Source License 2.0 (APPLE_LICENSE) and the notices in each file. Only BUILD.bazel and .bzl files in
 # this tree are ours.
-load("//kernel/rules:defs.bzl", "xnu_lint_files")
+#
+# No xnu_package() yet: it replays tables/*.bzl, which update_tables cannot record from this tree as it is. Its make
+# passes name MACHINE_CONFIGS=BCM2837, which xnu-12377 no longer has (10063 did), and xnu_ops.install_base expects the
+# .modulemap templates AvailabilityVersions-141.1 had and 157.2 dropped.
+load("//kernel/rules:defs.bzl", "xnu_lint_files", "xnu_recorder", "xnu_sources", "xnu_unrecorded")
+
+package(default_visibility = ["//visibility:public"])
 
 xnu_lint_files()
+
+xnu_sources(
+    name = "srcs",
+    tags = ["manual"],
+)
+
+xnu_recorder(
+    base_sources = {
+        "availability": "@availability_versions_157_2//:availability",
+        "libdispatch": "@libdispatch_1542_100_32//:LICENSE",
+        "libplatform": "@libplatform_375_120_2//:LICENSE",
+    },
+    darwin = "25.5.0",
+    ios_min = "26.0",
+    version = "12377.121.6",
+)
+
+xnu_unrecorded(
+    name = "sdk",
+    reason = "no tables recorded yet: they need the BCM2837 machine config on this tree, then bazel run :update_tables",
+    tags = ["manual"],
+)

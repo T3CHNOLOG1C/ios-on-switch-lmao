@@ -16,8 +16,8 @@ step that writes it, with paths relative to one of these roots:
 and each table is checked: every file make left (less objects and what r18-xnu-objs' link rules make) has exactly one
 step, and nothing else.
 
-usage: xnu_record.py --xnu DIR --version V --out DIR --availability DIR --libplatform DIR --libdispatch DIR
-                     [--jobs N] [--keep DIR] [--check]
+usage: xnu_record.py --xnu DIR --version V --darwin V --ios-min V --out DIR --availability DIR --libplatform DIR
+                     --libdispatch DIR [--jobs N] [--keep DIR] [--check]
 """
 
 import argparse
@@ -60,28 +60,34 @@ SCRIPT_ENV = [
     'MIGCC',
     'MIGCOM',
 ]
-DARWIN = '23.6.0'
-# The make variables of make's xnu_build.py that reach generated files (CFLAGS_EXTRA and the per-file flags only
-# reach objects).
-BUILD_VARS = [
-    'SDKROOT=iphoneos',
-    'ARCH_CONFIGS=ARM64',
-    'MACHINE_CONFIGS=BCM2837',
-    'ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64',
-    'LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY',
-    'ARM64_LINK_ADDR=0xfffffff007004000',
-    'ARM64_PLKSEG_ADDR=0xfffffff004004000',
-    'DEPLOYMENT_TARGET_FLAGS=-miphoneos-version-min=17.0 -DXNU_TARGET_OS_IOS',
-    'DEPLOYMENT_LINKER_FLAGS=-Wl,-ios_version_min,17.0',
-    'BUILD_LTO=0',
-    'BOUND_CHECKS=0',
-    'BUILD_WERROR=0',
-    'KCC=/usr/bin/false',
-    'KC++=/usr/bin/false',
-    'S_KCC=/usr/bin/false',
-    'GENASSYM_KCC=/usr/bin/false',
-    'LD=/usr/bin/false',
-]
+
+
+def build_vars(ios_min: str) -> list[str]:
+    """Return the make variables of make's xnu_build.py that reach generated files.
+
+    CFLAGS_EXTRA and the per-file flags only reach objects.
+    """
+    return [
+        'SDKROOT=iphoneos',
+        'ARCH_CONFIGS=ARM64',
+        'MACHINE_CONFIGS=BCM2837',
+        'ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64',
+        'LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY',
+        'ARM64_LINK_ADDR=0xfffffff007004000',
+        'ARM64_PLKSEG_ADDR=0xfffffff004004000',
+        f'DEPLOYMENT_TARGET_FLAGS=-miphoneos-version-min={ios_min} -DXNU_TARGET_OS_IOS',
+        f'DEPLOYMENT_LINKER_FLAGS=-Wl,-ios_version_min,{ios_min}',
+        'BUILD_LTO=0',
+        'BOUND_CHECKS=0',
+        'BUILD_WERROR=0',
+        'KCC=/usr/bin/false',
+        'KC++=/usr/bin/false',
+        'S_KCC=/usr/bin/false',
+        'GENASSYM_KCC=/usr/bin/false',
+        'LD=/usr/bin/false',
+    ]
+
+
 INSTALLHDRS_VARS = ['SDKROOT=macosx', 'ARCH_CONFIGS=ARM64', 'MACHINE_CONFIGS=BCM2837', 'KERNEL_CONFIGS=DEVELOPMENT']
 # Files the build leaves that are not headers or sources other code compiles: objects and their records, the host
 # tools, and what the link rules (r18-xnu-objs: config/, san/, assym, version.c) make themselves.
@@ -147,14 +153,14 @@ def wrapper(path, tool, real, watch=False):
     path.chmod(0o755)
 
 
-def run_make(src, work, target, variables, log, jobs, env):
+def run_make(src, work, target, variables, log, jobs, env, version: str, darwin: str):
     command = [
         'make',
         '-C',
         str(src),
         target,
-        'RC_DARWIN_KERNEL_VERSION=' + DARWIN,
-        'RC_ProjectSourceVersion=10063.141.1',
+        'RC_DARWIN_KERNEL_VERSION=' + darwin,
+        'RC_ProjectSourceVersion=' + version,
         'MAKEJOBS=-j' + str(jobs),
         'VERBOSE=YES',
         '-k',
@@ -481,6 +487,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('xnu', 'version', 'out', 'availability', 'libplatform', 'libdispatch'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--darwin', required=True, help='the Darwin version of the OS this XNU shipped in')
+    parser.add_argument('--ios-min', required=True, help='the iOS deployment target the kernel is built for')
     parser.add_argument('--jobs', type=int, default=4)
     parser.add_argument('--keep', help='keep the scratch directory here (for debugging)')
     parser.add_argument(
@@ -558,6 +566,8 @@ def main():
                 log,
                 args.jobs,
                 dict(ih_env, XNU_RECORD_LOG=str(log)),
+                args.version,
+                args.darwin,
             )
         roots = Roots([(str(src), 's'), (str(work / 'obj'), 'o'), (str(dst), 'd'), (DEVELOPER_DIR, 'x')])
         files, links = listing(dst)
@@ -593,10 +603,12 @@ def main():
                     src,
                     work,
                     'build',
-                    BUILD_VARS + ['KERNEL_CONFIGS=' + config] + tools + ['INSTALL=' + str(install_tool)],
+                    build_vars(args.ios_min) + ['KERNEL_CONFIGS=' + config] + tools + ['INSTALL=' + str(install_tool)],
                     log,
                     args.jobs,
                     dict(b_env, XNU_RECORD_LOG=str(log)),
+                    args.version,
+                    args.darwin,
                 )
             roots = Roots([(str(src), 's'), (str(work / 'obj'), 'o'), (str(sdkroot), 'k'), (DEVELOPER_DIR, 'x')])
             files, links = listing(work / 'obj')

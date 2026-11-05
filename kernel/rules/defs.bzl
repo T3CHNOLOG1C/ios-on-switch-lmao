@@ -3,7 +3,7 @@
     load("//kernel/rules:defs.bzl", "xnu_package")
     load(":tables/installhdrs.bzl", "INSTALLHDRS")
     ...
-    xnu_package(version = "10063.141.1", installhdrs = INSTALLHDRS, build = {"debug": ..., "release": ...})
+    xnu_package(version = "10063.141.1", darwin = "23.6.0", ios_min = "17.0", installhdrs = INSTALLHDRS, ...)
 
 Targets (all public):
   :sdk                      the kernel SDK for drivers (//kernel:sdk selects it by //kernel:xnu_version)
@@ -52,14 +52,62 @@ def xnu_lint_files():
     """lint_files() for a package inside a vendored XNU tree."""
     lint_files(exclude = XNU_FOREIGN + ["tables/*.bzl"])
 
-def xnu_sources(name):
+def xnu_sources(name, tags = None):
     """Every file of the XNU tree below this package, across the subpackages (each declares :all)."""
     subs = native.subpackages(include = ["**"], allow_empty = True)
     native.filegroup(
         name = name,
         srcs = native.glob(["**"], exclude = ["**/BUILD.bazel", "**/*.bzl"]) +
                ["//{}/{}:all".format(native.package_name(), s) for s in subs],
+        tags = tags,
     )
+
+# The SDK root's other parts each XNU's installhdrs is recorded with (xnu_ops.install_base).
+BASE_SOURCES_10063 = {
+    "availability": "@availability_versions//:availability",
+    "libdispatch": "@libdispatch//:LICENSE",
+    "libplatform": "@libplatform//:LICENSE",
+}
+
+def xnu_recorder(version, darwin, ios_min, base_sources):
+    """:update_tables (bazel run, manual): re-record tables/*.bzl of this kernel/xnu-<version>/ from its make.
+
+    Args:
+        version: the XNU version ("10063.141.1"), its make's RC_ProjectSourceVersion.
+        darwin: the Darwin version of the OS that XNU shipped in (RC_DARWIN_KERNEL_VERSION).
+        ios_min: the iOS deployment target the kernel is built for.
+        base_sources: {"availability", "libplatform", "libdispatch"}: a file at the root of each repository.
+
+    Returns:
+        struct(args, data): the recorder's arguments and runfiles, for a check that reruns it.
+    """
+    root = native.package_name()
+    args = [
+        "--xnu=" + root,
+        "--version=" + version,
+        "--darwin=" + darwin,
+        "--ios-min=" + ios_min,
+        "--out={}/tables".format(root),
+    ] + ["--{}=$(rootpath {})".format(name, base_sources[name]) for name in ("availability", "libplatform", "libdispatch")]
+    data = [base_sources[name] for name in ("availability", "libplatform", "libdispatch")]
+    py_binary(
+        name = "update_tables",
+        srcs = ["//kernel/rules:xnu_record.py", "//kernel/rules:xnu_ops.py"],
+        main = "//kernel/rules:xnu_record.py",
+        args = args,
+        data = data,
+        tags = ["manual"],
+    )
+    return struct(args = args, data = data)
+
+def _xnu_unrecorded_impl(ctx):
+    fail("{}: {}".format(ctx.label, ctx.attr.reason))
+
+xnu_unrecorded = rule(
+    implementation = _xnu_unrecorded_impl,
+    doc = "Stands in for a target of a vendored XNU that cannot be built yet: analysing it fails with the reason.",
+    attrs = {"reason": attr.string(mandatory = True)},
+)
 
 # Steps make's flow had besides the recorded ones: the empty directories the compiles' -I name (a marker each, as
 # make's xnu_build.py made), and the sanitizer ignore list the kernel recipes name (san/Makefile's sed).
@@ -75,11 +123,13 @@ _SDKROOT_EXTRA = [
     {"content": "", "kind": "write", "out": "d/usr/local/include/kernel/.keep"},
 ]
 
-def xnu_package(version, installhdrs, build, kernel_package, extra_headers, firehose):
+def xnu_package(version, darwin, ios_min, installhdrs, build, kernel_package, extra_headers, firehose):
     """The SDK root, the object root and the SDK of kernel/xnu-<version>, from its recorded tables.
 
     Args:
         version: the XNU version ("10063.141.1").
+        darwin: the Darwin version of the OS that XNU shipped in (xnu_recorder).
+        ios_min: the iOS deployment target the kernel is built for (xnu_recorder).
         installhdrs: the installhdrs table.
         build: {"debug": DEVELOPMENT table, "release": RELEASE table}.
         kernel_package: the package of the kernel's other generated files (kernel/rules/layout.bzl KERNEL_PACKAGE).
@@ -165,24 +215,7 @@ def xnu_package(version, installhdrs, build, kernel_package, extra_headers, fire
         extra = [extra_headers],
     )
 
-    record_args = [
-        "--xnu=" + root,
-        "--version=" + version,
-        "--out={}/tables".format(root),
-        # A file at each repository's root (the recorder takes its directory).
-        "--availability=$(rootpath @availability_versions//:availability)",
-        "--libplatform=$(rootpath @libplatform//:LICENSE)",
-        "--libdispatch=$(rootpath @libdispatch//:LICENSE)",
-    ]
-    record_data = ["@availability_versions//:availability", "@libplatform//:LICENSE", "@libdispatch//:LICENSE"]
-    py_binary(
-        name = "update_tables",
-        srcs = ["//kernel/rules:xnu_record.py", "//kernel/rules:xnu_ops.py"],
-        main = "//kernel/rules:xnu_record.py",
-        args = record_args,
-        data = record_data,
-        tags = ["manual"],
-    )
+    recorder = xnu_recorder(version = version, darwin = darwin, ios_min = ios_min, base_sources = BASE_SOURCES_10063)
 
     # Whether the tables are what make does now (a few minutes of make: manual, run it after a makefile change).
     py_test(
@@ -190,7 +223,7 @@ def xnu_package(version, installhdrs, build, kernel_package, extra_headers, fire
         size = "large",
         srcs = ["//kernel/rules:xnu_record.py", "//kernel/rules:xnu_ops.py"],
         main = "//kernel/rules:xnu_record.py",
-        args = record_args + ["--check"],
-        data = record_data + [":srcs"] + native.glob(["tables/*.bzl"]),
+        args = recorder.args + ["--check"],
+        data = recorder.data + [":srcs"] + native.glob(["tables/*.bzl"]),
         tags = ["manual", "no-remote-exec", "requires-darwin"],
     )
