@@ -1,11 +1,13 @@
-// Host harness for drivers/SwitchUSB/SwitchPDPolicy.h and XusbPorts.h (tests/test_switch_usb_host.py): the headers'
-// static inline functions as exported ones for ctypes, plus a fake xHCI capability space for the port lookup.
+// Host harness for drivers/SwitchUSB/SwitchPDPolicy.h and XusbPorts.h: the headers' static inline functions as exported
+// C ones (C11, -Wconversion -Wsign-conversion), plus a fake xHCI capability space for the port lookup, driven by
+// switch_usb_host_test.cpp.
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#include "SwitchPDPolicy.h"
-#include "XusbPorts.h"
+#include "../SwitchPDPolicy.h"
+#include "../XusbPorts.h"
+#include "switch_usb_host_harness.h"
 
 // --- SwitchPDPolicy.h ---
 static void copy_why(const char *why, char *out, size_t size)
@@ -37,15 +39,30 @@ int pd_window_end(int phase, int saw_detach, uint16_t status1, int *next, char *
     return (int)step.act;
 }
 
-int pd_switches_on(int phase, int allow) { return switch_pd_switches_on((enum switch_pd_phase)phase, allow != 0); }
-int pd_rails_on(int phase) { return switch_pd_rails_on((enum switch_pd_phase)phase); }
-int pd_vbus_ours(uint16_t status1) { return switch_pd_vbus_ours(status1); }
-const char *pd_phase_name(int phase) { return switch_pd_phase_name((enum switch_pd_phase)phase); }
+int pd_switches_on(int phase, int allow)
+{
+    return switch_pd_switches_on((enum switch_pd_phase)phase, allow != 0);
+}
+int pd_rails_on(int phase)
+{
+    return switch_pd_rails_on((enum switch_pd_phase)phase);
+}
+int pd_vbus_ours(uint16_t status1)
+{
+    return switch_pd_vbus_ours(status1);
+}
+const char *pd_phase_name(int phase)
+{
+    return switch_pd_phase_name((enum switch_pd_phase)phase);
+}
 
 // --- XusbPorts.h ---
 static uint32_t fake_space[0x2000 / 4];
 
-void fake_reset(void) { memset(fake_space, 0, sizeof(fake_space)); }
+void fake_reset(void)
+{
+    memset(fake_space, 0, sizeof(fake_space));
+}
 void fake_write(uint32_t offset, uint32_t value)
 {
     if (offset / 4 < sizeof(fake_space) / 4) fake_space[offset / 4] = value;
@@ -66,16 +83,46 @@ uint32_t find_ports(uint32_t window, unsigned major, unsigned *reads)
     return range.first << 16 | range.count;
 }
 
-uint32_t portsc_offset(uint32_t cap_length, unsigned port) { return xhci_portsc_offset(cap_length, port); }
-uint32_t portsc_power(uint32_t portsc, int on) { return xhci_portsc_power(portsc, on != 0); }
-uint32_t portsc_keep(void) { return XHCI_PORTSC_KEEP; }
-uint32_t vbus_id_drop_vbus(uint32_t v) { return xusb_vbus_id_drop_vbus(v); }
-uint32_t vbus_id_host(uint32_t v) { return xusb_vbus_id_host(v); }
-uint32_t vbus_id_device(uint32_t v) { return xusb_vbus_id_device(v); }
-uint32_t chrg_ctl0_host(uint32_t v) { return xusb_chrg_ctl0_host(v); }
-uint32_t chrg_ctl1_host(uint32_t v) { return xusb_chrg_ctl1_host(v); }
-uint32_t oc_map_host(uint32_t v) { return xusb_oc_map_host(v); }
-const char *id_name(uint32_t v) { return xusb_id_name(v); }
+uint32_t portsc_offset(uint32_t cap_length, unsigned port)
+{
+    return xhci_portsc_offset(cap_length, port);
+}
+uint32_t portsc_power(uint32_t portsc, int on)
+{
+    return xhci_portsc_power(portsc, on != 0);
+}
+uint32_t portsc_keep(void)
+{
+    return XHCI_PORTSC_KEEP;
+}
+uint32_t vbus_id_drop_vbus(uint32_t v)
+{
+    return xusb_vbus_id_drop_vbus(v);
+}
+uint32_t vbus_id_host(uint32_t v)
+{
+    return xusb_vbus_id_host(v);
+}
+uint32_t vbus_id_device(uint32_t v)
+{
+    return xusb_vbus_id_device(v);
+}
+uint32_t chrg_ctl0_host(uint32_t v)
+{
+    return xusb_chrg_ctl0_host(v);
+}
+uint32_t chrg_ctl1_host(uint32_t v)
+{
+    return xusb_chrg_ctl1_host(v);
+}
+uint32_t oc_map_host(uint32_t v)
+{
+    return xusb_oc_map_host(v);
+}
+const char *id_name(uint32_t v)
+{
+    return xusb_id_name(v);
+}
 
 // verdict of xusb_irq_judge for an armed and a current sample
 int irq_judge(uint32_t armed_count, uint32_t armed_erdp, int armed_pending, int armed_deliverable, uint32_t now_count,
@@ -85,5 +132,11 @@ int irq_judge(uint32_t armed_count, uint32_t armed_erdp, int armed_pending, int 
     const struct xusb_irq_sample now = {now_count, now_erdp, now_pending != 0, now_deliverable != 0};
     return (int)xusb_irq_judge(armed, now, first != 0, stage);
 }
-int xhci_pending(uint32_t iman, uint32_t usbsts) { return xusb_xhci_pending(iman, usbsts); }
-int xhci_deliverable(uint32_t iman, uint32_t usbcmd) { return xusb_xhci_deliverable(iman, usbcmd); }
+int xhci_pending(uint32_t iman, uint32_t usbsts)
+{
+    return xusb_xhci_pending(iman, usbsts);
+}
+int xhci_deliverable(uint32_t iman, uint32_t usbcmd)
+{
+    return xusb_xhci_deliverable(iman, usbcmd);
+}

@@ -1,0 +1,65 @@
+# drivers/SwitchPower on the host:
+#   switch_governor_test             SwitchGovernor.h, the CPU's on-demand clock governor: load traces in, operating
+#                                    points out, with SwitchPerfGovernor.cpp's tunables as shipped; L4T's T210B01 CVB
+#                                    table cut at Horizon's 1785 MHz, re-derived independently
+#   switch_thermal_sensors_test      SwitchSensors.h, thermalmonitord's sensors: the J120AP plist's table, nearest
+#                                    measurements, unit conversions, SOC_THERM fuse calibration against L4T's, CLTM
+#   switch_sensors_hid_source_test   the HID descriptor and IOHIDFamily vtable slots the sensors are published through
+# The headers are C: each is compiled as C11 with -Wconversion -Wsign-conversion in a harness (its static inline
+# functions as exported ones) and driven by a GoogleTest test.
+#
+#   bazel test //drivers/SwitchPower/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+C_FLAGS = [
+    "-O1",
+    "-Wconversion",
+    "-Wsign-conversion",
+]
+
+host_library(
+    name = "switch_governor_harness",
+    srcs = ["switch_governor_harness.c"],
+    hdrs = [
+        "switch_governor_harness.h",
+        "//drivers/SwitchPower:SwitchGovernor.h",
+    ],
+    copts = C_FLAGS,
+)
+
+host_test(
+    name = "switch_governor_test",
+    srcs = ["switch_governor_test.cpp"],
+    # The tunables, read as the kernel is built with them (a retune is tested as shipped).
+    data = ["//drivers/SwitchPower:SwitchPerfGovernor.cpp"],
+    deps = [":switch_governor_harness"],
+)
+
+host_library(
+    name = "switch_thermal_sensors_harness",
+    srcs = ["switch_thermal_sensors_harness.c"],
+    hdrs = [
+        "switch_thermal_sensors_harness.h",
+        "//drivers/SwitchPower:SwitchGovernor.h",
+        "//drivers/SwitchPower:SwitchSensors.h",
+    ],
+    copts = C_FLAGS,
+)
+
+host_test(
+    name = "switch_thermal_sensors_test",
+    srcs = ["switch_thermal_sensors_test.cpp"],
+    deps = [":switch_thermal_sensors_harness"],
+)
+
+host_test(
+    name = "switch_sensors_hid_source_test",
+    srcs = ["switch_sensors_hid_source_test.cpp"],
+    data = [
+        "//drivers/SwitchBrightness:SwitchALS.cpp",
+        "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
+    ],
+)

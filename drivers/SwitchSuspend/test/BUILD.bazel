@@ -1,0 +1,55 @@
+# drivers/SwitchSuspend's wake sources on the host:
+#   switch_wake_test          SwitchWakeSources.h through switch_wake_harness.c (C11, -Wconversion -Wsign-conversion):
+#                             Bluetooth controllers' Home and Capture in their HID reports and the clicks they make,
+#                             the wake guarantee, the power journal's ring, the PMC wake events armed for SC7
+#   switch_wake_source_test   what the wake path relies on elsewhere: the console buttons' HID descriptor (Menu and
+#                             Snapshot bits), SwitchBluetooth's every-packet peek, SwitchWake's and SwitchButtons' clicks
+#
+#   bazel test //drivers/SwitchSuspend/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_library(
+    name = "switch_wake_harness",
+    srcs = ["switch_wake_harness.c"],
+    hdrs = [
+        "switch_wake_harness.h",
+        "//drivers/SwitchSuspend:SwitchWakeSources.h",
+    ],
+    copts = [
+        "-O1",
+        "-Wconversion",
+        "-Wsign-conversion",
+    ],
+)
+
+host_test(
+    name = "switch_wake_test",
+    srcs = ["switch_wake_test.cpp"],
+    deps = [":switch_wake_harness"],
+)
+
+# SwitchHID.h's one kernel header, for the button bits' static_asserts.
+host_shims(
+    name = "kernel",
+    headers = ["IOKit/IOReturn.h"],
+    stubs = "switch_hid_stubs.h",
+)
+
+host_test(
+    name = "switch_wake_source_test",
+    srcs = [
+        "switch_wake_source_test.cpp",
+        "//drivers/NativeMobileDisplay:IOSwitchPortrait.h",
+        "//drivers/SwitchTouch:SwitchHID.h",
+    ],
+    data = [
+        "//drivers/SwitchBluetooth:SwitchBluetooth.cpp",
+        "//drivers/SwitchButtons:SwitchButtons.cpp",
+        "//drivers/SwitchSuspend:SwitchWake.cpp",
+        "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
+    ],
+    deps = [":kernel"],
+)

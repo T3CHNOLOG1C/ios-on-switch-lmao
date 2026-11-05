@@ -1,0 +1,41 @@
+# drivers/SwitchNVRAM's store (SwitchNVRAMStore.h) on the host: the file's layout, round trips, the newest-valid-slot
+# rule, what a damaged file falls back to, and the slot picker on files of every length under ASan. Banks are built
+# as IODTNVRAM serializes them and checked against zlib's CRC-32 and Adler-32. The header is compiled as C11 with
+# -Wconversion -Wsign-conversion in switch_nvram_store_harness.c and driven by a GoogleTest test.
+#
+#   bazel test //drivers/SwitchNVRAM/test:all
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+host_library(
+    name = "switch_nvram_store_harness",
+    srcs = ["switch_nvram_store_harness.c"],
+    hdrs = [
+        "switch_nvram_store_harness.h",
+        "//drivers/SwitchNVRAM:SwitchNVRAMStore.h",
+    ],
+    copts = [
+        "-O1",
+        "-Wconversion",
+        "-Wsign-conversion",
+    ],
+)
+
+# The macOS SDK's zlib: the independent CRC-32 and Adler-32.
+cc_library(
+    name = "zlib",
+    testonly = True,
+    linkopts = ["-lz"],
+)
+
+host_test(
+    name = "switch_nvram_store_test",
+    srcs = ["switch_nvram_store_test.cpp"],
+    deps = [
+        ":switch_nvram_store_harness",
+        ":zlib",
+    ],
+)

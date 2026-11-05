@@ -1,9 +1,10 @@
 // Host harness for drivers/SwitchPower/SwitchSensors.h (thermalmonitord's sensor map, unit conversions, SOC_THERM fuse
-// calibration, CLTM's CPU ceiling) and SwitchGovernor.h's switch_gov_index_at_fraction, driven by
-// tests/test_switch_thermal_sensors.py through ctypes.
+// calibration, CLTM's CPU ceiling) and SwitchGovernor.h's switch_gov_index_at_fraction as exported C functions (C11
+// with -Wconversion -Wsign-conversion), driven by switch_thermal_sensors_test.cpp.
 #include <stdint.h>
-#include "SwitchGovernor.h"
-#include "SwitchSensors.h"
+#include "../SwitchGovernor.h"
+#include "../SwitchSensors.h"
+#include "switch_thermal_sensors_harness.h"
 
 unsigned sensors_count(void)
 {

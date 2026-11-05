@@ -1,9 +1,10 @@
 # drivers/SwitchUSB on the host: the XUDC's device-mode transfer planner and OUT residue protocol (XudcTransfer.h,
-# xudc_transfer_test).
+# xudc_transfer_test), and USB2 host mode's power-role policy and register arithmetic (SwitchPDPolicy.h, XusbPorts.h,
+# switch_usb_host_test).
 #
 #   bazel test //drivers/SwitchUSB/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_test")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
 lint_files()
 
@@ -26,5 +27,45 @@ host_test(
     data = [
         "//drivers/SwitchUSB:SwitchXUDC.cpp",
         "//drivers/SwitchUSB:XudcHardware.cpp",
+    ],
+)
+
+# --- Host mode: the power role and the xHCI port arithmetic ---
+# SwitchPDPolicy.h's power-role decisions under a model of SwitchPD.cpp's apply/enter (r7w's BM92T36 traces, a fuzzed
+# walk) and XusbPorts.h's host-role register arithmetic and interrupt check, both headers compiled as C11 with
+# -Wconversion -Wsign-conversion in switch_usb_host_harness.c.
+host_library(
+    name = "switch_usb_host_harness",
+    srcs = ["switch_usb_host_harness.c"],
+    hdrs = [
+        "switch_usb_host_harness.h",
+        "//drivers/SwitchUSB:SwitchPDPolicy.h",
+        "//drivers/SwitchUSB:XusbPorts.h",
+    ],
+    copts = [
+        "-O1",
+        "-Wconversion",
+        "-Wsign-conversion",
+    ],
+)
+
+host_test(
+    name = "switch_usb_host_test",
+    srcs = ["switch_usb_host_test.cpp"],
+    deps = [":switch_usb_host_harness"],
+)
+
+# What the headers cannot show: the interrupt routing (DT SPI 39/40 level-high, the LIC, IPFS as tegra_xusb_config,
+# checkFired's one panic) and that the kernel files use the tested headers in the order the model assumes.
+host_test(
+    name = "switch_usb_host_source_test",
+    srcs = ["switch_usb_host_source_test.cpp"],
+    data = [
+        "//drivers/ArmGIC:ArmGIC.cpp",
+        "//drivers/SwitchUSB:SwitchPD.cpp",
+        "//drivers/SwitchUSB:SwitchUSB.cpp",
+        "//drivers/SwitchUSB:SwitchXHCI.cpp",
+        "//drivers/SwitchUSB:XusbHost.cpp",
+        "//drivers/SwitchUSB:XusbHost.h",
     ],
 )

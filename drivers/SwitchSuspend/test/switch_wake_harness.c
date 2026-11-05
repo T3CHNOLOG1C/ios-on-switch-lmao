@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Host harness for drivers/SwitchSuspend/SwitchWakeSources.h (tests/test_switch_wake.py drives it through ctypes).
+// Host harness for drivers/SwitchSuspend/SwitchWakeSources.h: its static inline functions and the state they keep as
+// exported C functions (C11, -Wconversion -Wsign-conversion), driven by switch_wake_test.cpp.
 #include <stdint.h>
 #include <string.h>
-#include "SwitchWakeSources.h"
+#include "../SwitchWakeSources.h"
+#include "switch_wake_harness.h"
 
 static struct switch_bt_buttons buttons;
 static struct switch_wake_guard guard;
