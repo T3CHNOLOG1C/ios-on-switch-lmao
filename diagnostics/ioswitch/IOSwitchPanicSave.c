@@ -550,7 +550,8 @@ int ioswitch_panic_begin(const char *format, va_list *args, unsigned long caller
 void ioswitch_panic_halted(void)
 {
     if (!begun || !screen_taken) return;
-    PE_panic_hook(""); /* the display puts window A back again, should a flip have moved it */
+    void (*const display)(const char *) = ioswitch_display_panic_hook;
+    if (display) display(""); /* the display puts window A back again, should a flip have moved it */
     draw_screen();
 }
 

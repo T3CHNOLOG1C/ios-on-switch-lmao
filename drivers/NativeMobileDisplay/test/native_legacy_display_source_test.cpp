@@ -188,3 +188,23 @@ TEST(DisplayProbeSource, ProbeRequestUnderTheFlipDeadline)
     EXPECT_THAT(method(display(), "    void checkFlipDeadline()\n"), HasSubstr("!probeRequest"));
     EXPECT_THAT(Between(display(), "struct ProbeIo", "};"), HasSubstr("flipTimer->setTimeoutMS(kFlipDeadlineMS)"));
 }
+
+// The panic-time screen restore works in every kernel config: PE_arm_debug_panic_hook is a const NULL outside DEVELOPMENT
+// and DEBUG, so the driver hangs it on IOSwitchDiag's ioswitch_display_panic_hook, which ioswitch_diag_panic calls before
+// anything draws the panic screen (the first call blacks the pitch area) and ioswitch_panic_halted calls again.
+TEST(PanicRestoreSource, EveryKernelConfig)
+{
+    EXPECT_THAT(display(), Not(HasSubstr("PE_arm_debug_panic_hook")));
+    EXPECT_THAT(display(), Not(HasSubstr("DEVELOPMENT")));
+    const std::string chain = method(display(), "    void chainPanicHook()\n");
+    expectBefore(chain, "gPanicRestore.start = surfaceAddress(0);", "dmb ish");
+    expectBefore(chain, "dmb ish", "ioswitch_display_panic_hook = restorePitchOnPanic;");
+    static const std::string diag = SourceText("../../../diagnostics/ioswitch/IOSwitchDiag.c");
+    const std::string panic = Between(diag, "void ioswitch_diag_panic(const char *format", "\n}\n");
+    expectBefore(panic, "if (display) display(format);", "ioswitch_panic_begin(");
+    expectBefore(panic, "if (display) display(format);", "ioswitch_diag_pixel(");
+    static const std::string save = SourceText("../../../diagnostics/ioswitch/IOSwitchPanicSave.c");
+    const std::string halted = Between(save, "void ioswitch_panic_halted(void)\n", "\n}\n");
+    EXPECT_THAT(halted, HasSubstr("if (display) display(\"\");"));
+    EXPECT_THAT(halted, Not(HasSubstr("PE_panic_hook")));
+}

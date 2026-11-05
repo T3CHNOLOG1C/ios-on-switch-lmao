@@ -7,7 +7,8 @@
 #   request_state_test                  NativeLegacyRequest.h: which swaps the legacy backend shows itself, the fill,
 #                                       the frame scans and colour counts, IOSurface bounds, the bounded row copy
 #   native_legacy_display_source_test   how NativeLegacyDisplay.cpp drives the ring, direct scanout, the vsync phase and
-#                                       the probe (the driver itself is not built for the host)
+#                                       the probe, and hangs its panic restore on IOSwitchDiag's hook (the driver itself
+#                                       is not built for the host)
 #   display_planes_test                 NativePlanes.h (r18-planes): every swap Core Animation can build from the
 #                                       published limits accepted (200000 swaps), the refusals, window B's registers
 #                                       against drm/tegra's formulas, the CSC table, the layer roles, PlaneLatch
@@ -51,7 +52,11 @@ host_test(
 host_test(
     name = "native_legacy_display_source_test",
     srcs = ["native_legacy_display_source_test.cpp"],
-    data = ["//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp"],
+    data = [
+        "//diagnostics/ioswitch:IOSwitchDiag.c",
+        "//diagnostics/ioswitch:IOSwitchPanicSave.c",
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+    ],
 )
 
 host_test(

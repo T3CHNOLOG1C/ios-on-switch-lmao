@@ -16,6 +16,10 @@ void ioswitch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, 
 void ioswitch_diag_init(const struct boot_args *args);
 void ioswitch_diag_stage(const char *message);
 void ioswitch_diag_panic(const char *format, va_list *args, unsigned long caller);
+/* The display's panic hook (NativeLegacyDisplay), in every kernel config: PE_arm_debug_panic_hook is a const NULL outside
+ * DEVELOPMENT and DEBUG. Called first thing in ioswitch_diag_panic, before anything draws the panic screen, and again from
+ * ioswitch_panic_halted once the other CPUs are halted. Interrupts are off and other CPUs may still run: stores only. */
+extern void (*volatile ioswitch_display_panic_hook)(const char *message);
 int ioswitch_diag_console_active(void);
 int ioswitch_native_text_console_active(void);
 void ioswitch_diag_console_putc(char c);

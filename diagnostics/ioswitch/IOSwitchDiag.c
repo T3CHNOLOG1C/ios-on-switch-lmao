@@ -326,8 +326,12 @@ void ioswitch_diag_stage(const char *message)
     (void)ml_set_interrupts_enabled(previous);
 }
 
+void (*volatile ioswitch_display_panic_hook)(const char *message);
+
 __attribute__((no_stack_protector)) void ioswitch_diag_panic(const char *format, va_list *args, unsigned long caller)
 {
+    void (*const display)(const char *) = ioswitch_display_panic_hook;
+    if (display) display(format);
     if (ioswitch_early_record[0]) {
         __asm__ volatile("msr daifset, #15" ::: "memory");
         if (ioswitch_early_record[2] || ioswitch_diag_record.panicked)

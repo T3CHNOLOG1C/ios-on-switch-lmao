@@ -281,27 +281,24 @@ static inline bool nativeBgra(uint32_t format, uint32_t planes)
 }
 // Panics draw into the boot framebuffer as the pitch console does (rotation 3: IOSwitchPanicSave.c's panic screen once the
 // GUI owns the display, XNU's console before that, or IOSwitchDiag's own banner), which a block-linear column scan would
-// show scrambled. While window A is rotated this chains XNU's DEVELOPMENT panic hook (PE_arm_debug_panic_hook, called from
-// PE_panic_hook in debug.c panic_trap_to_debugger before IOSwitchDiag's ioswitch_diag_panic, and again by
-// IOSwitchPanicSave.c once the other CPUs are halted): the first call blacks the pitch area, every call puts back window
-// A's four pitch registers, latched at the next frame, so the panic text lands on a readable screen. From the first call
+// show scrambled. While window A is rotated this is IOSwitchDiag's display panic hook (ioswitch_display_panic_hook, every
+// kernel config: called first in ioswitch_diag_panic, before the panic screen is drawn, and again by IOSwitchPanicSave.c
+// once the other CPUs are halted): the first call blacks the pitch area, every call puts back window A's four pitch
+// registers, latched at the next frame, so the panic text lands on a readable screen. From the first call
 // on, the frame-end filter and the flip leave window A alone: until debug.c halts them, the other CPUs still run this
 // driver, whose next flip would scan block-linear again and whose latch check would panic over the restored registers.
 // Before the first frame window A scans XNU's console tape (startConsoleTape): a panic the console still owns is drawn
 // there by the console itself, which scrolls the tape without waiting; one after the console released the screen is
 // IOSwitchPanicSave's, so window A goes back to the boot framebuffer as when rotated.
 // Interrupts are off and other CPUs may be stopped: no locks, no allocation, no logging, only stores.
-#if !(DEVELOPMENT || DEBUG)
-#error "the hardware rotation chains PE_arm_debug_panic_hook, which is const outside DEVELOPMENT and DEBUG kernels"
-#endif
+extern "C" void (*volatile ioswitch_display_panic_hook)(const char *message);
 namespace {
 struct PanicRestore {
     volatile uint32_t *dc;
     volatile uint64_t *pixels;
     uint64_t bytes;
     uint32_t options, stride, kind, hOffset, start;  // start: the boot framebuffer, where the panic console draws
-    void (*previous)(const char *);
-    volatile bool armed;      // window A is rotated: a panic must put the pitch window back
+    volatile bool armed;                             // window A is rotated: a panic must put the pitch window back
     volatile bool tape;       // window A scans the console tape: it must too, unless the console still owns the screen
     volatile bool panicking;  // a panic began: window A is the panic's
     volatile bool planes;     // window B may scan a plane, window A may blend over it: both go back (r18-planes)
@@ -345,7 +342,7 @@ void restorePitchOnPanic(const char *message)
         dc[kDcStateControl] = kGeneralUpdate | kWinBUpdate;
         dc[kDcStateControl] = kGeneralActReq | kWinBActReq;
     }
-    if (gPanicRestore.previous) gPanicRestore.previous(message);
+    (void)message;
 }
 // Clean and invalidate [address, address + bytes) to the point of coherency, by VA (CTR_EL0 line size).
 void cleanInvalidate(const void *address, uint64_t bytes)
@@ -2253,12 +2250,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         gPanicRestore.kind = pitchKind;
         gPanicRestore.hOffset = pitchHOffset;
         gPanicRestore.start = surfaceAddress(0);
-        static bool chained;
-        if (!chained) {
-            chained = true;
-            gPanicRestore.previous = PE_arm_debug_panic_hook;
-            PE_arm_debug_panic_hook = restorePitchOnPanic;
-        }
+        __asm__ volatile("dmb ish" ::: "memory");  // a CPU that panics sees the fields before the hook that reads them
+        ioswitch_display_panic_hook = restorePitchOnPanic;
         __asm__ volatile("dmb ish" ::: "memory");
     }
     // Under the gate, right after the first block-linear frame is in memory. Hekate's _di_winA_pitch and _di_winA_block differ in
