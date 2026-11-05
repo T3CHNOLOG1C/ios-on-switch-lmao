@@ -16,6 +16,8 @@ Steps (each can be switched off):
   4 GPU bundle     --stage-gpu: <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed} from --//deploy:gpu_bundle, via
                    the plugin's stager (its CDHashes must be in the same build's kernel window: deploy the boot package
                    built with that bundle); --remove-gpu removes it
+  4a AWDL           --awdl on|off: creates or removes <Data>/ioswitch/awdl-enable, the empty file SwitchWLAN's AWDL
+                   (AirDrop's Wi-Fi link) is off without (read once per boot, after Data mounts)
   4b gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from PosterBoard's
                    data store (poster_snapshots.py), so the next "Add New Wallpaper" renders them again
   5 launchd check  --launchd-check LABEL...: read-only, the jobs Data's launchd database disables (exit 1 if a label
@@ -45,12 +47,26 @@ from tools.install import host  # noqa: E402
 STALE_LOGGING_PROFILES = ("preferences/Logging/Subsystems/com.apple.SystemConfiguration.plist",)
 
 
+# SwitchWLANAwdl.cpp kFlag, /private/var/ioswitch/awdl-enable on the device.
+AWDL_FLAG = "ioswitch/awdl-enable"
+
+
 def remove_stale_logging_profiles(data_root, log):
     for name in STALE_LOGGING_PROFILES:
         path = Path(data_root) / name
         if path.is_file():
             path.unlink()
             log("removed stale logging profile", name)
+
+
+def set_awdl(data_root, on, log):
+    flag = Path(data_root) / AWDL_FLAG
+    if on:
+        flag.parent.mkdir(exist_ok=True)
+        flag.touch()
+    elif flag.exists():
+        flag.unlink()
+    log("awdl: {} ({})".format("on" if flag.exists() else "off", AWDL_FLAG))
 
 
 def located(path):
@@ -90,6 +106,7 @@ def main(argv=None):
     parser.add_argument("--logs-out")
     parser.add_argument("--corpus")
     parser.add_argument("--launchd-check", nargs="+", metavar="LABEL", default=None)
+    parser.add_argument("--awdl", choices=("on", "off"))
     parser.add_argument("--reset-gallery-snapshots", nargs="+", metavar="BUNDLE", default=None)
     parser.add_argument("--no-eject", action="store_true")
     parser.add_argument("--no-joycon-pairing", action="store_true")
@@ -128,6 +145,7 @@ def main(argv=None):
                 "stage {} controller(s) for host {}".format(len(pairing["controllers"]), pairing["host"])
                 if pairing else "remove any staged dump")]) + \
             (["stage the GPU bundle"] if args.stage_gpu else []) + (["remove the GPU bundle"] if args.remove_gpu else []) + \
+            (["AWDL {} (<Data>/ioswitch/awdl-enable)".format(args.awdl)] if args.awdl else []) + \
             (["reset gallery snapshots of {}".format(" ".join(args.reset_gallery_snapshots))]
              if args.reset_gallery_snapshots else []) + \
             (["launchd check {}".format(args.launchd_check)] if args.launchd_check else []) + \
@@ -162,6 +180,8 @@ def main(argv=None):
                 log("gpu:", (result.stdout + result.stderr).strip())
                 if result.returncode:
                     raise host.HostError("GPU bundle NOT staged")
+            if args.awdl:
+                set_awdl(data_root, args.awdl == "on", log)
             if args.reset_gallery_snapshots:
                 poster_snapshots.reset(data_root, args.reset_gallery_snapshots, log)
             if args.launchd_check is not None:

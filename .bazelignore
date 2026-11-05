@@ -24,3 +24,4 @@ out/native-a57/root-v1/tree/.git-empty-unused
 out/switch/device-logs
 out/switch/raw-v24-firmware
 out/switch/cryptex-trustcaches
+.claude
