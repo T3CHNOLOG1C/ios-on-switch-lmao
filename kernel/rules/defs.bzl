@@ -156,6 +156,10 @@ def xnu_package(version, installhdrs, build, kernel_package, extra_headers, fire
         xnu_root = root,
         package_dir = root,
         obj_dir = "obj",
+        kernel_config = select({
+            "//bazel:debug": "DEVELOPMENT",
+            "//bazel:release": "RELEASE",
+        }),
         kernel_package = kernel_package,
         extra = [extra_headers],
     )

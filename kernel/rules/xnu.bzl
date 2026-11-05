@@ -354,6 +354,7 @@ def _xnu_sdk_impl(ctx):
     sdk = KernelSdkInfo(
         headers = depset(transitive = [headers, sdk_files]),
         obj_dir = obj_tree.root,
+        kernel_config = ctx.attr.kernel_config,
         sdkroot_dir = sdkroot[XnuTreeInfo].root,
         objroot = "{}/{}/build/xnu/ios-obj".format(bin_dir, OLD_TREE),
         fakeroot = "{}/{}/.cache/fakeroot".format(bin_dir, OLD_TREE),
@@ -379,6 +380,7 @@ xnu_sdk = rule(
         "xnu_root": attr.string(mandatory = True),
         "package_dir": attr.string(mandatory = True, doc = "the package of obj (kernel/xnu-<version>)"),
         "obj_dir": attr.string(mandatory = True),
+        "kernel_config": attr.string(mandatory = True, doc = "DEVELOPMENT or RELEASE: the configuration obj is for"),
         "kernel_package": attr.string(mandatory = True, doc = "the package of the kernel's other generated files"),
         "extra": attr.label_list(
             allow_files = True,

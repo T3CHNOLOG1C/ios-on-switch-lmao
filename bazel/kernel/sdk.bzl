@@ -16,6 +16,8 @@ KernelSdkInfo = provider(
         "headers": "depset of files: XNU's object root's and SDK root's headers, each its own artifact (so .d files " +
                    "prune a compile's inputs to the headers it includes)",
         "obj_dir": "exec path of XNU's object root (kernel/xnu-<version>/obj: EXPORT_HDRS, <CONFIG>_ARM64_BCM2837/...)",
+        "kernel_config": "XNU's kernel configuration these headers are for: DEVELOPMENT (//bazel:debug) or RELEASE " +
+                         "(//bazel:release); the recipes' must match",
         "sdkroot_dir": "exec path of the kernel SDK root (Kernel.framework, usr/local/include, ...)",
         "objroot": "the object root's spelling in what the build ships (make's ios-obj in the kernel tree's build/)",
         "fakeroot": "the SDK root's spelling in what the build ships (the kernel tree's .cache/fakeroot)",
