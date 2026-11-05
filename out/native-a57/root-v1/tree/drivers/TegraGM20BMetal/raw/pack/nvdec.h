@@ -60,6 +60,10 @@ private:
     };
     MapFn map_;
     FILE *out_;
+    // the host tests' 2D engine (raw/fx/test/twod_sim: the mip chains' blits), executed into the BOs' host memory where the
+    // decoder is built with NVDEC_TWOD (raw/test/build.sh); declared either way, so every object sees one layout
+    void *twod_ = nullptr;
+    void twod(uint32_t subc, uint32_t mthd, uint32_t data);
     uint32_t reg_[5][0x4000] = {};
     std::vector<uint32_t> mmeRam_ = std::vector<uint32_t>(0x2000), mmeStart_ = std::vector<uint32_t>(0x80);
     uint32_t mmeRamPtr_ = 0, mmeStartPtr_ = 0;

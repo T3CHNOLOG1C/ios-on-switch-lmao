@@ -103,9 +103,9 @@ enum RMPred : uint8_t {
     PredNone = 0,
     // textures the raw path does not keep, decided when made (a bind hits the texture's own predicate)
     PredTexShape,  // rawShape: a = failing term (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format), b = format
-    PredTexPoolAlloc,   // no pool span or texture header
-    PredTexSurfPlane,   // a plane of a planar surface (not the 4:4:4 one): a = plane, b = plane count
-    PredTexSurfPitch,   // bytesPerRow & 31, or short: a = bytesPerRow, b = width x bpp
+    PredTexPoolAlloc,  // no pool span or texture header
+    PredTexSurfPlane,  // a plane of a planar surface (not the 4:4:4 one): a = plane, b = plane count
+    PredTexSurfPitch,  // bytesPerRow or plane offset & 15, or short: a = bytesPerRow, b = offset (when off 16) or width x bpp
     PredTexSurfBounds,  // offset + rows past the allocation
     PredTexSurfBase,    // base address off a page: a = base & 0xfff
     PredTexSurfImport,  // the import or the header slot refused
@@ -260,6 +260,19 @@ static bool rawShape(MTLTextureDescriptor *d)
     return d.textureType == MTLTextureType2D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
            d.depth <= 1 && !turned && raw::formatInfo(uint32_t(d.pixelFormat));
 }
+// A mipmapped texture the raw path keeps as a pool texture and a block-linear chain of its levels (raw::Device::createMipTexture,
+// raw/fx): 2D, one sample, one layer, no rotation, private (no CPU access to any level: every write is GPU work the tape orders),
+// of a format the 2D engine filters (not sRGB) and renders; chains on (the device's self-test)
+static bool chainShape(MTLTextureDescriptor *d)
+{
+    static const SEL rotation = NSSelectorFromString(@"rotation");
+    const NSUInteger turned =
+        [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
+    const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
+    return d.textureType == MTLTextureType2D && d.mipmapLevelCount > 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
+           d.depth <= 1 && !turned && d.storageMode == MTLStorageModePrivate && f && f->rt && !f->srgb &&
+           raw::fx::twodFormat(uint32_t(d.pixelFormat));
+}
 // Diagnostics: which rawShape term fails (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format; 0 none)
 static uint32_t rawShapeTerm(MTLTextureDescriptor *d)
 {
@@ -370,6 +383,10 @@ struct Stats {
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
+    // command buffers submitted in segments (planSegments), and their segments on m2v
+    std::atomic<uint64_t> splits{0}, splitM2v{0};
+    // command buffers completed (finish): with the commits, what the stall line (rawStall) watches
+    std::atomic<uint64_t> finished{0};
 };
 struct RawState {
     raw::Device *raw = nullptr;
@@ -401,6 +418,18 @@ struct RawState {
 };
 static RawState *gRM;
 static uint64_t signalled(NSMapTable *map, void *event);  // the order section's (below)
+
+// An m2v twin made outside its object's lock, kept if no other thread kept one first (theirs is returned, this one dropped). The
+// object's lock is never held across a call into m2v: a thread inside m2v holding one of its locks (its handlers run Core
+// Animation's, which may ask for a twin) and a thread here holding the object's lock asking m2v for one of its own would wait for
+// each other for good (r7p8's freeze: a wait with no bound).
+static id twinPublish(id object, __strong id &slot, id made)
+{
+    @synchronized(object) {
+        if (!slot) slot = made;
+        return slot;
+    }
+}
 
 // ---- the common base: an m2v twin and the selectors this facade does not answer itself ----
 @interface RMObject : NSObject {
@@ -636,16 +665,15 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
 - (id)rmTwin
 {
     @synchronized(self) {
-        if (!_twin) {
-            const size_t page = size_t(getpagesize());
-            // over the same pages: a pool span or the caller's no-copy pages, whole pages
-            _twin = [gRM->fallback newBufferWithBytesNoCopy:_raw.cpu
-                                                     length:(NSUInteger(_raw.length) + page - 1) & ~(page - 1)
-                                                    options:_options
-                                                deallocator:nil];
-        }
-        return _twin;
+        if (_twin) return _twin;
     }
+    // made outside this object's lock (twinPublish): over the same pages, a pool span or the caller's no-copy pages, whole
+    const size_t page = size_t(getpagesize());
+    return twinPublish(self, _twin,
+                       [gRM->fallback newBufferWithBytesNoCopy:_raw.cpu
+                                                        length:(NSUInteger(_raw.length) + page - 1) & ~(page - 1)
+                                                       options:_options
+                                                   deallocator:nil]);
 }
 // A CPU read after a GPU write: the GPU's bytes, not lines the CPU cached before (clean+invalidate keeps any CPU write)
 - (void)invalidateForCpu
@@ -738,6 +766,12 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     NSUInteger _plane;
     RMTexture *_parent;  // a view's
     RMBuffer *_buffer;   // a texture over a buffer's
+    // A mipmapped texture's (raw::Texture::chain): _twin is m2v's in-place texture over level 0 (one level: where m2v renders and
+    // copies level 0), _mipTwin m2v's own texture of every level (where m2v samples, copies other levels and generates), kept
+    // as the chain holds them by the replay (syncMipTwin): _mipL0 its level 0 holds level 0, _mipLevels its later levels the last
+    // generateMipmaps (the submit lock: the GPU's order)
+    id _mipTwin;
+    bool _mipL0, _mipLevels;
     NSUInteger _offset, _rowBytes;
     std::atomic<bool> _gpuDirty;
     MTLPurgeableState _purgeable;
@@ -768,39 +802,54 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 {
     @synchronized(self) {
         if (_twin) return _twin;
-        id<MTLDevice> m2v = gRM->fallback;
+    }
+    id<MTLDevice> m2v = gRM->fallback;
+    id made = nil;  // outside this object's lock (twinPublish)
+    {
         switch (_kind) {
-        case RMTextureSurface:
-            _twin = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane];
-            break;
+        case RMTextureSurface: made = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane]; break;
         case RMTexturePool: {  // m2v's in-place texture over the same pool pages (as an IOSurface's)
             const size_t page = size_t(getpagesize());
             id<MTLBuffer> pages = [m2v newBufferWithBytesNoCopy:_raw.span.cpu
                                                          length:(NSUInteger(_raw.span.bytes) + page - 1) & ~(page - 1)
                                                         options:MTLResourceStorageModeShared
                                                     deallocator:nil];
+            MTLTextureDescriptor *d = _descriptor;
+            if (_raw.chain) {  // level 0 (the chain's levels are the m2v texture of every level's: rmMipTwin)
+                d = [_descriptor copy];
+                d.mipmapLevelCount = 1;
+            }
             if (pages && native_bridge_metal_texture_in_place)
-                _twin = native_bridge_metal_texture_in_place(pages, _descriptor, 0, _raw.pitch);
+                made = native_bridge_metal_texture_in_place(pages, d, 0, _raw.pitch);
             break;
         }
         case RMTextureBuffer:
             if (id<MTLBuffer> b = [_buffer rmTwin]) {
-                _twin = native_bridge_metal_texture_in_place
-                            ? native_bridge_metal_texture_in_place(b, _descriptor, _offset, _rowBytes)
-                            : [b newTextureWithDescriptor:_descriptor offset:_offset bytesPerRow:_rowBytes];
+                made = native_bridge_metal_texture_in_place
+                           ? native_bridge_metal_texture_in_place(b, _descriptor, _offset, _rowBytes)
+                           : [b newTextureWithDescriptor:_descriptor offset:_offset bytesPerRow:_rowBytes];
             }
             break;
         case RMTextureView:
-            _twin = [(id<MTLTexture>)[_parent rmTwin] newTextureViewWithPixelFormat:_descriptor.pixelFormat];
+            made = [(id<MTLTexture>)[_parent rmTwin] newTextureViewWithPixelFormat:_descriptor.pixelFormat];
             break;
-        case RMTextureMemoryless: _twin = [m2v newTextureWithDescriptor:_descriptor]; break;
+        case RMTextureMemoryless: made = [m2v newTextureWithDescriptor:_descriptor]; break;
         case RMTextureTwinOnly: break;
         }
-        if (!_twin)
-            once([NSString stringWithFormat:@"no m2v twin for a %ux%u texture of format %lu (kind %u)", _raw.width,
-                                            _raw.height, (unsigned long)_descriptor.pixelFormat, unsigned(_kind)]);
-        return _twin;
     }
+    id twin = twinPublish(self, _twin, made);
+    if (!twin)
+        once([NSString stringWithFormat:@"no m2v twin for a %ux%u texture of format %lu (kind %u)", _raw.width,
+                                        _raw.height, (unsigned long)_descriptor.pixelFormat, unsigned(_kind)]);
+    return twin;
+}
+// A mipmapped texture's m2v texture of every level (made on first need)
+- (id)rmMipTwin
+{
+    @synchronized(self) {
+        if (_mipTwin) return _mipTwin;
+    }
+    return twinPublish(self, _mipTwin, [gRM->fallback newTextureWithDescriptor:_descriptor]);
 }
 - (MTLTextureType)textureType
 {
@@ -999,6 +1048,11 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     v->_parent = self;
     if (_rawOk && !_raw.memoryless && raw::formatInfo(uint32_t(format)))
         v->_rawOk = gRM->raw->createView(_raw, uint32_t(format), v->_raw);
+    if (_raw.chain) {  // a view of a mipmapped texture: m2v's view of its texture of every level (the replay keeps that current)
+        v->_twin = [(id<MTLTexture>)[self rmMipTwin] newTextureViewWithPixelFormat:format];
+        refuseTexture(v, PredTexView, format, 2, @"view", @"of a mipmapped texture");
+        return v->_twin ? (id<MTLTexture>)v : nil;
+    }
     if (!v->_rawOk)
         refuseTexture(v, PredTexView, format, _rawOk, @"view",
                       [NSString stringWithFormat:@"parent kind %u pred %s", unsigned(_kind), kPredNames[_pred]]);
@@ -1103,9 +1157,9 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 - (id)rmTwin
 {
     @synchronized(self) {
-        if (!_twin) _twin = [gRM->fallback newSamplerStateWithDescriptor:_descriptor];
-        return _twin;
+        if (_twin) return _twin;
     }
+    return twinPublish(self, _twin, [gRM->fallback newSamplerStateWithDescriptor:_descriptor]);
 }
 @end
 
@@ -1264,9 +1318,29 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 }
 @end
 
+// A part of a command buffer submitted on its own (RMCommandBuffer::_segs): tape [from, to), on the raw path or m2v
+struct RMSegment {
+    uint32_t from, to;
+    bool raw;
+};
+
 @interface RMCommandBuffer : RMObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
+    // Its encoders: each one's first command (OpRender, OpBlit, OpCompute) carries index 1 where it goes to m2v (a refusal taken
+    // while it was the active encoder: _encRefused, written into it as the next encoder begins or at commit, _encAt the
+    // command's place). A refusal outside any encoder keeps the command buffer whole (_whole). One whose encoders are some raw's
+    // and some m2v's is submitted in segments (_segs, planSegments): each run of encoders of one driver on its own, in order on
+    // the GPU as two command buffers of the drivers are (the kernel's Order), so a refused pass costs m2v that pass, not the
+    // frame. The command buffer completes with its last segment.
+    size_t _encAt;
+    bool _encOpen, _encRefused, _whole;
+    std::vector<RMSegment> _segs;
+    size_t _segNext;
+    NSError *_segError;  // an m2v segment's error, reported at completion
+    bool
+        _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
+    bool _chains;         // it uses a mipmapped texture (raw::Texture::chain): encodeRaw and the replay keep its levels
     std::vector<Cmd> _tape;
     std::vector<uint8_t> _bytes;
     std::vector<uint64_t> _extra;
@@ -1291,6 +1365,8 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
     uint8_t _pred0;           // the first one
 }
 - (void)takeReason:(RMReason)reason why:(NSString *)why;
+- (void)takeWholeReason:(RMReason)reason why:(NSString *)why;
+- (void)closeEncoder;
 - (void)record:(const Cmd &)cmd;
 - (void)retain:(id)object;
 @end
@@ -1542,7 +1618,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 // What raw::RenderEncoder::prepare would refuse of a draw with the encoder's bindings, decided here (the same tests)
 - (void)checkDraw:(NSUInteger)baseInstance
 {
-    if (!_pipe || !_pipe->_raw) return;  // no raw draw to decide (m2v drops a draw without a state too)
+    // no raw draw to decide (m2v drops a draw without a state too), or this encoder goes to m2v already (its pass refused: its
+    // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
+    if (!_pipe || !_pipe->_raw || _cb->_encRefused) return;
     const raw::Pipeline &pl = *_pipe->_raw;
     if (baseInstance) {
         [_cb takeReason:WhyEncode why:@"draw with a base instance"];
@@ -1652,6 +1730,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                 x->_kind);
     }
     if (stage == 2 && index < 16) _tex[index] = x;
+    if (x && x->_raw.sampled) _cb->_sampledShadows = true;
+    if (x && (x->_raw.chain || (x->_parent && x->_parent->_raw.chain))) _cb->_chains = true;
     setBinding(_cb, OpTexture, stage, index, t, 0);
 }
 - (void)setFragmentTexture:(id<MTLTexture>)t atIndex:(NSUInteger)index
@@ -1886,11 +1966,21 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
       destinationOrigin:(MTLOrigin)dorg
 {
     RMTexture *a = (RMTexture *)s, *b = (RMTexture *)d;
-    const bool ok = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMTexture class]] && a->_rawOk &&
-                    b->_rawOk && !ss && !sl && !ds && !dl && size.depth == 1 && a->_raw.bpp == b->_raw.bpp &&
-                    !a->_raw.memoryless && !b->_raw.memoryless && so.x + size.width <= a->_raw.width &&
-                    so.y + size.height <= a->_raw.height && dorg.x + size.width <= b->_raw.width &&
-                    dorg.y + size.height <= b->_raw.height;
+    const bool both = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMTexture class]];
+    // a mipmapped texture's level below the first (its chain's, raw::BlitEncoder::copyFromLevel: the 2D engine, 1:1, into a
+    // texture of the same format whose address and rows it takes as a pitch surface)
+    const raw::Texture::Chain *ch = both && a->_rawOk ? a->_raw.chain : nullptr;
+    const bool level = ch && sl && sl < ch->layout.levels && b->_rawOk && !b->_raw.memoryless &&
+                       !((b->_raw.va | b->_raw.pitch) & 127) && b->_raw.format == a->_raw.format && !b->_raw.planar &&
+                       !b->_raw.ycbcr && !ss && !ds && !dl && size.depth == 1 &&
+                       so.x + size.width <= ch->layout.level[sl].width &&
+                       so.y + size.height <= ch->layout.level[sl].height && dorg.x + size.width <= b->_raw.width &&
+                       dorg.y + size.height <= b->_raw.height;
+    const bool ok = level || (both && a->_rawOk && b->_rawOk && !ss && !sl && !ds && !dl && size.depth == 1 &&
+                              a->_raw.bpp == b->_raw.bpp && !a->_raw.memoryless && !b->_raw.memoryless &&
+                              so.x + size.width <= a->_raw.width && so.y + size.height <= a->_raw.height &&
+                              dorg.x + size.width <= b->_raw.width && dorg.y + size.height <= b->_raw.height);
+    if (both && (a->_raw.chain || b->_raw.chain)) _cb->_chains = true;
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture copy the raw path does not do (levels, slices, formats)"];
         hit(_cb, PredBlitTexCopy, ss | sl << 8 | ds << 16 | dl << 24,
@@ -1973,6 +2063,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     RMBuffer *a = (RMBuffer *)s;
     RMTexture *b = (RMTexture *)d;
+    if ([(id)b isKindOfClass:[RMTexture class]] && b->_raw.chain) _cb->_chains = true;
     const bool ok = [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && b->_rawOk &&
                     !ds && !dl && size.depth == 1 && !b->_raw.memoryless &&
                     so + row * (size.height - 1) + size.width * b->_raw.bpp <= a->_raw.length &&
@@ -2036,6 +2127,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     RMTexture *a = (RMTexture *)s;
     RMBuffer *b = (RMBuffer *)d;
+    if ([(id)a isKindOfClass:[RMTexture class]] && a->_raw.chain) _cb->_chains = true;
     const bool ok = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && a->_rawOk &&
                     !ss && !sl && size.depth == 1 && !a->_raw.memoryless &&
                     dof + row * (size.height - 1) + size.width * a->_raw.bpp <= b->_raw.length &&
@@ -2085,8 +2177,13 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 }
 - (void)generateMipmapsForTexture:(id<MTLTexture>)t
 {
-    [_cb takeReason:WhyMipmaps why:@"generateMipmapsForTexture"];
-    hit(_cb, PredMipmaps, t.pixelFormat, t.mipmapLevelCount);
+    RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
+    if (x && x->_rawOk && x->_raw.chain)  // a chain's levels, on the 2D engine (raw::BlitEncoder::generate)
+        _cb->_chains = true;
+    else {
+        [_cb takeReason:WhyMipmaps why:@"generateMipmapsForTexture"];
+        hit(_cb, PredMipmaps, t.pixelFormat, t.mipmapLevelCount);
+    }
     setBinding(_cb, OpMipmaps, 0, 0, t, 0);
 }
 - (void)synchronizeResource:(id<MTLResource>)r
@@ -2133,11 +2230,27 @@ static bool heldBehindEvent();
 {
     _tape.push_back(cmd);
 }
+// The encoder recorded last: whether it goes to m2v, into its first command
+- (void)closeEncoder
+{
+    if (_encOpen && _encAt < _tape.size()) _tape[_encAt].index = _encRefused ? 1 : 0;
+    _encOpen = false;
+}
 - (void)takeReason:(RMReason)reason why:(NSString *)why
 {
+    if (_active)
+        _encRefused = true;  // this encoder goes to m2v
+    else
+        _whole = true;
     if (_reason != WhyRaw) return;
     _reason = reason;
     _why = why;
+}
+// A refusal of the command buffer's own (an event m2v must see, a call on the command buffer): the whole of it goes to m2v
+- (void)takeWholeReason:(RMReason)reason why:(NSString *)why
+{
+    _whole = true;
+    [self takeReason:reason why:why];
 }
 - (id)rmTwin
 {
@@ -2190,6 +2303,10 @@ static bool heldBehindEvent();
     e->_device = _device;
     e->_cb = self;
     _active = e;
+    [self closeEncoder];
+    _encAt = _tape.size();  // its first command is the next one recorded
+    _encOpen = true;
+    _encRefused = false;
 }
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d
 {
@@ -2203,7 +2320,8 @@ static bool heldBehindEvent();
         [self retain:t];
         [self retain:pass.colorAttachments[c].resolveTexture];
         RMTexture *x = (RMTexture *)t;
-        if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !x->_raw.renderable) {
+        if ([(id)x isKindOfClass:[RMTexture class]] && x->_raw.chain) _chains = true;
+        if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !(x->_raw.renderable || x->_raw.shadowTarget)) {
             [self takeReason:WhyPass why:@"a color attachment the raw path does not render to"];
             const bool own = [(id)x isKindOfClass:[RMTexture class]];
             // a = format; b = attachment | kind << 8 | the texture's own predicate << 16 (0: kept, not renderable)
@@ -2286,7 +2404,7 @@ static bool heldBehindEvent();
     // CPU before its work is submitted; any other event is m2v's alone
     if (![(id)event conformsToProtocol:@protocol(MTLSharedEvent)] ||
         ![(id)event respondsToSelector:@selector(setSignaledValue:)]) {
-        [self takeReason:WhyEvent why:@"an event that is not a shared event"];
+        [self takeWholeReason:WhyEvent why:@"an event that is not a shared event"];
         hit(self, PredEvent, signal);
     }
     [self retain:event];
@@ -2449,7 +2567,7 @@ static bool heldBehindEvent();
     c.obj = (__bridge void *)inv;
     c.stage = 0xff;  // the command buffer's own, not an encoder's
     [self record:c];
-    [self takeReason:WhyCall why:@"a command buffer call recorded as an invocation"];
+    [self takeWholeReason:WhyCall why:@"a command buffer call recorded as an invocation"];
     hit(self, PredCallCBInvocation, uintptr_t(inv.selector));
     static std::mutex lock;  // each selector named once
     static std::set<SEL> seen;
@@ -2476,9 +2594,9 @@ static bool heldBehindEvent();
 - (id)rmTwin
 {
     @synchronized(self) {
-        if (!_twin) _twin = [gRM->fallback newCommandQueue];
-        return _twin;
+        if (_twin) return _twin;
     }
+    return twinPublish(self, _twin, [gRM->fallback newCommandQueue]);
 }
 - (id<MTLCommandBuffer>)commandBuffer
 {
@@ -2604,7 +2722,95 @@ static float extraFloat(RMCommandBuffer *cb, uint64_t i)
 }
 
 // The tape into an m2v command buffer, every object its twin; the CPU lines of the buffers it names cleaned first.
-static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
+// The tape [from, to) of `cb` as an m2v command buffer, not committed. `part`: a segment of a split command buffer (planSegments),
+// whose encoders' waits for fences another segment updated are left out: the segments' order on the GPU covers them.
+// A mipmapped texture in a replay (raw::Texture::chain): level 0 is the raw texture's own pages (m2v renders, copies and reads
+// level 0 through its in-place twin), every other use is m2v's texture of every level (rmMipTwin), which the replay makes hold
+// what the raw path's chain holds before an encoder uses it (mipSync); what m2v writes moves the raw path's states.
+static inline bool chained(void *o)
+{
+    return o && [(__bridge id)o isKindOfClass:[RMTexture class]] && ((__bridge RMTexture *)o)->_raw.chain;
+}
+static id mipTwinOf(void *o, bool level0)
+{
+    RMTexture *t = (__bridge RMTexture *)o;
+    return chained(o) && !level0 ? [t rmMipTwin] : twinOf((__bridge id)o);
+}
+// The textures of every level the encoder at `at` uses, current in m2v first (a blit encoder of their own before it): level 0
+// copied from the raw texture where it was written since, the levels generated where the raw path generated them since (both
+// from level 0, as m2v's own generateMipmaps makes them). A generateMipmaps needs level 0 only.
+static void mipSync(RMCommandBuffer *cb, id<MTLCommandBuffer> m, size_t at, size_t to)
+{
+    std::vector<std::pair<RMTexture *, bool>> need;
+    auto add = [&](void *o, bool levels) {
+        if (!chained(o)) return;
+        RMTexture *t = (__bridge RMTexture *)o;
+        for (auto &n : need)
+            if (n.first == t) {
+                n.second = n.second || levels;
+                return;
+            }
+        need.push_back({t, levels});
+    };
+    for (size_t k = at + 1; k < to && cb->_tape[k].op != OpEnd; k++) {
+        const Cmd &c = cb->_tape[k];
+        switch (c.op) {
+        case OpTexture:
+            if (c.obj && [(__bridge id)c.obj isKindOfClass:[RMTexture class]]) {
+                RMTexture *t = (__bridge RMTexture *)c.obj;
+                add(t->_kind == RMTextureView && t->_parent ? (__bridge void *)t->_parent : c.obj, true);
+            }
+            break;
+        case OpMipmaps: add(c.obj, false); break;
+        case OpCopyTexture:
+        case OpCopyTextureToBuffer:
+            if (extra(cb, c.x + 1)) add(c.obj, true);  // a level below the first, read
+            break;
+        default: break;
+        }
+    }
+    bool any = false;
+    for (auto &n : need) any = any || !n.first->_mipL0 || (n.second && !n.first->_mipLevels);
+    if (!any) return;
+    id<MTLBlitCommandEncoder> b = [m blitCommandEncoder];
+    for (auto &n : need) {
+        RMTexture *t = n.first;
+        id<MTLTexture> all = [t rmMipTwin];
+        if (!all) continue;
+        if (!t->_mipL0) {
+            [b copyFromTexture:(id<MTLTexture>)[t rmTwin]
+                      sourceSlice:0
+                      sourceLevel:0
+                     sourceOrigin:MTLOriginMake(0, 0, 0)
+                       sourceSize:MTLSizeMake(t->_raw.width, t->_raw.height, 1)
+                        toTexture:all
+                 destinationSlice:0
+                 destinationLevel:0
+                destinationOrigin:MTLOriginMake(0, 0, 0)];
+            t->_mipL0 = true;
+        }
+        if (n.second && !t->_mipLevels) {
+            [b generateMipmapsForTexture:all];
+            t->_mipLevels = true;
+        }
+    }
+    [b endEncoding];
+}
+// m2v wrote level `level` of a mipmapped texture: level 0 (its in-place twin: the raw texture's pages) puts the chain's copy and
+// m2v's own behind it; another level (m2v's texture of every level) puts the chain's generated levels behind m2v's
+static void mipWritten(void *o, uint64_t level)
+{
+    if (!chained(o)) return;
+    RMTexture *t = (__bridge RMTexture *)o;
+    if (level) {
+        t->_raw.chain->levelsFresh = false;
+    } else {
+        t->_raw.chain->l0Fresh = false;
+        t->_mipL0 = false;
+    }
+}
+
+static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part)
 {
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
     id<MTLCommandBuffer> m = [queue commandBuffer];
@@ -2660,15 +2866,34 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
                 range(b, boundOffset[1][r.vertexSlot] + uint64_t(first) * r.vertexStride,
                       uint64_t(count) * r.vertexStride);
     };
-    for (const Cmd &c : cb->_tape) {
+    std::set<void *> updated;  // fences this part updated
+    for (size_t at = from; at < to; at++) {
+        const Cmd &c = cb->_tape[at];
         switch (c.op) {
-        case OpRender:
-            enc = [m renderCommandEncoderWithDescriptor:twinPass((__bridge MTLRenderPassDescriptor *)c.obj)];
+        case OpRender: {
+            MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj, *twin = twinPass(pass);
+            if (cb->_chains) {
+                mipSync(cb, m, at, to);
+                for (unsigned j = 0; j < 8; j++) {  // a mipmapped attachment: level 0 in place, another level m2v's own
+                    MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
+                    if (!chained((__bridge void *)a.texture)) continue;
+                    if (a.level) twin.colorAttachments[j].texture = [(RMTexture *)a.texture rmMipTwin];
+                    mipWritten((__bridge void *)a.texture, a.level);
+                }
+            }
+            enc = [m renderCommandEncoderWithDescriptor:twin];
             memset(bound, 0, sizeof bound);
             pipe = nil;
             break;
-        case OpBlit: enc = [m blitCommandEncoder]; break;
-        case OpCompute: enc = [m computeCommandEncoderWithDispatchType:MTLDispatchType(c.a)]; break;
+        }
+        case OpBlit:
+            if (cb->_chains) mipSync(cb, m, at, to);
+            enc = [m blitCommandEncoder];
+            break;
+        case OpCompute:
+            if (cb->_chains) mipSync(cb, m, at, to);
+            enc = [m computeCommandEncoderWithDispatchType:MTLDispatchType(c.a)];
+            break;
         case OpEnd:
             [enc endEncoding];
             enc = nil;
@@ -2705,9 +2930,9 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
             break;
         case OpTexture:
             if (c.stage == 1)
-                [enc setVertexTexture:twinOf((__bridge id)c.obj) atIndex:c.index];
+                [enc setVertexTexture:mipTwinOf(c.obj, false) atIndex:c.index];
             else
-                [enc setFragmentTexture:twinOf((__bridge id)c.obj) atIndex:c.index];
+                [enc setFragmentTexture:mipTwinOf(c.obj, false) atIndex:c.index];
             break;
         case OpSampler:
             if (c.stage == 1)
@@ -2751,16 +2976,22 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
                            beforeStages:MTLRenderStages(c.c)];
             break;
         case OpUse: [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)]; break;
-        case OpUpdateFence: [enc updateFence:(__bridge id<MTLFence>)c.obj]; break;
-        case OpWaitFence: [enc waitForFence:(__bridge id<MTLFence>)c.obj]; break;
+        case OpUpdateFence:
+            updated.insert(c.obj);
+            [enc updateFence:(__bridge id<MTLFence>)c.obj];
+            break;
+        case OpWaitFence:
+            if (!part || updated.count(c.obj)) [enc waitForFence:(__bridge id<MTLFence>)c.obj];
+            break;
         case OpCopyTexture: {
             const uint64_t x = c.x, o = extra(cb, x + 10);
-            [enc copyFromTexture:twinOf((__bridge id)c.obj)
+            mipWritten(c.obj2, extra(cb, x + 9));
+            [enc copyFromTexture:mipTwinOf(c.obj, !extra(cb, x + 1))
                       sourceSlice:extra(cb, x)
                       sourceLevel:extra(cb, x + 1)
                      sourceOrigin:MTLOriginMake(extra(cb, x + 2), extra(cb, x + 3), extra(cb, x + 4))
                        sourceSize:MTLSizeMake(extra(cb, x + 5), extra(cb, x + 6), extra(cb, x + 7))
-                        toTexture:twinOf((__bridge id)c.obj2)
+                        toTexture:mipTwinOf(c.obj2, !extra(cb, x + 9))
                  destinationSlice:extra(cb, x + 8)
                  destinationLevel:extra(cb, x + 9)
                 destinationOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 11))];
@@ -2788,12 +3019,13 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
                 else
                     use(c.obj);
             }
+            mipWritten(c.obj2, extra(cb, x + 7));
             [enc copyFromBuffer:twinOf((__bridge id)c.obj)
                        sourceOffset:extra(cb, x)
                   sourceBytesPerRow:extra(cb, x + 1)
                 sourceBytesPerImage:extra(cb, x + 2)
                          sourceSize:MTLSizeMake(extra(cb, x + 3), extra(cb, x + 4), extra(cb, x + 5))
-                          toTexture:twinOf((__bridge id)c.obj2)
+                          toTexture:mipTwinOf(c.obj2, !extra(cb, x + 7))
                    destinationSlice:extra(cb, x + 6)
                    destinationLevel:extra(cb, x + 7)
                   destinationOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 9))];
@@ -2811,7 +3043,7 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
                 else
                     use(c.obj2);
             }
-            [enc copyFromTexture:twinOf((__bridge id)c.obj)
+            [enc copyFromTexture:mipTwinOf(c.obj, !extra(cb, x + 1))
                              sourceSlice:extra(cb, x)
                              sourceLevel:extra(cb, x + 1)
                             sourceOrigin:MTLOriginMake(uint32_t(o), o >> 32, extra(cb, x + 3))
@@ -2822,7 +3054,17 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
                 destinationBytesPerImage:extra(cb, x + 9)];
             break;
         }
-        case OpMipmaps: [enc generateMipmapsForTexture:twinOf((__bridge id)c.obj)]; break;
+        case OpMipmaps:
+            if (chained(
+                    c.obj)) {  // m2v's texture of every level (mipSync made its level 0 current): the chain's are behind it
+                RMTexture *t = (__bridge RMTexture *)c.obj;
+                [enc generateMipmapsForTexture:[t rmMipTwin]];
+                t->_mipLevels = true;
+                t->_raw.chain->levelsFresh = false;
+            } else {
+                [enc generateMipmapsForTexture:twinOf((__bridge id)c.obj)];
+            }
+            break;
         case OpInvocation: {
             NSInvocation *inv = (__bridge NSInvocation *)c.obj;
             for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments;
@@ -2907,16 +3149,48 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
 
 // ---- the tape onto the raw path ----
 // false: something in it the raw path cannot do after all (*why); nothing of it was submitted then
-static bool encodeRaw(RMCommandBuffer *cb, const char **why)
+static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
 {
     raw::Device &d = *gRM->raw;
     raw::CommandBuffer *rc = d.begin();
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
+    // mipmapped textures' states this encode changes (raw::Texture::Chain, RMTexture's _mipL0/_mipLevels): put back when it is
+    // abandoned (its work never runs; the command buffer or segment goes to m2v, whose replay keeps them from what ran)
+    struct ChainState {
+        RMTexture *t;
+        bool l0, levels, mipL0, mipLevels;
+    };
+    std::vector<ChainState> chainStates;
+    auto touch = [&](RMTexture *t) -> raw::Texture::Chain & {
+        raw::Texture::Chain &c = *t->_raw.chain;
+        for (const ChainState &k : chainStates)
+            if (k.t == t) return c;
+        chainStates.push_back({t, c.l0Fresh, c.levelsFresh, t->_mipL0, t->_mipLevels});
+        return c;
+    };
+    auto untouch = [&]() {
+        for (const ChainState &k : chainStates) {
+            k.t->_raw.chain->l0Fresh = k.l0;
+            k.t->_raw.chain->levelsFresh = k.levels;
+            k.t->_mipL0 = k.mipL0;
+            k.t->_mipLevels = k.mipLevels;
+        }
+    };
+    // a chain as sampling or a copy of a level needs it: its levels generated again where m2v generated them last (its own
+    // texture of every level's), else its level 0 refreshed where level 0 was written since
+    auto current = [&](RMTexture *t, raw::BlitEncoder *b) {
+        raw::Texture::Chain &c = touch(t);
+        if (!c.levelsFresh)
+            b->generate(t->_raw, true);
+        else if (!c.l0Fresh)
+            b->generate(t->_raw, false);
+    };
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;
         hit(cb, p, a, b);
         rc->abandon();
+        untouch();
         return false;
     };
     // a draw the encoder refused: its predicate and values (raw_gpu.h Refusal)
@@ -2927,6 +3201,7 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
         hit(cb, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
             uint64_t(f.b) | uint64_t(f.c) << 32);
         rc->abandon();
+        untouch();
         return false;
     };
     // the planar textures it samples: their images from their planes first, once (m2v converts at each encoder that uses one;
@@ -2937,7 +3212,8 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
         std::vector<RMTexture *> planar;
         std::vector<RMSampler *> samplers;
         auto isPlanar = [](void *o) { return o && ((__bridge RMTexture *)o)->_raw.addressMap; };
-        for (const Cmd &c : cb->_tape) {
+        for (size_t at = from; at < to; at++) {
+            const Cmd &c = cb->_tape[at];
             // Metal's copies of a planar texture move its planes' bytes, not the image: m2v's
             if ((c.op == OpCopyTexture && (isPlanar(c.obj) || isPlanar(c.obj2))) ||
                 (c.op == OpCopyBufferToTexture && isPlanar(c.obj2)) ||
@@ -2989,16 +3265,51 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
             }
         }
     }
-    for (const Cmd &c : cb->_tape) {
+    // textures sampled through a pool image (rows 16 but not 32 apart, raw::Texture::sampled): refreshed from their texels by the
+    // copy engine before the first pass that samples them, and again after work here wrote them (m2v copies such a surface into
+    // its shadow at each encoder that uses it once written since)
+    std::set<RMTexture *> fresh;
+    auto refresh = [&](size_t pass) {
+        for (size_t at = pass + 1; at < to && cb->_tape[at].op != OpEnd; at++) {
+            const Cmd &c = cb->_tape[at];
+            if (c.op != OpTexture || !c.obj) continue;
+            RMTexture *t = (__bridge RMTexture *)c.obj;
+            if (!t->_raw.sampled || !fresh.insert(t).second) continue;
+            const raw::Texture &x = t->_raw;
+            raw::BlitEncoder *b = rc->blit();
+            b->copyRect(x.va, x.pitch, x.sampled->va, x.sampled->pitch, x.width, x.height, x.bpp);
+            b->end();
+        }
+    };
+    for (size_t at = from; at < to; at++) {
+        const Cmd &c = cb->_tape[at];
         switch (c.op) {
         case OpRender: {
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
+            if (cb->_sampledShadows) refresh(at);
+            if (cb->_chains) {  // the chains this pass samples, current first (one blit of the 2D engine's work)
+                raw::BlitEncoder *b = nullptr;
+                for (size_t k = at + 1; k < to && cb->_tape[k].op != OpEnd; k++) {
+                    const Cmd &u = cb->_tape[k];
+                    if (u.op != OpTexture || !u.obj) continue;
+                    RMTexture *t = (__bridge RMTexture *)u.obj;
+                    if (!t->_raw.chain || (t->_raw.chain->l0Fresh && t->_raw.chain->levelsFresh)) continue;
+                    if (!b) b = rc->blit();
+                    current(t, b);
+                }
+                if (b) b->end();
+            }
             raw::PassDesc p;
             for (unsigned j = 0; j < 8; j++) {
                 MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
                 RMTexture *t = (RMTexture *)a.texture;
                 if (!t) continue;
                 if (t->_raw.planar) return fail(PredEncPlanarRT, "a planar texture as a render target", j);
+                if (!fresh.empty()) fresh.erase(t);  // this pass writes it
+                if (t->_raw.chain) {                 // its level 0: the chain's copy and m2v's are behind it
+                    touch(t).l0Fresh = false;
+                    t->_mipL0 = false;
+                }
                 p.color[j].texture = &t->_raw;
                 p.color[j].load = a.loadAction == MTLLoadActionClear  ? raw::ColorAttachment::Clear
                                   : a.loadAction == MTLLoadActionLoad ? raw::ColorAttachment::Load
@@ -3052,12 +3363,30 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
             break;
         case OpCopyTexture: {
             RMTexture *s = (__bridge RMTexture *)c.obj, *t = (__bridge RMTexture *)c.obj2;
-            const uint64_t x = c.x, o = extra(cb, x + 10);
+            if (!fresh.empty()) fresh.erase(t);
+            const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1);
             const uint64_t sx = extra(cb, x + 2), sy = extra(cb, x + 3), w = extra(cb, x + 5), h = extra(cb, x + 6);
             const uint64_t dx = uint32_t(o), dy = o >> 32;
-            be->copyRect(s->_raw.va + sy * s->_raw.pitch + sx * s->_raw.bpp, s->_raw.pitch,
-                         t->_raw.va + dy * t->_raw.pitch + dx * t->_raw.bpp, t->_raw.pitch, uint32_t(w), uint32_t(h),
-                         s->_raw.bpp);
+            if (sl) {  // a level below the first of a chain (decided at record): the chain current, then the 2D engine's copy
+                current(s, be);
+                be->copyFromLevel(s->_raw, uint32_t(sl), uint32_t(sx), uint32_t(sy), t->_raw, uint32_t(dx),
+                                  uint32_t(dy), uint32_t(w), uint32_t(h));
+            } else {
+                be->copyRect(s->_raw.va + sy * s->_raw.pitch + sx * s->_raw.bpp, s->_raw.pitch,
+                             t->_raw.va + dy * t->_raw.pitch + dx * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
+                             uint32_t(h), s->_raw.bpp);
+            }
+            if (t->_raw.chain) {  // its level 0 written
+                touch(t).l0Fresh = false;
+                t->_mipL0 = false;
+            }
+            break;
+        }
+        case OpMipmaps: {  // a chain's levels from level 0 (decided at record); m2v's texture of every level is behind it
+            RMTexture *t = (__bridge RMTexture *)c.obj;
+            touch(t);
+            be->generate(t->_raw, true);
+            t->_mipLevels = false;
             break;
         }
         case OpCopyBuffer: {
@@ -3073,8 +3402,12 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
             RMTexture *t = (__bridge RMTexture *)c.obj2;
             const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1);
             const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4);
-            if (row & 31 && h > 1)
-                return fail(PredEncBufToTexRow, "a buffer-to-texture copy whose rows are not 32-byte aligned", row, w);
+            if (!fresh.empty())
+                fresh.erase(t);  // (rows of whole texels, any pitch: the copy engine's; decided at record)
+            if (t->_raw.chain) {
+                touch(t).l0Fresh = false;
+                t->_mipL0 = false;
+            }
             rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
             be->copyRect(s->_raw.va + so, uint32_t(row),
                          t->_raw.va + (o >> 32) * t->_raw.pitch + uint32_t(o) * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
@@ -3210,6 +3543,7 @@ static void scheduled(RMCommandBuffer *cb)
 // objects released, waiters woken.
 static void finish(RMCommandBuffer *cb, NSError *error)
 {
+    gRM->stats.finished.fetch_add(1, std::memory_order_relaxed);
     unhold(cb);
     markWritten(cb);
     if (!cb->_m2v)
@@ -3346,6 +3680,21 @@ static void commitBuffer(RMCommandBuffer *cb);
 }
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
+    if (gRM->raw->chainsOn() && chainShape(d)) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
+        RMTexture *t = [RMTexture new];
+        t->_device = self;
+        t->_descriptor = [d copy];
+        t->_kind = RMTexturePool;
+        t->_rawOk = gRM->raw->createMipTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
+                                               uint32_t(d.mipmapLevelCount), t->_raw);
+        if (t->_rawOk) {
+            static std::atomic<bool> said{false};
+            if (!said.exchange(true))
+                os_log(rawLog(), "raw: mip chain on (%u levels of %ux%u, %llu bytes)", unsigned(d.mipmapLevelCount),
+                       unsigned(d.width), unsigned(d.height), (unsigned long long)t->_raw.chain->layout.bytes);
+            return (id<MTLTexture>)t;
+        }
+    }
     if (!rawShape(d)) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
         if (w) refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
@@ -3480,6 +3829,7 @@ static bool ycbcr420(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, 
         const size_t planes = IOSurfaceGetPlaneCount(s),
                      pitch = planes == 1 ? IOSurfaceGetBytesPerRowOfPlane(s, 0) : IOSurfaceGetBytesPerRow(s);
         const uintptr_t base = uintptr_t(IOSurfaceGetBaseAddress(s));
+        const uintptr_t offset = planes == 1 ? uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 0)) - base : 0;
         const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
         const uint64_t packed = uint64_t(d.width) * (f ? f->bpp : 0);
         const OSType fourcc = IOSurfaceGetPixelFormat(s);
@@ -3496,8 +3846,8 @@ static bool ycbcr420(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, 
             refuseTexture(t, PredTexShape, term, d.pixelFormat, @"surface", extra);
         else if (plane || planes > 1)
             refuseTexture(t, PredTexSurfPlane, plane, planes, @"surface", extra);
-        else if ((pitch & 31) || pitch < packed)
-            refuseTexture(t, PredTexSurfPitch, pitch, packed, @"surface", extra);
+        else if ((pitch & 15) || (offset & 15) || pitch < packed)  // (its plane's offset: as its pitch)
+            refuseTexture(t, PredTexSurfPitch, pitch, offset & 15 ? offset : packed, @"surface", extra);
         else if (uint64_t(pitch) * d.height > IOSurfaceGetAllocSize(s))
             refuseTexture(t, PredTexSurfBounds, uint64_t(pitch) * d.height, IOSurfaceGetAllocSize(s), @"surface",
                           extra);
@@ -3841,9 +4191,11 @@ static void countPreds(RMCommandBuffer *cb)
     }
 }
 
+static bool submitSegments(RMCommandBuffer *cb);
 static bool submitLocked(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
+    if (!cb->_segs.empty()) return submitSegments(cb);
     const char *why = nullptr;
     if (cb->_reason == WhyRaw) {
         if (r.gpuOrder && r.m2vSinceRaw) {  // its first entry: an acquire on what NVK's channels submitted
@@ -3859,7 +4211,7 @@ static bool submitLocked(RMCommandBuffer *cb)
             }
         }
         const uint64_t began = nowUs();
-        if (encodeRaw(cb, &why)) {
+        if (encodeRaw(cb, 0, cb->_tape.size(), &why)) {
             r.stats.encodeUs += nowUs() - began;
             r.stats.raw++;
             r.rawSinceM2v = true;
@@ -3890,7 +4242,7 @@ static bool submitLocked(RMCommandBuffer *cb)
     }
     cb->_m2v = true;
     const uint64_t replayBegan = nowUs();
-    id<MTLCommandBuffer> m = r.fallback ? replay(cb) : nil;
+    id<MTLCommandBuffer> m = r.fallback ? replay(cb, 0, cb->_tape.size(), false) : nil;
     if (!m) {
         finish(cb, [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                        code:MTLCommandBufferErrorInternal
@@ -3945,10 +4297,158 @@ static bool submitLocked(RMCommandBuffer *cb)
     return true;
 }
 
+// A command buffer some of whose encoders go to m2v and some do not, with no refusal of its own and no shared event: its segments
+// (each run of encoders of one driver), else none (it goes whole, as its reason says).
+// Off since r7p8 (a freeze 20 s after the home screen whose cause the logs did not name; the split was active just before it):
+// every command buffer goes whole, as before r12. It comes back once the stall line (rawStall) or m2v's bounded queue slot wait
+// names the cause.
+static constexpr bool kSplit = false;
+static void planSegments(RMCommandBuffer *cb)
+{
+    cb->_segs.clear();
+    cb->_segNext = 0;
+    [cb closeEncoder];
+    if (!kSplit || cb->_reason == WhyRaw || cb->_whole) return;
+    bool raw = false, m2v = false;
+    for (size_t at = 0; at < cb->_tape.size(); at++) {
+        const Cmd &c = cb->_tape[at];
+        if (c.op == OpSignalEvent || c.op == OpWaitEvent || (c.op == OpInvocation && c.stage == 0xff)) {
+            cb->_segs.clear();
+            return;
+        }
+        if (c.op != OpRender && c.op != OpBlit && c.op != OpCompute) {
+            if (cb->_segs.empty()) return;  // a command before the first encoder
+            continue;
+        }
+        const bool r = !c.index;
+        (r ? raw : m2v) = true;
+        if (!cb->_segs.empty()) cb->_segs.back().to = uint32_t(at);
+        if (!cb->_segs.empty() && cb->_segs.back().raw == r) continue;
+        cb->_segs.push_back({uint32_t(at), uint32_t(cb->_tape.size()), r});
+    }
+    if (!cb->_segs.empty()) cb->_segs.back().to = uint32_t(cb->_tape.size());
+    if (!raw || !m2v) cb->_segs.clear();
+}
+
+// Whether what `cb` submits next is raw work (it needs the m2v work before it scheduled: m2vClear)
+static bool nextRaw(RMCommandBuffer *cb)
+{
+    return cb->_segs.empty() ? cb->_reason == WhyRaw : cb->_segNext < cb->_segs.size() && cb->_segs[cb->_segNext].raw;
+}
+
+// submit lock held: a split command buffer's segments from the next one, in order, each as a command buffer of its driver would
+// go (submitLocked), the scheduled and completed handlers with the last. false: the next is raw and the m2v work before it is not
+// scheduled yet (it waits on the submit thread, as a raw command buffer after m2v work does).
+static bool submitSegments(RMCommandBuffer *cb)
+{
+    RawState &r = *gRM;
+    if (cb->_segNext == 0) {
+        r.stats.splits++;
+        countPreds(cb);
+    }
+    while (cb->_segNext < cb->_segs.size()) {
+        RMSegment &s = cb->_segs[cb->_segNext];
+        const bool last = cb->_segNext + 1 == cb->_segs.size();
+        if (s.raw) {
+            {
+                std::lock_guard<std::mutex> m(r.m2vLock);
+                if (!m2vClear()) return false;
+            }
+            if (r.gpuOrder && r.m2vSinceRaw) {
+                uint32_t waits = 0;
+                const int kr = r.raw->orderAfterOthers(waits);
+                if (kr == KERN_SUCCESS) {
+                    r.m2vSinceRaw = false;
+                    r.stats.acquires += waits;
+                } else {
+                    orderRefused("raw after m2v", kr);
+                    std::lock_guard<std::mutex> m(r.m2vLock);
+                    if (r.m2vPending) return false;
+                }
+            }
+            const char *why = nullptr;
+            const uint64_t began = nowUs();
+            if (!encodeRaw(cb, s.from, s.to, &why)) {
+                s.raw = false;  // the kernel refused it: this segment on m2v
+                continue;
+            }
+            r.stats.encodeUs += nowUs() - began;
+            r.rawSinceM2v = true;
+            countDriver(1);
+            if (last) {
+                {
+                    std::lock_guard<std::mutex> l(r.doneLock);
+                    r.inflight.push_back(cb);
+                }
+                r.doneChanged.notify_one();
+                scheduled(cb);
+            }
+        } else {
+            r.stats.splitM2v++;
+            const uint64_t began = nowUs();
+            id<MTLCommandBuffer> m = r.fallback ? replay(cb, s.from, s.to, true) : nil;
+            if (!m) {
+                cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                                    code:MTLCommandBufferErrorInternal
+                                                userInfo:nil];
+                if (last) finish(cb, cb->_segError);
+                cb->_segNext++;
+                continue;
+            }
+            if (r.gpuOrder && r.rawSinceM2v) {
+                uint32_t waits = 0;
+                const int kr = r.raw->orderOthersAfter(waits);
+                if (kr == KERN_SUCCESS)
+                    r.stats.acquires += waits;
+                else
+                    orderRefused("m2v after raw", kr);
+            }
+            if (!r.gpuOrder && !r.raw->done(r.raw->submitted())) {
+                r.stats.cpuOrdered++;
+                r.raw->wait(r.raw->submitted());
+            }
+            r.rawSinceM2v = false;
+            r.m2vSinceRaw = true;
+            countDriver(2);
+            __block bool counted = false;
+            {
+                std::lock_guard<std::mutex> l(r.m2vLock);
+                r.m2vPending++;
+                r.m2vUnscheduled++;
+            }
+            [m addScheduledHandler:^(id<MTLCommandBuffer>) {
+                {
+                    std::lock_guard<std::mutex> l(gRM->m2vLock);
+                    if (!counted) gRM->m2vUnscheduled--;
+                    counted = true;
+                }
+                gRM->m2vChanged.notify_all();
+                if (last) scheduled(cb);
+            }];
+            [m addCompletedHandler:^(id<MTLCommandBuffer> done) {
+                if (done.error && !cb->_segError) cb->_segError = done.error;
+                if (last) finish(cb, cb->_segError);
+                {
+                    std::lock_guard<std::mutex> l(gRM->m2vLock);
+                    if (!counted) gRM->m2vUnscheduled--;
+                    counted = true;
+                    gRM->m2vPending--;
+                }
+                gRM->m2vChanged.notify_all();
+            }];
+            [m commit];
+            r.stats.replayUs += nowUs() - began;
+        }
+        cb->_segNext++;
+    }
+    return true;
+}
+
 // A committed command buffer: submitted now when nothing committed before it waits and what it needs is there (raw: m2vClear,
 // the shared events it waits for covered), else handed to the submit thread in order.
 static void commitBuffer(RMCommandBuffer *cb)
 {
+    planSegments(cb);
     RawState &r = *gRM;
     if (waitsForEvent(cb)) {
         std::lock_guard<std::mutex> h(gHoldersLock);
@@ -3956,7 +4456,7 @@ static void commitBuffer(RMCommandBuffer *cb)
     }
     std::unique_lock<std::mutex> l(r.submit);
     bool now = r.waiting.empty();
-    if (now && cb->_reason == WhyRaw) {
+    if (now && nextRaw(cb)) {
         std::lock_guard<std::mutex> m(r.m2vLock);
         now = m2vClear();
         if (!now && !r.gpuOrder) r.stats.cpuOrdered++;  // it waits for the m2v work before it to complete
@@ -3980,14 +4480,14 @@ static void submitLoop()
             r.waitingChanged.wait(l, [&] { return !r.waiting.empty(); });
             cb = r.waiting.front();
         }
-        if (cb->_reason == WhyRaw) {
+        if (nextRaw(cb)) {
             {
                 std::unique_lock<std::mutex> m(r.m2vLock);
                 if (!r.m2vChanged.wait_for(m, kWaitLimit, [&] { return m2vClear(); }))
                     waitTooLong("raw command buffer waiting for the m2v work before it, command buffer",
                                 (__bridge void *)cb);
             }
-            waitEvents(cb);
+            if (cb->_reason == WhyRaw) waitEvents(cb);
         }
         std::lock_guard<std::mutex> l(r.submit);
         if (!submitLocked(cb)) continue;  // CPU order from now on: it waits for the m2v work before it to complete
@@ -4019,7 +4519,7 @@ static void completionLoop()
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
         switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, abortUs, replayUs, replayClean,
-        rtUnaligned, predOnly[PredCount];
+        rtUnaligned, predOnly[PredCount], splits, splitM2v;
 } gRates;
 
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
@@ -4036,8 +4536,8 @@ size_t raw_metal_rates(char *out, size_t size)
     if (!gRM || !size) return 0;
     Stats &s = gRM->stats;
     const uint64_t raw = s.raw.load(), m2v = s.m2v.load(), now = nowUs();
-    const uint64_t c = raw - gRates.raw, f = m2v - gRates.m2v;
-    if (!c && !f) return 0;
+    const uint64_t c = raw - gRates.raw, f = m2v - gRates.m2v, sp = s.splits.load() - gRates.splits;
+    if (!c && !f && !sp) return 0;
     const double secs = gRates.lastUs ? (now - gRates.lastUs) / 1e6 : 5.0;
     char reasons[160] = "";
     size_t at = 0;
@@ -4049,7 +4549,7 @@ size_t raw_metal_rates(char *out, size_t size)
         gRates.reasons[r] = s.reasons[r].load();
     }
     raw::Device::Stats &k = gRM->raw->stats;
-    const double per = c ? double(c) : 1.0;
+    const double per = c + sp ? double(c + sp) : 1.0;  // the raw path's command buffers, the split ones included
     // diagnostics (r10-rawsweep): per predicate, the command buffers that hit it / those it alone sent to m2v, the ten most hit
     char preds[256] = "";
     {
@@ -4073,16 +4573,21 @@ size_t raw_metal_rates(char *out, size_t size)
             cbs[best] = 0;
         }
     }
-    const uint64_t aborts = s.aborted.load() - gRates.aborted, m2vs = f ? f : 1;
+    // replay= and rclean= per m2v submission: whole command buffers and split ones' m2v segments
+    const uint64_t aborts = s.aborted.load() - gRates.aborted, segs = s.splitM2v.load() - gRates.splitM2v,
+                   m2vs = f + segs ? f + segs : 1;
     char diag[512];
     snprintf(diag, sizeof diag,
-             " abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) why=%s",
+             " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) why=%s",
+             (unsigned long long)sp, (unsigned long long)segs,
              (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
              (s.replayClean.load() - gRates.replayClean) / 1024.0 / double(m2vs),
              (unsigned long long)(k.rtUnaligned.load() - gRates.rtUnaligned), k.rtUnalignedPitch.load(),
              k.rtUnalignedVa.load(), *preds ? preds : "-");
     gRates.abortUs = s.abortUs.load();
+    gRates.splits = s.splits.load();
+    gRates.splitM2v = s.splitM2v.load();
     gRates.replayUs = s.replayUs.load();
     gRates.replayClean = s.replayClean.load();
     gRates.rtUnaligned = k.rtUnaligned.load();
@@ -4121,6 +4626,74 @@ size_t raw_metal_rates(char *out, size_t size)
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }
 
+// The stall line (r7p8: the compositor stopped committing for good with nothing in the log): every 5 s, on a timer of its own,
+// what the raw path has pending, read without waiting (a lock another thread holds is reported held, not waited for). Once
+// nothing was committed or completed over two ticks while work is pending or one of its locks stays held, one line names it,
+// once per process. Nothing else: an idle screen has nothing pending and says nothing.
+static void rawStallTick()
+{
+    static uint64_t lastCommits = ~0ull, lastDone = ~0ull;
+    static int still = 0;
+    static bool said = false;
+    if (said || !gRM) return;
+    RawState &r = *gRM;
+    Stats &s = r.stats;
+    const uint64_t commits = s.raw.load() + s.m2v.load() + s.splits.load(), done = s.finished.load();
+    const bool moved = commits != lastCommits || done != lastDone;
+    lastCommits = commits;
+    lastDone = done;
+    if (moved) {
+        still = 0;
+        return;
+    }
+    long waiting = -1, inflight = -1, m2vPending = -1, m2vUnscheduled = -1;
+    unsigned segNext = 0, segs = 0, reason = 0;
+    {
+        std::unique_lock<std::mutex> a(r.submit, std::try_to_lock);
+        if (a.owns_lock()) {
+            waiting = long(r.waiting.size());
+            if (!r.waiting.empty()) {
+                RMCommandBuffer *f = r.waiting.front();
+                segNext = unsigned(f->_segNext);
+                segs = unsigned(f->_segs.size());
+                reason = unsigned(f->_reason);
+            }
+        }
+    }
+    {
+        std::unique_lock<std::mutex> b(r.doneLock, std::try_to_lock);
+        if (b.owns_lock()) inflight = long(r.inflight.size());
+    }
+    {
+        std::unique_lock<std::mutex> m(r.m2vLock, std::try_to_lock);
+        if (m.owns_lock()) {
+            m2vPending = long(r.m2vPending);
+            m2vUnscheduled = long(r.m2vUnscheduled);
+        }
+    }
+    bool holders = false;
+    {
+        std::unique_lock<std::mutex> h(gHoldersLock, std::try_to_lock);
+        holders = h.owns_lock();
+    }
+    const bool device = r.raw->lockFree();
+    const uint32_t submitted = r.raw->submitted(), completed = r.raw->completed();
+    const bool pending = waiting != 0 || inflight != 0 || m2vPending != 0 || m2vUnscheduled != 0 || !holders ||
+                         !device || submitted != completed;
+    if (!pending) {
+        still = 0;
+        return;
+    }
+    if (++still < 2) return;
+    said = true;
+    os_log_error(rawLog(),
+                 "raw: stall: nothing committed or completed for 10 s with work pending: waiting %ld (front segment "
+                 "%u/%u reason %u), inflight %ld, m2v pending %ld unscheduled %ld (-1: its lock held), locks free: "
+                 "holders %d device %d, seqno submitted %u completed %u, commits %llu completed %llu",
+                 waiting, segNext, segs, reason, inflight, m2vPending, m2vUnscheduled, int(holders), int(device),
+                 submitted, completed, (unsigned long long)commits, (unsigned long long)done);
+}
+
 // raw_metal_prepare's thread and what it made (taken once, by raw_metal_device_open)
 static struct {
     std::mutex lock;
@@ -4138,6 +4711,9 @@ static raw::Device *openDevice(const char *packPath, uint64_t stack, std::string
         delete dev;  // its connection closes: the kernel frees what it held
         return nullptr;
     }
+    // the 2D engine's mip-chain self-test at open (raw/fx): one line, whichever way it went
+    os_log(rawLog(), "raw: fx mip self-test tegra=%u fermi=%u first=0x%x -> chains %{public}s", dev->selfTestTegra,
+           dev->selfTestFermi, dev->selfTestFirst, dev->chainsOn() ? "on" : "off");
     dev->warm();
     return dev;
 }
@@ -4238,6 +4814,15 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
                @"other's "
                @"work to complete");
     gRM = r;
+    {  // the stall line's timer (rawStallTick): its own, so nothing the render server's other threads hold delays it
+        static dispatch_source_t stall;
+        stall =
+            dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+        dispatch_source_set_timer(stall, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
+                                  NSEC_PER_SEC / 4);
+        dispatch_source_set_event_handler(stall, ^{ rawStallTick(); });
+        dispatch_resume(stall);
+    }
     // both threads at the render thread's class: what they hold up is the frame
     std::thread([] {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);

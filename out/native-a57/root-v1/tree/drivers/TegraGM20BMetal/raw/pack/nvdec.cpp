@@ -2,6 +2,9 @@
 // nvdec (r7-raw): see nvdec.h. Method numbers are NVIDIA's (Mesa src/nouveau/headers/nvidia/classes/cl9097.h, clb197.h, MIT).
 // Macros run through Mesa's Fermi MME simulator (src/nouveau/mme/mme_fermi_sim.c, MIT; third_party/mesa/libnouveau_mme.a).
 #include "nvdec.h"
+#ifdef NVDEC_TWOD
+#include "../fx/test/twod_sim.h"
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -166,6 +169,26 @@ uint64_t Decoder::fnv(const void *p, size_t n, uint64_t h)
 }
 
 Decoder::Decoder(MapFn map, FILE *out) : map_(std::move(map)), out_(out) {}
+#ifdef NVDEC_TWOD
+void Decoder::twod(uint32_t subc, uint32_t mthd, uint32_t data)
+{
+    auto *sim = static_cast<twodsim::Sim *>(twod_);
+    if (!sim) {
+        twod_ = sim = new twodsim::Sim;
+        sim->host = [this](uint64_t va, uint64_t bytes) {
+            return const_cast<uint8_t *>(map_ ? map_(va, bytes) : nullptr);
+        };
+    }
+    if (!sim->feed(subc, mthd, data)) {
+        fprintf(stderr, "nvdec: 2D engine: %s\n", sim->error().c_str());
+        if (out_) fprintf(out_, "TWOD_ERROR %s\n", sim->error().c_str());
+        delete sim;
+        twod_ = nullptr;
+    }
+}
+#else
+void Decoder::twod(uint32_t, uint32_t, uint32_t) {}
+#endif
 
 void Decoder::submitBegin()
 {
@@ -264,8 +287,14 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
             copyEngine(data);
         }
         if (subc == 3 && mthd == 0x08dc) fprintf(out_, "BLIT2D\n");
+#ifdef NVDEC_TWOD
+        if (subc == 3) twod(subc, mthd, data);
+#endif
         return;
     }
+#ifdef NVDEC_TWOD
+    if (mthd == 0x0110 || mthd == 0x1288) twod(subc, mthd, data);
+#endif
     // 3D
     if (!fromMme && mthd >= CALL_MME && mthd < CALL_MME + 0x800) {
         const uint32_t j = (mthd - CALL_MME) / 8;

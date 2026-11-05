@@ -19,7 +19,7 @@ filegroup(
 # (every .h/.c/.cpp/.mm/.py/.inc below raw/, the old build's raw_stack()).
 filegroup(
     name = "raw_runtime_headers",
-    srcs = glob(["raw/runtime/*.h"]),
+    srcs = glob(["raw/runtime/*.h", "raw/fx/*.h"]),
 )
 
 filegroup(

@@ -5,6 +5,7 @@
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
+#include <cmath>
 #import <objc/message.h>
 #include <algorithm>
 #include <mach/mach.h>
@@ -194,7 +195,12 @@ int main(int argc, char **argv)
                                                                                      mipmapped:NO];
             d.usage = td.renderTarget ? MTLTextureUsageRenderTarget | (td.memoryless ? 0 : MTLTextureUsageShaderRead)
                                       : MTLTextureUsageShaderRead;
-            if (td.iosurface) {
+            if (t == frame::IMAGE1 &&
+                frame::mipImage()) {  // every level, private: m2v's own image, or the raw path's chain
+                d.mipmapLevelCount = 1 + unsigned(std::log2(double(std::max(td.w, td.h))));
+                d.storageMode = MTLStorageModePrivate;
+                tex[t] = [dev newTextureWithDescriptor:d];
+            } else if (td.iosurface) {
                 NSDictionary *p = @{
                     (id)kIOSurfaceWidth : @(td.w),
                     (id)kIOSurfaceHeight : @(td.h),
@@ -243,13 +249,90 @@ int main(int argc, char **argv)
                              options:MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
         NSUInteger ringAt = 0;
         id<MTLBuffer> indices = [dev newBufferWithLength:65536 options:MTLResourceStorageModeShared];
+        // FRAME_SPLIT_PASS=mip: the extra pass renders into a texture of two levels instead (a twin-only attachment: refused at
+        // the pass, pass.fmt, as Core Animation's average-luma pass into its mipmapped surface is)
+        id<MTLTexture> mipTarget = nil;
+        if (getenv("FRAME_SPLIT_PASS") && !strcmp(getenv("FRAME_SPLIT_PASS"), "mip")) {
+            MTLTextureDescriptor *md =
+                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:tex[frame::BLUR0].pixelFormat
+                                                                   width:tex[frame::BLUR0].width
+                                                                  height:tex[frame::BLUR0].height
+                                                               mipmapped:YES];
+            md.mipmapLevelCount = 2;
+            md.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+            md.storageMode = MTLStorageModePrivate;
+            mipTarget = [dev newTextureWithDescriptor:md];
+        }
+        auto encodeExtra = [&](id<MTLCommandBuffer> cb, unsigned f) {
+            MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            rp.colorAttachments[0].texture = mipTarget ? mipTarget : tex[frame::BLUR0];
+            rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rp.colorAttachments[1].texture = tex[frame::BLUR_MEMORYLESS];
+            rp.colorAttachments[1].loadAction = MTLLoadActionDontCare;
+            rp.colorAttachments[1].storeAction = MTLStoreActionDontCare;
+            id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
+            [e setRenderPipelineState:extra[(f / 2) % extra.size()]];
+            frame::Bytes vb = {1, 1, shape.vertexBytes};
+            frame::fill(bytes, vb, f, 0);
+            [e setVertexBytes:bytes.data() length:vb.length atIndex:1];
+            for (int slot = 0; slot < 8; slot++) {
+                frame::Bytes u = {2, slot, shape.uniformBytes};
+                frame::fill(bytes, u, f, slot);
+                [e setVertexBytes:bytes.data() length:u.length atIndex:slot == 1 ? 7 : slot];
+                [e setFragmentBytes:bytes.data() length:u.length atIndex:slot];
+            }
+            for (int t = 0; t < 16; t++) [e setFragmentTexture:tex[frame::IMAGE1] atIndex:t];
+            for (int s2 = 0; s2 < 16; s2++) [e setFragmentSamplerState:smp[s2 & 1] atIndex:s2];
+            [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+            [e endEncoding];
+        };
+        // FRAME_MIP: IMAGE1's level 0 from a buffer of a pattern, then its levels (each frame, before its passes)
+        id<MTLBuffer> mipSource = nil;
+        if (frame::mipImage()) {
+            const frame::TexDesc td = frame::texture(frame::IMAGE1);
+            mipSource = [dev newBufferWithLength:NSUInteger(td.w) * td.h * 4 options:MTLResourceStorageModeShared];
+            uint8_t *b = (uint8_t *)mipSource.contents;
+            for (NSUInteger i = 0; i < NSUInteger(td.w) * td.h * 4; i++) b[i] = uint8_t(i * 131u + (i >> 9) * 7u + 3u);
+        }
         for (unsigned f = 0; f < frames; f++) {
             @autoreleasepool {
                 const uint64_t c0 = threadNs();
                 id<MTLCommandBuffer> cb = [queue commandBuffer];
                 caCommandBuffer(cb);
+                if (mipSource) {
+                    const frame::TexDesc td = frame::texture(frame::IMAGE1);
+                    id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+                    [b copyFromBuffer:mipSource
+                               sourceOffset:0
+                          sourceBytesPerRow:NSUInteger(td.w) * 4
+                        sourceBytesPerImage:0
+                                 sourceSize:MTLSizeMake(td.w, td.h, 1)
+                                  toTexture:tex[frame::IMAGE1]
+                           destinationSlice:0
+                           destinationLevel:0
+                          destinationOrigin:MTLOriginMake(0, 0, 0)];
+                    [b generateMipmapsForTexture:tex[frame::IMAGE1]];
+                    [b endEncoding];
+                }
                 unsigned drawIndex = 0;
                 for (const frame::Pass &pass : frame::passes(f, shape, blur.size(), uber.size())) {
+                    if ((f & 1) && !extra.empty() && getenv("FRAME_SPLIT") && !pass.draws.empty() &&
+                        !pass.draws[0].blur) {
+                        // FRAME_SPLIT=cb: the same passes as command buffers of their own (what the segments must equal)
+                        const bool own = !strcmp(getenv("FRAME_SPLIT"), "cb");
+                        if (own) {
+                            [cb commit];
+                            cb = [queue commandBuffer];
+                            caCommandBuffer(cb);
+                        }
+                        encodeExtra(cb, f);
+                        if (own) {
+                            [cb commit];
+                            cb = [queue commandBuffer];
+                            caCommandBuffer(cb);
+                        }
+                    }
                     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
                     for (int c = 0; c < 3; c++) {
                         if (pass.color[c] < 0) continue;
@@ -327,33 +410,13 @@ int main(int argc, char **argv)
                     [e endEncoding];
                 }
                 // FRAME_EXTRA: every odd frame, a second command buffer of one pass drawing an extra state (m2v's, on the facade)
-                // into BLUR0, then the next frame's raw work reads BLUR0 (its blur passes sample it)
-                if ((f & 1) && !extra.empty()) {
+                // into BLUR0, then the next frame's raw work reads BLUR0 (its blur passes sample it). FRAME_SPLIT: that pass in the
+                // same command buffer, before the main pass (the facade submits it in segments: raw, m2v, raw)
+                if ((f & 1) && !extra.empty() && !getenv("FRAME_SPLIT")) {
                     [cb commit];
                     cb = [queue commandBuffer];
                     caCommandBuffer(cb);
-                    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-                    rp.colorAttachments[0].texture = tex[frame::BLUR0];
-                    rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
-                    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-                    rp.colorAttachments[1].texture = tex[frame::BLUR_MEMORYLESS];
-                    rp.colorAttachments[1].loadAction = MTLLoadActionDontCare;
-                    rp.colorAttachments[1].storeAction = MTLStoreActionDontCare;
-                    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
-                    [e setRenderPipelineState:extra[(f / 2) % extra.size()]];
-                    frame::Bytes vb = {1, 1, shape.vertexBytes};
-                    frame::fill(bytes, vb, f, 0);
-                    [e setVertexBytes:bytes.data() length:vb.length atIndex:1];
-                    for (int slot = 0; slot < 8; slot++) {
-                        frame::Bytes u = {2, slot, shape.uniformBytes};
-                        frame::fill(bytes, u, f, slot);
-                        [e setVertexBytes:bytes.data() length:u.length atIndex:slot == 1 ? 7 : slot];
-                        [e setFragmentBytes:bytes.data() length:u.length atIndex:slot];
-                    }
-                    for (int t = 0; t < 16; t++) [e setFragmentTexture:tex[frame::IMAGE1] atIndex:t];
-                    for (int s2 = 0; s2 < 16; s2++) [e setFragmentSamplerState:smp[s2 & 1] atIndex:s2];
-                    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-                    [e endEncoding];
+                    encodeExtra(cb, f);
                 }
                 [cb commit];
                 cpu.push_back((threadNs() - c0) / 1e6);
@@ -375,8 +438,7 @@ int main(int argc, char **argv)
 #ifdef RAW_FACADE
         {
             char rates[2048];
-            raw_metal_rates(rates, sizeof rates);
-            printf("RATES %s\n", rates);
+            if (raw_metal_rates(rates, sizeof rates)) printf("RATES %s\n", rates);
         }
 #endif
         pushcount_report("nvkframe");

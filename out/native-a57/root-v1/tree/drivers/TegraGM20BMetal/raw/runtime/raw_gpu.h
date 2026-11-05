@@ -34,6 +34,7 @@
 #include "raw_kernel.h"
 #include "raw_pack.h"
 #include "raw_push.h"
+#include "../fx/fx_mip.h"
 
 namespace raw {
 
@@ -70,7 +71,11 @@ struct Texture {
     uint8_t *cpu = nullptr;  // the CPU's view of va (null: memoryless)
     uint32_t width = 0, height = 0, format = 0, pitch = 0;
     uint8_t bpp = 0;
-    bool renderable = false;   // the format has a render target format
+    bool renderable = false;  // a pitch render target as it is: a target format, address and pitch multiples of 128
+    // A target format, but an address or pitch the render hardware does not take (NVK's linear-render rule, linearTarget): a pass
+    // renders it through a pool image the copy engine fills from it before and copies back to it after (NVK's own tiled shadow,
+    // nvk_linear_render_copy, for the same targets: the texels stored are the same)
+    bool shadowTarget = false;
     bool memoryless = false;   // no memory: a pass gives it a backing (Device::backing)
     uint32_t tic = 0;          // texture header index, 0: none (not sampleable)
     Import *import = nullptr;  // surface or no-copy pages, else
@@ -92,6 +97,22 @@ struct Texture {
     // m2v's address map of a planar texture's samplers: 1 every mode clamps to the edge (4:2:0), 2 clamp to zero and to the
     // border clamp to the edge (4:4:4 codes)
     uint8_t addressMap = 0;
+    // Rows 16 but not 32 bytes apart (or an address off 32): the texture header's pitch takes multiples of 32, so it is sampled
+    // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
+    // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
+    Texture *sampled = nullptr;
+    // A mipmapped texture's levels (r12, raw/fx): level 0 is this texture (pitch, pool memory: rendered, copied and cleared as any
+    // other), and `chain` the block-linear image of every level that its texture header (tic) points at, which the 2D engine
+    // fills from level 0 (BlitEncoder::generate). The chain's own level 0 is a copy: `l0Fresh` says it holds what the texture's
+    // level 0 holds now, `levelsFresh` that its later levels were generated since the last generateMipmaps (encode order, under
+    // the submit lock: the GPU's order).
+    struct Chain {
+        fx::MipChain layout;
+        uint64_t va = 0;
+        Span span;
+        uint32_t fmt2d = 0;
+        bool l0Fresh = false, levelsFresh = false;
+    } *chain = nullptr;
 };
 struct Buffer {
     uint64_t va = 0, length = 0;
@@ -196,6 +217,8 @@ private:
     bool scissorDirty_ = true, viewportDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
     bool colorWritten_ = false, memoryless_[8] = {};
+    const Texture *shadowOf_[8] =
+        {};  // a shadow target's texture, where pass_ holds its pool image (CommandBuffer::render)
     // what m2v's DontCare loads answer (metal2vulkan clear_reach.rs: dont_care_loads, DrawnArea): whether the pass has a draw
     // call and one that draws, the colors its draws read, and the pixels they may write (scissor within viewport, each draw)
     bool called_ = false, drew_ = false, whole_ = false;
@@ -223,6 +246,13 @@ public:
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
+    // A mipmapped texture's chain (Texture::chain) on the 2D engine: `all`, generateMipmaps (level 0 converted from the texture,
+    // then each level from the one above); else level 0 only (the texture's level 0 was written since: what sampling it needs)
+    void generate(Texture &t, bool all);
+    // `w` x `h` texels of chain level `level` of `t` at (sx, sy) into the pitch texture `dst` at (dx, dy) (copyFromTexture of a
+    // level below the first); 1:1 on the 2D engine
+    void copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx,
+                       uint32_t dy, uint32_t w, uint32_t h);
     void end();
 
 private:
@@ -231,7 +261,7 @@ private:
     Device *dev_ = nullptr;
     Push p_;
     uint32_t *start_ = nullptr;
-    void room();
+    void room(uint32_t words = 56);  // at least `words` words left in the reservation
 };
 
 // Which encode-time predicate refused a draw (set beside *why; RawMetal.mm counts and logs it, r10-rawsweep diagnostics)
@@ -305,6 +335,17 @@ public:
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)
     bool createView(const Texture &of, uint32_t format, Texture &t);  // the same memory as another format
     bool createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t);
+    // A mipmapped 2D texture of `levels` levels: level 0 a pool texture as createTexture's, its header the block-linear chain's
+    // (Texture::chain). False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
+    bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
+    // Whether mip chains are on: the 2D engine's self-test at open made the chain the design expects (fx_mip.h)
+    bool chainsOn() const { return chainsOn_; }
+    // Whether the device's resource lock is free now (try, never waits: the stall line's)
+    bool lockFree()
+    {
+        std::unique_lock<std::mutex> l(lock_, std::try_to_lock);
+        return l.owns_lock();
+    }
     void destroyTexture(Texture &t);
     bool createBuffer(uint64_t length, Buffer &b);
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
@@ -340,7 +381,11 @@ public:
         // those through a tiled shadow: nvk_cmd_draw.c nvk_image_plane_aligned_for_linear_attachment), and the last one's pitch
         std::atomic<uint64_t> rtUnaligned{0};
         std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
+        // mip chains: made, chain bytes, generated (whole) and level-0 refreshes, copies out of a level
+        std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainRefreshes{0}, chainCopies{0};
     } stats;
+    // The self-test's result (open): bytes off in the Tegra and Fermi views of the CPU, the first bad one; ~0u: not run
+    uint32_t selfTestTegra = ~0u, selfTestFermi = ~0u, selfTestFirst = ~0u;
 
 private:
     friend class CommandBuffer;
@@ -380,8 +425,15 @@ private:
     uint32_t restart_ = 0;        // and its primitive restart index
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
     std::vector<Chunk> chunks_;
+    // mip chains' memory: chunks bound with PTE kind 0xFE (fx::kBlockLinearKind), made on demand, never CPU-written
+    std::vector<Chunk> blChunks_;
+    bool chainsOn_ = false;
+    bool blAlloc(uint64_t bytes, uint64_t align, Span &s);
+    void blFree(Span &s);
+    void selfTest();
     struct Backing {
         Texture texture;
+        uint32_t tag = 0;
         uint32_t lastUse = 0;  // the seqno of the last submission that used it (0: never submitted)
         uint64_t lastCommit = 0;
     };
@@ -404,7 +456,9 @@ private:
     void poolFree(Span &s);
     Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner);
     void release(Import *i);
-    Texture *backing(const Texture &memoryless);
+    // A memoryless attachment's memory (tag 0), or a shadow target's pool image for attachment j (tag 1 + j): one per size,
+    // format and tag, kept while passes use it
+    Texture *backing(const Texture &memoryless, uint32_t tag = 0);
     void trimBackings();
 };
 
