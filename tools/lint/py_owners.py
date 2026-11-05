@@ -2,13 +2,17 @@
 
     bazel run //tools/lint:py_owners
 
-Not a test: it asks `bazel query` which targets own each file, and a test cannot run Bazel.
+Not a test: it asks `bazel query` which targets own each file, and a test cannot run Bazel. Vendored code
+(third_party/, XNU at kernel/xnu-<version>/) is not ours to own: only its scripts the build runs have targets (Mesa's
+generators), the rest never run.
 """
 
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+VENDORED = ('third_party/', 'kernel/xnu-')
 
 OWNED = (
     'kind("source file", labels(srcs, kind("py_(binary|test|library)", //...)) + '
@@ -32,9 +36,13 @@ def owned_paths(root: Path, bazel: str) -> set[str]:
 def main() -> int:
     """Print every unowned tracked .py file; return 1 if there is one."""
     root = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path.cwd())
-    tracked = subprocess.run(
-        ['git', 'ls-files', '*.py'], cwd=root, check=True, capture_output=True, text=True
-    ).stdout.split()
+    tracked = [
+        path
+        for path in subprocess.run(
+            ['git', 'ls-files', '*.py'], cwd=root, check=True, capture_output=True, text=True
+        ).stdout.split()
+        if not path.startswith(VENDORED)
+    ]
     unowned = sorted(set(tracked) - owned_paths(root, os.environ.get('BAZEL', 'bazel')))
     for path in unowned:
         print(f'{path}: no py_binary, py_test or py_library owns it')

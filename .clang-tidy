@@ -143,10 +143,10 @@ Checks: >
 # Warnings are errors in the test (clang_tidy_test passes --warnings-as-errors=*), not here, so editors (clangd)
 # show them as warnings.
 WarningsAsErrors: ''
-# Our headers wherever they are; never XNU's, the SDK's, vendored ones (nouveau, Linux, NVIDIA, Mesa) or generated ones
-# (bazel-out: test shims, XNU's exported headers).
+# Our headers wherever they are; never XNU's (kernel/xnu-<version>/), the SDK's, vendored ones (third_party/, nouveau,
+# Linux, NVIDIA, Mesa) or generated ones (bazel-out: test shims, XNU's exported headers).
 HeaderFilterRegex: '.*'
-ExcludeHeaderFilterRegex: '.*/(external|bazel-out|nouveau|linux|nvidia|mesa|libdrm|\.cache|refer|build)/.*'
+ExcludeHeaderFilterRegex: '.*/(external|bazel-out|third_party|kernel/xnu-[^/]+|nouveau|linux|nvidia|mesa|libdrm|\.cache|refer|build)/.*'
 SystemHeaders: false
 FormatStyle: file
 CheckOptions:
