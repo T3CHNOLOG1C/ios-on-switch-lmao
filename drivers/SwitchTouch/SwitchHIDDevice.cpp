@@ -126,14 +126,6 @@ const uint8_t kAccelerometerDescriptor[] = {
 const uint8_t kGyroDescriptor[] = {MOTION_DESCRIPTOR(0x09, 0x57)};  // Gyro; Angular Velocity X 0x0457
 #undef MOTION_DESCRIPTOR
 
-// Device orientation (SwitchHID.h): Sensor/Device Orientation, one bit per AppleVendorMotion usage 0x64..0x6a.
-const uint8_t kOrientationDescriptor[] = {
-    0x05, 0x20, 0x09, 0x8a, 0xa1, 0x01, 0x85, 0x01,              // Sensor: Device Orientation, Collection (App), ID 1
-    0x06, 0x0c, 0xff, 0x19, 0x64, 0x29, 0x6a,                    // AppleVendorMotion: Usage 0x64 .. 0x6a
-    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x07, 0x81, 0x02,  // 7 x 1 bit, Input (Data, Var, Abs)
-    0x95, 0x01, 0x81, 0x03, 0xc0,                                // 1 bit padding
-};
-
 struct Profile {
     const uint8_t *descriptor;
     size_t descriptorSize, reportSize;
@@ -151,14 +143,14 @@ const Profile kProfiles[] = {
      "Switch Accelerometer", "SPI"},
     {kGyroDescriptor, sizeof(kGyroDescriptor), sizeof(SwitchMotionReport), 0x5106, 0xff00, 0x09, "Switch Gyroscope",
      "SPI"},
-    {kOrientationDescriptor, sizeof(kOrientationDescriptor), sizeof(SwitchOrientationReport), 0x5107, 0x20, 0x8a,
-     "Switch Device Orientation", "SPI"},
+    {kSwitchOrientationDescriptor, sizeof(kSwitchOrientationDescriptor), sizeof(SwitchOrientationReport), 0x5107, 0x20,
+     0x8a, "Switch Device Orientation", "SPI"},
     // One profile for every temperature sensor; each instance has its own Product (thermalmonitord's matchName).
     {kTemperatureDescriptor, sizeof(kTemperatureDescriptor), 5, 0x5108, 0xff00, 0x05, "Switch Temperature Sensor",
      "I2C"},
 };
 static_assert(sizeof(kProfiles) / sizeof(kProfiles[0]) == kSwitchHIDTemperature + 1, "one profile per SwitchHIDKind");
-static_assert(sizeof(SwitchMotionReport) == 13 && sizeof(SwitchOrientationReport) == 2, "motion report layouts");
+static_assert(sizeof(SwitchMotionReport) == 13 && sizeof(SwitchOrientationReport) == 11, "motion report layouts");
 
 namespace edge {
 enum : unsigned { kSlots = 256, kDispatch = 198, kGetType = 18, kGetInteger = 23, kSetInteger = 24 };

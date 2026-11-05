@@ -1,7 +1,8 @@
 // Guards for what switch_motion_test's models cannot see: the sample and FIFO drain paths never wait or poll (the
 // models' clock does not run while code spins), the motion services' HID descriptor (SwitchHIDDevice.cpp, a stand-in in
-// the scenarios) carries the Sensor-page usages 21H461's IOHIDEventDriver knows, and SwitchBacklight follows the
-// panel's power into the orientation detector.
+// the scenarios) carries the Sensor-page usages 21H461's IOHIDEventDriver knows, the orientation device serves the
+// descriptor orientation_pipeline_test checks, and SwitchBacklight follows the panel's power into the orientation
+// detector.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -36,6 +37,14 @@ TEST(SwitchMotionSource, SensorPropertyUsages)
     EXPECT_THAT(motion, HasSubstr("0x0a, 0x0e, 0x03,"));
     EXPECT_THAT(motion, HasSubstr("0x0a, 0x1b, 0x03,"));
     EXPECT_THAT(motion, Not(HasSubstr("0x0a, 0x16, 0x03")));
+}
+
+// orientation_pipeline_test checks kSwitchOrientationDescriptor against the report; the device must serve that one.
+TEST(SwitchMotionSource, OrientationDeviceServesTheCheckedDescriptor)
+{
+    EXPECT_THAT(SourceText("../../SwitchTouch/SwitchHIDDevice.cpp"),
+                HasSubstr("{kSwitchOrientationDescriptor, sizeof(kSwitchOrientationDescriptor), "
+                          "sizeof(SwitchOrientationReport),"));
 }
 
 TEST(SwitchMotionSource, BacklightFollowsPanelPower)

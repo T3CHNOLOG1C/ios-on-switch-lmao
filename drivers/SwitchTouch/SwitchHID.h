@@ -81,18 +81,47 @@ struct __attribute__((packed)) SwitchButtonsReport {
 //    IOHIDEventDriver.cpp parseSensorPropertyElement, setProperties).
 //  * Gyroscope, Apple vendor 0xff00/0x0009: the same with Angular Velocity X/Y/Z (0x0457-0x0459) in micro-radians per
 //    second (kIOHIDEventTypeGyro in rad/s).
-//  * Device orientation, Sensor 0x20/0x008a (what CoreMotion's orientation notifier in backboardd matches): input
-//    report 1 = one bit per AppleVendorMotion (0xff0c) usage 0x64 + UIDeviceOrientation (0x64 unknown .. 0x6a face
-//    down); IOHIDEventDriver turns a bit that goes 0 -> 1 into a kIOHIDEventTypeOrientation event (CMUsage).
+//  * Device orientation, Sensor 0x20/0x008a (what CoreMotion's orientation notifier matches): input report 1 =
+//    kSwitchOrientationDescriptor, SwitchOrientationReport.
 // Vectors are in iPadOS's device frame: the portrait panel's (IOSwitchPortrait.h), +X to its right, +Y to its top, +Z
 // out of the screen; acceleration is the gravity vector (lying face up reads z = -1 g), as Apple's AOP reports it.
 struct __attribute__((packed)) SwitchMotionReport {
     uint8_t id;  // 1
     int32_t x, y, z;
 };
+
+// What 21H461 needs of an orientation report (IOHIDFamily's IOHIDEventDriver, CoreMotion's CLOrientationNotifier, in
+// backboardd, SpringBoard and locationd alike):
+//  * The event: a bit per AppleVendorMotion (0xff0c) usage 0x64 + UIDeviceOrientation (0x64 unknown .. 0x6a face down).
+//    handleOrientationReport makes a kIOHIDEventTypeOrientation event (CMUsage) only for a bit that reads 1 and read 0
+//    in the report before. The bits come twice: a report sets the orientation's bit in one set and clears the other,
+//    and the next report uses the other set, so every report makes exactly one event, an unchanged orientation too.
+//  * Its sample time: CoreMotion takes it only from the event's first child, which must be a vendor-defined event of
+//    page 0xff15, usage 2 and 8 data bytes (a u64), and drops an event whose time is not above the last one's ("Skipping
+//    stale orientation (N @ T)"); with no child the time is 0 and every event is dropped. The time is only compared
+//    with earlier ones; it is mach absolute time here, the clock of the event's own timestamp, which CoreMotion hands
+//    its clients.
+//  * IOHIDEventDriver makes that child itself: each element inside an AppleVendor (0xff00) Message (0x23) collection
+//    becomes, for every report of its ID, a vendor-defined event of the element's page and usage, version 0 and the
+//    element's bytes, appended as a child to the next event it dispatches for that report; a report that makes no event
+//    has its child dispatched alone, which CoreMotion logs as a wrong event type. Hence no report without an event.
+//    The collection is Physical: an Application collection would be one of the device's usage pairs.
+constexpr uint8_t kSwitchOrientationDescriptor[] = {
+    0x05, 0x20, 0x09, 0x8a, 0xa1, 0x01, 0x85, 0x01,              // Sensor: Device Orientation, Collection (App), ID 1
+    0x06, 0x0c, 0xff, 0x19, 0x64, 0x29, 0x6a,                    // AppleVendorMotion: Usage 0x64 .. 0x6a
+    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x07, 0x81, 0x02,  // 7 x 1 bit, Input (Data, Var, Abs)
+    0x95, 0x01, 0x81, 0x03,                                      // 1 bit padding
+    0x19, 0x64, 0x29, 0x6a, 0x95, 0x07, 0x81, 0x02,              // the second set
+    0x95, 0x01, 0x81, 0x03,                                      // 1 bit padding
+    0x06, 0x00, 0xff, 0x09, 0x23, 0xa1, 0x00,                    // AppleVendor: Message, Collection (Physical)
+    0x06, 0x15, 0xff, 0x09, 0x02,                                // 0xff15 / 2: the sample time
+    0x27, 0xff, 0xff, 0xff, 0x7f, 0x75, 0x40, 0x95, 0x01, 0x81, 0x02,  // 64 bits, Input (Data, Var, Abs)
+    0xc0, 0xc0,
+};
 struct __attribute__((packed)) SwitchOrientationReport {
-    uint8_t id;           // 1
-    uint8_t orientation;  // 1u << UIDeviceOrientation
+    uint8_t id;              // 1
+    uint8_t orientation[2];  // 1u << UIDeviceOrientation in one set, 0 in the other
+    uint64_t timestamp;      // strictly increasing from report to report
 };
 
 // Temperature sensors (../SwitchPower/SwitchSensors.cpp): thermalmonitord's HID sensors, Apple vendor 0xff00 /

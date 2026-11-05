@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 #include "bazel/testing/require.h"
 #include "../SwitchMotion.cpp"
+#include "orientation_pipeline_model.h"
 
 // Every check is a GoogleTest failure at its call site.
 #define check(ok, what) EXPECT_TRUE(ok) << (what)
@@ -360,8 +361,14 @@ struct HidDevice : IOService {
     SwitchHIDFeatureHandler handler = nullptr;
     void *context = nullptr;
     std::vector<SwitchMotionReport> reports;
-    std::vector<uint64_t> times;        // switch_hid_post_at's sample times (0: switch_hid_post)
-    std::vector<uint8_t> orientations;  // the device orientation service's reports (their bit masks)
+    std::vector<uint64_t> times;  // switch_hid_post_at's sample times (0: switch_hid_post)
+    // The device orientation service: the reports IOHIDFamily took, their report times (IOHIDDevice::handleReport's
+    // clock_get_uptime, or switch_hid_post_at's time) and their bit masks; `refuse` reports are refused first, as
+    // IOHIDDevice refuses them until it is ready for input reports.
+    std::vector<SwitchOrientationReport> orientationReports;
+    std::vector<uint64_t> orientationTimes;
+    std::vector<uint8_t> orientations;
+    unsigned refuse = 0, refused = 0;
 };
 static bool gTimedPosts = true;  // switch_hid_supports_timestamps
 static std::vector<HidDevice *> gHid;
@@ -372,16 +379,28 @@ IOService *switch_hid_create(SwitchHIDKind kind)
     gHid.push_back(device);
     return device;
 }
+constexpr IOReturn kNotReady = (IOReturn)0xe00002d7;  // IOHIDDevice::handleReport before it is ready
+static IOReturn postOrientation(HidDevice *device, const void *report, size_t length, uint64_t time)
+{
+    REQUIRE(length == sizeof(SwitchOrientationReport));
+    SwitchOrientationReport copy;
+    memcpy(&copy, report, sizeof(copy));
+    REQUIRE(copy.id == 1);
+    REQUIRE((copy.orientation[0] == 0) != (copy.orientation[1] == 0));
+    if (device->refuse) {
+        --device->refuse;
+        ++device->refused;
+        return kNotReady;
+    }
+    device->orientationReports.push_back(copy);
+    device->orientationTimes.push_back(time);
+    device->orientations.push_back((uint8_t)(copy.orientation[0] | copy.orientation[1]));
+    return kIOReturnSuccess;
+}
 IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
 {
-    if (static_cast<HidDevice *>(device)->kind == kSwitchHIDOrientation) {
-        REQUIRE(length == sizeof(SwitchOrientationReport));
-        SwitchOrientationReport copy;
-        memcpy(&copy, report, sizeof(copy));
-        REQUIRE(copy.id == 1);
-        static_cast<HidDevice *>(device)->orientations.push_back(copy.orientation);
-        return kIOReturnSuccess;
-    }
+    if (static_cast<HidDevice *>(device)->kind == kSwitchHIDOrientation)
+        return postOrientation(static_cast<HidDevice *>(device), report, length, mach_absolute_time());
     REQUIRE(length == sizeof(SwitchMotionReport));
     SwitchMotionReport copy;
     memcpy(&copy, report, sizeof(copy));
@@ -391,7 +410,10 @@ IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
 }
 IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length, uint64_t timestamp)
 {
-    REQUIRE(gTimedPosts && length == sizeof(SwitchMotionReport));
+    REQUIRE(gTimedPosts);
+    if (static_cast<HidDevice *>(device)->kind == kSwitchHIDOrientation)
+        return postOrientation(static_cast<HidDevice *>(device), report, length, timestamp);
+    REQUIRE(length == sizeof(SwitchMotionReport));
     SwitchMotionReport copy;
     memcpy(&copy, report, sizeof(copy));
     static_cast<HidDevice *>(device)->reports.push_back(copy);
@@ -922,11 +944,52 @@ static void icm40607Session()
     teardown();
 }
 
-// The orientation detector (r17, SwitchMotion.cpp file comment): with the panel lit the accelerometer runs at 25 Hz for
-// it alone, in 5-record FIFO batches. A stable orientation is announced (a report with no bit, then its bit, so that
-// IOHIDEventDriver makes an event even when it is unchanged), again once the console comes to rest after moving, and a
-// new one as soon as it has held 0.4 s; with a client at 200 Hz the detector still sees 25 Hz. Panel off: nothing
-// converts. Panel on: the detector starts afresh and announces its first stable orientation.
+// The orientation reports IOHIDFamily took, through 21H461's IOHIDEventDriver and CoreMotion
+// (orientation_pipeline_model.h): each report makes one orientation event whose only child carries the report's sample
+// time, and CoreMotion takes every one, in order.
+static void expectCoreMotionTakesEvery(const std::string &what)
+{
+    const HidDevice *device = hid(kSwitchHIDOrientation);
+    REQUIRE(device);
+    orientation_model::EventDriver driver(
+        orientation_model::parse(kSwitchOrientationDescriptor, sizeof(kSwitchOrientationDescriptor)));
+    orientation_model::Notifier coreMotion;
+    std::vector<uint8_t> want;
+    for (size_t i = 0; i < device->orientationReports.size(); ++i) {
+        const SwitchOrientationReport &r = device->orientationReports[i];
+        const std::string which = what + ": report " + std::to_string(i);
+        check(r.orientation[i % 2] != 0 && r.orientation[1 - i % 2] == 0, which + " in the other set than the last");
+        if (gTimedPosts) check(device->orientationTimes[i] == r.timestamp, which + ": the report's time is its own");
+        const size_t before = driver.dispatched.size();
+        driver.report(reinterpret_cast<const uint8_t *>(&r), sizeof(r), device->orientationTimes[i]);
+        check(driver.dispatched.size() == before + 1, which + ": one event");
+        for (size_t e = before; e < driver.dispatched.size(); ++e) {
+            const orientation_model::Event &event = driver.dispatched[e];
+            check(event.type == 10 && event.children.size() == 1, which + ": an orientation event with one child");
+            if (event.children.size() != 1) continue;
+            const orientation_model::Event &child = event.children.front();
+            uint64_t stamp = 0;
+            if (child.data.size() == sizeof(stamp)) memcpy(&stamp, child.data.data(), sizeof(stamp));
+            check(child.type == 1 && child.page == 0xff15 && child.usage == 2 && child.data.size() == 8 &&
+                      stamp == r.timestamp,
+                  which + ": the child is the 0xff15 / 2 vendor event with the report's 8-byte time");
+        }
+        want.push_back((uint8_t)__builtin_ctz(device->orientations[i]));
+    }
+    for (const orientation_model::Event &event : driver.dispatched) coreMotion.onEvent(event);
+    const bool taken = coreMotion.delivered == want && coreMotion.stale == 0 && coreMotion.noChildren == 0 &&
+                       coreMotion.badChild == 0 && coreMotion.wrongType == 0;
+    check(taken, what + ": CoreMotion takes every orientation, none stale");
+    if (!taken)
+        for (const std::string &line : coreMotion.log) std::fprintf(stderr, "  CoreMotion: %s\n", line.c_str());
+    for (size_t i = 1; i < coreMotion.times.size(); ++i)
+        check(coreMotion.times[i] > coreMotion.times[i - 1], what + ": sample times strictly increase");
+}
+
+// The orientation detector (SwitchMotion.cpp file comment): with the panel lit the accelerometer runs at 25 Hz for it
+// alone, in 5-record FIFO batches. A stable orientation is announced, again once the console comes to rest after
+// moving, and a new one as soon as it has held 0.4 s; with a client at 200 Hz the detector still sees 25 Hz. Panel off:
+// nothing converts. Panel on: the detector starts afresh and announces its first stable orientation.
 static void icm42607Orientation()
 {
     const unsigned landscapeRight = 1u << 4, landscapeLeft = 1u << 3, portrait = 1u << 1;
@@ -960,20 +1023,18 @@ static void icm42607Orientation()
     run(handheld, 5);
     check(announced.empty(), "orientation: nothing before the filter settles and 0.4 s agree");
     run(handheld, 15);
-    check(announced == std::vector<uint8_t>({0, (uint8_t)landscapeRight}),
-          "orientation: landscape right announced once, cleared first");
+    check(announced == std::vector<uint8_t>({(uint8_t)landscapeRight}), "orientation: landscape right announced once");
     expectLog("os_log: SwitchMotion: orientation landscape right (4), was unknown", "orientation first");
     run(handheld, 25);
-    check(announced.size() == 2, "orientation: nothing more while it stays still");
+    check(announced.size() == 1, "orientation: nothing more while it stays still");
     run(jolt, 1);
     run(handheld, 5);
-    check(announced.size() == 2, "orientation: not while it settles after a jolt");
+    check(announced.size() == 1, "orientation: not while it settles after a jolt");
     run(handheld, 10);
-    check(announced == std::vector<uint8_t>({0, (uint8_t)landscapeRight, 0, (uint8_t)landscapeRight}),
+    check(announced == std::vector<uint8_t>({(uint8_t)landscapeRight, (uint8_t)landscapeRight}),
           "orientation: the same orientation announced again once it is still after moving");
     run(upright, 30);
-    check(announced.size() == 6 && announced[4] == 0 && announced[5] == portrait,
-          "orientation: held upright, portrait announced");
+    check(announced.size() == 3 && announced[2] == portrait, "orientation: held upright, portrait announced");
     expectLog("os_log: SwitchMotion: orientation portrait (1), was landscape right", "orientation portrait");
 
     // A client at 200 Hz (gyroscope, 15 ms batches): one rate for both, the detector decimated 8:1 to 25 Hz.
@@ -991,9 +1052,9 @@ static void icm42607Orientation()
         gChip->ops.clear();
     };
     fast(flipped, 80);  // 0.4 s at 200 Hz: 10 detector samples, too few for the filter and 0.4 s of agreement
-    check(announced.size() == 6, "orientation: at 200 Hz the detector still needs about 0.4 s at 25 Hz");
+    check(announced.size() == 3, "orientation: at 200 Hz the detector still needs about 0.4 s at 25 Hz");
     fast(flipped, 80);
-    check(announced.size() == 8 && announced[7] == landscapeLeft, "orientation: turned over, landscape left");
+    check(announced.size() == 4 && announced[3] == landscapeLeft, "orientation: turned over, landscape left");
     setFeature(kSwitchHIDGyro, 0, 0);
     gChip->ops.clear();
 
@@ -1009,11 +1070,56 @@ static void icm42607Orientation()
     gChip->ops.clear();
     gNow += 30000000;
     run(flipped, 20);
-    check(announced.size() == 10 && announced[8] == 0 && announced[9] == landscapeLeft,
+    check(announced.size() == 5 && announced[4] == landscapeLeft,
           "orientation: panel on, landscape left announced again");
     switch_motion_display_power(false);
     gChip->ops.clear();
+    expectCoreMotionTakesEvery("orientation");
     expectClean("orientation");
+    teardown();
+}
+
+// Without report times the FIFO stays off and each sample is its own interrupt; the clock stands still, so every
+// announce reads the same mach_absolute_time. The first report is refused, as IOHIDDevice refuses reports until it
+// is ready for input reports: the next one uses the same set and still makes an event.
+static void icm42607OrientationUntimed()
+{
+    const unsigned landscapeRight = 1u << 4;
+    const unsigned portrait = 1u << 1;
+    gDisplayLit = true;
+    gTimedPosts = false;
+    Icm42607 chip;
+    check(start(chip), "untimed orientation: started");
+    HidDevice *orientation = hid(kSwitchHIDOrientation);
+    orientation->refuse = 1;
+    gNow += 30000000;
+    const int16_t none[3] = {};
+    const int16_t handheld[3] = {4096, 0, 0};
+    const int16_t upright[3] = {0, -4096, 0};
+    const int16_t jolt[3] = {4096, 2048, 0};
+    const auto run = [&](const int16_t raw[3], unsigned samples) {
+        for (unsigned i = 0; i < samples; ++i) {
+            chip.produce(raw, none);
+            deliver();
+        }
+        gChip->ops.clear();
+    };
+    run(handheld, 20);
+    check(orientation->refused == 1 && orientation->orientations.empty(), "untimed orientation: the first refused");
+    run(jolt, 1);
+    run(handheld, 15);
+    run(jolt, 1);
+    run(handheld, 15);
+    run(upright, 30);
+    check(orientation->orientations ==
+              std::vector<uint8_t>({(uint8_t)landscapeRight, (uint8_t)landscapeRight, (uint8_t)portrait}),
+          "untimed orientation: landscape right twice, then portrait");
+    const std::vector<uint64_t> &times = orientation->orientationTimes;
+    check(times.size() == 3 && times[0] == times[2], "untimed orientation: one mach_absolute_time for every report");
+    expectCoreMotionTakesEvery("untimed orientation");
+    switch_motion_display_power(false);
+    gChip->ops.clear();
+    expectClean("untimed orientation");
     teardown();
 }
 
@@ -1062,6 +1168,10 @@ TEST(SwitchMotion, Icm42607Fifo)
 TEST(SwitchMotion, Icm42607Orientation)
 {
     icm42607Orientation();
+}
+TEST(SwitchMotion, Icm42607OrientationUntimed)
+{
+    icm42607OrientationUntimed();
 }
 TEST(SwitchMotion, Icm40607Session)
 {

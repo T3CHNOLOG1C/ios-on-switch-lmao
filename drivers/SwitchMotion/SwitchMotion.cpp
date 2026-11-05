@@ -31,12 +31,11 @@
 //     UIDeviceOrientation). Checked in 21H461's CoreMotion: CLOrientationNotifier::openHidDriverInterface looks for the
 //     AOP's plug-in (type 7ACF5332-1A35-4893-87CB-BA64E1887FAE) on the service's grandparent, which an IOHIDDevice
 //     does not have, so fHidDeviceInterface stays NULL, and onIohidEvent takes events only then (type 10, usage
-//     0x64..0x6a, orientation = usage - 0x64; anything else is logged and dropped). Its first query of the current
-//     orientation goes through that plug-in ("No reply for LastOrientation") and CoreMotion never copies the event, so
-//     a client learns the orientation only from an event after it started listening: the detector announces again
-//     (detectOrientation) whenever the console comes to rest after moving and when the panel comes on, not only on
-//     a change. Until r17 the service was not published (r7z/r8a: "usage pair {32, 138} is not ready", the device
-//     orientation unknown, the interface held landscape by a rotation lock the kernel rewrote every boot).
+//     0x64..0x6a, orientation = usage - 0x64; anything else is logged and dropped), each with its sample time as a
+//     child event (SwitchHID.h SwitchOrientationReport). Its first query of the current orientation goes through that
+//     plug-in ("No reply for LastOrientation") and CoreMotion never copies the event, so a client learns the
+//     orientation only from an event after it started listening: the detector announces again (detectOrientation)
+//     whenever the console comes to rest after moving and when the panel comes on, not only on a change.
 //   * Third-party apps' CMMotionManager (accelerometer, gyroscope, device motion) is served by locationd over XPC
 //     (kCLConnectionMessage...), which reads these same services; SpringBoard and backboardd run CoreMotion in process.
 // Sampling: the part converts only while a client has a nonzero report interval (the services' Report Interval
@@ -431,6 +430,9 @@ class SwitchMotion : public IOService {
     uint8_t orientation = Unknown, candidate = Unknown;
     unsigned candidateCount = 0, still = 0;
     bool announced = false;
+    bool timedOrientation = false;
+    unsigned orientationSet = 0;
+    uint64_t orientationStamp = 0;
 
     static void featureReceived(void *context, const uint8_t *report, size_t length);
     static void interruptOccurred(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -891,13 +893,20 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
     announce(next);
 }
 
-// Work loop: one kIOHIDEventTypeOrientation event for `which`. IOHIDEventDriver makes one only for a bit that goes from
-// 0 to 1, so every bit is cleared first (that report makes none), which lets an unchanged orientation be sent again.
+// Work loop: one report, one kIOHIDEventTypeOrientation event with its sample time (SwitchHID.h). The other set is used
+// next only once IOHIDFamily took this report (IOHIDDevice refuses reports, kIOReturnNotReady, until it is ready for
+// input reports): the set a report uses must read all 0 in the device's element state, which the last report taken
+// left so.
 void SwitchMotion::announce(uint8_t which)
 {
-    const SwitchOrientationReport none = {1, 0}, report = {1, (uint8_t)(1u << which)};
-    (void)switch_hid_post(orientationHid, &none, sizeof(none));
-    (void)switch_hid_post(orientationHid, &report, sizeof(report));
+    uint64_t stamp = mach_absolute_time();
+    if (stamp <= orientationStamp) stamp = orientationStamp + 1;
+    orientationStamp = stamp;
+    SwitchOrientationReport report = {1, {0, 0}, stamp};
+    report.orientation[orientationSet] = (uint8_t)(1u << which);
+    const IOReturn taken = timedOrientation ? switch_hid_post_at(orientationHid, &report, sizeof(report), stamp)
+                                            : switch_hid_post(orientationHid, &report, sizeof(report));
+    if (taken == kIOReturnSuccess) orientationSet ^= 1;
     announced = true;
 }
 
@@ -1112,7 +1121,10 @@ bool SwitchMotion::start(IOService *provider)
         hid[s] = switch_hid_create(s == Accel ? kSwitchHIDAccelerometer : kSwitchHIDGyro);
         switch_hid_set_feature_handler(hid[s], &SwitchMotion::featureReceived, &channels[s]);
     }
-    if (kOrientationPolicy != OrientationPolicy::Off) orientationHid = switch_hid_create(kSwitchHIDOrientation);
+    if (kOrientationPolicy != OrientationPolicy::Off) {
+        orientationHid = switch_hid_create(kSwitchHIDOrientation);
+        timedOrientation = switch_hid_supports_timestamps(orientationHid);
+    }
     __atomic_store_n(&displayLit, switch_display_is_on(), __ATOMIC_RELEASE);
     // FIFO batching needs every sample's own time on its HID report (SwitchHID.h switch_hid_post_at).
     timedPosts = switch_hid_supports_timestamps(hid[Accel]) && switch_hid_supports_timestamps(hid[Gyro]);
