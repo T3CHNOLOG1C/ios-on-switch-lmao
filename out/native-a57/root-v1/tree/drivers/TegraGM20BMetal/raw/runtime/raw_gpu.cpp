@@ -837,43 +837,61 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
     return true;
 }
 
-// Once at open, after the init submission: the 2D engine's state (Mesa nvc0's 2D init), then a 24x10 chain made from a pattern
-// and read back (fx_mip.h). Chains go on only if it is what the design expects, in either of the CPU's two possible views of
-// kind-0xFE memory (production never reads a chain on the CPU; the view only tells the check where to look). Its memory is a
+// Once at open, after the init submission: the 2D engine's state (Mesa nvc0's 2D init), then one 24x10 chain per sampling
+// candidate (fx::sampling) made from a pattern in one submission and read back (fx_mip.h). Chains go on with the first candidate
+// whose chain is exact within 1 in either of the CPU's two possible views of kind-0xFE memory (production never reads a chain on
+// the CPU; the view only tells the check where to look); none: chains stay off and every texture is as before. Its memory is a
 // coherent allocation: the CPU reads it without an invalidate. Nothing but this submission's own fence is waited for.
 void Device::selfTest()
 {
+    for (uint32_t i = 0; i < fx::kSamplings; i++) selfTestTegra[i] = selfTestFermi[i] = ~0u;
     fx::MipChain c;
     if (!fx::mipChainLayout(fx::kSelfTestW, fx::kSelfTestH, fx::fullLevels(fx::kSelfTestW, fx::kSelfTestH), 4, c))
         return;
-    Bo chain, src;
-    if (!k_.alloc(c.bytes, true, chain, fx::kBlockLinearKind)) return;
+    const uint64_t stride = (c.bytes + 16383) & ~uint64_t(16383);
+    Bo chains, src;
+    if (!k_.alloc(stride * fx::kSamplings, true, chains, fx::kBlockLinearKind)) return;
     if (!k_.alloc(4096, true, src)) {
-        k_.free(chain);
+        k_.free(chains);
         return;
     }
-    memset(chain.cpu, 0, c.bytes);
+    memset(chains.cpu, 0, stride * fx::kSamplings);
     fx::selfTestPattern(src.cpu, 256);
-    const uint32_t room = uint32_t(fx::twodInitWords() + fx::generateWords(c, 0, c.levels - 1) + 16);
+    const uint32_t room = uint32_t(fx::twodInitWords() + fx::kSamplings * fx::generateWords(c, 0, c.levels - 1) + 16);
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, room * 4, 256, va));
     Push p{start, start + room};
     fx::emitTwodInit(p);
     const fx::Pitch l0{src.va, 256, fx::kSelfTestW, fx::kSelfTestH};
-    fx::emitGenerate(p, c, chain.va, &l0, fx::twodFormat(80), 0, c.levels - 1);
+    for (uint32_t i = 0; i < fx::kSamplings; i++)
+        fx::emitGenerate(p, c, chains.va + i * stride, &l0, fx::twodFormat(80), 0, c.levels - 1, fx::sampling(i));
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     if (k_.exec(channel_, &seg, 1, lastSeqno_, seq)) {
         lastSeqno_ = seq;
         retire(push_, seq);
         if (k_.wait(channel_, seq)) {
-            selfTestTegra = fx::selfTestCheck(c, chain.cpu, &selfTestFirst, false);
-            selfTestFermi = fx::selfTestCheck(c, chain.cpu, nullptr, true);
-            chainsOn_ = !selfTestTegra || !selfTestFermi;
+            for (uint32_t i = 0; i < fx::kSamplings; i++) {
+                const uint8_t *cpu = chains.cpu + i * stride;
+                selfTestTegra[i] = fx::selfTestCheck(c, cpu, nullptr, false);
+                selfTestFermi[i] = fx::selfTestCheck(c, cpu, nullptr, true);
+            }
+            fx::selfTestDetail(c, chains.cpu, false, selfTestFirst);
+            for (uint32_t view = 0; view < 2 && selfTestChosen == fx::kSamplings; view++)
+                for (uint32_t i = 0; i < fx::kSamplings; i++)
+                    if (!(view ? selfTestFermi[i] : selfTestTegra[i])) {
+                        selfTestChosen = i;
+                        selfTestFermiView = view;
+                        break;
+                    }
+            if (selfTestChosen < fx::kSamplings) {
+                sampling_ = fx::sampling(selfTestChosen);
+                chainsOn_ = true;
+            }
         }
     }
     k_.free(src);
-    k_.free(chain);
+    k_.free(chains);
 }
 
 void Device::destroyTexture(Texture &t)
@@ -2036,7 +2054,7 @@ void BlitEncoder::generate(Texture &t, bool all)
     const uint32_t last = all ? c->layout.levels - 1 : 0;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
     const fx::Pitch l0{t.va, t.pitch, t.width, t.height};
-    fx::emitGenerate(p_, c->layout, c->va, &l0, c->fmt2d, 0, last);
+    fx::emitGenerate(p_, c->layout, c->va, &l0, c->fmt2d, 0, last, dev_->sampling_);
     c->l0Fresh = true;
     if (all) {
         c->levelsFresh = true;

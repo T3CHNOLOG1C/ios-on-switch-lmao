@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace raw {
@@ -81,10 +82,10 @@ constexpr size_t kSurfaceWords = 1 + 4 + 2 + 1 + 4;  // the larger (block-linear
 // One blit: the whole destination rectangle (dx, dy, w, h) from source rectangle origin (sx, sy) with steps du, dv (32.32), the
 // source invalidated in the texture data cache first (the 2D engine reads its source through it: a level the step before wrote)
 void blit(Push &p, uint32_t filter, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h, uint64_t du, uint64_t dv,
-          uint64_t sx, uint64_t sy)
+          uint64_t sx, uint64_t sy, uint32_t origin = SAMPLE_CENTER)
 {
     p.m(TWOD_INVALIDATE_TEXTURE_DATA_CACHE, TEXCACHE_L1, kSubc2D);
-    p.m(TWOD_SET_PIXELS_FROM_MEMORY_SAMPLE_MODE, SAMPLE_CENTER | filter, kSubc2D);
+    p.m(TWOD_SET_PIXELS_FROM_MEMORY_SAMPLE_MODE, origin | filter, kSubc2D);
     p.inc(TWOD_SET_PIXELS_FROM_MEMORY_DST_X0, {dx, dy, w, h}, kSubc2D);
     p.inc(TWOD_SET_PIXELS_FROM_MEMORY_DU_DX_FRAC, {uint32_t(du), uint32_t(du >> 32), uint32_t(dv), uint32_t(dv >> 32)},
           kSubc2D);
@@ -252,8 +253,25 @@ size_t generateWords(const MipChain &c, uint32_t firstLevel, uint32_t lastLevel)
     return kBeginWords + kEndWords + steps * (2 * kSurfaceWords + kBlitWords + kStepWaitWords);
 }
 
+Sampling sampling(uint32_t i)
+{
+    // the documented convention first, then texel centres at whole numbers (centre origin, the origin back half a texel; corner
+    // origin at half a step less half a texel), then the other plausible readings of the class
+    static const Sampling kAll[kSamplings] = {{0, 0, 0}, {0, 0, -1}, {1, 1, -1}, {1, 1, 0},
+                                              {0, 1, 0}, {0, 0, 1},  {1, 0, 0},  {0, 1, -1}};
+    return i < kSamplings ? kAll[i] : Sampling{};
+}
+
+void samplingName(const Sampling &s, char *out, size_t size)
+{
+    char du[16] = "", ht[16] = "";
+    if (s.halfDu) snprintf(du, sizeof du, "%+d*du/2", s.halfDu);
+    if (s.halfTexel) snprintf(ht, sizeof ht, "%+.1f", s.halfTexel * 0.5);
+    snprintf(out, size, "%s%s%s", s.corner ? "corner" : "centre", du, ht);
+}
+
 void emitGenerate(Push &p, const MipChain &c, uint64_t chainVa, const Pitch *level0, uint32_t fmt2d,
-                  uint32_t firstLevel, uint32_t lastLevel)
+                  uint32_t firstLevel, uint32_t lastLevel, Sampling sampling)
 {
     if (!c.levels || lastLevel >= c.levels || firstLevel > lastLevel || (level0 && firstLevel)) return;
     begin(p);
@@ -268,7 +286,12 @@ void emitGenerate(Push &p, const MipChain &c, uint64_t chainVa, const Pitch *lev
         p.m(TWOD_WAIT_FOR_IDLE, 0, kSubc2D);  // level l's writes are done before level l + 1 reads them
         surface(p, TWOD_SET_DST_FORMAT, fmt2d, true, d.yLog2, 0, d.width, d.height, chainVa + d.offset);
         surface(p, TWOD_SET_SRC_FORMAT, fmt2d, true, s.yLog2, 0, s.width, s.height, chainVa + s.offset);
-        blit(p, FILTER_BILINEAR, 0, 0, d.width, d.height, ratio(s.width, d.width), ratio(s.height, d.height), 0, 0);
+        const uint64_t du = ratio(s.width, d.width), dv = ratio(s.height, d.height);
+        // the source origin as `sampling` reads it (32.32, two's complement where it is negative)
+        const int64_t half = int64_t(1) << 31;
+        const uint64_t sx = uint64_t(int64_t(sampling.halfDu) * int64_t(du / 2) + int64_t(sampling.halfTexel) * half),
+                       sy = uint64_t(int64_t(sampling.halfDu) * int64_t(dv / 2) + int64_t(sampling.halfTexel) * half);
+        blit(p, FILTER_BILINEAR, 0, 0, d.width, d.height, du, dv, sx, sy, sampling.corner ? 1u : SAMPLE_CENTER);
     }
     end(p);
 }
@@ -353,6 +376,37 @@ void selfTestPattern(uint8_t *pixels, uint32_t pitch)
             t[2] = uint8_t((x * 37 + y * 101) & 0xff);  // red: both
             t[3] = uint8_t(((x ^ y) & 1) ? 255 : 64);   // alpha: a checker
         }
+}
+
+uint32_t selfTestDetail(const MipChain &c, const uint8_t *chainCpu, bool fermi, SelfTestReport &r)
+{
+    r = SelfTestReport{};
+    if (c.width != kSelfTestW || c.height != kSelfTestH || c.bpp != 4) return r.bad = ~0u;
+    uint8_t want[kSelfTestW * kSelfTestH * 4], above[kSelfTestW * kSelfTestH * 4];
+    selfTestPattern(want, kSelfTestW * 4);
+    for (uint32_t l = 0; l < c.levels; l++) {
+        const MipLevel &lv = c.level[l];
+        if (l) {
+            const MipLevel &up = c.level[l - 1];
+            for (uint32_t y = 0; y < up.height; y++)
+                for (uint32_t xb = 0; xb < up.width * 4; xb++)
+                    above[size_t(y) * up.width * 4 + xb] = chainCpu[texelOffset(c, l - 1, xb, y, fermi)];
+            referenceDownsample(above, up.width * 4, up.width, up.height, want, lv.width * 4, lv.width, lv.height, 4);
+        }
+        for (uint32_t y = 0; y < lv.height; y++)
+            for (uint32_t xb = 0; xb < lv.width * 4; xb++) {
+                const int got = chainCpu[texelOffset(c, l, xb, y, fermi)], w = want[size_t(y) * lv.width * 4 + xb];
+                const int d = std::abs(got - w);
+                if (d > r.maxDiff[xb % 4]) r.maxDiff[xb % 4] = uint8_t(d);
+                if (d <= 1) continue;
+                r.bad++;
+                r.levelBad[l]++;
+                if (r.firsts < 3)
+                    r.first[r.firsts++] = {uint8_t(l),   uint8_t(xb % 4),  uint8_t(w),
+                                           uint8_t(got), uint16_t(xb / 4), uint16_t(y)};
+            }
+    }
+    return r.bad;
 }
 
 uint32_t selfTestCheck(const MipChain &c, const uint8_t *chainCpu, uint32_t *first, bool fermi)

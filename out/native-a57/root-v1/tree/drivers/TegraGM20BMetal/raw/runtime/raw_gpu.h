@@ -384,8 +384,14 @@ public:
         // mip chains: made, chain bytes, generated (whole) and level-0 refreshes, copies out of a level
         std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainRefreshes{0}, chainCopies{0};
     } stats;
-    // The self-test's result (open): bytes off in the Tegra and Fermi views of the CPU, the first bad one; ~0u: not run
-    uint32_t selfTestTegra = ~0u, selfTestFermi = ~0u, selfTestFirst = ~0u;
+    // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
+    // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first
+    // candidate's detail in the Tegra view (what the documented convention gave)
+    uint32_t selfTestTegra[fx::kSamplings], selfTestFermi[fx::kSamplings];
+    uint32_t selfTestChosen = fx::kSamplings;
+    bool selfTestFermiView = false;
+    fx::SelfTestReport selfTestFirst;
+    fx::Sampling sampling() const { return sampling_; }
 
 private:
     friend class CommandBuffer;
@@ -428,6 +434,7 @@ private:
     // mip chains' memory: chunks bound with PTE kind 0xFE (fx::kBlockLinearKind), made on demand, never CPU-written
     std::vector<Chunk> blChunks_;
     bool chainsOn_ = false;
+    fx::Sampling sampling_;  // the self-test's winner: how every chain's scaled steps sample
     bool blAlloc(uint64_t bytes, uint64_t align, Span &s);
     void blFree(Span &s);
     void selfTest();

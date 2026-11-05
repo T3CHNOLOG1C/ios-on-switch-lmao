@@ -88,9 +88,24 @@ void emitTwodInit(Push &p);
 // generateMipmaps: levels (firstLevel, lastLevel] of the chain at `chainVa` from the level above each, after (when `level0`)
 // converting the pitch texture into chain level 0 first (firstLevel must then be 0). Starts with a 3D wait for idle (the work
 // before it wrote level 0) and ends with one plus a 3D texture data cache invalidate (the draws after it sample the chain).
+// How a scaled (bilinear) step asks the 2D engine to sample: the origin mode and the source origin SRC_X0/Y0 = halfDu x du/2 +
+// halfTexel x 1/2 (each axis with its own du/dv). The class's documented convention (origin centre, source origin 0: texel
+// centres at i + 1/2) is sampling(0); r7q's GM20B made level 1 of the self-test wrong in almost every byte under it (287 of the
+// 304 bytes below level 0, its level 0 exact), what an engine that weighs bilinear taps from the position's own fraction (texel
+// centres at whole numbers) gives. The self-test tries every candidate once at open and keeps the first exact one.
+struct Sampling {
+    uint8_t corner = 0;    // SAMPLE_MODE ORIGIN: 0 centre, 1 corner
+    int8_t halfDu = 0;     // the origin's du/2 multiples
+    int8_t halfTexel = 0;  // and its half-texel multiples
+};
+constexpr uint32_t kSamplings = 8;
+Sampling sampling(uint32_t i);  // the candidates, in the order the self-test tries them
+// "centre", "centre-0.5", "corner+du/2-0.5", ...: for the device line
+void samplingName(const Sampling &s, char *out, size_t size);
+
 size_t generateWords(const MipChain &c, uint32_t firstLevel, uint32_t lastLevel);
 void emitGenerate(Push &p, const MipChain &c, uint64_t chainVa, const Pitch *level0, uint32_t fmt2d,
-                  uint32_t firstLevel, uint32_t lastLevel);
+                  uint32_t firstLevel, uint32_t lastLevel, Sampling sampling = {});
 
 // A 1:1 copy of [sx, sx + w) x [sy, sy + h) of a pitch surface into level `level` of the chain at (dx, dy): a copy into a level
 // (copyFromTexture/copyFromBuffer ... destinationLevel:), with the same waits as emitGenerate.
@@ -112,6 +127,19 @@ void emitCopyFromLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t le
 constexpr uint32_t kSelfTestW = 24, kSelfTestH = 10;  // odd steps on purpose: 24x10 -> 12x5 -> 6x2 -> 3x1 -> 1x1
 void selfTestPattern(uint8_t *pixels, uint32_t pitch);
 uint32_t selfTestCheck(const MipChain &c, const uint8_t *chainCpu, uint32_t *first, bool fermi = false);
+// The same check, said in detail (the device line when it fails): bytes off by more than 1 (per level), the largest difference
+// per byte of a texel (BGRA8: blue, green, red, alpha) and the first differing bytes. Every difference at most 2 reads as the
+// engine's rounding; larger ones as where it samples (a positional error: origin, half texel)
+struct SelfTestReport {
+    uint32_t bad = 0, levelBad[kMaxLevels] = {};
+    uint8_t maxDiff[4] = {};
+    struct Byte {
+        uint8_t level, channel, want, got;
+        uint16_t x, y;
+    } first[3] = {};
+    uint32_t firsts = 0;
+};
+uint32_t selfTestDetail(const MipChain &c, const uint8_t *chainCpu, bool fermi, SelfTestReport &r);
 
 // The CPU reference of one chain step: level n+1 from level n exactly as the 2D engine's bilinear, centre-origin blit samples
 // (u = (x + 0.5) * w_n / w_{n+1} - 0.5, clamp to edge, unorm8 per component, weights at 1/256): the self-test's expectation and

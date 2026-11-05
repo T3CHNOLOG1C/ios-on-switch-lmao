@@ -137,14 +137,13 @@ bool Sim::launch()
     const uint32_t *r = r2d_;
     const uint32_t mode = r[0x088c >> 2], dx0 = r[0x08b0 >> 2], dy0 = r[0x08b4 >> 2], dw = r[0x08b8 >> 2],
                    dh = r[0x08bc >> 2];
+    // the source origin is signed 32.32 (a negative origin samples left of texel 0, clamped to the edge)
     const double du = double(uint64_t(r[0x08c4 >> 2]) << 32 | r[0x08c0 >> 2]) / 4294967296.0,
                  dv = double(uint64_t(r[0x08cc >> 2]) << 32 | r[0x08c8 >> 2]) / 4294967296.0,
-                 sx0 = double(uint64_t(r[0x08d4 >> 2]) << 32 | r[0x08d0 >> 2]) / 4294967296.0,
-                 sy0 = double(uint64_t(r[0x08dc >> 2]) << 32 | r[0x08d8 >> 2]) / 4294967296.0;
-    if (mode & 1) {
-        err_ = "corner origin not modelled";
-        return false;
-    }
+                 sx0 = double(int64_t(uint64_t(r[0x08d4 >> 2]) << 32 | r[0x08d0 >> 2])) / 4294967296.0,
+                 sy0 = double(int64_t(uint64_t(r[0x08dc >> 2]) << 32 | r[0x08d8 >> 2])) / 4294967296.0;
+    // origin centre: destination texel x samples at SRC_X0 + (x + 1/2) du; corner: at SRC_X0 + x du
+    const bool corner = mode & 1;
     const bool bilinear = (mode >> 4) & 1;
     if (dx0 + dw > d.width || dy0 + dh > d.height) {
         err_ = "destination rectangle outside the surface";
@@ -164,10 +163,11 @@ bool Sim::launch()
     auto clampi = [](double v, uint32_t n) {
         return uint32_t(std::clamp(int64_t(std::floor(v)), int64_t(0), int64_t(n) - 1));
     };
+    const double half = corner || quirkNoHalfTexel ? 0.0 : 0.5;
     for (uint32_t y = 0; y < dh; y++) {
-        const double v = sy0 + (y + (quirkNoHalfTexel ? 0.0 : 0.5)) * dv;
+        const double v = sy0 + (y + half) * dv;
         for (uint32_t x = 0; x < dw; x++) {
-            const double u = sx0 + (x + (quirkNoHalfTexel ? 0.0 : 0.5)) * du;
+            const double u = sx0 + (x + half) * du;
             uint8_t *out = at(texel(d, dx0 + x, dy0 + y), d.bpp);
             if (!out) {
                 err_ = "destination unmapped";
@@ -182,7 +182,8 @@ bool Sim::launch()
                 memcpy(out, in, d.bpp);
                 continue;
             }
-            const double uu = u - 0.5, vv = v - 0.5, fu = std::floor(uu), fv = std::floor(vv);
+            const double centre = quirkIntegerCentres ? 0.0 : 0.5;
+            const double uu = u - centre, vv = v - centre, fu = std::floor(uu), fv = std::floor(vv);
             uint32_t wx = uint32_t(std::lround((uu - fu) * 256.0)), wy = uint32_t(std::lround((vv - fv) * 256.0));
             uint32_t x0 = clampi(fu, s.width), x1 = clampi(fu + 1, s.width), y0 = clampi(fv, s.height),
                      y1 = clampi(fv + 1, s.height);

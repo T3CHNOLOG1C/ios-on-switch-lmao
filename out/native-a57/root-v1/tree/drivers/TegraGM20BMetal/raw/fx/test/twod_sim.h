@@ -48,6 +48,9 @@ public:
     // a hardware whose centre-origin scaled blit samples at SRC_X0 + (x - DST_X0) * DU_DX (no half-texel offset): the convention
     // Mesa nvc0's FIXME leaves open; the device self-test must catch it
     bool quirkNoHalfTexel = false;
+    // a hardware whose bilinear taps are weighed from the sample position's own fraction (texel centres at whole numbers: taps
+    // floor(p), floor(p) + 1, weight frac(p)), point sampling floor(p): r7q's GM20B's self-test failure, byte for byte in count
+    bool quirkIntegerCentres = false;
 
 private:
     struct Range {
