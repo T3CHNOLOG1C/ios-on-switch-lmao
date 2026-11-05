@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DRIVER = ROOT / "out/native-a57/root-v1/tree/drivers/NativeIOSwitchBlock"
+DRIVER = ROOT / "drivers/NativeIOSwitchBlock"
 
 
 class NativeSdCardTests(unittest.TestCase):

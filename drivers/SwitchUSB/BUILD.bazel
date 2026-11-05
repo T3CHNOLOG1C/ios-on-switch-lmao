@@ -1,0 +1,114 @@
+# drivers/SwitchUSB: moved from out/native-a57/root-v1/tree/drivers/SwitchUSB by the layout move.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# The ABI checker of subclasses of original classes (SwitchUSB's abi_checks): reads Mach-O through the prelinker.
+py_binary(
+    name = "abi_check",
+    srcs = ["abi_check.py"],
+    deps = ["//tools/prelink:native_prelink"],
+)
+
+# SwitchUSB: USB 2.0 on the USB-C port. Device mode: the XUDC under Apple's IOUSBDeviceFamily (+ AppleUSBDeviceMux).
+# Host mode: the XUSB host (falcon firmware by .incbin) under IOUSBHostFamily + AppleUSBXHCI and Apple's class drivers.
+# SwitchXUDC and SwitchXHCI subclass original classes (late objects); abi_check.py checks their vtables and imports
+# against the kernelcache, and that the bindings files are current, on every build.
+kernel_driver(
+    name = "SwitchUSB",
+    srcs = [
+        "XudcHardware.cpp",
+        "SwitchUSB.cpp",
+        "SwitchXUDC.cpp",
+        "original-bindings.S",
+        "SwitchPD.cpp",
+        "XusbHost.cpp",
+        "UsbDmaMapper.cpp",
+        "SwitchXHCI.cpp",
+        "xhci-original-bindings.S",
+        "firmware.S",
+    ],
+    abi_check = ":abi_check",
+    abi_checks = {
+        "original-bindings.S": "xudc SwitchXUDC.cpp",
+        "xhci-original-bindings.S": "xhci SwitchXHCI.cpp",
+    },
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/SwitchBattery",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
+    late = [
+        "SwitchXUDC.cpp",
+        "SwitchXHCI.cpp",
+    ],
+    prelink = [
+        # Device mode: the family SwitchXUDC subclasses, its dependency, and the usbmux function driver (usbmuxd,
+        # lockdownd, Xcode, Finder).
+        "com.apple.iokit.IOUSBDeviceFamily",
+        "com.apple.driver.usb.AppleUSBCommon",
+        "com.apple.driver.AppleUSBDeviceMux",
+        # Host mode: Apple's host stack and xHCI driver, which SwitchXHCI subclasses, and what it needs
+        # (IOAccessoryManager: AppleUSBXHCI's Type-C port classes; IOPortFamily: declared by AppleUSBXHCI) ...
+        "com.apple.iokit.IOUSBHostFamily",
+        "com.apple.driver.usb.AppleUSBXHCI",
+        "com.apple.iokit.IOAccessoryManager",
+        "com.apple.iokit.IOPortFamily",
+        # ... and the class drivers: hubs, composite devices, HID (keyboard, mouse) and mass storage with its SCSI layers
+        # and IOPCIFamily (one pointer).
+        "com.apple.driver.usb.AppleUSBHub",
+        "com.apple.driver.usb.AppleUSBHostCompositeDevice",
+        "com.apple.driver.usb.IOUSBHostHIDDevice",
+        "com.apple.iokit.IOUSBMassStorageDriver",
+        "com.apple.iokit.IOSCSIArchitectureModelFamily",
+        "com.apple.iokit.IOSCSIBlockCommandsDevice",
+        "com.apple.iokit.IOPCIFamily",
+    ],
+    # Declared dependencies left out of the prelink (COMPONENT=DEPENDENCY=pointer sites; a nonzero cut rebinds each
+    # site to _ioswitch_prelink_cut_null in SwitchUSB.cpp, so OSDynamicCast yields NULL):
+    # - AppleSMC (Mac SMC): IOUSBHostFamily's one site is OSDynamicCast(AppleSMC, waitForMatchingService(AppleSMC)) on
+    #   a path taken only for a port with a "UsbCPortNumber" property (fn 0xfffffff005e4fe88), never published here;
+    # - AppleUSBHostPlatformProperties: codeless, no personalities (the planner cannot carry it); no pointers;
+    # - AppleOnboardSerial would pull IOSkywalkFamily and IONetworkingFamily, whose classes SwitchWLAN defines natively;
+    #   its one site is OSDynamicCast(AppleOnboardSerial, provider) in the serial-accessory port's start
+    #   (fn 0xfffffff005cc3f0c), whose NULL path is a logged failure return; IOSerialFamily: no pointers.
+    prelink_cuts = [
+        "com.apple.iokit.IOUSBHostFamily=com.apple.driver.AppleSMC=1",
+        "com.apple.iokit.IOUSBHostFamily=com.apple.driver.usb.AppleUSBHostPlatformProperties=0",
+        "com.apple.iokit.IOAccessoryManager=com.apple.driver.AppleOnboardSerial=1",
+        "com.apple.iokit.IOAccessoryManager=com.apple.iokit.IOSerialFamily=0",
+    ],
+    # Personalities kept out of the boot catalogue so the USB host stack does not load at every boot (they match
+    # IOResources); SwitchXHCI adds AppleUSBHostResources and IOUSBMassStorageResource back when the host comes up.
+    # AppleUSBHostResourcesTypeC stays out (the Mac's Type-C/SMC variant; its probe waits 5 s for "product").
+    prelink_deferred = [
+        "com.apple.iokit.IOUSBHostFamily=AppleUSBHostResources",
+        "com.apple.iokit.IOUSBHostFamily=AppleUSBHostResourcesTypeC",
+        "com.apple.iokit.IOUSBMassStorageDriver=IOUSBMassStorageResource",
+    ],
+)

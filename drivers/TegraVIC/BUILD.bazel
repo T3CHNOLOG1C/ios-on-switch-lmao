@@ -1,0 +1,58 @@
+# drivers/TegraVIC: moved from out/native-a57/root-v1/tree/drivers/TegraVIC by the layout move.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+    "test/libdrm/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+py_binary(
+    name = "vic_abi_check",
+    srcs = ["abi_check.py"],
+    main = "abi_check.py",
+    deps = ["//tools/prelink:native_prelink"],
+)
+
+kernel_driver(
+    name = "TegraVIC",
+    srcs = [
+        "TegraVIC.cpp",
+        "TegraVICSelfTest.cpp",
+        "TegraVICSurface.cpp",
+        "TegraVICUserClient.cpp",
+        "original-bindings.S",
+        "firmware.S",
+    ],
+    abi_check = ":vic_abi_check",
+    abi_checks = {"original-bindings.S": "iosurface TegraVICSurface.cpp"},
+    hdr_deps = [
+        "drivers/TegraHost1x",
+        "drivers/TegraSMMU",
+    ],
+    stems = {
+        "firmware.S": "vic_firmware",
+        "original-bindings.S": "vic-original-bindings",
+    },
+)

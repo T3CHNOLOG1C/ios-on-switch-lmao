@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-USB = ROOT / 'out/native-a57/root-v1/tree/drivers/SwitchUSB'
+USB = ROOT / 'drivers/SwitchUSB'
 DRIVER = USB / 'SwitchXUDC.cpp'
 HARDWARE = USB / 'XudcHardware.cpp'
 HARNESS = ROOT / 'tests/switch_xudc_transfer_harness.cpp'

@@ -21,12 +21,12 @@
 #include <cinttypes>
 #include <functional>
 #include <typeinfo>
-#include "../out/native-a57/root-v1/tree/drivers/SwitchBattery/SwitchBattery.h"
-#include "../out/native-a57/root-v1/tree/drivers/SwitchBattery/SwitchChargePolicy.h"
-#include "../out/native-a57/root-v1/tree/drivers/SwitchSuspend/SwitchWakeSources.h"
-#include "../out/native-a57/root-v1/tree/drivers/SwitchUSB/SwitchPD.h"
-#include "../out/native-a57/root-v1/tree/drivers/TegraGPIO/TegraGPIO.h"
-#include "../out/native-a57/root-v1/tree/drivers/TegraI2C/TegraI2C.h"
+#include "../drivers/SwitchBattery/SwitchBattery.h"
+#include "../drivers/SwitchBattery/SwitchChargePolicy.h"
+#include "../drivers/SwitchSuspend/SwitchWakeSources.h"
+#include "../drivers/SwitchUSB/SwitchPD.h"
+#include "../drivers/TegraGPIO/TegraGPIO.h"
+#include "../drivers/TegraI2C/TegraI2C.h"
 
 extern "C" int switch_battery_start(void);
 extern "C" int switch_battery_temperature(int *milli_c, unsigned long long *at);

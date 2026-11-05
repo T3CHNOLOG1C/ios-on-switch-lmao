@@ -1,0 +1,36 @@
+# drivers/TegraHost1x: moved from out/native-a57/root-v1/tree/drivers/TegraHost1x by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# TegraHost1x + TegraNVDEC: host1x syncpoints, the NVDEC falcon and its job engine (switch-host1x, switch-nvdec=1..3);
+# NVDEC's firmware by .incbin.
+kernel_driver(
+    name = "TegraHost1x",
+    hdr_deps = [
+        "drivers/ArmGIC",
+    ],
+)

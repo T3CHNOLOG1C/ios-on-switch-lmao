@@ -17,7 +17,7 @@
 #include <cinttypes>
 #include <deque>
 #include <array>
-#include "../out/native-a57/root-v1/tree/drivers/SwitchMotion/SwitchMotion.cpp"
+#include "../drivers/SwitchMotion/SwitchMotion.cpp"
 
 static unsigned gChecks = 0, gFailures = 0;
 static void check(bool ok, const std::string &what)

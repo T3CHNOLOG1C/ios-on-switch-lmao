@@ -50,10 +50,8 @@ lint_files(
         include = [
             "*",
             "*/*",
-            "out/native-a57/root-v1/passes/*",
-            "out/native-a57/root-v1/tree",
+            "out/native-a57/root-v1/tree/patches",
         ],
-        # Each pattern may match nothing yet (no top-level drivers/<X> before r17-bazel's layout move).
         allow_empty = True,
         exclude = ["bazel-*"],
     ),
@@ -66,7 +64,7 @@ alias(
 
 alias(
     name = "kernel",
-    actual = "//out/native-a57/root-v1/tree:kernel",
+    actual = "//kernel:kernel",
 )
 
 alias(

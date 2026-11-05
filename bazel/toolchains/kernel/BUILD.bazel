@@ -16,7 +16,7 @@ lint_files(exclude = ["recipes.bzl"])
 
 kernel_cc_toolchain_config(
     name = "config",
-    sdk = "//out/native-a57/root-v1/tree:kernel_sdk",
+    sdk = "//kernel:kernel_sdk",
     # The main repository's top-level directories with kernel sources (the drivers' tree, the pinned bindings).
     source_roots = [
         "bazel",
@@ -25,7 +25,7 @@ kernel_cc_toolchain_config(
 )
 
 # Xcode's identity is an input of every compile (a new Xcode re-keys them all); the headers come from the targets'
-# CcInfo (//out/native-a57/root-v1/tree:kernel_sdk and the drivers' own), so .d files prune them per object.
+# CcInfo (//kernel:kernel_sdk and the drivers' own), so .d files prune them per object.
 filegroup(
     name = "files",
     srcs = ["@xcode//:identity"],
@@ -73,12 +73,12 @@ py_test(
     srcs = ["//tools/kernel:recipes.py"],
     args = [
         "--check",
-        "--objroot=$(rootpath //out/native-a57/root-v1/tree:xnu)",
+        "--objroot=$(rootpath //kernel:xnu)",
         "--out=$(rootpath :recipes.bzl)",
     ] + RECIPES,
     data = [
         ":recipes.bzl",
-        "//out/native-a57/root-v1/tree:xnu",
+        "//kernel:xnu",
     ],
     main = "//tools/kernel:recipes.py",
 )
@@ -87,9 +87,9 @@ py_binary(
     name = "update_recipes",
     srcs = ["//tools/kernel:recipes.py"],
     args = [
-        "--objroot=$(rootpath //out/native-a57/root-v1/tree:xnu)",
+        "--objroot=$(rootpath //kernel:xnu)",
         "--out=bazel/toolchains/kernel/recipes.bzl",
     ] + RECIPES,
-    data = ["//out/native-a57/root-v1/tree:xnu"],
+    data = ["//kernel:xnu"],
     main = "//tools/kernel:recipes.py",
 )

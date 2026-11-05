@@ -19,10 +19,10 @@ exports_files(glob(["testdata/**"]))
 
 install_spec(
     name = "spec",
-    block_cpp = "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/NativeIOSwitchBlock.cpp",
-    cryptex_cpp = "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/IOSwitchCryptex.cpp",
-    cryptex_h = "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/IOSwitchCryptex.h",
-    raw_mount = "//out/native-a57/root-v1/tree:diagnostics/ioswitch/IOSwitchRawMount.inc",
+    block_cpp = "//drivers/NativeIOSwitchBlock:NativeIOSwitchBlock.cpp",
+    cryptex_cpp = "//drivers/NativeIOSwitchBlock:IOSwitchCryptex.cpp",
+    cryptex_h = "//drivers/NativeIOSwitchBlock:IOSwitchCryptex.h",
+    raw_mount = "//diagnostics/ioswitch:IOSwitchRawMount.inc",
 )
 
 ipsw_pins(name = "ipsw")

@@ -1,0 +1,22 @@
+# bazel run //tools/repath -- PATCH...: a patch made before the layout move, rewritten for the new paths in place (its
+# diff headers and its hunks, with the move's own rules; hunks against the old kernel tree BUILD.bazel are listed with
+# the target and the package BUILD.bazel each now belongs to, since that file's blocks moved into many packages).
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+py_binary(
+    name = "repath",
+    srcs = [
+        "repath.py",
+        "rules.py",
+    ],
+    data = [
+        "blocks.json",
+        "labels.json",
+    ],
+    main = "repath.py",
+)

@@ -19,7 +19,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-VIDEO = ROOT / "out/native-a57/root-v1/tree/drivers/SwitchVideoDecoders"
+VIDEO = ROOT / "drivers/SwitchVideoDecoders"
 AVD = VIDEO / "AVD"
 FLAGS = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-g", "-fsanitize=address,undefined",
          "-fno-sanitize-recover=all"]

@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DRIVERS = ROOT / "out/native-a57/root-v1/tree/drivers"
+DRIVERS = ROOT / "drivers"
 
 
 def run_harness(test, name, marker):

@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "../out/native-a57/root-v1/tree/drivers/NativeMobileDisplay/NativePlanes.h"
+#include "../drivers/NativeMobileDisplay/NativePlanes.h"
 
 using namespace NativePlanes;
 

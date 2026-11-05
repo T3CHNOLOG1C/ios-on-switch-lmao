@@ -83,10 +83,10 @@ py_test(
     name = "spec_test",
     srcs = ["spec_test.py"],
     data = [
-        "//out/native-a57/root-v1/tree:diagnostics/ioswitch/IOSwitchRawMount.inc",
-        "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/IOSwitchCryptex.cpp",
-        "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/IOSwitchCryptex.h",
-        "//out/native-a57/root-v1/tree:drivers/NativeIOSwitchBlock/NativeIOSwitchBlock.cpp",
+        "//diagnostics/ioswitch:IOSwitchRawMount.inc",
+        "//drivers/NativeIOSwitchBlock:IOSwitchCryptex.cpp",
+        "//drivers/NativeIOSwitchBlock:IOSwitchCryptex.h",
+        "//drivers/NativeIOSwitchBlock:NativeIOSwitchBlock.cpp",
     ],
     deps = [
         ":spec_lib",

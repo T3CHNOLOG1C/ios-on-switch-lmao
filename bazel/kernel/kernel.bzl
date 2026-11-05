@@ -1,10 +1,11 @@
 """Code linked into the kernel: drivers (cc_library targets on the kernel toolchain), archives, the link, the prelink.
 
-Adding a driver is one call in out/native-a57/root-v1/tree/BUILD.bazel:
+Adding a driver is one call in its package's BUILD.bazel (drivers/SwitchFoo/BUILD.bazel):
 
     kernel_driver(name = "SwitchFoo")                     # drivers/SwitchFoo/*.cpp, IOKit C++ recipe, our warnings
 
-plus its name in the member list of the archive it rides in (archive member order is link order: -force_load).
+plus its label in the member list of the archive it rides in, in kernel/BUILD.bazel (archive member order is link
+order: -force_load).
 Knobs: srcs (ordered; .cpp/.c/.S, defaults to the directory's .cpp files), late (static initializer run by the board
 code after the original family loads), abi_checks (SwitchUSB-style checks against the original kernelcache),
 firmware (a firmware.S that .incbins the directory's firmware/), copts / c_copts / asm_copts, recipe / c_recipe /

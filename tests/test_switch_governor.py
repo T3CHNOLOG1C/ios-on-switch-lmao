@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TREE = ROOT / 'out/native-a57/root-v1/tree'
+TREE = ROOT / '.'
 POWER = TREE / 'drivers/SwitchPower'
 HARNESS = ROOT / 'tests/switch_governor_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I', str(POWER)]

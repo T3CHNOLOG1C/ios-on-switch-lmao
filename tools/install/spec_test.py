@@ -5,7 +5,7 @@ from python.runfiles import runfiles
 
 from tools.install import spec
 
-TREE = "_main/out/native-a57/root-v1/tree/"
+TREE = "_main/"
 
 
 class SpecTest(unittest.TestCase):

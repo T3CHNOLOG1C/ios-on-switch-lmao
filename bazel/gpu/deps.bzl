@@ -38,13 +38,13 @@ DEVICE_DATA = {
     "sha256": "533beda1b80c203d6f5f52576c0254304cc80e2fe26a0a750e51e7172d8acf7a",
 }
 
-_SERIES = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/series"
-_CARGO_LOCK = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:bridge/Cargo.lock"
+_SERIES = "//drivers/TegraGM20BMetal:patches/series"
+_CARGO_LOCK = "//drivers/TegraGM20BMetal:bridge/Cargo.lock"
 
 def _drivers_label(path):
     """A series line (a path below tree/drivers/) as a label in its driver's package."""
     package, _, file = path.partition("/")
-    return Label("//out/native-a57/root-v1/tree/drivers/{}:{}".format(package, file))
+    return Label("//drivers/{}:{}".format(package, file))
 
 # --- @m2v --------------------------------------------------------------------------------------------------------
 

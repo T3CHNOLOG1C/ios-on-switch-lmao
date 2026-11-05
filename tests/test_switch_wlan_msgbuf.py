@@ -18,7 +18,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-WLAN = ROOT / 'out/native-a57/root-v1/tree/drivers/SwitchWLAN'
+WLAN = ROOT / 'drivers/SwitchWLAN'
 STUBS = ROOT / 'tests/switch_wlan_msgbuf_stubs.h'
 HARNESS = ROOT / 'tests/switch_wlan_msgbuf_harness.cpp'
 FLAGS = [

@@ -38,7 +38,7 @@ py_binary(
 py_binary(
     name = "rawpack",
     srcs = ["rawpack.py"],
-    deps = ["//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:raw_pack"],
+    deps = ["//drivers/TegraGM20BMetal:raw_pack"],
 )
 
 py_binary(

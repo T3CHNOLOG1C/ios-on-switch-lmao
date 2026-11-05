@@ -10,8 +10,8 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DISPLAY = ROOT / "out/native-a57/root-v1/tree/drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp"
-GPU = ROOT / "out/native-a57/root-v1/tree/drivers/TegraGM20B/gpu.c"
+DISPLAY = ROOT / "drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp"
+GPU = ROOT / "drivers/TegraGM20B/gpu.c"
 
 
 def body(source, signature):

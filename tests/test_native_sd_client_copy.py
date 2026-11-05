@@ -5,10 +5,10 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-TREE = ROOT / "out/native-a57/root-v1/tree"
+TREE = ROOT / "."
 DRIVER = TREE / "drivers/NativeIOSwitchBlock"
 # copypv's flag values, from the XNU this driver links against (exported header first, then the source tree's).
-PMAP_HEADERS = [TREE / "build/xnu/ios-obj/EXPORT_HDRS/osfmk/vm/pmap.h", TREE / ".cache/xnu-work/osfmk/vm/pmap.h"]
+PMAP_HEADERS = [ROOT / "out/native-a57/root-v1/tree/build/xnu/ios-obj/EXPORT_HDRS/osfmk/vm/pmap.h", ROOT / "out/native-a57/root-v1/tree/.cache/xnu-work/osfmk/vm/pmap.h"]
 FLAGS = ("cppvPsnk", "cppvPsrc", "cppvFsnk", "cppvFsrc", "cppvNoModSnk", "cppvNoRefSrc", "cppvKmap")
 
 

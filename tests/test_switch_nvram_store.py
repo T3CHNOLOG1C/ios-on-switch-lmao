@@ -11,7 +11,7 @@ import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-STORE = ROOT / 'out/native-a57/root-v1/tree/drivers/SwitchNVRAM'
+STORE = ROOT / 'drivers/SwitchNVRAM'
 HARNESS = ROOT / 'tests/switch_nvram_store_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I', str(STORE)]
 BANK = 8192

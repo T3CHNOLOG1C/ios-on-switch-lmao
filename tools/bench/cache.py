@@ -23,7 +23,7 @@ import tempfile
 from pathlib import Path
 
 TARGETS = ["//:boot", "//:gpu"]
-DRIVER = "out/native-a57/root-v1/tree/drivers/SwitchButtons/SwitchButtons.cpp"
+DRIVER = "drivers/SwitchButtons/SwitchButtons.cpp"
 
 
 def build(workspace, label, startup=(), flags=()):

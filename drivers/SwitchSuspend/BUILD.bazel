@@ -1,0 +1,37 @@
+# drivers/SwitchSuspend: moved from out/native-a57/root-v1/tree/drivers/SwitchSuspend by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# System sleep (SC7) coordinator, inert unless switch-sleep=2; waking from the lock (wake sources with the panel off, the
+# wake guarantee's stackshot) and the power journal (SwitchWake.cpp).
+kernel_driver(
+    name = "SwitchSuspend",
+    hdr_deps = [
+        "drivers/SwitchBattery",
+        "drivers/TegraGPIO",
+    ],
+)

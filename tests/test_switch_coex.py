@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DRIVERS = ROOT / 'out/native-a57/root-v1/tree/drivers'
+DRIVERS = ROOT / 'drivers'
 HARNESS = ROOT / 'tests/switch_coex_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I',
          str(DRIVERS / 'SwitchBluetooth'), '-I', str(DRIVERS / 'SwitchWLAN')]

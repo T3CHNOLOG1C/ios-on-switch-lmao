@@ -1,0 +1,49 @@
+# drivers/SwitchTouch: moved from out/native-a57/root-v1/tree/drivers/SwitchTouch by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# Touch screen and buttons. SwitchHIDDevice subclasses the original IOHIDDevice through NativeHidInput's bindings (same
+# archive), so it is a late object.
+kernel_driver(
+    name = "SwitchTouch",
+    srcs = [
+        "SwitchHIDDevice.cpp",
+        "SwitchTouch.cpp",
+    ],
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/NativeMobileDisplay",
+        "drivers/SwitchPower",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
+    late = ["SwitchHIDDevice.cpp"],
+    src_copts = {"SwitchHIDDevice.cpp": [
+        "-I",
+        "{build}/native-hid-input",
+    ]},
+)

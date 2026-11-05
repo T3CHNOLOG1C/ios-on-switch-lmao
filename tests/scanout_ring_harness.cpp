@@ -15,7 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "../out/native-a57/root-v1/tree/drivers/TegraDisplayFlip/TegraScanoutRing.h"
+#include "../drivers/TegraDisplayFlip/TegraScanoutRing.h"
 
 namespace {
 int failures = 0;

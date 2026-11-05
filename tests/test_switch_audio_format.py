@@ -23,7 +23,7 @@ from fractions import Fraction
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-AUDIO = ROOT / 'out/native-a57/root-v1/tree/drivers/SwitchAudio'
+AUDIO = ROOT / 'drivers/SwitchAudio'
 HARNESS = ROOT / 'tests/switch_audio_format_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I', str(AUDIO),
          '-I', str(AUDIO / 'hal')]

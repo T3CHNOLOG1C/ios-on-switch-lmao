@@ -15,12 +15,12 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-TREE = ROOT / 'out/native-a57/root-v1/tree'
+TREE = ROOT / '.'
 DISPLAY = TREE / 'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp'
 PLANES = TREE / 'drivers/NativeMobileDisplay/NativePlanesDisplay.inc'
 BINDINGS = TREE / 'drivers/NativeMobileDisplay/NativePlanesBindings.S'
 VIC_BINDINGS = TREE / 'drivers/TegraVIC/original-bindings.S'
-XNU_PATCH = TREE / 'patches/xnu-ioswitch.diff'
+XNU_PATCH = ROOT / 'out/native-a57/root-v1/tree/patches/xnu-ioswitch.diff'
 
 
 def body(source: str, signature: str) -> str:

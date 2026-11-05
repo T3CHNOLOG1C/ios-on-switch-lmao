@@ -1,0 +1,71 @@
+# drivers/TegraGM20B: moved from out/native-a57/root-v1/tree/drivers/TegraGM20B by the layout move.
+load("//bazel/kernel:driver_flags.bzl", "GPU_C_FLAGS", "LINUX_RELAXATIONS")
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+kernel_driver(
+    name = "TegraGM20B_nvkm",
+    srcs = [":" + f for f in glob(["nouveau/**/*.c"])],
+    c_copts = GPU_C_FLAGS + LINUX_RELAXATIONS,
+    c_recipe = ":freestanding_c",
+    hdr_deps = [],
+    object_names = "path",
+)
+
+kernel_driver(
+    name = "TegraGM20B",
+    srcs = [
+        "shim/linux.c",
+        "shim/tegra_shim.c",
+        "shim/stubs.c",
+        "shim/nvif_nvkm.c",
+        "platform.c",
+        "gpu.c",
+        "shim/xnu_glue.cpp",
+        "TegraGM20B.cpp",
+        "TegraGM20BUserClient.cpp",
+        # Subclasses the original IOAcceleratorES: a late object, run by TegraGM20B.cpp after IOGPUFamily loads.
+        "TegraGM20BAccelerator.cpp",
+        # GM20B falcon firmware (linux-firmware nvidia/gm20b) by .incbin.
+        "firmware.S",
+    ],
+    c_copts = GPU_C_FLAGS,
+    c_recipe = ":freestanding_c",
+    copts = [
+        "-I",
+        "{tree}/drivers/TegraGM20B",
+    ],
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/TegraDisplayFlip",
+        "drivers/TegraI2C",
+    ],
+    late = ["TegraGM20BAccelerator.cpp"],
+    object_names = "path",
+    # IOAcceleratorES for QuartzCore's 30 s accelerator poll and the GM20B driver.
+    prelink = ["com.apple.iokit.IOGPUFamily"],
+)

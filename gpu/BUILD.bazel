@@ -19,11 +19,11 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-METAL = "//out/native-a57/root-v1/tree/drivers/NativeMetal"
+METAL = "//drivers/NativeMetal"
 
-GM20B_METAL = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal"
+GM20B_METAL = "//drivers/TegraGM20BMetal"
 
-GM20B_ABI = "//out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h"
+GM20B_ABI = "//drivers/TegraGM20B:TegraGM20BABI.h"
 
 NVK = "//gpu/nvk:dylib"
 

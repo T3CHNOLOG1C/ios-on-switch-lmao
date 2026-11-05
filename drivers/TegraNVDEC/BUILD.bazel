@@ -1,0 +1,45 @@
+# drivers/TegraNVDEC: moved from out/native-a57/root-v1/tree/drivers/TegraNVDEC by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+    "selftest/HEVCPicture176.inc",
+    "selftest/VP9Picture160.inc",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+kernel_driver(
+    name = "TegraNVDEC",
+    srcs = [
+        "TegraNVDEC.cpp",
+        "TegraNVDECMemory.cpp",
+        "TegraNVDECSelfTest.cpp",
+        "TegraNVDECUserClient.cpp",
+        "firmware.S",
+    ],
+    hdr_deps = [
+        "drivers/TegraHost1x",
+        "drivers/TegraVIC",
+    ],
+    stems = {"firmware.S": "nvdec_firmware"},
+)

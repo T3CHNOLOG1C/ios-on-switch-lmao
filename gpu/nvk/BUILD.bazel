@@ -67,7 +67,7 @@ RUST_SRC_PREFIX = "/Users/brunostjohn/.rustup/toolchains/stable-aarch64-apple-da
 
 [nvk_dylib(
     name = name,
-    abi_header = "//out/native-a57/root-v1/tree:drivers/TegraGM20B/TegraGM20BABI.h",
+    abi_header = "//drivers/TegraGM20B:TegraGM20BABI.h",
     expect_sha256 = EXPECT.get(platform, ""),
     expect_tree = EXPECT.get("tree", ""),
     git_sha1 = GIT_SHA1,

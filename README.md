@@ -123,7 +123,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
   mobileactivationd logs, migration state, the boot I/O census, the LaunchServices database and every process's m2v
   shader cache.
 - Builds `boot.logarchive`.
-- Merges the shader journals into `out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/precompile/corpus.log`, a
+- Merges the shader journals into `drivers/TegraGM20BMetal/precompile/corpus.log`, a
   source file: commit it. The next `//:gpu` build seeds from it.
 - Then unmounts and ejects (`--no-eject` keeps the card).
 
@@ -154,7 +154,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//:gpu` (= `//gpu:bundle`) | `bazel-bin/gpu/bundle`: `ngpu/addons/{TegraGM20BMetal.bundle, .m2v-seed, .raw/pack.bin}`, `TegraGM20BMetal.trustcache`, `trust.json` |
 | `//gpu:trustcache` | The bundle's trust cache module. `//:boot` appends it to the kernel's static trust cache |
 | `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa 77452b90 + `gpu/nvk`'s patches, meson inside Bazel |
-| `//out/native-a57/root-v1/tree:<driver>` | One driver's objects (e.g. `:SwitchUSB`); `:xnu` is the XNU objroot; `:kernel_unprelinked` is the link |
+| `//drivers/<Driver>` | One driver's package: its objects (e.g. `//drivers/SwitchUSB`), headers (`:headers`, `:hdrs`) and tests. `//kernel:xnu` is the XNU objroot; `//kernel:kernel_unprelinked` is the link |
 | `//ipsw:kernelcache`, `//ipsw:static_system_trust` | The original kernelcache (decompressed) and the root+OS-cryptex trust bundle, from the IPSW |
 | `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | The members of the IPSW kind `--//bazel/ipsw:kind` selects (`bazel/ipsw/pins.bzl`, one table of kinds). Deflated ones are inflated by a build action (`//bazel/ipsw:<kind>_<role>`) |
 | `//install:sd`, `//install:artifacts` | SD-card install and what it writes |
@@ -164,10 +164,10 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//:format`, `//:format_test`, `//:lint_test`, `//:clang_tidy_test` | Format and lint every file (see [Format and lint](#format-and-lint)) |
 | `//tools/lint:py_owners`, `//tools/lint:compdb` | Every tracked `.py` file has an owning target; compile_commands.json for clangd |
 | `//bazel/python:requirements.update`, `:requirements_test` | Re-lock the Python packages with uv; check the lock is current |
-| `//tests/...`, `//out/native-a57/root-v1/tree:*_test`, `//native:firmware_export_test`, `//install:*_test`, `//tools/deploy:deploy_test`, `//bazel/pinned:sha256` | Tests |
+| `//tests/...`, the driver packages' `*_test`, `//native:firmware_export_test`, `//install:*_test`, `//tools/deploy:deploy_test`, `//bazel/pinned:sha256` | Tests |
 | `//tools/repro:check` | Reproducibility |
 | `//native:firmware_export`, `//gpu/nvk:relink`, `//tools/package:progressui_logo`, `//tools/package:wallpaper_1x` | Regenerate a pinned input: the RAM exporter, a relinked NVK dylib, the ProgressUI logo, the 1x wallpaper plists |
-| `//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:<tool>` | GPU developer tools: the shader corpus (`make_corpus`, `run_corpus`, `report`, …), `ordercheck`, `check_dyld_cache_imports` |
+| `//drivers/TegraGM20BMetal:<tool>` | GPU developer tools: the shader corpus (`make_corpus`, `run_corpus`, `report`, …), `ordercheck`, `check_dyld_cache_imports` |
 
 Flags:
 - `--//boot:smp=false`: package for one core.
@@ -229,14 +229,15 @@ Notes:
 
 ## Adding a driver
 
-1. Put the sources in `out/native-a57/root-v1/tree/drivers/SwitchFoo/`.
-2. In `out/native-a57/root-v1/tree/BUILD.bazel`, add one call:
+1. Put the sources in `drivers/SwitchFoo/`.
+2. Give it a `drivers/SwitchFoo/BUILD.bazel` like `drivers/ArmGIC/BUILD.bazel` (its loads, `package`, `lint_files()`,
+   `kernel_headers()`) with one call:
 
    ```python
    kernel_driver(name = "SwitchFoo")   # every drivers/SwitchFoo/*.cpp (sorted), then its firmware.S if it has one
    ```
 
-3. Add `":SwitchFoo"` to the `members` of the archive it rides in. Most board drivers ride in
+3. Add `"//drivers/SwitchFoo"` to the `members` of the archive it rides in (`kernel/BUILD.bazel`). Most board drivers ride in
    `libNativeIOSwitchBlockDevice`; drivers that subclass original HID/display classes ride in `libNativeLegacyDisplay`.
    Member order is link order (`-force_load`).
 
@@ -278,11 +279,11 @@ every driver object, because they include XNU's headers.
 | IPSW | `bazel/ipsw/pins.bzl` | `bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> iPad7,1 j120ap` (pins one kind in place; streams each member once to hash it; nothing stored) |
 | XNU tag | `MODULE.bazel` `@xnu`/`@xnu_base` | New URL and sha256. The patch must apply to it |
 | Apple OSS, corecrypto, lz4 | `MODULE.bazel` | Version in the URL, new sha256, `strip_prefix` |
-| m2v | `bazel/gpu/deps.bzl` | Commit and sha256 of the GitHub tarball. The series is `tree/drivers/TegraGM20BMetal/patches/series` |
+| m2v | `bazel/gpu/deps.bzl` | Commit and sha256 of the GitHub tarball. The series is `drivers/TegraGM20BMetal/patches/series` |
 | NVK | `gpu/nvk/BUILD.bazel` | Add the patch to `PATCHES` (in order), set `GIT_SHA1` to the version string's commit, build `//gpu/nvk:ios //gpu/nvk:host`, then pin `EXPECT` (tree id and both sha256s the build prints) |
 | Mesa | `gpu/nvk/repos.bzl` `MESA_COMMIT` | A new commit; the series must apply. If `nvk_query.cl`, `nvk_copy_indirect.cl` or their headers change, regenerate `bazel/pinned/nvk` with Mesa's mesa_clc/vtn_bindgen2 (LLVM 23.1.4) |
 | The IPSW's Metal libraries | `bazel/gpu/apple-libs.sha256` | After an IPSW bump: attach the OS image read-only and regenerate with the command in its header (`libraries.py pins`) |
-| Device data | `bazel/gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:harvest -- --pack` writes `out/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
+| Device data | `bazel/gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes `out/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
 | Rust | `MODULE.bazel` GPU section | `rust.toolchain(versions = [...])` |
 | LLVM | `bazel/llvm/llvm.bzl` and `bazel/gpu/deps.bzl` | URL and sha256 in both (one archive) |
 | Python packages | not used yet | — |
@@ -291,7 +292,7 @@ every driver object, because they include XNU's headers.
 
 A few BUILD arguments name external repositories by their directory, which Bazel 9 derives from `MODULE.bazel`. For
 example, `external/+http_archive+xnu`, `+http_archive+corecrypto`, `+http_archive+lz4` and
-`+http_archive+iostoragefamily` appear in `out/native-a57/root-v1/tree/BUILD.bazel` and `tools/BUILD.bazel`. If you
+`+http_archive+iostoragefamily` appear in `kernel/BUILD.bazel` and `tools/BUILD.bazel`. If you
 rename a repository, or change how it is declared, update those paths too.
 
 ## Reproducibility and the old CMake flow
@@ -414,7 +415,7 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 - **`@gpu_device_data` fails to fetch (`out/gpu-device-data/m2v-device-….tar` not found)**: the repository cache doesn't
   have the device data yet. Copy the tar named in `bazel/gpu/deps.bzl` `DEVICE_DATA` into `out/gpu-device-data/` of
   this checkout, or make a new one from the device's caches: `bazel run //deploy:pull_logs -- disk4` stages them, then
-  `bazel run //out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:harvest -- --pack` writes the tar and prints the pin.
+  `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes the tar and prints the pin.
   Without any device data (another machine), set `DEVICE_DATA = None`: the seed then lacks the device's records and Core
   Image's 2 device-compiled kernels, which the device compiles on first use.
 - **`hdiutil attach` fails while fetching `@gpu_apple_libs`**: the first fetch on a machine attaches the IPSW's OS image

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path.cwd())
-TREE = ROOT / 'out/native-a57/root-v1/tree'
+TREE = ROOT / '.'
 SOURCES = ('.c', '.cc', '.cpp', '.h', '.hpp', '.m', '.mm', '.inc')
 
 DROP = {'-fsanitize-minimal-runtime', '-fno-c++-static-destructors', '-fc++-static-destructors=none'}

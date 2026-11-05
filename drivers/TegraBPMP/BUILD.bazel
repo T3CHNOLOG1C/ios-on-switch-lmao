@@ -1,0 +1,75 @@
+# drivers/TegraBPMP: moved from out/native-a57/root-v1/tree/drivers/TegraBPMP by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# TegraBPMP: the T210 BPMP mailbox (L4T mail.c / mail_t210.c / mailman.c vendored under a shim), the EMC clock.
+kernel_driver(
+    name = "TegraBPMP",
+    srcs = [
+        "linux/drivers/firmware/tegra/mail.c",
+        "linux/drivers/firmware/tegra/mail_t210.c",
+        "linux/drivers/firmware/tegra/mailman.c",
+        "shim/linux.c",
+        "TegraBPMP.c",
+        "shim/xnu_glue.cpp",
+    ],
+    c_copts = [
+        "-mgeneral-regs-only",
+        "-mstrict-align",
+        "-fno-stack-protector",
+        "-std=gnu11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unused-parameter",
+        "-Wno-sign-conversion",
+        "-Wno-shorten-64-to-32",
+        "-Wno-implicit-int-conversion",
+        "-Wno-sign-compare",
+        "-Wno-missing-field-initializers",
+        "-Wno-gnu-empty-struct",
+        "-Wno-zero-length-array",
+        "-I",
+        "{tree}/drivers/TegraBPMP/shim/include",
+        "-I",
+        "{tree}/drivers/TegraBPMP/linux/include",
+        "-I",
+        "{tree}/drivers/TegraBPMP/linux/drivers/firmware/tegra",
+        "-I",
+        "{tree}/drivers",
+        "-include",
+        "{tree}/drivers/TegraBPMP/shim/include/bpxnu_prelude.h",
+    ],
+    c_recipe = ":freestanding_c",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/TegraI2C",
+    ],
+    object_names = "path",
+    object_prefix = "tegra-bpmp_",
+    stems = {"xnu_glue.cpp": "TegraBPMPGlue"},
+)

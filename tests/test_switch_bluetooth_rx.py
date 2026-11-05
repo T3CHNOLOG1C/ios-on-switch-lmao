@@ -13,7 +13,7 @@ import pathlib
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DRIVER = ROOT / "out/native-a57/root-v1/tree/drivers/SwitchBluetooth/SwitchBluetooth.cpp"
+DRIVER = ROOT / "drivers/SwitchBluetooth/SwitchBluetooth.cpp"
 BYTE = 10 / 3e6 * 1e6  # us per byte at 3 Mbaud, 8N1
 TIMEOUT = 4 * BYTE
 

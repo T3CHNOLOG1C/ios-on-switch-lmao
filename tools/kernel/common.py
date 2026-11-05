@@ -61,8 +61,8 @@ def execroot():
 # The layout table of bazel/kernel/layout.bzl (keep the two in step): where the kernel tree's sources and generated
 # files are, and the old spelling the artifacts keep for them.
 OLD_TREE = "out/native-a57/root-v1/tree"
-TREE_ROOT = OLD_TREE
-KERNEL_PACKAGE = OLD_TREE
+TREE_ROOT = ""
+KERNEL_PACKAGE = "kernel"
 MOVED_ROOTS = ("drivers", "kits", "diagnostics", "overlay")
 
 

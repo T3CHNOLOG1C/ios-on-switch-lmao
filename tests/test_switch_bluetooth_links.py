@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BLUETOOTH = ROOT / 'out/native-a57/root-v1/tree/drivers/SwitchBluetooth'
+BLUETOOTH = ROOT / 'drivers/SwitchBluetooth'
 HARNESS = ROOT / 'tests/switch_bluetooth_links_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I',
          str(BLUETOOTH)]

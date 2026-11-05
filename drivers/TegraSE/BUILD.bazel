@@ -1,0 +1,34 @@
+# drivers/TegraSE: moved from out/native-a57/root-v1/tree/drivers/TegraSE by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# The Security Engine SE2: known answers over its interrupt, the kernel PRNG reseeded from its DRBG, and a timing run
+# against the A57s' crypto instructions (r17-crypto); the AppleKeyStore probe shares SE2 through tegra_se2_claim.
+kernel_driver(
+    name = "TegraSE",
+    hdr_deps = ["drivers/ArmGIC"],
+)

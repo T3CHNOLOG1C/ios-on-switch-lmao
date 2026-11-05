@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TREE = ROOT / 'out/native-a57/root-v1/tree'
+TREE = ROOT / '.'
 SUSPEND = TREE / 'drivers/SwitchSuspend'
 HARNESS = ROOT / 'tests/switch_wake_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I',

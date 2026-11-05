@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-#include "../out/native-a57/root-v1/tree/drivers/TegraGM20B/TegraGM20BPoolPolicy.h"
+#include "../drivers/TegraGM20B/TegraGM20BPoolPolicy.h"
 
 namespace
 {

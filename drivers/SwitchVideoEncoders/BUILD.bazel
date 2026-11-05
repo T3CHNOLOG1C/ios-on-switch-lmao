@@ -1,0 +1,68 @@
+# drivers/SwitchVideoEncoders: moved from out/native-a57/root-v1/tree/drivers/SwitchVideoEncoders by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_headers")
+load("//bazel/kernel:package.bzl", "ios_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# H264H7.videoencoder: AVE's stand-in, H.264 on NVENC as VideoToolbox's hardware 'avc1' encoder (registered once the
+# kernel published TegraNVENC; sessions open it where the process may), with the once-per-boot encode check
+# (EncodeCheck.c). The path is a slot of 21H461's VTLoadVideoEncoders list that the dyld cache does not fill.
+ios_binary(
+    name = "AVE",
+    srcs = [
+        "AVE/AVEEncoder.c",
+        "AVE/H264NVENC.c",
+        "AVE/NVENCClient.c",
+        "AVE/EncodeCheck.c",
+    ],
+    out = "build/switch-video/H264H7.videoencoder",
+    hdrs = glob(
+        ["AVE/*.h"],
+        allow_empty = True,
+    ) + ["//drivers/TegraNVENC:headers"] + ["//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h"],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "-fvisibility=hidden",
+        "-install_name",
+        "/System/Library/VideoEncoders/H264H7.videoencoder",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "CoreMedia",
+        "-framework",
+        "CoreVideo",
+        "-framework",
+        "VideoToolbox",
+        "-framework",
+        "IOKit",
+    ],
+    pagesize = "4096",
+    sign_identifier = "com.ioswitch.ave",
+)

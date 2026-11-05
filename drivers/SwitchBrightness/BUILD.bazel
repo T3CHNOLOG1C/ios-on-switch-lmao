@@ -1,0 +1,59 @@
+# drivers/SwitchBrightness: moved from out/native-a57/root-v1/tree/drivers/SwitchBrightness by the layout move.
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+py_test(
+    name = "als_test",
+    size = "small",
+    srcs = ["test_als.py"],
+    data = glob(["**"]) + [
+        "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
+        "//drivers/TegraI2C:TegraI2C.cpp",
+    ],
+    main = "test_als.py",
+    tags = ["requires-darwin"],
+)
+
+# Backlight (CoreBrightness's AppleARMBacklight, by metaclass), display power and the BH1730 ambient light sensor.
+kernel_driver(
+    name = "SwitchBrightness",
+    srcs = [
+        "TegraPanel.cpp",
+        "SwitchBacklight.cpp",
+        "SwitchALS.cpp",
+        "original-bindings.S",
+    ],
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/NativeMobileDisplay",
+        "drivers/SwitchSuspend",
+        "drivers/SwitchTouch",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
+)

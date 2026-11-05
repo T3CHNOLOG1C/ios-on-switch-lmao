@@ -114,7 +114,8 @@ def _boot_package_impl(ctx):
         files[source] = _one(target, "overlay file")
 
     # Source files the manifest names by their path in the kernel tree (the manifest's ../): no mapping to keep.
-    tree = ctx.file.overlay_manifest.short_path.rpartition("/")[0].rpartition("/")[0] + "/"
+    parent = ctx.file.overlay_manifest.short_path.rpartition("/")[0].rpartition("/")[0]
+    tree = parent + "/" if parent else ""
     for f in ctx.files.overlay_files:
         if not f.short_path.startswith(tree):
             fail("overlay_files {} is not in the kernel tree {}".format(f.short_path, tree))

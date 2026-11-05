@@ -28,7 +28,7 @@ MATH_LITERAL_POOLS = (
 )
 # Original kexts prelinked beyond the V20 roots, the dependencies left out of the prelink and the personalities kept
 # out of the boot catalogue: declared by the drivers that need them (prelink, prelink_cuts, prelink_deferred in
-# out/native-a57/root-v1/tree/BUILD.bazel, which says why for each) and passed here by the kernel_prelink rule.
+# the drivers' BUILD.bazel files, which say why for each) and passed here by the kernel_prelink rule.
 NEW_ORIGINAL_COMPONENTS = set()     # --new-root BUNDLE
 # Declared dependencies left out of the prelink, by exact pointer count (plan() fails the build when the original
 # kernelcache has a different number of sites): (component, dependency) -> (pointer sites, native stub). A nonzero cut

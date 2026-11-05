@@ -1,0 +1,57 @@
+# drivers/NativeKeyStoreEvents: moved from out/native-a57/root-v1/tree/drivers/NativeKeyStoreEvents by the layout move.
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# Host checks of driver code: each compiles the driver's sources with Xcode's clang for the Mac and runs them.
+py_test(
+    name = "keywrap_test",
+    size = "small",
+    srcs = ["test_keywrap.py"],
+    data = glob(["**"]),
+    main = "test_keywrap.py",
+    tags = ["requires-darwin"],
+)
+
+kernel_driver(
+    name = "NativeKeyStoreEvents",
+    srcs = ["NativeKeyStoreEvents.cpp"],
+    hdr_deps = [],
+    late = ["NativeKeyStoreEvents.cpp"],
+)
+
+# AppleKeyStore stand-in's device key: RFC 3394 wrap under a key derived from the fuse chip ID; the Security Engine probe.
+kernel_driver(
+    name = "AKSDeviceKey",
+    srcs = [
+        "AKSDeviceKey.cpp",
+        "TegraSecurityEngine.cpp",
+    ],
+    hdr_deps = [
+        "drivers/TegraSE",
+    ],
+)

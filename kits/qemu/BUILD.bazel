@@ -1,0 +1,77 @@
+# kits/qemu: moved from out/native-a57/root-v1/tree/kits/qemu by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# ShengPlatformPower: PMGR subclass (late).
+kernel_driver(
+    name = "ShengPlatformPower",
+    srcs = [
+        "ShengPlatformPower.cpp",
+        "//bazel/pinned:kernel/sheng-platform-power/original-bindings.S",
+    ],
+    copts = [
+        "-I",
+        "{build}/sheng-platform-power",
+    ],
+    hdr_deps = [
+        "drivers/SwitchPower",
+    ],
+    late = ["ShengPlatformPower.cpp"],
+)
+
+# Link stubs: no-op probe hooks.
+kernel_driver(
+    name = "LinkStubs",
+    srcs = ["LinkStubs.c"],
+    c_command = [
+        "xcrun",
+        "--sdk",
+        "iphoneos",
+        "clang",
+        "-arch",
+        "arm64",
+        "-mkernel",
+        "-miphoneos-version-min=17.0",
+        "-Os",
+        "-Wall",
+        "-Werror",
+    ],
+    hdr_deps = [],
+)
+
+kernel_driver(
+    name = "QemuProbes",
+    srcs = [
+        "LegacyDisplayProbe.cpp",
+        "KeyStoreProbe.cpp",
+        "HidInputProbe.cpp",
+        "TouchState.cpp",
+    ],
+    hdr_deps = [
+        "drivers/NativeMobileDisplay",
+    ],
+)

@@ -1,0 +1,142 @@
+# drivers/SwitchVideoDecoders: moved from out/native-a57/root-v1/tree/drivers/SwitchVideoDecoders by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_headers")
+load("//bazel/kernel:package.bzl", "ios_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+    "AVD/VP9Tables.inc",
+    "test/HEVCClip.h",
+    "test/HEVCTrace.h",
+    "test/VDECClip.h",
+    "test/VP9Clip.h",
+    "test/VP9Trace.h",
+    "test/vp9gen/vpx_config.h",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# HEVCH8.videodecoder: Apple's software HEVC decoder in VideoToolbox's hardware slot, for still images (HEIC) outside the
+# processes that choose streaming codecs.
+ios_binary(
+    name = "HEVCH8",
+    srcs = ["HEVCH8.c"],
+    out = "build/switch-video/HEVCH8.videodecoder",
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "-fvisibility=hidden",
+        "-install_name",
+        "/System/Library/VideoDecoders/HEVCH8.videodecoder",
+    ],
+    pagesize = "4096",
+    sign_identifier = "com.ioswitch.hevch8",
+)
+
+# AVD.videodecoder: H.264, VP9 and HEVC on NVDEC as VideoToolbox's hardware 'avc1', 'vp09' and 'hvc1' decoders
+# (registered where TegraNVDEC is open to the process and the codec passed its boot self-test and clip check), with the
+# once-per-boot clip checks (ClipCheck.c over test/VDECClip.h, test/VP9Clip.h and test/HEVCClip.h).
+ios_binary(
+    name = "AVD",
+    srcs = [
+        "AVD/AVDDecoder.c",
+        "AVD/H264NVDEC.c",
+        "AVD/H264Syntax.c",
+        "AVD/NVDECClient.c",
+        "AVD/BlockLinear.c",
+        "AVD/ClipCheck.c",
+        "AVD/VP9NVDEC.c",
+        "AVD/VP9Syntax.c",
+        "AVD/VP9Probs.c",
+        "AVD/HEVCNVDEC.c",
+        "AVD/HEVCSyntax.c",
+    ],
+    out = "build/switch-video/AVD.videodecoder",
+    hdrs = glob(
+        [
+            "AVD/*.h",
+            "AVD/*.inc",
+        ],
+        allow_empty = True,
+    ) + ["//drivers/TegraNVDEC:headers"] + [
+        "test/VDECClip.h",
+        "test/VP9Clip.h",
+        "test/HEVCClip.h",
+    ],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "-fvisibility=hidden",
+        "-install_name",
+        "/System/Library/VideoDecoders/AVD.videodecoder",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "CoreMedia",
+        "-framework",
+        "CoreVideo",
+        "-framework",
+        "VideoToolbox",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "IOSurface",
+    ],
+    pagesize = "4096",
+    sign_identifier = "com.ioswitch.avd",
+)
+
+# vdectest: the clip check as a command (AVD/ClipCheck.c); on the device the same check runs inside AVD.videodecoder.
+ios_binary(
+    name = "vdectest",
+    srcs = [
+        "test/vdectest.c",
+        "AVD/ClipCheck.c",
+    ],
+    out = "build/switch-video/vdectest",
+    hdrs = [
+        "AVD/ClipCheck.h",
+        "test/HEVCClip.h",
+        "test/VDECClip.h",
+        "test/VP9Clip.h",
+    ],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "CoreMedia",
+        "-framework",
+        "CoreVideo",
+        "-framework",
+        "VideoToolbox",
+    ],
+    sign_identifier = "com.ioswitch.vdectest",
+)

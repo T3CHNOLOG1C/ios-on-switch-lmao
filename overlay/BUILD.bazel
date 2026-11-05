@@ -1,0 +1,17 @@
+# The userland overlay: manifest.json and the files it names (moved from out/native-a57/root-v1/tree/overlay by the layout move).
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files(["manifest.json"])
+
+# The overlay files the manifest names by their path below the kernel tree (plists, tunings), from their drivers.
+filegroup(
+    name = "overlay_sources",
+    srcs = [
+        "//drivers/SwitchAudio:overlay_files",
+        "//drivers/SwitchJoyCon:overlay_files",
+    ],
+)

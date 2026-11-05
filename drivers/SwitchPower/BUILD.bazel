@@ -1,0 +1,58 @@
+# drivers/SwitchPower: moved from out/native-a57/root-v1/tree/drivers/SwitchPower by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# SwitchThermal: fan curve, CPU operating point; SwitchPerfGovernor: the CPU's on-demand governor (perfcontrol callouts);
+# SwitchSensors: SOC_THERM and thermalmonitord's HID temperature sensors (drivers/SwitchPower/CONTRACT.md).
+kernel_driver(
+    name = "SwitchThermal",
+    srcs = [
+        "SwitchThermal.cpp",
+        "SwitchPerfGovernor.cpp",
+        "SwitchSensors.cpp",
+    ],
+    hdr_deps = [
+        "drivers/NativeMobileDisplay",
+        "drivers/SwitchBattery",
+        "drivers/SwitchTouch",
+        "drivers/TegraDFLL",
+        "drivers/TegraGM20B",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
+)
+
+# Boot clock line, MAX77620 RTC (IORTC) and power-off/restart; called from IOKitInitializeTime() (xnu patch).
+kernel_driver(
+    name = "SwitchPMIC",
+    srcs = ["SwitchPMIC.cpp"],
+    hdr_deps = [
+        "drivers/SwitchBrightness",
+        "drivers/TegraBPMP",
+        "drivers/TegraI2C",
+    ],
+)

@@ -1,0 +1,63 @@
+# drivers/TegraDFLL: moved from out/native-a57/root-v1/tree/drivers/TegraDFLL by the layout move.
+load("//bazel/kernel:driver_flags.bzl", "DFLL_C_FLAGS", "LINUX_RELAXATIONS")
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+kernel_driver(
+    name = "TegraDFLL_linux",
+    srcs = [
+        "linux/drivers/clk/tegra/clk-dfll.c",
+        "linux/drivers/clk/tegra/clk-tegra124-dfll-fcpu.c",
+        "linux/drivers/soc/tegra/cvb.c",
+        "linux/drivers/soc/tegra/fuse/speedo-tegra210.c",
+    ],
+    c_copts = DFLL_C_FLAGS + LINUX_RELAXATIONS,
+    c_recipe = ":freestanding_c",
+    hdr_deps = [],
+    object_names = "path",
+)
+
+kernel_driver(
+    name = "TegraDFLL",
+    srcs = [
+        "shim/linux.c",
+        "platform.c",
+        "dfll.c",
+        "shim/xnu_glue.cpp",
+    ],
+    c_copts = DFLL_C_FLAGS,
+    c_recipe = ":freestanding_c",
+    copts = [
+        "-I",
+        "{tree}/drivers/TegraDFLL/shim",
+    ],
+    hdr_deps = [
+        "drivers/TegraI2C",
+    ],
+    object_names = "path",
+    stems = {"xnu_glue.cpp": "shim_xnu_glue.cpp"},
+)

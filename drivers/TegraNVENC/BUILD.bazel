@@ -1,0 +1,45 @@
+# drivers/TegraNVENC: moved from out/native-a57/root-v1/tree/drivers/TegraNVENC by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+    "selftest/E3Vectors.inc",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# TegraNVENC: the NVENC falcon, its job engine, arena and user client (on with NVDEC, E1..E4); its firmware by .incbin.
+kernel_driver(
+    name = "TegraNVENC",
+    srcs = [
+        "TegraNVENC.cpp",
+        "TegraNVENCMemory.cpp",
+        "TegraNVENCSelfTest.cpp",
+        "TegraNVENCUserClient.cpp",
+        "firmware.S",
+    ],
+    hdr_deps = [
+        "drivers/TegraHost1x",
+        "drivers/TegraNVDEC",
+    ],
+    stems = {"firmware.S": "nvenc_firmware"},
+)

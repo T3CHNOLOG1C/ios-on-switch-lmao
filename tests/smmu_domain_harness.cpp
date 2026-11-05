@@ -7,7 +7,7 @@
 #include <cstring>
 #include <vector>
 
-#include "../out/native-a57/root-v1/tree/drivers/TegraSMMU/TegraSMMUDomain.h"
+#include "../drivers/TegraSMMU/TegraSMMUDomain.h"
 
 namespace {
 int failures = 0;

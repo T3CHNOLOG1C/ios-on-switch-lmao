@@ -20,5 +20,5 @@ lint_files()
 
 alias(
     name = "kernel",
-    actual = "//out/native-a57/root-v1/tree:kernel",
+    actual = "//kernel:kernel",
 )

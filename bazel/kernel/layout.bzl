@@ -15,8 +15,8 @@ PATH_ROOT = "/ioswitch"
 OLD_TREE = "out/native-a57/root-v1/tree"
 
 # Where the kernel tree's sources are now ("" = the repository root), and the package of its generated files.
-TREE_ROOT = OLD_TREE
-KERNEL_PACKAGE = OLD_TREE
+TREE_ROOT = ""
+KERNEL_PACKAGE = "kernel"
 
 # The tree's top-level directories that live at TREE_ROOT.
 MOVED_ROOTS = ["drivers", "kits", "diagnostics", "overlay"]

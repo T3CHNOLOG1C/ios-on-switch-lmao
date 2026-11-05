@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-JOYCON = ROOT / 'out/native-a57/root-v1/tree/drivers/SwitchJoyCon'
+JOYCON = ROOT / 'drivers/SwitchJoyCon'
 HARNESS = ROOT / 'tests/switch_joycon_session_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I', str(JOYCON)]
 NONE, CLOSED, REPLACED = 0, 1, 2

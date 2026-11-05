@@ -24,9 +24,9 @@ from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BLUETOOTH = ROOT / 'out/native-a57/root-v1/tree/drivers/SwitchBluetooth'
+BLUETOOTH = ROOT / 'drivers/SwitchBluetooth'
 DRIVER = BLUETOOTH / 'SwitchBluetooth.cpp'
-APBDMA = ROOT / 'out/native-a57/root-v1/tree/drivers/TegraAPBDMA/TegraAPBDMA.cpp'
+APBDMA = ROOT / 'drivers/TegraAPBDMA/TegraAPBDMA.cpp'
 HARNESS = ROOT / 'tests/switch_bluetooth_rx_dma_harness.c'
 FLAGS = [
     '-std=c11',

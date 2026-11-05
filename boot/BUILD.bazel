@@ -60,7 +60,7 @@ boot_package(
     data_seed = "//bazel/pinned:data-seed/data-v10.dbr",
     dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
     exporter = "//bazel/pinned:firmware/exporter.uimg",
-    kernel = "//out/native-a57/root-v1/tree:kernel",
+    kernel = "//kernel:kernel",
     linker_script = NATIVE + ":loader/link.ld",
     loader_hdrs = [
         NATIVE + ":handoff/display.h",
@@ -102,21 +102,21 @@ boot_package(
     # The overlay's Mach-Os (the trust module hashes those the manifest trusts) and its other files, each by the
     # source tree/overlay/manifest.json names it by.
     overlay_binaries = {
-        "//out/native-a57/root-v1/tree:BlueTool": "build/switch-bluetooth/BlueTool",
-        "//out/native-a57/root-v1/tree:SwitchAudioHAL": "build/switch-audio/SwitchAudio.driver/SwitchAudio",
-        "//out/native-a57/root-v1/tree:joyconpaird": "build/switch-joycon/joyconpaird",
-        "//out/native-a57/root-v1/tree:HEVCH8": "build/switch-video/HEVCH8.videodecoder",
-        "//out/native-a57/root-v1/tree:AVD": "build/switch-video/AVD.videodecoder",
-        "//out/native-a57/root-v1/tree:AVE": "build/switch-video/H264H7.videoencoder",
+        "//drivers/SwitchBluetooth:BlueTool": "build/switch-bluetooth/BlueTool",
+        "//drivers/SwitchAudio:SwitchAudioHAL": "build/switch-audio/SwitchAudio.driver/SwitchAudio",
+        "//drivers/SwitchJoyCon:joyconpaird": "build/switch-joycon/joyconpaird",
+        "//drivers/SwitchVideoDecoders:HEVCH8": "build/switch-video/HEVCH8.videodecoder",
+        "//drivers/SwitchVideoDecoders:AVD": "build/switch-video/AVD.videodecoder",
+        "//drivers/SwitchVideoEncoders:AVE": "build/switch-video/H264H7.videoencoder",
     },
     overlay_data = {
         "//bazel/pinned:overlay/apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
         "//bazel/pinned:overlay/wallpaper-1x/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/7570.iPadOS_17_Flat.plist",
         "//bazel/pinned:overlay/wallpaper-1x/7560.Lake_Flat.plist": "build/wallpaper-1x/7560.Lake_Flat.plist",
     },
-    overlay_files = ["//out/native-a57/root-v1/tree:overlay_sources"],
-    overlay_manifest = "//out/native-a57/root-v1/tree:overlay/manifest.json",
-    portrait_header = "//out/native-a57/root-v1/tree:drivers/NativeMobileDisplay/IOSwitchPortrait.h",
+    overlay_files = ["//overlay:overlay_sources"],
+    overlay_manifest = "//overlay:manifest.json",
+    portrait_header = "//drivers/NativeMobileDisplay:IOSwitchPortrait.h",
     static_trust = "//ipsw:static_system_trust",
     template = ":raw-v24-boot.cmd",
 )

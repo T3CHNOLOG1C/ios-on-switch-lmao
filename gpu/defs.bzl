@@ -255,7 +255,7 @@ raw_stack = rule(
 
 def _metal_raw_pack_impl(ctx):
     out = ctx.actions.declare_directory(ctx.attr.name)
-    tree = ctx.file.generator.dirname.rsplit("/drivers/", 1)[0]
+    tree = ctx.file.generator.dirname.partition("drivers/TegraGM20BMetal/")[0].rstrip("/") or "."
     twin = _twin(ctx, ctx.executable._seed_tool)
     args = ctx.actions.args()
     args.add("--xcode-env", ctx.file._xcode_env)
@@ -364,7 +364,7 @@ m2v_library_names = rule(
     attrs = {
         "libraries": attr.label(mandatory = True, doc = "@gpu_apple_libs//:libraries (root/<device path>)"),
         "_tool": attr.label(
-            default = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:libraries",
+            default = "//drivers/TegraGM20BMetal:libraries",
             executable = True,
             cfg = "exec",
         ),

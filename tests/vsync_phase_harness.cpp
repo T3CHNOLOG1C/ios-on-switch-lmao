@@ -10,7 +10,7 @@
 #include <random>
 #include <string>
 #include <vector>
-#include "../out/native-a57/root-v1/tree/drivers/NativeMobileDisplay/VsyncPhase.h"
+#include "../drivers/NativeMobileDisplay/VsyncPhase.h"
 
 static unsigned gChecks = 0, gFailures = 0;
 static void check(bool ok, const std::string &what)

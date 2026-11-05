@@ -1,0 +1,34 @@
+# drivers/SwitchNVRAM: moved from out/native-a57/root-v1/tree/drivers/SwitchNVRAM by the layout move.
+load("//bazel/kernel:driver_flags.bzl", "BLOCK_FLAGS")
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+kernel_driver(
+    name = "SwitchNVRAM",
+    copts = BLOCK_FLAGS,
+    hdr_deps = [],
+)

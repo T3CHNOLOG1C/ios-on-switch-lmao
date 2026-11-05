@@ -19,7 +19,7 @@ TESTS = glob(["test_*.py"])
         "*.h",
     ]) + [
         "//native:all_sources",
-        "//out/native-a57/root-v1/tree:lint_sources",
+        "//kernel:lint_sources",
         "//out/native-a57/root-v1/tree/patches:xnu-ioswitch.diff",
         "//tools/package:sources",
         "//tools:lz4",

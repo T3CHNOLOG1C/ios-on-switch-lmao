@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DISPLAY = ROOT / "out/native-a57/root-v1/tree/drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp"
+DISPLAY = ROOT / "drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp"
 
 
 def body(source, signature):

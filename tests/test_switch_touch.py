@@ -33,7 +33,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DRIVERS = ROOT / "out/native-a57/root-v1/tree/drivers"
+DRIVERS = ROOT / "drivers"
 TOUCH = DRIVERS / "SwitchTouch/SwitchTouch.cpp"
 HID = DRIVERS / "SwitchTouch/SwitchHIDDevice.cpp"
 I2C = DRIVERS / "TegraI2C/TegraI2C.cpp"

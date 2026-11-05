@@ -27,10 +27,10 @@
 #include <set>
 #include "switch_touch_stubs.h"
 #include "tegra_i2c_host_model.h"
-#include "../out/native-a57/root-v1/tree/drivers/SwitchTouch/SwitchHID.h"
-#include "../out/native-a57/root-v1/tree/drivers/SwitchTouch/SwitchTouch.h"
-#include "../out/native-a57/root-v1/tree/drivers/TegraAPBDMA/TegraAPBDMA.h"
-#include "../out/native-a57/root-v1/tree/drivers/TegraGPIO/TegraGPIO.h"
+#include "../drivers/SwitchTouch/SwitchHID.h"
+#include "../drivers/SwitchTouch/SwitchTouch.h"
+#include "../drivers/TegraAPBDMA/TegraAPBDMA.h"
+#include "../drivers/TegraGPIO/TegraGPIO.h"
 
 static unsigned gChecks = 0, gFailures = 0;
 static void check(bool ok, const std::string &what)

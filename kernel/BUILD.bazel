@@ -1,6 +1,11 @@
-# The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/kernel:inputs.bzl", "tool_output")
+load("//bazel/kernel:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_link", "kernel_prelink", "stage_files")
+load("//bazel/kernel:sdk.bzl", "kernel_sdk", "outer_headers", "xnu_headers")
+load("//bazel/kernel:xnu.bzl", "kernel_firehose", "kernel_sdkroot", "xnu_build")
 load("//bazel/lint:defs.bzl", "lint_files")
+# The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
 
 package(default_visibility = ["//visibility:public"])
 
@@ -22,5 +27,434 @@ config_setting(
 # The selected XNU's SDK for the kernel's compiles (headers and the paths the kernel toolchain names).
 alias(
     name = "sdk",
-    actual = select({":xnu_10063_141_1": "//out/native-a57/root-v1/tree:kernel_sdk"}),
+    actual = select({":xnu_10063_141_1": "//kernel:kernel_sdk"}),
+)
+
+exports_files(["build-options.json"])
+
+# Headers every driver may include besides its own (bazel/kernel/kernel.bzl EXTRA_HEADERS).
+cc_library(
+    name = "hdrs_extra",
+    hdrs = ["//drivers/NativeMetal:OriginalAcceleratorABI.h"],
+    tags = ["kernel"],
+    target_compatible_with = ["//bazel/platforms:kernel"],
+)
+
+# What the host tests compile from the kernel tree: every package's files (each package's :all_files).
+filegroup(
+    name = "lint_sources",
+    srcs = [
+        "//diagnostics/ioswitch:all_files",
+        "//drivers/ArmCpu:all_files",
+        "//drivers/ArmDTPlatform:all_files",
+        "//drivers/ArmGIC:all_files",
+        "//drivers/ArmVirtPlatform:all_files",
+        "//drivers/IOSwitchAccelStub:all_files",
+        "//drivers/NativeAES:all_files",
+        "//drivers/NativeAdreno:all_files",
+        "//drivers/NativeGeniSpi:all_files",
+        "//drivers/NativeHidInput:all_files",
+        "//drivers/NativeIOSwitchBlock:all_files",
+        "//drivers/NativeIOSwitchWatchdog:all_files",
+        "//drivers/NativeKeyStoreEvents:all_files",
+        "//drivers/NativeMobileDisplay:all_files",
+        "//drivers/NativeRamBlock:all_files",
+        "//drivers/NativeUfs:all_files",
+        "//drivers/NativeVirtioBlock:all_files",
+        "//drivers/NativeVirtioConsole:all_files",
+        "//drivers/SwitchAudio:all_files",
+        "//drivers/SwitchBattery:all_files",
+        "//drivers/SwitchBluetooth:all_files",
+        "//drivers/SwitchBrightness:all_files",
+        "//drivers/SwitchButtons:all_files",
+        "//drivers/SwitchJoyCon:all_files",
+        "//drivers/SwitchMotion:all_files",
+        "//drivers/SwitchNVRAM:all_files",
+        "//drivers/SwitchPower:all_files",
+        "//drivers/SwitchSuspend:all_files",
+        "//drivers/SwitchTouch:all_files",
+        "//drivers/SwitchUSB:all_files",
+        "//drivers/SwitchVideoDecoders:all_files",
+        "//drivers/SwitchVideoEncoders:all_files",
+        "//drivers/SwitchWLAN:all_files",
+        "//drivers/TegraAPBDMA:all_files",
+        "//drivers/TegraBPMP:all_files",
+        "//drivers/TegraDFLL:all_files",
+        "//drivers/TegraDisplayFlip:all_files",
+        "//drivers/TegraGM20B:all_files",
+        "//drivers/TegraGPIO:all_files",
+        "//drivers/TegraHost1x:all_files",
+        "//drivers/TegraI2C:all_files",
+        "//drivers/TegraNVDEC:all_files",
+        "//drivers/TegraNVENC:all_files",
+        "//drivers/TegraNVJPG:all_files",
+        "//drivers/TegraSE:all_files",
+        "//drivers/TegraSMMU:all_files",
+        "//drivers/TegraSPI:all_files",
+        "//drivers/TegraVIC:all_files",
+        "//kits/AdrenoFirmware:all_files",
+        "//kits/AdrenoPM4:all_files",
+        "//kits/AirNir:all_files",
+        "//kits/ArmSmmu4K:all_files",
+        "//kits/NativePrelink:all_files",
+        "//kits/VerifiedRoot:all_files",
+        "//kits/qemu:all_files",
+    ],
+)
+
+# --- The kernel SDK root (the CMake flow's .cache/fakeroot) -------------------------------------------------------
+# Its headers need the patched XNU (its makedefs take XNU_AVAILABILITY_PL/KERNEL_SDKROOT). Unlike the CMake flow's
+# fakeroot, which installhdrs filled once and never refreshed, this one follows the patch.
+kernel_sdkroot(
+    name = "fakeroot_headers",
+    out = ".cache/fakeroot-headers",
+    xnu = "@xnu//:all",
+)
+
+kernel_firehose(
+    name = "fakeroot",
+    sdkroot = ":fakeroot_headers",
+    xnu = "@xnu//:all",
+)
+
+# --- XNU ------------------------------------------------------------------------------------------------------------
+# The kernel's XNU options are the smp pass's build-options.json (its archive paths are unused: kernel_link names the
+# archives built here).
+xnu_build(
+    name = "xnu",
+    headers = [
+        "//diagnostics/ioswitch:headers",
+        "//drivers/NativeIOSwitchBlock:headers",
+        "//kits/VerifiedRoot:headers",
+    ],
+    options = "//kernel:build-options.json",
+    sdkroot = ":fakeroot",
+    xnu = "@xnu//:all",
+)
+
+# --- What the kernel's code compiles against (bazel/kernel/sdk.bzl; the flags are bazel/toolchains/kernel's) -------
+# XNU's headers without its objects: an XNU change that leaves the headers alone recompiles no driver.
+xnu_headers(
+    name = "xnu_headers",
+    xnu = ":xnu",
+    xnu_source = "@xnu//:all",
+)
+
+# The kernel SDK for the kernel's cc targets (every kernel_driver depends on it) and the kernel toolchain (its paths).
+kernel_sdk(
+    name = "kernel_sdk",
+    # XNU's build options put -I diagnostics/ioswitch on every kernel compile (xnu_build.py XNU_EXTRA_CFLAGS).
+    extra = ["//diagnostics/ioswitch:headers"],
+    headers = ":xnu_headers",
+    xnu_source = "@xnu//:all",
+)
+
+# Generated headers the drivers' flags name ({build}/<dir>): built once, in the configuration that asks for the kernel.
+outer_headers(
+    name = "gen_storage_abi",
+    srcs = [":storage_abi"],
+)
+
+outer_headers(
+    name = "gen_native_data_seed",
+    srcs = [":native_data_seed_header"],
+)
+
+outer_headers(
+    name = "gen_pinned_headers",
+    srcs = [":pinned_headers"],
+)
+
+# --- Generated and pinned inputs, where the CMake flow's -I flags expected them (tree/build/<dir>) -----------------
+stage_files(
+    name = "pinned_headers",
+    files = {
+        "//bazel/pinned:kernel/native-legacy-display/OriginalLegacyFramebufferABI.h": "build/native-legacy-display/OriginalLegacyFramebufferABI.h",
+        "//bazel/pinned:kernel/native-hid-input/OriginalHidDeviceABI.h": "build/native-hid-input/OriginalHidDeviceABI.h",
+        "//bazel/pinned:kernel/sheng-platform-power/OriginalPMGRABI.h": "build/sheng-platform-power/OriginalPMGRABI.h",
+        "//bazel/pinned:kernel/sheng-platform-power/GuardedPMGRSlots.inc": "build/sheng-platform-power/GuardedPMGRSlots.inc",
+    },
+)
+
+tool_output(
+    name = "storage_abi",
+    srcs = ["@iostoragefamily//:all"],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--source=external/+http_archive+iostoragefamily",
+        "--out={out}",
+    ],
+    message = "IOStorageFamily-315 headers (storage-abi)",
+    out_dirs = ["build/storage-abi/include"],
+    tool = "storage_abi.py",
+)
+
+# NativeRamBlock's seed pins: a pure function of the pinned seed and its volume UUID (XNU_OWNER_DATA_VOLUME_UUID).
+tool_output(
+    name = "native_data_seed_header",
+    srcs = ["//bazel/pinned:data-seed/data-v10.dbr"],
+    outs = ["build/native-ram-block/NativeDataSeed.h"],
+    args = [
+        "$(location //bazel/pinned:data-seed/data-v10.dbr)",
+        "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9",
+        "{out}",
+    ],
+    tool = "data_seed.py",
+)
+
+# --- Corecrypto, libpthread (Apple sources, built against this XNU) ---------------------------------------------------
+# XNU's symbol names: what corecrypto namespaces against. A change that adds or removes no XNU symbol leaves the list,
+# and so corecrypto's archive, alone.
+tool_output(
+    name = "xnu_symbols",
+    srcs = [":xnu"],
+    outs = ["build/xnu/kernel-names.txt"],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--objroot=$(execpath :xnu)",
+        "--out={out}",
+    ],
+    message = "Listing XNU's symbol names",
+    tool = "xnu_symbols.py",
+)
+
+tool_output(
+    name = "corecrypto",
+    srcs = [
+        ":fakeroot",
+        ":xnu_symbols",
+        "@corecrypto//:all",
+    ],
+    outs = [
+        "build/corecrypto-2023/libcorecrypto_kernel_noasm-namespaced.a",
+        "build/corecrypto-2023/namespace.h",
+    ],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--source=external/+http_archive+corecrypto",
+        "--sdkroot=$(location :fakeroot)",
+        "--kernel-names=$(location :xnu_symbols)",
+        "--out={out0}",
+        "--namespace-header={out1}",
+        "--path-root={path_root}",
+    ],
+    message = "Compiling corecrypto 2023 for the kernel (plain, then namespaced)",
+    mnemonic = "KernelCorecrypto",
+    tool = "corecrypto.py",
+)
+
+tool_output(
+    name = "libpthread",
+    srcs = [
+        ":fakeroot",
+        ":xnu",
+        "@libpthread//:all",
+        "@xnu//:all",
+    ],
+    outs = [
+        "build/libpthread-kernel/libpthread_kernel.a",
+        "build/libpthread-kernel/source_pthread_bootstrap.o",
+    ],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--source=external/+http_archive+libpthread",
+        "--xnu=external/+http_archive+xnu",
+        "--sdkroot=$(location :fakeroot)",
+        "--objroot=$(execpath :xnu)",
+        "--out={out0}",
+        "--bootstrap-out={out1}",
+        "--path-root={path_root}",
+        "--bin-dir={bin_dir}",
+    ],
+    message = "Compiling libpthread-519.120.4's kernel component",
+    mnemonic = "KernelLibpthread",
+    tool = "libpthread.py",
+)
+
+kernel_archive(
+    name = "libNativeIOSwitchBlockDevice",
+    out = "build/native-ioswitch-root/libNativeIOSwitchBlockDevice.a",
+    members = [
+        "//drivers/NativeIOSwitchBlock:NativeIOSwitchBlock",
+        "//drivers/SwitchNVRAM:SwitchNVRAM",
+        "//drivers/TegraGPIO:TegraGPIO",
+        "//drivers/TegraI2C:TegraI2C",
+        "//drivers/TegraSPI:TegraSPI",
+        "//drivers/TegraAPBDMA:TegraAPBDMA",
+        "//drivers/TegraSE:TegraSE",
+        "//drivers/SwitchPower:SwitchThermal",
+        "//drivers/SwitchBattery:SwitchBattery",
+        "//drivers/SwitchBluetooth:SwitchBluetooth",
+        "//drivers/SwitchPower:SwitchPMIC",
+        "//drivers/SwitchSuspend:SwitchSuspend",
+        "//drivers/SwitchAudio:SwitchAudio",
+        "//drivers/SwitchWLAN:SwitchWLAN",
+        "//drivers/TegraGM20B:TegraGM20B_nvkm",
+        "//drivers/TegraGM20B:TegraGM20B",
+        "//drivers/TegraBPMP:TegraBPMP",
+        "//drivers/TegraDFLL:TegraDFLL_linux",
+        "//drivers/TegraDFLL:TegraDFLL",
+        "//drivers/TegraHost1x:TegraHost1x",
+        "//drivers/TegraNVDEC:TegraNVDEC",
+        "//drivers/TegraNVENC:TegraNVENC",
+        "//drivers/TegraSMMU:TegraSMMU",
+        "//drivers/TegraVIC:TegraVIC",
+        "//drivers/TegraNVJPG:TegraNVJPG",
+        "//drivers/SwitchUSB:SwitchUSB",
+    ],
+)
+
+# XNU's mockfs.
+kernel_driver(
+    name = "mockfs",
+    srcs = [
+        "@xnu//:bsd/miscfs/mockfs/mockfs_fsnode.c",
+        "@xnu//:bsd/miscfs/mockfs/mockfs_vfsops.c",
+        "@xnu//:bsd/miscfs/mockfs/mockfs_vnops.c",
+    ],
+    c_copts = ["-DMOCKFS=1"],
+    c_recipe = ":mockfs_c",
+    hdr_deps = [],
+)
+
+kernel_archive(
+    name = "libNativeLegacyDisplay",
+    out = "build/native-legacy-display/libNativeLegacyDisplay.late.a",
+    members = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay",
+        "//kits/qemu:QemuProbes",
+        "//drivers/NativeKeyStoreEvents:NativeKeyStoreEvents",
+        "//drivers/NativeHidInput:NativeHidInput",
+        "//drivers/NativeMobileDisplay:NativeGOPPresenter",
+        "//drivers/SwitchTouch:SwitchTouch",
+        "//drivers/SwitchButtons:SwitchButtons",
+        "//drivers/SwitchMotion:SwitchMotion",
+        "//drivers/SwitchBrightness:SwitchBrightness",
+        "//drivers/SwitchJoyCon:SwitchJoyCon",
+        "//drivers/IOSwitchAccelStub:IOSwitchAccelStub",
+        "//drivers/NativeIOSwitchWatchdog:NativeIOSwitchWatchdog",
+        "//drivers/NativeKeyStoreEvents:AKSDeviceKey",
+    ],
+)
+
+kernel_archive(
+    name = "libArmCpu",
+    out = "build/armcpu/libArmCpu.a",
+    members = [
+        "//drivers/ArmCpu:ArmCpu",
+        "//drivers/ArmGIC:ArmGIC",
+    ],
+)
+
+kernel_archive(
+    name = "libArmDTPlatform",
+    out = "build/armdt-platform/libArmDTPlatform.a",
+    members = ["//drivers/ArmDTPlatform:ArmDTPlatform"],
+)
+
+kernel_archive(
+    name = "libNativeAES",
+    out = "build/native-aes/libNativeAES.a",
+    members = ["//drivers/NativeAES:NativeAES"],
+)
+
+kernel_archive(
+    name = "libVerifiedRootProbe",
+    out = "build/verified-root-ioswitch/libVerifiedRootProbe.a",
+    members = ["//kits/VerifiedRoot:VerifiedRoot"],
+)
+
+kernel_archive(
+    name = "libmockfs_fixture",
+    out = "build/mockfs-fixture/libmockfs_fixture.a",
+    members = [":mockfs"],
+)
+
+kernel_archive(
+    name = "libShengPlatformPower",
+    out = "build/sheng-platform-power/libShengPlatformPower.a",
+    members = ["//kits/qemu:ShengPlatformPower"],
+)
+
+kernel_archive(
+    name = "libIOSwitchDiag",
+    out = "build/ioswitch-diag/libIOSwitchDiag.a",
+    members = ["//diagnostics/ioswitch:IOSwitchDiag"],
+)
+
+kernel_archive(
+    name = "libLinkStubs",
+    out = "build/link-stubs/libLinkStubs.a",
+    members = ["//kits/qemu:LinkStubs"],
+)
+
+# --- Link: XNU's recorded link with LD_KERNEL_ARCHIVES as the XNU build script assembled it for these options ----------
+kernel_link(
+    name = "kernel_unprelinked",
+    inputs = [
+        ":corecrypto",
+        ":libArmDTPlatform",
+        ":libArmCpu",
+        ":libNativeLegacyDisplay",
+        ":libNativeAES",
+        ":libNativeIOSwitchBlockDevice",
+        "//drivers/NativeRamBlock:NativeRamBlock",
+        ":libpthread",
+        ":libVerifiedRootProbe",
+        ":libmockfs_fixture",
+        ":libShengPlatformPower",
+        ":libIOSwitchDiag",
+        ":libLinkStubs",
+    ],
+    modes = [
+        "plain",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "plain",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "plain",
+    ],
+    xnu = ":xnu",
+)
+
+# --- Prelink: Apple's original kexts (the V20 roots, plus every driver's prelink list) --------------------------------
+tool_output(
+    name = "dma_prelink_report",
+    srcs = ["//bazel/pinned:prelink/dma-kernel.json.xz"],
+    outs = ["build/prelink/dma-kernel.json"],
+    args = [
+        "$(location //bazel/pinned:prelink/dma-kernel.json.xz)",
+        "{out}",
+        "012162a73b3cb2c8306e7e0a98bae2bdfb4f6cf91d7698feac787939d0c5ffd0",
+    ],
+    tool = "unxz.py",
+)
+
+kernel_prelink(
+    name = "kernel",
+    base_roots = [
+        "com.apple.driver.AppleMobileFileIntegrity",
+        "com.apple.filesystems.apfs",
+        "com.apple.security.sandbox",
+        "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
+        "com.apple.iokit.IOMobileGraphicsFamily",
+        "com.apple.iokit.IOSurface",
+        "com.apple.iokit.IOHIDFamily",
+        "com.apple.driver.DiskImages",
+        "com.apple.driver.DiskImages.FileBackingStore",
+        "com.apple.driver.DiskImages.KernelBacked",
+        "com.apple.driver.DiskImages.ReadWriteDiskImage",
+    ],
+    early_security_init = ["com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"],
+    inherit_report = ":dma_prelink_report",
+    kernel = ":kernel_unprelinked",
+    previous = "//bazel/pinned:prelink/dma-prelink.json",
+    slide = "-0x1000000",
 )

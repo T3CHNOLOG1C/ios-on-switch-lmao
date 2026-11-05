@@ -13,7 +13,7 @@ bundles/
 *.HEIC
 *.heic
 # ...except the video decoder's test inputs
-!/out/native-a57/root-v1/tree/drivers/SwitchVideoDecoders/test/*.heic
+!/drivers/SwitchVideoDecoders/test/*.heic
 
 # Editor/agent leftovers
 *.orig
@@ -40,7 +40,7 @@ bundles/
 /out/native-a57/root-v1/passes/*
 !/out/native-a57/root-v1/passes/native-root-smp-v1/
 /out/native-a57/root-v1/passes/native-root-smp-v1/*
-!/out/native-a57/root-v1/passes/native-root-smp-v1/build-options.json
+!/kernel/build-options.json
 !/out/native-a57/root-v1/passes/native-root-smp-v1/prelink-command.json
 !/out/native-a57/root-v1/passes/native-root-smp-v1/BUILD.bazel
 !/out/native-a57/root-v1/passes/native-root-smp-v1/source/

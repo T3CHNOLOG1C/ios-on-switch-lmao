@@ -1,0 +1,106 @@
+# The TegraGM20B Metal plugin's sources, its m2v patch series and the precompile/stage tools. The bundle itself is
+# built by //gpu:bundle (gpu/BUILD.bazel); the device-side tools here are what //deploy:* runs.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+# raw/pack/mesa is Mesa's code, kept as upstream has it; srgb_knots.inc is m2v's SRGB_KNOTS table, generated.
+lint_files(exclude = [
+    "raw/pack/mesa/**",
+    "raw/pack/srgb_knots.inc",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "patches",
+    srcs = glob(["patches/**/*.patch"]) + ["patches/series"],
+)
+
+# The raw GM20B path: its runtime (compiled into the plugin), its pack generator, and every source its stack key hashes
+# (every .h/.c/.cpp/.mm/.py/.inc below raw/, the old build's raw_stack()).
+filegroup(
+    name = "raw_runtime_headers",
+    srcs = glob(["raw/runtime/*.h", "raw/fx/*.h"]),
+)
+
+# Not a hand run's leftovers: a .pyc of the modules (the host Python's) in a checkout would change the raw pack's action key
+# there and nowhere else, so that checkout's pack never hits the disk cache another checkout filled, and the other way round.
+filegroup(
+    name = "raw_pack_generator",
+    srcs = glob(
+        ["raw/pack/**"],
+        exclude = [
+            "**/__pycache__/**",
+            "**/*.pyc",
+            "**/.DS_Store",
+        ],
+    ),
+)
+
+filegroup(
+    name = "raw_stack_sources",
+    srcs = glob(["raw/**/*.%s" % suffix for suffix in ("h", "c", "cpp", "mm", "py", "inc")]),
+)
+
+# The pack generator (raw/pack/rawpack.py and the modules it imports); //tools/gpu:rawpack runs it.
+py_library(
+    name = "raw_pack",
+    srcs = glob(["raw/pack/*.py"]),
+)
+
+# Developer tools, `bazel run //drivers/TegraGM20BMetal:<name> -- ...`: the shader corpus
+# (corpus/tools), the raw path's draw-order check, and the dyld shared cache import check.
+[py_binary(
+    name = tool,
+    srcs = ["corpus/tools/%s.py" % tool],
+    main = "corpus/tools/%s.py" % tool,
+) for tool in [
+    "categorize",
+    "dsc_metallibs",
+    "dsc_owner",
+    "make_corpus",
+    "mtlb_extract",
+    "report",
+    "run_corpus",
+    "runtime_compile_callers",
+]]
+
+py_binary(
+    name = "ordercheck",
+    srcs = ["raw/test/ordercheck.py"],
+    main = "raw/test/ordercheck.py",
+)
+
+py_binary(
+    name = "check_dyld_cache_imports",
+    srcs = ["check-dyld-cache-imports.py"],
+    main = "check-dyld-cache-imports.py",
+)
+
+# Merges the shader journals of a mounted Data volume into precompile/corpus.log and stages the device's own data (deploy's
+# log pull runs it); --pack makes @gpu_device_data's tar of it.
+py_binary(
+    name = "harvest",
+    srcs = ["precompile/harvest.py"],
+    main = "precompile/harvest.py",
+)
+
+# The OS volume's library pins (pins), names.json (names: //gpu:library_names) and the corpus's libraries (resolve: the seed).
+py_binary(
+    name = "libraries",
+    srcs = ["precompile/libraries.py"],
+    main = "precompile/libraries.py",
+)
+
+# Stages a built bundle (//gpu:bundle's directory) onto a mounted Data volume (deploy --stage-gpu runs it).
+py_binary(
+    name = "stage",
+    srcs = ["stage-tegra-gm20b-metal.py"],
+    main = "stage-tegra-gm20b-metal.py",
+)

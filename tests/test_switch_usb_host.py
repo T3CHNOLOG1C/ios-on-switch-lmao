@@ -27,7 +27,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TREE = ROOT / 'out/native-a57/root-v1/tree'
+TREE = ROOT / '.'
 USB = TREE / 'drivers/SwitchUSB'
 HARNESS = ROOT / 'tests/switch_usb_host_harness.c'
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wconversion', '-Wsign-conversion', '-I', str(USB)]

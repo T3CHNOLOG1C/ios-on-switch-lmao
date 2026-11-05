@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-GM20B = ROOT / "out/native-a57/root-v1/tree/drivers/TegraGM20B"
+GM20B = ROOT / "drivers/TegraGM20B"
 
 
 def flat(text):

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DRIVER = ROOT / "out/native-a57/root-v1/tree/drivers/SwitchMotion/SwitchMotion.cpp"
+DRIVER = ROOT / "drivers/SwitchMotion/SwitchMotion.cpp"
 HEADERS = ["IOKit/IOInterruptEventSource.h", "IOKit/IOLib.h", "IOKit/IOService.h", "IOKit/IOTimerEventSource.h",
            "IOKit/IOWorkLoop.h", "IOKit/IOReturn.h", "os/log.h"]
 
@@ -56,7 +56,7 @@ class SwitchMotionTests(unittest.TestCase):
         """The motion services' feature report carries the Sensor-page usages 21H461's IOHIDEventDriver knows: Report
         Interval 0x30e and Report Latency 0x31b (0x316 is Reporting State, which no element takes: BatchInterval never
         reached the driver and FIFO batching never ran before r17)."""
-        hid = (ROOT / "out/native-a57/root-v1/tree/drivers/SwitchTouch/SwitchHIDDevice.cpp").read_text()
+        hid = (ROOT / "drivers/SwitchTouch/SwitchHIDDevice.cpp").read_text()
         motion = hid.split("#define MOTION_DESCRIPTOR", 1)[1].split("#undef MOTION_DESCRIPTOR", 1)[0]
         self.assertIn("0x0a, 0x0e, 0x03,", motion)
         self.assertIn("0x0a, 0x1b, 0x03,", motion)
@@ -69,7 +69,7 @@ class SwitchMotionTests(unittest.TestCase):
         apply = source.split("void SwitchMotion::apply(", 1)[1].split("\n}\n", 1)[0]
         self.assertNotIn("!detector)", apply)
         self.assertIn("kOrientationBatchUS", apply)
-        backlight = (ROOT / "out/native-a57/root-v1/tree/drivers/SwitchBrightness/SwitchBacklight.cpp").read_text()
+        backlight = (ROOT / "drivers/SwitchBrightness/SwitchBacklight.cpp").read_text()
         self.assertEqual(backlight.count("switch_motion_display_power("), 3)  # the weak default, off and on
 
 

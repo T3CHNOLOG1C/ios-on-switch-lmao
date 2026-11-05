@@ -1,0 +1,45 @@
+# kits/VerifiedRoot: moved from out/native-a57/root-v1/tree/kits/VerifiedRoot by the layout move.
+load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+# This package's headers (kernel_headers): what other drivers' hdr_deps name.
+kernel_headers()
+
+# Verified root policy.
+kernel_driver(
+    name = "VerifiedRoot",
+    srcs = [
+        "src/verified_root.c",
+        "adapters/xnu_crypto.c",
+        "//bazel/pinned:kernel/verified-root-ioswitch/trusted-key.S",
+    ],
+    c_copts = [
+        "-I{tree}/kits/VerifiedRoot/include",
+        "-Werror",
+        "-mgeneral-regs-only",
+        "-mstrict-align",
+    ],
+    c_recipe = ":bsd_c",
+    hdr_deps = [],
+)
