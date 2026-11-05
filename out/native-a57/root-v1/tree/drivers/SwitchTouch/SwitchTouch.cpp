@@ -40,6 +40,10 @@ extern "C" __attribute__((weak)) bool switch_display_is_on(void)
     return true;
 }
 
+// SwitchBrightness (SwitchALS.cpp): LDO6 also feeds the ambient light sensor's I2C side, which waits for it. Weak, as
+// above.
+extern "C" __attribute__((weak)) void switch_als_supply(bool) {}
+
 namespace {
 constexpr unsigned kBus = 3, kPmicBus = 5;
 constexpr uint8_t kTouch = 0x49, kPmic = 0x3c;
@@ -214,7 +218,8 @@ void SwitchTouch::powerUp()
     IOSleep(1);
     tegra_gpio_output(TEGRA_GPIO_TOUCH_RESET, 1);
     IOSleep(10);
-    waitEvent(EvReady, 20);  // as hekate: the reset below waits for it again
+    switch_als_supply(true);  // LDO6 on for 12 ms or more: L4T's bh1730 waits 10 ms after its supplies
+    waitEvent(EvReady, 20);   // as hekate: the reset below waits for it again
 }
 
 // hekate touch_init (chip id, system reset, sensing), three attempts.
@@ -385,6 +390,7 @@ void SwitchTouch::powerDown()
     irq->disable();
     releaseAll();
     running = false;
+    switch_als_supply(false);  // first: the sensor powers down while it still has LDO6
     tegra_gpio_output(TEGRA_GPIO_TOUCH_RESET, 0);
     uint8_t ldo = 0;
     if (!tegra_i2c_read(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1)) {

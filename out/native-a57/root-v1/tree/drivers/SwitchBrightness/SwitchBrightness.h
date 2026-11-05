@@ -43,8 +43,14 @@ bool native_legacy_display_set_scanout(bool on);
 
 // Starts the ambient light sensor (unless switch-als=0: then returns 0 and does nothing). Needs TegraI2C, the GIC and
 // IOHIDFamily (switch_hid_create loads it); thread context, may sleep. Publishes the HID service at once and talks to the
-// sensor at its first sample (SwitchTouch powers it), panicking with the reason if it does not answer. 0 on success.
+// sensor at its first sample after LDO6 is on (switch_als_supply). A sensor that does not answer, or no LDO6 within
+// 20 s, logs one line and leaves it off; a lost display frame end panics. 0 on success.
 int switch_als_start(void);
+
+// SwitchTouch, on its work loop: LDO6 (the touch panel's 2.9 V, also the sensor's I2C reference and, by Horizon's
+// I2C2 bus regulator, the bus's pull-ups) is on and has been for 10 ms or more (true), or is about to go off (false).
+// Before switch_als_start() the state is kept for it. Thread context.
+void switch_als_supply(bool on);
 
 // True once the ALS HID service is registered: MobileGestalt's ambient-light-sensor is then true (XNU's kern_exec drops
 // MobileGestalt's cache when this differs from the last boot's). Any context.

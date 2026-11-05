@@ -3,7 +3,10 @@
 //
 // Buses use Tegra numbering, 1..5 (I2C1 0x7000C000 .. I2C5/PWR_I2C 0x7000D000):
 //   I2C1 100 kHz  MAX17050 fuel gauge 0x36, BQ24193 charger 0x6B, BM92T36 USB-PD 0x18
-//   I2C2 400 kHz  (ALS etc.)
+//   I2C2 400 kHz  BH1730FVC ALS 0x29, our only user (Atmosphere i2c_bus_device_map.inc also lists the INA226
+//                 power monitors 0x40-0x4e of development units and Hoag's NFC IC 0x08). Horizon enables a bus
+//                 regulator at 2.9 V before using I2C2 (i2c_bus_accessor.cpp); the only 2.9 V rail is MAX77620 LDO6
+//                 (switchbrew PCV: "TouchPanel, ALS"), so the pull-ups are taken to be on LDO6 (inferred).
 //   I2C3 400 kHz  FTM4 touch 0x49
 //   I2C4 100 kHz  CAM_I2C pads
 //   I2C5 400 kHz  MAX77620 PMIC 0x3C (shared, see below)
@@ -75,6 +78,12 @@ int tegra_i2c_read(unsigned bus, uint8_t addr, uint8_t reg, void *buf, size_t le
 
 // Register write: reg followed by len (<= TEGRA_I2C_MAX_REG_WRITE) bytes, then STOP.
 int tegra_i2c_write(unsigned bus, uint8_t addr, uint8_t reg, const void *buf, size_t len);
+
+// One line for a driver's give-up message: the bus's pinmux and drive (now, and as the boot chain left them), CNFG,
+// CLK_DIVISOR and INTERFACE_TIMING_0, the last bus clear's outcome and BUS_CLEAR_STATUS, and the last failed packet's
+// address, INT_STATUS and PACKET_TRANSFER_STATUS as the controller had them before recovery reset it (address or data
+// NACK, bytes sent). Thread context; waits for a transfer in flight.
+void tegra_i2c_describe(unsigned bus, char *buffer, size_t size);
 
 // The last transfers of the boot: SwitchPMIC's Shut Down / Restart (PE_halt_restart), and nothing else. The one polled
 // path in this driver: the packet is queued and INT_STATUS polled until it ends (same budget as an interrupt-driven

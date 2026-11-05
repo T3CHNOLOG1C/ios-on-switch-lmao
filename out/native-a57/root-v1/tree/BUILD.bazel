@@ -573,6 +573,15 @@ py_test(
     tags = ["requires-darwin"],
 )
 
+py_test(
+    name = "als_test",
+    size = "small",
+    srcs = ["drivers/SwitchBrightness/test_als.py"],
+    data = glob(["drivers/SwitchBrightness/**"]) + ["drivers/TegraI2C/TegraI2C.cpp"],
+    main = "drivers/SwitchBrightness/test_als.py",
+    tags = ["requires-darwin"],
+)
+
 [py_test(
     name = "sdmmc_%s_test" % kind,
     size = "small",

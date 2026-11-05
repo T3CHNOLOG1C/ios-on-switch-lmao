@@ -37,6 +37,7 @@ enum : uint32_t {
     SL_ADDR2 = 0x30,
     TX_FIFO = 0x50,
     RX_FIFO = 0x54,
+    PACKET_TRANSFER_STATUS = 0x58,
     FIFO_CONTROL = 0x5c,
     FIFO_STATUS = 0x60,
     INT_MASK = 0x64,
@@ -45,6 +46,7 @@ enum : uint32_t {
     BUS_CLEAR_CNFG = 0x84,
     BUS_CLEAR_STATUS = 0x88,
     CONFIG_LOAD = 0x8c,
+    INTERFACE_TIMING_0 = 0x94,
 };
 enum : uint32_t {
     CNFG_DEBOUNCE_4T = 2u << 12,
@@ -60,6 +62,9 @@ enum : uint32_t {
     INT_ARB_LOST = 1u << 2,
     INT_NO_ACK = 1u << 3,
     INT_PACKET_DONE = 1u << 7,
+    PKT_ARB_LOST = 1u << 1,  // PACKET_TRANSFER_STATUS bits 1-3 (Atmosphere vapours/tegra/tegra_i2c.hpp)
+    PKT_NOACK_DATA = 1u << 2,
+    PKT_NOACK_ADDR = 1u << 3,
     INT_BUS_CLEAR_DONE = 1u << 11,
     MSTR_CONFIG_LOAD = 1u << 0,
     BC_ENABLE = 1u << 0,
@@ -116,6 +121,14 @@ struct Bus {
     size_t len, done;
     bool active, busClear, overflow;
     int result;
+    // Diagnostics (tegra_i2c_describe): the last failed packet's INT_STATUS and PACKET_TRANSFER_STATUS, as the action
+    // or the timeout found them before recovery reset the controller; the pads as the boot chain left them.
+    uint32_t faultInt, faultPacket;
+    uint8_t addr, faultAddr;  // the packet in flight's address; the failed one's
+    bool faulted, padsSaved;
+    uint32_t bootPad[2], bootDrive[2];
+    uint32_t clearStatus;  // BUS_CLEAR_STATUS after the last bus clear
+    int clearResult;       // and how its wait ended
 };
 
 IOLock *volatile gSetupLock;
@@ -180,15 +193,24 @@ void clockEnable(const BusInfo &info)
     (void)r32(gCar, info.reset);
 }
 
-// The bus's two pads: function I2Cx with the input on (hekate pinmux_config_i2c), and the pull-down strength Horizon and
-// L4T give them (kBus). Without the drive setting the pads keep their reset strength, which r7p5's BH1730 on I2C2 did
-// not answer through.
-void padConfig(const BusInfo &info)
+// The bus's two pads: function I2Cx with the input on (hekate pinmux_config_i2c), and on I2C2 the pull-down strength
+// Horizon and L4T give the OLED's GEN2_I2C pads (kBus). Both checked against the references (test_als.py): pinmux 0x40 is
+// Atmosphere pinmux_initial_pad_config_aula.inc Gen2I2cScl/Sda (I2C2, no pull, driven, input, normal voltage) and L4T
+// tegra210b01-fric-pinmux.dtsi; the drive is Atmosphere pinmux_initial_drive_pad_config.inc (DRVDN 0x1f, DRVUP 0, the
+// non-Hoag table) and L4T's drive_default. The drive is not the ALS's problem: r7p5 (reset strength) and r7p8 (this)
+// got the same NACKs. The other buses keep their current strength (touch, the PMIC and the camera bus work with it; a
+// wrong drive on PWR_I2C would cost the boot). The values found first are kept for tegra_i2c_describe().
+void padConfig(Bus &b, const BusInfo &info)
 {
+    if (!b.padsSaved) {
+        b.bootPad[0] = r32(gPinmux, info.scl);
+        b.bootPad[1] = r32(gPinmux, info.sda);
+        b.bootDrive[0] = r32(gApbMisc, info.sclDrive);
+        b.bootDrive[1] = r32(gApbMisc, info.sdaDrive);
+        b.padsSaved = true;
+    }
     w32(gPinmux, info.scl, kPinmuxI2C);
     w32(gPinmux, info.sda, kPinmuxI2C);
-    // Only I2C2 (the ALS) for now: the other buses (touch, the PMIC, the camera bus) work at their current strength, and a
-    // wrong drive on PWR_I2C would cost the boot. Widen once r7p8 shows the ALS answering with it.
     if (info.sclDrive != kBus[1].sclDrive) return;
     w32(gApbMisc, info.sclDrive, (r32(gApbMisc, info.sclDrive) & ~kDriveMask) | (uint32_t)info.pullDown << 12);
     w32(gApbMisc, info.sdaDrive, (r32(gApbMisc, info.sdaDrive) & ~kDriveMask) | (uint32_t)info.pullDown << 12);
@@ -253,6 +275,12 @@ void interruptOccurred(OSObject *, IOInterruptEventSource *sender, int)
                 b.result = outcome(b, status);
             }
             if (b.result != kPending) {
+                if (b.result != TEGRA_I2C_OK && !b.busClear) {
+                    b.faultInt = status;
+                    b.faultPacket = r32(b.regs, PACKET_TRANSFER_STATUS);
+                    b.faultAddr = b.addr;
+                    b.faulted = true;
+                }
                 w32(b.regs, INT_MASK, 0);
                 b.active = false;
                 IOLockWakeup(b.irqLock, &b.active, true);
@@ -285,6 +313,12 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
                   intid(bus), status, mask, r32(b.regs, FIFO_STATUS), gic);
         }
         clock_interval_to_deadline(kGraceMs, kMillisecondScale, &deadline);
+    }
+    if (!b.busClear) {
+        b.faultInt = r32(b.regs, INT_STATUS);
+        b.faultPacket = r32(b.regs, PACKET_TRANSFER_STATUS);
+        b.faultAddr = b.addr;
+        b.faulted = true;
     }
     w32(b.regs, INT_MASK, 0);
     b.active = false;
@@ -320,8 +354,10 @@ int configure(unsigned bus, Bus &b)
     const int cleared = sleepForAction(bus, b, 10000);
     b.busClear = false;
     w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
+    b.clearResult = cleared;
+    b.clearStatus = r32(b.regs, BUS_CLEAR_STATUS);
     IOLockUnlock(b.irqLock);
-    if (cleared != TEGRA_I2C_OK || !(r32(b.regs, BUS_CLEAR_STATUS) & BC_STATUS)) {
+    if (cleared != TEGRA_I2C_OK || !(b.clearStatus & BC_STATUS)) {
         IOLog("TegraI2C: I2C%u bus clear did not complete\n", bus);
     }
     return TEGRA_I2C_OK;
@@ -362,7 +398,7 @@ int bringUp(unsigned bus, Bus &b)
     b.owned = true;
     b.hz = kClkM / info.divider / kBusDivide;
     clockEnable(info);
-    padConfig(info);
+    padConfig(b, info);
     if (bus == 3 || bus == 4) {
         // hekate pinmux_config_i2c(): detach the CAM_I2C (I2C4) pads from the I2C3 function.
         w32(gPinmux, kBus[3].scl, r32(gPinmux, kBus[3].scl) | 1u);
@@ -398,6 +434,7 @@ int packet(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, 
     IOLockLock(b.irqLock);
     int result = startPacket(b, addr, out, in, len, repeatStart);
     if (result == TEGRA_I2C_OK) {
+        b.addr = addr;
         b.result = kPending;
         b.active = true;
         w32(b.regs, INT_MASK,
@@ -547,7 +584,7 @@ extern "C" void tegra_i2c_resume(void)
         const bool adopted = bus == 5 && clockRunning(info);
         if (!adopted) {
             clockEnable(info);
-            padConfig(info);
+            padConfig(b, info);
             if (bus == 5) b.hz = kClkM / info.divider / kBusDivide;
         }
         if (b.irq) b.irq->enable();
@@ -602,6 +639,41 @@ extern "C" int tegra_i2c_final_transfer(unsigned bus, uint8_t addr, const void *
     }
     if (irqHeld) IOLockUnlock(b.irqLock);
     return result;
+}
+
+// Thread context; waits for a transfer in flight. Registers are read only while the controller is clocked.
+extern "C" void tegra_i2c_describe(unsigned bus, char *buffer, size_t size)
+{
+    if (!size) return;
+    if (bus < 1 || bus > kBuses || !gBus[bus - 1].lock) {
+        snprintf(buffer, size, "I2C%u: not initialised", bus);
+        return;
+    }
+    Bus &b = gBus[bus - 1];
+    const BusInfo &info = kBus[bus - 1];
+    IOLockLock(b.lock);
+    char fault[112] = "no failed packet";
+    if (b.faulted) {
+        const uint32_t p = b.faultPacket;
+        // Bits 15:4, the bytes transferred (TRANSFER_BYTENUM in the T210 TRM as remembered; the raw value is printed).
+        snprintf(fault, sizeof(fault), "last failure 0x%02x: INT_STATUS %#x PACKET_TRANSFER_STATUS %#x (%s, 15:4 %u)",
+                 b.faultAddr, b.faultInt, p,
+                 (p & PKT_NOACK_ADDR)   ? "address NACK"
+                 : (p & PKT_NOACK_DATA) ? "data NACK"
+                 : (p & PKT_ARB_LOST)   ? "arbitration lost"
+                                        : "no NACK flag",
+                 (p >> 4) & 0xfff);
+    }
+    const bool clocked = b.regs && clockRunning(info);
+    snprintf(buffer, size,
+             "I2C%u: pinmux %#x %#x (boot %#x %#x), drive %#x %#x (boot %#x %#x); %s CNFG %#x CLK_DIVISOR %#x "
+             "TIMING0 %#x, last bus clear %d BUS_CLEAR_STATUS %#x; %s",
+             bus, r32(gPinmux, info.scl), r32(gPinmux, info.sda), b.bootPad[0], b.bootPad[1],
+             r32(gApbMisc, info.sclDrive), r32(gApbMisc, info.sdaDrive), b.bootDrive[0], b.bootDrive[1],
+             clocked ? "clocked," : "NOT clocked,", clocked ? r32(b.regs, CNFG) : 0,
+             clocked ? r32(b.regs, CLK_DIVISOR) : 0, clocked ? r32(b.regs, INTERFACE_TIMING_0) : 0, b.clearResult,
+             b.clearStatus, fault);
+    IOLockUnlock(b.lock);
 }
 
 extern "C" int tegra_i2c_read(unsigned bus, uint8_t addr, uint8_t reg, void *buf, size_t len)

@@ -134,8 +134,16 @@ extern "C" {
 // cannot be attached.
 int tegra_gpio_start(void);
 
-// Input level of a pin (0 or 1), or -1 before tegra_gpio_start() or for a bad pin.
+// Input level of a pin (0 or 1), or -1 before tegra_gpio_start() or for a bad pin: GPIO_IN, meant for a pin in GPIO
+// mode. A pin left to its special function (CNF 0) may not be shown (r7p8: both I2C2 lines read 0 while the I2C
+// controller saw SDA high on 21 bus clears and 20 NACKs; unverified); tegra_gpio_sample() reads those.
 int tegra_gpio_read(unsigned gpio);
+
+// Diagnostics only: the pad's level read with the pin briefly a GPIO input (OE 0, CNF 1, 2 us, IN), its CNF and OE
+// written back after. Only for a pin whose special function is idle and not driving it (an I2C bus between transfers,
+// with that bus's owner calling): the pad is never driven by this. `config` (may be null) gets the pin as found:
+// bit 0 CNF, 1 OE, 2 OUT, 3 GPIO_IN. Returns 0 or 1, or -1 before tegra_gpio_start() or for a bad pin.
+int tegra_gpio_sample(unsigned gpio, unsigned *config);
 
 // One line for a panic message: the pin's CNF/OE/IN/INT_ENB/INT_STA/INT_LVL bits and trigger, then its bank's GIC
 // state (ioswitch_interrupt_describe).

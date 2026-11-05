@@ -162,6 +162,7 @@ public:
 
     IOService *nubFor(unsigned pin, unsigned trigger);
     int read(unsigned pin) const { return (rd(portReg(pin, IN)) & pinBit(pin)) ? 1 : 0; }
+    int sample(unsigned pin, unsigned *config);
     void describe(unsigned pin, char *buffer, size_t size) const;
     bool latched(unsigned pin) const { return rd(portReg(pin, INT_STA)) & rd(portReg(pin, INT_ENB)) & pinBit(pin); }
     void setDebounce(unsigned pin, unsigned ms);
@@ -448,6 +449,25 @@ void TegraGPIO::setOutput(unsigned pin, bool high)
     maskWrite(pin, MSK_CNF, true);
 }
 
+// The output enable goes off before the pin leaves its special function, and comes back after it returns, so the pad
+// is released throughout. Masked writes: atomic per pin.
+int TegraGPIO::sample(unsigned pin, unsigned *config)
+{
+    const uint32_t bit = pinBit(pin);
+    const bool cnf = rd(portReg(pin, CNF)) & bit, oe = rd(portReg(pin, OE)) & bit;
+    if (config) {
+        *config = (cnf ? 1u : 0u) | (oe ? 2u : 0u) | ((rd(portReg(pin, OUT)) & bit) ? 4u : 0u) |
+                  ((rd(portReg(pin, IN)) & bit) ? 8u : 0u);
+    }
+    maskWrite(pin, MSK_OE, false);
+    maskWrite(pin, MSK_CNF, true);
+    IODelay(2);
+    const int level = (rd(portReg(pin, IN)) & bit) ? 1 : 0;
+    maskWrite(pin, MSK_CNF, cnf);
+    maskWrite(pin, MSK_OE, oe);
+    return level;
+}
+
 // One line for a consumer's panic: the pin's level and interrupt registers, then its bank's GIC state.
 void TegraGPIO::describe(unsigned pin, char *buffer, size_t size) const
 {
@@ -509,6 +529,11 @@ extern "C" IOService *tegra_gpio_interrupt_nub(unsigned gpio, unsigned trigger)
 extern "C" int tegra_gpio_read(unsigned gpio)
 {
     return gController && gpio < TEGRA_GPIO_COUNT ? gController->read(gpio) : -1;
+}
+
+extern "C" int tegra_gpio_sample(unsigned gpio, unsigned *config)
+{
+    return gController && gpio < TEGRA_GPIO_COUNT ? gController->sample(gpio, config) : -1;
 }
 
 extern "C" void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size)
