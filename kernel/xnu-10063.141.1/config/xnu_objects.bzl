@@ -386,7 +386,11 @@ def xnu_objects(name, component, table, srcs = None, **kwargs):
             "//drivers/NativeIOSwitchBlock:headers",
             "//kits/VerifiedRoot:headers",
         ],
-        tags = ["kernel"],
+        # XNU is Apple's code: no clang-tidy or other linting of its compiles.
+        tags = [
+            "kernel",
+            "no-lint",
+        ],
         # RELEASE has no recipes yet (recipes_<config>.bzl): a release build fails as incompatible, never as DEVELOPMENT.
         target_compatible_with = select({
             "//bazel:release": ["@platforms//:incompatible"],

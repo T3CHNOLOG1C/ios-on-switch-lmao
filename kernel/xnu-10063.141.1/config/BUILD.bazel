@@ -2,9 +2,10 @@
 # export lists and symbol sets, and the rules that compile XNU natively (xnu_objects.bzl) and link the kernel
 # (xnu_kernel.bzl; the kernel tree's kernel_unprelinked calls it with the ioswitch archives). Apple's files as Apple
 # has them (APPLE_LICENSE); only BUILD.bazel and .bzl files are ours.
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":objects.bzl", "DEVELOPMENT")
-load(":xnu_kernel.bzl", "xnu_exports", "xnu_link_objects", "xnu_version_c")
+load(":xnu_kernel.bzl", "xnu_exports", "xnu_link_objects", "xnu_object_names", "xnu_version_c")
 load(":xnu_objects.bzl", "xnu_objects")
 
 package(default_visibility = ["//visibility:public"])
@@ -69,6 +70,29 @@ filegroup(
     name = "link_symbols_list",
     srcs = [":link_objects"],
     output_group = "symbols_list",
+)
+
+# objects.bzl against doconf's Makefiles (conf/files, MASTER): a conf/files edit can't drift from the native tables.
+xnu_object_names(name = "object_names")
+
+_DOCONF = [
+    "osfmk",
+    "bsd",
+    "libkern",
+    "iokit",
+    "pexpert",
+    "libsa",
+    "security",
+    "san",
+]
+
+py_test(
+    name = "objects_test",
+    size = "small",
+    srcs = ["objects_test.py"],
+    args = ["$(rootpath :object_names)"] + ["$(rootpaths //kernel/xnu-10063.141.1:config_makefile_{})".format(c) for c in _DOCONF],
+    data = [":object_names"] + ["//kernel/xnu-10063.141.1:config_makefile_" + c for c in _DOCONF],
+    main = "objects_test.py",
 )
 
 # --- KPI exports and symbol sets (config/Makefile) ----------------------------------------------------------------

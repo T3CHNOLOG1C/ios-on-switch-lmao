@@ -293,6 +293,24 @@ def _xnu_link_objects_impl(ctx):
         OutputGroupInfo(symbols = depset(symbols), symbols_list = depset([listing])),
     ]
 
+def _xnu_object_names_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".txt")
+    lines = []
+    for target in ctx.attr.components:
+        info = target[XnuObjectsInfo]
+        lines += ["{} {}\n".format(info.component, name) for name in info.names]
+    ctx.actions.write(out, "".join(lines))
+    return [DefaultInfo(files = depset([out]))]
+
+xnu_object_names = rule(
+    implementation = _xnu_object_names_impl,
+    doc = "\"<component> <object>\" per line, every component's objects in link order (objects_test compares them " +
+          "with doconf's Makefiles).",
+    attrs = {
+        "components": attr.label_list(providers = [XnuObjectsInfo], default = _COMPONENTS),
+    },
+)
+
 xnu_link_objects = rule(
     implementation = _xnu_link_objects_impl,
     doc = "The components' objects the kernel links (make's link.filelist), in link order, and (output group " +
