@@ -21,6 +21,9 @@ KERNEL_PACKAGE = "kernel"
 # The tree's top-level directories that live at TREE_ROOT.
 MOVED_ROOTS = ["drivers", "kits", "diagnostics", "overlay"]
 
+# The kernel tree's own subpackages before the move: their outputs were below OLD_TREE/<package>/ already.
+OLD_SUBPACKAGES = ["drivers/NativeMetal", "drivers/TegraGM20BMetal"]
+
 def tree_path(path):
     """A path below the kernel tree, as it is now (TREE_ROOT/path)."""
     return (TREE_ROOT + "/" + path) if TREE_ROOT else path
@@ -34,6 +37,34 @@ def old_spelling(path, bin_dir = None):
         new = bin_dir + "/" + KERNEL_PACKAGE + "/"
         if path.startswith(new):
             return bin_dir + "/" + OLD_TREE + "/" + path[len(new):]
+    return path
+
+def old_output_spelling(path):
+    """The pre-move spelling of an output-directory-relative path (unchanged while nothing has moved).
+
+    A moved package's outputs (the kernel package's, drivers/<X>'s, kits/<X>'s, diagnostics/ioswitch's, overlay's) were
+    the kernel tree package's: what the kernel link names them by, so its debug map keeps its paths. The Python twin is
+    tools/kernel/link.py's old_output_spelling: the two must stay in step.
+
+    Args:
+      path: a path below an output directory (a File's short_path).
+
+    Returns:
+      Its spelling before the layout move.
+    """
+    if KERNEL_PACKAGE == OLD_TREE:
+        return path
+    parts = path.split("/")
+    if parts[0] == KERNEL_PACKAGE:
+        return "/".join([OLD_TREE] + parts[1:])
+    if len(parts) > 2 and parts[0] in ("drivers", "kits"):
+        if "/".join(parts[:2]) in OLD_SUBPACKAGES:
+            return OLD_TREE + "/" + path
+        return "/".join([OLD_TREE] + parts[2:])
+    if parts[:2] == ["diagnostics", "ioswitch"]:
+        return "/".join([OLD_TREE] + parts[2:])
+    if parts[0] == "overlay":
+        return "/".join([OLD_TREE] + parts[1:])
     return path
 
 def compat_prefix_maps(bin_dir):
