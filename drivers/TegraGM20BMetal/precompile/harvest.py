@@ -31,9 +31,9 @@ usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log 
           --save copies, e.g. <state>/device-logs/*/m2v), no corpus.
 --pack    harvest.py --pack [--device <dir>]: the staging directory as the build's @gpu_device_data: a tar (sorted, no times or
           owners) of its records and of the libraries made from bytes that the corpus names and the build cannot make itself
-          (not one of bazel/gpu/apple-libs.sha256's, not the frontend's TwoPlaneStandIn.h: Core Image's kernels compiled on the
+          (not one of gpu/apple-libs.sha256's, not the frontend's TwoPlaneStandIn.h: Core Image's kernels compiled on the
           device), written to <state>/gpu-device-data/m2v-device-<sha256[:16]>.tar; prints the DEVICE_DATA pin for
-          bazel/gpu/deps.bzl. The first build after the pin copies the tar into the repository cache; no build reads the
+          gpu/deps.bzl. The first build after the pin copies the tar into the repository cache; no build reads the
           staging directory.
 """
 import hashlib
@@ -52,7 +52,7 @@ COMPUTE = re.compile(r'(form|opt|max|tgm|icb|depth|abf|mut)=')
 # The checkout: bazel run's (also what //deploy:pull_logs runs this in), else the one this file is in.
 PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).resolve().parents[3])
 # The device's data, outside every checkout (it is Apple-derived, so never tracked): where --pack writes the tar
-# @gpu_device_data's first fetch on a machine reads (bazel/gpu/deps.bzl), and the staging directory beside it.
+# @gpu_device_data's first fetch on a machine reads (gpu/deps.bzl), and the staging directory beside it.
 DEVICE = Path(os.environ.get('IOSWITCH_HOME') or Path.home() / 'Library/Application Support/ioswitch') / 'gpu-device-data'
 # /private/var/containers/Data/System/<UUID>/Library/Caches/m2v of the system containers whose processes kept an m2v cache there
 # (the plugin's "device ... ready in" lines, r5d and r6h): their Library and Library/Caches are mode 000.
@@ -224,8 +224,8 @@ def records(caches, store):
 
 
 def embedded_libraries():
-    """The sha256 of each metallib the build makes itself: the OS volume's (bazel/gpu/apple-libs.sha256) and the frontend's."""
-    made = {line.split()[0] for line in (PROJECT / 'bazel/gpu/apple-libs.sha256').read_text().splitlines()
+    """The sha256 of each metallib the build makes itself: the OS volume's (gpu/apple-libs.sha256) and the frontend's."""
+    made = {line.split()[0] for line in (PROJECT / 'gpu/apple-libs.sha256').read_text().splitlines()
             if line.strip() and not line.startswith('#')}
     text = (Path(__file__).resolve().parents[2] / 'NativeMetal/TwoPlaneStandIn.h').read_text()
     made.add(hashlib.sha256(bytes(int(b, 16) for b in re.findall(r'0x([0-9a-fA-F]{2})', text[text.index('{'):]))).hexdigest())
@@ -233,7 +233,7 @@ def embedded_libraries():
 
 
 def pack(store, corpus):
-    """The tar of @gpu_device_data (DEVICE_DATA in bazel/gpu/deps.bzl) from the staging directory `store`."""
+    """The tar of @gpu_device_data (DEVICE_DATA in gpu/deps.bzl) from the staging directory `store`."""
     named = set(re.findall(r'lib=data:([0-9a-f]{64})', corpus.read_text()))
     own = embedded_libraries()
     members = sorted(p for p in (store / 'records').glob('*/*') if p.is_file() and record_ok(p.read_bytes()))
@@ -255,7 +255,7 @@ def pack(store, corpus):
     print('%s: %d driver records, %d libraries (of %d made from bytes the corpus names)' %
           (out, sum(1 for p in members if p.parts[-3] == 'records'), sum(1 for p in members if p.parts[-2] == 'data'),
            len(named)))
-    print('bazel/gpu/deps.bzl:\nDEVICE_DATA = {\n    "file": "%s",\n    "sha256": "%s",\n}' % (out.name, digest))
+    print('gpu/deps.bzl:\nDEVICE_DATA = {\n    "file": "%s",\n    "sha256": "%s",\n}' % (out.name, digest))
 
 
 def option(args, name, many=False):

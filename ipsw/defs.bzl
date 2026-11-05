@@ -1,9 +1,9 @@
-"""What the build derives from an IPSW's members. Each rule takes the IPSW (//bazel/ipsw:current, the kind
---//bazel/ipsw:kind selects) for the kind's derived pins and names, and its members from @ipsw (the same kind's)."""
+"""What the build derives from an IPSW's members. Each rule takes the IPSW (//ipsw:current, the kind
+--//ipsw:kind selects) for the kind's derived pins and names, and its members from @ipsw (the same kind's)."""
 
-load("//bazel/ipsw:ipsw.bzl", "IpswInfo")
+load("//ipsw:ipsw.bzl", "IpswInfo")
 
-_IPSW = {"ipsw": attr.label(default = "//bazel/ipsw:current", providers = [IpswInfo])}
+_IPSW = {"ipsw": attr.label(default = "//ipsw:current", providers = [IpswInfo])}
 
 def _ipsw_kernelcache_impl(ctx):
     ipsw = ctx.attr.ipsw[IpswInfo]

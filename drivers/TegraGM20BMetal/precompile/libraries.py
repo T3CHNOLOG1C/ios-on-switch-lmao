@@ -3,15 +3,15 @@
 them out as the store precompile.mm reads:
 
   <store>/root/<device path>        a library the device loaded from a file (the journal's lib=<path>): 21H461's OS volume's,
-                                    extracted from the IPSW by @gpu_apple_libs (bazel/gpu/deps.bzl, pinned in
-                                    bazel/gpu/apple-libs.sha256)
+                                    extracted from the IPSW by @gpu_apple_libs (gpu/deps.bzl, pinned in
+                                    gpu/apple-libs.sha256)
   <store>/data/<sha256>.metallib    a library the device made from bytes (lib=data:<sha256>): any of the above or of the
                                     frontend's own (TwoPlaneStandIn.h) whose bytes they are, or one only the device made (Core
                                     Image's compiled kernels: @gpu_device_data, precompile/harvest.py --pack)
   <names.json>                      every function name of the pinned libraries -> their device paths (`names`, a build action)
 
 usage: libraries.py pins <mounted OS volume>                               the `shasum -a 256` listing of every Metal library of
-                                                                           the volume with a function (bazel/gpu/apple-libs.sha256)
+                                                                           the volume with a function (gpu/apple-libs.sha256)
        libraries.py names <root> <names.json> <device path>...             names.json of the libraries at <root>/<device path>
        libraries.py resolve <names.json> <corpus.log> <out.log>            the corpus with lib=<path> added to the stages of journal
                                                                            lines from before the journal named libraries (no lib=)

@@ -45,7 +45,7 @@ common --lockfile_mode=error
 # Transient download failures retry instead of failing the build.
 common --experimental_repository_downloader_retries=3
 # Never stamp: no build time, user or host in any output (Bazel's default, stated: the kernel's version string relies
-# on it; its date and builder are //bazel/kernel:build_date and :builder, constants).
+# on it; its date and builder are //kernel/rules:build_date and :builder, constants).
 build --nostamp
 
 # --- Speed ------------------------------------------------------------------------------------------------------

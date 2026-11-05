@@ -11,7 +11,7 @@ upscaled) into a standard 300x300 RGBA PNG. The overlay (tree/overlay/manifest.j
 ProgressUI.framework; the logo is rotated for landscape by ProgressUI itself (ADT /chosen display-boot-rotation,
 package_raw_boot.py). The output stays under tree/build/ (not in git: it is Apple's artwork).
 
-Usage: progressui_logo.py <OS volume .dmg> <output .png>   (the IPSW's OS member: @ipsw//:os, bazel/ipsw/pins.bzl)
+Usage: progressui_logo.py <OS volume .dmg> <output .png>   (the IPSW's OS member: @ipsw//:os, ipsw/pins.bzl)
 """
 import struct
 import subprocess

@@ -1,8 +1,8 @@
-# The kernel build's tools, one py_binary per job on the hermetic rules_python toolchain. bazel/kernel's rules run
-# them (run_tool in bazel/kernel/common.bzl); nobody runs them by hand.
+# The kernel build's tools, one py_binary per job on the hermetic rules_python toolchain. kernel/rules's rules run
+# them (run_tool in kernel/rules/common.bzl); nobody runs them by hand.
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
-load("//bazel/kernel:common.bzl", "KERNEL_TOOLS")
+load("//kernel/rules:common.bzl", "KERNEL_TOOLS")
 load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])

@@ -10,7 +10,7 @@ sha256. Mesa itself is vendored (third_party/mesa), as are the crates of its mes
                  is the one @llvm already fetched, so the repository cache holds it once).
 """
 
-load("//bazel/gpu:deps.bzl", "LLVM_RELEASE", "lock_packages")
+load("//gpu:deps.bzl", "LLVM_RELEASE", "lock_packages")
 
 _RUST_DIST = "https://static.rust-lang.org/dist/2026-06-30/"
 

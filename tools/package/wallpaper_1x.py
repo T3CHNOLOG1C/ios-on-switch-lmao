@@ -16,7 +16,7 @@ volume's: no artwork is copied, and the 2x image is drawn into the 720x1280 pane
 
 The output is metadata only (identifiers, names, file names) and is pinned in bazel/pinned/overlay/wallpaper-1x/.
 
-Usage: wallpaper_1x.py <OS volume .dmg> <output directory>   (the IPSW's OS member: @ipsw//:os, bazel/ipsw/pins.bzl)
+Usage: wallpaper_1x.py <OS volume .dmg> <output directory>   (the IPSW's OS member: @ipsw//:os, ipsw/pins.bzl)
 """
 import plistlib
 import subprocess

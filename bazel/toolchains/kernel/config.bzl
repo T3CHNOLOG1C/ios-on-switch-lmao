@@ -7,7 +7,7 @@ XNU's own compile records give code linked into the kernel (recipes.bzl), as fea
                             kernel_plain_c chosen by a target's features (kernel_driver does that); recipes of one language
                             exclude each other (provides)
   apple_clang_only          (default) the flags only Apple clang takes or only code generation needs: off for clang-tidy
-  kernel_warnings           (default) the drivers' -W set on C++ (bazel/kernel/kernel.bzl DRIVER_WARNINGS)
+  kernel_warnings           (default) the drivers' -W set on C++ (kernel/rules/kernel.bzl DRIVER_WARNINGS)
   kernel_plain_asm          (default) .S/.s: Xcode clang for iOS 17 against the iPhoneOS SDK, nothing from XNU
 
 Every path in a flag is execution-root relative; -fmacro-prefix-map/-fdebug-prefix-map make the strings that reach the
@@ -33,8 +33,8 @@ load(
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/toolchains:cc_toolchain_config_info.bzl", "CcToolchainConfigInfo")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
-load("//bazel/kernel:layout.bzl", "compat_prefix_maps")
-load("//bazel/kernel:sdk.bzl", "KernelSdkInfo")
+load("//kernel/rules:layout.bzl", "compat_prefix_maps")
+load("//kernel/rules:sdk.bzl", "KernelSdkInfo")
 load(":recipes.bzl", "RECIPES")
 
 PATH_ROOT = "/ioswitch"

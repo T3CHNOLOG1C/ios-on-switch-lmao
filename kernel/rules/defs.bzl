@@ -82,7 +82,7 @@ def xnu_package(version, installhdrs, build, kernel_package, extra_headers, fire
         version: the XNU version ("10063.141.1").
         installhdrs: the installhdrs table.
         build: {"debug": DEVELOPMENT table, "release": RELEASE table}.
-        kernel_package: the package of the kernel's other generated files (bazel/kernel/layout.bzl KERNEL_PACKAGE).
+        kernel_package: the package of the kernel's other generated files (kernel/rules/layout.bzl KERNEL_PACKAGE).
         extra_headers: the headers XNU's build options put on every kernel compile (-I <tree>/diagnostics/ioswitch).
         firehose: the SDK root with libdispatch's libfirehose_kernel.a installed (a directory): its files go into
             obj/sdkroot beside installhdrs' (:firehose), :sdkroot_files is both.

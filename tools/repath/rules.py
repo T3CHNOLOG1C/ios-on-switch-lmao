@@ -36,6 +36,17 @@ RULES = [
         ),
         r'boot/\1',
     ),
+    (re.compile(r'//bazel/kernel:xnu\.bzl'), '//kernel/rules:firehose.bzl'),
+    (re.compile(r'(?<![A-Za-z0-9_./-])bazel/kernel/xnu\.bzl'), 'kernel/rules/firehose.bzl'),
+    (re.compile(r'//bazel/kernel\b'), '//kernel/rules'),
+    (re.compile(r'(?<![A-Za-z0-9_./-])bazel/kernel/'), 'kernel/rules/'),
+    (re.compile(r'//bazel/gpu\b'), '//gpu'),
+    (re.compile(r'(?<![A-Za-z0-9_./-])bazel/gpu/'), 'gpu/'),
+    (re.compile(r'//bazel/ipsw\b'), '//ipsw'),
+    (re.compile(r'(?<![A-Za-z0-9_./-])bazel/ipsw/'), 'ipsw/'),
+    (re.compile(r'(?<![A-Za-z0-9_./-])bazel/kernel\b'), 'kernel/rules'),
+    (re.compile(r'(?<![A-Za-z0-9_./-])bazel/gpu\b'), 'gpu'),
+    (re.compile(r'(?<![A-Za-z0-9_./-])bazel/ipsw\b'), '//ipsw'),
 ]
 
 

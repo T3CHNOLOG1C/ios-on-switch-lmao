@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Construct an experimental native prelink candidate; no runtime qualification.
 
-The work splits by what it reads (bazel/kernel/kernel.bzl kernel_prelink runs each part as its own action):
+The work splits by what it reads (kernel/rules/kernel.bzl kernel_prelink runs each part as its own action):
 
     emit_prelink.py plan ORIGINAL-ARGS --plan-output PLAN       the original kernelcache only: the closure, every
                                                                 pointer site, the coalesced segments with every

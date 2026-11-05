@@ -3,7 +3,7 @@
     bazel run //tools/kernel:hdr_deps             report the drivers whose hdr_deps differ from their includes (exit 1)
     bazel run //tools/kernel:hdr_deps -- --write  rewrite those hdr_deps in place
 
-A driver's compiles see only its own package's headers and its hdr_deps' (bazel/kernel/kernel.bzl), so hdr_deps must
+A driver's compiles see only its own package's headers and its hdr_deps' (kernel/rules/kernel.bzl), so hdr_deps must
 name every other package whose headers its files reach. Starting from the driver's sources (srcs, or its package's
 *.cpp and firmware.S), each `#include "..."` is resolved as the compiler would (the including file's directory, then
 the driver's -I {tree}/<dir> flags) and followed into the headers it names, so a header that includes another

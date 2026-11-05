@@ -1,6 +1,6 @@
 # The kernel's C/C++/assembly toolchain (config.bzl): Apple clang with XNU's compile recipes as features, for
 # //bazel/platforms:ios_kernel_arm64. Registered in MODULE.bazel; the kernel's cc targets reach it through
-# kernel_driver's transition (bazel/kernel/kernel.bzl).
+# kernel_driver's transition (kernel/rules/kernel.bzl).
 #
 #   bazel run //bazel/toolchains/kernel:update_recipes    regenerate recipes.bzl from the native XNU build's tables
 load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")

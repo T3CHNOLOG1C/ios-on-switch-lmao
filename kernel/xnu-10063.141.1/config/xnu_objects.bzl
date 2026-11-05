@@ -21,7 +21,7 @@ directory (make's `.`), {sdkroot} the kernel SDK root, {san} the sanitizer ignor
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
-load("//bazel/kernel:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
+load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
 load("//bazel/platforms:transitions.bzl", "kernel_transition", "outer_transition")
 load(":recipes_development.bzl", "DEVELOPMENT_RECIPES")
 load(":recipes_release.bzl", "RELEASE_RECIPES")
@@ -83,7 +83,7 @@ def _dir_of(files, suffix, what):
 def _maps(places, gen, relative):
     """-fdebug-prefix-map/-fmacro-prefix-map flags: every input directory to its make spelling."""
 
-    # The kernel tree's directories XNU includes from, wherever bazel/kernel/layout.bzl puts them now.
+    # The kernel tree's directories XNU includes from, wherever kernel/rules/layout.bzl puts them now.
     tree = [(tree_path(root), ("{}/{}/{}".format(PATH_ROOT, OLD_TREE, root),) * 2) for root in MOVED_ROOTS]
     pairs = [(places["{xnu}"], LEGACY.xnu)] + tree + [
         (places["{export}"], LEGACY.export),

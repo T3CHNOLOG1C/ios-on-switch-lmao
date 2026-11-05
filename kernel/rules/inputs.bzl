@@ -32,7 +32,7 @@ tool_output = rule(
     doc = "Runs a tool (a //tools/kernel name, or any py_binary) with args ($(location), {out}/{outN}, {xcode_env}, " +
           "{path_root}, {bin_dir} expanded) on srcs into outs and out_dirs.",
     attrs = dict(KERNEL_TOOL_ATTRS, **{
-        "tool": attr.string(doc = "a //tools/kernel tool name (bazel/kernel/common.bzl KERNEL_TOOLS)"),
+        "tool": attr.string(doc = "a //tools/kernel tool name (kernel/rules/common.bzl KERNEL_TOOLS)"),
         "binary": attr.label(executable = True, cfg = "exec", doc = "or any executable target"),
         "srcs": attr.label_list(allow_files = True),
         "outs": attr.string_list(),

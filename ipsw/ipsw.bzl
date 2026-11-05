@@ -6,10 +6,10 @@ header and checks them against the pinned sha256, which puts them in the reposit
 by every output base).
 
 A stored member (the OS dmg) is used as fetched. A deflated one is inflated by a build action (ipsw_inflate,
-//bazel/ipsw:inflate) that checks the content against its pin; only the deflated bytes live in the repository cache.
+//ipsw:inflate) that checks the content against its pin; only the deflated bytes live in the repository cache.
 
 @ipsw is the hub the build names members by: @ipsw//:<role> (kernelcache, os, system_cryptex, ...) is the member of
-the kind --//bazel/ipsw:kind selects (a select() over //bazel/ipsw:<kind>). //bazel/ipsw:current gives rules the
+the kind --//ipsw:kind selects (a select() over //ipsw:<kind>). //ipsw:current gives rules the
 selected kind's identity and derived pins (IpswInfo). Nothing outside pins.bzl names a build or a member file.
 """
 
@@ -59,11 +59,11 @@ def _ipsw_hub_impl(rctx):
         lines.append('    name = "{}",'.format(role))
         lines.append("    actual = select({")
         for kind, actual in sorted(by_kind.items()):
-            lines.append('        "@@//bazel/ipsw:{}": "{}",'.format(kind, actual))
+            lines.append('        "@@//ipsw:{}": "{}",'.format(kind, actual))
         lines.append("    }),")
         lines.append(")")
         lines.append("")
-    # The deflated members' stored bytes, by kind, for //bazel/ipsw's inflate actions.
+    # The deflated members' stored bytes, by kind, for //ipsw's inflate actions.
     for name, actual in sorted(rctx.attr.stored.items()):
         lines.append('alias(name = "{}", actual = "{}")'.format(name, actual))
     rctx.file("BUILD.bazel", "\n".join(lines) + "\n")
@@ -87,7 +87,7 @@ def _ipsw_extension_impl(module_ctx):
             pin = ipsw.get("members", {}).get(role)
             if not pin:
                 # A declared slot, or a kind without this member: analysis of anything that reads it fails, with why.
-                roles[role][kind] = "@@//bazel/ipsw:{}_unpinned".format(kind)
+                roles[role][kind] = "@@//ipsw:{}_unpinned".format(kind)
                 continue
             repo = "ipsw_{}_{}".format(kind, role)
             ipsw_member(
@@ -99,7 +99,7 @@ def _ipsw_extension_impl(module_ctx):
                 sha256 = pin["sha256"],
             )
             if pin["deflated"]:
-                roles[role][kind] = "@@//bazel/ipsw:{}_{}".format(kind, role)
+                roles[role][kind] = "@@//ipsw:{}_{}".format(kind, role)
                 stored["stored_{}_{}".format(kind, role)] = "@{}//:stored.deflate".format(repo)
             else:
                 roles[role][kind] = "@{}//:{}".format(repo, _filename(pin))
@@ -117,8 +117,8 @@ def ipsw_member_label(kind, role):
 
 # --- The kind, and what rules read of it ----------------------------------------------------------------------------
 
-_UNPINNED = ("IPSW kind {kind} is declared in bazel/ipsw/pins.bzl but not pinned (or lacks this member): " +
-             "bazel run //bazel/ipsw:pin -- --kind=<its build> --replace={kind} <ipsw url> <product> <device class>")
+_UNPINNED = ("IPSW kind {kind} is declared in ipsw/pins.bzl but not pinned (or lacks this member): " +
+             "bazel run //ipsw:pin -- --kind=<its build> --replace={kind} <ipsw url> <product> <device class>")
 
 IpswInfo = provider(
     doc = "The selected IPSW kind: its identity (pins.bzl, without the members) and derived pins.",
@@ -150,8 +150,8 @@ def _ipsw_info_impl(ctx):
 
 ipsw_info = rule(
     implementation = _ipsw_info_impl,
-    doc = "IpswInfo of the kind --//bazel/ipsw:kind selects.",
-    attrs = {"_kind": attr.label(default = "//bazel/ipsw:kind")},
+    doc = "IpswInfo of the kind --//ipsw:kind selects.",
+    attrs = {"_kind": attr.label(default = "//ipsw:kind")},
 )
 
 def _ipsw_unpinned_impl(ctx):
@@ -181,12 +181,12 @@ ipsw_inflate = rule(
         "filename": attr.string(mandatory = True),
         "content_sha256": attr.string(mandatory = True),
         "large": attr.bool(doc = "kept out of the disk and remote caches"),
-        "_inflate": attr.label(default = "//bazel/ipsw:inflate", executable = True, cfg = "exec"),
+        "_inflate": attr.label(default = "//ipsw:inflate", executable = True, cfg = "exec"),
     },
 )
 
 def ipsw_kinds():
-    """In //bazel/ipsw: the kind flag, a config_setting per kind, the deflated members inflated (<kind>_<role>), the
+    """In //ipsw: the kind flag, a config_setting per kind, the deflated members inflated (<kind>_<role>), the
     unpinned stand-ins (<kind>_unpinned) and :current (IpswInfo)."""
     string_flag(
         name = "kind",

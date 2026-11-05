@@ -1,17 +1,17 @@
 """The IPSW kinds the build knows, by build: the one table that names an IPSW, its build and its member files.
 
-Written by `bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> <product> <device class>` (bazel/ipsw/pin.py),
+Written by `bazel run //ipsw:pin -- --kind=<build> <ipsw url> <product> <device class>` (ipsw/pin.py),
 which pins one kind's members and keeps the rest. Per kind:
   members   each member the build or the SD install reads: where it is stored in the IPSW (offset, stored_size), the
             sha256 of its stored bytes (what Bazel fetches by range request) and of its content
   derived   what the build derives from the members, pinned by hand: kernelcache_sha256 (the kernelcache's IM4P payload,
             LZFSE-decompressed, its arm64 slice: //ipsw:kernelcache) and quartzcore_metallib_sha256 (QuartzCore's
             default.metallib on the OS volume, the shader seed's gate: //gpu:seed)
-An empty kind is a declared slot: //bazel/ipsw:kind accepts it, no repository is made for it, and anything that reads
+An empty kind is a declared slot: //ipsw:kind accepts it, no repository is made for it, and anything that reads
 an IPSW fails at analysis until it is pinned. "next" is the slot for a later iOS 26/27 IPSW.
 """
 
-# --//bazel/ipsw:kind's default.
+# --//ipsw:kind's default.
 DEFAULT_KIND = "21H461"
 
 IPSWS = {

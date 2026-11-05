@@ -27,7 +27,7 @@ version, pipelineCacheUUID: this NVK's) whose envelope checks out join the seed'
 own (which win a name both have). They cover the makings no corpus state's creation predicts (a draw's variant) and those
 the precompile makes otherwise than the device; another NVK's records are left out.
 Gates (as before): the twin's .source must equal the iOS dylib's, and the QuartzCore metallib must be the IPSW kind's
-(--qc-sha256, bazel/ipsw/pins.bzl's quartzcore_metallib_sha256).
+(--qc-sha256, ipsw/pins.bzl's quartzcore_metallib_sha256).
 """
 import argparse
 import hashlib

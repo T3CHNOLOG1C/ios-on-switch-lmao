@@ -7,9 +7,9 @@ objects are linked from a tree of links laid out as make's object root was, with
 """
 
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
-load("//bazel/kernel:common.bzl", "XCODE_EXECUTION")
-load("//bazel/kernel:kernel.bzl", "KernelObjectsInfo")
-load("//bazel/kernel:layout.bzl", "old_output_spelling")
+load("//kernel/rules:common.bzl", "XCODE_EXECUTION")
+load("//kernel/rules:kernel.bzl", "KernelObjectsInfo")
+load("//kernel/rules:layout.bzl", "old_output_spelling")
 load(":recipes_development.bzl", "DEVELOPMENT_LINK")
 load(":recipes_release.bzl", "RELEASE_LINK", "RELEASE_LINK_LTO")
 load(":xnu_objects.bzl", "XnuObjectsInfo")
@@ -77,8 +77,8 @@ xnu_version_c = rule(
     implementation = _xnu_version_c_impl,
     doc = "version.c (config/version.c.template stamped by config/newvers.pl), at make's path below obj/.",
     attrs = {
-        "build_date": attr.string(default = "Thu  1 Jan 1970 00:00:00 UTC", doc = "//bazel/kernel:build_date"),
-        "builder": attr.string(default = "ioswitch", doc = "whoami's answer (//bazel/kernel:builder)"),
+        "build_date": attr.string(default = "Thu  1 Jan 1970 00:00:00 UTC", doc = "//kernel/rules:build_date"),
+        "builder": attr.string(default = "ioswitch", doc = "whoami's answer (//kernel/rules:builder)"),
         "config": attr.string(default = "DEVELOPMENT"),
         "darwin_version": attr.string(default = "23.6.0", doc = "RC_DARWIN_KERNEL_VERSION"),
         "newvers": attr.label(default = "newvers.pl", allow_single_file = True),

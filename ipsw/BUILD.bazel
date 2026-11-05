@@ -1,8 +1,11 @@
-# What the build derives from the IPSW's members: @ipsw//:<role>, the kind --//bazel/ipsw:kind selects (fetched by
-# range request; bazel/ipsw). The kind's own pins (the decompressed kernelcache's sha256, ...) are in
-# bazel/ipsw/pins.bzl, which the rules read through //bazel/ipsw:current.
+# What the build derives from the IPSW's members: @ipsw//:<role>, the kind --//ipsw:kind selects (fetched by
+# range request; //ipsw). The kind's own pins (the decompressed kernelcache's sha256, ...) are in
+# ipsw/pins.bzl, which the rules read through //ipsw:current.
+
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "ipsw_kernelcache", "ipsw_static_trust")
+load(":ipsw.bzl", "ipsw_kinds")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -28,3 +31,20 @@ alias(
     name = "app_cryptex_trust_cache",
     actual = "@ipsw//:app_cryptex_trust_cache",
 )
+
+# `bazel run //ipsw:pin -- --kind=<build> <ipsw url> <product> <device class>`: pins one IPSW kind's members in
+# ipsw/pins.bzl (the others and every kind's derived pins are kept).
+py_binary(
+    name = "pin",
+    srcs = ["pin.py"],
+)
+
+# Inflates a deflated member's bytes and checks the content against its pin (ipsw_inflate runs it).
+py_binary(
+    name = "inflate",
+    srcs = ["inflate.py"],
+)
+
+# --//ipsw:kind (default pins.bzl's DEFAULT_KIND), a config_setting per kind (//ipsw:<kind>), the deflated
+# members inflated (//ipsw:<kind>_<role>, what @ipsw//:<role> selects), :current (the kind's IpswInfo).
+ipsw_kinds()

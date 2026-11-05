@@ -40,9 +40,9 @@ KERNEL_TOOL_ATTRS = {
     "_tools": attr.label_list(default = ["//tools/kernel:" + t for t in KERNEL_TOOLS], cfg = "exec"),
     "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
     "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
-    "_path_root": attr.label(default = "//bazel/kernel:path_root"),
-    "_build_date": attr.label(default = "//bazel/kernel:build_date"),
-    "_builder": attr.label(default = "//bazel/kernel:builder"),
+    "_path_root": attr.label(default = "//kernel/rules:path_root"),
+    "_build_date": attr.label(default = "//kernel/rules:build_date"),
+    "_builder": attr.label(default = "//kernel/rules:builder"),
 }
 
 def run_tool(ctx, tool, arguments, inputs, outputs, mnemonic, progress, execution_requirements = None, env = None):

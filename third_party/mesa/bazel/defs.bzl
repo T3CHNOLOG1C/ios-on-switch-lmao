@@ -19,7 +19,7 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
-load("//bazel/kernel:common.bzl", "XCODE_EXECUTION")
+load("//kernel/rules:common.bzl", "XCODE_EXECUTION")
 load(":flags.bzl", "MESA_CPP_ARGS", "MESA_C_ARGS", "MESA_PRE_ARGS")
 
 MESA = "third_party/mesa"

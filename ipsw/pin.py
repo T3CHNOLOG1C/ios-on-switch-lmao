@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Pin one IPSW kind's members in bazel/ipsw/pins.bzl, without storing the IPSW.
+"""Pin one IPSW kind's members in ipsw/pins.bzl, without storing the IPSW.
 
-    bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> <product e.g. iPad7,1> <device class e.g. j120ap>
+    bazel run //ipsw:pin -- --kind=<build> <ipsw url> <product e.g. iPad7,1> <device class e.g. j120ap>
 
 Rewrites the kind's entry of pins.bzl's IPSWS (a declared slot such as "next" is replaced by --kind; the build is
 checked against the IPSW's own) and keeps every other kind and the kind's "derived" pins, which are kept by hand.
@@ -124,7 +124,7 @@ def main():
     args = parser.parse_args()
     url, product, device_class = args.url, args.product, args.device_class
     workspace = os.environ.get("BUILD_WORKSPACE_DIRECTORY") or sys.exit("run with bazel run")
-    pins_path = os.path.join(workspace, "bazel/ipsw/pins.bzl")
+    pins_path = os.path.join(workspace, "ipsw/pins.bzl")
     with open(pins_path) as f:
         text = f.read()
     head, _, table = text.partition("IPSWS = ")

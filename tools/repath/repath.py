@@ -21,7 +21,7 @@ OLD_BUILD = rules.OLD_TREE + '/BUILD.bazel'
 HUNK = re.compile(r'^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@')
 NAME = re.compile(r'^[ +-]\s*name = "([^"]+)"')
 NO_TARGET = '(no target: a load, constant or comment)'
-NO_PACKAGE = 'bazel/kernel/driver_flags.bzl or kernel/BUILD.bazel'
+NO_PACKAGE = 'kernel/rules/driver_flags.bzl or kernel/BUILD.bazel'
 
 
 def old_build_hunks(text: str) -> list[tuple[int, list[str]]]:

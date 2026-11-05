@@ -2,7 +2,7 @@
 
 @gpu_apple_libs  the Apple Metal libraries the seed and the raw pack read (QuartzCore's default.metallib among them),
                extracted from 21H461's OS volume (@ipsw_os, the IPSW's 044-76040-038.dmg) and pinned file by file
-               in bazel/gpu/apple-libs.sha256. Each file is a repository cache entry of its own, so a fetch reads the
+               in gpu/apple-libs.sha256. Each file is a repository cache entry of its own, so a fetch reads the
                OS image only for a file the cache lacks: once per machine.
 @gpu_device_data  what only the Switch makes (precompile/harvest.py --pack): the driver records m2v wrote and the Metal
                libraries Core Image compiled there, one tar pinned by sha256 (DEVICE_DATA), fetched into the repository
@@ -12,8 +12,8 @@
 """
 
 load("//bazel/host:files.bzl", "sha256_lines")
-load("//bazel/ipsw:ipsw.bzl", "ipsw_member_label")
-load("//bazel/ipsw:pins.bzl", "DEFAULT_KIND")
+load("//ipsw:ipsw.bzl", "ipsw_member_label")
+load("//ipsw:pins.bzl", "DEFAULT_KIND")
 
 # @gpu_device_data: the tar harvest.py --pack wrote (<state dir>/gpu-device-data/<file>), by its sha256. Its records are of the
 # NVK identities the device booted (vendor, device, driver version, pipelineCacheUUID); the seed takes its own NVK's.
@@ -74,7 +74,7 @@ llvm_tools = repository_rule(
 )
 
 # --- @gpu_apple_libs -----------------------------------------------------------------------------------------------
-# Apple's binaries stay out of the repository: they are read from the IPSW the build already fetches (bazel/ipsw), and
+# Apple's binaries stay out of the repository: they are read from the IPSW the build already fetches (//ipsw), and
 # only their sha256 is checked in.
 
 # A URL nothing serves: a download of it succeeds only from the repository cache, by its sha256.
@@ -195,7 +195,7 @@ def _gpu_impl(module_ctx):
     llvm_tools(name = "gpu_llvm_as", tools = ["llvm-as"])
     apple_libraries(
         name = "gpu_apple_libs",
-        pins = Label("//bazel/gpu:apple-libs.sha256"),
+        pins = Label("//gpu:apple-libs.sha256"),
         image = ipsw_member_label(DEFAULT_KIND, "os"),
     )
     device_data(name = "gpu_device_data")

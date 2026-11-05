@@ -5,8 +5,8 @@ action with declared inputs, so Bazel reruns only what an edit reaches:
                        -> rustc per crate (host bridge) -> precompile tool -> seed (runs on this Mac)
 """
 
-load("//bazel/ipsw:ipsw.bzl", "IpswInfo")
-load("//bazel/kernel:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "TREE_ROOT")
+load("//ipsw:ipsw.bzl", "IpswInfo")
+load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "TREE_ROOT")
 
 _XCODE = {
     "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
@@ -71,7 +71,7 @@ _IOS = ["-target", "arm64-apple-ios17.0", "-isysroot", "@IPHONEOS_SDK@"]
 # (10 of 10), at +10 KB of __text.
 _PLUGIN_CFLAGS = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fstack-protector-strong", "-std=c++17", "-fobjc-arc",
                   "-Wno-deprecated-declarations", "-fno-objc-msgsend-selector-stubs", "-ffile-prefix-map=@PWD@=/ioswitch"] + [
-    # The layout move's old spellings (bazel/kernel/layout.bzl): the plugin's strings name its sources as before.
+    # The layout move's old spellings (kernel/rules/layout.bzl): the plugin's strings name its sources as before.
     "-ffile-prefix-map=@PWD@/{r}=/ioswitch/{o}/{r}".format(r = r, o = OLD_TREE)
     for r in MOVED_ROOTS
     if TREE_ROOT != OLD_TREE
@@ -454,7 +454,7 @@ metal_seed = rule(
         "twin": attr.label(mandatory = True, allow_single_file = True),
         "nvk_sources": attr.label_list(allow_files = True, doc = "the two dylibs' .source files"),
         "qc": attr.label(mandatory = True, allow_single_file = True, doc = "the IPSW's QuartzCore default.metallib"),
-        "ipsw": attr.label(default = "//bazel/ipsw:current", providers = [IpswInfo], doc = "the QuartzCore metallib's pin"),
+        "ipsw": attr.label(default = "//ipsw:current", providers = [IpswInfo], doc = "the QuartzCore metallib's pin"),
         "libraries": attr.label(mandatory = True, doc = "the OS volume's Metal libraries (@gpu_apple_libs//:libraries)"),
         "names": attr.label(mandatory = True, allow_single_file = [".json"], doc = "their names.json (m2v_library_names)"),
         "embedded": attr.label_list(

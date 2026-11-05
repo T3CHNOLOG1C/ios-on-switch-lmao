@@ -57,7 +57,7 @@ KERNEL_SDK = "//kernel:sdk"
 EXTRA_HEADERS = "//{}:hdrs_extra".format(KERNEL_PACKAGE)
 
 def _one_package():
-    """The layout before the move: every driver in the kernel tree's one package (bazel/kernel/layout.bzl)."""
+    """The layout before the move: every driver in the kernel tree's one package (kernel/rules/layout.bzl)."""
     return native.package_name() == TREE_ROOT
 
 def _headers_label(directory):

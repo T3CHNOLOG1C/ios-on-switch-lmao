@@ -13,7 +13,7 @@ py_library(
     imports = ["."],
 )
 
-# Prelinks Apple's original kexts into the linked kernel (bazel/kernel/kernel.bzl kernel_prelink runs it).
+# Prelinks Apple's original kexts into the linked kernel (kernel/rules/kernel.bzl kernel_prelink runs it).
 py_binary(
     name = "emit_prelink",
     srcs = ["emit_prelink.py"],

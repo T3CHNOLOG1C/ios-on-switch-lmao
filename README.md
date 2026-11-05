@@ -44,7 +44,7 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
 - **bazelisk**: `brew install bazelisk`. `.bazelversion` pins Bazel 9.3.1, and bazelisk fetches it on first use.
   Nothing else comes from Homebrew: lz4 and the LLVM tools are pinned downloads, and the unit tests get them too.
 - **For the GPU bundle only**: `~/Library/Application Support/ioswitch/gpu-device-data/m2v-device-<sha>.tar` once per machine, the data only the Switch
-  makes (its driver records and Core Image's compiled kernels: `harvest.py --pack`, pinned in `bazel/gpu/deps.bzl`
+  makes (its driver records and Core Image's compiled kernels: `harvest.py --pack`, pinned in `gpu/deps.bzl`
   `DEVICE_DATA`). The first build copies it into the repository cache, and no checkout reads it after that. The Apple
   Metal libraries the seed and the raw pack read (QuartzCore's `default.metallib` among them) come from the IPSW, below.
 
@@ -67,7 +67,7 @@ The first build downloads, all by sha256 into the shared repository cache:
 - lz4 1.10.0;
 - a few MB of the IPSW (kernelcache, trust caches, device tree), by HTTP range request;
 - for `//:gpu`, the IPSW's 5.2 GB OS image (the member the installer also needs), once per machine: Bazel attaches it
-  read-only and copies out the 152 Metal libraries `bazel/gpu/apple-libs.sha256` pins (231 MB), each into the repository
+  read-only and copies out the 152 Metal libraries `gpu/apple-libs.sha256` pins (231 MB), each into the repository
   cache by its sha256. Later fetches take them from the cache and read neither the image nor the network.
 
 It then compiles XNU (about 80 s), about 300 driver objects, corecrypto and libpthread, links, prelinks and packages.
@@ -156,7 +156,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa vendored in `third_party/mesa` (77452b90 + ioswitch's commits), built natively, one action per compile and generator |
 | `//drivers/<Driver>` | One driver's package: its objects (e.g. `//drivers/SwitchUSB`), headers (`:headers`, `:hdrs`) and tests. XNU's objects are `//kernel/xnu-10063.141.1/<component>`; `//kernel:kernel_unprelinked` is the link |
 | `//ipsw:kernelcache`, `//ipsw:static_system_trust` | The original kernelcache (decompressed) and the root+OS-cryptex trust bundle, from the IPSW |
-| `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | The members of the IPSW kind `--//bazel/ipsw:kind` selects (`bazel/ipsw/pins.bzl`, one table of kinds). Deflated ones are inflated by a build action (`//bazel/ipsw:<kind>_<role>`) |
+| `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | The members of the IPSW kind `--//ipsw:kind` selects (`ipsw/pins.bzl`, one table of kinds). Deflated ones are inflated by a build action (`//ipsw:<kind>_<role>`) |
 | `//install:sd`, `//install:artifacts` | SD-card install and what it writes |
 | `//deploy:sd`, `//deploy:pull_logs` | Deploy and log pull |
 | `//boot:snapshot` | Copy this build to `~/Library/Application Support/ioswitch/lkg/<name>` |
@@ -172,7 +172,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 Flags:
 - `--//boot:smp=false`: package for one core.
 - `--//boot:gpu_trustcache=//boot:no_gpu`: package without the GPU trust module.
-- `--//bazel/kernel:path_root=…`, `build_date=…`, `builder=…`: what paths and the XNU version string show; they're for
+- `--//kernel/rules:path_root=…`, `build_date=…`, `builder=…`: what paths and the XNU version string show; they're for
   equivalence checks.
 - `--config=release`: stop at the first error.
 - `--config=reproducible-check`: no caches, with an execution log.
@@ -256,7 +256,7 @@ The default is the IOKit C++ recipe (XNU's own compile flags) plus our warnings.
 | `c_recipe = ":freestanding_c"`, `object_names = "path"` | Vendored Linux code (nvkm, BPMP, DFLL) |
 
 `bazel build //:kernel` then compiles just the new objects, re-archives and relinks. The old CMake flow had the same
-pieces; `bazel/kernel/kernel.bzl` documents each.
+pieces; `kernel/rules/kernel.bzl` documents each.
 
 ## Changing XNU
 
@@ -279,17 +279,17 @@ linters leave them alone.
 
 | Pin | Where | How |
 |---|---|---|
-| IPSW | `bazel/ipsw/pins.bzl` | `bazel run //bazel/ipsw:pin -- --kind=<build> <ipsw url> iPad7,1 j120ap` (pins one kind in place; streams each member once to hash it; nothing stored) |
+| IPSW | `ipsw/pins.bzl` | `bazel run //ipsw:pin -- --kind=<build> <ipsw url> iPad7,1 j120ap` (pins one kind in place; streams each member once to hash it; nothing stored) |
 | XNU version | `kernel/xnu-<version>/` | Vendor the new tag next to the old one (pristine commit, then our commits replayed), `bazel run //kernel/xnu-<version>:update_tables`, add the version to `//kernel:xnu_version`. `MODULE.bazel` `@xnu_base` (lldb macros) follows |
 | Apple OSS, corecrypto, lz4 | `MODULE.bazel` | Version in the URL, new sha256, `strip_prefix` |
 | m2v | `third_party/m2v` | Vendored: the upstream tree as one commit, our changes as commits on it (`git log -- third_party/m2v`). Edit it in place; for a new upstream commit, import it and rebase ours onto it |
 | Rust crates | `bazel/rust/crates.MODULE.bazel` | Edit a `crate.spec`, then `CARGO_BAZEL_REPIN=1 bazel mod deps --lockfile_mode=update` (rewrites `bazel/rust/Cargo.lock` and `crates.lock.json`) |
 | NVK | `third_party/mesa` | Edit Mesa's sources and commit (one commit per change, as the series is); `bazel build //gpu/nvk:ios //gpu/nvk:host` rebuilds what the edit touches |
 | Mesa | `third_party/mesa/README.ioswitch.md` | A new import, ioswitch's commits rebased onto it, the BUILD files updated where meson.build changed. If `nvk_query.cl`, `nvk_copy_indirect.cl` or their headers change, regenerate `third_party/mesa/bazel/pinned` with Mesa's mesa_clc/vtn_bindgen2 (LLVM 23.1.4) |
-| The IPSW's Metal libraries | `bazel/gpu/apple-libs.sha256` | After an IPSW bump: attach the OS image read-only and regenerate with the command in its header (`libraries.py pins`) |
-| Device data | `bazel/gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes `~/Library/Application Support/ioswitch/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
+| The IPSW's Metal libraries | `gpu/apple-libs.sha256` | After an IPSW bump: attach the OS image read-only and regenerate with the command in its header (`libraries.py pins`) |
+| Device data | `gpu/deps.bzl` `DEVICE_DATA` | `bazel run //deploy:pull_logs -- disk4` stages the device's caches, then `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes `~/Library/Application Support/ioswitch/gpu-device-data/m2v-device-<sha>.tar` and prints the pin |
 | Rust | `MODULE.bazel` | `rust.toolchain(versions = [...])` and the values of `//bazel/rust:toolchain_version` |
-| LLVM | `bazel/llvm/llvm.bzl` and `bazel/gpu/deps.bzl` | URL and sha256 in both (one archive) |
+| LLVM | `bazel/llvm/llvm.bzl` and `gpu/deps.bzl` | URL and sha256 in both (one archive) |
 | Python packages | not used yet | — |
 | Xcode | `bazel/host/xcode.bzl` | Select the new Xcode, then `bazel run @xcode//:print_pins` and paste |
 | Pinned files | `bazel/pinned` | Replace the file, update its line in `SHA256SUMS` (`shasum -a 256 <path>`, path relative to `bazel/pinned`), `bazel test //bazel/pinned:sha256` |
@@ -313,7 +313,7 @@ and NVK signatures, the seed and the raw pack.
 What makes the outputs reproducible:
 - Every compile maps the sandbox to a fixed path root with `-ffile-prefix-map` (`/ioswitch/...`). Apple clang's UBSan
   source locations ignore that flag, so they keep only their last three path components.
-- XNU's version string has a fixed date and builder (`--//bazel/kernel:build_date`, `builder`).
+- XNU's version string has a fixed date and builder (`--//kernel/rules:build_date`, `builder`).
 - XNU's make sorts symbol sets under `en_IE.UTF-8`, the locale the hardware-tested kernels were built under.
 - Archives are written with `ZERO_AR_DATE=1`, and the kernel link with `-oso_prefix`.
 - Code signatures are ad hoc, with no timestamp.
@@ -396,7 +396,7 @@ Rebasing a patch made before a formatting change (for example the one-time forma
 ## Tools and scripts
 
 Every build, package, install, deploy and log step is a Bazel target, and there are no loose scripts:
-- Orchestration is Starlark: rules in `bazel/kernel`, `bazel/ipsw`, `gpu/defs.bzl` and `install/defs.bzl` declare each
+- Orchestration is Starlark: rules in `kernel/rules`, `//ipsw`, `gpu/defs.bzl` and `install/defs.bzl` declare each
   action's inputs and outputs; repository rules fetch and check what comes from outside.
 - Real tools are Python, one `py_binary` per job on the hermetic rules_python 3.13 (`tools/kernel`, `tools/package`,
   `tools/prelink`, `tools/gpu`, `tools/install`, `tools/deploy`), called from those rules or by `bazel run`.
@@ -428,7 +428,7 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 - **"The selected Xcode does not match the pin"**: select Xcode-beta 27.0, or re-pin (see [Bumping a pin](#bumping-a-pin)).
   `IOSWITCH_ALLOW_UNPINNED_XCODE=1` builds anyway, with a warning; the output won't match.
 - **`@gpu_device_data` fails to fetch (`m2v-device-….tar` in neither the repository cache nor
-  `~/Library/Application Support/ioswitch/gpu-device-data/`)**: copy the tar named in `bazel/gpu/deps.bzl` `DEVICE_DATA` there
+  `~/Library/Application Support/ioswitch/gpu-device-data/`)**: copy the tar named in `gpu/deps.bzl` `DEVICE_DATA` there
   (`$IOSWITCH_HOME/gpu-device-data/` if you set it; it stays out of the repository: it is Apple-derived), or make a new one from the device's caches: `bazel run //deploy:pull_logs -- disk4` stages them, then
   `bazel run //drivers/TegraGM20BMetal:harvest -- --pack` writes the tar and prints the pin.
   Without any device data (another machine), set `DEVICE_DATA = None`: the seed then lacks the device's records and Core

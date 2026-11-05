@@ -11,7 +11,7 @@
 # Every header and generated file is its own action output (kernel/rules/xnu.bzl): editing one header reruns the steps
 # that read it and the compiles that include it, nothing else. r18-xnu-objs' BUILD files in the component directories
 # compile and link XNU from these.
-load("//bazel/kernel:layout.bzl", "KERNEL_PACKAGE")
+load("//kernel/rules:layout.bzl", "KERNEL_PACKAGE")
 load("//kernel/rules:defs.bzl", "xnu_lint_files", "xnu_package")
 load(":tables/build_DEVELOPMENT.bzl", "BUILD_DEVELOPMENT")
 load(":tables/build_RELEASE.bzl", "BUILD_RELEASE")

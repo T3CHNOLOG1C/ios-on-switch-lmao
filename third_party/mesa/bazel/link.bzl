@@ -17,7 +17,7 @@ load("@rules_cc//cc:action_names.bzl", "ACTION_NAMES")
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@xcode//:defs.bzl", "XCODE_TOOLCHAIN")
-load("//bazel/kernel:common.bzl", "XCODE_EXECUTION")
+load("//kernel/rules:common.bzl", "XCODE_EXECUTION")
 load(":defs.bzl", "MESA_ONLY")
 
 _MESA = "third_party/mesa"

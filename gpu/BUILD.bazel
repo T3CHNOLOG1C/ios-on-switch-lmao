@@ -13,7 +13,8 @@
 # input), NVK and its host twin (//gpu/nvk: Mesa 77452b90 + the series, built here), the Apple Metal libraries the seed
 # and the raw pack read (@gpu_apple_libs: the IPSW kind's OS volume's, QuartzCore's
 # default.metallib among them, extracted from the IPSW) and what only the device makes (@gpu_device_data: its driver
-# records and Core Image's compiled kernels, a pinned tar). See bazel/gpu/deps.bzl.
+# records and Core Image's compiled kernels, a pinned tar). See gpu/deps.bzl.
+
 load("@rules_rust//rust:defs.bzl", "rust_static_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/rust:defs.bzl", "cargo_ids", "rust_artifact")
@@ -240,3 +241,8 @@ gpu_tree(
     trust_json = ":trust_json",
     trustcache = ":trustcache",
 )
+
+# The pins of the Apple Metal libraries @gpu_apple_libs extracts from the IPSW (gpu/deps.bzl).
+
+
+exports_files(["apple-libs.sha256"])

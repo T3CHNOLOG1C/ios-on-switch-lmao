@@ -168,10 +168,10 @@ http_archive(
     urls = ["https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz"],
 )
 
-# --- The IPSW: per IPSW kind (bazel/ipsw/pins.bzl, --//bazel/ipsw:kind), only the members the build and the SD install
-# read, fetched by HTTP range request into the repository cache (`bazel run //bazel/ipsw:pin` to pin a kind). The
+# --- The IPSW: per IPSW kind (ipsw/pins.bzl, --//ipsw:kind), only the members the build and the SD install
+# read, fetched by HTTP range request into the repository cache (`bazel run //ipsw:pin` to pin a kind). The
 # build names them @ipsw//:<role>, the selected kind's. --------------------------------------------------------------
-ipsw = use_extension("//bazel/ipsw:ipsw.bzl", "ipsw")
+ipsw = use_extension("//ipsw:ipsw.bzl", "ipsw")
 use_repo(ipsw, "ipsw")
 
 # --- GPU (owned by gpu/) -----------------------------------------------------------------------------------------
@@ -201,9 +201,9 @@ use_repo(
 # bazel/rust/Cargo.lock and crates.lock.json).
 include("//bazel/rust:crates.MODULE.bazel")
 
-# The Apple Metal libraries of the IPSW's OS volume, the device's own data and llvm-as (bazel/gpu/deps.bzl). m2v is
+# The Apple Metal libraries of the IPSW's OS volume, the device's own data and llvm-as (gpu/deps.bzl). m2v is
 # third_party/m2v, its crates.io crates @rust_crates (bazel/rust).
-gpu = use_extension("//bazel/gpu:deps.bzl", "gpu")
+gpu = use_extension("//gpu:deps.bzl", "gpu")
 use_repo(gpu, "gpu_apple_libs", "gpu_device_data", "gpu_llvm_as")
 
 # --- NVK (gpu/nvk): Mesa vendored in third_party/mesa and built natively; the tools it runs, pinned ------------------

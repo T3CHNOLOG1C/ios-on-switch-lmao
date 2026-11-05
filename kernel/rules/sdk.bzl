@@ -23,7 +23,7 @@ KernelSdkInfo = provider(
         "fakeroot": "the SDK root's spelling in what the build ships (the kernel tree's .cache/fakeroot)",
         "bin_dir": "the bin directory these were built in",
         "xnu_root": "exec path of the XNU source (kernel/xnu-<version>)",
-        "tree": "where the kernel tree's sources are (bazel/kernel/layout.bzl TREE_ROOT; \"\" = the repository root)",
+        "tree": "where the kernel tree's sources are (kernel/rules/layout.bzl TREE_ROOT; \"\" = the repository root)",
         "package": "the package of the kernel's generated files (its build/ holds them)",
     },
 )
