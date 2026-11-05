@@ -2620,10 +2620,116 @@ iosw_keyboard_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size
 }
 
 /*
+ * IOSwitch widgets: chronod's placeholder deadline scaled to this CPU, so a widget's placeholder batch completes once
+ * and is cached instead of being discarded and redone every boot.
+ *
+ * chronod asks a widget extension for its gallery placeholders in one batch, getPlaceholders(n), and watchdogs the
+ * session with WidgetExtensionSessionOperation.defaultTimeout (WidgetKit, cache text in dyld_shared_cache_arm64.07 of
+ * 21H461): max(n + 10, 20) s for that case, 23 s for Music's 13 archives, a budget sized for an A12X. On the A57s the
+ * batch (two renders per archive, light and dark; TopCharts extra-large alone 11-15 s) never finishes in 23 s: chronod
+ * logs "Watchdog provision violated for getPlaceholders(13)", destroys all 13 promises and retries twice, while the
+ * extension renders the discarded batches anyway; nothing reaches the placeholder cache ("Cache miss ... reload without
+ * cache" at every boot), so MusicWidgets spent about 68 s of CPU per boot (r13 boot 0940-r7p8) for no result. Batches
+ * that do finish are cached and hit on the next boot (News, Notes, Maps, Weather placeholders: "Cache hit").
+ * Here that case is (n + 10) x 5 s, 115 s for 13 (the A57 at 1.67 GHz is 4-5x slower than an A12X core): fmov d1,
+ * #20.0 becomes fmov d1, #5.0 and fmaxnm d0, d0, d1 becomes fmul d0, d0, d1, after n + 10 is computed as shipped.
+ * Timelines (30 s per entry), descriptors and the other operations keep their shipped deadlines; an extension that
+ * hangs is still killed, later. Same pager and checks as the settings icons, on one 4 KB chunk: the case's six
+ * instructions must read as shipped.
+ */
+static const uint8_t iosw_wd_uuid[16] = {           /* dyld_shared_cache_arm64.07 of 21H461 */
+	0xb8, 0x6b, 0xcb, 0x98, 0x4e, 0x86, 0x33, 0x74, 0xb9, 0x27, 0x98, 0xa7, 0x1e, 0x6b, 0x1e, 0xbd,
+};
+#define IOSW_WD_PAGES_VMADDR    0x195df4000ULL      /* unslid; one 16 KB page (.07's text: 0x1948c8000, file 0) */
+#define IOSW_WD_PAGES_FILEOFF   0x152c000ULL
+#define IOSW_WD_PAGES_SIZE      0x4000ULL
+#define IOSW_WD_CHUNK_OFFSET    0x2000ULL           /* the 4 KB chunk at 0x195df6000 */
+#define IOSW_WD_CASE_FILEOFF    0x152eef4ULL        /* 0x195df6ef4, defaultTimeout.getter + 0x20: the batch case */
+#define IOSW_WD_PATCH_OFFSET    12                  /* fmov d1, #20.0 (0x195df6f00) and the fmaxnm after it */
+
+static int iosw_wd_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
+static uint32_t iosw_wd_logged;
+
+static int
+iosw_widget_deadline_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
+{
+	/* scvtf d0, x8; fmov d1, #10.0; fadd d0, d0, d1; fmov d1, #20.0; fmaxnm d0, d0, d1; ret */
+	static const uint8_t stock[24] = {
+		0x00, 0x01, 0x62, 0x9e, 0x01, 0x90, 0x64, 0x1e, 0x00, 0x28, 0x61, 0x1e,
+		0x01, 0x90, 0x66, 0x1e, 0x00, 0x68, 0x61, 0x1e, 0xc0, 0x03, 0x5f, 0xd6,
+	};
+	/* fmov d1, #5.0; fmul d0, d0, d1 */
+	static const uint8_t scaled[8] = { 0x01, 0x90, 0x62, 0x1e, 0x00, 0x08, 0x61, 0x1e };
+	uint8_t *out = dst;
+
+	bcopy(src, dst, IOSW_HG_CHUNK);
+	if (IOSW_WD_CASE_FILEOFF < src_offset || IOSW_WD_CASE_FILEOFF + sizeof(stock) > src_offset + IOSW_HG_CHUNK) {
+		return 0;
+	}
+	uint64_t at = IOSW_WD_CASE_FILEOFF - src_offset;
+	if (memcmp(out + at, stock, sizeof(stock)) != 0) {
+		if (!os_atomic_xchg(&iosw_wd_logged, 1, relaxed)) {
+			printf("IOSwitch widgets: cache bytes at 0x%llx are not the shipped ones, placeholder deadline left stock\n",
+			    IOSW_WD_CASE_FILEOFF);
+		}
+		return 0;
+	}
+	memcpy(out + at + IOSW_WD_PATCH_OFFSET, scaled, sizeof(scaled));
+	if (!os_atomic_xchg(&iosw_wd_logged, 1, relaxed)) {
+		printf("IOSwitch widgets: placeholder batch deadline (n + 10) x 5 s\n");
+	}
+	return 0;
+}
+
+/* The widget deadline's pager for the mapping that holds defaultTimeout, or MEMORY_OBJECT_NULL. */
+static memory_object_t
+iosw_widget_deadline_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
+{
+	if (unslid_address > IOSW_WD_PAGES_VMADDR ||
+	    IOSW_WD_PAGES_VMADDR + IOSW_WD_PAGES_SIZE > unslid_address + size ||
+	    file_offset + (IOSW_WD_PAGES_VMADDR - unslid_address) != IOSW_WD_PAGES_FILEOFF ||
+	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
+		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the getter */
+	}
+
+	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(iosw_wd_uuid)];
+	int resid = 0;
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
+	if (error != 0 || resid != 0) {
+		printf("IOSwitch widgets: cache header read failed (%d), cache text left stock\n", error);
+		return MEMORY_OBJECT_NULL;
+	}
+	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
+	    memcmp(header + IOSW_HG_UUID_OFFSET, iosw_wd_uuid, sizeof(iosw_wd_uuid)) != 0) {
+		printf("IOSwitch widgets: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+
+	struct pager_crypt_info crypt_info = {
+		.page_decrypt = iosw_widget_deadline_page,
+		.crypt_end = NULL,
+		.crypt_ops = &iosw_wd_cookie,
+		.crypt_refcnt = 0,
+	};
+	memory_object_t mo = apple_protect_pager_setup(file_object, IOSW_WD_PAGES_FILEOFF,
+	    IOSW_WD_PAGES_FILEOFF + IOSW_WD_CHUNK_OFFSET, &crypt_info,
+	    IOSW_WD_CHUNK_OFFSET, IOSW_WD_CHUNK_OFFSET + IOSW_HG_CHUNK, TRUE);
+	if (mo == MEMORY_OBJECT_NULL) {
+		printf("IOSwitch widgets: pager setup failed, cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+	*range_offset = IOSW_WD_PAGES_VMADDR - unslid_address;
+	*range_size = IOSW_WD_PAGES_SIZE;
+	return mo;
+}
+
+/*
  * Called by vm_shared_region_map_file_setup() for each executable cache mapping it has just entered in a shared
  * region. Returns an apple_protect pager for the range to replace (range_offset/range_size within the mapping),
- * or MEMORY_OBJECT_NULL to keep the mapping stock. The patched ranges are in different subcaches (.25, .13, .03),
- * so a mapping matches at most one.
+ * or MEMORY_OBJECT_NULL to keep the mapping stock. The patched ranges are in different subcaches (.25, .13, .03,
+ * .07), so a mapping matches at most one.
  */
 memory_object_t ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size);
@@ -2639,6 +2745,10 @@ ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, 
 	}
 	if (mo == MEMORY_OBJECT_NULL) {
 		mo = iosw_keyboard_pager(file_object, file_offset, size, unslid_address, vp, range_offset, range_size);
+	}
+	if (mo == MEMORY_OBJECT_NULL) {
+		mo = iosw_widget_deadline_pager(file_object, file_offset, size, unslid_address, vp, range_offset,
+		    range_size);
 	}
 	return mo;
 }
