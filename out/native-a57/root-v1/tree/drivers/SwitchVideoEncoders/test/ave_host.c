@@ -11,8 +11,10 @@
 // the setup points at (so a wrong reference shows as a mismatch). Its reconstruction goes to the buffer OUT_REF_PIC
 // names. CAVLC only (the check asks for it); the status record gets the bit count.
 // Also: the SPS/PPS/avcC parse back with the decoder's own H264Syntax.c to what was configured; struct sizes match
-// nvenc_drv.h's comments; the checker refuses each kind of bad submit derived from a good one; the layouts' offsets
-// are a bijection; the rate control converges on a synthetic bits-versus-QP model.
+// nvenc_drv.h's comments; the slice, ME, MD and quant controls, reference lists, slicing and history size of a
+// 1280x720 High IDR and P picture are byte for byte those of NVIDIA's own T210 driver (driverControls) and the checker
+// accepts them; the checker refuses each kind of bad submit derived from a good one; the layouts' offsets are a
+// bijection; the rate control converges on a synthetic bits-versus-QP model.
 // Prints "PASS ave ..." (tests/test_switch_video_encode.py).
 #include "../AVE/AVEEncoder.c"
 #include <stdio.h>
@@ -356,6 +358,119 @@ static void layouts(void)
         }
 }
 
+// NVIDIA's own T210 driver's H.264 picture setups (NVENC 5.0, 1280x720 High profile CABAC 8x8, QP 24), captured on a
+// Switch and published by github.com/TomasUribe/switch-frame-tap, logs/m79-runE-setups/setup_3.bin (IDR) and
+// setup_5.bin (P): their controls up to the last non-zero byte (every later byte of each block is 0), and the
+// pic_control lists (l0, l1, temp_dist_l0/l1, dist_scale_factor). H264NVENC.c's controls must be these bytes exactly,
+// which also proves the bitfields land where the driver's do (TegraNVENC/nvidia/SOURCE).
+static const uint8_t kDriverMe[156] = {
+    0x26, 0x40, 0x07, 0x00, 0x01, 0x40, 0x00, 0x08, 0xff, 0x1f, 0xff, 0x07, 0x00, 0x00, 0x90, 0x28, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x80, 0xa4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x1c, 0x1c, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3e, 0x3e,
+    0x3e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x3e, 0x7f, 0x3e, 0x08, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x89, 0x1c, 0x1c, 0x7f, 0x1c, 0x1c, 0x08, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x6e, 0x04, 0xfe, 0x07, 0x49, 0x56, 0x00, 0x06, 0x00, 0x00, 0x88, 0x46,
+};
+static const uint8_t kDriverMd[2][64] = {
+    {0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x03, 0x7f, 0x0f, 0x0f, 0x08, 0x00, 0x00, 0x00, 0x00,  // IDR
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xea, 0x9c, 0x00, 0x00, 0x8b, 0x08, 0x11, 0x00, 0x00, 0x00},
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xff, 0x03, 0x7f, 0x0f, 0x0f, 0x08, 0x00, 0x00, 0x00, 0x00,  // P
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xea, 0x9c, 0x00, 0x00, 0x8b, 0x08, 0x11, 0x00, 0x00, 0x00},
+};
+static const uint8_t kDriverQ[148] = {
+    0x6b, 0x05, 0xff, 0xaa, 0xaa, 0xff, 0x0f, 0x00, 0x04, 0x06, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x03, 0x6e,
+    0x03, 0x34, 0x03, 0xaa, 0x02, 0x6e, 0x03, 0x34, 0x03, 0xaa, 0x02, 0x00, 0x02, 0x34, 0x03, 0xaa, 0x02, 0x00, 0x02,
+    0x9a, 0x01, 0xaa, 0x02, 0x00, 0x02, 0x9a, 0x01, 0x9a, 0x01, 0xaa, 0x02, 0x4a, 0x02, 0x22, 0x02, 0xc8, 0x01, 0x4a,
+    0x02, 0x22, 0x02, 0xc8, 0x01, 0x56, 0x01, 0x22, 0x02, 0xc8, 0x01, 0x56, 0x01, 0x24, 0x01, 0xc8, 0x01, 0x56, 0x01,
+    0x24, 0x01, 0x12, 0x01, 0xaa, 0x02, 0x56, 0x01, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa,
+    0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02, 0xaa, 0x02,
+    0xaa, 0x02, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56,
+    0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01, 0x56, 0x01,
+};
+static const uint8_t kDriverSlice[12] = {0x10, 0x0e, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x33, 0x00};
+
+// Block `b` (`size` bytes) is `expect` (`n` bytes) followed by zeros.
+static bool sameBlock(const uint8_t *b, size_t size, const uint8_t *expect, size_t n)
+{
+    if (memcmp(b, expect, n)) return false;
+    for (size_t i = n; i < size; i++)
+        if (b[i]) return false;
+    return true;
+}
+
+static void driverControls(void)
+{
+    H264EncConfig c = {.width = 1280,
+                       .height = 720,
+                       .profile_idc = H264_PROFILE_HIGH,
+                       .cabac = true,
+                       .transform8x8 = true,
+                       .fps_num = 60,
+                       .fps_den = 1,
+                       .input_layout = TEGRA_NVENC_LAYOUT_TILED16,
+                       .chroma_mode = TEGRA_NVENC_CHROMA_OFFSET};
+    EXPECT(!h264enc_configure(&c), "configure 1280x720");
+    H264EncLayout l;
+    h264enc_layout(&c, &l);
+    EXPECT(l.history_bytes == 706560, "history at 1280x720 is %u bytes, NVIDIA's driver gives 706560", l.history_bytes);
+    const H264EncHandles h = {1, 2, 3, 4, 5};
+    const uint64_t sizes[6] = {0, l.input.bytes, l.recon.bytes, l.recon.bytes, l.bitstream_bytes, l.aux_bytes};
+    for (int k = 0; k < 2; k++) {
+        const H264EncPicture pic = {.type = k ? H264ENC_P : H264ENC_IDR, .qp = 24, .frame_num = (uint32_t)k};
+        static TegraNVENCSubmit s;
+        h264enc_fill_submit(&c, &l, &pic, &h, &s);
+        const nvenc_h264_drv_pic_setup_s *p = (const nvenc_h264_drv_pic_setup_s *)s.setup;
+        const nvenc_h264_pic_control_s *pc = &p->pic_control;
+        const char *name = k ? "P" : "IDR";
+        EXPECT(
+            sameBlock(s.setup + pc->me_control_offset, sizeof(nvenc_h264_me_control_s), kDriverMe, sizeof(kDriverMe)),
+            "%s: ME control differs from NVIDIA's T210 driver's", name);
+        EXPECT(sameBlock(s.setup + pc->md_control_offset, sizeof(nvenc_h264_md_control_s), kDriverMd[k],
+                         sizeof(kDriverMd[k])),
+               "%s: MD control differs from NVIDIA's T210 driver's", name);
+        EXPECT(
+            sameBlock(s.setup + pc->q_control_offset, sizeof(nvenc_h264_quant_control_s), kDriverQ, sizeof(kDriverQ)),
+            "%s: quant control differs from NVIDIA's T210 driver's", name);
+        EXPECT(sameBlock(s.setup + pc->slice_control_offset, sizeof(nvenc_h264_slice_control_s), kDriverSlice,
+                         sizeof(kDriverSlice)),
+               "%s: slice control differs from NVIDIA's T210 driver's", name);
+        // l0/l1 -2 past the references, temporal distances and scale factors -1 but a P picture's first.
+        uint8_t lists[160];
+        memset(lists, 0xfe, 16);
+        memset(lists + 16, 0xff, 144);
+        if (k) {
+            lists[0] = 0;
+            lists[16] = 1;
+            for (int r = 0; r < 8; r++) lists[32 + 16 * r] = 0x00, lists[33 + 16 * r] = 0x01;
+        }
+        EXPECT(!memcmp(pc->l0, lists, sizeof(lists)), "%s: reference lists differ from NVIDIA's T210 driver's", name);
+        // The flags word (pic_struct .. cabac_zero_word_enable): 0x9c for the driver's IDR, 0x90 for its P.
+        EXPECT(((const uint8_t *)pc)[0xe0] == (k ? 0x90 : 0x9c) && pc->slice_mode == 0 && pc->max_slice_size == 3600 &&
+                   pc->hist_buf_size == 706560,
+               "%s: slicing or history differ from NVIDIA's T210 driver's (flags %#x, max_slice_size %u, history %u)",
+               name, ((const uint8_t *)pc)[0xe0], pc->max_slice_size, pc->hist_buf_size);
+        uint64_t avail[TEGRA_NVENC_MAX_ENTRIES] = {0};
+        for (uint32_t i = 0; i < s.entry_count; i++)
+            if (s.entries[i].kind == TEGRA_NVENC_ENTRY_RELOC)
+                avail[i] = sizes[s.entries[i].value] - s.entries[i].offset;
+        const char *why = tegra_nvenc_check(&s, avail);
+        EXPECT(!why, "%s at 1280x720: the checker refuses it: %s", name, why ? why : "");
+    }
+    // The history the checker asks for: one row of 128-byte records (nvenc_drv.h 2.3) below NVIDIA's T210 size, which
+    // is 192 bytes a macroblock and a row more; never less than the row.
+    EXPECT(tegra_nvenc_history_bytes(64, 64) == 4 * 5 * 192 &&
+               tegra_nvenc_history_bytes(1920, 1080) == 120 * 69 * 192 &&
+               tegra_nvenc_history_bytes(32, 32) == (2 + 16) * 128,
+           "tegra_nvenc_history_bytes");
+}
+
 static void sizes(void)
 {
     EXPECT(sizeof(nvenc_h264_drv_pic_setup_s) == 512 && sizeof(nvenc_h264_pic_control_s) == 276 &&
@@ -379,7 +494,7 @@ static void refusals(void)
         {"magic", "magic"},
         {"no status", "missing relocation"},
         {"bitstream bigger than its buffer", "bitstream"},
-        {"history smaller than 2.3's minimum", "history"},
+        {"history of 128 bytes", "history"},
         {"ME-only", "ME-only"},
         {"B picture", "picture structure or type"},
         {"list 0 names an unrelocated slot", "reference slot"},
@@ -391,6 +506,12 @@ static void refusals(void)
         {"stats FIFO", "picture features"},
         {"two slices", "control counts"},
         {"application id after another method", "application id not first"},
+        {"slice_mode 1 (hardware-chained slices)", "slice mode"},
+        {"max_slice_size below the macroblock count", "slice mode"},
+        {"unused list-1 entry -1 instead of the driver's -2", "list 1"},
+        {"unused list-0 entry -1 instead of the driver's -2", "list 0 length"},
+        {"history of one 128-byte row (nvenc_drv.h 2.3), below the T210 driver's size", "history"},
+        {"direct prediction", "mode decision"},
     };
     for (unsigned k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
         TegraNVENCSubmit s = gFirstP;
@@ -441,6 +562,17 @@ static void refusals(void)
             avail[1] = a;
             break;
         }
+        case 15: pc->slice_mode = 1; break;
+        case 16: pc->max_slice_size = 1; break;
+        case 17: pc->l1[3] = -1; break;
+        case 18: pc->l0[1] = -1; break;
+        case 19: {
+            const uint32_t width = p->input_cfg.frame_width_minus1 + 1u, height = p->input_cfg.frame_height_minus1 + 1u;
+            pc->hist_buf_size = (((width - 1 + 16) / 16) + 16) * 128;
+            EXPECT(pc->hist_buf_size < tegra_nvenc_history_bytes(width, height), "the clip's row is the larger");
+            break;
+        }
+        case 20: ((nvenc_h264_md_control_s *)(s.setup + pc->md_control_offset))->bdirect_mode = 1; break;
         }
         const char *why = tegra_nvenc_check(&s, avail);
         EXPECT(why && !strcmp(why, cases[k].why), "%s: checker said \"%s\", expected \"%s\"", cases[k].name,
@@ -473,6 +605,7 @@ int main(void)
 {
     gLog = os_log_create("com.ioswitch.ave", "host-test");
     sizes();
+    driverControls();
     parameterSets();
     layouts();
     rateControl();

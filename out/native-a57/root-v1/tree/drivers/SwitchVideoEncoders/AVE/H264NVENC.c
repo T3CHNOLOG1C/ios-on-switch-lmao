@@ -159,7 +159,7 @@ void h264enc_layout(const H264EncConfig *c, H264EncLayout *l)
     // At most 3200 bits per macroblock (A.3.1 item j, the I_PCM bound) plus headers: NVENC's output never outgrows it.
     l->bitstream_bytes = ALIGN(mbs * 400 + 4096, 65536);
     l->status_bytes = 4096;
-    l->history_bytes = ALIGN(tegra_nvenc_history_bytes(c->width), 256);
+    l->history_bytes = ALIGN(tegra_nvenc_history_bytes(c->width, c->height), 256);
     l->coloc_bytes = ALIGN(mbs * (uint32_t)sizeof(nvenc_h264_coloc_mb_s), 256);
     l->history_offset = l->status_bytes;
     l->coloc_offset = l->history_offset + l->history_bytes;
@@ -351,52 +351,129 @@ static void surfaceConfig(const H264EncConfig *c, const H264EncSurface *s, nvenc
     }
 }
 
-// Motion search: spatial and zero-vector hints, both searched and refined to quarter pel over one full 8x8 stamp;
-// partitions down to 8x8, P skip; intra 4x4, 8x8 (with the 8x8 transform) and 16x16 with every mode. Biases,
-// deadzones and thresholds at 0: NVENC's own defaults. Nothing that writes outside the picture, bitstream and status.
+// The slice, motion search, mode decision and quantisation controls: the values NVIDIA's own T210 driver gives NVENC
+// 5.0 (its H.264 setups for 1280x720 High profile CABAC, IDR and P, captured on a Switch and published by
+// github.com/TomasUribe/switch-frame-tap, logs/m79-runE-setups/setup_3.bin (IDR) and setup_5.bin (P); decoded with this
+// tree's nvenc_drv.h, see TegraNVENC/nvidia/SOURCE). The driver's ME, MD and quant controls are the same for IDR and P
+// pictures except intra 4x4, which its P pictures leave off. NVENC 5.0's H.264 app reads the MD control up to byte 0x3a
+// only (priority_ipred_type_ip1; intra_ssd_cnt_*, rdo_level and on are later NVENCs'), and the ME control up to the
+// mbc_mb_size word (0x90); the rest is filled as the driver fills it anyway. Nothing here makes NVENC write outside the
+// picture, bitstream, history, colocated and status buffers the checker bounds.
 static void controls(const H264EncConfig *c, const H264EncPicture *p, uint8_t *setup)
 {
     const uint32_t mbs = h264enc_width_mbs(c) * h264enc_height_mbs(c);
+    const bool intra = p->type != H264ENC_P;
+    // One slice: the one control, under slice_mode 0, covers every macroblock (h264enc_fill_submit).
     nvenc_h264_slice_control_s *slice = (nvenc_h264_slice_control_s *)(setup + SLICE_OFF);
     slice->num_mb = mbs;
     slice->qp_avr = p->qp;
-    slice->qp_slice_min = 0;
+    slice->qp_slice_min = 1;  // the driver's; RateControl.h never asks below 8 (QP 10..48, key frames 2 finer)
     slice->qp_slice_max = 51;
     slice->disable_deblocking_filter_idc = 0;
     slice->cabac_init_idc = 0;
-    slice->force_intra = p->type != H264ENC_P;
+    slice->force_intra = 0;  // the driver's: the picture type alone makes an IDR intra
 
+    // Motion search: spatial and constant (zero) vector hints, integer search over the driver's five stamps then
+    // quarter-pel refinement, vectors limited to H.264's range (-2048..2047.75 x -512..511.75); the ME's reference
+    // cache (MBC) 110 macroblocks. NVENC 5.0 writes mbc_mb_size straight to the MBC (low 8 bits to I/O 0x1010, app
+    // 0x842a; the picture size in macroblocks goes to I/O 0x100c, app 0x82ec). 110 is the driver's at 1280x720, the
+    // only size captured; NVIDIA's desktop drivers send 0 to NVENC 6 and later, which do not read it
+    // (github.com/mickys/nvenc src/h264enctmpl.h).
     nvenc_h264_me_control_s *me = (nvenc_h264_me_control_s *)(setup + ME_OFF);
     me->refinement_mode = 1;  // quarter pel
+    me->lambda_mode = 1;      // constant lambda,
+    me->const_lambda = 4;     // U8.3: 0.5
     me->refine_on_search_enable = 1;
     me->fps_mvcost = 1;
     me->sps_mvcost = 1;
-    me->predsrc.self_spatial_enable = 1;
+    me->sps_cost_func = 1;
+    me->limit_mv.mv_limit_enable = 1;
+    me->limit_mv.left_mvx_int = -2048;
+    me->limit_mv.right_mvx_int = 2047;
+    me->limit_mv.right_mvx_frac = 3;
+    me->limit_mv.top_mvy_int = -512;
+    me->limit_mv.bottom_mvy_int = 511;
+    me->limit_mv.bottom_mvy_frac = 3;
+    me->predsrc.self_spatial_stamp_l0 = me->predsrc.self_spatial_stamp_l1 = 1;
     me->predsrc.self_spatial_search = 1;
-    me->predsrc.self_spatial_refine = 1;
-    me->predsrc.const_mv_enable = 1;
+    me->predsrc.self_spatial_enable = 1;
+    me->predsrc.const_mv_stamp_l0 = me->predsrc.const_mv_stamp_l1 = 2;
     me->predsrc.const_mv_search = 1;
-    me->predsrc.const_mv_refine = 1;
-    me->shape0.bitmask[0] = me->shape0.bitmask[1] = 0xffffffffu;
-    me->hint_type0 = 0;
+    me->predsrc.const_mv_enable = 1;
+    static const uint32_t kShapes[5][2] = {
+        {0x0c0c0000u, 0x00000000u}, {0x1c1c0000u, 0x0000001cu}, {0x3e3e0000u, 0x0000003eu},
+        {0x7f3e0800u, 0x0000083eu}, {0x7f1c1c89u, 0x81081c1cu},
+    };
+    nvenc_h264_me_stamp_s *shape = &me->shape0;
+    for (int i = 0; i < 5; i++) {
+        shape[i].bitmask[0] = kShapes[i][0];
+        shape[i].bitmask[1] = kShapes[i][1];
+    }
+    shape[0].hor_adjust = shape[0].ver_adjust = 1;
+    me->mbc_mb_size = 110;
+    me->partDecisionMadeByFPP = 1;
+    me->spatial_hint_pattern = 0xf;
+    me->temporal_hint_pattern = 0x3f;
+    me->fbm_op_winner_num_p_frame = me->fbm_op_winner_num_b_frame_l0 = me->fbm_op_winner_num_b_frame_l1 = 1;
+    me->fbm_select_best_cu32_parttype_num = 3;
+    me->sps_evaluate_merge_cand_num = 5;
+    me->external_hint_order = me->coloc_hint_order = 1;
+    me->hint_type0 = 0;  // nvenc_drv.h: the five must cover 0x1f
     me->hint_type1 = 1;
     me->hint_type2 = 2;
     me->hint_type3 = 3;
     me->hint_type4 = 4;
 
+    // Mode decision: every intra mode, the 4x4/8x8/16x16 search with early termination (8x8 first with the 8x8
+    // transform, nvenc_drv.h: priority_ipred_type_ip1 must be within ip_search_mode), early intra on 16x16 DC/H/V, all
+    // list-0 partitions and P skip, the driver's intra biases. The driver also enables the list-1 and bi-predicted
+    // partitions in IDR and P pictures, where they select nothing (no list 1); copied, so the block is the driver's.
     nvenc_h264_md_control_s *md = (nvenc_h264_md_control_s *)(setup + MD_OFF);
-    md->intra_luma4x4_mode_enable = 0x1ff;
+    md->intra_luma4x4_mode_enable = intra || !c->transform8x8 ? 0x1ff : 0;  // the driver's P pictures: 8x8, 16x16
     md->intra_luma8x8_mode_enable = c->transform8x8 ? 0x1ff : 0;
     md->intra_luma16x16_mode_enable = 0xf;
     md->intra_chroma_mode_enable = 0xf;
-    md->l0_part_16x16_enable = 1;
-    md->l0_part_16x8_enable = 1;
-    md->l0_part_8x16_enable = 1;
-    md->l0_part_8x8_enable = 1;
+    md->l0_part_16x16_enable = md->l0_part_16x8_enable = md->l0_part_8x16_enable = md->l0_part_8x8_enable = 1;
+    md->l0_part_8x4_enable = md->l0_part_4x8_enable = md->l0_part_4x4_enable = 1;
+    md->l1_part_16x16_enable = md->l1_part_16x8_enable = md->l1_part_8x16_enable = md->l1_part_8x8_enable = 1;
+    md->bi_part_16x16_enable = md->bi_part_16x8_enable = md->bi_part_8x16_enable = md->bi_part_8x8_enable = 1;
     md->pskip_enable = 1;
+    md->intra_nxn_bias_multiplier = 24;
+    md->intra_most_prob_bias_multiplier = 4;
     md->mv_cost_enable = 1;
+    md->early_intra_mode_control = 1;
+    md->early_intra_mode_type_16x16dc = md->early_intra_mode_type_16x16h = md->early_intra_mode_type_16x16v = 1;
     md->ip_search_mode = c->transform8x8 ? 7 : 5;  // 4x4, (8x8,) 16x16
-    (void)setup;
+    md->early_termination_ip1 = 1;
+    md->priority_ipred_type_ip1 = c->transform8x8 ? 3 : 1;
+    md->intra_ssd_cnt_4x4 = md->intra_ssd_cnt_8x8 = md->intra_ssd_cnt_16x16 = 1;  // later NVENCs hang on 0 (T2.05e)
+    md->rdo_level = 1;
+    md->tu_search_num = 2;
+
+    // Quantisation: the driver's coefficient-cost vectors and dead zones (rounding offsets: the firmware scales each to
+    // 10 bits and writes them in pairs into the quantiser, app 0x5540; 0 would truncate every coefficient towards
+    // zero). Intra 4x4 luma by position from 1023 (DC) down to 410, inter from 682 down to 274; chroma and 8x8 luma
+    // intra 682, inter 342: intra twice inter, as the H.264 reference model's 1/3 and 1/6 of a step.
+    nvenc_h264_quant_control_s *q = (nvenc_h264_quant_control_s *)(setup + Q_OFF);
+    static const unsigned short kDz4x4Intra[16] = {1023, 878, 820, 682, 878, 820, 682, 512,
+                                                   820,  682, 512, 410, 682, 512, 410, 410};
+    static const unsigned short kDz4x4Inter[16] = {682, 586, 546, 456, 586, 546, 456, 342,
+                                                   546, 456, 342, 292, 456, 342, 292, 274};
+    q->qpp_run_vector_4x4 = 0x056b;
+    q->qpp_run_vector_8x8[0] = 0xaaff;
+    q->qpp_run_vector_8x8[1] = 0xffaa;
+    q->qpp_run_vector_8x8[2] = 0x000f;
+    q->qpp_luma8x8_cost = 4;
+    q->qpp_luma16x16_cost = 6;
+    q->qpp_chroma_cost = 7;
+    memcpy(q->dz_4x4_YI, kDz4x4Intra, sizeof(kDz4x4Intra));
+    memcpy(q->dz_4x4_YP, kDz4x4Inter, sizeof(kDz4x4Inter));
+    q->dz_4x4_CI = 682;
+    q->dz_4x4_CP = 342;
+    for (int i = 0; i < 16; i++) {
+        q->dz_8x8_YI[i] = 682;
+        q->dz_8x8_YP[i] = 342;
+    }
 }
 
 void h264enc_fill_submit(const H264EncConfig *c, const H264EncLayout *l, const H264EncPicture *p,
@@ -428,12 +505,18 @@ void h264enc_fill_submit(const H264EncConfig *c, const H264EncLayout *l, const H
     rc->maxQP[0] = rc->maxQP[1] = rc->maxQP[2] = 51;
     rc->framerate = c->fps_num && c->fps_den ? (int)(c->fps_num / c->fps_den) : 30;
     rc->gop_length = 0xffffffffu;
+    // The lists and distances as NVIDIA's T210 driver writes them (TegraNVENC/nvidia/SOURCE): unused list entries -2,
+    // unused distances and scale factors -1; a P picture's one reference at distance 1, its scale factor 256.
     nvenc_h264_pic_control_s *pc = &setup->pic_control;
-    memset(pc->l0, -1, sizeof(pc->l0));
-    memset(pc->l1, -1, sizeof(pc->l1));
+    memset(pc->l0, -2, sizeof(pc->l0));
+    memset(pc->l1, -2, sizeof(pc->l1));
+    memset(pc->temp_dist_l0, -1, sizeof(pc->temp_dist_l0));
+    memset(pc->temp_dist_l1, -1, sizeof(pc->temp_dist_l1));
+    memset(pc->dist_scale_factor, -1, sizeof(pc->dist_scale_factor));
     if (pPicture) {
         pc->l0[0] = 0;  // the previous picture, in reference slot 0
         pc->temp_dist_l0[0] = 1;
+        for (int i = 0; i < 8; i++) pc->dist_scale_factor[i][0] = 256;
     }
     pc->frame_num = (unsigned short)p->frame_num;
     pc->pic_order_cnt_lsb = (unsigned short)p->poc_lsb;
@@ -449,7 +532,11 @@ void h264enc_fill_submit(const H264EncConfig *c, const H264EncLayout *l, const H
     pc->pic_struct = 0;
     pc->pic_type = p->type;
     pc->ref_pic_flag = 1;
-    pc->slice_mode = 1;  // static: one slice, from the slice control array
+    // Slicing as NVIDIA's T210 driver does it: slice_mode 0, the firmware walking the slice control array (one control,
+    // every macroblock), max_slice_size the macroblock count (TegraNVENCCheck.h refuses slice_mode 1).
+    pc->slice_mode = 0;
+    pc->max_slice_size = h264enc_width_mbs(c) * h264enc_height_mbs(c);
+    pc->cabac_zero_word_enable = 1;  // the driver's (7.4.2.10 bin-to-bit limit); a no-op with CAVLC
     pc->e4byteStartCode = 1;
     setup->gpTimer_timeout_val = TEGRA_NVENC_GPTIMER_MAX;
     controls(c, p, s->setup);

@@ -19,7 +19,17 @@
 //          block_height/tiled_16x16 set to match), moving on only when a layout's picture comes back wrong;
 //        * how chroma is addressed: TEGRA_NVENC_CHROMA_OFFSET first (the surface-config offset nvenc_drv.h's figure
 //          shows), then METHOD; both stay inside the buffers whatever the firmware reads (TegraNVENCABI.h).
-//   3. the IDR as the plug-in sends it (mode decision, CABAC, 8x8), within 30 dB of the source;
+//   3. the IDR as the plug-in sends it (mode decision, CABAC, 8x8), within 30 dB of the source. At r7q this job never
+//      finished (IPCM had): the hung job's falcon dump puts the H.264 app (linux-firmware nvenc.bin, envydis at image
+//      offset = falcon address) in its end-of-picture wait, 0x48b9, past its first wait (picture-done status I/O 0xaf0,
+//      or an error flag), past its macroblock count (the interrupt handler adds I/O 0x1848 per slice done) and past I/O
+//      0x1964 & 0xf, spinning at 0x492d..0x4934 on `IDLESTATE & 0x200` (IDLESTATE 0x201: one engine unit never went
+//      idle; trace 0x4934 x6, PC 0x4937/0x492d). Its setup left the ME, MD and quant controls mostly 0, among them
+//      mbc_mb_size, which the app writes straight into the ME's reference cache on every picture (I/O 0x1010), and
+//      sliced as no NVIDIA driver does (slice_mode 1, a history of one 128-byte row); the IPCM job that finished had
+//      the same slicing, history and lists, so the controls only mode decision and the ME read are the first suspects.
+//      r8a hung the same way. Since r17 (r14-nvenc's analysis) H264NVENC.c sends NVIDIA's own T210 driver's
+//      controls, slicing (slice_mode 0) and history size (192 bytes a macroblock), TegraNVENC/nvidia/SOURCE;
 //   4. the P picture: NVENC's 16x16-tiled reconstruction is never read by the CPU, so this is the only check of it;
 //      a P failure leaves NVENC on, intra only (TegraNVENCInfo.p_frames 0).
 // A job that does not finish stops E3 at once (the job's own line carries the falcon's state: tegra_nvenc_falcon_dump),
@@ -188,6 +198,7 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
     o->ret = mode == kProbe ? tegra_nvenc_run_magic_probe(s, resolveEnc, nullptr, &fence, &why)
                             : tegra_nvenc_run(s, resolveEnc, nullptr, &fence, &why);
     IODelete(s, TegraNVENCSubmit, 1);
+    if (why) IOLog("TegraNVENC: E3 NVENC job refused by the checker: %s\n", why);  // -22 in the FAIL line
     if (o->ret || (o->ret = tegra_nvenc_wait(fence))) return;
     o->us = (uint32_t)(nowUs() - began);
 
@@ -255,6 +266,7 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
     d->clean_count = 2;
     o->ret = tegra_nvdec_run(d, resolveDec, nullptr, &fence, &why);
     IODelete(d, TegraNVDECSubmit, 1);
+    if (why) IOLog("TegraNVENC: E3 NVDEC job refused by its checker: %s\n", why);
     if (o->ret || (o->ret = tegra_nvdec_wait(fence))) return;
 
     const TegraNVENCBlock &out = gDec[surface - kE3DecFirstHandle];

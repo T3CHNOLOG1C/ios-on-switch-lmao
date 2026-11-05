@@ -4,7 +4,7 @@
 //
 // NVENC writes physical memory directly (no SMMU), so every size that steers its writes is bounded here against the
 // buffer its relocation points into: the reconstructed picture (16x16 tiled, written for every reference picture),
-// the bitstream (bitstream_buf_size), the history (hist_buf_size, at least nvenc_drv.h 2.3's minimum), the colocated
+// the bitstream (bitstream_buf_size), the history (hist_buf_size, at least tegra_nvenc_history_bytes), the colocated
 // motion data (64 bytes per macroblock, 2.2), and the status record with its slice statistics. Reads (input picture,
 // references) are bounded by their buffers too. Surfaces are bounded for every reading of the chroma methods
 // (TegraNVENCABI.h TEGRA_NVENC_CHROMA_*), and for block-linear heights up to four GOBs.
@@ -12,6 +12,12 @@
 // dumps, two-pass and picture-level RC state, weighted prediction tables, B pictures, fields, MVC, encryption.
 // Every job must run with the engine's GP timer on and at most 1 << 27 cycles, as NVDEC's.
 // Only progressive 4:2:0 8-bit H.264 frames, one slice, one control of each kind.
+// Slicing is the one NVIDIA's own T210 driver uses (TegraNVENC/nvidia/SOURCE): slice_mode 0 (the firmware walks the
+// slice control array, here one control covering every macroblock) with max_slice_size at least the macroblock count.
+// slice_mode 1 is refused: NVIDIA's T210 driver never sends it, NVENC 5.0's H.264 app then runs the picture as one
+// hardware-chained run (target count the whole picture, each slice-done interrupt restarting the next, app 0x0fe1 and
+// 0x38ea), and NVIDIA's Ada NVENC hangs on it (github.com/mickys/nvenc docs/reports/T2.05e.md, MIT). It was in r7q's
+// IDR that never finished, but also in the IPCM job before it, which did (TegraNVENCSelfTest.cpp).
 #ifndef TEGRA_NVENC_CHECK_H
 #define TEGRA_NVENC_CHECK_H
 #include <stddef.h>
@@ -38,10 +44,16 @@ static inline uint32_t tegra_nvenc_align(uint32_t v, uint32_t a)
     return (v + a - 1) & ~(a - 1);
 }
 
-// nvenc_drv.h 2.3: (((frame_width_minus1 + 16) / 16) + 16) * 128 bytes.
-static inline uint32_t tegra_nvenc_history_bytes(uint32_t width)
+// The history buffer: the larger of nvenc_drv.h 2.3's minimum, (((frame_width_minus1 + 16) / 16) + 16) * 128 bytes
+// (one macroblock row of 128-byte records), and what NVIDIA's own T210 driver gives NVENC 5.0: HIST_BLOCK_SIZE (192)
+// bytes per macroblock of the picture plus one row, (width_mbs * (height_mbs + 1)) * 192 (706560 bytes at 1280x720,
+// TegraNVENC/nvidia/SOURCE). The firmware hands the size to the engine (hist_buf_size >> 7 into its history unit,
+// H.264 app 0x3333), so a smaller buffer is one the engine can outrun.
+static inline uint32_t tegra_nvenc_history_bytes(uint32_t width, uint32_t height)
 {
-    return (((width - 1 + 16) / 16) + 16) * 128;
+    const uint32_t wmbs = (width + 15) / 16, hmbs = (height + 15) / 16;
+    const uint32_t row = (((width - 1 + 16) / 16) + 16) * 128, picture = wmbs * (hmbs + 1) * HIST_BLOCK_SIZE;
+    return row > picture ? row : picture;
 }
 
 // Luma rows a surface spans: its height rounded to 64, which covers 16x16 tiles and block-linear blocks of up to
@@ -189,8 +201,9 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
         pc->enable_source_image_padding)
         return "picture features";
     if (pc->num_forced_slices_minus1 || pc->num_me_controls_minus1 || pc->num_md_controls_minus1 ||
-        pc->num_q_controls_minus1 || pc->num_wp_controls_minus1 || !pc->slice_mode)
+        pc->num_q_controls_minus1 || pc->num_wp_controls_minus1)
         return "control counts";
+    if (pc->slice_mode || pc->max_slice_size < mbs) return "slice mode";
     struct {
         uint32_t offset, size;
     } controls[] = {
@@ -210,21 +223,22 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
     if (slice->num_mb < mbs || slice->ROI_enable || slice->force_intra > 1) return "slice control";
     const nvenc_h264_me_control_s *me = (const nvenc_h264_me_control_s *)(s->setup + pc->me_control_offset);
     if (me->me_only_mode || me->mv_only_enable) return "ME-only";
+    // List-1 and bi-predicted partition enables pass (NVIDIA's T210 driver sets them in IDR and P pictures): with B
+    // pictures refused and every list-1 entry unused (below) they name no reference. Direct and B skip do not.
     const nvenc_h264_md_control_s *md = (const nvenc_h264_md_control_s *)(s->setup + pc->md_control_offset);
-    if (md->l1_part_16x16_enable || md->l1_part_16x8_enable || md->l1_part_8x16_enable || md->l1_part_8x8_enable ||
-        md->bi_part_16x16_enable || md->bi_part_16x8_enable || md->bi_part_8x16_enable || md->bi_part_8x8_enable ||
-        md->bdirect_mode || md->bskip_enable || md->ssim_rdo || md->calc_ssim)
-        return "mode decision";
+    if (md->bdirect_mode || md->bskip_enable || md->ssim_rdo || md->calc_ssim) return "mode decision";
 
-    // References: every list-0 entry a P picture may use names a slot with both planes relocated and big enough.
+    // References: every list-0 entry a P picture may use names a slot with both planes relocated and big enough. An
+    // unused entry is -2, as NVIDIA's T210 driver writes it (the firmware keeps an entry's low 5 bits as its DPB index,
+    // H.264 app 0x8951: -2 is 30, no slot this checker admits).
     const uint32_t refs = pc->pic_type == 0 ? pps->num_ref_idx_l0_active_minus1 + 1u : 0u;
     if (refs && slice->num_ref_idx_active_override_flag &&
         slice->num_ref_idx_l0_active_minus1 != pps->num_ref_idx_l0_active_minus1)
         return "reference count override";
     for (uint32_t i = 0; i < 8; i++) {
-        if ((signed char)pc->l1[i] != -1) return "list 1";  // char's signedness is the ABI's
+        if ((signed char)pc->l1[i] != -2) return "list 1";  // char's signedness is the ABI's
         if (i >= refs) {
-            if ((signed char)pc->l0[i] != -1) return "list 0 length";
+            if ((signed char)pc->l0[i] != -2) return "list 0 length";
             continue;
         }
         const int slot = (signed char)pc->l0[i];
@@ -237,7 +251,7 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
     if (pc->bitstream_buf_size < 4096 || pc->bitstream_buf_size > bits || pc->bitstream_start_pos >= 256 ||
         pc->bitstream_start_pos >= pc->bitstream_buf_size)
         return "bitstream";
-    if (pc->hist_buf_size < tegra_nvenc_history_bytes(width) || pc->hist_buf_size > history) return "history";
+    if (pc->hist_buf_size < tegra_nvenc_history_bytes(width, height) || pc->hist_buf_size > history) return "history";
     if (colocOut < (uint64_t)mbs * sizeof(nvenc_h264_coloc_mb_s)) return "colocated buffer";
     if (status < TEGRA_NVENC_STATUS_BYTES) return "status";
     if ((control & (1u << 11)) && (pc->slice_stat_offset < 128 || pc->slice_stat_offset + 16 * 4 > status))

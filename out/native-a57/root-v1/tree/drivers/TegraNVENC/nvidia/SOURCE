@@ -5,3 +5,18 @@ lists NV_NVENC_5_0 = 0xd0b70006 (T210's NVENC 5.0 firmware holds exactly that va
 every later class. The methods TegraNVENC uses have the same offsets in clc5b7.h, clc7b7.h and clc9b7.h. Struct sizes
 match the header's own comments under clang (512-byte H.264 picture setup); test/nvenc_host checks them.
 Used by TegraNVENCCheck.h and SwitchVideoEncoders/AVE.
+
+Control values (SwitchVideoEncoders/AVE/H264NVENC.c, checked byte for byte by test/ave_host.c driverControls):
+nvenc_drv.h documents the fields but not their values, and the first IDR sent with most of them 0 never finished (r7q,
+TegraNVENCSelfTest.cpp step 3). The slice, ME, MD and quant controls, reference lists, slicing (slice_mode 0,
+max_slice_size = macroblocks) and history size ((width_mbs * (height_mbs + 1)) * HIST_BLOCK_SIZE) are those of NVIDIA's
+own T210 driver: its H.264 picture setups (magic 0xd0b70006, 1280x720 High profile CABAC 8x8) captured on a Switch and
+published in github.com/TomasUribe/switch-frame-tap (GPL-2.0; data only, no code taken),
+logs/m79-runE-setups/setup_3.bin (IDR; 8 and 9 identical) and setup_5.bin (P; 2, 4, 6, 7 identical), checked 2026-11-05,
+decoded with this nvenc_drv.h. The two Ada NVENC hang causes found by github.com/mickys/nvenc (MIT)
+docs/reports/T2.05e.md, slice_mode 1 and intra_ssd_cnt_* = 0, agree; NVENC 5.0's H.264 app does not read intra_ssd_cnt_*
+(MD control bytes past 0x3a bits 0-2). What NVENC 5.0 reads was checked in the firmware (linux-firmware nvenc.bin,
+envytools envydis -m falcon -V fuc5, the H.264 app at image offsets 0xc00-0xab00 = falcon addresses): setup at DMEM
+0xa00 with the magic check at 0x8d96, ME control to DMEM 0x540 (read up to its mbc_mb_size word, written to I/O 0x1010
+at 0x842a), MD to 0x600, quant to 0x1300, slice to 0x680 (per slice, 0x37c7-0x385a), hist_buf_size >> 7 to I/O 0xe0c
+(0x3333).
