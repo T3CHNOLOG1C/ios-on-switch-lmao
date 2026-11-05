@@ -17,7 +17,8 @@
  *
  * Reporting. A thread call swaps every CPU's table with one cross-call, merges them and writes os_log lines (the log
  * only, never the console):
- *   IOSwitch kprof: the window, per-CPU busy and interrupt time (exact, from recount), the sample split
+ *   IOSwitch kprof: the window, per-CPU busy and interrupt time (exact, from recount), the sample split, and each
+ *       core's clock as measured by a timed dependent-add chain (kprof_clock_probe)
  *   IOSwitch kprof tasks: processes by samples, user+kernel
  *   IOSwitch kprof kernel 1/2, 2/2: kernel functions by samples: unslid address (kext@address in a kext), samples in
  *       kernel_task threads, majority caller, majority owner
@@ -140,6 +141,7 @@ struct kprof_cpu {
 	uint64_t          last_idle, last_irq;
 	uint64_t          last_irqs, last_ipis, last_exc;  /* cpu_stat counts at the last summary */
 	bool              primed;     /* last_idle/last_irq hold a previous summary's values */
+	uint64_t          probe_ticks; /* the clock probe's timebase ticks in the last cross-call (kprof_clock_probe) */
 };
 
 struct kprof_thread {
@@ -573,6 +575,52 @@ ioswitch_footprint_breakdown(task_t task, char *buf, size_t size)
 
 /* --- summary (thread call) ---------------------------------------------------------------------------------------- */
 
+/*
+ * The core clock as the cores see it: a chain of KPROF_PROBE_ADDS dependent adds (one cycle each on the A57, which
+ * issues one dependent integer add per cycle; the loop counter and branch go down the other pipes), timed by the
+ * generic timer. SwitchThermal/SwitchPerf report the PLLX rate they programmed; this shows the rate the cores
+ * actually ran at, after any divider, skipper or throttle. Runs with interrupts masked (the summary's cross-call, and
+ * kprof_init before the clock is raised, which calibrates it against hekate's 998.4 MHz): about 20 us per CPU per
+ * window at 1.67 GHz. Returns timebase ticks.
+ */
+#define KPROF_PROBE_LOOPS 4096
+#define KPROF_PROBE_ADDS  (KPROF_PROBE_LOOPS * 8)
+static uint64_t
+kprof_clock_probe(void)
+{
+	uint64_t n, x = 0, t0 = 0, t1 = 0;
+
+	for (int pass = 0; pass < 2; pass++) {  /* the first pass warms the branch predictor and the I-cache */
+		n = pass ? KPROF_PROBE_LOOPS : 64;
+		t0 = ml_get_timebase();
+		__asm__ volatile (
+		    "1:\n"
+		    "add %1, %1, #1\n"
+		    "add %1, %1, #1\n"
+		    "add %1, %1, #1\n"
+		    "add %1, %1, #1\n"
+		    "add %1, %1, #1\n"
+		    "add %1, %1, #1\n"
+		    "add %1, %1, #1\n"
+		    "add %1, %1, #1\n"
+		    "subs %0, %0, #1\n"
+		    "b.ne 1b\n"
+		    : "+r" (n), "+r" (x) : : "cc");
+		t1 = ml_get_timebase();
+	}
+	return t1 - t0;
+}
+
+/* MHz from a probe's ticks: KPROF_PROBE_ADDS cycles over the ticks' nanoseconds. */
+static uint64_t
+kprof_probe_mhz(uint64_t ticks)
+{
+	uint64_t ns;
+
+	absolutetime_to_nanoseconds(ticks, &ns);
+	return ns ? (uint64_t)KPROF_PROBE_ADDS * 1000 / ns : 0;
+}
+
 /* Cross-call on every CPU: the sampler moves to the other buffer; arm CPUs that have not left idle since boot. */
 static void
 kprof_flip_cpu(__unused void *arg)
@@ -585,6 +633,7 @@ kprof_flip_cpu(__unused void *arg)
 		return;
 	}
 	kc->active ^= 1;
+	kc->probe_ticks = kprof_clock_probe();
 	if (!kc->armed) {
 		kc->armed = true;
 		kc->deadline = now + kprof_period;
@@ -1053,6 +1102,10 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	}
 	kprof_put("; samples %llu (%llu ms each): user %llu, kernel %llu (kernel_task %llu), lost %llu", samples,
 	    KPROF_PERIOD_NS / NSEC_PER_MSEC, user, kernel, kernel_task_samples, lost);
+	kprof_put("; core MHz (probe):");
+	for (unsigned int c = 0; c < kprof_ncpus; c++) {
+		kprof_put(" %llu", kprof_probe_mhz(kprof_cpus[c].probe_ticks));
+	}
 	kprof_flush();
 
 	for (unsigned int i = 0; i < KPROF_TASKS; i++) {
@@ -1220,8 +1273,13 @@ kprof_init(void)
 	os_atomic_store(&kprof_ready, true, release);
 	thread_call_enter_delayed_with_leeway(kprof_call, NULL, kprof_last_summary + kprof_window, kprof_window / 10,
 	    THREAD_CALL_DELAY_LEEWAY);
-	os_log(OS_LOG_DEFAULT, "IOSwitch kprof: sampling every %llu ms of CPU work, %u kernel functions%s, summary every %llu s",
+	boolean_t istate = ml_set_interrupts_enabled(FALSE);
+	uint64_t  boot_probe = kprof_clock_probe();
+
+	ml_set_interrupts_enabled(istate);
+	os_log(OS_LOG_DEFAULT, "IOSwitch kprof: sampling every %llu ms of CPU work, %u kernel functions%s, summary every %llu s; "
+	    "core %llu MHz by the probe (boot clock, before SwitchPerf)",
 	    KPROF_PERIOD_NS / NSEC_PER_MSEC, kprof_nstarts, kprof_nstarts ? "" : " (no LC_FUNCTION_STARTS: 128-byte buckets)",
-	    KPROF_WINDOW_NS / NSEC_PER_SEC);
+	    KPROF_WINDOW_NS / NSEC_PER_SEC, kprof_probe_mhz(boot_probe));
 }
 STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, kprof_init);
