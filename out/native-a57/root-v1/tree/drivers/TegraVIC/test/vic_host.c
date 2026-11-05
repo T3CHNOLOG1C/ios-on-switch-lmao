@@ -224,6 +224,25 @@ static void colour(void)
         }
 }
 
+// The self-test's integer reference for reading 4:2:0 against the float formula, over the whole code space.
+static void idealReference(void)
+{
+    double worst = 0;
+    for (uint32_t y = 0; y < 256; y++)
+        for (uint32_t cb = 0; cb < 256; cb += 3)
+            for (uint32_t cr = 0; cr < 256; cr += 3) {
+                const uint32_t ycc[3] = {y, cb, cr};
+                uint32_t rgb[3];
+                tegra_vic_ideal_rgb709_full(ycc, rgb);
+                const double kr = 0.2126, kb = 0.0722, kg = 1 - kr - kb, pb = cb - 128.0, pr = cr - 128.0;
+                const double R = y + 2 * (1 - kr) * pr, B = y + 2 * (1 - kb) * pb, G = (y - kr * R - kb * B) / kg;
+                const double ideal[3] = {clamp255(R), clamp255(G), clamp255(B)};
+                for (int c = 0; c < 3; c++)
+                    if (fabs(rgb[c] - ideal[c]) > worst) worst = fabs(rgb[c] - ideal[c]);
+            }
+    CHECK(worst <= 0.51, "integer BT.709 reference off the float one by %.3f", worst);
+}
+
 // --- jobs and checker ------------------------------------------------------------------------------------------------
 static TegraVICTraits traits(void)
 {
@@ -238,6 +257,7 @@ static TegraVICTraits traits(void)
     t.bilinear = 1;
     t.pitchAlign = 64;
     t.fillThroughMatrix = 1;
+    t.yccIn = TEGRA_VIC_YCC_IN_RGB | TEGRA_VIC_YCC_IN_COPY;
     return t;
 }
 
@@ -603,6 +623,28 @@ static void requests(void)
     CHECK(!why, "offset source plan");
     why = buildAll(&plan, &lcd, &wb, &t, 1, &job);
     CHECK(why && !strcmp(why, "source rectangle outside the source"), "source past the edge: %s", why ? why : "ok");
+    // A unit whose self-test did not prove reading 4:2:0: such sources are refused (420f -> BGRA, 420f -> 420f).
+    TegraVICTraits noYcc = t;
+    noYcc.yccIn = 0;
+    TegraVICSurfaceDesc nv = desc(TEGRA_VIC_FOURCC('4', '2', '0', 'f'), 1280, 720, 1280, 1280);
+    TegraVICSurfaceDesc rgbOut = desc(TEGRA_VIC_FOURCC('B', 'G', 'R', 'A'), 1280, 720, 5120, 0);
+    r = cloneRequest(0);
+    why = tegra_vic_plan(&r, &nv, &rgbOut, &plan, &kind);
+    CHECK(!why, "420f -> BGRA plan");
+    why = buildAll(&plan, &nv, &rgbOut, &noYcc, 1, &job);
+    CHECK(why && !strcmp(why, "4:2:0 conversion this engine has not proven"), "unproven 4:2:0 -> RGB: %s",
+          why ? why : "ok");
+    why = buildAll(&plan, &nv, &rgbOut, &t, 1, &job);
+    CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_MATRIX, MATRIX_ENABLE) == 1,
+          "proven 4:2:0 -> RGB uses the slot matrix: %s", why ? why : "ok");
+    why = tegra_vic_plan(&r, &nv, &air, &plan, &kind);
+    CHECK(!why, "420f -> 420f plan");
+    why = buildAll(&plan, &nv, &air, &noYcc, 1, &job);
+    CHECK(why && !strcmp(why, "4:2:0 copy this engine has not proven"), "unproven 4:2:0 copy: %s", why ? why : "ok");
+    why = buildAll(&plan, &nv, &air, &t, 1, &job);
+    CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_MATRIX, MATRIX_ENABLE) == 0 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUT_MATRIX, MATRIX_ENABLE) == 0,
+          "proven 4:2:0 copy passes through: %s", why ? why : "ok");
     TegraVICSurfaceDesc shortMem = wb;
     shortMem.length = 768 * 1280;
     TegraVICImage im;
@@ -614,6 +656,7 @@ int main(void)
 {
     layout();
     colour();
+    idealReference();
     jobs();
     requests();
     if (failures) {

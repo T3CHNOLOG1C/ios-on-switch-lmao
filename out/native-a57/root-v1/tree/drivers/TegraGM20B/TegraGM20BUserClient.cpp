@@ -60,15 +60,17 @@ bool importSync()
 	return on;
 }
 
-// Pool BOs released while a task still maps their view (see releaseBo): the pages go back to the pool only once the
-// last such mapping is gone, so the task can never write pages the pool has handed out again (GPU page tables among
-// them). IOKit keeps a task's mappings past its connection's close, until the task unmaps them or dies, so the list is
-// global; any connection's BoAlloc and close look at it again.
+// Freed pool BOs (see releaseBo): every one's view is released and its pages given back here, on a thread call, never on
+// the freeing thread. A view a task still maps keeps its pages until the last such mapping is gone, so the task can never
+// write pages the pool has handed out again (GPU page tables among them); IOKit keeps a task's mappings past its
+// connection's close, until the task unmaps them or dies, so the list is global and any connection's BoAlloc and close
+// kick the thread call to look at it again.
 struct PoolOrphan {
 	PoolOrphan *next;
 	IOMemoryDescriptor *view;
 	void *va;
 	uint64_t pa, bytes;
+	bool zero;  // a BO a client had: its pages are zeroed before they go back (poolZeroLater)
 };
 PoolOrphan *gPoolOrphans;
 
@@ -80,7 +82,25 @@ void pushOrphan(PoolOrphan *orphan)
 		;
 }
 
-// A view only we hold is mapped nowhere (an IOMemoryMap holds its descriptor), and nothing can map it any more.
+bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes);
+
+// A view only we hold is mapped nowhere (an IOMemoryMap holds its descriptor), and nothing can map it any more. But
+// releasing it destroys its device pager's VM object, which first waits (uninterruptibly, vm_object_destroy ->
+// vm_object_paging_wait) for every UPL on that object to be committed, and the retain count does not show those: an import
+// of the view's mapping (BoImport of the WC pages, m2v's twin of a raw buffer) holds one until its own BO is released,
+// maybe on another connection, maybe later on the very thread that freed the view. So no client thread releases a view:
+//  - r7u: a dying task closes its connections one after the other on one thread; the raw connection's view went first,
+//    and the twin's connection, which would complete that UPL, never got closed (backboardd's abort became a frozen
+//    screen, its exit stuck in vm_object_destroy under AGXDeviceUserClient::releaseBo <- clientClose, then the watchdog
+//    panic at 199 s).
+//  - the same wait on a live task's thread: a BoFree of a raw buffer no task maps any more, or a BoAlloc that released
+//    orphans inline (as this did before), with the buffer's twin import still live: the compositor's thread waits for
+//    an import only it would free. (r7x froze on a Joy-Con screenshot; no log of it reached us, so that it was this
+//    wait is inferred, not shown. With no client thread left to wait here, a freeze that remains is something else.)
+// Here a run that meets such a view waits for its import to go, with the rest of the batch it took behind it; orphans
+// freed meanwhile get a run of their own (the call is not ONCE: XNU thread_call.c _pending_call_enqueue queues a running
+// non-ONCE call again, and the kernel group is TCG_PARALLEL, so another thread runs it). A view whose twin a long-lived
+// process keeps holds its batch's pages until that import is freed or the process exits.
 void releaseOrphans()
 {
 	for (PoolOrphan *orphan = __atomic_exchange_n(&gPoolOrphans, nullptr, __ATOMIC_ACQUIRE),
@@ -92,9 +112,33 @@ void releaseOrphans()
 			continue;
 		}
 		orphan->view->release();
-		tgm_pool_free(orphan->va, orphan->bytes, orphan->pa);
+		if (!(orphan->zero && poolZeroLater(orphan->va, orphan->pa, orphan->bytes)))
+			tgm_pool_free(orphan->va, orphan->bytes, orphan->pa);
 		IODelete(orphan, PoolOrphan, 1);
 	}
+}
+
+thread_call_t gOrphanCall;
+void orphanCallMain(thread_call_param_t, thread_call_param_t)
+{
+	releaseOrphans();
+}
+
+// releaseOrphans, on the thread call. Never blocks: callable with the connection's lock held.
+void scheduleOrphanRelease()
+{
+	if (!__atomic_load_n(&gOrphanCall, __ATOMIC_ACQUIRE)) {
+		// not ONCE: entered while a run is blocked on one view, it runs again (concurrently) for the others
+		thread_call_t fresh = thread_call_allocate_with_options(
+			orphanCallMain, nullptr, THREAD_CALL_PRIORITY_KERNEL, 0);
+		thread_call_t expected = nullptr;
+		if (fresh && !__atomic_compare_exchange_n(&gOrphanCall, &expected, fresh, false,
+							  __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+			thread_call_free(fresh);
+	}
+	thread_call_t call = __atomic_load_n(&gOrphanCall, __ATOMIC_ACQUIRE);
+	if (call)
+		thread_call_enter(call);
 }
 
 uint64_t nowNs()
@@ -857,7 +901,7 @@ IOReturn AGXDeviceUserClient::clientClose()
 	}
 	reap(true);  // no channel is left, so nothing can touch the pages any more
 	IOLockUnlock(lock_);
-	releaseOrphans();
+	scheduleOrphanRelease();  // not here: an import of one of these views may be on a connection not closed yet
 	terminate();
 	return kIOReturnSuccess;
 }
@@ -875,6 +919,7 @@ void AGXDeviceUserClient::free()
 			releaseBo(bo);
 		}
 		reap(true);
+		scheduleOrphanRelease();
 		if (binds_)
 			IODelete(binds_, Binding, cap_binds_);
 		if (fence_view_)
@@ -915,17 +960,18 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 		if (critical_)
 			tgm_stats_compositor_pool(-static_cast<int64_t>(bo->bytes));
 	}
-	// A pool view still mapped in a task keeps its pages until unmapped (PoolOrphan). Cached BOs need no such care:
-	// their mappings hold the buffer itself.
+	// A pool BO's view and pages go to the thread call (releaseOrphans: releasing the view can wait for an import on
+	// another connection), which keeps the pages while a task still maps the view. Cached BOs need no such care: their
+	// mappings hold the buffer itself, and releasing one waits for nothing.
 	PoolOrphan *orphan = nullptr;
-	if (bo->pool_va && bo->view && bo->view->getRetainCount() > 1 &&
-	    (orphan = IONew(PoolOrphan, 1))) {
-		if (!closing_)
+	if (bo->pool_va && bo->view && (orphan = IONew(PoolOrphan, 1))) {
+		if (!closing_ && bo->view->getRetainCount() > 1)
 			IOLog("tegra-gm20b: BoFree of BO %llu (%llu bytes) still mapped by its "
 			      "task: pages kept until unmapped\n",
 			      bo->handle, bo->bytes);
-		*orphan = {nullptr, bo->view, bo->pool_va, bo->pool_pa, bo->bytes};
+		*orphan = {nullptr, bo->view, bo->pool_va, bo->pool_pa, bo->bytes, bo->handle != 0};
 		pushOrphan(orphan);
+		scheduleOrphanRelease();
 	} else {
 		if (bo->view)
 			bo->view->release();
@@ -1022,7 +1068,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	    in->align_log2 > 21 ||
 	    (in->flags & ~uint32_t(TegraGM20BBoCoherent | TegraGM20BBoContiguous)))
 		return kIOReturnBadArgument;
-	releaseOrphans();
+	if (__atomic_load_n(&gPoolOrphans, __ATOMIC_RELAXED))
+		scheduleOrphanRelease();  // not here: releasing a view can wait for another connection (releaseOrphans)
 	const uint64_t start = nowNs();
 	uint64_t phase[TGM_PHASES] = {},
 		 mark = start;  // tegra-gpu-stats: kernel allocation and wiring, clean, pages, nvkm

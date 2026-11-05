@@ -595,6 +595,11 @@ void bringUp(void *, wait_result_t)
 }
 }  // namespace
 
+extern "C" void tegra_vic_describe(char *buffer, size_t size)
+{
+    snprintf(buffer, size, "%s", gVic ? falconState() : "VIC not mapped");
+}
+
 extern "C" bool tegra_vic_ready(void)
 {
     return gUp && !gWedged;

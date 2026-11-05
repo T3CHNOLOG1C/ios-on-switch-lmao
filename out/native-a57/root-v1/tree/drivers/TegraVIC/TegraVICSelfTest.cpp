@@ -26,6 +26,41 @@ uint32_t gJobs;
 uint64_t gBusyUs;
 
 constexpr uint32_t kPitch = 256;
+TegraVICJob gLastJob;  // the last job run, for a failure's diagnostic
+
+// One-boot diagnostic after a failed check: the last job's configuration as written (the parts colour and geometry
+// depend on, as 32-bit words), its methods, and the falcon's state, one IOLog line each (a failure only).
+void dumpLastJob(const char *what)
+{
+    const TegraVICJob &j = gLastJob;
+    const uint32_t *w = (const uint32_t *)j.config;
+    char text[300];
+    char falcon[200];
+    tegra_vic_describe(falcon, sizeof(falcon));
+    IOLog("TegraVIC: diag %s: %s\n", what, falcon);
+    struct {
+        const char *name;
+        uint32_t offset, bytes;
+    } parts[] = {
+        {"pipe", TEGRA_VIC_PIPE, 16},
+        {"output", TEGRA_VIC_OUTPUT, 16},
+        {"output surface", TEGRA_VIC_OUTPUT_SURFACE, 16},
+        {"output matrix", TEGRA_VIC_OUT_MATRIX, 32},
+        {"slot 0 config", TEGRA_VIC_SLOTS, 64},
+        {"slot 0 surface", TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE, 16},
+        {"slot 0 matrix", TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_MATRIX, 32},
+    };
+    for (const auto &part : parts) {
+        int n = snprintf(text, sizeof(text), "TegraVIC: diag %s: %s @%#x:", what, part.name, part.offset);
+        for (uint32_t i = 0; i < part.bytes / 4 && n > 0 && n < (int)sizeof(text); i++)
+            n += snprintf(text + n, sizeof(text) - n, " %08x", w[part.offset / 4 + i]);
+        IOLog("%s\n", text);
+    }
+    int n = snprintf(text, sizeof(text), "TegraVIC: diag %s: methods", what);
+    for (uint32_t i = 0; i < j.count && n > 0 && n < (int)sizeof(text); i++)
+        n += snprintf(text + n, sizeof(text) - n, " %03x=%08x", j.method[i], j.value[i]);
+    IOLog("%s\n", text);
+}
 constexpr uint32_t kCardW = 32, kCardH = 16;
 
 uint64_t nowUs()
@@ -81,7 +116,7 @@ TegraVICOp copyOp(uint32_t sw, uint32_t sh, uint32_t dw, uint32_t dh, uint32_t t
 int run(const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op, const TegraVICTraits *t,
         const char **why)
 {
-    static TegraVICJob job;
+    TegraVICJob &job = gLastJob;
     *why = tegra_vic_build(src, dst, op, t, tegra_vic_config_address(), tegra_vic_filter_address(), &job);
     if (*why) return -22;
     if (!op->fill) tegra_vic_cache_clean(gSrc.va, gSrc.size);
@@ -290,7 +325,146 @@ bool checkNv12(uint32_t w, uint32_t h, uint32_t patchW, uint32_t patchH, const u
     return *bad == 0;
 }
 
-bool colour(TegraVICTraits *t, char *line, size_t size)
+// 4:2:0 into the engine. The source is the 420f gSrc holds (64 x 32 patches, written by the engine itself), and every
+// expectation is computed from the samples read back from it: what the engine reads, not what it was asked to write
+// (r7u's V4 compared the patches with a source the flat-fill check had overwritten: 223 steps). 420f -> BGRA gates V4
+// as before: within one step, on every patch interior, of the engine's arithmetic for the matrix the job programs
+// (tegra_vic_matrix_apply; the host test holds that matrix within one step of the float BT.709 conversion), in one
+// chroma order and one of two ways of widening an 8-bit sample to the 10-bit pipeline: a shift (x << 2, the RGB -> 420f
+// law) or the shift with the top bits repeated (x << 2 | x >> 6). r7u-r7w's one pixel (the fill, Y 89 Cb 97 Cr 193
+// +- 1, read in the other order as 0xff295bd6) is only the second (0x295bd5 from Cr 194; the shift gives 2 steps off at
+// best). A wrong matrix, offset, range or chroma order is tens of steps off in both.
+// The same-format pass-through (420f -> 420f, exact to a step) is a trait: refused per job when not proven.
+inline uint32_t widen(uint32_t v8, uint32_t law)
+{
+    return law ? (v8 << 2) | (v8 >> 6) : v8 << 2;
+}
+
+bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteSize)
+{
+    TegraVICImage ysrc = nv12(gSrc, 64, 32);
+    const TegraVICOp op = copyOp(64, 32, 64, 32, 0);
+    const TegraVICChroma orders[2] = {t->out, {t->out.crChannel, t->out.cbChannel}};
+    const uint8_t *yp = gSrc.va, *uv = gSrc.va + (uint64_t)kPitch * 32;
+    // 420f -> BGRA through the slot matrix in both chroma orders. Patch centres kept for a failure's diagnostic: read
+    // Y Cb Cr, wrote R G B, want R G B (shift), want R G B (repeated bits), BT.709 R G B.
+    uint32_t worst[2][2] = {{256, 256}, {256, 256}}, centre[2][8][15] = {};
+    const char *refused[2] = {nullptr, nullptr};
+    for (uint32_t o = 0; o < 2; o++) {
+        TegraVICTraits probe = *t;
+        probe.in = orders[o];
+        probe.yccIn = TEGRA_VIC_YCC_IN_RGB;
+        TegraVICImage rgb = bgra(gDst, 64, 32, kPitch);
+        if (run(&ysrc, &rgb, &op, &probe, &refused[o])) continue;
+        TegraVICMatrix toRgb;
+        tegra_vic_matrix_ycc_to_rgb(TEGRA_VIC_YCC_709, 1, &orders[o], &toRgb);
+        worst[o][0] = worst[o][1] = 0;
+        for (uint32_t i = 0; i < 8; i++)
+            for (uint32_t y = (i / 4) * 16 + 4; y < (i / 4) * 16 + 12; y++)
+                for (uint32_t x = (i % 4) * 16 + 4; x < (i % 4) * 16 + 12; x++) {
+                    // NV12 memory: Cb then Cr (the RGB -> 420f check just proved the engine writes it so)
+                    const uint8_t *c = uv + (y / 2) * kPitch + (x / 2) * 2;
+                    const uint32_t ycc[3] = {yp[y * kPitch + x], c[0], c[1]};
+                    const uint32_t px = ((const uint32_t *)(gDst.va + y * kPitch))[x];
+                    const uint32_t got[3] = {(px >> 16) & 0xff, (px >> 8) & 0xff, px & 0xff};
+                    uint32_t want[2][3];
+                    for (uint32_t law = 0; law < 2; law++) {
+                        uint32_t pipe[3], out10[3];
+                        pipe[0] = widen(ycc[0], law);
+                        pipe[orders[o].cbChannel] = widen(ycc[1], law);
+                        pipe[orders[o].crChannel] = widen(ycc[2], law);
+                        tegra_vic_matrix_apply(&toRgb, pipe, out10);
+                        for (int k = 0; k < 3; k++) {
+                            want[law][k] = out10[k] >> 2;
+                            const uint32_t d = got[k] > want[law][k] ? got[k] - want[law][k] : want[law][k] - got[k];
+                            if (d > worst[o][law]) worst[o][law] = d;
+                        }
+                    }
+                    if (x == (i % 4) * 16 + 8 && y == (i / 4) * 16 + 8) {
+                        uint32_t *e = centre[o][i];
+                        for (int k = 0; k < 3; k++)
+                            e[k] = ycc[k], e[3 + k] = got[k], e[6 + k] = want[0][k], e[9 + k] = want[1][k];
+                        tegra_vic_ideal_rgb709_full(ycc, e + 12);
+                    }
+                }
+    }
+    uint32_t best = 0, law = 0;
+    for (uint32_t o = 0; o < 2; o++)
+        for (uint32_t l = 0; l < 2; l++)
+            if (worst[o][l] < worst[best][law]) best = o, law = l;
+    const uint32_t *e = centre[best][6];  // the c0 40 20 patch
+    if (worst[best][law] > 1) {
+        // The one-boot diagnostic: what the engine read and wrote at each patch centre in both orders, then the
+        // configuration of a job in the closer order (run again, so the dump is that job's).
+        for (uint32_t o = 0; o < 2; o++)
+            for (uint32_t i = 0; i < 8; i++) {
+                const uint32_t *d = centre[o][i];
+                IOLog("TegraVIC: diag 420f -> BGRA order %u (Cb in channel %u) patch %u: read Y %u Cb %u Cr %u, wrote "
+                      "%u %u %u, want %u %u %u (x << 2) or %u %u %u (x << 2 | x >> 6), BT.709 %u %u %u\n",
+                      o, orders[o].cbChannel, i, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10],
+                      d[11], d[12], d[13], d[14]);
+            }
+        TegraVICTraits probe = *t;
+        probe.in = orders[best];
+        probe.yccIn = TEGRA_VIC_YCC_IN_RGB;
+        TegraVICImage rgb = bgra(gDst, 64, 32, kPitch);
+        const char *why = nullptr;
+        (void)run(&ysrc, &rgb, &op, &probe, &why);
+        dumpLastJob("420f -> BGRA");
+        if (refused[0] && refused[1])
+            snprintf(line, size, "V4 FAIL 420f -> BGRA: %s", refused[0]);
+        else
+            snprintf(line, size,
+                     "V4 FAIL 420f -> BGRA (BT.709 full) not the reference in either chroma order (worst %u/%u/%u/%u "
+                     "steps; c0 40 20 patch read Y %u Cb %u Cr %u, wrote %u %u %u, want %u %u %u)",
+                     worst[0][0], worst[0][1], worst[1][0], worst[1][1], e[0], e[1], e[2], e[3], e[4], e[5],
+                     e[6 + 3 * law], e[7 + 3 * law], e[8 + 3 * law]);
+        return false;
+    }
+    t->in = orders[best];
+    t->yccIn |= TEGRA_VIC_YCC_IN_RGB;
+    // 420f -> 420f 1:1 (same range and standard): the pass-through, exact to a step. Only when the engine reads the
+    // chroma in the order it writes it: otherwise such a job goes through both matrices (tegra_vic_build), proven above.
+    uint32_t copyBad = 0, firstBad = UINT32_MAX;
+    const bool passThrough = t->in.cbChannel == t->out.cbChannel;
+    if (passThrough) {
+        TegraVICTraits probe = *t;
+        probe.yccIn |= TEGRA_VIC_YCC_IN_COPY;
+        TegraVICImage dst = nv12(gDst, 64, 32);
+        const char *why = nullptr;
+        if (run(&ysrc, &dst, &op, &probe, &why)) {
+            copyBad = UINT32_MAX;
+        } else {
+            for (uint32_t at = 0; at < (uint32_t)kPitch * 48; at++) {
+                if (at % kPitch >= 64) continue;
+                if (!near(gDst.va[at], gSrc.va[at])) {
+                    if (firstBad == UINT32_MAX) firstBad = at;
+                    copyBad++;
+                }
+            }
+        }
+        if (!copyBad)
+            t->yccIn |= TEGRA_VIC_YCC_IN_COPY;
+        else if (copyBad != UINT32_MAX) {
+            IOLog("TegraVIC: diag 420f -> 420f: %u of 3072 samples off, first at byte %#x (plane %s row %u column %u): "
+                  "%u, source %u\n",
+                  copyBad, firstBad, firstBad < kPitch * 32 ? "Y" : "CbCr", (firstBad % (kPitch * 32)) / kPitch,
+                  firstBad % kPitch, gDst.va[firstBad], gSrc.va[firstBad]);
+            dumpLastJob("420f -> 420f");
+        }
+    }
+    snprintf(note, noteSize,
+             "4:2:0 in: to RGB on (Cb in channel %u, 8-bit samples widened as %s; worst %u/%u/%u/%u steps by order and "
+             "widening; c0 40 20 patch read Y %u Cb %u Cr %u -> %u %u %u, BT.709 %u %u %u), copy %s",
+             t->in.cbChannel, law ? "x << 2 | x >> 6" : "x << 2", worst[0][0], worst[0][1], worst[1][0], worst[1][1],
+             e[0], e[1], e[2], e[3], e[4], e[5], e[12], e[13], e[14],
+             !passThrough                         ? "through the matrices"
+             : (t->yccIn & TEGRA_VIC_YCC_IN_COPY) ? "on"
+                                                  : "refused");
+    return true;
+}
+
+bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteSize)
 {
     // RGB -> 420f through the output matrix; the measured channel order first.
     drawPatches(kPitch);
@@ -311,7 +485,21 @@ bool colour(TegraVICTraits *t, char *line, size_t size)
         tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &m);
         uint32_t want[8][3];
         for (uint32_t i = 0; i < 8; i++) expectYcc(&m, &t->out, kPatches[i], want[i]);
-        if (checkNv12(64, 32, 16, 16, want, 4, &bad)) outOrder = o;
+        if (checkNv12(64, 32, 16, 16, want, 4, &bad)) {
+            outOrder = o;
+        } else {
+            const uint8_t *yp = gDst.va, *uv = gDst.va + kPitch * 32;
+            for (uint32_t i = 0; i < 8; i++) {
+                const uint32_t x = (i % 4) * 16 + 8, y = (i / 4) * 16 + 8;
+                const uint8_t *c = uv + (y / 2) * kPitch + (x / 2) * 2;
+                IOLog(
+                    "TegraVIC: diag BGRA -> 420f order %u (Cb in channel %u) patch %u (%06x): wrote Y %u Cb %u Cr %u, "
+                    "want %u %u %u\n",
+                    o, t->out.cbChannel, i, kPatches[i] & 0xffffff, yp[y * kPitch + x], c[0], c[1], want[i][0],
+                    want[i][1], want[i][2]);
+            }
+            dumpLastJob("BGRA -> 420f");
+        }
     }
     if (outOrder == 2) {
         const uint8_t *p = gDst.va, *uv = gDst.va + kPitch * 32;
@@ -322,6 +510,11 @@ bool colour(TegraVICTraits *t, char *line, size_t size)
         return false;
     }
     t->out = orders[outOrder];
+    t->in = t->out;
+
+    // That 420f (the patches, as the engine wrote them) is the source of the 4:2:0-in checks.
+    memcpy(gSrc.va, gDst.va, (uint64_t)kPitch * 48);
+    if (!yccSource(t, line, size, note, noteSize)) return false;
 
     // A fill of a 420f surface (Core Animation's border clears): the background colour through the output matrix, or
     // converted by the driver into the output channels.
@@ -351,54 +544,6 @@ bool colour(TegraVICTraits *t, char *line, size_t size)
                      uv[1], want[0][0], want[0][1], want[0][2]);
             return false;
         }
-    }
-
-    // 420f -> RGB through the slot matrix: the 420f just made is the source (in gSrc), BGRA out.
-    memcpy(gSrc.va, gDst.va, (uint64_t)kPitch * 48);
-    TegraVICImage ysrc = nv12(gSrc, 64, 32);
-    TegraVICImage rgb = bgra(gDst, 64, 32, kPitch);
-    uint32_t inOrder = 2, worst = 0;
-    for (uint32_t o = 0; o < 2 && inOrder == 2; o++) {
-        t->in = orders[(outOrder + o) & 1];
-        const char *why = nullptr;
-        if (run(&ysrc, &rgb, &op, t, &why)) {
-            snprintf(line, size, "V4 FAIL 420f -> BGRA: %s", why);
-            return false;
-        }
-        TegraVICMatrix toYcc, toRgb;
-        tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &toYcc);
-        tegra_vic_matrix_ycc_to_rgb(TEGRA_VIC_YCC_709, 1, &t->in, &toRgb);
-        bad = 0;
-        for (uint32_t i = 0; i < 8; i++) {
-            // The 420f sample the engine read back (pipeline order), then its RGB.
-            const uint32_t in10[3] = {((kPatches[i] >> 16) & 0xff) << 2, ((kPatches[i] >> 8) & 0xff) << 2,
-                                      (kPatches[i] & 0xff) << 2};
-            uint32_t mid10[3], mid8in10[3], out10[3];
-            tegra_vic_matrix_apply(&toYcc, in10, mid10);
-            for (int c = 0; c < 3; c++) mid8in10[c] = (mid10[c] >> 2) << 2;
-            // Reading back: Y in channel 0, Cb/Cr where the input order puts them.
-            uint32_t pipe[3] = {mid8in10[0], 0, 0};
-            pipe[t->in.cbChannel] = mid8in10[t->out.cbChannel];
-            pipe[t->in.crChannel] = mid8in10[t->out.crChannel];
-            tegra_vic_matrix_apply(&toRgb, pipe, out10);
-            const uint32_t want = 0xff000000u | (out10[0] >> 2) << 16 | (out10[1] >> 2) << 8 | (out10[2] >> 2);
-            const uint32_t px = (i % 4) * 16 + 8, py = (i / 4) * 16 + 8;
-            const uint32_t got = ((const uint32_t *)(gDst.va + py * kPitch))[px];
-            for (int c = 0; c < 24; c += 8) {
-                const uint32_t a = (got >> c) & 0xff, b = (want >> c) & 0xff;
-                const uint32_t d = a > b ? a - b : b - a;
-                if (d > 1) bad++;
-                if (d > worst) worst = d;
-            }
-        }
-        if (!bad) inOrder = o;
-    }
-    if (inOrder == 2) {
-        snprintf(line, size,
-                 "V4 FAIL 420f -> BGRA (BT.709 full) not the reference in either chroma order (worst %u "
-                 "steps); first pixel %#x",
-                 worst, ((const uint32_t *)gDst.va)[8 * kPitch / 4 + 8]);
-        return false;
     }
     return true;
 }
@@ -494,7 +639,7 @@ bool recording(TegraVICTraits *t, char *line, size_t size)
 
 extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
 {
-    char line[300];
+    char line[300], note[300] = "";
     if (tegra_vic_buffer(64 * 1024, &gSrc) || tegra_vic_buffer(64 * 1024, &gDst) || tegra_vic_buffer(4096, &gPageA) ||
         tegra_vic_buffer(4096, &gPageB)) {
         IOLog("TegraVIC: V3 FAIL no self-test buffers in the arena\n");
@@ -512,18 +657,21 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
     t.pitchAlign = 256;
     gJobs = 0;
     gBusyUs = 0;
-    const bool ok = transforms(&t, line, sizeof(line)) && colour(&t, line, sizeof(line)) &&
+    const bool ok = transforms(&t, line, sizeof(line)) && colour(&t, line, sizeof(line), note, sizeof(note)) &&
                     scaling(&t, line, sizeof(line)) && pitch(&t, line, sizeof(line)) &&
                     recording(&t, line, sizeof(line));
     tegra_vic_unlock();
     if (!ok) {
+        dumpLastJob("V4");
         IOLog("TegraVIC: %s\n", line);
         return -5;
     }
     *traits = t;
-    IOLog("TegraVIC: V4 ok transforms %#x of 0xff (rectangles %s the transpose), colour BT.709 full in and out (Cb in "
-          "channel %u), %s scaling, pitch %u-byte aligned; %u jobs, engine %llu us, %llu us in all\n",
-          t.rotations, t.preTransposeRects ? "before" : "after", t.out.cbChannel, t.bilinear ? "2-tap" : "1-tap only",
+    IOLog("TegraVIC: V4 ok transforms %#x of 0xff (rectangles %s the transpose), RGB to 420f BT.709 full (Cb in "
+          "channel %u), fill %s, %s scaling, pitch %u-byte aligned; %u jobs, engine %llu us, %llu us in all\n",
+          t.rotations, t.preTransposeRects ? "before" : "after", t.out.cbChannel,
+          t.fillThroughMatrix ? "through the matrix" : "converted here", t.bilinear ? "2-tap" : "1-tap only",
           t.pitchAlign, gJobs, gBusyUs, nowUs() - began);
+    IOLog("TegraVIC: V4 %s\n", note);
     return 0;
 }

@@ -152,7 +152,8 @@ Apple's code that still runs: the classes' constructors, `getMetaClass`, the ser
    ignored. Refused as **kIOReturnUnsupported** (callers fall back): histogram, HDR, film grain, colour remap, shared
    events, alpha override into a surface with alpha, formats other than BGRA/RGBA/420v/420f, protected-to-less-protected,
    and any shape the checker refuses (pitch the unit cannot address, odd 4:2:0 rects, >16x scaling, sizes outside
-   2..8192, transforms not proven). Refused as **kIOReturnBadArgument**: unknown surface IDs, Transform bits 3-5.
+   2..8192, transforms not proven, a same-format 4:2:0 pass-through V4 did not prove). Refused as
+   **kIOReturnBadArgument**: unknown surface IDs, Transform bits 3-5.
 3. Build and check every VIC job in the calling thread (`tegra_vic_build`, `TegraVICConfig.h`), so refusals are the
    call's own result; then queue (16 deep, FIFO) for the engine thread. Sync calls sleep until their jobs are done.
 4. Engine thread: `IOSurface::prepare`, map each surface page by page into its SMMU window (source read-only), clean
@@ -164,6 +165,23 @@ buffers) [I: attachments are not read]; '420v' video range, '420f' full range. V
 are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host against the float conversions (≤ 1 step).
 
 ## 9. Gaps and risks
+
+- r7u-r7w (11-05): V4 failed "420f -> BGRA (BT.709 full) not the reference in either chroma order (worst 223 steps);
+  first pixel 0xff295bd6" on every boot. The check's mistake, not the engine's: it compared the engine's output with
+  the eight patches while its source was the flat RGB c0 40 20 fill the 420f fill check had just written over them (Y
+  89, Cb 97, Cr 193 by the model; the fill check allows one step). The reported pixel (R 41, G 91, B 214) is that fill
+  read with Cb and Cr exchanged, the second order tried. Now the 420f -> BGRA check runs before the fill check, on the
+  420f the engine wrote, and expects what the engine's arithmetic gives for the samples read back from it (to one
+  step, as before); it still gates V4. The arithmetic has one measured choice besides the chroma order: an 8-bit
+  sample widened to the 10-bit pipeline as x << 2 or as x << 2 | x >> 6. That pixel fits only the second (0x295bd5
+  from Cr 194; x << 2 is 2 steps off for any fill byte within one of the model's); the V4 line says which held. If it
+  is the second, the matrices still assume the first, so 4:2:0 -> RGB results sit up to about one step above BT.709 in
+  R and B (chroma zero read as 514, not 512): the next change, once the line has shown it, is to build
+  `tegra_vic_matrix_ycc_to_rgb` for the measured law. On a failure it logs, once: each patch centre in both orders
+  (read Y Cb Cr, wrote, expected, the BT.709 value), the configuration words of the job (pipe, output, output surface
+  and matrix, slot 0 config, surface and matrix), its methods and the falcon's state ("TegraVIC: diag ..."). The 420f
+  -> 420f pass-through is checked too, as a trait (`yccIn`): not proven, such jobs are refused (callers fall back);
+  not a gate.
 
 - **Shared events** are refused. If Core Animation sends them on the clone path, each frame's transform fails with
   kIOReturnUnsupported (no crash; CA force-completes the events). The device log says so once ("transform refused

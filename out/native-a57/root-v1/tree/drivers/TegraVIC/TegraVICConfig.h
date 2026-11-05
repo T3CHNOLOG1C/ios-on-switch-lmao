@@ -277,6 +277,18 @@ static inline void tegra_vic_matrix_ycc_to_rgb(uint32_t standard, int full, cons
     m->c[2][3] = tegra_vic_fix(-(gy * y0 + bCb * 512), 256) + 512;
 }
 
+// The full-range BT.709 RGB of an 8-bit Y'CbCr sample: the float conversion in integer millionths, rounded and clamped
+// (the self-test's reference for reading 4:2:0; the host test checks it against the float formula).
+static inline void tegra_vic_ideal_rgb709_full(const uint32_t ycc[3], uint32_t rgb[3])
+{
+    const int64_t y = (int64_t)ycc[0] * 1000000, cb = (int64_t)ycc[1] - 128, cr = (int64_t)ycc[2] - 128;
+    const int64_t v[3] = {y + 1574800 * cr, y - 187324 * cb - 468124 * cr, y + 1855600 * cb};
+    for (int c = 0; c < 3; c++) {
+        const int64_t r = v[c] >= 0 ? (v[c] + 500000) / 1000000 : -((-v[c] + 500000) / 1000000);
+        rgb[c] = r < 0 ? 0 : r > 255 ? 255 : (uint32_t)r;
+    }
+}
+
 // --- Formats ------------------------------------------------------------------------------------------------------
 #define TEGRA_VIC_FOURCC(a, b, c, d) \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (uint32_t)(d))
@@ -320,6 +332,10 @@ typedef struct {
     uint32_t chromaSite;     // IOSurfaceAccelerator siting code 0..6 (0: unspecified)
 } TegraVICImage;
 
+// Reading 4:2:0 (TegraVICTraits.yccIn): to RGB through the slot matrix (within a few steps of the float conversion),
+// and the same-format copy that passes the channels through. Without the bit those jobs are refused (callers fall back).
+enum { TEGRA_VIC_YCC_IN_RGB = 1, TEGRA_VIC_YCC_IN_COPY = 2 };
+
 // IOSurfaceAccelerator's transform bits (the request's Transform option, flags bits 0..2).
 enum { TEGRA_VIC_FLIP_H = 1, TEGRA_VIC_FLIP_V = 2, TEGRA_VIC_ROT90 = 4 };
 
@@ -342,6 +358,7 @@ typedef struct {
     uint32_t bilinear;           // 2-tap filtering proven (else every job is 1-tap)
     uint32_t pitchAlign;         // smallest pitch alignment proven (64 or 256 bytes)
     uint32_t fillThroughMatrix;  // 1: the background colour goes through the output matrix (else it is converted here)
+    uint32_t yccIn;              // what reading a 4:2:0 source was proven to do: TEGRA_VIC_YCC_IN_*
 } TegraVICTraits;
 
 #define TEGRA_VIC_MAX_METHODS 12
@@ -426,6 +443,12 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     }
     if (dst->format->subsampled && ((op->dstX | op->dstY | op->dstW | op->dstH) & 1))
         return "4:2:0 destination rectangle on odd coordinates";
+    if (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB) {
+        const int same = dst->format->kind == src->format->kind && src->standard == dst->standard &&
+                         t->in.cbChannel == t->out.cbChannel;  // the pass-through tegra_vic_build programs below
+        if (!(t->yccIn & (same ? TEGRA_VIC_YCC_IN_COPY : TEGRA_VIC_YCC_IN_RGB)))
+            return same ? "4:2:0 copy this engine has not proven" : "4:2:0 conversion this engine has not proven";
+    }
 
     memset(job, 0, sizeof(*job));
     uint8_t *c = job->config;

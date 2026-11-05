@@ -49,6 +49,8 @@ void tegra_vic_unlock(void);
 // SMMU proof (TegraVIC.cpp) for V3: maps the page at IOVA `iova` to physical `pa` (or back to 1:1).
 void tegra_vic_identity_override(uint64_t iova, uint64_t pa);
 
+void tegra_vic_describe(char *buffer, size_t size);  // the falcon's state, for a failure line
+
 // Self-test (TegraVICSelfTest.cpp): V3 and V4; fills the traits. 0 or the failing stage's line is out.
 int tegra_vic_self_test(TegraVICTraits *traits);
 

@@ -536,7 +536,8 @@ OSDictionary *capabilities(const TegraVICTraits *t)
     putNumber(d, "IOSurfaceAcceleratorFilterCoefficientsPrePointBits", 4);
     putNumber(d, "IOSurfaceAcceleratorFilterCoefficientsPostPointBits", 12);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesRotation", t->rotations == 0xff);
-    putNumber(d, "IOSurfaceAcceleratorCapabilitiesIdentityCSC", 1);
+    // VideoToolbox gates 420f<->420v pairs on it: range conversion reads 4:2:0 through the slot matrix.
+    putNumber(d, "IOSurfaceAcceleratorCapabilitiesIdentityCSC", (t->yccIn & TEGRA_VIC_YCC_IN_RGB) ? 1 : 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesTiling", 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesFractionalXYOffsetsSupported", 0);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesFractionalDimensions", 0);
