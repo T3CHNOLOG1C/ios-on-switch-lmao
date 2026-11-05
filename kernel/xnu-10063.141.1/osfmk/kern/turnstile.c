@@ -210,6 +210,14 @@ turnstile_get_type(struct turnstile *turnstile)
 	return (turnstile_type_t) type_and_gencount.ts_type;
 }
 
+/* IOSwitch stall reports (ioswitch_stall.c): whether a turnstile's proprietor is a port. */
+turnstile_type_t ioswitch_turnstile_type(struct turnstile *turnstile);
+turnstile_type_t
+ioswitch_turnstile_type(struct turnstile *turnstile)
+{
+	return turnstile_get_type(turnstile);
+}
+
 /* Only safe to be called from stackshot context */
 static bool
 turnstile_is_send_turnstile(struct turnstile *turnstile)

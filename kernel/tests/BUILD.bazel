@@ -6,6 +6,8 @@
 #                            loops, exhaustively to 80 bytes at every alignment and over random inputs, guard pages
 #                            after both buffers
 #   xnu_memcmp_source_test   subrs.c uses it on arm64 only, through the two bodies the harness copies
+#   xnu_stall_test           osfmk/kern/ioswitch_stall.h's decisions: which samples of a UI main thread are a stall,
+#                            one report and one end per episode, wait names by block_hint.h value, user addresses
 #   xnu_zero_fill_around_test  vm_fault.c's ioswitch_zero_fill_around (r17-faults) enters exactly the absent pages of
 #                            the faulting page's 16 KiB group in its map entry and VM object, and nothing outside the
 #                            plain case, against a model of the object and pmap
@@ -156,4 +158,32 @@ host_test(
     srcs = ["xnu_render_senders_source_test.cpp"],
     data = ["//kernel/xnu-10063.141.1/osfmk:ipc/ipc_kmsg.c"],
     defines = ['IPC_KMSG=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:ipc/ipc_kmsg.c)\\"'],
+)
+
+copy_file(
+    name = "ioswitch_stall",
+    src = "//kernel/xnu-10063.141.1/osfmk:kern/ioswitch_stall.h",
+    out = "ioswitch_stall.h",
+)
+
+host_library(
+    name = "stall",
+    srcs = [
+        "ioswitch_stall.h",
+        "xnu_stall_harness.c",
+    ],
+    hdrs = ["xnu_stall_harness.h"],
+    copts = [
+        "-std=c11",
+        "-Wconversion",
+        "-Wsign-conversion",
+    ],
+    includes = ["."],
+)
+
+host_test(
+    name = "xnu_stall_test",
+    srcs = ["xnu_stall_test.cpp"],
+    data = ["//kernel/xnu-10063.141.1/osfmk:kern/block_hint.h"],
+    deps = [":stall"],
 )

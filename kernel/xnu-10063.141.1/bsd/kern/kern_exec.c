@@ -411,6 +411,7 @@ static errno_t exec_handle_exception_port_actions(const struct image_params *img
     const struct exec_port_actions *port_actions);
 extern int ioswitch_boot_band_classify(const char *path);
 extern void ioswitch_boot_band_spawned(task_t task, int band_class);
+extern void ioswitch_stall_exec(thread_t thread);
 /* drivers/SwitchPower/SwitchPerfGovernor.cpp (SwitchPower.h SWITCH_PERF_HINT_LAUNCH = 3): the CPU at its top clock
  * for a while, and the GPU back at its full clock if it was idling low (TegraGM20B's idle clock); any context */
 extern void switch_perf_hint(unsigned int hint);
@@ -4679,6 +4680,7 @@ bad:
 	 * the class was taken in exec_activate_image, which has freed the path by now). */
 	if (error == 0 && imgp->ip_new_thread != THREAD_NULL) {
 		ioswitch_boot_band_spawned(get_threadtask(imgp->ip_new_thread), imgp->ip_ioswitch_band);
+		ioswitch_stall_exec(imgp->ip_new_thread);
 	}
 
 	/* Transfer the turnstile watchport boost to new task if in exec */
@@ -5361,6 +5363,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 	/* IOSwitch: the boot band for execve() too (xpcproxy may exec the daemon in place; ioswitch_boot_band.c). */
 	if (!error && imgp->ip_new_thread != THREAD_NULL) {
 		ioswitch_boot_band_spawned(new_task, imgp->ip_ioswitch_band);
+		ioswitch_stall_exec(imgp->ip_new_thread);
 	}
 
 	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
