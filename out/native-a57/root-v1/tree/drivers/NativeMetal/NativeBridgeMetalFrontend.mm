@@ -3198,17 +3198,21 @@ static void completed(void *context)
         }
     }
     const uint64_t now = nowUs();
-    os_log_fault(OS_LOG_DEFAULT,
-                 "native-metal: commandBuffer of queue %p (%{public}s) not made after %llu ms: %llu of %llu slots held by "
-                 "uncompleted command buffers (%llu not committed), %lu committed in flight; oldest #%u '%{public}s' committed "
-                 "%llu ms ago, scheduled %d, waits for an unreached event %d, failed %d: abort() for the stack",
-                 queue, queue.label.UTF8String ?: "", (unsigned long long)waitLimitMs(), (unsigned long long)slots[1],
-                 (unsigned long long)slots[3], (unsigned long long)slots[2], (unsigned long)inFlight,
-                 oldest ? oldest.commitIndex : 0, oldest.label.UTF8String ?: "",
-                 oldest ? (unsigned long long)((now - oldest.committedUs) / 1000) : 0ull, oldest ? (int)oldest.schedulingDelivered : -1,
-                 oldest ? (int)[oldest waitsUnreached] : -1, oldest ? (int)(oldest.failedLocally || oldest.encodeFailure != nil) : -1);
+    os_log_fault(
+        OS_LOG_DEFAULT,
+        "native-metal: commandBuffer of queue %p (%{public}s) not made after %llu ms: %llu of %llu slots held by "
+        "uncompleted command buffers (%llu not committed), %lu committed in flight; oldest #%u '%{public}s' committed "
+        "%llu ms ago, scheduled %d, waits for an unreached event %d, failed %d: abort() for the stack",
+        queue, queue.label.UTF8String ?: "", (unsigned long long)waitLimitMs(), (unsigned long long)slots[1],
+        (unsigned long long)slots[3], (unsigned long long)slots[2], (unsigned long)inFlight,
+        oldest ? oldest.commitIndex : 0, oldest.label.UTF8String ?: "",
+        oldest ? (unsigned long long)((now - oldest.committedUs) / 1000) : 0ull,
+        oldest ? (int)oldest.schedulingDelivered : -1, oldest ? (int)[oldest waitsUnreached] : -1,
+        oldest ? (int)(oldest.failedLocally || oldest.encodeFailure != nil) : -1);
 #if !TARGET_OS_IPHONE
-    fprintf(stderr, "native-metal: commandBuffer of queue %p not made after %llu ms: %llu of %llu slots held (%llu not committed)\n",
+    fprintf(stderr,
+            "native-metal: commandBuffer of queue %p not made after %llu ms: %llu of %llu slots held (%llu not "
+            "committed)\n",
             (__bridge void *)queue, (unsigned long long)waitLimitMs(), (unsigned long long)slots[1],
             (unsigned long long)slots[3], (unsigned long long)slots[2]);
 #endif
