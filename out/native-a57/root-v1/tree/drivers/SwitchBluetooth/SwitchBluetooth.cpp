@@ -110,6 +110,7 @@
 #include <string.h>
 #include "SwitchBluetooth.h"
 #include "SwitchBluetoothLinks.h"
+#include "SwitchCoex.h"
 #include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraAPBDMA/TegraAPBDMA.h"
 #include "../SwitchSuspend/SwitchWake.h"
@@ -120,6 +121,11 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 // The rail Joy-Con driver's strong definition wins when it is linked (../SwitchJoyCon/SwitchJoyCon.h).
 extern "C" __attribute__((weak)) void switch_joycon_bluetooth_address(const uint8_t[6]) {}
+// SwitchWLAN.cpp: the Wi-Fi infra channel in MHz while associated, else 0 (for AFH, "Coexistence").
+extern "C" __attribute__((weak)) uint16_t swlan_awdl_infra_freq(void)
+{
+    return 0;
+}
 
 namespace {
 constexpr vm_offset_t kUartPA = 0x70006000, kUartD = 0x300;  // UART-A page; UART-D at +0x300 (hekate uart.c)
@@ -471,6 +477,27 @@ class SwitchBluetooth : public IOService {
     switch_bt_requests requests = {};  // incoming Connection Requests until their Accept (cmdLock)
     bool centralLogged = false;
     bool acceptAsCentral(uint8_t *params, uint8_t length);
+
+    // Coexistence ("Coexistence" section, SwitchCoex.h): the scans and the ACL priority bluetoothd has set (cmdLock),
+    // one line per change, and a snapshot for SwitchWLAN's stats line.
+    switch_coex_bt coex = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, SWITCH_COEX_NO_HANDLE, 0};
+    void coexCommand(uint16_t opcode, const uint8_t *params, uint8_t length);
+    // AFH from the Wi-Fi channel: a command of ours put into the client's stream between its commands (cmdLock: the
+    // opcode outstanding, its status and return parameters), the Wi-Fi channel the controller's classification is
+    // for (0: every channel usable, as after a reset), when to read the links' maps back, and whether it refused.
+    uint16_t injectOp = 0;
+    uint8_t injectStatus = 0, injectLength = 0, injectRet[16] = {};
+    uint16_t afhMhz = 0;                      // the Wi-Fi channel the checks below are for (0: none on 2.4 GHz)
+    uint64_t afhCheckAt = 0;                  // when to read the links' AFH maps (0: not due)
+    unsigned afhLinks = 0;                    // ACL links at the last check
+    bool afhSet = false, afhRefused = false;  // our classification is in the controller; it refused one
+    uint8_t inject(uint16_t opcode, const uint8_t *params, uint8_t length, uint8_t *ret, uint8_t *retLength);
+    void coexAfh(uint16_t opcode);
+
+public:
+    bool coexSnapshot(switch_coex_bt *out, char *linksText, size_t size);
+
+private:
     // Scratch for the work loop's link event and stats line (both under the work-loop gate: action or runAction), off
     // the stack of whichever thread runs deliver() (it can be bluetoothd's, through ctlSend or ctlRcvd).
     uint8_t linkParams[255] = {};
@@ -1276,6 +1303,12 @@ void SwitchBluetooth::resetClientFraming()
     links = {};  // a new client: the controller has no links (a used one was brought up again)
     requests = {};
     role = SWITCH_BT_ROLE_UNKNOWN;
+    switch_coex_bt_reset(&coex);  // and none of its scans or priorities
+    injectOp = 0;
+    afhMhz = 0;
+    afhCheckAt = 0;
+    afhLinks = 0;
+    afhSet = false;
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
 }
 
@@ -1407,6 +1440,17 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
         uint16_t vendor = 0;
         bool stray = false;
         const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+        if (injectOp && opcode == injectOp) {  // our own command's answer ("Coexistence"): never the client's
+            injectStatus = status ? at(3) : at(2) >= 4 ? at(6) : 0xff;
+            injectLength = 0;
+            for (uint32_t i = 7; !status && i < 3u + at(2) && injectLength < sizeof(injectRet); ++i)
+                injectRet[injectLength++] = at(i);
+            injectOp = 0;
+            IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+            thread_wakeup(&injectOp);
+            rxDrop = true;
+            break;
+        }
         if (!takePendingLocked(opcode)) {
             if ((opcode >> 10) == kOgfLe) vendor = takeVendorLocked();
             stray = !vendor && !sentOverflow;
@@ -1500,6 +1544,8 @@ errno_t SwitchBluetooth::clientCommand(uint8_t *packet, size_t size)
         __atomic_fetch_add(&st.central, 1, __ATOMIC_RELAXED);
     traceCommand(opcode, params, length, false);
     linkCommand(opcode, params, length);
+    coexCommand(opcode, params, length);
+    coexAfh(opcode);
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
     noteCommandLocked(opcode);
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
@@ -1650,6 +1696,210 @@ void SwitchBluetooth::traceCompletion(uint16_t opcode, bool status, uint8_t resu
     hex(r, sizeof(r), ret, retLength);
     os_log(OS_LOG_DEFAULT, "SwitchBluetooth: HCI %04x/%02x %u bytes [%s] -> Command %s, status %#04x [%s]", opcode,
            entry.sub, entry.length, p, status ? "Status" : "Complete", result, r);
+}
+
+// ---- Coexistence -------------------------------------------------------------------------------------------------
+//
+// The controller shares the chip's one 2.4 GHz antenna with the Wi-Fi core, which arbitrates between them in hardware.
+// What bluetoothd asks of the air is followed here (SwitchCoex.h): the LE scan's interval and window (its duty cycle:
+// AirDrop's discovery and the proximity scans move it between 10% and 100%), the classic page and inquiry scans, and
+// which ACL it has marked high priority (A2DP). Each change of the scans' parameters or of the priority is one os_log
+// line, "SwitchBluetooth: coex: LE scan on 30/300 ms passive (10%), page scan 11/1280 ms, ACL 000b high priority";
+// switching the LE scan on and off is only counted (the stats line's "scan on N off M": twice every few seconds).
+// SwitchWLAN prints the same state with its links on its stats line (switch_bluetooth_coex).
+
+// Client thread: a command on its way out, looked at for the state above.
+void SwitchBluetooth::coexCommand(uint16_t opcode, const uint8_t *params, uint8_t length)
+{
+    const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    const unsigned changed = switch_coex_bt_command(&coex, opcode, params, length);
+    const switch_coex_bt now = coex;
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    if (!(changed & (SWITCH_COEX_LE_PARAMS | SWITCH_COEX_CLASSIC_SCAN | SWITCH_COEX_PRIORITY))) return;
+    char text[160];
+    switch_coex_describe(&now, text, sizeof(text));
+    os_log(OS_LOG_DEFAULT, "SwitchBluetooth: coex: %s", text);
+}
+
+// Any thread: the state above and the ACL links ("3 ACL, 1 active: 000b"), false without a client.
+bool SwitchBluetooth::coexSnapshot(switch_coex_bt *out, char *linksText, size_t size)
+{
+    if (mode != kClient || !cmdLock) return false;
+    uint16_t active[SWITCH_BT_LINKS];
+    unsigned acl = 0, le = 0, activeCount = 0;
+    const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    *out = coex;
+    for (const switch_bt_link &l : links.link) {
+        if (l.kind == SWITCH_BT_LINK_LE) ++le;
+        if (l.kind != SWITCH_BT_LINK_ACL) continue;
+        ++acl;
+        if (l.mode == 0) active[activeCount++] = l.handle;
+    }
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    if (!size) return true;
+    int n = snprintf(linksText, size, "%u ACL", acl);
+    size_t at = n > 0 ? static_cast<size_t>(n) : 0;
+    if (at < size && le) {
+        n = snprintf(linksText + at, size - at, ", %u LE", le);
+        at += n > 0 ? static_cast<size_t>(n) : 0;
+    }
+    for (unsigned i = 0; i < activeCount && at < size; ++i) {
+        n = snprintf(linksText + at, size - at, "%s%04x", i ? " " : ", active ", active[i]);
+        at += n > 0 ? static_cast<size_t>(n) : 0;
+    }
+    return true;
+}
+
+// Client thread (clientCommand), at an H4 packet boundary: one command of ours to the controller while none of the
+// client's is outstanding, its Command Complete taken out of the client's stream (frameRx) and waited for, kInjectMs
+// at most, before the client's own command goes; bluetoothd keeps one command out at a time, so the controller never
+// holds two. Returns the status: 0xfe when the client has a command out, 0xfd when it could not be sent, 0xff when no
+// answer came in time (a late one is still taken out).
+uint8_t SwitchBluetooth::inject(uint16_t opcode, const uint8_t *params, uint8_t length, uint8_t *ret,
+                                uint8_t *retLength)
+{
+    constexpr uint32_t kInjectMs = 100;
+    uint8_t packet[4 + 16];
+    if (length > 16) return 0xfd;
+    packet[0] = H4_COMMAND;
+    packet[1] = (uint8_t)opcode;
+    packet[2] = (uint8_t)(opcode >> 8);
+    packet[3] = length;
+    memcpy(packet + 4, params, length);
+    IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    const bool busy = sentCount || injectOp;
+    if (!busy) {
+        injectOp = opcode;
+        injectStatus = 0xff;
+        injectLength = 0;
+    }
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    if (busy) return 0xfe;
+    if (transmit(packet, 4u + length, kWriteMs)) {
+        s = IOSimpleLockLockDisableInterrupt(cmdLock);
+        injectOp = 0;
+        IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+        return 0xfd;
+    }
+    uint64_t deadline;
+    clock_interval_to_deadline(kInjectMs, kMillisecondScale, &deadline);
+    s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    while (injectOp == opcode) {
+        assert_wait_deadline(&injectOp, THREAD_UNINT, deadline);
+        IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+        const wait_result_t w = thread_block(THREAD_CONTINUE_NULL);
+        s = IOSimpleLockLockDisableInterrupt(cmdLock);
+        if (w == THREAD_TIMED_OUT) break;
+    }
+    const bool answered = injectOp != opcode;
+    const uint8_t result = answered ? injectStatus : 0xff;
+    const uint8_t n = answered && ret && retLength ? (injectLength < *retLength ? injectLength : *retLength) : 0;
+    if (n) memcpy(ret, injectRet, n);
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    if (retLength) *retLength = n;
+    return result;
+}
+
+// Client thread, before each of the client's commands goes out (SwitchCoex.h, "AFH"). The Wi-Fi firmware hands its
+// channel to the Bluetooth core over the chip's internal coexistence bus (Broadcom's si_gci_init: GCI control bits
+// 40-47 "contain WL channel info and are sent to BT", with BFL2_BTCLEGACY clear as on this board), so the first step is
+// to look: 5 s after the Wi-Fi channel or the set of ACL links changes, each link's AFH map is read (one line). Only
+// a link still hopping on the Wi-Fi channel's range gets the host classification (one line), and its maps are read
+// again 5 s later. Back off 2.4 GHz, a classification we set is withdrawn (every channel usable). A client's HCI Reset
+// clears the controller's classification and starts over; a controller that refuses one is not asked again.
+void SwitchBluetooth::coexAfh(uint16_t opcode)
+{
+    if (opcode == OP_RESET) {
+        afhMhz = 0;
+        afhCheckAt = 0;
+        afhLinks = 0;
+        afhSet = false;
+        return;
+    }
+    const uint16_t infra = swlan_awdl_infra_freq();
+    const uint16_t want = infra >= 2412 && infra <= 2484 ? infra : 0;
+    uint16_t handles[4];
+    unsigned count = 0, acl = 0;
+    IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    for (const switch_bt_link &l : links.link) {
+        if (l.kind != SWITCH_BT_LINK_ACL) continue;
+        ++acl;
+        if (count < 4) handles[count++] = l.handle;
+    }
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    uint64_t settle = 0;
+    nanoseconds_to_absolutetime(5000000000ULL, &settle);  // the controller moves its links over within seconds
+    if (want != afhMhz || acl != afhLinks) {
+        if (want != afhMhz && afhSet && !afhRefused) {  // our classification is for a channel Wi-Fi left
+            uint8_t map[10];
+            const unsigned usable = switch_coex_afh_map(want, map, nullptr, nullptr);
+            const uint8_t status = inject(SWITCH_COEX_OP_SET_AFH_CLASSIFICATION, map, sizeof(map), nullptr, nullptr);
+            if (status == 0xfe) return;  // the client has a command out: at its next one
+            afhSet = false;
+            os_log(OS_LOG_DEFAULT,
+                   "SwitchBluetooth: coex: AFH host classification withdrawn (Wi-Fi %u MHz): %u "
+                   "channels usable, status %#04x",
+                   want, usable, status);
+        }
+        afhMhz = want;
+        afhLinks = acl;
+        afhCheckAt = want && acl ? mach_absolute_time() + settle : 0;
+        return;
+    }
+    if (!afhCheckAt || mach_absolute_time() < afhCheckAt) return;
+    // The links' maps as the controller hops them now (Read AFH Channel Map) against the Wi-Fi channel's range.
+    uint8_t map[10];
+    unsigned first = 0, last = 0;
+    const unsigned usable = switch_coex_afh_map(afhMhz, map, &first, &last);
+    char text[200];
+    size_t at = 0;
+    text[0] = 0;
+    bool onWifi = false;
+    for (unsigned i = 0; i < count && at < sizeof(text); ++i) {
+        const uint8_t params[2] = {(uint8_t)handles[i], (uint8_t)(handles[i] >> 8)};
+        uint8_t ret[13];
+        uint8_t n = sizeof(ret);
+        const uint8_t status = inject(SWITCH_COEX_OP_READ_AFH_MAP, params, sizeof(params), ret, &n);
+        if (status == 0xfe) return;  // again at the client's next command
+        int k;
+        if (status || n < 13) {
+            k = snprintf(text + at, sizeof(text) - at, "%s%04x status %#04x", i ? ", " : "", handles[i], status);
+        } else {
+            unsigned inside = 0;
+            const unsigned used = switch_coex_afh_used(ret + 3, first, last, &inside);
+            onWifi |= inside > 0;
+            k = snprintf(text + at, sizeof(text) - at, "%s%04x AFH %s, %u channels (%u in Wi-Fi's)", i ? ", " : "",
+                         handles[i], ret[2] ? "on" : "off", used, inside);
+        }
+        at += k > 0 ? static_cast<size_t>(k) : 0;
+    }
+    afhCheckAt = 0;
+    os_log(OS_LOG_DEFAULT, "SwitchBluetooth: coex: AFH maps with Wi-Fi at %u MHz (Bluetooth channels %u-%u)%s: %s",
+           afhMhz, first, last, afhSet ? ", our classification set" : "", text);
+    if (!onWifi || afhSet || afhRefused) return;
+    const uint8_t status = inject(SWITCH_COEX_OP_SET_AFH_CLASSIFICATION, map, sizeof(map), nullptr, nullptr);
+    if (status == 0xfe) {
+        afhCheckAt = mach_absolute_time();  // at the client's next command
+        return;
+    }
+    if (status) {
+        afhRefused = true;
+        IOLog("SwitchBluetooth: coex: AFH host channel classification refused (status %#04x)\n", status);
+        return;
+    }
+    afhSet = true;
+    afhCheckAt = mach_absolute_time() + settle;  // and look again
+    os_log(OS_LOG_DEFAULT,
+           "SwitchBluetooth: coex: AFH host channel classification set: channels %u-%u bad (Wi-Fi %u "
+           "MHz), %u usable",
+           first, last, afhMhz, usable);
+}
+
+extern "C" bool switch_bluetooth_coex(struct switch_coex_bt *state, char *links, size_t size)
+{
+    SwitchBluetooth *self = gDriver;
+    if (size) links[0] = 0;
+    return self && self->coexSnapshot(state, links, size);
 }
 
 // ---- Links -------------------------------------------------------------------------------------------------------

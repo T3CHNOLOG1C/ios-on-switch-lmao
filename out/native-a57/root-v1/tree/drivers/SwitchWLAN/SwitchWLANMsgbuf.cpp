@@ -432,6 +432,10 @@ void Msgbuf::drain()
         tx_[id - 1].busy = false;
         tx_[id - 1].status = le16(item + 8);
         ++txDone_;
+        if (tx_[id - 1].status) {
+            ++txFailed_;
+            txFailStatus_ = tx_[id - 1].status;
+        }
     }
     retire(TX_COMPLETE);
 }

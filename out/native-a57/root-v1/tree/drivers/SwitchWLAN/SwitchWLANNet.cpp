@@ -87,7 +87,9 @@ enum {
     kScanCacheClear = 90,
     kVirtualIfCreate = 94,  // wifip2pd's awdl0 (SwitchWLANAwdl.cpp), only once en0 advertised AWDL
     kVirtualIfDelete = 95,
+    kBtCoexFlags = 102,  // wifid's Bluetooth state (SwitchWLANCoex.h), the value in req_val
     kCurrentNetwork = 103,
+    kBtPower = 104,
     kRssiBounds = 106,
     kChannelsInfo = 207,
     kHwSupportedChannels = 254,
@@ -169,8 +171,10 @@ static_assert(sizeof(struct ifmediareq64) == 44 && SIOCGIFMEDIA64 == SIOCGIFMEDI
 ifnet_t gIf;
 uint8_t gMac[6];
 bool gPower = true;
-bool gKeyed;          // the last join used a key
-bool gLinkAnnounced;  // wifid was told the link is up (an association) and not yet that it went down
+bool gKeyed;            // the last join used a key
+bool gLinkAnnounced;    // wifid was told the link is up (an association) and not yet that it went down
+uint32_t gBtFlags;      // wifid's APPLE80211_IOC_BT_COEX_FLAGS: SWLAN_BT_* (SwitchWLANCoex.h)
+uint32_t gBtPower = 1;  // wifid's APPLE80211_IOC_BT_POWER
 uint32_t gRxFrames, gRxErrors, gRxNoBuffer, gTxOversize, gTxRefused;
 int gAssocResult = kAssocOk;
 unsigned gScanCursor, gScanning;
@@ -477,6 +481,13 @@ int copy_out(const apple80211req &rq, const void *src, size_t size)
     if (rq.req_len == 0 || !rq.req_data) return EINVAL;
     return copyout(src, rq.req_data, rq.req_len < size ? rq.req_len : size);
 }
+// A set's single value: in req_val without a buffer, else the buffer's {version, value}.
+uint32_t set_value(const apple80211req &rq)
+{
+    uint32_t w[2] = {};
+    if (rq.req_len >= sizeof(w) && rq.req_data && !copyin(rq.req_data, w, sizeof(w))) return w[1];
+    return static_cast<uint32_t>(rq.req_val);
+}
 // A get that gives no buffer takes a single value in req_val; one with a buffer gets {version, value}.
 int answer_value(apple80211req &rq, uint32_t value)
 {
@@ -634,6 +645,16 @@ int apple80211(bool set, apple80211req &rq)
                 return EFAULT;
             return r;
         }
+        case kBtCoexFlags:
+        case kBtPower:
+            // What Bluetooth does, for the radio's coexistence handling and its stats line (SwitchWLANCoex.h); wifid
+            // logged "APPLE80211_IOC_BT_COEX_FLAGS return -3903" at every A2DP start and stop while this was refused.
+            if (type == kBtCoexFlags)
+                gBtFlags = set_value(rq);
+            else
+                gBtPower = set_value(rq) != 0;
+            switch_wlan_bt_state(gBtFlags, gBtPower != 0);
+            return 0;
         case kScanCacheClear:
         case kLocale:
         case kCountryCode:
@@ -703,6 +724,8 @@ int apple80211(bool set, apple80211req &rq)
         return answer_bytes(rq, cc, 3);
     }  // two letters and a NUL
     case kAssociateResult: return answer_value(rq, static_cast<uint32_t>(gAssocResult));
+    case kBtCoexFlags: return answer_value(rq, gBtFlags);
+    case kBtPower: return answer_value(rq, gBtPower);
     case kSupportedChannels:
     case kHwSupportedChannels: {
         out.chans.version = 1;

@@ -36,7 +36,9 @@
 #include <sys/errno.h>
 #include <sys/random.h>
 #include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../SwitchBluetooth/SwitchCoex.h"
 #include "SwitchWLANAwdlRadio.h"
+#include "SwitchWLANCoex.h"
 #include "SwitchWLANCrypto.h"
 #include "SwitchWLANPrivate.h"
 #include "SwitchWLANStation.h"
@@ -55,7 +57,8 @@ constexpr uint32_t kWatchdogMs = 1000, kRssiRefreshMs = 10000, kTxWaitMs = 1000,
 constexpr uint32_t kRetryFirstMs = 2000, kRetryMaxMs = 60000;
 
 // Firmware commands (brcmfmac fwil_types.h / nxk wl.rs).
-constexpr uint32_t WLC_UP = 2, WLC_DOWN = 3, WLC_SET_INFRA = 20, WLC_SCAN = 50, WLC_DISASSOC = 52, WLC_SET_PM = 86;
+constexpr uint32_t WLC_UP = 2, WLC_DOWN = 3, WLC_SET_INFRA = 20, WLC_SCAN = 50, WLC_DISASSOC = 52, WLC_GET_PM = 85;
+constexpr uint32_t WLC_SET_PM = 86;
 constexpr uint32_t WLC_GET_RSSI = 127, WLC_GET_BSS_INFO = 136, WLC_GET_VAR = 262, WLC_SET_VAR = 263;
 // Firmware events (brcmfmac fweh.h).
 enum : uint32_t {
@@ -162,6 +165,7 @@ OSDeclareDefaultStructors(SwitchWLAN)
     void status(swlan_status *out);
     void counters(char *text, size_t size);
     void setMac(const uint8_t mac[6]) { memcpy(mac_, mac, 6); }
+    void btState(uint32_t flags, bool power);
 
     // The firmware's own AWDL for SwitchWLANAwdl.cpp (SwitchWLANAwdlRadio.h §6). Open/close and the iovars wait for
     // the firmware: thread context only, never the work loop. The callbacks are only stored here; the work loop calls
@@ -231,6 +235,11 @@ private:
     EapolFrame *eapol_ = nullptr;
     unsigned eapolHead_ = 0, eapolCount_ = 0;
     uint32_t eapolDropped_ = 0, rxToStack_ = 0, losses_ = 0, recoveries_ = 0;
+    uint32_t rxGroup_ = 0, rxUnicast_ = 0;  // frames to en0 by destination: group (multicast, broadcast) or ours
+    uint64_t rxBytes_ = 0, txBytes_ = 0;    // bytes to and from en0, for the stats line's throughput
+    // Coexistence ("Coexistence" section): what wifid says Bluetooth is doing (SWLAN_BT_*), and its power.
+    uint32_t btFlags_ = 0;
+    bool btPower_ = true, btChanged_ = false;
 
     // AWDL: the firmware's cap list has "awdl"; open (event mask on, frames and events routed); the AWDL
     // interface's firmware index from its WLC_E_IF (-1 until then).
@@ -252,12 +261,24 @@ private:
     uint64_t nextRssiNs_ = 0, scanEndNs_ = 0, nextStatsNs_ = 0;
     // The data path's counters at the last stats line (logStats).
     struct Counts {
-        uint32_t rx, tx, done, refused;
-        uint64_t msis;
+        uint32_t rx, tx, done, refused, failed, rxGroup, rxUnicast;
+        uint64_t msis, rxBytes, txBytes;
         swlan_net_counters net;
     } lastCounts_ = {};
     void snapshot(Counts &c);
     void logStats();
+    // The access point's counters (sta_info) and the firmware's time in power save (pm_dur, ms) at the last stats
+    // line; an iovar the firmware refused once is not asked again.
+    swlan_sta staLast_ = {};
+    uint32_t pmDurLast_ = 0;
+    bool staRefused_ = false, pmDurRefused_ = false, pmDurHave_ = false, btcStatusRefused_ = false;
+    // The power-save mode the station runs (coexApply) and whether the firmware took HOS's sleep return this join.
+    uint32_t pm_ = 0;
+    bool sleepRetSet_ = false, sleepRetRefused_ = false;
+    bool readSta(swlan_sta &out);
+    void coexBringUp();
+    void coexJoined();
+    void coexApply();
 
     template <typename F> void locked(F f)
     {
@@ -299,6 +320,8 @@ private:
     static IOReturn ioctlGated(OSObject *owner, void *call, void *, void *, void *);
     bool ioctl(uint32_t cmd, const uint8_t *data, size_t length, size_t outLength, uint8_t *out, size_t *outReturned);
     bool getVar(const char *name, uint8_t *out, size_t outLength, size_t *returned);
+    bool getVarWith(const char *name, const void *param, size_t paramLength, uint8_t *out, size_t outLength,
+                    size_t *returned);
     bool setVar(const char *name, const void *value, size_t length);
     bool cmdInt(uint32_t cmd, uint32_t value);
     bool radioInit();
@@ -343,6 +366,14 @@ extern "C" __attribute__((weak)) int switch_wlan_awdl_stat(char *buf, size_t siz
     (void)buf;
     (void)size;
     return 0;
+}
+
+// SwitchBluetooth's coexistence snapshot (SwitchCoex.h); weak so the driver links without the Bluetooth unit.
+extern "C" __attribute__((weak)) bool switch_bluetooth_coex(struct switch_coex_bt *state, char *links, size_t size)
+{
+    (void)state;
+    if (size) links[0] = 0;
+    return false;
 }
 
 bool SwitchWLAN::start(IOService *provider)
@@ -516,6 +547,8 @@ void SwitchWLAN::onFrame(void *context, const uint8_t *frame, size_t length, uin
     if (((frame[12] << 8) | frame[13]) == kEthPLinkCtl) return;  // firmware event frames take the event path
     if (self->status_.state == SWLAN_STA_UP && self->events_ && self->events_->rx) {
         ++self->rxToStack_;
+        ++(frame[0] & 1 ? self->rxGroup_ : self->rxUnicast_);
+        self->rxBytes_ += length;
         self->events_->rx(frame, length);
     }
 }
@@ -644,6 +677,18 @@ bool SwitchWLAN::getVar(const char *name, uint8_t *out, size_t outLength, size_t
     return ioctl(WLC_GET_VAR, reinterpret_cast<const uint8_t *>(name), strlen(name) + 1, outLength, out, returned);
 }
 
+// The same with a parameter after the name (brcmf_fil_bsscfg_data_get's buffer: sta_info takes the station's address).
+bool SwitchWLAN::getVarWith(const char *name, const void *param, size_t paramLength, uint8_t *out, size_t outLength,
+                            size_t *returned)
+{
+    uint8_t request[64];
+    const size_t nameLength = strlen(name) + 1;
+    if (nameLength + paramLength > sizeof(request)) return false;
+    memcpy(request, name, nameLength);
+    memcpy(request + nameLength, param, paramLength);
+    return ioctl(WLC_GET_VAR, request, nameLength + paramLength, outLength, out, returned);
+}
+
 bool SwitchWLAN::setVar(const char *name, const void *value, size_t length)
 {
     uint8_t request[256];
@@ -681,6 +726,7 @@ bool SwitchWLAN::radioInit()
     if (!setVar("allmulti", on, sizeof(on))) IOLog("SwitchWLAN: allmulti refused: %s\n", why_);
     if (!setVar("join_pref", joinPref, sizeof(joinPref))) IOLog("SwitchWLAN: join_pref refused: %s\n", why_);
     if (!cmdInt(WLC_UP, 1)) return false;
+    coexBringUp();
     uint8_t country[12] = {};
     size_t n = 0;
     char abbrev[5] = "?", code[5] = "?";
@@ -1301,8 +1347,8 @@ int SwitchWLAN::joinOnce(const JoinParams &p, char *ssidText)
         locked([&] { leaving = leaveRequested_; });
         if (leaving) return SWLAN_RES_FAILED;
         if (associated && link && keyed) {
-            // The firmware may turn power saving back on when it associates: the access point would then hold what it
-            // has for us until the next beacon (nxk saw pings of 100-170 ms).
+            // The firmware may turn power saving on when it associates; PM 0 until the join is done, then coexJoined
+            // sets the mode the station runs (coexApply: HOS's PM 2 with its 2-5 s sleep return while Bluetooth is on).
             cmdInt(WLC_SET_PM, 0);
             ensureFlow(bssid);
             uint32_t mhz = 0;
@@ -1324,6 +1370,7 @@ int SwitchWLAN::joinOnce(const JoinParams &p, char *ssidText)
             });
             __atomic_store_n(&gInfraFreq, mhz, __ATOMIC_RELEASE);
             IOLog("SwitchWLAN: joined '%s' (%s) at %u MHz, %d dBm\n", ssidText, secured ? "WPA2" : "open", mhz, rssi);
+            coexJoined();
             nextRssiNs_ = swlan::nowNs() + kRssiRefreshMs * 1000000ULL;
             nextStatsNs_ = swlan::nowNs() + kStatsMs * 1000000ULL;
             snapshot(lastCounts_);
@@ -1462,9 +1509,14 @@ void SwitchWLAN::run()
         }
         if (scan) startScan(scanSsidLength ? scanSsid : nullptr, scanSsidLength);
 
-        // While joined: link loss and group rekeys.
+        // While joined: link loss and group rekeys; what wifid said Bluetooth now does (coexApply).
         uint32_t state = SWLAN_STA_OFF;
-        locked([&] { state = status_.state; });
+        bool btChanged = false;
+        locked([&] {
+            state = status_.state;
+            btChanged = btChanged_;
+        });
+        if (btChanged && state == SWLAN_STA_UP) coexApply();
         FwEvent e;
         while (popEvent(e)) {
             if (state != SWLAN_STA_UP) continue;
@@ -1509,6 +1561,11 @@ void SwitchWLAN::snapshot(Counts &c)
         c.tx = mb_.framesSent();
         c.done = mb_.sendsCompleted();
         c.refused = mb_.sendsRefused();
+        c.failed = mb_.sendsFailed();
+        c.rxGroup = rxGroup_;
+        c.rxUnicast = rxUnicast_;
+        c.rxBytes = rxBytes_;
+        c.txBytes = txBytes_;
         c.msis = interrupts_;
     });
     switch_wlan_net_counters(&c.net);
@@ -1525,19 +1582,238 @@ void SwitchWLAN::logStats()
         return;
     }
     int signal = 0;
-    locked([&] { signal = status_.signal_dbm; });
-    char out[384];  // periodic: to the log only (os_log), never the boot console
-    snprintf(out, sizeof(out),
-             "SwitchWLAN: stats %u ms: rx %u (en0 %u, no mbuf %u, input refused %u), tx %u done %u refused %u, "
-             "if_output dropped %u oversize %u, %llu MSIs, %d dBm",
-             kStatsMs, now.rx - was.rx, now.net.rx_input - was.net.rx_input, now.net.rx_no_mbuf - was.net.rx_no_mbuf,
-             now.net.rx_input_errors - was.net.rx_input_errors, now.tx - was.tx, now.done - was.done,
-             now.refused - was.refused, now.net.tx_refused - was.net.tx_refused,
-             now.net.tx_oversize - was.net.tx_oversize, static_cast<unsigned long long>(now.msis - was.msis), signal);
-    size_t at = strlen(out);
+    uint32_t btFlags = 0;
+    bool btPower = true;
+    locked([&] {
+        signal = status_.signal_dbm;
+        btFlags = btFlags_;
+        btPower = btPower_;
+    });
+    char out[1024];  // periodic: to the log only (os_log), never the boot console
+    int n = snprintf(
+        out, sizeof(out),
+        "SwitchWLAN: stats %u ms: rx %u (en0 %u: unicast %u group %u, %llu KB, no mbuf %u, input refused %u), "
+        "tx %u (%llu KB) done %u failed %u refused %u, if_output dropped %u oversize %u, %llu MSIs, %d dBm",
+        kStatsMs, now.rx - was.rx, now.net.rx_input - was.net.rx_input, now.rxUnicast - was.rxUnicast,
+        now.rxGroup - was.rxGroup, static_cast<unsigned long long>((now.rxBytes - was.rxBytes) / 1024),
+        now.net.rx_no_mbuf - was.net.rx_no_mbuf, now.net.rx_input_errors - was.net.rx_input_errors, now.tx - was.tx,
+        static_cast<unsigned long long>((now.txBytes - was.txBytes) / 1024), now.done - was.done,
+        now.failed - was.failed, now.refused - was.refused, now.net.tx_refused - was.net.tx_refused,
+        now.net.tx_oversize - was.net.tx_oversize, static_cast<unsigned long long>(now.msis - was.msis), signal);
+    size_t at = n > 0 ? static_cast<size_t>(n) : 0;
+    auto advance = [&](int k) { at += k > 0 ? static_cast<size_t>(k) : 0; };
+    if (at < sizeof(out) && now.failed != was.failed)
+        advance(snprintf(out + at, sizeof(out) - at, " (status %u)", mb_.lastFailStatus()));
+    // The access point's view of the same window (sta_info): what it acknowledged and what it sent us.
+    swlan_sta sta;
+    if (readSta(sta)) {
+        char text[200];
+        swlan_sta_describe(&staLast_, &sta, text, sizeof(text));
+        if (text[0] && at < sizeof(out)) advance(snprintf(out + at, sizeof(out) - at, "; %s", text));
+        staLast_ = sta;
+    }
+    // The firmware's time in power save: with PM 0 set by us, only coexistence's own protection puts it there.
+    if (!pmDurRefused_) {
+        uint8_t v[4] = {};
+        size_t got = 0;
+        if (getVar("pm_dur", v, sizeof(v), &got) && got >= 4) {
+            const uint32_t pm = swlan::le32(v);
+            if (pmDurHave_ && at < sizeof(out))
+                advance(snprintf(out + at, sizeof(out) - at, "; PS pm_dur %u (+%d ms)", pm,
+                                 static_cast<int>(pm - pmDurLast_)));
+            pmDurLast_ = pm;
+            pmDurHave_ = true;
+        } else {
+            pmDurRefused_ = true;
+            os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: pm_dur not available: %s", why_);
+        }
+    }
+    // The firmware's dynamic coexistence as it stands: the mode it runs and the desense it applies (btc_dynctl_status).
+    if (!btcStatusRefused_) {
+        uint8_t v[16] = {};
+        size_t got = 0;
+        swlan_btc_status btc;
+        if (getVar("btc_dynctl_status", v, sizeof(v), &got) && swlan_btc_status_parse(v, got, &btc)) {
+            char text[96];
+            swlan_btc_status_describe(&btc, text, sizeof(text));
+            if (at < sizeof(out)) advance(snprintf(out + at, sizeof(out) - at, "; %s", text));
+        } else {
+            btcStatusRefused_ = true;
+            os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: btc_dynctl_status not available (%zu bytes): %s", got, why_);
+        }
+    }
+    // Bluetooth: what wifid says and what the controller was asked to do (SwitchBluetooth).
+    char flags[48], bt[200], links[96];
+    swlan_bt_flags_describe(btFlags, flags, sizeof(flags));
+    switch_coex_bt state;
+    if (switch_bluetooth_coex(&state, links, sizeof(links))) {
+        switch_coex_describe(&state, bt, sizeof(bt));
+        if (at < sizeof(out)) advance(snprintf(out + at, sizeof(out) - at, "; BT %s, %s; wifid %s", bt, links, flags));
+    } else if (at < sizeof(out)) {
+        advance(snprintf(out + at, sizeof(out) - at, "; BT %s; wifid %s", btPower ? "no client" : "off", flags));
+    }
     if (at < sizeof(out)) switch_wlan_awdl_stat(out + at, sizeof(out) - at);
     os_log(OS_LOG_DEFAULT, "%s", out);
     lastCounts_ = now;
+}
+
+// The access point's counters (sta_info by its address). A firmware that refuses or answers in a layout not known
+// here (SwitchWLANCoex.h) gets one line and is not asked again this boot.
+bool SwitchWLAN::readSta(swlan_sta &out)
+{
+    if (staRefused_) return false;
+    uint8_t bssid[6] = {};
+    locked([&] { memcpy(bssid, status_.bssid, 6); });
+    uint8_t info[256] = {};
+    size_t n = 0;
+    if (!getVarWith("sta_info", bssid, sizeof(bssid), info, sizeof(info), &n)) {
+        staRefused_ = true;
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: sta_info not available: %s", why_);
+        return false;
+    }
+    if (!swlan_sta_parse(info, n, &out) || !(out.have & SWLAN_STA_V3)) {
+        staRefused_ = true;
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: sta_info version %u length %u (%zu bytes) not understood", out.ver,
+               out.len, n);
+        return false;
+    }
+    return true;
+}
+
+// ---- Coexistence ----------------------------------------------------------------------------------------------
+//
+// The BCM4356's Wi-Fi and Bluetooth cores share one 2.4 GHz antenna (boardflags BFL_BTCOEX | BFL_FEM_BT) and arbitrate
+// in hardware over the die's own GCI/SECI link, which the firmware sets up itself; the host's levers are the btc_*
+// iovars and the power-save mode (SwitchWLANCoex.h). We run Nintendo's operating point for this firmware and NVRAM:
+// the NVRAM's dynamic coexistence (btcdyn: hybrid mode 5, desense by Wi-Fi RSSI) unchanged, and PM 2 with HOS's
+// sleep return while Bluetooth is on (coexApply). What the firmware actually runs is logged: its static settings once
+// per bring-up (coexBringUp), PM and the policy once per join (coexJoined), the dynamic state, the access point's
+// counters, the time in power save and Bluetooth's air use on every stats line (logStats).
+
+// Bring-up (radioInit, after WLC_UP): the coexistence settings the firmware took from the NVRAM and its defaults, one
+// line. Each value is "-" when the firmware does not answer it.
+void SwitchWLAN::coexBringUp()
+{
+    char text[640];
+    size_t at = 0;
+    auto add = [&](int k) { at += k > 0 ? static_cast<size_t>(k) : 0; };
+    uint8_t v[64] = {};
+    size_t n = 0;
+    add(snprintf(text, sizeof(text), "SwitchWLAN: coex: firmware btc_mode "));
+    if (getVar("btc_mode", v, sizeof(v), &n) && n >= 4)
+        add(snprintf(text + at, sizeof(text) - at, "%u", swlan::le32(v)));
+    else
+        add(snprintf(text + at, sizeof(text) - at, "-"));
+    // btc_params by index ("name\0" + le32 index -> le32): the NVRAM's two, SCO detection (27), the DHCP window's
+    // (41, 66, 68) and eSCO's (50, 51) as brcmfmac and bcmdhd use them; btc_flags 0-8.
+    static const uint32_t params[] = {27, 41, 50, 51, 66, 68, 84, 95};
+    if (at < sizeof(text)) add(snprintf(text + at, sizeof(text) - at, ", btc_params"));
+    for (uint32_t index : params) {
+        uint8_t le[4];
+        swlan::put32(le, index);
+        if (at >= sizeof(text)) break;
+        if (getVarWith("btc_params", le, sizeof(le), v, sizeof(v), &n) && n >= 4)
+            add(snprintf(text + at, sizeof(text) - at, " %u=%#x", index, swlan::le32(v)));
+        else
+            add(snprintf(text + at, sizeof(text) - at, " %u=-", index));
+    }
+    if (at < sizeof(text)) add(snprintf(text + at, sizeof(text) - at, ", btc_flags 0-8"));
+    for (uint32_t index = 0; index <= 8 && at < sizeof(text); ++index) {
+        uint8_t le[4];
+        swlan::put32(le, index);
+        if (getVarWith("btc_flags", le, sizeof(le), v, sizeof(v), &n) && n >= 4)
+            add(snprintf(text + at, sizeof(text) - at, " %u", swlan::le32(v)));
+        else
+            add(snprintf(text + at, sizeof(text) - at, " -"));
+    }
+    // The dynamic coexistence profile (btc_dynctl, 50 bytes): the NVRAM's btcdyn_* as the firmware holds them.
+    char profile[200] = "";
+    if (getVar("btc_dynctl", v, sizeof(v), &n)) swlan_btc_profile_describe(v, n, profile, sizeof(profile));
+    if (at < sizeof(text)) add(snprintf(text + at, sizeof(text) - at, "; %s", profile[0] ? profile : "btcdyn -"));
+    // The board's wiring as the NVRAM we loaded claims it (no SECI/GCI iovar exists: the link is on the die).
+    const char *nvram = reinterpret_cast<const char *>(switch_wlan_fw_nvram);
+    const size_t nvramLength = static_cast<size_t>(switch_wlan_fw_nvram_size);
+    uint32_t flags = 0, flags2 = 0, mux = 0;
+    const bool haveFlags = swlan_nvram_value(nvram, nvramLength, "boardflags", &flags);
+    const bool haveFlags2 = swlan_nvram_value(nvram, nvramLength, "boardflags2", &flags2);
+    const bool haveMux = swlan_nvram_value(nvram, nvramLength, "muxenab", &mux);
+    if (at < sizeof(text))
+        add(snprintf(text + at, sizeof(text) - at,
+                     "; NVRAM boardflags %#x (BTCOEX %u, FEM_BT shared antenna %u) boardflags2 %#x (BT_SHARE_ANT0 %u, "
+                     "BTCLEGACY %u: %s) muxenab %#x (SECI pins %u)",
+                     haveFlags ? flags : 0, (flags & 0x1) ? 1u : 0u, (flags & 0x400000) ? 1u : 0u,
+                     haveFlags2 ? flags2 : 0, (flags2 & 0x800000) ? 1u : 0u, (flags2 & 0x80) ? 1u : 0u,
+                     (flags2 & 0x80) ? "legacy wires" : "GCI/SECI on the die", haveMux ? mux : 0,
+                     (mux & 0x1000) ? 1u : 0u));
+    os_log(OS_LOG_DEFAULT, "%s", text);
+}
+
+// Any thread: what wifid says Bluetooth is doing (SwitchWLANNet.cpp, APPLE80211_IOC_BT_COEX_FLAGS / BT_POWER); one
+// line per change, then the worker applies it (coexApply).
+void SwitchWLAN::btState(uint32_t flags, bool power)
+{
+    bool changed = false;
+    locked([&] {
+        changed = flags != btFlags_ || power != btPower_;
+        btFlags_ = flags;
+        btPower_ = power;
+        if (changed) {
+            btChanged_ = true;
+            kick();
+        }
+    });
+    if (!changed) return;
+    char text[48];
+    swlan_bt_flags_describe(flags, text, sizeof(text));
+    os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: wifid says Bluetooth %s, %s (flags %#x)", power ? "on" : "off", text,
+           flags);
+}
+
+// Worker, once per join (joinOnce left the station at PM 0): the counters' baselines, then our power-save mode.
+void SwitchWLAN::coexJoined()
+{
+    staLast_ = {};
+    pmDurHave_ = false;
+    pm_ = SWLAN_PM_OFF;
+    sleepRetSet_ = false;
+    coexApply();
+}
+
+// Worker, joined: the power-save mode for what Bluetooth does now (swlan_coex_pm): while it is on, HOS's
+// pm2_sleep_ret_ext once per join and then PM 2; when it is off, PM 0. A firmware that refuses the sleep return stays
+// at PM 0 (PM 2 with the firmware's default 200 ms sleep return would add latency), with one line. Every change is
+// one line with the PM the firmware reads back.
+void SwitchWLAN::coexApply()
+{
+    bool power = true;
+    locked([&] {
+        btChanged_ = false;
+        power = btPower_;
+    });
+    if (power && !sleepRetSet_ && !sleepRetRefused_) {
+        uint8_t ext[SWLAN_PM2_SLEEP_RET_EXT_SIZE];
+        swlan_pm2_sleep_ret_ext(ext);
+        if (setVar("pm2_sleep_ret_ext", ext, sizeof(ext))) {
+            sleepRetSet_ = true;
+        } else {
+            sleepRetRefused_ = true;
+            os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: pm2_sleep_ret_ext refused (%s); the station stays at PM 0", why_);
+        }
+    }
+    const uint32_t want = swlan_coex_pm(power, sleepRetSet_);
+    if (want == pm_) return;
+    if (!cmdInt(WLC_SET_PM, want)) {
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: PM %u refused: %s", want, why_);
+        return;
+    }
+    pm_ = want;
+    uint8_t v[4] = {};
+    size_t n = 0;
+    const int readBack =
+        ioctl(WLC_GET_PM, nullptr, 0, sizeof(v), v, &n) && n >= 4 ? static_cast<int>(swlan::le32(v)) : -1;
+    os_log(OS_LOG_DEFAULT, "SwitchWLAN: coex: PM %u (firmware reads %d)%s", want, readBack,
+           want == SWLAN_PM_FAST ? ", sleep return 2000/5000 ms after 10 frames (HOS's): Bluetooth is on"
+                                 : ": Bluetooth is off");
 }
 
 // ---- the station interface ---------------------------------------------------------------------------------------
@@ -1653,6 +1929,7 @@ int SwitchWLAN::transmit(const uint8_t *frame, size_t length)
     uint32_t id = 0;
     locked([&] {
         if (up_ && status_.state == SWLAN_STA_UP) id = mb_.send(frame, length);
+        if (id) txBytes_ += length;
     });
     return id ? 0 : -1;
 }
@@ -1871,6 +2148,10 @@ extern "C" void switch_wlan_status_get(struct swlan_status *out)
         gDriver->status(out);
     else
         memset(out, 0, sizeof(*out));
+}
+extern "C" void switch_wlan_bt_state(uint32_t flags, int power)
+{
+    if (gDriver) gDriver->btState(flags, power != 0);
 }
 extern "C" void switch_wlan_counters(char *text, size_t size)
 {

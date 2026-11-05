@@ -288,6 +288,9 @@ public:
     uint32_t framesSent() const { return txFrames_; }
     uint32_t sendsCompleted() const { return txDone_; }
     uint32_t sendsRefused() const { return txRefused_; }
+    // Completions whose status was not 0 (the firmware did not get the frame out), and the last such status.
+    uint32_t sendsFailed() const { return txFailed_; }
+    uint16_t lastFailStatus() const { return txFailStatus_; }
 
 private:
     struct Ring {
@@ -335,6 +338,8 @@ private:
     TxBuffer tx_[32] = {};
     unsigned rxCount_ = 0;
     uint32_t pcie2_ = 0, dataOffset_ = 0, dtohMailbox_ = 0, rxFrames_ = 0, txFrames_ = 0, txDone_ = 0, txRefused_ = 0;
+    uint32_t txFailed_ = 0;
+    uint16_t txFailStatus_ = 0;
     uint16_t transId_ = 0, flowStatus_ = 0;
     Flow flow_ = FLOW_CLOSED;
     bool replyReady_ = false;
