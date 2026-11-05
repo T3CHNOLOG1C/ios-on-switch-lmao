@@ -481,7 +481,12 @@ impl SharedEventListener {
         });
         {
             let queue = Arc::clone(&queue);
-            exit_guard::spawn(
+            // At the user-interactive class, as the threads that bring command buffers to their
+            // handlers (`exit_guard::spawn_user_interactive`): a notification is how Core
+            // Animation learns a CAMetalLayer drawable's work is done (`layer_private_present`),
+            // so a frame waits on this thread; at the default class it queued behind every busy
+            // app's threads (ioswitch r8-webgpu).
+            exit_guard::spawn_user_interactive(
                 std::thread::Builder::new().name("metal2vulkan-listener".into()),
                 move || listen(&queue),
             )

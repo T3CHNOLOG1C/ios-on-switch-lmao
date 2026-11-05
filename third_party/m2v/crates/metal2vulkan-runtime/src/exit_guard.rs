@@ -728,8 +728,8 @@ where
 /// running `f`, as [`spawn`] does, but at the user-interactive quality of service on macOS, and
 /// with the utilization floor at its top on Linux, from its start ([`run_at_user_interactive`]):
 /// the scheduler's (`scheduler/`), the completion thread
-/// and each `VkQueue`'s waiter (`command_buffer/completion.rs`), and every thread of the handler
-/// pool (`contexts/`). A thread one of them starts (the reaper a pipeline state's last release
+/// and each `VkQueue`'s waiter (`command_buffer/completion.rs`), every thread of the handler
+/// pool (`contexts/`), and each shared event listener's (`event.rs`). A thread one of them starts (the reaper a pipeline state's last release
 /// starts on a handler thread, a program's thread made in a handler) does not take either: it
 /// starts at the default class on macOS ([`spawn`]), and with no floor on Linux.
 pub(crate) fn spawn_user_interactive<F, T>(
