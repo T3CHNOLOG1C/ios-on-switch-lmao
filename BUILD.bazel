@@ -9,7 +9,7 @@
 # Format and lint (//bazel/lint; every tool pinned in bazel/lint/tools.bzl, @llvm or the Rust toolchain):
 #
 #   bazel run //:format [-- PATH...]   format every file in place (or only these files and directories):
-#                                      C/C++/ObjC clang-format, Python ruff format, Starlark buildifier (fix),
+#                                      C/C++/ObjC clang-format, Python ruff format, Starlark buildifier,
 #                                      shell shfmt, Rust rustfmt, Markdown rumdl, JSON/TOML dprint
 #   bazel test //:format_test          the same formatters as checks, one cached action per file
 #   bazel test //:lint_test            the linters: ruff check, buildifier lint=warn, shellcheck, rumdl
@@ -28,6 +28,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
+    ".buildifier-tables.json",
     ".buildifier.json",
     ".clang-format",
     ".clang-tidy",

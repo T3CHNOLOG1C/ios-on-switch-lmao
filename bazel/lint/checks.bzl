@@ -62,6 +62,7 @@ def _tools(ctx):
         rustfmt_files = rustfmt.all_files,
         ruff_config = ctx.file._ruff_config,
         buildifier_config = ctx.file._buildifier_config,
+        buildifier_tables = ctx.file._buildifier_tables,
         rumdl_config = ctx.file._rumdl_config,
         dprint_config = ctx.file._dprint_config,
         rustfmt_config = ctx.file._rustfmt_config,
@@ -81,13 +82,16 @@ def _check_ruff(t, f, _):
     argv = [t.ruff.path, "check", "--no-cache", "--output-format=concise", "--config", t.ruff_config.path, f.path]
     return argv, [t.ruff, t.ruff_config]
 
+# buildifier never reorders a list here (.buildifier-tables.json, which .buildifier.json adds): list order is meaning in
+# this repository (a kernel_driver's srcs are its link order, an archive's members its member order, include paths
+# their search order). The format check and the formatter run with -lint=off: formatting only, never a lint fix.
 def _check_buildifier_format(t, f, _):
-    argv = [t.buildifier.path, "-mode=check", "-config=" + t.buildifier_config.path, f.path]
-    return argv, [t.buildifier, t.buildifier_config]
+    argv = [t.buildifier.path, "-mode=check", "-lint=off", "-config=" + t.buildifier_config.path, f.path]
+    return argv, [t.buildifier, t.buildifier_config, t.buildifier_tables]
 
 def _check_buildifier(t, f, _):
     argv = [t.buildifier.path, "-mode=check", "-lint=warn", "-config=" + t.buildifier_config.path, f.path]
-    return argv, [t.buildifier, t.buildifier_config]
+    return argv, [t.buildifier, t.buildifier_config, t.buildifier_tables]
 
 def _check_shfmt(t, f, _):
     return [t.shfmt.path, "-d"] + SHFMT_STYLE + [f.path], [t.shfmt]
@@ -202,6 +206,7 @@ def _lint_test_impl(ctx):
 _TOOL_ATTRS = {
     "_buildifier": attr.label(default = "@buildifier//file", executable = True, cfg = "exec", allow_single_file = True),
     "_buildifier_config": attr.label(default = "//:.buildifier.json", allow_single_file = True),
+    "_buildifier_tables": attr.label(default = "//:.buildifier-tables.json", allow_single_file = True),
     "_clang_format": attr.label(default = "@llvm//:bin/clang-format", executable = True, cfg = "exec", allow_single_file = True),
     "_dprint": attr.label(default = "@dprint//:dprint", executable = True, cfg = "exec", allow_single_file = True),
     "_dprint_config": attr.label(default = "//:dprint.json", allow_single_file = True),
@@ -280,7 +285,7 @@ DATA_FILES=({data_files})
 
 run clang-format C_FILES "$CLANG_FORMAT" -i --style=file --fallback-style=none
 run ruff PY_FILES "$RUFF" format --quiet --no-cache --config ruff.toml
-run buildifier STARLARK_FILES "$BUILDIFIER" -mode=fix -lint=fix -config=.buildifier.json
+run buildifier STARLARK_FILES "$BUILDIFIER" -mode=fix -lint=off -config=.buildifier.json
 run shfmt SH_FILES "$SHFMT" -w {shfmt_style}
 run rustfmt RS_FILES "$RUSTFMT" --config-path rustfmt.toml
 run rumdl MD_FILES "$RUMDL" fmt --silent --color never --config .rumdl.toml

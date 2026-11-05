@@ -2,5 +2,6 @@
   "type": "auto",
   "mode": "fix",
   "lint": "warn",
-  "warningsList": ["all"]
+  "warningsList": ["all"],
+  "addTables": ".buildifier-tables.json"
 }
