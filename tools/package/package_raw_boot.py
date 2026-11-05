@@ -49,7 +49,7 @@ PORTRAIT_HEADER = WORK / 'tree/drivers/NativeMobileDisplay/IOSwitchPortrait.h'
 USB_DEVICE_CONFIGURATION = 'unknownHardware'
 # USB 2.0 host mode on the same port (drivers/SwitchUSB SwitchXHCI): a keyboard, mouse or flash drive through a USB-C OTG
 # adapter or an unpowered hub. True writes /arm-io/usb-xhci, the driver's switch; the role then follows the BM92T36.
-USB_HOST = False
+USB_HOST = True
 # The panel's colour gamut as iOS learns it: /product artwork-display-gamut, MobileGestalt's ArtworkDisplayGamut, whose
 # HasExtendedColorDisplay is "== P3". 'sRGB' (what sRGB iPads carry) turns off deep colour everywhere: QuartzCore's
 # CADeviceUseCIF10 (so the display reports no extended colours, and CADisplayMode, FBSDisplayConfiguration and UIScreen
