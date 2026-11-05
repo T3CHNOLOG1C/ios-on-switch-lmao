@@ -25,7 +25,10 @@ void awdl_config_default(struct awdl_config *c, const uint8_t addr[6])
     c->country[1] = 'X';
 }
 
-size_t awdl_core_size(void) { return sizeof(struct awdl_core); }
+size_t awdl_core_size(void)
+{
+    return sizeof(struct awdl_core);
+}
 
 void awdl_log(struct awdl_core *c, const char *fmt, ...)
 {
@@ -38,8 +41,14 @@ void awdl_log(struct awdl_core *c, const char *fmt, ...)
     c->host.log(c->host.ctx, line);
 }
 
-static int is_group(const uint8_t *a) { return a[0] & 1; }
-static int addr_eq(const uint8_t *a, const uint8_t *b) { return !memcmp(a, b, 6); }
+static int is_group(const uint8_t *a)
+{
+    return a[0] & 1;
+}
+static int addr_eq(const uint8_t *a, const uint8_t *b)
+{
+    return !memcmp(a, b, 6);
+}
 
 // ---- timing ------------------------------------------------------------------------------------------------------
 uint16_t awdl_core_aw_seq(const struct awdl_core *c, uint64_t now)
@@ -54,7 +63,10 @@ uint64_t awdl_core_aw_start(const struct awdl_core *c, uint16_t seq, uint64_t no
     const int64_t d = (int16_t)(uint16_t)(seq - c->base_seq);
     return (uint64_t)((int64_t)c->base_tsf + d * (int64_t)AWDL_AW_US);
 }
-static unsigned slot_of(uint16_t aw) { return (unsigned)(aw / AWDL_EAW_AWS) % AWDL_SEQ_SLOTS; }
+static unsigned slot_of(uint16_t aw)
+{
+    return (unsigned)(aw / AWDL_EAW_AWS) % AWDL_SEQ_SLOTS;
+}
 struct awdl_chan awdl_core_channel_at(const struct awdl_core *c, uint64_t now)
 {
     return c->cfg.seq[slot_of(awdl_core_aw_seq(c, now))];
@@ -280,17 +292,17 @@ size_t awdl_core_build_af(struct awdl_core *c, uint8_t subtype, uint64_t now, ui
     awdl_w_u8(&w, awdl_chan_primary(ch));
     awdl_w_u16(&w, counter);
     awdl_w_u8(&w, awdl_chan_primary(ch));
-    awdl_w_u8(&w, 0);                     // guard time
-    awdl_w_u16(&w, AWDL_AW_TU);           // AW period
-    awdl_w_u16(&w, AWDL_PSF_INTERVAL_TU); // action frame period
-    awdl_w_u16(&w, 0x1800);               // flags
-    awdl_w_u16(&w, AWDL_AW_TU);           // AW extension length
-    awdl_w_u16(&w, AWDL_AW_TU);           // AW common length
-    awdl_w_u16(&w, 0);                    // remaining AW length
-    awdl_w_u8(&w, 3);                     // minimum extensions
-    awdl_w_u8(&w, 3);                     // maximum multicast extensions
-    awdl_w_u8(&w, 3);                     // maximum unicast extensions
-    awdl_w_u8(&w, 3);                     // maximum action frame extensions
+    awdl_w_u8(&w, 0);                      // guard time
+    awdl_w_u16(&w, AWDL_AW_TU);            // AW period
+    awdl_w_u16(&w, AWDL_PSF_INTERVAL_TU);  // action frame period
+    awdl_w_u16(&w, 0x1800);                // flags
+    awdl_w_u16(&w, AWDL_AW_TU);            // AW extension length
+    awdl_w_u16(&w, AWDL_AW_TU);            // AW common length
+    awdl_w_u16(&w, 0);                     // remaining AW length
+    awdl_w_u8(&w, 3);                      // minimum extensions
+    awdl_w_u8(&w, 3);                      // maximum multicast extensions
+    awdl_w_u8(&w, 3);                      // maximum unicast extensions
+    awdl_w_u8(&w, 3);                      // maximum action frame extensions
     awdl_w_bytes(&w, sync_master, 6);
     awdl_w_u8(&w, 4);  // presence mode
     awdl_w_u8(&w, 0);
@@ -528,11 +540,26 @@ void awdl_core_stop(struct awdl_core *c)
     awdl_log(c, "AWDL: stopped");
 }
 
-int awdl_core_running(const struct awdl_core *c) { return c->running; }
-enum awdl_role awdl_core_role(const struct awdl_core *c) { return c->role; }
-const struct awdl_election_v2 *awdl_core_election(const struct awdl_core *c) { return &c->adv; }
-const struct awdl_stats *awdl_core_stats(const struct awdl_core *c) { return &c->stats; }
-const struct awdl_chan *awdl_core_sequence(const struct awdl_core *c) { return c->cfg.seq; }
+int awdl_core_running(const struct awdl_core *c)
+{
+    return c->running;
+}
+enum awdl_role awdl_core_role(const struct awdl_core *c)
+{
+    return c->role;
+}
+const struct awdl_election_v2 *awdl_core_election(const struct awdl_core *c)
+{
+    return &c->adv;
+}
+const struct awdl_stats *awdl_core_stats(const struct awdl_core *c)
+{
+    return &c->stats;
+}
+const struct awdl_chan *awdl_core_sequence(const struct awdl_core *c)
+{
+    return c->cfg.seq;
+}
 
 void awdl_core_set_addr(struct awdl_core *c, const uint8_t addr[6])
 {

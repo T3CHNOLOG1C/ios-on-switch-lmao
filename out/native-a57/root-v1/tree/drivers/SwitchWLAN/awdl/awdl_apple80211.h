@@ -147,8 +147,8 @@ struct a80211_peer_presence {  // 68
 
 // ---- the IO80211 user-client event ring (IO80211 _Apple80211EventMonitoringHelper) ---------------------------------
 #define A80211_RING_MAGIC_EVENT 0x57u
-#define A80211_RING_MAGIC_PAD 0x50u
-#define A80211_RING_HEADER 0x30u
+#define A80211_RING_MAGIC_PAD   0x50u
+#define A80211_RING_HEADER      0x30u
 #define A80211_RING_MAX_PAYLOAD 0xff0u
 struct a80211_ring_header {
     uint32_t magic;
@@ -158,9 +158,9 @@ struct a80211_ring_header {
     char ifname[16];
 };
 struct a80211_ring {
-    uint8_t *buf;               // the region userland maps read-only (memory type 1)
-    uint32_t size;              // a multiple of 4
-    volatile uint32_t *state;   // the region userland maps read-write (type 2): [0] read offset, [1] write offset
+    uint8_t *buf;              // the region userland maps read-only (memory type 1)
+    uint32_t size;             // a multiple of 4
+    volatile uint32_t *state;  // the region userland maps read-write (type 2): [0] read offset, [1] write offset
     uint32_t posted, dropped;
 };
 int a80211_ring_init(struct a80211_ring *r, void *buf, uint32_t size, volatile uint32_t *state);
@@ -173,7 +173,7 @@ int a80211_ring_take(struct a80211_ring *r, uint32_t *event, char ifname[16], vo
 // ---- awdl0's request handler ------------------------------------------------------------------------------------------
 struct a80211_awdl_ops {
     void *ctx;
-    int (*start)(void *ctx);   // AWDL_SYNC_ENABLED on: start the stack (radio open, schedule); 0 or an errno
+    int (*start)(void *ctx);  // AWDL_SYNC_ENABLED on: start the stack (radio open, schedule); 0 or an errno
     void (*stop)(void *ctx);
     // an event for awdl0's ring (the integration adds the interface name and wakes the reader)
     void (*post)(void *ctx, uint32_t event, const void *payload, uint32_t len);

@@ -330,7 +330,16 @@ kernel_driver(
         "SwitchWLANCrypto.cpp",
         "SwitchWLANWpa.cpp",
         "SwitchWLANNet.cpp",
+        "SwitchWLANAwdl.cpp",
+        "awdl/awdl_wire.c",
+        "awdl/awdl_core.c",
+        "awdl/awdl_apple80211.c",
         "firmware.S",
+    ],
+    c_copts = [
+        "-mgeneral-regs-only",
+        "-mstrict-align",
+        "-std=gnu11",
     ],
     copts = [
         "-mgeneral-regs-only",
@@ -549,6 +558,17 @@ py_test(
     srcs = ["drivers/NativeKeyStoreEvents/test_keywrap.py"],
     data = glob(["drivers/NativeKeyStoreEvents/**"]),
     main = "drivers/NativeKeyStoreEvents/test_keywrap.py",
+    tags = ["requires-darwin"],
+)
+
+# SwitchWLAN's AWDL core and awdl0's Apple80211 side (drivers/SwitchWLAN/awdl): frame codec, sync, election, data path,
+# the IO80211 event ring, over a simulated air of nodes with skewed clocks (ASan + UBSan).
+py_test(
+    name = "awdl_test",
+    size = "small",
+    srcs = ["drivers/SwitchWLAN/awdl/tests/test_awdl.py"],
+    data = glob(["drivers/SwitchWLAN/awdl/**"]),
+    main = "drivers/SwitchWLAN/awdl/tests/test_awdl.py",
     tags = ["requires-darwin"],
 )
 

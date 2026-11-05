@@ -227,7 +227,8 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             struct a80211_userspace_p2p_options o;
             memset(&o, 0, sizeof o);
             memcpy(&o, data, in < sizeof o ? in : sizeof o);
-            if (o.flags != f->userspace_p2p_flags) flog(f, "AWDL: userspace P2P options %#llx", (unsigned long long)o.flags);
+            if (o.flags != f->userspace_p2p_flags)
+                flog(f, "AWDL: userspace P2P options %#llx", (unsigned long long)o.flags);
             f->userspace_p2p_flags = o.flags;
             return 0;
         }
@@ -248,7 +249,7 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
         case A80211_IOC_POST_PRESENCE_DONE:  // wifip2pd took our PEER_PRESENCE
         case A80211_IOC_AWDL_CTL:
         case A80211_IOC_AWDL_PEER_SERVICE_REQUEST:  // Bonjour offload: answered by mDNS over awdl0 instead
-        case A80211_IOC_AWDL_ADVERTISERS:          // peer hints from Bluetooth: the air tells us anyway
+        case A80211_IOC_AWDL_ADVERTISERS:           // peer hints from Bluetooth: the air tells us anyway
         case A80211_IOC_AWDL_UMI_TX_PEER:
         case A80211_IOC_GATEWAY_ADDRESS:
         case A80211_IOC_UNICAST_INFRA_PEER_ADDRESS: return 0;

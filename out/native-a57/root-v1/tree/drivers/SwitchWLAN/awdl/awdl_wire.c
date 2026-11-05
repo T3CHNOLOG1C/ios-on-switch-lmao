@@ -27,7 +27,10 @@ uint16_t awdl_chan_freq(struct awdl_chan c)
 }
 
 // ---- reading -----------------------------------------------------------------------------------------------------
-static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static uint16_t rd16(const uint8_t *p)
+{
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
 static uint32_t rd32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -93,9 +96,9 @@ static void parse_dps(const uint8_t *v, size_t n, struct awdl_data_path_state *d
     if (n < 2) return;
     d->flags = rd16(v);
     size_t at = 2;
-#define NEED(k)                                                                                                        \
-    do {                                                                                                               \
-        if (at + (k) > n) return;                                                                                      \
+#define NEED(k)                   \
+    do {                          \
+        if (at + (k) > n) return; \
     } while (0)
     if (d->flags & AWDL_DPS_COUNTRY_CODE) {
         NEED(3);
@@ -259,7 +262,10 @@ void awdl_w_bytes(struct awdl_writer *w, const void *p, size_t n)
     memcpy(w->buf + w->at, p, n);
     w->at += n;
 }
-void awdl_w_u8(struct awdl_writer *w, uint8_t v) { awdl_w_bytes(w, &v, 1); }
+void awdl_w_u8(struct awdl_writer *w, uint8_t v)
+{
+    awdl_w_bytes(w, &v, 1);
+}
 void awdl_w_u16(struct awdl_writer *w, uint16_t v)
 {
     uint8_t b[2];
@@ -294,8 +300,8 @@ size_t awdl_data_encap(const uint8_t *eth, size_t len, const uint8_t self[6], ui
     const size_t payload = len - 14, total = 24 + 8 + 8 + payload;
     if (total > size) return 0;
     memset(out, 0, 24);
-    out[0] = 0x08;  // data, FromDS = ToDS = 0
-    memcpy(out + 4, eth, 6);  // A1: destination
+    out[0] = 0x08;              // data, FromDS = ToDS = 0
+    memcpy(out + 4, eth, 6);    // A1: destination
     memcpy(out + 10, self, 6);  // A2: us
     memcpy(out + 16, awdl_bssid, 6);
     awdl_put16(out + 22, (uint16_t)((seq & 0xfff) << 4));
@@ -313,7 +319,7 @@ size_t awdl_data_encap(const uint8_t *eth, size_t len, const uint8_t self[6], ui
 size_t awdl_data_decap(const uint8_t *f, size_t len, uint8_t *out, size_t size, uint16_t *seq, int *retry)
 {
     if (len < 24 || (f[0] & 0x0c) != 0x08) return 0;  // not data
-    if (f[1] & 0x03) return 0;  // ToDS/FromDS must be clear
+    if (f[1] & 0x03) return 0;                        // ToDS/FromDS must be clear
     if (memcmp(f + 16, awdl_bssid, 6)) return 0;
     size_t at = 24;
     if (f[0] & 0x80) {  // QoS data: QoS control, then HT control if the order bit is set

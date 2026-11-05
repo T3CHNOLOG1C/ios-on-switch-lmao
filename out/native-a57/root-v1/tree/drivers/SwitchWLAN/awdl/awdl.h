@@ -21,16 +21,16 @@ extern "C" {
 #endif
 
 // ---- constants of the protocol -------------------------------------------------------------------------------------
-#define AWDL_TU_US 1024u          // one time unit
-#define AWDL_AW_TU 16u            // availability window
-#define AWDL_EAW_AWS 4u           // one channel-sequence slot (extended AW) = 4 AWs = 64 TU
-#define AWDL_SEQ_SLOTS 16u        // channel sequence length; one sequence = 1024 TU
-#define AWDL_PSF_INTERVAL_TU 110u // period of PSFs
-#define AWDL_MAX_PEERS 32u
-#define AWDL_PEER_TIMEOUT_US 3000000u   // a peer silent this long is lost
+#define AWDL_TU_US             1024u  // one time unit
+#define AWDL_AW_TU             16u    // availability window
+#define AWDL_EAW_AWS           4u     // one channel-sequence slot (extended AW) = 4 AWs = 64 TU
+#define AWDL_SEQ_SLOTS         16u    // channel sequence length; one sequence = 1024 TU
+#define AWDL_PSF_INTERVAL_TU   110u   // period of PSFs
+#define AWDL_MAX_PEERS         32u
+#define AWDL_PEER_TIMEOUT_US   3000000u  // a peer silent this long is lost
 #define AWDL_ELECTION_MAX_HOPS 10u
-#define AWDL_TXQ_FRAMES 32u
-#define AWDL_MAX_FRAME 1600u
+#define AWDL_TXQ_FRAMES        32u
+#define AWDL_MAX_FRAME         1600u
 
 extern const uint8_t awdl_bssid[6];  // 00:25:00:ff:94:73, address 3 of every AWDL frame
 extern const uint8_t awdl_oui[3];    // 00:17:f2 (Apple)
@@ -138,7 +138,7 @@ int awdl_af_parse(const uint8_t *frame, size_t len, struct awdl_af *out);
 
 // ---- the stack -------------------------------------------------------------------------------------------------------
 struct awdl_rx_meta {
-    uint64_t tsf;       // local TSF at the start of the frame, µs
+    uint64_t tsf;  // local TSF at the start of the frame, µs
     uint16_t freq_mhz;
     int8_t rssi;
 };
@@ -162,12 +162,12 @@ struct awdl_host {
 };
 
 struct awdl_config {
-    uint8_t addr[6];          // our AWDL address (awdl0's link-layer address)
-    char hostname[32];        // for the arpa TLV, without ".local"
+    uint8_t addr[6];    // our AWDL address (awdl0's link-layer address)
+    char hostname[32];  // for the arpa TLV, without ".local"
     struct awdl_chan seq[AWDL_SEQ_SLOTS];
-    uint32_t self_metric;     // election metric; low so a nearby Apple device stays master
-    uint8_t awdl_version;     // e.g. 0x34 = 3.4
-    uint8_t device_class;     // 1 macOS, 2 iOS
+    uint32_t self_metric;  // election metric; low so a nearby Apple device stays master
+    uint8_t awdl_version;  // e.g. 0x34 = 3.4
+    uint8_t device_class;  // 1 macOS, 2 iOS
     char country[3];
 };
 void awdl_config_default(struct awdl_config *c, const uint8_t addr[6]);
@@ -230,8 +230,7 @@ size_t awdl_core_build_af(struct awdl_core *c, uint8_t subtype, uint64_t now, ui
 
 // ---- data path -------------------------------------------------------------------------------------------------------
 // Ethernet frame -> AWDL 802.11 data frame (src = our address). Returns the length or 0.
-size_t awdl_data_encap(const uint8_t *eth, size_t len, const uint8_t self[6], uint16_t seq, uint8_t *out,
-                       size_t size);
+size_t awdl_data_encap(const uint8_t *eth, size_t len, const uint8_t self[6], uint16_t seq, uint8_t *out, size_t size);
 // AWDL 802.11 data frame -> Ethernet frame. Returns the length or 0 (not AWDL data / malformed). *seq gets the AWDL
 // sequence number, *retry the 802.11 retry bit.
 size_t awdl_data_decap(const uint8_t *frame, size_t len, uint8_t *out, size_t size, uint16_t *seq, int *retry);

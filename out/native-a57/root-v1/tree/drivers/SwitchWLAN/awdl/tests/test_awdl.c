@@ -11,12 +11,12 @@
 #include <string.h>
 
 static int failures;
-#define CHECK(x)                                                                                                       \
-    do {                                                                                                               \
-        if (!(x)) {                                                                                                    \
-            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x);                                               \
-            failures++;                                                                                                \
-        }                                                                                                              \
+#define CHECK(x)                                                         \
+    do {                                                                 \
+        if (!(x)) {                                                      \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); \
+            failures++;                                                  \
+        }                                                                \
     } while (0)
 
 static void hex(const char *s, uint8_t *out, size_t *n)
@@ -40,7 +40,7 @@ static void hex(const char *s, uint8_t *out, size_t *n)
 struct node {
     struct awdl_core *core;
     struct awdl_tsf_clock clock;
-    int64_t offset;     // local TSF = global + offset + global * ppm / 1e6
+    int64_t offset;  // local TSF = global + offset + global * ppm / 1e6
     int32_t ppm;
     struct awdl_chan sched[AWDL_SEQ_SLOTS];
     uint64_t anchor;
@@ -68,13 +68,19 @@ static struct frame air[512];
 static int nair;
 static int air_tx_count, air_lost_offchannel;
 
-static uint64_t local_of(int i, uint64_t g) { return (uint64_t)((int64_t)g + nodes[i].offset + (int64_t)g * nodes[i].ppm / 1000000); }
+static uint64_t local_of(int i, uint64_t g)
+{
+    return (uint64_t)((int64_t)g + nodes[i].offset + (int64_t)g * nodes[i].ppm / 1000000);
+}
 static uint64_t global_of(int i, uint64_t l)
 {
     const int64_t x = (int64_t)l - nodes[i].offset;
     return (uint64_t)(x - x * nodes[i].ppm / 1000000);
 }
-static int node_index(void *ctx) { return (int)(intptr_t)ctx; }
+static int node_index(void *ctx)
+{
+    return (int)(intptr_t)ctx;
+}
 
 static int sim_tx(void *ctx, const uint8_t *frame, size_t len, uint16_t freq, uint64_t tx_tsf, int no_ack)
 {
@@ -267,7 +273,8 @@ static void test_parse_hand_frame(void)
     CHECK(a.present & (1u << AWDL_TLV_SYNC_PARAMS));
     CHECK(a.sync.tx_channel == 149 && a.sync.tx_counter == 9 && a.sync.aw_period == 16 && a.sync.af_period == 110);
     CHECK(a.sync.aw_seq == 0x1234 && a.sync.presence_mode == 4 && !memcmp(a.sync.master, src, 6));
-    CHECK(a.sync.has_seq && a.sync.seq.count == 16 && a.sync.seq.chan[3].number == 155 && a.sync.seq.chan[3].opclass == 0x80);
+    CHECK(a.sync.has_seq && a.sync.seq.count == 16 && a.sync.seq.chan[3].number == 155 &&
+          a.sync.seq.chan[3].opclass == 0x80);
     CHECK(a.present & (1u << AWDL_TLV_ELECTION_PARAMS));
     CHECK(a.election.master_metric == 200 && !memcmp(a.election.master, src, 6));
     CHECK(a.present & (1u << AWDL_TLV_ELECTION_PARAMS_V2));
@@ -356,9 +363,9 @@ static void test_data_encap(void)
     for (int i = 14; i < 200; ++i) eth[i] = (uint8_t)i;
     const size_t n = awdl_data_encap(eth, 200, self, 0x123, f, sizeof f);
     CHECK(n == 200 - 14 + 40);
-    const uint8_t want[] = {0x08, 0x00, 0, 0, 0x33, 0x33, 0, 0, 0, 0xfb, 0x02, 1, 2, 3, 4, 5, 0x00, 0x25, 0x00, 0xff,
-                            0x94, 0x73, 0x30, 0x12, 0xaa, 0xaa, 0x03, 0x00, 0x17, 0xf2, 0x08, 0x00, 0x03, 0x04, 0x23,
-                            0x01, 0x00, 0x00, 0x86, 0xdd};
+    const uint8_t want[] = {0x08, 0x00, 0,    0,    0x33, 0x33, 0,    0,    0,    0xfb, 0x02, 1,    2,    3,
+                            4,    5,    0x00, 0x25, 0x00, 0xff, 0x94, 0x73, 0x30, 0x12, 0xaa, 0xaa, 0x03, 0x00,
+                            0x17, 0xf2, 0x08, 0x00, 0x03, 0x04, 0x23, 0x01, 0x00, 0x00, 0x86, 0xdd};
     CHECK(!memcmp(f, want, sizeof want));
     uint16_t seq;
     int retry;
@@ -392,8 +399,8 @@ static void test_data_encap(void)
 static void test_sync_two_nodes(void)
 {
     sim_reset(2);
-    sim_node(0, 0x0a, 200, 1700000, 0);   // an "iPhone": higher metric
-    sim_node(1, 0x0b, 60, 333333, 40);    // us
+    sim_node(0, 0x0a, 200, 1700000, 0);  // an "iPhone": higher metric
+    sim_node(1, 0x0b, 60, 333333, 40);   // us
     sim_start(0, 0);
     sim_start(1, 50000);
     sim_run(3000000);
@@ -431,7 +438,8 @@ static void test_sync_two_nodes(void)
     for (int i = 14; i < 120; ++i) eth[i] = (uint8_t)(i * 3);
     CHECK(awdl_core_output(nodes[1].core, eth, sizeof eth, local_of(1, sim_now)) == 0);
     sim_run(sim_now + 200000);
-    CHECK(nodes[0].deliveries == 1 && nodes[0].delivered_len == sizeof eth && !memcmp(nodes[0].delivered, eth, sizeof eth));
+    CHECK(nodes[0].deliveries == 1 && nodes[0].delivered_len == sizeof eth &&
+          !memcmp(nodes[0].delivered, eth, sizeof eth));
     memcpy(eth, (const uint8_t[6]){0x33, 0x33, 0, 0, 0, 0xfb}, 6);
     CHECK(awdl_core_output(nodes[0].core, eth, sizeof eth, local_of(0, sim_now)) == 0);  // (source rewritten)
     sim_run(sim_now + 200000);
@@ -467,7 +475,8 @@ static void test_election_chain(void)
     CHECK(awdl_core_role(nodes[1].core) == AWDL_ROLE_FOLLOWER && awdl_core_election(nodes[1].core)->hops == 1);
     CHECK(awdl_core_role(nodes[2].core) == AWDL_ROLE_FOLLOWER && awdl_core_election(nodes[2].core)->hops == 2);
     CHECK(!memcmp(awdl_core_election(nodes[2].core)->root, awdl_core_election(nodes[0].core)->root, 6));
-    CHECK(!memcmp(awdl_core_election(nodes[2].core)->parent, (const uint8_t[6]){0x02, 0x11, 0x22, 0x33, 0x44, 0x0b}, 6));
+    CHECK(
+        !memcmp(awdl_core_election(nodes[2].core)->parent, (const uint8_t[6]){0x02, 0x11, 0x22, 0x33, 0x44, 0x0b}, 6));
     const uint64_t g = 4000000;
     const uint16_t s0 = awdl_core_aw_seq(nodes[0].core, local_of(0, g));
     CHECK(awdl_core_aw_seq(nodes[2].core, local_of(2, g)) == s0);
@@ -491,7 +500,8 @@ static void test_two_channel_sequence(void)
     sim_node(0, 0x0a, 200, 0, 0);
     sim_node(1, 0x0b, 60, 77777, 10);
     struct awdl_chan seq[AWDL_SEQ_SLOTS];
-    for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i) seq[i] = i % 2 ? (struct awdl_chan){6, 0x51} : (struct awdl_chan){155, 0x80};
+    for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i)
+        seq[i] = i % 2 ? (struct awdl_chan){6, 0x51} : (struct awdl_chan){155, 0x80};
     sim_start(0, 0);
     sim_start(1, 0);
     awdl_core_set_sequence(nodes[0].core, seq, local_of(0, 0));
@@ -548,7 +558,8 @@ static void test_ring(void)
     int posted = 0;
     while (a80211_ring_post(&r, 46, "awdl0", payload, 68) == 0) posted++;
     CHECK(posted >= 3 && r.dropped == 1);
-    for (int i = 0; i < posted; ++i) CHECK(a80211_ring_take(&r, &event, ifname, out, &len, sizeof out) == 1 && event == 46);
+    for (int i = 0; i < posted; ++i)
+        CHECK(a80211_ring_take(&r, &event, ifname, out, &len, sizeof out) == 1 && event == 46);
     CHECK(a80211_ring_take(&r, &event, ifname, out, &len, sizeof out) == 0);
     CHECK(a80211_ring_post(&r, 1, "awdl0", payload, 0xff1) == -1);  // larger than IO80211 accepts
     // the header layout IO80211 reads: magic, lengths at 0x18/0x1a, event at 0x1c, name at 0x20
@@ -619,7 +630,8 @@ static void test_facade(void)
     CHECK(started == 1 && awdl_core_running(nodes[1].core));
     nodes[1].deadline = awdl_core_timer(nodes[1].core, local_of(1, 0));
     len = 0;
-    CHECK(a80211_awdl_request(&f, 0, A80211_IOC_AWDL_SYNC_CHANNEL_SEQUENCE, &val, data, &len, 400, 0) == 0 && len == 400);
+    CHECK(a80211_awdl_request(&f, 0, A80211_IOC_AWDL_SYNC_CHANNEL_SEQUENCE, &val, data, &len, 400, 0) == 0 &&
+          len == 400);
     struct a80211_awdl_sync_channel_sequence seq;
     memcpy(&seq, data, sizeof seq);
     CHECK(seq.length == 16 && seq.channel[0].channel == 149 && seq.channel[15].channel == 149 &&
@@ -657,7 +669,8 @@ static void test_facade(void)
     len = sizeof off;
     CHECK(a80211_awdl_request(&f, 1, A80211_IOC_AWDL_SYNC_ENABLED, &val, (void *)&off, &len, sizeof off, 0) == 0);
     CHECK(stopped == 1 && !awdl_core_running(nodes[1].core));
-    CHECK(a80211_ring_take(&facade_ring, &event, ifname, out, &len, sizeof out) == 1 && event == A80211_M_PEER_PRESENCE);
+    CHECK(a80211_ring_take(&facade_ring, &event, ifname, out, &len, sizeof out) == 1 &&
+          event == A80211_M_PEER_PRESENCE);
     struct a80211_peer_presence p;
     memcpy(&p, out, sizeof p);
     CHECK(p.state == A80211_PEER_ABSENT);

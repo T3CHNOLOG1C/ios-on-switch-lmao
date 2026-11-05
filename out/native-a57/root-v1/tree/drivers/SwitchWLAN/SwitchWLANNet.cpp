@@ -35,6 +35,7 @@ extern "C" {
 #include <sys/mbuf.h>
 #include <kern/thread_call.h>
 #include <stdarg.h>
+#include "SwitchWLANAwdlRadio.h"
 #include "SwitchWLANStation.h"
 
 #define SIOCSA80211 0x802869c8UL  // _IOW('i', 200, struct apple80211req)
@@ -84,6 +85,8 @@ enum {
     kRadioInfo = 54,
     kScanReqMultiple = 86,
     kScanCacheClear = 90,
+    kVirtualIfCreate = 94,  // wifip2pd's awdl0 (SwitchWLANAwdl.cpp), only once en0 advertised AWDL
+    kVirtualIfDelete = 95,
     kCurrentNetwork = 103,
     kRssiBounds = 106,
     kChannelsInfo = 207,
@@ -619,6 +622,18 @@ int apple80211(bool set, apple80211req &rq)
             post_link(false);
             gLinkAnnounced = false;  // wifid's own leaving: it knows
             return 0;
+        case kVirtualIfCreate:
+        case kVirtualIfDelete: {
+            uint8_t vif[32];
+            if (copy_in(rq, vif, sizeof vif)) return EFAULT;
+            const int r = type == kVirtualIfCreate ? switch_wlan_awdl_vif_create(vif, sizeof vif)
+                                                   : switch_wlan_awdl_vif_delete(vif, sizeof vif);
+            // the created interface's name goes back in the caller's buffer
+            if (!r && type == kVirtualIfCreate &&
+                copyout(vif, rq.req_data, rq.req_len < sizeof vif ? rq.req_len : sizeof vif))
+                return EFAULT;
+            return r;
+        }
         case kScanCacheClear:
         case kLocale:
         case kCountryCode:
@@ -645,6 +660,8 @@ int apple80211(bool set, apple80211req &rq)
     case kCardCaps: {  // a bitmap, bit n in byte n / 8: AES, AES-CCM, power management, short slot and preamble, WPA2, WME, short guard interval at 20 MHz
         static const uint8_t has[] = {2, 3, 6, 9, 10, 14, 17, 19};
         for (uint8_t bit : has) out.raw[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+        // AWDL (bit 32, what wifip2pd gates awdl0 on) only with the Data flag and a radio that can (SwitchWLANAwdl.cpp)
+        if (switch_wlan_awdl_capable() == 1) out.raw[4] |= 1;
         return answer_bytes(rq, out.raw, 12);
     }
     case kPhyMode:

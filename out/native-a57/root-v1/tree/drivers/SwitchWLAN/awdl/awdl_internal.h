@@ -8,7 +8,7 @@
 #include <stdarg.h>
 #include <string.h>
 #ifdef KERNEL
-#include <libkern/libkern.h>  // vsnprintf, strnlen
+extern int vsnprintf(char *, size_t, const char *, va_list) __attribute__((format(printf, 3, 0)));
 #else
 #include <stdio.h>
 #endif
@@ -17,13 +17,13 @@
 extern "C" {
 #endif
 
-#define AWDL_AW_US (AWDL_AW_TU * AWDL_TU_US)                 // 16384
-#define AWDL_EAW_US (AWDL_AW_US * AWDL_EAW_AWS)              // 65536
-#define AWDL_SEQ_US (AWDL_EAW_US * AWDL_SEQ_SLOTS)           // 1048576
-#define AWDL_PSF_US (AWDL_PSF_INTERVAL_TU * AWDL_TU_US)      // 112640
-#define AWDL_ROOT_COUNTER_US 1000000u                        // the root's loop-free counter ticks once a second
-#define AWDL_ELECTION_FRESH_US 2000000u                      // election parameters older than this are ignored
-#define AWDL_RESYNC_US 256                                   // re-install the radio schedule beyond this error
+#define AWDL_AW_US             (AWDL_AW_TU * AWDL_TU_US)            // 16384
+#define AWDL_EAW_US            (AWDL_AW_US * AWDL_EAW_AWS)          // 65536
+#define AWDL_SEQ_US            (AWDL_EAW_US * AWDL_SEQ_SLOTS)       // 1048576
+#define AWDL_PSF_US            (AWDL_PSF_INTERVAL_TU * AWDL_TU_US)  // 112640
+#define AWDL_ROOT_COUNTER_US   1000000u                             // the root's loop-free counter ticks once a second
+#define AWDL_ELECTION_FRESH_US 2000000u                             // election parameters older than this are ignored
+#define AWDL_RESYNC_US         256                                  // re-install the radio schedule beyond this error
 
 struct awdl_writer {
     uint8_t *buf;
