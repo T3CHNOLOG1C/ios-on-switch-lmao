@@ -1224,6 +1224,10 @@ brk_out:
 }
 
 extern void ioswitch_kprof_user_trap(arm_saved_state_t *state, uint32_t esr);
+/* osfmk/kern/ioswitch_kprof.c (r17-faults): a fault arm_fast_fault resolved, for the kprof faults lines */
+extern void ioswitch_kprof_fast_fault(bool access_flag);
+#define IOSWITCH_FSC_ACCESS_FLAG(fc) \
+	((fc) == FSC_ACCESS_FLAG_FAULT_L1 || (fc) == FSC_ACCESS_FLAG_FAULT_L2 || (fc) == FSC_ACCESS_FLAG_FAULT_L3)
 
 static void
 handle_breakpoint(arm_saved_state_t *state, uint32_t esr __unused)
@@ -1576,6 +1580,9 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 			result = arm_fast_fault(map->pmap,
 			    vm_fault_addr,
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), TRUE);
+			if (result == KERN_SUCCESS) {
+				ioswitch_kprof_fast_fault(IOSWITCH_FSC_ACCESS_FLAG(fault_code));
+			}
 		}
 		if (result != KERN_SUCCESS) {
 
@@ -1842,6 +1849,7 @@ handle_kernel_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_ad
 			    fault_addr,
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), FALSE);
 			if (result == KERN_SUCCESS) {
+				ioswitch_kprof_fast_fault(IOSWITCH_FSC_ACCESS_FLAG(fault_code));
 				return;
 			}
 		}

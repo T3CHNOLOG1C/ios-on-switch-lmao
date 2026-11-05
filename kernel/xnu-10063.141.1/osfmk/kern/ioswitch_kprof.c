@@ -37,6 +37,20 @@
  *       launch decomposition is wall = CPU + these waits + the rest (IPC, locks, scheduling)
  *   IOSwitch kprof image (r14-launch): the cryptex images' cached reads, those that missed, the 64 KiB windows read
  *       ahead (vfs_cluster.c ioswitch_image_window) and the card reads issued for the images
+ *   IOSwitch kprof faults (r17-faults): every completed vm_fault of the window by class, with the time spent in
+ *       vm_fault (entry to return, so a page-in's I/O wait is in it) and the longest: zf (zero fill), cow, soft (a
+ *       resident page mapped again), device (an IOKit/device pager page: GPU pool views, IOSurfaces of physical
+ *       memory), file (paged in), cmp (decompressed), failed; how many of them wired memory (vm_map_wire, IOKit
+ *       prepare), were in a kernel map, in the task's shared region (the dyld shared cache), in a kernel copyin or
+ *       copyout, and the zero fills of purgeable memory; the zero-fill fault-around (vm_fault.c
+ *       ioswitch_zero_fill_around: pages zero filled and mapped with a fault's page, never faulted themselves); the
+ *       fast faults (pmap reference/modify emulation, which never reach vm_fault: access-flag and write-permission
+ *       faults); and XNU's own vm_statistics64 counters over the window (vm_stat's), where zero fills outside
+ *       vm_fault are UPL/IOKit prepare zero fills
+ *   IOSwitch kprof faults by process 1/2, 2/2: the processes with the most vm_faults, by class, with their fault time,
+ *       wired/shared-region/copyio counts, fast faults and fault-around pages
+ *   IOSwitch kprof zf sites: where the two processes with the most zero fills took them: the user PC (copyio: k, the
+ *       syscall's) as dsc/main+ 64-byte bucket, with its majority LR
  *   The first line also carries each CPU's interrupts, IPIs and synchronous exceptions (faults and traps) per second.
  * User trap sites: a process's first brk (os_crash, __builtin_trap, Swift traps) prints one console line with the trap
  * site as main+<offset> or dsc <unslid address>, so a crash that takes the boot down (launchd _PanicOnCrash) still names
@@ -63,6 +77,9 @@
 #include <os/log.h>
 #include <pexpert/pexpert.h>
 #include <vm/vm_shared_region.h>
+#include <vm/vm_page.h>
+#include <vm/vm_protos.h>
+#include <kern/host_statistics.h>
 #include <arm/cpu_data_internal.h>
 #include <arm64/proc_reg.h>
 
@@ -100,6 +117,21 @@ extern int  vsnprintf(char *, size_t, const char *, va_list);
 #define KPROF_U_MAIN      (2ull << 62)      /* user key: offset from the main executable's Mach-O header */
 #define KPROF_U_OTHER     (3ull << 62)      /* user key: anywhere else (app frameworks, JIT), one bucket */
 #define KPROF_U_ADDR      ((1ull << 62) - 1)
+#define KPROF_U_COPYIO    (1ull << 61)      /* zf site key: a kernel copyin/copyout's fault, keyed by the syscall's PC */
+#define KPROF_CPU_SITES   256               /* per CPU and window: (process, zero-fill PC bucket) pairs */
+#define KPROF_SITES       1024              /* merged */
+#define KPROF_TOP_SITES   6                 /* zf sites logged per process */
+#define KPROF_TOP_FAULTS  8                 /* processes on the faults by process lines, four per line */
+
+/* r17-faults: vm_fault classes and flags, as vm_fault.c classifies a fault for ioswitch_kprof_fault (vm_protos.h) */
+#define KPROF_F_ZF         IOSW_FAULT_ZF
+#define KPROF_F_COW        IOSW_FAULT_COW
+#define KPROF_F_SOFT       IOSW_FAULT_SOFT
+#define KPROF_F_DEVICE     IOSW_FAULT_DEVICE
+#define KPROF_F_FILE       IOSW_FAULT_FILE
+#define KPROF_F_CMP        IOSW_FAULT_CMP
+#define KPROF_F_FAILED     IOSW_FAULT_FAILED
+#define KPROF_F_CLASSES    IOSW_FAULT_CLASSES
 
 struct kprof_fn {
 	uintptr_t key;          /* function start (slid) or 128-byte bucket | KPROF_BUCKET; 0: empty */
@@ -123,6 +155,30 @@ struct kprof_task {
 	uint64_t pagein_abs, image_abs, read_abs;
 	uint64_t cpu_abs;       /* merged table: exact user+system CPU this window (kprof_refresh_names) */
 	uint32_t age_ms;
+	/* r17-faults, ioswitch_kprof_fault/_fast_fault: this window's vm_faults by class, the time they took (mach time),
+	 * how many wired memory, were in the shared region or in a kernel copyin/copyout, the fast faults (access flag,
+	 * write permission) and the pages the zero-fill fault-around entered */
+	uint32_t faults[KPROF_F_CLASSES];
+	uint32_t fault_wired, fault_dsc, fault_copyio, fast_af, fast_mod, zf_around;
+	uint64_t fault_abs;
+};
+
+/* r17-faults: the window's faults system-wide (every process, also those a full task table refused) */
+struct kprof_faults {
+	uint32_t n[KPROF_F_CLASSES];
+	uint64_t abs[KPROF_F_CLASSES];      /* mach time in vm_fault */
+	uint64_t max_abs[KPROF_F_CLASSES];
+	uint32_t wired, kernel, dsc, copyio, purgeable, fast_af, fast_mod, around_faults, around_pages;
+};
+
+/* r17-faults: a zero fill's user PC (64-byte bucket, KPROF_U_* key, KPROF_U_COPYIO for a kernel copyio's fault) with
+ * its majority LR, for the zf sites line */
+struct kprof_site {
+	uint64_t key;           /* 0: empty */
+	uint64_t lr;            /* majority-vote LR (kprof_user_location form) */
+	int32_t  pid;
+	uint32_t n;
+	uint32_t lr_votes;
 };
 
 /* r14-launch: each live process's lifetime CPU at the last summary, by unique id, for exact per-window CPU. */
@@ -153,6 +209,8 @@ struct kprof_buf {
 	struct kprof_user   image[KPROF_CPU_IMAGES];  /* key: kprof_region_key() */
 	uint32_t            image_lost;
 	struct kprof_masked masked[KPROF_CPU_MASKED];
+	struct kprof_faults faults;
+	struct kprof_site   site[KPROF_CPU_SITES];
 };
 
 struct kprof_cpu {
@@ -189,6 +247,8 @@ static struct kprof_user  *kprof_users;
 static struct kprof_user  *kprof_images;        /* merged (process, region) table */
 static uint32_t            kprof_images_lost;
 static struct kprof_masked *kprof_masks;        /* merged window */
+static struct kprof_faults kprof_fault_sum;     /* merged window (r17-faults) */
+static struct kprof_site  *kprof_sites;         /* merged window (r17-faults) */
 static uintptr_t           kprof_unmask[2];     /* ml_set_interrupts_enabled(_with_debug) as function keys */
 static struct kprof_thread *kprof_threads[2];   /* kernel_task threads: this window, last window (sorted by tid) */
 static uint64_t           *kprof_vals;          /* top-N scratch, KPROF_USER entries */
@@ -403,6 +463,25 @@ kprof_masked_slot(struct kprof_masked *table, unsigned int bits, const uintptr_t
 	return NULL;
 }
 
+static struct kprof_site *
+kprof_site_slot(struct kprof_site *table, unsigned int bits, int32_t pid, uint64_t key)
+{
+	uint32_t mask = (1u << bits) - 1;
+	uint32_t i = kprof_hash(key ^ ((uint64_t)(uint32_t)pid << 32), bits);
+
+	for (unsigned int probe = 0; probe < KPROF_PROBES; probe++, i = (i + 1) & mask) {
+		if (table[i].key == key && table[i].pid == pid) {
+			return &table[i];
+		}
+		if (table[i].key == 0) {
+			table[i].key = key;
+			table[i].pid = pid;
+			return &table[i];
+		}
+	}
+	return NULL;
+}
+
 static void
 kprof_sample(struct kprof_cpu *kc)
 {
@@ -575,6 +654,131 @@ ioswitch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes)
 			ts->decmpfs++;
 			ts->decmpfs_kib += kib;
 			break;
+		}
+	}
+	ml_set_interrupts_enabled(istate);
+}
+
+/*
+ * r17-faults: one completed vm_fault (vm_fault.c vm_fault_internal, as it returns) for the current process, into this
+ * CPU's active table like a sample (interrupts off, so the summary's cross-call cannot flip the table under it): its
+ * class, flags and time in vm_fault, the shared-region and copyio tests, and for a zero fill its user PC and LR from
+ * the thread's user state (the faulting instruction, or for a kernel copyin/copyout the syscall that made it). Two
+ * table probes per fault, never on an interrupt path (vm_fault refuses those).
+ */
+void
+ioswitch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr, unsigned int around)
+{
+	const uint64_t       now = mach_absolute_time();
+	thread_t             thread = current_thread();
+	task_t               task = current_task();
+	struct kprof_buf    *b;
+	struct kprof_task   *ts;
+	boolean_t            istate;
+	unsigned int         cpu;
+	uint64_t             took = now - MIN(now, began);
+	bool                 copyio = false, dsc = false;
+	arm_saved_state_t   *upcb = NULL;
+	uint64_t             pc = 0, lr = 0;
+
+	if (!os_atomic_load(&kprof_ready, acquire) || task == TASK_NULL || cls >= KPROF_F_CLASSES) {
+		return;
+	}
+	if (task != kernel_task && !(flags & IOSW_FAULT_KERNEL) && (upcb = thread->machine.upcb) != NULL) {
+		const struct vm_shared_region *sr = task->shared_region;
+		const uint32_t                 ec = ESR_EC(get_saved_state_esr(upcb));
+
+		dsc = sr != NULL && vaddr >= sr->sr_base_address && vaddr - sr->sr_base_address < sr->sr_size;
+		/*
+		 * The user state holds the last exception from EL0: this fault's own abort, or else the syscall (or trap)
+		 * the kernel is serving, whose copyin/copyout (or vm_map_copyout, IOKit wiring) touched the user map.
+		 */
+		copyio = !(flags & IOSW_FAULT_WIRE) && ec != ESR_EC_DABORT_EL0 && ec != ESR_EC_IABORT_EL0;
+		if (cls == KPROF_F_ZF) {
+			pc = get_saved_state_pc(upcb);
+			lr = get_saved_state_lr(upcb);
+		} else {
+			upcb = NULL;
+		}
+	}
+	istate = ml_set_interrupts_enabled(FALSE);
+	cpu = (unsigned int)cpu_number();
+	if (cpu >= kprof_ncpus) {
+		ml_set_interrupts_enabled(istate);
+		return;
+	}
+	b = kprof_cpus[cpu].buf[kprof_cpus[cpu].active];
+	b->faults.n[cls]++;
+	b->faults.abs[cls] += took;
+	if (took > b->faults.max_abs[cls]) {
+		b->faults.max_abs[cls] = took;
+	}
+	b->faults.wired += (flags & IOSW_FAULT_WIRE) != 0;
+	b->faults.kernel += (flags & IOSW_FAULT_KERNEL) != 0;
+	b->faults.purgeable += (flags & IOSW_FAULT_PURGEABLE) != 0;
+	b->faults.dsc += dsc;
+	b->faults.copyio += copyio;
+	if (around != 0) {
+		b->faults.around_faults++;
+		b->faults.around_pages += around;
+	}
+	ts = kprof_task_slot(b->task, 7, task_pid(task));
+	if (ts != NULL) {
+		if (ts->name[0] == '\0') {
+			task_best_name(task, ts->name, sizeof(ts->name));
+		}
+		ts->faults[cls]++;
+		ts->fault_abs += took;
+		ts->fault_wired += (flags & IOSW_FAULT_WIRE) != 0;
+		ts->fault_dsc += dsc;
+		ts->fault_copyio += copyio;
+		ts->zf_around += around;
+	}
+	if (upcb != NULL) {
+		const uint64_t     where = kprof_user_location(task, pc);
+		const uint64_t     key = ((where & ~KPROF_U_ADDR) == KPROF_U_OTHER ? KPROF_U_OTHER : (where & ~63ull)) |
+		    (copyio ? KPROF_U_COPYIO : 0);
+		struct kprof_site *s = kprof_site_slot(b->site, 8, task_pid(task), key);
+
+		if (s != NULL) {
+			s->n++;
+			kprof_vote(&s->lr, &s->lr_votes, kprof_user_location(task, lr));
+		}
+	}
+	ml_set_interrupts_enabled(istate);
+}
+
+/* r17-faults: sleh.c, a user or kernel abort arm_fast_fault resolved (pmap reference/modify emulation). */
+void
+ioswitch_kprof_fast_fault(bool access_flag)
+{
+	task_t             task = current_task();
+	struct kprof_buf  *b;
+	struct kprof_task *ts;
+	boolean_t          istate;
+	unsigned int       cpu;
+
+	if (!os_atomic_load(&kprof_ready, acquire) || task == TASK_NULL) {
+		return;
+	}
+	istate = ml_set_interrupts_enabled(FALSE);
+	cpu = (unsigned int)cpu_number();
+	if (cpu < kprof_ncpus) {
+		b = kprof_cpus[cpu].buf[kprof_cpus[cpu].active];
+		if (access_flag) {
+			b->faults.fast_af++;
+		} else {
+			b->faults.fast_mod++;
+		}
+		if ((ts = kprof_task_slot(b->task, 7, task_pid(task))) != NULL) {
+			if (ts->name[0] == '\0') {
+				task_best_name(task, ts->name, sizeof(ts->name));
+			}
+			if (access_flag) {
+				ts->fast_af++;
+			} else {
+				ts->fast_mod++;
+			}
 		}
 	}
 	ml_set_interrupts_enabled(istate);
@@ -1163,6 +1367,212 @@ kprof_user_images(void)
 	}
 }
 
+/* --- r17-faults: the faults lines ---------------------------------------------------------------------------------- */
+
+static void
+kprof_faults_merge(struct kprof_faults *dst, const struct kprof_faults *src)
+{
+	for (unsigned int k = 0; k < KPROF_F_CLASSES; k++) {
+		dst->n[k] += src->n[k];
+		dst->abs[k] += src->abs[k];
+		dst->max_abs[k] = MAX(dst->max_abs[k], src->max_abs[k]);
+	}
+	dst->wired += src->wired;
+	dst->kernel += src->kernel;
+	dst->dsc += src->dsc;
+	dst->copyio += src->copyio;
+	dst->purgeable += src->purgeable;
+	dst->fast_af += src->fast_af;
+	dst->fast_mod += src->fast_mod;
+	dst->around_faults += src->around_faults;
+	dst->around_pages += src->around_pages;
+}
+
+static uint64_t
+kprof_abs_us(uint64_t abs)
+{
+	uint64_t ns;
+
+	absolutetime_to_nanoseconds(abs, &ns);
+	return ns / NSEC_PER_USEC;
+}
+
+static const char *
+kprof_where(uint64_t key)
+{
+	switch (key & ~KPROF_U_ADDR) {
+	case KPROF_U_DSC:
+		return "dsc ";
+	case KPROF_U_MAIN:
+		return "main+";
+	default:
+		return "other ";
+	}
+}
+
+/*
+ * The window's faults: by class system-wide with XNU's vm_statistics64 deltas (vm_stat's counters: what the GPU
+ * driver's mem line reports as "faults"), then the processes with the most, then where the top zero-fillers took them.
+ */
+static void
+kprof_faults_lines(uint64_t window)
+{
+	static const char *const names[KPROF_F_CLASSES] = { "zf", "cow", "soft", "device", "file", "cmp", "failed" };
+	static uint64_t          last[9];
+	static bool              primed;
+	const struct kprof_faults *f = &kprof_fault_sum;
+	const uint64_t           now[9] = {
+		counter_load(&vm_statistics_faults), counter_load(&vm_statistics_zero_fill_count),
+		counter_load(&vm_statistics_cow_faults), counter_load(&vm_statistics_pageins),
+		counter_load(&vm_statistics_reactivations), counter_load(&vm_statistics_decompressions),
+		counter_load(&vm_statistics_compressions), counter_load(&vm_statistics_purges),
+		counter_load(&vm_statistics_swapins),
+	};
+	uint64_t                 d[9], total = 0, zf_seen;
+	unsigned int             top[KPROF_TOP_FAULTS], ntop, lines;
+
+	for (unsigned int i = 0; i < 9; i++) {
+		d[i] = now[i] - last[i];
+		last[i] = now[i];
+	}
+	if (!primed) {
+		primed = true;      /* the first window would count the whole boot so far */
+		return;
+	}
+	for (unsigned int k = 0; k < KPROF_F_CLASSES; k++) {
+		total += f->n[k];
+	}
+	if (window == 0 || (total == 0 && d[0] == 0 && f->fast_af + f->fast_mod == 0)) {
+		return;
+	}
+	kprof_put("IOSwitch kprof faults: %llu/s (n, ms in vm_fault, longest us):", total * NSEC_PER_SEC / window);
+	for (unsigned int k = 0; k < KPROF_F_CLASSES; k++) {
+		kprof_put("%s %s %u %llu %llu", k ? "," : "", names[k], f->n[k], kprof_abs_ms(f->abs[k]),
+		    kprof_abs_us(f->max_abs[k]));
+	}
+	zf_seen = (uint64_t)f->n[KPROF_F_ZF] + f->around_pages;
+	kprof_put("; wired %u, kernel map %u, shared region %u, copyio %u, purgeable zf %u; zf around %u faults +%u pages; "
+	    "fast %llu/s (af %u, mod %u); xnu: faults %llu (wire_fast %lld), zero_fill %llu (outside vm_fault %lld), cow %llu, "
+	    "pageins %llu, reactivations %llu, decompressions %llu, compressions %llu, purges %llu, swapins %llu; free %u",
+	    f->wired, f->kernel, f->dsc, f->copyio, f->purgeable, f->around_faults, f->around_pages,
+	    (uint64_t)(f->fast_af + f->fast_mod) * NSEC_PER_SEC / window, f->fast_af, f->fast_mod,
+	    d[0], (long long)d[0] - (long long)total, d[1], (long long)d[1] - (long long)zf_seen, d[2], d[3], d[4], d[5],
+	    d[6], d[7], d[8], vm_page_free_count);
+	kprof_flush();
+
+	for (unsigned int i = 0; i < KPROF_TASKS; i++) {
+		const struct kprof_task *t = &kprof_tasks[i];
+		uint64_t                 n = 0;
+
+		for (unsigned int k = 0; t->used && k < KPROF_F_CLASSES; k++) {
+			n += t->faults[k];
+		}
+		kprof_vals[i] = n;
+	}
+	ntop = kprof_top(kprof_vals, KPROF_TASKS, top, KPROF_TOP_FAULTS);
+	lines = (ntop + 3) / 4;
+	for (unsigned int line = 0; line < lines; line++) {
+		kprof_put("IOSwitch kprof faults by process %u/%u (n: zf cow soft device file cmp failed, ms; wired, shared "
+		    "region, copyio; fast af/mod; zf around +pages):", line + 1, lines);
+		for (unsigned int i = line * 4; i < MIN(ntop, (line + 1) * 4); i++) {
+			const struct kprof_task *t = &kprof_tasks[top[i]];
+
+			kprof_put(" %s[%d] %llu:", t->name, t->pid, kprof_vals[top[i]]);
+			for (unsigned int k = 0; k < KPROF_F_CLASSES; k++) {
+				kprof_put(" %u", t->faults[k]);
+			}
+			kprof_put(", %llu ms; %u, %u, %u; %u/%u; +%u;", kprof_abs_ms(t->fault_abs), t->fault_wired, t->fault_dsc,
+			    t->fault_copyio, t->fast_af, t->fast_mod, t->zf_around);
+		}
+		kprof_flush();
+	}
+
+	/* the two processes with the most zero fills: their sites, one line each */
+	for (unsigned int i = 0; i < KPROF_TASKS; i++) {
+		kprof_vals[i] = kprof_tasks[i].used ? kprof_tasks[i].faults[KPROF_F_ZF] : 0;
+	}
+	ntop = kprof_top(kprof_vals, KPROF_TASKS, top, 2);
+	for (unsigned int p = 0; p < ntop; p++) {
+		const struct kprof_task *t = &kprof_tasks[top[p]];
+		unsigned int             sites[KPROF_TOP_SITES], nsites;
+		uint32_t                 logged = 0;
+
+		for (unsigned int i = 0; i < KPROF_SITES; i++) {
+			kprof_vals[KPROF_TASKS + i] = (kprof_sites[i].key != 0 && kprof_sites[i].pid == t->pid) ?
+			    kprof_sites[i].n : 0;
+		}
+		nsites = kprof_top(kprof_vals + KPROF_TASKS, KPROF_SITES, sites, KPROF_TOP_SITES);
+		kprof_put("IOSwitch kprof zf sites: %s[%d] %u (+%u around) (pc <majority lr n):", t->name, t->pid,
+		    t->faults[KPROF_F_ZF], t->zf_around);
+		for (unsigned int i = 0; i < nsites; i++) {
+			const struct kprof_site *s = &kprof_sites[sites[i]];
+			const uint64_t           key = s->key & ~KPROF_U_COPYIO;
+
+			kprof_put(" %s%s%llx <%s%llx %u,", (s->key & KPROF_U_COPYIO) ? "k " : "", kprof_where(key),
+			    key & KPROF_U_ADDR & ~KPROF_U_COPYIO, kprof_where(s->lr), s->lr & KPROF_U_ADDR, s->n);
+			logged += s->n;
+		}
+		kprof_put(" rest %u", t->faults[KPROF_F_ZF] - MIN(t->faults[KPROF_F_ZF], logged));
+		kprof_flush();
+	}
+}
+
+/*
+ * r17-faults, once at the first summary: what zeroing a page and cleaning one out of the CPU caches cost these cores,
+ * per 4 KiB, over 1 MiB of fresh kernel pages in 64 KiB chunks (interrupts off per chunk, ~0.2 ms each): clean and
+ * invalidate as the pages come off the free list (what a GPU copy-engine zero would need first: the GPU does not snoop
+ * the A57s' caches, so a dirty line of the old contents would later be written back over its zeros), bzero of the now
+ * uncached pages (a zero-fill fault's bzero_phys), bzero again with the lines in L2, and clean and invalidate of the
+ * dirty lines. Prices a pre-zeroed page pool with numbers instead of guesses.
+ */
+static void
+kprof_zero_cost_line(void)
+{
+	const vm_size_t    chunk = 64 * 1024, size = 16 * chunk;
+	const unsigned int cpu = MIN((unsigned int)cpu_number(), kprof_ncpus - 1);
+	uint64_t           t[4] = {}, ns[4];
+	char              *buf = kalloc_data(size, Z_WAITOK);
+
+	if (buf == NULL) {
+		return;
+	}
+	for (vm_size_t c = 0; c < size; c += chunk) {
+		char      *p = buf + c;
+		uint64_t   s[5];
+		boolean_t  istate = ml_set_interrupts_enabled(FALSE);
+
+		s[0] = mach_absolute_time();
+		for (vm_size_t a = 0; a < chunk; a += 64) {
+			__asm__ volatile ("dc civac, %0" : : "r"(p + a) : "memory");
+		}
+		__asm__ volatile ("dsb sy" : : : "memory");
+		s[1] = mach_absolute_time();
+		bzero(p, chunk);
+		__asm__ volatile ("dsb sy" : : : "memory");
+		s[2] = mach_absolute_time();
+		bzero(p, chunk);
+		__asm__ volatile ("dsb sy" : : : "memory");
+		s[3] = mach_absolute_time();
+		for (vm_size_t a = 0; a < chunk; a += 64) {
+			__asm__ volatile ("dc civac, %0" : : "r"(p + a) : "memory");
+		}
+		__asm__ volatile ("dsb sy" : : : "memory");
+		s[4] = mach_absolute_time();
+		ml_set_interrupts_enabled(istate);
+		for (unsigned int i = 0; i < 4; i++) {
+			t[i] += s[i + 1] - s[i];
+		}
+	}
+	kfree_data(buf, size);
+	for (unsigned int i = 0; i < 4; i++) {
+		absolutetime_to_nanoseconds(t[i], &ns[i]);
+		ns[i] /= size / 4096;
+	}
+	os_log(OS_LOG_DEFAULT, "IOSwitch kprof zero cost (once; ns per 4 KiB, 1 MiB of fresh kernel pages): clean+invalidate "
+	    "fresh %llu, bzero uncached %llu, bzero in L2 %llu, clean+invalidate dirty %llu; core %llu MHz (probe, cpu %u)", ns[0],
+	    ns[1], ns[2], ns[3], kprof_probe_mhz(kprof_cpus[cpu].probe_ticks), cpu);
+}
+
 static void
 kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
@@ -1182,10 +1592,26 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	bzero(kprof_images, KPROF_IMAGES * sizeof(kprof_images[0]));
 	kprof_images_lost = 0;
 	bzero(kprof_masks, KPROF_MASKED * sizeof(kprof_masks[0]));
+	bzero(kprof_sites, KPROF_SITES * sizeof(kprof_sites[0]));
+	bzero(&kprof_fault_sum, sizeof(kprof_fault_sum));
 	for (unsigned int c = 0; c < kprof_ncpus; c++) {
 		struct kprof_cpu *kc = &kprof_cpus[c];
 		struct kprof_buf *b = kc->buf[kc->active ^ 1];
 
+		kprof_faults_merge(&kprof_fault_sum, &b->faults);
+		for (unsigned int i = 0; i < KPROF_CPU_SITES; i++) {
+			const struct kprof_site *src = &b->site[i];
+			struct kprof_site       *dst;
+
+			if (src->key == 0) {
+				continue;
+			}
+			dst = kprof_site_slot(kprof_sites, 10, src->pid, src->key);
+			if (dst != NULL) {
+				dst->n += src->n;
+				kprof_vote_merge(&dst->lr, &dst->lr_votes, src->lr, src->lr_votes);
+			}
+		}
 		samples += b->samples;
 		user += b->user;
 		kernel += b->kernel;
@@ -1271,6 +1697,16 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 			dst->pagein_abs += src->pagein_abs;
 			dst->image_abs += src->image_abs;
 			dst->read_abs += src->read_abs;
+			for (unsigned int k = 0; k < KPROF_F_CLASSES; k++) {
+				dst->faults[k] += src->faults[k];
+			}
+			dst->fault_abs += src->fault_abs;
+			dst->fault_wired += src->fault_wired;
+			dst->fault_dsc += src->fault_dsc;
+			dst->fault_copyio += src->fault_copyio;
+			dst->fast_af += src->fast_af;
+			dst->fast_mod += src->fast_mod;
+			dst->zf_around += src->zf_around;
 			if (dst->name[0] == '\0') {
 				strlcpy(dst->name, src->name, sizeof(dst->name));
 			}
@@ -1386,9 +1822,18 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	kprof_decmpfs_line();
 	kprof_waits_line();
 	kprof_image_line();
+	kprof_faults_lines(window);
 	kprof_kernel_task_threads(window);
 	kprof_user_hot_spots();
 	kprof_user_images();
+	{
+		static bool zero_cost_done;
+
+		if (!zero_cost_done) {
+			zero_cost_done = true;
+			kprof_zero_cost_line();
+		}
+	}
 	thread_call_enter_delayed_with_leeway(kprof_call, NULL, now + kprof_window, kprof_window / 10,
 	    THREAD_CALL_DELAY_LEEWAY);
 }
@@ -1506,11 +1951,12 @@ kprof_init(void)
 	kprof_threads[1] = kalloc_data(KPROF_THREADS * sizeof(struct kprof_thread), Z_WAITOK | Z_ZERO);
 	kprof_vals = kalloc_data(KPROF_USER * sizeof(uint64_t), Z_WAITOK | Z_ZERO);
 	kprof_masks = kalloc_data(KPROF_MASKED * sizeof(kprof_masks[0]), Z_WAITOK | Z_ZERO);
+	kprof_sites = kalloc_data(KPROF_SITES * sizeof(kprof_sites[0]), Z_WAITOK | Z_ZERO);
 	kprof_cpu_last[0] = kalloc_data(KPROF_CPU_LAST * sizeof(struct kprof_cpu_last), Z_WAITOK | Z_ZERO);
 	kprof_cpu_last[1] = kalloc_data(KPROF_CPU_LAST * sizeof(struct kprof_cpu_last), Z_WAITOK | Z_ZERO);
 	if (!tables || kprof_cpu_last[0] == NULL || kprof_cpu_last[1] == NULL || kprof_fns == NULL || kprof_tasks == NULL ||
 	    kprof_users == NULL || kprof_images == NULL || kprof_threads[0] == NULL ||
-	    kprof_threads[1] == NULL || kprof_vals == NULL || kprof_masks == NULL) {
+	    kprof_threads[1] == NULL || kprof_vals == NULL || kprof_masks == NULL || kprof_sites == NULL) {
 		os_log(OS_LOG_DEFAULT, "IOSwitch kprof: off (a sample table could not be allocated)");
 		return;
 	}
