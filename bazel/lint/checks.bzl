@@ -266,12 +266,12 @@ pick() {{
 }}
 
 run() {{
-    # run NAME LIST COMMAND...: COMMAND FILE... over the picked files of LIST, in parallel batches.
+    # run NAME LIST COMMAND...: COMMAND FILE... over the picked files of LIST, four batches at a time (a shared machine).
     local name="$1" list="$2" files
     shift 2
     files="$(pick "$list")"
     [ -n "$files" ] || return 0
-    printf '%s\\n' "$files" | tr '\\n' '\\0' | xargs -0 -n 64 -P 8 "$@"
+    printf '%s\\n' "$files" | tr '\\n' '\\0' | xargs -0 -n 64 -P 4 "$@"
     echo "{label}: $name: $(printf '%s\\n' "$files" | wc -l | tr -d ' ') files"
 }}
 

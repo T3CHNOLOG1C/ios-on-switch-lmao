@@ -33,7 +33,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 package(default_visibility = ["//visibility:public"])
 
 # Everything below this package is a pinned input, checked against SHA256SUMS byte for byte: never reformatted.
-lint_files(exclude = ["*/**"])
+lint_files(exclude = ["*/**/*"])
 
 exports_files(glob(
     ["**"],

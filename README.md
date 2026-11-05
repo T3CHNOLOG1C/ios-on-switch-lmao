@@ -381,6 +381,17 @@ re-checking an unchanged file costs nothing.
   `exclude`. Code that is not ours is never reformatted or linted (and has `DisableFormat` for editors).
 - Not linted: assembly (no maintained linter; the assembler at `-Werror` is the check), linker scripts, plists, device
   trees, shaders and patches.
+- buildifier never reorders a list (`.buildifier-tables.json`): a driver's `srcs` are its link order, an archive's
+  members its member order. `//:format` only formats; lint findings are fixed by hand.
+
+Rebasing a patch made before a formatting change (for example the one-time format of the whole tree):
+
+1. Check out the commit the patch was made on and apply it there (a patch from before the S3 layout first goes through
+   `bazel run //tools/repath -- PATCH`).
+2. Format what it touches and fold that into it: `bazel run //:format -- $(git diff --name-only HEAD~1)`, then
+   `git commit --amend -a --no-edit`.
+3. Rebase onto main. The formatting both sides now share applies cleanly; what conflicts is the patch's own change.
+   Run `bazel run //:format -- FILE...` on anything you resolve by hand, and `bazel test //:format_test` before sending.
 
 ## Tools and scripts
 

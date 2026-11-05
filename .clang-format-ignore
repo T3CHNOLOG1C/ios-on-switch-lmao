@@ -1,5 +1,5 @@
-# Generated files clang-format must not touch (paths relative to this directory), for editors; //bazel/lint leaves the
-# same files out of its checks (lint_files(exclude = ...) in BUILD.bazel).
+# Generated files clang-format must not touch (paths relative to the repository root), for editors; //bazel/lint leaves
+# the same files out of its checks (their packages' lint_files(exclude = ...)).
 drivers/SwitchVideoDecoders/test/VDECClip.h
 drivers/SwitchVideoDecoders/test/VP9Clip.h
 drivers/SwitchVideoDecoders/test/VP9Trace.h

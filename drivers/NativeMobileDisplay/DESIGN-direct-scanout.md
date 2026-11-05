@@ -25,9 +25,10 @@ this tree; **[I]** = inferred, to check; **[T]** = to be proven by a boot self-t
 
 1. **TegraSMMU (shared).** Extract VIC's domain code into `drivers/TegraSMMU`: one lock around every `PTB_ASID` +
    `PTB_DATA` pair and every flush (two drivers selecting ASIDs at once would program each other's directory); an ASID
-   table (VIC 127, display 126); a domain = page directory + tables in one contiguous buffer, 4 KiB PTEs (PFN | R 31 |
-   W 30 | NS 29, PDE NEXT 28), `identity(range)`, `map(iova, pages)`, `unmap`, `attach(asidReg, translationBits)`,
-   `detach`, `reattach` after SC7 (the MC loses it). VIC moves onto it with its stages and lines unchanged. Host test:
+   table (VIC 127, display 126); a domain = page directory + tables in one contiguous buffer, 4 KiB PTEs
+   (`PFN | R 31 | W 30 | NS 29`, PDE `NEXT 28`), `identity(range)`, `map(iova, pages)`, `unmap`,
+   `attach(asidReg, translationBits)`, `detach`, `reattach` after SC7 (the MC loses it). VIC moves onto it with its
+   stages and lines unchanged. Host test:
    the PTE/PDE images and flush order against a register model.
 2. **Display domain, ASID 126, swgroup `dc`** (MC 0x240 [I: memory/tegra/tegra210.c], clients display0a/0b/0c and
    displayhc in TRANSLATION_ENABLE_0 [I]). Identity-mapped before the switch: everything DC A may scan then: the boot
