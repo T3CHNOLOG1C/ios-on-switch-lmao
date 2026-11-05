@@ -209,7 +209,8 @@ static HEVCDecoder *decodeClip(Fake *f, const uint8_t *data, size_t size, int *a
     static uint8_t buffer[64 * 1024];
     uint8_t *sample[64];
     size_t sizes[64];
-    const H264Backend backend = {f, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, fakeEmit, fakeDiscard};
+    const H264Backend backend = {f,           fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
+                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL};
     HEVCDecoder *d = hevc_decoder_create(&backend);
     hevc_decoder_allow_10bit(d, tenBit);
     *aus = samples(data, size, buffer, sample, sizes, 64);
@@ -242,8 +243,8 @@ static void testDecode(void)
         if (clip->depth == 10) {
             Fake g;
             memset(&g, 0, sizeof(g));
-            const H264Backend backend = {&g,       fakeAlloc,   fakeFree, fakeSubmit,
-                                         fakeWait, fakeDecoded, fakeEmit, fakeDiscard};
+            const H264Backend backend = {&g,          fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
+                                         fakeDecoded, fakeEmit,  fakeDiscard, NULL};
             HEVCDecoder *e = hevc_decoder_create(&backend);
             static uint8_t buffer[64 * 1024];
             uint8_t *sample[64];

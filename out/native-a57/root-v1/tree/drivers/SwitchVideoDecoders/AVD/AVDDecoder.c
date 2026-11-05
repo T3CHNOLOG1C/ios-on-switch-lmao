@@ -28,10 +28,16 @@
 //
 // Per picture (the scheduling): H264NVDEC parses and fills NVDEC's setup on the caller's decode thread; the kernel
 // queues the job on host1x channel 0 and the thread sleeps on the syncpoint interrupt (no polling, no GPU, nothing on
-// the compositor's threads); then the picture is copied (de-swizzled) on the same thread into a pixel buffer from the
-// session's pool, NV12 '420v'/'420f', the format H264SW gives the same clients. VIC is not used: with the SMMU
-// bypassed it can only write physically contiguous memory, which pool IOSurfaces are not, so its output would need
-// this same CPU pass. Frames go out as soon as they are decoded, in decode order, as Apple's H.264 decoders do even
+// the compositor's threads); then VIC copies the picture (block linear) into a pixel buffer from the session's pool,
+// NV12 '420v'/'420f' (the format H264SW gives the same clients), through its SMMU window onto the IOSurface's own
+// pages (TegraNVDECPresent, drivers/TegraVIC/TegraVICPresent.h), and the thread sleeps on VIC's syncpoint interrupt.
+// The CPU neither de-swizzles nor touches the pixels, and the IOSurface is in DRAM with no CPU line of it dirty when
+// it goes out: the GPU, which does not snoop the CPU's caches, reads what VIC wrote. Where VIC does not take a picture
+// (its block-linear input unproven this boot, an odd size, a surface it cannot address: the first refusal is one line)
+// the CPU de-swizzles it as before and then cleans the buffer's lines to DRAM (sys_dcache_flush). r8a, 720p60 H.264
+// in mediaplaybackd: the CPU copy was 2.47 ms a picture, most of mediaplaybackd's ~2.8 s of CPU every 10 s; the copy's
+// lines could reach the GPU later than its reads (nothing cleaned an IOSurface the compositor had already imported).
+// Frames go out as soon as they are decoded, in decode order, as Apple's H.264 decoders do even
 // under kVTDecodeFrame_EnableTemporalProcessing (observed on macOS 27 with test/vdectest): clients order by
 // presentation time. H264NVDEC's display-order bumping stays available (kReorder).
 //
@@ -39,7 +45,10 @@
 // it starts (on NVDEC, or on the software decoder and why) and one when it ends (frames, mean decode and copy time);
 // once per boot, the clip check (ClipCheck.c) in the first process that may open NVDEC, category selftest.
 #include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOReturn.h>
+#include <IOSurface/IOSurfaceRef.h>
 #include <dispatch/dispatch.h>
+#include <libkern/OSCacheControl.h>
 #include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
@@ -67,7 +76,9 @@ typedef struct {
     OSType pixelFormat;
     CFTypeRef matrix, primaries, transfer;
     uint32_t width, height, frames, errors;
-    uint64_t decodeTicks, copyTicks;
+    uint64_t decodeTicks, copyTicks;  // copyTicks: placing pictures in pixel buffers (VIC's or the CPU's copy)
+    bool present;                     // VIC copies the pictures (until it refuses one)
+    uint32_t presented, copied;
 } Decoder;
 
 typedef struct {
@@ -132,6 +143,42 @@ static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideo
 
 // ---- H264Backend: pictures out ---------------------------------------------------------------------------------
 
+// VIC's copy of the picture into the buffer (TegraNVDECPresent); false when it did not (a refusal turns it off for the
+// session, with one line). The kernel is always asked, even for a shape it will refuse (an odd VP9 size), because a
+// refusal leaves the picture's range invalidated: this picture's Wait did not, and the CPU copy must read DRAM.
+static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBufferRef image, uint32_t width,
+                           uint32_t height)
+{
+    IOSurfaceRef surface = CVPixelBufferGetIOSurface(image);
+    const TegraNVDECPresent p = {.handle = picture->handle,
+                                 .surface_id = surface ? IOSurfaceGetID(surface) : 0,
+                                 .pitch = picture->pitch,
+                                 .rows = picture->rows,
+                                 .chroma_offset = picture->chroma_offset,
+                                 .block_height_log2 = 1,  // GOB_2 (the decoders' gob_height 0)
+                                 .crop_x = picture->crop_x,
+                                 .crop_y = picture->crop_y,
+                                 .width = width,
+                                 .height = height};
+    CVPixelBufferLockBaseAddress(image, 0);  // a write lock, so the surface's seed moves as a CPU write moves it
+    const int err = nvdec_present(d->client, &p);
+    CVPixelBufferUnlockBaseAddress(image, 0);
+    if (!err) return true;
+    if (err == kIOReturnUnsupported || err == kIOReturnBadArgument) {
+        d->present = false;
+        os_log_error(gLog,
+                     "AVD: VIC refused a %ux%u picture in %{public}s (%#x; the kernel line says why): this session "
+                     "copies on the CPU",
+                     width, height, getprogname(), err);
+    }
+    return false;
+}
+
+static bool cpuReads(void *ctx)
+{
+    return !((Decoder *)ctx)->present;
+}
+
 static void *decoded(void *ctx, const H264Picture *picture)
 {
     Decoder *d = ctx;
@@ -146,16 +193,27 @@ static void *decoded(void *ctx, const H264Picture *picture)
         return out;
     }
     const uint64_t began = mach_absolute_time();
-    CVPixelBufferLockBaseAddress(out->image, 0);
     const uint32_t w = (uint32_t)CVPixelBufferGetWidth(out->image), h = (uint32_t)CVPixelBufferGetHeight(out->image);
     const uint32_t width = w < picture->width ? w : picture->width, height = h < picture->height ? h : picture->height;
-    block_linear_copy(CVPixelBufferGetBaseAddressOfPlane(out->image, 0),
-                      CVPixelBufferGetBytesPerRowOfPlane(out->image, 0), picture->luma, picture->pitch, picture->crop_x,
-                      picture->crop_y, width, height);
-    block_linear_copy(CVPixelBufferGetBaseAddressOfPlane(out->image, 1),
-                      CVPixelBufferGetBytesPerRowOfPlane(out->image, 1), picture->chroma, picture->pitch,
-                      picture->crop_x & ~1u, picture->crop_y / 2, width & ~1u, (height + 1) / 2);
-    CVPixelBufferUnlockBaseAddress(out->image, 0);
+    if (d->present && presentPicture(d, picture, out->image, width, height)) {
+        d->presented++;
+    } else {
+        CVPixelBufferLockBaseAddress(out->image, 0);
+        uint8_t *luma = CVPixelBufferGetBaseAddressOfPlane(out->image, 0);
+        uint8_t *chroma = CVPixelBufferGetBaseAddressOfPlane(out->image, 1);
+        const size_t lumaPitch = CVPixelBufferGetBytesPerRowOfPlane(out->image, 0);
+        const size_t chromaPitch = CVPixelBufferGetBytesPerRowOfPlane(out->image, 1);
+        block_linear_copy(luma, lumaPitch, picture->luma, picture->pitch, picture->crop_x, picture->crop_y, width,
+                          height);
+        block_linear_copy(chroma, chromaPitch, picture->chroma, picture->pitch, picture->crop_x & ~1u,
+                          picture->crop_y / 2, width & ~1u, (height + 1) / 2);
+        // To DRAM: the GPU does not snoop the CPU's caches, and nothing cleans a surface the compositor imported
+        // before this write (its IOSurface lock and unlock are traps the kernel's coherency hook never sees).
+        sys_dcache_flush(luma, lumaPitch * height);
+        sys_dcache_flush(chroma, chromaPitch * ((height + 1) / 2));
+        CVPixelBufferUnlockBaseAddress(out->image, 0);
+        d->copied++;
+    }
     d->copyTicks += mach_absolute_time() - began;
     if (d->matrix)
         CVBufferSetAttachment(out->image, kCVImageBufferYCbCrMatrixKey, d->matrix, kCVAttachmentMode_ShouldPropagate);
@@ -282,6 +340,14 @@ static CFDataRef copyAtom(CMVideoFormatDescriptionRef format, CFStringRef name)
     return atom && CFGetTypeID(atom) == CFDataGetTypeID() ? CFRetain(atom) : NULL;
 }
 
+// Rows and planes on 256-byte boundaries where VIC writes the buffers (its proven pitch, and the plane addresses it
+// takes); 64 for the CPU copy.
+static void setAlignment(const Decoder *d, CFMutableDictionaryRef attributes)
+{
+    setNumber(attributes, kCVPixelBufferBytesPerRowAlignmentKey, d->present ? 256 : 64);
+    if (d->present) setNumber(attributes, kCVPixelBufferPlaneAlignmentKey, 256);
+}
+
 static void setAttributes(Decoder *d, VTVideoDecoderSession session, bool fullRange, OSStatus *status)
 {
     d->pixelFormat =
@@ -293,7 +359,7 @@ static void setAttributes(Decoder *d, VTVideoDecoderSession session, bool fullRa
     setNumber(attributes, kCVPixelBufferPixelFormatTypeKey, (int32_t)d->pixelFormat);
     setNumber(attributes, kCVPixelBufferWidthKey, (int32_t)d->width);
     setNumber(attributes, kCVPixelBufferHeightKey, (int32_t)d->height);
-    setNumber(attributes, kCVPixelBufferBytesPerRowAlignmentKey, 64);
+    setAlignment(d, attributes);
     CFDictionarySetValue(attributes, kCVPixelBufferIOSurfacePropertiesKey, surface);
     *status = VTDecoderSessionSetPixelBufferAttributes(session, attributes);
     CFRelease(surface);
@@ -331,8 +397,8 @@ static OSStatus startVP9(Decoder *d, VTVideoDecoderSession session, CMVideoForma
     OSStatus status;
     setAttributes(d, session, fullRange, &status);
     if (!status)
-        os_log(gLog, "AVD: session %ux%u in %{public}s on NVDEC (VP9 profile 0, level %d)", d->width, d->height,
-               getprogname(), v ? v[5] : 0);
+        os_log(gLog, "AVD: session %ux%u in %{public}s on NVDEC (VP9 profile 0, level %d), pictures out by %{public}s",
+               d->width, d->height, getprogname(), v ? v[5] : 0, d->present ? "VIC" : "the CPU");
     return status;
 }
 
@@ -394,9 +460,12 @@ static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoForm
     setAttributes(d, session, sps->full_range, &status);
     static const char *const kProfiles[4] = {"", "Main", "Main 10", "Main Still Picture"};
     if (!status)
-        os_log(gLog, "AVD: session %ux%u in %{public}s on NVDEC (HEVC %{public}s, level %u.%u%{public}s)", d->width,
-               d->height, getprogname(), kProfiles[sps->profile_idc], sps->level_idc / 30, sps->level_idc % 30 / 3,
-               sps->bit_depth == 10 ? ", written as 8-bit NV12" : "");
+        os_log(gLog,
+               "AVD: session %ux%u in %{public}s on NVDEC (HEVC %{public}s, level %u.%u%{public}s), pictures out by "
+               "%{public}s",
+               d->width, d->height, getprogname(), kProfiles[sps->profile_idc], sps->level_idc / 30,
+               sps->level_idc % 30 / 3, sps->bit_depth == 10 ? ", written as 8-bit NV12" : "",
+               d->present ? "VIC" : "the CPU");
     return status;
 }
 
@@ -443,14 +512,17 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
     setNumber(attributes, kCVPixelBufferPixelFormatTypeKey, (int32_t)d->pixelFormat);
     setNumber(attributes, kCVPixelBufferWidthKey, (int32_t)d->width);
     setNumber(attributes, kCVPixelBufferHeightKey, (int32_t)d->height);
-    setNumber(attributes, kCVPixelBufferBytesPerRowAlignmentKey, 64);
+    setAlignment(d, attributes);
     CFDictionarySetValue(attributes, kCVPixelBufferIOSurfacePropertiesKey, surface);
     status = VTDecoderSessionSetPixelBufferAttributes(session, attributes);
     CFRelease(surface);
     CFRelease(attributes);
     if (!status)
-        os_log(gLog, "AVD: session %ux%u in %{public}s on NVDEC (H.264 profile %u level %u, %u reference frames)",
-               d->width, d->height, getprogname(), sps->profile_idc, sps->level_idc, sps->max_num_ref_frames);
+        os_log(gLog,
+               "AVD: session %ux%u in %{public}s on NVDEC (H.264 profile %u level %u, %u reference frames), pictures "
+               "out by %{public}s",
+               d->width, d->height, getprogname(), sps->profile_idc, sps->level_idc, sps->max_num_ref_frames,
+               d->present ? "VIC" : "the CPU");
     pthread_mutex_unlock(&d->lock);
     return status;
 }
@@ -594,9 +666,9 @@ static void finalize(CMBaseObjectRef ref)
     if (d->frames)
         os_log(gLog,
                "AVD: session %ux%u in %{public}s ended: %u frames on NVDEC, %u with errors, mean %.2f ms decode + "
-               "%.2f ms copy",
+               "%.2f ms out (%u pictures by VIC, %u by the CPU)",
                d->width, d->height, getprogname(), d->frames, d->errors, ticksToMs(d->decodeTicks) / d->frames,
-               ticksToMs(d->copyTicks) / d->frames);
+               ticksToMs(d->copyTicks) / d->frames, d->presented, d->copied);
     if (d->software) CFRelease(d->software);
     h264_decoder_destroy(d->h264);  // frees its buffers through the client, so before closing it
     vp9_decoder_destroy(d->vp9);
@@ -696,7 +768,8 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
     pthread_mutex_init(&d->lock, NULL);
     d->client = client;
     d->codec = codec;
-    const H264Backend backend = {d, bufferAlloc, bufferFree, jobSubmit, jobWait, decoded, emit, discard};
+    d->present = nvdec_can_present(client);
+    const H264Backend backend = {d, bufferAlloc, bufferFree, jobSubmit, jobWait, decoded, emit, discard, cpuReads};
     if (codec == kCMVideoCodecType_VP9    ? !(d->vp9 = vp9_decoder_create(&backend))
         : codec == kCMVideoCodecType_HEVC ? !(d->hevc = hevc_decoder_create(&backend))
                                           : !(d->h264 = h264_decoder_create(&backend))) {

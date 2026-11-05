@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVDEC user client ABI, v5 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
+// TegraNVDEC user client ABI, v6 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
 //
 // The service is "TegraNVDEC" (IOServiceMatching), published by default once NVDEC has proven itself (N4). Its user
 // client's class is named AppleD5500UserClient, iPad7,1's own decoder client (VXD393), which some of 21H461's sandbox
@@ -18,6 +18,10 @@
 //     into kernel-only memory after its sizes are checked against the buffers it makes NVDEC write.
 //   * Cache maintenance is explicit: Submit cleans the ranges the CPU wrote (bitstream, slice offsets), Wait
 //     invalidates the ranges the CPU will read (status, the decoded surface). Surfaces are never written by the CPU.
+//   * Present (v6, TegraNVDECInfo.features TEGRA_NVDEC_FEATURE_PRESENT): VIC copies a decoded surface (block linear)
+//     into an IOSurface of the calling task as pitch-linear NV12 (drivers/TegraVIC/TegraVICPresent.h), so the CPU
+//     neither de-swizzles nor reads it, and Wait need not invalidate it. A refused present leaves the picture's range
+//     invalidated, as Wait would have, so the caller's CPU copy reads what NVDEC wrote.
 //   * Jobs run in submission order; a fence is a syncpoint threshold. Wait sleeps on the syncpoint interrupt. Every job
 //     runs with NVDEC's GP timer (required by the checker), so the kernel bounds each wait itself; timeout_us is
 //     ignored. A job past that bound is a hardware fault and panics.
@@ -25,7 +29,7 @@
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION  5
+#define TEGRA_NVDEC_ABI_VERSION  6
 #define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
 #define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
@@ -39,7 +43,10 @@ enum TegraNVDECMethod {
     TegraNVDECMethodClaimSelfTest = 6,   // -> TegraNVDECClaim: claimed = 1 for the one caller that runs the clip check
     TegraNVDECMethodReportSelfTest = 7,  // TegraNVDECReport -> (the claiming connection only)
     TegraNVDECMethodWaitSelfTest = 8,    // -> TegraNVDECClaim: sleeps while the check runs, at most 3 s
+    TegraNVDECMethodPresent = 9,         // TegraNVDECPresent -> (the picture is in the IOSurface)
 };
+
+#define TEGRA_NVDEC_FEATURE_PRESENT (1u << 0)  // TegraNVDECInfo.features: Present is on (VIC proved block-linear input)
 
 // The userland clip check (AVD's ClipCheck.c): one connection per boot claims it and reports its VP9 and HEVC verdicts;
 // until then 'vp09' and 'hvc1' are registered nowhere as NVDEC decoders, and a failure turns that codec off
@@ -64,7 +71,7 @@ typedef struct {
     uint32_t abi_version, nvdec_version;  // nvdec_version 0x20: NVDEC 2.0 (T210)
     uint32_t codecs;                      // bit n: TEGRA_NVDEC_CODEC_* n is accepted by Submit
     uint32_t max_width, max_height;
-    uint32_t reserved;
+    uint32_t features;  // TEGRA_NVDEC_FEATURE_*
     uint64_t arena_bytes, arena_free;
 } TegraNVDECInfo;
 
@@ -115,6 +122,17 @@ typedef struct {
 typedef struct {
     uint32_t vp9_ok, hevc_ok, hevc10_ok, reserved;
 } TegraNVDECReport;
+
+// A decoded picture of buffer `handle` (NV12 block linear, GOB height 2^block_height_log2: NVDEC's is 1) into the
+// '420v'/'420f' IOSurface `surface_id` of the calling task: the window (crop_x, crop_y, width x height), clipped to
+// the surface, at its corner. pitch: whole 64-byte GOBs; rows: whole pairs of 16-row blocks; chroma at chroma_offset
+// (256-byte aligned, past the luma), rows / 2 rows. kIOReturnUnsupported: VIC does not take it (one kernel line says
+// why); kIOReturnBadArgument: geometry outside the buffer or an unknown surface.
+typedef struct {
+    uint32_t handle, surface_id;
+    uint32_t pitch, rows, chroma_offset, block_height_log2;
+    uint32_t crop_x, crop_y, width, height;
+} TegraNVDECPresent;
 
 typedef struct {
     uint32_t fence, timeout_us;  // timeout_us: ignored (the kernel bounds every wait, see above)

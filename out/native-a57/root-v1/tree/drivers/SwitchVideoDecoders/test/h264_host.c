@@ -206,7 +206,8 @@ int main(int argc, char **argv)
         fclose(fp);
         fake.selftest = argc > 2 && !strcmp(argv[2], "--selftest");
     }
-    const H264Backend backend = {&fake, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, fakeEmit, fakeDiscard};
+    const H264Backend backend = {&fake,       fakeAlloc, fakeFree,    fakeSubmit, fakeWait,
+                                 fakeDecoded, fakeEmit,  fakeDiscard, NULL};
     H264Decoder *d = h264_decoder_create(&backend);
 
     // Split into NAL units, then access units (7.4.1.2.3: a new one starts at an AUD, a parameter set or SEI after

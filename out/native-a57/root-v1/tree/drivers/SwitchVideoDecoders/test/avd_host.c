@@ -10,6 +10,9 @@
 //           (registerCheckDecoder: not flagged hardware, named com.ioswitch.avd.check.vp09, as the device's boot check
 //           uses it) and the fake engine: every superframe and frame through VP9NVDEC and the kernel's checker, all 16
 //           shown frames out of a session that says hardware.
+//   present: the engine session again with TegraNVDECPresent on: every picture handed to the fake VIC, whose pool
+//           buffer must be one VIC addresses (rows and the chroma plane on 256 bytes) and which copies it as VIC would;
+//           no wait invalidates the surface, and the CPU path's pictures come out.
 //   gate:   the private registration outside an open check (gCheckOpen false): no instance, so no session by its name.
 //   hevc:   HEVCClip.h's Main clips A and V and Main 10 clip T as 'hvc1' on the private check registration (named
 //           com.ioswitch.avd.check.hvc1) and the fake engine: every picture through HEVCNVDEC and the kernel's checker,
@@ -25,8 +28,8 @@ struct NVDECClient {
     uint64_t size[64];
 };
 
-static bool gFull;
-static int gOpens, gSubmits, gRefused;
+static bool gFull, gPresentOn;
+static int gOpens, gSubmits, gRefused, gPresents, gPresentBad, gWaitRanges;
 
 bool nvdec_service_present(void)
 {
@@ -57,6 +60,44 @@ uint32_t nvdec_codecs(const NVDECClient *c)
 uint32_t nvdec_codecs_now(NVDECClient *c)
 {
     return nvdec_codecs(c);
+}
+
+bool nvdec_can_present(const NVDECClient *c)
+{
+    (void)c;
+    return gPresentOn;
+}
+
+// The fake VIC: TegraNVDECUserClient's geometry checks and TegraVICConfig.h's address rules for the destination, then
+// the copy (BlockLinear.c, as VIC's pass-through would leave it).
+int nvdec_present(NVDECClient *c, const TegraNVDECPresent *p)
+{
+    gPresents++;
+    const uint64_t luma = (uint64_t)p->pitch * p->rows;
+    IOSurfaceRef s = IOSurfaceLookup(p->surface_id);
+    bool ok = p->handle < 64 && c->va[p->handle] && p->pitch && !(p->pitch % 64) && p->rows && !(p->rows % 32) &&
+              p->block_height_log2 == 1 && !(p->chroma_offset % 256) && p->chroma_offset >= luma &&
+              p->chroma_offset + luma / 2 <= c->size[p->handle] && s;
+    if (ok) {
+        const uintptr_t base = (uintptr_t)IOSurfaceGetBaseAddress(s);
+        ok = !(IOSurfaceGetBytesPerRowOfPlane(s, 0) % 256) && !(IOSurfaceGetBytesPerRowOfPlane(s, 1) % 256) &&
+             !(((uintptr_t)IOSurfaceGetBaseAddressOfPlane(s, 0) - base) % 256) &&
+             !(((uintptr_t)IOSurfaceGetBaseAddressOfPlane(s, 1) - base) % 256) && p->width <= IOSurfaceGetWidth(s) &&
+             p->height <= IOSurfaceGetHeight(s) && !((p->width | p->height) & 1);
+    }
+    if (ok) {
+        IOSurfaceLock(s, 0, NULL);
+        const uint8_t *picture = c->va[p->handle];
+        block_linear_copy(IOSurfaceGetBaseAddressOfPlane(s, 0), IOSurfaceGetBytesPerRowOfPlane(s, 0), picture, p->pitch,
+                          p->crop_x, p->crop_y, p->width, p->height);
+        block_linear_copy(IOSurfaceGetBaseAddressOfPlane(s, 1), IOSurfaceGetBytesPerRowOfPlane(s, 1),
+                          picture + p->chroma_offset, p->pitch, p->crop_x, p->crop_y / 2, p->width, p->height / 2);
+        IOSurfaceUnlock(s, 0, NULL);
+    } else {
+        gPresentBad++;
+    }
+    if (s) CFRelease(s);
+    return ok ? 0 : kIOReturnUnsupported;
 }
 
 uint32_t nvdec_check_claim(NVDECClient *c, bool *claimed)
@@ -120,7 +161,8 @@ int nvdec_submit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
 
 int nvdec_wait(void *ctx, const TegraNVDECWait *w)
 {
-    (void)ctx, (void)w;
+    (void)ctx;
+    gWaitRanges += (int)w->invalidate_count;
     return 0;
 }
 
@@ -148,9 +190,19 @@ int main(void)
                *specValues[] = {CFSTR("com.ioswitch.avd-host.avc1")};
     CFDictionaryRef spec = CFDictionaryCreate(NULL, specKeys, specValues, 1, &kCFTypeDictionaryKeyCallBacks,
                                               &kCFTypeDictionaryValueCallBacks);
-    char engine[512], full[512];
+    char engine[512], full[512], present[512];
     clip_check(ClipCheckHardware, spec, engine, sizeof(engine));
     const int engineOpens = gOpens, engineSubmits = gSubmits;
+    // VIC's present: the same session with the feature on.
+    gPresentOn = true;
+    const int presentSubmits = gSubmits, presentWaits = gWaitRanges;
+    clip_check(ClipCheckHardware, spec, present, sizeof(present));
+    gPresentOn = false;
+    const bool presentOk = strstr(present, "hardware: hardware decoder") && strstr(present, " 30 out (") &&
+                           gSubmits - presentSubmits == 30 && gPresents == 30 && !gPresentBad &&
+                           gWaitRanges - presentWaits == 30;  // the status alone, no surface
+    printf("present: %s (presents %d, refused %d, wait ranges %d)\n", present, gPresents, gPresentBad,
+           gWaitRanges - presentWaits);
     gFull = true;
     clip_check(ClipCheckHardware, spec, full, sizeof(full));
     CFRelease(spec);
@@ -202,7 +254,7 @@ int main(void)
                     strstr(engine, "hardware: hardware decoder") && strstr(engine, " 30 out (") &&
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
                     strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
-                    hevcSubmits - vp9Submits == 18 && gated && hevcOk;
+                    hevcSubmits - vp9Submits == 18 && gated && presentOk && hevcOk;
     printf("%s avd: plug-in on VideoToolbox (H.264, VP9 and HEVC on a fake NVDEC, then Apple's software H.264 and "
            "HEVC in the instance)\n",
            ok ? "PASS" : "FAIL");

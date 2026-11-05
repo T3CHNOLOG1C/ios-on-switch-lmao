@@ -9,8 +9,9 @@
   NVDEC is given (sw_hdr_skip_length included) equals FFmpeg's, pictures come out in FFmpeg's order, every submit is
   accepted by the kernel's checker, which refuses each kind of bad HEVC submit;
 - AVD.videodecoder itself on this Mac's VideoToolbox over a fake TegraNVDEC client: the plug-in's class layout, session
-  calls and property answers for 'avc1', 'vp09' and 'hvc1', and its fall-back onto Apple's software decoders when the
-  arena has no room;
+  calls and property answers for 'avc1', 'vp09' and 'hvc1', its fall-back onto Apple's software decoders when the
+  arena has no room, VIC's present (pool buffers VIC can address, no surface invalidate in the waits) and the private
+  check registration's gate;
 - the clip check (vdectest) against Apple's own decoders, which proves the clips and their x264 / FFmpeg CRCs."""
 from pathlib import Path
 import subprocess
@@ -23,7 +24,7 @@ AVD = VIDEO / "AVD"
 FLAGS = ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O1", "-g", "-fsanitize=address,undefined",
          "-fno-sanitize-recover=all"]
 FRAMEWORKS = ["-framework", "CoreFoundation", "-framework", "CoreMedia", "-framework", "CoreVideo", "-framework",
-              "VideoToolbox"]
+              "VideoToolbox", "-framework", "IOSurface"]
 
 
 def build_and_run(name, sources, extra=(), args=()):

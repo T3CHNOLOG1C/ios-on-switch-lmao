@@ -178,7 +178,8 @@ static int runClip(const char *name, const uint32_t *sizes, int packets, const u
         return 1;
     }
     Fake fake = {.counts = counts};
-    const H264Backend backend = {&fake, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, fakeEmit, fakeEmit};
+    const H264Backend backend = {&fake,       fakeAlloc, fakeFree, fakeSubmit, fakeWait,
+                                 fakeDecoded, fakeEmit,  fakeEmit, NULL};
     VP9Decoder *d = vp9_decoder_create(&backend);
     int bad = 0, record = 0;
     if (vp9_decoder_configure(d, 512, 288)) return 1;
@@ -334,7 +335,8 @@ int main(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "--selftest")) {
         Fake fake = {.selftest = 1};
-        const H264Backend backend = {&fake, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, fakeEmit, fakeEmit};
+        const H264Backend backend = {&fake,       fakeAlloc, fakeFree, fakeSubmit, fakeWait,
+                                     fakeDecoded, fakeEmit,  fakeEmit, NULL};
         VP9Decoder *d = vp9_decoder_create(&backend);
         if (vp9_decoder_configure(d, 160, 144) || vp9_decoder_decode(d, kTraceKData, kTraceKSizes[0], (void *)1) != 1)
             return 1;

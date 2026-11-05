@@ -1316,6 +1316,8 @@ ios_binary(
         "VideoToolbox",
         "-framework",
         "IOKit",
+        "-framework",
+        "IOSurface",
     ],
     out = "build/switch-video/AVD.videodecoder",
     pagesize = "4096",

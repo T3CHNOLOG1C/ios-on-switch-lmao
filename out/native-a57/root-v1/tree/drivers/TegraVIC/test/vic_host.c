@@ -652,6 +652,87 @@ static void requests(void)
     CHECK(why && !strcmp(why, "planes extend past the surface's memory"), "short memory: %s", why ? why : "ok");
 }
 
+// NVDEC's pictures (TegraVICPresent.h): a 1920x1080 H.264 picture as NVDEC leaves it (pitch 1920, 1088 block-aligned
+// rows, chroma at 1920 x 1088) copied 1:1 into a 2048-byte-row '420v' buffer. The source surface takes averne's
+// block-linear setup (16Bx2, 2 GOBs a block, 32Bx8 cache, the planes' whole blocks as their heights) and the copy no
+// matrix; the checker refuses what VIC cannot read as block linear.
+static void blockLinear(void)
+{
+    TegraVICTraits t = traits();
+    t.blockLinearIn = 1;
+    const uint32_t fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
+    TegraVICImage src = image(fourcc, 1920, 1080, 1920, 0x10000000);
+    src.rows[0] = 1088;
+    src.rows[1] = 544;
+    src.base[1] = 0x10000000 + 1920 * 1088;
+    src.span[0] = 1920 * 1088;
+    src.span[1] = 1920 * 544;
+    src.blockLinear = 1;
+    src.blockHeightLog2 = 1;
+    const TegraVICImage dst = image(fourcc, 1920, 1080, 2048, 0x18000000);
+    TegraVICOp op;
+    memset(&op, 0, sizeof(op));
+    op.srcW = 1920u << 16;
+    op.srcH = 1080u << 16;
+    op.dstW = 1920;
+    op.dstH = 1080;
+    op.nearest = 1;
+    TegraVICJob job;
+    const char *why = tegra_vic_build(&src, &dst, &op, &t, 0x80001000, 0x80002000, &job);
+    CHECK(!why, "NVDEC picture refused: %s", why ? why : "");
+    const uint8_t *c = job.config;
+    const uint32_t sf = TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE;
+    CHECK(TEGRA_VIC_GET(c, sf, SURF_BLK_KIND) == TEGRA_VIC_BLK_16Bx2 && TEGRA_VIC_GET(c, sf, SURF_BLK_HEIGHT) == 1 &&
+              TEGRA_VIC_GET(c, sf, SURF_CACHE_WIDTH) == TEGRA_VIC_CACHE_32Bx8,
+          "block-linear kind, height or cache");
+    CHECK(TEGRA_VIC_GET(c, sf, SURF_WIDTH) == 1919 && TEGRA_VIC_GET(c, sf, SURF_HEIGHT) == 1079 &&
+              TEGRA_VIC_GET(c, sf, SURF_LUMA_WIDTH) == 1919 && TEGRA_VIC_GET(c, sf, SURF_LUMA_HEIGHT) == 1087 &&
+              TEGRA_VIC_GET(c, sf, SURF_CHROMA_WIDTH) == 959 && TEGRA_VIC_GET(c, sf, SURF_CHROMA_HEIGHT) == 543,
+          "block-linear geometry: luma %llu rows, chroma %llu rows",
+          (unsigned long long)TEGRA_VIC_GET(c, sf, SURF_LUMA_HEIGHT),
+          (unsigned long long)TEGRA_VIC_GET(c, sf, SURF_CHROMA_HEIGHT));
+    CHECK(TEGRA_VIC_GET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_BLK_KIND) == TEGRA_VIC_BLK_PITCH &&
+              TEGRA_VIC_GET(c, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_WIDTH) == 2047,
+          "the output stays pitch linear");
+    CHECK(TEGRA_VIC_GET(c, TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_MATRIX, MATRIX_ENABLE) == 0 &&
+              TEGRA_VIC_GET(c, TEGRA_VIC_OUT_MATRIX, MATRIX_ENABLE) == 0,
+          "the copy passes the samples through");
+    int f;
+    CHECK(methodValue(&job, TEGRA_VIC_M_SURFACE0_SLOT0_CHROMA_U, &f) == (0x10000000u + 1920 * 1088) >> 8 && f,
+          "source chroma");
+    // A pitch-linear source keeps its old setup (no blocks, the 64Bx4 cache, its height as the luma rows).
+    TegraVICImage pitch = image(fourcc, 1920, 1080, 2048, 0x10000000);
+    why = tegra_vic_build(&pitch, &dst, &op, &t, 0x80001000, 0x80002000, &job);
+    CHECK(!why && TEGRA_VIC_GET(job.config, sf, SURF_BLK_KIND) == TEGRA_VIC_BLK_PITCH &&
+              TEGRA_VIC_GET(job.config, sf, SURF_CACHE_WIDTH) == TEGRA_VIC_CACHE_64Bx4 &&
+              TEGRA_VIC_GET(job.config, sf, SURF_LUMA_HEIGHT) == 1079,
+          "pitch-linear source setup changed: %s", why ? why : "");
+    struct {
+        int what;
+        const char *why;
+    } cases[] = {
+        {0, "block-linear source this engine has not proven"},
+        {1, "row pitch the engine cannot address"},
+        {2, "block-linear plane of partial blocks"},
+        {3, "plane extends past its mapping"},
+        {4, "block-linear destination"},
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        TegraVICTraits tt = t;
+        TegraVICImage s = src, d = dst;
+        switch (cases[i].what) {
+        case 0: tt.blockLinearIn = 0; break;
+        case 1: s.pitch[0] = s.pitch[1] = 1952; break;  // 32 bytes past a GOB
+        case 2: s.rows[0] = 1080, s.rows[1] = 540; break;
+        case 3: s.span[1] = 1920 * 540; break;
+        case 4: d.blockLinear = 1; break;
+        }
+        why = tegra_vic_build(&s, &d, &op, &tt, 0x80001000, 0x80002000, &job);
+        CHECK(why && !strcmp(why, cases[i].why), "block-linear case %d: wanted \"%s\", got \"%s\"", cases[i].what,
+              cases[i].why, why ? why : "accepted");
+    }
+}
+
 int main(void)
 {
     layout();
@@ -659,6 +740,7 @@ int main(void)
     idealReference();
     jobs();
     requests();
+    blockLinear();
     if (failures) {
         printf("%d of %d checks failed\n", failures, checks);
         return 1;

@@ -572,9 +572,10 @@ static int decodePicture(H264Decoder *d, const H264Slice *sh, void *token, bool 
     memset(&submit, 0, sizeof(submit));
     fillSetup(d, (nvdec_h264_pic_s *)submit.setup, sh, (uint8_t)picIdx, top, bottom);
     fillSubmit(d, &submit, (uint8_t)picIdx);
-    TegraNVDECWait wait = {.timeout_us = 1000000, .invalidate_count = 2};
+    TegraNVDECWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
     wait.invalidate[0] = (TegraNVDECRange){d->input, 0, sizeof(nvdec_status_s), 0};
-    wait.invalidate[1] = (TegraNVDECRange){d->surface[picIdx], 0, d->surface_bytes, 0};
+    if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
+        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){d->surface[picIdx], 0, d->surface_bytes, 0};
     if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait)) return -2;
     const nvdec_status_s *status = (const nvdec_status_s *)d->input_va;
     d->last_pic_idx = (uint8_t)picIdx;
@@ -583,6 +584,9 @@ static int decodePicture(H264Decoder *d, const H264Slice *sh, void *token, bool 
         .luma = d->surface_va[picIdx],
         .chroma = d->surface_va[picIdx] + d->luma_bytes,
         .pitch = d->pitch,
+        .handle = d->surface[picIdx],
+        .chroma_offset = d->luma_bytes,
+        .rows = d->aligned_height,
         .coded_width = d->width_mbs * 16,
         .coded_height = d->height_mbs * 16,
         .crop_x = d->sps.crop_left,

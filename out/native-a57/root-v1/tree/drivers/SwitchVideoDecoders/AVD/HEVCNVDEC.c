@@ -568,9 +568,10 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     entry(&submit, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8 /* AWAKEN */, 0);
     submit.clean[0] = (TegraNVDECRange){d->input, kTilesOff, (uint32_t)(kBitsOff - kTilesOff + length + 64), 0};
     submit.clean_count = 1;
-    TegraNVDECWait wait = {.invalidate_count = 2};
+    TegraNVDECWait wait = {.invalidate_count = 1};
     wait.invalidate[0] = (TegraNVDECRange){d->input, kStatusOff, sizeof(nvdec_status_s), 0};
-    wait.invalidate[1] = (TegraNVDECRange){e->handle, 0, d->surface_bytes, 0};
+    if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
+        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){e->handle, 0, d->surface_bytes, 0};
     if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait)) return -2;
     const nvdec_status_s *status = (const nvdec_status_s *)(d->input_va + kStatusOff);
     const int error = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
@@ -592,6 +593,9 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
             .luma = e->va,
             .chroma = e->va + d->luma_bytes,
             .pitch = d->pitch,
+            .handle = e->handle,
+            .chroma_offset = d->luma_bytes,
+            .rows = d->rows,
             .coded_width = sps->width,
             .coded_height = sps->height,
             .crop_x = sps->crop_left,

@@ -13,6 +13,9 @@
 //   scaling     a 2:1 downscale of flat patches with the 2-tap filter (patch interiors exact to one step), else 1-tap
 //   pitch       a source whose row pitch is 64- but not 256-byte aligned (as a 720-pixel BGRA row), else 256 is required
 //   recording   the Screen Recording shape in small: BGRA rotated into 420f
+//   block linear a 420f picture in Tegra block linear (NVDEC's output: 16Bx2 sectors, GOB height 2) copied 1:1 into
+//               pitch linear, every sample through to a step; not a gate: without it NVDEC's pictures are copied by
+//               the CPU (TegraVICPresent.h)
 // A failure is one "V3 FAIL" / "V4 FAIL" line with what was seen, and the service is not published.
 #include <IOKit/IOLib.h>
 #include <kern/clock.h>
@@ -635,11 +638,86 @@ bool recording(TegraVICTraits *t, char *line, size_t size)
     }
     return true;
 }
+// --- Block-linear input: NVDEC's pictures -------------------------------------------------------------------------
+// Byte (x, y) of a Tegra block-linear plane `pitch` bytes wide, GOB height 2 (BlockLinear.h's formula: 64Bx8 GOBs of
+// 16Bx2 sectors, two GOBs to a 16-row block, blocks left to right).
+inline size_t tbl(uint32_t pitch, uint32_t x, uint32_t y)
+{
+    return (size_t)(y / 16) * pitch * 16 + (x / 64) * 1024 + ((y % 16) / 8) * 512 + ((x % 64) / 32) * 256 +
+           ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + x % 16;
+}
+inline uint8_t blLuma(uint32_t x, uint32_t y)
+{
+    return (uint8_t)(x * 3 + y * 5 + 7);
+}
+inline uint8_t blChroma(uint32_t x, uint32_t y)  // x: the byte in the CbCr row
+{
+    return (uint8_t)(x * 5 + y * 11 + 50);
+}
+
+// A 128x64 420f picture (pitch 128: two GOBs across; 64 luma and 32 chroma rows: four and two blocks) written in block
+// linear and copied 1:1 into 256-byte pitch-linear rows. Only with the 4:2:0 pass-through proven (the copy the
+// decoders' pictures take); never fails V4.
+void blockLinear(TegraVICTraits *t, char *note, size_t size)
+{
+    constexpr uint32_t kW = 128, kH = 64, kLuma = kW * kH;
+    if (!(t->yccIn & TEGRA_VIC_YCC_IN_COPY) || t->in.cbChannel != t->out.cbChannel) {
+        snprintf(note, size, "block-linear in off (no 4:2:0 pass-through to carry it)");
+        return;
+    }
+    for (uint32_t y = 0; y < kH; y++)
+        for (uint32_t x = 0; x < kW; x++) gSrc.va[tbl(kW, x, y)] = blLuma(x, y);
+    for (uint32_t y = 0; y < kH / 2; y++)
+        for (uint32_t x = 0; x < kW; x++) gSrc.va[kLuma + tbl(kW, x, y)] = blChroma(x, y);
+    TegraVICImage src = {};
+    src.format = tegra_vic_format(TEGRA_VIC_FOURCC('4', '2', '0', 'f'));
+    src.width = kW;
+    src.height = kH;
+    src.pitch[0] = src.pitch[1] = kW;
+    src.rows[0] = kH;
+    src.rows[1] = kH / 2;
+    src.base[0] = gSrc.pa;
+    src.span[0] = kLuma;
+    src.base[1] = gSrc.pa + kLuma;
+    src.span[1] = kLuma / 2;
+    src.standard = TEGRA_VIC_YCC_709;
+    src.blockLinear = 1;
+    src.blockHeightLog2 = 1;
+    TegraVICImage dst = nv12(gDst, kW, kH);
+    TegraVICOp op = copyOp(kW, kH, kW, kH, 0);
+    TegraVICTraits probe = *t;
+    probe.blockLinearIn = 1;
+    const char *why = nullptr;
+    if (run(&src, &dst, &op, &probe, &why)) {
+        snprintf(note, size, "block-linear in off (the job: %s)", why);
+        return;
+    }
+    uint32_t bad = 0, firstX = 0, firstY = 0, got = 0, want = 0;
+    bool chroma = false;
+    for (uint32_t plane = 0; plane < 2; plane++)
+        for (uint32_t y = 0; y < (plane ? kH / 2 : kH); y++)
+            for (uint32_t x = 0; x < kW; x++) {
+                const uint8_t g = gDst.va[(plane ? (size_t)kPitch * kH : 0) + (size_t)y * kPitch + x];
+                const uint8_t w = plane ? blChroma(x, y) : blLuma(x, y);
+                if (near(g, w)) continue;
+                if (!bad++) firstX = x, firstY = y, got = g, want = w, chroma = plane;
+            }
+    if (!bad) {
+        t->blockLinearIn = 1;
+        snprintf(note, size, "block-linear in on (16Bx2, 2 GOBs a block: %u samples exact to a step)", kW * kH * 3 / 2);
+        return;
+    }
+    snprintf(note, size,
+             "block-linear in off: %u of %u samples off, first %s row %u column %u read %u, wrote %u (NVDEC's "
+             "pictures are copied by the CPU)",
+             bad, kW * kH * 3 / 2, chroma ? "CbCr" : "Y", firstY, firstX, got, want);
+    dumpLastJob("block linear");
+}
 }  // namespace
 
 extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
 {
-    char line[300], note[300] = "";
+    char line[300], note[300] = "", blNote[200] = "";
     if (tegra_vic_buffer(64 * 1024, &gSrc) || tegra_vic_buffer(64 * 1024, &gDst) || tegra_vic_buffer(4096, &gPageA) ||
         tegra_vic_buffer(4096, &gPageB)) {
         IOLog("TegraVIC: V3 FAIL no self-test buffers in the arena\n");
@@ -660,6 +738,7 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
     const bool ok = transforms(&t, line, sizeof(line)) && colour(&t, line, sizeof(line), note, sizeof(note)) &&
                     scaling(&t, line, sizeof(line)) && pitch(&t, line, sizeof(line)) &&
                     recording(&t, line, sizeof(line));
+    if (ok) blockLinear(&t, blNote, sizeof(blNote));
     tegra_vic_unlock();
     if (!ok) {
         dumpLastJob("V4");
@@ -673,5 +752,6 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
           t.fillThroughMatrix ? "through the matrix" : "converted here", t.bilinear ? "2-tap" : "1-tap only",
           t.pitchAlign, gJobs, gBusyUs, nowUs() - began);
     IOLog("TegraVIC: V4 %s\n", note);
+    IOLog("TegraVIC: V4 %s\n", blNote);
     return 0;
 }

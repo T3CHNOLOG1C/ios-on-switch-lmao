@@ -139,7 +139,8 @@ int main(void)
     }
 
     Fake fake = {0};
-    const H264Backend backend = {&fake, fakeAlloc, fakeFree, fakeSubmit, fakeWait, fakeDecoded, fakeEmit, fakeEmit};
+    const H264Backend backend = {&fake,       fakeAlloc, fakeFree, fakeSubmit, fakeWait,
+                                 fakeDecoded, fakeEmit,  fakeEmit, NULL};
     H264Decoder *d = h264_decoder_create(&backend);
     uint8_t sps[160], pps[48], au[128];
     const size_t spsSize = h264enc_write_sps(&c, sps, sizeof(sps)), ppsSize = h264enc_write_pps(&c, pps, sizeof(pps));

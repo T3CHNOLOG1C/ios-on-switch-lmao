@@ -16,6 +16,8 @@
 typedef struct {
     const uint8_t *luma, *chroma;  // block-linear NV12 (16Bx2 sectors, GOB height 2), CPU-visible
     uint32_t pitch;                // bytes per row of both planes, a multiple of 64
+    uint32_t handle;  // the NVDEC buffer holding it (TegraNVDECPresent): luma at 0, chroma at chroma_offset
+    uint32_t chroma_offset, rows;  // rows: the planes' block-aligned luma rows (a multiple of 32)
     uint32_t coded_width, coded_height;
     uint32_t crop_x, crop_y, width, height;  // the displayed window
     int32_t poc;
@@ -32,6 +34,9 @@ typedef struct {
     void *(*decoded)(void *ctx, const H264Picture *picture);  // an output item for `emit`, or NULL to drop it
     void (*emit)(void *ctx, void *item);                      // display order
     void (*discard)(void *ctx, void *item);                   // dropped without output (no_output_of_prior_pics)
+    // Whether `decoded` reads the picture on the CPU (else VIC copies it, TegraNVDECPresent): only then does the job's
+    // Wait invalidate the surface. NULL: it does.
+    bool (*cpu_reads)(void *ctx);
 } H264Backend;
 
 typedef struct H264Decoder H264Decoder;

@@ -12,7 +12,7 @@
 
 struct NVDECClient {
     io_connect_t connection;
-    uint32_t selector, codecs;
+    uint32_t selector, codecs, features;
     os_unfair_lock lock;
     struct {
         uint32_t handle;
@@ -79,12 +79,23 @@ NVDECClient *nvdec_open(int *error)
     }
     c->lock = OS_UNFAIR_LOCK_INIT;
     c->codecs = info.codecs;
+    c->features = info.features;
     return c;
 }
 
 uint32_t nvdec_codecs(const NVDECClient *c)
 {
     return c->codecs;
+}
+
+bool nvdec_can_present(const NVDECClient *c)
+{
+    return c->features & TEGRA_NVDEC_FEATURE_PRESENT;
+}
+
+int nvdec_present(NVDECClient *c, const TegraNVDECPresent *present)
+{
+    return call(c, c->selector, TegraNVDECMethodPresent, present, sizeof(*present), NULL, 0);
 }
 
 uint32_t nvdec_codecs_now(NVDECClient *c)

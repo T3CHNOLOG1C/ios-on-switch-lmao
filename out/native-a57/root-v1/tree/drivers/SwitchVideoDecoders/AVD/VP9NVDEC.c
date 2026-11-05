@@ -378,6 +378,9 @@ static void output(VP9Decoder *d, const Surface *s, int status, void *token)
         .luma = s->va,
         .chroma = s->va + s->luma_bytes,
         .pitch = s->pitch,
+        .handle = s->handle,
+        .chroma_offset = s->luma_bytes,
+        .rows = s->rows,
         .coded_width = s->width,
         .coded_height = s->height,
         .width = s->width,
@@ -459,10 +462,11 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
     submit.clean[1] =
         (TegraNVDECRange){d->aux, kTilesOff, clearMaps ? d->seg_off[1] + d->seg_bytes : (uint32_t)kTilesBytes, 0};
     submit.clean_count = 2;
-    TegraNVDECWait wait = {.invalidate_count = 3};
+    TegraNVDECWait wait = {.invalidate_count = 2};
     wait.invalidate[0] = (TegraNVDECRange){d->input, kStatusOff, sizeof(nvdec_status_s), 0};
-    wait.invalidate[1] = (TegraNVDECRange){cur->handle, 0, cur->bytes, 0};
-    wait.invalidate[2] = (TegraNVDECRange){d->aux, d->counters_off, sizeof(nvdec_vp9EntropyCounts_t), 0};
+    wait.invalidate[1] = (TegraNVDECRange){d->aux, d->counters_off, sizeof(nvdec_vp9EntropyCounts_t), 0};
+    if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))  // hidden frames too: show_existing_frame reads them later
+        wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){cur->handle, 0, cur->bytes, 0};
     if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait)) return -2;
     const nvdec_status_s *status = (const nvdec_status_s *)(d->input_va + kStatusOff);
     const int error = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;

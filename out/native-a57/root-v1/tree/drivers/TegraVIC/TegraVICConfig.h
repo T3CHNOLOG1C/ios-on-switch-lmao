@@ -67,6 +67,8 @@ enum {
     TEGRA_VIC_T_A8R8G8B8 = 32,
     TEGRA_VIC_T_Y8___U8V8_N420 = 67,
     TEGRA_VIC_BLK_PITCH = 0,
+    TEGRA_VIC_BLK_16Bx2 = 1,  // NVB0B6_BLK_KIND_GENERIC_16Bx2: Tegra block linear, NVDEC's output layout
+    TEGRA_VIC_CACHE_32Bx8 = 1,
     TEGRA_VIC_CACHE_64Bx4 = 2,
     TEGRA_VIC_FILTER_1TAP = 0,
     TEGRA_VIC_FILTER_2TAP = 1,
@@ -330,6 +332,11 @@ typedef struct {
     uint64_t span[2];        // bytes mapped from base[p] (the checker keeps every access inside)
     uint32_t standard;       // TEGRA_VIC_YCC_* for the 4:2:0 formats
     uint32_t chromaSite;     // IOSurfaceAccelerator siting code 0..6 (0: unspecified)
+    // A source in Tegra block linear (16Bx2 sectors in 64Bx8 GOBs, 2^blockHeightLog2 GOBs a block: NVDEC writes
+    // blockHeightLog2 1), as averne's FFmpeg nvtegra hands NVDEC's pictures to VIC: pitch a whole number of GOBs, each
+    // plane's rows whole blocks, `rows` the plane's aligned height (the engine reads whole blocks). Destinations are
+    // always pitch linear.
+    uint32_t blockLinear, blockHeightLog2;
 } TegraVICImage;
 
 // Reading 4:2:0 (TegraVICTraits.yccIn): to RGB through the slot matrix (within a few steps of the float conversion),
@@ -359,6 +366,7 @@ typedef struct {
     uint32_t pitchAlign;         // smallest pitch alignment proven (64 or 256 bytes)
     uint32_t fillThroughMatrix;  // 1: the background colour goes through the output matrix (else it is converted here)
     uint32_t yccIn;              // what reading a 4:2:0 source was proven to do: TEGRA_VIC_YCC_IN_*
+    uint32_t blockLinearIn;      // 1: a block-linear 4:2:0 source (NVDEC's layout) copies exactly into pitch linear
 } TegraVICTraits;
 
 #define TEGRA_VIC_MAX_METHODS 12
@@ -397,17 +405,21 @@ static inline const char *tegra_vic_check_image(const TegraVICImage *im, const T
         im->height > TEGRA_VIC_MAX_DIM)
         return "surface size outside 2..8192";
     if (f->subsampled && ((im->width | im->height) & 1)) return "4:2:0 surface with an odd size";
+    if (im->blockLinear && (!f->subsampled || im->blockHeightLog2 > 5)) return "block-linear surface VIC does not read";
     for (uint32_t p = 0; p < f->planes; p++) {
         const uint32_t w = f->subsampled && p ? im->width / 2 : im->width;
         const uint32_t h = f->subsampled && p ? im->height / 2 : im->height;
-        const uint32_t align = t && t->pitchAlign ? t->pitchAlign : 256;
+        const uint32_t align = im->blockLinear ? 64 : t && t->pitchAlign ? t->pitchAlign : 256;  // GOBs are 64 wide
         if (im->base[p] & 0xff) return "plane not 256-byte aligned";
         if (im->pitch[p] % align || im->pitch[p] % f->bpe[p]) return "row pitch the engine cannot address";
+        if (im->blockLinear && im->rows[p] % (8u << im->blockHeightLog2)) return "block-linear plane of partial blocks";
         if ((uint64_t)w * f->bpe[p] > im->pitch[p]) return "row pitch shorter than a row";
         if (im->pitch[p] / f->bpe[p] > 16384) return "row pitch over 16384 elements";
         if (im->rows[p] < h) return "plane shorter than the surface";
-        // The engine reads or writes (LumaHeight + 1) rows of (LumaWidth + 1) elements: h rows of pitch bytes.
-        if ((uint64_t)im->pitch[p] * h > im->span[p]) return "plane extends past its mapping";
+        // The engine reads or writes (LumaHeight + 1) rows of (LumaWidth + 1) elements: h rows of pitch bytes (a
+        // block-linear plane: all its rows, whole blocks).
+        if ((uint64_t)im->pitch[p] * (im->blockLinear ? im->rows[p] : h) > im->span[p])
+            return "plane extends past its mapping";
     }
     return 0;
 }
@@ -419,6 +431,7 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
                                           TegraVICJob *job)
 {
     const char *why;
+    if (dst->blockLinear) return "block-linear destination";
     if ((why = tegra_vic_check_image(dst, t, "destination"))) return why;
     if (!op->fill && (why = tegra_vic_check_image(src, t, "source"))) return why;
     if (op->transform > 7) return "transform outside the 8 flips and rotations";
@@ -443,6 +456,7 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     }
     if (dst->format->subsampled && ((op->dstX | op->dstY | op->dstW | op->dstH) & 1))
         return "4:2:0 destination rectangle on odd coordinates";
+    if (!op->fill && src->blockLinear && !t->blockLinearIn) return "block-linear source this engine has not proven";
     if (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB) {
         const int same = dst->format->kind == src->format->kind && src->standard == dst->standard &&
                          t->in.cbChannel == t->out.cbChannel;  // the pass-through tegra_vic_build programs below
@@ -533,14 +547,18 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
         TEGRA_VIC_SET(s, surf, SURF_FORMAT, sf->vic);
         TEGRA_VIC_SET(s, surf, SURF_CHROMA_LOC_HORIZ, sf->subsampled ? tegra_vic_chroma_horiz(src->chromaSite) : 0);
         TEGRA_VIC_SET(s, surf, SURF_CHROMA_LOC_VERT, sf->subsampled ? tegra_vic_chroma_vert(src->chromaSite) : 0);
-        TEGRA_VIC_SET(s, surf, SURF_BLK_KIND, TEGRA_VIC_BLK_PITCH);
-        TEGRA_VIC_SET(s, surf, SURF_CACHE_WIDTH, TEGRA_VIC_CACHE_64Bx4);
+        // Block linear (averne's nvtegra VIC setup for NVDEC's pictures): 16Bx2 kind, the GOBs a block, the 32Bx8
+        // cache, and the planes' heights as their whole blocks.
+        const int bl = src->blockLinear != 0;
+        TEGRA_VIC_SET(s, surf, SURF_BLK_KIND, bl ? TEGRA_VIC_BLK_16Bx2 : TEGRA_VIC_BLK_PITCH);
+        TEGRA_VIC_SET(s, surf, SURF_BLK_HEIGHT, bl ? src->blockHeightLog2 : 0);
+        TEGRA_VIC_SET(s, surf, SURF_CACHE_WIDTH, bl ? TEGRA_VIC_CACHE_32Bx8 : TEGRA_VIC_CACHE_64Bx4);
         TEGRA_VIC_SET(s, surf, SURF_WIDTH, src->width - 1);
         TEGRA_VIC_SET(s, surf, SURF_HEIGHT, src->height - 1);
         TEGRA_VIC_SET(s, surf, SURF_LUMA_WIDTH, src->pitch[0] / sf->bpe[0] - 1);
-        TEGRA_VIC_SET(s, surf, SURF_LUMA_HEIGHT, src->height - 1);
+        TEGRA_VIC_SET(s, surf, SURF_LUMA_HEIGHT, (bl ? src->rows[0] : src->height) - 1);
         TEGRA_VIC_SET(s, surf, SURF_CHROMA_WIDTH, sf->planes > 1 ? src->pitch[1] / sf->bpe[1] - 1 : 16383);
-        TEGRA_VIC_SET(s, surf, SURF_CHROMA_HEIGHT, sf->planes > 1 ? src->height / 2 - 1 : 16383);
+        TEGRA_VIC_SET(s, surf, SURF_CHROMA_HEIGHT, sf->planes > 1 ? (bl ? src->rows[1] : src->height / 2) - 1 : 16383);
 
         // Colour: 4:2:0 in -> RGB through the slot matrix, RGB -> 4:2:0 out through the output matrix. A 4:2:0 to
         // 4:2:0 job of the same range and standard passes the channels through untouched (the identity, measured).

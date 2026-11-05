@@ -17,6 +17,7 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <string.h>
+#include "../TegraVIC/TegraVICPresent.h"
 #include "TegraNVDEC.h"
 #include "nvidia/nvdec_drv.h"
 
@@ -156,8 +157,9 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         {0, sizeof(TegraNVDECClaim)},
         {sizeof(TegraNVDECReport), 0},
         {0, sizeof(TegraNVDECClaim)},
+        {sizeof(TegraNVDECPresent), 0},
     };
-    if (method < TegraNVDECMethodGetInfo || method > TegraNVDECMethodWaitSelfTest || inSize != kSizes[method].in ||
+    if (method < TegraNVDECMethodGetInfo || method > TegraNVDECMethodPresent || inSize != kSizes[method].in ||
         *outSize < kSizes[method].out)
         return kIOReturnBadArgument;
     *outSize = kSizes[method].out;
@@ -198,6 +200,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         info->nvdec_version = 0x20;
         info->codecs = tegra_nvdec_codecs();
         info->max_width = info->max_height = 4096;
+        info->features = tegra_vic_present_ready() ? TEGRA_NVDEC_FEATURE_PRESENT : 0;
         tegra_nvdec_arena_usage(&info->arena_bytes, &info->arena_free);
         break;
     }
@@ -259,6 +262,34 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         TegraNVDECFence *reply = static_cast<TegraNVDECFence *>(out);
         reply->fence = fence;
         reply->reserved = 0;
+        break;
+    }
+    case TegraNVDECMethodPresent: {
+        // Under the connection's lock: the buffer cannot be freed while VIC reads it.
+        const TegraNVDECPresent *p = static_cast<const TegraNVDECPresent *>(in);
+        Buffer *b = find(p->handle);
+        const uint64_t luma = (uint64_t)p->pitch * p->rows, picture = (uint64_t)p->chroma_offset + luma / 2;
+        if (!b) {
+            ret = kIOReturnBadArgument;
+            break;
+        }
+        if (!p->pitch || p->pitch % 64 || !p->rows || p->rows % 32 || p->block_height_log2 != 1 ||
+            p->chroma_offset % 256 || p->chroma_offset < luma || picture > b->block.size ||
+            (uint64_t)p->crop_x + p->width > p->pitch || (uint64_t)p->crop_y + p->height > p->rows) {
+            tegra_nvdec_cache_flush(b->block.va, b->block.size);  // as for any refusal: the caller copies on the CPU
+            ret = kIOReturnBadArgument;
+            break;
+        }
+        const TegraVICPicture vic = {b->block.pa,          picture,   p->pitch,  p->rows,  p->chroma_offset,
+                                     p->block_height_log2, p->crop_x, p->crop_y, p->width, p->height,
+                                     p->surface_id};
+        const char *why = nullptr;
+        const int err = tegra_vic_present(&vic, current_task(), &why);
+        if (err) {
+            // The caller copies the picture on the CPU now: it must read DRAM (what NVDEC wrote), as after Wait.
+            tegra_nvdec_cache_flush(b->block.va, picture);
+            ret = err == -22 ? kIOReturnBadArgument : err == -12 ? kIOReturnNoMemory : kIOReturnUnsupported;
+        }
         break;
     }
     case TegraNVDECMethodClaimSelfTest: {

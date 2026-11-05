@@ -16,6 +16,11 @@ void nvdec_close(NVDECClient *client);
 uint32_t nvdec_codecs(const NVDECClient *client);
 // The same bits read again (a clip-check verdict since the open turns a failed codec's bit off); the open's on error.
 uint32_t nvdec_codecs_now(NVDECClient *client);
+// TegraNVDECInfo.features has TEGRA_NVDEC_FEATURE_PRESENT: VIC copies pictures into IOSurfaces (nvdec_present).
+bool nvdec_can_present(const NVDECClient *client);
+// A decoded picture into an IOSurface of this process (TegraNVDECPresent); 0, or the IOReturn (the picture's range is
+// then invalidated for a CPU copy).
+int nvdec_present(NVDECClient *client, const TegraNVDECPresent *present);
 // The clip check's verdict (TegraNVDECABI.h TEGRA_NVDEC_CHECK_*): claim (the state; *claimed when this connection runs
 // it), report (the owner: VP9, HEVC and HEVC Main 10 verdicts), wait (at most 3 s while another process runs it).
 uint32_t nvdec_check_claim(NVDECClient *client, bool *claimed);
