@@ -10,7 +10,6 @@
 #define IOSW_RAW_BYTES        UINT64_C(34359738368)
 extern int ioswitch_raw_volume_status(const char *, dev_t *, char *, size_t, uint64_t *);
 extern int native_owner_publish_raw_boot_manifest(dev_t, const char *, dev_t, const char *);
-extern void ioswitch_cluster_register_verified_mount(mount_t);
 
 static int native_ioswitch_raw_wait(const char *uuid, dev_t *device, char path[64])
 {
@@ -148,10 +147,16 @@ static int native_ioswitch_raw_cache_prepare(proc_t p, user_addr_t scratch, user
         mount_t cryptex_mount = NULL;
         IOSW_RAW_STEP(i ? "App cryptex attach" : "System cryptex attach",
                       ioswitch_cryptex_attach(i, preboot_device, &image_volume, path, sizeof(path)));
-        IOSW_RAW_STEP(i ? "App cryptex mount" : "System cryptex mount",
-                      native_ioswitch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount));
+        error = native_ioswitch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount);
+        /* r17-launch: a volume on the image's direct read map that does not mount is mounted through DiskImages. */
+        if (error && !ioswitch_cryptex_fallback(i, &image_volume, path, sizeof(path))) {
+            printf("IOSwitch raw boot: %s cryptex mount on its direct read map failed: %d\n", i ? "App" : "System",
+                   error);
+            error = native_ioswitch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount);
+        }
+        IOSW_RAW_STEP(i ? "App cryptex mount" : "System cryptex mount", error);
         native_owner_cryptex_mount[i] = cryptex_mount;
-        ioswitch_cluster_register_verified_mount(cryptex_mount);  // vfs_cluster.c (inert unless the experiment is on)
+        ioswitch_cryptex_mounted(i, cryptex_mount);  // IOSwitchCryptex.cpp: the cluster layer's record, the prefetch
         if (!i) cache_device = image_volume;
     }
     native_owner_cryptex_host = preboot_mount;

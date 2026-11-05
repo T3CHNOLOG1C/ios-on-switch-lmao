@@ -11,13 +11,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Boot-only serialized original DiskImages attach. index0=System,1=App.
- * Fixed root-owned files under /private/preboot/IOSwitch-Staging; exact native
- * RW Preboot UUID/device, backing vnode and retained RO provider are required.
- * Returns BSD errno (0 success), not iosw_block_status. An attachment failure
- * latches for this index: the original hook has no transactional detach API. */
+struct mount;
+/* Boot-only serialized attach of the unchanged images. index0=System,1=App.
+ * Fixed root-owned files under /private/preboot/IOSwitch-Staging on the exact
+ * native RW Preboot device. r17-launch: a read-only block device reading the
+ * image's extents straight from the SD card (the direct read map), or, if that
+ * map is refused (one log line), the original DiskImages hook. Returns BSD
+ * errno (0 success), not iosw_block_status. A failure latches for this index. */
 int ioswitch_cryptex_attach(unsigned index, dev_t expectedPrebootDevice, dev_t *volume, char *devicePath,
                             size_t capacity);
+/* The direct-attached image's volume did not mount: detach the map and attach
+ * the image through DiskImages instead (one log line). EINVAL if it already is. */
+int ioswitch_cryptex_fallback(unsigned index, dev_t *volume, char *devicePath, size_t capacity);
+/* Right after each cryptex mount: registers it with the cluster layer and,
+ * once both are mounted, starts the boot prefetch (replay or recording). */
+void ioswitch_cryptex_mounted(unsigned index, struct mount *mount);
 /* Revalidates the retained binding and unique exact-UUID RO APFS descendant.
  * Returns BSD errno; can be called after mounting to compare actual dev_t. */
 int ioswitch_cryptex_volume_status(unsigned index, dev_t *volume, char *devicePath, size_t capacity);

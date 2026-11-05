@@ -26,6 +26,7 @@
 #include <libkern/c++/OSKext.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/storage/IOBlockStorageDevice.h>
+#include <IOKit/storage/IOMedia.h>
 #include <IOKit/storage/IOStorageDeviceCharacteristics.h>
 #include <IOKit/storage/IOStorageProtocolCharacteristics.h>
 #include <libkern/c++/OSBoolean.h>
@@ -3603,6 +3604,40 @@ extern "C" int ioswitch_block_publish(void)
     device->release();
     gPublishStatus = IOSW_BLOCK_OK;
     return gPublishStatus;
+}
+
+// r17-launch: the SD card's block device for IOSwitchCryptex's direct read map (the cryptex images' extents are read
+// with this device's doAsyncReadWrite, below the APFS container, not through the image files): the controller service the
+// cryptex devices attach to, the window's size and largest read in sectors, and the BSD device of the window's
+// whole-disk IOMedia (what DKIOCGETPHYSICALEXTENT names for an APFS file on it). nullptr until published.
+extern "C" IOBlockStorageDevice *ioswitch_block_device(IOService **controller, dev_t *whole, uint64_t *sectors,
+                                                       uint32_t *maxReadSectors)
+{
+    *controller = nullptr;
+    *whole = NODEV;
+    *sectors = 0;
+    *maxReadSectors = 0;
+    if (!gOwner || !gOwner->device) return nullptr;
+    // device -> IOBlockStorageDriver -> IOMedia (the whole window)
+    if (OSIterator *drivers = gOwner->device->getChildIterator(gIOServicePlane)) {
+        while (IORegistryEntry *driver = OSDynamicCast(IORegistryEntry, drivers->getNextObject())) {
+            OSIterator *medias = driver->getChildIterator(gIOServicePlane);
+            if (!medias) continue;
+            while (IORegistryEntry *media = OSDynamicCast(IORegistryEntry, medias->getNextObject())) {
+                auto *whole_ = OSDynamicCast(OSBoolean, media->getProperty(kIOMediaWholeKey));
+                auto *majorNumber = OSDynamicCast(OSNumber, media->getProperty(kIOBSDMajorKey));
+                auto *minorNumber = OSDynamicCast(OSNumber, media->getProperty(kIOBSDMinorKey));
+                if (whole_ == kOSBooleanTrue && majorNumber && minorNumber && *whole == NODEV)
+                    *whole = makedev(majorNumber->unsigned32BitValue(), minorNumber->unsigned32BitValue());
+            }
+            medias->release();
+        }
+        drivers->release();
+    }
+    *controller = gOwner;
+    *sectors = gOwner->sectorCount;
+    *maxReadSectors = gOwner->maxSectors;
+    return gOwner->device;
 }
 
 // ---- Volume lookup for the raw root/Preboot/cryptex boot path ----
