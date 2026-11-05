@@ -111,6 +111,11 @@ impl RangeAllocator {
         self.free.insert(start, size);
     }
 
+    /// The bytes of `[base, end)`.
+    pub(super) fn len(&self) -> u64 {
+        self.end - self.base
+    }
+
     /// Whether nothing is allocated.
     pub(super) fn is_empty(&self) -> bool {
         self.free.len() == 1 && self.free.get(&self.base) == Some(&(self.end - self.base))
