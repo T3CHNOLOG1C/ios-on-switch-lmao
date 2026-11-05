@@ -2,11 +2,11 @@
 """Make ProgressUI's missing 1x boot logo from the 21H461 OS volume's own 2x one.
 
 backboardd's boot overlay (BKDisplayRenderOverlayAppleLogo -> PUIProgressWindow) shows the Apple logo from
-backboardd's first frame until SpringBoard's UI. At main-screen-scale 1 ProgressUI tries
-apple-logo@1x~ipad.png, apple-logo@1x.png and apple-logo~ipad.png in ProgressUI.framework
-(-[PUIProgressWindow _createImageWithName:]); 21H461 ships only the @2x ones, so it logs "No image found for
-apple-logo" and the screen stays black. This takes apple-logo@2x~ipad.png (600x600, Apple's CgBI form: raw
-deflate, BGRA, premultiplied, Adam7) from the OS volume image and averages each 2x2 block (supersampled, never
+backboardd's first frame until SpringBoard's UI. ProgressUI truncates main-screen-scale to an integer, so at 1.6
+it tries apple-logo@1x~ipad.png, apple-logo@1x.png and apple-logo~ipad.png in ProgressUI.framework
+(-[PUIProgressWindow _createImageWithName:scale:displayHeight:]); 21H461 ships only the @2x ones, so it logs "No
+image found for apple-logo" and the screen stays black. This takes apple-logo@2x~ipad.png (600x600, Apple's CgBI
+form: raw deflate, BGRA, premultiplied, Adam7) from the OS volume image and averages each 2x2 block (supersampled, never
 upscaled) into a standard 300x300 RGBA PNG. The overlay (tree/overlay/manifest.json) shows it in
 ProgressUI.framework; the logo is rotated for landscape by ProgressUI itself (ADT /chosen display-boot-rotation,
 package_raw_boot.py). The output stays under tree/build/ (not in git: it is Apple's artwork).
