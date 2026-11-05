@@ -2,7 +2,7 @@
 action): the corecrypto_kext target's C sources, compiled for the iOS 17 kernel without assembly; the names the plain
 archive shares with XNU are renamed cc14_<name> (namespace.h) in the namespaced archive the kernel links.
 
-usage: corecrypto.py --xcode-env F --source DIR --sdkroot DIR --objroot DIR --out A.a --namespace-header H
+usage: corecrypto.py --xcode-env F --source DIR --sdkroot DIR --kernel-names NAMES.txt --out A.a --namespace-header H
                      --path-root P [--jobs N]
 """
 import argparse
@@ -18,12 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
-from kernel_names import archive_names, kernel_names  # noqa: E402
+from kernel_names import archive_names  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ("xcode-env", "source", "sdkroot", "objroot", "out", "namespace-header", "path-root"):
+    for name in ("xcode-env", "source", "sdkroot", "kernel-names", "out", "namespace-header", "path-root"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 8)
     args = parser.parse_args()
@@ -102,7 +102,9 @@ def main():
             return archive
 
         plain = build("", [])
-        collisions = sorted(archive_names(plain, "-U", env) & kernel_names(Path(here, args.objroot), env))
+        # XNU's global names (xnu_symbols.py's list): the only part of XNU this archive depends on.
+        kernel = {line[2:] for line in Path(args.kernel_names).read_text().splitlines() if line.startswith("g ")}
+        collisions = sorted(archive_names(plain, "-U", env) & kernel)
         if any(not name[1:].isidentifier() for name in collisions):
             sys.exit("A colliding symbol cannot be namespaced with a C identifier")
         header = out / "namespace.h"

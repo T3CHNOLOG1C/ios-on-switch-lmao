@@ -140,7 +140,8 @@ def kernel_driver(
 
     dir defaults to drivers/<name>; srcs to its .cpp files (sorted) followed by its firmware.S, if it has one. Names in
     srcs are relative to dir; anything else is a label ("//bazel/pinned:...", "@xnu//:..."). hdr_deps: header
-    directories (e.g. "drivers/ArmGIC") the driver includes besides its own; None means every one."""
+    directories (e.g. "drivers/ArmGIC") the driver includes besides its own; None means every one. The compile
+    sandbox holds only those: "fatal error: '../X/Y.h' file not found" means drivers/X belongs in hdr_deps."""
     package = native.package_name()
     dir = dir or ("drivers/" + name)
     if srcs == None:

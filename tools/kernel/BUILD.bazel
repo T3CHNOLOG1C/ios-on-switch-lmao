@@ -32,6 +32,7 @@ py_library(
     deps = [":common"] + {
         "corecrypto": [":kernel_names"],
         "libpthread": [":kernel_names"],
+        "xnu_symbols": [":kernel_names"],
         "trust_bundle": [":im4p_lib"],
     }.get(tool, []),
 ) for tool in KERNEL_TOOLS]

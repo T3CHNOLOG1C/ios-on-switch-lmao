@@ -2,6 +2,11 @@
 
 load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "python", "run_tool", "setting", "workspace_root")
 
+# XNU's code (not headers, makefiles, MIG .defs or config files): libdispatch's firehose build never reads it, so an edit
+# inside an XNU function does not rebuild libfirehose_kernel.a. (installhdrs keeps all of XNU: its setup step checks that
+# every source its sanitizer lists name exists.)
+_XNU_CODE = ["c", "cpp", "s", "S", "m", "mm"]
+
 def _kernel_sdkroot_impl(ctx):
     out = ctx.actions.declare_directory(ctx.attr.out)
     log = ctx.actions.declare_file(ctx.attr.out + ".log")
@@ -70,7 +75,7 @@ def _kernel_firehose_impl(ctx):
             "--path-root",
             setting(ctx, "_path_root"),
         ],
-        depset([sdkroot] + ctx.files.libdispatch + ctx.files.xnu),
+        depset([sdkroot] + ctx.files.libdispatch + [f for f in ctx.files.xnu if f.extension not in _XNU_CODE]),
         [out, log],
         "KernelFirehose",
         "Building libfirehose_kernel.a (xcodebuild) into the kernel SDK root",

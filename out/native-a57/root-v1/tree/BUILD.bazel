@@ -188,11 +188,26 @@ tool_output(
 )
 
 # --- Corecrypto, libpthread (Apple sources, built against this XNU) ---------------------------------------------------
+# XNU's symbol names: what corecrypto namespaces against. A change that adds or removes no XNU symbol leaves the list,
+# and so corecrypto's archive, alone.
+tool_output(
+    name = "xnu_symbols",
+    srcs = [":xnu"],
+    outs = ["build/xnu/kernel-names.txt"],
+    args = [
+        "--xcode-env={xcode_env}",
+        "--objroot=$(execpath :xnu)",
+        "--out={out}",
+    ],
+    message = "Listing XNU's symbol names",
+    tool = "xnu_symbols.py",
+)
+
 tool_output(
     name = "corecrypto",
     srcs = [
         ":fakeroot",
-        ":xnu",
+        ":xnu_symbols",
         "@corecrypto//:all",
     ],
     outs = [
@@ -203,7 +218,7 @@ tool_output(
         "--xcode-env={xcode_env}",
         "--source=external/+http_archive+corecrypto",
         "--sdkroot=$(location :fakeroot)",
-        "--objroot=$(execpath :xnu)",
+        "--kernel-names=$(location :xnu_symbols)",
         "--out={out0}",
         "--namespace-header={out1}",
         "--path-root={path_root}",
@@ -321,6 +336,7 @@ kernel_driver(
     name = "TegraI2C",
     hdr_deps = [
         "drivers/ArmGIC",
+        "drivers/TegraAPBDMA",
     ],
 )
 
@@ -369,6 +385,7 @@ kernel_driver(
     name = "SwitchBattery",
     hdr_deps = [
         "drivers/SwitchPower",
+        "drivers/SwitchSuspend",
         "drivers/SwitchUSB",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
@@ -402,6 +419,7 @@ kernel_driver(
 kernel_driver(
     name = "SwitchSuspend",
     hdr_deps = [
+        "drivers/SwitchBattery",
         "drivers/TegraGPIO",
     ],
 )
@@ -655,6 +673,7 @@ kernel_driver(
     name = "TegraNVDEC",
     hdr_deps = [
         "drivers/TegraHost1x",
+        "drivers/TegraVIC",
     ],
     srcs = [
         "TegraNVDEC.cpp",
@@ -1110,6 +1129,7 @@ kernel_driver(
 kernel_driver(
     name = "SwitchTouch",
     hdr_deps = [
+        "drivers/ArmGIC",
         "drivers/NativeMobileDisplay",
         "drivers/SwitchPower",
         "drivers/TegraGPIO",
@@ -1143,6 +1163,7 @@ kernel_driver(
 kernel_driver(
     name = "SwitchMotion",
     hdr_deps = [
+        "drivers/ArmGIC",
         "drivers/NativeMobileDisplay",
         "drivers/SwitchTouch",
         "drivers/TegraGPIO",
@@ -1225,7 +1246,9 @@ kernel_driver(
 # AppleKeyStore stand-in's device key: RFC 3394 wrap under a key derived from the fuse chip ID; the Security Engine probe.
 kernel_driver(
     name = "AKSDeviceKey",
-    hdr_deps = [],
+    hdr_deps = [
+        "drivers/TegraSE",
+    ],
     srcs = [
         "AKSDeviceKey.cpp",
         "TegraSecurityEngine.cpp",

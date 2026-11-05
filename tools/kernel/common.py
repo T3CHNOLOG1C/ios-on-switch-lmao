@@ -46,9 +46,12 @@ def run(command, env, cwd=None, log=None):
     command = [str(c) for c in command]
     result = subprocess.run(command, env=env, cwd=cwd, stdout=log or None, stderr=subprocess.STDOUT if log else None)
     if result.returncode:
+        tail = ""
         if log:
             log.flush()
-        sys.exit("command failed ({}): {}".format(result.returncode, " ".join(command)[:2000]))
+            # The log is an output Bazel deletes when the action fails: its end goes into the failure message.
+            tail = "\n".join(Path(log.name).read_text(errors="replace").splitlines()[-200:])
+        sys.exit("command failed ({}): {}\n{}".format(result.returncode, " ".join(command)[:2000], tail))
 
 
 def execroot():

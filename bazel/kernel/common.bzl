@@ -36,6 +36,7 @@ KERNEL_TOOLS = [
     "trust_bundle",
     "unxz",
     "xnu_build",
+    "xnu_symbols",
 ]
 
 KERNEL_TOOL_ATTRS = {
