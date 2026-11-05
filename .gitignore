@@ -30,3 +30,7 @@ bundles/
 /bazel-*
 /user.bazelrc
 /repro-exec.log.zst
+
+# clangd: its database (`bazel run //tools/lint:compdb`) and its background index.
+/compile_commands.json
+/.cache/

@@ -2,7 +2,7 @@
 # Formatting and linting are rules: //bazel/lint, run through //:format, //:format_test and //:lint_test.
 #
 #   bazel run //tools/lint:py_owners   fail on any tracked .py file no py_binary/py_test/py_library owns
-#   bazel run //tools/lint:compdb      out/native-a57/root-v1/tree/compile_commands.json for clangd
+#   bazel run //tools/lint:compdb      compile_commands.json (repository root) for clangd, from aquery (no build)
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 
