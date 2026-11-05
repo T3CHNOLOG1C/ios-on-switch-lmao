@@ -314,13 +314,15 @@ size_t bcm_awdl_chan_seq(uint8_t *out, size_t size, const struct awdl_chan *seq,
 
 // The series' chip without SDB (BCM4364; the BCM4356 has one radio too): byte 0x0c = 9 and every slot in slice 0
 // (0x4c), slice 1 (0x78) cleared, a slot of slice 0 empty in the trace taking slice 1's.
-size_t bcm_slot_bss(uint8_t *out)
+size_t bcm_slot_bss(uint8_t *out, uint16_t slots44)
 {
     memcpy(out, bcm_trace_slot_bss, BCM_AWDL_SLOT_BSS_LEN);
     out[0x0c] = 9;
     for (unsigned i = 0; i < 16; ++i) {
-        uint8_t *s0 = out + 0x4c + 2 * i, *s1 = out + 0x78 + 2 * i;
-        if (!s0[0] && !s0[1]) memcpy(s0, s1, 2);
+        const uint16_t cs = i == 8 ? 0x1006 : (slots44 >> i) & 1 ? 0xe22a : 0;  // as traced: 6/20, 44 in 36-48/80
+        uint8_t *s0 = out + 0x4c + 2 * i, *s1 = out + 0x78 + 2 * i, *adv = out + 0x1e + 2 * i;
+        s0[0] = adv[0] = (uint8_t)(cs >> 8);
+        s0[1] = adv[1] = (uint8_t)cs;
         s1[0] = s1[1] = 0;
     }
     return BCM_AWDL_SLOT_BSS_LEN;

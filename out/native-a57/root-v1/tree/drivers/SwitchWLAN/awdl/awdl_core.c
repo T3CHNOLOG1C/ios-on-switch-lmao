@@ -102,6 +102,9 @@ static void fw_peer_op(struct awdl_core *c, uint8_t op, const struct awdl_peer *
 }
 static void native_push_sync(struct awdl_core *c);
 static void native_learn_social(struct awdl_core *c, const struct awdl_peer *p, uint64_t now);
+static void native_traffic(struct awdl_core *c, const uint8_t *eth, size_t len, int out, uint64_t now);
+static void log_schedule(struct awdl_core *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void native_resend(struct awdl_core *c, uint16_t old_map);
 
 // ---- timing ------------------------------------------------------------------------------------------------------
 uint16_t awdl_core_aw_seq(const struct awdl_core *c, uint64_t now)
@@ -545,6 +548,7 @@ int awdl_core_output(struct awdl_core *c, const uint8_t *eth, size_t len, uint64
         }
         c->data_seq++;
         c->stats.data_tx++;
+        native_traffic(c, eth, len, 1, now);
         return 0;
     }
     const uint16_t seq = c->data_seq++;
@@ -614,27 +618,45 @@ static struct awdl_chan social5_chan(uint8_t ch)
 {
     return ch == 44 ? (struct awdl_chan){42, 0x80} : (struct awdl_chan){155, 0x80};
 }
-void awdl_schedule(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t infra_mhz, uint8_t social5)
+uint16_t awdl_slot_mask(uint16_t infra_mhz, enum awdl_mode mode)
+{
+    if (mode != AWDL_MODE_TRANSFER) return AWDL_SLOTS_IDLE;
+    return infra_mhz ? AWDL_SLOTS_TRANSFER_INFRA : AWDL_SLOTS_TRANSFER_ALL;
+}
+static void schedule_from(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t mask, struct awdl_chan free_chan,
+                          uint8_t first, uint8_t second)
+{
+    for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i) {
+        if (i == 8)
+            out[i] = (struct awdl_chan){6, 81};
+        else if ((mask >> i) & 1)
+            out[i] = social5_chan(i < 8 ? first : second);
+        else
+            out[i] = free_chan;  // the access point's channel, or empty while unassociated
+    }
+}
+void awdl_schedule(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t infra_mhz, uint8_t social5, enum awdl_mode mode)
 {
     const struct awdl_chan infra = awdl_chan_of_freq(infra_mhz);
     const uint8_t ip = infra.number;
-    uint8_t first = social5, second = social5;  // slots 0-4 and 9-12
+    uint8_t first = social5, second = social5;
     if (ip == 44 || ip == 149)
         first = second = ip;
     else if (social5 != 44 && social5 != 149) {
         first = 149;  // no master heard yet: both 5 GHz social channels, so either kind of peer meets us
         second = 44;
     }
+    schedule_from(out, awdl_slot_mask(infra_mhz, mode), infra, first, second);
+}
+unsigned awdl_slots_away(const struct awdl_chan seq[AWDL_SEQ_SLOTS], uint16_t infra_mhz)
+{
+    const uint8_t ip = awdl_chan_of_freq(infra_mhz).number;
+    unsigned n = 0;
     for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i) {
-        if (i <= 4)
-            out[i] = social5_chan(first);
-        else if (i >= 9 && i <= 12)
-            out[i] = social5_chan(second);
-        else if (i == 8)
-            out[i] = (struct awdl_chan){6, 81};
-        else
-            out[i] = infra;  // free: the access point's channel, or empty while unassociated
+        const uint8_t p = awdl_chan_primary(seq[i]);
+        n += p && p != ip;
     }
+    return n;
 }
 uint16_t awdl_social_map(const struct awdl_chan seq[AWDL_SEQ_SLOTS])
 {
@@ -650,15 +672,16 @@ static uint8_t social5_of(const struct awdl_chan seq[AWDL_SEQ_SLOTS])
     return awdl_chan_primary(seq[0]);
 }
 
-// The sequence the native backend runs: on interface_create v3 the series' slot_bss (44 and 6, the free slots the
-// firmware's for the station), on 7.x our own (awdl_schedule with the infra channel and the learnt social channel).
+// The sequence the native backend runs for its mode: on interface_create v3 the series' slot_bss form (44 and 6, the
+// free slots the firmware's for the station), on 7.x our own (the infra channel and the learnt social channel).
 static void native_build_seq(struct awdl_core *c)
 {
     if (c->created_with == BCM_AWDL_API_IFC_V3) {
-        awdl_schedule(c->cfg.seq, 0, 44);
+        schedule_from(c->cfg.seq, awdl_slot_mask(c->infra_mhz, (enum awdl_mode)c->mode), (struct awdl_chan){0, 0}, 44,
+                      44);
         return;
     }
-    awdl_schedule(c->cfg.seq, c->infra_mhz, c->social5);
+    awdl_schedule(c->cfg.seq, c->infra_mhz, c->social5, (enum awdl_mode)c->mode);
     for (unsigned i = 0; c->seq_no_empty && i < AWDL_SEQ_SLOTS; ++i)
         if (!c->cfg.seq[i].number) c->cfg.seq[i] = c->cfg.seq[0];
 }
@@ -666,7 +689,7 @@ static void native_schedule(struct awdl_core *c)
 {
     uint8_t b[BCM_AWDL_SLOT_BSS_LEN];
     if (c->created_with == BCM_AWDL_API_IFC_V3 && !fw_absent(c, "slot_bss"))
-        fw_set(c, "slot_bss", b, bcm_slot_bss(b));  // the series' slots (44/80 and 6), as traced
+        fw_set(c, "slot_bss", b, bcm_slot_bss(b, awdl_slot_mask(c->infra_mhz, (enum awdl_mode)c->mode)));
     else
         fw_set(c, "awdl_chan_seq", b, bcm_awdl_chan_seq(b, sizeof b, c->cfg.seq, AWDL_SEQ_SLOTS));
 }
@@ -738,13 +761,11 @@ static void native_learn_social(struct awdl_core *c, const struct awdl_peer *p, 
     const uint8_t want = n44 > n149 ? 44 : n149 ? 149 : 0;
     if (!want || want == c->social5 || c->created_with == BCM_AWDL_API_IFC_V3) return;
     c->social5 = want;
+    const uint16_t map = awdl_social_map(c->cfg.seq);
     native_build_seq(c);
-    awdl_log(c, "AWDL: master %02x:%02x:%02x:%02x:%02x:%02x is on channel %u: our 5 GHz social slots follow",
-             p->addr[0], p->addr[1], p->addr[2], p->addr[3], p->addr[4], p->addr[5], want);
-    if (c->nstate == AWDL_N_UP) {
-        native_schedule(c);
-        native_payload(c);  // the data path state's social channel map
-    }
+    log_schedule(c, "master %02x:%02x:%02x:%02x:%02x:%02x on channel %u", p->addr[0], p->addr[1], p->addr[2],
+                 p->addr[3], p->addr[4], p->addr[5], want);
+    native_resend(c, map);  // with the data path state's social channel map
 }
 
 static void native_fail(struct awdl_core *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -831,9 +852,78 @@ static void native_enable(struct awdl_core *c, uint64_t now)
     awdl_log(c, "AWDL: started (firmware AWDL, %s), ifidx %d bsscfg %u, social %u/%u, infra %u MHz",
              bcm_awdl_api_name((enum bcm_awdl_api)c->created_with), (int)c->fw_ifidx, c->fw_bsscfg,
              awdl_chan_primary(c->cfg.seq[0]), awdl_chan_primary(c->cfg.seq[9]), c->infra_mhz);
+    log_schedule(c, "%s", "start");
 }
 
-// 500 ms and 5 s after the start (the series' aftx_work and settle_work).
+// One line per schedule: the mode, why, and how many slots leave the access point's channel.
+static void log_schedule(struct awdl_core *c, const char *fmt, ...)
+{
+    char why[96];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(why, sizeof why, fmt, ap);
+    va_end(ap);
+    const char *mode = c->mode == AWDL_MODE_TRANSFER ? "transfer" : "idle";
+    const unsigned n = awdl_slots_away(c->cfg.seq, c->infra_mhz);
+    if (c->infra_mhz)
+        awdl_log(c, "AWDL: schedule %s (%s): %u of 16 slots away from infra (%u MHz)", mode, why, n, c->infra_mhz);
+    else
+        awdl_log(c, "AWDL: schedule %s (%s): AWDL in %u of 16 slots, not associated", mode, why, n);
+}
+// The sequence changed (mode, infra channel): to the firmware, with the payload when its social map moved.
+static void native_resend(struct awdl_core *c, uint16_t old_map)
+{
+    if (c->nstate != AWDL_N_UP) return;
+    native_schedule(c);
+    if (awdl_social_map(c->cfg.seq) != old_map) native_payload(c);
+}
+static void native_set_mode(struct awdl_core *c, enum awdl_mode mode, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static void native_set_mode(struct awdl_core *c, enum awdl_mode mode, const char *fmt, ...)
+{
+    if (c->mode == (uint8_t)mode) return;
+    char why[96];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(why, sizeof why, fmt, ap);
+    va_end(ap);
+    const uint16_t map = awdl_social_map(c->cfg.seq);
+    c->mode = (uint8_t)mode;
+    c->stats.mode_changes++;
+    native_build_seq(c);
+    log_schedule(c, "%s", why);
+    native_resend(c, map);
+}
+// AirDrop's data (TLS over TCP, unicast) on awdl0: transfer mode now, held for AWDL_TRANSFER_HOLD_US after it.
+static int unicast_tcp(const uint8_t *eth, size_t len)
+{
+    if (len < 14 + 20 || (eth[0] & 1)) return 0;
+    const uint16_t type = (uint16_t)((eth[12] << 8) | eth[13]);
+    if (type == 0x0800) return (eth[14] >> 4) == 4 && eth[14 + 9] == 6;
+    if (type == 0x86dd) return len >= 14 + 40 && (eth[14] >> 4) == 6 && eth[14 + 6] == 6;
+    return 0;
+}
+static void native_traffic(struct awdl_core *c, const uint8_t *eth, size_t len, int out, uint64_t now)
+{
+    if (!unicast_tcp(eth, len)) return;
+    c->transfer_until = now + AWDL_TRANSFER_HOLD_US;
+    if (c->mode == AWDL_MODE_TRANSFER) return;
+    const uint8_t *p = out ? eth : eth + 6;
+    native_set_mode(c, AWDL_MODE_TRANSFER, "TCP %s %02x:%02x:%02x:%02x:%02x:%02x", out ? "to" : "from", p[0], p[1],
+                    p[2], p[3], p[4], p[5]);
+}
+void awdl_core_traffic_registered(struct awdl_core *c, const char *who, uint64_t now)
+{
+    if (!native(c) || !c->running) return;
+    c->transfer_until = now + AWDL_TRANSFER_HOLD_US;  // a session start: the data that follows keeps it
+    native_set_mode(c, AWDL_MODE_TRANSFER, "wifip2pd traffic registration %.40s", who ? who : "");
+}
+enum awdl_mode awdl_core_mode(const struct awdl_core *c)
+{
+    return (enum awdl_mode)c->mode;
+}
+
+// 500 ms and 5 s after the start (the series' aftx_work and settle_work); transfer mode's end.
 static void native_deadlines(struct awdl_core *c, uint64_t now)
 {
     if (c->nstate == AWDL_N_CREATING && c->create_deadline && now >= c->create_deadline) {
@@ -854,10 +944,13 @@ static void native_deadlines(struct awdl_core *c, uint64_t now)
         uint8_t d[BCM_AWDL_PSF_DWELL_LEN];
         fw_set(c, "awdl_psf_dwell", d, bcm_awdl_psf_dwell(d, 0));
     }
+    if (c->mode == AWDL_MODE_TRANSFER && now >= c->transfer_until)
+        native_set_mode(c, AWDL_MODE_IDLE, "no AirDrop data for %u s", AWDL_TRANSFER_HOLD_US / 1000000);
 }
 static uint64_t native_next(const struct awdl_core *c)
 {
     uint64_t t = c->next_slot;
+    if (c->nstate == AWDL_N_UP && c->mode == AWDL_MODE_TRANSFER && c->transfer_until < t) t = c->transfer_until;
     if (c->nstate == AWDL_N_CREATING && c->create_deadline && c->create_deadline < t) t = c->create_deadline;
     if (c->aftx_at && c->aftx_at < t) t = c->aftx_at;
     if (c->settle_at && c->settle_at < t) t = c->settle_at;
@@ -877,7 +970,9 @@ static void native_start(struct awdl_core *c, uint64_t now)
     c->adv.root_metric = c->adv.self_metric = c->cfg.self_metric;
     c->adv.hops = 0;
     c->pushed_role = 0xff;
-    awdl_schedule(c->cfg.seq, c->infra_mhz, 0);
+    c->mode = AWDL_MODE_IDLE;  // discoverable with the least presence until AirDrop data flows
+    c->transfer_until = 0;
+    awdl_schedule(c->cfg.seq, c->infra_mhz, 0, AWDL_MODE_IDLE);
     if (c->cfg.fw_api != BCM_AWDL_API_IFC_V3 && c->cfg.fw_api != BCM_AWDL_API_AWDL_IF) {
         native_fail(c, "%s", "the firmware has neither interface_create v3 nor awdl_if (see the AWDL probe lines)");
         return;
@@ -944,13 +1039,14 @@ void awdl_core_set_infra(struct awdl_core *c, uint16_t infra_mhz, uint64_t now)
     (void)now;
     if (infra_mhz == c->infra_mhz) return;
     c->infra_mhz = infra_mhz;
-    if (!native(c) || !c->running || c->created_with == BCM_AWDL_API_IFC_V3) return;  // v3: the firmware's own
+    if (!native(c) || !c->running) return;
+    const uint16_t map = awdl_social_map(c->cfg.seq);
+    struct awdl_chan was[AWDL_SEQ_SLOTS];
+    memcpy(was, c->cfg.seq, sizeof was);
     native_build_seq(c);
-    awdl_log(c, "AWDL: infra %u MHz: free slots %s", infra_mhz, infra_mhz ? "on the access point's channel" : "empty");
-    if (c->nstate == AWDL_N_UP) {
-        native_schedule(c);
-        native_payload(c);
-    }
+    if (!memcmp(was, c->cfg.seq, sizeof was)) return;  // (v3: only association on/off changes its slots)
+    log_schedule(c, "%s", infra_mhz ? "infra channel changed" : "infra lost");
+    native_resend(c, map);
 }
 
 int awdl_core_fw_ifidx(const struct awdl_core *c)
@@ -1194,6 +1290,7 @@ void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *frame, size_t len, uin
     if (p) p->last_seen = now;
     c->stats.data_rx++;
     if (c->host.deliver) c->host.deliver(c->host.ctx, c->scratch, n);
+    native_traffic(c, c->scratch, n, 0, now);
 }
 
 // ---- TSF clock ----------------------------------------------------------------------------------------------------------

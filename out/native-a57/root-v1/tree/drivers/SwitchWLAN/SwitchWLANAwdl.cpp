@@ -432,10 +432,11 @@ void statsLine()
         OS_LOG_DEFAULT,
         "SwitchWLAN: AWDL stats: ifidx %d, fw events %u (unknown %u), AWs %u, frames %u parsed %u bad %u, fw role %d "
         "(%u), peers +%u -%u, syncs %u, iovars %u refused %u skipped %u, data rx %u tx %u drop %u refused %u "
-        "not-AWDL %u",
+        "not-AWDL %u, mode changes %u",
         awdl_core_fw_ifidx(gCore), st->fw_events, st->fw_unknown, st->aws, st->fw_frames, st->af_rx, st->af_bad,
         st->fw_role, st->roles, st->peer_adds, st->peer_dels, st->syncs_pushed, st->iovars, st->iovar_refused,
-        st->iovar_skipped, st->data_rx, st->data_tx, st->data_drop, st->tx_refused, st->data_not_awdl);
+        st->iovar_skipped, st->data_rx, st->data_tx, st->data_drop, st->tx_refused, st->data_not_awdl,
+        st->mode_changes);
 }
 void timerFired(thread_call_param_t, thread_call_param_t)
 {
@@ -554,11 +555,13 @@ extern "C" int switch_wlan_awdl_stat(char *buf, size_t size)
     if (gCore && awdl_core_running(gCore)) {
         const awdl_stats *st = awdl_core_stats(gCore);
         const enum awdl_role role = awdl_core_role(gCore);
-        n = snprintf(buf, size, "; AWDL running %s peers +%u-%u af_rx %u aws %u fw_ev %u",
+        n = snprintf(buf, size, "; AWDL running %s %s, %u/16 slots away, peers +%u-%u af_rx %u aws %u fw_ev %u",
                      role == AWDL_ROLE_ROOT       ? "root"
                      : role == AWDL_ROLE_FOLLOWER ? "follower"
                                                   : "off",
-                     st->peer_adds, st->peer_dels, st->af_rx, st->aws, st->fw_events);
+                     awdl_core_mode(gCore) == AWDL_MODE_TRANSFER ? "transfer" : "idle",
+                     awdl_slots_away(awdl_core_sequence(gCore), swlan_awdl_infra_freq()), st->peer_adds, st->peer_dels,
+                     st->af_rx, st->aws, st->fw_events);
     }
     IOLockUnlock(gLock);
     return n < 0 ? 0 : n;

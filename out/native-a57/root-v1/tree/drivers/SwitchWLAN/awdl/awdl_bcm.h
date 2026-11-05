@@ -195,8 +195,9 @@ struct awdl_chan;
 size_t bcm_awdl_chan_seq(uint8_t *out, size_t size, const struct awdl_chan *seq, unsigned slots);
 // slot_bss (interface_create v3 only): the series' bytes for a chip without SDB (byte 0x0c = 9, every slot in slice 0,
 // as it sends the BCM4364). Its slots name chanspecs high byte first (0xe22a = 44 in its 80 MHz block, 0x1006 = 6/20)
-// and leave the infra slots empty; the firmware fills them with the station's channel.
-size_t bcm_slot_bss(uint8_t *out);
+// and leave the infra slots empty; the firmware fills them with the station's channel. `slots44`: bit n puts 44 in
+// slot n (slot 8 is always 6), in slice 0 and in the advertised sequence at 0x1e; AWDL_SLOTS_TRACE gives the trace.
+size_t bcm_slot_bss(uint8_t *out, uint16_t slots44);
 // The d11ac chanspec of an AWDL channel (0 for an empty slot): 2.4 GHz 20 MHz, 5 GHz 20 or 80 MHz.
 uint16_t bcm_chanspec_of(struct awdl_chan c);
 // The primary channel number of a Broadcom chanspec (bits 0-7 for 20 MHz; the primary inside a 40/80 MHz block).

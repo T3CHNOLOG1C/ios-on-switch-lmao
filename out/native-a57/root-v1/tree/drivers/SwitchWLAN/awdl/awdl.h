@@ -219,7 +219,7 @@ struct awdl_stats {
     uint32_t af_rx, af_bad, af_tx, psf_tx, mif_tx, data_rx, data_tx, data_bad, data_drop, tx_refused, resyncs;
     int32_t last_sync_error_us;
     uint32_t fw_events, fw_unknown, iovars, iovar_refused, peer_adds, peer_dels, aws;
-    uint32_t iovar_skipped, data_not_awdl, roles, syncs_pushed, fw_frames;
+    uint32_t iovar_skipped, data_not_awdl, roles, syncs_pushed, fw_frames, mode_changes;
     int32_t fw_role;  // the firmware's last WLC_E_AWDL_ROLE status (-1 none yet)
 };
 
@@ -255,13 +255,34 @@ void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *eth, size_t len, uint6
 void awdl_core_set_infra(struct awdl_core *c, uint16_t infra_mhz, uint64_t now);
 // The AWDL interface's firmware index once its WLC_E_IF arrived, -1 before.
 int awdl_core_fw_ifidx(const struct awdl_core *c);
-// The 16-slot schedule the native backend runs, after the single-radio sequence macOS uses (the series' trace: the
-// 5 GHz social channel in slots 0-4 and 9-12, channel 6 in slot 8, slots 5-7 and 13-15 free). Free slots carry the
-// infra channel while associated (the radio stays with the access point there) and are empty otherwise. The 5 GHz
-// social channel is the infra channel when that is 44 or 149, else `social5` (44 or 149, learnt from the master's
-// sequence), else both until a master is heard (149 in slots 0-4, 44 in 9-12). 5 GHz social slots are 80 MHz
-// ({42, 0x80}, {155, 0x80}); the infra channel is 20 MHz with its global operating class.
-void awdl_schedule(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t infra_mhz, uint8_t social5);
+// The native schedule follows the AWDL states macOS was measured in (Stute, Kreitschmann, Hollick, MobiCom 2018,
+// table 2; p the 5 GHz social channel, s channel 6, i the access point's):
+//   idle (enabled, discoverable, browsing, no transfer): "Low Power", p in slots 0, 9, 10 and s in 8, the least any
+//     Apple device was seen to keep; the other 12 slots are the access point's;
+//   transfer while associated: "Data+Infra 75 %", p in 0-5 and 9-13, s in 8; the access point keeps 6, 7, 14, 15
+//     (the paper: "at least 25 % of the time is reserved for the AP connection if the node is connected to an AP");
+//   transfer while unassociated: "Data", every slot AWDL's.
+// Bit n: slot n carries the 5 GHz social channel (slot 8 always carries channel 6).
+enum awdl_mode { AWDL_MODE_IDLE = 0, AWDL_MODE_TRANSFER = 1 };
+#define AWDL_SLOTS_IDLE           0x0601u  // 0, 9, 10
+#define AWDL_SLOTS_TRANSFER_INFRA 0x3e3fu  // 0-5, 9-13
+#define AWDL_SLOTS_TRANSFER_ALL   0xfeffu  // all but 8
+#define AWDL_SLOTS_TRACE 0x1e1fu  // the brcmfmac series' slot_bss: 0-4, 9-12 (macOS 15, AirDrop open in Finder)
+uint16_t awdl_slot_mask(uint16_t infra_mhz, enum awdl_mode mode);
+// The 16-slot schedule for a mode: the mask's slots on the 5 GHz social channel, slot 8 on channel 6, the rest on the
+// infra channel while associated (the radio stays with the access point there) and empty otherwise. The 5 GHz social
+// channel is the infra channel when that is 44 or 149 (then only slot 8 leaves it), else `social5` (44 or 149, learnt
+// from the master's sequence), else both until a master is heard (149 before slot 8, 44 after). 5 GHz social slots
+// are 80 MHz ({42, 0x80}, {155, 0x80}); the infra channel is 20 MHz with its global operating class.
+void awdl_schedule(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t infra_mhz, uint8_t social5, enum awdl_mode mode);
+// Slots of a schedule away from the infra channel (unassociated: the slots AWDL uses at all).
+unsigned awdl_slots_away(const struct awdl_chan seq[AWDL_SEQ_SLOTS], uint16_t infra_mhz);
+// Transfer mode starts on the first unicast TCP frame on awdl0 (AirDrop's TLS), either way, or when wifip2pd
+// registers AWDL traffic (AWDL_PEER_TRAFFIC_REGISTRATION), and ends this long after the last such frame (a deadline
+// each frame moves, not a poll). One log line per change, with the slots away from infra.
+#define AWDL_TRANSFER_HOLD_US 3000000u
+void awdl_core_traffic_registered(struct awdl_core *c, const char *who, uint64_t now);
+enum awdl_mode awdl_core_mode(const struct awdl_core *c);
 // The data path state TLV's social channel map for a schedule: 0x1 channel 6, 0x2 channel 44, 0x4 channel 149.
 uint16_t awdl_social_map(const struct awdl_chan seq[AWDL_SEQ_SLOTS]);
 // The TLVs our MIFs carry beyond sync and election (service params, HT caps, data path state, arpa, version): the

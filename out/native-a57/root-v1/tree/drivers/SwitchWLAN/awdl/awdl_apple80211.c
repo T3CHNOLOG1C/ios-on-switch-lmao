@@ -236,11 +236,13 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             struct a80211_awdl_peer_traffic_registration t;
             memset(&t, 0, sizeof t);
             memcpy(&t, data, in < sizeof t ? in : sizeof t);
-            if (t.active)
-                f->traffic_registrations++;
-            else if (f->traffic_registrations)
-                f->traffic_registrations--;
             t.unique_id[sizeof t.unique_id - 1] = 0;
+            if (t.active) {
+                f->traffic_registrations++;
+                awdl_core_traffic_registered(f->core, (const char *)t.unique_id, now);  // a session starts
+            } else if (f->traffic_registrations) {
+                f->traffic_registrations--;
+            }
             flog(f, "AWDL: traffic %s for %02x:%02x:%02x:%02x:%02x:%02x (%.40s), %u active",
                  t.active ? "registered" : "cleared", t.address[0], t.address[1], t.address[2], t.address[3],
                  t.address[4], t.address[5], (const char *)t.unique_id, f->traffic_registrations);

@@ -70,9 +70,11 @@ struct awdl_core {
     uint8_t created_with;  // enum bcm_awdl_api used for the interface being made / made
     uint8_t payload_u16;   // awdl_payload's length form (u16: interface_create v3; u32: 7.x), switched once on refusal
     uint8_t payload_switched;
-    uint8_t seq_no_empty;  // the 7.x awdl_chan_seq refused empty slots once: free slots take slot 0's channel
-    uint8_t social5;       // 5 GHz social channel learnt from the master's sequence (44 or 149), 0 before
-    int16_t fw_ifidx;      // the AWDL interface's firmware index (WLC_E_IF add), -1 before
+    uint8_t seq_no_empty;     // the 7.x awdl_chan_seq refused empty slots once: free slots take slot 0's channel
+    uint8_t mode;             // enum awdl_mode
+    uint64_t transfer_until;  // transfer mode ends here unless more data comes
+    uint8_t social5;          // 5 GHz social channel learnt from the master's sequence (44 or 149), 0 before
+    int16_t fw_ifidx;         // the AWDL interface's firmware index (WLC_E_IF add), -1 before
     uint8_t fw_bsscfg;
     uint16_t infra_mhz;
     uint64_t create_deadline, aftx_at, settle_at;  // 0: not pending

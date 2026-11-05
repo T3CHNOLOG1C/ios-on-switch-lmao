@@ -235,8 +235,15 @@ static void test_encoders(void)
         if (!(s0[0] | s0[1])) memcpy(s0, s1, 2);
         memset(s1, 0, 2);
     }
-    NCHECK(bcm_slot_bss(b) == 158 && !memcmp(b, want, 158));
+    NCHECK(bcm_slot_bss(b, AWDL_SLOTS_TRACE) == 158 && !memcmp(b, want, 158));
     NCHECK(((b[0x4c + 16] << 8) | b[0x4d + 16]) == cs6 && zero(b + 0x78, 32));
+    // another mask (idle: 44 in 0, 9, 10): those slots in slice 0 and in the advertised sequence, 6 in 8, no others
+    NCHECK(bcm_slot_bss(b, AWDL_SLOTS_IDLE) == 158 && !memcmp(b, want, 0x1e) &&
+           !memcmp(b + 0x3e, want + 0x3e, 0x4c - 0x3e));
+    for (int i = 0; i < 16; ++i) {
+        const uint16_t w = i == 8 ? cs6 : (i == 0 || i == 9 || i == 10) ? cs44 : 0;
+        NCHECK(((b[0x4c + 2 * i] << 8) | b[0x4d + 2 * i]) == w && ((b[0x1e + 2 * i] << 8) | b[0x1f + 2 * i]) == w);
+    }
 
     // the data path's AWDL header (the series' brcmf_awdl_encap/decap)
     uint8_t eth[18] = {0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x02, 0xaa, 0xbb,
@@ -329,27 +336,45 @@ static void test_schedule(void)
     NCHECK(c.number == 0 && awdl_chan_freq(c) == 0);
 
     struct awdl_chan s[16];
-    // unassociated, no master yet: 149 in slots 0-4, 44 in 9-12, 6 in 8, the rest empty (macOS's pattern)
-    awdl_schedule(s, 0, 0);
+    // idle, unassociated, no master yet: Stute et al.'s "Low Power" (149 in slot 0, 6 in 8, 44 in 9-10), the rest empty
+    awdl_schedule(s, 0, 0, AWDL_MODE_IDLE);
     for (int i = 0; i < 16; ++i) {
         const uint8_t p = awdl_chan_primary(s[i]);
-        NCHECK(i <= 4                ? p == 149 && s[i].number == 155 && s[i].opclass == 0x80
-               : (i >= 9 && i <= 12) ? p == 44 && s[i].number == 42 && s[i].opclass == 0x80
+        NCHECK(i == 0                ? p == 149 && s[i].number == 155 && s[i].opclass == 0x80
+               : (i == 9 || i == 10) ? p == 44 && s[i].number == 42 && s[i].opclass == 0x80
                : i == 8              ? p == 6 && s[i].opclass == 81
                                      : p == 0);
     }
-    NCHECK(awdl_social_map(s) == 0x7);
-    // infra on channel 6 (a social channel): it does NOT take every slot; the 5 GHz social slots stay
-    awdl_schedule(s, 2437, 0);
-    NCHECK(count_primary(s, 6) == 7 && count_primary(s, 149) == 5 && count_primary(s, 44) == 4);
-    // infra on 149 (5 GHz social): one channel for AWDL and the access point, apart from slot 8
-    awdl_schedule(s, 5745, 0);
-    NCHECK(count_primary(s, 149) == 15 && count_primary(s, 6) == 1);
-    NCHECK(s[0].number == 155 && s[0].opclass == 0x80 && s[5].number == 149 && s[5].opclass == 0x7c);
-    // infra on 36, the master on 44: 5 GHz social slots on 44, free slots on 36 (opclass 115)
-    awdl_schedule(s, 5180, 44);
-    NCHECK(count_primary(s, 44) == 9 && count_primary(s, 36) == 6 && s[13].opclass == 115);
+    NCHECK(awdl_social_map(s) == 0x7 && awdl_slots_away(s, 0) == 4);
+    NCHECK(awdl_slot_mask(2437, AWDL_MODE_IDLE) == AWDL_SLOTS_IDLE &&
+           awdl_slot_mask(0, AWDL_MODE_IDLE) == AWDL_SLOTS_IDLE);
+    // idle on channel 6: 3 of 16 slots away (0, 9, 10); the access point has the other 13
+    awdl_schedule(s, 2437, 0, AWDL_MODE_IDLE);
+    NCHECK(awdl_slots_away(s, 2437) == 3 && count_primary(s, 6) == 13);
+    // transfer on channel 6 ("Data+Infra 75 %"): 11 away; the access point keeps 6, 7, 14, 15 and 8 (channel 6)
+    awdl_schedule(s, 2437, 149, AWDL_MODE_TRANSFER);
+    NCHECK(awdl_slots_away(s, 2437) == 11 && count_primary(s, 149) == 11 && count_primary(s, 6) == 5);
+    NCHECK(awdl_chan_primary(s[6]) == 6 && awdl_chan_primary(s[7]) == 6 && awdl_chan_primary(s[14]) == 6 &&
+           awdl_chan_primary(s[15]) == 6 && awdl_chan_primary(s[5]) == 149 && awdl_chan_primary(s[13]) == 149);
+    // transfer on 36 with the master on 44: 12 away, the access point's 4 slots on 36 (opclass 115)
+    awdl_schedule(s, 5180, 44, AWDL_MODE_TRANSFER);
+    NCHECK(awdl_slots_away(s, 5180) == 12 && count_primary(s, 44) == 11 && count_primary(s, 36) == 4 &&
+           s[14].opclass == 115);
     NCHECK(awdl_social_map(s) == 0x3);
+    // idle on 36: 4 away (0, 8, 9, 10)
+    awdl_schedule(s, 5180, 44, AWDL_MODE_IDLE);
+    NCHECK(awdl_slots_away(s, 5180) == 4 && count_primary(s, 36) == 12);
+    // transfer unassociated ("Data"): every slot
+    awdl_schedule(s, 0, 149, AWDL_MODE_TRANSFER);
+    NCHECK(awdl_slots_away(s, 0) == 16 && count_primary(s, 149) == 15 && count_primary(s, 6) == 1);
+    // infra on 149 (5 GHz social): only slot 8 leaves it, in either mode
+    awdl_schedule(s, 5745, 0, AWDL_MODE_IDLE);
+    NCHECK(awdl_slots_away(s, 5745) == 1 && count_primary(s, 149) == 15);
+    NCHECK(s[0].number == 155 && s[0].opclass == 0x80 && s[5].number == 149 && s[5].opclass == 0x7c);
+    awdl_schedule(s, 5745, 0, AWDL_MODE_TRANSFER);
+    NCHECK(awdl_slots_away(s, 5745) == 1);
+    awdl_schedule(s, 5220, 0, AWDL_MODE_TRANSFER);  // infra on 44 likewise
+    NCHECK(awdl_slots_away(s, 5220) == 1 && count_primary(s, 44) == 15);
 }
 
 // ---- end to end -----------------------------------------------------------------------------------------------------------
@@ -448,7 +473,7 @@ static void test_flow_ifc_v3(void)
     NCHECK(!memcmp(find_call("awdl_sync_params", 0)->buf, bcm_trace_sync_params, 36));
     NCHECK(!memcmp(find_call("awdl_psf_dwell", 0)->buf, bcm_trace_psf_dwell, 8));
     uint8_t sb[158];
-    bcm_slot_bss(sb);
+    bcm_slot_bss(sb, AWDL_SLOTS_IDLE);  // AWDL starts idle: the least presence
     NCHECK(find_call("slot_bss", 0)->len == 158 && !memcmp(find_call("slot_bss", 1)->buf, sb, 158));
     // we are our own master until the election hears better: role master with our address
     const struct fw_call *om = find_call("awdl_opmode", 0);
@@ -473,7 +498,8 @@ static void test_flow_ifc_v3(void)
         NCHECK((a.present & (1u << AWDL_TLV_HT_CAPS)) && a.ht_mcs[0] == 0xff && a.ht_mcs[1] == 0xff);
     }
     // the sequence awdl0 reports is the one the firmware runs: 44 and 6, free slots empty
-    NCHECK(count_primary(awdl_core_sequence(core), 44) == 9 && count_primary(awdl_core_sequence(core), 6) == 1);
+    NCHECK(count_primary(awdl_core_sequence(core), 44) == 3 && count_primary(awdl_core_sequence(core), 6) == 1 &&
+           awdl_core_mode(core) == AWDL_MODE_IDLE);
     // an infra change does not touch the v3 firmware's slots (it places the station itself)
     int before = ncalls;
     awdl_core_set_infra(core, 5180, 1200000);
@@ -537,6 +563,22 @@ static void test_flow_ifc_v3(void)
     eth[0] = 0x02;
     eth[5] = 0x99;
     NCHECK(awdl_core_output(core, eth, sizeof eth, 2200000) < 0 && eths == 3);  // a stranger: no route
+    NCHECK(awdl_core_mode(core) == AWDL_MODE_IDLE);                             // none of these was TCP: still idle
+    // AirDrop's first TCP segment to the phone: transfer mode, slot_bss with "Data+Infra" (associated on 36)
+    memcpy(eth, phone_addr, 6);
+    eth[14] = 0x60;  // IPv6
+    eth[20] = 6;     // next header TCP
+    before = ncalls;
+    NCHECK(awdl_core_output(core, eth, sizeof eth, 2300000) == 0 && awdl_core_mode(core) == AWDL_MODE_TRANSFER);
+    {
+        uint8_t want_sb[158];
+        bcm_slot_bss(want_sb, AWDL_SLOTS_TRANSFER_INFRA);
+        const struct fw_call *sbt = NULL;
+        for (int i = before; i < ncalls; ++i)
+            if (!strcmp(calls[i].name, "slot_bss")) sbt = &calls[i];
+        NCHECK(sbt && !memcmp(sbt->buf, want_sb, 158) && awdl_core_stats(core)->mode_changes == 1);
+    }
+    eth[14] = eth[20] = 0;
     // data in: the AWDL header removed before awdl0 sees it; it keeps the phone alive
     uint8_t in[64] = {0}, enc[96];
     memcpy(in, me, 6);
@@ -561,6 +603,7 @@ static void test_flow_ifc_v3(void)
         if (!strcmp(calls[i].name, "awdl_peer_op")) del = &calls[i];
     NCHECK(del && del->len == 9 && del->buf[1] == BCM_AWDL_PEER_OP_DEL);
     NCHECK(awdl_core_role(core) == AWDL_ROLE_ROOT);
+    NCHECK(awdl_core_mode(core) == AWDL_MODE_IDLE && awdl_core_stats(core)->mode_changes == 2);  // 3 s after 2.3 s
     // the 5 s step has passed meanwhile: awdl_config 0x73, psf_dwell zero
     const struct fw_call *cfg2 = find_call("awdl_config", 1), *dw2 = find_call("awdl_psf_dwell", 1);
     NCHECK(cfg2 && rd32(cfg2->buf) == 0x73 && dw2 && zero(dw2->buf, 8));
@@ -620,17 +663,17 @@ static void test_flow_awdl_if(void)
     NCHECK(cfg->len == 28 && rd32(cfg->buf) == 1 && cfg->buf[4] == 149 && cfg->buf[20] == 2);
     const struct fw_call *pl = find_call("awdl_payload", 0);
     NCHECK(rd32(pl->buf) + 4 == pl->len);  // 7.x: a u32 length
-    // the sequence: 149/80 in 0-4, 44/80 in 9-12, 6 in 8, and the access point's channel 6 in the free slots
+    // the idle sequence: 149/80 in 0, 6 in 8, 44/80 in 9-10, the access point's channel 6 everywhere else
     const struct fw_call *cs = find_call("awdl_chan_seq", 0);
     NCHECK(cs->len == 38 &&
            bytes_eq(cs->buf, 38,
-                    "0f 03 00 03 ffff 9b80 9b80 9b80 9b80 9b80 0651 0651 0651 0651 2a80 2a80 2a80 2a80 "
-                    "0651 0651 0651"));
+                    "0f 03 00 03 ffff 9b80 0651 0651 0651 0651 0651 0651 0651 0651 2a80 2a80 0651 0651 0651 "
+                    "0651 0651"));
     // the phone's master channel is 149 (its default sequence): our 44 slots follow it
     struct awdl_core *phone = make_phone(phone_addr, 200);
     int before = ncalls;
     phone_frame(core, phone, phone_addr, AWDL_SUBTYPE_MIF, 5100000, 1500000);
-    NCHECK(awdl_core_role(core) == AWDL_ROLE_FOLLOWER && count_primary(awdl_core_sequence(core), 149) == 9);
+    NCHECK(awdl_core_role(core) == AWDL_ROLE_FOLLOWER && count_primary(awdl_core_sequence(core), 149) == 3);
     const struct fw_call *cs2 = NULL;
     for (int i = before; i < ncalls; ++i)
         if (!strcmp(calls[i].name, "awdl_chan_seq")) cs2 = &calls[i];
@@ -638,8 +681,53 @@ static void test_flow_awdl_if(void)
     // a roam to 5 GHz channel 36: the free slots move there (opclass 115), sent again
     before = ncalls;
     awdl_core_set_infra(core, 5180, 1600000);
-    NCHECK(ncalls == before + 2 && !strcmp(calls[before].name, "awdl_chan_seq") && calls[before].buf[6 + 2 * 5] == 36 &&
-           calls[before].buf[7 + 2 * 5] == 115);
+    NCHECK(ncalls == before + 1 && !strcmp(calls[before].name, "awdl_chan_seq") && calls[before].buf[6 + 2 * 5] == 36 &&
+           calls[before].buf[7 + 2 * 5] == 115);  // the social map is unchanged: no payload
+    // AirDrop data from the phone (TCP, decapsulated): transfer mode, 12 of 16 slots away, the AP keeps 6, 7, 14, 15
+    {
+        uint8_t in[80] = {0}, enc[112];
+        memcpy(in, me, 6);
+        memcpy(in + 6, phone_addr, 6);
+        in[12] = 0x86;
+        in[13] = 0xdd;
+        in[14] = 0x60;
+        in[20] = 6;
+        const size_t en = bcm_awdl_encap(in, sizeof in, 1, enc, sizeof enc);
+        before = ncalls;
+        awdl_core_rx_eth(core, enc, en, 1650000);
+        NCHECK(delivered == 1 && awdl_core_mode(core) == AWDL_MODE_TRANSFER && ncalls == before + 1 &&
+               !strcmp(calls[before].name, "awdl_chan_seq"));
+        NCHECK(bytes_eq(calls[before].buf, 38,
+                        "0f 03 00 03 ffff 9b80 9b80 9b80 9b80 9b80 9b80 2473 2473 0651 9b80 9b80 9b80 9b80 9b80 "
+                        "2473 2473"));
+        NCHECK(awdl_slots_away(awdl_core_sequence(core), 5180) == 12);
+        // more data keeps it; 3 s after the last frame the deadline returns it to idle (one chan_seq each way)
+        awdl_core_rx_eth(core, enc, en, 2500000);
+        NCHECK(awdl_core_timer(core, 2600000) <= 2500000 + AWDL_TRANSFER_HOLD_US);
+        awdl_core_timer(core, 5400000);
+        NCHECK(awdl_core_mode(core) == AWDL_MODE_TRANSFER);
+        before = ncalls;
+        awdl_core_timer(core, 5500000);
+        NCHECK(awdl_core_mode(core) == AWDL_MODE_IDLE && awdl_slots_away(awdl_core_sequence(core), 5180) == 4);
+        int resent = 0;
+        for (int i = before; i < ncalls; ++i) resent += !strcmp(calls[i].name, "awdl_chan_seq");
+        NCHECK(resent == 1);
+        // wifip2pd's traffic registration (a session start) switches to transfer before any data
+        struct a80211_awdl_peer_traffic_registration t;
+        memset(&t, 0, sizeof t);
+        t.version = 1;
+        memcpy(t.address, phone_addr, 6);
+        memcpy(t.unique_id, "com.apple.sharing.airdrop", 25);
+        t.unique_id_length = 25;
+        t.active = 1;
+        uint32_t tl = sizeof t;
+        int32_t tv = 0;
+        NCHECK(a80211_awdl_request(&f, 1, A80211_IOC_AWDL_PEER_TRAFFIC_REGISTRATION, &tv, &t, &tl, sizeof t, 5600000) ==
+               0);
+        NCHECK(awdl_core_mode(core) == AWDL_MODE_TRANSFER);
+        awdl_core_timer(core, 5600000 + AWDL_TRANSFER_HOLD_US);  // no data followed: idle again
+        NCHECK(awdl_core_mode(core) == AWDL_MODE_IDLE && awdl_core_stats(core)->mode_changes == 4);
+    }
     // the firmware refuses the u32 payload: sent once more with a u16 length, then left alone
     before = ncalls;
     awdl_core_fw_result(core, "awdl_payload", BCME_BADLEN, 1700000);
