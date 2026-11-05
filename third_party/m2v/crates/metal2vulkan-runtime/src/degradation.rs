@@ -764,6 +764,13 @@ degradations! {
             "each level is the device's linear blit of the one above, which on the check's inputs \
              lay within 1 unit in the last place (2 for 32-bit float) of an Apple M3 Max's or an \
              Apple M4's answer, not at either's exactly; other inputs are not checked";
+        /// `generate_mipmaps` through the device's blit chain for a pixel format whose chain the
+        /// runtime's check did not accept within Metal's measured spread, or whose Metal answer is
+        /// not measured: Metal generates such a format's mipmaps with its box filter.
+        MipmapsBoxFilter = "mipmaps-box-filter", Precision,
+            "each level is the device's linear blit of the one above, a box filter like Metal's, \
+             whose answers for the format lie outside the spread measured between an Apple M3 \
+             Max and an Apple M4, or were not measured";
         /// A depth or stencil texture made in a heap on a device whose driver lays depth and
         /// stencil images apart from the memory they are bound to
         /// ([`metal2vulkan::device::DriverFact::DepthStencilImagesLieApart`]) that no shadow of the

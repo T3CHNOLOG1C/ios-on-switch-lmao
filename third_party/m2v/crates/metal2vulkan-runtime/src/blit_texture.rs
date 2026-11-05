@@ -1739,9 +1739,11 @@ impl BlitCommandEncoder {
         if one_dimensional || !own_format {
             return Err(gap());
         }
-        if !device.mipmaps_accepted(texture)? {
-            return Err(gap());
-        }
+        // A format whose blit chain failed the measured-spread check, or whose Metal answer is not
+        // measured, still gets the chain: Metal generates every filterable format's mipmaps with its
+        // box filter, and a refusal leaves the levels unwritten (a texture sampled below level 0
+        // shows garbage). The near-equivalent is announced once per device.
+        let within_spread = device.mipmaps_accepted(texture)?;
         let (image, aspects) = (texture.raw_image()?, texture_aspects(texture.image_plan()?));
         device.shared().counts.pool_compiled(
             crate::work_counts::PoolCompiled::ImageBlit,
@@ -1777,14 +1779,25 @@ impl BlitCommandEncoder {
             .collect();
         self.scrub(texture, written)?;
         let pixel_format = texture.record().pixel_format;
-        device.degrade(Degradation::MipmapsWithinSpread, || {
-            (
-                format!("generate_mipmaps of a {} texture", pixel_format.name()),
-                "the device's blit chain gives the format's mipmaps within Metal's measured \
-                 spread, which the runtime checked at the format's first generate_mipmaps"
-                    .to_owned(),
-            )
-        });
+        if within_spread {
+            device.degrade(Degradation::MipmapsWithinSpread, || {
+                (
+                    format!("generate_mipmaps of a {} texture", pixel_format.name()),
+                    "the device's blit chain gives the format's mipmaps within Metal's measured \
+                     spread, which the runtime checked at the format's first generate_mipmaps"
+                        .to_owned(),
+                )
+            });
+        } else {
+            device.degrade(Degradation::MipmapsBoxFilter, || {
+                (
+                    format!("generate_mipmaps of a {} texture", pixel_format.name()),
+                    "the device's linear blit chain, whose answers for the format lie outside \
+                     Metal's measured spread or were not measured"
+                        .to_owned(),
+                )
+            });
+        }
         Ok(())
     }
 
