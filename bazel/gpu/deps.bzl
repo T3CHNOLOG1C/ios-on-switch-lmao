@@ -42,6 +42,9 @@ HOST_FILES = {
 }
 HOST_DIRS = {
     "m2v-libs": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "m2v-libs", "//bazel/gpu:m2v-libs.sha256"),
+    # The device's driver records (precompile/harvest.py --records): m2v's VkPipelineCache data of each pipeline making the
+    # device did, named by what the making reads; the seed takes those of its NVK's identity (tools/gpu/seed.py).
+    "m2v-records": ("IOSWITCH_GPU_ARTIFACTS", "out/gpu-artifacts", "m2v-records", "//bazel/gpu:m2v-records.sha256"),
 }
 
 _SERIES = "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/series"
@@ -228,6 +231,11 @@ exports_files({files} + ["m2v-libs/names.json"])
 filegroup(
     name = "m2v_libs",
     srcs = glob(["m2v-libs/**"]),
+)
+
+filegroup(
+    name = "m2v_records",
+    srcs = glob(["m2v-records/**"]),
 )
 """.format(files = repr(sorted(files))))
 

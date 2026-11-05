@@ -211,7 +211,7 @@
   "moduleExtensions": {
     "//bazel/gpu:deps.bzl%gpu": {
       "general": {
-        "bzlTransitiveDigest": "CpYrgp7B1VIShvEz+8lipOlxknWGciycpn/7ajodASA=",
+        "bzlTransitiveDigest": "1p3iB4v14u1f2irtUPbwnYtFfKYxCjewg8UD2XJrIEw=",
         "usagesDigest": "bfFdfO1EKlphHXkGdolkTW4gIC6FbU/48n6GLz1cKtk=",
         "recordedInputs": [
           "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series eb8eb637f2864c8677fc111e9a72476f4388c46a7ba62360bbd695e7ddfad3f2"

@@ -339,6 +339,9 @@ def _metal_seed_impl(ctx):
     args.add("--store", ctx.file.store_index.dirname)
     args.add("--corpus", ctx.file.corpus)
     args.add("--libraries", ctx.file.libraries)
+    # Each record is <store>/<xx>/<name>: the store is the directory two levels above any of them.
+    if ctx.files.records:
+        args.add("--records", ctx.files.records[0].dirname.rsplit("/", 1)[0])
     args.add("--out", out.path)
     ctx.actions.run(
         executable = ctx.executable._tool,
@@ -347,7 +350,7 @@ def _metal_seed_impl(ctx):
             [ctx.file.host_bridge, ctx.file.mock_iokit, ctx.file.abi_header, ctx.file.precompile, ctx.file.frontend,
              ctx.file.metal_header, ctx.file.nvk, ctx.file.twin, ctx.file.qc, ctx.file.store_index, ctx.file.corpus,
              ctx.file.libraries, ctx.file._xcode_env, ctx.file._xcode_identity] +
-            ctx.files.hdrs + ctx.files.store + ctx.files.nvk_sources,
+            ctx.files.hdrs + ctx.files.store + ctx.files.nvk_sources + ctx.files.records,
         ),
         outputs = [out],
         mnemonic = "MetalSeed",
@@ -373,6 +376,7 @@ metal_seed = rule(
         "nvk_sources": attr.label_list(allow_files = True, doc = "the two dylibs' .source files"),
         "qc": attr.label(mandatory = True, allow_single_file = True),
         "store": attr.label(mandatory = True),
+        "records": attr.label(allow_files = True, doc = "the device's driver records (harvest.py --records): merged where of the twin's identity"),
         "store_index": attr.label(mandatory = True, allow_single_file = True, doc = "the store's names.json"),
         "corpus": attr.label(mandatory = True, allow_single_file = True),
         "libraries": attr.label(mandatory = True, allow_single_file = True),

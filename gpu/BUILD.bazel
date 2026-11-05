@@ -175,6 +175,7 @@ metal_seed(
     nvk_sources = NVK_SOURCES,
     precompile = GM20B_METAL + ":precompile/precompile.mm",
     qc = "@gpu_host_inputs//:QuartzCore-21H461.default.metallib",
+    records = "@gpu_host_inputs//:m2v_records",
     store = "@gpu_host_inputs//:m2v_libs",
     store_index = "@gpu_host_inputs//:m2v-libs/names.json",
     twin = NVK_TWIN,

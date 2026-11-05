@@ -16,10 +16,19 @@ usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log 
           way is made u+rx for the read and given its mode back at once (and checked); other closed containers are
           skipped and counted.
 --save    also copy each m2v cache found, whole (v1/, msl/, libs/, the journals), to <dir>/<where it was>, e.g. the boot's log folder.
+--records the driver record store the seed merges (tools/gpu/seed.py; default out/gpu-artifacts/m2v-records): with --volume,
+          and for every saved cache below --records-from, each driver record (the content directory's v1/<content>/<xx>/<name>,
+          m2v's VkPipelineCache data of one pipeline making, named by what the making reads: build-independent) whose
+          envelope checks out is copied to <store>/<xx>/<name>. The device's own makings: those of draws' variants that no
+          creation predicts, and each one the precompile makes otherwise than the device (r8-webgpu: 1268 of the 1293
+          records of the 23:17 boot's caches were not in the seed). The seed takes those of its NVK's identity.
+          harvest.py --records-from <dir>... [--records <store>]: only the records of every m2v cache below each <dir> (the
+          --save copies, e.g. out/switch/device-logs/*/m2v), no corpus.
 --libs    the library store precompile.mm reads (libraries.py; default out/gpu-artifacts/m2v-libs): with --volume, every cache's
           libs/<SHA-256>.metallib (the libraries made from bytes) is copied to <store>/data/, every msl/*.reply to <store>/msl/, and
           every library the corpus names by a path on the Data volume (an app's bundle) to <store>/root/<path>.
 """
+import hashlib
 import os
 import re
 import shutil
@@ -35,7 +44,10 @@ STORE = Path(__file__).resolve().parents[7] / 'out/gpu-artifacts/m2v-libs'   # t
 # (the plugin's "device ... ready in" lines, r5d and r6h): their Library and Library/Caches are mode 000.
 SYSTEM_CACHES = {'6C7A65AF-CB18-421C-A07A-D724B05A7AB6': 'backboardd', '532E562F-2888-4C55-9BF8-E6F0B246BBDA': 'SpringBoard',
                  '5BDBB9F1-C07A-4290-9D80-EA49A6BA2D68': 'Preferences', 'AA90E4B6-B0E4-4776-8E70-A4444E65642F': 'Spotlight'}
-JOURNALS = ('pipelines.log.old', 'pipelines.log')     # oldest first: the frontend renames the journal past 2 MiB
+JOURNALS = ('pipelines.log.old', 'pipelines.log')
+RECORDS = Path(__file__).resolve().parents[7] / 'out/gpu-artifacts/m2v-records'
+CONTENT = '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'   # m2v's content directory (seed.py's CONTENT)
+RECORD_MAGIC = b'M2VPPLC\0'     # m2v shader_cache/driver.rs: magic, identity (28 bytes), data length (u64), data, SHA-256     # oldest first: the frontend renames the journal past 2 MiB
 
 
 def normal(line):
@@ -181,6 +193,38 @@ def bundles(volume, lines, store):
     print('%s: %d libraries of app bundles copied' % (store, copied))
 
 
+def record_ok(data):
+    """Whether `data` is a whole driver record: magic, identity, a length that ends where the checksum begins, the checksum."""
+    if len(data) < 8 + 28 + 8 + 32 or data[:8] != RECORD_MAGIC:
+        return False
+    length = int.from_bytes(data[36:44], 'little')
+    return 44 + length + 32 == len(data) and hashlib.sha256(data[:-32]).digest() == data[-32:]
+
+
+def records(caches, store):
+    """Every driver record of each cache directory in `caches` whose envelope checks out, into `store` (by name; one already
+    there is kept: a name is what the making reads, so two records of one name hold the same driver's data)."""
+    seen = copied = bad = 0
+    for cache in caches:
+        content = Path(cache) / 'v1' / CONTENT
+        for path in sorted(content.glob('*/*')) if content.is_dir() else []:
+            if path.name.startswith('.') or not path.is_file():
+                continue
+            seen += 1
+            target = store / path.parent.name / path.name
+            if target.is_file():
+                continue
+            data = path.read_bytes()
+            if not record_ok(data):
+                bad += 1
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            copied += 1
+    print('%s: %d driver records of %d caches, %d new, %d refused (envelope), %d in the store' %
+          (store, seen, len(caches), copied, bad, sum(1 for _ in store.glob('*/*')) if store.is_dir() else 0))
+
+
 def option(args, name, many=False):
     values = []
     while name in args:
@@ -197,6 +241,13 @@ def main():
     volume = option(args, '--volume')
     save = option(args, '--save')
     store = Path(option(args, '--libs') or STORE)
+    record_store = Path(option(args, '--records') or RECORDS)
+    records_from = option(args, '--records-from', many=True)
+    if records_from:
+        records_from += args
+        records(sorted({str(v1.parent) for d in records_from for v1 in Path(d).rglob('v1') if (v1 / CONTENT).is_dir()}),
+                record_store)
+        return
     opens = set(option(args, '--open', many=True)) or set(SYSTEM_CACHES)
     open_all = '--open-all' in args
     args = [a for a in args if a != '--open-all']
@@ -216,6 +267,7 @@ def main():
                     if (m2v / journal).is_file():
                         sources.append(('%s/%s' % (where, journal), (m2v / journal).read_text(errors='replace')))
                 collect(volume, m2v, store)
+                records([m2v], record_store)
                 if save:
                     target = Path(save) / where.replace('/', '_')
                     shutil.rmtree(target, ignore_errors=True)
