@@ -5,6 +5,8 @@ action with declared inputs, so Bazel reruns only what an edit reaches:
                        -> cargo (host bridge, quick) -> precompile tool -> seed (runs on this Mac)
 """
 
+load("//bazel/kernel:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "TREE_ROOT")
+
 _XCODE = {
     "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
     "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
@@ -140,7 +142,12 @@ _IOS = ["-target", "arm64-apple-ios17.0", "-isysroot", "@IPHONEOS_SDK@"]
 # (selector loaded inline, objc_msgSend through __stubs) take the same instructions per message and link identically
 # (10 of 10), at +10 KB of __text.
 _PLUGIN_CFLAGS = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fstack-protector-strong", "-std=c++17", "-fobjc-arc",
-                  "-Wno-deprecated-declarations", "-fno-objc-msgsend-selector-stubs", "-ffile-prefix-map=@PWD@=/ioswitch"]
+                  "-Wno-deprecated-declarations", "-fno-objc-msgsend-selector-stubs", "-ffile-prefix-map=@PWD@=/ioswitch"] + [
+    # The layout move's old spellings (bazel/kernel/layout.bzl): the plugin's strings name its sources as before.
+    "-ffile-prefix-map=@PWD@/{r}=/ioswitch/{o}/{r}".format(r = r, o = OLD_TREE)
+    for r in MOVED_ROOTS
+    if TREE_ROOT != OLD_TREE
+]
 
 def _metal_plugin_impl(ctx):
     # -I in the old build's order (NativeMetal, raw/runtime, TegraGM20B), and the raw path's stack key as a define.

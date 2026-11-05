@@ -13,6 +13,7 @@ outputs).
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//bazel/platforms:transitions.bzl", "outer_transition")
+load(":layout.bzl", "TREE_ROOT")
 load(":xnu.bzl", "XnuInfo")
 
 KernelSdkInfo = provider(
@@ -23,7 +24,8 @@ KernelSdkInfo = provider(
         "fakeroot": "tree artifact: the kernel SDK root (.cache/fakeroot)",
         "bin_dir": "the bin directory these were built in",
         "xnu_root": "exec path of the patched XNU source (external/<repo>)",
-        "tree": "the kernel tree's package path",
+        "tree": "where the kernel tree's sources are (bazel/kernel/layout.bzl TREE_ROOT; \"\" = the repository root)",
+        "package": "the package of the kernel's generated files (its build/ holds them)",
     },
 )
 
@@ -56,7 +58,8 @@ cd "$1"
             fakeroot = xnu.sdkroot,
             bin_dir = ctx.bin_dir.path,
             xnu_root = ctx.attr.xnu_source.label.workspace_root,
-            tree = ctx.label.package,
+            tree = TREE_ROOT,
+            package = ctx.label.package,
         ),
     ]
 
@@ -81,7 +84,7 @@ def _kernel_sdk_impl(ctx):
 
     # Make variables for the drivers' flags (kernel_driver's {build}, {xnu}): the outer configuration's paths.
     variables = platform_common.TemplateVariableInfo({
-        "KERNEL_BUILD": "{}/{}/build".format(sdk.bin_dir, sdk.tree),
+        "KERNEL_BUILD": "{}/{}/build".format(sdk.bin_dir, sdk.package),
         "KERNEL_XNU": sdk.xnu_root,
     })
     return [

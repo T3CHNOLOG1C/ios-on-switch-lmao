@@ -58,6 +58,38 @@ def execroot():
     return os.getcwd()
 
 
+# The layout table of bazel/kernel/layout.bzl (keep the two in step): where the kernel tree's sources and generated
+# files are, and the old spelling the artifacts keep for them.
+OLD_TREE = "out/native-a57/root-v1/tree"
+TREE_ROOT = OLD_TREE
+KERNEL_PACKAGE = OLD_TREE
+MOVED_ROOTS = ("drivers", "kits", "diagnostics", "overlay")
+
+
+def old_spelling(path, bin_dir=None):
+    """The pre-move spelling of an execroot-relative path (unchanged if it was not moved)."""
+    for root in MOVED_ROOTS:
+        if path == root or path.startswith(root + "/"):
+            return OLD_TREE + "/" + path
+    if bin_dir and KERNEL_PACKAGE != OLD_TREE and path.startswith(bin_dir + "/" + KERNEL_PACKAGE + "/"):
+        return bin_dir + "/" + OLD_TREE + "/" + path[len(bin_dir + "/" + KERNEL_PACKAGE) + 1:]
+    return path
+
+
+def compat_prefix_maps(path_root, bin_dir):
+    """Prefix maps from moved paths (absolute, below this execution root) to their old spellings, after the generic
+    ones (debug maps: the last match wins; macro maps: the most specific). Empty while nothing has moved."""
+    here, root = execroot(), path_root.rstrip("/")
+    maps = []
+    if TREE_ROOT != OLD_TREE:
+        maps += ["-ffile-prefix-map={}/{}={}/{}/{}".format(here, r, root, OLD_TREE, r) for r in MOVED_ROOTS]
+    if KERNEL_PACKAGE != OLD_TREE:
+        new = "{}/{}/{}/build".format(here, bin_dir, KERNEL_PACKAGE)
+        maps += ["-fmacro-prefix-map={}={}/{}/build".format(new, root, OLD_TREE),
+                 "-fdebug-prefix-map={}={}/{}/{}/build".format(new, root, bin_dir, OLD_TREE)]
+    return maps
+
+
 def prefix_maps(path_root, bin_dir, xnu_dir):
     """-ffile-prefix-map flags that make every path a compile can embed independent of the sandbox: the patched XNU
     source shows as <root>/out/native-a57/root-v1/tree/.cache/xnu-work (where the CMake flow kept its checkout),
@@ -68,7 +100,7 @@ def prefix_maps(path_root, bin_dir, xnu_dir):
         "-ffile-prefix-map={}/{}={}".format(here, xnu_dir, tree),
         "-ffile-prefix-map={}/{}={}".format(here, bin_dir, path_root.rstrip("/")),
         "-ffile-prefix-map={}={}".format(here, path_root.rstrip("/")),
-    ]
+    ] + compat_prefix_maps(path_root, bin_dir)
 
 
 def copy_tree(source, target):

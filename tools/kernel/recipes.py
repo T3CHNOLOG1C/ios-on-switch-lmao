@@ -23,11 +23,15 @@ from pathlib import Path
 
 EXECROOT = "@EXECROOT@"
 # Paths below the execution root, as XNU's make wrote them (the build's own configuration directory in the middle).
+# The kernel's generated files' package before and after the layout move (bazel/kernel/layout.bzl).
+_PACKAGE = r"(?:out/native-a57/root-v1/tree|kernel)"
 PLACES = [
-    (re.compile(r"@EXECROOT@/bazel-out/[^/]+/bin/out/native-a57/root-v1/tree/build/xnu/ios-obj"), "{xnu_obj}"),
-    (re.compile(r"@EXECROOT@/bazel-out/[^/]+/bin/out/native-a57/root-v1/tree/\.cache/fakeroot"), "{fakeroot}"),
+    (re.compile(r"@EXECROOT@/bazel-out/[^/]+/bin/" + _PACKAGE + r"/build/xnu/ios-obj"), "{xnu_obj}"),
+    (re.compile(r"@EXECROOT@/bazel-out/[^/]+/bin/" + _PACKAGE + r"/\.cache/fakeroot"), "{fakeroot}"),
     (re.compile(r"@EXECROOT@/external/\+http_archive\+xnu"), "{xnu}"),
     (re.compile(r"@EXECROOT@/out/native-a57/root-v1/tree"), "{tree}"),
+    # Since the move, the kernel tree's sources are at the repository root: {tree}/x is x.
+    (re.compile(r"@EXECROOT@/(?=(?:drivers|kits|diagnostics|overlay)/)"), "{tree}/"),
 ]
 # Apple clang only, or code generation only (r17-lint's list): clang-tidy (upstream clang) runs without them.
 APPLE_PREFIXES = ("-fsanitize", "-flto", "-mcpu=", "-march=", "-fptrauth", "-ftrivial-auto-var-init", "-fbounds-safety",
@@ -109,7 +113,8 @@ def debug_dir(directory):
     rewrote it (the execution root becomes /ioswitch)."""
     if not directory.startswith(EXECROOT + "/"):
         sys.exit("record directory outside the execution root: " + directory)
-    return "/ioswitch/" + directory[len(EXECROOT) + 1:]
+    relative = re.sub(r"^(bazel-out/[^/]+/bin)/kernel/", r"\1/out/native-a57/root-v1/tree/", directory[len(EXECROOT) + 1:])
+    return "/ioswitch/" + relative
 
 
 def render(recipes):

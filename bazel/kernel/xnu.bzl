@@ -1,6 +1,7 @@
 """XNU: the kernel SDK root, the XNU build (compile + the exact link command), the final link."""
 
 load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "python", "run_tool", "setting", "workspace_root")
+load(":layout.bzl", "TREE_ROOT")
 
 # XNU's code (not headers, makefiles, MIG .defs or config files): libdispatch's firehose build never reads it, so an edit
 # inside an XNU function does not rebuild libfirehose_kernel.a. (installhdrs keeps all of XNU: its setup step checks that
@@ -117,7 +118,7 @@ def _xnu_build_impl(ctx):
             "--options",
             ctx.file.options.path,
             "--tree-root",
-            ctx.label.package,
+            TREE_ROOT or ".",
             "--out",
             objroot.path,
             "--owner-header",

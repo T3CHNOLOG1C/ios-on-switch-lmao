@@ -25,6 +25,7 @@ load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@xcode//:defs.bzl", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
 load("//bazel/platforms:transitions.bzl", "kernel_transition")
 load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "run_tool")
+load(":layout.bzl", "KERNEL_PACKAGE", "TREE_ROOT")
 load(":xnu.bzl", "XnuInfo")
 
 KernelObjectsInfo = provider(
@@ -42,12 +43,28 @@ FOREIGN_DIRS = ["linux/", "nouveau/"]
 
 # Generated headers a driver's flags name ({build}/<dir>) -> the target in the tree package that brings them.
 GENERATED_HEADERS = {
-    "storage-abi": ":gen_storage_abi",
-    "native-ram-block": ":gen_native_data_seed",
-    "native-legacy-display": ":gen_pinned_headers",
-    "native-hid-input": ":gen_pinned_headers",
-    "sheng-platform-power": ":gen_pinned_headers",
+    "storage-abi": "//{}:gen_storage_abi".format(KERNEL_PACKAGE),
+    "native-ram-block": "//{}:gen_native_data_seed".format(KERNEL_PACKAGE),
+    "native-legacy-display": "//{}:gen_pinned_headers".format(KERNEL_PACKAGE),
+    "native-hid-input": "//{}:gen_pinned_headers".format(KERNEL_PACKAGE),
+    "sheng-platform-power": "//{}:gen_pinned_headers".format(KERNEL_PACKAGE),
 }
+
+# The kernel SDK every kernel cc target compiles against (and whose make variables their flags use).
+KERNEL_SDK = "//kernel:sdk"
+
+# Headers every driver may include besides its own (the GPU package's OriginalAcceleratorABI.h).
+EXTRA_HEADERS = "//{}:hdrs_extra".format(KERNEL_PACKAGE)
+
+def _one_package():
+    """The layout before the move: every driver in the kernel tree's one package (bazel/kernel/layout.bzl)."""
+    return native.package_name() == TREE_ROOT
+
+def _headers_label(directory):
+    """The header library of a directory below the kernel tree (drivers/X, kits/X, diagnostics/ioswitch)."""
+    if _one_package():
+        return ":hdrs_" + directory.replace("/", "_")
+    return "//{}:hdrs".format(directory)
 
 _HEADER_GLOBS = ["**/*.h", "**/*.hpp", "**/*.inc"]
 _KERNEL_ONLY = ["//bazel/platforms:kernel"]
@@ -61,7 +78,8 @@ def _recipe_name(label, valid):
 def _expand(flags, package):
     """{tree}, {build}, {xnu}, {sdk} in a driver's flags: make variables of the kernel SDK (//...:kernel_sdk) or paths."""
     return [
-        f.replace("{tree}", package)
+        f.replace("{tree}/", TREE_ROOT + "/" if TREE_ROOT else "")
+            .replace("{tree}", TREE_ROOT or ".")
             .replace("{build}", "$(KERNEL_BUILD)")
             .replace("{xnu}", "$(KERNEL_XNU)")
             .replace("{sdk}", IPHONEOS_SDK)
@@ -108,6 +126,19 @@ def kernel_header_libraries(dirs, extra = []):
         tags = ["kernel"],
     )
 
+def kernel_headers(name = "hdrs", extra = []):
+    """A package's headers (any depth, as hdr_deps name them) as a kernel cc_library, and :headers, the same files."""
+    native.filegroup(
+        name = "headers",
+        srcs = native.glob(_HEADER_GLOBS, allow_empty = True) + extra,
+    )
+    cc_library(
+        name = name,
+        hdrs = [":headers"],
+        target_compatible_with = _KERNEL_ONLY,
+        tags = ["kernel"],
+    )
+
 def kernel_driver(
         name,
         srcs = None,
@@ -143,11 +174,15 @@ def kernel_driver(
     directories (e.g. "drivers/ArmGIC") the driver includes besides its own; None means every one. The compile
     sandbox holds only those: "fatal error: '../X/Y.h' file not found" means drivers/X belongs in hdr_deps."""
     package = native.package_name()
-    dir = dir or ("drivers/" + name)
+    if dir == None:
+        dir = ("drivers/" + name) if _one_package() else ""
+    if not _one_package() and not native.existing_rule("hdrs"):
+        kernel_headers()
+    prefix = (dir + "/") if dir else ""
     if srcs == None:
-        srcs = sorted(native.glob([dir + "/*.cpp"])) + native.glob([dir + "/firmware.S"], allow_empty = True)
+        srcs = sorted(native.glob([prefix + "*.cpp"])) + native.glob([prefix + "firmware.S"], allow_empty = True)
     else:
-        srcs = [s if (s.startswith(":") or s.startswith("/") or s.startswith("@")) else dir + "/" + s for s in srcs]
+        srcs = [s if (s.startswith(":") or s.startswith("/") or s.startswith("@")) else prefix + s for s in srcs]
 
     features = []
     if recipe:
@@ -160,22 +195,25 @@ def kernel_driver(
         features.append("-kernel_warnings")
 
     cxx_flags = (["-I", "{xnu}/osfmk"] if include_osfmk else []) + copts
-    if hdr_deps == None:
-        header_deps = [":kernel_sdk", ":all_kernel_headers"]
+    if hdr_deps == None and _one_package():
+        header_deps = [KERNEL_SDK, ":all_kernel_headers"]
     else:
         # Its own directory's headers (or, below drivers/X, X's), the ones it names, and the extra ones (hdrs_extra).
-        own = "/".join(dir.split("/")[:2]) if dir.startswith("drivers/") or dir.startswith("kits/") else dir
-        header_deps = [":kernel_sdk"]
-        if native.existing_rule("hdrs_" + own.replace("/", "_")):
-            header_deps.append(":hdrs_" + own.replace("/", "_"))
-        for d in hdr_deps:
-            lib = "hdrs_" + d.replace("/", "_")
+        # (Since the layout move, a driver without hdr_deps sees only its own package's headers.)
+        if _one_package():
+            own = "/".join(dir.split("/")[:2]) if dir.startswith("drivers/") or dir.startswith("kits/") else dir
+        else:
+            own = package[len(TREE_ROOT) + 1:] if TREE_ROOT else package
+        header_deps = [KERNEL_SDK]
+        if not _one_package() or native.existing_rule("hdrs_" + own.replace("/", "_")):
+            header_deps.append(_headers_label(own))
+        for d in hdr_deps or []:
             if d == own:
                 continue
-            if not native.existing_rule(lib):
+            if _one_package() and not native.existing_rule("hdrs_" + d.replace("/", "_")):
                 fail("{}: hdr_deps names {}, which has no headers (kernel_header_libraries)".format(name, d))
-            header_deps.append(":" + lib)
-        header_deps.append(":hdrs_extra")
+            header_deps.append(_headers_label(d))
+        header_deps.append(EXTRA_HEADERS)
 
     # Sources by the cc_library that compiles them; parts[i] is the index of source i's library.
     groups, order, parts = {}, [], []
@@ -186,7 +224,7 @@ def kernel_driver(
             key = "asm"
         elif base in src_copts:
             key = base
-        elif src.startswith("@") or any([path.startswith(dir + "/" + f) for f in FOREIGN_DIRS]):
+        elif src.startswith("@") or any([path.startswith(prefix + f) for f in FOREIGN_DIRS]):
             key = "foreign"
         elif ext in ("cpp", "cc", "mm", "c"):
             key = "own"
@@ -208,8 +246,8 @@ def kernel_driver(
             asm_flags = list(asm_copts)
             additional = []
             if firmware:
-                fw_dir = _src_path(firmware[0])[0].rpartition("/")[0] + "/firmware"
-                asm_flags += ["-I", "{tree}/" + fw_dir]
+                fw_dir = (_src_path(firmware[0])[0].rpartition("/")[0] + "/firmware").lstrip("/")
+                asm_flags += ["-I", (package + "/" + fw_dir) if package else fw_dir]
                 additional = native.glob([fw_dir + "/**"], allow_empty = True)
             cc_library(
                 name = lib,
@@ -217,7 +255,7 @@ def kernel_driver(
                 copts = _expand(asm_flags, package),
                 additional_compiler_inputs = additional,
                 deps = header_deps,
-                toolchains = [":kernel_sdk"],
+                toolchains = [KERNEL_SDK],
                 target_compatible_with = _KERNEL_ONLY,
                 tags = ["kernel", "no-lint"] + tags,
             )
@@ -232,7 +270,7 @@ def kernel_driver(
                 conlyopts = _expand(c_copts + extra, package),
                 features = features,
                 deps = header_deps + _generated(flags),
-                toolchains = [":kernel_sdk"],
+                toolchains = [KERNEL_SDK],
                 target_compatible_with = _KERNEL_ONLY,
                 tags = ["kernel"] + (["no-lint"] if key == "foreign" else []) + tags,
             )
@@ -243,7 +281,7 @@ def kernel_driver(
         srcs = srcs,
         parts = parts,
         cc_deps = cc_deps,
-        dir = package + "/" + dir,
+        dir = package + "/" + dir if dir else package,
         stems = stems,
         object_names = object_names,
         object_prefix = object_prefix,

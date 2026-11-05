@@ -32,6 +32,7 @@ load(
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/toolchains:cc_toolchain_config_info.bzl", "CcToolchainConfigInfo")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
+load("//bazel/kernel:layout.bzl", "compat_prefix_maps", "old_spelling")
 load("//bazel/kernel:sdk.bzl", "KernelSdkInfo")
 load(":recipes.bzl", "RECIPES")
 
@@ -77,7 +78,8 @@ def _impl(ctx):
         "{xnu_obj}": sdk.headers.path,
         "{fakeroot}": sdk.fakeroot.path,
         "{xnu}": sdk.xnu_root,
-        "{tree}": sdk.tree,
+        # "{tree}/x" is x below the kernel tree (the repository root since the layout move).
+        "{tree}/": sdk.tree + "/" if sdk.tree else "",
     }
 
     def expand(values):
@@ -88,17 +90,19 @@ def _impl(ctx):
             out.append(value)
         return out
 
-    # The headers tree stands in for XNU's object root (sdk.objroot): strings name the object root.
-    objroot_relative = sdk.objroot[len(sdk.bin_dir) + 1:]
+    # The headers tree stands in for XNU's object root (sdk.objroot): strings name the object root, as spelled before the
+    # layout move (bazel/kernel/layout.bzl).
+    objroot = old_spelling(sdk.objroot, sdk.bin_dir)
+    objroot_relative = objroot[len(sdk.bin_dir) + 1:]
     macro_maps = ["-fmacro-prefix-map={}/={}/{}/".format(d, PATH_ROOT, d) for d in ctx.attr.source_roots + ["external"]] + [
         "-fmacro-prefix-map={}={}".format(sdk.xnu_root, XNU_SPELLING),
         "-fmacro-prefix-map={}={}".format(sdk.bin_dir, PATH_ROOT),
         "-fmacro-prefix-map={}={}/{}".format(sdk.headers.path, PATH_ROOT, objroot_relative),
     ]
-    debug_maps = ["-fdebug-prefix-map={}/={}/{}/".format(d, PATH_ROOT, d) for d in ctx.attr.source_roots + ["external", "bazel-out"]] + [
-        "-fdebug-prefix-map={}={}/{}".format(sdk.headers.path, PATH_ROOT, sdk.objroot),
-    ]
-    maps = macro_maps + debug_maps
+    debug_maps = ["-fdebug-prefix-map={}/={}/{}/".format(d, PATH_ROOT, d) for d in ctx.attr.source_roots + ["external", "bazel-out"]]
+    compat_macro, compat_debug = compat_prefix_maps(sdk.bin_dir)
+    debug_maps += compat_debug + ["-fdebug-prefix-map={}={}/{}".format(sdk.headers.path, PATH_ROOT, objroot)]
+    maps = macro_maps + compat_macro + debug_maps
 
     env = [env_set(
         actions = _COMPILE + [ACTION_NAMES.cpp_link_static_library],
