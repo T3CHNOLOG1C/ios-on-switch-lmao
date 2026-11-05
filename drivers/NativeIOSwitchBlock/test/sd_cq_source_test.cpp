@@ -70,7 +70,8 @@ TEST(SdCqSource, DriverGuards)
     // read-back; the limit covers the spec's 1 s of busy or data access.
     // r18-sdcq: and an R1b's (CMD43: no task assigned before it completes); a failed command's response kept.
     EXPECT_THAT(command, HasSubstr("(data == kRegWrite || (flags & 3) == 3) && !waitIdle(true, 1000000000)"));
-    EXPECT_THAT(command, HasSubstr("if (s & INT_COMMAND) *response = r32(RESPONSE);"));
+    // r18-sdcq (r8d): not after a command error, where RESPONSE is still the previous command's.
+    EXPECT_THAT(command, HasSubstr("if ((s & INT_COMMAND) && !(s & 0x000f0000u)) *response = r32(RESPONSE);"));
     EXPECT_THAT(command, HasSubstr("limit = 1500000000ull"));
     EXPECT_THAT(body("Batch *NativeIOSwitchBlock::runGroup("), Not(HasSubstr("13, ")));  // no CMD13 task-status polling
     EXPECT_EQ(Count(engine(), "bus.settle()"), 2u);
@@ -97,6 +98,16 @@ TEST(SdCqSource, DriverGuards)
     EXPECT_LT(Index(enter, "readBack(bus, kSdPerfCqControl, 3, kEnabled)"),
               Index(enter, "bus.command(43, ioswitchSdCmd43(kSdAbortQueue, 0), true, &r1)"));
     EXPECT_THAT(enter, Not(HasSubstr("fail(")));
+    // r18-sdcq (r8d): every group's assignment starts with CMD43 unless the queue was just emptied (a card may keep a
+    // finished group's Task IDs taken until the host aborts the queue); a group whose retry went through is no strike.
+    const std::string submit = member("bool submit(Bus &bus, const IOSwitchCqTask *t, unsigned n)");
+    EXPECT_LT(Index(submit, "if (!emptied) {"),
+              Index(submit, "bus.command(43, ioswitchSdCmd43(kSdAbortQueue, 0), true, &r1)"));
+    EXPECT_LT(Index(submit, "bus.command(43, ioswitchSdCmd43(kSdAbortQueue, 0), true, &r1)"),
+              Index(submit, "bus.command(44,"));
+    EXPECT_THAT(enter, HasSubstr("emptied = true;"));
+    EXPECT_THAT(Between(engine(), "Outcome run(Bus &bus, Host &host,", "\n    }\n\n"),
+                HasSubstr("ended(outcome == kGroupLegacy);"));
     EXPECT_THAT(member("bool leave(Bus &bus)"), HasSubstr("return quit(bus, \"the card stays in CQ mode\");"));
     const std::string out = member("bool quit(Bus &bus, const char *reason)");
     EXPECT_LT(Index(out, "if (!off(bus))"), Index(out, "if (useCache && !disableCache(bus)) useCache = false;"));

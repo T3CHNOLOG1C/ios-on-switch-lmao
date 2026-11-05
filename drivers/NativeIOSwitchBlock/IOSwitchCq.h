@@ -21,6 +21,21 @@
 // a row with errors, longer each time; only a proof that differs (or a card that had to be power-cycled out of CQ mode
 // kMaxStuck times) stops it for the boot (`fail`).
 //
+// r18-sdcq (r8d): r8d's card (the same SanDisk SR01T) failed the first CMD44 of every group assigned right after another
+// group in the same session, and only those: groups = enters + errors at every stats line (839 = 406 + 433), each the
+// same line, "CMD44 task 0 step 3 ... CMD13 status 0x00400900 (ILLEGAL) state 4, tasks 0x00000000; previous CMD46;
+// CMD43 step 0", whatever the group's size (6 to 31 tasks). The card did not answer CMD44 (ILLEGAL_COMMAND in the next
+// R1, clear condition B), so for it Task ID 0 was still taken (4.19.5: no response for "Task ID already exists") although
+// every task had been executed and none showed ready; every group after a CMD43 (a session's opening one, or a
+// recovery's) went through. 6.00 4.19.1.2 has the host empty the queue itself, "Queue shall be empty before assigning
+// Tasks [Host may abort entire queue of tasks queued earlier]"; only 9.10 4.19.7 adds that a completed task's
+// information "shall be cleared and the Task ID can be reused". So each group's assignment now starts with CMD43
+// (abort the entire queue: no error on an empty one, 9.10 4.19.8), R1b, its busy waited out by interrupt, unless the
+// queue was just emptied (a session's opening CMD43, a recovery's): one command per group, where r8d paid a CMD44
+// timeout, two CMD13, a CMD43 and the group's assignment again. And a group whose retry went through the queue no
+// longer counts toward a pause (r8d: 74 pauses, the queue skipped for 273k group starts, with every retry good): only
+// groups read the legacy way do.
+//
 // r16-sdcq: r7z's card (SanDisk SR01T, 2024-11) took CMD49 03h with a clean R1 and its CMD48 read-back did not show 03h.
 // What the engine did not do, against the spec and both Linux kernels that drive SD CQ: (1) the cache first. 4.19.1:
 // "Cache Feature (Refer to Section 4.17) should be enabled before enabling Command Queue"; 4.16.2: A2 performance is
@@ -105,9 +120,10 @@ template <typename Bus> struct IOSwitchCqEngine {
     // same bound for the CMD43 that opens a session.
     static constexpr unsigned kReadBacks = 10;
     static constexpr unsigned kMaxDepth = 32;
-    // r18-sdcq: the backoff. kStrikes groups in a row with errors pause the queue for pauseLength groups (the reads that
-    // would have started one go the legacy way, counted per group, no clock), kPauseMin doubling to kPauseMax; kForgive
-    // clean groups in a row bring the pause back to kPauseMin. kMaxStuck power cycles out of CQ mode stop it for the boot.
+    // r18-sdcq: the backoff. kStrikes groups in a row read the legacy way (r8d: not those whose retry went through the
+    // queue) pause the queue for pauseLength groups (the reads that would have started one go the legacy way, counted
+    // per group, no clock), kPauseMin doubling to kPauseMax; kForgive groups in a row through the queue bring the pause
+    // back to kPauseMin. kMaxStuck power cycles out of CQ mode stop it for the boot.
     static constexpr unsigned kStrikes = 3, kPauseMin = 16, kPauseMax = 4096, kForgive = 64, kMaxStuck = 3;
     State state = kOff;
     uint8_t depth = 0;
@@ -115,6 +131,9 @@ template <typename Bus> struct IOSwitchCqEngine {
     const char *why = nullptr;      // the latest failure's reason (r18-sdcq: the stop's, once stopped)
     bool stuck = false;             // the card would not leave CQ mode: only a power cycle gets it out
     bool stopped = false;           // r18-sdcq: off for the boot (fail): a proof differed, or kMaxStuck power cycles
+    // r18-sdcq (r8d): the card's queue was just emptied by an answered CMD43 (a session's opening one, a recovery's), so
+    // the next group is assigned without another; any group assigned clears it (its finished tasks may stay taken).
+    bool emptied = false;
     // r16-sdcq: the card's cache. useCache: the card offers one and it has not refused it, so each CQ session turns it on
     // first. cacheOn: it may be enabled (set before the CMD49 that enables it; cleared only by a read-back that shows it
     // off, or by a power cycle), so a write must be flushed before it completes (commitWrite).
@@ -131,6 +150,7 @@ template <typename Bus> struct IOSwitchCqEngine {
     // probes that opening a session took beyond the first.
     IOSwitchCqError error = {};
     uint64_t recoveries = 0, retried = 0, legacyGroups = 0, skipped = 0, pauses = 0, powerCycles = 0, probes = 0;
+    uint64_t groupAborts = 0;  // r18-sdcq (r8d): CMD43s that emptied the queue between two groups of a session
     unsigned strikes = 0, clean = 0, pauseLeft = 0, pauseLength = kPauseMin;
     bool pausedNow = false;  // the last group started a pause (for the driver's line)
 
@@ -282,6 +302,7 @@ template <typename Bus> struct IOSwitchCqEngine {
         }
         state = kOn;
         queued = next = 0;
+        emptied = true;
         ++enters;
         return true;
     }
@@ -305,6 +326,8 @@ template <typename Bus> struct IOSwitchCqEngine {
     // Assigns tasks 0..n-1 (n <= depth) to an empty queue: CMD44 (read, id, blocks) then CMD45 (start block) for each.
     // r18-sdcq: false at the first command that fails, with `error` set and the engine still in CQ mode for `recover`
     // (the run's next step); a group that cannot be assigned at all (a bug in the caller) stops the queue (fail).
+    // r18-sdcq (r8d): CMD43 first (abort the entire queue, R1b), unless the queue was just emptied: a card may keep a
+    // finished group's Task IDs taken until the host aborts the queue (6.00 4.19.1.2; the header's r8d paragraph).
     bool submit(Bus &bus, const IOSwitchCqTask *t, unsigned n)
     {
         if (state != kOn || queued != next) return fail(bus, "tasks assigned to a busy queue"), false;
@@ -313,6 +336,18 @@ template <typename Bus> struct IOSwitchCqEngine {
             if (!t[i].sectors || t[i].sectors > 0xffff || t[i].lba > 0xffffffffull)
                 return fail(bus, "a task the queue cannot take"), false;
         queued = next = 0;
+        if (!emptied) {
+            uint32_t r1 = 0;
+            const uint8_t before = bus.lastCommand();
+            const int step = bus.command(43, ioswitchSdCmd43(kSdAbortQueue, 0), true, &r1);
+            if (step || (r1 & kR1Errors)) {
+                note(43, 0, before, step, r1, bus);
+                why = "CMD43 before a group failed";
+                return false;
+            }
+            ++groupAborts;
+        }
+        emptied = false;
         for (unsigned i = 0; i < n; ++i) {
             uint32_t r1 = 0;
             uint8_t before = bus.lastCommand();
@@ -365,10 +400,12 @@ template <typename Bus> struct IOSwitchCqEngine {
             error.tasksStep = bus.status(true, &error.taskStatus);
             error.abortStep = bus.command(43, ioswitchSdCmd43(kSdAbortQueue, 0), true, &error.abortR1);
             queued = next = 0;
-            if (!error.abortStep && !(error.abortR1 & kR1Errors))
+            if (!error.abortStep && !(error.abortR1 & kR1Errors)) {
                 r = kInPlace;
-            else
+                emptied = true;
+            } else {
                 r = quit(bus, "the card stays in CQ mode") ? kOut : kStuck;
+            }
         }
         error.outcome = r;
         return r;
@@ -514,7 +551,7 @@ template <typename Bus> struct IOSwitchCqEngine {
         const Outcome outcome = stopped ? kGroupStopped : legacy ? kGroupLegacy : errors ? kGroupRetried : kGroupQueued;
         if (outcome == kGroupLegacy) ++legacyGroups;
         if (outcome == kGroupRetried) ++retried;
-        ended(errors);
+        ended(outcome == kGroupLegacy);
         return outcome;
     }
 
@@ -547,11 +584,12 @@ template <typename Bus> struct IOSwitchCqEngine {
     }
 
 private:
-    // r18-sdcq: the backoff's count at a group's end.
-    void ended(bool errors)
+    // r18-sdcq: the backoff's count at a group's end: `failed`, it went the legacy way (r8d: a group whose retry went
+    // through the queue is no strike).
+    void ended(bool failed)
     {
         pausedNow = false;
-        if (!errors) {
+        if (!failed) {
             strikes = 0;
             if (clean < kForgive && ++clean == kForgive) pauseLength = kPauseMin;
             return;

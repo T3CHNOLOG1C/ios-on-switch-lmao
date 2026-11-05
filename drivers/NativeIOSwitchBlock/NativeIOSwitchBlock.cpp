@@ -1617,7 +1617,9 @@ int NativeIOSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t f
     if (!step && (data == kRegWrite || (flags & 3) == 3) && !waitIdle(true, 1000000000)) step = 10;
     cardLastIrq = s;
     if (step) {
-        if (s & INT_COMMAND) *response = r32(RESPONSE);
+        // r18-sdcq (r8d): not after a command error (timeout, CRC, end bit, index): this controller sets command complete
+        // with a timeout too (irq 0x00018001) and RESPONSE still holds the previous command's.
+        if ((s & INT_COMMAND) && !(s & 0x000f0000u)) *response = r32(RESPONSE);
         stats.errors++;
         stats.lastError = static_cast<uint32_t>(step);
         stats.lastStatus = s;
@@ -2051,8 +2053,8 @@ Batch *NativeIOSwitchBlock::runGroup(Batch *group, unsigned n, Batch *pending, b
     if (outcome == CqEngine::kGroupStopped) cqStopped();
     if (cq.pausedNow)
         os_log(OS_LOG_DEFAULT,
-               "IOSwitchSD: command queue paused for %u groups (%u groups in a row with errors; %llu errors recovered, "
-               "%llu groups read the legacy way, %llu pauses)",
+               "IOSwitchSD: command queue paused for %u groups (%u groups in a row read the legacy way; %llu errors "
+               "recovered, %llu groups read the legacy way, %llu pauses)",
                cq.pauseLeft, CqEngine::kStrikes, cq.recoveries, cq.legacyGroups, cq.pauses);
     stats.cqNs += nowNs() - began;
     return &group[n - 1];

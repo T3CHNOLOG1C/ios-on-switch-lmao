@@ -59,6 +59,9 @@ struct Card {
     long refuse44From = -1;  // every CMD44 from the n-th on gets no response (a card that never takes one again)
     unsigned rejectId = 32;  // Task IDs from this one on get no response (its real depth below byte 6's)
     long fail46At = -1;      // the n-th CMD46's data fails (a data CRC error: the task stays queued)
+    // r18-sdcq (r8d): a group's executed tasks keep their Task IDs taken (not ready: the Task Status Register shows
+    // none) until CMD43 aborts the queue or CQ mode ends, as 6.00 4.19.1.2 leaves it to the host to empty the queue.
+    bool keepsFinished = false;
     // State.
     bool cq = false;
     uint8_t byte262 = 0;  // the CQ control byte
@@ -83,6 +86,7 @@ struct Card {
     unsigned assigned = 0, executedNext = 0;
     uint32_t pendingB = 0;  // r18-sdcq: B-type bits for the next answered response
     unsigned openLeft = 0;
+    uint32_t finished = 0;  // r18-sdcq (r8d): Task IDs a keepsFinished card still holds for executed tasks
     long commands = 0, aborts = 0, enables = 0, legacyCommands = 0, cqReads = 0;
     long illegal = 0, cmd44s = 0, cmd46s = 0, statuses = 0;  // r18-sdcq
     std::vector<uint32_t> trace;                             // command indices in order
@@ -117,6 +121,7 @@ struct Card {
         for (Task &t : tasks) t.used = false;
         assigned = executedNext = 0;
         half = false;
+        finished = 0;
     }
     int command(uint32_t index, uint32_t argument, bool busy, uint32_t *r1)
     {
@@ -145,7 +150,8 @@ struct Card {
             ++cmd44s;
             if (cmd44s == refuse44At || (refuse44From > 0 && cmd44s >= refuse44From)) return noAnswer();
             // Task ID already exists, beyond the depth, no blocks: no response (4.19.5).
-            if (!blocks || task >= depth || task >= rejectId || tasks[task].used) return noAnswer();
+            if (!blocks || task >= depth || task >= rejectId || tasks[task].used || (finished >> task & 1))
+                return noAnswer();
             // Sequential mode: the queue is empty before a group, tasks assigned at once from 0 in order (4.19.1.2).
             REQUIRE(task == assigned && executedNext == 0);
             half = true;
@@ -331,6 +337,7 @@ struct Card {
         pendingB = 0;
         if (cmd46s == fail46At) return 2;
         tasks[task].used = false;
+        if (keepsFinished) finished |= 1u << task;
         ++executedNext;
         ++cqReads;
         if (executedNext == assigned) assigned = executedNext = 0;  // the queue is empty again
@@ -497,10 +504,11 @@ static void basics()
         // Legacy commands are fine again; a second group re-enters.
         card.legacy();
         REQUIRE(runGroup(e, bus, card, 2) && e.enters == 2);
-        // Two groups back to back stay in CQ mode (no CMD49 in between).
+        // Two groups back to back stay in CQ mode (no CMD49 in between); r18-sdcq (r8d): the second one's assignment
+        // starts with CMD43, emptying the queue of the first one's finished tasks.
         const size_t before = card.trace.size();
         REQUIRE(runGroup(e, bus, card, 4));
-        REQUIRE(card.trace[before] == 44 && e.enters == 2);
+        REQUIRE(card.trace[before] == 43 && card.trace[before + 1] == 44 && e.enters == 2 && e.groupAborts == 1);
         REQUIRE(e.leave(bus));
         e.resetCounts();
         REQUIRE(!e.groups && !e.tasks && !e.enters && !e.leaves);
@@ -912,7 +920,8 @@ TEST(SdCommandQueue, R8cSecondSessionCmd44Unanswered)
     REQUIRE(runOne(e, bus, next, 4) == Engine::kGroupQueued);
     const size_t before = card.trace.size();
     GroupHost third(&card, 2, false);
-    REQUIRE(runOne(e, bus, third, 2, 9000) == Engine::kGroupQueued && card.trace[before] == 44);
+    REQUIRE(runOne(e, bus, third, 2, 9000) == Engine::kGroupQueued && card.trace[before] == 43 &&
+            card.trace[before + 1] == 44);
     REQUIRE(e.leave(bus) && card.illegal == 1);
 }
 
@@ -1106,6 +1115,109 @@ TEST(SdCommandQueue, R8cPersistentFailuresPause)
     REQUIRE(e.pauseLength == Engine::kPauseMin && e.leave(bus));
 }
 
+// r18-sdcq (r8d): r8d's card. Every group assigned right after another group of the same session had its first CMD44
+// (task 0) unanswered, "CMD44 task 0 step 3 ... CMD13 status 0x00400900 (ILLEGAL) state 4, tasks 0x00000000; previous
+// CMD46; CMD43 step 0 R1 0x00000800; attempt 1, 31 tasks: assigned again in CQ mode", whatever the group's size; every
+// group after a CMD43 went through (groups = enters + errors at every stats line). The model's keepsFinished card is
+// that card: run as v1/v2 ran it (no CMD43 between groups: `emptied` left set) it gives r8d's line exactly, and every
+// retry goes through; with each group's assignment starting with CMD43, nothing fails.
+static void r8dSession(Engine &e, Bus &bus, Card &card)
+{
+    e.start(31, true);
+    setupGroup(e, bus, card);
+    // The first 32 tasks proven (two proving groups of 16: each leaves CQ mode for its legacy reads, the next enters).
+    for (unsigned i = 0; i < 2; ++i) {
+        GroupHost host(&card, 16, true);
+        REQUIRE(runOne(e, bus, host, 16, 20000 + 977 * 16 * i) == Engine::kGroupQueued);
+    }
+    REQUIRE(!card.illegal && !e.recoveries);
+}
+static const unsigned kR8dGroups[] = {31, 6, 16, 20, 26, 28, 30, 31, 31};
+TEST(SdCommandQueue, R8dWithoutAnAbortBetweenGroups)
+{
+    Card card;
+    card.keepsFinished = true;
+    Bus bus{&card};
+    Engine e;
+    r8dSession(e, bus, card);
+    unsigned g = 0;
+    for (const unsigned n : kR8dGroups) {
+        e.emptied = g++ != 0;  // as v1/v2: the first group enters (CMD43), the others follow it with no CMD43
+        GroupHost host(&card, n, false);
+        const Engine::Outcome outcome = runOne(e, bus, host, n, 50000 + 977 * 31 * g);
+        if (g == 1) {
+            REQUIRE(outcome == Engine::kGroupQueued && host.errors.empty());
+            continue;
+        }
+        // r8d's line, field by field (the model's controller has no interrupt status: irq 0, step 2 for no response).
+        REQUIRE(outcome == Engine::kGroupRetried && host.errors.size() == 1);
+        const IOSwitchCqError &err = host.errors[0];
+        EXPECT_EQ(err.command, 44);
+        EXPECT_EQ(err.task, 0);
+        EXPECT_NE(err.step, 0);
+        EXPECT_EQ(err.previous, 46);
+        EXPECT_EQ(err.r1, 0u);
+        EXPECT_EQ(err.statusStep, 0);
+        EXPECT_EQ(err.cardStatus, kIllegal | kCqTran);  // r8d 0x00400900: ILLEGAL, state 4 (and READY_FOR_DATA)
+        EXPECT_EQ(err.tasksStep, 0);
+        EXPECT_EQ(err.taskStatus, 0u);  // no task ready: every one was executed
+        EXPECT_EQ(err.abortStep, 0);
+        EXPECT_EQ(err.abortR1, kCqTran);  // r8d 0x00000800
+        EXPECT_EQ(err.attempt, 1);
+        EXPECT_EQ(err.tasks, n);
+        EXPECT_EQ(err.outcome, Engine::kInPlace);  // "assigned again in CQ mode", and it goes through
+    }
+    // r8d's arithmetic: groups = enters + errors; and no retried group counts toward a pause (r8d paused 74 times).
+    const unsigned groups = unsigned(sizeof(kR8dGroups) / sizeof(kR8dGroups[0]));
+    EXPECT_EQ(e.recoveries, groups - 1);
+    EXPECT_EQ(e.retried, groups - 1);
+    EXPECT_EQ(e.pauses, 0u);
+    EXPECT_FALSE(e.pauseLeft);
+    EXPECT_EQ(e.legacyGroups, 0u);
+    REQUIRE(e.leave(bus));
+}
+TEST(SdCommandQueue, R8dAbortBetweenGroups)
+{
+    Card card;
+    card.keepsFinished = true;
+    Bus bus{&card};
+    Engine e;
+    r8dSession(e, bus, card);
+    const long illegal = card.illegal;
+    unsigned g = 0;
+    for (const unsigned n : kR8dGroups) {
+        const size_t before = card.trace.size();
+        GroupHost host(&card, n, false);
+        REQUIRE(runOne(e, bus, host, n, 50000 + 977 * 31 * ++g) == Engine::kGroupQueued && host.errors.empty());
+        // The first group enters (its CMD43 opens the session); each after it starts with CMD43, then task 0's CMD44.
+        if (g > 1) REQUIRE(card.trace[before] == 43 && card.trace[before + 1] == 44 && card.trace[before - 1] == 46);
+    }
+    const unsigned groups = unsigned(sizeof(kR8dGroups) / sizeof(kR8dGroups[0]));
+    EXPECT_EQ(card.illegal, illegal);
+    EXPECT_EQ(e.recoveries, 0u);
+    EXPECT_EQ(e.groupAborts, groups - 1);
+    EXPECT_EQ(e.pauses, 0u);
+    REQUIRE(e.leave(bus));
+}
+// r18-sdcq (r8d): groups whose retry goes through the queue never pause it, however many there are in a row.
+TEST(SdCommandQueue, RetriedGroupsNeverPause)
+{
+    Card card;
+    card.keepsFinished = true;
+    Bus bus{&card};
+    Engine e;
+    e.start(31, true);
+    for (unsigned g = 0; g < 4 * Engine::kStrikes; ++g) {
+        e.emptied = g != 0;
+        REQUIRE(e.admit());
+        GroupHost host(&card, 8, false);
+        REQUIRE(runOne(e, bus, host, 8, 1000 + 977 * 8 * g) == (g ? Engine::kGroupRetried : Engine::kGroupQueued));
+    }
+    EXPECT_EQ(e.pauses, 0u);
+    EXPECT_EQ(e.recoveries, 4 * Engine::kStrikes - 1);
+    REQUIRE(e.leave(bus));
+}
+
 // The driver's loop over random work with random bus failures and card behaviours: whatever happens, the card's rules
 // hold (the model asserts them), a legacy command only ever finds the card out of CQ mode, the engine never says the card
 // is out of CQ mode while it is in, and after a failure the engine stays off. When the engine cannot get the card out
@@ -1142,6 +1254,7 @@ static void randomWork()
         card.refuse44From = random() % 40 == 0 ? long(1 + random() % 40) : -1;
         card.rejectId = random() % 20 == 0 ? unsigned(1 + random() % 31) : 32;
         card.fail46At = random() % 6 == 0 ? long(1 + random() % 60) : -1;
+        card.keepsFinished = random() % 4 == 0;
         const bool differs = random() % 60 == 0;
         Bus bus{&card};
         Engine e;
