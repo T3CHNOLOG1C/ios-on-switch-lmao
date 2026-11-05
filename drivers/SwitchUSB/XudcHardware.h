@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra X1 (T210B01) XUSB device controller (XUDC): clocks, power, the USB2 PHY on OTG pad 0 (the USB-C port's D+/D-),
-// event ring, endpoint contexts and transfer rings. USB2 high speed only. Used by SwitchXUDC.cpp, the backend of
-// Apple's IOUSBDeviceController.
+// event ring, endpoint contexts and transfer rings (TRB layout and ring sizes: XudcTransfer.h). USB2 high speed only.
+// Used by SwitchXUDC.cpp, the backend of Apple's IOUSBDeviceController.
 //
 // Sequence: hekate bdk/usb/xusbd.c (xusb_device_init, _xusb_init_phy, _xusbd_init_device_clocks,
 // xusb_device_enumerate); port reset, endpoint pause/reload/halt and the context bit layout: Linux
@@ -14,50 +14,10 @@
 #pragma once
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <libkern/c++/OSObject.h>
+#include "XudcTransfer.h"
 
 namespace xudc {
 
-enum : uint32_t {
-    // TRB types and flags (xHCI layout).
-    TRB_NORMAL = 1,
-    TRB_DATA = 3,
-    TRB_STATUS = 4,
-    TRB_LINK = 6,
-    TRB_TRANSFER_EVENT = 32,
-    TRB_PORT_EVENT = 34,
-    TRB_SETUP_EVENT = 63,
-    TRB_CYCLE = 1u << 0,
-    TRB_TOGGLE = 1u << 1,
-    TRB_ISP = 1u << 2,
-    TRB_CHAIN = 1u << 4,
-    TRB_IOC = 1u << 5,
-    TRB_DIR_IN = 1u << 16,
-    // Completion codes.
-    COMP_SUCCESS = 1,
-    COMP_STALL = 6,
-    COMP_SHORT_PACKET = 13,
-    COMP_EVENT_RING_FULL = 21,
-    // Endpoint context types.
-    EP_BULK_OUT = 2,
-    EP_INTR_OUT = 3,
-    EP_CONTROL = 4,
-    EP_BULK_IN = 6,
-    EP_INTR_IN = 7,
-};
-constexpr uint32_t trbType(uint32_t type)
-{
-    return type << 10;
-}
-constexpr uint32_t kRingTrbs = 16;  // EP0's ring (in the control area); the last one is the link TRB
-constexpr uint32_t kDataRingTrbs =
-    256;  // a data endpoint's ring, one 4 KiB page of its own (SwitchXUDC "Data endpoints")
-constexpr uint32_t kMaxDci = 32;
-// The event ring: two segments of this many events (Linux tegra-xudc's XUDC_EVENT_RING_SIZE), more than the rings can
-// owe at once: each TRB raises at most one event (the ISP event of the short packet that ends its TD, or its IOC event),
-// and 30 data rings of at most kDataRingTrbs - 2 TRBs and EP0's owe at most 7635. A ring sized for one TD per endpoint
-// (64 events) fills: 64 TDs per endpoint can complete in one burst while the drain waits, and an event the controller
-// cannot write is lost.
-constexpr uint32_t kEventSegmentTrbs = 4096;
 // Interrupt moderation (RT_IMOD, 250 ns units, Linux tegra_xudc): at least this long between two interrupts, so a burst
 // of completions is one interrupt; a lone event is not delayed (the interval since the last one has long passed).
 constexpr uint32_t kImodUs = 40;
@@ -106,6 +66,7 @@ public:
     void connect();                                     // VBUS/ID override, enable, port to RxDetect: pull-up on
     void disconnect();                                  // device mode and VBUS override off: the host sees a detach
     bool nextEvent(Event &event);                       // false when the ring is empty
+    bool eventPending();                                // the next event is there (nextEvent would return it)
     void finishEvents();                                // ERDP update + EHB clear after a batch
     bool takeInterrupt();                               // ST.IP set? Then acknowledge it (W1C, IP only)
     bool interruptPending();                            // ST.IP, read only

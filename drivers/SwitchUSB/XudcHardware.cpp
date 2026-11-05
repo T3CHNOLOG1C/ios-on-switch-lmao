@@ -152,7 +152,7 @@ enum : uint32_t {
 };
 
 // Control area: 32 endpoint contexts, EP0's transfer ring (data endpoints have rings of their own). The event ring,
-// two segments of kEventSegmentTrbs (XudcHardware.h), is a buffer of its own.
+// two segments of kEventSegmentTrbs (XudcTransfer.h: sized for every event the rings can owe), is a buffer of its own.
 constexpr uint32_t kContextOffset = 0x0800, kRingOffset = 0x1000, kControlBytes = 0x4000;
 constexpr uint32_t kEventBytes = 2 * kEventSegmentTrbs * 16;
 
@@ -444,6 +444,14 @@ bool Hardware::nextEvent(Event &event)
         eventCycle ^= 1;
     }
     return true;
+}
+
+// The CPU never writes the event ring: cacheFlush's clean of a dirty line would overwrite events written since.
+bool Hardware::eventPending()
+{
+    volatile uint32_t *e = (volatile uint32_t *)events.va + eventIndex * 4;
+    cacheFlush(e, 16);
+    return (e[3] & TRB_CYCLE) == eventCycle;
 }
 
 // Linux tegra_xudc_process_event_ring(): the new dequeue pointer with EHB written as 1 (W1C), which re-enables the

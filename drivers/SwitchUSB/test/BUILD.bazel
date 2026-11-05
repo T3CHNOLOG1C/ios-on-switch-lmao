@@ -1,5 +1,6 @@
 # drivers/SwitchUSB on the host: the XUDC's device-mode transfer planner and OUT residue protocol (XudcTransfer.h,
-# xudc_transfer_test), and USB2 host mode's power-role policy and register arithmetic (SwitchPDPolicy.h, XusbPorts.h,
+# xudc_transfer_test), its completion accounting against a model controller (XudcTransfer.h TdRing,
+# xudc_completion_test), and USB2 host mode's power-role policy and register arithmetic (SwitchPDPolicy.h, XusbPorts.h,
 # switch_usb_host_test).
 #
 #   bazel test //drivers/SwitchUSB/test:all
@@ -15,6 +16,18 @@ host_test(
     name = "xudc_transfer_test",
     srcs = [
         "xudc_transfer_test.cpp",
+        "//drivers/SwitchUSB:XudcTransfer.h",
+    ],
+    copts = ["-O1"],
+)
+
+# XudcTransfer.h's completion accounting (TdRing) against a model XUDC: short packets with one or two events, multi-TRB
+# TDs, ring wrap, cancels and their stale events, long usbmux-like sessions with no request lost, an event ring
+# overflow never silent, and a matching that fails earlier requests losing reads on the same model.
+host_test(
+    name = "xudc_completion_test",
+    srcs = [
+        "xudc_completion_test.cpp",
         "//drivers/SwitchUSB:XudcTransfer.h",
     ],
     copts = ["-O1"],

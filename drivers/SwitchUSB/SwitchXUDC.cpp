@@ -81,11 +81,14 @@ constexpr int kSpeedFull = 1, kSpeedHigh = 2, kSpeedNone = -1;
 constexpr uint32_t kEp0Depth = 16;
 constexpr uint32_t kEp0Bytes = 0x1000;  // descriptors and control data
 // Data endpoints (section "Data endpoints"): requests per endpoint, on the ring or waiting for room; the physically
-// contiguous runs one request may have (more: the serial path); TRBs one request may take; the bounce pool (4 KiB
-// pages, XudcTransfer.h); the serial path's buffer, one TRB at a time as before r17.
+// contiguous runs one request may have (more: the serial path); TRBs one request may take (one less than the ring's
+// room, so a serial TRB always fits beside the largest reserved tail); the bounce pool (4 KiB pages, XudcTransfer.h);
+// the serial path's buffer, one TRB at a time.
 constexpr uint32_t kQueueDepth = 64;
 constexpr uint32_t kMaxRuns = 128;
-constexpr uint32_t kMaxPieces = kDataRingTrbs - 2;
+constexpr uint32_t kMaxPieces = kDataRingTrbs - 3;
+using Tds = TdRing<kDataRingTrbs - 1, kQueueDepth>;
+static_assert(kMaxPieces < kDataRingTrbs - 2, "a serial TRB fits beside the largest tail");
 constexpr uint32_t kPoolBytes = 512 * 1024, kPoolPages = kPoolBytes / kBouncePageBytes;
 constexpr uint32_t kSerialBytes = 0x10000;
 constexpr uint64_t kReach = 1ull << 32;  // the XUDC's DMA reach as used here (XudcTransfer.h)
@@ -113,28 +116,32 @@ uint32_t log2Floor(uint32_t v)
 class SwitchXUDC : public IOUSBDeviceController {
     OSDeclareDefaultStructors(SwitchXUDC)
 
-        // A data endpoint's request (section "Data endpoints"): its memory, prepared from admission to completion; its
-        // TRBs on the ring (first index, count); the serial path's progress; the OUT residue probe's IOC on TRB 0.
+        // A data endpoint's request (section "Data endpoints"): its memory, prepared from admission to completion; the
+        // serial path's progress.
         struct Request {
         _IOUSBDeviceIORequestTag *tag;
         IOMemoryDescriptor *md;
-        uint32_t length, first, trbs, done;
-        bool prepared, probe;
+        uint32_t length, done;
+        bool prepared;
     };
-    // queue: kQueueDepth requests from head, the first onRing of them with TRBs on the ring (`used` TRBs in all).
-    // serial: the head request runs alone one TRB at a time through `serial` (serialTrb, serialLength in flight).
+    // queue: kQueueDepth requests from head, the first tds->onRing() of them with TDs on the ring. queue and tds are
+    // allocated at the first activation: SwitchXUDC itself is capped at 16 KiB. serial: the head request runs alone one
+    // TRB at a time through `serial` (its one-TRB TD in tds, serialLength in flight).
     struct Endpoint {
         bool active, in, serialBusy;
-        uint32_t mps, head, count, onRing, used, serialTrb, serialLength;
+        uint32_t mps, head, count, serialLength;
         Request *queue;
+        Tds *tds;
         DmaBuffer serial;
     };
-    // Bytes, requests and bounced bytes per direction (0 OUT, 1 IN), requests by the serial path, why packets were
-    // bounced (XudcTransfer.h PlanStats), interrupts, events, time in the filter, the event drain and queueing.
+    // Bytes, requests, failed requests and bounced bytes per direction (0 OUT, 1 IN), requests by the serial path, why
+    // packets were bounced (XudcTransfer.h PlanStats), interrupts, events, time in the filter, the event drain and
+    // queueing; transfer events by kind (XudcTransfer.h Verdict): TDs ended at a short packet before their last TRB,
+    // their second events absorbed, stale events after a cancel, events for no request.
     struct Stats {
-        uint64_t bytes[2], requests[2], bounced[2], serial[2];
+        uint64_t bytes[2], requests[2], failed[2], bounced[2], serial[2];
         PlanStats why;
-        uint32_t events;
+        uint32_t events, shortEarly, second, stale, unexplained;
         uint64_t ticks;
     };
     enum class Stage : uint8_t { Idle, DataIn, StatusIn, DataOut, StatusOut };
@@ -157,8 +164,10 @@ class SwitchXUDC : public IOUSBDeviceController {
     // Scratch of admit() and transferEvent() (work loop only, never nested: neither calls out before it is done).
     Run scratchRuns[kMaxRuns];
     Piece scratchPieces[kMaxPieces];
-    uint32_t scratchLengths[kMaxPieces];
     uint32_t interruptsLogged;
+    uint32_t mostTrbs[2];                // the most TRBs one request took per direction since the last stats line
+    uint8_t secondLogged, eventsLogged;  // one-shot lines: the first second event; events for no request, errors
+    bool draining;                       // serviceEvents is reading the event ring
     volatile uint64_t filterTicks;
     Stage stage;
     _IOUSBDeviceIORequestTag *ep0Request;
@@ -190,9 +199,11 @@ class SwitchXUDC : public IOUSBDeviceController {
     Admit admit(uint32_t dci, Request &r);
     void startSerial(uint32_t dci);
     void serialPiece(uint32_t dci);
-    void serialEvent(uint32_t dci, const Event &e);
-    void complete(uint32_t dci, uint32_t k, IOReturn status, uint32_t actual);
-    void releaseTrbs(uint32_t dci, Request &r, bool copyBack, uint32_t actual);
+    void serialEvent(uint32_t dci, const Decision &d);
+    void complete(uint32_t dci, IOReturn status, uint32_t actual, const Decision *event);
+    void releaseTrbs(uint32_t dci, const Tds::Td &td, Request &r, bool copyBack, uint32_t actual);
+    void lostEvent(uint32_t dci, const Event &e, uint32_t index, const Decision &d);
+    void oddEvent(uint32_t dci, const Event &e, uint32_t index, const char *what);
     int poolTake();
     void poolGive(uint64_t pa);
     bool inPool(uint64_t pa) const { return pool.va && pa >= pool.pa && pa < (uint64_t)pool.pa + pool.size; }
@@ -295,7 +306,9 @@ void SwitchXUDC::free()
     for (Endpoint &ep : endpoints) {
         ep.serial.release();
         if (ep.queue) IODelete(ep.queue, Request, kQueueDepth);
+        if (ep.tds) IODelete(ep.tds, Tds, 1);
         ep.queue = nullptr;
+        ep.tds = nullptr;
     }
     ep0Buffer.release();
     pool.release();
@@ -333,14 +346,20 @@ void SwitchXUDC::interruptOccurred(OSObject *owner, IOInterruptEventSource *, in
 }
 
 // The whole event ring, as Linux tegra_xudc_process_event_ring drains it (at most one ring's worth per pass, so a pass
-// ends). The ring is sized never to fill (XudcHardware.h kEventSegmentTrbs); should the controller still report it
+// ends). The ring is sized never to fill (XudcTransfer.h kEventSegmentTrbs); should the controller still report it
 // full (completion code 21 on a transfer event or, as xHCI does, a host controller event; a setup event's third word is
 // its sequence number, not looked at), events were lost, and that panics with one line.
 void SwitchXUDC::serviceEvents()
 {
     const uint64_t entered = mach_absolute_time();
     Event e;
-    for (uint32_t handled = 0; handled < 2 * kEventSegmentTrbs && hw.nextEvent(e); ++handled) {
+    bool emptied = false;
+    draining = true;
+    for (uint32_t handled = 0; handled < 2 * kEventSegmentTrbs; ++handled) {
+        if (!hw.nextEvent(e)) {
+            emptied = true;
+            break;
+        }
         ++st.events;
         if (e.type() != TRB_SETUP_EVENT && e.type() != TRB_PORT_EVENT && e.code() == COMP_EVENT_RING_FULL)
             panic("SwitchUSB: XUDC event ring full, events were lost (event type %u, DCI %u, TRB %#x, d %08x %08x %08x "
@@ -353,9 +372,23 @@ void SwitchXUDC::serviceEvents()
         default: break;
         }
     }
+    draining = false;
     // Always: the ERDP write also clears EHB, without which no further interrupt is raised. Events left over (a full
     // ring's worth read) raise a new one.
     hw.finishEvents();
+    // Emptied: every event the controller wrote before now has been read, so whatever a cancel left in the event ring
+    // is gone: the fenced endpoints take requests again (all lifted first: a kick may cancel another endpoint, whose
+    // fence this drain does not cover).
+    if (emptied) {
+        uint32_t lifted = 0;
+        for (uint32_t dci = 2; dci < kMaxDci; ++dci) {
+            if (!endpoints[dci].tds || !endpoints[dci].tds->fenced()) continue;
+            endpoints[dci].tds->liftFence();
+            lifted |= 1u << dci;
+        }
+        for (uint32_t dci = 2; dci < kMaxDci; ++dci)
+            if (lifted & (1u << dci) && endpoints[dci].queue) kick(dci);
+    }
     kickWaiting();
     const uint64_t now = mach_absolute_time();
     st.ticks += now - entered;
@@ -364,7 +397,9 @@ void SwitchXUDC::serviceEvents()
 
 // Work loop: one os_log line per kStatsMs at most, only after data moved (never the console): MB/s, requests and what
 // was bounced per direction, interrupts and events per second, and the driver's own CPU time (the interrupt filter, the
-// event drain and the queueing in ioGated, which includes prepare() and the bounce copies) as a share of one core.
+// event drain and the queueing in ioGated, which includes prepare() and the bounce copies) as a share of one core. A
+// second line (the kernel's os_log encodes at most about 236 bytes of arguments: one line would be dropped whole): how
+// transfer events matched requests (XudcTransfer.h Verdict), failed requests and the most TRBs one request took.
 void SwitchXUDC::logStats(uint64_t now)
 {
     const uint32_t irqs = __atomic_load_n(&interrupts, __ATOMIC_RELAXED);
@@ -374,6 +409,7 @@ void SwitchXUDC::logStats(uint64_t now)
         statsAt = now;
         stLogged = st;
         interruptsLogged = irqs;
+        mostTrbs[0] = mostTrbs[1] = 0;
         return;
     }
     uint64_t ns = 0, busy = 0;
@@ -396,8 +432,15 @@ void SwitchXUDC::logStats(uint64_t now)
            (uint64_t)(st.events - o.events) * 1000000000ULL / ns, cpu / 100, cpu % 100,
            st.why.discontinuity - o.why.discontinuity, st.why.boundary - o.why.boundary, st.why.high - o.why.high,
            st.why.edge - o.why.edge, poolFree, pool.va ? kPoolPages : 0, kResidueName[residue & 3]);
+    os_log(OS_LOG_DEFAULT,
+           "SwitchXUDC: transfer events %llu ms: %u TDs ended short before their last TRB, %u second events absorbed, "
+           "%u stale, %u for no request; failed requests IN %u OUT %u; most TRBs per request IN %u OUT %u",
+           ns / 1000000, st.shortEarly - o.shortEarly, st.second - o.second, st.stale - o.stale,
+           st.unexplained - o.unexplained, (uint32_t)(st.failed[1] - o.failed[1]),
+           (uint32_t)(st.failed[0] - o.failed[0]), mostTrbs[1], mostTrbs[0]);
     stLogged = st;
     interruptsLogged = irqs;
+    mostTrbs[0] = mostTrbs[1] = 0;
     statsAt = now;
 }
 
@@ -593,8 +636,11 @@ void SwitchXUDC::ep0Cancel(IOReturn status)
 // request (AppleUSBDeviceMux's are kernel virtual ranges over its mbufs, IOMemoryDescriptor::withAddressRanges) is
 // prepared once, its physical runs become chained TRBs (XudcTransfer.h plan: whole packets per TRB, IOC on the last,
 // ISP on OUT), and up to kQueueDepth requests sit on a kDataRingTrbs ring at once, so the controller goes from one to
-// the next without the CPU. Each completion (one event per request, interrupt moderation coalescing bursts) finishes
-// its request and lets the next ones on (completion-driven: ioGated and the event drain both call kick). Packets that
+// the next without the CPU. Each completion (the request's own event, interrupt moderation coalescing bursts) finishes
+// its request and lets the next ones on (completion-driven: ioGated and the event drain both call kick). Requests
+// complete only in order, each from its own event (XudcTransfer.h "Completion accounting": a TD ended by a short packet
+// keeps its TRBs reserved until the controller is past it, a cancel fences the ring until its stale events are read, an
+// event for a later request than the head is a lost event and panics). Packets that
 // cannot go direct (XudcTransfer.h: across a break, a 64 KiB boundary or 4 GiB, an OUT cache-line edge) go through
 // 4 KiB pages of the bounce pool, copied in before an IN and out after an OUT; a request with more runs than kMaxRuns
 // or more TRBs than the ring holds, an OUT one too small to probe the residue, or every multi-TRB OUT one once the
@@ -636,7 +682,7 @@ void SwitchXUDC::kickWaiting()
     poolFreed = false;
     for (uint32_t dci = 2; dci < kMaxDci; ++dci) {
         const Endpoint &ep = endpoints[dci];
-        if (ep.active && ep.queue && !ep.serialBusy && ep.onRing < ep.count) kick(dci);
+        if (ep.active && ep.queue && !ep.serialBusy && ep.tds->onRing() < ep.count) kick(dci);
     }
 }
 
@@ -652,13 +698,7 @@ IOReturn SwitchXUDC::ioGated(_IOUSBDeviceIORequestTag *request)
     if (get<uint64_t>(request, kReqLength) > UINT32_MAX || ep.count == kQueueDepth) return kIOReturnNoResources;
     const uint64_t entered = mach_absolute_time();
     Request &r = ep.queue[(ep.head + ep.count++) % kQueueDepth];
-    r = {request,
-         get<IOMemoryDescriptor *>(request, kReqBuffer),
-         (uint32_t)get<uint64_t>(request, kReqLength),
-         0,
-         0,
-         0,
-         false,
+    r = {request, get<IOMemoryDescriptor *>(request, kReqBuffer), (uint32_t)get<uint64_t>(request, kReqLength), 0,
          false};
     kick(dci);
     st.ticks += mach_absolute_time() - entered;
@@ -667,24 +707,24 @@ IOReturn SwitchXUDC::ioGated(_IOUSBDeviceIORequestTag *request)
 
 // Requests in order onto the ring while it and the pool have room; one doorbell for the lot. A request that cannot be
 // prepared fails when it reaches the head (the ones before it complete first, in order); one for the serial path
-// starts once the ring has drained.
+// starts once the ring has drained. A fenced ring takes nothing (its fence lifts after the next full event drain).
 void SwitchXUDC::kick(uint32_t dci)
 {
     Endpoint &ep = endpoints[dci];
     bool queued = false;
-    while (ep.active && !ep.serialBusy && ep.onRing < ep.count && !hw.halted(dci)) {
-        Request &r = ep.queue[(ep.head + ep.onRing) % kQueueDepth];
+    while (ep.active && !ep.serialBusy && !ep.tds->fenced() && ep.tds->onRing() < ep.count && !hw.halted(dci)) {
+        Request &r = ep.queue[(ep.head + ep.tds->onRing()) % kQueueDepth];
         const Admit a = admit(dci, r);
         if (a == Admit::Queued) {
             queued = true;
             continue;
         }
-        if (a == Admit::Wait || ep.onRing) break;  // room comes with completions; the rest waits for the head
+        if (a == Admit::Wait || ep.tds->onRing()) break;  // room comes with completions; the rest waits for the head
         if (a == Admit::Serial) {
             startSerial(dci);
             break;
         }
-        complete(dci, 0, kIOReturnDMAError, 0);  // Failed, at the head
+        complete(dci, kIOReturnDMAError, 0, nullptr);  // Failed, at the head (not on the ring)
     }
     if (queued) hw.doorbell(dci);
 }
@@ -714,7 +754,7 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
     }
     if (offset < r.length) return Admit::Serial;
     const bool probe = out && residue == kResidueUnknown && r.length >= 2 * ep.mps;
-    const uint32_t room = kDataRingTrbs - 2 - ep.used;
+    const uint32_t room = ep.tds->room();
     Piece *const pieces = scratchPieces;
     PlanStats why = {};
     const uint32_t n =
@@ -722,7 +762,9 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
     if (!n) {
         PlanStats ignored = {};
         const bool fits = plan(runs, runCount, r.length, ep.mps, out, probe, kReach, pieces, kMaxPieces, &ignored);
-        return fits ? Admit::Wait : Admit::Serial;
+        // Room comes with completions; with nothing on the ring only a reserved tail can hold it, until the
+        // controller's next event, so this one goes serial (one TRB, which always fits beside a tail: kMaxPieces).
+        return fits && ep.tds->onRing() ? Admit::Wait : Admit::Serial;
     }
     if (out && n > 1 && (residue == kResidueBroken || (residue == kResidueUnknown && !probe))) return Admit::Serial;
     uint32_t bounces = 0;
@@ -739,17 +781,16 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
     }
     if (r.length) r.md->performOperation(out ? kIOMemoryIncoherentIOFlush : kIOMemoryIncoherentIOStore, 0, r.length);
     const uint32_t base = trbType(TRB_NORMAL) | (out ? TRB_ISP : 0);
+    uint32_t first = 0;
     for (uint32_t i = 0; i < n; ++i) {
         const bool last = i + 1 == n;
         const uint32_t flags = base | (last ? TRB_IOC : TRB_CHAIN) | (probe && i == 0 && !last ? TRB_IOC : 0);
         const uint32_t index = hw.pushData(dci, pieces[i].pa, pieces[i].length, n - 1 - i, flags);
-        if (!i) r.first = index;
+        if (!i) first = index;
     }
-    r.trbs = n;
-    r.probe = probe && n > 1;
-    ep.used += n;
-    ++ep.onRing;
+    ep.tds->push({(uint16_t)first, (uint16_t)n, r.length, probe && n > 1});
     const uint32_t d = out ? 0 : 1;
+    if (n > mostTrbs[d]) mostTrbs[d] = n;
     st.bounced[d] += why.bounceBytes;
     st.why.discontinuity += why.discontinuity;
     st.why.boundary += why.boundary;
@@ -758,15 +799,14 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
     return Admit::Queued;
 }
 
-// The TRBs of an on-ring request given back: what arrived in the client's memory invalidated first (OUT: a line the
-// CPU fetched meanwhile is stale, and a bounced packet's bytes written into it would carry it back over the data), then
-// bounce pages copied out (OUT, up to `actual`) and freed.
-void SwitchXUDC::releaseTrbs(uint32_t dci, Request &r, bool copyBack, uint32_t actual)
+// The memory of an on-ring request's TD (`td`) given back: what arrived in the client's memory invalidated first (OUT:
+// a line the CPU fetched meanwhile is stale, and a bounced packet's bytes written into it would carry it back over the
+// data), then bounce pages copied out (OUT, up to `actual`) and freed. The TRB slots themselves are the TdRing's.
+void SwitchXUDC::releaseTrbs(uint32_t dci, const Tds::Td &td, Request &r, bool copyBack, uint32_t actual)
 {
-    Endpoint &ep = endpoints[dci];
     if (copyBack && actual) r.md->performOperation(kIOMemoryIncoherentIOFlush, 0, actual);
-    uint32_t index = r.first, offset = 0;
-    for (uint32_t i = 0; i < r.trbs; ++i, index = hw.nextIndex(dci, index)) {
+    uint32_t index = td.first, offset = 0;
+    for (uint32_t i = 0; i < td.trbs; ++i, index = hw.nextIndex(dci, index)) {
         const uint64_t pa = hw.trbBuffer(dci, index);
         const uint32_t length = hw.trbLength(dci, index);
         if (inPool(pa)) {
@@ -780,32 +820,27 @@ void SwitchXUDC::releaseTrbs(uint32_t dci, Request &r, bool copyBack, uint32_t a
         }
         offset += length;
     }
-    ep.used -= r.trbs;
-    r.trbs = 0;
 }
 
-// The k-th on-ring request (0 but for a lost event) and those before it are done: completed in order, the function
-// told (it may queue its next transfer from there), and the ring refilled.
-void SwitchXUDC::complete(uint32_t dci, uint32_t k, IOReturn status, uint32_t actual)
+// Only the head ever completes. `event` is its own (its TD given back and retired); without one it was not on the ring.
+// The request leaves the queue before finish(): the function may queue its next transfer from there.
+void SwitchXUDC::complete(uint32_t dci, IOReturn status, uint32_t actual, const Decision *event)
 {
     Endpoint &ep = endpoints[dci];
-    for (uint32_t i = 0; i <= k && ep.count; ++i) {
-        Request r = ep.queue[ep.head];
-        const bool mine = i == k;
-        const IOReturn result = mine ? status : ep.in ? kIOReturnSuccess : kIOReturnIOError;
-        const uint32_t moved = mine ? actual : ep.in ? r.length : 0;
-        if (ep.onRing) {
-            releaseTrbs(dci, r, !ep.in && result == kIOReturnSuccess, moved);
-            --ep.onRing;
-        }
-        if (r.prepared) r.md->complete();
-        ep.head = (ep.head + 1) % kQueueDepth;
-        ep.count--;
-        const uint32_t d = ep.in ? 1 : 0;
-        st.bytes[d] += moved;
-        ++st.requests[d];
-        finish(r.tag, result, moved);
+    if (!ep.count) return;
+    Request r = ep.queue[ep.head];
+    if (event) {
+        releaseTrbs(dci, ep.tds->td(0), r, !ep.in && status == kIOReturnSuccess, actual);
+        ep.tds->apply(*event);
     }
+    if (r.prepared) r.md->complete();
+    ep.head = (ep.head + 1) % kQueueDepth;
+    ep.count--;
+    const uint32_t d = ep.in ? 1 : 0;
+    st.bytes[d] += actual;
+    ++st.requests[d];
+    if (status != kIOReturnSuccess) ++st.failed[d];
+    finish(r.tag, status, actual);
     kick(dci);
 }
 
@@ -814,9 +849,9 @@ void SwitchXUDC::startSerial(uint32_t dci)
 {
     Endpoint &ep = endpoints[dci];
     Request &r = ep.queue[ep.head];
-    if (!ep.serial.va && !ep.serial.allocate(kSerialBytes)) return complete(dci, 0, kIOReturnNoMemory, 0);
+    if (!ep.serial.va && !ep.serial.allocate(kSerialBytes)) return complete(dci, kIOReturnNoMemory, 0, nullptr);
     if (r.md && !r.prepared) {
-        if (r.md->prepare() != kIOReturnSuccess) return complete(dci, 0, kIOReturnDMAError, 0);
+        if (r.md->prepare() != kIOReturnSuccess) return complete(dci, kIOReturnDMAError, 0, nullptr);
         r.prepared = true;
     }
     r.done = 0;
@@ -832,82 +867,125 @@ void SwitchXUDC::serialPiece(uint32_t dci)
     const uint32_t left = r.length - r.done, piece = left < ep.serial.size ? left : ep.serial.size;
     if (ep.in && piece && r.md->readBytes(r.done, ep.serial.va, piece) != piece) {
         ep.serialBusy = false;
-        return complete(dci, 0, kIOReturnDMAError, 0);
+        return complete(dci, kIOReturnDMAError, 0, nullptr);
     }
     cacheFlush(ep.serial.va, piece ? piece : 1);
     ep.serialLength = piece;
-    ep.serialTrb = hw.pushData(dci, ep.serial.pa, piece, 0, trbType(TRB_NORMAL) | TRB_ISP | TRB_IOC);
-    ep.used = 1;
+    const uint32_t index = hw.pushData(dci, ep.serial.pa, piece, 0, trbType(TRB_NORMAL) | TRB_ISP | TRB_IOC);
+    ep.tds->push({(uint16_t)index, 1, piece, false});
     hw.doorbell(dci);
 }
 
-void SwitchXUDC::serialEvent(uint32_t dci, const Event &e)
+namespace {
+IOReturn statusOf(Outcome outcome)
+{
+    return outcome == Outcome::Done    ? kIOReturnSuccess
+           : outcome == Outcome::Stall ? kIOReturnNotResponding
+                                       : kIOReturnIOError;
+}
+}  // namespace
+
+void SwitchXUDC::serialEvent(uint32_t dci, const Decision &d)
 {
     Endpoint &ep = endpoints[dci];
-    uint32_t index;
-    if (!hw.trbIndex(dci, e.trb(), &index) || index != ep.serialTrb) return;  // dropped by an abort
+    ep.tds->apply(d);
     Request &r = ep.queue[ep.head];
-    const bool ok = e.code() == COMP_SUCCESS || e.code() == COMP_SHORT_PACKET;
-    const uint32_t actual = ok && e.residue() <= ep.serialLength ? ep.serialLength - e.residue() : 0;
-    IOReturn status = ok ? kIOReturnSuccess : e.code() == COMP_STALL ? kIOReturnNotResponding : kIOReturnIOError;
-    if (ok && !ep.in && actual) {
+    const uint32_t actual = d.outcome == Outcome::Done && d.actual <= ep.serialLength ? d.actual : 0;
+    IOReturn status = statusOf(d.outcome);
+    if (status == kIOReturnSuccess && !ep.in && actual) {
         cacheFlush(ep.serial.va, actual);
         if (r.md->writeBytes(r.done, ep.serial.va, actual) != actual) status = kIOReturnDMAError;
     }
     r.done += actual;
-    ep.used = 0;
     if (status == kIOReturnSuccess && r.done < r.length && actual == ep.serialLength) return serialPiece(dci);
     ep.serialBusy = false;
     const uint32_t moved = r.done;
     st.bounced[ep.in ? 1 : 0] += moved;
-    complete(dci, 0, status, moved);
+    complete(dci, status, moved, nullptr);
 }
 
-// One transfer event of a data endpoint: the request whose TRBs hold it, its actual length (IN: all of it; OUT:
-// XudcTransfer.h outEvent, which also learns the residue reading from the probe), completion.
+// What each event means: XudcTransfer.h "Completion accounting".
 void SwitchXUDC::transferEvent(const Event &e)
 {
     uint32_t dci = e.dci();
     if (dci == 0) return ep0Complete(e);
     if (dci >= kMaxDci) return;
     Endpoint &ep = endpoints[dci];
-    if (ep.serialBusy) return serialEvent(dci, e);
     uint32_t index;
-    if (!hw.trbIndex(dci, e.trb(), &index)) return;
-    for (uint32_t k = 0; k < ep.onRing; ++k) {
-        Request &r = ep.queue[(ep.head + k) % kQueueDepth];
-        uint32_t at = r.first, pos = 0;
-        while (pos < r.trbs && at != index) {
-            at = hw.nextIndex(dci, at);
-            ++pos;
-        }
-        if (pos == r.trbs) continue;
-        const bool shortPacket = e.code() == COMP_SHORT_PACKET;
-        if (e.code() != COMP_SUCCESS && !shortPacket)
-            return complete(dci, k, e.code() == COMP_STALL ? kIOReturnNotResponding : kIOReturnIOError, 0);
-        if (ep.in) return complete(dci, k, kIOReturnSuccess, e.residue() <= r.length ? r.length - e.residue() : 0);
-        uint32_t *const lengths = scratchLengths;
-        for (uint32_t i = 0, t = r.first; i < r.trbs; ++i, t = hw.nextIndex(dci, t)) lengths[i] = hw.trbLength(dci, t);
-        const OutResult o = outEvent(residue, lengths, r.trbs, pos, e.residue(), shortPacket);
-        if (o.learned != kResidueUnknown && o.learned != residue && residue != kResidueBroken) {
-            residue = o.learned;
-            IOLog("SwitchUSB: OUT transfer events report the residue %s%s\n",
-                  residue == kResiduePerTd    ? "of the whole TD (as Linux tegra-xudc reads it)"
-                  : residue == kResiduePerTrb ? "of the event's TRB (as xHCI hosts do)"
-                                              : "as neither the TD's nor the TRB's",
-                  residue == kResidueBroken ? ": multi-TRB OUT requests go one TRB at a time from now" : "");
-        }
-        if (!o.done) return;  // the probe's packet arrived: the rest of the TD is still coming
-        return complete(dci, k, o.failed ? kIOReturnIOError : kIOReturnSuccess, o.failed ? 0 : o.actual);
+    if (!hw.trbIndex(dci, e.trb(), &index)) index = Tds::kNoTrb;
+    if (!ep.tds) {  // never configured
+        ++st.unexplained;
+        return oddEvent(dci, e, index, "for an endpoint never configured");
     }
+    const Decision d = ep.tds->decide(index, e.code(), e.residue(), ep.in, residue,
+                                      [this, dci](uint32_t t) { return hw.trbLength(dci, t); });
+    switch (d.verdict) {
+    case Verdict::Head: break;
+    case Verdict::SecondEvent:
+        ++st.second;
+        if (!secondLogged) {
+            secondLogged = 1;
+            IOLog("SwitchUSB: an OUT TD ended by a short packet before its last TRB gets a second event on that TRB "
+                  "(DCI %u, code %u, residue %u): absorbed, its TRBs reused after it\n",
+                  dci, e.code(), e.residue());
+        }
+        ep.tds->apply(d);  // the tail's TRBs are free: room for what waits
+        return kick(dci);
+    case Verdict::Stale: ++st.stale; return;
+    case Verdict::Lost: return lostEvent(dci, e, index, d);
+    case Verdict::Unexplained: ++st.unexplained; return oddEvent(dci, e, index, "for no request on the ring");
+    }
+    if (d.learned != kResidueUnknown && d.learned != residue && residue != kResidueBroken) {
+        residue = d.learned;
+        IOLog("SwitchUSB: OUT transfer events report the residue %s%s\n",
+              residue == kResiduePerTd    ? "of the whole TD (as Linux tegra-xudc reads it)"
+              : residue == kResiduePerTrb ? "of the event's TRB (as xHCI hosts do)"
+                                          : "as neither the TD's nor the TRB's",
+              residue == kResidueBroken ? ": multi-TRB OUT requests go one TRB at a time from now" : "");
+    }
+    if (d.outcome == Outcome::Error || d.outcome == Outcome::Stall) oddEvent(dci, e, index, "with an error");
+    if (ep.serialBusy) return serialEvent(dci, d);
+    if (d.outcome == Outcome::Pending) {  // the probe's packet: the rest of the TD is coming
+        ep.tds->apply(d);
+        return kick(dci);  // a tail it released makes room
+    }
+    if (d.armTail) ++st.shortEarly;
+    complete(dci, statusOf(d.outcome), d.outcome == Outcome::Done ? d.actual : 0, &d);
 }
 
-// Requests are taken off the queue before completion: completions re-enter ioGated().
+void SwitchXUDC::lostEvent(uint32_t dci, const Event &e, uint32_t index, const Decision &d)
+{
+    const Endpoint &ep = endpoints[dci];
+    const Tds::Td &head = ep.tds->td(0), &owner = ep.tds->td(d.k);
+    panic("SwitchUSB: XUDC transfer event lost on DCI %u (EP%u %s): an event on TRB %u (%#x, code %u, residue %u) is "
+          "for request %u of %u on the ring (TRBs %u..%u), but the head (TRBs %u..%u, %u bytes) had none",
+          dci, dci / 2, ep.in ? "IN" : "OUT", index, e.trb(), e.code(), e.residue(), d.k, ep.tds->onRing(),
+          (uint32_t)owner.first, Tds::at(owner.first, owner.trbs - 1u), (uint32_t)head.first,
+          Tds::at(head.first, head.trbs - 1u), head.bytes);
+}
+
+// Events that lose nothing but should not happen.
+void SwitchXUDC::oddEvent(uint32_t dci, const Event &e, uint32_t index, const char *what)
+{
+    if (eventsLogged >= 8) return;
+    ++eventsLogged;
+    const Tds *tds = endpoints[dci].tds;
+    const uint32_t onRing = tds ? tds->onRing() : 0;
+    IOLog("SwitchUSB: XUDC transfer event %s on DCI %u: TRB %#x (index %d), code %u, residue %u; %u requests on the "
+          "ring from TRB %u, tail %u TRBs\n",
+          what, dci, e.trb(), (int)index, e.code(), e.residue(), onRing, onRing ? (uint32_t)tds->td(0).first : 0,
+          tds ? tds->tailTrbs() : 0);
+}
+
+// Requests are taken off the queue before completion: completions re-enter ioGated(). The events the controller wrote
+// for what was on the ring may still be in the event ring: the endpoint is fenced (XudcTransfer.h TdRing::cancel) until
+// an event drain has read them, at once if none is there and no drain is under way (the controller wrote them before
+// dropQueued's pause completed).
 void SwitchXUDC::cancel(uint32_t dci, IOReturn status)
 {
     Endpoint &ep = endpoints[dci];
-    if (!ep.queue) return;
-    if (ep.onRing || ep.serialBusy) hw.dropQueued(dci);
+    if (!ep.queue || !ep.tds) return;
+    if (ep.tds->busy()) hw.dropQueued(dci);
     struct {
         _IOUSBDeviceIORequestTag *tag;
         IOMemoryDescriptor *prepared;
@@ -915,11 +993,12 @@ void SwitchXUDC::cancel(uint32_t dci, IOReturn status)
     const uint32_t count = ep.count;
     for (uint32_t i = 0; i < count; ++i) {
         Request &r = ep.queue[(ep.head + i) % kQueueDepth];
-        if (i < ep.onRing) releaseTrbs(dci, r, false, 0);
+        if (!ep.serialBusy && i < ep.tds->onRing()) releaseTrbs(dci, ep.tds->td(i), r, false, 0);
         pending[i] = {r.tag, r.prepared ? r.md : nullptr};
     }
-    ep.head = ep.count = ep.onRing = ep.used = 0;
+    ep.head = ep.count = 0;
     ep.serialBusy = false;
+    if (ep.tds->cancel() && !draining && !hw.eventPending()) ep.tds->liftFence();
     for (uint32_t i = 0; i < count; ++i) {
         if (pending[i].prepared) pending[i].prepared->complete();
         finish(pending[i].tag, status, 0);
@@ -1131,9 +1210,12 @@ IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, 
         return kIOReturnUnsupported;
     }
     Endpoint &ep = endpoints[dci];
+    if (ep.queue && ep.tds && (ep.count || ep.tds->busy()))
+        cancel(dci, kIOReturnAborted);  // activated without a deactivation
     if (!ep.queue) ep.queue = IONewZero(Request, kQueueDepth);
-    if (!ep.queue) return kIOReturnNoMemory;
-    ep.head = ep.count = ep.onRing = ep.used = 0;
+    if (!ep.tds) ep.tds = IONewZero(Tds, 1);  // zeroed: empty, unfenced
+    if (!ep.queue || !ep.tds) return kIOReturnNoMemory;
+    ep.head = ep.count = 0;
     ep.serialBusy = false;
     ep.in = in;
     ep.mps = (uint32_t)maxPacketSize;
