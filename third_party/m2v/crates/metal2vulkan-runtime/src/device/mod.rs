@@ -63,7 +63,7 @@ use super::memory::Memory;
 use super::mipmap_scratch::MipmapScratch;
 use super::owned_kernel::OwnedKernels;
 use super::render_state::{depth_bias_command, DepthBiasCommand};
-use super::render_target::KeptCompatible;
+use super::render_target::{KeptCompatible, KeptFinal};
 use super::resource_ids::{ResourceIds, SamplerIdReads};
 use super::sample_planes::PlanesObjects;
 use super::sampler::{SamplerCount, SamplerKey, SamplerShared};
@@ -305,6 +305,8 @@ pub(super) struct DeviceShared {
     pub(super) attachmentless: Mutex<KeptPasses>,
     /// The compatible passes it keeps, by shape (`render_target::shared_compatible_pass`).
     pub(super) compatible_passes: Mutex<KeptCompatible>,
+    /// The final passes it keeps, by what they are made of (`render_target::kept_final_pass`).
+    pub(super) final_passes: Mutex<KeptFinal>,
     /// The caller's images that move between layouts, and the events' timeline semaphores
     /// (`interop.rs`).
     pub(super) interop: Interop,
@@ -498,6 +500,7 @@ impl Drop for DeviceShared {
         lock(&self.depth_stencil_resolves).destroy(self.vk());
         lock(&self.attachmentless).destroy(self.vk());
         lock(&self.compatible_passes).destroy(self.vk());
+        lock(&self.final_passes).destroy(self.vk());
         // What released variants left (`pipeline/kept.rs`).
         lock(&self.kept).destroy(self);
         // The graphics pipeline libraries, after every pipeline they linked: each linked
@@ -1272,6 +1275,7 @@ impl Device {
             depth_stencil_resolves: Mutex::new(DepthStencilResolveObjects::default()),
             attachmentless: Mutex::default(),
             compatible_passes: Mutex::default(),
+            final_passes: Mutex::default(),
             interop: Interop::default(),
             heap_keys: Default::default(),
             rebinds: Default::default(),

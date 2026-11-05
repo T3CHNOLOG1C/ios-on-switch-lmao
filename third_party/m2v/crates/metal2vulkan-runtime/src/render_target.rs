@@ -299,7 +299,7 @@ pub(super) fn later_steps(layout: &PassLayout) -> impl Iterator<Item = &ResolveS
 }
 
 /// One attachment's operations: of its color or depth aspect, then of its stencil aspect.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Ops {
     load: vk::AttachmentLoadOp,
     store: vk::AttachmentStoreOp,
@@ -742,15 +742,79 @@ pub(super) fn final_pass(
             .filter(|c| subpass_resolve(c.as_ref()).is_some())
             .count()
     ];
-    create(
+    kept_final_pass(
         device,
-        shape,
-        &colors,
-        depth_stencil,
-        &resolves,
-        subpass_step(layout).map(step_ops),
-        at.last,
+        FinalMakings {
+            shape: shape.clone(),
+            colors,
+            depth_stencil,
+            resolves,
+            depth_stencil_resolve: subpass_step(layout).map(step_ops),
+            resolving: at.last,
+        },
     )
+}
+
+/// The most final passes a device keeps ([`kept_final_pass`]): a program's passes take a few
+/// shapes, each with a few sets of load and store operations.
+const KEPT_FINALS: usize = 256;
+
+/// What a final pass is made of: [`create`]'s arguments past the device.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) struct FinalMakings {
+    shape: PassShape,
+    colors: Vec<Ops>,
+    depth_stencil: Option<Ops>,
+    resolves: Vec<Ops>,
+    depth_stencil_resolve: Option<Ops>,
+    resolving: bool,
+}
+
+/// The final passes a device keeps, by what they are made of ([`kept_final_pass`]).
+#[derive(Default)]
+pub(super) struct KeptFinal(HashMap<FinalMakings, vk::RenderPass>);
+
+impl KeptFinal {
+    /// Destroy every kept pass; the device is idle, and is destroyed next.
+    pub(super) fn destroy(&self, raw: &ash::Device) {
+        for &pass in self.0.values() {
+            // SAFETY: the device is idle, so no pending command uses the pass, and no framebuffer
+            // made with it is left (each goes with the command buffer that began it).
+            unsafe { release::object(raw, pass) };
+        }
+    }
+}
+
+/// The device's final pass of `makings`, made now where it keeps none. A render pass is immutable,
+/// so one serves every instance made of the same: made and destroyed for every instance, as
+/// before, it cost a `vkCreateRenderPass2` (where Turnip lays out its attachments in GMEM for
+/// every tile layout) and a `vkDestroyRenderPass` each time a pass ended, 19 times a frame of
+/// iOS's compositor. Past [`KEPT_FINALS`] a pass is made for its instance alone, as before.
+fn kept_final_pass(device: &Device, makings: FinalMakings) -> Result<RenderPassObject, Error> {
+    let kept = &device.shared().final_passes;
+    if let Some(&raw) = lock(kept).0.get(&makings) {
+        return Ok(RenderPassObject::kept(device, raw));
+    }
+    let pass = create(
+        device,
+        &makings.shape,
+        &makings.colors,
+        makings.depth_stencil,
+        &makings.resolves,
+        makings.depth_stencil_resolve,
+        makings.resolving,
+    )?;
+    let mut passes = lock(kept);
+    // Another encoder's may have come first: its pass serves, and this one goes unused.
+    if let Some(&raw) = passes.0.get(&makings) {
+        return Ok(RenderPassObject::kept(device, raw));
+    }
+    if pass.owner == Owner::Holders && passes.0.len() < KEPT_FINALS {
+        let raw = pass.into_kept();
+        passes.0.insert(makings, raw);
+        return Ok(RenderPassObject::kept(device, raw));
+    }
+    Ok(pass)
 }
 
 /// The operations of color attachment `color` in an instance at `at`, the sample planes'
