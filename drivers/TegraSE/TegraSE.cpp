@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // TegraSE: the T210B01 Security Engines SE1 (0x70012000, SPI 58 = INTID 90) and SE2 (0x70412000, SPI 190 = INTID 222,
-// L4T tegra210b01-soc-base.dtsi) as the kernel's AES and SHA engines. Never booted (r17-crypto round 2).
+// L4T tegra210b01-soc-base.dtsi) as the kernel's AES and SHA engines.
 //
 // What runs here:
 //   - Both engines behind one queue: a caller takes whichever is free (TegraSE.h), so two callers run in parallel.
@@ -261,8 +261,6 @@ uint64_t tenths(uint64_t ticks)  // of a microsecond
     return ns / 100;
 }
 
-// ---- interrupt and one operation -------------------------------------------------------------------------------
-
 // Primary interrupt context: an operation's end (or error) acknowledged, its thread woken. Nothing else.
 bool filter(OSObject *, IOFilterInterruptEventSource *sender)
 {
@@ -352,8 +350,6 @@ bool run(Engine &e, uint32_t in, uint32_t out)
     return true;
 }
 
-// ---- the queue ----------------------------------------------------------------------------------------------------
-
 bool claim(Engine &e, uint32_t owner)
 {
     return __sync_bool_compare_and_swap(&e.owner, 0u, owner) || e.owner == owner;
@@ -398,8 +394,6 @@ void giveBack(Engine *e)
     IOLockWakeup(gQueue, &gQueueEvent, true);
     IOLockUnlock(gQueue);
 }
-
-// ---- DMA lists from the caller's pages ----------------------------------------------------------------------------
 
 struct Side {
     const uint8_t *va;  // the caller's range
@@ -469,8 +463,6 @@ void finishOutput(const Side &side, Dma &bounce)
     }
 }
 
-// ---- keyslots -----------------------------------------------------------------------------------------------------
-
 void writeQuad(Engine &e, unsigned slot, unsigned quad, const uint8_t *bytes)
 {
     uint32_t w[4];
@@ -522,8 +514,6 @@ void wipeSlots(Engine &e)
         bzero(&e.slots[s], sizeof e.slots[s]);
     }
 }
-
-// ---- the operations (engine held) ---------------------------------------------------------------------------------
 
 uint32_t keyMode(unsigned bytes)
 {
@@ -616,8 +606,6 @@ void shaDigest(Engine &e, unsigned alg, uint8_t *out)
     memcpy(out, w, n * 4);
 }
 
-// ---- CPU references -----------------------------------------------------------------------------------------------
-
 // The CPU's answer (kernel corecrypto's AES modes, the A57s' AES instructions): the reference every check uses.
 bool cpuAes(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned keyBytes, const uint8_t *ivIn,
             const uint8_t *in, uint8_t *out, size_t len)
@@ -694,8 +682,6 @@ void counted(unsigned alg, size_t len, const Side &a, const Side &b)
     __atomic_fetch_add(&gAlg[alg].bytes, len, __ATOMIC_RELAXED);
     if (a.bounced || b.bounced) __atomic_fetch_add(&gAlg[alg].bounced, len, __ATOMIC_RELAXED);
 }
-
-// ---- the public operations ----------------------------------------------------------------------------------------
 
 // whole (a multiple of 16) bytes on an engine; iv is the operation's starting IV/counter, not changed here.
 int aesLocked(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned keyBytes, const uint8_t *iv,
@@ -973,8 +959,6 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
     return 0;
 }
 
-// ---- known answers ------------------------------------------------------------------------------------------------
-
 const uint8_t kKey256[32] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
                              0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
                              0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f};
@@ -1086,8 +1070,6 @@ bool stateLoadWorks(Engine &only, unsigned alg, const struct ccdigest_info *di)
     return ok;
 }
 
-// ---- bring-up -----------------------------------------------------------------------------------------------------
-
 bool engineUp(Engine &e)
 {
     e.regs = reinterpret_cast<volatile uint8_t *>(ml_io_map(e.pa, 0x2000));
@@ -1151,8 +1133,6 @@ bool rng(Engine &e, uint8_t out[64])
     return any && !repeat;
 }
 
-// ---- timing -------------------------------------------------------------------------------------------------------
-
 struct Parallel {
     unsigned engine, rounds;
     uint8_t *buf;
@@ -1174,9 +1154,6 @@ void parallelWorker(void *arg, wait_result_t)
     thread_terminate(current_thread());
 }
 
-// Per algorithm and size: microseconds on each engine (the whole call: lists, cache maintenance, interrupt, wake)
-// against the CPU (kernel corecrypto, cold cache like the engine's input); then both engines at once.
-// One call of `row` on whichever engine the queue hands out (the caller forces one), or on the CPU.
 struct Row {
     unsigned alg;
     tegra_se_mode mode;
@@ -1200,6 +1177,7 @@ const Row kRows[] = {
     {CMAC, TEGRA_SE_ECB, true, 16, "aes128-cmac"},
 };
 
+// One call of `row` on whichever engine the queue hands out (the caller forces one), or on the CPU.
 int engineCall(const Row &row, const uint8_t *in, uint8_t *out, size_t n)
 {
     static const unsigned which[] = {1, 224, 256, 384, 512};

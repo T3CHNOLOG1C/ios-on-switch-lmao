@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraSE: the T210B01 Security Engines SE1 and SE2 as the kernel's AES and SHA engines (TegraSE.cpp). Never booted.
+// TegraSE: the T210B01 Security Engines SE1 and SE2 as the kernel's AES and SHA engines (TegraSE.cpp).
 #ifndef TEGRA_SE_H
 #define TEGRA_SE_H
 #include <stddef.h>
@@ -18,7 +18,7 @@ bool tegra_se_claim(unsigned engine, uint32_t owner, uint32_t ms);
 void tegra_se_release(unsigned engine, uint32_t owner);
 #define TEGRA_SE_OWNER_AKS_PROBE 1u
 #define TEGRA_SE_OWNER_DRIVER    2u
-// The previous round's names (SE2 only).
+// SE2-only forms of tegra_se_claim / tegra_se_release.
 bool tegra_se2_claim(uint32_t owner, uint32_t ms);
 void tegra_se2_release(uint32_t owner);
 #define TEGRA_SE2_OWNER_AKS_PROBE TEGRA_SE_OWNER_AKS_PROBE
