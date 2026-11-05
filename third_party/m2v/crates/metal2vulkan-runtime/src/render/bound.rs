@@ -87,8 +87,34 @@ impl Bound {
         if self.command_buffer != command_buffer {
             *self = Bound {
                 command_buffer,
-                ..Bound::default()
+                ..std::mem::take(self).emptied()
             };
+        }
+    }
+
+    /// Nothing bound, its vectors' room kept: an ended encoder's for the next encoder's
+    /// (`DrawRooms`).
+    pub(super) fn emptied(self) -> Bound {
+        let Bound {
+            mut sets,
+            mut pushes,
+            mut push_bytes,
+            mut vertex,
+            mut set,
+            ..
+        } = self;
+        sets.clear();
+        pushes.clear();
+        push_bytes.clear();
+        vertex.clear();
+        set.clear();
+        Bound {
+            sets,
+            pushes,
+            push_bytes,
+            vertex,
+            set,
+            ..Bound::default()
         }
     }
 

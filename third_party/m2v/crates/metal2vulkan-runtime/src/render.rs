@@ -1159,6 +1159,7 @@ pub(crate) struct DrawRooms {
     argument_samplers: Vec<SamplerState>,
     vertex_buffers: Vec<(u32, vk::Buffer, u64, u64)>,
     bind_memo: binding::BindMemo,
+    bound: Bound,
 }
 
 /// The most [`DrawRooms`] a device keeps: one per encoder encoding at once.
@@ -1178,6 +1179,7 @@ impl DrawRooms {
         self.argument_samplers.clear();
         self.vertex_buffers.clear();
         self.bind_memo = self.bind_memo.emptied();
+        self.bound = self.bound.emptied();
         let mut kept = crate::device::lock(&device.shared().draw_rooms);
         if kept.len() < KEPT_DRAW_ROOMS {
             kept.push(self);
@@ -1375,7 +1377,7 @@ impl CommandBuffer {
                 reformats: Vec::new(),
                 positioned: None,
                 rerecord: rerecord.then(Vec::new),
-                bound: Bound::default(),
+                bound: rooms.bound,
             },
             state: EncoderState::metal_defaults(
                 rate_map
@@ -3080,7 +3082,7 @@ impl RenderCommandEncoder {
         let RenderCommandEncoder {
             mut core,
             mut earlier,
-            current,
+            mut current,
             mut layout,
             passes,
             mut visibility,
@@ -3119,6 +3121,7 @@ impl RenderCommandEncoder {
             argument_samplers: argument_samplers_room,
             vertex_buffers: vertex_buffers_room,
             bind_memo,
+            bound: std::mem::take(&mut current.bound),
         }
         .keep(core.device());
         earlier.push(current);
