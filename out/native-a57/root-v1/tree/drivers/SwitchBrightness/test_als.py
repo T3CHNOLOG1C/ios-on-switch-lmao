@@ -28,6 +28,10 @@ values in TegraI2C.cpp and SwitchALS.cpp against the references they cite.
    E1 0 / L1 63.81 to E2 2000 / L2 287.62 nits above E0b 30 lux) gives the logged target at 61 lux exactly, and the
    step to 135 lux is 0.03 in its perceptual scale (BULuminanceToPerceptual: 1 + ln(L / Lmax) / ln(Lmax / Lmin), over
    this panel's 12.5..400 nits), a third of the brighten threshold 0.2 * 0.5 (AABC e70 * aggressivity 0x2a4; inferred).
+7. r7w's finger-then-flashlight test, through SwitchALS::sample's rule (a clipped reading above 1x only steps the gain
+   down, the sample after a gain change is skipped): 0 lux, then 50000, then 0 again, starting at 64x. Readings come back
+   valid within a few samples, no clipped reading is dispatched, and nothing in between under-reads. And SwitchBacklight
+   publishes new-backlight-architecture, without which CoreBrightness's faded ramps never reach brightness-nits.
 """
 from pathlib import Path
 import re
@@ -289,6 +293,53 @@ threshold = 0.2 * 0.5
 brighten = next(lux for lux in range(61, 2001) if perceptual(aab_curve(lux)) - perceptual(aab_curve(61)) > threshold)
 dim = next(lux for lux in range(61, -1, -1) if perceptual(aab_curve(61)) - perceptual(aab_curve(lux)) > threshold)
 assert 250 < brighten < 400 and 5 < dim < 25, (brighten, dim)
+
+# ---- 7. Steps through saturation, and the backlight architecture ---------------------------------------------------
+assert 'setProperty("new-backlight-architecture", kOSBooleanTrue);' in backlight
+step = r'''
+#include <cstdio>
+#include "SwitchALSMath.h"
+using namespace switch_als;
+// Counts the part gives for `lux` at a DATA1/DATA0 ratio of 0.37 (row 1), clipped at the ADC's top.
+static void counts(double lux, unsigned gain, unsigned &visible, unsigned &ir) {
+    const double v = lux * kGainFactor[gain] * kIntegrationUS * 1000.0 / ((3333 - 2778 * 0.37) * 100.0 * kLuxMultiplier);
+    visible = v > 65535 ? 65535 : (unsigned)v;
+    const double i = v * 0.37;
+    ir = i > 65535 ? 65535 : (unsigned)i;
+}
+int main() {
+    const double scene[] = {0, 50000, 0};
+    unsigned gain = 2, skip = 0;  // 64x, as SwitchALS starts
+    for (unsigned phase = 0; phase < 3; ++phase)
+        for (unsigned tick = 0; tick < 12; ++tick) {
+            if (skip) { --skip; printf("%u %u skip %u\n", phase, tick, gain); continue; }
+            unsigned v, i;
+            counts(scene[phase], gain, v, i);
+            if (!saturated(v, i) || gain == 0) printf("%u %u lux %u %u\n", phase, tick, lux(v, i, gain), gain);
+            else printf("%u %u clipped %u\n", phase, tick, gain);
+            const unsigned next = nextGain(gain, v, i);
+            if (next != gain) { gain = next; skip = 1; }
+        }
+    return 0;
+}
+'''
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    (work / 'step.cpp').write_text(step)
+    subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I', str(root), str(work / 'step.cpp'), '-o',
+                    str(work / 'step')], check=True)
+    trace = [line.split() for line in subprocess.run([str(work / 'step')], check=True, capture_output=True,
+                                                    text=True).stdout.splitlines()]
+for phase, want in ((0, 0), (1, 50000), (2, 0)):
+    events = [t for t in trace if int(t[0]) == phase]
+    first = next(int(t[1]) for t in events if t[2] == 'lux')
+    assert first <= 4, (phase, events[:6])                              # a valid reading within four samples
+    readings = [int(t[3]) for t in events if t[2] == 'lux']
+    assert all(abs(r - want) <= max(2, want // 50) for r in readings), (phase, readings)  # never an under-read
+    assert events[-1][2] == 'lux', events[-1]                          # and it stays valid
+assert any(t[2] == 'clipped' for t in trace if int(t[0]) == 1)          # 50000 lux clips 64x: dropped, not dispatched
+settled = {int(t[0]): int(t[4]) for t in trace if t[2] == 'lux'}
+assert settled == {0: 3, 1: 0, 2: 3}, settled                            # 128x in the dark, 1x at 50000 lux
 
 print(f'SwitchALS: {rows} lux/gain cases match bh1730.c (worst +{worst} lux); I2C2 row, pinmux 0x40, drive DRVDN 0x1f '
       f'and BH1730 commands match Atmosphere, L4T, Linux, hekate and the datasheet; window tables continuous; '

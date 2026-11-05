@@ -453,6 +453,14 @@ bool SwitchBacklight::start(IOService *provider)
     if (current) lit = current;
     setName("backlight");
     setProperty("backlight-control", kOSBooleanTrue);
+    // new-backlight-architecture = true: DisplayCreateWithID (0x1b62ad074..0x1b62ad1bc) then marks the display new
+    // (display+0x20) instead of starting its legacy brightness thread (display+0x24). Every brightness change, its own
+    // fades included, then goes through ___DisplaySetLogicalBrightnessInternal as brightness-nits. Without it the fade
+    // callback (___DisplayFadeCallback, 0x1b61b4258) hands each step to ___DisplaySetLogicalBrightnessLegacy, and r7w's
+    // auto-brightness ramped its own brightness from 12.5 to 400 nits under a flashlight ("End Ramp: L_device =
+    // 12.5061 L_current = 399.2494") while the panel stayed at 64: only its unfaded first step and the slider, which
+    // set the logical brightness directly, ever reached it.
+    setProperty("new-backlight-architecture", kOSBooleanTrue);
     // CoreBrightness reads ignore-IOMFB (CFData, nonzero) from the backlight and its parents and then clears its use-IOMFB
     // flag (display module init, 0x1b62b55fc): the framebuffer here is a stand-in, so it should not get
     // IOMFBBrightnessLevel writes.

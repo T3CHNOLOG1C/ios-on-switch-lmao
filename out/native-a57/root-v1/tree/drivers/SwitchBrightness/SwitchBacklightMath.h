@@ -12,8 +12,9 @@
 //     ceil(fraction * (max - min)) + min. Mapped onto kFloorRaw..2047 (toRaw), as before.
 //   * "brightness-nits", nits * 65536 in a CFNumber SInt32, from _SetBLDriverNitsValue, which
 //     ___DisplaySetLogicalBrightnessInternal calls for every brightness change once the display has a luminance range
-//     (backlight-calibration-parameters): the user's slider and auto-brightness alike, stepped by CoreBrightness's own
-//     fade timer. Mapped linearly onto the panel (nitsToRaw): 2047 at kNitsMax, never below kFloorRaw.
+//     (backlight-calibration-parameters) and is of the new backlight architecture (new-backlight-architecture, which
+//     SwitchBacklight publishes): the user's slider and auto-brightness alike, stepped by CoreBrightness's own fade
+//     timer. Mapped linearly onto the panel (nitsToRaw): 2047 at kNitsMax, never below kFloorRaw.
 #ifndef SWITCH_BACKLIGHT_MATH_H
 #define SWITCH_BACKLIGHT_MATH_H
 #include <stdint.h>
