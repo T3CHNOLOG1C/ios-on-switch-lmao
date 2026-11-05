@@ -1,9 +1,10 @@
-/* Focused host-only fault injection for the actual SD write transport. */
-#include <assert.h>
+/* Focused host-only fault injection for the actual SD write transport: sdmmc_write_cases() runs every case and is run
+ * by sdmmc_write_test.cpp. */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "sdmmc_read.h"
+#include "../sdmmc_read.h"
+#include "bazel/testing/c_check.h"
 enum fault {
     NONE,
     POWER_OFF,
@@ -58,7 +59,7 @@ static uint8_t read8(void *context, uint32_t offset)
     f->reads++;
     if (offset == 0x28) return 2;
     if (offset == 0x29) return f->fault == POWER_OFF ? 0 : 11;
-    assert(offset == 0x2f);
+    CHECK(offset == 0x2f);
     return 0;
 }
 static uint16_t read16(void *context, uint32_t offset)
@@ -69,7 +70,7 @@ static uint16_t read16(void *context, uint32_t offset)
     if (offset == 0xfe) return 0x0303;
     if (offset == 0x2c) return 7;
     if (offset == 0x3c) return f->fault == AUTO_ERROR ? 4 : 0;
-    assert(offset == 4 || offset == 6 || offset == 12);
+    CHECK(offset == 4 || offset == 6 || offset == 12);
     return (uint16_t)f->regs[offset / 2];
 }
 static uint32_t read32(void *context, uint32_t offset)
@@ -122,7 +123,7 @@ static uint32_t read32(void *context, uint32_t offset)
             if (writing(f) && f->fault == END_TIMEOUT) return 0;
             return 2;
         }
-        assert(f->phase == 4);
+        CHECK(f->phase == 4);
         return 0;
     }
     if (offset == 0x10) {
@@ -135,7 +136,7 @@ static uint32_t read32(void *context, uint32_t offset)
     }
     if (offset == 0x1c) return f->fault == STOP_ERROR ? 0x400000 : 0x900;
     if (offset == 0x20) {
-        assert(f->phase == 2 && !writing(f) && f->armed);
+        CHECK(f->phase == 2 && !writing(f) && f->armed);
         const uint8_t *bytes = f->current == 51                              ? f->scr
                                : f->arguments[f->command_count - 1] == 0x1ff ? f->general
                                                                              : f->perf;
@@ -144,7 +145,7 @@ static uint32_t read32(void *context, uint32_t offset)
         if (f->words == f->size / 4) f->phase = 3;
         return value;
     }
-    assert(offset == 8 || offset == 0x34 || offset == 0x38);
+    CHECK(offset == 8 || offset == 0x34 || offset == 0x38);
     return f->regs[offset / 2];
 }
 static void write16(void *context, uint32_t offset, uint16_t value)
@@ -155,34 +156,34 @@ static void write16(void *context, uint32_t offset, uint16_t value)
     if (offset == 0xe) {
         if (f->phase || f->command_count >= 1024)
             fprintf(stderr, "command invariant phase %u count %u fault %u\n", f->phase, f->command_count, f->fault);
-        assert(!f->phase && f->command_count < 1024);
+        CHECK(!f->phase && f->command_count < 1024);
         f->current = value >> 8;
-        assert(f->current == 13 || f->current == 55 || f->current == 51 || f->current == 48 || f->current == 24 ||
-               f->current == 25);
-        assert(value == (f->current << 8 | (f->current == 13 || f->current == 55 ? 0x1a : 0x3a)));
+        CHECK(f->current == 13 || f->current == 55 || f->current == 51 || f->current == 48 || f->current == 24 ||
+              f->current == 25);
+        CHECK(value == (f->current << 8 | (f->current == 13 || f->current == 55 ? 0x1a : 0x3a)));
         f->commands[f->command_count] = f->current;
         f->arguments[f->command_count++] = f->regs[8 / 2];
         f->count = f->regs[6 / 2];
         f->size = f->count ? f->regs[4 / 2] : 0;
         if (writing(f)) {
-            assert(f->accepted && f->permit_lba == f->regs[8 / 2] && f->permit_count == f->count);
-            assert(f->size == 512 && f->count >= 1 && f->count <= 128);
-            assert(f->regs[12 / 2] == (f->count > 1 ? 0x26 : 2));
+            CHECK(f->accepted && f->permit_lba == f->regs[8 / 2] && f->permit_count == f->count);
+            CHECK(f->size == 512 && f->count >= 1 && f->count <= 128);
+            CHECK(f->regs[12 / 2] == (f->count > 1 ? 0x26 : 2));
         } else if (f->current == 13 || f->current == 55) {
-            assert(!f->count && !f->regs[12 / 2]);
-            assert(f->regs[8 / 2] == 0x12340000);
+            CHECK(!f->count && !f->regs[12 / 2]);
+            CHECK(f->regs[8 / 2] == 0x12340000);
         } else {
-            assert(f->count == 1 && f->regs[12 / 2] == 0x12);
-            assert(f->size == (f->current == 51 ? 8 : 512));
+            CHECK(f->count == 1 && f->regs[12 / 2] == 0x12);
+            CHECK(f->size == (f->current == 51 ? 8 : 512));
         }
-        assert(!f->regs[0x38 / 2]);
-        assert((f->regs[0x34 / 2] & 0x03ff8033) == 0x03ff8033);
+        CHECK(!f->regs[0x38 / 2]);
+        CHECK((f->regs[0x34 / 2] & 0x03ff8033) == 0x03ff8033);
         f->phase = 1;
         f->words = f->blocks = f->armed = 0;
         if (f->current == 13) f->status_commands++;
         return;
     }
-    assert(offset == 4 || offset == 6 || offset == 12);
+    CHECK(offset == 4 || offset == 6 || offset == 12);
     f->regs[offset / 2] = value;
 }
 static void write32(void *context, uint32_t offset, uint32_t value)
@@ -192,22 +193,22 @@ static void write32(void *context, uint32_t offset, uint32_t value)
     f->writes++;
     if (offset == 0x30) {
         if (!f->phase)
-            assert(value == 0x33);
+            CHECK(value == 0x33);
         else if (f->phase == 1) {
-            assert(value == 1);
+            CHECK(value == 1);
             f->phase = f->size ? 2 : 4;
         } else if (f->phase == 2) {
-            assert(value == (writing(f) ? 0x10 : 0x20));
-            assert(!f->armed);
+            CHECK(value == (writing(f) ? 0x10 : 0x20));
+            CHECK(!f->armed);
             f->armed = 1;
         } else {
-            assert(f->phase == 3 && value == 2);
+            CHECK(f->phase == 3 && value == 2);
             f->phase = 4;
         }
         return;
     }
     if (offset == 0x20) {
-        assert(writing(f) && f->phase == 2 && f->armed && f->words < f->count * 128);
+        CHECK(writing(f) && f->phase == 2 && f->armed && f->words < f->count * 128);
         uint32_t at = f->words++ * 4;
         f->fifo_writes++;
         if (f->fault == LAST_BLOCK_TIMEOUT && f->words == f->count * 128 - 63) f->now += 6000000;
@@ -219,9 +220,9 @@ static void write32(void *context, uint32_t offset, uint32_t value)
         }
         return;
     }
-    assert(offset == 8 || offset == 0x34 || offset == 0x38);
+    CHECK(offset == 8 || offset == 0x34 || offset == 0x38);
     if (offset == 0x38 && value) {
-        assert(f->phase == 4);
+        CHECK(f->phase == 4);
         f->phase = 0;
     }
     f->regs[offset / 2] = value;
@@ -241,7 +242,7 @@ static void barrier(void *context)
 static int permit(void *context, uint64_t lba, uint32_t count)
 {
     struct fixture *f = context;
-    assert(!f->io_count);
+    CHECK(!f->io_count);
     f->write_calls++;
     f->permit_lba = lba;
     f->permit_count = count;
@@ -296,27 +297,27 @@ static void write_case(uint32_t count, enum fault fault, int expected)
     int result = iosw_sd_write_sectors(&h, 100, count, bytes, &r);
     if (result != expected)
         fprintf(stderr, "write fault %u got %d expected %d stage %u\n", fault, result, expected, r.stage);
-    assert(result == expected);
+    CHECK(result == expected);
     if (!result) {
-        assert(!h.blocked && h.write_cache_off_verified && r.words_written == count * 128 && r.stage == 22);
-        assert(f.commands[0] == (count > 1 ? 25 : 24) && f.commands[1] == 13);
-        assert(!memcmp(saved, f.regs, sizeof saved));
-        assert(!memcmp(f.data, bytes, count * 512));
-        assert(r.card_status == 0x900);
+        CHECK(!h.blocked && h.write_cache_off_verified && r.words_written == count * 128 && r.stage == 22);
+        CHECK(f.commands[0] == (count > 1 ? 25 : 24) && f.commands[1] == 13);
+        CHECK(!memcmp(saved, f.regs, sizeof saved));
+        CHECK(!memcmp(f.data, bytes, count * 512));
+        CHECK(r.card_status == 0x900);
         if (count == 128) {
-            assert(f.status_reads < 300 && f.tick_reads < 600);
+            CHECK(f.status_reads < 300 && f.tick_reads < 600);
             printf("64KiB write: %u FIFO writes, %u status reads, %u timer samples, %u total I/O callbacks\n",
                    f.fifo_writes, f.status_reads, f.tick_reads, f.io_count);
         }
     } else if (fault == POWER_OFF || fault == PIN_PROTECT || fault == PRE_ERROR) {
-        assert(!f.command_count && !f.writes && !h.blocked);
+        CHECK(!f.command_count && !f.writes && !h.blocked);
     } else {
-        assert(h.blocked && !h.write_cache_off_verified && !f.regs[0x38 / 2]);
+        CHECK(h.blocked && !h.write_cache_off_verified && !f.regs[0x38 / 2]);
         uint32_t io = f.io_count;
-        assert(iosw_sd_write_sectors(&h, 100, count, bytes, &r) == IOSW_SD_ALREADY_BLOCKED && f.io_count == io);
-        assert(iosw_sd_sync(&h, &r) == IOSW_SD_ALREADY_BLOCKED && f.io_count == io);
-        if (fault == MID_ERROR || fault == MID_DONE) assert(f.fifo_writes == 128);
-        if (fault == EARLY_DONE || fault == EARLY_READY_DONE) assert(f.fifo_writes == 128);
+        CHECK(iosw_sd_write_sectors(&h, 100, count, bytes, &r) == IOSW_SD_ALREADY_BLOCKED && f.io_count == io);
+        CHECK(iosw_sd_sync(&h, &r) == IOSW_SD_ALREADY_BLOCKED && f.io_count == io);
+        if (fault == MID_ERROR || fault == MID_DONE) CHECK(f.fifo_writes == 128);
+        if (fault == EARLY_DONE || fault == EARLY_READY_DONE) CHECK(f.fifo_writes == 128);
     }
     cases++;
 }
@@ -367,18 +368,19 @@ static void qualify_case(unsigned variant, int expected, uint32_t evidence)
     struct iosw_sd_result r;
     int result = iosw_sd_qualify_writes(&h, &r);
     if (result != expected) fprintf(stderr, "qualify variant %u got %d expected %d\n", variant, result, expected);
-    assert(result == expected && !f.fifo_writes && !f.write_calls);
+    CHECK(result == expected && !f.fifo_writes && !f.write_calls);
     for (unsigned i = 0; i < f.command_count; i++)
-        assert(f.commands[i] != 24 && f.commands[i] != 25 && f.commands[i] != 49);
+        CHECK(f.commands[i] != 24 && f.commands[i] != 25 && f.commands[i] != 49);
     if (!result) {
-        assert(h.write_cache_off_verified && !h.blocked && r.cache_evidence == evidence && r.stage == 12);
-        assert(!memcmp(saved, f.regs, sizeof saved));
-        assert(f.commands[0] == 13 && f.commands[1] == 55 && f.commands[2] == 51);
+        CHECK(h.write_cache_off_verified && !h.blocked && r.cache_evidence == evidence && r.stage == 12);
+        CHECK(!memcmp(saved, f.regs, sizeof saved));
+        CHECK(f.commands[0] == 13 && f.commands[1] == 55 && f.commands[2] == 51);
     } else
-        assert(h.blocked && !h.write_cache_off_verified && !f.regs[0x38 / 2]);
+        CHECK(h.blocked && !h.write_cache_off_verified && !f.regs[0x38 / 2]);
     cases++;
 }
-int main(void)
+unsigned sdmmc_write_cases(void);
+unsigned sdmmc_write_cases(void)
 {
     write_case(1, NONE, 0);
     write_case(2, NONE, 0);
@@ -441,7 +443,7 @@ int main(void)
         if (scenario == 14) h.permitted_sector_count = UINT64_MAX;
         if (scenario == 15) h.io.write16 = 0;
         if (scenario == 16) h.frequency = 0;
-        assert(iosw_sd_write_sectors(&h, lba, count, bytes, &r) != 0 && !f.io_count && !f.command_count && !h.blocked);
+        CHECK(iosw_sd_write_sectors(&h, lba, count, bytes, &r) != 0 && !f.io_count && !f.command_count && !h.blocked);
         cases++;
     }
     /* Each qualification command failure is fail-stop and cannot qualify cache. */
@@ -454,8 +456,8 @@ int main(void)
             extensions(&f);
             h.write_cache_off_verified = 0;
             f.fail_command = command;
-            assert(iosw_sd_qualify_writes(&h, &r) == (card_error ? IOSW_SD_CARD_ERROR : IOSW_SD_CONTROLLER_ERROR));
-            assert(h.blocked && !h.write_cache_off_verified && !f.fifo_writes && f.command_count == command);
+            CHECK(iosw_sd_qualify_writes(&h, &r) == (card_error ? IOSW_SD_CARD_ERROR : IOSW_SD_CONTROLLER_ERROR));
+            CHECK(h.blocked && !h.write_cache_off_verified && !f.fifo_writes && f.command_count == command);
             cases++;
         }
     }
@@ -465,23 +467,20 @@ int main(void)
     setup(&f, &h, NONE);
     f.app_missing = 1;
     h.write_cache_off_verified = 0;
-    assert(iosw_sd_qualify_writes(&h, &r) == IOSW_SD_CARD_STATE && h.blocked && f.command_count == 2);
+    CHECK(iosw_sd_qualify_writes(&h, &r) == IOSW_SD_CARD_STATE && h.blocked && f.command_count == 2);
     cases++;
     setup(&f, &h, NONE);
-    assert(iosw_sd_sync(&h, &r) == 0 && r.stage == 31 && f.command_count == 1 && f.commands[0] == 13 && !f.fifo_writes);
+    CHECK(iosw_sd_sync(&h, &r) == 0 && r.stage == 31 && f.command_count == 1 && f.commands[0] == 13 && !f.fifo_writes);
     cases++;
     setup(&f, &h, NONE);
     h.write_cache_off_verified = 0;
-    assert(iosw_sd_sync(&h, &r) == IOSW_SD_CACHE_UNQUALIFIED && !f.io_count);
+    CHECK(iosw_sd_sync(&h, &r) == IOSW_SD_CACHE_UNQUALIFIED && !f.io_count);
     cases++;
     setup(&f, &h, NONE);
     h.permitted_first_sector = 0;
     h.permitted_sector_count = h.capacity_sectors;
     uint8_t bytes[65536] = {0};
-    assert(iosw_sd_write_sectors(&h, UINT64_C(0xffffff80), 128, bytes, &r) == 0 &&
-           f.permit_lba == UINT64_C(0xffffff80));
+    CHECK(iosw_sd_write_sectors(&h, UINT64_C(0xffffff80), 128, bytes, &r) == 0 && f.permit_lba == UINT64_C(0xffffff80));
     cases++;
-    printf("%u focused SD write/cache cases passed: extent permission before I/O, exact FIFO, fail-stop, CMD13, "
-           "disabled-cache evidence, malformed extensions\n",
-           cases);
+    return cases;
 }

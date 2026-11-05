@@ -1,5 +1,4 @@
 # diagnostics/ioswitch: moved from out/native-a57/root-v1/tree/diagnostics/ioswitch by the layout move.
-load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
 load("//bazel/lint:defs.bzl", "lint_files")
 
@@ -26,15 +25,6 @@ filegroup(
 
 # This package's headers (kernel_headers): what other drivers' hdr_deps name.
 kernel_headers()
-
-[py_test(
-    name = "sdmmc_%s_test" % kind,
-    size = "small",
-    srcs = ["storage/tests/test_sdmmc_%s.py" % kind],
-    data = glob(["storage/**"]),
-    main = "storage/tests/test_sdmmc_%s.py" % kind,
-    tags = ["requires-darwin"],
-) for kind in ("batch", "write")]
 
 # IOSwitchDiag: boot diagnostics, SD/FAT32/APFS storage (osfmk C recipe, no FP/SIMD).
 kernel_driver(

@@ -1,9 +1,10 @@
-/* Independent SDHCI register model for the bounded PIO batch primitive. */
-#include <assert.h>
+/* Independent SDHCI register model for the bounded PIO batch primitive (iosw_sd_read_sectors): sdmmc_batch_cases()
+ * runs every case and is run by sdmmc_batch_test.cpp. */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "sdmmc_read.h"
+#include "../sdmmc_read.h"
+#include "bazel/testing/c_check.h"
 
 enum fault {
     NONE,
@@ -48,7 +49,7 @@ static uint8_t read8(void *ctx, uint32_t off)
     if (off == 0x28) return 2;
     if (off == 0x29) return m->fault == BAD_POWER ? 0 : 11;
     if (off == 0x2f) return 0;
-    assert(0);
+    CHECK(0);
     return 0;
 }
 static uint16_t read16(void *ctx, uint32_t off)
@@ -58,7 +59,7 @@ static uint16_t read16(void *ctx, uint32_t off)
     if (off == 0xfe) return 0x0303;
     if (off == 0x2c) return 7;
     if (off == 0x3c) return m->fault == AUTO_STATUS_ONLY ? 4 : 0;
-    assert(off == 4 || off == 6 || off == 12);
+    CHECK(off == 4 || off == 6 || off == 12);
     return (uint16_t)m->reg[off / 2];
 }
 static uint32_t read32(void *ctx, uint32_t off)
@@ -102,15 +103,15 @@ static uint32_t read32(void *ctx, uint32_t off)
             return 2;
         }
         if (m->phase == 4) return m->fault == LATE_ERROR ? 0x208000 : 0;
-        assert(0);
+        CHECK(0);
     }
     if (off == 0x10) return m->fault == CARD_ERROR ? 0x400000 : 0x900;
     if (off == 0x1c) return m->fault == STOP_CARD_ERROR ? 0x400000 : 0x900;
     if (off == 0x20) {
-        assert(m->phase == 2 && m->words < m->requested * 128);
+        CHECK(m->phase == 2 && m->words < m->requested * 128);
         /* In a batch, clearing readiness must precede reading. The next
          * block's event is latched immediately by the final FIFO read. */
-        if (m->requested > 1) assert(m->armed);
+        if (m->requested > 1) CHECK(m->armed);
         uint32_t value = 0, at = m->words * 4;
         for (unsigned i = 0; i < 4; i++) value |= (uint32_t)byte_at(m->reg[8 / 2], at + i) << (8 * i);
         m->words++;
@@ -124,7 +125,7 @@ static uint32_t read32(void *ctx, uint32_t off)
         }
         return value;
     }
-    assert(off == 8 || off == 0x34 || off == 0x38);
+    CHECK(off == 8 || off == 0x34 || off == 0x38);
     return m->reg[off / 2];
 }
 static void write16(void *ctx, uint32_t off, uint16_t value)
@@ -132,19 +133,19 @@ static void write16(void *ctx, uint32_t off, uint16_t value)
     struct model *m = ctx;
     m->writes++;
     if (off == 0xe) {
-        assert(m->phase == 0 && (value == 0x113a || value == 0x123a));
+        CHECK(m->phase == 0 && (value == 0x113a || value == 0x123a));
         m->commands++;
         m->requested = m->reg[6 / 2];
-        assert(m->requested >= 1 && m->requested <= 128);
-        assert(m->reg[4 / 2] == 512);
-        assert(value == (m->requested == 1 ? 0x113a : 0x123a));
-        assert(m->reg[12 / 2] == (m->requested == 1 ? 0x12 : 0x36));
-        assert((m->reg[0x34 / 2] & 0x03ff8023) == 0x03ff8023);
-        assert(m->reg[0x38 / 2] == 0);
+        CHECK(m->requested >= 1 && m->requested <= 128);
+        CHECK(m->reg[4 / 2] == 512);
+        CHECK(value == (m->requested == 1 ? 0x113a : 0x123a));
+        CHECK(m->reg[12 / 2] == (m->requested == 1 ? 0x12 : 0x36));
+        CHECK((m->reg[0x34 / 2] & 0x03ff8023) == 0x03ff8023);
+        CHECK(m->reg[0x38 / 2] == 0);
         m->phase = 1;
         return;
     }
-    assert(off == 4 || off == 6 || off == 12);
+    CHECK(off == 4 || off == 6 || off == 12);
     m->reg[off / 2] = value;
 }
 static void write32(void *ctx, uint32_t off, uint32_t value)
@@ -153,26 +154,26 @@ static void write32(void *ctx, uint32_t off, uint32_t value)
     m->writes++;
     if (off == 0x30) {
         if (m->phase == 0)
-            assert(value == 0x23);
+            CHECK(value == 0x23);
         else if (m->phase == 1) {
-            assert(value == 1);
+            CHECK(value == 1);
             m->phase = 2;
         } else if (m->phase == 2) {
-            assert(value == 0x20);
+            CHECK(value == 0x20);
             if (m->requested > 1) {
-                assert(!m->armed && m->blocks < m->requested);
+                CHECK(!m->armed && m->blocks < m->requested);
                 m->armed = 1;
             } else {
-                assert(m->words == 128);
+                CHECK(m->words == 128);
                 m->phase = 3;
             }
         } else {
-            assert(m->phase == 3 && value == 2);
+            CHECK(m->phase == 3 && value == 2);
             m->phase = 4;
         }
         return;
     }
-    assert(off == 8 || off == 0x34 || off == 0x38);
+    CHECK(off == 8 || off == 0x34 || off == 0x38);
     m->reg[off / 2] = value;
 }
 static uint64_t ticks(void *ctx)
@@ -222,44 +223,45 @@ static void run(uint32_t count, enum fault fault, uint32_t fault_block, int expe
     memset(client, 0x5a, sizeof client);
     struct iosw_sd_result r = {0};
     int result = iosw_sd_read_sectors(&h, 100, count, private_data + 1, &r);
-    assert(result == expected);
-    assert(private_data[0] == 0xa5 && private_data[count * 512 + 1] == 0xa5);
+    CHECK(result == expected);
+    CHECK(private_data[0] == 0xa5 && private_data[count * 512 + 1] == 0xa5);
     /* Real caller contract: incomplete private staging is never published. */
     if (result == 0) memcpy(client, private_data + 1, count * 512);
     if (!result) {
-        assert(r.stage == 5 && r.words_read == count * 128 && m.commands == 1 && !h.blocked);
-        assert(!memcmp(original, m.reg, sizeof original));
-        for (uint32_t i = 0; i < count * 512; i++) assert(client[i] == byte_at(100, i));
+        CHECK(r.stage == 5 && r.words_read == count * 128 && m.commands == 1 && !h.blocked);
+        CHECK(!memcmp(original, m.reg, sizeof original));
+        for (uint32_t i = 0; i < count * 512; i++) CHECK(client[i] == byte_at(100, i));
         if (count > 1)
-            assert(r.stop_response == 0x900 && r.auto_cmd_error == 0 && m.reads[0x3c] == 1 && m.reads[0x1c] == 1);
+            CHECK(r.stop_response == 0x900 && r.auto_cmd_error == 0 && m.reads[0x3c] == 1 && m.reads[0x1c] == 1);
         else
-            assert(!m.reads[0x3c] && !m.reads[0x1c]);
+            CHECK(!m.reads[0x3c] && !m.reads[0x1c]);
         if (count == 128 && fault == NONE) {
-            assert(m.reads[0x20] == 16384 && m.reads[0x30] < 300 && m.tick_reads < 600);
+            CHECK(m.reads[0x20] == 16384 && m.reads[0x30] < 300 && m.tick_reads < 600);
             printf("64KiB read: %u FIFO reads, %u status reads, %u timer samples\n", m.reads[0x20], m.reads[0x30],
                    m.tick_reads);
         }
     } else {
-        for (uint32_t i = 0; i < sizeof client; i++) assert(client[i] == 0x5a);
+        for (uint32_t i = 0; i < sizeof client; i++) CHECK(client[i] == 0x5a);
         if (fault == EARLY_DONE || fault == DONE_WITH_READY || fault == DONE_READY_NO_BUFFER ||
             fault == DONE_READY_ERROR)
-            assert(m.words == m.fault_block * 128); /* Refused block never drained. */
+            CHECK(m.words == m.fault_block * 128); /* Refused block never drained. */
         if (count == 1)
-            for (uint32_t i = 0; i < 514; i++) assert(private_data[i] == 0xa5);
+            for (uint32_t i = 0; i < 514; i++) CHECK(private_data[i] == 0xa5);
         if (fault == BAD_POWER || fault == PREEXISTING)
-            assert(!m.commands && !m.writes && !h.blocked);
+            CHECK(!m.commands && !m.writes && !h.blocked);
         else {
-            assert(m.commands == 1 && h.blocked && m.reg[0x38 / 2] == 0);
+            CHECK(m.commands == 1 && h.blocked && m.reg[0x38 / 2] == 0);
             unsigned writes = m.writes;
-            assert(iosw_sd_read_sectors(&h, 100, count, private_data + 1, &r) == IOSW_SD_ALREADY_BLOCKED);
-            assert(m.writes == writes);
+            CHECK(iosw_sd_read_sectors(&h, 100, count, private_data + 1, &r) == IOSW_SD_ALREADY_BLOCKED);
+            CHECK(m.writes == writes);
         }
     }
     const unsigned once[] = {0xfe, 0x28, 0x29, 0x2c, 0x2f, 4};
-    for (unsigned i = 0; i < sizeof once / sizeof *once; i++) assert(m.reads[once[i]] == 1);
+    for (unsigned i = 0; i < sizeof once / sizeof *once; i++) CHECK(m.reads[once[i]] == 1);
     cases++;
 }
-int main(void)
+unsigned sdmmc_batch_cases(void);
+unsigned sdmmc_batch_cases(void)
 {
     run(1, NONE, 0, 0);
     run(2, NONE, 0, 0);
@@ -313,7 +315,7 @@ int main(void)
         if (scenario == 7) h.permitted_sector_count = UINT64_MAX;
         if (scenario == 8) h.io.write16 = 0;
         if (scenario == 9) h.frequency = 0;
-        assert(iosw_sd_read_sectors(&h, lba, count, out, &r) != 0 && !m.writes && !m.commands);
+        CHECK(iosw_sd_read_sectors(&h, lba, count, out, &r) != 0 && !m.writes && !m.commands);
         cases++;
     }
     /* High LBA fits CMD18's 32-bit block argument and may end exactly at capacity. */
@@ -324,17 +326,14 @@ int main(void)
     h.permitted_sector_count = h.capacity_sectors;
     uint8_t out[65536];
     struct iosw_sd_result r = {0};
-    assert(iosw_sd_read_sectors(&h, UINT64_C(0xffffff80), 128, out, &r) == 0);
-    for (unsigned i = 0; i < sizeof out; i++) assert(out[i] == byte_at(0xffffff80, i));
+    CHECK(iosw_sd_read_sectors(&h, UINT64_C(0xffffff80), 128, out, &r) == 0);
+    for (unsigned i = 0; i < sizeof out; i++) CHECK(out[i] == byte_at(0xffffff80, i));
     cases++;
     setup(&m, &h, NONE);
     h.capacity_sectors = h.permitted_sector_count = 1;
     h.permitted_first_sector = 0;
     h.block_addressing_verified = 0;
-    assert(iosw_sd_read_sectors(&h, 0, 2, out, &r) == IOSW_SD_ARGUMENT && !m.writes);
+    CHECK(iosw_sd_read_sectors(&h, 0, 2, out, &r) == IOSW_SD_ARGUMENT && !m.writes);
     cases++;
-    printf("%u bounded SDHCI cases passed: CMD17/CMD18, exact FIFO blocks, Auto CMD12, busy, deadlines, range "
-           "refusals, fail-stop, private staging\n",
-           cases);
-    return 0;
+    return cases;
 }

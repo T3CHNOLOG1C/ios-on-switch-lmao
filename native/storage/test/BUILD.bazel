@@ -1,0 +1,103 @@
+# The loader's storage code (native/storage) on the host, each against an independent model or image built here:
+# GPT qualification, the FAT32 reader, the raw APFS block backend, the same-boot SD reference page and the read-only
+# SDHCI PIO reader. (block/: the NativeIOSwitchBlock driver of native/storage.)
+#
+#   bazel test //native/storage/test/...
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+# zlib's crc32: the independent CRC-32 the GPT and SD reference fixtures are built with (the macOS SDK's libz).
+host_library(
+    name = "zlib",
+    linkopts = ["-lz"],
+)
+
+# --- partition.c: GPT ---------------------------------------------------------------------------------------------
+host_library(
+    name = "partition",
+    srcs = ["//native:storage/partition.c"],
+    hdrs = [
+        "//native:storage/fat32.h",
+        "//native:storage/partition.h",
+    ],
+    copts = ["-O2"],
+)
+
+host_test(
+    name = "partition_test",
+    srcs = ["partition_test.cpp"],
+    deps = [
+        ":partition",
+        ":zlib",
+    ],
+)
+
+# --- fat32.c ----------------------------------------------------------------------------------------------------------
+host_library(
+    name = "fat32",
+    srcs = ["//native:storage/fat32.c"],
+    hdrs = ["//native:storage/fat32.h"],
+    copts = ["-O2"],
+)
+
+host_test(
+    name = "fat32_test",
+    srcs = ["fat32_test.cpp"],
+    deps = [":fat32"],
+)
+
+# --- raw_apfs.c: the raw APFS block backend --------------------------------------------------------------------------
+host_library(
+    name = "raw_apfs",
+    srcs = [
+        "raw_apfs_model.c",
+        "//native:storage/block_backend.h",
+        "//native:storage/raw_apfs.c",
+    ],
+    hdrs = ["//native:storage/raw_apfs.h"],
+    copts = ["-O1"],
+    deps = ["//bazel/testing:c_check"],
+)
+
+host_test(
+    name = "raw_apfs_test",
+    srcs = ["raw_apfs_test.cpp"],
+    deps = [":raw_apfs"],
+)
+
+# --- sd_reference.c: the same-boot sector-reference page ------------------------------------------------------------
+host_library(
+    name = "sd_reference",
+    srcs = ["//native:storage/sd_reference.c"],
+    hdrs = ["//native:storage/sd_reference.h"],
+    copts = ["-O2"],
+)
+
+host_test(
+    name = "sd_reference_test",
+    srcs = ["sd_reference_test.cpp"],
+    deps = [
+        ":sd_reference",
+        ":zlib",
+    ],
+)
+
+# --- sdmmc_read.c: the read-only PIO reader -------------------------------------------------------------------------
+host_library(
+    name = "sdmmc_read",
+    srcs = [
+        "sdmmc_read_model.c",
+        "//native:storage/sdmmc_read.c",
+    ],
+    hdrs = ["//native:storage/sdmmc_read.h"],
+    copts = ["-O2"],
+    deps = ["//bazel/testing:c_check"],
+)
+
+host_test(
+    name = "sdmmc_read_test",
+    srcs = ["sdmmc_read_test.cpp"],
+    deps = [":sdmmc_read"],
+)

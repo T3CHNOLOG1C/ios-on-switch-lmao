@@ -1,23 +1,35 @@
 /* native/loader/seed.c against a model of what it touches: CAR's SE and ENTROPY clock/reset bits, SE2's registers
  * (security, config, lists, RNG, status, interrupt and error latches) with a DRBG that writes its output into the
  * output list's buffer when started, the AHB write queue, the counter, and the 64-byte seed and 8-byte report in an
- * ADT. Every access seed.c makes goes through iosw_seed_read32/write32 below; anything outside the model aborts. */
-#include <assert.h>
+ * ADT. Every access seed.c makes goes through iosw_seed_read32/write32 below; anything outside the model aborts.
+ * seed_scenarios() is run by seed_test.cpp (BUILD.bazel builds seed.c with IOSW_SEED_HOST_TEST). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "seed.h"
+#include "../seed.h"
+#include "bazel/testing/c_check.h"
 
 volatile uint32_t *iosw_seed_dma_words(void);
 
-#define CAR 0x60006000u
-#define AHB 0x6000c000u
-#define SE2 0x70412000u
-#define SEED_PA 0x80000100u
+#define CAR       0x60006000u
+#define AHB       0x6000c000u
+#define SE2       0x70412000u
+#define SEED_PA   0x80000100u
 #define SOURCE_PA 0x80000200u
 
-enum { SE_CLOCK_OFF = 1, SE_SECURE = 2, DROP_WRITES = 4, NEVER_DONE = 8, ERROR_FIRST = 16, ERROR_ALWAYS = 32,
-       NEVER_DRAIN = 64, ZERO_OUTPUT = 128, ENTROPY_OFF = 256, ENTROPY_STUCK = 512, REPEAT_OUTPUT = 1024 };
+enum {
+    SE_CLOCK_OFF = 1,
+    SE_SECURE = 2,
+    DROP_WRITES = 4,
+    NEVER_DONE = 8,
+    ERROR_FIRST = 16,
+    ERROR_ALWAYS = 32,
+    NEVER_DRAIN = 64,
+    ZERO_OUTPUT = 128,
+    ENTROPY_OFF = 256,
+    ENTROPY_STUCK = 512,
+    REPEAT_OUTPUT = 1024
+};
 
 static struct {
     unsigned flags;
@@ -30,16 +42,20 @@ static struct {
     uint32_t drbg[16];
 } m;
 
-static uint64_t ticks(void) { return m.counter += 19; } /* a microsecond per look at 19.2 MHz */
+static uint64_t ticks(void)
+{
+    return m.counter += 19;
+} /* a microsecond per look at 19.2 MHz */
 
-static void start(void) {
-    assert(m.config == 0x01002000u && m.crypto == 0x108u && m.last == 3 && m.in_ll == 0);
-    assert((m.rng & ~3u) == 4u);                           /* SRC_ENTROPY, a mode, nothing else */
-    assert((m.rng_src & 2u) && !(m.rng_src & 1u));         /* RO_ENT_SRC on, its lock never set */
-    assert(m.out_ll == (uint32_t)(uintptr_t)iosw_seed_dma_words());
+static void start(void)
+{
+    CHECK(m.config == 0x01002000u && m.crypto == 0x108u && m.last == 3 && m.in_ll == 0);
+    CHECK((m.rng & ~3u) == 4u);                   /* SRC_ENTROPY, a mode, nothing else */
+    CHECK((m.rng_src & 2u) && !(m.rng_src & 1u)); /* RO_ENT_SRC on, its lock never set */
+    CHECK(m.out_ll == (uint32_t)(uintptr_t)iosw_seed_dma_words());
     volatile uint32_t *dma = iosw_seed_dma_words();
-    assert(dma[0] == 0 && dma[1] == (uint32_t)(uintptr_t)(dma + 16) && dma[2] == 64);
-    for (unsigned i = 16; i < 32; ++i) assert(dma[i] == 0); /* cleared before the start */
+    CHECK(dma[0] == 0 && dma[1] == (uint32_t)(uintptr_t)(dma + 16) && dma[2] == 64);
+    for (unsigned i = 16; i < 32; ++i) CHECK(dma[i] == 0); /* cleared before the start */
     m.modes[m.starts < 4 ? m.starts : 3] = m.rng & 3u;
     ++m.starts;
     if (m.flags & NEVER_DONE) return;
@@ -60,7 +76,8 @@ static void start(void) {
     m.drains = 3;
 }
 
-uint32_t iosw_seed_read32(uint64_t pa) {
+uint32_t iosw_seed_read32(uint64_t pa)
+{
     if (pa >= SEED_PA && pa < SEED_PA + 64) return m.seed[(pa - SEED_PA) / 4];
     if (pa >= SOURCE_PA && pa < SOURCE_PA + 8) return m.source[(pa - SOURCE_PA) / 4];
     switch (pa) {
@@ -73,8 +90,8 @@ uint32_t iosw_seed_read32(uint64_t pa) {
         return m.wrque;
     default: break;
     }
-    assert(pa >= SE2 && pa < SE2 + 0x1000);
-    assert((m.clk_v & (1u << 31)) && !(m.rst_v & (1u << 31))); /* never with the clock off or in reset */
+    CHECK(pa >= SE2 && pa < SE2 + 0x1000);
+    CHECK((m.clk_v & (1u << 31)) && !(m.rst_v & (1u << 31))); /* never with the clock off or in reset */
     ++m.se_accesses;
     switch ((uint32_t)pa - SE2) {
     case 0x000: return m.security;
@@ -94,18 +111,36 @@ uint32_t iosw_seed_read32(uint64_t pa) {
     }
 }
 
-void iosw_seed_write32(uint64_t pa, uint32_t value) {
-    if (pa >= SEED_PA && pa < SEED_PA + 64) { m.seed[(pa - SEED_PA) / 4] = value; return; }
-    if (pa >= SOURCE_PA && pa < SOURCE_PA + 8) { m.source[(pa - SOURCE_PA) / 4] = value; return; }
-    if (pa == CAR + 0x448) { assert(value == 1u << 21); m.clk_w |= value; return; } /* CLK_ENB_W_SET */
-    if (pa == CAR + 0x43c) { assert(value == 1u << 21); m.rst_w &= ~value; return; } /* RST_DEV_W_CLR */
-    assert(pa >= SE2 && pa < SE2 + 0x1000);
-    assert((m.clk_v & (1u << 31)) && !(m.rst_v & (1u << 31)));
-    assert(m.security & (1u << 16)); /* nothing written to a secure-only engine */
+void iosw_seed_write32(uint64_t pa, uint32_t value)
+{
+    if (pa >= SEED_PA && pa < SEED_PA + 64) {
+        m.seed[(pa - SEED_PA) / 4] = value;
+        return;
+    }
+    if (pa >= SOURCE_PA && pa < SOURCE_PA + 8) {
+        m.source[(pa - SOURCE_PA) / 4] = value;
+        return;
+    }
+    if (pa == CAR + 0x448) {
+        CHECK(value == 1u << 21);
+        m.clk_w |= value;
+        return;
+    } /* CLK_ENB_W_SET */
+    if (pa == CAR + 0x43c) {
+        CHECK(value == 1u << 21);
+        m.rst_w &= ~value;
+        return;
+    } /* RST_DEV_W_CLR */
+    CHECK(pa >= SE2 && pa < SE2 + 0x1000);
+    CHECK((m.clk_v & (1u << 31)) && !(m.rst_v & (1u << 31)));
+    CHECK(m.security & (1u << 16)); /* nothing written to a secure-only engine */
     ++m.se_accesses;
     if (m.flags & DROP_WRITES) return;
     switch ((uint32_t)pa - SE2) {
-    case 0x008: assert(value == 1); start(); return;
+    case 0x008:
+        CHECK(value == 1);
+        start();
+        return;
     case 0x010: m.ints &= ~value; return;
     case 0x014: m.config = value; return;
     case 0x018: m.in_ll = value; return;
@@ -123,7 +158,8 @@ static const uint32_t pinned[16] = {0x11111111u, 0x22222222u, 0x33333333u, 0x444
                                     0x77777777u, 0x88888888u, 0x99999999u, 0xaaaaaaaau, 0xbbbbbbbbu, 0xccccccccu,
                                     0xddddddddu, 0xeeeeeeeeu, 0xffffffffu, 0x01234567u};
 
-static uint32_t run(unsigned flags) {
+static uint32_t run(unsigned flags)
+{
     memset(&m, 0, sizeof(m));
     m.flags = flags;
     m.clk_v = (flags & SE_CLOCK_OFF) ? 0 : 1u << 31;
@@ -133,87 +169,90 @@ static uint32_t run(unsigned flags) {
     m.counter = 0x123456789ull;
     memcpy(m.seed, pinned, sizeof(pinned));
     const uint32_t word = iosw_seed_mix(SEED_PA, SOURCE_PA, ticks, 38400);
-    assert(m.source[0] == IOSW_SEED_MAGIC && m.source[1] == word);
+    CHECK(m.source[0] == IOSW_SEED_MAGIC && m.source[1] == word);
     volatile uint32_t *dma = iosw_seed_dma_words();
-    for (unsigned i = 16; i < 32; ++i) assert(dma[i] == 0); /* nothing of the output stays in the image */
+    for (unsigned i = 16; i < 32; ++i) CHECK(dma[i] == 0); /* nothing of the output stays in the image */
     return word;
 }
 
 /* The seed after a run: pinned ^ output (if mixed) ^ the counter in words 0 and 1. */
-static void check_seed(int mixed) {
-    for (unsigned i = 2; i < 16; ++i) assert(m.seed[i] == (pinned[i] ^ (mixed ? m.drbg[i] : 0)));
+static void check_seed(int mixed)
+{
+    for (unsigned i = 2; i < 16; ++i) CHECK(m.seed[i] == (pinned[i] ^ (mixed ? m.drbg[i] : 0)));
     const uint32_t c0 = m.seed[0] ^ pinned[0] ^ (mixed ? m.drbg[0] : 0);
     const uint32_t c1 = m.seed[1] ^ pinned[1] ^ (mixed ? m.drbg[1] : 0);
     const uint64_t counter = (uint64_t)c1 << 32 | c0;
-    assert(counter > 0x123456789ull && counter <= m.counter); /* a counter value read during the run */
+    CHECK(counter > 0x123456789ull && counter <= m.counter); /* a counter value read during the run */
 }
 
-int main(void) {
+unsigned seed_scenarios(void);
+unsigned seed_scenarios(void)
+{
     unsigned scenarios = 0;
     uint32_t w;
 
     w = run(0); /* the shipped case: clocks on, the DRBG answers */
-    assert((w & 0xffffu) == IOSW_SEED_STATUS_MIXED && m.starts == 1 && m.modes[0] == 2);
+    CHECK((w & 0xffffu) == IOSW_SEED_STATUS_MIXED && m.starts == 1 && m.modes[0] == 2);
     check_seed(1);
     uint32_t fold = 0;
     for (unsigned i = 0; i < 16; ++i) fold ^= m.drbg[i];
-    assert(w >> 16 == ((fold ^ fold >> 16) & 0xffffu));
+    CHECK(w >> 16 == ((fold ^ fold >> 16) & 0xffffu));
     ++scenarios;
 
     w = run(ENTROPY_OFF); /* BL31 left the entropy clock off (SC7): the loader turns it on first */
-    assert((w & 0xffu) == IOSW_SEED_STATUS_MIXED && (w & IOSW_SEED_FLAG_ENTROPY_ENABLED));
-    assert((m.clk_w & (1u << 21)) && !(m.rst_w & (1u << 21)));
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_MIXED && (w & IOSW_SEED_FLAG_ENTROPY_ENABLED));
+    CHECK((m.clk_w & (1u << 21)) && !(m.rst_w & (1u << 21)));
     check_seed(1);
     ++scenarios;
 
     w = run(ENTROPY_STUCK);
-    assert((w & 0xffu) == IOSW_SEED_STATUS_ENTROPY && m.starts == 0);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_ENTROPY && m.starts == 0);
     check_seed(0);
     ++scenarios;
 
     w = run(SE_CLOCK_OFF); /* not one engine register touched */
-    assert((w & 0xffffu) == IOSW_SEED_STATUS_SE_CLOCK && m.se_accesses == 0);
+    CHECK((w & 0xffffu) == IOSW_SEED_STATUS_SE_CLOCK && m.se_accesses == 0);
     check_seed(0);
     ++scenarios;
 
     w = run(SE_SECURE); /* read SE_SECURITY, nothing else */
-    assert((w & 0xffu) == IOSW_SEED_STATUS_SECURE && w >> 16 == 0x35u && m.se_accesses == 1);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_SECURE && w >> 16 == 0x35u && m.se_accesses == 1);
     check_seed(0);
     ++scenarios;
 
     w = run(DROP_WRITES);
-    assert((w & 0xffu) == IOSW_SEED_STATUS_IGNORED && m.starts == 0);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_IGNORED && m.starts == 0);
     check_seed(0);
     ++scenarios;
 
     w = run(NEVER_DONE); /* bounded: about 2 ms of counter, then the pinned seed */
-    assert((w & 0xffu) == IOSW_SEED_STATUS_TIMEOUT && m.starts == 1);
-    assert(m.counter - 0x123456789ull < 38400u + 4000u);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_TIMEOUT && m.starts == 1);
+    CHECK(m.counter - 0x123456789ull < 38400u + 4000u);
     check_seed(0);
     ++scenarios;
 
     w = run(ERROR_FIRST); /* forced reseed errors (DRBG never instantiated): instantiate once instead */
-    assert((w & 0xffu) == IOSW_SEED_STATUS_MIXED && m.starts == 2 && m.modes[0] == 2 && m.modes[1] == 1);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_MIXED && m.starts == 2 && m.modes[0] == 2 && m.modes[1] == 1);
     check_seed(1);
     ++scenarios;
 
     w = run(ERROR_ALWAYS);
-    assert((w & 0xffu) == IOSW_SEED_STATUS_ERROR && w >> 16 == 0x40u && m.starts == 2);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_ERROR && w >> 16 == 0x40u && m.starts == 2);
     check_seed(0);
     ++scenarios;
 
     w = run(NEVER_DRAIN);
-    assert((w & 0xffu) == IOSW_SEED_STATUS_DRAIN);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_DRAIN);
     check_seed(0);
     ++scenarios;
 
     w = run(ZERO_OUTPUT);
-    assert((w & 0xffu) == IOSW_SEED_STATUS_OUTPUT);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_OUTPUT);
     check_seed(0);
     ++scenarios;
 
     w = run(REPEAT_OUTPUT);
-    assert((w & 0xffu) == IOSW_SEED_STATUS_OUTPUT);
+    CHECK((w & 0xffu) == IOSW_SEED_STATUS_OUTPUT);
     check_seed(0);
     ++scenarios;
 
@@ -222,13 +261,15 @@ int main(void) {
     uint32_t first[16];
     memcpy(first, m.seed, sizeof(first));
     memset(&m, 0, sizeof(m));
-    m.clk_v = 1u << 31; m.clk_w = 1u << 21; m.security = 0x10035u; m.counter = 0x123456789ull;
+    m.clk_v = 1u << 31;
+    m.clk_w = 1u << 21;
+    m.security = 0x10035u;
+    m.counter = 0x123456789ull;
     m.starts = 5; /* the model's output depends on its start count */
     memcpy(m.seed, pinned, sizeof(pinned));
     (void)iosw_seed_mix(SEED_PA, SOURCE_PA, ticks, 38400);
-    assert(memcmp(first + 2, m.seed + 2, 56) != 0);
+    CHECK(memcmp(first + 2, m.seed + 2, 56) != 0);
     ++scenarios;
 
-    printf("PASS seed %u scenarios\n", scenarios);
-    return 0;
+    return scenarios;
 }

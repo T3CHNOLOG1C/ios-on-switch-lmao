@@ -1,13 +1,12 @@
 load("@rules_python//python:py_binary.bzl", "py_binary")
-load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-# The RAM metadata exporter (switchroot/ioswitch/exporter.uimg, pinned in bazel/pinned/firmware): its builder, its
-# Cortex-A57 model run and its host test, all against the pinned bl33.bin.
+# The RAM metadata exporter (switchroot/ioswitch/exporter.uimg, pinned in bazel/pinned/firmware): its builder and its
+# Cortex-A57 model run, against the pinned bl33.bin (its host test: //native/storage/firmware_export/test).
 #   bazel run //native:firmware_export -- --output <dir under out/>
 py_binary(
     name = "firmware_export",
@@ -19,15 +18,6 @@ py_binary(
     name = "firmware_export_model",
     srcs = ["storage/firmware_export/model.py"],
     main = "storage/firmware_export/model.py",
-)
-
-py_test(
-    name = "firmware_export_test",
-    size = "small",
-    srcs = ["storage/firmware_export/test_export.py"],
-    data = glob(["storage/firmware_export/*"]) + ["//bazel/pinned:firmware/bl33.bin"],
-    main = "storage/firmware_export/test_export.py",
-    tags = ["requires-darwin"],
 )
 
 filegroup(
