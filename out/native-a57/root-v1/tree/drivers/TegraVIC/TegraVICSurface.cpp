@@ -1,0 +1,132 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// IOSurfaces for the scaler, through Apple's IOSurface kext (com.apple.iokit.IOSurface, prelinked): an ID becomes a
+// retained IOSurface in the calling task's namespace, its geometry is read with the kext's own accessors, and its pages
+// are wired for the engine with IOSurface::prepare/complete, as AppleM2ScalerCSCDriver does (CONTRACT.md).
+//
+// The accessors are bound by address (original-bindings.S, checked against the kernelcache on every build by
+// abi_check.py: the slid address of each one holds the instructions read when it was identified):
+//   IOSurfaceRoot::lookupSurface(id, task)  find_surface for the task (its own surfaces, those its IOSurfaceRootUserClient
+//                                            holds, global ones), then a try-retain; release with OSObject::release
+//   getMemoryDescriptor, getPixelFormat, getWidth, getHeight, getBytesPerRow, getPlaneCount, getAllocSize,
+//   getProtectionOptions; getPlaneWidth/Height/Offset/BytesPerRow(plane) (plane 0 falls back to the surface's own
+//   fields when the surface has no plane array); prepare/complete (wire count, IOMemoryDescriptor::prepare).
+// The IOSurfaceRoot is the service named "IOCoreSurfaceRoot".
+#include <IOKit/IOLib.h>
+#include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOService.h>
+#include <string.h>
+#include "TegraVIC.h"
+#include "TegraVICSurface.h"
+
+extern "C" {
+OSObject *tegra_vic_ios_lookup(IOService *root, uint32_t id, task_t task);
+IOMemoryDescriptor *tegra_vic_ios_memory(OSObject *surface);
+uint32_t tegra_vic_ios_format(OSObject *surface);
+uint64_t tegra_vic_ios_width(OSObject *surface);
+uint64_t tegra_vic_ios_height(OSObject *surface);
+uint64_t tegra_vic_ios_bytes_per_row(OSObject *surface);
+uint32_t tegra_vic_ios_plane_count(OSObject *surface);
+uint64_t tegra_vic_ios_alloc_size(OSObject *surface);
+uint64_t tegra_vic_ios_protection(OSObject *surface);
+uint64_t tegra_vic_ios_plane_width(OSObject *surface, uint32_t plane);
+uint64_t tegra_vic_ios_plane_height(OSObject *surface, uint32_t plane);
+uint64_t tegra_vic_ios_plane_offset(OSObject *surface, uint32_t plane);
+uint64_t tegra_vic_ios_plane_bytes_per_row(OSObject *surface, uint32_t plane);
+int tegra_vic_ios_prepare(OSObject *surface);
+int tegra_vic_ios_complete(OSObject *surface);
+}
+
+namespace {
+IOService *gRoot;
+}
+
+extern "C" bool tegra_vic_surface_start(void)
+{
+    if (gRoot) return true;
+    OSDictionary *match = IOService::nameMatching("IOCoreSurfaceRoot");
+    if (!match) return false;
+    IOService *root = IOService::waitForMatchingService(match, 5ull * 1000 * 1000 * 1000);
+    match->release();
+    gRoot = root;  // kept (waitForMatchingService retained it)
+    return gRoot != nullptr;
+}
+
+extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICSurface *out)
+{
+    bzero(out, sizeof(*out));
+    if (!gRoot || !id) return kIOReturnBadArgument;
+    OSObject *surface = tegra_vic_ios_lookup(gRoot, id, task);
+    if (!surface) return kIOReturnBadArgument;  // as AppleM2ScalerCSCDriver: not this task's surface
+    out->surface = surface;
+    out->memory = tegra_vic_ios_memory(surface);
+    TegraVICSurfaceDesc *d = &out->desc;
+    d->fourcc = tegra_vic_ios_format(surface);
+    d->width = (uint32_t)tegra_vic_ios_width(surface);
+    d->height = (uint32_t)tegra_vic_ios_height(surface);
+    d->planes = tegra_vic_ios_plane_count(surface);
+    const uint32_t planes = d->planes ? d->planes : 1;
+    for (uint32_t p = 0; p < planes && p < 2; p++) {
+        d->planeOffset[p] = tegra_vic_ios_plane_offset(surface, p);
+        d->planeBytesPerRow[p] = tegra_vic_ios_plane_bytes_per_row(surface, p);
+        d->planeWidth[p] = tegra_vic_ios_plane_width(surface, p);
+        d->planeHeight[p] = tegra_vic_ios_plane_height(surface, p);
+    }
+    if (!d->planes) {
+        // A surface without planes: its own fields (the plane-0 accessors already fall back to them).
+        d->planeBytesPerRow[0] = tegra_vic_ios_bytes_per_row(surface);
+        d->planeHeight[0] = d->height;
+    }
+    d->length = out->memory ? out->memory->getLength() : 0;
+    if (tegra_vic_ios_alloc_size(surface) < d->length) d->length = tegra_vic_ios_alloc_size(surface);
+    d->protection = tegra_vic_ios_protection(surface);
+    if (!out->memory) {
+        tegra_vic_surface_release(out);
+        return kIOReturnNotReady;
+    }
+    return kIOReturnSuccess;
+}
+
+extern "C" void tegra_vic_surface_release(TegraVICSurface *s)
+{
+    if (s->prepared) tegra_vic_surface_complete(s);
+    if (s->surface) s->surface->release();  // IOSurface::release, as lookupSurface's caller must
+    bzero(s, sizeof(*s));
+}
+
+// Wires the surface (IOSurface::prepare) and lists the physical pages of its first `extent` bytes. The memory must
+// start on a page (IOSurface allocations do).
+extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t extent, uint64_t *pages, uint32_t max,
+                                              uint32_t *count)
+{
+    *count = 0;
+    const uint64_t bytes = (extent + 0xfff) & ~0xfffull;
+    if (!extent || bytes / 4096 > max || extent > s->memory->getLength()) return kIOReturnBadArgument;
+    // IOSurface::prepare keeps the surface's own wire count (and returns 0 even when the descriptor's prepare fails);
+    // the descriptor is prepared once more here, which is the result that counts.
+    if (tegra_vic_ios_prepare(s->surface) != kIOReturnSuccess) return kIOReturnNoMemory;
+    if (s->memory->prepare() != kIOReturnSuccess) {
+        (void)tegra_vic_ios_complete(s->surface);
+        return kIOReturnNoMemory;
+    }
+    s->prepared = true;
+    uint32_t n = 0;
+    for (uint64_t offset = 0; offset < bytes;) {
+        IOByteCount length = 0;
+        const addr64_t pa = s->memory->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
+        if (!pa || !length || (pa & 0xfff) || ((offset == 0) && (pa & 0xfff))) {
+            tegra_vic_surface_complete(s);
+            return kIOReturnNotAligned;
+        }
+        for (uint64_t at = 0; at < length && offset < bytes; at += 4096, offset += 4096) pages[n++] = pa + at;
+    }
+    *count = n;
+    return kIOReturnSuccess;
+}
+
+extern "C" void tegra_vic_surface_complete(TegraVICSurface *s)
+{
+    if (!s->prepared) return;
+    s->memory->complete();
+    (void)tegra_vic_ios_complete(s->surface);
+    s->prepared = false;
+}

@@ -453,10 +453,10 @@ extern "C" void tegra_host1x_resume(void)
 }
 
 // The sleep agent's hooks (SwitchSuspend calls them in thread context, interrupts on). They live here, in the file
-// that is always built, so they exist whether or not NVDEC is; NVDEC and NVENC register their quiesce and reload once
-// they are up. Clients quiesce in the reverse order of registration and reload in order.
+// that is always built, so they exist whether or not NVDEC is; NVDEC, NVENC and VIC register their quiesce and reload
+// once they are up. Clients quiesce in the reverse order of registration and reload in order.
 namespace {
-constexpr uint32_t kSleepClients = 2;
+constexpr uint32_t kSleepClients = 3;
 struct SleepClient {
     void (*suspend)(void), (*resume)(void);
 } gSleepClients[kSleepClients];
@@ -466,7 +466,7 @@ uint32_t gSleepClientCount;
 extern "C" void tegra_host1x_set_sleep_client(void (*suspend)(void), void (*resume)(void))
 {
     if (__atomic_load_n(&gSleepClientCount, __ATOMIC_ACQUIRE) >= kSleepClients) {
-        IOLog("TegraHost1x: a third sleep client was refused (two at most)\n");
+        IOLog("TegraHost1x: a fourth sleep client was refused (three at most)\n");
         return;
     }
     const uint32_t i = __atomic_fetch_add(&gSleepClientCount, 1, __ATOMIC_ACQ_REL);

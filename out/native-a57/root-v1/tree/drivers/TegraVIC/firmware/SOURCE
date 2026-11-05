@@ -1,0 +1,10 @@
+linux-firmware main (2026-10-13 "nvidia: Update and add missing firmware files for Tegra SoCs"),
+gitlab.com/kernel-firmware/linux-firmware, checked 2026-11-05.
+File: nvidia/tegra210/vic04_ucode.bin (WHENCE: Driver tegra-vic, Version l4t-r32.7.6, Link nvidia/tegra210/vic.bin),
+sha256 01ab2263d3ca54ce6abd425d0df8bedf3a33a59bfc51f9bec1d67207e74867f9, 16640 bytes.
+Byte-identical to the vic04_ucode.bin in NVIDIA's nvidia-l4t-firmware 32.7.6-20241104234540 (recorded by
+TegraNVDEC/firmware/SOURCE when NVDEC was vendored): VIC 4.0, the image Linux drm/tegra vic.c (tegra210) and L4T boot.
+Layout (falcon bin header v1): OS header at 0x100, OS data at 0x200 (0x3a00 bytes): code 0x0+0x300, data 0x3100+0x900;
+FCE header at 0x3c00 (ucode size 0x3c0 at +8), FCE microcode at 0x3d00. This generation needs the kernel to hand the
+FCE microcode over (Linux vic_boot: VIC_SET_FCE_UCODE_SIZE 0x71c, VIC_SET_FCE_UCODE_OFFSET 0x72c), which V2 does.
+Licence: LICENCE.nvidia (WHENCE: Redistributable), the same file as TegraNVDEC/firmware/LICENCE.nvidia.

@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// IOSurfaces for the scaler (TegraVICSurface.cpp): lookup by ID in the caller's task, geometry, wiring.
+#ifndef TEGRA_VIC_SURFACE_H
+#define TEGRA_VIC_SURFACE_H
+#include <IOKit/IOTypes.h>
+#include <kern/task.h>
+#include "TegraVICRequest.h"
+
+class OSObject;
+class IOMemoryDescriptor;
+
+struct TegraVICSurface {
+    OSObject *surface;           // retained IOSurface
+    IOMemoryDescriptor *memory;  // the surface's (not retained: the surface holds it)
+    TegraVICSurfaceDesc desc;
+    bool prepared;
+};
+
+extern "C" {
+bool tegra_vic_surface_start(void);  // finds the IOSurfaceRoot (V5)
+IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICSurface *out);
+void tegra_vic_surface_release(TegraVICSurface *s);
+IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t extent, uint64_t *pages, uint32_t max, uint32_t *count);
+void tegra_vic_surface_complete(TegraVICSurface *s);
+}
+#endif

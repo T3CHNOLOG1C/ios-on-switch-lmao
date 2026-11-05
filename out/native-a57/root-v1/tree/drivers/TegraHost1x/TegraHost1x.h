@@ -85,7 +85,7 @@ void tegra_host1x_resume(void);
 
 // The exports the sleep agent (drivers/SwitchSuspend) calls: the registered clients' quiesce then host1x's suspend,
 // and host1x's resume then the clients' reload. With nothing registered (NVDEC off) they are host1x alone, which is a
-// no-op unless host1x is up. TegraNVDEC and TegraNVENC register once their engines run (two clients at most).
+// no-op unless host1x is up. TegraNVDEC, TegraNVENC and TegraVIC register once their engines run (three at most).
 void tegra_host1x_set_sleep_client(void (*suspend)(void), void (*resume)(void));
 void tegra_nvdec_suspend(void);
 void tegra_nvdec_resume(void);

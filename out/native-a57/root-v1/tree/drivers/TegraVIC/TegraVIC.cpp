@@ -1,0 +1,825 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// Tegra210 VIC (Video Image Compositor 4.0, a falcon behind host1x): bring-up, its SMMU domain, the job engine and
+// sleep. tegra_vic_probe() runs the whole bring-up by default on its own thread:
+//   V0  NVDEC's bring-up has ended (its 48 MiB arena goes first), host1x is up, and VIC's kernel buffers are allocated:
+//       the firmware image, an arena for the configuration slot, the filter structure and the self-test surfaces, and
+//       the SMMU page directory with its page tables
+//   V1  VIC's SMMU domain (ASID 127 for the "vic" swgroup: the kernel buffers 1:1, two empty surface windows), power
+//       partition 23, clock (PLLP, 408 MHz), reset, the VIC MBIST workaround, falcon firmware loaded and started
+//   V2  proof of life through host1x channel 0 in VIC's class: an IMMEDIATE syncpoint increment (the engine's host
+//       interface), then the firmware's FCE microcode size and offset and an OP_DONE increment (the falcon), each
+//       completed by interrupt
+//   V3  SMMU translation proven: a fill whose page table entry sends it to page B lands in B, not at the bus address
+//   V4  every transform, the colour matrices and scaling checked against the reference (TegraVICSelfTest.cpp)
+//   V5  the AppleM2ScalerCSCDriver service and its IOSurfaceAcceleratorClient published (TegraVICUserClient.cpp)
+// One line per stage ("TegraVIC: V1 ok ..."), or the failing stage's FAIL line and nothing after it. Until V5
+// publishes, every failure is that one line: the swgroup goes back to bypass, the engine back to reset with its clock
+// off, and nothing is published (Core Animation has no IOSurfaceAccelerator, as before this driver). From V5 on the
+// engine is proven: a job past its bound panics with one line, and a lost syncpoint interrupt panics in TegraHost1x.
+//
+// Why the SMMU: the scaler's operands are other processes' IOSurfaces (scattered pages, half of the Switch's RAM above
+// the 32-bit boundary), and VIC has no scatter-gather. Each job maps its two surfaces page by page into two windows of
+// VIC's address space; everything else in the windows is unmapped, so the SMMU itself keeps the engine inside the job's
+// surfaces, behind the checker (TegraVICConfig.h) that keeps every programmed access inside them. switchroot's bl31
+// (tegra_memctrl_setup) turns the SMMU on with every client's translation bit set and every swgroup in bypass; the
+// global enable is secure-only and reads back as garbage from here, so V3 proves translation instead of reading it.
+//
+// Firmware: linux-firmware's nvidia/tegra210/vic04_ucode.bin (firmware/SOURCE), booted non-securely as Linux drm/tegra
+// vic.c does; its FCE microcode is handed over with two methods (VIC_SET_FCE_UCODE_SIZE/OFFSET), as vic_boot does for
+// this firmware generation.
+//
+// Sources (Linux's drivers are GPL-2.0-only and hekate's GPL-2.0, so this follows them without copying):
+//   tegra210.dtsi vic@54340000 (0x40000; clock and reset TEGRA210_CLK_VIC03 178 = CAR X bank bit 18, power domain VIC),
+//   include/soc/tegra/pmc.h TEGRA_POWERGATE_VIC 23 (hekate POWER_RAIL_VIC 23), clk-tegra-periph.c "vic03"
+//   (CLK_SOURCE_VIC03 0x678, mux pllc/pllp/...: PLLP is code 2; hekate _clock_vic: PLLP, divider 0, 408 MHz),
+//   clk-tegra210.c tegra210_vic_mbist_war (LVL2_CLK_GATE_OVRE bit 5, THI SLCG_OVERRIDE_LOW 0x8c bits 0, 7:2, 24),
+//   drm/tegra/vic.c vic_boot (NV_PVIC_MISC_PRI_VIC_CG 0x16d0, FCE header/data at firmware words 6/7, size at +8),
+//   drm/tegra/falcon.c falcon_boot (shared with TegraNVDEC/TegraNVENC), memory/tegra/tegra210.c (swgroup "vic" ASID
+//   register 0x284, clients vicsrd/vicswr translation bits 0x234 bits 12/13, MC hot reset VIC 0x200 bit 18),
+//   iommu/tegra-smmu.c (PTB_ASID 0x1c, PTB_DATA 0x20, TLB_FLUSH 0x30, PTC_FLUSH 0x34, PDE/PTE: PFN | R 31 | W 30 |
+//   NS 29, NEXT 28 in a PDE; 1024 x 4 MiB directory entries, 1024 x 4 KiB table entries), switch-atf memctrl_v1.c.
+// Waits on hardware sequencing with no interrupt of its own (partition status, IMEM/DMEM scrub, the falcon's DMA
+// queue) are bounded reads, as in TegraNVDEC/TegraNVENC; every completion of work is a host1x syncpoint interrupt.
+#include <IOKit/IOLib.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include <kern/clock.h>
+#include <kern/thread.h>
+#include <string.h>
+#include "../TegraHost1x/TegraHost1x.h"
+#include "TegraVIC.h"
+
+extern "C" {
+vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+vm_offset_t phystokv(uint64_t pa);
+boolean_t pmap_valid_page(ppnum_t pn);
+int tegra_nvdec_await(uint32_t timeoutMs);
+extern const uint8_t tegra_vic_fw_start[] __asm__("_tegra_vic_fw_start");
+extern const uint8_t tegra_vic_fw_end[] __asm__("_tegra_vic_fw_end");
+}
+
+namespace {
+constexpr vm_offset_t kVicPA = 0x54340000, kVicSize = 0x40000;
+constexpr uint32_t kClass = TEGRA_HOST1X_CLASS_VIC;
+constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (data)
+constexpr vm_offset_t kCarPA = 0x60006000, kPmcPagePA = 0x7000E000, kMcPA = 0x70019000;
+constexpr uint32_t kPmcOffset = 0x400, kPartition = 23;  // TEGRA_POWERGATE_VIC
+constexpr uint64_t kArenaBytes = 1ull << 20;
+constexpr uint32_t kNvdecWaitMs = 20000;
+constexpr uint32_t kAsid = 127;
+
+enum : uint32_t {  // clock and reset controller, X bank
+    CLK_OUT_ENB_X = 0x280,
+    CLK_ENB_X_SET = 0x284,
+    CLK_ENB_X_CLR = 0x288,
+    RST_DEVICES_X = 0x28c,
+    RST_DEV_X_SET = 0x290,
+    RST_DEV_X_CLR = 0x294,
+    LVL2_CLK_GATE_OVRE = 0x554,
+    CLK_SOURCE_VIC = 0x678,
+    X_VIC = 1u << 18,
+    OVRE_VIC_MBIST = 1u << 5,
+    SOURCE_PLLP = 2u << 29,  // this mux: pllc 1, pllp 2
+    VIC_DIV_1 = 0,
+};
+enum : uint32_t { PWRGATE_TOGGLE = 0x30, REMOVE_CLAMPING = 0x34, PWRGATE_STATUS = 0x38, TOGGLE_START = 1u << 8 };
+enum : uint32_t {
+    MC_SMMU_PTB_ASID = 0x1c,
+    MC_SMMU_PTB_DATA = 0x20,
+    MC_SMMU_TLB_FLUSH = 0x30,
+    MC_SMMU_PTC_FLUSH = 0x34,
+    MC_HOTRESET_CTRL = 0x200,
+    MC_HOTRESET_VIC = 1u << 18,
+    MC_SMMU_TRANSLATION_ENABLE_3 = 0x234,
+    TRANSLATION_VIC = (1u << 12) | (1u << 13),  // vicsrd, vicswr
+    MC_SMMU_VIC_ASID = 0x284,
+    SMMU_ASID_ENABLE = 1u << 31,
+    TLB_FLUSH_ASID_MATCH = 1u << 31,
+    SMMU_READ = 1u << 31,
+    SMMU_WRITE = 1u << 30,
+    SMMU_NONSECURE = 1u << 29,
+    SMMU_PDE_NEXT = 1u << 28,
+};
+enum : uint32_t {  // VIC private registers
+    THI_SLCG_OVERRIDE_LOW = 0x8c,
+    SLCG_MBIST = (1u << 0) | (0x3fu << 2) | (1u << 24),
+    MISC_PRI_VIC_CG = 0x16d0,
+    VIC_CG_BOOT = 4u | (1u << 6) | (4u << 16),  // CG_IDLE_CG_DLY_CNT(4) | CG_IDLE_CG_EN | CG_WAKEUP_DLY_CNT(4)
+};
+enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
+    FALCON_IRQSTAT = 0x1008,
+    FALCON_IRQMSET = 0x1010,
+    FALCON_IRQDEST = 0x101c,
+    FALCON_MAILBOX0 = 0x1040,
+    FALCON_ITFEN = 0x1048,
+    FALCON_IDLESTATE = 0x104c,
+    FALCON_DEBUGINFO = 0x1094,
+    FALCON_CPUCTL = 0x1100,
+    FALCON_BOOTVEC = 0x1104,
+    FALCON_DMACTL = 0x110c,
+    FALCON_DMATRFBASE = 0x1110,
+    FALCON_DMATRFMOFFS = 0x1114,
+    FALCON_DMATRFCMD = 0x1118,
+    FALCON_DMATRFFBOFFS = 0x111c,
+    CPUCTL_STARTCPU = 1u << 1,
+    DMACTL_SCRUBBING = (1u << 1) | (1u << 2),
+    DMATRFCMD_FULL = 1u << 0,
+    DMATRFCMD_IDLE = 1u << 1,
+    DMATRFCMD_IMEM = 1u << 4,
+    DMATRFCMD_SIZE_256B = 6u << 8,
+    ITFEN_CTXEN = 1u << 0,
+    ITFEN_MTHDEN = 1u << 1,
+    IRQMSET_BOOT = (1u << 1) | (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (0xffu << 8),
+    IRQDEST_BOOT = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (0xffu << 8),
+};
+
+struct Image {  // falcon bin header v1, its OS header, and VIC's FCE header (drm/tegra/falcon.h, vic.h)
+    uint32_t size, binData, binSize, code, codeSize, data, dataSize, apps, fceData, fceSize;
+};
+
+volatile uint8_t *gVic, *gCar, *gPmc, *gMc;
+IOBufferMemoryDescriptor *gFirmwareMd, *gArenaMd, *gTablesMd;
+TegraVICBuffer gFirmware, gArena, gTables;
+uint64_t gArenaUsed;
+Image gImage;
+char gLine[256];
+
+// SMMU domain: one page directory, the identity tables of the kernel buffers and the windows' tables.
+constexpr uint32_t kWindowTables = (uint32_t)(kTegraVICWindowBytes >> 22);  // 4 MiB per table
+constexpr uint32_t kIdentityTables = 4;  // the arena and the firmware: at most two 4 MiB sections each
+constexpr uint32_t kTables = 1 + TEGRA_VIC_WINDOWS * kWindowTables + kIdentityTables;
+uint32_t *gPd;
+uint32_t gIdentityUsed;
+uint32_t gWindowMapped[TEGRA_VIC_WINDOWS];  // pages mapped from each window's start
+
+// The job engine. A job's wait is bounded by kQueueUs (VIC shares host1x channel 0 with NVDEC and NVENC, whose queued
+// jobs may run first: up to 2 s by their own bounds) plus one microsecond per 8 pixels read and written (VIC does
+// several per clock at 408 MHz), at most kMaxBoundUs: only a hung engine gets there.
+constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000;
+inline uint32_t jobBoundUs(const TegraVICJob *job)
+{
+    const uint64_t us = kQueueUs + job->pixels / 8;
+    return (uint32_t)(us < kMaxBoundUs ? us : kMaxBoundUs);
+}
+IOLock *gJobLock;    // one job at a time: map, run, unmap
+IOLock *gStateLock;  // suspend/resume against jobs
+uint32_t gSyncpt, gNext;
+bool gUp, gWedged, gSuspended, gPublished;
+TegraVICBuffer gConfig, gFilter;
+TegraVICTraits gTraits;
+
+inline uint32_t r32(volatile uint8_t *base, uint32_t o)
+{
+    return *(volatile uint32_t *)(base + o);
+}
+inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
+{
+    *(volatile uint32_t *)(base + o) = v;
+}
+inline uint32_t le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+bool waitBits(volatile uint8_t *base, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
+{
+    for (uint32_t i = 0; i <= us; ++i) {
+        if ((r32(base, o) & mask) == value) return true;
+        IODelay(1);
+    }
+    return false;
+}
+
+uint64_t nowUs()
+{
+    uint64_t ns;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    return ns / 1000;
+}
+
+template <bool Invalidate> void cacheOp(const void *va, size_t size)
+{
+    if (!size) return;
+    uint64_t ctr;
+    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
+    __asm__ volatile("dsb sy" ::: "memory");
+    for (uintptr_t a = (uintptr_t)va & ~(line - 1), end = (uintptr_t)va + size; a < end; a += line) {
+        if (Invalidate)
+            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
+        else
+            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
+template <bool Invalidate> void cachePages(const uint64_t *pages, uint32_t count)
+{
+    uint64_t ctr;
+    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
+    __asm__ volatile("dsb sy" ::: "memory");
+    for (uint32_t i = 0; i < count; i++) {
+        if (!pmap_valid_page((ppnum_t)(pages[i] >> 12))) continue;
+        const uintptr_t va = phystokv(pages[i] & ~0xfffULL);
+        for (uintptr_t a = va; a < va + 4096; a += line) {
+            if (Invalidate)
+                __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
+            else
+                __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
+        }
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
+const char *falconState()
+{
+    static char text[160];
+    snprintf(text, sizeof(text), "falcon CPUCTL %#x IDLESTATE %#x IRQSTAT %#x MAILBOX0 %#x DEBUGINFO %#x",
+             r32(gVic, FALCON_CPUCTL), r32(gVic, FALCON_IDLESTATE), r32(gVic, FALCON_IRQSTAT),
+             r32(gVic, FALCON_MAILBOX0), r32(gVic, FALCON_DEBUGINFO));
+    return text;
+}
+
+// One physically contiguous buffer below 4 GiB, zeroed and clean in the caches.
+bool contiguous(uint64_t bytes, IOBufferMemoryDescriptor **md, TegraVICBuffer *out)
+{
+    const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous |
+                                 (IOOptionBits)kIOMemoryMapperNone;
+    *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, bytes, 0xfffff000ULL);
+    IOByteCount length = 0;
+    uint64_t pa = 0;
+    if (*md && (*md)->prepare() == kIOReturnSuccess) pa = (*md)->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+    if (!pa || length < bytes || pa + bytes > (1ULL << 32)) {
+        OSSafeReleaseNULL(*md);
+        return false;
+    }
+    out->pa = pa;
+    out->size = bytes;
+    out->va = (uint8_t *)(*md)->getBytesNoCopy();
+    bzero(out->va, bytes);
+    cacheOp<true>(out->va, bytes);
+    return true;
+}
+
+// falcon_parse_firmware_image, plus vic_boot's FCE header: magic 0x10de (or 0x10fe), version 1, the OS header and data
+// inside the image, the FCE microcode inside the file.
+bool parse(const uint8_t *fw, size_t length, Image *image)
+{
+    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1) return false;
+    image->size = le32(fw + 8);
+    const uint32_t os = le32(fw + 12);
+    image->binData = le32(fw + 16);
+    image->binSize = le32(fw + 20);
+    const uint32_t fceHeader = le32(fw + 24);
+    image->fceData = le32(fw + 28);
+    if (image->size > length || os > image->size - 20 || image->binData > image->size ||
+        image->binSize > image->size - image->binData)
+        return false;
+    image->code = le32(fw + os);
+    image->codeSize = le32(fw + os + 4);
+    image->data = le32(fw + os + 8);
+    image->dataSize = le32(fw + os + 12);
+    image->apps = le32(fw + os + 16);
+    // This firmware generation needs its FCE microcode handed over (vic_boot: data offset neither 0 nor 0xa5a5a5a5).
+    if (!fceHeader || fceHeader > image->size - 12 || !image->fceData || image->fceData == 0xa5a5a5a5u) return false;
+    image->fceSize = le32(fw + fceHeader + 8);
+    return image->codeSize && image->code <= image->binSize && image->codeSize <= image->binSize - image->code &&
+           image->data <= image->binSize && image->dataSize <= image->binSize - image->data &&
+           (image->fceData & 0xff) == 0 && image->fceSize && image->fceData <= image->size &&
+           image->fceSize <= image->size - image->fceData;
+}
+
+// --- SMMU domain -----------------------------------------------------------------------------------------------
+inline uint32_t *table(uint32_t index)
+{
+    return (uint32_t *)(gTables.va + (uint64_t)index * 4096);
+}
+inline uint64_t tablePa(uint32_t index)
+{
+    return gTables.pa + (uint64_t)index * 4096;
+}
+
+void smmuFlush()
+{
+    w32(gMc, MC_SMMU_PTC_FLUSH, 0);  // all
+    (void)r32(gMc, MC_SMMU_PTB_ASID);
+    w32(gMc, MC_SMMU_TLB_FLUSH, TLB_FLUSH_ASID_MATCH | (kAsid << 24));  // this ASID, every address
+    (void)r32(gMc, MC_SMMU_PTB_ASID);
+}
+
+// The page table entry for `iova` (its table is installed on first use; the windows' tables are fixed).
+uint32_t *pte(uint64_t iova)
+{
+    const uint32_t pdi = (uint32_t)(iova >> 22);
+    if (!(gPd[pdi] & SMMU_PDE_NEXT)) {
+        if (gIdentityUsed == kIdentityTables) return nullptr;
+        const uint32_t index = 1 + TEGRA_VIC_WINDOWS * kWindowTables + gIdentityUsed++;
+        gPd[pdi] = (uint32_t)(tablePa(index) >> 12) | SMMU_READ | SMMU_WRITE | SMMU_NONSECURE | SMMU_PDE_NEXT;
+        cacheOp<false>(&gPd[pdi], 4);
+    }
+    const uint64_t index = (((uint64_t)(gPd[pdi] & 0x3fffff) << 12) - gTables.pa) / 4096;  // every table is ours
+    return &table((uint32_t)index)[(iova >> 12) & 1023];
+}
+
+bool identity(const TegraVICBuffer &b, bool writable)
+{
+    for (uint64_t at = b.pa; at < b.pa + b.size; at += 4096) {
+        uint32_t *p = pte(at);
+        if (!p) return false;
+        *p = (uint32_t)(at >> 12) | SMMU_READ | SMMU_NONSECURE | (writable ? SMMU_WRITE : 0);
+        cacheOp<false>(p, 4);
+    }
+    return true;
+}
+
+// The directory, the windows' tables (fixed, empty) and the identity maps; then the ASID's directory and the swgroup.
+bool smmuSetUp()
+{
+    gPd = table(0);
+    for (uint32_t w = 0; w < TEGRA_VIC_WINDOWS; w++)
+        for (uint32_t t = 0; t < kWindowTables; t++) {
+            const uint64_t iova = kTegraVICWindowBase + w * kTegraVICWindowBytes + ((uint64_t)t << 22);
+            gPd[iova >> 22] = (uint32_t)(tablePa(1 + w * kWindowTables + t) >> 12) | SMMU_READ | SMMU_WRITE |
+                              SMMU_NONSECURE | SMMU_PDE_NEXT;
+        }
+    cacheOp<false>(gTables.va, gTables.size);
+    if (!identity(gFirmware, false) || !identity(gArena, true)) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL kernel buffers need more than %u identity tables", kIdentityTables);
+        return false;
+    }
+    return true;
+}
+
+// Programs the ASID's directory and points the swgroup at it (also after SC7, which resets the MC).
+bool smmuAttach()
+{
+    if (r32(gMc, MC_SMMU_VIC_ASID) & SMMU_ASID_ENABLE && (r32(gMc, MC_SMMU_VIC_ASID) & 0x7f) != kAsid) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL the vic swgroup is already translated by ASID %u (MC 0x284 = %#x)",
+                 r32(gMc, MC_SMMU_VIC_ASID) & 0x7f, r32(gMc, MC_SMMU_VIC_ASID));
+        return false;
+    }
+    const uint32_t ptb = (uint32_t)(gTables.pa >> 12) | SMMU_READ | SMMU_WRITE | SMMU_NONSECURE;
+    w32(gMc, MC_SMMU_PTB_ASID, kAsid);
+    w32(gMc, MC_SMMU_PTB_DATA, ptb);
+    (void)r32(gMc, MC_SMMU_PTB_ASID);
+    w32(gMc, MC_SMMU_PTB_ASID, kAsid);
+    if (r32(gMc, MC_SMMU_PTB_DATA) != ptb) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL ASID %u directory did not take (PTB_DATA %#x, wrote %#x)", kAsid,
+                 r32(gMc, MC_SMMU_PTB_DATA), ptb);
+        return false;
+    }
+    smmuFlush();
+    w32(gMc, MC_SMMU_TRANSLATION_ENABLE_3, r32(gMc, MC_SMMU_TRANSLATION_ENABLE_3) | TRANSLATION_VIC);
+    w32(gMc, MC_SMMU_VIC_ASID, SMMU_ASID_ENABLE | kAsid);
+    (void)r32(gMc, MC_SMMU_VIC_ASID);
+    if (r32(gMc, MC_SMMU_VIC_ASID) != (SMMU_ASID_ENABLE | kAsid)) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL vic swgroup ASID did not take (MC 0x284 = %#x)",
+                 r32(gMc, MC_SMMU_VIC_ASID));
+        return false;
+    }
+    smmuFlush();
+    return true;
+}
+
+void smmuDetach()
+{
+    if (!gMc) return;
+    w32(gMc, MC_SMMU_VIC_ASID, 0);
+    (void)r32(gMc, MC_SMMU_VIC_ASID);
+    w32(gMc, MC_SMMU_PTB_ASID, kAsid);
+    w32(gMc, MC_SMMU_PTB_DATA, 0);
+    smmuFlush();
+}
+
+// --- Power, clock, falcon ----------------------------------------------------------------------------------------
+// tegra_powergate_power_up with the VIC MBIST workaround (it needs host1x's clock, which the boot chain left on). A
+// partition the boot chain left on keeps its state; the engine is still reset and re-clocked so the falcon starts from
+// scratch.
+bool powerUp(bool *wasOn)
+{
+    *wasOn = (r32(gPmc, kPmcOffset + PWRGATE_STATUS) >> kPartition) & 1;
+    w32(gCar, RST_DEV_X_SET, X_VIC);
+    IODelay(10);
+    if (!*wasOn) {
+        if (!waitBits(gPmc, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000)) {
+            snprintf(gLine, sizeof(gLine), "V1 FAIL PMC toggle busy (PWRGATE_TOGGLE %#x)",
+                     r32(gPmc, kPmcOffset + PWRGATE_TOGGLE));
+            return false;
+        }
+        w32(gPmc, kPmcOffset + PWRGATE_TOGGLE, kPartition | TOGGLE_START);
+        if (!waitBits(gPmc, kPmcOffset + PWRGATE_STATUS, 1u << kPartition, 1u << kPartition, 5000)) {
+            snprintf(gLine, sizeof(gLine), "V1 FAIL partition %u did not power on (PWRGATE_STATUS %#x)", kPartition,
+                     r32(gPmc, kPmcOffset + PWRGATE_STATUS));
+            return false;
+        }
+        IODelay(10);
+    }
+    w32(gCar, CLK_SOURCE_VIC, SOURCE_PLLP | VIC_DIV_1);
+    IODelay(2);
+    w32(gCar, CLK_ENB_X_SET, X_VIC);
+    IODelay(10);
+    w32(gPmc, kPmcOffset + REMOVE_CLAMPING, 1u << kPartition);
+    IODelay(10);
+    if (r32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_VIC)
+        w32(gMc, MC_HOTRESET_CTRL, r32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_VIC);
+    w32(gCar, RST_DEV_X_CLR, X_VIC);
+    IODelay(10);
+    if (!(r32(gCar, CLK_OUT_ENB_X) & X_VIC) || (r32(gCar, RST_DEVICES_X) & X_VIC)) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL clock or reset stuck (CLK_OUT_ENB_X %#x RST_DEVICES_X %#x)",
+                 r32(gCar, CLK_OUT_ENB_X), r32(gCar, RST_DEVICES_X));
+        return false;
+    }
+    // tegra210_vic_mbist_war.
+    const uint32_t ovre = r32(gCar, LVL2_CLK_GATE_OVRE);
+    w32(gCar, LVL2_CLK_GATE_OVRE, ovre | OVRE_VIC_MBIST);
+    IODelay(1);
+    const uint32_t slcg = r32(gVic, THI_SLCG_OVERRIDE_LOW);
+    w32(gVic, THI_SLCG_OVERRIDE_LOW, slcg | SLCG_MBIST);
+    IODelay(1);
+    w32(gVic, THI_SLCG_OVERRIDE_LOW, slcg);
+    (void)r32(gVic, THI_SLCG_OVERRIDE_LOW);
+    w32(gCar, LVL2_CLK_GATE_OVRE, ovre);
+    IODelay(1);
+    return true;
+}
+
+bool copyChunk(uint32_t from, uint32_t to, bool code)
+{
+    if (!waitBits(gVic, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000)) return false;
+    w32(gVic, FALCON_DMATRFMOFFS, to);
+    w32(gVic, FALCON_DMATRFFBOFFS, from);
+    w32(gVic, FALCON_DMATRFCMD, DMATRFCMD_SIZE_256B | (code ? DMATRFCMD_IMEM : 0));
+    return true;
+}
+
+// vic_boot's clock gating, then falcon_boot minus its final idle poll: that the firmware runs is shown by V2's OP_DONE
+// increment instead. The falcon fetches through VIC's SMMU domain, where the firmware sits 1:1.
+bool bootFalcon()
+{
+    w32(gVic, MISC_PRI_VIC_CG, VIC_CG_BOOT);
+    if (!waitBits(gVic, FALCON_DMACTL, DMACTL_SCRUBBING, 0, 10000)) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL IMEM/DMEM scrubbing did not end (DMACTL %#x)",
+                 r32(gVic, FALCON_DMACTL));
+        return false;
+    }
+    w32(gVic, FALCON_DMACTL, 0);
+    w32(gVic, FALCON_DMATRFBASE, (uint32_t)((gFirmware.pa + gImage.binData) >> 8));
+    bool queued = true;
+    for (uint32_t offset = 0; queued && offset < gImage.dataSize; offset += 256)
+        queued = copyChunk(gImage.data + offset, offset, false);
+    for (uint32_t offset = 0; queued && offset < gImage.codeSize; offset += 256)
+        queued = copyChunk(gImage.code + offset, offset, true);
+    if (!queued || !waitBits(gVic, FALCON_DMATRFCMD, DMATRFCMD_IDLE, DMATRFCMD_IDLE, 100000)) {
+        snprintf(gLine, sizeof(gLine), "V1 FAIL firmware DMA did not finish (DMATRFCMD %#x)",
+                 r32(gVic, FALCON_DMATRFCMD));
+        return false;
+    }
+    w32(gVic, FALCON_IRQMSET, IRQMSET_BOOT);
+    w32(gVic, FALCON_IRQDEST, IRQDEST_BOOT);
+    w32(gVic, FALCON_ITFEN, ITFEN_MTHDEN | ITFEN_CTXEN);
+    w32(gVic, FALCON_BOOTVEC, 0);
+    w32(gVic, FALCON_CPUCTL, CPUCTL_STARTCPU);
+    return true;
+}
+
+// Channel 0 in VIC's class: an IMMEDIATE increment is done by the engine's host interface on arrival; then the FCE
+// microcode's size and address (vic_boot), and an OP_DONE increment the falcon reports once it has taken them.
+int answer(uint32_t id, uint32_t from, const char **stage)
+{
+    const uint32_t stream[] = {
+        tegra_host1x_op_setclass(kClass, 0, 0),
+        tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
+        tegra_host1x_op_incr(kThiMethod0 / 4, 2),
+        TEGRA_VIC_M_SET_FCE_UCODE_SIZE / 4,
+        gImage.fceSize,
+        tegra_host1x_op_incr(kThiMethod0 / 4, 2),
+        TEGRA_VIC_M_SET_FCE_UCODE_OFFSET / 4,
+        (uint32_t)((gFirmware.pa + gImage.fceData) >> 8),
+        tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
+    };
+    int ret = tegra_host1x_submit(stream, sizeof(stream) / sizeof(stream[0]));
+    *stage = "submit";
+    if (!ret) {
+        *stage = "host interface (IMMEDIATE)";
+        ret = tegra_host1x_syncpt_wait(id, from + 1, 100000);
+    }
+    if (!ret) {
+        *stage = "falcon (FCE methods, OP_DONE)";
+        ret = tegra_host1x_syncpt_wait(id, from + 2, 500000);
+    }
+    return ret;
+}
+
+// Back to bypass, reset and clock off after a failed bring-up: nothing will use the engine this boot.
+void park()
+{
+    smmuDetach();
+    w32(gCar, RST_DEV_X_SET, X_VIC);
+    IODelay(2);
+    w32(gCar, CLK_ENB_X_CLR, X_VIC);
+}
+
+void timedOut(uint32_t fence, uint64_t us)
+{
+    char host[200];
+    tegra_host1x_describe(host, sizeof(host));
+    if (gPublished)
+        panic("TegraVIC: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
+              tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+    if (gWedged) return;
+    gWedged = true;
+    IOLog("TegraVIC: job fence %u not reached in %llu us (syncpoint %u at %u); %s; %s\n", fence, us, gSyncpt,
+          tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+}
+
+void engineSuspend();
+void engineResume();
+
+bool allocate()
+{
+    const size_t length = (size_t)(tegra_vic_fw_end - tegra_vic_fw_start);
+    if (!parse(tegra_vic_fw_start, length, &gImage)) {
+        snprintf(gLine, sizeof(gLine), "V0 FAIL embedded firmware is not a VIC falcon v1 image with FCE (%lu bytes)",
+                 (unsigned long)length);
+        return false;
+    }
+    if (!contiguous((gImage.size + 0xfff) & ~0xfffull, &gFirmwareMd, &gFirmware) ||
+        !contiguous(kArenaBytes, &gArenaMd, &gArena) || !contiguous((uint64_t)kTables * 4096, &gTablesMd, &gTables)) {
+        snprintf(gLine, sizeof(gLine), "V0 FAIL no contiguous firmware, arena or page-table memory below 4 GiB");
+        return false;
+    }
+    memcpy(gFirmware.va, tegra_vic_fw_start, gImage.size);
+    cacheOp<false>(gFirmware.va, gImage.size);
+    return tegra_vic_buffer(4096, &gConfig) == 0 && tegra_vic_buffer(0x3000, &gFilter) == 0;
+}
+
+void giveBack()
+{
+    OSSafeReleaseNULL(gFirmwareMd);
+    OSSafeReleaseNULL(gArenaMd);
+    OSSafeReleaseNULL(gTablesMd);
+}
+
+void bringUp(void *, wait_result_t)
+{
+    // NVDEC first, whatever it decides: its 48 MiB arena is reserved while memory is least fragmented.
+    (void)tegra_nvdec_await(kNvdecWaitMs);
+    if (tegra_host1x_start()) {
+        IOLog("TegraVIC: V0 FAIL host1x is not up (see the TegraHost1x line)\n");
+        return;
+    }
+    gVic = (volatile uint8_t *)ml_io_map(kVicPA, kVicSize);
+    gCar = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
+    gPmc = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
+    gMc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
+    gJobLock = IOLockAlloc();
+    gStateLock = IOLockAlloc();
+    if (!gVic || !gCar || !gPmc || !gMc || !gJobLock || !gStateLock) {
+        IOLog("TegraVIC: V0 FAIL no mapping\n");
+        return;
+    }
+    gLine[0] = 0;
+    const uint64_t began = nowUs();
+    if (!allocate()) {
+        IOLog("TegraVIC: %s\n", gLine[0] ? gLine : "V0 FAIL no configuration slot in the arena");
+        giveBack();
+        return;
+    }
+    IOLog("TegraVIC: V0 ok firmware %u bytes at %#llx (FCE %#x+%#x), arena %llu KiB at %#llx, %u page tables, in %llu "
+          "us\n",
+          gImage.size, gFirmware.pa, gImage.fceData, gImage.fceSize, kArenaBytes >> 10, gArena.pa, kTables,
+          nowUs() - began);
+    bool wasOn = false;
+    if (!smmuSetUp() || !smmuAttach() || !powerUp(&wasOn) || !bootFalcon()) {
+        IOLog("TegraVIC: %s\n", gLine[0] ? gLine : "V1 FAIL");
+        park();
+        giveBack();
+        return;
+    }
+    IOLog("TegraVIC: V1 ok ASID %u (directory %#llx), partition %u %s, 408 MHz, falcon started (OS code %#x+%#x data "
+          "%#x+%#x)\n",
+          kAsid, gTables.pa, kPartition, wasOn ? "already on" : "powered here", gImage.code, gImage.codeSize,
+          gImage.data, gImage.dataSize);
+    uint32_t id = 0;
+    if (tegra_host1x_syncpt_alloc(&id)) {
+        IOLog("TegraVIC: V2 FAIL no syncpoint left\n");
+        park();
+        giveBack();
+        return;
+    }
+    const uint32_t from = tegra_host1x_syncpt_read(id);
+    const char *stage = nullptr;
+    const uint64_t start = nowUs();
+    const int ret = answer(id, from, &stage);
+    if (ret) {
+        char host[200];
+        tegra_host1x_describe(host, sizeof(host));
+        IOLog("TegraVIC: V2 FAIL %s %s syncpoint %u (%u->%u, %d); %s; %s\n", stage,
+              ret == TEGRA_HOST1X_ELOST ? "incremented, but no interrupt came for" : "did not increment", id, from,
+              tegra_host1x_syncpt_read(id), ret, falconState(), host);
+        park();
+        giveBack();
+        return;
+    }
+    IOLog(
+        "TegraVIC: V2 ok host interface and falcon (FCE %u bytes) incremented syncpoint %u %u->%u by interrupt in %llu "
+        "us; %s\n",
+        gImage.fceSize, id, from, tegra_host1x_syncpt_read(id), nowUs() - start, falconState());
+    gSyncpt = id;
+    gNext = tegra_host1x_syncpt_read(id);
+    gUp = true;
+    if (tegra_vic_self_test(&gTraits)) {  // V3 and V4; their FAIL line is out
+        gUp = false;
+        park();
+        giveBack();
+        return;
+    }
+    tegra_host1x_set_sleep_client(engineSuspend, engineResume);
+    tegra_host1x_set_strict();
+    // Proven: from here a job past its bound panics (TegraVIC.h).
+    gPublished = true;
+    if (tegra_vic_publish()) gPublished = false;
+}
+}  // namespace
+
+extern "C" bool tegra_vic_ready(void)
+{
+    return gUp && !gWedged;
+}
+
+extern "C" const TegraVICTraits *tegra_vic_traits(void)
+{
+    return &gTraits;
+}
+
+extern "C" int tegra_vic_buffer(uint64_t size, TegraVICBuffer *out)
+{
+    size = (size + 0xfff) & ~0xfffull;
+    if (!gArena.va || gArenaUsed + size > gArena.size) return -12;
+    out->pa = gArena.pa + gArenaUsed;
+    out->va = gArena.va + gArenaUsed;
+    out->size = size;
+    gArenaUsed += size;
+    return 0;
+}
+
+extern "C" uint64_t tegra_vic_config_address(void)
+{
+    return gConfig.pa;
+}
+extern "C" uint64_t tegra_vic_filter_address(void)
+{
+    return gFilter.pa;
+}
+
+extern "C" void tegra_vic_cache_clean(const void *va, size_t size)
+{
+    cacheOp<false>(va, size);
+}
+extern "C" void tegra_vic_cache_flush(const void *va, size_t size)
+{
+    cacheOp<true>(va, size);
+}
+extern "C" void tegra_vic_cache_flush_pages(const uint64_t *pages, uint32_t count)
+{
+    cachePages<true>(pages, count);
+}
+extern "C" void tegra_vic_cache_clean_pages(const uint64_t *pages, uint32_t count)
+{
+    cachePages<false>(pages, count);
+}
+
+extern "C" void tegra_vic_lock(void)
+{
+    IOLockLock(gJobLock);
+}
+extern "C" void tegra_vic_unlock(void)
+{
+    IOLockUnlock(gJobLock);
+}
+
+// Job lock held. The window's tables are fixed; pages past `count` are left (or made) unmapped, so an access beyond
+// the surface faults in the SMMU instead of reaching memory.
+extern "C" uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable)
+{
+    const uint64_t base = kTegraVICWindowBase + window * kTegraVICWindowBytes;
+    const uint32_t limit = (uint32_t)(kTegraVICWindowBytes >> 12);
+    if (window >= TEGRA_VIC_WINDOWS || count > limit) return 0;
+    uint32_t *pt = table(1 + window * kWindowTables);  // the window's tables are consecutive pages
+    const uint32_t attr = SMMU_READ | SMMU_NONSECURE | (writable ? SMMU_WRITE : 0);
+    for (uint32_t i = 0; i < count; i++) pt[i] = (uint32_t)(pages[i] >> 12) | attr;
+    for (uint32_t i = count; i < gWindowMapped[window]; i++) pt[i] = 0;
+    cacheOp<false>(pt, (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) * 4);
+    gWindowMapped[window] = count;
+    smmuFlush();
+    return base;
+}
+
+extern "C" void tegra_vic_window_clear(uint32_t window)
+{
+    if (window >= TEGRA_VIC_WINDOWS || !gWindowMapped[window]) return;
+    uint32_t *pt = table(1 + window * kWindowTables);
+    bzero(pt, (uint64_t)gWindowMapped[window] * 4);
+    cacheOp<false>(pt, (uint64_t)gWindowMapped[window] * 4);
+    gWindowMapped[window] = 0;
+    smmuFlush();
+}
+
+extern "C" void tegra_vic_identity_override(uint64_t iova, uint64_t pa)
+{
+    uint32_t *p = pte(iova);
+    if (!p) return;
+    *p = (uint32_t)(pa >> 12) | SMMU_READ | SMMU_WRITE | SMMU_NONSECURE;
+    cacheOp<false>(p, 4);
+    smmuFlush();
+}
+
+// Job lock held. The configuration slot is the kernel's (no client maps it); the stream is SETCLASS, the job's methods
+// through THI METHOD0/METHOD1, then an OP_DONE increment of VIC's syncpoint, waited for by interrupt.
+extern "C" int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs)
+{
+    if (!gUp || job->count > TEGRA_VIC_MAX_METHODS) return -19;
+    IOLockLock(gStateLock);
+    while (gSuspended) IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
+    if (gWedged) {
+        IOLockUnlock(gStateLock);
+        return -19;
+    }
+    memcpy(gConfig.va, job->config, TEGRA_VIC_CONFIG_BYTES);
+    cacheOp<false>(gConfig.va, TEGRA_VIC_CONFIG_BYTES);
+    uint32_t words[1 + 3 * TEGRA_VIC_MAX_METHODS + 1], n = 0;
+    words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
+    for (uint32_t i = 0; i < job->count; i++) {
+        words[n++] = tegra_host1x_op_incr(kThiMethod0 / 4, 2);
+        words[n++] = job->method[i] / 4;
+        words[n++] = job->value[i];
+    }
+    words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
+    const uint32_t fence = gNext + 1;
+    const uint64_t start = nowUs();
+    int ret = tegra_host1x_submit(words, n);
+    if (!ret) {
+        gNext = fence;
+        ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job));
+        if (ret == TEGRA_HOST1X_ETIMEDOUT) timedOut(fence, nowUs() - start);
+    }
+    if (busyUs) *busyUs = nowUs() - start;
+    IOLockUnlock(gStateLock);
+    return ret;
+}
+
+// Sleep (SC7), through TegraHost1x's sleep clients. Suspend waits for the job lock (no job runs), parks the engine
+// in reset and drops the swgroup to bypass before host1x saves its syncpoints; new jobs block until resume. Resume
+// runs after host1x is back: the SMMU domain is programmed again (SC7 resets the MC), the partition powered, the falcon
+// reloaded from the kept image and proven with the V2 stream.
+namespace {
+void engineSuspend()
+{
+    IOLockLock(gJobLock);
+    IOLockLock(gStateLock);
+    gSuspended = true;
+    smmuDetach();
+    w32(gCar, RST_DEV_X_SET, X_VIC);
+    IODelay(2);
+    w32(gCar, CLK_ENB_X_CLR, X_VIC);
+    IOLockUnlock(gStateLock);
+    IOLockUnlock(gJobLock);
+}
+
+void engineResume()
+{
+    IOLockLock(gStateLock);
+    bool wasOn = false;
+    gLine[0] = 0;
+    gWedged = true;
+    if (smmuAttach() && powerUp(&wasOn) && bootFalcon()) {
+        const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
+        const char *stage = nullptr;
+        const int ret = answer(gSyncpt, from, &stage);
+        if (!ret)
+            gWedged = false;
+        else
+            snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
+                     tegra_host1x_syncpt_read(gSyncpt), falconState());
+    }
+    if (gWedged) IOLog("TegraVIC: resume FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
+    gNext = tegra_host1x_syncpt_read(gSyncpt);
+    gSuspended = false;
+    IOLockWakeup(gStateLock, &gSuspended, false);
+    IOLockUnlock(gStateLock);
+}
+}  // namespace
+
+// On by default (no boot-arg): VIC is the scaler Core Animation needs to clone the display (Screen Recording).
+extern "C" int tegra_vic_probe(void)
+{
+    static volatile int started;
+    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return 0;
+    thread_t thread;
+    if (kernel_thread_start(bringUp, nullptr, &thread) != KERN_SUCCESS) {
+        IOLog("TegraVIC: could not start the bring-up thread\n");
+        return -1;
+    }
+    thread_deallocate(thread);
+    return 0;
+}

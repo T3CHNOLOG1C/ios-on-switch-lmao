@@ -552,6 +552,34 @@ kernel_driver(
     stems = {"firmware.S": "nvenc_firmware"},
 )
 
+# TegraVIC: the VIC falcon (Video Image Compositor 4.0) as the system's IOSurfaceAccelerator (AppleM2ScalerCSCDriver and
+# its IOSurfaceAcceleratorClient): its SMMU domain, job engine, boot self-test (V0..V5) and user client; firmware by
+# .incbin; the IOSurface kext's accessors by address, which vic_abi_check checks against the kernelcache on every build.
+py_binary(
+    name = "vic_abi_check",
+    srcs = ["drivers/TegraVIC/abi_check.py"],
+    main = "drivers/TegraVIC/abi_check.py",
+    deps = ["//tools/prelink:native_prelink"],
+)
+
+kernel_driver(
+    name = "TegraVIC",
+    srcs = [
+        "TegraVIC.cpp",
+        "TegraVICSelfTest.cpp",
+        "TegraVICSurface.cpp",
+        "TegraVICUserClient.cpp",
+        "original-bindings.S",
+        "firmware.S",
+    ],
+    abi_check = ":vic_abi_check",
+    abi_checks = {"drivers/TegraVIC/original-bindings.S": "iosurface TegraVICSurface.cpp"},
+    stems = {
+        "firmware.S": "vic_firmware",
+        "original-bindings.S": "vic-original-bindings",
+    },
+)
+
 # Host checks of driver code: each compiles the driver's sources with Xcode's clang for the Mac and runs them.
 py_test(
     name = "keywrap_test",
@@ -698,6 +726,7 @@ kernel_archive(
         ":TegraHost1x",
         ":TegraNVDEC",
         ":TegraNVENC",
+        ":TegraVIC",
         ":SwitchUSB",
     ],
 )

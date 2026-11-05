@@ -1,0 +1,3 @@
+libdrm main, gitlab.freedesktop.org/mesa/libdrm tests/tegra/vic40.h, fetched 2026-11-05 (Copyright © 2016-2018 NVIDIA
+Corporation, MIT licence: the notice is in the file). Unmodified. Used only by the host test (test/vic_host.c) as the
+reference layout of VIC 4.0's ConfigStruct that TegraVICConfig.h's bit packing is compared against, field by field.

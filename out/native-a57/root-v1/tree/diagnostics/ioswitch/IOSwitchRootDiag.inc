@@ -147,6 +147,7 @@ extern int tegra_gm20b_probe(void);      /* no-op unless tegra-gpu=<stage>; runs
 extern int tegra_host1x_probe(void);     /* no-op unless switch-host1x=1; own thread */
 extern int tegra_nvdec_probe(void);      /* no-op unless switch-nvdec=1; own thread, starts host1x itself */
 extern int tegra_nvenc_probe(void);      /* on with NVDEC (switch-nvdec=0 turns both off); own thread */
+extern int tegra_vic_probe(void);        /* on by default; own thread, waits for NVDEC's bring-up to end */
 extern int
 ioswitch_audio_publish(void); /* null sink unless switch-audio=1|3; the Tegra backend sleeps on I2C1, PZ4 and the GIC */
 extern int switch_suspend_start(void); /* no-op unless switch-sleep=2; after every board driver it suspends */
@@ -183,6 +184,7 @@ static void ioswitch_board_thread(void *parameter __unused, wait_result_t result
     if (tegra_host1x_probe()) printf("IOSwitch: TegraHost1x did not start\n");
     if (tegra_nvdec_probe()) printf("IOSwitch: TegraNVDEC did not start\n");
     if (tegra_nvenc_probe()) printf("IOSwitch: TegraNVENC did not start\n");
+    if (tegra_vic_probe()) printf("IOSwitch: TegraVIC did not start\n");
     if (ioswitch_audio_publish()) printf("IOSwitch: SwitchAudio did not start\n");
     (void)switch_suspend_start();
     thread_terminate_self();
