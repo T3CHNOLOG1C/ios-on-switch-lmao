@@ -60,6 +60,14 @@ llvm_tools(name = "llvm")
 
 bazel_dep(name = "rules_rust", version = "0.75.0")
 
+# One change to rules_rust (bazel/rust/rules_rust-own-metadata.patch): a crate whose rustc_flags carry its own
+# -Cmetadata keeps that value alone, as its output hash too, so m2v's crates keep cargo's symbol names and NAK's meson's.
+single_version_override(
+    module_name = "rules_rust",
+    patch_strip = 1,
+    patches = ["//bazel/rust:rules_rust-own-metadata.patch"],
+)
+
 # --- C/C++ toolchains, by target platform (bazel/platforms): the kernel's Apple clang with XNU's recipes ----------
 register_toolchains("//bazel/toolchains/kernel:toolchain")
 
@@ -169,7 +177,33 @@ rust.toolchain(
     ],
     # rustfmt from the same release (//:format, //:format_test), not rules_rust's default nightly.
     rustfmt_version = "1.98.0",
+    # One rustc per value of //bazel/rust:toolchain_version (bazel/rust/BUILD.bazel): this one by default.
+    target_settings = ["//bazel/rust:toolchain_1.98.0"],
     versions = ["1.98.0"],
+)
+
+# Rust 1.96.1, NVK's (NAK and NIL as Mesa built them: gpu/nvk), for the targets that transition
+# //bazel/rust:toolchain_version to it. The dist archives are the ones @nvk_rust pins (one repository cache entry each).
+rust.repository_set(
+    name = "rust_1_96_1",
+    edition = "2021",
+    exec_triple = "aarch64-apple-darwin",
+    rustfmt_version = "1.96.1",
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+    target_settings = ["//bazel/rust:toolchain_1.96.1"],
+    target_triple = "aarch64-apple-darwin",
+    versions = ["1.96.1"],
+)
+rust.repository_set(
+    name = "rust_1_96_1",
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:ios",
+    ],
+    target_triple = "aarch64-apple-ios",
 )
 use_repo(
     rust,
