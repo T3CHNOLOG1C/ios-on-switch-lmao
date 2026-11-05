@@ -3,6 +3,11 @@
 #include "awdl_bcm.h"
 #include "awdl_bcm_trace.h"
 #include "awdl_internal.h"
+#ifdef KERNEL
+#include <sys/errno.h>
+#else
+#include <errno.h>
+#endif
 
 const uint8_t bcm_awdl_events[] = {WLC_E_ACTION_FRAME_RX,    WLC_E_AWDL_AW,
                                    WLC_E_AWDL_ROLE,          WLC_E_AWDL_EVENT,
@@ -141,6 +146,26 @@ enum bcm_awdl_api bcm_awdl_api_of(const struct bcm_awdl_probe *p)
 const char *bcm_awdl_api_name(enum bcm_awdl_api api)
 {
     return api == BCM_AWDL_API_IFC_V3 ? "interface_create v3" : api == BCM_AWDL_API_AWDL_IF ? "awdl_if (7.x)" : "none";
+}
+
+struct awdl_radio_verdict awdl_radio_verdict_of(int query, int abi_ok, int has_native, int can_monitor, int can_inject,
+                                                const struct bcm_awdl_probe *probe)
+{
+    struct awdl_radio_verdict v = {AWDL_RADIO_OFF, AWDL_OFF_NOT, bcm_awdl_api_of(probe)};
+    const int soft = can_monitor && can_inject;
+    if (query == -EAGAIN)
+        v.mode = AWDL_RADIO_UNDECIDED;
+    else if (query < 0)
+        v.off = AWDL_OFF_NO_RADIO;
+    else if (!abi_ok)
+        v.off = AWDL_OFF_ABI;
+    else if (!has_native && !soft)
+        v.off = AWDL_OFF_NO_BACKEND;
+    else if (has_native && v.api == BCM_AWDL_API_NONE && !soft)
+        v.off = AWDL_OFF_NO_API;
+    else
+        v.mode = has_native && v.api != BCM_AWDL_API_NONE ? AWDL_RADIO_NATIVE : AWDL_RADIO_SOFT;
+    return v;
 }
 
 // ---- interface creation ------------------------------------------------------------------------------------------------

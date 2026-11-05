@@ -13,6 +13,9 @@
 #include "../awdl_apple80211.h"
 #include "../awdl_bcm.h"
 #include "../awdl_bcm_trace.h"
+#include <errno.h>
+#include <net/if.h>
+#include <net/if_media.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -314,6 +317,63 @@ static void test_probe(void)
     NCHECK(bcm_awdl_api_of(&p) == BCM_AWDL_API_NONE);
     bcm_probe_record(&p, BCM_PROBE_AWDL_IF2, BCME_NOTFOUND, NULL, 0);  // awdl_if2 alone is enough
     NCHECK(bcm_awdl_api_of(&p) == BCM_AWDL_API_AWDL_IF);
+}
+
+// 7.35.252.108's probe on the device: every item UNSUPPORTED but event_msgs_ext (VERSION).
+static void probe_7_35_252_108(struct bcm_awdl_probe *p)
+{
+    memset(p, 0, sizeof *p);
+    for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i) bcm_probe_record(p, i, BCME_UNSUPPORTED, NULL, 0);
+    bcm_probe_record(p, BCM_PROBE_EVENT_MSGS_EXT, -37, NULL, 0);
+    p->done = 1;
+}
+
+static void test_radio_verdict(void)
+{
+    struct bcm_awdl_probe p;
+    probe_7_35_252_108(&p);
+    NCHECK(bcm_probe_absent(&p) == (((1u << BCM_PROBE_COUNT) - 1) & ~(1u << BCM_PROBE_EVENT_MSGS_EXT)));
+    struct awdl_radio_verdict v = awdl_radio_verdict_of(0, 1, 1, 0, 0, &p);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_API && v.api == BCM_AWDL_API_NONE);
+    v = awdl_radio_verdict_of(-EAGAIN, 0, 0, 0, 0, NULL);
+    NCHECK(v.mode == AWDL_RADIO_UNDECIDED);
+    v = awdl_radio_verdict_of(-ENODEV, 0, 0, 0, 0, NULL);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_RADIO);
+    v = awdl_radio_verdict_of(0, 0, 1, 0, 0, &p);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_ABI);
+    v = awdl_radio_verdict_of(0, 1, 0, 1, 0, NULL);
+    NCHECK(v.mode == AWDL_RADIO_OFF && v.off == AWDL_OFF_NO_BACKEND);
+    v = awdl_radio_verdict_of(0, 1, 1, 1, 1, &p);
+    NCHECK(v.mode == AWDL_RADIO_SOFT && v.off == AWDL_OFF_NOT);
+    v = awdl_radio_verdict_of(0, 1, 0, 1, 1, NULL);
+    NCHECK(v.mode == AWDL_RADIO_SOFT);
+    bcm_probe_record(&p, BCM_PROBE_AWDL_IF, BCME_BADARG, NULL, 0);
+    v = awdl_radio_verdict_of(0, 1, 1, 0, 0, &p);
+    NCHECK(v.mode == AWDL_RADIO_NATIVE && v.api == BCM_AWDL_API_AWDL_IF);
+    const uint8_t v3[4] = {3, 0, 0, 0};
+    bcm_probe_record(&p, BCM_PROBE_INTERFACE_CREATE, 0, v3, 4);
+    v = awdl_radio_verdict_of(0, 1, 1, 0, 0, &p);
+    NCHECK(v.mode == AWDL_RADIO_NATIVE && v.api == BCM_AWDL_API_IFC_V3);
+}
+
+_Static_assert(A80211_IFF_BROADCAST == IFF_BROADCAST && A80211_IFF_SIMPLEX == IFF_SIMPLEX &&
+                   A80211_IFF_MULTICAST == IFF_MULTICAST && A80211_IFM_AVALID == IFM_AVALID,
+               "the BSD values awdl_apple80211.h carries");
+
+static void test_down_interface(void)
+{
+    const uint8_t station[6] = {0x98, 0xb6, 0xe9, 0x5c, 0x10, 0xc7};
+    struct a80211_awdl_down_if d;
+    NCHECK(a80211_awdl_down_if(station, &d) == 0);
+    NCHECK(!(d.if_flags & (IFF_UP | IFF_RUNNING)) && (d.if_flags & IFF_MULTICAST) && (d.if_flags & IFF_BROADCAST));
+    NCHECK(d.mtu == 1500);
+    NCHECK(d.lladdr[0] == 0x9a && !memcmp(d.lladdr + 1, station + 1, 5));
+    const uint8_t local[6] = {0x02, 1, 2, 3, 4, 5};
+    NCHECK(a80211_awdl_down_if(local, &d) == 0 && memcmp(d.lladdr, local, 6) && !(d.lladdr[0] & 0x01) &&
+           (d.lladdr[0] & 0x02));
+    const uint8_t zero6[6] = {0}, multicast[6] = {0x01, 0, 0x5e, 0, 0, 1};
+    NCHECK(a80211_awdl_down_if(zero6, &d) == -1 && a80211_awdl_down_if(multicast, &d) == -1);
+    NCHECK(a80211_awdl_down_media_status() == IFM_AVALID && !(a80211_awdl_down_media_status() & IFM_ACTIVE));
 }
 
 // ---- the schedule ---------------------------------------------------------------------------------------------------------
@@ -813,6 +873,8 @@ void test_native_main(void)
 {
     test_encoders();
     test_probe();
+    test_radio_verdict();
+    test_down_interface();
     test_schedule();
     test_flow_ifc_v3();
     test_flow_awdl_if();

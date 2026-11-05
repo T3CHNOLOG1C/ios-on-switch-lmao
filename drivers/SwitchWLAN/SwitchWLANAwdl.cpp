@@ -10,7 +10,8 @@
 //   - the AWDL protocol itself (awdl/awdl_core.c) on the radio services of SwitchWLANAwdlRadio.h (r12-awdl).
 //
 // en0 advertises AWDL (capability bit 32) when the radio's bring-up probe found a way to make the firmware's AWDL
-// interface (interface_create v3 or awdl_if); otherwise it never does and nothing here runs. Nothing touches the
+// interface (interface_create v3 or awdl_if); otherwise it never does, and awdl0 exists but stays down
+// (a80211_awdl_down_if) with no IO80211 service and no AWDL stack. Nothing touches the
 // firmware before wifip2pd enables AWDL on awdl0: that is when the radio is opened (event mask) and the interface
 // made. Every step that has never run on hardware fails with one log line and AWDL off. The native backend (the firmware's own AWDL, RADIO-API §6) drives
 // whichever firmware generation the radio's bring-up probe found (interface_create v3 as the brcmfmac AWDL series, or
@@ -646,22 +647,25 @@ int awdlRequest(bool set, apple80211req &rq)
     return e;
 }
 
+errno_t answerMedia(void *arg, int status)
+{
+    struct ifmediareq64 *m = static_cast<struct ifmediareq64 *>(arg);
+    static const int media = IFM_IEEE80211 | IFM_AUTO;  // wifip2pd: (ifm_active & 0xe0) == IFM_IEEE80211
+    m->ifm_current = media;
+    m->ifm_mask = 0;
+    m->ifm_status = status;
+    m->ifm_active = media;
+    if (m->ifmu_ulist && m->ifm_count > 0 && copyout(&media, m->ifmu_ulist, sizeof media)) return EFAULT;
+    m->ifm_count = 1;
+    return 0;
+}
+
 errno_t ifIoctl(ifnet_t ifp, unsigned long cmd, void *arg)
 {
     switch (cmd) {
     case SIOCGA80211:
     case SIOCSA80211: return awdlRequest(cmd == SIOCSA80211, *static_cast<apple80211req *>(arg));
-    case SIOCGIFMEDIA64: {
-        struct ifmediareq64 *m = static_cast<struct ifmediareq64 *>(arg);
-        static const int media = IFM_IEEE80211 | IFM_AUTO;  // wifip2pd: (ifm_active & 0xe0) == IFM_IEEE80211
-        m->ifm_current = media;
-        m->ifm_mask = 0;
-        m->ifm_status = IFM_AVALID | (gCore && awdl_core_running(gCore) ? IFM_ACTIVE : 0);
-        m->ifm_active = media;
-        if (m->ifmu_ulist && m->ifm_count > 0 && copyout(&media, m->ifmu_ulist, sizeof media)) return EFAULT;
-        m->ifm_count = 1;
-        return 0;
-    }
+    case SIOCGIFMEDIA64: return answerMedia(arg, IFM_AVALID | (gCore && awdl_core_running(gCore) ? IFM_ACTIVE : 0));
     case SIOCSIFLLADDR: {
         // wifip2pd's AWDL address: the stack transmits with it and the kernel derives fe80::/64 from it
         const struct ifreq *ifr = static_cast<const struct ifreq *>(arg);
@@ -959,6 +963,101 @@ void createInterface(thread_call_param_t, thread_call_param_t)
           gMac[4], gMac[5]);
 }
 
+thread_call_t gDownCreate;
+static_assert(A80211_IFF_BROADCAST == IFF_BROADCAST && A80211_IFF_SIMPLEX == IFF_SIMPLEX &&
+              A80211_IFF_MULTICAST == IFF_MULTICAST && A80211_IFM_AVALID == IFM_AVALID);
+
+errno_t downOutput(ifnet_t ifp, mbuf_t m)
+{
+    ifnet_stat_increment_out(ifp, 0, 0, 1);
+    mbuf_freem(m);
+    return ENETDOWN;
+}
+
+// Apple80211 requests are refused (EOPNOTSUPP): this awdl0 has no AWDL behind it, and without an IO80211 service
+// wifip2pd never adopts it.
+errno_t downIoctl(ifnet_t, unsigned long cmd, void *arg)
+{
+    switch (cmd) {
+    case SIOCGIFMEDIA64: return answerMedia(arg, a80211_awdl_down_media_status());
+    case SIOCSIFFLAGS:
+    case SIOCSIFMTU:
+    case SIOCADDMULTI:
+    case SIOCDELMULTI:
+    case SIOCSIFADDR: return 0;
+    default: return EOPNOTSUPP;
+    }
+}
+
+// en0 is attached before any caller decides the verdict (en0's own CARD_CAPABILITIES, or the worker after en0).
+void createDownInterface(thread_call_param_t, thread_call_param_t)
+{
+    uint8_t station[6] = {};
+    ifnet_t en0 = nullptr;
+    errno_t e = ifnet_find_by_name("en0", &en0);
+    if (!e) {
+        e = ifnet_lladdr_copy_bytes(en0, station, sizeof station);
+        ifnet_release(en0);
+    }
+    struct a80211_awdl_down_if d;
+    if (e || a80211_awdl_down_if(station, &d)) {
+        IOLog("SwitchWLAN: AWDL: awdl0 not made: no station address (%d)\n", e);
+        return;
+    }
+    struct ifnet_init_eparams p = {};
+    p.ver = IFNET_INIT_CURRENT_VERSION;
+    p.len = sizeof p;
+    p.flags = IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO;
+    p.name = "awdl";
+    p.unit = 0;
+    p.family = IFNET_FAMILY_ETHERNET;
+    p.subfamily = IFNET_SUBFAMILY_WIFI;
+    p.type = IFT_ETHER;
+    p.output = downOutput;
+    p.demux = ether_demux;
+    p.add_proto = ether_add_proto;
+    p.del_proto = ether_del_proto;
+    p.check_multi = ether_check_multi;
+    p.framer = ether_frameout;
+    p.ioctl = downIoctl;
+    p.event = ifEventStub;
+    p.detach = ifDetached;
+    static const uint8_t bcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    p.broadcast_addr = bcast;
+    p.broadcast_len = 6;
+    ifnet_t ifp = nullptr;
+    e = ifnet_allocate_extended(&p, &ifp);
+    if (e || !ifp) {
+        IOLog("SwitchWLAN: AWDL: awdl0 allocation failed (%d)\n", e);
+        return;
+    }
+    ifnet_set_mtu(ifp, d.mtu);
+    ifnet_set_flags(ifp, d.if_flags, 0xffff);
+    ifnet_set_hdrlen(ifp, ETHER_HDR_LEN);
+    ifnet_set_addrlen(ifp, ETHER_ADDR_LEN);
+    ifnet_set_eflags(ifp, IFEF_AWDL, IFEF_AWDL);
+    e = ifnet_attach(ifp, nullptr);
+    if (e) {
+        IOLog("SwitchWLAN: AWDL: awdl0 attach failed (%d)\n", e);
+        ifnet_release(ifp);
+        return;
+    }
+    ifnet_set_lladdr(ifp, d.lladdr, 6);
+    bpf_attach(ifp, DLT_EN10MB, ETHER_HDR_LEN, nullptr, nullptr);
+    IOLog("SwitchWLAN: AWDL: awdl0 present and down (%02x:%02x:%02x:%02x:%02x:%02x): this radio cannot run AWDL\n",
+          d.lladdr[0], d.lladdr[1], d.lladdr[2], d.lladdr[3], d.lladdr[4], d.lladdr[5]);
+}
+
+// Under switch_wlan_awdl_capable's `deciding`, once a boot; the caller may be inside en0's ioctl.
+void scheduleDownInterface()
+{
+    if (!(gDownCreate = thread_call_allocate(createDownInterface, nullptr))) {
+        IOLog("SwitchWLAN: AWDL: awdl0 not made: no thread call\n");
+        return;
+    }
+    thread_call_enter(gDownCreate);
+}
+
 }  // namespace
 
 extern "C" int switch_wlan_awdl_capable(void)
@@ -968,26 +1067,26 @@ extern "C" int switch_wlan_awdl_capable(void)
     static unsigned deciding;
     if (__atomic_exchange_n(&deciding, 1u, __ATOMIC_ACQ_REL)) return 0;
     if (gCapable < 0) {
-        int verdict = -1;  // undecided until the radio can answer
+        int verdict = -1;
         const struct swlan_awdl_caps *caps = nullptr;
         const int e = swlan_awdl_query(&caps);  // what the bring-up found; no firmware request
-        if (e == -EAGAIN) {
-            // the radio has not read its capabilities or run the probe yet: ask again at the next request
-        } else if (e < 0 || !caps) {
+        const awdl_radio_verdict v =
+            awdl_radio_verdict_of(e == 0 && !caps ? -ENODEV : e, caps && caps->abi_version == SWLAN_AWDL_ABI_VERSION,
+                                  caps && caps->has_native_awdl, caps && caps->can_monitor, caps && caps->can_inject,
+                                  caps ? caps->probe : nullptr);
+        if (v.mode == AWDL_RADIO_UNDECIDED) {
+        } else if (v.off == AWDL_OFF_NO_RADIO) {
             IOLog("SwitchWLAN: AWDL: the radio has no AWDL (%d): off\n", e);
             verdict = 0;
-        } else if (caps->abi_version != SWLAN_AWDL_ABI_VERSION) {
+        } else if (v.off == AWDL_OFF_ABI) {
             IOLog("SwitchWLAN: AWDL: radio ABI %u, the stack speaks %u: off\n", caps->abi_version,
                   SWLAN_AWDL_ABI_VERSION);
             verdict = 0;
-        } else if (!caps->has_native_awdl && !(caps->can_monitor && caps->can_inject)) {
+        } else if (v.off == AWDL_OFF_NO_BACKEND) {
             IOLog("SwitchWLAN: AWDL: radio native=%u monitor=%u inject=%u: neither backend can run: off\n",
                   caps->has_native_awdl, caps->can_monitor, caps->can_inject);
             verdict = 0;
-        } else if (caps->has_native_awdl && bcm_awdl_api_of(caps->probe) == BCM_AWDL_API_NONE &&
-                   !(caps->can_monitor && caps->can_inject)) {
-            // the cap list says awdl, but the iovar table cannot make an AWDL interface (the BCM4350's 7.35.180.133
-            // case in the brcmfmac series): wifip2pd is never offered AWDL
+        } else if (v.off == AWDL_OFF_NO_API) {
             IOLog(
                 "SwitchWLAN: AWDL: the firmware lists awdl but has neither interface_create v3 nor awdl_if (%s): off\n",
                 caps->probe ? "AWDL probe lines" : "probe did not run");
@@ -1005,9 +1104,8 @@ extern "C" int switch_wlan_awdl_capable(void)
             memcpy(gMac, caps->self_mac, 6);
             awdl_config cfg;
             awdl_config_default(&cfg, gMac);
-            // the firmware's own AWDL when it has it (this chip: cap "awdl"); monitor + injection otherwise
-            const enum bcm_awdl_api api = bcm_awdl_api_of(caps->probe);
-            cfg.backend = caps->has_native_awdl && api != BCM_AWDL_API_NONE ? AWDL_BACKEND_NATIVE : AWDL_BACKEND_SOFT;
+            const enum bcm_awdl_api api = v.api;
+            cfg.backend = v.mode == AWDL_RADIO_NATIVE ? AWDL_BACKEND_NATIVE : AWDL_BACKEND_SOFT;
             cfg.fw_api = static_cast<uint8_t>(api);
             cfg.fw_absent = bcm_probe_absent(caps->probe);
             const awdl_host host = {nullptr,     hostTx,  hostSchedule, hostPeer,
@@ -1021,6 +1119,7 @@ extern "C" int switch_wlan_awdl_capable(void)
             verdict = 1;
         }
         if (verdict >= 0) __atomic_store_n(&gCapable, verdict, __ATOMIC_RELEASE);
+        if (verdict == 0) scheduleDownInterface();
     }
     __atomic_store_n(&deciding, 0u, __ATOMIC_RELEASE);
     return gCapable > 0 ? 1 : 0;

@@ -122,6 +122,31 @@ enum bcm_awdl_api {
 enum bcm_awdl_api bcm_awdl_api_of(const struct bcm_awdl_probe *p);
 const char *bcm_awdl_api_name(enum bcm_awdl_api api);
 
+enum awdl_radio_mode {
+    AWDL_RADIO_UNDECIDED = -1,  // the radio has not read its capability list or run the probe yet: ask again
+    AWDL_RADIO_OFF = 0,
+    AWDL_RADIO_NATIVE = 1,
+    AWDL_RADIO_SOFT = 2,
+};
+enum awdl_radio_off {
+    AWDL_OFF_NOT = 0,
+    AWDL_OFF_NO_RADIO,
+    AWDL_OFF_ABI,
+    AWDL_OFF_NO_BACKEND,
+    // "awdl" is in the capability list but the iovar table cannot make an AWDL interface. Every 7.35 image of the
+    // BCM4350/4356 family lists it (its cap table is generic) and none registers an awdl_* iovar.
+    AWDL_OFF_NO_API,
+};
+struct awdl_radio_verdict {
+    enum awdl_radio_mode mode;
+    enum awdl_radio_off off;
+    enum bcm_awdl_api api;
+};
+// `query` is swlan_awdl_query's return with a missing caps pointer counted as refused: -EAGAIN is undecided, any other
+// negative value is off for good.
+struct awdl_radio_verdict awdl_radio_verdict_of(int query, int abi_ok, int has_native, int can_monitor, int can_inject,
+                                                const struct bcm_awdl_probe *probe);
+
 // ---- interface creation -------------------------------------------------------------------------------------------
 enum {
     BCM_IFC_V3_LEN = 28,  // wl_interface_create_v3 (natural alignment)

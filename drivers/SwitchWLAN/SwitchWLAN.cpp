@@ -1555,6 +1555,7 @@ void SwitchWLAN::run()
     if (!bringUp()) return;
     switch_wlan_net_start(mac_);
     netStarted_ = true;
+    switch_wlan_awdl_capable();  // a radio without AWDL gets its down awdl0 before userspace asks for it
     IOLog("SwitchWLAN: en0 ready, %u MSIs so far\n", static_cast<unsigned>(interrupts_));
 
     uint64_t nextWatchdog = 0, retryAt = 0;

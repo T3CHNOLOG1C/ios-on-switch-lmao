@@ -201,6 +201,27 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
 // The core's peer callback lands here: posts PEER_PRESENCE to wifip2pd.
 void a80211_awdl_peer(struct a80211_awdl *f, const uint8_t addr[6], int present, int8_t rssi);
 
+// awdl0 on a radio that cannot run AWDL. 21H461's sharingd force-unwraps nw_interface_create_with_name("awdl0") when
+// it starts its AirDrop Bonjour server and its temporary-pairing server, and traps when awdl0 is missing, so the
+// interface has to exist. It is never brought up and its link never reads active, as on an iPad whose AWDL is down;
+// NECP's listener scan skips an interface without IFF_UP | IFF_RUNNING.
+// BSD <net/if.h> and <net/if_media.h> values (this file builds without them); SwitchWLANAwdl.cpp asserts they match.
+enum {
+    A80211_IFF_BROADCAST = 0x2,
+    A80211_IFF_SIMPLEX = 0x800,
+    A80211_IFF_MULTICAST = 0x8000,
+    A80211_IFM_AVALID = 0x1,
+};
+struct a80211_awdl_down_if {
+    uint16_t if_flags;
+    uint32_t mtu;
+    uint8_t lladdr[6];
+};
+// 0, or -1 when `station` is not a unicast address. The link-layer address is the station's made locally
+// administered, never equal to the station's.
+int a80211_awdl_down_if(const uint8_t station[6], struct a80211_awdl_down_if *out);
+int a80211_awdl_down_media_status(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -376,3 +376,20 @@ void a80211_awdl_peer(struct a80211_awdl *f, const uint8_t addr[6], int present,
     p.link_quality = present ? 100 : 0;
     if (f->ops.post) f->ops.post(f->ops.ctx, A80211_M_PEER_PRESENCE, &p, sizeof p);
 }
+
+int a80211_awdl_down_if(const uint8_t station[6], struct a80211_awdl_down_if *out)
+{
+    static const uint8_t zero[6];
+    if (station[0] & 0x01 || !memcmp(station, zero, 6)) return -1;
+    out->if_flags = A80211_IFF_BROADCAST | A80211_IFF_SIMPLEX | A80211_IFF_MULTICAST;
+    out->mtu = 1500;
+    memcpy(out->lladdr, station, 6);
+    out->lladdr[0] |= 0x02;
+    if (!memcmp(out->lladdr, station, 6)) out->lladdr[0] ^= 0x04;
+    return 0;
+}
+
+int a80211_awdl_down_media_status(void)
+{
+    return A80211_IFM_AVALID;
+}

@@ -702,6 +702,7 @@ int main(int argc, char **argv)
          "three-node chain election + root loss, two-channel sequence, TSF clock, IO80211 event ring, awdl0 requests "
          "and PEER_PRESENCE; firmware AWDL: payloads = the brcmfmac series' traced bytes and the 2014 layouts, probe, "
          "AWDL data header, schedule, interface_create v3 and awdl_if bring-ups, WLC_E_ACTION_FRAME_RX peers, "
-         "awdl_peer_op with HT, host election to the firmware, idle/transfer schedules, creation failures: ok");
+         "awdl_peer_op with HT, host election to the firmware, idle/transfer schedules, the radio verdict and the "
+         "down awdl0, creation failures: ok");
     return 0;
 }
