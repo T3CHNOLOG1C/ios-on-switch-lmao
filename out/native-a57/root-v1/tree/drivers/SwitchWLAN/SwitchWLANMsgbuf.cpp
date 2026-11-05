@@ -460,7 +460,7 @@ uint32_t Msgbuf::service(bool *halted)
     return status;
 }
 
-bool Msgbuf::ioctlSubmit(uint32_t cmd, const uint8_t *data, size_t length, size_t outLength, char *why,
+bool Msgbuf::ioctlSubmit(uint32_t cmd, uint8_t ifidx, const uint8_t *data, size_t length, size_t outLength, char *why,
                          size_t whyLength)
 {
     size_t n = length > outLength ? length : outLength;
@@ -474,6 +474,7 @@ bool Msgbuf::ioctlSubmit(uint32_t cmd, const uint8_t *data, size_t length, size_
         return false;
     }
     p[0] = MSG_IOCTLPTR_REQ;
+    p[1] = ifidx;
     put32(p + 4, kIoctlReqPktId);
     put32(p + 8, cmd);
     put16(p + 12, ++transId_);

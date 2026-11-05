@@ -255,8 +255,11 @@ public:
     // signalling; *raw gets the two registers for the panic line.
     bool chipSignalling(uint32_t *mailboxInt, uint32_t *mailboxMask);
 
-    // Post one ioctl (brcmf_msgbuf_query_dcmd); the answer arrives through service(): replyReady() then reply().
-    bool ioctlSubmit(uint32_t cmd, const uint8_t *data, size_t length, size_t outLength, char *why, size_t whyLength);
+    // Post one ioctl (brcmf_msgbuf_query_dcmd) for firmware interface `ifidx` (msgbuf_common_hdr byte 1: 0 the
+    // station, the AWDL interface's index for its awdl_* iovars, as brcmf_fil_iovar_data_set on the AWDL ifp); the
+    // answer arrives through service(): replyReady() then reply().
+    bool ioctlSubmit(uint32_t cmd, uint8_t ifidx, const uint8_t *data, size_t length, size_t outLength, char *why,
+                     size_t whyLength);
     bool replyReady() const { return replyReady_; }
     int16_t replyStatus() const { return replyStatus_; }
     const uint8_t *replyData() const { return reply_; }

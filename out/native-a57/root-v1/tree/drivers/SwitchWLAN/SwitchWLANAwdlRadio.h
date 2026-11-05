@@ -3,7 +3,7 @@
 // the radio side and implements these in SwitchWLAN; r12-awdl-stack's SwitchWLANAwdl.cpp calls them). Until the radio
 // side lands, SwitchWLANAwdl.cpp carries weak defaults that answer "unavailable", so AWDL stays off.
 // Plain C types only. Every function: any thread, never blocks; completions come through the callbacks. The
-// exceptions wait for the firmware (swlan_awdl_tsf_read, swlan_awdl_iovar_set/get): the stack calls them only from
+// exceptions wait for the firmware (swlan_awdl_tsf_read, swlan_awdl_var): the stack calls them only from
 // its own threads, with its lock dropped, never from a callback of this API. The registration calls
 // (swlan_awdl_rx_start, swlan_awdl_events, swlan_awdl_fw_events, swlan_awdl_eth_rx) only store the callback: the
 // stack calls them with its lock held. Whatever the firmware needs for them (event_msgs bits, monitor) is set up by
@@ -18,7 +18,9 @@
 extern "C" {
 #endif
 
-#define SWLAN_AWDL_ABI_VERSION 1
+#define SWLAN_AWDL_ABI_VERSION 2  // 2: per-interface variables (swlan_awdl_var) and the bring-up probe in the caps
+
+struct bcm_awdl_probe;  // awdl/awdl_bcm.h
 
 struct swlan_awdl_caps {
     uint32_t abi_version;        // SWLAN_AWDL_ABI_VERSION
@@ -32,6 +34,9 @@ struct swlan_awdl_caps {
     uint32_t tsf_read_us_err;
     uint8_t self_mac[6];
     uint16_t max_inject_len;
+    // What the firmware's iovar table answered at bring-up (SwitchWLAN.cpp's probe, once a boot): the stack picks the
+    // firmware generation's bring-up from it (bcm_awdl_api_of). NULL when the probe did not run.
+    const struct bcm_awdl_probe *probe;
 };
 // <0 (negative errno): AWDL unavailable; the stack says so to wifip2pd and does not retry.
 int swlan_awdl_open(const struct swlan_awdl_caps **caps_out);
@@ -87,12 +92,27 @@ typedef void (*swlan_evt_fn)(void *ctx, const struct swlan_awdl_event *e);
 int swlan_awdl_events(swlan_evt_fn fn, void *ctx);
 int swlan_awdl_tsf_read(uint64_t *tsf_us);
 
-// ---- §6 native AWDL: the firmware's own AWDL (cap "awdl", r7p8). PROPOSED by r12-awdl-stack (AWDL-NATIVE.md) --------
-// Set or get one firmware iovar (bsscfg < 0: plain; >= 0: "bsscfg:<name>" with that index). Thread context only
-// (never from a callback): waits for the firmware's answer, bounded like every SwitchWLAN ioctl. 0 or < 0 errno.
-int swlan_awdl_iovar_set(int32_t bsscfg, const char *name, const void *buf, size_t len);
-int swlan_awdl_iovar_get(int32_t bsscfg, const char *name, void *buf, size_t len, size_t *returned);
-// The firmware events of an AWDL session (WLC_E_IF for the AWDL bsscfg and WLC_E 96-98, 111-120; awdl_bcm.h):
+// ---- §6 native AWDL: the firmware's own AWDL (cap "awdl", r7p8) ----------------------------------------------------------
+// One firmware variable on firmware interface `ifidx` (the msgbuf ioctl's interface: 0 the station; the AWDL
+// interface's index from its WLC_E_IF add for its awdl_* variables, as brcmfmac's brcmf_fil_iovar_data_set on the AWDL
+// ifp). set: "<name>\0<in>"; get: the same request, answered into `out` (a get may carry a request:
+// interface_create). Thread context only (never from a callback): waits for the firmware's answer, bounded like
+// every SwitchWLAN ioctl. Returns 0, SWLAN_FWERR(code) when the firmware answered with a BCME code, or a negative
+// errno when the request did not reach it (radio down, no answer).
+#define SWLAN_FWERR_BASE  1000
+#define SWLAN_FWERR(bcme) (-SWLAN_FWERR_BASE + (bcme))
+static inline int swlan_is_fwerr(int e)
+{
+    return e < -SWLAN_FWERR_BASE && e > -2 * SWLAN_FWERR_BASE;  // BCME codes are -1 .. -60
+}
+static inline int swlan_fwerr_code(int e)
+{
+    return e + SWLAN_FWERR_BASE;
+}
+int swlan_awdl_var(int set, uint8_t ifidx, const char *name, const void *in, size_t in_len, void *out, size_t out_len,
+                   size_t *returned);
+// The firmware events of an AWDL session (WLC_E_IF for the AWDL interface, WLC_E_ACTION_FRAME_RX (75) and
+// WLC_E 96-98, 111-120 while AWDL is open; awdl_bcm.h):
 // enabled in "event_msgs" by swlan_awdl_open; this call only stores the callback. Delivered from the work loop,
 // payload after the wl_event_msg_t.
 struct swlan_fw_event {
@@ -102,12 +122,13 @@ struct swlan_fw_event {
 };
 typedef void (*swlan_fw_event_fn)(void *ctx, const struct swlan_fw_event *e, const uint8_t *data, size_t len);
 int swlan_awdl_fw_events(swlan_fw_event_fn fn, void *ctx);
-// Ethernet frames on the firmware's AWDL interface (the ifidx its WLC_E_IF ADD names; its own msgbuf flow ring).
+// Frames on the firmware's AWDL interface (the ifidx its WLC_E_IF ADD names; one msgbuf flow ring per destination):
+// the 802.3 frames with the AWDL data header the stack builds (bcm_awdl_encap), and what the firmware delivers there.
 int swlan_awdl_eth_tx(const uint8_t *eth, size_t len);  // 0 queued
 typedef void (*swlan_eth_rx_fn)(void *ctx, const uint8_t *eth, size_t len);
 int swlan_awdl_eth_rx(swlan_eth_rx_fn fn, void *ctx);
-// The access point's channel (MHz) while the station is associated, 0 otherwise. Lock-free; SwitchWLANAwdl.cpp anchors
-// the firmware's AWDL interface to it so AWDL and the station share the one radio (no mchan on this firmware).
+// The access point's channel (MHz) while the station is associated, 0 otherwise. Lock-free; SwitchWLANAwdl.cpp gives
+// it to the stack, whose schedule puts the free slots on it (awdl_schedule: AWDL and the station share one radio).
 uint16_t swlan_awdl_infra_freq(void);
 
 // ---- SwitchWLANAwdl.cpp (r12-awdl-stack) -> SwitchWLANNet.cpp ---------------------------------------------------

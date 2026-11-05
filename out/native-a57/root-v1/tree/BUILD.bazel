@@ -344,6 +344,7 @@ kernel_driver(
         "awdl/awdl_wire.c",
         "awdl/awdl_core.c",
         "awdl/awdl_bcm.c",
+        "awdl/awdl_bcm_trace.c",
         "awdl/awdl_apple80211.c",
         "firmware.S",
     ],
@@ -619,7 +620,9 @@ py_test(
 )
 
 # SwitchWLAN's AWDL core and awdl0's Apple80211 side (drivers/SwitchWLAN/awdl): frame codec, sync, election, data path,
-# the IO80211 event ring, over a simulated air of nodes with skewed clocks (ASan + UBSan).
+# the IO80211 event ring, over a simulated air of nodes with skewed clocks; the firmware's AWDL: every iovar payload
+# byte for byte against the brcmfmac AWDL series' traced bytes and the 2014 wlioctl layouts, the probe, both
+# firmware generations' bring-up against a mock firmware (ASan + UBSan).
 py_test(
     name = "awdl_test",
     size = "small",

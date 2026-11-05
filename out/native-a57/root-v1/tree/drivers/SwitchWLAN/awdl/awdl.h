@@ -73,6 +73,11 @@ struct awdl_chan {
 };
 uint16_t awdl_chan_freq(struct awdl_chan c);  // MHz of the primary 20 MHz channel; 0 for an empty slot
 uint8_t awdl_chan_primary(struct awdl_chan c);
+// The global operating class (IEEE 802.11 Annex E, table E-4) of a 20 MHz channel: 81 (0x51) for 1-13, 82 for 14,
+// 115 (0x73) for 36-48, 118 for 52-64, 121 for 100-144, 124 (0x7c) for 149-161, 125 for 165-177; 0 for anything else.
+uint8_t awdl_opclass_20mhz(uint8_t channel);
+// The AWDL channel of a frequency at 20 MHz ({0, 0} for 0 or an unknown one).
+struct awdl_chan awdl_chan_of_freq(uint16_t mhz);
 
 // ---- decoded TLVs ----------------------------------------------------------------------------------------------------
 struct awdl_chanseq {
@@ -129,7 +134,8 @@ struct awdl_af {
     uint16_t service_update_indicator;
     uint8_t awdl_version, device_class;
     char hostname[64];
-    uint16_t ht_caps;
+    uint16_t ht_caps;  // HT TLV: capability info, A-MPDU parameters, receive MCS bitmask (MCS 0-7, 8-15)
+    uint8_t ht_ampdu, ht_mcs[2];
 };
 
 // Parse an 802.11 frame (header + body, no FCS). 0: an AWDL action frame, decoded into *out. Negative: not AWDL or
@@ -159,9 +165,11 @@ struct awdl_host {
     void (*deliver)(void *ctx, const uint8_t *eth, size_t len);
     // One line of log, already formatted. May be NULL.
     void (*log)(void *ctx, const char *line);
-    // Native backend only (the firmware runs AWDL): set one firmware iovar (bsscfg < 0: not bsscfg-prefixed). Called
-    // with the lock held: queue it and send it in order from a thread. 0 when queued.
-    int (*iovar)(void *ctx, int32_t bsscfg, const char *name, const void *buf, size_t len);
+    // Native backend only (the firmware runs AWDL): one firmware variable on firmware interface `ifidx` (0 the station,
+    // else the AWDL interface's index from its WLC_E_IF), a set or (get != 0) a get carrying `buf` as its request
+    // (interface_create). Called with the lock held: queue it and send it in order from a thread, then report the
+    // firmware's answer with awdl_core_fw_result. 0 when queued.
+    int (*iovar)(void *ctx, int32_t ifidx, int get, const char *name, const void *buf, size_t len);
     // Native backend only: an Ethernet frame for the firmware's AWDL interface. 0 when queued.
     int (*tx_eth)(void *ctx, const uint8_t *eth, size_t len);
 };
@@ -178,7 +186,10 @@ struct awdl_config {
     // and the AWDL data encapsulation; the core configures it with iovars, learns peers from the action frames the
     // firmware forwards and adds them for data. SOFT: the core does everything over monitor + injection.
     uint8_t backend;
-    int32_t bsscfg;  // the firmware bsscfg index for awdl_if (native)
+    // Native: which firmware generation the bring-up probe found (enum bcm_awdl_api) and the probe items it lacks
+    // (bit n: bcm_probe_item n answered UNSUPPORTED; those iovars are not sent).
+    uint8_t fw_api;
+    uint32_t fw_absent;
 };
 enum { AWDL_BACKEND_SOFT = 0, AWDL_BACKEND_NATIVE = 1 };
 void awdl_config_default(struct awdl_config *c, const uint8_t addr[6]);
@@ -200,12 +211,16 @@ struct awdl_peer {
     uint8_t has_data_seq;
     char hostname[64];
     uint32_t frames;
+    uint8_t has_ht, ht_ampdu, ht_mcs[2];
+    uint16_t ht_caps;
 };
 
 struct awdl_stats {
     uint32_t af_rx, af_bad, af_tx, psf_tx, mif_tx, data_rx, data_tx, data_bad, data_drop, tx_refused, resyncs;
     int32_t last_sync_error_us;
     uint32_t fw_events, fw_unknown, iovars, iovar_refused, peer_adds, peer_dels, aws;
+    uint32_t iovar_skipped, data_not_awdl, roles, syncs_pushed, fw_frames;
+    int32_t fw_role;  // the firmware's last WLC_E_AWDL_ROLE status (-1 none yet)
 };
 
 struct awdl_core;
@@ -227,9 +242,28 @@ uint64_t awdl_core_timer(struct awdl_core *c, uint64_t now);
 struct awdl_fw_event;
 void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, const uint8_t *data, size_t len,
                         uint64_t now);
-// Native backend: a data frame the firmware delivered from a peer (Ethernet); refreshes the peer. The integration
-// hands it to awdl0 itself.
+// Native backend: the firmware's answer to a request the host queued (0, or its BCME code; AWDL_FW_NO_ANSWER when the
+// request never reached it). A refused interface creation ends the session (one log line); a refused awdl_payload
+// is resent once with the other length form.
+#define AWDL_FW_NO_ANSWER (-32768)
+void awdl_core_fw_result(struct awdl_core *c, const char *name, int status, uint64_t now);
+// Native backend: a frame the firmware delivered on its AWDL interface. AWDL data (802.3 with the AWDL LLC/SNAP
+// header) is decapsulated and handed to host.deliver as Ethernet; it refreshes the peer. Anything else is counted.
 void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *eth, size_t len, uint64_t now);
+// The access point's frequency while the station is associated (0 otherwise). The native schedule interleaves it
+// (awdl_schedule); a change while running re-sends the schedule.
+void awdl_core_set_infra(struct awdl_core *c, uint16_t infra_mhz, uint64_t now);
+// The AWDL interface's firmware index once its WLC_E_IF arrived, -1 before.
+int awdl_core_fw_ifidx(const struct awdl_core *c);
+// The 16-slot schedule the native backend runs, after the single-radio sequence macOS uses (the series' trace: the
+// 5 GHz social channel in slots 0-4 and 9-12, channel 6 in slot 8, slots 5-7 and 13-15 free). Free slots carry the
+// infra channel while associated (the radio stays with the access point there) and are empty otherwise. The 5 GHz
+// social channel is the infra channel when that is 44 or 149, else `social5` (44 or 149, learnt from the master's
+// sequence), else both until a master is heard (149 in slots 0-4, 44 in 9-12). 5 GHz social slots are 80 MHz
+// ({42, 0x80}, {155, 0x80}); the infra channel is 20 MHz with its global operating class.
+void awdl_schedule(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t infra_mhz, uint8_t social5);
+// The data path state TLV's social channel map for a schedule: 0x1 channel 6, 0x2 channel 44, 0x4 channel 149.
+uint16_t awdl_social_map(const struct awdl_chan seq[AWDL_SEQ_SLOTS]);
 // The TLVs our MIFs carry beyond sync and election (service params, HT caps, data path state, arpa, version): the
 // "awdl_payload" the firmware appends to its frames in the native backend. Returns the length or 0.
 size_t awdl_core_build_payload(struct awdl_core *c, uint8_t *buf, size_t size);

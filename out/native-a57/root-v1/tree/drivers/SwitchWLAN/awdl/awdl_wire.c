@@ -18,6 +18,31 @@ uint8_t awdl_chan_primary(struct awdl_chan c)
     return c.number;
 }
 
+uint8_t awdl_opclass_20mhz(uint8_t ch)
+{
+    if (ch >= 1 && ch <= 13) return 81;
+    if (ch == 14) return 82;
+    if (ch >= 36 && ch <= 48) return 115;
+    if (ch >= 52 && ch <= 64) return 118;
+    if (ch >= 100 && ch <= 144) return 121;
+    if (ch >= 149 && ch <= 161) return 124;
+    if (ch >= 165 && ch <= 177) return 125;
+    return 0;
+}
+
+struct awdl_chan awdl_chan_of_freq(uint16_t mhz)
+{
+    uint8_t ch = 0;
+    if (mhz == 2484)
+        ch = 14;
+    else if (mhz >= 2412 && mhz <= 2472)
+        ch = (uint8_t)((mhz - 2407) / 5);
+    else if (mhz >= 5180 && mhz <= 5885)
+        ch = (uint8_t)((mhz - 5000) / 5);
+    const uint8_t opclass = awdl_opclass_20mhz(ch);
+    return opclass ? (struct awdl_chan){ch, opclass} : (struct awdl_chan){0, 0};
+}
+
 uint16_t awdl_chan_freq(struct awdl_chan c)
 {
     const uint8_t p = awdl_chan_primary(c);
@@ -55,9 +80,9 @@ static int parse_chanseq(const uint8_t *p, size_t n, struct awdl_chanseq *s)
     for (unsigned i = 0; i < s->count; ++i) {
         const uint8_t *e = p + 6 + i * width;
         if (s->encoding == AWDL_CHAN_ENC_SIMPLE)
-            s->chan[i] = (struct awdl_chan){e[0], (uint8_t)(e[0] <= 14 ? 0x51 : 0x73)};
+            s->chan[i] = (struct awdl_chan){e[0], awdl_opclass_20mhz(e[0])};
         else if (s->encoding == AWDL_CHAN_ENC_LEGACY)  // {flags, channel}
-            s->chan[i] = (struct awdl_chan){e[1], (uint8_t)(e[1] <= 14 ? 0x51 : 0x73)};
+            s->chan[i] = (struct awdl_chan){e[1], awdl_opclass_20mhz(e[1])};
         else
             s->chan[i] = (struct awdl_chan){e[0], e[1]};
     }
@@ -215,8 +240,15 @@ int awdl_af_parse(const uint8_t *f, size_t len, struct awdl_af *a)
             a->device_class = v[1];
             break;
         case AWDL_TLV_ARPA: parse_arpa(v, l, a->hostname, sizeof a->hostname); break;
-        case AWDL_TLV_HT_CAPS:
-            if (l >= 4) a->ht_caps = rd16(v + 2);
+        case AWDL_TLV_HT_CAPS:  // 2 reserved bytes, capability info, A-MPDU parameters, MCS bitmask per stream
+            if (l < 4) {
+                ok = 0;
+                break;
+            }
+            a->ht_caps = rd16(v + 2);
+            a->ht_ampdu = l >= 5 ? v[4] : 0;
+            a->ht_mcs[0] = l >= 6 ? v[5] : 0;
+            a->ht_mcs[1] = l >= 9 ? v[6] : 0;  // a second stream's byte only when the TLV has room for it
             break;
         default: break;
         }

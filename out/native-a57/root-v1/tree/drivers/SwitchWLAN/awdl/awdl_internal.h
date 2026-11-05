@@ -65,8 +65,24 @@ struct awdl_core {
     unsigned txq_head, txq_count;
     uint16_t data_seq, mgmt_seq, service_update_indicator;
     struct awdl_stats stats;
+    // native backend: the firmware's AWDL interface and its bring-up
+    uint8_t nstate;        // AWDL_N_*
+    uint8_t created_with;  // enum bcm_awdl_api used for the interface being made / made
+    uint8_t payload_u16;   // awdl_payload's length form (u16: interface_create v3; u32: 7.x), switched once on refusal
+    uint8_t payload_switched;
+    uint8_t seq_no_empty;  // the 7.x awdl_chan_seq refused empty slots once: free slots take slot 0's channel
+    uint8_t social5;       // 5 GHz social channel learnt from the master's sequence (44 or 149), 0 before
+    int16_t fw_ifidx;      // the AWDL interface's firmware index (WLC_E_IF add), -1 before
+    uint8_t fw_bsscfg;
+    uint16_t infra_mhz;
+    uint64_t create_deadline, aftx_at, settle_at;  // 0: not pending
+    uint8_t pushed_role, pushed_parent[6], pushed_root[6];
     uint8_t scratch[AWDL_MAX_FRAME];
 };
+enum { AWDL_N_OFF, AWDL_N_CREATING, AWDL_N_UP };
+#define AWDL_CREATE_TIMEOUT_US 2000000u  // the series' BRCMF_AWDL_IF_TIMEOUT
+#define AWDL_AFTX_DELAY_US     500000u
+#define AWDL_SETTLE_DELAY_US   5000000u
 
 void awdl_log(struct awdl_core *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 

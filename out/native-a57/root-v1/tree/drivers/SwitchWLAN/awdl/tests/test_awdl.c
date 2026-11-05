@@ -700,8 +700,8 @@ int main(int argc, char **argv)
     }
     puts("AWDL: hand-built MIF parse + fuzz, PSF/MIF round trip, data encap/decap, two-node sync (40 ppm), "
          "three-node chain election + root loss, two-channel sequence, TSF clock, IO80211 event ring, awdl0 requests "
-         "and PEER_PRESENCE; native firmware backend: iovar layouts, bring-up order, peers from "
-         "WLC_E_AWDL_RX_ACT_FRAME, "
-         "awdl_peer_op add/del, firmware role, data to the firmware: ok");
+         "and PEER_PRESENCE; firmware AWDL: payloads = the brcmfmac series' traced bytes and the 2014 layouts, probe, "
+         "AWDL data header, schedule, interface_create v3 and awdl_if bring-ups, WLC_E_ACTION_FRAME_RX peers, "
+         "awdl_peer_op with HT, host election to the firmware, creation failures: ok");
     return 0;
 }

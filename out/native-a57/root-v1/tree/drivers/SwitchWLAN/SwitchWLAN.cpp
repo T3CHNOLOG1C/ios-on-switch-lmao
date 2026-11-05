@@ -43,6 +43,7 @@
 #include "SwitchWLANPrivate.h"
 #include "SwitchWLANStation.h"
 #include "SwitchWLANWpa.h"
+#include "awdl/awdl_bcm.h"
 
 // firmware.S
 extern "C" const uint8_t switch_wlan_fw_image[], switch_wlan_fw_nvram[];
@@ -81,9 +82,10 @@ enum : uint32_t {
 };
 constexpr uint32_t kEventsWanted[] = {E_SET_SSID, E_JOIN,         E_AUTH, E_DEAUTH,    E_DEAUTH_IND, E_ASSOC,
                                       E_DISASSOC, E_DISASSOC_IND, E_LINK, E_EAPOL_MSG, E_IF,         E_ESCAN_RESULT};
-// The firmware's own AWDL (Infineon WHD numbering, as in drivers/SwitchWLAN/awdl/awdl_bcm.h): AW, role, generic,
-// then 111-120 (frames, status, AW start/end/extension, peer cache). Asked for only while AWDL is open.
-constexpr uint32_t kAwdlEvents[] = {96, 97, 98, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120};
+// The firmware's own AWDL (drivers/SwitchWLAN/awdl/awdl_bcm.h): ACTION_FRAME_RX (75, the AWDL interface's received
+// AWDL action frames, as the brcmfmac AWDL series reads them), AW, role, generic (96-98), then WHD's 111-120 (frames,
+// status, AW start/end/extension, peer cache). Asked for only while AWDL is open.
+constexpr uint32_t E_ACTION_FRAME_RX = 75;
 bool isAwdlEvent(uint32_t type)
 {
     return (type >= 96 && type <= 98) || (type >= 111 && type <= 120);
@@ -176,8 +178,8 @@ OSDeclareDefaultStructors(SwitchWLAN)
     // them with the gate held (the stack never calls back into a gated call while holding its own lock).
     int awdlOpen(const swlan_awdl_caps **caps);
     void awdlClose();
-    int awdlVar(bool set, int32_t bsscfg, const char *name, const void *in, size_t inLength, void *out,
-                size_t outLength, size_t *returned);
+    int awdlVar(bool set, uint8_t ifidx, const char *name, const void *in, size_t inLength, void *out, size_t outLength,
+                size_t *returned);
     int awdlTransmit(const uint8_t *eth, size_t length);
     void awdlCallbacks(swlan_fw_event_fn events, void *eventsContext, swlan_eth_rx_fn rx, void *rxContext,
                        swlan_evt_fn loss, void *lossContext);
@@ -248,7 +250,8 @@ private:
     // AWDL: the firmware's cap list has "awdl"; open (event mask on, frames and events routed); the AWDL
     // interface's firmware index from its WLC_E_IF (-1 until then).
     bool capAwdl_ = false, awdlOpen_ = false;
-    int awdlIfidx_ = -1;
+    int awdlIfidx_ = -1, awdlBssidx_ = -1;  // from its WLC_E_IF add (wl_event_data_if_t ifidx, bssidx)
+    bool awdlStrayFrameSaid_ = false;
     uint32_t awdlRxDropped_ = 0, awdlEventsIn_ = 0;
     swlan_fw_event_fn awdlEventFn_ = nullptr;
     void *awdlEventCtx_ = nullptr;
@@ -258,6 +261,9 @@ private:
     void *awdlLossCtx_ = nullptr;
     bool setEventMask(bool awdl);
     void awdlEvent(const swlan::Event &event);
+    // Once a boot, after the first bring-up: GET of every AWDL variable either firmware generation uses, one os_log
+    // line each (status, bytes), so one boot settles which AWDL API this firmware's table has (gAwdlProbe).
+    void awdlProbe();
 
     // Worker only.
     swlan::wpa::Supplicant sup_;
@@ -321,9 +327,15 @@ private:
         uint8_t *out;
         size_t *outReturned;
         bool ok;
+        uint8_t ifidx;     // the firmware interface (msgbuf ioctl ifidx)
+        int16_t fwStatus;  // the firmware's BCME code when it answered with an error, 0 otherwise
     };
     static IOReturn ioctlGated(OSObject *owner, void *call, void *, void *, void *);
     bool ioctl(uint32_t cmd, const uint8_t *data, size_t length, size_t outLength, uint8_t *out, size_t *outReturned);
+    // The same on firmware interface `ifidx`; *fwStatus gets the firmware's BCME code when it refused (0 when the
+    // request did not reach it or succeeded).
+    bool ioctlOn(uint8_t ifidx, uint32_t cmd, const uint8_t *data, size_t length, size_t outLength, uint8_t *out,
+                 size_t *outReturned, int16_t *fwStatus);
     bool getVar(const char *name, uint8_t *out, size_t outLength, size_t *returned);
     bool getVarWith(const char *name, const void *param, size_t paramLength, uint8_t *out, size_t outLength,
                     size_t *returned);
@@ -358,10 +370,12 @@ OSDefineMetaClassAndStructors(SwitchWLAN, IOService)
     namespace
 {
     SwitchWLAN *gDriver;
-    // The infra channel (MHz) while associated, 0 otherwise: read lock-free by SwitchWLANAwdl.cpp so the AWDL
-    // interface can be anchored to the access point's channel (no mchan on this firmware; staying on the infra
-    // channel is how AWDL and the station share the one radio without en0 losing airtime).
+    // The infra channel (MHz) while associated, 0 otherwise: read lock-free by SwitchWLANAwdl.cpp, whose schedule puts
+    // AWDL's free slots on the access point's channel (no mchan on this firmware: AWDL and the station share the
+    // one radio by time).
     uint32_t gInfraFreq;
+    // What the firmware's iovar table answered to the AWDL probe (awdlProbe, once a boot).
+    bcm_awdl_probe gAwdlProbe;
 }
 
 // A short AWDL suffix for the stats line, written by SwitchWLANAwdl.cpp (empty when AWDL is off); weak so the driver
@@ -479,7 +493,26 @@ void SwitchWLAN::onEvent(void *context, const swlan::Event &event)
     // WLC_E_IF about any interface but the station's (in the header or in wl_event_data_if_t's ifidx/bssidx)
     const bool otherIf = event.type == E_IF &&
                          (event.ifidx || event.bsscfgidx || (event.length >= 5 && (event.data[0] || event.data[3])));
-    if (self->awdlOpen_ && (isAwdlEvent(event.type) || otherIf)) {
+    // received action frames on the AWDL interface (brcmfmac finds the interface by the header's bsscfgidx, we take
+    // either field), or any whose body is an AWDL action frame (en0 uses no action frames): the first of those not
+    // on the AWDL interface's indices names the fields this firmware fills, once
+    bool awdlFrame = false;
+    if (event.type == E_ACTION_FRAME_RX && self->awdlOpen_) {
+        const bool onAwdl = (event.ifidx && event.ifidx == self->awdlIfidx_) ||
+                            (event.bsscfgidx && event.bsscfgidx == self->awdlBssidx_);
+        bcm_rx_frame meta;
+        const uint8_t *body = nullptr;
+        size_t n = 0;
+        const bool isAwdl = !bcm_awdl_rx_af(event.data, event.length, &meta, &body, &n);
+        awdlFrame = onAwdl || isAwdl;
+        if (isAwdl && !onAwdl && !self->awdlStrayFrameSaid_) {
+            self->awdlStrayFrameSaid_ = true;
+            IOLog("SwitchWLAN: AWDL: AWDL action frames arrive with ifidx %u bsscfg %u (the AWDL interface: ifidx %d "
+                  "bsscfg %d): taken by their content\n",
+                  event.ifidx, event.bsscfgidx, self->awdlIfidx_, self->awdlBssidx_);
+        }
+    }
+    if (self->awdlOpen_ && (isAwdlEvent(event.type) || otherIf || awdlFrame)) {
         self->awdlEvent(event);
         return;
     }
@@ -621,7 +654,8 @@ IOReturn SwitchWLAN::ioctlGated(OSObject *owner, void *argument, void *, void *,
                                  : "not up");
         return kIOReturnNotReady;
     }
-    if (!self->mb_.ioctlSubmit(call->cmd, call->data, call->length, call->outLength, self->why_, sizeof(self->why_)))
+    if (!self->mb_.ioctlSubmit(call->cmd, call->ifidx, call->data, call->length, call->outLength, self->why_,
+                               sizeof(self->why_)))
         return kIOReturnNoResources;
     uint64_t deadline = deadlineIn(kIoctlTimeoutMs);
     while (!self->mb_.replyReady() && !self->gone_ && !self->halted_) {
@@ -656,6 +690,7 @@ IOReturn SwitchWLAN::ioctlGated(OSObject *owner, void *argument, void *, void *,
         }
     }
     if (self->mb_.replyStatus()) {
+        call->fwStatus = self->mb_.replyStatus();
         snprintf(self->why_, sizeof(self->why_), "ioctl %u: firmware error %d", call->cmd, self->mb_.replyStatus());
         return kIOReturnError;
     }
@@ -671,8 +706,15 @@ IOReturn SwitchWLAN::ioctlGated(OSObject *owner, void *argument, void *, void *,
 bool SwitchWLAN::ioctl(uint32_t cmd, const uint8_t *data, size_t length, size_t outLength, uint8_t *out,
                        size_t *outReturned)
 {
-    Call call = {cmd, data, length, outLength, out, outReturned, false};
+    return ioctlOn(0, cmd, data, length, outLength, out, outReturned, nullptr);
+}
+
+bool SwitchWLAN::ioctlOn(uint8_t ifidx, uint32_t cmd, const uint8_t *data, size_t length, size_t outLength,
+                         uint8_t *out, size_t *outReturned, int16_t *fwStatus)
+{
+    Call call = {cmd, data, length, outLength, out, outReturned, false, ifidx, 0};
     gate_->runAction(&SwitchWLAN::ioctlGated, &call);
+    if (fwStatus) *fwStatus = call.ok ? 0 : call.fwStatus;
     return call.ok;
 }
 
@@ -743,6 +785,7 @@ bool SwitchWLAN::radioInit()
     }
     IOLog("SwitchWLAN: radio up, MAC %02x:%02x:%02x:%02x:%02x:%02x, country %s/%d (%s)\n", mac_[0], mac_[1], mac_[2],
           mac_[3], mac_[4], mac_[5], abbrev, static_cast<int>(swlan::le32(country + 4)), code);
+    if (capAwdl_) awdlProbe();  // once a boot, while the radio is up and before the station uses it
     locked([&] {
         status_.state = powerOn_ ? SWLAN_STA_IDLE : SWLAN_STA_OFF;
         status_.power = powerOn_;
@@ -884,7 +927,7 @@ void SwitchWLAN::lost(const char *why)
     bool awdl = false;
     locked([&] {
         awdl = awdlOpen_;
-        awdlIfidx_ = -1;  // the firmware's AWDL interface went with it; its rings are rebuilt at the next attach
+        awdlIfidx_ = awdlBssidx_ = -1;  // the firmware's AWDL interface went with it; rings rebuilt at the next attach
     });
     if (awdl && awdlLossFn_) {
         const swlan_awdl_event e = {SWLAN_AWDL_CHIP_LOST, 0, 0, 0};
@@ -1995,7 +2038,8 @@ bool SwitchWLAN::setEventMask(bool awdl)
     uint8_t mask[16] = {};
     for (uint32_t e : kEventsWanted) mask[e / 8] |= static_cast<uint8_t>(1u << (e % 8));
     if (awdl)
-        for (uint32_t e : kAwdlEvents) mask[e / 8] |= static_cast<uint8_t>(1u << (e % 8));
+        for (unsigned i = 0; i < bcm_awdl_event_count; ++i)
+            mask[bcm_awdl_events[i] / 8] |= static_cast<uint8_t>(1u << (bcm_awdl_events[i] % 8));
     return setVar("event_msgs", mask, sizeof(mask));
 }
 
@@ -2006,10 +2050,12 @@ void SwitchWLAN::awdlEvent(const swlan::Event &event)
     ++awdlEventsIn_;
     if (event.type == E_IF && event.length >= 5) {
         const uint8_t ifidx = event.data[0], opcode = event.data[1];
-        if (opcode == 1)
+        if (opcode == 1 && ifidx) {
+            if (awdlIfidx_ >= 0 && awdlIfidx_ != ifidx) mb_.awdlClose();  // a stale interface's rings go first
             awdlIfidx_ = ifidx;
-        else if (opcode == 2 && static_cast<int>(ifidx) == awdlIfidx_) {
-            awdlIfidx_ = -1;
+            awdlBssidx_ = event.data[3];
+        } else if (opcode == 2 && static_cast<int>(ifidx) == awdlIfidx_) {
+            awdlIfidx_ = awdlBssidx_ = -1;
             mb_.awdlClose();
         }
         IOLog("SwitchWLAN: AWDL: firmware interface %u %s (bsscfg %u, role %u)\n", ifidx,
@@ -2058,8 +2104,46 @@ int SwitchWLAN::awdlOpen(const swlan_awdl_caps **caps)
     c.abi_version = SWLAN_AWDL_ABI_VERSION;
     c.has_native_awdl = 1;
     memcpy(c.self_mac, mac_, 6);
+    c.probe = gAwdlProbe.done ? &gAwdlProbe : nullptr;
     *caps = &c;
     return 0;
+}
+
+// Once a boot (a probe the firmware does not survive is not retried by the recovery): every AWDL variable either
+// firmware generation sets, read with GET on the station's interface. UNSUPPORTED means the name is not in the
+// firmware's table; any other answer means its handler exists. The interface_create query is brcmf_feat_awdl_check's
+// (version 3 = the series' AWDL interface). os_log only: status, bytes returned, the first 16 of them.
+void SwitchWLAN::awdlProbe()
+{
+    static bool tried;
+    if (tried) return;
+    tried = true;
+    os_log(OS_LOG_DEFAULT, "SwitchWLAN: AWDL probe: %u variables, GET only", static_cast<unsigned>(BCM_PROBE_COUNT));
+    for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i) {
+        uint8_t request[64], reply[256] = {};
+        const size_t n = bcm_probe_request(i, request, sizeof(request));
+        size_t got = 0;
+        int16_t fw = 0;
+        const bool ok = n && ioctlOn(0, WLC_GET_VAR, request, n, sizeof(reply), reply, &got, &fw);
+        const int status = ok ? 0 : fw ? fw : BCM_PROBE_NO_ANSWER;
+        bcm_probe_record(&gAwdlProbe, i, status, ok ? reply : nullptr, ok ? got : 0);
+        char hex[3 * 16 + 1] = {};
+        for (size_t k = 0; ok && k < got && k < 16; ++k) snprintf(hex + 3 * k, 4, " %02x", reply[k]);
+        os_log(OS_LOG_DEFAULT, "SwitchWLAN: AWDL probe: %s: %d %s, %u bytes%s", bcm_probe_names[i], status,
+               bcme_name(status), static_cast<unsigned>(ok ? got : 0), hex);
+    }
+    gAwdlProbe.done = 1;
+    const enum bcm_awdl_api api = bcm_awdl_api_of(&gAwdlProbe);
+    os_log(OS_LOG_DEFAULT,
+           "SwitchWLAN: AWDL probe: API %s (interface_create version %u, awdl_if %s, slot_bss %s, awdl_chan_seq %s, "
+           "mchan %s); %u of %u variables present",
+           bcm_awdl_api_name(api), static_cast<unsigned>(gAwdlProbe.ifc_version),
+           bcm_probe_has(&gAwdlProbe, BCM_PROBE_AWDL_IF) ? "yes" : "no",
+           bcm_probe_has(&gAwdlProbe, BCM_PROBE_SLOT_BSS) ? "yes" : "no",
+           bcm_probe_has(&gAwdlProbe, BCM_PROBE_AWDL_CHAN_SEQ) ? "yes" : "no",
+           bcm_probe_has(&gAwdlProbe, BCM_PROBE_MCHAN) ? "yes" : "no",
+           static_cast<unsigned>(BCM_PROBE_COUNT - __builtin_popcount(bcm_probe_absent(&gAwdlProbe))),
+           static_cast<unsigned>(BCM_PROBE_COUNT));
 }
 
 void SwitchWLAN::awdlClose()
@@ -2068,41 +2152,35 @@ void SwitchWLAN::awdlClose()
     locked([&] {
         was = awdlOpen_;
         awdlOpen_ = false;
-        awdlIfidx_ = -1;
+        awdlIfidx_ = awdlBssidx_ = -1;
         if (up_) mb_.awdlClose();
     });
     if (was && !loop_->onThread()) setEventMask(false);
 }
 
-// "<name>\0<value>", or brcmf_fil_bsscfg_data_set's "bsscfg:<name>\0<s32 index><value>".
-int SwitchWLAN::awdlVar(bool set, int32_t bsscfg, const char *name, const void *in, size_t inLength, void *out,
+// "<name>\0<value>" on firmware interface `ifidx` (brcmf_fil_iovar_data_set/get on that interface's ifp: the msgbuf
+// ioctl's ifidx byte, no "bsscfg:" prefix, as the brcmfmac AWDL series sends every awdl_* variable). A firmware
+// refusal comes back as SWLAN_FWERR(code) for the stack to report; only requests that never got an answer are
+// logged here.
+int SwitchWLAN::awdlVar(bool set, uint8_t ifidx, const char *name, const void *in, size_t inLength, void *out,
                         size_t outLength, size_t *returned)
 {
     if (loop_->onThread()) return -EDEADLK;
     uint8_t request[1024];
-    size_t n = 0;
     const size_t nameLength = strlen(name) + 1;
-    if (7 + nameLength + 4 + inLength > sizeof(request)) return -EMSGSIZE;
-    if (bsscfg >= 0) {
-        memcpy(request, "bsscfg:", 7);
-        n = 7;
-    }
-    memcpy(request + n, name, nameLength);
-    n += nameLength;
-    if (bsscfg >= 0) {
-        swlan::put32(request + n, static_cast<uint32_t>(bsscfg));
-        n += 4;
-    }
-    if (inLength) memcpy(request + n, in, inLength);
-    n += inLength;
-    const bool ok = set ? ioctl(WLC_SET_VAR, request, n, 0, nullptr, nullptr)
-                        : ioctl(WLC_GET_VAR, request, n, outLength, static_cast<uint8_t *>(out), returned);
-    if (!ok) {
-        static unsigned said;
-        if (said++ < 16) IOLog("SwitchWLAN: AWDL: %s %s: %s\n", set ? "set" : "get", name, why_);
-        return -EIO;
-    }
-    return 0;
+    if (nameLength + inLength > sizeof(request)) return -EMSGSIZE;
+    memcpy(request, name, nameLength);
+    if (inLength) memcpy(request + nameLength, in, inLength);
+    const size_t n = nameLength + inLength;
+    int16_t fw = 0;
+    const bool ok =
+        set ? ioctlOn(ifidx, WLC_SET_VAR, request, n, 0, nullptr, nullptr, &fw)
+            : ioctlOn(ifidx, WLC_GET_VAR, request, n, outLength, static_cast<uint8_t *>(out), returned, &fw);
+    if (ok) return 0;
+    if (fw) return SWLAN_FWERR(fw);
+    static unsigned said;
+    if (said++ < 8) IOLog("SwitchWLAN: AWDL: %s %s (ifidx %u): %s\n", set ? "set" : "get", name, ifidx, why_);
+    return -EIO;
 }
 
 int SwitchWLAN::awdlTransmit(const uint8_t *eth, size_t length)
@@ -2205,13 +2283,10 @@ extern "C" void swlan_awdl_close(void)
 {
     if (gDriver) gDriver->awdlClose();
 }
-extern "C" int swlan_awdl_iovar_set(int32_t bsscfg, const char *name, const void *buf, size_t len)
+extern "C" int swlan_awdl_var(int set, uint8_t ifidx, const char *name, const void *in, size_t in_len, void *out,
+                              size_t out_len, size_t *returned)
 {
-    return gDriver ? gDriver->awdlVar(true, bsscfg, name, buf, len, nullptr, 0, nullptr) : -ENXIO;
-}
-extern "C" int swlan_awdl_iovar_get(int32_t bsscfg, const char *name, void *buf, size_t len, size_t *returned)
-{
-    return gDriver ? gDriver->awdlVar(false, bsscfg, name, nullptr, 0, buf, len, returned) : -ENXIO;
+    return gDriver ? gDriver->awdlVar(set != 0, ifidx, name, in, in_len, out, out_len, returned) : -ENXIO;
 }
 extern "C" int swlan_awdl_fw_events(swlan_fw_event_fn fn, void *ctx)
 {

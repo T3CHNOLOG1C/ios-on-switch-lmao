@@ -1,7 +1,9 @@
 """Build the AWDL core (drivers/SwitchWLAN/awdl) for the Mac with clang, AddressSanitizer and UBSan, and run its host
 tests (tests/test_awdl.c): frame parsing of a hand-built MIF and fuzzed frames, PSF/MIF round trip, data
 encapsulation, synchronisation and election over a simulated air of two and three nodes with skewed clocks, a
-two-channel sequence, the TSF clock, the IO80211 user-client event ring and awdl0's Apple80211 requests.
+two-channel sequence, the TSF clock, the IO80211 user-client event ring and awdl0's Apple80211 requests; and the
+firmware's AWDL (tests/test_native.c): iovar payloads against the brcmfmac AWDL series' traced bytes, the probe, the
+data path's AWDL header, the schedule and both firmware generations' bring-up against a mock firmware.
 """
 from pathlib import Path
 import subprocess
@@ -9,8 +11,8 @@ import tempfile
 
 here = Path(__file__).resolve().parent
 awdl = here.parent
-sources = [awdl / 'awdl_wire.c', awdl / 'awdl_core.c', awdl / 'awdl_bcm.c', awdl / 'awdl_apple80211.c',
-           here / 'test_awdl.c', here / 'test_native.c']
+sources = [awdl / 'awdl_wire.c', awdl / 'awdl_core.c', awdl / 'awdl_bcm.c', awdl / 'awdl_bcm_trace.c',
+           awdl / 'awdl_apple80211.c', here / 'test_awdl.c', here / 'test_native.c']
 with tempfile.TemporaryDirectory() as directory:
     binary = Path(directory) / 'test_awdl'
     subprocess.run(['cc', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-missing-field-initializers',
