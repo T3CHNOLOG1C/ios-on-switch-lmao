@@ -1114,6 +1114,12 @@ pub struct RenderCommandEncoder {
     /// form): its descriptor sets view the attachment's image, which then stays the pass's
     /// (`kept_bytes.rs`).
     inputs_read: BTreeSet<u32>,
+    /// The pass colors (a bit by color index) a draw of the pass may read as they were before
+    /// it: fetched, blended into, or written through a mask that keeps channels; every color for
+    /// an execution of render commands, a tile dispatch, a draw that reads the tile memory and one
+    /// whose writes the host does not bound. What a memoryless color's `DontCare` load answers
+    /// (`clear_reach::dont_care_loads`).
+    read_colors: u32,
     /// The pass has a draw call, whether or not it draws anything, or an execution of render
     /// commands: Metal's pass rewrites the unused bits of an extended-range or padded attachment
     /// it loads in the tiles its draws reach (`render/unused_bits_load.rs`).
@@ -1458,6 +1464,7 @@ impl CommandBuffer {
             drawn: clear_reach::DrawnArea::default(),
             coverage: linear_attachment::Coverage::default(),
             inputs_read: BTreeSet::new(),
+            read_colors: 0,
             rewrites_unused_bits: false,
             extended_written: cleared_off_codes(descriptor),
             extended,
@@ -3124,6 +3131,7 @@ impl RenderCommandEncoder {
             drawn,
             coverage,
             inputs_read,
+            read_colors,
             rewrites_unused_bits,
             residency,
             extended,
@@ -3373,7 +3381,7 @@ impl RenderCommandEncoder {
         // A `DontCare` load of an attachment the pass stores: loaded in a pass whose draws reach
         // no tile, else cleared to zero or its clear value, Metal's answer in each tile a draw
         // reaches (`clear_reach.rs`), and only in those `tiles` bounds.
-        let dont_care = clear_reach::dont_care_loads(&mut layout, reach);
+        let dont_care = clear_reach::dont_care_loads(&mut layout, reach, read_colors);
         if let Some(named) = dont_care.named.clone() {
             device.degrade(Degradation::DontCareLoadTiles, || {
                 (
@@ -5776,6 +5784,7 @@ impl RenderCommandEncoder {
                 true => {
                     self.drawn.everywhere();
                     self.coverage.everywhere();
+                    self.read_colors = u32::MAX;
                 }
                 false => {
                     let selects = selects || self.amplification.offsets_viewports();
@@ -5795,9 +5804,13 @@ impl RenderCommandEncoder {
                             let zeroed = !self.zeroed_colors(state, &routing).is_empty();
                             let writes = linear_attachment::writes(colors);
                             let writes = linear_attachment::pass_writes(&writes, &routing, zeroed);
+                            self.read_colors |= clear_reach::blended(&writes);
                             self.coverage.add(&writes, rects)
                         }
-                        _ => self.coverage.everywhere(),
+                        _ => {
+                            self.coverage.everywhere();
+                            self.read_colors = u32::MAX;
+                        }
                     }
                 }
             }
@@ -6246,6 +6259,12 @@ impl RenderCommandEncoder {
         fetched.dedup();
         if self.layout.fetch_inputs {
             self.inputs_read.extend(fetched.iter().copied());
+        }
+        for &color in &fetched {
+            self.read_colors |= 1u32.checked_shl(color).unwrap_or(0);
+        }
+        if reads_tile_memory {
+            self.read_colors = u32::MAX;
         }
         // A draw that reads and writes some of the instance's interlocked colors and writes none
         // of the others records in it, as one that reads them all would.

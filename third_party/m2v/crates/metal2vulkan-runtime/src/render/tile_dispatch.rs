@@ -1185,6 +1185,7 @@ impl RenderCommandEncoder {
         self.end_extended_shadows();
         self.called = true;
         self.drew = true;
+        self.read_colors = u32::MAX;
         // Its pixels are not bounded by a viewport the host knows of.
         self.drawn.everywhere();
         self.coverage.everywhere();

@@ -45,8 +45,17 @@
 //!   pass, and loads: every other tile keeps its texels, Metal's answer (a draw writes no pixel
 //!   outside them), and a pass whose draws reach no pixel loads, as one whose draws draw nothing.
 //! - A `DontCare`-loaded memoryless color attachment clears to zero in a pass whose draws reach a
-//!   tile: Metal's answer in every tile a fragment reads it (an Apple M4, EV ZIN-zp1-m4), and it is
-//!   never stored, so the answer is exact.
+//!   tile and one of which may read it before writing it (fetches it, blends into it, or writes it
+//!   through a mask that keeps channels): Metal's answer in every tile a fragment reads it (an
+//!   Apple M4, EV ZIN-zp1-m4), and it is never stored, so the answer is exact. In a pass none of
+//!   whose draws reads it no fragment observes its texels before writing them, and none after the
+//!   pass: it keeps its `DontCare` load, no clear (Core Animation's passes all hold a memoryless
+//!   second color, which most of their draws mask out: a clear of the whole render area each pass
+//!   on GM20B, 3.7 MB of writes at 1280x720). Likewise a stored color none of the pass's draws
+//!   reads loads: the tiles no draw touches keep their texels, Metal's answer, and in those a draw
+//!   touches only the pixels no draw writes keep theirs where Metal's read zero, texels its
+//!   `DontCare` leaves undefined; no clear, and no clearing pass of its own ([`ReachClears`]), for
+//!   it (Core Animation's blur passes, whose draws cover part of their targets).
 //! - Each `Clear`-loaded attachment (a converted one too) whose clear reaches past the render
 //!   area ([`reach`]) is cleared there before the pass by a render pass of its own: the attachment
 //!   alone, loaded and stored, over the pass's layers, `vkCmdClearAttachments` clearing the reach
@@ -186,10 +195,17 @@ pub(super) fn dont_care_clear(pf: PixelFormat) -> vk::ClearColorValue {
 
 /// Give each `DontCare` load of `layout` that the module docs name its answer in a pass of
 /// `reach`: `Load` where it reaches no tile, else `Clear`, to the format's zero for a color
-/// attachment ([`dont_care_clear`]) and to its clear value for depth and stencil. Which attachments took it, and whether the pass took
-/// the near-equivalent (its draws reach the tiles their primitives touch): the attachment it
-/// names, for the notice.
-pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> DontCareLoads {
+/// attachment ([`dont_care_clear`]) and to its clear value for depth and stencil; a color's only
+/// where a draw of the pass reads it (`read`, a bit by color index:
+/// `RenderCommandEncoder::read_colors`), or a memoryless one's resolve does: elsewhere a memoryless
+/// color keeps its `DontCare` load and a stored one loads. Which attachments took it, and
+/// whether the pass took the near-equivalent (its draws reach the tiles their primitives touch):
+/// the attachment it names, for the notice.
+pub(super) fn dont_care_loads(
+    layout: &mut PassLayout,
+    reach: PassReach,
+    read: u32,
+) -> DontCareLoads {
     let load = match reach {
         PassReach::Nothing => LoadAction::Load,
         PassReach::Every | PassReach::Draws => LoadAction::Clear,
@@ -208,15 +224,36 @@ pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> Dont
         // A memoryless color reads zero in every tile a draw touches, the only tiles where a
         // fragment reads it (an Apple M4, EV ZIN-zp1-m4: a framebuffer fetch of one read 0 in
         // 52 runs of 52, also after a pass that cleared other bytes into the tiles), and it is
-        // never stored: a clear to zero is Metal's answer exactly, in a pass that draws.
+        // never stored: a clear to zero is Metal's answer exactly, in a pass that draws and reads
+        // it (`read`, by color index), or resolves it (its resolve reads every sample, those no
+        // draw wrote too); one no draw reads and nothing resolves is never observed.
         if color.load == LoadAction::DontCare && color.memoryless {
-            if reach != PassReach::Nothing {
+            let resolved = color.store != StoreAction::DontCare
+                || color.resolve.is_some()
+                || color.copied_resolve.is_some();
+            let read = resolved
+                || 1u32
+                    .checked_shl(index as u32)
+                    .is_none_or(|bit| read & bit != 0);
+            if reach != PassReach::Nothing && read {
                 color.load = LoadAction::Clear;
                 color.clear = dont_care_clear(color.target.texture.pixel_format());
             }
             continue;
         }
         if color.load != LoadAction::DontCare || color.memoryless || !stores(color.store) {
+            continue;
+        }
+        // A stored color no draw of the pass reads before writing it loads: the texels of every
+        // tile no draw touches, Metal's answer, and in the tiles one touches the pixels no draw
+        // writes keep theirs, where Metal's hold zero, texels Metal's `DontCare` leaves
+        // undefined. No clear of the tiles the draws reach then, and no pass of its own for it
+        // (`ReachClears`).
+        let read = 1u32
+            .checked_shl(index as u32)
+            .is_none_or(|bit| read & bit != 0);
+        if !read {
+            color.load = LoadAction::Load;
             continue;
         }
         color.load = load;
@@ -253,6 +290,17 @@ pub(super) fn dont_care_loads(layout: &mut PassLayout, reach: PassReach) -> Dont
         }
     }
     loads
+}
+
+/// The pass colors (a bit by color index) a draw that writes `writes`
+/// (`linear_attachment::pass_writes`) reads as they were before it: those it blends into or
+/// writes through a mask that keeps channels.
+pub(super) fn blended(writes: &[Option<bool>]) -> u32 {
+    (writes.iter().enumerate())
+        .filter(|&(_, write)| *write == Some(true))
+        .fold(0, |bits, (index, _)| {
+            bits | 1u32.checked_shl(index as u32).unwrap_or(0)
+        })
 }
 
 /// What [`dont_care_loads`] did: the attachment it names for the notice where the pass took the

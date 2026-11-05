@@ -567,6 +567,7 @@ impl RenderCommandEncoder {
         self.current.interlocked_writes = InterlockedStorage::ALL;
         self.called = true;
         self.drew = true;
+        self.read_colors = u32::MAX;
         // Its pixels are not bounded by a viewport the host knows of.
         self.drawn.everywhere();
         self.coverage.everywhere();
@@ -2080,6 +2081,7 @@ impl RenderExecution {
             // A pass that executes render commands keeps its attachments over buffers in place
             // (`kept_bytes.rs`), whatever its draws read.
             inputs_read: BTreeSet::new(),
+            read_colors: u32::MAX,
             // The encoder that executes the commands records the pass's load pass
             // (`defer_execution`); this one records only the commands' draws.
             rewrites_unused_bits: false,
