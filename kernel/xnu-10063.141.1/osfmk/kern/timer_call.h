@@ -214,7 +214,7 @@ enum running_timer {
 #if KPERF
 	RUNNING_TIMER_KPERF,
 #endif /* KPERF */
-	RUNNING_TIMER_IOSWITCH_KPROF,   /* ioswitch_kprof.c: the always-on kernel sampling profiler */
+	RUNNING_TIMER_IOSWITCH_KPROF,   /* ioswitch_kprof.c: the kernel sampling profiler (ioswitch-diag=3) */
 	RUNNING_TIMER_MAX,
 };
 

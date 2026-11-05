@@ -1,5 +1,6 @@
 /*
  * IOSwitch kernel sampling profiler: where the CPU goes, kernel_task included, in the unified log every 10 s.
+ * Off unless asked: boot-arg ioswitch-diag=3 (bit 1; kprof_init).
  *
  * Sampling. Each CPU takes one sample about every 4 ms from its own running timer (RUNNING_TIMER_IOSWITCH_KPROF).
  * Running timers are armed only while a non-idle thread runs, so an idle CPU is never woken for a sample and the cost
@@ -60,6 +61,7 @@
 #include <mach-o/loader.h>
 #include <machine/machine_routines.h>
 #include <os/log.h>
+#include <pexpert/pexpert.h>
 #include <vm/vm_shared_region.h>
 #include <arm/cpu_data_internal.h>
 #include <arm64/proc_reg.h>
@@ -1465,6 +1467,20 @@ kprof_function_starts(void)
 static void
 kprof_init(void)
 {
+	unsigned int diag = 0;
+
+	/*
+	 * r16-idle: on only when asked. Running, kprof costs a timer interrupt per 4 ms of CPU work, and every 10 s a
+	 * cross-call to every CPU (each runs the clock probe with interrupts masked), the merge and about 14 log lines,
+	 * the one periodic wakeup an idle system would take from this file. Asked for by bit 1 of the existing
+	 * ioswitch-diag boot-arg: ioswitch-diag=3 is the native text console (bit 0, IOSwitchDiag.c) plus kprof. Off, the
+	 * hooks (running timer, page-in waits) see kprof_ready false and return; the user trap line and the footprint
+	 * breakdown below are per event and stay on.
+	 */
+	if (!PE_parse_boot_argn("ioswitch-diag", &diag, sizeof(diag)) || !(diag & 2)) {
+		os_log(OS_LOG_DEFAULT, "IOSwitch kprof: off (ioswitch-diag=3 turns it on)");
+		return;
+	}
 	kprof_ncpus = MIN((unsigned int)ml_get_max_cpu_number() + 1, KPROF_MAX_CPUS);
 	nanoseconds_to_absolutetime(KPROF_PERIOD_NS, &kprof_period);
 	nanoseconds_to_absolutetime(KPROF_WINDOW_NS, &kprof_window);
