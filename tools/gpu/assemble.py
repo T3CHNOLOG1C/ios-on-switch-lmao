@@ -29,8 +29,7 @@ def main():
         shutil.copytree(args.raw, addons / 'TegraGM20BMetal.raw', copy_function=shutil.copyfile)
     shutil.copyfile(args.trustcache, out / 'TegraGM20BMetal.trustcache')
     shutil.copyfile(args.trust_json, out / 'trust.json')
-    # Regular files only (the inputs are followed, never linked) and the modes the old build gave: 755 for directories
-    # and the two signed binaries, 644 for everything else.
+    # Regular files only: the inputs are followed, never linked.
     executables = {addons / 'TegraGM20BMetal.bundle' / name for name in ('TegraGM20BMetal', 'libvulkan_nouveau.dylib')}
     for path in [out, *out.rglob('*')]:
         path.chmod(0o755 if path.is_dir() or path in executables else 0o644)
