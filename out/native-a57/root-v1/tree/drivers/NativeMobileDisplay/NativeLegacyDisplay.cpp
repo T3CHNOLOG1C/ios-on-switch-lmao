@@ -23,6 +23,9 @@
 #include "../TegraDisplayFlip/TegraBlockSwizzle.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
+#include "../TegraSMMU/TegraSMMU.h"
+#include "../TegraSMMU/TegraSMMUDomain.h"
+#include "DisplaySmmuProbe.h"
 #include "TegraDisplayPower.h"
 extern "C" __attribute__((noreturn)) void native_legacy_backend_guard(unsigned, void *, void *);
 extern "C" IOService *native_legacy_display_allocate(void);
@@ -492,7 +495,25 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     IOMemoryMap *scanMappings[kScanBuffers] = {};  // their write-combined views
     uint64_t scanAddresses[kScanBuffers] = {};     // their physical addresses
     TegraScanoutRing ring;                         // which surface is scanned, asked for, replaced, drawn
-    bool kickDeferred = false;                     // a swap is waiting for a frame end (or for the SC7 resume)
+    // The direct-scanout gate's probe (DisplaySmmuProbe.h; DESIGN-direct-scanout.md D1-D2): once, kProbeAfterFrames frame ends
+    // after window A first scanned a client frame, with nothing in flight, DC A's CRC unit and the display's SMMU domain (ASID
+    // TEGRA_SMMU_ASID_DISPLAY on the "dc" swgroup) prove window A reads the scanned buffer through an IOVA slot; then all of
+    // it is undone and one line says what was found. Swaps wait meanwhile (about 12 frames). Nothing scans through the SMMU
+    // after it: direct scanout is the next stage.
+    static constexpr uint32_t kDcCrcControl = 0x300, kDcCrcLatched = 0x329, kCrcOn = (1u << 3) | (1u << 2) | (1u << 0);
+    static constexpr uint32_t kDisplay0aTranslation = 1u << 1;  // client display0a (id 1) in TRANSLATION_ENABLE_0
+    static constexpr uint64_t kProbeSlot = 0x10000000ull;  // below DRAM (0x80000000): only a translation reaches it
+    static constexpr unsigned kProbeTables = 16, kProbeAfterFrames = 600;
+    IOBufferMemoryDescriptor *probeTables = nullptr;
+    uint64_t probeTablesPa = 0, probeAt = 0;
+    TegraSMMUDomain probeDomain;
+    DisplaySmmuProbe probe;
+    bool probeRan = false, probeUnderflow = false;
+    bool probeRequest = false;  // a probe START_ADDR request (to the slot, or back) not yet seen taken
+    int probeSurface = kNoBuffer;
+    uint32_t probePixel = 0, probeSwgroupWas = 0;
+    char probeLine[160] = {};
+    bool kickDeferred = false;                  // a swap is waiting for a frame end (or for the SC7 resume)
     uint64_t flipRequested = 0, flipWaits = 0;  // frameEnds when the last flip went out; swaps that waited for a buffer
     IOTimerEventSource *flipTimer =
         nullptr;  // a flip's deadline: a lost DC A interrupt would otherwise stall the screen
@@ -826,6 +847,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         else if ((status & kVblankInt) && rotationLatched && ring.pending != kNoBuffer)
             checkFlip(false);
         if ((status & kFrameEndInt) && tapeSettle) checkTapeSettled();
+        if (status & kFrameEndInt) probeFrameEnd();
         if ((status & kFrameEndInt) && stats) noteStatsWindow();
     }
     // At a frame end, under the gate: after 5 s, the one stats line for the window, then a new window. The line is formatted here and
@@ -1206,6 +1228,17 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             panic("IOSwitch display: ioswitch-scanout-double=1: cannot add the flip deadline timer");
         doubleBuffer = true;
         ring.reset(buffers);
+        // The SMMU probe's page tables (directory + tables), physically contiguous below 4 GiB; none: no probe.
+        probeTables = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+            kernel_task, IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryPhysicallyContiguous),
+            (uint64_t)kProbeTables * 4096, 0x00000000fffff000ULL);
+        IOByteCount run = 0;
+        probeTablesPa = probeTables ? probeTables->getPhysicalSegment(0, &run, kIOMemoryMapperNone) : 0;
+        if (!probeTablesPa || run < (uint64_t)kProbeTables * 4096 || probeTablesPa + run > (1ull << 32) ||
+            !probeTables->getBytesNoCopy()) {
+            IOLog("IOSwitch display: no contiguous %u KiB for the SMMU probe's tables: probe off\n", kProbeTables * 4);
+            OSSafeReleaseNULL(probeTables);
+        }
         kickDeferred = false;
     }
     // XNU's text console scrolls by window A's start address (video_console.c vc_tape) from here until the first client frame
@@ -1365,7 +1398,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // taken by the filter but not yet handled (the gate was busy, e.g. with a copy) only moves the deadline.
     void checkFlipDeadline()
     {
-        if (ring.pending == kNoBuffer || hwSuspended || scanoutStopped || gPanicRestore.panicking) return;
+        if ((ring.pending == kNoBuffer && !probeRequest) || hwSuspended || scanoutStopped || gPanicRestore.panicking)
+            return;
         if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE) & kFrameEndInt) {
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
             return;
@@ -1374,8 +1408,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         ioswitch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
         panic("IOSwitch display: window A flip to %#x not settled in %u ms (%llu frame ends since): STATE_CONTROL %#x "
               "INT_STATUS %#x MASK %#x ENABLE %#x, %s",
-              surfaceAddress(ring.pending), kFlipDeadlineMS, frameEnds - flipRequested, dc[kDcStateControl],
-              dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+              ring.pending != kNoBuffer ? surfaceAddress(ring.pending)
+              : probe.onIova            ? (uint32_t)kProbeSlot
+                                        : surfaceAddress(probeSurface),
+              kFlipDeadlineMS, frameEnds - flipRequested, dc[kDcStateControl], dc[kDcIntStatus], dc[kDcIntMask],
+              dc[kDcIntEnable], gic);
     }
     // Surface i's physical address (window A's START_ADDR); 0 is the boot framebuffer, also the pitch console's.
     uint32_t surfaceAddress(int i) const
@@ -1494,6 +1531,153 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         const int again = ring.recover(surfaceIndex(start));
         if (again != kNoBuffer) writeFlip(again);
         if (stats) ++stFallbacks;
+    }
+    // --- The SMMU probe (DisplaySmmuProbe.h), under the gate ---------------------------------------------------------
+    // Its I/O, as DisplaySmmuProbe::perform drives it.
+    struct ProbeIo {
+        NativeLegacyDisplay *d;
+        void tweakPixel() { d->probeWritePixel(d->probePixel ^ 0x00010101u); }
+        void restorePixel() { d->probeWritePixel(d->probePixel); }
+        bool attach() { return d->probeAttach(); }
+        void scan(bool iova)
+        {
+            volatile uint32_t *regs = d->dc;
+            regs[kDcStateAccess] = regs[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
+            regs[kDcWindowHeader] = kWindowASelect;
+            regs[kWinbufStartAddr] = iova ? (uint32_t)kProbeSlot : d->surfaceAddress(d->probeSurface);
+            regs[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
+            regs[kDcStateControl] = kGeneralActReq | kWinAActReq;
+            // Out until a frame end shows it taken (probeFrameEnd); a lost DC A interrupt panics at the flip deadline.
+            d->probeRequest = true;
+            d->flipRequested = d->frameEnds;
+            d->flipTimer->setTimeoutMS(kFlipDeadlineMS);
+        }
+        void detach() { tegra_smmu_detach(TEGRA_SMMU_ASID_DISPLAY, TEGRA_SMMU_DC_ASID); }
+        void crcOff()
+        {
+            d->dc[kDcCrcControl] = 0;
+            d->dc[kDcStateControl] = kGeneralUpdate;
+            d->dc[kDcStateControl] = kGeneralActReq;
+        }
+    };
+    // The scanned surface's first word (one pixel's low bits change; the write-combined view, then a barrier).
+    void probeWritePixel(uint32_t value)
+    {
+        *reinterpret_cast<volatile uint32_t *>(surfaceMapping(probeSurface)->getVirtualAddress()) = value;
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
+    // A window other than A that DC A would fetch for (windows B and C, WIN_ENABLE in their active options).
+    bool otherWindowEnabled()
+    {
+        static constexpr uint32_t kWindowBCSelect[] = {1u << 5, 1u << 6};
+        for (uint32_t select : kWindowBCSelect) {
+            const uint32_t access = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
+            dc[kDcStateAccess] = access | kReadMuxActive;
+            dc[kDcWindowHeader] = select;
+            const uint32_t options = dc[kWinOptions];
+            dc[kDcWindowHeader] = kWindowASelect;
+            dc[kDcStateAccess] = access;
+            if (options & kWinEnable) return true;
+        }
+        return false;
+    }
+    // The domain: every scan surface 1:1 (read-only: DC A only reads), the slot onto the scanned surface; cleaned to memory,
+    // then the "dc" swgroup pointed at it. False (probeLine says why) leaves the swgroup as it was.
+    bool probeAttach()
+    {
+        if (!probeDomain.init(probeTables->getBytesNoCopy(), probeTablesPa, kProbeTables)) {
+            snprintf(probeLine, sizeof(probeLine), "the table buffer cannot hold a directory");
+            return false;
+        }
+        bool ok = true;
+        for (unsigned i = 0; i < ring.buffers; ++i)
+            ok = ok && probeDomain.identity(surfaceAddress((int)i), kNativeBlockBytes, false);
+        uint64_t pages[64];
+        for (uint64_t off = 0; ok && off < kNativeBlockBytes; off += sizeof(pages) / sizeof(pages[0]) * 4096) {
+            uint32_t n = 0;
+            for (; n < 64 && off + n * 4096ull < kNativeBlockBytes; ++n)
+                pages[n] = surfaceAddress(probeSurface) + off + n * 4096ull;
+            ok = probeDomain.map(kProbeSlot + off, pages, n, false);
+        }
+        if (!ok) {
+            snprintf(probeLine, sizeof(probeLine), "more than %u SMMU tables needed", kProbeTables);
+            return false;
+        }
+        uintptr_t low, high;
+        probeDomain.takeDirty(&low, &high);
+        cleanInvalidate(probeTables->getBytesNoCopy(), (uint64_t)kProbeTables * 4096);
+        probeSwgroupWas = tegra_smmu_read(TEGRA_SMMU_DC_ASID);
+        return !tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
+                                  TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation, probeLine, sizeof(probeLine));
+    }
+    // Every DC A frame end: start the probe once things are quiet, or take its next step.
+    void probeFrameEnd()
+    {
+        if (probeRequest && !(dc[kDcStateControl] & (kGeneralActReq | kWinAActReq))) {
+            probeRequest = false;
+            if (!probe.active() && kickDeferred) {  // the probe's last request (back to the physical address) is in
+                kickDeferred = false;
+                kickSwapQueue();
+            }
+        }
+        if (!probe.active()) {
+            if (probeRan || !probeTables || !doubleBuffer || !rotationLatched || hwSuspended || scanoutStopped ||
+                tapeAttached || gPanicRestore.panicking)
+                return;
+            if (!probeAt) probeAt = frameEnds + kProbeAfterFrames;
+            if (frameEnds < probeAt || transferred || ring.pending != kNoBuffer || ring.drawing != kNoBuffer ||
+                ring.held != kNoBuffer || ring.superseded != kNoBuffer)
+                return;
+            probeRan = true;
+            probeSurface = ring.front;
+            if (otherWindowEnabled()) {
+                IOLog("IOSwitch display: SMMU probe not run: window B or C is enabled (it would fetch through the SMMU "
+                      "too)\n");
+                return;
+            }
+            probePixel = *reinterpret_cast<volatile uint32_t *>(surfaceMapping(probeSurface)->getVirtualAddress());
+            probeUnderflow = false;
+            dc[kDcCrcControl] = kCrcOn;
+            dc[kDcStateControl] = kGeneralUpdate;
+            dc[kDcStateControl] = kGeneralActReq;
+            probe.start();
+            return;
+        }
+        const bool requestOut = dc[kDcStateControl] & (kGeneralActReq | kWinAActReq);
+        const DisplaySmmuProbe::Action action = probe.frameEnd(dc[kDcCrcLatched], requestOut, probeUnderflow);
+        probeUnderflow = false;
+        ProbeIo io = {this};
+        if (probe.perform(action, io)) finishProbe();
+    }
+    // The probe is over (passed, or failed and undone): its line, and the swaps it held go.
+    void finishProbe()
+    {
+        if (probe.stage == DisplaySmmuProbe::kDone)
+            IOLog("IOSwitch display: SMMU probe ok: DC A reads window A through the SMMU (ASID %u, swgroup dc, MC %#x "
+                  "was "
+                  "%#x, TRANSLATION_ENABLE_0 %#x): CRC %#x by physical address, 1:1 and at IOVA %#llx, %#x with one "
+                  "pixel "
+                  "changed; back in bypass\n",
+                  (unsigned)TEGRA_SMMU_ASID_DISPLAY, (unsigned)TEGRA_SMMU_DC_ASID, probeSwgroupWas,
+                  tegra_smmu_read(TEGRA_SMMU_TRANSLATION_ENABLE_0), probe.base, (unsigned long long)kProbeSlot,
+                  probe.tweaked);
+        else
+            IOLog("IOSwitch display: SMMU probe failed at %s: %s%s%s (CRC base %#x again %#x pixel %#x last %#x); "
+                  "undone, direct scanout stays off\n",
+                  DisplaySmmuProbe::name(probe.failedAt), probe.why, probeLine[0] ? ": " : "", probeLine, probe.base,
+                  probe.again, probe.tweaked, probe.seen);
+        if (kickDeferred && !probeRequest) {  // else at the frame end that shows the last request taken
+            kickDeferred = false;
+            kickSwapQueue();
+        }
+    }
+    // The display is going away or to sleep with the probe running: undo now (registers still clocked).
+    void abortProbe(const char *reason)
+    {
+        if (!probe.active()) return;
+        ProbeIo io = {this};
+        probe.perform(probe.fail(reason), io);
+        finishProbe();
     }
     // A surface left the scan: a frame held for the flip slot goes out (double-buffered after a fallback), and a swap waiting for a
     // surface may go.
@@ -1662,6 +1846,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         }
         dc[kDcIntStatus] = underflow;
         if (stats) stUnderflows++;
+        if (probe.active()) probeUnderflow = true;
         if (++underflowRun < kUnderflowFrames) return;
         panic("IOSwitch display: window A underflowed %u frames in a row since the rotation: UFLOW_STATUS %#x OPTIONS "
               "%#x KIND %#x STRIDE %#x",
@@ -1687,6 +1872,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // tape, over the console's screen (it redraws it in the boot framebuffer first; the tape may be read once more, never written).
     void stopRotation()
     {
+        abortProbe("the display stopped");
         if (rotated) {
             gPanicRestore.armed = false;
             __asm__ volatile("dmb ish" ::: "memory");
@@ -1788,6 +1974,7 @@ public:
     // between the steps is honoured, not undone).
     void quiesceForSuspend()
     {
+        abortProbe("the display suspended (SC7)");
         resumeLit = !scanoutStopped;
         setScanout(false);
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
@@ -2069,6 +2256,10 @@ public:
         if (!bootTransfer || transferred || !logicalPM || !bootMapping || !primary) return;
         const OriginalLegacySwapRequest *request = pendingSwapRequest();
         if (!request || !isValidated(request)) return;
+        if (probe.active() || probeRequest) {  // window A is the SMMU probe's for a few frames
+            kickDeferred = true;
+            return;
+        }
         // Every surface is held (one scanned, one asked for, and with three a replaced one not yet known to be untaken, or a flip
         // out with two), or the controller is unclocked during SC7: the frame end that settles a latch, or the resume, kicks again.
         const bool noSurface = doubleBuffer && ring.target() == kNoBuffer;
