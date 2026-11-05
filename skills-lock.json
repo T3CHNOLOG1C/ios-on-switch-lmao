@@ -7,6 +7,12 @@
       "skillPath": "skills/build-systems/bazel/SKILL.md",
       "computedHash": "a9e09db82a4c3743fb5583e282d2c8519a40865a902d9677ca0b8cb71419fce2"
     },
+    "bro": {
+      "source": "backnotprop/bro",
+      "sourceType": "github",
+      "skillPath": "skills/bro/SKILL.md",
+      "computedHash": "7a32a6afcc9fd6afca39febc769b6dd789bdce407a6f4ab521d1261b21dee29e"
+    },
     "cpp-coding-standards": {
       "source": "affaan-m/ecc",
       "sourceType": "github",
@@ -18,6 +24,18 @@
       "sourceType": "github",
       "skillPath": "skills/cpp-testing/SKILL.md",
       "computedHash": "fbe37695056aa5cf9454f8cf6d883f38c3bca0324ca7aeb288db2fe3b887e97d"
+    },
+    "grill-me": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/productivity/grill-me/SKILL.md",
+      "computedHash": "9cdbb4b8f7a3aeaef82e6230c9e823500d4a8a1214c726cf342cf9829d34fc7d"
+    },
+    "humanizer": {
+      "source": "blader/humanizer",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "1e67c3a4a675bd0c961b1fd8ebb718174f9a61a547d9bedad2ade5eb99cce831"
     }
   }
 }
