@@ -46,8 +46,22 @@ class NativeSdAdmaTests(unittest.TestCase):
         self.assertIn("(r8(HOST_CONTROL) & ~DMA_SELECT) | (descriptors ? DMA_ADMA2 : 0)", issue)
         card = source.split("int NativeIOSwitchBlock::cardCommand(", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("w8(HOST_CONTROL, r8(HOST_CONTROL) & ~DMA_SELECT)", card)
-        # Writes stay at 256 KiB per command until boots have verified ADMA2 writes (proveWrite).
-        self.assertRegex(source, r"constexpr uint32_t kDirectWriteSectors = kSafeSectors;")
+        # r12-sdio: ADMA2 writes up to 1 MiB, each boot's first ones over 256 KiB read back (proveWrite); one that
+        # differs takes writes over 256 KiB back to the bounce path's 256 KiB SDMA commands (never SDMA over 256 KiB).
+        self.assertRegex(source, r"constexpr uint32_t kDirectWriteSectors = kBounceSectors;")
+        self.assertRegex(source, r"constexpr uint32_t kWriteChecks = 32, kLargeWriteChecks = 16;")
+        prove = body("bool NativeIOSwitchBlock::proveWrite(")
+        self.assertIn("if (sectors > kSafeSectors && largeWriteChecks) --largeWriteChecks;", prove)
+        self.assertRegex(prove, r"if \(sectors > kSafeSectors\) \{[^}]*writeSectors = kSafeSectors;")
+        self.assertIn("admaWrites = false;", prove)
+        self.assertIn("(admaWrites && sectors <= writeSectors)", body("void NativeIOSwitchBlock::beginBatch("))
+        self.assertIn("(sectors > kSafeSectors && largeWriteChecks)", body("void NativeIOSwitchBlock::endBatch("))
+        self.assertIn("const uint32_t limit = first->write ? writeSectors : maxSectors;",
+                      body("Request *NativeIOSwitchBlock::pickLocked("))
+        self.assertIn("const uint32_t limit = write ? kSafeSectors : sdmaReadSectors;",
+                      body("bool NativeIOSwitchBlock::bounceChain("))
+        self.assertIn("largeWriteChecks = checkBuffer ? kLargeWriteChecks : 0;", source)
+        self.assertIn("writeSectors = admaWrites ? kDirectWriteSectors : kSafeSectors;", source)
         # Cache maintenance is by line over the table's own ranges: no set/way or whole-cache operation.
         self.assertIsNone(re.search(r"dc\s+(c?isw|csw)|FlushPoC_Dcache\b|CleanPoC_Dcache\b", source))
 

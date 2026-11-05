@@ -87,12 +87,14 @@ constexpr uint32_t kSafeSectors = 256 * 1024 / kSector;
 // Most requests one merged command carries (APFS issues >= 4 KiB, so 256 still fills the buffer).
 constexpr uint32_t kMaxChain = 256;
 // r10-adma2: with ADMA2, reads go up to kBounceSectors per command (the cap SDMA had once its boundary check passed) and
-// writes up to kDirectWriteSectors. Writes stay at 256 KiB in this build: the cap existed for the SDMA boundary resume
-// (0d184ec), which ADMA2 never uses, but ADMA2 has not written on this controller yet. The first kWriteChecks ADMA2 writes
-// of every boot are read back and compared (proveWrite); once boots show them verified, kDirectWriteSectors can become
-// kBounceSectors (the bounce fallback already splits a longer chain into SDMA-sized pieces).
-constexpr uint32_t kDirectWriteSectors = kSafeSectors;
-constexpr uint32_t kWriteChecks = 32;
+// writes up to kDirectWriteSectors. The first kWriteChecks ADMA2 writes of every boot are read back and compared
+// (proveWrite). r12-sdio: writes up to 1 MiB too. The 256 KiB cap existed for the SDMA boundary resume (0d184ec), which
+// ADMA2 never uses; r7p5 verified its 32 ADMA2 writes, and a longer ADMA2 write differs only in its block count and
+// descriptor count. Still, the first kLargeWriteChecks writes over 256 KiB of every boot are read back too; one that
+// differs is written again through the bounce buffer and writes longer than 256 KiB take the bounce path's 256 KiB SDMA
+// commands from then on (writeSectors; the advertised maximum cannot shrink once IOBlockStorageDriver has read it).
+constexpr uint32_t kDirectWriteSectors = kBounceSectors;
+constexpr uint32_t kWriteChecks = 32, kLargeWriteChecks = 16;
 // r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (prepareDirect, proveHigh).
 constexpr uint8_t kPoison = 0x5a;
 // Descriptor table: 16 KiB, contiguous, below 4 GiB; 1024 descriptors, four times what a 1 MiB chain of scattered 4 KiB
@@ -422,8 +424,7 @@ class NativeIOSwitchBlock : public IOService {
     // r10-adma2: the ADMA2 descriptor table (one, rebuilt for every ADMA2 command; 16 KiB contiguous below 4 GiB), whether
     // ADMA2 carries data (setup()'s check passed and no ADMA error since) and writes (no write read back different), the
     // state of the last ADMA error (command()), SDMA's own read limit for the bounce path (kBounceSectors once setup()
-    // has checked the boundary resume), and the read-back of the first ADMA2 writes (writeChecks left; a
-    // kDirectWriteSectors buffer until then).
+    // has checked the boundary resume), and the read-back of the first ADMA2 writes (writeChecks left; into checkBuffer).
     IOBufferMemoryDescriptor *tableMemory = nullptr;
     IOSwitchAdmaTable table = {};
     uint64_t tablePA = 0;
@@ -432,6 +433,9 @@ class NativeIOSwitchBlock : public IOService {
     uint64_t admaErrorAddress = 0;
     uint32_t sdmaReadSectors = kSafeSectors;
     uint32_t writeChecks = 0;
+    // r12-sdio: the longest write chain one ADMA2 command carries (kDirectWriteSectors, or kSafeSectors once a longer one
+    // read back different), and the read-backs of writes over kSafeSectors left this boot.
+    uint32_t writeSectors = kSafeSectors, largeWriteChecks = 0;
     // r12-sdio: whether ADMA2 reaches pages above 4 GiB (IOSwitchAdma.h), and the SDMA copy the proofs (proveHigh,
     // proveWrite) compare against: kBounceBytes, freed once no proof is left (releaseChecks).
     IOSwitchAdmaHigh high = {};
@@ -1018,15 +1022,26 @@ bool NativeIOSwitchBlock::proveWrite(Request *first, uint32_t sectors)
         stats.verified++;
         if (writeChecks) --writeChecks;
         if (table.high) high.writeChecked();
+        if (sectors > kSafeSectors && largeWriteChecks) --largeWriteChecks;
         releaseChecks();
         return true;
     }
     uint32_t at = 0;
     while (bounce[at] == checkBuffer[at]) ++at;
-    IOLog("IOSwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
-          "again through the bounce buffer, ADMA2 writes off until reboot\n",
-          first->lba, sectors, table.high, at);
-    admaWrites = false;
+    if (sectors > kSafeSectors) {
+        // r12-sdio: only writes over 256 KiB are new: they take the bounce path's 256 KiB SDMA commands from now on.
+        IOLog(
+            "IOSwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
+            "again through the bounce buffer, writes over 256 KiB in 256 KiB commands until reboot\n",
+            first->lba, sectors, table.high, at);
+        writeSectors = kSafeSectors;
+    } else {
+        IOLog(
+            "IOSwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
+            "again through the bounce buffer, ADMA2 writes off until reboot\n",
+            first->lba, sectors, table.high, at);
+        admaWrites = false;
+    }
     releaseChecks();
     return false;
 }
@@ -1091,7 +1106,9 @@ bool NativeIOSwitchBlock::proveHigh(Request *first, uint32_t sectors)
 // The proofs' SDMA buffer, once neither the first writes nor ADMA2 above 4 GiB need one.
 void NativeIOSwitchBlock::releaseChecks()
 {
-    if (!checkBuffer || (admaWrites && writeChecks) || (adma && high.checking(admaWrites))) return;
+    if (!checkBuffer || (admaWrites && (writeChecks || (largeWriteChecks && writeSectors > kSafeSectors))) ||
+        (adma && high.checking(admaWrites)))
+        return;
     IOFreeData(checkBuffer, kBounceBytes);
     checkBuffer = nullptr;
 }
@@ -1119,7 +1136,8 @@ void NativeIOSwitchBlock::beginBatch(Batch &b)
     // r10-adma2: straight between the card and the requests' pages by ADMA2 when it is on (writes: unless proveWrite
     // turned them off) and the whole chain qualifies; through the bounce buffer otherwise, counted by why.
     b.why = kAdmaOk;
-    b.direct = adma && (!b.write || admaWrites) && (b.why = buildTable(first, sectors, b.write)) == kAdmaOk;
+    b.direct = adma && (!b.write || (admaWrites && sectors <= writeSectors)) &&
+               (b.why = buildTable(first, sectors, b.write)) == kAdmaOk;
     // r12-sdio: a read that reaches above 4 GiB while that is unproven is compared with SDMA before it completes.
     b.proving = b.direct && high.proofDue(b.write, table.high);
     if (!b.direct) return;
@@ -1164,7 +1182,10 @@ void NativeIOSwitchBlock::endBatch(Batch &b)
             result = kIOReturnIOError;
         } else if (b.proving) {
             if (!proveHigh(first, sectors)) result = kIOReturnIOError;
-        } else if ((writeChecks || high.writeCheckDue(write, table.high)) && write && !proveWrite(first, sectors)) {
+        } else if (write &&
+                   (writeChecks || high.writeCheckDue(write, table.high) ||
+                    (sectors > kSafeSectors && largeWriteChecks)) &&
+                   !proveWrite(first, sectors)) {
             b.direct = false;
         }
     }
@@ -1255,7 +1276,7 @@ Request *NativeIOSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chain
     }
     Request *last = first;
     uint32_t sectors = first->sectors, count = 1;
-    const uint32_t limit = first->write ? maxWriteSectors : maxSectors;
+    const uint32_t limit = first->write ? writeSectors : maxSectors;
     // A passing read's chain passes the older requests too: each request it takes must not overlap any of them either.
     auto overlapsOlder = [&](const Request *later) {
         if (!prev) return false;
@@ -1413,16 +1434,17 @@ void NativeIOSwitchBlock::logThroughput()
     snprintf(
         out, sizeof(out),
         "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
-        "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu vfy %llu 4G+ %s | "
+        "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu vfy %llu wmax %uK 4G+ %s | "
         "<=4K %llu%% seq %llu%% merged %llu q%u | cmds %llu irq %llu ovl %llu/%llu | err %llu adma %llu retune %llu | "
         "%s %u.%02u MHz | wait ms%s",
         requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
         stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
         writeRate / 10, writeRate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000, stats.direct, bounced, bounces,
-        perRequest / 10, perRequest % 10, stats.verified, highState, requests ? stats.small * 100 / requests : 0,
-        requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.maxQueued, stats.commands,
-        __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early, stats.overlapped, stats.errors,
-        stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
+        perRequest / 10, perRequest % 10, stats.verified, writeSectors * kSector / 1024, highState,
+        requests ? stats.small * 100 / requests : 0, requests ? stats.sequential * 100 / requests : 0, stats.merged,
+        stats.maxQueued, stats.commands, __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early,
+        stats.overlapped, stats.errors, stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10,
+        classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
 }
 
@@ -2247,7 +2269,10 @@ bool NativeIOSwitchBlock::setup()
             maxWriteSectors = kDirectWriteSectors;
             checkBuffer = static_cast<uint8_t *>(IOMallocData(kBounceBytes));
             writeChecks = checkBuffer ? kWriteChecks : 0;
+            largeWriteChecks = checkBuffer ? kLargeWriteChecks : 0;
             admaWrites = checkBuffer != nullptr;
+            // Writes over 256 KiB only by ADMA2 with their read-backs; without the buffer for those, 256 KiB commands.
+            writeSectors = admaWrites ? kDirectWriteSectors : kSafeSectors;
             // Without the buffer nothing above 4 GiB can be proven: it stays below.
             if (!checkBuffer && high.state == IOSwitchAdmaHigh::kProving) high.refuse();
             static const char *const states[] = {" (above 4 GiB: proven by the first reads that reach there)", "",
