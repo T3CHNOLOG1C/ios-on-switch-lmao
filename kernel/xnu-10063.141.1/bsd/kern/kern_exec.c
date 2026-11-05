@@ -5333,6 +5333,11 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 	}
 #endif /* defined(HAS_APPLE_PAC) */
 
+	/* IOSwitch: the boot band for execve() too (xpcproxy may exec the daemon in place; ioswitch_boot_band.c). */
+	if (!error && imgp->ip_new_thread != THREAD_NULL && imgp->ip_strings != NULL) {
+		ioswitch_boot_band_spawned(new_task, imgp->ip_strings + strlen(EXECUTABLE_KEY));
+	}
+
 	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
 	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
 		proc_knote(p, NOTE_EXEC);

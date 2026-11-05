@@ -43,7 +43,7 @@ static LCK_GRP_DECLARE(band_lck_grp, "ioswitch_boot_band");
 static LCK_MTX_DECLARE(band_lock, &band_lck_grp);
 static bool          band_closed;
 static uint64_t      band_ids[BAND_MAX];
-static unsigned int  band_count, band_refused;
+static unsigned int  band_count, band_refused, band_seen;
 static thread_call_t band_call;
 
 /* Widget extensions (WidgetKit .appex): rendered by chronod for the home screen after it is up. */
@@ -81,7 +81,11 @@ ioswitch_boot_band_spawned(task_t task, const char *path)
 {
 	uint64_t now_ns;
 
-	if (os_atomic_load(&band_closed, relaxed) || path == NULL || !band_member(path)) {
+	if (os_atomic_load(&band_closed, relaxed) || path == NULL) {
+		return;
+	}
+	os_atomic_inc(&band_seen, relaxed);
+	if (!band_member(path)) {
 		return;
 	}
 	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
@@ -151,6 +155,6 @@ ioswitch_boot_band_lift(const char *why)
 	}
 	absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
 	os_log(OS_LOG_DEFAULT, "IOSwitch boot band: closed at %llu.%llu s of uptime (%s): %u processes held at background "
-	    "CPU priority, %u still running put back, %u not held (table full)", now_ns / NSEC_PER_SEC,
-	    now_ns % NSEC_PER_SEC / 100000000, why, members, count, band_refused);
+	    "CPU priority, %u still running put back, %u not held (table full); %u execs seen", now_ns / NSEC_PER_SEC,
+	    now_ns % NSEC_PER_SEC / 100000000, why, members, count, band_refused, os_atomic_load(&band_seen, relaxed));
 }
