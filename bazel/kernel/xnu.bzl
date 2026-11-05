@@ -1,9 +1,8 @@
-"""XNU: libfirehose_kernel.a into the kernel SDK root, the XNU build (compile + the exact link command), the final link.
+"""XNU's libfirehose_kernel.a, built into the kernel SDK root (libdispatch's firehose sources, Xcode's xcodebuild).
 
 The SDK root itself is kernel/xnu-<version>:sdkroot (kernel/rules/xnu.bzl), one directory of it the tree's fakeroot_headers."""
 
-load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "python", "run_tool", "setting", "workspace_root")
-load(":layout.bzl", "TREE_ROOT")
+load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "run_tool", "setting", "workspace_root")
 
 # XNU's code (not headers, makefiles, MIG .defs or config files): libdispatch's firehose build never reads it, so an edit
 # inside an XNU function does not rebuild libfirehose_kernel.a. (installhdrs keeps all of XNU: its setup step checks that
@@ -52,70 +51,6 @@ kernel_firehose = rule(
         "sdkroot": attr.label(mandatory = True, allow_single_file = True),
         "xnu": attr.label(mandatory = True),
         "libdispatch": attr.label(default = "@libdispatch//:all"),
-    }),
-    toolchains = [PY_TOOLCHAIN],
-)
-
-XnuInfo = provider(
-    doc = "An XNU build: its object root (objects, compile records, exported headers) and its recorded link.",
-    fields = ["objroot", "link", "owner_header", "sdkroot"],
-)
-
-def _xnu_build_impl(ctx):
-    objroot = ctx.actions.declare_directory("build/xnu/ios-obj")
-    owner = ctx.actions.declare_file("build/xnu/owner-data-volume.h")
-    link = ctx.actions.declare_file("build/xnu/link.json")
-    log = ctx.actions.declare_file("build/xnu/build.log")
-    run_tool(
-        ctx,
-        "xnu_build.py",
-        [
-            "--xcode-env",
-            ctx.file._xcode_env.path,
-            "--xnu",
-            _xnu_dir(ctx.attr.xnu),
-            "--sdkroot",
-            ctx.file.sdkroot.path,
-            "--options",
-            ctx.file.options.path,
-            "--tree-root",
-            TREE_ROOT or ".",
-            "--out",
-            objroot.path,
-            "--owner-header",
-            owner.path,
-            "--link-json",
-            link.path,
-            "--log",
-            log.path,
-            "--path-root",
-            setting(ctx, "_path_root"),
-            "--bin-dir",
-            ctx.bin_dir.path,
-            "--build-date",
-            setting(ctx, "_build_date"),
-            "--builder",
-            setting(ctx, "_builder"),
-        ],
-        depset([ctx.file.sdkroot, ctx.file.options] + ctx.files.xnu + ctx.files.headers),
-        [objroot, owner, link, log],
-        "XnuBuild",
-        "Compiling XNU (make)",
-    )
-    return [
-        DefaultInfo(files = depset([objroot])),
-        OutputGroupInfo(log = depset([log])),
-        XnuInfo(objroot = objroot, link = link, owner_header = owner, sdkroot = ctx.file.sdkroot),
-    ]
-
-xnu_build = rule(
-    implementation = _xnu_build_impl,
-    doc = "Compiles XNU with make (tools/kernel/xnu_build.py); the link is kernel_link's.",
-    attrs = dict(KERNEL_TOOL_ATTRS, **{
-        "xnu": attr.label(mandatory = True),
-        "sdkroot": attr.label(mandatory = True, allow_single_file = True),
-        "options": attr.label(mandatory = True, allow_single_file = [".json"]),
-        "headers": attr.label_list(allow_files = True, doc = "Tree files XNU's patched sources include."),
     }),
     toolchains = [PY_TOOLCHAIN],
 )

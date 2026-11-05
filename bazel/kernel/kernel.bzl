@@ -27,7 +27,6 @@ load("@xcode//:defs.bzl", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
 load("//bazel/platforms:transitions.bzl", "kernel_transition")
 load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "run_tool")
 load(":layout.bzl", "KERNEL_PACKAGE", "TREE_ROOT")
-load(":xnu.bzl", "XnuInfo")
 
 KernelObjectsInfo = provider(
     doc = "Objects in link order, and the original kexts they need prelinked.",
@@ -499,69 +498,6 @@ stage_files = rule(
     doc = "Places files at paths below this package's output directory (e.g. pinned headers at build/<dir>/, where " +
           "the CMake flow's -I flags expected them).",
     attrs = {"files": attr.label_keyed_string_dict(allow_files = True)},
-)
-
-def _kernel_link_impl(ctx):
-    xnu = ctx.attr.xnu[XnuInfo]
-    out = ctx.actions.declare_file("build/xnu/mach.development.bcm2837.unstripped.noctf")
-    if len(ctx.attr.inputs) != len(ctx.attr.modes):
-        fail("inputs and modes must pair up")
-    specs, files = [], []
-    for target, mode in zip(ctx.attr.inputs, ctx.attr.modes):
-        if KernelObjectsInfo in target:
-            items = target[KernelObjectsInfo].objects
-        else:
-            items = target.files.to_list()
-            archives = [f for f in items if f.extension == "a"]
-            if len(items) > 1 and len(archives) == 1:
-                items = archives
-        if len(items) != 1:
-            fail("{}: link input {} must be one file (or have one .a)".format(ctx.label, target.label))
-        specs.append(mode + ":" + items[0].path)
-        files += items
-    specs = ["lib-dir:" + xnu.sdkroot.path + "/usr/local/lib/kernel", "lib:firehose_kernel"] + specs
-    run_tool(
-        ctx,
-        "link.py",
-        [
-            "--xcode-env",
-            ctx.file._xcode_env.path,
-            "--link-json",
-            xnu.link.path,
-            "--objroot",
-            xnu.objroot.path,
-            "--sdkroot",
-            xnu.sdkroot.path,
-            "--output",
-            out.path,
-            "--bin-dir",
-            ctx.bin_dir.path,
-        ] + specs,
-        depset([xnu.objroot, xnu.link, xnu.sdkroot] + files),
-        [out],
-        "KernelLink",
-        "Linking XNU with the ioswitch archives",
-    )
-    prelink, cuts, deferred = [], [], []
-    for target in ctx.attr.inputs:
-        if KernelObjectsInfo in target:
-            prelink += target[KernelObjectsInfo].prelink
-            cuts += target[KernelObjectsInfo].cuts
-            deferred += target[KernelObjectsInfo].deferred
-    return [
-        DefaultInfo(files = depset([out])),
-        KernelObjectsInfo(objects = [out], prelink = prelink, cuts = cuts, deferred = deferred),
-    ]
-
-kernel_link = rule(
-    implementation = _kernel_link_impl,
-    doc = "XNU's recorded kernel link with LD_KERNEL_ARCHIVES = inputs (modes: force_load or plain), in order.",
-    attrs = dict(KERNEL_TOOL_ATTRS, **{
-        "xnu": attr.label(mandatory = True, providers = [XnuInfo]),
-        "inputs": attr.label_list(allow_files = True),
-        "modes": attr.string_list(),
-    }),
-    toolchains = [PY_TOOLCHAIN],
 )
 
 def _kernel_prelink_impl(ctx):

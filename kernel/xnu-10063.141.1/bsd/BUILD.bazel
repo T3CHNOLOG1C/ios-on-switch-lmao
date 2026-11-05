@@ -65,7 +65,7 @@ filegroup(
     ),
 )
 
-# kern_exec.c's -include (tools/kernel/xnu_build.py made it from build-options.json: the scratch Data volume the
+# kern_exec.c's -include (make's xnu_build.py made it from build-options.json: the scratch Data volume the
 # owner-data mount selects, XNU_OWNER_DATA_MOUNT=1 with XNU_NATIVE_RAM_BLOCK=1).
 write_file(
     name = "owner_header",

@@ -4,7 +4,7 @@
                                      as errors. One action per translation unit, so an unchanged unit is never checked
                                      twice (and the disk cache shares results between checkouts).
 
-The aspect follows the build graph from targets (ATTRS: cc deps, kernel_archive members, kernel_link inputs, the boot
+The aspect follows the build graph from targets (ATTRS: cc deps, kernel_archive members, xnu_kernel inputs, the boot
 package's overlay, ...), so each unit is checked in the configuration the build compiles it in (a kernel driver in
 //bazel/platforms:ios_kernel_arm64) with the flags its compile action gets: the cc_toolchain's features plus the
 target's copts, defines and include paths. Two toolchain features are left out of that feature configuration, with no

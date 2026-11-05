@@ -62,7 +62,7 @@ def xnu_sources(name):
     )
 
 # Steps make's flow had besides the recorded ones: the empty directories the compiles' -I name (a marker each, as
-# tools/kernel/xnu_build.py made), and the sanitizer ignore list the kernel recipes name (san/Makefile's sed).
+# make's xnu_build.py made), and the sanitizer ignore list the kernel recipes name (san/Makefile's sed).
 _OBJ_EXTRA = [
     {"content": "", "kind": "write", "out": "o/EXPORT_HDRS/libsa/.keep"},
     {"kind": "ignorelist", "out": "o/san/kasan-blacklist-arm64", "srcs": [

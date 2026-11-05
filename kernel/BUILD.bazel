@@ -3,7 +3,7 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/kernel:inputs.bzl", "tool_output")
 load("//bazel/kernel:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_prelink", "stage_files")
 load("//bazel/kernel:sdk.bzl", "outer_headers")
-load("//bazel/kernel:xnu.bzl", "kernel_firehose", "xnu_build")
+load("//bazel/kernel:xnu.bzl", "kernel_firehose")
 load("//kernel/rules:xnu.bzl", "xnu_tree")
 load("//kernel/xnu-10063.141.1/config:xnu_kernel.bzl", "xnu_kernel")
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -31,8 +31,6 @@ alias(
     name = "sdk",
     actual = select({":xnu_10063_141_1": "//kernel/xnu-10063.141.1:sdk"}),
 )
-
-exports_files(["build-options.json"])
 
 # Headers every driver may include besides its own (bazel/kernel/kernel.bzl EXTRA_HEADERS).
 cc_library(
@@ -106,7 +104,7 @@ filegroup(
 
 # --- The kernel SDK root (the CMake flow's .cache/fakeroot) -------------------------------------------------------
 # kernel/xnu-<version>:sdkroot (XNU's installhdrs as Bazel actions, one file each) as one directory, for the tools
-# that still take a directory (firehose, the XNU make build, corecrypto, libpthread).
+# that still take a directory (firehose, corecrypto, libpthread).
 xnu_tree(
     name = "fakeroot_headers",
     src = "//kernel/xnu-10063.141.1:sdkroot",
@@ -116,21 +114,6 @@ xnu_tree(
 kernel_firehose(
     name = "fakeroot",
     sdkroot = ":fakeroot_headers",
-    xnu = "//kernel/xnu-10063.141.1:srcs",
-)
-
-# --- XNU ------------------------------------------------------------------------------------------------------------
-# The kernel's XNU options are the smp pass's build-options.json (its archive paths are unused: kernel_link names the
-# archives built here).
-xnu_build(
-    name = "xnu",
-    headers = [
-        "//diagnostics/ioswitch:headers",
-        "//drivers/NativeIOSwitchBlock:headers",
-        "//kits/VerifiedRoot:headers",
-    ],
-    options = "//kernel:build-options.json",
-    sdkroot = ":fakeroot",
     xnu = "//kernel/xnu-10063.141.1:srcs",
 )
 

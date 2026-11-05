@@ -42,7 +42,7 @@ RECIPES = {
     "RELEASE": RELEASE_RECIPES,
 }
 
-# make's spellings (main's kernel, built by tools/kernel/xnu_build.py with -ffile-prefix-map=<execroot>=/ioswitch).
+# make's spellings (main's kernel, built by make's xnu_build.py with -ffile-prefix-map=<execroot>=/ioswitch).
 _ROOT = "/ioswitch"
 _MAKE_OBJ = "out/native-a57/root-v1/tree/build/xnu/ios-obj"
 _MAKE_BIN = "bazel-out/darwin_arm64-fastbuild/bin"

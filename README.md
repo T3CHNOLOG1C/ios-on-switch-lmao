@@ -154,7 +154,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//:gpu` (= `//gpu:bundle`) | `bazel-bin/gpu/bundle`: `ngpu/addons/{TegraGM20BMetal.bundle, .m2v-seed, .raw/pack.bin}`, `TegraGM20BMetal.trustcache`, `trust.json` |
 | `//gpu:trustcache` | The bundle's trust cache module. `//:boot` appends it to the kernel's static trust cache |
 | `//gpu/nvk:ios`, `//gpu/nvk:host` | NVK (`libvulkan_nouveau.dylib` + `.source`) and its macOS host twin: Mesa vendored in `third_party/mesa` (77452b90 + ioswitch's commits), built natively, one action per compile and generator |
-| `//drivers/<Driver>` | One driver's package: its objects (e.g. `//drivers/SwitchUSB`), headers (`:headers`, `:hdrs`) and tests. `//kernel:xnu` is the XNU objroot; `//kernel:kernel_unprelinked` is the link |
+| `//drivers/<Driver>` | One driver's package: its objects (e.g. `//drivers/SwitchUSB`), headers (`:headers`, `:hdrs`) and tests. XNU's objects are `//kernel/xnu-10063.141.1/<component>`; `//kernel:kernel_unprelinked` is the link |
 | `//ipsw:kernelcache`, `//ipsw:static_system_trust` | The original kernelcache (decompressed) and the root+OS-cryptex trust bundle, from the IPSW |
 | `@ipsw//:os`, `:system_cryptex`, `:app_cryptex`, … | The members of the IPSW kind `--//bazel/ipsw:kind` selects (`bazel/ipsw/pins.bzl`, one table of kinds). Deflated ones are inflated by a build action (`//bazel/ipsw:<kind>_<role>`) |
 | `//install:sd`, `//install:artifacts` | SD-card install and what it writes |

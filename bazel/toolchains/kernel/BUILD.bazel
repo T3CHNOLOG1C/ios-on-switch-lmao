@@ -2,7 +2,7 @@
 # //bazel/platforms:ios_kernel_arm64. Registered in MODULE.bazel; the kernel's cc targets reach it through
 # kernel_driver's transition (bazel/kernel/kernel.bzl).
 #
-#   bazel run //bazel/toolchains/kernel:update_recipes    regenerate recipes.bzl from XNU's compile records
+#   bazel run //bazel/toolchains/kernel:update_recipes    regenerate recipes.bzl from the native XNU build's tables
 load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -11,8 +11,11 @@ load(":config.bzl", "kernel_cc_toolchain_config")
 
 package(default_visibility = ["//visibility:public"])
 
-# recipes.bzl is generated (update_recipes), not formatted by hand.
-lint_files(exclude = ["recipes.bzl"])
+# recipes.bzl and recipes_release.bzl are generated (update_recipes), not formatted by hand.
+lint_files(exclude = [
+    "recipes.bzl",
+    "recipes_release.bzl",
+])
 
 kernel_cc_toolchain_config(
     name = "config",
@@ -56,15 +59,27 @@ toolchain(
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
 )
 
-# recipes.bzl from XNU's compile records, and the check that it is current (it fails after an XNU change that moves a
-# recipe's flags: run update_recipes and commit).
+# recipes.bzl (DEVELOPMENT) and recipes_release.bzl (RELEASE) from the native XNU build's tables (each recipe: the XNU
+# object whose flags a driver compiles with), and the check that they are current: it fails after a change to those
+# tables, or a new Xcode whose clang driver appends other flags; run update_recipes and commit.
+XNU = "kernel/xnu-10063.141.1"
+
 RECIPES = [
-    "--recipe=iokit_cxx=iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
-    "--recipe=iokit_cxx_generic=iokit/DEVELOPMENT/IOPlatformExpert.cpo.json:drop=-mcpu=:drop=-march=:drop=-flto",
-    "--recipe=osfmk_c=osfmk/DEVELOPMENT/arm_init.o.json",
-    "--recipe=bsd_c=bsd/DEVELOPMENT/bsd_init.o.json:keep_warnings",
-    "--recipe=mockfs_c=bsd/DEVELOPMENT/vfs_conf.o.json:keep_warnings:drop=-DMOCKFS=:drop=-UMOCKFS",
-    "--recipe=freestanding_c=osfmk/DEVELOPMENT/arm_init.o.json:strip_includes",
+    "--recipe=iokit_cxx=iokit/Kernel/IOPlatformExpert.cpp",
+    "--recipe=iokit_cxx_generic=iokit/Kernel/IOPlatformExpert.cpp:drop=-mcpu=:drop=-march=:drop=-flto",
+    "--recipe=osfmk_c=osfmk/arm/arm_init.c",
+    "--recipe=bsd_c=bsd/kern/bsd_init.c:keep_warnings",
+    "--recipe=mockfs_c=bsd/vfs/vfs_conf.c:keep_warnings:drop=-DMOCKFS=:drop=-UMOCKFS",
+    "--recipe=freestanding_c=osfmk/arm/arm_init.c:strip_includes",
+]
+
+RECIPE_TABLES = [
+    "//{}/config:recipes_development.bzl".format(XNU),
+    "//{}/config:recipes_release.bzl".format(XNU),
+    "//{}/bsd:objects.bzl".format(XNU),
+    "//{}/iokit:objects.bzl".format(XNU),
+    "//{}/osfmk:objects.bzl".format(XNU),
+    "@xcode//:xcode.env",
 ]
 
 py_test(
@@ -73,23 +88,30 @@ py_test(
     srcs = ["//tools/kernel:recipes.py"],
     args = [
         "--check",
-        "--objroot=$(rootpath //kernel:xnu)",
-        "--out=$(rootpath :recipes.bzl)",
+        "--tables=" + XNU,
+        "--xcode-env=$(rootpath @xcode//:xcode.env)",
+        "--out=DEVELOPMENT=$(rootpath :recipes.bzl)",
+        "--out=RELEASE=$(rootpath :recipes_release.bzl)",
     ] + RECIPES,
     data = [
         ":recipes.bzl",
-        "//kernel:xnu",
-    ],
+        ":recipes_release.bzl",
+    ] + RECIPE_TABLES,
     main = "//tools/kernel:recipes.py",
+    tags = ["requires-darwin"],
+    deps = ["//tools/kernel:common"],
 )
 
 py_binary(
     name = "update_recipes",
     srcs = ["//tools/kernel:recipes.py"],
     args = [
-        "--objroot=$(rootpath //kernel:xnu)",
-        "--out=bazel/toolchains/kernel/recipes.bzl",
+        "--tables=" + XNU,
+        "--xcode-env=$(rootpath @xcode//:xcode.env)",
+        "--out=DEVELOPMENT=bazel/toolchains/kernel/recipes.bzl",
+        "--out=RELEASE=bazel/toolchains/kernel/recipes_release.bzl",
     ] + RECIPES,
-    data = ["//kernel:xnu"],
+    data = RECIPE_TABLES,
     main = "//tools/kernel:recipes.py",
+    deps = ["//tools/kernel:common"],
 )

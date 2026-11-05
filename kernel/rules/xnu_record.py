@@ -5,7 +5,7 @@ files, conf/files, a script they run or Xcode; bazel test //kernel/xnu-<version>
 In a scratch directory, on a copy of kernel/xnu-<version>, it runs make as the earlier Bazel flow did:
   installhdrs  SDKROOT=macosx into a DSTROOT that already holds the SDK root's other parts (tools/kernel/sdkroot.py):
                the kernel SDK root (Kernel.framework, System.framework, usr/include, usr/local/include)
-  build        SDKROOT=iphoneos, once per kernel configuration (DEVELOPMENT, RELEASE; tools/kernel/xnu_build.py), the
+  build        SDKROOT=iphoneos, once per kernel configuration (DEVELOPMENT, RELEASE; make's xnu_build.py), the
                compiler replaced by `false` (make -k goes on): what the build writes besides objects
 Every tool that writes a header or a generated source is wrapped so that it logs its working directory, arguments and
 environment, and what it wrote: unifdef, installfile, mig, iig, and the scripts (doconf, makesyscalls.sh,
@@ -61,7 +61,7 @@ SCRIPT_ENV = [
     'MIGCOM',
 ]
 DARWIN = '23.6.0'
-# The make variables of tools/kernel/xnu_build.py that reach generated files (CFLAGS_EXTRA and the per-file flags only
+# The make variables of make's xnu_build.py that reach generated files (CFLAGS_EXTRA and the per-file flags only
 # reach objects).
 BUILD_VARS = [
     'SDKROOT=iphoneos',

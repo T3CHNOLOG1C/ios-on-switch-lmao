@@ -18,12 +18,11 @@ py_library(
     imports = ["."],
 )
 
-# The symbol names of XNU's own objects (corecrypto's and libpthread's namespacing).
+# The symbol names an archive defines (corecrypto's and libpthread's namespacing against the kernel's).
 py_library(
     name = "kernel_names",
     srcs = ["kernel_names.py"],
     imports = ["."],
-    deps = [":common"],
 )
 
 [py_binary(
@@ -32,7 +31,6 @@ py_library(
     deps = [":common"] + {
         "corecrypto": [":kernel_names"],
         "libpthread": [":kernel_names"],
-        "xnu_symbols": [":kernel_names"],
         "trust_bundle": [":im4p_lib"],
     }.get(tool, []),
 ) for tool in KERNEL_TOOLS]

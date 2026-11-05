@@ -43,8 +43,8 @@ def old_output_spelling(path):
     """The pre-move spelling of an output-directory-relative path (unchanged while nothing has moved).
 
     A moved package's outputs (the kernel package's, drivers/<X>'s, kits/<X>'s, diagnostics/ioswitch's, overlay's) were
-    the kernel tree package's: what the kernel link names them by, so its debug map keeps its paths. The Python twin is
-    tools/kernel/link.py's old_output_spelling: the two must stay in step.
+    the kernel tree package's: what the kernel link (kernel/xnu-<version>/config:xnu_kernel) names them by, so its
+    debug map keeps its paths.
 
     Args:
       path: a path below an output directory (a File's short_path).
