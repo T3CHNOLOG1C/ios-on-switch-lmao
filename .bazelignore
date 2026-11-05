@@ -22,9 +22,36 @@ out/native-a57/root-v1/tree/build
 out/native-a57/root-v1/tree/.cache
 out/native-a57/root-v1/tree/refer
 out/native-a57/root-v1/tree/.git-empty-unused
-out/switch/device-logs
-out/switch/raw-v24-firmware
-out/switch/cryptex-trustcaches
 .claude
 .git
 .agents
+# Device photos, logs and install receipts (nothing under out/switch is tracked).
+out/switch
+# The earlier passes, layouts and fixtures beside the kernel tree: only out/native-a57/root-v1/tree and
+# root-v1/passes/native-root-smp-v1 are tracked (the layout move takes even those out of out/).
+out/native-a57/amfi-audit
+out/native-a57/fixture
+out/native-a57/fixture-final
+out/native-a57/fixture-gic-up
+out/native-a57/fixture-kt120
+out/native-a57/ioswitch-diag
+out/native-a57/ioswitch-diag-v2
+out/native-a57/kernel
+out/native-a57/runs
+out/native-a57/sd-block-v1
+out/native-a57/root-v1/__pycache__
+out/native-a57/root-v1/adt-vnode-budget-v18
+out/native-a57/root-v1/media-input
+out/native-a57/root-v1/model-media
+out/native-a57/root-v1/policy-input
+out/native-a57/root-v1/prelink-memory-v21
+out/native-a57/root-v1/prelink-persistent-v17
+out/native-a57/root-v1/prelink-raw-v1
+out/native-a57/root-v1/tests
+out/native-a57/root-v1/user-fixture
+out/native-a57/root-v1/verified-root-host-tests
+out/native-a57/root-v1/passes/native-root-dma-v1
+out/native-a57/root-v1/passes/native-root-memory-v1
+out/native-a57/root-v1/passes/native-root-persistent-data-v1
+out/native-a57/root-v1/passes/native-root-rawsd
+out/native-a57/root-v1/passes/native-root-vmregions-v1

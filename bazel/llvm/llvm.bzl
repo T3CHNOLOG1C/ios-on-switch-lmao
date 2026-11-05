@@ -35,4 +35,7 @@ filegroup(
 )
 """.format(repr(["bin/" + tool for tool in TOOLS]), RESOURCE_HEADERS))
 
+    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
+
 llvm_tools = repository_rule(implementation = _llvm_impl)

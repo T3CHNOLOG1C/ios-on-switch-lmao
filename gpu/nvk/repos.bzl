@@ -85,6 +85,9 @@ def _mesa_source_impl(rctx):
 exports_files(["mesa.tar", "tree"], visibility = ["//visibility:public"])
 """.format(commit = MESA_COMMIT, tree = tree))
 
+    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
+
 mesa_source = repository_rule(implementation = _mesa_source_impl)
 
 def _rust_sysroot_impl(rctx):
@@ -99,6 +102,9 @@ def _rust_sysroot_impl(rctx):
 exports_files(["sysroot/bin/rustc", "sysroot/bin/cargo"])
 """)
 
+    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
+
 nvk_rust_sysroot = repository_rule(implementation = _rust_sysroot_impl)
 
 def _mesa_wraps_impl(rctx):
@@ -110,6 +116,9 @@ def _mesa_wraps_impl(rctx):
             sha256 = sha256,
         )
     rctx.file("BUILD.bazel", _ALL_FILES)
+
+    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
 
 mesa_wraps = repository_rule(implementation = _mesa_wraps_impl)
 
@@ -142,6 +151,9 @@ def _cargo_tool_source_impl(rctx):
 exports_files(["src/Cargo.toml"])
 """.format(crate = crate, version = version, count = count))
 
+    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
+
 cargo_tool_source = repository_rule(
     implementation = _cargo_tool_source_impl,
     attrs = {
@@ -161,6 +173,9 @@ def _libclang_impl(rctx):
         fail("extracting libclang: " + result.stderr)
     rctx.delete(archive)
     rctx.file("BUILD.bazel", _ALL_FILES)
+
+    # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.
+    return rctx.repo_metadata(reproducible = True)
 
 nvk_libclang = repository_rule(implementation = _libclang_impl)
 

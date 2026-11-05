@@ -1,30 +1,54 @@
-# ioswitch Bazel defaults. Personal overrides go in user.bazelrc (ignored by git), imported last.
+# ioswitch Bazel defaults, one reason per flag. A normal build needs nothing else; personal overrides (a remote cache,
+# local tuning) go in user.bazelrc (ignored by git), imported last.
 
 # --- Caches: content-addressed, outside the output base, shared by every checkout and worktree ---------------------
-# Repository cache: every download (toolchains, Apple OSS tarballs, IPSW members) by sha256. Hardlinked into the
-# external repositories on a hit, so a multi-GB IPSW member is stored once.
+# Downloads by sha256 (toolchains, Apple OSS tarballs, IPSW members). Its contents/ directory is also the repository
+# contents cache: every repository whose rule declares itself reproducible (http_archive with a sha256, LLVM, Mesa,
+# Rust, ...) is handed to a fresh output base already extracted, instead of re-extracting (the LLVM tarball alone
+# took 136 s per output base, three times over).
 common --repository_cache=~/Library/Caches/ioswitch-bazel/repository
+# Hardlink cached downloads into the external repositories instead of copying them (a multi-GB IPSW member once).
 common --experimental_repository_cache_hardlinks
-# Disk cache: action results by action key (a fresh output base or a `bazel clean` reuses them). Size-capped: Bazel
-# deletes the least recently used entries above the cap once it has been idle for gc_idle_delay.
+# Action results by action key: a fresh output base, a new worktree or `bazel clean` reuses them. With a disk cache
+# Bazel builds without the bytes: only top-level outputs land in the output base (one is ~1 GB, not 5).
 common --disk_cache=~/Library/Caches/ioswitch-bazel/disk
-common --experimental_disk_cache_gc_max_size=10G
+# The cap the least recently used entries are deleted above, once Bazel has been idle for gc_idle_delay. One full
+# working set (//:boot //:gpu and the tests) is ~4.5 GB and each agent branch adds 0.3-1 GB of its own (an XNU object
+# root, a kernel, a package): 16G holds main and about ten branches in flight, where 10G evicted one agent's work per
+# build. (The disk is the limit: raise it when there is room.)
+common --experimental_disk_cache_gc_max_size=16G
 common --experimental_disk_cache_gc_max_age=30d
 common --experimental_disk_cache_gc_idle_delay=2m
 
 # --- Hermeticity -------------------------------------------------------------------------------------------------
-# Actions see a fixed PATH/env (the only host inputs are declared in bazel/host: Xcode and its SDKs), run sandboxed
-# (darwin-sandbox: read-only inputs, no network), and repository rules may only fetch what MODULE.bazel pins.
+# Actions see a fixed PATH and none of the shell's environment.
 common --incompatible_strict_action_env
-build --spawn_strategy=sandboxed,local
+# Every action runs sandboxed (darwin-sandbox: read-only declared inputs, declared outputs only). No action needs an
+# unsandboxed fallback, so there is none: a new one that tries to read undeclared inputs fails instead of passing.
+build --spawn_strategy=sandboxed
+# No network inside actions (repository rules fetch; actions never do).
 build --sandbox_default_allow_network=false
+# Reuse sandbox directory trees between actions: faster sandbox setup, the same isolation.
 build --reuse_sandbox_directories
+# External repositories appear in runfiles once (under their own name), not also under _main/external.
 build --nolegacy_external_runfiles
-# Fail early on a moved or tampered download instead of using it.
+# A moved or tampered download fails instead of being used (MODULE.bazel.lock is checked, never rewritten).
 common --lockfile_mode=error
+# Transient download failures retry instead of failing the build.
 common --experimental_repository_downloader_retries=3
-# Never stamp (no build time, user or host in any output).
+# Never stamp: no build time, user or host in any output (Bazel's default, stated: the kernel's version string relies
+# on it; its date and builder are //bazel/kernel:build_date and :builder, constants).
 build --nostamp
+
+# --- Speed ------------------------------------------------------------------------------------------------------
+# Learn what changed from the file system's events (FSEvents) instead of checking every source file: no-op builds.
+common --watchfs
+# Do not stat every file of every external repository and every output before each command (a server tracking ~1M
+# nodes spent 7-17 s per command on it). Only Bazel writes either: no repository here is edited in place (no
+# local_repository or symlinked working directory; @pinned, @xcode and @gpu_device_data are checked by sha256 or
+# rctx.watch, which still re-fetches them), and bazel-out is Bazel's. A hand edit of either goes unnoticed.
+common --noexperimental_check_external_repository_files
+common --noexperimental_check_output_files
 
 # --- Output ------------------------------------------------------------------------------------------------------
 build --show_result=30
