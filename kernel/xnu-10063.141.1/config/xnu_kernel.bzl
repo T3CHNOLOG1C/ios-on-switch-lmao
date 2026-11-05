@@ -9,7 +9,7 @@ objects are linked from a tree of links laid out as make's object root was, with
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
 load("//bazel/kernel:common.bzl", "XCODE_EXECUTION")
 load("//bazel/kernel:kernel.bzl", "KernelObjectsInfo")
-load("//bazel/kernel:layout.bzl", "old_spelling")
+load("//bazel/kernel:layout.bzl", "KERNEL_PACKAGE", "OLD_TREE")
 load(":recipes_development.bzl", "DEVELOPMENT_LINK")
 load(":xnu_objects.bzl", "XnuObjectsInfo")
 
@@ -149,6 +149,30 @@ xnu_exports = rule(
     },
 )
 
+# The kernel tree's own subpackages before the layout move: their outputs were below OLD_TREE/<package>/ already.
+_OLD_SUBPACKAGES = ("drivers/NativeMetal", "drivers/TegraGM20BMetal")
+
+def _old_output_spelling(path):
+    """The pre-move spelling of an output-directory-relative path: tools/kernel/link.py's old_output_spelling.
+
+    A moved package's outputs (the kernel package's, drivers/<X>'s, kits/<X>'s, diagnostics/ioswitch's, overlay's) were
+    the kernel tree package's, and the link names them so (the debug map's paths). Identity while nothing has moved.
+    """
+    if KERNEL_PACKAGE == OLD_TREE:
+        return path
+    parts = path.split("/")
+    if parts[0] == KERNEL_PACKAGE:
+        return "/".join([OLD_TREE] + parts[1:])
+    if len(parts) > 2 and parts[0] in ("drivers", "kits"):
+        if "/".join(parts[:2]) in _OLD_SUBPACKAGES:
+            return OLD_TREE + "/" + path
+        return "/".join([OLD_TREE] + parts[2:])
+    if parts[:2] == ["diagnostics", "ioswitch"]:
+        return "/".join([OLD_TREE] + parts[2:])
+    if parts[0] == "overlay":
+        return "/".join([OLD_TREE] + parts[1:])
+    return path
+
 # --- The link ----------------------------------------------------------------------------------------------------
 def _xnu_kernel_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
@@ -189,7 +213,7 @@ def _xnu_kernel_impl(ctx):
             fail("{}: link input {} must be one file (or have one .a)".format(ctx.label, target.label))
 
         # Named in the link tree as before the layout move (bazel/kernel/layout.bzl): the debug map keeps its paths.
-        at = old_spelling(items[0].path, ctx.bin_dir.path)[len(items[0].root.path) + 1:] if items[0].root.path else items[0].path
+        at = _old_output_spelling(items[0].short_path)
         farm.append((items[0], at))
         files.append(items[0])
         if mode == "force_load":

@@ -1,10 +1,11 @@
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/kernel:inputs.bzl", "tool_output")
-load("//bazel/kernel:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_link", "kernel_prelink", "stage_files")
+load("//bazel/kernel:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_prelink", "stage_files")
 load("//bazel/kernel:sdk.bzl", "outer_headers")
 load("//bazel/kernel:xnu.bzl", "kernel_firehose", "xnu_build")
 load("//kernel/rules:xnu.bzl", "xnu_tree")
+load("//kernel/xnu-10063.141.1/config:xnu_kernel.bzl", "xnu_kernel")
 load("//bazel/lint:defs.bzl", "lint_files")
 # The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
 
@@ -374,8 +375,9 @@ kernel_archive(
     members = ["//kits/qemu:LinkStubs"],
 )
 
-# --- Link: XNU's recorded link with LD_KERNEL_ARCHIVES as the XNU build script assembled it for these options ----------
-kernel_link(
+# --- Link: XNU's native objects (kernel/xnu-10063.141.1/config:xnu_kernel.bzl), LD_KERNEL_ARCHIVES as the XNU build
+# script assembled it for these options
+xnu_kernel(
     name = "kernel_unprelinked",
     inputs = [
         ":corecrypto",
@@ -407,7 +409,6 @@ kernel_link(
         "force_load",
         "plain",
     ],
-    xnu = ":xnu",
 )
 
 # --- Prelink: Apple's original kexts (the V20 roots, plus every driver's prelink list) --------------------------------
