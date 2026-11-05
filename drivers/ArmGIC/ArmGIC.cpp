@@ -115,8 +115,8 @@ class ArmGIC : public IOInterruptController {
         return intid == kDisplayAIntid || intid == kGpuStallIntid || intid == kGpuNonstallIntid;
     }
     // GICv2 breaks a priority tie by lowest INTID, so with one priority for every SPI the GPU fence lines (189/190)
-    // lost CPU0 to any lower-numbered SPI also pending: during A2DP pairing UART-D (122) kept the GPU fence pending
-    // for over a second and backboardd's waitFence panicked (r4d, 10-31).
+    // lose CPU0 to any lower-numbered SPI also pending: during A2DP pairing UART-D (122) kept the GPU fence pending
+    // for over a second and backboardd's waitFence panicked.
     uint8_t priorityFor(uint32_t intid) const
     {
         if (isFrame(intid)) return kFramePriority;
