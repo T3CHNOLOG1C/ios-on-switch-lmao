@@ -1306,10 +1306,7 @@ bool SwitchThermal::start(IOService *provider)
     if (perfTrace) clock_interval_to_deadline(kTraceDelayMS, kMillisecondScale, &perfHoldUntil);
     // switch-cpu-mode=pll|dfll; without it the DFLL with the on-demand governor (see the top of the file).
     char mode[8] = "";
-    // r7z: the DFLL fixed at its 1785 MHz row, the on-demand governor (its perfcontrol hooks) off, while the r7y
-    // slowdown (every core 100% busy for minutes after boot) is bisected; switch-cpu-mode=dfll is the same thing.
-    dfllMode = true;
-    governed = false;
+    dfllMode = governed = true;
     if (PE_parse_boot_arg_str("switch-cpu-mode", mode, sizeof(mode))) {
         dfllMode = strcmp(mode, "pll") != 0;
         governed = false;
