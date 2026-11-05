@@ -1128,6 +1128,8 @@ pub struct RenderCommandEncoder {
     uses_room: Vec<Use<ResourceKey>>,
     /// The list the last draw's argument samplers were in, emptied (`Device::argument_samplers_into`).
     argument_samplers_room: Vec<SamplerState>,
+    /// The list the last draw's vertex buffer binds were in, emptied, for the next draw's.
+    vertex_buffers_room: Vec<(u32, vk::Buffer, u64, u64)>,
     /// The views and sampler descriptions its draws' binds made or found (`binding::BindMemo`).
     bind_memo: binding::BindMemo,
     /// What its last draw retained of its own ([`LastRetained`]).
@@ -1407,6 +1409,7 @@ impl CommandBuffer {
             draw_commands: None,
             uses_room: Vec::new(),
             argument_samplers_room: Vec::new(),
+            vertex_buffers_room: Vec::new(),
             bind_memo: binding::BindMemo::default(),
             last_retained: LastRetained::default(),
         })
@@ -6469,7 +6472,8 @@ impl RenderCommandEncoder {
             self.capture_missed();
             return Ok(());
         }
-        let mut vertex_buffers = Vec::with_capacity(plan.vertex_buffers.len());
+        let mut vertex_buffers = std::mem::take(&mut self.vertex_buffers_room);
+        vertex_buffers.clear();
         for bind in &plan.vertex_buffers {
             let table = pass_start.or(Stage::Vertex, &self.vertex);
             let offset = commands
@@ -7339,6 +7343,7 @@ impl RenderCommandEncoder {
         // The states go; the list stays for the next draw's.
         argument_samplers.clear();
         self.argument_samplers_room = argument_samplers;
+        self.vertex_buffers_room = vertex_buffers;
         Ok(())
     }
 
