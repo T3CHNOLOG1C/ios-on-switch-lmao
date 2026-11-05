@@ -32,6 +32,13 @@ values in TegraI2C.cpp and SwitchALS.cpp against the references they cite.
    down, the sample after a gain change is skipped): 0 lux, then 50000, then 0 again, starting at 64x. Readings come back
    valid within a few samples, no clipped reading is dispatched, and nothing in between under-reads. And SwitchBacklight
    publishes new-backlight-architecture, without which CoreBrightness's faded ramps never reach brightness-nits.
+8. DisplayCreateWithID's ways to fail that are this service's (21H461): IODisplayParameters (0x1b62acf74) and, under the
+   new architecture, backlight-marketing-table (0x1b62ae660; r7y/r7z had none: no display, so libEDR's server never
+   started and Core Animation's render server stalled 5 s per frame on its port). SwitchBacklight.cpp publishes both
+   before backlight-control and backlight-control only with IODisplayParameters, new-backlight-architecture only with
+   the table. The table, compiled from SwitchBacklightMath.h and read as DisplayCreateWithID reads it (int32 / 65536
+   into float), is the calibration's product range, needs no digital-dimming rescale (0x5e4/0x5e5 stay clear), and
+   through __DisplaySliderToLogicalBrightnessInternal puts the slider's ends on the panel's floor and full level.
 """
 from pathlib import Path
 import re
@@ -341,7 +348,92 @@ assert any(t[2] == 'clipped' for t in trace if int(t[0]) == 1)          # 50000 
 settled = {int(t[0]): int(t[4]) for t in trace if t[2] == 'lux'}
 assert settled == {0: 3, 1: 0, 2: 3}, settled                            # 128x in the dark, 1x at 50000 lux
 
+# ---- 8. DisplayCreateWithID gets its display: what it needs before backlight-control ------------------------------
+import struct
+
+start = backlight[backlight.index('bool SwitchBacklight::start(IOService *provider)'):]
+start = start[:start.index('\n}\n')]
+order = ['publishParameters();', 'setProperty("backlight-calibration-parameters", parameters);',
+         'setProperty("backlight-marketing-table", table)', 'setProperty("new-backlight-architecture", kOSBooleanTrue);',
+         'setProperty("backlight-control", kOSBooleanTrue);', 'registerService();']
+assert all(s in start for s in order), [s for s in order if s not in start]  # backlight-marketing-table: r7y/r7z
+at = [start.index(s) for s in order]
+assert at == sorted(at), list(zip(order, at))  # everything DisplayCreateWithID reads is there before backlight-control
+for key in ('backlight-control', 'new-backlight-architecture', 'backlight-marketing-table'):
+    assert backlight.count(f'setProperty("{key}"') == 1, key  # published once, in start()
+assert re.search(r'const bool marketing = table && setProperty\("backlight-marketing-table", table\);\s*'
+                 r'OSSafeReleaseNULL\(table\);\s*if \(marketing\) \{\s*setProperty\("new-backlight-architecture"',
+                 start)  # the new architecture only with its table (0x1b62ae660)
+assert re.search(r'if \(OSDynamicCast\(OSDictionary, getProperty\("IODisplayParameters"\)\)\) \{\s*'
+                 r'setProperty\("backlight-control", kOSBooleanTrue\);', start)  # 0x1b62acf74
+assert 'OSData::withBytes(kMarketingTable, sizeof(kMarketingTable))' in start  # CFData (0x1b62ae0a8 drops others)
+
+table_model = r'''
+#include <cstdio>
+#include "SwitchBacklightMath.h"
+using namespace switch_backlight;
+int main() {
+    const unsigned char *bytes = (const unsigned char *)kMarketingTable;
+    printf("%zu", sizeof(kMarketingTable));
+    for (size_t i = 0; i < sizeof(kMarketingTable); ++i) printf(" %u", bytes[i]);
+    printf("\n%u %u %u\n", kNitsMin, kNitsMid, kNitsMax);
+    return 0;
+}
+'''
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    (work / 'table.cpp').write_text(table_model)
+    subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I', str(root), str(work / 'table.cpp'), '-o',
+                    str(work / 'table')], check=True)
+    out = subprocess.run([str(work / 'table')], check=True, capture_output=True, text=True).stdout.splitlines()
+size, *raw_bytes = map(int, out[0].split())
+assert size == len(raw_bytes) and size % 4 == 0 and size // 4 >= 2, out[0]  # CFDataGetLength / 4 entries, two or more
+table = list(struct.unpack('<%di' % (size // 4), bytes(raw_bytes)))  # little-endian int32, as ldr w8 / scvtf reads it
+n_min, n_mid, n_max = map(int, out[1].split())
+assert table == [n_min, n_mid, n_max], table  # the calibration's product range: min, mid, max
+
+
+def f32(x):
+    return struct.unpack('<f', struct.pack('<f', x))[0]
+
+
+marketing = [f32(f32(v) / 65536) for v in table]  # scvtf s0, w8; fdiv by 65536.0 (0x1b62ae128..0x1b62ae138)
+assert all(a < b for a, b in zip(marketing, marketing[1:])), marketing
+# display+0x50c/0x510/0x514 = lMax/Mid/MinProduct, 0x518/0x51c/0x520 = lMax/Mid/MinPanel (0x1b62ad334..0x1b62ad460).
+product = [f32(n_max / 65536), f32(n_mid / 65536), f32(n_min / 65536)]
+panel = product[:]  # calibration(): the same values
+# digital-dimming-min-nits / user-accessible-max-nits absent: their defaults are the panel's min and max, through
+# fcvtzu(x * 65536) / 65536 (0x1b62adf64..0x1b62ae00c); the rescale loops run only if they come out lower (0x5e4/0x5e5).
+for limit in (panel[2], panel[0]):
+    assert f32(int(f32(limit * 65536.0)) / 65536.0) == limit, limit  # no rescale: the table is used as published
+
+
+def interpolate(x0, y0, x1, y1, x):
+    return f32(y0 + (x - x0) * (y1 - y0) / (x1 - x0))
+
+
+def slider_to_nits(slider):  # __DisplaySliderToLogicalBrightnessInternal, 0x1b62b29a0..0x1b62b2b74
+    position = f32(slider * (len(marketing) - 1))
+    index = int(position)
+    if index < len(marketing) - 1:
+        m = interpolate(index, marketing[index], index + 1, marketing[index + 1], position)
+    else:
+        m = marketing[-1]
+    if m < product[1]:
+        return interpolate(product[2], panel[2], product[1], panel[1], m)
+    return interpolate(product[1], panel[1], product[0], panel[0], m)
+
+
+curve = [slider_to_nits(i / 100) for i in range(101)]
+assert all(a <= b for a, b in zip(curve, curve[1:])), curve  # monotonic
+assert curve[0] == panel[2] and curve[50] == panel[1] and curve[100] == panel[0], (curve[0], curve[50], curve[100])
+ends = [min(PANEL, max(FLOOR, (int(n * 65536) * PANEL + NITS_MAX // 2) // NITS_MAX)) for n in (curve[0], curve[100])]
+assert ends == [FLOOR, PANEL], ends  # nitsToRaw (section 5): the slider's bottom is the panel's floor, its top full
+assert abs(curve[0] - 12.506) < 0.01 and curve[100] == 400.0
+
 print(f'SwitchALS: {rows} lux/gain cases match bh1730.c (worst +{worst} lux); I2C2 row, pinmux 0x40, drive DRVDN 0x1f '
       f'and BH1730 commands match Atmosphere, L4T, Linux, hekate and the datasheet; window tables continuous; '
       f'CoreBrightness ALS and backlight calibration keys present; brightness-nits {targets} on the panel; r7v at 61 lux '
-      f'holds from {dim} to {brighten} lux (perceptual step to 135 lux {delta:.3f})')
+      f'holds from {dim} to {brighten} lux (perceptual step to 135 lux {delta:.3f}); DisplayCreateWithID has '
+      f'IODisplayParameters and backlight-marketing-table {[round(m, 2) for m in marketing]} nits before '
+      f'backlight-control, slider ends on panel {ends}')

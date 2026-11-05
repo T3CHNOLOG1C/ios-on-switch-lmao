@@ -13,8 +13,9 @@
 //   * "brightness-nits", nits * 65536 in a CFNumber SInt32, from _SetBLDriverNitsValue, which
 //     ___DisplaySetLogicalBrightnessInternal calls for every brightness change once the display has a luminance range
 //     (backlight-calibration-parameters) and is of the new backlight architecture (new-backlight-architecture, which
-//     SwitchBacklight publishes): the user's slider and auto-brightness alike, stepped by CoreBrightness's own fade
-//     timer. Mapped linearly onto the panel (nitsToRaw): 2047 at kNitsMax, never below kFloorRaw.
+//     SwitchBacklight publishes with the backlight-marketing-table that architecture requires): the user's slider and
+//     auto-brightness alike, stepped by CoreBrightness's own fade timer. Mapped linearly onto the panel (nitsToRaw): 2047
+//     at kNitsMax, never below kFloorRaw.
 #ifndef SWITCH_BACKLIGHT_MATH_H
 #define SWITCH_BACKLIGHT_MATH_H
 #include <stdint.h>
@@ -28,6 +29,15 @@ constexpr unsigned kSpanRaw = kPanelMax - kFloorRaw;
 // Luminance, nits * 65536 (16.16 fixed point, as CoreBrightness's backlight-calibration-parameters and brightness-nits).
 constexpr uint32_t kNitsMax = 400u << 16, kNitsMid = 140u << 16;
 constexpr uint32_t kNitsMin = (uint32_t)(((uint64_t)kNitsMax * kFloorRaw + kPanelMax / 2) / kPanelMax);  // 12.5 nits
+
+// backlight-marketing-table: the slider's luminance at evenly spaced slider positions, int32 nits * 65536 (21H461
+// DisplayCreateWithID 0x1b62ae0b0..0x1b62ae158: CFDataGetLength / 4 entries, each scvtf / 65536 into display+0x48).
+// __DisplaySliderToLogicalBrightnessInternal (0x1b62b29a0) interpolates slider * (count - 1) between neighbouring
+// entries, then maps that from the product range onto the panel range (backlight-calibration-parameters, the same range
+// here), so slider 0, 0.5 and 1 are 12.5, 140 and 400 nits, linear between. These are CoreBrightness's own three points
+// for a display without a table (5, 140 and 400 nits at 0x1b632d644, which the legacy architecture takes) with the bottom
+// raised to the panel's floor, lMinProduct, so the slider's bottom asks for no less than the panel shows.
+constexpr int32_t kMarketingTable[] = {(int32_t)kNitsMin, (int32_t)kNitsMid, (int32_t)kNitsMax};
 
 inline unsigned toRaw(uint32_t brightness)
 {

@@ -22,6 +22,19 @@
 //     "brightness-nits-cap". r7s dropped brightness-nits: auto-brightness ramped from 38 to 138 nits and the panel stayed
 //     at the level it was given at start (525). Both are taken now (SwitchBacklightMath.h). A failed write makes it drop
 //     that update. It also sets IOMFBBrightnessLevel on the framebuffer unless the backlight carries ignore-IOMFB.
+//   * DisplayCreateWithID returns no display in five places, and CoreBrightness then has no display module at all
+//     ("failed to create DisplayRef", "Modules not ready" for every property after it): no CF object (0x1b62acdf4), no
+//     IOObjectRetain of the service (0x1b62acf04), no IODisplayParameters (0x1b62acf74), no backlight-marketing-table
+//     while new-backlight-architecture is set (0x1b62ae660..0x1b62ae678; the legacy architecture takes its built-in
+//     three points instead), no properties dictionary (0x1b62aedac). The third and fourth are this service's, so both are
+//     published before backlight-control, and backlight-control only with them (start()). The display matters beyond
+//     brightness: libEDR's server (com.apple.libEDR.Notification, in backboardd) is started by __DisplayCheckEDRSupport
+//     (0x1b62b2214), near the end of DisplayCreateWithID, and nowhere else, while Core Animation's render server opens a
+//     libEDR client whenever a service has backlight-control (CADeviceHasBacklight's IOPropertyMatch: CA::EDRClient::client
+//     calls EDRCreateClientForDisplayWithTimeoutAndCallback only then, 0x1896ba85c..0x1896ba8d0) and waits up to 5 s on
+//     each message to that port. r7y/r7z published new-backlight-architecture without the table: no display, no server,
+//     launchd kept the port, and the render server composited one frame per 5 s ("(ipc/send) timed out" every 5 s;
+//     SpringBoard hung, touch looked dead).
 // The original class lives in com.apple.driver.AppleARMPlatform, which is prelinked here (a dependency of
 // IOMobileGraphicsFamily), so the name cannot be defined again (duplicate classes panic in OSMetaClass::postModLoad).
 // SwitchBacklight is a plain IOService whose metaclass names the original AppleARMBacklight metaclass as its superclass
@@ -66,6 +79,7 @@
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <libkern/c++/OSBoolean.h>
+#include <libkern/c++/OSData.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSSymbol.h>
@@ -102,7 +116,7 @@ constexpr uint64_t kSendIntervalNS = 50000000;  // three frames at 60 Hz between
 constexpr uint32_t kQuietMS = 1000;             // no request for this long: the change is over (its log line)
 
 volatile bool gDisplayOn = true;
-volatile bool gSawNits, gSawNitsCap;  // the first of each is logged once
+volatile bool gSawNits, gSawNitsCap, gSawDisplay;  // the first of each is logged once
 
 OSDictionary *range(uint32_t max, uint32_t value)
 {
@@ -439,6 +453,17 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
 {
     OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
     if (!dict) return kIOReturnBadArgument;
+    // DisplayBrightnessNitsNVRAM (lMidPanel, nits * 65536): DisplayCreateWithID's first write here under the new
+    // architecture (0x1b62b0f44, straight through IORegistryEntrySetCFProperty while display+0x78 is still NULL), past all
+    // five of its failures and just before __DisplayCheckEDRSupport starts libEDR's server, so the first one says
+    // CoreBrightness has its display (logged once). Nothing else is done with it.
+    if (OSNumber *nvram = OSDynamicCast(OSNumber, dict->getObject("DisplayBrightnessNitsNVRAM"))) {
+        if (!__atomic_exchange_n(&gSawDisplay, true, __ATOMIC_RELAXED)) {
+            IOLog("SwitchBacklight: CoreBrightness made its display (new backlight architecture, NVRAM %u nits): "
+                  "libEDR's server starts next\n",
+                  nvram->unsigned32BitValue() >> 16);
+        }
+    }
     // brightness-nits-cap: CoreBrightness's ceiling for EDR headroom; its SDR targets already respect its caps, so it is
     // only recorded (the first one logged).
     if (OSNumber *cap = OSDynamicCast(OSNumber, dict->getObject("brightness-nits-cap"))) {
@@ -517,27 +542,46 @@ bool SwitchBacklight::start(IOService *provider)
     current = target = boot >= 0 ? toBrightness((unsigned)boot) : kMax / 2;
     if (current) lit = current;
     setName("backlight");
-    setProperty("backlight-control", kOSBooleanTrue);
-    // new-backlight-architecture = true: DisplayCreateWithID (0x1b62ad074..0x1b62ad1bc) then marks the display new
-    // (display+0x20) instead of starting its legacy brightness thread (display+0x24). Every brightness change, its own
-    // fades included, then goes through ___DisplaySetLogicalBrightnessInternal as brightness-nits. Without it the fade
-    // callback (___DisplayFadeCallback, 0x1b61b4258) hands each step to ___DisplaySetLogicalBrightnessLegacy, and r7w's
-    // auto-brightness ramped its own brightness from 12.5 to 400 nits under a flashlight ("End Ramp: L_device =
-    // 12.5061 L_current = 399.2494") while the panel stayed at 64: only its unfaded first step and the slider, which
-    // set the logical brightness directly, ever reached it.
-    setProperty("new-backlight-architecture", kOSBooleanTrue);
+    // Everything DisplayCreateWithID needs from this service first, backlight-control last and only with it (see the
+    // top): a backlight that CoreBrightness cannot make a display of leaves libEDR's server down while Core Animation's
+    // render server waits on it. No backlight-control instead: neither sees a backlight, and the render server makes no
+    // libEDR client.
+    publishParameters();
     // CoreBrightness reads ignore-IOMFB (CFData, nonzero) from the backlight and its parents and then clears its use-IOMFB
     // flag (display module init, 0x1b62b55fc): the framebuffer here is a stand-in, so it should not get
     // IOMFBBrightnessLevel writes.
     uint32_t ignore = 1;
     setProperty("ignore-IOMFB", &ignore, sizeof(ignore));
-    publishParameters();
     // All nine keys or none: a partial dictionary would crash backboardd (calibration()).
     if (OSDictionary *parameters = calibration()) {
         setProperty("backlight-calibration-parameters", parameters);
         parameters->release();
     } else {
         IOLog("SwitchBacklight: no memory for backlight-calibration-parameters: auto-brightness stays at 0..1 nits\n");
+    }
+    // new-backlight-architecture = true: DisplayCreateWithID (0x1b62ad074..0x1b62ad1bc) then marks the display new
+    // (display+0x20) instead of starting its legacy brightness thread (display+0x24). Every brightness change, its own
+    // fades included, then goes through ___DisplaySetLogicalBrightnessInternal as brightness-nits: the fade callback
+    // (___DisplayFadeCallback, 0x1b61b424c..0x1b61b4258) takes the legacy path only while display+0x24 is set. Without
+    // it each fade step went to ___DisplaySetLogicalBrightnessLegacy, and r7w's auto-brightness ramped its own brightness
+    // from 12.5 to 400 nits under a flashlight ("End Ramp: L_device = 12.5061 L_current = 399.2494") while the panel
+    // stayed at 64: only its unfaded first step and the slider, which set the logical brightness directly, ever reached
+    // it. The new architecture fails the display without backlight-marketing-table (0x1b62ae660), so the two go
+    // together.
+    OSData *table = OSData::withBytes(kMarketingTable, sizeof(kMarketingTable));
+    const bool marketing = table && setProperty("backlight-marketing-table", table);
+    OSSafeReleaseNULL(table);
+    if (marketing) {
+        setProperty("new-backlight-architecture", kOSBooleanTrue);
+    } else {
+        IOLog("SwitchBacklight: no memory for backlight-marketing-table: legacy backlight architecture (faded "
+              "auto-brightness steps do not reach the panel)\n");
+    }
+    if (OSDynamicCast(OSDictionary, getProperty("IODisplayParameters"))) {
+        setProperty("backlight-control", kOSBooleanTrue);
+    } else {
+        IOLog("SwitchBacklight: no memory for IODisplayParameters: no backlight-control, CoreBrightness and Core "
+              "Animation see no backlight (brightness stays as booted; display power still works)\n");
     }
     // backboardd sets FadePeriod/brightness properties on this service; its sandbox only allows that on the original
     // class, so our XNU grants it by name (IOUserClient.cpp native_sandbox_grant).
