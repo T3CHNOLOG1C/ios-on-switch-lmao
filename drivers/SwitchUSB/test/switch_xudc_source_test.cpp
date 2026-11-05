@@ -143,8 +143,12 @@ TEST(SwitchXudcSource, AttachedHostHoldsIdleSleep)
     EXPECT_EQ(Count(source, "hostPresent = "), 1u) << "only setHostPresent writes it";
     EXPECT_EQ(Count(source, "setHostPresent(true);"), 2u);   // bus reset with a host, resume from a bus suspend
     EXPECT_EQ(Count(source, "setHostPresent(false);"), 3u);  // disconnect, bus suspend, off the bus
-    const std::string hold = ioswitch::test::Between(source, "void SwitchXUDC::setHostPresent(bool present)", "\n}\n");
+    const std::string set = ioswitch::test::Between(source, "void SwitchXUDC::setHostPresent(bool present)", "\n}\n");
+    EXPECT_THAT(set, HasSubstr("thread_call_enter(idleHoldCall);"));
+    EXPECT_THAT(set, Not(HasSubstr("PMAssertion"))) << "never on the work loop";
+    const std::string hold =
+        ioswitch::test::Between(source, "void SwitchXUDC::applyIdleHold(thread_call_param_t owner", "\n}\n");
     EXPECT_THAT(hold, HasSubstr("kIOPMDriverAssertionPreventSystemIdleSleepBit"));
-    EXPECT_THAT(hold, HasSubstr("releasePMAssertion(idleHold);"));
+    EXPECT_THAT(hold, HasSubstr("releasePMAssertion(self->idleHold);"));
     EXPECT_THAT(hold, Not(HasSubstr("kIOPMDriverAssertionCPUBit")));
 }

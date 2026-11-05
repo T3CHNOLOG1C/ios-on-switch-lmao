@@ -46,6 +46,7 @@
 #include <libkern/c++/OSKext.h>
 #include <libkern/c++/OSSymbol.h>
 #include <kern/clock.h>
+#include <kern/thread_call.h>
 #include <mach/kmod.h>
 #include <os/log.h>
 #include <string.h>
@@ -178,8 +179,11 @@ class SwitchXUDC : public IOUSBDeviceController {
     int speed;
     bool onBus, suspended, hostPresent, reportedOnBus, hostOwnsPort, wantBus;
     bool asleep, busAfterSleep, lostToSleep;  // systemSleep: between suspend and resume; resume could not power on
-    IOPMDriverAssertionID idleHold;           // while a host is attached (setHostPresent)
+    IOPMDriverAssertionID idleHold;           // while a host is attached (setHostPresent; idleHoldCall only)
+    thread_call_t idleHoldCall;
+    volatile bool idleWanted;                 // what setHostPresent last asked idleHoldCall for
     void setHostPresent(bool present);
+    static void applyIdleHold(thread_call_param_t owner, thread_call_param_t);
     uint8_t deliveryStage;
     volatile uint32_t interrupts;  // ST.IP acknowledged by the filter
     uint32_t interruptsAtCheck;
@@ -267,6 +271,8 @@ bool SwitchXUDC::begin(IOService *provider, char *why, size_t whySize)
         return false;
     }
     loop = IOWorkLoop::workLoop();
+    idleHoldCall = thread_call_allocate_with_options(&SwitchXUDC::applyIdleHold, this, THREAD_CALL_PRIORITY_KERNEL,
+                                                     THREAD_CALL_OPTIONS_ONCE);
     delivery = IOTimerEventSource::timerEventSource(
         this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &SwitchXUDC::deliveryCheck));
     if (!loop || !delivery || !ep0Buffer.allocate(kEp0Bytes)) {
@@ -1157,17 +1163,28 @@ void SwitchXUDC::setBus(bool on)
 // connection (Active, DataRole 1) on AC power. Nothing here publishes that object (IOPortFamily's port controller
 // makes it, and its init is not ours to call), so the attached host holds the kernel's idle-sleep assertion instead:
 // the same effect on IOPMrootDomain, and a host always powers VBUS. Demand sleep is untouched.
+// The assertion changes on a thread call: hostPresent changes in the event drain, on the work loop, where the root
+// domain's assertion lock and PM queue are not to be waited on.
 void SwitchXUDC::setHostPresent(bool present)
 {
     hostPresent = present;
+    if (idleWanted == present) return;
+    idleWanted = present;
+    if (idleHoldCall) thread_call_enter(idleHoldCall);
+}
+
+void SwitchXUDC::applyIdleHold(thread_call_param_t owner, thread_call_param_t)
+{
+    auto *self = static_cast<SwitchXUDC *>(owner);
     IOPMrootDomain *root = getPMRootDomain();
-    if (!root || present == (idleHold != 0)) return;
-    if (present) {
-        idleHold = root->createPMAssertion(kIOPMDriverAssertionPreventSystemIdleSleepBit,
-                                           kIOPMDriverAssertionLevelOn, this, "SwitchUSB host attached");
+    const bool want = self->idleWanted;
+    if (!root || want == (self->idleHold != 0)) return;
+    if (want) {
+        self->idleHold = root->createPMAssertion(kIOPMDriverAssertionPreventSystemIdleSleepBit,
+                                                 kIOPMDriverAssertionLevelOn, self, "SwitchUSB host attached");
     } else {
-        root->releasePMAssertion(idleHold);
-        idleHold = 0;
+        root->releasePMAssertion(self->idleHold);
+        self->idleHold = 0;
     }
 }
 
