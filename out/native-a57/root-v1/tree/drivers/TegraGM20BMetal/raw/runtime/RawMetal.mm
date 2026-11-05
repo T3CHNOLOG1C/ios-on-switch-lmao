@@ -103,9 +103,9 @@ enum RMPred : uint8_t {
     PredNone = 0,
     // textures the raw path does not keep, decided when made (a bind hits the texture's own predicate)
     PredTexShape,  // rawShape: a = failing term (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format), b = format
-    PredTexPoolAlloc,   // no pool span or texture header
-    PredTexSurfPlane,   // a plane of a planar surface (not the 4:4:4 one): a = plane, b = plane count
-    PredTexSurfPitch,   // bytesPerRow & 31, or short: a = bytesPerRow, b = width x bpp
+    PredTexPoolAlloc,  // no pool span or texture header
+    PredTexSurfPlane,  // a plane of a planar surface (not the 4:4:4 one): a = plane, b = plane count
+    PredTexSurfPitch,  // bytesPerRow or plane offset & 15, or short: a = bytesPerRow, b = offset (when off 16) or width x bpp
     PredTexSurfBounds,  // offset + rows past the allocation
     PredTexSurfBase,    // base address off a page: a = base & 0xfff
     PredTexSurfImport,  // the import or the header slot refused
@@ -370,6 +370,8 @@ struct Stats {
     // diagnostics (r10-rawsweep): the raw encode thrown away by aborted command buffers, the m2v replay's time on the committing
     // thread (replay + commit), and the bytes replay cleans
     std::atomic<uint64_t> abortUs{0}, replayUs{0}, replayClean{0};
+    // command buffers submitted in segments (planSegments), and their segments on m2v
+    std::atomic<uint64_t> splits{0}, splitM2v{0};
 };
 struct RawState {
     raw::Device *raw = nullptr;
@@ -1264,9 +1266,28 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 }
 @end
 
+// A part of a command buffer submitted on its own (RMCommandBuffer::_segs): tape [from, to), on the raw path or m2v
+struct RMSegment {
+    uint32_t from, to;
+    bool raw;
+};
+
 @interface RMCommandBuffer : RMObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
+    // Its encoders: each one's first command (OpRender, OpBlit, OpCompute) carries index 1 where it goes to m2v (a refusal taken
+    // while it was the active encoder: _encRefused, written into it as the next encoder begins or at commit, _encAt the
+    // command's place). A refusal outside any encoder keeps the command buffer whole (_whole). One whose encoders are some raw's
+    // and some m2v's is submitted in segments (_segs, planSegments): each run of encoders of one driver on its own, in order on
+    // the GPU as two command buffers of the drivers are (the kernel's Order), so a refused pass costs m2v that pass, not the
+    // frame. The command buffer completes with its last segment.
+    size_t _encAt;
+    bool _encOpen, _encRefused, _whole;
+    std::vector<RMSegment> _segs;
+    size_t _segNext;
+    NSError *_segError;  // an m2v segment's error, reported at completion
+    bool
+        _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     std::vector<Cmd> _tape;
     std::vector<uint8_t> _bytes;
     std::vector<uint64_t> _extra;
@@ -1291,6 +1312,8 @@ inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
     uint8_t _pred0;           // the first one
 }
 - (void)takeReason:(RMReason)reason why:(NSString *)why;
+- (void)takeWholeReason:(RMReason)reason why:(NSString *)why;
+- (void)closeEncoder;
 - (void)record:(const Cmd &)cmd;
 - (void)retain:(id)object;
 @end
@@ -1542,7 +1565,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 // What raw::RenderEncoder::prepare would refuse of a draw with the encoder's bindings, decided here (the same tests)
 - (void)checkDraw:(NSUInteger)baseInstance
 {
-    if (!_pipe || !_pipe->_raw) return;  // no raw draw to decide (m2v drops a draw without a state too)
+    // no raw draw to decide (m2v drops a draw without a state too), or this encoder goes to m2v already (its pass refused: its
+    // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
+    if (!_pipe || !_pipe->_raw || _cb->_encRefused) return;
     const raw::Pipeline &pl = *_pipe->_raw;
     if (baseInstance) {
         [_cb takeReason:WhyEncode why:@"draw with a base instance"];
@@ -1652,6 +1677,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                 x->_kind);
     }
     if (stage == 2 && index < 16) _tex[index] = x;
+    if (x && x->_raw.sampled) _cb->_sampledShadows = true;
     setBinding(_cb, OpTexture, stage, index, t, 0);
 }
 - (void)setFragmentTexture:(id<MTLTexture>)t atIndex:(NSUInteger)index
@@ -2133,11 +2159,27 @@ static bool heldBehindEvent();
 {
     _tape.push_back(cmd);
 }
+// The encoder recorded last: whether it goes to m2v, into its first command
+- (void)closeEncoder
+{
+    if (_encOpen && _encAt < _tape.size()) _tape[_encAt].index = _encRefused ? 1 : 0;
+    _encOpen = false;
+}
 - (void)takeReason:(RMReason)reason why:(NSString *)why
 {
+    if (_active)
+        _encRefused = true;  // this encoder goes to m2v
+    else
+        _whole = true;
     if (_reason != WhyRaw) return;
     _reason = reason;
     _why = why;
+}
+// A refusal of the command buffer's own (an event m2v must see, a call on the command buffer): the whole of it goes to m2v
+- (void)takeWholeReason:(RMReason)reason why:(NSString *)why
+{
+    _whole = true;
+    [self takeReason:reason why:why];
 }
 - (id)rmTwin
 {
@@ -2190,6 +2232,10 @@ static bool heldBehindEvent();
     e->_device = _device;
     e->_cb = self;
     _active = e;
+    [self closeEncoder];
+    _encAt = _tape.size();  // its first command is the next one recorded
+    _encOpen = true;
+    _encRefused = false;
 }
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d
 {
@@ -2203,7 +2249,7 @@ static bool heldBehindEvent();
         [self retain:t];
         [self retain:pass.colorAttachments[c].resolveTexture];
         RMTexture *x = (RMTexture *)t;
-        if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !x->_raw.renderable) {
+        if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !(x->_raw.renderable || x->_raw.shadowTarget)) {
             [self takeReason:WhyPass why:@"a color attachment the raw path does not render to"];
             const bool own = [(id)x isKindOfClass:[RMTexture class]];
             // a = format; b = attachment | kind << 8 | the texture's own predicate << 16 (0: kept, not renderable)
@@ -2286,7 +2332,7 @@ static bool heldBehindEvent();
     // CPU before its work is submitted; any other event is m2v's alone
     if (![(id)event conformsToProtocol:@protocol(MTLSharedEvent)] ||
         ![(id)event respondsToSelector:@selector(setSignaledValue:)]) {
-        [self takeReason:WhyEvent why:@"an event that is not a shared event"];
+        [self takeWholeReason:WhyEvent why:@"an event that is not a shared event"];
         hit(self, PredEvent, signal);
     }
     [self retain:event];
@@ -2449,7 +2495,7 @@ static bool heldBehindEvent();
     c.obj = (__bridge void *)inv;
     c.stage = 0xff;  // the command buffer's own, not an encoder's
     [self record:c];
-    [self takeReason:WhyCall why:@"a command buffer call recorded as an invocation"];
+    [self takeWholeReason:WhyCall why:@"a command buffer call recorded as an invocation"];
     hit(self, PredCallCBInvocation, uintptr_t(inv.selector));
     static std::mutex lock;  // each selector named once
     static std::set<SEL> seen;
@@ -2604,7 +2650,9 @@ static float extraFloat(RMCommandBuffer *cb, uint64_t i)
 }
 
 // The tape into an m2v command buffer, every object its twin; the CPU lines of the buffers it names cleaned first.
-static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
+// The tape [from, to) of `cb` as an m2v command buffer, not committed. `part`: a segment of a split command buffer (planSegments),
+// whose encoders' waits for fences another segment updated are left out: the segments' order on the GPU covers them.
+static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part)
 {
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
     id<MTLCommandBuffer> m = [queue commandBuffer];
@@ -2660,7 +2708,9 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
                 range(b, boundOffset[1][r.vertexSlot] + uint64_t(first) * r.vertexStride,
                       uint64_t(count) * r.vertexStride);
     };
-    for (const Cmd &c : cb->_tape) {
+    std::set<void *> updated;  // fences this part updated
+    for (size_t at = from; at < to; at++) {
+        const Cmd &c = cb->_tape[at];
         switch (c.op) {
         case OpRender:
             enc = [m renderCommandEncoderWithDescriptor:twinPass((__bridge MTLRenderPassDescriptor *)c.obj)];
@@ -2751,8 +2801,13 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
                            beforeStages:MTLRenderStages(c.c)];
             break;
         case OpUse: [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)]; break;
-        case OpUpdateFence: [enc updateFence:(__bridge id<MTLFence>)c.obj]; break;
-        case OpWaitFence: [enc waitForFence:(__bridge id<MTLFence>)c.obj]; break;
+        case OpUpdateFence:
+            updated.insert(c.obj);
+            [enc updateFence:(__bridge id<MTLFence>)c.obj];
+            break;
+        case OpWaitFence:
+            if (!part || updated.count(c.obj)) [enc waitForFence:(__bridge id<MTLFence>)c.obj];
+            break;
         case OpCopyTexture: {
             const uint64_t x = c.x, o = extra(cb, x + 10);
             [enc copyFromTexture:twinOf((__bridge id)c.obj)
@@ -2907,7 +2962,7 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb)
 
 // ---- the tape onto the raw path ----
 // false: something in it the raw path cannot do after all (*why); nothing of it was submitted then
-static bool encodeRaw(RMCommandBuffer *cb, const char **why)
+static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
 {
     raw::Device &d = *gRM->raw;
     raw::CommandBuffer *rc = d.begin();
@@ -2937,7 +2992,8 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
         std::vector<RMTexture *> planar;
         std::vector<RMSampler *> samplers;
         auto isPlanar = [](void *o) { return o && ((__bridge RMTexture *)o)->_raw.addressMap; };
-        for (const Cmd &c : cb->_tape) {
+        for (size_t at = from; at < to; at++) {
+            const Cmd &c = cb->_tape[at];
             // Metal's copies of a planar texture move its planes' bytes, not the image: m2v's
             if ((c.op == OpCopyTexture && (isPlanar(c.obj) || isPlanar(c.obj2))) ||
                 (c.op == OpCopyBufferToTexture && isPlanar(c.obj2)) ||
@@ -2989,16 +3045,35 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
             }
         }
     }
-    for (const Cmd &c : cb->_tape) {
+    // textures sampled through a pool image (rows 16 but not 32 apart, raw::Texture::sampled): refreshed from their texels by the
+    // copy engine before the first pass that samples them, and again after work here wrote them (m2v copies such a surface into
+    // its shadow at each encoder that uses it once written since)
+    std::set<RMTexture *> fresh;
+    auto refresh = [&](size_t pass) {
+        for (size_t at = pass + 1; at < to && cb->_tape[at].op != OpEnd; at++) {
+            const Cmd &c = cb->_tape[at];
+            if (c.op != OpTexture || !c.obj) continue;
+            RMTexture *t = (__bridge RMTexture *)c.obj;
+            if (!t->_raw.sampled || !fresh.insert(t).second) continue;
+            const raw::Texture &x = t->_raw;
+            raw::BlitEncoder *b = rc->blit();
+            b->copyRect(x.va, x.pitch, x.sampled->va, x.sampled->pitch, x.width, x.height, x.bpp);
+            b->end();
+        }
+    };
+    for (size_t at = from; at < to; at++) {
+        const Cmd &c = cb->_tape[at];
         switch (c.op) {
         case OpRender: {
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
+            if (cb->_sampledShadows) refresh(at);
             raw::PassDesc p;
             for (unsigned j = 0; j < 8; j++) {
                 MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
                 RMTexture *t = (RMTexture *)a.texture;
                 if (!t) continue;
                 if (t->_raw.planar) return fail(PredEncPlanarRT, "a planar texture as a render target", j);
+                if (!fresh.empty()) fresh.erase(t);  // this pass writes it
                 p.color[j].texture = &t->_raw;
                 p.color[j].load = a.loadAction == MTLLoadActionClear  ? raw::ColorAttachment::Clear
                                   : a.loadAction == MTLLoadActionLoad ? raw::ColorAttachment::Load
@@ -3052,6 +3127,7 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
             break;
         case OpCopyTexture: {
             RMTexture *s = (__bridge RMTexture *)c.obj, *t = (__bridge RMTexture *)c.obj2;
+            if (!fresh.empty()) fresh.erase(t);
             const uint64_t x = c.x, o = extra(cb, x + 10);
             const uint64_t sx = extra(cb, x + 2), sy = extra(cb, x + 3), w = extra(cb, x + 5), h = extra(cb, x + 6);
             const uint64_t dx = uint32_t(o), dy = o >> 32;
@@ -3073,8 +3149,8 @@ static bool encodeRaw(RMCommandBuffer *cb, const char **why)
             RMTexture *t = (__bridge RMTexture *)c.obj2;
             const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1);
             const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4);
-            if (row & 31 && h > 1)
-                return fail(PredEncBufToTexRow, "a buffer-to-texture copy whose rows are not 32-byte aligned", row, w);
+            if (!fresh.empty())
+                fresh.erase(t);  // (rows of whole texels, any pitch: the copy engine's; decided at record)
             rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
             be->copyRect(s->_raw.va + so, uint32_t(row),
                          t->_raw.va + (o >> 32) * t->_raw.pitch + uint32_t(o) * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
@@ -3480,6 +3556,7 @@ static bool ycbcr420(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, 
         const size_t planes = IOSurfaceGetPlaneCount(s),
                      pitch = planes == 1 ? IOSurfaceGetBytesPerRowOfPlane(s, 0) : IOSurfaceGetBytesPerRow(s);
         const uintptr_t base = uintptr_t(IOSurfaceGetBaseAddress(s));
+        const uintptr_t offset = planes == 1 ? uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 0)) - base : 0;
         const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
         const uint64_t packed = uint64_t(d.width) * (f ? f->bpp : 0);
         const OSType fourcc = IOSurfaceGetPixelFormat(s);
@@ -3496,8 +3573,8 @@ static bool ycbcr420(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, 
             refuseTexture(t, PredTexShape, term, d.pixelFormat, @"surface", extra);
         else if (plane || planes > 1)
             refuseTexture(t, PredTexSurfPlane, plane, planes, @"surface", extra);
-        else if ((pitch & 31) || pitch < packed)
-            refuseTexture(t, PredTexSurfPitch, pitch, packed, @"surface", extra);
+        else if ((pitch & 15) || (offset & 15) || pitch < packed)  // (its plane's offset: as its pitch)
+            refuseTexture(t, PredTexSurfPitch, pitch, offset & 15 ? offset : packed, @"surface", extra);
         else if (uint64_t(pitch) * d.height > IOSurfaceGetAllocSize(s))
             refuseTexture(t, PredTexSurfBounds, uint64_t(pitch) * d.height, IOSurfaceGetAllocSize(s), @"surface",
                           extra);
@@ -3841,9 +3918,11 @@ static void countPreds(RMCommandBuffer *cb)
     }
 }
 
+static bool submitSegments(RMCommandBuffer *cb);
 static bool submitLocked(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
+    if (!cb->_segs.empty()) return submitSegments(cb);
     const char *why = nullptr;
     if (cb->_reason == WhyRaw) {
         if (r.gpuOrder && r.m2vSinceRaw) {  // its first entry: an acquire on what NVK's channels submitted
@@ -3859,7 +3938,7 @@ static bool submitLocked(RMCommandBuffer *cb)
             }
         }
         const uint64_t began = nowUs();
-        if (encodeRaw(cb, &why)) {
+        if (encodeRaw(cb, 0, cb->_tape.size(), &why)) {
             r.stats.encodeUs += nowUs() - began;
             r.stats.raw++;
             r.rawSinceM2v = true;
@@ -3890,7 +3969,7 @@ static bool submitLocked(RMCommandBuffer *cb)
     }
     cb->_m2v = true;
     const uint64_t replayBegan = nowUs();
-    id<MTLCommandBuffer> m = r.fallback ? replay(cb) : nil;
+    id<MTLCommandBuffer> m = r.fallback ? replay(cb, 0, cb->_tape.size(), false) : nil;
     if (!m) {
         finish(cb, [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                        code:MTLCommandBufferErrorInternal
@@ -3945,10 +4024,154 @@ static bool submitLocked(RMCommandBuffer *cb)
     return true;
 }
 
+// A command buffer some of whose encoders go to m2v and some do not, with no refusal of its own and no shared event: its segments
+// (each run of encoders of one driver), else none (it goes whole, as its reason says).
+static void planSegments(RMCommandBuffer *cb)
+{
+    cb->_segs.clear();
+    cb->_segNext = 0;
+    [cb closeEncoder];
+    if (cb->_reason == WhyRaw || cb->_whole) return;
+    bool raw = false, m2v = false;
+    for (size_t at = 0; at < cb->_tape.size(); at++) {
+        const Cmd &c = cb->_tape[at];
+        if (c.op == OpSignalEvent || c.op == OpWaitEvent || (c.op == OpInvocation && c.stage == 0xff)) {
+            cb->_segs.clear();
+            return;
+        }
+        if (c.op != OpRender && c.op != OpBlit && c.op != OpCompute) {
+            if (cb->_segs.empty()) return;  // a command before the first encoder
+            continue;
+        }
+        const bool r = !c.index;
+        (r ? raw : m2v) = true;
+        if (!cb->_segs.empty()) cb->_segs.back().to = uint32_t(at);
+        if (!cb->_segs.empty() && cb->_segs.back().raw == r) continue;
+        cb->_segs.push_back({uint32_t(at), uint32_t(cb->_tape.size()), r});
+    }
+    if (!cb->_segs.empty()) cb->_segs.back().to = uint32_t(cb->_tape.size());
+    if (!raw || !m2v) cb->_segs.clear();
+}
+
+// Whether what `cb` submits next is raw work (it needs the m2v work before it scheduled: m2vClear)
+static bool nextRaw(RMCommandBuffer *cb)
+{
+    return cb->_segs.empty() ? cb->_reason == WhyRaw : cb->_segNext < cb->_segs.size() && cb->_segs[cb->_segNext].raw;
+}
+
+// submit lock held: a split command buffer's segments from the next one, in order, each as a command buffer of its driver would
+// go (submitLocked), the scheduled and completed handlers with the last. false: the next is raw and the m2v work before it is not
+// scheduled yet (it waits on the submit thread, as a raw command buffer after m2v work does).
+static bool submitSegments(RMCommandBuffer *cb)
+{
+    RawState &r = *gRM;
+    if (cb->_segNext == 0) {
+        r.stats.splits++;
+        countPreds(cb);
+    }
+    while (cb->_segNext < cb->_segs.size()) {
+        RMSegment &s = cb->_segs[cb->_segNext];
+        const bool last = cb->_segNext + 1 == cb->_segs.size();
+        if (s.raw) {
+            {
+                std::lock_guard<std::mutex> m(r.m2vLock);
+                if (!m2vClear()) return false;
+            }
+            if (r.gpuOrder && r.m2vSinceRaw) {
+                uint32_t waits = 0;
+                const int kr = r.raw->orderAfterOthers(waits);
+                if (kr == KERN_SUCCESS) {
+                    r.m2vSinceRaw = false;
+                    r.stats.acquires += waits;
+                } else {
+                    orderRefused("raw after m2v", kr);
+                    std::lock_guard<std::mutex> m(r.m2vLock);
+                    if (r.m2vPending) return false;
+                }
+            }
+            const char *why = nullptr;
+            const uint64_t began = nowUs();
+            if (!encodeRaw(cb, s.from, s.to, &why)) {
+                s.raw = false;  // the kernel refused it: this segment on m2v
+                continue;
+            }
+            r.stats.encodeUs += nowUs() - began;
+            r.rawSinceM2v = true;
+            countDriver(1);
+            if (last) {
+                {
+                    std::lock_guard<std::mutex> l(r.doneLock);
+                    r.inflight.push_back(cb);
+                }
+                r.doneChanged.notify_one();
+                scheduled(cb);
+            }
+        } else {
+            r.stats.splitM2v++;
+            const uint64_t began = nowUs();
+            id<MTLCommandBuffer> m = r.fallback ? replay(cb, s.from, s.to, true) : nil;
+            if (!m) {
+                cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                                                    code:MTLCommandBufferErrorInternal
+                                                userInfo:nil];
+                if (last) finish(cb, cb->_segError);
+                cb->_segNext++;
+                continue;
+            }
+            if (r.gpuOrder && r.rawSinceM2v) {
+                uint32_t waits = 0;
+                const int kr = r.raw->orderOthersAfter(waits);
+                if (kr == KERN_SUCCESS)
+                    r.stats.acquires += waits;
+                else
+                    orderRefused("m2v after raw", kr);
+            }
+            if (!r.gpuOrder && !r.raw->done(r.raw->submitted())) {
+                r.stats.cpuOrdered++;
+                r.raw->wait(r.raw->submitted());
+            }
+            r.rawSinceM2v = false;
+            r.m2vSinceRaw = true;
+            countDriver(2);
+            __block bool counted = false;
+            {
+                std::lock_guard<std::mutex> l(r.m2vLock);
+                r.m2vPending++;
+                r.m2vUnscheduled++;
+            }
+            [m addScheduledHandler:^(id<MTLCommandBuffer>) {
+                {
+                    std::lock_guard<std::mutex> l(gRM->m2vLock);
+                    if (!counted) gRM->m2vUnscheduled--;
+                    counted = true;
+                }
+                gRM->m2vChanged.notify_all();
+                if (last) scheduled(cb);
+            }];
+            [m addCompletedHandler:^(id<MTLCommandBuffer> done) {
+                if (done.error && !cb->_segError) cb->_segError = done.error;
+                if (last) finish(cb, cb->_segError);
+                {
+                    std::lock_guard<std::mutex> l(gRM->m2vLock);
+                    if (!counted) gRM->m2vUnscheduled--;
+                    counted = true;
+                    gRM->m2vPending--;
+                }
+                gRM->m2vChanged.notify_all();
+            }];
+            [m commit];
+            r.stats.replayUs += nowUs() - began;
+        }
+        cb->_segNext++;
+    }
+    return true;
+}
+
 // A committed command buffer: submitted now when nothing committed before it waits and what it needs is there (raw: m2vClear,
 // the shared events it waits for covered), else handed to the submit thread in order.
 static void commitBuffer(RMCommandBuffer *cb)
 {
+    planSegments(cb);
     RawState &r = *gRM;
     if (waitsForEvent(cb)) {
         std::lock_guard<std::mutex> h(gHoldersLock);
@@ -3956,7 +4179,7 @@ static void commitBuffer(RMCommandBuffer *cb)
     }
     std::unique_lock<std::mutex> l(r.submit);
     bool now = r.waiting.empty();
-    if (now && cb->_reason == WhyRaw) {
+    if (now && nextRaw(cb)) {
         std::lock_guard<std::mutex> m(r.m2vLock);
         now = m2vClear();
         if (!now && !r.gpuOrder) r.stats.cpuOrdered++;  // it waits for the m2v work before it to complete
@@ -3980,14 +4203,14 @@ static void submitLoop()
             r.waitingChanged.wait(l, [&] { return !r.waiting.empty(); });
             cb = r.waiting.front();
         }
-        if (cb->_reason == WhyRaw) {
+        if (nextRaw(cb)) {
             {
                 std::unique_lock<std::mutex> m(r.m2vLock);
                 if (!r.m2vChanged.wait_for(m, kWaitLimit, [&] { return m2vClear(); }))
                     waitTooLong("raw command buffer waiting for the m2v work before it, command buffer",
                                 (__bridge void *)cb);
             }
-            waitEvents(cb);
+            if (cb->_reason == WhyRaw) waitEvents(cb);
         }
         std::lock_guard<std::mutex> l(r.submit);
         if (!submitLocked(cb)) continue;  // CPU order from now on: it waits for the m2v work before it to complete
@@ -4019,7 +4242,7 @@ static void completionLoop()
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
         switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, abortUs, replayUs, replayClean,
-        rtUnaligned, predOnly[PredCount];
+        rtUnaligned, predOnly[PredCount], splits, splitM2v;
 } gRates;
 
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
@@ -4036,8 +4259,8 @@ size_t raw_metal_rates(char *out, size_t size)
     if (!gRM || !size) return 0;
     Stats &s = gRM->stats;
     const uint64_t raw = s.raw.load(), m2v = s.m2v.load(), now = nowUs();
-    const uint64_t c = raw - gRates.raw, f = m2v - gRates.m2v;
-    if (!c && !f) return 0;
+    const uint64_t c = raw - gRates.raw, f = m2v - gRates.m2v, sp = s.splits.load() - gRates.splits;
+    if (!c && !f && !sp) return 0;
     const double secs = gRates.lastUs ? (now - gRates.lastUs) / 1e6 : 5.0;
     char reasons[160] = "";
     size_t at = 0;
@@ -4049,7 +4272,7 @@ size_t raw_metal_rates(char *out, size_t size)
         gRates.reasons[r] = s.reasons[r].load();
     }
     raw::Device::Stats &k = gRM->raw->stats;
-    const double per = c ? double(c) : 1.0;
+    const double per = c + sp ? double(c + sp) : 1.0;  // the raw path's command buffers, the split ones included
     // diagnostics (r10-rawsweep): per predicate, the command buffers that hit it / those it alone sent to m2v, the ten most hit
     char preds[256] = "";
     {
@@ -4073,16 +4296,21 @@ size_t raw_metal_rates(char *out, size_t size)
             cbs[best] = 0;
         }
     }
-    const uint64_t aborts = s.aborted.load() - gRates.aborted, m2vs = f ? f : 1;
+    // replay= and rclean= per m2v submission: whole command buffers and split ones' m2v segments
+    const uint64_t aborts = s.aborted.load() - gRates.aborted, segs = s.splitM2v.load() - gRates.splitM2v,
+                   m2vs = f + segs ? f + segs : 1;
     char diag[512];
     snprintf(diag, sizeof diag,
-             " abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) why=%s",
+             " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) why=%s",
+             (unsigned long long)sp, (unsigned long long)segs,
              (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
              (s.replayClean.load() - gRates.replayClean) / 1024.0 / double(m2vs),
              (unsigned long long)(k.rtUnaligned.load() - gRates.rtUnaligned), k.rtUnalignedPitch.load(),
              k.rtUnalignedVa.load(), *preds ? preds : "-");
     gRates.abortUs = s.abortUs.load();
+    gRates.splits = s.splits.load();
+    gRates.splitM2v = s.splitM2v.load();
     gRates.replayUs = s.replayUs.load();
     gRates.replayClean = s.replayClean.load();
     gRates.rtUnaligned = k.rtUnaligned.load();

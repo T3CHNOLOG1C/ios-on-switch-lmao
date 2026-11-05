@@ -243,6 +243,30 @@ int main(int argc, char **argv)
                              options:MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
         NSUInteger ringAt = 0;
         id<MTLBuffer> indices = [dev newBufferWithLength:65536 options:MTLResourceStorageModeShared];
+        auto encodeExtra = [&](id<MTLCommandBuffer> cb, unsigned f) {
+            MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            rp.colorAttachments[0].texture = tex[frame::BLUR0];
+            rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            rp.colorAttachments[1].texture = tex[frame::BLUR_MEMORYLESS];
+            rp.colorAttachments[1].loadAction = MTLLoadActionDontCare;
+            rp.colorAttachments[1].storeAction = MTLStoreActionDontCare;
+            id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
+            [e setRenderPipelineState:extra[(f / 2) % extra.size()]];
+            frame::Bytes vb = {1, 1, shape.vertexBytes};
+            frame::fill(bytes, vb, f, 0);
+            [e setVertexBytes:bytes.data() length:vb.length atIndex:1];
+            for (int slot = 0; slot < 8; slot++) {
+                frame::Bytes u = {2, slot, shape.uniformBytes};
+                frame::fill(bytes, u, f, slot);
+                [e setVertexBytes:bytes.data() length:u.length atIndex:slot == 1 ? 7 : slot];
+                [e setFragmentBytes:bytes.data() length:u.length atIndex:slot];
+            }
+            for (int t = 0; t < 16; t++) [e setFragmentTexture:tex[frame::IMAGE1] atIndex:t];
+            for (int s2 = 0; s2 < 16; s2++) [e setFragmentSamplerState:smp[s2 & 1] atIndex:s2];
+            [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+            [e endEncoding];
+        };
         for (unsigned f = 0; f < frames; f++) {
             @autoreleasepool {
                 const uint64_t c0 = threadNs();
@@ -250,6 +274,22 @@ int main(int argc, char **argv)
                 caCommandBuffer(cb);
                 unsigned drawIndex = 0;
                 for (const frame::Pass &pass : frame::passes(f, shape, blur.size(), uber.size())) {
+                    if ((f & 1) && !extra.empty() && getenv("FRAME_SPLIT") && !pass.draws.empty() &&
+                        !pass.draws[0].blur) {
+                        // FRAME_SPLIT=cb: the same passes as command buffers of their own (what the segments must equal)
+                        const bool own = !strcmp(getenv("FRAME_SPLIT"), "cb");
+                        if (own) {
+                            [cb commit];
+                            cb = [queue commandBuffer];
+                            caCommandBuffer(cb);
+                        }
+                        encodeExtra(cb, f);
+                        if (own) {
+                            [cb commit];
+                            cb = [queue commandBuffer];
+                            caCommandBuffer(cb);
+                        }
+                    }
                     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
                     for (int c = 0; c < 3; c++) {
                         if (pass.color[c] < 0) continue;
@@ -327,33 +367,13 @@ int main(int argc, char **argv)
                     [e endEncoding];
                 }
                 // FRAME_EXTRA: every odd frame, a second command buffer of one pass drawing an extra state (m2v's, on the facade)
-                // into BLUR0, then the next frame's raw work reads BLUR0 (its blur passes sample it)
-                if ((f & 1) && !extra.empty()) {
+                // into BLUR0, then the next frame's raw work reads BLUR0 (its blur passes sample it). FRAME_SPLIT: that pass in the
+                // same command buffer, before the main pass (the facade submits it in segments: raw, m2v, raw)
+                if ((f & 1) && !extra.empty() && !getenv("FRAME_SPLIT")) {
                     [cb commit];
                     cb = [queue commandBuffer];
                     caCommandBuffer(cb);
-                    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-                    rp.colorAttachments[0].texture = tex[frame::BLUR0];
-                    rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
-                    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-                    rp.colorAttachments[1].texture = tex[frame::BLUR_MEMORYLESS];
-                    rp.colorAttachments[1].loadAction = MTLLoadActionDontCare;
-                    rp.colorAttachments[1].storeAction = MTLStoreActionDontCare;
-                    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
-                    [e setRenderPipelineState:extra[(f / 2) % extra.size()]];
-                    frame::Bytes vb = {1, 1, shape.vertexBytes};
-                    frame::fill(bytes, vb, f, 0);
-                    [e setVertexBytes:bytes.data() length:vb.length atIndex:1];
-                    for (int slot = 0; slot < 8; slot++) {
-                        frame::Bytes u = {2, slot, shape.uniformBytes};
-                        frame::fill(bytes, u, f, slot);
-                        [e setVertexBytes:bytes.data() length:u.length atIndex:slot == 1 ? 7 : slot];
-                        [e setFragmentBytes:bytes.data() length:u.length atIndex:slot];
-                    }
-                    for (int t = 0; t < 16; t++) [e setFragmentTexture:tex[frame::IMAGE1] atIndex:t];
-                    for (int s2 = 0; s2 < 16; s2++) [e setFragmentSamplerState:smp[s2 & 1] atIndex:s2];
-                    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-                    [e endEncoding];
+                    encodeExtra(cb, f);
                 }
                 [cb commit];
                 cpu.push_back((threadNs() - c0) / 1e6);
@@ -375,8 +395,7 @@ int main(int argc, char **argv)
 #ifdef RAW_FACADE
         {
             char rates[2048];
-            raw_metal_rates(rates, sizeof rates);
-            printf("RATES %s\n", rates);
+            if (raw_metal_rates(rates, sizeof rates)) printf("RATES %s\n", rates);
         }
 #endif
         pushcount_report("nvkframe");

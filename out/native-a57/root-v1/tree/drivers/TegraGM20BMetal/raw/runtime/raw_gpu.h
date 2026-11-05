@@ -70,7 +70,11 @@ struct Texture {
     uint8_t *cpu = nullptr;  // the CPU's view of va (null: memoryless)
     uint32_t width = 0, height = 0, format = 0, pitch = 0;
     uint8_t bpp = 0;
-    bool renderable = false;   // the format has a render target format
+    bool renderable = false;  // a pitch render target as it is: a target format, address and pitch multiples of 128
+    // A target format, but an address or pitch the render hardware does not take (NVK's linear-render rule, linearTarget): a pass
+    // renders it through a pool image the copy engine fills from it before and copies back to it after (NVK's own tiled shadow,
+    // nvk_linear_render_copy, for the same targets: the texels stored are the same)
+    bool shadowTarget = false;
     bool memoryless = false;   // no memory: a pass gives it a backing (Device::backing)
     uint32_t tic = 0;          // texture header index, 0: none (not sampleable)
     Import *import = nullptr;  // surface or no-copy pages, else
@@ -92,6 +96,10 @@ struct Texture {
     // m2v's address map of a planar texture's samplers: 1 every mode clamps to the edge (4:2:0), 2 clamp to zero and to the
     // border clamp to the edge (4:4:4 codes)
     uint8_t addressMap = 0;
+    // Rows 16 but not 32 bytes apart (or an address off 32): the texture header's pitch takes multiples of 32, so it is sampled
+    // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
+    // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
+    Texture *sampled = nullptr;
 };
 struct Buffer {
     uint64_t va = 0, length = 0;
@@ -196,6 +204,8 @@ private:
     bool scissorDirty_ = true, viewportDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
     bool colorWritten_ = false, memoryless_[8] = {};
+    const Texture *shadowOf_[8] =
+        {};  // a shadow target's texture, where pass_ holds its pool image (CommandBuffer::render)
     // what m2v's DontCare loads answer (metal2vulkan clear_reach.rs: dont_care_loads, DrawnArea): whether the pass has a draw
     // call and one that draws, the colors its draws read, and the pixels they may write (scissor within viewport, each draw)
     bool called_ = false, drew_ = false, whole_ = false;
@@ -382,6 +392,7 @@ private:
     std::vector<Chunk> chunks_;
     struct Backing {
         Texture texture;
+        uint32_t tag = 0;
         uint32_t lastUse = 0;  // the seqno of the last submission that used it (0: never submitted)
         uint64_t lastCommit = 0;
     };
@@ -404,7 +415,9 @@ private:
     void poolFree(Span &s);
     Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner);
     void release(Import *i);
-    Texture *backing(const Texture &memoryless);
+    // A memoryless attachment's memory (tag 0), or a shadow target's pool image for attachment j (tag 1 + j): one per size,
+    // format and tag, kept while passes use it
+    Texture *backing(const Texture &memoryless, uint32_t tag = 0);
     void trimBackings();
 };
 
