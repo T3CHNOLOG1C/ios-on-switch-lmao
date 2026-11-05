@@ -1,7 +1,8 @@
 """drivers/SwitchMotion on the host: the real driver compiled against tests/switch_motion_stubs.h, over the
 register-level IMU models in tests/switch_motion_harness.cpp (ICM-42607-P/ICM-42607, ICM-40607, LSM6DS3H): exact
 register traffic for identify, reset, set-up, rate changes, sleep and wake; the sample path's decode, mount matrix,
-device frame and scale; the off-with-one-line and lost-interrupt-panic paths."""
+device frame and scale; the off-with-one-line and lost-interrupt-panic paths; FIFO batching (watermark from the batch
+interval, one status/count burst and whole-record data bursts per drain, per-sample times) and its fall-backs."""
 import pathlib
 import subprocess
 import tempfile
@@ -46,6 +47,10 @@ class SwitchMotionTests(unittest.TestCase):
         for wait in ("IOSleep", "IODelay", "while (", "for (;;)"):
             self.assertNotIn(wait, sample)
         self.assertLess(sample.index("icm42607::IntStatusDrdy"), sample.index("icm42607::AccelData"))
+        drain = body("void SwitchMotion::drainFifo(")
+        for wait in ("IOSleep", "IODelay", "while (", "for (;;)"):
+            self.assertNotIn(wait, drain)
+        self.assertLess(drain.index("icm42607::IntStatus,"), drain.index("icm42607::FifoData"))
 
 
 if __name__ == "__main__":

@@ -92,7 +92,8 @@ const uint8_t kLightDescriptor[] = {
 
 // Motion sensors (SwitchHID.h): Apple vendor top-level collection, input report 1 = three Sensor-page values, 32-bit
 // signed, in 10^-6 of the unit IOHIDEventDriver's event carries (physical range = logical range, unit exponent -6, so
-// getScaledFixedValue gives g or rad/s in 16.16); feature report 1 = Sensor Report Interval, microseconds.
+// getScaledFixedValue gives g or rad/s in 16.16); feature report 1 = Sensor Report Interval and Report Latency (the
+// batch interval), microseconds, so the feature handler receives both (SwitchHID.h).
 #define MOTION_DESCRIPTOR(usage, x)                                                                                  \
     0x06, 0x00, 0xff, 0x09, usage, 0xa1, 0x01, 0x85, 0x01, /* Apple vendor: usage, Collection (Application), ID 1 */ \
         0x05, 0x20, 0x0a, x, 0x04, 0x0a, x + 1, 0x04, 0x0a, x + 2, 0x04, /* Sensor: X, Y, Z */                       \
@@ -101,6 +102,7 @@ const uint8_t kLightDescriptor[] = {
         0x55, 0x0a, 0x75, 0x20, 0x95, 0x03, 0x81, 0x02,                  /* Unit Exponent -6, 3 x 32 bits, Input */  \
         0x0a, 0x0e, 0x03, 0x15, 0x00, 0x35, 0x00, 0x55, 0x00,            /* Report Interval, 0 .., exponent 0 */     \
         0x95, 0x01, 0xb1, 0x02,                                          /* 1 x 32 bits, Feature */                  \
+        0x0a, 0x16, 0x03, 0xb1, 0x02,                                    /* Report Latency: 1 x 32 bits, Feature */  \
         0xc0
 const uint8_t kAccelerometerDescriptor[] = {
     MOTION_DESCRIPTOR(0x03, 0x53)};                                 // Accelerometer; Acceleration Axis X 0x0453
@@ -252,6 +254,7 @@ public:
         setProperty("ProductID", (unsigned long long)profile->productID, 32);
         setProperty("Manufacturer", "Nintendo");
         setProperty("Built-In", true);
+        timed = timestamps();
         return IOHIDDevice::start(provider);
     }
 
@@ -273,6 +276,37 @@ public:
         memcpy(buffer->getBytesNoCopy(), report, length);
         return handleReport(buffer, 0 /* kIOHIDReportTypeInput */, 0);
     }
+
+    // IOHIDDevice::handleReport (slot 181, not overridden here) is clock_get_uptime, the _readyForInputReports test,
+    // WORKLOOP_LOCK (its event source's lock: the gate of getWorkLoop(), our `loop`), the virtual handleReportWithTime
+    // (slot 197) and WORKLOOP_UNLOCK (IOHIDFamily-2031 IOHIDDevice.cpp:1291-1311). postAt is the same with the caller's
+    // time; handleReportWithTime makes the same readiness test itself (IOHIDDevice.cpp:2111). Used only after
+    // timestamps() found 21H461's code there (from our kernel's prelinked IOHIDFamily): +0x34 ldrb w8, [x19, #0xb0]
+    // (_readyForInputReports), +0x48 ldr x1, [sp, #8] (the time), +0x50 ldr x8, [x8, #0x628] (slot 197).
+    static constexpr unsigned kHandleReport = 181, kHandleReportWithTime = 197;
+    bool timestamps() const
+    {
+        const uintptr_t *table = *reinterpret_cast<const uintptr_t *const *>(this);
+        const uint32_t *code = reinterpret_cast<const uint32_t *>(table[kHandleReport]);
+        return code && code[0x34 / 4] == 0x3942c268 && code[0x48 / 4] == 0xf94007e1 && code[0x50 / 4] == 0xf9431508;
+    }
+
+    IOReturn postAt(const void *report, size_t length, uint64_t timestamp)
+    {
+        if (length != profile->reportSize) return kIOReturnBadArgument;
+        if (!timed) return kIOReturnUnsupported;
+        memcpy(buffer->getBytesNoCopy(), report, length);
+        // Under the work loop's gate, as handleReport's WORKLOOP_LOCK takes it (runAction closes and opens it).
+        return loop->runAction(
+            [](OSObject *owner, void *time, void *, void *, void *) -> IOReturn {
+                auto *self = static_cast<SwitchHIDDevice *>(owner);
+                return edge::call<IOReturn, uint64_t, IOMemoryDescriptor *, uint32_t, IOOptionBits>(
+                    self, kHandleReportWithTime, *static_cast<const uint64_t *>(time), self->buffer,
+                    0 /* kIOHIDReportTypeInput */, 0);
+            },
+            this, &timestamp);
+    }
+    bool timed = false;  // timestamps(), at start
 
     IOReturn deliver(OSObject *event)
     {
@@ -452,6 +486,18 @@ IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
 {
     auto *hid = OSDynamicCast(SwitchHIDDevice, device);
     return hid ? hid->post(report, length) : kIOReturnBadArgument;
+}
+
+IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length, uint64_t timestamp)
+{
+    auto *hid = OSDynamicCast(SwitchHIDDevice, device);
+    return hid ? hid->postAt(report, length, timestamp) : kIOReturnBadArgument;
+}
+
+bool switch_hid_supports_timestamps(IOService *device)
+{
+    auto *hid = OSDynamicCast(SwitchHIDDevice, device);
+    return hid && hid->timed;
 }
 
 IOReturn switch_hid_dispatch_event(IOService *device, OSObject *event)

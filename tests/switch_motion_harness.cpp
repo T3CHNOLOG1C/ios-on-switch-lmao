@@ -6,9 +6,17 @@
 //   * ICM-42607-P / ICM-42607: TDK DS-000451 (the ICM-42670-P's map, which they share) reset values; a read or write
 //     of an address the datasheet does not list, a write while it is still resetting (1 ms) or within 200 us of a sensor
 //     leaving off, or a DEVICE_CONFIG without 4-wire SPI fails the test.
+//     Its FIFO (r15-offload): 16-byte records (header, accelerometer, gyroscope, temperature, timestamp) for the sensors
+//     FIFO_CONFIG5 (MREG1, through MADDR_W/M_W and MADDR_R/M_R, 10 us apart and only while MCLK_RDY) puts there, a
+//     record count in FIFO_COUNTH/L (records or bytes, either endianness, as INTF_CONFIG0 says), FIFO_THS at every ODR
+//     tick while the count is at or above the watermark (FIFO_WM_GT_TH), burst reads that stay on FIFO_DATA, a transfer
+//     that ends inside a record fails the test (FIFO_RESUME_PARTIAL_RD 0 would read it again), stream mode drops the
+//     oldest record when full and raises FIFO_FULL.
 //   * ICM-40607 and LSM6DS3H: enough of their maps for identification, reset, set-up and one sample each (their reset
 //     values as the driver's read-modify-writes expect them: inv_icm42600 and st_lsm6dsx).
 #include <cinttypes>
+#include <deque>
+#include <array>
 #include "../out/native-a57/root-v1/tree/drivers/SwitchMotion/SwitchMotion.cpp"
 
 static unsigned gChecks = 0, gFailures = 0;
@@ -35,6 +43,8 @@ struct Chip {
     virtual void access() {}
     virtual uint8_t read(uint8_t reg) = 0;  // one byte of a read, with its side effects
     virtual void write(uint8_t reg, uint8_t value) = 0;
+    virtual bool stays(uint8_t) const { return false; }  // a burst read that does not advance (FIFO_DATA)
+    virtual void endTransfer() {}                        // chip select released
     virtual bool line() const = 0;  // INT2, which drives PX2
     virtual void produce(const int16_t accel[3], const int16_t gyro[3]) = 0;  // the next output data rate tick
     void fail(const std::string &why) { errors.push_back(why); }
@@ -52,10 +62,17 @@ static void storeBigEndian(uint8_t *r, const int16_t v[3])
 
 struct Icm42607 : Chip {
     uint8_t r[0x80] = {};
+    uint8_t mreg1[0x100] = {};
     const uint8_t who;
     bool resetBroken = false;  // the soft reset never reports RESET_DONE
     bool stuck = false;        // INT2 held high with no data-ready status
-    uint64_t accessFrom = 0, writesFrom = 0;
+    bool mregBroken = false;   // M_W writes are not taken
+    bool countBroken = false;  // FIFO_COUNTH reads 0xff
+    uint64_t accessFrom = 0, writesFrom = 0, mregFrom = 0;
+    uint8_t maddrW = 0, maddrR = 0;
+    std::deque<std::array<uint8_t, 16>> fifo;
+    unsigned fifoByte = 0;  // bytes of the front record read in this transfer
+    uint16_t tick = 0;
     explicit Icm42607(uint8_t whoAmI = 0x60) : who(whoAmI) { resetValues(); }
     void resetValues()
     {
@@ -67,6 +84,18 @@ struct Icm42607 : Chip {
         for (const auto &v : reset) r[v[0]] = v[1];
         for (uint8_t a = 0x0b; a <= 0x16; a += 2) r[a] = 0x80;  // -32768: no data
         r[0x75] = who;
+        memset(mreg1, 0, sizeof(mreg1));
+        mreg1[0x01] = 0x20;  // FIFO_CONFIG5: FIFO_WM_GT_TH
+        fifo.clear();
+        fifoByte = 0;
+    }
+    unsigned watermark() const { return r[0x29] | (r[0x2a] & 0x0f) << 8; }
+    unsigned countValue() const { return (r[0x35] & 0x40) ? (unsigned)fifo.size() : (unsigned)fifo.size() * 16; }
+    bool stays(uint8_t reg) const override { return reg == 0x3f; }
+    void endTransfer() override
+    {
+        if (fifoByte) fail("a transfer ended inside a FIFO record");
+        fifoByte = 0;
     }
     static bool writable(uint8_t reg)
     {
@@ -81,12 +110,30 @@ struct Icm42607 : Chip {
     void access() override
     {
         if (gNow < accessFrom) fail("access within 1 ms of the soft reset");
+        if (gNow < mregFrom) fail("access within 10 us of an MREG access");
     }
     uint8_t read(uint8_t reg) override
     {
         if (reg >= 0x80 || !listed(reg)) {
             fail("read of unlisted register " + hex(reg));
             return 0;
+        }
+        if (reg == 0x3d || reg == 0x3e) {
+            const unsigned count = countValue();
+            const bool big = r[0x35] & 0x20;
+            if (countBroken) return 0xff;
+            return (uint8_t)((reg == 0x3d) == big ? count >> 8 : count);
+        }
+        if (reg == 0x3f) {
+            if (fifo.empty()) return 0x80;
+            const uint8_t value = fifo.front()[fifoByte++];
+            if (fifoByte == 16) fifo.pop_front(), fifoByte = 0;
+            return value;
+        }
+        if (reg == 0x7e) {
+            if (!(r[0x00] & 0x08)) fail("M_R read without MCLK");
+            mregFrom = gNow + 10000;
+            return mreg1[maddrR];
         }
         const uint8_t value = r[reg];
         if (reg >= 0x39 && reg <= 0x3c) r[reg] = 0;  // INT_STATUS_DRDY .. INT_STATUS3: cleared by the read
@@ -108,6 +155,26 @@ struct Icm42607 : Chip {
                 accessFrom = gNow + 1000000;
             }
             return;
+        case 0x7a: maddrW = value; return;
+        case 0x7d:
+            maddrR = value;
+            mregFrom = gNow + 10000;
+            return;
+        case 0x7b:
+            if (!(r[0x00] & 0x08)) fail("M_W write without MCLK");
+            if (r[0x79]) fail("M_W with BLK_SEL_W not MREG1");
+            if (!mregBroken) mreg1[maddrW] = value;
+            mregFrom = gNow + 10000;
+            return;
+        case 0x28:
+            if (value & 1) fifo.clear(), fifoByte = 0;  // bypassed: empty
+            r[reg] = value;
+            return;
+        case 0x29:
+        case 0x2a:
+            if (!fifo.empty()) fail("FIFO_WM written with records in the FIFO");
+            r[reg] = value;
+            return;
         case 0x1f: {
             const uint8_t old = r[0x1f];
             if ((value & 0x0c) == 0x08 || (value & 0x60)) fail("PWR_MGMT0 " + hex(value) + ": reserved bits/mode");
@@ -123,7 +190,11 @@ struct Icm42607 : Chip {
             r[reg] = value;
         }
     }
-    bool line() const override { return stuck || ((r[0x2d] & 0x08) && (r[0x39] & 1) && (r[0x06] & 0x38) == 0x38); }
+    bool line() const override
+    {
+        const bool latched = (r[0x06] & 0x38) == 0x38;
+        return stuck || ((r[0x2d] & 0x08) && (r[0x39] & 1) && latched) || ((r[0x2d] & 0x04) && (r[0x3a] & 0x04) && latched);
+    }
     void produce(const int16_t accel[3], const int16_t gyro[3]) override
     {
         const bool accelOn = (r[0x1f] & 0x03) == 0x03, gyroOn = (r[0x1f] & 0x0c) == 0x0c;
@@ -135,6 +206,17 @@ struct Icm42607 : Chip {
         if (accelOn) storeBigEndian(r + 0x0b, accel);
         if (gyroOn) storeBigEndian(r + 0x11, gyro);
         r[0x39] |= 1;
+        const bool fifoAccel = accelOn && (mreg1[0x01] & 0x01), fifoGyro = gyroOn && (mreg1[0x01] & 0x02);
+        if ((r[0x28] & 1) || (!fifoAccel && !fifoGyro)) return;
+        std::array<uint8_t, 16> record = {};
+        record[0] = (uint8_t)((fifoAccel ? 0x40 : 0) | (fifoGyro ? 0x20 : 0) | 0x08);
+        storeBigEndian(record.data() + 1, fifoAccel ? accel : kNoData);
+        storeBigEndian(record.data() + 7, fifoGyro ? gyro : kNoData);
+        record[14] = (uint8_t)(tick >> 8), record[15] = (uint8_t)tick;
+        tick = (uint16_t)(tick + 5000 / 16);
+        if (fifo.size() == 144) fifo.pop_front(), r[0x3a] |= 0x02;  // stream mode: the oldest goes, FIFO_FULL
+        fifo.push_back(record);
+        if (watermark() && countValue() >= watermark() && (mreg1[0x01] & 0x20)) r[0x3a] |= 0x04;  // FIFO_THS
     }
 };
 
@@ -231,12 +313,13 @@ extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *txv, vo
         assert(rx);
         gChip->ops.push_back("R " + hex(reg) + (len > 2 ? " x" + std::to_string(len - 1) : ""));
         rx[0] = 0xff;
-        for (size_t i = 1; i < len; ++i) rx[i] = gChip->read((uint8_t)(reg + i - 1));
+        for (size_t i = 1; i < len; ++i) rx[i] = gChip->read(gChip->stays(reg) ? reg : (uint8_t)(reg + i - 1));
     } else {
         if (len != 2) gChip->fail("multi-byte write at " + hex(reg));
         gChip->ops.push_back("W " + hex(reg) + " " + hex(tx[1]));
         gChip->write(reg, tx[1]);
     }
+    gChip->endTransfer();
     return 0;
 }
 
@@ -260,7 +343,9 @@ struct HidDevice : IOService {
     SwitchHIDFeatureHandler handler = nullptr;
     void *context = nullptr;
     std::vector<SwitchMotionReport> reports;
+    std::vector<uint64_t> times;  // switch_hid_post_at's sample times (0: switch_hid_post)
 };
+static bool gTimedPosts = true;  // switch_hid_supports_timestamps
 static std::vector<HidDevice *> gHid;
 IOService *switch_hid_create(SwitchHIDKind kind)
 {
@@ -275,7 +360,21 @@ IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
     SwitchMotionReport copy;
     memcpy(&copy, report, sizeof(copy));
     static_cast<HidDevice *>(device)->reports.push_back(copy);
+    static_cast<HidDevice *>(device)->times.push_back(0);
     return kIOReturnSuccess;
+}
+IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length, uint64_t timestamp)
+{
+    assert(gTimedPosts && length == sizeof(SwitchMotionReport));
+    SwitchMotionReport copy;
+    memcpy(&copy, report, sizeof(copy));
+    static_cast<HidDevice *>(device)->reports.push_back(copy);
+    static_cast<HidDevice *>(device)->times.push_back(timestamp);
+    return kIOReturnSuccess;
+}
+bool switch_hid_supports_timestamps(IOService *)
+{
+    return gTimedPosts;
 }
 void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler handler, void *context)
 {
@@ -290,13 +389,26 @@ static HidDevice *hid(SwitchHIDKind kind)
         if (device->kind == kind) return device;
     return nullptr;
 }
-// A client's ReportInterval (microseconds) as IOHIDEventDriver sends it: report ID 1, then the 32-bit field.
-static void setInterval(SwitchHIDKind kind, uint32_t us)
+// A client's ReportInterval and BatchInterval (microseconds) as IOHIDEventDriver sends them: report ID 1, then the
+// Report Interval and Report Latency fields, 32 bits each (SwitchHIDDevice.cpp MOTION_DESCRIPTOR).
+static void setFeature(SwitchHIDKind kind, uint32_t us, uint32_t batch)
 {
     HidDevice *device = hid(kind);
     assert(device && device->handler);
-    const uint8_t report[5] = {1, (uint8_t)us, (uint8_t)(us >> 8), (uint8_t)(us >> 16), (uint8_t)(us >> 24)};
+    const uint8_t report[9] = {1,
+                               (uint8_t)us,
+                               (uint8_t)(us >> 8),
+                               (uint8_t)(us >> 16),
+                               (uint8_t)(us >> 24),
+                               (uint8_t)batch,
+                               (uint8_t)(batch >> 8),
+                               (uint8_t)(batch >> 16),
+                               (uint8_t)(batch >> 24)};
     device->handler(device->context, report, sizeof(report));
+}
+static void setInterval(SwitchHIDKind kind, uint32_t us)
+{
+    setFeature(kind, us, 0);
 }
 static IOInterruptEventSource *dataReady()
 {
@@ -374,6 +486,7 @@ static void teardown()
     gHid.clear();
     gLog.clear();
     gChip = nullptr;
+    gTimedPosts = true;
 }
 
 // What start() sends an ICM-42607 after identifying it: reset (TDK inv_imu_device_reset), interface and INT2 set-up,
@@ -381,7 +494,7 @@ static void teardown()
 static const std::vector<std::string> k42607Start = {
     "R 75",    "R 0f",                                       // identify, nothing written first
     "W 7c 00", "W 79 00", "W 02 10", "W 01 04", "R 3a",      // reset, 4-wire restated, RESET_DONE
-    "R 36",    "W 36 41", "W 05 05", "R 35",    "W 35 33",   // I3C off + PLL, SPI slew, I2C off + big-endian
+    "R 36",    "W 36 41", "W 05 05", "R 35",    "W 35 73",   // I3C off + PLL, SPI slew, I2C off, big-endian, records
     "W 06 38", "W 2b 00",                                    // INT2 latched push-pull high; INT1 nothing
     "W 2d 00", "W 20 0c", "W 21 2c", "W 23 37", "W 24 47", "W 1f 00",  // off
 };
@@ -435,6 +548,24 @@ static void decodeAndMapping()
                 kICM42607.rates[i].milliHz == kICM40607.rates[i].milliHz;
     }
     check(rates, "ODR codes: ICM-42607 12.5 Hz = 12 .. 200 Hz = 8; ICM-40607 11 .. 7");
+
+    // FIFO records: header, then the register burst's layout; the empty marker and 20-byte records stop a drain.
+    uint8_t record[16] = {0x68};
+    memcpy(record + 1, icm, sizeof(icm));
+    check(decodeFifoRecord(record, accel, gyro, fresh) && accel[0] == 100 && accel[2] == 4096 && gyro[1] == -328 &&
+              fresh[Accel] && fresh[Gyro],
+          "decodeFifoRecord: accelerometer and gyroscope after the header");
+    record[0] = 0x28;
+    check(decodeFifoRecord(record, accel, gyro, fresh) && !fresh[Accel] && fresh[Gyro],
+          "decodeFifoRecord: a record without the accelerometer bit");
+    record[0] = 0x80;
+    check(!decodeFifoRecord(record, accel, gyro, fresh), "decodeFifoRecord: the empty marker");
+    record[0] = 0x78;
+    check(!decodeFifoRecord(record, accel, gyro, fresh), "decodeFifoRecord: a 20-byte record");
+    // Watermarks: whole sample periods inside the batch interval, 1 for none, capped.
+    check(watermarkFor(15000, 5000) == 3 && watermarkFor(20000, 20000) == 1 && watermarkFor(0, 5000) == 1 &&
+              watermarkFor(15000, 10000) == 1 && watermarkFor(1000000, 5000) == 24 && watermarkFor(1000000, 20000) == 12,
+          "watermarkFor: 15 ms at 200 Hz = 3; caps at 24 records and 250 ms");
 }
 
 // The r7p8 console: an ICM-42607-P straight from power-on (0x0f = 0x80, 0x75 = 0x60), through a whole client session.
@@ -450,7 +581,8 @@ static void icm42607Session()
     // UIAccelerometer-style client at 100 Hz: ODR code 9 (not the ICM-40607's 8), 25 Hz filter, accelerometer LN.
     setInterval(kSwitchHIDAccelerometer, 10000);
     expectOps({"W 20 09", "W 21 29", "W 23 36", "W 24 46", "W 1f 03", "W 2d 08"}, "42607 accel 100 Hz");
-    expectLog("os_log: SwitchMotion: 100000 mHz, accel 1 (10000 us), gyro 0 (0 us)", "42607 accel 100 Hz");
+    expectLog("os_log: SwitchMotion: 100000 mHz, accel 1 (10000 us), gyro 0 (0 us), batch 0 us, FIFO watermark 1",
+              "42607 accel 100 Hz");
     check(dataReady()->enabled && IOTimerEventSource::last->armed && IOTimerEventSource::last->ms == 1000,
           "42607: data-ready and the 1 s watchdog armed");
 
@@ -479,7 +611,8 @@ static void icm42607Session()
     // CoreMotion's gyroscope at 200 Hz joins: both at ODR 8 with the 53 Hz filter; the accelerometer is decimated 2:1.
     setInterval(kSwitchHIDGyro, 5000);
     expectOps({"W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0f", "W 2d 08"}, "42607 gyro 200 Hz");
-    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (10000 us), gyro 1 (5000 us)", "42607 gyro 200 Hz");
+    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (10000 us), gyro 1 (5000 us), batch 0 us, FIFO watermark 1",
+              "42607 gyro 200 Hz");
     gNow += 30000000;  // inside the gyroscope's 60 ms
     chip.produce(accel, gyro);
     deliver();
@@ -509,7 +642,7 @@ static void icm42607Session()
     switch_motion_suspend();
     expectOps({"W 2d 00", "W 20 0c", "W 21 2c", "W 23 37", "W 24 47", "W 1f 00"}, "42607 suspend");
     switch_motion_resume();
-    expectOps({"R 36", "W 36 41", "W 05 05", "R 35", "W 35 33", "W 06 38", "W 2b 00", "W 2d 00", "W 20 0c", "W 21 2c",
+    expectOps({"R 36", "W 36 41", "W 05 05", "R 35", "W 35 73", "W 06 38", "W 2b 00", "W 2d 00", "W 20 0c", "W 21 2c",
                "W 23 37", "W 24 47", "W 1f 00", "W 20 0b", "W 21 2b", "W 23 37", "W 24 47", "W 1f 03", "W 2d 08"},
               "42607 resume");
     check(gSpiSuspends == 1 && gSpiResumes == 1 && dataReady()->enabled, "42607: SPI4 suspended and resumed");
@@ -612,6 +745,133 @@ static void icm42607Faults()
     }
 }
 
+// FIFO batching: CoreMotion's gyroscope at 200 Hz with a 15 ms batch interval, then its accelerometer joins, then the
+// batch interval goes; and the checks that keep data-ready.
+static void icm42607Fifo()
+{
+    const std::vector<std::string> fifo3 = {"R 00", "R 35", "W 28 01", "W 29 03", "W 2a 00", "W 7a 01",
+                                            "W 7b 23", "W 7d 01", "R 7e", "W 28 00", "W 2d 04"};
+    const int16_t accel[3] = {100, -200, 4096}, gyro[3] = {164, -328, 16};
+    {
+        Icm42607 chip;
+        check(start(chip), "FIFO: started");
+        expectOps(k42607Start, "FIFO start");
+        setFeature(kSwitchHIDGyro, 5000, 15000);
+        std::vector<std::string> want = {"W 2d 00", "W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0c"};
+        want.insert(want.end(), fifo3.begin(), fifo3.end());
+        expectOps(want, "FIFO gyro 200 Hz, 15 ms batches: sensors, then the FIFO from empty, then FIFO_THS on INT2");
+        expectLog("os_log: SwitchMotion: 200000 mHz, accel 0 (0 us), gyro 1 (5000 us), batch 15000 us, FIFO watermark 3",
+                  "FIFO gyro");
+        gNow += 80000000;  // past the gyroscope's settle time
+        chip.produce(accel, gyro);
+        gNow += 5000000;
+        chip.produce(accel, gyro);
+        check(!chip.line() && deliver() == 0, "FIFO: no interrupt below the watermark");
+        gNow += 5000000;
+        chip.produce(accel, gyro);
+        check(deliver() == 1, "FIFO: one interrupt for three samples");
+        expectOps({"R 3a x5", "R 3f x48"}, "FIFO drain: status and count in one burst, three records in another");
+        expectReports(kSwitchHIDGyro, 3, -174532, 349065, 17027, "FIFO gyro reports");
+        const std::vector<uint64_t> spaced = {gNow - 10000000, gNow - 5000000, gNow};
+        check(hid(kSwitchHIDGyro)->times == spaced, "FIFO: each sample keeps its time, 5 ms apart, the last now");
+        expectLog("IOLog: SwitchMotion: ICM-42607-P FIFO batching on: watermark 3 at 200000 mHz, first drain 3 of 3 "
+                  "records (header 0x28)",
+                  "FIFO first drain");
+        check(!chip.line(), "FIFO: INT2 low after the drain");
+
+        // A late drain: five records, all posted, times still going forward and never past now.
+        for (unsigned i = 0; i < 5; ++i) {
+            gNow += 5000000;
+            chip.produce(accel, gyro);
+        }
+        check(deliver() == 1, "FIFO: late drain");
+        expectOps({"R 3a x5", "R 3f x48", "R 3f x32"}, "FIFO late drain: whole records, three a transfer");
+        const std::vector<uint64_t> &times = hid(kSwitchHIDGyro)->times;
+        bool forward = times.size() == 8 && times.back() <= gNow;
+        for (size_t i = 1; i < times.size(); ++i) forward = forward && times[i] > times[i - 1];
+        check(forward, "FIFO: times only go forward and stop at now");
+
+        // The accelerometer joins at 50 Hz with 20 ms batches: still 15 ms, both sensors' records, accel 4:1.
+        setFeature(kSwitchHIDAccelerometer, 20000, 20000);
+        want = {"W 2d 00", "W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0f"};
+        want.insert(want.end(), fifo3.begin(), fifo3.end());
+        expectOps(want, "FIFO accel joins");
+        gNow += 30000000;  // past the accelerometer's settle time
+        hid(kSwitchHIDGyro)->reports.clear(), hid(kSwitchHIDGyro)->times.clear();
+        for (unsigned i = 0; i < 12; ++i) {
+            gNow += 5000000;
+            chip.produce(accel, gyro);
+            deliver();
+        }
+        gChip->ops.clear();
+        expectReports(kSwitchHIDGyro, 12, -174532, 349065, 17027, "FIFO both: gyro");
+        expectReports(kSwitchHIDAccelerometer, 3, 24414, -48828, -1000000, "FIFO both: accel decimated 4:1");
+
+        // The gyroscope's batch interval goes to 0: data-ready again, the sensors untouched.
+        setFeature(kSwitchHIDGyro, 5000, 0);
+        expectOps({"W 2d 00", "W 28 01", "W 2d 08"}, "FIFO batch gone: FIFO bypassed, data-ready on INT2");
+        expectLog("os_log: SwitchMotion: batch 0 us, FIFO watermark 1", "FIFO batch gone");
+        gNow += 5000000;
+        chip.produce(accel, gyro);
+        check(deliver() == 1, "FIFO off: one interrupt per sample");
+        expectOps({"R 39", "R 0b x12"}, "FIFO off: the data-ready path");
+        check(hid(kSwitchHIDGyro)->times.back() == 0, "FIFO off: posted as before");
+
+        setInterval(kSwitchHIDGyro, 0);
+        setInterval(kSwitchHIDAccelerometer, 0);
+        gChip->ops.clear();
+        expectClean("FIFO session");
+        teardown();
+    }
+    {  // FIFO_CONFIG5 does not take the write: one line, data-ready for the boot.
+        Icm42607 chip;
+        chip.mregBroken = true;
+        check(start(chip), "MREG: started");
+        gChip->ops.clear();
+        setFeature(kSwitchHIDGyro, 5000, 15000);
+        expectOps({"W 2d 00", "W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0c", "R 00", "R 35", "W 28 01",
+                   "W 29 03", "W 2a 00", "W 7a 01", "W 7b 23", "W 7d 01", "R 7e", "W 2d 08"},
+                  "MREG: read back differs, data-ready routed");
+        expectLog("IOLog: SwitchMotion: ICM-42607-P FIFO batching off for this boot (FIFO_CONFIG5 (MREG1) read back 0x20 "
+                  "after writing 0x23); data-ready per sample as before",
+                  "MREG");
+        setFeature(kSwitchHIDAccelerometer, 20000, 20000);
+        expectOps({"W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0f", "W 2d 08"}, "MREG: no FIFO for the boot");
+        expectClean("MREG");
+        teardown();
+    }
+    {  // A count past the FIFO: one line, data-ready.
+        Icm42607 chip;
+        chip.countBroken = true;
+        check(start(chip), "count: started");
+        setFeature(kSwitchHIDGyro, 5000, 15000);
+        gNow += 80000000;
+        for (unsigned i = 0; i < 3; ++i) chip.produce(accel, gyro);
+        gChip->ops.clear();
+        check(deliver() == 2, "count: the FIFO interrupt, then data-ready's for the latest sample");
+        expectOps({"R 3a x5", "W 2d 00", "W 28 01", "W 2d 08", "R 39", "R 0b x12"},
+                  "count: FIFO bypassed, data-ready routed and taken");
+        expectLog("IOLog: SwitchMotion: ICM-42607-P FIFO batching off for this boot (FIFO count 65535 past its 144 "
+                  "records (INT_STATUS 0x4)); data-ready per sample as before",
+                  "count");
+        check(hid(kSwitchHIDGyro)->reports.size() == 1 && hid(kSwitchHIDGyro)->times.back() == 0,
+              "count: nothing posted from the FIFO, the data-ready sample as before");
+        teardown();
+    }
+    {  // HID reports without sample times: batching off from the start.
+        gTimedPosts = false;
+        Icm42607 chip;
+        check(start(chip), "untimed: started");
+        expectLog("IOLog: SwitchMotion: ICM-42607-P FIFO batching off: HID reports cannot carry sample times here "
+                  "(SwitchHID); data-ready per sample as before",
+                  "untimed");
+        gChip->ops.clear();
+        setFeature(kSwitchHIDGyro, 5000, 15000);
+        expectOps({"W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0c", "W 2d 08"}, "untimed: data-ready");
+        teardown();
+    }
+}
+
 static void icm40607Session()
 {
     Icm40607 chip;
@@ -658,6 +918,7 @@ int main()
     icm42607Session();
     icm42607LeftRunning();
     icm42607Faults();
+    icm42607Fifo();
     icm40607Session();
     lsm6ds3hSession();
     if (gFailures) {

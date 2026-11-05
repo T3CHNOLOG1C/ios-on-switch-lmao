@@ -35,7 +35,17 @@
 // feature, SwitchHID.h) or the orientation detector runs. The output data rate is the lowest supported rate at or above
 // the fastest request; the gyroscope's data-ready leads when it is on (both then share the rate) and each service is
 // decimated to its own interval. Each data-ready interrupt reads status and data (one SPI burst; the ICM-42607's status
-// register is apart from its data, so status first, then data), which lets the line drop. A 1 s watchdog, armed only
+// register is apart from its data, so status first, then data), which lets the line drop.
+// FIFO batching (ICM-42607, r15-offload): the services also carry a Report Latency feature (SwitchHID.h), so
+// IOHIDEventDriver hands this driver each client's BatchInterval (CoreMotion: 15 ms for the gyroscope, 20 ms for the
+// accelerometer, in r7s's logs). With batching asked for, the part fills its FIFO and raises FIFO_THS on INT2 once
+// `watermark` records are in (as many sample periods as fit in the shortest batch interval: 3 at 200 Hz for 15 ms), and
+// one interrupt drains them with one status/count burst and whole-record FIFO_DATA bursts (3 records a TegraSPI
+// transfer) instead of two transfers and an interrupt per sample. Every sample keeps its own time (switch_hid_post_at:
+// the watermark's record at the interrupt's action, the others a sample period apart), so CoreMotion integrates them as
+// before; nothing waits longer than the batch interval the client asked for. A batch interval of 0, another family, or a
+// FIFO check that fails on hardware (MCLK, the count format, the MREG1 read-back, a count or record that makes no
+// sense: one log line) keeps data-ready per sample. A 1 s watchdog, armed only
 // while converting, panics if data-ready is raised but never arrives (lost at the GPIO controller or the GIC); a part
 // that raises none, or a line that stays high without new data, turns motion off with one log line (giveUp). No polling
 // anywhere.
@@ -199,9 +209,12 @@ constexpr size_t kBurst = 15;
 }  // namespace icm40607
 
 // InvenSense ICM-42607-P / ICM-42607 registers, user bank 0 (TDK DS-000451 and inv_imu_regmap_rev_a.h; Linux
-// inv_icm42607.h). Everything here is in bank 0: the MREG banks (BLK_SEL/MADDR/M_W) hold nothing this driver uses.
+// inv_icm42607.h). Everything here is in bank 0 but FIFO_CONFIG5, in MREG1 (block 0: written through MADDR_W/M_W and
+// read back through MADDR_R/M_R with 10 us after each access, TDK inv_imu_transport.c write_mclk_reg/read_mclk_reg,
+// while MCLK runs: MCLK_RDY).
 namespace icm42607 {
 enum : uint8_t {
+    MclkRdy = 0x00,          // MCLK_RDY bit 3: the internal clock runs (sensors on), MREG accesses work
     DeviceConfig = 0x01,     // SPI_AP_4WIRE bit 2 (reset value 0x04: 4-wire), SPI_MODE bit 0 (0: modes 0 and 3)
     SignalPathReset = 0x02,  // SOFT_RESET_DEVICE_CONFIG bit 4
     DriveConfig3 = 0x05,     // SPI_SLEW_RATE 2:0
@@ -212,16 +225,47 @@ enum : uint8_t {
     AccelConfig0 = 0x21,  // FS 6:5, ODR 3:0
     GyroConfig1 = 0x23,   // UI filter bandwidth 2:0
     AccelConfig1 = 0x24,  // averaging 6:4 (low-power mode only), UI filter bandwidth 2:0
+    FifoConfig1 = 0x28,   // FIFO_MODE bit 1 (0 stream), FIFO_BYPASS bit 0 (reset value 0x01: bypassed, empty)
+    FifoConfig2 = 0x29,   // FIFO_WM 7:0
+    FifoConfig3 = 0x2a,   // FIFO_WM 11:8
     IntSource0 = 0x2b,    // INT1 sources (reset value 0x10: RESET_DONE)
     IntSource3 = 0x2d,    // INT2 sources
     IntfConfig0 = 0x35,
     IntfConfig1 = 0x36,
     IntStatusDrdy = 0x39,  // DATA_RDY_INT bit 0, cleared by the read
-    IntStatus = 0x3a,      // RESET_DONE_INT bit 4, cleared by the read
+    IntStatus = 0x3a,      // RESET_DONE_INT bit 4, FIFO_THS_INT bit 2, FIFO_FULL_INT bit 1, cleared by the read
+    FifoCountH = 0x3d,     // FIFO_COUNTH, FIFO_COUNTL: records (FifoCountRecords), big-endian (FifoCountBigEndian)
+    FifoData = 0x3f,       // a burst read stays on FIFO_DATA: whole records, oldest first
     WhoAmI = 0x75,
     BlkSelW = 0x79,
+    MaddrW = 0x7a,
+    MW = 0x7b,
     BlkSelR = 0x7c,
+    MaddrR = 0x7d,
+    MR = 0x7e,
+    FifoConfig5Mreg1 = 0x01,  // MREG1: FIFO_WM_GT_TH bit 5, FIFO_GYRO_EN bit 1, FIFO_ACCEL_EN bit 0 (reset 0x20)
 };
+// FIFO (DS-000451 FIFO; TDK inv_imu_configure_fifo / inv_imu_get_data_from_fifo / inv_imu_decode_fifo_frame): 16-byte
+// records of header, accelerometer X/Y/Z, gyroscope X/Y/Z (big-endian, -32768 for a sensor that is off), temperature
+// (1 byte) and a 2-byte timestamp. FIFO_WM_GT_TH raises FIFO_THS at every ODR tick while the count is at or above the
+// watermark, so a record that lands while the FIFO is drained re-arms it.
+enum : uint8_t {
+    FifoBypass = 1u << 0,          // FIFO_CONFIG1
+    FifoThsInt2 = 1u << 2,         // INT_SOURCE3
+    FifoThs = 1u << 2,             // INT_STATUS
+    FifoFull = 1u << 1,            // INT_STATUS
+    FifoCountRecords = 1u << 6,    // INTF_CONFIG0 FIFO_COUNT_FORMAT: count (and watermark) in records
+    FifoCountBigEndian = 1u << 5,  // INTF_CONFIG0 FIFO_COUNT_ENDIAN (its reset value)
+    MclkReady = 1u << 3,           // MCLK_RDY
+    FifoConfig5 = (1u << 5) | (1u << 1) | (1u << 0),  // FIFO_WM_GT_TH, gyroscope and accelerometer records
+    FifoHeaderMsg = 0x80,                             // the FIFO is empty (TDK: header 0x80, "frame invalid")
+    FifoHeaderAccel = 0x40,
+    FifoHeaderGyro = 0x20,
+    FifoHeader20 = 0x10,  // 20-byte records (FIFO_HIRES_EN): never configured here
+};
+constexpr size_t kFifoRecord = 16;
+constexpr unsigned kFifoRecordsPerRead = 3;  // 3 x 16 bytes after the address byte: one TegraSPI transfer (64)
+constexpr unsigned kFifoRecords = 144;       // 2.25 KiB of 16-byte records
 enum : uint8_t {
     Spi4Wire = 1u << 2,
     SoftReset = 1u << 4,
@@ -272,6 +316,32 @@ void decodeICM(const uint8_t *b, bool dataReady, int16_t accel[3], int16_t gyro[
     }
 }
 
+// One ICM-42607 FIFO record (icm42607::kFifoRecord bytes; host tests): its accelerometer and gyroscope after the
+// header, as the register burst lays them out. False for the empty marker (a count that ran ahead of the data) and for
+// a record of a format this driver never configures (20-byte), which stop the drain.
+bool decodeFifoRecord(const uint8_t *record, int16_t accel[3], int16_t gyro[3], bool fresh[2])
+{
+    const uint8_t header = record[0];
+    if (header & (icm42607::FifoHeaderMsg | icm42607::FifoHeader20)) return false;
+    decodeICM(record + 1, true, accel, gyro, fresh);
+    fresh[Accel] = fresh[Accel] && (header & icm42607::FifoHeaderAccel);
+    fresh[Gyro] = fresh[Gyro] && (header & icm42607::FifoHeaderGyro);
+    return true;
+}
+
+// FIFO batching (file comment): records per watermark interrupt for the shortest batch interval among the sensors a
+// client wants, at a sample period of `periodUS`: as many as fit in it, at least 1 (1 = data-ready per sample), at
+// most kMaxWatermark and at most kMaxBatchUS of samples (well inside the 1 s data-ready watchdog).
+constexpr unsigned kMaxWatermark = 24;
+constexpr uint32_t kMaxBatchUS = 250000;
+unsigned watermarkFor(uint32_t batchUS, uint32_t periodUS)
+{
+    if (!batchUS || !periodUS) return 1;
+    uint32_t records = (batchUS < kMaxBatchUS ? batchUS : kMaxBatchUS) / periodUS;
+    if (records > kMaxWatermark) records = kMaxWatermark;
+    return records ? records : 1;
+}
+
 // iPadOS's device frame from the part's axes (file comment and SwitchHID.h): the console's frame by the DT mount
 // matrix, then the portrait panel's, where +X is the console's down and +Y its right (SwitchTouch's landscape (x, y) ->
 // portrait (row 1279 - x, column y)). Acceleration is reported as the gravity vector, the negated specific force.
@@ -312,6 +382,7 @@ class SwitchMotion : public IOService {
     const Part *part = nullptr;
     const FamilyInfo *info = nullptr;
     uint32_t intervalUS[2] = {};  // the clients' report intervals, written by the feature handler (atomics)
+    uint32_t batchUS[2] = {};     // and their batch intervals (BatchInterval, the Report Latency feature; atomics)
 
     // Work loop state.
     bool converting = false, suspended = false, on[2] = {};
@@ -321,6 +392,15 @@ class SwitchMotion : public IOService {
     unsigned every[2] = {}, count[2] = {};  // decimation per service
     uint64_t settle[2] = {};                // first sample time each sensor's output is trusted
     unsigned samples = 0, empty = 0;
+    // ICM-42607 FIFO batching (file comment). fifoOn: FIFO_THS on INT2 at `watermark` records, each drain read as one
+    // status/count burst and whole-record FIFO_DATA bursts; else data-ready per sample. timedPosts: the HID devices take
+    // a report's sample time (switch_hid_post_at), which batching needs. fifoOff: a FIFO check failed, logged once,
+    // data-ready for the rest of the boot.
+    bool fifoOn = false, fifoOff = false, timedPosts = false, fifoLogged = false, overflowLogged = false;
+    unsigned watermark = 1;
+    uint64_t periodAbs = 0;       // one sample period at the current rate, in absolute time
+    uint64_t lastPosted[2] = {};  // the last sample time posted per service (they only go forward)
+    uint32_t drains = 0, records = 0, overflows = 0;
     int32_t gravity[3] = {};
     uint8_t orientation = Unknown, candidate = Unknown;
     unsigned candidateCount = 0;
@@ -335,9 +415,13 @@ class SwitchMotion : public IOService {
     bool identify();
     bool reset();
     void configurePart();
-    void program(bool accel, bool gyro, unsigned rateIndex);
+    void program(bool accel, bool gyro, unsigned rateIndex, unsigned fifoWatermark = 1);
+    void route(bool any, unsigned fifoWatermark);
+    bool configureFifo(unsigned fifoWatermark);
+    void fifoFailed(const char *what);
     void apply();
     void sample();
+    void drainFifo(uint64_t now);
     void post(Sensor sensor, const int16_t raw[3], uint64_t now);
     void detectOrientation(const int32_t accel[3]);
 
@@ -474,14 +558,16 @@ void SwitchMotion::configurePart()
     case Family::ICM42607:
         // Linux inv_icm42607 spi_bus_setup and setup, TDK configure_serial_interface: I3C off and the PLL clock,
         // the fastest SPI slew, I2C off (INTF_CONFIG0 1:0, reserved in DS-000451 but set by TDK's own driver) and
-        // big-endian data (the reset value); INT2 latched, push-pull, active high; nothing on INT1.
+        // big-endian data (the reset value), the FIFO count (and watermark) in records, big-endian (TDK
+        // inv_imu_configure_fifo counts records too); INT2 latched, push-pull, active high; nothing on INT1.
         readRegisters(icm42607::IntfConfig1, &value, 1);
         writeRegister(
             icm42607::IntfConfig1,
             (uint8_t)((value & ~(icm42607::I3cSdr | icm42607::I3cDdr | icm42607::ClkSelMask)) | icm42607::ClkSelPll));
         writeRegister(icm42607::DriveConfig3, icm42607::SpiSlewFastest);
         readRegisters(icm42607::IntfConfig0, &value, 1);
-        writeRegister(icm42607::IntfConfig0, (uint8_t)(value | icm42607::I2CDisable | icm42607::BigEndian));
+        writeRegister(icm42607::IntfConfig0, (uint8_t)(value | icm42607::I2CDisable | icm42607::BigEndian |
+                                                       icm42607::FifoCountRecords | icm42607::FifoCountBigEndian));
         writeRegister(icm42607::IntConfig, icm42607::Int2LatchedPushPullHigh);
         writeRegister(icm42607::IntSource0, 0);
         break;
@@ -492,7 +578,7 @@ void SwitchMotion::configurePart()
 // Data rates, full scales and power for both sensors, and the data-ready source on INT2: the gyroscope's when it is
 // on, else the accelerometer's (ST); the shared one (ICM). Turning on writes the sensors first and the routing last;
 // turning off the reverse, so INT2 is low when nothing converts.
-void SwitchMotion::program(bool accel, bool gyro, unsigned rateIndex)
+void SwitchMotion::program(bool accel, bool gyro, unsigned rateIndex, unsigned fifoWatermark)
 {
     const Rate &r = info->rates[rateIndex];
     const bool any = accel || gyro;
@@ -515,7 +601,7 @@ void SwitchMotion::program(bool accel, bool gyro, unsigned rateIndex)
         if (any) writeRegister(icm40607::IntSource3, icm40607::DataReady);
         break;
     case Family::ICM42607:
-        if (!any) writeRegister(icm42607::IntSource3, 0);
+        if (!any || fifoOn || fifoWatermark > 1) writeRegister(icm42607::IntSource3, 0);
         writeRegister(icm42607::GyroConfig0, (uint8_t)(icm42607::Fs2000dps | r.code));
         writeRegister(icm42607::AccelConfig0, (uint8_t)(icm42607::Fs8g | r.code));
         writeRegister(icm42607::GyroConfig1, (uint8_t)(icm42607::GyroConfig1Upper | r.filter));
@@ -523,9 +609,69 @@ void SwitchMotion::program(bool accel, bool gyro, unsigned rateIndex)
         writeRegister(icm42607::PwrMgmt0,
                       (uint8_t)((gyro ? icm42607::GyroLowNoise : 0) | (accel ? icm42607::AccelLowNoise : 0)));
         IODelay(200);  // no register writes for 200 us after a sensor leaves off (DS-000451 PWR_MGMT0)
-        if (any) writeRegister(icm42607::IntSource3, icm42607::DrdyInt2);
+        route(any, fifoWatermark);
         break;
     }
+}
+
+// Work loop, ICM-42607, INT2's sources off (program, apply): the FIFO for a watermark above 1 (configureFifo; a failed
+// check leaves data-ready), else bypassed if it was on, then INT2's source: FIFO_THS or data-ready, or none when
+// nothing converts.
+void SwitchMotion::route(bool any, unsigned fifoWatermark)
+{
+    bool fifo = any && fifoWatermark > 1 && !fifoOff && configureFifo(fifoWatermark);
+    if (!fifo && fifoOn) writeRegister(icm42607::FifoConfig1, icm42607::FifoBypass);  // empty, out of the way
+    fifoOn = fifo;
+    watermark = fifo ? fifoWatermark : 1;
+    const uint8_t source = fifo ? (uint8_t)icm42607::FifoThsInt2 : (uint8_t)icm42607::DrdyInt2;
+    if (any) writeRegister(icm42607::IntSource3, source);
+}
+
+// Work loop, ICM-42607, sensors on, INT2's sources off: the FIFO from empty with a new watermark (DS-000451 FIFO_WM:
+// change it while the FIFO is empty), accelerometer and gyroscope records in FIFO_CONFIG5 (MREG1, read back), counts
+// in records, stream mode. A part that does not behave as expected gets one line and data-ready for the boot.
+bool SwitchMotion::configureFifo(unsigned fifoWatermark)
+{
+    uint8_t value = 0;
+    readRegisters(icm42607::MclkRdy, &value, 1);
+    char why[96];
+    if (!(value & icm42607::MclkReady)) {
+        snprintf(why, sizeof(why), "MCLK_RDY %#x with the sensors on: no MREG access", value);
+        fifoFailed(why);
+        return false;
+    }
+    readRegisters(icm42607::IntfConfig0, &value, 1);
+    if ((value & (icm42607::FifoCountRecords | icm42607::FifoCountBigEndian)) !=
+        (icm42607::FifoCountRecords | icm42607::FifoCountBigEndian)) {
+        snprintf(why, sizeof(why), "INTF_CONFIG0 %#x: not the record count format", value);
+        fifoFailed(why);
+        return false;
+    }
+    writeRegister(icm42607::FifoConfig1, icm42607::FifoBypass);
+    writeRegister(icm42607::FifoConfig2, (uint8_t)(fifoWatermark & 0xff));
+    writeRegister(icm42607::FifoConfig3, (uint8_t)((fifoWatermark >> 8) & 0x0f));
+    writeRegister(icm42607::MaddrW, icm42607::FifoConfig5Mreg1);
+    writeRegister(icm42607::MW, icm42607::FifoConfig5);
+    IODelay(10);
+    writeRegister(icm42607::MaddrR, icm42607::FifoConfig5Mreg1);
+    IODelay(10);
+    readRegisters(icm42607::MR, &value, 1);
+    IODelay(10);
+    if (value != icm42607::FifoConfig5) {
+        snprintf(why, sizeof(why), "FIFO_CONFIG5 (MREG1) read back %#x after writing %#x", value,
+                 icm42607::FifoConfig5);
+        fifoFailed(why);
+        return false;
+    }
+    writeRegister(icm42607::FifoConfig1, 0);  // stream to FIFO, not bypassed
+    return true;
+}
+
+// Work loop: the FIFO path stops for this boot with one line; the next route() leaves the part on data-ready.
+void SwitchMotion::fifoFailed(const char *what)
+{
+    IOLog("SwitchMotion: %s FIFO batching off for this boot (%s); data-ready per sample as before\n", part->name, what);
+    fifoOff = true;
 }
 
 // Work loop. A part that does not behave as expected on hardware that has not booted this driver before is not worth the
@@ -558,6 +704,20 @@ void SwitchMotion::apply()
     }
     unsigned next = 0;
     while (next + 1 < 5 && info->rates[next].milliHz < need) ++next;
+    // FIFO batching (file comment): the shortest batch interval among the sensors a client wants; none for the
+    // orientation detector, which has no client to batch for.
+    unsigned fifoWatermark = 1;
+    uint32_t batch = 0;
+    if (part->family == Family::ICM42607 && timedPosts && !fifoOff && !detector) {
+        bool seen = false;
+        for (unsigned s = 0; s < 2; ++s) {
+            if (!want[s]) continue;
+            const uint32_t b = __atomic_load_n(&batchUS[s], __ATOMIC_ACQUIRE);
+            if (!seen || b < batch) batch = b;
+            seen = true;
+        }
+        fifoWatermark = watermarkFor(batch, (uint32_t)(1000000000ull / info->rates[next].milliHz));
+    }
 
     if (!want[Accel] && !want[Gyro]) {
         if (converting) {
@@ -575,10 +735,11 @@ void SwitchMotion::apply()
         for (unsigned s = 0; s < 2; ++s) {
             if (want[s] && !on[s]) settle[s] = now + msToAbs(s == Accel ? info->accelSettleMS : info->gyroSettleMS);
         }
-        program(want[Accel], want[Gyro], next);
+        program(want[Accel], want[Gyro], next, fifoWatermark);
         on[Accel] = want[Accel];
         on[Gyro] = want[Gyro];
         rate = next;
+        nanoseconds_to_absolutetime(1000000000000ull / info->rates[rate].milliHz, &periodAbs);
         if (!converting) {
             converting = true;
             samples = empty = 0;
@@ -586,8 +747,14 @@ void SwitchMotion::apply()
             watchdog->setTimeoutMS(kWatchdogMS);
         }
         // Log only (not the console): one line per change of what the part converts.
-        os_log(OS_LOG_DEFAULT, "SwitchMotion: %u mHz, accel %d (%u us), gyro %d (%u us)", info->rates[rate].milliHz,
-               on[Accel], interval[Accel], on[Gyro], interval[Gyro]);
+        os_log(OS_LOG_DEFAULT,
+               "SwitchMotion: %u mHz, accel %d (%u us), gyro %d (%u us), batch %u us, FIFO watermark %u",
+               info->rates[rate].milliHz, on[Accel], interval[Accel], on[Gyro], interval[Gyro], batch, watermark);
+    } else if (part->family == Family::ICM42607 && fifoWatermark != watermark) {
+        // Only the batch interval changed: the FIFO again from empty (route), the sensors untouched.
+        writeRegister(icm42607::IntSource3, 0);
+        route(true, fifoWatermark);
+        os_log(OS_LOG_DEFAULT, "SwitchMotion: batch %u us, FIFO watermark %u", batch, watermark);
     }
     for (unsigned s = 0; s < 2; ++s) {
         const uint64_t perReport = (uint64_t)info->rates[rate].milliHz * interval[s] / 1000000000ull;
@@ -602,6 +769,7 @@ void SwitchMotion::apply()
 // console's bottom).
 void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
 {
+    if (!fifoOn) lastPosted[sensor] = now;
     if (now < settle[sensor]) return;
     const SwitchMotionReport report = deviceReport(*info, sensor, raw);
     if (sensor == Accel && !firstLogged) {
@@ -616,7 +784,14 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
     }
     if (!__atomic_load_n(&intervalUS[sensor], __ATOMIC_RELAXED) || ++count[sensor] < every[sensor]) return;
     count[sensor] = 0;
-    (void)switch_hid_post(hid[sensor], &report, sizeof(report));  // dropped until the event driver has opened it
+    // Dropped until the event driver has opened it. A batched sample carries its own time, later than the last.
+    if (fifoOn) {
+        if (now <= lastPosted[sensor]) now = lastPosted[sensor] + 1;
+        lastPosted[sensor] = now;
+        (void)switch_hid_post_at(hid[sensor], &report, sizeof(report), now);
+    } else {
+        (void)switch_hid_post(hid[sensor], &report, sizeof(report));
+    }
 }
 
 // The AOP's device orientation from the gravity vector (micro-g, device frame), with the tilt and hysteresis margins
@@ -663,6 +838,10 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
 void SwitchMotion::sample()
 {
     const uint64_t now = mach_absolute_time();
+    if (fifoOn) {
+        drainFifo(now);
+        return;
+    }
     int16_t accel[3] = {}, gyro[3] = {};
     bool fresh[2] = {};
     switch (part->family) {
@@ -705,6 +884,90 @@ void SwitchMotion::sample()
     if (fresh[Accel]) post(Accel, accel, now);
 }
 
+// Work loop, PX2 masked until return, FIFO batching: INT_STATUS through FIFO_COUNTL in one burst (the read clears
+// FIFO_THS, which drops INT2), then the records in whole-record FIFO_DATA bursts, each sample posted with its own time.
+// The interrupt came with the watermark's record; records past it arrived while this ran, the ones before it a sample
+// period apart. So the watermark's record gets `now` (this action's time, as the data-ready path stamps its sample),
+// the others whole periods from it, none later than the moment the count was read (and post() keeps them going
+// forward). A count past the FIFO or a record in a format never configured turns batching off for the boot (one line);
+// a full FIFO (the work loop came that late) is logged once and its oldest records are gone; INT2 firing with an empty
+// FIFO is counted like a data-ready without data (kStuckLimit in a row turns motion off).
+void SwitchMotion::drainFifo(uint64_t now)
+{
+    uint8_t status[5];
+    readRegisters(icm42607::IntStatus, status, sizeof(status));
+    const uint64_t read = mach_absolute_time();
+    const unsigned n = (unsigned)status[3] << 8 | status[4];
+    char why[96];
+    if (n > icm42607::kFifoRecords) {
+        snprintf(why, sizeof(why), "FIFO count %u past its %u records (INT_STATUS %#x)", n, icm42607::kFifoRecords,
+                 status[0]);
+        fifoFailed(why);
+        writeRegister(icm42607::IntSource3, 0);
+        route(true, 1);
+        return;
+    }
+    if (status[0] & icm42607::FifoFull) {
+        ++overflows;
+        if (!overflowLogged) {
+            overflowLogged = true;
+            IOLog("SwitchMotion: %s FIFO full (%u records, watermark %u): drained late, its oldest records lost\n",
+                  part->name, n, watermark);
+        }
+    }
+    if (!n) {
+        if (++empty > kStuckLimit) {
+            char state[256];
+            tegra_gpio_describe(TEGRA_GPIO_IMU_INT, state, sizeof(state));
+            IOLog("SwitchMotion: off: %s FIFO threshold (PX2) fired %u times in a row with the FIFO empty: %s\n",
+                  part->name, empty, state);
+            giveUp();
+        }
+        return;
+    }
+    uint64_t newest = n >= watermark ? now + (uint64_t)(n - watermark) * periodAbs : read - periodAbs / 2;
+    if (newest > read) newest = read;
+    uint8_t b[icm42607::kFifoRecordsPerRead * icm42607::kFifoRecord];
+    unsigned taken = 0;
+    uint8_t firstHeader = 0;
+    for (unsigned done = 0; done < n;) {
+        const unsigned chunk = n - done < icm42607::kFifoRecordsPerRead ? n - done : icm42607::kFifoRecordsPerRead;
+        readRegisters(icm42607::FifoData, b, chunk * icm42607::kFifoRecord);
+        for (unsigned i = 0; i < chunk; ++i) {
+            const uint8_t *record = b + i * icm42607::kFifoRecord;
+            int16_t accel[3], gyro[3];
+            bool fresh[2];
+            if (!taken) firstHeader = record[0];
+            if (!decodeFifoRecord(record, accel, gyro, fresh)) {
+                if (record[0] == icm42607::FifoHeaderMsg) {
+                    done = n;  // the empty marker: the count was ahead of the data
+                    break;
+                }
+                snprintf(why, sizeof(why), "FIFO record header %#x, not a 16-byte record", record[0]);
+                fifoFailed(why);
+                writeRegister(icm42607::IntSource3, 0);
+                route(true, 1);
+                return;
+            }
+            const uint64_t at = newest - (uint64_t)(n - 1 - (done + i)) * periodAbs;
+            ++taken;
+            if (fresh[Gyro] && on[Gyro]) post(Gyro, gyro, at);
+            if (fresh[Accel] && on[Accel]) post(Accel, accel, at);
+        }
+        if (done < n) done += chunk;
+    }
+    if (!fifoLogged) {
+        fifoLogged = true;
+        IOLog("SwitchMotion: %s FIFO batching on: watermark %u at %u mHz, first drain %u of %u records (header %#x)\n",
+              part->name, watermark, info->rates[rate].milliHz, taken, n, firstHeader);
+    }
+    if (!taken) return;
+    empty = 0;
+    ++samples;
+    ++drains;
+    records += taken;
+}
+
 void SwitchMotion::interruptOccurred(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchMotion, owner);
@@ -739,10 +1002,14 @@ void SwitchMotion::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
 void SwitchMotion::featureReceived(void *context, const uint8_t *report, size_t length)
 {
     auto *channel = static_cast<Channel *>(context);
-    if (length < 4) return;
-    const uint8_t *value = report + length - 4;  // the Report Interval field ends the report (after the ID, if any)
+    if (length < 8) return;
+    // Report Interval and Report Latency (BatchInterval) end the report (after the ID, if any): SwitchHIDDevice.cpp.
+    const uint8_t *value = report + length - 8;
     const uint32_t interval =
         (uint32_t)value[0] | (uint32_t)value[1] << 8 | (uint32_t)value[2] << 16 | (uint32_t)value[3] << 24;
+    const uint32_t batch =
+        (uint32_t)value[4] | (uint32_t)value[5] << 8 | (uint32_t)value[6] << 16 | (uint32_t)value[7] << 24;
+    __atomic_store_n(&channel->owner->batchUS[channel->sensor], batch, __ATOMIC_RELEASE);
     __atomic_store_n(&channel->owner->intervalUS[channel->sensor], interval, __ATOMIC_RELEASE);
     channel->owner->kick->interruptOccurred(nullptr, nullptr, 0);
 }
@@ -779,6 +1046,13 @@ bool SwitchMotion::start(IOService *provider)
         switch_hid_set_feature_handler(hid[s], &SwitchMotion::featureReceived, &channels[s]);
     }
     if (kOrientationPolicy != OrientationPolicy::Off) orientationHid = switch_hid_create(kSwitchHIDOrientation);
+    // FIFO batching needs every sample's own time on its HID report (SwitchHID.h switch_hid_post_at).
+    timedPosts = switch_hid_supports_timestamps(hid[Accel]) && switch_hid_supports_timestamps(hid[Gyro]);
+    if (part->family == Family::ICM42607 && !timedPosts) {
+        IOLog("SwitchMotion: %s FIFO batching off: HID reports cannot carry sample times here (SwitchHID); data-ready "
+              "per sample as before\n",
+              part->name);
+    }
     setProperty("IMU", part->name);
     registerService();
     kick->interruptOccurred(nullptr, nullptr, 0);  // the orientation detector, when it is on

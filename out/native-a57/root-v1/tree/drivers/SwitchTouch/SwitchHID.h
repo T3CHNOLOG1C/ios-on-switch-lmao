@@ -66,7 +66,10 @@ struct __attribute__((packed)) SwitchButtonsReport {
 // (device-usage-page 0xff00, device-usage 3 and 9):
 //  * Accelerometer, Apple vendor 0xff00/0x0003: input report 1 = Sensor-page Acceleration X/Y/Z (0x0453-0x0455) in
 //    micro-g (unit exponent -6, so IOHIDEventDriver's kIOHIDEventTypeAccelerometer events carry g), feature report 1 =
-//    Sensor Report Interval (0x030e, microseconds).
+//    Sensor Report Interval (0x030e) then Report Latency (0x0316), both microseconds: IOHIDEventDriver writes a client's
+//    ReportInterval into the first and its BatchInterval (kIOHIDBatchIntervalKey) into the second, and publishes
+//    ReportLatency, so the event system hands the batch interval to the device (IOHIDFamily-2031 IOHIDEventDriver.cpp
+//    parseSensorPropertyElement, setProperties).
 //  * Gyroscope, Apple vendor 0xff00/0x0009: the same with Angular Velocity X/Y/Z (0x0457-0x0459) in micro-radians per
 //    second (kIOHIDEventTypeGyro in rad/s).
 //  * Device orientation, Sensor 0x20/0x008a (what CoreMotion's orientation notifier in backboardd matches): input
@@ -90,6 +93,12 @@ IOService *switch_hid_create(SwitchHIDKind kind);
 // Hands one input report to the device (and from there synchronously to its IOHIDEventDriver). Reports sent before
 // the event driver has opened the device are dropped by IOHIDFamily. Call from one thread per device.
 IOReturn switch_hid_post(IOService *device, const void *report, size_t length);
+
+// The same with the report's own time (mach absolute time) instead of now, for samples a device delivers in batches:
+// IOHIDDevice::handleReportWithTime, which handleReport calls with the current time. kIOReturnUnsupported where
+// switch_hid_supports_timestamps() is false.
+IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length, uint64_t timestamp);
+bool switch_hid_supports_timestamps(IOService *device);
 
 // Hands an IOHIDEvent to the device's IOHIDEventDriver as if the driver had made it (IOHIDEventService::dispatchEvent,
 // the driver's slot 198). kIOReturnNotReady until the driver has opened the device. Call from one thread per device.
