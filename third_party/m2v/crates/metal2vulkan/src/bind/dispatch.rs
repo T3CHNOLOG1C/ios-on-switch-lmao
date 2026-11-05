@@ -897,7 +897,8 @@ fn instantiate(
                 stride.to_le_bytes().to_vec()
             }
             field => slot_field(field, &bound.residuals, &t.resources, state)
-                .ok_or_else(|| internal(format!("a compute push field {field:?}")))?,
+                .ok_or_else(|| internal(format!("a compute push field {field:?}")))?
+                .to_vec(),
         };
         put(&mut push, push_start, &mut table, f.loc, &bytes)?;
     }

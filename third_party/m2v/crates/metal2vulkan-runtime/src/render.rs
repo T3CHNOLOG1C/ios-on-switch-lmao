@@ -296,7 +296,7 @@ use super::render_pass::{
     self, check_memoryless, AspectTarget, Attachment, DepthStencilTarget, PassLayout,
     RenderPassDescriptor, RenderPassProblem, Target, HIDDEN_DEPTH_FORMAT, MAX_COLOR_ATTACHMENTS,
 };
-use super::render_state::{self, DepthBiasRecord, EncoderState, MAX_VIEWPORTS};
+use super::render_state::{self, DepthBiasRecord, EncoderState, PerViewport, MAX_VIEWPORTS};
 use super::render_state::{Compensation, DepthBiasEffect, WrittenDepthClamp};
 use super::render_target::{self, covers, PassShape, Position, RenderPassObject};
 use super::render_values::{LoadAction, ScissorRect, StoreAction, StoreActionOptions, Viewport};
@@ -612,8 +612,8 @@ struct DrawSettings {
 /// (`render_state.rs`).
 #[derive(Clone)]
 struct DrawState {
-    viewports: Vec<vk::Viewport>,
-    scissors: Vec<vk::Rect2D>,
+    viewports: PerViewport<vk::Viewport>,
+    scissors: PerViewport<vk::Rect2D>,
     fixed: FixedState,
     /// The front and back stencil references.
     stencil_reference: [u32; 2],
@@ -1197,11 +1197,12 @@ impl LastRetained {
 /// A variant, plan and specialization under which `Device::degrade_bound_values` was quiet: no
 /// clause of a note it tested held. Which hold is a function of the three alone, so a draw of
 /// the same three announces nothing there. The variant and the plan are held, so a pointer seen
-/// again is the same object.
+/// again is the same object. The specialization is the plan's own where `specialization` is
+/// `None` (every draw but a mesh draw of its own key), so a draw keeps no copy of it.
 struct QuietBoundValues {
     variant: Arc<RenderVariant>,
     plan: Arc<BindingPlan>,
-    specialization: SpecializationKey,
+    specialization: Option<SpecializationKey>,
 }
 
 impl QuietBoundValues {
@@ -1214,7 +1215,11 @@ impl QuietBoundValues {
     ) -> bool {
         Arc::ptr_eq(&self.variant, variant)
             && Arc::ptr_eq(&self.plan, plan)
-            && self.specialization == *specialization
+            && self
+                .specialization
+                .as_ref()
+                .unwrap_or(&self.plan.specialization)
+                == specialization
     }
 }
 
@@ -6498,7 +6503,7 @@ impl RenderCommandEncoder {
         // offsetting bias folded into the compensation (`EncoderState::compensation`).
         let depth = compensation.and_then(|c| c.depth);
         let viewports = match depth {
-            Some(_) => self.state.used_viewports(selects).to_vec(),
+            Some(_) => self.state.used_viewports(selects).iter().copied().collect(),
             None => self
                 .state
                 .draw_viewports(selects, topology, profile, native)?,
@@ -6553,12 +6558,12 @@ impl RenderCommandEncoder {
                                 let [min_depth, max_depth] =
                                     depth.unwrap_or([viewport.min_depth, viewport.max_depth]);
                                 DrawState {
-                                    viewports: vec![vk::Viewport {
+                                    viewports: PerViewport::one(vk::Viewport {
                                         min_depth,
                                         max_depth,
                                         ..viewport
-                                    }],
-                                    scissors: vec![scissor],
+                                    }),
+                                    scissors: PerViewport::one(scissor),
                                     ..draw_state.clone()
                                 }
                             })
@@ -6620,7 +6625,7 @@ impl RenderCommandEncoder {
             self.quiet_bound_values = Some(QuietBoundValues {
                 variant: Arc::clone(&variant),
                 plan: Arc::clone(&plan),
-                specialization: specialization.clone(),
+                specialization: commands.specialization.clone(),
             });
         }
         device.degrade_cross_class(&plan.diagnostics, &formats);

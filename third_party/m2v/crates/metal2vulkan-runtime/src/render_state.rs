@@ -113,6 +113,70 @@ use metal2vulkan::pipeline::{GraphicsState, ViewportCompensation};
 /// Metal's most viewports and scissor rectangles.
 pub(super) const MAX_VIEWPORTS: usize = 16;
 
+/// One value per viewport a draw uses, held in place: its viewports and scissors, which every draw
+/// makes, without allocating. A draw uses at most [`MAX_VIEWPORTS`] (the setters refuse more,
+/// `check_count`, and a draw uses the viewports set or the first).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PerViewport<T> {
+    items: [T; MAX_VIEWPORTS],
+    len: u8,
+}
+
+impl<T: Copy + Default> PerViewport<T> {
+    /// `item` alone.
+    pub(super) fn one(item: T) -> PerViewport<T> {
+        std::iter::once(item).collect()
+    }
+}
+
+impl<T> std::ops::Deref for PerViewport<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.items[..usize::from(self.len)]
+    }
+}
+
+impl<T> std::ops::DerefMut for PerViewport<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.items[..usize::from(self.len)]
+    }
+}
+
+impl<T: Copy + Default> FromIterator<T> for PerViewport<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> PerViewport<T> {
+        let mut items = [T::default(); MAX_VIEWPORTS];
+        let mut len = 0;
+        for item in iter {
+            assert!(len < MAX_VIEWPORTS, "a draw of more than {MAX_VIEWPORTS} viewports");
+            items[len] = item;
+            len += 1;
+        }
+        PerViewport {
+            items,
+            len: len as u8,
+        }
+    }
+}
+
+impl<'a, T> IntoIterator for &'a PerViewport<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut PerViewport<T> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
 /// What a viewport, scissor rectangle or depth/stencil setter did wrong.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -335,7 +399,7 @@ impl EncoderState {
         topology: metal2vulkan::vk::PrimitiveTopology,
         profile: &DeviceProfile,
         native: bool,
-    ) -> Result<Vec<Viewport>, Error> {
+    ) -> Result<PerViewport<Viewport>, Error> {
         let used = self.used_viewports(selects);
         let clamps = self.clip_mode == DepthClipMode::Clamp;
         // In clamp mode a range past `[0, 1]` whose one clamp holds one depth stores that depth
@@ -766,7 +830,7 @@ impl EncoderState {
         viewports: &[Viewport],
         depth: Option<[f32; 2]>,
         guard: Option<[f64; 2]>,
-    ) -> Vec<vk::Viewport> {
+    ) -> PerViewport<vk::Viewport> {
         viewports
             .iter()
             .map(|v| {
@@ -808,7 +872,7 @@ impl EncoderState {
     /// its index, the one rectangle where the encoder holds one, and an empty one past two or
     /// more (the module docs), each clipped to the pixels its viewport overlaps, Metal's implicit
     /// scissor ([`viewport_pixels`]).
-    pub(super) fn vk_scissors(&self, selects: bool) -> Vec<vk::Rect2D> {
+    pub(super) fn vk_scissors(&self, selects: bool) -> PerViewport<vk::Rect2D> {
         self.each_vk_scissor(selects).collect()
     }
 

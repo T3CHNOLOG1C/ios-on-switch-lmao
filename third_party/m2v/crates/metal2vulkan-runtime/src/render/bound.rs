@@ -32,7 +32,7 @@ use ash::vk;
 use super::{DrawState, IndexBind};
 use crate::binding::PushWrite;
 use crate::pipeline::FixedState;
-use crate::render_state::DepthBiasSetting;
+use crate::render_state::{DepthBiasSetting, PerViewport};
 
 /// The state commands recorded into one secondary command buffer that still hold (the module
 /// docs).
@@ -63,8 +63,8 @@ pub(super) struct Bound {
 /// The values a draw sets its dynamic states to: the encoder's state at the draw and its input
 /// assembly.
 pub(super) struct Values {
-    viewports: Vec<vk::Viewport>,
-    scissors: Vec<vk::Rect2D>,
+    viewports: PerViewport<vk::Viewport>,
+    scissors: PerViewport<vk::Rect2D>,
     fixed: FixedState,
     stencil_reference: [u32; 2],
     depth_bias: DepthBiasSetting,
@@ -226,8 +226,8 @@ impl Values {
     fn of(now: Now<'_>) -> Values {
         let s = now.state;
         Values {
-            viewports: s.viewports.clone(),
-            scissors: s.scissors.clone(),
+            viewports: s.viewports,
+            scissors: s.scissors,
             fixed: s.fixed,
             stencil_reference: s.stencil_reference,
             depth_bias: s.depth_bias.setting(),
@@ -302,14 +302,8 @@ impl Values {
         let s = now.state;
         let (ds, now_ds) = (&mut self.fixed.depth_stencil, &s.fixed.depth_stencil);
         match state {
-            vk::DynamicState::VIEWPORT => {
-                self.viewports.clear();
-                self.viewports.extend_from_slice(&s.viewports);
-            }
-            vk::DynamicState::SCISSOR => {
-                self.scissors.clear();
-                self.scissors.extend_from_slice(&s.scissors);
-            }
+            vk::DynamicState::VIEWPORT => self.viewports = s.viewports,
+            vk::DynamicState::SCISSOR => self.scissors = s.scissors,
             vk::DynamicState::DEPTH_BIAS => self.depth_bias = s.depth_bias.setting(),
             vk::DynamicState::BLEND_CONSTANTS => self.blend_color = s.blend_color,
             vk::DynamicState::STENCIL_COMPARE_MASK => {

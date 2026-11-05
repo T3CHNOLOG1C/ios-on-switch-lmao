@@ -611,6 +611,67 @@ pub(crate) fn bind_buffers(
     Ok(out)
 }
 
+/// A push field's bytes as instantiation writes them: up to [`FieldBytes::INLINE`] bytes in place
+/// (every word and vector field, so a draw's fields allocate nothing), more in a vector (a capture
+/// layout, a dispatch region).
+pub(crate) enum FieldBytes {
+    Inline {
+        bytes: [u8; FieldBytes::INLINE],
+        len: u8,
+    },
+    Heap(Vec<u8>),
+}
+
+impl FieldBytes {
+    /// The most bytes held in place.
+    pub(crate) const INLINE: usize = 32;
+
+    /// `bytes`, copied.
+    pub(crate) fn of(bytes: &[u8]) -> FieldBytes {
+        bytes.iter().copied().collect()
+    }
+}
+
+impl std::ops::Deref for FieldBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            FieldBytes::Inline { bytes, len } => &bytes[..usize::from(*len)],
+            FieldBytes::Heap(bytes) => bytes,
+        }
+    }
+}
+
+impl From<Vec<u8>> for FieldBytes {
+    fn from(bytes: Vec<u8>) -> FieldBytes {
+        FieldBytes::Heap(bytes)
+    }
+}
+
+impl FromIterator<u8> for FieldBytes {
+    fn from_iter<I: IntoIterator<Item = u8>>(iter: I) -> FieldBytes {
+        let mut bytes = [0u8; FieldBytes::INLINE];
+        let mut iter = iter.into_iter();
+        for len in 0..=FieldBytes::INLINE {
+            let Some(byte) = iter.next() else {
+                return FieldBytes::Inline {
+                    bytes,
+                    len: len as u8,
+                };
+            };
+            if len == FieldBytes::INLINE {
+                let mut heap = bytes.to_vec();
+                heap.push(byte);
+                heap.extend(iter);
+                return FieldBytes::Heap(heap);
+            }
+            bytes[len] = byte;
+        }
+        unreachable!("the loop returns by its last pass")
+    }
+}
+
 /// The bytes of a slot push field (`SlotBindOffset`: the residual, 0 unbound; `SlotGuestBase`: the
 /// slot's `gpu_address + offset`, which is Metal's `nil`; `TextureLevels`: the level count the plan
 /// bound; `InstanceCount`: the bound structure's instance count; `Specialized`: the value the plan
@@ -621,7 +682,7 @@ pub(crate) fn slot_field(
     residuals: &[(SlotRef, u32)],
     resources: &crate::bind::plan::ResourceTemplate,
     state: &BindState,
-) -> Option<Vec<u8>> {
+) -> Option<FieldBytes> {
     match field {
         // The bound structure's instance count, 0 for an unbound slot.
         PushField::InstanceCount(slot) => {
@@ -630,38 +691,38 @@ pub(crate) fn slot_field(
                 .get(&slot.stage)
                 .and_then(|t| t.acceleration_structures.get(&slot.index))
                 .map_or(0, |s| s.instance_count);
-            Some(count.to_le_bytes().to_vec())
+            Some(FieldBytes::of(&count.to_le_bytes()))
         }
         // The level count the plan bound.
         PushField::TextureLevels(slot) => resources
             .texture_levels
             .iter()
             .find(|(s, _)| *s == slot)
-            .map(|(_, levels)| levels.to_le_bytes().to_vec()),
+            .map(|(_, levels)| FieldBytes::of(&levels.to_le_bytes())),
         // The value the bound resources decide, as the plan recorded it.
         PushField::Specialized(key) => resources
             .specialized
             .iter()
             .find(|(k, _)| *k == key)
-            .map(|(_, value)| value.to_le_bytes().to_vec()),
+            .map(|(_, value)| FieldBytes::of(&value.to_le_bytes())),
         // Whether the texture the plan bound holds 16-bit float channels.
         PushField::TextureHalfChannels(slot) => resources
             .texture_half_channels
             .iter()
             .find(|(s, _)| *s == slot)
-            .map(|(_, half)| half.to_le_bytes().to_vec()),
+            .map(|(_, half)| FieldBytes::of(&half.to_le_bytes())),
         // The integer channel widths of the texture the plan bound.
         PushField::TextureIntegerChannels(slot) => resources
             .texture_integer_channels
             .iter()
             .find(|(s, _)| *s == slot)
-            .map(|(_, word)| word.to_le_bytes().to_vec()),
+            .map(|(_, word)| FieldBytes::of(&word.to_le_bytes())),
         PushField::SlotBindOffset(slot) => {
             let r = residuals
                 .iter()
                 .find(|(s, _)| *s == slot)
                 .map_or(0, |r| r.1);
-            Some(r.to_le_bytes().to_vec())
+            Some(FieldBytes::of(&r.to_le_bytes()))
         }
         PushField::SlotGuestBase(slot) => {
             let base = match state
@@ -676,7 +737,7 @@ pub(crate) fn slot_field(
                 }) => gpu_address.wrapping_add(offset),
                 _ => 0,
             };
-            Some(base.to_le_bytes().to_vec())
+            Some(FieldBytes::of(&base.to_le_bytes()))
         }
         _ => None,
     }

@@ -234,8 +234,8 @@ use std::collections::BTreeMap;
 use crate::bind::heap::{planner, HeapPlanner};
 use crate::bind::instantiate::{
     bind_buffers, descriptor_range, put, slot_field, BufferExtent, BufferRange, DescriptorBytes,
-    DescriptorRange, IndexBufferRef, IndirectRef, PushConstantWrite, PushHole, RangeError,
-    RootTable,
+    DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef, PushConstantWrite, PushHole,
+    RangeError, RootTable,
 };
 use crate::bind::neutral::{zero_buffer_bytes, NeutralResource};
 use crate::bind::plan::compute::{internal, not_implemented, spec_key, tile_memory};
@@ -3326,7 +3326,7 @@ fn instantiate(
             }
         ];
         for f in &st.fields {
-            let bytes: Vec<u8> = match f.field {
+            let bytes: FieldBytes = match f.field {
                 PushField::RootTableAddress
                 | PushField::ExecutionStatusAddress
                 | PushField::CaptureAddress
@@ -3355,27 +3355,27 @@ fn instantiate(
                     let Some(shadow) = &t.shadow_stencil else {
                         return Err(internal("a stencil state without its shader-side stencil"));
                     };
-                    shadow_stencil_words(shadow, state)?
+                    shadow_stencil_words(shadow, state)?.into()
                 }
                 PushField::ShaderTestsState => {
                     if t.shader_tests.is_none() {
                         return Err(internal("a depth state without its in-shader depth test"));
                     }
-                    shader_tests_words(state)
+                    shader_tests_words(state).into()
                 }
                 PushField::ShaderStencilState => {
                     if t.shader_tests.is_none() {
                         return Err(internal("a stencil state without its in-shader tests"));
                     }
-                    shader_stencil_words(state)
+                    shader_stencil_words(state).into()
                 }
                 PushField::DispatchRegion => match mesh.as_ref().and_then(|m| m.region(st.stage)) {
-                    Some(region) => region.to_vec(),
+                    Some(region) => FieldBytes::of(&region),
                     None => return Err(internal("a dispatch region outside a mesh draw")),
                 },
-                PushField::ViewportCount => state.viewport_count.to_le_bytes().to_vec(),
+                PushField::ViewportCount => FieldBytes::of(&state.viewport_count.to_le_bytes()),
                 PushField::RenderTargetArrayLength => {
-                    state.render_target_array_length.to_le_bytes().to_vec()
+                    FieldBytes::of(&state.render_target_array_length.to_le_bytes())
                 }
                 // The identity where the state holds none: a plan states its variant, so
                 // instantiation under another shape asks for the other one first.
@@ -3392,11 +3392,12 @@ fn instantiate(
                     .flat_map(|v| v.to_le_bytes())
                     .collect(),
                 // No viewport mirrored where the state holds none.
-                PushField::ViewportMirrors => state
-                    .viewport_compensation
-                    .map_or(0, |c| c.mirrors)
-                    .to_le_bytes()
-                    .to_vec(),
+                PushField::ViewportMirrors => FieldBytes::of(
+                    &state
+                        .viewport_compensation
+                        .map_or(0, |c| c.mirrors)
+                        .to_le_bytes(),
+                ),
                 // No vertex's depth clamped where the state holds none.
                 PushField::VertexDepthClamp => state
                     .viewport_compensation
@@ -3411,11 +3412,11 @@ fn instantiate(
                     .iter()
                     .flat_map(|v| v.to_le_bytes())
                     .collect(),
-                PushField::StorageKeptChannels => t.storage_kept.to_le_bytes().to_vec(),
+                PushField::StorageKeptChannels => FieldBytes::of(&t.storage_kept.to_le_bytes()),
                 // The attachment's rule word, as link derived it from the pipeline's attachment.
                 PushField::ColorWriteRule(color) => {
                     match t.color_write_rules.iter().find(|(c, _)| *c == color) {
-                        Some((_, word)) => word.to_le_bytes().to_vec(),
+                        Some((_, word)) => FieldBytes::of(&word.to_le_bytes()),
                         None => return Err(internal("a color write rule link gave no word")),
                     }
                 }
@@ -3437,16 +3438,12 @@ fn instantiate(
                 // The first amplification's; `amplifications` writes each before its draw.
                 PushField::AmplificationId
                 | PushField::AmplificationLayerOffset
-                | PushField::AmplificationViewportOffset => {
-                    amplification_word(f.field, 0, &t.amplifications)?
-                        .to_le_bytes()
-                        .to_vec()
-                }
+                | PushField::AmplificationViewportOffset => FieldBytes::of(
+                    &amplification_word(f.field, 0, &t.amplifications)?.to_le_bytes(),
+                ),
                 PushField::BaseVertexInstance => {
                     reads_base = true;
-                    let mut b = base[0].to_le_bytes().to_vec();
-                    b.extend_from_slice(&base[1].to_le_bytes());
-                    b
+                    base.iter().flat_map(|b| b.to_le_bytes()).collect()
                 }
                 PushField::VertexBufferStride(layout) => {
                     let fixed = t.pulled_strides.iter().find(|(l, _)| *l == layout);
@@ -3471,7 +3468,7 @@ fn instantiate(
                             )))
                         }
                     };
-                    stride.to_le_bytes().to_vec()
+                    FieldBytes::of(&stride.to_le_bytes())
                 }
                 field => slot_field(field, &bound.residuals, &t.resources, state)
                     .ok_or_else(|| internal(format!("a render push field {field:?}")))?,
@@ -3961,21 +3958,22 @@ fn draw_uses(
         };
         uses.push(control(UseTarget::ControlPointIndices, range));
     }
-    uses.extend(match *draw {
+    // At most two, in place: a draw's own uses allocate nothing past `uses`.
+    let own: [Option<ResourceUse>; 2] = match *draw {
         // A mesh draw's arguments are its pipeline's to decide (`instantiate`).
         DrawCall::Primitives { .. }
         | DrawCall::Patches { .. }
         | DrawCall::MeshThreadgroups { .. }
         | DrawCall::MeshThreads { .. }
-        | DrawCall::MeshThreadgroupsIndirect { .. } => Vec::new(),
+        | DrawCall::MeshThreadgroupsIndirect { .. } => [None, None],
         DrawCall::Indexed {
             index_type,
             index_buffer,
             index_count,
             index_offset,
             ..
-        } => vec![index(index_bytes(index_type).map(|size| {
-            ByteRange {
+        } => [
+            Some(index(index_bytes(index_type).map(|size| ByteRange {
                 offset: 0,
                 len: match overrun {
                     None => u64::from(index_count) * size,
@@ -3986,15 +3984,17 @@ fn draw_uses(
                         u64::from(index_count.saturating_sub(past_end)) * size
                     }
                 },
-            }
-        }))],
+            }))),
+            None,
+        ],
         DrawCall::Indirect { indexed: None, .. } | DrawCall::PatchesIndirect { .. } => {
-            vec![indirect_use(16)]
+            [Some(indirect_use(16)), None]
         }
         DrawCall::Indirect {
             indexed: Some(_), ..
-        } => vec![index(None), indirect_use(20)],
-    });
+        } => [Some(index(None)), Some(indirect_use(20))],
+    };
+    uses.extend(own.into_iter().flatten());
     uses
 }
 
