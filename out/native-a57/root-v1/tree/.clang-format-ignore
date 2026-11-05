@@ -5,3 +5,4 @@ drivers/SwitchVideoDecoders/test/VP9Trace.h
 drivers/SwitchVideoDecoders/AVD/VP9Tables.inc
 drivers/TegraNVDEC/selftest/VP9Picture160.inc
 drivers/SwitchVideoDecoders/test/vp9gen/vpx_config.h
+drivers/TegraNVENC/selftest/E3Vectors.inc

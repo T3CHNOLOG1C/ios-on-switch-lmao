@@ -1,0 +1,508 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// Host test for AVE (H264H7.videoencoder) on a Mac: the plug-in itself (AVEEncoder.c, included for its factory) over
+// a fake TegraNVENC client whose engine is a lossless stand-in for NVENC, registered in this process and driven by the
+// encode check (EncodeCheck.c) through the Mac's VideoToolbox, which checks the plug-in's class layout, session calls,
+// format description and sample buffers against a real VideoToolbox, and decodes the result with Apple's decoder.
+//
+// The fake engine is not NVENC: it checks every submit with the kernel's own checker (TegraNVENCCheck.h), then writes
+// what the setup asks for the way NVENC would be asked to: the slice header from the setup's fields (type, frame_num,
+// idr_pic_id, POC LSB, QP, entropy mode), and slice data that decodes exactly to the input picture it reads in the
+// layout the setup declares: I_PCM macroblocks, and in P pictures P_Skip wherever the macroblock equals the reference
+// the setup points at (so a wrong reference shows as a mismatch). Its reconstruction goes to the buffer OUT_REF_PIC
+// names. CAVLC only (the check asks for it); the status record gets the bit count.
+// Also: the SPS/PPS/avcC parse back with the decoder's own H264Syntax.c to what was configured; struct sizes match
+// nvenc_drv.h's comments; the checker refuses each kind of bad submit derived from a good one; the layouts' offsets
+// are a bijection; the rate control converges on a synthetic bits-versus-QP model.
+// Prints "PASS ave ..." (tests/test_switch_video_encode.py).
+#include "../AVE/AVEEncoder.c"
+#include <stdio.h>
+#include "../../SwitchVideoDecoders/AVD/H264Syntax.h"
+#include "../../TegraNVENC/TegraNVENCCheck.h"
+
+extern const CFStringRef kVTVideoEncoderSpecification_EncoderID;
+
+enum { MAX_HANDLES = 64 };
+
+struct NVENCClient {
+    uint8_t *va[MAX_HANDLES];
+    uint64_t size[MAX_HANDLES];
+};
+
+static uint32_t gLayout = TEGRA_NVENC_LAYOUT_PITCH, gChroma = TEGRA_NVENC_CHROMA_OFFSET;
+static int gOpens, gSubmits, gRefused, gSkipped, gPcm, gIdr, gP;
+static const char *gRefusal;
+static TegraNVENCSubmit gFirstP;  // a good P submit, for the refusal cases
+static uint64_t gFirstPAvail[TEGRA_NVENC_MAX_ENTRIES];
+static bool gHaveP;
+
+bool nvenc_service_present(void)
+{
+    return true;
+}
+
+NVENCClient *nvenc_open(int *error)
+{
+    (void)error;
+    gOpens++;
+    return calloc(1, sizeof(NVENCClient));
+}
+
+void nvenc_close(NVENCClient *c)
+{
+    if (!c) return;
+    for (int i = 0; i < MAX_HANDLES; i++) free(c->va[i]);
+    free(c);
+}
+
+bool nvenc_claim_self_test(NVENCClient *c)
+{
+    (void)c;
+    return false;
+}
+
+bool nvenc_info(NVENCClient *c, TegraNVENCInfo *info)
+{
+    (void)c;
+    memset(info, 0, sizeof(*info));
+    info->abi_version = TEGRA_NVENC_ABI_VERSION;
+    info->nvenc_version = 0x50;
+    info->codecs = 1u << TEGRA_NVENC_CODEC_H264;
+    info->input_layout = gLayout;
+    info->chroma_mode = gChroma;
+    info->p_frames = 1;
+    return true;
+}
+
+int nvenc_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
+{
+    NVENCClient *c = ctx;
+    size = (size + 65535) & ~65535ull;  // the kernel's granule
+    for (uint32_t h = 1; h < MAX_HANDLES; h++) {
+        if (c->va[h]) continue;
+        if (!(c->va[h] = calloc(1, size))) return -1;
+        c->size[h] = size;
+        *handle = h;
+        *va = c->va[h];
+        return 0;
+    }
+    return -1;
+}
+
+void nvenc_free(void *ctx, uint32_t handle)
+{
+    NVENCClient *c = ctx;
+    free(c->va[handle]);
+    c->va[handle] = NULL;
+}
+
+int nvenc_wait(void *ctx, const TegraNVENCWait *w)
+{
+    (void)ctx, (void)w;
+    return 0;
+}
+
+// ---- The fake engine -----------------------------------------------------------------------------------------------
+
+static const TegraNVENCEntry *find(const TegraNVENCSubmit *s, uint16_t method)
+{
+    for (uint32_t i = 0; i < s->entry_count; i++)
+        if (s->entries[i].method == method) return &s->entries[i];
+    return NULL;
+}
+
+// One macroblock's 384 samples (luma raster, then Cb, then Cr) from an NV12 surface in `layout`.
+static void readMacroblock(const uint8_t *surface, uint32_t layout, uint32_t pitch, uint32_t chromaOffset, uint32_t mbx,
+                           uint32_t mby, uint8_t out[384])
+{
+    for (uint32_t y = 0; y < 16; y++)
+        for (uint32_t x = 0; x < 16; x++)
+            out[y * 16 + x] = surface[h264enc_surface_offset(layout, pitch, mbx * 16 + x, mby * 16 + y)];
+    for (uint32_t y = 0; y < 8; y++)
+        for (uint32_t x = 0; x < 8; x++) {
+            const uint8_t *c = surface + chromaOffset;
+            out[256 + y * 8 + x] = c[h264enc_surface_offset(layout, pitch, mbx * 16 + 2 * x, mby * 8 + y)];
+            out[320 + y * 8 + x] = c[h264enc_surface_offset(layout, pitch, mbx * 16 + 2 * x + 1, mby * 8 + y)];
+        }
+}
+
+static uint32_t layoutOf(const nvenc_h264_surface_cfg_s *cfg)
+{
+    if (cfg->tiled_16x16) return TEGRA_NVENC_LAYOUT_TILED16;
+    if (cfg->block_height == 1) return TEGRA_NVENC_LAYOUT_BL2_LOG;
+    if (cfg->block_height == 2) return gLayout == TEGRA_NVENC_LAYOUT_BL4_LOG ? gLayout : TEGRA_NVENC_LAYOUT_BL2_RAW;
+    return gLayout == TEGRA_NVENC_LAYOUT_BL1 ? gLayout : TEGRA_NVENC_LAYOUT_PITCH;  // block height 0: pitch or BL1
+}
+
+static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
+{
+    const nvenc_h264_drv_pic_setup_s *p = (const nvenc_h264_drv_pic_setup_s *)s->setup;
+    const nvenc_h264_pic_control_s *pc = &p->pic_control;
+    const nvenc_h264_slice_control_s *slice = (const nvenc_h264_slice_control_s *)(s->setup + pc->slice_control_offset);
+    const uint32_t width = p->input_cfg.frame_width_minus1 + 1u, height = p->input_cfg.frame_height_minus1 + 1u;
+    const uint32_t wmbs = (width + 15) / 16, hmbs = (height + 15) / 16;
+    const bool pPicture = pc->pic_type == H264ENC_P, idr = pc->pic_type == H264ENC_IDR;
+    if (p->pps_data.entropy_coding_mode_flag) return -1;  // CAVLC only (see above)
+    const TegraNVENCEntry *in = find(s, NVC5B7_SET_IN_CUR_PIC), *out = find(s, NVC5B7_SET_OUT_REF_PIC_LUMA);
+    const TegraNVENCEntry *ref = find(s, NVC5B7_SET_IN_REF_PIC0_LUMA), *bits = find(s, NVC5B7_SET_OUT_BITSTREAM);
+    const TegraNVENCEntry *status = find(s, NVC5B7_SET_OUT_ENC_STATUS);
+    const TegraNVENCEntry *inChroma = find(s, NVC5B7_SET_IN_CUR_PIC_CHROMA_U);
+    // Where chroma is, under the chroma mode the fake was told the hardware proved.
+    const uint32_t inOff =
+        gChroma == TEGRA_NVENC_CHROMA_OFFSET ? p->input_cfg.chroma_top_frm_offset * 256 : inChroma->offset - in->offset;
+    const uint32_t refOff = gChroma == TEGRA_NVENC_CHROMA_OFFSET ? p->outputpic_cfg.chroma_top_frm_offset * 256
+                                                                 : find(s, NVC5B7_SET_OUT_REF_PIC_CHROMA)->offset;
+    const uint8_t *input = c->va[in->value] + in->offset;
+    uint8_t *recon = c->va[out->value] + out->offset;
+    const uint8_t *reference = pPicture ? c->va[ref->value] + ref->offset : NULL;
+    const uint32_t layout = layoutOf(&p->input_cfg), pitch = p->input_cfg.sfc_pitch,
+                   rpitch = p->outputpic_cfg.sfc_pitch;
+
+    const H264EncConfig config = {
+        .width = width, .height = height, .profile_idc = p->sps_data.profile_idc, .cabac = false};
+    const H264EncPicture picture = {
+        .type = (uint8_t)pc->pic_type,
+        .qp = (uint8_t)slice->qp_avr,
+        .frame_num = pc->frame_num,
+        .idr_pic_id = pc->idr_pic_id,
+        .poc_lsb = pc->pic_order_cnt_lsb,
+    };
+    const size_t cap = (size_t)wmbs * hmbs * 400 + 4096;
+    uint8_t *rbsp = malloc(cap);
+    H264Bits b;
+    h264bits_init(&b, rbsp, cap);
+    h264enc_slice_header(&config, &picture, &b);
+    uint32_t skip = 0;
+    for (uint32_t mby = 0; mby < hmbs; mby++)
+        for (uint32_t mbx = 0; mbx < wmbs; mbx++) {
+            uint8_t mb[384], prev[384];
+            readMacroblock(input, layout, pitch, inOff, mbx, mby, mb);
+            if (pPicture) {
+                readMacroblock(reference, TEGRA_NVENC_LAYOUT_PITCH, rpitch, refOff, mbx, mby, prev);
+                if (!memcmp(mb, prev, sizeof(mb))) {
+                    skip++;
+                    gSkipped++;
+                    continue;
+                }
+                h264bits_ue(&b, skip);  // mb_skip_run
+                skip = 0;
+            }
+            h264bits_ue(&b, pPicture ? 30 : 25);  // mb_type I_PCM (5 + 25 in a P slice)
+            h264bits_align_zero(&b);
+            for (int i = 0; i < 384; i++) h264bits_u(&b, mb[i], 8);
+            gPcm++;
+            for (uint32_t y = 0; y < 16; y++)  // the reconstruction is the picture itself (pitch linear here)
+                memcpy(recon + (size_t)(mby * 16 + y) * rpitch + mbx * 16, mb + y * 16, 16);
+            for (uint32_t y = 0; y < 8; y++)
+                for (uint32_t x = 0; x < 8; x++) {
+                    uint8_t *cr = recon + refOff + (size_t)(mby * 8 + y) * rpitch + mbx * 16 + 2 * x;
+                    cr[0] = mb[256 + y * 8 + x];
+                    cr[1] = mb[320 + y * 8 + x];
+                }
+        }
+    if (skip) h264bits_ue(&b, skip);  // the run that ends the slice
+    // Skipped macroblocks keep the reference's samples (P_Skip with a zero vector: every neighbour is I_PCM or
+    // skipped with vector 0).
+    if (pPicture)
+        for (uint32_t mby = 0; mby < hmbs; mby++)
+            for (uint32_t mbx = 0; mbx < wmbs; mbx++) {
+                uint8_t mb[384], prev[384];
+                readMacroblock(input, layout, pitch, inOff, mbx, mby, mb);
+                readMacroblock(reference, TEGRA_NVENC_LAYOUT_PITCH, rpitch, refOff, mbx, mby, prev);
+                if (memcmp(mb, prev, sizeof(mb))) continue;
+                for (uint32_t y = 0; y < 16; y++)
+                    memcpy(recon + (size_t)(mby * 16 + y) * rpitch + mbx * 16,
+                           reference + (size_t)(mby * 16 + y) * rpitch + mbx * 16, 16);
+                for (uint32_t y = 0; y < 8; y++)
+                    memcpy(recon + refOff + (size_t)(mby * 8 + y) * rpitch + mbx * 16,
+                           reference + refOff + (size_t)(mby * 8 + y) * rpitch + mbx * 16, 16);
+            }
+    h264bits_trailing(&b);
+    uint8_t *bs = c->va[bits->value] + bits->offset;
+    bs[0] = bs[1] = bs[2] = 0;
+    bs[3] = 1;
+    const size_t n = h264enc_nal(idr ? 0x65 : 0x61, rbsp, h264bits_size(&b), bs + 4, pc->bitstream_buf_size - 4);
+    free(rbsp);
+    if (!n) return -1;
+    nvenc_pic_stat_s *stat = (nvenc_pic_stat_s *)(c->va[status->value] + status->offset);
+    memset(stat, 0, sizeof(*stat));
+    stat->total_bit_count = (uint32_t)(n + 4) * 8;
+    stat->num_slices = 1;
+    stat->pic_type = (unsigned short)pc->pic_type;
+    if (idr) gIdr++;
+    if (pPicture) gP++;
+    return 0;
+}
+
+int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence)
+{
+    NVENCClient *c = ctx;
+    uint64_t avail[TEGRA_NVENC_MAX_ENTRIES] = {0};
+    for (uint32_t i = 0; i < s->entry_count; i++) {
+        const TegraNVENCEntry *e = &s->entries[i];
+        if (e->kind != TEGRA_NVENC_ENTRY_RELOC) continue;
+        if (e->value >= MAX_HANDLES || !c->va[e->value] || e->offset > c->size[e->value]) return -1;
+        avail[i] = c->size[e->value] - e->offset;
+    }
+    const char *why = tegra_nvenc_check(s, avail);
+    if (why) {
+        gRefused++;
+        gRefusal = why;
+        return -1;
+    }
+    const nvenc_h264_drv_pic_setup_s *p = (const nvenc_h264_drv_pic_setup_s *)s->setup;
+    if (!gHaveP && p->pic_control.pic_type == H264ENC_P) {
+        gFirstP = *s;
+        memcpy(gFirstPAvail, avail, sizeof(avail));
+        gHaveP = true;
+    }
+    if (engine(c, s)) return -1;
+    *fence = (uint32_t)++gSubmits;
+    return 0;
+}
+
+// ---- Checks of their own ---------------------------------------------------------------------------------------------
+
+static int failures;
+#define EXPECT(cond, ...)                 \
+    do {                                  \
+        if (!(cond)) {                    \
+            printf("FAIL: " __VA_ARGS__); \
+            printf("\n");                 \
+            failures++;                   \
+        }                                 \
+    } while (0)
+
+static void parameterSets(void)
+{
+    H264EncConfig c = {.width = 1278,
+                       .height = 718,
+                       .profile_idc = H264_PROFILE_HIGH,
+                       .cabac = true,
+                       .transform8x8 = true,
+                       .full_range = true,
+                       .colour_description = true,
+                       .colour_primaries = 1,
+                       .transfer = 1,
+                       .matrix = 1,
+                       .fps_num = 60,
+                       .fps_den = 1};
+    EXPECT(!h264enc_configure(&c), "configure 1278x718");
+    EXPECT(c.level_idc == 32, "level for 720p60 is %u, expected 32", c.level_idc);
+    uint8_t sps[160], pps[48];
+    const size_t spsSize = h264enc_write_sps(&c, sps, sizeof(sps)), ppsSize = h264enc_write_pps(&c, pps, sizeof(pps));
+    static H264ParamSets sets;
+    uint8_t id = 0xff;
+    EXPECT(spsSize && !h264_parse_sps(&sets, sps, spsSize, &id) && id == 0, "SPS parses");
+    const H264SPS *s = &sets.sps[0];
+    EXPECT(s->profile_idc == 100 && s->level_idc == 32 && s->width_mbs == 80 && s->height_map_units == 45 &&
+               s->crop_right == 2 && s->crop_bottom == 2 && s->frame_mbs_only && s->log2_max_frame_num == 16 &&
+               s->poc_type == 0 && s->log2_max_poc_lsb == 16 && s->max_num_ref_frames == 1 && s->full_range &&
+               s->colour_description && s->matrix == 1 && s->bitstream_restriction && !s->max_num_reorder_frames,
+           "SPS fields");
+    EXPECT(ppsSize && !h264_parse_pps(&sets, pps, ppsSize, &id) && id == 0, "PPS parses");
+    const H264PPS *q = &sets.pps[0];
+    EXPECT(q->entropy_coding_mode && q->transform_8x8_mode && q->deblocking_filter_control_present &&
+               q->num_ref_idx_active[0] == 1 && !q->weighted_pred,
+           "PPS fields");
+    uint8_t avcc[256];
+    const size_t avccSize = h264enc_write_avcc(&c, avcc, sizeof(avcc));
+    EXPECT(avccSize == 6 + 2 + spsSize + 1 + 2 + ppsSize + 4 && avcc[0] == 1 && avcc[1] == 100 && avcc[4] == 0xff &&
+               avcc[5] == 0xe1 && !memcmp(avcc + 8, sps, spsSize),
+           "avcC");
+    // The slice header the setup asks for parses with the same parameter sets.
+    const H264EncPicture pic = {.type = H264ENC_P, .qp = 30, .frame_num = 7, .poc_lsb = 14};
+    uint8_t rbsp[64], nal[80];
+    H264Bits b;
+    h264bits_init(&b, rbsp, sizeof(rbsp));
+    h264enc_slice_header(&c, &pic, &b);
+    h264bits_trailing(&b);
+    const size_t n = h264enc_nal(0x61, rbsp, h264bits_size(&b), nal, sizeof(nal));
+    H264Slice sh;
+    EXPECT(n && !h264_parse_slice(&sets, nal, n, &sh) && sh.slice_type == H264_SLICE_P && sh.frame_num == 7 &&
+               sh.poc_lsb == 14 && sh.nal_ref_idc == 3,
+           "slice header");
+    H264EncConfig base = {.width = 640, .height = 480, .profile_idc = H264_PROFILE_BASELINE, .cabac = true};
+    EXPECT(!h264enc_configure(&base) && !base.cabac && !base.transform8x8, "Baseline drops CABAC and 8x8");
+    H264EncConfig odd = {.width = 641, .height = 480, .profile_idc = H264_PROFILE_HIGH};
+    EXPECT(h264enc_configure(&odd), "odd width refused");
+    H264EncConfig big = {.width = 4096, .height = 4096, .profile_idc = H264_PROFILE_HIGH};
+    EXPECT(h264enc_configure(&big), "4096x4096 refused (more than 36864 macroblocks)");
+}
+
+static void layouts(void)
+{
+    enum { PITCH = 128, ROWS = 64 };
+    static uint8_t seen[PITCH * ROWS];
+    for (uint32_t layout = 0; layout < TEGRA_NVENC_LAYOUTS; layout++) {
+        memset(seen, 0, sizeof(seen));
+        bool ok = true;
+        for (uint32_t y = 0; y < ROWS; y++)
+            for (uint32_t x = 0; x < PITCH; x++) {
+                const size_t o = h264enc_surface_offset(layout, PITCH, x, y);
+                if (o >= sizeof(seen) || seen[o]++) ok = false;
+            }
+        EXPECT(ok, "layout %u is not a bijection on %ux%u", layout, PITCH, ROWS);
+    }
+    // NVDEC's GOB-height-2 formula (TegraNVDECSelfTest.cpp blockLinear) is BL2's.
+    for (uint32_t y = 0; y < 32; y++)
+        for (uint32_t x = 0; x < 128; x++) {
+            const uint32_t gob =
+                ((x % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + x % 16;
+            const size_t nvdec = (y / 16) * 128 * 16 + (x / 64) * 1024 + ((y % 16) / 8) * 512 + gob;
+            if (h264enc_surface_offset(TEGRA_NVENC_LAYOUT_BL2_LOG, 128, x, y) != nvdec) {
+                EXPECT(false, "BL2 differs from NVDEC's block linear at %u,%u", x, y);
+                return;
+            }
+        }
+}
+
+static void sizes(void)
+{
+    EXPECT(sizeof(nvenc_h264_drv_pic_setup_s) == 512 && sizeof(nvenc_h264_pic_control_s) == 276 &&
+               sizeof(nvenc_h264_rc_s) == 88 && sizeof(nvenc_h264_me_control_s) == 192 &&
+               sizeof(nvenc_h264_md_control_s) == 128 && sizeof(nvenc_h264_quant_control_s) == 192 &&
+               sizeof(nvenc_h264_slice_control_s) == 128 && sizeof(nvenc_pic_stat_s) == 128 &&
+               sizeof(nvenc_h264_coloc_mb_s) == 64 && offsetof(nvenc_h264_drv_pic_setup_s, gpTimer_timeout_val) == 508,
+           "nvenc_drv.h struct sizes differ from its comments");
+}
+
+// Each mutation of a good P submit must be refused, for its own reason.
+static void refusals(void)
+{
+    if (!gHaveP) {
+        EXPECT(false, "no P picture reached the engine");
+        return;
+    }
+    static const struct {
+        const char *name, *why;
+    } cases[] = {
+        {"magic", "magic"},
+        {"no status", "missing relocation"},
+        {"bitstream bigger than its buffer", "bitstream"},
+        {"history smaller than 2.3's minimum", "history"},
+        {"ME-only", "ME-only"},
+        {"B picture", "picture structure or type"},
+        {"list 0 names an unrelocated slot", "reference slot"},
+        {"MPEC statistics", "control params"},
+        {"GP timer off", "control params"},
+        {"control past the setup", "control offset"},
+        {"execute not last", "execute not last"},
+        {"input buffer too small", "surface too small"},
+        {"stats FIFO", "picture features"},
+        {"two slices", "control counts"},
+    };
+    for (unsigned k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        TegraNVENCSubmit s = gFirstP;
+        uint64_t avail[TEGRA_NVENC_MAX_ENTRIES];
+        memcpy(avail, gFirstPAvail, sizeof(avail));
+        nvenc_h264_drv_pic_setup_s *p = (nvenc_h264_drv_pic_setup_s *)s.setup;
+        nvenc_h264_pic_control_s *pc = &p->pic_control;
+        switch (k) {
+        case 0: p->magic = 0xc9b70006u; break;
+        case 1:
+            for (uint32_t i = 0; i < s.entry_count; i++)  // moved to an unused reference slot
+                if (s.entries[i].method == NVC5B7_SET_OUT_ENC_STATUS)
+                    s.entries[i].method = NVC5B7_SET_IN_REF_PIC0_LUMA + 4 * 5;
+            break;
+        case 2: pc->bitstream_buf_size = 0x7fffff00u; break;
+        case 3: pc->hist_buf_size = 128; break;
+        case 4: ((nvenc_h264_me_control_s *)(s.setup + pc->me_control_offset))->me_only_mode = 1; break;
+        case 5: pc->pic_type = 1; break;
+        case 6: pc->l0[0] = 3; break;
+        case 7:
+        case 8:
+            for (uint32_t i = 0; i < s.entry_count; i++)
+                if (s.entries[i].method == NVC5B7_SET_CONTROL_PARAMS)
+                    s.entries[i].value = k == 7 ? s.entries[i].value | (1u << 15) : s.entries[i].value & ~(1u << 12);
+            break;
+        case 9: pc->q_control_offset = s.setup_bytes - 8; break;
+        case 10: {
+            const TegraNVENCEntry last = s.entries[s.entry_count - 1];
+            s.entries[s.entry_count - 1] = s.entries[0];
+            s.entries[0] = last;
+            const uint64_t a = avail[s.entry_count - 1];
+            avail[s.entry_count - 1] = avail[0];
+            avail[0] = a;
+            break;
+        }
+        case 11:
+            for (uint32_t i = 0; i < s.entry_count; i++)
+                if (s.entries[i].method == NVC5B7_SET_IN_CUR_PIC) avail[i] = 4096;
+            break;
+        case 12: pc->stats_fifo_enable = 1; break;
+        case 13: pc->num_forced_slices_minus1 = 1; break;
+        }
+        const char *why = tegra_nvenc_check(&s, avail);
+        EXPECT(why && !strcmp(why, cases[k].why), "%s: checker said \"%s\", expected \"%s\"", cases[k].name,
+               why ? why : "accepted", cases[k].why);
+    }
+}
+
+// The controller against a synthetic encoder: bytes = complexity * 2^((26 - QP) / 6), complexity jumping mid-way.
+static void rateControl(void)
+{
+    RateControl rc;
+    rc_init(&rc, 4e6, false, -1, 30, 1280, 720);
+    double total = 0, late = 0;
+    for (int i = 0; i < 600; i++) {
+        const bool key = i % 60 == 0;
+        const double complexity = (i < 300 ? 20000.0 : 60000.0) * (key ? 4 : 1);
+        const double bytes = complexity * pow(2, (26.0 - rc_qp(&rc, key)) / 6);
+        rc_update(&rc, bytes, key);
+        total += bytes;
+        if (i >= 450) late += bytes;
+    }
+    const double rate = total * 8 / 20, lateRate = late * 8 / 5;
+    EXPECT(rate > 3.2e6 && rate < 4.8e6 && lateRate > 3.2e6 && lateRate < 4.8e6,
+           "VBR 4 Mb/s came out at %.2f Mb/s overall, %.2f Mb/s after the jump", rate / 1e6, lateRate / 1e6);
+    rc_init(&rc, 0, false, 0.8, 30, 1280, 720);
+    EXPECT(rc_qp(&rc, false) == 22 && rc_qp(&rc, true) == 20, "constant quality 0.8 -> QP %d", rc_qp(&rc, false));
+}
+
+int main(void)
+{
+    gLog = os_log_create("com.ioswitch.ave", "host-test");
+    sizes();
+    parameterSets();
+    layouts();
+    rateControl();
+    // A class ID of our own, which the sessions name below: the Mac's own H.264 encoders would otherwise win.
+    const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoEncoder_IsHardwareAccelerated};
+    const void *values[] = {CFSTR("com.ioswitch.ave-host"), kCFBooleanTrue};
+    CFDictionaryRef info =
+        CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    const OSStatus registered = VTRegisterVideoEncoderWithInfo(kCMVideoCodecType_H264, info, createInstance);
+    CFRelease(info);
+    if (registered) {
+        printf("FAIL ave: VTRegisterVideoEncoderWithInfo %d\n", (int)registered);
+        return 1;
+    }
+    const void *specKeys[] = {kVTVideoEncoderSpecification_EncoderID};
+    const void *specValues[] = {CFSTR("com.ioswitch.ave-host")};
+    CFDictionaryRef spec = CFDictionaryCreate(NULL, specKeys, specValues, 1, &kCFTypeDictionaryKeyCallBacks,
+                                              &kCFTypeDictionaryValueCallBacks);
+    static const struct {
+        uint32_t layout, chroma;
+    } runs[] = {
+        {TEGRA_NVENC_LAYOUT_PITCH, TEGRA_NVENC_CHROMA_OFFSET},
+        {TEGRA_NVENC_LAYOUT_BL2_LOG, TEGRA_NVENC_CHROMA_METHOD},
+        {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET},
+    };
+    for (unsigned r = 0; r < sizeof(runs) / sizeof(runs[0]); r++) {
+        gLayout = runs[r].layout;
+        gChroma = runs[r].chroma;
+        const int submits = gSubmits, refused = gRefused;
+        char line[512];
+        const bool ok = encode_check(spec, kVTH264EntropyMode_CAVLC, 99.0, line, sizeof(line));
+        printf("layout %u chroma %u: %s (submits %d, refused %d%s%s)\n", gLayout, gChroma, line, gSubmits - submits,
+               gRefused - refused, gRefusal ? ": " : "", gRefusal ? gRefusal : "");
+        EXPECT(ok && gSubmits - submits == 30 && gRefused == refused, "encode check, layout %u", gLayout);
+    }
+    CFRelease(spec);
+    refusals();
+    printf("I_PCM macroblocks %d, skipped %d, IDR %d, P %d, opens %d\n", gPcm, gSkipped, gIdr, gP, gOpens);
+    EXPECT(gSkipped > 0 && gP > 0 && gIdr >= 12, "the clip exercised P_Skip and key frames");
+    printf("%s ave: plug-in on VideoToolbox over a lossless fake NVENC (%d failures)\n", failures ? "FAIL" : "PASS",
+           failures);
+    return failures ? 1 : 0;
+}

@@ -1,0 +1,769 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// AVE stand-in: H.264 on the Tegra X1's NVENC as VideoToolbox's hardware 'avc1' encoder.
+//
+// How VideoToolbox finds it (21H461 VTLoadVideoEncoders, disassembled): VTInitializeVideoEncoderRegistry registers
+// VideoToolbox's own wrappers (muxed alpha, depth), then dlopens a fixed list of paths and calls each one's register
+// function: HEVCH9, H9, VCPHEVC, H264H9, then /System/Library/VideoEncoders/H264H7.videoencoder (H264H7EncoderRegister),
+// H264H4, H264H2, JPEGH1, VCH263, ... On iPad7,1 the H.264 and HEVC encoders are H264H9 and H9 (AVE), which register
+// only when IOServiceMatching("AppleAVE2Driver") finds the AVE kext (AppleAVEVA_CheckPlatform), and VCPHEVC's register
+// function is an empty stub: without AVE this system has no H.264 encoder at all, hardware or software. H264H7 is not
+// in the dyld cache and iPad7,1 ships no such file; the userland overlay puts this one there.
+//
+// Registration: 'avc1' with CMClassImplementationID com.apple.videotoolbox.videoencoder.h264 (AVE's own encoder ID)
+// and IsHardwareAccelerated, in every process once the kernel published TegraNVENC (it proved itself at boot, E4).
+// Most processes never run an encoder themselves: VTCompressionSession remotes their sessions to the media server
+// (mediaserverd; videocodecd with CoreMedia's SeparateCodecProcess_Encode), but they look encoders up (AVAssetWriter's
+// output settings, VTCopySupportedPropertyDictionaryForEncoder), so the entry has to be there. An instance opens the
+// kernel client only when a session starts; a process the kernel refuses gets kVTCouldNotFindVideoEncoderErr there.
+//
+// Sessions: what NVENC takes (TegraNVENCCheck.h: progressive 4:2:0, 32..4096 a side, at most 4096x2304 macroblocks'
+// worth) runs on NVENC; anything else is refused at StartSession, and VideoToolbox has no other H.264 encoder to try,
+// exactly as before this plug-in. No software encoder inside: there is no Apple one on 21H461 to fall back to.
+// Pixel buffers are asked for as NV12 ('420v'/'420f'); VideoToolbox's pixel transfer converts anything else (BGRA
+// screen captures) before EncodeFrame.
+//
+// Per picture (synchronous, on VideoToolbox's encode thread): the picture is copied into the session's input buffer in
+// the layout E3 proved (TegraNVENCInfo.input_layout: a memcpy per row for pitch linear, 16-byte runs for block linear),
+// the setup built (H264NVENC.c) with the QP the rate control picked (RateControl.h), the job queued on host1x channel 0,
+// and the thread sleeps on the syncpoint interrupt; then NVENC's Annex B slice becomes a length-prefixed sample with
+// the format description of this plug-in's own SPS/PPS, and goes out at once (no reordering: no B pictures). A P
+// picture predicts from the previous picture's reconstruction (two buffers in turn); a key frame is an IDR. When E3
+// could not prove P pictures (TegraNVENCInfo.p_frames 0), every picture is an IDR.
+//
+// Log (subsystem com.ioswitch.ave, category encoder): per process, a refusal by TegraNVENC; per session, one line when
+// it starts and one when it ends (frames, bytes, mean copy and encode time); once per boot, the encode check
+// (EncodeCheck.c) in the first process that may open NVENC, category selftest.
+#include <CoreFoundation/CoreFoundation.h>
+#include <dispatch/dispatch.h>
+#include <mach/mach_time.h>
+#include <os/log.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
+#include "EncodeCheck.h"
+#include "H264NVENC.h"
+#include "NVENCClient.h"
+#include "RateControl.h"
+#include "VTEncoderSPI.h"
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-const-variable"
+#pragma clang diagnostic ignored "-Wunused-variable"
+#include "../../TegraNVENC/nvidia/nvenc_drv.h"
+#pragma clang diagnostic pop
+
+// 21H461 is iOS 17.7: the hardware-encoder keys the SDK marks iOS 17.4 are there (weak imports at the 17.0 target).
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+
+#define AVE_ENCODER_ID "com.apple.videotoolbox.videoencoder.h264"
+
+typedef struct {
+    pthread_mutex_t lock;
+    VTVideoEncoderSession session;
+    NVENCClient *client;
+    TegraNVENCInfo info;
+    CMVideoDimensions size;
+    bool configured, failed;
+    H264EncConfig config;
+    H264EncLayout layout;
+    H264EncHandles handles;
+    uint8_t *inputVA, *bitstreamVA, *auxVA;
+    uint32_t buffers[5];
+    unsigned bufferCount;
+    CMVideoFormatDescriptionRef format;
+    uint8_t *avcc;  // AVCC scratch for one picture
+    size_t avccCap;
+    // Properties.
+    int32_t maxKeyInterval, averageBitRate, constantBitRate;
+    double maxKeyDuration, quality, expectedFrameRate, limitBytes, limitSeconds;
+    bool allowTemporal, realTime;
+    CFStringRef profileLevel, entropy, primaries, transfer, matrix;
+    // Stream state.
+    bool haveRef, keyPending;
+    uint32_t frameNum, idrPicId, pictureIndex, pocCount, sinceKey;
+    CMTime lastKeyTime;
+    RateControl rc;
+    uint32_t frames, keyFrames, errors;
+    uint64_t bytes, copyTicks, encodeTicks;
+} Encoder;
+
+static os_log_t gLog;
+
+static Encoder *storage(CMBaseObjectRef object)
+{
+    return CMBaseObjectGetDerivedStorage(object);
+}
+
+static double ticksToMs(uint64_t ticks)
+{
+    static mach_timebase_info_data_t base;
+    if (!base.denom) mach_timebase_info(&base);
+    return (double)ticks * base.numer / base.denom / 1e6;
+}
+
+static void replace(CFTypeRef *slot, CFTypeRef value)
+{
+    if (value) CFRetain(value);
+    if (*slot) CFRelease(*slot);
+    *slot = value;
+}
+
+static bool number(CFTypeRef value, double *out)
+{
+    if (!value || CFGetTypeID(value) != CFNumberGetTypeID()) return false;
+    return CFNumberGetValue(value, kCFNumberDoubleType, out);
+}
+
+// ---- Colour: session properties, else the first picture's attachments, as H.273 code points ----------------------
+
+static uint8_t primariesCode(CFTypeRef v)
+{
+    if (!v) return 2;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_ITU_R_709_2)) return 1;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_EBU_3213)) return 5;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_SMPTE_C)) return 6;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_ITU_R_2020)) return 9;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_P3_D65)) return 12;
+    return 2;
+}
+
+static uint8_t transferCode(CFTypeRef v)
+{
+    if (!v) return 2;
+    if (CFEqual(v, kCVImageBufferTransferFunction_ITU_R_709_2)) return 1;
+    if (CFEqual(v, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)) return 16;
+    if (CFEqual(v, kCVImageBufferTransferFunction_ITU_R_2100_HLG)) return 18;
+    if (CFEqual(v, kCVImageBufferTransferFunction_sRGB)) return 13;
+    return 2;
+}
+
+static uint8_t matrixCode(CFTypeRef v)
+{
+    if (!v) return 2;
+    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_709_2)) return 1;
+    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_601_4)) return 6;
+    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_2020)) return 9;
+    return 2;
+}
+
+// ---- Kernel buffers ------------------------------------------------------------------------------------------------
+
+static void releaseBuffers(Encoder *e)
+{
+    for (unsigned i = 0; i < e->bufferCount; i++) nvenc_free(e->client, e->buffers[i]);
+    e->bufferCount = 0;
+}
+
+static int allocBuffer(Encoder *e, uint64_t size, uint32_t *handle, uint8_t **va)
+{
+    void *p = NULL;
+    if (nvenc_alloc(e->client, size, handle, &p)) return -1;
+    e->buffers[e->bufferCount++] = *handle;
+    if (va) *va = p;
+    return 0;
+}
+
+static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer, CFTypeRef matrix);
+
+// The first picture fixes the stream: its pixel format (full range or not) and colour tags go into the SPS.
+static OSStatus configure(Encoder *e, CVPixelBufferRef image)
+{
+    H264EncConfig *c = &e->config;
+    memset(c, 0, sizeof(*c));
+    c->width = (uint32_t)e->size.width;
+    c->height = (uint32_t)e->size.height;
+    c->profile_idc = H264_PROFILE_HIGH;
+    c->cabac = true;
+    if (e->profileLevel) {
+        char name[64] = "";
+        CFStringGetCString(e->profileLevel, name, sizeof(name), kCFStringEncodingUTF8);
+        if (!strncmp(name, "H264_Baseline", 13) || !strncmp(name, "H264_ConstrainedBaseline", 24))
+            c->profile_idc = H264_PROFILE_BASELINE;
+        else if (!strncmp(name, "H264_Main", 9))
+            c->profile_idc = H264_PROFILE_MAIN;
+        const char *level = strrchr(name, '_');
+        if (level && level[1] >= '1' && level[1] <= '5' && level[2] == '_' && level[3] >= '0' && level[3] <= '9')
+            c->level_idc = (uint8_t)((level[1] - '0') * 10 + (level[3] - '0'));
+    }
+    if (e->entropy && CFEqual(e->entropy, kVTH264EntropyMode_CAVLC)) c->cabac = false;
+    c->transform8x8 = c->profile_idc == H264_PROFILE_HIGH;
+    const OSType format = CVPixelBufferGetPixelFormatType(image);
+    c->full_range = format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+    // Retained: the session's own tags, else the picture's.
+    CFTypeRef primaries =
+        e->primaries ? CFRetain(e->primaries) : CVBufferCopyAttachment(image, kCVImageBufferColorPrimariesKey, NULL);
+    CFTypeRef transfer =
+        e->transfer ? CFRetain(e->transfer) : CVBufferCopyAttachment(image, kCVImageBufferTransferFunctionKey, NULL);
+    CFTypeRef matrix =
+        e->matrix ? CFRetain(e->matrix) : CVBufferCopyAttachment(image, kCVImageBufferYCbCrMatrixKey, NULL);
+    c->colour_primaries = primariesCode(primaries);
+    c->transfer = transferCode(transfer);
+    c->matrix = matrixCode(matrix);
+    c->colour_description = c->colour_primaries != 2 || c->transfer != 2 || c->matrix != 2;
+    OSStatus status = startStream(e, primaries, transfer, matrix);
+    if (primaries) CFRelease(primaries);
+    if (transfer) CFRelease(transfer);
+    if (matrix) CFRelease(matrix);
+    return status;
+}
+
+// The kernel buffers, the format description of this stream's parameter sets, and the rate control.
+static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer, CFTypeRef matrix)
+{
+    H264EncConfig *c = &e->config;
+    if (e->expectedFrameRate > 0 && e->expectedFrameRate <= 240) {
+        c->fps_num = (uint32_t)lround(e->expectedFrameRate * 1000);
+        c->fps_den = 1000;
+    }
+    c->input_layout = e->info.input_layout;
+    c->chroma_mode = e->info.chroma_mode;
+    if (h264enc_configure(c)) return kVTPropertyNotSupportedErr;
+    h264enc_layout(c, &e->layout);
+    const H264EncLayout *l = &e->layout;
+    uint8_t *ignored;
+    if (allocBuffer(e, l->input.bytes, &e->handles.input, &e->inputVA) ||
+        allocBuffer(e, l->recon.bytes, &e->handles.recon, &ignored) ||
+        allocBuffer(e, l->recon.bytes, &e->handles.ref, &ignored) ||
+        allocBuffer(e, l->bitstream_bytes, &e->handles.bitstream, &e->bitstreamVA) ||
+        allocBuffer(e, l->aux_bytes, &e->handles.aux, &e->auxVA)) {
+        releaseBuffers(e);
+        return kVTAllocationFailedErr;
+    }
+    e->avccCap = l->bitstream_bytes + 4096;
+    if (!(e->avcc = malloc(e->avccCap))) return kVTAllocationFailedErr;
+
+    uint8_t avcC[512];
+    const size_t avcCSize = h264enc_write_avcc(c, avcC, sizeof(avcC));
+    CFDataRef atom = CFDataCreate(kCFAllocatorDefault, avcC, (CFIndex)avcCSize);
+    const void *atomKeys[] = {CFSTR("avcC")}, *atomValues[] = {atom};
+    CFDictionaryRef atoms = CFDictionaryCreate(kCFAllocatorDefault, atomKeys, atomValues, 1,
+                                               &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFMutableDictionaryRef extensions = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms, atoms);
+    CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_FormatName, CFSTR("H.264"));
+    if (c->full_range) CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_FullRangeVideo, kCFBooleanTrue);
+    if (primaries) CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_ColorPrimaries, primaries);
+    if (transfer) CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_TransferFunction, transfer);
+    if (matrix) CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_YCbCrMatrix, matrix);
+    OSStatus status = VTEncoderSessionCreateVideoFormatDescription(
+        e->session, kCMVideoCodecType_H264, (int32_t)c->width, (int32_t)c->height, extensions, &e->format);
+    CFRelease(extensions);
+    CFRelease(atoms);
+    CFRelease(atom);
+    if (status) return status;
+
+    const double fps = e->expectedFrameRate > 0 ? e->expectedFrameRate : 30;
+    const bool cbr = e->constantBitRate > 0;
+    rc_init(&e->rc, cbr ? e->constantBitRate : e->averageBitRate, cbr, e->quality, fps, c->width, c->height);
+    rc_set_limit(&e->rc, e->limitBytes, e->limitSeconds);
+    e->configured = true;
+    os_log(gLog,
+           "AVE: session %ux%u in %{public}s on NVENC (H.264 profile %u level %u, %{public}s, %{public}s, input layout "
+           "%u, %{public}s)",
+           c->width, c->height, getprogname(), c->profile_idc, c->level_idc, c->cabac ? "CABAC" : "CAVLC",
+           e->rc.constQP >= 0 ? "constant quality"
+           : cbr              ? "CBR"
+                              : "VBR",
+           c->input_layout, e->info.p_frames ? "P pictures" : "intra only");
+    return noErr;
+}
+
+// ---- One picture ---------------------------------------------------------------------------------------------------
+
+static bool wantsKey(Encoder *e, CMTime pts, CFDictionaryRef options)
+{
+    if (!e->haveRef || e->keyPending || !e->allowTemporal || !e->info.p_frames) return true;
+    if (options) {
+        CFTypeRef force = CFDictionaryGetValue(options, kVTEncodeFrameOptionKey_ForceKeyFrame);
+        if (force && CFGetTypeID(force) == CFBooleanGetTypeID() && CFBooleanGetValue(force)) return true;
+    }
+    if (e->maxKeyInterval > 0 && e->sinceKey + 1 >= (uint32_t)e->maxKeyInterval) return true;
+    if (e->maxKeyDuration > 0 && CMTIME_IS_NUMERIC(pts) && CMTIME_IS_NUMERIC(e->lastKeyTime) &&
+        CMTimeGetSeconds(CMTimeSubtract(pts, e->lastKeyTime)) >= e->maxKeyDuration)
+        return true;
+    return false;
+}
+
+static OSStatus emitSample(Encoder *e, VTVideoEncoderFrame frame, size_t size, bool key, CMTime pts, CMTime duration)
+{
+    CMBlockBufferRef block = NULL;
+    OSStatus status = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, NULL, size, kCFAllocatorDefault, NULL, 0,
+                                                         size, kCMBlockBufferAssureMemoryNowFlag, &block);
+    if (!status) status = CMBlockBufferReplaceDataBytes(e->avcc, block, 0, size);
+    CMSampleBufferRef sample = NULL;
+    const CMSampleTimingInfo timing = {duration, pts, pts};
+    if (!status)
+        status = CMSampleBufferCreateReady(kCFAllocatorDefault, block, e->format, 1, 1, &timing, 1, &size, &sample);
+    if (block) CFRelease(block);
+    if (status) return status;
+    CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sample, true);
+    if (attachments && CFArrayGetCount(attachments)) {
+        CFMutableDictionaryRef a = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
+        CFDictionarySetValue(a, kCMSampleAttachmentKey_NotSync, key ? kCFBooleanFalse : kCFBooleanTrue);
+        CFDictionarySetValue(a, kCMSampleAttachmentKey_DependsOnOthers, key ? kCFBooleanFalse : kCFBooleanTrue);
+        CFDictionarySetValue(a, kCMSampleAttachmentKey_IsDependedOnByOthers,
+                             e->info.p_frames && e->allowTemporal ? kCFBooleanTrue : kCFBooleanFalse);
+    }
+    status = VTEncoderSessionEmitEncodedFrame(e->session, frame, noErr, 0, sample);
+    CFRelease(sample);
+    return status;
+}
+
+static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBufferRef image, CMTime pts,
+                              CMTime duration, CFDictionaryRef options)
+{
+    if (CVPixelBufferGetWidth(image) != (size_t)e->size.width ||
+        CVPixelBufferGetHeight(image) != (size_t)e->size.height || CVPixelBufferGetPlaneCount(image) != 2)
+        return kVTPixelTransferNotSupportedErr;
+    const bool key = wantsKey(e, pts, options);
+    const uint64_t began = mach_absolute_time();
+    if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly)) return kVTVideoEncoderMalfunctionErr;
+    h264enc_put_input(&e->config, &e->layout, e->inputVA, CVPixelBufferGetBaseAddressOfPlane(image, 0),
+                      CVPixelBufferGetBytesPerRowOfPlane(image, 0), CVPixelBufferGetBaseAddressOfPlane(image, 1),
+                      CVPixelBufferGetBytesPerRowOfPlane(image, 1));
+    CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
+    const uint64_t copied = mach_absolute_time();
+
+    if (key) {
+        e->frameNum = 0;
+        e->pocCount = 0;
+    }
+    const H264EncPicture picture = {
+        .type = key ? H264ENC_IDR : H264ENC_P,
+        .qp = (uint8_t)rc_qp(&e->rc, key),
+        .frame_num = e->frameNum,
+        .idr_pic_id = e->idrPicId,
+        .poc_lsb = (2 * e->pocCount) & 0xffff,
+        .picture_index = e->pictureIndex++,
+    };
+    TegraNVENCSubmit *submit = malloc(sizeof(*submit));
+    if (!submit) return kVTAllocationFailedErr;
+    h264enc_fill_submit(&e->config, &e->layout, &picture, &e->handles, submit);
+    TegraNVENCWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
+    wait.invalidate[0] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
+    const int submitted = nvenc_submit(e->client, submit, &wait.fence);
+    free(submit);
+    if (submitted || nvenc_wait(e->client, &wait)) {
+        e->errors++;
+        e->keyPending = true;
+        return kVTVideoEncoderMalfunctionErr;
+    }
+    const nvenc_pic_stat_s *stat = (const nvenc_pic_stat_s *)e->auxVA;
+    const uint32_t produced = (stat->total_bit_count + 7) / 8;
+    if (stat->error_status || stat->ucode_error_status || !produced || produced > e->layout.bitstream_bytes) {
+        static int logged;
+        if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
+            os_log_error(gLog, "AVE: NVENC picture failed: error_status %u ucode %#x, %u bits", stat->error_status,
+                         stat->ucode_error_status, stat->total_bit_count);
+        e->errors++;
+        e->keyPending = true;
+        return kVTVideoEncoderMalfunctionErr;
+    }
+    TegraNVENCWait bits = {.fence = wait.fence, .timeout_us = 1000000, .invalidate_count = 1};
+    bits.invalidate[0] = (TegraNVENCRange){e->handles.bitstream, 0, produced, 0};
+    if (nvenc_wait(e->client, &bits)) return kVTVideoEncoderMalfunctionErr;
+    const size_t size = h264enc_annexb_to_avcc(e->bitstreamVA, produced, e->avcc, e->avccCap);
+    e->encodeTicks += mach_absolute_time() - copied;
+    e->copyTicks += copied - began;
+    if (!size) {
+        e->errors++;
+        e->keyPending = true;
+        return kVTVideoEncoderMalfunctionErr;
+    }
+    rc_update(&e->rc, (double)size, key);
+    // The reconstruction is the next picture's reference.
+    const uint32_t recon = e->handles.recon;
+    e->handles.recon = e->handles.ref;
+    e->handles.ref = recon;
+    e->haveRef = true;
+    e->keyPending = false;
+    e->frameNum = (e->frameNum + 1) & 0xffff;
+    e->pocCount++;
+    if (key) {
+        e->idrPicId = (e->idrPicId + 1) & 0xffff;
+        e->sinceKey = 0;
+        e->lastKeyTime = pts;
+        e->keyFrames++;
+    } else {
+        e->sinceKey++;
+    }
+    e->frames++;
+    e->bytes += size;
+    return emitSample(e, frame, size, key, pts, duration);
+}
+
+// ---- VTVideoEncoderClass -------------------------------------------------------------------------------------------
+
+static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession session, CMVideoDimensions size,
+                             CFTypeRef unused)
+{
+    (void)unused;
+    Encoder *e = storage(ref);
+    pthread_mutex_lock(&e->lock);
+    e->session = session;
+    e->size = size;
+    H264EncConfig probe = {
+        .width = (uint32_t)size.width, .height = (uint32_t)size.height, .profile_idc = H264_PROFILE_HIGH};
+    OSStatus status = noErr;
+    int error = 0;
+    if (h264enc_configure(&probe)) {
+        os_log(gLog, "AVE: %dx%d in %{public}s refused: NVENC encodes 32..4096 a side, even sizes, up to 4096x2304",
+               size.width, size.height, getprogname());
+        status = kVTCouldNotFindVideoEncoderErr;
+    } else if (!(e->client = nvenc_open(&error)) || !nvenc_info(e->client, &e->info)) {
+        static int logged;
+        if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
+            os_log_error(gLog, "AVE: TegraNVENC refused %{public}s (%#x): no H.264 encoder here", getprogname(), error);
+        status = kVTCouldNotFindVideoEncoderErr;
+    }
+    if (!status) {
+        const int32_t formats[] = {kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                                   kCVPixelFormatType_420YpCbCr8BiPlanarFullRange};
+        CFNumberRef numbers[2];
+        for (int i = 0; i < 2; i++) numbers[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &formats[i]);
+        CFArrayRef list = CFArrayCreate(kCFAllocatorDefault, (const void **)numbers, 2, &kCFTypeArrayCallBacks);
+        CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
+                                                     &kCFTypeDictionaryValueCallBacks);
+        CFNumberRef w = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &size.width);
+        CFNumberRef h = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &size.height);
+        const void *keys[] = {kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey, kCVPixelBufferHeightKey,
+                              kCVPixelBufferIOSurfacePropertiesKey};
+        const void *values[] = {list, w, h, surface};
+        CFDictionaryRef attributes = CFDictionaryCreate(
+            kCFAllocatorDefault, keys, values, 4, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        status = VTEncoderSessionSetPixelBufferAttributes(session, attributes);
+        CFRelease(attributes);
+        CFRelease(w);
+        CFRelease(h);
+        CFRelease(surface);
+        CFRelease(list);
+        for (int i = 0; i < 2; i++) CFRelease(numbers[i]);
+    }
+    pthread_mutex_unlock(&e->lock);
+    return status;
+}
+
+static OSStatus encodeFrame(VTVideoEncoderRef ref, VTVideoEncoderFrame frame, CVImageBufferRef image, CMTime pts,
+                            CMTime duration, CFDictionaryRef options, VTEncodeInfoFlags *info)
+{
+    Encoder *e = storage(ref);
+    if (info) *info = 0;
+    pthread_mutex_lock(&e->lock);
+    OSStatus status = e->failed ? kVTVideoEncoderMalfunctionErr : noErr;
+    if (!status && !e->configured && (status = configure(e, image))) {
+        e->failed = true;
+        os_log_error(gLog, "AVE: session %dx%d in %{public}s could not start on NVENC (%d)", e->size.width,
+                     e->size.height, getprogname(), (int)status);
+    }
+    if (!status) status = encodePicture(e, frame, image, pts, duration, options);
+    if (status && e->session)
+        VTEncoderSessionEmitEncodedFrame(e->session, frame, status, kVTEncodeInfo_FrameDropped, NULL);
+    pthread_mutex_unlock(&e->lock);
+    return noErr;  // the frame was answered (with its status) above
+}
+
+static OSStatus completeFrames(VTVideoEncoderRef ref, CMTime until)
+{
+    (void)ref, (void)until;
+    return noErr;  // every frame is out before EncodeFrame returns
+}
+
+// type NULL: no type stated (dictionary and data values: clean aperture, ICC profile, HDR metadata).
+static void describe(CFMutableDictionaryRef supported, CFStringRef key, CFStringRef type, bool readOnly)
+{
+    const void *keys[] = {kVTPropertyReadWriteStatusKey, kVTPropertyTypeKey};
+    const void *values[] = {readOnly ? kVTPropertyReadWriteStatus_ReadOnly : kVTPropertyReadWriteStatus_ReadWrite,
+                            type};
+    CFDictionaryRef d = CFDictionaryCreate(kCFAllocatorDefault, keys, values, type ? 2 : 1,
+                                           &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(supported, key, d);
+    CFRelease(d);
+}
+
+static OSStatus copySupportedPropertyDictionary(VTVideoEncoderRef ref, CFDictionaryRef *out)
+{
+    (void)ref;
+    CFMutableDictionaryRef s = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
+                                                         &kCFTypeDictionaryValueCallBacks);
+    if (!s) return kVTAllocationFailedErr;
+    const CFStringRef numbers[] = {
+        kVTCompressionPropertyKey_AverageBitRate,
+        kVTCompressionPropertyKey_ConstantBitRate,
+        kVTCompressionPropertyKey_Quality,
+        kVTCompressionPropertyKey_MaxKeyFrameInterval,
+        kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
+        kVTCompressionPropertyKey_ExpectedFrameRate,
+        kVTCompressionPropertyKey_MaxFrameDelayCount,
+        kVTCompressionPropertyKey_SourceFrameCount,
+        kVTCompressionPropertyKey_ExpectedDuration,
+    };
+    const CFStringRef booleans[] = {
+        kVTCompressionPropertyKey_AllowTemporalCompression,
+        kVTCompressionPropertyKey_AllowFrameReordering,
+        kVTCompressionPropertyKey_RealTime,
+        kVTCompressionPropertyKey_AllowOpenGOP,
+        kVTCompressionPropertyKey_MaximizePowerEfficiency,
+        kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+    };
+    const CFStringRef enumerations[] = {
+        kVTCompressionPropertyKey_ProfileLevel,   kVTCompressionPropertyKey_H264EntropyMode,
+        kVTCompressionPropertyKey_ColorPrimaries, kVTCompressionPropertyKey_TransferFunction,
+        kVTCompressionPropertyKey_YCbCrMatrix,
+    };
+    for (unsigned i = 0; i < sizeof(numbers) / sizeof(numbers[0]); i++)
+        describe(s, numbers[i], kVTPropertyType_Number, false);
+    for (unsigned i = 0; i < sizeof(booleans) / sizeof(booleans[0]); i++)
+        describe(s, booleans[i], kVTPropertyType_Boolean, false);
+    for (unsigned i = 0; i < sizeof(enumerations) / sizeof(enumerations[0]); i++)
+        describe(s, enumerations[i], kVTPropertyType_Enumeration, false);
+    const CFStringRef metadata[] = {
+        kVTCompressionPropertyKey_PixelAspectRatio,
+        kVTCompressionPropertyKey_CleanAperture,
+        kVTCompressionPropertyKey_FieldCount,
+        kVTCompressionPropertyKey_FieldDetail,
+        kVTCompressionPropertyKey_AspectRatio16x9,
+        kVTCompressionPropertyKey_ProgressiveScan,
+        kVTCompressionPropertyKey_ICCProfile,
+        kVTCompressionPropertyKey_GammaLevel,
+        kVTCompressionPropertyKey_Depth,
+        kVTCompressionPropertyKey_MoreFramesBeforeStart,
+        kVTCompressionPropertyKey_MoreFramesAfterEnd,
+        kVTCompressionPropertyKey_MasteringDisplayColorVolume,
+        kVTCompressionPropertyKey_ContentLightLevelInfo,
+        kVTCompressionPropertyKey_HDRMetadataInsertionMode,
+    };
+    for (unsigned i = 0; i < sizeof(metadata) / sizeof(metadata[0]); i++) describe(s, metadata[i], NULL, false);
+    describe(s, kVTCompressionPropertyKey_DataRateLimits, kVTPropertyType_Number, false);
+    describe(s, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, kVTPropertyType_Boolean, true);
+    *out = s;
+    return noErr;
+}
+
+// ---- CMBaseClass ---------------------------------------------------------------------------------------------------
+
+static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef value)
+{
+    Encoder *e = storage(ref);
+    double v = 0;
+    OSStatus status = noErr;
+    pthread_mutex_lock(&e->lock);
+    if (CFEqual(key, kVTCompressionPropertyKey_AverageBitRate)) {
+        e->averageBitRate = number(value, &v) ? (int32_t)v : 0;
+        if (e->configured && e->constantBitRate <= 0) {
+            e->rc.bitrate = e->averageBitRate;
+            e->rc.buffer = e->averageBitRate;
+            e->rc.constQP = e->averageBitRate > 0 ? -1 : e->rc.constQP;
+        }
+    } else if (CFEqual(key, kVTCompressionPropertyKey_ConstantBitRate)) {
+        e->constantBitRate = number(value, &v) ? (int32_t)v : 0;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_Quality)) {
+        e->quality = number(value, &v) ? v : -1;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_MaxKeyFrameInterval)) {
+        e->maxKeyInterval = number(value, &v) ? (int32_t)v : 0;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration)) {
+        e->maxKeyDuration = number(value, &v) ? v : 0;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_ExpectedFrameRate)) {
+        e->expectedFrameRate = number(value, &v) ? v : 0;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_AllowTemporalCompression)) {
+        e->allowTemporal = !value || CFGetTypeID(value) != CFBooleanGetTypeID() || CFBooleanGetValue(value);
+    } else if (CFEqual(key, kVTCompressionPropertyKey_RealTime)) {
+        e->realTime = value && CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue(value);
+    } else if (CFEqual(key, kVTCompressionPropertyKey_DataRateLimits)) {
+        // [bytes, seconds, ...]: the first pair is enforced.
+        double bytes = 0, seconds = 0;
+        if (value && CFGetTypeID(value) == CFArrayGetTypeID() && CFArrayGetCount(value) >= 2 &&
+            number(CFArrayGetValueAtIndex(value, 0), &bytes) && number(CFArrayGetValueAtIndex(value, 1), &seconds)) {
+            e->limitBytes = bytes;
+            e->limitSeconds = seconds;
+            if (e->configured) rc_set_limit(&e->rc, bytes, seconds);
+        }
+    } else if (CFEqual(key, kVTCompressionPropertyKey_ProfileLevel)) {
+        if (value && CFGetTypeID(value) == CFStringGetTypeID() && CFStringHasPrefix(value, CFSTR("H264_")))
+            replace((CFTypeRef *)&e->profileLevel, value);
+        else
+            status = kVTPropertyNotSupportedErr;
+    } else if (CFEqual(key, kVTCompressionPropertyKey_H264EntropyMode)) {
+        replace((CFTypeRef *)&e->entropy, value);
+    } else if (CFEqual(key, kVTCompressionPropertyKey_ColorPrimaries)) {
+        replace((CFTypeRef *)&e->primaries, value);
+    } else if (CFEqual(key, kVTCompressionPropertyKey_TransferFunction)) {
+        replace((CFTypeRef *)&e->transfer, value);
+    } else if (CFEqual(key, kVTCompressionPropertyKey_YCbCrMatrix)) {
+        replace((CFTypeRef *)&e->matrix, value);
+    } else if (CFEqual(key, kVTCompressionPropertyKey_AllowFrameReordering) ||
+               CFEqual(key, kVTCompressionPropertyKey_AllowOpenGOP) ||
+               CFEqual(key, kVTCompressionPropertyKey_MaximizePowerEfficiency) ||
+               CFEqual(key, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality) ||
+               CFEqual(key, kVTCompressionPropertyKey_MaxFrameDelayCount) ||
+               CFEqual(key, kVTCompressionPropertyKey_SourceFrameCount) ||
+               CFEqual(key, kVTCompressionPropertyKey_ExpectedDuration)) {
+        // Accepted: no B pictures and no delay, whatever is asked; nothing to tune on a fixed-function engine.
+    } else if (CFEqual(key, kVTCompressionPropertyKey_PixelAspectRatio) ||
+               CFEqual(key, kVTCompressionPropertyKey_CleanAperture) ||
+               CFEqual(key, kVTCompressionPropertyKey_FieldCount) ||
+               CFEqual(key, kVTCompressionPropertyKey_FieldDetail) ||
+               CFEqual(key, kVTCompressionPropertyKey_AspectRatio16x9) ||
+               CFEqual(key, kVTCompressionPropertyKey_ProgressiveScan) ||
+               CFEqual(key, kVTCompressionPropertyKey_ICCProfile) ||
+               CFEqual(key, kVTCompressionPropertyKey_GammaLevel) || CFEqual(key, kVTCompressionPropertyKey_Depth) ||
+               CFEqual(key, kVTCompressionPropertyKey_MoreFramesBeforeStart) ||
+               CFEqual(key, kVTCompressionPropertyKey_MoreFramesAfterEnd) ||
+               CFEqual(key, kVTCompressionPropertyKey_MasteringDisplayColorVolume) ||
+               CFEqual(key, kVTCompressionPropertyKey_ContentLightLevelInfo) ||
+               CFEqual(key, kVTCompressionPropertyKey_HDRMetadataInsertionMode)) {
+        // Accepted and left to the format description VideoToolbox builds around ours: geometry and colour metadata
+        // that change no slice (progressive, square-sample 8-bit streams only).
+    } else {
+        status = kVTPropertyNotSupportedErr;
+        static int logged;
+        if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
+            os_log(gLog, "AVE: %{public}s set %{public}@, which this encoder does not support (first refusal only)",
+                   getprogname(), key);
+    }
+    pthread_mutex_unlock(&e->lock);
+    return status;
+}
+
+static OSStatus copyProperty(CMBaseObjectRef ref, CFStringRef key, CFAllocatorRef allocator, void *value)
+{
+    (void)allocator;
+    Encoder *e = storage(ref);
+    if (CFEqual(key, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder)) {
+        *(CFTypeRef *)value = CFRetain(kCFBooleanTrue);
+        return noErr;
+    }
+    if (CFEqual(key, kVTCompressionPropertyKey_AverageBitRate)) {
+        *(CFTypeRef *)value = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &e->averageBitRate);
+        return noErr;
+    }
+    if (CFEqual(key, kVTCompressionPropertyKey_MaxKeyFrameInterval)) {
+        *(CFTypeRef *)value = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &e->maxKeyInterval);
+        return noErr;
+    }
+    if (CFEqual(key, kVTCompressionPropertyKey_AllowTemporalCompression)) {
+        *(CFTypeRef *)value = CFRetain(e->allowTemporal ? kCFBooleanTrue : kCFBooleanFalse);
+        return noErr;
+    }
+    if (CFEqual(key, kVTCompressionPropertyKey_ProfileLevel) && e->profileLevel) {
+        *(CFTypeRef *)value = CFRetain(e->profileLevel);
+        return noErr;
+    }
+    return -12783;  // kCMBaseObjectError_ValueNotAvailable
+}
+
+static OSStatus invalidate(CMBaseObjectRef ref)
+{
+    Encoder *e = storage(ref);
+    pthread_mutex_lock(&e->lock);
+    e->session = NULL;
+    pthread_mutex_unlock(&e->lock);
+    return noErr;
+}
+
+static void finalize(CMBaseObjectRef ref)
+{
+    Encoder *e = storage(ref);
+    if (e->frames)
+        os_log(gLog,
+               "AVE: session %ux%u in %{public}s ended: %u pictures on NVENC (%u key), %u failed, %llu bytes, mean "
+               "%.2f ms copy + %.2f ms encode",
+               e->config.width, e->config.height, getprogname(), e->frames, e->keyFrames, e->errors,
+               (unsigned long long)e->bytes, ticksToMs(e->copyTicks) / e->frames,
+               ticksToMs(e->encodeTicks) / e->frames);
+    if (e->client) {
+        releaseBuffers(e);
+        nvenc_close(e->client);  // the kernel waits for this connection's jobs
+    }
+    free(e->avcc);
+    if (e->format) CFRelease(e->format);
+    CFTypeRef *strings[] = {(CFTypeRef *)&e->profileLevel, (CFTypeRef *)&e->entropy, (CFTypeRef *)&e->primaries,
+                            (CFTypeRef *)&e->transfer, (CFTypeRef *)&e->matrix};
+    for (unsigned i = 0; i < 5; i++) replace(strings[i], NULL);
+    pthread_mutex_destroy(&e->lock);
+}
+
+static CFStringRef copyDebugDescription(CMBaseObjectRef ref)
+{
+    return CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("<AVE H.264 encoder %p on NVENC>"), ref);
+}
+
+static const VTPluginBaseClass kBaseClass = {
+    .version = 1,
+    .derivedStorageSize = sizeof(Encoder),
+    .invalidate = invalidate,
+    .finalize = finalize,
+    .copyDebugDescription = copyDebugDescription,
+    .copyProperty = copyProperty,
+    .setProperty = setProperty,
+};
+
+// Version 1: the slots VideoToolbox reads from every encoder (its own MuxedAlpha encoder declares the same).
+static const VTPluginEncoderClass kEncoderClass = {
+    .version = 1,
+    .startSession = startSession,
+    .encodeFrame = encodeFrame,
+    .completeFrames = completeFrames,
+    .copySupportedPropertyDictionary = copySupportedPropertyDictionary,
+};
+
+static const VTPluginEncoderVTable kVTable = {NULL, &kBaseClass, &kEncoderClass};
+
+static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTVideoEncoderRef *out)
+{
+    if (codec != kCMVideoCodecType_H264) return kVTCouldNotFindVideoEncoderErr;
+    CMBaseObjectRef object = NULL;
+    const OSStatus status = CMDerivedObjectCreate(allocator, &kVTable, VTVideoEncoderGetClassID(), &object);
+    if (status) return status;
+    Encoder *e = storage(object);
+    memset(e, 0, sizeof(*e));
+    pthread_mutex_init(&e->lock, NULL);
+    e->allowTemporal = true;
+    e->quality = -1;
+    e->lastKeyTime = kCMTimeInvalid;
+    *out = object;
+    return noErr;
+}
+
+static void selfTest(void *context)
+{
+    (void)context;
+    char line[512];
+    const bool ok = encode_check(NULL, NULL, 30.0, line, sizeof(line));
+    os_log_t log = os_log_create("com.ioswitch.ave", "selftest");
+    if (ok)
+        os_log(log, "vetest: %{public}s (in %{public}s)", line, getprogname());
+    else
+        os_log_error(log, "vetest: %{public}s (in %{public}s)", line, getprogname());
+}
+
+static OSStatus registerEncoder(void)
+{
+    const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoEncoder_IsHardwareAccelerated,
+                          kVTVideoEncoder_EncoderNameKey};
+    const void *values[] = {CFSTR(AVE_ENCODER_ID), kCFBooleanTrue, CFSTR("Apple H.264 (HW)")};
+    CFDictionaryRef info =
+        CFDictionaryCreate(NULL, keys, values, 3, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    const OSStatus status = VTRegisterVideoEncoderWithInfo(kCMVideoCodecType_H264, info, createInstance);
+    CFRelease(info);
+    return status;
+}
+
+__attribute__((visibility("default"))) void H264H7EncoderRegister(void);
+
+void H264H7EncoderRegister(void)
+{
+    gLog = os_log_create("com.ioswitch.ave", "encoder");
+    if (!nvenc_service_present()) return;  // switch-nvdec=0, or NVENC did not prove itself at boot: nothing changes
+    const OSStatus status = registerEncoder();
+    if (status) {
+        os_log_error(gLog, "AVE: VTRegisterVideoEncoderWithInfo('avc1') failed: %d", (int)status);
+        return;
+    }
+    // The once-per-boot check runs in the first process that may open NVENC (the media server, in practice).
+    int error = 0;
+    NVENCClient *probe = nvenc_open(&error);
+    const bool claimed = probe && nvenc_claim_self_test(probe);
+    nvenc_close(probe);
+    // Off the registry's thread: the check's own session looks the registry up once this registration returns.
+    if (claimed) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), NULL, selfTest);
+}

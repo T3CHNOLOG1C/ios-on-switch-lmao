@@ -23,8 +23,13 @@ enum {
     TEGRA_HOST1X_ELOST = -5,       // the threshold was reached but its interrupt never came (before strict mode only)
 };
 
-// Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._VIC, ..._NVDEC).
-enum { TEGRA_HOST1X_CLASS_HOST1X = 0x01, TEGRA_HOST1X_CLASS_VIC = 0x5d, TEGRA_HOST1X_CLASS_NVDEC = 0xf0 };
+// Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._NVENC, ..._VIC, ..._NVDEC).
+enum {
+    TEGRA_HOST1X_CLASS_HOST1X = 0x01,
+    TEGRA_HOST1X_CLASS_NVENC = 0x21,
+    TEGRA_HOST1X_CLASS_VIC = 0x5d,
+    TEGRA_HOST1X_CLASS_NVDEC = 0xf0,
+};
 
 // Syncpoint increment conditions (host1x uclass INCR_SYNCPT bits 15:8).
 enum { TEGRA_HOST1X_COND_IMMEDIATE = 0, TEGRA_HOST1X_COND_OP_DONE = 1 };
@@ -78,9 +83,9 @@ int tegra_host1x_submit(const uint32_t *words, uint32_t count);
 void tegra_host1x_suspend(void);
 void tegra_host1x_resume(void);
 
-// The exports the sleep agent (drivers/SwitchSuspend) calls: the registered client's quiesce then host1x's suspend,
-// and host1x's resume then the client's reload. With nothing registered (NVDEC off) they are host1x alone, which is a
-// no-op unless host1x is up. TegraNVDEC registers once its engine runs.
+// The exports the sleep agent (drivers/SwitchSuspend) calls: the registered clients' quiesce then host1x's suspend,
+// and host1x's resume then the clients' reload. With nothing registered (NVDEC off) they are host1x alone, which is a
+// no-op unless host1x is up. TegraNVDEC and TegraNVENC register once their engines run (two clients at most).
 void tegra_host1x_set_sleep_client(void (*suspend)(void), void (*resume)(void));
 void tegra_nvdec_suspend(void);
 void tegra_nvdec_resume(void);

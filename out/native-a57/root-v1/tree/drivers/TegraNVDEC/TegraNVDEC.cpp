@@ -387,9 +387,31 @@ void park()
     w32(gCar, CLK_ENB_Y_CLR, Y_NVDEC);
 }
 
-void bringUp(void *stageArg, wait_result_t)
+// TegraNVENC's E3 decodes its picture here: it sleeps until this bring-up has ended either way (tegra_nvdec_await).
+IOLock *gSettleLock;
+int gSettled;  // 0 under way, 1 NVDEC decodes (published), -1 it does not
+
+IOLock *settleLock()
 {
-    const uint32_t stage = (uint32_t)(uintptr_t)stageArg;
+    if (!__atomic_load_n(&gSettleLock, __ATOMIC_ACQUIRE)) {
+        IOLock *fresh = IOLockAlloc(), *expected = nullptr;
+        if (!__atomic_compare_exchange_n(&gSettleLock, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            IOLockFree(fresh);
+    }
+    return gSettleLock;
+}
+
+void settle(int how)
+{
+    IOLock *lock = settleLock();
+    IOLockLock(lock);
+    gSettled = how;
+    IOLockWakeup(lock, &gSettled, false);
+    IOLockUnlock(lock);
+}
+
+void bringUpStages(uint32_t stage)
+{
     // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), and
     // the arena returned.
     auto giveUp = [](bool touched) {
@@ -470,11 +492,29 @@ void bringUp(void *stageArg, wait_result_t)
     tegra_host1x_set_strict();
     tegra_nvdec_publish(gArenaUs);
 }
+
+void bringUp(void *stageArg, wait_result_t)
+{
+    bringUpStages((uint32_t)(uintptr_t)stageArg);
+    settle(gPublished ? 1 : -1);
+}
 }  // namespace
 
 extern "C" uint32_t tegra_nvdec_codecs(void)
 {
     return gCodecs;
+}
+
+extern "C" int tegra_nvdec_await(uint32_t timeoutMs)
+{
+    IOLock *lock = settleLock();
+    uint64_t deadline;
+    clock_interval_to_deadline(timeoutMs, kMillisecondScale, &deadline);
+    IOLockLock(lock);
+    while (!gSettled && IOLockSleepDeadline(lock, &gSettled, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {}
+    const int settled = gSettled;
+    IOLockUnlock(lock);
+    return settled == 1;
 }
 
 extern "C" bool tegra_nvdec_ready(void)
@@ -627,11 +667,15 @@ extern "C" int tegra_nvdec_probe(void)
     static volatile int started;
     uint32_t stage = 3;  // on by default, like the board drivers; switch-nvdec=0 turns it off
     PE_parse_boot_argn("switch-nvdec", &stage, sizeof(stage));
-    if (!stage) return 0;
+    if (!stage) {
+        settle(-1);
+        return 0;
+    }
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return 0;
     thread_t thread;
     if (kernel_thread_start(bringUp, (void *)(uintptr_t)stage, &thread) != KERN_SUCCESS) {
         IOLog("TegraNVDEC: could not start the bring-up thread\n");
+        settle(-1);
         return -1;
     }
     thread_deallocate(thread);

@@ -146,10 +146,11 @@ extern int switch_wlan_publish(void);    /* no-op unless switch-wlan=1; runs its
 extern int tegra_gm20b_probe(void);      /* no-op unless tegra-gpu=<stage>; runs its bring-up on its own thread */
 extern int tegra_host1x_probe(void);     /* no-op unless switch-host1x=1; own thread */
 extern int tegra_nvdec_probe(void);      /* no-op unless switch-nvdec=1; own thread, starts host1x itself */
+extern int tegra_nvenc_probe(void);      /* on with NVDEC (switch-nvdec=0 turns both off); own thread */
 extern int
 ioswitch_audio_publish(void); /* null sink unless switch-audio=1|3; the Tegra backend sleeps on I2C1, PZ4 and the GIC */
 extern int switch_suspend_start(void); /* no-op unless switch-sleep=2; after every board driver it suspends */
-extern int switch_usb_start(void);     /* no-op without the ADT's /arm-io/usb-device; runs its bring-up on its own thread */
+extern int switch_usb_start(void); /* no-op without the ADT's /arm-io/usb-device; runs its bring-up on its own thread */
 extern int ioswitch_watchdog_publish(void); /* the IOWatchdog launchd starts watchdogd for (NativeIOSwitchWatchdog) */
 static int ioswitch_board_enabled(const char *name)
 {
@@ -181,6 +182,7 @@ static void ioswitch_board_thread(void *parameter __unused, wait_result_t result
     if (tegra_gm20b_probe()) printf("IOSwitch: TegraGM20B did not start\n");
     if (tegra_host1x_probe()) printf("IOSwitch: TegraHost1x did not start\n");
     if (tegra_nvdec_probe()) printf("IOSwitch: TegraNVDEC did not start\n");
+    if (tegra_nvenc_probe()) printf("IOSwitch: TegraNVENC did not start\n");
     if (ioswitch_audio_publish()) printf("IOSwitch: SwitchAudio did not start\n");
     (void)switch_suspend_start();
     thread_terminate_self();

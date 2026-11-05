@@ -22,7 +22,9 @@
     "(nine AUs tuned for J120's four MAX98723 drivers). drivers/SwitchAudio/tunings has same-named ones, gated like the",
     "plug-in, that bypass every AU of those chains except the volume (see hal/SwitchAudioPlugIn.c).",
     "The VideoDecoders union (HEVCH8, AVD) has no gate: AVD registers only in processes that may open the TegraNVDEC",
-    "service, which the kernel publishes once NVDEC proves itself at boot (switch-nvdec=0 turns NVDEC off)."
+    "service, which the kernel publishes once NVDEC proves itself at boot (switch-nvdec=0 turns NVDEC off).",
+    "H264H7.videoencoder (AVE on NVENC) has no gate either: it registers only once the kernel published TegraNVENC (E4,",
+    "after NVENC's picture decoded back on NVDEC at boot; switch-nvdec=0 turns both off)."
   ],
   "files": [
     {
@@ -65,6 +67,11 @@
     {
       "path": "/System/Library/VideoDecoders/AVD.videodecoder",
       "source": "build/switch-video/AVD.videodecoder",
+      "trust": true
+    },
+    {
+      "path": "/System/Library/VideoEncoders/H264H7.videoencoder",
+      "source": "build/switch-video/H264H7.videoencoder",
       "trust": true
     },
     {

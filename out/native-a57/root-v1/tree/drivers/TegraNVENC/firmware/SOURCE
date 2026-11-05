@@ -1,0 +1,12 @@
+linux-firmware main (2026-10-13 "nvidia: Update and add missing firmware files for Tegra SoCs"),
+gitlab.com/kernel-firmware/linux-firmware, checked 2026-11-05.
+File: nvidia/tegra210/nvenc.bin (WHENCE: Driver tegra-nvenc, Version l4t-r32.7.6), sha256
+c583def0cd3cf99c0948ff719276ef9c8d156e7c71f212a0e575c525614e6700, 121088 bytes.
+Byte-identical to /lib/firmware/tegra21x/nvhost_nvenc050.fw in NVIDIA's nvidia-l4t-firmware 32.7.6-20241104234540
+(repo.download.nvidia.com/jetson/t210, checked 2026-11-05): NVENC 5.0, the only NVENC image L4T ships for T210, which
+L4T's nvhost loads into the falcon non-securely, as TegraNVDEC does NVDEC's.
+Layout (falcon bin header v1): OS header at 0x100, OS data at 0x200 (0x1d700 bytes): code 0x0+0x500, data
+0x1d500+0x200, 13 apps the OS loads itself through DMATRFBASE. The image holds the driver magic 0xd0b70006 twice
+(file offsets 0x8f9d and 0x14c87, inside the H.264 and H.265 apps), the value open-gpu-doc's nvenc_drv.h gives for
+NV_NVENC_5_0 (TegraNVENC/nvidia/SOURCE).
+Licence: LICENCE.nvidia (WHENCE: Redistributable), the same file as TegraNVDEC/firmware/LICENCE.nvidia.

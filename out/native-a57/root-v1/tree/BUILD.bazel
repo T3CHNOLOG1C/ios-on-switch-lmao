@@ -529,6 +529,19 @@ kernel_driver(
     stems = {"firmware.S": "nvdec_firmware"},
 )
 
+# TegraNVENC: the NVENC falcon, its job engine, arena and user client (on with NVDEC, E1..E4); its firmware by .incbin.
+kernel_driver(
+    name = "TegraNVENC",
+    srcs = [
+        "TegraNVENC.cpp",
+        "TegraNVENCMemory.cpp",
+        "TegraNVENCSelfTest.cpp",
+        "TegraNVENCUserClient.cpp",
+        "firmware.S",
+    ],
+    stems = {"firmware.S": "nvenc_firmware"},
+)
+
 # Host checks of driver code: each compiles the driver's sources with Xcode's clang for the Mac and runs them.
 py_test(
     name = "keywrap_test",
@@ -651,6 +664,7 @@ kernel_archive(
         ":TegraDFLL",
         ":TegraHost1x",
         ":TegraNVDEC",
+        ":TegraNVENC",
         ":SwitchUSB",
     ],
 )
@@ -1178,6 +1192,46 @@ ios_binary(
     out = "build/switch-video/AVD.videodecoder",
     pagesize = "4096",
     sign_identifier = "com.ioswitch.avd",
+)
+
+# H264H7.videoencoder: AVE's stand-in, H.264 on NVENC as VideoToolbox's hardware 'avc1' encoder (registered once the
+# kernel published TegraNVENC; sessions open it where the process may), with the once-per-boot encode check
+# (EncodeCheck.c). The path is a slot of 21H461's VTLoadVideoEncoders list that the dyld cache does not fill.
+ios_binary(
+    name = "AVE",
+    srcs = [
+        "drivers/SwitchVideoEncoders/AVE/AVEEncoder.c",
+        "drivers/SwitchVideoEncoders/AVE/H264NVENC.c",
+        "drivers/SwitchVideoEncoders/AVE/NVENCClient.c",
+        "drivers/SwitchVideoEncoders/AVE/EncodeCheck.c",
+    ],
+    hdrs = glob([
+        "drivers/SwitchVideoEncoders/AVE/*.h",
+        "drivers/TegraNVENC/**/*.h",
+    ]) + ["drivers/SwitchVideoDecoders/AVD/VTDecoderSPI.h"],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "-fvisibility=hidden",
+        "-install_name",
+        "/System/Library/VideoEncoders/H264H7.videoencoder",
+        "-framework",
+        "CoreFoundation",
+        "-framework",
+        "CoreMedia",
+        "-framework",
+        "CoreVideo",
+        "-framework",
+        "VideoToolbox",
+        "-framework",
+        "IOKit",
+    ],
+    out = "build/switch-video/H264H7.videoencoder",
+    pagesize = "4096",
+    sign_identifier = "com.ioswitch.ave",
 )
 
 # vdectest: the clip check as a command (AVD/ClipCheck.c); on the device the same check runs inside AVD.videodecoder.

@@ -1,0 +1,7 @@
+nvenc_drv.h (NVIDIA, SPDX MIT, "1993-2023") and clc5b7.h (NVIDIA, MIT): NVENC's picture-setup structures and class
+methods from NVIDIA's open-gpu-doc (github.com/NVIDIA/open-gpu-doc, classes/video/, commit 9fdf5c40 2026-06-09).
+Unmodified. nvenc_drv.h is written for class C9B7 but keeps one layout for every NVENC from MSENC on: its magic table
+lists NV_NVENC_5_0 = 0xd0b70006 (T210's NVENC 5.0 firmware holds exactly that value) with the same revision byte as
+every later class. The methods TegraNVENC uses have the same offsets in clc5b7.h, clc7b7.h and clc9b7.h. Struct sizes
+match the header's own comments under clang (512-byte H.264 picture setup); test/nvenc_host checks them.
+Used by TegraNVENCCheck.h and SwitchVideoEncoders/AVE.

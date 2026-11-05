@@ -1,0 +1,137 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// TegraNVENC user client ABI, v1 (kernel: TegraNVENCUserClient.cpp; client: SwitchVideoEncoders/AVE).
+//
+// The service is "TegraNVENC" (IOServiceMatching), published by default once NVENC has proven itself (E4). Its user
+// client's class is named AppleAVE2UserClient, the client class of iPad7,1's own encoder (AppleAVE2Driver, not loaded
+// here), which 21H461's media sandbox profiles admit; the processes known to encode are granted outright as well
+// (NativeSandboxGrantProcess on the service). Open type TEGRA_NVENC_OPEN_TYPE.
+//
+// Calls: IOConnectCallStructMethod on any selector the sandbox admits, input {TEGRA_NVENC_TUNNEL_MAGIC, method,
+// record...}, output the method's record. Method TEGRA_NVENC_TUNNEL_PROBE only proves a selector is admitted.
+//
+// Model (the TegraNVDEC model, for an encoder):
+//   * No SMMU: NVENC reads and writes physical memory. Buffers come from NVENC's own arena (contiguous chunks below
+//     4 GiB, one small chunk reserved at boot, more added when a session needs them and kept); user space maps them
+//     (IOConnectMapMemory64 with type = handle, cacheable) and never sees an address. Every address method is a
+//     relocation (handle + offset) the kernel resolves and bounds-checks against what the firmware may touch there.
+//   * The kernel builds the host1x stream itself: only whitelisted NVENC methods, written through the engine's THI
+//     METHOD0/METHOD1 pair, then SET_IN_DRV_PIC_SETUP (a kernel-only copy of the checked setup) and EXECUTE, then an
+//     OP_DONE syncpoint increment. The address methods of features the checker keeps off (CEA hints, ME predictors,
+//     QP maps, RC state, ...) point at a kernel scratch buffer on every job, so the firmware never finds address 0, or
+//     another client's buffer, in them.
+//   * Cache maintenance is explicit: Submit cleans the ranges the CPU wrote (the input picture), Wait invalidates the
+//     ranges the CPU will read (status, bitstream). Reference pictures are never touched by the CPU.
+//   * Jobs run in submission order; a fence is a syncpoint threshold, waited on by interrupt. The kernel bounds every
+//     wait itself (timeout_us is ignored); once published, a job past that bound is a hardware fault and panics.
+//
+// What the boot self-test (E3) proved is in TegraNVENCInfo: the input surface layout the firmware reads, how it
+// addresses chroma planes, and whether a P picture referencing NVENC's own reconstruction decoded right.
+#ifndef TEGRA_NVENC_ABI_H
+#define TEGRA_NVENC_ABI_H
+#include <stdint.h>
+
+#define TEGRA_NVENC_ABI_VERSION  1
+#define TEGRA_NVENC_OPEN_TYPE    0x4e45       // 'NE'
+#define TEGRA_NVENC_TUNNEL_MAGIC 0x4e45544eu  // 'NETN'
+#define TEGRA_NVENC_TUNNEL_PROBE 0xffffffffu
+
+enum TegraNVENCMethod {
+    TegraNVENCMethodGetInfo = 1,        // -> TegraNVENCInfo
+    TegraNVENCMethodBufferAlloc = 2,    // TegraNVENCBufferAlloc -> TegraNVENCBufferReply
+    TegraNVENCMethodBufferFree = 3,     // TegraNVENCBuffer -> (waits for the last job, revokes the client's mappings)
+    TegraNVENCMethodSubmit = 4,         // TegraNVENCSubmit -> TegraNVENCFence
+    TegraNVENCMethodWait = 5,           // TegraNVENCWait ->
+    TegraNVENCMethodClaimSelfTest = 6,  // -> TegraNVENCClaim: claimed = 1 for exactly one caller per boot
+};
+
+enum { TEGRA_NVENC_CODEC_H264 = 1 };  // NVENC application id (clc5b7.h NVC5B7_SET_APPLICATION_ID_ID_NVENC_H264)
+
+// Input picture layouts (nvenc_h264_surface_cfg_s of input_cfg). E3 tries them in this order and keeps the first
+// whose picture NVDEC decodes back to the source; TegraNVENCInfo.input_layout names it.
+enum {
+    TEGRA_NVENC_LAYOUT_PITCH = 0,    // pitch linear: block_height 0, tiled_16x16 0
+    TEGRA_NVENC_LAYOUT_BL2_LOG = 1,  // Tegra block linear, 64Bx8 GOBs two to a block; block_height 1 (log2 GOBs)
+    TEGRA_NVENC_LAYOUT_BL2_RAW = 2,  // the same layout; block_height 2 (GOBs)
+    TEGRA_NVENC_LAYOUT_BL4_LOG = 3,  // block linear, four GOBs to a block; block_height 2 (log2 GOBs)
+    TEGRA_NVENC_LAYOUT_BL1 = 4,      // block linear, one GOB to a block; block_height 0
+    TEGRA_NVENC_LAYOUT_TILED16 = 5,  // 16x16 tiles in raster order, tile rows `pitch` x 16 apart; tiled_16x16 1
+    TEGRA_NVENC_LAYOUTS = 6,
+};
+
+// How a picture's chroma plane is addressed (input, reconstruction, references). Both place chroma `chroma_offset`
+// bytes after luma inside one buffer and keep every reading of the methods inside it:
+//   OFFSET: the surface config's chroma offset is chroma_offset / 256 and the CHROMA method gets the luma address;
+//   METHOD: the CHROMA method gets the chroma address and the surface config's chroma offset is 0.
+enum { TEGRA_NVENC_CHROMA_OFFSET = 0, TEGRA_NVENC_CHROMA_METHOD = 1 };
+
+typedef struct {
+    uint32_t abi_version, nvenc_version;  // nvenc_version 0x50: NVENC 5.0 (T210)
+    uint32_t codecs;                      // bit n: TEGRA_NVENC_CODEC_* n is accepted by Submit
+    uint32_t max_width, max_height, max_mbs;
+    uint32_t input_layout;  // TEGRA_NVENC_LAYOUT_* E3 proved
+    uint32_t chroma_mode;   // TEGRA_NVENC_CHROMA_* E3 proved
+    uint32_t p_frames;      // 1: a P picture predicted from NVENC's own reconstruction decoded right; 0: intra only
+    uint32_t reserved;
+    uint64_t arena_bytes, arena_free;
+} TegraNVENCInfo;
+
+typedef struct {
+    uint64_t size;
+} TegraNVENCBufferAlloc;
+typedef struct {
+    uint32_t handle, reserved;
+    uint64_t size;
+} TegraNVENCBufferReply;  // size rounded to 64 KiB
+typedef struct {
+    uint32_t handle, reserved;
+} TegraNVENCBuffer;
+typedef struct {
+    uint32_t handle, offset, length, reserved;
+} TegraNVENCRange;
+
+// One NVENC method. kind 0: `value` is written as is. kind 1: relocation, the method gets
+// (physical address of buffer `value` + `offset`) >> 8, so `offset` must be 256-byte aligned.
+typedef struct {
+    uint16_t method;  // byte offset in the NVENC class (clc5b7.h)
+    uint16_t kind;
+    uint32_t value, offset;
+} TegraNVENCEntry;
+
+enum { TEGRA_NVENC_ENTRY_VALUE = 0, TEGRA_NVENC_ENTRY_RELOC = 1 };
+
+// The setup is nvenc_h264_drv_pic_setup_s followed by the control arrays its pic_control offsets name (slice, ME, MD,
+// quantisation), all inside setup_bytes.
+#define TEGRA_NVENC_MAX_ENTRIES 48
+#define TEGRA_NVENC_MAX_RANGES  4
+#define TEGRA_NVENC_MAX_SETUP   2048
+typedef struct {
+    uint32_t codec;  // TEGRA_NVENC_CODEC_*
+    uint32_t entry_count, clean_count;
+    uint32_t setup_bytes;
+    TegraNVENCEntry entries[TEGRA_NVENC_MAX_ENTRIES];  // no SET_IN_DRV_PIC_SETUP: the kernel adds it
+    TegraNVENCRange clean[TEGRA_NVENC_MAX_RANGES];
+    uint8_t setup[TEGRA_NVENC_MAX_SETUP];
+} TegraNVENCSubmit;
+
+typedef struct {
+    uint32_t fence, reserved;
+} TegraNVENCFence;
+
+typedef struct {
+    uint32_t claimed, reserved;
+} TegraNVENCClaim;
+
+typedef struct {
+    uint32_t fence, timeout_us;  // timeout_us: ignored (the kernel bounds every wait, see above)
+    uint32_t invalidate_count, reserved;
+    TegraNVENCRange invalidate[TEGRA_NVENC_MAX_RANGES];
+} TegraNVENCWait;
+
+#ifdef __cplusplus
+static_assert(sizeof(TegraNVENCEntry) == 12, "entry");
+static_assert(sizeof(TegraNVENCSubmit) == 16 + 12 * 48 + 16 * 4 + 2048, "submit");
+static_assert(sizeof(TegraNVENCSubmit) + 8 <= 4096, "submit travels inline");
+#else
+_Static_assert(sizeof(TegraNVENCSubmit) + 8 <= 4096, "submit travels inline");
+#endif
+#endif
