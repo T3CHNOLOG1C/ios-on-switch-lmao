@@ -153,8 +153,6 @@ std::pair<Bytes, int> write(Bytes data, int current, const Bytes &image, uint64_
     return {data, target};
 }
 
-// --- format ----------------------------------------------------------------------------------------------------------
-
 TEST(SwitchNVRAMStore, Crc32IsZlibs)
 {
     for (const Bytes &data : {Bytes{}, str("123456789"), randomBytes(1, 1), randomBytes(8192 + 33, 2)})
@@ -196,8 +194,6 @@ TEST(SwitchNVRAMStore, ChrpBanksIodtnvramRefuses)
     EXPECT_FALSE(nv_chrp_valid(head.data(), 16));
 }
 
-// --- round trips -----------------------------------------------------------------------------------------------------
-
 TEST(SwitchNVRAMStore, RoundTrip)
 {
     const Bytes image = bank({{"boot-args", ""}, {"fm-spstatus", "ab"}});
@@ -226,8 +222,6 @@ TEST(SwitchNVRAMStore, SequenceIs64Bit)
     EXPECT_EQ(pick(fill(older, 0xffffffff) + fill(newer, 0x100000000)), Pick(1, 0x100000000));
     EXPECT_EQ(pick(fill(newer, 0x100000000) + fill(older, 0xffffffff)), Pick(0, 0x100000000));
 }
-
-// --- damage ----------------------------------------------------------------------------------------------------------
 
 TEST(SwitchNVRAMStore, TornNewestWriteFallsBackToThePreviousBank)
 {

@@ -436,7 +436,7 @@ extern "C" __attribute__((weak)) void switch_bluetooth_data_mounted(void) {}
 extern "C" uint32_t ioswitch_nvram_data_mounted(void)
 {
     const uint32_t added = SwitchNVRAM::restoreFromData();
-    switch_bluetooth_data_mounted();  // the other driver that reads Data before launchd (SwitchNVRAM.h)
+    switch_bluetooth_data_mounted();
     return added;
 }
 
