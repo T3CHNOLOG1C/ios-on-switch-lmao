@@ -21,7 +21,7 @@ lint_files()
 # helpers.inc: video_console.c from "static inline boolean_t\nvc_rotate3_wide(" up to "static void\nvc_clear_screen(".
 genrule(
     name = "console_helpers",
-    srcs = ["//kernel/xnu-10063.141.1:osfmk/console/video_console.c"],
+    srcs = ["//kernel/xnu-10063.141.1/osfmk:console/video_console.c"],
     outs = ["helpers.inc"],
     cmd = """awk '
         on && prev == "static void" && $$0 ~ /^vc_clear_screen\\(/ { done = 1; exit }
@@ -53,7 +53,7 @@ host_test(
 # --- ioswitch_memcmp.h ----------------------------------------------------------------------------------------------
 copy_file(
     name = "ioswitch_memcmp",
-    src = "//kernel/xnu-10063.141.1:osfmk/arm64/ioswitch_memcmp.h",
+    src = "//kernel/xnu-10063.141.1/osfmk:arm64/ioswitch_memcmp.h",
     out = "ioswitch_memcmp.h",
 )
 
@@ -88,11 +88,11 @@ host_test(
     srcs = ["xnu_memcmp_source_test.cpp"],
     data = [
         "xnu_memcmp_harness.c",
-        "//kernel/xnu-10063.141.1:osfmk/device/subrs.c",
+        "//kernel/xnu-10063.141.1/osfmk:device/subrs.c",
         "@xnu_base//:osfmk/device/subrs.c",
     ],
     defines = [
-        'SUBRS_PATCHED=\\"$(rootpath //kernel/xnu-10063.141.1:osfmk/device/subrs.c)\\"',
+        'SUBRS_PATCHED=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:device/subrs.c)\\"',
         'SUBRS_BASE=\\"$(rootpath @xnu_base//:osfmk/device/subrs.c)\\"',
     ],
 )
@@ -101,7 +101,7 @@ host_test(
 # fault_around.inc: vm_fault.c from "#ifndef IOSWITCH_ZERO_FILL_AROUND" up to "uint64_t vm_fault_resilient_media_initiate".
 genrule(
     name = "fault_around",
-    srcs = ["//kernel/xnu-10063.141.1:osfmk/vm/vm_fault.c"],
+    srcs = ["//kernel/xnu-10063.141.1/osfmk:vm/vm_fault.c"],
     outs = ["fault_around.inc"],
     cmd = """awk '
         /^uint64_t vm_fault_resilient_media_initiate/ { if (on) { done = 1; exit } }

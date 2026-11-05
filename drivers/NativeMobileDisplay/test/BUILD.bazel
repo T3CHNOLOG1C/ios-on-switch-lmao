@@ -74,7 +74,7 @@ host_test(
         "//drivers/NativeMobileDisplay:NativePlanesBindings.S",
         "//drivers/NativeMobileDisplay:NativePlanesDisplay.inc",
         "//drivers/TegraVIC:original-bindings.S",
-        "//kernel/xnu-10063.141.1:bsd/kern/kern_exec.c",
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
     ],
-    defines = ['XNU_KERN_EXEC=\\"$(rootpath //kernel/xnu-10063.141.1:bsd/kern/kern_exec.c)\\"'],
+    defines = ['XNU_KERN_EXEC=\\"$(rootpath //kernel/xnu-10063.141.1/bsd:kern/kern_exec.c)\\"'],
 )

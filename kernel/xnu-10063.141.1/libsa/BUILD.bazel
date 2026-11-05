@@ -1,0 +1,71 @@
+# XNU's libsa: libsa: the kernel's bootstrap (kext loading at startup). Apple's files as Apple has them (APPLE_LICENSE); only BUILD.bazel and .bzl files are ours.
+#
+# :objects compiles each object of objects.bzl (make's libsa.filelist, link order) on its own, so an edit to one
+# source recompiles that object and relinks the kernel (//kernel/xnu-10063.141.1/config:xnu_objects.bzl). A new
+# source: add it to objects.bzl where conf/files would put it, with any flags its conf/Makefile.* entry adds.
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/xnu-10063.141.1/config:xnu_objects.bzl", "xnu_objects")
+load(":objects.bzl", "DEVELOPMENT")
+
+package(default_visibility = ["//visibility:public"])
+
+# XNU's own files keep XNU's style: only our Starlark is formatted and linted.
+lint_files(exclude = [
+    "**/*.py",
+    "**/*.c",
+    "**/*.cc",
+    "**/*.cpp",
+    "**/*.h",
+    "**/*.hpp",
+    "**/*.inc",
+    "**/*.m",
+    "**/*.mm",
+    "**/*.rs",
+    "**/*.sh",
+    "**/*.md",
+    "**/*.json",
+    "**/*.toml",
+    "**/.clang-format",
+    "**/.clang-tidy",
+])
+
+# Every file, by its path below libsa/ (r18-xnu-hdrs' header, MIG and config rules name them).
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# What XNU's compiles may include from here (.d files prune each compile to what it read).
+filegroup(
+    name = "headers",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.inc",
+            "**/*.def",
+            "**/*.defs",
+            "**/*.iig",
+            "**/*.modulemap",
+        ],
+        allow_empty = True,
+    ),
+)
+
+# Every vendored file (r18-xnu-hdrs' :srcs): not ours, BUILD.bazel and .bzl.
+filegroup(
+    name = "all",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "BUILD.bazel",
+            "*.bzl",
+        ],
+    ),
+)
+
+xnu_objects(
+    name = "objects",
+    component = "libsa",
+    table = DEVELOPMENT,
+)

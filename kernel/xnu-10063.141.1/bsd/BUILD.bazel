@@ -1,0 +1,84 @@
+# XNU's bsd: the BSD layer: processes, VFS, networking, syscalls. Apple's files as Apple has them (APPLE_LICENSE); only BUILD.bazel and .bzl files are ours.
+#
+# :objects compiles each object of objects.bzl (make's bsd.filelist, link order) on its own, so an edit to one
+# source recompiles that object and relinks the kernel (//kernel/xnu-10063.141.1/config:xnu_objects.bzl). A new
+# source: add it to objects.bzl where conf/files would put it, with any flags its conf/Makefile.* entry adds.
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/xnu-10063.141.1/config:xnu_objects.bzl", "xnu_objects")
+load(":objects.bzl", "DEVELOPMENT")
+
+package(default_visibility = ["//visibility:public"])
+
+# XNU's own files keep XNU's style: only our Starlark is formatted and linted.
+lint_files(exclude = [
+    "**/*.py",
+    "**/*.c",
+    "**/*.cc",
+    "**/*.cpp",
+    "**/*.h",
+    "**/*.hpp",
+    "**/*.inc",
+    "**/*.m",
+    "**/*.mm",
+    "**/*.rs",
+    "**/*.sh",
+    "**/*.md",
+    "**/*.json",
+    "**/*.toml",
+    "**/.clang-format",
+    "**/.clang-tidy",
+])
+
+# Every file, by its path below bsd/ (r18-xnu-hdrs' header, MIG and config rules name them).
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# What XNU's compiles may include from here (.d files prune each compile to what it read).
+filegroup(
+    name = "headers",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.inc",
+            "**/*.def",
+            "**/*.defs",
+            "**/*.iig",
+            "**/*.modulemap",
+        ],
+        allow_empty = True,
+    ),
+)
+
+# Every vendored file (r18-xnu-hdrs' :srcs): not ours, BUILD.bazel and .bzl.
+filegroup(
+    name = "all",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "BUILD.bazel",
+            "*.bzl",
+        ],
+    ),
+)
+
+# kern_exec.c's -include (tools/kernel/xnu_build.py made it from build-options.json: the scratch Data volume the
+# owner-data mount selects, XNU_OWNER_DATA_MOUNT=1 with XNU_NATIVE_RAM_BLOCK=1).
+write_file(
+    name = "owner_header",
+    out = "owner/owner-data-volume.h",
+    content = ['#define XNU_OWNER_DATA_VOLUME_UUID "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9"'],
+)
+
+xnu_objects(
+    name = "objects",
+    srcs = glob([
+        "**/*.c",
+        "**/*.s",
+    ]) + ["//kernel/xnu-10063.141.1/osfmk:kperf/kperfbsd.c"],
+    component = "bsd",
+    table = DEVELOPMENT,
+)

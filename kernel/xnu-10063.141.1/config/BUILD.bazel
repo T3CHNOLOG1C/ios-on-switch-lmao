@@ -1,0 +1,77 @@
+# XNU's config/: the kernel's own objects (version.o, lastkerneldataconst.o, lastkernelconstructor.o, nonlto.o), the KPI
+# export lists and symbol sets, and the rules that compile XNU natively (xnu_objects.bzl) and link the kernel
+# (xnu_kernel.bzl; the kernel tree's kernel_unprelinked calls it with the ioswitch archives). Apple's files as Apple
+# has them (APPLE_LICENSE); only BUILD.bazel and .bzl files are ours.
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":objects.bzl", "DEVELOPMENT")
+load(":xnu_kernel.bzl", "xnu_exports", "xnu_version_c")
+load(":xnu_objects.bzl", "xnu_objects")
+
+package(default_visibility = ["//visibility:public"])
+
+# XNU's own files keep XNU's style: only our Starlark is formatted and linted (recipes_*.bzl is a generated table).
+lint_files(exclude = [
+    "**/*.pl",
+    "**/*.sh",
+    "**/*.plist",
+    "recipes_*.bzl",
+])
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# Every vendored file (r18-xnu-hdrs' :srcs: MASTER, the exports, the scripts): not ours, BUILD.bazel and .bzl.
+filegroup(
+    name = "all",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "BUILD.bazel",
+            "*.bzl",
+        ],
+    ),
+)
+
+filegroup(
+    name = "headers",
+    srcs = [],
+)
+
+# --- The kernel's own objects (makedefs/MakeInc.kernel) ------------------------------------------------------------
+xnu_version_c(name = "version_c")
+
+xnu_objects(
+    name = "objects",
+    srcs = [
+        "//kernel/xnu-10063.141.1/libsa:lastkernelconstructor.c",
+        "//kernel/xnu-10063.141.1/libsa:lastkerneldataconst.c",
+        "//kernel/xnu-10063.141.1/libsa:nonlto.c",
+    ],
+    component = "config",
+    gen_hdrs = None,
+    gen_relative = False,
+    gen_srcs = ":version_c",
+    table = DEVELOPMENT,
+)
+
+# --- KPI exports and symbol sets (config/Makefile) ----------------------------------------------------------------
+xnu_exports(
+    name = "exports",
+    srcs = glob([
+        "*.exports",
+        "generate_*.sh",
+    ]) + ["newvers.pl"],
+    plists = glob(["System.kext/PlugIns/*.kext/Info.plist"]),
+)
+
+[filegroup(
+    name = name,
+    srcs = [":exports"],
+    output_group = group,
+) for name, group in [
+    ("all_kpi_exp", "kpi"),
+    ("all_alias_exp", "alias"),
+    ("symbolsets_plist", "symbolsets"),
+]]

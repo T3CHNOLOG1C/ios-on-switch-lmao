@@ -294,9 +294,9 @@ kernel_archive(
 kernel_driver(
     name = "mockfs",
     srcs = [
-        "//kernel/xnu-10063.141.1:bsd/miscfs/mockfs/mockfs_fsnode.c",
-        "//kernel/xnu-10063.141.1:bsd/miscfs/mockfs/mockfs_vfsops.c",
-        "//kernel/xnu-10063.141.1:bsd/miscfs/mockfs/mockfs_vnops.c",
+        "//kernel/xnu-10063.141.1/bsd:miscfs/mockfs/mockfs_fsnode.c",
+        "//kernel/xnu-10063.141.1/bsd:miscfs/mockfs/mockfs_vfsops.c",
+        "//kernel/xnu-10063.141.1/bsd:miscfs/mockfs/mockfs_vnops.c",
     ],
     c_copts = ["-DMOCKFS=1"],
     c_recipe = ":mockfs_c",
