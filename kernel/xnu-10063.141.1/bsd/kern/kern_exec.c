@@ -7653,6 +7653,49 @@ native_ioswitch_watchdog_attributes(vnode_t vp, mount_t data_mount, int director
 	return 0;
 }
 
+/*
+ * What launchd's exec changed on Data this boot (files replaced or removed, directories made). On r7p5/r7p6 the policy
+ * step (eight synchronous file replacements, five directory syncs and a volume sync on the SD card) put about 2.1 s
+ * between the Data mount and launchd's exec, on the boot's critical path, though the files were the same every boot.
+ * Now a file that already holds the bytes, owner and mode it would get is left alone, and a directory or volume sync
+ * only runs once something has changed: every sync that persists a change still runs where it did, in the same order;
+ * the skipped ones had nothing to persist.
+ */
+static unsigned int native_ioswitch_policy_written, native_ioswitch_policy_unchanged;
+
+/* Whether path already is a regular file on data_mount with exactly these bytes, owner, group and mode. */
+static bool
+native_ioswitch_file_unchanged(const char *path, const char *bytes, int length, mount_t data_mount, uid_t owner,
+    gid_t group, mode_t mode)
+{
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	struct vnode_attr attributes;
+	bool same = false;
+
+	if (length <= 0 || length > 64 * 1024 || vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context)) return false;
+	VATTR_INIT(&attributes);
+	VATTR_WANTED(&attributes, va_uid);
+	VATTR_WANTED(&attributes, va_gid);
+	VATTR_WANTED(&attributes, va_mode);
+	VATTR_WANTED(&attributes, va_data_size);
+	if (vnode_mount(vp) == data_mount && vnode_isreg(vp) && !VNOP_GETATTR(vp, &attributes, context) &&
+	    VATTR_IS_SUPPORTED(&attributes, va_uid) && VATTR_IS_SUPPORTED(&attributes, va_gid) &&
+	    VATTR_IS_SUPPORTED(&attributes, va_mode) && VATTR_IS_SUPPORTED(&attributes, va_data_size) &&
+	    attributes.va_uid == owner && attributes.va_gid == group && (attributes.va_mode & 07777) == mode &&
+	    attributes.va_data_size == (uint64_t)length) {
+		char *existing = kalloc_data((vm_size_t)length, Z_WAITOK);
+		int residual = length;
+		if (existing && !vn_rdwr(UIO_READ, vp, existing, length, 0, UIO_SYSSPACE, 0, vfs_context_ucred(context),
+		    &residual, vfs_context_proc(context)) && residual == 0) {
+			same = memcmp(existing, bytes, (size_t)length) == 0;
+		}
+		kfree_data(existing, (vm_size_t)length);
+	}
+	(void)vnode_close(vp, FREAD, context);
+	return same;
+}
+
 static int
 native_ioswitch_watchdog_directory(proc_t p, user_addr_t scratch, const char *path, mount_t data_mount)
 {
@@ -7680,7 +7723,9 @@ native_ioswitch_watchdog_directory(proc_t p, user_addr_t scratch, const char *pa
 		error = vnode_setattr(vp, &attributes, vfs_context_current());
 	}
 	if (!error) error = native_ioswitch_watchdog_attributes(vp, data_mount, 1, 0);
-	if (!error) error = VNOP_FSYNC(vp, MNT_WAIT, vfs_context_current());
+	if (created) native_ioswitch_policy_written++;
+	/* Persists a new directory, or names changed in it; nothing to persist while nothing changed. */
+	if (!error && native_ioswitch_policy_written) error = VNOP_FSYNC(vp, MNT_WAIT, vfs_context_current());
 	int close_error = vnode_close(vp, FREAD, vfs_context_current());
 	return error ? error : close_error;
 }
@@ -7699,7 +7744,11 @@ native_ioswitch_watchdog_file(proc_t p, user_addr_t scratch, const char *path, c
 		error = vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
 		if (!error) return vnode_close(vp, FREAD, context);
 		if (error != ENOENT) return error;
+	} else if (native_ioswitch_file_unchanged(path, bytes, length, data_mount, owner, group, mode)) {
+		native_ioswitch_policy_unchanged++;
+		return 0;
 	}
+	native_ioswitch_policy_written++;
 	int size = snprintf(temporary, sizeof(temporary), "%s.ioswitch-%s", path, bootsessionuuid_string);
 	if (size < 0 || (size_t)size >= sizeof(temporary)) return ENAMETOOLONG;
 	error = vnode_open(temporary, FREAD | FWRITE | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode, 0, &vp, context);
@@ -7734,6 +7783,15 @@ native_ioswitch_watchdog_file(proc_t p, user_addr_t scratch, const char *path, c
 	return error;
 }
 
+/* unlink(2) for the policy step: a removal is a change the step's syncs have to persist. */
+static int
+native_ioswitch_unlink(proc_t p, struct unlink_args *request, int32_t *result)
+{
+	int error = unlink(p, request, result);
+	if (!error) native_ioswitch_policy_written++;
+	return error;
+}
+
 static int
 native_ioswitch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t owner, mode_t mode)
 {
@@ -7747,6 +7805,7 @@ native_ioswitch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t own
 	struct mkdir_args request = {.path = scratch + 0x900, .mode = 0755};
 	int32_t result = 0;
 	if ((error = copyout(path, request.path, strlen(path) + 1)) || (error = mkdir(p, &request, &result))) return error;
+	native_ioswitch_policy_written++;
 	if ((error = vnode_lookup(path, 0, &vp, vfs_context_current()))) return error;
 	struct vnode_attr attributes;
 	VATTR_INIT(&attributes);
@@ -7867,7 +7926,7 @@ native_ioswitch_system_app_migration(proc_t p, user_addr_t scratch, mount_t data
 		vnode_put(vp);
 		struct unlink_args request = {.path = scratch + 0x900};
 		int32_t result = 0;
-		if (!(error = copyout(sentinel, request.path, sizeof(sentinel)))) error = unlink(p, &request, &result);
+		if (!(error = copyout(sentinel, request.path, sizeof(sentinel)))) error = native_ioswitch_unlink(p, &request, &result);
 		printf("IOSwitch raw boot: last boot's data migration did not finish; not run again (%d)\n", error);
 		return;
 	}
@@ -7948,11 +8007,11 @@ native_ioswitch_portrait_cache(proc_t p, user_addr_t scratch, mount_t data_mount
 	struct unlink_args request = {.path = scratch + 0x900};
 	int32_t result = 0;
 	int error = copyout(cache, request.path, sizeof(cache));
-	if (!error) error = unlink(p, &request, &result);
+	if (!error) error = native_ioswitch_unlink(p, &request, &result);
 	if (error == ENOENT) error = 0;
 	for (unsigned int i = 0; i < 2 && !error; ++i) {
 		if (marked[i] && orientation != 3 + i) {
-			if (!(error = copyout(marker[i], request.path, strlen(marker[i]) + 1))) error = unlink(p, &request, &result);
+			if (!(error = copyout(marker[i], request.path, strlen(marker[i]) + 1))) error = native_ioswitch_unlink(p, &request, &result);
 		} else if (!marked[i] && orientation == 3 + i) {
 			error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
 			if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker[i], "", 0, data_mount, 0, 0, 0644);
@@ -7987,10 +8046,10 @@ native_ioswitch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	struct unlink_args request = {.path = scratch + 0x900};
 	int32_t result = 0;
 	int error = copyout(cache, request.path, sizeof(cache));
-	if (!error) error = unlink(p, &request, &result);
+	if (!error) error = native_ioswitch_unlink(p, &request, &result);
 	if (error == ENOENT) error = 0;
 	if (!error && marked) {
-		if (!(error = copyout(marker, request.path, sizeof(marker)))) error = unlink(p, &request, &result);
+		if (!(error = copyout(marker, request.path, sizeof(marker)))) error = native_ioswitch_unlink(p, &request, &result);
 	} else if (!error) {
 		error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
 		if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
@@ -8019,10 +8078,10 @@ native_ioswitch_als_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	struct unlink_args request = {.path = scratch + 0x900};
 	int32_t result = 0;
 	int error = copyout(cache, request.path, sizeof(cache));
-	if (!error) error = unlink(p, &request, &result);
+	if (!error) error = native_ioswitch_unlink(p, &request, &result);
 	if (error == ENOENT) error = 0;
 	if (!error && marked) {
-		if (!(error = copyout(marker, request.path, sizeof(marker)))) error = unlink(p, &request, &result);
+		if (!(error = copyout(marker, request.path, sizeof(marker)))) error = native_ioswitch_unlink(p, &request, &result);
 	} else if (!error) {
 		error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
 		if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
@@ -8057,7 +8116,7 @@ native_ioswitch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mou
 		vnode_put(vp);
 		struct unlink_args request = {.path = scratch + 0x900};
 		int32_t result = 0;
-		if (!(error = copyout(path, request.path, sizeof(path)))) error = unlink(p, &request, &result);
+		if (!(error = copyout(path, request.path, sizeof(path)))) error = native_ioswitch_unlink(p, &request, &result);
 	} else {
 		error = native_ioswitch_mkdir(p, scratch, directory, 0, 0755);
 		if (!error) error = native_ioswitch_mkdir(p, scratch, user, 0, 0755);
@@ -8189,6 +8248,7 @@ native_ioswitch_panic_save(proc_t p, user_addr_t scratch, mount_t data_mount)
 static int
 native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 {
+	const uint64_t policy_started = mach_absolute_time();
 	/* Jobs with no hardware or accounts here; the first three deadlock each other (UniXNU-sheng BootWatchdogPolicy.c
 	 * "lite" set). watchdogd is off again: on its first hardware boot (r7p4) it os_crash()ed (SIGTRAP) about 41 s in,
 	 * and its _PanicOnCrash took the system down; drivers/NativeIOSwitchWatchdog stays published for when it returns. */
@@ -8312,10 +8372,13 @@ native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 	if (!error) error = native_ioswitch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
 	if (!error) error = native_ioswitch_setup_state(p, scratch, data_mount);
 	if (!error) native_ioswitch_panic_save(p, scratch, data_mount);
-	if (!error) error = VNOP_FSYNC(data_root, MNT_WAIT, vfs_context_current());
+	if (!error && native_ioswitch_policy_written) error = VNOP_FSYNC(data_root, MNT_WAIT, vfs_context_current());
 	int close_error = vnode_close(data_root, FREAD, vfs_context_current());
 	if (!error) error = close_error;
-	if (!error) printf("ioswitch: persistent Data launchd preferences ready\n");
+	uint64_t policy_ns = 0;
+	absolutetime_to_nanoseconds(mach_absolute_time() - policy_started, &policy_ns);
+	if (!error) printf("ioswitch: persistent Data launchd preferences ready (%u written, %u unchanged, %llu ms)\n",
+	    native_ioswitch_policy_written, native_ioswitch_policy_unchanged, policy_ns / NSEC_PER_MSEC);
 	return error;
 }
 #endif
