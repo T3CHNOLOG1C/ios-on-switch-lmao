@@ -1,7 +1,10 @@
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
+
+lint_files()
 
 # The RAM metadata exporter (switchroot/ioswitch/exporter.uimg, pinned in bazel/pinned/firmware): its builder, its
 # Cortex-A57 model run and its host test, all against the pinned bl33.bin.

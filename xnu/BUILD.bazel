@@ -5,8 +5,11 @@
 #   bazel run //xnu:patch_check            exit 1 if the patch is stale
 #   bazel run //xnu:patch_apply -- <dir>   recreate a working repository from a clean xnu-10063.141.1 checkout
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
+
+lint_files()
 
 [py_binary(
     name = "patch_" + command,

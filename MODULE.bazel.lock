@@ -394,25 +394,37 @@
     "@@rules_python+//python/uv:uv.bzl%uv": {
       "general": {
         "bzlTransitiveDigest": "RH0xYDM+3D/BJrY901xKB9oHbAVDI7DBo6UhvEjliCw=",
-        "usagesDigest": "XRZOpOa3Ptb82+J12oqlM1gHuCL7k4dID6s0jzgPGVM=",
+        "usagesDigest": "G2BT7S9yMEq1pCbLiBWzWhytZryyi4xuwjq2lsxhAyk=",
         "recordedInputs": [
           "REPO_MAPPING:rules_python+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_python+,platforms platforms"
         ],
         "generatedRepoSpecs": {
+          "uv_0_13_0_aarch64_apple_darwin": {
+            "repoRuleId": "@@rules_python+//python/uv/private:uv_repository.bzl%uv_repository",
+            "attributes": {
+              "version": "0.13.0",
+              "platform": "aarch64-apple-darwin",
+              "urls": [
+                "https://github.com/astral-sh/uv/releases/download/0.13.0/uv-aarch64-apple-darwin.tar.gz"
+              ],
+              "sha256": "a9c1b29002cf3c83f07fa9cd8a887a3be0107d90e23189721221e7257db8e3d6"
+            }
+          },
           "uv": {
             "repoRuleId": "@@rules_python+//python/uv/private:uv_toolchains_repo.bzl%uv_toolchains_repo",
             "attributes": {
               "toolchain_type": "'@@rules_python+//python/uv:uv_toolchain_type'",
               "toolchain_names": [
-                "none"
+                "0_13_0_aarch64_apple_darwin"
               ],
               "toolchain_implementations": {
-                "none": "'@@rules_python+//python:none'"
+                "0_13_0_aarch64_apple_darwin": "@uv_0_13_0_aarch64_apple_darwin//:uv_toolchain"
               },
               "toolchain_compatible_with": {
-                "none": [
-                  "@platforms//:incompatible"
+                "0_13_0_aarch64_apple_darwin": [
+                  "'@@platforms//os:macos'",
+                  "'@@platforms//cpu:aarch64'"
                 ]
               },
               "toolchain_target_settings": {}

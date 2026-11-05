@@ -11,9 +11,12 @@
 # (pinned downloads), Xcode (the declared host input), NVK and its host twin (//gpu/nvk: Mesa 77452b90 + the series,
 # built here; --//gpu/nvk:prebuilt takes the hand-built r9 pair from @gpu_host_inputs instead), and
 # @gpu_host_inputs: QuartzCore's default.metallib and the precompile's library store. See bazel/gpu/deps.bzl.
+load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_bridge", "metal_bundle", "metal_plugin", "metal_raw_pack", "metal_seed", "raw_stack")
 
 package(default_visibility = ["//visibility:public"])
+
+lint_files()
 
 METAL = "//out/native-a57/root-v1/tree/drivers/NativeMetal"
 

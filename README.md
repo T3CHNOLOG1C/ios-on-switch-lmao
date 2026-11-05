@@ -25,6 +25,7 @@ are declared and checked (see [Host inputs](#host-inputs)). Older notes ([HANDOF
 - [Bumping a pin](#bumping-a-pin)
 - [Reproducibility and the old CMake flow](#reproducibility-and-the-old-cmake-flow)
 - [Host inputs](#host-inputs)
+- [Format and lint](#format-and-lint)
 - [Tools and scripts](#tools-and-scripts)
 - [Coming from the CMake flow](#coming-from-the-cmake-flow)
 - [Troubleshooting](#troubleshooting)
@@ -92,8 +93,9 @@ changed, and recompiles only what you touched.
 | Deploy a kept build | `bazel run //deploy:sd -- disk4 --yes --stage-gpu --boot-package=$PWD/out/boot/lkg/NAME --gpu-bundle=$PWD/out/boot/lkg/NAME/gpu` |
 | Install iPadOS on a fresh card | `bazel run //install:sd -- disk4` (dry run), then `... --yes` (see below) |
 | Export XNU changes | `bazel run //xnu:patch_export` |
-| Format / lint | `bazel run //lint:format`, `bazel run //lint:format_check`, `bazel run //lint:tidy` |
-| compile_commands.json for clangd | `bazel run //lint:compdb` |
+| Format everything | `bazel run //:format` (or `bazel run //:format -- PATH...`) |
+| Check format / lint | `bazel test //:format_test //:lint_test //:clang_tidy_test` |
+| compile_commands.json for clangd | `bazel run //tools/lint:compdb` |
 | Tests | `bazel test //...` |
 
 **Which disk?** `diskutil list external` shows the card, usually `disk4`. Every card command takes the whole disk and:
@@ -155,8 +157,9 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//deploy:sd`, `//deploy:pull_logs` | Deploy and log pull |
 | `//boot:snapshot` | Copy this build to `out/boot/lkg/<name>` |
 | `//xnu:patch_export`, `:patch_check`, `:patch_apply` | XNU patch ⇄ working repository |
-| `//lint:format`, `:format_check`, `:format_test`, `:tidy`, `:compdb` | clang-format / clang-tidy (LLVM 23.1.4) |
-| `//lint:py_owners` | Fails on any tracked `.py` file that no `py_binary`, `py_test` or `py_library` owns |
+| `//:format`, `//:format_test`, `//:lint_test`, `//:clang_tidy_test` | Format and lint every file (see [Format and lint](#format-and-lint)) |
+| `//tools/lint:py_owners`, `//tools/lint:compdb` | Every tracked `.py` file has an owning target; compile_commands.json for clangd |
+| `//bazel/python:requirements.update`, `:requirements_test` | Re-lock the Python packages with uv; check the lock is current |
 | `//tests/...`, `//out/native-a57/root-v1/tree:*_test`, `//native:firmware_export_test`, `//install:*_test`, `//tools/deploy:deploy_test`, `//bazel/pinned:sha256` | Tests |
 | `//tools/repro:check`, `//tools/repro:equivalence` | Reproducibility and old-flow comparison |
 | `//native:firmware_export`, `//gpu/nvk:relink`, `//tools/package:progressui_logo`, `//tools/package:wallpaper_1x` | Regenerate a pinned input: the RAM exporter, a relinked NVK dylib, the ProgressUI logo, the 1x wallpaper plists |
@@ -349,6 +352,31 @@ Pinned, unregenerable files (in `bazel/pinned`, with `SHA256SUMS`, checked the s
 
 `data-v10.dbr` and the ProgressUI logo contain Apple-derived content (the 1x wallpaper plists, Apple's metadata only): check before publishing the repository.
 
+## Format and lint
+
+Every file of ours has a formatter and, where one exists, a linter. They are Bazel rules (`bazel/lint`), the tools are
+pinned (`bazel/lint/tools.bzl`, LLVM 23.1.4, the Rust toolchain), and each check is one cached action per file, so
+re-checking an unchanged file costs nothing.
+
+| Files | Format | Lint |
+|---|---|---|
+| C, C++, Objective-C(++) | clang-format (`.clang-format`) | clang-tidy (`.clang-tidy`), per translation unit through the build graph |
+| Python | ruff format | ruff check (`ruff.toml`) |
+| BUILD, `.bzl`, MODULE.bazel | buildifier fix | buildifier lint=warn, all warnings (`.buildifier.json`) |
+| Shell | shfmt | shellcheck (`.shellcheckrc`) |
+| Rust | rustfmt (`rustfmt.toml`) | clippy once the bridge crates are `rust_library` targets |
+| Markdown | rumdl (`.rumdl.toml`, prose wrapped at 120) | rumdl |
+| JSON, TOML | dprint (`dprint.json`) | (dprint fails on anything that does not parse) |
+
+- `bazel run //:format` formats everything in place; `bazel run //:format -- PATH...` only those files and directories.
+- `bazel test //:format_test` checks formatting, `//:lint_test` runs the linters, `//:clang_tidy_test` runs clang-tidy
+  over every unit `//:boot` and `//:gpu` compile, warnings as errors.
+- The file sets are `lint_files()` (`bazel/lint/defs.bzl`): one call in every BUILD file declares the package's files
+  and chains its subpackages into `//:lint_files`. A new package needs the call; vendored and generated files go in its
+  `exclude`. Code that is not ours is never reformatted or linted (and has `DisableFormat` for editors).
+- Not linted: assembly (no maintained linter; the assembler at `-Werror` is the check), linker scripts, plists, device
+  trees, shaders and patches.
+
 ## Tools and scripts
 
 Every build, package, install, deploy and log step is a Bazel target, and there are no loose scripts:
@@ -357,7 +385,7 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 - Real tools are Python, one `py_binary` per job on the hermetic rules_python 3.13 (`tools/kernel`, `tools/package`,
   `tools/prelink`, `tools/gpu`, `tools/install`, `tools/deploy`), called from those rules or by `bazel run`.
   Shared code is a `py_library`; host tests are `py_test`.
-- `bazel run //lint:py_owners` fails on any tracked `.py` file that no target owns. Run it before committing a new
+- `bazel run //tools/lint:py_owners` fails on any tracked `.py` file that no target owns. Run it before committing a new
   script; give it a target, or don't add it.
 
 ## Coming from the CMake flow
@@ -372,7 +400,7 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 | `PKG=... [STAGE_GPU=1] zsh out/switch/deploy-sd.sh` | `bazel run //deploy:sd -- disk4 --yes [--stage-gpu] [--boot-package=... --gpu-bundle=...]` |
 | Logs part of deploy-sd.sh + `mkarchive.py` + `log show` | `bazel run //deploy:pull_logs -- disk4`, then `log show --archive .../boot.logarchive` |
 | `scripts/xnu-patch.sh export / check / apply` | `bazel run //xnu:patch_export / :patch_check / :patch_apply -- DIR` |
-| `scripts/lint.py format / tidy / compdb` | `bazel run //lint:format / :tidy / :compdb` |
+| `scripts/lint.py format / tidy / compdb` | `bazel run //:format`, `bazel test //:clang_tidy_test`, `bazel run //tools/lint:compdb` |
 | `python3 -m unittest ...` | `bazel test //...` |
 | Edit `cmake/Drivers.cmake` for a new driver | One `kernel_driver()` in the tree's `BUILD.bazel` |
 | Boot-args in `scripts/package_raw_boot.py` | The same file, now `tools/package/package_raw_boot.py` |
@@ -394,5 +422,5 @@ Every build, package, install, deploy and log step is a Bazel target, and there 
 - **A pinned download moved** (`Checksum was ...`): the pin is doing its job. Fix the URL, never the sha256, unless you
   meant to bump.
 - **Something odd after editing `.bzl` files**: `bazel clean`. The disk cache brings everything else back quickly.
-- **`bazel test //lint:format_test` fails**: run `bazel run //lint:format`. It's `manual` while main still has
-  unformatted files.
+- **`bazel test //:format_test` fails**: run `bazel run //:format`. **`//:lint_test` or `//:clang_tidy_test` fails**: fix
+  the finding it prints (each tool's config, at the root, says why every check that is off is off).

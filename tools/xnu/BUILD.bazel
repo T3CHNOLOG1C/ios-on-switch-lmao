@@ -1,3 +1,7 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+
 package(default_visibility = ["//visibility:public"])
+
+lint_files()
 
 exports_files(["patch.py"])

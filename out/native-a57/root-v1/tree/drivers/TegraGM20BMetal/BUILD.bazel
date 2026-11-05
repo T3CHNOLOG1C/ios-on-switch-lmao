@@ -2,8 +2,15 @@
 # built by //gpu:bundle (gpu/BUILD.bazel); the device-side tools here are what //deploy:* runs.
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
+load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
+
+# raw/pack/mesa is Mesa's code, kept as upstream has it; srgb_knots.inc is m2v's SRGB_KNOTS table, generated.
+lint_files(exclude = [
+    "raw/pack/mesa/**",
+    "raw/pack/srgb_knots.inc",
+])
 
 exports_files(glob(
     ["**"],

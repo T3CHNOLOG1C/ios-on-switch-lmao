@@ -3,6 +3,9 @@
 #
 #   bazel test //tests/...
 load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
 
 TESTS = glob(["test_*.py"])
 

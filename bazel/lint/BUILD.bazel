@@ -1,0 +1,9 @@
+# //bazel/lint: the repository's format and lint rules (checks.bzl), the per-package file sets they read (defs.bzl)
+# and the pinned tools (tools.bzl). The entry points are in the root BUILD.bazel: //:format, //:format_test,
+# //:lint_test.
+#
+# buildifier runs with every warning category (.buildifier.json "all"): the optional ones (unsorted dict items,
+# docstrings, native rules without a load, ...) are cheap to satisfy in a repository this size.
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()

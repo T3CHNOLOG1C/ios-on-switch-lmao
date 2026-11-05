@@ -1,0 +1,4 @@
+# rustfmt (Rust 1.98.0 toolchain, MODULE.bazel) for our Rust: `bazel run //:format`, checked by `bazel test //:lint_test`.
+edition = "2024"
+style_edition = "2024"
+max_width = 120

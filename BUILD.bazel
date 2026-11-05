@@ -3,9 +3,51 @@
 #   bazel build //:boot        the Hekate boot entry (bazel-bin/boot/ioswitch: switchroot/, bootloader/, overlay/)
 #   bazel build //:kernel      the prelinked kernel (XNU + drivers + Apple's kexts)
 #   bazel build //:gpu         the TegraGM20B Metal bundle, its m2v seed and trust cache
-#   bazel test //...           unit tests, pinned-input checks, lint
+#   bazel test //...           unit tests, pinned-input checks, format and lint
 #   bazel run //deploy:sd -- <disk>      bazel run //deploy:pull_logs -- <disk>      bazel run //install:sd -- <disk>
+#
+# Format and lint (//bazel/lint; every tool pinned in bazel/lint/tools.bzl, @llvm or the Rust toolchain):
+#
+#   bazel run //:format [-- PATH...]   format every file in place (or only these files and directories):
+#                                      C/C++/ObjC clang-format, Python ruff format, Starlark buildifier (fix),
+#                                      shell shfmt, Rust rustfmt, Markdown rumdl, JSON/TOML dprint
+#   bazel test //:format_test          the same formatters as checks, one cached action per file
+#   bazel test //:lint_test            the linters: ruff check, buildifier lint=warn, shellcheck, rumdl
+#   bazel test //:clang_tidy_test      clang-tidy over every C/C++/ObjC unit the build compiles, one cached action each
+#   bazel run //tools/lint:py_owners   every tracked .py file belongs to a py_binary/py_test/py_library
+#   bazel run //tools/lint:compdb      compile_commands.json for clangd
+#
+# The files are //:lint_files: each package's lint_files() (bazel/lint/defs.bzl) plus its subpackages'. Configs, at
+# the root: .clang-format, .clang-tidy, ruff.toml, .buildifier.json, .shellcheckrc, .rumdl.toml, dprint.json,
+# rustfmt.toml. Not linted: assembly (.S: no maintained linter; the assembler at -Werror is the check), linker
+# scripts, plists, device trees, GLSL/Metal shaders and patches.
+load("//bazel/lint:checks.bzl", "format_runner", "lint_test")
+load("//bazel/lint:clang_tidy.bzl", "clang_tidy_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
 package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    ".buildifier.json",
+    ".clang-format",
+    ".clang-tidy",
+    ".rumdl.toml",
+    ".shellcheckrc",
+    "dprint.json",
+    "ruff.toml",
+    "rustfmt.toml",
+])
+
+# out/ is build output and agents' scratch: only bazel-ignored or packaged parts of it are tracked. The rest are
+# untracked working-copy state that Bazel would otherwise glob.
+lint_files(exclude = [
+    ".agents/**",
+    ".claude/**",
+    "bundles/**",
+    "out/**",
+    "skills-lock.json",
+    "vendor/**",
+])
 
 alias(
     name = "boot",
@@ -20,4 +62,48 @@ alias(
 alias(
     name = "gpu",
     actual = "//gpu:bundle",
+)
+
+format_runner(
+    name = "format",
+    srcs = [":lint_files"],
+)
+
+lint_test(
+    name = "format_test",
+    srcs = [":lint_files"],
+    checks = [
+        "buildifier_format",
+        "clang_format",
+        "dprint",
+        "ruff_format",
+        "rumdl_format",
+        "rustfmt",
+        "shfmt",
+    ],
+    # Until main is formatted (bazel run //:format; r17-lint phase 2).
+    tags = ["manual"],
+)
+
+lint_test(
+    name = "lint_test",
+    srcs = [":lint_files"],
+    checks = [
+        "buildifier",
+        "ruff",
+        "rumdl",
+        "shellcheck",
+    ],
+    # Until the findings are fixed (r17-lint phase 3).
+    tags = ["manual"],
+)
+
+clang_tidy_test(
+    name = "clang_tidy_test",
+    # Until the drivers are cc_library targets (r17-bazel) and their findings are fixed (r17-lint phase 3).
+    tags = ["manual"],
+    targets = [
+        ":boot",
+        ":gpu",
+    ],
 )

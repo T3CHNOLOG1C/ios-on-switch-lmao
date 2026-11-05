@@ -28,8 +28,12 @@
 #       (bazel run //tools/package:wallpaper_1x remakes them from the OS volume; metadata only, no artwork).
 
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
+
+# Everything below this package is a pinned input, checked against SHA256SUMS byte for byte: never reformatted.
+lint_files(exclude = ["*/**"])
 
 exports_files(glob(
     ["**"],

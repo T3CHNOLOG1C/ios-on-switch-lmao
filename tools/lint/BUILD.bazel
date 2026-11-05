@@ -1,3 +1,21 @@
+# The two repository checks that need Bazel itself (bazel query / aquery), so they are `bazel run` tools, not tests.
+# Formatting and linting are rules: //bazel/lint, run through //:format, //:format_test and //:lint_test.
+#
+#   bazel run //tools/lint:py_owners   fail on any tracked .py file no py_binary/py_test/py_library owns
+#   bazel run //tools/lint:compdb      out/native-a57/root-v1/tree/compile_commands.json for clangd
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["lint.py"])
+lint_files()
+
+py_binary(
+    name = "py_owners",
+    srcs = ["py_owners.py"],
+)
+
+py_binary(
+    name = "compdb",
+    srcs = ["compdb.py"],
+)

@@ -1,0 +1,7 @@
+# shellcheck 0.11.0 (pinned in bazel/lint/tools.bzl) for every shell script: `bazel test //:lint_test`.
+# Every optional check except require-variable-braces (SC2250: "$var" and "${var}" are the same thing; braces only
+# where they are needed).
+enable=all
+disable=SC2250
+# Sourced files are not followed: each script is checked on its own (one cached action per file).
+external-sources=false

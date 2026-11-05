@@ -1,4 +1,9 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+
 exports_files([
     "build-options.json",
     "prelink-command.json",
 ])
+
+# source/ is the pass's frozen record of the sources it built (XNU's and ours as they were then): never rewritten.
+lint_files(exclude = ["source/**"])

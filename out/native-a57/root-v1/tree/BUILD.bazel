@@ -12,6 +12,7 @@ load("//bazel/kernel:inputs.bzl", "tool_output")
 load("//bazel/kernel:package.bzl", "ios_binary")
 load("//bazel/kernel:kernel.bzl", "PLAIN_ASM", "kernel_archive", "kernel_driver", "kernel_link", "kernel_prelink", "kernel_recipe", "stage_files")
 load("//bazel/kernel:xnu.bzl", "kernel_firehose", "kernel_sdkroot", "xnu_build")
+load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -20,7 +21,31 @@ exports_files(glob(
     exclude = ["BUILD.bazel"],
 ))
 
-# What //lint formats and checks: our sources and the .clang-format/.clang-tidy files that style them.
+# What //bazel/lint formats and checks here: everything of ours. Left out: code that is not ours (kept exactly as
+# upstream has it, and DisableFormat in its own .clang-format for editors), generated files (also listed in
+# .clang-format-ignore, which editors read), and package/, a third-party UEFI package (its own LICENSE) no target builds.
+# drivers/NativeMetal and drivers/TegraGM20BMetal are packages of their own, with their own lint_files().
+lint_files(exclude = [
+    "**/linux/**",
+    "**/nouveau/**",
+    "**/nvidia/**",
+    "drivers/TegraVIC/test/libdrm/**",
+    "package/**",
+    # generated
+    "drivers/SwitchVideoDecoders/AVD/VP9Tables.inc",
+    "drivers/SwitchVideoDecoders/test/HEVCClip.h",
+    "drivers/SwitchVideoDecoders/test/HEVCTrace.h",
+    "drivers/SwitchVideoDecoders/test/VDECClip.h",
+    "drivers/SwitchVideoDecoders/test/VP9Clip.h",
+    "drivers/SwitchVideoDecoders/test/VP9Trace.h",
+    "drivers/SwitchVideoDecoders/test/vp9gen/vpx_config.h",
+    "drivers/TegraNVDEC/selftest/HEVCPicture176.inc",
+    "drivers/TegraNVDEC/selftest/VP9Picture160.inc",
+    "drivers/TegraNVENC/selftest/E3Vectors.inc",
+    "drivers/TegraNVJPG/selftest/J3Vectors.inc",
+])
+
+# Our sources, which the host tests (//tests) compile.
 filegroup(
     name = "lint_sources",
     srcs = glob(
@@ -28,10 +53,6 @@ filegroup(
             "drivers/**",
             "kits/**",
             "diagnostics/ioswitch/**",
-            ".clang-format",
-            ".clang-tidy",
-            ".clang-format-ignore",
-            "**/.clang-format",
         ],
         allow_empty = True,
     ),

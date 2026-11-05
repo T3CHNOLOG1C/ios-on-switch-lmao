@@ -9,19 +9,30 @@ LLVM_RELEASE = {
 }
 
 # ld.lld, the loader's linker (a symlink to lld); llvm-objcopy (late objects, loader.bin); llvm-readelf (a symlink to
-# llvm-readobj) and llvm-objdump (the loader builder's checks); clang-format and clang-tidy (//lint).
+# llvm-readobj) and llvm-objdump (the loader builder's checks); clang-format and clang-tidy (//bazel/lint).
 TOOLS = ["lld", "ld.lld", "llvm-objcopy", "llvm-readobj", "llvm-readelf", "llvm-objdump", "clang-format", "clang-tidy"]
+
+# clang's own headers (stddef.h, stdarg.h, arm_acle.h, ...), which clang-tidy parses every unit with: the resource
+# directory of this release's clang.
+RESOURCE_HEADERS = "lib/clang/23/include"
 
 def _llvm_impl(rctx):
     archive = "llvm.tar.xz"
     rctx.download(url = LLVM_RELEASE["url"], output = archive, sha256 = LLVM_RELEASE["sha256"])
     result = rctx.execute(["/usr/bin/tar", "-xJf", archive, "--strip-components", "1"] +
-                          [LLVM_RELEASE["prefix"] + "/bin/" + tool for tool in TOOLS])
+                          [LLVM_RELEASE["prefix"] + "/bin/" + tool for tool in TOOLS] +
+                          [LLVM_RELEASE["prefix"] + "/" + RESOURCE_HEADERS])
     if result.return_code:
         fail("extracting LLVM tools failed: " + result.stderr)
     rctx.delete(archive)
-    rctx.file("BUILD.bazel", 'package(default_visibility = ["//visibility:public"])\n\nexports_files({})\n'.format(
-        repr(["bin/" + tool for tool in TOOLS]),
-    ))
+    rctx.file("BUILD.bazel", """package(default_visibility = ["//visibility:public"])
+
+exports_files({})
+
+filegroup(
+    name = "clang_resource_headers",
+    srcs = glob(["{}/**"]),
+)
+""".format(repr(["bin/" + tool for tool in TOOLS]), RESOURCE_HEADERS))
 
 llvm_tools = repository_rule(implementation = _llvm_impl)

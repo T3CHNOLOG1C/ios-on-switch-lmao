@@ -3,8 +3,11 @@
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("//bazel/kernel:common.bzl", "KERNEL_TOOLS")
+load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
+
+lint_files()
 
 # Xcode environment, the path hygiene every compile shares (prefix maps, locale, ZERO_AR_DATE).
 py_library(

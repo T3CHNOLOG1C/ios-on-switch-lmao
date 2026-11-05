@@ -16,7 +16,6 @@ bazel_dep(name = "rules_python", version = "2.4.6")
 # --- Python: the build's tools and tests run on this interpreter, never the host's ------------------------------
 # No implicit __init__.py in runfiles: tools/ is a namespace package (PEP 420), imported as tools.install etc.
 rules_python_config = use_extension("@rules_python//python/extensions:config.bzl", "config")
-
 rules_python_config.explicit_init_py(default = True)
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
@@ -32,6 +31,20 @@ pip.parse(
     requirements_lock = "//bazel/python:requirements_lock.txt",
 )
 use_repo(pip, "ioswitch_pypi")
+
+# uv 0.13.0 (the version the editor uses), only for `bazel run //bazel/python:requirements.update`, which locks
+# bazel/python/requirements.in into requirements_lock.txt. Pinned by URL and sha256 rather than uv's release manifest.
+uv = use_extension("@rules_python//python/uv:uv.bzl", "uv", dev_dependency = True)
+uv.configure(
+    platform = "aarch64-apple-darwin",
+    sha256 = "a9c1b29002cf3c83f07fa9cd8a887a3be0107d90e23189721221e7257db8e3d6",
+    urls = ["https://github.com/astral-sh/uv/releases/download/0.13.0/uv-aarch64-apple-darwin.tar.gz"],
+    version = "0.13.0",
+)
+
+# --- Lint and format tools (//bazel/lint): release binaries pinned in bazel/lint/tools.bzl ----------------------
+lint_tools = use_extension("//bazel/lint:tools.bzl", "lint_tools")
+use_repo(lint_tools, "buildifier", "dprint", "dprint_plugin_json", "dprint_plugin_toml", "ruff", "rumdl", "shellcheck", "shfmt")
 
 # --- LLVM 23.1.4 (the Homebrew version the CMake flow used): ld.lld/objcopy/readelf/objdump for the loader, llvm-objcopy
 # for late kernel objects, clang-format/clang-tidy for lint. Only those binaries of the release are extracted. --------
@@ -166,6 +179,8 @@ rust.toolchain(
         "aarch64-apple-ios",
         "aarch64-apple-darwin",
     ],
+    # rustfmt from the same release (//:format, //:format_test), not rules_rust's default nightly.
+    rustfmt_version = "1.98.0",
     versions = ["1.98.0"],
 )
 use_repo(

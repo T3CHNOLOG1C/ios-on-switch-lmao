@@ -1,0 +1,15 @@
+# rumdl 0.3.2 (pinned in bazel/lint/tools.bzl) for every Markdown file: `bazel test //:lint_test` checks,
+# `bazel run //:format` fixes (and wraps prose at 120 columns, the house line length).
+[global]
+line-length = 120
+# MD057 (relative links resolve) is off: each file is checked on its own in a sandbox that holds only that file, so
+# every relative link would look broken.
+disable = ["MD057"]
+
+[MD013]
+# Prose wraps at 120 like the code; code blocks and tables keep their lines (a wrapped command or row is wrong).
+line-length = 120
+code-blocks = false
+tables = false
+headings = false
+reflow = true

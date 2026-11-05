@@ -1,0 +1,8 @@
+# The Python packages the build runs (@ioswitch_pypi, Python 3.13): meson and mako for Mesa's build (gpu/nvk); pyyaml
+# and packaging are what Mesa's meson.build checks for; markupsafe is mako's dependency, pinned here too so the lock
+# only ever changes when this file does. `bazel run //bazel/python:requirements.update` locks them with uv.
+mako==1.4.3
+markupsafe==3.0.4
+meson==1.12.1
+packaging==26.3
+pyyaml==6.0.3

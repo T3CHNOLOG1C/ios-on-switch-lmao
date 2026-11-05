@@ -1,7 +1,9 @@
-# House style for ioswitch's own C, C++ and Objective-C++ (drivers/, kits/, diagnostics/).
-# Directories with code that is not ours turn formatting off with their own .clang-format (Linux ports, nouveau,
-# XNU and Apple sources); TegraBPMP, TegraDFLL and TegraGM20B follow the Linux kernel style of the code they sit beside.
-# Run: scripts/lint.py format FILE… (or --all, --check).
+# House style for all of ioswitch's own C, C++, Objective-C and Objective-C++ (clang-format 23.1.4, @llvm).
+#   bazel run //:format          format everything (with the other formatters)
+#   bazel test //:format_test    check it, one cached action per file
+# Directories with code that is not ours turn formatting off with their own .clang-format (DisableFormat: Linux ports,
+# nouveau, NVIDIA, Mesa, libdrm); TegraBPMP, TegraDFLL and TegraGM20B follow the Linux kernel style of the code they
+# sit beside. Generated files are left out of //bazel/lint's file sets (lint_files(exclude = ...)).
 BasedOnStyle: LLVM
 ColumnLimit: 120
 IndentWidth: 4

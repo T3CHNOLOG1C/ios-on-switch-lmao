@@ -1,1 +1,34 @@
+# The Python packages the build runs (@ioswitch_pypi, MODULE.bazel's pip.parse): requirements.in names them with exact
+# versions, uv (rules_python's lock rule, uv 0.13.0 pinned in MODULE.bazel) locks them with every file's sha256.
+#
+#   bazel run //bazel/python:requirements.update    re-lock requirements_lock.txt after editing requirements.in
+#   bazel test //bazel/python:requirements_test     the lock is what requirements.in locks to (asks PyPI: network)
+load("@bazel_skylib//rules:native_binary.bzl", "native_test")
+load("@rules_python//python/uv:lock.bzl", "lock")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
 exports_files(["requirements_lock.txt"])
+
+lock(
+    name = "requirements",
+    srcs = ["requirements.in"],
+    out = "requirements_lock.txt",
+    # The one platform the build runs on (bazel/host: Xcode).
+    args = [
+        "--python-platform",
+        "aarch64-apple-darwin",
+    ],
+    python_version = "3.13",
+)
+
+# Not hermetic by nature (uv reads PyPI's index), hence the tags: it needs the network and its result is never cached.
+native_test(
+    name = "requirements_test",
+    src = ":requirements.update",
+    tags = [
+        "no-cache",
+        "requires-network",
+    ],
+)

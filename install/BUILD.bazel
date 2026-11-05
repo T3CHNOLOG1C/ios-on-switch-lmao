@@ -8,9 +8,12 @@
 # range request into the repository cache; on APFS the copies Bazel makes from the cache are clones, so a member's
 # bytes are stored once).
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "fake_boot_package", "install_artifacts", "install_spec", "ipsw_pins", "test_member")
 
 package(default_visibility = ["//visibility:public"])
+
+lint_files()
 
 exports_files(glob(["testdata/**"]))
 

@@ -1,7 +1,10 @@
 # What the build derives from the IPSW's members (@ipsw//:<member>, fetched by range request; bazel/ipsw).
 load("//bazel/kernel:inputs.bzl", "tool_output")
+load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
+
+lint_files()
 
 # The original kernelcache, decompressed: what the prelinker takes Apple's kexts from and the ABI checks read.
 # (vendor/unixnu's kernelcache.decompressed: IM4P 'krnl' payload, LZFSE, arm64 slice; pinned.)

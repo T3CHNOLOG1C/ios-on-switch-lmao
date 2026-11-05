@@ -1,0 +1,184 @@
+# clang-tidy (LLVM 23.1.4, @llvm) for all of ioswitch's own C, C++, Objective-C and Objective-C++: the kernel's IOKit
+# drivers, kits and diagnostics, the boot chain, host tools and tests.
+#   bazel test //:clang_tidy_test   every unit the build compiles, one cached action each, warnings as errors
+# Strong on purpose: whole families on (bugprone, clang-analyzer, concurrency, cppcoreguidelines, misc, modernize,
+# performance, portability, readability), each check that is off says why on its line. A finding that has to stay
+# (a register-access pattern, an ABI layout, a vtable slot) gets `// NOLINT(check): reason` on its line, never a
+# blanket suppression. Kernel C++ here has no exceptions, RTTI or STL; memory is IOMalloc/OSObject, devices are MMIO.
+# cert-* is not listed: in LLVM 23 its checks are aliases of the bugprone/misc/readability checks enabled here.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -bugprone-narrowing-conversions,
+  -bugprone-reserved-identifier,
+  -clang-analyzer-optin.osx.*,
+  -clang-analyzer-optin.performance.Padding,
+  -clang-analyzer-security.insecureAPI.*,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-avoid-goto,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-c-copy-assignment-signature,
+  -cppcoreguidelines-explicit-constructor,
+  -cppcoreguidelines-explicit-virtual-functions,
+  -cppcoreguidelines-macro-to-enum,
+  -cppcoreguidelines-macro-usage,
+  -cppcoreguidelines-missing-std-forward,
+  -cppcoreguidelines-narrowing-conversions,
+  -cppcoreguidelines-no-malloc,
+  -cppcoreguidelines-noexcept-*,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-bounds-*,
+  -cppcoreguidelines-pro-type-cstyle-cast,
+  -cppcoreguidelines-pro-type-member-init,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-static-cast-downcast,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-rvalue-reference-param-not-moved,
+  -cppcoreguidelines-special-member-functions,
+  -cppcoreguidelines-use-default-member-init,
+  -cppcoreguidelines-use-enum-class,
+  -cppcoreguidelines-virtual-class-destructor,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -misc-unused-parameters,
+  -misc-use-anonymous-namespace,
+  -modernize-avoid-c-arrays,
+  -modernize-avoid-variadic-functions,
+  -modernize-deprecated-headers,
+  -modernize-macro-to-enum,
+  -modernize-use-auto,
+  -modernize-use-default-member-init,
+  -modernize-use-designated-initializers,
+  -modernize-use-integer-sign-comparison,
+  -modernize-use-nodiscard,
+  -modernize-use-scoped-lock,
+  -modernize-use-trailing-return-type,
+  -modernize-use-using,
+  -performance-enum-size,
+  -performance-no-int-to-ptr,
+  -portability-avoid-pragma-once,
+  -portability-no-assembler,
+  -portability-simd-intrinsics,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-math-missing-parentheses,
+  -readability-named-parameter,
+  -readability-trailing-comma,
+  -readability-use-anyofallof,
+  -readability-use-std-min-max
+# Why each one is off:
+#   bugprone-easily-swappable-parameters      register helpers take (offset, value) of one type by nature
+#   bugprone-multi-level-implicit-pointer-conversion  IOKit's out-parameters are void ** (mappings, memory)
+#   bugprone-narrowing-conversions            fields are packed into narrower registers on purpose; -Wconversion's job
+#   bugprone-reserved-identifier              header guards and kernel-private names follow XNU's _Name convention
+#   clang-analyzer-optin.osx.*                UI localization rules; none of our Objective-C++ is UI
+#   clang-analyzer-optin.performance.Padding  struct layouts are ABI (user clients, firmware, hardware descriptors)
+#   clang-analyzer-security.insecureAPI.*     flags memcpy/bzero/bcopy, the kernel's own primitives
+#   cppcoreguidelines-avoid-c-arrays          no std::array in the kernel; DMA rings and tables are C arrays
+#   cppcoreguidelines-avoid-do-while          do { } while (0) macros and wait-for-hardware loops
+#   cppcoreguidelines-avoid-goto              `goto fail` is the kernel's single-exit cleanup idiom
+#   cppcoreguidelines-avoid-magic-numbers     register offsets, bit fields and protocol values are the hardware spec
+#   cppcoreguidelines-avoid-non-const-global-variables  per-boot singletons and counters (IOKit has no other home)
+#   cppcoreguidelines-c-copy-assignment-signature  alias of misc-unconventional-assign-operator (on)
+#   cppcoreguidelines-explicit-constructor    alias of misc-explicit-constructor (on)
+#   cppcoreguidelines-explicit-virtual-functions  alias of modernize-use-override (on)
+#   cppcoreguidelines-macro-to-enum           register #defines are shared with C and assembly (.S includes them)
+#   cppcoreguidelines-macro-usage             IOKit's structors macros and register macros shared with C and assembly
+#   cppcoreguidelines-missing-std-forward, -rvalue-reference-param-not-moved  no <utility> in the kernel
+#   cppcoreguidelines-narrowing-conversions   alias of bugprone-narrowing-conversions (off, above)
+#   cppcoreguidelines-no-malloc               IOMalloc/kalloc are the kernel's allocators
+#   cppcoreguidelines-noexcept-*              no exceptions in the kernel
+#   cppcoreguidelines-non-private-member-variables-in-classes, misc-  IOKit classes keep state in protected
+#                                             members (the families' convention); plain-data structs mirror hardware
+#   cppcoreguidelines-owning-memory           no GSL; ownership is OSObject retain/release
+#   cppcoreguidelines-pro-bounds-*            DMA buffers, descriptor rings and MMIO windows are pointer arithmetic
+#   cppcoreguidelines-pro-type-cstyle-cast    modernize-avoid-c-style-cast (on) covers C-style casts and fixes them
+#   cppcoreguidelines-pro-type-member-init    OSObject allocations are zero-filled and init() sets members
+#   cppcoreguidelines-pro-type-reinterpret-cast  MMIO and DMA addresses become pointers
+#   cppcoreguidelines-pro-type-static-cast-downcast  no RTTI; OSDynamicCast/OSRequiredCast where it matters
+#   cppcoreguidelines-pro-type-union-access   register unions (bit fields over a raw word)
+#   cppcoreguidelines-pro-type-vararg         IOLog, os_log and snprintf
+#   cppcoreguidelines-special-member-functions  OSObject subclasses are never copied; the structors macros declare them
+#   cppcoreguidelines-use-default-member-init, modernize-  members are set in init(), not constructors (OSObject)
+#   cppcoreguidelines-use-enum-class          register field enums combine with integers and are shared with C
+#   cppcoreguidelines-virtual-class-destructor  IOKit objects die through OSObject::free(), never delete on a base
+#   misc-include-cleaner                      XNU/IOKit umbrella headers export through internal headers
+#   misc-unused-parameters                    IOKit overrides take the family's full signature (-Wunused-parameter off)
+#   misc-use-anonymous-namespace              `static` is internal linkage in C and C++ alike, one spelling
+#   modernize-avoid-c-arrays                  as cppcoreguidelines-avoid-c-arrays
+#   modernize-avoid-variadic-functions        IOLog/os_log-style logging wrappers
+#   modernize-deprecated-headers              the kernel has <string.h>, not <cstring>
+#   modernize-macro-to-enum                   as cppcoreguidelines-macro-to-enum
+#   modernize-use-auto                        explicit types document register widths
+#   modernize-use-designated-initializers, -use-integer-sign-comparison  C++20 (we are C++17)
+#   modernize-use-nodiscard                   noise on every getter; bugprone-unused-return-value covers the dangerous
+#   modernize-use-scoped-lock                 no std::scoped_lock in the kernel (IOLock, lck_mtx)
+#   modernize-use-trailing-return-type        style only
+#   modernize-use-using                       headers are shared with C, where only typedef works
+#   performance-enum-size                     enum sizes are ABI (user clients, firmware structs)
+#   performance-no-int-to-ptr                 MMIO: device addresses become pointers
+#   portability-avoid-pragma-once             every compiler we use supports #pragma once
+#   portability-no-assembler                  inline assembly reaches system registers and barriers
+#   portability-simd-intrinsics               NEON intrinsics are the point where they appear
+#   readability-identifier-length             i, n, rc and dev are clear in context
+#   readability-magic-numbers                 as cppcoreguidelines-avoid-magic-numbers
+#   readability-math-missing-parentheses      * binds tighter than +; -Wparentheses (on) covers the confusable mixes
+#   readability-named-parameter               an unnamed parameter is how C++ marks an override's unused one
+#   readability-trailing-comma                clang-format owns layout
+#   readability-use-anyofallof, -use-std-min-max  no <algorithm> in the kernel
+# Warnings are errors in the test (clang_tidy_test passes --warnings-as-errors=*), not here, so editors (clangd)
+# show them as warnings.
+WarningsAsErrors: ''
+# Our headers wherever they are; never XNU's, the SDK's or vendored ones (nouveau, Linux, NVIDIA, Mesa).
+HeaderFilterRegex: '.*'
+ExcludeHeaderFilterRegex: '.*/(external|nouveau|linux|nvidia|mesa|libdrm|\.cache|refer|build)/.*'
+SystemHeaders: false
+FormatStyle: file
+CheckOptions:
+  # Complexity limits: readability-function-cognitive-complexity at clang-tidy's default (25); the size limits are
+  # what a function past which a reader loses the thread looks like in this tree (see the r17-lint report).
+  readability-function-cognitive-complexity.Threshold: 25
+  readability-function-cognitive-complexity.IgnoreMacros: true
+  readability-function-size.LineThreshold: 150
+  readability-function-size.StatementThreshold: 100
+  readability-function-size.BranchThreshold: 25
+  readability-function-size.NestingThreshold: 5
+  readability-function-size.ParameterThreshold: 8
+  # Naming, where the tree agrees: classes CamelCase (structs are often shared with C and keep C names), methods
+  # camelBack like IOKit's, template parameters CamelCase, namespaces lower_case. (Members, locals and constants
+  # follow no single convention across the ported code; not enforced.)
+  readability-identifier-naming.ClassCase: CamelCase
+  readability-identifier-naming.StructCase: aNy_CasE
+  readability-identifier-naming.UnionCase: aNy_CasE
+  readability-identifier-naming.MethodCase: camelBack
+  readability-identifier-naming.TemplateParameterCase: CamelCase
+  readability-identifier-naming.NamespaceCase: lower_case
+  # `if (pointer)` and `if (flags & BIT)` are idiomatic; int <-> bool conversions elsewhere are flagged.
+  readability-implicit-bool-conversion.AllowPointerConditions: true
+  readability-implicit-bool-conversion.AllowIntegerConditions: true
+  # One-line bodies may go without braces (the house style); bodies of two lines or more need them.
+  readability-braces-around-statements.ShortStatementLines: 2
+  # Only the confusable suffix: l (vs 1). 0x10u is as clear as 0x10U.
+  readability-uppercase-literal-suffix.NewSuffixes: 'L;LL;LU;LLU;UL;ULL'
+  # `1 << 5` with positive literals is a mask, not a sign bug; bitwise on signed variables is still flagged.
+  bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true
+  # bzero/bcopy are the kernel's own; keep the check for gets/strcpy-class functions only.
+  bugprone-unsafe-functions.ReportMoreUnsafeFunctions: false
+  bugprone-suspicious-string-compare.WarnOnImplicitComparison: false
+  bugprone-unused-return-value.AllowCastToVoid: true
+  performance-unnecessary-value-param.AllowedTypes: 'OSSharedPtr;IOReturn'
+  modernize-use-override.IgnoreDestructors: true

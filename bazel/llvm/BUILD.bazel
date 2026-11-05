@@ -1,0 +1,3 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()

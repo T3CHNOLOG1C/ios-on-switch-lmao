@@ -1,0 +1,84 @@
+# ruff 0.17.3 (pinned in bazel/lint/tools.bzl) for every Python file in the repository.
+#
+#   bazel run //:format         ruff format, with the other formatters
+#   bazel test //:lint_test     ruff check: one cached action per file, with the other linters
+#
+# Strong on purpose. Correctness: pyflakes, bugbear, pylint's errors and warnings. Simplicity: mccabe at 10 and
+# pylint's size limits. Readability: naming, docstrings, annotations, pyupgrade to 3.13. Every rule turned off below
+# says why; a single finding that has to stay gets a `# noqa: CODE  reason` on its line.
+line-length = 120
+target-version = "py313"
+
+[format]
+# The repository's Python has always used single quotes; the formatter keeps that and makes it consistent.
+quote-style = "single"
+docstring-code-format = true
+
+[lint]
+select = [
+  "A", # flake8-builtins: no shadowing of builtins (id, type, input, ...)
+  "ANN", # flake8-annotations: every function's parameters and return type are annotated
+  "ARG", # flake8-unused-arguments
+  "B", # flake8-bugbear
+  "BLE", # flake8-blind-except: no bare `except Exception` that swallows everything
+  "C4", # flake8-comprehensions
+  "C90", # mccabe cyclomatic complexity (max-complexity below)
+  "D", # pydocstyle (pep257 convention below)
+  "E", # pycodestyle errors
+  "F", # pyflakes
+  "FURB", # refurb: the modern spelling of common idioms
+  "I", # isort
+  "ISC", # flake8-implicit-str-concat
+  "N", # pep8-naming
+  "PERF", # perflint
+  "PIE", # flake8-pie
+  "PL", # pylint: conventions, errors, refactors (incl. too-many-branches/statements/args/returns), warnings
+  "PT", # flake8-pytest-style
+  "RET", # flake8-return
+  "RUF", # ruff's own
+  "SIM", # flake8-simplify
+  "UP", # pyupgrade
+  "W", # pycodestyle warnings
+]
+ignore = [
+  # Binary formats and hardware registers: the values are the specification (offsets, magic numbers, sizes), and a
+  # name for each one would only restate the comment or table it comes from. Constants used twice get a name anyway.
+  "PLR2004",
+  # The formatter owns these (ruff's documented formatter conflicts).
+  "ISC001",
+  "W191",
+  "E111",
+  "E114",
+  "E117",
+  "D206",
+  "D300",
+]
+
+[lint.mccabe]
+max-complexity = 10
+
+[lint.pylint]
+# pylint's defaults, stated: a function past these is split, not waved through.
+max-args = 5
+max-positional-args = 5
+max-branches = 12
+max-returns = 6
+max-statements = 50
+
+[lint.pydocstyle]
+convention = "pep257"
+
+[lint.flake8-annotations]
+# __init__ is annotated through its parameters; `-> None` on it adds nothing.
+mypy-init-return = true
+
+[lint.isort]
+# tools/ is a namespace package imported as tools.<x>; stated so a lone file (one per check action) sorts the same.
+known-first-party = ["tools"]
+combine-as-imports = true
+
+[lint.per-file-ignores]
+# Tests are unittest (and become GoogleTest, see r17-bazel): their assertions are unittest's, their names say what
+# they test, and annotating test methods `-> None` adds nothing.
+"**/test_*.py" = ["PT009", "PT027", "D101", "D102", "ANN201"]
+"**/*_test.py" = ["PT009", "PT027", "D101", "D102", "ANN201"]

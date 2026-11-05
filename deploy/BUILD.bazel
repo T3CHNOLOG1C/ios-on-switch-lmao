@@ -5,8 +5,11 @@
 #   bazel run //deploy:sd --//deploy:gpu_bundle=//gpu:bundle -- disk4 --yes --stage-gpu
 #   bazel run //deploy:pull_logs -- disk4                   logs + logarchive + m2v harvest only
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
+
+lint_files()
 
 # The boot package deploy and install write (a directory: switchroot/ioswitch/, bootloader/ini/, overlay/).
 label_flag(
