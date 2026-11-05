@@ -83,8 +83,8 @@ use super::image_plan::{
     ImagePlan, ImageRefusal,
 };
 use super::linear_plan::{
-    aliases, check_linear_limits, holding, linear_lack, BufferLayout, Holds, LinearImage,
-    LinearLack,
+    aliases, check_linear_limits, holding, linear_lack, tile_store_fits, BufferLayout, Holds,
+    LinearImage, LinearLack,
 };
 use super::memory::{MemoryClass, Placement};
 use super::metal_texture::{self, MetalOver};
@@ -121,7 +121,7 @@ use first_move::{FirstMove, Fresh, Pattern, Patterned, TexelCopy, PATTERN_BYTES}
 use heap_tiled::{FreshDepth, FreshPattern};
 use metal2vulkan::bind::{ImageViewDesc, TextureFacts};
 use metal2vulkan::device::{
-    DeviceDescription, DeviceProfile, DriverFact, FormatSupport, VkFeature,
+    DeviceDescription, DeviceProfile, DriverFact, FormatSupport, PaddedReadsPolicy, VkFeature,
 };
 use metal2vulkan::error::{
     Capability, Feature, LinearNeed, RuntimeDriverDefect, SparseNeed, Unsupported,
@@ -1961,7 +1961,14 @@ impl Device {
         })?;
         // What an image over the texels may hold beside them: the bytes between padded rows too
         // where the texture only reads, by the policy (`linear_plan::holding`); else why none may.
-        let policy = self.compile_device().policy().padded_reads;
+        let mut policy = self.compile_device().policy().padded_reads;
+        // A written texture's tile stores may reach past its rows (`linear_plan::tile_store_fits`):
+        // where they would leave the row gaps or the buffer, only a texture that reads aliases.
+        if policy == PaddedReadsPolicy::AliasWrites
+            && !tile_store_fits(&texels.layout, u64::from(layout.extent[0]), texels.buffer.length())
+        {
+            policy = PaddedReadsPolicy::Alias;
+        }
         let holds = holding(&texels.layout, usage, policy);
         // Over bytes detached from their pages (`detach.rs`) no image aliases them: the texture
         // is their shadow, which presents a stand-in until they lie in pages again.
