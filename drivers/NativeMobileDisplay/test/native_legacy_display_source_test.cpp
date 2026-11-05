@@ -208,3 +208,13 @@ TEST(PanicRestoreSource, EveryKernelConfig)
     EXPECT_THAT(halted, HasSubstr("if (display) display(\"\");"));
     EXPECT_THAT(halted, Not(HasSubstr("PE_panic_hook")));
 }
+
+// A window with vsyncs sent and nothing swapped or presented is logged every time, before the window's counters are
+// reset: the quiet-window suppression would otherwise hide a hung render-server client after its first window.
+TEST(DisplayStatsSource, QuietDisplayWindowsAreLogged)
+{
+    const std::string stats = method(display(), "    void noteStatsWindow()");
+    EXPECT_THAT(stats, HasSubstr("if (stVsyncs && !stSwaps && !stPresents)"));
+    expectBefore(stats, "IOSwitch display: quiet display: ", "stSwaps = stVsyncs = ");
+    expectBefore(stats, "IOSwitch display: quiet display: ", "if (logged) os_log(");
+}

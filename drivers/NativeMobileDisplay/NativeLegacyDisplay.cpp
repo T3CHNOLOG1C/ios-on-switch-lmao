@@ -1119,6 +1119,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                            !stVsyncIdle && !__atomic_load_n(&stRejected, __ATOMIC_RELAXED);
         const bool logged = !(quiet && statsQuiet);
         statsQuiet = quiet;
+        // Logged every time, quiet or not: the render server took frames and committed none, which is what a hung
+        // client of it looks like from here.
+        if (stVsyncs && !stSwaps && !stPresents)
+            os_log(OS_LOG_DEFAULT,
+                   "IOSwitch display: quiet display: %llu ms with vsync %u sent of %u vblanks and no swap or present",
+                   (unsigned long long)(us / 1000), stVsyncs, vblanks);
         auto rate = [us](uint32_t n) {
             return (unsigned long long)((uint64_t)n * 10000000ULL / (us ? us : 1));
         };  // per second, in tenths
