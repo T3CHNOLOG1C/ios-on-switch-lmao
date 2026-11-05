@@ -159,7 +159,7 @@ Other flags: `--no-pull-logs`, `--no-csstore`, `--no-harvest`, `--no-launchd-log
 | `//lint:py_owners` | Fails on any tracked `.py` file that no `py_binary`, `py_test` or `py_library` owns |
 | `//tests/...`, `//out/native-a57/root-v1/tree:*_test`, `//native:firmware_export_test`, `//install:*_test`, `//tools/deploy:deploy_test`, `//bazel/pinned:sha256` | Tests |
 | `//tools/repro:check`, `//tools/repro:equivalence` | Reproducibility and old-flow comparison |
-| `//native:firmware_export`, `//gpu/nvk:relink`, `//tools/package:progressui_logo` | Regenerate a pinned input: the RAM exporter, a relinked NVK dylib, the ProgressUI logo |
+| `//native:firmware_export`, `//gpu/nvk:relink`, `//tools/package:progressui_logo`, `//tools/package:wallpaper_1x` | Regenerate a pinned input: the RAM exporter, a relinked NVK dylib, the ProgressUI logo, the 1x wallpaper plists |
 | `//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:<tool>` | GPU developer tools: the shader corpus (`make_corpus`, `run_corpus`, `report`, …), `ordercheck`, `check_dyld_cache_imports` |
 
 Flags:
@@ -347,7 +347,7 @@ Pinned, unregenerable files (in `bazel/pinned`, with `SHA256SUMS`, checked the s
 - the switchroot ATF/U-Boot and the OLED DTB;
 - `exporter.uimg` and the BT patch RAM.
 
-`data-v10.dbr` and the ProgressUI logo contain Apple-derived content: check before publishing the repository.
+`data-v10.dbr` and the ProgressUI logo contain Apple-derived content (the 1x wallpaper plists, Apple's metadata only): check before publishing the repository.
 
 ## Tools and scripts
 

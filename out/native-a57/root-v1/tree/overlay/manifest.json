@@ -24,7 +24,10 @@
     "The VideoDecoders union (HEVCH8, AVD) has no gate: AVD registers only in processes that may open the TegraNVDEC",
     "service, which the kernel publishes once NVDEC proves itself at boot (switch-nvdec=0 turns NVDEC off).",
     "H264H7.videoencoder (AVE on NVENC) has no gate either: it registers only once the kernel published TegraNVENC (E4,",
-    "after NVENC's picture decoded back on NVDEC at boot; switch-nvdec=0 turns both off)."
+    "after NVENC's picture decoded back on NVDEC at boot; switch-nvdec=0 turns both off).",
+    "The J120 iPadOS 17 and Lake wallpapers (WallpaperKit loads a bundle only at the device's logical screen class, here",
+    "1024w-1366h@1x~ipad; 21H461 ships @2x only): each bundle directory is its own union, showing the 1x Wallpaper.plist",
+    "(tools/package/wallpaper_1x.py, pinned) over the sealed one, with the sealed .ca and HEIC beneath. No gate."
   ],
   "files": [
     {
@@ -108,6 +111,14 @@
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_ringtone.austrip",
       "source": "drivers/SwitchAudio/tunings/j120_speaker_ringtone.austrip",
       "boot-arg": "switch-audio"
+    },
+    {
+      "path": "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/Wallpaper.plist",
+      "source": "build/wallpaper-1x/7570.iPadOS_17_Flat.plist"
+    },
+    {
+      "path": "/Library/Wallpaper/Collections/Lake~ipad.wallpaperCollection/Wallpapers/7560.Lake_Flat-1024w-1366h@2x~ipad.wallpaper/Wallpaper.plist",
+      "source": "build/wallpaper-1x/7560.Lake_Flat.plist"
     }
   ]
 }

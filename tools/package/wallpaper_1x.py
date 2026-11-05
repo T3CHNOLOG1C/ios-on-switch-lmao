@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Make the 1x screen class's Wallpaper.plist for the two J120 wallpapers, from the 21H461 OS volume's own.
+
+WallpaperKit loads a wallpaper bundle only when the logicalScreenClass in its Wallpaper.plist is 'any' or the
+device's (+[WKWallpaperBundle shouldLoadWallpaperBundleAtURL:]). The device's is built from UIScreen's scale:
+'1024w-1366h@1x~ipad' here (main-screen-scale 1, crisp-rendering), while 21H461 ships only @2x iPad bundles. So the
+iPadOS 17 and Lake collections load empty, the iPad's default wallpaper (7570) is "not found on disk", and
+WKDefaultWallpaperManager falls back to its synthesized 'Solid Black' (400): the black Collections tile and lock
+screen of r7s (11-05).
+
+iPad7,1 (J120) has its own bundles: the animated ones list it in unsupportedProductTypes, the _Flat ones in
+productTypes (J120.HEIC, J99-Flat.HEIC: one 2x image each). This copies each _Flat bundle's Wallpaper.plist with
+logicalScreenClass set to the 1x class and nothing else changed. The overlay (tree/overlay/manifest.json) shows it
+over the sealed bundle's own plist, with the bundle directory as its own union, so its .ca and HEIC are the sealed
+volume's: no artwork is copied, and the 2x image is drawn into the 720x1280 panel (scaled down, never up).
+
+The output is metadata only (identifiers, names, file names) and is pinned in bazel/pinned/overlay/wallpaper-1x/.
+
+Usage: wallpaper_1x.py [<OS volume .dmg> [<output directory>]]
+"""
+import plistlib
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+DMG = ROOT / 'vendor/unixnu-qemu/.cache/firmware/target-volumes/044-76040-038.dmg'
+OUT = ROOT / 'bazel/pinned/overlay/wallpaper-1x'
+COLLECTIONS = 'Library/Wallpaper/Collections'
+# (collection, bundle, output name): the J120 bundles of the iPad's default collection and of Lake.
+BUNDLES = (
+    ('iPadOS_17~ipad.wallpaperCollection', '7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper', '7570.iPadOS_17_Flat.plist'),
+    ('Lake~ipad.wallpaperCollection', '7560.Lake_Flat-1024w-1366h@2x~ipad.wallpaper', '7560.Lake_Flat.plist'),
+)
+FROM_CLASS, TO_CLASS = '1024w-1366h@2x~ipad', '1024w-1366h@1x~ipad'
+PRODUCT = 'iPad7,1'
+
+
+def one_x(data, name):
+    """The plist `data` with logicalScreenClass FROM_CLASS -> TO_CLASS; refuses anything but a J120 bundle's."""
+    plist = plistlib.loads(data)
+    if plist.get('logicalScreenClass') != FROM_CLASS:
+        raise SystemExit(f'{name}: logicalScreenClass {plist.get("logicalScreenClass")!r}, not {FROM_CLASS!r}')
+    if PRODUCT not in plist.get('productTypes', ()) or PRODUCT in plist.get('unsupportedProductTypes', ()):
+        raise SystemExit(f'{name}: not a {PRODUCT} bundle')
+    plist['logicalScreenClass'] = TO_CLASS
+    return plistlib.dumps(plist, fmt=plistlib.FMT_BINARY)
+
+
+def main():
+    dmg = Path(sys.argv[1]) if len(sys.argv) > 1 else DMG
+    out = Path(sys.argv[2]) if len(sys.argv) > 2 else OUT
+    with tempfile.TemporaryDirectory() as mount:
+        subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-noverify', '-mountpoint', mount, str(dmg)],
+                       check=True, stdout=subprocess.DEVNULL)
+        try:
+            sources = {name: (Path(mount) / COLLECTIONS / collection / 'Wallpapers' / bundle / 'Wallpaper.plist')
+                       .read_bytes() for collection, bundle, name in BUNDLES}
+        finally:
+            subprocess.run(['hdiutil', 'detach', mount], check=True, stdout=subprocess.DEVNULL)
+    out.mkdir(parents=True, exist_ok=True)
+    for collection, bundle, name in BUNDLES:
+        (out / name).write_bytes(one_x(sources[name], name))
+        print(f'{out / name}: /{COLLECTIONS}/{collection}/Wallpapers/{bundle}/Wallpaper.plist at {TO_CLASS}')
+
+
+if __name__ == '__main__':
+    main()

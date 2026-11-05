@@ -3,6 +3,7 @@
 # them through :boot with declared inputs.
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -37,6 +38,27 @@ py_binary(
 py_binary(
     name = "progressui_logo",
     srcs = ["progressui_logo.py"],
+)
+
+# Remakes bazel/pinned/overlay/wallpaper-1x/*.plist (the J120 iPadOS 17 and Lake wallpapers at the 1x screen class)
+# from the OS volume image:
+#   bazel run //tools/package:wallpaper_1x -- <OS volume .dmg> <output directory>
+py_binary(
+    name = "wallpaper_1x",
+    srcs = ["wallpaper_1x.py"],
+)
+
+py_test(
+    name = "wallpaper_1x_test",
+    srcs = [
+        "wallpaper_1x.py",
+        "wallpaper_1x_test.py",
+    ],
+    data = [
+        "//bazel/pinned:overlay/wallpaper-1x/7560.Lake_Flat.plist",
+        "//bazel/pinned:overlay/wallpaper-1x/7570.iPadOS_17_Flat.plist",
+    ],
+    imports = ["."],
 )
 
 # //boot:snapshot copies a build to out/boot/lkg/<name> (its py_binary lives in boot/).

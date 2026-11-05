@@ -64,6 +64,8 @@ boot_package(
         "//out/native-a57/root-v1/tree:AVD": "build/switch-video/AVD.videodecoder",
         "//out/native-a57/root-v1/tree:AVE": "build/switch-video/H264H7.videoencoder",
         "//bazel/pinned:overlay/apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
+        "//bazel/pinned:overlay/wallpaper-1x/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/7570.iPadOS_17_Flat.plist",
+        "//bazel/pinned:overlay/wallpaper-1x/7560.Lake_Flat.plist": "build/wallpaper-1x/7560.Lake_Flat.plist",
     },
     overlay_files = ["//out/native-a57/root-v1/tree:overlay_sources"],
     overlay_manifest = "//out/native-a57/root-v1/tree:overlay/manifest.json",

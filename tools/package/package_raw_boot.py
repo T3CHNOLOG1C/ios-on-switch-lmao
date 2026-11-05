@@ -316,6 +316,10 @@ def load_overlay():
         directory, gate = entry.get('union', posixpath.dirname(path)), entry.get('boot-arg', '')
         if not path.startswith(directory.rstrip('/') + '/'):
             raise SystemExit(f'overlay: {path} is not inside its union {directory}')
+        # native_ioswitch_raw_overlay's buffers: "<directory>[:<boot-arg>]" in char[128] and the overlay source path
+        # in char[176]; a longer entry would be skipped (or its source cut short) at boot without a word.
+        if len(directory) + (len(gate) + 1 if gate else 0) >= 128 or len(OVERLAY_ROOT + directory) >= 176:
+            raise SystemExit(f'overlay: union {directory} is too long for the kernel (128/176 bytes)')
         if gates.setdefault(directory, gate) != gate:
             raise SystemExit(f'overlay: files in {directory} need the same boot-arg')
         source = WORK / 'tree' / entry['source']
