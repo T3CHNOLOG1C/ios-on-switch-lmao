@@ -470,6 +470,13 @@ impl Device {
         let states = lock(&self.shared().resource_ids).samplers();
         states.into_iter().map(SamplerState).collect()
     }
+
+    /// [`argument_samplers`](Self::argument_samplers), listed in `out` (emptied first).
+    pub(super) fn argument_samplers_into(&self, out: &mut Vec<SamplerState>) {
+        out.clear();
+        let ids = lock(&self.shared().resource_ids);
+        out.extend(ids.live_samplers().map(SamplerState));
+    }
 }
 
 impl SamplerState {

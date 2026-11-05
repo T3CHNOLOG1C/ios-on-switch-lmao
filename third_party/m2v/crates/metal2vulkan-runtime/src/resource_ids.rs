@@ -464,6 +464,11 @@ impl ResourceIds {
 
     /// The live holders of sampler IDs, in ID order: the states a sampler table lists.
     pub(super) fn samplers(&self) -> Vec<Arc<SamplerShared>> {
+        self.live_samplers().collect()
+    }
+
+    /// [`samplers`](Self::samplers), one at a time.
+    pub(super) fn live_samplers(&self) -> impl Iterator<Item = Arc<SamplerShared>> + '_ {
         self.samplers
             .slots
             .values()
@@ -471,7 +476,6 @@ impl ResourceIds {
                 Holder::Sampler(state) => state.upgrade(),
                 _ => None,
             })
-            .collect()
     }
 }
 

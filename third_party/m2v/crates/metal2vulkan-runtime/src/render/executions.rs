@@ -2095,6 +2095,8 @@ impl RenderExecution {
             log: None,
             quiet_bound_values: None,
             draw_commands: None,
+            uses_room: Vec::new(),
+            argument_samplers_room: Vec::new(),
             bind_memo: crate::binding::BindMemo::default(),
             last_retained: Default::default(),
         }

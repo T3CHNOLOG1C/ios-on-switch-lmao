@@ -957,8 +957,52 @@ pub(super) struct EncoderUses<K> {
 /// The uses of one part of an encoder.
 struct Part<K> {
     /// The tracked uses so far, one per range, at most [`ENTRIES_PER_KEY`] per resource.
-    tracked: HashMap<K, Vec<Use<K>>>,
+    tracked: HashMap<K, KeyUses<K>>,
     stages: vk::PipelineStageFlags2,
+}
+
+/// One resource's tracked uses in a part, in the order they were first recorded: the first held
+/// in place, as a part mostly uses a resource over one range.
+enum KeyUses<K> {
+    One(Use<K>),
+    Many(Vec<Use<K>>),
+}
+
+impl<K> KeyUses<K> {
+    fn as_slice(&self) -> &[Use<K>] {
+        match self {
+            KeyUses::One(used) => std::slice::from_ref(used),
+            KeyUses::Many(uses) => uses,
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [Use<K>] {
+        match self {
+            KeyUses::One(used) => std::slice::from_mut(used),
+            KeyUses::Many(uses) => uses,
+        }
+    }
+
+    /// Add `used` after the others.
+    fn push(&mut self, used: Use<K>) {
+        match self {
+            KeyUses::Many(uses) => uses.push(used),
+            KeyUses::One(_) => {
+                let KeyUses::One(first) = std::mem::replace(self, KeyUses::Many(Vec::new())) else {
+                    unreachable!("matched above")
+                };
+                *self = KeyUses::Many(vec![first, used]);
+            }
+        }
+    }
+
+    /// The uses, appended to `out` in order.
+    fn append_to(self, out: &mut Vec<Use<K>>) {
+        match self {
+            KeyUses::One(used) => out.push(used),
+            KeyUses::Many(uses) => out.extend(uses),
+        }
+    }
 }
 
 impl<K> Part<K> {
@@ -1025,16 +1069,28 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             .iter()
             .filter(|used| used.tracked && !used.is_nothing())
         {
-            let ranges = part.tracked.entry(used.key).or_default();
-            match ranges.iter_mut().find(|known| known.range == used.range) {
+            let ranges = match part.tracked.entry(used.key) {
+                std::collections::hash_map::Entry::Vacant(vacant) => {
+                    vacant.insert(KeyUses::One(used.clone()));
+                    continue;
+                }
+                std::collections::hash_map::Entry::Occupied(occupied) => occupied.into_mut(),
+            };
+            match ranges
+                .as_mut_slice()
+                .iter_mut()
+                .find(|known| known.range == used.range)
+            {
                 Some(known) => {
                     known.read = known.read.union(used.read);
                     known.write = known.write.union(used.write);
                 }
                 None => ranges.push(used.clone()),
             }
-            if ranges.len() > ENTRIES_PER_KEY {
-                coalesce_uses(ranges);
+            if let KeyUses::Many(ranges) = ranges {
+                if ranges.len() > ENTRIES_PER_KEY {
+                    coalesce_uses(ranges);
+                }
             }
         }
     }
@@ -1050,6 +1106,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
                 self.parts.iter().any(|part| {
                     part.tracked.get(&read.key).is_some_and(|known| {
                         known
+                            .as_slice()
                             .iter()
                             .any(|k| !k.write.is_empty() && k.range.overlaps(&read.range))
                     })
@@ -1068,7 +1125,9 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
                 self.parts.iter().any(|part| {
                     part.tracked
                         .get(&write.key)
-                        .is_some_and(|known| known.iter().any(|k| k.range.overlaps(&write.range)))
+                        .is_some_and(|known| {
+                            known.as_slice().iter().any(|k| k.range.overlaps(&write.range))
+                        })
                 })
             })
     }
@@ -1077,7 +1136,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
     pub(super) fn tracked_in(&self, stages: vk::PipelineStageFlags2) -> Vec<Use<K>> {
         self.parts
             .iter()
-            .flat_map(|part| part.tracked.values().flatten())
+            .flat_map(|part| part.tracked.values().flat_map(KeyUses::as_slice))
             .filter(|known| (known.read.stages | known.write.stages).intersects(stages))
             .cloned()
             .collect()
@@ -1090,7 +1149,7 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
             self.parts.iter().any(|part| {
                 part.tracked
                     .get(&used.key)
-                    .is_some_and(|known| known.iter().any(|k| touches(k, used, stages)))
+                    .is_some_and(|known| known.as_slice().iter().any(|k| touches(k, used, stages)))
             })
         })
     }
@@ -1149,7 +1208,10 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         let mut summaries: Vec<Summary<K>> = parts
             .into_iter()
             .map(|part| {
-                let mut uses: Vec<Use<K>> = part.tracked.into_values().flatten().collect();
+                let mut uses: Vec<Use<K>> = Vec::with_capacity(part.tracked.len());
+                for known in part.tracked.into_values() {
+                    known.append_to(&mut uses);
+                }
                 uses.sort_by_key(|used| used.key);
                 Summary {
                     uses,

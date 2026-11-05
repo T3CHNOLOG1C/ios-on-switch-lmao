@@ -1457,7 +1457,24 @@ pub(super) fn command_uses(
     index: Option<(&Buffer, u64)>,
     indirect: Option<(&Buffer, u64)>,
 ) -> Result<CommandUses, Error> {
-    let mut uses = Vec::new();
+    command_uses_in(Vec::new(), call, plan, command, tables, index, indirect)
+}
+
+/// [`command_uses`], its uses listed in `room` (emptied first): a list an earlier command's
+/// uses were in ([`CommandUses::into_room`]).
+pub(super) fn command_uses_in(
+    mut room: Vec<Use<ResourceKey>>,
+    call: &'static str,
+    plan: &BindingPlan,
+    command: &Command<'_>,
+    tables: &Tables<'_>,
+    index: Option<(&Buffer, u64)>,
+    indirect: Option<(&Buffer, u64)>,
+) -> Result<CommandUses, Error> {
+    // At most one use for each resource use of the plan and the command.
+    room.clear();
+    room.reserve(plan.uses.len() + command.uses.len());
+    let mut uses = room;
     // The keys of the buffers made resident the command reaches through the resident set, by
     // address; every other use names its resource (a descriptor, a root table's static, a view).
     // Those it names are gathered once it reaches one so: until then each use names its key.
@@ -1624,6 +1641,13 @@ impl CommandUses {
     /// The keys the command reaches through the resident set alone.
     pub(super) fn resident(&self) -> &BTreeSet<ResourceKey> {
         &self.resident
+    }
+
+    /// The list the uses were in, emptied, for a later command's ([`command_uses_in`]).
+    pub(super) fn into_room(self) -> Vec<Use<ResourceKey>> {
+        let mut uses = self.uses;
+        uses.clear();
+        uses
     }
 }
 

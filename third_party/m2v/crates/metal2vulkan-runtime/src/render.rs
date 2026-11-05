@@ -1123,6 +1123,11 @@ pub struct RenderCommandEncoder {
     quiet_bound_values: Option<QuietBoundValues>,
     /// The last draw's commands, whose lists the next draw's fill again.
     draw_commands: Option<DrawCommands>,
+    /// The list the last draw's uses were in, emptied, for the next draw's
+    /// (`binding::command_uses_in`).
+    uses_room: Vec<Use<ResourceKey>>,
+    /// The list the last draw's argument samplers were in, emptied (`Device::argument_samplers_into`).
+    argument_samplers_room: Vec<SamplerState>,
     /// The views and sampler descriptions its draws' binds made or found (`binding::BindMemo`).
     bind_memo: binding::BindMemo,
     /// What its last draw retained of its own ([`LastRetained`]).
@@ -1394,6 +1399,8 @@ impl CommandBuffer {
             log,
             quiet_bound_values: None,
             draw_commands: None,
+            uses_room: Vec::new(),
+            argument_samplers_room: Vec::new(),
             bind_memo: binding::BindMemo::default(),
             last_retained: LastRetained::default(),
         })
@@ -5845,7 +5852,10 @@ impl RenderCommandEncoder {
         let max = pipeline.base().graphics.max_vertex_amplification_count;
         // The device's sampler states, less those at IDs no set-1 sampler array of the variant
         // holds (`heap_sets::fit_samplers`).
-        let mut argument_samplers = self.core.device().argument_samplers();
+        let mut argument_samplers = std::mem::take(&mut self.argument_samplers_room);
+        self.core
+            .device()
+            .argument_samplers_into(&mut argument_samplers);
         let function_tables = pipeline.function_tables();
         let mut unlisted = None;
         let reads_tile_memory = pipeline.reads_tile_memory();
@@ -6402,7 +6412,8 @@ impl RenderCommandEncoder {
             mesh: mesh_work.as_ref().map(mesh::MeshWork::regions),
         };
         let (index, indirect) = (buffers.index.as_ref(), buffers.indirect.as_ref());
-        let mut uses = binding::command_uses(
+        let mut uses = binding::command_uses_in(
+            std::mem::take(&mut self.uses_room),
             call,
             &plan,
             &command,
@@ -7311,8 +7322,13 @@ impl RenderCommandEncoder {
         }
         if capture.is_some() {
             self.capture_uses(uses);
+        } else {
+            self.uses_room = uses.into_room();
         }
         self.draw_commands = Some(commands);
+        // The states go; the list stays for the next draw's.
+        argument_samplers.clear();
+        self.argument_samplers_room = argument_samplers;
         Ok(())
     }
 
