@@ -7,17 +7,20 @@ load("//bazel/lint:defs.bzl", "lint_files")
 
 lint_files()
 
-TESTS = glob(["test_*.py"])
+TESTS = glob(["test_*.py"], allow_empty = True)
 
 [py_test(
     name = t[:-3],
     size = "medium",
     srcs = TESTS,
-    data = glob([
-        "*.c",
-        "*.cpp",
-        "*.h",
-    ]) + [
+    data = glob(
+        [
+            "*.c",
+            "*.cpp",
+            "*.h",
+        ],
+        allow_empty = True,
+    ) + [
         "//native:all_sources",
         "//kernel:lint_sources",
         "//out/native-a57/root-v1/tree/patches:xnu-ioswitch.diff",

@@ -1,0 +1,32 @@
+# drivers/SwitchBrightness's ambient light sensor and backlight on the host, against the references they cite:
+#   als_math_test    SwitchALSMath.h against Linux bh1730.c's lux and gain steps (and the window tables, the datasheet's
+#                    scale), SwitchBacklightMath.h's panel model and marketing table as CoreBrightness and
+#                    DisplayCreateWithID use them, r7v's auto-brightness, r7w's steps through saturation
+#   als_source_test  TegraI2C.cpp's I2C2 row and pads, SwitchALS.cpp's BH1730FVC commands, the properties CoreBrightness
+#                    reads from SwitchHIDDevice.cpp and SwitchBacklight.cpp, SwitchBacklight::start's publishing order
+#
+#   bazel test //drivers/SwitchBrightness/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "als_math_test",
+    srcs = [
+        "als_math_test.cpp",
+        "//drivers/SwitchBrightness:SwitchALSMath.h",
+        "//drivers/SwitchBrightness:SwitchBacklightMath.h",
+    ],
+)
+
+host_test(
+    name = "als_source_test",
+    srcs = ["als_source_test.cpp"],
+    data = [
+        "//drivers/SwitchBrightness:SwitchALS.cpp",
+        "//drivers/SwitchBrightness:SwitchBacklight.cpp",
+        "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
+        "//drivers/TegraI2C:TegraI2C.cpp",
+    ],
+)

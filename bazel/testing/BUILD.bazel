@@ -1,0 +1,30 @@
+# What every host test shares (defs.bzl: host_test, host_library, host_shims): running a scenario in a process of its
+# own (fresh_process.h), checks that are never compiled out (require.h), reading the source a guard checks
+# (source_text.h), and checks in C test code reported through GoogleTest (c_check.h).
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "host_library")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+cc_library(
+    name = "testing",
+    testonly = True,
+    hdrs = [
+        "fresh_process.h",
+        "require.h",
+        "source_text.h",
+    ],
+    deps = ["@googletest//:gtest"],
+)
+
+# CHECK()/FAIL_C() for test code kept in C (a model built with the C flags of the code it drives): failures at the C
+# file and line, never compiled out.
+host_library(
+    name = "c_check",
+    srcs = ["c_check.cpp"],
+    hdrs = ["c_check.h"],
+    deps = ["@googletest//:gtest"],
+)
