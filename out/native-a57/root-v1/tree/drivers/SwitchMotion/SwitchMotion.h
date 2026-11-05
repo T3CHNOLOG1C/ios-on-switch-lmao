@@ -2,6 +2,7 @@
 // Nintendo Switch OLED motion sensors (6-axis IMU on SPI4) as iPadOS's accelerometer and gyroscope HID services
 // (SwitchMotion.cpp has the hardware and the iPadOS side).
 #pragma once
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -18,6 +19,11 @@ int switch_motion_start(void);
 // switch_motion_start().
 void switch_motion_suspend(void);
 void switch_motion_resume(void);
+
+// Display power (SwitchBacklight, as the panel goes off and comes on; any thread, never blocks): the orientation
+// detector runs only while the panel is lit, so with the panel off nothing converts for it. Its first stable
+// orientation after the panel comes on is announced. No-op before switch_motion_start().
+void switch_motion_display_power(bool on);
 
 #ifdef __cplusplus
 }

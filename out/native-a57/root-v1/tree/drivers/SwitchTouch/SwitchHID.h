@@ -73,10 +73,10 @@ struct __attribute__((packed)) SwitchButtonsReport {
 // (device-usage-page 0xff00, device-usage 3 and 9):
 //  * Accelerometer, Apple vendor 0xff00/0x0003: input report 1 = Sensor-page Acceleration X/Y/Z (0x0453-0x0455) in
 //    micro-g (unit exponent -6, so IOHIDEventDriver's kIOHIDEventTypeAccelerometer events carry g), feature report 1 =
-//    Sensor Report Interval (0x030e) then Report Latency (0x0316), both microseconds: IOHIDEventDriver writes a client's
-//    ReportInterval into the first and its BatchInterval (kIOHIDBatchIntervalKey) into the second, and publishes
-//    ReportLatency, so the event system hands the batch interval to the device (IOHIDFamily-2031 IOHIDEventDriver.cpp
-//    parseSensorPropertyElement, setProperties).
+//    Sensor Report Interval (0x030e) then Report Latency (0x031b), both microseconds: IOHIDEventDriver writes a
+//    client's ReportInterval into the first and its BatchInterval (kIOHIDBatchIntervalKey) into the second, and
+//    publishes ReportLatency, so the event system hands the batch interval to the device (IOHIDFamily-2031
+//    IOHIDEventDriver.cpp parseSensorPropertyElement, setProperties).
 //  * Gyroscope, Apple vendor 0xff00/0x0009: the same with Angular Velocity X/Y/Z (0x0457-0x0459) in micro-radians per
 //    second (kIOHIDEventTypeGyro in rad/s).
 //  * Device orientation, Sensor 0x20/0x008a (what CoreMotion's orientation notifier in backboardd matches): input

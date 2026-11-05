@@ -52,6 +52,26 @@ class SwitchMotionTests(unittest.TestCase):
             self.assertNotIn(wait, drain)
         self.assertLess(drain.index("icm42607::IntStatus,"), drain.index("icm42607::FifoData"))
 
+    def test_sensor_property_usages(self):
+        """The motion services' feature report carries the Sensor-page usages 21H461's IOHIDEventDriver knows: Report
+        Interval 0x30e and Report Latency 0x31b (0x316 is Reporting State, which no element takes: BatchInterval never
+        reached the driver and FIFO batching never ran before r17)."""
+        hid = (ROOT / "out/native-a57/root-v1/tree/drivers/SwitchTouch/SwitchHIDDevice.cpp").read_text()
+        motion = hid.split("#define MOTION_DESCRIPTOR", 1)[1].split("#undef MOTION_DESCRIPTOR", 1)[0]
+        self.assertIn("0x0a, 0x0e, 0x03,", motion)
+        self.assertIn("0x0a, 0x1b, 0x03,", motion)
+        self.assertNotIn("0x0a, 0x16, 0x03", motion)
+
+    def test_orientation_published(self):
+        """Every orientation, the detector batched like any client, and the panel's power followed."""
+        source = DRIVER.read_text()
+        self.assertIn("kOrientationPolicy = OrientationPolicy::All", source)
+        apply = source.split("void SwitchMotion::apply(", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("!detector)", apply)
+        self.assertIn("kOrientationBatchUS", apply)
+        backlight = (ROOT / "out/native-a57/root-v1/tree/drivers/SwitchBrightness/SwitchBacklight.cpp").read_text()
+        self.assertEqual(backlight.count("switch_motion_display_power("), 3)  # the weak default, off and on
+
 
 if __name__ == "__main__":
     unittest.main()

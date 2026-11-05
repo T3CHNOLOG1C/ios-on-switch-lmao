@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The Switch OLED's 6-axis IMU as iPadOS's accelerometer and gyroscope (CoreMotion, UIAccelerometer), and optionally its
-// device-orientation sensor (backboardd's interface rotation; kOrientationPolicy below, off).
+// The Switch OLED's 6-axis IMU as iPadOS's accelerometer and gyroscope (CoreMotion, UIAccelerometer) and its
+// device-orientation sensor (backboardd's interface rotation; kOrientationPolicy below: every orientation, since r17).
 //
 // Hardware (switchroot/LineageOS nx-platforms/tegra210-nx-sensor.dtsi imu@0 on spi@7000da00, "multi-driver" probing of
 // every part below; L4T drivers/iio/imu/st_lsm6dsx and inv_icm42600, LineageOS inv_icm42607x):
@@ -28,27 +28,40 @@
 //   * backboardd's BKOrientationManager matches {0xff00, 3} for UIAccelerometer clients. Its device orientation comes
 //     only from CoreMotion's orientation notifier, which on this hardware type (CoreMotion hwType 62) opens the AOP's
 //     device-orientation service {0x20, 0x8a} and takes kIOHIDEventTypeOrientation events (field 0xa0004 = 0x64 +
-//     UIDeviceOrientation); it logs "fHidDeviceInterface NULL" without the AOP plug-in but takes the events. With that
-//     service SpringBoard rotates the interface; without it the device orientation stays unknown and the interface
-//     stays landscape, as now.
+//     UIDeviceOrientation). Checked in 21H461's CoreMotion: CLOrientationNotifier::openHidDriverInterface looks for the
+//     AOP's plug-in (type 7ACF5332-1A35-4893-87CB-BA64E1887FAE) on the service's grandparent, which an IOHIDDevice
+//     does not have, so fHidDeviceInterface stays NULL, and onIohidEvent takes events only then (type 10, usage
+//     0x64..0x6a, orientation = usage - 0x64; anything else is logged and dropped). Its first query of the current
+//     orientation goes through that plug-in ("No reply for LastOrientation") and CoreMotion never copies the event, so
+//     a client learns the orientation only from an event after it started listening: the detector announces again
+//     (detectOrientation) whenever the console comes to rest after moving and when the panel comes on, not only on
+//     a change. Until r17 the service was not published (r7z/r8a: "usage pair {32, 138} is not ready", the device
+//     orientation unknown, the interface held landscape by a rotation lock the kernel rewrote every boot).
+//   * Third-party apps' CMMotionManager (accelerometer, gyroscope, device motion) is served by locationd over XPC
+//     (kCLConnectionMessage...), which reads these same services; SpringBoard and backboardd run CoreMotion in process.
 // Sampling: the part converts only while a client has a nonzero report interval (the services' Report Interval
-// feature, SwitchHID.h) or the orientation detector runs. The output data rate is the lowest supported rate at or above
-// the fastest request; the gyroscope's data-ready leads when it is on (both then share the rate) and each service is
-// decimated to its own interval. Each data-ready interrupt reads status and data (one SPI burst; the ICM-42607's status
-// register is apart from its data, so status first, then data), which lets the line drop.
+// feature, SwitchHID.h) or the orientation detector runs, which it does while the panel is lit
+// (switch_motion_display_power, SwitchMotion.h): with the panel off nothing converts for it and nothing wakes the CPU.
+// The output data rate is the lowest supported rate at or above the fastest request; the gyroscope's data-ready leads
+// when it is on (both then share the rate) and each service is decimated to its own interval. Each data-ready interrupt
+// reads status and data (one SPI burst; the ICM-42607's status register is apart from its data, so status first, then
+// data), which lets the line drop.
 // FIFO batching (ICM-42607, r15-offload): the services also carry a Report Latency feature (SwitchHID.h), so
 // IOHIDEventDriver hands this driver each client's BatchInterval (CoreMotion: 15 ms for the gyroscope, 20 ms for the
-// accelerometer, in r7s's logs). With batching asked for, the part fills its FIFO and raises FIFO_THS on INT2 once
-// `watermark` records are in (as many sample periods as fit in the shortest batch interval: 3 at 200 Hz for 15 ms), and
-// one interrupt drains them with one status/count burst and whole-record FIFO_DATA bursts (3 records a TegraSPI
-// transfer) instead of two transfers and an interrupt per sample. Every sample keeps its own time (switch_hid_post_at:
-// the watermark's record at the interrupt's action, the others a sample period apart), so CoreMotion integrates them as
-// before; nothing waits longer than the batch interval the client asked for. A batch interval of 0, another family, or a
-// FIFO check that fails on hardware (MCLK, the count format, the MREG1 read-back, a count or record that makes no
-// sense: one log line) keeps data-ready per sample. A 1 s watchdog, armed only
-// while converting, panics if data-ready is raised but never arrives (lost at the GPIO controller or the GIC); a part
-// that raises none, or a line that stays high without new data, turns motion off with one log line (giveUp). No polling
-// anywhere.
+// accelerometer, in r7s's logs; it reaches the device only since r17's Report Latency usage fix, SwitchHIDDevice.cpp).
+// The orientation detector batches too (kOrientationBatchUS: 5 records at 25 Hz). With batching asked for, the part
+// fills its FIFO and raises FIFO_THS on INT2 once `watermark` records are in (as many sample periods as fit in the
+// shortest batch interval: 3 at 200 Hz for 15 ms), and one interrupt drains them with one status/count burst and
+// whole-record FIFO_DATA bursts (3 records a TegraSPI transfer) instead of two transfers and an interrupt per sample.
+// Every sample keeps its own time (switch_hid_post_at: the watermark's record at the interrupt's action, the others a
+// sample period apart), so CoreMotion integrates them as before; nothing waits longer than the batch interval the
+// client asked for. A batch interval of 0, another family, or a FIFO check that fails on hardware (MCLK, the count
+// format, the MREG1 read-back, a count or record that makes no sense: one log line) keeps data-ready per sample.
+// The Joy-Cons play no part: device motion and orientation come from this IMU alone, on the rails, detached or absent
+// (a Bluetooth Joy-Con's IMU is GameController motion, GCMotion, served by gamecontrollerd from its own reports).
+// A 1 s watchdog, armed only while converting, panics if data-ready is raised but never arrives (lost at the GPIO
+// controller or the GIC); a part that raises none, or a line that stays high without new data, turns motion off with
+// one log line (giveUp). No polling anywhere.
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -62,18 +75,25 @@
 #include "../TegraSPI/TegraSPI.h"
 #include "SwitchMotion.h"
 
+extern "C" bool switch_display_is_on(void);  // ../SwitchBrightness/SwitchBacklight.cpp
+
 namespace {
 constexpr unsigned kBus = 4, kChipSelect = 0;
 constexpr uint32_t kWatchdogMS = 1000;  // with as much leeway (ioswitch_check_after_ms): no wakeup of its own
 constexpr unsigned kStuckLimit = 64;    // data-ready interrupts in a row with no new data: INT2 is stuck high
 
-// Device orientation (file comment). Off: the service is not published and the interface stays landscape as now.
+// Device orientation (file comment). Off: the service is not published (the device orientation stays unknown).
 // LandscapeOnly: face up/down and the two landscapes only (the interface can turn 180 degrees, never to portrait).
-// All: every UIDeviceOrientation, so iPadOS may rotate the interface to portrait.
+// All: every UIDeviceOrientation, as on an iPad (r17, the user's choice: the Switch rotates, and the rotation lock is
+// SpringBoard's own again, Control Center's, no longer rewritten by the kernel every boot).
 enum class OrientationPolicy { Off, LandscapeOnly, All };
-constexpr OrientationPolicy kOrientationPolicy = OrientationPolicy::Off;
+constexpr OrientationPolicy kOrientationPolicy = OrientationPolicy::All;
 constexpr uint32_t kOrientationMilliHz = 25000;  // the detector's accelerometer rate (ST 26 Hz, ICM 25 Hz)
-constexpr unsigned kOrientationStable = 10;      // consecutive samples (about 0.4 s) before a new orientation counts
+constexpr unsigned kOrientationStable = 10;      // consecutive detector samples (0.4 s) before a new orientation counts
+constexpr uint32_t kOrientationBatchUS = 200000;  // FIFO batch for the detector alone: 5 interrupts a second at 25 Hz
+// A detector sample further than this from the filtered gravity vector (micro-g) means the console is being moved;
+// kOrientationStable samples back within it, and the orientation is announced again (detectOrientation).
+constexpr int64_t kOrientationMovingMicroG = 100000;
 enum : uint8_t { Unknown, Portrait, PortraitUpsideDown, LandscapeLeft, LandscapeRight, FaceUp, FaceDown };
 
 enum Sensor : unsigned { Accel = 0, Gyro = 1 };
@@ -379,6 +399,7 @@ class SwitchMotion : public IOService {
     IOInterruptEventSource *kick = nullptr;  // no provider: a report interval changed (feature handler)
     IOTimerEventSource *watchdog = nullptr;
     IOService *hid[2] = {}, *orientationHid = nullptr;
+    bool displayLit = true;  // the panel is on (switch_motion_display_power; atomics), so the detector runs
     Channel channels[2] = {};
     const Part *part = nullptr;
     const FamilyInfo *info = nullptr;
@@ -402,9 +423,14 @@ class SwitchMotion : public IOService {
     uint64_t periodAbs = 0;       // one sample period at the current rate, in absolute time
     uint64_t lastPosted[2] = {};  // the last sample time posted per service (they only go forward)
     uint32_t drains = 0, records = 0, overflows = 0;
+    // Orientation detector (detectOrientation): its input decimated to kOrientationMilliHz, the filtered gravity
+    // vector, the orientation last announced and a candidate, and whether it was announced since the console moved.
+    bool detecting = false;
+    unsigned detectorEvery = 1, detectorCount = 0;
     int32_t gravity[3] = {};
     uint8_t orientation = Unknown, candidate = Unknown;
-    unsigned candidateCount = 0;
+    unsigned candidateCount = 0, still = 0;
+    bool announced = false;
 
     static void featureReceived(void *context, const uint8_t *report, size_t length);
     static void interruptOccurred(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -425,12 +451,14 @@ class SwitchMotion : public IOService {
     void drainFifo(uint64_t now);
     void post(Sensor sensor, const int16_t raw[3], uint64_t now);
     void detectOrientation(const int32_t accel[3]);
+    void announce(uint8_t which);
 
 public:
     bool start(IOService *provider) override;
     void free() override;
     void suspend();
     void resume();
+    void displayPower(bool lit);
 };
 
 OSDefineMetaClassAndStructors(SwitchMotion, IOService)
@@ -690,13 +718,22 @@ void SwitchMotion::giveUp()
     on[Accel] = on[Gyro] = false;
 }
 
-// Work loop: the clients' intervals (and the orientation detector) to a rate, sensors, routing and decimation.
+// Work loop: the clients' intervals (and the orientation detector, while the panel is lit) to a rate, sensors, routing
+// and decimation.
 void SwitchMotion::apply()
 {
     if (suspended || broken) return;
     uint32_t interval[2];
     for (unsigned s = 0; s < 2; ++s) interval[s] = __atomic_load_n(&intervalUS[s], __ATOMIC_ACQUIRE);
-    const bool detector = kOrientationPolicy != OrientationPolicy::Off;
+    const bool detector = orientationHid && __atomic_load_n(&displayLit, __ATOMIC_ACQUIRE);
+    if (detector != detecting) {
+        // Starts afresh each time: a new filter, nothing announced, so the first stable orientation is announced.
+        detecting = detector;
+        memset(gravity, 0, sizeof(gravity));
+        orientation = candidate = Unknown;
+        candidateCount = still = detectorCount = 0;
+        announced = false;
+    }
     const bool want[2] = {interval[Accel] != 0 || detector, interval[Gyro] != 0};
     uint32_t need = detector ? kOrientationMilliHz : 0;
     for (unsigned s = 0; s < 2; ++s) {
@@ -705,14 +742,14 @@ void SwitchMotion::apply()
     }
     unsigned next = 0;
     while (next + 1 < 5 && info->rates[next].milliHz < need) ++next;
-    // FIFO batching (file comment): the shortest batch interval among the sensors a client wants; none for the
-    // orientation detector, which has no client to batch for.
+    // FIFO batching (file comment): the shortest batch interval among the sensors a client wants and the detector's.
     unsigned fifoWatermark = 1;
     uint32_t batch = 0;
-    if (part->family == Family::ICM42607 && timedPosts && !fifoOff && !detector) {
-        bool seen = false;
+    if (part->family == Family::ICM42607 && timedPosts && !fifoOff) {
+        bool seen = detector;
+        if (detector) batch = kOrientationBatchUS;
         for (unsigned s = 0; s < 2; ++s) {
-            if (!want[s]) continue;
+            if (!interval[s]) continue;
             const uint32_t b = __atomic_load_n(&batchUS[s], __ATOMIC_ACQUIRE);
             if (!seen || b < batch) batch = b;
             seen = true;
@@ -762,6 +799,8 @@ void SwitchMotion::apply()
         every[s] = perReport > 1 ? (unsigned)perReport : 1;
         count[s] = 0;
     }
+    const uint32_t perDetector = info->rates[rate].milliHz / kOrientationMilliHz;
+    detectorEvery = perDetector > 1 ? perDetector : 1;
 }
 
 // One trusted sample to its HID service (deviceReport has the frames). The boot's first accelerometer sample is logged
@@ -779,7 +818,8 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
               "-1000; upright: x near +1000)\n",
               part->name, raw[0], raw[1], raw[2], report.x / 1000, report.y / 1000, report.z / 1000);
     }
-    if (sensor == Accel && kOrientationPolicy != OrientationPolicy::Off) {
+    if (sensor == Accel && detecting && ++detectorCount >= detectorEvery) {
+        detectorCount = 0;
         const int32_t vector[3] = {report.x, report.y, report.z};
         detectOrientation(vector);
     }
@@ -795,12 +835,25 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
     }
 }
 
-// The AOP's device orientation from the gravity vector (micro-g, device frame), with the tilt and hysteresis margins
-// Apple's documentation describes: face up/down within 25 degrees of flat (leaving it past 35), portrait against
-// landscape 10 degrees past the diagonal, nothing while the device is accelerating, and 0.4 s of agreement.
+// The AOP's device orientation from the gravity vector (micro-g, device frame; kOrientationMilliHz samples), with the
+// tilt and hysteresis margins Apple's documentation describes: face up/down within 25 degrees of flat (leaving it past
+// 35), portrait against landscape 10 degrees past the diagonal, nothing while the device is accelerating, and 0.4 s of
+// agreement. A new orientation is announced at once; an unchanged one again once the console is still after it moved
+// (kOrientationMovingMicroG), since a client hears only events sent after it started listening (file comment).
 void SwitchMotion::detectOrientation(const int32_t accel[3])
 {
-    for (unsigned i = 0; i < 3; ++i) gravity[i] += (accel[i] - gravity[i]) / 4;
+    int64_t moved = 0;
+    for (unsigned i = 0; i < 3; ++i) {
+        const int64_t d = (int64_t)accel[i] - gravity[i];
+        moved += d * d;
+        gravity[i] += (accel[i] - gravity[i]) / 4;
+    }
+    if (moved > kOrientationMovingMicroG * kOrientationMovingMicroG) {
+        still = 0;
+        announced = false;
+    } else if (still < kOrientationStable) {
+        ++still;
+    }
     const int64_t x2 = (int64_t)gravity[0] * gravity[0], y2 = (int64_t)gravity[1] * gravity[1],
                   z2 = (int64_t)gravity[2] * gravity[2], n2 = x2 + y2 + z2;
     if (n2 < 562500000000ll || n2 > 1562500000000ll) return;  // |g| outside 0.75 .. 1.25 g
@@ -822,6 +875,7 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
     }
     if (next == orientation) {
         candidateCount = 0;
+        if (orientation != Unknown && !announced && still >= kOrientationStable) announce(orientation);
         return;
     }
     if (next != candidate) {
@@ -829,10 +883,22 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
         candidateCount = 0;
     }
     if (++candidateCount < kOrientationStable) return;
-    orientation = next;
     candidateCount = 0;
-    const SwitchOrientationReport report = {1, (uint8_t)(1u << orientation)};
+    static const char *const names[] = {
+        "unknown", "portrait", "portrait upside down", "landscape left", "landscape right", "face up", "face down"};
+    os_log(OS_LOG_DEFAULT, "SwitchMotion: orientation %s (%u), was %s", names[next], next, names[orientation]);
+    orientation = next;
+    announce(next);
+}
+
+// Work loop: one kIOHIDEventTypeOrientation event for `which`. IOHIDEventDriver makes one only for a bit that goes from
+// 0 to 1, so every bit is cleared first (that report makes none), which lets an unchanged orientation be sent again.
+void SwitchMotion::announce(uint8_t which)
+{
+    const SwitchOrientationReport none = {1, 0}, report = {1, (uint8_t)(1u << which)};
+    (void)switch_hid_post(orientationHid, &none, sizeof(none));
     (void)switch_hid_post(orientationHid, &report, sizeof(report));
+    announced = true;
 }
 
 // Work loop, PX2 masked until return: status and data, which releases the latched data-ready.
@@ -1047,6 +1113,7 @@ bool SwitchMotion::start(IOService *provider)
         switch_hid_set_feature_handler(hid[s], &SwitchMotion::featureReceived, &channels[s]);
     }
     if (kOrientationPolicy != OrientationPolicy::Off) orientationHid = switch_hid_create(kSwitchHIDOrientation);
+    __atomic_store_n(&displayLit, switch_display_is_on(), __ATOMIC_RELEASE);
     // FIFO batching needs every sample's own time on its HID report (SwitchHID.h switch_hid_post_at).
     timedPosts = switch_hid_supports_timestamps(hid[Accel]) && switch_hid_supports_timestamps(hid[Gyro]);
     if (part->family == Family::ICM42607 && !timedPosts) {
@@ -1056,7 +1123,7 @@ bool SwitchMotion::start(IOService *provider)
     }
     setProperty("IMU", part->name);
     registerService();
-    kick->interruptOccurred(nullptr, nullptr, 0);  // the orientation detector, when it is on
+    kick->interruptOccurred(nullptr, nullptr, 0);  // the orientation detector, with the panel lit
     IOLog("SwitchMotion: started (%s on SPI4, data-ready on PX2)\n", part->name);
     return true;
 }
@@ -1112,6 +1179,13 @@ void SwitchMotion::resume()
         this);
 }
 
+// SwitchBacklight's thread (switch_motion_display_power): store and kick, never wait.
+void SwitchMotion::displayPower(bool lit)
+{
+    __atomic_store_n(&displayLit, lit, __ATOMIC_RELEASE);
+    kick->interruptOccurred(nullptr, nullptr, 0);
+}
+
 namespace {
 SwitchMotion *volatile gMotion;
 }
@@ -1142,4 +1216,9 @@ extern "C" void switch_motion_suspend(void)
 extern "C" void switch_motion_resume(void)
 {
     if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE)) motion->resume();
+}
+
+extern "C" void switch_motion_display_power(bool on)
+{
+    if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE)) motion->displayPower(on);
 }

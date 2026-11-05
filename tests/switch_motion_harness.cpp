@@ -45,7 +45,7 @@ struct Chip {
     virtual void write(uint8_t reg, uint8_t value) = 0;
     virtual bool stays(uint8_t) const { return false; }  // a burst read that does not advance (FIFO_DATA)
     virtual void endTransfer() {}                        // chip select released
-    virtual bool line() const = 0;  // INT2, which drives PX2
+    virtual bool line() const = 0;                       // INT2, which drives PX2
     virtual void produce(const int16_t accel[3], const int16_t gyro[3]) = 0;  // the next output data rate tick
     void fail(const std::string &why) { errors.push_back(why); }
 };
@@ -77,10 +77,10 @@ struct Icm42607 : Chip {
     void resetValues()
     {
         memset(r, 0, sizeof(r));
-        const uint8_t reset[][2] = {{0x00, 0x08}, {0x01, 0x04}, {0x03, 0x2b}, {0x04, 0x0d}, {0x05, 0x05}, {0x09, 0x80},
-                                    {0x20, 0x06}, {0x21, 0x06}, {0x23, 0x31}, {0x24, 0x41}, {0x25, 0x08}, {0x26, 0x02},
-                                    {0x28, 0x01}, {0x2b, 0x10}, {0x34, 0x04}, {0x35, 0x30}, {0x36, 0x4d}, {0x3a, 0x10},
-                                    {0x3f, 0xff}};
+        const uint8_t reset[][2] = {{0x00, 0x08}, {0x01, 0x04}, {0x03, 0x2b}, {0x04, 0x0d}, {0x05, 0x05},
+                                    {0x09, 0x80}, {0x20, 0x06}, {0x21, 0x06}, {0x23, 0x31}, {0x24, 0x41},
+                                    {0x25, 0x08}, {0x26, 0x02}, {0x28, 0x01}, {0x2b, 0x10}, {0x34, 0x04},
+                                    {0x35, 0x30}, {0x36, 0x4d}, {0x3a, 0x10}, {0x3f, 0xff}};
         for (const auto &v : reset) r[v[0]] = v[1];
         for (uint8_t a = 0x0b; a <= 0x16; a += 2) r[a] = 0x80;  // -32768: no data
         r[0x75] = who;
@@ -186,14 +186,14 @@ struct Icm42607 : Chip {
             r[reg] = value;
             return;
         }
-        default:
-            r[reg] = value;
+        default: r[reg] = value;
         }
     }
     bool line() const override
     {
         const bool latched = (r[0x06] & 0x38) == 0x38;
-        return stuck || ((r[0x2d] & 0x08) && (r[0x39] & 1) && latched) || ((r[0x2d] & 0x04) && (r[0x3a] & 0x04) && latched);
+        return stuck || ((r[0x2d] & 0x08) && (r[0x39] & 1) && latched) ||
+               ((r[0x2d] & 0x04) && (r[0x3a] & 0x04) && latched);
     }
     void produce(const int16_t accel[3], const int16_t gyro[3]) override
     {
@@ -226,8 +226,8 @@ struct Icm40607 : Chip {
     void resetValues()
     {
         memset(r, 0, sizeof(r));
-        const uint8_t reset[][2] = {{0x13, 0x05}, {0x2d, 0x10}, {0x4c, 0x30}, {0x4f, 0x06}, {0x50, 0x06},
-                                    {0x64, 0x10}, {0x65, 0x10}, {0x75, 0x38}};
+        const uint8_t reset[][2] = {{0x13, 0x05}, {0x2d, 0x10}, {0x4c, 0x30}, {0x4f, 0x06},
+                                    {0x50, 0x06}, {0x64, 0x10}, {0x65, 0x10}, {0x75, 0x38}};
         for (const auto &v : reset) r[v[0]] = v[1];
         for (uint8_t a = 0x1f; a <= 0x2a; a += 2) r[a] = 0x80;
     }
@@ -239,8 +239,8 @@ struct Icm40607 : Chip {
     }
     void write(uint8_t reg, uint8_t value) override
     {
-        const bool writable = reg == 0x11 || reg == 0x13 || reg == 0x14 || reg == 0x16 || (reg >= 0x4c && reg <= 0x50) ||
-                              (reg >= 0x63 && reg <= 0x68) || reg == 0x76;
+        const bool writable = reg == 0x11 || reg == 0x13 || reg == 0x14 || reg == 0x16 ||
+                              (reg >= 0x4c && reg <= 0x50) || (reg >= 0x63 && reg <= 0x68) || reg == 0x76;
         if (!writable) return fail("write of " + hex(value) + " to read-only/unlisted " + hex(reg));
         if (reg == 0x11 && (value & 1)) return resetValues();
         r[reg] = value;
@@ -299,9 +299,18 @@ struct UnknownPart : Chip {
 
 // --- Kernel interfaces the driver calls -------------------------------------------------------------------------------
 static unsigned gSpiSuspends = 0, gSpiResumes = 0;
-extern "C" int tegra_spi_init(unsigned bus) { return bus == 4 ? 0 : -1; }
-extern "C" void tegra_spi_suspend(unsigned bus) { gSpiSuspends += bus == 4; }
-extern "C" void tegra_spi_resume(unsigned bus) { gSpiResumes += bus == 4; }
+extern "C" int tegra_spi_init(unsigned bus)
+{
+    return bus == 4 ? 0 : -1;
+}
+extern "C" void tegra_spi_suspend(unsigned bus)
+{
+    gSpiSuspends += bus == 4;
+}
+extern "C" void tegra_spi_resume(unsigned bus)
+{
+    gSpiResumes += bus == 4;
+}
 extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *txv, void *rxv, size_t len)
 {
     assert(bus == 4 && cs == 0 && txv && len >= 2 && len <= TEGRA_SPI_MAX_TRANSFER);
@@ -343,12 +352,21 @@ int ioswitch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
     return timer->setTimeoutMS(ms);
 }
 
+// SwitchBacklight's panel state (switch_display_is_on): off unless a scenario lights it, so the orientation detector
+// stays out of the scenarios written before it ran (r17).
+static bool gDisplayLit = false;
+extern "C" bool switch_display_is_on(void)
+{
+    return gDisplayLit;
+}
+
 struct HidDevice : IOService {
     SwitchHIDKind kind = kSwitchHIDTouch;
     SwitchHIDFeatureHandler handler = nullptr;
     void *context = nullptr;
     std::vector<SwitchMotionReport> reports;
-    std::vector<uint64_t> times;  // switch_hid_post_at's sample times (0: switch_hid_post)
+    std::vector<uint64_t> times;        // switch_hid_post_at's sample times (0: switch_hid_post)
+    std::vector<uint8_t> orientations;  // the device orientation service's reports (their bit masks)
 };
 static bool gTimedPosts = true;  // switch_hid_supports_timestamps
 static std::vector<HidDevice *> gHid;
@@ -361,6 +379,14 @@ IOService *switch_hid_create(SwitchHIDKind kind)
 }
 IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
 {
+    if (static_cast<HidDevice *>(device)->kind == kSwitchHIDOrientation) {
+        assert(length == sizeof(SwitchOrientationReport));
+        SwitchOrientationReport copy;
+        memcpy(&copy, report, sizeof(copy));
+        assert(copy.id == 1);
+        static_cast<HidDevice *>(device)->orientations.push_back(copy.orientation);
+        return kIOReturnSuccess;
+    }
     assert(length == sizeof(SwitchMotionReport));
     SwitchMotionReport copy;
     memcpy(&copy, report, sizeof(copy));
@@ -492,15 +518,16 @@ static void teardown()
     gLog.clear();
     gChip = nullptr;
     gTimedPosts = true;
+    gDisplayLit = false;
 }
 
 // What start() sends an ICM-42607 after identifying it: reset (TDK inv_imu_device_reset), interface and INT2 set-up,
 // then both sensors off at the lowest rate (12.5 Hz: ODR 12, 16 Hz filter).
 static const std::vector<std::string> k42607Start = {
-    "R 75",    "R 0f",                                       // identify, nothing written first
-    "W 7c 00", "W 79 00", "W 02 10", "W 01 04", "R 3a",      // reset, 4-wire restated, RESET_DONE
-    "R 36",    "W 36 41", "W 05 05", "R 35",    "W 35 73",   // I3C off + PLL, SPI slew, I2C off, big-endian, records
-    "W 06 38", "W 2b 00",                                    // INT2 latched push-pull high; INT1 nothing
+    "R 75",    "R 0f",                                      // identify, nothing written first
+    "W 7c 00", "W 79 00", "W 02 10", "W 01 04", "R 3a",     // reset, 4-wire restated, RESET_DONE
+    "R 36",    "W 36 41", "W 05 05", "R 35",    "W 35 73",  // I3C off + PLL, SPI slew, I2C off, big-endian, records
+    "W 06 38", "W 2b 00",                                   // INT2 latched push-pull high; INT1 nothing
     "W 2d 00", "W 20 0c", "W 21 2c", "W 23 37", "W 24 47", "W 1f 00",  // off
 };
 
@@ -569,7 +596,8 @@ static void decodeAndMapping()
     check(!decodeFifoRecord(record, accel, gyro, fresh), "decodeFifoRecord: a 20-byte record");
     // Watermarks: whole sample periods inside the batch interval, 1 for none, capped.
     check(watermarkFor(15000, 5000) == 3 && watermarkFor(20000, 20000) == 1 && watermarkFor(0, 5000) == 1 &&
-              watermarkFor(15000, 10000) == 1 && watermarkFor(1000000, 5000) == 24 && watermarkFor(1000000, 20000) == 12,
+              watermarkFor(15000, 10000) == 1 && watermarkFor(1000000, 5000) == 24 &&
+              watermarkFor(1000000, 20000) == 12,
           "watermarkFor: 15 ms at 200 Hz = 3; caps at 24 records and 250 ms");
 }
 
@@ -604,9 +632,10 @@ static void icm42607Session()
     check(deliver() == 1, "42607: third sample");
     gChip->ops.clear();
     expectReports(kSwitchHIDAccelerometer, 2, 24414, -48828, -1000000, "42607 accel reports");
-    expectLog("IOLog: SwitchMotion: ICM-42607-P first accelerometer sample: raw 100 -200 4096, device frame 24 -48 -1000 "
-              "mg (face up: z near -1000; upright: x near +1000)",
-              "42607 first sample");
+    expectLog(
+        "IOLog: SwitchMotion: ICM-42607-P first accelerometer sample: raw 100 -200 4096, device frame 24 -48 -1000 "
+        "mg (face up: z near -1000; upright: x near +1000)",
+        "42607 first sample");
     unsigned firstLines = 0;
     for (const std::string &l : gLog) firstLines += l.find("first accelerometer sample") != std::string::npos;
     check(firstLines == 1, "42607: the first sample is logged once");
@@ -722,8 +751,7 @@ static void icm42607Faults()
         Icm42607 chip;
         chip.resetBroken = true;
         check(!start(chip), "reset fails: not started");
-        expectOps({"R 75", "R 0f", "W 7c 00", "W 79 00", "W 02 10", "W 01 04", "R 3a", "R 01", "R 75"},
-                  "reset fails");
+        expectOps({"R 75", "R 0f", "W 7c 00", "W 79 00", "W 02 10", "W 01 04", "R 3a", "R 01", "R 75"}, "reset fails");
         expectLog("IOLog: SwitchMotion: off: ICM-42607-P software reset did not complete (INT_STATUS 0, DEVICE_CONFIG "
                   "0x4, WHO_AM_I now 0x60)",
                   "reset fails");
@@ -754,8 +782,8 @@ static void icm42607Faults()
 // batch interval goes; and the checks that keep data-ready.
 static void icm42607Fifo()
 {
-    const std::vector<std::string> fifo3 = {"R 00", "R 35", "W 28 01", "W 29 03", "W 2a 00", "W 7a 01",
-                                            "W 7b 23", "W 7d 01", "R 7e", "W 28 00", "W 2d 04"};
+    const std::vector<std::string> fifo3 = {"R 00",    "R 35",    "W 28 01", "W 29 03", "W 2a 00", "W 7a 01",
+                                            "W 7b 23", "W 7d 01", "R 7e",    "W 28 00", "W 2d 04"};
     const int16_t accel[3] = {100, -200, 4096}, gyro[3] = {164, -328, 16};
     {
         Icm42607 chip;
@@ -765,8 +793,9 @@ static void icm42607Fifo()
         std::vector<std::string> want = {"W 2d 00", "W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0c"};
         want.insert(want.end(), fifo3.begin(), fifo3.end());
         expectOps(want, "FIFO gyro 200 Hz, 15 ms batches: sensors, then the FIFO from empty, then FIFO_THS on INT2");
-        expectLog("os_log: SwitchMotion: 200000 mHz, accel 0 (0 us), gyro 1 (5000 us), batch 15000 us, FIFO watermark 3",
-                  "FIFO gyro");
+        expectLog(
+            "os_log: SwitchMotion: 200000 mHz, accel 0 (0 us), gyro 1 (5000 us), batch 15000 us, FIFO watermark 3",
+            "FIFO gyro");
         gNow += 80000000;  // past the gyroscope's settle time
         chip.produce(accel, gyro);
         gNow += 5000000;
@@ -837,9 +866,10 @@ static void icm42607Fifo()
         expectOps({"W 2d 00", "W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0c", "R 00", "R 35", "W 28 01",
                    "W 29 03", "W 2a 00", "W 7a 01", "W 7b 23", "W 7d 01", "R 7e", "W 2d 08"},
                   "MREG: read back differs, data-ready routed");
-        expectLog("IOLog: SwitchMotion: ICM-42607-P FIFO batching off for this boot (FIFO_CONFIG5 (MREG1) read back 0x20 "
-                  "after writing 0x23); data-ready per sample as before",
-                  "MREG");
+        expectLog(
+            "IOLog: SwitchMotion: ICM-42607-P FIFO batching off for this boot (FIFO_CONFIG5 (MREG1) read back 0x20 "
+            "after writing 0x23); data-ready per sample as before",
+            "MREG");
         setFeature(kSwitchHIDAccelerometer, 20000, 20000);
         expectOps({"W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0f", "W 2d 08"}, "MREG: no FIFO for the boot");
         expectClean("MREG");
@@ -897,6 +927,101 @@ static void icm40607Session()
     teardown();
 }
 
+// The orientation detector (r17, SwitchMotion.cpp file comment): with the panel lit the accelerometer runs at 25 Hz for
+// it alone, in 5-record FIFO batches. A stable orientation is announced (a report with no bit, then its bit, so that
+// IOHIDEventDriver makes an event even when it is unchanged), again once the console comes to rest after moving, and a
+// new one as soon as it has held 0.4 s; with a client at 200 Hz the detector still sees 25 Hz. Panel off: nothing
+// converts. Panel on: the detector starts afresh and announces its first stable orientation.
+static void icm42607Orientation()
+{
+    const unsigned landscapeRight = 1u << 4, landscapeLeft = 1u << 3, portrait = 1u << 1;
+    gDisplayLit = true;
+    Icm42607 chip;
+    check(start(chip), "orientation: started");
+    check(hid(kSwitchHIDOrientation) != nullptr, "orientation: the {0x20, 0x8a} service is published");
+    const std::vector<std::string> fifo5 = {"R 00",    "R 35",    "W 28 01", "W 29 05", "W 2a 00", "W 7a 01",
+                                            "W 7b 23", "W 7d 01", "R 7e",    "W 28 00", "W 2d 04"};
+    std::vector<std::string> want = k42607Start;
+    for (const char *op : {"W 2d 00", "W 20 0b", "W 21 2b", "W 23 37", "W 24 47", "W 1f 03"}) want.push_back(op);
+    want.insert(want.end(), fifo5.begin(), fifo5.end());
+    expectOps(want, "orientation: the accelerometer alone at 25 Hz, 5-record FIFO batches, FIFO_THS on INT2");
+    expectLog("os_log: SwitchMotion: 25000 mHz, accel 1 (0 us), gyro 0 (0 us), batch 200000 us, FIFO watermark 5",
+              "orientation start");
+    const std::vector<uint8_t> &announced = hid(kSwitchHIDOrientation)->orientations;
+    const int16_t none[3] = {};
+    // Ticks of the accelerometer at its 25 Hz (40 ms apart), each FIFO_THS delivered: `raw` in the part's axes.
+    const auto run = [&](const int16_t raw[3], unsigned ticks) {
+        for (unsigned i = 0; i < ticks; ++i) {
+            gNow += 40000000;
+            chip.produce(raw, none);
+            deliver();
+        }
+        gChip->ops.clear();
+    };
+    // Handheld landscape, the panel's top on the user's right: gravity along the portrait panel's +X (device frame
+    // (raw x, raw y, -raw z), SwitchMotion.cpp deviceReport), UIDeviceOrientationLandscapeRight.
+    const int16_t handheld[3] = {4096, 0, 0}, upright[3] = {0, -4096, 0}, flipped[3] = {-4096, 0, 0};
+    const int16_t jolt[3] = {4096, 2048, 0};
+    run(handheld, 5);
+    check(announced.empty(), "orientation: nothing before the filter settles and 0.4 s agree");
+    run(handheld, 15);
+    check(announced == std::vector<uint8_t>({0, (uint8_t)landscapeRight}),
+          "orientation: landscape right announced once, cleared first");
+    expectLog("os_log: SwitchMotion: orientation landscape right (4), was unknown", "orientation first");
+    run(handheld, 25);
+    check(announced.size() == 2, "orientation: nothing more while it stays still");
+    run(jolt, 1);
+    run(handheld, 5);
+    check(announced.size() == 2, "orientation: not while it settles after a jolt");
+    run(handheld, 10);
+    check(announced == std::vector<uint8_t>({0, (uint8_t)landscapeRight, 0, (uint8_t)landscapeRight}),
+          "orientation: the same orientation announced again once it is still after moving");
+    run(upright, 30);
+    check(announced.size() == 6 && announced[4] == 0 && announced[5] == portrait,
+          "orientation: held upright, portrait announced");
+    expectLog("os_log: SwitchMotion: orientation portrait (1), was landscape right", "orientation portrait");
+
+    // A client at 200 Hz (gyroscope, 15 ms batches): one rate for both, the detector decimated 8:1 to 25 Hz.
+    setFeature(kSwitchHIDGyro, 5000, 15000);
+    gChip->ops.clear();
+    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (0 us), gyro 1 (5000 us), batch 15000 us, FIFO watermark 3",
+              "orientation with a gyroscope client");
+    const int16_t spin[3] = {0, 0, 0};
+    const auto fast = [&](const int16_t raw[3], unsigned ticks) {
+        for (unsigned i = 0; i < ticks; ++i) {
+            gNow += 5000000;
+            chip.produce(raw, spin);
+            deliver();
+        }
+        gChip->ops.clear();
+    };
+    fast(flipped, 80);  // 0.4 s at 200 Hz: 10 detector samples, too few for the filter and 0.4 s of agreement
+    check(announced.size() == 6, "orientation: at 200 Hz the detector still needs about 0.4 s at 25 Hz");
+    fast(flipped, 80);
+    check(announced.size() == 8 && announced[7] == landscapeLeft, "orientation: turned over, landscape left");
+    setFeature(kSwitchHIDGyro, 0, 0);
+    gChip->ops.clear();
+
+    // Panel off: nothing converts, the FIFO is bypassed; no orientation reports.
+    switch_motion_display_power(false);
+    expectOps({"W 2d 00", "W 20 0c", "W 21 2c", "W 23 37", "W 24 47", "W 1f 00", "W 28 01"},
+              "orientation: panel off, the part off");
+    expectLog("os_log: SwitchMotion: off", "orientation panel off");
+    check(!dataReady()->enabled && !IOTimerEventSource::last->armed,
+          "orientation: panel off, no interrupt, no watchdog");
+    // Panel on: afresh, the first stable orientation announced although it did not change.
+    switch_motion_display_power(true);
+    gChip->ops.clear();
+    gNow += 30000000;
+    run(flipped, 20);
+    check(announced.size() == 10 && announced[8] == 0 && announced[9] == landscapeLeft,
+          "orientation: panel on, landscape left announced again");
+    switch_motion_display_power(false);
+    gChip->ops.clear();
+    expectClean("orientation");
+    teardown();
+}
+
 static void lsm6ds3hSession()
 {
     Lsm6ds3h chip;
@@ -924,6 +1049,7 @@ int main()
     icm42607LeftRunning();
     icm42607Faults();
     icm42607Fifo();
+    icm42607Orientation();
     icm40607Session();
     lsm6ds3hSession();
     if (gFailures) {

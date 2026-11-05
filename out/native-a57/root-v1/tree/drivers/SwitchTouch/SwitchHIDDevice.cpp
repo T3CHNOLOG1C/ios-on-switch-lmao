@@ -103,8 +103,12 @@ const uint8_t kTemperatureDescriptor[] = {
 
 // Motion sensors (SwitchHID.h): Apple vendor top-level collection, input report 1 = three Sensor-page values, 32-bit
 // signed, in 10^-6 of the unit IOHIDEventDriver's event carries (physical range = logical range, unit exponent -6, so
-// getScaledFixedValue gives g or rad/s in 16.16); feature report 1 = Sensor Report Interval and Report Latency (the
-// batch interval), microseconds, so the feature handler receives both (SwitchHID.h).
+// getScaledFixedValue gives g or rad/s in 16.16); feature report 1 = Sensor Report Interval (0x030e) and Report Latency
+// (0x031b, the batch interval), microseconds, so the feature handler receives both (SwitchHID.h). The usages are the
+// ones 21H461's IOHIDEventDriver::parseSensorPropertyElement compares (0x30e Report Interval, 0x31a Maximum FIFO
+// Events, 0x31b Report Latency, in its IOHIDFamily kext): until r17 the latency was 0x0316, the Sensor page's Reporting
+// State, which the driver does not know, so no element took BatchInterval and FIFO batching never ran (every r7z/r8a
+// SwitchMotion line: "batch 0 us").
 #define MOTION_DESCRIPTOR(usage, x)                                                                                  \
     0x06, 0x00, 0xff, 0x09, usage, 0xa1, 0x01, 0x85, 0x01, /* Apple vendor: usage, Collection (Application), ID 1 */ \
         0x05, 0x20, 0x0a, x, 0x04, 0x0a, x + 1, 0x04, 0x0a, x + 2, 0x04, /* Sensor: X, Y, Z */                       \
@@ -113,7 +117,7 @@ const uint8_t kTemperatureDescriptor[] = {
         0x55, 0x0a, 0x75, 0x20, 0x95, 0x03, 0x81, 0x02,                  /* Unit Exponent -6, 3 x 32 bits, Input */  \
         0x0a, 0x0e, 0x03, 0x15, 0x00, 0x35, 0x00, 0x55, 0x00,            /* Report Interval, 0 .., exponent 0 */     \
         0x95, 0x01, 0xb1, 0x02,                                          /* 1 x 32 bits, Feature */                  \
-        0x0a, 0x16, 0x03, 0xb1, 0x02,                                    /* Report Latency: 1 x 32 bits, Feature */  \
+        0x0a, 0x1b, 0x03, 0xb1, 0x02,                                    /* Report Latency: 1 x 32 bits, Feature */  \
         0xc0
 const uint8_t kAccelerometerDescriptor[] = {
     MOTION_DESCRIPTOR(0x03, 0x53)};                                 // Accelerometer; Acceleration Axis X 0x0453

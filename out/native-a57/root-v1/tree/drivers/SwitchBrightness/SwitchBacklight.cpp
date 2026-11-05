@@ -107,6 +107,8 @@ extern "C" __attribute__((weak)) bool native_legacy_display_set_scanout(bool)
 
 // SwitchTouch's strong definition wins when it is linked (SwitchTouch.h).
 extern "C" __attribute__((weak)) void switch_touch_display_power(bool) {}
+// SwitchMotion's likewise (SwitchMotion.h): its orientation detector runs only while the panel is lit.
+extern "C" __attribute__((weak)) void switch_motion_display_power(bool) {}
 
 namespace {
 using namespace switch_backlight;
@@ -311,6 +313,7 @@ void SwitchBacklight::powerOff()
     switch_als_set_active(false);
     const uint64_t als = mach_absolute_time();
     switch_touch_display_power(false);
+    switch_motion_display_power(false);  // stores and kicks its work loop, never waits
     const uint64_t touch = mach_absolute_time();
     const int err = tegra_panel_power_off();
     if (err) IOLog("SwitchBacklight: panel off failed (%d): the display is not running\n", err);
@@ -347,6 +350,7 @@ void SwitchBacklight::powerOn()
     gDisplayOn = true;
     switch_als_set_active(true);  // last: frame ends run again, and LDO6 came back with the touch panel meanwhile
     switch_wake_display(true);
+    switch_motion_display_power(true);
     switch_power_journal("SwitchBacklight: display on in %llu ms (touch %llu, scanout %llu, panel %llu %s, als %llu; "
                          "level %d)",
                          msSince(start), msBetween(start, touch), msBetween(touch, scanout), msBetween(scanout, panel),
