@@ -35,7 +35,8 @@ load("@rules_cc//cc/toolchains:cc_toolchain_config_info.bzl", "CcToolchainConfig
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
 load("//kernel/rules:layout.bzl", "compat_prefix_maps")
 load("//kernel/rules:sdk.bzl", "KernelSdkInfo")
-load(":recipes.bzl", "RECIPES")
+load(":recipes.bzl", DEVELOPMENT_RECIPES = "RECIPES")
+load(":recipes_release.bzl", RELEASE_RECIPES = "RECIPES")
 
 PATH_ROOT = "/ioswitch"
 
@@ -134,7 +135,18 @@ def _impl(ctx):
         feature(name = "apple_clang_only", enabled = True),
         feature(name = "kernel_env", enabled = True, env_sets = env),
     ]
-    for name, recipe in RECIPES.items():
+
+    # Another config's recipes on the SDK's headers would compile drivers against that kernel's structure layouts.
+    config = "RELEASE" if ctx.attr._profile[BuildSettingInfo].value == "release" else "DEVELOPMENT"
+    if sdk.kernel_config != config:
+        fail("{}: the {} recipes against the {} SDK ({}): the profile and the SDK's XNU config disagree".format(
+            ctx.label,
+            config,
+            sdk.kernel_config,
+            ctx.attr.sdk.label,
+        ))
+    recipes = RELEASE_RECIPES if config == "RELEASE" else DEVELOPMENT_RECIPES
+    for name, recipe in recipes.items():
         language = _LANGUAGE[name]
         actions = _CXX if language == "cxx" else _C
         features.append(feature(
@@ -151,6 +163,15 @@ def _impl(ctx):
             requires = [feature_set(features = ["kernel_" + name, "apple_clang_only"])],
             flag_sets = [flag_set(actions = actions, flag_groups = _flags(expand(recipe.apple)))],
         ))
+        if [f for f in recipe.flags + recipe.apple if f.startswith("-flto")]:
+            # XNU's CFLAGS_NOLTO_FLAG (-fno-lto; BUILT_LTO=1 stays): driver objects are never part of XNU's LTO (their
+            # archives link after its PRE_LTO step), and the late objects' llvm-objcopy and the ABI checks need Mach-O.
+            features.append(feature(
+                name = "kernel_{}_nolto".format(name),
+                enabled = True,
+                requires = [feature_set(features = ["kernel_" + name])],
+                flag_sets = [flag_set(actions = actions, flag_groups = _flags(["-fno-lto"]))],
+            ))
 
     # cmake/XnuRecipes.cmake ioswitch_compile_command: `xcrun --sdk iphoneos clang -arch arm64 -mkernel ...` (link stubs).
     features.append(feature(
@@ -280,6 +301,7 @@ kernel_cc_toolchain_config = rule(
     doc = "The kernel's CcToolchainConfigInfo: Apple clang with XNU's recipes as features.",
     attrs = {
         "sdk": attr.label(mandatory = True, providers = [KernelSdkInfo], doc = "the kernel SDK (//kernel:sdk)"),
+        "_profile": attr.label(default = "//bazel:profile"),
         "_xnu_version": attr.label(default = "//kernel:xnu_version"),
         "source_roots": attr.string_list(
             mandatory = True,
