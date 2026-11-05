@@ -346,11 +346,22 @@ static void jobs(void)
           "RGB in, Y'CbCr out: the output matrix only");
     // The same job with rectangles before the transpose (the other convention the self-test can prove).
     TegraVICTraits pre = t;
-    pre.preTransposeRects = 1;
+    pre.preTransposeRects = pre.preTransposeSurface = 1;
     why = tegra_vic_build(&src, &dst, &op, &pre, 0x80001000, 0x80002000, &job);
     CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT) == 719 &&
               TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 719,
           "pre-transpose rectangles");
+    // The two measured apart: rectangles before the transpose with the surface size after it, and the reverse.
+    pre.preTransposeSurface = 0;
+    why = tegra_vic_build(&src, &dst, &op, &pre, 0x80001000, 0x80002000, &job);
+    CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT) == 719 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 1279,
+          "pre-transpose rectangles, post-transpose surface");
+    pre.preTransposeRects = 0, pre.preTransposeSurface = 1;
+    why = tegra_vic_build(&src, &dst, &op, &pre, 0x80001000, 0x80002000, &job);
+    CHECK(!why && TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT, OUT_TARGET_RIGHT) == 1279 &&
+              TEGRA_VIC_GET(job.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_WIDTH) == 719,
+          "post-transpose rectangles, pre-transpose surface");
 
     // A fill (Core Animation's border clears): no slot, the background colour.
     memset(&op, 0, sizeof(op));

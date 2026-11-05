@@ -358,12 +358,13 @@ typedef struct {
 
 // What the boot self-test proved about this engine (TegraVICSelfTest.cpp).
 typedef struct {
-    TegraVICChroma in, out;      // channel of Cb/Cr when reading and writing 4:2:0
-    uint8_t vicFlips[8][3];      // IOSurfaceAccelerator transform -> OutputFlipX, OutputFlipY, OutputTranspose
-    uint32_t preTransposeRects;  // 1: target/destination rectangles and surface size are given before the transpose
-    uint32_t rotations;          // bit t: transform t proven
-    uint32_t bilinear;           // 2-tap filtering proven (else every job is 1-tap)
-    uint32_t pitchAlign;         // smallest pitch alignment proven (64 or 256 bytes)
+    TegraVICChroma in, out;        // channel of Cb/Cr when reading and writing 4:2:0
+    uint8_t vicFlips[8][3];        // IOSurfaceAccelerator transform -> OutputFlipX, OutputFlipY, OutputTranspose
+    uint32_t preTransposeRects;    // 1: a transposed job's target/destination rectangles are given before the transpose
+    uint32_t preTransposeSurface;  // 1: and its output surface size (the self-test measures the two apart)
+    uint32_t rotations;            // bit t: transform t proven
+    uint32_t bilinear;             // 2-tap filtering proven (else every job is 1-tap)
+    uint32_t pitchAlign;           // smallest pitch alignment proven (64 or 256 bytes)
     uint32_t fillThroughMatrix;  // 1: the background colour goes through the output matrix (else it is converted here)
     uint32_t yccIn;              // what reading a 4:2:0 source was proven to do: TEGRA_VIC_YCC_IN_*
     uint32_t blockLinearIn;      // 1: a block-linear 4:2:0 source (NVDEC's layout) copies exactly into pitch linear
@@ -469,10 +470,10 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     TEGRA_VIC_SET(c, TEGRA_VIC_PIPE, PIPE_DOWNSAMPLE_HORIZ, 4);  // 1.0, U9.2
     TEGRA_VIC_SET(c, TEGRA_VIC_PIPE, PIPE_DOWNSAMPLE_VERT, 4);
 
-    // Output. With the rectangles given before the transpose (a trait the self-test proves), the target and the
-    // surface size are swapped for a transposed job; the pitch is always the real one.
-    const uint32_t swap = transpose && t->preTransposeRects;
-    const uint32_t ow = swap ? dst->height : dst->width, oh = swap ? dst->width : dst->height;
+    // Output. With the rectangles (and, apart, the surface size) given before the transpose (traits the self-test
+    // proves), they are swapped for a transposed job; the pitch is always the real one.
+    const uint32_t swap = transpose && t->preTransposeRects, swapSurface = transpose && t->preTransposeSurface;
+    const uint32_t ow = swapSurface ? dst->height : dst->width, oh = swapSurface ? dst->width : dst->height;
     const uint32_t tx = swap ? op->dstY : op->dstX, ty = swap ? op->dstX : op->dstY;
     const uint32_t tw = swap ? op->dstH : op->dstW, th = swap ? op->dstW : op->dstH;
     const int alpha = !op->fill && src->format->alpha && dst->format->alpha;

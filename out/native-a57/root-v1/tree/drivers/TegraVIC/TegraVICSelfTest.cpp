@@ -5,8 +5,9 @@
 // conversion. The traits it proves (TegraVICTraits) are what the service later builds every job with:
 //   transforms  each of the 8 OutputFlipX/FlipY/Transpose combinations is run on a 32x16 card whose every pixel names
 //               its own coordinates; the map it produced (one of the 8 flips and rotations, or garbage) decides which
-//               combination implements which IOSurfaceAccelerator transform, and whether the rectangles of a
-//               transposed job are given before or after the transpose
+//               combination implements which IOSurfaceAccelerator transform, and whether the rectangles and,
+//               apart, the output surface size of a transposed job are given before or after the transpose (four
+//               conventions; r8a's two, both together, gave no quarter turn: a diag line then says what came out)
 //   colour      flat patches BGRA -> 420f (BT.709, full range) through the output matrix, and 420f -> BGRA through the
 //               slot matrix, exact to one 8-bit step against the engine's arithmetic (TegraVICConfig.h), in the chroma
 //               channel order measured on T210B01 or, failing that, the other one
@@ -220,6 +221,33 @@ void transformPoint(uint32_t t, uint32_t w, uint32_t h, uint32_t x, uint32_t y, 
     }
 }
 
+// Where an output pixel came from: "x,y" of the card pixel it holds, "-" unwritten (the poison), "?" anything else.
+void cardSource(uint32_t pixel, char *out, size_t size)
+{
+    const uint32_t x = ((pixel >> 16) & 0xff) / 8, y = ((pixel >> 8) & 0xff) / 16;
+    if (pixel == 0xababababu)
+        snprintf(out, size, "-");
+    else if (x < kCardW && y < kCardH && pixel == cardPixel(x, y))
+        snprintf(out, size, "%u,%u", x, y);
+    else
+        snprintf(out, size, "?%08x", pixel);
+}
+
+// One line for a transposed probe nothing recognised: the card pixels at its output's corners and next to its origin.
+void transposeDiag(const char *what, uint32_t ow, uint32_t oh)
+{
+    const uint32_t at[6][2] = {{0, 0}, {1, 0}, {0, 1}, {ow - 1, 0}, {0, oh - 1}, {ow - 1, oh - 1}};
+    char text[240];
+    int n = snprintf(text, sizeof(text), "TegraVIC: diag transpose %s (%ux%u out of %ux%u): output pixel <- card", what,
+                     ow, oh, kCardW, kCardH);
+    for (uint32_t i = 0; i < 6 && n > 0 && n < (int)sizeof(text); i++) {
+        char from[16];
+        cardSource(((const uint32_t *)(gDst.va + at[i][1] * kPitch))[at[i][0]], from, sizeof(from));
+        n += snprintf(text + n, sizeof(text) - n, " (%u,%u)<-%s", at[i][0], at[i][1], from);
+    }
+    IOLog("%s\n", text);
+}
+
 // Which transform the output in gDst (ow x oh BGRA, pitch kPitch) is of the card, or -1.
 int recognise(uint32_t ow, uint32_t oh)
 {
@@ -247,14 +275,16 @@ bool transforms(TegraVICTraits *t, char *line, size_t size)
     for (uint32_t combo = 0; combo < 8; combo++) {
         const uint32_t fx = combo & 1, fy = (combo >> 1) & 1, tr = (combo >> 2) & 1;
         int found = -1;
-        for (uint32_t convention = 0; convention < 2 && found < 0; convention++) {
+        // Conventions of a transposed job: bit 0 rectangles, bit 1 the surface size, given before the transpose.
+        for (uint32_t convention = 0; convention < 4 && found < 0; convention++) {
             if (!tr && convention) break;
             if (pre >= 0 && (int)convention != pre) continue;
             TegraVICTraits probe = *t;
             probe.vicFlips[0][0] = (uint8_t)fx;
             probe.vicFlips[0][1] = (uint8_t)fy;
             probe.vicFlips[0][2] = (uint8_t)tr;
-            probe.preTransposeRects = convention;
+            probe.preTransposeRects = convention & 1;
+            probe.preTransposeSurface = convention >> 1;
             probe.rotations = 1;
             const uint32_t ow = tr ? kCardH : kCardW, oh = tr ? kCardW : kCardH;
             TegraVICImage dst = bgra(gDst, ow, oh, kPitch);
@@ -266,6 +296,8 @@ bool transforms(TegraVICTraits *t, char *line, size_t size)
             }
             found = recognise(ow, oh);
             if (found >= 0 && tr) pre = (int)convention;
+            if (found < 0 && tr && !fx && !fy && (convention == 0 || convention == 3))
+                transposeDiag(convention ? "rects and surface before" : "rects and surface after", ow, oh);
         }
         if (found < 0) continue;
         t->vicFlips[found][0] = (uint8_t)fx;
@@ -273,7 +305,8 @@ bool transforms(TegraVICTraits *t, char *line, size_t size)
         t->vicFlips[found][2] = (uint8_t)tr;
         t->rotations |= 1u << found;
     }
-    t->preTransposeRects = pre > 0;
+    t->preTransposeRects = pre > 0 && (pre & 1);
+    t->preTransposeSurface = pre > 0 && (pre >> 1);
     if (!(t->rotations & 1)) {
         const uint32_t *p = (const uint32_t *)gDst.va;
         snprintf(line, size, "V4 FAIL a 1:1 BGRA copy is not the source (first pixels %#x %#x, want %#x %#x)", p[0],
@@ -746,11 +779,18 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
         return -5;
     }
     *traits = t;
-    IOLog("TegraVIC: V4 ok transforms %#x of 0xff (rectangles %s the transpose), RGB to 420f BT.709 full (Cb in "
+    const bool turns = t.rotations & 0xf0;
+    IOLog("TegraVIC: V4 ok transforms %#x of 0xff (quarter turns %s%s%s), RGB to 420f BT.709 full (Cb in "
           "channel %u), fill %s, %s scaling, pitch %u-byte aligned; %u jobs, engine %llu us, %llu us in all\n",
-          t.rotations, t.preTransposeRects ? "before" : "after", t.out.cbChannel,
-          t.fillThroughMatrix ? "through the matrix" : "converted here", t.bilinear ? "2-tap" : "1-tap only",
-          t.pitchAlign, gJobs, gBusyUs, nowUs() - began);
+          t.rotations, !turns ? "none: see the transpose diag lines" : "with rectangles ",
+          !turns                ? ""
+          : t.preTransposeRects ? "before, surface "
+                                : "after, surface ",
+          !turns                  ? ""
+          : t.preTransposeSurface ? "before the transpose"
+                                  : "after the transpose",
+          t.out.cbChannel, t.fillThroughMatrix ? "through the matrix" : "converted here",
+          t.bilinear ? "2-tap" : "1-tap only", t.pitchAlign, gJobs, gBusyUs, nowUs() - began);
     IOLog("TegraVIC: V4 %s\n", note);
     IOLog("TegraVIC: V4 %s\n", blNote);
     return 0;
