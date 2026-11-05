@@ -60,7 +60,7 @@ USB_HOST = True
 DISPLAY_GAMUT = 'sRGB'
 COMMAND_LINE = ' '.join([
     '-v', 'serial=0', 'debug=0x14e', 'kt_fixed_zones=120', 'cpus=1', 'armcpu-self-ipi=1',
-    'ioswitch-diag=1', 'sheng-pmgr=2', '-no_slto_panic',
+    'ioswitch-diag=3', 'sheng-pmgr=2', '-no_slto_panic',
     # The kernel ignores the two SD args now; the loader builder still gates on them.
     'ioswitch-sd-test=1', 'ioswitch-sd-files=1', 'ioswitch-root-boot=1',
     'offline-apfs-load=1', '-apfs_shared_datavolume', 'offline-mobile-graphics-load=1',
