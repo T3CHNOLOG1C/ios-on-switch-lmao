@@ -134,3 +134,17 @@ TEST(SwitchXudcSource, SleepPowersOnWholeBeforeTheBus)
     EXPECT_LT(unmasked, on);
     EXPECT_THAT(source, HasSubstr("if (on && lostToSleep) return;"));
 }
+
+// An attached host holds idle sleep off as an iPad's powerd does in USB device mode: every change of hostPresent goes
+// through setHostPresent, which takes and drops the kernel's idle-sleep assertion with it.
+TEST(SwitchXudcSource, AttachedHostHoldsIdleSleep)
+{
+    const std::string source = SourceText("../SwitchXUDC.cpp");
+    EXPECT_EQ(Count(source, "hostPresent = "), 1u) << "only setHostPresent writes it";
+    EXPECT_EQ(Count(source, "setHostPresent(true);"), 2u);   // bus reset with a host, resume from a bus suspend
+    EXPECT_EQ(Count(source, "setHostPresent(false);"), 3u);  // disconnect, bus suspend, off the bus
+    const std::string hold = ioswitch::test::Between(source, "void SwitchXUDC::setHostPresent(bool present)", "\n}\n");
+    EXPECT_THAT(hold, HasSubstr("kIOPMDriverAssertionPreventSystemIdleSleepBit"));
+    EXPECT_THAT(hold, HasSubstr("releasePMAssertion(idleHold);"));
+    EXPECT_THAT(hold, Not(HasSubstr("kIOPMDriverAssertionCPUBit")));
+}

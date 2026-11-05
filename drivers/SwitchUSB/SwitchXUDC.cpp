@@ -42,6 +42,7 @@
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
 #include <libkern/c++/OSKext.h>
 #include <libkern/c++/OSSymbol.h>
 #include <kern/clock.h>
@@ -177,6 +178,8 @@ class SwitchXUDC : public IOUSBDeviceController {
     int speed;
     bool onBus, suspended, hostPresent, reportedOnBus, hostOwnsPort, wantBus;
     bool asleep, busAfterSleep, lostToSleep;  // systemSleep: between suspend and resume; resume could not power on
+    IOPMDriverAssertionID idleHold;           // while a host is attached (setHostPresent)
+    void setHostPresent(bool present);
     uint8_t deliveryStage;
     volatile uint32_t interrupts;  // ST.IP acknowledged by the filter
     uint32_t interruptsAtCheck;
@@ -485,7 +488,7 @@ void SwitchXUDC::portEvent()
         handleUSBReset();  // the family drops the configuration (deactivateEndpoint for every pipe)
     }
     if (change.disconnected && hostPresent) {
-        hostPresent = false;
+        setHostPresent(false);
         IOLog("SwitchUSB: host disconnected\n");
     }
     if (change.reset && onBus) {
@@ -496,7 +499,7 @@ void SwitchXUDC::portEvent()
         speed = change.fullSpeed ? kSpeedFull : kSpeedHigh;
         handleUSBConnectionDone();
         if (!hostPresent) {
-            hostPresent = true;
+            setHostPresent(true);
             IOLog("SwitchUSB: host connected (%s speed)\n", speed == kSpeedHigh ? "high" : "full");
         }
     }
@@ -504,12 +507,12 @@ void SwitchXUDC::portEvent()
         suspended = true;
         handleUSBSuspend();
         if (hostPresent) {
-            hostPresent = false;
+            setHostPresent(false);
             IOLog("SwitchUSB: bus suspended (host asleep or cable out)\n");
         }
     } else if (change.resumed && suspended) {
         suspended = false;
-        hostPresent = true;
+        setHostPresent(true);
         handleUSBResume();
     }
 }
@@ -1146,7 +1149,26 @@ void SwitchXUDC::setBus(bool on)
     ep0Cancel(kIOReturnAborted);
     for (uint32_t dci = 2; dci < kMaxDci; ++dci) cancel(dci, kIOReturnAborted);
     speed = kSpeedNone;
-    suspended = hostPresent = false;
+    suspended = false;
+    setHostPresent(false);
+}
+
+// An iPad's powerd holds PreventUserIdleSystemSleep while its port's IOPortTransportStateUSB shows a device-role data
+// connection (Active, DataRole 1) on AC power. Nothing here publishes that object (IOPortFamily's port controller
+// makes it, and its init is not ours to call), so the attached host holds the kernel's idle-sleep assertion instead:
+// the same effect on IOPMrootDomain, and a host always powers VBUS. Demand sleep is untouched.
+void SwitchXUDC::setHostPresent(bool present)
+{
+    hostPresent = present;
+    IOPMrootDomain *root = getPMRootDomain();
+    if (!root || present == (idleHold != 0)) return;
+    if (present) {
+        idleHold = root->createPMAssertion(kIOPMDriverAssertionPreventSystemIdleSleepBit,
+                                           kIOPMDriverAssertionLevelOn, this, "SwitchUSB host attached");
+    } else {
+        root->releasePMAssertion(idleHold);
+        idleHold = 0;
+    }
 }
 
 // AppleUSBXDCI::softDisconnect clears DCTL.RUN_STOP and nothing more: the family puts us back with goOnBus(true).
