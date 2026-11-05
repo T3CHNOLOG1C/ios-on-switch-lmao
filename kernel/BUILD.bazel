@@ -194,11 +194,15 @@ tool_output(
 # and so corecrypto's archive, alone.
 tool_output(
     name = "xnu_symbols",
-    srcs = [":xnu"],
+    srcs = [
+        "//kernel/xnu-10063.141.1/config:all_alias_exp",
+        "//kernel/xnu-10063.141.1/config:link_symbols",
+        "//kernel/xnu-10063.141.1/config:link_symbols_list",
+    ],
     outs = ["build/xnu/kernel-names.txt"],
     args = [
-        "--xcode-env={xcode_env}",
-        "--objroot=$(execpath :xnu)",
+        "--names-list=$(execpath //kernel/xnu-10063.141.1/config:link_symbols_list)",
+        "--aliases=$(execpath //kernel/xnu-10063.141.1/config:all_alias_exp)",
         "--out={out}",
     ],
     message = "Listing XNU's symbol names",

@@ -280,6 +280,29 @@ XNU = "//kernel/xnu-10063.141.1/"
 
 _COMPONENTS = [XNU + c + ":objects" for c in ["osfmk", "bsd", "libkern", "iokit", "pexpert", "libsa", "security", "san"]]
 
+def _xnu_link_objects_impl(ctx):
+    infos = [t[XnuObjectsInfo] for t in ctx.attr.components]
+    symbols = [f for info in infos for f in info.symbols]
+
+    # The per-object name lists by path, one per line: xnu_symbols.py reads them from this file, so its command line
+    # stays short (and its key readable in aquery).
+    listing = ctx.actions.declare_file(ctx.label.name + ".symbols")
+    ctx.actions.write(listing, "".join([f.path + "\n" for f in symbols]))
+    return [
+        DefaultInfo(files = depset([f for info in infos for f in info.objects])),
+        OutputGroupInfo(symbols = depset(symbols), symbols_list = depset([listing])),
+    ]
+
+xnu_link_objects = rule(
+    implementation = _xnu_link_objects_impl,
+    doc = "The components' objects the kernel links (make's link.filelist), in link order, and (output group " +
+          "symbols) each one's defined names: what the archives linked beside XNU namespace against " +
+          "(//kernel:xnu_symbols).",
+    attrs = {
+        "components": attr.label_list(providers = [XnuObjectsInfo], default = _COMPONENTS),
+    },
+)
+
 _xnu_kernel = rule(
     implementation = _xnu_kernel_impl,
     doc = "XNU's kernel (mach.<config>.bcm2837.unstripped.noctf) from its native objects and the ioswitch archives " +

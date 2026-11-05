@@ -20,6 +20,7 @@ directory (make's `.`), {sdkroot} the kernel SDK root, {san} the sanitizer ignor
 
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
 load("//bazel/kernel:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
 load("//bazel/platforms:transitions.bzl", "kernel_transition", "outer_transition")
 load(":recipes_development.bzl", "DEVELOPMENT_RECIPES")
@@ -31,6 +32,7 @@ XnuObjectsInfo = provider(
         "config": "the XNU kernel config (DEVELOPMENT, RELEASE)",
         "names": "make's object names (ast.o, IOService.cpo, ...), parallel to objects",
         "objects": "list of File, link order",
+        "symbols": "per object, the names it defines (\"g _x\" global, \"a _x\" any), parallel to objects",
     },
 )
 
@@ -142,6 +144,26 @@ def _genassym(ctx, feature_configuration, cc_toolchain, recipe, places, maps, co
         progress_message = "Making assym.s from genassym.c's assembly",
     )
     return assym
+
+def _symbols(ctx, obj, base):
+    """The names one object defines, as kernel_names.py lists them (nm -g -U -j: "g", nm -U -j: "a").
+
+    One small cached action per object, so after an edit only that object's list is redone before the merge
+    (//kernel:xnu_symbols)."""
+    out = ctx.actions.declare_file("{}_symbols/{}.names".format(ctx.label.name, base))
+    ctx.actions.run_shell(
+        inputs = [obj],
+        outputs = [out],
+        arguments = [XCODE_TOOLCHAIN + "/nm", obj.path, out.path],
+        command = """set -o pipefail
+{ "$1" -g -U -j "$2" | /usr/bin/sed -n 's/^\\(_.*\\)$/g \\1/p'; "$1" -U -j "$2" | /usr/bin/sed -n 's/^\\(_.*\\)$/a \\1/p'; } > "$3"
+""",
+        env = {"DEVELOPER_DIR": DEVELOPER_DIR, "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        mnemonic = "XnuSymbols",
+        progress_message = "Listing the names {} defines".format(base),
+        execution_requirements = {"no-remote-exec": "", "requires-darwin": ""},
+    )
+    return out
 
 def _xnu_objects_impl(ctx):
     cc_toolchain = find_cc_toolchain(ctx)
@@ -267,7 +289,7 @@ def _xnu_objects_impl(ctx):
         for src, obj in zip(group.srcs, objects):
             compiled[src] = obj
 
-    objects, names = [], []
+    objects, names, symbols = [], [], []
     setsegname = ctx.executable._setsegname
     for entry, src in sources:
         obj = compiled[src]
@@ -289,9 +311,10 @@ def _xnu_objects_impl(ctx):
             obj = renamed
         objects.append(obj)
         names.append(base)
+        symbols.append(_symbols(ctx, obj, base))
     return [
         DefaultInfo(files = depset(objects)),
-        XnuObjectsInfo(component = comp, objects = objects, names = names, config = config),
+        XnuObjectsInfo(component = comp, objects = objects, names = names, symbols = symbols, config = config),
     ]
 
 xnu_objects_rule = rule(

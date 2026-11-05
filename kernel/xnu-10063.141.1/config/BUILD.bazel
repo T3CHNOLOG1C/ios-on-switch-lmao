@@ -4,7 +4,7 @@
 # has them (APPLE_LICENSE); only BUILD.bazel and .bzl files are ours.
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":objects.bzl", "DEVELOPMENT")
-load(":xnu_kernel.bzl", "xnu_exports", "xnu_version_c")
+load(":xnu_kernel.bzl", "xnu_exports", "xnu_link_objects", "xnu_version_c")
 load(":xnu_objects.bzl", "xnu_objects")
 
 package(default_visibility = ["//visibility:public"])
@@ -54,6 +54,21 @@ xnu_objects(
     gen_relative = False,
     gen_srcs = ":version_c",
     table = DEVELOPMENT,
+)
+
+# The components' objects the kernel links, in link order (what xnu_symbols lists the names of).
+xnu_link_objects(name = "link_objects")
+
+filegroup(
+    name = "link_symbols",
+    srcs = [":link_objects"],
+    output_group = "symbols",
+)
+
+filegroup(
+    name = "link_symbols_list",
+    srcs = [":link_objects"],
+    output_group = "symbols_list",
 )
 
 # --- KPI exports and symbol sets (config/Makefile) ----------------------------------------------------------------
