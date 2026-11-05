@@ -42,6 +42,7 @@ if __package__ in (None, ""):
 from tools.deploy import mkarchive  # noqa: E402
 from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
+from tools.install import renamed  # noqa: E402
 
 DATA_UUID = "D1B1D053-D0A6-496C-8625-A947A3DA863E"   # SwitchRawMount.h IOSW_RAW_DATA_UUID (checked against spec)
 # The checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the workspace: --harvest
@@ -185,17 +186,18 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
     for report in sorted(crash.glob("com.apple.WebKit.*.ips")) if crash.is_dir() else []:
         shutil.copyfile(report, out / report.name)
     copytree(data / "mobile/Library/Logs/mobileactivationd", out / "mobileactivationd", log)
-    census = data / "Switch/boot-io-census.bin"
+    own = renamed.data_folder(data)
+    census = own / "boot-io-census.bin"
     if census.is_file():
         shutil.copyfile(census, out / census.name)
-    panics = sorted((data / "Switch").glob("panic-*")) if (data / "Switch").is_dir() else []
+    panics = sorted(own.glob("panic-*")) if own.is_dir() else []
     for panic in panics:
         shutil.copyfile(panic, out / panic.name)
     if panics:
         log("saved panics:", ", ".join(panic.name for panic in panics))
         decode_panics(out, kcdata, log)
-    power = sorted((data / "Switch").glob("power*.log")) if (data / "Switch").is_dir() else []
-    wakes = sorted((data / "Switch").glob("wake-*.kcdata")) if (data / "Switch").is_dir() else []
+    power = sorted(own.glob("power*.log")) if own.is_dir() else []
+    wakes = sorted(own.glob("wake-*.kcdata")) if own.is_dir() else []
     for path in power + wakes:
         shutil.copyfile(path, out / path.name)
     if power:

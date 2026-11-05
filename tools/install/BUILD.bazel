@@ -16,6 +16,7 @@ py_library(
         "card.py",
         "gpt.py",
         "host.py",
+        "renamed.py",
     ],
     imports = ["../.."],
 )

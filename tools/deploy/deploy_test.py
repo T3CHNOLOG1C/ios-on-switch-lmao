@@ -9,6 +9,7 @@ from tools.deploy import joycon_pairing
 from tools.deploy import poster_snapshots
 from tools.deploy import pull_logs
 from tools.install import card as cards
+from tools.install import renamed
 
 
 class Log:
@@ -65,6 +66,52 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(cards.sync_boot_entry(self.fat, self.root / "pkg0", log), ([], []))
         changed, _ = cards.sync_boot_entry(self.fat, self.root / "pkg1", log)
         self.assertEqual(changed, ["switchroot/ios/kernel-window.bin"])
+
+    def test_a_copy_of_the_entry_under_another_name_is_replaced_in_place(self):
+        old = "[Old]\nl4t=1\nboot_prefixes=/switchroot/old-entry/\nid=OLD\nbootwait=0\n" + \
+            "scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\nbootcmd_mmc0=true\n"
+        for relative, data in (("bootloader/ini/old-entry.ini", old), ("bootloader/ini/._old-entry.ini", "x"),
+                               ("bootloader/ini/ubuntu.ini", "[L4T]\nl4t=1\nboot_prefixes=/switchroot/ubuntu/\n"),
+                               ("switchroot/old-entry/loader.uboot.bin", "x"), ("switchroot/old-entry/._loader.uboot.bin", "x"),
+                               ("switchroot/._old-entry", "x"),
+                               ("bootloader/ini/older.ini", "[Older]\nl4t=1\nboot_prefixes=/switchroot/older/\n"),
+                               ("switchroot/older/loader.uboot.bin", "x")):
+            (self.fat / relative).parent.mkdir(parents=True, exist_ok=True)
+            (self.fat / relative).write_text(data)
+        _, removed = cards.sync_boot_entry(self.fat, self.root / "pkg0", Log(), dry_run=True)
+        self.assertIn("bootloader/ini/old-entry.ini", removed)
+        self.assertTrue((self.fat / "bootloader/ini/old-entry.ini").is_file())
+        cards.sync_boot_entry(self.fat, self.root / "pkg0", Log())
+        files = self.snapshot()
+        self.assertFalse((self.fat / "switchroot/old-entry").exists())
+        self.assertFalse([f for f in files if "old-entry" in f or "older" in f])
+        for untouched in ("bootloader/hekate_ipl.ini", "bootloader/ini/ubuntu.ini", "switchroot/ubuntu/boot.scr",
+                          "payload.bin"):
+            self.assertIn(untouched, files)
+        self.assertEqual(files["bootloader/ini/ios.ini"], b"[iOS]\nl4t=1\n")
+
+    def test_the_volumes_folders_under_former_names_move_once(self):
+        data = self.root / "data"
+        for relative in ("old-name/overlay/usr/sbin/BlueTool", "old-name/awdl-enable", "db/keep",
+                         "mobile/Library/com.example.old.joycon-pairing.imported.plist"):
+            (data / relative).parent.mkdir(parents=True, exist_ok=True)
+            (data / relative).write_bytes(b"x")
+        self.assertEqual(renamed.data_folder(data), data / "old-name")
+        self.assertEqual(len(renamed.migrate_data(data, Log())), 2)
+        self.assertTrue((data / "Switch/awdl-enable").is_file())
+        self.assertTrue((data / renamed.PAIRING_RECORD).is_file())
+        self.assertEqual(sorted(p.name for p in data.iterdir()), ["Switch", "db", "mobile"])
+        self.assertEqual(renamed.data_folder(data), data / "Switch")
+        self.assertEqual(renamed.migrate_data(data, Log()), [])
+        preboot = self.root / "preboot"
+        spec = {"cryptexes": [{"path": "/private/preboot/Switch-Staging/a.dmg"},
+                              {"path": "/private/preboot/Switch-Staging/b.dmg"}]}
+        for relative in ("Old-Staging/a.dmg", "Old-Staging/b.dmg", "Other/a.dmg"):
+            (preboot / relative).parent.mkdir(parents=True, exist_ok=True)
+            (preboot / relative).write_bytes(b"dmg")
+        self.assertEqual(renamed.migrate_preboot(preboot, spec, Log(), dry_run=True), ["Old-Staging"])
+        self.assertEqual(renamed.migrate_preboot(preboot, spec, Log()), ["Old-Staging"])
+        self.assertEqual(sorted(p.name for p in preboot.iterdir()), ["Other", "Switch-Staging"])
 
     def test_overlay_replaced_only_when_different(self):
         data = self.root / "data"

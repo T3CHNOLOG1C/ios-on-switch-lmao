@@ -39,6 +39,7 @@ from tools.deploy import poster_snapshots  # noqa: E402
 from tools.deploy import pull_logs  # noqa: E402
 from tools.install import card as cards  # noqa: E402
 from tools.install import host  # noqa: E402
+from tools.install import renamed  # noqa: E402
 
 
 # Logging profiles put on Data by hand during bring-up, which nothing else removes: com.apple.SystemConfiguration at
@@ -163,7 +164,12 @@ def main(argv=None):
             if input("Deploy to {}? Type {}: ".format(card.disk, card.disk)).strip() != card.disk:
                 raise cards.Refused("not confirmed")
         ok = True
+        preboot = pull_logs.data_volume(card, spec["volumes"]["preboot"]["uuid"])
+        if preboot:
+            with cards.mounted(preboot, log) as preboot_root:
+                renamed.migrate_preboot(preboot_root, spec, log)
         with cards.mounted(data, log) as data_root:
+            renamed.migrate_data(data_root, log)
             if not args.no_pull_logs:
                 out = args.logs_out or pull_logs.state_dir() / "device-logs" / time.strftime(
                     "boot-%m%d-%H%M")

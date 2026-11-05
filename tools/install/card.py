@@ -9,8 +9,8 @@ Guard rails (every command):
   * the target is exactly one entry whose partition GUID is the card's userdata GUID or whose name is userdata, UDA or
     iOS, exactly the kernel's IOSW_RAW_BYTES (32 GiB), Linux-data or APFS typed, not the FAT, not emuMMC;
   * no other APFS-typed entry on the card (the kernel takes the only one).
-Writes on the FAT go only to switchroot/ios/* and bootloader/ini/ios.ini (by name); on the iPad volumes
-only to the paths the caller names.
+Writes on the FAT go only to switchroot/ios/* and bootloader/ini/ios.ini (by name), and remove a copy of this boot
+entry under the project's former names (renamed.py); on the iPad volumes only to the paths the caller names.
 """
 import contextlib
 import hashlib
@@ -21,7 +21,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.install import gpt, host
+from tools.install import gpt, host, renamed
 
 USERDATA_GUID = uuid.UUID("5703F8E9-0032-DF6B-2674-B1A569FFC4EE")
 TARGET_NAMES = {"userdata", "UDA", "iOS"}
@@ -246,7 +246,8 @@ def boot_entry_files(package):
 
 
 def sync_boot_entry(fat_root, package, log, dry_run=False):
-    """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package; nothing else."""
+    """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package and remove a copy of the entry under
+    the project's former names (one boot entry, replaced in place); nothing else."""
     fat_root = Path(fat_root)
     wanted = boot_entry_files(package)
     changed, removed = [], []
@@ -269,8 +270,9 @@ def sync_boot_entry(fat_root, package, log, dry_run=False):
                 removed.append(relative)
                 if not dry_run:
                     path.unlink()
+    removed += renamed.remove_older_boot_entries(fat_root, INI, BOOT_ENTRY, dry_run)
     for relative in list(wanted) + removed:          # AppleDouble files, by name only
-        double = (fat_root / relative).with_name("._" + Path(relative).name)
+        double = (fat_root / relative.rstrip("/")).with_name("._" + Path(relative.rstrip("/")).name)
         if double.exists() and not dry_run:
             double.unlink()
     if not dry_run:
@@ -300,7 +302,7 @@ def tree_digest(root):
 
 def sync_overlay(data_root, package, log, dry_run=False):
     """<Data>/Switch/overlay := the package's overlay/ (whole tree, like the old deploy script)."""
-    source, target = Path(package) / "overlay", Path(data_root) / "Switch/overlay"
+    source, target = Path(package) / "overlay", Path(data_root) / renamed.DATA_FOLDER / "overlay"
     if not source.is_dir():
         log("overlay: the boot package has none; left as is")
         return False
