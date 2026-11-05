@@ -3,7 +3,9 @@
 # and AirPlay's clone requests and Core Animation's border clears, IOSurfaceAccelerator requests (0x1b0 bytes)
 # translated, and every refusal of the request translator and the checker (tegra_vic_test); the vendored firmware is
 # the file firmware/SOURCE names, with the falcon and FCE headers TegraVIC.cpp parses (tegra_vic_firmware_test); a
-# TransformSurface destination's seed moves when its job is done, through a checked binding (tegra_vic_seed_source_test).
+# TransformSurface destination's seed moves when its job is done, through a checked binding (tegra_vic_seed_source_test);
+# transposed jobs on vic_model.h, the output layout model pinned to the unit's V4 diag lines and hekate's rotation, with
+# V4's own probes (TegraVICProbe.h) run on it (tegra_vic_transpose_test).
 #
 #   bazel test //drivers/TegraVIC/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -48,5 +50,15 @@ host_test(
         "//drivers/TegraVIC:TegraVICUserClient.cpp",
         "//drivers/TegraVIC:abi_check.py",
         "//drivers/TegraVIC:original-bindings.S",
+    ],
+)
+
+host_test(
+    name = "tegra_vic_transpose_test",
+    srcs = [
+        "tegra_vic_transpose_test.cpp",
+        "vic_model.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICProbe.h",
     ],
 )
