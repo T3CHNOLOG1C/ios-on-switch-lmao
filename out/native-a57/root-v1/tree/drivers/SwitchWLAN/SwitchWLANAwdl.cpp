@@ -462,9 +462,36 @@ void radioEvent(void *, const struct swlan_awdl_event *e)
     drain();
 }
 
+// AWDL and the station share one radio and this firmware has no mchan, so the AWDL interface is anchored to the
+// access point's channel while associated: the firmware's AWDL availability windows then happen on the infra channel
+// and the radio never leaves it, so en0 keeps its airtime. A few slots still visit the band's social channel (6 on
+// 2.4 GHz, 149 on 5 GHz) so a peer whose AWDL is elsewhere can still find us; if the infra channel is itself that
+// social channel, every slot is the one channel. Unassociated, the default 149 sequence stands. gLock held.
+void anchorSequence(uint64_t now)
+{
+    const uint16_t infra = swlan_awdl_infra_freq();
+    if (!infra) return;
+    struct awdl_chan inf, social;
+    if (infra <= 2484) {
+        inf = (struct awdl_chan){infra == 2484 ? (uint8_t)14 : (uint8_t)((infra - 2407) / 5), 0x51};
+        social = (struct awdl_chan){6, 0x51};
+    } else {
+        inf = (struct awdl_chan){(uint8_t)((infra - 5000) / 5), 0x73};
+        social = (struct awdl_chan){149, 0x73};
+    }
+    struct awdl_chan seq[AWDL_SEQ_SLOTS];
+    const int sameSocial = inf.number == social.number;
+    for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i)
+        seq[i] = (!sameSocial && (i % 4 == 3)) ? social : inf;  // 12 infra, 4 social
+    awdl_core_set_sequence(gCore, seq, now);
+    IOLog("SwitchWLAN: AWDL: anchored to the infra channel %u (chan %u)%s\n", infra, inf.number,
+          sameSocial ? "" : ", a few slots on the social channel");
+}
+
 // ---- the facade's operations (gLock held) ---------------------------------------------------------------------------
 int opStart(void *)
 {
+    anchorSequence(nowTsf());
     if (!gRxStarted && gCaps->has_native_awdl) {
         int e = swlan_awdl_fw_events(fwEvent, nullptr);
         if (e >= 0) e = swlan_awdl_eth_rx(ethRx, nullptr);
@@ -503,6 +530,25 @@ void opPost(void *, uint32_t event, const void *payload, uint32_t length)
 void opLog(void *, const char *line)
 {
     IOLog("SwitchWLAN: %s\n", line);
+}
+
+// A short suffix for SwitchWLAN's 5-s stats line, so en0 rx and AWDL state read off one line (empty when off).
+extern "C" int switch_wlan_awdl_stat(char *buf, size_t size)
+{
+    if (!gLock || !gCore) return 0;
+    int n = 0;
+    IOLockLock(gLock);
+    if (gCore && awdl_core_running(gCore)) {
+        const awdl_stats *st = awdl_core_stats(gCore);
+        const enum awdl_role role = awdl_core_role(gCore);
+        n = snprintf(buf, size, "; AWDL running %s peers +%u-%u af_rx %u aws %u fw_ev %u",
+                     role == AWDL_ROLE_ROOT       ? "root"
+                     : role == AWDL_ROLE_FOLLOWER ? "follower"
+                                                  : "off",
+                     st->peer_adds, st->peer_dels, st->af_rx, st->aws, st->fw_events);
+    }
+    IOLockUnlock(gLock);
+    return n < 0 ? 0 : n;
 }
 
 // ---- the ifnet ------------------------------------------------------------------------------------------------------

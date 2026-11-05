@@ -330,6 +330,19 @@ OSDefineMetaClassAndStructors(SwitchWLAN, IOService)
     namespace
 {
     SwitchWLAN *gDriver;
+    // The infra channel (MHz) while associated, 0 otherwise: read lock-free by SwitchWLANAwdl.cpp so the AWDL
+    // interface can be anchored to the access point's channel (no mchan on this firmware; staying on the infra
+    // channel is how AWDL and the station share the one radio without en0 losing airtime).
+    uint32_t gInfraFreq;
+}
+
+// A short AWDL suffix for the stats line, written by SwitchWLANAwdl.cpp (empty when AWDL is off); weak so the driver
+// links without the AWDL unit.
+extern "C" __attribute__((weak)) int switch_wlan_awdl_stat(char *buf, size_t size)
+{
+    (void)buf;
+    (void)size;
+    return 0;
 }
 
 bool SwitchWLAN::start(IOService *provider)
@@ -810,6 +823,7 @@ void SwitchWLAN::lost(const char *why)
         status_.state = SWLAN_STA_OFF;
         ++losses_;
     });
+    __atomic_store_n(&gInfraFreq, 0u, __ATOMIC_RELEASE);
     char state[200];
     pcie_.describe(state, sizeof(state));
     IOLog("SwitchWLAN: chip lost (%u so far): %s [%s]\n", losses_, why, state);
@@ -1105,6 +1119,7 @@ void SwitchWLAN::linkDown(const FwEvent &e)
     secured_ = false;
     sup_.wipe();
     setState(SWLAN_STA_IDLE);
+    __atomic_store_n(&gInfraFreq, 0u, __ATOMIC_RELEASE);
     if (events_ && events_->link_lost) events_->link_lost(static_cast<int>(e.reason));
 }
 
@@ -1307,6 +1322,7 @@ int SwitchWLAN::joinOnce(const JoinParams &p, char *ssidText)
                 last_ = p;
                 haveLast_ = true;
             });
+            __atomic_store_n(&gInfraFreq, mhz, __ATOMIC_RELEASE);
             IOLog("SwitchWLAN: joined '%s' (%s) at %u MHz, %d dBm\n", ssidText, secured ? "WPA2" : "open", mhz, rssi);
             nextRssiNs_ = swlan::nowNs() + kRssiRefreshMs * 1000000ULL;
             nextStatsNs_ = swlan::nowNs() + kStatsMs * 1000000ULL;
@@ -1518,6 +1534,8 @@ void SwitchWLAN::logStats()
              now.net.rx_input_errors - was.net.rx_input_errors, now.tx - was.tx, now.done - was.done,
              now.refused - was.refused, now.net.tx_refused - was.net.tx_refused,
              now.net.tx_oversize - was.net.tx_oversize, static_cast<unsigned long long>(now.msis - was.msis), signal);
+    size_t at = strlen(out);
+    if (at < sizeof(out)) switch_wlan_awdl_stat(out + at, sizeof(out) - at);
     os_log(OS_LOG_DEFAULT, "%s", out);
     lastCounts_ = now;
 }
@@ -1806,6 +1824,10 @@ void SwitchWLAN::awdlCallbacks(swlan_fw_event_fn events, void *eventsContext, sw
 
 // ---- C entry points ------------------------------------------------------------------------------------------------
 
+extern "C" uint16_t swlan_awdl_infra_freq(void)
+{
+    return static_cast<uint16_t>(__atomic_load_n(&gInfraFreq, __ATOMIC_ACQUIRE));
+}
 extern "C" void switch_wlan_set_events(const struct swlan_events *events)
 {
     if (gDriver) gDriver->setEvents(events);

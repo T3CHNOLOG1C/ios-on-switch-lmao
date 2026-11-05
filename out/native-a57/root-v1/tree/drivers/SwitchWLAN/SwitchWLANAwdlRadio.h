@@ -106,6 +106,9 @@ int swlan_awdl_fw_events(swlan_fw_event_fn fn, void *ctx);
 int swlan_awdl_eth_tx(const uint8_t *eth, size_t len);  // 0 queued
 typedef void (*swlan_eth_rx_fn)(void *ctx, const uint8_t *eth, size_t len);
 int swlan_awdl_eth_rx(swlan_eth_rx_fn fn, void *ctx);
+// The access point's channel (MHz) while the station is associated, 0 otherwise. Lock-free; SwitchWLANAwdl.cpp anchors
+// the firmware's AWDL interface to it so AWDL and the station share the one radio (no mchan on this firmware).
+uint16_t swlan_awdl_infra_freq(void);
 
 // ---- SwitchWLANAwdl.cpp (r12-awdl-stack) -> SwitchWLANNet.cpp ---------------------------------------------------
 // Whether en0 advertises AWDL (CARD_CAPABILITIES bit 32): the Data flag /private/var/ioswitch/awdl-enable exists and
