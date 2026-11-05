@@ -2863,7 +2863,9 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t
 
 	if (!chan || chan->error)
 		return -ENODEV;
-	if (block_height_log2 > 5 || dst_pitch < width * 4)
+	/* dst_va 0: no copy, only the acquires and the fence (direct scanout: the display scans the surface itself once the
+	 * compositor's rendering of it is done) */
+	if (dst_va && (block_height_log2 > 5 || dst_pitch < width * 4))
 		return -EINVAL;
 	mutex_lock(&present.lock);
 	if (__atomic_load_n(&present.pending, __ATOMIC_ACQUIRE)) {
@@ -2920,19 +2922,21 @@ int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t
 				   offsetof(struct tgm_stamps, start),
 			   present.stamped);
 	}
-	PUSH_NVSQ(push, NVA0B5, NVB0B5_OFFSET_IN_UPPER, upper_32_bits(src_va),
-		  NVB0B5_OFFSET_IN_LOWER, lower_32_bits(src_va), NVB0B5_OFFSET_OUT_UPPER,
-		  upper_32_bits(dst_va), NVB0B5_OFFSET_OUT_LOWER, lower_32_bits(dst_va),
-		  NVB0B5_PITCH_IN, (u32)stride, NVB0B5_PITCH_OUT, 0, NVB0B5_LINE_LENGTH_IN,
-		  width * 4, NVB0B5_LINE_COUNT, height);
-	PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_DST_BLOCK_SIZE,
-		  NVB0B5_BLOCK_SIZE_FERMI_8(block_height_log2), NVB0B5_SET_DST_WIDTH, dst_pitch,
-		  NVB0B5_SET_DST_HEIGHT, height, NVB0B5_SET_DST_DEPTH, 1, NVB0B5_SET_DST_LAYER, 0,
-		  NVB0B5_SET_DST_ORIGIN, 0);
-	PUSH_NVSQ(push, NVA0B5, NVB0B5_LAUNCH_DMA,
-		  NVB0B5_LAUNCH_DMA_NON_PIPELINED | NVB0B5_LAUNCH_DMA_FLUSH_ENABLE |
-			  NVB0B5_LAUNCH_DMA_SRC_PITCH | NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR |
-			  NVB0B5_LAUNCH_DMA_MULTI_LINE);
+	if (dst_va) {
+		PUSH_NVSQ(push, NVA0B5, NVB0B5_OFFSET_IN_UPPER, upper_32_bits(src_va),
+			  NVB0B5_OFFSET_IN_LOWER, lower_32_bits(src_va), NVB0B5_OFFSET_OUT_UPPER,
+			  upper_32_bits(dst_va), NVB0B5_OFFSET_OUT_LOWER, lower_32_bits(dst_va),
+			  NVB0B5_PITCH_IN, (u32)stride, NVB0B5_PITCH_OUT, 0, NVB0B5_LINE_LENGTH_IN,
+			  width * 4, NVB0B5_LINE_COUNT, height);
+		PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_DST_BLOCK_SIZE,
+			  NVB0B5_BLOCK_SIZE_FERMI_8(block_height_log2), NVB0B5_SET_DST_WIDTH,
+			  dst_pitch, NVB0B5_SET_DST_HEIGHT, height, NVB0B5_SET_DST_DEPTH, 1,
+			  NVB0B5_SET_DST_LAYER, 0, NVB0B5_SET_DST_ORIGIN, 0);
+		PUSH_NVSQ(push, NVA0B5, NVB0B5_LAUNCH_DMA,
+			  NVB0B5_LAUNCH_DMA_NON_PIPELINED | NVB0B5_LAUNCH_DMA_FLUSH_ENABLE |
+				  NVB0B5_LAUNCH_DMA_SRC_PITCH | NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR |
+				  NVB0B5_LAUNCH_DMA_MULTI_LINE);
+	}
 	/* set before the kick: the nonstall interrupt can come before chan_fence returns */
 	present.done = done;
 	present.arg = arg;

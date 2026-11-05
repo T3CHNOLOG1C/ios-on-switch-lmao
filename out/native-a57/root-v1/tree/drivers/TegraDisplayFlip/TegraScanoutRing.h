@@ -22,9 +22,13 @@
 // buffering as before (with two buffers, no third could be had, it is that from the start).
 #pragma once
 
+// Direct scanout (r14-direct): entries kMaxBuffers..kMaxEntries-1 are the compositor's own surfaces, mapped into SMMU slots.
+// They take the same roles (front, pending, superseded, held) but are never a copy target: target() hands out scan buffers
+// only. A frame whose window layout (pitch slot or block-linear buffer, stride) differs from the flip still out never
+// replaces it (a boundary between the stores would latch a mix): ready(i, false) holds it for that flip's latch instead.
 struct TegraScanoutRing {
     static constexpr int kNone = -1;
-    static constexpr unsigned kMaxBuffers = 3;
+    static constexpr unsigned kMaxBuffers = 3, kMaxEntries = 8;
     unsigned buffers = 0;
     int front = 0, pending = kNone, superseded = kNone, drawing = kNone, held = kNone;
     bool replace = true;  // latest frame wins; false after recover(): double buffering
@@ -43,7 +47,7 @@ struct TegraScanoutRing {
     int target() const
     {
         if (drawing != kNone) return drawing;
-        if (!replace && (pending != kNone || superseded != kNone || held != kNone)) return kNone;
+        if (held != kNone || (!replace && (pending != kNone || superseded != kNone))) return kNone;
         for (unsigned k = 1; k < buffers; ++k) {
             const int i = (int)(((unsigned)front + k) % buffers);
             if (!busy(i)) return i;
@@ -59,16 +63,16 @@ struct TegraScanoutRing {
                    // the replacement: latch() says which)
         kHold,  // double-buffered with a flip out: leave window A alone; flipHeld() hands it back at that flip's latch
     };
-    // The frame in i is complete.
-    Ready ready(int i)
+    // The frame in i is complete; mayReplace false: it may not replace a flip still out (another window layout).
+    Ready ready(int i, bool mayReplace = true)
     {
         if (drawing == i) drawing = kNone;
         if (pending == kNone) {
             pending = i;
             return kFlip;
         }
-        if (!replace) {
-            held = i;  // kNone before: double-buffered, target() hands out no buffer while a flip is out
+        if (!replace || !mayReplace) {
+            held = i;  // kNone before: target() hands out no buffer while one is held, and the display waits for none
             return kHold;
         }
         // superseded is kNone here: with it busy as well no buffer was free for i.

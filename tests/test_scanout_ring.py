@@ -35,7 +35,9 @@ class ScanoutRingTests(unittest.TestCase):
         for gone in ("flipPending", "front ^ 1", "front ^= 1"):
             self.assertNotIn(gone, source)
         flip = source.split("    void flip()\n", 1)[1].split("\n    }\n", 1)[0]
-        self.assertIn("ring.ready(", flip)
+        present = source.split("    void presentEntry(int i)\n", 1)[1].split("\n    }\n", 1)[0]
+        self.assertIn("presentEntry(target)", flip)  # r14-direct: scan buffers and direct slots share presentEntry
+        self.assertIn("ring.ready(", present)
         check = source.split("    void checkFlip(bool atFrameEnd)\n", 1)[1].split("\n    }\n", 1)[0]
         self.assertIn("ring.latch(", check)
         self.assertIn("panic(", check)  # a flip never taken (a lost frame end) is still one line and a panic

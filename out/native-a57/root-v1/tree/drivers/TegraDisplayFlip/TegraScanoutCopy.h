@@ -14,7 +14,10 @@
 #pragma once
 #include <stdint.h>
 
-#define TEGRA_SCANOUT_COPY_VERSION 1u
+#define TEGRA_SCANOUT_COPY_VERSION 2u
+// flags: no copy; the completion only says the compositor's GPU work on the source is done (direct scanout: the display
+// scans the source itself, through the SMMU). target, targetBytes, targetPitch and blockHeightLog2 are ignored.
+#define TEGRA_SCANOUT_COPY_FENCE_ONLY 1u
 
 struct TegraScanoutCopy {
     uint32_t version;        // TEGRA_SCANOUT_COPY_VERSION
@@ -35,6 +38,7 @@ struct TegraScanoutCopy {
     uint64_t targetBytes;      // 0x3C0000
     uint32_t targetPitch;      // 5120 bytes per line of pixels (80 GOBs across)
     uint32_t blockHeightLog2;  // 4: 16 GOBs per block
+    uint32_t flags;            // TEGRA_SCANOUT_COPY_FENCE_ONLY (version 2)
 };
 
 #ifdef __cplusplus

@@ -554,6 +554,36 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     int probeSurface = kNoBuffer;
     uint32_t probePixel = 0, probeSwgroupWas = 0;
     char probeLine[160] = {};
+    // Direct scanout (r14-direct; DESIGN-direct-scanout.md Phase 1), on once this boot's SMMU probe passed: the probe's domain
+    // stays attached, and a full-frame BGRA swap whose rows window A can fetch (stride a multiple of 64, one 4 MiB slot) is
+    // scanned in place from an SMMU slot (ring entries kSlot0..): a fence-only GPU present waits for the compositor's rendering
+    // of it, then window A flips to the slot in pitch layout. Core Animation recycles a framebuffer when a later swap completes
+    // ("swap %u completed, recycling surface 0x%x from swap %u"), so from then on every swap, direct or copied, retires when its
+    // frame is seen on screen, with every older one (latchRetire); a frame replaced before it showed retires with the one that
+    // replaced it. A slot keeps its surface's descriptor retained and prepared until another surface needs the slot and it is
+    // neither scanned nor asked for. Window A underflowing kDirectUnderflowFrames in a row from a slot turns direct off (one
+    // line); swaps keep retiring at their latch.
+    static constexpr int kSlot0 = (int)TegraScanoutRing::kMaxBuffers;
+    static constexpr unsigned kSlots = TegraScanoutRing::kMaxEntries - TegraScanoutRing::kMaxBuffers,
+                              kDirectUnderflowFrames = 3;
+    static constexpr uint64_t kSlotSpan = 4ull << 20;
+    struct DirectSlot {
+        IOMemoryDescriptor *memory;
+        uint64_t stride, used;
+        uint32_t pages;
+    };
+    DirectSlot slots[kSlots] = {};
+    uint64_t slotUses = 0, takeSeq = 0;
+    bool directOn = false, directAttached = false, latchRetire = false;
+    int gpuDirect = kNoBuffer, gpuPresentedEntry = kNoBuffer;  // the slot entry a fence-only present is for
+    struct Taken {
+        const OriginalLegacySwapRequest *request;
+        uint64_t seq;
+    };
+    Taken takenSwaps[8] = {};  // swaps presented or in flight, not yet retired (latchRetire)
+    const OriginalLegacySwapRequest *flipRequest = nullptr;  // the swap the next flip shows (noteTaken)
+    uint64_t entrySeq[TegraScanoutRing::kMaxEntries] = {};   // the take sequence of the swap each entry shows
+    uint32_t stDirect = 0;
     bool kickDeferred = false;                  // a swap is waiting for a frame end (or for the SC7 resume)
     uint64_t flipRequested = 0, flipWaits = 0;  // frameEnds when the last flip went out; swaps that waited for a buffer
     IOTimerEventSource *flipTimer =
@@ -692,7 +722,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     struct FrameMark {
         uint64_t submit, kick, waited, ready;
     };
-    FrameMark taken = {}, marks[kScanBuffers] = {};
+    FrameMark taken = {}, marks[TegraScanoutRing::kMaxEntries] = {};
     enum { kLongIdle, kLongCa, kLongGpu, kLongQueue, kLongLatch, kLongCauses };
     Span stPQueue = {}, stPWait = {}, stPCopy = {}, stPLatch = {};
     uint32_t stReplaced = 0, stCollapsed = 0, stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
@@ -997,6 +1027,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             (unsigned long long)stPWait.meanUs(), (unsigned long long)stPWait.maxUs(),
             (unsigned long long)stPCopy.meanUs(), (unsigned long long)stPCopy.maxUs(),
             (unsigned long long)stPLatch.meanUs(), (unsigned long long)stPLatch.maxUs());
+        add("; direct %u%s", stDirect, directOn ? "" : latchRetire ? " (off)" : "");
+        stDirect = 0;
         add("; %u buffers%s, replaced %u, collapsed %u", doubleBuffer ? ring.buffers : 1u,
             !doubleBuffer || ring.replace ? ""
             : stFallbacks                 ? " (fell back to double buffering now)"
@@ -1476,6 +1508,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // Surface i's physical address (window A's START_ADDR); 0 is the boot framebuffer, also the pitch console's.
     uint32_t surfaceAddress(int i) const
     {
+        if (i >= kSlot0) return (uint32_t)(kProbeSlot + (uint64_t)(i - kSlot0) * kSlotSpan);  // a direct slot's IOVA
         return (uint32_t)(i > 0 ? scanAddresses[i] : bootMapping->getPhysicalAddress());
     }
     // The surface window A scans when its START_ADDR is start; kNoBuffer when none is.
@@ -1483,7 +1516,30 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         for (unsigned i = 0; i < (doubleBuffer ? ring.buffers : 1u); ++i)
             if (start == surfaceAddress((int)i)) return (int)i;
+        if (directAttached)
+            for (unsigned k = 0; k < kSlots; ++k)
+                if (start == surfaceAddress(kSlot0 + (int)k)) return kSlot0 + (int)k;
         return kNoBuffer;
+    }
+    // Window A's layout for entry i: a direct slot is pitch with its surface's stride, a scan buffer block-linear.
+    void layoutOf(int i, uint32_t &kind, uint32_t &stride, uint32_t &hOffset) const
+    {
+        if (i >= kSlot0) {
+            kind = 0;
+            stride = (uint32_t)slots[i - kSlot0].stride;
+            hOffset = 0;
+        } else {
+            kind = kBlockSurfaceKind;
+            stride = kBlockLineStride;
+            hOffset = kBlockHOffset;
+        }
+    }
+    bool sameLayout(int a, int b) const
+    {
+        uint32_t ka, sa, ha, kb, sb, hb;
+        layoutOf(a, ka, sa, ha);
+        layoutOf(b, kb, sb, hb);
+        return ka == kb && sa == sb && ha == hb;
     }
     IOMemoryMap *surfaceMapping(int i) const { return i > 0 ? scanMappings[i] : blockMapping; }
     // Where the next block-linear frame goes: a surface window A neither scans nor may take (ring.target(), the one being drawn
@@ -1510,16 +1566,32 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             panic("IOSwitch display: a frame to flip, but no scanout surface was free for it (front %d pending %d "
                   "replaced %d)",
                   ring.front, ring.pending, ring.superseded);
-        const TegraScanoutRing::Ready how = ring.ready(target);
-        markFlip(target);
-        if (how != TegraScanoutRing::kHold) writeFlip(target);
+        presentEntry(target);
     }
-    // Under the gate: window A to surface i from the next frame boundary (START_ADDR, then the window and general requests).
+    // Under the gate: the frame in ring entry i (a scan buffer just written, or a direct slot whose rendering is done) goes out:
+    // it replaces a flip still out only when their window layouts match, else it is held for that flip's latch.
+    void presentEntry(int i)
+    {
+        const bool mayReplace = ring.pending == kNoBuffer || sameLayout(i, ring.pending);
+        const TegraScanoutRing::Ready how = ring.ready(i, mayReplace);
+        entrySeq[i] = seqOf(flipRequest);
+        markFlip(i);
+        if (how != TegraScanoutRing::kHold) writeFlip(i);
+    }
+    // Under the gate: window A to surface i from the next frame boundary (its layout once direct scanout is on, START_ADDR, then
+    // the window and general requests).
     void writeFlip(int i)
     {
         __asm__ volatile("dsb sy" ::: "memory");  // the frame is in memory before the window can fetch it
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
         dc[kDcWindowHeader] = kWindowASelect;
+        if (directAttached) {
+            uint32_t kind, stride, hOffset;
+            layoutOf(i, kind, stride, hOffset);
+            dc[kWinbufSurfaceKind] = kind;
+            dc[kWinLineStride] = stride;
+            dc[kWinbufHOffset] = hOffset;
+        }
         dc[kWinbufStartAddr] = surfaceAddress(i);
         dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
         dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
@@ -1567,10 +1639,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 if (replaced != kNoBuffer) ++stReplaced;  // that frame was never shown
                 notePresent(stamp, frameEnds - flipRequested, marks[asked]);
             }
+            retireThrough(entrySeq[asked]);
             break;
         case TegraScanoutRing::kTakenReplaced:
             if (stats)
                 notePresent(stamp, 1, marks[replaced]);  // shown for a frame after all; the newer one is still out
+            retireThrough(entrySeq[replaced]);
             break;
         }
         flipLatched();
@@ -1611,7 +1685,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             d->flipRequested = d->frameEnds;
             d->flipTimer->setTimeoutMS(kFlipDeadlineMS);
         }
-        void detach() { tegra_smmu_detach(TEGRA_SMMU_ASID_DISPLAY, TEGRA_SMMU_DC_ASID); }
+        void detach()
+        {
+            if (d->probe.stage == DisplaySmmuProbe::kDone && d->startDirect()) return;  // passed: the domain stays
+            tegra_smmu_detach(TEGRA_SMMU_ASID_DISPLAY, TEGRA_SMMU_DC_ASID);
+        }
         void crcOff()
         {
             d->dc[kDcCrcControl] = 0;
@@ -1718,10 +1796,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                   "was "
                   "%#x, TRANSLATION_ENABLE_0 %#x): CRC %#x by physical address, 1:1 and at IOVA %#llx, %#x with one "
                   "pixel "
-                  "changed; back in bypass\n",
+                  "changed; %s\n",
                   (unsigned)TEGRA_SMMU_ASID_DISPLAY, (unsigned)TEGRA_SMMU_DC_ASID, probeSwgroupWas,
                   tegra_smmu_read(TEGRA_SMMU_TRANSLATION_ENABLE_0), probe.base, (unsigned long long)kProbeSlot,
-                  probe.tweaked);
+                  probe.tweaked, directOn ? "the domain stays: direct scanout on" : "back in bypass");
         else
             IOLog("IOSwitch display: SMMU probe failed at %s: %s%s%s (CRC base %#x again %#x pixel %#x last %#x); "
                   "undone, direct scanout stays off\n",
@@ -1890,8 +1968,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             const uint32_t options = windowActive(kWinOptions), stride = windowActive(kWinLineStride);
             const uint32_t kind = windowActive(kWinbufSurfaceKind), hOffset = windowActive(kWinbufHOffset),
                            start = windowActive(kWinbufStartAddr);
-            if (options != (pitchOptions | kBlockScan) || (stride & 0xffff) != kBlockLineStride ||
-                kind != kBlockSurfaceKind || hOffset != kBlockHOffset || start != expectedStart())
+            uint32_t wantKind = kBlockSurfaceKind, wantStride = kBlockLineStride, wantH = kBlockHOffset;
+            if (doubleBuffer)
+                layoutOf(ring.pending != kNoBuffer ? ring.pending : ring.front, wantKind, wantStride, wantH);
+            if (options != (pitchOptions | kBlockScan) || (stride & 0xffff) != wantStride || kind != wantKind ||
+                hOffset != wantH || start != expectedStart())
                 panic("IOSwitch display: DC A did not take the block-linear window A: OPTIONS %#x STRIDE %#x KIND %#x "
                       "H %#x START %#x, wrote %#x %#x %#x %#x %#x",
                       options, stride, kind, hOffset, start, pitchOptions | kBlockScan, kBlockLineStride,
@@ -1926,6 +2007,13 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         dc[kDcIntStatus] = underflow;
         if (stats) stUnderflows++;
         if (probe.active()) probeUnderflow = true;
+        if (directOn && ring.front >= kSlot0 && underflowRun + 1 >= kDirectUnderflowFrames) {
+            directOn = false;
+            IOLog(
+                "IOSwitch display: window A underflowed %u frames in a row scanning a surface through the SMMU: direct "
+                "scanout off, frames are copied again (swaps still retire at their latch)\n",
+                underflowRun + 1);
+        }
         if (++underflowRun < kUnderflowFrames) return;
         panic("IOSwitch display: window A underflowed %u frames in a row since the rotation: UFLOW_STATUS %#x OPTIONS "
               "%#x KIND %#x STRIDE %#x",
@@ -1952,6 +2040,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     void stopRotation()
     {
         abortProbe("the display stopped");
+        stopDirect();
         if (rotated) {
             gPanicRestore.armed = false;
             __asm__ volatile("dmb ish" ::: "memory");
@@ -2089,6 +2178,7 @@ public:
     bool finishResume()
     {
         if (!hwSuspended) panic("IOSwitch display: tegra_display_resume without tegra_display_suspend");
+        if (directAttached) reattachDirect();  // SC7 reset the MC: the dc swgroup is in bypass again
         dc[kDcStateAccess] = 0;
         dc[kDcWindowHeader] = kWindowASelect;
         dc[kWinOptions] = 0;
@@ -2344,7 +2434,8 @@ public:
     void kickOnce()
     {
         if (!bootTransfer || transferred || !logicalPM || !bootMapping || !primary) return;
-        const OriginalLegacySwapRequest *request = pendingSwapRequest();
+        // Retiring at the latch, the head may be a swap already on screen or asked for: the next one not yet taken goes.
+        const OriginalLegacySwapRequest *request = latchRetire ? firstUntaken() : pendingSwapRequest();
         if (!request || !isValidated(request)) return;
         if ((probe.active() || probeRequest) && !releaseProbeHold()) {  // window A is the SMMU probe's for a few frames
             kickDeferred = true;
@@ -2353,7 +2444,9 @@ public:
         pruneValidated();
         // Every surface is held (one scanned, one asked for, and with three a replaced one not yet known to be untaken, or a flip
         // out with two), or the controller is unclocked during SC7: the frame end that settles a latch, or the resume, kicks again.
-        const bool noSurface = doubleBuffer && ring.target() == kNoBuffer;
+        const bool direct = directOn && !gpuBypass && directCandidate(request);
+        const bool noSurface = doubleBuffer && (direct ? ring.held != kNoBuffer || ring.superseded != kNoBuffer
+                                                       : ring.target() == kNoBuffer);
         if (noSurface || hwSuspended) {
             if (noSurface && !kickDeferred) {
                 flipWaits = flipWaits + 1;
@@ -2366,7 +2459,7 @@ public:
         // (or be replaced at once). Every accepted swap is a whole frame, so it retires unshown, as an early retire does at a
         // copy's start, and the newest one goes. Only with early retirement (the default): with sheng-early-retire=0 every swap
         // retires after its own copy.
-        if (bootEarlyRetire) {
+        if (bootEarlyRetire && !latchRetire) {
             for (const OriginalLegacySwapRequest *next = queuedAfter(request); next && isValidated(next);
                  next = queuedAfter(request)) {
                 if (!retireSwap(request, true)) break;
@@ -2460,6 +2553,11 @@ public:
             if (tapeSettling()) return;
         }
         noteSurface(surface, memory);
+        if (direct && offerDirect(request, memory, sourceStride, allocation, width, height, kickAt)) return;
+        if (direct && ring.target() == kNoBuffer) {  // no slot either: the frame end that frees a surface kicks again
+            kickDeferred = true;
+            return;
+        }
         if (gpuCopy && !gpuBypass && offerGpuCopy(request, memory, sourceStride, allocation, width, height, kickAt))
             return;
         if (!gpuBypass && native_legacy_gpu_offer(this, memory, sourceStride, width, height)) {
@@ -2474,7 +2572,7 @@ public:
             // frame's memory, the previous frame's copy has finished (transferred held this one back), and the next swap still waits for
             // the copy because transferred stays set until finishGpuSwap.
             noteTaken(request, kickAt);
-            if (bootEarlyRetire && retireSwap(request, true)) {
+            if (bootEarlyRetire && !latchRetire && retireSwap(request, true)) {
                 gpuRetired = true;
                 native_legacy_early_retires = native_legacy_early_retires + 1;
             }
@@ -2617,6 +2715,8 @@ public:
     // A swap the kick has finished with (copied, filled or handed to the GPU), before it retires: its queue time and flip wait.
     void noteTaken(const OriginalLegacySwapRequest *request, uint64_t kickAt)
     {
+        take(request);
+        flipRequest = request;
         if (!stats) return;
         // r6-lows/r14-pacing: carried to the flip of this frame (flip, markFlip), then to its present (notePresent).
         taken = {submittedAt(request), kickAt, 0, 0};
@@ -2818,7 +2918,7 @@ public:
         transferred = true;
         copyQueued = true;
         noteTaken(request, kickAt);
-        if (asyncCopy == 2 && retireSwap(request, true)) job.retired = true;
+        if (asyncCopy == 2 && !latchRetire && retireSwap(request, true)) job.retired = true;
         copySource->interruptOccurred(nullptr, nullptr, 0);
     }
     static void copyFired(OSObject *owner, IOInterruptEventSource *, int)
@@ -3023,7 +3123,7 @@ public:
         gpuLength = (uint64_t)width * height * 4;
         transferred = true;
         noteTaken(request, kickAt);
-        if (bootEarlyRetire && retireSwap(request, true)) {
+        if (bootEarlyRetire && !latchRetire && retireSwap(request, true)) {
             gpuRetired = true;
             native_legacy_early_retires = native_legacy_early_retires + 1;
         }
@@ -3062,6 +3162,17 @@ public:
             stGpuCopy.add(mach_absolute_time() - gpuOfferedAt);
             if (!status) ++stGpuCopies;
         }
+        const int directEntry = gpuDirect;
+        gpuDirect = kNoBuffer;
+        if (status &&
+            directEntry != kNoBuffer) {  // the rendering never finished on the GPU: copy it on the CPU instead
+            native_legacy_gpu_fallback_observed(status);
+            untake(request);
+            gpuBypass = true;
+            transferred = false;
+            kickSwapQueue();
+            return;
+        }
         if (status) {
             native_legacy_gpu_fallback_observed(status);
             ring.release();  // the target may hold a partial frame: never flipped to
@@ -3075,6 +3186,7 @@ public:
             return;
         }
         gpuPresented = request;
+        gpuPresentedEntry = directEntry;
         if (hwSuspended) {
             gpuPresentDeferred = true;
             return;
@@ -3084,9 +3196,20 @@ public:
     void presentGpuCopy()
     {
         const OriginalLegacySwapRequest *request = gpuPresented;
+        const int directEntry = gpuPresentedEntry;
         gpuPresented = nullptr;
-        presentBlock();  // the GPU's completion already put the frame in DRAM
+        gpuPresentedEntry = kNoBuffer;
+        if (directEntry != kNoBuffer) {
+            flipRequest = request;
+            presentEntry(directEntry);  // the compositor's rendering of it is done
+        } else
+            presentBlock();  // the GPU's completion already put the frame in DRAM
         native_legacy_transfer_observed(kIOReturnSuccess, request, gpuLength);
+        if (latchRetire) {  // it retires when it is seen on screen (checkFlip)
+            transferred = false;
+            kickSwapQueue();
+            return;
+        }
         // Retired at the offer, or gone from the queue meanwhile (the family discarded it): nothing left to retire.
         if (gpuRetired || !request || pendingSwapRequest() != request) {
             gpuRetired = false;
@@ -3101,6 +3224,7 @@ public:
     {
         if (!(bootRetire || bootCpuPresent || force)) return false;
         if (!activateOnlyPendingSwap(request)) return false;
+        untake(request);
         const uint64_t submitted = stats ? submittedAt(request) : 0;
         removeValidated(request);
         IOMobileFramebufferLegacy::completeCurrentSwap();
@@ -3118,11 +3242,219 @@ public:
     {
         // Only after the real copy and store barrier: select the actual pending head and let the unchanged family release it and wake
         // waiters. This reports memory scanout completion, not a panel vblank or hardware fence.
+        if (latchRetire) {  // retiring at the latch (direct scanout on): checkFlip retires it once it is seen on screen
+            transferred = false;
+            kickSwapQueue();
+            return;
+        }
         if (!retireSwap(request, force)) return;
         // The unchanged family has retired this generation and released its current reference. Permit the next independently validated
         // single pending frame. Keep the latch set while completion can reenter this method, and whenever retirement remains disabled.
         transferred = false;
         kickSwapQueue();
+    }
+    // --- Direct scanout (see the members) ------------------------------------------------------------------------------
+    void take(const OriginalLegacySwapRequest *request)
+    {
+        for (const Taken &t : takenSwaps)
+            if (t.request == request) return;
+        for (Taken &t : takenSwaps)
+            if (!t.request) {
+                t = {request, ++takeSeq};
+                return;
+            }
+        takenSwaps[0] = {request, ++takeSeq};  // more than eight in flight cannot happen (the family queues fewer)
+    }
+    void untake(const OriginalLegacySwapRequest *request)
+    {
+        for (Taken &t : takenSwaps)
+            if (t.request == request) t = {};
+    }
+    uint64_t seqOf(const OriginalLegacySwapRequest *request) const
+    {
+        for (const Taken &t : takenSwaps)
+            if (request && t.request == request) return t.seq;
+        return 0;
+    }
+    // The first accepted swap in the family's queue not yet taken (latchRetire: older ones wait on screen for their latch).
+    const OriginalLegacySwapRequest *firstUntaken() const
+    {
+        for (const OriginalLegacySwapRequest *r = pendingSwapRequest(); r; r = queuedAfter(r))
+            if (!seqOf(r)) return r;
+        return nullptr;
+    }
+    // At a latch (latchRetire): every taken swap at the head up to the one seen on screen (take sequence seq) retires, in queue
+    // order; the one still in flight, or a newer one asked for, stays.
+    void retireThrough(uint64_t seq)
+    {
+        if (!latchRetire || !seq) return;
+        bool retired = false;
+        for (const OriginalLegacySwapRequest *head = pendingSwapRequest(); head; head = pendingSwapRequest()) {
+            const uint64_t at = seqOf(head);
+            if (!at || at > seq || (gpuScanout && head == gpuRequest)) break;
+            if (!retireSwap(head, true)) break;
+            retired = true;
+        }
+        if (retired) kickSwapQueue();
+    }
+    // A swap window A can scan in place: one full-frame BGRA surface (validateSwap's single layer), its rows a multiple of 64
+    // bytes, at most one slot. The portrait-native layout only: window A then scans rows unrotated, as hekate's pitch window does.
+    bool directCandidate(const OriginalLegacySwapRequest *request) const
+    {
+        if (!IOSWITCH_PORTRAIT_NATIVE) return false;
+        OSObject *surface = nullptr;
+        memcpy(&surface, reinterpret_cast<const unsigned char *>(request) + 2624, sizeof(surface));
+        if (!surface || !surface->metaCast("IOSurface")) return false;
+        const uint64_t stride = native_legacy_surface_stride(surface),
+                       allocation = native_legacy_surface_allocation(surface);
+        return native_legacy_surface_width(surface) == kNativeBlockWidth &&
+               native_legacy_surface_height(surface) == kNativeBlockHeight &&
+               nativeBgra(native_legacy_surface_format(surface), native_legacy_surface_planes(surface)) &&
+               !(stride % 64) && stride >= (uint64_t)kNativeBlockWidth * 4 && stride <= 0xffff &&
+               allocation <= kSlotSpan && allocation >= stride * kNativeBlockHeight;
+    }
+    // The slot entry holding memory (mapped now, into the least recently used slot neither scanned nor asked for, if not yet);
+    // kNoBuffer when every slot is in use or the pages cannot be had.
+    int directSlotFor(IOMemoryDescriptor *memory, uint64_t stride, uint64_t allocation)
+    {
+        int victim = -1;
+        for (unsigned k = 0; k < kSlots; ++k) {
+            if (slots[k].memory == memory && slots[k].stride == stride) {
+                slots[k].used = ++slotUses;
+                return kSlot0 + (int)k;
+            }
+            if (!ring.busy(kSlot0 + (int)k) && (victim < 0 || slots[k].used < slots[victim].used)) victim = (int)k;
+        }
+        if (victim < 0) return kNoBuffer;
+        dropSlot((unsigned)victim);
+        const uint64_t iova = kProbeSlot + (uint64_t)victim * kSlotSpan;
+        const uint32_t pages = (uint32_t)((allocation + 4095) / 4096);
+        if (memory->prepare(kIODirectionOut) != kIOReturnSuccess) return kNoBuffer;
+        uint64_t batch[64];
+        uint32_t mapped = 0;
+        bool ok = true;
+        while (ok && mapped < pages) {
+            uint32_t n = 0;
+            while (n < 64 && mapped + n < pages) {
+                IOByteCount length = 0;
+                const uint64_t pa =
+                    memory->getPhysicalSegment((uint64_t)(mapped + n) * 4096, &length, kIOMemoryMapperNone);
+                if (!pa || (pa & 4095) || length < 4096) {
+                    ok = false;
+                    break;
+                }
+                batch[n++] = pa;
+            }
+            ok = ok && probeDomain.map(iova + (uint64_t)mapped * 4096, batch, n, false);
+            mapped += n;
+        }
+        if (!ok) {
+            probeDomain.unmap(iova, mapped);
+            cleanDomain();
+            memory->complete(kIODirectionOut);
+            return kNoBuffer;
+        }
+        memory->retain();
+        slots[victim] = {memory, stride, ++slotUses, pages};
+        cleanDomain();
+        return kSlot0 + victim;
+    }
+    // A slot's mapping and its surface given back (it is neither scanned nor asked for).
+    void dropSlot(unsigned k)
+    {
+        DirectSlot &slot = slots[k];
+        if (slot.pages) probeDomain.unmap(kProbeSlot + (uint64_t)k * kSlotSpan, slot.pages);
+        if (slot.memory) {
+            slot.memory->complete(kIODirectionOut);
+            slot.memory->release();
+        }
+        slot = {};
+        cleanDomain();
+    }
+    // The table entries just written, to memory, then the SMMU's caches for the display's ASID.
+    void cleanDomain()
+    {
+        uintptr_t low, high;
+        if (probeDomain.takeDirty(&low, &high)) cleanInvalidate(reinterpret_cast<const void *>(low), high - low);
+        tegra_smmu_flush(TEGRA_SMMU_ASID_DISPLAY);
+    }
+    // Under the gate, in the kick: the swap's surface into its slot, and a fence-only GPU present for it; its completion flips
+    // window A to the slot (finishGpuCopy). False: the copy path takes it.
+    bool offerDirect(const OriginalLegacySwapRequest *request, IOMemoryDescriptor *memory, uint64_t stride,
+                     uint64_t allocation, uint32_t width, uint32_t height, uint64_t kickAt)
+    {
+        if (!gpuCopy || !gpuDoneSource) return false;
+        const int entry = directSlotFor(memory, stride, allocation);
+        if (entry == kNoBuffer) return false;
+        TegraScanoutCopy copy = {};
+        copy.version = TEGRA_SCANOUT_COPY_VERSION;
+        copy.width = width;
+        copy.height = height;
+        copy.sequence = gpuSequence + 1;
+        copy.display = this;
+        copy.source = memory;
+        copy.sourceStride = stride;
+        copy.sourceBytes = allocation;
+        copy.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY;
+        memory->retain();
+        if (tegra_gm20b_scanout_copy(&copy)) {
+            memory->release();
+            if (stats) ++stGpuDeclined;
+            return false;
+        }
+        gpuSequence = copy.sequence;
+        gpuSource = memory;
+        gpuOfferedAt = mach_absolute_time();
+        __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
+        gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
+        gpuRequest = request;
+        gpuLength = (uint64_t)width * height * 4;
+        gpuDirect = entry;
+        transferred = true;
+        noteTaken(request, kickAt);
+        if (stats) ++stDirect;
+        return true;
+    }
+    // The probe passed (its domain: the scan surfaces 1:1, the slot tables): keep it attached and scan swaps in place.
+    bool startDirect()
+    {
+        if (!gpuCopy || !gpuDoneSource || !IOSWITCH_PORTRAIT_NATIVE) return false;
+        probeDomain.unmap(kProbeSlot, (uint32_t)(kNativeBlockBytes / 4096));  // the probe's own slot mapping
+        if (!probeDomain.reserve(kProbeSlot, kSlots * kSlotSpan)) {
+            snprintf(probeLine, sizeof(probeLine), "no SMMU tables for %u slots", kSlots);
+            return false;
+        }
+        cleanDomain();
+        directAttached = directOn = latchRetire = true;
+        return true;
+    }
+    // Resume from SC7 (the MC was reset): the same directory again; refused, window A back to the boot framebuffer.
+    void reattachDirect()
+    {
+        char why[160];
+        if (!tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY, probeDomain.ptb(), TEGRA_SMMU_DC_ASID,
+                               TEGRA_SMMU_TRANSLATION_ENABLE_0, kDisplay0aTranslation, why, sizeof(why)))
+            return;
+        IOLog("IOSwitch display: SMMU domain not re-attached after SC7 (%s): direct scanout off, window A back on the "
+              "boot "
+              "framebuffer\n",
+              why);
+        directOn = directAttached = false;
+        for (size_t i = 0; i < sizeof(kWindowAState) / sizeof(kWindowAState[0]); ++i) {
+            if (kWindowAState[i] == kWinbufStartAddr) savedWindow[i] = surfaceAddress(0);
+            if (kWindowAState[i] == kWinbufSurfaceKind) savedWindow[i] = kBlockSurfaceKind;
+            if (kWindowAState[i] == kWinLineStride) savedWindow[i] = kBlockLineStride;
+            if (kWindowAState[i] == kWinbufHOffset) savedWindow[i] = kBlockHOffset;
+        }
+        ring.reset(ring.buffers);
+    }
+    // The display stops: the swgroup back to bypass, every slot given back.
+    void stopDirect()
+    {
+        if (!directAttached) return;
+        tegra_smmu_detach(TEGRA_SMMU_ASID_DISPLAY, TEGRA_SMMU_DC_ASID);
+        for (unsigned k = 0; k < kSlots; ++k) dropSlot(k);
+        directOn = directAttached = false;
     }
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {

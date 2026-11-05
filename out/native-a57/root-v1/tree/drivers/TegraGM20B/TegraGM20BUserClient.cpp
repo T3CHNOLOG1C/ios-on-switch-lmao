@@ -2110,15 +2110,16 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 		return kIOReturnNotReady;
 	IOMemoryDescriptor *memory =
 		OSDynamicCast(IOMemoryDescriptor, static_cast<OSObject *>(copy->source));
+	const bool fenceOnly = copy->flags & TEGRA_SCANOUT_COPY_FENCE_ONLY;
 	if (!memory || !copy->width || !copy->height || copy->width > 16384 ||
 	    copy->sourceStride < uint64_t(copy->width) * 4 || copy->sourceStride > UINT32_MAX ||
 	    copy->sourceBytes < copy->sourceStride * copy->height ||
-	    copy->targetPitch < copy->width * 4 || copy->blockHeightLog2 > 5)
+	    (!fenceOnly && (copy->targetPitch < copy->width * 4 || copy->blockHeightLog2 > 5)))
 		return kIOReturnBadArgument;
 	// the block-linear target must hold the frame: whole block rows of targetPitch bytes x (8 << blockHeightLog2) lines
 	const uint64_t blockLines = 8ULL << copy->blockHeightLog2;
-	if (copy->targetBytes <
-	    (copy->height + blockLines - 1) / blockLines * blockLines * copy->targetPitch)
+	if (!fenceOnly && copy->targetBytes < (copy->height + blockLines - 1) / blockLines *
+						      blockLines * copy->targetPitch)
 		return kIOReturnBadArgument;
 	if (!gPresentLock) {
 		IOLock *fresh = IOLockAlloc(), *expected = nullptr;
@@ -2130,9 +2131,11 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	}
 	IOLockLock(gPresentLock);
 	uint64_t sourcePa = 0;
-	const uint64_t target = presentTarget(copy->target, copy->targetBytes);
-	const uint64_t source = target ? presentSurface(memory, copy->sourceBytes, &sourcePa) : 0;
-	int ret = target && source
+	// fence only: no target; the source is still imported (its first page names the channels that write it)
+	const uint64_t target = fenceOnly ? 0 : presentTarget(copy->target, copy->targetBytes);
+	const uint64_t source =
+		target || fenceOnly ? presentSurface(memory, copy->sourceBytes, &sourcePa) : 0;
+	int ret = (target || fenceOnly) && source
 			  ? tgm_present_copy(source, sourcePa, copy->sourceStride, copy->width,
 					     copy->height, target, copy->targetPitch,
 					     copy->blockHeightLog2, presentDone, copy->display)
