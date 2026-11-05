@@ -112,7 +112,6 @@ def _tidy_units(target, ctx):
         else:
             lang_flags = ctx.fragments.cpp.cxxopts + list(getattr(ctx.rule.attr, "cxxopts", []))
         flags = _flags(
-            ctx,
             cc_toolchain,
             feature_configuration,
             compilation_context,

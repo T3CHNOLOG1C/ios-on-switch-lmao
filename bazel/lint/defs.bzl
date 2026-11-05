@@ -13,6 +13,8 @@ that a package declares; this is how BUILD, .bzl, Markdown, JSON and TOML files,
 of cached checks. Third-party and generated files go in `exclude`.
 """
 
+load(":clang_tidy.bzl", "RULE_KINDS", "clang_tidy_test")
+
 PATTERNS = [
     # Starlark
     "BUILD",
@@ -58,6 +60,7 @@ def lint_files(
         exclude = [],
         dirs = None,
         subpackages = None,
+        clang_tidy_clean = False,
         visibility = ["//visibility:public"]):
     """Declares the package's lintable files and those of its subpackages as one filegroup.
 
@@ -71,6 +74,8 @@ def lint_files(
         exclude: glob patterns (relative to the package) of third-party or generated files to leave alone.
         dirs: when set, only the package's top-level files and these directories (recursively) are globbed.
         subpackages: when set, the subpackages to chain (paths relative to the package), instead of discovering them.
+        clang_tidy_clean: the package's :lint_files_clang_tidy test (clang-tidy over its host cc targets) is part of
+            `bazel test //...`; until then it is manual.
         visibility: the filegroup's visibility; its parent package must see it.
     """
     package = native.package_name()
@@ -90,3 +95,35 @@ def lint_files(
         ],
         visibility = visibility,
     )
+    _clang_tidy_targets(name = name + "_clang_tidy", clean = clang_tidy_clean)
+
+# Targets built for the device (the kernel, iOS userland) are checked through //:clang_tidy_test, which reaches them
+# through //:boot and //:gpu in the configuration they build in; in the host configuration they are incompatible.
+_DEVICE_CONSTRAINTS = ["bazel/platforms:kernel", "bazel/platforms:user", "os:ios"]
+
+def _clang_tidy_targets_impl(name, visibility, clean):
+    targets = []
+    for rule in native.existing_rules().values():
+        if rule["kind"] not in RULE_KINDS or "no-lint" in rule.get("tags", []):
+            continue
+        constraints = [str(c).rpartition("//")[2] for c in rule.get("target_compatible_with", [])]
+        if [c for c in constraints if c in _DEVICE_CONSTRAINTS]:
+            continue
+        targets.append(":" + rule["name"])
+    if targets:
+        clang_tidy_test(
+            name = name,
+            targets = targets,
+            # A package joins `bazel test //...` once its findings are fixed (lint_files(clang_tidy_clean = True)).
+            tags = [] if clean else ["manual"],
+            visibility = visibility,
+        )
+
+# A finalizer: it runs after the rest of the BUILD file, so it sees every cc target the package declares wherever the
+# lint_files() call sits, and gives the package one :lint_files_clang_tidy test over its host cc targets (host tests and
+# the code they compile, through their deps).
+_clang_tidy_targets = macro(
+    implementation = _clang_tidy_targets_impl,
+    attrs = {"clean": attr.bool(configurable = False, doc = "the test is part of `bazel test //...`")},
+    finalizer = True,
+)
