@@ -7,8 +7,7 @@
 // for 4 KiB and ~1.6 ms for 128 KiB, and of every 128 KiB window of the System image a boot reads at all it reads ~81%
 // (89% of 64 KiB windows, 73% of 256 KiB): 64-256 KiB windows cost about the same card time, 128 KiB the least, a
 // fifth of reading the blocks one by one. So the image is cached in aligned windows of kIOSwitchWindowBlocks blocks:
-//  - a small request that misses reads its whole window (every block of it not held or being read), and waits; one of
-//    a lower I/O class reads only its own blocks, so that no foreground read waits on a background one;
+//  - a small request that misses reads its whole window (every block of it not held or being read), and waits;
 //  - a request for blocks being read waits for that read: a block is never read twice at once, and never read while
 //    it is held (a held block's bytes never change while it is held, so copies out of it need no lock);
 //  - readAhead reads exactly the blocks asked for (the boot prefetch's runs), for the page-ins that follow;
@@ -101,8 +100,6 @@ class IOSwitchCache {
 public:
     enum Mode {
         kReadAround,   // a small request: read the rest of its windows too (at most kIOSwitchAroundWindows)
-        kNeedOnly,     // a small one of a lower class: read only its own blocks (no foreground read ever waits on a
-                       // window a background one is reading)
         kCoveredOnly,  // a large one: only if every block is held or being read, and then read nothing
     };
 
@@ -132,8 +129,7 @@ public:
 
     // A request for blocks [first, first + blocks) of image `image` (imageBlocks long). True when the cache takes it:
     // r holds its windows, r->waiting says how many it waits on (0: copy now), and reads[0, *count) are to be issued (at
-    // most kIOSwitchAroundWindows * kIOSwitchWindowReads, which `capacity` must allow but in kCoveredOnly). False: go
-    // direct.
+    // most kIOSwitchAroundWindows * kIOSwitchWindowReads, which `capacity` must allow in kReadAround). False: go direct.
     bool plan(IOSwitchCacheRequest *r, uint8_t image, uint64_t first, uint32_t blocks, uint64_t imageBlocks, Mode mode,
               IOSwitchCacheRead *reads, uint32_t capacity, uint32_t *count)
     {
@@ -146,7 +142,7 @@ public:
         const uint64_t last = first + blocks - 1, lastTag = last - last % kIOSwitchWindowBlocks;
         const uint32_t n = static_cast<uint32_t>((lastTag - firstTag) / kIOSwitchWindowBlocks + 1);
         if (n > kIOSwitchSpanWindows ||
-            (mode != kCoveredOnly && (n > kIOSwitchAroundWindows || capacity < n * kIOSwitchWindowReads)))
+            (mode == kReadAround && (n > kIOSwitchAroundWindows || capacity < n * kIOSwitchWindowReads)))
             return refuse(r, 0);
         for (uint32_t i = 0; i < n; ++i) {
             const uint64_t tag = firstTag + uint64_t(i) * kIOSwitchWindowBlocks;
@@ -164,10 +160,8 @@ public:
         }
         for (uint32_t i = 0; i < n; ++i) {
             IOSwitchWindow *w = r->window[i];
-            if (mode != kCoveredOnly) {
-                const uint32_t around = mode == kReadAround ? within(w->tag, imageBlocks) : r->need[i];
-                *count += emit(w, around & ~(w->valid | w->reading), false, reads + *count);
-            }
+            if (mode == kReadAround)
+                *count += emit(w, within(w->tag, imageBlocks) & ~(w->valid | w->reading), false, reads + *count);
             const uint32_t pending = r->need[i] & ~w->valid;
             if (pending) {
                 IOSwitchWait *wait = &r->wait[i];

@@ -32,7 +32,7 @@ TEST(CryptexSource, ReadsGoToTheCardWithoutACopy)
 {
     const std::string read = body("IOReturn IOSwitchCryptexDevice::doAsyncReadWrite(");
     // A read the cache does not take: each piece a sub-range of the request's own memory, issued on the SD device.
-    EXPECT_THAT(read, HasSubstr("if (cacheRead(p, buffer, block, count, issue)) return kIOReturnSuccess;"));
+    EXPECT_THAT(read, HasSubstr("if (cacheRead(p, buffer, block, count)) return kIOReturnSuccess;"));
     EXPECT_THAT(read, HasSubstr("ioswitchNextPiece(extents, extentCount, &at, start + done, length - done, maxPiece)"));
     EXPECT_THAT(read, HasSubstr("IOSubMemoryDescriptor::withSubRange(buffer, done, piece.length, kIODirectionIn)"));
     EXPECT_THAT(read, HasSubstr("sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, issue,"));
@@ -59,9 +59,8 @@ TEST(CryptexSource, ReadsGoToTheCardWithoutACopy)
 TEST(CryptexSource, SmallReadsGoThroughTheCache)
 {
     const std::string plan = body("bool IOSwitchCryptexDevice::cacheRead(");
-    EXPECT_THAT(plan, HasSubstr("const bool high = attributes && attributes->priority <= kIOStoragePriorityHigh;"));
-    EXPECT_THAT(plan, HasSubstr("count * kImageBlock > kAroundBytes ? IOSwitchCache::kCoveredOnly"));
-    EXPECT_THAT(plan, HasSubstr(": high                             ? IOSwitchCache::kReadAround"));
+    EXPECT_THAT(plan, HasSubstr("count * kImageBlock > kAroundBytes ? IOSwitchCache::kCoveredOnly : "
+                                "IOSwitchCache::kReadAround"));
     // What finishRequest needs is set before the plan (a read under way can make the request ready at the unlock),
     // and the request's count of what it waits for under the cache's lock.
     EXPECT_LT(plan.find("p->cached = true;"), plan.find("gCache.cache.plan("));
@@ -71,6 +70,9 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
     const std::string issue = body("uint32_t IOSwitchCryptexDevice::issueRead(");
     EXPECT_THAT(issue, HasSubstr("IOSubMemoryDescriptor::withSubRange(\n            memory,"));
     EXPECT_THAT(issue, HasSubstr("IOStorageCompletion pieceCompletion = {this, jobPieceDone, j};"));
+    // Every cache read in the SD driver's high class, whichever request started it: a foreground read may wait on it.
+    EXPECT_THAT(issue, HasSubstr("high.priority = kIOStoragePriorityHigh;"));
+    EXPECT_THAT(issue, HasSubstr("piece.length / kSdSector, &high, &pieceCompletion)"));
     EXPECT_THAT(issue, HasSubstr("bzero(bytes + done, piece.length);"));
     for (const char *copy : {"copypv", "memcpy", "writeBytes"}) EXPECT_THAT(issue, Not(HasSubstr(copy)));
     // The copy: on the thread call, from held windows, without readBytes/writeBytes' flush.

@@ -467,9 +467,8 @@ private:
     IOBlockStorageDevice *sd = nullptr;
     uint64_t maxPiece = 0;  // bytes per SD read
     bool holes = false;     // some of the image reads as zeros (a sparse file)
-    bool cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count,
-                   IOStorageAttributes *attributes);
-    uint32_t issueRead(const IOSwitchCacheRead &read, IOStorageAttributes *attributes, bool ahead);
+    bool cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count);
+    uint32_t issueRead(const IOSwitchCacheRead &read, bool ahead);
 };
 
 OSDefineMetaClassAndStructors(IOSwitchCryptexDevice, IOBlockStorageDevice)
@@ -530,7 +529,7 @@ IOReturn IOSwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UIn
     IOStorageAttributes high = {};
     high.priority = kIOStoragePriorityHigh;
     IOStorageAttributes *issue = p->prefetch ? &high : attributes;
-    if (cacheRead(p, buffer, block, count, issue)) return kIOReturnSuccess;
+    if (cacheRead(p, buffer, block, count)) return kIOReturnSuccess;
     if (p->prefetch) {
         p->inflight = true;
         IOLockLock(gFlow.lock);
@@ -576,17 +575,11 @@ IOReturn IOSwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UIn
     return kIOReturnSuccess;
 }
 
-// True when the cache took the request (finishRequest completes it once its windows hold every block). Only a small
-// request of the SD driver's high class (the foreground's page-ins, the prefetch's) reads its windows around it; one of
-// a lower class reads only its own blocks, so a foreground read never waits on a window a background one is reading.
-bool IOSwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count,
-                                      IOStorageAttributes *attributes)
+// True when the cache took the request (finishRequest completes it once its windows hold every block).
+bool IOSwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count)
 {
     if (!__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE)) return false;
-    const bool high = attributes && attributes->priority <= kIOStoragePriorityHigh;
-    const auto mode = count * kImageBlock > kAroundBytes ? IOSwitchCache::kCoveredOnly
-                      : high                             ? IOSwitchCache::kReadAround
-                                                         : IOSwitchCache::kNeedOnly;
+    const auto mode = count * kImageBlock > kAroundBytes ? IOSwitchCache::kCoveredOnly : IOSwitchCache::kReadAround;
     // Set before the plan: a read already under way may make the request ready as soon as the lock is dropped.
     p->cached = true;
     p->buffer = buffer;
@@ -605,16 +598,19 @@ bool IOSwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, ui
     }
     buffer->retain();
     uint32_t cardReads = 0;
-    for (uint32_t i = 0; i < n; ++i) cardReads += issueRead(p->reads[i], attributes, false);
+    for (uint32_t i = 0; i < n; ++i) cardReads += issueRead(p->reads[i], false);
     reportDirect(p->length, cardReads);
     pieceDone(this, p, kIOReturnSuccess, 0);  // the issuing reference
     return true;
 }
 
 // Returns the card reads it issued. The window's blocks are marked being read: nothing else touches them until
-// jobFinish.
-uint32_t IOSwitchCryptexDevice::issueRead(const IOSwitchCacheRead &read, IOStorageAttributes *attributes, bool ahead)
+// jobFinish. Every cache read goes in the SD driver's high class, whichever request started it: a foreground read may
+// be waiting on it, and in a lower class it would wait out the SD driver's 100 ms aging behind a busy foreground.
+uint32_t IOSwitchCryptexDevice::issueRead(const IOSwitchCacheRead &read, bool ahead)
 {
+    IOStorageAttributes high = {};
+    high.priority = kIOStoragePriorityHigh;
     Job *j = takeJob();
     if (!j) {  // the read fails at once: its blocks are read again by the next request that wants them
         IOLockLock(gCache.lock);
@@ -651,7 +647,7 @@ uint32_t IOSwitchCryptexDevice::issueRead(const IOSwitchCacheRead &read, IOStora
         __atomic_fetch_add(&j->remaining, 1, __ATOMIC_RELAXED);
         IOStorageCompletion pieceCompletion = {this, jobPieceDone, j};
         const IOReturn issued =
-            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, attributes, &pieceCompletion);
+            sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, &high, &pieceCompletion);
         sub->release();
         if (issued != kIOReturnSuccess) jobPieceDone(this, j, issued, 0);
         ++pieces;
@@ -665,8 +661,6 @@ uint32_t IOSwitchCryptexDevice::issueRead(const IOSwitchCacheRead &read, IOStora
 void IOSwitchCryptexDevice::readAhead(uint64_t start, uint64_t length)
 {
     if (!__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE) || !length) return;
-    IOStorageAttributes high = {};
-    high.priority = kIOStoragePriorityHigh;
     const uint64_t end = (start + length + kImageBlock - 1) / kImageBlock;
     uint32_t cardReads = 0;
     for (uint64_t at = start / kImageBlock; at < end;) {
@@ -676,7 +670,7 @@ void IOSwitchCryptexDevice::readAhead(uint64_t start, uint64_t length)
         const uint32_t covered = gCache.cache.readAhead(static_cast<uint8_t>(index), at, end - at, blocks, reads, &n);
         IOLockUnlock(gCache.lock);
         if (!covered) break;  // every window in use: the page-in reads the rest itself
-        for (uint32_t i = 0; i < n; ++i) cardReads += issueRead(reads[i], &high, true);
+        for (uint32_t i = 0; i < n; ++i) cardReads += issueRead(reads[i], true);
         at += covered;
     }
     __atomic_fetch_add(&gCache.unreported, cardReads, __ATOMIC_RELAXED);
@@ -724,9 +718,7 @@ IOReturn IOSwitchCryptexDevice::readBlock(IOMemoryDescriptor *buffer, uint64_t b
     SyncRead wait = {IOLockAlloc(), false, kIOReturnSuccess};
     if (!wait.lock) return kIOReturnNoMemory;
     IOStorageCompletion completion = {nullptr, syncReadDone, &wait};
-    IOStorageAttributes high = {};
-    high.priority = kIOStoragePriorityHigh;  // (read around, as the page-ins it stands for)
-    IOReturn status = doAsyncReadWrite(buffer, block, 1, &high, &completion);
+    IOReturn status = doAsyncReadWrite(buffer, block, 1, nullptr, &completion);
     if (status == kIOReturnSuccess) {
         uint64_t deadline = 0;
         clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);

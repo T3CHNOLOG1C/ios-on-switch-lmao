@@ -108,36 +108,6 @@ TEST(CryptexCache, AColdMissReadsItsWholeWindowOnceAndNeighboursWaitForIt)
     EXPECT_EQ(rig.cache.check(), nullptr);
 }
 
-// A request of a lower class reads only its own blocks; a foreground one then reads the rest of the window itself,
-// and waits for the background read only for the blocks that read is bringing.
-TEST(CryptexCache, ALowerClassReadsOnlyItsOwnBlocks)
-{
-    Rig rig(2, 4, 100, 10);
-    IOSwitchCacheRead reads[32];
-    uint32_t n = 0;
-    IOSwitchCacheRequest low{}, high{};
-    ASSERT_TRUE(rig.cache.plan(&low, 0, 5, 2, 100, IOSwitchCache::kNeedOnly, reads, 32, &n));
-    ASSERT_EQ(n, 1u);
-    EXPECT_EQ(reads[0].first, 5u);
-    EXPECT_EQ(reads[0].count, 2u);
-    IOSwitchCacheRead around[32];
-    uint32_t m = 0;
-    ASSERT_TRUE(rig.cache.plan(&high, 0, 10, 1, 100, IOSwitchCache::kReadAround, around, 32, &m));
-    ASSERT_EQ(m, 2u) << "the rest of the window, around the background read";
-    EXPECT_EQ(around[0].first, 0u);
-    EXPECT_EQ(around[0].count, 5u);
-    EXPECT_EQ(around[1].first, 7u);
-    EXPECT_EQ(around[1].count, 25u);
-    EXPECT_TRUE(list(rig.finish(around[1], true)).size() == 1u) << "the foreground read waited on the background one";
-    EXPECT_TRUE(rig.copyOut(high, 0, 10, 1));
-    rig.cache.release(&high, true);
-    EXPECT_TRUE(list(rig.finish(around[0], true)).empty());
-    EXPECT_EQ(list(rig.finish(reads[0], true)).size(), 1u);
-    EXPECT_TRUE(rig.copyOut(low, 0, 5, 2));
-    rig.cache.release(&low, true);
-    EXPECT_EQ(rig.cache.check(), nullptr);
-}
-
 TEST(CryptexCache, TheLastWindowStopsAtTheImageEnd)
 {
     Rig rig(2, 4, 40, 10);
@@ -358,9 +328,7 @@ TEST(CryptexCache, RandomTrafficAgainstAModel)
                 q->blocks = uint32_t(std::min<uint64_t>(room, large ? 17 + rng() % 240 : 1 + rng() % 16));
                 IOSwitchCacheRead reads[kIOSwitchAroundWindows * kIOSwitchWindowReads];
                 uint32_t n = 0;
-                const auto mode = q->blocks > 16 ? IOSwitchCache::kCoveredOnly
-                                  : rng() % 4    ? IOSwitchCache::kReadAround
-                                                 : IOSwitchCache::kNeedOnly;
+                const auto mode = q->blocks > 16 ? IOSwitchCache::kCoveredOnly : IOSwitchCache::kReadAround;
                 if (!rig.cache.plan(&q->cr, q->image, q->first, q->blocks, size, mode, reads,
                                     kIOSwitchAroundWindows * kIOSwitchWindowReads, &n)) {
                     ASSERT_EQ(n, 0u);
