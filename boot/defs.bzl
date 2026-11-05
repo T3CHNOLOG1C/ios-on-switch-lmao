@@ -7,8 +7,11 @@ only the steps it reaches:
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU) ... trustcache.bundle
     strip -x         (release only) ......... kernel.macho
-    build_native_loader.py (kernel, ADT, bundle, seed, boot-args)
-                                         ...... layout.h, runs.h, kernel-window.bin, constants.json
+    build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
+                                         ...... plan.json, the kernel's LZ4 blocks, the rest
+    build_native_loader.py compress, twice ... each set of blocks lz4 -12'd (a boot-arg, ADT, overlay or GPU trust
+                                               cache edit leaves the kernel's set, and its 2-4 s, alone)
+    build_native_loader.py join ............. layout.h, runs.h, kernel-window.bin, constants.json
     clang -c, one per loader source ......... loader objects (the window's constants only for those including them)
     loader_link.py ........................... loader.uboot.bin
     bl33.py patch (once) / stage ............. bl33.bin
@@ -17,8 +20,8 @@ only the steps it reaches:
     cp ...................................... ioswitch/ (the directory //deploy:sd, //install:sd and //boot:snapshot take)
 
 So an overlay plist edit reruns the overlay tree and the final copy; a driver edit reruns the kernel's steps from the
-window on (four loader objects, the link, the bl33 stage, the boot script and the copy); a boot-arg edit reruns from the
-ADT edit on. The Python steps run on the hermetic interpreter and need nothing of Xcode; the loader's compiles and the
+layout on (both compressions, four loader objects, the link, the bl33 stage, the boot script and the copy); a boot-arg
+edit reruns from the ADT edit on, but compresses only the window's tail. The Python steps run on the hermetic interpreter and need nothing of Xcode; the loader's compiles and the
 release strip do (Xcode's clang and strip, the declared host input).
 """
 
@@ -166,29 +169,47 @@ def _boot_package_impl(ctx):
         stripped = out("kernel.macho")
         _xcode(ctx, "/usr/bin/strip", ["-x", "-o", stripped.path, kernel.path], [kernel], [stripped], "StripKernel", "Stripping the kernel's local symbols")
         kernel = stripped
-    layout_h, runs_h, window, constants = out("gen/layout.h"), out("gen/runs.h"), out("kernel-window.bin"), out("constants.json")
+    # Layout and checks, then the kernel's own LZ4 blocks and the rest compressed apart (a boot-arg, ADT, overlay
+    # binary or GPU trust cache edit recompresses only the rest), then the staged window and the loader's headers.
+    window_plan, kernel_blocks, tail_blocks = out("window/plan.json"), out("window/kernel.blocks"), out("window/tail.blocks")
     args = ctx.actions.args()
+    args.add("layout")
     args.add("--kernel", kernel)
     args.add("--adt", adt)
     args.add("--trustcache", bundle)
     args.add("--data-seed", ctx.file.data_seed)
     args.add("--boot-args", boot_args)
-    args.add("--lz4", ctx.file._lz4)
+    args.add("--plan", window_plan)
+    args.add("--kernel-blocks", kernel_blocks)
+    args.add("--tail-blocks", tail_blocks)
+    _run(ctx, ctx.executable._window, [args], [kernel, adt, bundle, ctx.file.data_seed, boot_args], [window_plan, kernel_blocks, tail_blocks], "KernelLayout", "Laying out the kernel window")
+
+    compressed = {}
+    for shard, blocks in (("kernel", kernel_blocks), ("tail", tail_blocks)):
+        compressed[shard] = out("window/%s.lz4" % shard)
+        ctx.actions.run(
+            executable = ctx.executable._window,
+            arguments = ["compress", "--lz4", ctx.file._lz4.path, "--blocks", blocks.path, "--out", compressed[shard].path],
+            inputs = [blocks],
+            tools = [ctx.file._lz4],
+            outputs = [compressed[shard]],
+            mnemonic = "KernelCompress",
+            progress_message = "Compressing the kernel window's %s blocks" % shard,
+            # lz4 -12 over the kernel's ~60 blocks in parallel; the tail is a block or two, beside it.
+            resource_set = _four_cpus if shard == "kernel" else None,
+        )
+
+    layout_h, runs_h, window, constants = out("gen/layout.h"), out("gen/runs.h"), out("kernel-window.bin"), out("constants.json")
+    args = ctx.actions.args()
+    args.add("join")
+    args.add("--plan", window_plan)
+    args.add("--kernel-lz4", compressed["kernel"])
+    args.add("--tail-lz4", compressed["tail"])
     args.add("--layout-h", layout_h)
     args.add("--runs-h", runs_h)
     args.add("--window", window)
     args.add("--constants", constants)
-    ctx.actions.run(
-        executable = ctx.executable._window,
-        arguments = [args],
-        inputs = [kernel, adt, bundle, ctx.file.data_seed, boot_args],
-        tools = [ctx.file._lz4],
-        outputs = [layout_h, runs_h, window, constants],
-        mnemonic = "KernelWindow",
-        progress_message = "Laying out and compressing the kernel window",
-        # lz4 -12 over the window's 4 MiB blocks, in parallel.
-        resource_set = _four_cpus,
-    )
+    _run(ctx, ctx.executable._window, [args], [window_plan, compressed["kernel"], compressed["tail"]], [layout_h, runs_h, window, constants], "KernelWindow", "Staging the kernel window")
 
     includes = []
     for marker in ctx.files.loader_include_markers:
