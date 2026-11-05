@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// Internals shared by the AWDL core's units. Not for the integration (awdl.h is the interface).
+#ifndef AWDL_INTERNAL_H
+#define AWDL_INTERNAL_H
+
+#include "awdl.h"
+
+#include <stdarg.h>
+#include <string.h>
+#ifdef KERNEL
+#include <libkern/libkern.h>  // vsnprintf, strnlen
+#else
+#include <stdio.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define AWDL_AW_US (AWDL_AW_TU * AWDL_TU_US)                 // 16384
+#define AWDL_EAW_US (AWDL_AW_US * AWDL_EAW_AWS)              // 65536
+#define AWDL_SEQ_US (AWDL_EAW_US * AWDL_SEQ_SLOTS)           // 1048576
+#define AWDL_PSF_US (AWDL_PSF_INTERVAL_TU * AWDL_TU_US)      // 112640
+#define AWDL_ROOT_COUNTER_US 1000000u                        // the root's loop-free counter ticks once a second
+#define AWDL_ELECTION_FRESH_US 2000000u                      // election parameters older than this are ignored
+#define AWDL_RESYNC_US 256                                   // re-install the radio schedule beyond this error
+
+struct awdl_writer {
+    uint8_t *buf;
+    size_t size, at, tlv;
+    int overflow;
+};
+void awdl_put16(uint8_t *p, uint16_t v);
+void awdl_put32(uint8_t *p, uint32_t v);
+int awdl_w_begin(struct awdl_writer *w, uint8_t type);
+void awdl_w_end(struct awdl_writer *w);
+void awdl_w_bytes(struct awdl_writer *w, const void *p, size_t n);
+void awdl_w_u8(struct awdl_writer *w, uint8_t v);
+void awdl_w_u16(struct awdl_writer *w, uint16_t v);
+void awdl_w_u32(struct awdl_writer *w, uint32_t v);
+void awdl_w_chanseq(struct awdl_writer *w, const struct awdl_chan seq[AWDL_SEQ_SLOTS]);
+
+struct awdl_txq_entry {
+    uint16_t len;
+    uint8_t group;
+    uint8_t dst[6];
+    uint8_t frame[AWDL_MAX_FRAME];
+};
+
+struct awdl_core {
+    struct awdl_host host;
+    struct awdl_config cfg;
+    int running;
+    // timing: AW number base_seq starts at local TSF base_tsf
+    uint64_t base_tsf;
+    uint16_t base_seq;
+    uint64_t next_psf, next_slot, last_counter_tick, anchor;
+    // election
+    enum awdl_role role;
+    struct awdl_election_v2 adv;  // what we advertise (root, parent, hops, metrics, counters)
+    uint32_t self_counter;
+    // peers and transmit queue
+    struct awdl_peer peers[AWDL_MAX_PEERS];
+    struct awdl_txq_entry txq[AWDL_TXQ_FRAMES];
+    unsigned txq_head, txq_count;
+    uint16_t data_seq, mgmt_seq, service_update_indicator;
+    struct awdl_stats stats;
+    uint8_t scratch[AWDL_MAX_FRAME];
+};
+
+void awdl_log(struct awdl_core *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
