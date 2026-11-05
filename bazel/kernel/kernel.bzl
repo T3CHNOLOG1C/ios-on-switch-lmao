@@ -1,4 +1,4 @@
-"""Code linked into the kernel: compile recipes taken from XNU's own compile records, drivers, archives.
+"""Code linked into the kernel: drivers (cc_library targets on the kernel toolchain), archives, the link, the prelink.
 
 Adding a driver is one call in out/native-a57/root-v1/tree/BUILD.bazel:
 
@@ -7,11 +7,24 @@ Adding a driver is one call in out/native-a57/root-v1/tree/BUILD.bazel:
 plus its name in the member list of the archive it rides in (archive member order is link order: -force_load).
 Knobs: srcs (ordered; .cpp/.c/.S, defaults to the directory's .cpp files), late (static initializer run by the board
 code after the original family loads), abi_checks (SwitchUSB-style checks against the original kernelcache),
-firmware (a firmware.S that .incbins the directory's firmware/), copts, c_srcs recipe, hdrs, prelink (original
-kexts this driver needs prelinked: they join the prelink roots).
+firmware (a firmware.S that .incbins the directory's firmware/), copts / c_copts / asm_copts, recipe / c_recipe /
+c_command (the compile recipe: a feature of the kernel toolchain, bazel/toolchains/kernel), hdrs, hdr_deps (the header
+directories the driver includes besides its own), prelink (original kexts this driver needs prelinked: they join the
+prelink roots).
+
+A driver is cc_library targets for the kernel platform (compiled with the kernel toolchain; .d files prune the headers
+each object really includes) plus <name>, the driver's objects in link order under the names the archives always had:
+  <name>_cc            its own C/C++ sources (clang-tidy's)
+  <name>_foreign_cc    vendored sources (linux/, nouveau/, XNU's), tagged no-lint
+  <name>_<stem>_cc     a source with its own flags (src_copts)
+  <name>_asm_cc        assembly (bindings, firmware .incbin)
 """
 
-load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "run_tool", "setting", "workspace_root")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+load("@xcode//:defs.bzl", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
+load("//bazel/platforms:transitions.bzl", "kernel_transition")
+load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "run_tool")
 load(":xnu.bzl", "XnuInfo")
 
 KernelObjectsInfo = provider(
@@ -19,101 +32,276 @@ KernelObjectsInfo = provider(
     fields = ["objects", "prelink", "cuts", "deferred"],
 )
 
-RecipeInfo = provider(fields = ["file"])
 
-# cmake/Drivers.cmake IOSWITCH_DRIVER_WARNINGS: what every IOKit C++ driver adds to the kernel's flags.
-DRIVER_WARNINGS = [
-    "-Wall",
-    "-Wextra",
-    "-Werror",
-    "-Wno-unused-parameter",
-    "-Wno-c99-designator",
-    "-Wno-reorder-init-list",
-    "-Wno-deprecated-enum-enum-conversion",
-    "-Wno-unnecessary-virtual-specifier",
-]
+# Compile recipes (the old recipe/c_recipe labels' names) -> the kernel toolchain's features.
+_CXX_RECIPES = ["iokit_cxx", "iokit_cxx_generic"]
+_C_RECIPES = ["osfmk_c", "bsd_c", "mockfs_c", "freestanding_c"]
 
-# ioswitch_bindings / firmware .incbin units: Xcode's clang for iOS 17, nothing from XNU's recipes.
-PLAIN_ASM = ["xcrun", "clang", "-target", "arm64-apple-ios17.0", "-isysroot", "{sdk}", "-Werror"]
+# Vendored code below a driver's directory: its own cc_library, which clang-tidy skips.
+FOREIGN_DIRS = ["linux/", "nouveau/"]
 
-def _kernel_recipe_impl(ctx):
-    out = ctx.actions.declare_file("recipes/" + ctx.label.name + ".json")
-    xnu = ctx.attr.xnu[XnuInfo]
-    args = ["--objroot", xnu.objroot.path, "--record", ctx.attr.record, "--out", out.path]
-    if ctx.attr.keep_warnings:
-        args.append("--keep-warnings")
-    for prefix in ctx.attr.drop:
-        args.append("--drop=" + prefix)
-    if ctx.attr.strip_includes:
-        args.append("--strip-includes")
-    run_tool(ctx, "recipes.py", args, depset([xnu.objroot]), [out], "KernelRecipe", "Recipe " + ctx.label.name,
-             execution_requirements = {})
-    return [DefaultInfo(files = depset([out])), RecipeInfo(file = out)]
+# Generated headers a driver's flags name ({build}/<dir>) -> the target in the tree package that brings them.
+GENERATED_HEADERS = {
+    "storage-abi": ":gen_storage_abi",
+    "native-ram-block": ":gen_native_data_seed",
+    "native-legacy-display": ":gen_pinned_headers",
+    "native-hid-input": ":gen_pinned_headers",
+    "sheng-platform-power": ":gen_pinned_headers",
+}
 
-kernel_recipe = rule(
-    implementation = _kernel_recipe_impl,
-    doc = "A compile recipe from one of XNU's compile records (cmake/XnuRecipes.cmake ioswitch_recipe).",
-    attrs = dict(KERNEL_TOOL_ATTRS, **{
-        "xnu": attr.label(mandatory = True, providers = [XnuInfo]),
-        "record": attr.string(mandatory = True),
-        "keep_warnings": attr.bool(),
-        "drop": attr.string_list(),
-        "strip_includes": attr.bool(),
-    }),
-    toolchains = [PY_TOOLCHAIN],
-)
+_HEADER_GLOBS = ["**/*.h", "**/*.hpp", "**/*.inc"]
+_KERNEL_ONLY = ["//bazel/platforms:kernel"]
 
-def _compile(ctx, src, obj, recipe, flags, command, extra_inputs):
-    xnu = ctx.attr.xnu[XnuInfo]
-    args = [
-        "--xcode-env",
-        ctx.file._xcode_env.path,
-        "--tree",
-        ctx.label.package,
-        "--build",
-        ctx.bin_dir.path + "/" + ctx.label.package + "/build",
-        "--xnu",
-        workspace_root(ctx.attr._xnu_src),
-        "--path-root",
-        setting(ctx, "_path_root"),
-        "--bin-dir",
-        ctx.bin_dir.path,
-        "--source",
-        src.path,
-        "--output",
-        obj.path,
+def _recipe_name(label, valid):
+    name = label.rpartition(":")[2]
+    if name not in valid:
+        fail("unknown compile recipe {} (one of {})".format(label, valid))
+    return name
+
+def _expand(flags, package):
+    """{tree}, {build}, {xnu}, {sdk} in a driver's flags: make variables of the kernel SDK (//...:kernel_sdk) or paths."""
+    return [
+        f.replace("{tree}", package)
+            .replace("{build}", "$(KERNEL_BUILD)")
+            .replace("{xnu}", "$(KERNEL_XNU)")
+            .replace("{sdk}", IPHONEOS_SDK)
+        for f in flags
     ]
-    inputs = [src, xnu.objroot, xnu.sdkroot] + extra_inputs
-    if recipe:
-        args += ["--recipe", recipe.path]
-        inputs.append(recipe)
-    for c in command:
-        args.append("--command=" + c)
+
+def _generated(flags):
+    deps = []
     for f in flags:
-        args.append("--flag=" + f)
-    run_tool(
-        ctx,
-        "compile.py",
-        args,
-        depset(inputs, transitive = [depset(ctx.files._xnu_src)]),
-        [obj],
-        "KernelCompile",
-        "Compiling " + src.short_path,
+        if "{build}/" in f:
+            directory = f.partition("{build}/")[2].partition("/")[0]
+            dep = GENERATED_HEADERS.get(directory)
+            if dep and dep not in deps:
+                deps.append(dep)
+    return deps
+
+def _src_path(src):
+    """The package-relative path (or label) of a source, and its basename."""
+    path = src[1:] if src.startswith(":") else src
+    return path, path.rpartition("/")[2].rpartition(":")[2]
+
+def kernel_header_libraries(dirs, extra = []):
+    """hdrs_<dir> for each directory (its headers, any depth) and all_kernel_headers (every one, plus extra)."""
+    names = []
+    for d in dirs:
+        name = "hdrs_" + d.replace("/", "_")
+        cc_library(
+            name = name,
+            hdrs = native.glob([d + "/" + g for g in _HEADER_GLOBS], allow_empty = True),
+            target_compatible_with = _KERNEL_ONLY,
+            tags = ["kernel"],
+        )
+        names.append(":" + name)
+    cc_library(
+        name = "hdrs_extra",
+        hdrs = extra,
+        target_compatible_with = _KERNEL_ONLY,
+        tags = ["kernel"],
+    )
+    cc_library(
+        name = "all_kernel_headers",
+        deps = names + [":hdrs_extra"],
+        target_compatible_with = _KERNEL_ONLY,
+        tags = ["kernel"],
+    )
+
+def kernel_driver(
+        name,
+        srcs = None,
+        dir = None,
+        stems = {},
+        object_names = "stem",
+        object_prefix = "",
+        src_copts = {},
+        include_osfmk = True,
+        hdrs = [],
+        hdr_deps = None,
+        out_dir = None,
+        recipe = None,
+        c_recipe = None,
+        c_command = None,
+        warnings = True,
+        copts = [],
+        c_copts = [],
+        asm_copts = [],
+        late = [],
+        abi_checks = {},
+        abi_check = None,
+        prelink = [],
+        prelink_cuts = [],
+        prelink_deferred = [],
+        xnu = None,  # @unused: the kernel SDK replaced the XNU build as a compile input
+        visibility = None,
+        tags = []):
+    """A kernel driver: cc_library targets for the kernel platform, and <name>, its objects in link order.
+
+    dir defaults to drivers/<name>; srcs to its .cpp files (sorted) followed by its firmware.S, if it has one. Names in
+    srcs are relative to dir; anything else is a label ("//bazel/pinned:...", "@xnu//:..."). hdr_deps: header
+    directories (e.g. "drivers/ArmGIC") the driver includes besides its own; None means every one."""
+    package = native.package_name()
+    dir = dir or ("drivers/" + name)
+    if srcs == None:
+        srcs = sorted(native.glob([dir + "/*.cpp"])) + native.glob([dir + "/firmware.S"], allow_empty = True)
+    else:
+        srcs = [s if (s.startswith(":") or s.startswith("/") or s.startswith("@")) else dir + "/" + s for s in srcs]
+
+    features = []
+    if recipe:
+        features += ["-kernel_iokit_cxx", "kernel_" + _recipe_name(recipe, _CXX_RECIPES)]
+    if c_command:
+        features += ["-kernel_osfmk_c", "kernel_plain_c"]
+    elif c_recipe:
+        features += ["-kernel_osfmk_c", "kernel_" + _recipe_name(c_recipe, _C_RECIPES)]
+    if not warnings:
+        features.append("-kernel_warnings")
+
+    cxx_flags = (["-I", "{xnu}/osfmk"] if include_osfmk else []) + copts
+    if hdr_deps == None:
+        header_deps = [":kernel_sdk", ":all_kernel_headers"]
+    else:
+        # Its own directory's headers (or, below drivers/X, X's), the ones it names, and the extra ones (hdrs_extra).
+        own = "/".join(dir.split("/")[:2]) if dir.startswith("drivers/") or dir.startswith("kits/") else dir
+        header_deps = [":kernel_sdk"]
+        if native.existing_rule("hdrs_" + own.replace("/", "_")):
+            header_deps.append(":hdrs_" + own.replace("/", "_"))
+        for d in hdr_deps:
+            lib = "hdrs_" + d.replace("/", "_")
+            if d == own:
+                continue
+            if not native.existing_rule(lib):
+                fail("{}: hdr_deps names {}, which has no headers (kernel_header_libraries)".format(name, d))
+            header_deps.append(":" + lib)
+        header_deps.append(":hdrs_extra")
+
+    # Sources by the cc_library that compiles them; parts[i] is the index of source i's library.
+    groups, order, parts = {}, [], []
+    for src in srcs:
+        path, base = _src_path(src)
+        ext = base.rpartition(".")[2]
+        if ext in ("S", "s"):
+            key = "asm"
+        elif base in src_copts:
+            key = base
+        elif src.startswith("@") or any([path.startswith(dir + "/" + f) for f in FOREIGN_DIRS]):
+            key = "foreign"
+        elif ext in ("cpp", "cc", "mm", "c"):
+            key = "own"
+        else:
+            fail("{}: unsupported source {}".format(name, src))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(src)
+        parts.append(order.index(key))
+
+    cc_deps = []
+    for key in order:
+        group = groups[key]
+        extra = src_copts.get(key, [])
+        if key == "asm":
+            lib = name + "_asm_cc"
+            firmware = [s for s in group if _src_path(s)[1] == "firmware.S"]
+            asm_flags = list(asm_copts)
+            additional = []
+            if firmware:
+                fw_dir = _src_path(firmware[0])[0].rpartition("/")[0] + "/firmware"
+                asm_flags += ["-I", "{tree}/" + fw_dir]
+                additional = native.glob([fw_dir + "/**"], allow_empty = True)
+            cc_library(
+                name = lib,
+                srcs = group,
+                copts = _expand(asm_flags, package),
+                additional_compiler_inputs = additional,
+                deps = header_deps,
+                toolchains = [":kernel_sdk"],
+                target_compatible_with = _KERNEL_ONLY,
+                tags = ["kernel", "no-lint"] + tags,
+            )
+        else:
+            lib = name + ("_foreign_cc" if key == "foreign" else ("_cc" if key == "own" else "_" + key.rpartition(".")[0] + "_cc"))
+            flags = cxx_flags + c_copts + extra
+            cc_library(
+                name = lib,
+                srcs = group,
+                hdrs = hdrs,
+                cxxopts = _expand(cxx_flags + extra, package),
+                conlyopts = _expand(c_copts + extra, package),
+                features = features,
+                deps = header_deps + _generated(flags),
+                toolchains = [":kernel_sdk"],
+                target_compatible_with = _KERNEL_ONLY,
+                tags = ["kernel"] + (["no-lint"] if key == "foreign" else []) + tags,
+            )
+        cc_deps.append(":" + lib)
+
+    _kernel_driver_objects(
+        name = name,
+        srcs = srcs,
+        parts = parts,
+        cc_deps = cc_deps,
+        dir = package + "/" + dir,
+        stems = stems,
+        object_names = object_names,
+        object_prefix = object_prefix,
+        out_dir = out_dir or "",
+        late = late,
+        abi_checks = abi_checks,
+        abi_check = abi_check,
+        prelink = prelink,
+        prelink_cuts = prelink_cuts,
+        prelink_deferred = prelink_deferred,
+        visibility = visibility,
+        tags = tags,
     )
 
 def _stem(f):
     return f.basename[:f.basename.rfind(".")]
 
-def _kernel_driver_impl(ctx):
+def _library_objects(target):
+    """A cc_library's objects, in its srcs order."""
+    objects = []
+    for linker_input in target[CcInfo].linking_context.linker_inputs.to_list():
+        if linker_input.owner == target.label:
+            for library in linker_input.libraries:
+                objects += library.objects
+    return objects
+
+def _kernel_driver_objects_impl(ctx):
     out_dir = ctx.attr.out_dir or ("build/" + ctx.label.name)
-    hdrs = ctx.files.hdrs + ctx.files._common_hdrs
     late = {name: True for name in ctx.attr.late}
     checks = {}
     for bindings, spec in ctx.attr.abi_checks.items():
         cls, source = spec.split(" ")
         checks[source] = struct(cls = cls, bindings = bindings.files.to_list()[0])
+    compiled = [_library_objects(dep) for dep in ctx.attr.cc_deps]
+    taken = [0 for _ in compiled]
+    if len(ctx.files.srcs) != len(ctx.attr.parts):
+        fail("{}: srcs and parts differ".format(ctx.label))
+
+    # rules_cc names a library's objects _objs/<library>/<stem>.o, or _objs/<library>/<n>/<stem>.o for the n-th of
+    # several sources with one stem (case-insensitive, in srcs order): what each source's object must be.
+    totals = [{} for _ in compiled]
+    for src, part in zip(ctx.files.srcs, ctx.attr.parts):
+        totals[part][_stem(src).lower()] = totals[part].get(_stem(src).lower(), 0) + 1
+    seen = [{} for _ in compiled]
     objects = []
-    for src in ctx.files.srcs:
+    for src, part in zip(ctx.files.srcs, ctx.attr.parts):
+        if taken[part] >= len(compiled[part]):
+            fail("{}: {} has no object in {}".format(ctx.label, src.short_path, ctx.attr.cc_deps[part].label))
+        compiled_obj = compiled[part][taken[part]]
+        taken[part] += 1
+        key = _stem(src).lower()
+        expected = "_objs/{}/".format(ctx.attr.cc_deps[part].label.name)
+        if totals[part][key] > 1:
+            expected += "{}/".format(seen[part].get(key, 0))
+            seen[part][key] = seen[part].get(key, 0) + 1
+        expected += _stem(src) + ".o"
+        if not compiled_obj.path.endswith("/" + expected):
+            fail("{}: object {} does not belong to {} (expected .../{})".format(
+                ctx.label, compiled_obj.path, src.short_path, expected))
         ext = src.extension
         stem = _stem(src)
         if ext == "c" and ctx.attr.object_names == "path":
@@ -122,25 +310,9 @@ def _kernel_driver_impl(ctx):
         stem = ctx.attr.stems.get(src.basename, stem)
         if not stem:
             fail("empty stem for {} (dir {}, short_path {})".format(src, ctx.attr.dir, src.short_path))
+        # The object under the name and path the archives and the link always used.
         obj = ctx.actions.declare_file(out_dir + "/" + stem + ".o")
-        extra = ctx.attr.src_copts.get(src.basename, [])
-        if ext in ("cpp", "cc", "mm"):
-            _compile(ctx, src, obj, ctx.attr.recipe[RecipeInfo].file,
-                     (DRIVER_WARNINGS if ctx.attr.warnings else []) +
-                     (["-I", "{xnu}/osfmk"] if ctx.attr.include_osfmk else []) + ctx.attr.copts + extra,
-                     [], hdrs)
-        elif ext == "c":
-            if ctx.attr.c_command:
-                _compile(ctx, src, obj, None, ctx.attr.c_copts + extra, ctx.attr.c_command, hdrs)
-            else:
-                _compile(ctx, src, obj, ctx.attr.c_recipe[RecipeInfo].file, ctx.attr.c_copts + extra, [], hdrs)
-        elif ext in ("S", "s"):
-            copts = list(ctx.attr.asm_copts)
-            if src.basename == "firmware.S":
-                copts += ["-I", "{tree}/" + src.dirname[len(ctx.label.package) + 1:] + "/firmware"]
-            _compile(ctx, src, obj, None, copts, PLAIN_ASM, hdrs)
-        else:
-            fail("{}: unsupported source {}".format(ctx.label, src.basename))
+        ctx.actions.symlink(output = obj, target_file = compiled_obj)
         final = obj
         if src.basename in late:
             # cmake/XnuRecipes.cmake ioswitch_late_object.
@@ -186,6 +358,9 @@ def _kernel_driver_impl(ctx):
             )
             final = checked
         objects.append(final)
+    for part, objs in enumerate(compiled):
+        if taken[part] != len(objs):
+            fail("{}: {} has objects no source claims".format(ctx.label, ctx.attr.cc_deps[part].label))
     if checks:
         fail("{}: abi_checks for sources not in srcs: {}".format(ctx.label, checks.keys()))
     return [
@@ -194,51 +369,31 @@ def _kernel_driver_impl(ctx):
                           deferred = ctx.attr.prelink_deferred),
     ]
 
-_kernel_driver = rule(
-    implementation = _kernel_driver_impl,
+_kernel_driver_objects = rule(
+    implementation = _kernel_driver_objects_impl,
+    doc = "A driver's objects (from its kernel cc_library targets) in source order, named as the archives expect; " +
+          "late objects and ABI checks.",
     attrs = dict(KERNEL_TOOL_ATTRS, **{
         "srcs": attr.label_list(allow_files = [".cpp", ".cc", ".mm", ".c", ".S", ".s"], mandatory = True),
+        "parts": attr.int_list(mandatory = True, doc = "for each source, the index of the cc_deps entry compiling it"),
+        "cc_deps": attr.label_list(providers = [CcInfo], cfg = kernel_transition, mandatory = True),
         "dir": attr.string(mandatory = True),
         "stems": attr.string_dict(doc = "Object names for sources whose stem would collide (basename -> stem)."),
         "object_names": attr.string(default = "stem", values = ["stem", "path"]),
         "object_prefix": attr.string(),
-        "src_copts": attr.string_list_dict(doc = "Extra flags for one source (basename -> flags)."),
-        "include_osfmk": attr.bool(default = True, doc = "C++: -I <xnu>/osfmk after our warnings (ioswitch_driver)."),
-        "hdrs": attr.label_list(allow_files = True),
         "out_dir": attr.string(),
-        "recipe": attr.label(default = "//out/native-a57/root-v1/tree:iokit_cxx", providers = [RecipeInfo]),
-        "c_recipe": attr.label(default = "//out/native-a57/root-v1/tree:osfmk_c", providers = [RecipeInfo]),
-        "c_command": attr.string_list(),
-        "warnings": attr.bool(default = True),
-        "copts": attr.string_list(),
-        "c_copts": attr.string_list(),
-        "asm_copts": attr.string_list(),
         "late": attr.string_list(),
         "abi_checks": attr.label_keyed_string_dict(allow_files = True),
         "abi_check": attr.label(executable = True, cfg = "exec", doc = "the ABI checker (a py_binary)"),
         "prelink": attr.string_list(),
         "prelink_cuts": attr.string_list(),
         "prelink_deferred": attr.string_list(),
-        "xnu": attr.label(default = "//out/native-a57/root-v1/tree:xnu", providers = [XnuInfo]),
-        "_xnu_src": attr.label(default = "@xnu//:all"),
-        "_common_hdrs": attr.label(default = "//out/native-a57/root-v1/tree:kernel_headers"),
         "_objcopy": attr.label(default = "@llvm//:bin/llvm-objcopy", executable = True, allow_single_file = True, cfg = "exec"),
         "_kernelcache": attr.label(default = "//ipsw:kernelcache", allow_single_file = True),
+        "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
     }),
     toolchains = [PY_TOOLCHAIN],
 )
-
-def kernel_driver(name, srcs = None, dir = None, **kwargs):
-    """A kernel driver: its objects, in link order.
-
-    dir defaults to drivers/<name>; srcs to its .cpp files (sorted) followed by its firmware.S, if it has one. Names in
-    srcs are relative to dir; anything else is a label ("//bazel/pinned:...", "@xnu//:...")."""
-    dir = dir or ("drivers/" + name)
-    if srcs == None:
-        srcs = sorted(native.glob([dir + "/*.cpp"])) + native.glob([dir + "/firmware.S"], allow_empty = True)
-    else:
-        srcs = [s if (s.startswith(":") or s.startswith("/") or s.startswith("@")) else dir + "/" + s for s in srcs]
-    _kernel_driver(name = name, srcs = srcs, dir = native.package_name() + "/" + dir, **kwargs)
 
 def _kernel_archive_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
@@ -249,16 +404,26 @@ def _kernel_archive_impl(ctx):
         else:
             members += m.files.to_list()
     args = ctx.actions.args()
-    args.add_all(["--xcode-env", ctx.file._xcode_env.path, "--out", out.path])
+    args.add("rcs")
+    args.add(out)
     args.add_all(members)
-    run_tool(
-        ctx,
-        "archive.py",
-        ["--xcode-env", ctx.file._xcode_env.path, "--out", out.path] + [m.path for m in members],
-        depset(members),
-        [out],
-        "KernelArchive",
-        "Archiving " + ctx.attr.out,
+    # Xcode's ar (cmake/XnuRecipes.cmake ioswitch_archive: `xcrun ar rcs`); ZERO_AR_DATE=1 zeroes the member dates.
+    ctx.actions.run(
+        executable = XCODE_TOOLCHAIN + "/ar",
+        arguments = [args],
+        inputs = depset(members + [ctx.file._xcode_env, ctx.file._xcode_identity]),
+        outputs = [out],
+        env = {
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "DEVELOPER_DIR": XCODE_TOOLCHAIN.rpartition("/Toolchains/")[0],
+            "LC_ALL": "C",
+            "LANG": "C",
+            "TZ": "UTC",
+            "ZERO_AR_DATE": "1",
+        },
+        mnemonic = "KernelArchive",
+        progress_message = "Archiving " + ctx.attr.out,
+        execution_requirements = XCODE_EXECUTION,
     )
     prelink, cuts, deferred = [], [], []
     for m in ctx.attr.members:
@@ -278,7 +443,6 @@ kernel_archive = rule(
         "out": attr.string(mandatory = True),
         "members": attr.label_list(allow_files = [".o"]),
     }),
-    toolchains = [PY_TOOLCHAIN],
 )
 
 def _stage_files_impl(ctx):

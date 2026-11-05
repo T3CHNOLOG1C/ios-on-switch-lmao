@@ -101,6 +101,7 @@ def main():
                     "OBJROOT=" + scratch + "/obj", "SYMROOT=" + scratch + "/sym", "DSTROOT=" + str(out)],
                    make_env, log=log)
         (out / (".xnu-" + XNU_VERSION + "-headers")).write_text("")
+        common.resolve_links(out)
 
 
 if __name__ == "__main__":

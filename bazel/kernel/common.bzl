@@ -21,10 +21,8 @@ def workspace_root(target):
     return target.label.workspace_root
 
 # The kernel build's tools: py_binary targets in tools/kernel (each on the hermetic rules_python toolchain), named by
-# their script's stem. run_tool(ctx, "compile", ...) runs //tools/kernel:compile.
+# their script's stem. run_tool(ctx, "xnu_build", ...) runs //tools/kernel:xnu_build.
 KERNEL_TOOLS = [
-    "archive",
-    "compile",
     "corecrypto",
     "data_seed",
     "firehose",
@@ -33,7 +31,6 @@ KERNEL_TOOLS = [
     "ios_binary",
     "libpthread",
     "link",
-    "recipes",
     "sdkroot",
     "storage_abi",
     "trust_bundle",
@@ -51,7 +48,7 @@ KERNEL_TOOL_ATTRS = {
 }
 
 def run_tool(ctx, tool, arguments, inputs, outputs, mnemonic, progress, execution_requirements = None, env = None):
-    """Runs a tool: a tools/kernel name ("compile", or "compile.py") or any executable target (a py_binary)."""
+    """Runs a tool: a tools/kernel name ("xnu_build", or "xnu_build.py") or any executable target (a py_binary)."""
     if type(tool) == "string":
         name = tool[:-3] if tool.endswith(".py") else tool
         found = [t for t in ctx.attr._tools if t.label.name == name]

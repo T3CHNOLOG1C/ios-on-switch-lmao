@@ -69,28 +69,26 @@ def prefix_maps(path_root, bin_dir, xnu_dir):
 
 
 def copy_tree(source, target):
-    """Copy a tree as Bazel stages it (files are symlinks into the execroot): contents, not links. Framework bundles'
-    alias entries (Headers -> Versions/Current/Headers, Versions/Current -> A), which a tree artifact input shows as
-    plain directories, become relative symlinks again instead of second copies."""
-    source, target = Path(source), Path(target)
+    """Copy a tree's contents (files Bazel stages as symlinks become files; links inside it become copies)."""
+    shutil.copytree(source, target, symlinks=False, dirs_exist_ok=True)
 
-    def aliases(directory, names):
-        directory = Path(directory)
-        skip = []
-        if directory.name.endswith(".framework") and (directory / "Versions/A").is_dir():
-            skip = [n for n in names if n != "Versions" and (directory / "Versions/A" / n).exists()]
-        elif directory.name == "Versions" and directory.parent.name.endswith(".framework") and "A" in names:
-            skip = ["Current"] if "Current" in names else []
-        return skip
 
-    shutil.copytree(source, target, symlinks=False, dirs_exist_ok=True, ignore=aliases)
-    for framework in sorted(target.rglob("*.framework")):
-        versions = framework / "Versions"
-        source_framework = source / framework.relative_to(target)
-        if not (versions / "A").is_dir():
-            continue
-        if (source_framework / "Versions/Current").exists() and not (versions / "Current").exists():
-            os.symlink("A", versions / "Current")
-        for entry in sorted((source_framework / "Versions/A").iterdir()):
-            if (source_framework / entry.name).exists() and not (framework / entry.name).exists():
-                os.symlink("Versions/Current/" + entry.name, framework / entry.name)
+def resolve_links(root):
+    """Replace every symbolic link below root by a copy of what it names (Kernel.framework's Headers ->
+    Versions/Current/Headers and Versions/Current -> A, as XNU's installhdrs makes them). Tree artifacts stay
+    self-contained: a cache that hands out a tree's links but not their targets (Bazel's build without the bytes) would
+    otherwise leave them dangling, and Bazel then re-runs the action on every build."""
+    root = Path(root)
+    while True:
+        links = sorted((p for p in root.rglob("*") if p.is_symlink()), key=lambda p: len(p.parts))
+        if not links:
+            return
+        link = links[0]
+        target = link.resolve()
+        if not str(target).startswith(str(root.resolve()) + "/"):
+            sys.exit("{} links outside the tree: {}".format(link, target))
+        link.unlink()
+        if target.is_dir():
+            shutil.copytree(target, link, symlinks=True)
+        else:
+            shutil.copy2(target, link)

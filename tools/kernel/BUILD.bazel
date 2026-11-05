@@ -9,6 +9,8 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
+exports_files(["recipes.py"])
+
 # Xcode environment, the path hygiene every compile shares (prefix maps, locale, ZERO_AR_DATE).
 py_library(
     name = "common",

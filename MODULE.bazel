@@ -54,6 +54,9 @@ llvm_tools(name = "llvm")
 
 bazel_dep(name = "rules_rust", version = "0.75.0")
 
+# --- C/C++ toolchains, by target platform (bazel/platforms): the kernel's Apple clang with XNU's recipes ----------
+register_toolchains("//bazel/toolchains/kernel:toolchain")
+
 # --- The declared host input: Xcode (pinned version + SDK digests) ---------------------------------------------
 xcode_host = use_repo_rule("//bazel/host:xcode.bzl", "xcode_host")
 

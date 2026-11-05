@@ -10,7 +10,8 @@ load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/kernel:inputs.bzl", "tool_output")
 load("//bazel/kernel:package.bzl", "ios_binary")
-load("//bazel/kernel:kernel.bzl", "PLAIN_ASM", "kernel_archive", "kernel_driver", "kernel_link", "kernel_prelink", "kernel_recipe", "stage_files")
+load("//bazel/kernel:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_header_libraries", "kernel_link", "kernel_prelink", "stage_files")
+load("//bazel/kernel:sdk.bzl", "kernel_sdk", "outer_headers", "xnu_headers")
 load("//bazel/kernel:xnu.bzl", "kernel_firehose", "kernel_sdkroot", "xnu_build")
 load("//bazel/lint:defs.bzl", "lint_files")
 
@@ -88,55 +89,65 @@ xnu_build(
     xnu = "@xnu//:all",
 )
 
-# --- Compile recipes, from XNU's compile records (cmake/XnuRecipes.cmake) ------------------------------------------
-kernel_recipe(
-    name = "iokit_cxx",
-    record = "iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
+# --- What the kernel's code compiles against (bazel/kernel/sdk.bzl; the flags are bazel/toolchains/kernel's) -------
+# XNU's headers without its objects: an XNU change that leaves the headers alone recompiles no driver.
+xnu_headers(
+    name = "xnu_headers",
     xnu = ":xnu",
+    xnu_source = "@xnu//:all",
 )
 
-kernel_recipe(
-    name = "iokit_cxx_generic",
-    drop = [
-        "-mcpu=",
-        "-march=",
-        "-flto",
+# The kernel SDK for the kernel's cc targets (every kernel_driver depends on it) and the kernel toolchain (its paths).
+kernel_sdk(
+    name = "kernel_sdk",
+    # XNU's build options put -I diagnostics/ioswitch on every kernel compile (xnu_build.py XNU_EXTRA_CFLAGS).
+    extra = glob([
+        "diagnostics/ioswitch/**/*.h",
+        "diagnostics/ioswitch/**/*.inc",
+    ]),
+    headers = ":xnu_headers",
+    xnu_source = "@xnu//:all",
+)
+
+# Generated headers the drivers' flags name ({build}/<dir>): built once, in the configuration that asks for the kernel.
+outer_headers(
+    name = "gen_storage_abi",
+    srcs = [":storage_abi"],
+)
+
+outer_headers(
+    name = "gen_native_data_seed",
+    srcs = [":native_data_seed_header"],
+)
+
+outer_headers(
+    name = "gen_pinned_headers",
+    srcs = [":pinned_headers"],
+)
+
+# Each directory's headers (hdrs_<dir>), what a kernel_driver's hdr_deps name; all_kernel_headers is every one.
+kernel_header_libraries(
+    dirs = [
+        d
+        for d in glob(
+            [
+                "drivers/*",
+                "kits/*",
+            ],
+            exclude_directories = 0,
+        )
+        if d not in glob(
+            [
+                "drivers/*",
+                "kits/*",
+            ],
+            allow_empty = True,
+        )
+    ] + ["diagnostics/ioswitch"],
+    extra = [
+        # In the GPU's package (drivers/NativeMetal), included by IOSwitchAccelStub and TegraGM20BAccelerator.
+        "//out/native-a57/root-v1/tree/drivers/NativeMetal:OriginalAcceleratorABI.h",
     ],
-    record = "iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
-    xnu = ":xnu",
-)
-
-kernel_recipe(
-    name = "osfmk_c",
-    record = "osfmk/DEVELOPMENT/arm_init.o.json",
-    xnu = ":xnu",
-)
-
-kernel_recipe(
-    name = "bsd_c",
-    keep_warnings = True,
-    record = "bsd/DEVELOPMENT/bsd_init.o.json",
-    xnu = ":xnu",
-)
-
-kernel_recipe(
-    name = "mockfs_c",
-    drop = [
-        "-DMOCKFS=",
-        "-UMOCKFS",
-    ],
-    keep_warnings = True,
-    record = "bsd/DEVELOPMENT/vfs_conf.o.json",
-    xnu = ":xnu",
-)
-
-# The freestanding recipe the vendored Linux code (nvkm, BPMP, DFLL) uses: osfmk's C flags without XNU's include options
-# (its headers clash with the shims' Linux-named ones).
-kernel_recipe(
-    name = "freestanding_c",
-    record = "osfmk/DEVELOPMENT/arm_init.o.json",
-    strip_includes = True,
-    xnu = ":xnu",
 )
 
 # --- Generated and pinned inputs, where the CMake flow's -I flags expected them (tree/build/<dir>) -----------------
@@ -174,29 +185,6 @@ tool_output(
         "{out}",
     ],
     tool = "data_seed.py",
-)
-
-# Headers any kernel object may include: every driver/kit/diagnostics header, firmware blobs (.incbin) and the staged
-# and generated headers above.
-filegroup(
-    name = "kernel_headers",
-    srcs = glob([
-        "drivers/**/*.h",
-        "drivers/**/*.hpp",
-        "drivers/**/*.inc",
-        "drivers/**/*.def",
-        "drivers/*/firmware/**",
-        "kits/**/*.h",
-        "kits/**/*.inc",
-        "diagnostics/**/*.h",
-        "diagnostics/**/*.inc",
-    ], allow_empty = True) + [
-        # In the GPU's package (drivers/NativeMetal), included by IOSwitchAccelStub and TegraGM20BAccelerator.
-        "//out/native-a57/root-v1/tree/drivers/NativeMetal:OriginalAcceleratorABI.h",
-        ":native_data_seed_header",
-        ":pinned_headers",
-        ":storage_abi",
-    ],
 )
 
 # --- Corecrypto, libpthread (Apple sources, built against this XNU) ---------------------------------------------------
@@ -258,15 +246,27 @@ tool_output(
 # the CMake flow's tree/build), {tree}, {xnu} and {sdk}.
 
 # ArmCpu, ArmGIC, ArmDTPlatform: CPU/GIC/timer and platform expert.
-kernel_driver(name = "ArmCpu")
+kernel_driver(
+    name = "ArmCpu",
+    hdr_deps = [
+        "drivers/ArmGIC",
+    ],
+)
 
-kernel_driver(name = "ArmGIC")
+kernel_driver(
+    name = "ArmGIC",
+    hdr_deps = [],
+)
 
-kernel_driver(name = "ArmDTPlatform")
+kernel_driver(
+    name = "ArmDTPlatform",
+    hdr_deps = [],
+)
 
 # NativeAES.
 kernel_driver(
     name = "NativeAES",
+    hdr_deps = [],
     srcs = [
         "NativeAES.cpp",
         "//bazel/pinned:kernel/native-aes/original-bindings.S",
@@ -289,6 +289,12 @@ BLOCK_FLAGS = [
 
 kernel_driver(
     name = "NativeIOSwitchBlock",
+    hdr_deps = [
+        "diagnostics/ioswitch",
+        "drivers/ArmGIC",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "NativeIOSwitchBlock.cpp",
         "//bazel/pinned:kernel/native-ioswitch-root/original-bindings.S",
@@ -301,17 +307,38 @@ kernel_driver(
 kernel_driver(
     name = "SwitchNVRAM",
     copts = BLOCK_FLAGS,
+    hdr_deps = [],
 )
 
-kernel_driver(name = "TegraGPIO")
+kernel_driver(
+    name = "TegraGPIO",
+    hdr_deps = [
+        "drivers/ArmGIC",
+    ],
+)
 
-kernel_driver(name = "TegraI2C")
+kernel_driver(
+    name = "TegraI2C",
+    hdr_deps = [
+        "drivers/ArmGIC",
+    ],
+)
 
 # SPI4 master for the IMU (drivers/SwitchMotion).
-kernel_driver(name = "TegraSPI")
+kernel_driver(
+    name = "TegraSPI",
+    hdr_deps = [
+        "drivers/ArmGIC",
+    ],
+)
 
 # APB DMA for the UARTs (Joy-Con rails' RX, Bluetooth's TX and RX).
-kernel_driver(name = "TegraAPBDMA")
+kernel_driver(
+    name = "TegraAPBDMA",
+    hdr_deps = [
+        "drivers/ArmGIC",
+    ],
+)
 
 # The Security Engine SE2: known answers over its interrupt, the kernel PRNG reseeded from its DRBG, and a timing run
 # against the A57s' crypto instructions (r17-crypto); the AppleKeyStore probe shares SE2 through tegra_se2_claim.
@@ -321,6 +348,15 @@ kernel_driver(name = "TegraSE")
 # SwitchSensors: SOC_THERM and thermalmonitord's HID temperature sensors (drivers/SwitchPower/CONTRACT.md).
 kernel_driver(
     name = "SwitchThermal",
+    hdr_deps = [
+        "drivers/NativeMobileDisplay",
+        "drivers/SwitchBattery",
+        "drivers/SwitchTouch",
+        "drivers/TegraDFLL",
+        "drivers/TegraGM20B",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "SwitchThermal.cpp",
         "SwitchPerfGovernor.cpp",
@@ -329,33 +365,66 @@ kernel_driver(
     dir = "drivers/SwitchPower",
 )
 
-kernel_driver(name = "SwitchBattery")
+kernel_driver(
+    name = "SwitchBattery",
+    hdr_deps = [
+        "drivers/SwitchPower",
+        "drivers/SwitchUSB",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
+)
 
 kernel_driver(
     name = "SwitchBluetooth",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/SwitchSuspend",
+        "drivers/TegraAPBDMA",
+    ],
     srcs = ["SwitchBluetooth.cpp"],
 )
 
 # Boot clock line, MAX77620 RTC (IORTC) and power-off/restart; called from IOKitInitializeTime() (xnu patch).
 kernel_driver(
     name = "SwitchPMIC",
+    hdr_deps = [
+        "drivers/SwitchBrightness",
+        "drivers/TegraBPMP",
+        "drivers/TegraI2C",
+    ],
     srcs = ["SwitchPMIC.cpp"],
     dir = "drivers/SwitchPower",
 )
 
 # System sleep (SC7) coordinator, inert unless switch-sleep=2; waking from the lock (wake sources with the panel off, the
 # wake guarantee's stackshot) and the power journal (SwitchWake.cpp).
-kernel_driver(name = "SwitchSuspend")
+kernel_driver(
+    name = "SwitchSuspend",
+    hdr_deps = [
+        "drivers/TegraGPIO",
+    ],
+)
 
 # SwitchAudio: kernel service + Tegra I2S1/ADMA/RT5639 backend.
 kernel_driver(
     name = "SwitchAudio",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
     srcs = ["SwitchAudio.cpp"],
 )
 
 # SwitchWLAN: BCM4356A3 Wi-Fi on PCIe port 1 (switch-wlan=1); firmware.S .incbins drivers/SwitchWLAN/firmware.
 kernel_driver(
     name = "SwitchWLAN",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/SwitchBluetooth",
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "SwitchWLAN.cpp",
         "SwitchWLANProbe.cpp",
@@ -426,6 +495,7 @@ LINUX_RELAXATIONS = [
 
 kernel_driver(
     name = "TegraGM20B_nvkm",
+    hdr_deps = [],
     srcs = [":" + f for f in glob(["drivers/TegraGM20B/nouveau/**/*.c"])],
     c_copts = GPU_C_FLAGS + LINUX_RELAXATIONS,
     c_recipe = ":freestanding_c",
@@ -435,6 +505,11 @@ kernel_driver(
 
 kernel_driver(
     name = "TegraGM20B",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/TegraDisplayFlip",
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "shim/linux.c",
         "shim/tegra_shim.c",
@@ -465,6 +540,10 @@ kernel_driver(
 # TegraBPMP: the T210 BPMP mailbox (L4T mail.c / mail_t210.c / mailman.c vendored under a shim), the EMC clock.
 kernel_driver(
     name = "TegraBPMP",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "linux/drivers/firmware/tegra/mail.c",
         "linux/drivers/firmware/tegra/mail_t210.c",
@@ -529,6 +608,7 @@ DFLL_C_FLAGS = [
 
 kernel_driver(
     name = "TegraDFLL_linux",
+    hdr_deps = [],
     srcs = [
         "linux/drivers/clk/tegra/clk-dfll.c",
         "linux/drivers/clk/tegra/clk-tegra124-dfll-fcpu.c",
@@ -543,6 +623,9 @@ kernel_driver(
 
 kernel_driver(
     name = "TegraDFLL",
+    hdr_deps = [
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "shim/linux.c",
         "platform.c",
@@ -561,10 +644,18 @@ kernel_driver(
 
 # TegraHost1x + TegraNVDEC: host1x syncpoints, the NVDEC falcon and its job engine (switch-host1x, switch-nvdec=1..3);
 # NVDEC's firmware by .incbin.
-kernel_driver(name = "TegraHost1x")
+kernel_driver(
+    name = "TegraHost1x",
+    hdr_deps = [
+        "drivers/ArmGIC",
+    ],
+)
 
 kernel_driver(
     name = "TegraNVDEC",
+    hdr_deps = [
+        "drivers/TegraHost1x",
+    ],
     srcs = [
         "TegraNVDEC.cpp",
         "TegraNVDECMemory.cpp",
@@ -578,6 +669,10 @@ kernel_driver(
 # TegraNVENC: the NVENC falcon, its job engine, arena and user client (on with NVDEC, E1..E4); its firmware by .incbin.
 kernel_driver(
     name = "TegraNVENC",
+    hdr_deps = [
+        "drivers/TegraHost1x",
+        "drivers/TegraNVDEC",
+    ],
     srcs = [
         "TegraNVENC.cpp",
         "TegraNVENCMemory.cpp",
@@ -593,7 +688,10 @@ kernel_driver(
 # .incbin; the IOSurface kext's accessors by address, which vic_abi_check checks against the kernelcache on every build.
 # TegraSMMU: the memory controller's SMMU registers under one lock, and the page-table layout (TegraSMMUDomain.h) every
 # translated swgroup uses (VIC today, the display's direct scanout next).
-kernel_driver(name = "TegraSMMU")
+kernel_driver(
+    name = "TegraSMMU",
+    hdr_deps = [],
+)
 
 py_binary(
     name = "vic_abi_check",
@@ -604,6 +702,10 @@ py_binary(
 
 kernel_driver(
     name = "TegraVIC",
+    hdr_deps = [
+        "drivers/TegraHost1x",
+        "drivers/TegraSMMU",
+    ],
     srcs = [
         "TegraVIC.cpp",
         "TegraVICSelfTest.cpp",
@@ -625,6 +727,11 @@ kernel_driver(
 # self-test (J0..J4) against libjpeg-turbo's decode of embedded JPEGs, and user client; firmware by .incbin.
 kernel_driver(
     name = "TegraNVJPG",
+    hdr_deps = [
+        "drivers/TegraHost1x",
+        "drivers/TegraSMMU",
+        "drivers/TegraVIC",
+    ],
     srcs = [
         "TegraNVJPG.cpp",
         "TegraNVJPGSelfTest.cpp",
@@ -691,6 +798,12 @@ py_binary(
 # against the kernelcache, and that the bindings files are current, on every build.
 kernel_driver(
     name = "SwitchUSB",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/SwitchBattery",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "XudcHardware.cpp",
         "SwitchUSB.cpp",
@@ -806,6 +919,7 @@ kernel_driver(
         "-I",
         "{build}/native-ram-block",
     ],
+    hdr_deps = [],
     include_osfmk = False,
     recipe = ":iokit_cxx_generic",
 )
@@ -813,6 +927,7 @@ kernel_driver(
 # Verified root policy.
 kernel_driver(
     name = "VerifiedRoot",
+    hdr_deps = [],
     srcs = [
         "src/verified_root.c",
         "adapters/xnu_crypto.c",
@@ -831,6 +946,7 @@ kernel_driver(
 # XNU's mockfs.
 kernel_driver(
     name = "mockfs",
+    hdr_deps = [],
     srcs = [
         "@xnu//:bsd/miscfs/mockfs/mockfs_fsnode.c",
         "@xnu//:bsd/miscfs/mockfs/mockfs_vfsops.c",
@@ -844,6 +960,9 @@ kernel_driver(
 # ShengPlatformPower: PMGR subclass (late).
 kernel_driver(
     name = "ShengPlatformPower",
+    hdr_deps = [
+        "drivers/SwitchPower",
+    ],
     srcs = [
         "ShengPlatformPower.cpp",
         "//bazel/pinned:kernel/sheng-platform-power/original-bindings.S",
@@ -859,6 +978,9 @@ kernel_driver(
 # IOSwitchDiag: boot diagnostics, SD/FAT32/APFS storage (osfmk C recipe, no FP/SIMD).
 kernel_driver(
     name = "IOSwitchDiag",
+    hdr_deps = [
+        "kits/VerifiedRoot",
+    ],
     srcs = [
         "IOSwitchDiag.c",
         "IOSwitchPanicSave.c",
@@ -897,6 +1019,7 @@ kernel_driver(
 # Link stubs: no-op probe hooks.
 kernel_driver(
     name = "LinkStubs",
+    hdr_deps = [],
     srcs = ["LinkStubs.c"],
     c_command = [
         "xcrun",
@@ -917,6 +1040,13 @@ kernel_driver(
 # Display, key store and HID input, touch, buttons, backlight, Joy-Cons, accelerator stub: one late-initialized archive.
 kernel_driver(
     name = "NativeLegacyDisplay",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/SwitchPower",
+        "drivers/TegraDisplayFlip",
+        "drivers/TegraGPIO",
+        "drivers/TegraSMMU",
+    ],
     srcs = [
         "NativeLegacyDisplay.cpp",
         # The display across SC7 (tegra_display_suspend/resume): hekate's cold display init/power-down.
@@ -933,6 +1063,9 @@ kernel_driver(
 
 kernel_driver(
     name = "QemuProbes",
+    hdr_deps = [
+        "drivers/NativeMobileDisplay",
+    ],
     srcs = [
         "LegacyDisplayProbe.cpp",
         "KeyStoreProbe.cpp",
@@ -944,12 +1077,14 @@ kernel_driver(
 
 kernel_driver(
     name = "NativeKeyStoreEvents",
+    hdr_deps = [],
     srcs = ["NativeKeyStoreEvents.cpp"],
     late = ["NativeKeyStoreEvents.cpp"],
 )
 
 kernel_driver(
     name = "NativeHidInput",
+    hdr_deps = [],
     srcs = [
         "NativeHidInput.cpp",
         "//bazel/pinned:kernel/native-hid-input/original-bindings.S",
@@ -964,6 +1099,7 @@ kernel_driver(
 
 kernel_driver(
     name = "NativeGOPPresenter",
+    hdr_deps = [],
     srcs = ["NativeGOPPresenter.cpp"],
     dir = "drivers/NativeMobileDisplay",
     late = ["NativeGOPPresenter.cpp"],
@@ -973,6 +1109,12 @@ kernel_driver(
 # archive), so it is a late object.
 kernel_driver(
     name = "SwitchTouch",
+    hdr_deps = [
+        "drivers/NativeMobileDisplay",
+        "drivers/SwitchPower",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "SwitchHIDDevice.cpp",
         "SwitchTouch.cpp",
@@ -984,14 +1126,41 @@ kernel_driver(
     ]},
 )
 
-kernel_driver(name = "SwitchButtons")
+kernel_driver(
+    name = "SwitchButtons",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/NativeMobileDisplay",
+        "drivers/SwitchPower",
+        "drivers/SwitchSuspend",
+        "drivers/SwitchTouch",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
+)
 
 # The 6-axis IMU (SPI4) as the accelerometer and gyroscope HID services; calls SwitchHIDDevice (this archive).
-kernel_driver(name = "SwitchMotion")
+kernel_driver(
+    name = "SwitchMotion",
+    hdr_deps = [
+        "drivers/NativeMobileDisplay",
+        "drivers/SwitchTouch",
+        "drivers/TegraGPIO",
+        "drivers/TegraSPI",
+    ],
+)
 
 # Backlight (CoreBrightness's AppleARMBacklight, by metaclass), display power and the BH1730 ambient light sensor.
 kernel_driver(
     name = "SwitchBrightness",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/NativeMobileDisplay",
+        "drivers/SwitchSuspend",
+        "drivers/SwitchTouch",
+        "drivers/TegraGPIO",
+        "drivers/TegraI2C",
+    ],
     srcs = [
         "TegraPanel.cpp",
         "SwitchBacklight.cpp",
@@ -1003,6 +1172,12 @@ kernel_driver(
 # Joy-Cons (switch-joycon-rail / switch-joycon-bt). SwitchJoyConHID subclasses the original IOHIDDevice (late).
 kernel_driver(
     name = "SwitchJoyCon",
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/SwitchSuspend",
+        "drivers/TegraAPBDMA",
+        "drivers/TegraGPIO",
+    ],
     srcs = [
         "SwitchJoyConHID.cpp",
         "SwitchJoyConRail.cpp",
@@ -1019,6 +1194,7 @@ kernel_driver(
 # Accelerator stub: ends QuartzCore's 30 s IOAcceleratorES poll.
 kernel_driver(
     name = "IOSwitchAccelStub",
+    hdr_deps = [],
     srcs = [
         "IOSwitchAccelStubPublish.cpp",
         "IOSwitchAccelStub.cpp",
@@ -1032,6 +1208,9 @@ kernel_driver(
 # stackshots and kills a hung SpringBoard or backboardd. Published from the board thread.
 kernel_driver(
     name = "NativeIOSwitchWatchdog",
+    hdr_deps = [
+        "drivers/SwitchPower",
+    ],
     srcs = [
         "NativeIOSwitchWatchdogPublish.cpp",
         "NativeIOSwitchWatchdog.cpp",
@@ -1046,6 +1225,7 @@ kernel_driver(
 # AppleKeyStore stand-in's device key: RFC 3394 wrap under a key derived from the fuse chip ID; the Security Engine probe.
 kernel_driver(
     name = "AKSDeviceKey",
+    hdr_deps = [],
     srcs = [
         "AKSDeviceKey.cpp",
         "TegraSecurityEngine.cpp",

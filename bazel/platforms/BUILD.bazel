@@ -1,0 +1,65 @@
+# The platforms ioswitch builds for. Toolchain resolution picks the C/C++ toolchain (bazel/toolchains) from the target
+# platform; rules whose outputs belong to one platform move their dependencies there with a transition
+# (bazel/platforms/transitions.bzl), so `bazel build //:boot` builds each part for the right platform.
+#
+#   ios_kernel_arm64   the kernel: XNU and the drivers (arm64, -mkernel; bazel/toolchains/kernel)
+#   ios_arm64          iOS user space: the Metal plugin, the overlay's binaries (bazel/toolchains/ios)
+#   macos_arm64        this Mac: host tests and tools (bazel/toolchains/host)
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+# Which ABI the code runs under. Kernel cc targets carry target_compatible_with = [":kernel"], so a host-configured
+# `bazel build //...` skips them; they are built through the kernel rules' transition instead.
+constraint_setting(name = "abi")
+
+constraint_value(
+    name = "kernel",
+    constraint_setting = ":abi",
+)
+
+constraint_value(
+    name = "user",
+    constraint_setting = ":abi",
+)
+
+constraint_value(
+    name = "host",
+    constraint_setting = ":abi",
+)
+
+platform(
+    name = "ios_kernel_arm64",
+    constraint_values = [
+        "@platforms//os:ios",
+        "@platforms//cpu:arm64",
+        ":kernel",
+    ],
+)
+
+platform(
+    name = "ios_arm64",
+    constraint_values = [
+        "@platforms//os:ios",
+        "@platforms//cpu:arm64",
+        ":user",
+    ],
+)
+
+platform(
+    name = "macos_arm64",
+    constraint_values = [
+        "@platforms//os:osx",
+        "@platforms//cpu:arm64",
+        ":host",
+    ],
+)
+
+# The platforms a kernel_transition came from (bazel/platforms/transitions.bzl); empty outside the kernel's compiles.
+string_flag(
+    name = "outer",
+    build_setting_default = "",
+)
