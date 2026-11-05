@@ -113,3 +113,24 @@ TEST(SwitchXudcSource, StatsLinesFitTheKernelsOsLogBuffer)
     }
     EXPECT_EQ(calls, 2u) << "the stats line and the transfer-events line";
 }
+
+// System sleep: SC7 resets the controller and its event ring, so suspend goes off the bus with the interrupt and the
+// delivery check off, and resume runs the whole powerOn before it lifts the fences and goes back on the bus.
+TEST(SwitchXudcSource, SleepPowersOnWholeBeforeTheBus)
+{
+    const std::string source = SourceText("../SwitchXUDC.cpp");
+    const std::string sleep = ioswitch::test::Between(source, "IOReturn SwitchXUDC::systemSleep(bool entering)",
+                                                      "void switchxudc_sleep(bool entering)");
+    const size_t cancel = sleep.find("delivery->cancelTimeout();"), off = sleep.find("setBus(false);"),
+                 masked = sleep.find("interrupt->disable();"), power = sleep.find("hw.powerOn(why, sizeof(why))"),
+                 lift = sleep.find("liftFence();"), unmasked = sleep.find("interrupt->enable();"),
+                 on = sleep.find("setBus(true);");
+    for (const size_t at : {cancel, off, masked, power, lift, unmasked, on}) ASSERT_NE(at, std::string::npos);
+    EXPECT_LT(cancel, off);
+    EXPECT_LT(off, masked);
+    EXPECT_LT(masked, power);
+    EXPECT_LT(power, lift);
+    EXPECT_LT(lift, unmasked);
+    EXPECT_LT(unmasked, on);
+    EXPECT_THAT(source, HasSubstr("if (on && lostToSleep) return;"));
+}

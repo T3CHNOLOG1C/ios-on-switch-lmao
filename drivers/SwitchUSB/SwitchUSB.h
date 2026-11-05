@@ -52,6 +52,12 @@ extern "C" {
 // not configured (neither ADT node), -1 if the thread could not be created.
 int switch_usb_start(void);
 
+// System sleep (drivers/SwitchSuspend's sleep and wake actions, one thread). Device mode goes off the bus before SC7
+// and is powered on whole after it, back on the bus if it was; a host controller started this boot holds the system
+// awake instead (SC7 would take its firmware and Apple's xHCI state with it). No-ops without USB.
+void switch_usb_suspend(void);
+void switch_usb_resume(void);
+
 // Prelink cut stub (emit_prelink.py CUT_DEPENDENCIES): 8 zero bytes; a cut dependency's metaclass GOT entry points here.
 extern const unsigned long long ioswitch_prelink_cut_null;
 
@@ -66,6 +72,8 @@ class IOService;
 // SwitchXUDC.cpp: loads IOUSBDeviceFamily and AppleUSBDeviceMux, registers SwitchXUDC, powers the XUDC and starts it
 // on `provider`. False (with the reason in `why`) when device mode cannot run; the port is then left alone.
 bool switchxudc_start(IOService *provider, char *why, size_t whySize);
+// SwitchXUDC.cpp: switch_usb_suspend / switch_usb_resume's device-mode half, on the XUDC work loop.
+void switchxudc_sleep(bool entering);
 // SwitchXHCI.cpp: powers the XUSB host, loads its firmware and Apple's host stack, starts SwitchXHCI. Thread context.
 bool switchxhci_start(char *why, size_t whySize);
 // USB2 pad 0's role (XusbHost.h setHostRole; before or after switchxhci_start); with the controller running, host also

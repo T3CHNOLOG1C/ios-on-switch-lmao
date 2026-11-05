@@ -4,6 +4,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
@@ -30,6 +31,7 @@ thread_call_t gRoleCall, gReportCall;
 bool gWantHost, gHostCable;            // from the last PD state
 bool gHostUp, gHostBroken, gHostRole;  // what has been done
 bool gHostFailed;                      // switch_usb_host_failed (SwitchXHCI's interrupt check), any thread
+IOPMDriverAssertionID gHostHold;       // held from the host controller's first start for the rest of the boot
 uint32_t gRoleChanges;                 // role changes applied (the report names the one it follows)
 constexpr uint32_t kReportMS = 1000;   // the role line: this long after a change, when the port has settled
 
@@ -117,6 +119,13 @@ void applyRole(thread_call_param_t, thread_call_param_t)
             switchxudc_set_host_owns_port(false);
             (void)switch_pd_allow_source(false);  // SwitchPD takes VBUS off and keeps the port sink-only
             return;
+        }
+        if (!gHostHold) {
+            if (IOPMrootDomain *root = IOService::getPMRootDomain())
+                gHostHold = root->createPMAssertion(kIOPMDriverAssertionCPUBit, kIOPMDriverAssertionLevelOn,
+                                                    gDevicePort ? gDevicePort : IOService::getResourceService(),
+                                                    "SwitchUSB host controller");
+            IOLog("SwitchUSB: system sleep held off for this boot: the host controller has no SC7 path\n");
         }
         gHostRole = true;
         IOLog("SwitchUSB: host role (a device on the port, VBUS on)\n");
@@ -206,4 +215,15 @@ extern "C" int switch_usb_start(void)
     }
     thread_deallocate(thread);
     return 0;
+}
+
+extern "C" void switch_usb_suspend(void)
+{
+    if (gDevicePort) switchxudc_sleep(true);
+}
+
+extern "C" void switch_usb_resume(void)
+{
+    if (gDevicePort) switchxudc_sleep(false);
+    if (gRoleCall) thread_call_enter(gRoleCall);  // a cable that came or went while asleep
 }

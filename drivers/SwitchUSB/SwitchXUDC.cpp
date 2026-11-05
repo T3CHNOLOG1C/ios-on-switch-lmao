@@ -176,6 +176,7 @@ class SwitchXUDC : public IOUSBDeviceController {
     uint16_t sequence;
     int speed;
     bool onBus, suspended, hostPresent, reportedOnBus, hostOwnsPort, wantBus;
+    bool asleep, busAfterSleep, lostToSleep;  // systemSleep: between suspend and resume; resume could not power on
     uint8_t deliveryStage;
     volatile uint32_t interrupts;  // ST.IP acknowledged by the filter
     uint32_t interruptsAtCheck;
@@ -218,6 +219,7 @@ public:
     static SwitchXUDC *running;
     IOReturn hostExpected();
     IOReturn portOwner(bool host);
+    IOReturn systemSleep(bool entering);
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
     void free() override;
@@ -1078,9 +1080,55 @@ extern "C" void switchxudc_set_host_owns_port(bool host)
             controller, host ? controller : nullptr);
 }
 
+// SC7 resets the controller, its partitions, PLLU/UTMIPLL and the pad block, and with them the event ring and every
+// context: off the bus first, as a cable pull (the family gets every request back), with the interrupt and the
+// delivery check off; after it the whole powerOn again. Its event ring starts empty, so nothing a cancel left can come
+// back and every fence lifts at once.
+IOReturn SwitchXUDC::systemSleep(bool entering)
+{
+    if (entering) {
+        if (asleep) return kIOReturnSuccess;
+        asleep = true;
+        delivery->cancelTimeout();
+        deliveryStage = 0;
+        busAfterSleep = hostOwnsPort ? wantBus : onBus;
+        if (!hostOwnsPort) setBus(false);
+        interrupt->disable();
+        return kIOReturnSuccess;
+    }
+    if (!asleep) return kIOReturnSuccess;
+    asleep = false;
+    char why[160] = "";
+    if (!hw.powerOn(why, sizeof(why))) {
+        lostToSleep = true;
+        IOLog("SwitchUSB: device mode off after sleep: %s\n", why);
+        return kIOReturnSuccess;
+    }
+    for (uint32_t dci = 2; dci < kMaxDci; ++dci)
+        if (endpoints[dci].tds) endpoints[dci].tds->liftFence();
+    interrupt->enable();
+    if (hostOwnsPort)
+        wantBus = busAfterSleep;
+    else if (busAfterSleep)
+        setBus(true);
+    return kIOReturnSuccess;
+}
+
+void switchxudc_sleep(bool entering)
+{
+    SwitchXUDC *controller = __atomic_load_n(&SwitchXUDC::running, __ATOMIC_ACQUIRE);
+    if (controller)
+        controller->getWorkLoop()->runAction(
+            [](OSObject *owner, void *entering, void *, void *, void *) {
+                return static_cast<SwitchXUDC *>(owner)->systemSleep(entering != nullptr);
+            },
+            controller, entering ? controller : nullptr);
+}
+
 void SwitchXUDC::setBus(bool on)
 {
     if (on == onBus) return;
+    if (on && lostToSleep) return;
     if (on) {
         ep0Cancel(kIOReturnAborted);
         hw.initEndpoint(0, EP_CONTROL, 64, 0);

@@ -17,7 +17,6 @@
 // PMC as switchroot L4T's pmc.c sets it up for this DT (tegra20_pmc_init, tegra210_pmc_irq_set_wake/_set_type;
 // OLED DTB pmc@7000e400: core-pwr-good-time 13100/7800 us, core-pwr-off-time 44160 us, core-pwr-req-active-high,
 // sys-clock-req-active-high; max77620 nvidia,pmc-wakeup = wake 51 level low, pwr_int_n).
-#include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOService.h>
@@ -29,6 +28,7 @@
 #include "../SwitchBattery/SwitchBattery.h"
 #include "../SwitchBluetooth/SwitchBluetooth.h"
 #include "../SwitchMotion/SwitchMotion.h"
+#include "../SwitchUSB/SwitchUSB.h"
 #include "../SwitchWLAN/SwitchWLANStation.h"
 #include "../TegraBPMP/TegraBPMP.h"
 #include "../TegraGPIO/TegraGPIO.h"
@@ -188,15 +188,6 @@ void SwitchSuspend::missingSuspendPaths(char *list, size_t size)
     list[0] = 0;
     if (bootArg("tegra-gpu")) appendName(list, size, "GM20B");
     if (bootArg("switch-usb-host") || bootArg("switch-dp")) appendName(list, size, "USB-C host/DP");
-    // SwitchUSB runs whenever the packager put the device or host port in the ADT; SC7 resets XUDC/XHCI under it.
-    static const char *const kUsbNodes[] = {"/arm-io/usb-device", "/arm-io/usb-xhci"};
-    for (const char *path : kUsbNodes) {
-        if (IORegistryEntry *node = IORegistryEntry::fromPath(path, gIODTPlane)) {
-            node->release();
-            appendName(list, size, "USB (XUDC/XHCI)");
-            break;
-        }
-    }
 }
 
 // The RTC keeps time through SC7 by itself; only its register interface needs the APB clock, which nothing else here
@@ -327,6 +318,7 @@ void SwitchSuspend::sleepDevices()
     timed("sleep", 2, "touch", switch_touch_suspend);
     timed("sleep", 2, "motion", switch_motion_suspend);  // IMU off, SPI4 clock off
     timed("sleep", 3, "joycon", switch_joycon_suspend);
+    timed("sleep", 3, "usb", switch_usb_suspend);
     {
         const uint64_t at = mach_absolute_time();
         btWake = switch_bluetooth_suspend();
@@ -468,6 +460,7 @@ void SwitchSuspend::wakeDevices()
     timed("wake", 6, "audio", switch_audio_resume);
     timed("wake", 7, "wifi", switch_wlan_resume);  // the bring-up runs on SwitchWLAN's worker
     timed("wake", 7, "bluetooth", switch_bluetooth_resume);
+    timed("wake", 7, "usb", switch_usb_resume);
     timed("wake", 7, "joycon", switch_joycon_resume);
     timed("wake", 8, "motion", switch_motion_resume);
     timed("wake", 8, "touch", switch_touch_resume);

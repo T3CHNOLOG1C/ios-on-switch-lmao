@@ -17,7 +17,8 @@
 // Order (one driver here runs every step, so the order is this list; each hook is <driver>_suspend/_resume):
 //   sleep action, thread context, interrupts on, secondaries still running:
 //     0 als (BH1730 off: shares LDO6, clocked by DC A)   1 display (panel off, DC quiesced)   2 touch (FTM4, LDO6 off)
-//     2 motion (IMU off, SPI4 gated)   3 joycon   3 bluetooth (controllers dropped, host wake set up, UART-D stopped)
+//     2 motion (IMU off, SPI4 gated)   3 joycon   3 usb (XUDC off the bus)   3 bluetooth (controllers dropped, host
+//     wake set up, UART-D stopped)
 //     3 wifi (chip let go, worker parked)   4 host1x (NVDEC, NVENC, VIC, NVJPG quiesced, then host1x)   4 audio
 //     5 thermal (CPU off the DFLL to PLLX at the boot clocks, fan off)   5 se (both engines idle for BL31's save)
 //     6 PESyncNVRAM (SD still up), journal to Data
@@ -33,7 +34,8 @@
 //     0 i2c, gauge read   0 bpmp (the EMC rate back)   1 rtc (wall clock re-read before clock_wakeup_calendar)
 //     2 smmu (every attached swgroup)   2 se   3 sd   4 battery   5 thermal (DFLL re-initialized; SwitchThermal
 //     enables it again)   6 host1x (before the display, which sits behind it)   6 audio (APE partition, codec)
-//     7 wifi (PCIe and the chip brought up whole on its worker)   7 bluetooth   7 joycon   8 motion   8 touch
+//     7 wifi (PCIe and the chip brought up whole on its worker)   7 bluetooth   7 usb (XUDC powered on whole, back
+//     on the bus; the role again from SwitchPD)   7 joycon   8 motion   8 touch
 //     9 display   10 als (after LDO6 and the frame ends)
 // A driver that is turned on but has no SC7 path yet holds the system awake instead (switch_suspend_hold). The display
 // hooks need the DC A interrupt (sheng-vsync / ioswitch-vblank) and SwitchBrightness, as TegraDisplayPower.h says.
