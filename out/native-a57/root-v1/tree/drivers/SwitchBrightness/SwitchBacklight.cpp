@@ -92,6 +92,7 @@ using namespace switch_backlight;
 static_assert(kPanelMax == TEGRA_PANEL_BRIGHTNESS_MAX, "SwitchBacklightMath.h's panel range");
 constexpr uint64_t kLongestFadeNS = 10000000000ull;
 constexpr uint64_t kSendIntervalNS = 50000000;  // three frames at 60 Hz between panel commands
+constexpr uint32_t kQuietMS = 1000;             // no request for this long: the change is over (its log line)
 
 volatile bool gDisplayOn = true;
 volatile bool gSawNits, gSawNitsCap;  // the first of each is logged once
@@ -177,18 +178,21 @@ extern "C" bool switch_display_power_enabled(void)
 class SwitchBacklight : public IOService {
     OSDeclareDefaultStructors(SwitchBacklight) IOWorkLoop *loop = nullptr;
     IOTimerEventSource *work = nullptr;
+    IOTimerEventSource *quiet = nullptr;  // quietFired
     IOLock *requestLock = nullptr;
 
     // Requests, under requestLock.
     bool haveRequest = false, wantOn = true;
     uint32_t requestValue = 0;
     uint64_t requestFadeNS = 0;
+    unsigned nitsRequests = 0, brightnessRequests = 0;  // since the last settle line
 
     // Work loop state.
-    uint32_t current = 0, from = 0, target = 0;  // brightness, 0..kMax
-    uint32_t lit = kMax / 2;                     // the last nonzero target, restored on wake
-    uint64_t rampStart = 0, rampLength = 0;      // mach_absolute_time units
-    uint64_t lastSend = 0, sendInterval = 0;     // mach_absolute_time units
+    uint32_t current = 0, from = 0, target = 0;     // brightness, 0..kMax
+    uint32_t lit = kMax / 2;                        // the last nonzero target, restored on wake
+    uint64_t rampStart = 0, rampLength = 0;         // mach_absolute_time units
+    uint64_t lastSend = 0, sendInterval = 0;        // mach_absolute_time units
+    unsigned settleNits = 0, settleBrightness = 0;  // requests taken since the last settle line
     unsigned sentRaw = ~0u;
     bool panelOn = true, scanoutStopped = false, reportedFailure = false;
 
@@ -200,6 +204,7 @@ class SwitchBacklight : public IOService {
     void powerOn();
     bool send(unsigned raw);
     void publishParameters();
+    static void quietFired(OSObject *owner, IOTimerEventSource *sender);
 
 public:
     bool brightnessCommands = false, sleepEnabled = false;
@@ -313,6 +318,9 @@ void SwitchBacklight::step()
     const uint32_t value = requestValue;
     const uint64_t fadeNS = requestFadeNS;
     haveRequest = false;
+    settleNits += nitsRequests;
+    settleBrightness += brightnessRequests;
+    nitsRequests = brightnessRequests = 0;
     IOLockUnlock(requestLock);
 
     if (fresh) startRamp(value, fadeNS);
@@ -350,7 +358,23 @@ void SwitchBacklight::step()
         work->setTimeoutMS(1);
     } else {
         publishParameters();
+        if (settleNits || settleBrightness) quiet->setTimeoutMS(kQuietMS);  // the line once the requests stop
     }
+}
+
+// Work loop, kQuietMS after the panel last reached a requested level: one line per change, to the log only.
+// CoreBrightness's own ramps arrive as many brightness-nits steps (auto-brightness and the slider alike), so this is
+// one line per ramp, with the level it ended at.
+void SwitchBacklight::quietFired(OSObject *owner, IOTimerEventSource *)
+{
+    auto *self = OSDynamicCast(SwitchBacklight, owner);
+    if (!self || (!self->settleNits && !self->settleBrightness)) return;
+    const unsigned raw = toRaw(self->current);
+    const uint32_t nits = rawToNits(raw);
+    os_log(OS_LOG_DEFAULT,
+           "SwitchBacklight: panel %u (%u.%02u nits) after %u brightness-nits and %u brightness requests", raw,
+           nits >> 16, ((nits & 0xffff) * 100) >> 16, self->settleNits, self->settleBrightness);
+    self->settleNits = self->settleBrightness = 0;
 }
 
 void SwitchBacklight::workFired(OSObject *owner, IOTimerEventSource *)
@@ -392,6 +416,7 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
     IOLockLock(requestLock);
     requestValue = value;
     requestFadeNS = fadeNS;
+    ++*(nits ? &nitsRequests : &brightnessRequests);
     haveRequest = true;
     IOLockUnlock(requestLock);
     kick();
@@ -416,7 +441,9 @@ bool SwitchBacklight::start(IOService *provider)
     requestLock = IOLockAlloc();
     loop = IOWorkLoop::workLoop();
     work = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::workFired) : nullptr;
-    if (!requestLock || !work || loop->addEventSource(work) != kIOReturnSuccess) {
+    quiet = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBacklight::quietFired) : nullptr;
+    if (!requestLock || !work || !quiet || loop->addEventSource(work) != kIOReturnSuccess ||
+        loop->addEventSource(quiet) != kIOReturnSuccess) {
         IOLog("SwitchBacklight: work loop setup failed\n");
         return false;
     }
@@ -454,6 +481,11 @@ void SwitchBacklight::free()
         work->cancelTimeout();
         if (loop) loop->removeEventSource(work);
         work->release();
+    }
+    if (quiet) {
+        quiet->cancelTimeout();
+        if (loop) loop->removeEventSource(quiet);
+        quiet->release();
     }
     OSSafeReleaseNULL(loop);
     if (requestLock) IOLockFree(requestLock);

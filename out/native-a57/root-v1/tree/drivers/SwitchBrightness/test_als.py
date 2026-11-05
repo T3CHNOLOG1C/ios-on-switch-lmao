@@ -24,6 +24,10 @@ values in TegraI2C.cpp and SwitchALS.cpp against the references they cite.
 5. SwitchBacklightMath.h, compiled for the Mac: brightness-nits (nits * 65536) onto the panel linearly in luminance,
    2047 at lMaxPanel and never below the floor, which is lMinPanel; the legacy brightness mapping unchanged; the
    brightness the ramp keeps lands on the same panel level; the r7s auto-brightness targets it dropped.
+6. Why r7v's auto-brightness did not move from 61 to 135 lux: CoreBrightness's curve (backboardd's ALSUserPreference,
+   E1 0 / L1 63.81 to E2 2000 / L2 287.62 nits above E0b 30 lux) gives the logged target at 61 lux exactly, and the
+   step to 135 lux is 0.03 in its perceptual scale (BULuminanceToPerceptual: 1 + ln(L / Lmax) / ln(Lmax / Lmin), over
+   this panel's 12.5..400 nits), a third of the brighten threshold 0.2 * 0.5 (AABC e70 * aggressivity 0x2a4; inferred).
 """
 from pathlib import Path
 import re
@@ -263,6 +267,30 @@ targets = [shown[int(n * 65536)] for n in r7s]
 assert targets == [193, 244, 261, 432, 706, 530], targets  # 38..138 nits: panel 193..706 (r7s stayed at 525)
 assert shown[0] == FLOOR and shown[NITS_MAX] == PANEL and shown[0x7fffffff] == PANEL
 
+# ---- 6. r7v's auto-brightness -------------------------------------------------------------------------------------
+import math
+E1, L1, E2, L2, E0B, L0A, L0B = 0, 63.80889892578125, 2000, 287.6190490722656, 30, 5.000001907348633, 67.16605377197266
+
+
+def aab_curve(lux):
+    if lux < E0B:
+        return L0A + (L0B - L0A) * lux / E0B
+    return L1 + (L2 - L1) * (lux - E1) / (E2 - E1)
+
+
+def perceptual(nits, low=consts[2] / 65536, high=400.0):
+    return 1 + math.log(max(nits, low) / high) / math.log(high / low)
+
+
+assert abs(aab_curve(61) - 70.6351) < 5e-5  # r7v: Begin ramp L_target=70.6351 _Esensor_trusted=61
+delta = perceptual(aab_curve(135)) - perceptual(aab_curve(61))
+assert 0.025 < delta < 0.04, delta          # well under 0.1: no ramp, as iOS does
+threshold = 0.2 * 0.5
+brighten = next(lux for lux in range(61, 2001) if perceptual(aab_curve(lux)) - perceptual(aab_curve(61)) > threshold)
+dim = next(lux for lux in range(61, -1, -1) if perceptual(aab_curve(61)) - perceptual(aab_curve(lux)) > threshold)
+assert 250 < brighten < 400 and 5 < dim < 25, (brighten, dim)
+
 print(f'SwitchALS: {rows} lux/gain cases match bh1730.c (worst +{worst} lux); I2C2 row, pinmux 0x40, drive DRVDN 0x1f '
       f'and BH1730 commands match Atmosphere, L4T, Linux, hekate and the datasheet; window tables continuous; '
-      f'CoreBrightness ALS and backlight calibration keys present; brightness-nits {targets} on the panel')
+      f'CoreBrightness ALS and backlight calibration keys present; brightness-nits {targets} on the panel; r7v at 61 lux '
+      f'holds from {dim} to {brighten} lux (perceptual step to 135 lux {delta:.3f})')
