@@ -8189,6 +8189,29 @@ native_ioswitch_als_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("IOSwitch raw boot: ambient light sensor %s: MobileGestalt cache dropped (%d)\n", als ? "on" : "off", error);
 }
 
+/* The UI scale (vm_unix.c, IOSwitch UI scale): MobileGestalt's main-screen-scale comes from its static screen info, which
+ * lives in the same build-keyed cache as DisplayBootRotation, so a cache made at another scale keeps answering it. The
+ * cache is dropped once per scale: the marker names the scale whose cache MobileGestalt has made since. */
+static void
+native_ioswitch_ui_scale_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/ioswitch/ui-scale-8-5";
+	vnode_t vp = NULLVP;
+	if (!vnode_lookup(marker, 0, &vp, vfs_context_current())) {
+		vnode_put(vp);
+		return;
+	}
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = native_ioswitch_unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error) error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
+	if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	printf("IOSwitch raw boot: UI scale 8/5: MobileGestalt cache dropped (%d)\n", error);
+}
+
 /* Portrait-native: Core Animation must composite the landscape interface into the portrait framebuffer itself. backboardd
  * hands every interface orientation to the window server's first display as if it were a mirrored one
  * (UpdateMirroredDisplayOrientationWithInterfaceOrientation: [[CAWindowServer serverIfRunning].displays[0] setOrientation:]),
@@ -8325,6 +8348,7 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		native_ioswitch_rotation_lock_release(p, scratch, data_mount);
 		native_ioswitch_gamut_cache(p, scratch, data_mount);
 		native_ioswitch_als_cache(p, scratch, data_mount);
+		native_ioswitch_ui_scale_cache(p, scratch, data_mount);
 		native_ioswitch_portrait_display(p, scratch, data_mount);
 		native_ioswitch_system_app_migration(p, scratch, data_mount);
 	}

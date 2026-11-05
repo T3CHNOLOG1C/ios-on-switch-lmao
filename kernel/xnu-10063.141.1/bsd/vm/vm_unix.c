@@ -2420,7 +2420,7 @@ iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t siz
 }
 
 /*
- * IOSwitch settings icons: Settings' icon cache at main-screen-scale 1.
+ * IOSwitch settings icons: Settings' icon cache at a screen scale below 2.
  *
  * +[PKIconImageCache settingsIconCacheWithScale:] (Preferences, cache text in dyld_shared_cache_arm64.13 of 21H461)
  * takes iconCache@3x.artwork for scale >= 3, iconCache@2x.artwork for scale >= 2, and no file for anything less.
@@ -2428,9 +2428,9 @@ iosw_home_grid_pager(vm_object_t file_object, uint64_t file_offset, uint64_t siz
  * after the artwork is read), so every specifier with an "iconCache" key gets no icon and Preferences logs
  * "Icon for key ... is missing from the cache": Wi-Fi and some 35 more Settings root rows (Mail, Safari, Photos,
  * App Store, Music...), and Privacy and Restrictions rows. 21H461 ships only the @2x artwork; this screen is
- * scale 1. Here the method works at scale 2 whatever the screen: fmov d8, d0 (the scale argument, the first
- * instruction after the prologue) becomes fmov d8, #2.0, so the cache is the @2x artwork plus IconServices' icons
- * at 2x: 29-point icons from 58-pixel bitmaps, drawn downsampled on the 1x panel (never upscaled). Same pager and
+ * scale 1.6 (IOSwitch UI scale, below). Here the method works at scale 2 whatever the screen: fmov d8, d0 (the scale
+ * argument, the first instruction after the prologue) becomes fmov d8, #2.0, so the cache is the @2x artwork plus
+ * IconServices' icons at 2x: 29-point icons from 58-pixel bitmaps, drawn downsampled (never upscaled). Same pager and
  * checks as the home grid, on one 4 KB chunk: the instruction and the two after it must read as shipped.
  */
 static const uint8_t iosw_si_uuid[16] = {           /* dyld_shared_cache_arm64.13 of 21H461 */
@@ -2523,11 +2523,12 @@ iosw_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint64_
  * TextInput's IsLargeIPad() is true, the KeyboardUseProLayout preference defaults to YES, and UIKit gives the keyboard
  * the 12.9-inch Pro class (keyboard idiom 23). For that class _UIKeyboardGetDerivedKeyboardForSpecificOrientation
  * (UIKitCore, cache text in dyld_shared_cache_arm64.03 of 21H461) makes no derived keyboard: a real 12.9-inch screen
- * is 1366 points wide in landscape, the width of a layout of its own. This one is 1280, so the layout picked by width
- * is the 1024-point Wildcat-Landscape. Its keys are drawn stretched to 1280 (stretchFactor 1.25), but the keyboard
- * view keeps the layout's 1024 points (UIKeyboardAutomatic frame (128 0; 1024 370)), and the input window places that
- * narrower view centred at x = 128 in some layout passes and at x = 0 in others: a text field's first keyboard shows
- * its keys 128 points to the right, the right-hand ones off the screen, until a later pass (a keypress) moves it.
+ * is 1366 points wide in landscape, the width of a layout of its own. This one is not a layout width, so the layout
+ * picked by width is narrower than the screen. Its keys are drawn stretched to the screen's width, but the keyboard
+ * view keeps the layout's width (the 1024-point Wildcat-Landscape on a 1280-point screen: UIKeyboardAutomatic frame
+ * (128 0; 1024 370)), and the input window places that narrower view centred in some layout passes and at x = 0 in
+ * others: a text field's first keyboard shows its keys shifted right, the right-hand ones off the screen, until a
+ * later pass (a keypress) moves it.
  * Every other iPad whose screen is not a layout width gets a derived keyboard. For idiom 26 (screens larger than
  * 768x1024, the 10.2-inch iPad) that branch derives Wildcat-Landscape with keyboardSize (screen width, -1): the
  * keyboard view, its keyplane (sizeForKeyplane:) and the drawn keys all take the screen's width; the height and the
@@ -2751,11 +2752,171 @@ iosw_widget_deadline_pager(const struct iosw_wd_site *site, vm_object_t file_obj
 }
 
 /*
+ * IOSwitch UI scale: 1.6 pixels per point on the 720x1280 panel, every pixel rendered natively.
+ *
+ * At the panel's 209.8 ppi, 1.6 px/pt gives a point the physical size of a 9.7- to 12.9-inch iPad's (264 ppi at
+ * scale 2: 132 points per inch). The screen is 450x800 points, 800x450 in landscape. iPadOS has no fractional scale
+ * for the main display: MobileGestalt makes main-screen-scale from the integer /chosen/display-scale, QuartzCore's
+ * -[CADisplayMode preferredScale] truncates that answer (fcvtzu), and FrontBoardServices' main display modes take it.
+ * Display Zoom and More Space resample a canvas of another size in the display pipe instead. From FrontBoardServices
+ * up the scale is a double: -[FBSDisplayMode pointScale] is the mode's scaleOverride when that is nonzero (otherwise
+ * its preferredScale), UIScreen.scale is the display configuration's pointScale, _UIRootWindow maps points to pixels
+ * with an affine scale by UIScreen.scale under its rotation, and UIKit's layers rasterize at contentsScale =
+ * UIScreen.scale (QuartzCore keeps a non-integer contents or rasterization scale in the layer's extension). A
+ * non-integer override therefore draws every layer at 1.6 into the native framebuffer and nothing is resampled.
+ * Touches reach UIKit in display pixels and are divided by UIScreen.scale (-[UIWindow
+ * _transformDisplayToWindowCoordinates:]), so they follow.
+ *
+ * Two sites, one 4 KB chunk of cache text each, applied all or nothing per site:
+ * - FrontBoardServices (.09), -[FBSDisplayConfiguration _initWithImmutableDisplay:originalDisplay:assertIfInvalid:]
+ *   + 0x1c0: the main display's modes get the scale override 8 / 5, exact in a double, so the bounds are 450x800.
+ *   Three instructions make it in the five that gave every other display BKSDisplayServicesGetExternalDisplayScale():
+ *   other displays now get no override, so their modes keep QuartzCore's integer scale.
+ * - libMobileGestalt (.11), MGIOMFBSupport.c's static screen info: main-screen-scale is 1.6f instead of the
+ *   property's value converted. IconServices, TextInputCore, GraphicsServices, CoreMaterial, WebCore and others size
+ *   bitmaps from MobileGestalt rather than UIScreen; at 1 those would be drawn scaled up. The register that held the
+ *   property holds the float's bits (movz/movk over its read, fmov over the scvtf). Its one other use, the screen
+ *   class lookup, finds no class for 720x1280 at scale 1 either. QuartzCore's own scale stays 1 (fcvtzu of 1.6f).
+ * MobileGestalt keeps the answer in its build-keyed cache; kern_exec.c drops that cache once for this scale
+ * (native_ioswitch_ui_scale_cache).
+ */
+struct iosw_us_edit {
+	uint64_t fileoff;                           /* the first byte that must read as shipped */
+	uint8_t length;                             /* bytes that must read as shipped */
+	uint8_t at, size;                           /* the bytes replaced, from fileoff + at */
+	uint8_t stock[28];
+	uint8_t patched[20];
+};
+
+static const struct iosw_us_site {
+	uint8_t uuid[16];
+	uint64_t page_vmaddr;                       /* unslid; one 16 KB page */
+	uint64_t page_fileoff;
+	uint64_t chunk_offset;                      /* the 4 KB chunk within the page that holds every edit */
+	unsigned edits;
+	struct iosw_us_edit edit[2];
+	const char *name, *applied;
+} iosw_us_sites[] = {
+	{   /* dyld_shared_cache_arm64.09 of 21H461 (text 0x199130000, file 0) */
+		{ 0x59, 0xec, 0x4b, 0x71, 0xf0, 0x27, 0x33, 0xd1, 0xae, 0x39, 0x4e, 0x04, 0xbd, 0x70, 0x7b, 0x6d },
+		0x19f3cc000ULL, 0x629c000ULL, 0x3000ULL, 1,
+		{
+			/* 0x19f3cf8cc: bl isMainDisplay; fmov d8, xzr; tbnz w0, #0, +0x10; mov x0, x28;
+			 * bl BKSDisplayServicesGetExternalDisplayScale; fcvt d8, s0; mov x0, x28
+			 * -> fmov d8, #8.0; fmov d1, #5.0; fdiv d8, d8, d1; tbnz w0, #0, +0x8; fmov d8, xzr */
+			{ 0x629f8ccULL, 28, 4, 20,
+			  { 0xcd, 0x90, 0x02, 0x94, 0xe8, 0x03, 0x67, 0x9e, 0x80, 0x00, 0x00, 0x37, 0xe0, 0x03, 0x1c, 0xaa,
+			    0x28, 0x20, 0x24, 0x94, 0x08, 0xc0, 0x22, 0x1e, 0xe0, 0x03, 0x1c, 0xaa },
+			  { 0x08, 0x10, 0x64, 0x1e, 0x01, 0x90, 0x62, 0x1e, 0x08, 0x19, 0x61, 0x1e, 0x40, 0x00, 0x00, 0x37,
+			    0xe8, 0x03, 0x67, 0x9e } },
+		},
+		"FrontBoardServices", "main display scale override 8/5",
+	},
+	{   /* dyld_shared_cache_arm64.11 of 21H461 (text 0x19fce4000, file 0) */
+		{ 0x70, 0x56, 0x7d, 0x89, 0x4c, 0xe6, 0x3e, 0xc6, 0xa4, 0xde, 0xe7, 0xb4, 0xf4, 0xec, 0x60, 0x41 },
+		0x1a0214000ULL, 0x530000ULL, 0x1000ULL, 2,
+		{
+			/* 0x1a0215754: mov w4, #1; bl (the display-scale read); mov x19, x0
+			 * -> movz w19, #0xcccd; movk w19, #0x3fcc, lsl #16 */
+			{ 0x531754ULL, 12, 4, 8,
+			  { 0x24, 0x00, 0x80, 0x52, 0x05, 0xe9, 0xff, 0x97, 0xf3, 0x03, 0x00, 0xaa },
+			  { 0xb3, 0x99, 0x99, 0x52, 0x93, 0xf9, 0xa7, 0x72 } },
+			/* 0x1a021594c: str w21, [sp, #0x68]; scvtf s0, w19; stp s0, s8, [sp, #0x6c] -> fmov s0, w19 */
+			{ 0x53194cULL, 12, 4, 4,
+			  { 0xf5, 0x6b, 0x00, 0xb9, 0x60, 0x02, 0x22, 0x1e, 0xe0, 0xa3, 0x0d, 0x2d },
+			  { 0x60, 0x02, 0x27, 0x1e } },
+		},
+		"MobileGestalt", "main-screen-scale 1.6",
+	},
+};
+#define IOSW_US_SITES           (sizeof(iosw_us_sites) / sizeof(iosw_us_sites[0]))
+#define IOSW_US_PAGE_SIZE       0x4000ULL
+
+static uint32_t iosw_us_logged[IOSW_US_SITES];
+
+/* crypt_ops is the site, as for the widget deadlines */
+static int
+iosw_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, void *ops)
+{
+	const struct iosw_us_site *site = ops;
+	const unsigned which = (unsigned)(site - iosw_us_sites);
+	uint8_t *out = dst;
+
+	bcopy(src, dst, IOSW_HG_CHUNK);
+	for (unsigned i = 0; i < site->edits; i++) {
+		const struct iosw_us_edit *edit = &site->edit[i];
+		if (edit->fileoff < src_offset || edit->fileoff + edit->length > src_offset + IOSW_HG_CHUNK) {
+			return 0;
+		}
+		if (memcmp(out + (edit->fileoff - src_offset), edit->stock, edit->length) != 0) {
+			if (!os_atomic_xchg(&iosw_us_logged[which], 1, relaxed)) {
+				printf("IOSwitch UI scale: %s cache bytes at 0x%llx are not the shipped ones, page left stock\n",
+				    site->name, edit->fileoff);
+			}
+			return 0;
+		}
+	}
+	for (unsigned i = 0; i < site->edits; i++) {
+		const struct iosw_us_edit *edit = &site->edit[i];
+		memcpy(out + (edit->fileoff - src_offset) + edit->at, edit->patched, edit->size);
+	}
+	if (!os_atomic_xchg(&iosw_us_logged[which], 1, relaxed)) {
+		printf("IOSwitch UI scale: %s %s\n", site->name, site->applied);
+	}
+	return 0;
+}
+
+/* The pager for one UI scale site, if this mapping holds it, or MEMORY_OBJECT_NULL. */
+static memory_object_t
+iosw_ui_scale_pager(const struct iosw_us_site *site, vm_object_t file_object, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
+{
+	if (unslid_address > site->page_vmaddr ||
+	    site->page_vmaddr + IOSW_US_PAGE_SIZE > unslid_address + size ||
+	    file_offset + (site->page_vmaddr - unslid_address) != site->page_fileoff ||
+	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
+		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the site */
+	}
+
+	uint8_t header[IOSW_HG_UUID_OFFSET + sizeof(site->uuid)];
+	int resid = 0;
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
+	if (error != 0 || resid != 0) {
+		printf("IOSwitch UI scale: %s cache header read failed (%d), cache text left stock\n", site->name, error);
+		return MEMORY_OBJECT_NULL;
+	}
+	if (memcmp(header, iosw_hg_magic, sizeof(iosw_hg_magic)) != 0 ||
+	    memcmp(header + IOSW_HG_UUID_OFFSET, site->uuid, sizeof(site->uuid)) != 0) {
+		printf("IOSwitch UI scale: %s is not in the 21H461 subcache (UUID differs), cache text left stock\n",
+		    site->name);
+		return MEMORY_OBJECT_NULL;
+	}
+
+	struct pager_crypt_info crypt_info = {
+		.page_decrypt = iosw_ui_scale_page,
+		.crypt_end = NULL,
+		.crypt_ops = (void *)(uintptr_t)site,
+		.crypt_refcnt = 0,
+	};
+	memory_object_t mo = apple_protect_pager_setup(file_object, site->page_fileoff,
+	    site->page_fileoff + site->chunk_offset, &crypt_info,
+	    site->chunk_offset, site->chunk_offset + IOSW_HG_CHUNK, TRUE);
+	if (mo == MEMORY_OBJECT_NULL) {
+		printf("IOSwitch UI scale: %s pager setup failed, cache text left stock\n", site->name);
+		return MEMORY_OBJECT_NULL;
+	}
+	*range_offset = site->page_vmaddr - unslid_address;
+	*range_size = IOSW_US_PAGE_SIZE;
+	return mo;
+}
+
+/*
  * Called by vm_shared_region_map_file_setup() for each executable cache mapping it has just entered in a shared
  * region, once per slot (0 .. IOSW_TEXT_SLOTS - 1 there). Returns an apple_protect pager for the slot's range to replace
  * (range_offset/range_size within the mapping), or MEMORY_OBJECT_NULL to keep that part of the mapping stock. The home
- * grid, settings icons and keyboard ranges are in different subcaches (.25, .13, .03), one per mapping, so they only
- * answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k.
+ * grid, settings icons, keyboard and UI scale ranges are in different subcaches (.25, .13, .03, .09, .11), one per
+ * mapping, so they only answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k.
  */
 memory_object_t ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);
@@ -2772,6 +2933,10 @@ ioswitch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, 
 		}
 		if (mo == MEMORY_OBJECT_NULL) {
 			mo = iosw_keyboard_pager(file_object, file_offset, size, unslid_address, vp, range_offset, range_size);
+		}
+		for (unsigned site = 0; site < IOSW_US_SITES && mo == MEMORY_OBJECT_NULL; site++) {
+			mo = iosw_ui_scale_pager(&iosw_us_sites[site], file_object, file_offset, size, unslid_address, vp,
+			    range_offset, range_size);
 		}
 		if (mo != MEMORY_OBJECT_NULL) {
 			return mo;
