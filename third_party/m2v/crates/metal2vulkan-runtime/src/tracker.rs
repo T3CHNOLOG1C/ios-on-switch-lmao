@@ -342,6 +342,66 @@ impl Barrier {
         }
     }
 
+    /// What an attachment pass of the encoder's own (a reach clear's, a shader resolve's) may
+    /// read and write after the barriers around it: every stage, but only the access types a
+    /// command can have on an image or a vertex, index or uniform buffer; not indirect-command
+    /// or host reads, which no attachment's texels feed (indirect arguments are buffer bytes,
+    /// and the host's reads follow the batch's own [`Barrier::to_host`]). On NVK the generic
+    /// `MEMORY_READ` also stood for indirect-command reads, an MME-data invalidate: a host
+    /// wait for idle (`SET_REFERENCE`) on top of the barrier's own wait, at each of these
+    /// barriers (ioswitch r15-gpuperf: 15 per Core Animation frame on the host twin).
+    const ATTACHMENT_PASS_DST: vk::AccessFlags2 = vk::AccessFlags2::from_raw(
+        vk::AccessFlags2::SHADER_READ.as_raw()
+            | vk::AccessFlags2::SHADER_WRITE.as_raw()
+            | vk::AccessFlags2::INPUT_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags2::COLOR_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE.as_raw()
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ.as_raw()
+            | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE.as_raw()
+            | vk::AccessFlags2::TRANSFER_READ.as_raw()
+            | vk::AccessFlags2::TRANSFER_WRITE.as_raw()
+            | vk::AccessFlags2::UNIFORM_READ.as_raw()
+            | vk::AccessFlags2::VERTEX_ATTRIBUTE_READ.as_raw()
+            | vk::AccessFlags2::INDEX_READ.as_raw(),
+    );
+
+    /// Everything recorded before, before an attachment pass of the encoder's own (a reach
+    /// clear's, a shader resolve's) and whatever follows it: [`Barrier::everything`]'s source,
+    /// its destination without indirect-command and host reads ([`Self::ATTACHMENT_PASS_DST`]).
+    pub(super) fn before_attachment_pass() -> Barrier {
+        Barrier {
+            src: Access::new(
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_WRITE,
+            ),
+            dst: Access::new(
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                Self::ATTACHMENT_PASS_DST,
+            ),
+        }
+    }
+
+    /// An attachment pass of the encoder's own (a reach clear's, a shader resolve's) before
+    /// everything recorded after it. Such a pass writes its attachments and nothing else, in
+    /// the color output and fragment test stages (`render_target::ATTACHMENT_STAGES`): no
+    /// shader storage or transfer writes in the source, so on NVK a wait for idle and the
+    /// destination's invalidates, not a shader data flush.
+    pub(super) fn after_attachment_pass() -> Barrier {
+        Barrier {
+            src: Access::new(
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                    | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE
+                    | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+            ),
+            dst: Access::new(
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                Self::ATTACHMENT_PASS_DST,
+            ),
+        }
+    }
+
     /// A compute encoder's memory barrier (`memoryBarrierWithScope:` and
     /// `memoryBarrierWithResources:`): every shader write of the earlier dispatches before every
     /// shader, uniform and indirect-argument access of the later ones.

@@ -686,7 +686,7 @@ impl ShaderResolves {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        core.barrier(Barrier::everything());
+        core.barrier(Barrier::before_attachment_pass());
         core.command(ATTACHMENT_STAGES, &uses, |raw, command_buffer| {
             for resolve in &resolves {
                 let begin = vk::RenderPassBeginInfo::default()
@@ -719,7 +719,7 @@ impl ShaderResolves {
                 }
             }
         });
-        core.barrier(Barrier::everything());
+        core.barrier(Barrier::after_attachment_pass());
         core.retain(objects);
     }
 }

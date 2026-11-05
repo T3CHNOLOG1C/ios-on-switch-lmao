@@ -697,7 +697,7 @@ impl ReachClears {
             crate::work_counts::PoolCompiled::AttachmentClear,
             clears.len() as u64,
         );
-        core.barrier(Barrier::everything());
+        core.barrier(Barrier::before_attachment_pass());
         core.command(
             render_target::ATTACHMENT_STAGES,
             &uses,
@@ -741,7 +741,7 @@ impl ReachClears {
                 }
             },
         );
-        core.barrier(Barrier::everything());
+        core.barrier(Barrier::after_attachment_pass());
         core.retain(clears);
     }
 }
