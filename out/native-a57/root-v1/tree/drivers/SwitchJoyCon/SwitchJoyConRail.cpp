@@ -361,6 +361,12 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         volatile uint32_t interrupts, lineErrors, fastErrors, overflows;  // fastErrors: line errors at 3 Mbaud
         volatile bool stuck;
         bool fast;  // UART at 3 Mbaud (configureUart)
+        // The rail framing of the bytes the filter puts in the ring, as uartAction parses them (frameByte), so that a
+        // running Joy-Con's reply wakes the work loop once, at its end (filter); uartAction puts it back in step with its
+        // own whenever it has emptied the ring. Under `lock`.
+        uint32_t frameLength, frameTotal;
+        uint8_t frameSizeLow;
+        bool packetDone;  // a packet ended in the ring since the last wakeup
         uint8_t tx[kMaxTx];
         uint32_t txLength, txPosition;
         uint32_t ier;
@@ -433,6 +439,7 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     bool filter(Side &s);
     void fillTx(Side &s);
     bool drainRx(Side &s);
+    static void frameByte(Side &s, uint8_t byte);
 
     // Work loop.
     void setUp(Side &s, const SideConfig *cfg);
@@ -520,11 +527,18 @@ bool SwitchJoyConRail::uartFilter(OSObject *owner, IOFilterInterruptEventSource 
 // Every pending UART interrupt: RX data, RX timeout and line status drain the FIFO into the ring, THR empty refills the
 // TX FIFO (Linux tegra_uart_isr). The action runs only when bytes arrived. An identification register that never
 // clears would hold the level line forever: stop the UART's interrupts and let the action panic with the registers.
+// A running Joy-Con's reply (0x30 input reports, ~60 bytes) wakes the action once, not at every 8-byte RX FIFO trigger
+// (about 7 times, ~900 wakeups a second with both rails): while running, the action only acts on whole packets, so
+// bytes in the middle of one stay in the ring until the interrupt that brings its last byte (frameByte), the line
+// going idle (RX timeout), a line error or an overflow. That is the earliest the action could use them: no input
+// report or rumble goes out later than before. Every other phase (handshake, pairing) records every byte for its
+// give-up line and keeps a wakeup per interrupt.
 bool SwitchJoyConRail::filter(Side &s)
 {
-    bool got = false;
+    bool got = false, idle = false;
     IOSimpleLockLock(s.lock);
     s.interrupts = s.interrupts + 1;
+    const uint32_t errorsBefore = s.lineErrors, overflowsBefore = s.overflows;
     unsigned rounds = 0;
     for (;; ++rounds) {
         const uint32_t iir = rd(s, IIR_FCR);
@@ -539,11 +553,38 @@ bool SwitchJoyConRail::filter(Side &s)
         switch ((iir >> 1) & 7) {
         case 0: (void)rd(s, MSR); break;
         case 1: fillTx(s); break;
-        default: got |= drainRx(s); break;
+        default:
+            idle |= ((iir >> 1) & 7) == 6;  // RX timeout
+            got |= drainRx(s);
+            break;
         }
     }
+    if (got && !s.stuck && s.phase == kRunning && !s.packetDone && !idle && s.lineErrors == errorsBefore &&
+        s.overflows == overflowsBefore)
+        got = false;  // the middle of a reply: its end wakes the action
+    if (got) s.packetDone = false;
     IOSimpleLockUnlock(s.lock);
     return got;
+}
+
+// `lock` held. One more byte in the ring, framed as uartAction does (magic 19 81 03, a 16-bit size, size + 5 bytes):
+// packetDone when it ends a packet.
+void SwitchJoyConRail::frameByte(Side &s, uint8_t byte)
+{
+    if (s.frameLength < 3 && byte != kReplyMagic[s.frameLength]) {
+        s.frameLength = byte == kReplyMagic[0] ? 1 : 0;
+        return;
+    }
+    if (s.frameLength == 3) s.frameSizeLow = byte;
+    if (s.frameLength == 4) s.frameTotal = 5 + (s.frameSizeLow | (uint32_t)byte << 8);
+    if (++s.frameLength < 5) return;
+    if (s.frameTotal < kMinPacket || s.frameTotal > kMaxRx) {
+        s.frameLength = 0;
+        return;
+    }
+    if (s.frameLength < s.frameTotal) return;
+    s.frameLength = 0;
+    s.packetDone = true;
 }
 
 void SwitchJoyConRail::fillTx(Side &s)
@@ -573,6 +614,7 @@ bool SwitchJoyConRail::drainRx(Side &s)
         }
         s.ring[s.head] = byte;
         s.head = next;
+        frameByte(s, byte);
         got = true;
     }
     return got;
@@ -599,6 +641,13 @@ void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sende
     for (;;) {
         const IOInterruptState state = IOSimpleLockLockDisableInterrupt(s->lock);
         const uint32_t head = s->head;
+        if (s->tail == head) {
+            // The ring is empty: the filter's framing (frameByte) becomes this parser's, which is the reference.
+            s->frameLength = (uint32_t)s->packetLength;
+            s->frameSizeLow = s->packetLength > 3 ? s->packet[3] : 0;
+            s->frameTotal = s->packetLength > 4 ? 5 + (s->packet[3] | (uint32_t)s->packet[4] << 8) : 0;
+            s->packetDone = false;
+        }
         IOSimpleLockUnlockEnableInterrupt(s->lock, state);
         if (s->tail == head) break;
         const uint32_t epoch = s->epoch;
@@ -770,6 +819,8 @@ void SwitchJoyConRail::configureUart(Side &s, bool fast)
     while (rd(s, LSR) & LSR_DR) (void)rd(s, RBR_THR);
     s.tail = s.head;  // bytes of the old rate are dropped; the receive loop sees the new epoch and rereads head
     s.epoch++;
+    s.frameLength = 0;
+    s.packetDone = false;
     s.txLength = s.txPosition = 0;
     s.fast = fast;
     s.ier = IER_RX;
