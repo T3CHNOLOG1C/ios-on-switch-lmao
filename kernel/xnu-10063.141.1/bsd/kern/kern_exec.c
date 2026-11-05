@@ -5894,7 +5894,19 @@ bad:
  * (e00002c2, "frame rejected (reason 2)", 60 a second) and the screen froze for 28 s and 100 s, and the second time
  * IOMFBDisplay::detach_layer's copy_surface needed an IOSurfaceAccelerator, which this platform does not have:
  * "Failed to create IOSurfaceAccelerator" abort, backboardd and SpringBoard restarted.
+ * r18-planes (11-05): the variable stays only while native_legacy_detach_ready() (NativeLegacyDisplay.cpp) says no, asked at
+ * each backboardd exec. It says yes once the display's plane probe proved window B scans through the SMMU (at the display's
+ * start, before backboardd) and TegraVIC proved the IOSurfaceAccelerator quarter turns every rotated detached layer is
+ * copied through. Core Animation never falls back from a refused swap (finish_update sends it again every frame, the freezes
+ * above): the display now accepts every swap built within the limits it publishes (IOMFBScalingLimits, IOMFBMaxSrcPixels,
+ * IOMFBNumLayers 2, DisplayPipePlaneBaseAlignment) and shows the detached layer on window B under the UI.
  */
+/* Weak default for a kernel without the display: never. */
+__attribute__((weak)) bool
+native_legacy_detach_ready(void)
+{
+	return false;
+}
 static const char *const native_ioswitch_bluetoothd_environment[] = {
 	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
@@ -5924,6 +5936,7 @@ native_ioswitch_exec_environment(const struct image_params *imgp)
 		single_layer = PE_parse_boot_argn("offline-legacy-validate", &validate, sizeof(validate)) && validate == 1;
 	}
 	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
+		const int single = single_layer && !native_legacy_detach_ready();
 #if NATIVE_IOSWITCH_CA_VBL
 		/* Only with the display's DC A vsync (sheng-vsync, NativeLegacyDisplay startVsync): without it nothing would drive CA. */
 		static int vbl = -1;
@@ -5932,14 +5945,14 @@ native_ioswitch_exec_environment(const struct image_params *imgp)
 			(void)PE_parse_boot_argn("ioswitch-vblank", &vblank, sizeof(vblank));
 			vbl = PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz)) && hz && vblank;
 		}
-		if (vbl && single_layer) {
+		if (vbl && single) {
 			return native_ioswitch_backboardd_vbl_environment;
 		}
 		if (vbl) {
 			return native_ioswitch_backboardd_vbl_environment + 1;
 		}
 #endif
-		if (single_layer) {
+		if (single) {
 			return native_ioswitch_backboardd_environment;
 		}
 	}
