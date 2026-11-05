@@ -23,8 +23,9 @@ bundles/
 # ~/Library/Application Support/ioswitch). Nothing in it is tracked.
 /out/
 
-# Claude Code worktrees and local state
-.claude/
+# Claude Code worktrees and local state; the skills are links into .agents/skills
+.claude/*
+!.claude/skills/
 
 # Bazel: convenience symlinks, personal flags, execution logs
 /bazel-*
