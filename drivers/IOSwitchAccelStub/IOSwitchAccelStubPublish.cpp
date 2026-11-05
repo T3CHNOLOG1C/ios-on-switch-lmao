@@ -24,7 +24,7 @@ void ioswitch_accel_stub_publish(void)
     // exists and Metal would cache an empty device list for backboardd's lifetime, so it stays out of the way then.
     unsigned gpuStage = 0;
     if (PE_parse_boot_argn("tegra-gpu", &gpuStage, sizeof(gpuStage)) && gpuStage >= 4) return;
-    // ioswitch-accel-stub=0: no stub (QuartzCore waits its 30 s again), for a boot where IOGPUFamily cannot load.
+    // ioswitch-accel-stub=0: no stub (QuartzCore waits 30 s), for a boot where IOGPUFamily cannot load.
     unsigned stub = 1;
     if (PE_parse_boot_argn("ioswitch-accel-stub", &stub, sizeof(stub)) && !stub) return;
     const kern_return_t loaded = OSKextLoadKextWithIdentifier("com.apple.iokit.IOGPUFamily");
