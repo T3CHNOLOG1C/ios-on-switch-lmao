@@ -93,6 +93,8 @@ constexpr uint32_t kMaxChain = 256;
 // kBounceSectors (the bounce fallback already splits a longer chain into SDMA-sized pieces).
 constexpr uint32_t kDirectWriteSectors = kSafeSectors;
 constexpr uint32_t kWriteChecks = 32;
+// r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (directChain, proveHigh).
+constexpr uint8_t kPoison = 0x5a;
 // Descriptor table: 16 KiB, contiguous, below 4 GiB; 1024 descriptors, four times what a 1 MiB chain of scattered 4 KiB
 // pages needs (256). A chain that needs more takes the bounce buffer.
 constexpr uint32_t kAdmaDescriptors = 1024;
@@ -413,7 +415,10 @@ class NativeIOSwitchBlock : public IOService {
     uint64_t admaErrorAddress = 0;
     uint32_t sdmaReadSectors = kSafeSectors;
     uint32_t writeChecks = 0;
-    uint8_t *writeCheck = nullptr;
+    // r12-sdio: whether ADMA2 reaches pages above 4 GiB (IOSwitchAdma.h), and the SDMA copy the proofs (proveHigh,
+    // proveWrite) compare against: kBounceBytes, freed once no proof is left (releaseChecks).
+    IOSwitchAdmaHigh high = {};
+    uint8_t *checkBuffer = nullptr;
     char admaWhy[128] = {};
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
@@ -462,11 +467,13 @@ class NativeIOSwitchBlock : public IOService {
     void serviceBatch(Request *, uint32_t sectors);
     // r10-adma2: the ADMA2 path, the bounce path in SDMA-sized pieces, the write read-back, the setup check, the
     // power-state hooks.
-    IOSwitchAdmaRefusal buildTable(Request *first, uint32_t sectors);
-    int directChain(uint64_t lba, uint32_t sectors, bool write);
-    bool stageChain(Request *first, uint32_t from, uint32_t length, bool toClient);
+    IOSwitchAdmaRefusal buildTable(Request *first, uint32_t sectors, bool write);
+    int directChain(uint64_t lba, uint32_t sectors, bool write, bool poison);
+    bool stageChain(Request *first, uint32_t from, uint32_t length, uint8_t *buffer, bool toClient);
     bool bounceChain(Request *first, uint32_t sectors);
     bool proveWrite(Request *first, uint32_t sectors);
+    bool proveHigh(Request *first, uint32_t sectors);
+    void releaseChecks();
     const char *checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages, uint32_t *highOk);
     void dmaSuspend();
     void dmaResume();
@@ -863,25 +870,37 @@ template <int op> static void syncLines(const IOSwitchAdmaTable &table)
 }
 
 // The descriptor table for a chain, from each request's physical segments; kAdmaOk, or why the chain takes the bounce
-// buffer instead.
-IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sectors)
+// buffer instead. How far up it may reach depends on the direction and on how far ADMA2 above 4 GiB is proven (high).
+IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sectors, bool write)
 {
     table.reset();
+    table.limit = high.limit(write);
+    const auto pageOk = [&](uint64_t page) { return cacheableRam(page) && high.pageOk(page, write); };
     for (Request *r = first; r; r = r->next) {
-        const IOSwitchAdmaRefusal why = table.addMemory(r->buffer, uint64_t(r->sectors) * kSector, cacheableRam);
+        const IOSwitchAdmaRefusal why = table.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
         if (why) return why;
     }
     return table.bytes == uint64_t(sectors) * kSector && table.finish() ? kAdmaOk : kAdmaMissing;
 }
 
 // One ADMA2 command for the chain in `table` (buildTable), straight to or from the requests' pages: the descriptors and
-// the pages cleaned (write) or cleaned and invalidated (read) first, a read's pages invalidated again after.
-int NativeIOSwitchBlock::directChain(uint64_t lba, uint32_t sectors, bool write)
+// the pages cleaned (write) or cleaned and invalidated (read) first, a read's pages invalidated again after. `poison`
+// (a read that proves ADMA2 above 4 GiB, proveHigh): the table's pages up there are filled with kPoison first, so bytes
+// the engine never delivered show (the clean+invalidate takes the fill to DRAM before the card's bytes arrive).
+int NativeIOSwitchBlock::directChain(uint64_t lba, uint32_t sectors, bool write, bool poison)
 {
     const uint64_t began = nowNs();
     for (uintptr_t at = (uintptr_t)table.entries, end = at + table.count * sizeof(IOSwitchAdmaDescriptor); at < end;
          at += kAdmaLine)
         __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
+    for (uint32_t i = 0; poison && !write && i < table.count; ++i) {
+        uint64_t pa = ioswitchAdmaAddress(table.entries[i]);
+        for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
+            const uint64_t page = (pa | (kAdmaPage - 1)) + 1, stop = page < end ? page : end;
+            if (pa >= kAdma4GiB) memset(reinterpret_cast<void *>(phystokv(pa)), kPoison, stop - pa);
+            pa = stop;
+        }
+    }
     if (write)
         syncLines<0>(table);
     else
@@ -899,12 +918,13 @@ int NativeIOSwitchBlock::directChain(uint64_t lba, uint32_t sectors, bool write)
     return step;
 }
 
-// The chain's bytes [from, from + length) between the requests' memory and the start of the bounce buffer.
-bool NativeIOSwitchBlock::stageChain(Request *first, uint32_t from, uint32_t length, bool toClient)
+// The chain's bytes [from, from + length) between the requests' memory and the start of `buffer` (the bounce buffer, or
+// the proofs' SDMA copy).
+bool NativeIOSwitchBlock::stageChain(Request *first, uint32_t from, uint32_t length, uint8_t *buffer, bool toClient)
 {
     const uint64_t began = nowNs();
     const bool ok =
-        ioswitchChainCopy(first, from, length, bounce, [&](Request *r, uint32_t offset, uint8_t *at, uint32_t n) {
+        ioswitchChainCopy(first, from, length, buffer, [&](Request *r, uint32_t offset, uint8_t *at, uint32_t n) {
             return stage(r->buffer, offset, at, n, toClient);
         });
     stats.copyNs += nowNs() - began;
@@ -919,42 +939,108 @@ bool NativeIOSwitchBlock::bounceChain(Request *first, uint32_t sectors)
     const uint32_t limit = write ? kSafeSectors : sdmaReadSectors;
     for (uint32_t done = 0; done < sectors;) {
         const uint32_t n = sectors - done < limit ? sectors - done : limit;
-        if (write && !stageChain(first, done * kSector, n * kSector, false)) return false;
+        if (write && !stageChain(first, done * kSector, n * kSector, bounce, false)) return false;
         if (transfer(first->lba + done, n, write, bounce)) return false;
-        if (!write && !stageChain(first, done * kSector, n * kSector, true)) return false;
+        if (!write && !stageChain(first, done * kSector, n * kSector, bounce, true)) return false;
         done += n;
     }
     return true;
 }
 
-// The first kWriteChecks ADMA2 writes of a boot are read back by SDMA (the proven path) and compared with the requests'
-// memory. False only for data that differs: the caller then writes the chain again through the bounce buffer and ADMA2
-// writes stay off until reboot. A read-back that fails proves nothing either way and is not counted.
+// The first kWriteChecks ADMA2 writes of a boot, and the first writes from pages above 4 GiB (high), are read back by SDMA
+// (the proven path) and compared with the requests' memory. False only for data that differs: the caller then writes the
+// chain again through the bounce buffer and ADMA2 writes stay off until reboot. A read-back that fails proves nothing
+// either way and is not counted.
 bool NativeIOSwitchBlock::proveWrite(Request *first, uint32_t sectors)
 {
     const uint32_t length = sectors * kSector;
-    if (!writeCheck || sectors > kDirectWriteSectors) return true;
+    if (!checkBuffer || sectors > kBounceSectors) return true;
     for (uint32_t done = 0; done < sectors;) {
         const uint32_t n = sectors - done < kSafeSectors ? sectors - done : kSafeSectors;
-        if (transfer(first->lba + done, n, false, writeCheck + done * kSector)) return true;
+        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector)) return true;
         done += n;
     }
-    if (!stageChain(first, 0, length, false)) return true;
-    if (!memcmp(bounce, writeCheck, length)) {
+    if (!stageChain(first, 0, length, bounce, false)) return true;
+    if (!memcmp(bounce, checkBuffer, length)) {
         stats.verified++;
-        if (!--writeChecks) {
-            IOFreeData(writeCheck, kDirectWriteSectors * kSector);
-            writeCheck = nullptr;
-        }
+        if (writeChecks) --writeChecks;
+        if (table.high) high.writeChecked();
+        releaseChecks();
         return true;
     }
     uint32_t at = 0;
-    while (bounce[at] == writeCheck[at]) ++at;
-    IOLog("IOSwitchSD: ADMA2 write lba=%llu n=%u reads back different from byte %u; written again through the bounce "
-          "buffer, ADMA2 writes off until reboot\n",
-          first->lba, sectors, at);
+    while (bounce[at] == checkBuffer[at]) ++at;
+    IOLog("IOSwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
+          "again through the bounce buffer, ADMA2 writes off until reboot\n",
+          first->lba, sectors, table.high, at);
     admaWrites = false;
+    releaseChecks();
     return false;
+}
+
+// r12-sdio: a read chain whose table reached above 4 GiB while that is being proven (high), right after its ADMA2 command
+// (directChain poisoned those pages first): the same blocks again by SDMA into checkBuffer, compared with every byte the
+// table moved. Equal: one proof more (the last one turns ADMA2 above 4 GiB on, one line). Different: SDMA's copy goes into
+// the requests' memory, so they complete with the proven path's bytes, and ADMA2 stays below 4 GiB until reboot (one
+// line). If the SDMA read fails, nothing is proven and the chain is read again through the bounce buffer. False only when
+// the requests' bytes could not be made right (they complete with an I/O error).
+bool NativeIOSwitchBlock::proveHigh(Request *first, uint32_t sectors)
+{
+    const uint32_t length = sectors * kSector;
+    for (uint32_t done = 0; checkBuffer && done < sectors;) {
+        const uint32_t n = sectors - done < kSafeSectors ? sectors - done : kSafeSectors;
+        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector)) return bounceChain(first, sectors);
+        done += n;
+    }
+    if (!checkBuffer) return bounceChain(first, sectors);
+    // The table's descriptors are in chain order and only hold the requests' own pages: compare page by page through the
+    // kernel's physical aperture (as syncLines reaches them), counting what still holds the poison.
+    uint64_t at = 0, poisoned = 0, differs = UINT64_MAX, differsPA = 0;
+    for (uint32_t i = 0; i < table.count; ++i) {
+        uint64_t pa = ioswitchAdmaAddress(table.entries[i]);
+        for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
+            const uint64_t page = (pa | (kAdmaPage - 1)) + 1, stop = page < end ? page : end;
+            const auto *memory = reinterpret_cast<const uint8_t *>(phystokv(pa));
+            if (memcmp(memory, checkBuffer + at, stop - pa)) {
+                for (uint64_t k = 0; k < stop - pa; ++k) {
+                    if (memory[k] == checkBuffer[at + k]) continue;
+                    if (differs == UINT64_MAX) {
+                        differs = at + k;
+                        differsPA = pa + k;
+                    }
+                    if (memory[k] == kPoison) ++poisoned;
+                }
+            }
+            at += stop - pa;
+            pa = stop;
+        }
+    }
+    if (differs == UINT64_MAX) {
+        const uint64_t bytes = table.high;
+        if (high.proved(bytes)) {
+            IOLog("IOSwitchSD: ADMA2 above 4 GiB proven: %u reads (%llu KiB up there) match SDMA; requests' pages go "
+                  "straight up to %llu GiB, the first %u writes from up there read back\n",
+                  IOSwitchAdmaHigh::kProofs, high.provenBytes >> 10, kAdmaDmaLimit >> 30, high.writeProofsLeft);
+        }
+        releaseChecks();
+        return true;
+    }
+    high.refuse();
+    IOLog(
+        "IOSwitchSD: ADMA2 read lba=%llu n=%u (%llu bytes above 4 GiB) differs from SDMA at byte %llu (PA 0x%llx, %llu "
+        "bytes still poisoned); SDMA's copy used, ADMA2 stays below 4 GiB until reboot\n",
+        first->lba, sectors, table.high, differs, differsPA, poisoned);
+    const bool repaired = stageChain(first, 0, length, checkBuffer, true);
+    releaseChecks();
+    return repaired;
+}
+
+// The proofs' SDMA buffer, once neither the first writes nor ADMA2 above 4 GiB need one.
+void NativeIOSwitchBlock::releaseChecks()
+{
+    if (!checkBuffer || (admaWrites && writeChecks) || (adma && high.checking(admaWrites))) return;
+    IOFreeData(checkBuffer, kBounceBytes);
+    checkBuffer = nullptr;
 }
 
 // One card command for a chain of requests that continue each other on the card (same
@@ -975,18 +1061,31 @@ void NativeIOSwitchBlock::serviceBatch(Request *first, uint32_t sectors)
     // r10-adma2: straight between the card and the requests' pages by ADMA2 when it is on (writes: unless proveWrite
     // turned them off) and the whole chain qualifies; through the bounce buffer otherwise, counted by why.
     IOSwitchAdmaRefusal why = kAdmaOk;
-    bool direct = adma && (!write || admaWrites) && (why = buildTable(first, sectors)) == kAdmaOk;
+    bool direct = adma && (!write || admaWrites) && (why = buildTable(first, sectors, write)) == kAdmaOk;
+    // r12-sdio: a read that reaches above 4 GiB while that is unproven is compared with SDMA before it completes.
+    const bool proving = direct && high.proofDue(write, table.high);
     IOReturn result = kIOReturnSuccess;
     if (direct) {
-        const int step = directChain(first->lba, sectors, write);
-        if (step == kStepAdmaError) {
+        const int step = directChain(first->lba, sectors, write, proving);
+        if (step == kStepAdmaError && proving) {
+            // Only the pages above 4 GiB are new to the engine: they stay out of it, and this chain goes by SDMA.
+            high.refuse();
+            direct = false;
+            IOLog(
+                "IOSwitchSD: ADMA2 error on a read above 4 GiB (state 0x%02x at 0x%llx); ADMA2 stays below 4 GiB until "
+                "reboot\n",
+                admaErrorState, admaErrorAddress);
+            releaseChecks();
+        } else if (step == kStepAdmaError) {
             // The host's DMA failed, not the card: this chain and every later one through the bounce buffer.
             adma = false;
             direct = false;
             IOLog("IOSwitchSD: ADMA2 off until reboot (step %d); requests go through the bounce buffer\n", step);
         } else if (step) {
             result = kIOReturnIOError;
-        } else if (write && writeChecks && !proveWrite(first, sectors)) {
+        } else if (proving) {
+            if (!proveHigh(first, sectors)) result = kIOReturnIOError;
+        } else if ((writeChecks || high.writeCheckDue(write, table.high)) && write && !proveWrite(first, sectors)) {
             direct = false;
         }
     }
@@ -1175,20 +1274,30 @@ void NativeIOSwitchBlock::logThroughput()
     uint64_t bounced = 0;
     for (unsigned i = 0; i < kAdmaRefusals; ++i) bounced += stats.bounced[i];
     const uint64_t perRequest = stats.direct ? stats.descriptors * 10 / stats.direct : 0;
+    // r12-sdio: ADMA2 above 4 GiB: on, off, or proofs done/needed.
+    char highState[16];
+    if (!adma || high.state == IOSwitchAdmaHigh::kOff)
+        strlcpy(highState, "off", sizeof(highState));
+    else if (high.state == IOSwitchAdmaHigh::kOn)
+        strlcpy(highState, "on", sizeof(highState));
+    else
+        snprintf(highState, sizeof(highState), "%u/%u", IOSwitchAdmaHigh::kProofs - high.proofsLeft,
+                 IOSwitchAdmaHigh::kProofs);
     const uint64_t readRate = stats.readNs ? stats.readBytes * 10000 / stats.readNs : 0;
     const uint64_t writeRate = stats.writeNs ? stats.writeBytes * 10000 / stats.writeNs : 0;
     // Periodic: to the log only (os_log), never the boot console.
     char out[640];
     snprintf(out, sizeof(out),
              "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
-             "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu vfy %llu | "
+             "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu vfy %llu 4G+ %s | "
              "<=4K %llu%% seq %llu%% merged %llu q%u | err %llu adma %llu retune %llu | %s %u.%02u MHz | wait ms%s",
              requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
              stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
              writeRate / 10, writeRate % 10, wall ? busy * 100 / wall : 0, wall / 1000000000, stats.direct, bounced,
-             bounces, perRequest / 10, perRequest % 10, stats.verified, requests ? stats.small * 100 / requests : 0,
-             requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.maxQueued, stats.errors,
-             stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
+             bounces, perRequest / 10, perRequest % 10, stats.verified, highState,
+             requests ? stats.small * 100 / requests : 0, requests ? stats.sequential * 100 / requests : 0,
+             stats.merged, stats.maxQueued, stats.errors, stats.admaErrors, stats.retunes, busMode, busKHz / 1000,
+             busKHz % 1000 / 10, classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
 }
 
@@ -1792,7 +1901,7 @@ const char *NativeIOSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *d
     if (!table.entries || !tablePA || (tablePA & (kAdmaPage - 1)) || tablePA + kAdmaTableBytes > (1ull << 32))
         return "the descriptor table is not page-aligned below 4 GiB";
     table.capacity = kAdmaDescriptors;
-    table.limit = 1ull << 34;  // mainline Linux's DMA mask for this controller
+    table.limit = kAdmaDmaLimit;
 
     constexpr uint32_t kTestPages = 128;
     IOBufferMemoryDescriptor *pages =
@@ -1823,7 +1932,7 @@ const char *NativeIOSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *d
         take(bouncePA + 0x30000, bounce + 0x30000, 0x1c0);  // ...which this one completes
         for (uint32_t i = kTestPages - 1; i; --i) {
             const uint64_t pa = pages->getPhysicalSegment(i * kAdmaPage, nullptr, kIOMemoryMapperNone);
-            if (pa && pa - 0x140000000ull >= 0x40000) take(pa, pageBytes + i * kAdmaPage, kAdmaPage);
+            if (pa && pa - kAdmaIramAlias >= kAdmaIramBytes) take(pa, pageBytes + i * kAdmaPage, kAdmaPage);
         }
         take(bouncePA + 0x40000, bounce + 0x40000, kBounceBytes - streamed);  // the rest, in the bounce buffer
         table.reset();
@@ -1873,7 +1982,9 @@ const char *NativeIOSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *d
     }
     pages->complete();
     pages->release();
-    if (!why && (highMissing || !*highPages)) table.limit = 1ull << 32;
+    // r12-sdio: test pages above 4 GiB that matched prove the high address word; ones that kept their fill disprove it;
+    // with none up there (the usual case at boot) the data path's first read chains that reach there prove it (high).
+    high.state = highMissing ? IOSwitchAdmaHigh::kOff : *highPages ? IOSwitchAdmaHigh::kOn : IOSwitchAdmaHigh::kProving;
     return why;
 }
 
@@ -2008,13 +2119,17 @@ bool NativeIOSwitchBlock::setup()
             adma = true;
             maxSectors = kBounceSectors;
             maxWriteSectors = kDirectWriteSectors;
-            writeCheck = static_cast<uint8_t *>(IOMallocData(kDirectWriteSectors * kSector));
-            writeChecks = writeCheck ? kWriteChecks : 0;
-            admaWrites = writeCheck != nullptr;
+            checkBuffer = static_cast<uint8_t *>(IOMallocData(kBounceBytes));
+            writeChecks = checkBuffer ? kWriteChecks : 0;
+            admaWrites = checkBuffer != nullptr;
+            // Without the buffer nothing above 4 GiB can be proven: it stays below.
+            if (!checkBuffer && high.state == IOSwitchAdmaHigh::kProving) high.refuse();
+            static const char *const states[] = {" (above 4 GiB: proven by the first reads that reach there)", "",
+                                                 " (ADMA2 stays below 4 GiB)"};
             IOLog("IOSwitchSD: ADMA2 on: 1 MiB read through %u descriptors matches SDMA, %u of %u test pages above "
                   "4 GiB right%s; commands up to %u KiB read, %u KiB write%s\n",
-                  descriptors, highOk, highPages, table.limit > (1ull << 32) ? "" : " (ADMA2 stays below 4 GiB)",
-                  maxSectors * kSector / 1024, maxWriteSectors * kSector / 1024,
+                  descriptors, highOk, highPages, states[high.state], maxSectors * kSector / 1024,
+                  maxWriteSectors * kSector / 1024,
                   admaWrites ? ", the first writes read back" : ", writes through the bounce buffer");
         } else {
             IOLog("IOSwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);

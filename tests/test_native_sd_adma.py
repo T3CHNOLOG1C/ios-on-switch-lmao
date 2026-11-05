@@ -42,6 +42,32 @@ class NativeSdAdmaTests(unittest.TestCase):
         # Cache maintenance is by line over the table's own ranges: no set/way or whole-cache operation.
         self.assertIsNone(re.search(r"dc\s+(c?isw|csw)|FlushPoC_Dcache\b|CleanPoC_Dcache\b", source))
 
+    def test_high_proof_guards(self):
+        """r12-sdio: ADMA2 above 4 GiB is only used as far as it is proven, and a failed proof never reaches a client."""
+        source = (DRIVER / "NativeIOSwitchBlock.cpp").read_text()
+        header = (DRIVER / "IOSwitchAdma.h").read_text()
+        # Every table takes its limit and page filter from the proof state, per direction.
+        build = source.split("IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("table.limit = high.limit(write);", build)
+        self.assertIn("cacheableRam(page) && high.pageOk(page, write)", build)
+        # Writes never go above 4 GiB while that is unproven; the IRAM alias window stays out of proving reads.
+        self.assertIn("state == kOn || (state == kProving && !write) ? kAdmaDmaLimit : kAdma4GiB", header)
+        self.assertIn("!(state == kProving && !write && page - kAdmaIramAlias < kAdmaIramBytes)", header)
+        # Only reads are poisoned, and a mismatch puts SDMA's bytes into the requests before they complete.
+        direct = source.split("int NativeIOSwitchBlock::directChain(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("poison && !write", direct)
+        prove = source.split("bool NativeIOSwitchBlock::proveHigh(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("high.refuse();", prove)
+        self.assertIn("stageChain(first, 0, length, checkBuffer, true)", prove)
+        self.assertLess(prove.index("high.refuse();"), prove.index("stageChain(first, 0, length, checkBuffer, true)"))
+        # A failed SDMA reference read proves nothing: the chain goes through the bounce buffer again.
+        self.assertIn("return bounceChain(first, sectors);", prove)
+        batch = source.split("void NativeIOSwitchBlock::serviceBatch(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("high.proofDue(write, table.high)", batch)
+        self.assertIn("if (!proveHigh(first, sectors)) result = kIOReturnIOError;", batch)
+        # A write from pages above 4 GiB is read back while those checks last.
+        self.assertIn("high.writeCheckDue(write, table.high)", batch)
+
 
 if __name__ == "__main__":
     unittest.main()

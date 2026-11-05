@@ -42,7 +42,7 @@ struct Table {
     IOSwitchAdmaTable t;
     explicit Table(uint32_t capacity = 1024, uint64_t limit = 1ull << 34) : entries(capacity + 1)
     {
-        t = {entries.data(), capacity, limit, 0, 0};
+        t = {entries.data(), capacity, limit, 0, 0, 0};
         // A guard entry past the capacity: the builder must never write it.
         entries[capacity] = {0xdead, 0xbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef};
     }
@@ -70,6 +70,7 @@ static void checkTable(const IOSwitchAdmaTable &t, const std::vector<Run> &expec
         assert(d.reserved == 0);
         const uint64_t pa = ioswitchAdmaAddress(d);
         assert(pa % kAdmaLine == 0 && pa + d.length <= t.limit);
+        assert(pa >> 32 == (pa + d.length - 1) >> 32);  // never across a 4 GiB boundary
         for (uint64_t at = 0; at < d.length; at += kAdmaLine) got.push_back(pa + at);
         bytes += d.length;
     }
@@ -251,6 +252,120 @@ static void randomRuns()
     }
 }
 
+// r12-sdio: the bytes a table moves at or above 4 GiB (the proof of ADMA2 up
+// there keys on them).
+static void highBytes() {
+  Table t;
+  assert(t.t.add(0xfffff000ull, 0x1000, anyPage) == kAdmaOk && t.t.high == 0);
+  // Physically continuing across 4 GiB, still two descriptors: none crosses the
+  // boundary.
+  assert(t.t.add(0x100000000ull, 0x1000, anyPage) == kAdmaOk &&
+         t.t.high == 0x1000);
+  assert(t.t.count == 2 && t.t.finish() &&
+         ioswitchAdmaAddress(t.t.entries[1]) == 0x100000000ull);
+  checkTable(t.t, {{0xfffff000ull, 0x2000}});
+  Table straddle;
+  assert(straddle.t.add(0xffffff00ull, 0x200, anyPage) == kAdmaOk &&
+         straddle.t.high == 0x100);
+  assert(straddle.t.count == 2 && straddle.t.entries[0].length == 0x100 &&
+         straddle.t.entries[1].length == 0x100);
+  // One run across it, and one across 8 GiB: split exactly there, full-length
+  // descriptors otherwise.
+  Table across;
+  assert(across.t.add(0xffff0000ull, 0x20000, anyPage) == kAdmaOk &&
+         across.t.finish());
+  assert(across.t.count == 4 && across.t.entries[0].length == kAdmaMaxLength &&
+         across.t.entries[1].length == 0x1000);
+  assert(ioswitchAdmaAddress(across.t.entries[2]) == 0x100000000ull &&
+         across.t.entries[2].length == kAdmaMaxLength);
+  checkTable(across.t, {{0xffff0000ull, 0x20000}});
+  Table eight;
+  assert(eight.t.add(0x1fffff000ull, 0x2000, anyPage) == kAdmaOk &&
+         eight.t.count == 2 && eight.t.high == 0x2000);
+  Table low;
+  assert(low.t.add(0x80000000ull, 0x100000, anyPage) == kAdmaOk &&
+         low.t.high == 0);
+  Memory mixed;
+  mixed.runs = {
+      {0x123400000ull, 0x1000}, {0x80020000, 0x1000}, {0x17ffff000ull, 0x1000}};
+  Table m;
+  assert(m.t.addMemory(&mixed, 0x3000, anyPage) == kAdmaOk &&
+         m.t.high == 0x2000 && m.t.bytes == 0x3000);
+  m.t.reset();
+  assert(m.t.high == 0 && m.t.bytes == 0 && m.t.count == 0);
+  // A refused run adds nothing.
+  Table refused(1024, 1ull << 32);
+  assert(refused.t.add(0x100000000ull, 0x1000, anyPage) == kAdmaHigh &&
+         refused.t.high == 0);
+}
+
+// r12-sdio: the states of ADMA2 above 4 GiB (IOSwitchAdmaHigh) and what each
+// lets through.
+static void highProof() {
+  IOSwitchAdmaHigh h;
+  // Proving: reads may reach up to the DMA mask, writes stay below 4 GiB; the
+  // IRAM alias window is kept out of reads.
+  assert(h.state == IOSwitchAdmaHigh::kProving && h.checking(false) &&
+         h.checking(true));
+  assert(h.limit(false) == kAdmaDmaLimit && h.limit(true) == kAdma4GiB);
+  assert(!h.pageOk(kAdmaIramAlias, false) &&
+         !h.pageOk(kAdmaIramAlias + kAdmaIramBytes - kAdmaPage, false));
+  assert(h.pageOk(kAdmaIramAlias - kAdmaPage, false) &&
+         h.pageOk(kAdmaIramAlias + kAdmaIramBytes, false));
+  assert(h.pageOk(
+      kAdmaIramAlias,
+      true)); // writes never reach there while proving (their limit is 4 GiB)
+  assert(h.pageOk(0x80000000ull, false));
+  // Only reads that reach above 4 GiB are proofs; no write is checked for it
+  // yet.
+  assert(h.proofDue(false, 1) && !h.proofDue(false, 0) && !h.proofDue(true, 1));
+  assert(!h.writeCheckDue(true, 0x1000));
+  // A table built under the proving limit and filter: the IRAM alias page is
+  // refused, a page next to it is not.
+  {
+    Table t(1024, h.limit(false));
+    auto ok = [&](uint64_t page) { return h.pageOk(page, false); };
+    assert(t.t.add(kAdmaIramAlias + 0x1000, 0x1000, ok) == kAdmaMemory);
+    assert(t.t.add(kAdmaIramAlias + kAdmaIramBytes, 0x1000, ok) == kAdmaOk &&
+           t.t.high == 0x1000);
+    Table w(1024, h.limit(true));
+    assert(w.t.add(0x100000000ull, 0x1000, ok) == kAdmaHigh);
+  }
+  for (uint32_t i = 1; i < IOSwitchAdmaHigh::kProofs; ++i) {
+    assert(!h.proved(0x1000));
+    assert(h.state == IOSwitchAdmaHigh::kProving &&
+           h.proofsLeft == IOSwitchAdmaHigh::kProofs - i);
+  }
+  assert(h.proved(0x2000)); // the last one, reported once
+  assert(h.state == IOSwitchAdmaHigh::kOn && h.proofsLeft == 0);
+  assert(h.provenBytes == (IOSwitchAdmaHigh::kProofs - 1) * 0x1000ull + 0x2000);
+  assert(!h.proved(0x1000) &&
+         h.state == IOSwitchAdmaHigh::kOn); // no second report
+  // On: both directions up to the mask, the IRAM alias window too; the first
+  // writes from up there are read back.
+  assert(h.limit(false) == kAdmaDmaLimit && h.limit(true) == kAdmaDmaLimit);
+  assert(h.pageOk(kAdmaIramAlias, false) && h.pageOk(kAdmaIramAlias, true));
+  assert(!h.proofDue(false, 0x1000));
+  assert(h.checking(true) && !h.checking(false));
+  for (uint32_t i = 0; i < IOSwitchAdmaHigh::kWriteProofs; ++i) {
+    assert(h.writeCheckDue(true, 0x1000) && !h.writeCheckDue(true, 0) &&
+           !h.writeCheckDue(false, 0x1000));
+    h.writeChecked();
+  }
+  assert(!h.writeCheckDue(true, 0x1000) && !h.checking(true));
+  h.writeChecked(); // never wraps
+  assert(h.writeProofsLeft == 0);
+  // Off (a proof differed): below 4 GiB both ways, nothing more to check.
+  IOSwitchAdmaHigh off;
+  assert(!off.proved(0x1000));
+  off.refuse();
+  assert(off.limit(false) == kAdma4GiB && off.limit(true) == kAdma4GiB &&
+         !off.checking(true));
+  assert(!off.proofDue(false, 0x1000) && !off.writeCheckDue(true, 0x1000) &&
+         !off.proved(0x1000));
+  assert(off.state == IOSwitchAdmaHigh::kOff);
+}
+
 int main()
 {
     layout();
@@ -259,6 +374,8 @@ int main()
     refusals();
     chains();
     randomRuns();
+    highBytes();
+    highProof();
     puts("PASS: sd adma2 tables");
     return 0;
 }
