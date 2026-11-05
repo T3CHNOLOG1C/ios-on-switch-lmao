@@ -36,8 +36,9 @@ bool native_aks_state_enabled(void)
 }
 // The device-state "sls" field, which MKBGetDeviceLockState returns: 0 unlocked, 1 locked, 2 locking, 3 disabled (no
 // passcode). Default 3: this keybag has no passcode, and nothing here could check one (no SEP, no AppleCredentialManager).
-// With 0, MobileKeyBag reported "passcode set, unlocked", so SpringBoard had hasPasscodeSet YES and lockdownd asked for the
-// passcode after Trust (LocalAuthentication, ACMContextCreate -5), took the failure as a denial and refused USB pairing.
+// With 0, MobileKeyBag reports "passcode set, unlocked": SpringBoard's hasPasscodeSet is YES and lockdownd asks for
+// the passcode after Trust (LocalAuthentication, ACMContextCreate -5), takes the failure as a denial and refuses USB
+// pairing.
 // sheng-aks-sls=<n> (0..7) overrides it.
 uint32_t native_aks_lock_state(void)
 {
