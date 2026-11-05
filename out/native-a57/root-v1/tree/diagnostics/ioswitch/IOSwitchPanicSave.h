@@ -5,7 +5,7 @@
 //   IOSwitchDiag.c ioswitch_diag_panic         ioswitch_panic_begin     (panic entry, other CPUs still running)
 //   debug.c handle_debugger_trap               ioswitch_panic_halted    (other CPUs halted)
 //   debug.c, after SavePanicInfo               ioswitch_panic_logged    (XNU's panic log written; may not return)
-//   kern_exec.c, once Data is mounted          ioswitch_panic_save_pending, ioswitch_panic_save_done
+//   kern_exec.c, once Data is mounted          ioswitch_panic_save_pending, _pending_stackshot, ioswitch_panic_save_done
 #ifndef IOSWITCH_PANIC_SAVE_H
 #define IOSWITCH_PANIC_SAVE_H
 #include <stdarg.h>
@@ -18,6 +18,7 @@ int ioswitch_panic_begin(const char *format, va_list *args, unsigned long caller
 void ioswitch_panic_halted(void);
 void ioswitch_panic_logged(void);
 const char *ioswitch_panic_save_pending(uint32_t *bytes, char *path, size_t path_bytes);
+const void *ioswitch_panic_save_pending_stackshot(uint32_t *bytes);
 void ioswitch_panic_save_done(int error, const char *path);
 #else
 #define ioswitch_panic_save_init()                              ((void)0)
@@ -26,6 +27,7 @@ void ioswitch_panic_save_done(int error, const char *path);
 #define ioswitch_panic_halted()                                 ((void)0)
 #define ioswitch_panic_logged()                                 ((void)0)
 #define ioswitch_panic_save_pending(bytes, path, path_bytes)    ((const char *)0)
+#define ioswitch_panic_save_pending_stackshot(bytes)            ((const void *)0)
 #define ioswitch_panic_save_done(error, path)                   ((void)0)
 #endif
 #endif

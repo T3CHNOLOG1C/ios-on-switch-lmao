@@ -1,5 +1,31 @@
 # Native watchdog bring-up
 
+**r13: watchdogd runs again.** On its first hardware boot (r7p4, 2026-11-04 22:59) watchdogd crashed 1.5 s after each
+launch (pids 50, 131, 184, about 10 s apart), and the third crash panicked through its launchd `_PanicOnCrash`
+(`PanicOnConsecutiveCrash`): "watchdogd[184] exited -- exit reason namespace 2 subcode 0x5", SIGTRAP from `os_crash`.
+Root cause, from that boot's kernel log (decoded with a rebuilt kernel `dsc`): `Protobox: watchdogd(50) deny(1)
+iokit-open-service NativeIOSwitchWatchdog` at 22:59:33.5038, then 0.1 ms later watchdogd's error line (its
+`IOServiceOpen failed with error : 0x%x` path) and the crash; the same for pid 131 at 22:59:42.6207. Its sandbox only
+names the original watchdog classes. Fixes, all in `drivers/NativeIOSwitchWatchdog` and XNU:
+
+- `NativeSandboxGrantProcess = watchdogd` on the IOWatchdog (IOUserClient.cpp grants the open, as for our other drivers).
+- `NativeIOSwitchPMU`: watchdogd's next hard requirement, an IOService with `IOPMUPrimary = 1` (it `os_crash()`es
+  without one) where it writes `IOPMUBootStage` and `IOPMUBootAppName`.
+- `kern_exec.c` leaves `com.apple.watchdogd` off the launchd disabled list only when both services started
+  (`ioswitch_watchdog_ready`).
+- `kern_exit.c`: a watchdogd crash takes no panic. Its crash behavior is dropped and the driver turns userspace
+  monitoring off, so the relaunch reads "disabled" and exits 0 (launchd keeps it down). One log line.
+- A userspace watchdog timeout warm-resets 60 s after the panic (without `ioswitch-panic-reboot`). The panic stackshot is
+  kept with the panic record and written as `/private/var/ioswitch/panic-<UTC>.kcdata` next to the `.log`, with copies in
+  mobile's CrashReporter (`idevicecrashreport` over USB). `bazel run //deploy:pull_logs` copies both and decodes the
+  stackshot with XNU's `kcdata.py` into `.stackshot.ips` and the hung process's `.threads.txt`.
+
+Apple's timeouts are kept: a ping every 10 s; a service silent for 60 s gets a stackshot and is killed (induced crash);
+the third time, watchdogd panics "userspace watchdog timeout: no successful checkins from <label> (2 induced crashes)
+...". The kernel panics if watchdogd itself stops checking in (600 s after it connects, then 90 s after each check-in).
+
+Everything below is history from before r13.
+
 **V18 keeps watchdogd excluded through original launchd and fixes repeated-boot preference handling.** Existing root-owned regular preferences on the checked writable Data mount are preserved, including launchd rewrites. When absent, the initial watchdog-only policy is written to a same-directory temporary file, read back, fsynced and closed, then published with an exclusive rename. The directory is synced before marker creation. No native watchdog adapter or hardware-reset code is linked. [Installation](../out/switch/native-xnu-v18-install.json), [audit](native-audit.md), [persistent Data](native-persistent-data.md). Focused policy tests pass; physical startup and reboot behavior remain unverified.
 
 The V15 and earlier notes below are historical.

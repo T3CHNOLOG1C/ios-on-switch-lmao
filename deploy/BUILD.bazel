@@ -28,12 +28,14 @@ py_binary(
         "--spec=$(rlocationpath //install:spec)",
         "--gpu-bundle=$(rlocationpath :gpu_bundle)",
         "--stager=$(rlocationpath //out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py)",
+        "--kcdata=$(rlocationpath @xnu_base//:tools/lldbmacros/kcdata.py)",
     ],
     data = [
         ":boot_package",
         ":gpu_bundle",
         "//install:spec",
         "//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
+        "@xnu_base//:tools/lldbmacros/kcdata.py",
     ],
     main = "//tools/deploy:deploy.py",
     deps = [
@@ -45,8 +47,14 @@ py_binary(
 py_binary(
     name = "pull_logs",
     srcs = ["//tools/deploy:pull_logs.py"],
-    args = ["--spec=$(rlocationpath //install:spec)"],
-    data = ["//install:spec"],
+    args = [
+        "--spec=$(rlocationpath //install:spec)",
+        "--kcdata=$(rlocationpath @xnu_base//:tools/lldbmacros/kcdata.py)",
+    ],
+    data = [
+        "//install:spec",
+        "@xnu_base//:tools/lldbmacros/kcdata.py",
+    ],
     main = "//tools/deploy:pull_logs.py",
     deps = [
         "//tools/deploy:lib",

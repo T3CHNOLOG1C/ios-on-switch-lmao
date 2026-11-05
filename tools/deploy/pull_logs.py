@@ -10,13 +10,20 @@ Copies into <out> (default <workspace>/out/switch/device-logs/boot-<MMDD-HHMM>):
   launchd.log                           (--no-launchd skips it)
   mobile-CrashReporter/, *.ips          crash reports, the WebKit ones also at the top level
   mobileactivationd/, migration-state.txt, boot-io-census.bin
+  panic-<UTC>.log, .kcdata              the last saved kernel panic (IOSwitchPanicSave.c: the panic string, kernel log
+                                        tail and XNU's panic log; its stackshot), with the stackshot decoded by XNU's
+                                        kcdata.py into panic-<UTC>.stackshot.ips (every task's threads, as stacks-*.ips)
+                                        and panic-<UTC>.threads.txt (the threads of the process the panic names, e.g.
+                                        the one a "userspace watchdog timeout" found hung)
   com.apple.LaunchServices-*.csstore + lsdb-webkit.txt   (--no-csstore skips them)
   m2v/ (+ m2v-cache -> backboardd's)    every process's m2v shader cache, whose journals are merged into the
                                         precompile corpus (tree/drivers/TegraGM20BMetal/precompile/corpus.log, a source
                                         file in your checkout) by that directory's harvest.py (--no-harvest skips it)
 """
 import argparse
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -48,7 +55,81 @@ def copytree(src, dst, log):
     return False
 
 
-def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=True, corpus=None):
+def report_body(text):
+    """The JSON body of an .ips report (its first line is the header)."""
+    return json.loads(text.split("\n", 1)[1])
+
+
+# "userspace watchdog timeout: no successful checkins from com.apple.backboardd (2 induced crashes) ...", the kernel's
+# "watchdog timeout: no checkins from watchdogd ..." and launchd's critical exits ("backboardd[53] exited -- ...").
+PANIC_NAMES = (r"no successful checkins from (?:com\.apple\.)?([\w.-]+)", r"no checkins from ([\w.-]+)",
+               r"^panic: +([\w.-]+)\[\d+\] exited")
+
+
+def panic_process(panic_text):
+    """The process a panic names (lower case), or None."""
+    for pattern in PANIC_NAMES:
+        match = re.search(pattern, panic_text, re.M)
+        if match:
+            return match.group(1).lower()
+    return None
+
+
+def thread_summary(report, process):
+    """The threads of every task whose name is `process` (case-insensitive) in a stackshot report: state, wait, frames
+    as image+offset (S: the dyld shared cache, slid base in binaryImages; K/U: the kernel)."""
+    images = report.get("binaryImages", [])
+
+    def frame(entry):
+        index, offset = entry
+        uuid, base, kind = images[index] if 0 <= index < len(images) else ("?", 0, "?")
+        return "{}:{}+0x{:x}".format(kind, uuid[:8], offset)
+
+    lines = []
+    for pid, task in sorted(report.get("processByPid", {}).items(), key=lambda item: int(item[0])):
+        if (task.get("procname") or "").lower() != process:
+            continue
+        threads = task.get("threadById", {})
+        lines.append("{}[{}]: {} threads".format(task.get("procname"), pid, len(threads)))
+        for wait in task.get("waitInfo", []):
+            lines.append("  wait: " + wait)
+        for tid, thread in sorted(threads.items(), key=lambda item: int(item[0])):
+            name = thread.get("name") or thread.get("dispatch_queue_label") or ""
+            lines.append("  thread {} {} {}".format(tid, name, ",".join(thread.get("state", []))))
+            for kind, key in (("kernel", "kernelFrames"), ("user", "userFrames")):
+                frames = thread.get(key) or []
+                if frames:
+                    lines.append("    {}: {}".format(kind, " ".join(frame(f) for f in frames)))
+    return lines
+
+
+def decode_panics(out, kcdata, log):
+    """panic-*.kcdata -> .stackshot.ips (kcdata.py -s) and .threads.txt for the process its panic string names."""
+    for shot in sorted(Path(out).glob("panic-*.kcdata")):
+        stem = shot.with_suffix("")
+        if not kcdata or not Path(kcdata).is_file():
+            log("panic stackshot", shot.name, "NOT decoded: no kcdata.py (run as bazel run //deploy:pull_logs)")
+            return
+        ips = stem.with_name(stem.name + ".stackshot.ips")
+        result = subprocess.run([sys.executable, "-I", str(kcdata), "-s", str(ips), str(shot)], capture_output=True,
+                                text=True)
+        if result.returncode or not ips.is_file():
+            log("panic stackshot", shot.name, "NOT decoded:", (result.stderr or result.stdout).strip()[-300:])
+            continue
+        log("panic stackshot ->", ips)
+        text = stem.with_suffix(".log")
+        process = panic_process(text.read_text(errors="replace")) if text.is_file() else None
+        if not process:
+            continue
+        lines = thread_summary(report_body(ips.read_text()), process)
+        if lines:
+            summary = stem.with_name(stem.name + ".threads.txt")
+            summary.write_text("# {}'s threads in the panic stackshot {} (S: dyld shared cache offsets)\n{}\n".format(
+                process, ips.name, "\n".join(lines)))
+            log("hung process", process, "->", summary)
+
+
+def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=True, corpus=None, kcdata=None):
     data, out = Path(data), Path(out)
     out.mkdir(parents=True, exist_ok=True)
     copytree(data / "db/diagnostics", out / "diagnostics", log)
@@ -63,6 +144,12 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
     census = data / "ioswitch/boot-io-census.bin"
     if census.is_file():
         shutil.copyfile(census, out / census.name)
+    panics = sorted((data / "ioswitch").glob("panic-*")) if (data / "ioswitch").is_dir() else []
+    for panic in panics:
+        shutil.copyfile(panic, out / panic.name)
+    if panics:
+        log("saved panics:", ", ".join(panic.name for panic in panics))
+        decode_panics(out, kcdata, log)
     lines = []
     for name in ("staged_system_apps", "datamigrator", "ioswitch"):
         path = data / name
@@ -108,6 +195,17 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
     return out
 
 
+def runfile(path):
+    """A runfiles path (bazel run) or a plain one, absolute; None stays None."""
+    if path and not os.path.isabs(path):
+        try:
+            from python.runfiles import runfiles
+            path = runfiles.Create().Rlocation(path) or path
+        except ImportError:
+            pass
+    return os.path.abspath(path) if path else None
+
+
 def load_spec(path):
     """//install:spec from a runfiles path (bazel run) or a plain path."""
     import json
@@ -141,6 +239,7 @@ def main(argv=None):
         parser.add_argument("--no-" + flag, action="store_true")
     parser.add_argument("--log")
     parser.add_argument("--spec", help="//install:spec (the kernel's volume UUIDs)")
+    parser.add_argument("--kcdata", help="XNU's tools/lldbmacros/kcdata.py (decodes a saved panic's stackshot)")
     parser.add_argument("--no-eject", action="store_true", help="leave the card attached (default: unmount and eject)")
     args = parser.parse_args(argv)
     log = host.Log(args.log or Path.home() / "Library/Logs/ioswitch-install/pull-logs-{}.log".format(
@@ -156,7 +255,8 @@ def main(argv=None):
         out = Path(args.out or workspace() / "out/switch/device-logs" / time.strftime("boot-%m%d-%H%M"))
         with cards.mounted(volume, log) as data:
             pull(data, out, log, logarchive=not args.no_logarchive, harvest=not args.no_harvest,
-                 csstore=not args.no_csstore, launchd=not args.no_launchd, corpus=args.corpus)
+                 csstore=not args.no_csstore, launchd=not args.no_launchd, corpus=args.corpus,
+                 kcdata=runfile(args.kcdata))
         if not args.no_eject:
             # As deploy does: the iPad volumes unmounted, then the whole card ejected.
             container = host.container_on(target.identifier)

@@ -97,9 +97,10 @@ def main(argv=None):
     parser.add_argument("--spec", required=True)
     parser.add_argument("--gpu-bundle")
     parser.add_argument("--stager")
+    parser.add_argument("--kcdata")
     parser.add_argument("--log")
     args = parser.parse_args(argv)
-    for name in ("boot_package", "spec", "gpu_bundle", "stager"):
+    for name in ("boot_package", "spec", "gpu_bundle", "stager", "kcdata"):
         setattr(args, name, located(getattr(args, name)))
     log = host.Log(args.log or Path.home() / "Library/Logs/ioswitch-install/deploy-{}.log".format(
         time.strftime("%Y%m%d-%H%M%S")))
@@ -147,7 +148,7 @@ def main(argv=None):
                 out = args.logs_out or pull_logs.workspace() / "out/switch/device-logs" / time.strftime(
                     "boot-%m%d-%H%M")
                 pull_logs.pull(data_root, out, log, harvest=not args.no_harvest, csstore=not args.no_csstore,
-                               launchd=not args.no_launchd_log, corpus=args.corpus)
+                               launchd=not args.no_launchd_log, corpus=args.corpus, kcdata=args.kcdata)
             with cards.mounted(fat.identifier, log) as fat_root:
                 cards.sync_boot_entry(fat_root, args.boot_package, log)
             cards.sync_overlay(data_root, args.boot_package, log)

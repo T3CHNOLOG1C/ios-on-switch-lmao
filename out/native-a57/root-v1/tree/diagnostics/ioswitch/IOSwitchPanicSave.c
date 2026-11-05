@@ -17,6 +17,10 @@
 //   +0x000000  1 MiB    XNU's panic buffer for this boot (gPanicBase: embedded_panic_header, panic log, stackshot). Without
 //                       one (no /pram node here) SavePanicInfo spins at its first line and no backtrace is ever written.
 //   +0x100000  record   magic, CRC32s (zlib's, also per 4 KiB block), time, phase
+//   +0x101000  header   the panic stackshot kept with the record: magic, length, CRC32 (struct ioswitch_panic_stackshot)
+//   +0x102000  504 KiB  that stackshot: XNU's (zlib-compressed kcdata, every task's threads with kernel and user frames
+//                       and wait info), copied out of XNU's buffer once its panic log is written, as the next boot's XNU
+//                       reuses that buffer. Written next to the text as panic-<UTC>.kcdata (pull_logs decodes it)
 //   +0x180000  512 KiB  the text, in hekate's L4T console layout: 'DBGC', start, size, then size bytes (main.c _show_errors)
 // The text is the panic string, the last 64 KiB of the kernel log (msgbuf) and, once SavePanicInfo returned, XNU's panic
 // log (backtraces, kexts). With ioswitch-panic-hekate=1, PMC_SCRATCH37 is set at panic entry to hekate's L4T panic magic
@@ -28,6 +32,10 @@
 // (kern_exec.c, before launchd) and clears the record. A record whose panic log was never appended (reset by the
 // watchdog) gets XNU's log from +0x000000 at the next boot, before XNU clears that buffer.
 // Holding POWER instead (a PMIC power-off) loses DRAM and the record with it.
+// A watchdog panic (the userspace watchdog's "userspace watchdog timeout: ...", or the kernel's "watchdog timeout: no
+// checkins from watchdogd ...") is a hang, not a bug report to photograph: without ioswitch-panic-reboot it warm-resets
+// 60 s after the panic (WATCHDOG_REBOOT_S), so the device restarts and the record (with the hung process's threads in the
+// stackshot) reaches Data, where holding POWER would have lost it.
 // Boot-args: ioswitch-panic-save=1 (off by default), ioswitch-panic-reboot=<s> (default 0: hold the panic screen),
 // ioswitch-panic-hekate=1 (TPAN: hekate also copies the text to SD:/L4T_panic.* and waits for a button), ioswitch-panic-test=<s>
 // (a test panic s seconds after the Data mount, on boots without a saved panic).
@@ -55,23 +63,28 @@ extern uint64_t mach_absolute_time(void);
 extern boolean_t pmap_ioswitch_ram_reserved(ppnum_t pnum);
 extern unsigned char iso_font[256 * 16];
 
-#define REGION_PA      UINT64_C(0xb0000000)
-#define REGION_BYTES   0x200000u
-#define XNU_LOG_BYTES  0x100000u
-#define RECORD_OFFSET  0x100000u
-#define CONSOLE_OFFSET 0x180000u
-#define CONSOLE_BYTES  0x80000u
-#define CONSOLE_SIG    0x43474244u          /* 'DBGC' (hekate PSTORE_RAM_SIG) */
-#define TEXT_MAX       (CONSOLE_BYTES - 16) /* hekate saves it only below 0x80000 */
-#define BLOCK_BYTES    4096u
-#define RECORD_MAGIC   UINT64_C(0x31434e5057534f49) /* "IOSWPNC1" */
-#define MSGBUF_TAIL    (64u << 10)
-#define PMC_PA         UINT64_C(0x7000e000) /* the page; APBDEV_PMC at +0x400 (hekate t210.h PMC_BASE) */
-#define PMC_CNTRL      (0x400u + 0x000u)
-#define PMC_SCRATCH0   (0x400u + 0x050u)
-#define PMC_SCRATCH37  (0x400u + 0x130u)
-#define PMC_RST_STATUS (0x400u + 0x1b4u)
-#define PMC_MAIN_RST   (1u << 4)
+#define REGION_PA         UINT64_C(0xb0000000)
+#define REGION_BYTES      0x200000u
+#define XNU_LOG_BYTES     0x100000u
+#define RECORD_OFFSET     0x100000u
+#define CONSOLE_OFFSET    0x180000u
+#define CONSOLE_BYTES     0x80000u
+#define CONSOLE_SIG       0x43474244u          /* 'DBGC' (hekate PSTORE_RAM_SIG) */
+#define TEXT_MAX          (CONSOLE_BYTES - 16) /* hekate saves it only below 0x80000 */
+#define BLOCK_BYTES       4096u
+#define RECORD_MAGIC      UINT64_C(0x31434e5057534f49) /* "IOSWPNC1" */
+#define SHOT_HEADER       (RECORD_OFFSET + 0x1000u)
+#define SHOT_OFFSET       (RECORD_OFFSET + 0x2000u)
+#define SHOT_MAX          (CONSOLE_OFFSET - SHOT_OFFSET)
+#define SHOT_MAGIC        UINT64_C(0x314b534857534f49) /* "IOSWHSK1" */
+#define WATCHDOG_REBOOT_S 60u
+#define MSGBUF_TAIL       (64u << 10)
+#define PMC_PA            UINT64_C(0x7000e000) /* the page; APBDEV_PMC at +0x400 (hekate t210.h PMC_BASE) */
+#define PMC_CNTRL         (0x400u + 0x000u)
+#define PMC_SCRATCH0      (0x400u + 0x050u)
+#define PMC_SCRATCH37     (0x400u + 0x130u)
+#define PMC_RST_STATUS    (0x400u + 0x1b4u)
+#define PMC_MAIN_RST      (1u << 4)
 #define PMC_SCRATCH0_MODES \
     ((1u << 0) | (1u << 1) | (1u << 29) | (1u << 30) | (1u << 31)) /* warmboot, RCM, payload, bootloader, recovery */
 #define TPAN        0x4e415054u                                    /* hekate PMC_SCRATCH37_KERNEL_PANIC_MAGIC */
@@ -95,8 +108,15 @@ struct ioswitch_panic_console {
     uint32_t sig, start, size;
     char text[];
 };
+struct ioswitch_panic_stackshot {
+    uint64_t magic;
+    uint32_t bytes, crc;  /* the stackshot at SHOT_OFFSET and its CRC32 */
+    uint64_t panic_flags; /* the embedded panic header's eph_panic_flags (STACKSHOT_DATA_COMPRESSED, ...) */
+    uint32_t header_crc;  /* of everything above */
+};
 
 static unsigned save_on, hekate_on, reboot_s; /* 0: the panic screen stays up (10-31: the user photographs it) */
+static unsigned reboot_arg;                   /* ioswitch-panic-reboot given: it decides for watchdog panics too */
 static volatile uint8_t *region;              /* write-combined */
 static volatile uint32_t *pmc, *tmr, *screen;
 static const char *save_off_reason = "boot-arg ioswitch-panic-save is off";
@@ -115,6 +135,10 @@ static volatile struct ioswitch_panic_record *record(void)
 static volatile struct ioswitch_panic_console *console(void)
 {
     return (volatile struct ioswitch_panic_console *)(region + CONSOLE_OFFSET);
+}
+static volatile struct ioswitch_panic_stackshot *shot(void)
+{
+    return (volatile struct ioswitch_panic_stackshot *)(region + SHOT_HEADER);
 }
 static void drain(void)
 {
@@ -186,6 +210,40 @@ static int append_xnu_log(const volatile uint8_t *base, uint32_t bytes)
         }
     }
     return 1;
+}
+
+/* The panic stackshot of the embedded panic header at `base` (this boot's, or the last one's), into the record's own
+ * place: XNU's buffer is reused by the next boot. One line in the text says what happened to it. */
+static void keep_stackshot(const volatile uint8_t *base, uint32_t bytes)
+{
+    const volatile struct embedded_panic_header *h = (const volatile struct embedded_panic_header *)base;
+    volatile struct ioswitch_panic_stackshot *k = shot();
+    char line[160];
+    k->magic = 0;
+    drain();
+    if (h->eph_magic != EMBEDDED_PANIC_MAGIC) return;
+    const uint32_t offset = h->eph_stackshot_offset, length = h->eph_stackshot_len;
+    const uint64_t flags = h->eph_panic_flags;
+    if (!(flags & EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED) || !offset || !length || offset >= bytes ||
+        length > bytes - offset) {
+        snprintf(line, sizeof(line), "\n--- no panic stackshot (panic flags 0x%llx) ---\n", (unsigned long long)flags);
+    } else if (length > SHOT_MAX) {
+        snprintf(line, sizeof(line), "\n--- panic stackshot: %u bytes, over the %u KiB kept: not kept ---\n", length,
+                 SHOT_MAX >> 10);
+    } else {
+        volatile uint8_t *to = region + SHOT_OFFSET;
+        for (uint32_t i = 0; i < length; ++i) to[i] = base[offset + i];
+        k->bytes = length;
+        k->crc = crc_of(to, length);
+        k->panic_flags = flags;
+        k->header_crc = crc_of(k, offsetof(struct ioswitch_panic_stackshot, header_crc));
+        drain();
+        k->magic = SHOT_MAGIC;
+        drain();
+        snprintf(line, sizeof(line), "\n--- panic stackshot: %u bytes of %skcdata kept: panic-*.kcdata on Data ---\n",
+                 length, (flags & EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_DATA_COMPRESSED) ? "zlib " : "");
+    }
+    puts_(line);
 }
 
 static void seal(uint32_t phase)
@@ -306,10 +364,22 @@ static void draw_log_area(const char *title, const char *text, size_t length)
     }
     draw(LOG_ROW + 1, ROWS - 1, text + start, length - start, kGrey);
 }
+static int watchdog_panic; /* the panic string is a watchdog timeout (ioswitch_panic_begin) */
+static int starts_with(const char *s, const char *prefix)
+{
+    while (*prefix)
+        if (*s++ != *prefix++) return 0;
+    return 1;
+}
 static void draw_status(void)
 {
     char line[COLS + 1];
-    if (save_on && region && reboot_s)
+    if (save_on && region && reboot_s && watchdog_panic && !reboot_arg)
+        snprintf(line, sizeof(line),
+                 "Watchdog panic: saved in RAM. Warm reset %us after the panic; iPadOS then writes "
+                 "/private/var/ioswitch/panic-*.log and .kcdata (the stackshot).",
+                 reboot_s);
+    else if (save_on && region && reboot_s)
         snprintf(line, sizeof(line),
                  "Saved in RAM. Warm reset %us after the panic: hekate writes SD:/L4T_panic.txt, iPadOS "
                  "/private/var/ioswitch/panic-*.log.",
@@ -367,7 +437,10 @@ void ioswitch_panic_save_init(void)
     uint32_t value = 0;
     if (!PE_parse_boot_argn("ioswitch-panic-save", &value, sizeof(value)) || !value) return;
     if (PE_parse_boot_argn("ioswitch-panic-hekate", &value, sizeof(value))) hekate_on = value != 0;
-    if (PE_parse_boot_argn("ioswitch-panic-reboot", &value, sizeof(value))) reboot_s = value > 240 ? 240 : value;
+    if (PE_parse_boot_argn("ioswitch-panic-reboot", &value, sizeof(value))) {
+        reboot_s = value > 240 ? 240 : value;
+        reboot_arg = 1;
+    }
     save_on = 1;
     for (uint64_t pa = REGION_PA; pa < REGION_PA + REGION_BYTES; pa += 4096)
         if (!pmap_ioswitch_ram_reserved((ppnum_t)(pa >> 12))) {
@@ -375,9 +448,10 @@ void ioswitch_panic_save_init(void)
             return;
         }
     pmc = (volatile uint32_t *)ml_io_map((vm_offset_t)PMC_PA, 4096);
-    if (reboot_s) tmr = (volatile uint32_t *)ml_io_map((vm_offset_t)TMR_PA, 4096);
+    /* Always: a watchdog panic resets even without ioswitch-panic-reboot. */
+    tmr = (volatile uint32_t *)ml_io_map((vm_offset_t)TMR_PA, 4096);
     region = (volatile uint8_t *)ml_io_map_wcomb((vm_offset_t)REGION_PA, REGION_BYTES);
-    if (!pmc || !region || (reboot_s && !tmr)) {
+    if (!pmc || !region || !tmr) {
         region = NULL;
         save_off_reason = "mapping failed";
         return;
@@ -400,7 +474,10 @@ void ioswitch_panic_save_init(void)
     /* Reset before the panic log was appended (by the watchdog): it is still in the last boot's XNU buffer, which XNU
      * clears only later (check_for_panic_log). Appended as DRAM kept it, and sealed again (the damage count stays). */
     text_at = r->text_bytes;
-    if (r->phase == 1 && append_xnu_log(region, XNU_LOG_BYTES)) seal(2);
+    if (r->phase == 1 && append_xnu_log(region, XNU_LOG_BYTES)) {
+        keep_stackshot(region, XNU_LOG_BYTES);
+        seal(2);
+    }
 }
 
 int ioswitch_panic_save_xnu_buffer(uintptr_t *base, unsigned int *bytes)
@@ -421,6 +498,10 @@ int ioswitch_panic_begin(const char *format, va_list *args, unsigned long caller
     const int length = vsnprintf(panic_line, sizeof(panic_line), format, copy);
     va_end(copy);
     if (length < 0) panic_line[0] = 0;
+    /* watchdogd's (AppleARMWatchdogTimer's IOWatchdogUserClient) and the kernel's own check of watchdogd. */
+    watchdog_panic = starts_with(panic_line, "userspace watchdog timeout:") ||
+                     starts_with(panic_line, "watchdog timeout: no checkins from ");
+    if (watchdog_panic && !reboot_arg) reboot_s = WATCHDOG_REBOOT_S;
     screen_taken = take_screen && screen;
     if (save_on && region) {
         clock_sec_t secs = 0;
@@ -431,6 +512,7 @@ int ioswitch_panic_begin(const char *format, va_list *args, unsigned long caller
         char when[32], head[256];
         format_time(when, sizeof(when), secs);
         text_at = 0;
+        shot()->magic = 0; /* the last panic's, should it still be here */
         snprintf(head, sizeof(head),
                  "IOSwitch panic record 1: %s UTC, %llu.%03llu s after boot, cpu %u, caller 0x%lx\npanic: ", when,
                  (unsigned long long)(ns / 1000000000ull), (unsigned long long)(ns / 1000000ull % 1000), panic_cpu,
@@ -465,8 +547,10 @@ void ioswitch_panic_logged(void)
     static uint32_t once;
     if (!begun || __atomic_exchange_n(&once, 1u, __ATOMIC_ACQ_REL)) return;
     const volatile uint8_t *xnu = (const volatile uint8_t *)gPanicBase;
-    if (save_on && region && xnu == region && record()->magic == RECORD_MAGIC && append_xnu_log(xnu, XNU_LOG_BYTES))
+    if (save_on && region && xnu == region && record()->magic == RECORD_MAGIC && append_xnu_log(xnu, XNU_LOG_BYTES)) {
+        keep_stackshot(xnu, XNU_LOG_BYTES);
         seal(2);
+    }
     if (screen_taken && panic_info && panic_info->eph_panic_log_offset && panic_info->eph_panic_log_len < gPanicSize) {
         /* The panic log from its "Panicked task" line: the backtrace. */
         const char *log = (const char *)gPanicBase + panic_info->eph_panic_log_offset;
@@ -533,6 +617,22 @@ const char *ioswitch_panic_save_pending(uint32_t *bytes, char *path, size_t path
     return (const char *)(uintptr_t)console()->text;
 }
 
+const void *ioswitch_panic_save_pending_stackshot(uint32_t *bytes)
+{
+    if (!save_on || !region || !pending) return NULL;
+    const volatile struct ioswitch_panic_stackshot *k = shot();
+    if (k->magic != SHOT_MAGIC || k->header_crc != crc_of(k, offsetof(struct ioswitch_panic_stackshot, header_crc)) ||
+        !k->bytes || k->bytes > SHOT_MAX)
+        return NULL;
+    const volatile uint8_t *data = region + SHOT_OFFSET;
+    if (k->crc != crc_of(data, k->bytes)) {
+        printf("IOSwitch panic-save: the saved panic stackshot is damaged (%u bytes): not written\n", k->bytes);
+        return NULL;
+    }
+    *bytes = k->bytes;
+    return (const void *)(uintptr_t)data;
+}
+
 void ioswitch_panic_save_done(int error, const char *path)
 {
     if (!pending) return;
@@ -542,6 +642,7 @@ void ioswitch_panic_save_done(int error, const char *path)
     }
     pending = 0;
     record()->magic = 0;
+    shot()->magic = 0;
     console()->sig = 0;
     drain();
     printf("IOSwitch panic-save: %s written\n", path);

@@ -24,6 +24,7 @@ protected:
     // now +90 s, method 3 clears it.
     IOSimpleLock *checkinLock() const { return load<IOSimpleLock *>(0xa0); }
     bool userspaceMonitoring() const { return original_[0xa8 - 0x88] != 0; }
+    void setUserspaceMonitoring(bool on) { original_[0xa8 - 0x88] = on; }  // as methods 3/4 do, under the lock
     uint64_t checkinDeadline() const { return load<uint64_t>(0xc8); }
     void setCheckinDeadline(uint64_t deadline)
     {

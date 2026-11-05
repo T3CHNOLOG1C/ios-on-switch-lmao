@@ -88,6 +88,43 @@ class SyncTest(unittest.TestCase):
         self.assertEqual((out / "launchd.log").read_text(), "launchd\n")
         self.assertTrue((out / "migration-state.txt").is_file())
 
+    def test_pull_logs_copies_and_decodes_a_saved_panic(self):
+        data = self.root / "data"
+        (data / "ioswitch").mkdir(parents=True)
+        (data / "ioswitch/panic-2026-11-05-120000.log").write_text(
+            "IOSwitch panic record 1: ...\npanic: userspace watchdog timeout: no successful checkins from "
+            "com.apple.backboardd (2 induced crashes) in 60 seconds\n")
+        (data / "ioswitch/panic-2026-11-05-120000.kcdata").write_bytes(b"kcdata")
+        # A stand-in for XNU's kcdata.py -s: the report a panic stackshot decodes to.
+        report = {"binaryImages": [["590d839a-82d2-30f1-a17d-0cc053420f73", 6442450944, "S"],
+                                   ["74f305ba-7e28-4e3f-6e7d-bd42b4ee7da1", 0, "U"]],
+                  "processByPid": {"53": {"procname": "backboardd", "waitInfo": ["thread 900: semaphore port 0x1"],
+                                          "threadById": {"900": {"name": "main", "state": ["TH_WAIT", "TH_UNINT"],
+                                                                 "kernelFrames": [[1, 16]],
+                                                                 "userFrames": [[0, 4096], [0, 8192]]}}},
+                                   "27": {"procname": "SpringBoard", "threadById": {}}}}
+        tool = self.root / "kcdata.py"
+        tool.write_text("import json, sys\nopen(sys.argv[2], 'w').write('{}\\n' + json.dumps(%r))\n" % report)
+        log = Log()
+        out = pull_logs.pull(data, self.root / "logs", log, harvest=False, kcdata=tool)
+        self.assertEqual((out / "panic-2026-11-05-120000.kcdata").read_bytes(), b"kcdata")
+        self.assertTrue((out / "panic-2026-11-05-120000.stackshot.ips").is_file())
+        summary = (out / "panic-2026-11-05-120000.threads.txt").read_text()
+        self.assertIn("backboardd[53]: 1 threads", summary)
+        self.assertIn("wait: thread 900: semaphore port 0x1", summary)
+        self.assertIn("user: S:590d839a+0x1000 S:590d839a+0x2000", summary)
+        self.assertIn("kernel: U:74f305ba+0x10", summary)
+        self.assertNotIn("SpringBoard", summary)
+
+    def test_panic_process_names(self):
+        self.assertEqual(pull_logs.panic_process("panic: userspace watchdog timeout: no successful checkins from "
+                                                 "com.apple.SpringBoard (0 induced crashes)"), "springboard")
+        self.assertEqual(pull_logs.panic_process("panic: watchdog timeout: no checkins from watchdogd in 91 seconds"),
+                         "watchdogd")
+        self.assertEqual(pull_logs.panic_process("panic:  watchdogd[184] exited -- exit reason namespace 2"),
+                         "watchdogd")
+        self.assertIsNone(pull_logs.panic_process("panic: Kernel data abort."))
+
 
 # hekate nyx _joycon_info_dump_action's format (joycon_00 left, joycon_01 right; type 0 = none or not Horizon's).
 DUMP = """[joycon_00]
