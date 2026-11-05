@@ -5864,8 +5864,8 @@ bad:
  * switch-bt=1: bluetoothd's POSIX HCI driver (21H461 bluetoothd FUN_1001d104c / FUN_1000ddaa8) opens the kernel
  * control named in BT_HCI_TRANSPORT ("<transport>:<driver>:<name>,<baud>") instead of its default
  * "com.apple.uart.sk.bluetooth", a Skywalk channel endpoint nothing here provides. drivers/SwitchBluetooth registers
- * the plain stream "com.apple.uart.bluetooth" (the one BlueTool itself opens) with the controller already patched
- * and at 3 Mbaud; "H4" is plain H4 framing with RTS/CTS, as the ADT's transport-encoding 1 says.
+ * the plain stream "com.apple.uart.bluetooth" (BlueTool's own) with the controller patched, at 3 Mbaud. "H4BC" (J120's
+ * transport-encoding 3, BT_WAKE through SwitchBluetooth's /dev/btwake): plain "H4" crashed every stack terminate.
  */
 /*
  * r6-lows: CA_FORCE_TIMER=1 for backboardd (NATIVE_IOSWITCH_CA_VBL, a build-time switch: the boot-args are full). QuartzCore
@@ -5896,7 +5896,7 @@ bad:
  * "Failed to create IOSurfaceAccelerator" abort, backboardd and SpringBoard restarted.
  */
 static const char *const native_ioswitch_bluetoothd_environment[] = {
-	"BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.bluetooth,3000000", NULL
+	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
 static const char *const native_ioswitch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
 #if NATIVE_IOSWITCH_CA_VBL
