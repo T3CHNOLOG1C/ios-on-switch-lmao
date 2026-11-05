@@ -3,8 +3,9 @@
 # (bazel/platforms/transitions.bzl), so `bazel build //:boot` builds each part for the right platform.
 #
 #   ios_kernel_arm64   the kernel: XNU and the drivers (arm64, -mkernel; bazel/toolchains/kernel)
-#   ios_arm64          iOS user space: the Metal plugin, the overlay's binaries (bazel/toolchains/ios)
-#   macos_arm64        this Mac: host tests and tools (bazel/toolchains/host)
+#   ios_arm64          iOS user space: the Metal plugin, the overlay's binaries (bazel/toolchains/apple)
+#   macos_user_arm64   macOS user space as iOS user space builds: host twins of iOS code, e.g. NVK's (bazel/toolchains/apple)
+#   macos_arm64        this Mac: host tests and tools (the host toolchain)
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("//bazel/lint:defs.bzl", "lint_files")
 
@@ -44,6 +45,16 @@ platform(
     name = "ios_arm64",
     constraint_values = [
         "@platforms//os:ios",
+        "@platforms//cpu:arm64",
+        ":user",
+    ],
+)
+
+# The host twin of iOS user-space code: the same toolchain recipe for macOS (target and SDK only), unlike the host's.
+platform(
+    name = "macos_user_arm64",
+    constraint_values = [
+        "@platforms//os:osx",
         "@platforms//cpu:arm64",
         ":user",
     ],

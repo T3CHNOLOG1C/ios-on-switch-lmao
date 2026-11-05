@@ -263,7 +263,7 @@ _RUST = "//bazel/rust:toolchain_version"
 
 MESA_PLATFORMS = {
     "ios": "//bazel/platforms:ios_arm64",
-    "macos": "//third_party/mesa/bazel:macos_user_arm64",
+    "macos": "//bazel/platforms:macos_user_arm64",
 }
 
 def _mesa_platform_impl(_settings, attr):

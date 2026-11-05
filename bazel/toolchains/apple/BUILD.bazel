@@ -1,6 +1,6 @@
 # iOS and macOS user-space C/C++/Objective-C toolchains (config.bzl): Xcode's Apple clang with the target and SDK and
-# no other flags of their own, for //bazel/platforms:ios_arm64 and the macOS user platform (host twins of iOS code,
-# such as NVK's). Registered in MODULE.bazel before any host toolchain; the host platform (no :user constraint) never
+# no other flags of their own, for //bazel/platforms:ios_arm64 and //bazel/platforms:macos_user_arm64 (host twins of iOS
+# code, such as NVK's). Registered in MODULE.bazel before any host toolchain; the host platform (no :user constraint) never
 # resolves to them.
 load("@rules_cc//cc/toolchains:cc_toolchain.bzl", "cc_toolchain")
 load("//bazel/lint:defs.bzl", "lint_files")

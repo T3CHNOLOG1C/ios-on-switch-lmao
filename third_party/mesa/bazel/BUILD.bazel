@@ -1,5 +1,5 @@
-# The Mesa build's own pieces (defs.bzl): the platform settings its BUILD files select on, the macOS user platform the
-# host twin builds for, and the tools its generators run (bindgen, cbindgen, rustfmt, libclang).
+# The Mesa build's own pieces (defs.bzl): the platform settings its BUILD files select on (the host twin builds for
+# //bazel/platforms:macos_user_arm64), and the tools its generators run (bindgen, cbindgen, rustfmt, libclang).
 load("@xcode//:defs.bzl", "IPHONEOS_SDK", "MACOSX_SDK")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "cargo_tool", "mesa_make_variables")
@@ -18,16 +18,6 @@ config_setting(
 config_setting(
     name = "macos",
     constraint_values = ["@platforms//os:osx"],
-)
-
-# macOS user space (the host twin of an iOS library), until //bazel/platforms has it: the same name and constraints.
-platform(
-    name = "macos_user_arm64",
-    constraint_values = [
-        "@platforms//os:osx",
-        "@platforms//cpu:arm64",
-        "//bazel/platforms:user",
-    ],
 )
 
 # bindgen-cli 0.73.2 and cbindgen 0.29.4, built by Rust 1.96.1's cargo from their own Cargo.lock; they never rebuild
