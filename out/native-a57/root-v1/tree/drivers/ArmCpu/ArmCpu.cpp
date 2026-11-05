@@ -258,6 +258,16 @@ static void gicV2Send(uint32_t target)
     __asm__ volatile("dsb sy\nisb" ::: "memory");
 }
 
+// Set once every secondary core passed its startup self- and cross-IPI qualification (observeThread): from then on
+// SGIs skip gicV2IpiObserved, which only that qualification reads.
+static bool gIpiQualified = false;
+
+// A per-core counter only its own core writes, from interrupt context: a load and a store, no atomic read-modify-write.
+static inline void countOwn(volatile uint32_t &counter)
+{
+    __atomic_store_n(&counter, __atomic_load_n(&counter, __ATOMIC_RELAXED) + 1U, __ATOMIC_RELEASE);
+}
+
 static void gicV2IpiObserved(uint32_t cpu, uint32_t acknowledge)
 {
     if (!gNativeSmp || cpu >= IOSW_SMP_CORE_COUNT) {
@@ -919,7 +929,8 @@ void ArmCpu::observeThread(void *argument, wait_result_t)
         }
         if (ready && __atomic_load_n(&armcpu_smp_cross_back[cpu], __ATOMIC_ACQUIRE)) {
             __atomic_store_n(&armcpu_smp_step[cpu], 8U, __ATOMIC_RELEASE);
-            __atomic_fetch_add(&armcpu_smp_running, 1U, __ATOMIC_RELAXED);
+            if (__atomic_add_fetch(&armcpu_smp_running, 1U, __ATOMIC_RELAXED) == IOSW_SMP_CORE_COUNT - 1)
+                __atomic_store_n(&gIpiQualified, true, __ATOMIC_RELEASE);
             thread_terminate(current_thread());
             return;
         }
@@ -1085,11 +1096,15 @@ void ArmCpu::dispatch(void *target, void *, void *, int)
     static_cast<ArmCpu *>(target)->interrupt();
 }
 
+// r16-idle: every interrupt on every core comes through here, so only what the system needs runs by default: the
+// phase/id breadcrumbs and the global timer/IPI sums (64-bit atomics on one cache line all four cores write) are kept
+// for armcpu-diagnostics=1, and each core's own counters are plain stores (only that core writes its slot, with
+// interrupts masked), not exclusive-monitor read-modify-writes.
 void ArmCpu::interrupt(void)
 {
     unsigned drained = 0;
     for (;;) {
-        armcpu_irq_phase = 1;
+        if (diagnosePower) armcpu_irq_phase = 1;
         uint64_t id;
         uint32_t v2Acknowledge = 0;
         if (gicV2) {
@@ -1100,42 +1115,42 @@ void ArmCpu::interrupt(void)
         } else {
             __asm__ volatile("mrs %0, icc_iar1_el1" : "=r"(id));
         }
-        armcpu_irq_id = static_cast<uint32_t>(id & 0xffffff);
+        if (diagnosePower) armcpu_irq_id = static_cast<uint32_t>(id & 0xffffff);
         if ((id & 0xffffff) >= 1020) {
-            armcpu_irq_phase = 0;
+            if (diagnosePower) armcpu_irq_phase = 0;
             break;
         }
         if (diagnosePower && ++drained > 128)
             panic("ArmCpu: IRQ drain exceeds 128 id=%llx timer=%llu IPI=%llu", id, armcpu_timer_interrupts,
                   armcpu_ipi_interrupts);
         if ((id & 0xffffff) == 27) {
-            __atomic_fetch_add(&armcpu_timer_interrupts, UINT64_C(1), __ATOMIC_RELAXED);
-            armcpu_irq_phase = 2;
+            if (diagnosePower) __atomic_fetch_add(&armcpu_timer_interrupts, UINT64_C(1), __ATOMIC_RELAXED);
+            if (diagnosePower) armcpu_irq_phase = 2;
             rtclock_intr(0);
-            __atomic_fetch_add(&armcpu_core_timer[logicalId], 1U, __ATOMIC_RELEASE);
-            armcpu_irq_phase = 3;
+            countOwn(armcpu_core_timer[logicalId]);
+            if (diagnosePower) armcpu_irq_phase = 3;
         } else if ((id & 0xffffff) == 0) {
-            __atomic_fetch_add(&armcpu_ipi_interrupts, UINT64_C(1), __ATOMIC_RELAXED);
-            armcpu_irq_phase = 4;
+            if (diagnosePower) __atomic_fetch_add(&armcpu_ipi_interrupts, UINT64_C(1), __ATOMIC_RELAXED);
+            if (diagnosePower) armcpu_irq_phase = 4;
             if (ipi_handler != nullptr) {
                 ipi_handler();
             }
-            __atomic_fetch_add(&armcpu_core_sgi[logicalId], 1U, __ATOMIC_RELEASE);
-            if (gicV2) {
+            countOwn(armcpu_core_sgi[logicalId]);
+            if (gicV2 && !__atomic_load_n(&gIpiQualified, __ATOMIC_RELAXED)) {
                 gicV2IpiObserved(logicalId, v2Acknowledge);
             }
-            armcpu_irq_phase = 5;
+            if (diagnosePower) armcpu_irq_phase = 5;
         } else if (gSpiIpi && (id & 0xffffff) >= kIpiSpiBase && (id & 0xffffff) < kIpiSpiBase + 8) {
-            __atomic_fetch_add(&armcpu_ipi_interrupts, UINT64_C(1), __ATOMIC_RELAXED);
-            __atomic_fetch_add(&armcpu_core_sgi[logicalId], 1U, __ATOMIC_RELEASE);
-            armcpu_irq_phase = 4;
+            if (diagnosePower) __atomic_fetch_add(&armcpu_ipi_interrupts, UINT64_C(1), __ATOMIC_RELAXED);
+            countOwn(armcpu_core_sgi[logicalId]);
+            if (diagnosePower) armcpu_irq_phase = 4;
             if (ipi_handler != nullptr) {
                 ipi_handler();
             }
-            armcpu_irq_phase = 5;
+            if (diagnosePower) armcpu_irq_phase = 5;
         } else {
             const uint32_t intid = static_cast<uint32_t>(id & 0xffffff);
-            armcpu_irq_phase = 7;
+            if (diagnosePower) armcpu_irq_phase = 7;
             if (intid >= 32 && ioswitch_gic_dispatch(intid)) {
                 // A driver's vector ran (or masked its soft-disabled line); the EOI below is still the only one.
             } else if (intid >= 32 && gDist != 0) {
@@ -1146,7 +1161,7 @@ void ArmCpu::interrupt(void)
                 panic("ArmCpu: unexpected architectural IRQ %llu", id);
             }
         }
-        armcpu_irq_phase = 6;
+        if (diagnosePower) armcpu_irq_phase = 6;
         if (gicV2) {
             // Preserve source-CPU bits [12:10] for SGIs, not only the 10-bit INTID.
             __asm__ volatile("dsb sy" ::: "memory");
@@ -1169,7 +1184,7 @@ void ArmCpu::signalCPU(IOCPU *target)
         if (!peer->gicV2) {
             panic("ArmCpu: mixed GIC CPU signal target");
         }
-        __atomic_fetch_add(&armcpu_ipi_sent, UINT64_C(1), __ATOMIC_RELAXED);
+        if (diagnosePower) __atomic_fetch_add(&armcpu_ipi_sent, UINT64_C(1), __ATOMIC_RELAXED);
         if (peer == this) {
             __asm__ volatile("dsb ishst" ::: "memory");
             write32(dist, 0xf00, 2U << 24);  // Requesting CPU, SGI 0.
@@ -1185,7 +1200,7 @@ void ArmCpu::signalCPU(IOCPU *target)
     }
     uint64_t sgi =
         ((aff & 0xff00000000ULL) << 16) | ((aff & 0xff0000) << 16) | ((aff & 0xff00) << 8) | (1ULL << (aff & 0xff));
-    __atomic_fetch_add(&armcpu_ipi_sent, UINT64_C(1), __ATOMIC_RELAXED);
+    if (diagnosePower) __atomic_fetch_add(&armcpu_ipi_sent, UINT64_C(1), __ATOMIC_RELAXED);
     if (gSpiIpi) {
         spiIpiSend(gDist, peer->logicalId & 7);
         return;

@@ -186,6 +186,7 @@ enum : uint32_t {
 constexpr uint32_t kDmaRingBytes = 4096;
 enum : uint32_t { LCR_8N1 = 0x03, LCR_2STOP = 0x04, LCR_DLAB = 0x80, MCR_RTS_EN = 0x40 };
 enum : uint32_t { LSR_DR = 0x01, LSR_ERRORS = 0x1e, LSR_THRE = 0x20, LSR_TEMT = 0x40, LSR_TX_FULL = 0x100 };
+constexpr uint32_t kTxBurst = 16;  // bytes an empty TX FIFO takes without a status read (fillTx)
 enum : uint32_t { CSR_INVERT_TXD = 0x02, CSR_INVERT_RTS = 0x08 };
 // CAR UART source: PLLP (bits 31:29 = 0), fractional divider enable (bit 24), 7.1 divisor.
 constexpr uint32_t kUartDivEnable = 1u << 24, kDiv1M = 49 /* 25.5 */, kDiv3M = 15 /* 8.5 */;
@@ -675,6 +676,13 @@ void SwitchJoyConRail::frameByte(Side &s, uint8_t byte)
 
 void SwitchJoyConRail::fillTx(Side &s)
 {
+    // r16-idle: an empty TX FIFO (THRE, the FIFO is always on) takes a 16-byte burst (serial-tegra's PIO burst,
+    // TEGRA_UART_MIN_DMA; the FIFO holds 32) with one status read, not one per byte: a 13-byte request was 14 LSR
+    // reads, 133 times a second with both rails running. The rest goes byte by byte while LSR shows room, as before.
+    if (s.txPosition < s.txLength && (rd(s, LSR) & LSR_THRE)) {
+        const uint32_t end = s.txLength - s.txPosition > kTxBurst ? s.txPosition + kTxBurst : s.txLength;
+        while (s.txPosition < end) wr(s, RBR_THR, s.tx[s.txPosition++]);
+    }
     while (s.txPosition < s.txLength && !(rd(s, LSR) & LSR_TX_FULL)) wr(s, RBR_THR, s.tx[s.txPosition++]);
     if (s.txPosition == s.txLength && (s.ier & IER_THRI)) {
         s.ier &= ~IER_THRI;

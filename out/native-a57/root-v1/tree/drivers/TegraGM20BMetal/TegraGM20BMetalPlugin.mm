@@ -318,14 +318,16 @@ bool rawPack(char *path, size_t size)
 
 bool gRaw;  // the render server's device is the raw facade
 
-// The frontend's rates line, every 5 s while the device works (it says nothing when idle).
+// The frontend's rates line, every 5 s while the device works (it says nothing when idle). r16-idle: with a whole
+// interval of leeway, so the timer rides a wakeup the process or the kernel takes anyway instead of waking every
+// Metal process every 5 s; both rates functions measure their own window, so a late tick only makes a longer one.
 void startRates()
 {
     if (!knobOn("TEGRA_M2V_TELEMETRY", "tegra-m2v-telemetry", true)) return;
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
-                              NSEC_PER_SEC / 4);
+                              5 * NSEC_PER_SEC);
     dispatch_source_set_event_handler(timer, ^{
         // 768: the rates line passed 512 with r6-lows' frame distributions (encp= cgap= swait= gpuq= psomax=).
         char line[768];

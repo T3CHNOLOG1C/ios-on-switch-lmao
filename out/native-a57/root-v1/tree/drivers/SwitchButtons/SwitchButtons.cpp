@@ -54,8 +54,8 @@ constexpr uint8_t kTopOnOff = 1u << 1, kTopRtc = 1u << 3, kGlobalMask = 1u << 0,
 constexpr uint32_t kPmicIntid = 118;  // GIC SPI 86
 constexpr vm_offset_t kPmcPA = 0x7000E400;
 constexpr uint32_t kPmcIntrPolarity = 1u << 17;
-constexpr uint32_t kWatchdogMS = 10000;
-constexpr unsigned kPmicBurst = 20;  // PMIC interrupts per second that mean the line is stuck
+constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (ioswitch_check_after_ms): no wakeup of its own
+constexpr unsigned kPmicBurst = 20;      // PMIC interrupts per second that mean the line is stuck
 
 struct Volume {
     unsigned gpio;
@@ -145,7 +145,7 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
     for (auto *source : volume) source->enable();
     pmic->enable();
     home->enable();
-    watchdog->setTimeoutMS(kWatchdogMS);
+    ioswitch_check_after_ms(watchdog, kWatchdogMS);
     IOLog("SwitchButtons: started\n");
     return true;
 }
@@ -276,7 +276,7 @@ void SwitchButtons::homePulse(OSObject *owner, IOInterruptEventSource *, int)
 void SwitchButtons::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
 {
     for (const Volume &v : kVolume) tegra_gpio_check_delivery(v.gpio, "SwitchButtons");
-    sender->setTimeoutMS(kWatchdogMS);
+    ioswitch_check_after_ms(sender, kWatchdogMS);
 }
 
 extern "C" int switch_buttons_start(void)

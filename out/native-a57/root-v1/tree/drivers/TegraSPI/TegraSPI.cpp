@@ -3,11 +3,13 @@
 // The command word, FIFO handling and interrupt handling follow Linux spi-tegra114.c (tegra_spi_setup_transfer_one,
 // tegra_spi_start_cpu_based_transfer, tegra_spi_isr, handle_cpu_based_xfer, tegra_spi_clear_fifo; T210 chip data:
 // intr_mask_reg); clock, reset and pinmux bring-up as ../TegraI2C (hekate clock_enable).
+#include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
+#include <kern/sched_prim.h>
 #include <libkern/OSAtomic.h>
 #include "TegraSPI.h"
 #include "../ArmGIC/IOSwitchInterrupts.h"
@@ -61,7 +63,10 @@ enum : uint32_t {
     INTR_ALL = 0x1fu << 25,  // FIFO errors and RDY; 1 = masked
 };
 constexpr uint32_t kRxCountShift = 23, kRxCountMask = 0x7f;
-constexpr int kPending = 1;  // transfer result while it runs
+// A block's state (Bus::state): started and waiting for RDY (kActive), RDY seen by the filter (kDone, the bytes
+// still in the RX FIFO for the waiter), or none (kIdle). The filter and a timed-out waiter race for kActive with a
+// compare-and-swap, so exactly one of them ends the block.
+enum : uint32_t { kIdle, kActive, kDone };
 
 struct BusInfo {
     uint16_t regs;                     // offset from kSpiPA; 0 = not described
@@ -88,15 +93,15 @@ constexpr uint32_t kPinmuxFieldMask = 0x7f, kPinmuxOut = 0, kPinmuxIn = (2u << 2
 struct Bus {
     volatile uint8_t *regs;
     IOLock *lock;     // one transfer at a time
-    IOLock *irqLock;  // hands a wait between the caller and the interrupt action
-    IOInterruptEventSource *irq;
+    IOLock *irqLock;  // the block in flight, against recovery and suspend
+    IOFilterInterruptEventSource *irq;
     uint32_t hz, idle;  // bus clock; COMMAND1 between transfers (master, mode, 8-bit words, chip select high)
     bool ready;
-    // The transfer in flight (under irqLock).
+    // The transfer in flight (under irqLock; state and fifo also written by the filter).
     uint8_t *rx;
     size_t len, done;
-    bool active;
-    int result;
+    uint32_t state;  // kIdle, kActive, kDone
+    uint32_t fifo;   // FIFO_STATUS when the filter saw RDY: the RX word count and the error bits
 };
 
 IOLock *volatile gSetupLock;
@@ -179,45 +184,68 @@ int configure(Bus &b, const BusInfo &info)
     return TEGRA_SPI_OK;
 }
 
-// Work loop action for a bus's SPI (level; the GIC masks it while this runs). RDY ends the block: the RX FIFO holds
-// one word per byte clocked (handle_cpu_based_xfer). Writing TRANS_STATUS back clears RDY and drops the line.
-void interruptOccurred(OSObject *, IOInterruptEventSource *sender, int)
+// Primary interrupt context, the bus's SPI (level): RDY ends the block. Only the status is taken here: RDY and any
+// FIFO error are cleared (which drops the line) and the waiter is woken; it reads the RX FIFO itself, which keeps its
+// words until read or flushed, as in spi-tegra114.c, whose hard interrupt (tegra_spi_isr) reads FIFO_STATUS and
+// clears the status and whose thread (tegra_spi_isr_thread, handle_cpu_based_xfer) then drains the RX FIFO.
+// r16-idle: the work-loop action this was woke a thread that woke the caller, two thread switches per transfer,
+// 100-400 transfers a second for the IMU; now one, and the interrupt is masked for three register accesses, not for
+// the drain.
+bool filterInterrupt(OSObject *, IOFilterInterruptEventSource *sender)
 {
     for (Bus &b : gBus) {
         if (b.irq != sender) continue;
-        IOLockLock(b.irqLock);
         const uint32_t trans = r32(b.regs, TRANS_STATUS), fifo = r32(b.regs, FIFO_STATUS);
-        if (b.active && (trans & TRANS_RDY)) {
-            bool overflow = false;
-            for (uint32_t words = (fifo >> kRxCountShift) & kRxCountMask; words; --words) {
-                const uint32_t word = r32(b.regs, RX_FIFO);
-                if (b.done == b.len) {
-                    overflow = true;
-                    continue;
-                }
-                if (b.rx) b.rx[b.done] = (uint8_t)word;
-                ++b.done;
-            }
-            b.result = (fifo & FIFO_ERRORS) || overflow || b.done != b.len ? TEGRA_SPI_EIO : TEGRA_SPI_OK;
-            b.active = false;
-            IOLockWakeup(b.irqLock, &b.active, true);
+        uint32_t expected = kActive;
+        if (trans & TRANS_RDY) {
+            b.fifo = fifo;
+            if (__atomic_compare_exchange_n(&b.state, &expected, kDone, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED))
+                thread_wakeup((event_t)&b.state);
         }
-        w32(b.regs, TRANS_STATUS, trans);
+        w32(b.regs, TRANS_STATUS, trans);  // write 1 to clear: RDY off, the line low
         if (fifo & FIFO_ERRORS) w32(b.regs, FIFO_STATUS, FIFO_ERR | (fifo & FIFO_ERRORS));
-        IOLockUnlock(b.irqLock);
     }
+    return false;  // nothing left for the work loop
 }
 
-// Caller holds irqLock and has started the block. Sleeps until the action ends the wait or `us` pass. Timing out
+void noAction(OSObject *, IOInterruptEventSource *, int) {}
+
+// Thread context, the block ended by RDY (kDone): its bytes from the RX FIFO, one word per byte clocked
+// (handle_cpu_based_xfer), counted by the FIFO_STATUS the filter saw.
+int take(Bus &b)
+{
+    const uint32_t fifo = __atomic_load_n(&b.fifo, __ATOMIC_RELAXED);
+    bool overflow = false;
+    for (uint32_t words = (fifo >> kRxCountShift) & kRxCountMask; words; --words) {
+        const uint32_t word = r32(b.regs, RX_FIFO);
+        if (b.done == b.len) {
+            overflow = true;
+            continue;
+        }
+        if (b.rx) b.rx[b.done] = (uint8_t)word;
+        ++b.done;
+    }
+    __atomic_store_n(&b.state, kIdle, __ATOMIC_RELAXED);
+    return (fifo & FIFO_ERRORS) || overflow || b.done != b.len ? TEGRA_SPI_EIO : TEGRA_SPI_OK;
+}
+
+// Caller holds irqLock and has started the block. Sleeps until the filter ends the wait or `us` pass. Timing out
 // while TRANS_STATUS shows RDY (unmasked) means the controller's interrupt is not reaching us: after a grace period
-// for an action already under way, panic with the controller's and the GIC's state.
+// for an interrupt already under way, panic with the controller's and the GIC's state.
 int sleepForAction(unsigned bus, Bus &b, uint64_t us)
 {
     uint64_t deadline;
     clock_interval_to_deadline((uint32_t)us, kMicrosecondScale, &deadline);
     for (bool grace = false;; grace = true) {
-        while (b.active && IOLockSleepDeadline(b.irqLock, &b.active, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {}
-        if (!b.active) return b.result;
+        for (;;) {
+            const wait_result_t wait = assert_wait_deadline((event_t)&b.state, THREAD_UNINT, deadline);
+            if (__atomic_load_n(&b.state, __ATOMIC_ACQUIRE) != kActive) {
+                if (wait == THREAD_WAITING) clear_wait(current_thread(), THREAD_AWAKENED);
+                return take(b);
+            }
+            if (wait != THREAD_WAITING || thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT) break;
+        }
+        if (__atomic_load_n(&b.state, __ATOMIC_ACQUIRE) != kActive) return take(b);
         const uint32_t trans = r32(b.regs, TRANS_STATUS), mask = r32(b.regs, INTR_MASK);
         if (!(trans & TRANS_RDY) || (mask & INTR_ALL)) break;
         if (grace) {
@@ -228,8 +256,10 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
         }
         clock_interval_to_deadline(kGraceMs, kMillisecondScale, &deadline);
     }
-    b.active = false;
-    return TEGRA_SPI_ETIMEDOUT;
+    uint32_t expected = kActive;
+    if (__atomic_compare_exchange_n(&b.state, &expected, kIdle, false, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+        return TEGRA_SPI_ETIMEDOUT;
+    return take(b);  // the filter ended it after all
 }
 
 // One PIO block (tegra_spi_start_cpu_based_transfer): empty FIFOs, chip select low, TX words queued, block length,
@@ -248,8 +278,8 @@ int block(unsigned bus, Bus &b, unsigned cs, const uint8_t *tx, uint8_t *rx, siz
         b.rx = rx;
         b.len = len;
         b.done = 0;
-        b.result = kPending;
-        b.active = true;
+        __atomic_store_n(&b.state, kActive, __ATOMIC_RELEASE);
+        __asm__ volatile("dmb sy" ::: "memory");  // kActive is visible to the filter's CPU before the clock starts
         w32(b.regs, COMMAND1, cmd | CMD1_PIO);
         result = sleepForAction(bus, b, 2000 + (uint64_t)len * 8 * 1000000 / b.hz);
     }
@@ -260,13 +290,15 @@ int block(unsigned bus, Bus &b, unsigned cs, const uint8_t *tx, uint8_t *rx, siz
 }
 
 // After a failed block the controller is reset and reprogrammed (as tegra_spi_transfer_one_message on a timeout).
-// irqLock is held while the clock is gated so no action reads an unclocked block.
+// The interrupt is off meanwhile, so the filter never reads an unclocked controller.
 void recover(Bus &b, const BusInfo &info)
 {
+    b.irq->disable();
     IOLockLock(b.irqLock);
     clockEnable(info);
     (void)configure(b, info);
     IOLockUnlock(b.irqLock);
+    b.irq->enable();
 }
 
 IOLock *setupLock()
@@ -289,7 +321,7 @@ int bringUp(unsigned bus, Bus &b)
     if (result != TEGRA_SPI_OK) return result;
     w32(b.regs, INTR_MASK, r32(b.regs, INTR_MASK) | INTR_ALL);  // quiet until the event source is in place
     IOService *nub = ioswitch_interrupt_nub(intid(bus), false);
-    b.irq = IOInterruptEventSource::interruptEventSource(gLoop, &interruptOccurred, nub, 0);
+    b.irq = IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, &noAction, &filterInterrupt, nub, 0);
     if (!b.irq || gLoop->addEventSource(b.irq) != kIOReturnSuccess) {
         panic("TegraSPI: cannot attach the SPI%u interrupt (INTID %u)", bus, intid(bus));
     }

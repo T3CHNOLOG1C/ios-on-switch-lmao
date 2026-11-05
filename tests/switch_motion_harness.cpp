@@ -337,6 +337,11 @@ extern "C" void tegra_gpio_check_delivery(unsigned gpio, const char *who)
 {
     if (gChip->line()) panic("%s: GPIO %u interrupt lost (stub)", who, gpio);
 }
+// ArmGIC's leeway timer (r16-idle): the harness only sees the interval.
+int ioswitch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
+{
+    return timer->setTimeoutMS(ms);
+}
 
 struct HidDevice : IOService {
     SwitchHIDKind kind = kSwitchHIDTouch;

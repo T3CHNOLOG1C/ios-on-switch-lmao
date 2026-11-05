@@ -261,7 +261,8 @@ void ioswitch_diag_process_event(int pid, const char *name, const char *event, i
 void ioswitch_diag_init(const boot_args *args)
 {
     int enabled = 0, cpus = 0;
-    if (!PE_parse_boot_argn("ioswitch-diag", &enabled, sizeof(enabled)) || enabled != 1 ||
+    /* Bit 0: this native console profile; bit 1 is kprof's (osfmk/kern/ioswitch_kprof.c), so ioswitch-diag=3 is both. */
+    if (!PE_parse_boot_argn("ioswitch-diag", &enabled, sizeof(enabled)) || !(enabled & 1) ||
         !PE_parse_boot_argn("cpus", &cpus, sizeof(cpus)))
         return;
     if (cpus != 1) {

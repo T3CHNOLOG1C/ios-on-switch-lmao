@@ -28,6 +28,7 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <pexpert/pexpert.h>
+#include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../SwitchPower/SwitchPower.h"
@@ -66,9 +67,9 @@ constexpr uint8_t kFingerMode = 0x01, kResetValue = 0x80, kInterruptEnable = 0x4
 constexpr uint16_t kChipId = 0x3670;
 constexpr unsigned kEventSize = 8, kFifoDepth = 32, kSlots = kSwitchTouchSlots;
 constexpr unsigned kRealMaxX = 1264, kRealMaxY = 704, kEdgeOffset = 15;
-constexpr unsigned kEdgeBand = 24;  // px: ~3 mm on the 155 x 87 mm panel (Apple's edge contacts are ~3 mm)
-constexpr uint32_t kWatchdogMS = 10000;
-constexpr unsigned kEmptyLimit = 64;  // interrupts in a row that found the FIFO empty: INT is stuck low
+constexpr unsigned kEdgeBand = 24;       // px: ~3 mm on the 155 x 87 mm panel (Apple's edge contacts are ~3 mm)
+constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (ioswitch_check_after_ms): no wakeup of its own
+constexpr unsigned kEmptyLimit = 64;     // interrupts in a row that found the FIFO empty: INT is stuck low
 
 int command(const uint8_t *bytes, size_t length)
 {
@@ -269,7 +270,7 @@ void SwitchTouch::timerFired(OSObject *owner, IOTimerEventSource *sender)
     } else {
         tegra_gpio_check_delivery(TEGRA_GPIO_TOUCH_INT, "SwitchTouch");
     }
-    sender->setTimeoutMS(kWatchdogMS);
+    ioswitch_check_after_ms(sender, kWatchdogMS);
 }
 
 // Work loop, PX1 masked until return: drain the FIFO so the controller releases INT. While the panel is dark the events

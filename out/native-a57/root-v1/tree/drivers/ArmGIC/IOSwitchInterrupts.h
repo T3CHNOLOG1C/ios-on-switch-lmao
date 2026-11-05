@@ -22,6 +22,7 @@
 #include <stdint.h>
 
 class IOService;
+class IOTimerEventSource;
 
 // True once ArmCpu has the GIC and CPU0's interface up and nubs can be had.
 bool ioswitch_interrupts_ready(void);
@@ -35,3 +36,8 @@ IOService *ioswitch_interrupt_nub(uint32_t intid, bool edgeTriggered);
 // One line of the INTID's controller state (times handled, distributor enable/
 // pending/active, trigger, priority, target, Tegra LIC gate) for a panic message.
 void ioswitch_interrupt_describe(uint32_t intid, char *buffer, size_t size);
+
+// Arms `timer` for a lost-interrupt check (or other housekeeping no hardware event can clock) due in `ms` that may
+// run up to `ms` later: the timer gets that much leeway, so XNU folds it into a wakeup the CPU takes anyway and an
+// idle system takes none of its own for it. The check itself is unchanged; it only fires within [ms, 2 * ms].
+int ioswitch_check_after_ms(IOTimerEventSource *timer, uint32_t ms);

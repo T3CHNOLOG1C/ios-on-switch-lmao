@@ -54,6 +54,10 @@ namespace {
 constexpr uint32_t kMsiIntid = 131;
 constexpr uint32_t kIoctlTimeoutMs = 2000, kScanTimeoutMs = 15000, kJoinTimeoutMs = 20000, kRecheckMs = 50;
 constexpr uint32_t kWatchdogMs = 1000, kRssiRefreshMs = 10000, kTxWaitMs = 1000, kFlowWaitMs = 1000, kStatsMs = 5000;
+// r16-idle: the worker's tick and the chip watchdog with it, once the chip is up and no scan runs: what MSIs tell
+// (firmware halt, the bus gone) wakes the worker at once, so this only bounds how late a silent self-reset is seen.
+// A window with only an idle trickle in it is logged once a minute (kStatsQuietMs, logStats).
+constexpr uint32_t kIdleTickMs = 5000, kStatsQuietMs = 60000, kStatsTrickleFrames = 100;
 constexpr uint32_t kRetryFirstMs = 2000, kRetryMaxMs = 60000;
 
 // Firmware commands (brcmfmac fwil_types.h / nxk wl.rs).
@@ -259,6 +263,7 @@ private:
     swlan::wpa::Supplicant sup_;
     bool secured_ = false;
     uint64_t nextRssiNs_ = 0, scanEndNs_ = 0, nextStatsNs_ = 0;
+    uint64_t statsSinceNs_ = 0;  // the start of the window logStats is counting (lastCounts_)
     // The data path's counters at the last stats line (logStats).
     struct Counts {
         uint32_t rx, tx, done, refused, failed, rxGroup, rxUnicast;
@@ -1374,6 +1379,7 @@ int SwitchWLAN::joinOnce(const JoinParams &p, char *ssidText)
             nextRssiNs_ = swlan::nowNs() + kRssiRefreshMs * 1000000ULL;
             nextStatsNs_ = swlan::nowNs() + kStatsMs * 1000000ULL;
             snapshot(lastCounts_);
+            statsSinceNs_ = swlan::nowNs();
             return SWLAN_RES_OK;
         }
         waitWork(100);
@@ -1433,14 +1439,18 @@ void SwitchWLAN::run()
     IOLog("SwitchWLAN: en0 ready, %u MSIs so far\n", static_cast<unsigned>(interrupts_));
 
     uint64_t nextWatchdog = 0, retryAt = 0;
-    uint32_t backoff = kRetryFirstMs;
+    uint32_t backoff = kRetryFirstMs, tickMs = kWatchdogMs;
     for (;;) {
-        waitWork(kWatchdogMs);
+        waitWork(tickMs);
         const uint64_t now = swlan::nowNs();
-        bool chipUp = false;
-        locked([&] { chipUp = up_; });
+        bool chipUp = false, scanning = false;
+        locked([&] {
+            chipUp = up_;
+            scanning = scanning_ || scanRequested_;
+        });
+        tickMs = chipUp && !scanning ? kIdleTickMs : kWatchdogMs;
         if (chipUp && now >= nextWatchdog) {
-            nextWatchdog = now + kWatchdogMs * 1000000ULL;
+            nextWatchdog = now + tickMs * 1000000ULL;
             watchdog();
             locked([&] { chipUp = up_; });
             if (!chipUp) {
@@ -1576,11 +1586,34 @@ void SwitchWLAN::logStats()
     Counts now;
     snapshot(now);
     const Counts &was = lastCounts_;
+    const uint64_t nowNs = swlan::nowNs();
+    if (!statsSinceNs_) statsSinceNs_ = nowNs;
     if (now.rx == was.rx && now.tx == was.tx && now.refused == was.refused &&
         now.net.tx_oversize == was.net.tx_oversize) {
         lastCounts_ = now;
+        statsSinceNs_ = nowNs;
         return;
     }
+    // r16-idle: an idle trickle (fewer than kStatsTrickleFrames frames since the last line, none dropped, refused or
+    // failed: beacons' broadcasts, mDNS, a keepalive) is carried over to one line a minute, with the firmware queries
+    // below; real traffic or any trouble is logged every kStatsMs as before.
+    const bool trouble = now.refused != was.refused || now.failed != was.failed ||
+                         now.net.tx_oversize != was.net.tx_oversize || now.net.tx_refused != was.net.tx_refused ||
+                         now.net.rx_no_mbuf != was.net.rx_no_mbuf || now.net.rx_input_errors != was.net.rx_input_errors;
+    // A Bluetooth link up is coexistence's case (Wi-Fi quiet while the shared antenna serves Bluetooth): never carried
+    // over. SwitchBluetooth's snapshot reads "N ACL[, M LE][, active ...]", the rest only with links: so a link is a
+    // count that is not 0 or anything after it.
+    switch_coex_bt btState;
+    char btLinks[96];
+    bool btLink = false;
+    if (switch_bluetooth_coex(&btState, btLinks, sizeof(btLinks))) {
+        btLink = btLinks[0] != '0';
+        for (const char *c = btLinks; *c && !btLink; ++c) btLink = *c == ',';
+    }
+    const bool trickle = (now.rx - was.rx) + (now.tx - was.tx) < kStatsTrickleFrames && !btLink;
+    if (!trouble && trickle && nowNs - statsSinceNs_ < kStatsQuietMs * 1000000ULL) return;  // keep counting
+    const uint32_t windowMs = static_cast<uint32_t>((nowNs - statsSinceNs_) / 1000000ULL);
+    statsSinceNs_ = nowNs;
     int signal = 0;
     uint32_t btFlags = 0;
     bool btPower = true;
@@ -1594,7 +1627,7 @@ void SwitchWLAN::logStats()
         out, sizeof(out),
         "SwitchWLAN: stats %u ms: rx %u (en0 %u: unicast %u group %u, %llu KB, no mbuf %u, input refused %u), "
         "tx %u (%llu KB) done %u failed %u refused %u, if_output dropped %u oversize %u, %llu MSIs, %d dBm",
-        kStatsMs, now.rx - was.rx, now.net.rx_input - was.net.rx_input, now.rxUnicast - was.rxUnicast,
+        windowMs, now.rx - was.rx, now.net.rx_input - was.net.rx_input, now.rxUnicast - was.rxUnicast,
         now.rxGroup - was.rxGroup, static_cast<unsigned long long>((now.rxBytes - was.rxBytes) / 1024),
         now.net.rx_no_mbuf - was.net.rx_no_mbuf, now.net.rx_input_errors - was.net.rx_input_errors, now.tx - was.tx,
         static_cast<unsigned long long>((now.txBytes - was.txBytes) / 1024), now.done - was.done,

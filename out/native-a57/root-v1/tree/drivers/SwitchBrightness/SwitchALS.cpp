@@ -194,6 +194,8 @@ class SwitchALS : public IOService {
     uint64_t ticks = 0;
     // The stats window.
     unsigned samples = 0, luxMin = ~0u, luxMax = 0;
+    unsigned loggedLux = 0, loggedGain = ~0u;  // the last line's (noteStats); ~0u: none yet
+    int loggedPanel = -1;
 
     static void ticked(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void deadlinePassed(OSObject *owner, IOTimerEventSource *sender);
@@ -324,14 +326,24 @@ void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
     }
 }
 
-// Periodic, to the log only: what the sensor saw over the last 5 s, and the panel level it saw it at.
+// To the log only: what the sensor saw over the last 5 s, and the panel level it saw it at. r16-idle: only when that
+// changed since the last line (gain, panel level, or a reading more than an eighth, at least 2 lux, off the last line's
+// lux), so a lit screen in steady light writes no line every 5 s.
 void SwitchALS::noteStats(uint32_t level, uint32_t visible, uint32_t ir)
 {
     if (level < luxMin) luxMin = level;
     if (level > luxMax) luxMax = level;
     if (++samples < kStatsSamples) return;
-    os_log(OS_LOG_DEFAULT, "SwitchALS: %u samples, lux %u (%u..%u), ch0 %u ch1 %u gain %ux, panel %d", samples, level,
-           luxMin, luxMax, visible, ir, kGainFactor[gain], tegra_panel_brightness());
+    const int panel = tegra_panel_brightness();
+    const unsigned tolerance = loggedLux / 8 > 2 ? loggedLux / 8 : 2;
+    if (gain != loggedGain || panel != loggedPanel || luxMin + tolerance < loggedLux ||
+        luxMax > loggedLux + tolerance) {
+        os_log(OS_LOG_DEFAULT, "SwitchALS: %u samples, lux %u (%u..%u), ch0 %u ch1 %u gain %ux, panel %d", samples,
+               level, luxMin, luxMax, visible, ir, kGainFactor[gain], panel);
+        loggedLux = level;
+        loggedGain = gain;
+        loggedPanel = panel;
+    }
     samples = 0;
     luxMin = ~0u;
     luxMax = 0;

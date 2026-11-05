@@ -24,6 +24,7 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOTimerEventSource.h>
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <libkern/OSAtomic.h>
@@ -489,6 +490,13 @@ extern "C" bool ioswitch_gic_dispatch(uint32_t intid)
 {
     ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
     return gic && gic->handleInterrupt(nullptr, nullptr, static_cast<int>(intid)) == kIOReturnSuccess;
+}
+
+int ioswitch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
+{
+    uint64_t interval = 0;
+    clock_interval_to_absolutetime_interval(ms, kMillisecondScale, &interval);
+    return timer->setTimeout(kIOTimeOptionsWithLeeway, interval, interval);
 }
 
 bool ioswitch_interrupts_ready(void)

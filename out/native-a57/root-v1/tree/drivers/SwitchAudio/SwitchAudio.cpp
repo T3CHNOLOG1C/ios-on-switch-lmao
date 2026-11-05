@@ -515,6 +515,7 @@ class SwitchAudio : public IOService {
     IOTimerEventSource *statsTimer = nullptr;
     uint64_t statFrames = 0, statFramesShown = 0;
     uint32_t statStarts = 0, statStartsShown = 0, statUnderruns = 0;
+    bool statsArmed = false, statsShown = false;  // statsTimer: armed / a line written (statsFired)
     int statPeak = 0;
 
     uint64_t nowFrame() const
@@ -1163,6 +1164,7 @@ class SwitchAudio : public IOService {
     void codecRun()
     {
         idleTimer->cancelTimeout();
+        statsResume();
         tegra_gpio_check_delivery(kCodecIrq, "SwitchAudio");  // before trusting the jack state
         if (!codecOn) {
             codecBiasStandby();
@@ -1240,12 +1242,20 @@ class SwitchAudio : public IOService {
     // since the last line (0: only silence reached the DMA); then, as read now, ADMA ch0 STATUS and completed periods,
     // I2S1 enable and RX (playback) status, ADMAIF1 TX status, the jack (INT_IRQ_ST, bit 4 set = empty; PV6, 1 = empty)
     // and route, and PWR_DIG1, PWR_ANLG1, PWR_MIXER, PWR_VOL, SPK_VOL, HP_VOL, DAC1_DIG_VOL.
+    // r16-idle: the line runs while there is audio to report: the first window after boot, then from a stream's start
+    // (codecRun arms it) until a window with no stream, no start, nothing moved and the codec powered down; that window
+    // reads nothing, writes no line and leaves the timer off, so a silent console takes no stats wakeups.
     static void statsFired(OSObject *owner, IOTimerEventSource *sender)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
         const uint64_t frames = self->statFrames, moved = frames - self->statFramesShown;
-        self->statFramesShown = frames;
         const uint32_t starts = self->statStarts - self->statStartsShown;
+        if (self->statsShown && !self->control->state && !self->codecOn && !starts && !moved) {
+            self->statsArmed = false;
+            return;
+        }
+        self->statsShown = true;
+        self->statFramesShown = frames;
         self->statStartsShown += starts;
         const int peak = self->statPeak;
         self->statPeak = 0;
@@ -1263,6 +1273,13 @@ class SwitchAudio : public IOService {
             self->codecRead(DAC1_DIG_VOL));
         os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
         sender->setTimeoutMS(kStatsMS);
+    }
+    // Codec work loop: a stream starts; the stats line resumes if it had stopped (statsFired).
+    void statsResume()
+    {
+        if (!statsTimer || statsArmed) return;
+        statsArmed = true;
+        statsTimer->setTimeoutMS(kStatsMS);
     }
 
     void codecStart()
@@ -1297,7 +1314,7 @@ class SwitchAudio : public IOService {
             statsTimer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::statsFired);
             if (!statsTimer || codecLoop->addEventSource(statsTimer) != kIOReturnSuccess)
                 panic("SwitchAudio: stats timer setup failed");
-            statsTimer->setTimeoutMS(kStatsMS);
+            statsResume();
         }
     }
 

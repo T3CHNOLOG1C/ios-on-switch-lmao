@@ -277,7 +277,8 @@ constexpr uint32_t kRetrySeconds[] = {1, 2, 4, 8};
 // still running after this has stopped for a reason the driver does not know, and says so once (watch()).
 constexpr uint32_t kStuckMs = 60000;
 constexpr uint32_t kRingBytes = 16384;
-constexpr uint32_t kStatsMs = 10000;  // the stats line: at most this often, and only after traffic (logStats)
+constexpr uint32_t kStatsMs = 10000;          // the stats line: at most this often, and only after traffic (logStats)
+constexpr uint32_t kStatsRoutineWindows = 6;  // routine LE scanning only: one line per 6 windows (a minute)
 constexpr uint32_t kTraceEntries = 80, kTraceParams = 24, kTraceReturn = 12;
 constexpr uint32_t kLinkTraceLines = 600;  // link trace lines a boot (os_log; "Links" section)
 // Traced once a boot with their completions besides the LE and vendor commands: Read Local Supported Features, Read
@@ -2068,6 +2069,18 @@ void SwitchBluetooth::logStats(bool force)
         statsAt = now;
         return;
     }
+    // r16-idle: a window of routine LE scanning only (advertising reports, the LE commands that turn the scan on and
+    // off, and their completions: bluetoothd's duty-cycled scan on an idle Home Screen, ~20 reports a second) is
+    // logged once a minute with its counts carried over; anything else (ACL, SCO, a vendor command, a connection,
+    // another event, a command answered here or failed) at once, as before.
+    bool failedMoved = false;
+    for (uint32_t i = 0; i < sizeof(failed) / sizeof(failed[0]); ++i)
+        failedMoved |= failed[i].count != failedLogged[i].count;
+    const bool routine = n.acl == o.acl && n.sco == o.sco && n.vendorCommands == o.vendorCommands &&
+                         n.answered == o.answered && n.leConn == o.leConn && n.leOther == o.leOther &&
+                         n.vendor == o.vendor && n.otherEvents == o.otherEvents && n.nocp == o.nocp &&
+                         n.central == o.central && !failedMoved;
+    if (!force && routine && now - statsAt < kStatsRoutineWindows * statsWindow) return;
     char fails[200] = "";
     size_t at = 0;
     for (uint32_t i = 0; i < sizeof(failed) / sizeof(failed[0]) && at + 24 < sizeof(fails); ++i) {

@@ -57,14 +57,15 @@
 #include <os/log.h>
 #include <string.h>
 #include "../SwitchTouch/SwitchHID.h"
+#include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraSPI/TegraSPI.h"
 #include "SwitchMotion.h"
 
 namespace {
 constexpr unsigned kBus = 4, kChipSelect = 0;
-constexpr uint32_t kWatchdogMS = 1000;
-constexpr unsigned kStuckLimit = 64;  // data-ready interrupts in a row with no new data: INT2 is stuck high
+constexpr uint32_t kWatchdogMS = 1000;  // with as much leeway (ioswitch_check_after_ms): no wakeup of its own
+constexpr unsigned kStuckLimit = 64;    // data-ready interrupts in a row with no new data: INT2 is stuck high
 
 // Device orientation (file comment). Off: the service is not published and the interface stays landscape as now.
 // LandscapeOnly: face up/down and the two landscapes only (the interface can turn 180 degrees, never to portrait).
@@ -744,7 +745,7 @@ void SwitchMotion::apply()
             converting = true;
             samples = empty = 0;
             irq->enable();
-            watchdog->setTimeoutMS(kWatchdogMS);
+            ioswitch_check_after_ms(watchdog, kWatchdogMS);
         }
         // Log only (not the console): one line per change of what the part converts.
         os_log(OS_LOG_DEFAULT,
@@ -995,7 +996,7 @@ void SwitchMotion::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
         return;
     }
     self->samples = 0;
-    sender->setTimeoutMS(kWatchdogMS);
+    ioswitch_check_after_ms(sender, kWatchdogMS);
 }
 
 // IOHIDEventDriver's thread, possibly holding its work loop gate (SwitchHID.h): store and kick, never wait.

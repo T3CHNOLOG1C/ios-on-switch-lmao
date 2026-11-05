@@ -733,6 +733,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;  // stVsyncFolded: atomic (the filter)
     uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled (once a boot at most)
     bool idleSincePresent = false;
+    bool statsQuiet = false;  // the last window logged had nothing on the screen change (noteStatsWindow)
     // Under the gate, from flip(): the frame just written into surface i goes out now.
     void markFlip(int i)
     {
@@ -958,6 +959,13 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         }
         const uint64_t us = Span::ticksToUs(now - statsStart);
         const uint32_t vblanks = __atomic_exchange_n(&stVblanks, 0u, __ATOMIC_RELAXED);
+        // r16-idle: a window in which nothing reached the screen and nothing went wrong is logged once, marked quiet; the
+        // windows after it are counted and reset as always but not logged, until a swap, a present or an error comes. A
+        // lit, still screen then writes no display lines at all (it wrote two every 5 s).
+        const bool quiet = !stSwaps && !stPresents && !stUnderflows && !stGpuTimeouts && !stNewMaps && !stFallbacks &&
+                           !stVsyncIdle && !__atomic_load_n(&stRejected, __ATOMIC_RELAXED);
+        const bool logged = !(quiet && statsQuiet);
+        statsQuiet = quiet;
         auto rate = [us](uint32_t n) {
             return (unsigned long long)((uint64_t)n * 10000000ULL / (us ? us : 1));
         };  // per second, in tenths
@@ -1021,7 +1029,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             __atomic_exchange_n(&stFeFolded, 0u, __ATOMIC_RELAXED), stFlipWait.count, stLatch[0], stLatch[1]);
         add(", rejected %u (reason %u)", __atomic_exchange_n(&stRejected, 0u, __ATOMIC_RELAXED),
             __atomic_load_n(&stRejectReason, __ATOMIC_RELAXED));
-        os_log(OS_LOG_DEFAULT, "IOSwitch display stats: %s", line);  // log only, never the boot console
+        if (logged) os_log(OS_LOG_DEFAULT, "IOSwitch display stats: %s", line);  // log only, never the boot console
         // r14-pacing: swap-to-scan by stage, long presents by cause (presents/frames lost), vsync delivery (see FrameMark).
         at = 0;
         add("%u presents: swap-to-scan = queue %llu/%llu (surface wait %llu/%llu) + copy %llu/%llu + latch %llu/%llu "
@@ -1045,7 +1053,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             stLongFrames[kLongLatch]);
         add("; vsync folded %u late>1ms %u idle %u", __atomic_exchange_n(&stVsyncFolded, 0u, __ATOMIC_RELAXED),
             stVsyncLateN, stVsyncIdle);
-        os_log(OS_LOG_DEFAULT, "IOSwitch display pacing: %s", line);  // log only, never the boot console
+        if (quiet) add("%s", "; quiet (the next quiet windows are not logged)");
+        if (logged) os_log(OS_LOG_DEFAULT, "IOSwitch display pacing: %s", line);  // log only, never the boot console
         stPQueue = stPWait = stPCopy = stPLatch = Span{};
         stReplaced = stCollapsed = stVsyncLateN = stVsyncIdle = stFallbacks = 0;
         for (auto &n : stLong) n = 0;
@@ -1845,6 +1854,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     void flipLatched()
     {
         if (const int held = ring.flipHeld(); held != kNoBuffer) writeFlip(held);
+        // r16-idle: nothing is out any more, so the deadline has nothing to check; left armed it woke the CPU 100 ms after
+        // the last flip of every burst. The next writeFlip arms it again.
+        else if (ring.pending == kNoBuffer && !probeRequest && flipTimer)
+            flipTimer->cancelTimeout();
         if (kickDeferred) {
             kickDeferred = false;
             kickSwapQueue();

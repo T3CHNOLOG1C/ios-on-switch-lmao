@@ -10,9 +10,9 @@
 //     the four pads, programs master mode 3 with the chip select under software control, and claims the controller's
 //     interrupt (INTID 125), sleeping in ioswitch_interrupt_nub() until the GIC is up.
 //   * A transfer is one PIO block of 8-bit unpacked words (at most the 64-word FIFO), full duplex, with the chip select
-//     held low from before the first clock to after the last. The caller sleeps until the controller's RDY interrupt;
-//     the work loop action drains the RX FIFO. There is no polled mode: a wait that times out while TRANS_STATUS shows
-//     RDY panics with the controller and GIC state.
+//     held low from before the first clock to after the last. The caller sleeps until the controller's RDY interrupt,
+//     whose filter (primary interrupt context) clears it and wakes the caller, which drains the RX FIFO. There is no
+//     polled mode: a wait that times out while TRANS_STATUS shows RDY panics with the controller and GIC state.
 // Call from thread context only. Transfers on one bus are serialized by an IOLock.
 #ifndef TEGRA_SPI_H
 #define TEGRA_SPI_H
