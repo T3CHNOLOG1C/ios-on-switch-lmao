@@ -1274,6 +1274,31 @@ commit_upl(upl_t upl, upl_offset_t pl_offset, size_t uplSize, int flags, int abo
 }
 
 
+/*
+ * IOSwitch: what compressed page-ins cost (reported by kprof, ioswitch_kprof.c). The resource-fork types (even numbers:
+ * zlib 4, LZVN 8, LZFSE 12) store 64 KiB chunks and the decompressor decodes whole chunks, while page-ins come in the
+ * fault's cluster size (4 KiB pages here, 16 KiB on the iPad): requested bytes against the chunks they touch is the
+ * decompression done per byte used.
+ */
+extern uint64_t ioswitch_decmpfs_pageins, ioswitch_decmpfs_small, ioswitch_decmpfs_bytes, ioswitch_decmpfs_chunk_bytes;
+uint64_t ioswitch_decmpfs_pageins, ioswitch_decmpfs_small, ioswitch_decmpfs_bytes, ioswitch_decmpfs_chunk_bytes;
+static void
+ioswitch_decmpfs_count_pagein(uint32_t type, off_t offset, user_ssize_t size)
+{
+	const uint64_t chunk = 64 * 1024;
+
+	if (size <= 0 || (type & 1) != 0) {
+		return;
+	}
+	os_atomic_inc(&ioswitch_decmpfs_pageins, relaxed);
+	if (size <= (user_ssize_t)PAGE_SIZE) {
+		os_atomic_inc(&ioswitch_decmpfs_small, relaxed);
+	}
+	os_atomic_add(&ioswitch_decmpfs_bytes, (uint64_t)size, relaxed);
+	os_atomic_add(&ioswitch_decmpfs_chunk_bytes,
+	    ((((uint64_t)offset + (uint64_t)size - 1) / chunk) - ((uint64_t)offset / chunk) + 1) * chunk, relaxed);
+}
+
 errno_t
 decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmpfs_cnode *cp)
 {
@@ -1435,6 +1460,7 @@ decompress:
 	} else {
 		if (verify_block_size <= PAGE_SIZE) {
 			err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, uplPos, uplSize, 1, &vec, &did_read);
+			ioswitch_decmpfs_count_pagein(hdr->compression_type, uplPos, uplSize);
 			/* zero out whatever wasn't read */
 			if (did_read < rounded_uplSize) {
 				memset((char*)vec.buf + did_read, 0, (size_t)(rounded_uplSize - did_read));

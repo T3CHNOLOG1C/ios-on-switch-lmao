@@ -754,6 +754,32 @@ kprof_kernel_task_threads(uint64_t window)
 	kprof_thread_cur ^= 1;
 }
 
+/* bsd/kern/decmpfs.c: compressed page-ins of chunked files, their bytes and the 64 KiB chunks those bytes touched. */
+extern uint64_t ioswitch_decmpfs_pageins, ioswitch_decmpfs_small, ioswitch_decmpfs_bytes, ioswitch_decmpfs_chunk_bytes;
+
+static void
+kprof_decmpfs_line(void)
+{
+	static uint64_t last[4];
+	uint64_t        now[4] = {
+		os_atomic_load(&ioswitch_decmpfs_pageins, relaxed), os_atomic_load(&ioswitch_decmpfs_small, relaxed),
+		os_atomic_load(&ioswitch_decmpfs_bytes, relaxed), os_atomic_load(&ioswitch_decmpfs_chunk_bytes, relaxed),
+	};
+	uint64_t        d[4];
+
+	for (unsigned int i = 0; i < 4; i++) {
+		d[i] = now[i] - last[i];
+		last[i] = now[i];
+	}
+	if (d[0] == 0) {
+		return;
+	}
+	kprof_put("IOSwitch kprof decmpfs: %llu chunked page-ins (%llu of one page), %llu KiB paged in from %llu KiB of "
+	    "64 KiB chunks (%llu.%llux)", d[0], d[1], d[2] >> 10, d[3] >> 10, d[3] / MAX(d[2], 1),
+	    d[3] * 10 / MAX(d[2], 1) % 10);
+	kprof_flush();
+}
+
 /* The busiest processes' user-mode hot spots, two processes per line. */
 static void
 kprof_user_hot_spots(void)
@@ -972,6 +998,7 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 		kprof_flush();
 	}
 
+	kprof_decmpfs_line();
 	kprof_kernel_task_threads(window);
 	kprof_user_hot_spots();
 	thread_call_enter_delayed_with_leeway(kprof_call, NULL, now + kprof_window, kprof_window / 10,
