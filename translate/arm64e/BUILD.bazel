@@ -1,0 +1,86 @@
+# translate/arm64e: arm64e (Apple A12, ARMv8.3) code on the Cortex-A57 (ARMv8.0), for iPadOS 26/27. README.md has the
+# design. Not part of the iPadOS 17 boot: nothing under //:boot or //:gpu depends on this package.
+#
+#   bazel build //translate/arm64e:arm64e       the CLI: bazel run //translate/arm64e:arm64e -- COMMAND ARGS...
+#   bazel test //translate/arm64e/...           semantic, layout and Mach-O tests on this Mac
+#
+#   :a64x     the translator: classify, one-word rewrites, stubs, liveness, page translation (freestanding C, also
+#             compiled into XNU)
+#   :macho    host side: Mach-O images, the loader's translation of one image offline, chained fixups
+#   :arm64e   the CLI over both (tools/)
+#   :oracle   the classifier and translated words against LLVM (a developer check)
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+COPTS = [
+    "-std=c11",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+]
+
+filegroup(
+    name = "a64x_srcs",
+    srcs = [
+        "a64x/a64x.h",
+        "a64x/a64x_classify.c",
+        "a64x/a64x_fp16.inc",
+        "a64x/a64x_image.c",
+        "a64x/a64x_rewrite.c",
+        "a64x/a64x_vlive.inc",
+    ],
+)
+
+filegroup(
+    name = "macho_srcs",
+    srcs = [
+        "macho/macho.c",
+        "macho/macho.h",
+    ],
+)
+
+cc_library(
+    name = "a64x",
+    srcs = [
+        "a64x/a64x_classify.c",
+        "a64x/a64x_image.c",
+        "a64x/a64x_rewrite.c",
+    ],
+    hdrs = ["a64x/a64x.h"],
+    copts = COPTS,
+    textual_hdrs = [
+        "a64x/a64x_fp16.inc",
+        "a64x/a64x_vlive.inc",
+    ],
+)
+
+cc_library(
+    name = "macho",
+    srcs = ["macho/macho.c"],
+    hdrs = ["macho/macho.h"],
+    copts = COPTS,
+    deps = [":a64x"],
+)
+
+cc_binary(
+    name = "arm64e",
+    srcs = glob([
+        "tools/*.c",
+        "tools/*.h",
+    ]),
+    copts = COPTS,
+    deps = [":macho"],
+)
+
+# The classifier and translated words against LLVM's disassembler (needs llvm-mc: LLVM_MC=...).
+py_binary(
+    name = "oracle",
+    srcs = ["tools/oracle.py"],
+    data = [":arm64e"],
+)
