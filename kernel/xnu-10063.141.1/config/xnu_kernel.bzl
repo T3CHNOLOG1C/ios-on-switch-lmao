@@ -6,7 +6,7 @@ The link names every object by the path make's link used (the debug map, N_OSO, 
 objects are linked from a tree of links laid out as make's object root was, with -oso_prefix at its root.
 """
 
-load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
+load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
 load("//kernel/rules:common.bzl", "XCODE_EXECUTION")
 load("//kernel/rules:kernel.bzl", "KernelObjectsInfo")
 load("//kernel/rules:layout.bzl", "old_output_spelling")
@@ -179,6 +179,7 @@ def _xnu_kernel_impl(ctx):
 
     # LD_KERNEL_ARCHIVES as the XNU build script assembled it: firehose, then the inputs (force_load or plain).
     archives = ["-L{root}/" + _MAKE_SDKROOT + "/usr/local/lib/kernel", "-lfirehose_kernel"]
+    archive_paths = ["{root}/" + _MAKE_SDKROOT + "/usr/local/lib/kernel/libfirehose_kernel.a"]
     if len(ctx.attr.inputs) != len(ctx.attr.modes):
         fail("inputs and modes must pair up")
     files = []
@@ -197,6 +198,7 @@ def _xnu_kernel_impl(ctx):
         at = old_output_spelling(items[0].short_path)
         farm.append((items[0], at))
         files.append(items[0])
+        archive_paths.append("{root}/" + at)
         if mode == "force_load":
             archives.append("-Wl,-force_load,{root}/" + at)
         elif mode == "plain":
@@ -222,8 +224,10 @@ def _xnu_kernel_impl(ctx):
     ctx.actions.write(manifest, "".join(["{}\t{}\n".format(f.path, p) for f, p in farm]))
     listing = ctx.actions.declare_file(ctx.attr.name + ".filelist")
     ctx.actions.write(listing, "".join(["{root}/" + p + "\n" for p in filelist]))
+
+    kpi = "{root}/" + objdir + "/all-kpi.exp" if [a for a in link if a.startswith("-Wl,-exported_symbols_list,")] else ""
     arguments = ctx.actions.args()
-    arguments.add_all([manifest, listing, out, objdir, " ".join(kernel.names)])
+    arguments.add_all([manifest, listing, out, objdir, " ".join(kernel.names), kpi, " ".join(archive_paths)])
     arguments.add_all(argv)
     ctx.actions.run_shell(
         inputs = depset([manifest, listing] + [f for f, _ in farm] + [ctx.file._xcode_identity]),
@@ -233,7 +237,8 @@ def _xnu_kernel_impl(ctx):
         # debug map names each object as main's kernel did; -oso_prefix strips the tree's own location.
         command = """set -e
 root="$PWD/$3.tree"
-manifest="$1"; listing="$2"; out="$PWD/$3"; cwd="$root/$4"; own="$5"; shift 5
+manifest="$1"; listing="$2"; out="$PWD/$3"; cwd="$root/$4"; own="$5"; kpi="${{6//\\{{root\\}}/$root}}"
+archives="${{7//\\{{root\\}}/$root}}"; shift 7
 /usr/bin/perl -e 'use File::Path qw(make_path); my ($root, $here) = @ARGV[0, 1]; open(M, "<", $ARGV[2]) or die;
     while (<M>) {{ chomp; my ($src, $dst) = split /\\t/; my $to = "$root/$dst"; (my $dir = $to) =~ s,/[^/]*$,,;
     make_path($dir); symlink("$here/$src", $to) or die "$to: $!"; }}' "$root" "$PWD" "$manifest"
@@ -247,17 +252,34 @@ done
 cd "$cwd"
 if [ ${{#lto[@]}} -gt 0 ]; then
     # MakeInc.kernel PRE_LTO: bitcode objects (the 0x0b17c0de wrapper) to ltolink.filelist, the rest to
-    # nonltolink.filelist, the link's objects then the kernel's own in make's order; then the -r LTO step.
+    # nonltolink.filelist, the link's objects then the kernel's own in make's order; then the -r LTO step, which has no
+    # deployment flags: make's `xcrun -sdk iphoneos clang++` gives it the iPhoneOS SDK's platform through SDKROOT.
     : > ltolink.filelist; : > nonltolink.filelist
     for o in $(cat link.filelist) $own; do
         if [ "$(/usr/bin/od -An -N4 -tx4 "$o" | tr -d ' ')" = 0b17c0de ]; then echo "$o" >> ltolink.filelist
         else echo "$o" >> nonltolink.filelist; fi
     done
-    {clangxx} "${{lto[@]}}"
+    SDKROOT={iphoneos_sdk} {clangxx} "${{lto[@]}}"
+fi
+if [ -n "$kpi" ]; then
+    # ld takes every name of -exported_symbols_list as -u, and XNU's Private exports also name Apple's own code this
+    # tree has no source for (the DART, SART and UAT translators, the PPL IOMMU calls, IOUnifiedAddressTranslator), which
+    # no DEVELOPMENT kernel defines either. The list keeps its comments, its patterns and the names the link's inputs
+    # define (after the LTO step: justlto.o, the machine-code objects, the archives) or alias; kpi.dropped lists the
+    # rest.
+    {{ [ -e justlto.o ] && echo justlto.o
+       if [ -e nonltolink.filelist ]; then cat nonltolink.filelist; else cat link.filelist; printf '%s\\n' $own; fi
+       printf '%s\\n' $archives; }} > kpi.inputs
+    /usr/bin/xargs {nm} -g -U -j < kpi.inputs | /usr/bin/grep '^_' | /usr/bin/sort -u > kpi.defined
+    /usr/bin/awk -v dropped=kpi.dropped 'FILENAME == ARGV[1] {{ d[$1] = 1; next }}
+        FILENAME == ARGV[2] {{ if ($1 in d) d[$2] = 1; next }}
+        /^[[:space:]]*#/ || /[*?[]/ || ($1 in d) {{ print; next }}
+        NF {{ print $1 > dropped }}' kpi.defined "$cwd/all-alias.exp" "$kpi" > kpi.exp
+    rm "$kpi"; mv kpi.exp "$kpi"
 fi
 {clangxx} "${{args[@]}}"
 if LC_ALL=C grep -qF "$PWD" "$out"; then echo "the kernel names the execution root $PWD" >&2; exit 1; fi
-""".format(sdk = _MAKE_SDKROOT, clangxx = XCODE_TOOLCHAIN + "/clang++"),
+""".format(sdk = _MAKE_SDKROOT, clangxx = XCODE_TOOLCHAIN + "/clang++", iphoneos_sdk = IPHONEOS_SDK, nm = XCODE_TOOLCHAIN + "/nm"),
         env = _env(),
         mnemonic = "XnuKernelLink",
         progress_message = "Linking XNU's kernel ({} objects and the ioswitch archives)".format(len(filelist)),

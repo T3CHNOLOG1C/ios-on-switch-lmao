@@ -4424,8 +4424,10 @@ RELEASE_RECIPES = {
 }
 
 # The kernel's LTO step (MakeInc.kernel PRE_LTO): the bitcode objects (ltolink.filelist) and nonlto.o into one
-# machine-code object, justlto.o, run in {objdir}.
+# machine-code object, justlto.o, run in {objdir}. $(LD) is clang++ -nostdlib (MakeInc.def): without it the driver
+# asks ld for -lc++.
 RELEASE_LINK_LTO = [
+    "-nostdlib",
     "-arch",
     "arm64",
     "-r",
