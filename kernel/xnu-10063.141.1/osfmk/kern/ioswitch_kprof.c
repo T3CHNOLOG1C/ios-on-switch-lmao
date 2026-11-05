@@ -9,7 +9,10 @@
  * 128-byte bucket outside the kernel image (Apple's prelinked kexts). Each function also keeps a majority-vote caller
  * and owner (the process, or the kernel_task thread). A user-mode sample goes into a per-CPU table keyed by process and
  * 64-byte bucket: the unslid dyld shared cache address, or the offset from the main executable's Mach-O header, or one
- * "other" bucket (app frameworks, JIT). A timer sample cannot see interrupt handlers or code that runs with interrupts
+ * "other" bucket (app frameworks, JIT). It also goes into a small per-CPU table keyed by process and 1 MiB region of
+ * the same key: a flat profile (SwiftUI, Objective-C) spreads over thousands of 64-byte buckets, so the eight busiest
+ * cover a tenth of it, while its regions are a few dozen and name the images the time is in (r12-widgets: widget
+ * extensions at 10-15 % coverage). A timer sample cannot see interrupt handlers or code that runs with interrupts
  * masked: those land where interrupts come back on, so the exact per-CPU interrupt time is logged too.
  *
  * Reporting. A thread call swaps every CPU's table with one cross-call, merges them and writes os_log lines (the log
@@ -20,6 +23,8 @@
  *       kernel_task threads, majority caller, majority owner
  *   IOSwitch kprof kernel_task: kernel_task threads by exact CPU time, with name and their top sampled function
  *   IOSwitch kprof user 1/2, 2/2: the busiest processes' user-mode hot spots: dsc <unslid address>, main+<offset>, other
+ *   IOSwitch kprof images: the same processes' user samples by 1 MiB region: dsc <unslid address >> 20>,
+ *       main+ <offset >> 20>, other, then rest (regions past the logged ones) and lost (samples a full table refused)
  *   IOSwitch kprof masked: where the samples that land on ml_set_interrupts_enabled come from. A timer sample taken
  *       while interrupts are masked is delivered at the unmask, so these samples are masked time; three return
  *       addresses name the code that masked (the scheduler's context switch, a driver's spinlock, ...)
@@ -28,7 +33,8 @@
  * site as main+<offset> or dsc <unslid address>, so a crash that takes the boot down (launchd _PanicOnCrash) still names
  * its os_crash call site.
  * Kernel addresses are unslid: `xcrun atos -o kernel.macho -arch arm64 <addr>...` with the build's kernel.macho names
- * them. dsc addresses: `ipsw dyld a2s <21H461 dyld_shared_cache_arm64> <addr>`.
+ * them. dsc addresses: `ipsw dyld a2s <21H461 dyld_shared_cache_arm64> <addr>`; a region `dsc 18b9` is
+ * 0x18b900000-0x18b9fffff (`ipsw dyld a2s -i <dsc> 0x18b980000` names its image; a region can straddle two).
  */
 
 #include <kern/cpu_data.h>
@@ -69,6 +75,10 @@ extern int  vsnprintf(char *, size_t, const char *, va_list);
 #define KPROF_USER        8192              /* merged */
 #define KPROF_TOP_USER    4                 /* processes whose user hot spots are logged */
 #define KPROF_TOP_USER_PC 8
+#define KPROF_CPU_IMAGES  256               /* per CPU and window: (process, 1 MiB region) pairs */
+#define KPROF_IMAGES      1024              /* merged */
+#define KPROF_TOP_IMAGES  24                /* regions logged per process */
+#define KPROF_REGION      (1ull << 20)
 #define KPROF_CPU_MASKED  256               /* per CPU and window: unmask-point call chains */
 #define KPROF_MASKED      1024              /* merged */
 #define KPROF_TOP_MASKED  10
@@ -116,6 +126,8 @@ struct kprof_buf {
 	struct kprof_fn     fn[KPROF_CPU_FNS];
 	struct kprof_task   task[KPROF_CPU_TASKS];
 	struct kprof_user   user_pc[KPROF_CPU_USER];
+	struct kprof_user   image[KPROF_CPU_IMAGES];  /* key: kprof_region_key() */
+	uint32_t            image_lost;
 	struct kprof_masked masked[KPROF_CPU_MASKED];
 };
 
@@ -145,6 +157,8 @@ static uint32_t            kprof_nstarts;
 static struct kprof_fn    *kprof_fns;           /* merged window */
 static struct kprof_task  *kprof_tasks;
 static struct kprof_user  *kprof_users;
+static struct kprof_user  *kprof_images;        /* merged (process, region) table */
+static uint32_t            kprof_images_lost;
 static struct kprof_masked *kprof_masks;        /* merged window */
 static uintptr_t           kprof_unmask[2];     /* ml_set_interrupts_enabled(_with_debug) as function keys */
 static struct kprof_thread *kprof_threads[2];   /* kernel_task threads: this window, last window (sorted by tid) */
@@ -292,6 +306,14 @@ kprof_user_key(task_t task, uint64_t pc)
 	return (where & ~KPROF_U_ADDR) == KPROF_U_OTHER ? KPROF_U_OTHER : (where & ~63ull);
 }
 
+/* The 1 MiB region of a user key, for the images line: dyld shared cache images are contiguous, so a region names one
+ * image (or two at a boundary), and a flat profile collapses into a few dozen of them. */
+static uint64_t
+kprof_region_key(uint64_t key)
+{
+	return (key & ~KPROF_U_ADDR) | ((key & KPROF_U_ADDR) & ~(KPROF_REGION - 1));
+}
+
 /* The caller of the sampled function: LR in a leaf, else the return address in the function's frame record. */
 static uintptr_t
 kprof_caller(arm_saved_state_t *state, thread_t thread, uintptr_t fn)
@@ -370,8 +392,9 @@ kprof_sample(struct kprof_cpu *kc)
 		task_best_name(task, ts->name, sizeof(ts->name));
 	}
 	if (PSR64_IS_USER(get_saved_state_cpsr(state))) {
-		struct kprof_user *u = kprof_user_slot(b->user_pc, 11, task_pid(task),
-		    kprof_user_key(task, get_saved_state_pc(state)));
+		const uint64_t     key = kprof_user_key(task, get_saved_state_pc(state));
+		struct kprof_user *u = kprof_user_slot(b->user_pc, 11, task_pid(task), key);
+		struct kprof_user *r = kprof_user_slot(b->image, 8, task_pid(task), kprof_region_key(key));
 
 		b->user++;
 		if (ts != NULL) {
@@ -379,6 +402,11 @@ kprof_sample(struct kprof_cpu *kc)
 		}
 		if (u != NULL) {
 			u->samples++;
+		}
+		if (r != NULL) {
+			r->samples++;
+		} else {
+			b->image_lost++;
 		}
 		return;
 	}
@@ -820,6 +848,63 @@ kprof_user_hot_spots(void)
 	}
 }
 
+/*
+ * A process keeps the name it had at its first sample of the window, and a spawn's first sample is often still
+ * xpcproxy (it execs the daemon in place): once per summary, every process still alive gets its current name.
+ */
+static void
+kprof_refresh_names(void)
+{
+	task_t task;
+
+	lck_mtx_lock(&tasks_threads_lock);
+	queue_iterate(&tasks, task, task_t, tasks) {
+		const int32_t pid = task_pid(task);
+		uint32_t      i = kprof_hash((uint64_t)(uint32_t)pid + 1, 8);
+
+		for (unsigned int probe = 0; probe < KPROF_PROBES && kprof_tasks[i].used; probe++, i = (i + 1) & 255) {
+			if (kprof_tasks[i].pid == pid) {
+				task_best_name(task, kprof_tasks[i].name, sizeof(kprof_tasks[i].name));
+				break;
+			}
+		}
+	}
+	lck_mtx_unlock(&tasks_threads_lock);
+}
+
+/* The same processes' user samples by 1 MiB region, one line each: which images (SwiftUI, CoreText, libobjc...) a flat
+ * profile is in, where the 64-byte hot spots above cover only its busiest tenth (r12-widgets). */
+static void
+kprof_user_images(void)
+{
+	unsigned int procs[KPROF_TOP_USER], nprocs, top[KPROF_TOP_IMAGES], ntop;
+
+	for (unsigned int i = 0; i < KPROF_TASKS; i++) {
+		kprof_vals[i] = kprof_tasks[i].used ? kprof_tasks[i].user : 0;
+	}
+	nprocs = kprof_top(kprof_vals, KPROF_TASKS, procs, KPROF_TOP_USER);
+	for (unsigned int p = 0; p < nprocs; p++) {
+		const struct kprof_task *t = &kprof_tasks[procs[p]];
+		uint32_t                 logged = 0;
+
+		for (unsigned int i = 0; i < KPROF_IMAGES; i++) {
+			kprof_vals[i] = (kprof_images[i].key != 0 && kprof_images[i].pid == t->pid) ? kprof_images[i].samples : 0;
+		}
+		ntop = kprof_top(kprof_vals, KPROF_IMAGES, top, KPROF_TOP_IMAGES);
+		kprof_put("IOSwitch kprof images: %s[%d] %u:", t->name, t->pid, t->user);
+		for (unsigned int i = 0; i < ntop; i++) {
+			const struct kprof_user *r = &kprof_images[top[i]];
+			const uint64_t           kind = r->key & ~KPROF_U_ADDR;
+
+			kprof_put(" %s %llx %u,", kind == KPROF_U_DSC ? "dsc" : kind == KPROF_U_MAIN ? "main+" : "other",
+			    (r->key & KPROF_U_ADDR) >> 20, r->samples);
+			logged += r->samples;
+		}
+		kprof_put(" rest %u; lost %u", t->user - MIN(t->user, logged), kprof_images_lost);
+		kprof_flush();
+	}
+}
+
 static void
 kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
@@ -836,6 +921,8 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	bzero(kprof_fns, KPROF_FNS * sizeof(kprof_fns[0]));
 	bzero(kprof_tasks, KPROF_TASKS * sizeof(kprof_tasks[0]));
 	bzero(kprof_users, KPROF_USER * sizeof(kprof_users[0]));
+	bzero(kprof_images, KPROF_IMAGES * sizeof(kprof_images[0]));
+	kprof_images_lost = 0;
 	bzero(kprof_masks, KPROF_MASKED * sizeof(kprof_masks[0]));
 	for (unsigned int c = 0; c < kprof_ncpus; c++) {
 		struct kprof_cpu *kc = &kprof_cpus[c];
@@ -888,6 +975,21 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 				dst->samples += src->samples;
 			}
 		}
+		kprof_images_lost += b->image_lost;
+		for (unsigned int i = 0; i < KPROF_CPU_IMAGES; i++) {
+			const struct kprof_user *src = &b->image[i];
+			struct kprof_user       *dst;
+
+			if (src->key == 0) {
+				continue;
+			}
+			dst = kprof_user_slot(kprof_images, 10, src->pid, src->key);
+			if (dst != NULL) {
+				dst->samples += src->samples;
+			} else {
+				kprof_images_lost += src->samples;
+			}
+		}
 		for (unsigned int i = 0; i < KPROF_CPU_TASKS; i++) {
 			const struct kprof_task *src = &b->task[i];
 			struct kprof_task       *dst;
@@ -908,6 +1010,7 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 		bzero(b, sizeof(*b));
 	}
 
+	kprof_refresh_names();
 	kprof_put("IOSwitch kprof: %llu ms, %u cpus busy/irq %%:", window / NSEC_PER_MSEC, kprof_ncpus);
 	for (unsigned int c = 0; c < kprof_ncpus; c++) {
 		processor_t          processor = processor_array[c];
@@ -1001,6 +1104,7 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 	kprof_decmpfs_line();
 	kprof_kernel_task_threads(window);
 	kprof_user_hot_spots();
+	kprof_user_images();
 	thread_call_enter_delayed_with_leeway(kprof_call, NULL, now + kprof_window, kprof_window / 10,
 	    THREAD_CALL_DELAY_LEEWAY);
 }
@@ -1099,11 +1203,13 @@ kprof_init(void)
 	kprof_fns = kalloc_data(KPROF_FNS * sizeof(kprof_fns[0]), Z_WAITOK | Z_ZERO);
 	kprof_tasks = kalloc_data(KPROF_TASKS * sizeof(kprof_tasks[0]), Z_WAITOK | Z_ZERO);
 	kprof_users = kalloc_data(KPROF_USER * sizeof(kprof_users[0]), Z_WAITOK | Z_ZERO);
+	kprof_images = kalloc_data(KPROF_IMAGES * sizeof(kprof_images[0]), Z_WAITOK | Z_ZERO);
 	kprof_threads[0] = kalloc_data(KPROF_THREADS * sizeof(struct kprof_thread), Z_WAITOK | Z_ZERO);
 	kprof_threads[1] = kalloc_data(KPROF_THREADS * sizeof(struct kprof_thread), Z_WAITOK | Z_ZERO);
 	kprof_vals = kalloc_data(KPROF_USER * sizeof(uint64_t), Z_WAITOK | Z_ZERO);
 	kprof_masks = kalloc_data(KPROF_MASKED * sizeof(kprof_masks[0]), Z_WAITOK | Z_ZERO);
-	if (!tables || kprof_fns == NULL || kprof_tasks == NULL || kprof_users == NULL || kprof_threads[0] == NULL ||
+	if (!tables || kprof_fns == NULL || kprof_tasks == NULL || kprof_users == NULL || kprof_images == NULL ||
+	    kprof_threads[0] == NULL ||
 	    kprof_threads[1] == NULL || kprof_vals == NULL || kprof_masks == NULL) {
 		os_log(OS_LOG_DEFAULT, "IOSwitch kprof: off (a sample table could not be allocated)");
 		return;
