@@ -12,8 +12,8 @@
 // One line per stage ("TegraNVDEC: N1 ok ..."), or the failing stage's FAIL line and nothing after it. Until N4
 // publishes, every failure (a register that does not settle, an engine that does not answer, an interrupt that never
 // comes) is that one line: the engine is put back in reset with its clock off and nothing is published, so
-// VideoToolbox keeps Apple's software decoders. From N4 on the engine is proven and the project rule applies: a lost
-// syncpoint interrupt (TegraHost1x) or a job past its bound panics with one line.
+// VideoToolbox keeps Apple's software decoders. From N4 on the engine is proven: a lost syncpoint interrupt
+// (TegraHost1x) or a job past its bound panics with one line.
 //
 // Jobs (tegra_nvdec_run): host1x channel 0 in NVDEC's class, each method written through the engine's THI
 // METHOD0/METHOD1 pair (averne's av_nvtegra_cmdbuf_push_value; L4T nvhost), the picture setup from a kernel-only slot,
