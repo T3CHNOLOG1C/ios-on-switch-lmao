@@ -1,0 +1,111 @@
+/* SPDX-License-Identifier: BSD-2-Clause-Patent */
+/* The sample format SwitchAudio's Tegra backend runs the APE in, as plain C (the kernel service, and the host test
+ * tests/test_switch_audio_format.py through tests/switch_audio_format_harness.c, use this one header).
+ *
+ * S32_LE from memory to the codec: the rings hold 32-bit samples, ADMAIF1 moves them to the XBAR without packing
+ * (32-bit audio and client words), I2S1 sends each in a 32-bit slot (bit clock 64 fs, 3.072 MHz at 48 kHz, an exact
+ * 16th of PLLA_OUT0's 49.152 MHz), and the RT5639 reads the 24 bits it has from each slot (its I2S1 data length 24, its
+ * BCLK/LRCK ratio 64). The APE's audio interfaces carry integer PCM only: an audio CIF word has 8/16/24/32-bit integer
+ * samples (TEGRA210_AUDIOCIF_BITS_*) and no float format, so the plug-in's float32 still becomes integer on the CPU; at
+ * 32 bits that is one saturating NEON conversion per four samples and keeps all 24 bits the DAC has.
+ *
+ * Register words as Linux builds them for that stream (GPL-2.0 sources, field layouts and formulas only):
+ *  - CIF words: NVIDIA L4T sound/soc/tegra-alt/utils/tegra210_xbar_utils_alt.c tegra210_xbar_set_cif (Copyright (c)
+ *    2014-2019 NVIDIA CORPORATION), fields in include/tegra210_xbar_alt.h;
+ *  - ADMAIF: tegra210_admaif_alt.c tegra_admaif_hw_params for SNDRV_PCM_FORMAT_S32_LE (DATA_32BIT: PACK8 and PACK16
+ *    off, 32-bit audio and client bits);
+ *  - I2S: tegra210_i2s_alt.c tegra210_i2s_hw_params for S32_LE (BIT_SIZE_32, i2sclock = srate * 32 * 2 channels,
+ *    TIMING channel bit count (i2sclock / srate - 1) >> 1 in LRCK mode, NON_SYM only if i2sclock % (2 srate));
+ *  - RT5639: mainline sound/soc/codecs/rt5640.c rt5640_hw_params (Copyright 2011 Realtek Semiconductor Corp.) for a
+ *    24-bit sample in a 64-bit frame (frame size > 32 -> bclk_ms 1, width 24 -> RT5640_I2S_DL_24, pre-divider 1 for
+ *    MCLK 256 fs), fields in rt5640.h (RT5640_I2S1_SDP 0x70, RT5640_ADDA_CLK1 0x73). */
+#ifndef SWITCH_AUDIO_FORMAT_H
+#define SWITCH_AUDIO_FORMAT_H
+#include <stdint.h>
+
+#ifdef __cplusplus
+#define SWITCH_AUDIO_FN constexpr inline
+#else
+#define SWITCH_AUDIO_FN static inline
+#endif
+
+/* TEGRA210_AUDIOCIF_BITS_* (CIF words) and TEGRA210_I2S_BITS_* (I2S_CTRL bit size) share one encoding. */
+enum { SWITCH_AUDIO_BITS_16 = 3, SWITCH_AUDIO_BITS_24 = 5, SWITCH_AUDIO_BITS_32 = 7 };
+
+#define SWITCH_AUDIO_SAMPLE_BITS  32u /* in memory, on the ADMAIF and the XBAR */
+#define SWITCH_AUDIO_SLOT_BITS    32u /* one channel's I2S slot */
+#define SWITCH_AUDIO_CODEC_BITS   24u /* what the RT5639 takes of each slot */
+#define SWITCH_AUDIO_I2S_CHANNELS 2u
+#define SWITCH_AUDIO_BCLK_FS      (SWITCH_AUDIO_SLOT_BITS * SWITCH_AUDIO_I2S_CHANNELS) /* 64 */
+
+/* An audio CIF control word (tegra210_xbar_set_cif): FIFO threshold 24, audio channels - 1 at 20, client channels - 1
+ * at 16, audio bits 12, client bits 8, stereo-to-mono 4 (0 = channel 0); expand, replicate, truncate, mono 0. */
+SWITCH_AUDIO_FN uint32_t switch_audio_cif(uint32_t threshold, uint32_t audio_channels, uint32_t client_channels,
+                                          uint32_t audio_bits, uint32_t client_bits)
+{
+    return threshold << 24 | (audio_channels - 1) << 20 | (client_channels - 1) << 16 | audio_bits << 12 |
+           client_bits << 8;
+}
+/* ADMAIF channel CIF (TX_CTRL/RX_CTRL): PACK8 31, PACK16 30, both off for 32-bit data (tegra_admaif_set_pack_mode). */
+SWITCH_AUDIO_FN uint32_t switch_audio_admaif_cif(uint32_t channels)
+{
+    return switch_audio_cif(0, channels, channels, SWITCH_AUDIO_BITS_32, SWITCH_AUDIO_BITS_32);
+}
+/* I2S1 playback (AXBAR RX: XBAR stereo -> DAP stereo) and capture (AXBAR TX: DAP stereo -> XBAR mono, the left slot;
+ * the codec puts IN1 on both), with the RX FIFO threshold this driver has always used. */
+SWITCH_AUDIO_FN uint32_t switch_audio_i2s_rx_cif(void)
+{
+    return switch_audio_cif(3, 2, 2, SWITCH_AUDIO_BITS_32, SWITCH_AUDIO_BITS_32);
+}
+SWITCH_AUDIO_FN uint32_t switch_audio_i2s_tx_cif(void)
+{
+    return switch_audio_cif(0, 1, 2, SWITCH_AUDIO_BITS_32, SWITCH_AUDIO_BITS_32);
+}
+
+/* I2S_CTRL: FSYNC width 31 at 24 (DTB fsync-width), master at 10, LRCK frame (12 = 0), LRCK low = left (9 = 0), data
+ * on the positive edge (20 = 0), bit size 2:0. */
+SWITCH_AUDIO_FN uint32_t switch_audio_i2s_ctrl(void)
+{
+    return 31u << 24 | 1u << 10 | (uint32_t)SWITCH_AUDIO_BITS_32;
+}
+/* I2S_TIMING: the channel bit count, LRCK half a frame: (bclk / fs - 1) >> 1 = 31; symmetric (64 fs is even). */
+SWITCH_AUDIO_FN uint32_t switch_audio_i2s_timing(void)
+{
+    return (SWITCH_AUDIO_BCLK_FS - 1) >> 1;
+}
+/* CAR CLK_SOURCE_I2S0 divider (7.1: value = 2 * ratio - 2) for the bit clock from PLLA_OUT0: 49.152 MHz / 3.072 MHz
+ * = 16 -> 30. pllaout0_per_fs is PLLA_OUT0 / fs (1024 at 49.152 MHz and 48 kHz). */
+SWITCH_AUDIO_FN uint32_t switch_audio_i2s_divider(uint32_t pllaout0_per_fs)
+{
+    return 2 * (pllaout0_per_fs / SWITCH_AUDIO_BCLK_FS) - 2;
+}
+
+/* RT5639 (rt5640.h): I2S1_SDP master/slave 15 (1 = slave), BCLK polarity 7 (0 = normal), data length 3:2 (2 = 24
+ * bits), format 1:0 (0 = I2S); ADDA_CLK1 BCLK/LRCK 15 (1 = 64), I2S1 pre-divider 14:12 (0 = /1). */
+#define SWITCH_AUDIO_RT5640_SDP_MASK  ((1u << 15) | (1u << 7) | (3u << 2) | 3u)
+#define SWITCH_AUDIO_RT5640_SDP       ((1u << 15) | (2u << 2))
+#define SWITCH_AUDIO_RT5640_ADDA_MASK ((1u << 15) | (7u << 12))
+#define SWITCH_AUDIO_RT5640_ADDA      (1u << 15)
+
+/* Host ticks per I2S frame in 32.32 for PLLA = ref * n_eff / (8192 m p) (n_eff in 1/8192: n + 1/2 + sdm / 8192),
+ * PLLA_OUT0 = PLLA * 2 / out0_x2 (out0_x2 = 2 * the PLLA_OUT0 ratio: 15 for /7.5), bit clock = PLLA_OUT0 /
+ * (pllaout0_per_fs / 64), fs = bit clock / 64. Split so nothing passes 64 bits (no 128-bit helpers in the kernel). */
+SWITCH_AUDIO_FN uint64_t switch_audio_ticks_per_frame_q32_parts(uint64_t num, uint64_t den)
+{
+    return (num / den) << 32 | ((num % den) << 16) / den << 16 | (((((num % den) << 16) % den) << 16) / den);
+}
+SWITCH_AUDIO_FN uint64_t switch_audio_ticks_per_frame_q32(uint64_t host_hz, uint64_t ref_hz, uint64_t m, uint64_t p,
+                                                          uint64_t n_eff, uint64_t out0_x2, uint64_t pllaout0_per_fs)
+{
+    return switch_audio_ticks_per_frame_q32_parts(host_hz * 8192 * m * p * out0_x2 * pllaout0_per_fs,
+                                                  2 * ref_hz * n_eff);
+}
+/* The same frame rate in mHz (for the log): 2 ref n_eff / (8192 m p out0_x2 pllaout0_per_fs), rounded down. */
+SWITCH_AUDIO_FN uint64_t switch_audio_rate_millihz(uint64_t ref_hz, uint64_t m, uint64_t p, uint64_t n_eff,
+                                                   uint64_t out0_x2, uint64_t pllaout0_per_fs)
+{
+    return 2 * ref_hz * n_eff * 1000 / (8192 * m * p * out0_x2 * pllaout0_per_fs);
+}
+
+#undef SWITCH_AUDIO_FN
+#endif

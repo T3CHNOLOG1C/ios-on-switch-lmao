@@ -3,8 +3,10 @@
  * (hal/SwitchAudioPlugIn.c). Modelled on UniXNU-sheng's package/ShengAudioAbi.h.
  *
  * The plug-in opens the service, maps three memory types and starts and stops each direction. Memory type 0 is the
- * control page, 1 the playback ring, 2 the capture ring. Rings hold 16-bit little-endian interleaved samples,
- * ring_frames frames each; sample time t lives at frame t % ring_frames.
+ * control page, 1 the playback ring, 2 the capture ring. Rings hold 32-bit little-endian signed interleaved samples
+ * (S32_LE, full scale +-2^31; version 3, 16-bit before), ring_frames frames each; sample time t lives at frame
+ * t % ring_frames. The Tegra backend hands them to the APE as they are (SwitchAudioFormat.h): the codec plays the top
+ * 24 bits of each.
  *
  * Sample time 0 is host time anchor_host, and one frame lasts ticks_per_frame_q32 / 2^32 host ticks. The null backend
  * sets both once; the Tegra I2S backend sets anchor_host again each time the hardware starts (the host time its DMA
@@ -24,12 +26,13 @@
 
 #define SWITCH_AUDIO_CLASS         "SwitchAudio"
 #define SWITCH_AUDIO_MAGIC         0x53574155u /* 'SWAU' */
-#define SWITCH_AUDIO_VERSION       2u
+#define SWITCH_AUDIO_VERSION       3u
 #define SWITCH_AUDIO_RATE          48000u
 #define SWITCH_AUDIO_OUT_CHANNELS  2u
 #define SWITCH_AUDIO_IN_CHANNELS   1u
 #define SWITCH_AUDIO_PERIOD_FRAMES 480u   /* 10 ms: the null backend's step */
 #define SWITCH_AUDIO_RING_FRAMES   16384u /* 341 ms: 8 ADMA periods of 2048 frames */
+typedef int32_t switch_audio_sample_t;    /* a ring sample: S32_LE */
 
 enum { SwitchAudioMemoryControl = 0, SwitchAudioMemoryOutput = 1, SwitchAudioMemoryInput = 2 };
 enum {
@@ -53,6 +56,8 @@ typedef struct {
     volatile uint64_t out_frames;          /* the service: playback consumed (and cleared) below this sample time */
     volatile uint64_t in_frames;           /* the service: capture valid below this sample time */
     volatile uint64_t out_written;         /* the plug-in: the sample time after the last frame it wrote */
+    volatile uint64_t io_cycles;           /* the plug-in: playback IO cycles (WriteMix calls) since it mapped this */
+    volatile uint64_t io_frames;           /* the plug-in: frames those cycles wrote */
 } SwitchAudioControl;
 
 #endif

@@ -38,6 +38,8 @@
 //  - CoreAudio's 24 MHz host clock constant must be set to the board's timer (19.2 MHz here, as on sheng),
 //  - zero time stamps start at the frame IO starts on, with a period longer than safety offset plus one IO cycle.
 //
+// Samples: float32 from the audio server, S32_LE in the rings (../SwitchAudioAbi.h version 3; SwitchAudioConvert.h);
+// the kernel service is built from the same ABI header and the two ship together (a version mismatch refuses the map).
 // Build (the iOS SDK has no AudioServerPlugIn headers; the macOS ones declare the same interface):
 //   mkdir -p H/CoreAudio; for h in AudioServerPlugIn.h AudioHardwareBase.h AudioHardware.h; do
 //     ln -sf "$(xcrun --sdk macosx --show-sdk-path)/System/Library/Frameworks/CoreAudio.framework/Headers/$h" H/CoreAudio/; done
@@ -60,6 +62,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "SwitchAudioAbi.h"
+#include "SwitchAudioConvert.h"
 
 enum {
     kPlugIn = kAudioObjectPlugInObject,
@@ -85,7 +88,7 @@ static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
 static atomic_uint gRefs = 1;
 static io_connect_t gConnect;
 static SwitchAudioControl *gControl;
-static int16_t *gOut, *gIn;
+static switch_audio_sample_t *gOut, *gIn;
 static UInt32 gSpeakerUsers, gMicUsers, gHawkingUsers;  // IO clients per device (gLock)
 static Float32 gVolume = 1.0f;
 static Float64 gTicksPerFrame;      // the service's clock (its control page), nominal until it is mapped
@@ -669,11 +672,6 @@ static OSStatus BeginIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, 
     (void)info;
     return 0;
 }
-static inline int16_t toS16(Float32 v)
-{
-    v *= 32767.0f;
-    return (int16_t)(v > 32767.0f ? 32767 : v < -32768.0f ? -32768 : v);
-}
 static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, AudioObjectID stream, UInt32 client,
                               UInt32 op, UInt32 frames, const AudioServerPlugInIOCycleInfo *info, void *main,
                               void *secondary)
@@ -690,28 +688,27 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
     if (op == kAudioServerPlugInIOOperationWriteMix && stream == kSpeakerOut) {
         // The audio server can run more than one IO context on the device, each with its own mix: add to what the ring
         // holds (the service clears every period it consumes) so one context's silence does not erase another's sound.
-        const Float32 *src = main, g = gain();
+        // (On 21H461 one context plays the speaker, VirtualAudio's aggregate: the add meets silence.) Float32 becomes
+        // S32 in one saturating step (SwitchAudioConvert.h), in at most two runs either side of the ring's end.
         const uint64_t first = (uint64_t)info->mOutputTime.mSampleTime;
-        uint64_t t = first;
-        for (UInt32 i = 0; i < frames; ++i, ++t) {
-            int16_t *dst = gOut + 2 * (t % SWITCH_AUDIO_RING_FRAMES);
-            dst[0] = toS16(dst[0] / 32767.0f + src[2 * i] * g);
-            dst[1] = toS16(dst[1] / 32767.0f + src[2 * i + 1] * g);
+        const uint32_t total = frames < SWITCH_AUDIO_RING_FRAMES ? frames : SWITCH_AUDIO_RING_FRAMES;
+        const uint32_t at = (uint32_t)(first % SWITCH_AUDIO_RING_FRAMES);
+        const uint32_t run = switch_audio_ring_mix(gOut, SWITCH_AUDIO_RING_FRAMES, 2, first, main, frames, gain());
+        if (gControl->backend == SwitchAudioBackendTegraI2S && total) {
+            cleanToMemory(gOut + 2 * at, run * 2 * sizeof(switch_audio_sample_t));
+            if (run < total) cleanToMemory(gOut, (total - run) * 2 * sizeof(switch_audio_sample_t));
         }
-        if (gControl->backend == SwitchAudioBackendTegraI2S && frames) {
-            const uint64_t at = first % SWITCH_AUDIO_RING_FRAMES;
-            const uint64_t total = frames < SWITCH_AUDIO_RING_FRAMES ? frames : SWITCH_AUDIO_RING_FRAMES;
-            const uint64_t run = total < SWITCH_AUDIO_RING_FRAMES - at ? total : SWITCH_AUDIO_RING_FRAMES - at;
-            cleanToMemory(gOut + 2 * at, run * 2 * sizeof(int16_t));
-            if (run < total) cleanToMemory(gOut, (total - run) * 2 * sizeof(int16_t));
-        }
+        const uint64_t t = first + frames;
         if (t > gControl->out_written) gControl->out_written = t;
+        // IO cycle accounting for the service's stats line (wake-ups per second, frames per cycle).
+        gControl->io_cycles = gControl->io_cycles + 1;
+        gControl->io_frames = gControl->io_frames + frames;
     } else if (op == kAudioServerPlugInIOOperationReadInput && stream == kMicIn) {
         Float32 *dst = main;
         uint64_t t = (uint64_t)info->mInputTime.mSampleTime;
         const uint64_t captured = gControl->in_frames;
         for (UInt32 i = 0; i < frames; ++i, ++t)
-            dst[i] = t < captured ? gIn[t % SWITCH_AUDIO_RING_FRAMES] / 32768.0f : 0.0f;
+            dst[i] = t < captured ? switch_audio_s32_to_float(gIn[t % SWITCH_AUDIO_RING_FRAMES]) : 0.0f;
     }
     return 0;
 }

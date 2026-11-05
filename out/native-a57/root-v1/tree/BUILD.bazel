@@ -1197,7 +1197,10 @@ ios_binary(
 ios_binary(
     name = "SwitchAudioHAL",
     srcs = ["drivers/SwitchAudio/hal/SwitchAudioPlugIn.c"],
-    hdrs = ["drivers/SwitchAudio/SwitchAudioAbi.h"],
+    hdrs = [
+        "drivers/SwitchAudio/SwitchAudioAbi.h",
+        "drivers/SwitchAudio/hal/SwitchAudioConvert.h",
+    ],
     copts = [
         "-I",
         "{tree}/drivers/SwitchAudio",

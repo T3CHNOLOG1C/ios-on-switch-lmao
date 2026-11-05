@@ -33,13 +33,16 @@
 //    muxed as L4T leaves it before the codec is read; its level only goes into the diagnostics here.
 //    Microphone vs plain headphones: MICBIAS1 over-current at 600 uA.
 //  - Link: Tegra I2S1 (AHUB 0x702d1000; CAR clock "i2s0") is bit and frame clock master, the codec slave
-//    (dai-link-1: format i2s, no bitclock-master), 16-bit stereo, 48 kHz, BCLK 32 fs. MCLK 256 fs = 12.288 MHz
-//    (mclk-fs 256) on AUD_MCLK = PMC clk_out_1 <- extern1 <- PLLA_OUT0 (clk-tegra210.c init table); the codec runs
-//    from MCLK directly (sysclk source MCLK, pre-divider 1). Pins DAP1_FS/DIN/DOUT/SCLK (function i2s1), AUD_MCLK.
+//    (dai-link-1: format i2s, no bitclock-master), stereo, 48 kHz. Samples are S32_LE from memory to the I2S
+//    (SwitchAudioFormat.h): 32-bit slots, BCLK 64 fs, and the codec reads 24 bits of each (I2S1 data length 24, BCLK
+//    64 fs), as rt5640_hw_params sets it for 24-bit samples in a 64-bit frame. (The DTB's dai-link says s16_le, BCLK
+//    32 fs: what L4T and this driver ran until r17-audio.) MCLK 256 fs = 12.288 MHz (mclk-fs 256) on AUD_MCLK = PMC
+//    clk_out_1 <- extern1 <- PLLA_OUT0 (clk-tegra210.c init table); the codec runs from MCLK directly (sysclk source
+//    MCLK, pre-divider 1). Pins DAP1_FS/DIN/DOUT/SCLK (function i2s1), AUD_MCLK.
 //  - Clocks for 48 kHz (tegra_asoc_utils_alt.c): PLLA 368.64 MHz (T210B01 table, clk-tegra210b01.c:1789-1793:
 //    38.4 MHz ref, m 2, n 38, p 2, SDM 0xfccc, really 368639062.5 Hz), PLLA_OUT0 49.152 MHz, AHUB (d_audio)
-//    = PLLA_OUT0, I2S 1.536 MHz, extern1 12.288 MHz, APE from PLLP at 25.5 MHz. The real frame rate is therefore
-//    47999.878 Hz, and ticks_per_frame_q32 says so.
+//    = PLLA_OUT0, I2S 3.072 MHz (64 fs), extern1 12.288 MHz, APE from PLLP at 25.5 MHz. The real frame rate is
+//    therefore 47999.878 Hz, and ticks_per_frame_q32 says so.
 //  - Routing: XBAR "I2S1 Mux" = ADMAIF1 (playback), "ADMAIF1 Mux" = I2S1 (capture), as nvaudio_conf.xml sets them;
 //    ADMA request line 1 = ADMAIF1 (DTB admaif dmas). ADSP and the AHUB effect blocks are not used.
 //  - Interrupts: ADMA channel n raises SPI 24+n on the AGIC, the APE's own GICv2 (distributor 0x702f9000, CPU
@@ -49,10 +52,11 @@
 //    AGIC, ADMA_CH_INT_STATUS/CLEAR. Channels 0 (playback) and 1 (capture) are host channels.
 //
 // The ADMA plays the playback ring and fills the capture ring in place: one cycle of 8 periods (the most an ADMA
-// cycle holds) is exactly one ring, so a period is 2048 frames (42.7 ms). Each period interrupt clears the playback
-// period just consumed (so the next turn mixes onto silence) and invalidates the capture period just written, then
-// moves out_frames/in_frames on. The ADMA does not snoop the caches: the plug-in cleans what it mixes, this driver
-// cleans what it clears and invalidates what the ADMA wrote. Sample time 0 is the host time the playback DMA started.
+// cycle holds) is exactly one ring, so a period is 2048 frames (42.7 ms, 16 KiB of S32 stereo). Each period interrupt
+// clears the playback period just consumed (so the next turn mixes onto silence) and invalidates the capture period
+// just written, then moves out_frames/in_frames on. The ADMA does not snoop the caches: the plug-in cleans what it
+// mixes, this driver cleans what it clears and invalidates what the ADMA wrote. Sample time 0 is the host time the
+// playback DMA started.
 //
 // Started by ioswitch_audio_publish() from the board thread; the classes register through the normal static
 // initializer (they derive only from XNU's own IOService and IOUserClient).
@@ -68,6 +72,7 @@
 #include <kern/clock.h>
 #include <pexpert/pexpert.h>
 #include "SwitchAudioAbi.h"
+#include "SwitchAudioFormat.h"
 #include "../ArmGIC/IOSwitchInterrupts.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
@@ -82,8 +87,8 @@ int tegra_gpio_output(unsigned gpio, int value);
 }
 
 namespace {
-constexpr uint32_t kOutBytes = SWITCH_AUDIO_RING_FRAMES * SWITCH_AUDIO_OUT_CHANNELS * sizeof(int16_t);
-constexpr uint32_t kInBytes = SWITCH_AUDIO_RING_FRAMES * SWITCH_AUDIO_IN_CHANNELS * sizeof(int16_t);
+constexpr uint32_t kOutBytes = SWITCH_AUDIO_RING_FRAMES * SWITCH_AUDIO_OUT_CHANNELS * sizeof(switch_audio_sample_t);
+constexpr uint32_t kInBytes = SWITCH_AUDIO_RING_FRAMES * SWITCH_AUDIO_IN_CHANNELS * sizeof(switch_audio_sample_t);
 constexpr uint32_t kTickMS = SWITCH_AUDIO_PERIOD_FRAMES * 1000 / SWITCH_AUDIO_RATE;
 // Below 4 GiB and physically contiguous, so the ADMA plays the rings in place (32-bit addresses).
 constexpr mach_vm_address_t kDmaMask = 0x00000000fffff000ULL;
@@ -141,6 +146,7 @@ constexpr uint32_t kGraceMS = 50;        // after a missed deadline, for an inte
 constexpr uint32_t kIdleMS = 5000;       // codec power-down after the last stream stops (ASoC pmdown_time)
 constexpr uint32_t kJackSettleMS = 250;  // jack contact bounce
 constexpr uint32_t kStatsMS = 5000;      // switch-audio-stats line
+constexpr uint64_t kSettlePeriods = 2;   // switch-audio-stats: periods after a start left out of lead and lag
 constexpr unsigned kChOut = 0, kChIn = 1;
 constexpr uint32_t kAgicAdma = 32 + 24;  // AGIC INTID of ADMA channel 0
 constexpr uint32_t kCascadeIntid = 32 + 102;
@@ -220,9 +226,12 @@ enum : uint32_t {
 constexpr uint32_t kPllaM = 2, kPllaN = 38, kPllaP = 2, kPllaPHw = 1, kPllaSdm = 0xfccc;
 constexpr uint32_t kPllaMnp = (kPllaPHw << 20) | (kPllaN << 8) | kPllaM;
 constexpr int64_t kPllaNEff = 8192 * (int64_t)kPllaN + 4096 + (int64_t)(int16_t)kPllaSdm;  // n_eff * 8192 = 314572
-// 7.1 dividers (value = 2 * ratio - 2): PLLA_OUT0 = PLLA / 7.5, I2S = PLLA_OUT0 / 32, extern1 = PLLA_OUT0 / 4,
-// APE = PLLP 408 MHz / 16.
-constexpr uint32_t kPllaOut0Div = 13, kI2sDiv = 62, kExtern1Div = 6, kApeSource = (4u << 29) | 30;
+// 7.1 dividers (value = 2 * ratio - 2): PLLA_OUT0 = PLLA / 7.5, I2S = PLLA_OUT0 / 16 (the 64 fs bit clock),
+// extern1 = PLLA_OUT0 / 4, APE = PLLP 408 MHz / 16. PLLA_OUT0 is 1024 fs.
+constexpr uint32_t kPllaOut0X2 = 15, kPllaOut0PerFs = 1024;
+constexpr uint32_t kPllaOut0Div = kPllaOut0X2 - 2, kI2sDiv = switch_audio_i2s_divider(kPllaOut0PerFs), kExtern1Div = 6,
+                   kApeSource = (4u << 29) | 30;
+static_assert(kI2sDiv == 30, "I2S0 = PLLA_OUT0 / 16");
 
 // APBDEV_PMC (hekate bdk/soc/pmc_t210.h; mainline pmc.c tegra210_io_pads/io_pad_vctrls).
 enum : uint32_t {
@@ -292,16 +301,11 @@ enum : uint32_t {
     I2S_TIMING = 0x10a4,
 };
 constexpr uint32_t kXbarFromAdmaif1 = 1u << 0, kXbarFromI2s1 = 1u << 16;  // MUX_VALUE(0, 0), MUX_VALUE(0, 16)
-// Audio CIF control (tegra_cif.h): FIFO threshold 24, audio channels - 1 at 20, client channels - 1 at 16, 16-bit
-// audio and client samples (3) at 12 and 8, stereo-to-mono 0 = channel 0. ADMAIF PACK16: two samples per word.
-constexpr uint32_t cif(uint32_t threshold, uint32_t audio, uint32_t client)
-{
-    return threshold << 24 | (audio - 1) << 20 | (client - 1) << 16 | 3u << 12 | 3u << 8;
-}
-constexpr uint32_t kPack16 = 1u << 30;
-// I2S1: master, LRCK frame, LRCK low = left, data on the rising edge, 16-bit, DTB fsync-width 31; LRCK half-frame
-// 16 bit clocks (TIMING = bclk / (2 fs) - 1); data offset 1 (I2S); RX FIFO threshold 3 (tegra210_i2s.c default).
-constexpr uint32_t kI2sCtrl = (31u << 24) | (1u << 10) | 3u, kI2sTiming = 15, kI2sDataOffset = 1u << 8;
+// The S32 link's words (SwitchAudioFormat.h, as L4T's hw_params build them for S32_LE): audio CIFs 32/32 bits, the
+// ADMAIF unpacked (one sample per word), I2S1 master in LRCK frames with 32-bit slots (TIMING 31: half a 64 fs frame),
+// data offset 1 (I2S).
+constexpr uint32_t kI2sCtrl = switch_audio_i2s_ctrl(), kI2sTiming = switch_audio_i2s_timing(), kI2sDataOffset = 1u << 8;
+static_assert(kI2sCtrl == 0x1f000407 && kI2sTiming == 31, "I2S1: 32-bit slots, 64 fs");
 
 // ADMA (tegra210-adma.c, L4T): channel registers at 0x80 per channel, globals at 0xc00.
 enum : uint32_t {
@@ -513,10 +517,12 @@ class SwitchAudio : public IOService {
     Route route = kRouteNone;
     // switch-audio-stats: counted on the audio work loop, printed (and the peak reset) on the codec work loop.
     IOTimerEventSource *statsTimer = nullptr;
-    uint64_t statFrames = 0, statFramesShown = 0;
+    uint64_t statFrames = 0, statFramesShown = 0, statIoCyclesShown = 0, statIoFramesShown = 0;
     uint32_t statStarts = 0, statStartsShown = 0, statUnderruns = 0;
     bool statsArmed = false, statsShown = false;  // statsTimer: armed / a line written (statsFired)
     int statPeak = 0;
+    int64_t statLagMin = INT64_MAX, statLagMax = INT64_MIN, statLeadMin = INT64_MAX;
+    uint64_t periodTicksQ16 = 0;  // host ticks per ADMA period in 48.16 (kPeriodFrames * ticks_per_frame_q32 >> 16)
 
     uint64_t nowFrame() const
     {
@@ -525,7 +531,10 @@ class SwitchAudio : public IOService {
         const uint64_t ticks = now - control->anchor_host;  // split so nothing overflows (no 128-bit helpers here)
         return ticks / hz * SWITCH_AUDIO_RATE + ticks % hz * SWITCH_AUDIO_RATE / hz;
     }
-    int16_t *ring(uint32_t type) const { return static_cast<int16_t *>(memory[type]->getBytesNoCopy()); }
+    switch_audio_sample_t *ring(uint32_t type) const
+    {
+        return static_cast<switch_audio_sample_t *>(memory[type]->getBytesNoCopy());
+    }
 
     // ---- Null backend -------------------------------------------------------------------------------------------
     // Playback up to now is "played"; clear it so the next turn of the ring mixes onto silence.
@@ -533,14 +542,14 @@ class SwitchAudio : public IOService {
     {
         const uint64_t now = nowFrame();
         if (control->state & SwitchAudioOutputRunning) {
-            int16_t *out = ring(SwitchAudioMemoryOutput);
+            switch_audio_sample_t *out = ring(SwitchAudioMemoryOutput);
             uint64_t from = control->out_frames;
             if (now > from + SWITCH_AUDIO_RING_FRAMES) from = now - SWITCH_AUDIO_RING_FRAMES;
             while (from < now) {
                 const uint64_t at = from % SWITCH_AUDIO_RING_FRAMES;
                 const uint64_t run =
                     now - from < SWITCH_AUDIO_RING_FRAMES - at ? now - from : SWITCH_AUDIO_RING_FRAMES - at;
-                bzero(out + at * SWITCH_AUDIO_OUT_CHANNELS, run * SWITCH_AUDIO_OUT_CHANNELS * sizeof(int16_t));
+                bzero(out + at * SWITCH_AUDIO_OUT_CHANNELS, run * SWITCH_AUDIO_OUT_CHANNELS * sizeof(*out));
                 from += run;
             }
             control->out_frames = now;
@@ -563,13 +572,12 @@ class SwitchAudio : public IOService {
         return base;
     }
 
-    // The rate the I2S really runs at, as host ticks per frame in 32.32: fs = ref * n_eff / (8192 m p) * 2/15 / 32 / 32.
+    // The rate the I2S really runs at, as host ticks per frame in 32.32: fs = ref * n_eff / (8192 m p) * 2/15 / 1024
+    // (PLLA_OUT0 / 16 for the bit clock, / 64 bit clocks a frame).
     uint64_t tegraTicksPerFrame(uint64_t refHz) const
     {
-        const uint64_t num = hz * 8192 * kPllaM * kPllaP * 15 * 32 * 32, den = 2 * refHz * (uint64_t)kPllaNEff;
-        const uint64_t whole = num / den, rest = num % den;
-        const uint64_t high = (rest << 16) / den, low = (((rest << 16) % den) << 16) / den;
-        return whole << 32 | high << 16 | low;
+        return switch_audio_ticks_per_frame_q32(hz, refHz, kPllaM, kPllaP, (uint64_t)kPllaNEff, kPllaOut0X2,
+                                                kPllaOut0PerFs);
     }
 
     // PLLA 368.64 MHz and PLLA_OUT0 49.152 MHz, in the order clk-pll.c programs a disabled SDM PLL (set_defaults,
@@ -756,7 +764,7 @@ class SwitchAudio : public IOService {
 
     void tegraStart()
     {
-        int16_t *out = ring(SwitchAudioMemoryOutput), *in = ring(SwitchAudioMemoryInput);
+        switch_audio_sample_t *out = ring(SwitchAudioMemoryOutput), *in = ring(SwitchAudioMemoryInput);
         bzero(out, kOutBytes);
         cacheClean(out, kOutBytes);
         bzero(in, kInBytes);
@@ -774,14 +782,14 @@ class SwitchAudio : public IOService {
         w32(ahub, I2S_TIMING, kI2sTiming);
         w32(ahub, I2S_RX_CTRL, kI2sDataOffset);
         w32(ahub, I2S_TX_CTRL, kI2sDataOffset);
-        w32(ahub, I2S_RX_CIF, cif(3, 2, 2));  // playback: XBAR stereo -> DAP stereo
-        w32(ahub, I2S_TX_CIF, cif(0, 1, 2));  // capture: DAP stereo -> XBAR mono (left: the codec puts IN1 on both)
+        w32(ahub, I2S_RX_CIF, switch_audio_i2s_rx_cif());  // playback: XBAR stereo -> DAP stereo
+        w32(ahub, I2S_TX_CIF, switch_audio_i2s_tx_cif());  // capture: DAP stereo -> XBAR mono (left: IN1 is on both)
         i2sSoftReset(I2S_RX_SOFT_RESET, "I2S1 RX");
         if (tegraCapture) i2sSoftReset(I2S_TX_SOFT_RESET, "I2S1 TX");
         softReset(ADMAIF_TX_SOFT_RESET, "ADMAIF1 TX");
         softReset(ADMAIF_RX_SOFT_RESET, "ADMAIF1 RX");
-        w32(ahub, ADMAIF_TX_CIF, kPack16 | cif(0, 2, 2));
-        w32(ahub, ADMAIF_RX_CIF, kPack16 | cif(0, 1, 1));
+        w32(ahub, ADMAIF_TX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_OUT_CHANNELS));
+        w32(ahub, ADMAIF_RX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_IN_CHANNELS));
         const unsigned channels = tegraCapture ? 2 : 1;
         for (unsigned ch = 0; ch < channels; ++ch) {
             const uint32_t base = ch * CH_STRIDE;
@@ -841,7 +849,8 @@ class SwitchAudio : public IOService {
     void playedPeriod()
     {
         const uint64_t n = periods[kChOut]++;
-        int16_t *slot = ring(SwitchAudioMemoryOutput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS;
+        switch_audio_sample_t *slot =
+            ring(SwitchAudioMemoryOutput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS;
         const uint64_t done = (n + 1) * kPeriodFrames, now = nowFrame();
         if (statsTimer) notePlayed(slot, done);
         bzero(slot, kOutPeriodBytes);
@@ -854,17 +863,35 @@ class SwitchAudio : public IOService {
                 done, now, r32(ahub, I2S_RX_STATUS), r32(ahub, I2S_CTRL), r32(ahub, I2S_TIMING));
         }
     }
-    // switch-audio-stats: the period that just played, before it is cleared: its loudest sample, and an underrun when the
-    // plug-in had not written up to its end. (The plug-in's writes are already in this CPU-coherent mapping.)
-    void notePlayed(const int16_t *slot, uint64_t done)
+    // switch-audio-stats: the period that just played, before it is cleared: its loudest sample (in 16-bit units, as
+    // the line has always shown it: 32767 is full scale), an underrun when the plug-in had not written up to its end,
+    // how far past it the plug-in had written (the write-ahead margin: the safety offset in use, less the IO thread's
+    // lateness), and how late this interrupt runs after the period's end on the I2S clock model the plug-in's zero
+    // time stamps use (anchor_host + frames * ticks_per_frame_q32). The model and the host timer both run from the
+    // 38.4 MHz oscillator, so the lag only holds the DMA's start offset and the interrupt latency: one that drifts
+    // over a session means the time stamps do. The first kSettlePeriods of a start stay out of lead and lag (the audio
+    // server's first IO cycle comes after them: "under" has always counted one per start). (The plug-in's writes are
+    // already in this CPU-coherent mapping.)
+    void notePlayed(const switch_audio_sample_t *slot, uint64_t done)
     {
         statFrames += kPeriodFrames;
+        const bool settled = done > kSettlePeriods * kPeriodFrames;
+        if (settled) {
+            const int64_t lagTicks = (int64_t)(mach_absolute_time() - control->anchor_host) -
+                                     (int64_t)((done / kPeriodFrames) * periodTicksQ16 >> 16);
+            const int64_t lagUs = lagTicks * 1000000 / (int64_t)hz;
+            if (lagUs < statLagMin) statLagMin = lagUs;
+            if (lagUs > statLagMax) statLagMax = lagUs;
+        }
         if (!(control->state & SwitchAudioOutputRunning)) return;
-        if (control->out_written < done) ++statUnderruns;
+        const int64_t lead = (int64_t)control->out_written - (int64_t)done;
+        if (settled && lead < statLeadMin) statLeadMin = lead;
+        if (lead < 0) ++statUnderruns;
         int peak = statPeak;
         for (uint32_t i = 0; i < kPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS; ++i) {
-            const int sample = slot[i] < 0 ? -slot[i] : slot[i];
-            if (sample > peak) peak = sample;
+            const int sample = slot[i] >> 16;  // -32768..32767
+            const int magnitude = sample < 0 ? -sample : sample;
+            if (magnitude > peak) peak = magnitude;
         }
         statPeak = peak;
     }
@@ -873,7 +900,8 @@ class SwitchAudio : public IOService {
     void capturedPeriod()
     {
         const uint64_t n = periods[kChIn]++;
-        cacheFlush(ring(SwitchAudioMemoryInput) + (n % kPeriods) * kPeriodFrames, kInPeriodBytes);
+        cacheFlush(ring(SwitchAudioMemoryInput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_IN_CHANNELS,
+                   kInPeriodBytes);
         control->in_frames = (n + 1) * kPeriodFrames;
     }
 
@@ -991,7 +1019,7 @@ class SwitchAudio : public IOService {
     Route wantedRoute() const { return jackIn && !speakerOnly ? kRouteHeadphones : kRouteSpeaker; }
 
     // rt5640_i2c_probe, rt5640_probe, rt5640_enable_jack_detect, then the static link setup the machine driver and
-    // hw_params give it (CBS_CFS, I2S, NB_NF; sysclk MCLK 12.288 MHz, 48 kHz, 16-bit, BCLK 32 fs) and the mixer
+    // hw_params give it (CBS_CFS, I2S, NB_NF; sysclk MCLK 12.288 MHz, 48 kHz, 24-bit, BCLK 64 fs) and the mixer
     // switches of nvaudio_conf.xml's rt5640-speaker and rt5640-headphone paths. Power follows the route later.
     void codecProbe()
     {
@@ -1025,9 +1053,10 @@ class SwitchAudio : public IOService {
         codecUpdate(IRQ_CTRL2, 1u << 11, 0);  // external microphone: no sticky over-current
         codecWrite(IRQ_CTRL1, 1u << 15);      // IRQ_JD_NOR
         // Link and clocks.
-        codecUpdate(I2S1_SDP, (1u << 15) | (1u << 7) | (3u << 2) | 3u, 1u << 15);  // slave, normal BCLK, 16-bit, I2S
-        codecUpdate(GLB_CLK, 3u << 14, 0);                                         // sysclk = MCLK
-        codecUpdate(ADDA_CLK1, (1u << 15) | (7u << 12), 0);                        // BCLK 32 fs, pre-divider 1 (256 fs)
+        // Slave, normal BCLK, 24-bit, I2S; sysclk = MCLK; BCLK 64 fs, pre-divider 1 (256 fs) (SwitchAudioFormat.h).
+        codecUpdate(I2S1_SDP, SWITCH_AUDIO_RT5640_SDP_MASK, SWITCH_AUDIO_RT5640_SDP);
+        codecUpdate(GLB_CLK, 3u << 14, 0);
+        codecUpdate(ADDA_CLK1, SWITCH_AUDIO_RT5640_ADDA_MASK, SWITCH_AUDIO_RT5640_ADDA);
         // Mixer switches (a cleared bit routes): stereo DAC mixers <- DAC1, speaker mixers <- DAC1, speaker outputs
         // <- SPKVOL, output mixers <- DAC1, HPO mixer <- HPVOL. Outputs muted and at nvaudio_conf.xml's volumes.
         codecUpdate(STO_DAC_MIXER, (1u << 14) | (1u << 6), 0);
@@ -1239,9 +1268,13 @@ class SwitchAudio : public IOService {
     // switch-audio-stats=1, every kStatsMS on the codec work loop (it reads the codec over I2C). "starts" counts the
     // streams the hardware started since the last line, "moved" what the playback DMA played (240000 a line while a
     // stream runs), "under" the periods that played before the plug-in had written their end, "peak" the loudest sample
-    // since the last line (0: only silence reached the DMA); then, as read now, ADMA ch0 STATUS and completed periods,
-    // I2S1 enable and RX (playback) status, ADMAIF1 TX status, the jack (INT_IRQ_ST, bit 4 set = empty; PV6, 1 = empty)
-    // and route, and PWR_DIG1, PWR_ANLG1, PWR_MIXER, PWR_VOL, SPK_VOL, HP_VOL, DAC1_DIG_VOL.
+    // since the last line (16-bit units; 0: only silence reached the DMA); "io" the plug-in's playback IO cycles in the
+    // window and the frames each wrote (the audio server's wake-ups and IO buffer size), "lead" the least write-ahead
+    // the plug-in had at a period's end (frames; under 0 is an underrun), "lag" the period interrupts' least and most
+    // lateness against the I2S clock model in us (see notePlayed; "-" without a period); then, as read now, ADMA ch0
+    // STATUS and completed periods, I2S1 enable and RX (playback) status, ADMAIF1 TX status, the jack (INT_IRQ_ST,
+    // bit 4 set = empty; PV6, 1 = empty) and route, and PWR_DIG1, PWR_ANLG1, PWR_MIXER, PWR_VOL, SPK_VOL, HP_VOL,
+    // DAC1_DIG_VOL.
     // r16-idle: the line runs while there is audio to report: the first window after boot, then from a stream's start
     // (codecRun arms it) until a window with no stream, no start, nothing moved and the codec powered down; that window
     // reads nothing, writes no line and leaves the timer off, so a silent console takes no stats wakeups.
@@ -1259,18 +1292,31 @@ class SwitchAudio : public IOService {
         self->statStartsShown += starts;
         const int peak = self->statPeak;
         self->statPeak = 0;
+        const uint64_t ioCycles = self->control->io_cycles, ioFrames = self->control->io_frames;
+        const uint64_t cycles = ioCycles - self->statIoCyclesShown, written = ioFrames - self->statIoFramesShown;
+        self->statIoCyclesShown = ioCycles;
+        self->statIoFramesShown = ioFrames;
+        char lead[24] = "-", lag[48] = "-";
+        if (self->statLeadMin != INT64_MAX) snprintf(lead, sizeof(lead), "%lld", (long long)self->statLeadMin);
+        if (self->statLagMax != INT64_MIN) {
+            snprintf(lag, sizeof(lag), "%lld..%lld", (long long)self->statLagMin, (long long)self->statLagMax);
+        }
+        self->statLeadMin = INT64_MAX;
+        self->statLagMin = INT64_MAX;
+        self->statLagMax = INT64_MIN;
         static const char *const routes[] = {"none", "speaker", "headphones"};
-        char line[320];
+        char line[416];
         snprintf(
             line, sizeof(line),
-            "SwitchAudio stats: run %u starts %u moved %llu under %u peak %d | ADMA %#x xfer %u, I2S en %u rx %#x, "
-            "ADMAIF tx %#x | jack %s st %#x pv6 %d, %s | codec %04x %04x %04x %04x vol %04x %04x dac %04x",
-            self->control->state, starts, moved, self->statUnderruns, peak, r32(self->adma, CH_STATUS),
-            r32(self->adma, CH_XFER_STATUS) & 0xffff, r32(self->ahub, I2S_ENABLE), r32(self->ahub, I2S_RX_STATUS),
-            r32(self->ahub, ADMAIF_TX_STATUS), self->jackIn ? "in" : "out", self->codecRead(INT_IRQ_ST),
-            tegra_gpio_read(kJackDetect), routes[self->route], self->codecRead(PWR_DIG1), self->codecRead(PWR_ANLG1),
-            self->codecRead(PWR_MIXER), self->codecRead(PWR_VOL), self->codecRead(SPK_VOL), self->codecRead(HP_VOL),
-            self->codecRead(DAC1_DIG_VOL));
+            "SwitchAudio stats: run %u starts %u moved %llu under %u peak %d io %llu x %llu f lead %s lag %s us | ADMA "
+            "%#x xfer %u, I2S en %u rx %#x, ADMAIF tx %#x | jack %s st %#x pv6 %d, %s | codec %04x %04x %04x %04x vol "
+            "%04x %04x dac %04x",
+            self->control->state, starts, moved, self->statUnderruns, peak, cycles, cycles ? written / cycles : 0, lead,
+            lag, r32(self->adma, CH_STATUS), r32(self->adma, CH_XFER_STATUS) & 0xffff, r32(self->ahub, I2S_ENABLE),
+            r32(self->ahub, I2S_RX_STATUS), r32(self->ahub, ADMAIF_TX_STATUS), self->jackIn ? "in" : "out",
+            self->codecRead(INT_IRQ_ST), tegra_gpio_read(kJackDetect), routes[self->route], self->codecRead(PWR_DIG1),
+            self->codecRead(PWR_ANLG1), self->codecRead(PWR_MIXER), self->codecRead(PWR_VOL), self->codecRead(SPK_VOL),
+            self->codecRead(HP_VOL), self->codecRead(DAC1_DIG_VOL));
         os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
         sender->setTimeoutMS(kStatsMS);
     }
@@ -1397,6 +1443,7 @@ public:
             control->period_frames = kPeriodFrames;
             control->backend = SwitchAudioBackendTegraI2S;
             control->ticks_per_frame_q32 = tegraTicksPerFrame(38400000);
+            periodTicksQ16 = (uint64_t)kPeriodFrames * control->ticks_per_frame_q32 >> 16;
             timer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::watchdogFired);
         } else {
             control->period_frames = SWITCH_AUDIO_PERIOD_FRAMES;
@@ -1414,8 +1461,14 @@ public:
         setProperty("SwitchAudioBackend", tegra ? "tegra-i2s" : "null");
         registerService();
         if (tegra) {
-            IOLog("SwitchAudio: Tegra I2S1 + RT5639 ready (%s%s)\n", tegraCapture ? "playback and capture" : "playback",
-                  speakerOnly ? ", speaker only" : "");
+            // The format and rate, once: S32_LE rings and APE path, 32-bit I2S slots at 64 fs, the codec's 24 bits.
+            const uint64_t milliHz =
+                switch_audio_rate_millihz(38400000, kPllaM, kPllaP, (uint64_t)kPllaNEff, kPllaOut0X2, kPllaOut0PerFs);
+            IOLog("SwitchAudio: Tegra I2S1 + RT5639 ready (%s%s): S32_LE, I2S 32-bit slots at 64 fs (%u kHz BCLK), "
+                  "RT5639 %u-bit, %llu.%03llu Hz\n",
+                  tegraCapture ? "playback and capture" : "playback", speakerOnly ? ", speaker only" : "",
+                  (unsigned)((milliHz * SWITCH_AUDIO_BCLK_FS + 500000) / 1000000), SWITCH_AUDIO_CODEC_BITS,
+                  milliHz / 1000, milliHz % 1000);
         }
         return true;
     }
