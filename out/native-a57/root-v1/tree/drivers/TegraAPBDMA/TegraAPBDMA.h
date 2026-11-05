@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra210 APB DMA controller (T210/T210B01, "nvidia,tegra210-apbdma" = tegra148 chip data) for statically linked
-// IOSwitch drivers: the UARTs' DMA, as Linux serial-tegra.c drives it through drivers/dma/tegra20-apb-dma.c.
+// IOSwitch drivers: the UARTs' DMA, as Linux serial-tegra.c drives it through drivers/dma/tegra20-apb-dma.c, and I2C3's
+// long reads (TegraI2C, r17-touch), as Linux i2c-tegra.c does.
 //
 // Hardware (Linux tegra20-apb-dma.c, tegra210.dtsi dma@60020000): 0x60020000, 32 channels of 0x40 bytes from +0x1000
 // (CSR, STATUS, CSRE pause, AHB pointer/sequence, APB pointer/sequence, WCOUNT, WORD_TRANSFER), CAR clock and reset 34
@@ -24,13 +25,19 @@
 class IOWorkLoop;
 
 // Request selectors (tegra210.dtsi dmas = <&apbdma N>) and the fixed channels.
-enum : unsigned { TEGRA_APBDMA_REQ_UARTB = 9, TEGRA_APBDMA_REQ_UARTC = 10, TEGRA_APBDMA_REQ_UARTD = 19 };
+enum : unsigned {
+    TEGRA_APBDMA_REQ_UARTB = 9,
+    TEGRA_APBDMA_REQ_UARTC = 10,
+    TEGRA_APBDMA_REQ_UARTD = 19,
+    TEGRA_APBDMA_REQ_I2C3 = 23,  // i2c@7000c500 dmas = <&apbdma 23>, <&apbdma 23> (rx, tx)
+};
 enum : unsigned {
     TEGRA_APBDMA_CH_UARTB_RX = 0,  // Joy-Con (R) rail
     TEGRA_APBDMA_CH_UARTC_RX = 1,  // Joy-Con (L) rail
     TEGRA_APBDMA_CH_UARTD_TX = 2,  // Bluetooth
     TEGRA_APBDMA_CH_UARTD_RX = 3,  // Bluetooth (UART-D's request line serves both directions, as Linux's two channels)
-    TEGRA_APBDMA_CHANNELS = 4,
+    TEGRA_APBDMA_CH_I2C3_RX = 4,   // touch panel's long event reads (TegraI2C, r17-touch)
+    TEGRA_APBDMA_CHANNELS = 5,
 };
 
 // The longest transfer one programming takes (WCOUNT is 16 bits of bytes, word-granular).

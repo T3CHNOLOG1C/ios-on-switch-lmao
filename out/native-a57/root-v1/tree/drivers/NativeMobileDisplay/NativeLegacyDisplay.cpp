@@ -27,6 +27,7 @@
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
 #include "TegraDisplayPower.h"
+#include "VsyncPhase.h"
 #include "../SwitchPower/SwitchPower.h"
 
 // The last swap Core Animation offered (validateSwap, accepted or not; mach time): while swaps keep coming CA is
@@ -137,6 +138,12 @@ extern "C" uint64_t mach_continuous_time(void);
 // SwitchBrightness (TegraPanel.cpp) plays its DSI commands at DC A frame ends, from the vblank interrupt's filter below (primary interrupt
 // context). This empty default keeps the display linkable without it; its strong definition wins when SwitchBrightness is linked.
 extern "C" __attribute__((weak)) void tegra_panel_frame_end_filter(void) {}
+// SwitchTouch (r17-touch): the interrupt time of the oldest touch report no swap has followed yet, taken (and cleared)
+// if it is before `before`; 0 otherwise. Weak: 0 without the touch driver.
+extern "C" __attribute__((weak)) uint64_t switch_touch_take_report(uint64_t)
+{
+    return 0;
+}
 // SwitchBrightness (SwitchBacklight.cpp; display power is on unless switch-sleep=0) takes the render server's display power requests;
 // this default (no SwitchBrightness, or switch-sleep=0) leaves them to the original user client.
 extern "C" __attribute__((weak)) bool switch_display_power_request(bool)
@@ -173,6 +180,16 @@ static constexpr uint64_t kDisplayAPA = 0x54200000, kCarPA = 0x60006000;
 static constexpr uint32_t kDcIntStatus = 0x037, kDcIntMask = 0x038, kDcIntEnable = 0x039, kFrameEndInt = 1u << 1,
                           kVblankInt = 1u << 2;
 static constexpr uint32_t kDisplayAInterrupt = 105, kCarResetL = 0x004, kCarClockL = 0x010, kCarDisp1 = 1u << 27;
+// r17-touch: V_PULSE2, a raster-line interrupt, for the compositor's vsync phase (VsyncPhase.h). L4T dc_reg.h and
+// tegra_dc_init_vpulse2_int (T21x): INT bit 5; DISP_SIGNAL_OPTIONS0 V_PULSE_2_ENABLE bit 19; V_PULSE2_CONTROL H position 0,
+// LAST(1) (bit 8); V_PULSE2_POSITION_A START line 12:0 and END line 28:16, lines counted as L4T counts them (its V_BLANK line is
+// v_ref_to_sync + v_sync_width + v_back_porch + v_active). The timing registers give those: V in bits 31:16 of REF_TO_SYNC,
+// SYNC_WIDTH, BACK_PORCH, DISP_ACTIVE, FRONT_PORCH (hekate di.inl _di_dc_video_mode_config: 1, 1, 9, 1280, 10 on this panel).
+// All are assembly registers: written, they latch with the next flip's GENERAL_ACT_REQ, so the phase never asks for one.
+static constexpr uint32_t kVpulse2Int = 1u << 5, kDcDispSignalOptions0 = 0x400, kVpulse2Enable = 1u << 19,
+                          kDcDispVpulse2Control = 0x422, kDcDispVpulse2Position = 0x423, kVpulse2Last = 1u << 8;
+static constexpr uint32_t kDcDispRefToSync = 0x406, kDcDispSyncWidth = 0x407, kDcDispBackPorch = 0x408,
+                          kDcDispActive = 0x409, kDcDispFrontPorch = 0x40a;
 // DISPLAY_COMMAND bits 6:5: 0 stop, 1 continuous display (hekate di.h DISP_CTRL_MODE_*); an assembly register, latched by GENERAL_ACT_REQ.
 static constexpr uint32_t kDcDisplayCommand = 0x032, kDcModeMask = 3u << 5, kDcModeContinuous = 1u << 5;
 // Window A, for the hardware rotation (boot-arg ioswitch-hw-rotate, NativeScanout.h). Word indices and bits checked against L4T
@@ -506,6 +523,22 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool scanoutStopped = false;        // display power off (setScanout): no frame ends or vblanks are expected
     uint32_t dcPending = 0;             // INT_STATUS bits from the filter, for the action
     uint64_t vblankTime = 0, vblankContinuous = 0, vblankLast = 0, frameEnds = 0;
+    // r17-touch: the compositor's vsync phase (VsyncPhase.h, the pacing line's "phase"). While its lead is in effect the vsync
+    // goes out at V_PULSE2, programmed `lead` before the frame end; otherwise at V_BLANK as before, and at most one goes out a
+    // frame. Never booted: V_BLANK carries the vsync until V_PULSE2 has reached the CPU once; if it has not after
+    // kPhaseProbeFlips latched flips with it programmed, one line and the phase is off for the boot. Once it has, a silent one
+    // panics as a silent V_BLANK does. The phase needs the frame marks, so it runs with display stats on (the default).
+    VsyncPhase phase;
+    uint64_t vpulseTime = 0, vpulseContinuous = 0, deliveredFrame = ~0ull;
+    int64_t feAfterVblankNs = 0;  // the frame end's time after V_BLANK's, measured
+    int32_t phaseCorrection = 0;  // lines, from the measured lead against the asked-for one
+    uint32_t vblankLine = 0, totalLines = 0, phaseLine = 0, phaseAsked = 0, measuredLeadUs = 0;
+    uint32_t deliveredSource = 0;  // the last vsync's: 0 at V_BLANK, else V_PULSE2's line
+    unsigned phaseProbe = 0, vpulseSilent = 0;
+    unsigned phaseSettle =
+        0;  // latched flips to wait after a new line before measuring it (it latches with the next flip)
+    bool vpulseProgrammed = false, vpulseSeen = false, vpulseThisFrame = false, phaseFailed = false;
+    static constexpr unsigned kPhaseProbeFlips = 5;
     // Hardware rotation (boot-arg ioswitch-hw-rotate, default 1; NativeScanout.h). The CPU stops rotating: each client frame is
     // swizzled, unrotated, into the block-linear extent of the boot framebuffer and window A column-scans it. The first such
     // frame switches window A (four registers, latched at a frame boundary); the frame ends after it confirm the latch, read the
@@ -727,8 +760,18 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         uint64_t submit, kick, waited, ready;
     };
     FrameMark taken = {}, marks[TegraScanoutRing::kMaxEntries] = {};
-    enum { kLongIdle, kLongCa, kLongGpu, kLongQueue, kLongLatch, kLongCauses };
+    //   rate   its swap came promptly after the vsync it answered (under half a frame): the frames before it had nothing new
+    //          to show (a client drawing at 20 Hz: r8a's clock widget), not a late compositor (r17-touch)
+    enum { kLongIdle, kLongCa, kLongGpu, kLongQueue, kLongLatch, kLongRate, kLongCauses };
+    Span stPhaseLead = {};  // r17-touch: the measured V_PULSE2-to-frame-end lead, per frame it carried the vsync
+    uint32_t phaseReplacedSeen = 0;  // stReplaced at the last present (replaced flips are phase misses)
     Span stPQueue = {}, stPWait = {}, stPCopy = {}, stPLatch = {};
+    // r17-touch: for a present whose swap was submitted after a touch report the screen had not yet followed with one,
+    // that report's interrupt to the swap's submission (touch->swap) and to its scan-out (touch->scan): how old the
+    // touch input is when a frame that can answer it reaches the panel. A lower bound on touch-to-photon (the frame may
+    // answer an older report if the app's pipeline is deeper); the slow-motion test measures the whole of it.
+    Span stTouchSwap = {};
+    FrameHist stTouchScan = {};
     uint32_t stReplaced = 0, stCollapsed = 0, stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
     uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;  // stVsyncFolded: atomic (the filter)
     uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled (once a boot at most)
@@ -748,9 +791,21 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         if (stamp) noteMissedFrame(stamp);
         if (!stats || !stamp) return;
+        // r17-touch: a flip replaced unshown since the last present (counted just before this one) missed its boundary.
+        // noteStatsWindow zeroes stReplaced every window: a count below the one seen is a new window, not a replacement.
+        if (stReplaced < phaseReplacedSeen) phaseReplacedSeen = 0;
+        if (stReplaced != phaseReplacedSeen) {
+            phaseReplacedSeen = stReplaced;
+            phase.replaced(0, 0, Span::ticksToUs(stamp));
+        }
+        notePhasePresent(stamp, mark);
         ++stPresents;
         ++stLatch[latchedAt <= 1 ? 0 : 1];
         if (mark.submit && stamp > mark.submit) {
+            if (const uint64_t touch = switch_touch_take_report(mark.submit)) {
+                stTouchSwap.add(mark.submit - touch);
+                stTouchScan.add(Span::ticksToUs(stamp - touch));
+            }
             stLatency.add(Span::ticksToUs(stamp - mark.submit));
             if (mark.kick >= mark.submit && mark.ready >= mark.kick && stamp >= mark.ready) {
                 stPQueue.add(mark.kick - mark.submit);
@@ -782,7 +837,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         const uint64_t due = lastPresent + period;  // the boundary a one-frame interval would have used
         unsigned cause;
         if (!mark.submit || mark.submit >= due)
-            cause = idleSincePresent ? kLongIdle : kLongCa;
+            cause = idleSincePresent                                           ? kLongIdle
+                    : mark.submit && phase.paced(Span::ticksToUs(mark.submit)) ? kLongRate
+                                                                               : kLongCa;
         else if (mark.ready > due)
             cause = mark.ready - mark.kick > due - mark.submit ? kLongGpu : kLongQueue;
         else
@@ -822,10 +879,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (vblankSource) {
             // A V_BLANK latched while it was masked is stale: drop it, then let the next one through.
             __atomic_fetch_and(&dcPending, ~kVblankInt, __ATOMIC_RELAXED);
-            // Powered down for SC7: the resume's scanout restart unmasks V_BLANK for an armed tick.
+            // Powered down for SC7: the resume's scanout restart unmasks V_BLANK for an armed tick. V_PULSE2 (r17-touch's
+            // vsync phase) likewise, once programmed: a latched one from before is stale.
             if (!hwSuspended) {
-                dc[kDcIntStatus] = kVblankInt;
-                dc[kDcIntMask] = dc[kDcIntMask] | kVblankInt;
+                const uint32_t bits = kVblankInt | (vpulseProgrammed && !phaseFailed ? kVpulse2Int : 0);
+                dc[kDcIntStatus] = bits;
+                dc[kDcIntMask] = dc[kDcIntMask] | bits;
             }
             native_legacy_vsync_observed(0, vsyncHz);
             return;
@@ -843,7 +902,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (vblankSource) {
             // A polled panel command that overlapped the start may have restored INT_ENABLE without our bits; it is over by now.
             if (frameEnds) {
-                dc[kDcIntEnable] = dc[kDcIntEnable] | kVblankInt | kFrameEndInt;
+                dc[kDcIntEnable] = dc[kDcIntEnable] | kVblankInt | kFrameEndInt | (vpulseProgrammed ? kVpulse2Int : 0);
                 return;
             }
             char gic[192];
@@ -873,7 +932,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static bool vblankFilter(OSObject *owner, IOFilterInterruptEventSource *)
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
-        const uint32_t status = self->dc[kDcIntStatus] & (kVblankInt | kFrameEndInt);
+        const uint32_t status = self->dc[kDcIntStatus] & (kVblankInt | kFrameEndInt | kVpulse2Int);
         if (!status) return false;
         self->dc[kDcIntStatus] = status;
         (void)self->dc[kDcIntStatus];  // read back: the line is low before ArmCpu's EOI
@@ -882,6 +941,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (status & kVblankInt) {
             self->vblankTime = mach_absolute_time();
             self->vblankContinuous = mach_continuous_time();
+        }
+        if (status & kVpulse2Int) {  // r17-touch: the vsync phase's line
+            self->vpulseTime = mach_absolute_time();
+            self->vpulseContinuous = mach_continuous_time();
         }
         // The panel's DSI command steps, timed from the frame end as hekate does (the line is already low; the last step takes ~620 us).
         // A console waiting to scroll (waitTapeFrame) wakes at every frame end while it draws on the tape.
@@ -927,11 +990,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         const uint32_t status = __atomic_exchange_n(&dcPending, 0u, __ATOMIC_ACQUIRE);
         if (hwSuspended) return;  // a status taken just before the SC7 power-down: the registers are unclocked now
+        // r17-touch: V_PULSE2 first: it belongs to the frame whose end may be in this same action (a folded one), so its
+        // vsync must count against that frame, not the next.
+        if (status & kVpulse2Int) vpulseNotify();
         if (status & kFrameEndInt) frameEnds = frameEnds + 1;
         if ((status & kFrameEndInt) && stats) {
             const uint64_t stamp = __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), now = mach_absolute_time();
             if (stamp && now > stamp) stFeLate.add(now - stamp);
         }
+        if (status & kFrameEndInt) notePhaseFrameEnd();
         if (status & kVblankInt) vblankNotify();
         watchVsync(status);
         // After the compositor's vsync, since a latched flip starts the next frame's copy right here. A flip is also looked for at
@@ -1046,15 +1113,33 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             : stFallbacks                 ? " (fell back to double buffering now)"
                                           : " (double-buffered)",
             stReplaced, stCollapsed);
-        add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u",
-            stLong[kLongIdle] + stLong[kLongCa] + stLong[kLongGpu] + stLong[kLongQueue] + stLong[kLongLatch],
+        add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u rate %u/%u",
+            stLong[kLongIdle] + stLong[kLongCa] + stLong[kLongGpu] + stLong[kLongQueue] + stLong[kLongLatch] +
+                stLong[kLongRate],
             stLong[kLongIdle], stLongFrames[kLongIdle], stLong[kLongCa], stLongFrames[kLongCa], stLong[kLongGpu],
             stLongFrames[kLongGpu], stLong[kLongQueue], stLongFrames[kLongQueue], stLong[kLongLatch],
-            stLongFrames[kLongLatch]);
+            stLongFrames[kLongLatch], stLong[kLongRate], stLongFrames[kLongRate]);
         add("; vsync folded %u late>1ms %u idle %u", __atomic_exchange_n(&stVsyncFolded, 0u, __ATOMIC_RELAXED),
             stVsyncLateN, stVsyncIdle);
+        if (stTouchSwap.count) {
+            add("; touch->swap %llu/%llu us mean/max,", (unsigned long long)stTouchSwap.meanUs(),
+                (unsigned long long)stTouchSwap.maxUs());
+            quantiles("touch->scan", stTouchScan);
+            add(" (%u)", stTouchSwap.count);
+        }
+        // r17-touch: the vsync phase: the lead in effect (0: at V_BLANK), the line, the lead V_PULSE2 gave, the last window's
+        // response p99, margin and miss floor, and its misses this boot.
+        add("; phase %s lead %u us (line %u, measured %llu/%llu us), p99 %u margin %u floor %u, misses %u",
+            phaseFailed         ? "off"
+            : phaseDelivering() ? "on"
+                                : "at V_BLANK",
+            phase.lead(), phaseLine, (unsigned long long)stPhaseLead.meanUs(), (unsigned long long)stPhaseLead.maxUs(),
+            phase.lastP99(), phase.marginUs(), phase.floorUs(), phase.missCount());
+        stPhaseLead = Span{};
         if (quiet) add("%s", "; quiet (the next quiet windows are not logged)");
         if (logged) os_log(OS_LOG_DEFAULT, "IOSwitch display pacing: %s", line);  // log only, never the boot console
+        stTouchSwap = Span{};
+        stTouchScan = FrameHist{};
         stPQueue = stPWait = stPCopy = stPLatch = Span{};
         stReplaced = stCollapsed = stVsyncLateN = stVsyncIdle = stFallbacks = 0;
         for (auto &n : stLong) n = 0;
@@ -1076,26 +1161,140 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         if (!vsyncArmed) return;
         if (!vsyncWanted()) {
-            dc[kDcIntMask] = dc[kDcIntMask] & ~kVblankInt;
+            dc[kDcIntMask] = dc[kDcIntMask] & ~(kVblankInt | kVpulse2Int);  // no client: no wakeup of its own a frame
             vsyncArmed = false;
             native_legacy_vsync_observed(2, vsyncHz);
             noteVsyncIdle();
             return;
         }
-        // The panel's own period between consecutive vblanks; the nominal one after a pause.
-        const uint64_t stamp = vblankTime;
-        const uint64_t interval = vblankLast && stamp > vblankLast && stamp - vblankLast < 4 * vsyncInterval
+        if (phaseDelivering()) return;  // the compositor's vsync comes from V_PULSE2 now
+        deliverVsync(vblankTime, vblankContinuous, 0);
+    }
+    // r17-touch: the vsync phase (VsyncPhase.h, the phase members above). V_PULSE2 carries the vsync once it has reached the CPU,
+    // while a lead is in effect and nothing turned the phase off.
+    bool phaseDelivering() const { return stats && vpulseSeen && !phaseFailed && phase.lead(); }
+    void vpulseNotify()
+    {
+        vpulseThisFrame = true;
+        vpulseSilent = 0;
+        if (!vpulseSeen) {
+            vpulseSeen = true;
+            os_log(OS_LOG_DEFAULT, "IOSwitch display: V_PULSE2 reached the CPU (line %u of %u): the vsync phase is on",
+                   phaseLine, totalLines);
+        }
+        if (!vsyncArmed || !vsyncWanted() || !phaseDelivering()) return;
+        // Stamped when it goes out, as V_BLANK's is: the render server sees a fresh frame, never one already under way.
+        deliverVsync(vpulseTime, vpulseContinuous, measuredLeadUs ? measuredLeadUs : phase.lead());
+    }
+    // One vsync a frame (a switch between V_BLANK and V_PULSE2 never gives the compositor two in one), at `stamp`; `lead` is the
+    // phase it carries (0: at V_BLANK).
+    void deliverVsync(uint64_t stamp, uint64_t continuous, uint32_t lead)
+    {
+        if (deliveredFrame == frameEnds) return;
+        deliveredFrame = frameEnds;
+        // The panel's own period between consecutive notifications; the nominal one after a pause, and when the source or
+        // V_PULSE2's line just changed (the one irregular gap, period plus or minus a lead, is never passed on).
+        const uint32_t source = lead ? phaseLine : 0;
+        const bool moved = source != deliveredSource;
+        deliveredSource = source;
+        const uint64_t interval = !moved && vblankLast && stamp > vblankLast && stamp - vblankLast < 4 * vsyncInterval
                                       ? stamp - vblankLast
                                       : vsyncInterval;
         vblankLast = stamp;
-        native_legacy_vsync_notify(this, stamp, vblankContinuous, interval);
+        native_legacy_vsync_notify(this, stamp, continuous, interval);
         native_legacy_vsync_observed(1, vsyncHz);
         if (stats) {
             ++stVsyncs;
             const uint64_t late = mach_absolute_time() - stamp;
             stVsyncLate.add(late);
             if (Span::ticksToUs(late) > 1000) ++stVsyncLateN;
+            phase.vsync(Span::ticksToUs(stamp), lead);
         }
+    }
+    // At each frame end: the lead V_PULSE2 gave this frame (its time to this frame end), its line corrected towards the one
+    // asked for; V_BLANK-to-frame-end, which places the line; and V_PULSE2's own lost-interrupt check.
+    void notePhaseFrameEnd()
+    {
+        const uint64_t fe = __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE);
+        if (fe && vblankTime) {
+            const uint64_t a = fe > vblankTime ? fe - vblankTime : vblankTime - fe;
+            if (Span::ticksToUs(a) < 4000)
+                feAfterVblankNs = (int64_t)Span::ticksToUs(a) * 1000 * (fe > vblankTime ? 1 : -1);
+        }
+        if (vpulseThisFrame && fe > vpulseTime && vsyncInterval && fe - vpulseTime < vsyncInterval) {
+            measuredLeadUs = (uint32_t)Span::ticksToUs(fe - vpulseTime);
+            if (phaseDelivering()) stPhaseLead.add(fe - vpulseTime);
+            // Off by more than two lines from the lead asked for: correct the line once (latched with the next flip).
+            const uint32_t lineUs = lineNs() / 1000 ? lineNs() / 1000 : 1;
+            const int32_t error = ((int32_t)measuredLeadUs - (int32_t)phaseAsked) / (int32_t)lineUs;
+            if (phaseAsked && !phaseSettle && (error > 2 || error < -2)) {
+                phaseCorrection += error;
+                const int32_t bound = (int32_t)totalLines;
+                phaseCorrection = phaseCorrection > bound ? bound : phaseCorrection < -bound ? -bound : phaseCorrection;
+                programPhase(phaseAsked);
+            }
+        }
+        vpulseThisFrame = false;
+        if (!phaseDelivering() || !vsyncArmed) return;
+        if (++vpulseSilent < kVsyncSilentFrames) return;
+        char gic[192];
+        ioswitch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
+        panic("IOSwitch display: no DC A V_PULSE2 in %u frame ends with the vsync phase on: INT_STATUS %#x MASK %#x "
+              "ENABLE %#x, %s",
+              vpulseSilent, dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
+    }
+    uint32_t lineNs() const
+    {
+        uint64_t ns = 0;
+        if (vsyncInterval) absolutetime_to_nanoseconds(vsyncInterval, &ns);
+        return totalLines ? (uint32_t)(ns / totalLines) : 0;
+    }
+    // V_PULSE2's registers for the line `lead` before the frame end (assembly copies: they latch with the next flip).
+    void writePhaseRegisters()
+    {
+        dc[kDcDispVpulse2Control] = kVpulse2Last;
+        dc[kDcDispVpulse2Position] = phaseLine | (phaseLine + 1) << 16;
+        dc[kDcDispSignalOptions0] = dc[kDcDispSignalOptions0] | kVpulse2Enable;
+    }
+    void programPhase(uint32_t leadUs)
+    {
+        if (!dc || hwSuspended || phaseFailed || !totalLines || !lineNs()) return;
+        const int64_t back = ((int64_t)leadUs * 1000 - feAfterVblankNs) / (int64_t)lineNs();
+        int64_t line = (int64_t)vblankLine - back - phaseCorrection;
+        if (line < 2) line = 2;
+        if (line > (int64_t)vblankLine - 1) line = (int64_t)vblankLine - 1;
+        phaseAsked = leadUs;
+        if (vpulseProgrammed && (uint32_t)line == phaseLine) return;
+        phaseLine = (uint32_t)line;
+        phaseSettle = 2;
+        writePhaseRegisters();
+        if (!vpulseProgrammed) {
+            dc[kDcIntStatus] = kVpulse2Int;
+            dc[kDcIntEnable] = dc[kDcIntEnable] | kVpulse2Int;
+            if (vsyncArmed) dc[kDcIntMask] = dc[kDcIntMask] | kVpulse2Int;  // else armVsync unmasks it
+            vpulseProgrammed = true;
+            phaseProbe = 0;
+        }
+    }
+    // Under the gate, at each present: what the phase learned from it, the lead it now wants programmed, and the
+    // never-booted check (V_PULSE2 programmed, flips latched, not one V_PULSE2).
+    void notePhasePresent(uint64_t stamp, const FrameMark &mark)
+    {
+        if (!stats || phaseFailed || !mark.submit || !mark.ready) return;
+        if (vsyncInterval) phase.setPeriod((uint32_t)Span::ticksToUs(vsyncInterval));
+        if (phaseSettle) --phaseSettle;
+        phase.present(Span::ticksToUs(mark.submit), Span::ticksToUs(mark.ready), Span::ticksToUs(stamp));
+        if (phase.lead()) programPhase(phase.lead());
+        if (!vpulseProgrammed || vpulseSeen || ++phaseProbe < kPhaseProbeFlips) return;
+        phaseFailed = true;
+        dc[kDcIntMask] = dc[kDcIntMask] & ~kVpulse2Int;
+        dc[kDcIntEnable] = dc[kDcIntEnable] & ~kVpulse2Int;
+        char gic[192];
+        ioswitch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
+        IOLog("IOSwitch display: vsync phase off for this boot: V_PULSE2 never reached the CPU in %u flips (line %u; "
+              "SIGNAL_OPTIONS0 %#x V_PULSE2 %#x/%#x INT_STATUS %#x MASK %#x ENABLE %#x, %s); vsync stays at V_BLANK\n",
+              phaseProbe, phaseLine, dc[kDcDispSignalOptions0], dc[kDcDispVpulse2Control], dc[kDcDispVpulse2Position],
+              dc[kDcIntStatus], dc[kDcIntMask], dc[kDcIntEnable], gic);
     }
     // The compositor has no vsync client any more: it has nothing to draw until it registers again.
     void noteVsyncIdle()
@@ -1157,6 +1356,17 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt;
         dc[kDcIntEnable] = dcEnable | kVblankInt | kFrameEndInt;
         dc[kDcIntMask] = (dcMask & ~kVblankInt) | kFrameEndInt;
+        // r17-touch: the frame's lines, for the vsync phase's V_PULSE2 line (its constants' comment).
+        const auto vertical = [this](uint32_t reg) { return dc[reg] >> 16 & 0x1fff; };
+        vblankLine = vertical(kDcDispRefToSync) + vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) +
+                     vertical(kDcDispActive);
+        totalLines = vertical(kDcDispSyncWidth) + vertical(kDcDispBackPorch) + vertical(kDcDispActive) +
+                     vertical(kDcDispFrontPorch);
+        if (vblankLine < 64 || totalLines < vblankLine - vertical(kDcDispRefToSync)) {
+            IOLog("IOSwitch display: vsync phase off for this boot: DC A timing reads V_BLANK line %u of %u lines\n",
+                  vblankLine, totalLines);
+            phaseFailed = true;
+        }
         vblankSource->enable();
         vsyncTimer->setTimeoutMS(250);
         IOLog("IOSwitch display: vsync from the DC A vblank interrupt (INTID %u)\n", kDisplayAInterrupt);
@@ -1173,7 +1383,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         OSSafeReleaseNULL(vblankSource);
         dc[kDcIntMask] = dcMask;
         dc[kDcIntEnable] = dcEnable;
-        dc[kDcIntStatus] = kVblankInt | kFrameEndInt;
+        dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kVpulse2Int;
+        vpulseProgrammed = vpulseSeen = false;
         dc = nullptr;
         OSSafeReleaseNULL(dcMap);
         dcPending = 0;
@@ -2204,6 +2415,7 @@ public:
         dc[kDcDispWinOptions] = savedDispWinOptions;
         dc[kDcRegActControl] = savedActControl;
         dc[kDcScratchB] = savedScratchB;
+        if (vpulseProgrammed) writePhaseRegisters();  // r17-touch: SC7 reset them; they latch with the request below
         dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
         dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kWinAUnderflowInt;

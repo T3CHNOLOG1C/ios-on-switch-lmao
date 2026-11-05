@@ -123,9 +123,11 @@ IOService *switch_hid_create(SwitchHIDKind kind);
 // the event driver has opened the device are dropped by IOHIDFamily. Call from one thread per device.
 IOReturn switch_hid_post(IOService *device, const void *report, size_t length);
 
-// The same with the report's own time (mach absolute time) instead of now, for samples a device delivers in batches:
-// IOHIDDevice::handleReportWithTime, which handleReport calls with the current time. kIOReturnUnsupported where
-// switch_hid_supports_timestamps() is false.
+// The same with the report's own time (mach absolute time) instead of now, for samples a device delivers in batches
+// (SwitchMotion) or after a bus read (SwitchTouch: the touch interrupt's time, r17-touch):
+// IOHIDDevice::handleReportWithTime, which handleReport calls with the current time. Times must increase from report to
+// report (IOHIDEventDriver takes an element whose time equals the report's as part of it). The touch device's edge
+// wrapper is installed on this path too. kIOReturnUnsupported where switch_hid_supports_timestamps() is false.
 IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length, uint64_t timestamp);
 bool switch_hid_supports_timestamps(IOService *device);
 

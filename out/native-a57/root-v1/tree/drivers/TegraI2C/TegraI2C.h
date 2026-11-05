@@ -7,7 +7,7 @@
 //                 power monitors 0x40-0x4e of development units and Hoag's NFC IC 0x08). Horizon enables a bus
 //                 regulator at 2.9 V before using I2C2 (i2c_bus_accessor.cpp); the only 2.9 V rail is MAX77620 LDO6
 //                 (switchbrew PCV: "TouchPanel, ALS"), so the pull-ups are taken to be on LDO6 (inferred).
-//   I2C3 400 kHz  FTM4 touch 0x49
+//   I2C3 400 kHz  FTM4 touch 0x49 (L4T tegra210-soc-base.dtsi i2c3 clock-frequency 400000; hekate the same)
 //   I2C4 100 kHz  CAM_I2C pads
 //   I2C5 400 kHz  MAX77620 PMIC 0x3C (shared, see below)
 // I2C6 (DPAUX1 pads) is not supported.
@@ -42,8 +42,14 @@
 // at runtime (CL-DVFS is its own initiator on the PWR_I2C pads; the PMC bootrom-commands on controller 4 run only in
 // the BootROM on reset). Call only from thread context, never with a spinlock held or from an interrupt/filter
 // handler. After a failed transfer an owned bus is reset and reinitialized (as Linux i2c-tegra does).
+//
+// I2C3 (r17-touch) is a chained bus: once its owner's check has turned that on (tegra_i2c_set_chained), a write of up
+// to 8 bytes then a read is one submission ending in one interrupt and a read that fits the 32-byte RX FIFO takes no RX
+// interrupts; once tegra_i2c_set_dma() has turned that on too, a longer read's payload goes by APB DMA (TegraI2C.cpp's
+// file comment). Until then, and for good after a failed check, the bus works as the others do.
 #ifndef TEGRA_I2C_H
 #define TEGRA_I2C_H
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -59,6 +65,16 @@ enum {
     TEGRA_I2C_EARB = -5,       // arbitration lost / bus stuck
     TEGRA_I2C_ETIMEDOUT = -6,  // controller did not finish in time
     TEGRA_I2C_EIO = -7,        // packet completed short
+    TEGRA_I2C_ENODMA = -8,     // tegra_i2c_transfer_dma: the bus's DMA channel could not be had
+};
+
+// Cumulative since boot, for a driver's stats line (the caller differences two reads).
+struct tegra_i2c_counters {
+    uint32_t transfers;   // transfers that reached the bus
+    uint32_t interrupts;  // the bus's interrupt actions (the controller's, and DMA ends of count)
+    uint32_t dmaReads;    // reads whose payload came by APB DMA
+    bool dmaOff;          // long reads go by PIO (DMA never turned on, or off after a failed check)
+    bool chainOff;        // one packet per message (not a chained bus, or its check has not passed)
 };
 
 // Longest single read or write payload, and longest register write (tegra_i2c_write).
@@ -93,6 +109,26 @@ void tegra_i2c_describe(unsigned bus, char *buffer, size_t size);
 // controller's interrupts: transfers by anyone else wait forever after it. Same arguments and limits as
 // tegra_i2c_transfer().
 int tegra_i2c_final_transfer(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx, size_t rxlen);
+
+// The never-booted paths of a chained bus (I2C3), for its owner's one-time checks, in this order: the same transfer as
+// tegra_i2c_transfer (a write of 1..8 bytes, then the read) as one chained submission by PIO, or with its read by APB
+// DMA whatever its length (up to 4096 bytes; the first call claims the bus's DMA channel; needs the chained path on).
+// TEGRA_I2C_OK with the data, else an error with the reason in `why` and the bus recovered, never a panic for the
+// path's own failure (a chain that never completes times out; a first DMA end of count that never reaches the CPU is
+// reported). Neither turns anything on: the caller compares the data with a one-packet read it knows to be the same
+// (a chip ID) and then calls tegra_i2c_set_chained() / tegra_i2c_set_dma(). Thread context.
+int tegra_i2c_transfer_chained(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx, size_t rxlen,
+                               char *why, size_t whySize);
+int tegra_i2c_transfer_dma(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx, size_t rxlen, char *why,
+                           size_t whySize);
+// Whether the bus chains write-then-reads (and drains short reads at their completion) from now on; off until called.
+// Off also turns DMA off. Thread context.
+void tegra_i2c_set_chained(unsigned bus, bool on);
+// Whether reads above the RX FIFO (32 bytes) of a chained write-then-read go by DMA from now on; off until called, and
+// off for good on a bus whose DMA channel could not be had or that is not chaining. Thread context.
+void tegra_i2c_set_dma(unsigned bus, bool on);
+// The bus's counters (zeros for a bad bus). Any thread; a snapshot, not taken under the bus's lock.
+void tegra_i2c_get_counters(unsigned bus, struct tegra_i2c_counters *out);
 
 // System sleep (drivers/SwitchSuspend), thread context, both from the same thread: suspend holds every bus (later
 // transfers wait) until resume has re-clocked and reconfigured the controllers after SC7. Panics if a bus does not

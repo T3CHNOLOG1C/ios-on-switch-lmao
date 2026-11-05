@@ -3,6 +3,21 @@
 // Register layout and bring-up follow hekate bdk/soc/{i2c,clock,pinmux}.c (proven on this board); packet headers,
 // FIFO triggers, the interrupt handler and error handling follow Linux i2c-tegra.c (tegra_i2c_xfer_msg,
 // tegra_i2c_isr; T210 has_config_load_reg, has_per_pkt_xfer_complete_irq, supports_bus_clear).
+//
+// Chained buses (I2C3, the touch panel's; r17-touch): a write-then-read is one submission, as L4T's
+// tegra_i2c_multi_pkt_xfer sends an i2c_transfer of several messages on T210 (switchroot's 4.9 kernel, the one that
+// drives this board's FTM4): the write packet (REPEAT_START, no per-packet interrupt), its payload and the read packet's
+// header go into the TX FIFO together (at most 3 + 2 + 3 words, so writes of up to 8 bytes), and the one completion is
+// ALL_PACKETS_XFER_COMPLETE, after the read. One interrupt and one wake-up per register read instead of two of each and
+// the wait between the packets. A read that fits the 32-byte RX FIFO (hekate i2c_xfer_packet; L4T
+// I2C_PIO_MODE_MAX_LEN) leaves the RX request masked and is drained at the completion, so it takes no RX interrupts.
+// A longer read goes by APB DMA (request 23, tegra210.dtsi i2c@7000c500 dmas; one word per request at the 1-word RX
+// trigger); the completion then also waits for the channel's end of count. Both are never booted: each stays off until
+// the bus's owner has checked it once against the one-packet path (tegra_i2c_transfer_chained / _dma, TegraI2C.h), and
+// a check that fails costs one line and that path for the boot, never a panic: a chain whose completion never comes
+// times out (nothing is left asserted), and a DMA end of count that has never reached the CPU is reported, not
+// panicked on (the 473fb96 rule for never-booted interrupts); once one has, a lost one panics. Other buses keep one
+// packet per message.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOInterruptEventSource.h>
@@ -14,6 +29,7 @@
 #include <string.h>
 #include "TegraI2C.h"
 #include "../ArmGIC/IOSwitchInterrupts.h"
+#include "../TegraAPBDMA/TegraAPBDMA.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" boolean_t preemption_enabled(void);
@@ -28,6 +44,9 @@ constexpr uint32_t kClkM = 19200000;  // CLK_M = 38.4 MHz OSC / 2
 constexpr uint32_t kBusDivide = 48;   // (TLOW 4 + THIGH 2 + 2) * (CLK_DIVISOR std/fast 5 + 1)
 constexpr uint32_t kGraceMs = 50;     // after a timed-out wait, for an interrupt action already under way
 constexpr unsigned kArbRetries = 3;   // multi-master bus: repeats of a transfer that lost arbitration
+constexpr unsigned kFifoWords = 8;    // TX and RX FIFO depth, 32-bit words (hekate i2c_xfer_packet: 32 bytes each)
+constexpr size_t kChainMaxWrite = (kFifoWords - 6) * 4;  // a chain's write payload: both headers + it fit the TX FIFO
+constexpr uint32_t kDmaBufferSize = 4096;                // TEGRA_I2C_MAX_TRANSFER
 
 // Controller registers.
 enum : uint32_t {
@@ -61,6 +80,7 @@ enum : uint32_t {
     INT_TX_REQ = 1u << 1,
     INT_ARB_LOST = 1u << 2,
     INT_NO_ACK = 1u << 3,
+    INT_ALL_PACKETS_DONE = 1u << 6,  // the TX FIFO's last packet ended (L4T I2C_INT_ALL_PACKETS_XFER_COMPLETE)
     INT_PACKET_DONE = 1u << 7,
     PKT_ARB_LOST = 1u << 1,  // PACKET_TRANSFER_STATUS bits 1-3 (Atmosphere vapours/tegra/tegra_i2c.hpp)
     PKT_NOACK_DATA = 1u << 2,
@@ -91,17 +111,24 @@ struct BusInfo {
     uint16_t spi;       // GIC SPI: Linux tegra210.dtsi:676/691/706/721/739, OLED DTB i2c@7000c000.. interrupts
     uint16_t sclDrive, sdaDrive;  // APB_MISC GP_*_I2C_*_CFGPADCTRL
     uint8_t pullDown;             // DRVDN, the pads' pull-down (sink) strength; DRVUP is 0
+    bool chained;                 // write-then-read as one submission, short reads without RX interrupts (file comment)
+    uint8_t dmaRequest;           // APB DMA request line for long reads (0: none), tegra210.dtsi dmas
+    uint8_t dmaChannel;           // its TegraAPBDMA channel
 };
 // hekate clock.c _clock_i2c[] and pinmux.h PINMUX_AUX_X_I2C_SCL/SDA. The drive: Horizon's
 // (Atmosphere pinmux_initial_drive_pad_config.inc: Gen1/Gen2/Cam/Pwr I2C 0x1f, Gen3 0x07) and L4T's for the OLED
 // (tegra210b01-fric-pinmux.dtsi drive_default: the same pull-down strengths, pull-up 0); offsets from
 // pinmux_drive_pad_characters.inc and Linux pinctrl-tegra210.c.
+// Chained and DMA: I2C3 only for now (the touch panel, r17-touch); the other buses keep one packet per message.
 constexpr BusInfo kBus[kBuses] = {
-    {0x0000, 0x300, 0x320, 0x124, 0x004, 0x010, 12, 4, 0xbc, 0xc0, 38, 0x9a8, 0x9ac, 0x1f},  // I2C1 (L)
-    {0x0400, 0x308, 0x328, 0x198, 0x008, 0x014, 22, 1, 0xc4, 0xc8, 84, 0x9b0, 0x9b4, 0x1f},  // I2C2 (H)
-    {0x0500, 0x310, 0x330, 0x1b8, 0x00c, 0x018, 3, 1, 0xcc, 0xd0, 92, 0x9b8, 0x9bc, 0x07},   // I2C3 (U)
-    {0x0700, 0x430, 0x440, 0x3c4, 0x358, 0x360, 7, 4, 0xd4, 0xd8, 120, 0x934, 0x938, 0x1f},  // I2C4 (V), CAM_I2C pads
-    {0x1000, 0x308, 0x328, 0x128, 0x008, 0x014, 15, 1, 0xdc, 0xe0, 53, 0xa6c, 0xa70, 0x1f},  // I2C5 (H), PWR_I2C pads
+    {0x0000, 0x300, 0x320, 0x124, 0x004, 0x010, 12, 4, 0xbc, 0xc0, 38, 0x9a8, 0x9ac, 0x1f, false, 0, 0},  // I2C1 (L)
+    {0x0400, 0x308, 0x328, 0x198, 0x008, 0x014, 22, 1, 0xc4, 0xc8, 84, 0x9b0, 0x9b4, 0x1f, false, 0, 0},  // I2C2 (H)
+    {0x0500, 0x310, 0x330, 0x1b8, 0x00c, 0x018, 3, 1, 0xcc, 0xd0, 92, 0x9b8, 0x9bc, 0x07, true, TEGRA_APBDMA_REQ_I2C3,
+     TEGRA_APBDMA_CH_I2C3_RX},  // I2C3 (U)
+    {0x0700, 0x430, 0x440, 0x3c4, 0x358, 0x360, 7, 4, 0xd4, 0xd8, 120, 0x934, 0x938, 0x1f, false, 0,
+     0},  // I2C4 (V), CAM_I2C pads
+    {0x1000, 0x308, 0x328, 0x128, 0x008, 0x014, 15, 1, 0xdc, 0xe0, 53, 0xa6c, 0xa70, 0x1f, false, 0,
+     0},  // I2C5 (H), PWR_I2C pads
 };
 constexpr uint32_t kDriveMask = (0x1fu << 20) | (0x1fu << 12);  // DRVUP 24:20, DRVDN 16:12
 
@@ -115,12 +142,26 @@ struct Bus {
     bool owned;        // we reset/clocked it, so error recovery may reset it again
     bool multiMaster;  // another master shares the pads: lost arbitration is retried, never reset or bus-cleared
     bool final;        // tegra_i2c_final_transfer() has the bus for the rest of the boot
-    // The wait in flight (under irqLock): a packet, or the bus clear.
+    // The wait in flight (under irqLock): a packet, a chain (write packet + read packet, ended by doneBit
+    // INT_ALL_PACKETS_DONE), or the bus clear. With dmaActive the APB DMA moves the read's words, not serviceFifo, and
+    // the wait also needs the channel's end of count (dmaComplete) before it ends.
     const uint8_t *tx;
     uint8_t *rx;
     size_t len, done;
     bool active, busClear, overflow;
+    bool packetDone, dmaActive, dmaComplete;
+    uint32_t doneBit;
     int result;
+    // APB DMA for long reads on a chained bus (file comment): the channel and its buffer once opened, the software source
+    // its end of count signals on the work loop, and whether reads use it (the caller's check passed: tegra_i2c_set_dma).
+    tegra_apbdma_channel *dma;
+    tegra_apbdma_buffer dmaBuffer;
+    IOInterruptEventSource *dmaDoneSource;
+    bool dmaOn, dmaFailed;
+    bool chainOn;     // chained write-then-read and drain-at-end short reads, after the owner's check passed
+    bool dmaUnheard;  // a wait ended because the channel's first end of count never reached the CPU (never booted)
+    // tegra_i2c_get_counters: interrupt actions, transfers, reads by DMA.
+    volatile uint32_t interrupts, transfers, dmaReads;
     // Diagnostics (tegra_i2c_describe): the last failed packet's INT_STATUS and PACKET_TRANSFER_STATUS, as the action
     // or the timeout found them before recovery reset the controller; the pads as the boot chain left them.
     uint32_t faultInt, faultPacket;
@@ -136,6 +177,7 @@ volatile uint8_t *gI2C, *gCar, *gPinmux, *gApbMisc;
 IOWorkLoop *gLoop;
 Bus gBus[kBuses];
 
+#ifndef TEGRA_I2C_HOST_MODEL  // tests/switch_touch_harness.cpp supplies these over its controller model
 inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
@@ -144,6 +186,15 @@ inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
 }
+// The DMA buffer's lines cleaned and invalidated: before the engine writes it (no dirty line lands on top later) and
+// after (the CPU reads what the engine wrote, not a line it prefetched meanwhile). The engine does not snoop.
+inline void dmaSync(const uint8_t *va, size_t size)
+{
+    for (uintptr_t at = (uintptr_t)va & ~(uintptr_t)63, end = (uintptr_t)va + size; at < end; at += 64)
+        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+#endif
 inline uint64_t nowUs()
 {
     uint64_t ns;
@@ -224,9 +275,10 @@ bool clockRunning(const BusInfo &info)
 }
 
 // Moves payload between the FIFOs and the packet: drains the RX FIFO for a read (discarding words past the end,
-// which is an overflow), tops up the TX FIFO for a write.
+// which is an overflow), tops up the TX FIFO for a write. Nothing while the APB DMA takes the read's words.
 void serviceFifo(Bus &b)
 {
+    if (b.dmaActive) return;
     const uint32_t fifo = r32(b.regs, FIFO_STATUS);
     if (b.rx) {
         for (uint32_t words = fifo & 0xf; words; --words) {
@@ -250,12 +302,31 @@ void serviceFifo(Bus &b)
     }
 }
 
-// The packet's outcome once INT_STATUS shows an error or completion, kPending otherwise.
+// The packet's (or chain's) outcome once INT_STATUS shows an error or its completion (and, for a DMA read, the
+// channel's end of count has come too), kPending otherwise. A chain's NACK on its write half ends it here as well:
+// the controller stops at the NACK and the read never starts (ALL_PACKETS_DONE does not come).
 int outcome(Bus &b, uint32_t status)
 {
     if (status & (INT_NO_ACK | INT_ARB_LOST)) return (status & INT_NO_ACK) ? TEGRA_I2C_ENACK : TEGRA_I2C_EARB;
-    if (status & INT_PACKET_DONE) return b.done == b.len && !b.overflow ? TEGRA_I2C_OK : TEGRA_I2C_EIO;
-    return kPending;
+    if (status & b.doneBit) b.packetDone = true;
+    if (!b.packetDone || (b.dmaActive && !b.dmaComplete)) return kPending;
+    return b.done == b.len && !b.overflow ? TEGRA_I2C_OK : TEGRA_I2C_EIO;
+}
+
+// The wait ends (under irqLock): the controller's interrupts masked, a DMA read that did not finish stopped, the
+// failure's registers kept for tegra_i2c_describe, the sleeper woken.
+void finish(Bus &b, uint32_t status)
+{
+    if (b.result != TEGRA_I2C_OK && !b.busClear) {
+        b.faultInt = status;
+        b.faultPacket = r32(b.regs, PACKET_TRANSFER_STATUS);
+        b.faultAddr = b.addr;
+        b.faulted = true;
+    }
+    if (b.dmaActive && !b.dmaComplete) tegra_apbdma_stop(b.dma);
+    w32(b.regs, INT_MASK, 0);
+    b.active = false;
+    IOLockWakeup(b.irqLock, &b.active, true);
 }
 
 // Work loop action for a bus's SPI (level; the GIC masks it while this runs). Mirrors tegra_i2c_isr: errors end
@@ -265,6 +336,7 @@ void interruptOccurred(OSObject *, IOInterruptEventSource *sender, int)
     for (Bus &b : gBus) {
         if (b.irq != sender) continue;
         IOLockLock(b.irqLock);
+        b.interrupts = b.interrupts + 1;
         const uint32_t status = r32(b.regs, INT_STATUS);
         if (!b.active) {
             w32(b.regs, INT_MASK, 0);  // stale: nobody waits any more
@@ -276,20 +348,39 @@ void interruptOccurred(OSObject *, IOInterruptEventSource *sender, int)
                 b.result = outcome(b, status);
             }
             if (b.result != kPending) {
-                if (b.result != TEGRA_I2C_OK && !b.busClear) {
-                    b.faultInt = status;
-                    b.faultPacket = r32(b.regs, PACKET_TRANSFER_STATUS);
-                    b.faultAddr = b.addr;
-                    b.faulted = true;
-                }
-                w32(b.regs, INT_MASK, 0);
-                b.active = false;
-                IOLockWakeup(b.irqLock, &b.active, true);
+                finish(b, status);
+            } else if (b.packetDone) {
+                // A DMA read whose packets are done: only the channel's end of count is still to come.
+                w32(b.regs, INT_MASK, r32(b.regs, INT_MASK) & ~b.doneBit);
             } else if (!b.busClear && !b.rx && b.done == b.len) {
                 w32(b.regs, INT_MASK, r32(b.regs, INT_MASK) & ~INT_TX_REQ);
             }
         }
         w32(b.regs, INT_STATUS, status);  // the FIFO request bits are levels and ignore this
+        IOLockUnlock(b.irqLock);
+    }
+}
+
+// Primary interrupt context, CPU0 (TegraAPBDMA's filter, the end of count already acknowledged): the bus's own work-loop
+// source takes it from here, so the end of count and the controller's interrupt are handled on one thread.
+void dmaEnded(void *context)
+{
+    static_cast<Bus *>(context)->dmaDoneSource->interruptOccurred(nullptr, nullptr, 0);
+}
+
+// Work loop: a DMA read's words have all landed; the wait ends if the packets have too.
+void dmaFinished(OSObject *, IOInterruptEventSource *sender, int)
+{
+    for (Bus &b : gBus) {
+        if (b.dmaDoneSource != sender) continue;
+        IOLockLock(b.irqLock);
+        b.interrupts = b.interrupts + 1;
+        if (b.active && b.dmaActive && !b.dmaComplete) {
+            b.dmaComplete = true;
+            b.done = b.len;
+            b.result = outcome(b, 0);
+            if (b.result != kPending) finish(b, 0);
+        }
         IOLockUnlock(b.irqLock);
     }
 }
@@ -306,8 +397,19 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
         while (b.active && IOLockSleepDeadline(b.irqLock, &b.active, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {}
         if (!b.active) return b.result;
         const uint32_t status = r32(b.regs, INT_STATUS), mask = r32(b.regs, INT_MASK);
-        if (!(status & mask)) break;
+        bool dmaEnd = false;
+        if (b.dmaActive && !b.dmaComplete) (void)tegra_apbdma_moved(b.dma, &dmaEnd);
+        if (!(status & mask) && !dmaEnd) break;
         if (grace) {
+            if (dmaEnd && !tegra_apbdma_interrupts(b.dma)) {
+                b.dmaUnheard = true;  // never booted: the caller's check reports it (TegraI2C.h), DMA stays off
+                break;
+            }
+            if (dmaEnd) {
+                char dma[256];
+                tegra_apbdma_describe(b.dma, dma, sizeof(dma));
+                panic("TegraI2C: I2C%u DMA end of count lost: %s", bus, dma);
+            }
             char gic[192];
             ioswitch_interrupt_describe(intid(bus), gic, sizeof(gic));
             panic("TegraI2C: I2C%u interrupt lost (INTID %u): INT_STATUS %#x INT_MASK %#x FIFO_STATUS %#x, %s", bus,
@@ -321,6 +423,7 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
         b.faultAddr = b.addr;
         b.faulted = true;
     }
+    if (b.dmaActive && !b.dmaComplete) tegra_apbdma_stop(b.dma);
     w32(b.regs, INT_MASK, 0);
     b.active = false;
     return TEGRA_I2C_ETIMEDOUT;
@@ -348,6 +451,7 @@ int configure(unsigned bus, Bus &b)
     IOLockLock(b.irqLock);
     w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
     b.busClear = true;
+    b.packetDone = b.dmaActive = false;
     b.result = kPending;
     b.active = true;
     w32(b.regs, INT_MASK, INT_BUS_CLEAR_DONE);
@@ -429,17 +533,22 @@ int startPacket(Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, size_t le
 
 // One packet: queue it, unmask the controller's interrupts (tegra_i2c_xfer_msg: errors and packet completion
 // always, the FIFO request for the direction in use) and sleep until the action reports the outcome. The budget is
-// 9 bits per byte plus START/address, twice over, and 5 ms for clock stretching.
+// 9 bits per byte plus START/address, twice over, and 5 ms for clock stretching. On a chained bus a read that fits the
+// RX FIFO leaves its request masked: the completion's action drains it (file comment).
 int packet(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, size_t len, bool repeatStart)
 {
     IOLockLock(b.irqLock);
     int result = startPacket(b, addr, out, in, len, repeatStart);
     if (result == TEGRA_I2C_OK) {
+        const bool drainAtEnd = in && b.chainOn && (len + 3) / 4 <= kFifoWords;
         b.addr = addr;
+        b.packetDone = b.dmaActive = false;
+        b.doneBit = INT_PACKET_DONE;
         b.result = kPending;
         b.active = true;
         w32(b.regs, INT_MASK,
-            INT_NO_ACK | INT_ARB_LOST | INT_PACKET_DONE | (in ? INT_RX_REQ : (b.done < b.len ? INT_TX_REQ : 0)));
+            INT_NO_ACK | INT_ARB_LOST | INT_PACKET_DONE |
+                (in ? (drainAtEnd ? 0 : INT_RX_REQ) : (b.done < b.len ? INT_TX_REQ : 0)));
         result = sleepForAction(bus, b, 5000 + (uint64_t)(len + 2) * 18 * 1000000 / b.hz);
         w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
     }
@@ -447,6 +556,99 @@ int packet(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, uint8_t *in, 
     b.rx = nullptr;
     IOLockUnlock(b.irqLock);
     return result;
+}
+
+// A write of at most kChainMaxWrite bytes and a read after a repeated START, as one submission on a chained bus (file
+// comment): flush, both packets queued (L4T tegra_i2c_prepare_buffer: no per-packet interrupt in a multi-packet
+// transfer), errors and ALL_PACKETS_DONE unmasked, the RX request only for a PIO read longer than the RX FIFO. With
+// `dma` the read's words go by the bus's APB DMA channel (started before the headers, as L4T
+// tegra_i2c_start_dma_xfer) into its buffer, and the wait also needs the channel's end of count. One budget for
+// both packets.
+int chain(unsigned bus, Bus &b, uint8_t addr, const uint8_t *out, size_t outLen, uint8_t *in, size_t inLen, bool dma)
+{
+    const BusInfo &info = kBus[bus - 1];
+    const uint32_t words = (uint32_t)((inLen + 3) / 4);
+    IOLockLock(b.irqLock);
+    w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
+    w32(b.regs, FIFO_CONTROL, FIFO_TX_TRIG_8 | FIFO_FLUSH);
+    int result = waitClear(b, FIFO_CONTROL, FIFO_FLUSH, 2000) ? TEGRA_I2C_OK : TEGRA_I2C_ETIMEDOUT;
+    if (result == TEGRA_I2C_OK) {
+        b.tx = nullptr;
+        b.rx = dma ? nullptr : in;
+        b.len = inLen;
+        b.done = 0;
+        b.overflow = false;
+        b.packetDone = false;
+        b.dmaActive = dma;
+        b.dmaComplete = false;
+        b.doneBit = INT_ALL_PACKETS_DONE;
+        b.addr = addr;
+        b.result = kPending;
+        b.active = true;
+        if (dma) {
+            dmaSync(b.dmaBuffer.va, words * 4);
+            // Each 32-bit read of RX_FIFO pops one word of the read (four bytes; a UART's pops one byte).
+            tegra_apbdma_start_rx_words(b.dma, (uint32_t)(kI2CPA + info.regs + RX_FIFO), info.dmaRequest,
+                                        b.dmaBuffer.pa, words);
+        }
+        w32(b.regs, TX_FIFO, PKT0_I2C);
+        w32(b.regs, TX_FIFO, (uint32_t)outLen - 1);
+        w32(b.regs, TX_FIFO, HDR_REPEAT_START | ((uint32_t)addr << 1));
+        for (size_t at = 0; at < outLen; at += 4) {
+            uint32_t word = 0;
+            memcpy(&word, out + at, outLen - at < 4 ? outLen - at : 4);
+            w32(b.regs, TX_FIFO, word);
+        }
+        w32(b.regs, TX_FIFO, PKT0_I2C);
+        w32(b.regs, TX_FIFO, (uint32_t)inLen - 1);
+        w32(b.regs, TX_FIFO, HDR_READ | ((uint32_t)addr << 1));
+        w32(b.regs, INT_MASK,
+            INT_NO_ACK | INT_ARB_LOST | INT_ALL_PACKETS_DONE | (!dma && words > kFifoWords ? INT_RX_REQ : 0));
+        result = sleepForAction(bus, b, 5000 + (uint64_t)(outLen + inLen + 4) * 18 * 1000000 / b.hz);
+        w32(b.regs, INT_STATUS, r32(b.regs, INT_STATUS));
+        if (result == TEGRA_I2C_OK && dma) {
+            dmaSync(b.dmaBuffer.va, words * 4);
+            memcpy(in, b.dmaBuffer.va, inLen);
+            b.dmaReads = b.dmaReads + 1;
+        }
+    }
+    b.tx = nullptr;
+    b.rx = nullptr;
+    b.dmaActive = false;
+    IOLockUnlock(b.irqLock);
+    return result;
+}
+
+// The bus's DMA channel, its buffer and the work-loop source its end of count signals, once (thread context, b.lock
+// held). False with the reason in `why`; the bus then stays on PIO for the boot.
+bool openDma(const BusInfo &info, Bus &b, char *why, size_t whySize)
+{
+    if (b.dma) return true;
+    if (b.dmaFailed) {
+        snprintf(why, whySize, "its DMA could not be had earlier");
+        return false;
+    }
+    b.dmaFailed = true;
+    if (!b.dmaDoneSource) {
+        b.dmaDoneSource = IOInterruptEventSource::interruptEventSource(gLoop, &dmaFinished, nullptr, 0);
+        if (!b.dmaDoneSource || gLoop->addEventSource(b.dmaDoneSource) != kIOReturnSuccess) {
+            snprintf(why, whySize, "no work-loop source for the DMA end of count");
+            return false;
+        }
+        b.dmaDoneSource->enable();
+    }
+    if (!b.dmaBuffer.va && !tegra_apbdma_alloc(kDmaBufferSize, &b.dmaBuffer)) {
+        snprintf(why, whySize, "no DMA buffer (%u bytes below 4 GiB)", kDmaBufferSize);
+        return false;
+    }
+    char reason[96] = "";
+    b.dma = tegra_apbdma_open(info.dmaChannel, gLoop, &dmaEnded, &b, reason, sizeof(reason));
+    if (!b.dma) {
+        snprintf(why, whySize, "APB DMA channel %u: %s", info.dmaChannel, reason);
+        return false;
+    }
+    b.dmaFailed = false;
+    return true;
 }
 
 // tegra_i2c_final_transfer()'s packet: the one polled transfer in this driver (TegraI2C.h). The controller's interrupts
@@ -544,9 +746,16 @@ extern "C" int tegra_i2c_transfer(unsigned bus, uint8_t addr, const void *tx, si
     if (!b.lock) return TEGRA_I2C_ENOTREADY;
     IOLockLock(b.lock);
     int result = b.ready ? TEGRA_I2C_OK : TEGRA_I2C_ENOTREADY;
+    const bool chained = b.chainOn && txlen && rxlen && txlen <= kChainMaxWrite;
+    const bool dma = chained && b.dmaOn && rxlen > kFifoWords * 4 && rxlen <= b.dmaBuffer.size;
+    if (result == TEGRA_I2C_OK) b.transfers = b.transfers + 1;
     for (unsigned attempt = 0; result == TEGRA_I2C_OK; ++attempt) {
-        if (txlen) result = packet(bus, b, addr, (const uint8_t *)tx, nullptr, txlen, rxlen != 0);
-        if (result == TEGRA_I2C_OK && rxlen) result = packet(bus, b, addr, nullptr, (uint8_t *)rx, rxlen, false);
+        if (chained) {
+            result = chain(bus, b, addr, (const uint8_t *)tx, txlen, (uint8_t *)rx, rxlen, dma);
+        } else {
+            if (txlen) result = packet(bus, b, addr, (const uint8_t *)tx, nullptr, txlen, rxlen != 0);
+            if (result == TEGRA_I2C_OK && rxlen) result = packet(bus, b, addr, nullptr, (uint8_t *)rx, rxlen, false);
+        }
         if (result == TEGRA_I2C_OK) break;
         recover(bus, b);
         if (result != TEGRA_I2C_EARB || !b.multiMaster || attempt == kArbRetries) break;
@@ -675,6 +884,104 @@ extern "C" void tegra_i2c_describe(unsigned bus, char *buffer, size_t size)
              clocked ? r32(b.regs, CLK_DIVISOR) : 0, clocked ? r32(b.regs, INTERFACE_TIMING_0) : 0, b.clearResult,
              b.clearStatus, fault);
     IOLockUnlock(b.lock);
+}
+
+namespace {
+// One chained transfer for a check (TegraI2C.h), PIO or DMA, whatever the bus's modes: the owner compares the data
+// with what the one-packet path read. A failure leaves the reason in `why` and the bus recovered.
+int checkedChain(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx, size_t rxlen, bool dma, char *why,
+                 size_t whySize)
+{
+    if (!whySize) return TEGRA_I2C_EINVAL;
+    why[0] = 0;
+    if (bus < 1 || bus > kBuses || addr > 0x7f || !tx || !rx || !txlen || txlen > kChainMaxWrite || !rxlen ||
+        rxlen > (dma ? kDmaBufferSize : (size_t)TEGRA_I2C_MAX_TRANSFER)) {
+        snprintf(why, whySize, "bad arguments");
+        return TEGRA_I2C_EINVAL;
+    }
+    const BusInfo &info = kBus[bus - 1];
+    Bus &b = gBus[bus - 1];
+    if (!info.chained || (dma && !info.dmaRequest)) {
+        snprintf(why, whySize, "I2C%u has no %s path", bus, dma ? "DMA read" : "chained");
+        return TEGRA_I2C_EINVAL;
+    }
+    if (!b.lock) {
+        snprintf(why, whySize, "I2C%u not initialised", bus);
+        return TEGRA_I2C_ENOTREADY;
+    }
+    IOLockLock(b.lock);
+    int result = b.ready ? TEGRA_I2C_OK : TEGRA_I2C_ENOTREADY;
+    if (result == TEGRA_I2C_ENOTREADY) snprintf(why, whySize, "I2C%u not initialised", bus);
+    if (result == TEGRA_I2C_OK && dma && !b.chainOn) {
+        snprintf(why, whySize, "it needs the chained path, which is off");
+        result = TEGRA_I2C_ENODMA;
+    }
+    if (result == TEGRA_I2C_OK && dma && !openDma(info, b, why, whySize)) result = TEGRA_I2C_ENODMA;
+    if (result == TEGRA_I2C_OK) {
+        b.transfers = b.transfers + 1;
+        b.dmaUnheard = false;
+        result = chain(bus, b, addr, (const uint8_t *)tx, txlen, (uint8_t *)rx, rxlen, dma);
+        if (result != TEGRA_I2C_OK) {
+            char state[192];
+            if (dma) {
+                tegra_apbdma_describe(b.dma, state, sizeof(state));
+            } else {
+                snprintf(state, sizeof(state), "INT_STATUS %#x PACKET_TRANSFER_STATUS %#x", b.faultInt, b.faultPacket);
+            }
+            snprintf(why, whySize, "%s (%d): %s",
+                     b.dmaUnheard ? "its first end of count never reached the CPU"
+                     : dma        ? "DMA read failed"
+                                  : "chained read failed",
+                     result, state);
+            recover(bus, b);
+        }
+    }
+    IOLockUnlock(b.lock);
+    return result;
+}
+}  // namespace
+
+extern "C" int tegra_i2c_transfer_chained(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx,
+                                          size_t rxlen, char *why, size_t whySize)
+{
+    return checkedChain(bus, addr, tx, txlen, rx, rxlen, false, why, whySize);
+}
+
+extern "C" int tegra_i2c_transfer_dma(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx, size_t rxlen,
+                                      char *why, size_t whySize)
+{
+    return checkedChain(bus, addr, tx, txlen, rx, rxlen, true, why, whySize);
+}
+
+extern "C" void tegra_i2c_set_chained(unsigned bus, bool on)
+{
+    if (bus < 1 || bus > kBuses || !gBus[bus - 1].lock) return;
+    Bus &b = gBus[bus - 1];
+    IOLockLock(b.lock);
+    b.chainOn = on && kBus[bus - 1].chained;
+    if (!b.chainOn) b.dmaOn = false;
+    IOLockUnlock(b.lock);
+}
+
+extern "C" void tegra_i2c_set_dma(unsigned bus, bool on)
+{
+    if (bus < 1 || bus > kBuses || !gBus[bus - 1].lock) return;
+    Bus &b = gBus[bus - 1];
+    IOLockLock(b.lock);
+    b.dmaOn = on && b.dma && b.chainOn;
+    IOLockUnlock(b.lock);
+}
+
+extern "C" void tegra_i2c_get_counters(unsigned bus, struct tegra_i2c_counters *out)
+{
+    *out = {};
+    if (bus < 1 || bus > kBuses) return;
+    const Bus &b = gBus[bus - 1];
+    out->transfers = b.transfers;
+    out->interrupts = b.interrupts;
+    out->dmaReads = b.dmaReads;
+    out->dmaOff = !b.dmaOn;
+    out->chainOff = !b.chainOn;
 }
 
 extern "C" int tegra_i2c_read(unsigned bus, uint8_t addr, uint8_t reg, void *buf, size_t len)

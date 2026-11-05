@@ -385,12 +385,19 @@ public:
         IOHIDDevice::free();
     }
 
-    IOReturn post(const void *report, size_t length)
+    // The touch device's event driver gets the edge wrapper (file comment) once it has opened the device; until then
+    // IOHIDFamily drops the reports anyway. Both post paths, so the time a report carries never costs the edge gestures.
+    void installEdge()
     {
-        if (length != profile->reportSize) return kIOReturnBadArgument;
         if (profile == &kProfiles[kSwitchHIDTouch] && !edgeInstalled) {
             if (IOService *driver = edge::findDriver(this)) edgeInstalled = edge::install(driver);
         }
+    }
+
+    IOReturn post(const void *report, size_t length)
+    {
+        if (length != profile->reportSize) return kIOReturnBadArgument;
+        installEdge();
         memcpy(buffer->getBytesNoCopy(), report, length);
         return handleReport(buffer, 0 /* kIOHIDReportTypeInput */, 0);
     }
@@ -413,6 +420,7 @@ public:
     {
         if (length != profile->reportSize) return kIOReturnBadArgument;
         if (!timed) return kIOReturnUnsupported;
+        installEdge();
         memcpy(buffer->getBytesNoCopy(), report, length);
         // Under the work loop's gate, as handleReport's WORKLOOP_LOCK takes it (runAction closes and opens it).
         return loop->runAction(
