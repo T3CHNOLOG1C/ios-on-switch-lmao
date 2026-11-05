@@ -55,7 +55,17 @@ class DisplaySmmuTests(unittest.TestCase):
         self.assertIn('abortProbe("the display suspended (SC7)")', source)
         self.assertIn('abortProbe("the display stopped")', source)
         kick = source.split("    void kickOnce()\n", 1)[1].split("\n    }\n", 1)[0]
-        self.assertIn("if (probe.active() || probeRequest)", kick)  # swaps wait while window A is the probe's
+        self.assertIn("(probe.active() || probeRequest) && !releaseProbeHold()", kick)  # held, but bounded
+        release = source.split("    bool releaseProbeHold()\n", 1)[1].split("\n    }\n", 1)[0]
+        self.assertIn("kProbeHoldMs", release)
+        self.assertIn("abortProbe(", release)
+        scanout = source.split("    bool setScanout(bool on)\n", 1)[1].split("\n    }\n", 1)[0]
+        self.assertIn('abortProbe("the display went off")', scanout)  # no frame end comes with the scan stopped
+        # the accepted-swap table never drops the pending head silently
+        add = source.split("    bool addValidated(", 1)[1].split("\n    }\n", 1)[0]
+        self.assertNotIn("if (slot == 8) slot = 0;", add)
+        self.assertIn("validatedAt[i] < validatedAt[slot]", add)
+        self.assertIn("pruneValidated();", kick)
         # A probe START_ADDR request is under the flip deadline like a flip: a lost DC A interrupt panics, never freezes.
         deadline = source.split("    void checkFlipDeadline()\n", 1)[1].split("\n    }\n", 1)[0]
         self.assertIn("!probeRequest", deadline)

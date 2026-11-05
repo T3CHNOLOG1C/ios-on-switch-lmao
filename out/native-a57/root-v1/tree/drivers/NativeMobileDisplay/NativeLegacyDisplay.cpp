@@ -390,8 +390,13 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // Every request the validator accepted and the family has not retired yet. A client may submit swap N+1 while swap N is still on the GPU
     // (int-131: swap 3 was validated during swap 2's GPU copy and one remembered pointer lost swap 2, which then never retired and left
     // every wait on it busy), so more than one can be pending.
-    const OriginalLegacySwapRequest *validated[8] = {};
-    uint64_t validatedAt[8] = {};  // when each was first accepted (mach time): the client's submission
+    // r14-probefix: 16 entries, and entries of swaps the family no longer holds (cancelled or discarded: it never asks this
+    // driver to retire those) are dropped under the gate (pruneValidated) before the table fills. Full, the oldest entry goes,
+    // not entry 0 (which may be the pending head: unvalidated, it would never be taken again and the screen would freeze).
+    static constexpr unsigned kValidated = 16;
+    const OriginalLegacySwapRequest *validated[kValidated] = {};
+    uint64_t validatedAt[kValidated] = {};  // when each was first accepted (mach time): the client's submission
+    uint32_t validatedEvicted = 0, validatedStale = 0;
     bool isValidated(const OriginalLegacySwapRequest *request) const
     {
         if (!request) return false;
@@ -409,11 +414,42 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         if (isValidated(request)) return false;
         unsigned slot = 0;
-        while (slot < 8 && validated[slot]) ++slot;
-        if (slot == 8) slot = 0;
+        while (slot < kValidated && validated[slot]) ++slot;
+        if (slot == kValidated) {
+            slot = 0;
+            for (unsigned i = 1; i < kValidated; ++i)
+                if (validatedAt[i] < validatedAt[slot]) slot = i;
+            __atomic_fetch_add(&validatedEvicted, 1u, __ATOMIC_RELAXED);
+        }
         validated[slot] = request;
         validatedAt[slot] = now;
         return true;
+    }
+    // Under the gate: entries older than a second whose swap is neither in the family's queue, nor its current swap, nor in
+    // flight here (a younger one may be a swap validateSwap just accepted that the family has not queued yet).
+    void pruneValidated()
+    {
+        const OriginalLegacySwapRequest *current = nullptr;
+        memcpy(&current, reinterpret_cast<const unsigned char *>(this) + 5472, sizeof(current));
+        uint64_t second;
+        nanoseconds_to_absolutetime(1000000000ull, &second);
+        const uint64_t now = mach_absolute_time();
+        for (unsigned i = 0; i < kValidated; ++i) {
+            const OriginalLegacySwapRequest *&entry = validated[i];
+            if (!entry || now - validatedAt[i] < second || entry == current || entry == gpuRequest ||
+                (copyQueued && entry == job.request))
+                continue;
+            bool queued = false;
+            for (const OriginalLegacySwapRequest *r = pendingSwapRequest(); r && !queued; r = queuedAfter(r))
+                queued = r == entry;
+            if (queued) continue;
+            entry = nullptr;
+            ++validatedStale;
+        }
+        if (const uint32_t evicted = __atomic_exchange_n(&validatedEvicted, 0u, __ATOMIC_RELAXED))
+            IOLog("IOSwitch display: the accepted-swap table was full: %u entries replaced (%u stale ones dropped so "
+                  "far)\n",
+                  evicted, validatedStale);
     }
     // The request queued behind this one in the family's tail queue (each request's next at +2960, OriginalLegacyFramebufferABI.h
     // activateOnlyPendingSwap), or none.
@@ -425,7 +461,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     }
     uint64_t submittedAt(const OriginalLegacySwapRequest *request) const
     {
-        for (unsigned i = 0; i < 8; ++i)
+        for (unsigned i = 0; i < kValidated; ++i)
             if (request && validated[i] == request) return validatedAt[i];
         return 0;
     }
@@ -511,6 +547,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     DisplaySmmuProbe probe;
     bool probeRan = false, probeUnderflow = false;
     bool probeRequest = false;  // a probe START_ADDR request (to the slot, or back) not yet seen taken
+    // r14-probefix: the probe holds swaps at most kProbeHoldMs (it needs about 20 frame ends, 330 ms); past that, or with the
+    // display going off, it is undone and the swaps go (one line).
+    static constexpr unsigned kProbeHoldMs = 600;
+    uint64_t probeHoldSince = 0;
     int probeSurface = kNoBuffer;
     uint32_t probePixel = 0, probeSwgroupWas = 0;
     char probeLine[160] = {};
@@ -1634,6 +1674,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         if (probeRequest && !(dc[kDcStateControl] & (kGeneralActReq | kWinAActReq))) {
             probeRequest = false;
+            if (!probe.active()) probeHoldSince = 0;
             if (!probe.active() && kickDeferred) {  // the probe's last request (back to the physical address) is in
                 kickDeferred = false;
                 kickSwapQueue();
@@ -1660,6 +1701,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             dc[kDcStateControl] = kGeneralUpdate;
             dc[kDcStateControl] = kGeneralActReq;
             probe.start();
+            probeHoldSince = mach_absolute_time();
             return;
         }
         const bool requestOut = dc[kDcStateControl] & (kGeneralActReq | kWinAActReq);
@@ -1685,10 +1727,28 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                   "undone, direct scanout stays off\n",
                   DisplaySmmuProbe::name(probe.failedAt), probe.why, probeLine[0] ? ": " : "", probeLine, probe.base,
                   probe.again, probe.tweaked, probe.seen);
+        if (!probeRequest) probeHoldSince = 0;
         if (kickDeferred && !probeRequest) {  // else at the frame end that shows the last request taken
             kickDeferred = false;
             kickSwapQueue();
         }
+    }
+    // In a kick held by the probe: past kProbeHoldMs the probe is undone (abortProbe) and its last start-address request no
+    // longer holds swaps (a later flip supersedes it; DC A takes the assembly copy at the boundary either way). True: go.
+    bool releaseProbeHold()
+    {
+        uint64_t bound;
+        nanoseconds_to_absolutetime((uint64_t)kProbeHoldMs * 1000000ull, &bound);
+        if (!probeHoldSince || mach_absolute_time() - probeHoldSince < bound) return false;
+        if (probe.active()) abortProbe("it held the display's swaps too long (frame ends stopped?)");
+        if (probeRequest) {
+            IOLog("IOSwitch display: SMMU probe: its last start-address request was not seen taken in %u ms; swaps go "
+                  "on\n",
+                  kProbeHoldMs);
+            probeRequest = false;
+        }
+        probeHoldSince = 0;
+        return true;
     }
     // The display is going away or to sleep with the probe running: undo now (registers still clocked).
     void abortProbe(const char *reason)
@@ -1955,6 +2015,17 @@ public:
     bool setScanout(bool on)
     {
         if (!dc) return false;
+        if (!on && !hwSuspended && (probe.active() || probeRequest)) {
+            // No frame end comes once the scan stops: undo the probe now, and its last request is taken when the scan
+            // restarts (the assembly copy holds the physical address); the swaps it held go.
+            abortProbe("the display went off");
+            probeRequest = false;
+            probeHoldSince = 0;
+            if (kickDeferred) {
+                kickDeferred = false;
+                kickSwapQueue();
+            }
+        }
         // Powered down for SC7: the resume restarts the scanout (and wakes the panel) if the last request was on.
         if (hwSuspended) {
             resumeLit = on;
@@ -2275,10 +2346,11 @@ public:
         if (!bootTransfer || transferred || !logicalPM || !bootMapping || !primary) return;
         const OriginalLegacySwapRequest *request = pendingSwapRequest();
         if (!request || !isValidated(request)) return;
-        if (probe.active() || probeRequest) {  // window A is the SMMU probe's for a few frames
+        if ((probe.active() || probeRequest) && !releaseProbeHold()) {  // window A is the SMMU probe's for a few frames
             kickDeferred = true;
             return;
         }
+        pruneValidated();
         // Every surface is held (one scanned, one asked for, and with three a replaced one not yet known to be untaken, or a flip
         // out with two), or the controller is unclocked during SC7: the frame end that settles a latch, or the resume, kicks again.
         const bool noSurface = doubleBuffer && ring.target() == kNoBuffer;
