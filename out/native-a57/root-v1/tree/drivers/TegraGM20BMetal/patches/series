@@ -59,3 +59,4 @@ TegraGM20BMetal/patches/m2v/0113-spare-dedicated-blocks.patch
 TegraGM20BMetal/patches/m2v/0115-bounded-command-buffer-waits.patch
 TegraGM20BMetal/patches/m2v/0116-host-reads-and-texel-copy-routes.patch
 TegraGM20BMetal/patches/m2v/0117-listener-user-interactive.patch
+TegraGM20BMetal/patches/m2v/0118-making-log.patch

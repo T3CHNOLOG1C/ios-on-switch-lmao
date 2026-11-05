@@ -15,7 +15,10 @@ usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log 
           SpringBoard's and Preferences', SYSTEM_CACHES) or every one with --open-all, each closed directory on the
           way is made u+rx for the read and given its mode back at once (and checked); other closed containers are
           skipped and counted.
---save    also copy each m2v cache found, whole (v1/, msl/, libs/, the journals), to <dir>/<where it was>, e.g. the boot's log folder.
+--save    also copy each m2v cache found, whole (v1/, msl/, libs/, the journals, makings.log), to <dir>/<where it was>, e.g. the boot's
+          log folder. makings.log (m2v 0118, the plugin turns it on in every cache): one line per driver record the process wrote
+          (a compile), its name and the making's description; a precompile run with METAL2VULKAN_MAKING_LOG=<file> writes the
+          host's, so a seeded making the device made again shows where the two descriptions part.
 --records the driver record store the seed merges (tools/gpu/seed.py; default out/gpu-artifacts/m2v-records): with --volume,
           and for every saved cache below --records-from, each driver record (the content directory's v1/<content>/<xx>/<name>,
           m2v's VkPipelineCache data of one pipeline making, named by what the making reads: build-independent) whose

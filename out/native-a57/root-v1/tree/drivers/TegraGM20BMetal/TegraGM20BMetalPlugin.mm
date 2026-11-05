@@ -479,6 +479,21 @@ id openDevice(unsigned port)
                 continue;
             }
             cache = candidates[i];
+            // The runtime's making log (m2v 0118): one line per driver record this process writes (a pipeline compiled here,
+            // which neither its cache nor the seed held), naming the record and the making's description, beside the journal so
+            // harvest.py --save takes it; past 2 MiB it starts again, the previous kept as makings.log.old. A precompile's own
+            // log beside a device's shows where a seeded making and the device's part (host and device must name each alike).
+            {
+                char makings[600];
+                snprintf(makings, sizeof makings, "%s/makings.log", candidates[i]);
+                struct stat makingsStat;
+                if (stat(makings, &makingsStat) == 0 && makingsStat.st_size > (2 << 20)) {
+                    char old[620];
+                    snprintf(old, sizeof old, "%s.old", makings);
+                    rename(makings, old);
+                }
+                setenv("METAL2VULKAN_MAKING_LOG", makings, 1);
+            }
             const uint64_t bridgeBegan = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
             @try {
                 device = native_bridge_metal_open(loader, cache, registryID, missing);

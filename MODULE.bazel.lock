@@ -214,7 +214,7 @@
         "bzlTransitiveDigest": "1p3iB4v14u1f2irtUPbwnYtFfKYxCjewg8UD2XJrIEw=",
         "usagesDigest": "bfFdfO1EKlphHXkGdolkTW4gIC6FbU/48n6GLz1cKtk=",
         "recordedInputs": [
-          "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series 774f565bcdd788df2ab444b24feccb21973805228ede60d7f1d171538af9ea82"
+          "FILE:@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal/patches/series 53b70c6a98af1d5c1fe3a64f8e1f6b929c4def6fcc5424fbe41e32748186ddcf"
         ],
         "generatedRepoSpecs": {
           "m2v": {
@@ -280,7 +280,8 @@
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0113-spare-dedicated-blocks.patch",
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0115-bounded-command-buffer-waits.patch",
                 "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0116-host-reads-and-texel-copy-routes.patch",
-                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0117-listener-user-interactive.patch"
+                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0117-listener-user-interactive.patch",
+                "@@//out/native-a57/root-v1/tree/drivers/TegraGM20BMetal:patches/m2v/0118-making-log.patch"
               ]
             }
           },

@@ -1,0 +1,255 @@
+diff --git a/crates/metal2vulkan-runtime/src/shader_cache/driver.rs b/crates/metal2vulkan-runtime/src/shader_cache/driver.rs
+--- a/crates/metal2vulkan-runtime/src/shader_cache/driver.rs
++++ b/crates/metal2vulkan-runtime/src/shader_cache/driver.rs
+@@ -178,8 +178,9 @@ pub(crate) fn open(identity: &Identity, bytes: &[u8]) -> Option<Range<usize>> {
+ }
+ 
+ /// What a making reads, which names its record (the module docs): a tag naming the code that
+-/// makes it, then the parts its caller adds, in order.
+-pub(crate) struct Making(Sha256);
++/// makes it, then the parts its caller adds, in order; and, where the making log is on
++/// ([`MakingLog`]), the same parts as text.
++pub(crate) struct Making(Sha256, Option<String>);
+ 
+ impl Making {
+     /// A making by the code `kind` names.
+@@ -187,7 +188,8 @@ impl Making {
+         let mut hash = Sha256::new();
+         hash.update(b"metal2vulkan pipeline making\0");
+         hash.update(VERSION.to_le_bytes());
+-        Making(hash).part(kind.as_bytes())
++        let text = MakingLog::on().then(|| format!("{kind:?}"));
++        Making(hash, text).part(kind.as_bytes())
+     }
+ 
+     /// And `bytes`, after their length.
+@@ -201,29 +203,134 @@ impl Making {
+     pub(crate) fn words(mut self, words: &[u32]) -> Making {
+         self.0.update(((words.len() as u64) * 4).to_le_bytes());
+         let mut chunk = [0u8; 4096];
++        let mut text = self.1.take().map(|text| (text, Sha256::new()));
+         for words in words.chunks(chunk.len() / 4) {
+             for (at, word) in words.iter().enumerate() {
+                 chunk[at * 4..at * 4 + 4].copy_from_slice(&word.to_le_bytes());
+             }
+             self.0.update(&chunk[..words.len() * 4]);
++            if let Some((_, words_hash)) = &mut text {
++                words_hash.update(&chunk[..words.len() * 4]);
++            }
++        }
++        if let Some((mut text, words_hash)) = text {
++            let digest: Hash256 = words_hash.finalize().into();
++            text.push_str(&format!(" spirv:{}:{}", words.len(), hex(&digest[..8])));
++            self.1 = Some(text);
+         }
+         self
+     }
+ 
+     /// And `value`'s `Debug` text: equal values give equal text, and a build that prints them
+     /// otherwise names other records, which costs a compile.
+-    pub(crate) fn text(self, value: &dyn std::fmt::Debug) -> Making {
+-        self.part(format!("{value:?}").as_bytes())
++    pub(crate) fn text(mut self, value: &dyn std::fmt::Debug) -> Making {
++        let printed = format!("{value:?}");
++        if let Some(text) = &mut self.1 {
++            text.push_str(" | ");
++            text.push_str(&printed);
++        }
++        self.part(printed.as_bytes())
+     }
+ 
+     /// And `digest`, of parts described as these are.
+-    pub(crate) fn digest(self, digest: &Hash256) -> Making {
++    pub(crate) fn digest(mut self, digest: &Hash256) -> Making {
++        if let Some(text) = &mut self.1 {
++            text.push_str(" @");
++            text.push_str(&hex(&digest[..8]));
++        }
+         self.part(digest)
+     }
+ 
+-    /// The digest of the parts so far, to describe the makings that share them at once.
++    /// The digest of the parts so far, to describe the makings that share them at once (kept
++    /// with its text where the making log is on, so a making that names it prints it).
+     pub(crate) fn finish(self) -> Hash256 {
+-        self.0.finalize().into()
++        let digest: Hash256 = self.0.finalize().into();
++        if let Some(text) = self.1 {
++            MakingLog::described(&digest, text);
++        }
++        digest
++    }
++}
++
++/// Lowercase hex of `bytes`.
++fn hex(bytes: &[u8]) -> String {
++    bytes.iter().map(|b| format!("{b:02x}")).collect()
++}
++
++/// The making log (ioswitch r8-webgpu): with `METAL2VULKAN_MAKING_LOG` naming a file, each record
++/// this process writes (a making the cache and its seed did not hold: a compile) appends one line
++/// to it, `<record name> <making's parts as text>`, a part named by a digest (`@<16 hex>`) printed
++/// once on a line of its own before it (`= <16 hex> <its parts>`). Two builds or two devices that
++/// make one pipeline under two names print where their descriptions part. Off by default; on, it
++/// only formats what a making already formats to name its record.
++pub(crate) struct MakingLog;
++
++static MAKING_LOG: std::sync::OnceLock<Option<std::sync::Mutex<MakingLogState>>> =
++    std::sync::OnceLock::new();
++
++struct MakingLogState {
++    file: std::fs::File,
++    /// The texts of the digests described lately, by their first 8 bytes' hex, and those printed.
++    described: std::collections::HashMap<String, String>,
++    printed: std::collections::HashSet<String>,
++}
++
++impl MakingLog {
++    fn state() -> Option<&'static std::sync::Mutex<MakingLogState>> {
++        MAKING_LOG
++            .get_or_init(|| {
++                let path = std::env::var_os("METAL2VULKAN_MAKING_LOG")?;
++                let file = std::fs::OpenOptions::new()
++                    .create(true)
++                    .append(true)
++                    .open(path)
++                    .ok()?;
++                Some(std::sync::Mutex::new(MakingLogState {
++                    file,
++                    described: std::collections::HashMap::new(),
++                    printed: std::collections::HashSet::new(),
++                }))
++            })
++            .as_ref()
++    }
++
++    fn on() -> bool {
++        Self::state().is_some()
++    }
++
++    fn described(digest: &Hash256, text: String) {
++        if let Some(state) = Self::state() {
++            let mut state = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
++            if state.described.len() >= 256 {
++                state.described.clear();
++            }
++            state.described.insert(hex(&digest[..8]), text);
++        }
++    }
++
++    /// The line of the record `name`, written by a making described as `text`.
++    fn wrote(name: &str, text: &str) {
++        use std::io::Write;
++        let Some(state) = Self::state() else {
++            return;
++        };
++        let mut state = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
++        let mut out = String::new();
++        for at in text.match_indices(" @").map(|(at, _)| at + 2) {
++            let Some(key) = text.get(at..at + 16) else {
++                continue;
++            };
++            if state.printed.contains(key) {
++                continue;
++            }
++            if let Some(parts) = state.described.get(key) {
++                out.push_str(&format!("= {key} {parts}\n"));
++                let key = key.to_owned();
++                state.printed.insert(key);
++            }
++        }
++        out.push_str(&format!("{name} {text}\n"));
++        let _ = state.file.write_all(out.as_bytes());
+     }
+ }
+ 
+@@ -238,16 +345,23 @@ pub(crate) struct Records {
+ impl Records {
+     /// The name of `making`'s record.
+     pub(crate) fn name(&self, making: Making) -> String {
++        self.name_and_text(making).0
++    }
++
++    /// The name of `making`'s record, and its parts as text where the making log is on.
++    fn name_and_text(&self, mut making: Making) -> (String, Option<String>) {
++        let text = making.1.take();
+         let key = making
+             .digest(&Sha256::digest(self.identity.0).into())
+             .digest(&self.settings)
+             .finish();
+-        entry_name(
++        let name = entry_name(
+             &store::content(),
+             EntryKind::PipelineData,
+             &key,
+             &self.profile,
+-        )
++        );
++        (name, text)
+     }
+ }
+ 
+@@ -270,7 +384,7 @@ pub(super) fn make<T, E>(
+     making: Making,
+     create: impl FnOnce(vk::PipelineCache) -> Result<T, E>,
+ ) -> Result<T, E> {
+-    let name = records.name(making);
++    let (name, text) = records.name_and_text(making);
+     let identity = &records.identity;
+     let seed = match store.load_content(&name, |bytes| {
+         let data = open(identity, &bytes)?;
+@@ -317,7 +431,11 @@ pub(super) fn make<T, E>(
+     };
+     let made = create(cache);
+     if made.is_ok() {
+-        keep(store, (identity, &name), raw, cache, loaded);
++        if keep(store, (identity, &name), raw, cache, loaded) {
++            if let Some(text) = &text {
++                MakingLog::wrote(&name, text);
++            }
++        }
+     }
+     // SAFETY: the making returned, and nothing else holds the cache.
+     unsafe { release::object(raw, cache) };
+@@ -333,9 +451,9 @@ fn keep(
+     raw: &ash::Device,
+     cache: vk::PipelineCache,
+     loaded: Option<&Seed>,
+-) {
++) -> bool {
+     let Some(busy) = exit_guard::enter() else {
+-        return;
++        return false;
+     };
+     // SAFETY: the cache is live, and no making uses it any more.
+     let read = unsafe { raw.get_pipeline_cache_data(cache) };
+@@ -343,18 +461,24 @@ fn keep(
+     drop(busy);
+     let Ok(data) = read else {
+         store.write_failed();
+-        return;
++        return false;
+     };
+     if loaded.is_some_and(|seed| seed.bytes[seed.data.clone()] == data[..]) {
+         count(&store.counters.driver_data_unchanged);
+-        return;
++        return false;
+     }
+     if let Err(refusal) = identity.check_vulkan_header(&data) {
+         store.counters.refused(refusal);
+-        return;
++        return false;
+     }
+     match store.write_record(name, &seal(identity, &data)) {
+-        Ok(_) => count(&store.counters.driver_saves),
+-        Err(_) => store.write_failed(),
++        Ok(_) => {
++            count(&store.counters.driver_saves);
++            true
++        }
++        Err(_) => {
++            store.write_failed();
++            false
++        }
+     }
+ }
