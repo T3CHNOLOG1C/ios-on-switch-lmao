@@ -10,6 +10,7 @@
 //           (registerCheckDecoder: not flagged hardware, named com.ioswitch.avd.check.vp09, as the device's boot check
 //           uses it) and the fake engine: every superframe and frame through VP9NVDEC and the kernel's checker, all 16
 //           shown frames out of a session that says hardware.
+//   gate:   the private registration outside an open check (gCheckOpen false): no instance, so no session by its name.
 //   hevc:   HEVCClip.h's Main clips A and V and Main 10 clip T as 'hvc1' on the private check registration (named
 //           com.ioswitch.avd.check.hvc1) and the fake engine: every picture through HEVCNVDEC and the kernel's checker,
 //           all out of a hardware session; then with the arena full, Apple's software HEVC decoder in the instance,
@@ -51,6 +52,11 @@ uint32_t nvdec_codecs(const NVDECClient *c)
     (void)c;
     return 1u << TEGRA_NVDEC_CODEC_H264 | 1u << TEGRA_NVDEC_CODEC_VP9 | 1u << TEGRA_NVDEC_CODEC_HEVC |
            TEGRA_NVDEC_HEVC_MAIN10;
+}
+
+uint32_t nvdec_codecs_now(NVDECClient *c)
+{
+    return nvdec_codecs(c);
 }
 
 uint32_t nvdec_check_claim(NVDECClient *c, bool *claimed)
@@ -131,6 +137,9 @@ int main(void)
                                 registerCheckDecoder(kCMVideoCodecType_VP9) ||
                                 registerCheckDecoder(kCMVideoCodecType_HEVC);
     CFRelease(info);
+    // This process is the check (its private registration makes instances only while one is open).
+    __atomic_store_n(&gClaimer, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&gCheckOpen, true, __ATOMIC_RELEASE);
     if (registered) {
         printf("FAIL avd: VTRegisterVideoDecoderWithInfo %d\n", (int)registered);
         return 1;
@@ -152,8 +161,16 @@ int main(void)
     CFDictionaryRef vp9Spec = CFDictionaryCreate(NULL, vp9Keys, vp9Values, 1, &kCFTypeDictionaryKeyCallBacks,
                                                  &kCFTypeDictionaryValueCallBacks);
     clip_check(ClipCheckVP9, vp9Spec, vp9, sizeof(vp9));
-    CFRelease(vp9Spec);
     printf("vp9: %s (submits %d)\n", vp9, gSubmits - vp9Submits);
+    // Outside an open check the private registration makes no instance: VideoToolbox finds no decoder by that name.
+    char closed[512];
+    __atomic_store_n(&gCheckOpen, false, __ATOMIC_RELEASE);
+    const int closedSubmits = gSubmits;
+    clip_check(ClipCheckVP9, vp9Spec, closed, sizeof(closed));
+    const bool gated = strstr(closed, "VTDecompressionSessionCreate failed") && gSubmits == closedSubmits;
+    printf("vp9 outside the check: %s\n", closed);
+    __atomic_store_n(&gCheckOpen, true, __ATOMIC_RELEASE);
+    CFRelease(vp9Spec);
     // HEVC on the private check registration: clips A and V, then the Main 10 clip T, through HEVCNVDEC and the kernel
     // checker (the fake engine writes nothing, so no frame matches: all must come out, from a hardware session); then
     // with the arena full, Apple's software HEVC decoder inside the instance, which must match FFmpeg.
@@ -185,7 +202,7 @@ int main(void)
                     strstr(engine, "hardware: hardware decoder") && strstr(engine, " 30 out (") &&
                     gOpens > engineOpens && strstr(full, "hardware: software decoder, 30/30 frames match x264") &&
                     strstr(vp9, "vp9: hardware decoder") && strstr(vp9, " 16 out (") &&
-                    hevcSubmits - vp9Submits == 18 && hevcOk;
+                    hevcSubmits - vp9Submits == 18 && gated && hevcOk;
     printf("%s avd: plug-in on VideoToolbox (H.264, VP9 and HEVC on a fake NVDEC, then Apple's software H.264 and "
            "HEVC in the instance)\n",
            ok ? "PASS" : "FAIL");

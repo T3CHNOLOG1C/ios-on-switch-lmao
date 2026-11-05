@@ -87,6 +87,14 @@ uint32_t nvdec_codecs(const NVDECClient *c)
     return c->codecs;
 }
 
+uint32_t nvdec_codecs_now(NVDECClient *c)
+{
+    TegraNVDECInfo info;
+    if (call(c, c->selector, TegraNVDECMethodGetInfo, NULL, 0, &info, sizeof(info)) == KERN_SUCCESS)
+        c->codecs = info.codecs;
+    return c->codecs;
+}
+
 // A call that fails leaves the state FAILED: nothing is offered on a verdict this process could not read.
 uint32_t nvdec_check_claim(NVDECClient *c, bool *claimed)
 {

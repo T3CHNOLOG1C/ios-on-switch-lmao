@@ -12,8 +12,10 @@ typedef struct NVDECClient NVDECClient;
 bool nvdec_service_present(void);
 NVDECClient *nvdec_open(int *error);  // NULL with the IOReturn when the service is absent or refuses this process
 void nvdec_close(NVDECClient *client);
-// TegraNVDECInfo.codecs: bit n, codec n proven on the engine at boot.
+// TegraNVDECInfo.codecs: bit n, codec n proven on the engine at boot, as the kernel had them when the client opened.
 uint32_t nvdec_codecs(const NVDECClient *client);
+// The same bits read again (a clip-check verdict since the open turns a failed codec's bit off); the open's on error.
+uint32_t nvdec_codecs_now(NVDECClient *client);
 // The clip check's verdict (TegraNVDECABI.h TEGRA_NVDEC_CHECK_*): claim (the state; *claimed when this connection runs
 // it), report (the owner: VP9, HEVC and HEVC Main 10 verdicts), wait (at most 3 s while another process runs it).
 uint32_t nvdec_check_claim(NVDECClient *client, bool *claimed);

@@ -712,13 +712,28 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
 // only the check selects it); the verdicts go to the kernel, and 'vp09' / 'hvc1' are offered (here and in every other
 // process) only when the clips matched their references (libvpx, FFmpeg). A failure turns that codec off:
 // TegraNVDECInfo.codecs loses it and Submit refuses it. HEVC Main 10 has its own clip and verdict.
+//
+// The check's sessions need not run in the claiming process: VideoToolbox remotes some clients' sessions into the
+// codec process (com.apple.WebKit.GPU's run in videocodecd), and the private registration has to be in that process's
+// registry. So every process that finds the check running registers it too, and it makes instances only while a check
+// is open (gCheckOpen: in the claimer from the claim to the report, elsewhere until the verdict); outside that window
+// VideoToolbox moves on to the next decoder. A process that finds the check running never holds up its registry for
+// the verdict: H.264 is offered at once, 'vp09' and 'hvc1' from a background wait when the verdict comes (the kernel's
+// bounded sleep on it, not polling). r8a: com.apple.WebKit.GPU claimed the check, its VP9 and HEVC sessions went to
+// videocodecd, which had no private registration (-12906), so VP9 and HEVC were off for the boot; videocodecd had
+// meanwhile blocked 3 s in VTLoadVideoDecoders waiting for that same check, then offered neither.
 #define kCheckImplementation CFSTR("com.ioswitch.avd.check")
 #define kCheckDecoderID      CFSTR("com.ioswitch.avd.check.vp09")
 #define kCheckHEVCDecoderID  CFSTR("com.ioswitch.avd.check.hvc1")
 
+enum { kVerdictWaits = 10 };  // the kernel's 3 s waits for a verdict: a check that gives none in 30 s is stuck
+
+static bool gCheckOpen;  // the private registration makes instances (atomic)
+static bool gClaimer;    // this process runs the check (atomic)
+
 typedef struct {
-    NVDECClient *probe;  // holds the claim until the verdict is reported
-    bool vp9, hevc;
+    NVDECClient *probe;  // the claimer's holds the claim until the verdict is reported; a waiter's sleeps on it
+    bool vp9, hevc;      // proven at N3 and privately registered: the check covers them
 } Check;
 
 static void logCheck(bool ok, const char *line)
@@ -758,21 +773,68 @@ static void registerHEVC(void)
     if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoderWithInfo('hvc1') failed: %d", (int)status);
 }
 
+static void registerVP9(void)
+{
+    const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
+    if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)status);
+}
+
+// The private registration's factory: refuses outside an open check, so VideoToolbox takes the next decoder.
+static OSStatus createCheckInstance(FourCharCode codec, CFAllocatorRef allocator, VTVideoDecoderRef *out)
+{
+    if (!__atomic_load_n(&gCheckOpen, __ATOMIC_ACQUIRE)) return kVTCouldNotFindVideoDecoderErr;
+    if (!__atomic_load_n(&gClaimer, __ATOMIC_ACQUIRE) && !tSoftwareLookup) {
+        static int logged;  // the next boot's proof that a remoted check session found it here
+        if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
+            os_log(gLog,
+                   "AVD: clip-check decoder '%{public}s' serving a session in %{public}s (the check runs in "
+                   "another process)",
+                   codec == kCMVideoCodecType_VP9 ? "vp09" : "hvc1", getprogname());
+    }
+    return createInstance(codec, allocator, out);
+}
+
+static OSStatus registerCheckDecoder(FourCharCode codec)
+{
+    const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoDecoder_IsHardwareAccelerated};
+    const void *values[] = {kCheckImplementation, kCFBooleanFalse};
+    CFDictionaryRef info =
+        CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    const OSStatus status = VTRegisterVideoDecoderWithInfo(codec, info, createCheckInstance);
+    CFRelease(info);
+    return status;
+}
+
+// What the kernel's codec bits say now (a failed clip turned its codec off), offered in this process.
+static void offerVerdict(NVDECClient *probe, bool vp9Proven, bool hevcProven)
+{
+    const uint32_t codecs = nvdec_codecs_now(probe);
+    if (codecs & (1u << TEGRA_NVDEC_CODEC_VP9))
+        registerVP9();
+    else if (vp9Proven)
+        os_log(gLog, "AVD: VP9 not offered in %{public}s: the clip check failed", getprogname());
+    if (codecs & (1u << TEGRA_NVDEC_CODEC_HEVC))
+        registerHEVC();
+    else if (hevcProven)
+        os_log(gLog, "AVD: HEVC not on NVDEC in %{public}s: the clip check failed", getprogname());
+}
+
 static void selfTest(void *context)
 {
     Check *check = context;
+    __atomic_store_n(&gClaimer, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&gCheckOpen, true, __ATOMIC_RELEASE);
     char line[512];
     logCheck(clip_check(ClipCheckHardware, NULL, line, sizeof(line)), line);
     const bool vp9Ok = check->vp9 && namedCheck(ClipCheckVP9, kCheckDecoderID, line, sizeof(line));
     const bool hevcOk = check->hevc && namedCheck(ClipCheckHEVC, kCheckHEVCDecoderID, line, sizeof(line));
     const bool hevc10Ok = hevcOk && namedCheck(ClipCheckHEVC10, kCheckHEVCDecoderID, line, sizeof(line));
     nvdec_check_report(check->probe, vp9Ok, hevcOk, hevc10Ok);
-    if (vp9Ok) {
-        const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
-        if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)status);
-    } else if (check->vp9) {
+    __atomic_store_n(&gCheckOpen, false, __ATOMIC_RELEASE);
+    if (vp9Ok)
+        registerVP9();
+    else if (check->vp9)
         os_log_error(gLog, "AVD: VP9 off until reboot (the clip check failed); sites fall back to H.264");
-    }
     if (hevcOk)
         registerHEVC();
     else if (check->hevc)
@@ -784,15 +846,36 @@ static void selfTest(void *context)
     free(check);
 }
 
-static OSStatus registerCheckDecoder(FourCharCode codec)
+// Another process runs the check: wait for its verdict off the registry's thread, then offer what it left on. A claim
+// given back without a verdict (that process closed) is taken here, and the check runs here.
+static void awaitVerdict(void *context)
 {
-    const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoDecoder_IsHardwareAccelerated};
-    const void *values[] = {kCheckImplementation, kCFBooleanFalse};
-    CFDictionaryRef info =
-        CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    const OSStatus status = VTRegisterVideoDecoderWithInfo(codec, info, createInstance);
-    CFRelease(info);
-    return status;
+    Check *check = context;
+    uint32_t state = TEGRA_NVDEC_CHECK_RUNNING;
+    for (unsigned waits = 0; waits < kVerdictWaits;) {
+        if (state == TEGRA_NVDEC_CHECK_UNCLAIMED) {
+            bool claimed = false;
+            state = nvdec_check_claim(check->probe, &claimed);
+            if (claimed) {
+                selfTest(check);
+                return;
+            }
+        }
+        if (state != TEGRA_NVDEC_CHECK_RUNNING && state != TEGRA_NVDEC_CHECK_UNCLAIMED) break;
+        state = nvdec_check_wait(check->probe);
+        waits++;
+    }
+    __atomic_store_n(&gCheckOpen, false, __ATOMIC_RELEASE);
+    if (state == TEGRA_NVDEC_CHECK_PASSED || state == TEGRA_NVDEC_CHECK_FAILED) {
+        offerVerdict(check->probe, check->vp9, check->hevc);
+        os_log(gLog, "AVD: clip-check verdict reached %{public}s after it started (%{public}s)", getprogname(),
+               state == TEGRA_NVDEC_CHECK_PASSED ? "passed" : "failed");
+    } else {
+        os_log_error(gLog, "AVD: VP9 and HEVC not offered in %{public}s: no clip-check verdict in %u s", getprogname(),
+                     kVerdictWaits * 3);
+    }
+    nvdec_close(check->probe);
+    free(check);
 }
 
 __attribute__((visibility("default"))) void AVDRegister(void);
@@ -814,38 +897,23 @@ void AVDRegister(void)
     const uint32_t proven = nvdec_codecs(probe);
     const bool vp9Proven = proven & (1u << TEGRA_NVDEC_CODEC_VP9), hevcProven = proven & (1u << TEGRA_NVDEC_CODEC_HEVC);
     bool claimed = false;
-    uint32_t state = nvdec_check_claim(probe, &claimed);
-    if (!claimed && state == TEGRA_NVDEC_CHECK_RUNNING) {
-        state = nvdec_check_wait(probe);  // another process runs it (well under a second)
-        if (state == TEGRA_NVDEC_CHECK_UNCLAIMED) state = nvdec_check_claim(probe, &claimed);  // it gave up the claim
-    }
-    if (claimed) {
+    const uint32_t state = nvdec_check_claim(probe, &claimed);
+    if (claimed || state == TEGRA_NVDEC_CHECK_RUNNING) {
         Check *check = calloc(1, sizeof(*check));
-        if (check) {
-            check->probe = probe;
-            check->vp9 = vp9Proven && !registerCheckDecoder(kCMVideoCodecType_VP9);
-            check->hevc = hevcProven && !registerCheckDecoder(kCMVideoCodecType_HEVC);
-            // Off the registry's thread: the check's sessions look the registry up once this registration returns.
-            dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), check, selfTest);
+        if (!check) {
+            if (claimed) nvdec_check_report(probe, false, false, false);
+            nvdec_close(probe);
             return;
         }
-        nvdec_check_report(probe, false, false, false);
-    } else if (state == TEGRA_NVDEC_CHECK_PASSED || state == TEGRA_NVDEC_CHECK_FAILED) {
-        // The verdicts are the codec bits now: a codec whose clip failed lost its bit.
-        const uint32_t codecs = nvdec_codecs(probe);
-        if (codecs & (1u << TEGRA_NVDEC_CODEC_VP9)) {
-            const OSStatus vp9Status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
-            if (vp9Status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)vp9Status);
-        } else if (vp9Proven) {
-            os_log(gLog, "AVD: VP9 not offered in %{public}s: the clip check failed", getprogname());
-        }
-        if (codecs & (1u << TEGRA_NVDEC_CODEC_HEVC))
-            registerHEVC();
-        else if (hevcProven)
-            os_log(gLog, "AVD: HEVC not on NVDEC in %{public}s: the clip check failed", getprogname());
-    } else if (vp9Proven || hevcProven) {
-        os_log(gLog, "AVD: VP9 and HEVC not offered in %{public}s: the clip check gave no verdict within 3 s",
-               getprogname());
+        check->probe = probe;
+        check->vp9 = vp9Proven && !registerCheckDecoder(kCMVideoCodecType_VP9);
+        check->hevc = hevcProven && !registerCheckDecoder(kCMVideoCodecType_HEVC);
+        if (!claimed) __atomic_store_n(&gCheckOpen, true, __ATOMIC_RELEASE);  // sessions remoted here by the claimer
+        // Off the registry's thread: the check's sessions look the registry up once this registration returns.
+        dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), check, claimed ? selfTest : awaitVerdict);
+        return;
     }
+    if (state == TEGRA_NVDEC_CHECK_PASSED || state == TEGRA_NVDEC_CHECK_FAILED)
+        offerVerdict(probe, vp9Proven, hevcProven);  // the verdicts are the codec bits now
     nvdec_close(probe);
 }

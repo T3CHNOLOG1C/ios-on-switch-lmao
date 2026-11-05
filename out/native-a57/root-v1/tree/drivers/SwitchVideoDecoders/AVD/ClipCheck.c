@@ -343,7 +343,9 @@ bool clip_check(ClipCheckMode mode, CFDictionaryRef extraSpec, char *line, size_
     if (status) {
         CFRelease(format);
         snprintf(line, size, "%s: VTDecompressionSessionCreate failed %d%s FAIL", name, (int)status,
-                 hardware ? " (no hardware decoder for it: AVD.videodecoder not registered in this process)" : "");
+                 hardware ? " (VideoToolbox found no hardware decoder for it, here or in the codec process it remotes "
+                            "the session to)"
+                          : "");
         return false;
     }
     CFBooleanRef usingHardware = NULL;
