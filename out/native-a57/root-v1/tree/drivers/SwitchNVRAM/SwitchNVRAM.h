@@ -13,7 +13,9 @@ extern "C" {
 int ioswitch_nvram_publish(void);
 
 // kern_exec.c load_init_program, once Data is mounted and before launchd: restores the NVRAM saved in
-// /private/var/ioswitch/nvram.bin and starts saving it there. Returns how many variables were restored.
+// /private/var/ioswitch/nvram.bin and starts saving it there. Returns how many variables were restored. Then hands the
+// same moment to SwitchBluetooth (switch_bluetooth_data_mounted, a no-op without it), which publishes the BD address
+// staged on Data before bluetoothd can read the address.
 uint32_t ioswitch_nvram_data_mounted(void);
 
 // Writes the NVRAM to the SD card now and returns once it is there (0, or the errno; 0 with nothing to write or before

@@ -430,9 +430,14 @@ extern "C" int ioswitch_nvram_publish(void)
     return status;
 }
 
+// SwitchBluetooth's strong definition wins when it is linked (../SwitchBluetooth/SwitchBluetooth.h).
+extern "C" __attribute__((weak)) void switch_bluetooth_data_mounted(void) {}
+
 extern "C" uint32_t ioswitch_nvram_data_mounted(void)
 {
-    return SwitchNVRAM::restoreFromData();
+    const uint32_t added = SwitchNVRAM::restoreFromData();
+    switch_bluetooth_data_mounted();  // the other driver that reads Data before launchd (SwitchNVRAM.h)
+    return added;
 }
 
 extern "C" int switch_nvram_flush(void)

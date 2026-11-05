@@ -56,12 +56,22 @@
 // BD address: the unit's own from the fuses (publishAddress), or Horizon's when deploy staged hekate's "Dump Joy-Con BT"
 // (switchroot/joycon_mac.ini on the FAT, read there by tools/deploy/joycon_pairing.py and written to Data as
 // kStagedAddressPath: 6 bytes, display order), as switchroot's U-Boot sets the controller to the host address in
-// joycon_mac.bin so that Joy-Cons paired in Horizon reconnect without being paired again. Data is surely mounted only
-// once bluetoothd runs, so the staged address is read at its first connect, written to the controller (0xFC01) before
-// the stream is handed over and put where bluetoothd and MobileGestalt read the address. bluetoothd has read
-// local-mac-address once already by then, for BlueTool's "btaddress" (21H461 FUN_1002f0268), which the stand-in
-// ignores. Every connect then hands the controller's address to the rail Joy-Con driver, which pairs rail Joy-Cons to
-// it (switch_joycon_bluetooth_address, ../SwitchJoyCon/SwitchJoyCon.h).
+// joycon_mac.bin so that Joy-Cons paired in Horizon reconnect without being paired again. bluetoothd must see one
+// address for its whole life: it reads local-mac-address at its start (21H461 FindLocalMacAddress, "Got
+// local-mac-address", before it connects) and the controller's (Read BD_ADDR) once its stack is up, and every classic
+// link key it keeps carries the local address it was stored under. When its stack starts it drops each key stored
+// under another one ("We have a link key for the wrong local device", "Not link key, result 150"), and a link key
+// request for that device then finds none. Until r14 the staged address replaced the fuses' only at bluetoothd's
+// first connect, after it had read local-mac-address: every boot's stack start dropped the Joy-Con and AirPods keys
+// stored under the other address (two or three a boot in r7r's logs), and only the keys joyconpaird imported after
+// that check were there for the boot. r7r 11:02:51 dropped the right Joy-Con's (imported
+// just before) and kept the left's (just after); at 11:07:43-:46 the right one connected four times and dropped the
+// link within 330 ms without authenticating, at :49 its link key request found no key, and after it was put back on
+// the rail (re-import, 11:07:57) its key was found. So the staged address is published once Data is mounted, before
+// launchd (switch_bluetooth_data_mounted, called by SwitchNVRAM's hook in load_init_program): bluetoothd reads it at
+// its start, and its first connect writes it to the controller (0xFC01) before the stream is handed over. Every
+// connect then hands the controller's address to the rail Joy-Con driver, which pairs rail Joy-Cons to it
+// (switch_joycon_bluetooth_address, ../SwitchJoyCon/SwitchJoyCon.h).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
@@ -85,6 +95,7 @@
 #include <sys/vnode.h>
 #include <string.h>
 #include "SwitchBluetooth.h"
+#include "SwitchBluetoothLinks.h"
 #include "../ArmGIC/IOSwitchInterrupts.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -242,7 +253,15 @@ constexpr uint32_t kRetrySeconds[] = {1, 2, 4, 8};
 constexpr uint32_t kStuckMs = 60000;
 constexpr uint32_t kRingBytes = 16384;
 constexpr uint32_t kStatsMs = 10000;  // the stats line: at most this often, and only after traffic (logStats)
-constexpr uint32_t kTraceEntries = 48, kTraceParams = 24, kTraceReturn = 12;
+constexpr uint32_t kTraceEntries = 80, kTraceParams = 24, kTraceReturn = 12;
+constexpr uint32_t kLinkTraceLines = 600;  // link trace lines a boot (os_log; "Links" section)
+// Traced once a boot with their completions besides the LE and vendor commands: Read Local Supported Features, Read
+// Buffer Size (the ACL and SCO buffers every link shares), Read BD_ADDR (the address bluetoothd takes from the
+// controller), controller-to-host flow control and Host Buffer Size, Write Simple Pairing Mode, Write Secure
+// Connections Host Support, Write Class Of Device, Write Page Timeout, Write Connection Accept Timeout, Write Page
+// Scan Type, Write Inquiry Scan Type.
+constexpr uint16_t kTracedSetup[] = {0x1003, 0x1005, 0x1009, 0x0c31, 0x0c33, 0x0c56,
+                                     0x0c7a, 0x0c24, 0x0c18, 0x0c16, 0x0c47, 0x0c43};
 
 inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
@@ -415,10 +434,22 @@ class SwitchBluetooth : public IOService {
     bool clientRoom(size_t need);
     void logStats(bool force);
 
+    // Links ("Links" section, SwitchBluetoothLinks.h): ACL packets per connection handle (cmdLock) and the link trace.
+    switch_bt_links links = {};
+    uint8_t roleAddr[6] = {};  // the last Role Change's address and role, for a link whose Connection Complete follows
+    uint8_t role = SWITCH_BT_ROLE_UNKNOWN;
+    uint32_t linkLines = 0;  // link trace lines logged this boot (atomic)
+    void linkEvent(uint8_t code, uint32_t length);
+    void linkCommand(uint16_t opcode, const uint8_t *params, uint8_t length);
+    void linkCompletion(uint16_t opcode, bool status, uint8_t result);
+    void linkLog(const char *direction, const char *line, const switch_bt_link *last = nullptr);
+
     OSData *patch = nullptr;
     uint8_t address[6] = {};
     bool haveAddress = false;
     const char *addressFrom = "ADT";
+    uint8_t chipAddress[6] = {};  // what the controller was last given (Write BD_ADDR), valid with chipAddressSet
+    bool chipAddressSet = false;
     bool stagedChecked = false;  // stateLock: the staged address was looked for (first connect)
     bool adoptStagedAddress();
     void publishAddressProperties();
@@ -507,30 +538,71 @@ OSDefineMetaClassAndStructors(SwitchBluetooth, IOService)
     SwitchBluetooth *gDriver;
     bool gAddressFromFuses;
 
+    // The staged address (see the header, "BD address"), looked for once Data is mounted, before launchd
+    // (switch_bluetooth_data_mounted): kStagedNone until then and when there is none, kStagedFound with it in gStaged.
+    enum { kStagedUnread, kStagedNone, kStagedFound };
+    int gStagedState = kStagedUnread;  // atomic; gStaged is written before kStagedFound is stored (release)
+    uint8_t gStaged[6];
+
+    // kStagedAddressPath, read with the kernel's context: true with a unicast address in `out`. A missing file is the
+    // normal case (no dump staged); anything else is one line and no staged address.
+    bool readStagedAddress(uint8_t out[6])
+    {
+        vfs_context_t ctx = vfs_context_kernel();
+        vnode_t vp = NULLVP;
+        const int opened = vnode_open(kStagedAddressPath, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx);
+        if (opened) {
+            if (opened != ENOENT) IOLog("SwitchBluetooth: %s not opened (%d)\n", kStagedAddressPath, opened);
+            return false;
+        }
+        uint8_t staged[7] = {};
+        int resid = 0;
+        const int error = vn_rdwr(UIO_READ, vp, reinterpret_cast<caddr_t>(staged), sizeof(staged), 0, UIO_SYSSPACE,
+                                  IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+        vnode_close(vp, FREAD, ctx);
+        static const uint8_t zero[6] = {}, ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+        // Exactly 6 bytes (one more asked for, so a longer file shows), a unicast address.
+        if (error || resid != 1 || !memcmp(staged, zero, 6) || !memcmp(staged, ones, 6) || (staged[0] & 1)) {
+            IOLog("SwitchBluetooth: %s is not a BD address (error %d, %d bytes); ignored\n", kStagedAddressPath, error,
+                  (int)sizeof(staged) - resid);
+            return false;
+        }
+        memcpy(out, staged, 6);
+        return true;
+    }
+
+    // Where bluetoothd (/arm-io/bluetooth local-mac-address) and MobileGestalt (/chosen mac-address-bluetooth0) read
+    // the address.
+    void publishAddressBytes(const uint8_t bytes[6])
+    {
+        OSData *value = OSData::withBytes(bytes, 6);
+        IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane);
+        IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+        if (value && node) node->setProperty("local-mac-address", value);
+        if (value && chosen) chosen->setProperty("mac-address-bluetooth0", value);
+        OSSafeReleaseNULL(chosen);
+        OSSafeReleaseNULL(node);
+        OSSafeReleaseNULL(value);
+    }
+
     // The unit's own BD address, as U-Boot derives device_bt_mac (switchroot board/nintendo/switch/nintendo-switch.c
     // generate_and_set_serial): Nintendo's OUI 98:B6:E9, bits 23:16 and 15:8 of FUSE_OPT_LOT_CODE_0, its low byte + 1
     // (+2 is Wi-Fi's). It replaces the packager's shared fallback where bluetoothd (/arm-io/bluetooth
     // local-mac-address) and MobileGestalt (/chosen mac-address-bluetooth0) read it. Runs in switch_bluetooth_start,
-    // ahead of launchd and of anything that can sleep. Left alone when the fuses cannot be read safely or are blank.
+    // ahead of launchd and of anything that can sleep, and so (the board thread's first step, seconds before the Data
+    // mount) ahead of a staged address, which it never replaces. Left alone when the fuses cannot be read safely or
+    // are blank.
     void publishAddress()
     {
+        if (__atomic_load_n(&gStagedState, __ATOMIC_ACQUIRE) == kStagedFound) return;
         volatile uint8_t *car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
         if (!car || !(r32(car, CLK_OUT_ENB_H) & kFuseClock) || !(r32(car, MISC_CLK_ENB) & kFuseVisible)) return;
         volatile uint8_t *fuse = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFusePA, 0x1000));
         const uint32_t lot0 = fuse ? r32(fuse, kFuseLotCode0) : 0;
         if (!lot0) return;
         const uint8_t unit[6] = {0x98, 0xb6, 0xe9, (uint8_t)(lot0 >> 16), (uint8_t)(lot0 >> 8), (uint8_t)(lot0 + 1)};
-        OSData *value = OSData::withBytes(unit, sizeof(unit));
-        IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane);
-        IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
-        if (value && node) {
-            node->setProperty("local-mac-address", value);
-            if (chosen) chosen->setProperty("mac-address-bluetooth0", value);
-            gAddressFromFuses = true;
-        }
-        OSSafeReleaseNULL(chosen);
-        OSSafeReleaseNULL(node);
-        OSSafeReleaseNULL(value);
+        publishAddressBytes(unit);
+        gAddressFromFuses = true;
     }
 }
 
@@ -576,7 +648,10 @@ bool SwitchBluetooth::start(IOService *provider)
         if (data && data->getLength() == 6) {
             memcpy(address, data->getBytesNoCopy(), 6);
             haveAddress = true;
-            if (gAddressFromFuses) addressFrom = "fuses";
+            if (__atomic_load_n(&gStagedState, __ATOMIC_ACQUIRE) == kStagedFound && !memcmp(address, gStaged, 6))
+                addressFrom = "staged";
+            else if (gAddressFromFuses)
+                addressFrom = "fuses";
         }
         node->release();
     }
@@ -1073,6 +1148,8 @@ void SwitchBluetooth::resetClientFraming()
     sentCount = 0;
     sentOverflow = false;
     answerHead = answerTail = 0;
+    links = {};  // a new client: the controller has no links (a used one was brought up again)
+    role = SWITCH_BT_ROLE_UNKNOWN;
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
 }
 
@@ -1100,6 +1177,7 @@ size_t SwitchBluetooth::noteClientTx(const uint8_t *bytes, size_t length)
             if (f.have < f.need) continue;
             f.left = f.type == H4_ACL ? (uint32_t)(f.header[2] | f.header[3] << 8) : f.header[2];
             if (f.type == H4_COMMAND) noteCommandLocked((uint16_t)(f.header[0] | f.header[1] << 8));
+            if (f.type == H4_ACL) switch_bt_link_tx(&links, switch_bt_acl_handle(f.header));
             f.state = f.left ? 2 : 0;
             if (!f.state) break;
         } else {
@@ -1167,8 +1245,12 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
         const uint8_t code = at(1);
         const bool status = code == EV_COMMAND_STATUS;  // Status: status, credits, opcode; Complete: credits, opcode
         const bool completion = status ? at(2) >= 4 : code == EV_COMMAND_COMPLETE && at(2) >= 3;
-        // A completion is looked at whole; an LE meta event once its sub-event and report count (bytes 3, 4) are in.
-        if (completion ? avail < total : code == EV_LE_META && avail < (total < 5 ? total : 5)) return false;
+        // A completion is looked at whole; an LE meta event once its sub-event and report count (bytes 3, 4) are in,
+        // and whole if it is a connection complete; a link event ("Links") whole.
+        if (code == EV_LE_META && avail < (total < 5 ? total : 5)) return false;
+        const bool linked = !completion && switch_bt_event_wanted(code, code == EV_LE_META && at(2) ? at(3) : 0);
+        if ((completion || linked) && avail < total) return false;
+        if (linked) linkEvent(code, at(2));
         ++st.events;
         switch (code) {
         case EV_COMMAND_COMPLETE: ++st.cc; break;
@@ -1213,6 +1295,7 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
             for (uint32_t i = 0; i < retLength; ++i) ret[i] = at(7 + i);
             countCompletion(opcode, (uint8_t)was);
             traceCompletion(opcode, status, (uint8_t)was, ret, retLength);
+            linkCompletion(opcode, status, (uint8_t)was);
         }
         if (stray) {  // not passed on (top of section)
             rxDrop = true;
@@ -1238,11 +1321,16 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
         }
         break;
     }
-    case H4_ACL:
+    case H4_ACL: {
         if (avail < 5) return false;
         total = 5u + (uint32_t)(at(3) | at(4) << 8);
         ++st.acl;
+        const uint8_t header[2] = {at(1), at(2)};
+        const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+        switch_bt_link_rx(&links, switch_bt_acl_handle(header));
+        IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
         break;
+    }
     case H4_SCO:
         if (avail < 4) return false;
         total = 4u + at(3);
@@ -1273,6 +1361,7 @@ errno_t SwitchBluetooth::clientCommand(uint8_t *packet, size_t size)
     }
     if (fixAdvertising(opcode, params, length)) __atomic_fetch_add(&st.advFixed, 1, __ATOMIC_RELAXED);
     traceCommand(opcode, params, length, false);
+    linkCommand(opcode, params, length);
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
     noteCommandLocked(opcode);
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
@@ -1374,8 +1463,10 @@ void hex(char *out, size_t size, const uint8_t *bytes, uint32_t count)
 void SwitchBluetooth::traceCommand(uint16_t opcode, const uint8_t *params, uint8_t length, bool answered)
 {
     const uint16_t ogf = opcode >> 10;
+    bool setup = false;  // the controller settings that shape every link (Links), and what it reports of itself
+    for (const uint16_t op : kTracedSetup) setup |= opcode == op;
     if (ogf != kOgfLe && ogf != kOgfVendor && opcode != OP_SET_EVENT_MASK && opcode != OP_SET_EVENT_MASK_2 &&
-        opcode != OP_WRITE_LE_HOST_SUPPORT)
+        opcode != OP_WRITE_LE_HOST_SUPPORT && !setup)
         return;
     const uint8_t sub = opcode == OP_BCM_LE_META && length ? params[0] : 0;
     Traced entry = {};
@@ -1421,6 +1512,109 @@ void SwitchBluetooth::traceCompletion(uint16_t opcode, bool status, uint8_t resu
     hex(r, sizeof(r), ret, retLength);
     os_log(OS_LOG_DEFAULT, "SwitchBluetooth: HCI %04x/%02x %u bytes [%s] -> Command %s, status %#04x [%s]", opcode,
            entry.sub, entry.length, p, status ? "Status" : "Complete", result, r);
+}
+
+// ---- Links -------------------------------------------------------------------------------------------------------
+//
+// What every connection does, for a controller that holds several at once (two Joy-Cons and AirPods: two classic HID
+// links in sniff and an A2DP one). The table (SwitchBluetoothLinks.h, cmdLock) follows each connection handle from its
+// Connection Complete to its Disconnection Complete: the ACL packets each way, the controller's completions for them
+// (the credit accounting bluetoothd does across all links from Read Buffer Size's total), the most ever outstanding, the
+// role and sniff mode; the stats line carries it. The link trace (os_log, kLinkTraceLines a boot) logs every command
+// that makes, accepts, secures, shapes or ends a link, with its Command Status or Complete, and every link event:
+// connection request and complete, role and mode changes, link key and IO capability requests, authentication,
+// encryption, disconnection (with the link's counts), max slots, supervision timeout, Hardware Error and Data Buffer
+// Overflow. A Link Key Request Reply is logged without its key.
+
+// Any thread: one link trace line ("->" to the controller, "<-" from it), with a closed link's counts; the last line of
+// the budget says the rest are not logged.
+void SwitchBluetooth::linkLog(const char *direction, const char *line, const switch_bt_link *last)
+{
+    const uint32_t n = __atomic_fetch_add(&linkLines, 1, __ATOMIC_RELAXED);
+    if (n > kLinkTraceLines) return;
+    if (n == kLinkTraceLines) {
+        os_log(OS_LOG_DEFAULT, "SwitchBluetooth: link trace: %u lines this boot, no more", kLinkTraceLines);
+        return;
+    }
+    if (last)
+        os_log(OS_LOG_DEFAULT, "SwitchBluetooth: link %s %s: rx %u tx %u done %u outstanding %u peak %u", direction,
+               line, last->rx, last->tx, last->done, last->tx - last->done, last->peak);
+    else
+        os_log(OS_LOG_DEFAULT, "SwitchBluetooth: link %s %s", direction, line);
+}
+
+// Client thread (clientCommand): a link command on its way to the controller.
+void SwitchBluetooth::linkCommand(uint16_t opcode, const uint8_t *params, uint8_t length)
+{
+    if (!switch_bt_link_command_name(opcode)) return;
+    char line[160];
+    switch_bt_describe_command(line, sizeof(line), opcode, params, length);
+    linkLog("->", line);
+}
+
+// Work loop (frameRx): the Command Status or Complete of a link command.
+void SwitchBluetooth::linkCompletion(uint16_t opcode, bool status, uint8_t result)
+{
+    const char *name = switch_bt_link_command_name(opcode);
+    if (!name) return;
+    char line[96];
+    snprintf(line, sizeof(line), "Command %s for %s: 0x%02x", status ? "Status" : "Complete", name, result);
+    linkLog("<-", line);
+}
+
+// Work loop (frameRx): a whole link event at the ring's tail (`length` parameter bytes after its 3-byte H4 header),
+// into the table and the trace. Number Of Completed Packets is only counted.
+void SwitchBluetooth::linkEvent(uint8_t code, uint32_t length)
+{
+    uint8_t p[255];
+    const uint32_t tail = rx.tail;
+    for (uint32_t i = 0; i < length; ++i) p[i] = rx.data[(tail + 3 + i) & (kRingBytes - 1)];
+    switch_bt_link closed = {};
+    bool wasOpen = false;
+    const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
+    switch (code) {
+    case SWITCH_BT_EV_NUM_COMPLETED: (void)switch_bt_links_completed(&links, p, length); break;
+    case SWITCH_BT_EV_CONNECTION_COMPLETE:
+        if (length >= 11 && !p[0])
+            (void)switch_bt_link_open(&links, switch_bt_le16(p + 1), SWITCH_BT_LINK_ACL, p + 3,
+                                      memcmp(p + 3, roleAddr, 6) ? (uint8_t)SWITCH_BT_ROLE_UNKNOWN : role);
+        break;
+    case SWITCH_BT_EV_LE_META:
+        if (length >= 19 && !p[1])
+            (void)switch_bt_link_open(&links, (uint16_t)(switch_bt_le16(p + 2) & 0x0fffu), SWITCH_BT_LINK_LE, p + 6,
+                                      p[4]);
+        break;
+    case SWITCH_BT_EV_DISCONNECTION_COMPLETE:
+        if (length >= 4 && !p[0]) wasOpen = switch_bt_link_close(&links, switch_bt_le16(p + 1), &closed);
+        break;
+    case SWITCH_BT_EV_ROLE_CHANGE:
+        if (length >= 8 && !p[0]) {
+            memcpy(roleAddr, p + 1, 6);
+            role = p[7];
+            for (switch_bt_link &l : links.link)
+                if (l.kind != SWITCH_BT_LINK_FREE && !memcmp(l.addr, p + 1, 6)) l.role = p[7];
+        }
+        break;
+    case SWITCH_BT_EV_MODE_CHANGE: {
+        switch_bt_link *l = length >= 6 && !p[0] ? switch_bt_link_find(&links, switch_bt_le16(p + 1)) : nullptr;
+        if (l) {
+            l->mode = p[3];
+            l->interval = switch_bt_le16(p + 4);
+        }
+        break;
+    }
+    case SWITCH_BT_EV_ENCRYPTION_CHANGE: {
+        switch_bt_link *l = length >= 4 && !p[0] ? switch_bt_link_find(&links, switch_bt_le16(p + 1)) : nullptr;
+        if (l) l->encrypted = p[3];
+        break;
+    }
+    default: break;
+    }
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
+    if (code == SWITCH_BT_EV_NUM_COMPLETED) return;
+    char line[200];
+    switch_bt_describe_event(line, sizeof(line), code, p, length);
+    linkLog("<-", line, wasOpen ? &closed : nullptr);
 }
 
 // Work loop: a completion with a non-zero status, counted by opcode and status for the stats line.
@@ -1471,21 +1665,52 @@ void SwitchBluetooth::logStats(bool force)
         at += (size_t)snprintf(fails + at, sizeof(fails) - at, " %04x=%#04x x%u", failed[i].opcode, failed[i].status,
                                failed[i].count - failedLogged[i].count);
     }
+    // The links as they are now (totals since each came up; "Links" section): tx - done is what each holds of the
+    // controller's ACL buffers.
+    switch_bt_links snapshot = {};
+    IOInterruptState locked = IOSimpleLockLockDisableInterrupt(cmdLock);
+    snapshot = links;
+    IOSimpleLockUnlockEnableInterrupt(cmdLock, locked);
+    char held[520] = "";
+    size_t used = 0;  // what is in `held`; an entry that would not fit ends it (snprintf returns what it wanted)
+    for (const switch_bt_link &l : snapshot.link) {
+        if (l.kind == SWITCH_BT_LINK_FREE) continue;
+        char a[18];
+        switch_bt_format_addr(a, l.addr);
+        const int n = snprintf(held + used, sizeof(held) - used,
+                               " %04x %s %s role %s %s %u, rx %u tx %u done %u outstanding %u peak %u;", l.handle, a,
+                               l.kind == SWITCH_BT_LINK_LE ? "LE" : "ACL",
+                               l.role == 0   ? "central"
+                               : l.role == 1 ? "peripheral"
+                                             : "?",
+                               l.mode == 2 ? "sniff" : "active", l.interval, l.rx, l.tx, l.done, l.tx - l.done, l.peak);
+        if (n < 0 || used + (size_t)n >= sizeof(held)) {
+            held[used] = '\0';
+            break;
+        }
+        used += (size_t)n;
+    }
+    if (snapshot.strayTx || snapshot.strayDone) {
+        const int n = snprintf(held + used, sizeof(held) - used, " unknown handles: tx %u done %u", snapshot.strayTx,
+                               snapshot.strayDone);
+        if (n < 0 || used + (size_t)n >= sizeof(held)) held[used] = '\0';
+    }
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(now - statsAt, &ns);
-    char line[640];
+    char line[1024];
     snprintf(
         line, sizeof(line),
         "SwitchBluetooth: stats %llu ms: rx %u B, tx %u B, %u interrupts, %u wakeups; from the controller %u events "
         "(complete %u, status %u, completed packets %u, vendor %u, other %u), LE meta %u (advertising reports "
         "%u in %u events, connections %u, other %u), ACL %u, SCO %u; to it %u commands (LE %u, vendor %u), "
-        "answered here %u, advertising intervals raised %u, scan on %u off %u; failed:%s",
+        "answered here %u, advertising intervals raised %u, scan on %u off %u; failed:%s; links:%s",
         (unsigned long long)(ns / 1000000), rxNow - rxBytesLogged, txNow - txBytesLogged, irqsNow - irqsLogged,
         n.actions - o.actions, n.events - o.events, n.cc - o.cc, n.cs - o.cs, n.nocp - o.nocp, n.vendor - o.vendor,
         n.otherEvents - o.otherEvents, n.le - o.le, n.leAdvReports - o.leAdvReports, n.leAdv - o.leAdv,
         n.leConn - o.leConn, n.leOther - o.leOther, n.acl - o.acl, n.sco - o.sco, n.commands - o.commands,
         n.leCommands - o.leCommands, n.vendorCommands - o.vendorCommands, n.answered - o.answered,
-        n.advFixed - o.advFixed, n.scanOn - o.scanOn, n.scanOff - o.scanOff, at ? fails : " none");
+        n.advFixed - o.advFixed, n.scanOn - o.scanOn, n.scanOff - o.scanOff, at ? fails : " none",
+        held[0] ? held : " none");
     os_log(OS_LOG_DEFAULT, "%s", line);
     stLogged = n;
     memcpy(failedLogged, failed, sizeof(failed));
@@ -1775,6 +2000,7 @@ bool SwitchBluetooth::bringUp(uint32_t offMs, char *why, size_t whySize)
     const uint32_t faultsBefore = rxFaults;
     setMode(kKernel);
     power(false);
+    chipAddressSet = false;  // a power cycle takes the controller back to its own address
     setPin(PH3, GPIO_OUT, false);
     IOSleep(offMs);
     setHostBaud(kInitBaud);
@@ -1861,6 +2087,8 @@ bool SwitchBluetooth::bringUp(uint32_t offMs, char *why, size_t whySize)
                 snprintf(why, whySize, "Write BD_ADDR failed (error %d)", error);
                 goto fail;
             }
+            memcpy(chipAddress, address, sizeof(chipAddress));
+            chipAddressSet = true;
         }
         setMode(kIdle);
         IOLog("SwitchBluetooth: %s up at %u baud, manufacturer %#06x, LMP subversion %#06x (ROM %#06x), %s %u records, "
@@ -1963,42 +2191,28 @@ void SwitchBluetooth::setMode(Mode m)
 // mac-address-bluetooth0) read it, as publishAddress() puts the fuses' one.
 void SwitchBluetooth::publishAddressProperties()
 {
-    OSData *value = OSData::withBytes(address, sizeof(address));
-    IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane);
-    IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
-    if (value && node) node->setProperty("local-mac-address", value);
-    if (value && chosen) chosen->setProperty("mac-address-bluetooth0", value);
-    OSSafeReleaseNULL(chosen);
-    OSSafeReleaseNULL(node);
-    OSSafeReleaseNULL(value);
+    publishAddressBytes(address);
 }
 
-// The staged address (see the header), read with the kernel's context: this runs on bluetoothd's thread, and its
-// sandbox would refuse the path. Returns whether it replaced `address`. A missing file is the normal case; a malformed
-// one is ignored with a line.
+// bluetoothd's first connect (see the header): the staged address as `address`, if there is one and it is not that
+// already. Normally switch_bluetooth_data_mounted found it before launchd and published it, so bluetoothd has read it
+// as local-mac-address from its start and this only takes it over for the controller. A kernel that never called that
+// hook (no Data mount of its own) reads the file here, as before: this runs on bluetoothd's thread, so with the
+// kernel's context (bluetoothd's sandbox would refuse the path). Returns whether `address` changed.
 bool SwitchBluetooth::adoptStagedAddress()
 {
-    vfs_context_t ctx = vfs_context_kernel();
-    vnode_t vp = NULLVP;
-    if (vnode_open(kStagedAddressPath, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) return false;
-    uint8_t staged[7] = {};
-    int resid = 0;
-    const int error = vn_rdwr(UIO_READ, vp, reinterpret_cast<caddr_t>(staged), sizeof(staged), 0, UIO_SYSSPACE,
-                              IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
-    vnode_close(vp, FREAD, ctx);
-    static const uint8_t zero[6] = {}, ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-    // Exactly 6 bytes (one more asked for, so a longer file shows), a unicast address.
-    if (error || resid != 1 || !memcmp(staged, zero, 6) || !memcmp(staged, ones, 6) || (staged[0] & 1)) {
-        IOLog("SwitchBluetooth: %s is not a BD address (error %d, %d bytes); kept %02x:%02x:%02x:%02x:%02x:%02x\n",
-              kStagedAddressPath, error, (int)sizeof(staged) - resid, address[0], address[1], address[2], address[3],
-              address[4], address[5]);
+    uint8_t staged[6];
+    const int found = __atomic_load_n(&gStagedState, __ATOMIC_ACQUIRE);
+    if (found == kStagedFound)
+        memcpy(staged, gStaged, sizeof(staged));
+    else if (found == kStagedNone || !readStagedAddress(staged))
         return false;
-    }
     if (haveAddress && !memcmp(staged, address, 6)) return false;
     IOLog("SwitchBluetooth: BD %02x:%02x:%02x:%02x:%02x:%02x from the staged Joy-Con pairing (Horizon's), was "
-          "%02x:%02x:%02x:%02x:%02x:%02x (%s)\n",
+          "%02x:%02x:%02x:%02x:%02x:%02x (%s)%s\n",
           staged[0], staged[1], staged[2], staged[3], staged[4], staged[5], address[0], address[1], address[2],
-          address[3], address[4], address[5], haveAddress ? addressFrom : "chip default");
+          address[3], address[4], address[5], haveAddress ? addressFrom : "chip default",
+          found == kStagedFound ? "" : "; bluetoothd read the old one at its start");
     memcpy(address, staged, 6);
     haveAddress = true;
     addressFrom = "staged";
@@ -2020,15 +2234,17 @@ errno_t SwitchBluetooth::ctlConnect(kern_ctl_ref, struct sockaddr_ctl *sac, void
     while (self->state <= kBusy &&
            IOLockSleepDeadline(self->stateLock, &self->state, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {}
     errno_t error = 0;
-    // The first connect (see the header): a staged address the controller does not have yet. Bring-up writes it; a
-    // controller that needs none gets it with one command.
-    bool readdress = false;
+    // The first connect (see the header) takes the staged address over; the controller, brought up at boot before
+    // Data was mounted, still has the fuses' one. Bring-up writes `address`; a controller that needs none gets it
+    // with one command.
     if (self->state > kBusy && !self->client && !self->stagedChecked) {
         self->stagedChecked = true;
         IOLockUnlock(self->stateLock);
-        readdress = self->adoptStagedAddress();
+        (void)self->adoptStagedAddress();
         IOLockLock(self->stateLock);
     }
+    const bool readdress =
+        self->haveAddress && (!self->chipAddressSet || memcmp(self->chipAddress, self->address, sizeof(self->address)));
     if (readdress && self->state == kReady && !self->client && !self->chipDirty &&
         !__atomic_load_n(&self->rxFault, __ATOMIC_RELAXED)) {
         self->state = kBusy;
@@ -2039,6 +2255,10 @@ errno_t SwitchBluetooth::ctlConnect(kern_ctl_ref, struct sockaddr_ctl *sac, void
         const int written = self->command(OP_BCM_WRITE_BDADDR, le, sizeof(le), kCommandMs);
         self->setMode(kIdle);
         if (written) IOLog("SwitchBluetooth: Write BD_ADDR for the staged address failed (error %d)\n", written);
+        if (!written) {
+            memcpy(self->chipAddress, self->address, sizeof(self->chipAddress));
+            self->chipAddressSet = true;
+        }
         IOLockLock(self->stateLock);
         self->state = kReady;
         self->chipDirty |= written != 0;  // the bring-up below writes it
@@ -2275,4 +2495,24 @@ extern "C" int switch_bluetooth_start(void)
     }
     thread_deallocate(thread);
     return 0;
+}
+
+// kern_exec.c load_init_program, through SwitchNVRAM's ioswitch_nvram_data_mounted: Data is mounted and launchd not yet
+// started. A staged address is published now, so that bluetoothd reads it as local-mac-address when it starts and
+// never sees another one (see the header, "BD address"); the controller gets it at bluetoothd's first connect.
+extern "C" void switch_bluetooth_data_mounted(void)
+{
+    uint32_t enabled = 0;
+    if (!PE_parse_boot_argn("switch-bt", &enabled, sizeof(enabled)) || !enabled) return;
+    uint8_t staged[6];
+    if (!readStagedAddress(staged)) {
+        __atomic_store_n(&gStagedState, kStagedNone, __ATOMIC_RELEASE);
+        return;
+    }
+    memcpy(gStaged, staged, sizeof(gStaged));
+    __atomic_store_n(&gStagedState, kStagedFound, __ATOMIC_RELEASE);
+    publishAddressBytes(staged);
+    IOLog("SwitchBluetooth: BD %02x:%02x:%02x:%02x:%02x:%02x from the staged Joy-Con pairing (Horizon's), in place "
+          "before launchd\n",
+          staged[0], staged[1], staged[2], staged[3], staged[4], staged[5]);
 }
