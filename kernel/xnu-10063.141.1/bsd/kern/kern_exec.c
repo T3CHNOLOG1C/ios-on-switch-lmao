@@ -8062,22 +8062,34 @@ native_ioswitch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mou
 
 /* The state a restored iPad has after Setup and data migration, plus no
  * SpringBoard watchdogs or idle sleep (no buttons or idle timer here yet).
- * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks. */
+ * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks.
+ *
+ * Each domain is written one of three ways: replacing the user's plist every boot (kSetupUser: domains whose every key is
+ * ours), seeding it only when it is missing (kSetupOnce), or as a managed preference (kSetupManaged: /private/var/Managed
+ * Preferences/mobile/<domain>.plist, root 0644, rewritten every boot), which CFPreferences reads over the user's plist key
+ * by key and so leaves the user's other keys alone. com.apple.springboard is managed: its user plist also keeps what
+ * backboardd and SpringBoard save there, above all the display brightness (SBBacklightLevel2, BKSSpringBoardDefaults
+ * brightness), which backboardd restores at start (BKDisplayBrightnessUpdateTransactionManager
+ * synchronizeALSPreferencesAndSystemDisplayBrightness). Rewriting that plist every boot reset the brightness to the
+ * default 0.5 at each boot (every boot logged since 10-30). Should the managed file not be written, the user's plist is
+ * replaced as before (one line). */
+enum native_ioswitch_setup_kind { kSetupUser, kSetupOnce, kSetupManaged };
+
 static int
 native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
 #define IOSW_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
-	static const struct { const char *name, *body; bool once; } prefs[] = {
+	static const struct { const char *name, *body; enum native_ioswitch_setup_kind kind; } prefs[] = {
 		{"com.apple.purplebuddy", IOSW_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
-		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), false},
+		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), kSetupUser},
 		{"com.apple.purplebuddy.notbackedup", IOSW_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
 		    "<key>ShouldRunHSA2MiniBuddy</key><false/><key>ShouldRunKeychainSyncMiniBuddy</key><false/>"
 		    "<key>ShouldRunMesaMiniBuddy</key><false/><key>ShouldRunPaymentMiniBuddy</key><false/>"
-		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), false},
+		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), kSetupUser},
 		{"com.apple.managedconfiguration.notbackedup",
-		    IOSW_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), false},
+		    IOSW_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), kSetupUser},
 		{"com.apple.springboard", IOSW_PLIST("<key>BKNoWatchdogs</key><true/>"
 		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
 		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
@@ -8091,13 +8103,13 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		     * type falls back to the iPad mini 6. In orientation 4 that swap turns Vol- into Vol+. The
 		     * Switch never turns (no accelerometer, rotation locked), so Vol+ (PX6) is always on the user's
 		     * right and raises the volume in every interface orientation, even a portrait an app forces. */
-		    "<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"), false},
+		    "<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"), kSetupManaged},
 		{"com.apple.UIKit", IOSW_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
-		    "<string>UICTContentSizeCategoryXXL</string>"), false},
+		    "<string>UICTContentSizeCategoryXXL</string>"), kSetupOnce}, /* the default; the user's Text Size then sticks */
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
 		{"com.apple.migration", IOSW_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
-		    "<key>buildVersion</key><string>21H461</string></dict>"), true},
+		    "<key>buildVersion</key><string>21H461</string></dict>"), kSetupOnce},
 	};
 #undef IOSW_PLIST
 	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
@@ -8122,14 +8134,24 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		error = native_ioswitch_mkdir(p, scratch, directories[i].path, directories[i].owner, directories[i].mode);
 	char path[160] = "/private/var/containers";
 	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
+		static char portrait[1024];  /* once, in launchd's exec */
+		const char *body = native_ioswitch_portrait_prefs(prefs[i].name, prefs[i].body, portrait, sizeof(portrait));
+		if (prefs[i].kind == kSetupManaged) {
+			snprintf(path, sizeof(path), "/private/var/Managed Preferences/mobile/%s.plist", prefs[i].name);
+			int managed = native_ioswitch_mkdir(p, scratch, "/private/var/Managed Preferences", 0, 0755);
+			if (!managed) managed = native_ioswitch_mkdir(p, scratch, "/private/var/Managed Preferences/mobile", 0, 0755);
+			if (!managed) {
+				managed = native_ioswitch_watchdog_file(p, scratch, path, body, (int)strlen(body), data_mount, 0, 0, 0644);
+			}
+			if (!managed) continue;
+			printf("IOSwitch raw boot: %s failed: %d; replacing the user's plist instead\n", path, managed);
+		}
 		snprintf(path, sizeof(path), "/private/var/mobile/Library/Preferences/%s.plist", prefs[i].name);
 		vnode_t existing = NULLVP;
-		if (prefs[i].once && !vnode_lookup(path, 0, &existing, vfs_context_current())) {
+		if (prefs[i].kind == kSetupOnce && !vnode_lookup(path, 0, &existing, vfs_context_current())) {
 			vnode_put(existing);
 			continue;
 		}
-		static char portrait[1024];  /* once, in launchd's exec */
-		const char *body = native_ioswitch_portrait_prefs(prefs[i].name, prefs[i].body, portrait, sizeof(portrait));
 		error = native_ioswitch_watchdog_file(p, scratch, path, body, (int)strlen(body), data_mount, 501, 501, 0600);
 	}
 	if (error) printf("IOSwitch raw boot: first-boot state failed at %s: %d\n", path, error);
