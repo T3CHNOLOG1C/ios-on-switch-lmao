@@ -2,6 +2,10 @@
 
 Don't write stupidly long files. Around 500 lines of code, you should consider splitting them. Keep helpers away from higher level logic. A human needs to be able to read and maintain this codebase. That means you need to keep it readable to a human. This does not conflict with code comments. Your code should be self explanatory to the largest extent possible.
 
+## Writing Documentation
+
+When writing documentation (this includes even any README.md), write only what isn't obvious. When writing readmes for individual packages, don't make them a million lines long and containing all sorts of flowery language trying to explain every single thing about it. Keep it small, simple, bounded. If you followed the above rule, the documentation should be the code. For things that are implicit or non-obvious (like Bazel tasks, for example), put them in the README.md files. To make them pleasant to read, always run the `/humanizer` skill on them. Don't explain names, or folder layouts, or anything that's a waste of space. If it's a readme, explain what this is, what it does, how to run it, why it is the way that it is, and that's it. Do **NOT** touch `docs/` without explicit human approval. This contains documentation that will end up on a public website and it cannot become AI slop.
+
 ## Code Comments
 
 Default to writing no new comments.
