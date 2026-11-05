@@ -12,8 +12,12 @@ pipeline states only (PROBE_LABEL): the render server's.
      extended-range formats' shadow images and merges) are left out: the raw path hands them to m2v.
 
 usage: rawpack.py --bridge <host libnative_metal_bridge.a> --nvk <host twin dylib> --qc <default.metallib> --corpus <corpus.log>
-                  --out <dir> [--stack <hex key>]
+                  --out <dir> [--stack <hex key>] [--prebuilt <dir>]
+       rawpack.py --build-only --bridge <host libnative_metal_bridge.a> --out <dir>
 writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe logs in <out>/work (deleted with --clean).
+--build-only compiles the probe, the mock GPU (libmock_iokit.dylib) and ycbcr.metallib into <dir> and stops; --prebuilt
+<dir> runs those instead of compiling them (//gpu:raw_pack makes them its own action, so a corpus edit only reruns the
+probes).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime refuses a
 pack of another build.
 """
@@ -22,6 +26,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent            # drivers/TegraGM20BMetal/raw/pack
@@ -47,36 +52,61 @@ def option(name, required=True):
     return None
 
 
-def main():
-    bridge, nvk, qc, corpus = (Path(option(n)).resolve() for n in ('--bridge', '--nvk', '--qc', '--corpus'))
-    out = Path(option('--out')).resolve()
-    stack = int(option('--stack', False) or '0', 16)
-    work = out / 'work'
-    shutil.rmtree(work, ignore_errors=True)
-    work.mkdir(parents=True)
-    # the mock GPU with nvdec on every submission, and the probe through the frontend + host bridge
-    cflags = ['-O2', '-Wall', '-I', ABI]
+BUILT = ('probe', 'libmock_iokit.dylib', 'ycbcr.metallib')
+
+
+def build(work, bridge):
+    """The mock GPU with nvdec on every submission, the probe through the frontend + host bridge (beside it: rpath
+    @executable_path) and the raw path's own states: the 4:2:0 YCbCr conversions (ycbcr.metal), an iOS library like
+    QuartzCore's, drawn after Core Animation's (probe.mm PROBE_YCBCR_LIB)."""
+    # Source paths (Mesa's asserts' __FILE__) as /ioswitch/..., whichever checkout or sandbox this runs in: the probe and
+    # the mock are an action's outputs, and the run's cache key is their bytes.
+    maps = ['-ffile-prefix-map=%s=/ioswitch/tree' % RAW.parents[2], '-ffile-prefix-map=%s=/ioswitch' % Path.cwd()]
+    cflags = ['-O2', '-Wall', *maps, '-I', ABI]
     objs = []
     for src in ('mesa/mme_fermi.c', 'mesa/mme_fermi_sim.c'):
         obj = work / (Path(src).stem + '.o')
-        run(['xcrun', 'clang', '-O2', '-std=c11', '-w', '-I', HERE / 'mesa', '-c', HERE / src, '-o', obj])
+        run(['xcrun', 'clang', '-O2', '-std=c11', '-w', *maps, '-I', HERE / 'mesa', '-c', HERE / src, '-o', obj])
         objs.append(obj)
     run(['xcrun', 'clang', *cflags, '-c', HERE / 'mock_iokit.c', '-o', work / 'mock_iokit.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'cap.cpp', '-o', work / 'cap.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'nvdec.cpp', '-o', work / 'nvdec.o'])
     run(['xcrun', 'clang++', '-dynamiclib', work / 'mock_iokit.o', work / 'cap.o', work / 'nvdec.o', *objs, '-framework', 'IOKit',
          '-framework', 'CoreFoundation', '-install_name', '@rpath/libmock_iokit.dylib', '-o', work / 'libmock_iokit.dylib'])
-    run(['xcrun', 'clang++', '-O2', '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations', '-I', METAL, '-x', 'objective-c++',
-         HERE / 'probe.mm', METAL / 'NativeBridgeMetalFrontend.mm', '-x', 'none', bridge, '-L', work, '-lmock_iokit',
-         '-Wl,-rpath,' + str(work), '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface',
+    run(['xcrun', 'clang++', '-O2', '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations', *maps, '-I', METAL,
+         '-x', 'objective-c++', HERE / 'probe.mm', METAL / 'NativeBridgeMetalFrontend.mm', '-x', 'none', bridge, '-L', work,
+         '-lmock_iokit', '-Wl,-rpath,@executable_path', '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface',
          '-framework', 'IOKit', '-o', work / 'probe'])
+    run(['xcrun', '-sdk', 'iphoneos', 'metal', '-c', HERE / 'ycbcr.metal', '-I', HERE, '-o', work / 'ycbcr.air'])
+    run(['xcrun', '-sdk', 'iphoneos', 'metallib', work / 'ycbcr.air', '-o', work / 'ycbcr.metallib'])
+
+
+def main():
+    if '--build-only' in sys.argv[1:]:
+        out = Path(option('--out')).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as scratch:
+            build(Path(scratch), Path(option('--bridge')).resolve())
+            for name in BUILT:
+                shutil.copyfile(Path(scratch) / name, out / name)
+                (out / name).chmod(0o755)
+        return
+    nvk, qc, corpus = (Path(option(n)).resolve() for n in ('--nvk', '--qc', '--corpus'))
+    out = Path(option('--out')).resolve()
+    stack = int(option('--stack', False) or '0', 16)
+    work = out / 'work'
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    prebuilt = option('--prebuilt', False)
+    if prebuilt:
+        for name in BUILT:
+            shutil.copyfile(Path(prebuilt) / name, work / name)
+            (work / name).chmod(0o755)
+    else:
+        build(work, Path(option('--bridge')).resolve())
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(('NAK_', 'NVK_', 'MESA_', 'NMB_', 'M2V_', 'METAL2VULKAN_', 'TEGRA_', 'MTL_', 'NVDEC_', 'RAWCAP_', 'PROBE_'))}
     env.update(MESA_SHADER_CACHE_DISABLE='true', NVDEC_PROBE='1', NVDEC_SCRUB='1', NVDEC_TRACE='3', NMB_ASYNC_PSO='0', NMB_ASYNC_PSO_API='0')
-    # the raw path's own states: the 4:2:0 YCbCr conversions (ycbcr.metal), an iOS library like QuartzCore's, drawn after
-    # Core Animation's (probe.mm PROBE_YCBCR_LIB)
-    run(['xcrun', '-sdk', 'iphoneos', 'metal', '-c', HERE / 'ycbcr.metal', '-I', HERE, '-o', work / 'ycbcr.air'])
-    run(['xcrun', '-sdk', 'iphoneos', 'metallib', work / 'ycbcr.air', '-o', work / 'ycbcr.metallib'])
     env.update(PROBE_YCBCR_LIB=str(work / 'ycbcr.metallib'))
     # first a run that only fills the m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
     # name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache

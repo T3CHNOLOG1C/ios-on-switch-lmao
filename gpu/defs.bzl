@@ -186,12 +186,34 @@ raw_stack = rule(
 )
 
 def _metal_raw_pack_impl(ctx):
-    out = ctx.actions.declare_directory(ctx.attr.name)
     tree = ctx.file.generator.dirname.partition("drivers/TegraGM20BMetal/")[0].rstrip("/") or "."
-    twin = _twin(ctx, ctx.executable._seed_tool)
+    xcode = [ctx.file._xcode_env, ctx.file._xcode_identity]
+
+    # The generator's host tools: everything but its Python reaches them (the probe, the mock GM20B, ycbcr.metallib).
+    tools = ctx.actions.declare_directory(ctx.attr.name + "_tools")
     args = ctx.actions.args()
+    args.add("build")
     args.add("--xcode-env", ctx.file._xcode_env)
     args.add("--host-bridge", ctx.file.host_bridge)
+    args.add("--generator", ctx.file.generator)
+    args.add("--tree", tree)
+    args.add("--out", tools.path)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = depset([ctx.file.host_bridge, ctx.file.generator] + xcode + [f for f in ctx.files.srcs if f.extension != "py"]),
+        outputs = [tools],
+        mnemonic = "MetalRawPackTools",
+        progress_message = "Building the raw pack's probe and mock GM20B",
+        execution_requirements = {"no-remote-exec": "1", "requires-darwin": ""},
+    )
+
+    twin = _twin(ctx, ctx.executable._seed_tool)
+    out = ctx.actions.declare_directory(ctx.attr.name)
+    args = ctx.actions.args()
+    args.add("run")
+    args.add("--xcode-env", ctx.file._xcode_env)
+    args.add("--tools", tools.path)
     args.add("--twin-dylib", twin)
     args.add("--qc", ctx.file.qc)
     args.add("--corpus", ctx.file.corpus)
@@ -203,8 +225,8 @@ def _metal_raw_pack_impl(ctx):
         executable = ctx.executable._tool,
         arguments = [args],
         inputs = depset(
-            [ctx.file.host_bridge, twin, ctx.file.qc, ctx.file.corpus, ctx.file.stack, ctx.file.generator,
-             ctx.file._xcode_env, ctx.file._xcode_identity] + ctx.files.srcs,
+            [tools, twin, ctx.file.qc, ctx.file.corpus, ctx.file.stack, ctx.file.generator] + xcode +
+            [f for f in ctx.files.srcs if f.extension == "py"],
         ),
         outputs = [out],
         mnemonic = "MetalRawPack",
@@ -213,7 +235,11 @@ def _metal_raw_pack_impl(ctx):
         execution_requirements = {"no-remote-exec": "1"},
         resource_set = _all_cores,
     )
-    return [DefaultInfo(files = depset([out]))]
+    return [
+        DefaultInfo(files = depset([out])),
+        # The steps before the probe run (bazel build //gpu:raw_pack --output_groups=steps).
+        OutputGroupInfo(steps = depset([tools, twin])),
+    ]
 
 metal_raw_pack = rule(
     implementation = _metal_raw_pack_impl,
