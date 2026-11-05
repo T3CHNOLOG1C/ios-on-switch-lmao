@@ -170,11 +170,11 @@ def _xnu_pass_impl(ctx):
                     inputs += getattr(ctx.files, "_" + name)
         own = {o.path: True for o in outs}
         pruned = [f for f in depset(pruned).to_list() if f.path not in own]
-        spec = ctx.actions.declare_file("{}.steps/{}-{}.json".format(ctx.label.name, index, kind))
+        spec = ctx.actions.declare_file("steps/{}/{}-{}.json".format(ctx.label.name, index, kind))
         data = {"roots": roots, "steps": steps, "tools": tools, "base_sources": base_sources}
         unused = None
         if kind in ("mig", "iig"):
-            unused = ctx.actions.declare_file("{}.steps/{}-{}.unused".format(ctx.label.name, index, kind))
+            unused = ctx.actions.declare_file("steps/{}/{}-{}.unused".format(ctx.label.name, index, kind))
             data["unused"] = unused.path
         ctx.actions.write(spec, json.encode(data))
         args = ctx.actions.args()
@@ -288,8 +288,9 @@ xnu_pass = rule(
 
 # --- Host tools from XNU's SETUP/ --------------------------------------------------------------------------------
 def _xnu_host_tool_impl(ctx):
-    out = ctx.actions.declare_file(ctx.label.name)
-    gen = ctx.actions.declare_directory(ctx.label.name + ".gen") if (ctx.file.yacc or ctx.file.lex) else None
+    # Below bin/: a tool's name (config) can be a component's subpackage (config/), whose outputs share that path.
+    out = ctx.actions.declare_file("bin/" + ctx.label.name)
+    gen = ctx.actions.declare_directory("bin/" + ctx.label.name + ".gen") if (ctx.file.yacc or ctx.file.lex) else None
     srcs = [f.path for f in ctx.files.srcs]
     lines = ["set -e", "export PATH=/usr/bin:/bin DEVELOPER_DIR={}".format(DEVELOPER_DIR)]
     includes = ["-I" + d for d in sorted({f.dirname: True for f in ctx.files.srcs + ctx.files.hdrs}.keys())]
