@@ -36,7 +36,6 @@ kernel_driver(
     ],
     copts = BLOCK_FLAGS,
     hdr_deps = [
-        "diagnostics/ioswitch",
         "drivers/ArmGIC",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",

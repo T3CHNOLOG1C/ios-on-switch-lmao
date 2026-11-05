@@ -41,3 +41,11 @@ py_library(
     srcs = ["im4p.py"],
     imports = ["."],
 )
+
+# bazel run //tools/kernel:hdr_deps [-- --write]: every kernel_driver's hdr_deps against what its sources include.
+py_binary(
+    name = "hdr_deps",
+    srcs = ["hdr_deps.py"],
+    args = ["--buildifier=$(rootpath @buildifier//file)"],
+    data = ["@buildifier//file"],
+)
