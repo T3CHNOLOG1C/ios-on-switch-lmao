@@ -15,6 +15,12 @@ extern "C" {
 // doorbell interrupt never arrives panics. Call with khz 0 to bring the mailbox up and only report.
 int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size);
 
+// System sleep (drivers/SwitchSuspend), thread context with interrupts on, nothing else using the mailbox: suspend
+// brings the mailbox up if it is not, lowers EMC to 204 MHz and tells the firmware the next power-down is SC7; resume
+// asks for the EMC rate suspend found. Each fills `line` and returns 0 or a negative errno.
+int tegra_bpmp_sc7_suspend(char *line, unsigned long size);
+int tegra_bpmp_sc7_resume(char *line, unsigned long size);
+
 #ifdef __cplusplus
 }
 #endif

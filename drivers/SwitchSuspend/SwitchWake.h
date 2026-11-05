@@ -45,6 +45,12 @@ void switch_wake_bt_gone(uint16_t handle);
 // SwitchBluetooth, a new or departed client (every connection is gone); any context, never blocks. Taken at the next
 // packet.
 void switch_wake_bt_reset(void);
+// SwitchBluetooth's sleep path, under its work-loop gate (serialized with its receive path): the connection handles of
+// the Nintendo controllers that have sent reports, at most `max`; returns how many.
+unsigned switch_wake_bt_controllers(uint16_t *handles, unsigned max);
+// SwitchSuspend, after a wake by the Bluetooth host wake: the next controller to connect within
+// SWITCH_BT_RECONNECT_MS presses the console's Home (SwitchWakeSources.h). Any context.
+void switch_wake_bt_slept(void);
 
 // The wake guarantee fired (SwitchBacklight, which lights the panel): a stackshot of every task (kernel and user frames,
 // wait info) is written to /private/var/ioswitch/wake-<UTC>.kcdata and, for `idevicecrashreport`, to mobile's

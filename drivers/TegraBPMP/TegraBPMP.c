@@ -281,3 +281,63 @@ int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size)
 		 before / 1000000, after / 1000000, fw_tag, rates, have_mv, need_mv, fw_mv);
 	return 0;
 }
+
+/*
+ * SC7, as L4T runs it around the BPMP: pm-tegra210.c's syscore suspend tells the firmware which state the next CCPLEX
+ * power-down is (MRQ_ENABLE_SUSPEND {TEGRA_PM_SC7, 0}); tegra210-emc.c tegra210b01_emc_suspend drops EMC to 204 MHz
+ * (EMC_SUSPEND_RATE, the rate hekate's saved SDRAM parameters bring the DRAM back at) and its resume asks for the saved
+ * rate again. ATF restarts the firmware at PMC_SCRATCH39 after SC7 and both sides keep the channel areas, so the
+ * mailbox needs nothing new (t210_mail_ops has no resume).
+ */
+#define EMC_SUSPEND_HZ 204000000LL
+static s64 emc_resume_hz;
+
+int tegra_bpmp_sc7_suspend(char *line, unsigned long size)
+{
+	u32 enable[2] = {TEGRA_PM_SC7, 0};
+	s64 now = 0, rounded = 0, after = 0;
+	int err;
+
+	emc_resume_hz = 0;
+	err = mailbox_up(line, size);
+	if (err)
+		return err;
+	err = clk_get_rate(&now);
+	if (!err && now > EMC_SUSPEND_HZ) {
+		err = clk_rate(CMD_CLK_ROUND_RATE, EMC_SUSPEND_HZ, &rounded);
+		if (!err)
+			err = clk_rate(CMD_CLK_SET_RATE, rounded, &after);
+		if (!err)
+			emc_resume_hz = now;
+	}
+	if (err) {
+		snprintf(line, size, "EMC not lowered to 204 MHz for SC7 (MRQ_CLK %d, at %lld MHz)", err,
+			 now / 1000000);
+		return err;
+	}
+	err = tegra_bpmp_send_receive(MRQ_ENABLE_SUSPEND, enable, sizeof(enable), NULL, 0);
+	if (!err)
+		err = tegra_bpmp_suspend();
+	snprintf(line, size, "EMC %lld -> %lld MHz, MRQ_ENABLE_SUSPEND SC7 %s (%d)", now / 1000000,
+		 (emc_resume_hz ? after : now) / 1000000, err ? "failed" : "sent", err);
+	return err;
+}
+
+int tegra_bpmp_sc7_resume(char *line, unsigned long size)
+{
+	s64 now = 0, after = 0;
+	int err;
+
+	if (mailbox_state) {
+		snprintf(line, size, "BPMP mailbox not up");
+		return 0;
+	}
+	tegra_bpmp_resume();
+	err = clk_get_rate(&now);
+	if (!err && emc_resume_hz && now != emc_resume_hz)
+		err = clk_rate(CMD_CLK_SET_RATE, emc_resume_hz, &after);
+	if (!err)
+		err = clk_get_rate(&after);
+	snprintf(line, size, "EMC %lld -> %lld MHz after SC7 (MRQ_CLK %d)", now / 1000000, after / 1000000, err);
+	return err;
+}

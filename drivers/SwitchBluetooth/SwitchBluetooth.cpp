@@ -289,6 +289,7 @@ enum : uint16_t {
     OP_BCM_LE_META = 0xfce9,           // Broadcom LE meta VSC: sub-operation first (bluetoothd _BCM_LEMeta*)
     OP_BCM_MULTI_ADV_PARAMS = 0xfd4a,  // bluetoothd _BCM_SetMultipleAdvInstanceParams
     OP_ACCEPT_CONNECTION = 0x0409,     // Accept Connection Request {address, role} (SwitchBluetoothLinks.h)
+    OP_DISCONNECT = 0x0406,            // Disconnect {handle, reason}: Command Status, then Disconnection Complete
 };
 // 0xFCE9 sub-operations not passed on (BLE section): enable features, PCF feature selection, PCF service UUID (and
 // its V2/V3 forms).
@@ -557,6 +558,20 @@ class SwitchBluetooth : public IOService {
     uint8_t inject(uint16_t opcode, const uint8_t *params, uint8_t length, uint8_t *ret, uint8_t *retLength);
     void coexAfh(uint16_t opcode);
 
+    // System sleep (SwitchBluetooth.h): the client's sends wait at sendGate from suspend to resume; disconnects counts
+    // Disconnection Complete events (thread_wakeup on it) for the controllers suspend drops.
+    IOLock *sendGate = nullptr;
+    bool asleep = false, slept = false;  // suspended; the controller was up and the UART stopped for it
+    uint32_t disconnects = 0;
+    uint8_t sleepCommand(uint16_t opcode, const uint8_t *params, uint8_t length);
+    unsigned dropControllers();
+
+public:
+    bool sleep();
+    void wake();
+
+private:
+
 public:
     bool coexSnapshot(switch_coex_bt *out, char *linksText, size_t size);
 
@@ -617,7 +632,7 @@ private:
     void maskRxFaultLocked(const char *what);
     bool rxFaultEventLocked(const char *what);
     void clearInterruptsLocked();
-    void setupUart();
+    void setupUart(bool rts = true);
     void setBaudLocked(uint32_t rate);
     void setHostBaud(uint32_t rate);
     void describe(char *buffer, size_t size);
@@ -652,6 +667,7 @@ private:
     static errno_t ctlConnect(kern_ctl_ref ref, struct sockaddr_ctl *sac, void **unitinfo);
     static errno_t ctlDisconnect(kern_ctl_ref ref, u_int32_t unit, void *unitinfo);
     static errno_t ctlSend(kern_ctl_ref ref, u_int32_t unit, void *unitinfo, mbuf_t m, int flags);
+    errno_t clientSend(u_int32_t unit, mbuf_t m);
     static errno_t ctlSetopt(kern_ctl_ref ref, u_int32_t unit, void *unitinfo, int opt, void *data, size_t len);
     static errno_t ctlGetopt(kern_ctl_ref ref, u_int32_t unit, void *unitinfo, int opt, void *data, size_t *len);
     static void ctlRcvd(kern_ctl_ref ref, u_int32_t unit, void *unitinfo, int flags);
@@ -748,6 +764,7 @@ bool SwitchBluetooth::start(IOService *provider)
     hwLock = IOSimpleLockAlloc();
     cmdLock = IOSimpleLockAlloc();
     stateLock = IOLockAlloc();
+    sendGate = IOLockAlloc();
     hciLock = IOLockAlloc();
     txLock = IOLockAlloc();
     rx.data = static_cast<uint8_t *>(IOMalloc(kRingBytes));
@@ -757,7 +774,7 @@ bool SwitchBluetooth::start(IOService *provider)
     nanoseconds_to_absolutetime(kIdleStormNs, &idleStormAbs);
     nanoseconds_to_absolutetime((uint64_t)kStatsMs * 1000000ULL, &statsWindow);
     if (!uart || !car || !gpio || !pinmux || !hwLock || !stateLock || !hciLock || !txLock || !rx.data || !tx.data ||
-        !loop || !stuckCall || !cmdLock) {
+        !loop || !stuckCall || !cmdLock || !sendGate) {
         IOLog("SwitchBluetooth: out of memory or mappings\n");
         return false;
     }
@@ -849,7 +866,7 @@ void SwitchBluetooth::setupPins()
 // before for any packet that did not end on a trigger: no byte waits longer than that timeout plus the interrupt's own
 // latency (19 us in the model, the same worst case as at 8). The FIFO's other 15 bytes are 50 us at 3 Mbaud; past
 // that RTS holds the chip (MCR RTS_EN), as when the ring is full, so nothing is lost.
-void SwitchBluetooth::setupUart()
+void SwitchBluetooth::setupUart(bool rts)
 {
     w32(car, RST_DEV_U_SET, kUartDBit);
     w32(car, CLK_ENB_U_SET, kUartDBit);
@@ -867,7 +884,7 @@ void SwitchBluetooth::setupUart()
     IODelay(20);
     setBaudLocked(kInitBaud);
     w32(uart, FCR, FCR_ENABLE | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_RX_TRIG_16 | FCR_TX_TRIG_16);
-    w32(uart, MCR, MCR_CTS_EN | MCR_RTS_EN | MCR_RTS);
+    w32(uart, MCR, rts ? MCR_CTS_EN | MCR_RTS_EN | MCR_RTS : MCR_CTS_EN);
     (void)r32(uart, SPR);
     IOSimpleLockUnlockEnableInterrupt(hwLock, s);
     IODelay(100);
@@ -2280,6 +2297,8 @@ void SwitchBluetooth::linkEvent(uint8_t code, uint32_t length)
     case SWITCH_BT_EV_DISCONNECTION_COMPLETE:
         if (length >= 4 && !p[0]) wasOpen = switch_bt_link_close(&links, switch_bt_le16(p + 1), &closed);
         if (length >= 4 && !p[0]) switch_wake_bt_gone(switch_bt_le16(p + 1));  // its controller's buttons go
+        __atomic_fetch_add(&disconnects, 1, __ATOMIC_RELEASE);
+        thread_wakeup(&disconnects);
         break;
     case SWITCH_BT_EV_ROLE_CHANGE:
         if (length >= 8 && !p[0]) {
@@ -3178,6 +3197,15 @@ errno_t SwitchBluetooth::ctlDisconnect(kern_ctl_ref, u_int32_t unit, void *)
 errno_t SwitchBluetooth::ctlSend(kern_ctl_ref, u_int32_t unit, void *, mbuf_t m, int)
 {
     SwitchBluetooth *self = gDriver;
+    IOLockLock(self->sendGate);
+    const errno_t sent = self->clientSend(unit, m);
+    IOLockUnlock(self->sendGate);
+    return sent;
+}
+
+errno_t SwitchBluetooth::clientSend(u_int32_t unit, mbuf_t m)
+{
+    SwitchBluetooth *self = this;
     errno_t error = self->client == unit ? 0 : ENOTCONN;
     if (!error) self->clientUsed = true;
     size_t total = 0;
@@ -3222,8 +3250,11 @@ errno_t SwitchBluetooth::ctlSetopt(kern_ctl_ref, u_int32_t unit, void *, int opt
     const uint32_t rate = (uint32_t)(t.c_ospeed ? t.c_ospeed : t.c_ispeed);
     if (rate && rate != self->baud) {
         if (rate != 3000000 && rate != 1000000 && (rate < 9600 || rate > 921600)) return EINVAL;
-        if (self->drainTx(kWriteMs)) return EIO;
-        self->setHostBaud(rate);
+        IOLockLock(self->sendGate);
+        const bool drained = !self->drainTx(kWriteMs);
+        if (drained) self->setHostBaud(rate);
+        IOLockUnlock(self->sendGate);
+        if (!drained) return EIO;
         self->clientUsed = true;
     }
     self->tio = t;
@@ -3324,6 +3355,139 @@ void startThread(void *, wait_result_t)
     driver->release();  // the attachment keeps it
     gDriver->run();
 }
+}
+
+// ---- System sleep --------------------------------------------------------------------------------------------------
+//
+// SC7 powers the SoC off and keeps the combo chip powered (BT_REG_ON PH4 and the pads keep their levels), so the
+// controller, its patch RAM and its links outlive the sleep and the controller can wake the console:
+//   suspend: the client's sends wait (sendGate, until resume); the Nintendo controllers' links are dropped, as Horizon
+//   does at sleep (a connected Joy-Con streams reports; its next button press pages the console back); Broadcom Set
+//   Sleep Mode on with host wake (switch_bt_sleep_mode_params); TX drained; BT_WAKE released (PH3 high); RTS deasserted
+//   so the controller holds what it has; what is in the ring goes to the client; UART interrupts off.
+//   resume: UART-D from reset at the rate it had with RTS still off, the FIFO, ring and framing flushed and RX (DMA)
+//   on, then RTS: the controller sends what it held (the page that woke the console) in order; BT_WAKE asserted; sleep
+//   mode off as at bring-up.
+// Commands go as the client's stream allows: injected between its packets (inject) while a client is connected, as the
+// kernel's own HCI otherwise.
+uint8_t SwitchBluetooth::sleepCommand(uint16_t opcode, const uint8_t *params, uint8_t length)
+{
+    if (mode != kClient) {
+        setMode(kKernel);
+        const int error = command(opcode, params, length, kCommandMs);
+        setMode(kIdle);
+        return error ? 0xff : 0;
+    }
+    uint8_t status = 0xfe;
+    for (unsigned tries = 0; tries < 50 && status == 0xfe; ++tries) {
+        status = inject(opcode, params, length, nullptr, nullptr);
+        if (status == 0xfe) IOSleep(10);  // the client's last command is still out (it waits at sendGate now)
+    }
+    return status;
+}
+
+// HCI Disconnect (reason 0x15, power off) for each controller, then up to a second for their Disconnection Complete.
+unsigned SwitchBluetooth::dropControllers()
+{
+    uint16_t handles[SWITCH_BT_BUTTON_LINKS];
+    unsigned n = 0;
+    loop->runAction(
+        [](OSObject *, void *list, void *count, void *, void *) -> IOReturn {
+            *static_cast<unsigned *>(count) = switch_wake_bt_controllers(static_cast<uint16_t *>(list),
+                                                                         SWITCH_BT_BUTTON_LINKS);
+            return kIOReturnSuccess;
+        },
+        this, handles, &n);
+    const uint32_t before = __atomic_load_n(&disconnects, __ATOMIC_ACQUIRE);
+    unsigned asked = 0;
+    for (unsigned i = 0; i < n; ++i) {
+        const uint8_t params[3] = {(uint8_t)handles[i], (uint8_t)(handles[i] >> 8), 0x15};
+        if (sleepCommand(OP_DISCONNECT, params, sizeof(params)) == 0) ++asked;
+    }
+    uint64_t deadline;
+    clock_interval_to_deadline(1000, kMillisecondScale, &deadline);
+    while (__atomic_load_n(&disconnects, __ATOMIC_ACQUIRE) - before < asked) {
+        assert_wait_deadline(&disconnects, THREAD_UNINT, deadline);
+        if (__atomic_load_n(&disconnects, __ATOMIC_ACQUIRE) - before >= asked) {
+            clear_wait(current_thread(), THREAD_AWAKENED);
+            break;
+        }
+        if (thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT) break;
+    }
+    const unsigned done = __atomic_load_n(&disconnects, __ATOMIC_ACQUIRE) - before;
+    if (asked != n || done < asked)
+        IOLog("SwitchBluetooth: sleep: %u of %u controllers disconnected (%u asked)\n", done, n, asked);
+    return done < asked ? done : asked;
+}
+
+// Returns whether the controller will wake the host (PMC wake event 52).
+bool SwitchBluetooth::sleep()
+{
+    IOLockLock(sendGate);
+    asleep = true;
+    IOLockLock(stateLock);
+    const bool up = state == kReady && chipOn;
+    IOLockUnlock(stateLock);
+    slept = up;
+    if (!up) return false;
+    bool hostWake = false;
+    unsigned linksDropped = 0;
+    // A client packet half sent would have our commands land inside it: no commands then, the stream stops as it is.
+    const bool boundary = mode != kClient || (!txFrame.state && !framingLost);
+    if (boundary) {
+        linksDropped = dropControllers();
+        uint8_t params[SWITCH_BT_SLEEP_PARAMS];
+        switch_bt_sleep_mode_params(params, true);
+        hostWake = sleepCommand(OP_BCM_SLEEP_MODE, params, sizeof(params)) == 0;
+    }
+    const int drained = drainTx(kWriteMs);
+    if (hostWake) setPin(PH3, GPIO_OUT, true);
+    IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
+    w32(uart, MCR, MCR_CTS_EN);
+    IOSimpleLockUnlockEnableInterrupt(hwLock, s);
+    IODelay(2 * 10 * 1000000 / baud + 20);  // a character the controller had started
+    loop->runAction(&SwitchBluetooth::gated, this, reinterpret_cast<void *>(1));  // the ring to the client
+    s = IOSimpleLockLockDisableInterrupt(hwLock);
+    leaveRxDmaLocked(true);
+    w32(uart, IER, 0);
+    IOSimpleLockUnlockEnableInterrupt(hwLock, s);
+    switch_power_journal("SwitchBluetooth: sleep: %u controllers dropped, host wake %s%s%s", linksDropped,
+                         hostWake ? "on (PH5, PMC 52)" : "off", boundary ? "" : " (client mid-packet)",
+                         drained ? "; TX not drained" : "");
+    return hostWake;
+}
+
+void SwitchBluetooth::wake()
+{
+    if (!asleep) return;
+    if (slept) {
+        const uint32_t rate = baud;
+        setupUart(false);  // RTS stays off: what the controller holds must not come at the reset rate
+        if (rate != baud) setHostBaud(rate);
+        flushRx();
+        const IOInterruptState s = IOSimpleLockLockDisableInterrupt(hwLock);
+        w32(uart, IER, ier);
+        w32(uart, MCR, MCR_CTS_EN | MCR_RTS_EN | MCR_RTS);
+        IOSimpleLockUnlockEnableInterrupt(hwLock, s);
+        setPin(PH3, GPIO_OUT, false);
+        uint8_t params[SWITCH_BT_SLEEP_PARAMS];
+        switch_bt_sleep_mode_params(params, false);
+        const uint8_t status = sleepCommand(OP_BCM_SLEEP_MODE, params, sizeof(params));
+        switch_power_journal("SwitchBluetooth: wake: UART-D at %u baud again, sleep mode off (%#x)", baud, status);
+    }
+    asleep = slept = false;
+    IOLockUnlock(sendGate);
+}
+
+extern "C" bool switch_bluetooth_suspend(void)
+{
+    SwitchBluetooth *self = __atomic_load_n(&gDriver, __ATOMIC_ACQUIRE);
+    return self && self->sleep();
+}
+
+extern "C" void switch_bluetooth_resume(void)
+{
+    if (SwitchBluetooth *self = __atomic_load_n(&gDriver, __ATOMIC_ACQUIRE)) self->wake();
 }
 
 // ---- /dev/btwake ---------------------------------------------------------------------------------------------------

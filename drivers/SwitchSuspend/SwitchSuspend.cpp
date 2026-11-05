@@ -26,7 +26,9 @@
 #include <os/log.h>
 #include <pexpert/pexpert.h>
 #include "../SwitchBattery/SwitchBattery.h"
+#include "../SwitchBluetooth/SwitchBluetooth.h"
 #include "../SwitchMotion/SwitchMotion.h"
+#include "../TegraBPMP/TegraBPMP.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraHost1x/TegraHost1x.h"
 #include "../TegraSMMU/TegraSMMU.h"
@@ -85,6 +87,7 @@ enum : uint32_t {
     PMC_SW_WAKE2_STATUS = kPmc + 0x16c,
 };
 enum : uint32_t {
+    CNTRL_LATCH_WAKEUPS = 1u << 5,
     CNTRL_PWRREQ_POLARITY = 1u << 8,
     CNTRL_SYSCLK_POLARITY = 1u << 10,
     CNTRL_SYSCLK_OE = 1u << 11,
@@ -128,6 +131,10 @@ class SwitchSuspend : public IOService {
     uint32_t pad[kPadWords] = {}, mux[kMuxWords] = {};
     uint32_t wakeStatus = 0, wake2Status = 0;
     uint64_t wakeArmed = 0;  // PMC wake events, bit n = event n
+    bool btWake = false;     // the Bluetooth controller was set up to wake the console for this sleep
+    IOPMDriverAssertionID wakeHold = 0;  // after a radio wake, until its controller reconnects or the window ends
+    thread_call_t wakeHoldEnd = nullptr;
+    static void endWakeHold(thread_call_param_t owner, thread_call_param_t);
     uint64_t quiesceNS = 0, activateNS = 0, suspendedAt = 0;
     uint64_t rtcBeforeMS = 0, rtcAfterMS = 0;  // the Tegra RTC at quiesce and at activate
     bool rtcUsable = false;
@@ -172,10 +179,8 @@ void SwitchSuspend::missingSuspendPaths(char *list, size_t size)
 {
     list[0] = 0;
     if (bootArg("switch-wlan")) appendName(list, size, "Wi-Fi");
-    if (bootArg("switch-bt")) appendName(list, size, "Bluetooth");
     if (bootArg("switch-audio")) appendName(list, size, "audio");
     if (bootArg("tegra-gpu")) appendName(list, size, "GM20B");
-    if (bootArg("switch-emc")) appendName(list, size, "EMC rate (BPMP)");
     if (bootArg("switch-usb-host") || bootArg("switch-dp")) appendName(list, size, "USB-C host/DP");
 }
 
@@ -260,6 +265,7 @@ bool SwitchSuspend::start(IOService *provider)
         registerService();
         return true;
     }
+    wakeHoldEnd = thread_call_allocate(&SwitchSuspend::endWakeHold, this);
     switch_rtc_sleep_enable();
     // IOService::registerService() installs these as platform actions (iokit/Kernel/IOPlatformActions.cpp).
     setProperty("IOPlatformSleepAction", kActionPriority, 32);
@@ -305,6 +311,11 @@ void SwitchSuspend::sleepDevices()
     timed("sleep", 2, "touch", switch_touch_suspend);
     timed("sleep", 2, "motion", switch_motion_suspend);  // IMU off, SPI4 clock off
     timed("sleep", 3, "joycon", switch_joycon_suspend);
+    {
+        const uint64_t at = mach_absolute_time();
+        btWake = switch_bluetooth_suspend();
+        switch_power_journal("SwitchSuspend: sleep 3 bluetooth: %llu us", nsSince(at) / 1000);
+    }
     timed("sleep", 4, "host1x", tegra_nvdec_suspend);  // NVDEC, NVENC, VIC, NVJPG quiesced, then host1x
     timed("sleep", 5, "thermal", switch_thermal_suspend);
     timed("sleep", 6, "nvram", [] { PESyncNVRAM(); });  // the NVRAM controller's sync (SwitchNVRAM), SD still up
@@ -322,14 +333,20 @@ void SwitchSuspend::sleepDevices()
     // Wake sources (SwitchWakeSources.h): the MAX77620's nIRQ (power key, RTC alarm), the USB-PD ALERT (USB-C
     // plug/unplug) and the gauge's ALRT (the battery's charge zone). Statuses cleared first, as
     // tegra210_pmc_irq_set_wake does.
-    wakeArmed =
-        switch_wake_pmc_armed(tegra_gpio_read(TEGRA_GPIO_PD_ALERT) == 1, tegra_gpio_read(TEGRA_GPIO_GAUGE_ALERT) == 1);
+    wakeArmed = switch_wake_pmc_armed(tegra_gpio_read(TEGRA_GPIO_PD_ALERT) == 1,
+                                      tegra_gpio_read(TEGRA_GPIO_GAUGE_ALERT) == 1, btWake, false);
     uint32_t mask[2], high[2], low[2];
     switch_wake_pmc_registers(wakeArmed, mask, high, low);
+    // Linux pmc.c tegra_pmc_suspend: software statuses cleared, the wake latches pulsed, then the latched statuses
+    // cleared (write one to clear) before the levels and masks.
     wr(PMC_SW_WAKE_STATUS, 0);
     wr(PMC_SW_WAKE2_STATUS, 0);
-    wr(PMC_WAKE_STATUS, 0);
-    wr(PMC_WAKE2_STATUS, 0);
+    wr(PMC_CNTRL, rd(PMC_CNTRL) | CNTRL_LATCH_WAKEUPS);
+    IODelay(120);
+    wr(PMC_CNTRL, rd(PMC_CNTRL) & ~CNTRL_LATCH_WAKEUPS);
+    IODelay(120);
+    wr(PMC_WAKE_STATUS, rd(PMC_WAKE_STATUS));
+    wr(PMC_WAKE2_STATUS, rd(PMC_WAKE2_STATUS));
     wr(PMC_WAKE_LVL, (rd(PMC_WAKE_LVL) | high[0]) & ~low[0]);
     wr(PMC_WAKE_MASK, mask[0]);
     wr(PMC_WAKE2_LVL, (rd(PMC_WAKE2_LVL) | high[1]) & ~low[1]);
@@ -337,6 +354,13 @@ void SwitchSuspend::sleepDevices()
     (void)rd(PMC_WAKE2_MASK);
     switch_power_journal("SwitchSuspend: sleep 9: PMC wake events armed %#llx (WAKE_MASK %#x WAKE2_MASK %#x)",
                          (unsigned long long)wakeArmed, mask[0], mask[1]);
+    {
+        char line[160] = "";
+        const uint64_t at = mach_absolute_time();
+        const int err = tegra_bpmp_sc7_suspend(line, sizeof(line));
+        switch_power_journal("SwitchSuspend: sleep 9 bpmp: %llu us: %s%s", nsSince(at) / 1000, line,
+                             err ? " (SC7 may not be entered)" : "");
+    }
     const uint64_t us = nsSince(start) / 1000;
     switch_power_journal("SwitchSuspend: sleep 10: i2c (last; devices took %llu.%03llu ms)", us / 1000, us % 1000);
     tegra_i2c_suspend();
@@ -393,6 +417,12 @@ void SwitchSuspend::wakeDevices()
         switch_power_journal("SwitchSuspend: wake %u battery: gauge not read (I2C %d before, %d after)", sleeps + 1,
                              gaugeBeforeErr, gaugeAfterErr);
     }
+    {
+        char line[160] = "";
+        const uint64_t at = mach_absolute_time();
+        (void)tegra_bpmp_sc7_resume(line, sizeof(line));
+        switch_power_journal("SwitchSuspend: wake 0 bpmp: %llu us: %s", nsSince(at) / 1000, line);
+    }
     bool alarm = false;
     {
         const uint64_t at = mach_absolute_time();
@@ -410,6 +440,7 @@ void SwitchSuspend::wakeDevices()
     timed("wake", 5, "thermal", switch_thermal_resume);
     timed("wake", 5, "sensors", switch_sensors_resume);
     timed("wake", 6, "host1x", tegra_nvdec_resume);  // before the display, which sits behind host1x
+    timed("wake", 7, "bluetooth", switch_bluetooth_resume);
     timed("wake", 7, "joycon", switch_joycon_resume);
     timed("wake", 8, "motion", switch_motion_resume);
     timed("wake", 8, "touch", switch_touch_resume);
@@ -420,6 +451,17 @@ void SwitchSuspend::wakeDevices()
     const char *reason = alarm ? "rtc" : switch_wake_pmc_reason(status, wakeArmed);
     IOPMrootDomain *root = getPMRootDomain();
     if (root) root->claimSystemWakeEvent(this, kIOPMWakeEventSource, reason, nullptr);
+    if (!strcmp(reason, "bt")) {
+        // The page that woke the console is a controller reconnecting: keep the system up while it does, and let its
+        // first report light the panel (SwitchWake).
+        switch_wake_bt_slept();
+        if (root && !wakeHold)
+            wakeHold = root->createPMAssertion(kIOPMDriverAssertionCPUBit, kIOPMDriverAssertionLevelOn, this,
+                                               "SwitchSuspend Bluetooth wake");
+        uint64_t deadline;
+        clock_interval_to_deadline(SWITCH_BT_RECONNECT_MS, kMillisecondScale, &deadline);
+        if (wakeHoldEnd) thread_call_enter_delayed(wakeHoldEnd, deadline);
+    }
     const uint64_t us = nsSince(start) / 1000;
     switch_power_journal("SwitchSuspend: wake %u: %s (PMC WAKE_STATUS %#x WAKE2_STATUS %#x), devices %llu.%03llu ms",
                          sleeps, reason, wakeStatus, wake2Status, us / 1000, us % 1000);
@@ -428,6 +470,14 @@ void SwitchSuspend::wakeDevices()
               "%#llx)\n",
               sleeps, wakeStatus, wake2Status, (unsigned long long)wakeArmed);
     }
+}
+
+void SwitchSuspend::endWakeHold(thread_call_param_t owner, thread_call_param_t)
+{
+    auto *self = static_cast<SwitchSuspend *>(owner);
+    IOPMrootDomain *root = getPMRootDomain();
+    const IOPMDriverAssertionID id = __atomic_exchange_n(&self->wakeHold, 0, __ATOMIC_ACQ_REL);
+    if (root && id) root->releasePMAssertion(id);
 }
 
 extern "C" int switch_suspend_start(void)

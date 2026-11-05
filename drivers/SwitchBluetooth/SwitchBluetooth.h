@@ -39,6 +39,15 @@ int switch_bluetooth_start(void);
 // malformed; nothing without one.
 void switch_bluetooth_data_mounted(void);
 
+// System sleep (drivers/SwitchSuspend's sleep and wake actions, one thread, interrupts on; SwitchBluetooth.cpp "System
+// sleep"): suspend drops the Nintendo controllers' links, puts the controller in Broadcom's UART sleep mode with host
+// wake (PH5, PMC wake event 52) and stops UART-D; the client's sends wait until resume, which restarts UART-D, lets the
+// controller send what it held and turns sleep mode off. suspend returns whether the host wake is set up. Both do
+// nothing (false) with Bluetooth off or the controller not up.
+#include <stdbool.h>
+bool switch_bluetooth_suspend(void);
+void switch_bluetooth_resume(void);
+
 #ifdef __cplusplus
 }
 #endif

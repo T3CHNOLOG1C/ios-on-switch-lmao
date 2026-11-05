@@ -111,7 +111,12 @@ void pmc_registers(uint64_t events, uint32_t out[6])
 
 uint64_t pmc_armed(int usbHigh, int gaugeHigh)
 {
-    return switch_wake_pmc_armed(usbHigh != 0, gaugeHigh != 0);
+    return switch_wake_pmc_armed(usbHigh != 0, gaugeHigh != 0, false, false);
+}
+
+uint64_t pmc_armed_radios(int usbHigh, int gaugeHigh, int btWake, int wifiWake)
+{
+    return switch_wake_pmc_armed(usbHigh != 0, gaugeHigh != 0, btWake != 0, wifiWake != 0);
 }
 
 const char *pmc_reason(uint32_t status0, uint32_t status1, uint64_t armed)
@@ -148,4 +153,26 @@ uint64_t sleep_elapsed_ms(uint64_t before, uint64_t after)
 int32_t sleep_average_ma(uint16_t before, uint16_t after, uint32_t lsb_uah, uint64_t elapsed_ms)
 {
     return switch_sleep_average_ma(before, after, lsb_uah, elapsed_ms);
+}
+
+void bt_sleep_params(uint8_t out[12], int on)
+{
+    switch_bt_sleep_mode_params(out, on != 0);
+}
+
+static uint64_t reconnectUntil;
+
+void bt_reconnect_open(uint64_t now)
+{
+    switch_bt_reconnect_open(&reconnectUntil, now);
+}
+
+int bt_reconnect_take(uint64_t now, int fresh, int dark)
+{
+    return switch_bt_reconnect_take(&reconnectUntil, now, fresh != 0, dark != 0);
+}
+
+int bt_reconnect_open_now(void)
+{
+    return reconnectUntil != 0;
 }

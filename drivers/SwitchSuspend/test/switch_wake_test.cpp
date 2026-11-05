@@ -384,6 +384,50 @@ TEST_F(Wake, PmcReason)
     EXPECT_STREQ(pmc_reason(1u << 8, 1u << 20, armed), "unknown");      // Wi-Fi/BT wake: not armed
 }
 
+TEST_F(Wake, PmcRadioWakeEvents)
+{
+    // Bluetooth host wake (52, PH5) active low, Wi-Fi host wake (8, PH2) active high; each only when its driver set the
+    // chip up for this sleep.
+    EXPECT_EQ(pmc_armed_radios(1, 0, 0, 0), pmc_armed(1, 0));
+    EXPECT_EQ(pmc_armed_radios(1, 0, 1, 0), pmc_armed(1, 0) | (1ull << 52));
+    EXPECT_EQ(pmc_armed_radios(0, 0, 1, 1), (1ull << 51) | (1ull << 52) | (1ull << 8));
+    const std::vector<uint32_t> bt = registers(1ull << 52);
+    EXPECT_EQ(bt, (std::vector<uint32_t>{0, 1u << 20, 0, 0, 0, 1u << 20}));
+    const std::vector<uint32_t> wifi = registers(1ull << 8);
+    EXPECT_EQ(wifi, (std::vector<uint32_t>{1u << 8, 0, 1u << 8, 0, 0, 0}));
+    const uint64_t armed = pmc_armed_radios(1, 1, 1, 1);
+    EXPECT_STREQ(pmc_reason(0, 1u << 20, armed), "bt");
+    EXPECT_STREQ(pmc_reason(1u << 8, 0, armed), "wifi");
+    EXPECT_STREQ(pmc_reason(1u << 8, 1u << 19, armed), "pwrbtn");  // the power key first
+}
+
+TEST_F(Wake, BluetoothSleepModeParameters)
+{
+    uint8_t on[12], off[12];
+    bt_sleep_params(on, 1);
+    bt_sleep_params(off, 0);
+    // UART sleep, 600 ms idle thresholds, BT_WAKE and HOST_WAKE active low, host sleep allowed in SCO, sleep combined
+    // with LPM, no tristate, no USB, no break, level (not pulsed) host wake.
+    EXPECT_EQ(std::vector<uint8_t>(on, on + 12), (std::vector<uint8_t>{1, 2, 2, 0, 0, 1, 1, 0, 0, 0, 0, 0}));
+    EXPECT_EQ(std::vector<uint8_t>(off, off + 12), std::vector<uint8_t>(12, 0));
+}
+
+TEST_F(Wake, BluetoothReconnectAfterSleep)
+{
+    const uint64_t s = 1000000000ull;
+    EXPECT_FALSE(bt_reconnect_take(0, 1, 1));  // closed: nothing
+    bt_reconnect_open(10 * s);
+    EXPECT_FALSE(bt_reconnect_take(11 * s, 0, 1));  // a report of a controller that stayed connected
+    EXPECT_FALSE(bt_reconnect_take(11 * s, 1, 0));  // the panel already lit
+    EXPECT_TRUE(bt_reconnect_open_now());
+    EXPECT_TRUE(bt_reconnect_take(12 * s, 1, 1));  // the reconnect: Home, once
+    EXPECT_FALSE(bt_reconnect_open_now());
+    EXPECT_FALSE(bt_reconnect_take(12 * s, 1, 1));
+    bt_reconnect_open(20 * s);
+    EXPECT_FALSE(bt_reconnect_take(36 * s, 1, 1));  // after 15 s it closed unused
+    EXPECT_FALSE(bt_reconnect_open_now());
+}
+
 TEST_F(Wake, SleepTimeFromTheTegraRtc)
 {
     EXPECT_EQ(sleep_rtc_ms(100, 250), 100250u);

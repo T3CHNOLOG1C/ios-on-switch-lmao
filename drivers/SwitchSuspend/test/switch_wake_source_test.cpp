@@ -70,7 +70,9 @@ TEST(SwitchWakeSource, BluetoothPeeksEveryPacket)
     EXPECT_EQ(Count(bt, "switch_wake_bt_reset();"), 2u);
     const std::string wake = SourceText("../SwitchWake.cpp");
     EXPECT_THAT(wake, Not(HasSubstr("switch_buttons_home_pulse")));
-    EXPECT_THAT(wake, HasSubstr("switch_buttons_bt_click(step.click)"));
+    EXPECT_THAT(wake, HasSubstr("uint8_t click = step.click;"));
+    EXPECT_THAT(wake, HasSubstr("switch_buttons_bt_click(click)"));
+    EXPECT_THAT(wake, HasSubstr("switch_bt_reconnect_take("));  // the reconnect after a Bluetooth wake presses Home
     const std::string buttons = SourceText("../../SwitchButtons/SwitchButtons.cpp");
     EXPECT_THAT(buttons, HasSubstr("{SWITCH_BT_CAPTURE, kSwitchButtonSnapshot}"));
 }

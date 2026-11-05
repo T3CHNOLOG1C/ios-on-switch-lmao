@@ -283,9 +283,10 @@ static inline size_t switch_power_ring_render(const struct switch_power_ring *r,
 
 // --- PMC wake events (system sleep, SwitchSuspend) -----------------------------------------------------------------
 // The OLED DTB's nvidia,pmc-wakeup events (switchroot tegra210b01-nx-common.dtsi / -nx-pmic.dtsi). PMC_WAKE_* hold
-// events 0-31, PMC_WAKE2_* events 32-63; a LVL bit set is active high. armed: what SwitchSuspend arms for SC7. Wi-Fi
-// wake (8) and Bluetooth host wake (52) are commented out in that DTB, as the controllers' host-wake features are not
-// set up there either; they stay listed (not armed) so a wake status naming them is decoded.
+// events 0-31, PMC_WAKE2_* events 32-63; a LVL bit set is active high. armed: what SwitchSuspend arms for SC7 always.
+// Wi-Fi wake (8, PH2 WL_HOST_WAKE) and Bluetooth host wake (52, PH5 BT_HOST_WAKE, active low as the DTB's commented
+// host-wakeup-gpios) are commented out there (switchroot powers the chip down in suspend); here each is armed when its
+// driver has set the chip up to wake the host for this sleep.
 enum { SWITCH_WAKE_LOW = 0, SWITCH_WAKE_HIGH = 1 };
 struct switch_wake_pmc_event {
     uint8_t event, level, armed;
@@ -299,8 +300,8 @@ static const struct switch_wake_pmc_event switch_wake_pmc_events[] = {
                                           // (armed only while the line is high)
     {16, SWITCH_WAKE_HIGH, 0, "soc-rtc"},  // rtc_irq: the PMC's own RTC (the MAX77620's is used)
     {35, SWITCH_WAKE_LOW, 0, "sd-cd"},     // gpio_pz1: SD card detect (both edges in the DTB)
-    {8, SWITCH_WAKE_HIGH, 0, "wifi"},      // WiFi Wake Ap (PH2), commented out
-    {52, SWITCH_WAKE_LOW, 0, "bt"},        // bt_wake_ap (PH5), commented out
+    {52, SWITCH_WAKE_LOW, 0, "bt"},        // bt_wake_ap (PH5): SwitchBluetooth's sleep mode (switch_bluetooth_suspend)
+    {8, SWITCH_WAKE_HIGH, 0, "wifi"},      // WiFi Wake Ap (PH2): SwitchWLAN's wake-on-WLAN
 };
 #define SWITCH_WAKE_PMC_EVENTS (sizeof(switch_wake_pmc_events) / sizeof(switch_wake_pmc_events[0]))
 
@@ -323,15 +324,19 @@ static inline void switch_wake_pmc_registers(uint64_t events, uint32_t mask[2], 
 }
 
 // The armed events, as a bit set; usbHigh / gaugeHigh: the USB-PD ALERT / gauge ALRT line reads high (a level-low line
-// already low would wake at once).
-static inline uint64_t switch_wake_pmc_armed(bool usbHigh, bool gaugeHigh)
+// already low would wake at once, and both are stuck low when their chip misbehaves); btWake / wifiWake: the radio was
+// set up to wake the host. A host-wake line already asserted is armed anyway: the radio has something for the host,
+// so the console wakes at once.
+static inline uint64_t switch_wake_pmc_armed(bool usbHigh, bool gaugeHigh, bool btWake, bool wifiWake)
 {
     uint64_t events = 0;
     for (size_t i = 0; i < SWITCH_WAKE_PMC_EVENTS; ++i) {
-        if (!switch_wake_pmc_events[i].armed) continue;
-        if (switch_wake_pmc_events[i].event == 14 && !usbHigh) continue;
-        if (switch_wake_pmc_events[i].event == 27 && !gaugeHigh) continue;
-        events |= (uint64_t)1 << switch_wake_pmc_events[i].event;
+        const unsigned e = switch_wake_pmc_events[i].event;
+        const bool wanted = switch_wake_pmc_events[i].armed ? (e != 14 || usbHigh) && (e != 27 || gaugeHigh)
+                            : e == 52                        ? btWake
+                            : e == 8                         ? wifiWake
+                                                             : false;
+        if (wanted) events |= (uint64_t)1 << e;
     }
     return events;
 }
@@ -345,6 +350,49 @@ static inline const char *switch_wake_pmc_reason(const uint32_t status[2], uint6
         if ((armed >> e & 1u) && (status[e / 32] >> (e % 32) & 1u)) return switch_wake_pmc_events[i].name;
     }
     return "unknown";
+}
+
+// --- Bluetooth across SC7 -------------------------------------------------------------------------------------------
+// Broadcom HCI_VS 0xFC27 Set Sleep Mode (Linux hci_bcm.c struct bcm_set_sleep_mode): sleep_mode, idle_host, idle_dev
+// (x 300 ms), bt_wake_active, host_wake_active (1 high, 0 low), allow_host_sleep (during SCO), combine_modes (sleep and
+// LPM), tristate_control, usb_auto_sleep, usb_resume_timeout, break_to_host, pulsed_host_wake. On: UART sleep with
+// both lines active low as the OLED wires them (device-wakeup PH3 and host-wakeup PH5, GPIO_ACTIVE_LOW), and a level
+// host wake rather than hci_bcm's pulse, which the PMC's level-low wake event 52 needs held. Off: twelve zeros, as at
+// bring-up (BT_WAKE stays asserted, host wake unused).
+#define SWITCH_BT_SLEEP_PARAMS 12u
+static inline void switch_bt_sleep_mode_params(uint8_t out[SWITCH_BT_SLEEP_PARAMS], bool on)
+{
+    for (unsigned i = 0; i < SWITCH_BT_SLEEP_PARAMS; ++i) out[i] = 0;
+    if (!on) return;
+    out[0] = 1;   // UART
+    out[1] = 2;   // idle_host
+    out[2] = 2;   // idle_dev
+    out[5] = 1;   // allow_host_sleep
+    out[6] = 1;   // combine_modes
+}
+
+// Horizon drops its controllers' links when it sleeps and a Joy-Con's button press pages the console back: a
+// controller left connected would stream reports and wake it at once. After a wake by the Bluetooth host wake, the
+// first report of a controller that connects within SWITCH_BT_RECONNECT_MS is the console's Home press (it lights
+// the panel), as Horizon wakes on a reconnecting controller. Times in nanoseconds; *until 0 is closed.
+#define SWITCH_BT_RECONNECT_MS 15000u
+static inline void switch_bt_reconnect_open(uint64_t *until, uint64_t now)
+{
+    *until = now + (uint64_t)SWITCH_BT_RECONNECT_MS * 1000000u;
+}
+
+// A controller report: true when it is the reconnect the window waits for (the window closes); a window past its end
+// closes without one.
+static inline bool switch_bt_reconnect_take(uint64_t *until, uint64_t now, bool fresh, bool dark)
+{
+    if (!*until) return false;
+    if (now >= *until) {
+        *until = 0;
+        return false;
+    }
+    if (!fresh || !dark) return false;
+    *until = 0;
+    return true;
 }
 
 // --- Time and charge asleep (SwitchSuspend's wake line) ------------------------------------------------------------

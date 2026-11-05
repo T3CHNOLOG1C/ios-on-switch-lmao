@@ -46,6 +46,7 @@ char gRender[SWITCH_POWER_LINES * SWITCH_POWER_LINE + 256];  // gWriteLock
 switch_bt_buttons gButtons;  // SwitchBluetooth's receive path only (its ACL packets and link events)
 bool gButtonsLogged;         // the same: the first controller report of the boot was logged
 volatile bool gButtonsStale;  // a client came or went: every connection's buttons go (switch_wake_bt_reset)
+uint64_t gReconnectUntil;      // switch_bt_reconnect_open's window after a Bluetooth wake (ns; atomic, 0 closed)
 
 IOLock *once(IOLock *volatile *slot)
 {
@@ -271,8 +272,35 @@ extern "C" void switch_wake_bt_acl(const uint8_t *acl, size_t length)
     if (step.fresh && dark)
         switch_power_journal("Bluetooth controller %#x connected with the panel off: report %#04x, Home/Capture %#x",
                              handle, report, held);
-    if (step.pressed & SWITCH_BT_HOME) switch_wake_event(SWITCH_WAKE_BT_HOME);  // nothing with the panel lit
-    if (step.click) switch_buttons_bt_click(step.click);
+    uint8_t click = step.click;
+    uint64_t until = __atomic_load_n(&gReconnectUntil, __ATOMIC_ACQUIRE);
+    bool reconnect = false;
+    if (until) {
+        reconnect = switch_bt_reconnect_take(&until, nanoseconds(mach_absolute_time()), step.fresh, dark);
+        if (!until) __atomic_store_n(&gReconnectUntil, 0, __ATOMIC_RELEASE);
+    }
+    if (reconnect && !(click & SWITCH_BT_HOME)) {
+        switch_power_journal("Bluetooth controller %#x reconnected after a Bluetooth wake: console Home", handle);
+        click |= SWITCH_BT_HOME;
+    }
+    if ((step.pressed & SWITCH_BT_HOME) || reconnect) switch_wake_event(SWITCH_WAKE_BT_HOME);  // nothing when lit
+    if (click) switch_buttons_bt_click(click);
+}
+
+extern "C" unsigned switch_wake_bt_controllers(uint16_t *handles, unsigned max)
+{
+    if (__atomic_load_n(&gButtonsStale, __ATOMIC_ACQUIRE)) return 0;
+    unsigned n = 0;
+    for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS && n < max; ++i)
+        if (gButtons.used[i]) handles[n++] = gButtons.handle[i];
+    return n;
+}
+
+extern "C" void switch_wake_bt_slept(void)
+{
+    uint64_t until = 0;
+    switch_bt_reconnect_open(&until, nanoseconds(mach_absolute_time()));
+    __atomic_store_n(&gReconnectUntil, until, __ATOMIC_RELEASE);
 }
 
 extern "C" void switch_wake_bt_gone(uint16_t handle)

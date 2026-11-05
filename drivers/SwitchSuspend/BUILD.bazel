@@ -32,7 +32,9 @@ kernel_driver(
     name = "SwitchSuspend",
     hdr_deps = [
         "drivers/SwitchBattery",
+        "drivers/SwitchBluetooth",
         "drivers/SwitchMotion",
+        "drivers/TegraBPMP",
         "drivers/TegraGPIO",
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",
