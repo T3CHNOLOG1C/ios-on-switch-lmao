@@ -34,9 +34,12 @@ class NativeSdAdmaTests(unittest.TestCase):
         begin = body("void NativeIOSwitchBlock::beginBatch(")
         self.assertIn("outside the APFS partition", begin)
         self.assertLess(begin.index("outside the APFS partition"), begin.index("issue("))
-        # issue() is only called from command() and beginBatch().
+        # issue() is only called from command() and beginBatch(), and (r14-sdcq) for command-queue reads from
+        # beginTask() and checkCq(): those issue reads (write false) with a task argument, never a write.
         calls = re.findall(r"^.*[^:\w]issue\(static_cast|^.*[^:\w]issue\(lba", source, re.M)
-        self.assertEqual(len(calls), 2, calls)
+        self.assertEqual(len(calls), 4, calls)
+        for name in ("void NativeIOSwitchBlock::beginTask(", "const char *NativeIOSwitchBlock::checkCq("):
+            self.assertRegex(body(name), r"issue\(static_cast<uint32_t>\([^)]*\), \w+(?:\.sectors)?, false, [^;]*cq\.argument\(\)\)")
         # In ADMA2 mode the SDMA boundary interrupt is neither awaited nor acted on (resuming would rewrite the
         # descriptor table's address), and an ADMA error is the host's failure.
         self.assertIn("INT_TRANSFER | (descriptors ? 0 : INT_DMA) | ERROR_SIGNALS", complete)
@@ -71,7 +74,10 @@ class NativeSdAdmaTests(unittest.TestCase):
         header = (DRIVER / "IOSwitchAdma.h").read_text()
         # Every table takes its limit and page filter from the proof state, per direction.
         build = source.split("IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("table.limit = high.limit(write);", build)
+        # r14-sdcq: a command-queue task stays below 4 GiB while that is unproven (its proof is a legacy command).
+        self.assertIn("const uint64_t limit = task && high.state == IOSwitchAdmaHigh::kProving ? kAdma4GiB : high.limit(write);",
+                      build)
+        self.assertEqual(build.count("table.limit = limit;"), 2)
         self.assertIn("cacheableRam(page) && high.pageOk(page, write)", build)
         # Writes never go above 4 GiB while that is unproven; the IRAM alias window stays out of proving reads.
         self.assertIn("state == kOn || (state == kProving && !write) ? kAdmaDmaLimit : kAdma4GiB", header)
@@ -98,9 +104,11 @@ class NativeSdAdmaTests(unittest.TestCase):
         worker = source.split("void NativeIOSwitchBlock::worker(", 1)[1].split("\n}\n", 1)[0]
         self.assertLess(worker.index("beginBatch(*next)"), worker.index("completeBatch(*pending)"))
         self.assertLess(worker.index("completeBatch(*pending)"), worker.index("endBatch(*next)"))
-        # suspend() waits for `working`: it is set before the command is begun and cleared only after endBatch.
-        self.assertLess(worker.index("working = true"), worker.index("beginBatch(*next)"))
-        self.assertLess(worker.index("endBatch(*next)"), worker.index("working = false"))
+        # suspend() waits for `working`: it is set before the command is begun and cleared only after endBatch (r14-sdcq:
+        # and around leaving CQ mode when the queue runs dry, before the pick).
+        self.assertLess(worker.index("working = true", worker.index("pickLocked(")), worker.index("beginBatch(*next)"))
+        self.assertLess(worker.index("endBatch(*next)"), worker.rindex("working = false"))
+        self.assertLess(worker.index("runGroup("), worker.rindex("working = false"))
         # beginBatch never waits for the card: it only issues (no complete(), command(), run() or transfer() there).
         begin = source.split("void NativeIOSwitchBlock::beginBatch(", 1)[1].split("\n}\n", 1)[0]
         self.assertIsNone(re.search(r"\b(complete|command|run|transfer|bounceChain|waitSignal)\(", begin))

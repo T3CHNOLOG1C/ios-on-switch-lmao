@@ -61,7 +61,10 @@ class NativeSdQueueTests(unittest.TestCase):
         self.assertIn("} else if (b.gapSectors && gapProofs) {", end)
         prove = body("bool NativeIOSwitchBlock::proveGaps(")
         self.assertIn("gapsOn = false;", prove)
-        self.assertIn("stageChain(first, 0, sectors * kSector, checkBuffer, true)", prove)
+        self.assertIn("compareChain(first, sectors, &at)", prove)
+        # compareChain: the requests get the SDMA read's bytes when theirs differ.
+        self.assertIn("stageChain(first, 0, sectors * kSector, checkBuffer, true)",
+                      body("NativeIOSwitchBlock::ChainProof NativeIOSwitchBlock::compareChain("))
         self.assertIn("(gapsOn && gapProofs)", body("void NativeIOSwitchBlock::releaseChecks()"))
         # Toward the requests gaps are skipped; from them (writes, read-back copies) every byte must be covered.
         self.assertIn("toClient);", body("bool NativeIOSwitchBlock::stageChain("))

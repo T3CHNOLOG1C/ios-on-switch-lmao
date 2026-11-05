@@ -50,6 +50,7 @@
 #include "IOSwitchAdma.h"
 #include "IOSwitchQueue.h"
 #include "IOSwitchSdCard.h"
+#include "IOSwitchCq.h"
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -112,6 +113,16 @@ constexpr uint32_t kCmd23Pairs = 16, kCmd23WriteChecks = 16;
 // command's read-through to 64 KiB (~0.64 ms, against ~1.16 ms for the two commands its two longest gaps save). The first
 // kGapProofs such chains of every boot are read again by SDMA and compared before they complete (proveGaps).
 constexpr uint32_t kGapSectors = 32 * 1024 / kSector, kGapBudget = 64 * 1024 / kSector, kGapProofs = 8;
+// r14-sdcq: the card's command queue (IOSwitchCq.h), for reads. A task is at most kCqTaskSectors (256 KiB: what one SDMA
+// command into the bounce buffer moves without reaching its 512 KiB boundary, so a task whose pages cannot go straight
+// still goes in one CMD46); a group stops taking chains at kCqGroupSectors (1 MiB, one legacy command's worth: a page
+// fault queued behind a group waits about as long as behind one large read) or at the card's depth (kCqMaxTasks at
+// most). The first kCqProofs tasks of every boot are read again the legacy way and compared before they complete.
+constexpr uint32_t kCqTaskSectors = kSafeSectors, kCqGroupSectors = kBounceSectors, kCqMaxTasks = 32, kCqProofs = 32;
+// issue()'s `task` when the command is not a CQ task's CMD46.
+constexpr uint32_t kNoTask = 0xffffffffu;
+// cqCommand()'s data: none, one 512-byte block from the card, or to it.
+enum : int { kRegNone, kRegRead, kRegWrite };
 // r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (prepareDirect, proveHigh).
 constexpr uint8_t kPoison = 0x5a;
 // r12-sdio: the most separate stretches of a read chain staged through the bounce buffer (IOSwitchAdmaStaging; consecutive
@@ -362,6 +373,8 @@ struct Stats {
     // r14-sdcq: data commands framed with Auto CMD23; read chains with gaps, the gaps' bytes read through and discarded,
     // and of those chains the ones compared with SDMA and found equal.
     uint64_t cmd23, gapChains, gapBytes, gapProven;
+    // r14-sdcq: command-queue tasks executed, and the worker time of their groups (submission, every task, proofs).
+    uint64_t cqTasks, cqNs;
 };
 }
 
@@ -487,6 +500,27 @@ class NativeIOSwitchBlock : public IOService {
     bool gapsOn = false;
     uint32_t gapProofs = 0;
     bool inSink(uint64_t pa) const { return sinkPA && pa >= sinkPA && pa - sinkPA < uint64_t(kGapSectors) * kSector; }
+    // r14-sdcq: the command queue (IOSwitchCq.h): the engine and its bus (this controller), the CQ control byte's place
+    // (identify()), the DMA buffer CMD48/CMD49 move their block through, the two task arrays the worker alternates (a
+    // group's last task may still wait for its completions while the next group fills the other one), and the tasks
+    // still to compare with legacy reads this boot.
+    struct CqBus {
+        NativeIOSwitchBlock *self;
+        int command(uint32_t index, uint32_t argument, bool busy, uint32_t *r1);
+        int control(bool write, uint8_t *value);
+        void settle() { IOSleep(1); }
+    };
+    using CqEngine = IOSwitchCqEngine<CqBus>;
+    CqBus cqBus{this};
+    CqEngine cq;
+    uint32_t cqControlAddress = 0;
+    IOBufferMemoryDescriptor *regMemory = nullptr;
+    uint8_t *regBuffer = nullptr;
+    uint64_t regPA = 0;
+    Batch cqGroups[2][kCqMaxTasks] = {};
+    unsigned cqTurn = 0;
+    uint32_t cqProofs = 0;
+    char cqWhy[128] = {};
     char admaWhy[128] = {};
     // SDMMC1 interrupt: the controller's line is (STATUS & SIGNAL_ENABLE). The worker enables the signals it
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
@@ -540,20 +574,37 @@ class NativeIOSwitchBlock : public IOService {
     int command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool cmd23 = false);
     // r12-sdio: command()'s halves, so the worker can do other work while the card moves the data. r14-sdcq: `cmd23`
     // frames a multi-block command with Auto CMD23 instead of Auto CMD12 (ioswitchSdBlockFrame).
-    int issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, bool cmd23 = false);
-    int complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early, bool cmd23 = false);
+    // r14-sdcq: `task` (a command-queue task's CMD46 argument) issues CMD46 instead, with no auto command (complete()'s
+    // `task`).
+    int issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, bool cmd23 = false,
+              uint32_t task = kNoTask);
+    int complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early, bool cmd23 = false,
+                 bool task = false);
     bool failed(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write, unsigned descriptors,
                 bool retry);
     int run(uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
     int retry(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
     static void worker(void *, wait_result_t);
     Request *pickLocked(uint32_t *sectors, uint32_t *count);
+    void takenLocked(Request *first, uint32_t count, uint64_t pickNs);
     void beginBatch(Batch &);
     void endBatch(Batch &);
+    void account(Batch &);
     void completeBatch(Batch &);
+    // r14-sdcq: the command queue: a group's chains (under queueLock), the group run, its tasks, the protocol's own
+    // commands, leaving CQ mode, stopping it for the boot, and the power cycle for a card that will not leave it.
+    unsigned groupLocked(Request *first, uint32_t sectors, uint32_t count);
+    Batch *runGroup(Batch *group, unsigned n, Batch *pending);
+    void beginTask(Batch &);
+    int endTask(Batch &);
+    int cqCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data);
+    void cqLeave();
+    void cqStop(const char *why);
+    void resetCard();
+    const char *checkCq(uint64_t *queuedNs, uint64_t *serialNs, uint64_t *enterNs, uint64_t *leaveNs, unsigned *tasks);
     // r10-adma2: the ADMA2 path, the bounce path in SDMA-sized pieces, the write read-back, the setup check, the
     // power-state hooks.
-    IOSwitchAdmaRefusal buildTable(Request *first, uint32_t sectors, bool write);
+    IOSwitchAdmaRefusal buildTable(Request *first, uint32_t sectors, bool write, bool task = false);
     void prepareDirect(bool write, bool poison);
     void finishDirect(bool write);
     bool stageChain(Request *first, uint32_t from, uint32_t length, uint8_t *buffer, bool toClient);
@@ -561,6 +612,9 @@ class NativeIOSwitchBlock : public IOService {
     bool proveWrite(Request *first, uint32_t sectors, bool cmd23);
     bool proveHigh(Request *first, uint32_t sectors);
     bool proveGaps(Request *first, uint32_t sectors);
+    // r14-sdcq: a read chain compared with the same blocks read by SDMA (proveGaps, the command queue's proofs).
+    enum ChainProof : uint8_t { kChainMatches, kChainDiffers, kChainUnproven, kChainBroken };
+    ChainProof compareChain(Request *first, uint32_t sectors, uint64_t *at);
     void releaseChecks();
     bool copyStaged();
     const char *checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages, uint32_t *highOk,
@@ -783,13 +837,16 @@ int NativeIOSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, uns
 
 // The command's first half: the partition check, the registers and the command itself. 0, or step 1 when the controller
 // never went idle (then nothing was issued).
-int NativeIOSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, bool cmd23)
+int NativeIOSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, bool cmd23,
+                               uint32_t task)
 {
     // Every card write passes here, whichever path staged it: none may reach outside the APFS partition. (Until setup()
     // has found the partition, sectorCount is 0 and so no write can be issued at all.)
     if (write && (lba < firstSector || sectors > sectorCount || lba - firstSector > sectorCount - sectors))
         panic("IOSwitchSD: write lba=%u n=%u outside the APFS partition [%llu, +%llu)", lba, sectors, firstSector,
               sectorCount);
+    // r14-sdcq: the command queue carries reads only (a CQ write would need CMD47 and its own proofs).
+    if (write && task != kNoTask) panic("IOSwitchSD: write lba=%u n=%u as a command-queue task", lba, sectors);
     if (!waitIdle(write, 2000000000)) return 1;
     w32(STATUS, 0xffffffff);
     // DMA select per command: the bring-up commands' SDMA (cardCommand) and the data path share the controller.
@@ -799,10 +856,12 @@ int NativeIOSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsig
     w32(DMA_HIGH, static_cast<uint32_t>(address >> 32));
     w16(BLOCK_SIZE, kSector | 0x7000);  // 512 KiB SDMA boundary (ADMA2 ignores it)
     w16(BLOCK_COUNT, static_cast<uint16_t>(sectors));
-    w32(ARGUMENT, lba);
-    // DMA | block-count | Auto CMD12 (or r14-sdcq: Auto CMD23, its block count in Argument 2) | read | multi, as the
-    // qualified sequence.
-    const IOSwitchSdFrame frame = ioswitchSdBlockFrame(sectors, write, cmd23);
+    // r14-sdcq: a task's CMD46 names the task (its block address went to the card in CMD45).
+    w32(ARGUMENT, task != kNoTask ? task : lba);
+    // DMA | block-count | Auto CMD12 (or r14-sdcq: Auto CMD23, its block count in Argument 2; a task: none) | read |
+    // multi, as the qualified sequence.
+    const IOSwitchSdFrame frame =
+        task != kNoTask ? ioswitchSdTaskFrame(sectors) : ioswitchSdBlockFrame(sectors, write, cmd23);
     if (frame.argument2) w32(ARGUMENT2, frame.argument2);
     w16(TRANSFER, frame.transfer);
     barrier();
@@ -814,7 +873,7 @@ int NativeIOSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsig
 // not from issue(): the worker may have completed the previous chain's requests in between. `*early` (when asked): the
 // command had already finished when this began, so it took no interrupt.
 int NativeIOSwitchBlock::complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early,
-                                  bool cmd23)
+                                  bool cmd23, bool task)
 {
     *status = 0;
     const bool multi = sectors > 1;
@@ -869,8 +928,9 @@ int NativeIOSwitchBlock::complete(uint32_t sectors, bool write, unsigned descrip
     if (early) *early = !waited;
     w32(STATUS, INT_COMMAND | INT_TRANSFER);
     if (!(s & INT_COMMAND) || (r32(RESPONSE) & R1_ERRORS)) return 4;
-    if (multi) {
-        // Auto CMD12's or (r14-sdcq) Auto CMD23's errors; only a CMD12 leaves a response in STOP_RESPONSE.
+    if (multi && !task) {
+        // Auto CMD12's or (r14-sdcq) Auto CMD23's errors; only a CMD12 leaves a response in STOP_RESPONSE. A CQ task
+        // has no auto command.
         if (r16(AUTO_CMD_ERROR) & 0x9f) return 8;
         if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS)) return 9;
     }
@@ -1003,11 +1063,14 @@ template <int op> static void syncLines(const IOSwitchAdmaTable &table, uint64_t
 
 // The descriptor table for a chain, from each request's physical segments; kAdmaOk, or why the chain takes the bounce
 // buffer instead. How far up it may reach depends on the direction and on how far ADMA2 above 4 GiB is proven (high).
-IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sectors, bool write)
+// r14-sdcq: a command-queue task (`task`) reaches above 4 GiB only once that is proven: the proof's SDMA read is a legacy
+// command, which CQ mode does not allow; pages up there are staged through the bounce buffer meanwhile.
+IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sectors, bool write, bool task)
 {
     table.reset();
     staging.count = 0;
-    table.limit = high.limit(write);
+    const uint64_t limit = task && high.state == IOSwitchAdmaHigh::kProving ? kAdma4GiB : high.limit(write);
+    table.limit = limit;
     const auto pageOk = [&](uint64_t page) { return cacheableRam(page) && high.pageOk(page, write); };
     // r14-sdcq: a read chain's gaps go to the sink, one descriptor each (no gap is longer than the sink).
     uint64_t lba = first->lba;
@@ -1015,7 +1078,7 @@ IOSwitchAdmaRefusal NativeIOSwitchBlock::buildTable(Request *first, uint32_t sec
     if (!write && stagingOn) {
         // r12-sdio: a read's refused segments alone through the bounce buffer (IOSwitchAdmaStaging).
         staging.reset(&table, bouncePA, stages, kStages);
-        table.limit = high.limit(write);
+        table.limit = limit;
         for (Request *r = first; r; r = r->next) {
             IOSwitchAdmaRefusal why = kAdmaOk;
             if (gap(r))
@@ -1237,50 +1300,63 @@ bool NativeIOSwitchBlock::proveHigh(Request *first, uint32_t sectors)
     return repaired;
 }
 
-// r14-sdcq: the first kGapProofs read chains with gaps of every boot, right after their command: the command's blocks again
-// by SDMA into checkBuffer (the proven path, stopped by CMD12), and each request's bytes compared with their place there.
-// Equal: one proof more (the last one logs). Different: SDMA's bytes go into the requests, so they complete with the
-// proven path's data, and gap reads stay off until reboot (one line). If the SDMA read fails nothing is proven and the
-// chain is read again through the bounce buffer. False only when the requests' bytes could not be made right.
-bool NativeIOSwitchBlock::proveGaps(Request *first, uint32_t sectors)
+// r14-sdcq: a read chain's blocks again by SDMA (the proven path, stopped by CMD12) into checkBuffer, and each request's
+// bytes compared with their place there (a gap's place is nobody's). Differs: SDMA's bytes are put into the requests, so
+// they complete with the proven path's data (*at: the first byte that differed). Unproven: the SDMA read failed (or there
+// is no buffer), so nothing is known; after a failed SDMA read the chain is read again through the bounce buffer. Broken:
+// the requests' bytes could not be made right (they complete with an I/O error).
+NativeIOSwitchBlock::ChainProof NativeIOSwitchBlock::compareChain(Request *first, uint32_t sectors, uint64_t *at)
 {
-    if (!checkBuffer) return true;
+    *at = 0;
+    if (!checkBuffer || sectors > kBounceSectors) return kChainUnproven;
     for (uint32_t done = 0; done < sectors;) {
         const uint32_t n = sectors - done < kSafeSectors ? sectors - done : kSafeSectors;
-        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector)) return bounceChain(first, sectors);
+        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector))
+            return bounceChain(first, sectors) ? kChainUnproven : kChainBroken;
         done += n;
     }
-    // Each request's bytes into the bounce buffer at its place in the command (the gaps' places stay as they are).
-    uint64_t differs = UINT64_MAX;
-    for (Request *r = first; r && differs == UINT64_MAX; r = r->next) {
-        const uint32_t at = static_cast<uint32_t>(r->lba - first->lba) * kSector, length = r->sectors * kSector;
-        if (!stage(r->buffer, 0, bounce + at, length, false))
-            return stageChain(first, 0, sectors * kSector, checkBuffer, true);
-        if (!memcmp(bounce + at, checkBuffer + at, length)) continue;
-        differs = at;
-        while (bounce[differs] == checkBuffer[differs]) ++differs;
+    // Each request's bytes into the bounce buffer at its place in the command.
+    for (Request *r = first; r; r = r->next) {
+        const uint32_t from = static_cast<uint32_t>(r->lba - first->lba) * kSector, length = r->sectors * kSector;
+        const bool copied = stage(r->buffer, 0, bounce + from, length, false);
+        if (copied && !memcmp(bounce + from, checkBuffer + from, length)) continue;
+        if (copied) {
+            *at = from;
+            while (bounce[*at] == checkBuffer[*at]) ++*at;
+        }
+        const bool repaired = stageChain(first, 0, sectors * kSector, checkBuffer, true);
+        return !repaired ? kChainBroken : copied ? kChainDiffers : kChainUnproven;
     }
-    if (differs == UINT64_MAX) {
+    return kChainMatches;
+}
+
+// r14-sdcq: the first kGapProofs read chains with gaps of every boot, right after their command (compareChain). Equal: one
+// proof more (the last one logs). Different: the requests get SDMA's bytes and gap reads stay off until reboot (one
+// line). False only when the requests' bytes could not be made right.
+bool NativeIOSwitchBlock::proveGaps(Request *first, uint32_t sectors)
+{
+    uint64_t at = 0;
+    const ChainProof proof = compareChain(first, sectors, &at);
+    if (proof == kChainMatches) {
         ++stats.gapProven;
         if (gapProofs && !--gapProofs)
             IOLog("IOSwitchSD: gap reads proven: %u chains read through their gaps match SDMA\n", kGapProofs);
-        releaseChecks();
-        return true;
+    } else if (proof == kChainDiffers) {
+        gapsOn = false;
+        IOLog("IOSwitchSD: read chain lba=%llu n=%u with gaps differs from SDMA at byte %llu; SDMA's copy used, "
+              "gap reads off until reboot\n",
+              first->lba, sectors, at);
     }
-    gapsOn = false;
-    IOLog("IOSwitchSD: read chain lba=%llu n=%u with gaps differs from SDMA at byte %llu; SDMA's copy used, "
-          "gap reads off until reboot\n",
-          first->lba, sectors, differs);
-    const bool repaired = stageChain(first, 0, sectors * kSector, checkBuffer, true);
     releaseChecks();
-    return repaired;
+    return proof != kChainBroken;
 }
 
 // The proofs' SDMA buffer, once neither the first writes nor ADMA2 above 4 GiB need one.
 void NativeIOSwitchBlock::releaseChecks()
 {
     if (!checkBuffer || (admaWrites && (writeChecks || (largeWriteChecks && writeSectors > kSafeSectors))) ||
-        (adma && high.checking(admaWrites)) || (admaWrites && cmd23Writes && cmd23WriteChecks) || (gapsOn && gapProofs))
+        (adma && high.checking(admaWrites)) || (admaWrites && cmd23Writes && cmd23WriteChecks) ||
+        (gapsOn && gapProofs) || (cq.state != CqEngine::kOff && cqProofs))
         return;
     IOFreeData(checkBuffer, kBounceBytes);
     checkBuffer = nullptr;
@@ -1388,10 +1464,17 @@ void NativeIOSwitchBlock::endBatch(Batch &b)
         stats.bounced[b.why] += b.count;
     }
     b.result = result;
-    // Card and copies first, completions after: busy time covers the card, the copies and the cache maintenance,
-    // completeNs the callbacks (IOStorageFamily/APFS work that runs on this thread; r12-sdio: while the next command
-    // runs, their time inside this chain's span is not this chain's busy time).
-    for (Request *r = first; r; r = r->next) {
+    account(b);
+}
+
+// The stats for a chain whose command (or r14-sdcq: task) has ended. Card and copies first, completions after: busy time
+// covers the card, the copies and the cache maintenance, completeNs the callbacks (IOStorageFamily/APFS work that runs on
+// this thread; r12-sdio: while the next command runs, their time inside this chain's span is not this chain's busy time).
+void NativeIOSwitchBlock::account(Batch &b)
+{
+    const bool write = b.write;
+    const IOReturn result = b.result;
+    for (Request *r = b.first; r; r = r->next) {
         const uint32_t length = r->sectors * kSector;
         if (write) {
             stats.writes++;
@@ -1435,6 +1518,351 @@ void NativeIOSwitchBlock::completeBatch(Batch &b)
     }
     b.first = nullptr;
     stats.completeNs += nowNs() - began;
+}
+
+// ---- r14-sdcq: the command queue (IOSwitchCq.h) ----
+//
+// One of the queue protocol's own commands, waited for by interrupt as the data commands are (complete()): no data
+// (CMD44/CMD45, R1; CMD43, R1b, whose busy end raises transfer complete on this controller, the hardware busy detection
+// L4T relies on with MMC_CAP_WAIT_WHILE_BUSY), or one 512-byte block by SDMA through regBuffer (CMD48 from the card,
+// CMD49 to it; transfer complete follows CMD49's busy). 0 or a step code (1 controller not idle, 2/3 an error interrupt
+// without/with command complete, 6/7 no end within 1 s, the extension registers' limit); a failure resets the CMD and DAT
+// lines. *response gets the R1.
+int NativeIOSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data)
+{
+    *response = 0;
+    if (!waitIdle(false, 100000000)) return 1;
+    w32(STATUS, 0xffffffff);
+    if (data != kRegNone) {
+        for (uintptr_t at = (uintptr_t)regBuffer, end = at + kSector; at < end; at += kAdmaLine)
+            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+        barrier();
+        w8(HOST_CONTROL, r8(HOST_CONTROL) & ~DMA_SELECT);
+        w32(DMA_LOW, static_cast<uint32_t>(regPA));
+        w32(DMA_HIGH, static_cast<uint32_t>(regPA >> 32));
+        w16(BLOCK_SIZE, kSector | 0x7000);
+        w16(BLOCK_COUNT, 1);
+    }
+    w32(ARGUMENT, argument);
+    w16(TRANSFER, data == kRegRead ? 0x11 : data == kRegWrite ? 0x01 : 0);
+    barrier();
+    w16(COMMAND, static_cast<uint16_t>(index << 8 | flags | (data != kRegNone ? CMD_DATA : 0)));
+    const uint32_t done = data != kRegNone || (flags & 3) == 3 ? INT_TRANSFER : INT_COMMAND;
+    const uint32_t awaited = done | ERROR_SIGNALS;
+    const uint64_t start = nowNs(), limit = 1000000000ull;
+    int step = 0;
+    uint32_t s = 0;
+    for (;;) {
+        s = r32(STATUS);
+        if (s & INT_ERRORS) {
+            step = (s & INT_COMMAND) ? 3 : 2;
+            break;
+        }
+        if (s & done) break;
+        const uint64_t elapsed = nowNs() - start;
+        if (elapsed >= limit) {
+            step = (s & INT_COMMAND) ? 6 : 7;
+            break;
+        }
+        const uint64_t left = limit - elapsed;
+        if (!waitSignal(awaited, left < kInterruptCheckNs ? left : kInterruptCheckNs) && (r32(STATUS) & awaited)) {
+            char gic[192];
+            ioswitch_interrupt_describe(kInterrupt, gic, sizeof(gic));
+            panic("IOSwitchSD: SDMMC1 interrupt lost: STATUS %#x awaited %#x, %s", r32(STATUS), awaited, gic);
+        }
+    }
+    if (!step && !(s & INT_COMMAND)) step = 4;
+    if (step) {
+        stats.errors++;
+        stats.lastError = static_cast<uint32_t>(step);
+        stats.lastStatus = s;
+        resetLines();
+        w32(STATUS, 0xffffffff);
+        return step;
+    }
+    *response = r32(RESPONSE);
+    w32(STATUS, INT_COMMAND | INT_TRANSFER);
+    if (data == kRegRead) {
+        for (uintptr_t at = (uintptr_t)regBuffer, end = at + kSector; at < end; at += kAdmaLine)
+            __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
+        barrier();
+    }
+    return 0;
+}
+
+int NativeIOSwitchBlock::CqBus::command(uint32_t index, uint32_t argument, bool busy, uint32_t *r1)
+{
+    return self->cqCommand(index, argument, busy ? RSP_R1B : RSP_R1, r1, kRegNone);
+}
+
+// The CQ control byte: CMD49 of `*value`, or CMD48 into it. The only extension-register byte this driver ever writes:
+// byte 262 of the card's performance function (identify(), ioswitchSdCqControlAddress), one byte (LEN 0, no mask write),
+// only its CQ enable and mode bits (00h or 03h). Anything else is a bug here and panics before it reaches the card.
+int NativeIOSwitchBlock::CqBus::control(bool write, uint8_t *value)
+{
+    const uint32_t address = self->cqControlAddress;
+    if (!address || address != ioswitchSdCqControlAddress(self->extInfo.perf) || !self->regBuffer ||
+        (write && *value != 0 && *value != (kSdCqEnable | kSdCqSequential)))
+        panic("IOSwitchSD: extension register %s fno %u @0x%05x value 0x%02x refused", write ? "write" : "read",
+              unsigned(self->extInfo.perf.fno), address, unsigned(*value));
+    if (write) {
+        memset(self->regBuffer, 0, kSector);
+        self->regBuffer[0] = *value;
+    }
+    uint32_t r1 = 0;
+    const int step = self->cqCommand(write ? 49 : 48, ioswitchSdExtArgument(self->extInfo.perf.fno, address, 1), RSP_R1,
+                                     &r1, write ? kRegWrite : kRegRead);
+    if (step) return step;
+    if (r1 & R1_ERRORS) return 30;
+    if (!write) *value = self->regBuffer[0];
+    return 0;
+}
+
+// Out of CQ mode before a legacy command, and when the queue runs dry. A card that will not leave it stops the queue
+// for the boot and is power-cycled (cqStop).
+void NativeIOSwitchBlock::cqLeave()
+{
+    if (cq.state == CqEngine::kOn && !cq.leave(cqBus)) cqStop("the card stays in CQ mode");
+}
+
+// The queue off until reboot, with one line: whatever is queued on the card aborted (CMD43), the card out of CQ mode
+// (CMD49 00h, read back); a card that stays in it is powered off and initialized again (resetCard), the only way out.
+void NativeIOSwitchBlock::cqStop(const char *why)
+{
+    const bool stuck = !cq.fail(cqBus, why) || cq.stuck;
+    IOLog("IOSwitchSD: command queue off until reboot (%s) after %llu tasks in %llu groups%s\n", cq.why, cq.tasks,
+          cq.groups, stuck ? "; the card stayed in CQ mode: power-cycled" : "");
+    if (stuck) {
+        resetCard();
+        cq.powerCycled();
+    }
+    releaseChecks();
+}
+
+// A card that will not leave CQ mode cannot take legacy commands (Table 4-74), and CQ mode does not survive power-off:
+// the card is powered off and initialized again as after system sleep (suspend/resume's own steps), then LBA 1 must read
+// as at boot. Panics where resume() would (the card cannot be used at all then).
+void NativeIOSwitchBlock::resetCard()
+{
+    dmaSuspend();
+    if (irqSource) irqSource->disable();
+    powerOffCard();
+    powerOnController();
+    if (irqSource) irqSource->enable();
+    const bool uhs = lowVoltageBus && enablePllc4();
+    if (lowVoltageBus && !uhs)
+        panic("IOSwitchSD: PLLC4 does not lock after the card's power cycle (PLLC4_BASE 0x%08x)",
+              rd(car, CAR_PLLC4_BASE));
+    (void)reinitialize(PLLP_KHZ * 2 / (kPllpDivider48MHz + 2), 0xc0 | kLdo3V3, uhs, true);
+    uint8_t again[kSector];
+    const int step = transfer(1, 1, false, again);
+    if (step || memcmp(again, gptHeader, sizeof(again)))
+        panic("IOSwitchSD: LBA 1 differs after the card's power cycle (read step %d, bus %s)", step, busMode);
+    dmaResume();
+}
+
+// Whether the chain pickLocked just took starts a command-queue group (queueLock held): a read of at most
+// kCqTaskSectors with no unproven gaps while the queue is on. Then more chains join, each the oldest queued read that
+// overlaps no older queued request (ioswitchNextIndependentRead: never past a write it would see) with the reads that
+// continue it (as pickLocked gathers, up to kCqTaskSectors, gaps once proven), until the card's depth or kCqGroupSectors.
+// From legacy mode a group needs two chains (one is cheaper as a legacy command than CQ mode's way in and out); in CQ
+// mode one will do. The group goes in cqGroups[cqTurn], the picked chain first; returns its size, or 0 for the legacy way.
+unsigned NativeIOSwitchBlock::groupLocked(Request *first, uint32_t sectors, uint32_t count)
+{
+    if (cq.state == CqEngine::kOff || suspended || first->write || sectors > kCqTaskSectors) return 0;
+    uint64_t payload = 0;
+    for (const Request *r = first; r; r = r->next) payload += r->sectors;
+    if (payload != sectors && gapProofs) return 0;
+    Batch *const group = cqGroups[cqTurn];
+    group[0] = {};
+    group[0].first = first;
+    group[0].sectors = sectors;
+    group[0].count = count;
+    unsigned n = 1;
+    uint32_t total = sectors;
+    const unsigned limit = cq.depth < kCqMaxTasks ? cq.depth : kCqMaxTasks;
+    const uint32_t gap = gapsOn && !gapProofs ? kGapSectors : 0, budget = gapsOn && !gapProofs ? kGapBudget : 0;
+    const uint64_t pickNs = nowNs();
+    while (n < limit && total < kCqGroupSectors && merge && mergeAnywhere) {
+        Request *const r = ioswitchNextIndependentRead(head, kCqTaskSectors, kMergeScan);
+        if (!r) break;
+        uint64_t start = 0;
+        uint32_t chainSectors = 0;
+        const uint32_t chainCount =
+            ioswitchGatherReads(head, r, kCqTaskSectors, kMaxChain, kMergeScan, &start, &chainSectors, gap, budget);
+        if (!ioswitchChainFits(head, start, chainSectors, chainCount, gap, budget)) {
+            ioswitchClearChain(head);
+            break;
+        }
+        Request *const chain = ioswitchUnlinkChain(head, tail, chainCount);
+        takenLocked(chain, chainCount, pickNs);
+        group[n] = {};
+        group[n].first = chain;
+        group[n].sectors = chainSectors;
+        group[n].count = chainCount;
+        ++n;
+        total += chainSectors;
+    }
+    return n >= (cq.state == CqEngine::kOn ? 1u : 2u) ? n : 0;
+}
+
+// A task's command (the engine's next CMD46): its table (beginBatch's builder, with nothing above 4 GiB while that is
+// unproven), or the bounce buffer when the chain cannot go straight (a task is at most 256 KiB: one SDMA command there),
+// the cache maintenance, the command issued. Nothing in it waits for the card.
+void NativeIOSwitchBlock::beginTask(Batch &b)
+{
+    Request *const first = b.first;
+    uint64_t payload = 0;
+    for (const Request *r = first; r; r = r->next) payload += r->sectors;
+    b.gapSectors = static_cast<uint32_t>(b.sectors - payload);
+    b.write = false;
+    b.beganNs = nowNs();
+    b.overlapNs = 0;
+    b.issueStep = 0;
+    b.cmd23 = false;
+    b.proving = false;
+    b.why = buildTable(first, b.sectors, false, true);
+    b.direct = b.why == kAdmaOk;
+    b.staged = b.direct && staging.count;
+    if (b.direct) {
+        prepareDirect(false, false);
+    } else {
+        for (uintptr_t at = (uintptr_t)bounce, end = at + b.sectors * kSector; at < end; at += kAdmaLine)
+            __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+        barrier();
+    }
+    b.issueStep =
+        issue(static_cast<uint32_t>(first->lba), b.sectors, false, b.direct ? table.count : 0, false, cq.argument());
+    b.issued = true;
+}
+
+// A task's end: its transfer waited for (by interrupt, unless it finished meanwhile), its data out of the bounce buffer if
+// it went there, the stats. 0, or the step that failed (logged, the lines recovered; runGroup stops the queue).
+int NativeIOSwitchBlock::endTask(Batch &b)
+{
+    uint32_t status = 0;
+    bool early = false;
+    const unsigned descriptors = b.direct ? table.count : 0;
+    const int step = b.issueStep ? b.issueStep : complete(b.sectors, false, descriptors, &status, &early, false, true);
+    if (!b.issueStep && b.overlapNs) {
+        ++stats.overlapped;
+        if (early) ++stats.early;
+    }
+    if (b.direct) finishDirect(false);
+    if (step) {
+        (void)failed(step, status, b.first->lba, b.sectors, false, descriptors, false);
+        return step;
+    }
+    cq.executed();
+    IOReturn result = kIOReturnSuccess;
+    if (b.direct) {
+        if (b.staged) {
+            if (!copyStaged()) result = kIOReturnIOError;
+            ++stats.stagedChains;
+            stats.stagedBytes += staging.staged;
+        }
+        stats.direct += b.count;
+        stats.descriptors += table.count;
+    } else {
+        for (uintptr_t at = (uintptr_t)bounce, end = at + b.sectors * kSector; at < end; at += kAdmaLine)
+            __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
+        barrier();
+        if (!stageChain(b.first, 0, b.sectors * kSector, bounce, true)) result = kIOReturnIOError;
+        stats.bounced[b.why] += b.count;
+    }
+    b.result = result;
+    ++stats.cqTasks;
+    account(b);
+    return 0;
+}
+
+// One command-queue group (groupLocked); `pending` is the batch whose completions have not run yet. Into CQ mode, every
+// chain assigned as a task (CMD44 + CMD45), then each executed in order (CMD46) while the previous one's completions run.
+// While proofs are due the group's requests are held until, out of CQ mode, each task's blocks read again the legacy way
+// match (compareChain). On any error or a proof that differs the queue stops for the boot (cqStop: one line) and every
+// chain not completed yet runs the legacy way. Returns the batch left pending.
+Batch *NativeIOSwitchBlock::runGroup(Batch *group, unsigned n, Batch *pending)
+{
+    const uint64_t began = nowNs();
+    const bool proving = cqProofs != 0;
+    IOSwitchCqTask tasks[kCqMaxTasks];
+    for (unsigned i = 0; i < n; ++i) {
+        // As beginBatch checks every command: no task's blocks reach outside the APFS partition.
+        const Request *const first = group[i].first;
+        const uint32_t sectors = group[i].sectors;
+        if (first->lba < firstSector || sectors > sectorCount || first->lba - firstSector > sectorCount - sectors)
+            panic("IOSwitchSD: command lba=%llu n=%u outside the APFS partition [%llu, +%llu)", first->lba, sectors,
+                  firstSector, sectorCount);
+        tasks[i] = {first->lba, sectors};
+    }
+    const char *why = nullptr;
+    if (!cq.enter(cqBus))
+        why = cq.why ? cq.why : "the card would not enter CQ mode";
+    else if (!cq.submit(cqBus, tasks, n))
+        why = cq.why;
+    unsigned done = 0;
+    for (; !why && done < n; ++done) {
+        Batch &b = group[done];
+        beginTask(b);
+        if (pending) {
+            const uint64_t completing = nowNs();
+            completeBatch(*pending);
+            if (b.issued) b.overlapNs = nowNs() - completing;
+            pending = nullptr;
+        }
+        if (const int step = endTask(b)) {
+            snprintf(cqWhy, sizeof(cqWhy), "task %u (lba %llu n %u) failed: step %d", done, b.first->lba, b.sectors,
+                     step);
+            why = cqWhy;
+            break;
+        }
+        if (!proving) pending = &b;
+    }
+    if (!why && proving) {
+        // Out of CQ mode for the legacy reads; then each task's blocks compared, the requests still held.
+        if (!cq.leave(cqBus)) why = "the card stays in CQ mode";
+        unsigned matched = 0;  // tasks proven (one whose legacy read failed proves nothing)
+        for (unsigned i = 0; !why && i < n; ++i) {
+            uint64_t at = 0;
+            const ChainProof proof = compareChain(group[i].first, group[i].sectors, &at);
+            if (proof == kChainMatches) ++matched;
+            if (proof == kChainBroken) group[i].result = kIOReturnIOError;
+            if (proof == kChainDiffers) {
+                // The queue stops and the whole group is read again the legacy way (below): no task of a group that
+                // read one block wrong completes with the queue's bytes.
+                snprintf(cqWhy, sizeof(cqWhy), "task %u (lba %llu n %u) differs from the legacy read at byte %llu", i,
+                         group[i].first->lba, group[i].sectors, at);
+                why = cqWhy;
+            }
+        }
+        if (!why) {
+            const uint32_t before = cqProofs;
+            cqProofs = cqProofs > matched ? cqProofs - matched : 0;
+            if (before && !cqProofs)
+                IOLog("IOSwitchSD: command queue proven: %u tasks read back the same the legacy way\n", kCqProofs);
+            releaseChecks();
+            for (unsigned i = 0; i + 1 < n; ++i) completeBatch(group[i]);
+            pending = &group[n - 1];
+        }
+    }
+    if (why) {
+        // Stop the queue; then every chain whose requests have not completed the legacy way (while proving, the tasks
+        // that did run are read again too: their bytes were not proven).
+        cqStop(why);
+        for (unsigned i = proving ? 0 : done; i < n; ++i) {
+            Batch &b = group[i];
+            beginBatch(b);
+            if (pending) {
+                const uint64_t completing = nowNs();
+                completeBatch(*pending);
+                if (b.issued) b.overlapNs = nowNs() - completing;
+            }
+            endBatch(b);
+            pending = &b;
+        }
+    }
+    stats.cqNs += nowNs() - began;
+    return pending;
 }
 
 // The next chain off the queue (queueLock held, queue not empty), unlinked: the head, or a passing read (r6-lows), and the
@@ -1518,6 +1946,15 @@ Request *NativeIOSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chain
         if (tail == last) tail = prev;
         last->next = nullptr;
     }
+    takenLocked(first, count, pickNs);
+    *chainSectors = sectors;
+    *chainCount = count;
+    return first;
+}
+
+// The queue counts and the per-class wait stats for a chain just unlinked (queueLock held).
+void NativeIOSwitchBlock::takenLocked(Request *first, uint32_t count, uint64_t pickNs)
+{
     queued -= count;
     for (Request *r = first; r; r = r->next) {
         if (!r->write) --queuedReads[r->klass];
@@ -1527,9 +1964,6 @@ Request *NativeIOSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chain
         wait.sumNs += waited;
         if (waited > wait.maxNs) wait.maxNs = waited;
     }
-    *chainSectors = sectors;
-    *chainCount = count;
-    return first;
 }
 
 void NativeIOSwitchBlock::worker(void *context, wait_result_t)
@@ -1541,28 +1975,53 @@ void NativeIOSwitchBlock::worker(void *context, wait_result_t)
     Batch *pending = nullptr;
     for (;;) {
         IOLockLock(self->queueLock);
+        // r14-sdcq: the queue ran dry (or sleep is coming) with the card in CQ mode: out of it before sleeping, so a
+        // lone read after a pause goes the legacy way at once and system sleep finds the card out of CQ mode.
+        if (!pending && (!self->head || self->suspended) && self->cq.state == CqEngine::kOn) {
+            self->working = true;
+            IOLockUnlock(self->queueLock);
+            self->cqLeave();
+            IOLockLock(self->queueLock);
+            self->working = false;
+            if (self->suspended) IOLockWakeup(self->queueLock, &self->working, false);
+            IOLockUnlock(self->queueLock);
+            continue;
+        }
         while (!pending && (!self->head || self->suspended)) IOLockSleep(self->queueLock, &self->head, THREAD_UNINT);
-        Batch *next = nullptr;
+        Batch *next = nullptr, *group = nullptr;
+        unsigned tasks = 0;
         if (self->head && !self->suspended) {
             next = &batches[turn];
             turn ^= 1;
             next->first = self->pickLocked(&next->sectors, &next->count);
+            // r14-sdcq: the picked read and the independent reads queued with it as one command-queue group.
+            if ((tasks = self->groupLocked(next->first, next->sectors, next->count))) {
+                group = self->cqGroups[self->cqTurn];
+                self->cqTurn ^= 1;
+                next = nullptr;
+            }
             self->working = true;
         }
         IOLockUnlock(self->queueLock);
-        // The next chain's command goes to the card first; the previous chain's completions run while it moves data. A
-        // chain that is not one ADMA2 command (the bounce path) only has its table built here, so those completions are
-        // not held behind its several commands.
-        if (next) self->beginBatch(*next);
-        if (pending) {
-            const uint64_t began = nowNs();
-            self->completeBatch(*pending);
-            if (next && next->issued) next->overlapNs = nowNs() - began;
-            pending = nullptr;
+        if (group) {
+            pending = self->runGroup(group, tasks, pending);
+        } else {
+            // r14-sdcq: a legacy command needs the card out of CQ mode.
+            if (next) self->cqLeave();
+            // The next chain's command goes to the card first; the previous chain's completions run while it moves
+            // data. A chain that is not one ADMA2 command (the bounce path) only has its table built here, so those
+            // completions are not held behind its several commands.
+            if (next) self->beginBatch(*next);
+            if (pending) {
+                const uint64_t began = nowNs();
+                self->completeBatch(*pending);
+                if (next && next->issued) next->overlapNs = nowNs() - began;
+                pending = nullptr;
+            }
+            if (!next) continue;
+            self->endBatch(*next);
+            pending = next;
         }
-        if (!next) continue;
-        self->endBatch(*next);
-        pending = next;
         IOLockLock(self->queueLock);
         self->working = false;
         if (self->suspended) IOLockWakeup(self->queueLock, &self->working, false);
@@ -1641,6 +2100,18 @@ void NativeIOSwitchBlock::logThroughput()
     uint64_t bounced = 0;
     for (unsigned i = 0; i < kAdmaRefusals; ++i) bounced += stats.bounced[i];
     const uint64_t perRequest = stats.direct ? stats.descriptors * 10 / stats.direct : 0;
+    // r14-sdcq: the command queue: tasks/groups, times into CQ mode, the worker's ms in groups (all of it: assignment,
+    // tasks, proofs), "proving" while the first tasks are read again; or off (never on, or stopped: then "off" after
+    // the counts).
+    char cqState[80];
+    if (cq.state == CqEngine::kOff && !cq.tasks)
+        strlcpy(cqState, "off", sizeof(cqState));
+    else
+        snprintf(cqState, sizeof(cqState), "%llu/%llu in %llu %llums%s", cq.tasks, cq.groups, cq.enters,
+                 stats.cqNs / 1000000,
+                 cq.state == CqEngine::kOff ? " off"
+                 : cqProofs                 ? " proving"
+                                            : "");
     // r12-sdio: ADMA2 above 4 GiB: on, off, or proofs done/needed.
     char highState[16];
     if (!adma || high.state == IOSwitchAdmaHigh::kOff)
@@ -1659,8 +2130,8 @@ void NativeIOSwitchBlock::logThroughput()
         "IOSwitchSD: %llu rq %llu MiB avg %lluK | busy %llu.%llus copy %llums sync %llums %llu.%llu MB/s "
         "(rd %llu.%llu wr %llu.%llu) %llu%% of %llus | dma %llu bounce %llu%s seg %llu.%llu part %llu/%lluK vfy %llu "
         "wmax %uK 4G+ %s | "
-        "<=4K %llu%% seq %llu%% merged %llu gap %llu/%lluK q%u | cmds %llu c23 %llu irq %llu ovl %llu/%llu | err %llu "
-        "adma %llu retune %llu | "
+        "<=4K %llu%% seq %llu%% merged %llu gap %llu/%lluK q%u | cmds %llu c23 %llu irq %llu ovl %llu/%llu | cq %s | "
+        "err %llu adma %llu retune %llu | "
         "%s %u.%02u MHz | wait ms%s",
         requests, bytes >> 20, requests ? (bytes / requests) >> 10 : 0, busy / 1000000000, busy / 100000000 % 10,
         stats.copyNs / 1000000, stats.syncNs / 1000000, rate / 10, rate % 10, readRate / 10, readRate % 10,
@@ -1669,8 +2140,8 @@ void NativeIOSwitchBlock::logThroughput()
         writeSectors * kSector / 1024, highState, requests ? stats.small * 100 / requests : 0,
         requests ? stats.sequential * 100 / requests : 0, stats.merged, stats.gapChains, stats.gapBytes >> 10,
         stats.maxQueued, stats.commands, stats.cmd23, __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED), stats.early,
-        stats.overlapped, stats.errors, stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10,
-        classes);
+        stats.overlapped, cqState, stats.errors, stats.admaErrors, stats.retunes, busMode, busKHz / 1000,
+        busKHz % 1000 / 10, classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
 }
 
@@ -2341,6 +2812,9 @@ void NativeIOSwitchBlock::suspend()
     suspended = true;
     while (working) IOLockSleep(queueLock, &working, THREAD_UNINT);
     IOLockUnlock(queueLock);
+    // r14-sdcq: the worker leaves CQ mode before it sleeps; this only covers a card that is somehow still in it (the
+    // card is about to lose power either way, and CQ mode does not survive that).
+    if (cq.state == CqEngine::kOn) (void)cq.leave(cqBus);
     dmaSuspend();
     if (irqSource) irqSource->disable();
     powerOffCard();
@@ -2387,6 +2861,7 @@ void NativeIOSwitchBlock::resume()
               busMode);
     }
     dmaResume();
+    cq.powerCycled();
     IOLockLock(queueLock);
     suspended = false;
     IOLockWakeup(queueLock, &head, false);
@@ -2597,6 +3072,120 @@ const char *NativeIOSwitchBlock::checkCmd23(uint64_t *withNs, uint64_t *withoutN
     return why;
 }
 
+// r14-sdcq: setup(): nullptr when read chains may go through the card's command queue (IOSwitchCq.h), else why not. The
+// card must offer one (Performance Enhancement byte 6) with its control byte inside one page, reading 00h (nobody left it
+// on); the data path must run ADMA2 with interrupts and have its proofs' buffer. Then one test group must work: *tasks
+// 4 KiB reads at blocks spread over the APFS partition assigned at once and executed in order by ADMA2 into the bounce
+// buffer (filled with 0xa5 first), out of CQ mode, the same blocks read the legacy way (SDMA, CMD12) into checkBuffer
+// must match byte for byte. The same check times the group (*queuedNs, assignment to the last task's end), as many
+// legacy 4 KiB reads of other blocks one at a time (*serialNs), and entering and leaving CQ mode. Any failure stops the
+// queue for the boot (cqStop: the card out of CQ mode, power-cycled if it would not leave).
+const char *NativeIOSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, uint64_t *enterNs, uint64_t *leaveNs,
+                                         unsigned *tasks)
+{
+    *queuedNs = *serialNs = *enterNs = *leaveNs = 0;
+    *tasks = 0;
+    if (!havePerf) return extWhy ? extWhy : "no performance enhancement function";
+    if (perf.cqDepth < 2) return "the card offers no queue";
+    cqControlAddress = ioswitchSdCqControlAddress(extInfo.perf);
+    if (!cqControlAddress) return "its control byte crosses a page";
+    if (perf.cqControl & kSdCqEnable) return "its queue is enabled already";
+    if (!irqMode) return "boot-arg ioswitch-sd-irq=0";
+    if (!checkBuffer) return "no buffer for its proofs";
+    regMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task,
+        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
+        kAdmaPage, 0x00000000ffffffffull & ~(kAdmaPage - 1));
+    regBuffer = regMemory ? static_cast<uint8_t *>(regMemory->getBytesNoCopy()) : nullptr;
+    regPA = regMemory ? regMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone) : 0;
+    if (!regBuffer || !regPA || (regPA & (kAdmaPage - 1)) || regPA + kAdmaPage > (1ull << 32))
+        return "no DMA buffer for its register";
+    constexpr uint32_t kSectors = 8, kBytes = kSectors * kSector, kTests = 8;
+    const unsigned n = perf.cqDepth < kTests ? perf.cqDepth : kTests;
+    const uint64_t blocks = sectorCount / kSectors;
+    if (blocks < 2 * kTests) return "the partition is too small";
+    // Blocks spread over the partition (another hash than checkCmd23's): [0, n) the group's, [n, 2n) the serial reads'.
+    const auto lbaOf = [&](unsigned i) {
+        return firstSector + (static_cast<uint64_t>(i + 101) * 2246822519ull % blocks) * kSectors;
+    };
+    const auto oneRun = [&](uint32_t at) {
+        table.reset();
+        return !table.add(bouncePA + at, kBytes, cacheableRam) && table.finish();
+    };
+    uint32_t status = 0;
+    for (unsigned i = 0; i < n; ++i) {
+        if (!oneRun(i * kBytes)) return "the builder refused the bounce buffer";
+        prepareDirect(false, false);
+        const uint64_t t0 = nowNs();
+        const int step =
+            command(static_cast<uint32_t>(lbaOf(n + i)), kSectors, false, table.count, &status, cmd23Reads);
+        *serialNs += nowNs() - t0;
+        finishDirect(false);
+        if (step) {
+            recover(true);
+            snprintf(cqWhy, sizeof(cqWhy), "a legacy test read failed: step %d, STATUS 0x%08x", step, status);
+            return cqWhy;
+        }
+    }
+    // The engine is usable from here on; every failure below stops it again (the end of this function).
+    cq.start(perf.cqDepth);
+    const char *why = nullptr;
+    uint64_t t0 = nowNs();
+    if (!cq.enter(cqBus)) why = cq.why ? cq.why : "the card would not enter CQ mode";
+    *enterNs = nowNs() - t0;
+    IOSwitchCqTask test[kTests];
+    for (unsigned i = 0; i < n; ++i) test[i] = {lbaOf(i), kSectors};
+    memset(bounce, 0xa5, n * kBytes);
+    t0 = nowNs();
+    if (!why && !cq.submit(cqBus, test, n)) why = cq.why ? cq.why : "the test group could not be assigned";
+    for (unsigned i = 0; !why && i < n; ++i) {
+        if (!oneRun(i * kBytes)) {
+            why = "the builder refused the bounce buffer";
+            break;
+        }
+        prepareDirect(false, false);
+        int step = issue(static_cast<uint32_t>(test[i].lba), kSectors, false, table.count, false, cq.argument());
+        if (!step) step = complete(kSectors, false, table.count, &status, nullptr, false, true);
+        finishDirect(false);
+        if (step) {
+            recover(true);
+            snprintf(cqWhy, sizeof(cqWhy), "test task %u failed: step %d, STATUS 0x%08x", i, step, status);
+            why = cqWhy;
+            break;
+        }
+        cq.executed();
+    }
+    *queuedNs = nowNs() - t0;
+    t0 = nowNs();
+    if (!why && !cq.leave(cqBus)) why = "the card stays in CQ mode";
+    *leaveNs = nowNs() - t0;
+    // The same blocks the legacy way (out of CQ mode now), compared.
+    for (unsigned i = 0; !why && i < n; ++i) {
+        if (transfer(test[i].lba, kSectors, false, checkBuffer + i * kBytes)) {
+            why = "a legacy re-read failed";
+        } else if (memcmp(bounce + i * kBytes, checkBuffer + i * kBytes, kBytes)) {
+            uint32_t at = 0;
+            while (bounce[i * kBytes + at] == checkBuffer[i * kBytes + at]) ++at;
+            snprintf(cqWhy, sizeof(cqWhy), "test task %u (lba %llu) differs from the legacy read at byte %u", i,
+                     test[i].lba, at);
+            why = cqWhy;
+        }
+    }
+    table.reset();
+    if (why) {
+        // Off for the boot; the card out of CQ mode first (power-cycled if it would not leave).
+        const bool stuck = !cq.fail(cqBus, why) || cq.stuck;
+        if (stuck) {
+            IOLog("IOSwitchSD: the card stayed in CQ mode: power-cycled\n");
+            resetCard();
+            cq.powerCycled();
+        }
+        return why;
+    }
+    *tasks = n;
+    return nullptr;
+}
+
 bool NativeIOSwitchBlock::setup()
 {
     regs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kControllerPA, 0x1000));
@@ -2800,6 +3389,21 @@ bool NativeIOSwitchBlock::setup()
                 IOLog("IOSwitchSD: gap reads off (%s)\n", !checkBuffer ? "no buffer for their proofs"
                                                           : !merge     ? "boot-arg ioswitch-sd-merge=0"
                                                                        : "no sink page below 4 GiB");
+            // r14-sdcq: the command queue, when the card offers one and its test group reads what the legacy path reads.
+            uint64_t queuedNs = 0, serialNs = 0, enterNs = 0, leaveNs = 0;
+            unsigned tested = 0;
+            if (const char *cqOff = checkCq(&queuedNs, &serialNs, &enterNs, &leaveNs, &tested)) {
+                IOLog("IOSwitchSD: command queue not used (%s); reads stay one command at a time\n", cqOff);
+            } else {
+                cqProofs = kCqProofs;
+                IOLog(
+                    "IOSwitchSD: command queue on (sequential mode, depth %u): %u queued 4 KiB reads match the legacy "
+                    "path's; they took %llu us queued against %llu us one at a time; into CQ mode %llu us, out %llu "
+                    "us; two or more independent queued reads go as tasks, the first %u tasks read again the legacy "
+                    "way\n",
+                    unsigned(cq.depth), tested, queuedNs / 1000, serialNs / 1000, enterNs / 1000, leaveNs / 1000,
+                    kCqProofs);
+            }
         } else {
             IOLog("IOSwitchSD: ADMA2 off (%s); every request through the bounce buffer\n", why);
         }

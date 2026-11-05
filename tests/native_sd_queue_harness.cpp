@@ -373,6 +373,57 @@ static void randomGaps()
     }
 }
 
+// r14-sdcq: the command queue's further tasks start at the oldest read that overlaps no older queued request.
+static void independent()
+{
+    // The head read, when nothing is older.
+    {
+        Queue q({{100, 8, false}, {200, 8, false}});
+        assert(ioswitchNextIndependentRead(q.head, 512, 128) == q.at(0));
+    }
+    // A write first: the read behind it goes unless it overlaps that write.
+    {
+        Queue q({{100, 8, true}, {104, 8, false}, {300, 8, false}});
+        assert(ioswitchNextIndependentRead(q.head, 512, 128) == q.at(2));
+    }
+    // An older read of the same blocks keeps a newer one back; reads larger than a task are skipped.
+    {
+        Queue q({{100, 1024, false}, {104, 8, false}, {2000, 8, false}});
+        assert(ioswitchNextIndependentRead(q.head, 512, 128) == q.at(2));
+    }
+    // Within `scan` only; none at all.
+    {
+        Queue q({{100, 8, true}, {200, 8, true}, {300, 8, false}});
+        assert(!ioswitchNextIndependentRead(q.head, 512, 2) && ioswitchNextIndependentRead(q.head, 512, 3) == q.at(2));
+        Queue w({{100, 8, true}});
+        assert(!ioswitchNextIndependentRead(w.head, 512, 128));
+        Queue e({});
+        assert(!ioswitchNextIndependentRead(e.head, 512, 128));
+    }
+    // Random queues: what it returns is a read within the bounds overlapping nothing older, and the first such.
+    std::mt19937_64 random(0x1d);
+    for (unsigned round = 0; round < 20000; ++round) {
+        const unsigned n = unsigned(random() % 30);
+        std::vector<std::tuple<uint64_t, uint32_t, bool>> items;
+        for (unsigned i = 0; i < n; ++i)
+            items.push_back({(random() % 64) * 8, 8 * uint32_t(1 + random() % 8), random() % 4 == 0});
+        Queue q(items);
+        const uint32_t maxSectors = 8 * uint32_t(1 + random() % 8);
+        const Request *found = ioswitchNextIndependentRead(q.head, maxSectors, 128);
+        for (unsigned i = 0; i < n; ++i) {
+            const Request &r = q.storage[i];
+            bool ok = !r.write && r.sectors <= maxSectors;
+            for (unsigned older = 0; older < i && ok; ++older) ok = !ioswitchOverlaps(&q.storage[older], &r);
+            if (ok) {
+                assert(found == &r);
+                break;
+            }
+            assert(found != &r);
+        }
+        if (found) assert(!found->write && found->sectors <= maxSectors);
+    }
+}
+
 int main()
 {
     tiling();
@@ -382,6 +433,7 @@ int main()
     randomQueues();
     gaps();
     randomGaps();
+    independent();
     puts("PASS: sd queue merging");
     return 0;
 }

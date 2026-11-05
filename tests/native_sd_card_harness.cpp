@@ -279,6 +279,14 @@ static void framing()
     assert(f.transfer == 0x2b && f.command == 0x193a && f.argument2 == 2048);
     f = ioswitchSdBlockFrame(1, true, true);
     assert(f.transfer == 0x01 && f.command == 0x183a && f.argument2 == 0);
+    // r14-sdcq: a command-queue task's CMD46: a read, DMA, the block count, no auto command, never a write.
+    for (uint32_t sectors = 1; sectors <= 512; ++sectors) {
+        const IOSwitchSdFrame t = ioswitchSdTaskFrame(sectors);
+        assert(t.command == 0x2e3a && t.argument2 == 0 && !t.autoStop);
+        assert(!(t.transfer & (kSdTransferAutoCmd12 | kSdTransferAutoCmd23)) && (t.transfer & kSdTransferRead) &&
+               (t.transfer & kSdTransferDma));
+        assert(t.transfer == (sectors > 1 ? 0x33 : 0x11));
+    }
 }
 
 int main()

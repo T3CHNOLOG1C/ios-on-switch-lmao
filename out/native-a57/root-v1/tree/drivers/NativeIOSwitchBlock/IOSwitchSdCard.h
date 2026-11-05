@@ -297,3 +297,30 @@ inline IOSwitchSdFrame ioswitchSdBlockFrame(uint32_t sectors, bool write, bool c
     const uint16_t index = static_cast<uint16_t>(write ? (multi ? 25 : 24) : (multi ? 18 : 17));
     return {transfer, static_cast<uint16_t>(index << 8 | kSdDataR1), multi && cmd23 ? sectors : 0, multi && !cmd23};
 }
+
+// ---- Command Queue (4.19) ------------------------------------------------------------------------------------------
+// CMD44 Q_TASK_INFO_A: [30] direction (1 read, 0 write), [23] priority, [20:16] task id, [15:0] blocks (1..65535); [29:24]
+// (extended address, SDUC only) and the rest 0. CMD45 Q_TASK_INFO_B: the start block. CMD46 Q_RD_TASK / CMD47 Q_WR_TASK:
+// [20:16] task id. CMD43 Q_MANAGEMENT (R1b): [20:16] task id, [3:0] 1 abort the entire queue, 2 abort that task.
+inline uint32_t ioswitchSdCmd44(bool read, uint8_t task, uint32_t blocks)
+{
+    return (read ? 1u << 30 : 0u) | static_cast<uint32_t>(task & 0x1f) << 16 | (blocks & 0xffff);
+}
+inline uint32_t ioswitchSdTaskArgument(uint8_t task)
+{
+    return static_cast<uint32_t>(task & 0x1f) << 16;
+}
+constexpr uint32_t kSdAbortQueue = 1, kSdAbortTask = 2;
+inline uint32_t ioswitchSdCmd43(uint32_t operation, uint8_t task)
+{
+    return static_cast<uint32_t>(task & 0x1f) << 16 | (operation & 0xf);
+}
+// CMD46 of a read task: no Auto CMD12 or CMD23, the block count was given in CMD44; the card sends that many blocks
+// (4.19.7) and the host stops after BLOCK_COUNT of them.
+inline IOSwitchSdFrame ioswitchSdTaskFrame(uint32_t sectors)
+{
+    const bool multi = sectors > 1;
+    const uint16_t transfer = static_cast<uint16_t>(kSdTransferDma | kSdTransferRead |
+                                                    (multi ? kSdTransferBlockCount | kSdTransferMulti : 0));
+    return {transfer, static_cast<uint16_t>(46 << 8 | kSdDataR1), 0, false};
+}

@@ -115,6 +115,24 @@ inline bool ioswitchChainTiles(const Request *head, uint64_t start, uint32_t sec
     return ioswitchChainFits(head, start, sectors, count, 0, 0);
 }
 
+// r14-sdcq: the oldest queued read (among the first `scan`) of at most `maxSectors` that overlaps no older queued request,
+// so it may go now, ahead of what is queued before it (a write it would see, or an older read of the same blocks, keeps
+// it back: the rule the gather and the r6-lows priority pass apply). The SD worker starts a command-queue group's further
+// tasks with it. nullptr when there is none.
+template <typename Request>
+inline Request *ioswitchNextIndependentRead(Request *head, uint32_t maxSectors, unsigned scan)
+{
+    unsigned seen = 0;
+    for (Request *r = head; r && seen < scan; r = r->next, ++seen) {
+        if (r->write || r->sectors > maxSectors) continue;
+        bool overlaps = false;
+        for (const Request *older = head; older != r && !overlaps; older = older->next)
+            overlaps = ioswitchOverlaps(older, r);
+        if (!overlaps) return r;
+    }
+    return nullptr;
+}
+
 // Clears every `chained` mark (a chain that failed ioswitchChainTiles stays queued as it was).
 template <typename Request> inline void ioswitchClearChain(Request *head)
 {

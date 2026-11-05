@@ -48,7 +48,7 @@ class NativeSdCardTests(unittest.TestCase):
         source = (DRIVER / "NativeIOSwitchBlock.cpp").read_text()
         body = lambda signature: source.split(signature, 1)[1].split("\n}\n", 1)[0]
         issue = body("int NativeIOSwitchBlock::issue(")
-        self.assertIn("const IOSwitchSdFrame frame = ioswitchSdBlockFrame(sectors, write, cmd23);", issue)
+        self.assertIn("ioswitchSdBlockFrame(sectors, write, cmd23)", issue)
         # Argument 2 before the command that uses it, and the partition guard still first.
         self.assertLess(issue.index("outside the APFS partition"), issue.index("w32(ARGUMENT2, frame.argument2)"))
         self.assertLess(issue.index("w32(ARGUMENT2, frame.argument2)"), issue.index("w16(COMMAND, frame.command)"))
