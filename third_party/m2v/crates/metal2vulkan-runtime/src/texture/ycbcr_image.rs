@@ -20,6 +20,7 @@ use crate::tracker::UseRange;
 use crate::values::ResourceOptions;
 use crate::view_plan::ViewRecord;
 use crate::ycbcr::{YCbCrConversion, YCbCrWriteBack};
+use crate::ycbcr_memo::Memo;
 use crate::Device;
 use ash::vk;
 use metal2vulkan::bind::{YCbCrCodes, YCbCrOutput, YCbCrPlanes};
@@ -171,13 +172,20 @@ impl Device {
         })?;
         let (raw, at) = texels.buffer.at(span.start);
         let conversion = YCbCrConversion::new(self, (planes, span.clone()), at, view)?;
-        let (bytes, tracked) = texels.buffer.tracked(span);
+        let (bytes, tracked) = texels.buffer.tracked(span.clone());
+        let alias = texels.buffer.alias().map(|alias| alias.key);
+        let memo = Memo::of(
+            &texels.buffer,
+            span,
+            std::iter::once(bytes.key).chain(alias),
+        );
+        let conversion = conversion.with_memo(memo);
         let copies = ShadowCopies {
             source: ShadowSource::Converted {
                 buffer: ShadowBuffer::of(&texels.buffer, raw),
                 key: bytes.key,
                 bytes: tracked,
-                alias: texels.buffer.alias().map(|alias| alias.key),
+                alias,
                 conversion: Box::new(conversion),
                 pixel_format: pf,
             },

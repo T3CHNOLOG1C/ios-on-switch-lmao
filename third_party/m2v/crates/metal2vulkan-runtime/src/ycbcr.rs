@@ -49,7 +49,8 @@
 //!   bytes like any other, which the tracker orders after the writes of the same and earlier
 //!   command buffers. The surface's bytes are the CPU's to write unseen, so the runtime cannot
 //!   tell cheaply that they are unchanged since the last conversion, and converts at every
-//!   encoder that uses the texture.
+//!   encoder that uses the texture, unless the program asked it to trust a sample of the planes'
+//!   bytes and the count of the writes recorded to them (`ycbcr_memo.rs`, `M2V_YCBCR_MEMO`).
 //! - **The texels Metal's copies move** are the luma plane's bytes, a code's bytes a texel
 //!   (EVs TXN2-ycr2-m4, TXN2-ycr4-m4 for 4:2:2 and 4:4:4 and, for the code formats,
 //!   XRR2-ycr540c-m4 and XRR2-ycr541-m4):
@@ -134,6 +135,7 @@ use super::shadow::ShadowCopies;
 use super::texture_descriptor::TextureLayout;
 use super::tracker::{Access, Barrier, Use, UseRange};
 use super::values::ResourceOptions;
+use super::ycbcr_memo::Memo;
 use super::Device;
 use ash::vk;
 use metal2vulkan::bind::{
@@ -420,9 +422,18 @@ pub(super) struct YCbCrConversion {
     kernel: OwnedKernel,
     sets: OwnedSets,
     groups: [u32; 2],
+    /// What the image holds the conversion of, where the program asked to skip a conversion of
+    /// planes it holds (`ycbcr_memo.rs`).
+    memo: Option<Memo>,
 }
 
 impl YCbCrConversion {
+    /// Skip the conversions of planes `memo` finds unchanged (`ycbcr_memo.rs`).
+    pub(super) fn with_memo(mut self, memo: Option<Memo>) -> YCbCrConversion {
+        self.memo = memo;
+        self
+    }
+
     /// The conversion of `planes`, whose bytes lie in `bytes` of their buffer, at `at` of its
     /// `VkBuffer`, into `view`, a storage view of the texture's image, on `device`. Refused as
     /// `new_buffer` refuses the staging buffer and as the kernel's objects are refused.
@@ -482,6 +493,7 @@ impl YCbCrConversion {
             kernel,
             sets,
             groups,
+            memo: None,
         })
     }
 
@@ -544,6 +556,11 @@ impl YCbCrConversion {
         command_buffer: vk::CommandBuffer,
         source: vk::Buffer,
     ) {
+        // The image holds the conversion of these bytes already (`ycbcr_memo.rs`): the same
+        // uses are declared, and nothing is recorded.
+        if self.memo.as_ref().is_some_and(Memo::unchanged) {
+            return;
+        }
         let staging = self.staging.at(0).0;
         // SAFETY: the caller's contract; the shape and the copy lie in the staging buffer and
         // the copy in `source` (checked when the texture was made), and the set binds them.

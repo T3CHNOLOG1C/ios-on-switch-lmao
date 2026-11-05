@@ -1050,6 +1050,13 @@ impl<K: Copy + Ord + Hash> EncoderUses<K> {
         uses: &[Use<K>],
         barrier: Option<Barrier>,
     ) {
+        // A write of the planes of a YCbCr texture's conversion is a change the conversion's memo
+        // must see (`ycbcr_memo.rs`), whether the resource is tracked or not.
+        if crate::ycbcr_memo::watching() {
+            for used in uses.iter().filter(|used| !used.write.is_empty()) {
+                crate::ycbcr_memo::note_write(&used.key);
+            }
+        }
         let part = self.current();
         // Every stage, untracked work's too: a fence wait orders all of the encoder's work.
         part.stages |= uses.iter().fold(stages, |all, used| {
