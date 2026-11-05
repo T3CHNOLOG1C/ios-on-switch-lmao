@@ -152,6 +152,7 @@ nvk_cmd_pool_alloc_mem(struct nvk_cmd_pool *pool, bool force_gart,
    if (unlikely(pdev->debug_flags & NVK_DEBUG_TRASH_MEMORY)) {
       memset(mem->mem->map, 0xF1, mem->mem->size_B);
    }
+   mem->written_B = NVK_CMD_MEM_SIZE;
 
    *mem_out = mem;
    return VK_SUCCESS;

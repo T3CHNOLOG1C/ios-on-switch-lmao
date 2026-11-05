@@ -17,6 +17,13 @@ struct nvkmd_mem;
 struct nvk_cmd_mem {
    struct nvkmd_mem *mem;
 
+   /** Bytes from the start of the BO the CPU may have written since the BO
+    * was taken from the pool: what nvk_EndCommandBuffer flushes to the GPU.
+    * NVK_CMD_MEM_SIZE (the whole BO) unless its user tracks it, as the push
+    * and upload streams do (nvk_cmd_mem_track).
+    */
+   uint32_t written_B;
+
    /** Link in nvk_cmd_pool::free_bos or nvk_cmd_buffer::bos */
    struct list_head link;
 };

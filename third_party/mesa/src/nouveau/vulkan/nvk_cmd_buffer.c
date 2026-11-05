@@ -168,6 +168,19 @@ const struct vk_command_buffer_ops nvk_cmd_buffer_ops = {
 /* If we ever fail to allocate a push, we use this */
 static uint32_t push_runout[NVK_CMD_BUFFER_MAX_PUSH];
 
+/* A BO whose user records what it writes in written_B: nothing written yet,
+ * unless NVK_DEBUG=trash_memory wrote all of it.
+ */
+static void
+nvk_cmd_mem_track(struct nvk_cmd_buffer *cmd, struct nvk_cmd_mem *mem)
+{
+   const struct nvk_physical_device *pdev =
+      nvk_device_physical(nvk_cmd_buffer_device(cmd));
+
+   if (!(pdev->debug_flags & NVK_DEBUG_TRASH_MEMORY))
+      mem->written_B = 0;
+}
+
 VkResult
 nvk_cmd_buffer_alloc_mem(struct nvk_cmd_buffer *cmd, bool force_gart,
                          struct nvk_cmd_mem **mem_out)
@@ -201,6 +214,10 @@ nvk_cmd_buffer_flush_push(struct nvk_cmd_buffer *cmd, bool incomplete)
       util_dynarray_append(&cmd->pushes, push);
 
       cmd->prev_subc = nvk_cmd_buffer_last_subchannel(cmd);
+
+      const uint32_t end_B =
+         (char *)cmd->push.end - (char *)cmd->push_mem->mem->map;
+      cmd->push_mem->written_B = MAX2(cmd->push_mem->written_B, end_B);
    }
 
    cmd->push.start = cmd->push.end;
@@ -225,6 +242,7 @@ nvk_cmd_buffer_new_push(struct nvk_cmd_buffer *cmd)
       nv_push_init(&cmd->push, push_runout, 0, subc_mask);
       cmd->push_mem_limit = &push_runout[NVK_CMD_BUFFER_MAX_PUSH];
    } else {
+      nvk_cmd_mem_track(cmd, cmd->push_mem);
       nv_push_init(&cmd->push, cmd->push_mem->mem->map, 0, subc_mask);
       cmd->push_mem_limit =
          (uint32_t *)((char *)cmd->push_mem->mem->map + NVK_CMD_MEM_SIZE);
@@ -264,6 +282,8 @@ nvk_cmd_buffer_upload_alloc(struct nvk_cmd_buffer *cmd,
       *ptr = (char *)cmd->upload_mem->mem->map + offset;
 
       cmd->upload_offset = offset + size;
+      cmd->upload_mem->written_B =
+         MAX2(cmd->upload_mem->written_B, offset + size);
 
       return VK_SUCCESS;
    }
@@ -275,6 +295,8 @@ nvk_cmd_buffer_upload_alloc(struct nvk_cmd_buffer *cmd,
 
    *addr = mem->mem->va->addr;
    *ptr = mem->mem->map;
+   nvk_cmd_mem_track(cmd, mem);
+   mem->written_B = MAX2(mem->written_B, size);
 
    /* Pick whichever of the current upload BO and the new BO will have more
     * room left to be the BO for the next upload.  If our upload size is
@@ -380,11 +402,23 @@ nvk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    return VK_SUCCESS;
 }
 
+/* Only what the CPU wrote of each BO (written_B): a push or upload BO is
+ * mostly untouched, and a cached BO's maintenance costs a cache operation per
+ * line whether the line was written or not.
+ */
 static void
 flush_mem_list(struct nvk_cmd_buffer *cmd, struct list_head *mem_list)
 {
-   list_for_each_entry_safe(struct nvk_cmd_mem, mem, mem_list, link)
-      nvkmd_mem_sync_map_to_gpu(mem->mem, 0, mem->mem->size_B);
+   const struct nvk_physical_device *pdev =
+      nvk_device_physical(nvk_cmd_buffer_device(cmd));
+   const uint32_t atom_B = pdev->info.nc_atom_size_B;
+
+   list_for_each_entry_safe(struct nvk_cmd_mem, mem, mem_list, link) {
+      const uint64_t range_B =
+         MIN2(align64(mem->written_B, atom_B), mem->mem->size_B);
+      if (range_B > 0)
+         nvkmd_mem_sync_map_to_gpu(mem->mem, 0, range_B);
+   }
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
