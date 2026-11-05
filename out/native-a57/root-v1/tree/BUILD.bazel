@@ -1339,6 +1339,7 @@ ios_binary(
     ],
     hdrs = [
         "drivers/SwitchVideoDecoders/AVD/ClipCheck.h",
+        "drivers/SwitchVideoDecoders/test/HEVCClip.h",
         "drivers/SwitchVideoDecoders/test/VDECClip.h",
         "drivers/SwitchVideoDecoders/test/VP9Clip.h",
     ],
