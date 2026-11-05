@@ -9,7 +9,6 @@ lint_files(exclude = [
     "**/linux/**",
     "**/nouveau/**",
     "**/nvidia/**",
-    "test/libdrm/**",
 ])
 
 exports_files(glob(

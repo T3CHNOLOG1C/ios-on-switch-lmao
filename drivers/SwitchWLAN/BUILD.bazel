@@ -1,5 +1,4 @@
 # drivers/SwitchWLAN: moved from out/native-a57/root-v1/tree/drivers/SwitchWLAN by the layout move.
-load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
 load("//bazel/lint:defs.bzl", "lint_files")
 
@@ -63,15 +62,3 @@ kernel_driver(
     ],
 )
 
-# SwitchWLAN's AWDL core and awdl0's Apple80211 side (drivers/SwitchWLAN/awdl): frame codec, sync, election, data path,
-# the IO80211 event ring, over a simulated air of nodes with skewed clocks; the firmware's AWDL: every iovar payload
-# byte for byte against the brcmfmac AWDL series' traced bytes and the 2014 wlioctl layouts, the probe, both
-# firmware generations' bring-up against a mock firmware (ASan + UBSan).
-py_test(
-    name = "awdl_test",
-    size = "small",
-    srcs = ["awdl/tests/test_awdl.py"],
-    data = glob(["awdl/**"]),
-    main = "awdl/tests/test_awdl.py",
-    tags = ["requires-darwin"],
-)

@@ -6,17 +6,17 @@
 // adaptation) proves what NVDEC is given for every frame, clip A (adaptation on) the counter mapping and the backward
 // adaptation. Every submit must pass the kernel's checker (TegraNVDECCheck.h), which must also refuse each kind of bad
 // VP9 submit derived from the first one.
-//   vp9_host             prints "PASS vp9 ..." (tests/test_switch_video.py)
+//   vp9_host             prints "PASS vp9 ..." (vp9_host_test)
 //   vp9_host --selftest  prints clip K's key frame as the kernel's N3 VP9 test vector (C source)
-// Build: cc -O1 -I. -o vp9_host vp9_host.c ../AVD/VP9NVDEC.c ../AVD/VP9Syntax.c ../AVD/VP9Probs.c -lz
+// Build: cc -O1 -o vp9_host vp9_host.c ../../AVD/VP9NVDEC.c ../../AVD/VP9Syntax.c ../../AVD/VP9Probs.c -lz
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
-#include "../AVD/VP9NVDEC.h"
-#include "../../TegraNVDEC/TegraNVDECCheck.h"
-#include "VP9Clip.h"
-#include "VP9Trace.h"
+#include "../../AVD/VP9NVDEC.h"
+#include "../../../TegraNVDEC/TegraNVDECCheck.h"
+#include "../VP9Clip.h"
+#include "../VP9Trace.h"
 
 _Static_assert(sizeof(VP9FrameContext) == 2039, "libvpx FRAME_CONTEXT probability bytes");
 

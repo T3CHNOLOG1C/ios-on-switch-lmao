@@ -1,0 +1,91 @@
+# Hardware video encode (drivers/SwitchVideoEncoders over drivers/TegraNVENC) on the host:
+#   ave_host_test  AVE (H264H7.videoencoder) itself on this Mac's VideoToolbox over a fake TegraNVENC client whose
+#                  engine is a lossless stand-in for NVENC: every submit accepted by the kernel's own checker
+#                  (TegraNVENCCheck.h), the encode check (EncodeCheck.c, the one the Switch runs once per boot) decoding
+#                  every frame back exactly with Apple's decoder in three input layouts, sync samples where they
+#                  belong, P_Skip from the reference the setup names; the SPS/PPS/avcC parsing back with AVD's
+#                  H264Syntax.c; the checker refusing each kind of bad submit; the rate control on a synthetic encoder
+#   e3gen_test     the kernel's E3 vectors (TegraNVENC/selftest/E3Vectors.inc) are exactly what the plug-in's
+#                  H264NVENC.c and AVD's H264NVDEC.c produce today (e3gen.c; regenerate the file with its output)
+#
+#   bazel test //drivers/SwitchVideoEncoders/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+FRAMEWORKS = [
+    "-framework",
+    "CoreFoundation",
+    "-framework",
+    "CoreMedia",
+    "-framework",
+    "CoreVideo",
+    "-framework",
+    "VideoToolbox",
+]
+
+# The plug-in's H.264 bitstream and NVENC setup code, and AVD's H.264 syntax (the SPS/PPS/avcC parse-back).
+host_library(
+    name = "h264_nvenc",
+    srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/H264Syntax.c",
+        "//drivers/SwitchVideoEncoders:AVE/H264NVENC.c",
+        "//drivers/TegraNVENC:nvidia/clc5b7.h",
+        "//drivers/TegraNVENC:nvidia/nvenc_drv.h",
+    ],
+    hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/H264Syntax.h",
+        "//drivers/SwitchVideoEncoders:AVE/H264NVENC.h",
+        "//drivers/TegraNVENC:TegraNVENCABI.h",
+        "//drivers/TegraNVENC:TegraNVENCCheck.h",
+    ],
+    copts = ["-O1"],
+)
+
+# ave_host.c includes AVEEncoder.c itself (for its factory); its main() renamed so the test calls it.
+host_library(
+    name = "ave_host",
+    srcs = [
+        "ave_host.c",
+        "//drivers/SwitchVideoEncoders:AVE/EncodeCheck.c",
+        "//drivers/SwitchVideoEncoders:AVE/EncodeCheck.h",
+        "//drivers/SwitchVideoEncoders:AVE/NVENCClient.h",
+        "//drivers/SwitchVideoEncoders:AVE/RateControl.h",
+        "//drivers/SwitchVideoEncoders:AVE/VTEncoderSPI.h",
+        "//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=ave_host_main"],
+    linkopts = FRAMEWORKS,
+    textual_hdrs = ["//drivers/SwitchVideoEncoders:AVE/AVEEncoder.c"],
+    deps = [":h264_nvenc"],
+)
+
+host_test(
+    name = "ave_host_test",
+    srcs = ["ave_host_test.cpp"],
+    deps = [":ave_host"],
+)
+
+host_library(
+    name = "e3gen",
+    srcs = [
+        "e3gen.c",
+        "//drivers/SwitchVideoDecoders:AVD/H264NVDEC.c",
+        "//drivers/SwitchVideoDecoders:AVD/H264NVDEC.h",
+        "//drivers/TegraNVDEC:TegraNVDECABI.h",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=e3gen_main"],
+    deps = [":h264_nvenc"],
+)
+
+host_test(
+    name = "e3gen_test",
+    srcs = ["e3gen_test.cpp"],
+    data = ["//drivers/TegraNVENC:selftest/E3Vectors.inc"],
+    deps = [":e3gen"],
+)

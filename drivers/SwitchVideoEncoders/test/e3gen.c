@@ -10,7 +10,7 @@
 // Buffer handles: NVENC 1 input, 2 and 3 reconstructions, 4 bitstream, 5 aux; NVDEC's are its own allocation order,
 // numbered from 16. E3 fills each job's stream length and slice offsets in itself.
 // Build: cc -I.. -o e3gen e3gen.c ../AVE/H264NVENC.c ../../SwitchVideoDecoders/AVD/H264NVDEC.c
-//        ../../SwitchVideoDecoders/AVD/H264Syntax.c; run with no arguments (tests/test_switch_video_encode.py compares
+//        ../../SwitchVideoDecoders/AVD/H264Syntax.c; run with no arguments (test:e3gen_test compares
 // its output with the committed file).
 #include <stdio.h>
 #include <stdlib.h>

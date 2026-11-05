@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Host tests of the AWDL core and awdl0's Apple80211 side. Built and run by awdl_test (BUILD.bazel) with the Mac's
+// Host tests of the AWDL core and awdl0's Apple80211 side. Built and run by test:awdl_test (BUILD.bazel) with the Mac's
 // clang, sanitizers on. The "air" is simulated: every node has its own TSF (offset and drift from a global clock), a
 // radio that follows the schedule the core installs, and a medium that delivers each frame to the nodes in range that
 // are on that channel when it goes out.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Host test of TegraNVJPG's JPEG side (tests/test_tegra_nvjpg.py builds and runs it):
+// Host test of TegraNVJPG's JPEG side (test:nvjpg_host_test runs it):
 // - TegraNVJPGJpeg.h's parser against libjpeg-turbo's own parse of the same files, over a matrix of files libjpeg-turbo
 //   writes here (sizes, 4:2:0/4:2:2/4:4:0/4:4:4/grey, restart intervals, quality, optimised tables): dimensions,
 //   sampling, every quantisation and Huffman table, the scan's table choices, the restart interval, where the scan
@@ -169,6 +169,7 @@ static void edits(const char *name, const uint8_t *orig, size_t n)
     free(d);
 }
 
+#ifdef HAVE_LIBJPEG  // only the libjpeg-turbo matrix makes the files it strips
 // A file without DHT (Motion JPEG style) gets Annex K's tables: the same ones libjpeg-turbo wrote into the original.
 static void without_dht(const char *name, const uint8_t *orig, size_t n)
 {
@@ -195,6 +196,8 @@ static void without_dht(const char *name, const uint8_t *orig, size_t n)
     }
     free(d);
 }
+
+#endif  // HAVE_LIBJPEG
 
 // --- Mutation fuzzing -------------------------------------------------------------------------------------------
 static uint64_t rng = 0x9e3779b97f4a7c15ull;

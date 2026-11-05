@@ -1,0 +1,211 @@
+# Hardware video decode (drivers/SwitchVideoDecoders over drivers/TegraNVDEC) on the host, each C test host here run by
+# a GoogleTest wrapper that checks what it prints:
+#   blocklinear_host_test  BlockLinear.c's de-swizzle against the per-byte GOB formula
+#   h264_host_test         H264NVDEC over ../VDECClip.h's clip: every submit accepted by the kernel's own checker
+#                          (TegraNVDECCheck.h), pictures out in x264's display order, the checker refusing each kind of
+#                          bad submit
+#   vp9_host_test          VP9NVDEC over libvpx's own trace (../VP9Trace.h, ../VP9Clip.h from ../vp9gen): headers, the
+#                          entropy contexts NVDEC is given, the counter mapping and backward adaptation equal libvpx's
+#                          frame by frame; every submit accepted by the kernel's checker, which refuses each bad one
+#   hevc_host_test         HEVCSyntax/HEVCNVDEC over FFmpeg's own trace (../HEVCTrace.h, ../HEVCClip.h from
+#                          ../hevcgen): every slice header field NVDEC is given equals FFmpeg's, pictures in FFmpeg's
+#                          order, every submit accepted by the kernel's checker, which refuses each bad one
+#   avd_host_test          AVD.videodecoder itself on this Mac's VideoToolbox over a fake TegraNVDEC client: the
+#                          plug-in's class layout, session calls and property answers for 'avc1', 'vp09' and 'hvc1', its
+#                          fall-back onto Apple's software decoders, VIC's present and the private check's gate
+#   vdectest_test          the clip check (../vdectest.c, also shipped as the vdectest tool) against Apple's own
+#                          decoders, which proves the clips and their x264 / FFmpeg CRCs
+# The clip and trace headers and vdectest.c stay in ../ (AVD.videodecoder and vdectest are built from them).
+#
+#   bazel test //drivers/SwitchVideoDecoders/test/host:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+AVD = "//drivers/SwitchVideoDecoders:AVD/"
+
+FRAMEWORKS = [
+    "-framework",
+    "CoreFoundation",
+    "-framework",
+    "CoreMedia",
+    "-framework",
+    "CoreVideo",
+    "-framework",
+    "VideoToolbox",
+    "-framework",
+    "IOSurface",
+]
+
+# --- AVD's decoders, each compiled once ------------------------------------------------------------------------------
+host_library(
+    name = "nvdec_check",
+    hdrs = [
+        "//drivers/TegraNVDEC:TegraNVDECABI.h",
+        "//drivers/TegraNVDEC:TegraNVDECCheck.h",
+    ],
+)
+
+host_library(
+    name = "block_linear",
+    srcs = ["//drivers/SwitchVideoDecoders:AVD/BlockLinear.c"],
+    hdrs = ["//drivers/SwitchVideoDecoders:AVD/BlockLinear.h"],
+    copts = ["-O1"],
+)
+
+host_library(
+    name = "h264",
+    srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/H264NVDEC.c",
+        "//drivers/SwitchVideoDecoders:AVD/H264Syntax.c",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+    ],
+    hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/H264NVDEC.h",
+        "//drivers/SwitchVideoDecoders:AVD/H264Syntax.h",
+    ],
+    copts = ["-O1"],
+    deps = [":nvdec_check"],
+)
+
+host_library(
+    name = "vp9",
+    srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/VP9NVDEC.c",
+        "//drivers/SwitchVideoDecoders:AVD/VP9Probs.c",
+        "//drivers/SwitchVideoDecoders:AVD/VP9Syntax.c",
+        "//drivers/SwitchVideoDecoders:AVD/VP9Tables.inc",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+    ],
+    hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/VP9NVDEC.h",
+        "//drivers/SwitchVideoDecoders:AVD/VP9Probs.h",
+        "//drivers/SwitchVideoDecoders:AVD/VP9Syntax.h",
+    ],
+    copts = ["-O1"],
+    deps = [":h264"],
+)
+
+host_library(
+    name = "hevc",
+    srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/HEVCNVDEC.c",
+        "//drivers/SwitchVideoDecoders:AVD/HEVCSyntax.c",
+        "//drivers/TegraNVDEC:nvidia/clc5b0.h",
+        "//drivers/TegraNVDEC:nvidia/nvdec_drv.h",
+    ],
+    hdrs = [
+        "//drivers/SwitchVideoDecoders:AVD/HEVCNVDEC.h",
+        "//drivers/SwitchVideoDecoders:AVD/HEVCSyntax.h",
+    ],
+    copts = ["-O1"],
+    deps = [":h264"],
+)
+
+# The once-per-boot clip check over the three clips, on VideoToolbox.
+host_library(
+    name = "clip_check",
+    srcs = [
+        "//drivers/SwitchVideoDecoders:AVD/ClipCheck.c",
+        "//drivers/SwitchVideoDecoders:test/HEVCClip.h",
+        "//drivers/SwitchVideoDecoders:test/VDECClip.h",
+        "//drivers/SwitchVideoDecoders:test/VP9Clip.h",
+    ],
+    hdrs = ["//drivers/SwitchVideoDecoders:AVD/ClipCheck.h"],
+    copts = ["-O1"],
+    linkopts = FRAMEWORKS,
+)
+
+# --- The C test hosts, each main() renamed so its GoogleTest wrapper calls it -------------------------------------------
+host_library(
+    name = "blocklinear_host",
+    srcs = ["blocklinear_host.c"],
+    copts = ["-O1"],
+    defines = ["main=blocklinear_host_main"],
+    deps = [":block_linear"],
+)
+
+host_library(
+    name = "h264_host",
+    srcs = [
+        "h264_host.c",
+        "//drivers/SwitchVideoDecoders:test/VDECClip.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=h264_host_main"],
+    deps = [":h264"],
+)
+
+host_library(
+    name = "vp9_host",
+    srcs = [
+        "vp9_host.c",
+        "//drivers/SwitchVideoDecoders:test/VP9Clip.h",
+        "//drivers/SwitchVideoDecoders:test/VP9Trace.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=vp9_host_main"],
+    linkopts = ["-lz"],
+    deps = [":vp9"],
+)
+
+host_library(
+    name = "hevc_host",
+    srcs = [
+        "hevc_host.c",
+        "//drivers/SwitchVideoDecoders:test/HEVCClip.h",
+        "//drivers/SwitchVideoDecoders:test/HEVCTrace.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=hevc_host_main"],
+    deps = [":hevc"],
+)
+
+# avd_host.c includes the plug-in's AVDDecoder.c itself (for its factory).
+host_library(
+    name = "avd_host",
+    srcs = [
+        "avd_host.c",
+        "//drivers/SwitchVideoDecoders:AVD/NVDECClient.h",
+        "//drivers/SwitchVideoDecoders:AVD/VTDecoderSPI.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=avd_host_main"],
+    linkopts = FRAMEWORKS,
+    textual_hdrs = ["//drivers/SwitchVideoDecoders:AVD/AVDDecoder.c"],
+    deps = [
+        ":block_linear",
+        ":clip_check",
+        ":h264",
+        ":hevc",
+        ":vp9",
+    ],
+)
+
+host_library(
+    name = "vdectest",
+    srcs = ["//drivers/SwitchVideoDecoders:test/vdectest.c"],
+    copts = ["-O1"],
+    defines = ["main=vdectest_main"],
+    deps = [":clip_check"],
+)
+
+# --- The tests ---------------------------------------------------------------------------------------------------------
+[host_test(
+    name = host + "_test",
+    srcs = [
+        host + "_test.cpp",
+        "run_host.h",
+    ],
+    deps = [":" + host],
+) for host in [
+    "avd_host",
+    "blocklinear_host",
+    "h264_host",
+    "hevc_host",
+    "vdectest",
+    "vp9_host",
+]]

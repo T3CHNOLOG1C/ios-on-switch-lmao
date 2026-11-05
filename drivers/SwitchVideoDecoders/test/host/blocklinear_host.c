@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Host test: block_linear_copy against the per-byte GOB formula, for aligned and unaligned windows.
-// Build: cc -O2 -o blocklinear_host blocklinear_host.c ../AVD/BlockLinear.c (tests/test_switch_video.py)
+// Build: cc -O2 -o blocklinear_host blocklinear_host.c ../../AVD/BlockLinear.c (blocklinear_host_test)
 #include <stdio.h>
 #include <stdlib.h>
-#include "../AVD/BlockLinear.h"
+#include "../../AVD/BlockLinear.h"
 
 static uint32_t offset(uint32_t x, uint32_t y, uint32_t pitch)
 {

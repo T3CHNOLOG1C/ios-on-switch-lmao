@@ -1,6 +1,7 @@
-// r17-launch: XNU's arm64 memcmp/bcmp (osfmk/arm64/ioswitch_memcmp.h, taken from the XNU patch) against the portable
-// byte loops they replace (osfmk/device/subrs.c), exhaustively for every first difference and length up to 80 bytes at
-// every alignment, plus random inputs; each buffer ends right before an unreadable page, so a load past n faults.
+// r17-launch: XNU's arm64 memcmp/bcmp (osfmk/arm64/ioswitch_memcmp.h, from @xnu, the patched source) against the
+// portable byte loops they replace (osfmk/device/subrs.c), exhaustively for every first difference and length up to 80
+// bytes at every alignment, plus random inputs; each buffer ends right before an unreadable page, so a load past n
+// faults. xnu_memcmp_test.cpp runs the two halves; each returns how many cases differed.
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include <unistd.h>
 
 #include "ioswitch_memcmp.h"
+#include "xnu_memcmp_harness.h"
 
 static int reference_memcmp(const void *s1, const void *s2, size_t n)
 {
@@ -66,16 +68,26 @@ static void check(const unsigned char *a, const unsigned char *b, size_t n)
     const int m = fast_memcmp(a, b, n), rm = reference_memcmp(a, b, n);
     const int c = fast_bcmp(a, b, n), rc = reference_bcmp(a, b, n);
     if (m != rm || c != rc) {
-        if (failures++ < 10)
-            printf("FAIL n=%zu memcmp %d vs %d, bcmp %d vs %d\n", n, m, rm, c, rc);
+        if (failures++ < 10) printf("FAIL n=%zu memcmp %d vs %d, bcmp %d vs %d\n", n, m, rm, c, rc);
     }
 }
 
-int main(void)
+// Random contents eight bytes per step (xorshift64*: random() per byte made the random half take a minute).
+static uint64_t contents = 0x9e3779b97f4a7c15ull;
+static void fill(unsigned char *a, unsigned char *b, size_t n)
+{
+    for (size_t k = 0; k < n; k += 8) {
+        contents ^= contents >> 12, contents ^= contents << 25, contents ^= contents >> 27;
+        const uint64_t x = contents * 0x2545f4914f6cdd1dull;
+        for (size_t j = 0; j < 8 && k + j < n; j++) a[k + j] = b[k + j] = (unsigned char)(x >> (8 * j));
+    }
+}
+
+unsigned long xnu_memcmp_exhaustive(unsigned long *cases)
 {
     const size_t page = (size_t)getpagesize();
     unsigned char *enda = guarded(page), *endb = guarded(page);
-    unsigned long cases = 0;
+    failures = 0;
 
     // Every length, both buffers ending at the guard page (so any over-read faults) and at every misalignment, with
     // the first difference at every position, every sign, and none.
@@ -93,26 +105,30 @@ int main(void)
                     }
                     check(a, b, n);
                     check(b, a, n);
-                    cases += 2;
+                    *cases += 2;
                 }
             }
         }
     }
+    return failures;
+}
+
+unsigned long xnu_memcmp_random(unsigned seed, int rounds, unsigned long *cases)
+{
     // Random contents, lengths up to 3 pages, random alignments, mostly equal prefixes.
+    const size_t page = (size_t)getpagesize();
     unsigned char *big_a = malloc(4 * page + 16), *big_b = malloc(4 * page + 16);
-    srandom(17);
-    for (int round = 0; round < 200000; round++) {
+    failures = 0;
+    srandom(seed);
+    for (int round = 0; round < rounds; round++) {
         size_t n = (size_t)random() % (round & 1 ? 64 : 3 * page);
         unsigned char *a = big_a + random() % 8, *b = big_b + random() % 8;
-        for (size_t k = 0; k < n; k++) a[k] = b[k] = (unsigned char)random();
+        fill(a, b, n);
         if (n && random() % 4) b[(size_t)random() % n] = (unsigned char)random();
         check(a, b, n);
-        cases++;
+        (*cases)++;
     }
-    if (failures) {
-        printf("FAIL: %lu of %lu cases differ\n", failures, cases);
-        return 1;
-    }
-    printf("PASS: xnu memcmp/bcmp match the byte loops in %lu cases, no load past n\n", cases);
-    return 0;
+    free(big_a);
+    free(big_b);
+    return failures;
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Host test of TegraNVJPGRequest.h (tests/test_tegra_nvjpg.py): AppleJPEGDriver decode requests, as CMPhoto and
+// Host test of TegraNVJPGRequest.h (test:request_host_test): AppleJPEGDriver decode requests, as CMPhoto and
 // JPEGH1.videodecoder build them, translated into NVJPG plans against made-up destination surfaces shaped as
 // CoreVideo lays them out; every refusal, with its kind (UNSUPPORTED: the caller decodes on the CPU; BAD: the request
 // contradicts the file or the surfaces).

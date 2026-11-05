@@ -18,10 +18,10 @@
 //           com.ioswitch.avd.check.hvc1) and the fake engine: every picture through HEVCNVDEC and the kernel's checker,
 //           all out of a hardware session; then with the arena full, Apple's software HEVC decoder in the instance,
 //           matching FFmpeg.
-// Prints "PASS avd ..." when all hold (tests/test_switch_video.py).
-#include "../AVD/AVDDecoder.c"
+// Prints "PASS avd ..." when all hold (avd_host_test).
+#include "../../AVD/AVDDecoder.c"
 #include <stdio.h>
-#include "../../TegraNVDEC/TegraNVDECCheck.h"
+#include "../../../TegraNVDEC/TegraNVDECCheck.h"
 
 struct NVDECClient {
     uint8_t *va[64];

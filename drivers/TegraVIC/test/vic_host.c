@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Host checks of TegraVIC's job generation, request translation and checker (tests/test_tegra_vic.py runs this):
+// Host checks of TegraVIC's job generation, request translation and checker (test:tegra_vic_test runs this):
 //   layout     every ConfigStruct field TegraVICConfig.h packs lands exactly where libdrm's vic40.h (NVIDIA, MIT)
 //              bitfields put it, and the structure is 0x610 bytes
 //   colour     the generated matrices, through the engine's arithmetic (the law TegraVICConfig.h states), against the

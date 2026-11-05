@@ -9,11 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../AVD/HEVCNVDEC.h"
-#include "../AVD/HEVCSyntax.h"
-#include "../../TegraNVDEC/TegraNVDECCheck.h"
-#include "HEVCClip.h"
-#include "HEVCTrace.h"
+#include "../../AVD/HEVCNVDEC.h"
+#include "../../AVD/HEVCSyntax.h"
+#include "../../../TegraNVDEC/TegraNVDECCheck.h"
+#include "../HEVCClip.h"
+#include "../HEVCTrace.h"
 
 static int gFailures;
 #define CHECK(cond, ...)                               \

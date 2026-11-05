@@ -1,0 +1,40 @@
+# drivers/TegraVIC on the host: vic_host.c, the configuration packing against libdrm's vic40.h bitfields, the colour
+# matrices through the engine's arithmetic against the float BT.601/BT.709 conversions, the jobs for Screen Recording's
+# and AirPlay's clone requests and Core Animation's border clears, IOSurfaceAccelerator requests (0x1b0 bytes)
+# translated, and every refusal of the request translator and the checker (tegra_vic_test); the vendored firmware is
+# the file firmware/SOURCE names, with the falcon and FCE headers TegraVIC.cpp parses (tegra_vic_firmware_test).
+#
+#   bazel test //drivers/TegraVIC/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+# libdrm/ is NVIDIA's (MIT), kept as upstream has it.
+lint_files(exclude = ["libdrm/**"])
+
+# vic_host.c's checks, its main() renamed so the test calls it.
+host_library(
+    name = "vic_host",
+    srcs = [
+        "libdrm/vic40.h",
+        "vic_host.c",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=vic_host_main"],
+)
+
+host_test(
+    name = "tegra_vic_test",
+    srcs = ["tegra_vic_test.cpp"],
+    deps = [":vic_host"],
+)
+
+host_test(
+    name = "tegra_vic_firmware_test",
+    srcs = ["tegra_vic_firmware_test.cpp"],
+    data = [
+        "//drivers/TegraVIC:firmware/SOURCE",
+        "//drivers/TegraVIC:firmware/nvidia/tegra210/vic04_ucode.bin",
+    ],
+)

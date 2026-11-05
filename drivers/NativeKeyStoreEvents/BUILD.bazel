@@ -1,5 +1,4 @@
 # drivers/NativeKeyStoreEvents: moved from out/native-a57/root-v1/tree/drivers/NativeKeyStoreEvents by the layout move.
-load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/kernel:kernel.bzl", "kernel_driver", "kernel_headers")
 load("//bazel/lint:defs.bzl", "lint_files")
 
@@ -26,16 +25,6 @@ filegroup(
 
 # This package's headers (kernel_headers): what other drivers' hdr_deps name.
 kernel_headers()
-
-# Host checks of driver code: each compiles the driver's sources with Xcode's clang for the Mac and runs them.
-py_test(
-    name = "keywrap_test",
-    size = "small",
-    srcs = ["test_keywrap.py"],
-    data = glob(["**"]),
-    main = "test_keywrap.py",
-    tags = ["requires-darwin"],
-)
 
 kernel_driver(
     name = "NativeKeyStoreEvents",

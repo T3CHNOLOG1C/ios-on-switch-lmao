@@ -1,0 +1,66 @@
+# drivers/TegraNVJPG (NVJPG 1.0 as the AppleJPEGDriver hardware JPEG codec) on the host:
+#   nvjpg_host_test     TegraNVJPGJpeg.h's parser against libjpeg-turbo's own parse (BCR @libjpeg_turbo, pinned in
+#                       MODULE.bazel) over a matrix of files libjpeg-turbo writes, every refusal, the output targets and
+#                       the JFIF matrix, and the boot self-test's vectors against libjpeg-turbo's decode (nvjpg_host.c)
+#   request_host_test   the AppleJPEGDriver decode request's translation and refusals (request_host.c)
+#   tegra_nvjpg_vendored_test  the vendored firmware and NVIDIA headers are the files their SOURCE files name
+#
+#   bazel test //drivers/TegraNVJPG/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_test")
+
+lint_files()
+
+host_library(
+    name = "nvjpg_host",
+    srcs = [
+        "nvjpg_host.c",
+        "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
+        "//drivers/TegraNVJPG:nvidia/nvjpg_drv.h",
+        "//drivers/TegraNVJPG:selftest/J3Vectors.inc",
+    ],
+    copts = ["-O1"],
+    defines = [
+        "HAVE_LIBJPEG",
+        "main=nvjpg_host_main",
+    ],
+    deps = ["@libjpeg_turbo//:jpeg"],
+)
+
+host_test(
+    name = "nvjpg_host_test",
+    srcs = ["nvjpg_host_test.cpp"],
+    deps = [":nvjpg_host"],
+)
+
+host_library(
+    name = "request_host",
+    srcs = [
+        "request_host.c",
+        "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
+        "//drivers/TegraNVJPG:TegraNVJPGRequest.h",
+        "//drivers/TegraNVJPG:nvidia/nvjpg_drv.h",
+    ],
+    copts = ["-O1"],
+    defines = ["main=request_host_main"],
+)
+
+host_test(
+    name = "request_host_test",
+    srcs = ["request_host_test.cpp"],
+    deps = [":request_host"],
+)
+
+host_test(
+    name = "tegra_nvjpg_vendored_test",
+    srcs = ["tegra_nvjpg_vendored_test.cpp"],
+    data = [
+        "//drivers/TegraNVDEC:firmware/LICENCE.nvidia",
+        "//drivers/TegraNVJPG:firmware/LICENCE.nvidia",
+        "//drivers/TegraNVJPG:firmware/SOURCE",
+        "//drivers/TegraNVJPG:firmware/nvidia/tegra210/nvjpg.bin",
+        "//drivers/TegraNVJPG:nvidia/SOURCE",
+        "//drivers/TegraNVJPG:nvidia/cle7d0.h",
+        "//drivers/TegraNVJPG:nvidia/nvjpg_drv.h",
+    ],
+)

@@ -15,7 +15,7 @@
 // 1280x720 High IDR and P picture are byte for byte those of NVIDIA's own T210 driver (driverControls) and the checker
 // accepts them; the checker refuses each kind of bad submit derived from a good one; the layouts' offsets are a
 // bijection; the rate control converges on a synthetic bits-versus-QP model.
-// Prints "PASS ave ..." (tests/test_switch_video_encode.py).
+// Prints "PASS ave ..." (test:ave_host_test).
 #include "../AVE/AVEEncoder.c"
 #include <stdio.h>
 #include "../../SwitchVideoDecoders/AVD/H264Syntax.h"

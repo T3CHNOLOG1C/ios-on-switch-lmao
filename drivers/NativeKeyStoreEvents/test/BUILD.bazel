@@ -1,0 +1,22 @@
+# drivers/NativeKeyStoreEvents' AKSKeyWrap.h and AKSCmac.h on the host against the published vectors, with CommonCrypto
+# standing in for libkern's AES and SHA-256 and for the Security Engine's one-block ECB: RFC 3394 4.3 and 4.6 (256-bit
+# KEK, 128- and 256-bit key data), RFC 4231 test case 2 (HMAC-SHA256), RFC 4493 4 (AES-CMAC subkeys and examples 1-4)
+# and a failing cipher, then round trips of every length the stand-in accepts, rejection of a tampered blob, of the
+# wrong class key and of lengths outside the accepted range.
+#
+#   bazel test //drivers/NativeKeyStoreEvents/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "keywrap_test",
+    srcs = [
+        "keywrap_test.cpp",
+        "//drivers/NativeKeyStoreEvents:AKSCmac.h",
+        "//drivers/NativeKeyStoreEvents:AKSKeyWrap.h",
+    ],
+    # CommonCrypto's one-shot SHA-256 calls (CC_SHA256_Init/Update/Final) are deprecated in the SDK.
+    copts = ["-Wno-deprecated-declarations"],
+)

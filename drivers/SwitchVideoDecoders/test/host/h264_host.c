@@ -5,14 +5,14 @@
 //   h264_host <stream.264> --selftest  prints the first picture's submit as the kernel's N3 test vector (C source)
 //   h264_host --clip                   test/VDECClip.h's clip: every submit accepted, pictures out in x264's display
 //                                      order, and the checker refusing each kind of bad submit derived from the first
-//                                      one; prints "PASS h264 clip ..." (tests/test_switch_video.py)
-// Build: cc -O1 -I.. -o h264_host h264_host.c ../AVD/H264Syntax.c ../AVD/H264NVDEC.c
+//                                      one; prints "PASS h264 clip ..." (h264_host_test)
+// Build: cc -O1 -o h264_host h264_host.c ../../AVD/H264Syntax.c ../../AVD/H264NVDEC.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../AVD/H264NVDEC.h"
-#include "../../TegraNVDEC/TegraNVDECCheck.h"
-#include "VDECClip.h"
+#include "../../AVD/H264NVDEC.h"
+#include "../../../TegraNVDEC/TegraNVDECCheck.h"
+#include "../VDECClip.h"
 
 typedef struct {
     uint8_t *va[64];
