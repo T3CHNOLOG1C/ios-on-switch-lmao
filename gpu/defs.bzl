@@ -148,6 +148,12 @@ _PLUGIN_CFLAGS = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fstack-protector
     "-ffile-prefix-map=@PWD@/{r}=/ioswitch/{o}/{r}".format(r = r, o = OLD_TREE)
     for r in MOVED_ROOTS
     if TREE_ROOT != OLD_TREE
+] + [
+    # The sources are compiled by their execution-root-relative path (src.path), which the line tables' directories
+    # and __FILE__ keep relative: those get the old spelling too.
+    "-ffile-prefix-map={r}={o}/{r}".format(r = r, o = OLD_TREE)
+    for r in MOVED_ROOTS
+    if TREE_ROOT != OLD_TREE
 ]
 
 def _metal_plugin_impl(ctx):
