@@ -11,7 +11,7 @@
 //   E4  the TegraNVENC service and its user client published (TegraNVENCUserClient.cpp)
 // One line per stage ("TegraNVENC: E1 ok ..."), or the failing stage's FAIL line and nothing after it. Until E4
 // publishes, every failure is that one line: the engine is put back in reset with its clock off, the arena is given
-// back and nothing is published, so VideoToolbox has no hardware encoder (as before this driver). From E4 on the
+// back and nothing is published, so VideoToolbox has no hardware encoder. From E4 on the
 // engine is proven: a job past its bound panics with one line, and a lost syncpoint interrupt panics in TegraHost1x.
 // switch-nvdec=0 turns NVENC off too (E3 decodes through NVDEC); there is no boot-arg of NVENC's own.
 //
@@ -34,8 +34,8 @@
 //   memory/tegra/tegra210.c (MC client hot reset NVENC: control 0x200 bit 11; SMMU ASID NVENC 0x264),
 //   include/linux/host1x.h (HOST1X_CLASS_NVENC 0x21), soc/tegra/pmc.c tegra_powergate_power_up, drm/tegra/falcon.c
 //   falcon_boot (shared with TegraNVDEC.cpp), L4T nvhost t210.c (NVENC 5.0, nvhost_nvenc050.fw).
-//   Clock: PLLP undivided, 408 MHz, the rate NVDEC has run at since r11 (the T210B01 core DVFS table gives NVENC and
-//   NVDEC the same points).
+//   Clock: PLLP undivided, 408 MHz, the rate NVDEC runs at (the T210B01 core DVFS table gives NVENC and NVDEC the same
+//   points).
 // Waits on hardware sequencing with no interrupt of its own (partition status, IMEM/DMEM scrub, the falcon's DMA
 // queue) are bounded reads, as in TegraNVDEC; every completion of work is a host1x syncpoint interrupt.
 #include <IOKit/IOLib.h>

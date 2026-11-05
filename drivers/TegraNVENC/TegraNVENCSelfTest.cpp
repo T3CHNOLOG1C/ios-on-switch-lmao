@@ -19,17 +19,14 @@
 //          block_height/tiled_16x16 set to match), moving on only when a layout's picture comes back wrong;
 //        * how chroma is addressed: TEGRA_NVENC_CHROMA_OFFSET first (the surface-config offset nvenc_drv.h's figure
 //          shows), then METHOD; both stay inside the buffers whatever the firmware reads (TegraNVENCABI.h).
-//   3. the IDR as the plug-in sends it (mode decision, CABAC, 8x8), within 30 dB of the source. At r7q this job never
-//      finished (IPCM had): the hung job's falcon dump puts the H.264 app (linux-firmware nvenc.bin, envydis at image
-//      offset = falcon address) in its end-of-picture wait, 0x48b9, past its first wait (picture-done status I/O 0xaf0,
-//      or an error flag), past its macroblock count (the interrupt handler adds I/O 0x1848 per slice done) and past I/O
-//      0x1964 & 0xf, spinning at 0x492d..0x4934 on `IDLESTATE & 0x200` (IDLESTATE 0x201: one engine unit never went
-//      idle; trace 0x4934 x6, PC 0x4937/0x492d). Its setup left the ME, MD and quant controls mostly 0, among them
-//      mbc_mb_size, which the app writes straight into the ME's reference cache on every picture (I/O 0x1010), and
-//      sliced as no NVIDIA driver does (slice_mode 1, a history of one 128-byte row); the IPCM job that finished had
-//      the same slicing, history and lists, so the controls only mode decision and the ME read are the first suspects.
-//      r8a hung the same way. Since r17 (r14-nvenc's analysis) H264NVENC.c sends NVIDIA's own T210 driver's
-//      controls, slicing (slice_mode 0) and history size (192 bytes a macroblock), TegraNVENC/nvidia/SOURCE;
+//   3. the IDR as the plug-in sends it (mode decision, CABAC, 8x8), within 30 dB of the source. H264NVENC.c sends
+//      NVIDIA's own T210 driver's controls, slicing (slice_mode 0) and history size (192 bytes a macroblock),
+//      TegraNVENC/nvidia/SOURCE. With the ME, MD and quant controls mostly 0 this job never finishes while IPCM does:
+//      the H.264 app (linux-firmware nvenc.bin, envydis at image offset = falcon address) spins in its end-of-picture
+//      wait (0x48b9) at 0x492d..0x4934 on `IDLESTATE & 0x200` (IDLESTATE 0x201: one engine unit never goes idle),
+//      past its picture-done wait (I/O 0xaf0, or an error flag), its macroblock count (the interrupt handler adds I/O
+//      0x1848 per slice done) and I/O 0x1964 & 0xf. Among those controls is mbc_mb_size, which the app writes straight
+//      into the ME's reference cache on every picture (I/O 0x1010);
 //   4. the P picture: NVENC's 16x16-tiled reconstruction is never read by the CPU, so this is the only check of it;
 //      a P failure leaves NVENC on, intra only (TegraNVENCInfo.p_frames 0).
 // A job that does not finish stops E3 at once (the job's own line carries the falcon's state: tegra_nvenc_falcon_dump),
@@ -317,8 +314,8 @@ void describe(char *line, size_t size, uint32_t layout, const Outcome &o)
 
 // The input layouts in the order E3 tries them: the 16x16 tiles NVENC reads its references in first (the one input
 // format its hardware surely fetches; nvenc_drv.h 1.5 names only it and block linear for inputs), then block linear,
-// pitch linear last. A layout the hardware cannot fetch could stall it, and a job that does not finish ends E3 (the
-// first hardware boot, r7p9d, stalled on pitch linear, tried first then).
+// pitch linear last. A layout the hardware cannot fetch could stall it, and a job that does not finish ends E3 (pitch
+// linear, tried first, has stalled it).
 const uint32_t kSearch[TEGRA_NVENC_LAYOUTS] = {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_LAYOUT_BL2_LOG,
                                                TEGRA_NVENC_LAYOUT_BL2_RAW, TEGRA_NVENC_LAYOUT_BL4_LOG,
                                                TEGRA_NVENC_LAYOUT_BL1,     TEGRA_NVENC_LAYOUT_PITCH};

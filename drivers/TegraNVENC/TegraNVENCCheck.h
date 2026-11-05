@@ -16,8 +16,8 @@
 // slice control array, here one control covering every macroblock) with max_slice_size at least the macroblock count.
 // slice_mode 1 is refused: NVIDIA's T210 driver never sends it, NVENC 5.0's H.264 app then runs the picture as one
 // hardware-chained run (target count the whole picture, each slice-done interrupt restarting the next, app 0x0fe1 and
-// 0x38ea), and NVIDIA's Ada NVENC hangs on it (github.com/mickys/nvenc docs/reports/T2.05e.md, MIT). It was in r7q's
-// IDR that never finished, but also in the IPCM job before it, which did (TegraNVENCSelfTest.cpp).
+// 0x38ea), and NVIDIA's Ada NVENC hangs on it (github.com/mickys/nvenc docs/reports/T2.05e.md, MIT). On this NVENC it
+// was in an IDR that never finished but also in an IPCM job that did (TegraNVENCSelfTest.cpp).
 #ifndef TEGRA_NVENC_CHECK_H
 #define TEGRA_NVENC_CHECK_H
 #include <stddef.h>
@@ -247,7 +247,6 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
             return why;
     }
 
-    // Outputs.
     if (pc->bitstream_buf_size < 4096 || pc->bitstream_buf_size > bits || pc->bitstream_start_pos >= 256 ||
         pc->bitstream_start_pos >= pc->bitstream_buf_size)
         return "bitstream";
