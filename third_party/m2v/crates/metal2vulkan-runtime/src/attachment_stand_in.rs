@@ -88,7 +88,7 @@ use super::resource::ResourceKey;
 use super::sample_positions;
 use super::texture_descriptor::TextureDescriptor;
 use super::tracker::{Access, Barrier, Use};
-use super::values::ResourceOptions;
+use super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
 use super::Device;
 use ash::vk;
 use metal2vulkan::device::FormatUsage;
@@ -154,6 +154,9 @@ pub(super) struct KeptBacking {
     queue: u64,
     /// It was made for copies to and from its attachment (`stand_in`'s `copies`).
     copies: bool,
+    /// It was made a linear image over a buffer of the runtime's ([`kept_linear_backing`]), and
+    /// it is one where its texture's image is linear.
+    linear: bool,
     level: u32,
     layer: u32,
     layers: u32,
@@ -164,9 +167,11 @@ pub(super) struct KeptBacking {
 }
 
 impl KeptBacking {
-    /// Whether it backs `own` for the passes of `queue`, copied to and from it where `copies`.
-    fn backs(&self, own: &Target, queue: u64, copies: bool) -> bool {
+    /// Whether it backs `own` for the passes of `queue`, copied to and from it where `copies`, a
+    /// linear one where `linear`.
+    fn backs(&self, own: &Target, queue: u64, copies: bool, linear: bool) -> bool {
         self.queue == queue
+            && self.linear == linear
             && (self.copies || !copies)
             && self.level == own.level
             && self.layer == own.layer
@@ -200,7 +205,10 @@ pub(super) fn kept_backing(
 ) -> Result<Target, Error> {
     let device = maker.device();
     let kept = own.texture.kept_backings();
-    if let Some(found) = lock(kept).iter().find(|k| k.backs(own, queue, copies)) {
+    if let Some(found) = lock(kept)
+        .iter()
+        .find(|k| k.backs(own, queue, copies, false))
+    {
         // Held as one `maker` made: its first batch moves it to `GENERAL` where the command
         // buffer that made it has not yet submitted a batch.
         maker.hold_own_texture(found.backing.texture.clone());
@@ -209,7 +217,7 @@ pub(super) fn kept_backing(
     // Made with no lock held; one another thread kept meanwhile is taken, and this one dropped.
     let made = stand_in(maker, own, copies)?;
     let mut kept = lock(kept);
-    if let Some(found) = kept.iter().find(|k| k.backs(own, queue, copies)) {
+    if let Some(found) = kept.iter().find(|k| k.backs(own, queue, copies, false)) {
         maker.hold_own_texture(found.backing.texture.clone());
         return Ok(found.backing.clone());
     }
@@ -217,6 +225,7 @@ pub(super) fn kept_backing(
     kept.push(KeptBacking {
         queue,
         copies,
+        linear: false,
         level: own.level,
         layer: own.layer,
         layers: own.layers,
@@ -226,6 +235,113 @@ pub(super) fn kept_backing(
         backing: made.clone(),
     });
     Ok(made)
+}
+
+/// The linear backing of `own`, a memoryless color attachment of a pass of `queue` whose other
+/// colors are linear images (`linear_attachment::apart`): a 2D texture over a buffer of the
+/// runtime's that the device lays out linearly, so that every color of the pass is linear and the
+/// others render in place under `VK_NV_linear_color_attachment`'s rule, not through images of
+/// their own copied in and merged back. Metal neither loads nor stores a memoryless texture, so
+/// nothing is copied, and its texture keeps it for the passes of the queue as [`kept_backing`]
+/// keeps its backings. `None` where it would not be linear: a multisampled or layered attachment,
+/// a view in another format, a format without a texel size, or a device that makes the texture
+/// over the buffer a shadow (kept, so that no pass makes it again).
+pub(super) fn kept_linear_backing(
+    maker: &CommandBuffer,
+    own: &Target,
+    queue: u64,
+) -> Result<Option<Target>, Error> {
+    let found = |kept: &[KeptBacking]| {
+        kept.iter()
+            .find(|k| k.backs(own, queue, false, true))
+            .map(|k| k.backing.clone())
+    };
+    let linear = |backing: Target| -> Result<Option<Target>, Error> {
+        if !backing.texture.linear_image()? {
+            return Ok(None);
+        }
+        maker.hold_own_texture(backing.texture.clone());
+        Ok(Some(backing))
+    };
+    let kept = own.texture.kept_backings();
+    if let Some(backing) = found(&lock(kept)) {
+        return linear(backing);
+    }
+    let Some(made) = linear_stand_in(maker.device(), own)? else {
+        return Ok(None);
+    };
+    let mut kept = lock(kept);
+    if let Some(backing) = found(&kept) {
+        return linear(backing);
+    }
+    maker.device().shared().counts.kept_backing_made();
+    kept.push(KeptBacking {
+        queue,
+        copies: false,
+        linear: true,
+        level: own.level,
+        layer: own.layer,
+        layers: own.layers,
+        format: own.format,
+        samples: own.samples,
+        extent: own.extent,
+        backing: made.clone(),
+    });
+    drop(kept);
+    linear(made)
+}
+
+/// [`kept_linear_backing`]'s texture: over a `Private` buffer of rows 128-byte aligned (a multiple
+/// of Metal's 16, the alignment NVIDIA's linear render targets need and Mesa's NVK gives the rows
+/// of a linear image it lays out itself), of `own`'s format and extent, a render target; `None`
+/// where `own` takes none (as there).
+fn linear_stand_in(device: &Device, own: &Target) -> Result<Option<Target>, Error> {
+    const ROW_ALIGNMENT: u64 = 128;
+    let pixel_format = own.texture.pixel_format();
+    let block = own.format.block().filter(|block| block.texels == 1);
+    let own_format = metal2vulkan::metal::format::vk_format(
+        pixel_format,
+        &[FormatUsage::ColorAttachment].into(),
+        device.compile_device().profile(),
+    )
+    .is_ok_and(|mapping| mapping.format == own.format);
+    let (Some(block), true) = (block, own_format) else {
+        return Ok(None);
+    };
+    if own.samples != 1 || own.layers != 1 {
+        return Ok(None);
+    }
+    let [width, height] = own.extent;
+    let row = (u64::from(width) * u64::from(block.size)).next_multiple_of(ROW_ALIGNMENT);
+    let hazard = HazardTrackingMode::Tracked;
+    let buffer = device.scratch_buffer_tracked(row * u64::from(height), hazard)?;
+    let descriptor = TextureDescriptor {
+        texture_type: TextureType::Type2D,
+        pixel_format,
+        width: width.into(),
+        height: height.into(),
+        usage: TextureUsage::RENDER_TARGET,
+        resource_options: ResourceOptions::new(
+            StorageMode::Private,
+            CpuCacheMode::DefaultCache,
+            hazard,
+        ),
+        ..TextureDescriptor::default()
+    };
+    let texture = match buffer.new_texture(&descriptor, 0, row) {
+        Ok(texture) => texture,
+        Err(Error::Unsupported(_) | Error::NotImplemented(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(Some(Target {
+        texture,
+        level: 0,
+        layer: 0,
+        layers: 1,
+        format: own.format,
+        samples: 1,
+        extent: own.extent,
+    }))
 }
 
 /// The stand-in for `target`, an attachment the pass renders whole into an image of its own

@@ -1119,11 +1119,22 @@ impl Device {
     /// it with the exit guard's entry points alone (`exit_guard`). Refused as
     /// [`Device::new_buffer`] refuses its length.
     pub(super) fn scratch_buffer(&self, length: u64) -> Result<Buffer, Error> {
+        self.scratch_buffer_tracked(length, HazardTrackingMode::Untracked)
+    }
+
+    /// [`scratch_buffer`](Self::scratch_buffer)'s buffer, its uses tracked as `hazard` says: a
+    /// buffer whose texture the device's passes render (`attachment_stand_in::kept_linear_backing`)
+    /// is tracked as a texture of the runtime's is.
+    pub(super) fn scratch_buffer_tracked(
+        &self,
+        length: u64,
+        hazard: HazardTrackingMode,
+    ) -> Result<Buffer, Error> {
         const CALL: &str = "new_buffer";
         let modes = Modes::of(ResourceOptions::new(
             StorageMode::Private,
             CpuCacheMode::DefaultCache,
-            HazardTrackingMode::Untracked,
+            hazard,
         ))?;
         let class = buffer_class(CALL, modes)?;
         if length == 0 || length > self.properties().max_buffer_length {

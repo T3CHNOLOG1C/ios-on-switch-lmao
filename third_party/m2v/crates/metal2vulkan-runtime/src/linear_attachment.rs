@@ -216,7 +216,14 @@ enum Apart {
 /// Render the bound attachments among `colors`, a pass's as it begins, apart where another is
 /// not linear, or where the pass has a depth or stencil attachment (`depth_stencil` names it):
 /// each through the image its texture keeps for `maker`'s queue, copied in and back (the module
-/// docs), announced.
+/// docs), announced. First, where the pass has a linear color (bound or not) and its other colors
+/// are memoryless, and no depth or stencil attachment, each memoryless one renders through a
+/// linear image its texture keeps (`attachment_stand_in::kept_linear_backing`), so that every color
+/// of the pass is linear: Metal neither loads nor stores a memoryless texture, so its backing is
+/// copied nothing. Core Animation's passes over an IOSurface all hold a memoryless second color:
+/// beside it, the surface rendered through the image its texture keeps, its box copied in and
+/// merged back, or, on a device whose linear tiling renders beside any other (NVK), through the
+/// driver's own tiled shadow, copied in and back over the render area each pass.
 pub(super) fn apart(
     maker: &CommandBuffer,
     colors: &mut [Option<ColorTarget>],
@@ -224,17 +231,35 @@ pub(super) fn apart(
 ) -> Result<(), Error> {
     let device = maker.device();
     let mut bound_at = Vec::new();
-    let mut other = None;
+    let mut linear = false;
+    let mut others = Vec::new();
     for (index, color) in colors.iter().enumerate() {
         let Some(color) = color else {
             continue;
         };
         if color.stand_in.is_none() && bound(device, &color.target)? {
             bound_at.push(index);
+            linear = true;
         } else if !color.target.texture.linear_image()? {
-            other.get_or_insert(index);
+            others.push(index);
+        } else {
+            linear |= color.stand_in.is_none();
         }
     }
+    let memoryless = |index: &usize| {
+        colors[*index]
+            .as_ref()
+            .is_some_and(|color| color.memoryless && color.stand_in.is_none())
+    };
+    if linear
+        && !others.is_empty()
+        && depth_stencil.is_none()
+        && others.iter().all(memoryless)
+        && back_linear(maker, colors, &others)?
+    {
+        return Ok(());
+    }
+    let other = others.first().copied();
     let why = match (other, depth_stencil) {
         (Some(other), _) => Apart::Color(other),
         (None, Some(attachment)) => Apart::DepthStencil(attachment),
@@ -263,6 +288,37 @@ pub(super) fn apart(
         }
     }
     Ok(())
+}
+
+/// Give each of `memoryless`, memoryless colors among `colors`, the linear backing its texture
+/// keeps for `maker`'s queue ([`apart`]): `false`, and none of them one, where one takes none.
+fn back_linear(
+    maker: &CommandBuffer,
+    colors: &mut [Option<ColorTarget>],
+    memoryless: &[usize],
+) -> Result<bool, Error> {
+    let queue = maker.command_queue().id();
+    let mut backings = Vec::with_capacity(memoryless.len());
+    for &index in memoryless {
+        let Some(Some(color)) = colors.get(index) else {
+            return Ok(false);
+        };
+        match attachment_stand_in::kept_linear_backing(maker, &color.target, queue)? {
+            Some(backing) => backings.push((index, backing)),
+            None => return Ok(false),
+        }
+    }
+    for (index, backing) in backings {
+        if let Some(Some(color)) = colors.get_mut(index) {
+            let own = std::mem::replace(&mut color.target, backing);
+            color.stand_in = Some(StandIn {
+                own,
+                cause: Cause::Backing,
+                area: None,
+            });
+        }
+    }
+    Ok(true)
 }
 
 /// Render the bound attachments among `layout`'s colors, a pass's as it ends, apart where a
@@ -390,7 +446,10 @@ pub(super) fn choose(
             continue;
         }
         any = true;
-        if color.load == LoadAction::Clear && !may_read(index) {
+        // With unified memory the linear image lies in the device's own memory: a clear in place
+        // writes what a clear of an image of the device's would, and saves the copy back.
+        let unified = device.properties().has_unified_memory;
+        if color.load == LoadAction::Clear && !may_read(index) && !unified {
             through = true;
             through_backing(
                 maker,
