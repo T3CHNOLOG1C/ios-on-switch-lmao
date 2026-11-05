@@ -9,7 +9,7 @@
 //
 // CoreBrightness writes the backlight two ways (21H461):
 //   * "brightness", 0..65536 (IODisplayParameters.brightness max), from ___DisplaySetPhysicalBrightnessLegacyOnThread:
-//     ceil(fraction * (max - min)) + min. Mapped onto kFloorRaw..2047 (toRaw), as before.
+//     ceil(fraction * (max - min)) + min. Mapped onto kFloorRaw..2047 (toRaw).
 //   * "brightness-nits", nits * 65536 in a CFNumber SInt32, from _SetBLDriverNitsValue, which
 //     ___DisplaySetLogicalBrightnessInternal calls for every brightness change once the display has a luminance range
 //     (backlight-calibration-parameters) and is of the new backlight architecture (new-backlight-architecture, which

@@ -7,15 +7,15 @@
 //    equal to Linux's except where Linux would step up into a reading over the next gain's fl, and no step up that the
 //    next sample undoes. Row 0's ci is hekate's Aula 30300, not the DT's 7502: every row boundary of Nintendo's Icosa
 //    table (hekate's default) and of the Aula table with 30300 is continuous, and 7502 is not. The scale against the
-//    datasheet's bare sensor (window loss) at r7r's readings, for ours and for the Icosa table.
+//    datasheet's bare sensor (window loss) at a reading logged on the console, for ours and for the Icosa table.
 // 5. Brightness-nits (nits * 65536) onto the panel linearly in luminance, 2047 at lMaxPanel and never below the floor,
 //    which is lMinPanel; the legacy brightness mapping unchanged; the brightness the ramp keeps lands on the same panel
-//    level; the r7s auto-brightness targets it dropped.
-// 6. Why r7v's auto-brightness did not move from 61 to 135 lux: CoreBrightness's curve (backboardd's ALSUserPreference,
+//    level; a logged auto-brightness ramp's targets on their nearest levels.
+// 6. Why a logged auto-brightness held from 61 to 135 lux: CoreBrightness's curve (backboardd's ALSUserPreference,
 //    E1 0 / L1 63.81 to E2 2000 / L2 287.62 nits above E0b 30 lux) gives the logged target at 61 lux exactly, and the
 //    step to 135 lux is 0.03 in its perceptual scale (BULuminanceToPerceptual: 1 + ln(L / Lmax) / ln(Lmax / Lmin),
 //    over this panel's 12.5..400 nits), a third of the brighten threshold 0.2 * 0.5 (AABC e70 * aggressivity 0x2a4).
-// 7. r7w's finger-then-flashlight test through SwitchALS::sample's rule (a clipped reading above 1x only steps the gain
+// 7. A finger-then-flashlight scene through SwitchALS::sample's rule (a clipped reading above 1x only steps the gain
 //    down, the sample after a gain change is skipped): 0 lux, then 50000, then 0 again, starting at 64x. Readings come
 //    back valid within a few samples, no clipped reading is dispatched, and nothing in between under-reads.
 // 8. The backlight-marketing-table read as DisplayCreateWithID reads it (int32 / 65536 into float): the calibration's
@@ -39,7 +39,6 @@
 #include "../SwitchBacklightMath.h"
 
 namespace {
-// ---- 1. The references ---------------------------------------------------------------------------------------------
 constexpr uint64_t kRefCycles = 38, kRefMultiplier = 3600, kRefMaxLux = 100000;
 constexpr uint64_t kRefItimeUs = 2700 * kRefCycles;
 constexpr uint64_t kRefGains[] = {1, 2, 64, 128};
@@ -84,7 +83,7 @@ unsigned linuxGain(unsigned gain, uint64_t visible, uint64_t ir)
     return gain;
 }
 
-// The grid: 0..63, 1.07^k for k in 64..164, and the values r7r and the datasheet name.
+// The grid: 0..63, 1.07^k for k in 64..164, and the values a logged reading and the datasheet name.
 std::vector<unsigned> gridValues()
 {
     std::set<unsigned> values;
@@ -172,7 +171,7 @@ TEST(SwitchALSMath, WindowTablesAndScale)
     for (bool join : joins(kIcosaWindow)) EXPECT_TRUE(join) << "Icosa";
     for (bool join : joins(kWindowRows)) EXPECT_TRUE(join) << "Aula with ci0 30300";
     EXPECT_EQ(joins(kDtWindow), (std::vector<bool>{false, true, true})) << "7964 against 2691 at 231";
-    // Scale: r7r's uncovered reading, 64x DATA0 372 DATA1 132 (ratio 0.355), against the datasheet's own formula for
+    // Scale: a logged uncovered reading, 64x DATA0 372 DATA1 132 (ratio 0.355), against the datasheet's own formula for
     // the bare part (ratio < 0.55: (0.795 DATA0 - 0.859 DATA1) / gain * 102.6 / ITIME ms): the optical window's factor.
     const double bare = (0.795 * 372 - 0.859 * 132) / 64;
     const double ours = windowLux(kWindowRows, 372, 132) / bare, icosa = windowLux(kIcosaWindow, 372, 132) / bare;
@@ -181,10 +180,9 @@ TEST(SwitchALSMath, WindowTablesAndScale)
     EXPECT_EQ(switch_als::lux(372, 132, 2), 47u) << "r7r logged lux 47 for ch0 372 ch1 132 at 64x";
 }
 
-// ---- 5. The panel model ----------------------------------------------------------------------------------------------
 namespace {
 constexpr int64_t kPanel = 2047, kFloor = 64, kNitsMaxFixed = 400 << 16;
-constexpr double kR7s[] = {37.7215, 47.7215, 51.0549, 84.3882, 137.9125, 103.5238};  // r7s Begin ramp L_target values
+constexpr double kR7s[] = {37.7215, 47.7215, 51.0549, 84.3882, 137.9125, 103.5238};  // logged L_target values
 
 // The panel level nearest to `nits` (16.16), as nitsToRaw must give it.
 int64_t nearestLevel(int64_t nits)
@@ -228,14 +226,13 @@ TEST(SwitchBacklightMath, PanelModel)
     }
     std::vector<unsigned> targets;
     for (double n : kR7s) targets.push_back(shown[(int32_t)(n * 65536)]);
-    // 38..138 nits: panel 193..706 (r7s stayed at 525).
+    // 38..138 nits: panel 193..706.
     EXPECT_EQ(targets, (std::vector<unsigned>{193, 244, 261, 432, 706, 530}));
     EXPECT_EQ(shown[0], (unsigned)kFloor);
     EXPECT_EQ(shown[(int32_t)kNitsMaxFixed], (unsigned)kPanel);
     EXPECT_EQ(shown[0x7fffffff], (unsigned)kPanel);
 }
 
-// ---- 6. r7v's auto-brightness ------------------------------------------------------------------------------------
 namespace {
 constexpr double kE1 = 0, kL1 = 63.80889892578125, kE2 = 2000, kL2 = 287.6190490722656, kE0b = 30;
 constexpr double kL0a = 5.000001907348633, kL0b = 67.16605377197266;
@@ -269,7 +266,6 @@ TEST(SwitchBacklightMath, R7vAutoBrightnessHolds)
     std::printf("r7v at 61 lux holds from %d to %d lux (perceptual step to 135 lux %.3f)\n", dim, brighten, delta);
 }
 
-// ---- 7. Steps through saturation -----------------------------------------------------------------------------------
 namespace {
 struct Event {
     unsigned phase, tick;
@@ -337,7 +333,6 @@ TEST(SwitchALSMath, StepsThroughSaturation)
     EXPECT_EQ(settled, (std::map<unsigned, unsigned>{{0, 3}, {1, 0}, {2, 3}})) << "128x in the dark, 1x at 50000 lux";
 }
 
-// ---- 8. The backlight-marketing-table as DisplayCreateWithID reads it --------------------------------------------
 namespace {
 float f32(double x)
 {
@@ -386,7 +381,7 @@ TEST(SwitchBacklightMath, MarketingTableAsDisplayCreateWithIDReadsIt)
     EXPECT_EQ(curve[0], panel[2]);
     EXPECT_EQ(curve[50], panel[1]);
     EXPECT_EQ(curve[100], panel[0]);
-    // nitsToRaw (section 5): the slider's bottom is the panel's floor, its top full.
+    // nitsToRaw (PanelModel): the slider's bottom is the panel's floor, its top full.
     EXPECT_EQ(nearestLevel((int64_t)((double)curve[0] * 65536)), kFloor);
     EXPECT_EQ(nearestLevel((int64_t)((double)curve[100] * 65536)), kPanel);
     EXPECT_LT(std::fabs(curve[0] - 12.506), 0.01);

@@ -16,10 +16,10 @@
 // 7. SwitchBacklight publishes new-backlight-architecture, without which CoreBrightness's faded ramps never reach
 //    brightness-nits.
 // 8. DisplayCreateWithID's ways to fail that are this service's (21H461): IODisplayParameters (0x1b62acf74) and, under
-//    the new architecture, backlight-marketing-table (0x1b62ae660; r7y/r7z had none: no display, so libEDR's server never
-//    started and Core Animation's render server stalled 5 s per frame on its port). SwitchBacklight.cpp publishes both
-//    before backlight-control, backlight-control only with IODisplayParameters, new-backlight-architecture only with the
-//    table.
+//    the new architecture, backlight-marketing-table (0x1b62ae660; without it there is no display, so libEDR's server
+//    never starts and Core Animation's render server stalls 5 s per frame on its port). SwitchBacklight.cpp publishes
+//    both before backlight-control, backlight-control only with IODisplayParameters, new-backlight-architecture only
+//    with the table.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -182,7 +182,7 @@ TEST(SwitchALSSource, DisplayCreateWithIDHasWhatItNeedsBeforeBacklightControl)
     size_t previous = 0;
     for (const std::string &step : order) {
         const size_t at = start.find(step);
-        ASSERT_NE(at, std::string::npos) << step;  // backlight-marketing-table: r7y/r7z
+        ASSERT_NE(at, std::string::npos) << step;
         EXPECT_GE(at, previous) << step << ": everything DisplayCreateWithID reads is there before backlight-control";
         previous = at;
     }

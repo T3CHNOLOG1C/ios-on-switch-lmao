@@ -31,12 +31,12 @@
 //     display OFF"). A clock that stops while the panel is lit panics after kClockDeadlineMS. A sensor that does not
 //     answer for kErrorLimit samples, a supply that never comes, a part that is not a BH1730 and a HID path nobody
 //     takes each log one line and turn the sensor off for the boot.
-//   * r7p5 and r7p8: every transfer to 0x29 was NACKed with LDO6 on (POK). TegraI2C's bus clears all completed and the
-//     controller saw no ACK, so SDA was high to it and SCL ran. The "SCL 0 SDA 0" of r7p8 was GPIO_IN of pins in SFIO
-//     mode, which that suggests does not show them (unverified, TegraGPIO.h). The give-up now settles it and the rest
-//     in one boot (probe()): the lines read as GPIO inputs next to SFIO-mode GPIO_IN of the working I2C1 and I2C3, the
-//     pads now and as the boot chain left them, the PMC's I/O rail power, voltage and deep power down, the controller's
-//     last failure (address or data NACK) and a scan of the bus.
+//   * Seen on hardware: every transfer to 0x29 NACKed with LDO6 on (POK), while TegraI2C's bus clears completed and the
+//     controller saw no ACK, so SDA was high to it and SCL ran. GPIO_IN of pins in SFIO mode then read SCL 0 SDA 0,
+//     which suggests it does not show them (unverified, TegraGPIO.h). So the give-up logs everything needed in one boot
+//     (probe()): the lines read as GPIO inputs next to SFIO-mode GPIO_IN of the working I2C1 and I2C3, the pads now
+//     and as the boot chain left them, the PMC's I/O rail power, voltage and deep power down, the controller's last
+//     failure (address or data NACK) and a scan of the bus.
 //
 // iPadOS side (21H461; CoreBrightness, libMobileGestalt and AccessibilitySettings disassembly):
 //   * MobileGestalt ambient-light-sensor (lo3szoQ4sLy7o3+ZD0GcAQ) is IOServiceGetMatchingService(IOPropertyMatch
@@ -192,7 +192,6 @@ class SwitchALS : public IOService {
     bool running = false;
     unsigned frames = 0;
     uint64_t ticks = 0;
-    // The stats window.
     unsigned samples = 0, luxMin = ~0u, luxMax = 0;
     unsigned loggedLux = 0, loggedGain = ~0u;  // the last line's (noteStats); ~0u: none yet
     int loggedPanel = -1;
@@ -326,8 +325,8 @@ void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
     }
 }
 
-// To the log only: what the sensor saw over the last 5 s, and the panel level it saw it at. r16-idle: only when that
-// changed since the last line (gain, panel level, or a reading more than an eighth, at least 2 lux, off the last line's
+// To the log only: what the sensor saw over the last 5 s, and the panel level it saw it at, only when that changed
+// since the last line (gain, panel level, or a reading more than an eighth, at least 2 lux, off the last line's
 // lux), so a lit screen in steady light writes no line every 5 s.
 void SwitchALS::noteStats(uint32_t level, uint32_t visible, uint32_t ir)
 {

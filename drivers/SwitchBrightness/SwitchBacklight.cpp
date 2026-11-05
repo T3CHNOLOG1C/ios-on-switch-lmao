@@ -2,7 +2,7 @@
 // The built-in display's backlight for iPadOS 17.7 CoreBrightness, and the display's power, driving the Switch OLED panel
 // through TegraPanel (DCS commands; there is no PWM backlight). Boot-args in SwitchBrightness.h.
 //
-// What CoreBrightness expects (21H461; addresses in its dyld cache image and the kernelcache, scratchpad/power/re):
+// What CoreBrightness expects (21H461; addresses in its dyld cache image and the kernelcache):
 //   * -[BLControl findBacklight] / -[CBDisplayContaineriOS findBacklight] look up a registered service with
 //     backlight-control = true; handleDisplayArrival: makes the built-in display module (CBDisplayModuleiOS) only if that
 //     service conforms to "AppleARMBacklight" (IOObjectConformsTo, i.e. metaCast by class name). An IOHIDDevice gets the
@@ -12,16 +12,16 @@
 //     and BrightnessMilliNits.
 //   * DisplayCreateWithID also reads backlight-calibration-parameters, the panel's luminance range in nits (16.16 fixed
 //     point; publishCalibration below). Without it the display's physical range is the slider's 0..1, read as nits:
-//     every nits value CoreBrightness computes is clamped to 1 (r7r: "Lmax=1.000000 Lmin=0.000000", "nits physical =
-//     1.000000"), and AABC::_UpdateEsensorTrusted, which bounds the lux it acts on by the lux at which its curve reaches
-//     the panel's maximum, held auto-brightness at 7.85 lux while the sensor read 30-70 (320 of 372 samples).
+//     every nits value CoreBrightness computes is clamped to 1 ("Lmax=1.000000 Lmin=0.000000"), and
+//     AABC::_UpdateEsensorTrusted, which bounds the lux it acts on by the lux at which its curve reaches the panel's
+//     maximum, caps it at about 8 lux.
 //   * Without that range it writes with IORegistryEntrySetCFProperties(service, dict): "brightness" = ceil(fraction *
 //     (max - min)) + min; "FadePeriod" = seconds * 65536 to ramp over; sometimes "backlight-level" (not used here). With
 //     it, every change (the user's slider and auto-brightness) comes as "brightness-nits", nits * 65536, which
 //     CoreBrightness steps itself (_SetBLDriverNitsValue from ___DisplaySetLogicalBrightnessInternal), and sometimes
-//     "brightness-nits-cap". r7s dropped brightness-nits: auto-brightness ramped from 38 to 138 nits and the panel stayed
-//     at the level it was given at start (525). Both are taken now (SwitchBacklightMath.h). A failed write makes it drop
-//     that update. It also sets IOMFBBrightnessLevel on the framebuffer unless the backlight carries ignore-IOMFB.
+//     "brightness-nits-cap". Without brightness-nits the panel stays at its start level while auto-brightness ramps, so
+//     both are taken (SwitchBacklightMath.h). A failed write makes it drop that update. It also sets
+//     IOMFBBrightnessLevel on the framebuffer unless the backlight carries ignore-IOMFB.
 //   * DisplayCreateWithID returns no display in five places, and CoreBrightness then has no display module at all
 //     ("failed to create DisplayRef", "Modules not ready" for every property after it): no CF object (0x1b62acdf4), no
 //     IOObjectRetain of the service (0x1b62acf04), no IODisplayParameters (0x1b62acf74), no backlight-marketing-table
@@ -32,9 +32,9 @@
 //     (0x1b62b2214), near the end of DisplayCreateWithID, and nowhere else, while Core Animation's render server opens a
 //     libEDR client whenever a service has backlight-control (CADeviceHasBacklight's IOPropertyMatch: CA::EDRClient::client
 //     calls EDRCreateClientForDisplayWithTimeoutAndCallback only then, 0x1896ba85c..0x1896ba8d0) and waits up to 5 s on
-//     each message to that port. r7y/r7z published new-backlight-architecture without the table: no display, no server,
-//     launchd kept the port, and the render server composited one frame per 5 s ("(ipc/send) timed out" every 5 s;
-//     SpringBoard hung, touch looked dead).
+//     each message to that port. With new-backlight-architecture but no table there is no display and no server while
+//     launchd holds the port, so the render server composites one frame per 5 s ("(ipc/send) timed out"; SpringBoard
+//     hangs, touch looks dead).
 // The original class lives in com.apple.driver.AppleARMPlatform, which is prelinked here (a dependency of
 // IOMobileGraphicsFamily), so the name cannot be defined again (duplicate classes panic in OSMetaClass::postModLoad).
 // SwitchBacklight is a plain IOService whose metaclass names the original AppleARMBacklight metaclass as its superclass
@@ -52,9 +52,9 @@
 // scans out, then the display stops the DC (no fetches, no frame-end or vblank interrupts, so the cores sit in WFI); on =
 // the display restarts the DC, then TegraPanel wakes the panel and restores the brightness. The touch controller goes
 // down with the screen and comes back up while the panel wakes (SwitchTouch's display power). The rail Joy-Cons keep
-// running (r15: they used to pause here, so a seated Joy-Con's Home could not wake the console; see
-// ../SwitchSuspend/SwitchWakeSources.h). On by default; boot-arg
-// switch-sleep=0 leaves the render server's requests to the original user client (the panel stays lit when locked).
+// running, so a seated Joy-Con's Home can wake the console (../SwitchSuspend/SwitchWakeSources.h). On by default;
+// boot-arg switch-sleep=0 leaves the render server's requests to the original user client (the panel stays lit when
+// locked).
 //
 // Waking (../SwitchSuspend/SwitchWake.h): every display off and on is one power-journal line with each step's time, and
 // the journal goes to Data after every display off. A wake source with the panel off (power key, a Joy-Con's Home)
@@ -208,7 +208,7 @@ extern "C" bool switch_display_power_enabled(void)
 class SwitchBacklight : public IOService {
     OSDeclareDefaultStructors(SwitchBacklight) IOWorkLoop *loop = nullptr;
     IOTimerEventSource *work = nullptr;
-    IOTimerEventSource *quiet = nullptr;       // quietFired
+    IOTimerEventSource *quiet = nullptr;
     IOTimerEventSource *guardTimer = nullptr;  // the wake guarantee's deadline
     IOLock *requestLock = nullptr;
 
@@ -565,11 +565,9 @@ bool SwitchBacklight::start(IOService *provider)
     // (display+0x20) instead of starting its legacy brightness thread (display+0x24). Every brightness change, its own
     // fades included, then goes through ___DisplaySetLogicalBrightnessInternal as brightness-nits: the fade callback
     // (___DisplayFadeCallback, 0x1b61b424c..0x1b61b4258) takes the legacy path only while display+0x24 is set. Without
-    // it each fade step went to ___DisplaySetLogicalBrightnessLegacy, and r7w's auto-brightness ramped its own brightness
-    // from 12.5 to 400 nits under a flashlight ("End Ramp: L_device = 12.5061 L_current = 399.2494") while the panel
-    // stayed at 64: only its unfaded first step and the slider, which set the logical brightness directly, ever reached
-    // it. The new architecture fails the display without backlight-marketing-table (0x1b62ae660), so the two go
-    // together.
+    // it each fade step goes to ___DisplaySetLogicalBrightnessLegacy and never reaches the panel: only a fade's unfaded
+    // first step and the slider, which set the logical brightness directly, do. The new architecture fails the display
+    // without backlight-marketing-table (0x1b62ae660), so the two go together.
     OSData *table = OSData::withBytes(kMarketingTable, sizeof(kMarketingTable));
     const bool marketing = table && setProperty("backlight-marketing-table", table);
     OSSafeReleaseNULL(table);
