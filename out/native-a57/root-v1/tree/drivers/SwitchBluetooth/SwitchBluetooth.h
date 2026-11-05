@@ -5,8 +5,8 @@
 // only knows Apple's own chips and firmware; see SwitchBluetooth.cpp. Userland then gets the controller as the
 // kernel control "com.apple.uart.bluetooth": a SOCK_STREAM PF_SYSTEM socket carrying raw H4, with TIOCGETA /
 // TIOCSETA as SYSPROTO_CONTROL socket options, the interface BlueTool's "device -D" and bluetoothd's POSIX HCI
-// driver open (BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.bluetooth,3000000, which kern_exec.c gives bluetoothd with
-// switch-bt=1). The rest of the stack, gated by the same boot-arg: the BlueTool stand-in (BlueTool/BlueTool.c) in the
+// driver open (BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000, which kern_exec.c gives bluetoothd with
+// switch-bt=1; H4BC also opens /dev/btwake, made here). The rest of the stack, gated by the same boot-arg: the BlueTool stand-in (BlueTool/BlueTool.c) in the
 // Data overlay answers bluetoothd's boot/init/deepsleep requests, and launchd's disabled list keeps bluetoothd and
 // audiomxd off without it.
 //
@@ -18,7 +18,7 @@
 //                        staged hekate's Joy-Con dump, Horizon's replaces that once Data is mounted, before launchd
 //                        (switch_bluetooth_data_mounted), and the controller gets it at bluetoothd's first connect
 //                        (SwitchBluetooth.cpp, "BD address").
-//   "transport-speed" (u32 3000000) and "transport-encoding" (u32 1, H4) for bluetoothd and BlueTool.
+//   "transport-speed" (u32 3000000) and "transport-encoding" (u32 3, H4BC, as J120) for bluetoothd and BlueTool.
 #ifndef SWITCH_BLUETOOTH_H
 #define SWITCH_BLUETOOTH_H
 

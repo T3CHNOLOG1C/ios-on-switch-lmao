@@ -132,6 +132,8 @@
 #include <sys/termios.h>
 #include <sys/ttycom.h>
 #include <sys/vnode.h>
+#include <sys/conf.h>
+#include <miscfs/devfs/devfs.h>
 #include <string.h>
 #include "SwitchBluetooth.h"
 #include "SwitchBluetoothLinks.h"
@@ -3325,6 +3327,44 @@ void startThread(void *, wait_result_t)
 }
 }
 
+// ---- /dev/btwake ---------------------------------------------------------------------------------------------------
+//
+// bluetoothd's HCI transport is H4BC (BT_HCI_TRANSPORT, set for it by kern_exec.c; J120's ADT transport-encoding 3):
+// H4 framing over the same POSIX driver and kernel control, plus Apple's BT_WAKE line as a device it opens before it
+// sends after an idle spell and closes 200 ms after the last packet (21H461 bluetoothd sub_1000dd9f0 / sub_1000dda74),
+// and a prepare-to-terminate step the plain "H4" transport lacks: its ops table has a NULL there (+0x60), so every
+// stack terminate jumped to address 0 (r8a 11-05 15:19:42: SIGSEGV when Bluetooth was turned off in Settings, then a
+// crash loop, each relaunch terminating the stack again for the saved "off"). Here BT_WAKE stays asserted while the
+// chip is up (sleep mode off, bring-up), so the device's open and close succeed and change nothing; without the node
+// H4BC would log "Unable to turn on BT)_WAKE signal" at every wake. One line at the first open.
+namespace {
+uint32_t gBtwakeOpens;
+
+int btwakeOpen(dev_t, int, int, struct proc *)
+{
+    if (!__atomic_fetch_add(&gBtwakeOpens, 1, __ATOMIC_RELAXED))
+        os_log(OS_LOG_DEFAULT, "SwitchBluetooth: /dev/btwake opened (bluetoothd's H4BC wake; BT_WAKE stays asserted)");
+    return 0;
+}
+
+int btwakeClose(dev_t, int, int, struct proc *)
+{
+    return 0;
+}
+
+const struct cdevsw kBtwake = {btwakeOpen, btwakeClose, eno_rdwrt, eno_rdwrt, eno_ioctl, eno_stop, eno_reset,
+                               nullptr,    eno_select,  eno_mmap,  eno_strat, eno_getc,  eno_putc, 0};
+
+void publishBtwake()
+{
+    const int major = cdevsw_add(-1, &kBtwake);
+    if (major < 0 ||
+        !devfs_make_node(makedev(static_cast<uint32_t>(major), 0), DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666, "btwake"))
+        IOLog("SwitchBluetooth: /dev/btwake not created (major %d); bluetoothd logs a BT_WAKE error at each wake\n",
+              major);
+}
+}  // namespace
+
 extern "C" int switch_bluetooth_start(void)
 {
     uint32_t enabled = 0;
@@ -3332,6 +3372,7 @@ extern "C" int switch_bluetooth_start(void)
     static volatile bool started;
     if (__atomic_exchange_n(&started, true, __ATOMIC_ACQ_REL)) return 0;
     publishAddress();
+    publishBtwake();
     thread_t thread = THREAD_NULL;
     if (kernel_thread_start(&startThread, nullptr, &thread) != KERN_SUCCESS) {
         IOLog("SwitchBluetooth: thread start failed\n");

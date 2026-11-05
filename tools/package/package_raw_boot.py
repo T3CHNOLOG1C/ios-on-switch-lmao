@@ -396,8 +396,10 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
         put(product, key, value)
     put(child(product, 'audio'), 'wireless-splitter', u32(1))   # as UniXNU's 21H461 profile
     # Bluetooth (drivers/SwitchBluetooth, switch-bt=1). ArmDTPlatform publishes every /arm-io child, so this is the
-    # IOService named "bluetooth" bluetoothd looks up (local-mac-address, transport-speed, transport-encoding; 1 = H4,
-    # J120's 3 = H4BC would also open Apple's /dev/btwake). The kernel downloads ioswitch,patchram itself, since
+    # IOService named "bluetooth" bluetoothd looks up (local-mac-address, transport-speed, transport-encoding: J120's 3,
+    # H4BC, which also opens /dev/btwake, SwitchBluetooth's; bluetoothd takes its transport from kern_exec.c's
+    # BT_HCI_TRANSPORT, the same H4BC, as plain H4 has no prepare-to-terminate step and crashed whenever Bluetooth was
+    # turned off). The kernel downloads ioswitch,patchram itself, since
     # BlueTool has no BCM4356A3 firmware, and replaces local-mac-address (and /chosen mac-address-bluetooth0) with the
     # unit's own address from the fuse lot code when it can read it.
     # Only when the boot-arg is in COMMAND_LINE: without the radio, the node would only change what wifid and
@@ -405,7 +407,7 @@ def ipad_adt(data, smp=False, overlay_dirs=()):
     if boot_arg_on('switch-bt'):
         bluetooth = child(child(tree, 'arm-io'), 'bluetooth')
         for key, value in (('device_type', b'bluetooth\0'), ('local-mac-address', bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, 0x02])),
-                           ('transport-speed', u32(3000000)), ('transport-encoding', u32(1))):
+                           ('transport-speed', u32(3000000)), ('transport-encoding', u32(3))):
             put(bluetooth, key, value)
         if BT_PATCH.exists():
             put(bluetooth, 'ioswitch,patchram', BT_PATCH.read_bytes())
