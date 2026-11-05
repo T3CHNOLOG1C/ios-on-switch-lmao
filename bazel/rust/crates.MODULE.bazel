@@ -41,7 +41,7 @@ crate.spec(
 )
 
 # Each crate keeps the -C metadata and -C extra-filename cargo gave it in the release iOS bridge (bazel/rust/
-# rules_rust-own-metadata.patch), so its symbols, the order fat LTO merges the crates' modules in, and with them the
+# rules_rust.patch), so its symbols, the order fat LTO merges the crates' modules in, and with them the
 # release bridge's bytes are cargo's. The values are the Metal bridge's `cargo build --release --target
 # aarch64-apple-ios -v` at 720ef1ce; a crate whose version changes takes rules_rust's own (delete its line). Its sources
 # are named as cargo's vendor directory named them (/ioswitch/external/+gpu+m2v_crates/<name>-<version>/...: panic

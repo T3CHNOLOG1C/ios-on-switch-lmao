@@ -11,12 +11,12 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-# rules_rust 0.75.0 with one change (MODULE.bazel's single_version_override).
+# rules_rust 0.75.0 with our changes (MODULE.bazel's single_version_override).
 exports_files([
     "Cargo.lock",
     "crates.MODULE.bazel",
     "crates.lock.json",
-    "rules_rust-own-metadata.patch",
+    "rules_rust.patch",
 ])
 
 string_flag(

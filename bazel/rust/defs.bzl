@@ -16,7 +16,8 @@ Profiles (//bazel:profile, r17-bazel's one switch):
            m2v crates' BUILD files; the source paths are remapped to the ones cargo's build named).
   debug    the default, for edit-build cycles: every crate its own action, no LTO of any kind (not even rustc's
            thin-local LTO between a crate's codegen units), opt-level 1 (O0's code is too slow and its stack frames too
-           deep for the translator on the device), many codegen units, line tables, debug assertions and overflow checks.
+           deep for the translator on the device), many codegen units, line tables, debug assertions and overflow checks,
+           and our own crates (INCREMENTAL_CRATES) compiled incrementally.
 
 Nothing here is global: the flags reach rules_rust through its own build settings, set by the transition on this
 rule's `crate` only, so other Rust in the build (NVK's NAK, r18-mesa) keeps its own flags.
@@ -92,6 +93,23 @@ _ROOT_FLAGS = {
 }
 _ROOT_FLAGS[("device_mac", "release")] = _ROOT_FLAGS[("device", "release")]
 
+# The debug profile compiles the crates we edit incrementally (rustc's -C incremental; bazel/rust/rules_rust.patch): an
+# edit recompiles what it reaches in that crate and in its dependents, not all of them. The sessions live below the output
+# base (one per configuration and action kind), outside Bazel's caches; the rlibs are declared outputs as ever. The
+# crates.io crates never change and keep the sandbox. 256 codegen units: rustc's own for incremental work (a small unit
+# is reused unless an edit reaches it). Release never compiles incrementally.
+INCREMENTAL_CRATES = [
+    "//third_party/m2v/",
+    "//gpu:bridge",
+    "//drivers/TegraGM20BMetal/corpus/runner:",
+]
+
+_INCREMENTAL_FLAGS = [
+    # Below the output base (the action runs unsandboxed, in the execroot <output base>/execroot/_main).
+    "-Cincremental=${pwd}/../../rust_incremental",
+    "-Ccodegen-units=256",
+]
+
 def _filter(label):
     """A rules_rust per-crate filter for exactly `label`'s crate (its label without the repository's @s)."""
     text = str(label)
@@ -107,7 +125,9 @@ def _rust_transition_impl(settings, attr):
         # Strip nothing whatever the compilation mode (rules_rust strips debug info under -c opt, cargo did not).
         _EXTRA_FLAGS: REMAP_FLAGS + _CRATE_FLAGS[key] + ["-Cstrip=none"],
         _EXTRA_ENV: _DEPLOYMENT_ENV,
-        _PER_CRATE: ["{}@{}".format(_filter(attr.crate), flag) for flag in _ROOT_FLAGS.get(key, [])],
+        _PER_CRATE: ["{}@{}".format(_filter(attr.crate), flag) for flag in _ROOT_FLAGS.get(key, [])] + (
+            ["{}@{}".format(crate, flag) for crate in INCREMENTAL_CRATES for flag in _INCREMENTAL_FLAGS] if settings[_PROFILE] == "debug" else []
+        ),
         # Each crate's LTO form is the flags' above; rules_rust adds none of its own.
         _LTO: "manual",
         # A crate's dependents start on its metadata (.rmeta) while its code is still being generated.
@@ -174,5 +194,5 @@ THIRD_PARTY_LINT_EXCLUDE = [
 ]
 
 def cargo_ids(metadata, extra_filename):
-    """The -C metadata and -C extra-filename cargo gave a crate (bazel/rust/rules_rust-own-metadata.patch)."""
+    """The -C metadata and -C extra-filename cargo gave a crate (bazel/rust/rules_rust.patch)."""
     return ["-Cmetadata=" + metadata, "-Cextra-filename=-" + extra_filename]

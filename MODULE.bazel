@@ -60,12 +60,14 @@ llvm_tools(name = "llvm")
 
 bazel_dep(name = "rules_rust", version = "0.75.0")
 
-# One change to rules_rust (bazel/rust/rules_rust-own-metadata.patch): a crate whose rustc_flags carry its own
-# -Cmetadata keeps that value alone, as its output hash too, so m2v's crates keep cargo's symbol names and NAK's meson's.
+# Two changes to rules_rust (bazel/rust/rules_rust.patch): a crate whose rustc_flags carry its own -Cmetadata keeps that
+# value alone, as its output hash too, so m2v's crates keep cargo's symbol names and NAK's meson's; and a crate given
+# -Cincremental=<base> (bazel/rust/defs.bzl, the debug profile) compiles incrementally, unsandboxed, one session per
+# configuration.
 single_version_override(
     module_name = "rules_rust",
     patch_strip = 1,
-    patches = ["//bazel/rust:rules_rust-own-metadata.patch"],
+    patches = ["//bazel/rust:rules_rust.patch"],
 )
 
 # --- C/C++ toolchains, by target platform (bazel/platforms): the kernel's Apple clang with XNU's recipes ----------

@@ -29,6 +29,11 @@ common --incompatible_strict_action_env
 # Every action runs sandboxed (darwin-sandbox: read-only declared inputs, declared outputs only). No action needs an
 # unsandboxed fallback, so there is none: a new one that tries to read undeclared inputs fails instead of passing.
 build --spawn_strategy=sandboxed
+# One exception, debug only: the crates the debug profile compiles incrementally (bazel/rust/defs.bzl, INCREMENTAL_CRATES)
+# keep rustc's sessions below the output base, so their two Rust actions are tagged no-sandbox and run here unsandboxed;
+# every other Rust action (and every action of release) stays sandboxed.
+build:debug --strategy=Rustc=sandboxed,local
+build:debug --strategy=RustcMetadata=sandboxed,local
 # No network inside actions (repository rules fetch; actions never do).
 build --sandbox_default_allow_network=false
 # Reuse sandbox directory trees between actions: faster sandbox setup, the same isolation.

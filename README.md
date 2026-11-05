@@ -190,7 +190,7 @@ Measured on this Mac (16 cores, shared with other agents, so wall times vary):
 | **Comment added** to `drivers/SwitchButtons/SwitchButtons.cpp` | 2.3 s | `INFO: 2 processes: 1 action cache hit, 1 internal, 1 darwin-sandbox.` |
 | **Code changed** in that driver (a function added) | 11.7 s | `INFO: 6 processes: 1 internal, 5 darwin-sandbox.` |
 | Code change reverted | 0.53 s | `INFO: 6 processes: 5 disk cache hit, 1 internal.` |
-| **One m2v `.rs` edited** (a line in `third_party/m2v/crates/metal2vulkan/src/lower/arith/wide.rs`, debug profile) | 101.6 s, of it 67 s for the Rust (load average 50-90 on 16 cores, `--jobs=4`) | `INFO: 26 processes: 3 internal, 23 darwin-sandbox.` |
+| **One m2v `.rs` edited** (a line in `third_party/m2v/crates/metal2vulkan/src/lower/arith/wide.rs`, debug profile: incremental rustc) | 15.6 s for both bridges; `//:gpu` after them 36 s (the seed 26.5 s) (load average 45-60 on 16 cores, `--config=agent`) | `INFO: 13 processes: 3 internal, 2 darwin-sandbox, 8 local.` |
 | m2v edit reverted | 0.3 s (the bridges) | `INFO: 13 processes: 34 action cache hit, 10 disk cache hit, 3 internal.` |
 | **Fresh output base**, disk cache warm (a new clone, or after `bazel clean --expunge`) | 78.5 s (critical path 2.2 s) | `INFO: 428 processes: 346 disk cache hit, 82 internal.` |
 | **A driver header edited** (a comment in `drivers/TegraGPIO/TegraGPIO.h`) | 24.8 s (critical path 2.6 s) | `INFO: 282 processes: 24 action cache hit, 1 internal, 281 darwin-sandbox.` (every driver object: each declares all the tree's headers) |
@@ -202,7 +202,8 @@ What each scenario shows:
 - **Code changed.** Exactly five actions ran: that object, its archive, the XNU link, the prelink and the package.
   XNU, the other ~300 objects and the GPU bundle were untouched.
 - **m2v `.rs` edited.** That crate (metal2vulkan) and its dependents only (metal2vulkan-runtime, the bridge), each
-  its own rustc action, for the device's bridge and the precompile's host bridge; no LTO in the debug profile. Then the
+  its own rustc action, for the device's bridge and the precompile's host bridge; no LTO in the debug profile, and rustc
+  compiles our crates incrementally there (sessions in `<output base>/rust_incremental`). Then the
   plugin objects (the raw stack key hashes m2v's sources and is compiled in), link, sign, seed, raw pack and bundle.
   The kernel didn't rebuild; only the package step reruns once the bundle's trust cache changes.
 - **Fresh output base.** Nothing executed. The time is server start, analysis and copying 346 outputs out of the disk
