@@ -201,6 +201,99 @@ fn a_hit_refreshes_the_access_time() {
     assert!(accessed > old + Duration::from_secs(24 * 60 * 60));
 }
 
+/// Every file under `root` with its bytes and modification time, in path order.
+fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>, SystemTime)> {
+    let mut found = Vec::new();
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            let metadata = entry.metadata().unwrap();
+            if metadata.is_dir() {
+                dirs.push(path);
+            } else {
+                found.push((
+                    path.clone(),
+                    fs::read(&path).unwrap(),
+                    metadata.modified().unwrap(),
+                ));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A seed beneath the directory: an entry or record the directory lacks is read from it, and the
+/// seed is never written, trimmed or removed from, even where it holds a refused entry or the cap
+/// is passed; a miss in both is written to the directory, whose own entry is then found first.
+#[test]
+fn a_seed_beneath_the_directory_is_read_and_never_changed() {
+    let seed = Scratch::new();
+    let maker = store(seed.path(), BUILD, 1 << 20);
+    let seeded = name(&BUILD, 1);
+    put(&maker, &seeded, 1, b"seeded entry");
+    let refused = name(&BUILD, 3);
+    put(&maker, &refused, 2, b"device two's data");
+    let record = name(&BUILD, 5);
+    maker
+        .write_record(&record, &seal(&identity(5), &data(5, b"seeded record")))
+        .expect("a write");
+    drop(maker);
+    let before = files(seed.path());
+    assert_eq!(before.len(), 3);
+
+    let scratch = Scratch::new();
+    let payload = vec![0x5a; 1000];
+    let capacity = seal(&identity(0), &data(0, &payload)).len() as u64 * 2;
+    let directory = Directory::open(scratch.path().to_path_buf(), BUILD, capacity)
+        .unwrap()
+        .with_seed(Some(seed.path().to_path_buf()));
+    assert_eq!(directory.seed(), Some(seed.path()));
+    let store = Store::new(directory, None);
+
+    assert_eq!(
+        get(&store, &seeded, 1),
+        Lookup::Hit(data(1, b"seeded entry"))
+    );
+    let loaded = store.load_content(&record, |bytes| {
+        open(&identity(5), &bytes).map(|data| bytes[data].to_vec())
+    });
+    assert_eq!(loaded, Lookup::Hit(data(5, b"seeded record")));
+    assert_eq!(store.counters.seed_reads.load(Ordering::Relaxed), 2);
+    assert_eq!(get(&store, &refused, 3), Lookup::Rejected);
+    assert_eq!(store.counters.rejected.load(Ordering::Relaxed), 1);
+    assert!(
+        files(scratch.path()).is_empty(),
+        "a seed's hit writes nothing"
+    );
+
+    // A miss in both is the directory's to fill; its own entry is found before the seed's.
+    let fresh = name(&BUILD, 4);
+    assert_eq!(get(&store, &fresh, 4), Lookup::Absent);
+    put(&store, &fresh, 4, &payload);
+    assert!(store.directory().entry_path(&fresh).is_file());
+    put(&store, &seeded, 1, b"own entry");
+    assert_eq!(get(&store, &seeded, 1), Lookup::Hit(data(1, b"own entry")));
+    assert_eq!(get(&store, &refused, 3), Lookup::Rejected);
+
+    // Past its cap the directory is trimmed; the seed is not.
+    for n in 10..14u32 {
+        put(&store, &name(&BUILD, n), n, &payload);
+    }
+    store.sweep(&AtomicBool::new(false));
+    assert!(store.counters.evictions.load(Ordering::Relaxed) > 0);
+    assert_eq!(files(seed.path()), before);
+
+    // A seed without the layout's directory is none.
+    let empty = Scratch::new();
+    fs::create_dir_all(empty.path()).unwrap();
+    let directory = Directory::open(scratch.path().to_path_buf(), BUILD, capacity)
+        .unwrap()
+        .with_seed(Some(empty.path().to_path_buf()));
+    assert_eq!(directory.seed(), None);
+}
+
 /// Set `path`'s access and modification times to `when`.
 fn set_times(path: &Path, when: SystemTime) {
     let file = fs::File::options().write(true).open(path).unwrap();

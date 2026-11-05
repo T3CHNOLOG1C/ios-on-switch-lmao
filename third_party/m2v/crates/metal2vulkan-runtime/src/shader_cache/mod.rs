@@ -30,6 +30,11 @@
 //!   past the cap and its first failed write are each said once as a warning
 //!   (`metal2vulkan-shader-cache-evicted`, `metal2vulkan-shader-cache-write-failed`) naming the
 //!   directory and its cap.
+//! - **A read-only seed beneath it.** `METAL2VULKAN_SHADER_CACHE_SEED` may name a directory laid
+//!   out as a cache directory (made ahead of time for this build: the same names), shared by
+//!   every process: a lookup the directory misses reads the same name there, at a read's cost and
+//!   no more (no copy, no scan, no access time), and a miss in both compiles and writes the
+//!   directory's own entry as before (`store.rs`).
 //! - **In memory first.** Before the directory, every lookup asks the device's memo
 //!   (`pipeline/memo.rs`), which [`ShaderCacheOptions::memory_capacity`] bounds (256 MiB by
 //!   default). An entry read or written here is kept there, weighed at its encoded length.
@@ -184,6 +189,10 @@ pub struct ShaderCacheStatistics {
     /// for byte: nothing written. With [`driver_saves`](Self::driver_saves) and the two refusals,
     /// one read per making the runtime finished while the process was not exiting.
     pub driver_data_unchanged: u64,
+    /// Entries and records read from the read-only seed beneath the directory
+    /// (`METAL2VULKAN_SHADER_CACHE_SEED`) and accepted; each is also counted where the same read
+    /// from the directory is ([`hits`](Self::hits), [`driver_loads`](Self::driver_loads)).
+    pub seed_reads: u64,
 }
 
 /// What an entry holds, in its name.
@@ -267,14 +276,15 @@ impl CacheSetup {
             Some(directory) => directory.clone(),
             None => default_directory().map_err(Error::ShaderCache)?,
         };
-        let directory =
-            Directory::open(root, this_build(), options.capacity).map_err(|failed| {
+        let directory = Directory::open(root, this_build(), options.capacity)
+            .map_err(|failed| {
                 Error::ShaderCache(ShaderCacheError::new(
                     Some(failed.path),
                     failed.error.kind(),
                     &failed.error.to_string(),
                 ))
-            })?;
+            })?
+            .with_seed(store::seed_from_environment());
         Ok(CacheSetup {
             directory,
             memory_capacity: options.memory_capacity,
@@ -635,6 +645,7 @@ impl ShaderCache {
             driver_data_truncated: read(&counters.driver_data_truncated),
             driver_data_mismatched: read(&counters.driver_data_mismatched),
             driver_data_unchanged: read(&counters.driver_data_unchanged),
+            seed_reads: read(&counters.seed_reads),
         }
     }
 }
