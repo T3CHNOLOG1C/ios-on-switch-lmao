@@ -7974,16 +7974,15 @@ native_ioswitch_system_app_migration(proc_t p, user_addr_t scratch, mount_t data
 
 /* Portrait-native (drivers/NativeMobileDisplay/IOSwitchPortrait.h): iOS is given the Switch's 720x1280 panel as it is and
  * runs landscape with the panel's top on the user's right, which is interface orientation 4 (landscape left, home button
- * on the left) and device orientation 4. With no accelerometer, the orientation comes from two places:
- *  - ADT /chosen display-boot-rotation 270 (scripts/package_raw_boot.py, which also decides the mode): MobileGestalt
- *    DisplayBootRotation, from which SpringBoard starts in orientation 4 (-[SpringBoard _bootOrientation]: 270 -> 4,
- *    90 -> 3) and ProgressUI turns the boot Apple logo.
- *  - SpringBoard's rotation lock, restored at every startup (-[SBOrientationLockManager restoreStateFromPrefs] locks to
- *    SBLastRotationLockedOrientation[iPad] when it is non-zero, and sends backboardd BKSHIDServicesLockOrientation, so
- *    backboardd's device orientation is 4 and CoreMotion's "unknown" is ignored). It is derived from the ADT value, so
- *    the packager's one number turns everything (270 -> 4; its mirror, 90 -> 3). The SpringBoard plist is rewritten
- *    every boot, so a lock turned off in Control Center comes back at the next boot.
- * The orientation to lock to, from this boot's ADT; 0: not portrait-native. */
+ * on the left) and device orientation 4. ADT /chosen display-boot-rotation 270 (scripts/package_raw_boot.py, which also
+ * decides the mode) is MobileGestalt's DisplayBootRotation, from which SpringBoard starts in orientation 4
+ * (-[SpringBoard _bootOrientation]: 270 -> 4, 90 -> 3) and ProgressUI turns the boot Apple logo. From there the device
+ * orientation comes from the console's IMU (drivers/SwitchMotion, the AOP's {0x20, 0x8a} orientation service) and the
+ * interface rotates as on an iPad (r17, the user's choice). Until r17 there was no orientation service, and the managed
+ * SpringBoard preferences locked rotation to this orientation every boot (SBLastRotationLockedOrientation[iPad]); the
+ * rotation lock is SpringBoard's own again (Control Center's, kept in its user plist), and the lock those boots left
+ * there is released once (native_ioswitch_rotation_lock_release).
+ * The boot orientation, from this boot's ADT; 0: not portrait-native. */
 static unsigned int
 native_ioswitch_portrait(void)
 {
@@ -7998,21 +7997,76 @@ native_ioswitch_portrait(void)
 	return rotation == 270 ? 4 : rotation == 90 ? 3 : 0;
 }
 
-/* The SpringBoard prefs body with the rotation lock added before its closing "</dict></plist>\n", in buffer; any other
- * domain, or not portrait-native, as it is. */
-static const char *
-native_ioswitch_portrait_prefs(const char *name, const char *body, char *buffer, size_t size)
+/* The rotation lock earlier builds made (native_ioswitch_portrait), released once: SpringBoard's own
+ * SBLastRotationLockedOrientation[iPad] in its user plist still hold it (SpringBoard saves the lock it restored), and
+ * it restores every lock it finds at startup. Each key is renamed in place to IOSWasRotationLockedOrientation[iPad] (the
+ * same length, so a binary plist's offsets and uniqued values stay as they are): in a binary plist an ASCII string of
+ * 15 bytes or more is 0x5F, the integer object 0x10 <length>, then its bytes; in an XML one, <key>name</key>. Then the
+ * marker, so the user's own lock from Control Center is never touched again. Before cfprefsd runs (launchd's exec).
+ * Failures are logged only; without the marker the next boot tries again. */
+static void
+native_ioswitch_rotation_lock_release(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
-	static const char end[] = "</dict></plist>\n";
-	const size_t length = strlen(body), tail = sizeof(end) - 1;
-	const unsigned int orientation = native_ioswitch_portrait();
-	if (strcmp(name, "com.apple.springboard") || !orientation || length < tail || strcmp(body + length - tail, end)) {
-		return body;
+	static const char plist[] = "/private/var/mobile/Library/Preferences/com.apple.springboard.plist",
+	    marker[] = "/private/var/ioswitch/rotation-lock-released";
+	static const char *const keys[] = {"SBLastRotationLockedOrientationiPad", "SBLastRotationLockedOrientation"};
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	if (!vnode_lookup(marker, 0, &vp, context)) {
+		vnode_put(vp);
+		return;
 	}
-	const int made = snprintf(buffer, size, "%.*s<key>SBLastRotationLockedOrientationiPad</key><integer>%u</integer>"
-	    "<key>SBLastRotationLockedOrientation</key><integer>%u</integer>%s", (int)(length - tail), body, orientation,
-	    orientation, end);
-	return made > 0 && (size_t)made < size ? buffer : body;
+	unsigned int renamed = 0;
+	int length = 0, error = vnode_open(plist, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
+	char *bytes = NULL;
+	if (!error) {
+		struct vnode_attr attributes;
+		VATTR_INIT(&attributes);
+		VATTR_WANTED(&attributes, va_data_size);
+		if (vnode_mount(vp) != data_mount || !vnode_isreg(vp) || VNOP_GETATTR(vp, &attributes, context) ||
+		    !VATTR_IS_SUPPORTED(&attributes, va_data_size) || attributes.va_data_size > 1024 * 1024) {
+			error = EINVAL;
+		} else {
+			length = (int)attributes.va_data_size;
+			bytes = length ? kalloc_data((vm_size_t)length, Z_WAITOK) : NULL;
+			int residual = length;
+			if (length && !bytes) {
+				error = ENOMEM;
+			} else if (length) {
+				error = vn_rdwr(UIO_READ, vp, bytes, length, 0, UIO_SYSSPACE, 0, vfs_context_ucred(context),
+				    &residual, p);
+			}
+			if (!error && residual) error = EIO;
+		}
+		(void)vnode_close(vp, FREAD, context);
+	}
+	for (unsigned int k = 0; !error && bytes && k < sizeof(keys) / sizeof(keys[0]); ++k) {
+		const size_t size = strlen(keys[k]);
+		char binary[48], xml[64];
+		binary[0] = 0x5f, binary[1] = 0x10, binary[2] = (char)size;
+		memcpy(binary + 3, keys[k], size);
+		const int xml_size = snprintf(xml, sizeof(xml), "<key>%s</key>", keys[k]);
+		for (int at = 0; at < length; ++at) {
+			char *name = NULL;
+			if ((size_t)(length - at) >= size + 3 && !memcmp(bytes + at, binary, size + 3)) {
+				name = bytes + at + 3;
+			} else if (at <= length - xml_size && !memcmp(bytes + at, xml, (size_t)xml_size)) {
+				name = bytes + at + 5;
+			}
+			if (!name) continue;
+			memcpy(name, "IOSWas", 6);  /* SBLast... -> IOSWas...: the same length */
+			renamed++;
+		}
+	}
+	if (!error && renamed) {
+		error = native_ioswitch_watchdog_file(p, scratch, plist, bytes, length, data_mount, 501, 501, 0600);
+	}
+	if (bytes) kfree_data(bytes, (vm_size_t)length);
+	if (error == ENOENT) error = 0;  /* no SpringBoard plist yet: nothing was ever locked */
+	if (!error) error = native_ioswitch_mkdir(p, scratch, "/private/var/ioswitch", 0, 0755);
+	if (!error) error = native_ioswitch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	printf("IOSwitch raw boot: rotation lock of earlier builds released once: %u key%s renamed (%d)\n", renamed,
+	    renamed == 1 ? "" : "s", error);
 }
 
 /* MobileGestalt caches its answers (DisplayBootRotation among them) keyed by the OS build alone, so an answer from the
@@ -8195,9 +8249,8 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		    /* Fixed volume buttons. SpringBoard swaps volume up and down by interface orientation
 		     * (SBVolumeButtonEventMapper) for an iPad's top-edge or right-edge buttons. It puts them on the
 		     * top edge here: no iPad without a home button is as small as 720x1280 points, so the screen
-		     * type falls back to the iPad mini 6. In orientation 4 that swap turns Vol- into Vol+. The
-		     * Switch never turns (no accelerometer, rotation locked), so Vol+ (PX6) is always on the user's
-		     * right and raises the volume in every interface orientation, even a portrait an app forces. */
+		     * type falls back to the iPad mini 6. In orientation 4 that swap turns Vol- into Vol+. With it
+		     * off, Vol+ (PX6) raises the volume in every interface orientation the Switch rotates to. */
 		    "<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"), kSetupManaged},
 		{"com.apple.UIKit", IOSW_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
 		    "<string>UICTContentSizeCategoryXXL</string>"), kSetupOnce}, /* the default; the user's Text Size then sticks */
@@ -8229,8 +8282,7 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		error = native_ioswitch_mkdir(p, scratch, directories[i].path, directories[i].owner, directories[i].mode);
 	char path[160] = "/private/var/containers";
 	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
-		static char portrait[1024];  /* once, in launchd's exec */
-		const char *body = native_ioswitch_portrait_prefs(prefs[i].name, prefs[i].body, portrait, sizeof(portrait));
+		const char *body = prefs[i].body;
 		if (prefs[i].kind == kSetupManaged) {
 			snprintf(path, sizeof(path), "/private/var/Managed Preferences/mobile/%s.plist", prefs[i].name);
 			int managed = native_ioswitch_mkdir(p, scratch, "/private/var/Managed Preferences", 0, 0755);
@@ -8252,6 +8304,7 @@ native_ioswitch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	if (error) printf("IOSwitch raw boot: first-boot state failed at %s: %d\n", path, error);
 	else {
 		native_ioswitch_portrait_cache(p, scratch, data_mount);
+		native_ioswitch_rotation_lock_release(p, scratch, data_mount);
 		native_ioswitch_gamut_cache(p, scratch, data_mount);
 		native_ioswitch_als_cache(p, scratch, data_mount);
 		native_ioswitch_portrait_display(p, scratch, data_mount);
@@ -8303,13 +8356,16 @@ static int
 native_ioswitch_watchdog_policy(proc_t p, user_addr_t scratch)
 {
 	const uint64_t policy_started = mach_absolute_time();
-	/* Jobs with no hardware or accounts here; the first three deadlock each other (UniXNU-sheng BootWatchdogPolicy.c
-	 * "lite" set). */
+	/* Jobs with no hardware or accounts here (UniXNU-sheng BootWatchdogPolicy.c "lite" set, which disabled locationd
+	 * with them: there the three deadlocked each other). locationd runs since r17: third-party apps' CoreMotion
+	 * (CMMotionManager accelerometer, gyroscope and device motion) is served by it over XPC from the console IMU's
+	 * HID services (drivers/SwitchMotion), and r8a's bluetoothd already asked for it ("failed lookup:
+	 * com.apple.locationd.registration"). With CommCenter and identityservicesd off, its lookups of them fail at
+	 * once (a disabled job is refused at import), as bluetoothd's do. */
 #define NATIVE_IOSWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	    "<plist version=\"1.0\"><dict>" \
 	    "<key>com.apple.identityservicesd</key><true/>" \
-	    "<key>com.apple.locationd</key><true/>" \
 	    "<key>com.apple.CommCenter</key><true/>"
 	/* Bluetooth needs drivers/SwitchBluetooth, which runs only with boot-arg switch-bt=1 (the BlueTool stand-in in
 	 * the overlay and bluetoothd's transport, native_ioswitch_exec_environment, are gated the same way). Without it
