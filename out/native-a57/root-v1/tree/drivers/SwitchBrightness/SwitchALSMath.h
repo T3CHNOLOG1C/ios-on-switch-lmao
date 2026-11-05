@@ -3,7 +3,13 @@
 // against a port of Linux's.
 //
 // Calibration: switchroot L4T tegra210-nx-sensor.dtsi bh1730fvc@29 (rohm,integration-cycle 38, rohm,lux-multiplier 3600)
-// with the OLED's rohm,opt-win-coeff and rohm,gain-coeff from tegra210b01-fric.dts. Maths: CTCaer/switch-l4t-kernel-4.9
+// with the OLED's rohm,opt-win-coeff and rohm,gain-coeff from tegra210b01-fric.dts (unchanged in switchroot's newest OLED
+// tree, linux-5.0.0-dev and lineage-20 tegra210b01-frig.dts), except row 0's ci: 30300 as hekate bdk/input/als.c's Aula
+// table, not the DT's 7502 (the Icosa table's row-0 ci, copied). Every boundary of both tables is continuous (each row
+// meets the next at its rc: test_als.py), and only 30300 makes row 0 meet row 1 at 231 (2697 vs 2691; 7502 jumps to
+// 7964, 3x). It matters only in low-infrared light (DATA1 < 23% of DATA0, e.g. LED lighting), where 7502 read high.
+// Scale: at the IR ratios r7r saw (about 0.35, row 1) this gives 16.8 times the datasheet's bare-sensor lux, the optical
+// window's loss; Nintendo's Icosa table (hekate's default) gives 16.7 there. Maths: CTCaer/switch-l4t-kernel-4.9
 // drivers/iio/light/bh1730.c (GPL-2.0, Copyright (c) 2021 CTCaer) bh1730_get_lux and bh1730_adjust_gain, re-expressed:
 //   * lux = (cv * DATA0 - ci * DATA1) * 100 ms * multiplier / (gain * integration time us * 1000), one division instead
 //     of Linux's three (its first truncation cost up to 15% below 30 lux); (cv, ci) from the first optical-window row
@@ -11,8 +17,9 @@
 //   * Gain: down when the larger channel passes the gain's fl, up when it falls under its cl, except that a step up is
 //     taken only if the reading stays under the next gain's fl (the DT's 2x cl 1600 is 51200 at 64x, over its fl 50000,
 //     which would flip between the two every sample).
-// hekate bdk/input/als.c has an Aula table too (row 0 ci 30300, multiplier 1410) that its code never selects; the DT is
-// what L4T and Android use on this console. Nothing here corrects for the panel's own light reaching the sensor.
+// hekate's Aula multiplier (1410) is not used: its code never selects it, and the DT's 3600 is what L4T and Android use
+// on this console. Nothing here corrects for the panel's own light reaching the sensor (r7r: the readings did not follow
+// the panel level, 324 to 807 raw, at the same ambient).
 #ifndef SWITCH_ALS_MATH_H
 #define SWITCH_ALS_MATH_H
 #include <stdint.h>
@@ -32,7 +39,7 @@ constexpr GainLimits kGainLimits[kGains] = {{2500, 0}, {1600, 7800}, {10, 50000}
 struct Window {
     uint32_t rc, cv, ci;
 };
-constexpr Window kWindow[] = {{231, 9697, 7502}, {993, 3333, 2778}, {1478, 1621, 1053}, {7500, 81, 10}};
+constexpr Window kWindow[] = {{231, 9697, 30300}, {993, 3333, 2778}, {1478, 1621, 1053}, {7500, 81, 10}};
 
 inline uint32_t lux(uint32_t visible, uint32_t ir, unsigned gain)
 {

@@ -10,6 +10,11 @@
 //   * The module reads IODisplayParameters.brightness {min, max, value} (32-bit integers) and fails without it. Apple's
 //     AppleARMBacklight publishes brightness 0..65536 (value 32768 at start), rawBrightness 0..2047, BrightnessMicroAmps
 //     and BrightnessMilliNits.
+//   * DisplayCreateWithID also reads backlight-calibration-parameters, the panel's luminance range in nits (16.16 fixed
+//     point; publishCalibration below). Without it the display's physical range is the slider's 0..1, read as nits:
+//     every nits value CoreBrightness computes is clamped to 1 (r7r: "Lmax=1.000000 Lmin=0.000000", "nits physical =
+//     1.000000"), and AABC::_UpdateEsensorTrusted, which bounds the lux it acts on by the lux at which its curve reaches
+//     the panel's maximum, held auto-brightness at 7.85 lux while the sensor read 30-70 (320 of 372 samples).
 //   * It writes with IORegistryEntrySetCFProperties(service, dict): "brightness" = ceil(fraction * (max - min)) + min,
 //     fraction being linear luminance relative to maximum; "FadePeriod" = seconds * 65536 to ramp over; sometimes
 //     "backlight-level" (not used here). A failed write makes it drop that update. It also sets IOMFBBrightnessLevel on
@@ -108,6 +113,45 @@ OSDictionary *range(uint32_t max, uint32_t value)
         OSNumber *number = OSNumber::withNumber(entry.value, 32);
         if (dict && number) dict->setObject(entry.key, number);
         OSSafeReleaseNULL(number);
+    }
+    return dict;
+}
+
+// backlight-calibration-parameters (21H461 DisplayCreateWithID, 0x1b62ad1e4..0x1b62ad4e8): nine CFNumbers read as float and
+// divided by 65536, each without a null check (a missing key would crash backboardd in CFNumberGetValue), and an
+// optional tenth. lMaxPanel and lMinPanel become the physical maximum and minimum (_DisplayGetBrightnessMaxPhysical
+// reads display+0x1d0 = lMaxPanel, ...MinPhysical display+0x18c = lMinPanel); the product values are its marketing range.
+// The Switch OLED's luminance has not been measured, so the nits are CoreBrightness's own for an uncalibrated display
+// (its fallback when the dictionary is absent stores 400, 140 and 5 nits before scaling them by the slider table it does
+// not have here). The currents only feed its power model; they are the nits themselves, so every current ratio is the
+// luminance ratio and milliAmps2NitsScaleFactor is left to its default, lMaxPanel.
+constexpr uint32_t kNitsMax = 400, kNitsMid = 140, kNitsMin = 5;
+
+OSDictionary *calibration()
+{
+    const struct {
+        const char *key;
+        uint32_t value;
+    } entries[] = {
+        {"current-for-max-backlight", kNitsMax},
+        {"current-for-mid-backlight", kNitsMid},
+        {"hardware-max-current-limit", kNitsMax},
+        {"lMaxProduct", kNitsMax},
+        {"lMidProduct", kNitsMid},
+        {"lMinProduct", kNitsMin},
+        {"lMaxPanel", kNitsMax},
+        {"lMidPanel", kNitsMid},
+        {"lMinPanel", kNitsMin},
+    };
+    OSDictionary *dict = OSDictionary::withCapacity(sizeof(entries) / sizeof(entries[0]));
+    for (const auto &entry : entries) {
+        OSNumber *number = OSNumber::withNumber((unsigned long long)entry.value << 16, 32);
+        if (!dict || !number || !dict->setObject(entry.key, number)) {
+            OSSafeReleaseNULL(number);
+            OSSafeReleaseNULL(dict);
+            return nullptr;
+        }
+        number->release();
     }
     return dict;
 }
@@ -368,6 +412,13 @@ bool SwitchBacklight::start(IOService *provider)
     uint32_t ignore = 1;
     setProperty("ignore-IOMFB", &ignore, sizeof(ignore));
     publishParameters();
+    // All nine keys or none: a partial dictionary would crash backboardd (calibration()).
+    if (OSDictionary *parameters = calibration()) {
+        setProperty("backlight-calibration-parameters", parameters);
+        parameters->release();
+    } else {
+        IOLog("SwitchBacklight: no memory for backlight-calibration-parameters: auto-brightness stays at 0..1 nits\n");
+    }
     // backboardd sets FadePeriod/brightness properties on this service; its sandbox only allows that on the original
     // class, so our XNU grants it by name (IOUserClient.cpp native_sandbox_grant).
     setProperty("NativeSandboxGrantProcess", "backboardd");

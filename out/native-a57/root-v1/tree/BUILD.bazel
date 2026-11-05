@@ -577,7 +577,10 @@ py_test(
     name = "als_test",
     size = "small",
     srcs = ["drivers/SwitchBrightness/test_als.py"],
-    data = glob(["drivers/SwitchBrightness/**"]) + ["drivers/TegraI2C/TegraI2C.cpp"],
+    data = glob(["drivers/SwitchBrightness/**"]) + [
+        "drivers/SwitchTouch/SwitchHIDDevice.cpp",
+        "drivers/TegraI2C/TegraI2C.cpp",
+    ],
     main = "drivers/SwitchBrightness/test_als.py",
     tags = ["requires-darwin"],
 )

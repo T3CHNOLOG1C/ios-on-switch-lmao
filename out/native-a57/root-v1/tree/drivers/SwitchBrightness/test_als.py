@@ -6,7 +6,9 @@ values in TegraI2C.cpp and SwitchALS.cpp against the references they cite.
    lux multiplier 3600; tegra210b01-fric.dts: opt-win-coeff, gain-coeff), on a grid of both channels at every gain:
    lux never below Linux's and at most 4 above (Linux truncates three times, we once), never a u64 wrap inside a row;
    the gain step equal to Linux's except where Linux would step up into a reading over the next gain's fl, and no
-   step up that the next sample undoes.
+   step up that the next sample undoes. Row 0's ci is hekate's Aula 30300, not the DT's 7502: every row boundary of
+   Nintendo's Icosa table (hekate's default) and of the Aula table with 30300 is continuous, and 7502 is not. The
+   scale against the datasheet's bare sensor (window loss) at r7r's readings, for ours and for the Icosa table.
 2. TegraI2C.cpp's I2C2 row and pad values: Atmosphere i2c_bus_device_map.inc (I2c2 0x7000C400, fast mode, interrupt
    116), pinmux_initial_pad_config_aula.inc (Gen2I2cScl/Sda opt 0x40, mask 0x27F), pinmux_initial_drive_pad_config.inc
    (Gen2I2c 0x0001F000, mask 0x01F1F000) and pinmux_drive_pad_characters.inc (0x09B0, 0x09B4); Linux
@@ -15,6 +17,10 @@ values in TegraI2C.cpp and SwitchALS.cpp against the references they cite.
    (I2C2: RST_DEV_H_SET, CLK_ENB_H_SET, CLK_SOURCE_I2C2 0x198, bit 22, CLK_M / 1 for 400 kHz).
 3. SwitchALS.cpp's BH1730FVC command bytes against the ROHM datasheet (TSZ02201-0M3M0F616050-1-2): COMMAND = 1, TRANSACTION
    00 + register or 11 + special command (software reset 00100), PART_ID at 12h, DATA0 at 14h, TIMING default DAh.
+4. What CoreBrightness reads (21H461 disassembly): the light sensor's personality keys in SwitchHIDDevice.cpp
+   (-[CBALSNode initALSProperties]: Placement, Orientation, the three integration times; IOHIDFamily
+   AppleEmbeddedHIDKeys.h enums) and SwitchBacklight.cpp's backlight-calibration-parameters (DisplayCreateWithID: all
+   nine mandatory keys, 16.16 fixed point, nits in order).
 """
 from pathlib import Path
 import re
@@ -29,7 +35,9 @@ U64 = (1 << 64) - 1
 CYCLES, MULTIPLIER, MAX_LUX = 38, 3600, 100000
 ITIME_US = 2700 * CYCLES
 GAINS = [1, 2, 64, 128]
-WINDOW = [(231, 9697, 7502), (993, 3333, 2778), (1478, 1621, 1053), (7500, 81, 10)]  # tegra210b01-fric.dts
+WINDOW = [(231, 9697, 30300), (993, 3333, 2778), (1478, 1621, 1053), (7500, 81, 10)]  # hekate Aula = fric.dts but ci0
+DT_WINDOW = [(231, 9697, 7502)] + WINDOW[1:]                                           # tegra210b01-fric.dts as is
+ICOSA_WINDOW = [(500, 5002, 7502), (754, 2250, 2000), (1029, 1999, 1667), (1373, 884, 583), (1879, 309, 165)]  # hekate
 GAIN_COEFF = [(2500, 0), (1600, 7800), (10, 50000), (0, 1000)]                      # (cl, fl), tegra210b01-fric.dts
 
 
@@ -60,7 +68,7 @@ def linux_gain(gain, visible, ir):
     return gain
 
 
-values = sorted(set(list(range(0, 64)) + [int(1.07 ** k) for k in range(64, 165)] + [100, 1000, 65534, 65535]))
+values = sorted(set(list(range(0, 64)) + [int(1.07 ** k) for k in range(64, 165)] + [100, 132, 372, 1000, 65534, 65535]))
 harness = r'''
 #include <cstdio>
 #include "SwitchALSMath.h"
@@ -107,10 +115,35 @@ for line in output.splitlines():
         assert next_gain == stepped, (g, v, i, next_gain, stepped)
     rows += 1
 assert rows == 4 * len(values) ** 2
-# Spot value: 64x, DATA0 1000, DATA1 100 (ratio 100 < 231, row 0): (9697000 - 750200) * 100 * 3600 / (64 * 102600 *
-# 1000) = 490.5; Linux's 8946800 * 100 // 6566400 = 136, * 3600 // 1000 = 489.
-assert linux_lux(1000, 100, 2) == 489
-assert '\n2 1000 100 490 ' in '\n' + output
+# Spot value: 64x, DATA0 1000, DATA1 100 (ratio 100 < 231, row 0): (9697000 - 3030000) * 100 * 3600 / (64 * 102600 *
+# 1000) = 365.5; Linux's 6667000 * 100 // 6566400 = 101, * 3600 // 1000 = 363.
+assert linux_lux(1000, 100, 2) == 363
+assert '\n2 1000 100 365 ' in '\n' + output
+
+
+def joins(table):
+    """Each row's line cv - ci * r meets the next row's at the boundary r = rc (per mille), within 0.2% of its cv
+    (the published tables are rounded to integers: the worst join is 1.6 in 1621)."""
+    return [abs((cv - ci * rc / 1000) - (cv2 - ci2 * rc / 1000)) <= 0.002 * cv
+            for (rc, cv, ci), (_, cv2, ci2) in zip(table, table[1:])]
+
+
+assert all(joins(ICOSA_WINDOW)) and all(joins(WINDOW))
+assert joins(DT_WINDOW) == [False, True, True]  # 7964 against 2691 at 231
+
+
+def window_lux(table, d0, d1, gain=2):
+    for rc, cv, ci in table:
+        if 1000 * d1 / d0 < rc:
+            return (cv * d0 - ci * d1) * 100 * MULTIPLIER / (GAINS[gain] * ITIME_US * 1000)
+    return 0
+
+
+# Scale: r7r's uncovered reading, 64x DATA0 372 DATA1 132 (ratio 0.355), against the datasheet's own formula for the bare
+# part (ratio < 0.55: (0.795 DATA0 - 0.859 DATA1) / gain * 102.6 / ITIME ms): the optical window's factor.
+bare = (0.795 * 372 - 0.859 * 132) / 64
+assert 16.6 < window_lux(WINDOW, 372, 132) / bare < 17.0 and 16.6 < window_lux(ICOSA_WINDOW, 372, 132) / bare < 17.0
+assert '\n2 372 132 47 ' in '\n' + output  # r7r logged lux 47 for ch0 372 ch1 132 at 64x
 
 # ---- 2. I2C2 bus and pads -----------------------------------------------------------------------------------------
 i2c = (drivers / 'TegraI2C' / 'TegraI2C.cpp').read_text()
@@ -152,5 +185,26 @@ assert 'RegControl = 0x00, RegTiming = 0x01, RegGain = 0x07, RegId = 0x12, RegDa
 assert 256 - CYCLES == 0xDA                                                  # TIMING default DAh: the 38 cycles
 assert 'tegra_i2c_write(kBus, kSensor, kSoftwareReset, nullptr, 0)' in als  # special command alone
 
+# ---- 4. What CoreBrightness reads -----------------------------------------------------------------------------------
+hid = (drivers / 'SwitchTouch' / 'SwitchHIDDevice.cpp').read_text()
+light = dict((k, int(v)) for k, v in re.findall(r'\{"(Placement|Orientation|ALS\w+IntegrationTime)", (\d+)\}', hid))
+assert light == {'Placement': 1,                                # kIOHIDPlacementTypeTop; 2 (Bottom) is the rear ALS
+                 'Orientation': 8,                              # kIOHIDOrientationTypeSouthWest: portrait bottom left
+                 'ALSFastIntegrationTime': ITIME_US, 'ALSSuperFastIntegrationTime': ITIME_US,
+                 'ALSSlowIntegrationTime': ITIME_US}, light
+assert 'if (&p == &kProfiles[kSwitchHIDLight]) addLightProperties(dict);' in hid
+backlight = (root / 'SwitchBacklight.cpp').read_text()
+found = re.search(r'constexpr uint32_t kNitsMax = (\d+), kNitsMid = (\d+), kNitsMin = (\d+);', backlight).groups()
+nits = dict(zip(('max', 'mid', 'min'), map(int, found)))
+assert nits == {'max': 400, 'mid': 140, 'min': 5}  # CoreBrightness's own fallback for an uncalibrated display
+keys = re.findall(r'\{"([a-zA-Z-]+)", kNits(Max|Mid|Min)\}', backlight)
+assert sorted(k for k, _ in keys) == sorted(['current-for-max-backlight', 'current-for-mid-backlight',
+                                             'hardware-max-current-limit', 'lMaxProduct', 'lMidProduct', 'lMinProduct',
+                                             'lMaxPanel', 'lMidPanel', 'lMinPanel']), keys
+assert dict(keys)['lMaxPanel'] == 'Max' and dict(keys)['lMinPanel'] == 'Min' and dict(keys)['lMidPanel'] == 'Mid'
+assert '(unsigned long long)entry.value << 16, 32' in backlight  # read as float / 65536
+assert nits['max'] << 16 < 1 << 32
+
 print(f'SwitchALS: {rows} lux/gain cases match bh1730.c (worst +{worst} lux); I2C2 row, pinmux 0x40, drive DRVDN 0x1f '
-      f'and BH1730 commands match Atmosphere, L4T, Linux, hekate and the datasheet')
+      f'and BH1730 commands match Atmosphere, L4T, Linux, hekate and the datasheet; window tables continuous; '
+      f'CoreBrightness ALS and backlight calibration keys present')

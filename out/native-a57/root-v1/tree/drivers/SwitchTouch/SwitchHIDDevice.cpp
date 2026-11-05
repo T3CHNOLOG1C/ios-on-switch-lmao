@@ -312,6 +312,37 @@ OSDefineMetaClassAndStructors(SwitchHIDDevice, IOHIDDevice)
 
     namespace
 {
+    // The ambient light sensor's service properties for CoreBrightness (21H461 -[CBALSNode initALSProperties], read with
+    // IOHIDServiceClientCopyProperty from the event service, i.e. this IOHIDEventDriver, which IOKit gives its
+    // personality's keys; IOHIDEventService copies none of these from its provider):
+    //   * Placement 1, kIOHIDPlacementTypeTop (IOHIDFamily AppleEmbeddedHIDKeys.h): the front of the device. CoreBrightness
+    //     takes 2 (Bottom) for its rear ALS (-[CBABModuleiOS addHIDServiceClient:]) and anything else for the front.
+    //   * Orientation 8, kIOHIDOrientationTypeSouthWest: where the sensor sits on the screen iOS is given. The BH1730 is
+    //     behind the top-left of the bezel in handheld (landscape) use; the portrait panel (IOSwitchPortrait.h) shows
+    //     landscape (x, y) at (y, 1279 - x), so the landscape top left is the portrait bottom left. Used only to place
+    //     CBDigitizerFilter's hotspot, which needs the device tree's digitizer-filter-window-type (not set here).
+    //   * ALSFastIntegrationTime, ALSSuperFastIntegrationTime, ALSSlowIntegrationTime: microseconds (its defaults 99000,
+    //     100000, 250000). The BH1730 has one, 102600 (38 cycles of 2.7 us; SwitchALSMath.h), whatever the mode.
+    //   * ALSSensorType is not published: its values are not known (one module compares it to 8); the default is 0.
+    void addLightProperties(OSDictionary * dict)
+    {
+        const struct {
+            const char *key;
+            uint32_t value;
+        } entries[] = {
+            {"Placement", 1},
+            {"Orientation", 8},
+            {"ALSFastIntegrationTime", 102600},
+            {"ALSSuperFastIntegrationTime", 102600},
+            {"ALSSlowIntegrationTime", 102600},
+        };
+        for (const auto &entry : entries) {
+            OSNumber *number = OSNumber::withNumber(entry.value, 32);
+            if (!number || !dict->setObject(entry.key, number)) panic("SwitchHID: no memory for the ALS properties");
+            number->release();
+        }
+    }
+
     // IOHIDEventDriver for one of our devices only: IOHIDFamily's MatchPropertyTable compares VendorID, ProductID and the
     // DeviceUsagePairs against the device.
     OSDictionary *personality(const Profile &p)
@@ -337,6 +368,7 @@ OSDefineMetaClassAndStructors(SwitchHIDDevice, IOHIDDevice)
             dict->setObject("VendorID", vendor);
             dict->setObject("ProductID", product);
             dict->setObject("DeviceUsagePairs", pairs);
+            if (&p == &kProfiles[kSwitchHIDLight]) addLightProperties(dict);
         }
         OSSafeReleaseNULL(pair);
         OSSafeReleaseNULL(pairs);
