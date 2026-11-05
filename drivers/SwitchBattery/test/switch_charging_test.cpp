@@ -1,8 +1,7 @@
-// Host test of the charging path (test_switch_charging.py compiles and runs this): the real
-// drivers/SwitchBattery/SwitchBattery.cpp and drivers/SwitchUSB/SwitchPD.cpp, each its own translation unit over
-// tests/switch_charging_stubs.h, behind register-level models of the three I2C1 chips; plus the pure policy
-// (drivers/SwitchBattery/SwitchChargePolicy.h) checked directly. One scenario per process (the drivers keep globals):
-// `switch-charging <scenario>`; `policy` runs the policy checks.
+// Host test of the charging path: the real drivers/SwitchBattery/SwitchBattery.cpp and drivers/SwitchUSB/SwitchPD.cpp,
+// each its own translation unit over switch_charging_stubs.h (BUILD.bazel), behind register-level models of the three
+// I2C1 chips; plus the pure policy (drivers/SwitchBattery/SwitchChargePolicy.h) checked directly. One scenario per
+// process (the drivers keep globals): each TEST runs its scenario in a fresh process; Policy runs the policy checks.
 //   BQ24193: TI SLUSBG7A reset values (REG00 30, 01 1b, 02 60, 03 11, 04 b2, 05 9a, 06 03, 07 4b, 0a 2f), default mode
 //            after reset (REG09 bit 7), host mode from the first write, the I2C watchdog (REG05, kicked by REG01 bit
 //            6) resetting every register when it expires, input current detection on plug-in (8.3.1.3), REG09's
@@ -21,29 +20,37 @@
 #include <cinttypes>
 #include <functional>
 #include <typeinfo>
-#include "../drivers/SwitchBattery/SwitchBattery.h"
-#include "../drivers/SwitchBattery/SwitchChargePolicy.h"
-#include "../drivers/SwitchSuspend/SwitchWakeSources.h"
-#include "../drivers/SwitchUSB/SwitchPD.h"
-#include "../drivers/TegraGPIO/TegraGPIO.h"
-#include "../drivers/TegraI2C/TegraI2C.h"
+#include <gtest/gtest.h>
+#include "bazel/testing/fresh_process.h"
+#include "../SwitchBattery.h"
+#include "../SwitchChargePolicy.h"
+#include "../../SwitchSuspend/SwitchWakeSources.h"
+#include "../../SwitchUSB/SwitchPD.h"
+#include "../../TegraGPIO/TegraGPIO.h"
+#include "../../TegraI2C/TegraI2C.h"
 
 extern "C" int switch_battery_start(void);
 extern "C" int switch_battery_temperature(int *milli_c, unsigned long long *at);
 static unsigned gSensorNotes = 0;
-extern "C" void switch_sensors_note(void) { ++gSensorNotes; }  // r15-thermal's SwitchSensors (SwitchPower.h)
-static std::vector<unsigned> gWakeEvents;
-extern "C" void switch_wake_event(unsigned source) { gWakeEvents.push_back(source); }  // r15-sleep's SwitchWake.h
-
-static unsigned gChecks = 0, gFailures = 0;
-static void check(bool ok, const std::string &what)
+extern "C" void switch_sensors_note(void)
 {
-    ++gChecks;
-    if (!ok) {
-        ++gFailures;
-        std::fprintf(stderr, "FAIL: %s\n", what.c_str());
-    }
+    ++gSensorNotes;
+}  // r15-thermal's SwitchSensors (SwitchPower.h)
+static std::vector<unsigned> gWakeEvents;
+extern "C" void switch_wake_event(unsigned source)
+{
+    gWakeEvents.push_back(source);
+}  // r15-sleep's SwitchWake.h
+
+// Every check is a GoogleTest failure at its call site; the count lets a failed scenario dump the logs it ran on.
+static unsigned gFailures = 0;
+static void checkAt(bool ok, const std::string &what, const char *file, int line)
+{
+    if (ok) return;
+    ++gFailures;
+    ADD_FAILURE_AT(file, line) << what;
 }
+#define check(ok, what) checkAt((ok), (what), __FILE__, __LINE__)
 static std::string hex(unsigned v)
 {
     char text[16];
@@ -69,14 +76,14 @@ struct Gauge {
     bool line = true, edge = false;  // ALRT (high = released), a falling edge not yet delivered
     Gauge()
     {
-        reg[0x21] = 0x00ac;          // DevName
-        reg[0x00] = 0x0002;          // Status: POR
-        reg[0x1d] = 0x2210;          // Config
-        reg[0x01] = 0xff00;          // VAlrtTh
-        reg[0x02] = 0x7f80;          // TAlrtTh
-        reg[0x03] = 0xff00;          // SAlrtTh
-        reg[0x05] = 2586 * 2;        // RepCap 2586 mAh
-        reg[0x06] = 60 << 8;         // RepSOC 60 %
+        reg[0x21] = 0x00ac;    // DevName
+        reg[0x00] = 0x0002;    // Status: POR
+        reg[0x1d] = 0x2210;    // Config
+        reg[0x01] = 0xff00;    // VAlrtTh
+        reg[0x02] = 0x7f80;    // TAlrtTh
+        reg[0x03] = 0xff00;    // SAlrtTh
+        reg[0x05] = 2586 * 2;  // RepCap 2586 mAh
+        reg[0x06] = 60 << 8;   // RepSOC 60 %
         reg[0x09] = (uint16_t)((3900 * 1000 / 625) << 3);
         reg[0x0a] = (uint16_t)(1800 * 100000 / 15625);  // Current 1800 mA
         reg[0x0b] = reg[0x0a];
@@ -190,7 +197,8 @@ struct Charger {
         if (r == 5 && refuseReg05) return 0;
         if (r == 0 && (v & 7) > (reg[0] & 7)) {
             ++iinlimRaises;
-            check(charge::bq::decodeInputLimit(v) <= 2000, "IINLIM raised to " + std::to_string(charge::bq::decodeInputLimit(v)));
+            check(charge::bq::decodeInputLimit(v) <= 2000,
+                  "IINLIM raised to " + std::to_string(charge::bq::decodeInputLimit(v)));
         }
         reg[r] = r == 1 ? (uint8_t)(v & 0x3f) : v;
         if (r == 2) check(charge::bq::decodeChargeCurrent(v) <= 2048, "ICHG " + hex(v));
@@ -245,7 +253,10 @@ struct PdChip {
             for (int i = 0; i < 4; ++i) buf[1 + i] = (uint8_t)(v >> (8 * i));
         };
         switch (r) {
-        case 0x02: put16(alert); alert = 0; break;
+        case 0x02:
+            put16(alert);
+            alert = 0;
+            break;
         case 0x03: put16(status1); break;
         case 0x04: put16(status2); break;
         case 0x06: put16(config1); break;
@@ -316,8 +327,14 @@ static PdChip gPd;
 static std::map<unsigned, IOService *> gNubs;
 static std::map<unsigned, int> gOutputs;
 
-extern "C" int tegra_i2c_init(unsigned) { return 0; }
-extern "C" int tegra_i2c_transfer(unsigned, uint8_t, const void *, size_t, void *, size_t) { return TEGRA_I2C_EINVAL; }
+extern "C" int tegra_i2c_init(unsigned)
+{
+    return 0;
+}
+extern "C" int tegra_i2c_transfer(unsigned, uint8_t, const void *, size_t, void *, size_t)
+{
+    return TEGRA_I2C_EINVAL;
+}
 extern "C" int tegra_i2c_read(unsigned bus, uint8_t addr, uint8_t reg, void *buf, size_t len)
 {
     check(bus == 1, "I2C bus " + std::to_string(bus));
@@ -357,7 +374,10 @@ extern "C" IOService *tegra_gpio_interrupt_nub(unsigned gpio, unsigned)
     if (!gNubs[gpio]) gNubs[gpio] = new IOService;
     return gNubs[gpio];
 }
-extern "C" void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size) { std::snprintf(buffer, size, "GPIO %u", gpio); }
+extern "C" void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size)
+{
+    std::snprintf(buffer, size, "GPIO %u", gpio);
+}
 static bool pending(unsigned gpio)
 {
     return gpio == TEGRA_GPIO_PK4 ? gPd.alert != 0 : gpio == TEGRA_GPIO_PZ0 ? gCharger.intPending : gGauge.edge;
@@ -440,18 +460,23 @@ const uint32_t kNintendo5V = PdChip::fixed(5000, 1500), kNintendo15V = PdChip::f
 static void bootWithNintendoCharger(unsigned detectMA = 500)
 {
     gCharger.plug(detectMA, 2);
-    gCharger.intPending = false;  // before boot
+    gCharger.intPending = false;                  // before boot
     gPd.sink({kNintendo5V, kNintendo15V}, 0, 0);  // the controller's own contract: 5 V
     if (switch_battery_start()) check(false, "switch_battery_start");
     advance(10);
 }
-static unsigned iinlim() { return charge::bq::decodeInputLimit(gCharger.reg[0]); }
+static unsigned iinlim()
+{
+    return charge::bq::decodeInputLimit(gCharger.reg[0]);
+}
 
 // --- Scenarios --------------------------------------------------------------------------------------------------------
 static void nintendoBoot()
 {
     bootWithNintendoCharger();
-    check(logHas("BQ24193 as found: REG00-09 32 1b 60 11 b2 9a 03 4b a4 80/80: input limit 500 mA") && logHas("default mode"), "as-found line");
+    check(logHas("BQ24193 as found: REG00-09 32 1b 60 11 b2 9a 03 4b a4 80/80: input limit 500 mA") &&
+              logHas("default mode"),
+          "as-found line");
     check(logHas("charger set: VINDPM 4360 mV, ICHG 2048 mA, VREG 4208 mV, pre-charge/termination 128/128 mA, "
                  "watchdog off, safety timer off, battery 30.00 C (normal)"),
           "setup line");
@@ -461,7 +486,8 @@ static void nintendoBoot()
           "REG02-06 and VINDPM");
     check((gCharger.reg[1] & 0x3e) == 0x10, "REG01 charge, SYS_MIN 3000 mV: " + hex(gCharger.reg[1]));
     check(gPd.commands.size() == 2 && gPd.commands[0] == "0707" && gPd.commands[1] == "0505", "SEND_RDO, PS_RDY");
-    check(gPd.curRdo == (2u << 28 | 3u << 24 | 120u << 10 | 260u), "RDO: PDO 2, 1.2 A op, 2.6 A max, USB comms, no suspend");
+    check(gPd.curRdo == (2u << 28 | 3u << 24 | 120u << 10 | 260u),
+          "RDO: PDO 2, 1.2 A op, 2.6 A max, USB comms, no suspend");
     check(!logHas("SwitchPD: contract"), "not published before 2 s");
     check(iinlim() == 500, "input limit as detected until the contract is published");
     const size_t mark = gLog.size();
@@ -469,17 +495,19 @@ static void nintendoBoot()
     check(logHas("IOLog: SwitchPD: contract 15 V 1.2 A (5 V 1.5 A, *15 V 2.6 A)", mark), "contract line");
     check(iinlim() == 1200, "input limit 1200 mA: " + std::to_string(iinlim()));
     check(gDelayedUS >= 1000, "raised in steps 1 ms apart");
-    check(logHas("IOLog: SwitchBattery: input limit 1200 mA (was 500 mA): USB-PD contract 15000 mV; read back REG00 0x34 "
-                 "(IINLIM 1200 mA, VINDPM 4360 mV) REG02 0x60 (ICHG 2048 mA)",
-                 mark),
-          "input limit line with the read-back");
+    check(
+        logHas("IOLog: SwitchBattery: input limit 1200 mA (was 500 mA): USB-PD contract 15000 mV; read back REG00 0x34 "
+               "(IINLIM 1200 mA, VINDPM 4360 mV) REG02 0x60 (ICHG 2048 mA)",
+               mark),
+        "input limit line with the read-back");
     check(logHas("os_log: SwitchBattery: stats: in USB-PD 15000 mV, limit 1200 mA | charge 1800 mA", mark), "stats");
     IOPMPowerSource *ps = battery();
-    check(ps && ps->adapter.numbers["FamilyCode"] == kIOPSFamilyCodeUSBCPD && ps->adapter.numbers["AdapterVoltage"] == 15000 &&
-              ps->adapter.numbers["Current"] == 1200 && ps->adapter.numbers["Watts"] == 18,
+    check(ps && ps->adapter.numbers["FamilyCode"] == kIOPSFamilyCodeUSBCPD &&
+              ps->adapter.numbers["AdapterVoltage"] == 15000 && ps->adapter.numbers["Current"] == 1200 &&
+              ps->adapter.numbers["Watts"] == 18,
           "adapter details 15 V 1.2 A 18 W");
-    check(gGauge.reg[0x02] == (31u << 8 | 29u), "temperature window [29, 31] (1 C around, within [17, 51]): " +
-                                                     hex(gGauge.reg[0x02]));
+    check(gGauge.reg[0x02] == (31u << 8 | 29u),
+          "temperature window [29, 31] (1 C around, within [17, 51]): " + hex(gGauge.reg[0x02]));
     int milliC = 0;
     unsigned long long at = 0;
     check(switch_battery_temperature(&milliC, &at) == 1 && milliC == 30000 && at && gSensorNotes == 1,
@@ -538,7 +566,8 @@ static void jeita()
     advance(300);
     check(switch_battery_set_otg_boost(true, false) == 0 && ((gCharger.reg[1] >> 4) & 3) == 2 && (gCharger.reg[1] & 1),
           "boost on: OTG, 1.3 A");
-    check(switch_battery_set_otg_boost(false, false) == 0 && ((gCharger.reg[1] >> 4) & 3) == 0, "boost off while hot: off");
+    check(switch_battery_set_otg_boost(false, false) == 0 && ((gCharger.reg[1] >> 4) & 3) == 0,
+          "boost off while hot: off");
 }
 
 static void hotplug()
@@ -726,7 +755,7 @@ static void notTaken()
 
 static void linuxLeft()
 {
-    gCharger.reg[5] = 0x02;  // switchroot's bq2419x_charger_init: termination off, watchdog off, safety timer off
+    gCharger.reg[5] = 0x02;   // switchroot's bq2419x_charger_init: termination off, watchdog off, safety timer off
     gCharger.reg[7] |= 0x10;  // and JEITA_VSET
     gCharger.defaultMode = false;
     gCharger.latched = 0;
@@ -740,7 +769,8 @@ static void badTemp()
 {
     gGauge.reg[0x08] = 0;
     bootWithNintendoCharger();
-    check(logHas("battery temperature 0.00 C (TEMP 0x0000) is not plausible: charger left as found, read only"), "line");
+    check(logHas("battery temperature 0.00 C (TEMP 0x0000) is not plausible: charger left as found, read only"),
+          "line");
     check(gCharger.writes == 0, "no charger writes: " + std::to_string(gCharger.writes));
     advance(5000);
     check(gCharger.writes == 0 && iinlim() == 500, "read only afterwards");
@@ -762,7 +792,10 @@ static IOReturn setProperty(const char *key, unsigned value)
     n->release();
     return r;
 }
-static unsigned chgConfig() { return (gCharger.reg[1] >> 4) & 3; }
+static unsigned chgConfig()
+{
+    return (gCharger.reg[1] >> 4) & 3;
+}
 
 static void iosRequests()
 {
@@ -837,8 +870,8 @@ static void temperatureHoldPublished()
     advance(300);
     IOPMPowerSource *ps = battery();
     check(chgConfig() == 0 && !ps->charging && ps->external, "hot: on AC, not charging");
-    check((ps->ps["NotChargingReason"] & charge::kTlcMask) && (ps->dicts["ChargerData"].numbers["NotChargingReason"] &
-                                                                charge::kTlcMask),
+    check((ps->ps["NotChargingReason"] & charge::kTlcMask) &&
+              (ps->dicts["ChargerData"].numbers["NotChargingReason"] & charge::kTlcMask),
           "TLC: NotChargingReason in PowerUI's 0x11e mask (Charging On Hold: iPad Temperature)");
     check((ps->ps["NotChargingReason"] & 0x180) != 0x100, "not PowerLog's penalty box");
     // An OBC hold on top: both shown; cooling down leaves only OBC.
@@ -952,11 +985,14 @@ static void policy()
 {
     using namespace charge;
     // Encodings: Atmosphere's static_asserts and the datasheet's reset values.
-    for (unsigned ma : {512u, 576u, 768u, 2048u}) check(bq::decodeChargeCurrent(bq::encodeChargeCurrent(ma)) == ma, "ICHG " + std::to_string(ma));
+    for (unsigned ma : {512u, 576u, 768u, 2048u})
+        check(bq::decodeChargeCurrent(bq::encodeChargeCurrent(ma)) == ma, "ICHG " + std::to_string(ma));
     check(bq::decodeChargeCurrent(bq::encodeChargeCurrent(4544)) == 2048, "ICHG capped at 2048");
-    for (unsigned mv : {3504u, 3520u, 3952u, 4208u}) check(bq::decodeChargeVoltage(bq::encodeChargeVoltage(mv)) == mv, "VREG " + std::to_string(mv));
+    for (unsigned mv : {3504u, 3520u, 3952u, 4208u})
+        check(bq::decodeChargeVoltage(bq::encodeChargeVoltage(mv)) == mv, "VREG " + std::to_string(mv));
     check(bq::decodeChargeVoltage(bq::encodeChargeVoltage(4400)) == 4208, "VREG capped at 4208");
-    for (unsigned i = 0; i < 8; ++i) check(bq::decodeInputLimit(bq::encodeInputLimit(kInputSteps[i])) == kInputSteps[i], "IINLIM step");
+    for (unsigned i = 0; i < 8; ++i)
+        check(bq::decodeInputLimit(bq::encodeInputLimit(kInputSteps[i])) == kInputSteps[i], "IINLIM step");
     check(bq::encodeInputLimit(0) == 0 && bq::encodeInputLimit(149) == 0 && bq::encodeInputLimit(151) == 1 &&
               bq::encodeInputLimit(9999) == 7 && bq::encodeInputLimit(1199) == 3,
           "IINLIM rounds down");
@@ -965,7 +1001,8 @@ static void policy()
     check(bq::watchdogSeconds(0x9a) == 40 && bq::watchdogSeconds(0xaa) == 80 && bq::watchdogSeconds(0xba) == 160 &&
               bq::watchdogSeconds(0x8a) == 0,
           "watchdog decode");
-    check(bq::encodePreChargeTermination(128, 128) == 0x00 && bq::encodePreChargeTermination(256, 256) == 0x11, "REG03");
+    check(bq::encodePreChargeTermination(128, 128) == 0x00 && bq::encodePreChargeTermination(256, 256) == 0x11,
+          "REG03");
     check(bq::encodeSystemMinimum(3000) == 0x00 && bq::encodeSystemMinimum(3500) == 0x0a, "SYS_MIN");
 
     // PDO choice (bm92t_check_pdo) and the input limit (bm92t_calculate_current_limit, DTB caps).
@@ -989,7 +1026,11 @@ static void policy()
         {"MacBook port 5 V 1.5 A (r8a)", {F(5000, 1500)}, 1, 5000, 1500},
         {"over 3 A", {F(5000, 3000), F(15000, 5000)}, 1, 5000, 2000},
         {"odd voltage", {F(5000, 3000), F(14800, 3000)}, 1, 5000, 2000},
-        {"variable and PPS only beyond 5 V", {F(5000, 3000), (2u << 30) | F(15000, 3000), (3u << 30) | 0x1234}, 1, 5000, 2000},
+        {"variable and PPS only beyond 5 V",
+         {F(5000, 3000), (2u << 30) | F(15000, 3000), (3u << 30) | 0x1234},
+         1,
+         5000,
+         2000},
         {"no PDOs", {}, 0, 0, 0},
     };
     for (const Case &c : cases) {
@@ -1070,36 +1111,100 @@ static void policy()
     check(chargerSetting(Zone::Cool).reg02 == 0x10 && chargerSetting(Zone::Hot).reg02 == 0x00, "zone ICHG");
 }
 
-int main(int argc, char **argv)
+// --- One process per scenario (the drivers keep globals) -------------------------------------------------------------
+static void run(void (*scenario)())
 {
-    gCharger.gauge = &gGauge;
-    const std::string scenario = argc > 1 ? argv[1] : "";
-    static const std::map<std::string, std::function<void()>> kScenarios = {
-        {"policy", policy},         {"nintendo-boot", nintendoBoot}, {"jeita", jeita},
-        {"hotplug", hotplug},       {"refused", refused},            {"silent", silent},
-        {"rebalance", rebalance},   {"ours-already", oursAlready},   {"settings-lost", settingsLost},
-        {"not-taken", notTaken},    {"otg-left-on", otgLeftOn},      {"linux-left", linuxLeft},
-        {"bad-temp", badTemp},      {"lost-while-hot", lostWhileHot},    {"ios-requests", iosRequests},
-        {"temperature-hold", temperatureHoldPublished},                  {"power-in-wake", powerInWake},
-        {"sleep-windows", sleepWindows},                                 {"role-swap", roleSwap},
-        {"mac-port", macPort},
-    };
-    auto it = kScenarios.find(scenario);
-    if (it == kScenarios.end()) {
-        std::fprintf(stderr, "unknown scenario '%s'\n", scenario.c_str());
-        return 2;
-    }
-    try {
-        it->second();
-    } catch (const Panic &p) {
-        check(false, std::string("panic: ") + p.what());
-    }
-    if (gFailures) {
-        for (const auto &line : gLog) std::fprintf(stderr, "  %s\n", line.c_str());
-        for (const auto &op : gCharger.ops) std::fprintf(stderr, "  BQ24193 %s\n", op.c_str());
-        std::fprintf(stderr, "%u of %u checks failed in %s\n", gFailures, gChecks, scenario.c_str());
-        return 1;
-    }
-    std::printf("PASS: switch charging %s (%u checks)\n", scenario.c_str(), gChecks);
-    return 0;
+    ioswitch::test::ExpectPassesInFreshProcess([scenario] {
+        gCharger.gauge = &gGauge;
+        try {
+            scenario();
+        } catch (const Panic &p) {
+            check(false, std::string("panic: ") + p.what());
+        }
+        if (gFailures) {
+            for (const auto &line : gLog) std::fprintf(stderr, "  %s\n", line.c_str());
+            for (const auto &op : gCharger.ops) std::fprintf(stderr, "  BQ24193 %s\n", op.c_str());
+        }
+    });
+}
+
+TEST(SwitchCharging, Policy)
+{
+    run(policy);
+}
+TEST(SwitchCharging, NintendoBoot)
+{
+    run(nintendoBoot);
+}
+TEST(SwitchCharging, Jeita)
+{
+    run(jeita);
+}
+TEST(SwitchCharging, Hotplug)
+{
+    run(hotplug);
+}
+TEST(SwitchCharging, Refused)
+{
+    run(refused);
+}
+TEST(SwitchCharging, Silent)
+{
+    run(silent);
+}
+TEST(SwitchCharging, Rebalance)
+{
+    run(rebalance);
+}
+TEST(SwitchCharging, OursAlready)
+{
+    run(oursAlready);
+}
+TEST(SwitchCharging, SettingsLost)
+{
+    run(settingsLost);
+}
+TEST(SwitchCharging, NotTaken)
+{
+    run(notTaken);
+}
+TEST(SwitchCharging, OtgLeftOn)
+{
+    run(otgLeftOn);
+}
+TEST(SwitchCharging, LinuxLeft)
+{
+    run(linuxLeft);
+}
+TEST(SwitchCharging, BadTemp)
+{
+    run(badTemp);
+}
+TEST(SwitchCharging, LostWhileHot)
+{
+    run(lostWhileHot);
+}
+TEST(SwitchCharging, IosRequests)
+{
+    run(iosRequests);
+}
+TEST(SwitchCharging, TemperatureHold)
+{
+    run(temperatureHoldPublished);
+}
+TEST(SwitchCharging, PowerInWake)
+{
+    run(powerInWake);
+}
+TEST(SwitchCharging, SleepWindows)
+{
+    run(sleepWindows);
+}
+TEST(SwitchCharging, RoleSwap)
+{
+    run(roleSwap);
+}
+TEST(SwitchCharging, MacPort)
+{
+    run(macPort);
 }

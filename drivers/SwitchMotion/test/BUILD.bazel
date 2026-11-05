@@ -1,0 +1,61 @@
+# drivers/SwitchMotion on the host: the real driver, included in switch_motion_test.cpp and compiled against
+# switch_motion_stubs.h, over register-level IMU models (ICM-42607-P/ICM-42607, ICM-40607, LSM6DS3H): exact register
+# traffic for identify, reset, set-up, rate changes, sleep and wake; the sample path's decode, mount matrix, device
+# frame and scale; the off-with-one-line and lost-interrupt-panic paths; FIFO batching (watermark from the batch
+# interval, one status/count burst and whole-record data bursts per drain, per-sample times) and its fall-backs; the
+# orientation detector. Plus guards on what the models cannot see (switch_motion_source_test).
+#
+#   bazel test //drivers/SwitchMotion/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = [
+        "IOKit/IOInterruptEventSource.h",
+        "IOKit/IOLib.h",
+        "IOKit/IOReturn.h",
+        "IOKit/IOService.h",
+        "IOKit/IOTimerEventSource.h",
+        "IOKit/IOWorkLoop.h",
+        "os/log.h",
+    ],
+    stubs = "switch_motion_stubs.h",
+)
+
+# The headers SwitchMotion.cpp includes.
+host_library(
+    name = "headers",
+    hdrs = [
+        "//drivers/ArmGIC:IOSwitchInterrupts.h",
+        "//drivers/NativeMobileDisplay:IOSwitchPortrait.h",
+        "//drivers/SwitchMotion:SwitchMotion.h",
+        "//drivers/SwitchTouch:SwitchHID.h",
+        "//drivers/TegraGPIO:TegraGPIO.h",
+        "//drivers/TegraSPI:TegraSPI.h",
+    ],
+)
+
+host_test(
+    name = "switch_motion_test",
+    srcs = ["switch_motion_test.cpp"],
+    # The driver is #included by the test (one translation unit: the models reach its internals).
+    additional_compiler_inputs = ["//drivers/SwitchMotion:SwitchMotion.cpp"],
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":headers",
+        ":kernel",
+    ],
+)
+
+host_test(
+    name = "switch_motion_source_test",
+    srcs = ["switch_motion_source_test.cpp"],
+    data = [
+        "//drivers/SwitchBrightness:SwitchBacklight.cpp",
+        "//drivers/SwitchMotion:SwitchMotion.cpp",
+        "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
+    ],
+)

@@ -1,0 +1,49 @@
+# The Wi-Fi data path on the host (r17-wlanperf): drivers/SwitchWLAN/SwitchWLANMsgbuf.cpp itself, its own translation
+# unit over switch_wlan_msgbuf_stubs.h, against switch_wlan_msgbuf_test.cpp's model of the BCM4356's msgbuf firmware
+# (rings in the DMA area, indices in the chip's RAM, the mailbox interrupt), one process per scenario: a download's
+# every frame intact with its buffer back, one doorbell and about one chip-RAM index read per batch, an upload of 4000
+# frames with no drop, the handshake path, the 512 KiB fallback; and SwitchWLANLink.h's decoders.
+#
+#   bazel test //drivers/SwitchWLAN/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = [
+        "IOKit/IOBufferMemoryDescriptor.h",
+        "IOKit/IOLib.h",
+    ],
+    stubs = "switch_wlan_msgbuf_stubs.h",
+)
+
+host_library(
+    name = "headers",
+    hdrs = [
+        "//drivers/SwitchWLAN:SwitchWLANLink.h",
+        "//drivers/SwitchWLAN:SwitchWLANPrivate.h",
+    ],
+)
+
+host_library(
+    name = "switch_wlan_msgbuf",
+    srcs = ["//drivers/SwitchWLAN:SwitchWLANMsgbuf.cpp"],
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":headers",
+        ":kernel",
+    ],
+)
+
+host_test(
+    name = "switch_wlan_msgbuf_test",
+    srcs = ["switch_wlan_msgbuf_test.cpp"],
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":headers",
+        ":kernel",
+        ":switch_wlan_msgbuf",
+    ],
+)

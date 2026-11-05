@@ -1,6 +1,6 @@
 // Host stand-ins for what drivers/SwitchWLAN/SwitchWLANMsgbuf.cpp takes from the kernel (IOLib, the DMA area's
-// IOBufferMemoryDescriptor, panic), for tests/switch_wlan_msgbuf_harness.cpp. test_switch_wlan_msgbuf.py points
-// <IOKit/IOLib.h> and <IOKit/IOBufferMemoryDescriptor.h> here. The DMA area is host memory given a fake 32-bit
+// IOBufferMemoryDescriptor, panic), for switch_wlan_msgbuf_test.cpp. BUILD.bazel points <IOKit/IOLib.h> and
+// <IOKit/IOBufferMemoryDescriptor.h> here (host_shims). The DMA area is host memory given a fake 32-bit
 // physical address; every register access of the driver's Mmio goes to the harness's counter (SWLAN_MMIO_TRACE).
 #ifndef IOSWITCH_TEST_SWITCH_WLAN_MSGBUF_STUBS_H
 #define IOSWITCH_TEST_SWITCH_WLAN_MSGBUF_STUBS_H

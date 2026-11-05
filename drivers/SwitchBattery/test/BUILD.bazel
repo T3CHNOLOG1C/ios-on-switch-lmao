@@ -1,0 +1,101 @@
+# The charging path on the host (r15-charging): drivers/SwitchBattery/SwitchChargePolicy.h (PDO choice, the input
+# limit, the RDO, BQ24193 register encodings, temperature zones, the gauge's temperature window) and the real
+# SwitchBattery and SwitchPD drivers, each its own translation unit over switch_charging_stubs.h, behind the
+# register-level BQ24193, MAX17050 and BM92T36 models in switch_charging_test.cpp, one process per scenario: boot with
+# Nintendo's charger, temperature zones, hot-plug (PD, plain Type-C, USB host with Hi-Z, a Mac), a refused or unanswered
+# request, a re-balancing charger, a contract that is ours already, a charger that loses or refuses its settings, a
+# boost left on by an earlier boot. Plus the policy's cited limits (switch_charge_policy_test, at compile time) and
+# guards on what the models cannot see (switch_charging_source_test).
+#
+#   bazel test //drivers/SwitchBattery/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = [
+        "IOKit/IOInterruptEventSource.h",
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOService.h",
+        "IOKit/IOTimerEventSource.h",
+        "IOKit/IOWorkLoop.h",
+        "IOKit/pwr_mgt/IOPM.h",
+        "IOKit/pwr_mgt/IOPMPowerSource.h",
+        "libkern/c++/OSBoolean.h",
+        "libkern/c++/OSDictionary.h",
+        "libkern/c++/OSNumber.h",
+        "libkern/c++/OSString.h",
+        "libkern/c++/OSSymbol.h",
+        "os/log.h",
+    ],
+    stubs = "switch_charging_stubs.h",
+)
+
+# The headers the drivers and the models share.
+host_library(
+    name = "headers",
+    hdrs = [
+        "//drivers/SwitchBattery:SwitchBattery.h",
+        "//drivers/SwitchBattery:SwitchChargePolicy.h",
+        "//drivers/SwitchPower:SwitchPower.h",
+        "//drivers/SwitchPower:SwitchSensors.h",
+        "//drivers/SwitchSuspend:SwitchWake.h",
+        "//drivers/SwitchSuspend:SwitchWakeSources.h",
+        "//drivers/SwitchUSB:SwitchPD.h",
+        "//drivers/SwitchUSB:SwitchPDPolicy.h",
+        "//drivers/TegraGPIO:TegraGPIO.h",
+        "//drivers/TegraI2C:TegraI2C.h",
+    ],
+)
+
+host_library(
+    name = "switch_battery",
+    srcs = ["//drivers/SwitchBattery:SwitchBattery.cpp"],
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":headers",
+        ":kernel",
+    ],
+)
+
+host_library(
+    name = "switch_pd",
+    srcs = ["//drivers/SwitchUSB:SwitchPD.cpp"],
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":headers",
+        ":kernel",
+    ],
+)
+
+host_test(
+    name = "switch_charging_test",
+    srcs = ["switch_charging_test.cpp"],
+    copts = ["-Wno-unused-parameter"],
+    deps = [
+        ":headers",
+        ":kernel",
+        ":switch_battery",
+        ":switch_pd",
+    ],
+)
+
+host_test(
+    name = "switch_charge_policy_test",
+    srcs = [
+        "switch_charge_policy_test.cpp",
+        "//drivers/SwitchBattery:SwitchChargePolicy.h",
+    ],
+)
+
+host_test(
+    name = "switch_charging_source_test",
+    srcs = ["switch_charging_source_test.cpp"],
+    data = [
+        "//drivers/SwitchBattery:SwitchBattery.cpp",
+        "//drivers/SwitchUSB:SwitchPD.cpp",
+    ],
+)

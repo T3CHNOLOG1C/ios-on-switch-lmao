@@ -1,11 +1,11 @@
 // Host stand-ins for the kernel interfaces drivers/SwitchBattery/SwitchBattery.cpp and drivers/SwitchUSB/SwitchPD.cpp
-// use (IOKit, IOPMPowerSource, OSDictionary and friends, IOLock, os_log, mach time), for
-// tests/switch_charging_harness.cpp. test_switch_charging.py points <IOKit/...>, <libkern/...> and <os/log.h> here and
-// compiles each driver as its own translation unit. A work loop runs actions at once on the caller's thread; timers
-// keep a deadline on a fake clock that the harness advances; interrupt sources are fired by the harness.
+// use (IOKit, IOPMPowerSource, OSDictionary and friends, IOLock, os_log, mach time), for switch_charging_test.cpp.
+// BUILD.bazel points <IOKit/...>, <libkern/...> and <os/log.h> here (host_shims) and compiles each driver as its own
+// translation unit. A work loop runs actions at once on the caller's thread; timers keep a deadline on a fake clock
+// that the test advances; interrupt sources are fired by the test. A stand-in used wrongly (a lock released that is
+// not held, a detach from another provider, a timer fired that is not armed) panics: the scenario fails.
 #ifndef IOSWITCH_TEST_SWITCH_CHARGING_STUBS_H
 #define IOSWITCH_TEST_SWITCH_CHARGING_STUBS_H
-#include <cassert>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -24,14 +24,23 @@ constexpr IOReturn kIOReturnUnsupported = 0x2c7;
 // Fake time in nanoseconds; the absolute-time conversions are the identity.
 inline uint64_t gNow = 0;
 inline uint64_t gDelayedUS = 0;  // IODelay total (busy waits)
-inline uint64_t mach_absolute_time() { return gNow; }
-inline void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns) { *ns = abs; }
+inline uint64_t mach_absolute_time()
+{
+    return gNow;
+}
+inline void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns)
+{
+    *ns = abs;
+}
 inline void IODelay(unsigned us)
 {
     gNow += us * 1000ull;
     gDelayedUS += us;
 }
-inline void IOSleep(unsigned ms) { gNow += ms * 1000000ull; }
+inline void IOSleep(unsigned ms)
+{
+    gNow += ms * 1000000ull;
+}
 
 // IOLog and os_log lines, in order, each prefixed with its channel.
 inline std::vector<std::string> gLog;
@@ -57,7 +66,7 @@ __attribute__((format(printf, 1, 2))) inline void stubOsLog(const char *format, 
     stubLog("os_log: ", format, ap);
     va_end(ap);
 }
-#define OS_LOG_DEFAULT nullptr
+#define OS_LOG_DEFAULT   nullptr
 #define os_log(log, ...) stubOsLog(__VA_ARGS__)
 
 struct Panic : std::runtime_error {
@@ -77,8 +86,14 @@ struct Panic : std::runtime_error {
 struct IOLock {
     bool held = false;
 };
-inline IOLock *IOLockAlloc() { return new IOLock; }
-inline void IOLockFree(IOLock *lock) { delete lock; }
+inline IOLock *IOLockAlloc()
+{
+    return new IOLock;
+}
+inline void IOLockFree(IOLock *lock)
+{
+    delete lock;
+}
 inline void IOLockLock(IOLock *lock)
 {
     if (lock->held) throw Panic("IOLock taken twice");
@@ -86,7 +101,7 @@ inline void IOLockLock(IOLock *lock)
 }
 inline void IOLockUnlock(IOLock *lock)
 {
-    assert(lock->held);
+    if (!lock->held) throw Panic("IOLock released while not held");
     lock->held = false;
 }
 
@@ -94,7 +109,7 @@ inline void IOLockUnlock(IOLock *lock)
 public:                                \
     cls() = default;
 #define OSDefineMetaClassAndStructors(cls, super)
-#define OSTypeAlloc(cls) (new cls)
+#define OSTypeAlloc(cls)        (new cls)
 #define OSDynamicCast(cls, obj) dynamic_cast<cls *>(obj)
 #define OSSafeReleaseNULL(obj) \
     do {                       \
@@ -202,7 +217,7 @@ public:
     }
     void detach(IOService *from)
     {
-        assert(provider == from);
+        if (provider != from) throw Panic("detach from a provider not attached to");
         provider = nullptr;
         release();
     }
@@ -216,14 +231,14 @@ public:
 };
 
 // IOPMPowerSource: the properties land in `ps` (numbers) and `psDicts` (the adapter details).
-#define kIOPMFullyChargedKey "FullyCharged"
-#define kIOPMPSBatteryTemperatureKey "Temperature"
-#define kIOPMPSDesignCapacityKey "DesignCapacity"
-#define kIOPMPSAdapterDetailsKey "AdapterDetails"
-#define kIOPMPSAdapterDetailsFamilyKey "FamilyCode"
-#define kIOPMPSAdapterDetailsWattsKey "Watts"
-#define kIOPMPSAdapterDetailsVoltage "AdapterVoltage"
-#define kIOPMPSAdapterDetailsAmperageKey "Current"
+#define kIOPMFullyChargedKey                "FullyCharged"
+#define kIOPMPSBatteryTemperatureKey        "Temperature"
+#define kIOPMPSDesignCapacityKey            "DesignCapacity"
+#define kIOPMPSAdapterDetailsKey            "AdapterDetails"
+#define kIOPMPSAdapterDetailsFamilyKey      "FamilyCode"
+#define kIOPMPSAdapterDetailsWattsKey       "Watts"
+#define kIOPMPSAdapterDetailsVoltage        "AdapterVoltage"
+#define kIOPMPSAdapterDetailsAmperageKey    "Current"
 #define kIOPMPSAdapterDetailsDescriptionKey "Description"
 constexpr int kIOPSFamilyCodeDisconnected = 0;
 constexpr int kIOPSFamilyCodeUSBHost = (int)0xe0004000;
@@ -289,7 +304,7 @@ public:
     IOService *provider = nullptr;
     static inline std::vector<IOInterruptEventSource *> all;
     static IOInterruptEventSource *interruptEventSource(OSObject *owner, Action action, IOService *provider = nullptr,
-                                                       int = 0)
+                                                        int = 0)
     {
         auto *source = new IOInterruptEventSource;
         source->owner = owner;
@@ -330,7 +345,7 @@ public:
     void cancelTimeout() { armed = false; }
     void fire()
     {
-        assert(armed);
+        if (!armed) throw Panic("timer fired while not armed");
         armed = false;
         action(owner, this);
     }

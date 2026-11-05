@@ -1,0 +1,30 @@
+# drivers/SwitchUSB on the host: the XUDC's device-mode transfer planner and OUT residue protocol (XudcTransfer.h,
+# xudc_transfer_test).
+#
+#   bazel test //drivers/SwitchUSB/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+# --- Device mode: the XUDC transfer planner ---
+# XudcTransfer.h's planner over 3000 random scatter-gather layouts and its OUT residue protocol against model
+# controllers of both residue kinds, plus the cost model; only the header, so a SwitchXUDC.cpp edit does not rerun it.
+host_test(
+    name = "xudc_transfer_test",
+    srcs = [
+        "xudc_transfer_test.cpp",
+        "//drivers/SwitchUSB:XudcTransfer.h",
+    ],
+    copts = ["-O1"],
+)
+
+# What xudc_transfer_test cannot see in the driver itself.
+host_test(
+    name = "switch_xudc_source_test",
+    srcs = ["switch_xudc_source_test.cpp"],
+    data = [
+        "//drivers/SwitchUSB:SwitchXUDC.cpp",
+        "//drivers/SwitchUSB:XudcHardware.cpp",
+    ],
+)

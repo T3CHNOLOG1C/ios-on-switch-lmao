@@ -1,20 +1,27 @@
 // The SwitchWLAN data path on the host: drivers/SwitchWLAN/SwitchWLANMsgbuf.cpp itself (its own translation unit over
-// tests/switch_wlan_msgbuf_stubs.h) driven against a model of the BCM4356's msgbuf firmware: the chip's RAM (shared
+// switch_wlan_msgbuf_stubs.h, BUILD.bazel) driven against a model of the BCM4356's msgbuf firmware: the chip's RAM (shared
 // area, ring descriptors and indices) as host memory, the PCIe2 core's mailbox registers, and a firmware that takes
 // receive buffers and transmit posts off the H2D rings and writes completions onto the D2H rings by physical address,
 // raising the mailbox interrupt each time. The driver's own Mmio reads of the chip's RAM (the PCIe round trips a
 // frame costs), its register reads and writes, doorbells, interrupts and the bytes copied per frame are counted, and
-// each scenario prints one JSON object for tests/test_switch_wlan_msgbuf.py.
-//
-//   switch-wlan-msgbuf attach | rx | tx | mixed | eapol | small | link
+// each scenario's counts are checked against what r8a (11-05) measured on the device before r17-wlanperf: at fast.com's
+// 40 Mb/s about 1.3 frames per MSI, and 2069-3439 of 4714-6466 en0 frames per 5 s refused for want of one of 32
+// transmit buffers (TCP's ACKs on a download, its data on an upload). Here: every frame of a download delivered intact
+// with its buffer back in the next doorbell, one doorbell and about one chip-RAM index read per batch instead of per
+// frame, an upload of 4000 frames with no drop (frames wait in en0's queue, a completion resumes it), the handshake
+// path, the 512 KiB fallback, and the link decoding. One process per scenario (the driver's Msgbuf is a global).
 #include <cstdio>
 #include <cstring>  // SwitchWLANLink.h's snprintf, memset, memcmp, strlen
 #include <deque>
 #include <string>
 #include <vector>
 
-#include "SwitchWLANLink.h"
-#include "SwitchWLANPrivate.h"
+#include <gtest/gtest.h>
+
+#include "../SwitchWLANLink.h"
+#include "../SwitchWLANPrivate.h"
+#include "bazel/testing/fresh_process.h"
+#include "bazel/testing/require.h"
 
 namespace {
 
@@ -335,7 +342,7 @@ bool bringUp()
     char why[200] = "";
     gChip.attach(nullptr, 0, 0, why, sizeof(why));
     if (!gMb.attach(&gChip, onEvent, onFrame, nullptr, why, sizeof(why))) {
-        printf("{\"error\": \"attach: %s\"}\n", why);
+        ADD_FAILURE() << "attach: " << why;
         return false;
     }
     gFw.attach();
@@ -362,42 +369,73 @@ void resetCounts()
     gBatches = gResumes = gPeak = 0;
 }
 
-void printCounts(const char *scenario, uint64_t frames, const char *extra)
+// What a scenario measured: the counts, then what each scenario adds.
+struct Result {
+    uint64_t frames = 0, tcmReads = 0, tcmWrites = 0, regReads = 0, regWrites = 0, doorbells = 0, msis = 0;
+    uint64_t copiedBytes = 0, indexReads = 0;
+    unsigned rxPosted = 0, rxBuffers = 0, txBuffers = 0, txInFlight = 0, txPeak = 0;
+    uint64_t txFull = 0, txRefused = 0, rxStarved = 0;
+    unsigned minPosted = 0, batches = 0, resumes = 0;
+    // attach, small
+    size_t postedAtAttach = 0, lines = 0;
+    std::string describe, log;
+    // rx, tx
+    bool intact = false;
+    size_t queuedLeft = 0;
+    // mixed
+    unsigned acks = 0;
+    size_t acksSeen = 0, received = 0;
+    // eapol
+    uint32_t id = 0;
+    bool sentBefore = false, sentAfter = false, seen = false;
+    unsigned status = 0;
+};
+
+Result counts(uint64_t frames)
 {
     const swlan::DataCounters d = gMb.takeCounters();
-    const unsigned peak = d.txPeak > gPeak ? d.txPeak : gPeak;
-    printf("{\"scenario\": \"%s\", \"frames\": %llu, \"tcm_reads\": %llu, \"tcm_writes\": %llu, \"reg_reads\": %llu, "
-           "\"reg_writes\": %llu, \"doorbells\": %llu, \"msis\": %llu, \"copied_bytes\": %llu, \"index_reads\": %llu, "
-           "\"rx_posted\": %u, \"rx_buffers\": %u, \"tx_buffers\": %u, \"tx_in_flight\": %u, \"tx_peak\": %u, "
-           "\"tx_full\": %llu, \"tx_refused\": %llu, \"rx_starved\": %llu, \"min_posted\": %u, \"batches\": %u, "
-           "\"resumes\": %u%s}\n",
-           scenario, static_cast<unsigned long long>(frames), static_cast<unsigned long long>(gCount.tcmReads),
-           static_cast<unsigned long long>(gCount.tcmWrites), static_cast<unsigned long long>(gCount.regReads),
-           static_cast<unsigned long long>(gCount.regWrites), static_cast<unsigned long long>(gCount.doorbells),
-           static_cast<unsigned long long>(gCount.msis), static_cast<unsigned long long>(gCount.copiedBytes),
-           static_cast<unsigned long long>(d.indexReads), d.rxPosted, gMb.rxBufferCount(), gMb.txBufferCount(),
-           d.txInFlight, peak, static_cast<unsigned long long>(d.txFull), static_cast<unsigned long long>(d.txRefused),
-           static_cast<unsigned long long>(gFw.rxStarved), gFw.minPosted == ~0u ? 0 : gFw.minPosted, gBatches, gResumes,
-           extra);
+    Result r;
+    r.frames = frames;
+    r.tcmReads = gCount.tcmReads;
+    r.tcmWrites = gCount.tcmWrites;
+    r.regReads = gCount.regReads;
+    r.regWrites = gCount.regWrites;
+    r.doorbells = gCount.doorbells;
+    r.msis = gCount.msis;
+    r.copiedBytes = gCount.copiedBytes;
+    r.indexReads = d.indexReads;
+    r.rxPosted = d.rxPosted;
+    r.rxBuffers = gMb.rxBufferCount();
+    r.txBuffers = gMb.txBufferCount();
+    r.txInFlight = d.txInFlight;
+    r.txPeak = d.txPeak > gPeak ? d.txPeak : gPeak;
+    r.txFull = d.txFull;
+    r.txRefused = d.txRefused;
+    r.rxStarved = gFw.rxStarved;
+    r.minPosted = gFw.minPosted == ~0u ? 0 : gFw.minPosted;
+    r.batches = gBatches;
+    r.resumes = gResumes;
+    return r;
 }
 
 // ---- scenarios -------------------------------------------------------------------------------------------------------
-int attachScenario()
+Result attachScenario()
 {
-    if (!bringUp()) return 1;
-    char layout[200], extra[300];
+    REQUIRE(bringUp());
+    char layout[200];
     gMb.describe(layout, sizeof(layout));
-    snprintf(extra, sizeof(extra), ", \"posted_at_attach\": %zu, \"lines\": %zu, \"describe\": \"%s\"",
-             gFw.rxBuffers.size(), gLog.size(), layout);
-    printCounts("attach", 0, extra);
-    return 0;
+    Result r = counts(0);
+    r.postedAtAttach = gFw.rxBuffers.size();
+    r.lines = gLog.size();
+    r.describe = layout;
+    return r;
 }
 
 // A download: bursts of `burst` frames (an A-MPDU's worth) per interrupt, 1500-byte frames, every one delivered and
 // intact, the receive buffers back with the chip after each interrupt.
-int rxScenario(unsigned frames, unsigned burst)
+Result rxScenario(unsigned frames, unsigned burst)
 {
-    if (!bringUp()) return 1;
+    REQUIRE(bringUp());
     resetCounts();
     gReceived.clear();
     unsigned sent = 0;
@@ -408,17 +446,17 @@ int rxScenario(unsigned frames, unsigned burst)
     }
     bool intact = gReceived.size() == frames;
     for (unsigned i = 0; intact && i < frames; ++i) intact = gReceived[i].bytes == makeFrame(i, 1514).bytes;
-    char extra[64];
-    snprintf(extra, sizeof(extra), ", \"intact\": %s, \"burst\": %u", intact ? "true" : "false", burst);
-    printCounts("rx", frames, extra);
-    return 0;
+    Result r = counts(frames);
+    r.intact = intact;
+    return r;
 }
 
 // An upload: `frames` queued at once (TCP's window), the firmware fetching at most `hold` and the air completing
 // `perAir` per turn. Nothing may be dropped: what does not fit waits in the queue until a completion resumes it.
-int txScenario(unsigned frames, unsigned hold, unsigned perAir)
+Result txScenario(unsigned frames, unsigned hold, unsigned perAir)
 {
-    if (!bringUp() || !openFlow()) return 1;
+    REQUIRE(bringUp());
+    REQUIRE(openFlow());
     resetCounts();
     gFw.holdLimit = hold;
     for (unsigned i = 0; i < frames; ++i) gQueue.push_back(makeFrame(i, 1514));
@@ -430,17 +468,18 @@ int txScenario(unsigned frames, unsigned hold, unsigned perAir)
     }
     bool intact = gFw.txSeen.size() == frames && gQueue.empty();
     for (unsigned i = 0; intact && i < frames; ++i) intact = gFw.txSeen[i].bytes == makeFrame(i, 1514).bytes;
-    char extra[96];
-    snprintf(extra, sizeof(extra), ", \"intact\": %s, \"queued_left\": %zu", intact ? "true" : "false", gQueue.size());
-    printCounts("tx", frames, extra);
-    return 0;
+    Result r = counts(frames);
+    r.intact = intact;
+    r.queuedLeft = gQueue.size();
+    return r;
 }
 
 // A download with its ACKs: one 66-byte ACK queued per two frames received, both directions through the same
 // interrupts.
-int mixedScenario(unsigned frames, unsigned burst)
+Result mixedScenario(unsigned frames, unsigned burst)
 {
-    if (!bringUp() || !openFlow()) return 1;
+    REQUIRE(bringUp());
+    REQUIRE(openFlow());
     resetCounts();
     gReceived.clear();
     gFw.holdLimit = 32;
@@ -459,17 +498,18 @@ int mixedScenario(unsigned frames, unsigned burst)
         gFw.transmitted(64);
         firmware();
     }
-    char extra[96];
-    snprintf(extra, sizeof(extra), ", \"acks\": %u, \"acks_seen\": %zu, \"received\": %zu", acks, gFw.txSeen.size(),
-             gReceived.size());
-    printCounts("mixed", static_cast<uint64_t>(frames) + acks, extra);
-    return 0;
+    Result r = counts(static_cast<uint64_t>(frames) + acks);
+    r.acks = acks;
+    r.acksSeen = gFw.txSeen.size();
+    r.received = gReceived.size();
+    return r;
 }
 
 // The supplicant's handshake frame: sent at once, its completion's status read back by id.
-int eapolScenario()
+Result eapolScenario()
 {
-    if (!bringUp() || !openFlow()) return 1;
+    REQUIRE(bringUp());
+    REQUIRE(openFlow());
     const Frame f = makeFrame(7, 121);
     const uint32_t id = gMb.send(f.bytes.data(), f.bytes.size());
     uint16_t status = 0xFFFF;
@@ -478,34 +518,30 @@ int eapolScenario()
     gFw.transmitted(1, 0);
     firmware();
     const bool after = gMb.sent(id, &status);
-    char extra[160];
-    snprintf(extra, sizeof(extra),
-             ", \"id\": %u, \"sent_before\": %s, \"sent_after\": %s, \"status\": %u, "
-             "\"seen\": %s",
-             id, before ? "true" : "false", after ? "true" : "false", status,
-             gFw.txSeen.size() == 1 && gFw.txSeen[0].bytes == f.bytes ? "true" : "false");
-    printCounts("eapol", 1, extra);
-    return 0;
+    Result r = counts(1);
+    r.id = id;
+    r.sentBefore = before;
+    r.sentAfter = after;
+    r.status = status;
+    r.seen = gFw.txSeen.size() == 1 && gFw.txSeen[0].bytes == f.bytes;
+    return r;
 }
 
 // No 2 MiB contiguous: the old layout, one line.
-int smallScenario()
+Result smallScenario()
 {
     gFailAllocationsFrom = swlan::kAreaLarge.length;
     gLog.clear();
-    if (!bringUp()) return 1;
-    std::string log = gLog.empty() ? "" : gLog.front();
-    for (char &c : log)
-        if (c == '"') c = '\'';
-    char extra[400];
-    snprintf(extra, sizeof(extra), ", \"posted_at_attach\": %zu, \"lines\": %zu, \"log\": \"%s\"", gFw.rxBuffers.size(),
-             gLog.size(), log.c_str());
-    printCounts("small", 0, extra);
-    return 0;
+    REQUIRE(bringUp());
+    Result r = counts(0);
+    r.postedAtAttach = gFw.rxBuffers.size();
+    r.lines = gLog.size();
+    r.log = gLog.empty() ? "" : gLog.front();
+    return r;
 }
 
 // SwitchWLANLink.h: chanspecs, an access point's elements, the best rate, a dump's counters.
-int linkScenario()
+void linkScenario()
 {
     swlan_chanspec a, b, c, d;
     const bool okA = swlan_chanspec_decode(0x1006, SWLAN_IOTYPE_D11AC, &a);  // 2.4 GHz 6, 20 MHz
@@ -534,14 +570,19 @@ int linkScenario()
     const bool noMissing = !swlan_dump_value(dump, sizeof(dump), "mpdu", &missing);
     char tenths[16];
     swlan_tenths(txmpdu, txampdu, tenths, sizeof(tenths));
-    printf("{\"scenario\": \"link\", \"a\": [%d, %u, %u, %u, %d], \"b\": [%d, %u, %u, %u, %d], "
-           "\"c\": [%d, %u, %u, %u, %d], \"d\": [%d, %u, %u, %u, %d], \"peer\": \"%s\", \"best80\": %u, "
-           "\"best20\": %u, \"dump\": [%d, %u, %u, %u, %u, %d], \"tenths\": \"%s\"}\n",
-           okA, a.control, a.center, a.bw_mhz, a.five_ghz, okB, b.control, b.center, b.bw_mhz, b.five_ghz, okC,
-           c.control, c.center, c.bw_mhz, c.five_ghz, okD, d.control, d.center, d.bw_mhz, d.five_ghz, text,
-           swlan_link_best_kbps(&ap, 80), swlan_link_best_kbps(&ap, 20), dumpOk, txampdu, txmpdu, rxampdu, rxmpdu,
-           noMissing, tenths);
-    return 0;
+    using V = std::vector<unsigned>;
+    const auto chanspec = [](bool ok, const swlan_chanspec &cs) {
+        return V{ok, cs.control, cs.center, cs.bw_mhz, static_cast<unsigned>(cs.five_ghz)};
+    };
+    EXPECT_EQ(chanspec(okA, a), (V{1, 6, 6, 20, 0})) << "0x1006: 2.4 GHz 6, 20 MHz";
+    EXPECT_EQ(chanspec(okB, b), (V{1, 149, 155, 80, 1})) << "0xE09B: 5 GHz 80 MHz centre 155, ctl 149";
+    EXPECT_EQ(chanspec(okC, c), (V{1, 40, 38, 40, 1})) << "0xD926: 5 GHz 40 MHz centre 38, upper: ctl 40";
+    EXPECT_EQ(chanspec(okD, d), (V{1, 8, 6, 40, 0})) << "0x2E06 (d11n): 2.4 GHz 40 MHz centre 6, upper: ctl 8";
+    EXPECT_STREQ(text, "HT 2 SS 40 MHz SGI, VHT 2 SS 80 MHz SGI, HE");
+    EXPECT_EQ(swlan_link_best_kbps(&ap, 80), 866600u);
+    EXPECT_EQ(swlan_link_best_kbps(&ap, 20), 173400u);
+    EXPECT_EQ((V{dumpOk, txampdu, txmpdu, rxampdu, rxmpdu, noMissing}), (V{1, 120, 1500, 400, 9000, 1}));
+    EXPECT_STREQ(tenths, "12.5");
 }
 
 }  // namespace
@@ -579,24 +620,124 @@ const Core *Chip::find(uint16_t coreId) const
 }
 }  // namespace swlan
 
-int main(int argc, char **argv)
+// --- One process per scenario (the driver's Msgbuf, the chip and the firmware model are globals) ---------------------
+using ioswitch::test::ExpectPassesInFreshProcess;
+constexpr uint64_t kFrame = 1514;
+
+// Attach posts every receive buffer in one doorbell.
+TEST(SwitchWlanMsgbuf, AttachPostsEveryReceiveBufferInOneDoorbell)
 {
-    const std::string what = argc > 1 ? argv[1] : "";
-    const unsigned a = argc > 2 ? static_cast<unsigned>(atoi(argv[2])) : 0;
-    const unsigned b = argc > 3 ? static_cast<unsigned>(atoi(argv[3])) : 0;
-    const unsigned c = argc > 4 ? static_cast<unsigned>(atoi(argv[4])) : 0;
-    try {
-        if (what == "attach") return attachScenario();
-        if (what == "rx") return rxScenario(a ? a : 4000, b ? b : 32);
-        if (what == "tx") return txScenario(a ? a : 4000, b ? b : 64, c ? c : 32);
-        if (what == "mixed") return mixedScenario(a ? a : 4000, b ? b : 32);
-        if (what == "eapol") return eapolScenario();
-        if (what == "small") return smallScenario();
-        if (what == "link") return linkScenario();
-    } catch (const std::exception &e) {
-        printf("{\"error\": \"%s\"}\n", e.what());
-        return 2;
-    }
-    fprintf(stderr, "usage: %s attach|rx|tx|mixed|eapol|small|link\n", argv[0]);
-    return 64;
+    ExpectPassesInFreshProcess([] {
+        const Result r = attachScenario();
+        EXPECT_EQ(r.rxBuffers, 255u);  // the firmware's max_rxbufpost (was 64)
+        EXPECT_EQ(r.postedAtAttach, 255u);
+        EXPECT_EQ(r.txBuffers, 256u);  // was 32
+        EXPECT_EQ(r.lines, 0u);
+        EXPECT_EQ(r.doorbells, 1u + 16u);  // the receive buffers together, then each of 16 control buffers
+        EXPECT_NE(r.describe.find("2048 KiB DMA area"), std::string::npos) << r.describe;
+        EXPECT_NE(r.describe.find("255 receive buffers posted (the firmware takes 255)"), std::string::npos)
+            << r.describe;
+    });
+}
+
+// A download: every frame intact and its buffer back.
+TEST(SwitchWlanMsgbuf, DownloadEveryFrameIntactAndBuffersBack)
+{
+    ExpectPassesInFreshProcess([] {
+        const Result r = rxScenario(4000, 32);
+        EXPECT_TRUE(r.intact);
+        EXPECT_EQ(r.rxStarved, 0u);
+        EXPECT_EQ(r.rxPosted, r.rxBuffers);  // every buffer back with the chip
+        // One CPU copy per frame (out of the DMA buffer into the mbuf), nothing else.
+        EXPECT_EQ(r.copiedBytes, 4000 * kFrame);
+        // Per frame before r17: 2 index reads (write index per item, read index per repost) and 1 doorbell. Now about
+        // one write-index read and one doorbell per interrupt's batch of 32.
+        EXPECT_LE(static_cast<double>(r.tcmReads) / static_cast<double>(r.frames), 0.15);
+        EXPECT_LE(static_cast<double>(r.doorbells) / static_cast<double>(r.frames), 1.0 / 16);
+        EXPECT_GE(static_cast<double>(r.frames) / static_cast<double>(r.msis), 16.0);
+    });
+}
+
+// Bursts of a full A-MPDU (beyond the 64 buffers the chip had before r17) never starve the chip.
+TEST(SwitchWlanMsgbuf, DownloadBurstsOfAFullAmpduNeverStarveTheChip)
+{
+    ExpectPassesInFreshProcess([] {
+        const Result r = rxScenario(2048, 128);
+        EXPECT_TRUE(r.intact);
+        EXPECT_EQ(r.rxStarved, 0u);
+        EXPECT_GE(r.minPosted, 255u - 128u);
+    });
+}
+
+// An upload: nothing dropped, frames wait for room.
+TEST(SwitchWlanMsgbuf, UploadNothingDroppedFramesWaitForRoom)
+{
+    ExpectPassesInFreshProcess([] {
+        const Result r = txScenario(4000, 64, 32);
+        EXPECT_TRUE(r.intact);
+        EXPECT_EQ(r.queuedLeft, 0u);
+        EXPECT_EQ(r.txRefused, 0u);
+        EXPECT_EQ(r.txInFlight, 0u);
+        EXPECT_EQ(r.copiedBytes, 4000 * kFrame);  // one copy each, mbuf to DMA buffer (was two)
+        EXPECT_LE(r.txPeak, r.txBuffers);
+        EXPECT_LE(static_cast<double>(r.doorbells) / static_cast<double>(r.frames), 1.0 / 8);
+    });
+}
+
+// The air takes 4 frames a turn while TCP queued 4000: every buffer goes into flight, en0's start routine stops, and
+// completions resume it (no drop, no polling: the resume comes from the interrupt).
+TEST(SwitchWlanMsgbuf, UploadIntoASlowAirRunsOutAndResumes)
+{
+    ExpectPassesInFreshProcess([] {
+        const Result r = txScenario(4000, 512, 4);
+        EXPECT_TRUE(r.intact);
+        EXPECT_EQ(r.txPeak, r.txBuffers);
+        EXPECT_GT(r.txFull, 0u);
+        EXPECT_GT(r.resumes, 0u);
+        EXPECT_EQ(r.txRefused, 0u);
+    });
+}
+
+// A download with its ACKs through the same interrupts.
+TEST(SwitchWlanMsgbuf, DownloadWithAcksThroughTheSameInterrupts)
+{
+    ExpectPassesInFreshProcess([] {
+        const Result r = mixedScenario(4000, 32);
+        EXPECT_EQ(r.received, 4000u);
+        EXPECT_EQ(r.acksSeen, r.acks);
+        EXPECT_EQ(r.txRefused, 0u);
+        EXPECT_LE(static_cast<double>(r.tcmReads) / static_cast<double>(r.frames), 0.3);
+        EXPECT_LE(static_cast<double>(r.doorbells) / static_cast<double>(r.frames), 0.25);
+    });
+}
+
+// The handshake frame is sent and its status read.
+TEST(SwitchWlanMsgbuf, HandshakeFrameSentAndItsStatusRead)
+{
+    ExpectPassesInFreshProcess([] {
+        const Result r = eapolScenario();
+        EXPECT_GT(r.id, 0u);
+        EXPECT_FALSE(r.sentBefore);
+        EXPECT_TRUE(r.sentAfter);
+        EXPECT_EQ(r.status, 0u);
+        EXPECT_TRUE(r.seen);
+    });
+}
+
+// No contiguous 2 MiB: the old layout, with one line.
+TEST(SwitchWlanMsgbuf, NoContiguous2MiBTakesTheOldLayoutWithOneLine)
+{
+    ExpectPassesInFreshProcess([] {
+        const Result r = smallScenario();
+        EXPECT_EQ(r.rxBuffers, 64u);
+        EXPECT_EQ(r.txBuffers, 32u);
+        EXPECT_EQ(r.postedAtAttach, 64u);
+        EXPECT_EQ(r.lines, 1u);
+        EXPECT_NE(r.log.find("2048 KiB contiguous below 4 GiB not available"), std::string::npos) << r.log;
+    });
+}
+
+TEST(SwitchWlanMsgbuf, LinkDecoding)
+{
+    ExpectPassesInFreshProcess([] { linkScenario(); });
 }

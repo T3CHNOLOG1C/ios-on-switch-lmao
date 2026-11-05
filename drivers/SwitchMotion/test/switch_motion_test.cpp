@@ -1,5 +1,5 @@
-// Host test of drivers/SwitchMotion/SwitchMotion.cpp (test_switch_motion.py compiles and runs this): the real driver over
-// tests/switch_motion_stubs.h and register-level models of its IMUs behind tegra_spi_transfer. Each model keeps a
+// Host test of drivers/SwitchMotion/SwitchMotion.cpp: the real driver (included here, one translation unit) over
+// switch_motion_stubs.h and register-level models of its IMUs behind tegra_spi_transfer. Each model keeps a
 // register file with its datasheet reset values, applies reads' and writes' side effects (soft reset, read-to-clear
 // status, latched INT2) and its timing rules, and records every SPI transfer, so each scenario checks the exact
 // register traffic, the HID reports (decode, mount matrix, device frame, scale) and the log lines.
@@ -17,17 +17,12 @@
 #include <cinttypes>
 #include <deque>
 #include <array>
-#include "../drivers/SwitchMotion/SwitchMotion.cpp"
+#include <gtest/gtest.h>
+#include "bazel/testing/require.h"
+#include "../SwitchMotion.cpp"
 
-static unsigned gChecks = 0, gFailures = 0;
-static void check(bool ok, const std::string &what)
-{
-    ++gChecks;
-    if (!ok) {
-        ++gFailures;
-        std::fprintf(stderr, "FAIL: %s\n", what.c_str());
-    }
-}
+// Every check is a GoogleTest failure at its call site.
+#define check(ok, what) EXPECT_TRUE(ok) << (what)
 static std::string hex(unsigned v)
 {
     char text[8];
@@ -313,13 +308,13 @@ extern "C" void tegra_spi_resume(unsigned bus)
 }
 extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *txv, void *rxv, size_t len)
 {
-    assert(bus == 4 && cs == 0 && txv && len >= 2 && len <= TEGRA_SPI_MAX_TRANSFER);
+    REQUIRE(bus == 4 && cs == 0 && txv && len >= 2 && len <= TEGRA_SPI_MAX_TRANSFER);
     const auto *tx = static_cast<const uint8_t *>(txv);
     auto *rx = static_cast<uint8_t *>(rxv);
     const uint8_t reg = tx[0] & 0x7f;
     gChip->access();
     if (tx[0] & 0x80) {
-        assert(rx);
+        REQUIRE(rx);
         gChip->ops.push_back("R " + hex(reg) + (len > 2 ? " x" + std::to_string(len - 1) : ""));
         rx[0] = 0xff;
         for (size_t i = 1; i < len; ++i) rx[i] = gChip->read(gChip->stays(reg) ? reg : (uint8_t)(reg + i - 1));
@@ -335,7 +330,7 @@ extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *txv, vo
 static IOService gNub;  // PX2's interrupt nub
 extern "C" IOService *tegra_gpio_interrupt_nub(unsigned gpio, unsigned trigger)
 {
-    assert(gpio == TEGRA_GPIO_IMU_INT && trigger == TEGRA_GPIO_LEVEL_HIGH);
+    REQUIRE(gpio == TEGRA_GPIO_IMU_INT && trigger == TEGRA_GPIO_LEVEL_HIGH);
     return &gNub;
 }
 extern "C" void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size)
@@ -380,14 +375,14 @@ IOService *switch_hid_create(SwitchHIDKind kind)
 IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
 {
     if (static_cast<HidDevice *>(device)->kind == kSwitchHIDOrientation) {
-        assert(length == sizeof(SwitchOrientationReport));
+        REQUIRE(length == sizeof(SwitchOrientationReport));
         SwitchOrientationReport copy;
         memcpy(&copy, report, sizeof(copy));
-        assert(copy.id == 1);
+        REQUIRE(copy.id == 1);
         static_cast<HidDevice *>(device)->orientations.push_back(copy.orientation);
         return kIOReturnSuccess;
     }
-    assert(length == sizeof(SwitchMotionReport));
+    REQUIRE(length == sizeof(SwitchMotionReport));
     SwitchMotionReport copy;
     memcpy(&copy, report, sizeof(copy));
     static_cast<HidDevice *>(device)->reports.push_back(copy);
@@ -396,7 +391,7 @@ IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
 }
 IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length, uint64_t timestamp)
 {
-    assert(gTimedPosts && length == sizeof(SwitchMotionReport));
+    REQUIRE(gTimedPosts && length == sizeof(SwitchMotionReport));
     SwitchMotionReport copy;
     memcpy(&copy, report, sizeof(copy));
     static_cast<HidDevice *>(device)->reports.push_back(copy);
@@ -425,7 +420,7 @@ static HidDevice *hid(SwitchHIDKind kind)
 static void setFeature(SwitchHIDKind kind, uint32_t us, uint32_t batch)
 {
     HidDevice *device = hid(kind);
-    assert(device && device->handler);
+    REQUIRE(device && device->handler);
     const uint8_t report[9] = {1,
                                (uint8_t)us,
                                (uint8_t)(us >> 8),
@@ -1042,20 +1037,37 @@ static void lsm6ds3hSession()
     teardown();
 }
 
-int main()
+// --- The scenarios, in this order in one process, as the harness has always run them: each session tears the driver
+// down (teardown()) before the next starts it again. Do not shard or shuffle.
+TEST(SwitchMotion, DecodeAndMapping)
 {
     decodeAndMapping();
+}
+TEST(SwitchMotion, Icm42607Session)
+{
     icm42607Session();
+}
+TEST(SwitchMotion, Icm42607LeftRunning)
+{
     icm42607LeftRunning();
+}
+TEST(SwitchMotion, Icm42607Faults)
+{
     icm42607Faults();
+}
+TEST(SwitchMotion, Icm42607Fifo)
+{
     icm42607Fifo();
+}
+TEST(SwitchMotion, Icm42607Orientation)
+{
     icm42607Orientation();
+}
+TEST(SwitchMotion, Icm40607Session)
+{
     icm40607Session();
+}
+TEST(SwitchMotion, Lsm6ds3hSession)
+{
     lsm6ds3hSession();
-    if (gFailures) {
-        std::printf("FAIL: switch motion: %u of %u checks failed\n", gFailures, gChecks);
-        return 1;
-    }
-    std::printf("PASS: switch motion (%u checks)\n", gChecks);
-    return 0;
 }

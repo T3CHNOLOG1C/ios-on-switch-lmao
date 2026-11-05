@@ -1,9 +1,9 @@
 // Host stand-ins for the kernel interfaces drivers/SwitchMotion/SwitchMotion.cpp uses (IOKit, os_log, mach time), for
-// tests/switch_motion_harness.cpp. test_switch_motion.py points <IOKit/...> and <os/log.h> here. The work loop runs
-// everything at once on the caller's thread; time is a fake clock that IOSleep and IODelay advance.
+// switch_motion_test.cpp. BUILD.bazel points <IOKit/...> and <os/log.h> here (host_shims). The work loop runs
+// everything at once on the caller's thread; time is a fake clock that IOSleep and IODelay advance. A stand-in used
+// wrongly (a detach from another provider, a timer fired that is not armed) panics: the scenario fails.
 #ifndef IOSWITCH_TEST_SWITCH_MOTION_STUBS_H
 #define IOSWITCH_TEST_SWITCH_MOTION_STUBS_H
-#include <cassert>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -17,10 +17,22 @@ constexpr IOReturn kIOReturnSuccess = 0;
 
 // Fake time in nanoseconds; nanoseconds_to_absolutetime is the identity.
 inline uint64_t gNow = 0;
-inline uint64_t mach_absolute_time() { return gNow; }
-inline void nanoseconds_to_absolutetime(uint64_t ns, uint64_t *abs) { *abs = ns; }
-inline void IODelay(unsigned us) { gNow += us * 1000ull; }
-inline void IOSleep(unsigned ms) { gNow += ms * 1000000ull; }
+inline uint64_t mach_absolute_time()
+{
+    return gNow;
+}
+inline void nanoseconds_to_absolutetime(uint64_t ns, uint64_t *abs)
+{
+    *abs = ns;
+}
+inline void IODelay(unsigned us)
+{
+    gNow += us * 1000ull;
+}
+inline void IOSleep(unsigned ms)
+{
+    gNow += ms * 1000000ull;
+}
 
 // IOLog and os_log lines, in order, each prefixed with its channel.
 inline std::vector<std::string> gLog;
@@ -46,7 +58,7 @@ __attribute__((format(printf, 1, 2))) inline void stubOsLog(const char *format, 
     stubLog("os_log: ", format, ap);
     va_end(ap);
 }
-#define OS_LOG_DEFAULT nullptr
+#define OS_LOG_DEFAULT   nullptr
 #define os_log(log, ...) stubOsLog(__VA_ARGS__)
 
 struct Panic : std::runtime_error {
@@ -64,7 +76,7 @@ struct Panic : std::runtime_error {
 
 #define OSDeclareDefaultStructors(cls)
 #define OSDefineMetaClassAndStructors(cls, super)
-#define OSTypeAlloc(cls) (new cls)
+#define OSTypeAlloc(cls)        (new cls)
 #define OSDynamicCast(cls, obj) dynamic_cast<cls *>(obj)
 #define OSSafeReleaseNULL(obj) \
     do {                       \
@@ -106,7 +118,7 @@ public:
     }
     void detach(IOService *from)
     {
-        assert(provider == from);
+        if (provider != from) throw Panic("detach from a provider not attached to");
         provider = nullptr;
         release();
     }
@@ -151,7 +163,7 @@ public:
     IOService *provider = nullptr;
     static inline std::vector<IOInterruptEventSource *> all;
     static IOInterruptEventSource *interruptEventSource(OSObject *owner, Action action, IOService *provider = nullptr,
-                                                       int = 0)
+                                                        int = 0)
     {
         auto *source = new IOInterruptEventSource;
         source->owner = owner;
@@ -191,7 +203,7 @@ public:
     void cancelTimeout() { armed = false; }
     void fire()
     {
-        assert(armed);
+        if (!armed) throw Panic("timer fired while not armed");
         armed = false;
         action(owner, this);
     }
