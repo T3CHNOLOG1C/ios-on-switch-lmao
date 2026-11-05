@@ -981,10 +981,16 @@ impl Device {
         // SAFETY: the device is live, of `physical`, and enables timeline semaphores, and
         // `bufferDeviceAddress` where `device_address` says so; `queues` holds at least one of
         // its queues, which nothing uses yet.
+        // Not `VK_EXT_device_generated_commands`' objects (ioswitch): NVK compiles an indirect
+        // commands layout's preprocessing shader as the layout is made, a NAK compile in every
+        // process that opens a device (the largest share of a device's opening on the host, ~11 of
+        // ~60 ms, and seconds on a Tegra X1). Their first call in a section primes them instead,
+        // as the exit guard registers its hook again at a section's first call of an entry point
+        // (`exit_guard.rs`); a process that never makes an indirect command buffer never pays it.
         let priming_has = prime::Has {
             timestamps: timestamp_bits > 0,
             device_addresses: device_address,
-            generated_commands: generated_commands.is_some(),
+            generated_commands: false,
             sparse_binding: sparse.binds(),
         };
         // Raw disk/cache I/O only: starting the ordinary guarded cache or its
@@ -1006,7 +1012,7 @@ impl Device {
                 &queues,
                 Sharing::new(&queue_families),
                 priming_has,
-                generated_commands.as_ref(),
+                None,
                 priming_cache,
             )
         } {
