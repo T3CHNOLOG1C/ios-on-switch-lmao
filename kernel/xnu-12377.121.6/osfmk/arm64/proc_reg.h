@@ -243,6 +243,14 @@
 /* D-Cache, 128KB for Acc8 PCore, 8-way. 64KB for ECore, 8-way. */
 #define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
 
+#elif defined (BCM2837) /* generic ARMv8 target */
+
+/* I-Cache. */
+#define MMU_I_CLINE 6
+
+/* D-Cache. */
+#define MMU_CLINE   6
+
 #elif defined (VMAPPLE)
 
 /* I-Cache. */
