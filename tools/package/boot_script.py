@@ -36,7 +36,7 @@ def boot_script(text: str, loader_bytes: int, bl33: bytes | int, constants: dict
         if f'@{name}@' not in text:
             raise SystemExit(f'boot script template has no @{name}@')
         text = text.replace(f'@{name}@', hex(value))
-    # The command line now lives in the layout; drop the fixed-address args patch.
+    # The command line lives in the layout, so the template's fixed-address args patch goes.
     text, removed = re.subn(r'\n# Select raw only.*?\nfi\n', '\n', text, flags=re.S)
     if (removed != 1 or re.search(r'/switchroot/(?!' + NAME + '/)', text) or 'raw-args' in text or
             'crc32 -v' in text or '@' in text or 'kernel-window.bin' in text):

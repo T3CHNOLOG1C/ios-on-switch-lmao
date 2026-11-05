@@ -27,9 +27,9 @@ ENV_EDITS = {
         b'mmc_boot=if mmc dev ${devnum}; then setexpr.l ios_u_sd *0x60005010; setenv devtype mmc; '
         b'run scan_dev_for_boot_part; fi',
     b'boot_targets=mmc1 mmc0 ': b'boot_targets=mmc1',
-    # r7o: 1016 ms from the SD card up to hekate's env imported, nearly all `part list -bootable` (U-Boot re-reads and
-    # re-checks the GPT for every one of its 64 partition indexes). hekate's FAT is always partition 1, and r7o booted
-    # from it: scan it directly (no part list, no fstype probe: test -e and load mount it themselves).
+    # `part list -bootable` took about 1 s from the SD card up to hekate's env imported (U-Boot re-reads and re-checks
+    # the GPT for every one of its 64 partition indexes). hekate's FAT is always partition 1: scan it directly (no part
+    # list, no fstype probe: test -e and load mount it themselves).
     b'scan_dev_for_boot_part=part list ${devtype} ${devnum} -bootable devplist; env exists devplist || setenv devplist 1; '
     b'for distro_bootpart in ${devplist}; do if fstype ${devtype} ${devnum}:${distro_bootpart} bootfstype; then '
     b'run scan_dev_for_boot; fi; done':

@@ -440,7 +440,6 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         'root_boot cannot use diagnostic PID1 or alternate root selection',
     )
 
-    # The native profile's reviewed envelope.
     _require(m['virt_base'] == 0xFFFFFFF00427C000, 'prelinked native profile requires its exact reviewed virtual base')
     _require(
         m['phys_base'] & ~0x1FFFFF == 0xB2000000 and (m['window_end'] + 0x1FFFFF) & ~0x1FFFFF == 0xE2200000,

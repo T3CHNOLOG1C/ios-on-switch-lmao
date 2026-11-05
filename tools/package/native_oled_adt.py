@@ -87,7 +87,7 @@ def generate_adt(seed: bytes | None = None, *, userspace_fixture: bool = False,
         raise ValueError("native_smp requires the explicit full-RAM native root profile")
     # Sidecar slots stay empty until native_xnu_layout checks and places their
     # exact bytes inside the managed kernel window. The root profile uses a
-    # disposable Data seed; the earlier fixture profile uses a RAM root.
+    # disposable Data seed; the userspace fixture profile uses a RAM root.
     bootstrap = ([
         ("osenvironment", b"main\0" if root_boot else b"ramdisk\0"),
         ("crypto-hash-method", b"sha2-384\0"),

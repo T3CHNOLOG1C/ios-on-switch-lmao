@@ -1,15 +1,5 @@
 # The boot entry's packaging steps, one py_binary each: //boot:package (boot/defs.bzl) runs every one as its own
 # action, so an edit to one module reruns only the steps that import it.
-#
-#   boot_args.py    the kernel's boot-args (COMMAND_LINE)
-#   adt.py          the board ADT (native_oled_adt.py), //boot:adt
-#   overlay.py      the userland overlay: plan, trust module, tree
-#   adt_edit.py     the ADT's iPad identity, hardware nodes, overlay unions, loader slots (USB_HOST, DISPLAY_GAMUT)
-#   trust.py        the static trust cache bundle
-#   build_native_loader.py  the kernel window (native_xnu_layout.py), layout.h and runs.h
-#   loader_link.py  the loader linked and wrapped for bootm (and, through boot_script.py, boot.cmd / boot.scr)
-#   bl33.py         U-Boot's environment edit and the staged window
-#   boot_script.py  boot.cmd / boot.scr
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("@rules_python//python:py_test.bzl", "py_test")

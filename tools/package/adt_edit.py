@@ -143,9 +143,9 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
     # IOService named "bluetooth" bluetoothd looks up (local-mac-address, transport-speed, transport-encoding: J120's 3,
     # H4BC, which also opens /dev/btwake, SwitchBluetooth's; bluetoothd takes its transport from kern_exec.c's
     # BT_HCI_TRANSPORT, the same H4BC, as plain H4 has no prepare-to-terminate step and crashed whenever Bluetooth was
-    # turned off). The kernel downloads ioswitch,patchram itself, since
-    # BlueTool has no BCM4356A3 firmware, and replaces local-mac-address (and /chosen mac-address-bluetooth0) with the
-    # unit's own address from the fuse lot code when it can read it.
+    # turned off). The kernel downloads ioswitch,patchram itself, since BlueTool has no BCM4356A3 firmware, and replaces
+    # local-mac-address (and /chosen mac-address-bluetooth0) with the unit's own address from the fuse lot code when it
+    # can read it.
     # Only when the boot-arg is in the command line: without the radio, the node would only change what wifid and
     # MobileGestalt see on an otherwise unchanged boot (toggling a boot-arg repackages anyway).
     if boot_arg_on(command_line, 'switch-bt'):
