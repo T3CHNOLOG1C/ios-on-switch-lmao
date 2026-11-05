@@ -1,8 +1,9 @@
 """An iOS 17 userland binary for the overlay, as cmake/Drivers.cmake built them: Xcode's clang for arm64-apple-ios17.0
 with the iPhoneOS SDK, then an ad hoc signature (no timestamp: the CDHash is a function of the bytes).
 
-usage: ios_binary.py --xcode-env F --out O --path-root P --bin-dir D [--coreaudio-headers]
+usage: ios_binary.py --xcode-env F --out O --path-root P --bin-dir D [--coreaudio-headers] [--strip]
                      [--sign-identifier ID] [--entitlements E] [--pagesize N] -- <clang args and sources>
+--strip (the release profile) strips local symbols (strip -x) before the signature.
 --coreaudio-headers puts the macOS SDK's AudioServerPlugIn.h, AudioHardwareBase.h and AudioHardware.h first on the
 include path as CoreAudio/ (the iOS SDK lacks them; the HAL plug-in interface is the same).
 """
@@ -27,6 +28,7 @@ def main():
     parser.add_argument("--sign-identifier")
     parser.add_argument("--entitlements")
     parser.add_argument("--pagesize")
+    parser.add_argument("--strip", action="store_true")
     parser.add_argument("clang", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     here = common.execroot()
@@ -47,6 +49,8 @@ def main():
     command += common.prefix_maps(args.path_root, args.bin_dir, "external/+http_archive+xnu")
     command += ["-o", os.path.join(here, args.out)]
     subprocess.run(command, check=True, env=env)
+    if args.strip:
+        subprocess.run(["xcrun", "strip", "-x", args.out], check=True, env=env)
     if True:
         # Ad hoc, as the CMake flow signed them (identifier defaults to the file name).
         sign = ["codesign", "-f", "-s", "-"]

@@ -6,7 +6,6 @@ only the steps it reaches:
     adt_edit.py      (board ADT, plan) ...... ioswitch.adt
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU) ... trustcache.bundle
-    strip -x         (release only) ......... kernel.macho
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
                                          ...... plan.json, the kernel's LZ4 blocks, the rest
     build_native_loader.py compress, twice ... each set of blocks lz4 -12'd (a boot-arg, ADT, overlay or GPU trust
@@ -21,8 +20,8 @@ only the steps it reaches:
 
 So an overlay plist edit reruns the overlay tree and the final copy; a driver edit reruns the kernel's steps from the
 layout on (both compressions, four loader objects, the link, the bl33 stage, the boot script and the copy); a boot-arg
-edit reruns from the ADT edit on, but compresses only the window's tail. The Python steps run on the hermetic interpreter and need nothing of Xcode; the loader's compiles and the
-release strip do (Xcode's clang and strip, the declared host input).
+edit reruns from the ADT edit on, but compresses only the window's tail. The Python steps run on the hermetic interpreter and need nothing of Xcode; the loader's compiles do (Xcode's
+clang, the declared host input).
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
@@ -164,11 +163,10 @@ def _boot_package_impl(ctx):
     _run(ctx, ctx.executable._trust, [args], [ctx.file.static_trust, ctx.file.app_trust, overlay_trust] + gpu, [bundle], "BootTrust", "Bundling the static trust caches")
 
     # --- the kernel window and the loader --------------------------------------------------------------------------
+    # The prelinked kernel as linked: Xcode's strip and llvm-objcopy both refuse its layout ("string table not at the
+    # end of the file"), so a release kernel is stripped where it is linked, before the prelinker (which binds the kexts
+    # to its global symbols, all a strip -x keeps).
     kernel = ctx.file.kernel
-    if ctx.attr.strip_kernel:
-        stripped = out("kernel.macho")
-        _xcode(ctx, "/usr/bin/strip", ["-x", "-o", stripped.path, kernel.path], [kernel], [stripped], "StripKernel", "Stripping the kernel's local symbols")
-        kernel = stripped
     # Layout and checks, then the kernel's own LZ4 blocks and the rest compressed apart (a boot-arg, ADT, overlay
     # binary or GPU trust cache edit recompresses only the rest), then the staged window and the loader's headers.
     window_plan, kernel_blocks, tail_blocks = out("window/plan.json"), out("window/kernel.blocks"), out("window/tail.blocks")
@@ -337,7 +335,6 @@ boot_package = rule(
         "out": attr.string(default = "ioswitch"),
         "entry": attr.string(default = "ioswitch", doc = "the entry's folder (switchroot/<entry>/) and ini name"),
         "kernel": attr.label(mandatory = True, allow_single_file = True),
-        "strip_kernel": attr.bool(doc = "strip the kernel's local symbols before the layout (the release profile)"),
         "adt": attr.label(mandatory = True, allow_single_file = True, doc = "the board ADT (//boot:adt)"),
         "static_trust": attr.label(mandatory = True, allow_single_file = True),
         "app_trust": attr.label(mandatory = True, allow_single_file = True),
