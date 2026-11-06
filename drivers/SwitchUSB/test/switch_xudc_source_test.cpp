@@ -33,6 +33,7 @@ TEST(SwitchXudcSource, DriverUsesTheHeader)
              "kIOMemoryPhysicallyContiguous",
          })
         EXPECT_THAT(source, HasSubstr(needle));
+    EXPECT_THAT(SourceText("../XudcHardware.cpp"), HasSubstr("link[3] = linkControl(link[3], flags, ring.cycle);"));
     const std::string memory = SourceText("../XudcRequestMemory.h");
     EXPECT_THAT(memory, HasSubstr("md->performOperation(invalidate ? kIOMemoryIncoherentIOFlush : "
                                   "kIOMemoryIncoherentIOStore, offset, length);"));

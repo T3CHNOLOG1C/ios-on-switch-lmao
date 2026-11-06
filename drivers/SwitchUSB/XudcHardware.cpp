@@ -730,7 +730,8 @@ uint32_t Hardware::push(uint32_t dci, uint32_t bufferPA, uint32_t length, uint32
     return rings[dci].pa + index * 16;
 }
 
-// The TRB (the controller reads it once its line is cleaned), and the link TRB's cycle when the ring wraps.
+// The TRB (the controller reads it once its line is cleaned), and the link TRB (XudcTransfer.h linkControl) when the
+// ring wraps.
 uint32_t Hardware::pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, uint32_t tdSize, uint32_t flags)
 {
     Ring &ring = rings[dci];
@@ -743,7 +744,7 @@ uint32_t Hardware::pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, ui
     cacheFlush(t, 16);
     if (++ring.enqueue == ring.trbs - 1) {
         volatile uint32_t *link = ring.trb + ring.enqueue * 4;
-        link[3] = (link[3] & ~TRB_CYCLE) | ring.cycle;
+        link[3] = linkControl(link[3], flags, ring.cycle);
         cacheFlush(link, 16);
         ring.enqueue = 0;
         ring.cycle ^= 1;

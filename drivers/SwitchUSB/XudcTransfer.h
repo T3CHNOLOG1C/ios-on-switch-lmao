@@ -62,6 +62,15 @@ constexpr uint32_t trbType(uint32_t type)
     return type << 10;
 }
 
+// A ring's link TRB as the producer passes it: the cycle bit hands it to the controller, CHAIN is the TRB's before it
+// (Linux xhci inc_enq). xHCI ends a TD at a link TRB without CHAIN, so a TD that wraps would become two: an OUT short
+// packet before the link completes the request, and the host's next transfer lands in the TRBs after the link, in that
+// request's memory, its event taken for the TD's second.
+constexpr uint32_t linkControl(uint32_t link, uint32_t previous, uint32_t cycle)
+{
+    return (link & ~(TRB_CYCLE | TRB_CHAIN)) | (previous & TRB_CHAIN) | (cycle & TRB_CYCLE);
+}
+
 constexpr uint32_t kRingTrbs = 16;  // EP0's ring (in the control area); the last one is the link TRB
 constexpr uint32_t kDataRingTrbs =
     256;  // a data endpoint's ring, one 4 KiB page of its own (SwitchXUDC "Data endpoints"); the last is the link TRB

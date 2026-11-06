@@ -3,11 +3,11 @@
 // order, with the bytes the controller put in it.
 //
 // The model controller works through the TDs on a transfer ring the way xHCI and Linux tegra-xudc describe it: TRBs in
-// ring order, a TD ends at its TRB without CHAIN; OUT packets fill whole-packet TRBs; an IOC TRB that fills raises an
-// event; a short packet (or a zero-length one) ends the TD with an event on the TRB it landed in (ISP), the residue
-// that TRB's or the TD's, and the controller then skips the rest of the TD, a while later, reading those TRBs as it
-// goes, and may raise a second event on the TD's last TRB (IOC) when it gets there. Events go through one FIFO of a
-// fixed size.
+// ring order, a TD ends at its TRB without CHAIN (or, as xHCI reads it, at a link TRB without CHAIN); OUT packets fill
+// whole-packet TRBs; an IOC TRB that fills raises an event; a short packet (or a zero-length one) ends the TD with an
+// event on the TRB it landed in (ISP), the residue that TRB's or the TD's, and the controller then skips the rest of
+// the TD, a while later, reading those TRBs as it goes, and may raise a second event on the TD's last TRB (IOC) when
+// it gets there. Events go through one FIFO of a fixed size.
 //
 // The model driver is SwitchXUDC.cpp's data path in miniature: requests laid out by XudcTransfer.h plan() from
 // mbuf-like scatter-gather onto the ring within TdRing::room(), events matched by TdRing::decide/apply, the next
@@ -110,6 +110,9 @@ template <uint32_t Slots> struct Wire {
     };
 
     Trb trb[Slots] = {};
+    uint32_t link = xudc::trbType(xudc::TRB_LINK) | xudc::TRB_TOGGLE;  // after TRB Slots - 1
+    uint32_t cycle = 1;
+    bool legacyLink = false;  // the link as Hardware::pushData wrote it before linkControl: cycle only, never CHAIN
     uint32_t enqueue = 0;     // the driver's producer position (Hardware::pushData)
     uint32_t dequeue = 0;     // the next TRB the controller reads
     uint32_t owned = 0;       // TRBs written that the controller has not passed yet
@@ -122,6 +125,10 @@ template <uint32_t Slots> struct Wire {
         const uint32_t index = enqueue;
         trb[index] = {length, flags, request};
         enqueue = (enqueue + 1) % Slots;
+        if (!enqueue) {
+            link = legacyLink ? (link & ~xudc::TRB_CYCLE) | cycle : xudc::linkControl(link, flags, cycle);
+            cycle ^= 1;
+        }
         ++owned;
         return index;
     }
@@ -158,9 +165,11 @@ template <uint32_t Slots> struct Controller {
             return false;
         cur = {true, wire.dequeue, 0, 0, 0, 0, 0, wire.trb[wire.dequeue].request};
         for (uint32_t i = 0;; ++i) {
-            const auto &t = wire.trb[at(cur.first, i)];
+            const uint32_t index = at(cur.first, i);
+            const auto &t = wire.trb[index];
             cur.total += t.length;
-            if (!(t.flags & xudc::TRB_CHAIN)) {
+            const bool linkEnds = index == Slots - 1 && !(wire.link & xudc::TRB_CHAIN);
+            if (!(t.flags & xudc::TRB_CHAIN) || linkEnds) {
                 cur.trbs = i + 1;
                 break;
             }
@@ -234,7 +243,9 @@ template <uint32_t Slots> struct Controller {
         if (!load())
             return false;
         delivered[cur.request] += cur.total;
-        events->raise({dci, at(cur.first, cur.trbs - 1), xudc::COMP_SUCCESS, 0});
+        const uint32_t last = at(cur.first, cur.trbs - 1);
+        if (wire.trb[last].flags & xudc::TRB_IOC)
+            events->raise({dci, last, xudc::COMP_SUCCESS, 0});
         pass(cur);
         cur.active = false;
         return true;
@@ -267,6 +278,15 @@ Layout mbufs(Rng &rng, uint32_t length)
     }
     return l;
 }
+
+// AppleUSBDeviceMux's reads without ScatterGatherSupport: one of its 32 KiB buffers from the controller's
+// createIOBuffer, contiguous at a 16 KiB page below 4 GiB; one in four crosses a 64 KiB boundary (two TRBs).
+Layout muxBuffer(Rng &rng, uint32_t length)
+{
+    return {{{0x8000'0000 + rng.below(1u << 12) * 16384, length}}, length};
+}
+
+using ReadLayout = Layout (*)(Rng &, uint32_t);
 
 struct Completion {
     uint64_t request;
@@ -518,10 +538,12 @@ template <uint32_t Slots, class Matching = void> struct Session {
     bool draining = false;
     double cancelChance = 0;
     uint32_t readBytes;
+    ReadLayout readLayout;
     size_t perEndpointDeepest = 0;
 
-    Session(uint64_t seed, Behaviour how, size_t eventCapacity, uint32_t reads, uint32_t depth)
-        : rng(seed), events(eventCapacity), readBytes(reads)
+    Session(uint64_t seed, Behaviour how, size_t eventCapacity, uint32_t reads, uint32_t depth,
+            ReadLayout layout = mbufs)
+        : rng(seed), events(eventCapacity), readBytes(reads), readLayout(layout)
     {
         for (Ep *ep : {&outEp, &inEp}) {
             ep->hw.dci = ep == &outEp ? 2 : 3;
@@ -534,13 +556,13 @@ template <uint32_t Slots, class Matching = void> struct Session {
         outEp.onComplete = [this](Ep &ep) {
             if (cancelChance && rng.chance(cancelChance))
                 return cancel(rng.chance(0.5) ? inEp : ep);
-            ep.queue.push_back({ep.nextId++, mbufs(rng, readBytes), 0});
+            ep.queue.push_back({ep.nextId++, readLayout(rng, readBytes), 0});
         };
         inEp.onComplete = [this](Ep &ep) {
             ep.queue.push_back({ep.nextId++, write(), 0});
         };
         for (uint32_t i = 0; i < depth; ++i) {
-            outEp.enqueue(mbufs(rng, readBytes));
+            outEp.enqueue(readLayout(rng, readBytes));
             inEp.enqueue(write());
         }
     }
@@ -583,7 +605,7 @@ template <uint32_t Slots, class Matching = void> struct Session {
         // Bytes the host sent into a TD that is gone: an abort loses them (both sides of the check drop them).
         ep.cancel(draining, events);
         for (uint32_t i = 0; i < 8; ++i)
-            ep.queue.push_back({ep.nextId++, &ep == &inEp ? write() : mbufs(rng, readBytes), 0});
+            ep.queue.push_back({ep.nextId++, &ep == &inEp ? write() : readLayout(rng, readBytes), 0});
         ep.kick();
     }
 
@@ -828,6 +850,15 @@ TEST(XudcCompletion, RingWrap)
 // The ring full of mux reads and the head ends at a short packet on its first TRB: the next read cannot go onto the
 // TD's TRBs (the controller may still be skipping through them) until an event shows the controller past it. Without
 // the tail, 11 would be free at once from TRB 252: 252..254 and 0..7, the TD's own; the one free slot, TRB 8, its last.
+TEST(XudcCompletion, LinkCarriesTheChain)
+{
+    const uint32_t link = xudc::trbType(xudc::TRB_LINK) | xudc::TRB_TOGGLE;
+    const uint32_t middle = xudc::trbType(xudc::TRB_NORMAL) | xudc::TRB_ISP | xudc::TRB_CHAIN;
+    const uint32_t last = xudc::trbType(xudc::TRB_NORMAL) | xudc::TRB_ISP | xudc::TRB_IOC;
+    EXPECT_EQ(xudc::linkControl(link, middle, 1), link | xudc::TRB_CHAIN | xudc::TRB_CYCLE) << "a TD across the link";
+    EXPECT_EQ(xudc::linkControl(link | xudc::TRB_CHAIN | xudc::TRB_CYCLE, last, 0), link) << "a TD ends before it";
+}
+
 TEST(XudcCompletion, TailKeepsTheSkippedTrbs)
 {
     Ring255 ring{};
@@ -908,6 +939,39 @@ TEST(XudcSession, SmallRingWraps)
         s.run(20000, 0.5, 8);
         checkSession(s, false);
         EXPECT_GT(s.outEp.tally.serial, 0u) << "a tail blocked a read with nothing on the ring";
+    }
+}
+
+// AppleUSBDeviceMux's reads as on the device (32 KiB buffers, two queued, a quarter of them two TRBs) on a controller
+// that raises second events. With the link written without CHAIN, a read across the link that a short packet ends
+// before it leaves its last TRB to the controller as a TD of its own: the host's next transfer goes there, into a read
+// already completed, and its event passes for the read's second. With CHAIN carried: no loss.
+TEST(XudcSession, ReadAcrossTheLinkStaysOneTd)
+{
+    for (const bool legacy : {true, false}) {
+        SCOPED_TRACE(legacy ? "link without CHAIN" : "link with the TD's CHAIN");
+        Session<255> s(19, {false, Second::ShortCode}, 2 * xudc::kEventSegmentTrbs, 32768, 2, muxBuffer);
+        ASSERT_EQ(s.outEp.hw.wire.cycle, 1u) << "no wrap yet";
+        s.outEp.hw.wire.legacyLink = s.inEp.hw.wire.legacyLink = legacy;
+        s.run(5000, 0.3, 24);
+        uint64_t got = 0, wrong = 0;
+        for (const Completion &c : s.outEp.completed) {
+            got += c.actual;
+            const auto it = s.outEp.hw.delivered.find(c.request);
+            wrong += c.actual != (it == s.outEp.hw.delivered.end() ? 0 : it->second);
+        }
+        if (!legacy) {
+            checkSession(s, false);
+            continue;
+        }
+        EXPECT_GT(wrong, 0u) << "host bytes in reads already completed";
+        EXPECT_LT(got, s.hostBytes);
+        EXPECT_EQ(s.outEp.tally.second, s.outEp.tally.shortEarly) << "the lost transfer's event passes for a second";
+        checkCompletions(s.inEp, false, "IN");
+        std::printf("XUDC mux reads, link without CHAIN: %llu of %zu reads given bytes after they completed, %llu of "
+                    "%llu host bytes lost\n",
+                    static_cast<unsigned long long>(wrong), s.outEp.completed.size(),
+                    static_cast<unsigned long long>(s.hostBytes - got), static_cast<unsigned long long>(s.hostBytes));
     }
 }
 
