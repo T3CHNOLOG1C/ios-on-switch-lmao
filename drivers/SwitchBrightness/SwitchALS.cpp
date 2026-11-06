@@ -206,9 +206,10 @@ class SwitchALS : public IOService {
     bool broken = false;    // a sensor or HID path that is not as expected: logged once, sampling off for this boot
     uint64_t supplyAt = 0;  // when LDO6 last came on (switch_als_supply)
     uint64_t ticksSeen = 0;
-    // Frame-end filter state: `running` gates it; `frames` is the filter's own; `ticks` counts its signals.
+    // Frame-end filter state: `running` gates it; `frames` and `due` (frame ends to the next signal) are the filter's
+    // own once running; `ticks` counts its signals.
     bool running = false;
-    unsigned frames = 0;
+    unsigned frames = 0, due = kFramesPerSample;
     uint64_t ticks = 0;
     unsigned samples = 0, luxMin = ~0u, luxMax = 0;
     unsigned loggedLux = 0, loggedGain = ~0u;  // the last line's (noteStats); ~0u: none yet
@@ -260,16 +261,18 @@ static volatile bool gSupply;  // LDO6 as SwitchTouch last reported it, for a re
 // Primary interrupt context (TegraPanel's frame-end filter), every DC A FRAME_END.
 void SwitchALS::frameEnd()
 {
-    if (!__atomic_load_n(&running, __ATOMIC_ACQUIRE) || ++frames < kFramesPerSample)
+    if (!__atomic_load_n(&running, __ATOMIC_ACQUIRE) || ++frames < due)
         return;
     frames = 0;
+    due = kFramesPerSample;
     __atomic_fetch_add(&ticks, 1, __ATOMIC_RELAXED);
     clock->interruptOccurred(nullptr, nullptr, 0);
 }
 
 // Work loop. The sensor samples while the panel is lit (or waking), the console awake and LDO6 on; otherwise it is
 // powered down (it keeps its registers while LDO6 stays on) and the frame ends are ignored. Starting sets it up at
-// once: its first conversion is done by the first frame-end tick.
+// once; the first tick is a frame later than the rest, because starting falls anywhere in a frame and the sensor's
+// registers still hold the last conversion from before it powered down.
 void SwitchALS::update()
 {
     const bool want = lit && !suspended && supply && !broken;
@@ -277,6 +280,7 @@ void SwitchALS::update()
         return;
     if (want) {
         frames = 0;
+        due = kFramesToFirstSample;
         errors = 0;
         configured = false;  // the sensor may have lost power
         ticksSeen = __atomic_load_n(&ticks, __ATOMIC_RELAXED);
