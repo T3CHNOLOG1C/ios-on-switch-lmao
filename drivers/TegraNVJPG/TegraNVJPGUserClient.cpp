@@ -649,11 +649,8 @@ IOReturn AppleJPEGDriverUserClient::registerNotificationPort(mach_port_t port, U
     if (!busy)
         port_ = port;
     IOLockUnlock(lock_);
-    if (busy) {
-        IOUserClient::releaseNotificationPort(port);
-        return kIOReturnError;
-    }
-    return kIOReturnSuccess;
+    // A refused port's right is the MIG server's to destroy: it does so when this returns an error.
+    return busy ? kIOReturnError : kIOReturnSuccess;
 }
 
 // Queued decodes hold the connection; closing waits for them (each is bounded by the engine), so no completion
