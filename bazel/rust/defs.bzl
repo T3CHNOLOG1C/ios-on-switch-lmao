@@ -15,9 +15,11 @@ Profiles (//bazel:profile, r17-bazel's one switch):
            byte the one cargo built (each crate keeps cargo's -C metadata/extra-filename: crates.MODULE.bazel and the
            m2v crates' BUILD files; the source paths are remapped to the ones cargo's build named).
   debug    the default, for edit-build cycles: every crate its own action, no LTO of any kind (not even rustc's
-           thin-local LTO between a crate's codegen units), opt-level 1 (O0's code is too slow and its stack frames too
-           deep for the translator on the device), many codegen units, line tables, debug assertions and overflow checks,
-           and our own crates (INCREMENTAL_CRATES) compiled incrementally.
+           thin-local LTO between a crate's codegen units), many codegen units, line tables, and our own crates
+           (INCREMENTAL_CRATES) compiled incrementally. opt-level 3 with debug assertions and overflow checks off, as in
+           release: the device runs this bridge for every app's Metal, and m2v's debug assertions re-derive and compare
+           whole bind states on every draw (a CA-shaped frame took 2.7x the CPU of the release bridge at opt-level 1
+           with them on).
 
 Nothing here is global: the flags reach rules_rust through its own build settings, set by the transition on this
 rule's `crate` only, so other Rust in the build (NVK's NAK, r18-mesa) keeps its own flags.
@@ -60,7 +62,7 @@ _CRATE_FLAGS = {
         "-Clinker-plugin-lto",
     ],
     ("device", "debug"): [
-        "-Copt-level=1",
+        "-Copt-level=3",
         "-Ccodegen-units=64",
         "-Clto=off",
         "-Cembed-bitcode=no",
@@ -68,8 +70,8 @@ _CRATE_FLAGS = {
         # of the translator 35-47 s); here it also makes the debug bridge 1/3 the size.
         "-Cdebuginfo=line-tables-only",
         "-Csplit-debuginfo=unpacked",
-        "-Cdebug-assertions=on",
-        "-Coverflow-checks=on",
+        "-Cdebug-assertions=off",
+        "-Coverflow-checks=off",
     ],
     # The precompile's: cargo's release profile less LTO and debug info (what the old build's --quick did), in both profiles.
     ("tool", "release"): [
