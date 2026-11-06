@@ -5122,7 +5122,9 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     }
     if (!p->_raw)
         once([NSString stringWithFormat:@"state not in the pack (m2v draws it)%s: %@",
-                                        p->_quartzCore ? "" : " (not QuartzCore's functions: never looked up)",
+                                        !p->_quartzCore ? " (not QuartzCore's functions: never looked up)"
+                                        : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
+                                                                   : "",
                                         d.label ?: @"-"]);
     return p;
 }
