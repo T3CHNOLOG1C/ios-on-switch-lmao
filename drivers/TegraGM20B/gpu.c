@@ -1481,7 +1481,7 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 {
 	struct tgm_hang_candidate c[6] = {};
 	struct tgm_chan *chans[6] = {}, *chan, *blame;
-	char report[sizeof(late->fault)], state[320];
+	char report[sizeof(late->fault)], state[TGM_HANG_LINE];
 	enum tgm_hang verdict;
 	u64 now = nvxnu_nanotime();
 	int suspects[4], n, i, b, progress = 0;
@@ -1510,8 +1510,10 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 	chan_describe(blame, state, sizeof(state));
 	scnprintf(report, sizeof(report), HANG_REPORT "%s waited %llu ms for %s fence %u; %s", who,
 		  waited_ns / 1000000, late->owner, seqno, state);
-	nvxnu_log("tegra-gm20b: GPU hang, recovering %s (channel %u): %s\n", blame->owner,
-		  blame->chid, report);
+	nvxnu_log(
+		"tegra-gm20b: GPU hang, recovering %s (channel %u): %s waited %llu ms for %s fence "
+		"%u; %s\n",
+		blame->owner, blame->chid, who, waited_ns / 1000000, late->owner, seqno, state);
 	chan_isolate(blame, report, now);
 	tgm_recover_fault(gpu.device, blame->chid);
 	return verdict;
@@ -1520,7 +1522,7 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 int tgm_ctxsw_stuck(int chid)
 {
 	struct tgm_chan *chan;
-	char report[sizeof(chan->fault)], state[320];
+	char report[sizeof(chan->fault)], state[TGM_HANG_LINE];
 	u64 now = nvxnu_nanotime();
 	int stuck = 1;
 
