@@ -417,9 +417,7 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
             }
         }
         if (!copyBad) {
-            {
-                t->yccIn |= TEGRA_VIC_YCC_IN_COPY;
-            }
+            t->yccIn |= TEGRA_VIC_YCC_IN_COPY;
         } else if (copyBad != UINT32_MAX) {
             IOLog("TegraVIC: diag 420f -> 420f: %u of 3072 samples off, first at byte %#x (plane %s row %u column %u): "
                   "%u, source %u\n",
