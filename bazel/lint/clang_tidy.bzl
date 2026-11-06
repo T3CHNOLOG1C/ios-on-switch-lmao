@@ -98,6 +98,22 @@ def _flags(cc_toolchain, feature_configuration, compilation_context, action, use
         variables = variables,
     )
 
+def _make_variables(ctx):
+    """The make variables the target's toolchains define ($(KERNEL_XNU), ...), which its copts use."""
+    variables = {}
+    for toolchain in getattr(ctx.rule.attr, "toolchains", []):
+        if platform_common.TemplateVariableInfo in toolchain:
+            variables.update(toolchain[platform_common.TemplateVariableInfo].variables)
+    return variables
+
+def _expand(flags, variables):
+    expanded = []
+    for flag in flags:
+        for name, value in variables.items():
+            flag = flag.replace("$(" + name + ")", value)
+        expanded.append(flag)
+    return expanded
+
 def _tidy_units(target, ctx):
     cc_toolchain = find_cpp_toolchain(ctx)
     feature_configuration = cc_common.configure_features(
@@ -107,7 +123,8 @@ def _tidy_units(target, ctx):
         unsupported_features = ctx.disabled_features + UNSUPPORTED_FEATURES,
     )
     compilation_context = target[CcInfo].compilation_context
-    copts = list(getattr(ctx.rule.attr, "copts", []))
+    variables = _make_variables(ctx)
+    copts = _expand(getattr(ctx.rule.attr, "copts", []), variables)
     configs = [f for f in ctx.files._configs if f.basename in (".clang-tidy", ".clang-format")]
     resource_dir = ctx.files._resource_dir[0].path.partition("/include/")[0]
     reports = []
@@ -116,9 +133,9 @@ def _tidy_units(target, ctx):
             continue
         action, language = LANGUAGES[src.extension]
         if language in ("c", "objective-c"):
-            lang_flags = ctx.fragments.cpp.conlyopts + list(getattr(ctx.rule.attr, "conlyopts", []))
+            lang_flags = ctx.fragments.cpp.conlyopts + _expand(getattr(ctx.rule.attr, "conlyopts", []), variables)
         else:
-            lang_flags = ctx.fragments.cpp.cxxopts + list(getattr(ctx.rule.attr, "cxxopts", []))
+            lang_flags = ctx.fragments.cpp.cxxopts + _expand(getattr(ctx.rule.attr, "cxxopts", []), variables)
         flags = _flags(
             cc_toolchain,
             feature_configuration,
