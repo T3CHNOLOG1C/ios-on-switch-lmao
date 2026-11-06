@@ -1,4 +1,4 @@
-load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 # The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
@@ -33,6 +33,14 @@ string_flag(
         "16k",
         "4k",
     ],
+)
+
+# kprof (osfmk/kern/switch_kprof.c) in a debug kernel, for a measurement boot: --//kernel:kprof. Release kernels never
+# have it.
+bool_flag(
+    name = "kprof",
+    build_setting_default = False,
+    scope = "target",
 )
 
 config_setting(

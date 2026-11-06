@@ -1913,7 +1913,11 @@ kprof_function_starts(void)
  * waits) see kprof_ready false and return; the user trap line and the footprint breakdown below are per event and stay
  * on. Not a boot-arg: a release must not be able to turn it on.
  */
+#if defined(SWITCH_KPROF) && SWITCH_KPROF
+static bool kprof_wanted = true;
+#else
 static bool kprof_wanted = false;
+#endif
 
 static void
 kprof_init(void)

@@ -227,6 +227,14 @@ def _impl(ctx):
             flag_sets = [flag_set(actions = _COMPILE, flag_groups = _flags(["-DSWITCH_VM_16K_PAGES=1"]))],
         ))
 
+    # The sampling profiler in debug kernels (//kernel:kprof): one os_log report every 10 s of where the CPU went.
+    if ctx.attr._kprof[BuildSettingInfo].value:
+        features.append(feature(
+            name = "kprof_macro",
+            enabled = True,
+            flag_sets = [flag_set(actions = _COMPILE, flag_groups = _flags(["-DSWITCH_KPROF=1"]))],
+        ))
+
     # cc_library defines, which no_legacy_features would drop: a driver package's build settings reach the compiles of
     # every driver that names its headers (drivers/SwitchUSB:hdrs). Nothing else on the kernel side has defines.
     features.append(feature(
@@ -343,6 +351,7 @@ kernel_cc_toolchain_config = rule(
     attrs = {
         "sdk": attr.label(mandatory = True, providers = [KernelSdkInfo], doc = "the kernel SDK (//kernel:sdk)"),
         "_profile": attr.label(default = "//bazel:profile"),
+        "_kprof": attr.label(default = "//kernel:kprof"),
         "_vm_page_size": attr.label(default = "//kernel:vm_page_size"),
         "_xnu_version": attr.label(default = "//kernel:xnu_version"),
         "source_roots": attr.string_list(

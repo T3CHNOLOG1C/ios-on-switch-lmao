@@ -1,6 +1,6 @@
 /*
  * Switch kernel sampling profiler: where the CPU goes, kernel_task included, in the unified log every 10 s.
- * Debug kernels only, and off there unless built in: kprof_wanted (kprof_init). Release kernels keep only
+ * Debug kernels only, and off there unless built with --//kernel:kprof (SWITCH_KPROF). Release kernels keep only
  * switch_footprint_breakdown.
  *
  * Sampling. Each CPU takes one sample about every 4 ms from its own running timer (RUNNING_TIMER_SWITCH_KPROF).
@@ -1976,7 +1976,11 @@ kprof_function_starts(void)
  * waits) see kprof_ready false and return; the user trap line and the footprint breakdown below are per event and stay
  * on. Not a boot-arg: a release must not be able to turn it on.
  */
+#if defined(SWITCH_KPROF) && SWITCH_KPROF
+static bool kprof_wanted = true;
+#else
 static bool kprof_wanted = false;
+#endif
 
 static void
 kprof_init(void)
