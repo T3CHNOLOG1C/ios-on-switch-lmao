@@ -1612,7 +1612,7 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 @interface RMPipeline : RMObject {
 @public
     raw::Pipeline *_raw;  // null: not in the pack (every command buffer using it goes to m2v)
-    bool _quartzCore;  // its functions are QuartzCore's (looked up in the pack)
+    bool _quartzCore;     // its functions are QuartzCore's (looked up in the pack)
 }
 @end
 @implementation RMPipeline
