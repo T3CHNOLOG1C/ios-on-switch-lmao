@@ -21,12 +21,15 @@ void native_keyevents_open_refused(void)
     native_keyevents_refused_opens = native_keyevents_refused_opens + 1;
 }
 
-// The owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed the diagnostic
-// page's extension rows (slots 0-1): opens/calls, then selector:count per selector seen ('e' = the last answer was an error).
+// The owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed a debug kernel's
+// diagnostic page's extension rows (slots 0-1): opens/calls, then selector:count per selector seen ('e' = the last
+// answer was an error).
+#if DEVELOPMENT || DEBUG
 extern char boot_progress_ext[8][48];
 volatile uint32_t native_aks_opens, native_aks_calls;
 static volatile uint32_t aks_count[96];
 static volatile int32_t aks_rc[96];
+#endif
 
 bool native_aks_state_enabled(void)
 {
@@ -43,6 +46,7 @@ uint32_t native_aks_lock_state(void)
     return 3;
 }
 
+#if DEVELOPMENT || DEBUG
 static void aks_publish(void)
 {
     // Slot 0: counters; slot 1: selector:count tokens ('e' = the last answer was an error). Slots 2-3 belong to the Data store.
@@ -87,6 +91,13 @@ void native_aks_call(uint32_t selector, int32_t result)
     }
     aks_publish();
 }
+#else
+void native_aks_opened(void)
+{}
+
+void native_aks_call(uint32_t, int32_t)
+{}
+#endif
 
 static void native_keyevents_probe(void)
 {

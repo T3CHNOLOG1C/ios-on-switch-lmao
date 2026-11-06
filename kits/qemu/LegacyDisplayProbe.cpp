@@ -258,11 +258,14 @@ volatile uint32_t native_legacy_frame_count;
 volatile uint32_t native_legacy_frame_kind[NATIVE_LEGACY_FRAMES];
 volatile uint32_t native_legacy_frame_time[NATIVE_LEGACY_FRAMES];
 volatile uint64_t native_legacy_frame_stats[NATIVE_LEGACY_FRAMES][5];
+#if DEVELOPMENT || DEBUG
 static uint64_t frameEpoch;
+#endif
 
 void native_legacy_frame_observed(unsigned kind, uint64_t count, uint64_t minx, uint64_t miny, uint64_t maxx,
                                   uint64_t maxy)
 {
+#if DEVELOPMENT || DEBUG
     uint32_t n = native_legacy_frame_count;
     uint64_t now, frequency;
     __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(now));
@@ -279,6 +282,9 @@ void native_legacy_frame_observed(unsigned kind, uint64_t count, uint64_t minx, 
         native_legacy_frame_stats[n][4] = maxy;
     }
     native_legacy_frame_count = n + 1;
+#else
+    (void)kind, (void)count, (void)minx, (void)miny, (void)maxx, (void)maxy;
+#endif
 }
 
 volatile uint32_t native_legacy_frame_colors[8][4];
@@ -287,6 +293,7 @@ volatile uint64_t native_legacy_frame_color_counts[8][4], native_legacy_frame_co
 // Called right after the matching native_legacy_frame_observed(); fills slot count-1 (or the blank slot).
 void native_legacy_frame_colors_observed(const uint32_t *colors, const uint64_t *counts, uint64_t other)
 {
+#if DEVELOPMENT || DEBUG
     uint32_t n = native_legacy_frame_count;
     if (!n || n > 8)
         return;  // dominant colours are kept for the first eight frames only
@@ -296,6 +303,9 @@ void native_legacy_frame_colors_observed(const uint32_t *colors, const uint64_t 
         native_legacy_frame_color_counts[n][i] = counts[i];
     }
     native_legacy_frame_color_other[n] = other;
+#else
+    (void)colors, (void)counts, (void)other;
+#endif
 }
 
 // The life of every accepted swap, from the kernel's side: validated (the client submitted it), offered to the GPU copy (or started on the CPU),
@@ -310,6 +320,7 @@ static uint32_t swapEventCount;
 
 extern "C" void native_legacy_swap_stage(unsigned stage)
 {
+#if DEVELOPMENT || DEBUG
     const uint64_t now = probeNowUs();
     uint32_t total = swapEventCount;
     if (stage == 0) {
@@ -332,6 +343,9 @@ extern "C" void native_legacy_swap_stage(unsigned stage)
             return;
         }
     }
+#else
+    (void)stage;
+#endif
 }
 
 extern "C" unsigned native_legacy_swap_timeline(char *out, unsigned cap)
@@ -389,6 +403,7 @@ volatile uint64_t native_legacy_copy_n, native_legacy_copy_last, native_legacy_c
 
 void native_legacy_copy_timing_observed(uint64_t ticks, uint64_t bytes)
 {
+#if DEVELOPMENT || DEBUG
     native_legacy_copy_bytes_last = bytes;
     native_legacy_copy_bytes_sum = native_legacy_copy_bytes_sum + bytes;
     native_legacy_copy_n = native_legacy_copy_n + 1;
@@ -396,6 +411,9 @@ void native_legacy_copy_timing_observed(uint64_t ticks, uint64_t bytes)
     native_legacy_copy_sum = native_legacy_copy_sum + ticks;
     if (ticks > native_legacy_copy_max)
         native_legacy_copy_max = ticks;
+#else
+    (void)ticks, (void)bytes;
+#endif
 }
 
 __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status, const void *request, uint64_t bytes)
@@ -426,12 +444,16 @@ __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status, 
 }
 
 // Display refresh tick (NativeLegacyDisplay): armed, sent, idle, late, started, refresh reported.
+#if DEVELOPMENT || DEBUG
 static volatile uint64_t vsyncEvents[6];
+#endif
 
 extern "C" void native_legacy_vsync_observed(unsigned event, unsigned hz)
 {
+#if DEVELOPMENT || DEBUG
     if (event < 6)
         vsyncEvents[event] = vsyncEvents[event] + 1;
+#endif
     if (event == 4)
         IOLog("SwitchDisplay: vsync timer at %u Hz\n", hz);
 }
@@ -450,6 +472,7 @@ void native_legacy_gpu_fallback_observed(int status)
 
 __attribute__((noinline)) void native_legacy_retirement_observed(IOService *display)
 {
+#if DEVELOPMENT || DEBUG
     const unsigned char *bytes = reinterpret_cast<const unsigned char *>(display);
     uint64_t current = 0, pending = 0;
     uint32_t completed = 0, presented = 0, frames = 0;
@@ -464,6 +487,10 @@ __attribute__((noinline)) void native_legacy_retirement_observed(IOService *disp
     native_legacy_presented_generation = presented;
     native_legacy_retired_frames = frames;
     native_legacy_retirement_calls = native_legacy_retirement_calls + 1;
+#else
+    (void)display;
+    native_legacy_retirement_calls = native_legacy_retirement_calls + 1;
+#endif
 }
 
 // The display object's properties as they are now (the registration copy above predates setDisplayRefreshProperties and the rest): for the
@@ -512,6 +539,7 @@ void native_legacy_client_enter(task_t task, uint32_t type)
     native_legacy_client_pid = task ? proc_pid((proc_t)get_bsdtask_info(task)) : 0;
 }
 
+#if DEVELOPMENT || DEBUG
 // Every framebuffer user client seen (object, pid), with what it does: the original client's vtable is copied and two entries (externalMethod, slot 168,
 // and registerNotificationPort(port,type,refCon), slot 175) are pointed at wrappers that count and forward to the original function. The original code
 // is not touched; only this object's vptr names the copy. XNU's ARM64 vptr points at slot 0 (the original code dispatches with ldr x8,[vptr,#slot*8]).
@@ -703,13 +731,17 @@ extern "C" unsigned native_legacy_clients_dump(char *out, unsigned cap)
     return at;
 }
 
+#endif
+
 void native_legacy_client_observed(IOReturn status, IOUserClient *client)
 {
     if (displayLogClients++ < 4)
         IOLog("SwitchDisplay: client pid %d opened the display: %08x\n", (int)native_legacy_client_pid,
               (unsigned)status);
+#if DEVELOPMENT || DEBUG
     if (client && !status)
         interpose(client, native_legacy_client_pid);
+#endif
     native_legacy_client_status = status;
     native_legacy_client_object = (uintptr_t)client;
     if (client)
