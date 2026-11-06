@@ -183,7 +183,22 @@ class BootLogo(unittest.TestCase):
         size, width, height, pixels = read_bmp(self.icon)
         self.assertEqual((size, width, height), (len(self.icon), 192, 192))
         self.assertTrue(all(pixels[i + 3] == 255 for i in range(0, len(pixels), 4)))
-        self.assertEqual(pixels[:4], b'\0\0\0\xff')
+
+    def test_icon_is_the_project_mark_on_its_tile(self) -> None:
+        mark = Path(runfiles.Create().Rlocation('_main/.github/logo.svg')).read_text()
+        tile = bytes.fromhex(re.search(r'<rect\b[^>]*\bfill="#(\w{6})"', mark).group(1))[::-1]
+        ink = bytes.fromhex(re.search(r'<path\b[^>]*\bfill="#(\w{6})"', mark).group(1))[::-1]
+        _, _, _, pixels = read_bmp(self.icon)
+        colours = {pixels[i : i + 3] for i in range(0, len(pixels), 4)}
+        widest = max(range(3), key=lambda i: abs(ink[i] - tile[i]))
+        for colour in colours:
+            share = (colour[widest] - tile[widest]) / (ink[widest] - tile[widest])
+            for t, k, v in zip(tile, ink, colour, strict=True):
+                self.assertLessEqual(abs(t + (k - t) * share - v), 1, f'{colour.hex()} is not a tile-to-ink blend')
+        self.assertIn(tile, colours)
+        self.assertIn(ink, colours)
+        for corner in (0, 191 * 4, 191 * 192 * 4, (192 * 192 - 1) * 4):
+            self.assertEqual(pixels[corner : corner + 3], tile)
 
     def test_progressui_finds_this_logo_at_scale_1_and_2(self) -> None:
         manifest = json.loads(Path(runfiles.Create().Rlocation('_main/overlay/manifest.json')).read_text())

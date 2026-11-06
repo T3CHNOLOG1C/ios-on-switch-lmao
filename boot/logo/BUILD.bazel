@@ -22,7 +22,10 @@ py_binary(
 
 run_binary(
     name = "pictures",
-    srcs = ["apple-logo.svg"],
+    srcs = [
+        "apple-logo.svg",
+        "//:.github/logo.svg",
+    ],
     outs = [
         "apple-logo~ipad.png",
         "bootlogo.bmp",
@@ -30,6 +33,7 @@ run_binary(
     ],
     args = [
         "--svg=$(execpath apple-logo.svg)",
+        "--mark=$(execpath //:.github/logo.svg)",
         "--progressui=$(execpath apple-logo~ipad.png)",
         "--bootlogo=$(execpath bootlogo.bmp)",
         "--icon=$(execpath icon_ios.bmp)",
@@ -43,6 +47,7 @@ py_test(
     srcs = ["logo_test.py"],
     data = [
         ":pictures",
+        "//:.github/logo.svg",
         "//overlay:manifest.json",
         "//tools/package:adt_edit.py",
     ],
