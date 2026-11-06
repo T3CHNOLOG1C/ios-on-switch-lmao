@@ -2,13 +2,12 @@
 // the ones NativeLegacyDisplay.cpp follows (validateSwap through checkUpdated, the kick on the family's effective
 // layers with video-only swaps costing no GPU work, window B written with window A in one STATE_CONTROL pair, retire
 // at the latch, the panic hook taking window B down, the published limits), the plane accessors are the IOSurface
-// functions TegraVIC binds, and backboardd loses CA_DISABLE_DETACHED only when native_legacy_detach_ready() says so
+// functions TegraVIC calls, and backboardd loses CA_DISABLE_DETACHED only when native_legacy_detach_ready() says so
 // (planes on, VIC's quarter turns and a row pitch proven; the alignment published from that proof).
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <fstream>
-#include <map>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -58,29 +57,16 @@ std::string XnuKernExec()
     return text.str();
 }
 
-// `.set _name, 0x...` lines of a bindings file.
-std::map<std::string, std::string> Bindings(const std::string &text)
-{
-    std::map<std::string, std::string> table;
-    const std::regex set(R"(\.set _(\w+), (0x[0-9a-f]+))");
-    for (std::sregex_iterator it(text.begin(), text.end(), set), end; it != end; ++it)
-        table[(*it)[1]] = (*it)[2];
-    return table;
-}
-
 }  // namespace
 
-TEST(DisplayPlanesSource, BindingsAreTegraVics)
+TEST(DisplayPlanesSource, PlaneAccessorsAreTegraVics)
 {
-    // The plane accessors are the IOSurface functions TegraVIC binds (its abi_check.py checks them each build).
-    const auto mine = Bindings(SourceText("../NativePlanesBindings.S"));
-    const auto vic = Bindings(SourceText("../../TegraVIC/original-bindings.S"));
-    for (const char *name : {"plane_offset", "plane_bytes_per_row", "plane_height", "plane_width"}) {
-        const auto m = mine.find(std::string("native_planes_surface_") + name);
-        const auto v = vic.find(std::string("tegra_vic_ios_") + name);
-        ASSERT_NE(m, mine.end()) << name;
-        ASSERT_NE(v, vic.end()) << name;
-        EXPECT_EQ(m->second, v->second) << name;
+    // The plane accessors are the IOSurface functions TegraVIC calls: one table entry each, both drivers' symbols.
+    const std::string iface = SourceText("../../../kits/SwitchABI/interface/IOSurface.json");
+    for (const std::string name : {"plane_offset", "plane_bytes_per_row", "plane_height", "plane_width"}) {
+        const std::regex entry("\"" + name + "\": \\{[^}]*\"tegra_vic_ios_" + name + "\",\\s*\"native_planes_surface_" +
+                               name + "\"");
+        EXPECT_TRUE(std::regex_search(iface, entry)) << name;
     }
 }
 

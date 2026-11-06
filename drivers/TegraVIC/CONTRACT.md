@@ -126,8 +126,8 @@ device tree), so no instance exists. A class of ours with either name would make
 with it, fail to load; and matching (`IOServiceMatching` walks instances of the named class) and the sandbox go by
 those names. So TegraVIC instantiates Apple's classes (`OSMetaClass::allocClassWithName`) and points each object at a
 copy of its class's vtable with these slots replaced (slots found by the IOService/IOUserClient function each holds in
-the kernel's own `__ZTV9IOService`/`__ZTV12IOUserClient`; `abi_check.py` checks Apple's overrides sit there in the
-kernelcache, and V5 checks it again at run time):
+the kernel's own `__ZTV9IOService`/`__ZTV12IOUserClient`, and V5 checks at run time that Apple's overrides sit
+there):
 
 | class | slot (method) | Apple's override | in the copy |
 |---|---|---|---|
@@ -143,8 +143,8 @@ Apple's code that still runs: the classes' constructors, `getMetaClass`, the ser
 
 ## 8. What TegraVIC does with a request
 
-1. Look up both surfaces in the caller's task (IOSurface kext, by address: `original-bindings.S`, checked against the
-   kernelcache by `abi_check.py` on every build). `IOCoreSurfaceRoot` is the root.
+1. Look up both surfaces in the caller's task (IOSurface kext, by address: kits/SwitchABI's IOSurface tables, each
+   function pinned by its words). `IOCoreSurfaceRoot` is the root.
 2. Translate (`tegra_vic_plan`, `TegraVICRequest.h`): empty rects → whole surfaces; ZeroFill and BorderFill become fills
    before the transform; WriteOnlyMode becomes a fill of the destination rect (4:2:0 fills widened to even coordinates);
    Transform, NearestFilter and the destination's chroma siting are used; quality hints (dither, enhance, noise

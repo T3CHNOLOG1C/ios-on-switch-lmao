@@ -24,5 +24,89 @@
     "complete": "0xfffffff005b9ff64",
     "device_unlock": "0xfffffff005ba0fc8",
     "lookup": "0xfffffff005baa72c"
+  },
+  "hints": {
+    "functions": {
+      "lookup": {
+        "at": "0xfffffff005baa72c",
+        "body": "a9bd57f6 a9014ff4 a9027bfd 910083fd",
+        "why": "IOSurfaceRoot::lookupSurface(id, task): find_surface, then a try-retain of +0xc; the first IOSurface entry of AppleM2ScalerCSCDriver's GOT (0xfffffff006e5e910)"
+      },
+      "memory": {
+        "at": "0xfffffff005b9ead0",
+        "body": "f9401800 d65f03c0 a9bf7bfd 910003fd",
+        "why": "ldr x0, [x0, #0x30]: the descriptor"
+      },
+      "format": {
+        "at": "0xfffffff005b9ebac",
+        "body": "b9408000 d65f03c0 b9401000 d65f03c0",
+        "why": "ldr w0, [x0, #0x80]: pixel format"
+      },
+      "width": {
+        "at": "0xfffffff005b9ebbc",
+        "body": "f9402c00 d65f03c0 f9403000 d65f03c0",
+        "why": "ldr x0, [x0, #0x58]: width"
+      },
+      "height": {
+        "at": "0xfffffff005b9ebc4",
+        "body": "f9403000 d65f03c0 f9403c00 d65f03c0",
+        "why": "ldr x0, [x0, #0x60]: height"
+      },
+      "bytes_per_row": {
+        "at": "0xfffffff005b9ebd4",
+        "body": "f9403400 d65f03c0 7940e000 d65f03c0",
+        "why": "ldr x0, [x0, #0x68]: bytes per row"
+      },
+      "plane_count": {
+        "at": "0xfffffff005b9ebf4",
+        "body": "b9409800 d65f03c0 f9404800 d65f03c0",
+        "why": "ldr w0, [x0, #0x98]: plane count"
+      },
+      "alloc_size": {
+        "at": "0xfffffff005b9ebfc",
+        "body": "f9404800 d65f03c0 f9404400 d65f03c0",
+        "why": "ldr x0, [x0, #0x90]: allocation size"
+      },
+      "protection": {
+        "at": "0xfffffff005b9d2fc",
+        "body": "f941c400 d65f03c0 b000fa68 f945b900",
+        "why": "ldr x0, [x0, #0x388]: protection options"
+      },
+      "plane_width": {
+        "at": "0xfffffff005b9eeb8",
+        "body": "a9bf7bfd 910003fd f940c008 b4000408",
+        "why": "getPlaneWidth(plane): plane entry +0x00 (stride 0x38), the plane array at +0x180 and the count at +0x98 checked first"
+      },
+      "plane_height": {
+        "at": "0xfffffff005b9ef84",
+        "body": "a9bf7bfd 910003fd f940c008 b40003e8 b9409809 6b01013f 54000389 b9418809 5280070a 9b0a2129 eb080129 54000423 d360fd2a b50003ea d37a7c2a cb214d4a eb2ac15f 540003c1 2a0103ea d35a654b eb0a8d6a 54000284 d360fd4a 1100e14b 6b09017f 54000208 ab0a0108 1a9f37ea 93400149 ca0a012a b500028a b7f80269 91002108",
+        "why": "getPlaneHeight(plane): add x8, x8, #0x8 at +0x80, the entry's height"
+      },
+      "plane_offset": {
+        "at": "0xfffffff005b9ed10",
+        "body": "a9bf7bfd 910003fd f940c008 b40003e8 b9409809 6b01013f 54000389 b9418809 5280070a 9b0a2129 eb080129 54000423 d360fd2a b50003ea d37a7c2a cb214d4a eb2ac15f 540003c1 2a0103ea d35a654b eb0a8d6a 54000284 d360fd4a 1100e14b 6b09017f 54000208 ab0a0108 1a9f37ea 93400149 ca0a012a b500028a b7f80269 91006108",
+        "why": "getPlaneOffset(plane): add x8, x8, #0x18 at +0x80, the entry's offset"
+      },
+      "plane_bytes_per_row": {
+        "at": "0xfffffff005b9f1fc",
+        "body": "a9bf7bfd 910003fd f940c008 b40003e8 b9409809 6b01013f 54000389 b9418809 5280070a 9b0a2129 eb080129 54000423 d360fd2a b50003ea d37a7c2a cb214d4a eb2ac15f 540003c1 2a0103ea d35a654b eb0a8d6a 54000284 d360fd4a 1100e14b 6b09017f 54000208 ab0a0108 1a9f37ea 93400149 ca0a012a b500028a b7f80269 91008108",
+        "why": "getPlaneBytesPerRow(plane): add x8, x8, #0x20 at +0x80, the entry's bytes per row"
+      },
+      "prepare": {
+        "at": "0xfffffff005b9fda0",
+        "body": "d101c3ff a9035ff8 a90457f6 a9054ff4",
+        "why": "IOSurface::prepare(): wire count +0x20c, descriptor prepare"
+      },
+      "complete": {
+        "at": "0xfffffff005b9ff64",
+        "body": "d10183ff a9044ff4 a9057bfd 910143fd",
+        "why": "IOSurface::complete()"
+      },
+      "device_unlock": {
+        "at": "0xfffffff005ba0fc8",
+        "body": "a9be4ff4 a9017bfd 910043fd aa0103f4 aa0003f3 f9402800 94005ca0 37000174 f940be68 b9400d09 11000529 b9000d09 b943b269 321e0929 b903b269 b9401109 11000529 b9001109",
+        "why": "the device write end (surface, options): under the surface's IOLock (+0x50), unless options bit 0 (read), the seed (+0xc of the root entry at +0x178) and the write count (+0x10) go up and the cache flags (+0x3b0) get 0x1c; returns 0. AppleM2ScalerCSCDriver's GOT holds it at 0xfffffff006e5ea88: what Apple's media engines call on a job's destination"
+      }
+    }
   }
 }

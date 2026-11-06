@@ -57,7 +57,7 @@ extern "C" size_t switch_render_senders_line(char *, size_t, uint64_t, unsigned)
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
-// IOSurface plane accessors (NativePlanesBindings.S): offset, bytes per row, height and width of plane `plane`.
+// IOSurface plane accessors (kits/SwitchABI IOSurface): offset, bytes per row, height and width of plane `plane`.
 extern "C" uint64_t native_planes_surface_plane_offset(OSObject *, uint32_t),
     native_planes_surface_plane_bytes_per_row(OSObject *, uint32_t),
     native_planes_surface_plane_height(OSObject *, uint32_t), native_planes_surface_plane_width(OSObject *, uint32_t);

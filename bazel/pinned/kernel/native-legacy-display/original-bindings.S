@@ -368,20 +368,6 @@
 .set __ZNK25IOMobileFramebufferLegacy11getWorkLoopEv, 0xfffffff00578cb78
 .globl __ZTV25IOMobileFramebufferLegacy
 .set __ZTV25IOMobileFramebufferLegacy, 0xfffffff005f38560
-.globl _native_legacy_surface_allocation
-.set _native_legacy_surface_allocation, 0xfffffff004b9ebfc
-.globl _native_legacy_surface_descriptor
-.set _native_legacy_surface_descriptor, 0xfffffff004b9ead0
-.globl _native_legacy_surface_format
-.set _native_legacy_surface_format, 0xfffffff004b9ebac
-.globl _native_legacy_surface_height
-.set _native_legacy_surface_height, 0xfffffff004b9ebc4
-.globl _native_legacy_surface_planes
-.set _native_legacy_surface_planes, 0xfffffff004b9ebf4
-.globl _native_legacy_surface_stride
-.set _native_legacy_surface_stride, 0xfffffff004b9ebd4
-.globl _native_legacy_surface_width
-.set _native_legacy_surface_width, 0xfffffff004b9ebbc
 .globl _native_legacy_set_refresh_properties
 .set _native_legacy_set_refresh_properties, 0xfffffff00579ebb8
 .globl _native_legacy_vsync_notify

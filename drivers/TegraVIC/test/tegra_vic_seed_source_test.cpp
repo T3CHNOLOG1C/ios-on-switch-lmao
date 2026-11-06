@@ -1,7 +1,7 @@
 // A TransformSurface destination's seed moves when its job is done (r18-planes), as Apple's AppleM2ScalerCSCDriver moves
 // it: TegraVIC's engine thread calls the IOSurface kext's device write end on the destination after the job and before
-// the caller hears back, through a binding abi_check.py verifies (its first bytes, the seed's own loads and stores, and
-// that Apple's scaler imports that very function).
+// the caller hears back, through the kits/SwitchABI IOSurface binding, whose tables pin the function by its words (the
+// seed's own loads and stores among them).
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -35,9 +35,9 @@ TEST(TegraVICSeed, DestinationSeedMovesBeforeTheReply)
 
 TEST(TegraVICSeed, BindingIsChecked)
 {
-    const std::string check = SourceText("../abi_check.py");
-    EXPECT_THAT(check, HasSubstr("(\n        '_tegra_vic_ios_device_unlock',\n        0xFFFFFFF005BA0FC8,"));
-    EXPECT_THAT(check, HasSubstr("('_tegra_vic_ios_device_unlock', 0xFFFFFFF006E5EA88, 'AppleM2ScalerCSCDriver')"));
-    EXPECT_THAT(SourceText("../original-bindings.S"),
-                HasSubstr(".set _tegra_vic_ios_device_unlock, 0xfffffff004ba0fc8"));
+    // Each kind's table pins the device write end by its words, the seed's load, increment and store among them.
+    const std::string ios17 = SourceText("../../../kits/SwitchABI/kinds/21H461/IOSurface.json");
+    const std::string ios27 = SourceText("../../../kits/SwitchABI/kinds/24B119/IOSurface.json");
+    EXPECT_THAT(Between(ios17, "\"device_unlock\": {", "}"), HasSubstr("f940be68 b9400d09 11000529 b9000d09"));
+    EXPECT_THAT(Between(ios27, "\"device_unlock\": {", "}"), HasSubstr("b9400e08 11000508 b9000e08"));
 }

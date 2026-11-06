@@ -1,7 +1,7 @@
 # drivers/TegraVIC: moved from out/native-a57/root-v1/tree/drivers/TegraVIC by the layout move.
-load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//kits/SwitchABI:defs.bzl", "switch_abi_bindings")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -27,13 +27,6 @@ filegroup(
 # This package's headers (kernel_headers): what other drivers' hdr_deps name.
 kernel_headers()
 
-py_binary(
-    name = "vic_abi_check",
-    srcs = ["abi_check.py"],
-    main = "abi_check.py",
-    deps = ["//tools/prelink:native_prelink"],
-)
-
 kernel_driver(
     name = "TegraVIC",
     srcs = [
@@ -44,8 +37,7 @@ kernel_driver(
         "original-bindings.S",
         "firmware.S",
     ],
-    abi_check = ":vic_abi_check",
-    abi_checks = {"original-bindings.S": "iosurface TegraVICSurface.cpp"},
+    abi = ["IOSurface"],
     hdr_deps = [
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",
@@ -54,4 +46,16 @@ kernel_driver(
         "firmware.S": "vic_firmware",
         "original-bindings.S": "vic-original-bindings",
     },
+)
+
+# The IOSurface kext's functions every driver calls by address: TegraVIC's, the display's surface accessors and its
+# hardware planes' (one bindings file, since each table address is bound once in the kernel).
+switch_abi_bindings(
+    name = "original_bindings",
+    out = "original-bindings.S",
+    classes = ["//kits/SwitchABI:IOSurface"],
+    objects = [
+        ":TegraVIC_cc",
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay_NativeLegacyDisplay_cc",
+    ],
 )

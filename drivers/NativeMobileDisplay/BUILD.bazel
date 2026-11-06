@@ -35,9 +35,9 @@ kernel_driver(
         # The display across SC7 (tegra_display_suspend/resume): hekate's cold display init/power-down.
         "TegraDisplayPower.cpp",
         "//bazel/pinned:kernel/native-legacy-display/original-bindings.S",
-        # The IOSurface plane accessors the hardware planes read (r18-planes).
-        "NativePlanesBindings.S",
     ],
+    # The IOSurface accessors (the surfaces' and the hardware planes'): TegraVIC's original-bindings.S binds them.
+    abi = ["IOSurface"],
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/SwitchPower",

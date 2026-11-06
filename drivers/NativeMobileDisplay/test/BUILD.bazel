@@ -85,10 +85,9 @@ host_test(
     srcs = ["display_planes_source_test.cpp"],
     data = [
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
-        "//drivers/NativeMobileDisplay:NativePlanesBindings.S",
         "//drivers/NativeMobileDisplay:NativePlanesDisplay.h",
-        "//drivers/TegraVIC:original-bindings.S",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
+        "//kits/SwitchABI:interface/IOSurface.json",
     ],
     defines = ['XNU_KERN_EXEC=\\"$(rootpath //kernel/xnu-10063.141.1/bsd:kern/kern_exec.c)\\"'],
 )
