@@ -22,24 +22,24 @@ import sys
 def frames(path: str) -> list[list[dict]]:
     subs, cur = [], []
     with open(path) as log:
-        for l in log:
-            l = l.rstrip('\n')
-            if l.startswith('SUBMIT'):
+        for text in log:
+            line = text.rstrip('\n')
+            if line.startswith('SUBMIT'):
                 subs.append(cur)
                 cur = []
-            elif l.startswith(('DRAW', 'CLEAR', '  ', 'END-OF-SUBMIT')) and not l.startswith(
+            elif line.startswith(('DRAW', 'CLEAR', '  ', 'END-OF-SUBMIT')) and not line.startswith(
                 ('  STATE', 'P ')
             ):  # DRAW-INDEXED too
-                cur.append(l)
+                cur.append(line)
     out = []
     for s in subs:
         events, ev = [], None
-        for l in s:
-            if l.startswith(('DRAW', 'CLEAR')):
-                ev = {'head': l, 'lines': []}
+        for line in s:
+            if line.startswith(('DRAW', 'CLEAR')):
+                ev = {'head': line, 'lines': []}
                 events.append(ev)
-            elif l.startswith('  ') and ev is not None:
-                ev['lines'].append(l.strip())
+            elif line.startswith('  ') and ev is not None:
+                ev['lines'].append(line.strip())
         if any(e['head'].startswith('DRAW') for e in events):
             out.append(events)
     # --flat: every submission's events as one stream (a command buffer the raw path submits in segments is several
@@ -67,7 +67,7 @@ def rename_all(out: list[list[dict]]) -> list[list[dict]]:
     for events in out:
         for e in events:
             if e['head'].startswith('DRAW'):
-                e['lines'] = [rename(l, True) for l in e['lines']]
+                e['lines'] = [rename(line, True) for line in e['lines']]
     for events in out:
         for e in events:
             if e['head'].startswith('CLEAR'):
@@ -102,7 +102,9 @@ def fields(ev: dict) -> collections.OrderedDict:
     if LAYOUTS:
         ev = {
             'head': re.sub(r'rt=\w+,\d+x\d+,(fmt=\w+),mem=\w+', r'rt=\1', ev['head']),
-            'lines': [re.sub(r'^(rt\d+)=\S+ \S+ (fmt=\w+).*$', r'\1=\2', normalize_layouts(l)) for l in ev['lines']],
+            'lines': [
+                re.sub(r'^(rt\d+)=\S+ \S+ (fmt=\w+).*$', r'\1=\2', normalize_layouts(line)) for line in ev['lines']
+            ],
         }
     h = ev['head']
     if h.startswith('DRAW'):
@@ -114,21 +116,21 @@ def fields(ev: dict) -> collections.OrderedDict:
         f['clear'] = m.group(1)
         f['barriers'] = {x for x in m.group(2).split(',') if x}
     stage = None
-    for l in ev['lines']:
-        if l.startswith('R '):
-            f['R'] = dict(x.split('=') for x in l[2:].split())
+    for line in ev['lines']:
+        if line.startswith('R '):
+            f['R'] = dict(x.split('=') for x in line[2:].split())
             if LAYOUTS:
                 f['R'] = {k: v for k, v in f['R'].items() if k not in LAYOUT_REGS}
-        elif l.startswith('regs='):
-            f['regs'] = l[5:]
-        elif l.startswith('stage'):
-            stage = l.split()[0]
-            f[stage] = l
-        elif l.startswith('cb'):
-            suffix = ' ' + l.split()[2].split('=')[0] if l.split()[1] == 'root' else ''
-            f[f'{stage}.{l.split()[0]}{suffix}'] = l
+        elif line.startswith('regs='):
+            f['regs'] = line[5:]
+        elif line.startswith('stage'):
+            stage = line.split()[0]
+            f[stage] = line
+        elif line.startswith('cb'):
+            suffix = ' ' + line.split()[2].split('=')[0] if line.split()[1] == 'root' else ''
+            f[f'{stage}.{line.split()[0]}{suffix}'] = line
         else:
-            f[l.split('=')[0].split()[0]] = l
+            f[line.split('=')[0].split()[0]] = line
     return f
 
 
@@ -151,7 +153,7 @@ def main() -> int:
         # each driver's own draws: programs no draw of the other log runs (m2v's shadow copies and mip work; the raw
         # path's 4:2:0 conversions through the pack's ycbcr states, where m2v converts with its own)
         def programs(e: dict) -> tuple[str, ...]:
-            return tuple(l.split()[1] for l in e['lines'] if l.startswith('stage'))
+            return tuple(line.split()[1] for line in e['lines'] if line.startswith('stage'))
 
         def drop(frames_of: list[list[dict]], other: list[list[dict]], who: str) -> None:
             theirs = {programs(e) for events in other for e in events if e['head'].startswith('DRAW')}

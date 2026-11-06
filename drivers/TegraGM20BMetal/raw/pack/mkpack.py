@@ -147,22 +147,22 @@ def main() -> None:
                     if f'ptr0.{o * 4}' in p['records'][0]['ptr']:
                         sizes.setdefault((p['index'], o * 4), [0, 0])[0 if b == 16 else 1] = w[o + 2]
     os.makedirs(out_dir, exist_ok=True)
-    P = probelog.load(out_path, log_path)
+    probes = probelog.load(out_path, log_path)
     programs = load_programs(prog_path)
     # init trace and post-init registers
     init, post = [], {0: {}, 1: {}}
     with open(log_path) as log:
-        for l in log:
-            if l.startswith('T '):
-                _, sc, m, d = l.split()
+        for line in log:
+            if line.startswith('T '):
+                _, sc, m, d = line.split()
                 init.append((int(sc), int(m, 16), int(d, 16)))
-            elif l.startswith('S regs '):
-                f = l.split()
+            elif line.startswith('S regs '):
+                f = line.split()
                 post[int(f[2])] = {int(a, 16): int(v, 16) for a, v in (x.split('=') for x in f[3:])}
     # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate
     report = []
     simple, skipped = [], []
-    for p in P:
+    for p in probes:
         why = None
         if p['draws'] != 1:
             why = f'{p["draws"]} draws'
@@ -203,7 +203,7 @@ def main() -> None:
     vals = {m: {p['records'][0]['regs'].get(m, 0) for p in simple} for m in allregs if not owned(m)}
     varying = sorted(m for m, v in vals.items() if len(v) > 1)
     baseline = {m: next(iter(v)) for m, v in vals.items() if len(v) == 1 and next(iter(v)) != post[0].get(m, 0)}
-    report.append(f'{len(P)} states probed, {len(simple)} taken, {len(skipped)} skipped')
+    report.append(f'{len(probes)} states probed, {len(simple)} taken, {len(skipped)} skipped')
     for p, why in skipped:
         report.append(f'  skipped {p["index"]} ({why}): {p["key"][:150]}')
     names = ' '.join(f'{m:x}' for m in varying)
@@ -301,7 +301,7 @@ def main() -> None:
                 entries.append(ent)
         rec['entries'] = entries
         vbs = []
-        for j, (loc, lim, fmt) in sorted(r['vbinfo'].items()):
+        for j, (_loc, _lim, fmt) in sorted(r['vbinfo'].items()):
             w = r['vb'][j][1]
             if (w[0] >> 16) != 0xC0DE or (w[0] >> 8) & 0xFF != 1:
                 problems.append(f'vertex stream {j} not a vertex slot')

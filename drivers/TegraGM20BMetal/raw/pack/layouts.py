@@ -57,9 +57,9 @@ def layout(p: dict) -> tuple[list[tuple], list[str]]:
     words = r['set0'][1]
     # render targets of the draw by name, from the canonical record (rtN=Rk ...)
     rts = {}
-    for l in p['canon']:
-        if l.startswith('  rt') and '=' in l:
-            k, v = l.strip().split('=', 1)
+    for line in p['canon']:
+        if line.startswith('  rt') and '=' in line:
+            k, v = line.strip().split('=', 1)
             rts[v.split()[0]] = int(k[2:])
     entries, problems = [], []
     o = 0

@@ -11,36 +11,36 @@ def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
 def load(out_path: str, log_path: str, init_submits: int = 4) -> list[dict]:
     probes = []
     with open(out_path) as out:
-        if any(l.startswith('WARMUP') for l in out):
+        if any(line.startswith('WARMUP') for line in out):
             init_submits += 1
     with open(out_path) as out:
-        for l in out:
-            if l.startswith('PROBE '):
-                _, i, key = l.rstrip('\n').split(' ', 2)
+        for line in out:
+            if line.startswith('PROBE '):
+                _, i, key = line.rstrip('\n').split(' ', 2)
                 probes.append({'index': int(i), 'key': key.strip()})
     subs, cur = [], []
     with open(log_path) as log:
-        for l in log:
-            l = l.rstrip('\n')
-            cur.append(l)
-            if l.startswith('SUBMIT'):
+        for text in log:
+            line = text.rstrip('\n')
+            cur.append(line)
+            if line.startswith('SUBMIT'):
                 subs.append(cur)
                 cur = []
     for n, p in enumerate(probes):
         s = subs[init_submits + n]
-        p['draws'] = sum(1 for l in s if l.startswith('DRAW'))
-        p['dispatches'] = sum(1 for l in s if l.startswith('DISPATCH'))
-        p['clears'] = [l for l in s if l.startswith('CLEAR')]
+        p['draws'] = sum(1 for line in s if line.startswith('DRAW'))
+        p['dispatches'] = sum(1 for line in s if line.startswith('DISPATCH'))
+        p['clears'] = [line for line in s if line.startswith('CLEAR')]
         p['canon'] = s
         recs, rec = [], None
-        for l in s:
-            if l == 'P begin':
+        for line in s:
+            if line == 'P begin':
                 rec = {'binds': {}, 'ptr': {}, 'tic': {}, 'tsc': {}, 'vb': {}, 'vbinfo': {}, 'prog': {}}
-            elif l == 'P end':
+            elif line == 'P end':
                 recs.append(rec)
                 rec = None
-            elif rec is not None and l.startswith('P '):
-                f = l.split()
+            elif rec is not None and line.startswith('P '):
+                f = line.split()
                 t = f[1]
                 if t == 'regs':
                     rec['regs'] = {int(a, 16): int(b, 16) for a, b in (x.split('=') for x in f[2:])}

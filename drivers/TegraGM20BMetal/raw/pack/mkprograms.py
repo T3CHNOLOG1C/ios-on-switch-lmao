@@ -26,7 +26,7 @@ def main() -> None:
                     b = record.read()
                 if b[:8] != b'M2VPPLC\0':
                     continue
-                for t, k, data in nvkshader.records(b):
+                for _t, _k, data in nvkshader.records(b):
                     s = nvkshader.shader(data)
                     if not s:
                         continue

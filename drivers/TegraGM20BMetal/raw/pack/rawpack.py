@@ -202,7 +202,7 @@ def main() -> None:
             )
         if r.returncode:
             sys.exit(f'rawpack: probe {name} failed:\n{r.stderr[-4000:]}')
-        tail = [l for l in r.stderr.splitlines() if l.startswith('probe:')]
+        tail = [line for line in r.stderr.splitlines() if line.startswith('probe:')]
         print(f'rawpack: {name}: {tail[-1] if tail else "?"}')
 
     probe('warm', {})

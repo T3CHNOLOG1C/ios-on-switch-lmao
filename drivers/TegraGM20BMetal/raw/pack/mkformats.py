@@ -9,15 +9,15 @@ usage: mkformats.py <probe.out> <probe.log>
 import sys
 
 with open(sys.argv[1]) as probe_out:
-    out = [l.split() for l in probe_out if l.startswith('FORMAT ') and 'refused' not in l]
+    out = [line.split() for line in probe_out if line.startswith('FORMAT ') and 'refused' not in line]
 subs, cur = [], []
 with open(sys.argv[2]) as probe_log:
-    for l in probe_log:
-        if l.startswith('SUBMIT'):
+    for line in probe_log:
+        if line.startswith('SUBMIT'):
             subs.append(cur)
             cur = []
         else:
-            cur.append(l.rstrip('\n'))
+            cur.append(line.rstrip('\n'))
 # the decoded submissions with a draw, in order: one per FORMAT line
 draws = [s for s in subs if any(x.startswith('DRAW') for x in s)]
 assert len(draws) >= len(out), (len(draws), len(out))

@@ -36,7 +36,7 @@ def shader(d: bytes) -> dict | None:
     """Return a dict for an nvk_shader object, or None for other objects."""
     if len(d) < NAK_INFO + 150 or d[4] != 53:  # sm 53 (GM20B)
         return None
-    stage, sm, gprs = struct.unpack_from('<IBB', d, 0)
+    stage, _sm, gprs = struct.unpack_from('<IBB', d, 0)
     at = NAK_INFO
     count = struct.unpack_from('<I', d, at)[0]
     cbufs = [struct.unpack_from('<BBBBI', d, at + 4 + 8 * i) for i in range(16)][:count]
@@ -78,7 +78,7 @@ if __name__ == '__main__':
                 continue
         with open(f, 'rb') as whole:
             data = whole.read()
-        for t, k, d in records(data):
+        for _t, _k, d in records(data):
             s = shader(d)
             if s:
                 print(
