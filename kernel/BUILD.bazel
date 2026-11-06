@@ -334,6 +334,7 @@ kernel_driver(
     c_copts = ["-DMOCKFS=1"],
     c_recipe = ":mockfs_c",
     hdr_deps = [],
+    tags = ["no-lint"],
 )
 
 kernel_archive(
