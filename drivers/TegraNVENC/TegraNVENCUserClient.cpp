@@ -44,9 +44,9 @@ IOReturn ioreturn(int err)
         return kIOReturnError;
     }
 }
-}  // namespace
 
 class AppleAVE2UserClient : public IOUserClient {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(AppleAVE2UserClient)
 
         struct Buffer {
@@ -60,7 +60,7 @@ class AppleAVE2UserClient : public IOUserClient {
     bool submitted_ = false, counted_ = false;
 
     Buffer *find(uint32_t handle);
-    bool quiesce();
+    bool quiesce() const;
     void drop(Buffer *b, bool returnMemory);
     IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out, uint32_t *outSize);
     static bool resolve(void *context, uint32_t handle, TegraNVENCBlock *block);
@@ -82,27 +82,29 @@ public:
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
                             OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
 };
+}  // namespace
 
 OSDefineMetaClassAndStructors(AppleAVE2UserClient, IOUserClient)
 
     AppleAVE2UserClient::Buffer *AppleAVE2UserClient::find(uint32_t handle)
 {
-    for (uint32_t i = 0; handle && i < kMaxBuffers; i++)
+    for (uint32_t i = 0; handle && i < kMaxBuffers; i++) {
         if (buffers_[i].handle == handle)
             return &buffers_[i];
+    }
     return nullptr;
 }
 
 bool AppleAVE2UserClient::resolve(void *context, uint32_t handle, TegraNVENCBlock *block)
 {
-    Buffer *b = static_cast<AppleAVE2UserClient *>(context)->find(handle);
+    const Buffer *b = static_cast<AppleAVE2UserClient *>(context)->find(handle);
     if (b)
         *block = b->block;
     return b != nullptr;
 }
 
 // The connection's jobs are done (or the engine is wedged and will never touch memory again before a resume resets it).
-bool AppleAVE2UserClient::quiesce()
+bool AppleAVE2UserClient::quiesce() const
 {
     if (!submitted_)
         return true;
@@ -141,9 +143,10 @@ IOReturn AppleAVE2UserClient::clientClose()
 void AppleAVE2UserClient::free()
 {
     if (lock_) {
-        for (uint32_t i = 0; i < kMaxBuffers; i++)
-            if (buffers_[i].handle)
-                drop(&buffers_[i], quiesce());
+        for (Buffer &b : buffers_) {
+            if (b.handle)
+                drop(&b, quiesce());
+        }
         IOLockFree(lock_);
         lock_ = nullptr;
     }
@@ -155,7 +158,7 @@ void AppleAVE2UserClient::free()
 IOReturn AppleAVE2UserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory)
 {
     IOLockLock(lock_);
-    Buffer *b = find(type);
+    const Buffer *b = find(type);
     if (b) {
         b->block.pages.memory->retain();
         *memory = b->block.pages.memory;
@@ -185,6 +188,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
 
     if (method == TegraNVENCMethodWait) {  // no lock: other calls of this connection may proceed while it sleeps
         const TegraNVENCWait *w = static_cast<const TegraNVENCWait *>(in);
+        // NOLINTNEXTLINE(clang-analyzer-core.NullDereference): input size checked above
         if (w->invalidate_count > TEGRA_NVENC_MAX_RANGES)
             return kIOReturnBadArgument;
         const int ret = tegra_nvenc_wait(w->fence);  // bounded by the kernel, whatever timeout_us says
@@ -194,8 +198,8 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         IOReturn result = kIOReturnSuccess;
         for (uint32_t i = 0; i < w->invalidate_count; i++) {
             const TegraNVENCRange *r = &w->invalidate[i];
-            Buffer *b = find(r->handle);
-            if (!b || (uint64_t)r->offset + r->length > b->block.size) {
+            const Buffer *b = find(r->handle);
+            if (!b || static_cast<uint64_t>(r->offset) + r->length > b->block.size) {
                 result = kIOReturnBadArgument;
                 break;
             }
@@ -224,11 +228,13 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         break;
     }
     case TegraNVENCMethodBufferAlloc: {
+        // NOLINTNEXTLINE(clang-analyzer-core.NullDereference): input size checked above
         const uint64_t size = static_cast<const TegraNVENCBufferAlloc *>(in)->size;
         Buffer *slot = nullptr;
-        for (uint32_t i = 0; i < kMaxBuffers && !slot; i++)
+        for (uint32_t i = 0; i < kMaxBuffers && !slot; i++) {
             if (!buffers_[i].handle)
                 slot = &buffers_[i];
+        }
         if (!slot || !size || size > kMaxBufferBytes) {
             ret = slot ? kIOReturnBadArgument : kIOReturnNoResources;
             break;
@@ -245,6 +251,7 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         break;
     }
     case TegraNVENCMethodBufferFree: {
+        // NOLINTNEXTLINE(clang-analyzer-core.NullDereference): input size checked above
         Buffer *b = find(static_cast<const TegraNVENCBuffer *>(in)->handle);
         if (!b) {
             ret = kIOReturnBadArgument;
@@ -307,12 +314,15 @@ IOReturn AppleAVE2UserClient::externalMethod(uint32_t selector, IOExternalMethod
     return ret;
 }
 
+namespace {
 class TegraNVENC : public IOService {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
 OSDeclareDefaultStructors(TegraNVENC)
 
     public : IOReturn newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
                                     IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
+}  // namespace
 
 OSDefineMetaClassAndStructors(TegraNVENC, IOService)
 

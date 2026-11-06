@@ -123,6 +123,13 @@ const char *falconState()
     return switch_falcon_state(gNvenc, text, sizeof(text));
 }
 
+const char *falconRunState(uint32_t cpuctl)
+{
+    if (cpuctl & 0x10)
+        return "halted";
+    return (cpuctl & 0x20) ? "stopped" : "running";
+}
+
 // A falcon that did not finish, for its one line (nvgpu gk20a_falcon_dump_stats): CPUCTL (bit 4 halted, bit 5
 // stopped, i.e. waiting for work), IDLESTATE (bit 0 the falcon, bits 1.. engine units busy), interrupts, mailboxes,
 // the exception register, the falcon's DMA queue and its external-error capture, the OS's version word, the THI
@@ -137,30 +144,26 @@ const char *falconDump(bool debugger)
         text, sizeof(text),
         "falcon CPUCTL %#x (%s) IDLESTATE %#x IRQSTAT %#x MAILBOX %#x %#x EXCI %#x OS %#x DEBUGINFO %#x "
         "DMATRFCMD %#x EXTERR %#x@%#x THI_INT %#x",
-        cpuctl,
-        cpuctl & 0x10   ? "halted"
-        : cpuctl & 0x20 ? "stopped"
-                        : "running",
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_IDLESTATE), switch_mmio_read32(gNvenc, SWITCH_FALCON_IRQSTAT),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_MAILBOX0), switch_mmio_read32(gNvenc, SWITCH_FALCON_MAILBOX1),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_EXCI), switch_mmio_read32(gNvenc, SWITCH_FALCON_OS),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_DEBUGINFO), switch_mmio_read32(gNvenc, SWITCH_FALCON_DMATRFCMD),
-        switch_mmio_read32(gNvenc, SWITCH_FALCON_EXTERRSTAT), switch_mmio_read32(gNvenc, SWITCH_FALCON_EXTERRADDR),
-        switch_mmio_read32(gNvenc, THI_INT_STATUS));
+        cpuctl, falconRunState(cpuctl), switch_mmio_read32(gNvenc, SWITCH_FALCON_IDLESTATE),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_IRQSTAT), switch_mmio_read32(gNvenc, SWITCH_FALCON_MAILBOX0),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_MAILBOX1), switch_mmio_read32(gNvenc, SWITCH_FALCON_EXCI),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_OS), switch_mmio_read32(gNvenc, SWITCH_FALCON_DEBUGINFO),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_DMATRFCMD), switch_mmio_read32(gNvenc, SWITCH_FALCON_EXTERRSTAT),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_EXTERRADDR), switch_mmio_read32(gNvenc, THI_INT_STATUS));
     const uint32_t traced = (switch_mmio_read32(gNvenc, SWITCH_FALCON_TRACEIDX) >> 16) & 0xff;
-    n += snprintf(text + n, sizeof(text) - (size_t)n, " trace(%u)", traced);
+    n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " trace(%u)", traced);
     for (uint32_t i = 0; i < traced && i < 6; i++) {
         switch_mmio_write32(gNvenc, SWITCH_FALCON_TRACEIDX, i);
-        n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x",
+        n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " %#x",
                       switch_mmio_read32(gNvenc, SWITCH_FALCON_TRACEPC) & 0xffffff);
     }
     if (debugger)
-        n += snprintf(text + n, sizeof(text) - (size_t)n, " PC/SP");
+        n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " PC/SP");
     for (int i = 0; debugger && i < 3; i++) {
         switch_mmio_write32(gNvenc, SWITCH_FALCON_ICD_CMD, ICD_RREG | 21u << 8);
         const uint32_t pc = switch_mmio_read32(gNvenc, SWITCH_FALCON_ICD_RDATA);
         switch_mmio_write32(gNvenc, SWITCH_FALCON_ICD_CMD, ICD_RREG | 20u << 8);
-        n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x/%#x", pc,
+        n += snprintf(text + n, sizeof(text) - static_cast<size_t>(n), " %#x/%#x", pc,
                       switch_mmio_read32(gNvenc, SWITCH_FALCON_ICD_RDATA));
     }
     return text;
@@ -210,10 +213,11 @@ bool powerUp(bool *wasOn)
 // address (SMMU bypassed), now for its OS and later for the apps.
 bool loadImage()
 {
-    const size_t length = (size_t)(tegra_nvenc_fw_end - tegra_nvenc_fw_start);
+    const size_t length =
+        reinterpret_cast<uintptr_t>(tegra_nvenc_fw_end) - reinterpret_cast<uintptr_t>(tegra_nvenc_fw_start);
     if (!switch_falcon_parse(tegra_nvenc_fw_start, length, &gImage)) {
         snprintf(gLine, sizeof(gLine), "E1 FAIL embedded firmware is not a falcon v1 image (%lu bytes)",
-                 (unsigned long)length);
+                 static_cast<unsigned long>(length));
         return false;
     }
     if (!gFirmware.memory) {  // kept for resume: the falcon is reloaded from it after SC7
@@ -301,9 +305,10 @@ void timedOut(uint32_t fence)
 {
     char host[200];
     tegra_host1x_describe(host, sizeof(host));
-    if (gPublished)
+    if (gPublished) {
         panic("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s",
               fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconDump(true), host);
+    }
     if (gWedged)
         return;
     gWedged = true;
@@ -364,7 +369,8 @@ void bringUp(void *, wait_result_t)
           kPartition, wasOn ? "already on" : "powered here", gImage.code, gImage.code_size, gImage.data,
           gImage.data_size, gImage.apps);
     uint64_t us = 0;
-    uint32_t id = 0, from = 0;
+    uint32_t id = 0;
+    uint32_t from = 0;
     if (!proofOfLife(&us, &id, &from)) {
         IOLog("TegraNVENC: %s\n", gLine);
         giveUp(true);
@@ -414,12 +420,13 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         }
         avail[i] = blocks[i].size - e->offset;
     }
-    if ((*why = tegra_nvenc_check(s, avail)))
+    *why = tegra_nvenc_check(s, avail);
+    if (*why)
         return -22;
     for (uint32_t i = 0; i < s->clean_count; i++) {
         const TegraNVENCRange *r = &s->clean[i];
         TegraNVENCBlock b;
-        if (!resolve(context, r->handle, &b) || (uint64_t)r->offset + r->length > b.size) {
+        if (!resolve(context, r->handle, &b) || static_cast<uint64_t>(r->offset) + r->length > b.size) {
             *why = "clean range";
             return -22;
         }
@@ -436,7 +443,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     for (uint32_t i = 0; i < s->entry_count; i++)
         predictors |= s->entries[i].method == NVC5B7_SET_IN_MEPRED_DATA;
     words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
-    auto method = [&](uint32_t offset, uint32_t value) {
+    const auto method = [&](uint32_t offset, uint32_t value) {
         words[n++] = tegra_host1x_op_incr(kThiMethod0 / 4, 2);
         words[n++] = offset / 4;
         words[n++] = value;
@@ -540,11 +547,12 @@ void engineResume()
         const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
         const char *stage = nullptr;
         const int ret = answer(gSyncpt, from, &stage);
-        if (!ret)
+        if (!ret) {
             gWedged = false;
-        else
+        } else {
             snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
+        }
     }
     if (gWedged)
         IOLog("TegraNVENC: resume FAIL %s; NVENC refuses work\n", gLine[0] ? gLine : "E1");
@@ -565,7 +573,7 @@ extern "C" int tegra_nvenc_probe(void)
         return 0;
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
         return 0;
-    thread_t thread;
+    thread_t thread = nullptr;
     if (kernel_thread_start(bringUp, nullptr, &thread) != KERN_SUCCESS) {
         IOLog("TegraNVENC: could not start the bring-up thread\n");
         return -1;
