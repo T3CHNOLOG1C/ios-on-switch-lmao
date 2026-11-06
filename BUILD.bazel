@@ -114,8 +114,6 @@ lint_test(
         "rustfmt",
         "shfmt",
     ],
-    # Not in `bazel test //...` until the tree is formatted.
-    tags = ["manual"],
 )
 
 lint_test(
