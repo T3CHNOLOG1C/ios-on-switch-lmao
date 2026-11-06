@@ -24,7 +24,8 @@ struct arm_saved_state;
 static inline int
 a64x_subtype_translated(cpu_type_t type, cpu_subtype_t subtype)
 {
-	return type == CPU_TYPE_ARM64 && (subtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E;
+	return type == CPU_TYPE_ARM64 &&
+	       ((subtype & CPU_SUBTYPE_PTRAUTH_ABI) || (subtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E);
 }
 
 /*
@@ -36,18 +37,29 @@ a64x_subtype_translated(cpu_type_t type, cpu_subtype_t subtype)
  * An image carrying the target marker (a section __TEXT,__a64x_target, see A64X_TARGET_SECTNAME) is mapped as is
  * whatever its subtype: it was built for this core (-march=armv8-a -mcpu=cortex-a57, no PAC, no LSE). It is not
  * scanned; if it still executes an instruction the A57 lacks, the undefined-instruction path emulates LSE (counted
- * in kern.a64x.traps) and reports anything else.
+ * in kern.a64x.traps) and reports anything else. Apple's binaries translated offline (translate/arm64e pretranslate)
+ * have no room for that section after their load commands: they carry A64X_PRETRANSLATED in mach_header_64.reserved
+ * instead (0 in every Apple binary), with the same meaning.
  */
 #define A64X_IMAGE_NATIVE 0
 #define A64X_IMAGE_ARM64E 1
 #define A64X_IMAGE_ARM64  2
 #define A64X_TARGET_SEGNAME  "__TEXT"
 #define A64X_TARGET_SECTNAME "__a64x_target"
+#define A64X_PRETRANSLATED   0x78343661u
 static inline int
 a64x_image_kind(cpu_type_t type, cpu_subtype_t subtype)
 {
 	if (type != CPU_TYPE_ARM64) {
 		return A64X_IMAGE_NATIVE;
+	}
+	/*
+	 * arm64e is the pointer-authentication capability bit, not a subtype value: a fat arm64e binary carries one
+	 * slice per ptrauth ABI version (CPU_SUBTYPE_ARM64E and the versioned ones, whose low byte is not 2), and
+	 * every one holds PAC. Grade them all as arm64e, so whichever the loader picks is translated.
+	 */
+	if (subtype & CPU_SUBTYPE_PTRAUTH_ABI) {
+		return A64X_IMAGE_ARM64E;
 	}
 	switch (subtype & ~CPU_SUBTYPE_MASK) {
 	case CPU_SUBTYPE_ARM64E:
@@ -80,6 +92,7 @@ int a64x_mmap_exec(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset
  * MEMORY_OBJECT_NULL if the cache cannot be translated (then the mapping must fail: untranslated arm64e text
  * cannot run here).
  */
+bool a64x_cache_pretranslated(struct vnode *vp);
 void *a64x_shared_cache_pager(void *file_object, uint64_t file_offset, uint64_t size, uint64_t vmaddr,
     struct vnode *vp);
 

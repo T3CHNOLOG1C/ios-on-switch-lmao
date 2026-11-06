@@ -69,6 +69,7 @@
 struct vnode;
 extern void *a64x_shared_cache_pager(void *file_object, uint64_t file_offset, uint64_t size, uint64_t vmaddr,
     struct vnode *vp);
+extern bool a64x_cache_pretranslated(struct vnode *vp);
 #endif
 #include <vm/vm_kern_xnu.h>
 #include <vm/memory_object_internal.h>
@@ -1889,7 +1890,7 @@ vm_shared_region_map_file_setup(
 				 * cache file: pages validated against the cache signature, then translated).
 				 */
 				memory_object_t a64x_mo = MEMORY_OBJECT_NULL;
-				if (mappings[i].sms_init_prot & VM_PROT_EXECUTE) {
+				if ((mappings[i].sms_init_prot & VM_PROT_EXECUTE) && !a64x_cache_pretranslated(srfmp->vp)) {
 					/* every iOS 26 cache is arm64e, also the one arm64 processes map */
 					a64x_mo = a64x_shared_cache_pager(file_object, mappings[i].sms_file_offset,
 					    mappings[i].sms_size, mappings[i].sms_address - srfmp->slide, srfmp->vp);

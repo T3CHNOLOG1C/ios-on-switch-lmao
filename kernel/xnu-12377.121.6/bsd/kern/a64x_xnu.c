@@ -420,7 +420,7 @@ a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const void *lcmd
 	if (kind == A64X_IMAGE_NATIVE) {
 		return 0;
 	}
-	if (!error && lay.marked) {
+	if (mh->reserved == A64X_PRETRANSLATED || (!error && lay.marked)) {
 		/* built for this core: mapped as is, like any binary (signature and trust cache checks unchanged) */
 		OSIncrementAtomic64((SInt64 *)&a64x_images_marked);
 		return 0;
@@ -544,6 +544,10 @@ a64x_mmap_exec(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset_t a
 		return 0;
 	}
 	if (mh.magic != MH_MAGIC_64 || a64x_image_kind(mh.cputype, mh.cpusubtype) == A64X_IMAGE_NATIVE) {
+		return 0;
+	}
+	if (mh.reserved == A64X_PRETRANSLATED) {
+		OSIncrementAtomic64((SInt64 *)&a64x_images_marked);
 		return 0;
 	}
 	size_t lsize = sizeof(mh) + mh.sizeofcmds;
@@ -741,6 +745,38 @@ static void
 a64x_cache_map_end(void *ops)
 {
 	kfree_type(struct a64x_cache_map, ops);
+}
+
+/*
+ * A cache file translated offline: its cdhash is one of /chosen/a64x-cache-pretranslated's (20-byte CodeDirectory
+ * hashes, as trust caches hold them). Every page is validated against that cdhash as any file's, so the file maps as
+ * stock XNU maps a cache: no pager, no plan.
+ */
+static uint32_t a64x_cache_pretranslated_logged;
+
+bool
+a64x_cache_pretranslated(struct vnode *vp)
+{
+	DTEntry chosen;
+	const void *list;
+	unsigned int size;
+	if (vp == NULLVP || SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
+	    SecureDTGetProperty(chosen, "a64x-cache-pretranslated", &list, &size) != kSuccess || size % CS_CDHASH_LEN) {
+		return false;
+	}
+	struct cs_blob *blob = ubc_cs_blob_get(vp, CPU_TYPE_ANY, CPU_SUBTYPE_ANY, 0);
+	if (blob == NULL) {
+		return false;
+	}
+	for (unsigned int at = 0; at < size; at += CS_CDHASH_LEN) {
+		if (memcmp((const uint8_t *)list + at, blob->csb_cdhash, CS_CDHASH_LEN) == 0) {
+			if (!os_atomic_xchg(&a64x_cache_pretranslated_logged, 1, relaxed)) {
+				printf("a64x: shared cache translated offline (%u cdhashes listed): mapped stock\n", size / CS_CDHASH_LEN);
+			}
+			return true;
+		}
+	}
+	return false;
 }
 
 void *
