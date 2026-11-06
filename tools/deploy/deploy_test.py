@@ -194,7 +194,7 @@ class SyncTest(unittest.TestCase):
             },
         }
         tool = self.root / 'kcdata.py'
-        tool.write_text("import json, sys\nopen(sys.argv[2], 'w').write('{}\\n' + json.dumps(%r))\n" % report)
+        tool.write_text(f"import json, sys\nopen(sys.argv[2], 'w').write('{{}}\\n' + json.dumps({report!r}))\n")
         log = Log()
         out = pull_logs.pull(data, self.root / 'logs', log, harvest=False, kcdata=tool)
         self.assertEqual((out / 'panic-2026-11-05-120000.kcdata').read_bytes(), b'kcdata')
@@ -233,7 +233,7 @@ class SyncTest(unittest.TestCase):
             },
         }
         tool = self.root / 'kcdata.py'
-        tool.write_text("import json, sys\nopen(sys.argv[2], 'w').write('{}\\n' + json.dumps(%r))\n" % report)
+        tool.write_text(f"import json, sys\nopen(sys.argv[2], 'w').write('{{}}\\n' + json.dumps({report!r}))\n")
         out = pull_logs.pull(data, self.root / 'logs', Log(), harvest=False, kcdata=tool)
         self.assertIn('display off', (out / 'power.log').read_text())
         self.assertTrue((out / 'power.prev.log').is_file())
