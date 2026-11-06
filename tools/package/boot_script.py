@@ -14,7 +14,7 @@ import struct
 from pathlib import Path
 
 from loader_abi import BOOT_ARGS_BYTES, BOOT_ARGS_PAGE, DTB_SLOT, EXPORTER_SLOT, LOADER_SLOT, STAGE_SOURCE
-from uimage import legacy_image
+from uimage import Header, legacy_image
 
 
 def boot_script(text: str, constants: dict, dtb_bytes: int) -> str:
@@ -50,7 +50,7 @@ def boot_script(text: str, constants: dict, dtb_bytes: int) -> str:
 def script_image(script: str) -> bytes:
     """Wrap the script as U-Boot's source command takes it: a legacy script image of one part."""
     data = script.encode('ascii')
-    return legacy_image(struct.pack('>II', len(data), 0) + data, os_type=17, kind=6, name='Boot')
+    return legacy_image(struct.pack('>II', len(data), 0) + data, Header(os_type=17, kind=6, name='Boot'))
 
 
 def main() -> None:

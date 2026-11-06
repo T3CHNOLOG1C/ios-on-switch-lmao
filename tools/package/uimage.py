@@ -2,13 +2,23 @@
 
 import struct
 import zlib
+from typing import NamedTuple
 
 # Where U-Boot's bootm puts the loader and jumps (the loader's link address, boot/loader/link.ld).
 LOAD = 0xA0000000
 
 
-def legacy_image(data: bytes, *, os_type: int, kind: int, name: str, load: int = 0, entry: int = 0) -> bytes:
+class Header(NamedTuple):
+    os_type: int
+    kind: int
+    name: str
+    load: int = 0
+    entry: int = 0
+
+
+def legacy_image(data: bytes, fields: Header) -> bytes:
     """Put `data` behind a legacy header (architecture 22, AArch64; uncompressed), checked by decoding it again."""
+    os_type, kind, name, load, entry = fields
     title = name.encode('ascii')
     if len(title) > 32:
         raise ValueError('legacy image name is too long')

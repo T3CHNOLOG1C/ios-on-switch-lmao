@@ -27,7 +27,7 @@ from build_native_loader import (
     stage_into_bl33,
 )
 from loader_abi import BOOT_ARGS_PAGE, DTB_SLOT, EXPORTER_SLOT, LOADER_SLOT, SCRIPT_SLOT
-from uimage import LOAD, legacy_image
+from uimage import LOAD, Header, legacy_image
 
 BL33 = Path('bazel/pinned/firmware/bl33.bin')
 EXPORTER = Path('bazel/pinned/firmware/exporter.uimg')
@@ -67,7 +67,7 @@ class Bl33StageTests(unittest.TestCase):
         cls.dtb = DTB.read_bytes()
         cls.script = boot_script(TEMPLATE.read_text(), cls.constants, len(cls.dtb))
         cls.loader = legacy_image(
-            random.Random(5).randbytes(0x1D000), os_type=5, kind=2, name='Loader', load=LOAD, entry=LOAD
+            random.Random(5).randbytes(0x1D000), Header(os_type=5, kind=2, name='Loader', load=LOAD, entry=LOAD)
         )
         cls.slots = [
             (*SCRIPT_SLOT, script_image(cls.script)),

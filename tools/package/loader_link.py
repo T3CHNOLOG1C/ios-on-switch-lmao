@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 
 from loader_abi import SD_REFERENCE, STAMPS_SLOT
-from uimage import LOAD, legacy_image
+from uimage import LOAD, Header, legacy_image
 
 MAX_RAW = 128 * 1024
 
@@ -105,7 +105,7 @@ def main() -> None:
         report = subprocess.run([args.readelf, '-h', '-l', '-r', '-s', elf], check=True, capture_output=True, text=True)
         if 'There are no relocations in this file.' not in report.stdout:
             raise SystemExit('unresolved loader relocations')
-        image = legacy_image(flat.read_bytes(), os_type=5, kind=2, name='Loader', load=LOAD, entry=LOAD)
+        image = legacy_image(flat.read_bytes(), Header(os_type=5, kind=2, name='Loader', load=LOAD, entry=LOAD))
         args.out.write_bytes(image)
 
 
