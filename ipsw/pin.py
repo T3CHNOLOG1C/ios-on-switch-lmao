@@ -9,8 +9,9 @@ checked against the IPSW's own) and keeps every other kind and the kind's "deriv
 Reads the zip's central directory and BuildManifest.plist over HTTP range requests, selects the Erase build
 identity for the device class, then streams each member the build needs once to compute two sha256s:
 `sha256` of the member's bytes as stored in the zip (what Bazel downloads with a Range header and keeps in its
-repository cache) and `content_sha256` of the member itself (after inflating a deflated member). Nothing is
-written to disk. The OS dmg alone is several GB, so expect a few minutes.
+repository cache) and `content_sha256` of the member itself (after inflating a deflated member, or decrypting an
+Apple Encrypted Archive with the key its auth data leads to, which is pinned as `aea_key`). Nothing is written to disk.
+The OS dmg alone is several GB, so expect a few minutes.
 """
 import argparse
 import ast
@@ -19,9 +20,13 @@ import json
 import os
 import plistlib
 import struct
+import subprocess
 import sys
+import threading
 import urllib.request
 import zlib
+
+from ipsw import aea
 
 CHUNK = 8 << 20
 # BuildManifest components the boot and the SD install read, by their role in this build.
@@ -114,6 +119,39 @@ def stream(remote, member, offset):
     return stored.hexdigest(), content.hexdigest()
 
 
+def aea_key(remote, offset):
+    """The `aea decrypt -key-value` key of the AEA member stored at offset."""
+    profile, length = aea.prologue(remote.read(offset, offset + aea.PROLOGUE))
+    if profile != aea.SYMMETRIC_PROFILE:
+        raise SystemExit("AEA profile {} at {}: only the symmetric profile is supported".format(profile, offset))
+    return aea.key_value(aea.auth_fields(remote.read(offset + aea.PROLOGUE, offset + aea.PROLOGUE + length)))
+
+
+def stream_aea(remote, member, offset, key):
+    """sha256 of the stored archive and of what /usr/bin/aea decrypts it to; checks the zip's CRC."""
+    stored, content, crc = hashlib.sha256(), hashlib.sha256(), [0]
+    decrypt = subprocess.Popen(["/usr/bin/aea", "decrypt", "-key-value", key], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE)
+
+    def feed():
+        with remote.range(offset, offset + member["csize"]) as response, decrypt.stdin:
+            while chunk := response.read(CHUNK):
+                stored.update(chunk)
+                crc[0] = zlib.crc32(chunk, crc[0])
+                decrypt.stdin.write(chunk)
+
+    writer = threading.Thread(target=feed)
+    writer.start()
+    while chunk := decrypt.stdout.read(CHUNK):
+        content.update(chunk)
+    writer.join()
+    if decrypt.wait():
+        raise SystemExit("aea decrypt failed (exit {})".format(decrypt.returncode))
+    if crc[0] != member["crc32"]:
+        raise SystemExit("CRC mismatch")
+    return stored.hexdigest(), content.hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--kind", required=True, help="the IPSW kind: its build (ProductBuildVersion)")
@@ -150,7 +188,14 @@ def main():
         member = members[name]
         offset = data_offset(remote, member)
         print("# {}: {} ({} bytes stored, {} bytes)".format(role, name, member["csize"], member["size"]), file=sys.stderr)
-        sha256, content_sha256 = stream(remote, member, offset)
+        key = None
+        if name.endswith(".aea"):
+            if member["method"] != 0:
+                raise SystemExit("{}: a deflated AEA member".format(name))
+            key = aea_key(remote, offset)
+            sha256, content_sha256 = stream_aea(remote, member, offset, key)
+        else:
+            sha256, content_sha256 = stream(remote, member, offset)
         pins[role] = {
             "member": name,
             "component": component,
@@ -161,6 +206,8 @@ def main():
             "sha256": sha256,
             "content_sha256": content_sha256,
         }
+        if key:
+            pins[role]["aea_key"] = key
     entry = {
         "url": url,
         "size": remote.size,

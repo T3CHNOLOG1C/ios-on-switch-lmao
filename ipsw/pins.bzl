@@ -7,8 +7,9 @@ which pins one kind's members and keeps the rest. Per kind:
   derived   what the build derives from the members, pinned by hand: kernelcache_sha256 (the kernelcache's IM4P payload,
             LZFSE-decompressed, its arm64 slice: //ipsw:kernelcache) and quartzcore_metallib_sha256 (QuartzCore's
             default.metallib on the OS volume, the shader seed's gate: //gpu:seed)
-An empty kind is a declared slot: //ipsw:kind accepts it, no repository is made for it, and anything that reads
-an IPSW fails at analysis until it is pinned. "next" is the slot for a later iOS 26/27 IPSW.
+An Apple Encrypted Archive member (iOS 26 and later) also has aea_key, the key /usr/bin/aea decrypts it with, which
+`pin` unwraps from the archive's auth data. An empty kind is a declared slot: //ipsw:kind accepts it, no repository is
+made for it, and anything that reads an IPSW fails at analysis until it is pinned.
 """
 
 # --//ipsw:kind's default.
@@ -109,5 +110,99 @@ IPSWS = {
         "url": "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw",
         "version": "17.7.11"
     },
-    "next": {}
+    "24B119": {
+        "build": "24B119",
+        "derived": {
+            "kernelcache_sha256": "250337d45598da0e5cc578413704981368afe92f84b3450dc956e21da1b21bd4"
+        },
+        "device_class": "j181ap",
+        "members": {
+            "app_cryptex": {
+                "component": "Cryptex1,AppOS",
+                "content_sha256": "8a70ca8f34f8604f436dd3ec23d27aea21a9dc5b28f114acc7ada0ee76df010c",
+                "deflated": True,
+                "member": "141-08824-244.dmg",
+                "offset": 47,
+                "sha256": "71b113308b8cbeb77ea5e5b4c3396cb075f94b4d4ab8375837dba34db3aede50",
+                "size": 16777216,
+                "stored_size": 8962415
+            },
+            "app_cryptex_trust_cache": {
+                "component": "Cryptex1,AppTrustCache",
+                "content_sha256": "618c041eca6b8b7c160864be1d64efa84f93912759a8e241c1d8a66dfde52fb0",
+                "deflated": True,
+                "member": "Firmware/141-08824-244.dmg.trustcache",
+                "offset": 10519920406,
+                "sha256": "3c60e7245889088a8d7ab74246712596ee3a39b222fc5035b3ef04147318f95c",
+                "size": 863,
+                "stored_size": 833
+            },
+            "device_tree": {
+                "component": "DeviceTree",
+                "content_sha256": "e77e065d4368bbce85b0a01228499176d3a7f8ea1968bb7d0b200ea3028c3e6b",
+                "deflated": True,
+                "member": "Firmware/all_flash/DeviceTree.j181ap.im4p",
+                "offset": 10621133195,
+                "sha256": "83b909acc045a78a9a0e8892496ba9b379acbe6b8ed9d29251206c064d8c6ebf",
+                "size": 36554,
+                "stored_size": 36569
+            },
+            "kernelcache": {
+                "component": "KernelCache",
+                "content_sha256": "eb4b0f24a1145c5f7d22b293b74de2947517963c7a4efe229df4b97bdfa9651f",
+                "deflated": True,
+                "member": "kernelcache.release.ipad12p",
+                "offset": 10659917172,
+                "sha256": "ce3cda3cb30a8168806fcd6f1cc50d6090fb633572b9976011034903c8b0fc5c",
+                "size": 21687326,
+                "stored_size": 21668113
+            },
+            "os": {
+                "aea_key": "base64:HzcLKynvr+LYWwgI8nvik7nKA6RQRdfyGJ+l3hyv4mA=",
+                "component": "OS",
+                "content_sha256": "4ee01ed973cb11a6e88b4684072cc9bb76b45acd5c18e66a80252aff01125968",
+                "deflated": False,
+                "member": "141-09394-217.dmg.aea",
+                "offset": 8962533,
+                "sha256": "939612a319ce0e533688bea0996437b951d47b3383eb9e6b9f114c092d09eaf0",
+                "size": 7717519360,
+                "stored_size": 7717519360
+            },
+            "static_trust_cache": {
+                "component": "StaticTrustCache",
+                "content_sha256": "c71268adca6fd53512eacbf692558d77aa36c7a8ac8409598c6901465e075361",
+                "deflated": True,
+                "member": "Firmware/141-09394-217.dmg.aea.trustcache",
+                "offset": 10555209215,
+                "sha256": "8ac49a3586f46c3f2356bb9aa768a666c03edc927846928831da1fb400a1f639",
+                "size": 84601,
+                "stored_size": 76659
+            },
+            "system_cryptex": {
+                "aea_key": "base64:vkMWcw+0u3HwUw8AehkWDt2CyPQCNWpz0Qz7NzGg+M8=",
+                "component": "Cryptex1,SystemOS",
+                "content_sha256": "d215b0bd1b3a4201d4d20c311e6baf114f808f63ca9a718dce7439b06cc49f83",
+                "deflated": False,
+                "member": "141-10410-227.dmg.aea",
+                "offset": 8103971707,
+                "sha256": "423778eee61b0fe78740d86928dc6d023aa9daf8e5a8afddbc64f54a4dcdea51",
+                "size": 2415919104,
+                "stored_size": 2415919104
+            },
+            "system_cryptex_trust_cache": {
+                "component": "Cryptex1,SystemTrustCache",
+                "content_sha256": "e714a3fcaa20281df406f150339e17277a1e6db79abe6c089ab88bb1d0c0064e",
+                "deflated": True,
+                "member": "Firmware/141-10410-227.dmg.aea.trustcache",
+                "offset": 10555302247,
+                "sha256": "444670402cf8bc1c0f6b56c561dfc2d7e5b30beb33dfcaff9dc10a869f25177f",
+                "size": 3191,
+                "stored_size": 2922
+            }
+        },
+        "product": "iPad12,1",
+        "size": 10681591172,
+        "url": "https://updates.cdn-apple.com/2026FallFCS/4ed6b0d9-7721-4690-b843-664305638776/iPad_10.2_2021_27.2_24B119_Restore.ipsw",
+        "version": "27.2"
+    }
 }

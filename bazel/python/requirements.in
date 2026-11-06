@@ -1,8 +1,12 @@
 # The Python packages the build runs (@switch_pypi, Python 3.13): meson and mako for Mesa's build (gpu/nvk); pyyaml
 # and packaging are what Mesa's meson.build checks for; markupsafe is mako's dependency, pinned here too so the lock
 # only ever changes when this file does. `bazel run //bazel/python:requirements.update` locks them with uv.
+# cryptography unwraps IPSW members' AEA keys (//ipsw:pin); cffi and pycparser are its dependencies.
+cffi==2.1.1
+cryptography==50.0.2
 mako==1.4.3
 markupsafe==3.0.4
 meson==1.12.1
 packaging==26.3
+pycparser==3.12
 pyyaml==6.0.3

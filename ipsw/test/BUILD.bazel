@@ -1,0 +1,13 @@
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
+py_test(
+    name = "aea_test",
+    size = "small",
+    srcs = ["aea_test.py"],
+    data = ["//ipsw:aea_decrypt"],
+    tags = ["requires-darwin"],
+    deps = ["//ipsw:aea"],
+)

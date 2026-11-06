@@ -6,7 +6,9 @@ header and checks them against the pinned sha256, which puts them in the reposit
 by every output base).
 
 A stored member (the OS dmg) is used as fetched. A deflated one is inflated by a build action (ipsw_inflate,
-//ipsw:inflate) that checks the content against its pin; only the deflated bytes live in the repository cache.
+//ipsw:inflate) that checks the content against its pin; only the deflated bytes live in the repository cache. An Apple
+Encrypted Archive (iOS 26 and later: OS.dmg.aea, the SystemOS cryptex) is decrypted the same way (ipsw_aea_decrypt) with
+its pinned aea_key.
 
 @ipsw is the hub the build names members by: @ipsw//:<role> (kernelcache, os, system_cryptex, ...) is the member of
 the kind --//ipsw:kind selects (a select() over //ipsw:<kind>). //ipsw:current gives rules the
@@ -101,6 +103,9 @@ def _ipsw_extension_impl(module_ctx):
             if pin["deflated"]:
                 roles[role][kind] = "@@//ipsw:{}_{}".format(kind, role)
                 stored["stored_{}_{}".format(kind, role)] = "@{}//:stored.deflate".format(repo)
+            elif pin.get("aea_key"):
+                roles[role][kind] = "@@//ipsw:{}_{}".format(kind, role)
+                stored["stored_{}_{}".format(kind, role)] = "@{}//:{}".format(repo, _filename(pin))
             else:
                 roles[role][kind] = "@{}//:{}".format(repo, _filename(pin))
     _ipsw_hub(name = "ipsw", members = json.encode(roles), stored = stored)
@@ -111,8 +116,8 @@ ipsw = module_extension(implementation = _ipsw_extension_impl)
 def ipsw_member_label(kind, role):
     """The file of a stored (not deflated) member of a pinned kind, for repository rules (which cannot select())."""
     pin = IPSWS[kind]["members"][role]
-    if pin["deflated"]:
-        fail("{} {} is deflated: only a build action inflates it".format(kind, role))
+    if pin["deflated"] or pin.get("aea_key"):
+        fail("{} {} is deflated or encrypted: only a build action makes its content".format(kind, role))
     return Label("@@+ipsw+ipsw_{}_{}//:{}".format(kind, role, _filename(pin)))
 
 # --- The kind, and what rules read of it ----------------------------------------------------------------------------
@@ -185,6 +190,31 @@ ipsw_inflate = rule(
     },
 )
 
+def _ipsw_aea_decrypt_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + "/" + ctx.attr.filename)
+    ctx.actions.run(
+        executable = ctx.executable._aea_decrypt,
+        arguments = [ctx.file.src.path, out.path, ctx.attr.key, ctx.attr.content_sha256],
+        inputs = [ctx.file.src],
+        outputs = [out],
+        mnemonic = "IpswAeaDecrypt",
+        progress_message = "Decrypting the IPSW's " + ctx.attr.filename,
+        execution_requirements = {"no-cache": "", "requires-darwin": ""},
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+ipsw_aea_decrypt = rule(
+    implementation = _ipsw_aea_decrypt_impl,
+    doc = "An AEA member's content (<name>/<filename>), decrypted by /usr/bin/aea and checked against its content sha256.",
+    attrs = {
+        "content_sha256": attr.string(mandatory = True),
+        "filename": attr.string(mandatory = True),
+        "key": attr.string(mandatory = True, doc = "aea decrypt's -key-value"),
+        "src": attr.label(mandatory = True, allow_single_file = True, doc = "the member's stored archive"),
+        "_aea_decrypt": attr.label(default = "//ipsw:aea_decrypt", executable = True, cfg = "exec"),
+    },
+)
+
 def ipsw_kinds():
     """In //ipsw: the kind flag, a config_setting per kind, the deflated members inflated (<kind>_<role>), the
     unpinned stand-ins (<kind>_unpinned) and :current (IpswInfo)."""
@@ -206,6 +236,17 @@ def ipsw_kinds():
             # the pin command. Manual, so `bazel build //...` does not analyze it.
             _ipsw_unpinned(name = kind + "_unpinned", kind = kind, tags = ["manual"], visibility = ["//visibility:public"])
         for role, pin in ipsw.get("members", {}).items():
+            if pin.get("aea_key"):
+                ipsw_aea_decrypt(
+                    name = "{}_{}".format(kind, role),
+                    src = "@ipsw//:stored_{}_{}".format(kind, role),
+                    filename = _filename(pin).removesuffix(".aea"),
+                    key = pin["aea_key"],
+                    content_sha256 = pin["content_sha256"],
+                    tags = ["manual"],
+                    visibility = ["//visibility:public"],
+                )
+                continue
             if not pin["deflated"]:
                 continue
             large = pin["stored_size"] > _LARGE
