@@ -27,6 +27,7 @@ py_test(
     name = "translate_tree_test",
     srcs = ["translate_tree_test.py"],
     data = ["translate_tree.py"],
+    deps = ["//tools/trustcache"],
 )
 
 [pretranslate_role(
