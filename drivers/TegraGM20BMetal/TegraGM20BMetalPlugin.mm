@@ -36,7 +36,8 @@
 //   NMB_REFUSE_REBINDS=0      encoders log their calls for rebinds again (default: nothing rebinds)
 //   NMB_PADDED_ALIAS=1        textures over padded rows rendered in place (default off: untried on NVK)
 //   M2V_YCBCR_MEMO=<N>        skip unchanged two-plane YCbCr conversions (N sampled chunks; default off)
-//   M2V_YCBCR_FILTER=device   the device's filter for converted YCbCr (default: Metal's, exact)
+//   M2V_YCBCR_FILTER=device   the device's filter for converted YCbCr on any device (default: as every texture's sample,
+//                             the device's own here)
 //   M2V_ZERO_FRESH=1          zero fresh memory and upload staging on the CPU again (default off)
 //   TEGRA_M2V_SEED=0          no shared shader cache seed (default 1)
 //   NMB_SYSTEM_COMPILER       Metal source and stitched libraries compiled in-process (default 1 outside backboardd, 0 in it)
