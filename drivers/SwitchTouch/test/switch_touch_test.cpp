@@ -1088,7 +1088,7 @@ static void scenarioDeepFifo()
     gSchedule(gNow + 1000000, [] {
         std::vector<Event> events;
         for (unsigned i = 0; i < 40; ++i)
-            events.push_back(contactEvent(i == 0 ? 3 : 5, 0, 100 + i, 100));
+            events.push_back(contactEvent(i == 0 ? 3 : i == 39 ? 4 : 5, 0, 100 + i, 100));
         gFtm4.scan(events);
     });
     gRunUntil(gNow + 30000000);
@@ -1243,18 +1243,17 @@ static void scenarioFilter()
             check(r[0].slot[0].x == r[1].slot[0].x && r[0].slot[0].y == r[1].slot[0].y,
                   "tap inside the hysteresis: no travel");
     }
-    // One that creeps 8 raw px at a steady strength once settled: real motion, reported, and lifted within the
-    // hysteresis of the finger.
+    // One whose centroid creeps 8 raw px at a steady strength once settled, as the FTM4's do for the first ~50 ms: it
+    // stays inside the still radius (0.8 mm), so the tap lifts within a pixel of where it landed.
     {
         std::vector<std::pair<unsigned, unsigned>> p;
         for (unsigned i = 0; i < 10; ++i)
             p.push_back({600, 400 + 2 * (i < 3 ? 0 : std::min(i - 2, 4u))});
         const auto r = scans(1, p);
-        const auto want = reported(600, 408);
-        check(r.size() > 2, format("creeping tap: its motion is reported (%zu reports)", r.size()));
-        check(std::abs(r.back().slot[1].x - want.first) <= 3 && r.back().slot[1].y == want.second,
-              format("creeping tap: lifted at (%d,%d), within 3 px of the finger's (%d,%d)", r.back().slot[1].x,
-                     r.back().slot[1].y, want.first, want.second));
+        const auto landed = reported(600, 400);
+        check(std::abs(r.back().slot[1].x - landed.first) <= 1 && r.back().slot[1].y == landed.second,
+              format("creeping tap: lifted at (%d,%d), within a pixel of where it landed (%d,%d)", r.back().slot[1].x,
+                     r.back().slot[1].y, landed.first, landed.second));
     }
     // A still tap as the panel reports it: the centroid slides 12 raw px while the pad presses down (strength rising)
     // and 18 more while it lifts (strength falling). Neither is motion.
@@ -1272,20 +1271,21 @@ static void scenarioFilter()
         const auto r = scans(2, p);
         check(r.size() == 2, format("jittering hold: down and up only (%zu reports)", r.size()));
     }
-    // A slow drag (3 raw px a scan) from touch-down: its first scan is still settling, then every scan is reported in
-    // small steps, and it ends within the hysteresis of the finger.
+    // A slow drag (3 raw px a scan) from touch-down: its first scans are inside the still radius, then every scan is
+    // reported in steps of at most 1.5 of the finger's (3 px, so 5 once rounded), and it ends within the hysteresis of
+    // the finger.
     {
         std::vector<std::pair<unsigned, unsigned>> p;
         for (unsigned i = 0; i < 30; ++i)
             p.push_back({800, 300 + 3 * i});
         const auto r = scans(3, p);
-        check(r.size() == 30, format("slow drag: every scan from the second reported (%zu reports)", r.size()));
+        check(r.size() == 29, format("slow drag: every scan from the third reported (%zu reports)", r.size()));
         int last = r.empty() ? 0 : r[0].slot[3].x, worst = 0;
         for (const auto &rep : r) {
             worst = std::max(worst, std::abs((int)rep.slot[3].x - last));
             last = rep.slot[3].x;
         }
-        check(worst <= 4, format("slow drag: largest step %d px", worst));
+        check(worst <= 5, format("slow drag: largest step %d px", worst));
         const auto want = reported(800, 300 + 3 * 29);
         check(std::abs(r.back().slot[3].x - want.first) <= 3,
               format("slow drag: ends within 3 px of the finger (%d, want %d)", r.back().slot[3].x, want.first));
@@ -1298,9 +1298,9 @@ static void scenarioFilter()
     fireWatchdog();
     const std::string geometry = logLine("SwitchTouch geometry:");
     std::printf("%s\n", geometry.c_str());
-    check(geometry.find("taps raw travel 11/31/31 px (4, reported moving 1, reported travel 1/7/7 px; hysteresis "
+    check(geometry.find("taps raw travel 11/31/31 px (4, reported moving 1, reported travel 0/1/1 px; hysteresis "
                         "2.4 px)") != std::string::npos,
-          "geometry: of the four taps only the creeping one moved");
+          "geometry: of the four taps only the creeping one moved, by a pixel");
 }
 
 static void scenarioPalm()

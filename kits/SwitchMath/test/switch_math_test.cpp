@@ -50,6 +50,19 @@ TEST(SwitchMath, ClampAndSaturate)
     EXPECT_EQ(switch_sat_i32(INT64_MIN), INT32_MIN);
 }
 
+TEST(SwitchMath, IntegerSquareRoot)
+{
+    EXPECT_EQ(switch_isqrt_u64(0), 0u);
+    EXPECT_EQ(switch_isqrt_u64(1), 1u);
+    EXPECT_EQ(switch_isqrt_u64(15), 3u);
+    EXPECT_EQ(switch_isqrt_u64(16), 4u);
+    EXPECT_EQ(switch_isqrt_u64(UINT64_MAX), 0xffffffffu);
+    for (uint64_t r = 1; r < 5000; r += 7) {
+        EXPECT_EQ(switch_isqrt_u64(r * r), r);
+        EXPECT_EQ(switch_isqrt_u64(r * r - 1), r - 1);
+    }
+}
+
 TEST(SwitchMath, MinMaxEvaluateOnce)
 {
     int calls = 0;
