@@ -303,7 +303,6 @@ extern "C" bool switch_usb_remote_wake()
 // does not keep, from the role thread.
 extern "C" void switch_usb_resume(void)
 {
-    switch_pd_sleep(false);
     if (gDevicePort)
         switchxudc_sleep(false);
     if (__atomic_load_n(&gHostUp, __ATOMIC_ACQUIRE)) {
@@ -312,6 +311,7 @@ extern "C" void switch_usb_resume(void)
         gPadLost = true;
         IOLockUnlock(gLock);
     }
+    switch_pd_sleep(false);  // last: a sink attached while asleep is found now, with the host block already back
     if (gRoleCall)
         thread_call_enter(gRoleCall);  // a cable that came or went while asleep
 }

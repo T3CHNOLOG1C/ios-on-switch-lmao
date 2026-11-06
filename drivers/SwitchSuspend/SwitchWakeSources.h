@@ -333,7 +333,8 @@ static const struct switch_wake_pmc_event switch_wake_pmc_events[] = {
     {52, SWITCH_WAKE_LOW, 0, "bt"},        // bt_wake_ap (PH5): SwitchBluetooth's sleep mode (switch_bluetooth_suspend)
     {8, SWITCH_WAKE_HIGH, 0, "wifi"},      // WiFi Wake Ap (PH2): SwitchWLAN's wake-on-WLAN
     {39, SWITCH_WAKE_HIGH, 0, "usb"},      // UTMIP port 0: a USB device's remote wake through the PMC's sleepwalk
-                                           // (SwitchUSB XusbSleepwalk.h), armed when a device is on the host port
+                                           // (SwitchUSB XusbSleepwalk.h), armed when a device is on the host port;
+                                           // after usb-c, so an unplug (its ALERT) is never taken for a key press
 };
 #define SWITCH_WAKE_PMC_EVENTS (sizeof(switch_wake_pmc_events) / sizeof(switch_wake_pmc_events[0]))
 

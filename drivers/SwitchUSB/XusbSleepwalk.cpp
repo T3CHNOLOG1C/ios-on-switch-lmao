@@ -12,8 +12,9 @@ namespace xhost {
 // detectors up, then the pad's electrical control to the PMC, the trigger on any line change and the wake on.
 bool Controller::armRemoteWake(unsigned port)
 {
-    if (!isPowered || !port)
-        return false;
+    const uint32_t id = r(padctl, XUSB_USB2_VBUS_ID) & (XUSB_VBUS_ID_ID_SRC_OVR | XUSB_VBUS_ID_ID_MASK);
+    if (!isPowered || !port || id != (XUSB_VBUS_ID_ID_SRC_OVR | XUSB_VBUS_ID_ID_GROUNDED))
+        return false;  // the pad is not in the host role (setHostRole grounds the ID override): not ours to hand over
     const uint32_t portsc = xhci(xhci_portsc_offset(capLength(), port));
     if (!(portsc & XHCI_PORTSC_CCS))
         return false;
