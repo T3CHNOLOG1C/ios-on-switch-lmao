@@ -1,0 +1,132 @@
+---
+title: "Installation"
+description: "From an empty partition on your SD card to the iPadOS Home Screen."
+---
+
+<Warning>
+  Nobody can help you if this goes wrong. Copy everything on your SD card somewhere safe before you start, because
+  partitioning a card can wipe it.
+</Warning>
+
+## What you need
+
+- A Switch OLED that already boots [hekate](https://github.com/CTCaer/hekate). Getting a console to that point is
+  its own project, and these docs don't cover it.
+- A microSD card with room for a partition of 32 GB or more for iOS, plus space on the card's FAT partition for
+  the install image while it's being copied.
+  {/* TODO(r22-install): the minimum partition size and the image's size on the FAT. */}
+- A Mac running macOS, on Apple silicon or Intel, with about 35 GB free, an internet connection and an
+  administrator password.
+  {/* TODO(r22-install): measured disk use and build time. */}
+- [Bazelisk](https://github.com/bazelbuild/bazelisk) on that Mac. It's the only thing the image builder needs.
+
+To install Bazelisk, paste this into Terminal. It works on Apple silicon and Intel Macs.
+
+```bash
+sudo mkdir -p /usr/local/bin
+sudo curl -fL -o /usr/local/bin/bazelisk https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-darwin
+sudo chmod +x /usr/local/bin/bazelisk
+```
+
+If you already use Homebrew, `brew install bazelisk` does the same thing.
+
+## Install iOS
+
+<Steps>
+  <Step title="Make a partition for iOS in hekate">
+    Boot hekate and open **Tools**, then **Partition SD Card**. Make a Linux or an Android partition at the size you
+    want iOS to have, and let hekate finish.
+
+    Don't install Linux or Android onto it afterwards. The installer turns that partition into iOS's and leaves every
+    other partition alone. Pick the size now: the image is built for this exact partition, so if you repartition
+    later, you build it again.
+  </Step>
+
+  <Step title="Get the source">
+    Open the project's [releases](https://github.com/brunostjohn/ios-on-switch-lmao/releases), download **Source code
+    (zip)** for the latest release and double-click it to unzip it. Then open Terminal in the unzipped folder.
+  </Step>
+
+  <Step title="Build the image and copy it to the card">
+    Put the SD card in your Mac and run:
+
+    ```bash
+    bazelisk run //:image -- --copy-to-card
+    ```
+
+    {/* TODO(r22-install): confirm the --copy-to-card flag's name once it lands. */}
+
+    The builder finds the Switch card, reads the size of the partition you just made, downloads iPadOS from Apple and
+    the release's prebuilt parts, and builds an image that fits that partition exactly. It asks for your password once,
+    to set file owners inside the image. The first run downloads several gigabytes, so give it time.
+
+    It then copies its files onto the card and ejects it. It only adds `switchroot/ios/`, `bootloader/ini/ios.ini`,
+    `bootloader/res/icon_ios.bmp` and `bootloader/payloads/install-ios.bin`, and leaves everything else on the card
+    alone.
+
+    <Accordion title="Options">
+      Put these after `--`, as in `bazelisk run //:image -- --copy-to-card --disk disk4`.
+
+      | Option | Use it when |
+      | --- | --- |
+      | `--disk diskN` | More than one card is in the Mac. `diskutil list external` shows which is which. |
+      | `--partition NAME` | The card has both a Linux and an Android partition. |
+      | `--size 64G` | The card isn't in the Mac. Give the partition's exact size. |
+      | `--out DIR` | You want the build's folder somewhere other than `out/sd` in the source folder. |
+
+      `bazelisk run //:image_dry_run -- --size 64G` checks the card or the size and prints the plan without
+      downloading the large files.
+    </Accordion>
+
+    <Accordion title="Copying the folder yourself">
+      Without `--copy-to-card`, the builder stops after writing its folder and prints where it is. Everything in it
+      goes onto the root of the SD card, merged with the `bootloader` and `switchroot` folders already there.
+
+      Don't drag it over in Finder. Finder offers to replace folders that already exist, which would delete hekate's.
+      `ditto` merges instead. Put your card's name in place of `SWITCH SD`:
+
+      ```bash
+      ditto --norsrc --noextattr out/sd "/Volumes/SWITCH SD"
+      diskutil eject "/Volumes/SWITCH SD"
+      ```
+    </Accordion>
+  </Step>
+
+  <Step title="Run the installer">
+    Put the card back in the Switch, boot hekate and open **Payloads**, then **install-ios.bin**.
+
+    The installer shows the image and the partition it will replace, with their names and sizes. If more than one
+    partition fits, move between them with the volume buttons and press POWER to pick one. On the last screen,
+    VOL+ erases that partition and installs iOS, and VOL- cancels without writing anything.
+
+    A progress bar counts the megabytes written. When it finishes, it says iOS is installed and deletes the image from
+    the card to give you the space back. Press POWER to go back to hekate.
+
+    If the image doesn't match the partition's size, the installer shows both sizes and refuses before it writes
+    anything. Build the image again with the card in the Mac.
+  </Step>
+
+  <Step title="Boot iOS">
+    In hekate, open **More Configs** and pick **iOS**.
+
+    The first boot takes several minutes. The Apple logo stays on screen with iPadOS's progress bar under it while
+    the system sets itself up and installs its built-in apps. Later boots go from the logo straight to the Home Screen.
+    {/* TODO(r22-install): the first boot's measured duration. */}
+  </Step>
+</Steps>
+
+## Updating
+
+Build the new release's image and install it the same way. For now that erases everything you had in iOS.
+{/* TODO(r22-install): in-place updates. */}
+
+## Removing it
+
+Delete or recreate the iOS partition with hekate's partition manager. Then delete these from the SD card:
+
+- `switchroot/ios/`
+- `bootloader/ini/ios.ini`
+- `bootloader/res/icon_ios.bmp`
+- `bootloader/payloads/install-ios.bin`
+
+The installer never touches anything else on the card.

@@ -1,0 +1,38 @@
+---
+title: "iPadOS on the Switch OLED"
+description: "iPadOS, booting natively on a Nintendo Switch OLED."
+---
+
+{/* TODO(photo): a photo of the Switch running iOS, e.g.
+<img src="/images/switch.jpg" alt="A Switch OLED showing the iPadOS Home Screen" /> */}
+
+This project boots iPadOS 26 and 27 on a Nintendo Switch OLED, running directly on the console's hardware. The kernel
+is Apple's XNU, built from the source Apple publishes, with drivers written for the Switch's chips. Everything above
+the kernel is Apple's own iPadOS, which your Mac downloads from Apple while it builds the install image.
+
+You start it from hekate, the way people boot Android or Linux on a Switch. It lives on its own partition of the SD
+card, and the installer leaves the rest of the card alone.
+
+<Warning>
+  **This is a hobby project with no support, and you take all the risk.**
+
+  - There's no warranty. If you break your console, that's on you.
+  - It runs on the Switch OLED only. No other model is supported, and none is planned.
+  - Issues are disabled on GitHub. Don't message or email the author about it.
+  - Pull requests are the only thing accepted, and there's no timeline for reviewing them.
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Install it" icon="download" href="/installation">
+    What you need, and every step from an empty partition to the Home Screen.
+  </Card>
+  <Card title="What works" icon="list-check" href="/what-works">
+    The hardware and features that work, and the ones that don't.
+  </Card>
+  <Card title="How it works" icon="microchip" href="/how-it-works">
+    How iPadOS ends up running on a console Apple never made it for.
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/contributing">
+    Building from source and sending a pull request.
+  </Card>
+</CardGroup>

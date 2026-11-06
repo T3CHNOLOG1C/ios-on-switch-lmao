@@ -1,0 +1,68 @@
+---
+title: "Contributing"
+description: "Building from source, trying your build on a Switch, and sending a pull request."
+---
+
+Pull requests are the only contributions this project takes. Issues are disabled, and there's no timeline for
+reviews: a PR might be merged next week, much later or never. Slop won't be merged.
+
+## Pull requests
+
+The PR template has five sections: what the change does, how, why, testing and evidence, and risk. Each one needs
+real content, and the checklist under them has to be fully ticked, or the **PR template** check fails. Evidence from a
+real Switch OLED, such as log lines, screenshots or numbers from before and after, makes a PR much quicker to review.
+
+Every PR also runs one workflow on GitHub's macOS runners. It checks formatting and lint, builds the debug and release
+configurations and runs the tests, all through Bazel.
+
+[AGENTS.md](https://github.com/brunostjohn/ios-on-switch-lmao/blob/main/AGENTS.md) has the rules the code follows. The
+ones PRs most often run into:
+
+- Drivers run on interrupts, and a lost interrupt is a one-line panic, with no fallback to polling.
+- Data moves by DMA whenever the hardware can do it.
+- A change must never make the system slower.
+- A feature that misbehaves gets its cause found and fixed, and stays on.
+- Everything renders at the panel's native pixels.
+- Comments say only what the code can't.
+
+## Building from source
+
+The kernel has to be built with Apple's clang against the iOS SDK, and both come only with Xcode, which Apple's
+licence doesn't let a build download. Install the Xcode version the build asks for, and Bazel fetches everything else,
+pinned by hash. Installing iOS doesn't need any of this: the image builder uses prebuilt parts from the release.
+{/* TODO(r22-toolchain): the pinned Xcode version and how the build finds it. */}
+
+| What | Command |
+| --- | --- |
+| Build the kernel, boot files and Metal driver | `bazelisk build //:boot //:gpu` |
+| The same, in the release configuration | `bazelisk build --config=release //:boot //:gpu` |
+| Run the tests | `bazelisk test //...` |
+| Format everything | `bazelisk run //:format` |
+| Check formatting and lint | `bazelisk test //:format_test //:lint_test //:clang_tidy_test` |
+
+## Trying your build on a Switch
+
+With the SD card in your Mac, `bazelisk run //deploy:sd -- disk4` shows what it would write, and adding `--yes` writes
+it. It replaces the boot files and the files this project adds to iOS's Data volume, after copying the last boot's
+logs off the card. `diskutil list external` tells you which disk the card is.
+{/* TODO(r22-install): confirm //deploy:sd's flags after the install rework. */}
+
+To read logs:
+
+- `bazelisk run //deploy:pull_logs -- disk4` copies them off the card into a log archive you can open with
+  `log show --archive`.
+- With the Switch paired to your Mac over USB-C, `idevicesyslog` from libimobiledevice streams the live log.
+
+Boot options go in `switchroot/ios/bootargs.txt` on the SD card. A debug build shows a text console when that file
+has `-v`, and a release build needs no options at all.
+{/* TODO(r22-bootargs): the list of options. */}
+
+## Releases
+
+Pushing a tag like `1.2.0` builds a release: a zip in SD-card layout and the image builder's prebuilt parts. The tag
+has to match the version in `MODULE.bazel`. A tag with a suffix, like `1.2.0-beta`, makes a pre-release.
+
+## These docs
+
+The site is built with [Mintlify](https://mintlify.com) from `docs/`. To preview a change, install the CLI with
+`npm i -g mint` and run `mint dev` in `docs/`.

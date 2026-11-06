@@ -1,0 +1,72 @@
+---
+title: "How it works"
+description: "How iPadOS ends up running on a console Apple never made it for."
+---
+
+## The hardware
+
+The Switch OLED runs on NVIDIA's Tegra X1+, a chip from 2019 with four ARM Cortex-A57 cores, a Maxwell GPU and 4 GB
+of RAM, driving a 7-inch 1280×720 OLED panel. iPadOS is told it's running on a 9th-generation iPad, the oldest iPad
+that runs iPadOS 27.
+
+## Booting
+
+hekate starts the boot the way it starts Linux or Android, using the firmware switchroot made for Linux on the
+Switch (ARM Trusted Firmware and U-Boot). From there, this project's own loader puts the kernel in memory along with
+an Apple device tree, the hardware description XNU expects to find, written for the Switch. Then it jumps into the
+kernel.
+
+The Apple logo appears in hekate and stays in exactly the same place, pixel for pixel, through the loader and the
+kernel until iPadOS takes over the screen. {/* TODO(r22-logo): confirm once the logo work lands. */}
+
+## The kernel
+
+The kernel is XNU, built from the source Apple publishes, with this project's changes on top. iPadOS 26 and 27 both
+run on xnu-12377, iPadOS 26's kernel, because Apple hasn't published 27's kernel source yet.
+
+About forty drivers handle the Switch's hardware: the SD card, display, touchscreen, Joy-Con, Wi-Fi, Bluetooth,
+audio, battery and charging, USB, sensors, the GPU and the video engines. They're IOKit drivers like Apple's, and
+they're linked into the kernel. Apple's own kernel extensions come from the iPadOS download and are linked in next
+to them, so iPadOS sees the same kernel interfaces it would on an iPad.
+
+There's no Secure Enclave on the Switch. A stand-in answers iPadOS's key store, and the Tegra's own security engine
+does the AES and SHA work.
+
+Every driver runs on hardware interrupts and moves data with DMA, which leaves the CPU free for apps.
+
+## Running arm64e code on older cores
+
+iPadOS 26 and 27 are built for arm64e, the instruction set of Apple's A12 and newer. It uses pointer authentication
+and newer atomic instructions, and the Cortex-A57 has neither. This project translates that code into instructions
+the A57 has:
+
+- Apple's kernel extensions are rewritten once, when the kernel is built.
+- The shared library cache that every app loads is planned once per iPadOS release, on the Mac, and each page is
+  rewritten as the kernel reads it in.
+- Every other program is translated as it loads.
+
+The files on disk never change, so Apple's signatures and the sealed system volume stay valid. Pointer
+authentication always succeeds, because nothing is ever signed. One cost is that arm64e apps can't use a JIT, so
+JavaScript runs in its interpreter.
+
+## Graphics
+
+iPadOS draws everything with Metal. Here, [metal2vulkan](https://github.com/steelbrain/metal2vulkan) translates
+Metal's shaders and API calls into Vulkan, and [NVK](https://docs.mesa3d.org/drivers/nvk.html), Mesa's Vulkan driver
+for NVIDIA GPUs, compiles them for the Switch's GPU. Underneath, a kernel driver built from Linux's nouveau runs the
+GPU itself. The display shows Core Animation's frames directly, with no extra copy, and a playing video can go on a
+hardware plane of its own.
+
+Compiling shaders on the console would make the first boot crawl. Instead, the image builder searches the iPadOS
+download for every shader it can find, translates and compiles them on the Mac, and puts the results into the image,
+so the shader cache is full before iOS boots for the first time.
+
+Video goes to the Tegra's own engines: NVDEC decodes, NVENC encodes, NVJPG decodes JPEGs, and VIC converts, scales
+and rotates pictures. iPadOS's video framework finds them through decoders and encoders this project adds.
+
+## Storage, and why it needs a Mac
+
+iPadOS lives on an APFS container on its own partition of the SD card. The system volume comes straight from Apple's
+download, next to the Data and Preboot volumes and Apple's cryptex images. Building that container takes macOS's own
+APFS tools, which is why the image builder runs on a Mac and nowhere else. The installer on the Switch then copies the
+finished image onto the partition.
