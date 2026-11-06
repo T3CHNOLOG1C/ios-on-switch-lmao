@@ -145,8 +145,10 @@ constexpr uint32_t kWatchdogMS = 4 * kPeriodFrames * 1000 / SWITCH_AUDIO_RATE;  
 constexpr uint32_t kGraceMS = 50;        // after a missed deadline, for an interrupt action already queued
 constexpr uint32_t kIdleMS = 5000;       // codec power-down after the last stream stops (ASoC pmdown_time)
 constexpr uint32_t kJackSettleMS = 250;  // jack contact bounce
-constexpr uint32_t kStatsMS = 5000;      // the stats line
-constexpr uint64_t kSettlePeriods = 2;   // the stats: periods after a start left out of lead and lag
+#if DEVELOPMENT || DEBUG
+constexpr uint32_t kStatsMS = 5000;     // the stats line
+constexpr uint64_t kSettlePeriods = 2;  // the stats: periods after a start left out of lead and lag
+#endif
 constexpr unsigned kChOut = 0, kChIn = 1;
 constexpr uint32_t kAgicAdma = 32 + 24;  // AGIC INTID of ADMA channel 0
 constexpr uint32_t kCascadeIntid = 32 + 102;
@@ -539,6 +541,7 @@ class SwitchAudio : public IOService {
     bool codecOn = false, jackKnown = false, jackIn = false, headset = false, speakerOnly = false;
     bool hardwareLost = false;  // the APE did not come back after sleep: the hardware is never touched again
     Route route = kRouteNone;
+#if DEVELOPMENT || DEBUG
     // The stats: counted on the audio work loop, printed (and the peak reset) on the codec work loop.
     IOTimerEventSource *statsTimer = nullptr;
     uint64_t statFrames = 0, statFramesShown = 0, statIoCyclesShown = 0, statIoFramesShown = 0;
@@ -547,6 +550,7 @@ class SwitchAudio : public IOService {
     int statPeak = 0;
     int64_t statLagMin = INT64_MAX, statLagMax = INT64_MIN, statLeadMin = INT64_MAX;
     uint64_t periodTicksQ16 = 0;  // host ticks per ADMA period in 48.16 (kPeriodFrames * ticks_per_frame_q32 >> 16)
+#endif
 
     uint64_t nowFrame() const
     {
@@ -858,7 +862,9 @@ class SwitchAudio : public IOService {
         }
         graced = false;
         timer->setTimeoutMS(kWatchdogMS);
+#if DEVELOPMENT || DEBUG
         ++statStarts;
+#endif
     }
 
     // tegra_adma_stop, tegra_admaif_stop, the I2S widgets' power-down: DMA, then ADMAIF, then I2S.
@@ -894,8 +900,10 @@ class SwitchAudio : public IOService {
         switch_audio_sample_t *slot =
             ring(SwitchAudioMemoryOutput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS;
         const uint64_t done = (n + 1) * kPeriodFrames, now = nowFrame();
+#if DEVELOPMENT || DEBUG
         if (statsTimer)
             notePlayed(slot, done);
+#endif
         bzero(slot, kOutPeriodBytes);
         cacheClean(slot, kOutPeriodBytes);
         control->out_frames = done;
@@ -908,6 +916,7 @@ class SwitchAudio : public IOService {
         }
     }
 
+#if DEVELOPMENT || DEBUG
     // The stats: the period that just played, before it is cleared: its loudest sample (in 16-bit units:
     // 32767 is full scale), an underrun when the plug-in had not written up to its end, how far past it the plug-in
     // had written (the write-ahead margin: the safety offset in use, less the IO thread's lateness), and how late this
@@ -946,6 +955,7 @@ class SwitchAudio : public IOService {
         }
         statPeak = peak;
     }
+#endif
 
     // Period n of the capture ring is in memory: drop what the CPUs cached of it, then publish it.
     void capturedPeriod()
@@ -1273,7 +1283,9 @@ class SwitchAudio : public IOService {
     void codecRun()
     {
         idleTimer->cancelTimeout();
+#if DEVELOPMENT || DEBUG
         statsResume();
+#endif
         tegra_gpio_check_delivery(kCodecIrq, "SwitchAudio");  // before trusting the jack state
         if (!codecOn) {
             codecBiasStandby();
@@ -1354,6 +1366,7 @@ class SwitchAudio : public IOService {
             self->codecMute(false);
     }
 
+#if DEVELOPMENT || DEBUG
     // The stats line, every kStatsMS on the codec work loop (it reads the codec over I2C). "starts" counts the
     // streams the hardware started since the last line, "moved" what the playback DMA played (240000 a line while a
     // stream runs), "under" the periods that played before the plug-in had written their end, "peak" the loudest sample
@@ -1419,6 +1432,7 @@ class SwitchAudio : public IOService {
         statsArmed = true;
         statsTimer->setTimeoutMS(kStatsMS);
     }
+#endif
 
     void codecStart()
     {
@@ -1446,10 +1460,12 @@ class SwitchAudio : public IOService {
         }
         jackSource->enable();
         jackTimer->setTimeoutMS(kJackSettleMS);
+#if DEVELOPMENT || DEBUG
         statsTimer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::statsFired);
         if (!statsTimer || codecLoop->addEventSource(statsTimer) != kIOReturnSuccess)
             panic("SwitchAudio: stats timer setup failed");
         statsResume();
+#endif
     }
 
     static IOReturn requestGated(OSObject *owner, void *selector, void *, void *, void *)
@@ -1555,8 +1571,10 @@ class SwitchAudio : public IOService {
             self->jackSource->disable();
             self->jackTimer->cancelTimeout();
             self->idleTimer->cancelTimeout();
+#if DEVELOPMENT || DEBUG
             if (self->statsTimer)
                 self->statsTimer->cancelTimeout();
+#endif
             if (self->codecOn) {
                 self->codecRouteDown();
                 self->codecBiasOff();
@@ -1572,8 +1590,10 @@ class SwitchAudio : public IOService {
         self->jackKnown = false;
         self->jackSource->enable();
         self->jackTimer->setTimeoutMS(kJackSettleMS);
+#if DEVELOPMENT || DEBUG
         if (self->statsTimer)
             self->statsResume();
+#endif
         return kIOReturnSuccess;
     }
 
@@ -1630,7 +1650,9 @@ public:
             control->period_frames = kPeriodFrames;
             control->backend = SwitchAudioBackendTegraI2S;
             control->ticks_per_frame_q32 = tegraTicksPerFrame(38400000);
+#if DEVELOPMENT || DEBUG
             periodTicksQ16 = (uint64_t)kPeriodFrames * control->ticks_per_frame_q32 >> 16;
+#endif
             timer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::watchdogFired);
         } else {
             control->period_frames = SWITCH_AUDIO_PERIOD_FRAMES;
@@ -1679,16 +1701,22 @@ public:
                 jackSource->disable();
                 codecLoop->removeEventSource(jackSource);
             }
+#if DEVELOPMENT || DEBUG
             if (statsTimer)
                 statsTimer->cancelTimeout();
             IOEventSource *sources[] = {jackTimer, idleTimer, statsTimer, codecGate};
+#else
+            IOEventSource *sources[] = {jackTimer, idleTimer, codecGate};
+#endif
             for (IOEventSource *source : sources) {
                 if (source)
                     codecLoop->removeEventSource(source);
             }
         }
         OSSafeReleaseNULL(timer);
+#if DEVELOPMENT || DEBUG
         OSSafeReleaseNULL(statsTimer);
+#endif
         OSSafeReleaseNULL(cascade);
         OSSafeReleaseNULL(gate);
         OSSafeReleaseNULL(loop);

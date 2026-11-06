@@ -816,9 +816,11 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
         const uint64_t t = first + frames;
         if (t > gControl->out_written)
             gControl->out_written = t;
+#if SWITCH_DEBUG
         // IO cycle accounting for the service's stats line (wake-ups per second, frames per cycle).
         gControl->io_cycles = gControl->io_cycles + 1;
         gControl->io_frames = gControl->io_frames + frames;
+#endif
     } else if (op == kAudioServerPlugInIOOperationReadInput && stream == kMicIn) {
         Float32 *dst = main;
         uint64_t t = (uint64_t)info->mInputTime.mSampleTime;
