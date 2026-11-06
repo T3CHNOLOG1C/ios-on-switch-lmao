@@ -1,0 +1,112 @@
+# The release's assets (.github/workflows/release.yml publishes them for a tag), each refused at analysis if any of its
+# files was made from the IPSW or the device's data (ipsw_free.bzl).
+#
+#   bazel build --config=release //release:assets
+load("@rules_pkg//pkg:mappings.bzl", "REMOVE_BASE_DIRECTORY", "pkg_attributes", "pkg_files")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("@rules_pkg//pkg:zip.bzl", "pkg_zip")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":ipsw_free.bzl", "ipsw_free")
+load(":ipsw_free_test.bzl", "ipsw_free_tests")
+
+lint_files()
+
+pkg_files(
+    name = "sd_ini",
+    srcs = ["//boot:ios_ini"],
+    prefix = "bootloader/ini",
+    renames = {"//boot:ios_ini": "ios.ini"},
+)
+
+pkg_files(
+    name = "sd_res",
+    srcs = ["//boot/logo:icon_ios.bmp"],
+    prefix = "bootloader/res",
+)
+
+pkg_files(
+    name = "sd_payloads",
+    srcs = ["//boot/installer:install-ios.bin"],
+    prefix = "bootloader/payloads",
+)
+
+pkg_files(
+    name = "sd_switchroot",
+    srcs = [
+        "//bazel/pinned:firmware/bl31.bin",
+        "//boot/logo:bootlogo.bmp",
+    ],
+    prefix = "switchroot/ios",
+)
+
+# Merged onto the SD card's root. switchroot/ios/bootargs.txt is the user's: it is never in the zip, so merging keeps it.
+pkg_zip(
+    name = "sd_zip",
+    srcs = [
+        ":sd_ini",
+        ":sd_payloads",
+        ":sd_res",
+        ":sd_switchroot",
+    ],
+    out = "sd.zip",
+    tags = ["manual"],
+)
+
+ipsw_free(
+    name = "sd",
+    src = ":sd_zip",
+)
+
+# Tars, not zips: rules_pkg's zip writer gives a directory output a "/" entry and its files no file type. pkg_files would
+# make every file 0644; Bazel's outputs are all executable anyway.
+pkg_files(
+    name = "image_inputs_files",
+    srcs = ["//install:release_inputs"],
+    attributes = pkg_attributes(mode = "0755"),
+    renames = {"//install:release_inputs": REMOVE_BASE_DIRECTORY},
+)
+
+pkg_tar(
+    name = "image_inputs_tar",
+    srcs = [":image_inputs_files"],
+    out = "image-inputs.tar",
+    tags = ["manual"],
+)
+
+ipsw_free(
+    name = "image_inputs",
+    src = ":image_inputs_tar",
+)
+
+pkg_files(
+    name = "host_tools_files",
+    srcs = ["//install:host_tools"],
+    attributes = pkg_attributes(mode = "0755"),
+    renames = {"//install:host_tools": REMOVE_BASE_DIRECTORY},
+)
+
+pkg_tar(
+    name = "host_tools_tar",
+    srcs = [":host_tools_files"],
+    out = "host-tools-darwin-arm64.tar",
+    tags = ["manual"],
+)
+
+ipsw_free(
+    name = "host_tools",
+    src = ":host_tools_tar",
+)
+
+filegroup(
+    name = "assets",
+    srcs = [
+        ":host_tools",
+        ":image_inputs",
+        ":sd",
+    ],
+)
+
+ipsw_free_tests(
+    name = "ipsw_free_test",
+    member = "//ipsw:app_cryptex_trust_cache",
+)
