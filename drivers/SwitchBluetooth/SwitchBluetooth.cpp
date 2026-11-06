@@ -375,17 +375,23 @@ constexpr uint32_t kRetrySeconds[] = {1, 2, 4, 8};
 // still running after this has stopped for a reason the driver does not know, and says so once (watch()).
 constexpr uint32_t kStuckMs = 60000;
 constexpr uint32_t kRingBytes = 16384;
-constexpr uint32_t kStatsMs = 10000;          // the stats line: at most this often, and only after traffic (logStats)
+constexpr uint32_t kStatsMs = 10000;  // the stats line: at most this often, and only after traffic (logStats)
+#if DEVELOPMENT || DEBUG
 constexpr uint32_t kStatsRoutineWindows = 6;  // routine LE scanning only: one line per 6 windows (a minute)
+#endif
 constexpr uint32_t kTraceEntries = 80, kTraceParams = 24, kTraceReturn = 12;
+#if DEVELOPMENT || DEBUG
 constexpr uint32_t kLinkTraceLines = 600;  // link trace lines a boot (os_log; "Links" section)
+#endif
 // Traced once a boot with their completions besides the LE and vendor commands: Read Local Supported Features, Read
 // Buffer Size (the ACL and SCO buffers every link shares), Read BD_ADDR (the address bluetoothd takes from the
 // controller), controller-to-host flow control and Host Buffer Size, Write Simple Pairing Mode, Write Secure
 // Connections Host Support, Write Class Of Device, Write Page Timeout, Write Connection Accept Timeout, Write Page
 // Scan Type, Write Inquiry Scan Type.
+#if DEVELOPMENT || DEBUG
 constexpr uint16_t kTracedSetup[] = {0x1003, 0x1005, 0x1009, 0x0c31, 0x0c33, 0x0c56,
                                      0x0c7a, 0x0c24, 0x0c18, 0x0c16, 0x0c47, 0x0c43};
+#endif
 
 inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
@@ -1062,7 +1068,9 @@ void SwitchBluetooth::setHostBaud(uint32_t rate)
 bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
 {
     auto *self = static_cast<SwitchBluetooth *>(owner);
+#if DEVELOPMENT || DEBUG
     const uint64_t entered = mach_absolute_time();
+#endif
     bool work = false, rxWork = false, idle = false, done = false, dmaRx = false, dmaLineError = false;
     bool dmaStuck = false;
     IOSimpleLockLock(self->hwLock);
@@ -1168,7 +1176,9 @@ bool SwitchBluetooth::filter(OSObject *owner, IOFilterInterruptEventSource *)
     }
     work |= self->rxFaults != faultsBefore;  // the work loop runs once more; RX comes back at a flush or a send
     work |= self->rxDmaFailed != nullptr;    // its one line
+#if DEVELOPMENT || DEBUG
     self->isrTicks += mach_absolute_time() - entered;
+#endif
     IOSimpleLockUnlock(self->hwLock);
     if (work)
         self->actionDue = true;
@@ -1359,7 +1369,9 @@ void SwitchBluetooth::kickTx()
 void SwitchBluetooth::txDone(void *context)
 {
     auto *self = static_cast<SwitchBluetooth *>(context);
+#if DEVELOPMENT || DEBUG
     const uint64_t entered = mach_absolute_time();
+#endif
     IOSimpleLockLock(self->hwLock);
     if (self->txDmaBytes) {
         __atomic_store_n(&self->tx.tail, self->tx.tail + self->txDmaBytes, __ATOMIC_RELEASE);
@@ -1373,7 +1385,9 @@ void SwitchBluetooth::txDone(void *context)
         w32(self->uart, IER, self->ier);
     }
     const bool wake = self->txWanted;
+#if DEVELOPMENT || DEBUG
     self->isrTicks += mach_absolute_time() - entered;
+#endif
     IOSimpleLockUnlock(self->hwLock);
     if (wake) {
         self->actionDue = true;
@@ -1523,7 +1537,9 @@ void SwitchBluetooth::armRxDmaLocked()
 void SwitchBluetooth::rxDone(void *context)
 {
     auto *self = static_cast<SwitchBluetooth *>(context);
+#if DEVELOPMENT || DEBUG
     const uint64_t entered = mach_absolute_time();
+#endif
     IOSimpleLockLock(self->hwLock);
     bool work = false;
     if (self->rxDmaOn && self->rxDmaArmed) {
@@ -1533,7 +1549,9 @@ void SwitchBluetooth::rxDone(void *context)
         if (work)
             self->rxPacketDone = false;
     }
+#if DEVELOPMENT || DEBUG
     self->isrTicks += mach_absolute_time() - entered;
+#endif
     IOSimpleLockUnlock(self->hwLock);
     if (work) {
         self->actionDue = true;
@@ -1666,7 +1684,9 @@ again:
         if (!rx.used())
             syncFramerLocked();  // nothing in the ring: frameRx's framing is the filter's (filter)
         IOSimpleLockUnlockEnableInterrupt(hwLock, s);
+#if DEVELOPMENT || DEBUG
         logStats(false);
+#endif
     }
 }
 
@@ -1953,8 +1973,10 @@ bool SwitchBluetooth::frameRx(uint32_t avail)
             countCompletion(opcode, (uint8_t)was);
             if (opcode == OP_READ_BUFFER_SIZE && !was && retLength >= 5)
                 aclBuffers = (uint16_t)(ret[3] | ret[4] << 8);
+#if DEVELOPMENT || DEBUG
             traceCompletion(opcode, status, (uint8_t)was, ret, retLength);
             linkCompletion(opcode, status, (uint8_t)was);
+#endif
         }
         if (stray) {  // not passed on (top of section)
             rxDrop = true;
@@ -2033,7 +2055,9 @@ errno_t SwitchBluetooth::clientCommand(uint8_t *packet, size_t size)
     if (opcode == OP_LE_SET_SCAN_ENABLE && length)
         __atomic_fetch_add(params[0] ? &st.scanOn : &st.scanOff, 1, __ATOMIC_RELAXED);
     if (answerHere(opcode, params, length)) {
+#if DEVELOPMENT || DEBUG
         traceCommand(opcode, params, length, true);
+#endif
         loop->runAction(&SwitchBluetooth::gated, this, reinterpret_cast<void *>(1));  // deliver(): the answer goes out
         return 0;
     }
@@ -2041,8 +2065,10 @@ errno_t SwitchBluetooth::clientCommand(uint8_t *packet, size_t size)
         __atomic_fetch_add(&st.advFixed, 1, __ATOMIC_RELAXED);
     if (opcode == OP_ACCEPT_CONNECTION && acceptAsCentral(params, length))
         __atomic_fetch_add(&st.central, 1, __ATOMIC_RELAXED);
+#if DEVELOPMENT || DEBUG
     traceCommand(opcode, params, length, false);
     linkCommand(opcode, params, length);
+#endif
     coexCommand(opcode, params, length);
     coexAfh(opcode);
     const IOInterruptState s = IOSimpleLockLockDisableInterrupt(cmdLock);
@@ -2141,6 +2167,7 @@ bool SwitchBluetooth::fixAdvertising(uint16_t opcode, uint8_t *params, uint8_t l
     return true;
 }
 
+#if DEVELOPMENT || DEBUG
 namespace {
 void hex(char *out, size_t size, const uint8_t *bytes, uint32_t count)
 {
@@ -2150,7 +2177,9 @@ void hex(char *out, size_t size, const uint8_t *bytes, uint32_t count)
         at += (size_t)snprintf(out + at, size - at, "%02x", bytes[i]);
 }
 }
+#endif
 
+#if DEVELOPMENT || DEBUG
 // Client thread: the first LE and vendor command of each opcode (and 0xFCE9 sub-operation) and the event mask
 // commands, kept for traceCompletion; one answered here is logged at once. os_log only, once per boot each.
 void SwitchBluetooth::traceCommand(uint16_t opcode, const uint8_t *params, uint8_t length, bool answered)
@@ -2187,7 +2216,9 @@ void SwitchBluetooth::traceCommand(uint16_t opcode, const uint8_t *params, uint8
     os_log(OS_LOG_DEFAULT, "SwitchBluetooth: HCI %04x/%02x %u bytes [%s] -> answered here: Unknown HCI Command", opcode,
            sub, entry.length, p);
 }
+#endif
 
+#if DEVELOPMENT || DEBUG
 // Work loop: the completion of a command traceCommand kept, logged with its parameters (once per boot each).
 void SwitchBluetooth::traceCompletion(uint16_t opcode, bool status, uint8_t result, const uint8_t *ret,
                                       uint32_t retLength)
@@ -2211,6 +2242,7 @@ void SwitchBluetooth::traceCompletion(uint16_t opcode, bool status, uint8_t resu
     os_log(OS_LOG_DEFAULT, "SwitchBluetooth: HCI %04x/%02x %u bytes [%s] -> Command %s, status %#04x [%s]", opcode,
            entry.sub, entry.length, p, status ? "Status" : "Complete", result, r);
 }
+#endif
 
 // ---- Coexistence -------------------------------------------------------------------------------------------------
 //
@@ -2467,6 +2499,7 @@ extern "C" bool switch_bluetooth_coex(struct switch_coex_bt *state, char *links,
 // encryption, disconnection (with the link's counts), max slots, supervision timeout, Hardware Error and Data Buffer
 // Overflow. A Link Key Request Reply is logged without its key.
 
+#if DEVELOPMENT || DEBUG
 // Any thread: one link trace line ("->" to the controller, "<-" from it), with a closed link's counts; the last line of
 // the budget says the rest are not logged.
 void SwitchBluetooth::linkLog(const char *direction, const char *line, const switch_bt_link *last)
@@ -2484,7 +2517,9 @@ void SwitchBluetooth::linkLog(const char *direction, const char *line, const swi
     else
         os_log(OS_LOG_DEFAULT, "SwitchBluetooth: link %s %s", direction, line);
 }
+#endif
 
+#if DEVELOPMENT || DEBUG
 // Client thread (clientCommand): a link command on its way to the controller.
 void SwitchBluetooth::linkCommand(uint16_t opcode, const uint8_t *params, uint8_t length)
 {
@@ -2494,7 +2529,9 @@ void SwitchBluetooth::linkCommand(uint16_t opcode, const uint8_t *params, uint8_
     switch_bt_describe_command(line, sizeof(line), opcode, params, length);
     linkLog("->", line);
 }
+#endif
 
+#if DEVELOPMENT || DEBUG
 // Work loop (frameRx): the Command Status or Complete of a link command.
 void SwitchBluetooth::linkCompletion(uint16_t opcode, bool status, uint8_t result)
 {
@@ -2505,6 +2542,7 @@ void SwitchBluetooth::linkCompletion(uint16_t opcode, bool status, uint8_t resul
     snprintf(line, sizeof(line), "Command %s for %s: 0x%02x", status ? "Status" : "Complete", name, result);
     linkLog("<-", line);
 }
+#endif
 
 // Work loop (frameRx): a whole link event at the ring's tail (`length` parameter bytes after its 3-byte H4 header),
 // into the table and the trace. Number Of Completed Packets is only counted.
@@ -2578,10 +2616,14 @@ void SwitchBluetooth::linkEvent(uint8_t code, uint32_t length)
     IOSimpleLockUnlockEnableInterrupt(cmdLock, s);
     if (linksMayChange)
         switch_wlan_bt_links(linkCount);  // the Wi-Fi coexistence mode follows ("Coexistence")
+#if DEVELOPMENT || DEBUG
     if (code == SWITCH_BT_EV_NUM_COMPLETED)
         return;
     switch_bt_describe_event(linkText, sizeof(linkText), code, p, length);
     linkLog("<-", linkText, wasOpen ? &closed : nullptr);
+#else
+    (void)wasOpen;
+#endif
 }
 
 // Client thread (clientCommand): bluetoothd's Accept Connection Request for a gamepad that paged us, Role 1 (stay
@@ -2626,6 +2668,7 @@ void SwitchBluetooth::countCompletion(uint16_t opcode, uint8_t result)
     ++slot->count;
 }
 
+#if DEVELOPMENT || DEBUG
 // Work loop, client mode: one line for what changed since the last, at most every kStatsMs and only when something
 // did (force: whatever the time, as the client goes). os_log only, never the console.
 void SwitchBluetooth::logStats(bool force)
@@ -2754,6 +2797,7 @@ void SwitchBluetooth::logStats(bool force)
     isrTicksLogged = isrTicksNow;
     statsAt = now;
 }
+#endif
 
 // Work loop, RX masked (rxStalled) and room in the ring again: RX interrupts back on, then what the FIFO already
 // holds is taken here, bounded like one interrupt. A residue below the RX trigger (8) whose character timeout ran
@@ -3297,8 +3341,10 @@ IOReturn SwitchBluetooth::gated(OSObject *owner, void *what, void *, void *, voi
     } else {
         const Mode was = self->mode;
         self->mode = static_cast<Mode>(op - 2);
+#if DEVELOPMENT || DEBUG
         if (was == kClient && self->mode != kClient)
             self->logStats(true);  // the client's last stats line
+#endif
         if (self->mode == kClient && was != kClient)
             self->statsAt = mach_absolute_time();
         if (self->mode == kClient)
