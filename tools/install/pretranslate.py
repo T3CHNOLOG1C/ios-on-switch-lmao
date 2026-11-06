@@ -31,13 +31,17 @@ KEPT = ('{role}.trustcache', '{role}.cdhash-pairs', 'a64x-cache-pretranslated.bi
 
 
 class Roles:
-    def __init__(self, roles, scratch, log):
-        """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}."""
+    def __init__(self, roles, scratch, log, memo_root=None):
+        """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}.
+
+        `memo_root`, if given, keeps each role's translations there across runs (the driver's --memo); done() leaves it.
+        """
         unknown = set(roles) - set(ORDER)
         if unknown:
             raise host.HostError('unknown pretranslate roles: {}'.format(sorted(unknown)))
         self.roles, self.scratch, self.log = roles, Path(scratch), log
         self.kept = self.scratch / 'pretranslated'
+        self.memo_root = Path(memo_root) if memo_root else None
 
     def __contains__(self, role):
         return role in self.roles
@@ -54,6 +58,8 @@ class Roles:
         spec = self.roles[role]
         command = [spec['driver'], '--role', role, '--tool', spec['tool'], '--volume', str(volume)]
         command += ['--out', str(self.out(role))]
+        if self.memo_root:
+            command += ['--memo', str(self.memo_root / role)]
         for trust in spec.get('trustcaches', []):
             command += ['--apple-trustcache', trust]
         if role == 'system_cryptex':

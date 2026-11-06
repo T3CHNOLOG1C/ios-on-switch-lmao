@@ -14,10 +14,9 @@ SEALER = '/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_prepare_cr
 APFS_VOLUME = '41504653-0000-11AA-AA11-00306543ECAC'
 
 
-def _attach(image: Path, log: host.Log) -> tuple[str, str]:
-    out = host.plist(
-        'hdiutil', 'attach', '-plist', '-readwrite', '-nomount', '-noverify', '-noautofsck', str(image), log=log
-    )
+def _attach(image: Path, log: host.Log, writable: bool = True) -> tuple[str, str]:
+    mode = '-readwrite' if writable else '-readonly'
+    out = host.plist('hdiutil', 'attach', '-plist', mode, '-nomount', '-noverify', '-noautofsck', str(image), log=log)
     entities = out['system-entities']
     volumes = [e['dev-entry'][len('/dev/') :] for e in entities if e.get('content-hint', '').upper() == APFS_VOLUME]
     disks = [e['dev-entry'] for e in entities if re.fullmatch(r'/dev/disk\d+', e.get('dev-entry', ''))]

@@ -189,6 +189,13 @@ class Builder:
         self.pins = json.loads(Path(args.ipsw).read_text())
         self.spec = stages.ipsw_volumes(json.loads(Path(args.spec).read_text()), self.pins)
 
+    def warm(self) -> int:
+        check_inputs(self.args)
+        self.log(f'image: {version_label(self.pins)}: warming translations')
+        stages.Stages(self.args, self.spec, self.pins, self.log).warm_translations()
+        self.log(f'translations kept in {Path(self.args.scratch) / stages.TRANSLATIONS}')
+        return 0
+
     def run(self) -> int:
         sd_files = check_inputs(self.args)
         if self.args.boot_only:
@@ -318,6 +325,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--boot-only', action='store_true', help="refresh only the boot entry in --out's folder")
     parser.add_argument('--stop-after', choices=stages.STAGES[:2], help='stop after this stage; rerun to go on')
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument(
+        '--warm-translations',
+        action='store_true',
+        help="translate iOS 27's volumes into the scratch's memo as this user, then stop (no compose)",
+    )
+    parser.add_argument(
+        '--translation-memo',
+        action='store_true',
+        help="populate takes translations from the scratch's memo instead of translating again",
+    )
     parser.add_argument('--keep-scratch', action='store_true')
     parser.add_argument('--scratch', help='where the container is composed (needs its size in free space, sparse)')
     parser.add_argument('--log')
@@ -336,7 +353,8 @@ def main(argv: list[str] | None = None) -> int:
     log = host.Log(args.log) if not args.dry_run else PrintLog()
     try:
         host.check_tools(log)
-        return Builder(args, log).run()
+        builder = Builder(args, log)
+        return builder.warm() if args.warm_translations else builder.run()
     except cards.RefusedError as error:
         log('REFUSED:', error)
         return 2

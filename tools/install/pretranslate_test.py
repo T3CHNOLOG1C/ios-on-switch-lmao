@@ -21,6 +21,7 @@ for name in ('--role', '--tool', '--volume', '--out'):
     ap.add_argument(name, required=True)
 ap.add_argument('--apple-trustcache', action='append', default=[])
 ap.add_argument('--cdhash-pairs', action='append', default=[])
+ap.add_argument('--memo')
 a = ap.parse_args()
 out = Path(a.out)
 (out / 'files').mkdir(parents=True, exist_ok=True)
@@ -33,7 +34,8 @@ entry = dict(path='/usr/bin/tool', file='files/tool', sha256_in=hashlib.sha256(b
 if a.role == 'system_cryptex':
     (out / 'a64x-cache-pretranslated.bin').write_bytes(b'cache')
 with open(sys.argv[0] + '.calls', 'a') as calls:
-    calls.write(json.dumps(dict(role=a.role, pairs=a.cdhash_pairs, trust=a.apple_trustcache, volume=a.volume)) + '\\n')
+    calls.write(json.dumps(dict(role=a.role, pairs=a.cdhash_pairs, trust=a.apple_trustcache, volume=a.volume,
+                                memo=a.memo)) + '\\n')
 """
 
 
@@ -79,6 +81,21 @@ class RolesTest(unittest.TestCase):
         for role in pretranslate.ORDER:
             self.assertIn(role + '.trustcache', names)
         self.assertIn('a64x-cache-pretranslated.bin', names)
+
+    def test_no_memo_unless_asked(self):
+        self.roles.run('os', self.dir / 'os')
+        self.assertIsNone(self.calls()[0]['memo'])
+
+    def test_a_memo_root_gives_each_role_its_memo_and_outlives_done(self):
+        memo = self.dir / 'scratch/translations'
+        spec = {'driver': str(self.driver), 'tool': '/bin/echo', 'trustcaches': []}
+        roles = pretranslate.Roles(dict.fromkeys(pretranslate.ORDER, spec), self.dir / 'scratch', Quiet(), memo)
+        for role in pretranslate.ORDER:
+            roles.run(role, self.dir / role)
+            memo.mkdir(parents=True, exist_ok=True)
+            roles.done(role)
+        self.assertEqual([c['memo'] for c in self.calls()], [str(memo / r) for r in pretranslate.ORDER])
+        self.assertTrue(memo.is_dir())
 
     def test_system_cryptex_refuses_to_go_first(self):
         with self.assertRaisesRegex(host.HostError, 'after os, app_cryptex'):

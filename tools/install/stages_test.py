@@ -27,6 +27,18 @@ class ScratchTest(unittest.TestCase):
         self.assertEqual(len(set(dirs)), len(dirs))
 
 
+class TranslationMemoTest(unittest.TestCase):
+    def roles(self, **flags):
+        args = SimpleNamespace(scratch='/scratch', pretranslate={'os': {'driver': 'd', 'tool': 't'}}, **flags)
+        return stages.Stages(args, SPEC, PINS, quiet).roles()
+
+    def test_populate_translates_afresh_by_default(self):
+        self.assertIsNone(self.roles().memo_root)
+
+    def test_translation_memo_reads_the_scratchs_memo(self):
+        self.assertEqual(self.roles(translation_memo=True).memo_root, Path('/scratch') / stages.TRANSLATIONS)
+
+
 class StateTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())

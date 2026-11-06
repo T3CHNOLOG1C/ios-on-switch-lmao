@@ -5,9 +5,11 @@ partition size differ starts again from compose.
 """
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 from tools.install import (
@@ -31,6 +33,8 @@ FLOOR = 14 << 30
 # iOS 17's image was composed before per-kind scratch, and the morning command names no --scratch, so 21H461 keeps the
 # unsuffixed directory. Every other build gets its own, so one kind's image never recomposes over another's.
 LEGACY_BUILD = '21H461'
+# Kept translations (pretranslate's memo): --warm-translations fills it as the user, --translation-memo reads it.
+TRANSLATIONS = 'translations'
 
 
 def default_scratch(build: str) -> Path:
@@ -107,7 +111,50 @@ class Stages:
     def roles(self) -> pretranslate.Roles | None:
         """IOS 27's pretranslate drivers by role (pretranslate.py), or None for an IPSW that needs none."""
         given = getattr(self.args, 'pretranslate', None)
-        return pretranslate.Roles(given, self.scratch, self.log) if given else None
+        memo = self.scratch / TRANSLATIONS if getattr(self.args, 'translation_memo', False) else None
+        return pretranslate.Roles(given, self.scratch, self.log, memo) if given else None
+
+    def warm_translations(self) -> None:
+        """Translate every role from the decrypted members, mounted read-only as the calling user, into the memo.
+
+        The members hold the same files populate later mounts, so its run with --translation-memo only copies them.
+        """
+        given = getattr(self.args, 'pretranslate', None)
+        if not given:
+            raise host.HostError('this IPSW kind has no pretranslate roles to warm')
+        roles = pretranslate.Roles(given, self.scratch, self.log, self.scratch / TRANSLATIONS)
+        members = {
+            'os': self.args.os_dmg,
+            'app_cryptex': self.args.app_cryptex,
+            'system_cryptex': self.args.system_cryptex,
+        }
+        for role in pretranslate.ORDER:
+            if role in roles:
+                with self._member_volume(role, members[role]) as root:
+                    roles.run(role, root)
+                roles.done(role)
+
+    @contextlib.contextmanager
+    def _member_volume(self, role: str, image: str) -> Iterator[Path]:
+        if role == 'os':
+            whole, store = compose._attach_os(image, self.log)
+            try:
+                container = host.container_on(store[len('/dev/') :]) or {}
+                uuid = self.spec['volumes']['system']['uuid'].upper()
+                volume = next(
+                    v['DeviceIdentifier'] for v in container.get('Volumes', []) if v['APFSVolumeUUID'].upper() == uuid
+                )
+                with cards.mounted(volume, self.log, read_only=True) as root:
+                    yield root
+            finally:
+                host.run('hdiutil', 'detach', whole, log=self.log, check=False)
+        else:
+            volume, whole = cryptex._attach(Path(image), self.log, writable=False)
+            try:
+                with cards.mounted(volume, self.log, read_only=True) as root:
+                    yield root
+            finally:
+                host.run('hdiutil', 'detach', whole, log=self.log, check=False)
 
     def cryptexes(self, roles: pretranslate.Roles | None) -> tuple[dict[str, str | Path], dict[str, str]]:
         """Return the cryptex images to stage, and their sha256 where translated (the pins describe the IPSW's).
