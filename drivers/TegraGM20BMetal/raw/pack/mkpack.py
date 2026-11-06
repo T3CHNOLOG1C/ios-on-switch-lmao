@@ -130,7 +130,7 @@ def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
         at += count
         image = b[at : at + 80 + code]
         at += 80 + code
-        progs['%x' % fnv(image)] = {'image': image, 'cbufs': types}
+        progs[f'{fnv(image):x}'] = {'image': image, 'cbufs': types}
     return progs
 
 
@@ -139,12 +139,12 @@ def main() -> None:
     sizes = {}  # (state index, set offset) -> (bound size with 16-byte payloads, with 4096-byte payloads)
     if len(sys.argv) > 5:
         for b in (16, 4096):
-            for p in probelog.load('%s%d.out' % (sys.argv[5], b), '%s%d.log' % (sys.argv[5], b)):
+            for p in probelog.load(f'{sys.argv[5]}{b}.out', f'{sys.argv[5]}{b}.log'):
                 if p['draws'] != 1 or p['dispatches'] or not p['records'] or 'set0' not in p['records'][0]:
                     continue
                 w = p['records'][0]['set0'][1]
                 for o in range(0, len(w) - 3, 4):
-                    if 'ptr0.%d' % (o * 4) in p['records'][0]['ptr']:
+                    if f'ptr0.{o * 4}' in p['records'][0]['ptr']:
                         sizes.setdefault((p['index'], o * 4), [0, 0])[0 if b == 16 else 1] = w[o + 2]
     os.makedirs(out_dir, exist_ok=True)
     P = probelog.load(out_path, log_path)
@@ -165,9 +165,9 @@ def main() -> None:
     for p in P:
         why = None
         if p['draws'] != 1:
-            why = '%d draws' % p['draws']
+            why = f'{p["draws"]} draws'
         elif p['dispatches']:
-            why = '%d dispatches' % p['dispatches']
+            why = f'{p["dispatches"]} dispatches'
         elif not p['records']:
             why = 'no record'
         else:
@@ -175,7 +175,7 @@ def main() -> None:
             if any(v[2] != 'known' for v in r['prog'].values()):
                 why = 'unknown program'
             elif sorted(r['prog']) != [1, 5]:
-                why = 'stages %s' % sorted(r['prog'])
+                why = f'stages {sorted(r["prog"])}'
         # (three color attachments: the render server's since r7n's harvest, Core Animation's "A3" states with an
         # R32Float third attachment, taken as any other; test/frame.h FRAME_A3 draws them)
         if why:
@@ -203,11 +203,12 @@ def main() -> None:
     vals = {m: {p['records'][0]['regs'].get(m, 0) for p in simple} for m in allregs if not owned(m)}
     varying = sorted(m for m, v in vals.items() if len(v) > 1)
     baseline = {m: next(iter(v)) for m, v in vals.items() if len(v) == 1 and next(iter(v)) != post[0].get(m, 0)}
-    report.append('%d states probed, %d taken, %d skipped' % (len(P), len(simple), len(skipped)))
+    report.append(f'{len(P)} states probed, {len(simple)} taken, {len(skipped)} skipped')
     for p, why in skipped:
-        report.append('  skipped %d (%s): %s' % (p['index'], why, p['key'][:150]))
-    report.append('%d per-pipeline registers: %s' % (len(varying), ' '.join('%x' % m for m in varying)))
-    report.append('%d baseline registers over post-init' % len(baseline))
+        report.append(f'  skipped {p["index"]} ({why}): {p["key"][:150]}')
+    names = ' '.join(f'{m:x}' for m in varying)
+    report.append(f'{len(varying)} per-pipeline registers: {names}')
+    report.append(f'{len(baseline)} baseline registers over post-init')
     # programs used, heap layout
     used = []
     for p in simple:
@@ -225,7 +226,7 @@ def main() -> None:
         heap += slot
         prog_index[pid] = len(prog_recs)
         if any(t not in (1, 3) for t in pr['cbufs']):
-            report.append('  program %s has cbufs %s (only root + set 0 supported)' % (pid, pr['cbufs']))
+            report.append(f'  program {pid} has cbufs {pr["cbufs"]} (only root + set 0 supported)')
         prog_recs.append(
             {
                 'id': pid,
@@ -236,7 +237,7 @@ def main() -> None:
                 'cbufs': pr['cbufs'],
             }
         )
-    report.append('%d programs, shader heap image %d KiB' % (len(prog_recs), len(heap) // 1024))
+    report.append(f'{len(prog_recs)} programs, shader heap image {len(heap) // 1024} KiB')
     # pipelines
     pipes, constexpr_tsc = [], []
     for p in simple:
@@ -283,7 +284,7 @@ def main() -> None:
                 elif tk[0] == 'fetch':
                     ent['tex'] = ('fetch', tk[1])
                 else:
-                    problems.append('texture %s' % (tk,))
+                    problems.append(f'texture {tk}')
                 if sk is None:
                     ent['smp'] = None
                 elif sk[0] == 'smp':
@@ -303,21 +304,21 @@ def main() -> None:
         for j, (loc, lim, fmt) in sorted(r['vbinfo'].items()):
             w = r['vb'][j][1]
             if (w[0] >> 16) != 0xC0DE or (w[0] >> 8) & 0xFF != 1:
-                problems.append('vertex stream %d not a vertex slot' % j)
+                problems.append(f'vertex stream {j} not a vertex slot')
             vbs.append({'stream': j, 'slot': w[0] & 0xFF, 'stride': fmt & 0xFFF})
         rec['vbs'] = vbs
         rec['fetch'] = any(e.get('tex', [None])[0] == 'fetch' for e in entries if e['kind'] == 'handle')
         rec['clears'] = len(p['clears'])
         rec['problems'] = problems
         if problems:  # m2v draws it (RawMetal.mm: a state not in the pack goes there)
-            report.append('  skipped %d (%s): %s' % (p['index'], '; '.join(problems), p['key'][:150]))
+            report.append(f'  skipped {p["index"]} ({"; ".join(problems)}): {p["key"][:150]}')
             continue
         pipes.append(rec)
     # init template with relocations (submissions 1-3 as NVK recorded them)
     init_recs = []
     for sc, m, d in init:
         init_recs.append((sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)))
-    report.append('init template: %d methods, %d relocated' % (len(init_recs), sum(1 for x in init_recs if x[3])))
+    report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')
     # --- pack.bin ---
     strings = bytearray()
 
@@ -387,7 +388,7 @@ def main() -> None:
     tsc_bin = b''.join(struct.pack('<8I', *w) for w in constexpr_tsc)
     base_bin = b''.join(struct.pack('<II', m, v) for m, v in sorted(baseline.items()))
     init_bin = b''.join(struct.pack('<HHII', sc, m, d, rc) for sc, m, d, rc in init_recs)
-    blob_bin = struct.pack('<%dI' % len(blob), *blob)
+    blob_bin = struct.pack(f'<{len(blob)}I', *blob)
     sections = [bytes(prog_bin), bytes(pipe_bin), tsc_bin, base_bin, init_bin, blob_bin, bytes(strings), bytes(heap)]
     header_size = 8 + 4 * 4 + 8 * 2 * len(sections)
     offs, at = [], (header_size + 255) // 256 * 256
@@ -399,18 +400,18 @@ def main() -> None:
         body += s
     corpus = fnv(''.join(sorted(r['key'] for r in pipes)).encode())
     hdr = MAGIC + struct.pack('<IIII', VERSION, len(prog_recs), len(pipes), len(constexpr_tsc))
-    hdr += struct.pack('<%dQ' % (2 * len(sections)), *[x for o in offs for x in o])
+    hdr += struct.pack(f'<{2 * len(sections)}Q', *[x for o in offs for x in o])
     data = hdr + bytes((header_size + 255) // 256 * 256 - len(hdr)) + body
     with open(os.path.join(out_dir, 'pack.bin'), 'wb') as pack_bin:
         pack_bin.write(data)
     js = {
         'version': VERSION,
-        'corpus_hash': '%x' % corpus,
+        'corpus_hash': f'{corpus:x}',
         'programs': prog_recs,
         'pipelines': pipes,
         'constexpr_tsc': constexpr_tsc,
-        'baseline': {'%x' % m: v for m, v in sorted(baseline.items())},
-        'varying': ['%x' % m for m in varying],
+        'baseline': {f'{m:x}': v for m, v in sorted(baseline.items())},
+        'varying': [f'{m:x}' for m in varying],
         'init_methods': len(init_recs),
     }
     with open(os.path.join(out_dir, 'pack.json'), 'w') as pack_json:
@@ -428,13 +429,11 @@ def main() -> None:
     with open(os.path.join(out_dir, 'layouts.txt'), 'w') as f:
         for rec in pipes:
             vs, fs = prog_recs[rec['vs']]['id'], prog_recs[rec['fs']]['id']
-            f.write(
-                '%s %s %x %s\n'
-                % (vs, fs, rec['set_size'], ' '.join('%d:%s' % (e['off'], kinds(e)) for e in rec['entries']))
-            )
+            slots = ' '.join(f'{e["off"]}:{kinds(e)}' for e in rec['entries'])
+            f.write(f'{vs} {fs} {rec["set_size"]:x} {slots}\n')
     report.append(
-        'pack.bin %d KiB: %d pipelines, %d programs, %d constexpr samplers, %d blob dwords, %d baseline regs'
-        % (len(data) // 1024, len(pipes), len(prog_recs), len(constexpr_tsc), len(blob), len(baseline))
+        f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(prog_recs)} programs, '
+        f'{len(constexpr_tsc)} constexpr samplers, {len(blob)} blob dwords, {len(baseline)} baseline regs'
     )
     with open(os.path.join(out_dir, 'report.txt'), 'w') as report_txt:
         report_txt.write('\n'.join(report) + '\n')

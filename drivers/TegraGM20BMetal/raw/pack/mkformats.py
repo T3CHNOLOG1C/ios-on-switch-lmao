@@ -33,4 +33,4 @@ for f, s in zip(out, draws, strict=False):
     words = [int(x, 16) for x in hit[0][4:12]]
     words[1] &= 0x1F
     words[2] &= ~0xFFFF  # address bits (pitch: ADDRESS_BITS31TO5 in word 1, 47:32 in word 2)
-    print(mtl, bpr, ' '.join('%08x' % x for x in words))
+    print(mtl, bpr, ' '.join(f'{x:08x}' for x in words))

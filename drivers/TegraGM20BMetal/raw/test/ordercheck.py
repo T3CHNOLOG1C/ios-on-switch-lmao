@@ -37,26 +37,22 @@ for i, r in enumerate(window):
         if (p['ch'] == rawch) != (r['ch'] == rawch) and r['start'] < p['end']:
             bad += 1
             print(
-                'ORDER BROKEN: ch %d #%d started at %d before ch %d #%d (kicked earlier) ended at %d'
-                % (r['ch'], r['seq'], r['start'], p['ch'], p['seq'], p['end'])
+                f'ORDER BROKEN: ch {r["ch"]} #{r["seq"]} started at {r["start"]} before ch {p["ch"]} #{p["seq"]} '
+                f'(kicked earlier) ended at {p["end"]}'
             )
 raw = [r for r in window if r['ch'] == rawch]
 nvk = [r for r in window if r['ch'] != rawch]
+channels = sorted({r['ch'] for r in nvk})
+acquires = sum(1 for r in window if r['acq'])
+kicks = (window[-1]['kick'] - window[0]['kick']) / 1000
+busy = (window[-1]['end'] - window[0]['start']) / 1000
 print(
-    'runs in window: raw %d (channel %d), nvk %d (channels %s); with acquires: %d; kicks within %.1f ms, GPU busy %.1f ms'
-    % (
-        len(raw),
-        rawch,
-        len(nvk),
-        sorted({r['ch'] for r in nvk}),
-        sum(1 for r in window if r['acq']),
-        (window[-1]['kick'] - window[0]['kick']) / 1000,
-        (window[-1]['end'] - window[0]['start']) / 1000,
-    )
+    f'runs in window: raw {len(raw)} (channel {rawch}), nvk {len(nvk)} (channels {channels}); with acquires: '
+    f'{acquires}; kicks within {kicks:.1f} ms, GPU busy {busy:.1f} ms'
 )
 print(
-    'order calls %d, acquires queued %d; WaitFence calls %d, from the raw submit thread %d'
-    % (stats['order'][0], stats['order'][1], stats['wait'][0], stats['wait'][1])
+    f'order calls {stats["order"][0]}, acquires queued {stats["order"][1]}; WaitFence calls {stats["wait"][0]}, '
+    f'from the raw submit thread {stats["wait"][1]}'
 )
-print('ordering', 'OK' if not bad else 'BROKEN (%d)' % bad)
+print('ordering', 'OK' if not bad else f'BROKEN ({bad})')
 sys.exit(1 if bad else 0)

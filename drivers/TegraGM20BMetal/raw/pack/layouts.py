@@ -20,7 +20,7 @@ def tic_kind(tic: tuple[str, list[int]], rts: dict[str, int]) -> tuple[str, int 
         return ('tex', width - 16)
     if name in rts:
         return ('fetch', rts[name])
-    return ('tic?', '%s:%dx%d' % (name, width, height))
+    return ('tic?', f'{name}:{width}x{height}')
 
 
 DUMMY_TSC = [
@@ -39,13 +39,13 @@ def tsc_kind(t: list[int]) -> tuple[str, int | str]:
     # states were skipped as "derived".)
     lod = (t[2] >> 12) & 0xFFF
     if lod % 256 or not 256 <= lod <= 256 * 8:
-        return ('tsc?', ' '.join('%x' % w for w in t))
+        return ('tsc?', ' '.join(f'{w:x}' for w in t))
     mag, u = t[1] & 7, t[0] & 7
     if mag not in (1, 2):
-        return ('tsc?', ' '.join('%x' % w for w in t))
+        return ('tsc?', ' '.join(f'{w:x}' for w in t))
     slot = 2 * (lod // 256 - 1) + (1 if mag == 2 else 0)
     if slot > 15 or u != (0 if slot & 2 else 2):
-        return ('tsc?derived', ' '.join('%x' % w for w in t))
+        return ('tsc?derived', ' '.join(f'{w:x}' for w in t))
     return ('smp', slot)
 
 
@@ -64,13 +64,13 @@ def layout(p: dict) -> tuple[list[tuple], list[str]]:
     entries, problems = [], []
     o = 0
     while o < len(words):
-        key = 'ptr0.%d' % (o * 4)
+        key = f'ptr0.{o * 4}'
         if o % 4 == 0 and key in r['ptr']:
             pw = r['ptr'][key][1]
             if (pw[0] >> 16) == 0xC0DE and pw[1] == i:
                 entries.append((o * 4, 'ubo', STAGES[(pw[0] >> 8) & 0xFF], pw[0] & 0xFF, words[o + 2]))
             else:
-                problems.append('untagged pointer at %d (%x)' % (o * 4, pw[0]))
+                problems.append(f'untagged pointer at {o * 4} ({pw[0]:x})')
             o += 4
             continue
         w = words[o]
@@ -84,7 +84,7 @@ def layout(p: dict) -> tuple[list[tuple], list[str]]:
                 sk = None  # index 0: the probe's warm-up sampler, never bound in a probe: the handle names no sampler
             entries.append((o * 4, 'handle', tk, sk, w))
             if tk and tk[0].endswith('?'):
-                problems.append('unidentified handle at %d: %x' % (o * 4, w))
+                problems.append(f'unidentified handle at {o * 4}: {w:x}')
         o += 1
     return entries, problems
 
@@ -99,7 +99,7 @@ if __name__ == '__main__':
             continue
         e, pr = layout(p)
         desc = ' '.join(
-            '%d:%s' % (x[0], ('ubo(%s%d,%x)' % x[2:5]) if x[1] == 'ubo' else 'h(%s,%s)' % (x[2], x[3])) for x in e
+            f'{x[0]}:' + (f'ubo({x[2]}{x[3]},{x[4]:x})' if x[1] == 'ubo' else f'h({x[2]},{x[3]})') for x in e
         )
         c[desc] += 1
         if pr:

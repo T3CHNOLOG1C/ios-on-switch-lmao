@@ -53,8 +53,7 @@ def run(cmd: list[str | Path], env: dict[str, str] | None = None, out: Path | No
         )
     if r.returncode:
         sys.exit(
-            'rawpack: FAILED: %s\n%s%s'
-            % (' '.join(map(str, cmd))[:400], (r.stdout or '')[-3000:], (r.stderr or '')[-5000:])
+            f'rawpack: FAILED: {" ".join(map(str, cmd))[:400]}\n{(r.stdout or "")[-3000:]}{(r.stderr or "")[-5000:]}'
         )
     return (r.stdout or '') + (r.stderr or '')
 
@@ -79,7 +78,7 @@ def build(work: Path, bridge: Path) -> None:
     """
     # Source paths (Mesa's asserts' __FILE__) as /switch-ios/..., whichever checkout or sandbox this runs in: the probe
     # and the mock are an action's outputs, and the run's cache key is their bytes.
-    maps = ['-ffile-prefix-map=%s=/switch-ios/tree' % RAW.parents[2], '-ffile-prefix-map=%s=/switch-ios' % Path.cwd()]
+    maps = [f'-ffile-prefix-map={RAW.parents[2]}=/switch-ios/tree', f'-ffile-prefix-map={Path.cwd()}=/switch-ios']
     cflags = ['-O2', '-Wall', *maps, '-I', ABI]
     objs = []
     for src in ('mesa/mme_fermi.c', 'mesa/mme_fermi_sim.c'):
@@ -192,7 +191,7 @@ def main() -> None:
     cache.mkdir()
 
     def probe(name: str, extra: dict[str, str]) -> None:
-        with open(work / ('%s.out' % name), 'w') as out:
+        with open(work / f'{name}.out', 'w') as out:
             r = subprocess.run(
                 [str(work / 'probe'), str(nvk), str(cache), str(qc), str(corpus)],
                 env=dict(env, **extra),
@@ -202,18 +201,18 @@ def main() -> None:
                 check=False,
             )
         if r.returncode:
-            sys.exit('rawpack: probe %s failed:\n%s' % (name, r.stderr[-4000:]))
+            sys.exit(f'rawpack: probe {name} failed:\n{r.stderr[-4000:]}')
         tail = [l for l in r.stderr.splitlines() if l.startswith('probe:')]
-        print('rawpack: %s: %s' % (name, tail[-1] if tail else '?'))
+        print(f'rawpack: {name}: {tail[-1] if tail else "?"}')
 
     probe('warm', {})
     print(run([sys.executable, HERE / 'mkprograms.py', work / 'programs.bin', cache]).strip())
     for size in (256, 16, 4096):
         probe(
-            'probe%d' % size,
+            f'probe{size}',
             {
                 'PROBE_BYTES': str(size),
-                'RAWCAP_LOG': str(work / ('probe%d.log' % size)),
+                'RAWCAP_LOG': str(work / f'probe{size}.log'),
                 'RAWCAP_PROGRAMS': str(work / 'programs.bin'),
             },
         )

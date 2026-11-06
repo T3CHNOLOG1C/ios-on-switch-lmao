@@ -38,7 +38,7 @@ def main() -> None:
                     out += b'NVPG' + struct.pack('<II', len(s['code']), len(types)) + types + s['hdr'][:80] + s['code']
     with open(sys.argv[1], 'wb') as programs:
         programs.write(out)
-    print('%s: %d programs' % (sys.argv[1], len(seen)))
+    print(f'{sys.argv[1]}: {len(seen)} programs')
 
 
 if __name__ == '__main__':

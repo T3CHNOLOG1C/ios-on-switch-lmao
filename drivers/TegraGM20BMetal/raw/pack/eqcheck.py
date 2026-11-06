@@ -59,7 +59,7 @@ def rename_all(out: list[list[dict]]) -> list[list[dict]]:
             if m.group(0) not in names:
                 if not assign:
                     return 'C' + m.group(0)[1:]
-                names[m.group(0)] = 'N%d' % (len(names) + 1)
+                names[m.group(0)] = f'N{len(names) + 1}'
             return names[m.group(0)]
 
         return re.sub(r'\bR\d+\b', sub, text)
@@ -84,7 +84,7 @@ def rename_all(out: list[list[dict]]) -> list[list[dict]]:
 # hashes).
 def layout_tic(m: re.Match[str]) -> str:
     w = [int(x, 16) for x in m.group(2).split()]
-    return 'tic[%08x %04x %04x]' % (w[0], w[4] & 0xFFFF, w[5] & 0xFFFF)
+    return f'tic[{w[0]:08x} {w[4] & 0xFFFF:04x} {w[5] & 0xFFFF:04x}]'
 
 
 def normalize_layouts(text: str) -> str:
@@ -107,7 +107,7 @@ def fields(ev: dict) -> collections.OrderedDict:
     h = ev['head']
     if h.startswith('DRAW'):
         m = re.match(r'DRAW(?:-INDEXED)? first=(\d+) count=(\d+) begin=(\w+) barriers=(.*)', h)
-        f['draw'] = '%s %s %s %s' % (h.split()[0], *m.group(1, 2, 3))
+        f['draw'] = f'{h.split()[0]} {m.group(1)} {m.group(2)} {m.group(3)}'
         f['barriers'] = {x for x in m.group(4).split(',') if x}
     else:
         m = re.match(r'CLEAR (.*) barriers=(.*)', h)
@@ -125,9 +125,8 @@ def fields(ev: dict) -> collections.OrderedDict:
             stage = l.split()[0]
             f[stage] = l
         elif l.startswith('cb'):
-            f[
-                '%s.%s' % (stage, l.split()[0] + (' ' + l.split()[2].split('=')[0] if l.split()[1] == 'root' else ''))
-            ] = l
+            suffix = ' ' + l.split()[2].split('=')[0] if l.split()[1] == 'root' else ''
+            f[f'{stage}.{l.split()[0]}{suffix}'] = l
         else:
             f[l.split('=')[0].split()[0]] = l
     return f
@@ -147,7 +146,7 @@ OWN = LAYOUTS or '--own' in sys.argv
 def main() -> int:
     show = int(sys.argv[sys.argv.index('--show') + 1]) if '--show' in sys.argv else 3
     a, b = frames(sys.argv[1]), frames(sys.argv[2])
-    print('frames: nvk %d raw %d' % (len(a), len(b)))
+    print(f'frames: nvk {len(a)} raw {len(b)}')
     if OWN:  # (before the names: what is left out names nothing)
         # each driver's own draws: programs no draw of the other log runs (m2v's shadow copies and mip work; the raw
         # path's 4:2:0 conversions through the pack's ycbcr states, where m2v converts with its own)
@@ -162,7 +161,7 @@ def main() -> int:
                 dropped += len(events) - len(keep)
                 events[:] = keep
             if dropped:
-                print('%d draws of programs only the %s log runs left out (its own work)' % (dropped, who))
+                print(f'{dropped} draws of programs only the {who} log runs left out (its own work)')
 
         theirs_b = [list(events) for events in b]
         drop(a, theirs_b, 'nvk')
@@ -182,19 +181,17 @@ def main() -> int:
         if fi == 0:
             extra = [c for c in ca if c not in cb]
             if extra:
-                print(
-                    'frame 0: %d clears only in nvk (m2v initialises new textures: %s)'
-                    % (len(extra), '; '.join(e.split(' color')[0] for e in extra))
-                )
+                textures = '; '.join(e.split(' color')[0] for e in extra)
+                print(f'frame 0: {len(extra)} clears only in nvk (m2v initialises new textures: {textures})')
                 ca = [c for c in ca if c in cb]
         if ca != cb:
             mism['clears'] += 1
             if len(examples['clears']) < show:
-                examples['clears'].append('frame %d\n   nvk %s\n   raw %s' % (fi, ca, cb))
+                examples['clears'].append(f'frame {fi}\n   nvk {ca}\n   raw {cb}')
         clears += len(ca)
         if len(da) != len(db):
             mism['draw count'] += 1
-            examples['draw count'].append('frame %d: nvk %d raw %d' % (fi, len(da), len(db)))
+            examples['draw count'].append(f'frame {fi}: nvk {len(da)} raw {len(db)}')
         for di, (ea, eb) in enumerate(zip(da, db, strict=False)):
             draws += 1
             x, y = fields(ea), fields(eb)
@@ -211,20 +208,14 @@ def main() -> int:
                         for m in d:
                             reg_diff[m] += 1
                         if len(examples['registers']) < show:
-                            examples['registers'].append(
-                                'frame %d draw %d: %s'
-                                % (
-                                    fi,
-                                    di,
-                                    ' '.join('%s nvk=%s raw=%s' % (m, ra.get(m, '-'), rb.get(m, '-')) for m in d[:12]),
-                                )
-                            )
+                            regs = ' '.join(f'{m} nvk={ra.get(m, "-")} raw={rb.get(m, "-")}' for m in d[:12])
+                            examples['registers'].append(f'frame {fi} draw {di}: {regs}')
                     continue
                 if x.get(k) != y.get(k):
                     ok = False
                     mism[k] += 1
                     if len(examples[k]) < show:
-                        examples[k].append('frame %d draw %d\n   nvk %s\n   raw %s' % (fi, di, x.get(k), y.get(k)))
+                        examples[k].append(f'frame {fi} draw {di}\n   nvk {x.get(k)}\n   raw {y.get(k)}')
             missing = x['barriers'] - y['barriers']
             for m in missing:
                 bar_missing[m] += 1
@@ -235,16 +226,16 @@ def main() -> int:
                 mism['barrier (fetch/pass)'] += 1
                 if len(examples['barrier (fetch/pass)']) < show:
                     examples['barrier (fetch/pass)'].append(
-                        'frame %d draw %d: nvk %s raw %s' % (fi, di, sorted(x['barriers']), sorted(y['barriers']))
+                        f'frame {fi} draw {di}: nvk {sorted(x["barriers"])} raw {sorted(y["barriers"])}'
                     )
             same += ok
-    print('draws compared %d, identical %d; clears compared %d' % (draws, same, clears))
+    print(f'draws compared {draws}, identical {same}; clears compared {clears}')
     for k, n in mism.most_common():
-        print('MISMATCH %-28s %d' % (k, n))
+        print(f'MISMATCH {k:<28} {n}')
         for e in examples[k]:
             print('  ' + e)
     if reg_diff:
-        print('registers differing (draws):', ' '.join('%s:%d' % kv for kv in reg_diff.most_common(40)))
+        print('registers differing (draws):', ' '.join(f'{m}:{n}' for m, n in reg_diff.most_common(40)))
     if bar_missing:
         print('barriers nvk had, raw not (draws):', dict(bar_missing))
     if bar_extra:

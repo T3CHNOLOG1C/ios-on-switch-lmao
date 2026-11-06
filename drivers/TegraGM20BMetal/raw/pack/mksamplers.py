@@ -35,4 +35,4 @@ for f, s in zip(out, draws, strict=False):
             counts[v >> 20] = counts.get(v >> 20, 0) + 1
     if counts:
         words = tscs[max(counts, key=counts.get)]
-    print(' '.join(f[1:10]), ' '.join('%08x' % w for w in words) if words else 'none')
+    print(' '.join(f[1:10]), ' '.join(f'{w:08x}' for w in words) if words else 'none')
