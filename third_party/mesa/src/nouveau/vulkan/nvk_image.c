@@ -1707,6 +1707,9 @@ nvk_image_plane_bind(struct nvk_device *dev,
       if (mem->dedicated_image == image && image->can_compress && not_shared) {
          image->is_compressed = true;
          plane->addr = mem->mem->va->addr + offset_B;
+      } else if (mem->mem->va->pte_kind == plane->nil.pte_kind) {
+         /* The memory's own binding already maps it with the plane's kind. */
+         plane->addr = mem->mem->va->addr + offset_B;
       } else {
          VkResult result = nvk_image_plane_alloc_va(dev, image, plane);
          if (result != VK_SUCCESS)
