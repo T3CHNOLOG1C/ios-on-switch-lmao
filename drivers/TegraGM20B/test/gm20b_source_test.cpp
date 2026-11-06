@@ -363,7 +363,16 @@ TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
 	EXPECT_THAT(reopen, Not(HasSubstr("heap_")));
 	expectBefore(reopen, "k_.channel(kEngines, channel_, fence_)", "emitContext(p);");
 	expectBefore(reopen, "emitContext(p);", "fx::emitTwodInit(p);");
+	// the interlock's ticket buffer zeroed by the copy engine in the new channel, after the context names it and before
+	// the 3D engine runs again
+	expectBefore(reopen, "emitContext(p);",
+		     "uint32_t(tickets_.va >> 32), uint32_t(tickets_.va)}, SUBC_COPY);");
+	expectBefore(reopen, "uint32_t(tickets_.va)}, SUBC_COPY);",
+		     "p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);");
+	expectBefore(reopen, "p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);",
+		     "p.m(WAIT_FOR_IDLE, 0);");
 	const std::string context = flat(definition(raw, "void Device::emitContext(Push &p)"));
+	EXPECT_THAT(context, HasSubstr("p.m(LOAD_CB_OFFSET, kRootInterlockTickets);"));
 	for (const char *reloc :
 	     {"case RelocHeapHi:", "case RelocHeapLo:", "case RelocTicHi:", "case RelocTicLo:",
 	      "case RelocTscHi:", "case RelocTscLo:", "case RelocRootHi:", "case RelocRootLo:"})
