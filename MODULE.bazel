@@ -25,6 +25,14 @@ bazel_dep(name = "libjpeg_turbo", version = "3.1.3.bcr.6", dev_dependency = True
 
 # --- Python: the build's tools and tests run on this interpreter, never the host's ------------------------------
 # No implicit __init__.py in runfiles: tools/ is a namespace package (PEP 420), imported as tools.install etc.
+# bazel/python/rules_python.patch: the hermetic CPython's LC_ID_DYLIB fix-up runs only on a Mac with developer tools,
+# so the image builder's Python fetches on a Mac with only Bazelisk.
+single_version_override(
+    module_name = "rules_python",
+    patch_strip = 1,
+    patches = ["//bazel/python:rules_python.patch"],
+)
+
 rules_python_config = use_extension("@rules_python//python/extensions:config.bzl", "config")
 rules_python_config.explicit_init_py(default = True)
 

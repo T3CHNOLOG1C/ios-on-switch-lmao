@@ -1,0 +1,14 @@
+--- a/python/private/python_repository.bzl
++++ b/python/private/python_repository.bzl
+@@ -207,7 +207,10 @@
+     elif rctx.attr.distutils_content:
+         rctx.file(distutils_path, rctx.attr.distutils_content)
+ 
+-    if "darwin" in platform and "osx" == repo_utils.get_platforms_os_name(rctx):
++    # install_name_tool is a shim of the developer tools: without them it fails and asks to install them. A Mac without
++    # them cannot link against libpython either, so its LC_ID_DYLIB does not matter there.
++    if ("darwin" in platform and "osx" == repo_utils.get_platforms_os_name(rctx) and
++        rctx.execute(["/usr/bin/xcode-select", "-p"], quiet = True).return_code == 0):
+         # Fix up the Python distribution's LC_ID_DYLIB field.
+         # It points to a build directory local to the GitHub Actions
+         # host machine used in the Python standalone build, which causes
