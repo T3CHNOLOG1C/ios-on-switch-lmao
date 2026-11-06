@@ -1,0 +1,99 @@
+{
+  "class": "IOAESAccelerator",
+  "doc": "The original IOAESAccelerator (com.apple.iokit.IOCryptoAcceleratorFamily). Its C++ base here is IOService: IOCryptoAccelerator, in between, adds no fields and only getAlgorithmName (slot 168), which is declared here; the original gMetaClass keeps the real superclass chain.",
+  "superclass": "IOService",
+  "kext": "com.apple.iokit.IOCryptoAcceleratorFamily",
+  "structors": "default",
+  "includes": [
+    "IOKit/IOService.h",
+    "IOKit/IOMemoryDescriptor.h"
+  ],
+  "declarations": [
+    "struct IOAESIV {",
+    "    unsigned char bytes[16];",
+    "};",
+    "struct IOAESKeyData {",
+    "    uint32_t bits;",
+    "    unsigned char bytes[32];",
+    "    uint32_t selector;",
+    "};",
+    "enum IOAESOperation : unsigned {",
+    "    IOAESEncrypt = 0,",
+    "    IOAESDecrypt = 1",
+    "};",
+    "class IOAESAcceleratorCommand;",
+    "using IOAESCompletion = void (*)(void *, int);",
+    "static_assert(sizeof(IOAESIV) == 16 && __builtin_offsetof(IOAESKeyData, selector) == 36, \"the original key and IV\");"
+  ],
+  "methods": {
+    "start": {
+      "decl": "bool start(IOService *provider) override",
+      "mangled": "__ZN16IOAESAccelerator5startEP9IOService",
+      "pac": "_ZN9IOService5startEPS_"
+    },
+    "getWorkLoop": {
+      "decl": "IOWorkLoop *getWorkLoop() const override",
+      "mangled": "__ZNK16IOAESAccelerator11getWorkLoopEv",
+      "pac": "_ZNK9IOService11getWorkLoopEv"
+    },
+    "callPlatformFunction": {
+      "decl": "IOReturn callPlatformFunction(const OSSymbol *functionName, bool waitForFunction, void *param1, void *param2, void *param3, void *param4) override",
+      "mangled": "__ZN16IOAESAccelerator20callPlatformFunctionEPK8OSSymbolbPvS3_S3_S3_",
+      "pac": "_ZN9IOService20callPlatformFunctionEPK8OSSymbolbPvS3_S3_S3_"
+    },
+    "getAlgorithmName": {
+      "decl": "virtual const char *getAlgorithmName()",
+      "mangled": "__ZN16IOAESAccelerator16getAlgorithmNameEv",
+      "pac": "_ZN19IOCryptoAccelerator16getAlgorithmNameEv"
+    },
+    "performAESTask": {
+      "decl": "virtual IOReturn performAES(void *input, void *output, task_t task, unsigned long long bytes, IOAESIV *iv, IOAESOperation operation, IOAESKeyData *key, IOAESCompletion completion, void *refcon)",
+      "mangled": "__ZN16IOAESAccelerator10performAESEPvS0_P4taskyP7IOAESIV14IOAESOperationP12IOAESKeyDataPFvS0_iES0_"
+    },
+    "performAESDescriptor": {
+      "decl": "virtual IOReturn performAES(IOMemoryDescriptor *input, IOMemoryDescriptor *output, unsigned long long bytes, IOAESIV *iv, IOAESOperation operation, IOAESKeyData *key, unsigned long long inputOffset, unsigned long long outputOffset, IOAESCompletion completion, void *refcon)",
+      "mangled": "__ZN16IOAESAccelerator10performAESEP18IOMemoryDescriptorS1_yP7IOAESIV14IOAESOperationP12IOAESKeyDatayyPFvPviES7_",
+      "doc": "The original clears bit 31 of key->selector in place before it looks at the selector."
+    },
+    "isKeySupported": {
+      "decl": "virtual bool isKeySupported(unsigned selector)",
+      "mangled": "__ZN16IOAESAccelerator14isKeySupportedEj"
+    },
+    "getSupportedOptions": {
+      "decl": "virtual unsigned getSupportedOptions()",
+      "mangled": "__ZN16IOAESAccelerator19getSupportedOptionsEv"
+    },
+    "performAESQuantum": {
+      "decl": "virtual IOReturn performAESQuantum(IOAESAcceleratorCommand *command)",
+      "mangled": "__ZN16IOAESAccelerator17performAESQuantumEP23IOAESAcceleratorCommand"
+    },
+    "completeAESQuantum": {
+      "decl": "virtual void completeAESQuantum(IOAESAcceleratorCommand *command)",
+      "mangled": "__ZN16IOAESAccelerator18completeAESQuantumEP23IOAESAcceleratorCommand"
+    },
+    "performImmediateAES": {
+      "decl": "virtual IOReturn performImmediateAES(IOAESAcceleratorCommand *command)",
+      "mangled": "__ZN16IOAESAccelerator19performImmediateAESEP23IOAESAcceleratorCommand"
+    },
+    "disableHardwareKey": {
+      "decl": "virtual void disableHardwareKey(unsigned selector)",
+      "mangled": "__ZN16IOAESAccelerator18disableHardwareKeyEj"
+    },
+    "createSpecialKeys": {
+      "decl": "virtual void createSpecialKeys()",
+      "mangled": "__ZN16IOAESAccelerator17createSpecialKeysEv"
+    },
+    "_queueLocked": {
+      "decl": "virtual IOReturn _queueLocked(IOAESAcceleratorCommand *command)",
+      "mangled": "__ZN16IOAESAccelerator12_queueLockedEP23IOAESAcceleratorCommand"
+    },
+    "_startCommand": {
+      "decl": "virtual void _startCommand()",
+      "mangled": "__ZN16IOAESAccelerator13_startCommandEv"
+    },
+    "_completeAES": {
+      "decl": "virtual void _completeAES(IOAESAcceleratorCommand *command)",
+      "mangled": "__ZN16IOAESAccelerator12_completeAESEP23IOAESAcceleratorCommand"
+    }
+  }
+}

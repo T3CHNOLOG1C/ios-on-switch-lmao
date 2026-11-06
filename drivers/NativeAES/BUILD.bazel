@@ -2,6 +2,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 
 # drivers/NativeAES: moved from out/native-a57/root-v1/tree/drivers/NativeAES by the layout move.
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//kits/SwitchABI:defs.bzl", "switch_abi_bindings")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -32,9 +33,17 @@ kernel_driver(
     name = "NativeAES",
     srcs = [
         "NativeAES.cpp",
-        "//bazel/pinned:kernel/native-aes/original-bindings.S",
+        "original-bindings.S",
     ],
+    abi = ["IOAESAccelerator"],
     hdr_deps = [
         "drivers/TegraSE",
     ],
+)
+
+switch_abi_bindings(
+    name = "original_bindings",
+    out = "original-bindings.S",
+    classes = ["//kits/SwitchABI:IOAESAccelerator"],
+    objects = [":NativeAES_cc"],
 )

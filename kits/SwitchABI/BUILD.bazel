@@ -103,6 +103,8 @@ switch_abi_class(
     header = False,
 )
 
+switch_abi_class("IOAESAccelerator")
+
 switch_abi_class(
     "IOAcceleratorES",
     header = False,
