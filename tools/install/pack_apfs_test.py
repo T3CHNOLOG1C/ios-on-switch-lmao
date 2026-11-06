@@ -89,11 +89,13 @@ class PackApfsTest(unittest.TestCase):
         out.mkdir()
         kernel = self.dir / 'bl33.bin'
         kernel.write_bytes(b'kernel')
-        folder = 'switchroot/ios/install/21H461'
-        boot = [pack.boot_file(f'{folder}/bl33.bin', kernel)]
-        m = pack.pack(sparse, part.first * 512, part.bytes, out, folder, 'test', boot, Quiet())
-        self.assertEqual(manifest.decode((out / pack.MANIFEST).read_bytes()), m)
-        source = b''.join((out / Path(p.path).name).read_bytes() for p in m.parts)
+        layout = {'container_bytes': part.bytes, 'minimum_bytes': part.bytes, 'pool_start': 0, 'pool_end': 0}
+        source = pack.Source(sparse, part.first * 512, layout)
+        m = pack.pack(source, pack.Target(out, 'switchroot/ios', 'IOS17', 'test', [('bl33.bin', kernel)]), Quiet())
+        with open(out / 'IOS17.SII.001', 'rb') as f:
+            self.assertEqual(manifest.decode(f.read(manifest.BOOT_OFFSET)), m)
+        stream = b''.join((out / Path(p.path).name).read_bytes() for p in m.parts)
+        source = stream[manifest.BODY_OFFSET :]
         chunk = manifest.HASH_CHUNK
         self.assertEqual(
             m.hashes, [hashlib.sha256(source[i : i + chunk]).digest() for i in range(0, len(source), chunk)]

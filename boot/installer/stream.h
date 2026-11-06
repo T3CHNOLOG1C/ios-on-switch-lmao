@@ -15,8 +15,8 @@ struct switch_install_io {
 };
 
 // Every extent onto the partition at `first_sector`. `buffer` holds one hash chunk; `zeros` is `zero_bytes` of
-// zeros. A chunk is read and checked whole before any of it is written, and the first must start with the image's
-// container superblock. Stops at the first failure.
+// zeros; `io->read` starts at the body. A chunk is read and checked whole before any of it is written, and the first
+// must start with the image's container superblock. Stops at the first failure.
 int switch_install_stream(const struct switch_image *image, const struct switch_install_io *io, uint64_t first_sector,
                           uint64_t partition_sectors, uint8_t *buffer, const uint8_t *zeros, uint32_t zero_bytes);
 

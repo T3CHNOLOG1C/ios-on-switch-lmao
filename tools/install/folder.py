@@ -1,53 +1,44 @@
-"""The folder //:image makes, merged onto the SD card's root, and how it is merged.
+"""The folder //:image makes (out/sd), and how //:image_to_card puts it on the SD card.
 
-    switchroot/ios/install/<build>/   one kind's image: manifest.bin, part-NN.bin and that kind's boot entry files
-    bootloader/ini/ios.ini            the hekate entry, and its icon bootloader/res/icon_ios_hue.bmp
+    switchroot/ios/NAME.SII.001 ...    one image per iOS version (IOS17, IOS27): manifest, boot files, container
+    bootloader/ini/ios.ini             the hekate entry, and its icon bootloader/res/icon_ios_hue.bmp
     bootloader/payloads/install-ios.bin
 
-The boot entry hekate starts (switchroot/ios/bl31.bin, ...) is not in the folder: install-ios.bin copies the installed
-image's own there, and deploy writes it to an installed card. So the folder of one kind never changes which kernel the
-card starts, and each kind's image keeps the boot files it was made with.
-
-Merging writes only those paths. A kind's folder on the card loses the files the folder does not have, and the other
-kinds' folders stay as they are. The image from before one folder per kind (switchroot/ios/install/manifest.bin and its
-parts) goes, as does a copy of the entry under the project's former names (renamed.py). Nothing else is read or written.
+The boot files hekate starts (switchroot/ios/bl31.bin, ...) are never in the folder: install-ios.bin copies the
+installed image's own there, and deploy writes them for the version it was built for. Copying an image to the card
+writes only its own NAME.SII.* (the parts that differ, by the manifests' chunk hashes), removes its stale parts and the
+image from before .SII files (switchroot/ios/install/), and refreshes the payload, ini and icon. Nothing else is read
+or written.
 """
 
 import json
 import os
 import re
 import shutil
-from collections.abc import Iterable
 from pathlib import Path
 
-from tools.install import card as cards, host, renamed
+from tools.install import card as cards, host, manifest, renamed
 
-INSTALL = cards.BOOT_ENTRY + '/install'
-MANIFEST = 'manifest.bin'
+SII_DIR = cards.BOOT_ENTRY
+LEGACY = cards.BOOT_ENTRY + '/install'
 PAYLOAD = 'bootloader/payloads/install-ios.bin'
 MARKER = '.switch-ios-image'
 SHARED = (cards.INI, cards.ICON, PAYLOAD)
-KIND_FILE = re.compile(re.escape(INSTALL) + r'/([0-9A-Za-z]+)/([^/]+)')
+PART = re.compile(r'([A-Z0-9]+)\.SII\.([0-9]{3})')
+COPY_CHUNK = 64 << 20
 
 
-def kind_dir(build: str) -> str:
-    if not re.fullmatch(r'[0-9A-Za-z]+', build):
-        raise host.HostError(f'{build!r} is not an IPSW build')
-    return f'{INSTALL}/{build}'
-
-
-def kind_of(relative: str) -> str | None:
-    """Return the kind whose image folder holds `relative`, None for any other path."""
-    found = KIND_FILE.fullmatch(relative)
-    return found.group(1) if found else None
+def image_name(pins: dict) -> str:
+    return 'IOS{}'.format(pins['version'].split('.')[0])
 
 
 def _allowed(relative: str) -> bool:
-    return relative in SHARED or kind_of(relative) is not None
+    directory, _, name = relative.rpartition('/')
+    return relative in SHARED or (directory == SII_DIR and PART.fullmatch(name) is not None)
 
 
 def records(out: Path) -> dict[str, dict]:
-    """Return {build: what finish() recorded} for each image the folder holds."""
+    """Return {NAME: what //:image recorded of it} for each image the folder holds."""
     try:
         saved = json.loads((Path(out) / MARKER).read_text())
     except (OSError, ValueError):
@@ -55,40 +46,28 @@ def records(out: Path) -> dict[str, dict]:
     return saved.get('images', {}) if isinstance(saved, dict) else {}
 
 
-def record(out: Path, build: str, entry: dict) -> None:
+def record(out: Path, name: str, entry: dict | None) -> None:
     saved = records(out)
-    saved[build] = entry
+    if entry is None:
+        saved.pop(name, None)
+    else:
+        saved[name] = entry
     (Path(out) / MARKER).write_text(json.dumps({'images': saved}, indent=2) + '\n')
 
 
-def _clear(directory: Path, keep: set[Path]) -> None:
-    """Remove everything in `directory` but the `keep` paths and the folders that lead to them."""
-    for path in directory.iterdir():
-        if path in keep:
-            continue
-        if any(path in k.parents for k in keep):
-            _clear(path, keep)
-        elif path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
+def prepare(out: str | Path) -> Path:
+    """Return `out` ready for an image: a new folder, or one an earlier run made, whose images all stay.
 
-
-def prepare(out: str | Path, build: str) -> Path:
-    """Return `out` ready for `build`'s image.
-
-    A new folder, or one an earlier run made: that keeps the other kinds' images and loses the rest. Refuses any other
-    directory.
+    Refuses any other directory. A folder from before .SII files loses its image (switchroot/ios/install/).
     """
     out = Path(out)
-    kept = {}
-    if out.exists():
-        if any(out.iterdir()) and not (out / MARKER).is_file():
-            raise host.HostError(f'{out} is not empty and was not made by //:image: give --out a new folder')
-        kept = {k: v for k, v in records(out).items() if k != build and (out / kind_dir(k)).is_dir()}
-        _clear(out, {out / MARKER} | {out / kind_dir(k) for k in kept})
-    (out / kind_dir(build)).mkdir(parents=True)
-    (out / MARKER).write_text(json.dumps({'images': kept}, indent=2) + '\n')
+    if out.exists() and any(out.iterdir()) and not (out / MARKER).is_file():
+        raise host.HostError(f'{out} is not empty and was not made by //:image: give --out a new folder')
+    if (out / LEGACY).exists():
+        shutil.rmtree(out / LEGACY)
+    (out / SII_DIR).mkdir(parents=True, exist_ok=True)
+    if not (out / MARKER).is_file():
+        (out / MARKER).write_text(json.dumps({'images': {}}) + '\n')
     return out
 
 
@@ -101,21 +80,6 @@ def add(out: Path, relative: str, source: str | Path) -> None:
     target.chmod(0o644)
 
 
-def boot_files(package: str | Path, build: str) -> dict[str, Path]:
-    """{path in the folder: source} of the boot package: its boot entry into the kind's folder, the ini and icon."""
-    entry = cards.BOOT_ENTRY + '/'
-    return {
-        f'{kind_dir(build)}/{Path(relative).name}' if relative.startswith(entry) else relative: source
-        for relative, source in cards.boot_entry_files(package).items()
-    }
-
-
-def listing(package: str | Path, build: str) -> list[str]:
-    """Return what a finished folder for `build` puts on the card."""
-    image = [f'{kind_dir(build)}/{MANIFEST}', f'{kind_dir(build)}/part-NN.bin']
-    return sorted([*boot_files(package, build), *image, PAYLOAD])
-
-
 def files(out: Path) -> list[str]:
     """List what of the folder goes onto the card: the paths it may hold, never what is kept beside them for the Mac."""
     out = Path(out)
@@ -123,58 +87,99 @@ def files(out: Path) -> list[str]:
     return sorted(relative for relative in found if _allowed(relative))
 
 
-def needed_bytes(out: Path, fat_root: Path) -> int:
-    total = 0
-    for relative in files(out):
-        target = Path(fat_root) / relative
-        if not (target.is_file() and target.stat().st_size == (Path(out) / relative).stat().st_size):
-            total += (Path(out) / relative).stat().st_size
-    return total
+def images(root: Path) -> dict[str, manifest.Manifest | None]:
+    """Return {NAME: its manifest, None when unreadable} of the images in `root`'s switchroot/ios."""
+    found = {}
+    for first in sorted((Path(root) / SII_DIR).glob('*.SII.001')):
+        name = first.name[: -len('.SII.001')]
+        try:
+            with open(first, 'rb') as f:
+                found[name] = manifest.decode(f.read(manifest.BOOT_OFFSET))
+        except (OSError, manifest.ManifestError):
+            found[name] = None
+    return found
 
 
-def remove_legacy(fat_root: Path) -> list[str]:
-    """Remove the image from before one folder per kind: the files directly in switchroot/ios/install/."""
-    install = Path(fat_root) / INSTALL
-    removed = []
-    if install.is_dir():
-        for path in sorted(install.iterdir()):
-            if path.is_file():
-                path.unlink()
-                removed.append(f'{INSTALL}/{path.name}')
-    return removed
+def _same_head(mine: manifest.Manifest, theirs: manifest.Manifest) -> bool:
+    return manifest.encode(mine) == manifest.encode(theirs)
 
 
-def merge(out: Path, fat_root: Path, log: host.Log, keep: Iterable[str] = ()) -> tuple[list[str], list[str]]:
-    """Copy the folder onto a mounted FAT.
+def _same_body(mine: manifest.Manifest, theirs: manifest.Manifest, start: int, end: int) -> bool:
+    first = max(0, start - manifest.BODY_OFFSET) // manifest.HASH_CHUNK
+    last = -(-(end - manifest.BODY_OFFSET) // manifest.HASH_CHUNK)
+    return len(theirs.hashes) >= last and mine.hashes[first:last] == theirs.hashes[first:last]
 
-    Unchanged files (same size and sha256) are skipped; `keep` names files already on the card that belong to it.
+
+def copy_plan(out: Path, fat_root: Path, name: str) -> tuple[list[tuple[str, int, int]], list[str]]:
+    """Return ([(relative, start, end)] to copy, [relative] to remove) for image NAME onto the card.
+
+    A part whose bytes the card already holds (equal size and chunk hashes) is left; when only the head of .001 differs
+    (new boot files), only the head is written.
     """
-    out, fat_root = Path(out), Path(fat_root)
-    wanted = files(out)
-    kept = set(wanted) | set(keep)
-    changed = []
-    for relative in wanted:
-        source, target = out / relative, fat_root / relative
-        if (
-            target.is_file()
-            and target.stat().st_size == source.stat().st_size
-            and cards.sha256_file(target) == cards.sha256_file(source)
-        ):
+    mine = images(out)[name]
+    theirs = images(fat_root).get(name)
+    copies, at = [], 0
+    for part in mine.parts:
+        relative = f'{SII_DIR}/{Path(part.path).name}'
+        target = Path(fat_root) / relative
+        start, end = at, at + part.bytes
+        at = end
+        same_file = theirs is not None and target.is_file() and target.stat().st_size == part.bytes
+        same_body = same_file and _same_body(mine, theirs, start, end)
+        if same_body and (start or _same_head(mine, theirs)):
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_name('.switch-partial-' + target.name)
-        shutil.copyfile(source, partial)
+        copies.append((relative, 0, manifest.BODY_OFFSET if same_body else part.bytes))
+    keep = {Path(p.path).name for p in mine.parts}
+    stale = [
+        f'{SII_DIR}/{p.name}' for p in sorted((Path(fat_root) / SII_DIR).glob(f'{name}.SII.*')) if p.name not in keep
+    ]
+    legacy = Path(fat_root) / LEGACY
+    stale += [f'{LEGACY}/{p.name}' for p in sorted(legacy.iterdir()) if p.is_file()] if legacy.is_dir() else []
+    return copies, stale
+
+
+def _copy_range(source: Path, target: Path, start: int, end: int) -> None:
+    whole = start == 0 and end == source.stat().st_size
+    partial = target.with_name('.switch-partial-' + target.name) if whole else target
+    with open(source, 'rb') as src, open(partial, 'wb' if whole else 'r+b') as dst:
+        src.seek(start)
+        dst.seek(start)
+        while start < end:
+            data = src.read(min(COPY_CHUNK, end - start))
+            dst.write(data)
+            start += len(data)
+        dst.flush()
+        os.fsync(dst.fileno())
+    if whole:
         os.replace(partial, target)
-        changed.append(relative)
-    removed = remove_legacy(fat_root)
-    for kind in sorted({kind_of(r) for r in kept} - {None}):
-        folder = fat_root / kind_dir(kind)
-        for path in sorted(folder.iterdir()) if folder.is_dir() else []:
-            relative = f'{kind_dir(kind)}/{path.name}'
-            if path.is_file() and relative not in kept:
-                path.unlink()
-                removed.append(relative)
+
+
+def merge(out: Path, fat_root: Path, names: list[str], log: host.Log) -> tuple[list[str], list[str]]:
+    """Put images NAMES and the payload, ini and icon from `out` onto a mounted FAT; return (written, removed)."""
+    out, fat_root = Path(out), Path(fat_root)
+    written, removed = [], []
+    for name in names:
+        copies, stale = copy_plan(out, fat_root, name)
+        for relative in stale:
+            (fat_root / relative).unlink()
+            removed.append(relative)
+        for relative, start, end in copies:
+            (fat_root / relative).parent.mkdir(parents=True, exist_ok=True)
+            _copy_range(out / relative, fat_root / relative, start, end)
+            written.append(relative if end != manifest.BODY_OFFSET or start else relative + ' (head)')
+    if (fat_root / LEGACY).is_dir() and not any((fat_root / LEGACY).iterdir()):
+        (fat_root / LEGACY).rmdir()
+    for relative in SHARED:
+        source, target = out / relative, fat_root / relative
+        if source.is_file() and not (target.is_file() and cards.sha256_file(target) == cards.sha256_file(source)):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _copy_range(source, target, 0, source.stat().st_size)
+            written.append(relative)
     removed += renamed.remove_older_boot_entries(fat_root, cards.INI, cards.BOOT_ENTRY, False)
     host.run('sync')
-    log(f'card: {len(changed)} files written, {len(wanted) - len(changed)} unchanged, {len(removed)} stale removed')
-    return changed, removed
+    log(f'card: {len(written)} written, {len(removed)} removed: {", ".join(written + removed) or "nothing"}')
+    return written, removed
+
+
+def copy_bytes(out: Path, fat_root: Path, names: list[str]) -> int:
+    return sum(end - start for name in names for _, start, end in copy_plan(out, fat_root, name)[0])

@@ -4,6 +4,7 @@ These are the declared host inputs of //install:sd and //deploy:* (macOS base sy
 hdiutil, ditto, fsck_apfs, sw_vers, sync. Each run checks they exist and logs `sw_vers`.
 """
 
+import concurrent.futures
 import datetime
 import os
 import plistlib
@@ -15,6 +16,7 @@ TOOLS = {
     'diskutil': '/usr/sbin/diskutil',
     'hdiutil': '/usr/bin/hdiutil',
     'ditto': '/usr/bin/ditto',
+    'cp': '/bin/cp',
     'fsck_apfs': '/sbin/fsck_apfs',
     'sw_vers': '/usr/bin/sw_vers',
     'sync': '/bin/sync',
@@ -161,3 +163,36 @@ def require_root_or(reason: str) -> None:
 
 def python() -> str:
     return sys.executable
+
+
+CHUNK = 8 << 20
+
+
+def copy_parallel(src: int, src_offset: int, dst: int, dst_offset: int, size: int) -> None:
+    """`size` bytes from `src` to `dst` in CHUNK pieces on every core; all-zero pieces stay holes."""
+
+    def piece(at: int) -> None:
+        chunk = os.pread(src, min(CHUNK, size - at), src_offset + at)
+        if len(chunk) != min(CHUNK, size - at):
+            raise HostError(f'short read at {src_offset + at}')
+        if chunk.strip(b'\0'):
+            os.pwrite(dst, chunk, dst_offset + at)
+
+    with concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 4) as pool:
+        list(pool.map(piece, range(0, size, CHUNK)))
+
+
+def copy_file_parallel(source: str | os.PathLike, target: str | os.PathLike) -> None:
+    """Copy a whole file on every core (copy_parallel)."""
+    size = os.path.getsize(source)
+    src = os.open(source, os.O_RDONLY)
+    try:
+        dst = os.open(target, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            os.ftruncate(dst, size)
+            copy_parallel(src, 0, dst, 0, size)
+            os.fsync(dst)
+        finally:
+            os.close(dst)
+    finally:
+        os.close(src)

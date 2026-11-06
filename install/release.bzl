@@ -26,6 +26,8 @@ filegroup(name = "gpu_base", srcs = ["inputs/gpu/trust.json"])
 
 filegroup(name = "install_payload", srcs = ["sd/bootloader/payloads/install-ios.bin"])
 
+filegroup(name = "apfs_tool", srcs = ["host_tools/apfs_tool"])
+
 exports_files(glob(["sd/**", "inputs/**", "host_tools/**"]))
 """
 
@@ -41,7 +43,7 @@ _MISSING = """package(default_visibility = ["//visibility:public"])
 
 load(":missing.bzl", "missing")
 
-[missing(name = name) for name in ["sd", "inputs", "host_tools", "shader_tools", "gpu_base", "install_payload"]]
+[missing(name = name) for name in ["sd", "inputs", "host_tools", "shader_tools", "gpu_base", "install_payload", "apfs_tool"]]
 """
 
 _MISSING_RULE = """def _impl(ctx):

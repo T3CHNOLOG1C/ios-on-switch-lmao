@@ -97,6 +97,11 @@ alias(
     actual = "//install:image_boot",
 )
 
+alias(
+    name = "image_to_card",
+    actual = "//install:image_to_card",
+)
+
 format_runner(
     name = "format",
     srcs = [":lint_files"],

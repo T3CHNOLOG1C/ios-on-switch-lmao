@@ -90,16 +90,17 @@ class ExtentsTest(unittest.TestCase):
         self.write(0, nxsb(1, 8, 9, 32))
         self.write(7 << 20, b'y' * BLOCK)
         plan = extents.plan(extents.data_ranges(self.fd, 0, SIZE, BLOCK), [(BLOCK, 41 * BLOCK)], SIZE, BLOCK)
-        sizes = manifest.split(plan)
+        source = sum(n for _, s, n in plan if s != manifest.ZERO)
         m = manifest.Manifest(
+            SIZE,
             SIZE,
             BLOCK,
             extents.container(os.pread(self.fd, BLOCK, 0))[2],
             'test',
-            [manifest.Part(f'image/p{i}', n) for i, n in enumerate(sizes)],
+            [manifest.Part(f'image/{i}', n) for i, n in enumerate(manifest.split(manifest.BODY_OFFSET + source))],
             plan,
-            [bytes(32)] * -(-sum(sizes) // manifest.HASH_CHUNK),
-            [manifest.Boot('image/bl33.bin', 1, [bytes(32)])],
+            [bytes(32)] * manifest.chunks(source),
+            [manifest.Boot('bl33.bin', manifest.BOOT_OFFSET, 1, [bytes(32)])],
         )
         self.assertEqual(manifest.decode(manifest.encode(m)).extents, plan)
 

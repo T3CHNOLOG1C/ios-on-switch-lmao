@@ -4,8 +4,9 @@
 
 #include "manifest.h"
 
-// One folder per kind (its IPSW build) holds that kind's image: tools/install/folder.py.
-#define SWITCH_IMAGES_DIR   "switchroot/ios/install"
+// Each iOS version's image is NAME.SII.001, .002, ... here (tools/install/folder.py).
+#define SWITCH_IMAGES_DIR   "switchroot/ios"
+#define SWITCH_IMAGES_FIRST "*.SII.001"
 #define SWITCH_IMAGES_MAX   6u
 #define SWITCH_SIZE_TEXT    16u
 #define SWITCH_KEY_POWER    (1u << 0)
@@ -14,20 +15,20 @@
 
 enum switch_image_state {
     SWITCH_IMAGE_READY,
-    // No manifest.bin, or one this installer refuses (made by another version of //:image, or damaged).
+    // A manifest this installer refuses (made by another version of //:image, or damaged).
     SWITCH_IMAGE_UNREADABLE,
-    // Its manifest names files outside its own folder.
+    // Its manifest is another file's: the .001 was renamed.
     SWITCH_IMAGE_ELSEWHERE,
-    // A part or boot file is missing or the wrong size.
+    // A part is missing or the wrong size.
     SWITCH_IMAGE_MISSING,
 };
 
 // 0 and the size of the file at `path`, or nonzero when there is no such file.
 typedef int (*switch_file_size)(void *context, const char *path, uint64_t *bytes);
 
-// What the image in `folder` is fit for: `image` is its decoded manifest, NULL when it did not decode. `*missing` is
-// the first file that is not there at its size.
-enum switch_image_state switch_image_examine(const struct switch_image *image, const char *folder,
+// What the image whose first part is at `path` is fit for: `image` is its decoded manifest, NULL when it did not
+// decode. `*missing` is the first part that is not there at its size.
+enum switch_image_state switch_image_examine(const struct switch_image *image, const char *path,
                                              switch_file_size size, void *context, const char **missing);
 
 enum switch_menu {

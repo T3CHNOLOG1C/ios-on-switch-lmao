@@ -355,7 +355,7 @@ static int used_end(const struct switch_apfs_io *io, struct work *w, uint64_t *e
     return 0;
 }
 
-int switch_apfs_measure(const struct switch_apfs_io *io, void *work, uint64_t *blocks, uint64_t *minimum)
+int switch_apfs_measure(const struct switch_apfs_io *io, void *work, struct switch_apfs_layout *layout)
 {
     struct work *w = work;
     uint64_t used = 0;
@@ -368,9 +368,11 @@ int switch_apfs_measure(const struct switch_apfs_io *io, void *work, uint64_t *b
     while (new_ip_blocks(w, chunks) < pool_used) {
         chunks++;
     }
-    *minimum = max64(max64(w->areas_end, w->main_queue_end), max64(used, (chunks - 1) * w->bpc + 1));
-    *blocks = w->blocks;
-    return *minimum > w->blocks;
+    layout->minimum = max64(max64(w->areas_end, w->main_queue_end), max64(used, (chunks - 1) * w->bpc + 1));
+    layout->blocks = w->blocks;
+    layout->pool_base = w->ip_base;
+    layout->pool_blocks = w->ip_blocks;
+    return layout->minimum > w->blocks;
 }
 
 static uint8_t *edited_cib(const struct switch_apfs_io *io, struct work *w, uint32_t index)
@@ -555,13 +557,12 @@ static uint32_t max_volumes(uint64_t blocks)
 int switch_apfs_fit(const struct switch_apfs_io *io, void *work, uint64_t blocks)
 {
     struct work *w = work;
-    uint64_t size = 0;
-    uint64_t minimum = 0;
+    struct switch_apfs_layout layout;
     uint64_t end = 0;
-    if (switch_apfs_measure(io, w, &size, &minimum) || blocks < minimum || blocks > size) {
+    if (switch_apfs_measure(io, w, &layout) || blocks < layout.minimum || blocks > layout.blocks) {
         return 1;
     }
-    if (blocks == size) {
+    if (blocks == layout.blocks) {
         return 0;
     }
     w->cibs_edited = 0;

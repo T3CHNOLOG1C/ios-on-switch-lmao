@@ -32,7 +32,7 @@ int switch_install_stream(const struct switch_image *image, const struct switch_
                           uint64_t partition_sectors, uint8_t *buffer, const uint8_t *zeros, uint32_t zero_bytes)
 {
     if (!image || !io || !io->read || !io->verify || !io->write || !buffer || !zeros || !zero_bytes ||
-        zero_bytes % image->block_size || partition_sectors * 512 != image->partition_bytes) {
+        zero_bytes % image->block_size || partition_sectors * 512 < image->minimum_bytes) {
         return 1;
     }
     struct source s = {image, io, buffer, 0, 0, 0};

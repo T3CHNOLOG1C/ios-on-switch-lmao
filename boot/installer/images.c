@@ -5,29 +5,23 @@
 
 static int has_size(switch_file_size size, void *context, const char *path, uint64_t want)
 {
-    uint64_t bytes;
+    uint64_t bytes = 0;
     return !size(context, path, &bytes) && bytes == want;
 }
 
-enum switch_image_state switch_image_examine(const struct switch_image *image, const char *folder,
+enum switch_image_state switch_image_examine(const struct switch_image *image, const char *path,
                                              switch_file_size size, void *context, const char **missing)
 {
     *missing = NULL;
     if (!image) {
         return SWITCH_IMAGE_UNREADABLE;
     }
-    if (!switch_image_in(image, folder)) {
+    if (!switch_image_named(image, path)) {
         return SWITCH_IMAGE_ELSEWHERE;
     }
     for (uint32_t i = 0; i < image->part_count; i++) {
         if (!has_size(size, context, image->parts[i].path, image->parts[i].bytes)) {
             *missing = image->parts[i].path;
-            return SWITCH_IMAGE_MISSING;
-        }
-    }
-    for (uint32_t i = 0; i < image->boot_count; i++) {
-        if (!has_size(size, context, image->boot[i].path, image->boot[i].bytes)) {
-            *missing = image->boot[i].path;
             return SWITCH_IMAGE_MISSING;
         }
     }

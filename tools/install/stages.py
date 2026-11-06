@@ -1,7 +1,7 @@
-"""//:image's work in three stages, each resumable: compose (no root), populate (root, for file owners), pack.
+"""//:image's work in stages, each kept with the key of what it was made from (keys.py).
 
-The scratch directory's state.json records the last stage finished and what it was made from; a run whose inputs or
-partition size differ starts again from compose.
+Compose and pack run as the user, populate as root (file owners). composed.img stays in the scratch directory for the
+next run; populate works on an APFS clone of it, which pack empties into NAME.SII.* as it goes.
 """
 
 import argparse
@@ -19,6 +19,7 @@ from tools.install import (
     delta,
     folder,
     host,
+    keys,
     manifest,
     pack,
     populate,
@@ -26,10 +27,16 @@ from tools.install import (
 )
 
 STATE = 'state.json'
-IMAGE = 'image.img'
-STAGES = ('compose', 'populate', 'pack')
+COMPOSED = 'composed.img'
+POPULATED = 'populated.img'
+PROOF = 'proof.img'
 STAGING = '/private/preboot/Switch-Staging/'
 FLOOR = 14 << 30
+NOMINAL = 1 << 40
+BLOCK = 4096
+# A fitted container needs room for iOS to run in beyond what the image holds, and iOS a partition of this at least.
+FREE_AFTER_INSTALL = 4 << 30
+SMALLEST_PARTITION = 16 << 30
 # iOS 17's image was composed before per-kind scratch, and the morning command names no --scratch, so 21H461 keeps the
 # unsuffixed directory. Every other build gets its own, so one kind's image never recomposes over another's.
 LEGACY_BUILD = '21H461'
@@ -42,14 +49,8 @@ def default_scratch(build: str) -> Path:
     return base / 'image' if build == LEGACY_BUILD else base / f'image-{build}'
 
 
-def identity(_args: argparse.Namespace, spec: dict, pins: dict, size: int) -> dict:
-    """Return what a composed image depends on besides the boot package (populate reads that afresh)."""
-    return {
-        'partition_bytes': size,
-        'build': pins['build'],
-        'os': pins['members']['os']['content_sha256'],
-        'volumes': {k: v['uuid'] for k, v in spec['volumes'].items()},
-    }
+def version_label(pins: dict) -> str:
+    return 'iPadOS {} ({})'.format(pins['version'], pins['build'])
 
 
 def ipsw_volumes(spec: dict, pins: dict) -> dict:
@@ -68,45 +69,67 @@ def ipsw_volumes(spec: dict, pins: dict) -> dict:
     return spec
 
 
+def boot_files(package: str | Path) -> list[tuple[str, Path]]:
+    """[(name, path)] of the version's boot entry, as install-ios.bin puts them in switchroot/ios/."""
+    entry = cards.BOOT_ENTRY + '/'
+    found = cards.boot_entry_files(package)
+    return [(relative[len(entry) :], found[relative]) for relative in sorted(found) if relative.startswith(entry)]
+
+
+def key_inputs(args: argparse.Namespace, spec: dict, pins: dict) -> dict:
+    """Return what each stage is made from, as plain values for keys.compute."""
+    members = pins['members']
+    roles = getattr(args, 'pretranslate', None) or {}
+    return {
+        'compose': {'os': members['os']['content_sha256'], 'volumes': spec['volumes'], 'nominal': NOMINAL},
+        'populate': {
+            'cryptexes': [members[m]['content_sha256'] for m in ('system_cryptex', 'app_cryptex')],
+            'spec': spec['cryptexes'],
+            'overlay': keys.tree_digest(Path(args.boot_package) / 'overlay'),
+            'gpu': keys.tree_digest(args.gpu_base),
+            'seed': keys.tree_digest(getattr(args, 'shader_seed', None)),
+            'pretranslated_pins': keys.tree_digest(getattr(args, 'pretranslated_pins', None)),
+            'pretranslate': {r: [keys.tree_digest(v['driver']), keys.tree_digest(v['tool'])] for r, v in roles.items()},
+        },
+    }
+
+
+def minimum_bytes(layout: dict) -> int:
+    """Return the smallest partition to install to: what the container uses, room to run, and iOS's floor."""
+    needed = -(-(layout['minimum_bytes'] + FREE_AFTER_INSTALL) // BLOCK) * BLOCK
+    return min(layout['container_bytes'], max(SMALLEST_PARTITION, needed))
+
+
 class Stages:
     def __init__(self, args: argparse.Namespace, spec: dict, pins: dict, log: host.Log):
         self.args, self.spec, self.pins, self.log = args, spec, pins, log
         self.scratch = Path(args.scratch)
-        self.image = self.scratch / IMAGE
+        self.composed, self.populated = self.scratch / COMPOSED, self.scratch / POPULATED
 
-    def state(self, size: int, refuse_other_size: bool = False) -> tuple[str | None, int | None]:
-        path = self.scratch / STATE
-        if not path.is_file() or not self.image.is_file():
-            return None, None
-        saved = json.loads(path.read_text())
-        want = identity(self.args, self.spec, self.pins, size)
-        if saved.get('identity') != want:
-            other = saved.get('identity', {}).get('partition_bytes')
-            if refuse_other_size and other != size and dict(saved['identity'], partition_bytes=size) == want:
-                raise host.HostError(
-                    f'{self.image} was composed for a {other >> 20} MiB partition; '
-                    f"this card's is {size >> 20} MiB. Give that card, or delete {self.scratch / STATE} to start again"
-                )
-            self.log(f'scratch: {self.image} was made from other inputs; starting again')
-            return None, None
-        return saved['stage'], saved['offset']
+    def state(self) -> dict:
+        """{stage: key} of the stages whose output is still here, and the container's offset in the images."""
+        try:
+            saved = json.loads((self.scratch / STATE).read_text())
+        except (OSError, ValueError):
+            return {}
+        found = {'offset': saved.get('offset')}
+        for stage, image in (('compose', self.composed), ('populate', self.populated)):
+            if image.is_file() and saved.get(stage):
+                found[stage] = saved[stage]
+        return found
 
-    def save(self, stage: str, size: int, offset: int) -> None:
-        record = {'stage': stage, 'offset': offset, 'identity': identity(self.args, self.spec, self.pins, size)}
-        (self.scratch / STATE).write_text(json.dumps(record, indent=2) + '\n')
+    def save(self, **changes: object) -> None:
+        saved = {k: v for k, v in self.state().items() if v is not None}
+        saved.update(changes)
+        (self.scratch / STATE).write_text(json.dumps(saved, indent=2) + '\n')
         give_back(self.scratch)
 
-    def clear(self) -> None:
-        for name in (IMAGE, STATE):
-            if (self.scratch / name).exists():
-                (self.scratch / name).unlink()
-
-    def compose(self, size: int) -> int:
+    def compose(self, key: str) -> None:
         self.scratch.mkdir(parents=True, exist_ok=True)
-        self.clear()
-        offset, _ = compose.compose(self.image, self.args.os_dmg, size, self.spec, self.log)
-        self.save('compose', size, offset)
-        return offset
+        for image in (self.composed, self.populated):
+            image.unlink(missing_ok=True)
+        offset, _ = compose.compose(self.composed, self.args.os_dmg, NOMINAL, self.spec, self.log)
+        self.save(compose=key, populate=None, offset=offset)
 
     def roles(self) -> pretranslate.Roles | None:
         """IOS 27's pretranslate drivers by role (pretranslate.py), or None for an IPSW that needs none."""
@@ -194,10 +217,12 @@ class Stages:
                 f'{FLOOR >> 30} GiB kept free; {free >> 30} GiB is'
             )
 
-    def populate(self, size: int, offset: int) -> None:
+    def populate(self, key: str) -> None:
+        self.populated.unlink(missing_ok=True)
+        host.run('cp', '-c', str(self.composed), str(self.populated), log=self.log)
         roles = self.roles()
         self.check_translate_space(roles)
-        disk = compose.attach_raw(self.image, self.log)
+        disk = compose.attach_raw(self.populated, self.log)
         try:
             container = host.container_on(disk + 's1')
             vols = {v['APFSVolumeUUID'].upper(): v['DeviceIdentifier'] for v in (container or {}).get('Volumes', [])}
@@ -229,13 +254,59 @@ class Stages:
             compose.fsck(disk + 's1', 'image', self.log)
         finally:
             host.run('hdiutil', 'detach', disk, log=self.log, check=False)
-        self.save('populate', size, offset)
+        self.save(populate=key)
 
-    def pack(self, size: int, offset: int, install_dir: Path, boot: list[manifest.Boot]) -> manifest.Manifest:
-        prefix = folder.kind_dir(self.pins['build'])
-        m = pack.pack(self.image, offset, size, install_dir, prefix, version_label(self.pins), boot, self.log)
-        self.clear()
+    def measure(self, tool: str, image: Path) -> dict:
+        """apfs_tool's measure of the container in `image`, in bytes."""
+        offset = self.state()['offset']
+        blocks, minimum, pool, pool_blocks = map(int, host.run(tool, str(image), str(offset)).split())
+        b = BLOCK
+        return {
+            'container_bytes': blocks * b,
+            'minimum_bytes': minimum * b,
+            'pool_start': pool * b,
+            'pool_end': (pool + pool_blocks) * b,
+        }
+
+    def prove(self, tool: str, smallest: int) -> None:
+        """Make install-ios.bin's fit on a clone of the real container; the kernel must attach it and fsck pass it."""
+        proof = self.scratch / PROOF
+        proof.unlink(missing_ok=True)
+        host.run('cp', '-c', str(self.populated), str(proof), log=self.log)
+        try:
+            host.run(tool, str(proof), str(self.state()['offset']), str(smallest // BLOCK), log=self.log)
+            disk = compose.attach_raw(proof, self.log)
+            try:
+                if not host.container_on(disk + 's1'):
+                    raise host.HostError(f'the container fitted to {smallest} bytes does not attach')
+                host.run('diskutil', 'unmountDisk', disk + 's1', log=self.log, check=False)
+                compose.fsck(disk + 's1', f'fitted to {smallest >> 20} MiB', self.log)
+            finally:
+                host.run('hdiutil', 'detach', disk, log=self.log, check=False)
+        finally:
+            proof.unlink(missing_ok=True)
+
+    def pack(self, tool: str, out: Path, name: str, files: list[tuple[str, Path]]) -> manifest.Manifest:
+        layout = self.measure(tool, self.populated)
+        layout['minimum_bytes'] = minimum_bytes(layout)
+        self.prove(tool, layout['minimum_bytes'])
+        source = pack.Source(self.populated, self.state()['offset'], layout)
+        target = pack.Target(Path(out) / folder.SII_DIR, folder.SII_DIR, name, version_label(self.pins), files)
+        m = pack.pack(source, target, self.log)
+        self.populated.unlink(missing_ok=True)
+        self.save(populate=None)
         return m
+
+
+def refresh_head(out: Path, name: str, files: list[tuple[str, Path]], label: str) -> manifest.Manifest:
+    """Put new boot files into an image the folder holds: only NAME.SII.001's head is written again."""
+    first = Path(out) / folder.SII_DIR / f'{name}.SII.001'
+    with open(first, 'rb') as f:
+        m = manifest.decode(f.read(manifest.BOOT_OFFSET))
+    m.boot = pack.boot_records(files)
+    m.label = label
+    pack.write_head(Path(out) / folder.SII_DIR, m, files)
+    return m
 
 
 def boot_record(args: argparse.Namespace) -> dict[str, str | None]:
@@ -246,54 +317,6 @@ def boot_record(args: argparse.Namespace) -> dict[str, str | None]:
         'overlay': cards.tree_digest(package / 'overlay'),
         'gpu_trustcache': cards.sha256_file(trust) if trust.is_file() else None,
     }
-
-
-def version_label(pins: dict) -> str:
-    return 'iPadOS {} ({})'.format(pins['version'], pins['build'])
-
-
-def boot_records(args: argparse.Namespace, build: str) -> list[manifest.Boot]:
-    """Return the manifest's records of the kind's boot files, as add_boot() puts them in the kind's folder."""
-    files = folder.boot_files(args.boot_package, build)
-    return [pack.boot_file(relative, source) for relative, source in files.items() if folder.kind_of(relative)]
-
-
-def add_boot(out: Path, args: argparse.Namespace, build: str) -> None:
-    for relative, source in folder.boot_files(args.boot_package, build).items():
-        folder.add(out, relative, source)
-    folder.add(out, folder.PAYLOAD, args.install_payload)
-
-
-def refresh_boot(out: str | Path, args: argparse.Namespace, build: str, log: host.Log) -> None:
-    """Only the kind's boot entry and install-ios.bin, into a folder //:image made, when Data's parts still match.
-
-    The image's manifest records the boot files, so it is written again with theirs.
-    """
-    out = Path(out)
-    record = folder.records(out).get(build)
-    path = out / folder.kind_dir(build) / folder.MANIFEST
-    if not record or not path.is_file():
-        raise host.HostError(f'{out} holds no {build} image //:image finished: run //:image first')
-    current = boot_record(args)
-    changed = [k for k in current if current[k] != record['boot'].get(k)]
-    if changed:
-        raise host.HostError(
-            "the boot package's {} changed since the image was made (it lives on Data): run //:image again".format(
-                ', '.join(changed)
-            )
-        )
-    m = manifest.decode(path.read_bytes())
-    image_files = {folder.MANIFEST} | {Path(p.path).name for p in m.parts}
-    for stale in sorted((out / folder.kind_dir(build)).iterdir()):
-        if stale.is_file() and stale.name not in image_files:
-            stale.unlink()
-    for relative in folder.SHARED:
-        (out / relative).unlink(missing_ok=True)
-    add_boot(out, args, build)
-    m.boot = boot_records(args, build)
-    path.write_bytes(manifest.encode(m))
-    give_back(out)
-    log(f'folder: the {build} boot entry, its manifest and install-ios.bin refreshed in {out}')
 
 
 def give_back(path: Path) -> None:

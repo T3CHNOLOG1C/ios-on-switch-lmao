@@ -206,7 +206,12 @@ struct Container {
     int measure(uint64_t &size, uint64_t &minimum)
     {
         switch_apfs_io i = io();
-        return switch_apfs_measure(&i, work.data(), &size, &minimum);
+        switch_apfs_layout layout{};
+        int error = switch_apfs_measure(&i, work.data(), &layout);
+        size = layout.blocks;
+        minimum = layout.minimum;
+        EXPECT_EQ(layout.pool_base, kPool);
+        return error;
     }
 
     int fit(uint64_t blocks)

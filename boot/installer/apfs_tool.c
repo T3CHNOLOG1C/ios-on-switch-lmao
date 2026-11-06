@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // The installer's container fit on the Mac, for //:image and the tests:
-//   apfs_tool IMAGE OFFSET             prints the container's block count and the smallest it fits to
+//   apfs_tool IMAGE OFFSET             prints, in blocks: the container's size, the smallest it fits to, the pool
 //   apfs_tool IMAGE OFFSET BLOCKS      fits it to BLOCKS
 #include <fcntl.h>
 #include <inttypes.h>
@@ -42,14 +42,14 @@ int main(int argc, char **argv)
         return 1;
     }
     struct switch_apfs_io io = {&f, read_block, write_block};
-    uint64_t blocks = 0;
-    uint64_t minimum = 0;
+    struct switch_apfs_layout layout;
     if (argc == 3) {
-        if (switch_apfs_measure(&io, work, &blocks, &minimum)) {
+        if (switch_apfs_measure(&io, work, &layout)) {
             fprintf(stderr, "%s: not a container the installer can fit\n", argv[1]);
             return 1;
         }
-        printf("%" PRIu64 " %" PRIu64 "\n", blocks, minimum);
+        printf("%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 "\n", layout.blocks, layout.minimum, layout.pool_base,
+               layout.pool_blocks);
         return 0;
     }
     if (switch_apfs_fit(&io, work, strtoull(argv[3], NULL, 0)) || fsync(f.fd)) {

@@ -108,14 +108,7 @@ def _copy_os(os_dmg: str, image: Path, partition_sectors: int, spec: dict, log: 
             first = (gpt.APFS, uuid.uuid4(), START_SECTOR, START_SECTOR + os_bytes // gpt.SECTOR - 1, 'compose')
             for lba, data in gpt.build(disk_sectors, [first]):
                 os.pwrite(ifd, data, lba * gpt.SECTOR)
-            copied = 0
-            while copied < os_bytes:
-                chunk = os.pread(sfd, min(COPY_CHUNK, os_bytes - copied), copied)
-                if not chunk:
-                    raise host.HostError(f'short read of the OS image at {copied}')
-                if chunk.strip(b'\0'):
-                    os.pwrite(ifd, chunk, START_SECTOR * gpt.SECTOR + copied)
-                copied += len(chunk)
+            host.copy_parallel(sfd, 0, ifd, START_SECTOR * gpt.SECTOR, os_bytes)
             os.fsync(ifd)
         finally:
             os.close(sfd)

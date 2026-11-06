@@ -9,6 +9,8 @@ package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
+exports_files(["to_card.py"])
+
 py_library(
     name = "lib",
     srcs = [
@@ -21,6 +23,7 @@ py_library(
         "folder.py",
         "gpt.py",
         "host.py",
+        "keys.py",
         "manifest.py",
         "overlay_index.py",
         "pack.py",
@@ -170,17 +173,38 @@ py_test(
 )
 
 py_test(
+    name = "keys_test",
+    size = "small",
+    srcs = ["keys_test.py"],
+    deps = [":lib"],
+)
+
+py_library(
+    name = "sii_fixture",
+    testonly = True,
+    srcs = ["sii_fixture.py"],
+    imports = ["../.."],
+    deps = [":lib"],
+)
+
+py_test(
     name = "folder_test",
     size = "small",
     srcs = ["folder_test.py"],
-    deps = [":lib"],
+    deps = [
+        ":lib",
+        ":sii_fixture",
+    ],
 )
 
 py_test(
     name = "stages_test",
     size = "small",
     srcs = ["stages_test.py"],
-    deps = [":lib"],
+    deps = [
+        ":lib",
+        ":sii_fixture",
+    ],
 )
 
 py_test(

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// install-ios.bin: writes one of the install images `bazel run //:image` put on the FAT onto the partition it was
-// made for, and makes that image's boot files the ones hekate's iOS entry starts.
+// install-ios.bin: writes one of the install images (switchroot/ios/NAME.SII.*) onto the card's iOS partition, fits
+// its container to the partition, and makes that image's boot files the ones hekate's iOS entry starts.
 #include <bdk.h>
 #include <libs/fatfs/ff.h>
 #include <string.h>
 
+#include "apfs.h"
 #include "bootfiles.h"
 #include "card.h"
 #include "catalog.h"
@@ -76,19 +77,22 @@ static const char *base_name(const char *path)
 
 static void image_row(const struct catalog_entry *e, int selected)
 {
-    char a[SWITCH_SIZE_TEXT], b[SWITCH_SIZE_TEXT];
-    const char *name = e->image ? e->image->label : base_name(e->folder);
+    char a[SWITCH_SIZE_TEXT];
+    char b[SWITCH_SIZE_TEXT];
+    const char *name = e->image ? e->image->label : e->name;
     ui_textf(MARGIN, line_y, 3, selected ? UI_WHITE : UI_GREY, "%s %s", selected ? ">" : " ", name);
     line_y += 32;
     if (e->state == SWITCH_IMAGE_READY) {
-        ui_textf(DETAIL_X, line_y, 2, UI_GREY, "%s image for a %s partition", size_text(e->image->source_bytes, a),
-                 size_text(e->image->partition_bytes, b));
+        ui_textf(DETAIL_X, line_y, 2, UI_GREY, "%s, %s; for a partition of %s or more", e->name,
+                 size_text(SWITCH_IMAGE_BODY_OFFSET + e->image->source_bytes, a),
+                 size_text(e->image->minimum_bytes, b));
     } else if (e->state == SWITCH_IMAGE_MISSING) {
         ui_textf(DETAIL_X, line_y, 2, UI_RED, "Incomplete: %s is missing or the wrong size", base_name(e->missing));
     } else if (e->state == SWITCH_IMAGE_ELSEWHERE) {
-        ui_textf(DETAIL_X, line_y, 2, UI_RED, "Its manifest names files outside %s/", base_name(e->folder));
+        ui_textf(DETAIL_X, line_y, 2, UI_RED, "%s.001 holds %s's manifest: rename it back", e->name,
+                 base_name(e->image->parts[0].path));
     } else {
-        ui_textf(DETAIL_X, line_y, 2, UI_RED, "Unreadable: build it again with this project's //:image");
+        ui_textf(DETAIL_X, line_y, 2, UI_RED, "%s: unreadable, build it again with this project's //:image", e->name);
     }
     line_y += 36;
 }
@@ -99,7 +103,7 @@ static void image_rows(uint32_t count, uint32_t current, int legacy)
         image_row(&images[i], i == current);
     }
     if (legacy) {
-        ui_text(MARGIN, line_y, 2, UI_GREY, SWITCH_IMAGES_DIR "/manifest.bin: older layout, build it again");
+        ui_text(MARGIN, line_y, 2, UI_GREY, SWITCH_IMAGES_DIR "/install/: an older image, build it again");
         line_y += 36;
     }
 }
@@ -221,6 +225,43 @@ static uint64_t find_fat(void)
     return 0;
 }
 
+static int read_stream(void *context, uint64_t at, void *buffer, uint32_t bytes)
+{
+    return source_seek(context, at) || source_read(context, buffer, bytes);
+}
+
+struct partition {
+    uint64_t first;
+};
+
+static int read_block(void *context, uint64_t block, uint8_t *buffer)
+{
+    const struct partition *p = context;
+    return card_read(p->first + block * (SWITCH_APFS_BLOCK / 512), SWITCH_APFS_BLOCK / 512, buffer);
+}
+
+static int write_block(void *context, uint64_t block, const uint8_t *buffer)
+{
+    const struct partition *p = context;
+    return card_write(p->first + block * (SWITCH_APFS_BLOCK / 512), SWITCH_APFS_BLOCK / 512, buffer);
+}
+
+// The container to the partition (or kept as composed on a larger one), then measured again from the card.
+static int fit_container(const struct switch_target *t)
+{
+    void *work = malloc(SWITCH_APFS_WORK_BYTES);
+    struct partition p = {t->first};
+    struct switch_apfs_io io = {&p, read_block, write_block};
+    struct switch_apfs_layout layout;
+    uint64_t bytes = t->sectors * 512 < image->container_bytes ? t->sectors * 512 : image->container_bytes;
+    card_permit(t->first, t->sectors);
+    int error = !work || switch_apfs_fit(&io, work, bytes / SWITCH_APFS_BLOCK) ||
+                switch_apfs_measure(&io, work, &layout) || layout.blocks != bytes / SWITCH_APFS_BLOCK;
+    card_permit_none();
+    free(work);
+    return error;
+}
+
 static int install_boot_files(struct switch_boot_io *io, uint8_t *buffer)
 {
     card_permit(sd_fs.volbase, fat_sectors);
@@ -237,13 +278,13 @@ static void install(const struct switch_target *t)
         return;
     }
     struct source s = {.image = image};
-    struct switch_boot_io boot_io = {&s, catalog_read, catalog_write, source_verify};
+    struct switch_boot_io boot_io = {&s, read_stream, catalog_read, catalog_write, source_verify};
     screen("Checking the image");
     int bad = switch_boot_check(image, &boot_io, buffer);
     if (bad) {
         screen("Damaged install image");
-        say(UI_WHITE, "%s does not match its manifest.", base_name(image->boot[bad - 1].path));
-        say(UI_GREY, "Nothing was written. Copy the folder from");
+        say(UI_WHITE, "%s does not match its manifest.", image->boot[bad - 1].name);
+        say(UI_GREY, "Nothing was written. Copy the image from");
         say(UI_GREY, "your Mac onto the card again.");
         return;
     }
@@ -261,15 +302,23 @@ static void install(const struct switch_target *t)
     if (!error) {
         struct switch_install_io io = {&s, source_read, source_verify, write_sectors, progress};
         card_permit(t->first, t->sectors);
-        error = switch_install_stream(image, &io, t->first, t->sectors, buffer, zeros, ZERO_BYTES);
+        error = source_seek(&s, SWITCH_IMAGE_BODY_OFFSET) ||
+                switch_install_stream(image, &io, t->first, t->sectors, buffer, zeros, ZERO_BYTES);
         card_permit_none();
         source_end(&s);
+    }
+    if (!error && fit_container(t)) {
+        screen("Install failed");
+        say(UI_RED, "The container could not be fitted to %s.", t->name);
+        say(UI_GREY, "%s is now iOS-setup and does not boot.", t->name);
+        say(UI_GREY, "Run install-ios.bin again.");
+        return;
     }
     if (error) {
         screen("Install failed");
         say(UI_RED, "The image could not be read, or the card written.");
         say(UI_GREY, "%s is now iOS-setup and does not boot.", t->name);
-        say(UI_GREY, "Copy the folder from your Mac onto the card again");
+        say(UI_GREY, "Copy the image from your Mac onto the card again");
         say(UI_GREY, "and run install-ios.bin again.");
         return;
     }
@@ -289,15 +338,16 @@ static void install(const struct switch_target *t)
 
 static int fits(const struct switch_target *t)
 {
-    char want[SWITCH_SIZE_TEXT], have[SWITCH_SIZE_TEXT];
-    if (t->sectors * 512 == image->partition_bytes) {
+    char want[SWITCH_SIZE_TEXT];
+    char have[SWITCH_SIZE_TEXT];
+    if (t->sectors * 512 >= image->minimum_bytes) {
         return 1;
     }
-    screen("Wrong size");
-    say(UI_WHITE, "This image is for a %s partition;", size_text(image->partition_bytes, want));
+    screen("Partition too small");
+    say(UI_WHITE, "This image needs a partition of %s;", size_text(image->minimum_bytes, want));
     say(UI_WHITE, "%s is %s. Nothing was written.", t->name, size_text(t->sectors * 512, have));
-    say(UI_GREY, "Run bazelisk run //:image again with this card in");
-    say(UI_GREY, "the Mac. Press any button to go back.");
+    say(UI_GREY, "Make it larger in hekate's partition manager.");
+    say(UI_GREY, "Press any button to go back.");
     press();
     return 0;
 }
@@ -305,7 +355,8 @@ static int fits(const struct switch_target *t)
 static int read_card(int *target_count)
 {
     gpt = malloc(sizeof(*gpt));
-    if (!gpt || card_read_gpt(gpt) || !(fat_sectors = find_fat())) {
+    fat_sectors = gpt && !card_read_gpt(gpt) ? find_fat() : 0;
+    if (!fat_sectors) {
         screen("Unexpected partition table");
         say(UI_WHITE, "The card's GPT is not valid. Nothing was written.");
         return 1;
@@ -331,10 +382,10 @@ static int nothing_to_install(uint32_t count, int legacy)
     screen(count ? "No complete install image" : "No install image");
     image_rows(count, count, legacy);
     if (!count && !legacy) {
-        say(UI_WHITE, "This card has nothing in %s/.", SWITCH_IMAGES_DIR);
+        say(UI_WHITE, "This card has no .SII image in %s/.", SWITCH_IMAGES_DIR);
     }
     say(UI_GREY, "On your Mac, run  bazelisk run //:image");
-    say(UI_GREY, "and copy its folder onto the card.");
+    say(UI_GREY, "and  bazelisk run //:image_to_card");
     return 1;
 }
 

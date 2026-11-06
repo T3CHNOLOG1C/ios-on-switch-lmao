@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Prepare iOS for a Switch: a folder to merge onto the SD card's root.
+"""Prepare iOS for a Switch: out/sd, a folder holding one install image per iOS version.
 
-The folder holds install-ios.bin and the selected kind's install image, which it writes onto the card's Linux or
-Android partition, with that kind's boot entry, which it makes the one hekate starts. Each kind has its own folder
-(folder.py), so a card holds an image of each kind side by side.
+    bazel run //:image [-- --out DIR]                   switchroot/ios/IOS17.SII.* (--config=ios27: IOS27.SII.*)
+    bazel run //:image_dry_run                          the plan, without the IPSW's large members
+    bazel run //:image_to_card -- diskN [--yes]         put the folder's images on the card (to_card.py)
 
-    bazel run //:image [-- --disk diskN | --size 64G] [--partition NAME] [--out DIR] [--copy-to-card]
-    bazel run //:image_dry_run -- [--disk diskN | --size 64G]
-
-The image is made for one partition size: the card's, read from its partition table (diskutil, no root) when it is
-in the Mac, else --size (G and M are GiB and MiB, as hekate's partition manager counts). install-ios.bin refuses any
-other size. Composing and populating the container need root for file owners, so the run asks for sudo once.
+No card is needed: the container is composed for 1 TiB and install-ios.bin fits it to the card's iOS partition, which
+must be at least the image's minimum. Every stage is kept with the key of what it was made from (keys.py), so a rerun
+does only what changed. Populating the container needs root for file owners, so a run that populates asks for sudo
+once.
 """
 
 import argparse
 import json
 import os
-import re
+import resource
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 
@@ -33,9 +32,9 @@ from tools.install import (
     folder,
     gpt,
     host,
+    keys,
     manifest,
     stages,
-    target as targets,
 )
 
 try:
@@ -56,17 +55,10 @@ INPUTS = (
     'shader_seed_size',
     'install_payload',
     'pretranslated_pins',
+    'apfs_tool',
 )
-MIN_BYTES = 16 << 30
 HEADROOM = 4 << 30
 DATA_SEED_BYTES = 1 << 30
-
-
-def parse_size(text: str) -> int:
-    found = re.fullmatch(r'\s*(\d+)\s*([GMgm]?)(?:i?B)?\s*', text)
-    if not found:
-        raise argparse.ArgumentTypeError(f'{text!r}: give bytes, or a number with G (GiB) or M (MiB)')
-    return int(found.group(1)) << {'': 0, 'm': 20, 'g': 30}[found.group(2).lower()]
 
 
 def runfiles() -> 'rules_python_runfiles.Runfiles | None':
@@ -100,45 +92,6 @@ def resolve_inputs(args: argparse.Namespace) -> None:
         args.gpu_base = os.path.dirname(args.gpu_base)
 
 
-def switch_cards() -> list[cards.Card]:
-    found = []
-    for item in host.plist('diskutil', 'list', '-plist', 'physical').get('WholeDisks', []):
-        try:
-            card = cards.resolve(item)
-        except cards.RefusedError:
-            continue
-        parts = cards.diskutil_partitions(card)
-        if parts and parts[0].name == 'hos_data':
-            found.append(card)
-    return found
-
-
-def find_target(
-    args: argparse.Namespace, spec: dict, log: host.Log
-) -> tuple[cards.Card | None, cards.Part | None, cards.Part | None, int]:
-    """(card or None, FAT partition or None, target partition or None, partition bytes)."""
-    if args.size:
-        targets.check_size(args.size)
-        return None, None, None, args.size
-    if args.disk:
-        card = cards.resolve(args.disk)
-    else:
-        found = switch_cards()
-        if len(found) != 1:
-            raise cards.RefusedError(
-                '{} Switch SD cards in this Mac ({}): insert one, name it with --disk, or give --size'.format(
-                    len(found), ', '.join(c.disk for c in found) or 'none'
-                )
-            )
-        card = found[0]
-    fat, partition = cards.check_layout_unprivileged(card, spec, args.partition)
-    log(
-        f'card: {card.disk} ({card.size} bytes); target {partition.identifier} {partition.name!r}, '
-        f'{partition.size} bytes'
-    )
-    return card, fat, partition, partition.size
-
-
 def needed(args: argparse.Namespace, pins: dict, os_bytes: int) -> int:
     seed = 0
     if args.shader_seed_size:
@@ -147,146 +100,151 @@ def needed(args: argparse.Namespace, pins: dict, os_bytes: int) -> int:
     return os_bytes + cryptexes + DATA_SEED_BYTES + seed + HEADROOM
 
 
-def plan_lines(args: argparse.Namespace, size: int, card: cards.Card | None, done: str | None, build: str) -> list[str]:
-    where = args.out
-    parts = f"{card.disk}'s FAT" if args.copy_to_card else where
+def plan_lines(args: argparse.Namespace, first: str | None, name: str) -> list[str]:
+    if first == 'head':
+        return [f"write {name}.SII.001's head (manifest and boot files); the rest is unchanged"]
     steps = [
-        ('compose', f'compose a {size >> 20} MiB iOS container in {args.scratch}'),
-        ('populate', 'populate Data and Preboot (asks for sudo once)'),
-        ('pack', f"pack it and the kind's boot entry into {parts}/{folder.kind_dir(build)}/, add install-ios.bin"),
+        f'compose a 1 TiB iOS container in {args.scratch}/{stages.COMPOSED} (kept for the next run)',
+        'populate Data and Preboot on a clone of it (asks for sudo once)',
+        f'prove the fit on a clone, pack {args.out}/{folder.SII_DIR}/{name}.SII.*',
     ]
-    if args.copy_to_card:
-        steps.append(('pack', f"merge {where} onto {card.disk}'s FAT and eject it"))
-    skip = stages.STAGES[: stages.STAGES.index(done) + 1] if done else ()
-    stop = stages.STAGES.index(args.stop_after) + 1 if args.stop_after else len(stages.STAGES)
-    return [('done: ' if stage in skip else '') + line for stage, line in steps if stage in stages.STAGES[:stop]]
+    start = ('compose', 'populate', 'pack').index(first) if first else len(steps)
+    stop = ('compose', 'populate').index(args.stop_after) + 1 if args.stop_after else len(steps)
+    return [('unchanged: ' if i < start else '') + line for i, line in enumerate(steps[:stop])]
 
 
 def check_inputs(args: argparse.Namespace) -> None:
-    missing = [
-        name
-        for name in ('spec', 'ipsw', 'boot_package', 'gpu_base', 'gpu_stager', 'install_payload')
-        if not getattr(args, name) or not os.path.exists(getattr(args, name))
-    ]
+    names = ['spec', 'ipsw', 'boot_package', 'gpu_base', 'gpu_stager', 'install_payload', 'apfs_tool']
     if not args.dry_run and not args.boot_only:
-        missing += [
-            name
-            for name in ('os_dmg', 'system_cryptex', 'app_cryptex')
-            if not getattr(args, name) or not os.path.exists(getattr(args, name))
-        ]
+        names += ['os_dmg', 'system_cryptex', 'app_cryptex']
+    missing = [n for n in names if not getattr(args, n) or not os.path.exists(getattr(args, n))]
     if missing:
         raise host.HostError('inputs missing: {}'.format(', '.join(missing)))
+
+
+class Timer:
+    """Each stage's wall time and the CPU it and its children used, for the log."""
+
+    def __init__(self, log: host.Log) -> None:
+        self.log = log
+
+    @staticmethod
+    def cpu() -> float:
+        own, children = resource.getrusage(resource.RUSAGE_SELF), resource.getrusage(resource.RUSAGE_CHILDREN)
+        return own.ru_utime + own.ru_stime + children.ru_utime + children.ru_stime
+
+    def __call__(self, stage: str, work: Callable[[], object]) -> object:
+        wall, cpu = time.monotonic(), self.cpu()
+        result = work()
+        wall, cpu = time.monotonic() - wall, self.cpu() - cpu
+        cores = os.cpu_count() or 1
+        share = 100 * cpu / max(wall, 1e-9) / cores
+        self.log(f'time: {stage} {wall:.1f} s wall, {cpu:.1f} s CPU ({share:.0f}% of {cores} cores)')
+        return result
 
 
 class Builder:
     def __init__(self, args: argparse.Namespace, log: host.Log):
         self.args, self.log = args, log
         self.pins = json.loads(Path(args.ipsw).read_text())
-        self.build = self.pins['build']
         self.spec = stages.ipsw_volumes(json.loads(Path(args.spec).read_text()), self.pins)
+        self.name, self.label = folder.image_name(self.pins), stages.version_label(self.pins)
+        self.time = Timer(log)
 
     def warm(self) -> int:
         check_inputs(self.args)
-        self.log(f'image: {stages.version_label(self.pins)}: warming translations')
+        self.log(f'image: {self.label}: warming translations')
         stages.Stages(self.args, self.spec, self.pins, self.log).warm_translations()
         self.log(f'translations kept in {Path(self.args.scratch) / stages.TRANSLATIONS}')
         return 0
 
     def run(self) -> int:
         check_inputs(self.args)
+        files = stages.boot_files(self.args.boot_package)
+        out = Path(self.args.out) if self.args.dry_run else folder.prepare(self.args.out)
+        record = folder.records(out).get(self.name)
+        if not (out / folder.SII_DIR / f'{self.name}.SII.001').is_file():
+            record = None
         if self.args.boot_only:
-            stages.refresh_boot(self.args.out, self.args, self.build, self.log)
-            return 0
-        self.log(f'image: {stages.version_label(self.pins)}')
-        card, fat, _partition, size = find_target(self.args, self.spec, self.log)
-        if size < MIN_BYTES:
-            raise cards.RefusedError(
-                f'{size} bytes is too small for iOS: make the partition at least {MIN_BYTES >> 30} GiB'
-            )
-        if self.args.copy_to_card and not card:
-            raise cards.RefusedError('--copy-to-card writes to the card: put it in the Mac instead of giving --size')
+            return self.boot_only(out, record, files)
+        inputs = stages.key_inputs(self.args, self.spec, self.pins)
+        k = self.time('keys', lambda: keys.compute(inputs, files, self.label))
         work = stages.Stages(self.args, self.spec, self.pins, self.log)
-        done, offset = work.state(size, refuse_other_size=self.args.copy_to_card)
-        for line in plan_lines(self.args, size, card, done, self.build):
+        first = keys.first_stage(k, work.state(), record)
+        self.log(f'image: {self.label} as {self.name}.SII')
+        for line in plan_lines(self.args, first, self.name):
             self.log('  plan:', line)
-        for relative in folder.listing(self.args.boot_package, self.build):
-            self.log('  card:', relative)
-        if self.args.dry_run:
-            self.log('dry run: nothing written')
+        if self.args.dry_run or first is None:
+            self.log('dry run: nothing written' if self.args.dry_run else f'{self.name}.SII: unchanged')
             return 0
-        if done is None:
-            self.check_space(size)
-            offset = work.compose(size)
-            done = 'compose'
-            self.log(f'compose: done; the image is {allocated(work.image) >> 20} MiB on disk')
-        if self.args.stop_after == 'compose':
+        if first == 'head':
+            self.time('head', lambda: stages.refresh_head(out, self.name, files, self.label))
+            self.finish(out, k)
             return 0
-        if done == 'compose':
-            if os.geteuid() != 0:
-                reexec_as_root(self.args)
-            work.populate(size, offset)
-            done = 'populate'
-        if self.args.stop_after == 'populate':
+        if not self.compose_and_populate(work, k, first):
             return 0
-        out = folder.prepare(self.args.out, self.build)
-        if self.args.copy_to_card:
-            self.pack_to_card(work, card, fat, size, offset, out)
-        else:
-            m = work.pack(size, offset, out / folder.kind_dir(self.build), stages.boot_records(self.args, self.build))
-            self.finish(out, m)
-            self.log(f"folder: {out} ({len(folder.files(out))} files); merge it onto the SD card's root")
+        m = self.time('pack', lambda: work.pack(self.args.apfs_tool, out, self.name, files))
+        self.finish(out, k, m.minimum_bytes)
+        self.log(f'folder: {out}; {self.name} needs a partition of {m.minimum_bytes / (1 << 30):.1f} GiB or more')
         return 0
 
-    def check_space(self, size: int) -> None:
+    def compose_and_populate(self, work: stages.Stages, k: keys.Keys, first: str) -> bool:
+        """Run compose and populate as far as `first` and --stop-after ask; return whether pack comes next."""
+        if first == 'compose':
+            self.check_space()
+            self.time('compose', lambda: work.compose(k.compose))
+        if self.args.stop_after == 'compose':
+            return False
+        if first in ('compose', 'populate'):
+            if os.geteuid() != 0:
+                reexec_as_root(self.args)
+            self.time('populate', lambda: work.populate(k.populate))
+        return self.args.stop_after != 'populate'
+
+    def boot_only(self, out: Path, record: dict | None, files: list[tuple[str, Path]]) -> int:
+        if not record:
+            raise host.HostError(f'{out} holds no {self.name}.SII //:image finished: run //:image first')
+        current = stages.boot_record(self.args)
+        changed = [k for k in current if current[k] != record.get('boot', {}).get(k)]
+        if changed:
+            raise host.HostError(
+                "the boot package's {} changed since the image was made (it lives on Data): run //:image".format(
+                    ', '.join(changed)
+                )
+            )
+        stages.refresh_head(out, self.name, files, self.label)
+        self.add_shared(out)
+        folder.record(out, self.name, dict(record, head=None))
+        self.log(f'folder: the head of {self.name}.SII.001 and install-ios.bin refreshed in {out}')
+        return 0
+
+    def add_shared(self, out: Path) -> None:
+        entry = cards.boot_entry_files(self.args.boot_package)
+        for relative in (cards.INI, cards.ICON):
+            if relative in entry:
+                folder.add(out, relative, entry[relative])
+        folder.add(out, folder.PAYLOAD, self.args.install_payload)
+
+    def finish(self, out: Path, k: keys.Keys, minimum: int | None = None) -> None:
+        before = folder.records(out).get(self.name, {})
+        entry = {'pack': k.pack, 'head': k.head, 'label': self.label, 'boot': stages.boot_record(self.args)}
+        entry['minimum_bytes'] = minimum or before.get('minimum_bytes')
+        folder.record(out, self.name, entry)
+        kept = Path(self.args.scratch) / 'pretranslated'
+        if kept.is_dir():
+            shutil.copytree(kept, Path(out) / 'pretranslated', dirs_exist_ok=True)
+            shutil.rmtree(kept)
+        self.add_shared(out)
+        stages.give_back(out)
+
+    def check_space(self) -> None:
         want = needed(self.args, self.pins, compose.os_container_bytes(self.args.os_dmg, self.log))
-        if size < want:
-            raise cards.RefusedError(f'the partition is {size} bytes; this iOS needs at least {want}')
         free = stages.free_bytes(self.args.scratch)
         if free < want + stages.FLOOR:
             raise host.HostError(
                 f'{self.args.scratch} has {free >> 30} GiB free; composing needs about {want >> 30} GiB and leaves '
                 f'{stages.FLOOR >> 30} GiB'
             )
-
-    def finish(self, out: Path, m: manifest.Manifest) -> None:
-        entry = {'label': m.label, 'partition_bytes': m.partition_bytes, 'boot': stages.boot_record(self.args)}
-        folder.record(out, self.build, entry)
-        kept = Path(self.args.scratch) / 'pretranslated'
-        if kept.is_dir():
-            shutil.copytree(kept, Path(out) / 'pretranslated', dirs_exist_ok=True)
-            shutil.rmtree(kept)
-        stages.add_boot(out, self.args, self.build)
-        stages.give_back(out)
-
-    def pack_to_card(
-        self, work: stages.Stages, card: cards.Card, fat: cards.Part, size: int, offset: int, out: Path
-    ) -> None:
-        """Pack the parts straight onto the card's FAT: no second local copy of the image.
-
-        The folder keeps a copy of the manifest, which //:image_boot writes again when it refreshes the boot entry.
-        """
-        with cards.mounted(fat.identifier, self.log) as root:
-            for relative in folder.remove_legacy(root):
-                self.log("card: removed the older layout's", relative)
-            install = Path(root) / folder.kind_dir(self.build)
-            if install.exists():
-                shutil.rmtree(install)
-            install.mkdir(parents=True)
-            free = shutil.disk_usage(root).free
-            if free < allocated(work.image):
-                raise host.HostError(
-                    f"the card's FAT has {free >> 20} MiB free; the image needs about {allocated(work.image) >> 20} MiB"
-                )
-            m = work.pack(size, offset, install, stages.boot_records(self.args, self.build))
-            shutil.copyfile(install / folder.MANIFEST, out / folder.kind_dir(self.build) / folder.MANIFEST)
-            self.finish(out, m)
-            folder.merge(out, root, self.log, keep=[p.path for p in m.parts])
-        host.run('diskutil', 'eject', card.disk, log=self.log)
-        self.log('ejected', card.disk, "- in the Switch, run install-ios.bin from hekate's Payloads")
-
-
-def allocated(path: Path) -> int:
-    return os.stat(path).st_blocks * 512 if os.path.exists(path) else 0
 
 
 def reexec_as_root(args: argparse.Namespace) -> NoReturn:
@@ -314,18 +272,9 @@ def reexec_as_root(args: argparse.Namespace) -> NoReturn:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    where = parser.add_mutually_exclusive_group()
-    where.add_argument('--disk', help="the Switch SD card's whole disk (default: the one Switch card in this Mac)")
-    where.add_argument('--size', type=parse_size, help="the partition's exact size, when the card is not in the Mac")
-    parser.add_argument('--partition', help='the partition by GPT name, when the card has Linux and Android')
     parser.add_argument('--out', help='the folder to write (default: out/sd in the source tree)')
-    parser.add_argument(
-        '--copy-to-card',
-        action='store_true',
-        help='write the image and folder onto the card, then eject it (no local copy of the image)',
-    )
-    parser.add_argument('--boot-only', action='store_true', help="refresh only the boot entry in --out's folder")
-    parser.add_argument('--stop-after', choices=stages.STAGES[:2], help='stop after this stage; rerun to go on')
+    parser.add_argument('--boot-only', action='store_true', help="rewrite only the image's boot files (the head)")
+    parser.add_argument('--stop-after', choices=('compose', 'populate'), help='stop after this stage; rerun to go on')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument(
         '--warm-translations',
@@ -337,8 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         action='store_true',
         help="populate takes translations from the scratch's memo instead of translating again",
     )
-    parser.add_argument('--keep-scratch', action='store_true')
-    parser.add_argument('--scratch', help='where the container is composed (needs its size in free space, sparse)')
+    parser.add_argument('--scratch', help='where the container is composed and kept (sparse; about 15 GB used)')
     parser.add_argument('--log')
     parser.add_argument('--inputs', action='append', help='a JSON file of the inputs below (//install:image_inputs)')
     for name in INPUTS:

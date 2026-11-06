@@ -23,54 +23,59 @@ TEST(Manifest, DecodesWhatTheMacWrote)
 {
     Image m;
     ASSERT_EQ(m.decode(), 0);
-    EXPECT_EQ(m.image.partition_bytes, 16u << 20);
-    EXPECT_EQ(m.image.block_size, 4096u);
-    EXPECT_EQ(m.image.part_count, 2u);
-    EXPECT_STREQ(m.image.parts[1].path, "switchroot/ios/install/21H461/part-01.bin");
-    EXPECT_EQ(m.image.extent_count, 3u);
+    EXPECT_EQ(m.image.container_bytes, 32 * switch_test::kMiB);
+    EXPECT_EQ(m.image.minimum_bytes, switch_test::kMinimum);
+    EXPECT_EQ(m.image.manifest_bytes, m.raw.size());
+    EXPECT_EQ(m.image.block_size, 4096U);
+    ASSERT_EQ(m.image.part_count, 2U);
+    EXPECT_STREQ(m.image.parts[1].path, "switchroot/ios/IOS17.SII.002");
+    EXPECT_EQ(m.image.parts[0].bytes, 80 * switch_test::kMiB);
+    EXPECT_EQ(m.image.parts[1].bytes, 12U * 1024);
+    EXPECT_EQ(m.image.extent_count, 3U);
     EXPECT_EQ(m.image.extents[1].source, SWITCH_IMAGE_ZERO);
-    EXPECT_EQ(m.image.hash_count, 2u);
+    EXPECT_EQ(m.image.hash_count, 2U);
     EXPECT_STREQ(m.image.label, "iPadOS 17.7.11 (21H461)");
-    ASSERT_EQ(m.image.boot_count, 2u);
-    EXPECT_STREQ(m.image.boot[0].path, "switchroot/ios/install/21H461/bl31.bin");
-    EXPECT_EQ(m.image.boot[0].bytes, 3000u);
-    EXPECT_EQ(m.image.boot[0].first_hash, 2u);
-    EXPECT_EQ(m.image.boot[1].bytes, (9u << 20) + 5);
-    EXPECT_EQ(m.image.boot[1].first_hash, 3u);
-    EXPECT_EQ(m.image.hash_total, 5u);
+    ASSERT_EQ(m.image.boot_count, 2U);
+    EXPECT_STREQ(m.image.boot[0].name, "bl31.bin");
+    EXPECT_EQ(m.image.boot[0].offset, SWITCH_IMAGE_BOOT_OFFSET);
+    EXPECT_EQ(m.image.boot[0].bytes, 3000U);
+    EXPECT_EQ(m.image.boot[0].first_hash, 2U);
+    EXPECT_EQ(m.image.boot[1].offset, SWITCH_IMAGE_BOOT_OFFSET + 4096U);
+    EXPECT_EQ(m.image.boot[1].bytes, (9 * switch_test::kMiB) + 5);
+    EXPECT_EQ(m.image.boot[1].first_hash, 3U);
+    EXPECT_EQ(m.image.hash_total, 5U);
 }
 
-TEST(Manifest, KnowsItsOwnFolderWhateverTheCase)
+TEST(Manifest, KnowsItsFirstPartWhateverTheCase)
 {
     Image m;
     ASSERT_EQ(m.decode(), 0);
-    EXPECT_TRUE(switch_image_in(&m.image, "switchroot/ios/install/21H461"));
-    EXPECT_TRUE(switch_image_in(&m.image, "SWITCHROOT/ios/install/21h461"));
-    EXPECT_FALSE(switch_image_in(&m.image, "switchroot/ios/install"));
-    EXPECT_FALSE(switch_image_in(&m.image, "switchroot/ios/install/24B119"));
-    EXPECT_FALSE(switch_image_in(&m.image, "switchroot/ios/install/21H461/"));
+    EXPECT_TRUE(switch_image_named(&m.image, "switchroot/ios/IOS17.SII.001"));
+    EXPECT_TRUE(switch_image_named(&m.image, "SWITCHROOT/ios/ios17.sii.001"));
+    EXPECT_FALSE(switch_image_named(&m.image, "switchroot/ios/IOS17.SII.002"));
+    EXPECT_FALSE(switch_image_named(&m.image, "switchroot/ios/IOS17.SII.0011"));
 }
 
-TEST(Manifest, RefusesTheFirstVersion)
+TEST(Manifest, RefusesEarlierVersions)
 {
-    Image m;
-    m.raw[8] = 1;
-    m.reseal();
-    EXPECT_NE(m.decode(), 0);
-}
-
-TEST(Manifest, RefusesBootFilesOutsideTheImageOrOverTheUsersFiles)
-{
-    for (const char *path : {"switchroot/ios/install/24B119/bl31.bin", "switchroot/ios/install/21H461/bootargs.txt",
-                             "switchroot/ios/install/21H461/manifest.bin", "switchroot/ios/install/21H461/part-00.bin",
-                             "bl31.bin", "switchroot/ios/install/21H461/../bl31.bin"}) {
+    for (uint8_t version : {1, 2}) {
         Image m;
-        m.set_path(SWITCH_IMAGE_HEADER_BYTES + 2 * SWITCH_IMAGE_RECORD_BYTES, path);
-        EXPECT_NE(m.decode(), 0) << path;
+        m.raw[8] = version;
+        m.reseal();
+        EXPECT_NE(m.decode(), 0) << int(version);
+    }
+}
+
+TEST(Manifest, RefusesBootFilesThatWouldLandOnAnotherFile)
+{
+    const size_t first_boot = SWITCH_IMAGE_HEADER_BYTES + (2 * SWITCH_IMAGE_RECORD_BYTES);
+    for (const char *name : {"bootargs.txt", "manifest.bin", "../bl31.bin", "boot/bl31.bin", "", "bl33.bin"}) {
+        Image m;
+        m.setPath(first_boot, name);
+        EXPECT_NE(m.decode(), 0) << name;
     }
     Image renamed;
-    renamed.set_path(SWITCH_IMAGE_HEADER_BYTES + 2 * SWITCH_IMAGE_RECORD_BYTES,
-                     "switchroot/ios/install/21H461/bootlogo.bmp");
+    renamed.setPath(first_boot, "bootlogo.bmp");
     EXPECT_EQ(renamed.decode(), 0);
 }
 
@@ -165,15 +170,27 @@ TEST(Stream, WritesNothingOfAChunkThatFailsItsHash)
     }));
 }
 
-TEST(Stream, RefusesAPartitionOfAnotherSize)
+TEST(Stream, RefusesAPartitionBelowTheMinimum)
 {
     Image m;
     ASSERT_EQ(m.decode(), 0);
     std::vector<uint8_t> source = load("source.bin");
     Device d(source);
-    d.partition.resize(d.partition.size() + 4096, 0xA5);
+    d.partition.resize(d.partition.size() - 4096);
     EXPECT_NE(stream(d, m.image), 0);
-    EXPECT_EQ(d.read_at, 0u);
+    EXPECT_EQ(d.read_at, 0U);
+}
+
+TEST(Stream, WritesTheSameIntoALargerPartition)
+{
+    Image m;
+    ASSERT_EQ(m.decode(), 0);
+    std::vector<uint8_t> source = load("source.bin");
+    std::vector<uint8_t> expected = load("expected.bin");
+    Device d(source);
+    d.partition.resize(d.partition.size() + (4 * switch_test::kMiB), 0xA5);
+    ASSERT_EQ(stream(d, m.image), 0);
+    EXPECT_TRUE(std::equal(expected.begin(), expected.end(), d.partition.begin()));
 }
 
 TEST(Stream, RefusesASourceWithoutTheContainerSuperblock)

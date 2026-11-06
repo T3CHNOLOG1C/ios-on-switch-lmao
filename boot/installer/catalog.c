@@ -5,7 +5,7 @@
 #include <libs/fatfs/ff.h>
 #include <string.h>
 
-#define MANIFEST_NAME "manifest.bin"
+#define LEGACY_MANIFEST SWITCH_IMAGES_DIR "/install/manifest.bin"
 
 static int file_size(void *context, const char *path, uint64_t *bytes)
 {
@@ -18,17 +18,15 @@ static int file_size(void *context, const char *path, uint64_t *bytes)
     return 0;
 }
 
-static struct switch_image *load(const char *folder)
+// The manifest from the head of the image's first part.
+static struct switch_image *load(const char *path)
 {
-    char path[SWITCH_IMAGE_PATH_BYTES + sizeof(MANIFEST_NAME)];
-    strcpy(path, folder);
-    strcat(path, "/" MANIFEST_NAME);
     FIL file;
     if (f_open(&file, path, FA_READ) != FR_OK) {
         return NULL;
     }
-    uint32_t size = (uint32_t)f_size(&file);
-    uint8_t *raw = f_size(&file) <= SWITCH_IMAGE_MAX_BYTES ? malloc(size) : NULL;
+    UINT size = f_size(&file) < SWITCH_IMAGE_BOOT_OFFSET ? (UINT)f_size(&file) : SWITCH_IMAGE_BOOT_OFFSET;
+    uint8_t *raw = malloc(size);
     struct switch_image_extent *extents = malloc(SWITCH_IMAGE_MAX_EXTENTS * sizeof(*extents));
     struct switch_image *image = malloc(sizeof(*image));
     UINT got = 0;
@@ -44,15 +42,18 @@ static struct switch_image *load(const char *folder)
     return image;
 }
 
-static void insert_sorted(struct catalog_entry *entries, uint32_t count, const char *folder)
+static void insert_sorted(struct catalog_entry *entries, uint32_t count, const char *name)
 {
     uint32_t at = count;
-    while (at && strcmp(entries[at - 1].folder, folder) > 0) {
+    while (at && strcmp(entries[at - 1].name, name) > 0) {
         entries[at] = entries[at - 1];
         at--;
     }
     memset(&entries[at], 0, sizeof(entries[at]));
-    strcpy(entries[at].folder, folder);
+    strcpy(entries[at].path, SWITCH_IMAGES_DIR "/");
+    strcat(entries[at].path, name);
+    strcpy(entries[at].name, name);
+    entries[at].name[strlen(name) - 4] = 0;
 }
 
 uint32_t catalog_scan(struct catalog_entry *entries)
@@ -60,33 +61,26 @@ uint32_t catalog_scan(struct catalog_entry *entries)
     DIR dir;
     FILINFO info;
     uint32_t count = 0;
-    if (f_opendir(&dir, SWITCH_IMAGES_DIR) != FR_OK) {
-        return 0;
-    }
-    while (count < SWITCH_IMAGES_MAX && f_readdir(&dir, &info) == FR_OK && info.fname[0]) {
-        uint32_t n = strlen(info.fname);
-        if (!(info.fattrib & AM_DIR) || info.fname[0] == '.' ||
-            sizeof(SWITCH_IMAGES_DIR) + n + 1 > SWITCH_IMAGE_PATH_BYTES) {
-            continue;
+    FRESULT found = f_findfirst(&dir, &info, SWITCH_IMAGES_DIR, SWITCH_IMAGES_FIRST);
+    while (found == FR_OK && info.fname[0] && count < SWITCH_IMAGES_MAX) {
+        if (!(info.fattrib & AM_DIR) && sizeof(SWITCH_IMAGES_DIR) + strlen(info.fname) < SWITCH_IMAGE_PATH_BYTES) {
+            insert_sorted(entries, count++, info.fname);
         }
-        char folder[SWITCH_IMAGE_PATH_BYTES];
-        strcpy(folder, SWITCH_IMAGES_DIR "/");
-        strcat(folder, info.fname);
-        insert_sorted(entries, count++, folder);
+        found = f_findnext(&dir, &info);
     }
     f_closedir(&dir);
     for (uint32_t i = 0; i < count; i++) {
         struct catalog_entry *e = &entries[i];
-        e->image = load(e->folder);
-        e->state = switch_image_examine(e->image, e->folder, file_size, NULL, &e->missing);
+        e->image = load(e->path);
+        e->state = switch_image_examine(e->image, e->path, file_size, NULL, &e->missing);
     }
     return count;
 }
 
 int catalog_legacy(void)
 {
-    uint64_t bytes;
-    return !file_size(NULL, SWITCH_IMAGES_DIR "/" MANIFEST_NAME, &bytes);
+    uint64_t bytes = 0;
+    return !file_size(NULL, LEGACY_MANIFEST, &bytes);
 }
 
 int catalog_read(void *context, const char *path, uint64_t at, void *buffer, uint32_t bytes)

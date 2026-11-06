@@ -23,6 +23,9 @@ inline std::vector<uint8_t> load(const char *name)
     return {std::istreambuf_iterator<char>(in), {}};
 }
 
+constexpr uint64_t kMiB = uint64_t(1) << 20;
+constexpr uint64_t kMinimum = 16 * kMiB;
+
 // manifest_vectors.py's boot_bytes().
 inline std::vector<uint8_t> boot_bytes(const char *name, size_t size)
 {
@@ -55,7 +58,7 @@ struct Image {
         std::memcpy(raw.data() + 64, &crc, 4);
     }
 
-    void set_path(size_t record, const char *path)
+    void setPath(size_t record, const char *path)
     {
         std::memset(raw.data() + record, 0, SWITCH_IMAGE_PATH_BYTES);
         std::memcpy(raw.data() + record, path, std::strlen(path));

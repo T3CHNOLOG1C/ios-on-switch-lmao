@@ -22,9 +22,17 @@ struct switch_apfs_io {
     int (*write)(void *context, uint64_t block, const uint8_t *buffer);
 };
 
-// The container's block count and the smallest switch_apfs_fit takes. 0, or nonzero for a container it cannot fit.
-// `work` is SWITCH_APFS_WORK_BYTES.
-int switch_apfs_measure(const struct switch_apfs_io *io, void *work, uint64_t *blocks, uint64_t *minimum);
+// In blocks: the container's size, the smallest switch_apfs_fit takes, and the internal pool, which holds the
+// bitmaps the fit edits.
+struct switch_apfs_layout {
+    uint64_t blocks;
+    uint64_t minimum;
+    uint64_t pool_base;
+    uint64_t pool_blocks;
+};
+
+// 0, or nonzero for a container it cannot fit. `work` is SWITCH_APFS_WORK_BYTES.
+int switch_apfs_measure(const struct switch_apfs_io *io, void *work, struct switch_apfs_layout *layout);
 
 // Shrinks the container to `blocks` (from switch_apfs_measure's minimum up to its size; its size changes nothing).
 // Every check runs before the first write, so a nonzero return has written nothing.

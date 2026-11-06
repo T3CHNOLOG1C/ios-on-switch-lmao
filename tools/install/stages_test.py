@@ -1,13 +1,11 @@
 """A run resumes only from a stage made of the same inputs, and a boot refresh only when Data's parts still match."""
 
-import hashlib
 import tempfile
 import unittest
-import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
-from tools.install import folder, host, manifest, stages
+from tools.install import folder, manifest, sii_fixture, stages
 
 SPEC = {'volumes': {'system': {'uuid': 'S'}, 'data': {'uuid': 'D'}, 'preboot': {'uuid': 'P'}}}
 PINS = {'build': '21H461', 'members': {'os': {'content_sha256': 'abc'}}}
@@ -43,87 +41,51 @@ class TranslationMemoTest(unittest.TestCase):
 class StateTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
-        self.args = SimpleNamespace(scratch=str(self.dir))
-        self.work = stages.Stages(self.args, SPEC, PINS, quiet)
-        (self.dir / stages.IMAGE).write_bytes(b'image')
-        self.work.save('compose', 32 << 30, 1 << 20)
+        self.work = stages.Stages(SimpleNamespace(scratch=str(self.dir)), SPEC, PINS, quiet)
 
-    def test_resumes_the_same_inputs(self):
-        self.assertEqual(self.work.state(32 << 30), ('compose', 1 << 20))
-
-    def test_starts_again_for_other_inputs(self):
-        other = stages.Stages(self.args, SPEC, dict(PINS, build='24B119'), quiet)
-        self.assertEqual(other.state(32 << 30), (None, None))
-        self.assertEqual(self.work.state(64 << 30), (None, None))
-
-    def test_refuses_a_card_of_another_size(self):
-        with self.assertRaisesRegex(host.HostError, '32768 MiB'):
-            self.work.state(64 << 30, refuse_other_size=True)
-
-    def test_no_image_no_state(self):
-        (self.dir / stages.IMAGE).unlink()
-        self.assertEqual(self.work.state(32 << 30), (None, None))
+    def test_a_stage_counts_while_its_image_is_there(self):
+        (self.dir / stages.COMPOSED).write_bytes(b'image')
+        self.work.save(compose='c1', offset=1 << 20)
+        self.assertEqual(self.work.state(), {'offset': 1 << 20, 'compose': 'c1'})
+        self.work.save(populate='p1')
+        self.assertNotIn('populate', self.work.state())
+        (self.dir / stages.POPULATED).write_bytes(b'clone')
+        self.assertEqual(self.work.state()['populate'], 'p1')
+        (self.dir / stages.COMPOSED).unlink()
+        self.assertNotIn('compose', self.work.state())
 
 
-class RefreshTest(unittest.TestCase):
-    BUILD = '21H461'
+class MinimumTest(unittest.TestCase):
+    def test_room_to_run_and_ios_floor(self):
+        layout = {'container_bytes': 1 << 40, 'minimum_bytes': 9 << 30}
+        self.assertEqual(stages.minimum_bytes(layout), 16 << 30)
+        layout['minimum_bytes'] = (20 << 30) + 5
+        self.assertEqual(stages.minimum_bytes(layout), (24 << 30) + 4096)
+        self.assertEqual(stages.minimum_bytes({'container_bytes': 8 << 30, 'minimum_bytes': 1 << 30}), 8 << 30)
 
-    def setUp(self):
-        self.dir = Path(tempfile.mkdtemp())
-        self.package = self.dir / 'package'
-        for relative, data in {
-            'switchroot/ios/bl33.bin': b'kernel 1',
-            'switchroot/ios/bootlogo.bmp': b'logo',
-            'bootloader/ini/ios.ini': b'[iOS]\n',
-            'overlay/usr/bin/tool': b'tool',
-        }.items():
-            (self.package / relative).parent.mkdir(parents=True, exist_ok=True)
-            (self.package / relative).write_bytes(data)
-        self.gpu = self.dir / 'gpu'
-        self.gpu.mkdir()
-        (self.gpu / 'TegraGM20BMetal.trustcache').write_bytes(b'trust')
-        self.payload = self.dir / 'install-ios.bin'
-        self.payload.write_bytes(b'payload')
-        self.args = SimpleNamespace(
-            boot_package=str(self.package), gpu_base=str(self.gpu), install_payload=str(self.payload)
-        )
-        self.out = folder.prepare(self.dir / 'out', self.BUILD)
-        self.kind = self.out / folder.kind_dir(self.BUILD)
-        (self.kind / 'part-00.bin').write_bytes(bytes(4096))
-        m = manifest.Manifest(1 << 30, 4096, uuid.uuid4(), 'iPadOS 17.7.11 (21H461)')
-        m.parts = [manifest.Part(f'{folder.kind_dir(self.BUILD)}/part-00.bin', 4096)]
-        m.extents = [(0, 0, 4096)]
-        m.hashes = [bytes(32)]
-        m.boot = stages.boot_records(self.args, self.BUILD)
-        (self.kind / folder.MANIFEST).write_bytes(manifest.encode(m))
-        stages.add_boot(self.out, self.args, self.BUILD)
-        folder.record(self.out, self.BUILD, {'label': m.label, 'boot': stages.boot_record(self.args)})
 
-    def test_a_kernel_change_refreshes_the_kinds_boot_entry_and_manifest_only(self):
-        (self.package / 'switchroot/ios/bl33.bin').write_bytes(b'kernel 2')
-        (self.package / 'switchroot/ios/bootlogo.bmp').unlink()
-        stages.refresh_boot(self.out, self.args, self.BUILD, quiet)
-        self.assertEqual((self.kind / 'bl33.bin').read_bytes(), b'kernel 2')
-        self.assertFalse((self.kind / 'bootlogo.bmp').exists())
-        self.assertEqual((self.kind / 'part-00.bin').read_bytes(), bytes(4096))
-        m = manifest.decode((self.kind / folder.MANIFEST).read_bytes())
-        self.assertEqual([(b.path, b.bytes) for b in m.boot], [(f'{folder.kind_dir(self.BUILD)}/bl33.bin', 8)])
-        self.assertEqual(m.boot[0].hashes, [hashlib.sha256(b'kernel 2').digest()])
-        self.assertFalse((self.out / 'switchroot/ios/bl33.bin').exists())
+class HeadTest(unittest.TestCase):
+    def test_new_boot_files_change_the_head_only(self):
+        out = folder.prepare(Path(tempfile.mkdtemp()) / 'sd')
+        sii_fixture.make(out, 'IOS17', bytes([7]) * (90 << 20), {'bl33.bin': b'kernel 1'})
+        parts = sorted((out / folder.SII_DIR).glob('IOS17.SII.*'))
+        before = [p.read_bytes() for p in parts]
+        package = out.parent / 'kernel'
+        package.write_bytes(b'kernel 2, longer')
+        m = stages.refresh_head(out, 'IOS17', [('bl33.bin', package)], 'iPadOS 17.7.11 (21H461)')
+        after = [p.read_bytes() for p in parts]
+        self.assertEqual(after[1:], before[1:])
+        self.assertEqual(after[0][manifest.BODY_OFFSET :], before[0][manifest.BODY_OFFSET :])
+        self.assertEqual(manifest.decode(after[0][: manifest.BOOT_OFFSET]), m)
+        start = m.boot[0].offset
+        self.assertEqual(after[0][start : start + 16], b'kernel 2, longer')
 
-    def test_refuses_a_kind_the_folder_does_not_hold(self):
-        with self.assertRaisesRegex(host.HostError, '24B119'):
-            stages.refresh_boot(self.out, self.args, '24B119', quiet)
-
-    def test_refuses_when_the_overlay_changed(self):
-        (self.package / 'overlay/usr/bin/tool').write_bytes(b'tool 2')
-        with self.assertRaisesRegex(host.HostError, 'overlay'):
-            stages.refresh_boot(self.out, self.args, self.BUILD, quiet)
-
-    def test_refuses_when_the_gpu_trust_cache_changed(self):
-        (self.gpu / 'TegraGM20BMetal.trustcache').write_bytes(b'trust 2')
-        with self.assertRaisesRegex(host.HostError, 'gpu_trustcache'):
-            stages.refresh_boot(self.out, self.args, self.BUILD, quiet)
+    def test_boot_files_are_the_packages_boot_entry(self):
+        package = Path(tempfile.mkdtemp())
+        for relative in ('switchroot/ios/bl33.bin', 'switchroot/ios/bl31.bin', 'bootloader/ini/ios.ini'):
+            (package / relative).parent.mkdir(parents=True, exist_ok=True)
+            (package / relative).write_bytes(b'x')
+        self.assertEqual([n for n, _ in stages.boot_files(package)], ['bl31.bin', 'bl33.bin'])
 
 
 class IpswVolumesTest(unittest.TestCase):

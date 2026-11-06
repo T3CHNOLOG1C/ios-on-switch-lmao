@@ -83,7 +83,7 @@ def stage_cryptexes(
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name('.partial-' + target.name)
-        shutil.copyfile(source, partial)
+        host.copy_file_parallel(source, partial)
         if cards.sha256_file(partial) != want:
             partial.unlink()
             raise host.HostError(f'{relative}: copy does not match its sha256')

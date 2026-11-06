@@ -5,9 +5,8 @@
 
 void switch_boot_target(const struct switch_image_boot *boot, char *out)
 {
-    const char *name = strrchr(boot->path, '/') + 1;
     memcpy(out, SWITCH_BOOT_ENTRY "/", sizeof(SWITCH_BOOT_ENTRY));
-    strcpy(out + sizeof(SWITCH_BOOT_ENTRY), name);
+    strcpy(out + sizeof(SWITCH_BOOT_ENTRY), boot->name);
 }
 
 static uint32_t chunk_bytes(const struct switch_image_boot *boot, uint64_t at)
@@ -16,13 +15,16 @@ static uint32_t chunk_bytes(const struct switch_image_boot *boot, uint64_t at)
     return left < SWITCH_IMAGE_HASH_CHUNK ? (uint32_t)left : SWITCH_IMAGE_HASH_CHUNK;
 }
 
+// The boot file's bytes, from the stream (`path` NULL) or the file at `path`, against its hashes.
 static int matches(const struct switch_image_boot *boot, const char *path, const struct switch_boot_io *io,
                    uint8_t *buffer)
 {
     uint32_t chunk = boot->first_hash;
     for (uint64_t at = 0; at < boot->bytes; chunk++) {
         uint32_t n = chunk_bytes(boot, at);
-        if (io->read(io->context, path, at, buffer, n) || io->verify(io->context, chunk, buffer, n)) {
+        int error = path ? io->read_file(io->context, path, at, buffer, n)
+                         : io->read_stream(io->context, boot->offset + at, buffer, n);
+        if (error || io->verify(io->context, chunk, buffer, n)) {
             return 0;
         }
         at += n;
@@ -33,7 +35,7 @@ static int matches(const struct switch_image_boot *boot, const char *path, const
 int switch_boot_check(const struct switch_image *image, const struct switch_boot_io *io, uint8_t *buffer)
 {
     for (uint32_t i = 0; i < image->boot_count; i++) {
-        if (!matches(&image->boot[i], image->boot[i].path, io, buffer)) {
+        if (!matches(&image->boot[i], NULL, io, buffer)) {
             return (int)i + 1;
         }
     }
@@ -46,8 +48,8 @@ static int copy(const struct switch_image_boot *boot, const char *target, const 
     uint32_t chunk = boot->first_hash;
     for (uint64_t at = 0; at < boot->bytes; chunk++) {
         uint32_t n = chunk_bytes(boot, at);
-        if (io->read(io->context, boot->path, at, buffer, n) || io->verify(io->context, chunk, buffer, n) ||
-            io->write(io->context, target, at, buffer, n)) {
+        if (io->read_stream(io->context, boot->offset + at, buffer, n) || io->verify(io->context, chunk, buffer, n) ||
+            io->write_file(io->context, target, at, buffer, n)) {
             return 0;
         }
         at += n;

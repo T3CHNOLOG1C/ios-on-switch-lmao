@@ -131,6 +131,14 @@ alias(
 )
 
 alias(
+    name = "image_apfs_tool",
+    actual = select({
+        ":from_release": "@switch_release//:apfs_tool",
+        "//conditions:default": "//boot/installer:apfs_tool",
+    }),
+)
+
+alias(
     name = "image_install_payload",
     actual = select({
         ":from_release": "@switch_release//:install_payload",
@@ -170,6 +178,7 @@ filegroup(
 image_inputs(
     name = "image_inputs",
     inputs = {
+        "apfs_tool": ":image_apfs_tool",
         "boot_package": "//deploy:boot_package",
         "gpu_base": ":image_gpu_base",
         "gpu_stager": "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
@@ -251,6 +260,14 @@ py_binary(
     ],
 )
 
+# `bazel run //:image_to_card -- diskN [--yes]`: out/sd's images onto the card (tools/install/to_card.py).
+py_binary(
+    name = "image_to_card",
+    srcs = ["//tools/install:to_card.py"],
+    main = "//tools/install:to_card.py",
+    deps = ["//tools/install:lib"],
+)
+
 # The release's image-builder inputs (ios-on-switch-lmao-<version>-image-inputs.tar, r22-ci): this project's built
 # parts the Mac composes with the IPSW, none of them made from it.
 prelink_options(
@@ -280,6 +297,7 @@ release_tree(
     name = "host_tools",
     files = {
         ":shader_tools": "shader",
+        "//boot/installer:apfs_tool": "apfs_tool",
         "//tools:lz4": "lz4",
     },
     tags = ["manual"],

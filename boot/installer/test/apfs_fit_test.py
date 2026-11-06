@@ -1,5 +1,7 @@
-"""The container fit against macOS itself: a container grown to the nominal size, fitted to partitions of other sizes,
-must attach in the kernel at that size and pass fsck_apfs, and a fit below the minimum must change nothing.
+"""The container fit against macOS itself.
+
+A container grown to the nominal size and fitted to partitions of other sizes must attach in the kernel at that size
+and pass fsck_apfs; a fit below the minimum must change nothing.
 
 Manual and local: hdiutil and diskutil on sparse images (about 1 TiB each, a few MB on disk), no root.
 """
@@ -30,7 +32,15 @@ def run(*args: str) -> str:
 def attach(image: Path) -> str:
     out = plistlib.loads(
         subprocess.run(
-            ['/usr/bin/hdiutil', 'attach', '-plist', '-nomount', '-imagekey', 'diskimage-class=CRawDiskImage', str(image)],
+            [
+                '/usr/bin/hdiutil',
+                'attach',
+                '-plist',
+                '-nomount',
+                '-imagekey',
+                'diskimage-class=CRawDiskImage',
+                str(image),
+            ],
             capture_output=True,
             check=True,
         ).stdout
@@ -39,7 +49,9 @@ def attach(image: Path) -> str:
 
 
 def container_size(disk: str) -> int | None:
-    listing = plistlib.loads(subprocess.run(['/usr/sbin/diskutil', 'apfs', 'list', '-plist'], capture_output=True).stdout)
+    listing = plistlib.loads(
+        subprocess.run(['/usr/sbin/diskutil', 'apfs', 'list', '-plist'], capture_output=True, check=False).stdout
+    )
     for c in listing.get('Containers', []):
         if any(s.get('DeviceIdentifier', '').startswith(disk.removeprefix('/dev/') + 's') for s in c['PhysicalStores']):
             return c.get('CapacityCeiling')
@@ -48,7 +60,7 @@ def container_size(disk: str) -> int | None:
 
 class FitTest(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         cls.tool = runfiles.Create().Rlocation('_main/boot/installer/apfs_tool')
         cls.dir = Path(tempfile.mkdtemp())
         cls.nominal = cls.dir / 'nominal.img'
@@ -64,15 +76,15 @@ class FitTest(unittest.TestCase):
         fd = os.open(cls.nominal, os.O_RDONLY)
         cls.offset = gpt.read(fd, os.fstat(fd).st_size).used[-1].first * 512
         os.close(fd)
-        size, minimum = map(int, run(cls.tool, str(cls.nominal), str(cls.offset)).split())
+        size, minimum, _, _ = map(int, run(cls.tool, str(cls.nominal), str(cls.offset)).split())
         cls.size, cls.minimum = size, minimum
 
     @classmethod
-    def tearDownClass(cls):
+    def tearDownClass(cls) -> None:
         shutil.rmtree(cls.dir)
 
     def fitted(self, blocks: int) -> Path:
-        """A partition of exactly `blocks` holding the nominal container fitted to it."""
+        """Make a partition of exactly `blocks` holding the nominal container fitted to it."""
         copy = self.dir / 'copy.img'
         subprocess.run(['/bin/cp', '-c', str(self.nominal), str(copy)], check=True)
         run(self.tool, str(copy), str(self.offset), str(blocks))
@@ -105,8 +117,10 @@ class FitTest(unittest.TestCase):
         try:
             self.assertEqual(container_size(disk), blocks * BLOCK)
             store = disk.removeprefix('/dev/') + 's1'
-            subprocess.run(['/usr/sbin/diskutil', 'unmountDisk', store], capture_output=True)
-            fsck = subprocess.run(['/sbin/fsck_apfs', '-n', '/dev/r' + store], capture_output=True, text=True)
+            subprocess.run(['/usr/sbin/diskutil', 'unmountDisk', store], capture_output=True, check=False)
+            fsck = subprocess.run(
+                ['/sbin/fsck_apfs', '-n', '/dev/r' + store], capture_output=True, text=True, check=False
+            )
             self.assertIn('appears to be OK', fsck.stdout + fsck.stderr)
         finally:
             run('/usr/bin/hdiutil', 'detach', disk)
@@ -123,10 +137,12 @@ class FitTest(unittest.TestCase):
 
     def test_below_the_minimum_nothing_is_written(self):
         result = subprocess.run(
-            [self.tool, str(self.nominal), str(self.offset), str(self.minimum - 1)], capture_output=True
+            [self.tool, str(self.nominal), str(self.offset), str(self.minimum - 1)], capture_output=True, check=False
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(run(self.tool, str(self.nominal), str(self.offset)).split(), [str(self.size), str(self.minimum)])
+        self.assertEqual(
+            run(self.tool, str(self.nominal), str(self.offset)).split()[:2], [str(self.size), str(self.minimum)]
+        )
 
 
 if __name__ == '__main__':
