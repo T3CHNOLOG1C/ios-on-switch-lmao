@@ -337,9 +337,9 @@ def build_layout(kernel_path: Path, adt_path: Path, output_dir: Path, *,
     video_range = None
     if any(video):
         base, display, row, width, height, depth = video
-        native_text = video == [0xF5A00000, 0, 2880, 720, 1280, 0x320]
-        if not base or base % 4 or (not native_text and (display != 1 or depth != 32)) or not width or not height or row < width * 4 or row % 4:
-            raise LayoutError("video requires 32bpp graphics or the native rotated text profile, with valid width/height/stride")
+        native = video[:1] + video[2:] == [0xF5A00000, 2880, 720, 1280, 0x320] and display in (0, 1)
+        if not base or base % 4 or (not native and (display != 1 or depth != 32)) or not width or not height or row < width * 4 or row % 4:
+            raise LayoutError("video requires 32bpp graphics or the native rotated profile, with valid width/height/stride")
         end = bounded_end(base, row * height, "framebuffer")
         if base < mapped_end and mapped_start < end:
             raise LayoutError("block-rounded window overlaps framebuffer")

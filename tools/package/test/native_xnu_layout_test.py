@@ -3,6 +3,7 @@
 from pathlib import Path
 import hashlib
 import json
+import shutil
 import struct
 import tempfile
 import unittest
@@ -356,6 +357,15 @@ class NativeLayoutTests(unittest.TestCase):
     def test_default_adt_window_is_256_mib(self):
         self.tree.write_bytes(adt(window=None))
         self.assertEqual(self.build()['owned_window_size'], N)
+
+    def test_native_rotated_profile_in_text_or_graphics_mode(self):
+        for display in (0, 1):
+            video = [0xF5A00000, display, 2880, 720, 1280, 0x320]
+            with self.subTest(display=display):
+                self.assertEqual(self.build(video=video)['video'], video)
+            shutil.rmtree(self.output)
+        with self.assertRaises(layout.LayoutError):
+            self.build(video=[0xF5A00000, 2, 2880, 720, 1280, 0x320])
 
     def test_bad_command_video_and_source_type_leave_no_output(self):
         for kwargs in (

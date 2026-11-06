@@ -46,7 +46,7 @@ static char console_lines[CONSOLE_ROWS][CONSOLE_COLUMNS + 1];
 static unsigned console_enabled, console_busy, console_head, console_column, console_used;
 static uint64_t console_last_draw;
 static unsigned graphics_owns_display;
-static unsigned native_text_console;
+static unsigned native_text_console, native_profile;
 /* magic,armed,step,error,PC,CPSR,pid,last-return,getpid,sysctl,flags1,flags2,page-size,old-length */
 volatile uint64_t switch_user_record[14];
 
@@ -149,6 +149,11 @@ int switch_diag_console_active(void)
 int switch_native_text_console_active(void)
 {
     return native_text_console;
+}
+
+int switch_native_profile_active(void)
+{
+    return native_profile;
 }
 
 void switch_diag_graphics_takeover(void)
@@ -262,11 +267,12 @@ void switch_diag_init(const boot_args *args)
 {
     const int cpus = (int)ml_get_max_cpu_number() + 1;
     if (!switch_native_cpu_profile_matches(cpus)) return;
-    /* The native verbose profile belongs exclusively to XNU's video console.
+    /* The native profile belongs exclusively to XNU's video console (text mode) or to the boot logo (graphics mode).
      * Keep observations in RAM, but never map or arm the custom HUD renderer. */
-    if (args->Video.v_baseAddr == SWITCH_FB_PA && args->Video.v_display == 0 && args->Video.v_rowBytes == 2880 &&
+    if (args->Video.v_baseAddr == SWITCH_FB_PA && args->Video.v_display <= 1 && args->Video.v_rowBytes == 2880 &&
         args->Video.v_width == 720 && args->Video.v_height == 1280 && args->Video.v_depth == 0x320) {
-        native_text_console = 1;
+        native_profile = 1;
+        native_text_console = args->Video.v_display == 0;
         switch_diag_record.magic = UINT64_C(0x53574348584e5531);
         return;
     }
@@ -334,14 +340,16 @@ __attribute__((no_stack_protector)) void switch_diag_panic(const char *format, v
         __asm__ volatile("dsb sy" ::: "memory");
         for (;;) __asm__ volatile("wfe" ::: "memory");
     }
-    if (native_text_console) {
+    if (native_profile) {
         const int first = !switch_diag_record.panicked;
         switch_diag_record.panicked = 1;
         /* Once the GUI took the screen, SwitchPanicSave.c draws the panic itself (and saves the record): taking XNU's
          * console back has gc_enable kalloc its text buffers with interrupts off, which zalloc_ext's MACH_ASSERT turns
          * into a nested panic that leaves console output disabled. Before the GUI, XNU's console is still on and shows
-         * the panic. */
-        if (first && !switch_panic_begin(format, args, caller, graphics_owns_display != 0) && graphics_owns_display) {
+         * the panic. In graphics mode there is no console: SwitchPanicSave.c always draws it. */
+        const int take_screen = !native_text_console || graphics_owns_display;
+        if (first && !switch_panic_begin(format, args, caller, take_screen) && native_text_console &&
+            graphics_owns_display) {
             graphics_owns_display = 0;
             PE_initialize_console(NULL, kPEAcquireScreen);
         }

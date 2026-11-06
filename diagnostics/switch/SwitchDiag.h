@@ -22,6 +22,7 @@ void switch_diag_panic(const char *format, va_list *args, unsigned long caller);
 extern void (*volatile switch_display_panic_hook)(const char *message);
 int switch_diag_console_active(void);
 int switch_native_text_console_active(void);
+int switch_native_profile_active(void);
 void switch_diag_console_putc(char c);
 void switch_diag_process_event(int pid, const char *name, const char *event, int status);
 void switch_diag_graphics_takeover(void);
@@ -34,6 +35,7 @@ void switch_diag_graphics_takeover(void);
 #define switch_diag_panic(format, args, caller)                      ((void)0)
 #define switch_diag_console_active()                                 0
 #define switch_native_text_console_active()                          0
+#define switch_native_profile_active()                               0
 #define switch_diag_console_putc(c)                                  ((void)0)
 #define switch_diag_process_event(...)                               ((void)0)
 #define switch_diag_graphics_takeover()                              ((void)0)

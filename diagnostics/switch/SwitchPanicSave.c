@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The panic screen and the persistent panic record.
 //
-// Screen (always, native text console profile, once the GUI took the screen): XNU's console was released at the GUI
-// takeover (kPEReleaseScreen frees its text buffers). Taking it back at panic time (SwitchDiag's kPEAcquireScreen) has
-// gc_enable allocate them again, kalloc_data(Z_WAITOK) with interrupts off, which this kernel refuses: MACH_ASSERT is on,
-// and zalloc_ext asserts "Calling {k,z}alloc from interrupt disabled context isn't allowed" (kernel_debugger_entry_count is
-// still 0 there). That nested panic leaves disableConsoleOutput set, so not one line reached the screen NativeLegacyDisplay's
-// panic hook had just blacked, and XNU then spins in SavePanicInfo. Here the
+// Screen (native profile: in graphics mode always, in text mode once the GUI took it): XNU's console was released at
+// the GUI takeover (kPEReleaseScreen frees its text buffers). Taking it back at panic time (SwitchDiag's
+// kPEAcquireScreen) has gc_enable allocate them again, kalloc_data(Z_WAITOK) with interrupts off, which this kernel
+// refuses: MACH_ASSERT is on, and zalloc_ext asserts "Calling {k,z}alloc from interrupt disabled context isn't allowed"
+// (kernel_debugger_entry_count is still 0 there). That nested panic leaves disableConsoleOutput set, so not one line
+// reached the screen NativeLegacyDisplay's panic hook had just blacked, and XNU then spins in SavePanicInfo. Here the
 // panic is drawn straight into the boot framebuffer, which that hook gives window A back as hekate's pitch window: no
-// allocation, no lock, ISO 8x16 glyphs at 1280x720 (XNU's console font and layout). It is drawn at panic entry, again once
-// the other CPUs are halted (a frame copy on another CPU may still have landed over it), and once XNU wrote its panic log.
+// allocation, no lock, ISO 8x16 glyphs at 1280x720 (XNU's console font and layout). It is drawn at panic entry, again
+// once the other CPUs are halted (a frame copy on another CPU may still have landed over it), and once XNU wrote its
+// panic log.
 //
 // Record: hekate's L4T pstore RAM, 0xb0000000 + 2 MiB (hekate bdk/memory_map.h
 // PSTORE_ADDR/PSTORE_SZ). The loader's RAM ledger already keeps it from the VM (scripts/build_native_loader.py exclusion
@@ -443,7 +444,7 @@ static void __attribute__((noreturn)) pmc_reset(void)
 
 void switch_panic_save_init(void)
 {
-    if (switch_native_text_console_active())
+    if (switch_native_profile_active())
         screen = (volatile uint32_t *)ml_io_map_wcomb((vm_offset_t)SWITCH_FB_PA, (vm_size_t)SWITCH_FB_BYTES);
     save_on = 1;
     for (uint64_t pa = REGION_PA; pa < REGION_PA + REGION_BYTES; pa += 4096)

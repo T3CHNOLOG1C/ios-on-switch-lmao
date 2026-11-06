@@ -23,8 +23,10 @@ NATIVE_FULL_RAM_EXCLUSIONS = [r for r in NATIVE_EXCLUSIONS if r[0] != 'retained-
     ('secure-low-tail', 0xFFD00000, 0x300000),
 ]
 
-# boot_args Video: the native rotated text profile (base, display, row bytes, width, height, depth).
-VIDEO = [0xF5A00000, 0, 2880, 720, 1280, 0x320]
+# boot_args Video (base, display, row bytes, width, height, depth): hekate's framebuffer in graphics mode, where XNU
+# never draws, so hekate's boot logo stays on the panel until backboardd draws the same one. Display 0 is the text
+# console.
+VIDEO = [0xF5A00000, 1, 2880, 720, 1280, 0x320]
 
 # The cacheable-copy loader ships the window packed: only its nonzero extents (4 KiB granular; zero gaps shorter than
 # 64 KiB stay in an extent), back to back. Over half the window is zeros (the VA holes between prelinked segments); the
