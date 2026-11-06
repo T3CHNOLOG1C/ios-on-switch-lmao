@@ -8,19 +8,21 @@ usage: mkformats.py <probe.out> <probe.log>
 
 import sys
 
-out = [l.split() for l in open(sys.argv[1]) if l.startswith('FORMAT ') and 'refused' not in l]
+with open(sys.argv[1]) as probe_out:
+    out = [l.split() for l in probe_out if l.startswith('FORMAT ') and 'refused' not in l]
 subs, cur = [], []
-for l in open(sys.argv[2]):
-    if l.startswith('SUBMIT'):
-        subs.append(cur)
-        cur = []
-    else:
-        cur.append(l.rstrip('\n'))
+with open(sys.argv[2]) as probe_log:
+    for l in probe_log:
+        if l.startswith('SUBMIT'):
+            subs.append(cur)
+            cur = []
+        else:
+            cur.append(l.rstrip('\n'))
 # the decoded submissions with a draw, in order: one per FORMAT line
 draws = [s for s in subs if any(x.startswith('DRAW') for x in s)]
 assert len(draws) >= len(out), (len(draws), len(out))
 draws = draws[-len(out) :]
-for f, s in zip(out, draws):
+for f, s in zip(out, draws, strict=False):
     _, i, mtl, size, bpr = f
     w, h = map(int, size.split('x'))
     tics = [x.split() for x in s if x.startswith('P tic ')]

@@ -43,7 +43,6 @@ def shader(d: bytes) -> dict | None:
     at += 132
     sse = d[at]
     mss = struct.unpack_from('<f', d, at + 1)[0]
-    ver = d[at + 5]
     at += 6
     at = (at + 3) // 4 * 4
     code_size, data_size = struct.unpack_from('<II', d, at)
@@ -54,29 +53,32 @@ def shader(d: bytes) -> dict | None:
     at += data_size
     hdr = d[NAK_INFO - 128 : NAK_INFO]
     info = d[:NAK_INFO]
-    return dict(
-        stage=stage,
-        gprs=gprs,
-        cbufs=[(CBUF_TYPES.get(t, t), s, di, off) for t, s, di, _, off in cbufs],
-        code=code,
-        data=cdata,
-        hdr=hdr,
-        info=info,
-        sample_shading=sse,
-        min_sample_shading=mss,
-        slm=struct.unpack_from('<I', d, 40)[0],
-        crs=struct.unpack_from('<I', d, 44)[0],
-        fs=d[48:53],
-        vtg=d[188:193],
-        rest=len(d) - at,
-    )
+    return {
+        'stage': stage,
+        'gprs': gprs,
+        'cbufs': [(CBUF_TYPES.get(t, t), s, di, off) for t, s, di, _, off in cbufs],
+        'code': code,
+        'data': cdata,
+        'hdr': hdr,
+        'info': info,
+        'sample_shading': sse,
+        'min_sample_shading': mss,
+        'slm': struct.unpack_from('<I', d, 40)[0],
+        'crs': struct.unpack_from('<I', d, 44)[0],
+        'fs': d[48:53],
+        'vtg': d[188:193],
+        'rest': len(d) - at,
+    }
 
 
 if __name__ == '__main__':
     for f in sys.argv[1:]:
-        if open(f, 'rb').read(8) != b'M2VPPLC\0':
-            continue
-        for t, k, d in records(open(f, 'rb').read()):
+        with open(f, 'rb') as head:
+            if head.read(8) != b'M2VPPLC\0':
+                continue
+        with open(f, 'rb') as whole:
+            data = whole.read()
+        for t, k, d in records(data):
             s = shader(d)
             if s:
                 print(

@@ -10,19 +10,22 @@ def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
 
 def load(out_path: str, log_path: str, init_submits: int = 4) -> list[dict]:
     probes = []
-    if any(l.startswith('WARMUP') for l in open(out_path)):
-        init_submits += 1
-    for l in open(out_path):
-        if l.startswith('PROBE '):
-            _, i, key = l.rstrip('\n').split(' ', 2)
-            probes.append({'index': int(i), 'key': key.strip()})
+    with open(out_path) as out:
+        if any(l.startswith('WARMUP') for l in out):
+            init_submits += 1
+    with open(out_path) as out:
+        for l in out:
+            if l.startswith('PROBE '):
+                _, i, key = l.rstrip('\n').split(' ', 2)
+                probes.append({'index': int(i), 'key': key.strip()})
     subs, cur = [], []
-    for l in open(log_path):
-        l = l.rstrip('\n')
-        cur.append(l)
-        if l.startswith('SUBMIT'):
-            subs.append(cur)
-            cur = []
+    with open(log_path) as log:
+        for l in log:
+            l = l.rstrip('\n')
+            cur.append(l)
+            if l.startswith('SUBMIT'):
+                subs.append(cur)
+                cur = []
     for n, p in enumerate(probes):
         s = subs[init_submits + n]
         p['draws'] = sum(1 for l in s if l.startswith('DRAW'))
@@ -45,7 +48,7 @@ def load(out_path: str, log_path: str, init_submits: int = 4) -> list[dict]:
                     rec['binds'][(int(f[2]), int(f[3]))] = (int(f[4], 16), int(f[5], 16))
                 elif t in ('root', 'set0', 'set1'):
                     rec[t] = (int(f[2], 16), [int(x, 16) for x in f[3:]])
-                elif t.startswith('ptr') or t.startswith('pushptr'):
+                elif t.startswith(('ptr', 'pushptr')):
                     rec['ptr'][t] = (int(f[2], 16), [int(x, 16) for x in f[3:]])
                 elif t == 'tic':
                     rec['tic'][int(f[2])] = (f[3], [int(x, 16) for x in f[4:]])

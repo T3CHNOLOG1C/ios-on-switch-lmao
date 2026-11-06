@@ -119,7 +119,8 @@ RELOC_CODE = {
 
 
 def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
-    b = open(path, 'rb').read()
+    with open(path, 'rb') as programs:
+        b = programs.read()
     progs, at = {}, 0
     while at + 12 <= len(b):
         assert b[at : at + 4] == b'NVPG'
@@ -150,13 +151,14 @@ def main() -> None:
     programs = load_programs(prog_path)
     # init trace and post-init registers
     init, post = [], {0: {}, 1: {}}
-    for l in open(log_path):
-        if l.startswith('T '):
-            _, sc, m, d = l.split()
-            init.append((int(sc), int(m, 16), int(d, 16)))
-        elif l.startswith('S regs '):
-            f = l.split()
-            post[int(f[2])] = {int(a, 16): int(v, 16) for a, v in (x.split('=') for x in f[3:])}
+    with open(log_path) as log:
+        for l in log:
+            if l.startswith('T '):
+                _, sc, m, d = l.split()
+                init.append((int(sc), int(m, 16), int(d, 16)))
+            elif l.startswith('S regs '):
+                f = l.split()
+                post[int(f[2])] = {int(a, 16): int(v, 16) for a, v in (x.split('=') for x in f[3:])}
     # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate
     report = []
     simple, skipped = [], []
@@ -198,7 +200,7 @@ def main() -> None:
     allregs = set(post[0])
     for p in simple:
         allregs |= set(p['records'][0]['regs'])
-    vals = {m: set(p['records'][0]['regs'].get(m, 0) for p in simple) for m in allregs if not owned(m)}
+    vals = {m: {p['records'][0]['regs'].get(m, 0) for p in simple} for m in allregs if not owned(m)}
     varying = sorted(m for m, v in vals.items() if len(v) > 1)
     baseline = {m: next(iter(v)) for m, v in vals.items() if len(v) == 1 and next(iter(v)) != post[0].get(m, 0)}
     report.append('%d states probed, %d taken, %d skipped' % (len(P), len(simple), len(skipped)))
@@ -251,7 +253,7 @@ def main() -> None:
         ]
         root = r['root'][1]
         rec['push'] = [(int(o, 16), int(x, 16)) for o, x in (w.split('=') for w in r.get('pushw', []))]
-        rec['set_size'] = r['root'][1][0x38 // 4 + 2] if 'set0' in r else 0
+        rec['set_size'] = root[0x38 // 4 + 2] if 'set0' in r else 0
         entries = []
         for e in ents:
             if e[1] == 'ubo':
@@ -399,7 +401,8 @@ def main() -> None:
     hdr = MAGIC + struct.pack('<IIII', VERSION, len(prog_recs), len(pipes), len(constexpr_tsc))
     hdr += struct.pack('<%dQ' % (2 * len(sections)), *[x for o in offs for x in o])
     data = hdr + bytes((header_size + 255) // 256 * 256 - len(hdr)) + body
-    open(os.path.join(out_dir, 'pack.bin'), 'wb').write(data)
+    with open(os.path.join(out_dir, 'pack.bin'), 'wb') as pack_bin:
+        pack_bin.write(data)
     js = {
         'version': VERSION,
         'corpus_hash': '%x' % corpus,
@@ -410,19 +413,21 @@ def main() -> None:
         'varying': ['%x' % m for m in varying],
         'init_methods': len(init_recs),
     }
-    json.dump(
-        js,
-        open(os.path.join(out_dir, 'pack.json'), 'w'),
-        indent=1,
-        default=lambda o: o.hex() if isinstance(o, (bytes, bytearray)) else str(o),
-    )
+    with open(os.path.join(out_dir, 'pack.json'), 'w') as pack_json:
+        json.dump(
+            js,
+            pack_json,
+            indent=1,
+            default=lambda o: o.hex() if isinstance(o, (bytes, bytearray)) else str(o),
+        )
+
     # decoder table: pipeline set-0 layouts by program pair, so nvdec compares only the bytes a layout defines
+    def kinds(e: dict) -> str:
+        return 'u' if e['kind'] == 'ubo' else ('h' if e.get('smp') else 't')  # t: a handle whose sampler is unused
+
     with open(os.path.join(out_dir, 'layouts.txt'), 'w') as f:
         for rec in pipes:
             vs, fs = prog_recs[rec['vs']]['id'], prog_recs[rec['fs']]['id']
-            kinds = lambda e: (
-                'u' if e['kind'] == 'ubo' else ('h' if e.get('smp') else 't')
-            )  # t: a handle whose sampler is unused
             f.write(
                 '%s %s %x %s\n'
                 % (vs, fs, rec['set_size'], ' '.join('%d:%s' % (e['off'], kinds(e)) for e in rec['entries']))
@@ -431,7 +436,8 @@ def main() -> None:
         'pack.bin %d KiB: %d pipelines, %d programs, %d constexpr samplers, %d blob dwords, %d baseline regs'
         % (len(data) // 1024, len(pipes), len(prog_recs), len(constexpr_tsc), len(blob), len(baseline))
     )
-    open(os.path.join(out_dir, 'report.txt'), 'w').write('\n'.join(report) + '\n')
+    with open(os.path.join(out_dir, 'report.txt'), 'w') as report_txt:
+        report_txt.write('\n'.join(report) + '\n')
     print('\n'.join(report))
 
 

@@ -21,20 +21,21 @@ import sys
 
 def frames(path: str) -> list[list[dict]]:
     subs, cur = [], []
-    for l in open(path):
-        l = l.rstrip('\n')
-        if l.startswith('SUBMIT'):
-            subs.append(cur)
-            cur = []
-        elif l.startswith(('DRAW', 'CLEAR', '  ', 'END-OF-SUBMIT')) and not l.startswith(
-            ('  STATE', 'P ')
-        ):  # DRAW-INDEXED too
-            cur.append(l)
+    with open(path) as log:
+        for l in log:
+            l = l.rstrip('\n')
+            if l.startswith('SUBMIT'):
+                subs.append(cur)
+                cur = []
+            elif l.startswith(('DRAW', 'CLEAR', '  ', 'END-OF-SUBMIT')) and not l.startswith(
+                ('  STATE', 'P ')
+            ):  # DRAW-INDEXED too
+                cur.append(l)
     out = []
     for s in subs:
         events, ev = [], None
         for l in s:
-            if l.startswith('DRAW') or l.startswith('CLEAR'):
+            if l.startswith(('DRAW', 'CLEAR')):
                 ev = {'head': l, 'lines': []}
                 events.append(ev)
             elif l.startswith('  ') and ev is not None:
@@ -106,12 +107,12 @@ def fields(ev: dict) -> collections.OrderedDict:
     h = ev['head']
     if h.startswith('DRAW'):
         m = re.match(r'DRAW(?:-INDEXED)? first=(\d+) count=(\d+) begin=(\w+) barriers=(.*)', h)
-        f['draw'] = '%s %s %s %s' % ((h.split()[0],) + m.group(1, 2, 3))
-        f['barriers'] = set(x for x in m.group(4).split(',') if x)
+        f['draw'] = '%s %s %s %s' % (h.split()[0], *m.group(1, 2, 3))
+        f['barriers'] = {x for x in m.group(4).split(',') if x}
     else:
         m = re.match(r'CLEAR (.*) barriers=(.*)', h)
         f['clear'] = m.group(1)
-        f['barriers'] = set(x for x in m.group(2).split(',') if x)
+        f['barriers'] = {x for x in m.group(2).split(',') if x}
     stage = None
     for l in ev['lines']:
         if l.startswith('R '):
@@ -173,7 +174,7 @@ def main() -> int:
     bar_missing = collections.Counter()
     bar_extra = collections.Counter()
     draws = same = clears = 0
-    for fi, (fa, fb) in enumerate(zip(a, b)):
+    for fi, (fa, fb) in enumerate(zip(a, b, strict=False)):
         da = [e for e in fa if e['head'].startswith('DRAW')]
         db = [e for e in fb if e['head'].startswith('DRAW')]
         ca = [fields(e)['clear'] for e in fa if e['head'].startswith('CLEAR')]
@@ -194,7 +195,7 @@ def main() -> int:
         if len(da) != len(db):
             mism['draw count'] += 1
             examples['draw count'].append('frame %d: nvk %d raw %d' % (fi, len(da), len(db)))
-        for di, (ea, eb) in enumerate(zip(da, db)):
+        for di, (ea, eb) in enumerate(zip(da, db, strict=False)):
             draws += 1
             x, y = fields(ea), fields(eb)
             ok = True

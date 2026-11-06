@@ -10,14 +10,24 @@ usage: ordercheck.py <log> <begin_us>
 import sys
 
 runs, stats = [], {}
-for line in open(sys.argv[1]):
-    w = line.split()
-    if w[0] == 'run':
-        runs.append(dict(ch=int(w[1]), seq=int(w[2]), kick=int(w[3]), start=int(w[4]), end=int(w[5]), acq=int(w[6])))
-    elif w[0] == 'order':
-        stats['order'] = (int(w[2]), int(w[4]))
-    elif w[0] == 'waitfence':
-        stats['wait'] = (int(w[2]), int(w[4]))
+with open(sys.argv[1]) as log:
+    for line in log:
+        w = line.split()
+        if w[0] == 'run':
+            runs.append(
+                {
+                    'ch': int(w[1]),
+                    'seq': int(w[2]),
+                    'kick': int(w[3]),
+                    'start': int(w[4]),
+                    'end': int(w[5]),
+                    'acq': int(w[6]),
+                }
+            )
+        elif w[0] == 'order':
+            stats['order'] = (int(w[2]), int(w[4]))
+        elif w[0] == 'waitfence':
+            stats['wait'] = (int(w[2]), int(w[4]))
 begin = int(float(sys.argv[2]) * 1000)
 rawch = max(r['ch'] for r in runs)
 window = sorted((r for r in runs if r['kick'] >= begin), key=lambda r: r['kick'])

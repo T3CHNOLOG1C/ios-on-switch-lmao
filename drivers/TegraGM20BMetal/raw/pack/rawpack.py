@@ -24,6 +24,7 @@ reruns the probes).
 refuses a pack of another build.
 """
 
+import contextlib
 import os
 import shutil
 import struct
@@ -40,14 +41,16 @@ ABI = TREE / 'drivers/TegraGM20B'
 
 
 def run(cmd: list[str | Path], env: dict[str, str] | None = None, out: Path | None = None) -> str:
-    r = subprocess.run(
-        [str(c) for c in cmd],
-        capture_output=out is None,
-        text=True,
-        env=env,
-        stdout=open(out, 'w') if out else None,
-        stderr=subprocess.PIPE if out else None,
-    )
+    with open(out, 'w') if out else contextlib.nullcontext() as stdout:
+        r = subprocess.run(
+            [str(c) for c in cmd],
+            capture_output=out is None,
+            text=True,
+            env=env,
+            stdout=stdout,
+            stderr=subprocess.PIPE if out else None,
+            check=False,
+        )
     if r.returncode:
         sys.exit(
             'rawpack: FAILED: %s\n%s%s'
@@ -189,13 +192,15 @@ def main() -> None:
     cache.mkdir()
 
     def probe(name: str, extra: dict[str, str]) -> None:
-        r = subprocess.run(
-            [str(work / 'probe'), str(nvk), str(cache), str(qc), str(corpus)],
-            env=dict(env, **extra),
-            stdout=open(work / ('%s.out' % name), 'w'),
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        with open(work / ('%s.out' % name), 'w') as out:
+            r = subprocess.run(
+                [str(work / 'probe'), str(nvk), str(cache), str(qc), str(corpus)],
+                env=dict(env, **extra),
+                stdout=out,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
         if r.returncode:
             sys.exit('rawpack: probe %s failed:\n%s' % (name, r.stderr[-4000:]))
         tail = [l for l in r.stderr.splitlines() if l.startswith('probe:')]
@@ -206,11 +211,11 @@ def main() -> None:
     for size in (256, 16, 4096):
         probe(
             'probe%d' % size,
-            dict(
-                PROBE_BYTES=str(size),
-                RAWCAP_LOG=str(work / ('probe%d.log' % size)),
-                RAWCAP_PROGRAMS=str(work / 'programs.bin'),
-            ),
+            {
+                'PROBE_BYTES': str(size),
+                'RAWCAP_LOG': str(work / ('probe%d.log' % size)),
+                'RAWCAP_PROGRAMS': str(work / 'programs.bin'),
+            },
         )
     report = run(
         [

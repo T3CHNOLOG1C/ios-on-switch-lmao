@@ -22,7 +22,8 @@ def main() -> None:
         for root, _, files in os.walk(d):
             for f in files:
                 p = os.path.join(root, f)
-                b = open(p, 'rb').read()
+                with open(p, 'rb') as record:
+                    b = record.read()
                 if b[:8] != b'M2VPPLC\0':
                     continue
                 for t, k, data in nvkshader.records(b):
@@ -35,7 +36,8 @@ def main() -> None:
                     seen.add(key)
                     types = bytes(TYPES.get(c[0], c[0]) if isinstance(c[0], str) else c[0] for c in s['cbufs'])
                     out += b'NVPG' + struct.pack('<II', len(s['code']), len(types)) + types + s['hdr'][:80] + s['code']
-    open(sys.argv[1], 'wb').write(out)
+    with open(sys.argv[1], 'wb') as programs:
+        programs.write(out)
     print('%s: %d programs' % (sys.argv[1], len(seen)))
 
 
