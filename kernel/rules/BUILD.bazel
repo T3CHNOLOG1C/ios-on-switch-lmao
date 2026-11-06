@@ -9,6 +9,7 @@ package(default_visibility = ["//visibility:public"])
 lint_files()
 
 exports_files([
+    "xnu_objects_test.py",
     "xnu_ops.py",
     "xnu_record.py",
 ])

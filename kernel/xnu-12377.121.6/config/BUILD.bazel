@@ -92,10 +92,10 @@ _DOCONF = [
 py_test(
     name = "objects_test",
     size = "small",
-    srcs = ["objects_test.py"],
+    srcs = ["//kernel/rules:xnu_objects_test.py"],
     args = ["$(rootpath :object_names)"] + ["$(rootpaths //kernel/xnu-12377.121.6:config_makefile_{})".format(c) for c in _DOCONF],
     data = [":object_names"] + ["//kernel/xnu-12377.121.6:config_makefile_" + c for c in _DOCONF],
-    main = "objects_test.py",
+    main = "//kernel/rules:xnu_objects_test.py",
 )
 
 # --- KPI exports and symbol sets (config/Makefile) ----------------------------------------------------------------

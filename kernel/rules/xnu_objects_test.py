@@ -4,7 +4,7 @@ objects.bzl is what the native build compiles and links; doconf's Makefile (r18-
 from conf/files and the MASTER options) is what XNU's make would build. A conf/files or MASTER edit that adds, drops or
 moves an object fails here until objects.bzl follows it.
 
-usage: objects_test.py NAMES.txt MAKEFILE...   (NAMES.txt: "<component> <object>" lines; each MAKEFILE's path names
+usage: xnu_objects_test.py NAMES.txt MAKEFILE...   (NAMES.txt: "<component> <object>" lines; each MAKEFILE's path names
        its component: .../<component>/<CONFIG>/Makefile)
 """
 
