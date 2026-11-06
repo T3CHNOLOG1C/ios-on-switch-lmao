@@ -53,8 +53,7 @@ common --experimental_repository_downloader_retries=3
 build --nostamp
 
 # --- Speed ------------------------------------------------------------------------------------------------------
-# Learn what changed from the file system's events (FSEvents) instead of checking every source file: no-op builds.
-common --watchfs
+# No --watchfs: Bazel 9.3.1's FSEvents watch sees no edits on macOS 27, so a running server built stale sources.
 # Do not stat every file of every external repository and every output before each command (a server tracking ~1M
 # nodes spent 7-17 s per command on it). Only Bazel writes either: no repository here is edited in place (no
 # local_repository or symlinked working directory; @pinned, @xcode and @gpu_device_data are checked by sha256 or
