@@ -6075,7 +6075,7 @@ cs_validate_range(
 	}
 #endif
 
-#if DEVELOPMENT || DEBUG
+#if 1 /* ios-on-switch-lmao: in every kernel configuration (was DEVELOPMENT || DEBUG) */
 	code_signing_config_t cs_config = 0;
 
 	/*
@@ -6150,7 +6150,7 @@ cs_validate_page(
 	}
 #endif
 
-#if DEVELOPMENT || DEBUG
+#if 1 /* ios-on-switch-lmao: in every kernel configuration (was DEVELOPMENT || DEBUG) */
 	code_signing_config_t cs_config = 0;
 
 	/*
