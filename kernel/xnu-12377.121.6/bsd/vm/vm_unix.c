@@ -1452,14 +1452,16 @@ out:
 
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
 /*
- * SwitchHomeGrid: 6 columns x 4 rows on the landscape home screen.
+ * SwitchHomeGrid: 5 columns x 3 rows on the landscape home screen.
  *
  * SpringBoardHome takes its grid sizes from a constant table, _defaultRootMetrics (__TEXT.__const, in the r-x
  * TEXT mapping of the iOS 17.7 21H461 cache file dyld_shared_cache_arm64.25), indexed by screen type only.
  * Every iPad type (0x19-0x2b, 16 entries) has the root grid 5x6 portrait / 6x5 landscape. Each entry also
  * holds the grid iPadOS gives pages that contain widgets, 4x6 portrait (landscape 0x0, i.e. the transpose:
- * 6x4), with the same insets. Here every page gets that grid: each entry's root grid bytes {5,6,6,5} become
- * {4,6,6,4}. The icon model's page size follows the portrait grid, so both orientations hold 24 icons.
+ * 6x4), with the same insets. Here every page, with widgets or not, gets 3x5 portrait / 5x3 landscape: each
+ * entry's root grid bytes {5,6,6,5} become {3,5,5,3} and its widget grid {4,6} becomes {3,5}. The icon model's
+ * page size follows the portrait grid, so both orientations hold 15 icons. A widget wider than 3 columns or taller
+ * than 3 rows has no room on such a page.
  *
  * Mechanism (the one the arm64e translator uses for cache text, r8-arm64e): an apple_protect pager on the
  * cache file replaces the two 16 KB pages that hold the 16 entries in the shared region. At page-in it faults
@@ -1495,7 +1497,8 @@ switch_home_grid_page(const void *src, void *dst, unsigned long long src_offset,
 {
 	static const uint8_t stock[8] = { 5, 6, 6, 5, 0, 0, 0, 0 };
 	static const uint8_t widgets[8] = { 4, 6, 0, 0, 0, 0, 0, 0 };
-	static const uint8_t grid[4] = { 4, 6, 6, 4 };
+	static const uint8_t grid[4] = { 3, 5, 5, 3 };
+	static const uint8_t widgetGrid[2] = { 3, 5 };
 	uint8_t *out = dst;
 	unsigned int count = 0;
 
@@ -1521,6 +1524,7 @@ switch_home_grid_page(const void *src, void *dst, unsigned long long src_offset,
 				count++;
 			} else {
 				memcpy(out + at, grid, sizeof(grid));
+				memcpy(out + at + SWITCH_HG_WIDGETS_OFFSET, widgetGrid, sizeof(widgetGrid));
 			}
 		}
 	}
@@ -1531,7 +1535,7 @@ switch_home_grid_page(const void *src, void *dst, unsigned long long src_offset,
 	uint32_t all = (1u << (SWITCH_HG_CHUNKS_SIZE / SWITCH_HG_CHUNK)) - 1;
 	uint32_t before = os_atomic_or_orig(&switch_hg_chunks_done, 1u << chunk, relaxed);
 	if (before != all && (before | (1u << chunk)) == all) {
-		printf("SwitchHomeGrid: 6x4 (%u entries, %llu pages)\n", SWITCH_HG_ENTRIES,
+		printf("SwitchHomeGrid: 5x3 (%u entries, %llu pages)\n", SWITCH_HG_ENTRIES,
 		    SWITCH_HG_PAGES_SIZE / PAGE_SIZE);
 	}
 	return 0;
