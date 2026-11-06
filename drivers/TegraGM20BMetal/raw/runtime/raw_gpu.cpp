@@ -80,6 +80,7 @@ constexpr uint32_t kEngines =
     TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
 constexpr uint64_t kPushRing = 2 << 20, kUploadRing = 4 << 20;
 constexpr uint64_t kChunk = 16 << 20, kDedicated = 8 << 20;
+constexpr size_t kDedicatedSpares = 2;
 // The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MB
 // of programs, of which the render server uses a few hundred
 constexpr uint64_t kHeapCap = 8 << 20;
@@ -529,8 +530,14 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
     s = {};
     if (bytes >
         kDedicated) {  // its own chunk, made now (rare: no Core Animation texture of the 720p screen is that large)
-        uint32_t c;
-        if (!newChunk(bytes, true, nullptr, c))
+        uint32_t c = ~0u;
+        for (auto it = spares_.begin(); it != spares_.end(); ++it)
+            if (chunks_[it->chunk].bytes == bytes) {
+                c = it->chunk;
+                spares_.erase(it);
+                break;
+            }
+        if (c == ~0u && !newChunk(bytes, true, nullptr, c))
             return false;
         chunks_[c].used = bytes;
         s = {c, 0, bytes, chunks_[c].bo.va, static_cast<uint8_t *>(chunks_[c].memory)};
@@ -606,6 +613,11 @@ void Device::poolFree(Span &s)
     Chunk &ch = chunks_[s.chunk];
     ch.used -= s.bytes;
     if (ch.dedicated) {  // nothing else is in it
+        if (spares_.size() < kDedicatedSpares) {
+            spares_.push_back({s.chunk, commitCount_});
+            s = {};
+            return;
+        }
         stats.poolBytes -= ch.bytes;
         stats.poolChunks--;
         k_.free(ch.bo);
@@ -1538,6 +1550,19 @@ Texture *Device::backing(const Texture &m, uint32_t tag)
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool.
 void Device::trimBackings()
 {
+    for (auto it = spares_.begin(); it != spares_.end();) {
+        if (commitCount_ - it->freedAt > 600) {
+            Chunk &ch = chunks_[it->chunk];
+            stats.poolBytes -= ch.bytes;
+            stats.poolChunks--;
+            k_.free(ch.bo);
+            vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
+            ch = Chunk();
+            it = spares_.erase(it);
+            continue;
+        }
+        ++it;
+    }
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
         if (commitCount_ - b->lastCommit > 600 && (!b->lastUse || done(b->lastUse))) {

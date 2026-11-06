@@ -651,6 +651,15 @@ private:
     uint32_t restart_ = 0;        // and its primitive restart index
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
     std::vector<Chunk> chunks_;
+    // Dedicated chunks freed but kept wired for the next allocation of the same size: a video's frames are surface textures
+    // made and released one after another, each with a converted image past the dedicated limit (30 MB at 2500x1500), which
+    // would otherwise be wired anew on the render thread for every frame. A chunk comes back only when its texture died,
+    // so after every submission that used it completed.
+    struct Spare {
+        uint32_t chunk;
+        uint64_t freedAt;  // commitCount_
+    };
+    std::vector<Spare> spares_;
     // mip chains' memory: chunks bound with PTE kind 0xFE (fx::kBlockLinearKind), made on demand, never CPU-written
     std::vector<Chunk> blChunks_;
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
