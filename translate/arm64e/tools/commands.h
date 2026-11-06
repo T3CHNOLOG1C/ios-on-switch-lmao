@@ -6,6 +6,8 @@
 #define ARM64E_TOOLS_COMMANDS_H
 
 int a64x_cmd_check(int argc, char **argv);        /* a64check.c: what the loader does with a Mach-O or a fileset */
+int a64x_cmd_dsc_apply(int argc, char **argv);    /* dsc.c: one dyld cache file translated with its plan */
+int a64x_cmd_dsc_verify(int argc, char **argv);   /* dsc.c: a translated dyld cache against the original */
 int a64x_cmd_class(int argc, char **argv);        /* a64class.c: class of each hex word on stdin */
 int a64x_cmd_gen_toptable(int argc, char **argv); /* gen_toptable.c: the classifier's fast-reject table */
 int a64x_cmd_holes(int argc, char **argv);        /* a64holes.c: dead space in a dyld cache's text */

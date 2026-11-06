@@ -28,8 +28,19 @@ host_library(
 
 host_library(
     name = "macho",
-    srcs = ["//translate/arm64e:macho/macho.c"],
-    hdrs = ["//translate/arm64e:macho/macho.h"],
+    srcs = [
+        "//translate/arm64e:macho/codesign.c",
+        "//translate/arm64e:macho/dsc.c",
+        "//translate/arm64e:macho/dsc_verify.c",
+        "//translate/arm64e:macho/macho.c",
+        "//translate/arm64e:macho/sha256.c",
+    ],
+    hdrs = [
+        "//translate/arm64e:macho/codesign.h",
+        "//translate/arm64e:macho/dsc.h",
+        "//translate/arm64e:macho/macho.h",
+        "//translate/arm64e:macho/sha256.h",
+    ],
     deps = [":a64x"],
 )
 

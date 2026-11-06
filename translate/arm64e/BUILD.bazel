@@ -41,12 +41,24 @@ filegroup(
     ],
 )
 
+MACHO_SRCS = [
+    "macho/codesign.c",
+    "macho/dsc.c",
+    "macho/dsc_verify.c",
+    "macho/macho.c",
+    "macho/sha256.c",
+]
+
+MACHO_HDRS = [
+    "macho/codesign.h",
+    "macho/dsc.h",
+    "macho/macho.h",
+    "macho/sha256.h",
+]
+
 filegroup(
     name = "macho_srcs",
-    srcs = [
-        "macho/macho.c",
-        "macho/macho.h",
-    ],
+    srcs = MACHO_SRCS + MACHO_HDRS,
 )
 
 cc_library(
@@ -66,8 +78,8 @@ cc_library(
 
 cc_library(
     name = "macho",
-    srcs = ["macho/macho.c"],
-    hdrs = ["macho/macho.h"],
+    srcs = MACHO_SRCS,
+    hdrs = MACHO_HDRS,
     copts = COPTS,
     deps = [":a64x"],
 )
