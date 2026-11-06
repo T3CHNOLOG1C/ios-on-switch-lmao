@@ -129,6 +129,10 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
     # IOPMrootDomain reads this at boot complete (gSleepDisabledFlag) and refuses every sleep while it is 1. Whether
     # the console may sleep is SwitchSuspend's call at runtime (a CPU power assertion while it cannot).
     put(child(tree, 'defaults'), 'sleep-disabled', u32(0))
+    # Both kernels read vm_compressor_mode from here. Without it xnu-10063's CONFIG_FREEZE default (8) leaves the
+    # compressor present but inactive: anonymous memory is never compressed and jetsam kills instead. 2 is
+    # VM_PAGER_COMPRESSOR_NO_SWAP: the active in-core compressor, no swap files (4 would swap to the SD card).
+    put(child(tree, 'defaults'), 'kern.vm_compressor', u32(2))
     product = child(tree, 'product')
     for key, value in (
         ('product-name', b'iPad Pro (12.9-inch) (2nd generation)\0'),

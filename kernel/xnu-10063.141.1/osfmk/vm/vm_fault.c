@@ -4162,9 +4162,9 @@ vm_fault_type_for_tracing(boolean_t need_copy_on_read, int type_of_fault)
  * blocking ends the group. A zero page entered early is exactly what its own fault would have entered: semantics stay;
  * the footprint is the 16 KiB-page footprint iPadOS's limits are made for. Counted on the kprof faults line.
  *
- * Without dynamic paging (no active compressor: this kernel's default, vm_compressor_mode 8) an anonymous page has
- * nowhere to go, so zero_fill_cleanup puts it on the throttled queue before vm_fault_enqueue_page; each page here goes
- * there first too, which vm_fault_enter's enqueue then leaves alone.
+ * Without dynamic paging (no active compressor, e.g. vm_compressor_mode 8) an anonymous page has nowhere to go, so
+ * zero_fill_cleanup puts it on the throttled queue before vm_fault_enqueue_page; each page here goes there first too,
+ * which vm_fault_enter's enqueue then leaves alone.
  */
 #ifndef SWITCH_ZERO_FILL_AROUND
 #define SWITCH_ZERO_FILL_AROUND 1     /* 0: one page per zero-fill fault, as XNU (an A/B build); the counters stay */
