@@ -8249,6 +8249,25 @@ native_switch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount
 enum native_switch_setup_kind { kSetupUser, kSetupOnce, kSetupManaged };
 enum native_switch_setup_scale { kSetupAnyScale, kSetupUnitScale, kSetupFractionalScale };
 
+/*
+ * Removes a once-only seed for the other kind of scale while the user's plist is still byte for byte what we wrote:
+ * cfprefsd saves a changed domain as a binary plist, so a Text Size the user chose is never this XML. Scale 1's XXL
+ * text left on the Data volume makes every Dynamic Type label at a fractional scale two sizes larger than an iPad's
+ * (Control Center's Focus title wraps, its bauble group grows with it).
+ */
+static void
+native_switch_unseed(proc_t p, user_addr_t scratch, const char *name, const char *body, mount_t data_mount)
+{
+	char path[160];
+	snprintf(path, sizeof(path), "/private/var/mobile/Library/Preferences/%s.plist", name);
+	if (!native_switch_file_unchanged(path, body, (int)strlen(body), data_mount, 501, 501, 0600)) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(path, request.path, strlen(path) + 1);
+	if (!error) error = native_switch_unlink(p, &request, &result);
+	printf("SwitchRawBoot: %s: the other scale's seed removed (%d)\n", name, error);
+}
+
 static int
 native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
@@ -8321,7 +8340,12 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	char path[160] = "/private/var/containers";
 	const bool unit_scale = switch_ui_scale_is_unit(switch_ui_scale());
 	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
-		if (prefs[i].scale == (unit_scale ? kSetupFractionalScale : kSetupUnitScale)) continue;
+		if (prefs[i].scale == (unit_scale ? kSetupFractionalScale : kSetupUnitScale)) {
+			if (prefs[i].kind == kSetupOnce) {
+				native_switch_unseed(p, scratch, prefs[i].name, prefs[i].body, data_mount);
+			}
+			continue;
+		}
 		const char *body = prefs[i].body;
 		if (prefs[i].kind == kSetupManaged) {
 			snprintf(path, sizeof(path), "/private/var/Managed Preferences/mobile/%s.plist", prefs[i].name);
