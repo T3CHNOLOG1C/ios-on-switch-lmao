@@ -17,7 +17,6 @@
 #   display_planes_source_test          the driver and XNU follow those rules (validateSwap, the kick, one
 #                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
-#   boot_logo_check_test                BootLogoCheck.h: the first client frame against the boot framebuffer
 #
 #   bazel test //drivers/NativeMobileDisplay/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -48,14 +47,6 @@ host_test(
     srcs = [
         "request_state_test.cpp",
         "//drivers/NativeMobileDisplay:NativeLegacyRequest.h",
-    ],
-)
-
-host_test(
-    name = "boot_logo_check_test",
-    srcs = [
-        "boot_logo_check_test.cpp",
-        "//drivers/NativeMobileDisplay:BootLogoCheck.h",
     ],
 )
 

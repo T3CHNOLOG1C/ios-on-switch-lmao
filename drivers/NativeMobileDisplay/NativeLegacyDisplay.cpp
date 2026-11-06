@@ -27,7 +27,6 @@
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
-#include "BootLogoCheck.h"
 #include "DisplaySmmuProbe.h"
 #include "NativePlanes.h"
 #include "../TegraVIC/TegraVICConfig.h"
@@ -525,7 +524,6 @@ struct FrameHists {
 
 class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     OSDeclareDefaultStructors(NativeLegacyDisplay) IOMemoryMap *bootMapping = nullptr;
-    bool logoCheck = SWITCH_BOOT_LOGO_CHECK && SWITCH_PORTRAIT_NATIVE;
     bool primary = false;
     bool logicalPM = false;
     bool transferred = false;
@@ -1233,8 +1231,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         vsyncTimer->wakeAtTime(vsyncNext);
     }
 
-    // Primary interrupt context.
-    static bool vblankFilter(OSObject *owner, IOFilterInterruptEventSource *)
+    // Primary interrupt context. The action is scheduled with signalInterrupt() and the filter returns false: returning
+    // true on this level line makes IOFilterInterruptEventSource::disableInterruptOccurred mask it until the work loop has
+    // run the action, and TegraPanel's DSI steps and the console tape need every frame end however long the gate is held.
+    // The filter clears the DC's status and reads it back first, which is what signalInterrupt() requires.
+    static bool vblankFilter(OSObject *owner, IOFilterInterruptEventSource *source)
     {
         NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
         const uint32_t status = self->dc[kDcIntStatus] & (kVblankInt | kFrameEndInt | kVpulse2Int);
@@ -1287,7 +1288,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 __atomic_fetch_add(&self->stVsyncFolded, 1u, __ATOMIC_RELAXED);
         }
         __atomic_fetch_or(&self->dcPending, status, __ATOMIC_RELEASE);
-        return true;
+        source->signalInterrupt();
+        return false;
     }
 
     static void vblankFired(OSObject *owner, IOInterruptEventSource *, int)
@@ -3090,10 +3092,6 @@ public:
             return false;
         if (!startDisplay(provider))
             return false;
-        if (logoCheck) {
-            PE_Video console = {};
-            logoCheck = !PE_current_console(&console) && console.v_display;  // text mode: the console drew over it
-        }
         startVsync();
         startHardwareRotation();
         if (IOWorkLoop *loop = hwRotate ? getWorkLoop() : nullptr)
@@ -3307,8 +3305,6 @@ public:
             }
             if (tapeSettling())
                 return;
-            if (logoCheck)
-                checkBootLogo(nullptr, 0, 0, bw, bh);
             // Once window A is rotated it reads the whole block-linear extent, which reaches past the pitch frame (block row 5). While
             // it scans the console tape, a blank frame leaves it as a first client frame does: block-linear, through startRotation.
             const bool block = rotated || tapeAttached;
@@ -3368,8 +3364,6 @@ public:
                 return;
         }
         noteSurface(surface, memory);
-        if (logoCheck)
-            checkBootLogo(memory, sourceStride, allocation, width, height);
         const bool tiled = surfaceTiled(memory);
         if (direct && offerDirect(request, memory, sourceStride, allocation, width, height, tiled, kickAt))
             return;
@@ -3516,43 +3510,6 @@ public:
                 stFlipWait.add(taken.waited);
             deferredAt = 0;
         }
-    }
-
-    // Once, before the first client frame is copied anywhere (single-buffered, the copy goes into the boot framebuffer):
-    // that frame (null memory: a blank swap) against what hekate drew there, which U-Boot, the loader and XNU in graphics
-    // mode leave alone.
-    void checkBootLogo(IOMemoryDescriptor *memory, uint64_t stride, uint64_t allocation, uint32_t width,
-                       uint32_t height)
-    {
-        logoCheck = false;
-        bool owned = true;
-        IOMemoryMap *source = memory ? sourceMapping(memory, owned) : nullptr;
-        const uint32_t *frame = nullptr;
-        if (memory) {
-            if (!source || !source->getVirtualAddress() || source->getLength() < allocation) {
-                if (owned)
-                    OSSafeReleaseNULL(source);
-                IOLog("SwitchDisplay: boot logo check not run: the first frame could not be mapped\n");
-                return;
-            }
-            frame = reinterpret_cast<const uint32_t *>(source->getVirtualAddress());
-            uint64_t gpu, cache;
-            bool timedOut;
-            syncForCpu(frame, allocation, gpu, cache, timedOut);
-        }
-        const BootLogoDifference d =
-            boot_logo_compare(reinterpret_cast<const volatile uint32_t *>(bootMapping->getVirtualAddress()), 2880,
-                              frame, stride, width, height);
-        if (owned)
-            OSSafeReleaseNULL(source);
-        const char *kind = memory ? "client" : "blank";
-        if (!d.pixels)
-            IOLog("SwitchDisplay: boot logo check: the first %s frame is the panel hekate drew, all %u pixels\n", kind,
-                  width * height);
-        else
-            IOLog("SwitchDisplay: boot logo check: the first %s frame changes %llu of %u pixels hekate drew, "
-                  "the first at column %u row %u (%06x, now %06x)\n",
-                  kind, d.pixels, width * height, d.column, d.row, d.boot, d.frame);
     }
 
     // The kernel mapping of a surface's memory for its copy; the caller releases it.
