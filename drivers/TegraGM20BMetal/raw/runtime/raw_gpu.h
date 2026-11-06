@@ -594,7 +594,9 @@ private:
     const volatile uint32_t *fence_ = nullptr;
     std::vector<uint32_t> freeTic_, freeTsc_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
-    std::vector<Pipeline> pipelines_;  // the pack's, each made at its first lookup (rec set)
+    // the pack's, each made at its first lookup (rec set); sized once at init and never resized: pipeline() hands out
+    // pointers into it
+    std::vector<Pipeline> pipelines_;
     std::vector<uint32_t> placed_;     // each pack program's heap offset, ~0u: not placed
     uint64_t heapPlaced_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
