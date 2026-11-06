@@ -17,6 +17,7 @@ filegroup(
     srcs = [
         "AsyncPipelines.h",
         "NativeBridgeMetalFrontend.h",
+        "SwitchFrameTimeline.h",
         "TwoPlaneStandIn.h",
         "bridge/NativeMetalBridge.h",
         "bridge/NativeMetalObjects.h",

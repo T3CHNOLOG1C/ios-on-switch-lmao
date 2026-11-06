@@ -34,6 +34,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "SwitchFrameTimeline.h"
 #include "raw_gpu.h"
 
 // The m2v frontend's in-place texture over a buffer (NativeBridgeMetalFrontend.mm): weak, so the host benchmark links without it.
@@ -417,6 +418,10 @@ struct Stats {
     std::atomic<uint64_t> splits{0}, splitM2v{0};
     // command buffers completed (finish): with the commits, what the stall line (rawStall) watches
     std::atomic<uint64_t> finished{0};
+#if SWITCH_FRAME_TIMELINE
+    // the m2v replay's parts (noteReplay)
+    std::atomic<uint64_t> replaySlotUs{0}, replayTwinUs{0}, replayCommitUs{0}, replayMaxUs{0};
+#endif
 };
 
 struct RawState {
@@ -1627,6 +1632,9 @@ struct RMSegment {
     uint64_t _preds;          // every refusal predicate it hit (1 << RMPred)
     uint64_t _predA, _predB;  // the first one's values
     uint8_t _pred0;           // the first one
+#if SWITCH_FRAME_TIMELINE
+    switch_frame::Stamps _frame;
+#endif
 }
 - (void)takeReason:(RMReason)reason why:(NSString *)why;
 - (void)takeWholeReason:(RMReason)reason why:(NSString *)why;
@@ -2933,9 +2941,15 @@ static bool heldBehindEvent();
         _committed = true;
         _status = MTLCommandBufferStatusCommitted;
     }
+#if SWITCH_FRAME_TIMELINE
+    switch_frame::committed(_frame);
+#endif
     if (_active)
         [(RMEncoder *)_active endEncoding];
     [(RMDevice *)_device rmCommit:self];
+#if SWITCH_FRAME_TIMELINE
+    _frame.mark(switch_frame::Back);
+#endif
 }
 
 - (BOOL)commitAndWaitUntilSubmitted
@@ -3097,13 +3111,24 @@ static bool heldBehindEvent();
 @end
 
 // ---- object mapping for the m2v replay ----
+#if SWITCH_FRAME_TIMELINE
+static thread_local uint64_t tTwinTicks;
+#endif
 static inline id twinOf(id object)
 {
     if (!object)
         return nil;
-    if ([object isKindOfClass:[RMObject class]])
-        return [(RMObject *)object rmTwin];
-    return object;  // an m2v object already (events, fences, anything the device forwarded)
+    if (![object isKindOfClass:[RMObject class]])
+        return object;  // an m2v object already (events, fences, anything the device forwarded)
+#if SWITCH_FRAME_TIMELINE
+    if (!((RMObject *)object)->_twin) {
+        const uint64_t began = mach_absolute_time();
+        id twin = [(RMObject *)object rmTwin];
+        tTwinTicks += mach_absolute_time() - began;
+        return twin;
+    }
+#endif
+    return [(RMObject *)object rmTwin];
 }
 
 static MTLRenderPassDescriptor *twinPass(MTLRenderPassDescriptor *pass)
@@ -3364,7 +3389,13 @@ static void mirrorWrites(id<MTLCommandBuffer> m, MirrorWrites &writes)
 static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, bool part)
 {
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
+#if SWITCH_FRAME_TIMELINE
+    cb->_frame.mark(switch_frame::SlotStart);
+#endif
     id<MTLCommandBuffer> m = [queue commandBuffer];
+#if SWITCH_FRAME_TIMELINE
+    cb->_frame.mark(switch_frame::SlotEnd);
+#endif
     if (!m)
         return nil;
     m.label = cb.label;
@@ -4362,6 +4393,9 @@ static void finish(RMCommandBuffer *cb, NSError *error)
         cb->_changed.notify_all();
         cb->_owners.clear();  // the resources may die now: no submission uses them any more
         cb->_owners.shrink_to_fit();
+#if SWITCH_FRAME_TIMELINE
+        switch_frame::finished(cb->_frame);
+#endif
     };
     dispatch_queue_t q = cb->_queue ? cb->_queue->_completionQueue : nil;
     if (q)
@@ -5196,6 +5230,27 @@ static void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to)
         t->_mirrored = true;
 }
 
+#if SWITCH_FRAME_TIMELINE
+// The m2v replay's parts for the rates line: the wait for an m2v command buffer (its queue's slots), the twins made, and the
+// replay's encode end to its commit's return (the Order call, a CPU-order wait, m2v's commit)
+static void noteReplay(const switch_frame::Stamps &f, uint64_t returned)
+{
+    using namespace switch_frame;
+    Stats &s = gRM->stats;
+    const uint64_t perMs = ticksPerMs();
+    auto us = [perMs](uint64_t from, uint64_t to) {
+        return to > from ? (to - from) * 1000 / perMs : 0;
+    };
+    s.replaySlotUs += us(f.get(SlotStart), f.get(SlotEnd));
+    s.replayTwinUs += f.get(Twins) * 1000 / perMs;
+    s.replayCommitUs += us(f.get(ReplayEnd), returned);
+    const uint64_t total = us(f.get(ReplayStart), returned);
+    uint64_t seen = s.replayMaxUs.load(std::memory_order_relaxed);
+    while (total > seen && !s.replayMaxUs.compare_exchange_weak(seen, total, std::memory_order_relaxed)) {
+    }
+}
+#endif
+
 static bool submitSegments(RMCommandBuffer *cb);
 
 static bool submitLocked(RMCommandBuffer *cb)
@@ -5219,7 +5274,16 @@ static bool submitLocked(RMCommandBuffer *cb)
             }
         }
         const uint64_t began = nowUs();
-        if (encodeRaw(cb, 0, cb->_tape.size(), &why)) {
+#if SWITCH_FRAME_TIMELINE
+        cb->_frame.mark(switch_frame::EncodeStart);
+        switch_frame::trace(switch_frame::kRawEncode, switch_frame::kStart, cb->_frame.seq);
+#endif
+        const bool encoded = encodeRaw(cb, 0, cb->_tape.size(), &why);
+#if SWITCH_FRAME_TIMELINE
+        cb->_frame.mark(switch_frame::EncodeEnd);
+        switch_frame::trace(switch_frame::kRawEncode, switch_frame::kEnd, cb->_frame.seq, encoded);
+#endif
+        if (encoded) {
             r.stats.encodeUs += nowUs() - began;
             r.stats.raw++;
             r.rawSinceM2v = true;
@@ -5250,9 +5314,19 @@ static bool submitLocked(RMCommandBuffer *cb)
     }
     cb->_m2v = true;
     const uint64_t replayBegan = nowUs();
+#if SWITCH_FRAME_TIMELINE
+    cb->_frame.mark(switch_frame::ReplayStart);
+    switch_frame::trace(switch_frame::kReplay, switch_frame::kStart, cb->_frame.seq);
+    tTwinTicks = 0;
+#endif
     if (r.fallback)
         mirrorsForM2v(cb, 0, cb->_tape.size());
     id<MTLCommandBuffer> m = r.fallback ? replay(cb, 0, cb->_tape.size(), false) : nil;
+#if SWITCH_FRAME_TIMELINE
+    cb->_frame.mark(switch_frame::ReplayEnd);
+    cb->_frame.set(switch_frame::Twins, tTwinTicks);
+    switch_frame::trace(switch_frame::kReplay, switch_frame::kEnd, cb->_frame.seq, tTwinTicks);
+#endif
     if (!m) {
         finish(cb, [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                        code:MTLCommandBufferErrorInternal
@@ -5271,7 +5345,15 @@ static bool submitLocked(RMCommandBuffer *cb)
     }
     if (!r.gpuOrder && !r.raw->done(r.raw->submitted())) {
         r.stats.cpuOrdered++;
+#if SWITCH_FRAME_TIMELINE
+        cb->_frame.mark(switch_frame::OrderWaitStart);
+        switch_frame::trace(switch_frame::kOrderWait, switch_frame::kStart, cb->_frame.seq);
+#endif
         r.raw->wait(r.raw->submitted());
+#if SWITCH_FRAME_TIMELINE
+        cb->_frame.mark(switch_frame::OrderWaitEnd);
+        switch_frame::trace(switch_frame::kOrderWait, switch_frame::kEnd, cb->_frame.seq);
+#endif
     }
     r.rawSinceM2v = false;
     r.m2vSinceRaw = true;
@@ -5294,6 +5376,10 @@ static bool submitLocked(RMCommandBuffer *cb)
         scheduled(cb);
     }];
     [m addCompletedHandler:^(id<MTLCommandBuffer> done) {
+#if SWITCH_FRAME_TIMELINE
+        cb->_frame.mark(switch_frame::Fence);
+        switch_frame::trace(switch_frame::kFence, switch_frame::kPoint, cb->_frame.seq);
+#endif
         finish(cb, done.error);
         {
             std::lock_guard<std::mutex> l(gRM->m2vLock);
@@ -5306,6 +5392,10 @@ static bool submitLocked(RMCommandBuffer *cb)
     }];
     [m commit];
     r.stats.replayUs += nowUs() - replayBegan;
+#if SWITCH_FRAME_TIMELINE
+    noteReplay(cb->_frame, cb->_frame.mark(switch_frame::Returned));
+    switch_frame::trace(switch_frame::kReplayCommitted, switch_frame::kPoint, cb->_frame.seq);
+#endif
     return true;
 }
 
@@ -5547,6 +5637,10 @@ static void completionLoop()
             cb = r.inflight.front();
         }
         r.raw->wait(cb->_seqno);
+#if SWITCH_FRAME_TIMELINE
+        cb->_frame.mark(switch_frame::Fence);
+        switch_frame::trace(switch_frame::kFence, switch_frame::kPoint, cb->_frame.seq);
+#endif
         {
             std::lock_guard<std::mutex> l(r.doneLock);
             r.inflight.pop_front();
@@ -5645,6 +5739,14 @@ size_t raw_metal_rates(char *out, size_t size)
              k.rtUnalignedVa.load(), (unsigned long long)(k.levelPasses.load() - gRates.levelPasses),
              (unsigned long long)(k.mirrorsOut.load() - gRates.mirrorsOut),
              (unsigned long long)(k.mirrorsIn.load() - gRates.mirrorsIn), *preds ? preds : "-");
+#if SWITCH_FRAME_TIMELINE
+    {
+        const size_t used = strlen(diag);
+        snprintf(diag + used, sizeof diag - used, " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus",
+                 (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
+                 (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0));
+    }
+#endif
     gRates.abortUs = s.abortUs.load();
     gRates.splits = s.splits.load();
     gRates.splitM2v = s.splitM2v.load();

@@ -34,6 +34,7 @@
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
+#include "SwitchFrameTimeline.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
 
@@ -2072,6 +2073,10 @@ struct PassTarget {
     NSUInteger lastWidth, lastHeight;
     // The shared event values it waits for (encodeWaitForEvent), its events kept alive in waitedEvents: heldBehindEvent.
     std::vector<std::pair<NmbEvent *, uint64_t>> eventWaits;
+#if SWITCH_FRAME_TIMELINE
+    // the timeline's fields for an m2v process: ret = scheduled, fence = the runtime's completion, done = the handlers run
+    switch_frame::Stamps frame;
+#endif
 }
 @property (nonatomic, strong) NSMutableArray *waitedEvents;
 @property (nonatomic) NmbCommandBuffer *handle;
@@ -3639,6 +3644,10 @@ static void scheduled(void *context);
 // The runtime has submitted the work. Deliver scheduling without waiting for GPU completion.
 - (void)didSchedule
 {
+#if SWITCH_FRAME_TIMELINE
+    frame.mark(switch_frame::Returned);
+    switch_frame::trace(switch_frame::kScheduled, switch_frame::kPoint, frame.seq);
+#endif
     {
         const uint64_t took = nowUs() - self.committedUs;
         std::lock_guard<std::mutex> lock(gCommitLock);
@@ -3696,6 +3705,10 @@ static void scheduled(void *context);
     void (^run)(void) = ^{
         for (MTLCommandBufferHandler block in completedHandlers)
             block((id<MTLCommandBuffer>)self);
+#if SWITCH_FRAME_TIMELINE
+        if (!self.failedLocally)
+            switch_frame::finished(self->frame);
+#endif
         dispatch_group_leave(self->_handlers);
     };
     dispatch_queue_t queue = _queue.completionQueue;
@@ -3768,12 +3781,19 @@ extern "C" size_t native_bridge_metal_commit_origin(char *out, size_t size)
 
 - (void)commit
 {
+#if SWITCH_FRAME_TIMELINE
+    switch_frame::committed(frame);
+    switch_frame::trace(switch_frame::kM2vCommit, switch_frame::kPoint, frame.seq);
+#endif
     const uint64_t began = apiTiming() ? mach_absolute_time() : 0;
     [self commitNow];
     if (began) {
         gApiUs += ticksToUs(tApiTicks + mach_absolute_time() - began);
         tApiTicks = 0;
     }
+#if SWITCH_FRAME_TIMELINE
+    frame.mark(switch_frame::Back);
+#endif
 }
 
 - (void)commitNow
@@ -3920,6 +3940,10 @@ static void completed(void *context)
 {
     gCompleted++;
     NBCommandBuffer *commandBuffer = (__bridge_transfer NBCommandBuffer *)context;
+#if SWITCH_FRAME_TIMELINE
+    commandBuffer->frame.mark(switch_frame::Fence);
+    switch_frame::trace(switch_frame::kCompleted, switch_frame::kPoint, commandBuffer->frame.seq);
+#endif
     {
         const uint64_t took = nowUs() - commandBuffer.committedUs;
         gTimeEncodeToCommit.count++;
