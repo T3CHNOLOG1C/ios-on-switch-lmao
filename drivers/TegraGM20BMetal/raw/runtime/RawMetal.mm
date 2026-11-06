@@ -747,12 +747,14 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
         if (_twin)
             return _twin;
     }
-    // made outside this object's lock (twinPublish): in place over the same memory (a pool span or the caller's no-copy pages)
+    // made outside this object's lock (twinPublish): in place over the same memory (a pool span or the caller's no-copy pages),
+    // Shared whatever this buffer's storage mode (the memory is CPU-visible; m2v makes no Private buffer over host memory)
     const size_t page = size_t(getpagesize());
+    const MTLResourceOptions options = (_options & ~MTLResourceStorageModeMask) | MTLResourceStorageModeShared;
     raw::Alias a;
     return twinPublish(self, _twin,
                        gRM->raw->alias(_raw, a)
-                           ? rawAliasBuffer(a, _raw.cpu, (NSUInteger(_raw.length) + page - 1) & ~(page - 1), _options)
+                           ? rawAliasBuffer(a, _raw.cpu, (NSUInteger(_raw.length) + page - 1) & ~(page - 1), options)
                            : nil);
 }
 
