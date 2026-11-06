@@ -4338,8 +4338,10 @@ vm_fault_internal(
 	 * this heuristic, but vm_object_unlock currently takes > 30 cycles.
 	 */
 	bool                    object_is_contended = false;
-	/* Switch (r17-faults): for the kprof faults lines (switch_kprof_fault, at done) */
+	/* Switch (r17-faults): for the kprof faults lines (switch_kprof_fault, at done; debug kernels) */
+#if DEVELOPMENT || DEBUG
 	const uint64_t          switch_began = mach_absolute_time();
+#endif
 	bool                    switch_device = false;    /* the page entered was a device pager's */
 	bool                    switch_purgeable = false; /* a zero fill in a purgeable object */
 	unsigned int            switch_around = 0;        /* pages the zero-fill fault-around entered */
@@ -6681,6 +6683,7 @@ done:
 		DEBUG4K_FAULT("map %p original %p vaddr 0x%llx -> 0x%x\n", map, original_map, (uint64_t)trace_real_vaddr, kr);
 	}
 
+#if DEVELOPMENT || DEBUG
 	/* Switch (r17-faults): this fault for the kprof faults lines */
 	{
 		unsigned int switch_class;
@@ -6715,6 +6718,11 @@ done:
 		    (switch_purgeable && switch_class == SWITCH_FAULT_ZF ? SWITCH_FAULT_PURGEABLE : 0),
 		    switch_began, (uint64_t)vaddr, switch_around);
 	}
+#else
+	(void)switch_device;
+	(void)switch_purgeable;
+	(void)switch_around;
+#endif
 
 	return kr;
 }

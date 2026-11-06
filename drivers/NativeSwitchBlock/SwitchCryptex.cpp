@@ -47,11 +47,13 @@ struct switch_record_entry {  // bsd/vfs/vfs_cluster.c
 
 extern "C" {
 int di_root_image_ext(const char *, char *, size_t, dev_t *, bool);
-void switch_cluster_register_image(vnode_t);                                                 // bsd/vfs/vfs_cluster.c
-void switch_cluster_register_cryptex_mount(unsigned int index, mount_t);                     // bsd/vfs/vfs_cluster.c
-void switch_cluster_record_start(struct switch_record_entry *log, uint32_t capacity);        // bsd/vfs/vfs_cluster.c
-uint32_t switch_cluster_record_stop(void);                                                   // bsd/vfs/vfs_cluster.c
-void switch_cluster_image_direct(uint64_t bytes, uint32_t cardReads);                        // bsd/vfs/vfs_cluster.c
+void switch_cluster_register_image(vnode_t);                                           // bsd/vfs/vfs_cluster.c
+void switch_cluster_register_cryptex_mount(unsigned int index, mount_t);               // bsd/vfs/vfs_cluster.c
+void switch_cluster_record_start(struct switch_record_entry *log, uint32_t capacity);  // bsd/vfs/vfs_cluster.c
+uint32_t switch_cluster_record_stop(void);                                             // bsd/vfs/vfs_cluster.c
+#if DEVELOPMENT || DEBUG
+void switch_cluster_image_direct(uint64_t bytes, uint32_t cardReads);  // bsd/vfs/vfs_cluster.c
+#endif
 int vnode_pagein(vnode_t, upl_t, upl_offset_t, vm_object_offset_t, upl_size_t, int, int *);  // bsd/vm/vnode_pager.c
 int VFS_VGET(mount_t, ino64_t, vnode_t *, vfs_context_t);                                    // bsd/vfs/kpi_vfs.c
 IOBlockStorageDevice *switch_block_device(IOService **controller, dev_t *whole, uint64_t *sectors,
@@ -236,7 +238,7 @@ struct {
     SwitchWindow **buckets;
     uint32_t count;
     bool setUp, on;
-    uint64_t unreported;  // read-ahead card reads not yet in the kprof image line
+    uint64_t unreported;  // read-ahead card reads not yet in the kprof image line (debug kernels)
 } gCache;
 
 bool isPrefetchThread(thread_t thread)
@@ -269,8 +271,13 @@ void flowDone(uint64_t bytes)
 // The kprof image line's direct reads (one per request) and the card reads they took, with the read-ahead's.
 void reportDirect(uint64_t bytes, uint32_t cardReads)
 {
+#if DEVELOPMENT || DEBUG
     const uint64_t ahead = __atomic_exchange_n(&gCache.unreported, 0, __ATOMIC_RELAXED);
     switch_cluster_image_direct(bytes, cardReads + static_cast<uint32_t>(ahead));
+#else
+    (void)bytes;
+    (void)cardReads;
+#endif
 }
 
 void finishRequest(thread_call_param_t, thread_call_param_t);
@@ -768,7 +775,11 @@ void SwitchCryptexDevice::readAhead(uint64_t start, uint64_t length)
             cardReads += issueRead(reads[i], true);
         at += covered;
     }
+#if DEVELOPMENT || DEBUG
     __atomic_fetch_add(&gCache.unreported, cardReads, __ATOMIC_RELAXED);
+#else
+    (void)cardReads;
+#endif
 }
 
 namespace {

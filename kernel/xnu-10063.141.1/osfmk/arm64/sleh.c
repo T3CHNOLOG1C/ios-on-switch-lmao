@@ -1223,11 +1223,13 @@ brk_out:
 #undef MSG_FMT
 }
 
+#if DEVELOPMENT || DEBUG
 extern void switch_kprof_user_trap(arm_saved_state_t *state, uint32_t esr);
 /* osfmk/kern/switch_kprof.c (r17-faults): a fault arm_fast_fault resolved, for the kprof faults lines */
 extern void switch_kprof_fast_fault(bool access_flag);
 #define SWITCH_FSC_ACCESS_FLAG(fc) \
 	((fc) == FSC_ACCESS_FLAG_FAULT_L1 || (fc) == FSC_ACCESS_FLAG_FAULT_L2 || (fc) == FSC_ACCESS_FLAG_FAULT_L3)
+#endif
 
 static void
 handle_breakpoint(arm_saved_state_t *state, uint32_t esr __unused)
@@ -1237,9 +1239,11 @@ handle_breakpoint(arm_saved_state_t *state, uint32_t esr __unused)
 	mach_msg_type_number_t     numcodes  = 2;
 
 	boot_progress_user_breakpoint(state, esr);
+#if DEVELOPMENT || DEBUG
 	if (PSR64_IS_USER(get_saved_state_cpsr(state))) {
 		switch_kprof_user_trap(state, esr);
 	}
+#endif
 #if __has_feature(ptrauth_calls)
 	if (ESR_EC(esr) == ESR_EC_BRK_AARCH64 &&
 	    brk_comment_is_ptrauth(ISS_BRK_COMMENT(esr))) {
@@ -1580,9 +1584,11 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 			result = arm_fast_fault(map->pmap,
 			    vm_fault_addr,
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), TRUE);
+#if DEVELOPMENT || DEBUG
 			if (result == KERN_SUCCESS) {
 				switch_kprof_fast_fault(SWITCH_FSC_ACCESS_FLAG(fault_code));
 			}
+#endif
 		}
 		if (result != KERN_SUCCESS) {
 
@@ -1849,7 +1855,9 @@ handle_kernel_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_ad
 			    fault_addr,
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), FALSE);
 			if (result == KERN_SUCCESS) {
+#if DEVELOPMENT || DEBUG
 				switch_kprof_fast_fault(SWITCH_FSC_ACCESS_FLAG(fault_code));
+#endif
 				return;
 			}
 		}

@@ -6565,7 +6565,9 @@ unsigned int preheat_min_bytes = (1024 * 32);
  * for, so this costs no extra decoding or reading: the pages that were decoded and dropped are kept, and the next
  * faults in the same chunk find them resident. Counted for the kprof decmpfs line.
  */
+#if DEVELOPMENT || DEBUG
 uint64_t switch_decmpfs_aligned, switch_decmpfs_aligned_pages;
+#endif
 #ifndef SWITCH_DECMPFS_CHUNK_ALIGN
 #define SWITCH_DECMPFS_CHUNK_ALIGN 1  /* 0: page-ins as XNU sizes them (an A/B build); the counters stay */
 #endif
@@ -6618,8 +6620,10 @@ switch_cluster_chunk_align(vm_object_t object, vm_object_offset_t *start, vm_siz
 	if (s == *start && e == *start + *length) {
 		return;
 	}
+#if DEVELOPMENT || DEBUG
 	os_atomic_inc(&switch_decmpfs_aligned, relaxed);
 	os_atomic_add(&switch_decmpfs_aligned_pages, (uint64_t)((e - s - *length) >> PAGE_SHIFT), relaxed);
+#endif
 	*start = s;
 	*length = (vm_size_t)(e - s);
 }

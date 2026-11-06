@@ -633,6 +633,7 @@ vnode_pager_data_request(
 	assert(offset >= base_offset &&
 	    offset < base_offset + size);
 
+#if DEVELOPMENT || DEBUG
 	/*
 	 * Switch (r14-launch): the faulting thread's wait for this page-in, for its process (kprof waits line): on a
 	 * cryptex (a disk image: the dyld shared cache) or any other volume.
@@ -642,6 +643,9 @@ vnode_pager_data_request(
 	switch_kprof_wait(vnode_pager_virtualdev(vnode_object->vnode_handle) ? 3 : 0, mach_absolute_time() - began,
 	    (uint64_t)size);
 	return kr;
+#else
+	return vnode_pager_cluster_read(vnode_object, base_offset, offset, io_streaming, size);
+#endif
 }
 
 /*
