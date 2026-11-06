@@ -140,6 +140,8 @@ constexpr int kStepAdmaError = 11;
 const char kRootUUID[] = "04769D26-2CA0-4825-B443-E2E5F88300F2";
 const uint8_t kApfsType[16] = {0xef, 0x57, 0x34, 0x7c, 0x00, 0x00, 0xaa, 0x11,
                                0xaa, 0x11, 0x00, 0x30, 0x65, 0x43, 0xec, 0xac};
+// The GPT name install-ios.bin gives the partition, UTF-16LE in the entry's 72-byte name field.
+const char kPartitionName[] = "iOS";
 // Fixed development identifier consumed by the owner boot-manifest code.
 const uint8_t kRootIdentifier[48] = {0xfd, 0x86, 0xb9, 0x5b, 0x70, 0x33, 0xe3, 0x52, 0x84, 0x3f, 0x98, 0xd1,
                                      0x20, 0x4a, 0xde, 0x29, 0x45, 0x9b, 0xf6, 0x08, 0xa7, 0xe1, 0xcc, 0xb1,
@@ -302,6 +304,15 @@ inline uint32_t le32(const uint8_t *p)
 inline uint64_t le64(const uint8_t *p)
 {
     return le32(p) | (uint64_t)le32(p + 4) << 32;
+}
+bool partitionNamed(const uint8_t *entry, const char *name)
+{
+    const uint8_t *field = entry + 56;
+    unsigned i = 0;
+    for (; name[i]; ++i) {
+        if (i == 36 || field[2 * i] != (uint8_t)name[i] || field[2 * i + 1]) return false;
+    }
+    return i == 36 || (!field[2 * i] && !field[2 * i + 1]);
 }
 inline uint32_t rd(volatile uint8_t *base, uint32_t o)
 {
@@ -3555,7 +3566,7 @@ bool NativeSwitchBlock::setup()
     unsigned found = 0;
     for (uint32_t i = 0; i < entryCount; ++i) {
         const uint8_t *e = entries + i * entrySize;
-        if (memcmp(e, kApfsType, 16)) continue;
+        if (memcmp(e, kApfsType, 16) && !partitionNamed(e, kPartitionName)) continue;
         uint64_t first = le64(e + 32), last = le64(e + 40);
         if (!first || last < first) continue;
         firstSector = first;
@@ -3563,7 +3574,7 @@ bool NativeSwitchBlock::setup()
         ++found;
     }
     if (found != 1 || firstSector + sectorCount > UINT32_MAX) {
-        IOLog("SwitchSD: expected one APFS partition, found %u\n", found);
+        IOLog("SwitchSD: expected one APFS or \"%s\" partition, found %u\n", kPartitionName, found);
         return false;
     }
 

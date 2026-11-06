@@ -7,7 +7,6 @@
 
 #define SWITCH_RAW_DATA_UUID    "D1B1D053-D0A6-496C-8625-A947A3DA863E"
 #define SWITCH_RAW_PREBOOT_UUID "4AA4A761-5138-439D-9A30-D4138F6887FA"
-#define SWITCH_RAW_BYTES        UINT64_C(34359738368)
 extern int switch_raw_volume_status(const char *, dev_t *, char *, size_t, uint64_t *);
 extern int native_owner_publish_raw_boot_manifest(dev_t, const char *, dev_t, const char *);
 

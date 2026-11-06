@@ -4,11 +4,11 @@
     spec.py --raw-mount SwitchRawMount.h --cryptex-h SwitchCryptex.h --cryptex-cpp SwitchCryptex.cpp
             --block-cpp NativeSwitchBlock.cpp --out spec.json
 
-  SwitchRawMount.h     SWITCH_RAW_DATA_UUID, SWITCH_RAW_PREBOOT_UUID, SWITCH_RAW_BYTES (the APFS partition's exact size)
+  SwitchRawMount.h     SWITCH_RAW_DATA_UUID, SWITCH_RAW_PREBOOT_UUID
   SwitchCryptex.h        SWITCH_PREBOOT_UUID (must agree), the two cryptex volume UUIDs
   SwitchCryptex.cpp      the Preboot paths of the two cryptex images
-  NativeSwitchBlock.cpp  kRootUUID (the System volume, also the ADT root-matching UUID) and the APFS type GUID it
-                           selects the partition by
+  NativeSwitchBlock.cpp  kRootUUID (the System volume, also the ADT root-matching UUID), and the APFS type GUID and
+                           GPT name it selects the partition by (any size)
 """
 import argparse
 import json
@@ -36,11 +36,6 @@ def parse(raw_mount, cryptex_h, cryptex_cpp, block_cpp):
     cpp_text, block_text = Path(cryptex_cpp).read_text(), Path(block_cpp).read_text()
     data = _uuid(_define(raw_text, "SWITCH_RAW_DATA_UUID", raw_mount), "SWITCH_RAW_DATA_UUID")
     preboot = _uuid(_define(raw_text, "SWITCH_RAW_PREBOOT_UUID", raw_mount), "SWITCH_RAW_PREBOOT_UUID")
-    size = _define(raw_text, "SWITCH_RAW_BYTES", raw_mount)
-    size_match = re.fullmatch(r"(?:UINT64_C\()?(\d+)(?:ULL|UL|U)?\)?", size)
-    if not size_match:
-        raise SystemExit("{}: SWITCH_RAW_BYTES is not a number: {}".format(raw_mount, size))
-    partition_bytes = int(size_match.group(1))
     if preboot != _uuid(_define(h_text, "SWITCH_PREBOOT_UUID", cryptex_h), "SWITCH_PREBOOT_UUID"):
         raise SystemExit("SwitchRawMount.h and SwitchCryptex.h disagree on the Preboot UUID")
     system_cryptex = _uuid(_define(h_text, "SWITCH_SYSTEM_CRYPTEX_UUID", cryptex_h), "SWITCH_SYSTEM_CRYPTEX_UUID")
@@ -60,12 +55,12 @@ def parse(raw_mount, cryptex_h, cryptex_cpp, block_cpp):
     type_bytes = bytes(int(b, 16) for b in re.findall(r"0x([0-9a-fA-F]{2})", apfs_type.group(1)))
     if len(type_bytes) != 16:
         raise SystemExit("{}: kApfsType is not 16 bytes".format(block_cpp))
-    if partition_bytes % 512:
-        raise SystemExit("SWITCH_RAW_BYTES is not a multiple of 512")
+    name = re.search(r'kPartitionName\[\]\s*=\s*"([^"]+)"', block_text)
+    if not name:
+        raise SystemExit("{}: no kPartitionName".format(block_cpp))
     return {
-        "partition_bytes": partition_bytes,
-        "partition_sectors": partition_bytes // 512,
         "partition_type": str(uuid.UUID(bytes_le=type_bytes)).upper(),
+        "partition_name": name.group(1),
         "volumes": {
             "system": {"uuid": _uuid(root.group(1), "kRootUUID"), "role": 0x0001},
             "data": {"uuid": data, "role": 0x0040, "name": "SwitchDataTrial"},

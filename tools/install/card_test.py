@@ -13,7 +13,7 @@ from python.runfiles import runfiles
 from tools.install import card as cards
 from tools.install import gpt
 
-SPEC = {"partition_bytes": 32 << 30, "partition_sectors": (32 << 30) // 512}
+SPEC = {"partition_name": "iOS"}
 
 
 def table(mutate=None):
@@ -52,31 +52,68 @@ def retype(index, kind):
     return mutate
 
 
+def both(*mutations):
+    def mutate(entries, mbr):
+        for m in mutations:
+            m(entries, mbr)
+    return mutate
+
+
+def rename(index, name):
+    def mutate(entries, mbr):
+        entries[index * 128 + 56:index * 128 + 128] = name.encode("utf-16-le").ljust(72, b"\0")
+    return mutate
+
+
+def shrink(index, sectors):
+    def mutate(entries, mbr):
+        last = int.from_bytes(entries[index * 128 + 40:index * 128 + 48], "little") - sectors
+        entries[index * 128 + 40:index * 128 + 48] = last.to_bytes(8, "little")
+    return mutate
+
+
 class CardTest(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.object(cards.host, "disk_info", return_value={"FilesystemType": "msdos"})
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_real_card_targets_userdata(self):
-        card = table()
-        target = cards.check_layout(card, SPEC)
+    def test_linux_and_android_card_asks_which(self):
+        with self.assertRaisesRegex(cards.Refused, "--partition"):
+            cards.check_layout(table(), SPEC)
+        target = cards.check_layout(table(), SPEC, partition="userdata")
+        self.assertEqual((target.index, target.name), (8, "userdata"))
+        self.assertEqual(cards.check_layout(table(), SPEC, partition="l4t").index, 1)
+
+    def test_one_fresh_partition_is_taken(self):
+        target = cards.check_layout(table(rename(1, "linux")), SPEC)
         self.assertEqual((target.index, target.name), (8, "userdata"))
 
     def test_already_installed_card(self):
         card = table(retype(8, gpt.APFS))
         self.assertEqual(cards.check_layout(card, SPEC).index, 8)
+        self.assertEqual(cards.check_layout(table(rename(1, "iOS")), SPEC).index, 1)
+        self.assertEqual(cards.check_layout(table(rename(8, "iOS-setup")), SPEC).index, 8)
 
-    def test_refuses_wrong_size(self):
-        def shrink(entries, mbr):
-            last = int.from_bytes(entries[8 * 128 + 40:8 * 128 + 48], "little") - 1
-            entries[8 * 128 + 40:8 * 128 + 48] = last.to_bytes(8, "little")
-        with self.assertRaisesRegex(cards.Refused, "requires exactly"):
-            cards.check_layout(table(shrink), SPEC)
+    def test_any_aligned_size(self):
+        self.assertEqual(cards.check_layout(table(both(rename(1, "linux"), shrink(8, 8))), SPEC).index, 8)
+        with self.assertRaisesRegex(cards.Refused, "cannot hold iOS"):
+            cards.check_layout(table(both(rename(1, "linux"), shrink(8, 1))), SPEC)
 
     def test_refuses_second_apfs_partition(self):
-        with self.assertRaisesRegex(cards.Refused, "other APFS"):
-            cards.check_layout(table(retype(1, gpt.APFS)), SPEC)
+        with self.assertRaisesRegex(cards.Refused, "more than one APFS"):
+            cards.check_layout(table(both(retype(1, gpt.APFS), retype(8, gpt.APFS))), SPEC)
+        with self.assertRaisesRegex(cards.Refused, "already has iOS"):
+            cards.check_layout(table(retype(1, gpt.APFS)), SPEC, partition="userdata")
+
+    def test_hybrid_mbr_may_list_the_whole_target(self):
+        card = table()
+        l4t = card.table.entries[1]
+        card.table.mbr_partitions.append(gpt.MbrPartition(3, 0, cards.LINUX_MBR, l4t.first, l4t.sectors))
+        self.assertEqual(cards.check_layout(card, SPEC, partition="l4t").index, 1)
+        card.table.mbr_partitions[-1] = gpt.MbrPartition(3, 0, cards.LINUX_MBR, l4t.first, l4t.sectors - 8)
+        with self.assertRaisesRegex(cards.Refused, "hybrid MBR"):
+            cards.check_layout(card, SPEC, partition="l4t")
 
     def test_refuses_without_hos_data(self):
         def no_fat(entries, mbr):
@@ -93,11 +130,12 @@ class CardTest(unittest.TestCase):
             cards.check_layout(card, SPEC)
 
     def test_refuses_emummc_or_unknown_target(self):
-        def rename(entries, mbr):
-            entries[8 * 128 + 56:8 * 128 + 128] = "other".encode("utf-16-le").ljust(72, b"\0")
+        def unknown(entries, mbr):
             entries[8 * 128 + 16:8 * 128 + 32] = bytes(15) + b"\1"
-        with self.assertRaisesRegex(cards.Refused, "exactly one userdata"):
-            cards.check_layout(table(rename), SPEC)
+        with self.assertRaisesRegex(cards.Refused, "expected one Linux"):
+            cards.check_layout(table(both(rename(1, "linux"), rename(8, "other"), unknown)), SPEC)
+        with self.assertRaisesRegex(cards.Refused, "expected one Linux"):
+            cards.check_layout(table(both(rename(1, "linux"), retype(8, gpt.EMUMMC))), SPEC)
 
     def test_resolve_refuses_partitions_and_paths(self):
         for argument in ("disk4s9", "/Volumes/SWITCH SD", "/dev/disk4s1", "rdisk4s2"):

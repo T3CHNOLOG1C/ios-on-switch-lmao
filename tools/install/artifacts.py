@@ -5,7 +5,7 @@
 
 Writes into <dir>:
   bootloader/ini/ios.ini   the hekate entry (copied from the boot package, which owns it)
-  uuid-spec.json                the partition size and volume/cryptex UUIDs, as the kernel sources define them
+  uuid-spec.json                the partition type and name and the volume/cryptex UUIDs the kernel sources define
   preboot-staging.json          the Preboot files: path on Preboot, IPSW member, size, sha256, owner and mode
   data-seed-plan.txt            how Data is seeded and what the kernel itself creates on first boot
   boot-entry.json               switchroot/ios/* and the ini: size and sha256 of each file
@@ -70,7 +70,7 @@ def main():
     overlay = package / "overlay"
     manifest = {
         "ipsw": {k: pins[k] for k in ("product", "device_class", "version", "build", "url", "size")},
-        "partition": {"bytes": spec["partition_bytes"], "type": spec["partition_type"], "gpt_name": "iOS"},
+        "partition": {"type": spec["partition_type"], "gpt_name": spec["partition_name"]},
         "volumes": spec["volumes"],
         "os_image": {k: pins["members"]["os"][k] for k in ("member", "size", "content_sha256")},
         "preboot": staging,

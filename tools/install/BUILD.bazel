@@ -14,9 +14,12 @@ py_library(
     srcs = [
         "apfs.py",
         "card.py",
+        "compose.py",
         "gpt.py",
         "host.py",
+        "populate.py",
         "renamed.py",
+        "target.py",
     ],
     imports = ["../.."],
 )

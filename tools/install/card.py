@@ -6,10 +6,11 @@ Guard rails (every command):
   * never an internal non-removable disk;
   * it must look like a Switch card: valid primary and backup GPT, entry #0 "hos_data" a Microsoft basic data (FAT32)
     partition that the hybrid MBR also lists;
-  * the target is exactly one entry whose partition GUID is the card's userdata GUID or whose name is userdata, UDA or
-    iOS, exactly the kernel's SWITCH_RAW_BYTES (32 GiB), Linux-data or APFS typed, not the FAT, not emuMMC;
-  * no other APFS-typed entry on the card (the kernel takes the only one).
-Writes on the FAT go only to switchroot/ios/* and bootloader/ini/ios.ini (by name), and remove a copy of this boot
+  * the target is the one partition target.py selects (any size the kernel takes), Linux-data or APFS typed, not the
+    FAT, not emuMMC; no other APFS or iOS entry on the card (the kernel takes the only one);
+  * the hybrid MBR may list the target only as the whole partition (hekate lists l4t), never part of it.
+Writes on the FAT go only to switchroot/ios/*, bootloader/ini/ios.ini and bootloader/res/icon_ios.bmp (by name), and
+remove a copy of this boot
 entry under the project's former names (renamed.py); on the iPad volumes only to the paths the caller names.
 """
 import contextlib
@@ -17,16 +18,15 @@ import hashlib
 import os
 import shutil
 import tempfile
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.install import gpt, host, renamed
+from tools.install import gpt, host, renamed, target as targets
 
-USERDATA_GUID = uuid.UUID("5703F8E9-0032-DF6B-2674-B1A569FFC4EE")
-TARGET_NAMES = {"userdata", "UDA", "iOS"}
+LINUX_MBR = 0x83
 BOOT_ENTRY = "switchroot/ios"
 INI = "bootloader/ini/ios.ini"
+ICON = "bootloader/res/icon_ios.bmp"
 HASH_CHUNK = 8 << 20
 
 
@@ -94,7 +94,14 @@ def read_table(card):
     return card.table
 
 
-def check_layout(card, spec):
+def _select(card, entries, spec, partition):
+    try:
+        return targets.select(entries, spec.get("partition_name", "iOS"), partition)
+    except targets.TargetError as error:
+        raise Refused("{}: {}".format(card.disk, error)) from None
+
+
+def check_layout(card, spec, partition=None):
     """Find hos_data and the target, or refuse."""
     table = card.table
     entries = table.used
@@ -108,25 +115,17 @@ def check_layout(card, spec):
     fat_info = host.disk_info(card.slice(first)) or {}
     if fat_info.get("FilesystemType") not in ("msdos", None) and fat_info.get("FilesystemType"):
         raise Refused("{}: hos_data is {}, not FAT".format(card.disk, fat_info.get("FilesystemType")))
-    candidates = [e for e in entries if e.guid == USERDATA_GUID or e.name in TARGET_NAMES]
-    if len(candidates) != 1:
-        raise Refused("{}: expected exactly one userdata/UDA/iOS entry, found {}".format(
-            card.disk, [e.describe() for e in candidates]))
-    target = candidates[0]
-    if target.index == first.index or target.type == gpt.EMUMMC:
-        raise Refused("{}: the target {} is the FAT or emuMMC".format(card.disk, target.describe()))
-    if target.sectors != spec["partition_sectors"]:
-        raise Refused("{}: {} is {} bytes; the kernel requires exactly {} (SWITCH_RAW_BYTES)".format(
-            card.disk, target.describe(), target.bytes, spec["partition_bytes"]))
+    eligible = [e for e in entries if e.index != first.index and e.type != gpt.EMUMMC]
+    chosen = _select(card, [targets.Candidate(e.index, e.name, e.type == gpt.APFS, e.bytes)
+                            for e in eligible], spec, partition)
+    target = next(e for e in eligible if e.index == chosen.index)
     if target.type not in (gpt.LINUX_DATA, gpt.APFS):
         raise Refused("{}: {} is neither Linux data nor APFS".format(card.disk, target.describe()))
-    others = [e for e in entries if e.type == gpt.APFS and e.index != target.index]
-    if others:
-        raise Refused("{}: other APFS partitions {}: the kernel needs exactly one".format(
-            card.disk, [e.describe() for e in others]))
-    if any(target.first <= p.first + p.sectors - 1 and p.first <= target.last
-           for p in table.mbr_partitions if p.kind not in (0, 0xEE)):
-        raise Refused("{}: the hybrid MBR lists a partition overlapping the target".format(card.disk))
+    for p in table.mbr_partitions:
+        if p.kind in (0, 0xEE) or not (target.first <= p.first + p.sectors - 1 and p.first <= target.last):
+            continue
+        if not (p.kind == LINUX_MBR and p.first == target.first and p.sectors == target.sectors):
+            raise Refused("{}: the hybrid MBR lists a partition overlapping the target".format(card.disk))
     card.target, card.fat = target, first
     return target
 
@@ -154,25 +153,17 @@ def diskutil_partitions(card):
     return out
 
 
-def check_layout_unprivileged(card, spec):
-    """The same guards as check_layout, from diskutil's view (deploy, and dry runs without root). Returns (fat
-    partition, target partition)."""
+def check_layout_unprivileged(card, spec, partition=None):
+    """The same guards as check_layout, from diskutil's view (deploy, image sizing, dry runs without root). Returns
+    (fat partition, target partition)."""
     parts = diskutil_partitions(card)
     if not parts or parts[0].name != "hos_data" or parts[0].content != "Microsoft Basic Data" or \
             parts[0].filesystem not in ("msdos", ""):
         raise Refused("{}: the first partition is not the Switch's hos_data FAT32".format(card.disk))
-    targets = [p for p in parts if p.guid == str(USERDATA_GUID).upper() or p.name in TARGET_NAMES]
-    if len(targets) != 1:
-        raise Refused("{}: expected exactly one userdata/UDA/iOS partition, found {}".format(
-            card.disk, [p.identifier for p in targets]))
-    target = targets[0]
-    if target.size != spec["partition_bytes"]:
-        raise Refused("{}: {} is {} bytes, not {}".format(card.disk, target.identifier, target.size,
-                                                         spec["partition_bytes"]))
-    apfs_parts = [p for p in parts if p.content == "Apple_APFS" and p.identifier != target.identifier]
-    if apfs_parts:
-        raise Refused("{}: other APFS partitions {}".format(card.disk, [p.identifier for p in apfs_parts]))
-    return parts[0], target
+    eligible = [p for p in parts[1:] if p.content.upper() != str(gpt.EMUMMC).upper()]
+    chosen = _select(card, [targets.Candidate(p.index, p.name, p.content == "Apple_APFS", p.size)
+                            for p in eligible], spec, partition)
+    return parts[0], next(p for p in eligible if p.index == chosen.index)
 
 
 def table_snapshot(card):
@@ -231,7 +222,7 @@ def sha256_file(path):
 
 
 def boot_entry_files(package):
-    """{relative path on the FAT: source} of the boot package: switchroot/ios/* and the hekate ini."""
+    """{relative path on the FAT: source} of the boot package: switchroot/ios/*, the hekate ini and its icon."""
     package = Path(package)
     files = {}
     entry = package / BOOT_ENTRY
@@ -242,6 +233,8 @@ def boot_entry_files(package):
             raise host.HostError("unexpected directory {} in the boot package".format(path))
         files["{}/{}".format(BOOT_ENTRY, path.name)] = path
     files[INI] = package / INI
+    if (package / ICON).is_file():
+        files[ICON] = package / ICON
     return files
 
 
