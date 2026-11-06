@@ -10,42 +10,46 @@
   "addresses": {
     "alloc_size": "0xfffffff009aeb438",
     "bytes_per_row": "0xfffffff009aee61c",
-    "complete": "unported",
-    "device_unlock": "unported",
+    "complete": "0xfffffff009aefca4",
+    "device_unlock": "0xfffffff009af1a38",
     "format": "0xfffffff009aee5a8",
     "height": "0xfffffff009aee604",
-    "lookup": "unported",
+    "lookup": "0xfffffff009affb20",
     "memory": "0xfffffff009aee4e8",
     "plane_bytes_per_row": "0xfffffff009aeec40",
     "plane_count": "0xfffffff009aee64c",
     "plane_height": "0xfffffff009aee9dc",
     "plane_offset": "0xfffffff009aee778",
     "plane_width": "0xfffffff009aee910",
-    "prepare": "unported",
-    "protection": "unported",
+    "prepare": "0xfffffff009aefa78",
+    "protection": "0xfffffff009aec5f4",
     "width": "0xfffffff009aee5f8"
   },
   "found": {
     "alloc_size": "ldr x0, [x0, #0x90] as in 21H461",
     "bytes_per_row": "ldr x0, [x0, #0x68]: the field the plane-bytes-per-row accessor falls back to",
-    "complete": "not located in this kind yet",
-    "device_unlock": "not located in this kind yet",
+    "complete": "IOSurface::complete(): the lock at +0x398, the wire count at +0x22c dropped, the rest only when it reaches 0 (21H461: +0x380, +0x20c); the GOT entry right after prepare's in both kexts, as in 21H461",
+    "device_unlock": "the device write end (surface, options), as in 21H461: under the lock at +0x50, unless options bit 0, the seed (+0xc of the root entry, now a signed pointer at +0x178) and the write count (+0x10) go up and the cache flags (+0x3d0, 21H461 +0x3b0) get 0x1c; the 7th and 10th __ZN9IOSurface GOT entries of AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461",
     "format": "ldr w0, [x0, #0x80] as in 21H461",
     "height": "ldr x0, [x0, #0x60]: the field the plane-height accessor falls back to",
-    "lookup": "not located in this kind yet",
+    "lookup": "IOSurfaceRoot::lookupSurface(id, task), as in 21H461: find_surface(id, task), the result's lock at +0xd8 and the root's at +0x140 (21H461 +0x138); the first IOSurface entry of AppleM2ScalerCSCDriver's __auth_got and the second of IOMobileGraphicsFamily's, where 21H461's GOTs hold it",
     "memory": "ldr x0, [x0, #0x30] as in 21H461, at the head of the accessor run",
     "plane_bytes_per_row": "plane accessor reading entry +0x20, falling back to +0x68",
     "plane_count": "ldr w0, [x0, #0x98]: the count every plane accessor bounds-checks",
     "plane_height": "plane accessor reading entry +0x08, falling back to +0x60",
     "plane_offset": "plane accessor reading entry +0x18",
     "plane_width": "plane accessor reading entry +0x00 (stride 0x38), falling back to +0x58",
-    "prepare": "not located in this kind yet",
-    "protection": "not located in this kind yet",
+    "prepare": "IOSurface::prepare(): the descriptor (+0x30) checked, the lock at +0x398 taken, the wire count at +0x22c raised (21H461: +0x380, +0x20c); the 11th and 15th __ZN9IOSurface GOT entries of AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461",
+    "protection": "the protection options: the value at +0x3a0, now kept signed (autda, the address and +0x50 blended) where 21H461 read +0x388 plainly; the GOT entry after the plane accessor that follows getPlaneBytesPerRow in both AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461",
     "width": "ldr x0, [x0, #0x58]: the field the plane-width accessor falls back to"
   },
   "hints": {
     "functions": {
-      "lookup": "unported",
+      "lookup": {
+        "at": "0xfffffff009affb20",
+        "body": "d503237f a9bd57f6 a9014ff4 a9027bfd 910083fd aa0203f5 aa0103f6 aa0003f4 aa0203e1 94000024 aa0003f3 b4000060 f9406e60",
+        "why": "IOSurfaceRoot::lookupSurface(id, task), as in 21H461: find_surface(id, task), the result's lock at +0xd8 and the root's at +0x140 (21H461 +0x138); the first IOSurface entry of AppleM2ScalerCSCDriver's __auth_got and the second of IOMobileGraphicsFamily's, where 21H461's GOTs hold it"
+      },
       "memory": {
         "at": "0xfffffff009aee4e8",
         "body": "f9401800 d65f03c0",
@@ -81,7 +85,11 @@
         "body": "f9404800 d65f03c0",
         "why": "ldr x0, [x0, #0x90] as in 21H461"
       },
-      "protection": "unported",
+      "protection": {
+        "at": "0xfffffff009aec5f4",
+        "body": "910e8008 f941d010 f9402809 d343fd29 8b482131 f2fb4571 dac11a30 aa1003f1 dac147f1 eb11021f 54000040 d4388e40 aa1003e0 d65f03c0",
+        "why": "the protection options: the value at +0x3a0, now kept signed (autda, the address and +0x50 blended) where 21H461 read +0x388 plainly; the GOT entry after the plane accessor that follows getPlaneBytesPerRow in both AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461"
+      },
       "plane_width": {
         "at": "0xfffffff009aee910",
         "body": "d503237f a9bf7bfd 910003fd",
@@ -102,9 +110,21 @@
         "body": "d503237f a9bf7bfd 910003fd",
         "why": "plane accessor reading entry +0x20, falling back to +0x68"
       },
-      "prepare": "unported",
-      "complete": "unported",
-      "device_unlock": "unported"
+      "prepare": {
+        "at": "0xfffffff009aefa78",
+        "body": "d503237f d10183ff a90357f6 a9044ff4 a9057bfd 910143fd b0ff2aa8 f9406908 f9400108 f90017e8 f9401808 b4000308 aa0003f3 f941cc00 94009764 9108b260 940097a6 35000d40 394f4668",
+        "why": "IOSurface::prepare(): the descriptor (+0x30) checked, the lock at +0x398 taken, the wire count at +0x22c raised (21H461: +0x380, +0x20c); the 11th and 15th __ZN9IOSurface GOT entries of AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461"
+      },
+      "complete": {
+        "at": "0xfffffff009aefca4",
+        "body": "d503237f d10183ff a9044ff4 a9057bfd 910143fd aa0003f3 b0ff2aa8 f9406908 f9400108 f81e83a8 f941cc00 940096dc 9108b260 9400971a 7100041f 54000401",
+        "why": "IOSurface::complete(): the lock at +0x398, the wire count at +0x22c dropped, the rest only when it reaches 0 (21H461: +0x380, +0x20c); the GOT entry right after prepare's in both kexts, as in 21H461"
+      },
+      "device_unlock": {
+        "at": "0xfffffff009af1a38",
+        "body": "d503237f a9be4ff4 a9017bfd 910043fd aa0103f4 aa0003f3 f9402800 94008f7b 37000274 f940be70 9105e271 f2f47371 dac11a30 aa1003f1 dac147f1 eb11021f 54000040 d4388e40 b9400e08 11000508 b9000e08 b943d268 321e0908 b903d268 b9401208 11000508 b9001208 f9402a60",
+        "why": "the device write end (surface, options), as in 21H461: under the lock at +0x50, unless options bit 0, the seed (+0xc of the root entry, now a signed pointer at +0x178) and the write count (+0x10) go up and the cache flags (+0x3d0, 21H461 +0x3b0) get 0x1c; the 7th and 10th __ZN9IOSurface GOT entries of AppleM2ScalerCSCDriver and IOMobileGraphicsFamily, as in 21H461"
+      }
     }
   }
 }
