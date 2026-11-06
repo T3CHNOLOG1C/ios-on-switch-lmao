@@ -7,6 +7,7 @@ The shader seed and the raw pack are gpu/seed's.
 """
 
 load("//bazel:profile.bzl", "PROFILE_ATTR", "switch_debug_define")
+load("//gpu/seed:defs.bzl", "SeedInfo")
 load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "TREE_ROOT")
 
 _XCODE = {
@@ -238,12 +239,11 @@ def _gpu_tree_impl(ctx):
     args.add("--bundle", bundle.path)
     args.add("--trustcache", ctx.file.trustcache)
     args.add("--trust-json", ctx.file.trust_json)
-    args.add_all(ctx.files.overlay, before_each = "--overlay", expand_directories = False)
     args.add("--out", out.path)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [bundle, ctx.file.trustcache, ctx.file.trust_json] + ctx.files.overlay,
+        inputs = [bundle, ctx.file.trustcache, ctx.file.trust_json],
         outputs = [out],
         mnemonic = "GpuTree",
         progress_message = "Laying out the GPU bundle directory",
@@ -256,7 +256,46 @@ gpu_tree = rule(
         "bundle": attr.label(mandatory = True),
         "trustcache": attr.label(mandatory = True, allow_single_file = True),
         "trust_json": attr.label(mandatory = True, allow_single_file = True),
-        "overlay": attr.label_list(doc = "directories laid over the tree's ngpu/addons (//gpu/seed:tree: the seed and the raw pack)"),
         "_tool": attr.label(default = "//tools/gpu:assemble", executable = True, cfg = "exec"),
+    },
+)
+
+# --- What deploy stages: a manifest over the outputs, nothing copied ----------------------------------------------
+
+def _rlocation(ctx, f):
+    return f.short_path[3:] if f.short_path.startswith("../") else ctx.workspace_name + "/" + f.short_path
+
+def _gpu_stage_impl(ctx):
+    seed = ctx.attr.seed[SeedInfo]
+    base = [f for f in ctx.files.base if f.is_directory][0]
+    manifest = ctx.actions.declare_file(ctx.attr.name + ".stage")
+    args = ctx.actions.args()
+    args.add("--self", _rlocation(ctx, manifest))
+    for flag, tree in (("--base", base), ("--seed", seed.meta), ("--raw", ctx.file.raw)):
+        args.add(flag, tree.path)
+        args.add(flag + "-rlocation", _rlocation(ctx, tree))
+    for pack in seed.packs:
+        args.add("--pack", pack)
+        args.add("--pack-rlocation", _rlocation(ctx, pack))
+    args.add("--out", manifest)
+    ctx.actions.run(
+        executable = ctx.executable._tool,
+        arguments = [args],
+        inputs = [base, seed.meta, ctx.file.raw] + seed.packs,
+        outputs = [manifest],
+        mnemonic = "GpuStageManifest",
+        progress_message = "Listing the GPU bundle, the shader seed and the raw pack for the Data volume",
+    )
+    files = [manifest, base, seed.meta, ctx.file.raw] + seed.packs
+    return [DefaultInfo(files = depset([manifest]), runfiles = ctx.runfiles(files = files))]
+
+gpu_stage = rule(
+    implementation = _gpu_stage_impl,
+    doc = "The file deploy's stager syncs the Data volume to: every file, its sha256 and where it is in the runfiles.",
+    attrs = {
+        "base": attr.label(mandatory = True, doc = "//gpu:base: the signed bundle"),
+        "seed": attr.label(mandatory = True, providers = [SeedInfo]),
+        "raw": attr.label(mandatory = True, allow_single_file = True, doc = "the raw pack's directory"),
+        "_tool": attr.label(default = "//tools/gpu:stage_manifest", executable = True, cfg = "exec"),
     },
 )

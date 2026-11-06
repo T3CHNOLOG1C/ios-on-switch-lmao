@@ -158,9 +158,8 @@ def main(argv: list[str] | None = None) -> int:
         if not data:
             raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
         check_kind(card, args.ipsw)
-        if args.stage_gpu and not (
-            args.gpu_bundle and (Path(args.gpu_bundle) / 'TegraGM20BMetal.trustcache').is_file()
-        ):
+        gpu = Path(args.gpu_bundle) if args.gpu_bundle else None
+        if args.stage_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
             raise host.HostError('--stage-gpu: no GPU bundle (build //gpu:bundle; --//deploy:gpu_bundle=//gpu:bundle)')
         with cards.mounted(fat.identifier, log) as fat_root:
             changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)

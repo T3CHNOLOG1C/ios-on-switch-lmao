@@ -1,8 +1,8 @@
 # The TegraGM20B Metal plugin bundle for iOS 17 (arm64): the GPU userland of the Switch's GM20B.
 #
 #   bazel build //gpu:base          IPSW-free: ngpu/addons/TegraGM20BMetal.bundle, TegraGM20BMetal.trustcache, trust.json
-#   bazel build //gpu:bundle        what deploy stages: base + the shader seed and the raw pack (//gpu/seed:tree, which
-#                                   reads the IPSW's Metal libraries)
+#   bazel build //gpu:bundle        what deploy stages: base + the shader seed and the raw pack (//gpu/seed, which reads
+#                                   the IPSW's Metal libraries), as a manifest over their outputs in deploy's runfiles
 #   bazel build //gpu:trustcache    only the trust-cache module the boot package appends (both CDHashes)
 #   bazel build //gpu:plugin --output_groups=debug   the plugin's dSYM
 #
@@ -13,7 +13,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_static_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/rust:defs.bzl", "cargo_ids", "rust_artifact")
-load(":defs.bzl", "gpu_tree", "llvm_as", "metal_bundle", "metal_plugin", "raw_stack")
+load(":defs.bzl", "gpu_stage", "gpu_tree", "llvm_as", "metal_bundle", "metal_plugin", "raw_stack")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -179,11 +179,10 @@ gpu_tree(
     trustcache = ":trustcache",
 )
 
-gpu_tree(
+gpu_stage(
     name = "bundle",
-    bundle = ":signed_bundle",
-    overlay = ["//gpu/seed:tree"],
+    base = ":base",
+    raw = "//gpu/seed:raw_pack",
+    seed = "//gpu/seed:seed",
     tags = ["manual"],
-    trust_json = ":trust_json",
-    trustcache = ":trustcache",
 )
