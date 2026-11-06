@@ -9324,13 +9324,14 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * with them: there the three deadlocked each other). locationd runs since r17: third-party apps' CoreMotion
 	 * (CMMotionManager accelerometer, gyroscope and device motion) is served by it over XPC from the console IMU's
 	 * HID services (drivers/SwitchMotion), and r8a's bluetoothd already asked for it ("failed lookup:
-	 * com.apple.locationd.registration"). With CommCenter and identityservicesd off, its lookups of them fail at
-	 * once (a disabled job is refused at import), as bluetoothd's do. */
+	 * com.apple.locationd.registration"). With identityservicesd off, its lookups of it fail at once (a disabled job is
+	 * refused at import), as bluetoothd's do. CommCenter runs: a device tree without a baseband node loads
+	 * com.apple.CommCenter-noncellular.plist, as on a Wi-Fi iPad, and SpringBoard's SBTelephonyManager expects it
+	 * (without it, it retried com.apple.commcenter.xpc on its main thread once a second). */
 #define NATIVE_SWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	    "<plist version=\"1.0\"><dict>" \
-	    "<key>com.apple.identityservicesd</key><true/>" \
-	    "<key>com.apple.CommCenter</key><true/>"
+	    "<key>com.apple.identityservicesd</key><true/>"
 	/* Bluetooth needs drivers/SwitchBluetooth, which boot-arg switch-no-bt keeps off (the BlueTool stand-in in the
 	 * overlay and bluetoothd's transport, native_switch_exec_environment, follow it). Without it bluetoothd has no
 	 * controller and stays disabled, and so does audiomxd: its Bluetooth plug-in would retry bluetoothd's
