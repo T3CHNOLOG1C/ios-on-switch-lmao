@@ -549,3 +549,21 @@ switch_stall_report(__unused thread_call_param_t p0, __unused thread_call_param_
 		thread_deallocate(t);
 	}
 }
+
+#if DEVELOPMENT || DEBUG
+/*
+ * The frame timeline (NativeLegacyDisplay's "SwitchFrame" line) names the scheduling of the thread that submitted a
+ * swap: base and current priority, mode (1 realtime, 2 fixed, 3 timeshare) and effective QoS. Unlocked reads: a
+ * snapshot for a log line.
+ */
+void switch_thread_sched(thread_t t, int *base_pri, int *sched_pri, int *mode, int *qos);
+
+void
+switch_thread_sched(thread_t t, int *base_pri, int *sched_pri, int *mode, int *qos)
+{
+	*base_pri = t->base_pri;
+	*sched_pri = t->sched_pri;
+	*mode = t->sched_mode;
+	*qos = t->effective_policy.thep_qos;
+}
+#endif

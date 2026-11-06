@@ -123,6 +123,8 @@ void nvxnu_irq_start(void);
  * nvxnu_idle() no longer looks at PMC); nvxnu_irq_resume() once it is back, before nvkm arms its interrupts. */
 void nvxnu_irq_suspend(void);
 void nvxnu_irq_resume(void);
+/* A frame timeline kdebug tracepoint (SwitchFrameTimeline.h): debug kernels only, free while tracing is off. */
+void nvxnu_kdebug(nvxnu_u32 code, nvxnu_u64 a, nvxnu_u64 b, nvxnu_u64 c);
 /* The interrupt passes run so far, by line. */
 void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall);
 nvxnu_u32 nvxnu_wake_seq(void);

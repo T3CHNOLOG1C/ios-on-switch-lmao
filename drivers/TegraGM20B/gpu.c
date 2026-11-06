@@ -58,6 +58,7 @@
 #include <nvhw/class/cla0b5.h>
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BSleepGate.h"
+#include "../TegraDisplayFlip/SwitchFrameTimeline.h"
 
 /* mainline tegra210.dtsi gpu@57000000: BAR0, BAR1, SPI 157 ("stall") / 158 ("nonstall") */
 static struct resource gpu_res[] = {
@@ -683,7 +684,7 @@ static int l2_on(void)
 	return 1;
 }
 
-static void l2_invalidate(void)
+static u64 l2_invalidate(void)
 {
 	struct nvkm_device *device = gpu.device;
 	u64 start = nvxnu_nanotime(), end, took;
@@ -705,6 +706,7 @@ static void l2_invalidate(void)
 	if (took > l2_time.max)
 		l2_time.max = took;
 	mutex_unlock(&l2_lock);
+	return took;
 }
 
 struct tgm_vm {
@@ -2609,6 +2611,8 @@ static void chan_wake_waiters(struct tgm_chan *chan)
 	if (done == chan->woken_done)
 		return;
 	chan->woken_done = done;
+	if (SWITCH_FRAME_TIMELINE)
+		nvxnu_kdebug(SWITCH_KDBG_GPU_DONE, chan->chid, done, chan->critical);
 	chan_wake_all_waiters(chan);
 }
 
@@ -3251,6 +3255,40 @@ static u32 chan_fence(struct tgm_chan *chan)
 	return next;
 }
 
+/* The frame timeline (SwitchFrameTimeline.h): the compositor's submissions since the display last took them, and every
+ * other process's count. Submitters on several connections at once: each field on its own atomics. */
+static struct {
+	u64 first, last, exec_ns, l2_ns;
+	u32 submits, others;
+} frame_gpu;
+
+static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start, u64 l2)
+{
+	u64 now = nvxnu_nanotime(), none = 0;
+
+	nvxnu_kdebug(SWITCH_KDBG_SUBMIT, chan->chid, seqno, chan->critical);
+	if (!chan->critical) {
+		__atomic_fetch_add(&frame_gpu.others, 1, __ATOMIC_RELAXED);
+		return;
+	}
+	__atomic_compare_exchange_n(&frame_gpu.first, &none, start, false, __ATOMIC_RELAXED,
+				    __ATOMIC_RELAXED);
+	__atomic_store_n(&frame_gpu.last, start, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&frame_gpu.submits, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&frame_gpu.exec_ns, now - start, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&frame_gpu.l2_ns, l2, __ATOMIC_RELAXED);
+}
+
+void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
+{
+	out->firstSubmit = __atomic_exchange_n(&frame_gpu.first, 0, __ATOMIC_RELAXED);
+	out->lastSubmit = __atomic_exchange_n(&frame_gpu.last, 0, __ATOMIC_RELAXED);
+	out->submits = __atomic_exchange_n(&frame_gpu.submits, 0, __ATOMIC_RELAXED);
+	out->others = __atomic_exchange_n(&frame_gpu.others, 0, __ATOMIC_RELAXED);
+	out->execNs = __atomic_exchange_n(&frame_gpu.exec_ns, 0, __ATOMIC_RELAXED);
+	out->l2Ns = __atomic_exchange_n(&frame_gpu.l2_ns, 0, __ATOMIC_RELAXED);
+}
+
 /* Present order: held by a user submission from its present wait to its kick, and by the present
  * from its snapshot of the user channels to its kick, so every user submission is either in a present's snapshot (the
  * copy waits for it) or kicked after that present (it waits for the copy). */
@@ -3261,6 +3299,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		     uint32_t *seqno, const struct tgm_prof *prof)
 {
 	int ordered = present_order_on() && !chan->kernel && chan->vm->pfence_va;
+	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0, l2 = 0;
 	u32 i, stamps = 0;
 	int ret;
 
@@ -3294,7 +3333,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	if (ret)
 		return ret == -ETIMEDOUT ? -EBUSY : ret;
 	if (l2_on())
-		l2_invalidate(); /* before the host can fetch anything of this submission */
+		l2 = l2_invalidate(); /* before the host can fetch anything of this submission */
 	if (ordered) {
 		mutex_lock(&order_lock);
 		present_order(chan); /* first, so the start stamp below times the work itself */
@@ -3331,6 +3370,8 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	*seqno = chan_fence(chan);
 	if (ordered)
 		mutex_unlock(&order_lock);
+	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
+		frame_submitted(chan, *seqno, start, l2);
 	if (stats_on())
 		stats_tick();
 	return 0;

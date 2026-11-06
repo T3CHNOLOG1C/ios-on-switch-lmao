@@ -15,6 +15,7 @@
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
+#include <sys/kdebug.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMpowerState.h>
 #include <libkern/c++/OSData.h>
@@ -23,6 +24,7 @@
 #include "../TegraDisplayFlip/TegraBlockSwizzle.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
+#include "../TegraDisplayFlip/SwitchFrameTimeline.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "BootLogoCheck.h"
@@ -93,6 +95,17 @@ extern "C" bool native_legacy_gpu_offer(void *display, IOMemoryDescriptor *, uin
 extern "C" __attribute__((weak)) int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *)
 {
     return -1;
+}
+
+extern "C" __attribute__((weak)) void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
+{
+    *out = {};
+}
+
+// XNU osfmk/kern/switch_stall.c, debug kernels: base and current priority, mode and effective QoS of a thread.
+extern "C" __attribute__((weak)) void switch_thread_sched(thread_t, int *base, int *sched, int *mode, int *qos)
+{
+    *base = *sched = *mode = *qos = 0;
 }
 
 // XNU's text console scrolled by window A's start address (osfmk/console/video_console.c vc_tape; startConsoleTape below).
@@ -505,15 +518,26 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool primary = false;
     bool logicalPM = false;
     bool transferred = false;
+
     // Every request the validator accepted and the family has not retired yet. A client may submit swap N+1 while swap N is still on the GPU
     // (int-131: swap 3 was validated during swap 2's GPU copy and one remembered pointer lost swap 2, which then never retired and left
     // every wait on it busy), so more than one can be pending.
     // r14-probefix: 16 entries, and entries of swaps the family no longer holds (cancelled or discarded: it never asks this
     // driver to retire those) are dropped under the gate (pruneValidated) before the table fills. Full, the oldest entry goes,
     // not entry 0 (which may be the pending head: unvalidated, it would never be taken again and the screen would freeze).
+    // The frame timeline (SwitchFrameTimeline.h), debug kernels: the vsync the swap came after, the GPU's completion of its
+    // present, the compositor's submissions for it, and how the swapping thread and the CPU clock stood.
+    struct FrameTimeline {
+        uint64_t vsync, done;
+        SwitchFrameGpu gpu;
+        uint32_t khzVsync, khzSwap;
+        int basePri, schedPri, mode, qos;
+    };
+
     static constexpr unsigned kValidated = 16;
     const OriginalLegacySwapRequest *validated[kValidated] = {};
     uint64_t validatedAt[kValidated] = {};  // when each was first accepted (mach time): the client's submission
+    FrameTimeline validatedTl[kValidated] = {};
     uint32_t validatedEvicted = 0, validatedStale = 0;
 
     bool isValidated(const OriginalLegacySwapRequest *request) const
@@ -599,6 +623,14 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         return 0;
     }
 
+    FrameTimeline timelineOf(const OriginalLegacySwapRequest *request) const
+    {
+        for (unsigned i = 0; i < kValidated; ++i)
+            if (request && validated[i] == request)
+                return validatedTl[i];
+        return {};
+    }
+
     const OriginalLegacySwapRequest *gpuRequest = nullptr;
     uint64_t gpuLength = 0;
     bool gpuBypass = false;
@@ -617,6 +649,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     IOTimerEventSource *gpuDeadline = nullptr;
     int gpuStatus = 0;
     bool gpuDonePending = false;  // written by native_legacy_gpu_complete before it signals gpuDoneSource
+    uint64_t gpuDoneAt = 0;       // the frame timeline: when it came
     static constexpr unsigned kGpuCopyDeadlineMS = 1000;
     // The refresh tick runs on the family's work loop, the loop of the command gate that registers and removes the vsync clients, so the
     // client queue at +5592 never changes while the sender walks it.
@@ -643,6 +676,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // panics as a silent V_BLANK does. The phase needs the frame marks, so it runs with display stats on (the default).
     VsyncPhase phase;
     uint64_t vpulseTime = 0, vpulseContinuous = 0, deliveredFrame = ~0ull;
+    uint64_t vsyncSentAt = 0;  // the frame timeline: the last vsync sent (its stamp), and the CPU clock then
+    uint32_t vsyncSentKhz = 0;
     int64_t feAfterVblankNs = 0;  // the frame end's time after V_BLANK's, measured
     int32_t phaseCorrection = 0;  // lines, from the measured lead against the asked-for one
     uint32_t vblankLine = 0, totalLines = 0, phaseLine = 0, phaseAsked = 0, measuredLeadUs = 0;
@@ -902,6 +937,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // often the compositor turned vsync off.
     struct FrameMark {
         uint64_t submit, kick, waited, ready;
+        FrameTimeline tl;
     };
 
     FrameMark taken = {}, marks[TegraScanoutRing::kMaxEntries] = {};
@@ -984,8 +1020,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 const uint64_t period = vsyncInterval ? Span::ticksToUs(vsyncInterval) : 16667;
                 const uint64_t frames = (us + period / 2) / period;
                 ++stVb[frames <= 1 ? 0 : frames >= 4 ? 3 : frames - 1];
-                if (frames >= 2)
-                    noteLong((uint32_t)frames, mark);
+                if (frames >= 2) {
+                    const unsigned cause = noteLong((uint32_t)frames, mark);
+                    if (SWITCH_FRAME_TIMELINE)
+                        noteSlowFrame(stamp, us, (uint32_t)frames, cause, mark);
+                }
             }
         }
         lastPresent = stamp;
@@ -993,7 +1032,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     }
 
     // A present frames DC A periods after the previous one (lastPresent, not yet moved on): its cause, see above.
-    void noteLong(uint32_t frames, const FrameMark &mark)
+    unsigned noteLong(uint32_t frames, const FrameMark &mark)
     {
         uint64_t period = vsyncInterval;
         if (!period)
@@ -1010,6 +1049,44 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             cause = kLongLatch;
         ++stLong[cause];
         stLongFrames[cause] += frames - 1;
+        return cause;
+    }
+
+    // Debug kernels: one "SwitchFrame" line per present 1.5 periods or more after the one before (tools/frames reads them),
+    // its points in microseconds from the vsync its swap came after (from its submission when none is known).
+    void noteSlowFrame(uint64_t stamp, uint64_t us, uint32_t frames, unsigned cause, const FrameMark &mark)
+    {
+        static const char *const kCause[kLongCauses] = {"idle", "ca", "gpu", "queue", "latch", "rate"};
+        const FrameTimeline &tl = mark.tl;
+        uint64_t originNs = 0;
+        absolutetime_to_nanoseconds(tl.vsync ? tl.vsync : mark.submit ? mark.submit : stamp, &originNs);
+        auto at = [originNs](uint64_t ticks) -> long long {
+            if (!ticks)
+                return -1;
+            uint64_t ns = 0;
+            absolutetime_to_nanoseconds(ticks, &ns);
+            return ((long long)ns - (long long)originNs) / 1000;
+        };
+        auto atNs = [originNs](uint64_t ns) -> long long {
+            return ns ? ((long long)ns - (long long)originNs) / 1000 : -1;
+        };
+        char line[512];
+        snprintf(
+            line, sizeof(line),
+            "latch %llu after %u frames (%llu us), cause %s; origin %s %llu; first submit %lld, last "
+            "submit %lld (%u, exec %llu us, L2 %llu us), swap %lld, offer %lld, gpu done %lld, flip %lld, latch "
+            "%lld us; other submits %u; swap thread base %d sched %d mode %d qos %d; cpu %u MHz at vsync %u at swap",
+            stamp, frames, us, cause < kLongCauses ? kCause[cause] : "?",
+            tl.vsync      ? "vsync"
+            : mark.submit ? "swap"
+                          : "latch",
+            tl.vsync      ? tl.vsync
+            : mark.submit ? mark.submit
+                          : stamp,
+            atNs(tl.gpu.firstSubmit), atNs(tl.gpu.lastSubmit), tl.gpu.submits, tl.gpu.execNs / 1000, tl.gpu.l2Ns / 1000,
+            at(mark.submit), at(mark.kick), at(tl.done), at(mark.ready), at(stamp), tl.gpu.others, tl.basePri,
+            tl.schedPri, tl.mode, tl.qos, tl.khzVsync / 1000, tl.khzSwap / 1000);
+        os_log(OS_LOG_DEFAULT, "SwitchFrame: %s", line);  // one string: os_log drops a record whose scalars outgrow it
     }
 
     // A present two or more refresh periods after the one before it, right after one that came a single period
@@ -1431,6 +1508,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                                       ? stamp - vblankLast
                                       : vsyncInterval;
         vblankLast = stamp;
+        if (SWITCH_FRAME_TIMELINE) {
+            __atomic_store_n(&vsyncSentAt, stamp, __ATOMIC_RELAXED);
+            __atomic_store_n(&vsyncSentKhz, switch_perf_cpu_khz(), __ATOMIC_RELAXED);
+            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_VSYNC), frameEnds);
+        }
         native_legacy_vsync_notify(this, stamp, continuous, interval);
         native_legacy_vsync_observed(1, vsyncHz);
         if (stats) {
@@ -2132,6 +2214,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         }
         dc[kDcStateControl] = update;
         dc[kDcStateControl] = request;
+        if (SWITCH_FRAME_TIMELINE)
+            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_FLIP), surfaceAddress(i));
         flipRequested = frameEnds;  // a replaced flip's boundary is this one's too
         flipTimer->setTimeoutMS(kFlipDeadlineMS);
     }
@@ -2176,6 +2260,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             recoverFlip(start, control, asked, replaced, scanned);
             return;
         case TegraScanoutRing::kTaken:
+            if (SWITCH_FRAME_TIMELINE)
+                KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_LATCH), surfaceAddress(asked), frameEnds - flipRequested);
             if (stats) {
                 if (replaced != kNoBuffer)
                     ++stReplaced;  // that frame was never shown
@@ -2861,6 +2947,10 @@ public:
     // completion (any context, even the GPU's interrupt filter) only records its status and signals the work loop.
     void gpuComplete(int status)
     {
+        if (SWITCH_FRAME_TIMELINE) {
+            __atomic_store_n(&gpuDoneAt, mach_absolute_time(), __ATOMIC_RELAXED);
+            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT_DONE), gpuSequence, status);
+        }
         if (gpuDoneSource) {
             __atomic_store_n(&gpuStatus, status, __ATOMIC_RELAXED);
             __atomic_store_n(&gpuDonePending, true, __ATOMIC_RELEASE);
@@ -3358,7 +3448,7 @@ public:
         if (!stats)
             return;
         // r6-lows/r14-pacing: carried to the flip of this frame (flip, markFlip), then to its present (notePresent).
-        taken = {submittedAt(request), kickAt, 0, 0};
+        taken = {submittedAt(request), kickAt, 0, 0, timelineOf(request)};
         if (taken.submit)
             stQueue.add(kickAt > taken.submit ? kickAt - taken.submit : 0);
         if (deferredAt) {
@@ -3838,6 +3928,8 @@ public:
             kickSwapQueue();
             return;
         }
+        if (SWITCH_FRAME_TIMELINE)
+            taken.tl.done = __atomic_load_n(&gpuDoneAt, __ATOMIC_RELAXED);
         gpuPresented = request;
         gpuPresentedEntry = directEntry;
         if (hwSuspended) {
@@ -4100,6 +4192,8 @@ public:
         gpuDirect = entry;
         transferred = true;
         noteTaken(request, kickAt);
+        if (SWITCH_FRAME_TIMELINE)
+            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT), gpuSequence);
         if (stats)
             ++stDirect;
         return true;
@@ -4266,13 +4360,35 @@ public:
     void noteSubmitted(const OriginalLegacySwapRequest *request)
     {
         const uint64_t now = mach_absolute_time();
-        if (!addValidated(request, now) || !stats)
+        if (!addValidated(request, now))
+            return;
+        if (SWITCH_FRAME_TIMELINE)
+            noteSwapTimeline(request);
+        if (!stats)
             return;
         if (lastSubmit) {
             stInterval.add(now - lastSubmit);
             stClient.add(lastRetire > lastSubmit && now > lastRetire ? now - lastRetire : 0);
         }
         lastSubmit = now;
+    }
+
+    // Debug kernels: the newly accepted swap's timeline, on the swapping thread.
+    void noteSwapTimeline(const OriginalLegacySwapRequest *request)
+    {
+        for (unsigned i = 0; i < kValidated; ++i) {
+            if (validated[i] != request)
+                continue;
+            FrameTimeline &tl = validatedTl[i];
+            tl = {};
+            tl.vsync = __atomic_load_n(&vsyncSentAt, __ATOMIC_RELAXED);
+            tl.khzVsync = __atomic_load_n(&vsyncSentKhz, __ATOMIC_RELAXED);
+            tl.khzSwap = switch_perf_cpu_khz();
+            switch_thread_sched(current_thread(), &tl.basePri, &tl.schedPri, &tl.mode, &tl.qos);
+            tegra_gm20b_frame_take(&tl.gpu);
+            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), frameEnds);
+            return;
+        }
     }
 
     // The original slot-188 caller passes a uint32_t output and consumes an

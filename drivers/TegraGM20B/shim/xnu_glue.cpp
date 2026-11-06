@@ -17,8 +17,10 @@
 #include <vm/memory_types.h>
 #include <stdarg.h>
 #include <string.h>
+#include <sys/kdebug.h>
 #include "include/nvxnu.h"
 #include "../../ArmGIC/SwitchInterrupts.h"
+#include "../../TegraDisplayFlip/SwitchFrameTimeline.h"
 
 extern "C" {
 vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_init.c)
@@ -416,6 +418,15 @@ extern "C" void nvxnu_word_wake_due(const volatile nvxnu_u32 *word, nvxnu_u32 se
 	    sleepUntil(word, seq, nvxnu_nanotime() + kGraceNs))
 		return;
 	gpuPanic("lost", what, value);
+}
+
+extern "C" void nvxnu_kdebug(nvxnu_u32 code, nvxnu_u64 a, nvxnu_u64 b, nvxnu_u64 c)
+{
+#if SWITCH_FRAME_TIMELINE
+	KDBG(SWITCH_KDBG_CODE(code), a, b, c);
+#else
+	(void)code, (void)a, (void)b, (void)c;
+#endif
 }
 
 extern "C" void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall)

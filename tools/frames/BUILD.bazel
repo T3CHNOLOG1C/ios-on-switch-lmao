@@ -1,0 +1,24 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
+py_library(
+    name = "lib",
+    srcs = ["frames.py"],
+)
+
+# bazel run //tools/frames -- <pulled .logarchive or log text> [--summary]: every slow frame's stages (debug kernels).
+py_binary(
+    name = "frames",
+    srcs = ["frames.py"],
+)
+
+py_test(
+    name = "frames_test",
+    size = "small",
+    srcs = ["frames_test.py"],
+    deps = [":lib"],
+)
