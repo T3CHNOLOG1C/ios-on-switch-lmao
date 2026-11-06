@@ -32,5 +32,6 @@ kernel_driver(
     name = "TegraSPI",
     hdr_deps = [
         "drivers/ArmGIC",
+        "kits/SwitchMMIO",
     ],
 )
