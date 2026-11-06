@@ -4,6 +4,7 @@
 import argparse
 import base64
 import hashlib
+import itertools
 import json
 import struct
 import xml.etree.ElementTree as ET
@@ -33,7 +34,7 @@ def macho(data, at=0):
         if command == 0x19:
             if length < 72:
                 raise ValueError('Truncated segment')
-            name, va, size, fileoff, filesize, maxprot, initprot, nsects, flags = struct.unpack_from(
+            name, va, size, fileoff, filesize, maxprot, initprot, nsects, _flags = struct.unpack_from(
                 '<16s4Q4I', data, offset + 8
             )
             if length != 72 + 80 * nsects or filesize > size or va + size > 1 << 64:
@@ -220,9 +221,11 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
         if module['kind'] != 11:
             raise ValueError('Expected MH_KEXT_BUNDLE component')
         modules[identifier] = module
-        for segment in module['segments']:
-            if segment['size'] and segment['name'] != '__LINKEDIT':
-                owned.append((segment['va'], segment['va'] + segment['size'], identifier, segment))
+        owned.extend(
+            (segment['va'], segment['va'] + segment['size'], identifier, segment)
+            for segment in module['segments']
+            if segment['size'] and segment['name'] != '__LINKEDIT'
+        )
     codeless = selected - modules.keys()
     for identifier in codeless:
         entry = entries[identifier]
@@ -240,7 +243,7 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
         ):
             raise ValueError('Codeless component must contain personalities and no executable fields: ' + identifier)
     owned.sort(key=lambda item: item[:3])
-    for left, right in zip(owned, owned[1:]):
+    for left, right in itertools.pairwise(owned):
         if left[1] > right[0]:
             raise ValueError(f'Overlapping component extents: {left[2]} and {right[2]}')
     starts = [item[0] for item in owned]
@@ -373,9 +376,9 @@ def bind_native(report, unbound, native_data):
         [(component, dependency, stub) for _, component, dependency, stub in unbound['cut']],
         [(e['va'], e['size']) for e in report['extents']],
     )
-    for (index, _, _), address in zip(unbound['kernel'], addresses):
+    for (index, _, _), address in zip(unbound['kernel'], addresses, strict=False):
         bindings[index]['new_target'] = address
-    for (index, _, _, _), address in zip(unbound['cut'], stubs):
+    for (index, _, _, _), address in zip(unbound['cut'], stubs, strict=False):
         bindings[index]['new_target'] = address
     report['native_sha256'] = hashlib.sha256(native_data).hexdigest()
     return exported

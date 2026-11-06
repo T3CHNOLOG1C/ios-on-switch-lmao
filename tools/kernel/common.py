@@ -45,7 +45,9 @@ def environment(xcode, extra_path=(), **extra):
 
 def run(command, env, cwd=None, log=None):
     command = [str(c) for c in command]
-    result = subprocess.run(command, env=env, cwd=cwd, stdout=log or None, stderr=subprocess.STDOUT if log else None)
+    result = subprocess.run(
+        command, env=env, cwd=cwd, stdout=log or None, stderr=subprocess.STDOUT if log else None, check=False
+    )
     if result.returncode:
         tail = ''
         if log:
@@ -109,7 +111,8 @@ def prefix_maps(path_root, bin_dir, xnu_dir):
         f'-ffile-prefix-map={here}/{xnu_dir}={tree}',
         '-ffile-prefix-map={}/{}={}'.format(here, bin_dir, path_root.rstrip('/')),
         '-ffile-prefix-map={}={}'.format(here, path_root.rstrip('/')),
-    ] + compat_prefix_maps(path_root, bin_dir)
+        *compat_prefix_maps(path_root, bin_dir),
+    ]
     if xnu_dir != XNU_REPOSITORY:
         # The vendored XNU (kernel/xnu-<version>) keeps the debug-information spelling it had as the @xnu repository
         # (debug maps go by the last match: after the execution root's).

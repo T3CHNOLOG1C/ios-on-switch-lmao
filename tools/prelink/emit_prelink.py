@@ -23,6 +23,7 @@ import array
 import base64
 import copy
 import hashlib
+import itertools
 import json
 import struct
 import sys
@@ -159,7 +160,8 @@ def instruction_inventory(original_data, parent, modules):
                     internal = any(s['va'] <= target < s['va'] + s['size'] for s in extents)
                 if not internal:
                     raise ValueError(
-                        f'External PC-relative encoding at {segment["va"] + offset:#x}; no instruction rewrite supported'
+                        f'External PC-relative encoding at {segment["va"] + offset:#x}; '
+                        'no instruction rewrite supported'
                     )
                 instruction_count += 1
     return {
@@ -418,7 +420,7 @@ def prepare(original_data, roots, slide, early_security_init=None, *, inherited_
     # Applying the native pointers last gives emit's bytes only when no original-only write after them overlaps one
     # (none does: each pointer site is its own 8 bytes) and none is in code (checked below with the copied code).
     native_sites = sorted([*kernel_sites, *(at for at, *_ in cut_sites)])
-    if any(b - a < 8 for a, b in zip(native_sites, native_sites[1:])):
+    if any(b - a < 8 for a, b in itertools.pairwise(native_sites)):
         raise ValueError('Native kernel pointer sites overlap')
 
     def hits_native(at, length):
@@ -563,9 +565,9 @@ def apply(plan, native_data, report=None, unbound=None):
         if segment['fileoff'] - at != base:
             raise ValueError('Coalesced segments are not contiguous')
     pack = struct.Struct('<Q').pack_into
-    for at, group in zip(plan.kernel_sites, plan.kernel_groups):
+    for at, group in zip(plan.kernel_sites, plan.kernel_groups, strict=False):
         pack(output, base + at, addresses[group])
-    for (at, *_), address in zip(plan.cuts, stubs):
+    for (at, *_), address in zip(plan.cuts, stubs, strict=False):
         pack(output, base + at, address)
     kcid = hashlib.sha256(KCID_DOMAIN)
     kcid.update(native_data)
@@ -616,11 +618,11 @@ def apply(plan, native_data, report=None, unbound=None):
     macho(output)
     if report is not None:
         bindings = report['bindings']
-        for (index, target, _), group in zip(unbound['kernel'], plan.kernel_groups):
+        for (index, target, _), group in zip(unbound['kernel'], plan.kernel_groups, strict=False):
             if plan.targets[group][0] != target:
                 raise ValueError('The plan and the report disagree on a kernel pointer')
             bindings[index]['new_target'] = addresses[group]
-        for (index, *_), address in zip(unbound['cut'], stubs):
+        for (index, *_), address in zip(unbound['cut'], stubs, strict=False):
             bindings[index]['new_target'] = address
         report['native_sha256'] = hashlib.sha256(native_data).hexdigest()
         report['sparse_index']['fileoff'] = base + index_at
@@ -671,7 +673,7 @@ def original_inputs(parser, args):
         CUT_DEPENDENCIES[(component, dependency)] = (int(sites), CUT_STUB if int(sites) else None)
     for defer in args.defer:
         component, personality = defer.split('=')
-        DEFERRED_PERSONALITIES[component] = DEFERRED_PERSONALITIES.get(component, ()) + (personality,)
+        DEFERRED_PERSONALITIES[component] = (*DEFERRED_PERSONALITIES.get(component, ()), personality)
     initializers = {}
     for request in args.early_security_init:
         identifier, separator, address = request.partition('=')

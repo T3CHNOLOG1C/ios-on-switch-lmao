@@ -26,8 +26,8 @@ def main():
     sdkroot = Path(args.sdkroot).absolute()
     # The finished SDK root: the headers stage plus what this installs (as the CMake flow's one fakeroot).
     common.copy_tree(sdkroot, out)
-    with tempfile.TemporaryDirectory() as scratch, open(args.log, 'w') as log:
-        scratch = Path(scratch)
+    with tempfile.TemporaryDirectory() as scratch_dir, open(args.log, 'w') as log:
+        scratch = Path(scratch_dir)
         # A writable libdispatch checkout next to "xnu-work" (its xcconfig names ../xnu-work/EXTERNAL_HEADERS).
         work = scratch / 'libdispatch-work'
         shutil.copytree(args.libdispatch, work, symlinks=False)

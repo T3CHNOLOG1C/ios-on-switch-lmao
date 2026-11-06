@@ -52,8 +52,10 @@ def main():
         f'-ffile-prefix-map={here}/{args.bin_dir}={root}',
         f'-ffile-prefix-map={here}={root}',
         # make's osfmk object directory, where these were compiled when the kernel came from make.
-        f'-fdebug-compilation-dir={root}/{args.bin_dir}/out/native-a57/root-v1/tree/build/xnu/ios-obj/'
-        'DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT',
+        (
+            f'-fdebug-compilation-dir={root}/{args.bin_dir}/out/native-a57/root-v1/tree/build/xnu/ios-obj/'
+            'DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT'
+        ),
     ]
 
     def compile_one(path, destination, namespace=None):
@@ -102,7 +104,9 @@ def main():
         ]
         if namespace:
             command += ['-include', str(namespace)]
-        result = subprocess.run(command, cwd=here, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        result = subprocess.run(
+            command, cwd=here, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, check=False
+        )
         if result.returncode:
             sys.exit(result.stdout[-4500:])
         check(destination)
@@ -111,7 +115,7 @@ def main():
         out = Path(scratch)
         sources = [source / 'kern' / name for name in ('kern_init.c', 'kern_support.c', 'kern_synch.c')]
         objects = [out / (s.stem + '.o') for s in sources]
-        for s, o in zip(sources, objects):
+        for s, o in zip(sources, objects, strict=False):
             compile_one(s, o)
         names = {line.partition(' ')[2] for line in Path(args.kernel_names).read_text().splitlines() if line}
         definitions = set().union(*(archive_names(o, '-U', env) for o in objects))
@@ -119,7 +123,7 @@ def main():
         if collisions:
             namespace = out / 'namespace.h'
             namespace.write_text(''.join(f'#define {n[1:]} pthread519_{n[1:]}\n' for n in sorted(collisions)))
-            for s, o in zip(sources, objects):
+            for s, o in zip(sources, objects, strict=False):
                 compile_one(s, o, namespace)
         definitions = set().union(*(archive_names(o, '-U', env) for o in objects))
         imports = set().union(*(archive_names(o, '-u', env) for o in objects)) - definitions

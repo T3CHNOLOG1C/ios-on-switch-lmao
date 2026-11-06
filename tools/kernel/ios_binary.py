@@ -44,10 +44,10 @@ def main():
             os.symlink(
                 xcode['MACOSX_SDK'] + '/System/Library/Frameworks/CoreAudio.framework/Headers/' + name, headers / name
             )
-        clang = ['-I', str(Path(scratch, 'H'))] + clang
+        clang = ['-I', str(Path(scratch, 'H')), *clang]
     # Absolute paths, as the CMake flow gave them, mapped back to the path root.
     clang = [os.path.join(here, a) if (not a.startswith('-') and os.path.exists(a)) else a for a in clang]
-    command = ['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-isysroot', xcode['IPHONEOS_SDK']] + clang
+    command = ['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-isysroot', xcode['IPHONEOS_SDK'], *clang]
     command += common.prefix_maps(args.path_root, args.bin_dir, 'external/+http_archive+xnu')
     command += ['-o', os.path.join(here, args.out)]
     subprocess.run(command, check=True, env=env)
@@ -62,7 +62,7 @@ def main():
             sign += ['--identifier', args.sign_identifier]
         if args.entitlements:
             sign += ['--entitlements', args.entitlements]
-        subprocess.run(sign + [args.out], check=True, env=env)
+        subprocess.run([*sign, args.out], check=True, env=env)
     data = Path(args.out).read_bytes()
     if here.encode() in data:
         sys.exit(f'{args.out} names the execution root')

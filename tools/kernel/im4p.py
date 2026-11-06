@@ -58,7 +58,7 @@ def main():
                 env={'PATH': '/usr/bin:/bin'},
             )
             payload = out.read_bytes()
-    if args.thin_arm64 and payload[:4] in (b'\xca\xfe\xba\xbe',):
+    if args.thin_arm64 and payload[:4] == b'\xca\xfe\xba\xbe':
         count = struct.unpack_from('>I', payload, 4)[0]
         for i in range(count):
             cpu, _, offset, size, _ = struct.unpack_from('>iiIII', payload, 8 + 20 * i)

@@ -57,14 +57,14 @@ def seed_metadata(path, volume_uuid):
     if cursor != len(data) or nonzero * PAGE > RESIDENT_LIMIT:
         raise ValueError('Trailing input or resident seed cap exceeded')
     zero_run(logical - end)
-    return dict(
-        expected_volume_uuid=canonical_uuid,
-        encoded_bytes=len(data),
-        encoded_sha256=hashlib.sha256(data).hexdigest(),
-        logical_bytes=logical,
-        logical_sha256=digest.hexdigest(),
-        nonzero_pages=nonzero,
-    )
+    return {
+        'expected_volume_uuid': canonical_uuid,
+        'encoded_bytes': len(data),
+        'encoded_sha256': hashlib.sha256(data).hexdigest(),
+        'logical_bytes': logical,
+        'logical_sha256': digest.hexdigest(),
+        'nonzero_pages': nonzero,
+    }
 
 
 def seed_header(metadata):

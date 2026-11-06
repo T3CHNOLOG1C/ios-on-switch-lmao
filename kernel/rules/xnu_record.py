@@ -153,7 +153,7 @@ def wrapper(path, tool, real, watch=False):
     path.chmod(0o755)
 
 
-def run_make(src, work, target, variables, log, jobs, env, version: str, darwin: str):
+def run_make(src, work, target, variables, jobs, env, version: str, darwin: str):
     command = [
         'make',
         '-C',
@@ -167,9 +167,10 @@ def run_make(src, work, target, variables, log, jobs, env, version: str, darwin:
         f'OBJROOT={work}/obj',
         f'SYMROOT={work}/sym',
         f'DSTROOT={work}/dst',
-    ] + variables
+        *variables,
+    ]
     with open(work / 'make.log', 'w') as out:
-        result = subprocess.run(command, env=env, stdout=out, stderr=subprocess.STDOUT)
+        result = subprocess.run(command, env=env, stdout=out, stderr=subprocess.STDOUT, check=False)
     return result.returncode
 
 
@@ -193,12 +194,12 @@ class Roots:
         found = self.place(path, cwd)
         if not found:
             return path
-        return '{%s}/%s' % found if found[1] else '{%s}' % found[0]
+        return f'{{{found[0]}}}/{found[1]}' if found[1] else f'{{{found[0]}}}'
 
     def text(self, value):
         """Every root path inside a string (an argument like -I/abs/dir) as its placeholder."""
         for root, name in self.pairs:
-            value = value.replace(root, '{%s}' % name)
+            value = value.replace(root, f'{{{name}}}')
         return value.replace('}//', '}/')
 
 
@@ -276,7 +277,7 @@ def include_dirs(argv, cwd, roots):
     return sorted(set(dirs))
 
 
-def record_pass(name, src, work, roots, final_files, log_path, make_log):
+def record_pass(work, roots, final_files, log_path, make_log):
     """The table entries of one pass from its wrapper log."""
     records = [json.loads(line) for line in log_path.read_text().splitlines()]
     steps, problems = [], []
@@ -441,9 +442,11 @@ def record_pass(name, src, work, roots, final_files, log_path, make_log):
 
 def check_coverage(produced, coverage, final_files):
     problems = ['no step writes ' + p for p in sorted(coverage - set(produced))]
-    for p in sorted(produced):
-        if p[2:] not in final_files.get(p[0], set()) | final_files.get(p[0] + 'L', set()):
-            problems.append(f'a step writes {p} but make left no such file')
+    problems.extend(
+        f'a step writes {p} but make left no such file'
+        for p in sorted(produced)
+        if p[2:] not in final_files.get(p[0], set()) | final_files.get(p[0] + 'L', set())
+    )
     return problems
 
 
@@ -475,13 +478,11 @@ def write_table(path, name, version, data):
         name.upper() + ' = {',
         '    "flags": [',
     ]
-    for f in flags:
-        lines.append('        ' + json.dumps(list(f)) + ',')
+    lines.extend('        ' + json.dumps(list(f)) + ',' for f in flags)
     lines += ['    ],', '    "steps": [']
     for step in sorted(data, key=lambda s: (s['kind'], s.get('out') or s['outs'][0])):
-        if 'flags' in step:
-            step = dict(step, flags=index[tuple(step['flags'])])
-        lines.append('        ' + json.dumps(step, sort_keys=True) + ',')
+        entry = dict(step, flags=index[tuple(step['flags'])]) if 'flags' in step else step
+        lines.append('        ' + json.dumps(entry, sort_keys=True) + ',')
     lines += ['    ],', '}']
     text = '\n'.join(lines) + '\n'
     text = text.replace(': true', ': True').replace(': false', ': False').replace(': null', ': None')
@@ -568,7 +569,6 @@ def main():
                 work,
                 'installhdrs',
                 INSTALLHDRS_VARS + tools + ['INSTALL=' + str(install_tool)],
-                log,
                 args.jobs,
                 dict(ih_env, XNU_RECORD_LOG=str(log)),
                 args.version,
@@ -578,7 +578,7 @@ def main():
         files, links = listing(dst)
         o_files, _ = listing(work / 'obj')
         final = {'d': files, 'dL': links, 'o': o_files}
-        steps, produced, found = record_pass('installhdrs', src, work, roots, final, log, work / 'make.log')
+        steps, produced, found = record_pass(work, roots, final, log, work / 'make.log')
         # The SDK root's other parts (availability.pl and its headers, libplatform, libdispatch os/): one step, the
         # files installhdrs did not write over.
         base_step = {'kind': 'base', 'outs': sorted('d/' + f for f in base_files if 'd/' + f not in produced)}
@@ -608,8 +608,7 @@ def main():
                     src,
                     work,
                     'build',
-                    build_vars(args.ios_min) + ['KERNEL_CONFIGS=' + config] + tools + ['INSTALL=' + str(install_tool)],
-                    log,
+                    [*build_vars(args.ios_min), 'KERNEL_CONFIGS=' + config, *tools, 'INSTALL=' + str(install_tool)],
                     args.jobs,
                     dict(b_env, XNU_RECORD_LOG=str(log)),
                     args.version,
@@ -619,7 +618,7 @@ def main():
             files, links = listing(work / 'obj')
             final = {'o': files, 'oL': links}
             coverage = {'o/' + f for f in files if not NOT_OURS.search(f)}
-            steps, produced, found = record_pass('build_' + config, src, work, roots, final, log, work / 'make.log')
+            steps, produced, found = record_pass(work, roots, final, log, work / 'make.log')
             found += check_coverage(produced, coverage, final)
             tables['build_' + config] = steps
             problems += [f'build {config}: {p}' for p in found]

@@ -134,6 +134,7 @@ def main():
                     stderr=subprocess.STDOUT,
                     text=True,
                     env=env,
+                    check=False,
                 )
                 return destination, result
 
