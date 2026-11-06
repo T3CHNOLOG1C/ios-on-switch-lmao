@@ -63,7 +63,7 @@ int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy);
 // and signals the display's work loop. The display panics if an accepted copy is not completed within 1 s.
 void native_legacy_gpu_complete(void *display, int status);
 // Provided by the GPU driver (weak in NativeLegacyDisplay): whether the IOSurface whose first page is `pa` holds
-// block-linear pixels, i.e. a GPU client's last bind of the whole surface used TEGRA_SCANOUT_TILED_KIND. Thread context.
+// block-linear pixels: a bind of the whole surface with TEGRA_SCANOUT_TILED_KIND lives. Thread context.
 int tegra_gm20b_surface_tiled(uint64_t pa);
 #ifdef __cplusplus
 }

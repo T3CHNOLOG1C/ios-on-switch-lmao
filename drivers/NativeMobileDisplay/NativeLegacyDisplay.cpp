@@ -869,7 +869,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     struct CopyJob {
         const OriginalLegacySwapRequest *request;
         IOMemoryMap *source, *target;
-        bool ownedSource, retired, read;
+        bool ownedSource, retired, read, tiled;
         uint64_t stride, allocation;
         uint32_t width, height;
         IOReturn status;
@@ -3367,7 +3367,7 @@ public:
                 native_legacy_transfer_observed(kIOReturnBadArgument, request, 0);
                 return;
             }
-            startCopy(request, source, ownedSource, sourceStride, allocation, width, height, kickAt);
+            startCopy(request, source, ownedSource, sourceStride, allocation, width, height, tiled, kickAt);
             return;
         }
         {
@@ -3409,7 +3409,7 @@ public:
             // single-buffered, the frame scanned while this copy runs shows the new bytes through the old pitch window once).
             // Double-buffered, the pass fills the surface window A does not scan and window A flips to it.
             const Swizzled how =
-                swizzle(drawSurface(), sourceAddress, source->getLength(), sourceStride, width, height);
+                swizzle(drawSurface(), sourceAddress, source->getLength(), sourceStride, width, height, tiled);
             if (how == kSwizzleFailed) {
                 releaseSource();
                 native_legacy_transfer_observed(kIOReturnBadArgument, request, 0);
@@ -3539,13 +3539,22 @@ public:
     enum Swizzled {
         kSwizzleFailed,
         kSwizzleFast,
-        kSwizzleByte
+        kSwizzleByte,
+        kSwizzleTiled
     };
 
+    // A tiled source (tegra_gm20b_surface_tiled) is already in the scanout's block layout: copied as it is.
     Swizzled swizzle(IOMemoryMap *target, const void *source, uint64_t bytes, uint64_t stride, uint32_t width,
-                     uint32_t height) const
+                     uint32_t height, bool tiled) const
     {
         void *out = reinterpret_cast<void *>(target->getVirtualAddress());
+        if (tiled) {
+            if (width != kNativeBlockWidth || height != kNativeBlockHeight || target->getLength() < kNativeBlockBytes ||
+                bytes < kNativeBlockBytes)
+                return kSwizzleFailed;
+            memcpy(out, source, kNativeBlockBytes);
+            return kSwizzleTiled;
+        }
         return native_legacy_block_copy(out, target->getLength(), source, bytes, stride, width, height)
                    ? kSwizzleByte
                    : kSwizzleFailed;
@@ -3553,7 +3562,7 @@ public:
 
     void noteSwizzled(Swizzled how)
     {
-        if (how == kSwizzleFast)
+        if (how == kSwizzleFast || how == kSwizzleTiled)
             ++stFast;
         else if (how == kSwizzleByte)
             ++stByte;
@@ -3626,10 +3635,11 @@ public:
 
     // Under the gate, a validated surface swap mapped and bounded: hand it to the copy thread.
     void startCopy(const OriginalLegacySwapRequest *request, IOMemoryMap *source, bool ownedSource, uint64_t stride,
-                   uint64_t allocation, uint32_t width, uint32_t height, uint64_t kickAt)
+                   uint64_t allocation, uint32_t width, uint32_t height, bool tiled, uint64_t kickAt)
     {
         job = {};
         job.request = request;
+        job.tiled = tiled;
         job.source = source;
         job.target = drawSurface();
         if (doubleBuffer)
@@ -3672,7 +3682,8 @@ public:
                     job.readTicks = readPass(source, job.stride, job.width, job.height);
                 uint64_t start, end;
                 __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(start));
-                job.swizzled = swizzle(job.target, source, job.source->getLength(), job.stride, job.width, job.height);
+                job.swizzled =
+                    swizzle(job.target, source, job.source->getLength(), job.stride, job.width, job.height, job.tiled);
                 if (job.swizzled == kSwizzleFailed)
                     job.status = kIOReturnBadArgument;
                 __asm__ volatile("dsb sy" ::: "memory");

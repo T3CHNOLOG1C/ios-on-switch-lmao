@@ -98,6 +98,11 @@ TEST(DirectScanoutSource, TiledSurfacesScanBlockLinear)
                 HasSubstr("copy.flags = tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;"));
     expectBefore(after(display(), "    void kickOnce()"), "const bool tiled = surfaceTiled(memory);",
                  "offerDirect(request, memory, sourceStride, allocation, width, height, tiled, kickAt)");
+    // the CPU's fallback copies a tiled frame as it is: it is already in the scanout's block layout
+    EXPECT_THAT(method(display(), "    Swizzled swizzle("), HasSubstr("memcpy(out, source, kNativeBlockBytes);"));
+    EXPECT_THAT(
+        after(display(), "    void kickOnce()"),
+        HasSubstr("swizzle(drawSurface(), sourceAddress, source->getLength(), sourceStride, width, height, tiled)"));
 }
 
 // Every flip, latch check and copy target goes through TegraScanoutRing (TegraDisplayFlip/test:scanout_ring_test): the

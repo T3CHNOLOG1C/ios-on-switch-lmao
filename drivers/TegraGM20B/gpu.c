@@ -1068,7 +1068,7 @@ struct tgm_coh {
 	u32 npages, refs;
 	int writable;  /* some import lets the GPU write it: submissions mark it GPU-dirty */
 	int gpu_dirty; /* atomic: the GPU may have written it since the last CPU read lock */
-	int tiled; /* atomic: its last whole-surface bind was block-linear (TEGRA_SCANOUT_TILED_KIND) */
+	u32 tiled_binds; /* atomic: live whole-surface binds that address it block-linear (TEGRA_SCANOUT_TILED_KIND) */
 };
 
 /* Registers this driver's read_lock/write_unlock with the kernel's IOSurface lock/unlock hook (XNU IOUserClient.cpp). */
@@ -1150,11 +1150,11 @@ void tgm_coherency_put(struct tgm_coh *c)
 	mutex_unlock(&coh_lock);
 }
 
-/* A bind of the whole surface holding `c` with PTE kind `kind`: the GPU now addresses its pixels block-linear or not. */
-void tgm_coherency_bound(struct tgm_coh *c, uint32_t kind)
+/* A whole-surface block-linear bind of the surface holding `c` was made (add 1) or removed (add -1). */
+void tgm_coherency_tiled_bind(struct tgm_coh *c, int add)
 {
 	if (c)
-		__atomic_store_n(&c->tiled, kind == TEGRA_SCANOUT_TILED_KIND, __ATOMIC_RELEASE);
+		__atomic_fetch_add(&c->tiled_binds, (u32)add, __ATOMIC_ACQ_REL);
 }
 
 int tegra_gm20b_surface_tiled(uint64_t pa)
@@ -1164,7 +1164,7 @@ int tegra_gm20b_surface_tiled(uint64_t pa)
 
 	mutex_lock(&coh_lock);
 	c = *coh_slot(pa);
-	tiled = c && __atomic_load_n(&c->tiled, __ATOMIC_ACQUIRE);
+	tiled = c && __atomic_load_n(&c->tiled_binds, __ATOMIC_ACQUIRE);
 	mutex_unlock(&coh_lock);
 	return tiled;
 }

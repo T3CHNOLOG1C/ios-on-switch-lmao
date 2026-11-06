@@ -705,6 +705,7 @@ class AGXDeviceUserClient : public IOUserClient
 		uint64_t va, range;
 		Bo *bo;
 		uint64_t bo_offset;
+		bool tiled;  // counted in the surface's tiled binds (tgm_coherency_tiled_bind)
 	};
 
 	// A mapping method 12 (Map) made into the client's task: what IOKit's io_connect_map_memory_into_task keeps in the
@@ -1324,6 +1325,8 @@ void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only)
 		Binding &b = binds_[i];
 		if (b.va < va + range && va < b.va + b.range && (!only || b.bo == only)) {
 			tgm_vm_unmap(vm_, b.va, b.range);
+			if (b.tiled)
+				tgm_coherency_tiled_bind(b.bo->coh, -1);
 			binds_[i] = binds_[--nbinds_];
 		} else {
 			i++;
@@ -1369,9 +1372,11 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 						   static_cast<uint8_t>(op.kind), bo->readOnly));
 		if (ret)
 			return ret;
-		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset};
-		if (bo->coh && !op.bo_offset && op.range >= bo->bytes)
-			tgm_coherency_bound(bo->coh, op.kind);
+		const bool tiled = bo->coh && !op.bo_offset && op.range >= bo->bytes &&
+				   op.kind == TEGRA_SCANOUT_TILED_KIND;
+		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset, tiled};
+		if (tiled)
+			tgm_coherency_tiled_bind(bo->coh, 1);
 		tgm_stats_bind(1, op.range >> 12, nowNs() - start);
 	}
 	return kIOReturnSuccess;

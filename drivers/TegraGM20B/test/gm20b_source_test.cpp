@@ -240,8 +240,9 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 		     "NVB0B5_LAUNCH_DMA");
 	EXPECT_THAT(copy, HasSubstr("(src_block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH)"));
 	EXPECT_THAT(flat(Between(client(), "IOReturn AGXDeviceUserClient::vmBind(", "\n}\n")),
-		    HasSubstr("if (bo->coh && !op.bo_offset && op.range >= bo->bytes) "
-			      "tgm_coherency_bound(bo->coh, op.kind);"));
+		    HasSubstr("if (tiled) tgm_coherency_tiled_bind(bo->coh, 1);"));
+	EXPECT_THAT(flat(Between(client(), "void AGXDeviceUserClient::unbindOverlaps(", "\n}\n")),
+		    HasSubstr("if (b.tiled) tgm_coherency_tiled_bind(b.bo->coh, -1);"));
 }
 
 // System sleep (gpu.c "system sleep"): every path that touches the GPU outside gpu.lock goes through the gate

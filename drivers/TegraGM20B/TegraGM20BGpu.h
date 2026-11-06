@@ -197,8 +197,9 @@ struct tgm_coh;
 struct tgm_coh *tgm_coherency_add(uint64_t pa, const uint64_t *pas, uint32_t npages, int writable);
 void tgm_coherency_put(struct tgm_coh *c);
 void tgm_coherency_wrote(struct tgm_coh *c);
-/* A GPU client bound the whole surface holding `c` with PTE kind `kind` (tegra_gm20b_surface_tiled reads it). */
-void tgm_coherency_bound(struct tgm_coh *c, uint32_t kind);
+/* A GPU client made (add 1) or removed (add -1) a bind of the whole surface holding `c` with TEGRA_SCANOUT_TILED_KIND:
+ * the surface is tiled while any such bind lives, whatever other binds of it say (tegra_gm20b_surface_tiled). */
+void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
 uint64_t tgm_coherency_read_lock(uint64_t pa);
 uint64_t tgm_coherency_write_unlock(uint64_t pa);
 
