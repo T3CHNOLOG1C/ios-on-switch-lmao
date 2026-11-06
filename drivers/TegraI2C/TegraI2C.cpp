@@ -29,6 +29,10 @@
 #include "TegraI2C.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraAPBDMA/TegraAPBDMA.h"
+#ifndef TEGRA_I2C_HOST_MODEL
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIO.h"
+#endif
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" boolean_t preemption_enabled(void);
@@ -182,21 +186,19 @@ Bus gBus[kBuses];
 #ifndef TEGRA_I2C_HOST_MODEL  // SwitchTouch/test/switch_touch_test.cpp supplies these over its controller model
 inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
-    return *(volatile uint32_t *)(base + o);
+    return switch_mmio_read32(base, o);
 }
 
 inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
-    *(volatile uint32_t *)(base + o) = v;
+    switch_mmio_write32(base, o, v);
 }
 
 // The DMA buffer's lines cleaned and invalidated: before the engine writes it (no dirty line lands on top later) and
 // after (the CPU reads what the engine wrote, not a line it prefetched meanwhile). The engine does not snoop.
 inline void dmaSync(const uint8_t *va, size_t size)
 {
-    for (uintptr_t at = (uintptr_t)va & ~(uintptr_t)63, end = (uintptr_t)va + size; at < end; at += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
+    switch_dcache_clean_invalidate(va, size);
 }
 #endif
 inline uint64_t nowUs()
