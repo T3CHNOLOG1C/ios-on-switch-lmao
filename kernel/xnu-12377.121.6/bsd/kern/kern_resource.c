@@ -117,6 +117,7 @@
 #include <sys/resource_private.h>
 #include <sys/priv.h>
 #include <IOKit/IOBSD.h>
+#include <switch/sched.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -869,6 +870,7 @@ proc_set_darwin_role(proc_t curp, proc_t targetp, int priority)
 
 	proc_set_task_policy(proc_task(targetp), TASK_POLICY_ATTRIBUTE,
 	    TASK_POLICY_ROLE, role);
+	switch_sched_role(proc_task(targetp), role);
 
 #if CONFIG_FREEZE
 	if (priority == PRIO_DARWIN_ROLE_UI_FOCAL || priority == PRIO_DARWIN_ROLE_UI || priority == PRIO_DARWIN_ROLE_UI_NON_FOCAL) {

@@ -87,7 +87,7 @@ __BEGIN_DECLS
 #include <mach/shared_region.h>
 #include <kern/clock.h>
 __END_DECLS
-#include <kern/switch_sched.h>
+#include <switch/sched.h>
 
 #if defined(__i386__) || defined(__x86_64__)
 __BEGIN_DECLS

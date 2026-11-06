@@ -103,7 +103,7 @@
 #include <security/mac_framework.h>
 #endif
 
-#include <kern/switch_sched.h>
+#include <switch/sched.h>
 
 struct pshmnode;
 struct psemnode;

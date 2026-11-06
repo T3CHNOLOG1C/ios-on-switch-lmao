@@ -1,4 +1,4 @@
-// osfmk/kern/switch_sched_stats.h, the scheduling stats line's histogram and text, and where XNU feeds it: the
+// kernel/switch/sched/stats.h, the scheduling stats line's histogram and text, and where XNU feeds it: the
 // incoming thread's dispatch in both of thread_invoke's paths, under that thread's lock, and nothing in a release kernel.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -107,13 +107,13 @@ TEST(XnuSchedStatsSource, DispatchIsCountedUnderTheIncomingThreadsLock)
 
 TEST(XnuSchedStatsSource, ReleaseKernelsCompileEveryHookToNothing)
 {
-    const std::string header = switch_ios::test::SourceText("../xnu-10063.141.1/osfmk/kern/switch_sched.h");
+    const std::string header = switch_ios::test::SourceText("../switch/include/switch/sched.h");
     const size_t release = header.find("#else /* DEVELOPMENT || DEBUG */");
     ASSERT_NE(release, std::string::npos);
     const std::string stubs = header.substr(release);
     for (const char *hook : {"switch_sched_on_core(", "switch_sched_named(", "switch_sched_role(",
                              "switch_sched_limit_block(", "switch_sched_tick(", "switch_sched_boot_complete("})
-        EXPECT_THAT(stubs, HasSubstr(std::string("static inline void\n") + hook)) << hook;
-    const std::string source = switch_ios::test::SourceText("../xnu-10063.141.1/osfmk/kern/switch_sched_stats.c");
+        EXPECT_THAT(stubs, HasSubstr(std::string("static inline void ") + hook)) << hook;
+    const std::string source = switch_ios::test::SourceText("../switch/sched/stats.c");
     EXPECT_THAT(source, HasSubstr("\n#if DEVELOPMENT || DEBUG\n"));
 }

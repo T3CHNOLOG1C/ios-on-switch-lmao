@@ -1,4 +1,4 @@
-// xnu_sched_stats_harness.c: osfmk/kern/switch_sched_stats.h compiled as the kernel compiles it (C), for
+// xnu_sched_stats_harness.c: kernel/switch/sched/stats.h compiled as the kernel compiles it (C), for
 // xnu_sched_stats_test.cpp.
 #ifndef SWITCH_XNU_SCHED_STATS_HARNESS_H
 #define SWITCH_XNU_SCHED_STATS_HARNESS_H

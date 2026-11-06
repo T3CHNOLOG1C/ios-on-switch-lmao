@@ -116,7 +116,7 @@
 #include <sys/resource_private.h>
 #include <sys/priv.h>
 #include <IOKit/IOBSD.h>
-#include <kern/switch_sched.h>
+#include <switch/sched.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>

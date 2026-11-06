@@ -106,7 +106,7 @@
 #include <kern/timer_queue.h>
 #include <kern/waitq.h>
 #include <kern/policy_internal.h>
-#include <kern/switch_sched.h>
+#include <switch/sched.h>
 
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>

@@ -40,7 +40,7 @@
 #include <kern/machine.h>
 #include <kern/queue.h>
 #include <kern/policy_internal.h>
-#include <kern/switch_sched.h>
+#include <switch/sched.h>
 
 #include <sys/errno.h>
 
