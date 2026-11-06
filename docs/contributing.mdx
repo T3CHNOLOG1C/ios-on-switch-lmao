@@ -53,9 +53,30 @@ To read logs:
   `log show --archive`.
 - With the Switch paired to your Mac over USB-C, `idevicesyslog` from libimobiledevice streams the live log.
 
-Boot options go in `switchroot/ios/bootargs.txt` on the SD card. A debug build shows a text console when that file
-has `-v`, and a release build needs no options at all.
-{/* TODO(r22-bootargs): the list of options. */}
+### Boot options
+
+Boot options go in `switchroot/ios/bootargs.txt` on the SD card. It's plain text: words separated by spaces or new
+lines, with `#` starting a comment that runs to the end of the line. You don't need the file at all. Everything is on
+by default, and a release build boots with no options.
+
+In a debug build, `-v` shows a text console instead of the Apple logo.
+
+Each of these turns one thing off, for when you're hunting a problem:
+
+| Option | Turns off |
+| --- | --- |
+| `switch-no-bt` | Bluetooth and Joy-Con pairing on the rails, and sound with them |
+| `switch-no-wlan` | Wi-Fi |
+| `switch-no-gpu` | The GPU and Metal |
+| `switch-no-nvdec` | Hardware video decoding and encoding |
+| `switch-no-audio` | Sound |
+| `switch-no-sleep` | Turning the screen off on lock, and with it sleep |
+| `switch-no-sd-uhs` | The SD card's fast mode, so it stays at 48 MHz |
+| `switch-no-dfll` | The CPU's on-demand clock, so it runs at a fixed 1670 MHz |
+
+`switch-ui-scale=` sets how big everything on screen is. `1.6` is the default and gives 450x800 points, the size of an
+iPad's screen. `1.25` gives 576x1024 and `1` gives 720x1280. Anything else counts as `1`, and the kernel log says so.
+The new scale shows up on the next boot.
 
 ## Releases
 

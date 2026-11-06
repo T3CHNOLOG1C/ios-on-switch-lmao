@@ -18,8 +18,9 @@ Both land in `bazel-bin/boot/ios`. `//deploy:sd` copies it to the card.
 | `switchroot/ios/bl33.bin` | switchroot's U-Boot with everything else of ours behind it. |
 | `switchroot/ios/bootargs.txt` | Yours, optional. No build ships it, and deploy never touches it. |
 
-hekate loads all of `bl33.bin` to `0xAA000000` and runs U-Boot. U-Boot's built-in environment is edited so that it sources
-the boot script from inside the file instead of looking for one on the FAT. `tools/package/loader_abi.py` keeps the map:
+hekate loads all of `bl33.bin` to `0xAA000000` and runs U-Boot. We edit U-Boot's built-in environment so that it
+sources the boot script from inside the file instead of looking for one on the FAT. `tools/package/loader_abi.py` keeps
+the map:
 
 | Address | What |
 |---|---|
