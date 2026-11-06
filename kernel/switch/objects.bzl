@@ -10,6 +10,9 @@ SWITCH_ROOT = "kernel/switch"
 
 # component: [(the Apple object it links after, the source below kernel/switch, its own copts)]
 SWITCH_OBJECTS = {
+    "iokit": [
+        ("iokit/Kernel/IOUserClient.cpp", "iokit/iosurface.cpp", []),
+    ],
     "osfmk": [
         ("osfmk/arm64/arm_vm_init.c", "ram/ram.c", []),
     ],
