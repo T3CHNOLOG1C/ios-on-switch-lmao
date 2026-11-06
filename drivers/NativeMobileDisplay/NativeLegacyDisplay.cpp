@@ -711,7 +711,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // goes out at V_PULSE2, programmed `lead` before the frame end; otherwise at V_BLANK as before, and at most one goes out a
     // frame. Never booted: V_BLANK carries the vsync until V_PULSE2 has reached the CPU once; if it has not after
     // kPhaseProbeFlips latched flips with it programmed, one line and the phase is off for the boot. Once it has, a silent one
-    // panics as a silent V_BLANK does. The phase needs the frame marks, so it runs with display stats on (the default).
+    // panics as a silent V_BLANK does. The phase runs on the frame marks, which every kernel keeps (the stats are debug only).
     VsyncPhase phase;
     uint64_t vpulseTime = 0, vpulseContinuous = 0, deliveredFrame = ~0ull;
     uint64_t vsyncSentAt = 0;  // the frame timeline: the last vsync sent (its stamp), and the CPU clock then
@@ -920,8 +920,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // accepted to retired; client is the compositor's own time from a retire to its next submission (0 when it submitted before the
     // retire); vsync late is V_BLANK interrupt to notification sent; gpu-copy is a GPU frame copy's offer to its completion; attr is the
     // MAIR byte of the source and scanout views (mairAttribute).
-    // All under the work-loop gate except stVblanks.
-    static constexpr bool stats = true;
+    // All under the work-loop gate except stVblanks. Debug kernels only, as the frame timeline is: a release kernel keeps
+    // the frame timing the vsync phase and the frame-miss hint run on (stamps, marks, presents) and none of the counters.
+    static constexpr bool stats = SWITCH_FRAME_TIMELINE;
     uint64_t statsStart = 0, lastSubmit = 0, lastRetire = 0, deferredAt = 0;
     Span stQueue = {}, stFlipWait = {}, stMap = {}, stGpu = {}, stCache = {}, stScan = {}, stCopy = {}, stRetire = {},
          stInterval = {}, stClient = {}, stVsyncLate = {};
@@ -1013,7 +1014,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // Under the gate, from flip(): the frame just written into surface i goes out now.
     void markFlip(int i)
     {
-        if (!stats || i < 0)
+        if (i < 0)
             return;
         marks[i] = taken;
         marks[i].ready = mach_absolute_time();
@@ -1024,10 +1025,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // is the presented frame's own times (all 0 if not known).
     void notePresent(uint64_t stamp, uint64_t latchedAt, const FrameMark &mark)
     {
-        if (stamp)
-            noteMissedFrame(stamp);
-        if (!stats || !stamp)
+        if (!stamp)
             return;
+        noteMissedFrame(stamp);
         // r17-touch: a flip replaced unshown since the last present (counted just before this one) missed its boundary.
         // noteStatsWindow zeroes stReplaced every window: a count below the one seen is a new window, not a replacement.
         if (stReplaced < phaseReplacedSeen)
@@ -1037,6 +1037,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             phase.replaced(0, 0, Span::ticksToUs(stamp));
         }
         notePhasePresent(stamp, mark);
+        if (stats)
+            notePresentTimes(stamp, latchedAt, mark);
+        lastPresent = stamp;
+        idleSincePresent = false;
+    }
+
+    // Debug kernels: the present's counters for the stats line (lastPresent is still the one before).
+    void notePresentTimes(uint64_t stamp, uint64_t latchedAt, const FrameMark &mark)
+    {
         ++stPresents;
         ++stLatch[latchedAt <= 1 ? 0 : 1];
         if (mark.submit && stamp > mark.submit) {
@@ -1071,8 +1080,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 }
             }
         }
-        lastPresent = stamp;
-        idleSincePresent = false;
     }
 
     // A present frames DC A periods after the previous one (lastPresent, not yet moved on): its cause, see above.
@@ -1253,11 +1260,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 __atomic_fetch_add(&self->tapeFrames, 1ull, __ATOMIC_RELEASE);
                 thread_wakeup((event_t)&self->tapeFrames);
             }
+            // r6-lows: the frame end's time (the present stamp); debug kernels also the DC A period and a frame end the
+            // action has not taken yet.
+            const uint64_t now = mach_absolute_time(), last = self->feLast;
+            __atomic_store_n(&self->feStamp, now, __ATOMIC_RELEASE);
+            self->feLast = now;
             if (self->stats) {
-                // r6-lows: the frame end's time (the present stamp), the DC A period, and a frame end the action has not taken yet.
-                const uint64_t now = mach_absolute_time(), last = self->feLast;
-                __atomic_store_n(&self->feStamp, now, __ATOMIC_RELEASE);
-                self->feLast = now;
                 // Only consecutive frame ends (a stopped scanout or SC7 in between is no period).
                 if (last && now > last && (!self->vsyncInterval || now - last < 2 * self->vsyncInterval)) {
                     const uint64_t period = now - last;
@@ -1526,7 +1534,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // while a lead is in effect and nothing turned the phase off.
     bool phaseDelivering() const
     {
-        return stats && vpulseSeen && !phaseFailed && phase.lead();
+        return vpulseSeen && !phaseFailed && phase.lead();
     }
 
     void vpulseNotify()
@@ -1573,8 +1581,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             stVsyncLate.add(late);
             if (Span::ticksToUs(late) > 1000)
                 ++stVsyncLateN;
-            phase.vsync(Span::ticksToUs(stamp), lead);
         }
+        phase.vsync(Span::ticksToUs(stamp), lead);
     }
 
     // At each frame end: the lead V_PULSE2 gave this frame (its time to this frame end), its line corrected towards the one
@@ -1659,7 +1667,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // never-booted check (V_PULSE2 programmed, flips latched, not one V_PULSE2).
     void notePhasePresent(uint64_t stamp, const FrameMark &mark)
     {
-        if (!stats || phaseFailed || !mark.submit || !mark.ready)
+        if (phaseFailed || !mark.submit || !mark.ready)
             return;
         if (vsyncInterval)
             phase.setPeriod((uint32_t)Span::ticksToUs(vsyncInterval));
@@ -2314,16 +2322,13 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         case TegraScanoutRing::kTaken:
             if (SWITCH_FRAME_TIMELINE)
                 KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_LATCH), surfaceAddress(asked), frameEnds - flipRequested);
-            if (stats) {
-                if (replaced != kNoBuffer)
-                    ++stReplaced;  // that frame was never shown
-                notePresent(stamp, frameEnds - flipRequested, marks[asked]);
-            }
+            if (replaced != kNoBuffer)
+                ++stReplaced;  // that frame was never shown
+            notePresent(stamp, frameEnds - flipRequested, marks[asked]);
             retireThrough(entrySeq[asked]);
             break;
         case TegraScanoutRing::kTakenReplaced:
-            if (stats)
-                notePresent(stamp, 1, marks[replaced]);  // shown for a frame after all; the newer one is still out
+            notePresent(stamp, 1, marks[replaced]);  // shown for a frame after all; the newer one is still out
             retireThrough(entrySeq[replaced]);
             break;
         }
@@ -2732,11 +2737,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 // start is expectedStart(), the flip asked for last: taken (a replaced one never scanned for long).
                 const int asked = ring.pending, replaced = ring.superseded;
                 ring.latch(surfaceIndex(start), false);
-                if (stats) {
-                    if (replaced != kNoBuffer)
-                        ++stReplaced;
-                    notePresent(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), frameEnds - flipRequested, marks[asked]);
-                }
+                if (replaced != kNoBuffer)
+                    ++stReplaced;
+                notePresent(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), frameEnds - flipRequested, marks[asked]);
                 retireThrough(entrySeq[asked]);  // r18-planes: retiring at the latch from the first frame on
                 flipLatched();
             }
@@ -3230,7 +3233,7 @@ public:
         PlaneDecision pd;
         planeDecide(request, pd);
         if (!pd.uiNew) {
-            kickPlaneOnly(request, pd, stats ? mach_absolute_time() : 0);
+            kickPlaneOnly(request, pd, mach_absolute_time());
             return;
         }
         planeNextSet = pd.planeChange;
@@ -3267,14 +3270,14 @@ public:
             if (request != first) {  // the newest swap goes: its own layers (planes are off here: no window B change)
                 planeDecide(request, pd);
                 if (!pd.uiNew) {
-                    kickPlaneOnly(request, pd, stats ? mach_absolute_time() : 0);
+                    kickPlaneOnly(request, pd, mach_absolute_time());
                     return;
                 }
                 planeNextSet = pd.planeChange;
                 planeNext = pd.set;
             }
         }
-        const uint64_t kickAt = stats ? mach_absolute_time() : 0;
+        const uint64_t kickAt = mach_absolute_time();
         // This bounded first-frame transfer preserves the original queue's
         // resource ownership. Separately gated retirement follows the copy;
         // neither path signals a hardware fence, announces a vblank or
@@ -3503,15 +3506,14 @@ public:
     {
         take(request);
         flipRequest = request;
-        if (!stats)
-            return;
         // r6-lows/r14-pacing: carried to the flip of this frame (flip, markFlip), then to its present (notePresent).
         taken = {submittedAt(request), kickAt, 0, 0, timelineOf(request)};
-        if (taken.submit)
+        if (taken.submit && stats)
             stQueue.add(kickAt > taken.submit ? kickAt - taken.submit : 0);
         if (deferredAt) {
             taken.waited = kickAt > deferredAt ? kickAt - deferredAt : 0;
-            stFlipWait.add(taken.waited);
+            if (stats)
+                stFlipWait.add(taken.waited);
             deferredAt = 0;
         }
     }
