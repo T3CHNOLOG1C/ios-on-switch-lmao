@@ -1,0 +1,249 @@
+{
+  "class": "IOUSBDeviceController",
+  "doc": "The original abstract base of a USB device-mode controller driver (com.apple.iokit.IOUSBDeviceFamily; AppleUSBXDCI is the in-cache reference subclass), which SwitchXUDC subclasses: the family builds the descriptors, runs EP0's state machine (IOUSBDeviceControlRequest) and publishes the functions' interfaces. The non-virtual members SwitchXUDC calls are bound here by their mangled names; drivers/SwitchUSB/OriginalIOUSBDeviceFamily.h declares their classes.",
+  "superclass": "IOService",
+  "kext": "com.apple.iokit.IOUSBDeviceFamily",
+  "structors": "abstract",
+  "includes": [
+    "IOKit/IOService.h",
+    "IOKit/IOBufferMemoryDescriptor.h",
+    "libkern/c++/OSArray.h"
+  ],
+  "declarations": [
+    "struct _IOUSBDeviceIORequestTag;  // the family's 0x68-byte I/O request (SwitchXUDC.cpp reads its fields)",
+    "class IOUSBDeviceControlRequest;"
+  ],
+  "members": [
+    "void readyForHost()",
+    "void completeEndpointIO(_IOUSBDeviceIORequestTag *request)"
+  ],
+  "methods": {
+    "free": {
+      "decl": "void free() override",
+      "mangled": "__ZN21IOUSBDeviceController4freeEv",
+      "pac": "_ZN8OSObject4freeEv"
+    },
+    "setProperties": {
+      "decl": "IOReturn setProperties(OSObject *properties) override",
+      "mangled": "__ZN21IOUSBDeviceController13setPropertiesEP8OSObject",
+      "pac": "_ZN15IORegistryEntry13setPropertiesEP8OSObject"
+    },
+    "start": {
+      "decl": "bool start(IOService *provider) override",
+      "mangled": "__ZN21IOUSBDeviceController5startEP9IOService",
+      "pac": "_ZN9IOService5startEPS_",
+      "doc": "Builds the command gate, pool and timers on getWorkLoop()."
+    },
+    "stop": {
+      "decl": "void stop(IOService *provider) override",
+      "mangled": "__ZN21IOUSBDeviceController4stopEP9IOService",
+      "pac": "_ZN9IOService4stopEPS_"
+    },
+    "terminate": {
+      "decl": "bool terminate(IOOptionBits options = 0) override",
+      "mangled": "__ZN21IOUSBDeviceController9terminateEj",
+      "pac": "_ZN9IOService9terminateEj"
+    },
+    "callPlatformFunction": {
+      "decl": "IOReturn callPlatformFunction(const OSSymbol *functionName, bool waitForFunction, void *param1, void *param2, void *param3, void *param4) override",
+      "mangled": "__ZN21IOUSBDeviceController20callPlatformFunctionEPK8OSSymbolbPvS3_S3_S3_",
+      "pac": "_ZN9IOService20callPlatformFunctionEPK8OSSymbolbPvS3_S3_S3_"
+    },
+    "setPowerState": {
+      "decl": "IOReturn setPowerState(unsigned long powerStateOrdinal, IOService *whatDevice) override",
+      "mangled": "__ZN21IOUSBDeviceController13setPowerStateEmP9IOService",
+      "pac": "_ZN9IOService13setPowerStateEmPS_"
+    },
+    "maxCapabilityForDomainState": {
+      "decl": "unsigned long maxCapabilityForDomainState(IOPMPowerFlags domainState) override",
+      "mangled": "__ZN21IOUSBDeviceController27maxCapabilityForDomainStateEm",
+      "pac": "_ZN9IOService27maxCapabilityForDomainStateEm"
+    },
+    "initialPowerStateForDomainState": {
+      "decl": "unsigned long initialPowerStateForDomainState(IOPMPowerFlags domainState) override",
+      "mangled": "__ZN21IOUSBDeviceController31initialPowerStateForDomainStateEm",
+      "pac": "_ZN9IOService31initialPowerStateForDomainStateEm"
+    },
+    "powerStateWillChangeTo": {
+      "decl": "IOReturn powerStateWillChangeTo(IOPMPowerFlags capabilities, unsigned long stateNumber, IOService *whatDevice) override",
+      "mangled": "__ZN21IOUSBDeviceController22powerStateWillChangeToEmmP9IOService",
+      "pac": "_ZN9IOService22powerStateWillChangeToEmmPS_"
+    },
+    "powerStateDidChangeTo": {
+      "decl": "IOReturn powerStateDidChangeTo(IOPMPowerFlags capabilities, unsigned long stateNumber, IOService *whatDevice) override",
+      "mangled": "__ZN21IOUSBDeviceController21powerStateDidChangeToEmmP9IOService",
+      "pac": "_ZN9IOService21powerStateDidChangeToEmmPS_"
+    },
+    "softDisconnect": {
+      "decl": "virtual void softDisconnect(uint32_t reason) = 0",
+      "mangled": "__ZN21IOUSBDeviceController14softDisconnectEj",
+      "doc": "Off the bus without a cable change; the family puts it back with goOnBus(true)."
+    },
+    "goOnBus": {
+      "decl": "virtual void goOnBus(bool on) = 0",
+      "mangled": "__ZN21IOUSBDeviceController7goOnBusEb"
+    },
+    "connectedWithAccessoryCable": {
+      "decl": "virtual bool connectedWithAccessoryCable() = 0",
+      "mangled": "__ZN21IOUSBDeviceController27connectedWithAccessoryCableEv"
+    },
+    "handleStallEndpoint": {
+      "decl": "virtual IOReturn handleStallEndpoint(int address, bool stall) = 0",
+      "mangled": "__ZN21IOUSBDeviceController19handleStallEndpointEib"
+    },
+    "handleAbortEndpoint": {
+      "decl": "virtual IOReturn handleAbortEndpoint(int address) = 0",
+      "mangled": "__ZN21IOUSBDeviceController19handleAbortEndpointEi"
+    },
+    "handleSetAddressPreStatusPhase": {
+      "decl": "virtual IOReturn handleSetAddressPreStatusPhase(int address) = 0",
+      "mangled": "__ZN21IOUSBDeviceController30handleSetAddressPreStatusPhaseEi"
+    },
+    "handleSetAddressPostStatusPhase": {
+      "decl": "virtual IOReturn handleSetAddressPostStatusPhase(int address) = 0",
+      "mangled": "__ZN21IOUSBDeviceController31handleSetAddressPostStatusPhaseEi"
+    },
+    "getConnectionSpeed": {
+      "decl": "virtual int getConnectionSpeed() = 0",
+      "mangled": "__ZN21IOUSBDeviceController18getConnectionSpeedEv",
+      "doc": "1 full speed, 2 high speed, -1 none."
+    },
+    "provideEndpointIDsForConfiguration": {
+      "decl": "virtual IOReturn provideEndpointIDsForConfiguration(OSArray *interfaces, uint8_t *ids) = 0",
+      "mangled": "__ZN21IOUSBDeviceController34provideEndpointIDsForConfigurationEP7OSArrayPh"
+    },
+    "prepareConfiguration": {
+      "decl": "virtual IOReturn prepareConfiguration(OSArray *interfaces) = 0",
+      "mangled": "__ZN21IOUSBDeviceController20prepareConfigurationEP7OSArray"
+    },
+    "activateEndpoint": {
+      "decl": "virtual IOReturn activateEndpoint(int address, int type, int maxPacketSize, int interval, int property) = 0",
+      "mangled": "__ZN21IOUSBDeviceController16activateEndpointEiiiii",
+      "pac": "_ZN21IOUSBDeviceController16activateEndpointEiiii33tIOUSBDeviceInterfacePipeProperty",
+      "doc": "The family passes IOUSBDevicePipe's address, type, max packet size, interval and property; Apple's root has the property as the int-sized enum tIOUSBDeviceInterfacePipeProperty."
+    },
+    "deactivateEndpoint": {
+      "decl": "virtual IOReturn deactivateEndpoint(int address) = 0",
+      "mangled": "__ZN21IOUSBDeviceController18deactivateEndpointEi"
+    },
+    "createIOBuffer": {
+      "decl": "virtual IOBufferMemoryDescriptor *createIOBuffer(IOOptionBits options, uint64_t capacity) = 0",
+      "mangled": "__ZN21IOUSBDeviceController14createIOBufferEjy"
+    },
+    "isEndpointStalled": {
+      "decl": "virtual bool isEndpointStalled(int address) = 0",
+      "mangled": "__ZN21IOUSBDeviceController17isEndpointStalledEi"
+    },
+    "resetEndpointDataToggle": {
+      "decl": "virtual IOReturn resetEndpointDataToggle(int address) = 0",
+      "mangled": "__ZN21IOUSBDeviceController23resetEndpointDataToggleEi"
+    },
+    "handleUSBSuspend": {
+      "decl": "virtual void handleUSBSuspend()",
+      "mangled": "__ZN21IOUSBDeviceController16handleUSBSuspendEv"
+    },
+    "handleUSBReset": {
+      "decl": "virtual void handleUSBReset()",
+      "mangled": "__ZN21IOUSBDeviceController14handleUSBResetEv",
+      "doc": "The family drops the configuration (deactivateEndpoint for every pipe)."
+    },
+    "handleUSBConnectionDone": {
+      "decl": "virtual void handleUSBConnectionDone()",
+      "mangled": "__ZN21IOUSBDeviceController23handleUSBConnectionDoneEv"
+    },
+    "handleUSBResume": {
+      "decl": "virtual void handleUSBResume()",
+      "mangled": "__ZN21IOUSBDeviceController15handleUSBResumeEv"
+    },
+    "forceReEnumeration": {
+      "decl": "virtual void forceReEnumeration() = 0",
+      "mangled": "__ZN21IOUSBDeviceController18forceReEnumerationEv"
+    },
+    "doRemoteWakeGated": {
+      "decl": "virtual IOReturn doRemoteWakeGated() = 0",
+      "mangled": "__ZN21IOUSBDeviceController17doRemoteWakeGatedEv"
+    },
+    "handleUSBCableConnect": {
+      "decl": "virtual IOReturn handleUSBCableConnect()",
+      "mangled": "__ZN21IOUSBDeviceController21handleUSBCableConnectEv",
+      "doc": "Calls goOnBus(true)."
+    },
+    "handleControlRequestStateChange": {
+      "decl": "virtual void handleControlRequestStateChange(int oldState, int newState)",
+      "mangled": "__ZN21IOUSBDeviceController31handleControlRequestStateChangeEii",
+      "doc": "IOUSBDeviceControlRequest reports each EP0 state change (old, new); the original is empty."
+    },
+    "ioGated": {
+      "decl": "virtual IOReturn ioGated(_IOUSBDeviceIORequestTag *request) = 0",
+      "mangled": "__ZN21IOUSBDeviceController7ioGatedEP24_IOUSBDeviceIORequestTag",
+      "doc": "Inside the family's command gate; nonzero means not queued."
+    },
+    "getBufferOptions": {
+      "decl": "virtual IOReturn getBufferOptions(uint32_t &options)",
+      "mangled": "__ZN21IOUSBDeviceController16getBufferOptionsERj"
+    }
+  },
+  "fields": {
+    "controlRequest": {
+      "type": "IOUSBDeviceControlRequest *",
+      "access": "get",
+      "doc": "EP0's control request state machine, which readyForHost creates."
+    }
+  },
+  "functions": {
+    "readyForHost": {
+      "symbols": [
+        "_ZN21IOUSBDeviceController12readyForHostEv"
+      ],
+      "doc": "IOUSBDeviceController::readyForHost(): creates the control request, the device description defaults, registerService()."
+    },
+    "completeEndpointIO": {
+      "symbols": [
+        "_ZN21IOUSBDeviceController18completeEndpointIOEP24_IOUSBDeviceIORequestTag"
+      ],
+      "doc": "IOUSBDeviceController::completeEndpointIO(request): the completion, then freeRequest."
+    },
+    "inputSetupPacket": {
+      "symbols": [
+        "_ZN25IOUSBDeviceControlRequest16inputSetupPacketEPh"
+      ],
+      "doc": "IOUSBDeviceControlRequest::inputSetupPacket(packet)"
+    },
+    "processSetupPacket": {
+      "symbols": [
+        "_ZN25IOUSBDeviceControlRequest18processSetupPacketEv"
+      ],
+      "doc": "IOUSBDeviceControlRequest::processSetupPacket()"
+    },
+    "inputDataPacket": {
+      "symbols": [
+        "_ZN25IOUSBDeviceControlRequest15inputDataPacketEPhy"
+      ],
+      "doc": "IOUSBDeviceControlRequest::inputDataPacket(bytes, length)"
+    },
+    "getAlternateSettingCount": {
+      "symbols": [
+        "_ZNK20IOUSBDeviceInterface24getAlternateSettingCountEv"
+      ],
+      "doc": "IOUSBDeviceInterface::getAlternateSettingCount() const"
+    },
+    "getPipeCountForAlternateSetting": {
+      "symbols": [
+        "_ZN20IOUSBDeviceInterface31getPipeCountForAlternateSettingEh"
+      ],
+      "doc": "IOUSBDeviceInterface::getPipeCountForAlternateSetting(alternate)"
+    },
+    "getPipeForAlternateSetting": {
+      "symbols": [
+        "_ZN20IOUSBDeviceInterface26getPipeForAlternateSettingEih"
+      ],
+      "doc": "IOUSBDeviceInterface::getPipeForAlternateSetting(index, alternate)"
+    },
+    "getDirection": {
+      "symbols": [
+        "_ZN15IOUSBDevicePipe12getDirectionEv"
+      ],
+      "doc": "IOUSBDevicePipe::getDirection(): 0 OUT, 1 IN"
+    }
+  }
+}

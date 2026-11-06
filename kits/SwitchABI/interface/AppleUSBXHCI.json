@@ -1,0 +1,171 @@
+{
+  "class": "AppleUSBXHCI",
+  "doc": "Apple's generic xHCI driver (com.apple.driver.usb.AppleUSBXHCI on IOUSBHostFamily's AppleUSBHostController: rings, slots, endpoints, ports, hubs, power), which SwitchXHCI subclasses for the Tegra X1 XUSB host controller as the SoC subclasses do. Concrete: no pure virtual slot. Declared on IOService: AppleUSBHostController's slots are opaque.",
+  "superclass": "IOService",
+  "kext": "com.apple.driver.usb.AppleUSBXHCI",
+  "structors": "default",
+  "includes": [
+    "IOKit/IOService.h"
+  ],
+  "methods": {
+    "free": {
+      "decl": "void free() override",
+      "mangled": "__ZN12AppleUSBXHCI4freeEv",
+      "pac": "_ZN8OSObject4freeEv"
+    },
+    "init": {
+      "decl": "bool init(OSDictionary *dictionary) override",
+      "mangled": "__ZN12AppleUSBXHCI4initEP12OSDictionary",
+      "pac": "_ZN15IORegistryEntry4initEP12OSDictionary"
+    },
+    "setProperties": {
+      "decl": "IOReturn setProperties(OSObject *properties) override",
+      "mangled": "__ZN12AppleUSBXHCI13setPropertiesEP8OSObject",
+      "pac": "_ZN15IORegistryEntry13setPropertiesEP8OSObject"
+    },
+    "didTerminate": {
+      "decl": "bool didTerminate(IOService *provider, IOOptionBits options, bool *defer) override",
+      "mangled": "__ZN12AppleUSBXHCI12didTerminateEP9IOServicejPb",
+      "pac": "_ZN9IOService12didTerminateEPS_jPb"
+    },
+    "systemWillShutdown": {
+      "decl": "void systemWillShutdown(IOOptionBits specifier) override",
+      "mangled": "__ZN12AppleUSBXHCI18systemWillShutdownEj",
+      "pac": "_ZN9IOService18systemWillShutdownEj"
+    },
+    "registerService": {
+      "decl": "void registerService(IOOptionBits options = 0) override",
+      "mangled": "__ZN12AppleUSBXHCI15registerServiceEj",
+      "pac": "_ZN9IOService15registerServiceEj"
+    },
+    "start": {
+      "decl": "bool start(IOService *provider) override",
+      "mangled": "__ZN12AppleUSBXHCI5startEP9IOService",
+      "pac": "_ZN9IOService5startEPS_"
+    },
+    "stop": {
+      "decl": "void stop(IOService *provider) override",
+      "mangled": "__ZN12AppleUSBXHCI4stopEP9IOService",
+      "pac": "_ZN9IOService4stopEPS_"
+    },
+    "open": {
+      "decl": "bool open(IOService *forClient, IOOptionBits options = 0, void *arg = nullptr) override",
+      "mangled": "__ZN12AppleUSBXHCI4openEP9IOServicejPv",
+      "pac": "_ZN9IOService4openEPS_jPv"
+    },
+    "close": {
+      "decl": "void close(IOService *forClient, IOOptionBits options = 0) override",
+      "mangled": "__ZN12AppleUSBXHCI5closeEP9IOServicej",
+      "pac": "_ZN9IOService5closeEPS_j"
+    },
+    "handleOpen": {
+      "decl": "bool handleOpen(IOService *forClient, IOOptionBits options, void *arg) override",
+      "mangled": "__ZN12AppleUSBXHCI10handleOpenEP9IOServicejPv",
+      "pac": "_ZN9IOService10handleOpenEPS_jPv"
+    },
+    "handleClose": {
+      "decl": "void handleClose(IOService *forClient, IOOptionBits options) override",
+      "mangled": "__ZN12AppleUSBXHCI11handleCloseEP9IOServicej",
+      "pac": "_ZN9IOService11handleCloseEPS_j"
+    },
+    "handleIsOpen": {
+      "decl": "bool handleIsOpen(const IOService *forClient) const override",
+      "mangled": "__ZNK12AppleUSBXHCI12handleIsOpenEPK9IOService",
+      "pac": "_ZNK9IOService12handleIsOpenEPKS_"
+    },
+    "terminate": {
+      "decl": "bool terminate(IOOptionBits options = 0) override",
+      "mangled": "__ZN12AppleUSBXHCI9terminateEj",
+      "pac": "_ZN9IOService9terminateEj"
+    },
+    "matchPropertyTable": {
+      "decl": "bool matchPropertyTable(OSDictionary *table, SInt32 *score) override",
+      "mangled": "__ZN12AppleUSBXHCI18matchPropertyTableEP12OSDictionaryPi",
+      "pac": "_ZN9IOService18matchPropertyTableEP12OSDictionaryPi"
+    },
+    "attach": {
+      "decl": "bool attach(IOService *provider) override",
+      "mangled": "__ZN12AppleUSBXHCI6attachEP9IOService",
+      "pac": "_ZN9IOService6attachEPS_"
+    },
+    "getWorkLoop": {
+      "decl": "IOWorkLoop *getWorkLoop() const override",
+      "mangled": "__ZNK12AppleUSBXHCI11getWorkLoopEv",
+      "pac": "_ZNK9IOService11getWorkLoopEv"
+    },
+    "message": {
+      "decl": "IOReturn message(UInt32 type, IOService *provider, void *argument = nullptr) override",
+      "mangled": "__ZN12AppleUSBXHCI7messageEjP9IOServicePv",
+      "pac": "_ZN9IOService7messageEjPS_Pv"
+    },
+    "messageClients": {
+      "decl": "IOReturn messageClients(UInt32 type, void *argument = nullptr, vm_size_t argSize = 0) override",
+      "mangled": "__ZN12AppleUSBXHCI14messageClientsEjPvm",
+      "pac": "_ZN9IOService14messageClientsEjPvm"
+    },
+    "PMstop": {
+      "decl": "void PMstop() override",
+      "mangled": "__ZN12AppleUSBXHCI6PMstopEv",
+      "pac": "_ZN9IOService6PMstopEv"
+    },
+    "setPowerState": {
+      "decl": "IOReturn setPowerState(unsigned long powerStateOrdinal, IOService *whatDevice) override",
+      "mangled": "__ZN12AppleUSBXHCI13setPowerStateEmP9IOService",
+      "pac": "_ZN9IOService13setPowerStateEmPS_"
+    },
+    "maxCapabilityForDomainState": {
+      "decl": "unsigned long maxCapabilityForDomainState(IOPMPowerFlags domainState) override",
+      "mangled": "__ZN12AppleUSBXHCI27maxCapabilityForDomainStateEm",
+      "pac": "_ZN9IOService27maxCapabilityForDomainStateEm"
+    },
+    "initialPowerStateForDomainState": {
+      "decl": "unsigned long initialPowerStateForDomainState(IOPMPowerFlags domainState) override",
+      "mangled": "__ZN12AppleUSBXHCI31initialPowerStateForDomainStateEm",
+      "pac": "_ZN9IOService31initialPowerStateForDomainStateEm"
+    },
+    "powerStateWillChangeTo": {
+      "decl": "IOReturn powerStateWillChangeTo(IOPMPowerFlags capabilities, unsigned long stateNumber, IOService *whatDevice) override",
+      "mangled": "__ZN12AppleUSBXHCI22powerStateWillChangeToEmmP9IOService",
+      "pac": "_ZN9IOService22powerStateWillChangeToEmmPS_"
+    },
+    "powerStateDidChangeTo": {
+      "decl": "IOReturn powerStateDidChangeTo(IOPMPowerFlags capabilities, unsigned long stateNumber, IOService *whatDevice) override",
+      "mangled": "__ZN12AppleUSBXHCI21powerStateDidChangeToEmmP9IOService",
+      "pac": "_ZN9IOService21powerStateDidChangeToEmmPS_"
+    },
+    "copyMapper": {
+      "decl": "virtual IOMapper *copyMapper()",
+      "mangled": "__ZN12AppleUSBXHCI10copyMapperEv",
+      "pac": "_ZN22AppleUSBHostController10copyMapperEv",
+      "doc": "AppleUSBHostController::start keeps what it returns as the mapper of every controller DMA buffer and transfer DMA command (a reference)."
+    },
+    "regRead16": {
+      "decl": "virtual uint16_t regRead16(uint64_t base, uint32_t offset)",
+      "mangled": "__ZN12AppleUSBXHCI9regRead16Eyj",
+      "doc": "Register accessors (mapped base, byte offset). The original calls them through the vtable for every register access, the read-modify-write helpers included."
+    },
+    "regRead32": {
+      "decl": "virtual uint32_t regRead32(uint64_t base, uint32_t offset)",
+      "mangled": "__ZN12AppleUSBXHCI9regRead32Eyj"
+    },
+    "regRead64": {
+      "decl": "virtual uint64_t regRead64(uint64_t base, uint32_t offset)",
+      "mangled": "__ZN12AppleUSBXHCI9regRead64Eyj"
+    },
+    "regWrite32": {
+      "decl": "virtual void regWrite32(uint64_t base, uint32_t offset, uint32_t value)",
+      "mangled": "__ZN12AppleUSBXHCI10regWrite32Eyjj"
+    },
+    "regWrite64": {
+      "decl": "virtual void regWrite64(uint64_t base, uint32_t offset, uint64_t value)",
+      "mangled": "__ZN12AppleUSBXHCI10regWrite64Eyjy"
+    }
+  },
+  "fields": {
+    "ringBufferOptions": {
+      "type": "uint32_t",
+      "access": "get set",
+      "doc": "The memory options ring buffers are allocated with: AppleUSBHostController::init sets them, the SoC subclasses clear the cache-mode bits before AppleUSBXHCI::start."
+    }
+  }
+}

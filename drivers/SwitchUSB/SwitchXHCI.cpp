@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// SwitchXHCI: the Tegra X1 XUSB host controller under Apple's original AppleUSBXHCI (21H461).
+// SwitchXHCI: the Tegra X1 XUSB host controller under Apple's original AppleUSBXHCI (kits/SwitchABI).
 //
 // iPadOS drives USB host through IOUSBHostFamily + AppleUSBXHCI (generic xHCI: rings, slots, ports, hubs, power) with
 // a thin SoC subclass (AppleNubT8011USBXHCI on iPad7,1). Once the falcon firmware runs, Tegra's host is a plain xHCI
@@ -11,8 +11,8 @@
 //
 // AppleUSBXHCI::start refuses a controller with fewer than three interrupters (HCSPARAMS1.MaxIntrs). With one provider
 // interrupt it runs them all on the shared line (legacy interrupters), so when the Tegra firmware reports fewer, we
-// report three and keep the missing register sets in a shadow (regRead32/regRead64/regWrite32/regWrite64, slots
-// 290-293: AppleUSBXHCIInterrupter::enable reads ERSTBA and ERDP back through regRead64); which case ran is logged once.
+// report three and keep the missing register sets in a shadow (the regRead32/regRead64/regWrite32/regWrite64
+// overrides: AppleUSBXHCIInterrupter::enable reads ERSTBA and ERDP back through regRead64); which case ran is logged.
 //
 // Interrupts only: AppleUSBXHCI's own filter owns INTID 71, the mailbox filter (INTID 72) is ours. No timer runs in
 // steady state. Routing (checked against the sources): the OLED DT's xusb@70090000 has interrupts GIC_SPI 39 (host)
@@ -128,7 +128,7 @@ bool SwitchXHCI::start(IOService *provider)
     runtimeOffset = gHost.runtimeOffset();  // read once: regRead32 also runs in the primary interrupt filter
     // Controller structures non-cacheable: the write-combine cache mode (normal non-cacheable) in place of the one
     // AppleUSBHostController::init picked (AppleNubT8011USBXHCI clears it: its fabric is coherent; ours is not).
-    ringBufferOptions() = (ringBufferOptions() & ~(uint32_t)kIOMapCacheMask) | (uint32_t)kIOMapWriteCombineCache;
+    setRingBufferOptions((ringBufferOptions() & ~(uint32_t)kIOMapCacheMask) | (uint32_t)kIOMapWriteCombineCache);
     // Without the mapper AppleUSBXHCI would run on (copyMapper NULL is no error to it) there is no cache maintenance.
     if (!switch_usb_dma_mapper(dmaReach()))
         return false;
@@ -475,7 +475,7 @@ bool switchxhci_start(char *why, size_t whySize)
     }
     const OSMetaClass *parent = lookupClass("AppleUSBXHCI");
     if (parent != &AppleUSBXHCI::gMetaClass || parent->getClassSize() != sizeof(AppleUSBXHCI)) {
-        snprintf(why, whySize, "the loaded AppleUSBXHCI is not the 21H461 one");
+        snprintf(why, whySize, "the loaded AppleUSBXHCI is not the " SWITCH_ABI_KIND " one");
         return false;
     }
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);

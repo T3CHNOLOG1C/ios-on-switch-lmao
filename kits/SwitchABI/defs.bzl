@@ -82,15 +82,41 @@ def _bindings_impl(ctx):
         mnemonic = "SwitchAbiBindings",
         progress_message = "Binding %{label}'s original imports for the selected IPSW kind",
     )
+    if not ctx.attr.subclass:
+        return []
+    if len(ctx.attr.classes) != 1:
+        fail("{}: subclass checks one original class".format(ctx.label))
+    info = ctx.attr.classes[0][SwitchAbiInfo]
+    checked = ctx.actions.declare_file(ctx.label.name + ".subclass-ok")
+    check = ["vtable", "--interface", info.interface.path, "--table", info.table.path, "--subclass", ctx.attr.subclass]
+    for name in ctx.attr.own:
+        check += ["--own", name]
+    for o in objects:
+        check += ["--object", o.path]
+    ctx.actions.run(
+        executable = ctx.executable._subclass,
+        arguments = check + ["--out", checked.path],
+        inputs = objects + [info.interface, info.table],
+        outputs = [checked],
+        mnemonic = "SwitchAbiSubclass",
+        progress_message = "Checking {}'s vtable against the selected IPSW kind's table".format(ctx.attr.subclass),
+    )
+
+    # A validation: the kernel links the objects as compiled.
+    return [OutputGroupInfo(_validation = depset([checked]))]
 
 switch_abi_bindings = rule(
     implementation = _bindings_impl,
-    doc = "out (.S): every original symbol the objects import from classes, at the selected kind's addresses.",
+    doc = "out (.S): every original symbol the objects import from classes, at the selected kind's addresses; with " +
+          "subclass, a validation of its vtable against the class's table (kits/SwitchABI/subclass.py).",
     attrs = {
         "out": attr.output(mandatory = True),
         "classes": attr.label_list(mandatory = True, providers = [SwitchAbiInfo]),
         "objects": attr.label_list(mandatory = True, providers = [CcInfo], cfg = kernel_transition),
+        "subclass": attr.string(doc = "a driver class subclassing the one original class: its vtable is checked"),
+        "own": attr.string_list(doc = "the subclass's methods that override slots (besides its structors)"),
         "_gen": attr.label(default = ABI_PACKAGE + ":gen", executable = True, cfg = "exec"),
+        "_subclass": attr.label(default = ABI_PACKAGE + ":subclass", executable = True, cfg = "exec"),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
     },
 )

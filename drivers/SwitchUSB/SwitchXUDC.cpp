@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchXUDC: the Tegra X1 XUSB device controller as a backend of Apple's original IOUSBDeviceController
-// (com.apple.iokit.IOUSBDeviceFamily 2.0.0, 21H461).
+// (com.apple.iokit.IOUSBDeviceFamily, the selected IPSW kind's: kits/SwitchABI).
 //
 // Apple's code does everything above the controller, as on an iPad:
 //   * the family (prelinked) builds descriptors, runs the EP0 request state machine (IOUSBDeviceControlRequest) and
@@ -19,7 +19,7 @@
 // moves between the controller and the functions' own buffers, scatter-gather, many requests in flight (section "Data
 // endpoints").
 //
-// Contract (symbolized macOS IOUSBDeviceFamily, checked against the 21H461 code):
+// Contract (symbolized macOS IOUSBDeviceFamily, checked against the 21H461 and 24B119 code):
 // - setup packets go to controlRequest()->inputSetupPacket() + processSetupPacket();
 // - io() requests reach ioGated() inside the family's command gate on our work loop; completion = status + actual
 //   into the request, then completeEndpointIO(); a nonzero ioGated() return means "not queued";
@@ -61,7 +61,7 @@ void switchxudc_static_init(void) __asm__("__GLOBAL__sub_I_SwitchXUDC.cpp");
 }
 
 namespace {
-// _IOUSBDeviceIORequestTag fields (IOUSBDeviceController::io, completeEndpointIO; 21H461 code).
+// _IOUSBDeviceIORequestTag fields (IOUSBDeviceController::io, completeEndpointIO; the same in every kind so far).
 constexpr size_t kReqEndpoint = 0, kReqBuffer = 8, kReqStatus = 40, kReqIsoc = 48, kReqLength = 64, kReqActual = 72;
 
 template <typename T> T get(const _IOUSBDeviceIORequestTag *r, size_t off)
@@ -1555,7 +1555,7 @@ bool switchxudc_start(IOService *provider, char *why, size_t whySize)
     }
     const OSMetaClass *parent = lookupClass("IOUSBDeviceController");
     if (parent != &IOUSBDeviceController::gMetaClass || parent->getClassSize() != sizeof(IOUSBDeviceController)) {
-        snprintf(why, whySize, "the loaded IOUSBDeviceController is not the 21H461 one");
+        snprintf(why, whySize, "the loaded IOUSBDeviceController is not the " SWITCH_ABI_KIND " one");
         return false;
     }
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);

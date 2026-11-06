@@ -377,6 +377,16 @@ def _kernel_driver_objects_impl(ctx):
                 progress_message = "Staging the static initializer of " + src.basename,
             )
             final = late_obj
+            late_ok = ctx.actions.declare_file(out_dir + "/" + stem + ".late-ok")
+            ctx.actions.run(
+                executable = ctx.executable._subclass,
+                arguments = ["late", "--object", obj.path, "--late", late_obj.path, "--out", late_ok.path],
+                inputs = [obj, late_obj],
+                outputs = [late_ok],
+                mnemonic = "KernelLateObjectCheck",
+                progress_message = "Checking the staged static initializer of " + src.basename,
+            )
+            validations.append(late_ok)
         if src.basename in checks:
             check = checks.pop(src.basename)
             checked = ctx.actions.declare_file(out_dir + "/" + stem + ".abi-ok")
@@ -442,6 +452,7 @@ _kernel_driver_objects = rule(
         "prelink_cuts": attr.string_list(),
         "prelink_deferred": attr.string_list(),
         "_objcopy": attr.label(default = "@llvm//:bin/llvm-objcopy", executable = True, allow_single_file = True, cfg = "exec"),
+        "_subclass": attr.label(default = ABI_PACKAGE + ":subclass", executable = True, cfg = "exec"),
         "_kernelcache": attr.label(default = "//ipsw:kernelcache", allow_single_file = True),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
     }),

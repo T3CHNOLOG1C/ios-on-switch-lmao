@@ -30,6 +30,18 @@ py_binary(
     srcs = ["gen.py"],
 )
 
+py_library(
+    name = "subclass_lib",
+    srcs = ["subclass.py"],
+    deps = [":gen_lib"],
+)
+
+py_binary(
+    name = "subclass",
+    srcs = ["subclass.py"],
+    deps = [":subclass_lib"],
+)
+
 py_binary(
     name = "extract",
     srcs = [
@@ -111,10 +123,18 @@ py_test(
     deps = [":gen_lib"],
 )
 
+py_test(
+    name = "subclass_test",
+    srcs = ["test/subclass_test.py"],
+    deps = [":subclass_lib"],
+)
+
 switch_abi_class(
     "AppleARMBacklight",
     header = False,
 )
+
+switch_abi_class("AppleUSBXHCI")
 
 switch_abi_class("IOAESAccelerator")
 
@@ -137,5 +157,7 @@ switch_abi_class(
     "IOSurface",
     header = False,
 )
+
+switch_abi_class("IOUSBDeviceController")
 
 switch_abi_class("IOWatchdog")

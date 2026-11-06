@@ -1,9 +1,9 @@
 # drivers/SwitchUSB: moved from out/native-a57/root-v1/tree/drivers/SwitchUSB by the layout move.
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
-load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:kernel.bzl", "kernel_driver")
+load("//kits/SwitchABI:defs.bzl", "switch_abi_bindings")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -79,17 +79,10 @@ cc_library(
     target_compatible_with = ["//bazel/platforms:kernel"],
 )
 
-# The ABI checker of subclasses of original classes (SwitchUSB's abi_checks): reads Mach-O through the prelinker.
-py_binary(
-    name = "abi_check",
-    srcs = ["abi_check.py"],
-    deps = ["//tools/prelink:native_prelink"],
-)
-
 # SwitchUSB: USB 2.0 on the USB-C port. Device mode: the XUDC under Apple's IOUSBDeviceFamily (+ AppleUSBDeviceMux).
 # Host mode: the XUSB host (falcon firmware by .incbin) under IOUSBHostFamily + AppleUSBXHCI and Apple's class drivers.
-# SwitchXUDC and SwitchXHCI subclass original classes (late objects); abi_check.py checks their vtables and imports
-# against the kernelcache, and that the bindings files are current, on every build.
+# SwitchXUDC and SwitchXHCI subclass original classes (late objects) from kits/SwitchABI: the selected kind's
+# IOUSBDeviceController and AppleUSBXHCI, whose bindings check their vtables against the kind's tables on every build.
 kernel_driver(
     name = "SwitchUSB",
     srcs = [
@@ -104,11 +97,10 @@ kernel_driver(
         "xhci-original-bindings.S",
         "firmware.S",
     ],
-    abi_check = ":abi_check",
-    abi_checks = {
-        "original-bindings.S": "xudc SwitchXUDC.cpp",
-        "xhci-original-bindings.S": "xhci SwitchXHCI.cpp",
-    },
+    abi = [
+        "AppleUSBXHCI",
+        "IOUSBDeviceController",
+    ],
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/SwitchBattery",
@@ -176,4 +168,56 @@ kernel_driver(
         "UsbSmmuMapper.cpp",
     ],
     hdr_deps = ["drivers/TegraSMMU"],
+)
+
+switch_abi_bindings(
+    name = "xudc_bindings",
+    out = "original-bindings.S",
+    classes = ["//kits/SwitchABI:IOUSBDeviceController"],
+    objects = [":SwitchUSB_cc"],
+    own = [
+        "activateEndpoint",
+        "connectedWithAccessoryCable",
+        "createIOBuffer",
+        "deactivateEndpoint",
+        "doRemoteWakeGated",
+        "forceReEnumeration",
+        "free",
+        "getBufferOptions",
+        "getConnectionSpeed",
+        "getWorkLoop",
+        "goOnBus",
+        "handleAbortEndpoint",
+        "handleControlRequestStateChange",
+        "handleSetAddressPostStatusPhase",
+        "handleSetAddressPreStatusPhase",
+        "handleStallEndpoint",
+        "ioGated",
+        "isEndpointStalled",
+        "prepareConfiguration",
+        "provideEndpointIDsForConfiguration",
+        "resetEndpointDataToggle",
+        "softDisconnect",
+        "start",
+        "stop",
+    ],
+    subclass = "SwitchXUDC",
+)
+
+switch_abi_bindings(
+    name = "xhci_bindings",
+    out = "xhci-original-bindings.S",
+    classes = ["//kits/SwitchABI:AppleUSBXHCI"],
+    objects = [":SwitchUSB_cc"],
+    own = [
+        "copyMapper",
+        "free",
+        "regRead32",
+        "regRead64",
+        "regWrite32",
+        "regWrite64",
+        "start",
+        "stop",
+    ],
+    subclass = "SwitchXHCI",
 )
