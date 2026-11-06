@@ -177,7 +177,8 @@ gk20a_instobj_acquire_dma(struct nvkm_memory *memory)
 	struct gk20a_instmem *imem = node->imem;
 	struct nvkm_ltc *ltc = imem->base.subdev.device->ltc;
 
-	nvkm_ltc_flush(ltc);
+	if (!memory->switch_page_table)
+		nvkm_ltc_flush(ltc);
 
 	return node->vaddr;
 }
@@ -190,7 +191,8 @@ gk20a_instobj_acquire_iommu(struct nvkm_memory *memory)
 	struct nvkm_ltc *ltc = imem->base.subdev.device->ltc;
 	const u64 size = nvkm_memory_size(memory);
 
-	nvkm_ltc_flush(ltc);
+	if (!memory->switch_page_table)
+		nvkm_ltc_flush(ltc);
 
 	mutex_lock(&imem->lock);
 
@@ -234,7 +236,10 @@ gk20a_instobj_release_dma(struct nvkm_memory *memory)
 
 	/* in case we got a write-combined mapping */
 	wmb();
-	nvkm_ltc_invalidate(ltc);
+	/* Switch: a GPU-ordered user map's page-table writes are invalidated in the L2 by the next submission's prologue
+	 * (gpu.c chan_exec), before its MMU TLB invalidate. */
+	if (!(memory->switch_page_table && nvxnu_gpu_ordered()))
+		nvkm_ltc_invalidate(ltc);
 }
 
 static void
@@ -258,7 +263,8 @@ out:
 	mutex_unlock(&imem->lock);
 
 	wmb();
-	nvkm_ltc_invalidate(ltc);
+	if (!(memory->switch_page_table && nvxnu_gpu_ordered()))
+		nvkm_ltc_invalidate(ltc);
 }
 
 static u32

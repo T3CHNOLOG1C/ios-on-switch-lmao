@@ -801,6 +801,7 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 	lock_ = IOLockAlloc();
 	if (!lock_ || tgm_vm_new(&vm_))
 		return false;
+	tgm_vm_claim(vm_, this);
 	// fence page: pool memory (write-combined), GPU-mapped in the kernel range, read-only to the client
 	if (tgm_fence_page_get(&fence_va_, &fence_pa_) ||
 	    tgm_mem_new(vm_, &fence_pa_, 1, &fence_mem_) ||
@@ -1367,8 +1368,9 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 			binds_ = grown;
 			cap_binds_ = cap;
 		}
-		IOReturn ret = ioreturn(tgm_vm_map(vm_, op.va, op.range, bo->mem, op.bo_offset,
-						   static_cast<uint8_t>(op.kind), bo->readOnly));
+		IOReturn ret =
+			ioreturn(tgm_vm_map_ordered(vm_, op.va, op.range, bo->mem, op.bo_offset,
+						    static_cast<uint8_t>(op.kind), bo->readOnly));
 		if (ret)
 			return ret;
 		const bool tiled = bo->coh && !op.bo_offset && op.range >= bo->bytes &&
@@ -1392,8 +1394,8 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 		return kIOReturnNoResources;
 	// not reset: a slot's seqno only moves forward (tgm_chan_new continues it)
 	volatile uint32_t *fence = fence_va_ + slot * 4;
-	IOReturn ret = ioreturn(
-		tgm_chan_new(vm_, fence, fence_gpu_ + slot * 16, owner_, critical_, &chans_[slot]));
+	IOReturn ret = ioreturn(tgm_chan_new(vm_, this, fence, fence_gpu_ + slot * 16, owner_,
+					     critical_, &chans_[slot]));
 	if (ret)
 		return ret;
 	tgm_chan_set_group(chans_[slot], task_);  // Order relates the channels of one task

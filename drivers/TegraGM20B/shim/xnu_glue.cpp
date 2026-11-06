@@ -113,6 +113,23 @@ volatile int gErrorsFatal;
 int (*gErrorsContained)(const char *errors);
 }
 
+static thread_t gGpuOrderedThread;
+
+extern "C" void nvxnu_gpu_ordered_begin(void)
+{
+	__atomic_store_n(&gGpuOrderedThread, current_thread(), __ATOMIC_RELAXED);
+}
+
+extern "C" void nvxnu_gpu_ordered_end(void)
+{
+	__atomic_store_n(&gGpuOrderedThread, (thread_t) nullptr, __ATOMIC_RELAXED);
+}
+
+extern "C" int nvxnu_gpu_ordered(void)
+{
+	return current_thread() == __atomic_load_n(&gGpuOrderedThread, __ATOMIC_RELAXED);
+}
+
 extern "C" void nvxnu_error(const char *dev, const char *fmt, ...)
 {
 	char line[256];

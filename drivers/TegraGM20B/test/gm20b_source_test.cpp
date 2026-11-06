@@ -314,15 +314,33 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 }
 
 // The L2 invalidate that makes the CPU's writes visible is ordered on the GPU, in the submission's own stream, ahead of
-// a first push that is not prefetched; the CPU does not wait for it.
+// a first push that is not prefetched; the CPU does not wait for it. A channel behind its space's GPU-ordered maps
+// invalidates its TLB after the L2 (the walk reads page tables through it) in the same entry.
 TEST(GM20BL2Source, InvalidateOnTheGpu)
 {
 	EXPECT_EQ(Count(gpu(), "FLUSH_L2_SYSTEM_INVALIDATE"), 0u);
 	const std::string exec = flat(Between(gpu(), "static int chan_exec(", "\n}\n"));
-	expectBefore(
-		exec,
-		"NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE); PUSH_KICK(&chan->chan.push);",
-		"pushes[i].no_prefetch || (l2_on() && !i));");
+	expectBefore(exec, "tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb);",
+		     "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);");
+	expectBefore(exec, "NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);",
+		     "NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); PUSH_KICK(&chan->chan.push);");
+	expectBefore(exec,
+		     "NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE); PUSH_KICK(&chan->chan.push);",
+		     "pushes[i].no_prefetch || ((l2_on() || tlb) && !i));");
+}
+
+// Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
+TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
+{
+	EXPECT_THAT(client(), HasSubstr("tgm_vm_map_ordered(vm_, op.va"));
+	EXPECT_EQ(Count(client(), "tgm_vm_map("), 0u);
+	EXPECT_EQ(Count(gpu(), "nvxnu_gpu_ordered_begin();"), 1u);
+	const std::string map = flat(definition(gpu(), "static int vm_map("));
+	expectBefore(map, "nvxnu_gpu_ordered_end();", "nvif_vmm_raw_put(");
+	const std::string unmap = flat(definition(gpu(), "int tgm_vm_unmap("));
+	EXPECT_THAT(unmap, Not(HasSubstr("gpu_ordered")));
+	EXPECT_THAT(flat(definition(gpu(), "void tgm_vm_del(")),
+		    HasSubstr("mmu_invalidate_all();"));
 }
 
 TEST(GM20BSleepSource, SleepAndWakeOrder)

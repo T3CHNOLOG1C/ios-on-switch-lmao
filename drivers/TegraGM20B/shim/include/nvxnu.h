@@ -98,6 +98,12 @@ void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size);
 /* the same over `count` 4 KiB pages, with one barrier pair for the whole list instead of one per page */
 void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 count);
 
+/* A user raw map whose page-table writes the GPU orders (gpu.c vm_map, under gpu.lock): between begin and end, on the
+ * calling thread only, nvkm skips the L2 invalidate after page-table writes and the MMU TLB invalidate. */
+void nvxnu_gpu_ordered_begin(void);
+void nvxnu_gpu_ordered_end(void);
+int nvxnu_gpu_ordered(void);
+
 /* the system's page faults so far (every vm_fault) and the zero-filled ones among them (XNU's vm_stat counters); with the
  * kernel's user-fault timing, the user faults handled so far, their total time and the longest since the last call (ns) */
 struct nvxnu_faults {

@@ -130,6 +130,9 @@ gf100_ltc_invalidate(struct nvkm_ltc *ltc)
 
 	nvkm_wr32(device, 0x70004, 0x00000001);
 	taken = nvkm_wait_msec(device, 2000, 0x70004, 0x00000003, 0x00000000);
+	if (taken < 0)
+		nvxnu_panic("tegra-gm20b: L2 invalidate still busy after 2 s (0x70004 %08x)",
+			    nvkm_rd32(device, 0x70004));
 
 	if (taken > 0)
 		nvkm_debug(&ltc->subdev, "LTC invalidate took %lld ns\n", taken);
@@ -143,6 +146,9 @@ gf100_ltc_flush(struct nvkm_ltc *ltc)
 
 	nvkm_wr32(device, 0x70010, 0x00000001);
 	taken = nvkm_wait_msec(device, 2000, 0x70010, 0x00000003, 0x00000000);
+	if (taken < 0)
+		nvxnu_panic("tegra-gm20b: L2 flush still busy after 2 s (0x70010 %08x)",
+			    nvkm_rd32(device, 0x70010));
 
 	if (taken > 0)
 		nvkm_debug(&ltc->subdev, "LTC flush took %lld ns\n", taken);

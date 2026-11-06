@@ -195,10 +195,12 @@ gf100_vmm_invalidate(struct nvkm_vmm *vmm, u32 type)
 	/* Looks like maybe a "free flush slots" counter, the
 	 * faster you write to 0x100cbc to more it decreases.
 	 */
-	nvkm_msec(device, 2000,
+	if (nvkm_msec(device, 2000,
 		if (nvkm_rd32(device, 0x100c80) & 0x00ff0000)
 			break;
-	);
+	) < 0)
+		nvxnu_panic("tegra-gm20b: MMU invalidate: no free slot after 2 s (0x100c80 %08x)",
+			    nvkm_rd32(device, 0x100c80));
 
 	if (!(type & 0x00000002) /* ALL_PDB. */) {
 		switch (nvkm_memory_target(pd->memory)) {
@@ -217,10 +219,12 @@ gf100_vmm_invalidate(struct nvkm_vmm *vmm, u32 type)
 	nvkm_wr32(device, 0x100cbc, 0x80000000 | type);
 
 	/* Wait for flush to be queued? */
-	nvkm_msec(device, 2000,
+	if (nvkm_msec(device, 2000,
 		if (nvkm_rd32(device, 0x100c80) & 0x00008000)
 			break;
-	);
+	) < 0)
+		nvxnu_panic("tegra-gm20b: MMU invalidate not acknowledged after 2 s (0x100c80 %08x)",
+			    nvkm_rd32(device, 0x100c80));
 	mutex_unlock(&vmm->mmu->mutex);
 }
 
@@ -228,6 +232,9 @@ void
 gf100_vmm_flush(struct nvkm_vmm *vmm, int depth)
 {
 	u32 type = 0x00000001; /* PAGE_ALL */
+	/* Switch: a GPU-ordered user map leaves the invalidate to its channels' next prologues (gpu.c chan_exec). */
+	if (vmm->managed.raw && nvxnu_gpu_ordered())
+		return;
 	if (atomic_read(&vmm->engref[NVKM_SUBDEV_BAR]))
 		type |= 0x00000004; /* HUB_ONLY */
 	gf100_vmm_invalidate(vmm, type);

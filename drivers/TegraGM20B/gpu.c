@@ -36,6 +36,7 @@
 #include <subdev/devinit.h>
 #include <subdev/fb.h>
 #include <subdev/ltc.h>
+#include <subdev/mmu.h>
 #include <subdev/timer.h>
 #include <subdev/top.h>
 #include <nvif/class.h>
@@ -58,6 +59,7 @@
 #include <nvhw/class/cla0b5.h>
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BSleepGate.h"
+#include "TegraGM20BTlb.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 
@@ -684,7 +686,9 @@ struct tgm_vm {
 	u64 fences_va; /* every connection's fence page, read-only (tgm_chan_order's acquires), 0: not mapped */
 	struct list_head
 		imports; /* struct tgm_import: first pages of the host imports made in it (live_lock) */
-	int imports_lost; /* one could not be recorded: taken as importing every page */
+	int imports_lost;         /* one could not be recorded: taken as importing every page */
+	struct tgm_tlb_space tlb; /* GPU-ordered maps (TegraGM20BTlb.h) */
+	const void *owner;        /* tgm_vm_claim: the connection whose channels alone address it */
 };
 
 struct tgm_import {
@@ -750,6 +754,7 @@ int tgm_vm_new(struct tgm_vm **pvm)
 		return -ENOMEM;
 	INIT_LIST_HEAD(&vm->kmaps);
 	INIT_LIST_HEAD(&vm->imports);
+	tgm_tlb_space_init(&vm->tlb);
 	mutex_lock(&gpu.lock);
 	/* RAW: the client manages [0, 1<<39) with raw binds; nvkm allocates in [1<<39, 1<<40) */
 	ret = nvif_vmm_ctor(&gpu.mmu, "uvmm", NVIF_CLASS_VMM_GM200, RAW, TGM_KERNEL_VA,
@@ -775,6 +780,25 @@ int tgm_vm_new(struct tgm_vm **pvm)
 	return 0;
 }
 
+/* gpu.lock held: the GPU L2's page-table lines, then every address space's TLB (gf100_vmm_invalidate with ALL_PDB),
+ * synchronously. */
+static void mmu_invalidate_all(void)
+{
+	struct nvkm_device *device = gpu.device;
+
+	nvkm_ltc_invalidate(device->ltc);
+	mutex_lock(&device->mmu->mutex);
+	if (nvkm_msec(device, 2000, if (nvkm_rd32(device, 0x100c80) & 0x00ff0000) break;) < 0)
+		nvxnu_panic("tegra-gm20b: MMU invalidate: no free slot after 2 s (0x100c80 %08x)",
+			    nvkm_rd32(device, 0x100c80));
+	nvkm_wr32(device, 0x100cbc, 0x80000000 | 0x00000003); /* PAGE_ALL | ALL_PDB */
+	if (nvkm_msec(device, 2000, if (nvkm_rd32(device, 0x100c80) & 0x00008000) break;) < 0)
+		nvxnu_panic(
+			"tegra-gm20b: MMU invalidate not acknowledged after 2 s (0x100c80 %08x)",
+			nvkm_rd32(device, 0x100c80));
+	mutex_unlock(&device->mmu->mutex);
+}
+
 void tgm_vm_del(struct tgm_vm **pvm)
 {
 	struct tgm_vm *vm = *pvm;
@@ -792,9 +816,15 @@ void tgm_vm_del(struct tgm_vm **pvm)
 		kfree(k);
 	}
 	nvif_vmm_dtor(&vm->vmm);
+	mmu_invalidate_all(); /* a later space may reuse this one's page directory page */
 	mutex_unlock(&gpu.lock);
 	kfree(vm);
 	*pvm = NULL;
+}
+
+void tgm_vm_claim(struct tgm_vm *vm, const void *owner)
+{
+	vm->owner = owner;
 }
 
 int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem)
@@ -834,22 +864,33 @@ void tgm_mem_del(struct tgm_mem **pmem)
 /* Sysmem is mapped volatile (GPU L2 does not keep its lines): CONTRACT.md §3(b) option one; cacheable with
  * l2_on(). Compressible kinds are not offered (no comptags); nvkm rejects invalid kinds. */
 static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
-		  uint64_t offset, uint8_t kind, int read_only, int vol)
+		  uint64_t offset, uint8_t kind, int read_only, int vol, int gpu_ordered)
 {
 	struct gf100_vmm_map_v0 args = {
 		.version = 0, .vol = !!vol, .ro = !!read_only, .priv = 0, .kind = kind};
-	int ret;
+	int ret, got;
 	if (va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range ||
 	    offset > mem->bytes || range > mem->bytes - offset ||
 	    !nvif_mmu_kind_valid(&gpu.mmu, kind))
 		return -EINVAL;
 	mutex_lock(&gpu.lock);
+	if (gpu_ordered)
+		nvxnu_gpu_ordered_begin();
 	ret = nvif_vmm_raw_get(&vm->vmm, va, range, PAGE_SHIFT);
-	if (!ret) {
+	got = !ret;
+	if (got)
 		ret = nvif_vmm_raw_map(&vm->vmm, va, range, PAGE_SHIFT, &args, sizeof(args),
 				       &mem->mem, offset);
-		if (ret)
+	if (gpu_ordered)
+		nvxnu_gpu_ordered_end();
+	if (gpu_ordered && !ret)
+		tgm_tlb_mapped(&vm->tlb);
+	if (ret) {
+		/* removals are synchronous (TegraGM20BTlb.h): a failed get may have dropped page tables it made */
+		if (got)
 			nvif_vmm_raw_put(&vm->vmm, va, range, PAGE_SHIFT);
+		else if (gpu_ordered)
+			mmu_invalidate_all();
 	}
 	mutex_unlock(&gpu.lock);
 	return ret;
@@ -858,7 +899,15 @@ static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem
 int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset,
 	       uint8_t kind, int read_only)
 {
-	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on());
+	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on(), 0);
+}
+
+int tgm_vm_map_ordered(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
+		       uint64_t offset, uint8_t kind, int read_only)
+{
+	if (!vm->owner)
+		return -EINVAL;
+	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on(), 1);
 }
 
 int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range)
@@ -938,6 +987,7 @@ struct tgm_order {
 
 struct tgm_chan {
 	struct tgm_vm *vm;
+	struct tgm_tlb_chan tlb; /* the space's GPU-ordered maps this channel has invalidated for */
 	struct nvif_object user;
 	struct nvif_object obj[5];
 	struct nvif_event kill;
@@ -2505,8 +2555,8 @@ static void chan_timeslice(u32 chid, u32 value)
 
 static int chan_push_wait(struct tgm_chan *chan, u32 push_nr);
 
-static int chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence_gpu_va,
-		    const char *owner, int critical, struct tgm_chan **pchan)
+static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
+		    uint64_t fence_gpu_va, const char *owner, int critical, struct tgm_chan **pchan)
 {
 	static const u32 classes[5] = {MAXWELL_B, MAXWELL_COMPUTE_B, KEPLER_INLINE_TO_MEMORY_B,
 				       FERMI_TWOD_A, MAXWELL_DMA_COPY_A};
@@ -2530,9 +2580,13 @@ static int chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fe
 
 	if (gpu.stage < 2)
 		return -ENODEV;
+	/* BoFree's zombies wait for the claimant's channels only: a space is addressed by its claimant's alone */
+	if (vm->owner != vm_owner)
+		return -EINVAL;
 	if (!(chan = kzalloc(sizeof(*chan), GFP_KERNEL)))
 		return -ENOMEM;
 	chan->vm = vm;
+	tgm_tlb_chan_init(&chan->tlb);
 	chan->fence_cpu = fence_cpu;
 	chan->fence_gpu = fence_gpu_va;
 	chan->critical = critical;
@@ -2659,13 +2713,13 @@ fail:
 }
 
 /* The gate: its subchannel binds are kicked after gpu.lock is dropped. */
-int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence_gpu_va,
-		 const char *owner, int critical, struct tgm_chan **pchan)
+int tgm_chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
+		 uint64_t fence_gpu_va, const char *owner, int critical, struct tgm_chan **pchan)
 {
 	int ret;
 
 	gate_enter();
-	ret = chan_new(vm, fence_cpu, fence_gpu_va, owner, critical, pchan);
+	ret = chan_new(vm, vm_owner, fence_cpu, fence_gpu_va, owner, critical, pchan);
 	gate_leave();
 	return ret;
 }
@@ -3009,6 +3063,8 @@ void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)
 #define NVB06F_MEM_OP_D 0x0034
 #define NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE (0x0eu << 27)
 #define NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY (0x10u << 27)
+#define NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE (0x09u << 27)
+#define NVB06F_MEM_OP_C_TLB_INVALIDATE_PDB_ALL 0x1u /* GPC 1:1 0: the GPCs' TLBs too */
 #define NVB06F_WFI 0x0078
 
 /* One 16-byte semaphore release (writes payload and the GPU's PTIMER ns), after wait-for-idle */
@@ -3175,7 +3231,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	int ordered = present_order_on() && !chan->kernel && chan->vm->pfence_va;
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i, stamps = 0;
-	int ret;
+	int ret, tlb;
 
 	if (chan->error)
 		return -EIO;
@@ -3228,14 +3284,20 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		WRITE_ONCE(chan->prof_seqno,
 			   chan->submitted + 1); /* before the fence that completes it */
 	}
-	if (l2_on()) {
+	/* The L2 first: page-table lines a GPU-ordered map wrote around (TegraGM20BTlb.h) go before the TLB refetches. */
+	tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb);
+	if (l2_on() || tlb) {
 		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);
+		if (tlb)
+			PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_MEM_OP_C,
+				  NVB06F_MEM_OP_C_TLB_INVALIDATE_PDB_ALL, NVB06F_MEM_OP_D,
+				  NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE);
 		PUSH_KICK(&chan->chan.push);
 	}
 	for (i = 0; i < count; i++) {
 		nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
-				      pushes[i].no_prefetch || (l2_on() && !i));
+				      pushes[i].no_prefetch || ((l2_on() || tlb) && !i));
 		if (prof && prof->cls[i] != TGM_PC_SKIP) {
 			push_stamp(&chan->chan.push,
 				   chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
@@ -3522,7 +3584,7 @@ int tgm_present_open(struct tgm_vm **pvm)
 		ret = tgm_vm_kmap(present.vm, present.fences_mem, TGM_FENCE_PAGES * PAGE_SIZE,
 				  &present.fences_gpu);
 	if (!ret)
-		ret = tgm_chan_new(present.vm, present.fence, present.fence_gpu, "present", 1,
+		ret = tgm_chan_new(present.vm, NULL, present.fence, present.fence_gpu, "present", 1,
 				   &present.chan);
 	if (!ret) {
 		present.chan->kernel = CHAN_PRESENT;
@@ -3539,7 +3601,7 @@ out:
 /* Present mappings: volatile, at a fixed address of the present's user range. */
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind)
 {
-	return present.vm ? vm_map(present.vm, va, bytes, mem, 0, kind, 0, 1) : -ENODEV;
+	return present.vm ? vm_map(present.vm, va, bytes, mem, 0, kind, 0, 1, 0) : -ENODEV;
 }
 
 int tgm_present_unmap(uint64_t va, uint64_t bytes)
@@ -3920,7 +3982,7 @@ static void scrub_open(void)
 		ret = tgm_vm_kmap(scrub.vm, scrub.fence_mem, PAGE_SIZE, &scrub.fence_gpu);
 	scrub.fence = fence_va;
 	if (!ret)
-		ret = tgm_chan_new(scrub.vm, scrub.fence, scrub.fence_gpu, "scrub", 1, &chan);
+		ret = tgm_chan_new(scrub.vm, NULL, scrub.fence, scrub.fence_gpu, "scrub", 1, &chan);
 	if (ret) {
 		/* no teardown: what was made stays unused (a few pages); allocations zero on the CPU */
 		nvxnu_log("tegra-gm20b: pool scrub unavailable (%d): pool pages are zeroed by the "
@@ -3998,7 +4060,7 @@ static int m3(char *line, unsigned int len)
 		user = !ret;
 	}
 	if (!ret)
-		ret = tgm_chan_new(vm, (volatile u32 *)page, va, "self-test", 1, &chan);
+		ret = tgm_chan_new(vm, NULL, (volatile u32 *)page, va, "self-test", 1, &chan);
 	if (ret)
 		goto done;
 

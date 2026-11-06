@@ -112,7 +112,9 @@ struct TegraGM20BAbiBoFree {
 	uint64_t handle;
 };
 
-/* Method 5. Applied in order, synchronously, with the GMMU TLB invalidated before return. */
+/* Method 5. Applied in order. An unmap (and a map's unbind of what it overlaps) has invalidated the GPU's L2 and TLB
+ * before return; a map is seen by every submission made after the call returns (each of the connection's channels
+ * invalidates at its next submission), and by none of the work already submitted. */
 enum {
 	TegraGM20BBindMap = 1,   /* [va, va+range) -> handle at bo_offset, PTE kind = kind */
 	TegraGM20BBindUnmap = 2, /* [va, va+range) -> invalid (GPU access faults) */

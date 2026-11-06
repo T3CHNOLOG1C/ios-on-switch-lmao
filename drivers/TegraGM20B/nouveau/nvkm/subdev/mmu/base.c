@@ -210,6 +210,7 @@ nvkm_mmu_ptc_get(struct nvkm_mmu *mmu, u32 size, u32 align, bool zero)
 		kfree(pt);
 		return NULL;
 	}
+	pt->memory->switch_page_table = true;
 
 	pt->base = 0;
 	pt->addr = nvkm_memory_addr(pt->memory);
