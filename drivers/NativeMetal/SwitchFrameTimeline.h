@@ -97,11 +97,11 @@ inline uint64_t ticksPerMs()
     return perMs;
 }
 
-// At the commit call's entry: the command buffer's sequence number and the stamps that start it
-inline void committed(Stamps &s)
+// At the commit call's entry: the command buffer's sequence number and the stamps that start it. `lastCommit` is the caller's
+// own per-thread stamp: the raw facade's and the m2v frontend's commits interleave on one thread when a replay commits.
+inline void committed(Stamps &s, uint64_t &lastCommit)
 {
     static std::atomic<uint64_t> sequence{0};
-    static thread_local uint64_t lastCommit = 0;
     s.seq = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     const uint64_t t = s.mark(Commit);
     s.set(Previous, lastCommit);

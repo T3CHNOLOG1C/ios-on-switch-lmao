@@ -175,11 +175,15 @@ static thread_local uint64_t tApiTicks;
 
 static bool apiTiming()
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     static const bool on = [] {
         const char *v = getenv("TEGRA_M2V_TELEMETRY");
         return !v || strcmp(v, "0");
     }();
     return on;
+#else
+    return false;
+#endif
 }
 
 struct NBApiTime {
@@ -3782,7 +3786,8 @@ extern "C" size_t native_bridge_metal_commit_origin(char *out, size_t size)
 - (void)commit
 {
 #if SWITCH_FRAME_TIMELINE
-    switch_frame::committed(frame);
+    static thread_local uint64_t lastCommit = 0;
+    switch_frame::committed(frame, lastCommit);
     switch_frame::trace(switch_frame::kM2vCommit, switch_frame::kPoint, frame.seq);
 #endif
     const uint64_t began = apiTiming() ? mach_absolute_time() : 0;

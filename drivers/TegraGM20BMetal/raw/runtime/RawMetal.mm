@@ -2942,7 +2942,8 @@ static bool heldBehindEvent();
         _status = MTLCommandBufferStatusCommitted;
     }
 #if SWITCH_FRAME_TIMELINE
-    switch_frame::committed(_frame);
+    static thread_local uint64_t lastCommit = 0;
+    switch_frame::committed(_frame, lastCommit);
 #endif
     if (_active)
         [(RMEncoder *)_active endEncoding];
