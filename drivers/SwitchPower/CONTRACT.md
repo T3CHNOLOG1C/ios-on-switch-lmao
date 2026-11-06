@@ -224,7 +224,11 @@ r15.tar --age-limit 600`, then `/usr/bin/log show --archive <dir>.logarchive --s
 1. Kernel: `SwitchSensors: SOC_THERM up (fuse common ...; CONFIG2 ...)` and no `SwitchSensors: ... off` /
    `SwitchHID: temperature ...` line.
 2. Kernel: `SwitchSensors: 38 of 38 HID sensors hooked (P by the publish notification, Q once matching was quiet)`, then
-   `SwitchSensors: thermalmonitord's 38 sensors answer (it has read all 21 it reads): CPU a b c d, GPU e, PLLX f, SoC diode g, PCB h, battery i C`
+
+   ```text
+   SwitchSensors: thermalmonitord's 38 sensors answer (it has read all 21 it reads): CPU a b c d, GPU e, PLLX f, SoC diode g, PCB h, battery i C
+   ```
+
    with plausible values (CPU/GPU/PLLX within a few degrees of the SoC diode at idle, PCB below them, battery near room
    temperature), and **no** `userspace watchdog off for this boot`.
 3. Kernel: `SwitchWatchdog: watchdogd connected; userspace watchdog armed`.

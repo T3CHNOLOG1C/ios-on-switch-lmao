@@ -18,3 +18,6 @@ reflow = true
 [per-file-ignores]
 # GitHub shows the PR template under the pull request title, which is its level 1 heading.
 ".github/pull_request_template.md" = ["MD041"]
+# The agents' rules (CLAUDE.md links to it): each rule is a top-level section, with no title above them. A glob: rumdl
+# resolves CLAUDE.md, and every file in the checks' sandbox, to its real path.
+"**/AGENTS.md" = ["MD041"]

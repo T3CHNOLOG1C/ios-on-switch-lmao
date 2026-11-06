@@ -697,7 +697,7 @@ __PRELINK_DATA, XML prelink info with `_PrelinkLinkKASLROffsets`; kext segments 
 
 ### 12.4 Bindings for 26.5.2 (prelink26/bindings26.py) - measured
 
-510 symbols in the main tree's 10 bindings files (375 are "opaque<slot>" vtable slots). Found from 26.5.2's bytes:
+510 symbols in the main tree's 10 bindings files (375 are `opaque<slot>` vtable slots). Found from 26.5.2's bytes:
 **211**: 14 metaclass/vtable addresses, 193 vtable slots (21H461 slot -> 26.5.2 slot through PAC-named anchors;
 equal-length runs between anchors pair in order), 4 by signature. Not resolved: 79 AppleUSBXHCI (kext absent) + 70
 AppleUSBHostController slots (only SwitchXHCI uses them), ~112 slots in vtable runs that changed size
