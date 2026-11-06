@@ -202,6 +202,36 @@ uint64_t texelOffset(const MipChain &c, uint32_t l, uint32_t xB, uint32_t y, boo
            (fermi ? gobOffsetFermi(xB, y) : gobOffset(xB, y));
 }
 
+namespace {
+template <class Move>
+void eachRun(const MipChain &c, uint32_t l, uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool fermi, Move move)
+{
+    const uint32_t bpp = c.bpp, first = x * bpp, end = (x + w) * bpp;
+    for (uint32_t row = 0; row < h; row++)
+        for (uint32_t xB = first; xB < end;) {
+            const uint32_t run = std::min(end, (xB & ~15u) + 16) - xB;
+            move(texelOffset(c, l, xB, y + row, fermi), size_t(row), xB - first, run);
+            xB += run;
+        }
+}
+}  // namespace
+
+void writeLevel(const MipChain &c, uint8_t *chainCpu, uint32_t l, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                const uint8_t *src, size_t rowBytes, bool fermi)
+{
+    eachRun(c, l, x, y, w, h, fermi, [&](uint64_t at, size_t row, uint32_t from, uint32_t run) {
+        memcpy(chainCpu + at, src + row * rowBytes + from, run);
+    });
+}
+
+void readLevel(const MipChain &c, const uint8_t *chainCpu, uint32_t l, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+               uint8_t *dst, size_t rowBytes, bool fermi)
+{
+    eachRun(c, l, x, y, w, h, fermi, [&](uint64_t at, size_t row, uint32_t from, uint32_t run) {
+        memcpy(dst + row * rowBytes + from, chainCpu + at, run);
+    });
+}
+
 void mipChainTic(const MipChain &c, uint64_t va, uint32_t tic0, bool srgb, uint32_t baseLevel, uint32_t levelCount,
                  uint32_t out[8])
 {

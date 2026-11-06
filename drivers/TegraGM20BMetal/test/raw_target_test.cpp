@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
 #include "../raw/runtime/raw_target.h"
@@ -112,6 +113,54 @@ TEST(RawTarget, ChainLevelAddressesTheLayout)
             }
         }
     std::printf("%u texel bytes addressed alike\n", checked);
+}
+
+
+// A Shared mipmapped texture's CPU access to a later level: every texel byte written lands where fx::texelOffset has it (the
+// layout the texture header samples), nothing outside the region is touched, and reading the region back gives the bytes
+TEST(RawTarget, CpuLevelCopyFollowsTheLayout)
+{
+    unsigned checked = 0;
+    for (bool fermi : {false, true})
+        for (uint32_t bpp : {2u, 4u, 8u})
+            for (const Size &s : kSizes) {
+                if (uint64_t(s.w) * s.h > 1u << 21)
+                    continue;
+                MipChain c;
+                ASSERT_TRUE(raw::fx::mipChainLayout(s.w, s.h, s.levels, bpp, c));
+                std::vector<uint8_t> chain(c.bytes, 0xee);
+                for (uint32_t l = 1; l < c.levels; l++) {
+                    const raw::fx::MipLevel &lv = c.level[l];
+                    const uint32_t x = lv.width / 3, y = lv.height / 4, w = lv.width - x, h = lv.height - y;
+                    const size_t row = size_t(w) * bpp + 5;
+                    std::vector<uint8_t> src(row * h), back(row * h, 0);
+                    for (size_t i = 0; i < src.size(); i++)
+                        src[i] = uint8_t(i * 131 + l * 7 + 1);
+                    raw::fx::writeLevel(c, chain.data(), l, x, y, w, h, src.data(), row, fermi);
+                    for (uint32_t r = 0; r < h; r++)
+                        for (uint32_t b = 0; b < w * bpp; b++) {
+                            const uint64_t at = raw::fx::texelOffset(c, l, x * bpp + b, y + r, fermi);
+                            if (chain[at] != src[r * row + b]) {
+                                ADD_FAILURE() << s.w << "x" << s.h << " level " << l << " (" << b << "," << r << ")";
+                                return;
+                            }
+                            checked++;
+                        }
+                    raw::fx::readLevel(c, chain.data(), l, x, y, w, h, back.data(), row, fermi);
+                    for (uint32_t r = 0; r < h; r++)
+                        ASSERT_EQ(0, memcmp(back.data() + r * row, src.data() + r * row, size_t(w) * bpp));
+                }
+                size_t untouched = 0;
+                for (uint8_t b : chain)
+                    untouched += b == 0xee;
+                size_t written = 0;
+                for (uint32_t l = 1; l < c.levels; l++) {
+                    const raw::fx::MipLevel &lv = c.level[l];
+                    written += size_t(lv.width - lv.width / 3) * (lv.height - lv.height / 4) * bpp;
+                }
+                EXPECT_GE(untouched, c.bytes - written) << "bytes outside the regions were written";
+            }
+    std::printf("%u texel bytes copied by the CPU where the layout has them\n", checked);
 }
 
 }  // namespace

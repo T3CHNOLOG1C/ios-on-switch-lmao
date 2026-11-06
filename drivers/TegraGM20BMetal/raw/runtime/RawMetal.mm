@@ -277,9 +277,12 @@ static bool rawShape(MTLTextureDescriptor *d)
 }
 
 // A mipmapped texture the raw path keeps as a pool texture and a block-linear chain of its levels (raw::Device::createMipTexture,
-// raw/fx): 2D, one sample, one layer, no rotation, private or memoryless (no CPU access to any level: every write is GPU work the
-// tape orders; r7r: Core Animation makes 776x24 mipmapped surfaces memoryless too, kept here as private ones, a superset),
-// of a format the 2D engine filters (not sRGB) and renders; chains on (the device's self-test)
+// raw/fx): 2D, one sample, one layer, no rotation, of a format the 2D engine filters (not sRGB) and renders; chains on (the
+// device's self-test). Private, memoryless (r7r: Core Animation makes 776x24 mipmapped surfaces memoryless too, kept here as
+// private ones, a superset) or shared: CA::OGL::MetalContext::update_surface copies IOSurface content it draws with a trilinear
+// minification filter into a texture of the surface texture's descriptor (shared) with every level, then generates them (on
+// the 18:13 boot of 11-06, 49 command buffers of a 1280x720 one went to m2v). A shared one's CPU access to a later level reads
+// and writes where the level is held (cpuLevel below).
 static bool chainShape(MTLTextureDescriptor *d)
 {
     static const SEL rotation = NSSelectorFromString(@"rotation");
@@ -288,8 +291,9 @@ static bool chainShape(MTLTextureDescriptor *d)
     const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
     return d.textureType == MTLTextureType2D && d.mipmapLevelCount > 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
            d.depth <= 1 && !turned &&
-           (d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeMemoryless) && f && f->rt &&
-           !f->srgb && raw::fx::twodFormat(uint32_t(d.pixelFormat));
+           (d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeMemoryless ||
+            d.storageMode == MTLStorageModeShared) &&
+           f && f->rt && !f->srgb && raw::fx::twodFormat(uint32_t(d.pixelFormat));
 }
 
 // Diagnostics: which rawShape term fails (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format; 0 none)
@@ -881,6 +885,10 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     std::atomic<bool> _gpuDirty;
     MTLPurgeableState _purgeable;
     uint8_t _pred;  // why the raw path does not keep it (RMPred; 0: it does)
+    // A shared mipmapped texture's CPU writes the chain's states do not show yet (foldCpuLevels, at the next submission, under
+    // the submit lock): bit l, level l written where the raw path holds it (level 0: its pages, later: the chain); bit 16 + l,
+    // later level l written into its mirror (m2v held it)
+    std::atomic<uint32_t> _cpuLevels;
 }
 @end
 
@@ -898,6 +906,16 @@ static void declareGpuWrites(RMTexture *t)
                      "raw: the GPU's writes to IOSurface %u were not declared: CPU readers may see stale lines",
                      IOSurfaceGetID(t->_surface));
 }
+
+// A shared mipmapped texture's CPU writes reach its chain's states (raw::Texture::Chain, _mipL0/_mipLevels: the submit lock's) at
+// the next submission, before it encodes: Metal leaves a CPU access racing GPU work that uses the texture undefined, so every
+// command buffer committed before the write has completed and every later one encodes after the fold.
+static std::mutex gCpuLevelsLock;
+static std::vector<RMTexture *> gCpuLevelsPending;
+static std::atomic<bool> gCpuLevelsAny{false};
+
+static void noteCpuLevels(RMTexture *t, uint32_t bits);
+static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
 
 @implementation RMTexture
 
@@ -1168,7 +1186,7 @@ static void declareGpuWrites(RMTexture *t)
 }
 
 // CPU writes into the texture's own pages (level 0, slice 0, a 2D texture), cleaned to memory at once: a later command buffer's
-// GPU reads see them. Other textures are m2v's (their twin's replaceRegion).
+// GPU reads see them. A shared mipmapped texture's later levels: cpuLevel. Other textures are m2v's (their twin's replaceRegion).
 - (void)replaceRegion:(MTLRegion)r
           mipmapLevel:(NSUInteger)level
                 slice:(NSUInteger)slice
@@ -1176,6 +1194,10 @@ static void declareGpuWrites(RMTexture *t)
           bytesPerRow:(NSUInteger)row
         bytesPerImage:(NSUInteger)image
 {
+    if (_rawOk && _raw.chain && level && !slice && r.size.depth <= 1) {
+        cpuLevel(self, r, level, (uint8_t *)bytes, row, true);
+        return;
+    }
     if (!_rawOk || level || slice || r.size.depth > 1 || !_raw.cpu) {
         [(id<MTLTexture>)[self rmTwin] replaceRegion:r
                                          mipmapLevel:level
@@ -1200,6 +1222,8 @@ static void declareGpuWrites(RMTexture *t)
 #if defined(__aarch64__)
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
+    if (_raw.chain)
+        noteCpuLevels(self, 1);
 }
 
 - (void)replaceRegion:(MTLRegion)r
@@ -1218,6 +1242,10 @@ static void declareGpuWrites(RMTexture *t)
       mipmapLevel:(NSUInteger)level
             slice:(NSUInteger)slice
 {
+    if (_rawOk && _raw.chain && level && !slice && r.size.depth <= 1) {
+        cpuLevel(self, r, level, (uint8_t *)bytes, row, false);
+        return;
+    }
     if (!_rawOk || level || slice || r.size.depth > 1 || !_raw.cpu) {
         [(id<MTLTexture>)[self rmTwin] getBytes:bytes
                                     bytesPerRow:row
@@ -1272,6 +1300,135 @@ static void declareGpuWrites(RMTexture *t)
 }
 
 @end
+
+static void noteCpuLevels(RMTexture *t, uint32_t bits)
+{
+    if (t->_cpuLevels.fetch_or(bits, std::memory_order_acq_rel))
+        return;
+    std::lock_guard<std::mutex> l(gCpuLevelsLock);
+    gCpuLevelsPending.push_back(t);
+    gCpuLevelsAny.store(true, std::memory_order_release);
+}
+
+// The submit lock held: the pending CPU writes into the chains' states. A later level the CPU wrote into the chain is the
+// chain's own (rawLevels: m2v copies it in, never generates it), newer than its mirror, and makes the chain's levels the ones
+// held when nothing generated them before (m2v held none: cpuLevel wrote into the chain only then).
+static void foldCpuLevels()
+{
+    if (!gCpuLevelsAny.load(std::memory_order_acquire))
+        return;
+    std::vector<RMTexture *> list;
+    {
+        std::lock_guard<std::mutex> l(gCpuLevelsLock);
+        list.swap(gCpuLevelsPending);
+        gCpuLevelsAny.store(false, std::memory_order_relaxed);
+    }
+    for (RMTexture *t : list) {
+        const uint32_t m = t->_cpuLevels.exchange(0, std::memory_order_acq_rel);
+        raw::Texture::Chain &c = *t->_raw.chain;
+        if (m & 1) {
+            c.l0Fresh = false;
+            t->_mipL0 = false;
+        }
+        if (const uint16_t own = uint16_t(m & 0xfffe)) {
+            c.levelsFresh = true;
+            c.rawLevels |= own;
+            c.mirrorLevels &= uint16_t(~own);
+            t->_mipLevels = false;
+        }
+        c.mirrorLevels |= uint16_t(m >> 16);
+    }
+}
+
+static void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate)
+{
+#if defined(__aarch64__)
+    for (uintptr_t a = uintptr_t(from) & ~uintptr_t(63); a < uintptr_t(from) + bytes; a += 64)
+        if (invalidate)
+            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
+        else
+            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
+#else
+    (void)from;
+    (void)bytes;
+    (void)invalidate;
+#endif
+}
+
+// replaceRegion/getBytes of later level `level` of a shared mipmapped texture, where the level is held (the states as the work
+// committed before left them, and the CPU writes since): m2v's texture of every level after m2v generated them (a write also goes
+// to the level's mirror, whole, so the raw path takes it in after generating: Chain::mirrorLevels); the mirror after m2v wrote
+// the level (and m2v's texture); else the chain, in the CPU's view the device's self-test chose.
+static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write)
+{
+    const raw::Texture::Chain &c = *t->_raw.chain;
+    if (level >= c.layout.levels)
+        return;
+    const raw::fx::MipLevel &lv = c.layout.level[level];
+    if (r.origin.x + r.size.width > lv.width || r.origin.y + r.size.height > lv.height)
+        return;
+    const uint32_t bit = 1u << level, pending = t->_cpuLevels.load(std::memory_order_acquire);
+    id<MTLTexture> all = t->_mipTwin;
+    const bool m2v = !(pending & bit) && !(pending >> 16 & bit) && !c.levelsFresh && all;
+    RMTexture *mirror = nil;
+    if (m2v || (pending >> 16 & bit) || (!(pending & bit) && (c.mirrorLevels & bit)))
+        mirror = [t rmMirror:level];
+    if (m2v || mirror) {
+        if (write && all)
+            [all replaceRegion:r mipmapLevel:level slice:0 withBytes:bytes bytesPerRow:row bytesPerImage:0];
+        if (!mirror) {
+            if (write)
+                once(@"a CPU write to a level of a mipmapped texture m2v holds has no mirror: the raw path's copy of the "
+                     @"level stays generated from level 0");
+            else
+                [all getBytes:bytes bytesPerRow:row bytesPerImage:0 fromRegion:r mipmapLevel:level slice:0];
+            return;
+        }
+        const raw::Texture &m = mirror->_raw;
+        const uint64_t span = uint64_t(m.pitch) * lv.height;
+        if (m2v && write) {
+            [all getBytes:m.cpu
+                  bytesPerRow:m.pitch
+                bytesPerImage:0
+                   fromRegion:MTLRegionMake2D(0, 0, lv.width, lv.height)
+                  mipmapLevel:level
+                        slice:0];
+        } else if (m2v) {
+            [all getBytes:bytes bytesPerRow:row bytesPerImage:0 fromRegion:r mipmapLevel:level slice:0];
+            return;
+        } else {
+            if (!write)
+                cacheLines(m.cpu, span, true);
+            const size_t line = r.size.width * m.bpp;
+            for (NSUInteger y = 0; y < r.size.height; y++) {
+                uint8_t *at = m.cpu + (r.origin.y + y) * m.pitch + r.origin.x * m.bpp;
+                if (write)
+                    memcpy(at, bytes + y * row, line);
+                else
+                    memcpy(bytes + y * row, at, line);
+            }
+        }
+        if (write) {
+            cacheLines(m.cpu, span, false);
+            noteCpuLevels(t, bit << 16);
+        }
+        return;
+    }
+    uint8_t *chain = c.span.cpu;
+    const bool fermi = gRM->raw->selfTestFermiView;
+    const uint64_t at = lv.offset, span = uint64_t(lv.rowBytes) * lv.rows;
+    if (write) {
+        raw::fx::writeLevel(c.layout, chain, uint32_t(level), uint32_t(r.origin.x), uint32_t(r.origin.y),
+                            uint32_t(r.size.width), uint32_t(r.size.height), bytes, row, fermi);
+        cacheLines(chain + at, span, false);
+        noteCpuLevels(t, bit);
+    } else {
+        cacheLines(chain + at, span, true);
+        raw::fx::readLevel(c.layout, chain, uint32_t(level), uint32_t(r.origin.x), uint32_t(r.origin.y),
+                           uint32_t(r.size.width), uint32_t(r.size.height), bytes, row, fermi);
+    }
+}
 
 static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane);
 
@@ -5308,6 +5465,7 @@ static bool submitSegments(RMCommandBuffer *cb);
 static bool submitLocked(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
+    foldCpuLevels();
     if (!cb->_segs.empty())
         return submitSegments(cb);
     const char *why = nullptr;
