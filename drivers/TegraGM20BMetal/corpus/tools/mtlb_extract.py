@@ -60,5 +60,6 @@ for f in funcs:
         ['/opt/homebrew/opt/llvm/bin/llvm-dis', str(out / (f['name'] + '.bc')), '-o', str(out / (f['name'] + '.ll'))],
         capture_output=True,
         text=True,
+        check=False,
     )
     print(f['name'], 'ok' if r.returncode == 0 else r.stderr[:300])

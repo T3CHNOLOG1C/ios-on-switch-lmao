@@ -42,7 +42,9 @@ class Xcode:
     def run(self, *command: str | Path) -> str:
         tool = command[0]
         path = Path(self.toolchain, tool) if Path(self.toolchain, tool).is_file() else Path('/usr/bin', tool)
-        result = subprocess.run([str(path), *map(str, command[1:])], env=self.env, capture_output=True, text=True)
+        result = subprocess.run(
+            [str(path), *map(str, command[1:])], env=self.env, capture_output=True, text=True, check=False
+        )
         if result.returncode:
             sys.exit('FAILED: %s\n%s%s' % (' '.join(map(str, command)), result.stdout, result.stderr))
         return result.stdout + result.stderr
@@ -98,16 +100,16 @@ def main() -> None:
     nvk_cdhash = sign(xcode, dylib, 'com.brunostjohn.switch.nvk')
     (bundle / 'Info.plist').write_bytes(
         plistlib.dumps(
-            dict(
-                CFBundleIdentifier='com.brunostjohn.switch.' + NAME,
-                CFBundleExecutable=NAME,
-                CFBundlePackageType='BNDL',
-                CFBundleVersion='1',
-                CFBundleShortVersionString='1',
-                NSPrincipalClass='TegraGM20BMetalDevice',
-                MinimumOSVersion='17.0',
-                SwitchShaderStack=Path(args.stack).read_text().strip(),
-            ),
+            {
+                'CFBundleIdentifier': 'com.brunostjohn.switch.' + NAME,
+                'CFBundleExecutable': NAME,
+                'CFBundlePackageType': 'BNDL',
+                'CFBundleVersion': '1',
+                'CFBundleShortVersionString': '1',
+                'NSPrincipalClass': 'TegraGM20BMetalDevice',
+                'MinimumOSVersion': '17.0',
+                'SwitchShaderStack': Path(args.stack).read_text().strip(),
+            },
             fmt=plistlib.FMT_XML,
         )
     )
@@ -118,12 +120,12 @@ def main() -> None:
     Path(args.trustcache).write_bytes(trust_module([plugin_cdhash, nvk_cdhash]))
     Path(args.trust_json).write_text(
         json.dumps(
-            dict(
-                plugin_cdhash=plugin_cdhash,
-                nvk_cdhash=nvk_cdhash,
-                plugin_bytes=exe.stat().st_size,
-                nvk_bytes=dylib.stat().st_size,
-            ),
+            {
+                'plugin_cdhash': plugin_cdhash,
+                'nvk_cdhash': nvk_cdhash,
+                'plugin_bytes': exe.stat().st_size,
+                'nvk_bytes': dylib.stat().st_size,
+            },
             indent=2,
         )
         + '\n'

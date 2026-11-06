@@ -54,10 +54,11 @@ def main() -> None:
     generator = [sys.executable, str(root / args.generator)]
     if args.step == 'build':
         result = subprocess.run(
-            generator + ['--build-only', '--bridge', str(root / args.host_bridge), '--out', str(root / args.out)],
+            [*generator, '--build-only', '--bridge', str(root / args.host_bridge), '--out', str(root / args.out)],
             env=env,
             capture_output=True,
             text=True,
+            check=False,
         )
         if result.returncode:
             sys.exit("the pack generator's tools failed:\n%s" % (result.stdout + result.stderr)[-6000:])
@@ -70,8 +71,8 @@ def main() -> None:
     generated = work / 'out'
     stack = json.loads((tools / 'MANIFEST.json').read_text())['stack']
     result = subprocess.run(
-        generator
-        + [
+        [
+            *generator,
             '--prebuilt',
             str(tools / 'raw'),
             '--nvk',
@@ -89,6 +90,7 @@ def main() -> None:
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode or not (generated / 'pack.bin').is_file():
         sys.exit('the pack generator failed:\n%s' % (result.stdout + result.stderr)[-6000:])

@@ -48,7 +48,7 @@ def main() -> None:
             if Path(directory, tool).is_file():
                 command[0] = str(Path(directory, tool))
                 break
-    sys.exit(subprocess.run(command, env=env).returncode)
+    sys.exit(subprocess.run(command, env=env, check=False).returncode)
 
 
 if __name__ == '__main__':

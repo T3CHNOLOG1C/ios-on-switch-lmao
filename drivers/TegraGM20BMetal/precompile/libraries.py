@@ -104,7 +104,7 @@ GUESSES = (
 
 def resolve(index_json: str, corpus: str, out: str) -> None:
     table = json.loads(Path(index_json).read_text())
-    qc = set(n for n, paths in table.items() if QC in paths)
+    qc = {n for n, paths in table.items() if QC in paths}
     lines, rows = [], defaultdict(Counter)
 
     def candidates(name: str) -> list[str | None]:

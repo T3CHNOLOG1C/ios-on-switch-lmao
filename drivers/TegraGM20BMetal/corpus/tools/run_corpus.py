@@ -42,11 +42,21 @@ def run_one(tag: str, path: str, out: Path, timeout: int) -> tuple[str, int]:
     )
     while True:
         cache.mkdir(parents=True, exist_ok=True)
-        cmd = [str(RUNNER), str(NVK), str(cache), path, '--tag', tag, '--from', str(start)] + os.environ.get(
-            'RUNNER_ARGS', ''
-        ).split()
+        cmd = [
+            str(RUNNER),
+            str(NVK),
+            str(cache),
+            path,
+            '--tag',
+            tag,
+            '--from',
+            str(start),
+            *os.environ.get('RUNNER_ARGS', '').split(),
+        ]
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, errors='replace', env=env, timeout=timeout)
+            p = subprocess.run(
+                cmd, capture_output=True, text=True, errors='replace', env=env, timeout=timeout, check=False
+            )
             stdout, stderr, code, hung = p.stdout, p.stderr, p.returncode, False
         except subprocess.TimeoutExpired as e:
             stdout = (e.stdout or b'').decode(errors='replace') if isinstance(e.stdout, bytes) else (e.stdout or '')

@@ -5,6 +5,7 @@ Writes each to <out>/<image>@<addr>.metallib.
 usage: dsc_metallibs.py <dir with dyld_shared_cache_arm64*> <out dir>
 """
 
+import bisect
 import mmap
 import re
 import struct
@@ -31,12 +32,11 @@ for i in range(icount):
     addr, _, _, poff, _ = struct.unpack_from('<3Q2I', h, ioff + 32 * i)
     images.append((addr, h[poff : h.find(b'\0', poff)].decode()))
 images.sort()
-import bisect
 
 keys = [a for a, _ in images]
 found = 0
 for sub in sorted(d.glob('dyld_shared_cache_arm64*')):
-    if sub.suffix in ('.symbols',) or sub.name.endswith('.map'):
+    if sub.suffix == '.symbols' or sub.name.endswith('.map'):
         continue
     hh, ms = maps(sub)
     for m in re.finditer(b'MTLB', hh):

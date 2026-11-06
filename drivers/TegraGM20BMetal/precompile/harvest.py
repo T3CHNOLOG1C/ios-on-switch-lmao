@@ -366,12 +366,14 @@ def main() -> None:
             sys.exit('%s: not a mounted iPad Data volume (no mobile/)' % volume)
         found, skipped = caches(volume, opens, open_all, print)
         for where, m2v, through in found:
-            with opened(through + (m2v,) if through else (), print):
+            with opened((*through, m2v) if through else (), print):
                 if not m2v.is_dir():
                     continue
-                for journal in JOURNALS:
-                    if (m2v / journal).is_file():
-                        sources.append(('%s/%s' % (where, journal), (m2v / journal).read_text(errors='replace')))
+                sources.extend(
+                    ('%s/%s' % (where, journal), (m2v / journal).read_text(errors='replace'))
+                    for journal in JOURNALS
+                    if (m2v / journal).is_file()
+                )
                 collect(m2v, store)
                 records([m2v], store / 'records')
                 if save:

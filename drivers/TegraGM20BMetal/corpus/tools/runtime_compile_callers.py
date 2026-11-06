@@ -52,19 +52,20 @@ def selrefs(path: Path) -> list[tuple[int, int]]:
     return out
 
 
-for line in open(sys.argv[4]):
-    addr, image = line.split(None, 1)
-    image = image.strip()
-    p = root / image.lstrip('/')
-    if not p.is_file():
-        continue
-    hits = set()
-    for addr, size in selrefs(p):
-        for i in range(0, size, 8):
-            v = cache.ptr(addr + i)
-            if v:
-                s = cache.cstr(v, 80)
-                if s in WANT:
-                    hits.add(s)
-    if hits:
-        print('%s\t%s' % (image, ' '.join(sorted(hits))), flush=True)
+with open(sys.argv[4]) as image_list:
+    for line in image_list:
+        addr, image = line.split(None, 1)
+        image = image.strip()
+        p = root / image.lstrip('/')
+        if not p.is_file():
+            continue
+        hits = set()
+        for addr, size in selrefs(p):
+            for i in range(0, size, 8):
+                v = cache.ptr(addr + i)
+                if v:
+                    s = cache.cstr(v, 80)
+                    if s in WANT:
+                        hits.add(s)
+        if hits:
+            print('%s\t%s' % (image, ' '.join(sorted(hits))), flush=True)

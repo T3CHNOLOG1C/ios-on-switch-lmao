@@ -8,6 +8,7 @@ usage: report.py <before run dir> <after run dir> [--ms]   -> TSV on stdout
 """
 
 import collections
+import contextlib
 import re
 import sys
 from pathlib import Path
@@ -48,8 +49,8 @@ def load(run: str) -> list[list[str]]:
 
 
 def framework(tag: str) -> str:
-    t = tag.split('/')[0]
-    return 'dsc:' + tag.split('/')[1].split('@')[0] if t == 'dsc' else t
+    t = tag.split('/', maxsplit=1)[0]
+    return 'dsc:' + tag.split('/')[1].split('@', maxsplit=1)[0] if t == 'dsc' else t
 
 
 def bucket(tag: str, name: str, phase: str, detail: str) -> str:
@@ -73,10 +74,8 @@ def summarize(
         e = entries.setdefault((tag, name), {'ok': False, 'z': None, 'why': None, 'ms': []})
         if result == 'OK':
             e['ok'] = True
-            try:
+            with contextlib.suppress(ValueError):
                 e['ms'].append(int(ms))
-            except ValueError:
-                pass
         elif e['why'] is None:
             e['why'] = (phase, detail)
         if variant in ('z', '?'):
@@ -137,7 +136,10 @@ if '--ms' in sys.argv:
     for fw in ('QuartzCore',):
         ms = sorted(m for (t, n), e in ea.items() if framework(t) == fw for m in e['ms'])
     allms = sorted(m for e in ea.values() for m in e['ms'])
-    q = lambda xs, p: xs[min(len(xs) - 1, int(p * len(xs)))] if xs else 0
+
+    def q(xs: list[int], p: float) -> int:
+        return xs[min(len(xs) - 1, int(p * len(xs)))] if xs else 0
+
     print(
         'compile+make ms (host): all p50 %d p99 %d max %d; QuartzCore p50 %d p99 %d max %d'
         % (q(allms, 0.5), q(allms, 0.99), allms[-1] if allms else 0, q(ms, 0.5), q(ms, 0.99), ms[-1] if ms else 0)

@@ -38,7 +38,7 @@ def make_twin(nvk: str, twin: str, out: str, env: dict[str, str]) -> None:
     if not pinned:
         lc_uuid(out, lc_uuid(nvk))
     result = subprocess.run(
-        ['/usr/bin/codesign', '--force', '--sign', '-', str(out)], env=env, capture_output=True, text=True
+        ['/usr/bin/codesign', '--force', '--sign', '-', str(out)], env=env, capture_output=True, text=True, check=False
     )
     if result.returncode:
         sys.exit('codesign %s: %s' % (out, result.stderr))
