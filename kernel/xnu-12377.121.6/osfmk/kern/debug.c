@@ -88,6 +88,7 @@
 #include <console/serial_protos.h>
 #include <IOKit/IOBSD.h>
 #include <libkern/crc.h>
+#include <ptrauth.h>
 
 #if !(MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING)
 #include <kdp/kdp_udp.h>
@@ -2587,5 +2588,5 @@ void
 unixnu_fileset_unmapped(uint64_t arg0, uint64_t arg1)
 {
 	panic("fileset: original component called an unmapped kernel function from %p (x0 0x%llx x1 0x%llx)",
-	    __builtin_ptrauth_strip(__builtin_return_address(0), 0), arg0, arg1);
+	    ptrauth_strip(__builtin_return_address(0), ptrauth_key_return_address), arg0, arg1);
 }
