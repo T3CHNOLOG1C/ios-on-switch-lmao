@@ -666,10 +666,12 @@ int main(void)
     layouts();
     rateControl();
     // A class ID of our own, which the sessions name below: the Mac's own H.264 encoders would otherwise win.
-    const void *keys[] = {CFSTR("CMClassImplementationID"), kVTVideoEncoder_IsHardwareAccelerated};
-    const void *values[] = {CFSTR("com.brunostjohn.switch.ave-host"), kCFBooleanTrue};
+    // No IsHardwareAccelerated: in a macOS VM VideoToolbox hides hardware-flagged encoders other than its
+    // paravirtualized ones. The encode check reads the plug-in's own UsingHardwareAcceleratedVideoEncoder.
+    const void *keys[] = {CFSTR("CMClassImplementationID")};
+    const void *values[] = {CFSTR("com.brunostjohn.switch.ave-host")};
     CFDictionaryRef info =
-        CFDictionaryCreate(NULL, keys, values, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     const OSStatus registered = VTRegisterVideoEncoderWithInfo(kCMVideoCodecType_H264, info, createInstance);
     CFRelease(info);
     if (registered) {
