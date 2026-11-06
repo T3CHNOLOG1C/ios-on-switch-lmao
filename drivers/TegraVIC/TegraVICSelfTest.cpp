@@ -27,6 +27,7 @@
 #include <string.h>
 #include "../TegraHost1x/TegraHost1x.h"
 #include "TegraVIC.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraVICProbe.h"
 
 namespace {
@@ -71,13 +72,6 @@ void dumpLastJob(const char *what)
     for (uint32_t i = 0; i < j.count && n > 0 && n < (int)sizeof(text); i++)
         n += snprintf(text + n, sizeof(text) - n, " %03x=%08x", j.method[i], j.value[i]);
     IOLog("%s\n", text);
-}
-
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
 }
 
 TegraVICImage bgra(const TegraVICBuffer &b, uint32_t w, uint32_t h, uint32_t pitch)
@@ -131,12 +125,12 @@ int run(const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op
     if (*why)
         return -22;
     if (!op->fill)
-        tegra_vic_cache_clean(gSrc.va, gSrc.size);
+        switch_dcache_clean(gSrc.va, gSrc.size);
     memset(gDst.va, 0xab, gDst.size);  // poison: what the engine does not write shows
-    tegra_vic_cache_flush(gDst.va, gDst.size);
+    switch_dcache_clean_invalidate(gDst.va, gDst.size);
     uint64_t us = 0;
     const int ret = tegra_vic_run(&job, &us);
-    tegra_vic_cache_flush(gDst.va, gDst.size);
+    switch_dcache_clean_invalidate(gDst.va, gDst.size);
     gJobs++;
     gBusyUs += us;
     if (ret)
@@ -168,14 +162,14 @@ bool smmuProof(char *line, size_t size)
     }
     bzero(gPageA.va, 4096);
     bzero(gPageB.va, 4096);
-    tegra_vic_cache_flush(gPageA.va, 4096);
-    tegra_vic_cache_flush(gPageB.va, 4096);
+    switch_dcache_clean_invalidate(gPageA.va, 4096);
+    switch_dcache_clean_invalidate(gPageB.va, 4096);
     tegra_vic_identity_override(gPageA.pa, gPageB.pa);
     uint64_t us = 0;
     const int ret = tegra_vic_run(&job, &us);
     tegra_vic_identity_override(gPageA.pa, gPageA.pa);
-    tegra_vic_cache_flush(gPageA.va, 4096);
-    tegra_vic_cache_flush(gPageB.va, 4096);
+    switch_dcache_clean_invalidate(gPageA.va, 4096);
+    switch_dcache_clean_invalidate(gPageB.va, 4096);
     gJobs++;
     gBusyUs += us;
     const uint32_t want = 0xff55aa33u;  // A8R8G8B8: bytes 33 aa 55 ff
@@ -719,7 +713,7 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
         return -12;
     }
     tegra_vic_lock();
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
     if (!smmuProof(line, sizeof(line))) {
         tegra_vic_unlock();
         IOLog("TegraVIC: %s\n", line);
@@ -755,7 +749,7 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
           "in channel %u), fill %s, %s scaling, pitch %u-byte aligned; %u jobs, engine %llu us, %llu us in all\n",
           t.rotations, turns, t.subRects, t.out.cbChannel,
           t.fillThroughMatrix ? "through the matrix" : "converted here", t.bilinear ? "2-tap" : "1-tap only",
-          t.pitchAlign, gJobs, gBusyUs, nowUs() - began);
+          t.pitchAlign, gJobs, gBusyUs, switch_now_us() - began);
     IOLog("TegraVIC: V4 %s\n", note);
     IOLog("TegraVIC: V4 %s\n", blNote);
     return 0;

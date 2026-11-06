@@ -47,6 +47,7 @@
 #include <os/log.h>
 #include <string.h>
 #include "TegraVIC.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
 
@@ -124,13 +125,6 @@ int slotOf(const uintptr_t *vtable, const void *function)
     return -1;
 }
 
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
-}
-
 IOReturn ioreturn(int err)
 {
     switch (err) {
@@ -189,7 +183,7 @@ struct Job {
 IOReturn runJob(Job *job)
 {
     static TegraVICJob vj;
-    const uint64_t t0 = nowUs();
+    const uint64_t t0 = switch_now_us();
     uint32_t pages[TEGRA_VIC_WINDOWS] = {};
     TegraVICImage dst, src;
     const char *why = nullptr;
@@ -214,10 +208,12 @@ IOReturn runJob(Job *job)
     // VIC does not snoop the CPU's caches: what the CPU wrote to the source must be in DRAM, and no dirty line of the
     // destination may be written back over what VIC writes.
     if (!ret && job->plan.readsSource)
-        tegra_vic_cache_clean_pages(gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
-    if (!ret)
-        tegra_vic_cache_flush_pages(gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
-    const uint64_t t1 = nowUs();
+        tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
+    if (!ret) {
+        tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+        switch_dcache_sync();
+    }
+    const uint64_t t1 = switch_now_us();
     uint64_t busy = 0;
     for (uint32_t i = 0; !ret && i < job->plan.count; i++) {
         const TegraVICOp *op = &job->plan.op[i];
@@ -233,14 +229,15 @@ IOReturn runJob(Job *job)
         __atomic_add_fetch(&gStats.ops, 1, __ATOMIC_RELAXED);
     }
     // The CPU may have pulled destination lines in while VIC wrote: readers must see DRAM.
-    tegra_vic_cache_flush_pages(gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+    switch_dcache_sync();
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_DST);
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_SRC);
     tegra_vic_unlock();
     tegra_vic_surface_complete(&job->dst);
     tegra_vic_surface_complete(&job->src);
     gStats.engineUs += busy;
-    gStats.mapUs += (t1 - t0) + (nowUs() - t1 - busy);
+    gStats.mapUs += (t1 - t0) + (switch_now_us() - t1 - busy);
     gStats.bytes += ((uint64_t)pages[0] + pages[1]) << 12;
     if (why)
         IOLog("TegraVIC: a checked job was refused on the engine thread: %s\n", why);
@@ -249,7 +246,7 @@ IOReturn runJob(Job *job)
 
 void statsLine()
 {
-    const uint64_t now = nowUs();
+    const uint64_t now = switch_now_us();
     if (!gStats.windowStart)
         gStats.windowStart = now;
     if (now - gStats.windowStart < 5000000)
@@ -334,7 +331,7 @@ void presentRefused(uint32_t bit, const char *why)
 // One line per 5 s window with pictures (engine lock held).
 void presentStatsLine()
 {
-    const uint64_t now = nowUs();
+    const uint64_t now = switch_now_us();
     if (!gPresentStats.windowStart)
         gPresentStats.windowStart = now;
     if (now - gPresentStats.windowStart < 5000000)
@@ -417,7 +414,7 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
         presentRefused(0, *why);
         return -19;
     }
-    const uint64_t t0 = nowUs();
+    const uint64_t t0 = switch_now_us();
     TegraVICSurface surface;
     if (tegra_vic_surface_lookup(p->surfaceID, task, &surface)) {
         *why = "surface ID not found for this task";
@@ -466,7 +463,8 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
     // handed out, and the decoder only reads them): the source needs no cache maintenance. The destination does: a
     // fresh IOSurface's pages were zeroed through the CPU's caches, and a dirty line written back later would land on
     // VIC's output (a green stripe); the second flush drops lines a CPU reader may have pulled in meanwhile.
-    tegra_vic_cache_flush_pages(gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages);
+    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages);
+    switch_dcache_sync();
     if (!*why)
         *why = tegra_vic_build(&src, &dst, &op, tegra_vic_traits(), tegra_vic_config_address(),
                                tegra_vic_filter_address(), &gPresentJob);
@@ -474,14 +472,15 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
     int err = *why ? -95 : tegra_vic_run(&gPresentJob, &busy);
     if (!*why && err)
         *why = "the job did not finish";
-    tegra_vic_cache_flush_pages(gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages);
+    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages);
+    switch_dcache_sync();
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_DST);
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_SRC);
     gPresentStats.pictures++;
     if (err)
         gPresentStats.failed++;
     gPresentStats.engineUs += busy;
-    gPresentStats.cpuUs += (nowUs() - t0) - busy;
+    gPresentStats.cpuUs += (switch_now_us() - t0) - busy;
     gPresentStats.bytes += ((uint64_t)srcPages + dstPages) << 12;
     presentStatsLine();
     tegra_vic_unlock();

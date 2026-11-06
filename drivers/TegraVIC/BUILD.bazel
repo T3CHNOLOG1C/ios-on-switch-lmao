@@ -41,6 +41,12 @@ kernel_driver(
     hdr_deps = [
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",
+        "kits/SwitchCAR",
+        "kits/SwitchDMA",
+        "kits/SwitchFalcon",
+        "kits/SwitchMMIO",
+        "kits/SwitchMath",
+        "kits/SwitchTime",
     ],
     stems = {
         "firmware.S": "vic_firmware",

@@ -49,10 +49,16 @@
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "TegraVIC.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchFalcon/SwitchFalcon.h"
+#include "../../kits/SwitchMath/SwitchMath.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-vm_offset_t phystokv(uint64_t pa);
 boolean_t pmap_valid_page(ppnum_t pn);
 int tegra_nvdec_await(uint32_t timeoutMs);
 extern const uint8_t tegra_vic_fw_start[] __asm__("_tegra_vic_fw_start");
@@ -60,25 +66,21 @@ extern const uint8_t tegra_vic_fw_end[] __asm__("_tegra_vic_fw_end");
 }
 
 namespace {
-constexpr vm_offset_t kVicPA = 0x54340000, kVicSize = 0x40000;
+constexpr uint64_t kVicPA = 0x54340000, kVicSize = 0x40000;
 constexpr uint32_t kClass = TEGRA_HOST1X_CLASS_VIC;
 constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (data)
-constexpr vm_offset_t kCarPA = 0x60006000, kPmcPagePA = 0x7000E000, kMcPA = 0x70019000;
-constexpr uint32_t kPmcOffset = 0x400, kPartition = 23;  // TEGRA_POWERGATE_VIC
+constexpr uint64_t kMcPA = 0x70019000;
+constexpr uint32_t kPartition = 23;  // TEGRA_POWERGATE_VIC
+constexpr unsigned kClock = 178;     // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
 constexpr uint64_t kArenaBytes = 1ull << 20;
 constexpr uint32_t kNvdecWaitMs = 20000;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_VIC;
 
-enum : uint32_t {  // clock and reset controller, X bank
+enum : uint32_t {  // clock and reset controller
     CLK_OUT_ENB_X = 0x280,
-    CLK_ENB_X_SET = 0x284,
-    CLK_ENB_X_CLR = 0x288,
     RST_DEVICES_X = 0x28c,
-    RST_DEV_X_SET = 0x290,
-    RST_DEV_X_CLR = 0x294,
     LVL2_CLK_GATE_OVRE = 0x554,
     CLK_SOURCE_VIC = 0x678,
-    X_VIC = 1u << 18,
     OVRE_VIC_MBIST = 1u << 5,
     SOURCE_PLLP = 2u << 29,  // this mux: pllc 1, pllp 2
     VIC_DIV_1 = 0,
@@ -86,9 +88,7 @@ enum : uint32_t {  // clock and reset controller, X bank
 
 enum : uint32_t {
     PWRGATE_TOGGLE = 0x30,
-    REMOVE_CLAMPING = 0x34,
     PWRGATE_STATUS = 0x38,
-    TOGGLE_START = 1u << 8
 };
 
 enum : uint32_t {  // the SMMU's own registers are TegraSMMU.h's
@@ -104,42 +104,14 @@ enum : uint32_t {  // VIC private registers
     VIC_CG_BOOT = 4u | (1u << 6) | (4u << 16),  // CG_IDLE_CG_DLY_CNT(4) | CG_IDLE_CG_EN | CG_WAKEUP_DLY_CNT(4)
 };
 
-enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
-    FALCON_IRQSTAT = 0x1008,
-    FALCON_IRQMSET = 0x1010,
-    FALCON_IRQDEST = 0x101c,
-    FALCON_MAILBOX0 = 0x1040,
-    FALCON_ITFEN = 0x1048,
-    FALCON_IDLESTATE = 0x104c,
-    FALCON_DEBUGINFO = 0x1094,
-    FALCON_CPUCTL = 0x1100,
-    FALCON_BOOTVEC = 0x1104,
-    FALCON_DMACTL = 0x110c,
-    FALCON_DMATRFBASE = 0x1110,
-    FALCON_DMATRFMOFFS = 0x1114,
-    FALCON_DMATRFCMD = 0x1118,
-    FALCON_DMATRFFBOFFS = 0x111c,
-    CPUCTL_STARTCPU = 1u << 1,
-    DMACTL_SCRUBBING = (1u << 1) | (1u << 2),
-    DMATRFCMD_FULL = 1u << 0,
-    DMATRFCMD_IDLE = 1u << 1,
-    DMATRFCMD_IMEM = 1u << 4,
-    DMATRFCMD_SIZE_256B = 6u << 8,
-    ITFEN_CTXEN = 1u << 0,
-    ITFEN_MTHDEN = 1u << 1,
-    IRQMSET_BOOT = (1u << 1) | (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (0xffu << 8),
-    IRQDEST_BOOT = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (0xffu << 8),
-};
+// The firmware image (kits/SwitchFalcon) and VIC's FCE microcode inside it (drm/tegra/vic.h).
+switch_falcon_image gImage;
+uint32_t gFceSize;
 
-struct Image {  // falcon bin header v1, its OS header, and VIC's FCE header (drm/tegra/falcon.h, vic.h)
-    uint32_t size, binData, binSize, code, codeSize, data, dataSize, apps, fceData, fceSize;
-};
-
-volatile uint8_t *gVic, *gCar, *gPmc, *gMc;
-IOBufferMemoryDescriptor *gFirmwareMd, *gArenaMd, *gTablesMd;
+volatile uint8_t *gVic, *gMc;
+switch_dma_buffer gFirmwareDma, gArenaDma, gTablesDma;
 TegraVICBuffer gFirmware, gArena, gTables;
 uint64_t gArenaUsed;
-Image gImage;
 char gLine[256];
 
 // SMMU domain: one page directory, the identity tables of the kernel buffers and the windows' tables.
@@ -167,134 +139,41 @@ bool gUp, gWedged, gSuspended, gPublished;
 TegraVICBuffer gConfig, gFilter;
 TegraVICTraits gTraits;
 
-inline uint32_t r32(volatile uint8_t *base, uint32_t o)
+// A job's pages through the physical aperture, without the barrier: the caller's switch_dcache_sync() completes them.
+void cachePages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
 {
-    return *(volatile uint32_t *)(base + o);
-}
-
-inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
-{
-    *(volatile uint32_t *)(base + o) = v;
-}
-
-inline uint32_t le32(const uint8_t *p)
-{
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-}
-
-bool waitBits(volatile uint8_t *base, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
-{
-    for (uint32_t i = 0; i <= us; ++i) {
-        if ((r32(base, o) & mask) == value)
-            return true;
-        IODelay(1);
-    }
-    return false;
-}
-
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
-}
-
-template <bool Invalidate> void cacheOp(const void *va, size_t size)
-{
-    if (!size)
-        return;
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    __asm__ volatile("dsb sy" ::: "memory");
-    for (uintptr_t a = (uintptr_t)va & ~(line - 1), end = (uintptr_t)va + size; a < end; a += line) {
-        if (Invalidate)
-            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-        else
-            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-    }
-    __asm__ volatile("dsb sy" ::: "memory");
-}
-
-template <bool Invalidate> void cachePages(const uint64_t *pages, uint32_t count)
-{
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    __asm__ volatile("dsb sy" ::: "memory");
-    for (uint32_t i = 0; i < count; i++) {
-        if (!pmap_valid_page((ppnum_t)(pages[i] >> 12)))
-            continue;
-        const uintptr_t va = phystokv(pages[i] & ~0xfffULL);
-        for (uintptr_t a = va; a < va + 4096; a += line) {
-            if (Invalidate)
-                __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-            else
-                __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-        }
-    }
-    __asm__ volatile("dsb sy" ::: "memory");
+    for (uint32_t i = 0; i < count; i++)
+        if (pmap_valid_page((ppnum_t)(pages[i] >> 12)))
+            switch_dcache_phys_lines(op, pages[i] & ~0xfffULL, 4096);
 }
 
 const char *falconState()
 {
     static char text[160];
-    snprintf(text, sizeof(text), "falcon CPUCTL %#x IDLESTATE %#x IRQSTAT %#x MAILBOX0 %#x DEBUGINFO %#x",
-             r32(gVic, FALCON_CPUCTL), r32(gVic, FALCON_IDLESTATE), r32(gVic, FALCON_IRQSTAT),
-             r32(gVic, FALCON_MAILBOX0), r32(gVic, FALCON_DEBUGINFO));
-    return text;
+    return switch_falcon_state(gVic, text, sizeof(text));
 }
 
 // One physically contiguous buffer below 4 GiB, zeroed and clean in the caches.
-bool contiguous(uint64_t bytes, IOBufferMemoryDescriptor **md, TegraVICBuffer *out)
+bool contiguous(uint64_t bytes, switch_dma_buffer *dma, TegraVICBuffer *out)
 {
-    const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous |
-                                 (IOOptionBits)kIOMemoryMapperNone;
-    *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, bytes, 0xfffff000ULL);
-    IOByteCount length = 0;
-    uint64_t pa = 0;
-    if (*md && (*md)->prepare() == kIOReturnSuccess)
-        pa = (*md)->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
-    if (!pa || length < bytes || pa + bytes > (1ULL << 32)) {
-        OSSafeReleaseNULL(*md);
+    if (!switch_dma_alloc(dma, bytes))
         return false;
-    }
-    out->pa = pa;
-    out->size = bytes;
-    out->va = (uint8_t *)(*md)->getBytesNoCopy();
-    bzero(out->va, bytes);
-    cacheOp<true>(out->va, bytes);
+    *out = {dma->pa, dma->size, dma->va};
     return true;
 }
 
-// falcon_parse_firmware_image, plus vic_boot's FCE header: magic 0x10de (or 0x10fe), version 1, the OS header and data
-// inside the image, the FCE microcode inside the file.
-bool parse(const uint8_t *fw, size_t length, Image *image)
+// falcon_parse_firmware_image (kits/SwitchFalcon), plus vic_boot's FCE header: the FCE microcode inside the file.
+bool parse(const uint8_t *fw, size_t length)
 {
-    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1)
+    if (!switch_falcon_parse(fw, length, &gImage))
         return false;
-    image->size = le32(fw + 8);
-    const uint32_t os = le32(fw + 12);
-    image->binData = le32(fw + 16);
-    image->binSize = le32(fw + 20);
-    const uint32_t fceHeader = le32(fw + 24);
-    image->fceData = le32(fw + 28);
-    if (image->size > length || os > image->size - 20 || image->binData > image->size ||
-        image->binSize > image->size - image->binData)
-        return false;
-    image->code = le32(fw + os);
-    image->codeSize = le32(fw + os + 4);
-    image->data = le32(fw + os + 8);
-    image->dataSize = le32(fw + os + 12);
-    image->apps = le32(fw + os + 16);
     // This firmware generation needs its FCE microcode handed over (vic_boot: data offset neither 0 nor 0xa5a5a5a5).
-    if (!fceHeader || fceHeader > image->size - 12 || !image->fceData || image->fceData == 0xa5a5a5a5u)
+    if (!gImage.fce_header || gImage.fce_header > gImage.size - 12 || !gImage.fce_data ||
+        gImage.fce_data == 0xa5a5a5a5u)
         return false;
-    image->fceSize = le32(fw + fceHeader + 8);
-    return image->codeSize && image->code <= image->binSize && image->codeSize <= image->binSize - image->code &&
-           image->data <= image->binSize && image->dataSize <= image->binSize - image->data &&
-           (image->fceData & 0xff) == 0 && image->fceSize && image->fceData <= image->size &&
-           image->fceSize <= image->size - image->fceData;
+    gFceSize = switch_falcon_le32(fw + gImage.fce_header + 8);
+    return (gImage.fce_data & 0xff) == 0 && gFceSize && gImage.fce_data <= gImage.size &&
+           gFceSize <= gImage.size - gImage.fce_data;
 }
 
 // --- SMMU domain (TegraSMMUDomain.h; the registers under TegraSMMU.h's lock) ---------------------------------------
@@ -308,7 +187,7 @@ void cleanDomain()
 {
     uintptr_t low, high;
     if (gDomain.takeDirty(&low, &high))
-        cacheOp<false>(reinterpret_cast<const void *>(low), high - low);
+        switch_dcache_clean(reinterpret_cast<const void *>(low), high - low);
 }
 
 void smmuFlush()
@@ -336,7 +215,7 @@ bool smmuSetUp()
             return false;
         }
     const bool identities = identity(gFirmware, false) && identity(gArena, true);
-    cacheOp<false>(gTables.va, gTables.size);
+    switch_dcache_clean(gTables.va, gTables.size);
     uintptr_t low, high;
     gDomain.takeDirty(&low, &high);  // all of it was just cleaned
     if (!identities) {
@@ -371,59 +250,44 @@ void smmuDetach()
 // scratch.
 bool powerUp(bool *wasOn)
 {
-    *wasOn = (r32(gPmc, kPmcOffset + PWRGATE_STATUS) >> kPartition) & 1;
-    w32(gCar, RST_DEV_X_SET, X_VIC);
+    *wasOn = switch_pmc_partition_is_on(kPartition);
+    switch_car_reset_assert(kClock);
     IODelay(10);
     if (!*wasOn) {
-        if (!waitBits(gPmc, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000)) {
-            snprintf(gLine, sizeof(gLine), "V1 FAIL PMC toggle busy (PWRGATE_TOGGLE %#x)",
-                     r32(gPmc, kPmcOffset + PWRGATE_TOGGLE));
-            return false;
-        }
-        w32(gPmc, kPmcOffset + PWRGATE_TOGGLE, kPartition | TOGGLE_START);
-        if (!waitBits(gPmc, kPmcOffset + PWRGATE_STATUS, 1u << kPartition, 1u << kPartition, 5000)) {
-            snprintf(gLine, sizeof(gLine), "V1 FAIL partition %u did not power on (PWRGATE_STATUS %#x)", kPartition,
-                     r32(gPmc, kPmcOffset + PWRGATE_STATUS));
+        if (!switch_pmc_partition_on(kPartition)) {
+            snprintf(gLine, sizeof(gLine), "V1 FAIL partition %u did not power on (PWRGATE_TOGGLE %#x STATUS %#x)",
+                     kPartition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS));
             return false;
         }
         IODelay(10);
     }
-    w32(gCar, CLK_SOURCE_VIC, SOURCE_PLLP | VIC_DIV_1);
+    switch_car_write(CLK_SOURCE_VIC, SOURCE_PLLP | VIC_DIV_1);
     IODelay(2);
-    w32(gCar, CLK_ENB_X_SET, X_VIC);
+    switch_car_clock_enable(kClock);
     IODelay(10);
-    w32(gPmc, kPmcOffset + REMOVE_CLAMPING, 1u << kPartition);
+    switch_pmc_remove_clamping(kPartition);
     IODelay(10);
-    if (r32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_VIC)
-        w32(gMc, MC_HOTRESET_CTRL, r32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_VIC);
-    w32(gCar, RST_DEV_X_CLR, X_VIC);
+    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_VIC)
+        switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_VIC);
+    switch_car_reset_deassert(kClock);
     IODelay(10);
-    if (!(r32(gCar, CLK_OUT_ENB_X) & X_VIC) || (r32(gCar, RST_DEVICES_X) & X_VIC)) {
+    if (!switch_car_clock_enabled(kClock) || switch_car_reset_asserted(kClock)) {
         snprintf(gLine, sizeof(gLine), "V1 FAIL clock or reset stuck (CLK_OUT_ENB_X %#x RST_DEVICES_X %#x)",
-                 r32(gCar, CLK_OUT_ENB_X), r32(gCar, RST_DEVICES_X));
+                 switch_car_read(CLK_OUT_ENB_X), switch_car_read(RST_DEVICES_X));
         return false;
     }
-    // tegra210_vic_mbist_war.
-    const uint32_t ovre = r32(gCar, LVL2_CLK_GATE_OVRE);
-    w32(gCar, LVL2_CLK_GATE_OVRE, ovre | OVRE_VIC_MBIST);
+    // tegra210_vic_mbist_war: VIC's override bit pulsed under the CAR lock, the register's other bits left alone.
+    const bool overridden = switch_car_read(LVL2_CLK_GATE_OVRE) & OVRE_VIC_MBIST;
+    switch_car_rmw(LVL2_CLK_GATE_OVRE, 0, OVRE_VIC_MBIST);
     IODelay(1);
-    const uint32_t slcg = r32(gVic, THI_SLCG_OVERRIDE_LOW);
-    w32(gVic, THI_SLCG_OVERRIDE_LOW, slcg | SLCG_MBIST);
+    const uint32_t slcg = switch_mmio_read32(gVic, THI_SLCG_OVERRIDE_LOW);
+    switch_mmio_write32(gVic, THI_SLCG_OVERRIDE_LOW, slcg | SLCG_MBIST);
     IODelay(1);
-    w32(gVic, THI_SLCG_OVERRIDE_LOW, slcg);
-    (void)r32(gVic, THI_SLCG_OVERRIDE_LOW);
-    w32(gCar, LVL2_CLK_GATE_OVRE, ovre);
+    switch_mmio_write32(gVic, THI_SLCG_OVERRIDE_LOW, slcg);
+    (void)switch_mmio_read32(gVic, THI_SLCG_OVERRIDE_LOW);
+    if (!overridden)
+        switch_car_rmw(LVL2_CLK_GATE_OVRE, OVRE_VIC_MBIST, 0);
     IODelay(1);
-    return true;
-}
-
-bool copyChunk(uint32_t from, uint32_t to, bool code)
-{
-    if (!waitBits(gVic, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000))
-        return false;
-    w32(gVic, FALCON_DMATRFMOFFS, to);
-    w32(gVic, FALCON_DMATRFFBOFFS, from);
-    w32(gVic, FALCON_DMATRFCMD, DMATRFCMD_SIZE_256B | (code ? DMATRFCMD_IMEM : 0));
     return true;
 }
 
@@ -431,29 +295,20 @@ bool copyChunk(uint32_t from, uint32_t to, bool code)
 // increment instead. The falcon fetches through VIC's SMMU domain, where the firmware sits 1:1.
 bool bootFalcon()
 {
-    w32(gVic, MISC_PRI_VIC_CG, VIC_CG_BOOT);
-    if (!waitBits(gVic, FALCON_DMACTL, DMACTL_SCRUBBING, 0, 10000)) {
+    switch_mmio_write32(gVic, MISC_PRI_VIC_CG, VIC_CG_BOOT);
+    switch (switch_falcon_load(gVic, gFirmware.pa, &gImage)) {
+    case SWITCH_FALCON_SCRUBBING:
         snprintf(gLine, sizeof(gLine), "V1 FAIL IMEM/DMEM scrubbing did not end (DMACTL %#x)",
-                 r32(gVic, FALCON_DMACTL));
+                 switch_mmio_read32(gVic, SWITCH_FALCON_DMACTL));
         return false;
-    }
-    w32(gVic, FALCON_DMACTL, 0);
-    w32(gVic, FALCON_DMATRFBASE, (uint32_t)((gFirmware.pa + gImage.binData) >> 8));
-    bool queued = true;
-    for (uint32_t offset = 0; queued && offset < gImage.dataSize; offset += 256)
-        queued = copyChunk(gImage.data + offset, offset, false);
-    for (uint32_t offset = 0; queued && offset < gImage.codeSize; offset += 256)
-        queued = copyChunk(gImage.code + offset, offset, true);
-    if (!queued || !waitBits(gVic, FALCON_DMATRFCMD, DMATRFCMD_IDLE, DMATRFCMD_IDLE, 100000)) {
+    case SWITCH_FALCON_DMA:
         snprintf(gLine, sizeof(gLine), "V1 FAIL firmware DMA did not finish (DMATRFCMD %#x)",
-                 r32(gVic, FALCON_DMATRFCMD));
+                 switch_mmio_read32(gVic, SWITCH_FALCON_DMATRFCMD));
         return false;
+    case SWITCH_FALCON_OK:
+        break;
     }
-    w32(gVic, FALCON_IRQMSET, IRQMSET_BOOT);
-    w32(gVic, FALCON_IRQDEST, IRQDEST_BOOT);
-    w32(gVic, FALCON_ITFEN, ITFEN_MTHDEN | ITFEN_CTXEN);
-    w32(gVic, FALCON_BOOTVEC, 0);
-    w32(gVic, FALCON_CPUCTL, CPUCTL_STARTCPU);
+    switch_falcon_start(gVic);
     return true;
 }
 
@@ -466,10 +321,10 @@ int answer(uint32_t id, uint32_t from, const char **stage)
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
         tegra_host1x_op_incr(kThiMethod0 / 4, 2),
         TEGRA_VIC_M_SET_FCE_UCODE_SIZE / 4,
-        gImage.fceSize,
+        gFceSize,
         tegra_host1x_op_incr(kThiMethod0 / 4, 2),
         TEGRA_VIC_M_SET_FCE_UCODE_OFFSET / 4,
-        (uint32_t)((gFirmware.pa + gImage.fceData) >> 8),
+        (uint32_t)((gFirmware.pa + gImage.fce_data) >> 8),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
     };
     int ret = tegra_host1x_submit(stream, sizeof(stream) / sizeof(stream[0]));
@@ -489,9 +344,9 @@ int answer(uint32_t id, uint32_t from, const char **stage)
 void park()
 {
     smmuDetach();
-    w32(gCar, RST_DEV_X_SET, X_VIC);
+    switch_car_reset_assert(kClock);
     IODelay(2);
-    w32(gCar, CLK_ENB_X_CLR, X_VIC);
+    switch_car_clock_disable(kClock);
 }
 
 void timedOut(uint32_t fence, uint64_t us)
@@ -514,26 +369,26 @@ void engineResume();
 bool allocate()
 {
     const size_t length = (size_t)(tegra_vic_fw_end - tegra_vic_fw_start);
-    if (!parse(tegra_vic_fw_start, length, &gImage)) {
+    if (!parse(tegra_vic_fw_start, length)) {
         snprintf(gLine, sizeof(gLine), "V0 FAIL embedded firmware is not a VIC falcon v1 image with FCE (%lu bytes)",
                  (unsigned long)length);
         return false;
     }
-    if (!contiguous((gImage.size + 0xfff) & ~0xfffull, &gFirmwareMd, &gFirmware) ||
-        !contiguous(kArenaBytes, &gArenaMd, &gArena) || !contiguous((uint64_t)kTables * 4096, &gTablesMd, &gTables)) {
+    if (!contiguous(switch_align_up(gImage.size, 4096), &gFirmwareDma, &gFirmware) ||
+        !contiguous(kArenaBytes, &gArenaDma, &gArena) || !contiguous((uint64_t)kTables * 4096, &gTablesDma, &gTables)) {
         snprintf(gLine, sizeof(gLine), "V0 FAIL no contiguous firmware, arena or page-table memory below 4 GiB");
         return false;
     }
     memcpy(gFirmware.va, tegra_vic_fw_start, gImage.size);
-    cacheOp<false>(gFirmware.va, gImage.size);
+    switch_dcache_clean(gFirmware.va, gImage.size);
     return tegra_vic_buffer(4096, &gConfig) == 0 && tegra_vic_buffer(0x3000, &gFilter) == 0;
 }
 
 void giveBack()
 {
-    OSSafeReleaseNULL(gFirmwareMd);
-    OSSafeReleaseNULL(gArenaMd);
-    OSSafeReleaseNULL(gTablesMd);
+    switch_dma_free(&gFirmwareDma);
+    switch_dma_free(&gArenaDma);
+    switch_dma_free(&gTablesDma);
 }
 
 void bringUp(void *, wait_result_t)
@@ -544,18 +399,16 @@ void bringUp(void *, wait_result_t)
         IOLog("TegraVIC: V0 FAIL host1x is not up (see the TegraHost1x line)\n");
         return;
     }
-    gVic = (volatile uint8_t *)ml_io_map(kVicPA, kVicSize);
-    gCar = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
-    gPmc = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
-    gMc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
+    gVic = switch_mmio_map(kVicPA, kVicSize);
+    gMc = switch_mmio_map(kMcPA, 0x1000);
     gJobLock = IOLockAlloc();
     gStateLock = IOLockAlloc();
-    if (!gVic || !gCar || !gPmc || !gMc || !gJobLock || !gStateLock) {
+    if (!gVic || !gMc || !gJobLock || !gStateLock) {
         IOLog("TegraVIC: V0 FAIL no mapping\n");
         return;
     }
     gLine[0] = 0;
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
     if (!allocate()) {
         IOLog("TegraVIC: %s\n", gLine[0] ? gLine : "V0 FAIL no configuration slot in the arena");
         giveBack();
@@ -563,8 +416,8 @@ void bringUp(void *, wait_result_t)
     }
     IOLog("TegraVIC: V0 ok firmware %u bytes at %#llx (FCE %#x+%#x), arena %llu KiB at %#llx, %u page tables, in %llu "
           "us\n",
-          gImage.size, gFirmware.pa, gImage.fceData, gImage.fceSize, kArenaBytes >> 10, gArena.pa, kTables,
-          nowUs() - began);
+          gImage.size, gFirmware.pa, gImage.fce_data, gFceSize, kArenaBytes >> 10, gArena.pa, kTables,
+          switch_now_us() - began);
     bool wasOn = false;
     if (!smmuSetUp() || !smmuAttach() || !powerUp(&wasOn) || !bootFalcon()) {
         IOLog("TegraVIC: %s\n", gLine[0] ? gLine : "V1 FAIL");
@@ -574,8 +427,8 @@ void bringUp(void *, wait_result_t)
     }
     IOLog("TegraVIC: V1 ok ASID %u (directory %#llx), partition %u %s, 408 MHz, falcon started (OS code %#x+%#x data "
           "%#x+%#x)\n",
-          kAsid, gTables.pa, kPartition, wasOn ? "already on" : "powered here", gImage.code, gImage.codeSize,
-          gImage.data, gImage.dataSize);
+          kAsid, gTables.pa, kPartition, wasOn ? "already on" : "powered here", gImage.code, gImage.code_size,
+          gImage.data, gImage.data_size);
     uint32_t id = 0;
     if (tegra_host1x_syncpt_alloc(&id)) {
         IOLog("TegraVIC: V2 FAIL no syncpoint left\n");
@@ -585,7 +438,7 @@ void bringUp(void *, wait_result_t)
     }
     const uint32_t from = tegra_host1x_syncpt_read(id);
     const char *stage = nullptr;
-    const uint64_t start = nowUs();
+    const uint64_t start = switch_now_us();
     const int ret = answer(id, from, &stage);
     if (ret) {
         char host[200];
@@ -600,7 +453,7 @@ void bringUp(void *, wait_result_t)
     IOLog(
         "TegraVIC: V2 ok host interface and falcon (FCE %u bytes) incremented syncpoint %u %u->%u by interrupt in %llu "
         "us; %s\n",
-        gImage.fceSize, id, from, tegra_host1x_syncpt_read(id), nowUs() - start, falconState());
+        gFceSize, id, from, tegra_host1x_syncpt_read(id), switch_now_us() - start, falconState());
     gSyncpt = id;
     gNext = tegra_host1x_syncpt_read(id);
     gUp = true;
@@ -656,24 +509,9 @@ extern "C" uint64_t tegra_vic_filter_address(void)
     return gFilter.pa;
 }
 
-extern "C" void tegra_vic_cache_clean(const void *va, size_t size)
+extern "C" void tegra_vic_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
 {
-    cacheOp<false>(va, size);
-}
-
-extern "C" void tegra_vic_cache_flush(const void *va, size_t size)
-{
-    cacheOp<true>(va, size);
-}
-
-extern "C" void tegra_vic_cache_flush_pages(const uint64_t *pages, uint32_t count)
-{
-    cachePages<true>(pages, count);
-}
-
-extern "C" void tegra_vic_cache_clean_pages(const uint64_t *pages, uint32_t count)
-{
-    cachePages<false>(pages, count);
+    cachePages(op, pages, count);
 }
 
 extern "C" void tegra_vic_lock(void)
@@ -699,8 +537,9 @@ extern "C" uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages,
         pt[i] = TegraSMMUDomain::entry(pages[i], writable);
     for (uint32_t i = count; i < gWindowMapped[window]; i++)
         pt[i] = 0;
-    cacheOp<false>(pt,
-                   (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) * 4);  // pages in a row
+    switch_dcache_clean(pt,
+                        (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) *
+                            4);  // pages in a row
     gWindowMapped[window] = count;
     smmuFlush();
     return base;
@@ -712,7 +551,7 @@ extern "C" void tegra_vic_window_clear(uint32_t window)
         return;
     uint32_t *pt = table(1 + window * kWindowTables);
     bzero(pt, (uint64_t)gWindowMapped[window] * 4);
-    cacheOp<false>(pt, (uint64_t)gWindowMapped[window] * 4);
+    switch_dcache_clean(pt, (uint64_t)gWindowMapped[window] * 4);
     gWindowMapped[window] = 0;
     smmuFlush();
 }
@@ -742,7 +581,7 @@ extern "C" int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs)
         return -19;
     }
     memcpy(gConfig.va, job->config, TEGRA_VIC_CONFIG_BYTES);
-    cacheOp<false>(gConfig.va, TEGRA_VIC_CONFIG_BYTES);
+    switch_dcache_clean(gConfig.va, TEGRA_VIC_CONFIG_BYTES);
     uint32_t words[1 + 3 * TEGRA_VIC_MAX_METHODS + 1], n = 0;
     words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
     for (uint32_t i = 0; i < job->count; i++) {
@@ -752,16 +591,16 @@ extern "C" int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs)
     }
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const uint32_t fence = gNext + 1;
-    const uint64_t start = nowUs();
+    const uint64_t start = switch_now_us();
     int ret = tegra_host1x_submit(words, n);
     if (!ret) {
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job));
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
-            timedOut(fence, nowUs() - start);
+            timedOut(fence, switch_now_us() - start);
     }
     if (busyUs)
-        *busyUs = nowUs() - start;
+        *busyUs = switch_now_us() - start;
     IOLockUnlock(gStateLock);
     return ret;
 }
@@ -777,9 +616,9 @@ void engineSuspend()
     IOLockLock(gStateLock);
     gSuspended = true;
     smmuDetach();
-    w32(gCar, RST_DEV_X_SET, X_VIC);
+    switch_car_reset_assert(kClock);
     IODelay(2);
-    w32(gCar, CLK_ENB_X_CLR, X_VIC);
+    switch_car_clock_disable(kClock);
     IOLockUnlock(gStateLock);
     IOLockUnlock(gJobLock);
 }

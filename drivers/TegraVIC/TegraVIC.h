@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "TegraVICConfig.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 class IOMemoryDescriptor;
 
@@ -44,10 +45,9 @@ void tegra_vic_window_clear(uint32_t window);
 int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs);
 uint64_t tegra_vic_config_address(void);
 uint64_t tegra_vic_filter_address(void);
-void tegra_vic_cache_clean(const void *va, size_t size);                  // dc cvac
-void tegra_vic_cache_flush(const void *va, size_t size);                  // dc civac
-void tegra_vic_cache_flush_pages(const uint64_t *pages, uint32_t count);  // dc civac through the physical aperture
-void tegra_vic_cache_clean_pages(const uint64_t *pages, uint32_t count);  // dc cvac through the physical aperture
+// A job's pages (managed RAM only) through the physical aperture, with no barrier: the caller's switch_dcache_sync()
+// completes them, once for every list it batches.
+void tegra_vic_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count);
 void tegra_vic_lock(void);  // held across a job's map, run and unmap (one job at a time)
 void tegra_vic_unlock(void);
 
