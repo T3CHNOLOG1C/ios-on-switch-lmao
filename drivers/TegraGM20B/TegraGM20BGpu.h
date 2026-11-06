@@ -187,21 +187,25 @@ void tgm_vm_import_note(struct tgm_vm *vm, uint64_t pa, int add);
  * them, reads what the CPU wrote and no dirty line is later written back over what the GPU wrote. */
 void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages);
 
-/* Host-import coherency registry (gpu.c), keyed by a surface's first physical page: the lazy CPU<->GPU path the XNU
- * IOSurface lock/unlock hook drives (once that hook is on the trap path: see gpu.c). add at import (with the import's page list; returns the entry the import holds; the
- * import still cleans its pages itself, always) and put at release; wrote marks a writable import a submission may have
- * written (from exec: one store through the import's entry); read_lock invalidates a GPU-written import for a CPU read lock and clears the mark;
- * write_unlock cleans a GPU import after a CPU write unlock. The last two return the bytes touched (0 if nothing / not
- * our import), and do the cache maintenance themselves (by VA, inner-shareable broadcast). */
+/* Host-import coherency registry (TegraGM20BCoherency.cpp), kept coherent at every process's IOSurfaceLock/Unlock of
+ * an imported surface (tegra_gm20b_iosurface_trap). add at import, with the first page, the IOSurface ID (0: not an
+ * IOSurface) and the import's page list; it returns the entry the import holds (NULL without memory: no lazy
+ * coherency), and the importer still cleans its pages itself. put at release; wrote from Exec, for a writable import a
+ * submission may have written. take_stats returns and zeroes the traps' lock invalidations and unlock cleans (count,
+ * bytes each). */
 struct tgm_coh;
-struct tgm_coh *tgm_coherency_add(uint64_t pa, const uint64_t *pas, uint32_t npages, int writable);
+int tgm_coherency_init(void);
+struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, const uint64_t *pas,
+				  uint32_t npages, int writable);
 void tgm_coherency_put(struct tgm_coh *c);
 void tgm_coherency_wrote(struct tgm_coh *c);
+void tgm_coherency_take_stats(uint64_t out[4]);
+/* XNU's iokit_user_client_trap, after an IOSurfaceRootUserClient trap ran: index 2 lock, 3 unlock (IOConnectTrap3 p1 the
+ * surface ID, p2 the lock options). */
+void tegra_gm20b_iosurface_trap(uint32_t index, uint32_t surface_id, uint32_t options);
 /* A GPU client made (add 1) or removed (add -1) a bind of the whole surface holding `c` with TEGRA_SCANOUT_TILED_KIND:
  * the surface is tiled while any such bind lives, whatever other binds of it say (tegra_gm20b_surface_tiled). */
 void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
-uint64_t tgm_coherency_read_lock(uint64_t pa);
-uint64_t tgm_coherency_write_unlock(uint64_t pa);
 
 /* The stats (every periodic tegra-gm20b line, the submissions' GPU stamps, the push scan and profile): debug kernels
  * only; a release kernel has none of their code or strings. */

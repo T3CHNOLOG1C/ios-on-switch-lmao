@@ -620,7 +620,7 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
         }
     }
     Import *i = new Import;
-    if (!k_.import(base, bytes, i->bo, kPteKindPitch)) {
+    if (!k_.import(base, bytes, i->bo, kPteKindPitch, uint32_t(id))) {
         delete i;
         return nullptr;
     }

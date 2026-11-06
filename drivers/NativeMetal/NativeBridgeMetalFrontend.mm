@@ -678,6 +678,28 @@ static std::mutex gSurfaceImportLock;
 // association is never the one dropped: a lookup that missed it would import the same surface a second time.
 static constexpr NSUInteger kSurfaceImportKeys = 1024;
 
+// NVK's switch_nvk_import_surface: the IOSurface the next host import on this thread covers, so the kernel keeps that
+// import coherent at every process's IOSurfaceLock/Unlock. The Vulkan loader opened NVK (libvulkan_nouveau.dylib, beside
+// this image) RTLD_LOCAL, so the symbol is looked up through that image rather than RTLD_DEFAULT.
+static void noteImportSurface(IOSurfaceID surfaceId, const void *base, size_t bytes)
+{
+    using Note = void (*)(uint32_t, const void *, uint64_t);
+    static const Note note = []() -> Note {
+        Dl_info info = {};
+        if (!dladdr(reinterpret_cast<const void *>(&noteImportSurface), &info) || !info.dli_fname)
+            return nullptr;
+        std::string path(info.dli_fname);
+        const size_t slash = path.rfind('/');
+        if (slash == std::string::npos)
+            return nullptr;
+        path.replace(slash + 1, std::string::npos, "libvulkan_nouveau.dylib");
+        void *nvk = dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+        return nvk ? reinterpret_cast<Note>(dlsym(nvk, "switch_nvk_import_surface")) : nullptr;
+    }();
+    if (note)
+        note(surfaceId, base, bytes);
+}
+
 static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
 {
     struct Key {
@@ -695,7 +717,9 @@ static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
         return buffer;
     }
     const uint64_t began = nowUs();
+    noteImportSurface(IOSurfaceGetID(surface), base, bytes);
     NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, base, bytes, MTLResourceStorageModeShared);
+    noteImportSurface(0, nullptr, 0);
     gTimeSurfaceImport.add(began);
     if (!handle) {
         NBLOG(@"native-metal: surface import refused: %@", lastError());

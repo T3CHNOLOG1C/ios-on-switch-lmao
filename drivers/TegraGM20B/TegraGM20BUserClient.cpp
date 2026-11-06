@@ -1260,12 +1260,11 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		releaseBo(bo);
 		return ret;
 	}
-	// Register the import for the lazy CPU<->GPU coherency the XNU IOSurface lock/unlock hook drives (tgm_coherency_*):
+	// Registered for the coherency every process's IOSurfaceLock/Unlock of the surface drives (TegraGM20BCoherency.cpp):
 	// writable (the GPU may write it) unless the task maps the pages read-only.
-	bo->coh = tgm_coherency_add(bo->pas[0], bo->pas, bo->npages, !bo->readOnly);
+	bo->coh = tgm_coherency_add(bo->pas[0], in->surface_id, bo->pas, bo->npages, !bo->readOnly);
 	// The GPU does not snoop the CPU caches: what the task wrote must be in DRAM before the GPU reads it, and no dirty
-	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote. Always, even
-	// when another import of these pages is live: that proves nothing about CPU writes since (gpu.c, the registry).
+	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote.
 	tgm_cpu_clean_pages(bo->pas, bo->npages);
 	lap(3);
 	tgm_stats_import(static_cast<int64_t>(bo->bytes), bo->pas[0]);
@@ -1848,6 +1847,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return kIOReturnNotReady;
 
 	switch (method) {
+	case TegraGM20BMethodBoImport:
+		if (!reservedZero(static_cast<const TegraGM20BAbiBoImport *>(in)->reserved))
+			return kIOReturnBadArgument;
+		break;
 	case TegraGM20BMethodVmBind:
 		if (!reservedZero(static_cast<const TegraGM20BAbiVmBind *>(in)->reserved))
 			return kIOReturnBadArgument;

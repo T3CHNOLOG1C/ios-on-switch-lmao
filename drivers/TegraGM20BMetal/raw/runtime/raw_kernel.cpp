@@ -166,21 +166,21 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
     return true;
 }
 
-bool Kernel::import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind)
+bool Kernel::import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind, uint32_t surfaceId)
 {
-    if (!importPages(addr, bytes, bo)) {
+    if (!importPages(addr, bytes, bo, surfaceId)) {
         err_ = "BoImport failed";
         return false;
     }
     return bindImport(addr, bo, kind);
 }
 
-bool Kernel::importPages(void *addr, uint64_t bytes, Bo &bo)
+bool Kernel::importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId)
 {
     const uint64_t page = info_.page_size;
     const uintptr_t base = uintptr_t(addr) & ~uintptr_t(page - 1);
     const uint64_t span = ((uintptr_t(addr) + bytes + page - 1) & ~uintptr_t(page - 1)) - base;
-    TegraGM20BAbiBoImport in = {base, span};
+    TegraGM20BAbiBoImport in = {base, span, surfaceId, 0};
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
     if (call(TegraGM20BMethodBoImport, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS)

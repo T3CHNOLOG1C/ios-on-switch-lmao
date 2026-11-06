@@ -924,6 +924,32 @@ nvkmd_darwin_import_dma_buf(struct nvkmd_dev *dev,
    return vk_error(log_obj, VK_ERROR_INVALID_EXTERNAL_HANDLE);
 }
 
+/* The BoImport an IOSurface's import leads to names the surface, so the kernel keeps it coherent at every process's
+ * IOSurfaceLock/Unlock of it. */
+static __thread struct {
+   uint32_t id;
+   uintptr_t base;
+   uint64_t bytes;
+} import_surface;
+
+__attribute__((visibility("default"))) void
+switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes)
+{
+   import_surface.id = surface_id;
+   import_surface.base = (uintptr_t)base;
+   import_surface.bytes = bytes;
+}
+
+static uint32_t
+import_surface_id(const void *host_ptr, uint64_t size_B)
+{
+   const uintptr_t start = (uintptr_t)host_ptr;
+   if (!import_surface.id || start >= import_surface.base + import_surface.bytes ||
+       import_surface.base >= start + size_B)
+      return 0;
+   return import_surface.id;
+}
+
 static VkResult
 nvkmd_darwin_import_host_mem(struct nvkmd_dev *_dev,
                              struct vk_object_base *log_obj,
@@ -935,6 +961,7 @@ nvkmd_darwin_import_host_mem(struct nvkmd_dev *_dev,
    struct TegraGM20BAbiBoImport req = {
       .address = (uintptr_t)host_ptr,
       .bytes = size_B,
+      .surface_id = import_surface_id(host_ptr, size_B),
    };
    struct TegraGM20BAbiBoAllocReply reply = { 0 };
    kern_return_t kr = darwin_call(&dev->conn, TegraGM20BMethodBoImport,

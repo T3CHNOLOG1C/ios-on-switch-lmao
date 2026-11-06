@@ -1040,188 +1040,6 @@ static int vm_imports(struct tgm_vm *vm, u64 pa) /* live_lock held */
 	return 0;
 }
 
-/* host-import coherency registry:
- * Lazy CPU<->GPU coherency for imported host memory (IOSurfaces, no-copy buffers): the render path pays nothing, and the
- * cache maintenance is paid by whoever touches a surface on the CPU, at its IOSurface lock/unlock (the XNU hook that calls
- * tgm_coherency_*). The GPU does not snoop the CPU caches on Tegra.
- *  - GPU -> CPU: a writable import the GPU may have written is marked dirty at each submission (tgm_coherency_wrote, from the
- *    UserClient's exec). The reader's read lock invalidates the surface's lines once and clears the mark, so the CPU reads
- *    DRAM (what the GPU wrote), not lines it cached before (a fresh surface's zeros: 16x1 black runs in a launch
- *    snapshot rendered on the GPU and read back on the CPU to encode a PNG).
- *  - CPU -> GPU: a writer's non-read-only unlock of a surface the GPU imported cleans its lines, so the GPU reads what the
- *    CPU wrote; read-only imports included (the GPU reads what the app redraws into them). A per-commit clean in the
- *    frontend would see only in-process writers, and a surface's writers are often other processes.
- *  - Import: the importer always cleans the surface's lines, for what the CPU wrote before the GPU imported it, even when
- *    another import of the same pages is live. An earlier import proves nothing about writes since: no-copy buffers (Core
- *    Animation's shared-memory images, most read-only imports) never see an IOSurface lock, and IOSurfaceLock/Unlock are
- *    IOKit traps (IOConnectTrap3, index 2/3), not the external methods the XNU hook watches, so no unlock cleans
- *    anything. Without the clean a recycled backing store reaches the GPU with its newest lines still in the CPU caches
- *    (text as 16x1 blocks of old and new, a selected row showing the buffer's previous text). Cleaning costs ~80 us per
- *    MiB.
- * Entries are keyed by the surface's first physical page (its page-aligned base, as the import and the XNU hook both have it),
- * in a hash under coh_lock for the hook's lookups. Each import holds a reference to its entry, which stays where it was made,
- * so the per-submission dirty mark is one store through the import's own pointer, no lookup and no lock. */
-struct tgm_coh {
-	struct tgm_coh *next; /* hash chain (coh_lock) */
-	u64 pa; /* the surface's first physical page: the key, as the import and the XNU hook both have it */
-	u64 *pas; /* the largest page list imported for it, so the cache ops reach a non-contiguous surface */
-	u32 npages, refs;
-	int writable;  /* some import lets the GPU write it: submissions mark it GPU-dirty */
-	int gpu_dirty; /* atomic: the GPU may have written it since the last CPU read lock */
-	u32 tiled_binds; /* atomic: live whole-surface binds that address it block-linear (TEGRA_SCANOUT_TILED_KIND) */
-};
-
-/* Registers this driver's read_lock/write_unlock with the kernel's IOSurface lock/unlock hook (XNU IOUserClient.cpp). */
-extern void tegra_coherency_register(uint64_t (*read_lock)(uint64_t),
-				     uint64_t (*write_unlock)(uint64_t));
-#define TGM_COH_BUCKETS 256
-static struct tgm_coh *coh_hash[TGM_COH_BUCKETS];
-static DEFINE_MUTEX(coh_lock);
-
-/* stats: the IOSurface lock/unlock hooks' work (one 5 s window), on the push line */
-static struct {
-	u64 inval_n, inval_bytes, clean_n, clean_bytes;
-} coh_stats;
-
-static struct tgm_coh **
-coh_slot(u64 pa) /* coh_lock held: the link that points at pa's entry, or the chain's end */
-{
-	struct tgm_coh **p =
-		&coh_hash[((pa >> PAGE_SHIFT) ^ (pa >> (PAGE_SHIFT + 8))) & (TGM_COH_BUCKETS - 1)];
-	while (*p && (*p)->pa != pa)
-		p = &(*p)->next;
-	return p;
-}
-
-/* A host import of the surface whose pages are pas[0..npages) was made: its entry, with a reference for the import (NULL
- * when there is no memory for one: the import then simply has no lazy coherency). The importer
- * cleans the pages itself, always (see above). `writable` is 0 for a read-only import. */
-struct tgm_coh *tgm_coherency_add(u64 pa, const u64 *pas, u32 npages, int writable)
-{
-	struct tgm_coh **p, *c;
-	if (!npages)
-		return NULL;
-	mutex_lock(&coh_lock);
-	p = coh_slot(pa);
-	c = *p;
-	if (c && npages > c->npages) {
-		/* a larger import of the same surface: keep its page list, so the hooks reach every page either imports */
-		u64 *copy = kmalloc_array(npages, sizeof(u64), GFP_KERNEL);
-		if (copy) {
-			memcpy(copy, pas, (size_t)npages * sizeof(u64));
-			kfree(c->pas);
-			c->pas = copy;
-			c->npages = npages;
-		}
-	} else if (!c && (c = kzalloc(sizeof(*c), GFP_KERNEL))) {
-		c->pas = kmalloc_array(npages, sizeof(u64), GFP_KERNEL);
-		if (!c->pas) {
-			kfree(c);
-			c = NULL;
-		} else {
-			memcpy(c->pas, pas, (size_t)npages * sizeof(u64));
-			c->pa = pa;
-			c->npages = npages;
-			*p = c;
-		}
-	}
-	if (c) {
-		c->refs++;
-		c->writable |= writable;
-	}
-	mutex_unlock(&coh_lock);
-	return c;
-}
-
-/* The import holding `c` was released. */
-void tgm_coherency_put(struct tgm_coh *c)
-{
-	struct tgm_coh **p;
-	if (!c)
-		return;
-	mutex_lock(&coh_lock);
-	if (!--c->refs) {
-		p = coh_slot(c->pa);
-		if (*p == c)
-			*p = c->next;
-		kfree(c->pas);
-		kfree(c);
-	}
-	mutex_unlock(&coh_lock);
-}
-
-/* A whole-surface block-linear bind of the surface holding `c` was made (add 1) or removed (add -1). */
-void tgm_coherency_tiled_bind(struct tgm_coh *c, int add)
-{
-	if (c)
-		__atomic_fetch_add(&c->tiled_binds, (u32)add, __ATOMIC_ACQ_REL);
-}
-
-int tegra_gm20b_surface_tiled(uint64_t pa)
-{
-	struct tgm_coh *c;
-	int tiled;
-
-	mutex_lock(&coh_lock);
-	c = *coh_slot(pa);
-	tiled = c && __atomic_load_n(&c->tiled_binds, __ATOMIC_ACQUIRE);
-	mutex_unlock(&coh_lock);
-	return tiled;
-}
-
-/* A submission that may write the writable import holding `c`: mark it dirty, so the next CPU read lock invalidates it.
- * Called from the UserClient's exec, per writable import: one store, no lookup, no lock, no cache maintenance. */
-void tgm_coherency_wrote(struct tgm_coh *c)
-{
-	if (c)
-		__atomic_store_n(&c->gpu_dirty, 1, __ATOMIC_RELEASE);
-}
-
-/* The XNU IOSurface read-lock hook (a CPU read lock, not the GPU's): if the surface whose first page is `pa` is a GPU
- * import the GPU may have written, invalidate its pages for the CPU (so the read sees DRAM, what the GPU wrote, not lines
- * the CPU cached before) and clear the mark. Nothing for a surface that is not our import or that the GPU has not written
- * since the last read lock. Cache ops are by VA through the kernel's physical aperture, broadcast within the inner-
- * shareable domain (no IPI). Returns the bytes invalidated (0 if nothing). */
-u64 tgm_coherency_read_lock(u64 pa)
-{
-	struct tgm_coh *c;
-	u64 bytes = 0;
-	mutex_lock(&coh_lock);
-	c = *coh_slot(pa);
-	if (c && __atomic_exchange_n(&c->gpu_dirty, 0, __ATOMIC_ACQ_REL)) {
-		tgm_cpu_clean_pages(
-			c->pas,
-			c->npages); /* clean+invalidate: no dirty CPU line survives either */
-		bytes = (u64)c->npages << PAGE_SHIFT;
-		coh_stats.inval_n++;
-		coh_stats.inval_bytes += bytes;
-	}
-	mutex_unlock(&coh_lock);
-	return bytes;
-}
-
-/* The XNU IOSurface write-unlock hook (a CPU writer unlocking, not read-only): if the surface is a GPU import (read-only
- * imports included: the GPU reads what the CPU wrote), clean its pages so the GPU reads what the CPU wrote. A pure-CPU
- * surface (not our import) is not touched and costs nothing. A writer that stores into an imported surface without
- * IOSurfaceLock/Unlock is NOT covered here: the import-time clean (BoImport) covers writes before the import, but writes
- * made after it with no lock reach no hook (as on stock Metal, where such a write is a program error). Returns the bytes
- * cleaned (0 if not ours). */
-u64 tgm_coherency_write_unlock(u64 pa)
-{
-	struct tgm_coh *c;
-	u64 bytes = 0;
-	mutex_lock(&coh_lock);
-	c = *coh_slot(pa);
-	if (c) {
-		tgm_cpu_clean_pages(c->pas, c->npages);
-		bytes = (u64)c->npages << PAGE_SHIFT;
-		coh_stats.clean_n++;
-		coh_stats.clean_bytes += bytes;
-	}
-	mutex_unlock(&coh_lock);
-	return bytes;
-}
-
 uint32_t tgm_chan_submitted(struct tgm_chan *chan)
 {
 	return chan->submitted;
@@ -2239,22 +2057,15 @@ static void stats_tick(void)
 	stats_exec_owners(line, sizeof(line), rate);
 	stats_mem(ms);
 	stats_waits(ms);
-	/* The lazy IOSurface-coherency hooks' work this window (the XNU lock/unlock hook; tgm_coherency_*): GPU-written imports
-	 * invalidated for a CPU read lock, and CPU-written imports cleaned for the GPU at a write unlock. Zero on the render
-	 * path, so these count only surfaces the CPU actually locks. */
+	/* The IOSurface lock/unlock traps' cache maintenance this window (TegraGM20BCoherency.cpp): GPU-written imports
+	 * invalidated at a CPU lock, CPU-written imports cleaned at an unlock. */
 	{
-		u64 in, ib, cn, cb;
-		mutex_lock(&coh_lock);
-		in = coh_stats.inval_n;
-		ib = coh_stats.inval_bytes;
-		cn = coh_stats.clean_n;
-		cb = coh_stats.clean_bytes;
-		coh_stats = (typeof(coh_stats)){0};
-		mutex_unlock(&coh_lock);
-		if (in || cn)
-			nvxnu_log("tegra-gm20b: coherency %llu read-lock invalidations (%llu KiB), "
-				  "%llu write-unlock cleans (%llu KiB)\n",
-				  in, ib >> 10, cn, cb >> 10);
+		uint64_t coh[4];
+		tgm_coherency_take_stats(coh);
+		if (coh[0] || coh[2])
+			nvxnu_log("tegra-gm20b: coherency %llu lock invalidations (%llu KiB), "
+				  "%llu unlock cleans (%llu KiB)\n",
+				  coh[0], coh[1] >> 10, coh[2], coh[3] >> 10);
 	}
 #undef PT_NS
 }
@@ -4662,9 +4473,8 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		if (tgm_all_clients())
 			iso.deadline = nvxnu_work_alloc(iso_deadline, NULL);
 		nvxnu_errors_fatal(iso.deadline ? errors_contained : NULL);
-		/* Register the host-import coherency backend the kernel's IOSurface lock/unlock hook calls (XNU
-		 * is_io_connect_method, tegra_coherency_register). The GPU does the imports, so it owns the registry. */
-		tegra_coherency_register(tgm_coherency_read_lock, tgm_coherency_write_unlock);
+		if (tgm_coherency_init())
+			nvxnu_log("tegra-gm20b: no coherency registry: imports are cleaned once\n");
 		idle_start(); /* 768 MHz while busy, 76.8 MHz once truly idle */
 		scrub_open(); /* the copy engine zeroes the pool from here on (see "pool scrub") */
 	}

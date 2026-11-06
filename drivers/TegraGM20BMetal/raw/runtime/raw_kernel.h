@@ -35,10 +35,10 @@ public:
 
     bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000);
     // Wires [addr, addr + bytes) of this task (whole pages) and binds them; bo.va/bo.cpu name addr itself.
-    bool import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind = 0);
+    bool import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind = 0, uint32_t surfaceId = 0);
     // The same in two steps, for a caller that serialises the VA list itself: the kernel's BoImport (the wiring: the slow part,
     // safe beside the other calls) and then the VA and its bind (bindImport, under the caller's lock).
-    bool importPages(void *addr, uint64_t bytes, Bo &bo);
+    bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
     // BoFree (the kernel unbinds it at once and releases the pages after the channels complete what they had); the VA goes
     // back to the free list at once: call it only once no submission that uses the BO is still running (raw::Device does).

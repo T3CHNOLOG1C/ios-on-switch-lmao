@@ -1,4 +1,6 @@
 # drivers/TegraGM20B on the host:
+#   gm20b_coherency_test     TegraGM20BCoherency.cpp: which IOSurface lock/unlock traps clean or invalidate an import,
+#                            across imports of one surface and their release, and traps racing a release
 #   gm20b_pool_policy_test   TegraGM20BPoolPolicy.h (where a coherent BO's memory comes from) over a model of the pool
 #                            when Maps opened: its first buffers come from system memory instead of being refused;
 #                            MapKit's 4 KiB, the compositor's 16 MiB block, the floor, room for everyone
@@ -14,7 +16,7 @@
 #
 #   bazel test //drivers/TegraGM20B/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_test")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
 lint_files()
 
@@ -56,5 +58,33 @@ host_test(
         "//drivers/TegraGM20B:gpu.c",
         "//drivers/TegraGM20B:shim/linux.c",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+)
+
+host_shims(
+    name = "coherency_kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+    ],
+    stubs = "gm20b_coherency_stubs.h",
+)
+
+host_library(
+    name = "coherency",
+    srcs = ["//drivers/TegraGM20B:TegraGM20BCoherency.cpp"],
+    hdrs = [
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    deps = [":coherency_kernel"],
+)
+
+host_test(
+    name = "gm20b_coherency_test",
+    srcs = ["gm20b_coherency_test.cpp"],
+    deps = [
+        ":coherency",
+        ":coherency_kernel",
     ],
 )

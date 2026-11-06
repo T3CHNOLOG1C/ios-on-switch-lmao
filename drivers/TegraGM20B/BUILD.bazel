@@ -49,6 +49,7 @@ kernel_driver(
         "shim/xnu_glue.cpp",
         "TegraGM20B.cpp",
         "TegraGM20BUserClient.cpp",
+        "TegraGM20BCoherency.cpp",
         # Subclasses the original IOAcceleratorES: a late object, run by TegraGM20B.cpp after IOGPUFamily loads.
         "TegraGM20BAccelerator.cpp",
         # GM20B falcon firmware (linux-firmware nvidia/gm20b) by .incbin.

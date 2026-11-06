@@ -94,10 +94,16 @@ struct TegraGM20BAbiBoAllocReply {
 };
 
 /* Method 3. Wires [address, address+bytes) of the calling task (an IOSurface's pages) and makes them a BO. No map token: the
- * caller keeps its own mapping and does its own cache maintenance. Reply: TegraGM20BAbiBoAllocReply with map_token 0. */
+ * caller keeps its own mapping. Reply: TegraGM20BAbiBoAllocReply with map_token 0.
+ * surface_id: the IOSurface whose memory the range lies in (IOSurfaceGetID), or 0 for other memory. With an ID the kernel
+ * keeps the import coherent across every process's IOSurfaceLock/Unlock of that surface (an unlock that wrote cleans it
+ * for the GPU, a lock after GPU writes invalidates it for the CPU). Memory without an ID is cleaned once, at import;
+ * later CPU writes to it are the caller's to clean. */
 struct TegraGM20BAbiBoImport {
 	uint64_t address; /* page aligned */
 	uint64_t bytes;   /* page multiple */
+	uint32_t surface_id;
+	uint32_t reserved; /* 0 */
 };
 
 /* Method 4. The handle dies now; its pages are released only after every channel of the connection has completed what it had
@@ -277,7 +283,7 @@ struct TegraGM20BAbiOrderReply {
 TEGRA_GM20B_ASSERT(TegraGM20BAbiInfo, 192);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoAlloc, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoAllocReply, 16);
-TEGRA_GM20B_ASSERT(TegraGM20BAbiBoImport, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBoImport, 24);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoFree, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBindOp, 40);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiVmBind, 4008);
