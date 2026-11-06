@@ -38,7 +38,7 @@ class DeltaTest(unittest.TestCase):
             {'path': '/private/var/staged/app', 'file': 'files/app', 'sha256_in': sha(b'app arm64e'),
              'sha256_out': sha(b'app arm64')},
         ]  # fmt: skip
-        (out / 'os.manifest.json').write_text(json.dumps(entries))
+        (out / 'os.manifest.json').write_text(json.dumps({'role': 'os', 'translator': 'test', 'files': entries}))
         self.entries = delta.load(out / 'os.manifest.json')
 
     def test_rewrites_in_place(self):
@@ -47,6 +47,11 @@ class DeltaTest(unittest.TestCase):
         self.assertEqual(self.tool.read_bytes(), b'arm64 translated')
         self.assertEqual(os.stat(self.tool).st_ino, inode)
         self.assertEqual(self.tool.stat().st_mode & 0o777, 0o751)
+
+    def test_consume_deletes_each_replacement_once_written(self):
+        delta.apply(self.volume, self.entries, quiet, 'System', consume=True)
+        self.assertFalse(any(e['source'].exists() for e in self.entries))
+        self.assertEqual(delta.apply(self.volume, self.entries, quiet, 'System'), 0)
 
     def test_resumes(self):
         delta.apply(self.volume, self.entries, quiet, 'System')
@@ -68,7 +73,9 @@ class DeltaTest(unittest.TestCase):
 
     def test_refuses_relative_paths(self):
         manifest = self.dir / 'bad.manifest.json'
-        manifest.write_text(json.dumps([{'path': 'usr/../etc', 'file': 'x', 'sha256_in': '', 'sha256_out': ''}]))
+        manifest.write_text(
+            json.dumps({'files': [{'path': 'usr/../etc', 'file': 'x', 'sha256_in': '', 'sha256_out': ''}]})
+        )
         with self.assertRaises(delta.DeltaError):
             delta.load(manifest)
 

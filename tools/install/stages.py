@@ -9,12 +9,13 @@ import os
 import shutil
 from pathlib import Path
 
-from tools.install import card as cards, compose, cryptex, delta, folder, host, pack, populate
+from tools.install import card as cards, compose, cryptex, delta, folder, host, pack, populate, pretranslate
 
 STATE = 'state.json'
 IMAGE = 'image.img'
 STAGES = ('compose', 'populate', 'pack')
 STAGING = '/private/preboot/Switch-Staging/'
+FLOOR = 14 << 30
 
 
 def identity(args, spec, pins, size):
@@ -83,32 +84,51 @@ class Stages:
         self.save('compose', size, offset)
         return offset
 
-    def deltas(self):
-        """{role: entries} of the pretranslated deltas given (iOS 27), else {}."""
-        return {role: delta.load(path) for role, path in (getattr(self.args, 'deltas', None) or {}).items()}
+    def roles(self):
+        """iOS 27's pretranslate drivers by role (pretranslate.py), or None for an IPSW that needs none."""
+        given = getattr(self.args, 'pretranslate', None)
+        return pretranslate.Roles(given, self.scratch, self.log) if given else None
 
-    def cryptexes(self, deltas):
-        """The cryptex images to stage, and their sha256 where a delta rebuilt them (the pins describe the IPSW's)."""
+    def cryptexes(self, roles):
+        """The cryptex images to stage, and their sha256 where they were translated (the pins describe the IPSW's).
+        The App cryptex goes before the SystemOS one, whose dyld cache takes the other volumes' cdhashes."""
         sources = {'system_cryptex': self.args.system_cryptex, 'app_cryptex': self.args.app_cryptex}
         expected = {}
-        for member in list(sources):
-            if member in deltas:
-                sources[member] = cryptex.rebuild(sources[member], deltas[member], self.scratch, self.log, member)
+        for member in ('app_cryptex', 'system_cryptex'):
+            if roles and member in roles:
+                sources[member] = cryptex.rebuild(
+                    sources[member], lambda root, m=member: roles.run(m, root), self.scratch, self.log, member
+                )
+                roles.done(member)
                 expected[member] = cards.sha256_file(sources[member])
         return sources, expected
 
-    def translate_system(self, device, entries):
+    def check_translate_space(self, roles):
+        """The SystemOS cryptex's clone takes its translated files, and the rebuilt image is staged into Preboot."""
+        if not roles or 'system_cryptex' not in roles:
+            return
+        want = 2 * os.path.getsize(self.args.system_cryptex) + (1 << 30)
+        free = free_bytes(self.scratch)
+        if free < want + FLOOR:
+            raise host.HostError(
+                'translating iOS 27 needs about {} GiB free in {} besides the {} GiB kept free; {} GiB is'.format(
+                    want >> 30, self.scratch, FLOOR >> 30, free >> 30
+                )
+            )
+
+    def translate_system(self, entries):
         """The System volume's delta. Apple's seal no longer describes the volume afterwards; whether the kernel boots
         it re-sealed with a new root snapshot or as the live file system is not decided, so this stops."""
         raise host.HostError(
             'iOS 27: the System volume has {} translated files to apply, but how the kernel boots a changed System '
-            'volume (re-sealed, or its live file system) is not decided yet; nothing past compose was written'.format(
+            'volume (re-sealed, or its live file system) is not decided yet; the image is not finished'.format(
                 len(entries)
             )
         )
 
     def populate(self, size, offset):
-        deltas = self.deltas()
+        roles = self.roles()
+        self.check_translate_space(roles)
         disk = compose.attach_raw(self.image, self.log)
         try:
             container = host.container_on(disk + 's1')
@@ -116,22 +136,23 @@ class Stages:
             dev = {k: vols.get(v['uuid']) for k, v in self.spec['volumes'].items()}
             if not all(dev.values()):
                 raise host.HostError("the composed container's volumes did not attach: {}".format(dev))
-            if 'os' in deltas:
-                self.translate_system(dev['system'], deltas['os'])
-            sources, expected = self.cryptexes(deltas)
             with (
                 cards.mounted(dev['system'], self.log, read_only=True) as system,
                 cards.mounted(dev['data'], self.log, owners=True) as data,
                 cards.mounted(dev['preboot'], self.log, owners=True) as preboot,
             ):
+                system_entries = roles.run('os', system) if roles and 'os' in roles else None
+                sources, expected = self.cryptexes(roles)
                 populate.seed_data(system, data, True, self.log, reseed=True)
-                if 'os' in deltas:
-                    delta.apply(data, delta.entries_under(deltas['os'], '/private/var'), self.log, 'Data')
+                if system_entries is not None:
+                    delta.apply(data, delta.entries_under(system_entries, '/private/var'), self.log, 'Data')
                 populate.stage_cryptexes(preboot, self.spec, self.pins, sources, True, self.log, expected)
                 cards.sync_overlay(data, self.args.boot_package, self.log)
                 populate.stage_gpu(data, self.args.gpu_stager, self.args.gpu_base, self.log)
                 if self.args.shader_seed:
                     populate.merge_tree(self.args.shader_seed, data, True, self.log, 'shader seed')
+                if system_entries is not None:
+                    self.translate_system(system_entries)
             host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=self.log, check=False)
             compose.fsck(disk + 's1', 'image', self.log)
         finally:

@@ -47,12 +47,10 @@ INPUTS = (
     'shader_seed_size',
     'install_payload',
 )
-DELTAS = ('os', 'system_cryptex', 'app_cryptex')
 PAYLOAD = 'bootloader/payloads/install-ios.bin'
 MIN_BYTES = 16 << 30
 HEADROOM = 4 << 30
 DATA_SEED_BYTES = 1 << 30
-FLOOR = 14 << 30
 
 
 def parse_size(text):
@@ -62,17 +60,32 @@ def parse_size(text):
     return int(found.group(1)) << {'': 0, 'm': 20, 'g': 30}[found.group(2).lower()]
 
 
-def resolve_inputs(args):
+def runfiles():
     try:
-        from python.runfiles import runfiles
+        from python.runfiles import runfiles as rules_python_runfiles
 
-        locate = runfiles.Create()
+        return rules_python_runfiles.Create()
     except ImportError:
-        locate = None
+        return None
+
+
+def resolve_inputs(args):
+    locate = runfiles()
+
+    def where(value):
+        return os.path.abspath(locate.Rlocation(value) or value if locate and not os.path.isabs(value) else value)
+
+    args.pretranslate = {}
     for listing in args.inputs or []:
-        path = locate.Rlocation(listing) if locate and not os.path.isabs(listing) else listing
-        for name, value in json.loads(Path(path).read_text()).items():
-            if not getattr(args, name, None):
+        for name, value in json.loads(Path(where(listing)).read_text()).items():
+            if name == 'pretranslate':
+                for role, spec in value.items():
+                    args.pretranslate[role] = {
+                        'driver': where(spec['driver']),
+                        'tool': where(spec['tool']),
+                        'trustcaches': [where(f) for f in spec['trustcaches']],
+                    }
+            elif not getattr(args, name, None):
                 setattr(args, name, value)
     for name in INPUTS:
         value = getattr(args, name, None)
@@ -81,13 +94,6 @@ def resolve_inputs(args):
         setattr(args, name, os.path.abspath(value) if value else None)
     if args.gpu_base and os.path.isfile(args.gpu_base):
         args.gpu_base = os.path.dirname(args.gpu_base)
-    args.deltas = {}
-    for role in DELTAS:
-        value = getattr(args, 'delta_' + role, None)
-        if value:
-            value = os.path.abspath(locate.Rlocation(value) if locate and not os.path.isabs(value) else value)
-            setattr(args, 'delta_' + role, value)
-            args.deltas[role] = value
 
 
 def switch_cards():
@@ -228,16 +234,20 @@ class Builder:
         if size < want:
             raise cards.Refused('the partition is {} bytes; this iOS needs at least {}'.format(size, want))
         free = stages.free_bytes(self.args.scratch)
-        if free < want + FLOOR:
+        if free < want + stages.FLOOR:
             raise host.HostError(
                 '{} has {} GiB free; composing needs about {} GiB and leaves {} GiB'.format(
-                    self.args.scratch, free >> 30, want >> 30, FLOOR >> 30
+                    self.args.scratch, free >> 30, want >> 30, stages.FLOOR >> 30
                 )
             )
 
     def finish(self, out, m):
         record = {'label': m.label, 'partition_bytes': m.partition_bytes, 'boot': stages.boot_record(self.args)}
         (Path(out) / folder.MARKER).write_text(json.dumps(record, indent=2) + '\n')
+        kept = Path(self.args.scratch) / 'pretranslated'
+        if kept.is_dir():
+            shutil.copytree(kept, Path(out) / 'pretranslated', dirs_exist_ok=True)
+            shutil.rmtree(kept)
         stages.add_boot(out, self.args, PAYLOAD)
         stages.give_back(out)
 
@@ -267,12 +277,18 @@ def allocated(path):
 
 
 def reexec_as_root(args):
-    command = ['sudo', '--', sys.executable, os.path.abspath(__file__)]
+    """The same run under sudo. The runfiles variables go along: the inputs are found, and so are the runfiles of the
+    pretranslate drivers it starts (sudo clears the environment)."""
+    locate = runfiles()
+    env = ['{}={}'.format(k, v) for k, v in sorted((locate.EnvVars() if locate else {}).items())]
+    command = ['sudo', '--', '/usr/bin/env', *env, sys.executable, os.path.abspath(__file__)]
     for key, value in sorted(vars(args).items()):
-        if key in ('inputs', 'deltas'):
+        if key == 'pretranslate':
             continue
         flag = '--' + key.replace('_', '-')
-        if value is True:
+        if key == 'inputs':
+            command += ['{}={}'.format(flag, v) for v in value or []]
+        elif value is True:
             command.append(flag)
         elif value not in (None, False):
             command.append('{}={}'.format(flag, value))
@@ -299,7 +315,7 @@ def main(argv=None):
     parser.add_argument('--scratch', help='where the container is composed (needs its size in free space, sparse)')
     parser.add_argument('--log')
     parser.add_argument('--inputs', action='append', help='a JSON file of the inputs below (//install:image_inputs)')
-    for name in INPUTS + tuple('delta_' + role for role in DELTAS):
+    for name in INPUTS:
         parser.add_argument('--' + name.replace('_', '-'))
     args = parser.parse_args(argv)
     resolve_inputs(args)

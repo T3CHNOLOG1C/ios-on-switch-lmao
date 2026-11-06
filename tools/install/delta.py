@@ -1,6 +1,6 @@
 """A pretranslated delta (//translate/arm64e/pretranslate, iOS 27) applied to a mounted volume.
 
-The manifest lists [{"path": volume path, "file": replacement, relative to the manifest, "sha256_in",
+The manifest's "files" list [{"path": volume path, "file": replacement, relative to the manifest, "sha256_in",
 "sha256_out"}]. Each file is rewritten in place, so its inode, owner, mode, flags and other attributes stay; a
 compressed file is stored uncompressed afterwards.
 """
@@ -21,7 +21,7 @@ class DeltaError(host.HostError):
 
 def load(manifest):
     manifest = Path(manifest)
-    entries = json.loads(manifest.read_text())
+    entries = json.loads(manifest.read_text())['files']
     for e in entries:
         if not e['path'].startswith('/') or '..' in Path(e['path']).parts:
             raise DeltaError('{}: {!r} is not an absolute volume path'.format(manifest, e['path']))
@@ -35,8 +35,9 @@ def entries_under(entries, prefix):
     return [dict(e, path='/' + e['path'][len(prefix) :]) for e in entries if e['path'].startswith(prefix)]
 
 
-def apply(root, entries, log, what):
-    """Rewrite each entry's file below `root`. A file already holding sha256_out is left alone (a resumed run)."""
+def apply(root, entries, log, what, consume=False):
+    """Rewrite each entry's file below `root`. A file already holding sha256_out is left alone (a resumed run).
+    `consume` deletes each replacement once written, so a delta and its volume never both hold the bytes."""
     changed = 0
     for e in entries:
         target = Path(root) / e['path'].lstrip('/')
@@ -59,6 +60,8 @@ def apply(root, entries, log, what):
             os.chflags(target, flags & ~COMPRESSED)
         if cards.sha256_file(target) != e['sha256_out']:
             raise DeltaError('{}: {} does not hold the translated bytes after the write'.format(what, e['path']))
+        if consume:
+            e['source'].unlink()
         changed += 1
     log('{}: {} of {} files translated'.format(what, changed, len(entries)))
     return changed

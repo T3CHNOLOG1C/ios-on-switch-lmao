@@ -138,23 +138,6 @@ alias(
     }),
 )
 
-# iOS 27's pretranslated deltas (r23's //translate/arm64e/pretranslate:os, :system_cryptex, :app_cryptex), once they
-# land.
-label_flag(
-    name = "delta_os",
-    build_setting_default = ":none",
-)
-
-label_flag(
-    name = "delta_system_cryptex",
-    build_setting_default = ":none",
-)
-
-label_flag(
-    name = "delta_app_cryptex",
-    build_setting_default = ":none",
-)
-
 label_flag(
     name = "shader_seed",
     build_setting_default = "//gpu/seed:tree",
@@ -179,11 +162,6 @@ filegroup(
 
 image_inputs(
     name = "image_inputs",
-    deltas = {
-        "app_cryptex": ":delta_app_cryptex",
-        "os": ":delta_os",
-        "system_cryptex": ":delta_system_cryptex",
-    },
     inputs = {
         "boot_package": "//deploy:boot_package",
         "gpu_base": ":image_gpu_base",
@@ -205,6 +183,14 @@ image_inputs(
         "shader_seed_size": ":shader_seed_size",
         "system_cryptex": ":system_cryptex",
     },
+    pretranslated = select({
+        "//ipsw:ios27": [
+            "//translate/arm64e/pretranslate:os",
+            "//translate/arm64e/pretranslate:app_cryptex",
+            "//translate/arm64e/pretranslate:system_cryptex",
+        ],
+        "//conditions:default": [],
+    }),
     tags = ["manual"],
 )
 

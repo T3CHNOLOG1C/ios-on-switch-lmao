@@ -27,8 +27,9 @@ def _attach(image, log):
     return volumes[0], disks[0]
 
 
-def rebuild(source, entries, work_dir, log, what):
-    """`source` cloned into `work_dir` (APFS clones share blocks until written), translated and sealed."""
+def rebuild(source, translate, work_dir, log, what):
+    """`source` cloned into `work_dir` (APFS clones share blocks until written), its delta applied and sealed again.
+    `translate(mount point)` makes the delta from the mounted clone and returns its entries."""
     image = Path(work_dir) / Path(source).name
     if image.exists():
         image.unlink()
@@ -37,7 +38,7 @@ def rebuild(source, entries, work_dir, log, what):
     volume, whole = _attach(image, log)
     try:
         with cards.mounted(volume, log, owners=True) as root:
-            delta.apply(root, entries, log, what)
+            delta.apply(root, translate(root), log, what, consume=True)
             host.run(SEALER, str(root), log=log)
     finally:
         host.run('hdiutil', 'detach', whole, log=log, check=False)

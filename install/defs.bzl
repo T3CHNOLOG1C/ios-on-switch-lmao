@@ -3,6 +3,7 @@
 load("//ipsw:defs.bzl", _ipsw_pins = "ipsw_pins")
 load("//kernel:prelink.bzl", "PRELINK")
 load("//kernel/rules:kernel.bzl", "KernelObjectsInfo")
+load("//translate/arm64e/pretranslate:defs.bzl", "PretranslatedInfo")
 
 # The selected IPSW kind's member pins as JSON (//ipsw:defs.bzl).
 ipsw_pins = _ipsw_pins
@@ -174,22 +175,29 @@ def _image_inputs_impl(ctx):
         if found:
             paths[name] = _rlocation(ctx, found[0])
             files.append(found[0])
-    for role, target in ctx.attr.deltas.items():
-        found = target[DefaultInfo].files.to_list()
-        manifests = [f for f in found if f.basename.endswith(".manifest.json")]
-        if len(manifests) > 1:
-            fail("delta {} ({}) has {} manifests".format(role, target.label, len(manifests)))
-        if manifests:
-            paths["delta_" + role] = _rlocation(ctx, manifests[0])
-            files.extend(found)
+    runfiles = ctx.runfiles(files = [out] + files)
+    roles = {}
+    for target in ctx.attr.pretranslated:
+        info = target[PretranslatedInfo]
+        roles[info.role] = {
+            "driver": _rlocation(ctx, info.driver),
+            "tool": _rlocation(ctx, info.tool),
+            "trustcaches": [_rlocation(ctx, f) for f in info.apple_trustcaches],
+        }
+        runfiles = runfiles.merge(info.runfiles)
+    if roles:
+        paths["pretranslate"] = roles
     ctx.actions.write(out, json.encode_indent(paths) + "\n")
-    return [DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out] + files))]
+    return [DefaultInfo(files = depset([out]), runfiles = runfiles)]
 
 image_inputs = rule(
     implementation = _image_inputs_impl,
     attrs = {
         "inputs": attr.string_keyed_label_dict(allow_files = True),
-        "deltas": attr.string_keyed_label_dict(doc = "pretranslated deltas by role: their manifest and files"),
+        "pretranslated": attr.label_list(
+            providers = [PretranslatedInfo],
+            doc = "iOS 27's pretranslate drivers, run by the composer over each mounted volume",
+        ),
     },
     doc = "{input name: runfiles path} as JSON for tools/install/image.py, with the inputs in runfiles; an empty " +
           "input (a label_flag left at :none) is left out.",

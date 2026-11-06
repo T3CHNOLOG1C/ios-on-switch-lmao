@@ -24,6 +24,7 @@ py_library(
         "manifest.py",
         "pack.py",
         "populate.py",
+        "pretranslate.py",
         "renamed.py",
         "stages.py",
         "target.py",
@@ -172,5 +173,12 @@ py_test(
     name = "delta_test",
     size = "small",
     srcs = ["delta_test.py"],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "pretranslate_test",
+    size = "small",
+    srcs = ["pretranslate_test.py"],
     deps = [":lib"],
 )

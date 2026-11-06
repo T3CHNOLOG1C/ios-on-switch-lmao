@@ -56,12 +56,10 @@ def add_boot_package(out, package):
 
 
 def files(out):
+    """What of the folder goes onto the card: the paths it may hold, never what is kept beside them for the Mac."""
     out = Path(out)
-    return sorted(
-        p.relative_to(out).as_posix()
-        for p in out.rglob('*')
-        if p.is_file() and p.name != MARKER and not p.name.startswith('._')
-    )
+    found = (p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file() and not p.name.startswith('._'))
+    return sorted(relative for relative in found if _allowed(relative))
 
 
 def needed_bytes(out, fat_root):
