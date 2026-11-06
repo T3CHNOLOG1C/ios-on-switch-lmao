@@ -31,6 +31,11 @@ enum : uint32_t {
     VERTEX_ARRAY_START = 0x0d74,
     COLOR_CLEAR_VALUE = 0x0d80,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
+    PIXEL_SHADER_BARRIER = 0x0de0,
+    // Not in NVIDIA's published class headers: the texture data cache invalidate that NVN (deko3d's ORDER_FRAGMENTS
+    // barrier) and NVIDIA's Linux driver put after PIXEL_SHADER_BARRIER, which orders it after the earlier pixels. The
+    // _NO_WFI form acts as the front end reads it, while those pixels may still be shading or in the ROP.
+    INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED = 0x0f74,
     SCISSOR_ENABLE = 0x0e00,
     SURFACE_CLIP_H = 0x0ff4,
     CLEAR_SURFACE_CONTROL = 0x10f8,
@@ -2120,7 +2125,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     countRules(*pl);
 #endif
     // framebuffer fetch reads a color attachment through the texture unit: a barrier where a draw since the last one wrote a
-    // color this draw fetches (m2v's barrier, 0106, follows any color write: the ROP writes only the colors SET_CT_WRITE opens)
+    // color this draw fetches (m2v's barrier, 0106, follows any color write: the ROP writes only the colors SET_CT_WRITE opens).
+    // The barrier holds this draw's pixel shading until the earlier pixels have left the ROP; vertex work and rasterization
+    // go on (NVK's for a color-output to fragment-read dependency, as NVIDIA's drivers order one)
     if (pl->fetchBits & writtenBits_) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         dev_->stats.fetchBarriers++;
@@ -2129,8 +2136,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         writtenCount_ = 0;
         writtenFull_ = false;
 #endif
-        p.m(WAIT_FOR_IDLE, 0);
-        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+        p.m(PIXEL_SHADER_BARRIER, 0);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
         writtenBits_ = 0;
     }
     if (first != first_ || baseInstance != baseInstance_) {

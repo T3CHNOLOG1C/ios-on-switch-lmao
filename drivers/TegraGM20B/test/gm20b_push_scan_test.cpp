@@ -143,6 +143,18 @@ TEST(GM20BPushScan, MultisampledPassCopyClearDispatch)
 	CHECK(b.cls[3] == TGM_PC_COMPUTE);
 }
 
+// A framebuffer fetch's barrier as NVIDIA orders it (PIXEL_SHADER_BARRIER, then the texture invalidate 0x0f74 it
+// orders), and a state that turns the pixel interlock on (pixel conflicts, ordered) and one that turns it off.
+TEST(GM20BPushScan, PixelShaderBarrierAndInterlock)
+{
+	Push s0 = {immd(0, 0x0de0, 0), immd(0, 0x0f74, 0)};
+	Push s1 = {immd(0, 0x1224, 2), immd(0, 0x1224, 0)};
+	Result e = scan({&s0, &s1});
+	CHECK(e.c.psBarriers == 1 && e.c.texInval == 1 && e.c.wfi == 0);
+	CHECK(e.c.interlocks == 1);
+	CHECK(e.cls[0] == TGM_PC_SYNC && e.cls[1] == TGM_PC_STATE);
+}
+
 TEST(GM20BPushScan, UnreadablePushEndsTheStamps)
 {
 	const CoreAnimation ca;
