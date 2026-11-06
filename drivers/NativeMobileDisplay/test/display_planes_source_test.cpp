@@ -88,7 +88,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_THAT(kick, Not(HasSubstr("+ 2624")));  // window A's surface is the effective UI layer, not layer 0's slot
     const std::string decide =
         Function(planes, "void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)\n");
-    EXPECT_THAT(decide, HasSubstr("NativePlanes::kEffective"));
+    EXPECT_THAT(decide, HasSubstr("swapEffectiveSurfaces"));
     EXPECT_THAT(decide, HasSubstr("NativePlanes::rolesOf("));
     // Window B goes out with window A in one UPDATE write and one ACT_REQ write.
     const std::string flip = Method(source, "    void writeFlip(int i)\n");

@@ -3,8 +3,10 @@
 // sources and their tags are in NativePlanes.h; the members this uses are declared after the direct-scanout ones. Everything
 // here runs under the family's work-loop gate.
 
+#include "NativeLegacySwapQueue.h"
+
 // The layers the screen has, as the kicks took them: each layer's surface and geometry (a layer a swap does not update keeps
-// what an earlier swap gave it, as the family's effective surfaces at 0xa60 do).
+// what an earlier swap gave it, as the family's effective surfaces (swapEffectiveSurfaces) do).
 struct PlaneLayerRecord {
     OSObject *surface;
     NativePlanes::Layer layer;
@@ -66,9 +68,9 @@ static NativePlanes::Layer planeLayerOf(const unsigned char *bytes, unsigned i, 
     NativePlanes::Layer l;
     l.surface = planeSurfaceOf(surface);
     l.kind = NativePlanes::kindOf(l.surface.format, l.surface.planes);
-    l.src = NativePlanes::rectAt(bytes, NativePlanes::kSrcRect, i);
-    l.dst = NativePlanes::rectAt(bytes, NativePlanes::kDstRect, i);
-    l.transform = NativePlanes::wordAt(bytes, NativePlanes::kTransform + 4 * i) & 7;
+    l.src = NativePlanes::rectAt(bytes, swapSourceRects, i);
+    l.dst = NativePlanes::rectAt(bytes, swapDestinationRects, i);
+    l.transform = NativePlanes::wordAt(bytes, swapTransforms + 4 * i) & 7;
     return l;
 }
 
@@ -96,14 +98,14 @@ void planeDecide(const OriginalLegacySwapRequest *request, PlaneDecision &d)
 {
     d = {};
     const unsigned char *bytes = reinterpret_cast<const unsigned char *>(request);
-    const uint32_t updated = NativePlanes::wordAt(bytes, NativePlanes::kUpdated);
+    const uint32_t updated = NativePlanes::wordAt(bytes, swapUpdated);
     // The real driver takes a swap only once every updated layer's IOSurface fence signalled (UnifiedPipeline's kick waits
     // for 0x318 == 0x31c [V]). Here the GPU's work on the UI is ordered by the fence-only present, and the decoder's frames
     // are in DRAM before Core Animation has them; a mismatch is only counted [I: no IOSurface fence here is ever pending].
-    if (stats && ((updated ^ NativePlanes::wordAt(bytes, NativePlanes::kReady)) & NativePlanes::kLayerBits))
+    if (stats && ((updated ^ NativePlanes::wordAt(bytes, swapReady)) & NativePlanes::kLayerBits))
         ++stPlaneUnready;
     OSObject *effective[NativePlanes::kLayers];
-    memcpy(effective, bytes + NativePlanes::kEffective, sizeof(effective));
+    memcpy(effective, bytes + swapEffectiveSurfaces, sizeof(effective));
     uint32_t width = 0, height = 0;
     getDisplayDimensions(&width, &height);
     bool present[NativePlanes::kLayers] = {};

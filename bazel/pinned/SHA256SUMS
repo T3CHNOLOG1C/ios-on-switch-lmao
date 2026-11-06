@@ -1,5 +1,3 @@
-34bddaa2b01303732d26878eca684afdccf800b2869ea5c4028b80559cafc929  kernel/native-legacy-display/original-bindings.S
-5cac548c5dad7030bb9585a89fd780ebc93fe87e3024bab794903ecd345d761d  kernel/native-legacy-display/OriginalLegacyFramebufferABI.h
 6da0fed6adc06f9efc36fddb24233c683571b2e8343fa9e6661d77b35883be4b  kernel/verified-root-switch/trusted-key.S
 fb156d6164613125844512e4d68ca6c6aed966da9e730c871b825229b53fef8d  data-seed/data-v10.dbr
 dea0ecd406cd110b8d475641900ed23223d24d32dd5cef4d8a9ea2459c34e2b4  firmware/bl31.bin

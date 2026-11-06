@@ -614,7 +614,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     void pruneValidated()
     {
         const OriginalLegacySwapRequest *current = nullptr;
-        memcpy(&current, reinterpret_cast<const unsigned char *>(this) + 5472, sizeof(current));
+        memcpy(&current, reinterpret_cast<const unsigned char *>(this) + swapQueueCurrent, sizeof(current));
         uint64_t second;
         nanoseconds_to_absolutetime(1000000000ull, &second);
         const uint64_t now = mach_absolute_time();
@@ -637,13 +637,13 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                   evicted, validatedStale);
     }
 
-    // The request queued behind this one in the family's tail queue (each request's next at +2960, OriginalLegacyFramebufferABI.h
+    // The request queued behind this one in the family's tail queue (each request's next at swapNext; NativeLegacySwapQueue.h
     // activateOnlyPendingSwap), or none.
     static const OriginalLegacySwapRequest *queuedAfter(const OriginalLegacySwapRequest *request)
     {
         const OriginalLegacySwapRequest *next = nullptr;
         if (request)
-            memcpy(&next, reinterpret_cast<const unsigned char *>(request) + 2960, sizeof(next));
+            memcpy(&next, reinterpret_cast<const unsigned char *>(request) + swapNext, sizeof(next));
         return next;
     }
 
@@ -684,7 +684,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint64_t gpuDoneAt = 0;       // the frame timeline: when it came
     static constexpr unsigned kGpuCopyDeadlineMS = 1000;
     // The refresh tick runs on the family's work loop, the loop of the command gate that registers and removes the vsync clients, so the
-    // client queue at +5592 never changes while the sender walks it.
+    // client queue (vsyncClientList) never changes while the sender walks it.
     IOTimerEventSource *vsyncTimer = nullptr;
     uint64_t vsyncInterval = 0, vsyncNext = 0;
     unsigned vsyncHz = 0;
@@ -1148,7 +1148,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool vsyncWanted() const
     {
         const void *head = nullptr;
-        memcpy(&head, reinterpret_cast<const unsigned char *>(this) + 5592, sizeof(head));
+        memcpy(&head, reinterpret_cast<const unsigned char *>(this) + vsyncClientList, sizeof(head));
         return head;
     }
 
@@ -3044,10 +3044,12 @@ public:
         OSSafeReleaseNULL(bootMapping);
     }
 
-    // The panel is already lit by the firmware's GOP framebuffer, which is the one thing the original code's power-state word (display+5840,
-    // the "powered" half of the state pair next to +5836) is meant to say; the platform subclass that normally writes it is not part of this
-    // port, so without it the user client's wait (selector 6) answers kIOReturnBusy forever and the compositor never presents. This is the
-    // original state setter (virtual 354, the one the original code calls with this same request shape) with only the powered word named.
+    // The panel is already lit by the firmware's GOP framebuffer, which is the one thing the original code's power-state word (the
+    // "powered" half of its requested/powered state pair) is meant to say; the platform subclass that normally writes it is not part of
+    // this port, so without it the user client's wait (selector 6) answers kIOReturnBusy forever and the compositor never presents. This
+    // is the original state setter, called with the request shape the original code uses, with only the powered word named: it stores
+    // each word not skipped that differs from the framebuffer's and, when one did, announces the change (the original's own virtual
+    // call), which is what wakes that wait.
     void announcePoweredByFirmware()
     {
         struct StateRequest {
@@ -3056,9 +3058,7 @@ public:
             uint8_t pad[11];
         } request = {1, 0, 0, 1, 1, {}};
 
-        typedef int (*Setter)(void *, StateRequest *, bool);
-        Setter setter = reinterpret_cast<Setter *>(*reinterpret_cast<void **>(this))[354];
-        setter(this, &request, false);
+        setDisplayPowerState(&request, false);
     }
 
     bool start(IOService *provider) override
@@ -4347,12 +4347,12 @@ public:
         bool accepted = false;
         if (logicalPM && primary && bootMapping && request) {
             OSObject *surfaces[NativePlanes::kLayers] = {};
-            memcpy(surfaces, bytes + NativePlanes::kSurfaces, sizeof(surfaces));
+            memcpy(surfaces, bytes + swapSurfaces, sizeof(surfaces));
             uint32_t width = 0, height = 0;
             getDisplayDimensions(&width, &height);
-            const uint32_t updated = word(NativePlanes::kUpdated), background = word(NativePlanes::kBackground);
+            const uint32_t updated = word(swapUpdated), background = word(swapBackground);
             bool options = true;
-            for (unsigned offset = 804; offset <= 812; offset += 4)
+            for (unsigned offset = swapOptions; offset <= swapOptions + 8; offset += 4)
                 options = options && word(offset) == 0;
             bool hasSurface[NativePlanes::kLayers] = {}, any = false, objects = true;
             NativePlanes::Layer layers[NativePlanes::kLayers];
@@ -4367,13 +4367,13 @@ public:
                 if (objects)
                     layers[i] = planeLayerOf(bytes, i, surfaces[i]);
             }
-            if (!width || !height || !options || word(816) != width || word(820) != height)
+            if (!width || !height || !options || word(swapSize) != width || word(swapSize + 4) != height)
                 reason = 3;
             else if (!objects)
                 reason = 4;
             else if (!any) {
                 // No surface in any slot and every updated layer disabled over black: present a blank screen.
-                reason = native_legacy_blank_state(updated, word(NativePlanes::kReady), background) ? 5 : 2;
+                reason = native_legacy_blank_state(updated, word(swapReady), background) ? 5 : 2;
                 accepted = reason == 5;
             } else {
                 reason = NativePlanes::checkUpdated(updated, background, hasSurface, layers, width, height);
@@ -4670,18 +4670,18 @@ public:
         publish("IOMFBNumLayers", layers, 1, 32);
     }
 
-#define LEAF(n)                                                            \
-    __attribute__((noreturn, noinline)) void opaque##n() override          \
+#define LEAF(name, n)                                                      \
+    __attribute__((noreturn, noinline)) void name() override               \
     {                                                                      \
         native_legacy_backend_guard(n, this, __builtin_return_address(0)); \
     }
-    LEAF(211)
-    LEAF(245)
-    LEAF(246)
-    LEAF(306)
-    LEAF(307)
-    LEAF(338)
-    LEAF(345)
+    LEAF(platformPipeForward, 211)
+    LEAF(platformInternalPlug, 245)
+    LEAF(platformInternalUnplug, 246)
+    LEAF(platformColorRemap, 306)
+    LEAF(platformHotPlug, 307)
+    LEAF(platformRefreshRates, 338)
+    LEAF(platformIdleWithoutClients, 345)
 #undef LEAF
 };
 

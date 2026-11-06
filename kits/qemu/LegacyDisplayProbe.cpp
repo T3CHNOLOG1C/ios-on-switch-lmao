@@ -18,6 +18,7 @@
 #include <pexpert/pexpert.h>
 #include <mach/kmod.h>
 #include <machine/machine_routines.h>
+#include "OriginalLegacyFramebufferABI.h"
 extern "C" kmod_info_t g_kernel_kmod_info;
 extern "C" void native_legacy_display_static_init(void) __asm__("__GLOBAL__sub_I_NativeLegacyDisplay.cpp");
 extern "C" IOService *native_legacy_display_allocate(void);
@@ -188,15 +189,14 @@ __attribute__((noinline)) void native_legacy_swap_validation_checkpoint(bool, un
     __asm__ volatile("" ::: "memory");
 }
 
-// Last rejected swap request, copied from the original request layout the validator reads (offsets
-// qualified in NativeLegacyDisplay::validateSwap). Observation only; nothing here changes the verdict.
+// Last rejected swap request, at the request offsets validateSwap reads. Observation only; it changes no verdict.
+using Legacy = IOMobileFramebufferLegacy;
 volatile uint32_t native_legacy_swap_accepted_count, native_legacy_swap_rejected_count, native_legacy_rej_reason;
 volatile uint64_t native_legacy_rej_surfaces[4];
 volatile uint32_t native_legacy_rej_state[3], native_legacy_rej_options[3], native_legacy_rej_size[2],
     native_legacy_rej_rects[2][4];
 char native_legacy_rej_class[32];
-volatile uint64_t native_legacy_rej_surface
-    [7];  // width, height, format, planes, stride, allocation, descriptor bytes of the last rejected surface
+volatile uint64_t native_legacy_rej_surface[7];  // width, height, format, planes, stride, allocation, descriptor bytes
 
 void native_legacy_surface_rejected(uint64_t width, uint64_t height, uint32_t format, uint32_t planes, uint64_t stride,
                                     uint64_t allocation, uint64_t bytes)
@@ -217,23 +217,23 @@ static void recordRejectedSwap(unsigned reason, const void *request, const void 
         return;
     native_legacy_rej_reason = reason;
     uint64_t surfaces[4] = {};
-    memcpy(surfaces, bytes + 2624, sizeof(surfaces));
+    memcpy(surfaces, bytes + Legacy::swapSurfaces, sizeof(surfaces));
     for (unsigned i = 0; i < 4; ++i)
         native_legacy_rej_surfaces[i] = surfaces[i];
-    const unsigned stateOffsets[3] = {792, 796, 800}, optionOffsets[3] = {804, 808, 812};
+    const unsigned long state = Legacy::swapUpdated, options = Legacy::swapOptions;
     for (unsigned i = 0; i < 3; ++i) {
         uint32_t a = 0, b = 0;
-        memcpy(&a, bytes + stateOffsets[i], 4);
-        memcpy(&b, bytes + optionOffsets[i], 4);
+        memcpy(&a, bytes + state + 4 * i, 4);
+        memcpy(&b, bytes + options + 4 * i, 4);
         native_legacy_rej_state[i] = a;
         native_legacy_rej_options[i] = b;
     }
     uint32_t w = 0, h = 0;
-    memcpy(&w, bytes + 816, 4);
-    memcpy(&h, bytes + 820, 4);
+    memcpy(&w, bytes + Legacy::swapSize, 4);
+    memcpy(&h, bytes + Legacy::swapSize + 4, 4);
     native_legacy_rej_size[0] = w;
     native_legacy_rej_size[1] = h;
-    const unsigned rectOffsets[2] = {17, 81};
+    const unsigned rectOffsets[2] = {Legacy::swapSourceRects, Legacy::swapDestinationRects};
     for (unsigned r = 0; r < 2; ++r) {
         uint32_t rect[4] = {};
         memcpy(rect, bytes + rectOffsets[r], sizeof(rect));
@@ -476,11 +476,11 @@ __attribute__((noinline)) void native_legacy_retirement_observed(IOService *disp
     const unsigned char *bytes = reinterpret_cast<const unsigned char *>(display);
     uint64_t current = 0, pending = 0;
     uint32_t completed = 0, presented = 0, frames = 0;
-    memcpy(&current, bytes + 5472, 8);
-    memcpy(&pending, bytes + 5480, 8);
-    memcpy(&completed, bytes + 5820, 4);
-    memcpy(&presented, bytes + 5824, 4);
-    memcpy(&frames, bytes + 252, 4);
+    memcpy(&current, bytes + Legacy::swapQueueCurrent, 8);
+    memcpy(&pending, bytes + Legacy::swapQueueHead, 8);
+    memcpy(&completed, bytes + Legacy::swapsCompleted, 4);
+    memcpy(&presented, bytes + Legacy::swapsPresented, 4);
+    memcpy(&frames, bytes + Legacy::framesCompleted, 4);
     native_legacy_retired_current = current;
     native_legacy_retired_pending = pending;
     native_legacy_retired_generation = completed;
@@ -620,8 +620,8 @@ static IOReturn wrappedExternal(IOUserClient *client, uint32_t selector, IOExter
                 const unsigned char *object = reinterpret_cast<const unsigned char *>(native_legacy_object);
                 e.done = e.presented = 0;
                 if (object) {
-                    memcpy(&e.done, object + 5820, 4);
-                    memcpy(&e.presented, object + 5824, 4);
+                    memcpy(&e.done, object + Legacy::swapsCompleted, 4);
+                    memcpy(&e.presented, object + Legacy::swapsPresented, 4);
                 }
             }
             if (at >= 0) {

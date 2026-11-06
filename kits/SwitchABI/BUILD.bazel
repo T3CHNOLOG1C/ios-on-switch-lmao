@@ -162,6 +162,11 @@ switch_abi_class(
     header = False,
 )
 
+switch_abi_class(
+    "IOMobileFramebufferLegacy",
+    header_name = "OriginalLegacyFramebufferABI.h",
+)
+
 switch_abi_class("IOUSBDeviceController")
 
 switch_abi_class("IOWatchdog")

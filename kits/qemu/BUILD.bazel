@@ -81,6 +81,7 @@ kernel_driver(
         "HidInputProbe.cpp",
         "TouchState.cpp",
     ],
+    abi = ["IOMobileFramebufferLegacy"],
     hdr_deps = [
         "drivers/NativeMobileDisplay",
     ],

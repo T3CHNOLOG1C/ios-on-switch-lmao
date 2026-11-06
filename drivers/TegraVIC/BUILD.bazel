@@ -56,6 +56,6 @@ switch_abi_bindings(
     classes = ["//kits/SwitchABI:IOSurface"],
     objects = [
         ":TegraVIC_cc",
-        "//drivers/NativeMobileDisplay:NativeLegacyDisplay_NativeLegacyDisplay_cc",
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay_cc",
     ],
 )

@@ -19,13 +19,14 @@
 //    detached the UI stays the only layer. Background is opaque black. On an internal display a layer that needs a quarter
 //    turn, a scale outside the limits or a conversion is first copied by the IOSurfaceAccelerator (TegraVIC) into a
 //    display-ready surface: no rotated plane ever reaches the kernel.
-// The swap request (IOMobileGraphicsFamily 21H461 IOMFBSwapIORequest; out/agent-scratch/r18-planes/re/kc-re):
-//  - [V] per layer i: IOSurface * at 0xa40 + 8i (updated layers only, at validateSwap), source and destination rectangles as
-//    four int32 x, y, w, h at 0x11 + 16i and 0x51 + 16i, transform at 0x244 + 4i (& 7). 0x318: updated mask (bits 0-3 layers,
-//    bit 31 the background); 0x31c: ready mask (bit i once layer i's IOSurface fence signalled; null layers and bit 31 at
-//    once); 0x320 background colour. After validateSwap the family's enqueue fills the effective surfaces at 0xa60 + 8i, a
-//    layer not updated inheriting the one the queue head, the current swap or the screen holds: a video-only swap (bit 2
-//    alone) is normal. An updated layer with no surface turns that layer off.
+// The swap request (IOMobileGraphicsFamily's IOMFBSwapIORequest; its offsets per IPSW kind are kits/SwitchABI's
+// IOMobileFramebufferLegacy constants):
+//  - [V] per layer i: an IOSurface * (updated layers only, at validateSwap), source and destination rectangles as four
+//    int32 x, y, w, h, and a transform (& 7); the updated mask (bits 0-3 layers, bit 31 the background), the ready mask (bit
+//    i once layer i's IOSurface fence signalled; null layers and bit 31 at once) and the background colour. After
+//    validateSwap the family's enqueue fills the effective surfaces, a layer not updated inheriting the one the queue head,
+//    the current swap or the screen holds: a video-only swap (bit 2 alone) is normal. An updated layer with no surface turns
+//    that layer off.
 //  - [V] A10X (AppleCLCD/UnifiedPipeline): two pipes, at most two layers ("cannot blend more than 2 layers"); the blender takes
 //    layer 2, then 0, then 1 (layer_crossbar 0xfffffff006bd38c4), i.e. bottom to top [I: input 0 is the bottom].
 // DC A (Tegra X1 T210; L4T drivers/video/tegra/dc, mainline drivers/gpu/drm/tegra/dc.c, hekate bdk/display/di.h, all GPL-2.0,
@@ -50,8 +51,6 @@ namespace NativePlanes {
 
 // --- The swap request ---------------------------------------------------------------------------------------------------
 constexpr unsigned kLayers = 4;
-constexpr unsigned kSrcRect = 0x11, kDstRect = 0x51, kTransform = 0x244, kUpdated = 0x318, kReady = 0x31c,
-                   kBackground = 0x320, kSurfaces = 0xa40, kEffective = 0xa60;
 constexpr uint32_t kBackgroundBit = 1u << 31, kLayerBits = 0xfu, kOpaqueBlack = 0xff000000u;
 
 struct Rect {

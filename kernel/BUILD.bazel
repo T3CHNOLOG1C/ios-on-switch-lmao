@@ -6,7 +6,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel:prelink.bzl", "kernel_prelink_switch")
 load("//kernel/rules:firehose.bzl", "kernel_firehose")
 load("//kernel/rules:inputs.bzl", "tool_output")
-load("//kernel/rules:kernel.bzl", "kernel_archive", "kernel_driver", "stage_files")
+load("//kernel/rules:kernel.bzl", "kernel_archive", "kernel_driver")
 load("//kernel/rules:prelink_fileset.bzl", "kernel_prelink_fileset")
 load("//kernel/rules:sdk.bzl", "outer_headers")
 load("//kernel/rules:version.bzl", "xnu_versions")
@@ -164,19 +164,7 @@ outer_headers(
     srcs = [":native_data_seed_header"],
 )
 
-outer_headers(
-    name = "gen_pinned_headers",
-    srcs = [":pinned_headers"],
-)
-
 # --- Generated and pinned inputs, where the CMake flow's -I flags expected them (tree/build/<dir>) -----------------
-stage_files(
-    name = "pinned_headers",
-    files = {
-        "//bazel/pinned:kernel/native-legacy-display/OriginalLegacyFramebufferABI.h": "build/native-legacy-display/OriginalLegacyFramebufferABI.h",
-    },
-)
-
 tool_output(
     name = "storage_abi",
     srcs = ["@iostoragefamily//:all"],

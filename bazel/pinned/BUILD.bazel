@@ -4,8 +4,8 @@
 #
 #   kernel/*/original-bindings.S, kernel/*/*ABI.h
 #       Absolute-address tables into the 21H461 kernelcache and ABI headers, written by the kernel tree's audit scripts
-#       (build-switch-root-block.py, build-native-legacy-display.py, build-native-hid-input.py, all retired) from
-#       QEMU-boot interface audits that cannot run in a sandbox.
+#       (build-switch-root-block.py, build-native-hid-input.py, all retired) from QEMU-boot interface audits that cannot
+#       run in a sandbox.
 #   kernel/verified-root-switch/trusted-key.S
 #       The owner verification key (openssl, never regenerated).
 #   data-seed/data-v10.dbr

@@ -8,7 +8,8 @@
 #                                       the frame scans and colour counts, IOSurface bounds, the bounded row copy
 #   native_legacy_display_source_test   how NativeLegacyDisplay.cpp drives the ring, direct scanout, the vsync phase and
 #                                       the probe, and hangs its panic restore on SwitchDiag's hook (the driver itself
-#                                       is not built for the host)
+#                                       is not built for the host); iOS 17's IOMobileFramebufferLegacy table keeps its
+#                                       values
 #   display_planes_test                 NativePlanes.h (r18-planes): every swap Core Animation can build from the
 #                                       published limits accepted (200000 swaps), the refusals, window B's registers
 #                                       against drm/tegra's formulas, the CSC table, the layer roles, PlaneLatch
@@ -65,6 +66,7 @@ host_test(
         "//diagnostics/switch:SwitchDiag.c",
         "//diagnostics/switch:SwitchPanicSave.c",
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//kits/SwitchABI:kinds/21H461/IOMobileFramebufferLegacy.json",
     ],
 )
 

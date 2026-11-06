@@ -2,6 +2,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 
 # drivers/NativeMobileDisplay: moved from out/native-a57/root-v1/tree/drivers/NativeMobileDisplay by the layout move.
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//kits/SwitchABI:defs.bzl", "switch_abi_bindings")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -34,10 +35,13 @@ kernel_driver(
         "NativeLegacyDisplay.cpp",
         # The display across SC7 (tegra_display_suspend/resume): hekate's cold display init/power-down.
         "TegraDisplayPower.cpp",
-        "//bazel/pinned:kernel/native-legacy-display/original-bindings.S",
+        "original-bindings.S",
     ],
-    # The IOSurface accessors (the surfaces' and the hardware planes'): TegraVIC's original-bindings.S binds them.
-    abi = ["IOSurface"],
+    # IOSurface's accessors (the surfaces' and the hardware planes') are bound by TegraVIC's original-bindings.S.
+    abi = [
+        "IOMobileFramebufferLegacy",
+        "IOSurface",
+    ],
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/SwitchPower",
@@ -48,10 +52,13 @@ kernel_driver(
         "drivers/TegraVIC",
     ],
     late = ["NativeLegacyDisplay.cpp"],
-    src_copts = {"NativeLegacyDisplay.cpp": [
-        "-I",
-        "{build}/native-legacy-display",
-    ]},
+)
+
+switch_abi_bindings(
+    name = "original_bindings",
+    out = "original-bindings.S",
+    classes = ["//kits/SwitchABI:IOMobileFramebufferLegacy"],
+    objects = [":NativeLegacyDisplay_cc"],
 )
 
 kernel_driver(

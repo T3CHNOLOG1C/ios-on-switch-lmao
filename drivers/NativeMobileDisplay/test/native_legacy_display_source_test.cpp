@@ -238,3 +238,25 @@ TEST(DisplayStatsSource, QuietDisplayWindowsAreLogged)
     expectBefore(stats, "SwitchDisplay: quiet display: ", "stSwaps = stVsyncs = ");
     expectBefore(stats, "SwitchDisplay: quiet display: ", "if (logged)\n            os_log(");
 }
+
+// iOS 17's layout of the original framebuffer is the one this driver always ran on: its table must keep these values, or
+// an iOS 17 kernel would read the swap queue and the swap requests somewhere else.
+TEST(LegacyFramebufferTable, Ios17ValuesStayPut)
+{
+    const std::string table = SourceText("../../../kits/SwitchABI/kinds/21H461/IOMobileFramebufferLegacy.json");
+    const std::string constants = Between(table, "\"constants\": {", "}");
+    for (const char *entry :
+         {"\"swapQueueCurrent\": \"0x1560\"", "\"swapQueueHead\": \"0x1568\"", "\"swapQueueTail\": \"0x1570\"",
+          "\"swapNext\": \"0xb90\"", "\"swapPrevious\": \"0xb98\"", "\"swapSourceRects\": \"0x11\"",
+          "\"swapDestinationRects\": \"0x51\"", "\"swapTransforms\": \"0x244\"", "\"swapUpdated\": \"0x318\"",
+          "\"swapReady\": \"0x31c\"", "\"swapBackground\": \"0x320\"", "\"swapOptions\": \"0x324\"",
+          "\"swapSize\": \"0x330\"", "\"swapSurfaces\": \"0xa40\"", "\"swapEffectiveSurfaces\": \"0xa60\"",
+          "\"vsyncClientList\": \"0x15d8\"", "\"swapsCompleted\": \"0x16bc\"", "\"swapsPresented\": \"0x16c0\"",
+          "\"framesCompleted\": \"0xfc\""})
+        EXPECT_THAT(constants, HasSubstr(entry));
+    const std::string fields = Between(table, "\"fields\": {", "}");
+    EXPECT_THAT(fields, HasSubstr("\"displayWidth\": \"0x16b0\""));
+    EXPECT_THAT(fields, HasSubstr("\"displayHeight\": \"0x16b4\""));
+    EXPECT_THAT(table, HasSubstr("\"size\": \"0x18a0\""));
+    EXPECT_THAT(table, HasSubstr("\"slots\": 358"));
+}

@@ -1,0 +1,237 @@
+{
+  "class": "IOMobileFramebufferLegacy",
+  "doc": "The original IOMobileFramebufferLegacy (com.apple.iokit.IOMobileGraphicsFamily, below IOMobileFramebufferService and IOMobileFramebuffer): the family's swap queue, user client and power states, which NativeLegacyDisplay subclasses in place of Apple's platform display driver. Its virtuals beyond IOService's carry no PAC name we know, so each kind's table places them by hint.",
+  "superclass": "IOService",
+  "kext": "com.apple.iokit.IOMobileGraphicsFamily",
+  "structors": "abstract",
+  "header_name": "OriginalLegacyFramebufferABI.h",
+  "bind": "imports",
+  "includes": [
+    "IOKit/IOService.h",
+    "libkern/libkern.h"
+  ],
+  "declarations": [
+    "struct OriginalLegacySwapRequest;"
+  ],
+  "methods": {
+    "free": {
+      "decl": "void free() override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy4freeEv",
+      "pac": "_ZN8OSObject4freeEv"
+    },
+    "init": {
+      "decl": "bool init(OSDictionary *properties = nullptr) override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy4initEP12OSDictionary",
+      "pac": "_ZN15IORegistryEntry4initEP12OSDictionary"
+    },
+    "setProperties": {
+      "decl": "IOReturn setProperties(OSObject *) override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy13setPropertiesEP8OSObject",
+      "pac": "_ZN15IORegistryEntry13setPropertiesEP8OSObject"
+    },
+    "systemWillShutdown": {
+      "decl": "void systemWillShutdown(IOOptionBits) override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy18systemWillShutdownEj",
+      "pac": "_ZN9IOService18systemWillShutdownEj"
+    },
+    "probe": {
+      "decl": "IOService *probe(IOService *, SInt32 *) override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy5probeEP9IOServicePi",
+      "pac": "_ZN9IOService5probeEPS_Pi"
+    },
+    "start": {
+      "decl": "bool start(IOService *) override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy5startEP9IOService",
+      "pac": "_ZN9IOService5startEPS_"
+    },
+    "stop": {
+      "decl": "void stop(IOService *) override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy4stopEP9IOService",
+      "pac": "_ZN9IOService4stopEPS_"
+    },
+    "getWorkLoop": {
+      "decl": "IOWorkLoop *getWorkLoop() const override",
+      "mangled": "__ZNK25IOMobileFramebufferLegacy11getWorkLoopEv",
+      "pac": "_ZNK9IOService11getWorkLoopEv"
+    },
+    "newUserClient": {
+      "decl": "IOReturn newUserClient(task_t, void *, UInt32, IOUserClient **) override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy13newUserClientEP4taskPvjPP12IOUserClient",
+      "pac": "_ZN9IOService13newUserClientEP4taskPvjPP12IOUserClient"
+    },
+    "setPowerState": {
+      "decl": "IOReturn setPowerState(unsigned long, IOService *) override",
+      "mangled": "__ZN25IOMobileFramebufferLegacy13setPowerStateEmP9IOService",
+      "pac": "_ZN9IOService13setPowerStateEmPS_"
+    },
+    "isMainDisplay": {
+      "decl": "virtual bool isMainDisplay()",
+      "pac": "_ZN25IOMobileFramebufferLegacy13isMainDisplayEv",
+      "mangled": "__ZN25IOMobileFramebufferLegacy13isMainDisplayEv",
+      "doc": "Whether this framebuffer is the main display (the family reads two flag bytes of its own)."
+    },
+    "getDotPitch": {
+      "decl": "virtual IOReturn getDotPitch(uint32_t *pitch)",
+      "pac": "_ZN25IOMobileFramebufferLegacy11getDotPitchEPj",
+      "mangled": "__ZN25IOMobileFramebufferLegacy11getDotPitchEPj",
+      "doc": "The family's implementation assumes an AppleARMIODevice provider and reads its dot-pitch property."
+    },
+    "supportedFrameInfo": {
+      "decl": "virtual IOReturn supportedFrameInfo(uint32_t, uint32_t *count, char *key, uint32_t *mask) = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy18supportedFrameInfoEjPjPcS0_"
+    },
+    "getDisplayDimensions": {
+      "decl": "virtual void getDisplayDimensions(uint32_t *width, uint32_t *height)",
+      "pac": "_ZN25IOMobileFramebufferLegacy20getDisplayDimensionsEPjS0_",
+      "mangled": "__ZN25IOMobileFramebufferLegacy20getDisplayDimensionsEPjS0_",
+      "doc": "The mode the family holds (displayWidth, displayHeight)."
+    },
+    "startHardware": {
+      "decl": "virtual bool startHardware()",
+      "pac": "_ZN25IOMobileFramebufferLegacy13startHardwareEv",
+      "mangled": "__ZN25IOMobileFramebufferLegacy13startHardwareEv",
+      "doc": "The family's answers false; a platform driver brings the display pipe up."
+    },
+    "kickSwapQueue": {
+      "decl": "virtual void kickSwapQueue()",
+      "pac": "_ZN25IOMobileFramebufferLegacy13kickSwapQueueEv",
+      "mangled": "__ZN25IOMobileFramebufferLegacy13kickSwapQueueEv",
+      "doc": "Called whenever the swap queue changes (a new swap, a vsync client registered): the platform driver presents from it."
+    },
+    "completeCurrentSwap": {
+      "decl": "virtual void completeCurrentSwap()",
+      "pac": "_ZN25IOMobileFramebufferLegacy19completeCurrentSwapEv",
+      "mangled": "__ZN25IOMobileFramebufferLegacy19completeCurrentSwapEv",
+      "doc": "Retires the current swap (swapQueueCurrent) and moves the queue on."
+    },
+    "validateSwap": {
+      "decl": "virtual bool validateSwap(const OriginalLegacySwapRequest *request)",
+      "pac": "_ZN25IOMobileFramebufferLegacy12validateSwapEPK25OriginalLegacySwapRequest",
+      "mangled": "__ZN25IOMobileFramebufferLegacy12validateSwapEPK25OriginalLegacySwapRequest",
+      "doc": "The family's refuses every swap; a platform driver accepts those it can show."
+    },
+    "collectCompletionReports": {
+      "decl": "virtual IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy24collectCompletionReportsEjPvPjj",
+      "doc": "Called by the completion path with optional outputs; its IOReturn is ignored."
+    },
+    "setDisplayPowerState": {
+      "decl": "virtual int setDisplayPowerState(void *change, bool gated)",
+      "pac": "_ZN25IOMobileFramebufferLegacy20setDisplayPowerStateEPvb",
+      "mangled": "__ZN25IOMobileFramebufferLegacy20setDisplayPowerStateEPvb",
+      "doc": "The power-state setter: change is {skipRequested, requested, skipPowered, powered, changed} (four uint32 and a byte); a word not skipped that differs is stored and the change is announced."
+    },
+    "platformPipeForward": {
+      "decl": "virtual void platformPipeForward() = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy19platformPipeForwardEv",
+      "doc": "Apple's platform driver (UnifiedPipeline) forwards it to its display pipe backend. Only a platform display driver implements it, and nothing here should reach it."
+    },
+    "platformInternalPlug": {
+      "decl": "virtual void platformInternalPlug() = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy20platformInternalPlugEv",
+      "doc": "Reached from IOAVHandlerInternalDisplay::plugEvent_async_gated; UnifiedPipeline answers kIOReturnUnsupported. Only a platform display driver implements it, and nothing here should reach it."
+    },
+    "platformInternalUnplug": {
+      "decl": "virtual void platformInternalUnplug() = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy22platformInternalUnplugEv",
+      "doc": "The internal display plug pair's second; UnifiedPipeline answers kIOReturnUnsupported. Only a platform display driver implements it, and nothing here should reach it."
+    },
+    "platformColorRemap": {
+      "decl": "virtual void platformColorRemap() = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy18platformColorRemapEv",
+      "doc": "Reached with get_color_remap_mode; UnifiedPipeline forwards it to its display pipe backend. Only a platform display driver implements it, and nothing here should reach it."
+    },
+    "platformHotPlug": {
+      "decl": "virtual void platformHotPlug() = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy15platformHotPlugEv",
+      "doc": "Reached from hotPlug_notify_gated; UnifiedPipeline forwards it to its display pipe backend. Only a platform display driver implements it, and nothing here should reach it."
+    },
+    "platformRefreshRates": {
+      "decl": "virtual void platformRefreshRates() = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy20platformRefreshRatesEv",
+      "doc": "Reached from hotPlug_notify_gated's refresh frequencies; UnifiedPipeline does nothing. Only a platform display driver implements it, and nothing here should reach it."
+    },
+    "platformIdleWithoutClients": {
+      "decl": "virtual void platformIdleWithoutClients() = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy26platformIdleWithoutClientsEv",
+      "doc": "Reached from disp_has_no_clients_gated and swap_wait_gated; UnifiedPipeline answers a flag of its own. Only a platform display driver implements it, and nothing here should reach it."
+    }
+  },
+  "fields": {
+    "displayWidth": {
+      "type": "uint32_t",
+      "access": "set",
+      "doc": "The mode width getDisplayDimensions returns."
+    },
+    "displayHeight": {
+      "type": "uint32_t",
+      "access": "set",
+      "doc": "The mode height getDisplayDimensions returns."
+    }
+  },
+  "constants": {
+    "swapQueueCurrent": {
+      "doc": "The framebuffer's current swap (a request pointer): the one completeCurrentSwap retires."
+    },
+    "swapQueueHead": {
+      "doc": "The framebuffer's swap queue head (a tail queue of requests, linked through swapNext/swapPrevious): its address is the first request's previous link."
+    },
+    "swapQueueTail": {
+      "doc": "The swap queue's tail: the address of the last request's next link (the head's address when empty)."
+    },
+    "swapNext": {
+      "doc": "A request's next link in the swap queue."
+    },
+    "swapPrevious": {
+      "doc": "A request's previous link: the address of the link that points at it."
+    },
+    "swapSourceRects": {
+      "doc": "A request's source rectangles, four int32 x, y, w, h per layer (16 bytes each)."
+    },
+    "swapDestinationRects": {
+      "doc": "A request's destination rectangles, as swapSourceRects."
+    },
+    "swapTransforms": {
+      "doc": "A request's layer transforms, a uint32 per layer (& 7)."
+    },
+    "swapUpdated": {
+      "doc": "A request's updated mask: bits 0-3 the layers, bit 31 the background."
+    },
+    "swapReady": {
+      "doc": "A request's ready mask: bit i once layer i's IOSurface fence signalled."
+    },
+    "swapBackground": {
+      "doc": "A request's background colour."
+    },
+    "swapOptions": {
+      "doc": "A request's three option words (all 0 for a plain swap)."
+    },
+    "swapSize": {
+      "doc": "The display width and height (two uint32) the request was submitted for."
+    },
+    "swapSurfaces": {
+      "doc": "A request's IOSurface per layer (updated layers only, at validateSwap)."
+    },
+    "swapEffectiveSurfaces": {
+      "doc": "The IOSurface per layer each request shows, the family's fill after validateSwap (inherited for layers it does not update)."
+    },
+    "swapsCompleted": {
+      "doc": "The framebuffer's last completed swap id (uint32): the completion path stores each retired swap's id."
+    },
+    "swapsPresented": {
+      "doc": "The framebuffer's last presented swap id (uint32): the completed id, when the swap was shown."
+    },
+    "framesCompleted": {
+      "doc": "The framebuffer's completed frame count (uint32), one per swap the completion path retires shown."
+    },
+    "vsyncClientList": {
+      "doc": "The framebuffer's vsync client list head (a pointer): set while a client wants vsync messages; native_legacy_vsync_notify walks it."
+    }
+  },
+  "functions": {
+    "native_legacy_vsync_notify": {
+      "decl": "void native_legacy_vsync_notify(void *display, uint64_t timestamp, uint64_t continuousTime, uint64_t interval)",
+      "doc": "The family's vsync message sender (IOMobileFramebufferLegacy's own): every client on vsyncClients gets the vsync message; a 0 continuous time or interval is filled in from the framebuffer."
+    }
+  }
+}
