@@ -531,13 +531,40 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // driver to retire those) are dropped under the gate (pruneValidated) before the table fills. Full, the oldest entry goes,
     // not entry 0 (which may be the pending head: unvalidated, it would never be taken again and the screen would freeze).
     // The frame timeline (SwitchFrameTimeline.h), debug kernels: the vsync the swap came after, the GPU's completion of its
-    // present, the compositor's submissions for it, and how the swapping thread and the CPU clock stood.
+    // present, the compositor's submissions for it, every process's new-surface work, and how the swapping thread and the
+    // CPU clock stood. Times are microseconds from the swap's submission (kNotSeen: none), kept small because the
+    // accepted-swap table, the frame marks and the taken swap hold 25 of these inside the class.
+    static constexpr int32_t kNotSeen = INT32_MIN;
+
     struct FrameTimeline {
-        uint64_t vsync, done;
-        SwitchFrameGpu gpu;
-        uint32_t khzVsync, khzSwap;
-        int basePri, schedPri, mode, qos;
+        int32_t vsyncUs = kNotSeen, doneUs = kNotSeen, firstUs = kNotSeen, lastUs = kNotSeen;
+        uint32_t execUs, importUs, bindUs, allocUs, cleanUs, cleanKiB;
+        uint16_t submits, others, imports, binds, allocs, frees, mhzVsync, mhzSwap;
+        int8_t basePri, schedPri, mode, qos;
     };
+
+    static int32_t usFrom(uint64_t fromNs, uint64_t toNs)
+    {
+        const int64_t us = ((int64_t)toNs - (int64_t)fromNs) / 1000;
+        return us > INT32_MAX ? INT32_MAX : us <= INT32_MIN ? INT32_MIN + 1 : (int32_t)us;
+    }
+
+    static uint32_t us32(uint64_t ns)
+    {
+        return ns / 1000 > UINT32_MAX ? UINT32_MAX : (uint32_t)(ns / 1000);
+    }
+
+    static uint16_t sat16(uint64_t n)
+    {
+        return n > 0xffff ? 0xffff : (uint16_t)n;
+    }
+
+    static uint64_t ticksNs(uint64_t ticks)
+    {
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(ticks, &ns);
+        return ns;
+    }
 
     static constexpr unsigned kValidated = 16;
     const OriginalLegacySwapRequest *validated[kValidated] = {};
@@ -1064,34 +1091,35 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         static const char *const kCause[kLongCauses] = {"idle", "ca", "gpu", "queue", "latch", "rate"};
         const FrameTimeline &tl = mark.tl;
-        uint64_t originNs = 0;
-        absolutetime_to_nanoseconds(tl.vsync ? tl.vsync : mark.submit ? mark.submit : stamp, &originNs);
+        const bool fromVsync = mark.submit && tl.vsyncUs != kNotSeen;
+        const uint64_t submitNs = mark.submit ? ticksNs(mark.submit) : 0;
+        uint64_t origin = mark.submit ? mark.submit : stamp, back = 0;
+        if (fromVsync && tl.vsyncUs < 0)
+            nanoseconds_to_absolutetime((uint64_t)-(int64_t)tl.vsyncUs * 1000, &back);
+        origin -= back;
+        const uint64_t originNs = ticksNs(origin);
         auto at = [originNs](uint64_t ticks) -> long long {
-            if (!ticks)
-                return -1;
-            uint64_t ns = 0;
-            absolutetime_to_nanoseconds(ticks, &ns);
-            return ((long long)ns - (long long)originNs) / 1000;
+            return ticks ? ((long long)ticksNs(ticks) - (long long)originNs) / 1000 : -1;
         };
-        auto atNs = [originNs](uint64_t ns) -> long long {
-            return ns ? ((long long)ns - (long long)originNs) / 1000 : -1;
+        auto rel = [&](int32_t fromSubmitUs) -> long long {
+            return mark.submit && fromSubmitUs != kNotSeen
+                       ? ((long long)submitNs + (long long)fromSubmitUs * 1000 - (long long)originNs) / 1000
+                       : -1;
         };
-        char line[512];
-        snprintf(
-            line, sizeof(line),
-            "latch %llu after %u frames (%llu us), cause %s; origin %s %llu; first submit %lld, last "
-            "submit %lld (%u, exec %llu us), swap %lld, offer %lld, gpu done %lld, flip %lld, latch "
-            "%lld us; other submits %u; swap thread base %d sched %d mode %d qos %d; cpu %u MHz at vsync %u at swap",
-            stamp, frames, us, cause < kLongCauses ? kCause[cause] : "?",
-            tl.vsync      ? "vsync"
-            : mark.submit ? "swap"
-                          : "latch",
-            tl.vsync      ? tl.vsync
-            : mark.submit ? mark.submit
-                          : stamp,
-            atNs(tl.gpu.firstSubmit), atNs(tl.gpu.lastSubmit), tl.gpu.submits, tl.gpu.execNs / 1000, at(mark.submit),
-            at(mark.kick), at(tl.done), at(mark.ready), at(stamp), tl.gpu.others, tl.basePri, tl.schedPri, tl.mode,
-            tl.qos, tl.khzVsync / 1000, tl.khzSwap / 1000);
+        char line[640];
+        snprintf(line, sizeof(line),
+                 "latch %llu after %u frames (%llu us), cause %s; origin %s %llu; first submit %lld, last "
+                 "submit %lld (%u, exec %u us), swap %lld, offer %lld, gpu done %lld, flip %lld, latch "
+                 "%lld us; other submits %u; swap thread base %d sched %d mode %d qos %d; cpu %u MHz at vsync %u at "
+                 "swap; imp %u %u us, bind %u %u us, alloc %u %u us, free %u, clean %u KiB %u us",
+                 stamp, frames, us, cause < kLongCauses ? kCause[cause] : "?",
+                 fromVsync     ? "vsync"
+                 : mark.submit ? "swap"
+                               : "latch",
+                 origin, rel(tl.firstUs), rel(tl.lastUs), tl.submits, tl.execUs, at(mark.submit), at(mark.kick),
+                 rel(tl.doneUs), at(mark.ready), at(stamp), tl.others, tl.basePri, tl.schedPri, tl.mode, tl.qos,
+                 tl.mhzVsync, tl.mhzSwap, tl.imports, tl.importUs, tl.binds, tl.bindUs, tl.allocs, tl.allocUs, tl.frees,
+                 tl.cleanKiB, tl.cleanUs);
         os_log(OS_LOG_DEFAULT, "SwitchFrame: %s", line);  // one string: os_log drops a record whose scalars outgrow it
     }
 
@@ -3949,7 +3977,9 @@ public:
             return;
         }
         if (SWITCH_FRAME_TIMELINE)
-            taken.tl.done = __atomic_load_n(&gpuDoneAt, __ATOMIC_RELAXED);
+            taken.tl.doneUs =
+                taken.submit ? usFrom(ticksNs(taken.submit), ticksNs(__atomic_load_n(&gpuDoneAt, __ATOMIC_RELAXED)))
+                             : kNotSeen;
         gpuPresented = request;
         gpuPresentedEntry = directEntry;
         if (hwSuspended) {
@@ -4408,13 +4438,34 @@ public:
         for (unsigned i = 0; i < kValidated; ++i) {
             if (validated[i] != request)
                 continue;
+            const uint64_t submitNs = ticksNs(validatedAt[i]), vsync = __atomic_load_n(&vsyncSentAt, __ATOMIC_RELAXED);
+            SwitchFrameGpu gpu;
+            tegra_gm20b_frame_take(&gpu);
+            int base = 0, sched = 0, mode = 0, qos = 0;
+            switch_thread_sched(current_thread(), &base, &sched, &mode, &qos);
             FrameTimeline &tl = validatedTl[i];
-            tl = {};
-            tl.vsync = __atomic_load_n(&vsyncSentAt, __ATOMIC_RELAXED);
-            tl.khzVsync = __atomic_load_n(&vsyncSentKhz, __ATOMIC_RELAXED);
-            tl.khzSwap = switch_perf_cpu_khz();
-            switch_thread_sched(current_thread(), &tl.basePri, &tl.schedPri, &tl.mode, &tl.qos);
-            tegra_gm20b_frame_take(&tl.gpu);
+            tl.vsyncUs = vsync ? usFrom(submitNs, ticksNs(vsync)) : kNotSeen;
+            tl.doneUs = kNotSeen;
+            tl.firstUs = gpu.firstSubmit ? usFrom(submitNs, gpu.firstSubmit) : kNotSeen;
+            tl.lastUs = gpu.lastSubmit ? usFrom(submitNs, gpu.lastSubmit) : kNotSeen;
+            tl.execUs = us32(gpu.execNs);
+            tl.importUs = us32(gpu.importNs);
+            tl.bindUs = us32(gpu.bindNs);
+            tl.allocUs = us32(gpu.allocNs);
+            tl.cleanUs = us32(gpu.cleanNs);
+            tl.cleanKiB = (uint32_t)(gpu.cleanBytes >> 10);
+            tl.submits = sat16(gpu.submits);
+            tl.others = sat16(gpu.others);
+            tl.imports = sat16(gpu.imports);
+            tl.binds = sat16(gpu.binds);
+            tl.allocs = sat16(gpu.allocs);
+            tl.frees = sat16(gpu.frees);
+            tl.mhzVsync = sat16(__atomic_load_n(&vsyncSentKhz, __ATOMIC_RELAXED) / 1000);
+            tl.mhzSwap = sat16(switch_perf_cpu_khz() / 1000);
+            tl.basePri = (int8_t)base;
+            tl.schedPri = (int8_t)sched;
+            tl.mode = (int8_t)mode;
+            tl.qos = (int8_t)qos;
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), frameEnds);
             return;
         }

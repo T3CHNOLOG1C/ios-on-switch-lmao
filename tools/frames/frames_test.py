@@ -8,7 +8,7 @@ KERNEL = (
     'kernel: SwitchFrame: latch 192000000 after 3 frames (50000 us), cause gpu; origin vsync 191040000; '
     'first submit 4000, last submit 6000 (3, exec 300 us), swap 6500, offer 6600, gpu done 31000, '
     'flip 31200, latch 50000 us; other submits 2; swap thread base 47 sched 47 mode 3 qos 6; '
-    'cpu 1785 MHz at vsync 1785 at swap'
+    'cpu 1785 MHz at vsync 1785 at swap; imp 2 340 us, bind 3 90 us, alloc 1 20 us, free 0, clean 7200 KiB 610 us'
 )
 USER = 'backboardd: SwitchFrameUser: backboardd cb 42 commit 191100000 replay 191100100 191200000 fence 0'
 
@@ -23,6 +23,12 @@ class FramesTest(unittest.TestCase):
         self.assertEqual(stages['offer->gpu done'], 24400)
         self.assertEqual(stages['flip->latch'], 18800)
         self.assertEqual(frame.user[0][2], 42)
+
+    def test_new_surface_work(self):
+        frame = frames.collect([KERNEL])[0]
+        self.assertEqual(frame.surfaces['imp'], 2)
+        self.assertEqual(frame.surfaces['clean_kib'], 7200)
+        self.assertIn('2 imports (340 us, cleaned 7200 KiB in 610 us)', '\n'.join(frames.describe(frame)))
 
     def test_missing_points_are_skipped(self):
         line = KERNEL.replace('first submit 4000, last submit 6000', 'first submit -1, last submit -1')

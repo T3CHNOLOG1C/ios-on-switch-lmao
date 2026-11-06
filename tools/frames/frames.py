@@ -21,6 +21,9 @@ FRAME = re.compile(
     r'gpu done (?P<done>-?\d+), flip (?P<flip>-?\d+), latch (?P<at_latch>-?\d+) us; other submits (?P<others>\d+); '
     r'swap thread base (?P<base>-?\d+) sched (?P<sched>-?\d+) mode (?P<mode>-?\d+) qos (?P<qos>-?\d+); '
     r'cpu (?P<khz_vsync>\d+) MHz at vsync (?P<khz_swap>\d+) at swap'
+    r'(?:; imp (?P<imp>\d+) (?P<imp_us>\d+) us, bind (?P<bind>\d+) (?P<bind_us>\d+) us, '
+    r'alloc (?P<alloc>\d+) (?P<alloc_us>\d+) us, free (?P<free>\d+), '
+    r'clean (?P<clean_kib>\d+) KiB (?P<clean_us>\d+) us)?'
 )
 USER = re.compile(r'SwitchFrameUser: (?P<proc>\S+) cb (?P<cb>\d+) (?P<rest>.*)')
 USER_FIELD = re.compile(r'(\w+) (\d+)(?: (\d+))?')
@@ -35,6 +38,8 @@ STAGES = [
     ('gpu done->flip', 'done', 'flip', 'the completion interrupt to the flip'),
     ('flip->latch', 'flip', 'at_latch', 'the flip waiting for the next scanout boundary'),
 ]
+# The kernel's new-surface work in the frame (every process): counts and microseconds.
+SURFACE_FIELDS = ('imp', 'imp_us', 'bind', 'bind_us', 'alloc', 'alloc_us', 'free', 'clean_kib', 'clean_us')
 MODES = {1: 'realtime', 2: 'fixed', 3: 'timeshare'}
 QOS = {0: 'unspecified', 1: 'maintenance', 2: 'background', 3: 'utility', 4: 'default', 5: 'user-initiated', 6: 'UI'}
 
@@ -55,6 +60,7 @@ class Frame:
     others: int
     thread: tuple
     khz: tuple
+    surfaces: dict = field(default_factory=dict)
     user: list = field(default_factory=list)
 
     def stages(self):
@@ -85,6 +91,7 @@ def parse_frame(m):
         others=int(g['others']),
         thread=(int(g['base']), int(g['sched']), int(g['mode']), int(g['qos'])),
         khz=(int(g['khz_vsync']), int(g['khz_swap'])),
+        surfaces={k: int(g[k]) for k in SURFACE_FIELDS if g[k] is not None},
     )
 
 
@@ -165,6 +172,13 @@ def describe(frame):
         f'  swap thread base {base} sched {sched} {MODES.get(mode, mode)} QoS {QOS.get(qos, qos)}; '
         f'CPU {frame.khz[0]} MHz at vsync, {frame.khz[1]} at swap'
     )
+    n = frame.surfaces
+    if n:
+        out.append(
+            f'  new surfaces: {n["imp"]} imports ({n["imp_us"]} us, '
+            f'cleaned {n["clean_kib"]} KiB in {n["clean_us"]} us), '
+            f'{n["bind"]} binds ({n["bind_us"]} us), {n["alloc"]} allocs ({n["alloc_us"]} us), {n["free"]} frees'
+        )
     for proc, commit, cb, spans in frame.user:
         parts = []
         for name, (a, b) in spans.items():

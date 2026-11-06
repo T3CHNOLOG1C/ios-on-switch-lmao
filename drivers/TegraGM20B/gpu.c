@@ -1642,12 +1642,24 @@ void tgm_stats_compositor_pool(int64_t bytes)
 		__atomic_fetch_add(&compositor_pool, (u64)bytes, __ATOMIC_RELAXED);
 }
 
+/* The frame timeline (SwitchFrameTimeline.h): since the display last took them, the compositor's submissions and every
+ * other process's count, and every process's new-surface work (BoImport, VmBind, BoAlloc, BoFree, the imports' cache
+ * cleans). Callers on several connections at once: each field on its own atomics. */
+static struct {
+	u64 first, last, exec_ns;
+	u32 submits, others;
+	u32 imports, binds, allocs, frees;
+	u64 import_ns, bind_ns, alloc_ns, clean_ns, clean_bytes;
+} frame_gpu;
+
 void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
 			const char *owner)
 {
 	int i;
 	if (!stats_on())
 		return;
+	__atomic_fetch_add(&frame_gpu.allocs, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&frame_gpu.alloc_ns, ns, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&stats.allocs, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&stats.alloc_bytes, bytes, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&stats.alloc_ns, ns, __ATOMIC_RELAXED);
@@ -1680,6 +1692,10 @@ void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns
 	int i;
 	if (!stats_on())
 		return;
+	__atomic_fetch_add(&frame_gpu.imports, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&frame_gpu.import_ns, ns, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&frame_gpu.clean_ns, phase_ns[3], __ATOMIC_RELAXED);
+	__atomic_fetch_add(&frame_gpu.clean_bytes, bytes, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.import_n, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.import_bytes, bytes, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.import_ro, !!read_only, __ATOMIC_RELAXED);
@@ -1693,6 +1709,8 @@ void tgm_stats_bind(int map, uint64_t pages, uint64_t ns)
 {
 	if (!stats_on())
 		return;
+	__atomic_fetch_add(&frame_gpu.binds, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&frame_gpu.bind_ns, ns, __ATOMIC_RELAXED);
 	if (map) {
 		__atomic_fetch_add(&mstat.map_n, 1, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&mstat.map_pages, pages, __ATOMIC_RELAXED);
@@ -1707,6 +1725,7 @@ void tgm_stats_bo_free(uint64_t ns)
 {
 	if (!stats_on())
 		return;
+	__atomic_fetch_add(&frame_gpu.frees, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&mstat.free_n, 1, __ATOMIC_RELAXED);
 	stats_add(&mstat.free_ns, &mstat.free_max, ns);
 }
@@ -3299,13 +3318,6 @@ static u32 chan_fence(struct tgm_chan *chan)
 	return next;
 }
 
-/* The frame timeline (SwitchFrameTimeline.h): the compositor's submissions since the display last took them, and every
- * other process's count. Submitters on several connections at once: each field on its own atomics. */
-static struct {
-	u64 first, last, exec_ns;
-	u32 submits, others;
-} frame_gpu;
-
 static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 {
 	u64 now = nvxnu_nanotime(), none = 0;
@@ -3329,6 +3341,15 @@ void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
 	out->submits = __atomic_exchange_n(&frame_gpu.submits, 0, __ATOMIC_RELAXED);
 	out->others = __atomic_exchange_n(&frame_gpu.others, 0, __ATOMIC_RELAXED);
 	out->execNs = __atomic_exchange_n(&frame_gpu.exec_ns, 0, __ATOMIC_RELAXED);
+	out->imports = __atomic_exchange_n(&frame_gpu.imports, 0, __ATOMIC_RELAXED);
+	out->binds = __atomic_exchange_n(&frame_gpu.binds, 0, __ATOMIC_RELAXED);
+	out->allocs = __atomic_exchange_n(&frame_gpu.allocs, 0, __ATOMIC_RELAXED);
+	out->frees = __atomic_exchange_n(&frame_gpu.frees, 0, __ATOMIC_RELAXED);
+	out->importNs = __atomic_exchange_n(&frame_gpu.import_ns, 0, __ATOMIC_RELAXED);
+	out->bindNs = __atomic_exchange_n(&frame_gpu.bind_ns, 0, __ATOMIC_RELAXED);
+	out->allocNs = __atomic_exchange_n(&frame_gpu.alloc_ns, 0, __ATOMIC_RELAXED);
+	out->cleanNs = __atomic_exchange_n(&frame_gpu.clean_ns, 0, __ATOMIC_RELAXED);
+	out->cleanBytes = __atomic_exchange_n(&frame_gpu.clean_bytes, 0, __ATOMIC_RELAXED);
 }
 
 /* Present order: held by a user submission from its present wait to its kick, and by the present

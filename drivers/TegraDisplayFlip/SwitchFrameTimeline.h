@@ -32,6 +32,10 @@ struct SwitchFrameGpu {
     uint32_t submits;                  // the compositor's
     uint32_t others;                   // every other process's
     uint64_t execNs;                   // CPU time in the compositor's submissions (kernel side)
+    // Every process's new-surface work: BoImports, VmBind ops (map and unmap), BoAllocs, BoFrees, their kernel CPU time,
+    // and the bytes the imports cleaned from the CPU caches and the time that took.
+    uint32_t imports, binds, allocs, frees;
+    uint64_t importNs, bindNs, allocNs, cleanNs, cleanBytes;
 };
 
 #ifdef __cplusplus
