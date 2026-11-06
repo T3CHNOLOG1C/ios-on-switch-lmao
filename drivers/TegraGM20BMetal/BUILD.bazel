@@ -79,6 +79,8 @@ ios_binary(
         "-framework",
         "IOKit",
     ],
+    # debug builds only (Device::fetchBarrier): //boot:package depends on it in the debug profile
+    tags = ["manual"],
 )
 
 # The pack generator (raw/pack/rawpack.py and the modules it imports); //tools/gpu:rawpack runs it.
