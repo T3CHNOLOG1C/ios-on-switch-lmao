@@ -5,7 +5,8 @@ lays those classes out differently. This kit lets one driver source tree build f
 order, instance size, field offsets, addresses) lives in tables.
 
 - `interface/<Class>.json` is what drivers see, and it is the same for every kind: methods with their C++ declaration,
-  our mangled name and Apple's PAC root name; fields by name and type; members and C functions.
+  our mangled name and Apple's PAC root name; fields by name and type; members and C functions; `declarations`, the
+  types its methods name that no SDK header declares (the header puts them before the class).
 - `kinds/<kind>/<Class>.json` is one kind's layout and addresses. `found` records how each entry was read. `hints`
   holds what reading cannot name: a renamed method's slot, the string that locates a function, or a field offset with
   the instruction word that shows it.

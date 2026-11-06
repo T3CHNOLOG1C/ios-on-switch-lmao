@@ -57,6 +57,7 @@ TABLE = {
         'opaque168': '0xfffffff006000100',
         'opaque170': 'unported',
         'switch_base_check': '0xfffffff006000200',
+        'getMetaClass': '0xfffffff006000300',
     },
 }
 
@@ -96,6 +97,12 @@ class HeaderTest(unittest.TestCase):
         self.assertIn('static_assert(sizeof(Base) == 0x100', text)
         self.assertIn('switch_abi_load<uint8_t>(this, 0x90) != 0', text)
 
+    def test_declarations_between_the_includes_and_the_class(self):
+        interface = dict(INTERFACE, declarations=['struct BaseKey {', '    unsigned bits;', '};'])
+        text = gen.header(interface, TABLE, 'kinds/TEST/Base.json')
+        self.assertLess(text.index('#include <IOKit/IOService.h>'), text.index('struct BaseKey {\n    unsigned bits;'))
+        self.assertLess(text.index('struct BaseKey {'), text.index('class Base : public IOService {'))
+
     def test_a_slot_the_interface_lacks_is_refused(self):
         table = dict(TABLE, layout={'168': 'missing'})
         with self.assertRaises(SystemExit):
@@ -114,6 +121,7 @@ class BindingsTest(unittest.TestCase):
         self.assertIn('.set __ZN4Base4stopEP9IOService, 0xfffffff005fff000', text)
         self.assertIn('.set __ZN4Base10gMetaClassE, 0xfffffff006fff000', text)
         self.assertIn('.set _switch_base_check, 0xfffffff005fff200', text)
+        self.assertIn('.set __ZNK4Base12getMetaClassEv, 0xfffffff005fff300', text)
 
     def test_unported_becomes_a_named_trap(self):
         text = self.bind(['__ZN4Base9opaque170Ev'])
