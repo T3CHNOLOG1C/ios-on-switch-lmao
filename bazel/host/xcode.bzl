@@ -78,6 +78,7 @@ def _xcode_host_impl(rctx):
             pins,
         ))
     if mismatches:
+        # buildifier: disable=print
         print("WARNING: building with an UNPINNED Xcode ({}); outputs will not match the pinned build.".format(app))
 
     # The SDK paths as `xcrun --show-sdk-path` names them (iPhoneOS27.0.sdk): the spelling the CMake flow passed to

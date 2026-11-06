@@ -48,9 +48,9 @@ XNU_FOREIGN = [
 # The components r18-xnu-objs' compile rules use the generated files of.
 COMPONENTS = ["osfmk", "bsd", "iokit", "libkern", "libsa", "pexpert", "san", "security"]
 
-def xnu_lint_files():
+def xnu_lint_files(name = "lint_files"):
     """lint_files() for a package inside a vendored XNU tree."""
-    lint_files(exclude = XNU_FOREIGN + ["tables/*.bzl"])
+    lint_files(name = name, exclude = XNU_FOREIGN + ["tables/*.bzl"])
 
 def xnu_sources(name, tags = None):
     """Every file of the XNU tree below this package, across the subpackages (each declares :all)."""
@@ -143,6 +143,7 @@ _SDKROOT_EXTRA = [
     {"content": "", "kind": "write", "out": "d/usr/local/include/kernel/.keep"},
 ]
 
+# buildifier: disable=unnamed-macro
 def xnu_package(
         version,
         darwin,

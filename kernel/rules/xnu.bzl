@@ -240,9 +240,12 @@ def _in_sdk(root, rest, parts):
             parts[0].startswith(parts[2] + "_"))
 
 def _groups(root, rest):
-    """Output groups: sdk_headers (what the kernel's compiles may include), export_hdrs[_<comp>],
-    gen_<comp>_hdrs / gen_<comp>_srcs (a component's generated files, at make's relative names), config_makefile_<comp>
-    (doconf's Makefile: the component's object list)."""
+    """The output groups a file of the pass's roots belongs to.
+
+    sdk_headers (what the kernel's compiles may include), export_hdrs[_<comp>], gen_<comp>_hdrs / gen_<comp>_srcs (a
+    component's generated files, at make's relative names), config_makefile_<comp> (doconf's Makefile: the
+    component's object list).
+    """
     parts = rest.split("/")
     name = parts[-1]
     source = name.endswith(".c") or name.endswith(".cpp") or name.endswith(".s")

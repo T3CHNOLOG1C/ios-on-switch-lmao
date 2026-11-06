@@ -1,7 +1,5 @@
 """The three pretranslated roles the iOS 27 image composer consumes (//install reads PretranslatedInfo)."""
 
-load("//ipsw:ipsw.bzl", "IpswInfo")
-
 PretranslatedInfo = provider(
     doc = "How to produce one role's translated tree at compose time (the composer has the volume mounted).",
     fields = {

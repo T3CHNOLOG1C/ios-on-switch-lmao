@@ -17,7 +17,7 @@ _OUTER = "//bazel/platforms:outer"
 # Stands for "no --platforms" (the host platform) in _OUTER.
 _HOST = "-"
 
-def _kernel_impl(settings, attr):
+def _kernel_impl(settings, _attr):
     outer = settings[_OUTER]
     if not outer:
         outer = ",".join([str(p) for p in settings[_PLATFORMS]]) or _HOST
@@ -25,7 +25,7 @@ def _kernel_impl(settings, attr):
 
 kernel_transition = transition(implementation = _kernel_impl, inputs = [_PLATFORMS, _OUTER], outputs = [_PLATFORMS, _OUTER])
 
-def _outer_impl(settings, attr):
+def _outer_impl(settings, _attr):
     outer = settings[_OUTER]
     if not outer:
         return {_PLATFORMS: settings[_PLATFORMS], _OUTER: ""}

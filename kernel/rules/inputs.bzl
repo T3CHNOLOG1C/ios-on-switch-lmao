@@ -9,7 +9,7 @@ def _tool_output_impl(ctx):
     outs = [ctx.actions.declare_file(o) for o in ctx.attr.outs] + [ctx.actions.declare_directory(d) for d in ctx.attr.out_dirs]
     args = []
     for a in ctx.attr.args:
-        for i, o in enumerate(ctx.attr.outs + ctx.attr.out_dirs):
+        for i, _ in enumerate(ctx.attr.outs + ctx.attr.out_dirs):
             a = a.replace("{out%d}" % i, outs[i].path)
         a = a.replace("{out}", outs[0].path)
         a = a.replace("{xcode_env}", ctx.file._xcode_env.path)
@@ -29,7 +29,7 @@ def _tool_output_impl(ctx):
 
 tool_output = rule(
     implementation = _tool_output_impl,
-    doc = "Runs a tool (a //tools/kernel name, or any py_binary) with args ($(location), {out}/{outN}, {xcode_env}, " +
+    doc = "Runs a tool (a //tools/kernel name, or any py_binary) with args ($(execpath), {out}/{outN}, {xcode_env}, " +
           "{path_root}, {bin_dir} expanded) on srcs into outs and out_dirs.",
     attrs = dict(KERNEL_TOOL_ATTRS, **{
         "tool": attr.string(doc = "a //tools/kernel tool name (kernel/rules/common.bzl KERNEL_TOOLS)"),

@@ -23,8 +23,6 @@ load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
 lint_files()
 
-AVD = "//drivers/SwitchVideoDecoders:AVD/"
-
 FRAMEWORKS = [
     "-framework",
     "CoreFoundation",

@@ -68,8 +68,11 @@ def old_output_spelling(path):
     return path
 
 def compat_prefix_maps(bin_dir):
-    """Prefix maps from moved paths to their old spellings: macro maps (the most specific prefix wins) and debug maps
-    (the last match wins, so these go after the generic ones). Inert while nothing lives at the new paths."""
+    """Prefix maps from moved paths to their old spellings.
+
+    Macro maps (the most specific prefix wins) and debug maps (the last match wins, so these go after the generic
+    ones). Inert while nothing lives at the new paths.
+    """
     macro, debug = [], []
     if TREE_ROOT != OLD_TREE:
         for root in MOVED_ROOTS:

@@ -74,7 +74,7 @@ def _recipe_name(label, valid):
         fail("unknown compile recipe {} (one of {})".format(label, valid))
     return name
 
-def _expand(flags, package):
+def _expand(flags):
     """{tree}, {build}, {xnu}, {sdk} in a driver's flags: make variables of the kernel SDK (//...:kernel_sdk) or paths."""
     return [
         f.replace("{tree}/", TREE_ROOT + "/" if TREE_ROOT else "")
@@ -253,7 +253,7 @@ def kernel_driver(
             cc_library(
                 name = lib,
                 srcs = group,
-                copts = _expand(asm_flags, package),
+                copts = _expand(asm_flags),
                 additional_compiler_inputs = additional,
                 deps = header_deps,
                 toolchains = [KERNEL_SDK],
@@ -267,8 +267,8 @@ def kernel_driver(
                 name = lib,
                 srcs = group,
                 hdrs = hdrs,
-                cxxopts = _expand(cxx_flags + extra, package),
-                conlyopts = _expand(c_copts + extra, package),
+                cxxopts = _expand(cxx_flags + extra),
+                conlyopts = _expand(c_copts + extra),
                 features = features,
                 deps = header_deps + _generated(flags),
                 toolchains = [KERNEL_SDK],

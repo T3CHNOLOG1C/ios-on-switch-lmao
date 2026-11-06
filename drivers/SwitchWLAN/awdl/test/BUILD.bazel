@@ -11,8 +11,6 @@ load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
 lint_files()
 
-AWDL = "//drivers/SwitchWLAN:awdl/"
-
 COPTS = [
     "-O1",
     "-Wno-missing-field-initializers",

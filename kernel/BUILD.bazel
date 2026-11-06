@@ -179,7 +179,7 @@ tool_output(
     srcs = ["//bazel/pinned:data-seed/data-v10.dbr"],
     outs = ["build/native-ram-block/NativeDataSeed.h"],
     args = [
-        "$(location //bazel/pinned:data-seed/data-v10.dbr)",
+        "$(execpath //bazel/pinned:data-seed/data-v10.dbr)",
         "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9",
         "{out}",
     ],
@@ -234,8 +234,8 @@ tool_output(
     args = [
         "--xcode-env={xcode_env}",
         "--source=external/+http_archive+corecrypto",
-        "--sdkroot=$(location :kernel_headers_root)",
-        "--kernel-names=$(location :xnu_symbols)",
+        "--sdkroot=$(execpath :kernel_headers_root)",
+        "--kernel-names=$(execpath :xnu_symbols)",
         "--out={out0}",
         "--namespace-header={out1}",
         "--path-root={path_root}",
@@ -268,7 +268,7 @@ tool_output(
     args = [
         "--xcode-env={xcode_env}",
         "--source=external/+http_archive+libpthread",
-        "--sdkroot=$(location :kernel_headers_root)",
+        "--sdkroot=$(execpath :kernel_headers_root)",
         "--kernel-names=$(execpath :xnu_symbols)",
         "--bootstrap=$(execpath :pthread_bootstrap)",
         "--out={out0}",
@@ -495,7 +495,7 @@ tool_output(
     srcs = ["//bazel/pinned:prelink/dma-kernel.json.xz"],
     outs = ["build/prelink/dma-kernel.json"],
     args = [
-        "$(location //bazel/pinned:prelink/dma-kernel.json.xz)",
+        "$(execpath //bazel/pinned:prelink/dma-kernel.json.xz)",
         "{out}",
         "012162a73b3cb2c8306e7e0a98bae2bdfb4f6cf91d7698feac787939d0c5ffd0",
     ],

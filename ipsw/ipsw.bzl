@@ -242,9 +242,12 @@ def config_setting_any(name, settings, visibility):
     else:
         selects.config_setting_group(name = name, match_any = settings, visibility = visibility)
 
-def ipsw_kinds():
-    """In //ipsw: the kind flag, a config_setting per kind and per iOS major (ios<major>), the deflated members
-    inflated (<kind>_<role>), the unpinned stand-ins (<kind>_unpinned) and :current (IpswInfo)."""
+def ipsw_kinds():  # buildifier: disable=unnamed-macro
+    """The kind flag and what selects on it, in //ipsw.
+
+    A config_setting per kind and per iOS major (ios<major>), the deflated members inflated (<kind>_<role>), the
+    unpinned stand-ins (<kind>_unpinned) and :current (IpswInfo).
+    """
     string_flag(
         name = "kind",
         build_setting_default = DEFAULT_KIND,
