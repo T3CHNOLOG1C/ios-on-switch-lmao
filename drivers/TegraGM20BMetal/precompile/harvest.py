@@ -84,34 +84,46 @@ def normal(line: str) -> tuple[str | None, str | None]:
     if ' ok=1 ' not in line:
         return None, None
     if line.startswith('S '):
-        m = re.search(r' (lib=\S+ )?name=(\S+) k=(.*?)( \| |$)', line)
-        if not m:
-            return None, None
-        lib = m[1] or ''
-        return f'S ok=1 {lib}name={m[2]} k={m[3]} | ', f'{lib}{m[2]} {m[3]}'
+        return _normal_specialization(line)
     if line.startswith('C '):
-        parts = line.split(' | ')
-        head = parts[0].split()
-        stages = [p for p in parts[1:] if p[:2] in ('k ', 'l ', 'p ')]
-        if not stages:
-            return None, None
-        label = next((t for t in head if t.startswith('label=')), None)
-        fields, stages = ' '.join(t for t in head if COMPUTE.match(t)), ' | '.join(stages)
-        labelled = f' {label}' if label else ''
-        return f'C ok=1 {fields}{labelled} | {stages} | ', fields + ' | ' + stages
+        return _normal_compute(line)
     if line.startswith('D '):
         return line.rstrip(), line.rstrip()
     if line.startswith('R '):
-        v = line.find(' | v ')
-        f = line.find(' | f ', v)
-        end = line.find(' | ', f + 5) if f >= 0 else -1
-        if v < 0 or f < 0:
-            return None, None
-        head = line[:v].split()
-        label = next((t for t in head if t.startswith('label=')), 'label=-')
-        state = ' '.join(t for t in head if DESCRIPTOR.match(t)) + line[v : end if end >= 0 else len(line)]
-        return f'R ok=1 {label} {state} | ', state
+        return _normal_render(line)
     return None, None
+
+
+def _normal_specialization(line: str) -> tuple[str | None, str | None]:
+    m = re.search(r' (lib=\S+ )?name=(\S+) k=(.*?)( \| |$)', line)
+    if not m:
+        return None, None
+    lib = m[1] or ''
+    return f'S ok=1 {lib}name={m[2]} k={m[3]} | ', f'{lib}{m[2]} {m[3]}'
+
+
+def _normal_compute(line: str) -> tuple[str | None, str | None]:
+    parts = line.split(' | ')
+    head = parts[0].split()
+    stages = [p for p in parts[1:] if p[:2] in ('k ', 'l ', 'p ')]
+    if not stages:
+        return None, None
+    label = next((t for t in head if t.startswith('label=')), None)
+    fields, stages = ' '.join(t for t in head if COMPUTE.match(t)), ' | '.join(stages)
+    labelled = f' {label}' if label else ''
+    return f'C ok=1 {fields}{labelled} | {stages} | ', fields + ' | ' + stages
+
+
+def _normal_render(line: str) -> tuple[str | None, str | None]:
+    v = line.find(' | v ')
+    f = line.find(' | f ', v)
+    end = line.find(' | ', f + 5) if f >= 0 else -1
+    if v < 0 or f < 0:
+        return None, None
+    head = line[:v].split()
+    label = next((t for t in head if t.startswith('label=')), 'label=-')
+    state = ' '.join(t for t in head if DESCRIPTOR.match(t)) + line[v : end if end >= 0 else len(line)]
+    return f'R ok=1 {label} {state} | ', state
 
 
 @contextmanager
@@ -152,39 +164,15 @@ def caches(
     Each cache as (where, m2v directory, the directories to open on the way).
     """
     found, skipped = [], []
-
-    def look(where: str, m2v: Path, through: tuple[Path, ...] = ()) -> None:
-        found.append((where, m2v, through))
-
-    def containers(base: Path) -> list[Path]:
-        try:
-            return sorted(p for p in base.iterdir() if p.is_dir())
-        except OSError:
-            return []
-
     for kind, base in (
         ('System', volume / 'containers/Data/System'),
         ('Application', volume / 'mobile/Containers/Data/Application'),
         ('PluginKitPlugin', volume / 'mobile/Containers/Data/PluginKitPlugin'),
     ):
-        for c in containers(base):
-            for sub in ('Library/Caches/m2v', 'tmp/m2v'):
-                parts = sub.split('/')
-                way = [c / '/'.join(parts[: i + 1]) for i in range(len(parts) - 1)]
-                shut = [d for d in way if os.path.lexists(d) and not readable(d)]
-                if not shut:
-                    if (c / sub).is_dir():
-                        look(f'{kind}/{c.name}/{sub}', c / sub)
-                elif open_all or c.name in opens:
-                    look(f'{kind}/{c.name}/{sub}', c / sub, tuple(way))
-                elif sub.startswith('Library'):
-                    skipped.append(c.name)
-            # the plugin's Library/Caches/m2v-<process> of a data container whose tmp is the process's temp directory
-            # (66b8ec2: WebKit's GPU process in Safari's container, a poster extension in its own)
-            if readable(c / 'Library') and readable(c / 'Library/Caches'):
-                for m2v in sorted((c / 'Library/Caches').glob('m2v-*')):
-                    if m2v.is_dir() and readable(m2v):
-                        look(f'{kind}/{c.name}/{m2v.relative_to(c)}', m2v)
+        for c in _containers(base):
+            in_container, closed = _container_caches(f'{kind}/{c.name}', c, open_all or c.name in opens)
+            found += in_container
+            skipped += closed
     for pattern in (
         'tmp/m2v-*',
         'tmp/m2v',
@@ -196,7 +184,40 @@ def caches(
     ):
         for m2v in sorted(volume.glob(pattern)):
             if m2v.is_dir() and readable(m2v):
-                look(str(m2v.relative_to(volume)), m2v)
+                found.append((str(m2v.relative_to(volume)), m2v, ()))
+    return found, skipped
+
+
+def _containers(base: Path) -> list[Path]:
+    try:
+        return sorted(p for p in base.iterdir() if p.is_dir())
+    except OSError:
+        return []
+
+
+def _container_caches(
+    where: str, container: Path, may_open: bool
+) -> tuple[list[tuple[str, Path, tuple[Path, ...]]], list[str]]:
+    found, skipped = [], []
+    for sub in ('Library/Caches/m2v', 'tmp/m2v'):
+        parts = sub.split('/')
+        way = [container / '/'.join(parts[: i + 1]) for i in range(len(parts) - 1)]
+        shut = [d for d in way if os.path.lexists(d) and not readable(d)]
+        if not shut:
+            if (container / sub).is_dir():
+                found.append((f'{where}/{sub}', container / sub, ()))
+        elif may_open:
+            found.append((f'{where}/{sub}', container / sub, tuple(way)))
+        elif sub.startswith('Library'):
+            skipped.append(container.name)
+    # the plugin's Library/Caches/m2v-<process> of a data container whose tmp is the process's temp directory
+    # (66b8ec2: WebKit's GPU process in Safari's container, a poster extension in its own)
+    if readable(container / 'Library') and readable(container / 'Library/Caches'):
+        found.extend(
+            (f'{where}/{m2v.relative_to(container)}', m2v, ())
+            for m2v in sorted((container / 'Library/Caches').glob('m2v-*'))
+            if m2v.is_dir() and readable(m2v)
+        )
     return found, skipped
 
 

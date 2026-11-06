@@ -19,6 +19,58 @@ import sys
 from pathlib import Path
 
 
+def _export_sources(
+    cmds: list[tuple[int, bytes]],
+) -> tuple[tuple[int, int] | None, tuple[int, int] | None, list[str]]:
+    linkedit = trie = None
+    reexports = []
+    for cmd, body in cmds:
+        if cmd == 0x19 and body[8:24].rstrip(b'\0') == b'__LINKEDIT':
+            vmaddr, _vmsize, fileoff = struct.unpack_from('<3Q', body, 24)
+            linkedit = (vmaddr, fileoff)
+        elif cmd == 0x80000033:  # LC_DYLD_EXPORTS_TRIE
+            trie = struct.unpack_from('<2I', body, 8)
+        elif cmd in (0x22, 0x80000022):  # LC_DYLD_INFO(_ONLY)
+            off, size = struct.unpack_from('<2I', body, 40)
+            if size:
+                trie = (off, size)
+        elif cmd == 0x8000001F:  # LC_REEXPORT_DYLIB
+            noff = struct.unpack_from('<I', body, 8)[0]
+            reexports.append(body[noff : body.index(b'\0', noff)].decode())
+    return linkedit, trie, reexports
+
+
+def _uleb(data: bytes, at: int) -> tuple[int, int]:
+    v = s = 0
+    while True:
+        b = data[at]
+        at += 1
+        v |= (b & 0x7F) << s
+        s += 7
+        if b < 0x80:
+            return v, at
+
+
+def _trie_names(data: bytes) -> set[str]:
+    names = set()
+    stack = [(0, b'')]
+    while stack:
+        node, prefix = stack.pop()
+        size, at = _uleb(data, node)
+        if size:
+            names.add(prefix.decode('latin1'))
+        at += size
+        count = data[at]
+        at += 1
+        for _ in range(count):
+            end = data.index(b'\0', at)
+            edge = data[at:end]
+            at = end + 1
+            child, at = _uleb(data, at)
+            stack.append((child, prefix + edge))
+    return names
+
+
 class Cache:
     def __init__(self, directory: str):
         files = sorted(
@@ -75,51 +127,10 @@ class Cache:
         if path in seen:
             return set()
         seen.add(path)
-        cmds = self.macho(path)
-        linkedit = trie = None
-        reexports = []
-        for cmd, body in cmds:
-            if cmd == 0x19 and body[8:24].rstrip(b'\0') == b'__LINKEDIT':
-                vmaddr, _vmsize, fileoff = struct.unpack_from('<3Q', body, 24)
-                linkedit = (vmaddr, fileoff)
-            elif cmd == 0x80000033:  # LC_DYLD_EXPORTS_TRIE
-                trie = struct.unpack_from('<2I', body, 8)
-            elif cmd in (0x22, 0x80000022):  # LC_DYLD_INFO(_ONLY)
-                off, size = struct.unpack_from('<2I', body, 40)
-                if size:
-                    trie = (off, size)
-            elif cmd == 0x8000001F:  # LC_REEXPORT_DYLIB
-                noff = struct.unpack_from('<I', body, 8)[0]
-                reexports.append(body[noff : body.index(b'\0', noff)].decode())
+        linkedit, trie, reexports = _export_sources(self.macho(path))
         names = set()
         if trie and trie[1]:
-            data = self.read(linkedit[0] + trie[0] - linkedit[1], trie[1])
-
-            def uleb(at: int) -> tuple[int, int]:
-                v = s = 0
-                while True:
-                    b = data[at]
-                    at += 1
-                    v |= (b & 0x7F) << s
-                    s += 7
-                    if b < 0x80:
-                        return v, at
-
-            stack = [(0, b'')]
-            while stack:
-                node, prefix = stack.pop()
-                size, at = uleb(node)
-                if size:
-                    names.add(prefix.decode('latin1'))
-                at += size
-                count = data[at]
-                at += 1
-                for _ in range(count):
-                    end = data.index(b'\0', at)
-                    edge = data[at:end]
-                    at = end + 1
-                    child, at = uleb(at)
-                    stack.append((child, prefix + edge))
+            names = _trie_names(self.read(linkedit[0] + trie[0] - linkedit[1], trie[1]))
         for r in reexports:
             if r in self.images:
                 names |= self.exports(r, seen)

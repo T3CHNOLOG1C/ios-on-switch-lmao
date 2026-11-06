@@ -32,6 +32,7 @@ import re
 import struct
 import sys
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from pathlib import Path
 
 QC = '/System/Library/Frameworks/QuartzCore.framework/default.metallib'
@@ -102,6 +103,55 @@ GUESSES = (
     3  # a name in up to this many libraries is replayed in each of them (seed space only: m2v's keys hash the AIR)
 )
 
+Stage = tuple[re.Match[str], str | None, list[str | None] | None]
+
+
+def _stages(line: str, kind: str, candidates: Callable[[str], list[str | None]]) -> list[Stage]:
+    # Each stage: (its text, the journal's library, or the candidates of its name). An S line is one stage.
+    stages = []
+    if kind == 'S':
+        m = re.match(r'S ok=1 (lib=(\S+) )?name=(\S+) ', line)
+        if m:
+            stages.append((m, m[2], None if m[2] else candidates(m[3])))
+    else:
+        for m in STAGE.finditer(line):
+            lib = next((t[4:] for t in (m[3] or '').split() if t.startswith('lib=')), None)
+            if m[2] != '-':
+                stages.append((m, lib, None if lib else candidates(m[2])))
+    return stages
+
+
+def _choices(stages: list[Stage]) -> tuple[str, list[str | None]]:
+    open_ = [c for _, lib, c in stages if not lib]
+    if not open_:
+        return ('journaled' if stages else 'unknown'), [None]
+    # The stages' functions are taken to come from one library: the libraries every open stage's name is in.
+    common = set(open_[0]).intersection(*open_[1:])
+    how = (
+        'qc'
+        if common == {None}
+        else 'resolved'
+        if len(common) == 1
+        else 'guessed'
+        if 1 < len(common) <= GUESSES
+        else 'ambiguous'
+        if any(open_)
+        else 'unknown'
+    )
+    return how, sorted(common, key=lambda c: c or '') if how in ('qc', 'resolved', 'guessed') else [None]
+
+
+def _with_library(line: str, kind: str, stages: list[Stage], choice: str | None) -> str:
+    text = line
+    for m, lib, _ in reversed(stages):  # from the end, so earlier offsets hold
+        if lib or not choice:
+            continue
+        if kind == 'S':
+            text = text[: m.start(3) - 5] + f'lib={choice} ' + text[m.start(3) - 5 :]
+        else:
+            text = text[: m.end(2)] + ' lib=' + choice + text[m.end(2) :]
+    return text
+
 
 def resolve(index_json: str, corpus: str, out: str) -> None:
     table = json.loads(Path(index_json).read_text())
@@ -120,45 +170,10 @@ def resolve(index_json: str, corpus: str, out: str) -> None:
         if kind not in 'SRC':
             lines.append(line)
             continue
-        # Each stage: (its text, the journal's library, or the candidates of its name). An S line is one stage.
-        stages = []
-        if kind == 'S':
-            m = re.match(r'S ok=1 (lib=(\S+) )?name=(\S+) ', line)
-            if m:
-                stages.append((m, m[2], None if m[2] else candidates(m[3])))
-        else:
-            for m in STAGE.finditer(line):
-                lib = next((t[4:] for t in (m[3] or '').split() if t.startswith('lib=')), None)
-                if m[2] != '-':
-                    stages.append((m, lib, None if lib else candidates(m[2])))
-        open_ = [c for _, lib, c in stages if not lib]
-        if not open_:
-            how, choices = ('journaled' if stages else 'unknown'), [None]
-        else:
-            # The stages' functions are taken to come from one library: the libraries every open stage's name is in.
-            common = set(open_[0]).intersection(*open_[1:])
-            how = (
-                'qc'
-                if common == {None}
-                else 'resolved'
-                if len(common) == 1
-                else 'guessed'
-                if 1 < len(common) <= GUESSES
-                else 'ambiguous'
-                if any(open_)
-                else 'unknown'
-            )
-            choices = sorted(common, key=lambda c: c or '') if how in ('qc', 'resolved', 'guessed') else [None]
+        stages = _stages(line, kind, candidates)
+        how, choices = _choices(stages)
         for choice in choices:
-            text = line
-            for m, lib, _ in reversed(stages):  # from the end, so earlier offsets hold
-                if lib or not choice:
-                    continue
-                if kind == 'S':
-                    text = text[: m.start(3) - 5] + f'lib={choice} ' + text[m.start(3) - 5 :]
-                else:
-                    text = text[: m.end(2)] + ' lib=' + choice + text[m.end(2) :]
-            lines.append(text)
+            lines.append(_with_library(line, kind, stages, choice))
             first = next((lib for _, lib, _ in stages if lib), None) or choice or QC
             rows[first if how in ('qc', 'journaled', 'resolved', 'guessed') else how][(kind, how)] += 1
     Path(out).write_text('\n'.join(lines) + '\n')

@@ -41,8 +41,7 @@ PREFS = {
 }
 
 
-def main() -> None:
-    argv = sys.argv[1:]
+def _arguments(argv: list[str]) -> tuple[Path, Path | None, bool, bool]:
     remove = '--remove' in argv
     raw = '--no-raw' not in argv and os.environ.get('TEGRA_RAW_STAGE', '1') != '0'
     argv = [a for a in argv if a != '--no-raw']
@@ -53,7 +52,10 @@ def main() -> None:
     args = [a for a in argv if a != '--remove']
     if len(args) != 1 or (build is None and not remove):
         sys.exit(__doc__)
-    data = Path(args[0]).resolve()
+    return Path(args[0]).resolve(), build, remove, raw
+
+
+def _check_volume(data: Path) -> None:
     info = plistlib.loads(
         subprocess.run(['diskutil', 'info', '-plist', str(data)], capture_output=True, check=True).stdout
     )
@@ -61,6 +63,33 @@ def main() -> None:
         sys.exit(f'{data} is not the iPadOS Data volume {DATA_UUID} mounted read-write')
     if not (data / 'mobile').is_dir():
         sys.exit(f'{data} has no mobile/; wrong volume?')
+
+
+def _copy(source: Path, target: Path, executables: tuple[str, ...] = ()) -> None:
+    shutil.copytree(source, target, symlinks=False, copy_function=shutil.copyfile)
+    for path in [target, *target.rglob('*')]:
+        path.chmod(0o755 if path.is_dir() or path.name in executables else 0o644)
+
+
+def _merge_preferences(data: Path) -> None:
+    for home, owner in (('mobile', 501), ('root', 0)):
+        directory = data / home / 'Library/Preferences'
+        directory.mkdir(parents=True, exist_ok=True)
+        # backboardd's defaults domain is its bundle ID, com.apple.backboardd; the global domain is what took effect
+        # so far
+        for name in ('com.apple.backboardd.plist', 'backboardd.plist', '.GlobalPreferences.plist'):
+            file = directory / name
+            values = plistlib.loads(file.read_bytes()) if file.exists() else {}
+            values.update(PREFS)
+            file.write_bytes(plistlib.dumps(values, fmt=plistlib.FMT_BINARY))
+            file.chmod(0o644)
+            if os.geteuid() == 0:
+                os.chown(file, owner, owner)
+
+
+def main() -> None:
+    data, build, remove, raw = _arguments(sys.argv[1:])
+    _check_volume(data)
     target = data / 'ngpu/addons' / NAME
     seed_target = data / 'ngpu/addons/TegraGM20BMetal.m2v-seed'
     raw_target = data / 'ngpu/addons/TegraGM20BMetal.raw'
@@ -76,30 +105,12 @@ def main() -> None:
     for directory in (data / 'ngpu', data / 'ngpu/addons'):
         directory.mkdir(exist_ok=True)
         directory.chmod(0o755)
-    shutil.copytree(source, target, symlinks=False, copy_function=shutil.copyfile)
-    for path in [target, *target.rglob('*')]:
-        path.chmod(0o755 if path.is_dir() or path.name in ('TegraGM20BMetal', 'libvulkan_nouveau.dylib') else 0o644)
+    _copy(source, target, ('TegraGM20BMetal', 'libvulkan_nouveau.dylib'))
     if (build / 'ngpu/addons/TegraGM20BMetal.m2v-seed').is_dir():
-        shutil.copytree(build / 'ngpu/addons/TegraGM20BMetal.m2v-seed', seed_target, copy_function=shutil.copyfile)
-        for path in [seed_target, *seed_target.rglob('*')]:
-            path.chmod(0o755 if path.is_dir() else 0o644)
+        _copy(build / 'ngpu/addons/TegraGM20BMetal.m2v-seed', seed_target)
     if raw and (build / 'ngpu/addons/TegraGM20BMetal.raw/pack.bin').is_file():
-        shutil.copytree(build / 'ngpu/addons/TegraGM20BMetal.raw', raw_target, copy_function=shutil.copyfile)
-        for path in [raw_target, *raw_target.rglob('*')]:
-            path.chmod(0o755 if path.is_dir() else 0o644)
-    for home, owner in (('mobile', 501), ('root', 0)):
-        directory = data / home / 'Library/Preferences'
-        directory.mkdir(parents=True, exist_ok=True)
-        # backboardd's defaults domain is its bundle ID, com.apple.backboardd; the global domain is what took effect
-        # so far
-        for name in ('com.apple.backboardd.plist', 'backboardd.plist', '.GlobalPreferences.plist'):
-            file = directory / name
-            values = plistlib.loads(file.read_bytes()) if file.exists() else {}
-            values.update(PREFS)
-            file.write_bytes(plistlib.dumps(values, fmt=plistlib.FMT_BINARY))
-            file.chmod(0o644)
-            if os.geteuid() == 0:
-                os.chown(file, owner, owner)
+        _copy(build / 'ngpu/addons/TegraGM20BMetal.raw', raw_target)
+    _merge_preferences(data)
     for leftover in (data / 'ngpu').rglob('._*'):  # AppleDouble files a non-APFS copy may leave
         leftover.unlink()
     subprocess.run(['sync'], check=True)
