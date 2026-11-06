@@ -64,6 +64,7 @@
 #include "TegraGM20BSched.h"
 #include "TegraGM20BSleepGate.h"
 #include "TegraGM20BTlb.h"
+#include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 
@@ -4767,7 +4768,9 @@ void tgm_sleep(void)
 	case TGM_SLEEP_NOTHING:
 		return;
 	case TGM_SLEEP_POWER:
+		switch_sleep_mark(SWITCH_STEP_GPU_POWER_DOWN);
 		sleep_power_down();
+		switch_sleep_mark(SWITCH_STEP_GPU_DOWN);
 		tgm_journal("tegra-gm20b: sleep: no nvkm client (bring-up stopped after stage %d): "
 			    "powered down",
 			    gpu.stage);
@@ -4775,12 +4778,18 @@ void tgm_sleep(void)
 	case TGM_SLEEP_FULL:
 		break;
 	}
+	switch_sleep_mark(SWITCH_STEP_GPU_GATE);
 	sleep_gate();
+	switch_sleep_mark(SWITCH_STEP_GPU_FENCES);
 	sleep_fences();
 	mutex_lock(&gpu.lock);
+	switch_sleep_mark(SWITCH_STEP_GPU_IDLE_OFF);
 	sleep_idle_off();
+	switch_sleep_mark(SWITCH_STEP_GPU_NVKM);
 	sleep_nvkm();
+	switch_sleep_mark(SWITCH_STEP_GPU_POWER_DOWN);
 	sleep_power_down();
+	switch_sleep_mark(SWITCH_STEP_GPU_DOWN);
 }
 
 void tgm_wake(void)

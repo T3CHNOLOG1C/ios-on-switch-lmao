@@ -31,6 +31,7 @@
 #include "NativePlanes.h"
 #include "SwitchFrameStall.h"
 #include "SwitchInteraction.h"
+#include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "../TegraVIC/TegraVICConfig.h"
 #include "TegraDisplayPower.h"
 #include "VsyncPhase.h"
@@ -4821,6 +4822,7 @@ extern "C" void tegra_display_suspend(void)
         d->quiesceForSuspend();
         return true;
     });
+    switch_sleep_mark(SWITCH_STEP_DISPLAY_QUIESCED);
     IOSleep(20);  // DC A stops at the end of the frame it was scanning
     tegra_display_power_down();
 }
