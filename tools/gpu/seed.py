@@ -121,7 +121,7 @@ def tool(args: argparse.Namespace, root: Path, work: Path) -> None:
     )
 
 
-def twin(args: argparse.Namespace, root: Path, work: Path) -> None:
+def twin(args: argparse.Namespace, _root: Path, work: Path) -> None:
     # The twin with the device's pipeline cache identity (tools/gpu/nvk_twin.py).
     (work / 'home').mkdir()
     make_twin(
@@ -132,7 +132,7 @@ def twin(args: argparse.Namespace, root: Path, work: Path) -> None:
     )
 
 
-def layout(args: argparse.Namespace, root: Path, work: Path) -> None:
+def layout(args: argparse.Namespace, _root: Path, _work: Path) -> None:
     out = Path(args.out)
     shutil.rmtree(out, ignore_errors=True)
     (out / 'raw').mkdir(parents=True)
@@ -160,7 +160,7 @@ def layout(args: argparse.Namespace, root: Path, work: Path) -> None:
     (out / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1, sort_keys=True) + '\n')
 
 
-def archive(args: argparse.Namespace, root: Path, work: Path) -> None:
+def archive(args: argparse.Namespace, _root: Path, _work: Path) -> None:
     tools = Path(args.tools)
     data = io.BytesIO()
     with tarfile.open(fileobj=data, mode='w', format=tarfile.USTAR_FORMAT) as tar:

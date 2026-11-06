@@ -68,7 +68,7 @@ def summarize(
     rows: list[list[str]],
 ) -> tuple[collections.OrderedDict[tuple[str, str], dict], collections.OrderedDict[str, collections.Counter[str]]]:
     entries = collections.OrderedDict()  # (tag, name) -> [results]
-    for tag, name, stage, variant, result, phase, detail, ms in rows:
+    for tag, name, _stage, variant, result, phase, detail, ms in rows:
         if result == 'SKIP' or name == '-':
             continue
         e = entries.setdefault((tag, name), {'ok': False, 'z': None, 'why': None, 'ms': []})

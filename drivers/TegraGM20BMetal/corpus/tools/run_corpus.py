@@ -67,15 +67,17 @@ def run_one(tag: str, path: str, out: Path, timeout: int) -> tuple[str, int]:
         lines = stderr.splitlines()
         if lines and lines[-1] == 'END' and code == 0:
             break
-        begins = [l for l in lines if l.startswith('BEGIN ')]
+        begins = [line for line in lines if line.startswith('BEGIN ')]
         if not begins:
             with rows.open('a') as f:
                 kind = 'hang' if hung else 'crash'
-                last = ' | '.join(l for l in lines[-6:] if 'NVK is not a conformant' not in l)[:1500].replace('\t', ' ')
+                last = ' | '.join(line for line in lines[-6:] if 'NVK is not a conformant' not in line)[:1500].replace(
+                    '\t', ' '
+                )
                 f.write(f'{tag}\t-\t-\t-\tERR\t{kind}\t{last}\t0\n')
             break
         _, pos, name = begins[-1].split(' ', 2)
-        tail = [l for l in lines[lines.index(begins[-1]) + 1 :] if 'NVK is not a conformant' not in l][-8:]
+        tail = [line for line in lines[lines.index(begins[-1]) + 1 :] if 'NVK is not a conformant' not in line][-8:]
         why = f'hang > {timeout}s' if hung else (f'signal {-code}' if code < 0 else f'exit {code}')
         with rows.open('a') as f:
             kind = 'hang' if hung else 'crash'
@@ -96,7 +98,7 @@ def main() -> None:
     corpus, out = Path(sys.argv[1]), Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
     jobs, only, timeout = int(opt('--jobs', '6')), opt('--only', None), int(opt('--timeout', '900'))
-    entries = [l.split('\t') for l in corpus.read_text().splitlines() if l and not l.startswith('#')]
+    entries = [line.split('\t') for line in corpus.read_text().splitlines() if line and not line.startswith('#')]
     entries = [(t, p) for t, p in entries if not only or any(o in t for o in only.split(','))]
     # biggest first so the long ones start early
     entries.sort(key=lambda e: -Path(e[1]).stat().st_size)

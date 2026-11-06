@@ -145,7 +145,7 @@ def readable(d: Path) -> bool:
 
 
 def caches(
-    volume: Path, opens: set[str], open_all: bool, log: Callable[[str], None]
+    volume: Path, opens: set[str], open_all: bool, _log: Callable[[str], None]
 ) -> tuple[list[tuple[str, Path, tuple[Path, ...]]], list[str]]:
     """Find every m2v cache on the volume, and the closed containers skipped.
 
@@ -214,9 +214,10 @@ def merge(corpus: Path, sources: list[tuple[str, str]]) -> list[str]:
         print(f'{name}: {added} new')
     corpus.write_text('\n'.join(lines) + '\n')
     print(
-        f'{corpus}: {sum(l[0] == "S" for l in lines)} specializations, '
-        f'{sum(l[0] == "R" for l in lines)} render states, {sum(l[0] == "C" for l in lines)} compute states, '
-        f'{sum(l[0] == "D" for l in lines)} dispatch shapes'
+        f'{corpus}: {sum(entry[0] == "S" for entry in lines)} specializations, '
+        f'{sum(entry[0] == "R" for entry in lines)} render states, '
+        f'{sum(entry[0] == "C" for entry in lines)} compute states, '
+        f'{sum(entry[0] == "D" for entry in lines)} dispatch shapes'
     )
     return lines
 

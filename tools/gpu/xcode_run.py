@@ -33,7 +33,8 @@ def main() -> None:
         name, value = option.split('=', 1)
         env[name] = value
     replace = {'@IPHONEOS_SDK@': xcode['IPHONEOS_SDK'], '@MACOSX_SDK@': xcode['MACOSX_SDK'], '@PWD@': os.getcwd()}
-    for i, arg in enumerate(command):
+    for i, original in enumerate(command):
+        arg = original
         for key, value in replace.items():
             arg = arg.replace(key, value)
         # @FILE:<path>@ is the file's content (stripped): a value an earlier action computed, e.g. the raw stack key.

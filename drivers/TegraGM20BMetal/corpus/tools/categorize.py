@@ -58,7 +58,7 @@ per = collections.OrderedDict()
 cats = collections.Counter()
 catlibs = collections.defaultdict(set)
 examples = {}
-for tag, name, stage, variant, result, phase, detail, ms in (r[:8] for r in rows):
+for tag, name, _stage, variant, result, phase, detail, _ms in (r[:8] for r in rows):
     fw = tag
     e = per.setdefault(fw, collections.Counter())
     if result == 'SKIP':

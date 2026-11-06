@@ -80,7 +80,7 @@ class Cache:
         reexports = []
         for cmd, body in cmds:
             if cmd == 0x19 and body[8:24].rstrip(b'\0') == b'__LINKEDIT':
-                vmaddr, vmsize, fileoff = struct.unpack_from('<3Q', body, 24)
+                vmaddr, _vmsize, fileoff = struct.unpack_from('<3Q', body, 24)
                 linkedit = (vmaddr, fileoff)
             elif cmd == 0x80000033:  # LC_DYLD_EXPORTS_TRIE
                 trie = struct.unpack_from('<2I', body, 8)
@@ -134,13 +134,13 @@ def main() -> None:
     bad = 0
     for binary in sys.argv[2:]:
         libs = [
-            l.split(' (compat')[0].strip()
-            for l in subprocess.check_output(['otool', '-L', binary], text=True).splitlines()[1:]
+            line.split(' (compat')[0].strip()
+            for line in subprocess.check_output(['otool', '-L', binary], text=True).splitlines()[1:]
         ]
         leaf = {}
-        for l in libs:
-            name = Path(l).name
-            leaf[name.split('.')[0]] = l
+        for lib in libs:
+            name = Path(lib).name
+            leaf[name.split('.')[0]] = lib
         missing = []
         for line in subprocess.check_output(['dyld_info', '-imports', binary], text=True).splitlines():
             m = re.match(r'\s+0x[0-9A-F]+\s+(\S+)\s+\(from ([^)]*)\)(.*)', line)
