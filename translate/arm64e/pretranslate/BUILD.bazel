@@ -1,0 +1,40 @@
+# The iOS 27 user space, pretranslated to plain arm64 at image-build time. The composer (//install, --config=ios27)
+# mounts each decrypted image read-only and runs :translate_tree over it; that step needs root (to mount, and to
+# reseal the system volume), which a Bazel action does not have, so it is not a cached build output. The pieces it
+# needs are Bazel targets: the translator, the driver and Apple's trust caches, bundled per role as PretranslatedInfo.
+#
+#   bazel run //translate/arm64e/pretranslate:translate_tree -- --role system_cryptex --tool $(location ...) \
+#       --volume <mounted cryptex> --out <dir> --apple-trustcache <system IM4P>
+#
+# The driver writes <role>.manifest.json, the replacement files, <role>.trustcache and, for the SystemOS cryptex,
+# <role>.a64xplan and a64x-cache-pretranslated.bin (the device tree's /chosen/a64x-cache-pretranslated).
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "pretranslate_role")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+py_binary(
+    name = "translate_tree",
+    srcs = ["translate_tree.py"],
+)
+
+[pretranslate_role(
+    name = role,
+    apple_trustcaches = select({
+        "//ipsw:ios27": trustcaches,
+        "//conditions:default": [],
+    }),
+    driver = ":translate_tree",
+    role = role,
+    tool = "//translate/arm64e",
+) for role, trustcaches in {
+    "os": ["@ipsw//:static_trust_cache"],
+    "system_cryptex": [
+        "@ipsw//:static_trust_cache",
+        "@ipsw//:system_cryptex_trust_cache",
+    ],
+    "app_cryptex": ["@ipsw//:app_cryptex_trust_cache"],
+}.items()]
