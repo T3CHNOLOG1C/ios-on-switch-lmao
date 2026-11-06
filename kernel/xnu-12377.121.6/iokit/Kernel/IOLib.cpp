@@ -62,6 +62,7 @@
 #include <os/log_private.h>
 #include <sys/msgbuf.h>
 #include <console/serial_protos.h>
+#include <switch/iokit.h>
 
 #if IOKITSTATS
 
@@ -760,6 +761,7 @@ IOKernelAllocateWithPhysicalRestrict(
 		adjustedSize = size;
 		contiguous = (contiguous && (adjustedSize > page_size))
 		    || (alignment > page_size);
+		contiguous = switch_iolib_contiguous(contiguous, size, maxPhys, page_size, gPhysBase + gPhysSize);
 
 		if (!contiguous) {
 #if __arm64__

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * IOKit hooks (kernel/switch/iokit/). Included by iokit/Kernel/IOUserClient.cpp.
+ * IOKit hooks (kernel/switch/iokit/). Included by iokit/Kernel/IOUserClient.cpp and iokit/Kernel/IOLib.cpp.
  */
 #ifndef SWITCH_IOKIT_H
 #define SWITCH_IOKIT_H
@@ -9,6 +9,19 @@
 
 #ifdef __cplusplus
 #include <mach/kern_return.h>
+
+/*
+ * IOKernelAllocateWithPhysicalRestrict, after it has decided whether the allocation must be contiguous: one page under
+ * a physical limit below the end of RAM goes to kmem_alloc_contig, which keeps the limit. XNU's own path for it drops
+ * the limit and asks for KMA_LOMEM, which arm64 ignores: Apple's DMA masters sit behind DART, but there is no system
+ * IOMapper here, so a device sees the physical address and a below-4 GiB buffer has to be below 4 GiB. With 16 KiB VM
+ * pages every buffer of 16 KiB or less takes this path (a 4 KiB XUDC transfer ring landed above 4 GiB).
+ */
+static inline bool switch_iolib_contiguous(bool contiguous, uint64_t size, uint64_t maxPhys, uint64_t pageSize,
+                                           uint64_t ramEnd)
+{
+    return contiguous || (maxPhys != 0 && maxPhys < ramEnd && size <= pageSize);
+}
 
 class IOUserClient;
 
