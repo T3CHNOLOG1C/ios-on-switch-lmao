@@ -8,6 +8,7 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <string.h>
 #include "TegraNVDEC.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace {
 constexpr uint64_t kGranule = 64 * 1024;
@@ -33,31 +34,16 @@ void setUsed(uint32_t first, uint32_t count, bool on)
     }
 }
 
-template <bool Invalidate> void cacheOp(const void *va, size_t size)
-{
-    if (!size)
-        return;
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    for (uintptr_t a = (uintptr_t)va & ~(line - 1), end = (uintptr_t)va + size; a < end; a += line) {
-        if (Invalidate)
-            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-        else
-            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-    }
-    __asm__ volatile("dsb sy" ::: "memory");
-}
 }  // namespace
 
 extern "C" void tegra_nvdec_cache_clean(const void *va, size_t size)
 {
-    cacheOp<false>(va, size);
+    switch_dcache_clean(va, size);
 }
 
 extern "C" void tegra_nvdec_cache_flush(const void *va, size_t size)
 {
-    cacheOp<true>(va, size);
+    switch_dcache_clean_invalidate(va, size);
 }
 
 extern "C" int tegra_nvdec_arena_init(uint64_t bytes)
