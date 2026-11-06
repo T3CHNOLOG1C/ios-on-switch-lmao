@@ -52,12 +52,16 @@ void SwitchDisplayPort::dispatch()
                                          caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL]);
         applyTraining();
         break;
-    case Next::TrainingSet: stepTimer->setTimeoutUS(trainOut.wait_us); break;
+    case Next::TrainingSet:
+        stepTimer->setTimeoutUS(trainOut.wait_us);
+        break;
     case Next::TrainingStatus:
         trainOut = switch_dp_train_status(&train, request.data);
         applyTraining();
         break;
-    case Next::Trained: trained(); break;
+    case Next::Trained:
+        trained();
+        break;
     case Next::LinkStatus:
         if (!switch_dp_link_holds(request.data + 2, link.lanes)) {
             IOLog("SwitchDisplayPort: IRQ_HPD: the link lost lock (lanes %#x %#x align %#x); training again\n",

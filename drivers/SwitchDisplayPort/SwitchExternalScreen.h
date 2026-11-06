@@ -19,6 +19,7 @@ public:
     void detach();
     // Display controller B's frame end: the flip asked for before it is now scanned.
     void frameEnd();
+
     bool attached() const
     {
         return dcb != nullptr;

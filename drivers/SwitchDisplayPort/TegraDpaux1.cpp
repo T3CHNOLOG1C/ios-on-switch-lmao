@@ -12,6 +12,7 @@
 namespace {
 constexpr uint64_t kDpaux1PA = 0x54040000;
 constexpr unsigned kClockDpaux1 = 207, kClockSorSafe = 222;
+
 enum : uint32_t {
     PLLDP_BASE = 0x590,
     PLLDP_MISC = 0x594,
@@ -19,6 +20,7 @@ enum : uint32_t {
     PLLDP_SS_CTRL1 = 0x59c,
     PLLDP_SS_CTRL2 = 0x5a0,
 };
+
 constexpr uint32_t kPllEnable = 1u << 30, kPllLock = 1u << 27;
 constexpr uint32_t kPllDp270 = (3u << 19) | (28u << 8) | 1u;  // P = 4 (qlin code 3), N = 28, M = 1
 constexpr uint32_t kPadAux = (2u << 12) | (4u << 8) | (0x30u << 2) | (1u << 1);

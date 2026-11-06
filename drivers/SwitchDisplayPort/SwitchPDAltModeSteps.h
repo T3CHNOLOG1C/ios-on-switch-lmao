@@ -24,21 +24,31 @@ static inline struct switch_pd_alt_out switch_pd_alt_send(struct switch_pd_alt *
 {
     alt->accepted = false;
     switch (alt->step) {
-    case SWITCH_PD_ALT_STALE_EXIT: return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DP_EXIT, SWITCH_PD_ALT_REPLY_MS);
-    case SWITCH_PD_ALT_DR_SWAP: return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DR_SWAP, SWITCH_PD_ALT_REPLY_MS);
-    case SWITCH_PD_ALT_DISCOVER_ID: return switch_pd_alt_structured(0x01, 0, 0xFF00);
-    case SWITCH_PD_ALT_DISCOVER_SVID: return switch_pd_alt_structured(0x02, 0, 0xFF00);
-    case SWITCH_PD_ALT_DISCOVER_MODE: return switch_pd_alt_structured(0x03, 0, 0xFF01);
-    case SWITCH_PD_ALT_ENTER_DOCK: return switch_pd_alt_structured(0x04, 1, 0x057E);
-    case SWITCH_PD_ALT_DP_DISCOVER: return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DP_DISCOVER, SWITCH_PD_ALT_REPLY_MS);
+    case SWITCH_PD_ALT_STALE_EXIT:
+        return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DP_EXIT, SWITCH_PD_ALT_REPLY_MS);
+    case SWITCH_PD_ALT_DR_SWAP:
+        return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DR_SWAP, SWITCH_PD_ALT_REPLY_MS);
+    case SWITCH_PD_ALT_DISCOVER_ID:
+        return switch_pd_alt_structured(0x01, 0, 0xFF00);
+    case SWITCH_PD_ALT_DISCOVER_SVID:
+        return switch_pd_alt_structured(0x02, 0, 0xFF00);
+    case SWITCH_PD_ALT_DISCOVER_MODE:
+        return switch_pd_alt_structured(0x03, 0, 0xFF01);
+    case SWITCH_PD_ALT_ENTER_DOCK:
+        return switch_pd_alt_structured(0x04, 1, 0x057E);
+    case SWITCH_PD_ALT_DP_DISCOVER:
+        return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DP_DISCOVER, SWITCH_PD_ALT_REPLY_MS);
     case SWITCH_PD_ALT_DP_CONFIGURE: {
         struct switch_pd_alt_out out = switch_pd_alt_vdm(alt->configure, 4);
         out.command = SWITCH_PD_ALT_CMD_DP_CONFIGURE;
         return out;
     }
-    case SWITCH_PD_ALT_DOCK_QUERY: return switch_pd_alt_dock_request(0, 0x16);
-    case SWITCH_PD_ALT_DOCK_LED: return switch_pd_alt_dock_led();
-    case SWITCH_PD_ALT_HUB_ENABLE: return switch_pd_alt_dock_request(1, 0x20);
+    case SWITCH_PD_ALT_DOCK_QUERY:
+        return switch_pd_alt_dock_request(0, 0x16);
+    case SWITCH_PD_ALT_DOCK_LED:
+        return switch_pd_alt_dock_led();
+    case SWITCH_PD_ALT_HUB_ENABLE:
+        return switch_pd_alt_dock_request(1, 0x20);
     case SWITCH_PD_ALT_HUB_POWER: {
         struct switch_pd_alt_out out = switch_pd_alt_none();
         out.timer_ms = SWITCH_PD_ALT_HUB_POWER_MS;
@@ -51,7 +61,8 @@ static inline struct switch_pd_alt_out switch_pd_alt_send(struct switch_pd_alt *
     }
     case SWITCH_PD_ALT_IDLE:
     case SWITCH_PD_ALT_DONE:
-    case SWITCH_PD_ALT_FAILED: break;
+    case SWITCH_PD_ALT_FAILED:
+        break;
     }
     return switch_pd_alt_none();
 }
@@ -96,12 +107,17 @@ static inline struct switch_pd_alt_out switch_pd_alt_dp_or_dock(struct switch_pd
     return switch_pd_alt_after_dp(alt, NULL);
 }
 
-// The data role decides the first step: DFP discovers, UFP swaps first (a dock or charger starts as DFP).
+// The data role decides the first step: DFP discovers, UFP swaps first (a source starts as DFP). Only a source with the
+// dock's power signature is asked to swap: bm92txx swaps with any dual-role source, and a Mac that accepted would stop
+// being the Switch's USB host (usbmux, Xcode, idevicesyslog).
 static inline struct switch_pd_alt_out switch_pd_alt_begin(struct switch_pd_alt *alt, uint16_t status1)
 {
     const unsigned role = switch_pd_alt_data_role(status1);
     if (role == SWITCH_PD_ALT_DATA_ROLE_DFP) {
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_DISCOVER_ID);
+    }
+    if (role == SWITCH_PD_ALT_DATA_ROLE_UFP && !alt->dock_power) {
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, NULL);
     }
     if (role == SWITCH_PD_ALT_DATA_ROLE_UFP) {
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_DR_SWAP);
@@ -160,7 +176,8 @@ static inline struct switch_pd_alt_out switch_pd_alt_reply(struct switch_pd_alt 
     case SWITCH_PD_ALT_DOCK_QUERY:
         alt->old_dock_firmware = vdm[6] == 2 && vdm[7] == 0x17 && len > 11 && (vdm[11] & 0x02u) != 0;
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_DOCK_LED);
-    case SWITCH_PD_ALT_DOCK_LED: return switch_pd_alt_go(alt, SWITCH_PD_ALT_HUB_POWER);
+    case SWITCH_PD_ALT_DOCK_LED:
+        return switch_pd_alt_go(alt, SWITCH_PD_ALT_HUB_POWER);
     case SWITCH_PD_ALT_HUB_ENABLE: {
         const bool answer = vdm[6] == 2 && vdm[7] == 0x21;
         if (answer && (vdm[5] & 0x01u) != 0 && alt->hub_tries < SWITCH_PD_ALT_HUB_RETRIES) {
@@ -171,7 +188,8 @@ static inline struct switch_pd_alt_out switch_pd_alt_reply(struct switch_pd_alt 
         return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE,
                                     alt->hub_enabled ? NULL : "the dock did not enable its USB hub");
     }
-    default: break;
+    default:
+        break;
     }
     return switch_pd_alt_none();
 }
@@ -180,6 +198,7 @@ struct switch_pd_alt_in {
     uint16_t alert, status1, dp_status;
     bool sink_session;  // SwitchPD's sink phase with the partner as source (a dock, a charger)
     bool at_rest;       // SwitchPD's own USB-PD request is not using COMMAND (published, settling or given up)
+    bool dock_power;    // the source's PDOs carry the dock's signature
 };
 
 static inline bool switch_pd_alt_waiting_on_chip(const struct switch_pd_alt *alt)
@@ -198,6 +217,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_reset(struct switch_pd_alt 
 
 static inline struct switch_pd_alt_out switch_pd_alt_start(struct switch_pd_alt *alt, const struct switch_pd_alt_in *in)
 {
+    alt->dock_power = in->dock_power;
     alt->lanes = alt->want_dp ? SWITCH_PD_ALT_LANES_PENDING : SWITCH_PD_ALT_LANES_FREE;
     if ((in->dp_status & SWITCH_PD_ALT_DP_STATUS_DP_EN) != 0) {
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_STALE_EXIT);
@@ -210,7 +230,8 @@ static inline struct switch_pd_alt_out switch_pd_alt_done(struct switch_pd_alt *
 {
     const unsigned last = switch_pd_alt_last_command(status1);
     switch (alt->step) {
-    case SWITCH_PD_ALT_STALE_EXIT: return switch_pd_alt_begin(alt, status1);
+    case SWITCH_PD_ALT_STALE_EXIT:
+        return switch_pd_alt_begin(alt, status1);
     case SWITCH_PD_ALT_DR_SWAP:
         if (last != 0 || switch_pd_alt_data_role(status1) != SWITCH_PD_ALT_DATA_ROLE_DFP) {
             return switch_pd_alt_finish(alt, SWITCH_PD_ALT_FAILED, "the partner refused the data role swap");
@@ -231,7 +252,8 @@ static inline struct switch_pd_alt_out switch_pd_alt_done(struct switch_pd_alt *
         alt->dp_lanes = alt->pin == SWITCH_PD_ALT_PIN_D ? 2 : 4;
         alt->lanes = alt->pin == SWITCH_PD_ALT_PIN_D ? SWITCH_PD_ALT_LANES_FREE : SWITCH_PD_ALT_LANES_TAKEN;
         return switch_pd_alt_after_dp(alt, NULL);
-    default: break;
+    default:
+        break;
     }
     return switch_pd_alt_none();
 }
@@ -245,8 +267,10 @@ static inline bool switch_pd_alt_vdm_step(enum switch_pd_alt_step step)
     case SWITCH_PD_ALT_ENTER_DOCK:
     case SWITCH_PD_ALT_DOCK_QUERY:
     case SWITCH_PD_ALT_DOCK_LED:
-    case SWITCH_PD_ALT_HUB_ENABLE: return true;
-    default: return false;
+    case SWITCH_PD_ALT_HUB_ENABLE:
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -254,7 +278,8 @@ static inline bool switch_pd_alt_vdm_step(enum switch_pd_alt_step step)
 static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt *alt, const struct switch_pd_alt_in *in)
 {
     const bool plugged = (in->status1 & SWITCH_PD_ALT_STATUS1_INSERT) != 0;
-    if (!plugged || !in->sink_session || (alt->step != SWITCH_PD_ALT_IDLE && (in->alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)) {
+    if (!plugged || !in->sink_session ||
+        (alt->step != SWITCH_PD_ALT_IDLE && (in->alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)) {
         return switch_pd_alt_reset(alt);
     }
     if ((in->alert & SWITCH_PD_ALT_ALERT_CONTRACT) != 0 && switch_pd_alt_waiting_on_chip(alt)) {
@@ -317,17 +342,19 @@ static inline struct switch_pd_alt_out switch_pd_alt_timer(struct switch_pd_alt 
     }
     if (alt->step == SWITCH_PD_ALT_DOCK_QUERY || alt->step == SWITCH_PD_ALT_DOCK_LED ||
         alt->step == SWITCH_PD_ALT_HUB_ENABLE) {
-        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "the dock did not answer within 1.5 s (its hub stays off)");
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE,
+                                    "the dock did not answer within 1.5 s (its hub stays off)");
     }
     return switch_pd_alt_finish(alt, SWITCH_PD_ALT_FAILED, "the partner did not answer within 1.5 s");
 }
 
 static inline const char *switch_pd_alt_step_name(enum switch_pd_alt_step step)
 {
-    static const char *const names[] = {"idle",          "stale DisplayPort exit", "data role swap",  "Discover Identity",
-                                        "Discover SVIDs", "Discover Modes",        "dock mode entry", "DisplayPort discovery",
-                                        "DisplayPort Configure", "dock state",     "dock LED",        "dock hub power-up",
-                                        "dock hub enable", "dock hub retry",       "done",            "failed"};
+    static const char *const names[] = {
+        "idle",           "stale DisplayPort exit", "data role swap",        "Discover Identity",     "Discover SVIDs",
+        "Discover Modes", "dock mode entry",        "DisplayPort discovery", "DisplayPort Configure", "dock state",
+        "dock LED",       "dock hub power-up",      "dock hub enable",       "dock hub retry",        "done",
+        "failed"};
     return (unsigned)step < sizeof(names) / sizeof(names[0]) ? names[step] : "?";
 }
 

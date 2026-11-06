@@ -10,29 +10,29 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SWITCH_DPAUX_INTR_EN_AUX       0x01u
-#define SWITCH_DPAUX_INTR_AUX          0x05u
-#define SWITCH_DPAUX_INTR_AUX_DONE     (1u << 3)
-#define SWITCH_DPAUX_INTR_IRQ_EVENT    (1u << 2)
-#define SWITCH_DPAUX_INTR_UNPLUG_EVENT (1u << 1)
-#define SWITCH_DPAUX_INTR_PLUG_EVENT   (1u << 0)
-#define SWITCH_DPAUX_AUXDATA_WRITE(x)  (0x09u + ((x) << 2))
-#define SWITCH_DPAUX_AUXDATA_READ(x)   (0x19u + ((x) << 2))
-#define SWITCH_DPAUX_AUXADDR           0x29u
-#define SWITCH_DPAUX_AUXCTL            0x2Du
-#define SWITCH_DPAUX_AUXCTL_TRANSACTREQ (1u << 16)
+#define SWITCH_DPAUX_INTR_EN_AUX         0x01u
+#define SWITCH_DPAUX_INTR_AUX            0x05u
+#define SWITCH_DPAUX_INTR_AUX_DONE       (1u << 3)
+#define SWITCH_DPAUX_INTR_IRQ_EVENT      (1u << 2)
+#define SWITCH_DPAUX_INTR_UNPLUG_EVENT   (1u << 1)
+#define SWITCH_DPAUX_INTR_PLUG_EVENT     (1u << 0)
+#define SWITCH_DPAUX_AUXDATA_WRITE(x)    (0x09u + ((x) << 2))
+#define SWITCH_DPAUX_AUXDATA_READ(x)     (0x19u + ((x) << 2))
+#define SWITCH_DPAUX_AUXADDR             0x29u
+#define SWITCH_DPAUX_AUXCTL              0x2Du
+#define SWITCH_DPAUX_AUXCTL_TRANSACTREQ  (1u << 16)
 #define SWITCH_DPAUX_AUXCTL_ADDRESS_ONLY (1u << 8)
-#define SWITCH_DPAUX_AUXSTAT           0x31u
-#define SWITCH_DPAUX_AUXSTAT_HPD       (1u << 28)
-#define SWITCH_DPAUX_AUXSTAT_ERRORS    0xF00u
-#define SWITCH_DPAUX_HYBRID_PADCTL     0x49u
-#define SWITCH_DPAUX_HYBRID_SPARE      0x4Du
+#define SWITCH_DPAUX_AUXSTAT             0x31u
+#define SWITCH_DPAUX_AUXSTAT_HPD         (1u << 28)
+#define SWITCH_DPAUX_AUXSTAT_ERRORS      0xF00u
+#define SWITCH_DPAUX_HYBRID_PADCTL       0x49u
+#define SWITCH_DPAUX_HYBRID_SPARE        0x4Du
 
-#define SWITCH_DP_AUX_MAX              16u
-#define SWITCH_DP_AUX_RETRIES          7u
-#define SWITCH_DP_AUX_RETRY_US         500u
-#define SWITCH_DP_EDID_ADDRESS         0x50u
-#define SWITCH_DP_EDID_SEGMENT         0x30u
+#define SWITCH_DP_AUX_MAX      16u
+#define SWITCH_DP_AUX_RETRIES  7u
+#define SWITCH_DP_AUX_RETRY_US 500u
+#define SWITCH_DP_EDID_ADDRESS 0x50u
+#define SWITCH_DP_EDID_SEGMENT 0x30u
 
 enum switch_dp_aux_op {
     SWITCH_DP_AUX_I2C_WRITE = 0x0,
@@ -93,7 +93,8 @@ static inline void switch_dp_aux_fifo_words(const struct switch_dp_aux_request *
     }
 }
 
-static inline enum switch_dp_aux_result switch_dp_aux_decode(uint32_t auxstat, const struct switch_dp_aux_request *request)
+static inline enum switch_dp_aux_result switch_dp_aux_decode(uint32_t auxstat,
+                                                             const struct switch_dp_aux_request *request)
 {
     if ((auxstat & (1u << 8)) != 0) {
         return SWITCH_DP_AUX_TIMEOUT;
@@ -102,12 +103,18 @@ static inline enum switch_dp_aux_result switch_dp_aux_decode(uint32_t auxstat, c
         return SWITCH_DP_AUX_ERROR;
     }
     switch ((auxstat >> 16) & 0xFu) {
-    case 0x0: break;
-    case 0x1: return SWITCH_DP_AUX_NACK;
-    case 0x2: return SWITCH_DP_AUX_DEFER;
-    case 0x4: return SWITCH_DP_AUX_I2C_NACK;
-    case 0x8: return SWITCH_DP_AUX_I2C_DEFER;
-    default: return SWITCH_DP_AUX_ERROR;
+    case 0x0:
+        break;
+    case 0x1:
+        return SWITCH_DP_AUX_NACK;
+    case 0x2:
+        return SWITCH_DP_AUX_DEFER;
+    case 0x4:
+        return SWITCH_DP_AUX_I2C_NACK;
+    case 0x8:
+        return SWITCH_DP_AUX_I2C_DEFER;
+    default:
+        return SWITCH_DP_AUX_ERROR;
     }
     if (switch_dp_aux_reads(request->op) && request->size > 0 && (auxstat & 0xFFu) != request->size) {
         return SWITCH_DP_AUX_SHORT;

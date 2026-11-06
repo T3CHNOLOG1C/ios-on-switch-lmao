@@ -8,30 +8,30 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SWITCH_DPCD_REV                     0x000u
-#define SWITCH_DPCD_MAX_LINK_RATE           0x001u
-#define SWITCH_DPCD_MAX_LANE_COUNT          0x002u
+#define SWITCH_DPCD_REV                      0x000u
+#define SWITCH_DPCD_MAX_LINK_RATE            0x001u
+#define SWITCH_DPCD_MAX_LANE_COUNT           0x002u
 #define SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL 0x00Eu
-#define SWITCH_DPCD_LINK_BW_SET             0x100u
-#define SWITCH_DPCD_TRAINING_PATTERN_SET    0x102u
-#define SWITCH_DPCD_DOWNSPREAD_CTRL         0x107u
-#define SWITCH_DPCD_SINK_COUNT              0x200u
-#define SWITCH_DPCD_LANE0_1_STATUS          0x202u
-#define SWITCH_DPCD_SET_POWER               0x600u
-#define SWITCH_DPCD_ENHANCED_FRAME          (1u << 7)
-#define SWITCH_DPCD_TPS3                    (1u << 6)
-#define SWITCH_DPCD_SCRAMBLING_DISABLE      (1u << 5)
-#define SWITCH_DPCD_MAX_SWING_REACHED       (1u << 2)
+#define SWITCH_DPCD_LINK_BW_SET              0x100u
+#define SWITCH_DPCD_TRAINING_PATTERN_SET     0x102u
+#define SWITCH_DPCD_DOWNSPREAD_CTRL          0x107u
+#define SWITCH_DPCD_SINK_COUNT               0x200u
+#define SWITCH_DPCD_LANE0_1_STATUS           0x202u
+#define SWITCH_DPCD_SET_POWER                0x600u
+#define SWITCH_DPCD_ENHANCED_FRAME           (1u << 7)
+#define SWITCH_DPCD_TPS3                     (1u << 6)
+#define SWITCH_DPCD_SCRAMBLING_DISABLE       (1u << 5)
+#define SWITCH_DPCD_MAX_SWING_REACHED        (1u << 2)
 #define SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED (1u << 5)
-#define SWITCH_DPCD_CR_DONE                 (1u << 0)
-#define SWITCH_DPCD_EQ_DONE                 (1u << 1)
-#define SWITCH_DPCD_SYMBOL_LOCKED           (1u << 2)
-#define SWITCH_DPCD_INTERLANE_ALIGN_DONE    (1u << 0)
+#define SWITCH_DPCD_CR_DONE                  (1u << 0)
+#define SWITCH_DPCD_EQ_DONE                  (1u << 1)
+#define SWITCH_DPCD_SYMBOL_LOCKED            (1u << 2)
+#define SWITCH_DPCD_INTERLANE_ALIGN_DONE     (1u << 0)
 
-#define SWITCH_DP_CR_US                     100u
-#define SWITCH_DP_CR_SAME_SWING_MAX         5u
-#define SWITCH_DP_CR_TRIES_MAX              10u
-#define SWITCH_DP_EQ_TRIES_MAX              5u
+#define SWITCH_DP_CR_US             100u
+#define SWITCH_DP_CR_SAME_SWING_MAX 5u
+#define SWITCH_DP_CR_TRIES_MAX      10u
+#define SWITCH_DP_EQ_TRIES_MAX      5u
 
 enum switch_dp_train_phase {
     SWITCH_DP_TRAIN_CLOCK_RECOVERY,
@@ -97,8 +97,8 @@ static inline struct switch_dp_train_out switch_dp_train_drive(const struct swit
 static inline struct switch_dp_train_out switch_dp_train_start(struct switch_dp_train *t, uint8_t lanes, bool tps3,
                                                                uint8_t rd_interval)
 {
-    const struct switch_dp_train fresh = {SWITCH_DP_TRAIN_CLOCK_RECOVERY, lanes, tps3, switch_dp_eq_wait_us(rd_interval),
-                                          {0}, {0}, 0, 0, 0};
+    const struct switch_dp_train fresh = {
+        SWITCH_DP_TRAIN_CLOCK_RECOVERY, lanes, tps3, switch_dp_eq_wait_us(rd_interval), {0}, {0}, 0, 0, 0};
     *t = fresh;
     return switch_dp_train_drive(t);
 }

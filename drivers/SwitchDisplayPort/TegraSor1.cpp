@@ -20,6 +20,7 @@ constexpr unsigned kClockSor1 = 183, kPartitionSor = 17, kPadLvds = 32 + 25, kPm
 constexpr uint8_t kPmic = 0x3c, kLdo8Config = 0x33, kLdo8On1V0 = (3u << 6) | 4u, kLdo8Off = 4u;
 constexpr unsigned kHead = 1;  // display controller B
 constexpr uint32_t kHandshakeUs = 10000;
+
 enum : uint32_t {
     CLK_SOURCE_DISP2 = 0x13c,
     CLK_SOURCE_SOR1 = 0x410,
@@ -30,8 +31,10 @@ enum : uint32_t {
     PLLD2_MISC2 = 0x574,
     PLLD2_MISC3 = 0x578,
 };
+
 constexpr uint32_t kPllEnable = 1u << 30, kPllLock = 1u << 27, kSdmEnable = 1u << 31;
 constexpr uint32_t kSourcePllD2Out0 = 5u << 29, kSourceMask = 7u << 29, kOutMask = 3u << 14, kOutPad = 1u << 14;
+
 enum : uint32_t {
     SUPER_STATE0 = 0x01,
     SUPER_STATE1 = 0x02,
@@ -63,6 +66,7 @@ enum : uint32_t {
     DP_AUDIO_VBLANK_SYMBOLS = 0x64,
     DP_TPG = 0x6d,
 };
+
 constexpr uint32_t kAttached = 1u << 3, kModeNormal = 1u << 2, kHeadAwake = 2u;
 constexpr uint32_t kTrigger = 1u << 31, kNormalPowerUp = 1u << 0, kModeSafe = 1u << 28;
 constexpr uint32_t kTestAttached = 1u << 10, kTestHeadMask = 3u << 8, kTestHeadAwake = 2u << 8;
@@ -266,7 +270,7 @@ void TegraSor1::drive(const struct switch_dp_train &train, const struct switch_d
         emphasis |= (uint32_t)kEmphasis[index] << (lane * 8);
         txPu = kTxPu[index] > txPu ? kTxPu[index] : txPu;
         const uint32_t lanePattern = out.pattern == 0 ? (1u << 4) : out.pattern;  // none: Galois scrambler on
-        pattern = (pattern << 8) | lanePattern | (1u << 6);                         // 8b/10b channel coding
+        pattern = (pattern << 8) | lanePattern | (1u << 6);                       // 8b/10b channel coding
     }
     write(LANE_DRIVE_CURRENT0, swing);
     write(LANE_PREEMPHASIS0, emphasis);

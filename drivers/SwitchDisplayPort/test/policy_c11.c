@@ -13,6 +13,6 @@ int switch_dp_policy_c11(void)
 {
     struct switch_pd_alt alt;
     switch_pd_alt_init(&alt, true);
-    const struct switch_pd_alt_in in = {0, 0, 0, false, true};
+    const struct switch_pd_alt_in in = {0, 0, 0, false, true, false};
     return (int)switch_pd_alt_event(&alt, &in).act;
 }

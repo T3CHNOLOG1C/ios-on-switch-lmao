@@ -15,6 +15,7 @@ namespace {
 constexpr uint64_t kDisplayBPA = 0x54240000, kMcPA = 0x70019000;
 constexpr unsigned kClockDisp2 = 26, kPartitionDisb = 19;
 constexpr uint32_t kMcHotResetControl = 0x200, kMcHotResetDcb = 1u << 3;
+
 enum : uint32_t {
     DC_CMD_DISPLAY_COMMAND_OPTION0 = 0x031,
     DC_CMD_DISPLAY_COMMAND = 0x032,
@@ -60,6 +61,7 @@ enum : uint32_t {
     DC_WINBUF_ADDR_V_OFFSET = 0x808,
     DC_WINBUF_SURFACE_KIND = 0x80b,
 };
+
 constexpr uint32_t kGeneralActReq = 1u << 0, kWinAActReq = 1u << 1, kGeneralUpdate = 1u << 8;
 constexpr uint32_t kFrameEnd = 1u << 1, kContinuousDisplay = 1u << 5, kSor1Enable = 1u << 26;
 constexpr uint32_t kPowerAll = 0x50155;  // PW0..PW4, PM0, PM1
@@ -68,6 +70,7 @@ constexpr uint32_t kWindowA = 1u << 4, kWinEnable = 1u << 30, kB8G8R8A8 = 12, kD
 struct Reg {
     uint32_t index, value;
 };
+
 constexpr Reg kInit[] = {
     {DC_CMD_STATE_ACCESS, 0},
     {DC_CMD_REG_ACT_CONTROL, 0x454},

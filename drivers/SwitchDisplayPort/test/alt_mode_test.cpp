@@ -69,9 +69,14 @@ struct Model {
                 reply({8, 0x42, 0x80, 0x00, 0xFF, 0x00, 0x00, 0x7E, 0x05});
             }
             break;
-        case 0x03: reply({8, 0x43, 0x80, 0x01, 0xFF, 0x05, 0x00, 0x0C, 0x00}); break;
-        case 0x04: reply({4, 0x44, 0x81, 0x7E, 0x05}); break;
-        default: FAIL() << "unexpected VDM " << int(command);
+        case 0x03:
+            reply({8, 0x43, 0x80, 0x01, 0xFF, 0x05, 0x00, 0x0C, 0x00});
+            break;
+        case 0x04:
+            reply({4, 0x44, 0x81, 0x7E, 0x05});
+            break;
+        default:
+            FAIL() << "unexpected VDM " << int(command);
         }
     }
 
@@ -83,7 +88,9 @@ struct Model {
             messages.push_back(message);
         }
         switch (out.command) {
-        case SWITCH_PD_ALT_CMD_SEND_VDM: vdm(message); break;
+        case SWITCH_PD_ALT_CMD_SEND_VDM:
+            vdm(message);
+            break;
         case SWITCH_PD_ALT_CMD_ACCEPT_VDM:
             incoming = pending_reply;
             alerts.push_back(SWITCH_PD_ALT_ALERT_CMD_DONE);
@@ -109,7 +116,8 @@ struct Model {
             dp_status = 0;
             alerts.push_back(SWITCH_PD_ALT_ALERT_CMD_DONE);
             break;
-        default: FAIL() << "unexpected command " << out.command;
+        default:
+            FAIL() << "unexpected command " << out.command;
         }
     }
 };
@@ -120,6 +128,7 @@ struct Session {
     std::vector<std::string> lines;
     uint32_t timer_ms = 0;
     bool at_rest = true;
+    bool dock_power = true;
 
     explicit Session(bool want_dp = true)
     {
@@ -142,7 +151,7 @@ struct Session {
 
     void event(uint16_t alert)
     {
-        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest};
+        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest, dock_power};
         perform(switch_pd_alt_event(&alt, &in));
     }
 
@@ -241,6 +250,17 @@ TEST(AltMode, ChargerWithoutIdentityFreesTheLanes)
     run.settle();
     EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
     EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+}
+
+TEST(AltMode, OnlyTheDocksPowerSignatureIsAskedToSwap)
+{
+    Session run;
+    run.dock_power = false;
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_TRUE(run.model.commands.empty());
+    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+    EXPECT_TRUE(run.lines.empty());
 }
 
 TEST(AltMode, LanesArePendingUntilConfigured)

@@ -321,7 +321,7 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
 #if SWITCH_DISPLAYPORT || SWITCH_USB_SUPERSPEED
     switch_pd_alt_alert(alertBits, status1,
                         phase == SWITCH_PD_SINK && state.plugged && !(status1 & SWITCH_PD_STATUS1_SRC_MODE),
-                        requestAtRest());
+                        requestAtRest(), choice.dock);
 #endif
     notify();
 }

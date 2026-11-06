@@ -14,35 +14,35 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SWITCH_PD_ALT_ALERT_CMD_DONE      (1u << 2)
-#define SWITCH_PD_ALT_ALERT_PLUGPULL      (1u << 3)
-#define SWITCH_PD_ALT_ALERT_VDM_RECEIVED  (1u << 11)
-#define SWITCH_PD_ALT_ALERT_CONTRACT      (1u << 12)
-#define SWITCH_PD_ALT_STATUS1_LASTCMD     (7u << 4)
-#define SWITCH_PD_ALT_STATUS1_INSERT      (1u << 7)
-#define SWITCH_PD_ALT_STATUS1_DR_SHIFT    8
-#define SWITCH_PD_ALT_STATUS1_CSIDE       (1u << 11)
-#define SWITCH_PD_ALT_STATUS1_CMD_BUSY    (1u << 13)
-#define SWITCH_PD_ALT_DP_STATUS_DP_EN     (1u << 15)
-#define SWITCH_PD_ALT_DATA_ROLE_UFP       1u
-#define SWITCH_PD_ALT_DATA_ROLE_DFP       2u
+#define SWITCH_PD_ALT_ALERT_CMD_DONE     (1u << 2)
+#define SWITCH_PD_ALT_ALERT_PLUGPULL     (1u << 3)
+#define SWITCH_PD_ALT_ALERT_VDM_RECEIVED (1u << 11)
+#define SWITCH_PD_ALT_ALERT_CONTRACT     (1u << 12)
+#define SWITCH_PD_ALT_STATUS1_LASTCMD    (7u << 4)
+#define SWITCH_PD_ALT_STATUS1_INSERT     (1u << 7)
+#define SWITCH_PD_ALT_STATUS1_DR_SHIFT   8
+#define SWITCH_PD_ALT_STATUS1_CSIDE      (1u << 11)
+#define SWITCH_PD_ALT_STATUS1_CMD_BUSY   (1u << 13)
+#define SWITCH_PD_ALT_DP_STATUS_DP_EN    (1u << 15)
+#define SWITCH_PD_ALT_DATA_ROLE_UFP      1u
+#define SWITCH_PD_ALT_DATA_ROLE_DFP      2u
 
-#define SWITCH_PD_ALT_CMD_SEND_VDM        0x1111u
-#define SWITCH_PD_ALT_CMD_ACCEPT_VDM      0x1616u
-#define SWITCH_PD_ALT_CMD_DR_SWAP         0x1818u
-#define SWITCH_PD_ALT_CMD_DP_DISCOVER     0x3131u
-#define SWITCH_PD_ALT_CMD_DP_CONFIGURE    0x3636u
-#define SWITCH_PD_ALT_CMD_DP_EXIT         0x3B3Bu
+#define SWITCH_PD_ALT_CMD_SEND_VDM     0x1111u
+#define SWITCH_PD_ALT_CMD_ACCEPT_VDM   0x1616u
+#define SWITCH_PD_ALT_CMD_DR_SWAP      0x1818u
+#define SWITCH_PD_ALT_CMD_DP_DISCOVER  0x3131u
+#define SWITCH_PD_ALT_CMD_DP_CONFIGURE 0x3636u
+#define SWITCH_PD_ALT_CMD_DP_EXIT      0x3B3Bu
 
-#define SWITCH_PD_ALT_VDM_MAX             13u  // count byte + 12 bytes: the longest message sent (the dock's LED)
-#define SWITCH_PD_ALT_INCOMING_MAX        29u  // count byte + header + six VDOs
-#define SWITCH_PD_ALT_REPLY_MS            1500u
-#define SWITCH_PD_ALT_HUB_POWER_MS        500u
-#define SWITCH_PD_ALT_HUB_RETRY_MS        250u
-#define SWITCH_PD_ALT_HUB_RETRIES         10u
+#define SWITCH_PD_ALT_VDM_MAX      13u  // count byte + 12 bytes: the longest message sent (the dock's LED)
+#define SWITCH_PD_ALT_INCOMING_MAX 29u  // count byte + header + six VDOs
+#define SWITCH_PD_ALT_REPLY_MS     1500u
+#define SWITCH_PD_ALT_HUB_POWER_MS 500u
+#define SWITCH_PD_ALT_HUB_RETRY_MS 250u
+#define SWITCH_PD_ALT_HUB_RETRIES  10u
 
-#define SWITCH_PD_ALT_PIN_C               (1u << 2)
-#define SWITCH_PD_ALT_PIN_D               (1u << 3)
+#define SWITCH_PD_ALT_PIN_C (1u << 2)
+#define SWITCH_PD_ALT_PIN_D (1u << 3)
 
 enum switch_pd_alt_step {
     SWITCH_PD_ALT_IDLE,
@@ -87,8 +87,9 @@ struct switch_pd_alt_out {
 struct switch_pd_alt {
     enum switch_pd_alt_step step;
     bool want_dp;
-    bool accepted;  // the step's VDM was answered and ACCEPT went out: its CMD_DONE means the reply is readable
-    bool paused;    // a contract alert while a command was out: the step goes again once SwitchPD is at rest
+    bool dock_power;  // the source's PDOs are the dock's signature (SwitchChargePolicy.h): the only partner swapped to
+    bool accepted;    // the step's VDM was answered and ACCEPT went out: its CMD_DONE means the reply is readable
+    bool paused;      // a contract alert while a command was out: the step goes again once SwitchPD is at rest
     bool dock, old_dock_firmware, hub_enabled;
     uint8_t pin, dp_lanes, hub_tries;
     uint8_t configure[4];
@@ -97,8 +98,9 @@ struct switch_pd_alt {
 
 static inline void switch_pd_alt_init(struct switch_pd_alt *alt, bool want_dp)
 {
-    const struct switch_pd_alt fresh = {SWITCH_PD_ALT_IDLE, want_dp, false, false, false, false, false, 0, 0, 0,
-                                        {0, 0, 0, 0},       SWITCH_PD_ALT_LANES_FREE};
+    const struct switch_pd_alt fresh = {
+        SWITCH_PD_ALT_IDLE,      want_dp, false, false, false, false, false, false, 0, 0, 0, {0, 0, 0, 0},
+        SWITCH_PD_ALT_LANES_FREE};
     *alt = fresh;
 }
 

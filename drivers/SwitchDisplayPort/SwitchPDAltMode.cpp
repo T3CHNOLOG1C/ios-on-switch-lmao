@@ -20,7 +20,13 @@
 namespace {
 constexpr unsigned kBus = 1;
 constexpr uint8_t kPD = 0x18;
-enum : uint8_t { COMMAND = 0x05, DP_STATUS = 0x18, INCOMING_VDM = 0x50, OUTGOING_VDM = 0x60 };
+
+enum : uint8_t {
+    COMMAND = 0x05,
+    DP_STATUS = 0x18,
+    INCOMING_VDM = 0x50,
+    OUTGOING_VDM = 0x60
+};
 
 #if SWITCH_DISPLAYPORT
 constexpr bool kWantDisplayPort = true;
@@ -100,7 +106,7 @@ void switch_pd_alt_attach(IOService *owner, IOWorkLoop *loop)
     }
 }
 
-void switch_pd_alt_alert(uint16_t alert, uint16_t status1, bool sink_session, bool at_rest)
+void switch_pd_alt_alert(uint16_t alert, uint16_t status1, bool sink_session, bool at_rest, bool dock_power)
 {
     gStatus1 = status1;
     uint16_t dp_status = 0;
@@ -109,7 +115,7 @@ void switch_pd_alt_alert(uint16_t alert, uint16_t status1, bool sink_session, bo
         (void)tegra_i2c_read(kBus, kPD, DP_STATUS, raw, sizeof(raw));
         dp_status = (uint16_t)(raw[0] | (raw[1] << 8));
     }
-    const struct switch_pd_alt_in in = {alert, status1, dp_status, sink_session, at_rest};
+    const struct switch_pd_alt_in in = {alert, status1, dp_status, sink_session, at_rest, dock_power};
     const enum switch_pd_alt_step before = gAlt.step;
     const struct switch_pd_alt_out out = switch_pd_alt_event(&gAlt, &in);
     if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && gAlt.step == before) {

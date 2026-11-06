@@ -138,8 +138,8 @@ static inline bool switch_dp_tu_config(uint32_t pixel_khz, uint32_t hactive, uin
     if (input >= output) {
         return false;
     }
-    struct switch_dp_tu_params params = {(uint32_t)(link_rate * hactive / pclk), input * f / output, f, 0, 0, 0, 64,
-                                         64 * f};
+    struct switch_dp_tu_params params = {
+        (uint32_t)(link_rate * hactive / pclk), input * f / output, f, 0, 0, 0, 64, 64 * f};
     for (uint32_t size = 64; size >= 32; --size) {
         if (switch_dp_tu_try(&params, size)) {
             break;
@@ -183,8 +183,8 @@ struct switch_dp_plld2 {
 // twice it, from the 38.4 MHz oscillator with M = 1 and the SDM's fraction for clocks the integer N cannot hit.
 static inline bool switch_dp_plld2_for(uint32_t pixel_khz, uint32_t ref_khz, struct switch_dp_plld2 *pll)
 {
-    static const uint8_t pdivs[17][2] = {{1, 0},  {2, 1},   {3, 2},   {4, 3},   {5, 4},   {6, 5},
-                                         {8, 6},  {9, 7},   {10, 8},  {12, 9},  {15, 10}, {16, 11},
+    static const uint8_t pdivs[17][2] = {{1, 0},   {2, 1},   {3, 2},   {4, 3},   {5, 4},   {6, 5},
+                                         {8, 6},   {9, 7},   {10, 8},  {12, 9},  {15, 10}, {16, 11},
                                          {18, 12}, {20, 13}, {24, 14}, {30, 15}, {32, 16}};
     const uint64_t target_hz = (uint64_t)pixel_khz * 2000u, ref_hz = (uint64_t)ref_khz * 1000u;
     if (target_hz == 0 || ref_hz == 0) {

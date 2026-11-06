@@ -24,15 +24,33 @@ class SwitchDisplayPort : public IOService {
 
 public:
     bool begin();
+
     IOWorkLoop *getWorkLoop() const override
     {
         return loop;
     }
+
     void setAltLanes(unsigned lanes, bool flipped);
 
 private:
-    enum class Stage : uint8_t { Off, Waiting, Probing, Training, Running };
-    enum class Next : uint8_t { Caps, Powered, Edid, LinkSet, Coding, TrainingSet, TrainingStatus, Trained, LinkStatus };
+    enum class Stage : uint8_t {
+        Off,
+        Waiting,
+        Probing,
+        Training,
+        Running
+    };
+    enum class Next : uint8_t {
+        Caps,
+        Powered,
+        Edid,
+        LinkSet,
+        Coding,
+        TrainingSet,
+        TrainingStatus,
+        Trained,
+        LinkStatus
+    };
 
     IOWorkLoop *loop = nullptr;
     IOInterruptEventSource *auxSource = nullptr, *dcSource = nullptr;

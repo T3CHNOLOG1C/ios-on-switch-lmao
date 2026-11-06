@@ -15,8 +15,9 @@ class IOWorkLoop;
 void switch_pd_alt_attach(IOService *owner, IOWorkLoop *loop);
 
 // After SwitchPD has handled an ALERT (or looked at the port): `sink_session` is its sink phase with a source partner,
-// `at_rest` that its request is not using COMMAND (settling, published or given up).
-void switch_pd_alt_alert(uint16_t alert, uint16_t status1, bool sink_session, bool at_rest);
+// `at_rest` that its request is not using COMMAND (settling, published or given up), `dock_power` that the source's
+// PDOs are the Nintendo dock's signature.
+void switch_pd_alt_alert(uint16_t alert, uint16_t status1, bool sink_session, bool at_rest, bool dock_power);
 
 // SwitchPD's answer to "is your request at rest now", for the engine's timer.
 extern "C" bool switch_pd_alt_at_rest(void);

@@ -55,8 +55,21 @@ constexpr uint32_t kBanks[7][6] = {
     {0x364, 0x448, 0x44c, 0x35c, 0x438, 0x43c}, {0x280, 0x284, 0x288, 0x28c, 0x290, 0x294},
     {0x298, 0x29c, 0x2a0, 0x2a4, 0x2a8, 0x2ac},
 };
-enum : uint32_t { PWRGATE_TOGGLE = 0x30, REMOVE_CLAMPING = 0x34, PWRGATE_STATUS = 0x38, TOGGLE_START = 1u << 8 };
-enum : uint32_t { IO_DPD_REQ = 0x1b8, IO_DPD_STATUS = 0x1bc, IO_DPD2_REQ = 0x1c0, IO_DPD2_STATUS = 0x1c4 };
+
+enum : uint32_t {
+    PWRGATE_TOGGLE = 0x30,
+    REMOVE_CLAMPING = 0x34,
+    PWRGATE_STATUS = 0x38,
+    TOGGLE_START = 1u << 8
+};
+
+enum : uint32_t {
+    IO_DPD_REQ = 0x1b8,
+    IO_DPD_STATUS = 0x1bc,
+    IO_DPD2_REQ = 0x1c0,
+    IO_DPD2_STATUS = 0x1c4
+};
+
 constexpr uint32_t kDpdOff = 1u << 30, kDpdOn = 2u << 30;
 
 inline volatile uint8_t *car()

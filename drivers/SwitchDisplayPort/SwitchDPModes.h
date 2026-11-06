@@ -13,12 +13,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SWITCH_DP_MAX_WIDTH     1920u
-#define SWITCH_DP_MAX_HEIGHT    1080u
-#define SWITCH_DP_MAX_REFRESH   60500u  // mHz: 60 Hz and 59.94 Hz
-#define SWITCH_DP_SMOOTH        49900u  // mHz: 50 Hz and up count as smooth
+#define SWITCH_DP_MAX_WIDTH      1920u
+#define SWITCH_DP_MAX_HEIGHT     1080u
+#define SWITCH_DP_MAX_REFRESH    60500u  // mHz: 60 Hz and 59.94 Hz
+#define SWITCH_DP_SMOOTH         49900u  // mHz: 50 Hz and up count as smooth
 #define SWITCH_DP_BITS_PER_PIXEL 24u
-#define SWITCH_DP_MAX_MODES     32u
+#define SWITCH_DP_MAX_MODES      32u
 
 struct switch_dp_mode {
     uint32_t pixel_khz;
@@ -121,6 +121,7 @@ static inline bool switch_dp_cta_vic(unsigned vic, struct switch_dp_mode *mode)
         {33, {74250, 1920, 528, 44, 148, 1080, 4, 5, 36, true, true, false}},
         {34, {74250, 1920, 88, 44, 148, 1080, 4, 5, 36, true, true, false}},
     };
+
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
         if (table[i].vic == vic) {
             *mode = table[i].mode;
@@ -240,7 +241,8 @@ static inline int switch_dp_pick_mode(const struct switch_dp_mode_list *list, ui
     int best = -1;
     for (unsigned i = 0; i < list->count; ++i) {
         const struct switch_dp_mode *m = &list->modes[i];
-        if (switch_dp_mode_allowed(m, link_payload_kbps) && (best < 0 || switch_dp_mode_better(m, &list->modes[best]))) {
+        if (switch_dp_mode_allowed(m, link_payload_kbps) &&
+            (best < 0 || switch_dp_mode_better(m, &list->modes[best]))) {
             best = (int)i;
         }
     }
