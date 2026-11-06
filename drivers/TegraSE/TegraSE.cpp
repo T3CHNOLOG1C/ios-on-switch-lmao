@@ -21,8 +21,8 @@
 //     register_crypto.c). Every check is still corecrypto's; only the block arithmetic moves.
 //   - The DRBG: 64 bytes into the kernel PRNG (write_random) at start.
 //   - Small, one-off, latency-bound work stays on the A57s' AES/SHA instructions (code-signing's 16 KiB page hashes on
-//     page-in, short digests); from each algorithm's cutover up it goes to the engines. The cutover starts at 64 KiB
-//     and is replaced by the measured crossover in the timing run 90 s after start (1 KiB to 1 MiB, every algorithm,
+//     page-in, short digests); from each algorithm's cutover up it goes to the engines. The cutover is 64 KiB; a debug
+//     kernel replaces it with the crossover its timing run measures 90 s after start (1 KiB to 1 MiB, every algorithm,
 //     each engine against the CPU): the smallest size at which every engine is no slower than the CPU.
 //
 // Correctness: known answers per algorithm on each engine at start; then the first 32 operations of each algorithm and
@@ -142,20 +142,17 @@ struct Engine {
     IOFilterInterruptEventSource *source;
     int event;
     volatile uint32_t seen, status, owner;
-    volatile uint64_t doneAt;
     bool up, busy, proven;
     uint16_t slotsUsable;  // bit per keyslot the engine lets EL1 update and use
     Slot slots[16];
     uint64_t clock;  // LRU stamp
     Dma list, bounceIn, bounceOut;
-    uint64_t ops, ns;
+    uint64_t ops;
 };
 
 Engine gEngines[kEngines] = {
-    {"SE1", 0x70012000, 32 + 58, 1u << 14, nullptr, nullptr, 0,  0,  0,  0, 0,
-     false, false,      false,   0,        {},      0,       {}, {}, {}, 0, 0},
-    {"SE2", 0x70412000, 32 + 190, 1u << 13, nullptr, nullptr, 0,  0,  0,  0, 0,
-     false, false,      false,    0,        {},      0,       {}, {}, {}, 0, 0},
+    {"SE1", 0x70012000, 32 + 58, 1u << 14, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
+    {"SE2", 0x70412000, 32 + 190, 1u << 13, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
 };
 volatile uint8_t *gCar, *gAhb;
 IOWorkLoop *gLoop;
@@ -185,13 +182,13 @@ const char *const kAlgName[ALGS] = {"sha1",    "sha224",  "sha256",  "sha384",  
 struct AlgState {
     volatile bool on;
     volatile uint32_t ops;
-    volatile uint64_t bytes, bounced, cpuFallbacks;
+    volatile uint64_t bytes, bounced;
 };
 
 AlgState gAlg[ALGS];
 // The CPU keeps what is small and one-off (the A57s' AES/SHA instructions answer sooner); from this many bytes an
 // algorithm goes to the engines. Compiled defaults (code-signing's 16 KiB page hashes and single TLS records stay on the
-// CPU), replaced at the 90 s timing run by each algorithm's measured crossover.
+// CPU), replaced at a debug kernel's 90 s timing run by each algorithm's measured crossover.
 volatile size_t gCutover[ALGS] = {65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536};
 // The driver's own known-answer and timing threads: every size to the engines, whatever the cutover.
 thread_t volatile gForced[2];
@@ -225,6 +222,17 @@ void forceOnly(Engine *only)
 
 volatile uint64_t gUnreachable, gUnsleepable;  // bytes left to the CPU: not mappable / caller cannot sleep
 bool gStateLoad;                               // SHA compress from a loaded state works (the hook is installed)
+
+// The traffic counters: only a debug kernel's traffic line reads them.
+void tally(volatile uint64_t &counter, uint64_t bytes)
+{
+#if DEVELOPMENT || DEBUG
+    __atomic_fetch_add(&counter, bytes, __ATOMIC_RELAXED);
+#else
+    (void)counter;
+    (void)bytes;
+#endif
+}
 
 uint32_t rd(const Engine &e, uint32_t offset)
 {
@@ -301,7 +309,6 @@ bool filter(OSObject *, IOFilterInterruptEventSource *sender)
         if (!(status & (kIntDone | kIntError)))
             return false;
         wr(e, INT_STATUS, status);
-        e.doneAt = mach_absolute_time();
         e.status = status;
         e.seen = e.seen + 1;
         thread_wakeup(&e.event);
@@ -342,7 +349,6 @@ bool run(Engine &e, uint32_t in, uint32_t out)
     nanoseconds_to_absolutetime((uint64_t)kOpTimeoutMs * 1000000, &interval);
     assert_wait_deadline(&e.event, THREAD_UNINT, mach_absolute_time() + interval);
     __asm__ volatile("dsb sy" ::: "memory");
-    const uint64_t started = mach_absolute_time();
     wr(e, OPERATION, 1);
     const wait_result_t result = thread_block(THREAD_CONTINUE_NULL);
     if (result == THREAD_TIMED_OUT || e.seen == seen) {
@@ -379,8 +385,9 @@ bool run(Engine &e, uint32_t in, uint32_t out)
         }
     }
     e.proven = true;
+#if DEVELOPMENT || DEBUG
     e.ops++;
-    e.ns += tenths(e.doneAt - started) * 100;
+#endif
     return true;
 }
 
@@ -745,9 +752,9 @@ bool canSleep()
 
 void counted(unsigned alg, size_t len, const Side &a, const Side &b)
 {
-    __atomic_fetch_add(&gAlg[alg].bytes, len, __ATOMIC_RELAXED);
+    tally(gAlg[alg].bytes, len);
     if (a.bounced || b.bounced)
-        __atomic_fetch_add(&gAlg[alg].bounced, len, __ATOMIC_RELAXED);
+        tally(gAlg[alg].bounced, len);
 }
 
 // whole (a multiple of 16) bytes on an engine; iv is the operation's starting IV/counter, not changed here.
@@ -772,7 +779,7 @@ int aesLocked(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned key
             algOff(alg, gWhy);
         }
     } else {
-        __atomic_fetch_add(&gUnreachable, whole, __ATOMIC_RELAXED);
+        tally(gUnreachable, whole);
     }
     giveBack(e);
     return result;
@@ -941,14 +948,14 @@ extern "C" int tegra_se_cmac(const uint8_t *key, unsigned keyBytes, const void *
             for (unsigned i = 0; i < 4; ++i)
                 w[i] = rd(*e, HASH_RESULT + 4 * i);
             memcpy(mac, w, 16);
-            __atomic_fetch_add(&gAlg[CMAC].bytes, len, __ATOMIC_RELAXED);
+            tally(gAlg[CMAC].bytes, len);
             result = 0;
         } else {
             algOff(CMAC, gWhy);
         }
         bzero(e->list.va + kScratch, 16);
     } else {
-        __atomic_fetch_add(&gUnreachable, len, __ATOMIC_RELAXED);
+        tally(gUnreachable, len);
     }
     giveBack(e);
     if (!result && shouldCheck(CMAC)) {  // CBC-MAC of the same blocks on the CPU
@@ -997,7 +1004,7 @@ extern "C" int tegra_se_digest(unsigned which, const void *in, size_t len, uint8
             algOff(alg, gWhy);
         }
     } else {
-        __atomic_fetch_add(&gUnreachable, len, __ATOMIC_RELAXED);
+        tally(gUnreachable, len);
     }
     giveBack(e);
     return result;
@@ -1021,7 +1028,7 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
     if (len < kHookMinBytes || (len < gCutover[alg] && !forced()) || !gAlg[alg].on)
         return -1;
     if (!canSleep()) {
-        __atomic_fetch_add(&gUnsleepable, len, __ATOMIC_RELAXED);
+        tally(gUnsleepable, len);
         return -1;
     }
     const unsigned words = (unsigned)(original->state_size / 4);
@@ -1042,7 +1049,7 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
             algOff(alg, gWhy);
         }
     } else {
-        __atomic_fetch_add(&gUnreachable, len, __ATOMIC_RELAXED);
+        tally(gUnreachable, len);
     }
     giveBack(e);
     if (result)
@@ -1243,6 +1250,7 @@ bool rng(Engine &e, uint8_t out[64])
     return any && !repeat;
 }
 
+#if DEVELOPMENT || DEBUG
 struct Parallel {
     unsigned engine, rounds;
     uint8_t *buf;
@@ -1447,6 +1455,7 @@ void stats(const char *when)
                  gUnreachable >> 20, gUnsleepable >> 20);
     os_log(OS_LOG_DEFAULT, "%{public}s", line);
 }
+#endif
 
 void seThread(void *, wait_result_t)
 {
@@ -1549,6 +1558,7 @@ void seThread(void *, wait_result_t)
           gStateLoad ? "routed here (code-signing hashes included)" : "left on the CPU: state load did not answer",
           reseeded ? "reseeded from the DRBG" : "not reseeded (entropy clock off or DRBG output implausible)");
 
+#if DEVELOPMENT || DEBUG
     IOSleep(90000);  // the timing run waits for the boot to be over
     if (clockOn())
         timing();
@@ -1556,6 +1566,7 @@ void seThread(void *, wait_result_t)
         stats(gStateLoad ? "traffic" : "traffic (hook off)");
         IOSleep(300000);
     }
+#endif
 }
 }  // namespace
 
