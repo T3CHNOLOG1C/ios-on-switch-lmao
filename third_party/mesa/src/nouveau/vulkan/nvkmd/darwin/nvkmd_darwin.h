@@ -139,5 +139,7 @@ struct nvkmd_darwin_sync_point {
 /* The IOSurface the next host import on this thread covers, from the Metal frontend (dlsym: the Vulkan loader opened
  * this library RTLD_LOCAL). */
 void switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes);
+/* The GPU may write the surface from now on (method 15): before its first render, blit or store. false: not said. */
+bool switch_nvk_surface_gpu_writes(uint32_t surface_id);
 
 #endif /* NVKMD_DARWIN_H */

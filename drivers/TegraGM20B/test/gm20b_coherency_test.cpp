@@ -38,8 +38,14 @@ tgm_coh *add(uint64_t pa, uint32_t surfaceId, const uint64_t *pas, uint32_t npag
 	     int *covered = nullptr)
 {
 	int ignored = 0;
-	return tgm_coherency_add(pa, surfaceId, pas, npages, writable,
+	return tgm_coherency_add(pa, surfaceId, pas, npages, writable, writable,
 				 covered ? covered : &ignored);
+}
+
+tgm_coh *sampled(uint64_t pa, uint32_t surfaceId, const uint64_t *pas, uint32_t npages)
+{
+	int ignored = 0;
+	return tgm_coherency_add(pa, surfaceId, pas, npages, 1, 0, &ignored);
 }
 
 class Coherency : public ::testing::Test
@@ -66,6 +72,34 @@ TEST_F(Coherency, LockInvalidatesOnlyAfterGpuWrites)
 	tegra_gm20b_iosurface_trap(kLock, 7, 0);
 	EXPECT_EQ(cleanCalls().size(), 1u);
 	tgm_coherency_put(c);
+}
+
+TEST_F(Coherency, ASurfaceTheGpuOnlySamplesIsNeverInvalidatedOnLock)
+{
+	const auto p = pages(0x8a000000, 4);
+	tgm_coh *c = sampled(p[0], 61, p.data(), 4);
+	tgm_coherency_wrote(c);
+	tegra_gm20b_iosurface_trap(kLock, 61, 0);
+	EXPECT_TRUE(cleanCalls().empty());
+	tgm_coherency_gpu_writes(61);
+	tgm_coherency_wrote(c);
+	tegra_gm20b_iosurface_trap(kLock, 61, 0);
+	ASSERT_EQ(cleanCalls().size(), 1u);
+	EXPECT_EQ(cleanCalls()[0], p);
+	tgm_coherency_put(c);
+}
+
+TEST_F(Coherency, ARenderedToImportMakesTheSurfaceGpuWrittenForEveryImporter)
+{
+	const auto p = pages(0x8b000000, 2);
+	tgm_coh *reader = sampled(p[0], 62, p.data(), 2);
+	tgm_coh *renderer = add(p[0], 62, p.data(), 2, 1);
+	ASSERT_EQ(reader, renderer);
+	tgm_coherency_wrote(reader);
+	tegra_gm20b_iosurface_trap(kLock, 62, kReadOnly);
+	EXPECT_EQ(cleanCalls().size(), 1u);
+	tgm_coherency_put(renderer);
+	tgm_coherency_put(reader);
 }
 
 TEST_F(Coherency, UnlockCleansUnlessReadOnly)

@@ -27,9 +27,10 @@ enum {
 	TegraGM20BMethodWaitFence = 9,
 	TegraGM20BMethodGetTimestamp = 10,
 	TegraGM20BMethodGetStatus = 11,
-	TegraGM20BMethodMap = 12,   /* with TegraGM20BInfoKernelMap */
-	TegraGM20BMethodUnmap = 13, /* with TegraGM20BInfoKernelMap */
-	TegraGM20BMethodOrder = 14, /* with TegraGM20BInfoOrder */
+	TegraGM20BMethodMap = 12,           /* with TegraGM20BInfoKernelMap */
+	TegraGM20BMethodUnmap = 13,         /* with TegraGM20BInfoKernelMap */
+	TegraGM20BMethodOrder = 14,         /* with TegraGM20BInfoOrder */
+	TegraGM20BMethodSurfaceWrites = 15, /* with TegraGM20BInfoSurfaceWrites */
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -42,6 +43,8 @@ enum {
 	TegraGM20BInfoZcull = 1u << 2,      /* zcull[] is valid */
 	TegraGM20BInfoKernelMap = 1u << 3,  /* Map and Unmap (methods 12, 13) are implemented */
 	TegraGM20BInfoOrder = 1u << 4,      /* Order (method 14) is implemented */
+	TegraGM20BInfoSurfaceWrites = 1u
+		<< 5, /* BoImport takes TegraGM20BImportGpuReads; method 15 is implemented */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
@@ -98,12 +101,25 @@ struct TegraGM20BAbiBoAllocReply {
  * surface_id: the IOSurface whose memory the range lies in (IOSurfaceGetID), or 0 for other memory. With an ID the kernel
  * keeps the import coherent across every process's IOSurfaceLock/Unlock of that surface (an unlock that wrote cleans it
  * for the GPU, a lock after GPU writes invalidates it for the CPU). Memory without an ID is cleaned once, at import;
- * later CPU writes to it are the caller's to clean. */
+ * later CPU writes to it are the caller's to clean.
+ * flags: TegraGM20BImportGpuReads says the GPU only reads the surface until a SurfaceWrites (method 15) names it, so a CPU
+ * lock of a surface only ever sampled invalidates nothing. Without it every submission may have written the import. */
+enum {
+	TegraGM20BImportGpuReads = 1u << 0,
+};
+
 struct TegraGM20BAbiBoImport {
 	uint64_t address; /* page aligned */
 	uint64_t bytes;   /* page multiple */
 	uint32_t surface_id;
-	uint32_t reserved; /* 0 */
+	uint32_t flags; /* TegraGM20BImport* */
+};
+
+/* Method 15. The GPU may write the IOSurface surface_id from now on, in any process that imported it: before a submission
+ * that renders, blits or stores into it is made. */
+struct TegraGM20BAbiSurfaceWrites {
+	uint32_t surface_id;
+	uint32_t reserved;
 };
 
 /* Method 4. The handle dies now; its pages are released only after every channel of the connection has completed what it had
@@ -286,6 +302,7 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiInfo, 192);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoAlloc, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoAllocReply, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoImport, 24);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceWrites, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoFree, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBindOp, 40);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiVmBind, 4008);

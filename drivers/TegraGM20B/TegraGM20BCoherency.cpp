@@ -3,9 +3,13 @@
 // whoever touches an imported IOSurface on the CPU pays, at its IOSurfaceLock/Unlock. Those are IOKit traps
 // (IOConnectTrap3 index 2 lock, 3 unlock, p1 the surface ID, p2 the lock options), which XNU's iokit_user_client_trap
 // hands to tegra_gm20b_iosurface_trap after the trap ran.
-//  - GPU -> CPU: Exec marks each writable import GPU-dirty (tgm_coherency_wrote). The next lock of the surface, in any
-//    process, invalidates its lines once and clears the mark, so the CPU reads what the GPU wrote rather than lines it
-//    cached before (a fresh surface's zeros came back as 16x1 black runs in a GPU-rendered launch snapshot).
+//  - GPU -> CPU: Exec marks each writable import GPU-dirty (tgm_coherency_wrote), if the GPU may write the surface at
+//    all: an import without TegraGM20BImportGpuReads, or a SurfaceWrites naming it (the Metal frontends send one before
+//    a surface is first rendered, blitted or stored into). The next lock of the surface, in any process, invalidates
+//    its lines once and clears the mark, so the CPU reads what the GPU wrote rather than lines it cached before (a
+//    fresh surface's zeros came back as 16x1 black runs in a GPU-rendered launch snapshot). A surface the GPU only
+//    samples (an app's backing store in the render server) is never marked, so the app's lock to redraw it costs no
+//    invalidate.
 //  - CPU -> GPU: an unlock that was not read-only cleans the surface, so the GPU reads what the CPU wrote. Read-only
 //    imports included: the GPU samples what an app redraws into them.
 //  - Import: the importer cleans the pages for what the CPU wrote before. Memory imported without a surface ID (no-copy
@@ -30,7 +34,8 @@ struct tgm_coh {
 	IOLock *lock;   // pas, npages: the cache ops and a larger import's list
 	uint64_t *pas;  // the largest page list imported for it
 	uint32_t npages;
-	int writable;         // some import lets the GPU write it
+	int writable;  // some import lets the GPU write it
+	int gpuWrites;  // atomic: an import or a SurfaceWrites says the GPU may write it, so submissions mark it
 	int cleaned;          // atomic: an import of it finished its own clean
 	int gpuDirty;         // atomic: the GPU may have written it since the last CPU lock
 	uint32_t tiledBinds;  // atomic: live whole-surface binds with TEGRA_SCANOUT_TILED_KIND
@@ -206,7 +211,8 @@ extern "C" int tgm_coherency_init(void)
 }
 
 extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, const uint64_t *pas,
-					     uint32_t npages, int writable, int *covered)
+					     uint32_t npages, int writable, int gpu_writes,
+					     int *covered)
 {
 	*covered = 0;
 	if (!npages || !gRegistryLock)
@@ -226,6 +232,8 @@ extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, c
 	if (c) {
 		c->refs++;
 		c->writable |= writable;
+		if (gpu_writes)
+			__atomic_store_n(&c->gpuWrites, 1, __ATOMIC_RELAXED);
 		if (surface_id && !c->surfaceId) {
 			c->surfaceId = surface_id;
 			tgm_coh **b = idBucket(surface_id);
@@ -268,8 +276,20 @@ extern "C" void tgm_coherency_put(struct tgm_coh *c)
 
 extern "C" void tgm_coherency_wrote(struct tgm_coh *c)
 {
-	if (c)
+	if (c && __atomic_load_n(&c->gpuWrites, __ATOMIC_RELAXED))
 		__atomic_store_n(&c->gpuDirty, 1, __ATOMIC_RELEASE);
+}
+
+extern "C" void tgm_coherency_gpu_writes(uint32_t surface_id)
+{
+	if (!surface_id || !gRegistryLock)
+		return;
+	IOLockLock(gRegistryLock);
+	for (tgm_coh *c = *idBucket(surface_id); c; c = c->idNext) {
+		if (c->surfaceId == surface_id)
+			__atomic_store_n(&c->gpuWrites, 1, __ATOMIC_RELAXED);
+	}
+	IOLockUnlock(gRegistryLock);
 }
 
 extern "C" void tgm_coherency_tiled_bind(struct tgm_coh *c, int add)

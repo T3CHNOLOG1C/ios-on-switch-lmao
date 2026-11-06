@@ -1264,8 +1264,9 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	// Registered for the coherency every process's IOSurfaceLock/Unlock of the surface drives (TegraGM20BCoherency.cpp):
 	// writable (the GPU may write it) unless the task maps the pages read-only.
 	int covered = 0;
+	const int gpuWrites = !bo->readOnly && !(in->flags & TegraGM20BImportGpuReads);
 	bo->coh = tgm_coherency_add(bo->pas[0], in->surface_id, bo->pas, bo->npages, !bo->readOnly,
-				    &covered);
+				    gpuWrites, &covered);
 	// The GPU does not snoop the CPU caches: what the task wrote must be in DRAM before the GPU reads it, and no dirty
 	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote.
 	if (!covered) {
@@ -1748,7 +1749,8 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	tgm_get_info(&info);
 	bzero(out, sizeof(*out));
 	out->abi_version = TegraGM20BAbiVersion;
-	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap | TegraGM20BInfoOrder;
+	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap | TegraGM20BInfoOrder |
+		     TegraGM20BInfoSurfaceWrites;
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;
@@ -1845,6 +1847,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiOrder);
 		wantOut = sizeof(TegraGM20BAbiOrderReply);
 		break;
+	case TegraGM20BMethodSurfaceWrites:
+		wantIn = sizeof(TegraGM20BAbiSurfaceWrites);
+		break;
 	default:
 		return kIOReturnUnsupported;
 	}
@@ -1855,7 +1860,12 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 
 	switch (method) {
 	case TegraGM20BMethodBoImport:
-		if (!reservedZero(static_cast<const TegraGM20BAbiBoImport *>(in)->reserved))
+		if (static_cast<const TegraGM20BAbiBoImport *>(in)->flags &
+		    ~uint32_t(TegraGM20BImportGpuReads))
+			return kIOReturnBadArgument;
+		break;
+	case TegraGM20BMethodSurfaceWrites:
+		if (!reservedZero(static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->reserved))
 			return kIOReturnBadArgument;
 		break;
 	case TegraGM20BMethodVmBind:
@@ -1945,6 +1955,11 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodOrder:
 		ret = order(static_cast<const TegraGM20BAbiOrder *>(in),
 			    static_cast<TegraGM20BAbiOrderReply *>(out));
+		break;
+	case TegraGM20BMethodSurfaceWrites:
+		tgm_coherency_gpu_writes(
+			static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->surface_id);
+		ret = kIOReturnSuccess;
 		break;
 	default:
 		ret = kIOReturnUnsupported;

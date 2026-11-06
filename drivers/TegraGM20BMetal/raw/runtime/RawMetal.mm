@@ -853,6 +853,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     raw::Texture _raw;
     bool _rawOk;  // the raw path can draw with it (else every command buffer using it goes to m2v)
     RMTextureKind _kind;
+    std::atomic<bool> _gpuWrites;  // its surface was declared GPU-written (surfaceGpuWrites)
     MTLTextureDescriptor *_descriptor;
     IOSurfaceRef _surface;
     NSUInteger _plane;
@@ -882,6 +883,21 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     uint8_t _pred;  // why the raw path does not keep it (RMPred; 0: it does)
 }
 @end
+
+// Before the raw path first renders into a surface texture: the kernel takes the surface's imports as only sampled until
+// then, so a CPU lock of a surface the GPU never writes invalidates nothing.
+static void declareGpuWrites(RMTexture *t)
+{
+    if (!t->_surface || t->_gpuWrites.exchange(true))
+        return;
+    if (gRM && gRM->raw && gRM->raw->surfaceGpuWrites(IOSurfaceGetID(t->_surface)))
+        return;
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true))
+        os_log_error(rawLog(),
+                     "raw: the GPU's writes to IOSurface %u were not declared: CPU readers may see stale lines",
+                     IOSurfaceGetID(t->_surface));
+}
 
 @implementation RMTexture
 
@@ -2357,6 +2373,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     }
     [_cb retain:s];
     [_cb retain:d];
+    if ([(id)d isKindOfClass:[RMTexture class]])
+        declareGpuWrites((RMTexture *)d);
     Cmd m = cmd(OpCopyTexture);
     m.obj = (__bridge void *)s;
     m.obj2 = (__bridge void *)d;
@@ -2450,6 +2468,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     }
     [_cb retain:s];
     [_cb retain:d];
+    if ([(id)d isKindOfClass:[RMTexture class]])
+        declareGpuWrites((RMTexture *)d);
     Cmd m = cmd(OpCopyBufferToTexture);
     m.obj = (__bridge void *)s;
     m.obj2 = (__bridge void *)d;
@@ -2552,6 +2572,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 - (void)generateMipmapsForTexture:(id<MTLTexture>)t
 {
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
+    if (x)
+        declareGpuWrites(x);
     if (x && x->_rawOk && x->_raw.chain)  // a chain's levels, on the 2D engine (raw::BlitEncoder::generate)
         _cb->_chains = true;
     else {
@@ -2726,6 +2748,8 @@ static bool heldBehindEvent();
         RMTexture *x = (RMTexture *)t;
         if ([(id)x isKindOfClass:[RMTexture class]] && x->_raw.chain)
             _chains = true;
+        if ([(id)x isKindOfClass:[RMTexture class]])
+            declareGpuWrites(x);
         if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !(x->_raw.renderable || x->_raw.shadowTarget)) {
             [self takeReason:WhyPass why:@"a color attachment the raw path does not render to"];
             const bool own = [(id)x isKindOfClass:[RMTexture class]];
@@ -4759,6 +4783,9 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
                                                    uint32_t(d.width), uint32_t(d.height), uint32_t(pitch),
                                                    uint32_t(d.pixelFormat), t->_raw);
     }
+    if (t->_rawOk &&
+        (d.usage == MTLTextureUsageUnknown || (d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite))))
+        declareGpuWrites(t);
     if (!t->_rawOk) {  // a surface the raw path does not take: m2v's texture over it, made now (it may refuse: nil, as today)
         // which term (createSurfaceTexture's, recomputed here: a creation, not the hot path)
         const size_t planes = IOSurfaceGetPlaneCount(s),

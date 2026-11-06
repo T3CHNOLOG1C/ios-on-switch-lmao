@@ -39,6 +39,8 @@ public:
     // The same in two steps, for a caller that serialises the VA list itself: the kernel's BoImport (the wiring: the slow part,
     // safe beside the other calls) and then the VA and its bind (bindImport, under the caller's lock).
     bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0);
+    // The GPU may write the IOSurface from now on (BoImport took it as only sampled): before its first render or store.
+    bool surfaceGpuWrites(uint32_t surfaceId);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
     // BoFree (the kernel unbinds it at once and releases the pages after the channels complete what they had); the VA goes
     // back to the free list at once: call it only once no submission that uses the BO is still running (raw::Device does).

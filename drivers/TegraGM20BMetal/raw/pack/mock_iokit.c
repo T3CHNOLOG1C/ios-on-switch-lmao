@@ -302,6 +302,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         memcpy(out, &r, sizeof(r));
         return KERN_SUCCESS;
     }
+    case TegraGM20BMethodSurfaceWrites:
+        return KERN_SUCCESS;
     case TegraGM20BMethodBoImport: {
         const struct TegraGM20BAbiBoImport *a = in;
         static const char *slow =

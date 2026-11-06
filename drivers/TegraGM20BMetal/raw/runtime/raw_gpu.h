@@ -390,6 +390,13 @@ public:
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory when wcOn() (a texture the CPU writes with
     // replaceRegion: no clean after), else pool memory
     bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false);
+
+    // Before the GPU first renders or stores into the IOSurface (Kernel::surfaceGpuWrites).
+    bool surfaceGpuWrites(uint64_t id)
+    {
+        return id && k_.surfaceGpuWrites(uint32_t(id));
+    }
+
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
                               uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t);
     // A two-plane 4:2:0 surface's texture of YCBCR8_420_2P (500), YCBCR8_420_2P_sRGB (520) or RGB8_420_2P (540): its planes at

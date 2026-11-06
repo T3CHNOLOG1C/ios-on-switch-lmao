@@ -11,6 +11,7 @@
 #include "util/macros.h"
 #include "util/os_misc.h"
 #include "util/os_time.h"
+#include "util/u_atomic.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "vk_log.h"
@@ -710,10 +711,15 @@ nvkmd_darwin_create_pdev(struct vk_object_base *log_obj,
  * Device
  */
 
+/* The device SurfaceWrites goes through: the process's first. The kernel's record is per surface, not per connection. */
+static struct nvkmd_darwin_dev *surface_writes_dev;
+
 static void
 nvkmd_darwin_dev_destroy(struct nvkmd_dev *_dev)
 {
    struct nvkmd_darwin_dev *dev = nvkmd_darwin_dev(_dev);
+
+   p_atomic_cmpxchg(&surface_writes_dev, dev, NULL);
 
    util_vma_heap_finish(&dev->heap);
    util_vma_heap_finish(&dev->replay_heap);
@@ -812,6 +818,7 @@ nvkmd_darwin_create_dev(struct nvkmd_pdev *_pdev,
    util_vma_heap_init(&dev->replay_heap, dev->replay_start,
                       info.va_end - dev->replay_start);
 
+   p_atomic_cmpxchg(&surface_writes_dev, NULL, dev);
    *dev_out = &dev->base;
    return VK_SUCCESS;
 }
@@ -940,6 +947,16 @@ switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes)
    import_surface.bytes = bytes;
 }
 
+bool
+switch_nvk_surface_gpu_writes(uint32_t surface_id)
+{
+   struct nvkmd_darwin_dev *dev = p_atomic_read(&surface_writes_dev);
+   struct TegraGM20BAbiSurfaceWrites req = { .surface_id = surface_id };
+
+   return dev && darwin_call(&dev->conn, TegraGM20BMethodSurfaceWrites, &req, sizeof(req),
+                             NULL, 0) == KERN_SUCCESS;
+}
+
 static uint32_t
 import_surface_id(const void *host_ptr, uint64_t size_B)
 {
@@ -963,6 +980,8 @@ nvkmd_darwin_import_host_mem(struct nvkmd_dev *_dev,
       .bytes = size_B,
       .surface_id = import_surface_id(host_ptr, size_B),
    };
+   if (req.surface_id)
+      req.flags = TegraGM20BImportGpuReads;
    struct TegraGM20BAbiBoAllocReply reply = { 0 };
    kern_return_t kr = darwin_call(&dev->conn, TegraGM20BMethodBoImport,
                                   &req, sizeof(req), &reply, sizeof(reply));

@@ -554,8 +554,33 @@ static bool gHoldRG8SrgbAsRGBA8;
 @property (nonatomic, strong) id<MTLTexture> parent;
 @property (nonatomic, strong) id<MTLHeap> parentHeap;
 @property (nonatomic) NSUInteger heapOffset;
+@property (atomic) bool gpuWritesDeclared;
 - (NBBuffer *)hostImport;
 @end
+
+static void declareGpuWrites(IOSurfaceRef surface);
+
+// The IOSurface a texture's storage is, through views and buffer-backed textures; nullptr: none.
+static IOSurfaceRef textureSurface(NBTexture *t)
+{
+    for (unsigned depth = 0; t && depth < 8; depth++) {
+        if (t.surface)
+            return t.surface;
+        if (t.buffer.surfaceOwner)
+            return t.buffer.surfaceOwner;
+        t = [(id)t.parent isKindOfClass:[NBTexture class]] ? (NBTexture *)t.parent : nil;
+    }
+    return nullptr;
+}
+
+static void textureGpuWrites(NBTexture *t)
+{
+    if (!t || t.gpuWritesDeclared)
+        return;
+    if (IOSurfaceRef surface = textureSurface(t))
+        declareGpuWrites(surface);
+    t.gpuWritesDeclared = true;
+}
 
 // Clean [base, base + bytes) to the point of coherency and invalidate it, by VA from EL0 (XNU sets SCTLR_EL1.UCI). Cortex-A57 data
 // cache lines are 64 bytes (CTR_EL0 is not readable at EL0 here: SCTLR_EL1.UCT is clear). The caller ends its run of these with a DSB.
@@ -678,26 +703,51 @@ static std::mutex gSurfaceImportLock;
 // association is never the one dropped: a lookup that missed it would import the same surface a second time.
 static constexpr NSUInteger kSurfaceImportKeys = 1024;
 
-// NVK's switch_nvk_import_surface: the IOSurface the next host import on this thread covers, so the kernel keeps that
-// import coherent at every process's IOSurfaceLock/Unlock. The Vulkan loader opened NVK (libvulkan_nouveau.dylib, beside
-// this image) RTLD_LOCAL, so the symbol is looked up through that image rather than RTLD_DEFAULT.
-static void noteImportSurface(IOSurfaceID surfaceId, const void *base, size_t bytes)
+// A symbol of NVK (libvulkan_nouveau.dylib, beside this image), which the Vulkan loader opened RTLD_LOCAL: looked up
+// through that image rather than RTLD_DEFAULT.
+static void *nvkSymbol(const char *name)
 {
-    using Note = void (*)(uint32_t, const void *, uint64_t);
-    static const Note note = []() -> Note {
+    static void *const nvk = []() -> void * {
         Dl_info info = {};
-        if (!dladdr(reinterpret_cast<const void *>(&noteImportSurface), &info) || !info.dli_fname)
+        if (!dladdr(reinterpret_cast<const void *>(&nvkSymbol), &info) || !info.dli_fname)
             return nullptr;
         std::string path(info.dli_fname);
         const size_t slash = path.rfind('/');
         if (slash == std::string::npos)
             return nullptr;
         path.replace(slash + 1, std::string::npos, "libvulkan_nouveau.dylib");
-        void *nvk = dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
-        return nvk ? reinterpret_cast<Note>(dlsym(nvk, "switch_nvk_import_surface")) : nullptr;
+        return dlopen(path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
     }();
+    return nvk ? dlsym(nvk, name) : nullptr;
+}
+
+// The IOSurface the next host import on this thread covers, so the kernel keeps that import coherent at every process's
+// IOSurfaceLock/Unlock. NVK imports it as only sampled by the GPU until declareGpuWrites names it.
+static void noteImportSurface(IOSurfaceID surfaceId, const void *base, size_t bytes)
+{
+    using Note = void (*)(uint32_t, const void *, uint64_t);
+    static const Note note = reinterpret_cast<Note>(nvkSymbol("switch_nvk_import_surface"));
     if (note)
         note(surfaceId, base, bytes);
+}
+
+// Before the GPU first renders, blits or stores into the surface: from then on each submission marks its imports
+// GPU-written, so the next CPU lock in any process invalidates them. A surface never named here is taken as sampled only.
+static void declareGpuWrites(IOSurfaceRef surface)
+{
+    using Declare = bool (*)(uint32_t);
+    static const Declare declare = reinterpret_cast<Declare>(nvkSymbol("switch_nvk_surface_gpu_writes"));
+    if (!surface || (declare && declare(IOSurfaceGetID(surface))))
+        return;
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true))
+        NBLOG(@"native-metal: the GPU's writes to IOSurface %u were not declared: CPU readers may see stale lines",
+              IOSurfaceGetID(surface));
+}
+
+static bool usageWrites(MTLTextureUsage usage)
+{
+    return usage == MTLTextureUsageUnknown || (usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite));
 }
 
 static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
@@ -1194,6 +1244,8 @@ static NBTexture *planarSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef sur
     texture.offset = offset;
     texture.rowBytes = row;
     texture.surface = (IOSurfaceRef)CFRetain(surface);
+    if (usageWrites(d.usage))
+        textureGpuWrites(texture);
     return texture;
 }
 @implementation NBBuffer (Textures)
@@ -3000,6 +3052,7 @@ static void waitForResource(id resource)
         [self.commandBuffer refuse:@"copyFromTexture:toTexture: between an RG8 texture held as RGBA8 and another"];
         return;
     }
+    textureGpuWrites((NBTexture *)d);
     const uint64_t a[3] = {so.x, so.y, so.z}, size[3] = {z.width, z.height, z.depth}, b[3] = {dO.x, dO.y, dO.z};
     [self check:nmb_blit_copy_texture(self.handle, [(NBTexture *)s handle], ss, sl, a, size, [(NBTexture *)d handle],
                                       ds, dl, b)
@@ -3044,6 +3097,7 @@ static void waitForResource(id resource)
     NBApiTime timed;
     if (![self buffers:NB_OBJECTS(s) count:1] || ![self textures:NB_OBJECTS(d) count:1])
         return;
+    textureGpuWrites((NBTexture *)d);
     const uint64_t size[3] = {z.width, z.height, z.depth}, b[3] = {dO.x, dO.y, dO.z};
     if ([(NBTexture *)d rgWide]) {
         // An RG8 texture held as RGBA8 (heldAsRGBA8): the buffer's RG pairs widened into a staging buffer now, which the copy
@@ -3101,6 +3155,7 @@ static void waitForResource(id resource)
 {
     if (![self textures:NB_OBJECTS(t) count:1])
         return;
+    textureGpuWrites((NBTexture *)t);
     [self check:nmb_blit_generate_mipmaps(self.handle, [(NBTexture *)t handle]) what:"generateMipmapsForTexture"];
 }
 
@@ -3464,6 +3519,7 @@ static void scheduled(void *context);
             return false;
         NBTexture *texture = (NBTexture *)a.texture;
         [_resourceOwners addObject:texture];
+        textureGpuWrites(texture);
         out.texture = texture.handle;
         out.level = a.level;
         out.slice = a.slice;
@@ -3476,6 +3532,7 @@ static void scheduled(void *context);
             if (![(id)resolve isKindOfClass:[NBTexture class]])
                 return false;
             [_resourceOwners addObject:resolve];
+            textureGpuWrites((NBTexture *)resolve);
             out.resolve_texture = [(NBTexture *)resolve handle];
             out.resolve_level = a.resolveLevel;
             out.resolve_slice = a.resolveSlice;
@@ -5594,7 +5651,10 @@ static void fillLimits(id)
     const size_t page = vm_page_size, allocation = IOSurfaceGetAllocSize(surface);
     if (!base || ((uintptr_t)base & (page - 1)) || !allocation || allocation > SIZE_MAX - (page - 1))
         return nil;
-    return (id<MTLBuffer>)surfaceBuffer(surface, base, (allocation + page - 1) & ~(page - 1));
+    NBBuffer *buffer = surfaceBuffer(surface, base, (allocation + page - 1) & ~(page - 1));
+    if (buffer)
+        declareGpuWrites(surface);
+    return (id<MTLBuffer>)buffer;
 }
 
 // supportsFamily: and the other queries the runtime answers are installed from it (installAnswers); supportsFamily: also answers the target
@@ -5896,6 +5956,8 @@ static void fillLimits(id)
     if (!texture)
         return nil;
     texture.surface = (IOSurfaceRef)CFRetain(surface);
+    if (usageWrites(d.usage))
+        textureGpuWrites(texture);
     return (id<MTLTexture>)texture;
 }
 
