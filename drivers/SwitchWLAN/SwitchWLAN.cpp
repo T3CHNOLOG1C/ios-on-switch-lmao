@@ -210,6 +210,7 @@ OSDeclareDefaultStructors(SwitchWLAN)
 
     void btState(uint32_t flags, bool power);
     void btLinks(unsigned links);
+    void multicast(const uint8_t (*groups)[6], unsigned count, bool all);
 
     // The firmware's own AWDL for SwitchWLANAwdl.cpp (SwitchWLANAwdlRadio.h §6). Open/close and the iovars wait for
     // the firmware: thread context only, never the work loop. The callbacks are only stored here; the work loop calls
@@ -290,6 +291,11 @@ private:
     uint32_t btFlags_ = 0;
     bool btPower_ = true, btChanged_ = false;
     unsigned btLinks_ = 0;  // SwitchBluetooth's links (switch_wlan_bt_links)
+    // en0's multicast filter (switch_wlan_multicast); mcastChanged_: not yet given to the firmware.
+    uint8_t mcast_[SWLAN_MCAST_MAX][6] = {};
+    unsigned mcastCount_ = 0;
+    bool mcastAll_ = false, mcastChanged_ = false;
+    void multicastApply();
 
     // AWDL: the firmware's cap list has "awdl"; open (event mask on, frames and events routed); the AWDL
     // interface's firmware index from its WLC_E_IF (-1 until then).
@@ -883,11 +889,10 @@ bool SwitchWLAN::cmdInt(uint32_t cmd, uint32_t value)
 
 // nxk wl.rs `init` (brcmf_c_preinit_dcmds, brcmf_config_dongle): our address, the events handled, station mode,
 // no power saving, no firmware roaming (it would start a key handshake with another access point behind the
-// supplicant's back; wifid decides on roams), every multicast frame passed up (en0 does not hand the firmware its
-// multicast list, brcmf_netdev_set_multicast_list's "mcast_list"; without this IPv6 neighbour discovery and mDNS
-// never arrive), brcmf's join preference (brcmf_c_set_joinpref_default: by RSSI, 5 GHz counted 8 dB better; the
-// firmware picks the access point when wifid names none, and without it r4a sat on 2.4 GHz at -45 dBm next to the
-// same network's 5 GHz at -44, sharing the air with Bluetooth), interface up; then the regulatory domain.
+// supplicant's back; wifid decides on roams), en0's multicast groups (multicastApply), brcmf's join preference
+// (brcmf_c_set_joinpref_default: by RSSI, 5 GHz counted 8 dB better; the firmware picks the access point when wifid
+// names none, and without it r4a sat on 2.4 GHz at -45 dBm next to the same network's 5 GHz at -44, sharing the air
+// with Bluetooth), interface up; then the regulatory domain.
 bool SwitchWLAN::radioInit()
 {
     const uint8_t on[4] = {1, 0, 0, 0};
@@ -901,8 +906,7 @@ bool SwitchWLAN::radioInit()
         return false;
     if (!setVar("roam_off", on, sizeof(on)))
         IOLog("SwitchWLAN: roam_off refused: %s\n", why_);
-    if (!setVar("allmulti", on, sizeof(on)))
-        IOLog("SwitchWLAN: allmulti refused: %s\n", why_);
+    multicastApply();
     if (!setVar("join_pref", joinPref, sizeof(joinPref)))
         IOLog("SwitchWLAN: join_pref refused: %s\n", why_);
     if (!cmdInt(WLC_UP, 1))
@@ -1893,6 +1897,12 @@ void SwitchWLAN::run()
             if (state == SWLAN_STA_UP)
                 coexApply();
         }
+        bool mcastChanged = false;
+        locked([&] {
+            mcastChanged = mcastChanged_;
+        });
+        if (mcastChanged)
+            multicastApply();
         FwEvent e;
         while (popEvent(e)) {
             if (state != SWLAN_STA_UP)
@@ -2470,6 +2480,48 @@ void SwitchWLAN::btLinks(unsigned links)
         btChanged_ = true;
         kick();
     });
+}
+
+// Any thread (en0's SIOCADDMULTI, SIOCDELMULTI, SIOCSIFFLAGS): the stack's groups; the worker programs them.
+void SwitchWLAN::multicast(const uint8_t (*groups)[6], unsigned count, bool all)
+{
+    if (count > SWLAN_MCAST_MAX) {
+        count = 0;
+        all = true;
+    }
+    locked([&] {
+        if (count)
+            memcpy(mcast_, groups, count * sizeof(mcast_[0]));
+        mcastCount_ = count;
+        mcastAll_ = all;
+        mcastChanged_ = true;
+        kick();
+    });
+}
+
+// Worker and radioInit: the firmware passes up only the groups en0 joined (brcmf_set_multicast_list: "mcast_list"
+// is a little-endian count and the addresses, then "allmulti"), so the CPU never wakes for another host's multicast.
+// A list the firmware refuses passes every group instead, as brcmf does.
+void SwitchWLAN::multicastApply()
+{
+    uint8_t list[4 + SWLAN_MCAST_MAX * 6];
+    unsigned count = 0;
+    bool all = false;
+    locked([&] {
+        count = mcastCount_;
+        all = mcastAll_;
+        memcpy(list + 4, mcast_, count * 6);
+        mcastChanged_ = false;
+    });
+    swlan::put32(list, count);
+    if (!setVar("mcast_list", list, 4 + count * 6)) {
+        IOLog("SwitchWLAN: mcast_list of %u groups refused (%s): every multicast frame passed up\n", count, why_);
+        all = true;
+    }
+    uint8_t value[4];
+    swlan::put32(value, all ? 1 : 0);
+    if (!setVar("allmulti", value, sizeof(value)))
+        IOLog("SwitchWLAN: allmulti refused: %s\n", why_);
 }
 
 // Bring-up (radioInit, after coexBringUp): the firmware's dynamic coexistence profile and mode kept as the idle state,
@@ -3130,6 +3182,12 @@ extern "C" void switch_wlan_bt_state(uint32_t flags, int power)
 {
     if (gDriver)
         gDriver->btState(flags, power != 0);
+}
+
+extern "C" void switch_wlan_multicast(const uint8_t (*groups)[6], unsigned count, int all)
+{
+    if (gDriver)
+        gDriver->multicast(groups, count, all != 0);
 }
 
 extern "C" void switch_wlan_counters(char *text, size_t size)

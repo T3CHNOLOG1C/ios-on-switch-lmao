@@ -24,6 +24,7 @@
 #include <sys/sockio.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/if_ether.h>
 #include <net/kpi_interface.h>
@@ -1045,7 +1046,38 @@ int apple80211(bool set, apple80211req &rq)
     }
 }
 
-errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data)
+// The stack's link-layer groups (its AF_LINK memberships, as IONetworkInterface collects them) for the radio's filter.
+void push_multicast(ifnet_t ifp)
+{
+    uint8_t groups[SWLAN_MCAST_MAX][6];
+    unsigned count = 0;
+    bool all = (ifnet_flags(ifp) & IFF_ALLMULTI) != 0;
+    ifmultiaddr_t *list = nullptr;
+    if (ifnet_get_multicast_list(ifp, &list) != 0) {
+        switch_wlan_multicast(groups, 0, 1);
+        return;
+    }
+    for (unsigned i = 0; list[i] && !all; ++i) {
+        union {
+            struct sockaddr sa;
+            struct sockaddr_dl dl;
+            uint8_t room[64];
+        } address = {};
+
+        if (ifmaddr_address(list[i], &address.sa, sizeof(address)) != 0 || address.sa.sa_family != AF_LINK ||
+            address.dl.sdl_alen != 6)
+            continue;
+        if (count == SWLAN_MCAST_MAX) {
+            all = true;
+            break;
+        }
+        memcpy(groups[count++], LLADDR(&address.dl), 6);
+    }
+    ifnet_free_multicast_list(list);
+    switch_wlan_multicast(groups, count, all);
+}
+
+errno_t if_ioctl(ifnet_t ifp, unsigned long cmd, void *data)
 {
     note_caller(cmd);
     switch (cmd) {
@@ -1072,10 +1104,12 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data)
         m->ifm_count = 1;
         return 0;
     }
-    case SIOCSIFFLAGS:
-    case SIOCSIFMTU:
+    case SIOCSIFFLAGS:  // IFF_ALLMULTI comes this way
     case SIOCADDMULTI:
     case SIOCDELMULTI:
+        push_multicast(ifp);
+        return 0;
+    case SIOCSIFMTU:
     case SIOCSIFADDR:
     case SIOCSIFMEDIA:
         return 0;

@@ -107,6 +107,10 @@ void switch_wlan_counters(char *text, size_t size);  // frames and losses, one l
 void switch_wlan_bt_state(uint32_t flags, int power);
 // SwitchBluetooth: how many links (ACL and LE) the controller has, at every change; the coexistence mode follows it.
 void switch_wlan_bt_links(unsigned links);
+// en0's multicast filter, at every change: the link-layer groups the stack joined and whether it wants every group
+// (IFF_ALLMULTI, or more groups than the firmware's list holds). Programmed now and after every bring-up.
+#define SWLAN_MCAST_MAX 32
+void switch_wlan_multicast(const uint8_t (*groups)[6], unsigned count, int all);
 
 // SwitchWLANNet.cpp: what en0 did with the frames, for the radio's stats line.
 struct swlan_net_counters {
