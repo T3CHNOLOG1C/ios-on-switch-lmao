@@ -378,8 +378,9 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 	EXPECT_THAT(nvk,
 		    HasSubstr("if (req.surface_id && !p_atomic_read(&surface_writes_failed))"));
 	// The frontend reaches both with dlsym (NativeBridgeMetalFrontend.mm nvkSymbol); Mesa builds hidden by default.
-	for (const char *exported : {"__attribute__((visibility(\"default\"))) void\nswitch_nvk_import_surface(",
-				     "__attribute__((visibility(\"default\"))) bool\nswitch_nvk_surface_gpu_writes("})
+	for (const char *exported :
+	     {"__attribute__((visibility(\"default\"))) void\nswitch_nvk_import_surface(",
+	      "__attribute__((visibility(\"default\"))) bool\nswitch_nvk_surface_gpu_writes("})
 		EXPECT_THAT(nvk, HasSubstr(exported));
 }
 
@@ -435,10 +436,13 @@ TEST(NvkImageSource, StencilCopyTempStartsOnTheBindAlignment)
 {
 	const std::string image =
 		flat(SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_image.c"));
-	const std::string temp = image.substr(image.find("&image->stencil_copy_temp.nil, &stencil_nil_info);"));
+	const std::string temp =
+		image.substr(image.find("&image->stencil_copy_temp.nil, &stencil_nil_info);"));
 	EXPECT_THAT(temp.substr(0, temp.find("uint64_t plane_offset_B = 0;")),
-		    HasSubstr("if (image->stencil_copy_temp.nil.pte_kind) image->stencil_copy_temp.plane_align_B = "
-			      "MAX2(image->stencil_copy_temp.plane_align_B, pdev->nvkmd->bind_align_B);"));
+		    HasSubstr("if (image->stencil_copy_temp.nil.pte_kind) "
+			      "image->stencil_copy_temp.plane_align_B = "
+			      "MAX2(image->stencil_copy_temp.plane_align_B, "
+			      "pdev->nvkmd->bind_align_B);"));
 	EXPECT_THAT(flat(definition(image, "nvk_image_plane_alloc_va(struct nvk_device *dev,")),
 		    HasSubstr("const uint64_t va_align_B = plane->plane_align_B;"));
 }
