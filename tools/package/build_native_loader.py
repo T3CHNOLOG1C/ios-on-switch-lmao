@@ -286,12 +286,7 @@ def _require(condition: object, message: str) -> None:
         raise ValueError(message)
 
 
-def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
-    """Check what the cacheable-copy root-boot loader needs of a layout and return the loader's constants.
-
-    `m` is the layout's manifest, `payload` its image and `adt` the ADT it was laid out with. The staged window's
-    constants are None until it is made.
-    """
+def _check_layout(m: dict, payload: bytes) -> None:
     _require(m['schema_version'] == 1 and m['profile'] == 'native-xnu-host-layout', 'unsupported host layout')
     _require(
         m.get('native_window_ownership_verified') is False,
@@ -345,6 +340,73 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     for key in ('entry_pa', 'boot_args_pa', 'adt_pa'):
         _require(m['phys_base'] <= m[key] < m['phys_base'] + len(payload), 'layout address outside used extent: ' + key)
     _require(m.get('full_ram') is True, 'the root-boot loader takes the full-RAM layout')
+
+
+def _check_sidecars(m: dict, payload: bytes, properties: dict, start: int, sidecars: tuple[str, ...]) -> None:
+    spans = []
+    for key in sidecars:
+        pos, length = properties.get(('/chosen/memory-map', key), (-1, 0))
+        _require(length == 16, 'root_boot sidecar placeholder missing: ' + key)
+        address, size = struct.unpack_from('<QQ', payload, start + pos)
+        expected = m['sources'][key]
+        _require(
+            not address % 0x1000
+            and size == expected['size_bytes']
+            and 0 < size <= 16 << 20
+            and m['adt_pa'] + m['adt_size'] <= address <= m['used_end']
+            and size <= m['used_end'] - address,
+            'root_boot sidecar bounds changed: ' + key,
+        )
+        _require(
+            not any(address < end and begin < address + size for begin, end in spans), 'root_boot sidecars overlap'
+        )
+        spans.append((address, address + size))
+        content = payload[address - m['phys_base'] : address - m['phys_base'] + size]
+        _require(
+            hashlib.sha256(content).hexdigest() == expected['sha256'], 'root_boot sidecar contents changed: ' + key
+        )
+        (validate_data_seed if key == 'NativeDataSeed' else validate_trustcache)(content)
+
+
+def _check_command_line(m: dict, payload: bytes) -> None:
+    # The built-in line in the window's boot_args.
+    words = m['command_line'].split()
+    command_at = m['boot_args_pa'] - m['phys_base'] + 0x6C
+    encoded = m['command_line'].encode('ascii')
+    _require(
+        len(encoded) < 1024 and payload[command_at : command_at + 1024] == encoded + bytes(1024 - len(encoded)),
+        'the boot argument manifest does not match the staged boot arguments',
+    )
+    _require(len(payload) <= 0x5000000, 'kernel staging overlaps the firmware exporter')
+    _require(
+        not any(v.startswith(('rd=', 'boot-uuid=')) for v in words),
+        'root_boot cannot use an alternate root selection',
+    )
+
+
+def _check_native_profile(m: dict, payload: bytes) -> None:
+    _require(m['virt_base'] == 0xFFFFFFF00427C000, 'prelinked native profile requires its exact reviewed virtual base')
+    _require(
+        m['phys_base'] & ~0x1FFFFF == 0xB2000000 and (m['window_end'] + 0x1FFFFF) & ~0x1FFFFF == 0xE2200000,
+        'native ownership envelope changed',
+    )
+    expected = set(NATIVE_FULL_RAM_EXCLUSIONS)
+    actual = {(r['name'], r['start'], r['size']) for r in m['reserved_ranges']}
+    _require(
+        actual == expected and len(m['reserved_ranges']) == len(expected),
+        'native experiment requires the exact reviewed exclusion ledger',
+    )
+    _require(len(payload) <= 0x6000000 and m['video'] == VIDEO, 'native staging or display contract mismatch')
+    _require(not len(payload) % 0x1000, 'native cacheable copy requires a page-aligned payload')
+
+
+def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
+    """Check what the cacheable-copy root-boot loader needs of a layout and return the loader's constants.
+
+    `m` is the layout's manifest, `payload` its image and `adt` the ADT it was laid out with. The staged window's
+    constants are None until it is made.
+    """
+    _check_layout(m, payload)
 
     # The same-boot SD reference, the RAM ledger, the boot timing record and the per-boot seed: zeroed ADT slots the
     # loader fills, at the offsets layout.h gives it.
@@ -439,57 +501,9 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         ),
         'root_boot requires empty runtime manifest inputs and no RAM root',
     )
-    spans = []
-    for key in sidecars:
-        pos, length = properties.get(('/chosen/memory-map', key), (-1, 0))
-        _require(length == 16, 'root_boot sidecar placeholder missing: ' + key)
-        address, size = struct.unpack_from('<QQ', payload, start + pos)
-        expected = m['sources'][key]
-        _require(
-            not address % 0x1000
-            and size == expected['size_bytes']
-            and 0 < size <= 16 << 20
-            and m['adt_pa'] + m['adt_size'] <= address <= m['used_end']
-            and size <= m['used_end'] - address,
-            'root_boot sidecar bounds changed: ' + key,
-        )
-        _require(
-            not any(address < end and begin < address + size for begin, end in spans), 'root_boot sidecars overlap'
-        )
-        spans.append((address, address + size))
-        content = payload[address - m['phys_base'] : address - m['phys_base'] + size]
-        _require(
-            hashlib.sha256(content).hexdigest() == expected['sha256'], 'root_boot sidecar contents changed: ' + key
-        )
-        (validate_data_seed if key == 'NativeDataSeed' else validate_trustcache)(content)
-
-    # The built-in line in the window's boot_args.
-    words = m['command_line'].split()
-    command_at = m['boot_args_pa'] - m['phys_base'] + 0x6C
-    encoded = m['command_line'].encode('ascii')
-    _require(
-        len(encoded) < 1024 and payload[command_at : command_at + 1024] == encoded + bytes(1024 - len(encoded)),
-        'the boot argument manifest does not match the staged boot arguments',
-    )
-    _require(len(payload) <= 0x5000000, 'kernel staging overlaps the firmware exporter')
-    _require(
-        not any(v.startswith(('rd=', 'boot-uuid=')) for v in words),
-        'root_boot cannot use an alternate root selection',
-    )
-
-    _require(m['virt_base'] == 0xFFFFFFF00427C000, 'prelinked native profile requires its exact reviewed virtual base')
-    _require(
-        m['phys_base'] & ~0x1FFFFF == 0xB2000000 and (m['window_end'] + 0x1FFFFF) & ~0x1FFFFF == 0xE2200000,
-        'native ownership envelope changed',
-    )
-    expected = set(NATIVE_FULL_RAM_EXCLUSIONS)
-    actual = {(r['name'], r['start'], r['size']) for r in m['reserved_ranges']}
-    _require(
-        actual == expected and len(m['reserved_ranges']) == len(expected),
-        'native experiment requires the exact reviewed exclusion ledger',
-    )
-    _require(len(payload) <= 0x6000000 and m['video'] == VIDEO, 'native staging or display contract mismatch')
-    _require(not len(payload) % 0x1000, 'native cacheable copy requires a page-aligned payload')
+    _check_sidecars(m, payload, properties, start, sidecars)
+    _check_command_line(m, payload)
+    _check_native_profile(m, payload)
 
     return {
         'SOURCE': STAGE_SOURCE,
