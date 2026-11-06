@@ -58,6 +58,7 @@
 #include <nvif/push906f.h>
 #include <nvhw/class/cla0b5.h>
 #include "TegraGM20BGpu.h"
+#include "TegraGM20BHangDecode.h"
 #include "TegraGM20BSleepGate.h"
 #include "TegraGM20BTlb.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
@@ -1046,6 +1047,7 @@ struct tgm_chan {
 	u32 norder;
 	struct tgm_order order[TGM_ORDER_MAX];
 	struct tgm_order waited;
+	struct tgm_hang_log hang;
 };
 
 #define CHAN_PRESENT 1 /* the GPU present's channel */
@@ -1142,26 +1144,32 @@ static void chan_describe(struct tgm_chan *chan, char *buf, unsigned int len)
 {
 	struct nvkm_device *device = gpu.device;
 	volatile u32 *userd = chan->user.map.ptr;
+	const u32 eng = nvkm_rd32(device, 0x002640);
 	u32 mc_int, mc_err, mc_adr;
+	char engine[48], note[112];
 
+	tgm_hang_engine(eng, engine, sizeof(engine));
+	tgm_hang_note(&chan->hang, tgm_chan_completed(chan) + 1, chan->submitted,
+		      chan->chan.gpfifo.map.ptr, chan->chan.gpfifo.max, chan->ring_va,
+		      CHAN_PUSH_BYTES, chan->vm->owner, note, sizeof(note));
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
-	scnprintf(buf, len,
-		  "%s ch %u err %u fence %u/%u kicked %llu ms ago, gp %u/%u (put %u), PGRAPH %08x "
-		  "ENG0 %08x, "
-		  "PBDMA0 %08x ch %u mthd %08x data %08x, PMC %08x, MC %08x err %08x at %08x",
-		  chan->owner[0] ? chan->owner : "?", chan->chid, chan->error,
-		  tgm_chan_completed(chan), chan->submitted,
-		  chan->submit_ns ? (nvxnu_nanotime() - chan->submit_ns) / 1000000 : 0ULL,
-		  userd ? userd[0x88 / 4] : 0, userd ? userd[0x8c / 4] : 0, chan->chan.gpfifo.cur,
-		  nvkm_rd32(device, 0x400700), nvkm_rd32(device, 0x002640),
-		  nvkm_rd32(device, 0x003080), nvkm_rd32(device, 0x040120) & 0xfff,
-		  nvkm_rd32(device, 0x0400c0), nvkm_rd32(device, 0x0400c4),
-		  nvkm_rd32(device, 0x000100), mc_int, mc_err, mc_adr);
+	scnprintf(
+		buf, len,
+		"%s ch %u err %u fence %u/%u kicked %llu ms ago%s, gp %u/%u (put %u), PGRAPH %08x "
+		"ENG0 %08x (%s), "
+		"PBDMA0 %08x ch %u mthd %08x data %08x, PMC %08x, MC %08x err %08x at %08x",
+		chan->owner[0] ? chan->owner : "?", chan->chid, chan->error,
+		tgm_chan_completed(chan), chan->submitted,
+		chan->submit_ns ? (nvxnu_nanotime() - chan->submit_ns) / 1000000 : 0ULL, note,
+		userd ? userd[0x88 / 4] : 0, userd ? userd[0x8c / 4] : 0, chan->chan.gpfifo.cur,
+		nvkm_rd32(device, 0x400700), eng, engine, nvkm_rd32(device, 0x003080),
+		nvkm_rd32(device, 0x040120) & 0xfff, nvkm_rd32(device, 0x0400c0),
+		nvkm_rd32(device, 0x0400c4), nvkm_rd32(device, 0x000100), mc_int, mc_err, mc_adr);
 }
 
 void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)
 {
-	char state[320], order[64] = "";
+	char state[TGM_HANG_LINE], order[64] = "";
 	const struct tgm_order *w = &chan->waited;
 	chan_describe(chan, state, sizeof(state));
 	/* still waiting for another channel of its task (tgm_chan_order) */
@@ -1233,7 +1241,7 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 {
 	struct tgm_chan *chan = container_of(event, struct tgm_chan, kill);
 	const char *report = chan->fault[0] ? chan->fault : nvxnu_gpu_errors();
-	char state[320];
+	char state[TGM_HANG_LINE];
 
 	(void)repv;
 	(void)repc;
@@ -1394,7 +1402,7 @@ static int errors_contained(const char *errors)
 static void iso_deadline(void *arg)
 {
 	struct tgm_chan *chan;
-	char state[320];
+	char state[TGM_HANG_LINE];
 
 	(void)arg;
 	mutex_lock(&live_lock);
@@ -3253,7 +3261,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 {
 	int ordered = present_order_on() && !chan->kernel && chan->vm->pfence_va;
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
-	u32 i, stamps = 0;
+	u32 i, stamps = 0, first;
 	int ret, tlb;
 
 	if (chan->error)
@@ -3318,6 +3326,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 				  NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE);
 		PUSH_KICK(&chan->chan.push);
 	}
+	first = chan->chan.gpfifo.cur;
 	for (i = 0; i < count; i++) {
 		nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
 				      pushes[i].no_prefetch || ((l2_on() || tlb) && !i));
@@ -3328,6 +3337,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 			PUSH_KICK(&chan->chan.push);
 		}
 	}
+	tgm_hang_log_submit(&chan->hang, chan->submitted + 1, first, chan->chan.gpfifo.cur);
 
 	*seqno = chan_fence(chan);
 	if (ordered)
@@ -3462,7 +3472,7 @@ static void present_fenced(struct tgm_chan *chan)
 static void present_deadline(void *arg)
 {
 	struct tgm_chan *chan, *waited = NULL;
-	char state[320], what[320];
+	char state[TGM_HANG_LINE], what[TGM_HANG_LINE];
 	u64 age;
 	u32 i, seqno = 0;
 
@@ -3950,7 +3960,7 @@ static void scrub_deadline(void *arg)
 	u32 tail = __atomic_load_n(&scrub.tail, __ATOMIC_ACQUIRE),
 	    head = __atomic_load_n(&scrub.head, __ATOMIC_ACQUIRE), slot = tail % SCRUB_JOBS;
 	u64 age;
-	char state[320];
+	char state[TGM_HANG_LINE];
 
 	(void)arg;
 	if (tail == head)
