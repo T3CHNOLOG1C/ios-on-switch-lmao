@@ -45,6 +45,7 @@ namespace
 {
 constexpr uint32_t kBuckets = 256;
 constexpr uint32_t kTrapLock = 2, kTrapUnlock = 3, kLockReadOnly = 0x1;
+constexpr uint32_t kBatch = 4;
 
 IOLock *gRegistryLock;
 tgm_coh *gByPage[kBuckets], *gById[kBuckets];
@@ -120,14 +121,14 @@ uint64_t maintain(tgm_coh *c)
 	return bytes;
 }
 
-// The entries a trap of `surfaceId` reaches, each with a reference the caller drops (at most `max`; a surface has one
-// entry unless its imports began at different pages).
-uint32_t findById(uint32_t surfaceId, tgm_coh **out, uint32_t max)
+// The entries of `surfaceId` from the `skip`th on, at most kBatch, each with a reference the caller drops. A surface has
+// one entry unless its imports began at different pages.
+uint32_t findById(uint32_t surfaceId, uint32_t skip, tgm_coh **out)
 {
-	uint32_t n = 0;
+	uint32_t n = 0, seen = 0;
 	IOLockLock(gRegistryLock);
-	for (tgm_coh *c = *idBucket(surfaceId); c && n < max; c = c->idNext) {
-		if (c->surfaceId == surfaceId) {
+	for (tgm_coh *c = *idBucket(surfaceId); c && n < kBatch; c = c->idNext) {
+		if (c->surfaceId == surfaceId && seen++ >= skip) {
 			c->refs++;
 			out[n++] = c;
 		}
@@ -136,36 +137,26 @@ uint32_t findById(uint32_t surfaceId, tgm_coh **out, uint32_t max)
 	return n;
 }
 
-void surfaceLocked(uint32_t surfaceId)
+// A lock invalidates the entries the GPU may have written since the last lock; an unlock that wrote cleans them all.
+void surfaceTrapped(uint32_t surfaceId, bool unlock)
 {
-	tgm_coh *found[4];
-	const uint32_t n = findById(surfaceId, found, 4);
-	uint64_t bytes = 0, invalidated = 0;
-	for (uint32_t i = 0; i < n; i++) {
-		if (__atomic_exchange_n(&found[i]->gpuDirty, 0, __ATOMIC_ACQ_REL)) {
-			bytes += maintain(found[i]);
-			invalidated++;
+	tgm_coh *found[kBatch];
+	uint32_t n = kBatch;
+	for (uint32_t skip = 0; n == kBatch && (n = findById(surfaceId, skip, found)); skip += n) {
+		uint64_t bytes = 0, done = 0;
+		for (uint32_t i = 0; i < n; i++) {
+			if (unlock ||
+			    __atomic_exchange_n(&found[i]->gpuDirty, 0, __ATOMIC_ACQ_REL)) {
+				bytes += maintain(found[i]);
+				done++;
+			}
 		}
+		IOLockLock(gRegistryLock);
+		count(unlock, done, bytes);
+		for (uint32_t i = 0; i < n; i++)
+			release(found[i]);
+		IOLockUnlock(gRegistryLock);
 	}
-	IOLockLock(gRegistryLock);
-	count(false, invalidated, bytes);
-	for (uint32_t i = 0; i < n; i++)
-		release(found[i]);
-	IOLockUnlock(gRegistryLock);
-}
-
-void surfaceUnlocked(uint32_t surfaceId)
-{
-	tgm_coh *found[4];
-	const uint32_t n = findById(surfaceId, found, 4);
-	uint64_t bytes = 0;
-	for (uint32_t i = 0; i < n; i++)
-		bytes += maintain(found[i]);
-	IOLockLock(gRegistryLock);
-	count(true, n, bytes);
-	for (uint32_t i = 0; i < n; i++)
-		release(found[i]);
-	IOLockUnlock(gRegistryLock);
 }
 
 // A larger import of a surface already registered: its list replaces the entry's (entry lock held).
@@ -330,7 +321,7 @@ extern "C" void tegra_gm20b_iosurface_trap(uint32_t index, uint32_t surface_id, 
 	if (!surface_id || !__atomic_load_n(&gWithId, __ATOMIC_RELAXED))
 		return;
 	if (index == kTrapLock)
-		surfaceLocked(surface_id);
+		surfaceTrapped(surface_id, false);
 	else if (index == kTrapUnlock && !(options & kLockReadOnly))
-		surfaceUnlocked(surface_id);
+		surfaceTrapped(surface_id, true);
 }

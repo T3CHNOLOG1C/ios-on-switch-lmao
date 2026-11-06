@@ -102,6 +102,23 @@ TEST_F(Coherency, ARenderedToImportMakesTheSurfaceGpuWrittenForEveryImporter)
 	tgm_coherency_put(reader);
 }
 
+TEST_F(Coherency, TrapsReachEveryEntryOfASurface)
+{
+	std::vector<std::vector<uint64_t>> lists;
+	std::vector<tgm_coh *> entries;
+	for (uint64_t i = 0; i < 6; i++) {
+		lists.push_back(pages(0x8c000000 + (i << 24), 2));
+		entries.push_back(add(lists.back()[0], 71, lists.back().data(), 2, 1));
+		tgm_coherency_wrote(entries.back());
+	}
+	tegra_gm20b_iosurface_trap(kUnlock, 71, 0);
+	EXPECT_EQ(cleanCalls().size(), 6u);
+	tegra_gm20b_iosurface_trap(kLock, 71, 0);
+	EXPECT_EQ(cleanCalls().size(), 12u);
+	for (tgm_coh *c : entries)
+		tgm_coherency_put(c);
+}
+
 TEST_F(Coherency, UnlockCleansUnlessReadOnly)
 {
 	const auto p = pages(0x81000000, 3);
