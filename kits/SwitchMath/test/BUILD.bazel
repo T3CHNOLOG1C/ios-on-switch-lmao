@@ -1,0 +1,15 @@
+# kits/SwitchMath on the host.
+#
+#   bazel test //kits/SwitchMath/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "switch_math_test",
+    srcs = [
+        "switch_math_test.cpp",
+        "//kits/SwitchMath:SwitchMath.h",
+    ],
+)
