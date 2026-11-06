@@ -5,11 +5,12 @@ lays those classes out differently. This kit lets one driver source tree build f
 order, instance size, field offsets, addresses) lives in tables.
 
 - `interface/<Class>.json` is what drivers see, and it is the same for every kind: methods with their C++ declaration,
-  our mangled name and Apple's PAC root name; fields by name and type; members and C functions; `declarations`, the
-  types its methods name that no SDK header declares (the header puts them before the class).
+  our mangled name and Apple's PAC root name; fields by name and type; constants (offsets into structures that are not
+  classes); members and C functions; `declarations`, the types its methods name that no SDK header declares (the header
+  puts them before the class).
 - `kinds/<kind>/<Class>.json` is one kind's layout and addresses. `found` records how each entry was read. `hints`
-  holds what reading cannot name: a renamed method's slot, the string that locates a function, or a field offset with
-  the instruction word that shows it.
+  holds what reading cannot name: a renamed method's slot, the string that locates a function, or a field offset or
+  constant with the instruction word that shows it.
 
 `switch_abi_class` makes `//kits/SwitchABI:<Class>`, which generates `Original<Class>.h` for the kind `--//ipsw:kind`
 selects. A driver adds `abi = ["<Class>"]` to `kernel_driver` and generates its bindings with `switch_abi_bindings`.
@@ -27,7 +28,8 @@ bazel run [--config=ios27] //kits/SwitchABI:verify  # compares instead of writin
 The kind is whichever pinned IPSW has the kernelcache's sha256. For a fileset kernelcache (iOS 26 and later), the ipsw
 CLI reads classes and inheritance, and `kernelcache.py` computes PAC discriminators and finds constructors and string
 references. The same kernelcache always gives the same bytes. iOS 17's arm64 kernelcache has no PAC, so its tables were
-written by hand and are only checked: the slot count, every bound slot, and getMetaClass.
+written by hand and are only checked: the slot count, every bound slot, getMetaClass, and the words of each function
+hint that has a body.
 
 CI has no IPSWs, so the committed tables are what it builds from. Editing an iOS 17 table changes the iOS 17 kernel,
 and `//:boot` has to stay byte-identical.

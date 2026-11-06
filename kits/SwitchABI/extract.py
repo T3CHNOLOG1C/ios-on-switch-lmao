@@ -10,12 +10,13 @@ Read from the kernelcache: the instance size, gMetaClass and the vtable (the met
 each interface method's slot (its PAC discriminator, from Apple's mangled root name), every other slot the class adds
 (opaque<N>, or a refusal if it is pure: a new contract), the C2 constructor and D2 destructor (the functions storing
 the vtable), and every function a hint locates by a string it references. Hints are what no reading can name: a
-renamed method's slot, the string that finds a function, a field's offset with the instruction that shows it (checked
-here). The same kernelcache always gives the same JSON; --check compares instead of writing.
+renamed method's slot, the string that finds a function, a field's offset or a constant with the instruction that shows
+it (checked here). The same kernelcache always gives the same JSON; --check compares instead of writing.
 
 A kernelcache that is not a fileset (iOS 17's arm64 prelinked kernel, unstripped of nothing but without PAC) cannot
 name slots; its tables are checked instead: the vtable has the table's slot count, every bound slot holds the
-table's address, and getMetaClass returns the table's gMetaClass (for a table that binds the vtable).
+table's address, and getMetaClass returns the table's gMetaClass (for a table that binds the vtable); each function hint
+with a body holds those words at the address the table binds.
 """
 
 import argparse
@@ -24,6 +25,7 @@ import hashlib
 import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -150,6 +152,18 @@ def fields(fs, table):
     return out, found
 
 
+def constants(fs: kernelcache.Fileset, table: dict) -> tuple[dict, dict]:
+    """Read hints.constants: each value with the instruction word that shows it, checked like a field's."""
+    out, found = {}, {}
+    for key, hint in sorted(table.get('hints', {}).get('constants', {}).items()):
+        at, word = int(hint['at'], 16), int(hint['word'], 16)
+        if fs.word(at) != word:
+            raise SystemExit(f'constant {key}: the word at {at:#x} is {fs.word(at):08x}, not {word:08x}')
+        out[key] = hint['value']
+        found[key] = f'value shown by {word:08x} at {at:#x}'
+    return out, found
+
+
 def extract(fs, interface, table, kind, pure):
     cls = interface['class']
     info = fs.inheritance[cls]
@@ -218,6 +232,8 @@ def extract(fs, interface, table, kind, pure):
         )
     offsets, field_found = fields(fs, table)
     found.update(field_found)
+    values, value_found = constants(fs, table)
+    found.update(value_found)
     out = {
         'class': cls,
         'kind': kind,
@@ -227,10 +243,14 @@ def extract(fs, interface, table, kind, pure):
         'slide': table['slide'],
         'layout': {str(i): named[i] for i in sorted(named)},
         'fields': offsets,
-        'addresses': {k: hex(v) for k, v in sorted(addresses.items(), key=lambda kv: (kv[1], kv[0]))},
-        'found': dict(sorted(found.items())),
-        'hints': table.get('hints', {}),
     }
+    if values:
+        out['constants'] = values
+    out.update(
+        addresses={k: hex(v) for k, v in sorted(addresses.items(), key=lambda kv: (kv[1], kv[0]))},
+        found=dict(sorted(found.items())),
+        hints=table.get('hints', {}),
+    )
     return dump(out)
 
 
@@ -238,41 +258,62 @@ def dump(table):
     return json.dumps(table, indent=2) + '\n'
 
 
-def check_plain(path, interface, table):
+def check_plain(path: Path, interface: dict, table: dict) -> None:
     sys.path.insert(0, str(HERE.parents[1] / 'tools/prelink'))
     from native_prelink import backed_offset, macho
 
     data = path.read_bytes()
     segments = macho(data)['segments']
-    code = [(g['va'], g['va'] + g['size']) for g in segments if g['initprot'] & 4]
 
-    def u64(va):
-        return int.from_bytes(data[backed_offset(segments, va, 8, len(data)) :][:8], 'little')
+    def read(va: int, size: int) -> int:
+        return int.from_bytes(data[backed_offset(segments, va, size, len(data)) :][:size], 'little')
 
     addresses = {k: int(v, 16) for k, v in table['addresses'].items() if v != 'unported'}
-    if 'vtable' not in addresses:
-        return
+    errors = plain_function_errors(lambda va: read(va, 4), addresses, table)
+    if 'vtable' in addresses:
+        code = [(g['va'], g['va'] + g['size']) for g in segments if g['initprot'] & 4]
+        errors += plain_vtable_errors(read, code, addresses, table)
+    if errors:
+        joined = '\n  '.join(errors)
+        raise SystemExit(f'{interface["class"]} ({table["kind"]}):\n  {joined}')
+
+
+def plain_vtable_errors(
+    read: Callable[[int, int], int], code: list[tuple[int, int]], addresses: dict[str, int], table: dict
+) -> list[str]:
+    """Check that the vtable has the slot count, every bound slot its address and getMetaClass the gMetaClass."""
     vtable = addresses['vtable'] + 16
-    entries = [u64(vtable + 8 * i) for i in range(table['slots'] + 1)]
+    entries = [read(vtable + 8 * i, 8) for i in range(table['slots'] + 1)]
     errors = []
     if not all(any(lo <= e < hi for lo, hi in code) for e in entries[:-1]) or any(
         lo <= entries[-1] < hi for lo, hi in code
     ):
-        errors.append('the vtable does not hold exactly {} code slots'.format(table['slots']))
+        errors.append(f'the vtable does not hold exactly {table["slots"]} code slots')
     for slot, key in table['layout'].items():
         if key in addresses and entries[int(slot)] != addresses[key]:
-            errors.append(
-                'slot {} holds {:#x}, the table binds {} at {:#x}'.format(slot, entries[int(slot)], key, addresses[key])
-            )
+            errors.append(f'slot {slot} holds {entries[int(slot)]:#x}, the table binds {key} at {addresses[key]:#x}')
     getter = entries[7]
-    adrp, add = (
-        int.from_bytes(data[backed_offset(segments, getter + 4 * i, 4, len(data)) :][:4], 'little') for i in range(2)
-    )
+    adrp, add = (read(getter + 4 * i, 4) for i in range(2))
     page = (getter & ~0xFFF) + (kernelcache.sx(((adrp >> 5) & 0x7FFFF) << 2 | (adrp >> 29) & 3, 21) << 12)
     if page + ((add >> 10) & 0xFFF) != addresses['gMetaClass']:
         errors.append("getMetaClass does not return the table's gMetaClass")
-    if errors:
-        raise SystemExit('{} ({}):\n  {}'.format(interface['class'], table['kind'], '\n  '.join(errors)))
+    return errors
+
+
+def plain_function_errors(word: Callable[[int], int], addresses: dict[str, int], table: dict) -> list[str]:
+    """Check each hints.functions {at, body}: the words at `at`, and that `at` is the address the table binds."""
+    errors = []
+    for key, hint in sorted(table.get('hints', {}).get('functions', {}).items()):
+        if not isinstance(hint, dict) or 'body' not in hint:
+            continue
+        at, want = int(hint['at'], 16), [int(w, 16) for w in hint['body'].split()]
+        got = [word(at + 4 * i) for i in range(len(want))]
+        if addresses.get(key) != at:
+            errors.append(f'{key}: the hint is at {at:#x}, the table binds {table["addresses"].get(key)}')
+        if got != want:
+            words = ' '.join(f'{w:08x}' for w in got)
+            errors.append(f'{key} at {at:#x}: the words are {words}, the hint says {hint["body"]}')
+    return errors
 
 
 def is_fileset(path):

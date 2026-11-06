@@ -4,10 +4,10 @@
     gen.py bindings --pair I T [--pair I T]... --object O... --out bindings.S
 
 The header declares the original class as the kind lays it out: its instance size, its virtuals in slot order (a slot
-no driver names is opaque<N>), field accessors at the kind's offsets and the members drivers call, after the
-interface's declarations (the types its methods name that no included header declares). The bindings bind
-every symbol of the tables' addresses (and refuse an original import they lack) at its kernelcache address plus the
-kind's prelink slide; an entry the table marks "unported" becomes a function that panics naming it.
+no driver names is opaque<N>), field accessors at the kind's offsets, the kind's constants and the members drivers
+call, after the interface's declarations (the types its methods name that no included header declares). The bindings
+bind every symbol of the tables' addresses (and refuse an original import they lack) at its kernelcache address plus
+the kind's prelink slide; an entry the table marks "unported" becomes a function that panics naming it.
 """
 
 import argparse
@@ -119,6 +119,17 @@ def accessors(interface, table):
     return lines
 
 
+def constant_declarations(interface: dict, table: dict) -> list[str]:
+    """Declare the interface's constants as static members, at the kind's values."""
+    lines = []
+    for key, constant in interface.get('constants', {}).items():
+        value = table.get('constants', {}).get(key)
+        if value is None:
+            raise SystemExit(f'{table["class"]}: no value for constant {key}')
+        lines += [*doc(constant, '    '), f'    static constexpr unsigned long {key} = {number(value):#x};']
+    return lines
+
+
 def header(interface, table, table_name):
     cls, sup = interface['class'], interface['superclass']
     size = number(table['size'])
@@ -137,7 +148,7 @@ def header(interface, table, table_name):
     fields = accessors(interface, table)
     if fields:
         out += ['', 'protected:'] + fields
-    out += ['', 'public:'] + slot_declarations(interface, table)
+    out += ['', 'public:', *constant_declarations(interface, table), *slot_declarations(interface, table)]
     out += ['    {};'.format(decl) for decl in interface.get('members', [])]
     out += ['};', '#undef SWITCH_ABI_OPAQUE']
     out.append('static_assert(sizeof({}) == {:#x}, "{} as {} lays it out");'.format(cls, size, cls, table['kind']))

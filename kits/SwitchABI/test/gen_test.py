@@ -70,6 +70,7 @@ class TablesTest(unittest.TestCase):
                 self.assertEqual(table['kind'], path.parent.name)
                 self.assertTrue(set(table['layout'].values()) <= set(interface['methods']))
                 self.assertEqual(set(table['fields']), set(interface.get('fields', {})))
+                self.assertEqual(set(table.get('constants', {})), set(interface.get('constants', {})))
                 self.assertLessEqual(table['first_slot'], table['slots'])
                 if interface.get('header', True):
                     gen.header(interface, table, path.name)
@@ -102,6 +103,13 @@ class HeaderTest(unittest.TestCase):
         text = gen.header(interface, TABLE, 'kinds/TEST/Base.json')
         self.assertLess(text.index('#include <IOKit/IOService.h>'), text.index('struct BaseKey {\n    unsigned bits;'))
         self.assertLess(text.index('struct BaseKey {'), text.index('class Base : public IOService {'))
+
+    def test_constants_take_the_kind_values(self):
+        interface = dict(INTERFACE, constants={'swapNext': {'doc': 'the next link'}})
+        text = gen.header(interface, dict(TABLE, constants={'swapNext': '0xb90'}), 'kinds/TEST/Base.json')
+        self.assertIn('    static constexpr unsigned long swapNext = 0xb90;', text)
+        with self.assertRaises(SystemExit):
+            gen.header(interface, TABLE, 'kinds/TEST/Base.json')
 
     def test_a_slot_the_interface_lacks_is_refused(self):
         table = dict(TABLE, layout={'168': 'missing'})
