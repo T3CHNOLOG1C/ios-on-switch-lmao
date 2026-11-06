@@ -38,13 +38,16 @@ void tgm_journal(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int tgm_stage(void);
 void tgm_get_info(struct tgm_info *info);
 uint64_t tgm_timestamp_ns(void);
-/* Waiting (interrupt-driven from stage 1 on; no polled mode): take tgm_wake_seq(), test the condition, then
- * tgm_idle() sleeps until a GPU interrupt or other wake moves the sequence (1) or deadline_ns (the
- * absolutetime_to_nanoseconds(mach_absolute_time()) clock) passes (0). A fence found complete after tgm_idle()
- * returned 0 was not announced by its interrupt: tgm_fence_unwoken() allows 50 ms for the wake, then panics. */
-uint32_t tgm_wake_seq(void);
-int tgm_idle(uint32_t seq, uint64_t deadline_ns);
-void tgm_fence_unwoken(uint32_t seq, uint32_t seqno);
+/* Waiting for a channel's fence (interrupt-driven from stage 1 on; no polled mode): with the channel valid, take
+ * waiter = tgm_chan_waiter(chan) and seq = tgm_waiter_seq(waiter), then test the fence; tgm_waiter_idle() sleeps until
+ * that channel's fence moves, it is killed or destroyed (1), or deadline_ns (the absolutetime_to_nanoseconds(
+ * mach_absolute_time()) clock) passes (0). The waiter stays valid after the channel is gone. A fence found complete
+ * after tgm_waiter_idle() returned 0 was not announced by its interrupt: tgm_waiter_unwoken() allows 50 ms for the
+ * wake, then panics. */
+uint32_t tgm_chan_waiter(struct tgm_chan *chan);
+uint32_t tgm_waiter_seq(uint32_t waiter);
+int tgm_waiter_idle(uint32_t waiter, uint32_t seq, uint64_t deadline_ns);
+void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno);
 
 /* GPU memory pool (contiguous, write-combined in the kernel, below 4 GiB) */
 void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa);

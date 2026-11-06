@@ -96,19 +96,27 @@ int tgm_stage(void)
 	return gpu.stage;
 }
 
-uint32_t tgm_wake_seq(void)
+/* Fence waits by channel (nouveau_fence_chan.waiting): a fence's nonstall interrupt wakes the waiters of the channels
+ * whose fence moved, not every thread in a GPU wait. nvkm runs every channel's nonstall handler on each nonstall
+ * interrupt, so one global wake per handler woke each waiter once per live channel per fence. Channels share the words
+ * by id; a waiter of another channel on the same word wakes, finds its fence unchanged and sleeps again. Static: a
+ * waiter may still sleep on its channel's word while the channel is destroyed. */
+#define TGM_WAITERS 128
+static volatile u32 waiter_words[TGM_WAITERS];
+
+uint32_t tgm_waiter_seq(uint32_t waiter)
 {
-	return nvxnu_wake_seq();
+	return nvxnu_word_seq(&waiter_words[waiter % TGM_WAITERS]);
 }
 
-int tgm_idle(uint32_t seq, uint64_t deadline_ns)
+int tgm_waiter_idle(uint32_t waiter, uint32_t seq, uint64_t deadline_ns)
 {
-	return nvxnu_idle(seq, deadline_ns);
+	return nvxnu_word_idle(&waiter_words[waiter % TGM_WAITERS], seq, deadline_ns);
 }
 
-void tgm_fence_unwoken(uint32_t seq, uint32_t seqno)
+void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno)
 {
-	nvxnu_wake_due(seq, "fence", seqno);
+	nvxnu_word_wake_due(&waiter_words[waiter % TGM_WAITERS], seq, "fence", seqno);
 }
 
 static int badf(u32 v)
@@ -978,8 +986,9 @@ struct tgm_chan {
 	u64 submit_ns;   /* when the last fence was kicked */
 	u32 stall_done;  /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
 	u64 stall_ns;
-	u32 gov_done;  /* idle clock: last seqno counted retired (gov_fenced) */
-	u32 stat_done; /* stats: last seqno whose latency was counted, submit times by seqno */
+	u32 gov_done;   /* idle clock: last seqno counted retired (gov_fenced) */
+	u32 woken_done; /* the completed seqno its waiters were last woken for (chan_wake_waiters) */
+	u32 stat_done;  /* stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
 	u64 stat_exec,
@@ -1230,6 +1239,16 @@ uint32_t tgm_chan_error(struct tgm_chan *chan)
 	return chan->error;
 }
 
+uint32_t tgm_chan_waiter(struct tgm_chan *chan)
+{
+	return (uint32_t)(chan->id % TGM_WAITERS);
+}
+
+static void chan_wake_all_waiters(struct tgm_chan *chan)
+{
+	nvxnu_word_wake(&waiter_words[tgm_chan_waiter(chan)]);
+}
+
 /* One line of what the GPU is doing about a channel: owner, hardware channel id, error, completed/submitted fence and
  * how long ago the last one was kicked; GPFIFO GET/PUT as the host sees them (USERD 0x88/0x8c) and the PUT the kernel
  * wrote; PGRAPH_STATUS (0x400700, bit 0 busy), PFIFO engine 0 (GR) status (0x2640); PBDMA 0: status (0x3080, bits 13-15
@@ -1352,6 +1371,7 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n",
 		  chan->owner, chan->chid, report);
 	nvxnu_wake();
+	chan_wake_all_waiters(chan);
 	return NVIF_EVENT_DROP;
 }
 
@@ -2517,6 +2537,18 @@ static void idle_start(void)
 static void present_fenced(struct tgm_chan *chan);
 static void scrub_fenced(struct tgm_chan *chan);
 
+/* The interrupt pass's own nvxnu_wake() at its end wakes the kernel's waits (channel teardown, sync_for_cpu, system
+ * sleep's drain); a channel's fence waiters sleep on its word and wake only when its fence moved. */
+static void chan_wake_waiters(struct tgm_chan *chan)
+{
+	u32 done = tgm_chan_completed(chan);
+
+	if (done == chan->woken_done)
+		return;
+	chan->woken_done = done;
+	chan_wake_all_waiters(chan);
+}
+
 static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 {
 	struct tgm_chan *chan = container_of(event, struct tgm_chan, nonstall);
@@ -2534,7 +2566,8 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 		stats_fences(chan);
 	if (chan->kernel)
 		present_fenced(chan);
-	nvxnu_wake();
+	else
+		chan_wake_waiters(chan);
 	return NVIF_EVENT_KEEP;
 }
 
@@ -2629,6 +2662,7 @@ static int chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fe
 	 * acquire on the old seqno (the GPU present) is never left waiting for a word that went back to 0 */
 	chan->submitted = READ_ONCE(*fence_cpu);
 	chan->stat_done = chan->submitted;
+	chan->woken_done = chan->submitted;
 	chan->ring = dma_alloc_attrs(&gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL,
 				     DMA_ATTR_WRITE_COMBINE);
 	chan->ring_pas = kcalloc(npages, sizeof(u64), GFP_KERNEL);
@@ -2762,9 +2796,11 @@ static void order_forget(struct tgm_chan *chan);
 void tgm_chan_del(struct tgm_chan **pchan)
 {
 	struct tgm_chan *chan = *pchan;
+	u32 waiter;
 	u64 end;
 	if (!chan)
 		return;
+	waiter = tgm_chan_waiter(chan);
 	/* bounded wait for idle (CONTRACT.md: <= 1 s), then nvkm tears the channel down (preempt + runlist) */
 	end = nvxnu_nanotime() + NSEC_PER_SEC;
 	for (;;) {
@@ -2790,6 +2826,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	chan_free(chan);
 	mutex_unlock(&gpu.lock);
 	*pchan = NULL;
+	nvxnu_word_wake(&waiter_words[waiter]);
 }
 
 /* fence pages:

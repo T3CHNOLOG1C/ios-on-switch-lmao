@@ -127,6 +127,13 @@ nvxnu_u32 nvxnu_wake_seq(void);
 void nvxnu_wake(void);
 int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns);
 void nvxnu_wake_due(nvxnu_u32 seq, const char *what, nvxnu_u32 value);
+/* The same on a wake word of the caller's (a word that must outlive its sleepers): nvxnu_word_wake() moves it and wakes
+ * only the threads sleeping on it, not every GPU waiter. */
+nvxnu_u32 nvxnu_word_seq(const volatile nvxnu_u32 *word);
+void nvxnu_word_wake(volatile nvxnu_u32 *word);
+int nvxnu_word_idle(const volatile nvxnu_u32 *word, nvxnu_u32 seq, nvxnu_u64 deadline_ns);
+void nvxnu_word_wake_due(const volatile nvxnu_u32 *word, nvxnu_u32 seq, const char *what,
+			 nvxnu_u32 value);
 
 /* Tegra210 platform pieces (platform.c), used by the clk/regulator/reset/pmc shims */
 int tegra_gm20b_platform_map(void);

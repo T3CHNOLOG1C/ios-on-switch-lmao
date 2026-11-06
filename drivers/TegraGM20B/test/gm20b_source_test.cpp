@@ -256,6 +256,33 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 		HasSubstr("if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE)) return;"));
 }
 
+// Fence waits sleep on their channel's word: a fence interrupt wakes only the waiters of channels whose fence moved,
+// a kill or a teardown wakes that channel's, and the interrupt pass's own wake is left to the kernel's waits.
+TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
+{
+	const std::string nonstall = flat(definition(
+		gpu(), "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)"));
+	EXPECT_THAT(nonstall, HasSubstr("else chan_wake_waiters(chan);"));
+	EXPECT_EQ(Count(nonstall, "nvxnu_wake();"),
+		  1u);  // the scrubber's, while the sleep gate is shut
+	EXPECT_THAT(flat(definition(gpu(), "static void chan_wake_waiters(struct tgm_chan *chan)")),
+		    HasSubstr("if (done == chan->woken_done) return;"));
+	EXPECT_THAT(flat(definition(gpu(), "static int chan_killed(struct nvif_event *event, void "
+					   "*repv, u32 repc)")),
+		    HasSubstr("chan_wake_all_waiters(chan);"));
+	expectBefore(flat(definition(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")),
+		     "*pchan = NULL;", "nvxnu_word_wake(&waiter_words[waiter]);");
+	EXPECT_THAT(
+		flat(definition(SourceText("../shim/xnu_glue.cpp"),
+				"void gpuInterrupt(OSObject *, IOInterruptEventSource *, int)")),
+		HasSubstr("nvxnu_wake();"));
+	const std::string wait =
+		flat(Between(client(), "IOReturn AGXDeviceUserClient::waitFence(", "\n}\n"));
+	expectBefore(wait, "seq = tgm_waiter_seq(waiter);", "tgm_chan_completed(chan) - in->seqno");
+	EXPECT_THAT(wait, HasSubstr("tgm_waiter_idle(waiter, seq, deadline)"));
+	EXPECT_THAT(wait, Not(HasSubstr("tgm_idle(")));
+}
+
 TEST(GM20BSleepSource, SleepAndWakeOrder)
 {
 	const std::string body = flat(definition(gpu(), "void tgm_sleep(void)"));

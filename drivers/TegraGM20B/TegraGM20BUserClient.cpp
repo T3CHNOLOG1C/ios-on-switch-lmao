@@ -1586,11 +1586,15 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 	const uint64_t limit_ns = in->timeout_ns == UINT64_MAX ? 10000000000ULL : in->timeout_ns;
 	const uint64_t start = nowNs();
 	const uint64_t deadline = limit_ns > UINT64_MAX - start ? UINT64_MAX : start + limit_ns;
+	uint32_t waiter = 0, seq = 0;
 	for (bool slept = false;; slept = true) {
-		const uint32_t seq = tgm_wake_seq();
 		IOReturn ret = kIOReturnNotReady;
 		IOLockLock(lock_);
 		tgm_chan *chan = chans_[in->channel - 1];
+		if (chan) {
+			waiter = tgm_chan_waiter(chan);
+			seq = tgm_waiter_seq(waiter);
+		}
 		const uint64_t now = nowNs();
 		if (!chan)
 			ret = slept ? kIOReturnNotResponding : kIOReturnBadArgument;
@@ -1609,14 +1613,15 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 		IOLockUnlock(lock_);
 		if (ret != kIOReturnNotReady)
 			return ret;
-		if (!tgm_idle(seq, deadline)) {
+		if (!tgm_waiter_idle(waiter, seq, deadline)) {
 			IOLockLock(lock_);
 			chan = chans_[in->channel - 1];
-			const bool unwoken = chan && static_cast<int32_t>(tgm_chan_completed(chan) -
-									  in->seqno) >= 0;
+			const bool unwoken =
+				chan && tgm_chan_waiter(chan) == waiter &&
+				static_cast<int32_t>(tgm_chan_completed(chan) - in->seqno) >= 0;
 			IOLockUnlock(lock_);
 			if (unwoken)
-				tgm_fence_unwoken(seq, in->seqno);
+				tgm_waiter_unwoken(waiter, seq, in->seqno);
 		}
 	}
 }
