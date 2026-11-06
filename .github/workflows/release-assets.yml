@@ -102,4 +102,4 @@ jobs:
           cache-save: false
           bazelrc: build --show_progress_rate_limit=30
       - name: Dry-run the image builder on this build's assets
-        run: bazel run --repo_env=SWITCH_RELEASE_DIR="$RUNNER_TEMP/assets" --//install:prebuilt=release //:image_dry_run -- --size 32G
+        run: bazel run --repo_env=SWITCH_RELEASE_DIR="$RUNNER_TEMP/assets" --//install:prebuilt=release //:image_dry_run

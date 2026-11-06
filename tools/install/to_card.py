@@ -22,6 +22,14 @@ if __package__ in (None, ''):
 from tools.install import card as cards, folder, host
 
 
+def fat_of(card: cards.Card) -> cards.Part:
+    """Return the card's hos_data FAT32, the only partition the copy touches; any iOS target is the installer's."""
+    parts = cards.diskutil_partitions(card)
+    if not parts or parts[0].name != 'hos_data' or parts[0].content != 'Microsoft Basic Data':
+        raise cards.RefusedError(f"{card.disk}: the first partition is not the Switch's hos_data FAT32")
+    return parts[0]
+
+
 def stale_bytes(root: Path, relatives: list[str]) -> int:
     return sum((root / r).stat().st_size for r in relatives if (root / r).is_file())
 
@@ -63,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         if not names or broken:
             raise host.HostError(f'{out} holds no readable image {" ".join(broken)}: run //:image first')
         card = cards.resolve(args.disk)
-        fat, _ = cards.check_layout_unprivileged(card, {})
+        fat = fat_of(card)
         with cards.mounted(fat.identifier, log, read_only=not args.yes) as root:
             need = plan(out, Path(root), names, log)
             free = shutil.disk_usage(root).free

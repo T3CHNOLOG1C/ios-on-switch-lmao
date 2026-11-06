@@ -32,6 +32,7 @@ py_library(
         "renamed.py",
         "stages.py",
         "target.py",
+        "to_card.py",
     ],
     imports = ["../.."],
 )
@@ -169,6 +170,13 @@ py_test(
         "local",
         "manual",
     ],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "to_card_test",
+    size = "small",
+    srcs = ["to_card_test.py"],
     deps = [":lib"],
 )
 

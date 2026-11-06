@@ -5,7 +5,8 @@
 #   bazel build //:gpu         the TegraGM20B Metal bundle and its trust cache (//gpu:bundle adds the IPSW-made seed)
 #   bazel test //...           unit tests, pinned-input checks, format and lint
 #   bazel run //deploy:sd -- <disk>      bazel run //deploy:pull_logs -- <disk>      bazel run //install:sd -- <disk>
-#   bazel run //:image [-- --size 64G]   the SD-card folder: boot entry, install-ios.bin and the iOS install image
+#   bazel run //:image                   out/sd: an install image per iOS version (switchroot/ios/IOS17.SII.*)
+#   bazel run //:image_to_card -- <disk> those images, install-ios.bin and the hekate entry onto the card
 #
 # Format and lint (//bazel/lint; every tool pinned in bazel/lint/tools.bzl, @llvm or the Rust toolchain):
 #

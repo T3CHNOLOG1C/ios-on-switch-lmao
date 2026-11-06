@@ -1,7 +1,8 @@
 # Installing iPadOS onto the Switch SD card (README.md "Install").
 #
-#   bazel run //:image [-- --disk diskN | --size 64G]   the SD-card folder and install image (tools/install/image.py)
-#   bazel run //:image_dry_run -- --size 64G            the same checks and plan, without the IPSW's large members
+#   bazel run //:image                                  out/sd's IOS17.SII.* (--config=ios27: IOS27.SII.*), image.py
+#   bazel run //:image_dry_run                          the plan, without the IPSW's large members
+#   bazel run //:image_to_card -- disk4 [--yes]         out/sd's images onto the card (tools/install/to_card.py)
 #   bazel build //install:artifacts                     what the install writes, described (no device)
 #   bazel run //install:sd -- disk4 [--yes]             write a card in the Mac directly (tools/install/sd.py)
 #
