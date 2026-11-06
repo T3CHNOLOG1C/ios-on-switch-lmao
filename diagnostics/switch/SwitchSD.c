@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <machine/machine_routines.h>
+#include <mach/vm_param.h>
 #include <mach/vm_prot.h>
 #if !SWITCH_SD_MODEL
 #include <IOKit/IOLib.h>
@@ -579,8 +580,8 @@ void switch_sd_probe(void)
 #endif
     if (!native_sd_cpu_profile_matches(cpus, root_boot) ||
         (!root_boot && (switch_user_record[2] != 3 || switch_user_record[3] || switch_user_record[6] != 1 ||
-                        switch_user_record[8] != 1 || switch_user_record[9] || switch_user_record[12] != 4096 ||
-                        switch_user_record[13] != 4))) {
+                        switch_user_record[8] != 1 || switch_user_record[9] ||
+                        switch_user_record[12] != (uint64_t)PAGE_SIZE || switch_user_record[13] != 4))) {
         refuse(100);
         return;
     }
@@ -660,7 +661,7 @@ void switch_sd_probe(void)
     }
 #else
     /* ml_io_map uses VM_WIMG_IO. The pinned pmap maps this non-DRAM PA as
-     * Device-nGnRnE and NX. Mapping granularity is4KiB; callbacks constrain all
+     * Device-nGnRnE and NX, a whole VM page of it; callbacks constrain all
      * accesses to this controller's first0x200 and never touch eMMC at+0x600. */
     mapped = ml_io_map((vm_offset_t)SWITCH_SD_CONTROLLER_PA, 0x200);
     if (!mapped) {

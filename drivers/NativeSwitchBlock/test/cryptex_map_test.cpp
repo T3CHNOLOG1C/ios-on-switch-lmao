@@ -292,3 +292,31 @@ TEST(CryptexMap, AReplayBootDropsAListThatNoLongerMatchesIt)
     EXPECT_STREQ(switchListStale({cap + 1, 0, 0}, cap, page), "it holds more than a boot reads");
     EXPECT_EQ(switchListStale({cap, 0, 0}, cap, page), nullptr);
 }
+
+// Against a brute-force model: every VM page holding a byte of the run and of the file is paged in, nothing else, and the
+// page-in is whole VM pages. At 4 KiB VM pages it is the run itself, cut at the file's last page.
+TEST(CryptexMap, ARunPagesInTheWholeVmPagesItTouches)
+{
+    failures = 0;
+    constexpr uint64_t list = 4096;
+    std::mt19937_64 rng(5);
+    for (uint64_t vm : {4096ull, 16384ull}) {
+        for (int i = 0; i < 200000; ++i) {
+            const SwitchRun run = {1, uint32_t(rng() % 4096), uint16_t(1 + rng() % 128), 1, 0};
+            const uint64_t file = 1 + rng() % (20ull << 20), first = uint64_t(run.page) * list;
+            SwitchPageIn in = {};
+            const bool any = switchRunPageIn(run, list, vm, file, &in);
+            CHECK(any == (first < file), "run %u+%u, file %llu: %d", run.page, run.pages, (unsigned long long)file,
+                  any);
+            if (!any)
+                continue;
+            const uint64_t last = std::min<uint64_t>(first + uint64_t(run.pages) * list, file) - 1;
+            const uint64_t want = first / vm * vm, wantEnd = (last / vm + 1) * vm;
+            CHECK(in.offset == want && in.offset + in.length == wantEnd,
+                  "vm %llu run %u+%u file %llu: [%llu, %llu) want [%llu, %llu)", (unsigned long long)vm, run.page,
+                  run.pages, (unsigned long long)file, (unsigned long long)in.offset,
+                  (unsigned long long)(in.offset + in.length), (unsigned long long)want, (unsigned long long)wantEnd);
+        }
+    }
+    EXPECT_EQ(failures, 0u) << "checks failed (the first 20 reported above)";
+}

@@ -99,6 +99,25 @@ struct SwitchRun {
     uint8_t index;
 };
 
+// A run as the page-in UBC accepts: whole VM pages (cluster_pagein refuses anything else). The list counts listPage
+// bytes per page, its frozen unit, so under larger VM pages a run widens to the VM pages it touches; it ends at the
+// file's last VM page. False when the run starts at or past the end of the file.
+struct SwitchPageIn {
+    uint64_t offset, length;
+};
+
+inline bool switchRunPageIn(const SwitchRun &run, uint64_t listPage, uint64_t vmPage, uint64_t fileBytes,
+                            SwitchPageIn *out)
+{
+    const uint64_t first = uint64_t(run.page) * listPage, mask = vmPage - 1;
+    if (first >= fileBytes)
+        return false;
+    const uint64_t eof = (fileBytes + mask) & ~mask, end = (first + uint64_t(run.pages) * listPage + mask) & ~mask;
+    out->offset = first & ~mask;
+    out->length = (end < eof ? end : eof) - out->offset;
+    return true;
+}
+
 // Enough runs for any merge of n ranges holding `pages` pages in all.
 inline uint64_t switchRunCapacity(uint32_t n, uint64_t pages, uint32_t maxRun, uint32_t maxGap)
 {

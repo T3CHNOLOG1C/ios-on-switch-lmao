@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <kern/misc_protos.h>
+#include <mach/vm_param.h>
 #include "SwitchUserFixture.h"
 #include "SwitchSD.h"
 #include "SwitchFiles.h"
@@ -527,7 +528,7 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
         switch_user_record[12] = page;
         switch_user_record[13] = length;
         if (results[0] != 1 || results[1] != 0 || (results[2] & (1u << 29)) || (results[3] & (1u << 29)) ||
-            page != 4096 || length != 4) {
+            page != (uint64_t)PAGE_SIZE || length != 4) {
             switch_user_record[3] = 0x300;
             return;
         }

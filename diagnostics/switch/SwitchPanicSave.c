@@ -489,8 +489,8 @@ void switch_panic_save_init(void)
     if (switch_native_profile_active())
         screen = (volatile uint32_t *)ml_io_map_wcomb((vm_offset_t)SWITCH_FB_PA, (vm_size_t)SWITCH_FB_BYTES);
     save_on = 1;
-    for (uint64_t pa = REGION_PA; pa < REGION_PA + REGION_BYTES; pa += 4096)
-        if (!pmap_switch_ram_reserved((ppnum_t)(pa >> 12))) {
+    for (uint64_t pa = REGION_PA; pa < REGION_PA + REGION_BYTES; pa += PAGE_SIZE)
+        if (!pmap_switch_ram_reserved((ppnum_t)atop_64(pa))) {
             save_off_reason = "0xb0000000 is not reserved RAM";
             return;
         }

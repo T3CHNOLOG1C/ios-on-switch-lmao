@@ -70,8 +70,12 @@ COALESCED = {
 }
 
 
-def align(value: int) -> int:
-    return (value + 4095) & ~4095
+# XNU's VM page: the kernelcache's segments are mapped and freed as whole VM pages (16 KiB, as on every iPad).
+VM_PAGE = 0x4000
+
+
+def align(value: int, page: int = 4096) -> int:
+    return (value + page - 1) & ~(page - 1)
 
 
 def to_xml(value: object) -> ET.Element:
@@ -278,8 +282,8 @@ class CoalescedImage:
     def append_segment(
         self, name: str, va: int, blob: bytes | bytearray, size: int, protection: int
     ) -> tuple[dict[str, object], int]:
-        if va % 4096 or size % 4096 or len(blob) > size:
-            raise ValueError('Coalesced segment must have native 4K alignment')
+        if va % VM_PAGE or size % VM_PAGE or len(blob) > size:
+            raise ValueError('Coalesced segment must be whole VM pages')
         if any(s['size'] and va < s['va'] + s['size'] and s['va'] < va + size for s in self.new_segments):
             raise ValueError('Coalesced segment collides with existing mapping')
         fileoff = len(self.output)
@@ -651,8 +655,8 @@ class NativeImage:
     def append_segment(
         self, name: str, va: int, blob: bytes | memoryview, size: int, protection: int
     ) -> dict[str, object]:
-        if va % 4096 or size % 4096 or len(blob) > size:
-            raise ValueError('Coalesced segment must have native 4K alignment')
+        if va % VM_PAGE or size % VM_PAGE or len(blob) > size:
+            raise ValueError('Coalesced segment must be whole VM pages')
         if any(
             s['size'] and va < s['va'] + s['size'] and s['va'] < va + size
             for s in [*self.native['segments'], *self.new_segments]
@@ -712,8 +716,8 @@ def apply(
     kcid.update(native_data)
     kcid.update(bytes.fromhex(plan.original_sha256))
     xml = plan.xml_head + base64.b64encode(kcid.digest()[:16]) + plan.xml_tail
-    info_va = align(max(s['va'] + s['size'] for s in native['segments'] if s['size']))
-    image.append_segment('__PRELINK_INFO', info_va, xml, align(len(xml)), 3)
+    info_va = align(max(s['va'] + s['size'] for s in native['segments'] if s['size']), VM_PAGE)
+    image.append_segment('__PRELINK_INFO', info_va, xml, align(len(xml), VM_PAGE), 3)
     add_sparse_index_section(image, plan.index, base)
     macho(image.output)
     if report is not None:

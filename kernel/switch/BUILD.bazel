@@ -6,6 +6,9 @@ package(default_visibility = ["//kernel:__subpackages__"])
 
 lint_files()
 
+# For the host tests that compile a hook header's inline bodies (kernel/tests).
+exports_files(glob(["include/switch/*.h"]))
+
 filegroup(
     name = "srcs",
     srcs = glob(

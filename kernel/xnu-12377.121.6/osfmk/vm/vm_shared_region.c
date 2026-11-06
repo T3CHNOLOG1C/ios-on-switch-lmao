@@ -837,7 +837,7 @@ vm_shared_region_create(
 			csm_setup_nested_address_space(nested_pmap, base_address, size);
 #endif /* CODE_SIGNING_MONITOR */
 			int vm_map_pageshift = PAGE_SHIFT;
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 			vm_map_pageshift = FOURK_PAGE_SHIFT;
 #else
 			if (is_64bit ||
@@ -3684,7 +3684,7 @@ vm_shared_region_slide_page_v5(
 
 
 
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 /*
  * A 4 KiB kernel pages a 16 KiB v5 slide page in four parts, each on its own. vaddr holds part `part` of the page and uservaddr is
  * its user address; start is the offset (in the 16 KiB page) of the first rebase in this part. *next receives the offset of the

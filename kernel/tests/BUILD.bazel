@@ -21,6 +21,11 @@
 #   xnu_ui_scale_test        bsd/vm/switch_ui_scale.h's scales (whole-point screens, exact floats, boot-arg values)
 #                            and the cache text they write, against the assembler and the bytes the 1.6-only sites
 #                            shipped; vm_unix.c's CoreUI row bytes, and no UI scale pager at scale 1
+#   xnu_page_ratio_test      16 KiB VM pages over the 4 KiB granule: pmap.c's write_pte_fast (both trees) writes a
+#                            VM page as four consecutive 4 KiB frames, repeats empty and compressed entries, refuses an
+#                            unaligned PTE
+#   xnu_page_size_test       the native-4K guards (both trees) choose 16 KiB for the kernel, the commpage, process maps
+#                            and the shared region in the 16k kernel, and 4 KiB everywhere in the 4k one
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -242,4 +247,99 @@ host_test(
     ],
     data = ["//kernel/xnu-10063.141.1/bsd:vm/vm_unix.c"],
     includes = ["."],
+)
+
+# --- 16 KiB VM pages over the 4 KiB granule -------------------------------------------------------------------------
+# write_pte_fast_<tree>.h: pmap.c from "static void\nwrite_pte_fast(" through its closing brace.
+[
+    genrule(
+        name = "write_pte_fast_" + tree,
+        srcs = ["//kernel/xnu-{}/osfmk:arm/pmap/pmap.c".format(version)],
+        outs = ["write_pte_fast_{}.h".format(tree)],
+        cmd = """awk '
+            prev == "static void" && $$0 ~ /^write_pte_fast\\(/ { on = 1; print prev }
+            on { print }
+            on && $$0 == "}" { done = 1; exit }
+            { prev = $$0 }
+            END { if (!done) exit 1 }
+        ' $< > $@""",
+    )
+    for tree, version in [
+        ("10063", "10063.141.1"),
+        ("12377", "12377.121.6"),
+    ]
+]
+
+host_test(
+    name = "xnu_page_ratio_test",
+    srcs = [
+        "write_pte_fast_10063.h",
+        "write_pte_fast_12377.h",
+        "xnu_page_ratio_test.cpp",
+    ],
+    includes = ["."],
+)
+
+# page_policy_<tree>_<file>.h: each native-4K guard's block of the source, as a function (xnu_guard_blocks.awk).
+[
+    genrule(
+        name = "page_policy_{}_{}".format(tree, name),
+        srcs = ["//kernel/xnu-{}/{}".format(version, source)],
+        outs = ["page_policy_{}_{}.h".format(tree, name)],
+        cmd = "awk -v name=xnu{}_{} -v max={} -f $(location xnu_guard_blocks.awk) $(location //kernel/xnu-{}/{}) > $@".format(
+            tree,
+            name,
+            blocks,
+            version,
+            source,
+        ),
+        tools = ["xnu_guard_blocks.awk"],
+    )
+    for tree, version in [
+        ("10063", "10063.141.1"),
+        ("12377", "12377.121.6"),
+    ]
+    for name, source, blocks in [
+        ("arm_init", "osfmk:arm/arm_init.c", 2),
+        ("commpage", "osfmk:arm/commpage/commpage.c", 1),
+        ("mach_loader", "bsd:kern/mach_loader.c", 1),
+        ("shared_region", "osfmk:vm/vm_shared_region.c", 1),
+    ]
+]
+
+[
+    host_library(
+        name = "page_size_" + size,
+        srcs = [
+            "xnu_page_size_harness.c",
+        ] + [
+            "page_policy_{}_{}.h".format(tree, name)
+            for tree in [
+                "10063",
+                "12377",
+            ]
+            for name in [
+                "arm_init",
+                "commpage",
+                "mach_loader",
+                "shared_region",
+            ]
+        ],
+        hdrs = ["xnu_page_size_harness.h"],
+        defines = ["XNU_PAGE_SHIFTS=xnu_page_shifts_" + size] + (["SWITCH_VM_16K_PAGES=1"] if size == "16k" else []),
+        includes = ["."],
+    )
+    for size in [
+        "16k",
+        "4k",
+    ]
+]
+
+host_test(
+    name = "xnu_page_size_test",
+    srcs = ["xnu_page_size_test.cpp"],
+    deps = [
+        ":page_size_16k",
+        ":page_size_4k",
+    ],
 )

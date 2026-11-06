@@ -269,7 +269,7 @@ boolean_t switch_ram_virtual_region(unsigned int region_select, vm_map_offset_t 
 
 unsigned int pmap_switch_dense_page_count(void)
 {
-    return pmap_switch_ram_enabled() ? 0x100000 : 0;
+    return pmap_switch_ram_enabled() ? (unsigned int)(0x100000000ULL >> PAGE_SHIFT) : 0;
 }
 
 boolean_t pmap_switch_page_reserved(ppnum_t pnum)

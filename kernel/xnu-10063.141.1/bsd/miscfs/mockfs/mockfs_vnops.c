@@ -408,7 +408,7 @@ mockfs_blockmap(struct vnop_blockmap_args * ap)
 		}
 		*bpn = (fsnode->backing_offset + foffset) / blksize;
 		/* File metadata is exact; block I/O may include allocated zero padding. */
-		*run = ((fsnode->size + 4095) & ~4095ULL) - foffset;
+		*run = ((fsnode->size + PAGE_MASK) & ~(uint64_t)PAGE_MASK) - foffset;
 
 		if (ap->a_size > *run) {
 			/* We've been asked for more data than the backing device can provide; we're done. */

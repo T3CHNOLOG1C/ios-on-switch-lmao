@@ -103,7 +103,7 @@ static void ubc_cs_free(struct ubc_info *uip);
 
 static boolean_t ubc_cs_supports_multilevel_hash(struct cs_blob *blob);
 static kern_return_t ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob);
-#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE
+#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE && !SWITCH_VM_16K_PAGES
 static int cs_native4k_prepare(vnode_t vp, struct cs_blob *blob);
 #endif
 
@@ -370,7 +370,7 @@ cs_validate_codedirectory(const CS_CodeDirectory *cd, size_t length)
 		return EBADEXEC;
 	}
 	if ((cd->pageSize != PAGE_SHIFT_4K) && (cd->pageSize != PAGE_SHIFT)
-#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE
+#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE && !SWITCH_VM_16K_PAGES
 	    && !(PAGE_SHIFT == 12 && cd->pageSize == 14)
 #endif
 	    ) {
@@ -4981,7 +4981,7 @@ ubc_cs_blob_add(
 		goto out;
 	}
 
-#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE
+#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE && !SWITCH_VM_16K_PAGES
 	/* Authenticate before publishing the signed object or taking its locks. */
 	error = cs_native4k_prepare(vp, &tmp_blob);
 	if (error != 0) {
@@ -5856,7 +5856,7 @@ ubc_get_cs_mtime(
 
 unsigned long cs_validate_page_no_hash = 0;
 unsigned long cs_validate_page_bad_hash = 0;
-#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE
+#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE && !SWITCH_VM_16K_PAGES
 __attribute__((used)) const uint32_t cs_native4k_hash_cache_version = 1;
 unsigned long cs_native4k_full_blocks = 0;
 unsigned long cs_native4k_page_checks = 0;
@@ -6061,7 +6061,7 @@ cs_validate_hash(
 				panic("hash size too large");
 			}
 			codeLimit = ntohl(cd->codeLimit);
-#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE
+#if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE && !SWITCH_VM_16K_PAGES
 			if (PAGE_SHIFT == 12 && blob->csb_hash_pageshift == 14) {
 				vm_size_t index = (vm_size_t)offset >> PAGE_SHIFT;
 				if ((offset & PAGE_MASK) || offset >= codeLimit ||

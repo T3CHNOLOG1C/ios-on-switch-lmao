@@ -320,7 +320,7 @@ typedef struct shared_region_pager {
 #if __has_feature(ptrauth_calls)
 	uint64_t                srp_jop_key;        /* zero if used for arm64 */
 #endif /* __has_feature(ptrauth_calls) */
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 	uint16_t                *srp_part_starts;   /* 16 KiB slide pages: first rebase of each 4 KiB part, see shared_region_pager_slide_part() */
 	vm_size_t               srp_part_bytes;
 #endif
@@ -478,7 +478,7 @@ shared_region_pager_data_initialize(
 	return KERN_FAILURE;
 }
 
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 #define SRP_PART_UNKNOWN 0xFFFEu
 
 /* One source page of the shared cache, copied out (a part of a 16 KiB slide page that comes before the one being paged in). */
@@ -893,7 +893,7 @@ retry_src_fault:
 		 * Process the original contents of the source page
 		 * into the destination page.
 		 */
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 		if (slide_info_page_size > PAGE_SIZE) {
 			vm_object_offset_t offset_in_backing_object = offset + cur_offset + pager->srp_backing_offset;
 			bcopy((const char *)src_vaddr, (char *)dst_vaddr, PAGE_SIZE);
@@ -997,7 +997,7 @@ retry_src_fault:
 			shared_region_pager_slid++;
 		}
 
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 part_done:
 #endif
 		assert(VM_PAGE_OBJECT(src_page) == src_page_object);
@@ -1200,7 +1200,7 @@ shared_region_pager_deallocate_internal(
 			pager->srp_slide_info = NULL;
 		}
 
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 		if (pager->srp_part_starts != NULL) {
 			kfree_data(pager->srp_part_starts, pager->srp_part_bytes);
 			pager->srp_part_starts = NULL;
@@ -1397,7 +1397,7 @@ shared_region_pager_create(
 	pager->srp_header.mo_control = MEMORY_OBJECT_CONTROL_NULL;
 	pager->srp_header.mo_last_unmap_ctid = 0;
 
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 	pager->srp_part_starts = NULL;
 	pager->srp_part_bytes = 0;
 #endif

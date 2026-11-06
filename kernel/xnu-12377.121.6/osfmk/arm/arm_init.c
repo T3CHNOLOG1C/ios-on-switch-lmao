@@ -430,7 +430,7 @@ arm_init(
 
 	{
 		/* Native non-Apple 4K builds expose the hardware page size at any RAM size. */
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 		PAGE_SHIFT_CONST = ARM_PGSHIFT;
 #else
 		/*
@@ -453,7 +453,7 @@ arm_init(
 
 #endif
 
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 		page_shift_user32 = ARM_PGSHIFT;
 #else
 		/* 32-bit apps always see 16KB page size */

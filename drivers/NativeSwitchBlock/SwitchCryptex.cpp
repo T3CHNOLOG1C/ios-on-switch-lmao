@@ -1249,7 +1249,7 @@ extern "C" int switch_cryptex_manifest_sha384(dev_t device, const char *uuid, ui
 // cannot read is a recording boot with no prefetch, so loadList says why in one line, and the format is frozen
 // (SwitchCryptexMap.h): a new one must read the old.
 namespace {
-constexpr uint32_t kPage = 4096;
+constexpr uint32_t kPage = 4096;   // the list's page and the image cache's block, whatever the VM page size
 constexpr uint32_t kMaxRun = 128;  // pages: 512 KiB per page-in, as the old 512 KiB advisory reads
 constexpr uint32_t kMaxGap = 8;    // read through up to 32 KiB of unrecorded pages rather than start another page-in
 constexpr uint64_t kInFlightBytes = 3 * kMaxRun * kPage;
@@ -1639,12 +1639,10 @@ void prefetchWorker(void *parameter, wait_result_t)
         }
         if (!vp)
             continue;
-        const off_t offset = off_t(run.page) * kPage;
-        if (offset >= vpSize)
+        SwitchPageIn in;
+        if (!switchRunPageIn(run, kPage, PAGE_SIZE, uint64_t(vpSize), &in))
             continue;
-        off_t length = off_t(run.pages) * kPage;
-        if (length > vpSize - offset)
-            length = (vpSize - offset + kPage - 1) & ~off_t(kPage - 1);
+        const off_t offset = off_t(in.offset), length = off_t(in.length);
         if (directDevice[run.index])
             readAheadRun(vp, run.index, offset, length);
         int error = 0;

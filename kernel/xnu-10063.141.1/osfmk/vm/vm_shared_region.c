@@ -817,7 +817,7 @@ vm_shared_region_create(
 			sub_map = vm_map_create_options(pmap_nested, 0,
 			    (vm_map_offset_t)size, VM_MAP_CREATE_PAGEABLE);
 
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 			vm_map_set_page_shift(sub_map, FOURK_PAGE_SHIFT);
 #else
 			if (is_64bit ||

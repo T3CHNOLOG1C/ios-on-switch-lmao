@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 # The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
@@ -20,6 +21,24 @@ lint_files()
 # The XNU the kernel is built from: kernel/xnu-<version>/, the selected IPSW kind's (kernel/rules/version.bzl). Code
 # that differs per version uses #if XNU_<version>; drivers depend on :sdk, never on one XNU's labels.
 xnu_versions(name = "xnu_version")
+
+# The kernel's VM page size. 16k is 16 KiB VM pages, as on every iPad, over the A57's 4 KiB translation granule (XNU's
+# PAGE_RATIO 4); the kernel toolchain then adds -DSWITCH_VM_16K_PAGES=1 to every kernel compile. 4k is the native 4 KiB
+# kernel, kept until a 16 KiB boot is proven on the device.
+string_flag(
+    name = "vm_page_size",
+    build_setting_default = "4k",
+    scope = "target",
+    values = [
+        "16k",
+        "4k",
+    ],
+)
+
+config_setting(
+    name = "vm_page_16k",
+    flag_values = {":vm_page_size": "16k"},
+)
 
 # The selected XNU's SDK for the kernel's compiles (headers and the paths the kernel toolchain names).
 alias(

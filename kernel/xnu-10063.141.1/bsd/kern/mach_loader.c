@@ -511,7 +511,7 @@ load_machfile(
 
 #if defined(__arm64__)
 	if (result->is_64bit_addr) {
-#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__ && !SWITCH_VM_16K_PAGES
 		vm_map_set_page_shift(map, FOURK_PAGE_SHIFT);
 #else
 		/* enforce 16KB alignment of VM map entries */

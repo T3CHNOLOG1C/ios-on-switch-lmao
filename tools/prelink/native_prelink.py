@@ -199,8 +199,8 @@ def plan_original(
     {'kernel': [(binding index, target, original export names)], 'cut': [(binding index, component, dependency, stub)]}.
     """
     check_inherited_identity(inherited_original_sha256)
-    if slide % 4096:
-        raise ValueError('Rebasing must preserve native 4K alignment')
+    if slide % 0x4000:
+        raise ValueError('Rebasing must keep the segments on whole VM pages (16 KiB)')
     original = macho(original_data)
     if original['kind'] != 2:
         raise ValueError('Expected MH_EXECUTE kernel images')

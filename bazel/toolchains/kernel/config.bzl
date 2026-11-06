@@ -218,6 +218,15 @@ def _impl(ctx):
         ))],
     ))
 
+    # 16 KiB VM pages over the 4 KiB granule (//kernel:vm_page_size=16k). The 4k kernel gets no flag at all, so its
+    # compiles stay what they were before the setting existed.
+    if ctx.attr._vm_page_size[BuildSettingInfo].value == "16k":
+        features.append(feature(
+            name = "vm_16k_pages_macro",
+            enabled = True,
+            flag_sets = [flag_set(actions = _COMPILE, flag_groups = _flags(["-DSWITCH_VM_16K_PAGES=1"]))],
+        ))
+
     # cc_library defines, which no_legacy_features would drop: a driver package's build settings reach the compiles of
     # every driver that names its headers (drivers/SwitchUSB:hdrs). Nothing else on the kernel side has defines.
     features.append(feature(
@@ -334,6 +343,7 @@ kernel_cc_toolchain_config = rule(
     attrs = {
         "sdk": attr.label(mandatory = True, providers = [KernelSdkInfo], doc = "the kernel SDK (//kernel:sdk)"),
         "_profile": attr.label(default = "//bazel:profile"),
+        "_vm_page_size": attr.label(default = "//kernel:vm_page_size"),
         "_xnu_version": attr.label(default = "//kernel:xnu_version"),
         "source_roots": attr.string_list(
             mandatory = True,
