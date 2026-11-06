@@ -147,7 +147,8 @@ TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
     EXPECT_THAT(present, HasSubstr("phaseFailed = true;"));
     EXPECT_THAT(present, Not(HasSubstr("panic("))) << "a V_PULSE2 that never fired costs one line, not the boot";
     EXPECT_THAT(present, HasSubstr("IOLog(\"SwitchDisplay: vsync phase off for this boot"));
-    EXPECT_THAT(method(display(), "    unsigned noteLong(uint32_t frames, const FrameMark &mark)"), HasSubstr("kLongRate"));
+    EXPECT_THAT(method(display(), "    unsigned noteLong(uint32_t frames, const FrameMark &mark)"),
+                HasSubstr("kLongRate"));
 }
 
 TEST(VsyncPhaseSource, ReplacementsAndResume)
