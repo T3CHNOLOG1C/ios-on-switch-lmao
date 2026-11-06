@@ -19,6 +19,9 @@ jobs:
           cache: lint
           buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           upload: ${{ github.event_name == 'push' }}
+      # A build evaluates a module extension only when it needs one of its repositories, so a stale lockfile entry
+      # otherwise fails only the job that does (@switch_release's: the release image dry run).
+      - run: bazel mod deps --lockfile_mode=error
       - run: bazel test //:format_test //:lint_test //:clang_tidy_test
       - run: bazel run //tools/lint:py_owners
       - if: github.event_name == 'push' && !cancelled()
