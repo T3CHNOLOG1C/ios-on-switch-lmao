@@ -1,0 +1,37 @@
+# kits/SwitchFalcon on the host: the image parser, and the boot sequence against a model falcon.
+#
+#   bazel test //kits/SwitchFalcon/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "kern/clock.h",
+    ],
+    stubs = "switch_falcon_stubs.h",
+)
+
+host_library(
+    name = "falcon",
+    srcs = [
+        "//kits/SwitchFalcon:SwitchFalcon.cpp",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    hdrs = ["//kits/SwitchFalcon:SwitchFalcon.h"],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = [":kernel"],
+)
+
+host_test(
+    name = "switch_falcon_test",
+    srcs = ["switch_falcon_test.cpp"],
+    deps = [
+        ":falcon",
+        ":kernel",
+    ],
+)
