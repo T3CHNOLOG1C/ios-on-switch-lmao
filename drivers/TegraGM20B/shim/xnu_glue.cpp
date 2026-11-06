@@ -619,7 +619,7 @@ extern "C" void nvxnu_dcache_clean_inval(const void *va, nvxnu_u64 size)
 // Pages outside the kernel's RAM (device memory a task mapped) have no cacheable alias to maintain.
 extern "C" void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size)
 {
-	if (pmap_valid_page(static_cast<ppnum_t>(pa >> 12)))
+	if (pmap_valid_page(static_cast<ppnum_t>(atop_64(pa))))
 		dcache_op(reinterpret_cast<const void *>(phystokv(pa)), size, true);
 }
 
@@ -632,7 +632,7 @@ extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 c
 	const uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
 	__asm__ volatile("dsb sy" ::: "memory");
 	for (nvxnu_u32 i = 0; i < count; i++) {
-		if (!pmap_valid_page(static_cast<ppnum_t>(pas[i] >> 12)))
+		if (!pmap_valid_page(static_cast<ppnum_t>(atop_64(pas[i]))))
 			continue;
 		const uintptr_t va = phystokv(pas[i] & ~0xfffULL);
 		for (uintptr_t a = va; a < va + 4096; a += line)
