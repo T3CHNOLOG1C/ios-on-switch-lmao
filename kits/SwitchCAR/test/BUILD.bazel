@@ -1,0 +1,42 @@
+# kits/SwitchCAR on the host, against a model of the CAR banks and the PMC's toggle handshake.
+#
+#   bazel test //kits/SwitchCAR/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "kern/clock.h",
+    ],
+    stubs = "switch_car_stubs.h",
+)
+
+host_library(
+    name = "car",
+    srcs = [
+        "//kits/SwitchCAR:SwitchCAR.cpp",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchCAR:SwitchPMC.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = [":kernel"],
+)
+
+host_test(
+    name = "switch_car_test",
+    srcs = [
+        "switch_car_test.cpp",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchCAR:SwitchPMC.h",
+    ],
+    deps = [
+        ":car",
+        ":kernel",
+    ],
+)
