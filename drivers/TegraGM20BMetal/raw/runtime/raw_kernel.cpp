@@ -72,6 +72,8 @@ bool Kernel::open(std::string &err)
     const auto release = nvk ? reinterpret_cast<void (*)()>(dlsym(nvk, "switch_nvk_connection_release")) : nullptr;
     if (!connection || !release)
         return openOwn(err);
+    // [vaStart, vaEnd) is the whole window NVK leaves out, handed to every caller: one Kernel per process may take it (the
+    // render server's one raw device), or two free lists would hand out the same VAs.
     uint64_t vaStart = 0, vaEnd = 0;
     if (!connection(&conn_, &tunnel_, &selector_, &vaStart, &vaEnd)) {
         err = "NVK's connection did not open";
