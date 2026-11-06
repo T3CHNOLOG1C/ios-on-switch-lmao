@@ -1,5 +1,6 @@
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//kits/SwitchABI:defs.bzl", "switch_abi_bindings")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -30,16 +31,26 @@ kernel_driver(
     name = "ShengPlatformPower",
     srcs = [
         "ShengPlatformPower.cpp",
-        "//bazel/pinned:kernel/sheng-platform-power/original-bindings.S",
+        "original-bindings.S",
     ],
-    copts = [
-        "-I",
-        "{build}/sheng-platform-power",
+    abi = [
+        "ApplePMGR",
+        "ApplePMGRNub",
     ],
     hdr_deps = [
         "drivers/SwitchPower",
     ],
     late = ["ShengPlatformPower.cpp"],
+)
+
+switch_abi_bindings(
+    name = "original_bindings",
+    out = "original-bindings.S",
+    classes = [
+        "//kits/SwitchABI:ApplePMGR",
+        "//kits/SwitchABI:ApplePMGRNub",
+    ],
+    objects = [":ShengPlatformPower_cc"],
 )
 
 # Link stubs: no-op probe hooks.

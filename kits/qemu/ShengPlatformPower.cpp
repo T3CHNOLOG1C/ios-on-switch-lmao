@@ -2,7 +2,8 @@
 // Board-side original PMGR ABI qualification. Default off. Modes: 1 releases
 // unpublished objects, 2 publishes the original nub, 3 tests power refusal.
 // No clocks, sleep, reset or secondary-CPU success is advertised.
-#include "OriginalPMGRABI.h"
+#include "OriginalApplePMGR.h"
+#include "OriginalApplePMGRNub.h"
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <libkern/c++/OSSymbol.h>
@@ -17,9 +18,6 @@ extern "C" {
 extern kmod_info_t g_kernel_kmod_info;
 kern_return_t OSKextLoadKextWithIdentifier(const char *);
 void sheng_pmgr_static_init(void) __asm__("__GLOBAL__sub_I_ShengPlatformPower.cpp");
-IOService *sheng_original_pmgr_nub_create(IORegistryEntry *, ApplePMGR *);
-uint32_t sheng_original_pmgr_nub_read(IOService *);
-void sheng_original_pmgr_nub_write(IOService *, uint64_t);
 // stage,status,parent-size,own-size,provider,nub,bound-provider,read-before,
 // read-after,own-before,own-after,nub-before,nub-after,attached,registered,mode.
 volatile uint64_t sheng_pmgr_observation[16];
@@ -84,7 +82,7 @@ OSDeclareDefaultStructors(ShengPlatformPower) public : void enableCPUCore(unsign
         unavailable(176);
     }
 
-#include "GuardedPMGRSlots.inc"
+    SWITCH_ABI_GUARDS(unavailable)
     IOReturn setProperties(OSObject *properties) override;
 };
 
@@ -102,7 +100,7 @@ void ShengPlatformPower::operator delete(void *memory, size_t size)
     OSObject::operator delete(memory, size);
 }
 
-static_assert(sizeof(ShengPlatformPower) == 0x4b8a8, "Exact original provider storage");
+static_assert(sizeof(ShengPlatformPower) == sizeof(ApplePMGR), "Exact original provider storage");
 
 // iPadOS's CPU ceiling. thermalmonitord (CLTM, 21H461 -[MitigationController updateCPU], CONTRACT.md) writes its
 // decisions as IORegistryEntrySetCFProperty on IOServiceMatching("ApplePMGR"), this service: four DVD factor
@@ -170,8 +168,8 @@ extern "C" void sheng_pmgr_run(void)
         return;
     }
     const OSMetaClass *parent = lookup("ApplePMGR"), *nubMeta = lookup("ApplePMGRNub");
-    if (!parent || parent != &ApplePMGR::gMetaClass || parent->getClassSize() != 0x4b8a8 || !nubMeta ||
-        nubMeta->getClassSize() != 0x740) {
+    if (!parent || parent != &ApplePMGR::gMetaClass || parent->getClassSize() != sizeof(ApplePMGR) || !nubMeta ||
+        nubMeta->getClassSize() != sizeof(ApplePMGRNub)) {
         sheng_pmgr_checkpoint();
         return;
     }
@@ -192,7 +190,7 @@ extern "C" void sheng_pmgr_run(void)
     sheng_pmgr_observation[11] = nubMeta->getInstanceCount();
     ShengPlatformPower *provider = new ShengPlatformPower;
     IORegistryEntry *description = new IORegistryEntry;
-    IOService *nub = nullptr;
+    ApplePMGRNub *nub = nullptr;
     do {
         if (!provider || !description || !provider->init() || !description->init())
             break;
@@ -205,8 +203,7 @@ extern "C" void sheng_pmgr_run(void)
         sheng_pmgr_observation[5] = reinterpret_cast<uintptr_t>(nub);
         if (!nub || nub->getMetaClass() != nubMeta || !provider->metaCast("ApplePMGR"))
             break;
-        uintptr_t bound = 0;
-        memcpy(&bound, reinterpret_cast<const char *>(nub) + 0x88, sizeof(bound));
+        const uintptr_t bound = reinterpret_cast<uintptr_t>(nub->pmgr());
         sheng_pmgr_observation[6] = bound;
         if (bound != reinterpret_cast<uintptr_t>(provider))
             break;

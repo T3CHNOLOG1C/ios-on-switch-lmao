@@ -174,8 +174,6 @@ stage_files(
     name = "pinned_headers",
     files = {
         "//bazel/pinned:kernel/native-legacy-display/OriginalLegacyFramebufferABI.h": "build/native-legacy-display/OriginalLegacyFramebufferABI.h",
-        "//bazel/pinned:kernel/sheng-platform-power/OriginalPMGRABI.h": "build/sheng-platform-power/OriginalPMGRABI.h",
-        "//bazel/pinned:kernel/sheng-platform-power/GuardedPMGRSlots.inc": "build/sheng-platform-power/GuardedPMGRSlots.inc",
     },
 )
 
