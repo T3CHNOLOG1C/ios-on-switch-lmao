@@ -41,6 +41,7 @@
 
 mod creation;
 pub(crate) mod driver;
+mod seed;
 pub(super) mod store;
 mod worker;
 

@@ -294,6 +294,80 @@ fn a_seed_beneath_the_directory_is_read_and_never_changed() {
     assert_eq!(directory.seed(), None);
 }
 
+/// Pack the cache directory at `from` as a packed seed of `build` at `to` (one pack), as the seed's
+/// build writes one (tools/gpu/shaders/merge.py): `index` sorted by (name, space), `packs/000`.
+fn pack(from: &Path, build: &[u8; 32], to: &Path) {
+    let content: String = crate::shader_cache::store::content()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let mut records = Vec::new();
+    let mut pack = Vec::new();
+    for (path, bytes, _) in files(from) {
+        let directory = path.parent().unwrap().parent().unwrap().file_name().unwrap();
+        let space = u8::from(directory.to_str().unwrap() == content);
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let mut raw = [0u8; 32];
+        for (i, byte) in raw.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&name[2 * i..2 * i + 2], 16).unwrap();
+        }
+        records.push((raw, space, bytes.len() as u32, pack.len() as u64));
+        pack.extend_from_slice(&bytes);
+    }
+    records.sort();
+    let mut index = b"M2VSEED1".to_vec();
+    index.extend_from_slice(&1u32.to_le_bytes());
+    index.extend_from_slice(&1u32.to_le_bytes());
+    index.extend_from_slice(&(records.len() as u64).to_le_bytes());
+    index.extend_from_slice(build);
+    for (name, space, length, offset) in records {
+        index.extend_from_slice(&name);
+        index.extend_from_slice(&[space, 0, 0, 0]);
+        index.extend_from_slice(&length.to_le_bytes());
+        index.extend_from_slice(&offset.to_le_bytes());
+    }
+    fs::create_dir_all(to.join("packs")).unwrap();
+    fs::write(to.join("index"), index).unwrap();
+    fs::write(to.join("packs/000"), pack).unwrap();
+}
+
+/// A packed seed answers as the directory it was packed from, and a packed seed of another build
+/// is none.
+#[test]
+fn a_packed_seed_is_read_as_its_directory_is() {
+    let made = Scratch::new();
+    let maker = store(made.path(), BUILD, 1 << 20);
+    let seeded = name(&BUILD, 1);
+    put(&maker, &seeded, 1, b"seeded entry");
+    let record = name(&BUILD, 5);
+    maker
+        .write_record(&record, &seal(&identity(5), &data(5, b"seeded record")))
+        .expect("a write");
+    drop(maker);
+    let seed = Scratch::new();
+    pack(made.path(), &BUILD, seed.path());
+
+    let scratch = Scratch::new();
+    let directory = Directory::open(scratch.path().to_path_buf(), BUILD, 1 << 20)
+        .unwrap()
+        .with_seed(Some(seed.path().to_path_buf()));
+    assert_eq!(directory.seed(), Some(seed.path()));
+    let store = Store::new(directory, None);
+    assert_eq!(get(&store, &seeded, 1), Lookup::Hit(data(1, b"seeded entry")));
+    let loaded = store.load_content(&record, |bytes| {
+        open(&identity(5), &bytes).map(|data| bytes[data].to_vec())
+    });
+    assert_eq!(loaded, Lookup::Hit(data(5, b"seeded record")));
+    assert_eq!(get(&store, &name(&BUILD, 2), 2), Lookup::Absent);
+    assert_eq!(store.counters.seed_reads.load(Ordering::Relaxed), 2);
+    assert!(files(scratch.path()).is_empty(), "a seed's hit writes nothing");
+
+    let directory = Directory::open(scratch.path().to_path_buf(), OTHER_BUILD, 1 << 20)
+        .unwrap()
+        .with_seed(Some(seed.path().to_path_buf()));
+    assert_eq!(directory.seed(), None);
+}
+
 /// Set `path`'s access and modification times to `when`.
 fn set_times(path: &Path, when: SystemTime) {
     let file = fs::File::options().write(true).open(path).unwrap();
