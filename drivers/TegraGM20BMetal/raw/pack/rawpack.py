@@ -26,10 +26,15 @@ writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe lo
 reruns the probes).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime
 refuses a pack of another build.
+A state that fetches a color (fc_framebuffer_fetch) is probed a second time with NVK's interlock hidden
+(NVK_DEBUG=no_fsi, the macOS twin's alone), in buckets of their own (barrier0 .. barrier15): the pack holds both of
+metal2vulkan's forms of it, the storage form the pixel interlock orders and the barrier form (input attachments,
+barriers between draws).
 The same work in three steps, for a build that caches each bucket's probe runs (they depend on the bucket's state lines
 and the tools alone):
        rawpack.py --split --qc <default.metallib> --corpus <corpus.log> --out <dir>
-           writes <dir>/work/bucket0 .. bucket15, each a corpus.log of its states
+           writes <dir>/work/bucket0 .. bucket15 and barrier0 .. barrier15, each a corpus.log of its states (a barrier
+           bucket only where its share of the states fetches)
        rawpack.py --probe-bucket <bucket dir> --prebuilt <dir> --nvk <host twin dylib> --qc <default.metallib>
            probes one bucket in place: programs.bin, probe{256,16,4096}.{out,log}
        rawpack.py --link --out <dir> [--stack <hex key>] <bucket dir>...
@@ -195,12 +200,15 @@ def build(work: Path, bridge: Path) -> None:
 BUCKETS = 16
 
 
+FETCH = 'fc_framebuffer_fetch:53:01'
+
+
 def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
     """Write each bucket's corpus (its Core Animation lines, in corpus order) into work/bucket<i>/corpus.log.
 
-    Each bucket starts with the first downsample_4_frag state: the probe's warm-up draws it so its dummy sampler takes
-    NVK's sampler index 0 (layouts.py reads a handle naming index 0 as no sampler). A bucket that also holds it probes
-    it twice; mkpack.py keeps one.
+    Its fetching states go into work/barrier<i>/corpus.log too, where it has some. Each bucket starts with the first
+    downsample_4_frag state: the probe's warm-up draws it so its dummy sampler takes NVK's sampler index 0 (layouts.py
+    reads a handle naming index 0 as no sampler). A bucket that also holds it probes it twice; mkpack.py keeps one.
     """
     lines: list[list[str]] = [[] for _ in range(count)]
     warm = ''
@@ -211,10 +219,13 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
                 warm = warm or (line if 'f downsample_4_frag' in line else '')
     dirs = []
     for i, part in enumerate(lines):
-        d = work / f'bucket{i}'
-        d.mkdir(parents=True)
-        (d / 'corpus.log').write_text(warm + ''.join(part))
-        dirs.append(d)
+        for name, states in ((f'bucket{i}', part), (f'barrier{i}', [line for line in part if FETCH in line])):
+            if not states:
+                continue
+            d = work / name
+            d.mkdir(parents=True)
+            (d / 'corpus.log').write_text(warm + ''.join(states))
+            dirs.append(d)
     return dirs
 
 
@@ -233,6 +244,8 @@ def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str])
     """
     if d.name == 'bucket0':
         env = dict(env, PROBE_YCBCR_LIB=str(tools / 'ycbcr.metallib'))
+    if d.name.startswith('barrier'):
+        env = dict(env, NVK_DEBUG='no_fsi')
     said = []
 
     def probe(name: str, extra: dict[str, str]) -> None:

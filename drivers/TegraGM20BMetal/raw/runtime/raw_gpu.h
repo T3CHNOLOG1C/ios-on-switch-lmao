@@ -401,7 +401,7 @@ public:
     }
 
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
-    Pipeline *pipeline(uint64_t keyHash);
+    Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory when wcOn() (a texture the CPU writes with

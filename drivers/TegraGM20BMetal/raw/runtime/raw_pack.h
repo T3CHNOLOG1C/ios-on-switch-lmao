@@ -28,7 +28,7 @@ enum PackSectionId {
 
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
-    uint32_t version, programs, pipelines, samplers;  // version 2
+    uint32_t version, programs, pipelines, samplers;  // version 3
     PackSection section[PackSectionCount];
     uint64_t stack;  // the build's stack key (build-tegra-gm20b-metal.py: the plugin is compiled with the same one)
 };
@@ -64,7 +64,16 @@ struct PackEntry {
 };
 
 enum PackPipelineFlags : uint32_t {
-    PipelineFetches = 1
+    PipelineFetches = 1,
+    // metal2vulkan's barrier form of a state whose first record fetches in the storage form (the pixel interlock): its
+    // fetches read input attachments, ordered by barriers (pack/rawpack.py's probe with NVK's interlock hidden)
+    PipelineBarrierForm = 2
+};
+
+// Which of a state's records: its first (the storage form where it has both), or its barrier form
+enum class PackForm : uint8_t {
+    Default,
+    Barrier
 };
 
 struct PackPipeline {
@@ -126,7 +135,7 @@ public:
         return hdr_->section[s].bytes;
     }
 
-    const PackPipeline *find(uint64_t keyHash) const;  // nullptr: not in the pack
+    const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;  // nullptr: not in the pack
 
     const char *string(uint32_t off) const
     {

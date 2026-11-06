@@ -384,9 +384,9 @@ bool Device::place(uint32_t prog, uint32_t &program)
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
 // as push words with its programs placed in the heap
-Pipeline *Device::pipeline(uint64_t keyHash)
+Pipeline *Device::pipeline(uint64_t keyHash, PackForm form)
 {
-    const PackPipeline *rec = pack_.find(keyHash);
+    const PackPipeline *rec = pack_.find(keyHash, form);
     if (!rec)
         return nullptr;
     std::lock_guard<std::mutex> l(lock_);

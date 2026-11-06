@@ -18,7 +18,9 @@ usage: mkpack.py <merged programs.bin out> <out dir> <bucket dir>...
   each bucket dir (rawpack.py's) holds its own probe runs: probe256.out/.log, and the PROBE_BYTES=16 and 4096 runs
   (probe16.*, probe4096.*: each buffer entry's descriptor type, a uniform buffer's range NVK rounds up to 256 bytes, and
   the function's window on the slot) and programs.bin; a state's index is (its bucket, its line in the bucket's corpus).
-  The context init and post-init registers are the first bucket's (every probe process opens the device alike).
+  The context init and post-init registers are the first bucket's (every probe process opens the device alike). A
+  bucket dir named barrier<i> holds the fetching states' run with NVK's interlock hidden: a state whose own record is
+  metal2vulkan's storage form gets a second record from it, its barrier form (PipelineBarrierForm), after every first.
 writes the merged programs.bin, <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt
 (decoder tables), and prints a report.
 """
@@ -126,13 +128,32 @@ def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
 
 
 def load_buckets(dirs: list[str], size: int) -> list[dict]:
-    """Give every bucket's probes of the run with `size`-byte payloads, each with its bucket's number."""
+    """Give every bucket's probes of the run with `size`-byte payloads, each with its bucket's number and form.
+
+    The form is 'barrier' in a barrier bucket (the run with NVK's interlock hidden, rawpack.py), else ''.
+    """
     probes = []
     for b, d in enumerate(dirs):
+        form = 'barrier' if os.path.basename(os.path.normpath(d)).startswith('barrier') else ''
         for p in probelog.load(os.path.join(d, f'probe{size}.out'), os.path.join(d, f'probe{size}.log')):
             p['bucket'] = b
+            p['form'] = form
             probes.append(p)
     return probes
+
+
+def interlocked(p: dict) -> bool:
+    """Whether the probe's draw had SET_PIXEL_SHADER_INTERLOCK_CONTROL on: metal2vulkan's storage form of a fetch."""
+    return bool(p['records'][0]['regs'].get(0x1224, 0) & 3)
+
+
+def barrier_forms(simple: list[dict]) -> list[dict]:
+    """Keep a barrier-form probe only where the same state's default record is in the storage form.
+
+    Elsewhere the two runs drew it alike.
+    """
+    storage = {p['key'] for p in simple if not p['form'] and interlocked(p)}
+    return [p for p in simple if not p['form'] or p['key'] in storage]
 
 
 def load_sizes(dirs: list[str]) -> dict[tuple, list[int]]:
@@ -313,6 +334,7 @@ def pipeline(
     rec = {
         'index': p['index'],
         'key': p['key'],
+        'form': p['form'],
         'vs': prog_index[r['prog'][1][0]],
         'fs': prog_index[r['prog'][5][0]],
     }
@@ -344,18 +366,25 @@ def main() -> None:
                 merged.write(part.read())
     sizes = load_sizes(dirs)
     os.makedirs(out_dir, exist_ok=True)
-    seen: set[str] = set()
-    probes = [p for p in load_buckets(dirs, 256) if not (p['key'] in seen or seen.add(p['key']))]
+    seen: set[tuple[str, str]] = set()
+    probes = [
+        p for p in load_buckets(dirs, 256) if (p['form'], p['key']) not in seen and not seen.add((p['form'], p['key']))
+    ]
     programs = load_programs(prog_path)
     init, post = load_init(os.path.join(dirs[0], 'probe256.log'))
     # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate
     report = []
     simple, skipped = split_probes(probes)
+    simple = barrier_forms(simple)
     for p in simple:
         n = targets(p['key'])
         p['records'][0]['regs'] = {m: v for m, v in p['records'][0]['regs'].items() if not foreign(m, n)}
     varying, baseline = split_registers(simple, post)
-    report.append(f'{len(probes)} states probed, {len(simple)} taken, {len(skipped)} skipped')
+    barriers = sum(1 for p in simple if p['form'])
+    report.append(
+        f'{len(probes)} states probed, {len(simple) - barriers} taken, {len(skipped)} skipped; '
+        f'{barriers} storage-form states with their barrier form'
+    )
     for p, why in skipped:
         report.append(f'  skipped {p["index"]} ({why}): {p["key"][:150]}')
     names = ' '.join(f'{m:x}' for m in varying)
@@ -370,6 +399,7 @@ def main() -> None:
             report.append(f'  skipped {p["index"]} ({"; ".join(rec["problems"])}): {p["key"][:150]}')
             continue
         pipes.append(rec)
+    pipes.sort(key=lambda rec: rec['form'] == 'barrier')  # a key's first record is its default (Pack::find)
     # init template with relocations (submissions 1-3 as NVK recorded them)
     init_recs = [(sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)) for sc, m, d in init]
     report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')
