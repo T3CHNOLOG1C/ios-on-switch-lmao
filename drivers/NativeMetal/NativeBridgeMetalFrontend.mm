@@ -706,11 +706,18 @@ static std::mutex gSurfaceImportLock;
 // association is never the one dropped: a lookup that missed it would import the same surface a second time.
 static constexpr NSUInteger kSurfaceImportKeys = 1024;
 
-// A symbol of NVK (libvulkan_nouveau.dylib, beside this image), which the Vulkan loader opened RTLD_LOCAL: looked up
-// through that image rather than RTLD_DEFAULT.
+// A symbol of NVK (libvulkan_nouveau.dylib: the one this process loaded, else the one beside this image), which the Vulkan
+// loader opened RTLD_LOCAL: looked up through that image rather than RTLD_DEFAULT.
 static void *nvkSymbol(const char *name)
 {
     static void *const nvk = []() -> void * {
+        static const char kNvk[] = "/libvulkan_nouveau.dylib";
+        for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
+            const char *image = _dyld_get_image_name(i);
+            const size_t length = image ? strlen(image) : 0;
+            if (length > sizeof kNvk - 1 && !strcmp(image + length - (sizeof kNvk - 1), kNvk))
+                return dlopen(image, RTLD_LAZY | RTLD_NOLOAD);
+        }
         Dl_info info = {};
         if (!dladdr(reinterpret_cast<const void *>(&nvkSymbol), &info) || !info.dli_fname)
             return nullptr;
@@ -748,6 +755,58 @@ static void declareGpuWrites(IOSurfaceRef surface)
               IOSurfaceGetID(surface));
 }
 
+static NmbBuffer *bufferOverForeign(const struct switch_foreign_memory *memory, void *bytes, uint64_t length,
+                                    uint64_t options)
+{
+    using Foreign = void (*)(const void *, uint64_t, uint64_t, uint64_t, uint32_t, void (*)(void *), void (*)(void *),
+                             void *);
+    static const Foreign foreign = reinterpret_cast<Foreign>(nvkSymbol("switch_nvk_import_foreign"));
+    if (!foreign || !gDevice)
+        return nullptr;
+    foreign(memory->cpu, memory->bytes, memory->handle, memory->va, memory->kind, memory->hold, memory->drop,
+            memory->lease);
+    NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, bytes, length, options);
+    foreign(nullptr, 0, 0, 0, 0, nullptr, nullptr, nullptr);
+    return handle;
+}
+
+extern "C" id native_bridge_metal_buffer_over_foreign(const struct switch_foreign_memory *memory, void *bytes,
+                                                      NSUInteger length, NSUInteger options)
+{
+    NmbBuffer *handle = memory ? bufferOverForeign(memory, bytes, length, options) : nullptr;
+    if (!handle) {
+        NBLOG(@"native-metal: buffer over foreign memory refused: %@", lastError());
+        return nil;
+    }
+    NBBuffer *buffer = [NBBuffer new];
+    buffer.handle = handle;
+    buffer.options = options;
+    buffer.wrapped = bytes;
+    return (id<MTLBuffer>)buffer;
+}
+
+static std::atomic<switch_surface_importer> gSurfaceImporter{nullptr};
+
+extern "C" void native_bridge_metal_set_surface_importer(switch_surface_importer importer)
+{
+    gSurfaceImporter.store(importer);
+}
+
+static NmbBuffer *importSurface(IOSurfaceRef surface, void *base, size_t bytes)
+{
+    const switch_surface_importer importer = gSurfaceImporter.load();
+    struct switch_foreign_memory memory = {};
+    if (importer && importer(IOSurfaceGetID(surface), surface, base, bytes, &memory)) {
+        NmbBuffer *handle = bufferOverForeign(&memory, base, bytes, MTLResourceStorageModeShared);
+        memory.drop(memory.lease);
+        return handle;
+    }
+    noteImportSurface(IOSurfaceGetID(surface), base, bytes);
+    NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, base, bytes, MTLResourceStorageModeShared);
+    noteImportSurface(0, nullptr, 0);
+    return handle;
+}
+
 static bool usageWrites(MTLTextureUsage usage)
 {
     return usage == MTLTextureUsageUnknown || (usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite));
@@ -770,9 +829,7 @@ static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
         return buffer;
     }
     const uint64_t began = nowUs();
-    noteImportSurface(IOSurfaceGetID(surface), base, bytes);
-    NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, base, bytes, MTLResourceStorageModeShared);
-    noteImportSurface(0, nullptr, 0);
+    NmbBuffer *handle = importSurface(surface, base, bytes);
     gTimeSurfaceImport.add(began);
     if (!handle) {
         NBLOG(@"native-metal: surface import refused: %@", lastError());

@@ -44,5 +44,26 @@ id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger off
 // A render pipeline state of this device made at its first set (AsyncPipelines.h startLazy): the raw path's m2v twin of a
 // state it draws itself.
 id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options);
+
+// Memory another driver of this process keeps bound in the GPU VM it shares with NVK (the raw GM20B path's: raw_gpu.h Alias): the
+// BO's first byte for the CPU, its size, handle and GPU address, the PTE kind of that binding, and the lease a view holds.
+struct switch_foreign_memory {
+    const void *cpu;
+    uint64_t bytes, handle, va;
+    uint32_t kind;
+    void (*hold)(void *lease);
+    void (*drop)(void *lease);
+    void *lease;
+};
+// A buffer over `length` bytes at `bytes`, inside `memory`: NVK makes its memory over memory's binding with no kernel call, and
+// holds memory's lease from then until it frees it. The caller's own hold stays the caller's. Nil if the runtime refuses.
+id native_bridge_metal_buffer_over_foreign(const struct switch_foreign_memory *memory, void *bytes, NSUInteger length,
+                                           NSUInteger options);
+// Every IOSurface import the frontend makes from now on is `importer`'s: it fills *memory with the surface's import and one hold
+// of its lease for the frontend, so a process whose raw GM20B path imports the surface has one import of it. false: the frontend
+// imports the surface itself.
+typedef bool (*switch_surface_importer)(uint32_t surface_id, const void *surface, void *base, uint64_t bytes,
+                                        struct switch_foreign_memory *memory);
+void native_bridge_metal_set_surface_importer(switch_surface_importer importer);
 }
 #endif

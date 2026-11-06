@@ -5,7 +5,7 @@
 // MAXWELL_B / MAXWELL_DMA_COPY_A methods in a push buffer and submits them through the TegraGM20B user client (raw_kernel.h).
 //
 // Memory. Everything the raw path draws with is memory this task can also hand to m2v (RawMetal.mm's fallback makes m2v
-// objects over the same pages, never a copy):
+// objects over the same BOs at the same VAs, never a copy or a second import: Alias):
 //  - textures Core Animation makes, and buffers: pool spans, page-aligned anonymous memory imported once in big chunks;
 //  - IOSurface textures: the surface's pages, imported once per surface while a texture over it lives;
 //  - no-copy buffers: the caller's pages.
@@ -41,6 +41,27 @@ namespace raw {
 
 class Device;
 class CommandBuffer;
+
+constexpr uint32_t kPteKindPitch = 0;
+
+struct Lease;  // raw_alias.cpp
+
+// Where memory comes from: the pool, the write-combined GPU pool, an import
+enum class Memory : uint8_t {
+    Pool,
+    Wc,
+    Import
+};
+
+// Memory of the raw path an m2v view uses in place (RawMetal.mm's twins), as NVK takes it (switch_nvk_import_foreign): the BO
+// it lies in, bound already in the GPU VM the two drivers share (raw_kernel.h), and a lease the view holds (Device::holdLease,
+// dropLease, any thread) so the memory outlives the view's last use. One hold of it is the caller's to drop.
+struct Alias {
+    const uint8_t *cpu = nullptr;  // the BO's first byte for the CPU
+    uint64_t bytes = 0, handle = 0, va = 0;
+    uint32_t kind = 0;  // the PTE kind of its binding
+    Lease *lease = nullptr;
+};
 
 // MTLPixelFormat -> NV formats: the texture header's word 0 NVK writes (read off the twin: pack/mkformats.py), its render target
 // format when the raw path may render to it (0: sampled only), bytes per pixel, sRGB.
@@ -88,6 +109,7 @@ struct Texture {
     uint32_t tic = 0;          // texture header index, 0: none (not sampleable)
     Import *import = nullptr;  // surface or no-copy pages, else
     Span span;                 // pool memory, else a view (memory of the texture it views)
+    Lease *lease = nullptr;    // span's, once an m2v view aliases it (Device::alias): span is freed at its last drop
 
     // A two-plane 4:4:4 surface's texture (RGB8_444_2P, Metal format 542): the image sampled is span (RGBA8, the codes as Metal
     // reads them: red Cr, green Y, blue Cb, alpha 1), which BlitEncoder::convertPlanar writes from the surface's planes (import)
@@ -156,6 +178,7 @@ struct Buffer {
     bool wc = false;
     Import *import = nullptr;  // a caller's no-copy pages, else
     Span span;                 // pool memory
+    Lease *lease = nullptr;    // as Texture::lease
 };
 
 struct SamplerDesc {                                      // the MTLSamplerDescriptor fields the TSC takes
@@ -414,8 +437,8 @@ public:
     Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
-    // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory when wcOn() (a texture the CPU writes with
-    // replaceRegion: no clean after), else pool memory
+    // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:
+    // no clean after), else (or full) pool memory
     bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false);
 
     // Before the GPU first renders or stores into the IOSurface (Kernel::surfaceGpuWrites).
@@ -450,6 +473,12 @@ public:
     // the level fetches its color through it); 0: none
     uint32_t levelTic(Texture &t, uint32_t level);
 
+    // Whether the connection is NVK's (raw_kernel.h): m2v's views alias this path's memory
+    bool shared() const
+    {
+        return k_.shared();
+    }
+
     // Whether mip chains are on: the 2D engine's self-test at open made the chain the design expects (fx_mip.h)
     bool chainsOn() const
     {
@@ -464,19 +493,8 @@ public:
     }
 
     void destroyTexture(Texture &t);
-    // `wc`: from the write-combined GPU pool (Buffer::wc) when wcOn(), else (or full) pool memory as before
+    // `wc`: from the write-combined GPU pool (Buffer::wc), else (or full) pool memory as before
     bool createBuffer(uint64_t length, Buffer &b, bool wc = false);
-
-    // Whether write-combined buffers are on (RawMetal.mm turns them off at open when m2v cannot make its twin over one)
-    bool wcOn() const
-    {
-        return wcOn_;
-    }
-
-    void setWc(bool on)
-    {
-        wcOn_ = on;
-    }
 
     // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
     uint32_t wcChunksHeld();
@@ -489,6 +507,15 @@ public:
 
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
     void destroyBuffer(Buffer &b);
+
+    // The memory an m2v view of t (a pool or write-combined texture) or b uses in place, one hold taken for the caller (raw_alias.cpp).
+    // False: nothing to alias (memoryless, a view's memory), or the connection is not NVK's.
+    bool alias(Texture &t, Alias &a);
+    bool alias(Buffer &b, Alias &a);
+    // The surface's import, made now if no texture of the raw path holds one: an m2v import of the surface is this one, aliased.
+    bool aliasSurface(uint64_t surfaceId, void *base, uint64_t bytes, const void *surface, Alias &a);
+    static void holdLease(void *lease);
+    static void dropLease(void *lease);
     bool createSampler(const SamplerDesc &d, Sampler &s);
     void destroySampler(Sampler &s);
 
@@ -666,7 +693,6 @@ private:
     std::vector<Chunk> blChunks_;
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
-    bool wcOn_ = true;
     bool wcAlloc(uint64_t bytes, Span &s);
     void wcFree(Span &s);
     bool chainsOn_ = false;
@@ -708,6 +734,11 @@ private:
     void poolFree(Span &s);
     Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner);
     void release(Import *i);
+    // lock_ held (raw_alias.cpp): a hold on a span's lease, made at its first alias; the last drop frees what the lease holds
+    Lease *leaseSpan(Lease *&lease, const Span &span, Memory from);
+    void dropLocked(Lease *lease);
+    // lock_ held: the span goes back to where it came from now, or at its lease's last drop
+    void freeSpan(Span &span, Memory from, Lease *&lease);
     // A memoryless attachment's memory (tag 0), or a shadow target's pool image for attachment j (tag 1 + j): one per size,
     // format and tag, kept while passes use it
     Texture *backing(const Texture &memoryless, uint32_t tag = 0);

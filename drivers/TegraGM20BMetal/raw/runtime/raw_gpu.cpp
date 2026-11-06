@@ -84,7 +84,6 @@ constexpr size_t kDedicatedSpares = 2;
 // The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MB
 // of programs, of which the render server uses a few hundred
 constexpr uint64_t kHeapCap = 8 << 20;
-constexpr uint32_t kPteKindPitch = 0;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
 constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
@@ -763,7 +762,7 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     t.pitch = (width * t.bpp + 255) & ~255u;
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t bytes = uint64_t(t.pitch) * height;
-    if (wc && wcOn_ && wcAlloc(bytes, t.span)) {
+    if (wc && wcAlloc(bytes, t.span)) {
         t.wc = true;
         stats.wcBytes += t.span.bytes;
     } else {
@@ -891,6 +890,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     t.shadowTarget = f->rt != 0 && !linearTarget(t);
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
+    t.lease = nullptr;
     if (!(t.tic = allocTic()))
         return false;
     writeTic(t);
@@ -1129,12 +1129,7 @@ void Device::destroyTexture(Texture &t)
     }
     if (t.import)
         release(t.import);
-    if (t.span.valid()) {
-        if (t.wc)
-            wcFree(t.span);
-        else
-            poolFree(t.span);
-    }
+    freeSpan(t.span, t.wc ? Memory::Wc : Memory::Pool, t.lease);
     t = {};
 }
 
@@ -1144,7 +1139,7 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
     if (!length)
         length = 16;
     std::lock_guard<std::mutex> l(lock_);
-    if (wc && wcOn_) {
+    if (wc) {
         if (wcAlloc(length, b.span)) {
             b.wc = true;
             b.va = b.span.va;
@@ -1297,12 +1292,7 @@ void Device::destroyBuffer(Buffer &b)
     std::lock_guard<std::mutex> l(lock_);
     if (b.import)
         release(b.import);
-    if (b.span.valid()) {
-        if (b.wc)
-            wcFree(b.span);
-        else
-            poolFree(b.span);
-    }
+    freeSpan(b.span, b.wc ? Memory::Wc : Memory::Pool, b.lease);
     b = {};
 }
 

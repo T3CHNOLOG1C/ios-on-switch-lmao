@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 #include "SwitchFrameTimeline.h"
+#include "RawAlias.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
 
@@ -493,19 +494,6 @@ static id twinPublish(id object, __strong id &slot, id made)
 - (void)rmCommit:(RMCommandBuffer *)cb;
 @end
 
-// A resource the raw path keeps gets its m2v twin at once, on a utility-class queue: a command buffer that goes to m2v later
-// finds every twin made. Made on demand, the first replay after a quiet spell made them on the submitting thread, the render
-// thread when nothing was queued: 116-130 IOSurface imports, 25-94 ms, of the 136-442 ms replays at 18:19 and 19:20 on 11-06.
-static void prepareTwin(RMObject *o)
-{
-    static dispatch_queue_t queue =
-        dispatch_queue_create("com.brunostjohn.switch.TegraGM20BMetal.twins",
-                              dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
-    dispatch_async(queue, ^{
-        [o rmTwin];
-    });
-}
-
 @implementation RMObject
 
 - (id)rmTwin
@@ -759,13 +747,13 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
         if (_twin)
             return _twin;
     }
-    // made outside this object's lock (twinPublish): over the same pages, a pool span or the caller's no-copy pages, whole
+    // made outside this object's lock (twinPublish): in place over the same memory (a pool span or the caller's no-copy pages)
     const size_t page = size_t(getpagesize());
+    raw::Alias a;
     return twinPublish(self, _twin,
-                       [gRM->fallback newBufferWithBytesNoCopy:_raw.cpu
-                                                        length:(NSUInteger(_raw.length) + page - 1) & ~(page - 1)
-                                                       options:_options
-                                                   deallocator:nil]);
+                       gRM->raw->alias(_raw, a)
+                           ? rawAliasBuffer(a, _raw.cpu, (NSUInteger(_raw.length) + page - 1) & ~(page - 1), _options)
+                           : nil);
 }
 
 // A CPU read after a GPU write: the GPU's bytes, not lines the CPU cached before (clean+invalidate keeps any CPU write)
@@ -968,12 +956,14 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
         case RMTextureSurface:
             made = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane];
             break;
-        case RMTexturePool: {  // m2v's in-place texture over the same pool pages (as an IOSurface's)
+        case RMTexturePool: {  // m2v's in-place texture over the same pool memory (as an IOSurface's)
             const size_t page = size_t(getpagesize());
-            id<MTLBuffer> pages = [m2v newBufferWithBytesNoCopy:_raw.span.cpu
-                                                         length:(NSUInteger(_raw.span.bytes) + page - 1) & ~(page - 1)
-                                                        options:MTLResourceStorageModeShared
-                                                    deallocator:nil];
+            raw::Alias a;
+            id<MTLBuffer> pages =
+                gRM->raw->alias(_raw, a) ? rawAliasBuffer(a, _raw.span.cpu,
+                                                          (NSUInteger(_raw.span.bytes) + page - 1) & ~(page - 1),
+                                                          MTLResourceStorageModeShared)
+                                         : nil;
             MTLTextureDescriptor *d = _descriptor;
             if (_raw.chain) {  // level 0 (the chain's levels are the m2v texture of every level's: rmMipTwin)
                 d = [_descriptor copy];
@@ -1309,8 +1299,6 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
                       [NSString stringWithFormat:@"parent kind %u pred %s", unsigned(_kind), kPredNames[_pred]]);
     if (!v->_rawOk && ![v rmTwin])
         return nil;
-    if (v->_rawOk)
-        prepareTwin(v);
     return (id<MTLTexture>)v;
 }
 
@@ -1533,8 +1521,6 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
     }
     if (!t->_rawOk && ![t rmTwin])
         return nil;
-    if (t->_rawOk)
-        prepareTwin(t);
     return (id<MTLTexture>)t;
 }
 
@@ -4712,7 +4698,6 @@ static void commitBuffer(RMCommandBuffer *cb);
         t->_twin = [gRM->fallback newBufferWithLength:n options:o];
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
-    prepareTwin(b);
     return (id<MTLBuffer>)b;
 }
 
@@ -4742,7 +4727,6 @@ static void commitBuffer(RMCommandBuffer *cb);
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_deallocator = [deallocator copy];
-    prepareTwin(b);
     return (id<MTLBuffer>)b;
 }
 
@@ -4772,7 +4756,6 @@ static void commitBuffer(RMCommandBuffer *cb);
             if (!said.exchange(true))
                 os_log(rawLog(), "raw: mip chain on (%u levels of %ux%u, %llu bytes)", unsigned(d.mipmapLevelCount),
                        unsigned(d.width), unsigned(d.height), (unsigned long long)t->_raw.chain->layout.bytes);
-            prepareTwin(t);
             return (id<MTLTexture>)t;
         }
     }
@@ -4800,7 +4783,6 @@ static void commitBuffer(RMCommandBuffer *cb);
             refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
         return (id<MTLTexture>)w;
     }
-    prepareTwin(t);
     return (id<MTLTexture>)t;
 }
 
@@ -4929,8 +4911,7 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
             refuseTexture(t, PredTexSurfImport, 1, 0, @"surface", extra);
         if (![t rmTwin])
             return nil;
-    } else if (!t->_raw.planar && !t->_raw.ycbcr)  // (m2v's twin of a YCbCr surface holds a converted image of its own)
-        prepareTwin(t);
+    }
     return (id<MTLTexture>)t;
 }
 
@@ -4972,7 +4953,6 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
         o->_twin = r->_twin;
         return (id<MTLSamplerState>)o;
     }
-    prepareTwin(r);
     return (id<MTLSamplerState>)r;
 }
 
@@ -6147,6 +6127,11 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     }
     if (!prepared)
         dev = openDevice(packPath, stack, err);
+    if (dev && fallback && !dev->shared()) {
+        err = "the kernel connection is not NVK's, so m2v cannot alias the raw path's memory";
+        delete dev;
+        dev = nullptr;
+    }
     if (!dev) {
         if (error)
             *error = [NSString stringWithUTF8String:err.c_str()];
@@ -6225,20 +6210,8 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
                @"other's "
                @"work to complete");
     gRM = r;
-    {  // write-combined buffers stay on only if m2v makes its twin over one (its import of GPU-pool pages): one line either way
-        raw::Buffer probe;
-        bool twin = false;
-        const NSUInteger page = NSUInteger(getpagesize());
-        if (dev->createBuffer(page, probe, true) && probe.wc && fallback)
-            twin = [fallback newBufferWithBytesNoCopy:probe.cpu length:page options:0 deallocator:nil] != nil;
-        if (probe.cpu)
-            dev->destroyBuffer(probe);
-        if (!twin)
-            dev->setWc(false);
-        os_log(rawLog(),
-               "raw: write-combined buffers %{public}s (a GPU-pool page: %{public}s, m2v's twin over it %{public}s)",
-               dev->wcOn() ? "on" : "off", probe.wc || twin ? "made" : "not made", twin ? "made" : "not made");
-    }
+    if (fallback)
+        rawAliasSurfaces(dev);
     os_log(rawLog(), "raw: shader heap %llu KB, each program placed at its state's first use",
            (unsigned long long)(dev->heapBytes() >> 10));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
