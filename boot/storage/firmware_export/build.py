@@ -27,30 +27,34 @@ def tool(name: str) -> str:
     raise ValueError('missing build tool ' + name)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--output', type=Path, required=True)
-    args = ap.parse_args()
-    out = args.output.absolute()
+def _check_output(out: Path) -> None:
     if out.exists() or any(p.is_symlink() for p in (out, *out.parents)):
         raise ValueError('output must be a new nonsymlink directory')
     if not out.is_relative_to(ROOT / 'out'):
         raise ValueError('output must be under workspace out')
+
+
+def _pinned_firmware() -> bytes:
     firmware = ROOT / 'bazel/pinned/firmware/bl33.bin'
     if firmware.is_symlink():
         raise ValueError('symlink firmware')
     raw = firmware.read_bytes()
     if hashlib.sha256(raw).hexdigest() != PIN:
         raise ValueError('BL33 pin mismatch')
-    source_names = ('export.c', 'export.h', 'native.c', 'entry.S', 'link.ld', 'signatures.h', 'build.py')
-    source_hashes = {n: hashlib.sha256((SOURCE / n).read_bytes()).hexdigest() for n in source_names}
+    return raw
+
+
+def _signatures(raw: bytes) -> list[tuple[str, str]]:
     words = re.findall(r'\{0x([0-9a-f]{8})u,\s*0x([0-9a-f]{8})u\}', (SOURCE / 'signatures.h').read_text())
     if len(words) < 100:
         raise ValueError('missing instruction signatures')
     for off, word in words:
         if struct.unpack_from('<I', raw, int(off, 16))[0] != int(word, 16):
             raise ValueError('instruction signature mismatch')
-    out.mkdir(parents=True)
+    return words
+
+
+def _compile(out: Path) -> list[list[str]]:
     flags = [
         '--target=aarch64-none-elf',
         '-march=armv8-a',
@@ -96,7 +100,10 @@ def main() -> None:
     cmd = [tool('llvm-objcopy'), '-O', 'binary', str(out / 'exporter.elf'), str(out / 'exporter.bin')]
     commands.append(cmd)
     subprocess.run(cmd, check=True)
-    data = (out / 'exporter.bin').read_bytes()
+    return commands
+
+
+def _segments(out: Path, data: bytes) -> list[dict]:
     if not 0 < len(data) <= 65536:
         raise ValueError('invalid footprint')
     elf = (out / 'exporter.elf').read_bytes()
@@ -105,12 +112,16 @@ def main() -> None:
         raise ValueError('ELF entry mismatch')
     segments = []
     for i in range(e[9]):
-        typ, flags_, off, va, pa, filesz, memsz, _align = struct.unpack_from('<IIQQQQQQ', elf, e[4] + e[8] * i)
+        typ, flags_, _off, va, pa, filesz, memsz, _align = struct.unpack_from('<IIQQQQQQ', elf, e[4] + e[8] * i)
         if typ != 1:
             continue
         if va != pa or not LOAD <= va < LOAD + 65536 or filesz != memsz or memsz > LOAD + 65536 - va:
             raise ValueError('out-of-range or uninitialized ELF allocation')
         segments.append({'address': va, 'size': memsz, 'flags': flags_})
+    return segments
+
+
+def _check_code(out: Path) -> None:
     undefined = subprocess.check_output([tool('llvm-nm'), '--undefined-only', str(out / 'exporter.elf')], text=True)
     if undefined.strip():
         raise ValueError('exporter has undefined imports')
@@ -121,6 +132,9 @@ def main() -> None:
     )
     if re.search(r'\b(?:[vqds][0-9]+)\b', instruction_lines):
         raise ValueError('SIMD/FP register emitted')
+
+
+def _stack(out: Path) -> dict[str, int]:
     stack = {}
     for p in out.glob('*.su'):
         for line in p.read_text().splitlines():
@@ -128,6 +142,10 @@ def main() -> None:
             stack[cols[0].rsplit(':', 1)[-1]] = int(cols[1])
     if sum(stack.values()) >= 8192:
         raise ValueError('stack upper bound too large')
+    return stack
+
+
+def _uimage(data: bytes) -> bytes:
     # Optional standalone uImage wrapper: the root packager chooses how to
     # publish the code through its cache-maintenance sequence.
     header = struct.pack(
@@ -146,7 +164,26 @@ def main() -> None:
         b'Switch MMC RAM Export v1'.ljust(32, b'\0'),
     )
     header = header[:4] + struct.pack('>I', zlib.crc32(header)) + header[8:]
-    (out / 'exporter.uimg').write_bytes(header + data)
+    return header + data
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--output', type=Path, required=True)
+    args = ap.parse_args()
+    out = args.output.absolute()
+    _check_output(out)
+    raw = _pinned_firmware()
+    source_names = ('export.c', 'export.h', 'native.c', 'entry.S', 'link.ld', 'signatures.h', 'build.py')
+    source_hashes = {n: hashlib.sha256((SOURCE / n).read_bytes()).hexdigest() for n in source_names}
+    words = _signatures(raw)
+    out.mkdir(parents=True)
+    commands = _compile(out)
+    data = (out / 'exporter.bin').read_bytes()
+    segments = _segments(out, data)
+    _check_code(out)
+    stack = _stack(out)
+    (out / 'exporter.uimg').write_bytes(_uimage(data))
     result = {
         'profile': 'pinned-bl33-ram-card-metadata-export-v1',
         'bl33_sha256': PIN,
